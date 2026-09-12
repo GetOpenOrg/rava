@@ -8,7 +8,7 @@ use crate::java_runtime::prelude::*;
     access      = "public",
     source      = "HashMap.java",
 ))]
-pub struct HashMap {
+pub struct HashMap<K, V> {
     #[cfg_attr(any(), java_field(name = "table", descriptor = "[Ljava/util/HashMap$Node;", access = ""))]
     pub table: Field<JvmObject>,
     #[cfg_attr(any(), java_field(name = "entrySet", descriptor = "Ljava/util/Set;", access = ""))]
@@ -23,7 +23,7 @@ pub struct HashMap {
     pub loadFactor: Field<f32>,
 }
 
-impl HashMap {
+impl<K: Clone + 'static, V: Clone + 'static> HashMap<K, V> {
     #[cfg_attr(any(), java_method(name = "hash", descriptor = "(Ljava/lang/Object;)I", access = "static final"))]
     pub fn hash(key: JvmObject) -> Result<i32> {
         let _t0 = key.hashCode()?;
@@ -158,7 +158,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "get", descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;", access = "public"))]
-    pub fn get(&self, key: JvmObject) -> Result<JvmObject> {
+    pub fn get(&self, key: JvmObject) -> Result<V> {
         let this = self;
         let _t0 = this.getNode(key)?;
         let mut e: JvmObject = _t0;
@@ -196,7 +196,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "put", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", access = "public"))]
-    pub fn put(&self, key: JvmObject, value: JvmObject) -> Result<JvmObject> {
+    pub fn put(&self, key: K, value: V) -> Result<V> {
         let this = self;
         let _t0: i32 = HashMap::hash(key)?;
         let _t1 = this.putVal(_t0, key, value, 0i32, 1i32)?;
@@ -204,7 +204,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "putVal", descriptor = "(ILjava/lang/Object;Ljava/lang/Object;ZZ)Ljava/lang/Object;", access = "final"))]
-    pub fn putVal(&self, hash: i32, key: JvmObject, value: JvmObject, onlyIfAbsent: bool, evict: bool) -> Result<JvmObject> {
+    pub fn putVal(&self, hash: i32, key: K, value: V, onlyIfAbsent: bool, evict: bool) -> Result<V> {
         let this = self;
         let mut tab: JvmObject = this.table.get();
         let mut n: i32 = (tab.len() as i32);
@@ -335,7 +335,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "remove", descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;", access = "public"))]
-    pub fn remove(&self, key: JvmObject) -> Result<JvmObject> {
+    pub fn remove(&self, key: JvmObject) -> Result<V> {
         let this = self;
         let _t0: i32 = HashMap::hash(key)?;
         /* TODO: aconst_null  */
@@ -493,7 +493,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "getOrDefault", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", access = "public"))]
-    pub fn getOrDefault(&self, key: JvmObject, defaultValue: JvmObject) -> Result<JvmObject> {
+    pub fn getOrDefault(&self, key: JvmObject, defaultValue: V) -> Result<V> {
         let this = self;
         let _t0 = this.getNode(key)?;
         let mut e: JvmObject = _t0;
@@ -501,7 +501,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "putIfAbsent", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", access = "public"))]
-    pub fn putIfAbsent(&self, key: JvmObject, value: JvmObject) -> Result<JvmObject> {
+    pub fn putIfAbsent(&self, key: K, value: V) -> Result<V> {
         let this = self;
         let _t0: i32 = HashMap::hash(key)?;
         let _t1 = this.putVal(_t0, key, value, 1i32, 1i32)?;
@@ -517,7 +517,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "replace", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z", access = "public"))]
-    pub fn replace(&self, key: JvmObject, oldValue: JvmObject, newValue: JvmObject) -> Result<bool> {
+    pub fn replace(&self, key: K, oldValue: V, newValue: V) -> Result<bool> {
         let this = self;
         let _t0 = this.getNode(key)?;
         let mut e: JvmObject = _t0;
@@ -530,7 +530,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "replace", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", access = "public"))]
-    pub fn replace(&self, key: JvmObject, value: JvmObject) -> Result<JvmObject> {
+    pub fn replace(&self, key: K, value: V) -> Result<V> {
         let this = self;
         let _t0 = this.getNode(key)?;
         let mut e: JvmObject = _t0;
@@ -543,7 +543,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "computeIfAbsent", descriptor = "(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;", access = "public"))]
-    pub fn computeIfAbsent(&self, key: JvmObject, mappingFunction: JvmObject) -> Result<JvmObject> {
+    pub fn computeIfAbsent(&self, key: K, mappingFunction: JvmObject) -> Result<V> {
         let this = self;
         panic!("{}", /* NullPointerException::new()? */);
         let _t0: i32 = HashMap::hash(key)?;
@@ -592,7 +592,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "computeIfPresent", descriptor = "(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;", access = "public"))]
-    pub fn computeIfPresent(&self, key: JvmObject, remappingFunction: JvmObject) -> Result<JvmObject> {
+    pub fn computeIfPresent(&self, key: K, remappingFunction: JvmObject) -> Result<V> {
         let this = self;
         panic!("{}", /* NullPointerException::new()? */);
         let _t0 = this.getNode(key)?;
@@ -614,7 +614,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "compute", descriptor = "(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;", access = "public"))]
-    pub fn compute(&self, key: JvmObject, remappingFunction: JvmObject) -> Result<JvmObject> {
+    pub fn compute(&self, key: K, remappingFunction: JvmObject) -> Result<V> {
         let this = self;
         panic!("{}", /* NullPointerException::new()? */);
         let _t0: i32 = HashMap::hash(key)?;
@@ -661,7 +661,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "merge", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;", access = "public"))]
-    pub fn merge(&self, key: JvmObject, value: JvmObject, remappingFunction: JvmObject) -> Result<JvmObject> {
+    pub fn merge(&self, key: K, value: V, remappingFunction: JvmObject) -> Result<V> {
         let this = self;
         panic!("{}", /* NullPointerException::new()? */);
         let _t0: i32 = HashMap::hash(key)?;
@@ -670,7 +670,7 @@ impl HashMap {
         /* TODO: aconst_null  */
         let mut t: JvmObject = remappingFunction;
         /* TODO: aconst_null  */
-        let mut old: JvmObject = value;
+        let mut old: V = value;
         let mut tab: JvmObject = this.table.get();
         let mut n: i32 = (tab.len() as i32);
         let _t1 = this.resize()?;
@@ -835,7 +835,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "newNode", descriptor = "(ILjava/lang/Object;Ljava/lang/Object;Ljava/util/HashMap$Node;)Ljava/util/HashMap$Node;"))]
-    pub fn newNode(&self, hash: i32, key: JvmObject, value: JvmObject, next: JvmObject) -> Result<JvmObject> {
+    pub fn newNode(&self, hash: i32, key: K, value: V, next: JvmObject) -> Result<JvmObject> {
         let this = self;
         Ok(HashMap$Node::new(hash, key, value, next)?)
     }
@@ -847,7 +847,7 @@ impl HashMap {
     }
 
     #[cfg_attr(any(), java_method(name = "newTreeNode", descriptor = "(ILjava/lang/Object;Ljava/lang/Object;Ljava/util/HashMap$Node;)Ljava/util/HashMap$TreeNode;"))]
-    pub fn newTreeNode(&self, hash: i32, key: JvmObject, value: JvmObject, next: JvmObject) -> Result<JvmObject> {
+    pub fn newTreeNode(&self, hash: i32, key: K, value: V, next: JvmObject) -> Result<JvmObject> {
         let this = self;
         Ok(HashMap$TreeNode::new(hash, key, value, next)?)
     }

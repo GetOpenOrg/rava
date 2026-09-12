@@ -1,5 +1,4 @@
 #![allow(unused_variables, unused_mut, dead_code, non_snake_case)]
-mod java_runtime;
 mod hello_world;
 use hello_world::HelloWorld;
 

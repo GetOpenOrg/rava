@@ -8,12 +8,12 @@ use crate::java_runtime::prelude::*;
     access      = "public",
     source      = "HashSet.java",
 ))]
-pub struct HashSet {
+pub struct HashSet<E> {
     #[cfg_attr(any(), java_field(name = "map", descriptor = "Ljava/util/HashMap;", access = ""))]
     pub map: Field<JvmObject>,
 }
 
-impl HashSet {
+impl<E: Clone + 'static> HashSet<E> {
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public"))]
     pub fn new() -> Result<Self> {
         let this = Self { map: Field::new(Default::default()) };
@@ -88,7 +88,7 @@ impl HashSet {
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public"))]
-    pub fn add(&self, e: JvmObject) -> Result<bool> {
+    pub fn add(&self, e: E) -> Result<bool> {
         let this = self;
         let _t0 = this.map.get().put(e, HashSet::PRESENT())?;
         Ok(_t0.is_none())

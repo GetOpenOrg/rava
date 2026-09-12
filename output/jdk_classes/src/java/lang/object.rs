@@ -1,5 +1,5 @@
 #![allow(unused_variables, unused_mut, dead_code, non_snake_case)]
-use crate::java_runtime::prelude::*;
+use java_runtime::prelude::*;
 
 #[cfg_attr(any(), java_class(
     binary_name = "java/lang/Object",

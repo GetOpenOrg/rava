@@ -3,5 +3,19 @@
 version = 4
 
 [[package]]
-name = "java_transpiled"
+name = "java_runtime"
 version = "0.1.0"
+
+[[package]]
+name = "jdk_classes"
+version = "0.1.0"
+dependencies = [
+ "java_runtime",
+]
+
+[[package]]
+name = "user"
+version = "0.1.0"
+dependencies = [
+ "java_runtime",
+]
