@@ -989,75 +989,145 @@ def _indent(block: str, n: int = 4) -> str:
     return '\n'.join(pad + ln if ln.strip() else '' for ln in block.split('\n'))
 
 
-def write_cargo_project(out_dir: str, class_infos: list):
+def _to_snake(name: str) -> str:
+    """PascalCase / camelCase → snake_case（用作 Rust 模块文件名）"""
+    s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
+    s = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', s)
+    return s.lower()
+
+def _pkg_from_java(java_file: str) -> str:
+    """从 .java 源文件读取 package 声明，无则返回空串"""
+    try:
+        with open(java_file, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('package '):
+                    return line[8:].rstrip(';').strip()
+                # 遇到非注释、非空行且不是 package 就停止
+                if line and not line.startswith('//') and not line.startswith('/*'):
+                    if any(line.startswith(k) for k in ('import ','public ','class ','@')):
+                        break
+    except OSError:
+        pass
+    return ''
+
+def _gen_class_rs(ci: ClassInfo) -> str:
+    """生成单个类的完整 .rs 文件内容"""
+    parts: list[str] = []
+    parts.append("#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]")
+    parts.append("use std::rc::Rc;")
+    parts.append("use std::cell::RefCell;")
+    parts.append("use std::collections::HashMap;")
+    parts.append("use std::collections::HashSet;")
+    parts.append("")
+
+    inst_fields = [f for f in ci.fields if not f.is_static]
+    has_instance_methods = any(not m.is_static and not m.is_constructor for m in ci.methods)
+    if inst_fields:
+        field_decls = '\n'.join(f"    pub {f.name}: {jvm_to_rust(f.descriptor)}," for f in inst_fields)
+        parts.append(f"#[derive(Debug, Clone, Default)]\npub struct {ci.name} {{\n{field_decls}\n}}\n")
+    elif has_instance_methods:
+        parts.append(f"#[derive(Debug, Clone, Default)]\npub struct {ci.name};\n")
+    else:
+        parts.append(f"pub struct {ci.name};\n")
+
+    method_blocks = []
+    for m in ci.methods:
+        if m.name == '<clinit>':
+            continue
+        try:
+            body = gen_method_body(m, ci)
+        except Exception as e:
+            body = f"/* codegen error {m.name}: {e} */"
+        method_blocks.append(body)
+
+    impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
+    parts.append(f"impl {ci.name} {{\n{impl_body}\n}}\n")
+    return '\n'.join(parts)
+
+
+def write_cargo_project(out_dir: str, class_infos: list, java_files: list = None):
     src_dir = os.path.join(out_dir, 'src')
     rt_dir  = os.path.join(src_dir, 'java_runtime')
     os.makedirs(rt_dir, exist_ok=True)
 
+    # Runtime stubs
     for fname, content in [('mod.rs',RUNTIME_MOD),('error.rs',RUNTIME_ERROR),
                             ('math.rs',RUNTIME_MATH),('io.rs',RUNTIME_IO)]:
         with open(os.path.join(rt_dir,fname),'w') as f: f.write(content)
     with open(os.path.join(out_dir,'Cargo.toml'),'w') as f: f.write(CARGO_TOML)
 
-    # 是否有 HashMap / HashSet
-    need_map = any(
-        any('HashMap' in m.descriptor or 'HashMap' in str([ins.comment for ins in m.instrs])
-            for m in ci.methods)
-        for ci in class_infos
-    )
-    need_set = any(
-        any('HashSet' in str([ins.comment for ins in m.instrs])
-            for m in ci.methods)
-        for ci in class_infos
-    )
-    has_rc = any(
-        any(not m.is_static for m in ci.methods) or ci.fields
-        for ci in class_infos
-    )
+    # 1. 提取每个类的包名
+    packages: dict[str, str] = {}
+    if java_files:
+        for jf, ci in zip(java_files, class_infos):
+            packages[ci.name] = _pkg_from_java(jf)
 
-    uses = ["#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
-            "mod java_runtime;"]
-    if has_rc:
-        uses += ["use std::rc::Rc;", "use std::cell::RefCell;"]
-    uses += ["use std::collections::HashMap;", "use std::collections::HashSet;"]
-
-    main_rs_parts = ['\n'.join(uses), '']
-
-    # 为每个 class_info 生成 struct + impl
-    main_class = class_infos[0].name if class_infos else 'Main'
+    # 2. 计算每个类的文件路径、包路径分段、模块名
+    #    layout[class_name] = (abs_file_path, pkg_parts, mod_name)
+    layout: dict[str, tuple] = {}
     for ci in class_infos:
-        inst_fields = [f for f in ci.fields if not f.is_static]
-        has_instance_methods = any(not m.is_static and not m.is_constructor for m in ci.methods)
-        if inst_fields:
-            field_decls = '\n'.join(f"    pub {f.name}: {jvm_to_rust(f.descriptor)}," for f in inst_fields)
-            main_rs_parts.append(f"#[derive(Debug, Clone, Default)]\npub struct {ci.name} {{\n{field_decls}\n}}\n")
-        elif has_instance_methods:
-            main_rs_parts.append(f"#[derive(Debug, Clone, Default)]\npub struct {ci.name};\n")
-        else:
-            main_rs_parts.append(f"pub struct {ci.name};\n")
+        pkg      = packages.get(ci.name, '')
+        pkg_parts = pkg.split('.') if pkg else []
+        mod_name  = _to_snake(ci.name)
+        file_path = os.path.join(src_dir, *pkg_parts, mod_name + '.rs')
+        layout[ci.name] = (file_path, pkg_parts, mod_name)
 
-        # 方法
-        method_blocks = []
-        for m in ci.methods:
-            if m.name in ('<clinit>',):
-                continue
-            if m.is_constructor and m.name == ci.name:
-                # 合并为 ::new
-                pass
-            try:
-                body = gen_method_body(m, ci)
-            except Exception as e:
-                body = f"/* codegen error {m.name}: {e} */"
-            method_blocks.append(body)
+    # 3. 构建模块树：dir → {子模块名}
+    #    src/com/example/foo.rs 需要：
+    #      src_dir          → 'com'
+    #      src_dir/com      → 'example'
+    #      src_dir/com/example → 'foo'
+    mod_tree: dict[str, set] = {}
+    for ci in class_infos:
+        _, pkg_parts, mod_name = layout[ci.name]
+        parent = src_dir
+        for part in pkg_parts:
+            mod_tree.setdefault(parent, set()).add(part)
+            parent = os.path.join(parent, part)
+        mod_tree.setdefault(parent, set()).add(mod_name)
 
-        impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
-        main_rs_parts.append(f"impl {ci.name} {{\n{impl_body}\n}}\n")
+    # 4. 写出每个类的 .rs 文件
+    for ci in class_infos:
+        file_path, _, _ = layout[ci.name]
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, 'w') as f:
+            f.write(_gen_class_rs(ci))
 
-    main_rs_parts.append(f"\nfn main() {{ {main_class}::main(); }}\n")
-    main_rs = '\n'.join(main_rs_parts)
+    # 5. 为中间包目录写 mod.rs（src_dir 本身由 main.rs 承担，跳过）
+    for dir_path, children in mod_tree.items():
+        if dir_path == src_dir:
+            continue
+        os.makedirs(dir_path, exist_ok=True)
+        mod_rs_path = os.path.join(dir_path, 'mod.rs')
+        with open(mod_rs_path, 'w') as f:
+            f.write('\n'.join(f"pub mod {c};" for c in sorted(children)) + '\n')
 
-    with open(os.path.join(src_dir,'main.rs'),'w') as f:
-        f.write(main_rs)
+    # 6. 写 main.rs：顶层 mod 声明 + fn main()
+    main_class = class_infos[0].name if class_infos else 'Main'
+    top_mods   = sorted(mod_tree.get(src_dir, set()))
+
+    main_lines = [
+        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
+        "mod java_runtime;",
+    ]
+    for m in top_mods:
+        main_lines.append(f"mod {m};")
+
+    # use 引入入口类
+    _, pkg_parts, mod_name = layout[main_class]
+    if pkg_parts:
+        use_path = '::'.join(pkg_parts + [mod_name, main_class])
+    else:
+        use_path = f"{mod_name}::{main_class}"
+    main_lines.append(f"use {use_path};")
+    main_lines.append("")
+    main_lines.append(f"fn main() {{ {main_class}::main(); }}")
+    main_lines.append("")
+
+    with open(os.path.join(src_dir, 'main.rs'), 'w') as f:
+        f.write('\n'.join(main_lines))
+
     print(f"[codegen] Cargo project → {out_dir}/")
 
 
@@ -1102,7 +1172,7 @@ def transpile(java_files: list, out_dir: str):
 
     # 4. 生成
     print(f"[4/4] 生成 Rust → {out_dir}/")
-    write_cargo_project(out_dir, class_infos)
+    write_cargo_project(out_dir, class_infos, java_files)
     print("\n✓ 完成。运行方式：")
     print(f"  cd {out_dir} && cargo run --release")
 
