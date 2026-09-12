@@ -1,4 +1,3 @@
-// java_runtime/error.rs
 #[derive(Debug)]
 pub enum JvmError {
     NullPointerException,

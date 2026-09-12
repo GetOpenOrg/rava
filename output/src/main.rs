@@ -1,44 +1,42 @@
 #![allow(unused_variables, unused_mut, dead_code, non_snake_case)]
 mod java_runtime;
+use std::rc::Rc;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
-pub struct TestP0;
+pub struct TestP3;
 
-impl TestP0 {
-    pub fn add(arg_0: i32, arg_1: i32) -> i32 {
-        return (arg_0).wrapping_add(arg_1);
-    }
-
-    pub fn multiply(arg_0: i32, arg_1: i32) -> i32 {
-        return (arg_0).wrapping_mul(arg_1);
-    }
-
-    pub fn factorial(arg_0: i32) -> i32 {
-        let mut local_1: i32 = 1i32;
-        let mut local_2: i32 = 2i32;
-        loop {
-            if local_2 > arg_0 { break; }
-        local_1 = (local_1).wrapping_mul(local_2);
-        local_2 = local_2.wrapping_add(1i32);
-        }  // loop
-        return local_1;
+impl TestP3 {
+    pub fn new() -> Rc<RefCell<Self>> {
+        let this: Rc<RefCell<Self>> = Rc::new(RefCell::new(Self {}));
+        /* invokespecial Method java/lang/Object."<init>":()V */
+        this
     }
 
     pub fn main() {
-        let mut local_1: i32 = 5i32;
-        let mut local_2: i32 = 10i32;
-        let _t0: i32 = Self::add(local_1, local_2);
-        let mut local_3: i32 = _t0;
-        println!("{}", local_3);
-        let _t1: i32 = Self::multiply(3i32, 7i32);
-        let mut local_4: i32 = _t1;
-        println!("{}", local_4);
-        let _t2: i32 = Self::factorial(6i32);
-        let mut local_5: i32 = _t2;
-        println!("{}", local_5);
-        let mut local_6: i32 = 2i32;
-        println!("{}", local_6);
+        let mut local_1: Vec<i32> = Vec::new();
+        local_1.push(10i32);
+        local_1.push(20i32);
+        local_1.push(30i32);
+        println!("{}", (local_1.len() as i32));
+        println!("{}", local_1[1i32 as usize]);
+        let mut local_2: HashMap<String,i32> = HashMap::new();
+        local_2.insert("one".to_string(), 1i32);
+        local_2.insert("two".to_string(), 2i32);
+        local_2.insert("three".to_string(), 3i32);
+        println!("{}", (local_2.len() as i32));
+        println!("{}", local_2.get(&"two".to_string()).copied().unwrap_or(0));
+        println!("{}", local_2.contains_key(&"one".to_string()));
+        let mut local_3: HashSet<i32> = HashSet::new();
+        local_3.insert(100i32);
+        local_3.insert(200i32);
+        local_3.insert(100i32);
+        println!("{}", (local_3.len() as i32));
+        println!("{}", local_3.contains(&200i32));
         return;
     }
 }
 
-fn main() { TestP0::main(); }
+
+fn main() { TestP3::main(); }
