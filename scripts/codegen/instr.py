@@ -21,10 +21,21 @@ from .rs_ir import (
 from .render import render_expr, render_type
 from .type_map import (
     jvm_to_rust, sig_type, is_jdk, short_cls,
-    NEWARRAY_TYPES, JDK_COLL_TYPES,
+    NEWARRAY_TYPES,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
     parse_descriptor_params, parse_descriptor_return,
 )
+
+# 集合类构造时的 IR 类型节点和初始化表达式
+# 用 RsInfer() 占位，Rust 编译器从首次 add/put 调用推断实际元素类型
+_COLL_IR_TYPES: dict[str, tuple] = {
+    'ArrayList':           (RsGeneric('ArrayList', [RsInfer()]),         'ArrayList::<_>::new()?'),
+    'java/util/ArrayList': (RsGeneric('ArrayList', [RsInfer()]),         'ArrayList::<_>::new()?'),
+    'HashMap':             (RsGeneric('HashMap',   [RsInfer(), RsInfer()]), 'HashMap::<_, _>::new()?'),
+    'java/util/HashMap':   (RsGeneric('HashMap',   [RsInfer(), RsInfer()]), 'HashMap::<_, _>::new()?'),
+    'HashSet':             (RsGeneric('HashSet',   [RsInfer()]),         'HashSet::<_>::new()?'),
+    'java/util/HashSet':   (RsGeneric('HashSet',   [RsInfer()]),         'HashSet::<_>::new()?'),
+}
 from .types import Instr
 from .jdk_dispatch import dispatch_virtual
 
@@ -435,24 +446,29 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str):
         raw_cls = obj_expr.class_name.rsplit('/', 1)[-1]
         raw_cls = short_cls(raw_cls) or raw_cls
 
-        if raw_cls in JDK_COLL_TYPES:
-            rust_ty, init_expr = JDK_COLL_TYPES[raw_cls]
+        if raw_cls in _COLL_IR_TYPES:
+            rust_ty_node, init_expr = _COLL_IR_TYPES[raw_cls]
+            rust_ty = render_type(rust_ty_node)
         elif raw_cls in ('StringBuilder', 'StringBuffer'):
-            rust_ty, init_expr = 'String', 'String::new()'
+            rust_ty_node = RsNamed('String')
+            rust_ty      = 'String'
+            init_expr    = 'String::new()'
         elif raw_cls and not is_jdk(raw_cls):
             # 用户类：new()? 返回 Result<Self>
-            init_expr = f"{raw_cls}::new({', '.join(args)})?"
-            rust_ty   = raw_cls
+            init_expr    = f"{raw_cls}::new({', '.join(args)})?"
+            rust_ty      = raw_cls
+            rust_ty_node = RsNamed(rust_ty)
         else:
-            init_expr = f"/* {raw_cls}::new() */"
-            rust_ty   = raw_cls
+            init_expr    = f"/* {raw_cls}::new() */"
+            rust_ty      = raw_cls
+            rust_ty_node = RsNamed(rust_ty)
 
         if sim.stack and isinstance(sim.stack[-1][0], NewPendingExpr):
-            sim.stack[-1] = (RawExpr(init_expr), RsNamed(rust_ty))
+            sim.stack[-1] = (RawExpr(init_expr), rust_ty_node)
         else:
             v = sim.fresh('_obj')
             sim.emit(RawStmt(f"let mut {v}: {rust_ty} = {init_expr};"))
-            sim.push(Var(v), RsNamed(rust_ty))
+            sim.push(Var(v), rust_ty_node)
     else:
         sim.emit(RawStmt(f"/* invokespecial {comment} */"))
 

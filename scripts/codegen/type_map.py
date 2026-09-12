@@ -33,17 +33,6 @@ NEWARRAY_TYPES: dict[str, tuple[str, str]] = {
     'boolean': ('bool', 'false'),
 }
 
-# JDK 集合类 → (Rust 类型, 初始化表达式)
-# 所有集合类型用 java::util 的同构类型；初始化用 new()? 因为返回 Result
-JDK_COLL_TYPES: dict[str, tuple[str, str]] = {
-    'ArrayList':           ('ArrayList<_>',        'ArrayList::<_>::new()?'),
-    'java/util/ArrayList': ('ArrayList<_>',        'ArrayList::<_>::new()?'),
-    'HashMap':             ('HashMap<_, _>',       'HashMap::<_, _>::new()?'),
-    'java/util/HashMap':   ('HashMap<_, _>',       'HashMap::<_, _>::new()?'),
-    'HashSet':             ('HashSet<_>',          'HashSet::<_>::new()?'),
-    'java/util/HashSet':   ('HashSet<_>',          'HashSet::<_>::new()?'),
-}
-
 # 已知 JDK 类名（短名，无包路径）
 JDK_CLASSES: set[str] = {
     'Object', 'String', 'Integer', 'Long', 'Double', 'Float',
