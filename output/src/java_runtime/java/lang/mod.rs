@@ -1,3 +1,6 @@
-pub mod math;
+pub mod string;
 pub mod system;
-pub mod object;
+pub mod math;
+
+pub use string::String;
+pub use system::System;

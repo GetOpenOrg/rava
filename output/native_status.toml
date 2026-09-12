@@ -1,0 +1,22 @@
+# native_status.toml — 由 build.rs 自动维护
+# status: "implemented" | "needed" | "stub" | "not-needed"
+
+[java.lang.Object]
+clone = "implemented"
+getClass = "implemented"
+hashCode = "implemented"
+notify = "implemented"
+notifyAll = "implemented"
+wait0 = "implemented"
+
+[java.lang.System]
+arraycopy = "implemented"
+currentTimeMillis = "implemented"
+identityHashCode = "needed"
+mapLibraryName = "needed"
+nanoTime = "implemented"
+registerNatives = "implemented"
+setErr0 = "implemented"
+setIn0 = "implemented"
+setOut0 = "implemented"
+

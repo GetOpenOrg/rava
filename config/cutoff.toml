@@ -1,0 +1,28 @@
+# RTA 截断规则：进入这些类的调用到此为止，记录为边界，不继续向内追踪。
+# 目的：避免 SPI / 反射 / 安全框架等引发的依赖爆炸。
+
+[cutoff]
+classes = [
+    "java/util/ServiceLoader",            # SPI，运行时动态加载
+    "java/lang/reflect/Method",           # 反射
+    "java/lang/reflect/Constructor",      # 反射
+    "java/lang/reflect/Field",            # 反射
+    "java/security/AccessController",     # 安全框架
+    "java/security/AccessControlContext", # 安全框架
+    "sun/misc/Unsafe",                    # unsafe 操作
+    "jdk/internal/misc/Unsafe",           # unsafe（JDK 9+）
+    "java/lang/ClassLoader",              # 类加载器
+    "java/lang/invoke/MethodHandle",      # MethodHandle
+    "java/lang/invoke/MethodHandles",     # MethodHandles.Lookup
+    "java/lang/invoke/MethodType",        # MethodHandle 类型
+    "java/lang/invoke/LambdaMetafactory", # lambda 元工厂
+    "sun/nio/cs/StreamEncoder",           # 字符集编码（触发 SPI）
+    "java/nio/charset/Charset",           # 字符集（触发 SPI）
+    "java/nio/charset/CharsetEncoder",    # 字符集编码器
+]
+
+# 这些方法本身可追踪，但不继续追踪其内部调用
+methods = [
+    "java/lang/Object#clone#()Ljava/lang/Object;",
+    "java/lang/Runtime#exec#(Ljava/lang/String;)Ljava/lang/Process;",
+]

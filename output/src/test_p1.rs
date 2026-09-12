@@ -13,7 +13,7 @@ pub struct TestP1 {
 impl TestP1 {
     pub fn new(arg_0: i32, arg_1: i32) -> Rc<RefCell<Self>> {
         let this: Rc<RefCell<Self>> = Rc::new(RefCell::new(Self { x: 0, y: 0 }));
-        /* invokespecial Method java/lang/Object."<init>":()V */
+        /* invokespecial Method java/lang/Object.<init>:()V */
         this.borrow_mut().x = arg_0;
         this.borrow_mut().y = arg_1;
         this
@@ -29,12 +29,13 @@ impl TestP1 {
     }
 
     pub fn main() {
-        let mut local_1: Rc<RefCell<TestP1>> = TestP1::new(3i32, 4i32);
-        let _t0: i32 = TestP1::sum(&local_1);
-        println!("{}", _t0);
-        TestP1::setX(&local_1, 10i32);
+        let mut _obj0: Rc<RefCell<TestP1>> = TestP1::new(3i32, 4i32);
+        let mut local_1: Rc<RefCell<TestP1>> = _obj0;
         let _t1: i32 = TestP1::sum(&local_1);
         println!("{}", _t1);
+        TestP1::setX(&local_1, 10i32);
+        let _t2: i32 = TestP1::sum(&local_1);
+        println!("{}", _t2);
         println!("{}", local_1.borrow().x);
         return;
     }

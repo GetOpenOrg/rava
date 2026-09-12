@@ -23,6 +23,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
+try:
+    import tomllib          # Python 3.11+
+except ImportError:
+    try:
+        import tomli as tomllib  # pip install tomli
+    except ImportError:
+        tomllib = None      # cutoff.toml 加载失败时优雅降级
+
 import javalang
 import javalang.tree as T
 
@@ -478,11 +486,13 @@ class ASTParser:
 
 class RTAnalyzer:
     """
-    从入口方法出发，BFS 展开调用图
-    虚方法规则：只有在 instantiated 集合里的类，其 override 才被认为可达
+    从入口方法出发，BFS 展开调用图。
+    虚方法规则：只有在 instantiated 集合里的类，其 override 才被认为可达。
+    <clinit> 隔离：静态初始化方法只在类确实被实例化时才跟随。
+    cutoff 截断：进入 cutoff.toml 中声明的类时停止追踪，记录为边界。
     """
 
-    def __init__(self, parser: ASTParser):
+    def __init__(self, parser: ASTParser, cutoff_classes: set[str] | None = None):
         self.parser = parser
         self.classes = parser.classes
         self.instantiated = parser.instantiated  # NEW 指令收集的类型集合
@@ -493,6 +503,22 @@ class RTAnalyzer:
         self.call_edges: list[CallEdge] = []
         # caller → [callee] 邻接表
         self.call_graph: dict[str, list[str]] = defaultdict(list)
+        # cutoff 边界集合（记录但不展开）
+        self.cutoff_frontier: set[str] = set()
+        # cutoff 截断类集合（JVM 内部名，如 java/util/ServiceLoader）
+        self._cutoff_classes: set[str] = cutoff_classes or set()
+
+    def _should_follow(self, callee: MethodRef, call_type: str) -> bool:
+        """判断是否应继续追踪该被调用方法。"""
+        # cutoff 截断：记录边界，不继续追踪
+        cls_jvm = callee.class_name.replace('.', '/')
+        if cls_jvm in self._cutoff_classes or callee.class_name in self._cutoff_classes:
+            self.cutoff_frontier.add(callee.key())
+            return False
+        # <clinit> 隔离：只有类被 new 过才跟随
+        if callee.method_name == '<clinit>':
+            return callee.class_name in self.instantiated
+        return True
 
     def analyze(self, entry_class: str, entry_method: str = "main"):
         entry = MethodRef(entry_class, entry_method)
@@ -511,6 +537,10 @@ class RTAnalyzer:
 
             for edge in method_info.calls:
                 callee = edge.callee
+
+                # cutoff / clinit 隔离检查
+                if not self._should_follow(callee, edge.call_type):
+                    continue
 
                 # RTA 虚方法过滤
                 if edge.call_type == "virtual":
@@ -789,8 +819,14 @@ def analyze(source_path: str,
         print(f"  入口：  {entry_class}.{entry_method}()")
         print(f"  实例化类型集合（从 NEW 指令收集）：", end="")
 
-    # 阶段 2：RTA 分析
-    analyzer = RTAnalyzer(parser)
+    # 阶段 2：RTA 分析（加载 cutoff.toml）
+    cutoff_classes: set[str] = set()
+    cutoff_path = Path(__file__).parent.parent / 'config' / 'cutoff.toml'
+    if cutoff_path.exists() and tomllib is not None:
+        with open(cutoff_path, 'rb') as _f:
+            _cutoff_data = tomllib.load(_f)
+        cutoff_classes = set(_cutoff_data.get('cutoff', {}).get('classes', []))
+    analyzer = RTAnalyzer(parser, cutoff_classes=cutoff_classes)
     analyzer.analyze(entry_class, entry_method)
 
     if not output_json:

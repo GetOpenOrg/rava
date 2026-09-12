@@ -9,25 +9,28 @@ pub struct TestP3;
 impl TestP3 {
     pub fn new() -> Rc<RefCell<Self>> {
         let this: Rc<RefCell<Self>> = Rc::new(RefCell::new(Self {}));
-        /* invokespecial Method java/lang/Object."<init>":()V */
+        /* invokespecial Method java/lang/Object.<init>:()V */
         this
     }
 
     pub fn main() {
-        let mut local_1: Vec<i32> = Vec::new();
+        let mut _obj0: Vec<i32> = Vec::new();
+        let mut local_1: Vec<i32> = _obj0;
         local_1.push(10i32);
         local_1.push(20i32);
         local_1.push(30i32);
         println!("{}", (local_1.len() as i32));
         println!("{}", local_1[1i32 as usize]);
-        let mut local_2: HashMap<String,i32> = HashMap::new();
+        let mut _obj1: HashMap<String,i32> = HashMap::new();
+        let mut local_2: HashMap<String,i32> = _obj1;
         local_2.insert("one".to_string(), 1i32);
         local_2.insert("two".to_string(), 2i32);
         local_2.insert("three".to_string(), 3i32);
         println!("{}", (local_2.len() as i32));
         println!("{}", local_2.get(&"two".to_string()).copied().unwrap_or(0));
         println!("{}", local_2.contains_key(&"one".to_string()));
-        let mut local_3: HashSet<i32> = HashSet::new();
+        let mut _obj2: HashSet<i32> = HashSet::new();
+        let mut local_3: HashSet<i32> = _obj2;
         local_3.insert(100i32);
         local_3.insert(200i32);
         local_3.insert(100i32);

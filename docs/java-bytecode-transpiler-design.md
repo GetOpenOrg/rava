@@ -1,6 +1,6 @@
 # Java 字节码转译器：可达性分析与增量生成技术设计文档
 
-**版本** 0.1 · **日期** 2026-09-12 · **状态** 草稿
+**版本** 0.2 · **日期** 2026-09-12 · **状态** 进行中（P0–P3 已验证通过）
 
 ---
 
@@ -579,7 +579,104 @@ pub fn of<T>(values: JArray<T>) -> JRef<Stream<T>> {
 
 阶段 3 完成后，`AUTO_TRANSPILE` 的方法已有实际代码，`NATIVE_STUB/todo` 和 `UNSUPPORTED/todo` 仍为 `compile_error!`，阶段 4 的 check 输出就是精确的 **TODO 清单**，按依赖深度排序即为优先级顺序。
 
-### 9.2 命令行接口设计（参考）
+### 9.2 JDK 类文件定位与反编译流程
+
+RTA 分析完成后，需要把可达的 JDK 方法对应的 `.class` 文件找出来并转译成 Rust。这是 Hello World → Rust 可运行程序的核心环节。
+
+#### 9.2.1 JDK 类文件定位
+
+JDK 8 与 JDK 9+ 的类文件存放方式不同：
+
+| JDK 版本 | 存放位置 | 提取方式 |
+|----------|---------|---------|
+| JDK ≤ 8 | `$JAVA_HOME/jre/lib/rt.jar` | `jar xf rt.jar java/io/PrintStream.class` |
+| JDK 9+ | `$JAVA_HOME/lib/modules`（jimage 格式） | `jimage extract --dir=extracted $JAVA_HOME/lib/modules` |
+
+实践上直接用 `javap` 命令即可，JDK 会自动从模块系统中定位类文件：
+
+```bash
+# 无需先解包，javap 直接读取 JDK 内部类
+javap -verbose java.io.PrintStream
+```
+
+#### 9.2.2 反编译流程
+
+从 manifest.toml 中读取 `AUTO_TRANSPILE` 类别的 JDK 方法，按类分组，每个类调用 `javap -verbose` 一次：
+
+```python
+def decompile_jdk_class(class_name: str) -> str:
+    """
+    class_name: JVM 内部名，如 "java/io/PrintStream"
+    返回: javap -verbose 的文本输出
+    """
+    dot_name = class_name.replace('/', '.')  # java.io.PrintStream
+    result = subprocess.run(
+        ['javap', '-verbose', '-p', dot_name],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"javap failed for {dot_name}: {result.stderr}")
+    return result.stdout
+```
+
+#### 9.2.3 javap 文本解析
+
+`scripts/codegen/javap.py` 中的 `parse_javap(text, class_name) → ClassInfo` 解析 `javap -verbose` 的输出，提取：
+
+- **类头**：类名、父类、实现的接口、access flags
+- **字段列表**：字段名、描述符、access flags
+- **方法列表**：每个方法的
+  - 签名（名称 + 描述符 + 参数类型）
+  - locals 数量、args_size
+  - 字节码指令序列（pc → `Instr(opcode, operand, comment)`）
+
+解析的核心是逐行扫描，识别三类标记行：
+
+```
+public void println(java.lang.String);   ← 方法签名行
+  descriptor: (Ljava/lang/String;)V       ← 描述符行
+  Code:
+     0: aload_0                           ← 指令行（pc: opcode [operand] [// comment]）
+     1: aload_1
+     2: invokevirtual #7  // Method java/io/PrintStream.write:(Ljava/lang/String;)V
+```
+
+#### 9.2.4 Rust 代码生成
+
+解析得到 `ClassInfo` 后，进入与用户代码相同的生成流程：
+
+```
+ClassInfo
+  └─ gen_method_body(method, class_info)   ← scripts/codegen/method.py
+       └─ sim_instr(ins, sim, ...)          ← scripts/codegen/instr.py（StackSim 模拟）
+            └─ emit(rust_stmt)
+  └─ write_cargo_project(out_dir, ...)     ← scripts/codegen/emitter.py
+       └─ 按包路径写入 src/<pkg>/<class>.rs
+```
+
+JDK 类的生成结果放在 `output/src/java_runtime/java/` 下，按原始包路径组织：
+
+```
+java_runtime/java/io/print_stream.rs      ← java.io.PrintStream 的 Rust 实现
+java_runtime/java/lang/system.rs          ← java.lang.System
+java_runtime/java/util/array_list.rs      ← java.util.ArrayList
+```
+
+凡是分类为 `NATIVE_STUB` 或 `UNSUPPORTED_PATTERN` 的方法，不走字节码解析，而是直接生成带 `compile_error!` / `todo!()` 的空壳（见第 8 章），待手工实现后替换。
+
+#### 9.2.5 Hello World 完整调用路径示例
+
+```
+HelloWorld.main()
+  └─ System.out.println("Hello World")
+       └─ [JDK] PrintStream.println(String)      ← AUTO_TRANSPILE → 反编译并生成 Rust
+            └─ [JDK] PrintStream.write(String)   ← AUTO_TRANSPILE → 同上
+                 └─ [JDK] System.arraycopy(...)  ← NATIVE_STUB   → compile_error! 空壳
+```
+
+用户只需实现约 13 个 native stub（见第 10 章），其余 ~200 个方法由转译器自动从 JDK 字节码生成 Rust。
+
+### 9.3 命令行接口设计（参考）
 
 ```bash
 # 阶段 1：分析，生成清单
@@ -624,7 +721,7 @@ cargo run --example hello_world
 # 期望输出：Hello, World!
 ```
 
-### 9.3 增量更新策略
+### 9.4 增量更新策略
 
 清单文件一旦生成，人工编辑（修改 `status`、添加 `suggested_impl` 注释、标记 `wont_implement`）是常态操作，分析器不应无条件覆盖它。
 
@@ -678,84 +775,103 @@ java/io/FileDescriptor#sync
 
 ---
 
-## 11 验证方法（Python 脚本）
+## 11 实现现状与验证方法
 
-在正式工程化之前，可用 Python 脚本快速验证整个思路的正确性。
+### 11.1 依赖管理
 
-### 11.1 依赖
+项目使用 `uv` 管理依赖，`pyproject.toml` 无第三方 Python 依赖：
 
-```bash
-pip install jawa          # Java 字节码解析
-pip install javalang      # Java 源码 AST 解析（可选，用于源码模式）
+```toml
+[project]
+requires-python = ">=3.12"
+dependencies = []
 ```
 
-### 11.2 脚本结构
+- `javalang`（Java 源码 AST 解析库）已 vendor 到 `scripts/javalang/`，可在此基础上二次改造，无需 pip 安装
+- `six`（Python 2 兼容层）已完全移除，`scripts/javalang/` 已改为纯 Python 3
+- `jawa`（字节码解析库）未引入；转译器通过 `javap -verbose` 文本输出解析字节码，无需额外依赖
+
+安装环境：`uv sync`，运行：`uv run python scripts/main.py <file.java>`
+
+### 11.2 当前脚本结构（v0.2 实际状态）
 
 ```
 scripts/
-  java_rta.py         # 核心 RTA 分析器（支持源码或字节码输入）
-  classify.py         # 方法分类器
-  gen_manifest.py     # 生成 manifest.toml
-  gen_stubs.py        # 从清单生成空壳
-  validate.py         # 验证清单完整性
+  main.py               ← CLI 入口：python scripts/main.py <file.java>
+  java_rta.py           ← RTA 分析器（基于 javalang 源码 AST）✅ 已实现
+  codegen/              ← Java → Rust 转译器包 ✅ P0–P3 已实现
+    __init__.py         ←   对外暴露 transpile()
+    types.py            ←   数据结构（Instr/FieldInfo/ParsedMethod/ClassInfo）
+    type_map.py         ←   JVM→Rust 类型映射、装箱拆箱表
+    javap.py            ←   javap -verbose 文本解析器
+    cfg.py              ←   控制流分析（while 循环 back-edge 检测）
+    stack.py            ←   StackSim JVM 操作数栈模拟
+    instr.py            ←   字节码指令 → Rust 语句翻译
+    method.py           ←   gen_method_body（方法体生成）
+    emitter.py          ←   Cargo 项目输出、按包路径组织文件
+    runtime.py          ←   java_runtime Rust 存根（JDK 包路径层级）
+    transpile.py        ←   流水线：javac → javap → parse → codegen
+
+  # 以下脚本规划中，尚未实现：
+  classify.py           ☐ 方法分类器（AUTO_TRANSPILE / NATIVE_STUB / UNSUPPORTED）
+  gen_manifest.py       ☐ 生成 manifest.toml
+  gen_stubs.py          ☐ 从清单生成空壳（compile_error! / todo!）
+  validate.py           ☐ 验证清单完整性
 ```
 
-### 11.3 核心模块接口
+### 11.3 java_runtime 运行时存根结构（v0.2）
 
-```python
-# java_rta.py 核心接口
+生成的 Rust 运行时按 JDK 包路径分层，位于 `output/src/java_runtime/`：
 
-class RTAnalyzer:
-    def __init__(self, classpath: list[str], cutoff: CutoffRules):
-        ...
-
-    def analyze(self, entry_points: list[MethodRef]) -> AnalysisResult:
-        """
-        从入口点出发 BFS，返回可达方法集、native 边界集、实例化类型集
-        """
-        ...
-
-class AnalysisResult:
-    reachable:        dict[str, MethodRef]   # key → MethodRef
-    native_frontier:  set[MethodRef]          # 遇到 native 边界的方法
-    instantiated:     set[str]                # NEW 指令收集的类名集合
-    call_graph:       dict[str, list[str]]    # caller key → [callee key]
-    stats:            AnalysisStats
-
-
-# classify.py 核心接口
-
-class MethodClassifier:
-    def __init__(self, manual_registry: dict[str, str]):
-        ...
-
-    def classify(self, method: MethodRef, bytecode: MethodNode) -> MethodCategory:
-        ...
-
-    def classify_all(self, result: AnalysisResult) -> dict[str, MethodCategory]:
-        ...
+```
+java_runtime/
+  mod.rs                ← pub mod error; pub mod java;
+  error.rs              ← JvmError enum
+  java/
+    mod.rs              ← pub mod lang; pub mod util; pub mod io;
+    lang/
+      mod.rs
+      math.rs           ← java.lang.Math（abs/sqrt/pow/floor/sin...）
+      system.rs         ← java.lang.System（println/exit/currentTimeMillis）
+      object.rs         ← java.lang.Object（hashCode/equals/toString）
+    util/
+      mod.rs
+      array_list.rs     ← java.util.ArrayList
+      hash_map.rs       ← java.util.HashMap
+      hash_set.rs       ← java.util.HashSet
+    io/
+      mod.rs
+      print_stream.rs   ← java.io.PrintStream
 ```
 
-### 11.4 验证步骤
+新增 JDK 存根：在对应包目录添加 `.rs` 文件，并在 `scripts/codegen/runtime.py` 的 `RUNTIME_FILES` 字典中注册路径和内容。
+
+### 11.4 已验证阶段（P0–P3）
+
+| 阶段 | 内容 | Java 输出 | Rust 输出 | 状态 |
+|------|------|-----------|-----------|------|
+| P0 | 整数运算、while 循环、静态方法调用 | `15 21 720 2` | `15 21 720 2` | ✅ 通过 |
+| P1 | 类实例化、字段读写、实例方法 | `7 14 10` | `7 14 10` | ✅ 通过 |
+| P2 | 数组（newarray/iaload/iastore/arraylength） | `5 150 30 15` | `5 150 30 15` | ✅ 通过 |
+| P3 | ArrayList、HashMap、HashSet，自动装箱 | `3 20 3 2 true 2 true` | `3 20 3 2 true 2 true` | ✅ 通过 |
+
+### 11.5 快速运行验证
 
 ```bash
-# Step 1：用源码模式验证分析逻辑（不需要 JDK）
-python java_rta.py HelloWorld.java --mode source
+# RTA 可达性分析（基于源码 AST）
+uv run python scripts/java_rta.py tests/TestP1.java
 
-# Step 2：切换到字节码模式，对接真实 JDK
-python java_rta.py \
-  --mode       bytecode \
-  --jdk        /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk \
-  --surface    api-surface.toml \
-  --cutoff     cutoff.toml \
-  --out        result.json
+# Java → Rust 转译（基于字节码）
+uv run python scripts/main.py tests/TestP0.java
+cd output && cargo run --release
 
-# Step 3：生成清单
-python gen_manifest.py --analysis result.json --out manifest.toml
-
-# Step 4：验证数字
-python validate.py manifest.toml
-# 期望：total_reachable < 300，native_stub < 20
+# 全量回归对比（Java vs Rust 输出）
+for f in TestP0 TestP1 TestP2 TestP3; do
+  java_out=$(java -cp tests/classes $f)
+  uv run python scripts/main.py tests/$f.java > /dev/null 2>&1
+  rust_out=$(cd output && cargo run --release 2>/dev/null)
+  [ "$java_out" = "$rust_out" ] && echo "✓ $f" || echo "✗ $f"
+done
 ```
 
 ---

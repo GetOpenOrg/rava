@@ -9,7 +9,7 @@ pub struct TestP2;
 impl TestP2 {
     pub fn new() -> Rc<RefCell<Self>> {
         let this: Rc<RefCell<Self>> = Rc::new(RefCell::new(Self {}));
-        /* invokespecial Method java/lang/Object."<init>":()V */
+        /* invokespecial Method java/lang/Object.<init>:()V */
         this
     }
 

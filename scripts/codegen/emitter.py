@@ -1,14 +1,32 @@
 """
 Rust 文件生成器：将 ClassInfo 列表写出为 Cargo 项目，
-按 Java 包路径组织模块，java_runtime 按 JDK 包路径分层。
+按 Java 包路径组织模块（Java 命名空间同构）。
+
+结构原则：
+- 生成代码使用 java_runtime prelude（String, ArrayList, Field 等）
+- struct 直接包含 Field<T> 字段，不生成 raw:: 子模块
+- 所有方法返回 Result<T>
+- 每个类/字段/方法携带 // @java_class / @java_field / @java_method 注释，
+  供 build.rs 自动解析继承链与 native 状态
 """
 
 import os
 import re
-from .types import ClassInfo
-from .type_map import jvm_to_rust, sig_type, rust_default
+from .types import ClassInfo, FieldInfo, ParsedMethod
+from .type_map import jvm_to_rust, rust_default
 from .method import gen_method_body, _indent
 from .runtime import RUNTIME_FILES
+
+# Access flags
+_ACC_PUBLIC    = 0x0001
+_ACC_PRIVATE   = 0x0002
+_ACC_PROTECTED = 0x0004
+_ACC_STATIC    = 0x0008
+_ACC_FINAL     = 0x0010
+_ACC_NATIVE    = 0x0100
+_ACC_INTERFACE = 0x0200
+_ACC_ABSTRACT  = 0x0400
+_ACC_ENUM      = 0x4000
 
 CARGO_TOML = """\
 [package]
@@ -49,25 +67,152 @@ def pkg_from_java(java_file: str) -> str:
     return ''
 
 
+# ── Java 元数据注释生成（供 build.rs 扫描）──────────────────────
+
+def _access_str(flags: int) -> str:
+    """将 access_flags 整数转为可读字符串，如 'public static final'。"""
+    parts = []
+    if flags & _ACC_PUBLIC:    parts.append('public')
+    if flags & _ACC_PRIVATE:   parts.append('private')
+    if flags & _ACC_PROTECTED: parts.append('protected')
+    if flags & _ACC_STATIC:    parts.append('static')
+    if flags & _ACC_FINAL:     parts.append('final')
+    if flags & _ACC_ABSTRACT:  parts.append('abstract')
+    if flags & _ACC_NATIVE:    parts.append('native')
+    return ' '.join(parts)
+
+
+def _java_class_attr(ci: ClassInfo) -> str:
+    """生成 // @java_class(...) 注释行，供 build.rs 解析类层次。"""
+    parts = [f'name="{ci.name}"']
+    if ci.super_class:
+        parts.append(f'super="{ci.super_class}"')
+    if ci.interfaces:
+        ifaces = ','.join(ci.interfaces)
+        parts.append(f'interfaces="{ifaces}"')
+    if ci.access_flags:
+        parts.append(f'access="{_access_str(ci.access_flags)}"')
+    if ci.is_interface:
+        parts.append('kind="interface"')
+    elif ci.is_enum:
+        parts.append('kind="enum"')
+    elif ci.is_abstract:
+        parts.append('kind="abstract"')
+    if ci.generic_signature:
+        parts.append(f'signature="{ci.generic_signature}"')
+    if ci.source_file:
+        parts.append(f'source="{ci.source_file}"')
+    return '// @java_class(' + ', '.join(parts) + ')'
+
+
+def _java_field_attr(f: FieldInfo) -> str:
+    """生成 // @java_field(...) 注释行。"""
+    parts = [f'name="{f.name}"', f'descriptor="{f.descriptor}"']
+    if f.access_flags:
+        parts.append(f'access="{_access_str(f.access_flags)}"')
+    if f.generic_signature:
+        parts.append(f'signature="{f.generic_signature}"')
+    return '// @java_field(' + ', '.join(parts) + ')'
+
+
+def _java_method_attr(m: ParsedMethod) -> str:
+    """生成 // @java_method(...) 或 // @java_native(...) 注释行。"""
+    tag = '@java_native' if (m.is_native or m.is_abstract) else '@java_method'
+    parts = [f'name="{m.name}"', f'descriptor="{m.descriptor}"']
+    if m.access_flags:
+        parts.append(f'access="{_access_str(m.access_flags)}"')
+    if m.exceptions:
+        excs = ','.join(m.exceptions)
+        parts.append(f'exceptions="{excs}"')
+    if m.generic_signature:
+        parts.append(f'signature="{m.generic_signature}"')
+    return f'// {tag}(' + ', '.join(parts) + ')'
+
+
+def _gen_native_stub(m: ParsedMethod, ci: ClassInfo) -> str:
+    """为 native / abstract 方法生成 todo! 存根，供手工实现替换。"""
+    from .type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
+    params = parse_descriptor_params(m.descriptor)
+    ret    = parse_descriptor_return(m.descriptor)
+    rust_ret = jvm_to_rust(ret)
+
+    # 构建参数列表
+    arg_names = [m.local_names.get(i + (0 if m.is_static else 1), f'arg{i}')
+                 for i in range(len(params))]
+    args_str = ', '.join(
+        f'{name}: {jvm_to_rust(p)}' for name, p in zip(arg_names, params)
+    )
+
+    if m.is_static:
+        sig_self = ''
+    else:
+        sig_self = '&self'
+        if args_str:
+            sig_self += ', '
+
+    ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
+    label = 'native' if m.is_native else 'abstract'
+    body = f'todo!("{label} {ci.name}.{m.name}")'
+
+    return (
+        f'pub fn {m.name}({sig_self}{args_str}) -> {ret_type} {{\n'
+        f'    {body}\n'
+        f'}}'
+    )
+
+
+def _jdk_class_file_path(src_dir: str, binary_name: str) -> str:
+    """将 JDK 类 binary name 转为 src/ 下的元数据文件路径。"""
+    parts = binary_name.split('/')
+    *pkg_parts, class_name = parts
+    mod_name = to_snake(class_name)
+    return os.path.join(src_dir, *pkg_parts, mod_name + '.rs')
+
+
+def _gen_jdk_class_rs(ci: ClassInfo) -> str:
+    """为 JDK 类生成元数据注释文件。
+
+    文件仅含 // @java_class / @java_native 注释，供 build.rs 扫描维护
+    native_status.toml，不参与 Rust 模块编译（无 mod 声明引用此路径）。
+    """
+    lines = [
+        "// 此文件由 java_rta 自动生成，仅供 build.rs 扫描 Java 元数据。",
+        "// 不参与 Rust 模块编译。",
+        "",
+        _java_class_attr(ci),
+    ]
+    for m in ci.methods:
+        if m.is_native:  # 只记录真正的 native 方法，abstract 接口方法不需要 native 实现
+            lines.append(_java_method_attr(m))
+    return '\n'.join(lines) + '\n'
+
+
 def _gen_class_rs(ci: ClassInfo) -> str:
-    """生成单个 Java 类对应的完整 .rs 文件内容"""
+    """生成单个 Java 类对应的完整 .rs 文件内容。
+
+    生成规则：
+    - 实例字段用 Field<T> 包装（提供 Java 字段语义的内部可变性）
+    - 方法直接在 impl 块中，无 raw:: 子模块
+    - 所有方法返回 Result<T>
+    - 每个 struct / field / method 前加 // @java_* 注释供 build.rs 扫描
+    """
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
-        "use std::rc::Rc;",
-        "use std::cell::RefCell;",
-        "use std::collections::HashMap;",
-        "use std::collections::HashSet;",
+        "use crate::java_runtime::prelude::*;",
         "",
+        _java_class_attr(ci),
     ]
 
-    inst_fields           = [f for f in ci.fields if not f.is_static]
-    has_instance_methods  = any(not m.is_static and not m.is_constructor for m in ci.methods)
+    inst_fields = [f for f in ci.fields if not f.is_static]
+    has_instance_methods = any(not m.is_static and not m.is_constructor for m in ci.methods)
 
     if inst_fields:
-        decls = '\n'.join(f"    pub {f.name}: {jvm_to_rust(f.descriptor)}," for f in inst_fields)
-        parts.append(f"#[derive(Debug, Clone, Default)]\npub struct {ci.name} {{\n{decls}\n}}\n")
-    elif has_instance_methods:
-        parts.append(f"#[derive(Debug, Clone, Default)]\npub struct {ci.name};\n")
+        field_lines = []
+        for f in inst_fields:
+            field_lines.append(_java_field_attr(f))
+            field_lines.append(f"    pub {f.name}: Field<{jvm_to_rust(f.descriptor)}>,")
+        decls = '\n'.join(field_lines)
+        parts.append(f"pub struct {ci.name} {{\n{decls}\n}}\n")
     else:
         parts.append(f"pub struct {ci.name};\n")
 
@@ -75,10 +220,16 @@ def _gen_class_rs(ci: ClassInfo) -> str:
     for m in ci.methods:
         if m.name == '<clinit>':
             continue
-        try:
-            method_blocks.append(gen_method_body(m, ci))
-        except Exception as e:
-            method_blocks.append(f"/* codegen error {m.name}: {e} */")
+        attr_line = _java_method_attr(m)
+        if m.is_native or m.is_abstract:
+            stub = _gen_native_stub(m, ci)
+            method_blocks.append(attr_line + '\n' + stub)
+        else:
+            try:
+                body = gen_method_body(m, ci)
+                method_blocks.append(attr_line + '\n' + body)
+            except Exception as e:
+                method_blocks.append(f"/* codegen error {m.name}: {e} */")
 
     impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
     parts.append(f"impl {ci.name} {{\n{impl_body}\n}}\n")
@@ -87,7 +238,9 @@ def _gen_class_rs(ci: ClassInfo) -> str:
 
 # ── 主函数 ────────────────────────────────────────────────────────
 
-def write_cargo_project(out_dir: str, class_infos: list[ClassInfo], java_files: list[str] | None = None):
+def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
+                         jdk_class_infos: list[ClassInfo] | None = None,
+                         java_files: list[str] | None = None):
     src_dir = os.path.join(out_dir, 'src')
     rt_dir  = os.path.join(src_dir, 'java_runtime')
 
@@ -119,7 +272,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo], java_files: 
         layout[ci.name] = (file_path, pkg_parts, mod_name)
 
     # 5. 构建模块树：dir → {子模块名}
-    mod_tree: dict[str, set[str]] = {}
+    #    同时构建 reexport 表：dir → {(mod_name, ClassName)} 用于生成 pub use
+    mod_tree:    dict[str, set[str]]            = {}
+    reexport:    dict[str, set[tuple[str,str]]] = {}   # dir → {(mod, ClassName)}
     for ci in class_infos:
         _, pkg_parts, mod_name = layout[ci.name]
         parent = src_dir
@@ -127,6 +282,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo], java_files: 
             mod_tree.setdefault(parent, set()).add(part)
             parent = os.path.join(parent, part)
         mod_tree.setdefault(parent, set()).add(mod_name)
+        reexport.setdefault(parent, set()).add((mod_name, ci.name))
 
     # 6. 写各类的 .rs 文件
     for ci in class_infos:
@@ -135,20 +291,27 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo], java_files: 
         with open(file_path, 'w') as f:
             f.write(_gen_class_rs(ci))
 
-    # 7. 写中间包目录的 mod.rs
+    # 7. 写中间包目录的 mod.rs（含 pub mod 和 pub use 再导出）
     for dir_path, children in mod_tree.items():
         if dir_path == src_dir:
             continue
         os.makedirs(dir_path, exist_ok=True)
+        mod_lines = [f"pub mod {c};" for c in sorted(children)]
+        # pub use ClassX; 让上层可以通过短路径引用
+        for mod_name, cls_name in sorted(reexport.get(dir_path, set())):
+            mod_lines.append(f"pub use {mod_name}::{cls_name};")
         with open(os.path.join(dir_path, 'mod.rs'), 'w') as f:
-            f.write('\n'.join(f"pub mod {c};" for c in sorted(children)) + '\n')
+            f.write('\n'.join(mod_lines) + '\n')
 
     # 8. 写 main.rs
     main_class = class_infos[0].name if class_infos else 'Main'
     top_mods   = sorted(mod_tree.get(src_dir, set()))
 
     _, pkg_parts, mod_name = layout[main_class]
-    use_path = '::'.join(pkg_parts + [mod_name, main_class]) if pkg_parts else f"{mod_name}::{main_class}"
+    if pkg_parts:
+        use_path = '::'.join(pkg_parts + [main_class])  # com::example::HelloWorld
+    else:
+        use_path = f"{mod_name}::{main_class}"
 
     main_lines = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
@@ -156,10 +319,21 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo], java_files: 
         *[f"mod {m};" for m in top_mods],
         f"use {use_path};",
         "",
-        f"fn main() {{ {main_class}::main(); }}",
+        f"fn main() {{",
+        f"    {main_class}::main().unwrap_or_else(|e| eprintln!(\"JVM Error: {{:?}}\", e));",
+        f"}}",
         "",
     ]
     with open(os.path.join(src_dir, 'main.rs'), 'w') as f:
         f.write('\n'.join(main_lines))
+
+    # 9. 写 JDK 类元数据注释文件（仅供 build.rs 扫描，不在 mod 树中）
+    if jdk_class_infos:
+        for jdk_ci in jdk_class_infos:
+            file_path = _jdk_class_file_path(src_dir, jdk_ci.name)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w') as f:
+                f.write(_gen_jdk_class_rs(jdk_ci))
+        print(f"[codegen] JDK 元数据 → {len(jdk_class_infos)} 个类")
 
     print(f"[codegen] Cargo project → {out_dir}/")

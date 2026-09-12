@@ -5,10 +5,12 @@ JVM 类型描述符 → Rust 类型的映射与解析工具。
 import re
 
 # ── JVM descriptor → Rust 类型 ──────────────────────────────────
+# 注：String 是 java::lang::String（通过 prelude 引入），
+#     它遮蔽 Rust 的 std::string::String，符合 Java 命名空间同构要求。
 JVM_RUST: dict[str, str] = {
     'I': 'i32', 'J': 'i64', 'F': 'f32', 'D': 'f64', 'Z': 'bool',
     'B': 'i8',  'S': 'i16', 'C': 'u16', 'V': '()',
-    'Ljava/lang/String;':  'String',
+    'Ljava/lang/String;':  'String',     # java.lang.String（不是 std::string::String）
     'Ljava/lang/Object;':  'JvmObject',
     'Ljava/lang/Integer;': 'i32',
     'Ljava/lang/Long;':    'i64',
@@ -32,13 +34,14 @@ NEWARRAY_TYPES: dict[str, tuple[str, str]] = {
 }
 
 # JDK 集合类 → (Rust 类型, 初始化表达式)
+# 所有集合类型用 java::util 的同构类型；初始化用 new()? 因为返回 Result
 JDK_COLL_TYPES: dict[str, tuple[str, str]] = {
-    'ArrayList':           ('Vec<i32>',           'Vec::new()'),
-    'java/util/ArrayList': ('Vec<i32>',           'Vec::new()'),
-    'HashMap':             ('HashMap<String,i32>', 'HashMap::new()'),
-    'java/util/HashMap':   ('HashMap<String,i32>', 'HashMap::new()'),
-    'HashSet':             ('HashSet<i32>',        'HashSet::new()'),
-    'java/util/HashSet':   ('HashSet<i32>',        'HashSet::new()'),
+    'ArrayList':           ('ArrayList<String>',        'ArrayList::<String>::new()?'),
+    'java/util/ArrayList': ('ArrayList<String>',        'ArrayList::<String>::new()?'),
+    'HashMap':             ('HashMap<String, String>',  'HashMap::<String, String>::new()?'),
+    'java/util/HashMap':   ('HashMap<String, String>',  'HashMap::<String, String>::new()?'),
+    'HashSet':             ('HashSet<String>',          'HashSet::<String>::new()?'),
+    'java/util/HashSet':   ('HashSet<String>',          'HashSet::<String>::new()?'),
 }
 
 # 已知 JDK 类名（短名，无包路径）
@@ -86,7 +89,8 @@ def sig_type(rt: str) -> str:
 def rust_default(rt: str) -> str:
     return {
         'i32': '0', 'i64': '0', 'f32': '0.0', 'f64': '0.0',
-        'bool': 'false', 'String': 'String::new()',
+        'bool': 'false',
+        'String': 'String::new()',  # java.lang.String 默认值
     }.get(rt, 'Default::default()')
 
 
