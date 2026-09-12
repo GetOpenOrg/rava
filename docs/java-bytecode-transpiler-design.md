@@ -819,32 +819,61 @@ scripts/
   validate.py           ☐ 验证清单完整性
 ```
 
-### 11.3 java_runtime 运行时存根结构（v0.2）
+### 11.3 输出项目结构：Cargo Workspace（v0.3）
 
-生成的 Rust 运行时按 JDK 包路径分层，位于 `output/src/java_runtime/`：
+转译器生成一个 **Cargo workspace**，包含三个独立子 crate：
 
 ```
-java_runtime/
-  mod.rs                ← pub mod error; pub mod java;
-  error.rs              ← JvmError enum
-  java/
-    mod.rs              ← pub mod lang; pub mod util; pub mod io;
-    lang/
-      mod.rs
-      math.rs           ← java.lang.Math（abs/sqrt/pow/floor/sin...）
-      system.rs         ← java.lang.System（println/exit/currentTimeMillis）
-      object.rs         ← java.lang.Object（hashCode/equals/toString）
-    util/
-      mod.rs
-      array_list.rs     ← java.util.ArrayList
-      hash_map.rs       ← java.util.HashMap
-      hash_set.rs       ← java.util.HashSet
-    io/
-      mod.rs
-      print_stream.rs   ← java.io.PrintStream
+output/
+  Cargo.toml                    ← [workspace] members = ["java_runtime", "jdk_classes", "user"]
+
+  java_runtime/                 ← 【手写，永不自动生成】内部运行时封装
+    Cargo.toml                  ← [lib]，无外部依赖
+    src/
+      lib.rs                    ← pub mod error; pub mod types; pub mod java; + prelude
+      error.rs                  ← JvmError enum, Result<T> 类型别名
+      types.rs                  ← Field<T>（内部用 Rc<RefCell<T>>，对外不可见）
+      java/
+        lang/
+          string.rs             ← java.lang.String
+          system.rs             ← java.lang.System / PrintStream
+          math.rs               ← java.lang.Math native stubs
+        util/
+          array_list.rs         ← java.util.ArrayList<T>
+          hash_map.rs           ← java.util.HashMap<K,V>
+          hash_set.rs           ← java.util.HashSet<T>
+
+  jdk_classes/                  ← 【自动生成】JDK .class 字节码翻译
+    Cargo.toml                  ← [lib]，depends on java_runtime = { path = "../java_runtime" }
+    src/
+      lib.rs                    ← pub mod java;
+      java/
+        util/
+          array_list.rs         ← ArrayList.class 字节码翻译（含泛型 <E>）
+          hash_map.rs           ← HashMap.class 字节码翻译（含泛型 <K,V>）
+          ...
+        lang/
+          object.rs             ← Object.class 字节码翻译
+
+  user/                         ← 【自动生成】用户 Java 代码翻译
+    Cargo.toml                  ← [[bin]]，depends on java_runtime + jdk_classes
+    src/
+      main.rs                   ← fn main() { HelloWorld::main()... }
+      hello_world.rs            ← HelloWorld.java 翻译
 ```
 
-新增 JDK 存根：在对应包目录添加 `.rs` 文件，并在 `scripts/codegen/runtime.py` 的 `RUNTIME_FILES` 字典中注册路径和内容。
+**三层隔离原则**：
+- `java_runtime`：内部实现（`Rc<RefCell<>>`、`dyn Any`）完全封装，对外只暴露 prelude
+- `jdk_classes`：生成代码只用 `use java_runtime::prelude::*;`，不见任何内部结构
+- `user`：生成代码只用 `use java_runtime::prelude::*;`，通过 `jdk_classes` 调用 JDK 类
+
+**运行命令**：
+```bash
+python3 scripts/main.py tests/HelloWorld.java
+cd output && cargo run --release -p user
+```
+
+新增 JDK 运行时存根：在 `scripts/codegen/runtime.py` 的 `RUNTIME_FILES` 字典中添加路径和内容，内容写入 `java_runtime/src/` 下对应位置。
 
 ### 11.4 已验证阶段（P0–P3）
 

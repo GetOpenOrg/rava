@@ -64,7 +64,8 @@ let list: Vec<String> = Vec::new();        // 不用 Rust 标准库类型
 
 ```rust
 // 业务层文件（hello_world.rs）的 use
-use crate::java_runtime::prelude::*;
+// java_runtime 是外部 crate 依赖，不是 crate 内部模块
+use java_runtime::prelude::*;
 ```
 
 ---
