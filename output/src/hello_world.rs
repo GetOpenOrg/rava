@@ -35,7 +35,7 @@ impl HelloWorld {
         let mut i: i32 = 0i32;
         loop {
             if i >= times { break; }
-            sb.append(&s);
+            sb.append(&s)?;
             i = i.wrapping_add(1i32);
         }
         Ok(sb)
@@ -49,9 +49,10 @@ impl HelloWorld {
         let mut r: String = _t0;
         System::out().println(r)?;
         let mut items: ArrayList<_> = ArrayList::<_>::new()?;
-        items.add(String::from("foo"))?;
-        items.add(String::from("bar"))?;
-        System::out().println(items.size())?;
+        let _t1 = items.add(String::from("foo"))?;
+        let _t2 = items.add(String::from("bar"))?;
+        let _t3 = items.size()?;
+        System::out().println(_t3)?;
         Ok(())
     }
 }

@@ -33,18 +33,6 @@ NEWARRAY_TYPES: dict[str, tuple[str, str]] = {
     'boolean': ('bool', 'false'),
 }
 
-# 已知 JDK 类名（短名，无包路径）
-JDK_CLASSES: set[str] = {
-    'Object', 'String', 'Integer', 'Long', 'Double', 'Float',
-    'Boolean', 'Byte', 'Short', 'Character',
-    'StringBuilder', 'StringBuffer',
-    'Math', 'System', 'Arrays', 'Collections',
-    'PrintStream', 'InputStream', 'OutputStream', 'BufferedReader',
-    'ArrayList', 'LinkedList',
-    'HashMap', 'LinkedHashMap', 'TreeMap',
-    'HashSet', 'TreeSet',
-    'List', 'Map', 'Set', 'Collection', 'Iterator', 'Optional',
-}
 
 # 装箱方法（调用端透明：保留栈顶值不变）
 BOXING_SKIP_STATIC: set[str] = {
@@ -84,7 +72,8 @@ def rust_default(rt: str) -> str:
 
 
 def is_jdk(cls: str) -> bool:
-    return cls in JDK_CLASSES or '/' in cls
+    """判断是否为 JDK 类（纯路径检查：含 / 的是 JDK 类）。"""
+    return '/' in cls
 
 
 def short_cls(cls: str) -> str:

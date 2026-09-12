@@ -41,10 +41,10 @@ impl TestP1 {
     #[cfg_attr(any(), java_method(name = "main", descriptor = "([Ljava/lang/String;)V", access = "public static"))]
     pub fn main() -> Result<()> {
         let mut p: TestP1 = TestP1::new(3i32, 4i32)?;
-        let _t0: i32 = p.sum()?;
+        let _t0 = p.sum()?;
         System::out().println(_t0)?;
         p.setX(10i32)?;
-        let _t1: i32 = p.sum()?;
+        let _t1 = p.sum()?;
         System::out().println(_t1)?;
         System::out().println(p.x.get())?;
         Ok(())

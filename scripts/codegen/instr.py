@@ -20,7 +20,7 @@ from .rs_ir import (
 )
 from .render import render_expr, render_type
 from .type_map import (
-    jvm_to_rust, sig_type, is_jdk, short_cls,
+    jvm_to_rust, sig_type, short_cls,
     NEWARRAY_TYPES,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
     parse_descriptor_params, parse_descriptor_return,
@@ -37,7 +37,6 @@ _COLL_IR_TYPES: dict[str, tuple] = {
     'java/util/HashSet':   (RsGeneric('HashSet',   [RsInfer()]),         'HashSet::<_>::new()?'),
 }
 from .types import Instr
-from .jdk_dispatch import dispatch_virtual
 
 
 # ── 辅助：解析 javap 注释中的方法引用 ────────────────────────────
@@ -269,11 +268,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     # ── 字段访问 ──
     elif op == 'getfield':
         obj_expr, obj_ty = sim.pop()
-        fm = re.search(r'Field\s+(?:\w+\.)?(\w+):(\S+)', comment)
-        if fm:
-            fname = fm.group(1)
-            ftype = jvm_to_rust(fm.group(2))
-            # 字段通过 Field<T>::get() 访问
+        if comment:
+            _, fname, fdesc = _parse_field_ref(comment)
+            ftype = jvm_to_rust(fdesc) if fdesc else 'JvmObject'
             sim.push(RawExpr(f"{render_expr(obj_expr)}.{fname}.get()"), RsNamed(ftype))
         else:
             sim.push(RawExpr(f"{render_expr(obj_expr)}.field"), I32)
@@ -281,10 +278,8 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'putfield':
         val_expr, _ = sim.pop()
         obj_expr, obj_ty = sim.pop()
-        fm = re.search(r'Field\s+(?:\w+\.)?(\w+):(\S+)', comment)
-        if fm:
-            fname = fm.group(1)
-            # 字段通过 Field<T>::set() 写入
+        if comment:
+            _, fname, _ = _parse_field_ref(comment)
             sim.emit(RawStmt(f"{render_expr(obj_expr)}.{fname}.set({render_expr(val_expr)});"))
         else:
             sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))
@@ -453,7 +448,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str):
             rust_ty_node = RsNamed('String')
             rust_ty      = 'String'
             init_expr    = 'String::new()'
-        elif raw_cls and not is_jdk(raw_cls):
+        elif raw_cls and '/' not in raw_cls:
             # 用户类：new()? 返回 Result<Self>
             init_expr    = f"{raw_cls}::new({', '.join(args)})?"
             rust_ty      = raw_cls
@@ -513,7 +508,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str):
     elif cls is None or cls == class_name:
         call = f"Self::{mname}({', '.join(args)})"
         needs_q = True
-    elif is_jdk(cls or ''):
+    elif cls and '/' in cls:
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
         call = f"{cls}::{mname}({', '.join(args)})"
@@ -544,25 +539,11 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         sim.push(obj_expr, obj_ty_node)
         return
 
-    # System.out.println / System.err.println
-    is_stdout = (
-        (isinstance(obj_expr, StaticFieldRef) and obj_expr.field_name in ('out', 'err'))
-        or (isinstance(obj_ty_node, RsNamed) and obj_ty_node.name == 'PrintStream')
-    )
-    if is_stdout:
-        is_err = isinstance(obj_expr, StaticFieldRef) and obj_expr.field_name == 'err'
-        stream = 'System::err()' if is_err else 'System::out()'
-        if not args:
-            sim.emit(RawStmt(f"{stream}.println_empty()?;"))
-        else:
-            sim.emit(RawStmt(f"{stream}.println({args[0]})?;"))
-        return
-
-    # StringBuilder.append / toString （映射到 java.lang.String）
+    # StringBuilder.append / toString（保留：Rust 引用语义特殊处理）
     if cls in ('StringBuilder', 'StringBuffer') or (obj_ty == 'String' and mname in ('append', 'toString')):
         if mname == 'append':
             a = args[0] if args else 'String::new()'
-            sim.emit(RawStmt(f"{obj_e}.append(&{a});"))
+            sim.emit(RawStmt(f"{obj_e}.append(&{a})?;"))
             sim.push(RawExpr(obj_e), RsNamed('String'))
             return
         if mname == 'toString':
@@ -571,24 +552,15 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         if mname == '<init>':
             return
 
-    # JDK 集合虚方法分派（接口驱动，降级到类名前缀匹配）
-    if dispatch_virtual(sim, obj_expr, obj_ty_node, obj_e, obj_ty, cls, mname, args, class_name, registry=registry):
-        return
-
-    # 用户类实例方法：obj.method(args)?
-    target_cls = cls or class_name
-    if not is_jdk(target_cls):
-        arg_str  = ', '.join(args)
-        call     = f"{obj_e}.{mname}({arg_str})"
-        rust_ret = jvm_to_rust(ret)
-        if rust_ret == '()':
-            sim.emit(RawStmt(f"{call}?;"))
-        else:
-            v = sim.fresh()
-            sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}?;"))
-            sim.push(Var(v), RsNamed(rust_ret))
-        return
-
-    sim.emit(RawStmt(f"/* {cls}.{mname}({', '.join(args)}) */"))
+    # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
+    arg_str = ', '.join(args)
+    rust_ret = jvm_to_rust(ret)
+    if rust_ret == '()':
+        sim.emit(RawStmt(f"{obj_e}.{mname}({arg_str})?;"))
+    else:
+        v = sim.fresh()
+        # 不写出显式类型注解，让 Rust 从方法返回类型推断（避免 JDK 类型擦除问题）
+        sim.emit(RawStmt(f"let {v} = {obj_e}.{mname}({arg_str})?;"))
+        sim.push(Var(v), RsNamed(rust_ret))
 
 

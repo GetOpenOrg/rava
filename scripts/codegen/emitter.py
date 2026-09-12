@@ -13,7 +13,7 @@ Rust 文件生成器：将 ClassInfo 列表写出为 Cargo 项目，
 import os
 import re
 from .types import ClassInfo, FieldInfo, ParsedMethod
-from .type_map import jvm_to_rust, rust_default
+from .type_map import jvm_to_rust, rust_default, short_cls
 from .method import gen_method_body, _indent
 from .runtime import RUNTIME_FILES
 
@@ -213,15 +213,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
     inst_fields = [f for f in ci.fields if not f.is_static]
     has_instance_methods = any(not m.is_static and not m.is_constructor for m in ci.methods)
 
+    # 用短名作为 Rust 标识符（JDK 类的 ci.name 含 /，不是合法 Rust 名）
+    struct_name = short_cls(ci.name) if '/' in ci.name else ci.name
+
     if inst_fields:
         field_lines = []
         for f in inst_fields:
             field_lines.append("    " + _java_field_attr(f))
             field_lines.append(f"    pub {f.name}: Field<{jvm_to_rust(f.descriptor)}>,")
         decls = '\n'.join(field_lines)
-        parts.append(f"pub struct {ci.name} {{\n{decls}\n}}\n")
+        parts.append(f"pub struct {struct_name} {{\n{decls}\n}}\n")
     else:
-        parts.append(f"pub struct {ci.name};\n")
+        parts.append(f"pub struct {struct_name};\n")
 
     method_blocks: list[str] = []
     for m in ci.methods:
@@ -239,7 +242,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
                 method_blocks.append(f"/* codegen error {m.name}: {e} */")
 
     impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
-    parts.append(f"impl {ci.name} {{\n{impl_body}\n}}\n")
+    parts.append(f"impl {struct_name} {{\n{impl_body}\n}}\n")
     return '\n'.join(parts)
 
 
@@ -340,13 +343,13 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     with open(os.path.join(src_dir, 'main.rs'), 'w') as f:
         f.write('\n'.join(main_lines))
 
-    # 9. 写 JDK 类元数据注释文件（仅供 build.rs 扫描，不在 mod 树中）
+    # 9. 写 JDK 类完整翻译文件（不在 mod 树中，不参与 Rust 模块编译）
     if jdk_class_infos:
         for jdk_ci in jdk_class_infos:
             file_path = _jdk_class_file_path(src_dir, jdk_ci.name)
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, 'w') as f:
-                f.write(_gen_jdk_class_rs(jdk_ci))
-        print(f"[codegen] JDK 元数据 → {len(jdk_class_infos)} 个类")
+                f.write(_gen_class_rs(jdk_ci, registry=registry))
+        print(f"[codegen] JDK 翻译 → {len(jdk_class_infos)} 个类")
 
     print(f"[codegen] Cargo project → {out_dir}/")
