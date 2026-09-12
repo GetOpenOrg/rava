@@ -14,13 +14,14 @@ import re
 from .types import ParsedMethod, ClassInfo
 from .type_map import jvm_to_rust, sig_type, rust_default
 from .stack import StackSim
-from .cfg import find_loops, cmp_op
+from .cfg import find_loops, find_boolean_conditions, cmp_op, neg_cmp_op
 from .instr import sim_instr
 from .render import render_stmt, render_expr
 from .rs_ir import (
     RsNamed, RsPrimitive, RsType,
-    AssignStmt, LetStmt, Var, IfStmt, LoopStmt,
+    AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr,
 )
+from .stack import BOOL
 
 _PRIMITIVE_TYPES = {'i32', 'i64', 'f32', 'f64', 'bool', 'usize', '()'}
 
@@ -119,6 +120,7 @@ def _indent(block: str, n: int = 4) -> str:
 def gen_method_body(method: ParsedMethod, class_info: ClassInfo, registry: dict | None = None) -> str:
     instrs           = method.instrs
     loop_map         = {lp.start_idx: lp for lp in find_loops(instrs)}
+    bool_cond_map    = find_boolean_conditions(instrs)
     param_types      = method.param_types
     rust_param_types = [jvm_to_rust(t) for t in param_types]
     rust_ret         = jvm_to_rust(method.return_type)
@@ -238,6 +240,27 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo, registry: dict 
 
             entries.append(('', "    }"))
             i = lp.end_idx + 1
+            continue
+
+        # condition→boolean 模式（if* iconst_X goto iconst_Y）
+        if i in bool_cond_map:
+            true_val, false_val, false_idx, end_idx = bool_cond_map[i]
+            is_two_op = ins.opcode in TWO_OP_CMP
+            if is_two_op:
+                b_expr, _ = sim.pop(); a_expr, _ = sim.pop()
+                a_str = render_expr(a_expr); b_str = render_expr(b_expr)
+            else:
+                a_expr, _ = sim.pop()
+                a_str = render_expr(a_expr); b_str = ''
+            # true_val=1,false_val=0 → fall-through 为 true → 用 neg_cmp_op（取反跳转条件）
+            # true_val=0,false_val=1 → jump 为 true    → 用 cmp_op（跳转条件即为 true）
+            if true_val == 1 and false_val == 0:
+                bool_expr = neg_cmp_op(ins.opcode, a_str, b_str)
+            else:
+                bool_expr = cmp_op(ins.opcode, a_str, b_str)
+            sim.push(RawExpr(bool_expr), BOOL)
+            flush(sim)
+            i = end_idx
             continue
 
         # 普通指令
