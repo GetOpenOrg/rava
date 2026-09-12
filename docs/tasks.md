@@ -483,7 +483,7 @@ T18 (native impls)    ─ 依赖 T17
 **背景**：代码审计发现代码生成层存在 5 个根本性问题（魔法字符串、字符串类型标注、if-chain 分派、正则后处理、RawExpr 泛滥），需要从架构层面系统性修复。
 
 ### T19 · rs_ir.py 扩展新 IR 节点
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/rs_ir.py`、`scripts/codegen/render.py`  
 **依赖**：T02（已完成）
 
@@ -499,7 +499,7 @@ T18 (native impls)    ─ 依赖 T17
 ---
 
 ### T20 · stack.py 删除字符串兼容路径
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/stack.py`  
 **依赖**：T19
 
@@ -515,7 +515,7 @@ T18 (native impls)    ─ 依赖 T17
 ---
 
 ### T21 · instr.py 全量 IR 化（消灭魔法字符串）
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/instr.py`  
 **依赖**：T20
 
@@ -534,7 +534,7 @@ T18 (native impls)    ─ 依赖 T17
 ---
 
 ### T22 · method.py 删除正则后处理，改为 IR mutation 分析
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/method.py`  
 **依赖**：T21
 
@@ -551,7 +551,7 @@ T18 (native impls)    ─ 依赖 T17
 ---
 
 ### T23 · 阶段 A 回归验证
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **依赖**：T22
 
 **目标**：确认 A1–A4 改造后全部测试仍正确。
@@ -572,7 +572,7 @@ cd output && cargo run --release  # 输出 Hello, World!
 ---
 
 ### T24 · jdk_dispatch.py 新建（过渡注册表）
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/jdk_dispatch.py`（新建）  
 **依赖**：T21
 
@@ -589,7 +589,7 @@ cd output && cargo run --release  # 输出 Hello, World!
 ---
 
 ### T25 · 泛型类型实时确定（删除 JDK_COLL_TYPES）
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/jdk_dispatch.py`、`scripts/codegen/type_map.py`  
 **依赖**：T24
 
@@ -603,7 +603,7 @@ cd output && cargo run --release  # 输出 Hello, World!
 ---
 
 ### T26 · 阶段 B 回归验证
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **依赖**：T25
 
 **目标**：确认 B1–B3 改造后全部测试仍正确，重点验证 TestP3（集合泛型）。
@@ -613,7 +613,7 @@ cd output && cargo run --release  # 输出 Hello, World!
 ---
 
 ### T27 · emitter.py 升级属性格式，build.rs 同步更新
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/emitter.py`、`output/build.rs`  
 **依赖**：T17（已完成）
 
@@ -648,7 +648,7 @@ cd output && cargo run --release  # 输出 Hello, World!
 ---
 
 ### T29 · build.rs 构建阻断升级
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`output/build.rs`  
 **依赖**：T27
 
