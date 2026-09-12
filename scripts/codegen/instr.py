@@ -374,7 +374,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op in ('nop', 'wide'): pass
     elif op == 'athrow':
         e_expr, _ = sim.pop()
-        sim.emit(RawStmt(f'panic!("{{}}", /* {render_expr(e_expr)} */);'))
+        sim.emit(RawStmt(f'return Err(JvmError::Custom(String::from("athrow")));'))
     else:
         sim.emit(RawStmt(f"/* TODO: {op} {operand} */"))
 

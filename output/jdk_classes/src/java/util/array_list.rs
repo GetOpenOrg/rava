@@ -10,7 +10,7 @@ use java_runtime::prelude::*;
 ))]
 pub struct ArrayList<E> {
     #[cfg_attr(any(), java_field(name = "elementData", descriptor = "[Ljava/lang/Object;", access = ""))]
-    pub elementData: Field<Object>,
+    pub elementData: Field<Vec<Object>>,
     #[cfg_attr(any(), java_field(name = "size", descriptor = "I", access = "private"))]
     pub size: Field<i32>,
 }
@@ -26,7 +26,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         this.elementData.set(ArrayList::EMPTY_ELEMENTDATA());
         String::new().append(&String::from("Illegal Capacity:"))?;
         String::new().append(&initialCapacity)?;
-        panic!("{}", /* IllegalArgumentException::new(String::new())? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(this)
     }
 
@@ -41,15 +41,15 @@ impl<E: Clone + 'static> ArrayList<E> {
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/util/Collection;)V", access = "public"))]
     // java: <init>(Ljava/util/Collection;)V
-    pub fn new__coll(c: Object) -> Result<Self> {
+    pub fn new__coll(c: Collection) -> Result<Self> {
         let this = Self { elementData: Field::new(Default::default()), size: Field::new(0) };
         /* invokespecial Method java/util/AbstractList.<init>:()V */
         let _t0 = c.toArray()?;
-        let mut a: Object = _t0;
+        let mut a: Vec<Object> = _t0;
         this.size.set((a.len() as i32));
         let _t1 = c.getClass()?;
         this.elementData.set(a);
-        let _t2: Object = Arrays::copyOf(a, this.size.get(), 56i32)?;
+        let _t2: Vec<Object> = Arrays::copyOf(&a, this.size.get(), 56i32)?;
         this.elementData.set(_t2);
         this.elementData.set(ArrayList::EMPTY_ELEMENTDATA());
         Ok(this)
@@ -59,7 +59,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     pub fn trimToSize(&self) -> Result<()> {
         let this = self;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
-        let _t0: Object = Arrays::copyOf(this.elementData.get(), this.size.get())?;
+        let _t0: Vec<Object> = Arrays::copyOf(&this.elementData.get(), this.size.get())?;
         ArrayList::EMPTY_ELEMENTDATA().elementData.set(_t0);
         Ok(())
     }
@@ -74,12 +74,12 @@ impl<E: Clone + 'static> ArrayList<E> {
 
     #[cfg_attr(any(), java_method(name = "grow", descriptor = "(I)[Ljava/lang/Object;", access = "private"))]
     // java: grow(I)[Ljava/lang/Object;
-    pub fn grow__i(&self, minCapacity: i32) -> Result<Object> {
+    pub fn grow__i(&self, minCapacity: i32) -> Result<Vec<Object>> {
         let this = self;
         let mut oldCapacity: i32 = (this.elementData.get().len() as i32);
         let _t0: i32 = ArraysSupport::newLength(oldCapacity, (minCapacity).wrapping_sub(oldCapacity), (oldCapacity>>((1i32&0x1f))))?;
         let mut newCapacity: i32 = _t0;
-        let _t1: Object = Arrays::copyOf(this.elementData.get(), newCapacity)?;
+        let _t1: Vec<Object> = Arrays::copyOf(&this.elementData.get(), newCapacity)?;
         this.elementData.set(_t1);
         return Ok(_t1);
         let _t2: i32 = (10i32).max(minCapacity);
@@ -90,7 +90,7 @@ impl<E: Clone + 'static> ArrayList<E> {
 
     #[cfg_attr(any(), java_method(name = "grow", descriptor = "()[Ljava/lang/Object;", access = "private"))]
     // java: grow()[Ljava/lang/Object;
-    pub fn grow(&self) -> Result<Object> {
+    pub fn grow(&self) -> Result<Vec<Object>> {
         let this = self;
         let _t0 = this.grow((this.size.get()).wrapping_add(1i32))?;
         Ok(_t0)
@@ -125,7 +125,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_method(name = "indexOfRange", descriptor = "(Ljava/lang/Object;II)I"))]
     pub fn indexOfRange(&self, o: Object, start: i32, end: i32) -> Result<i32> {
         let this = self;
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         let mut i: i32 = start;
         loop {
             if i >= end { break; }
@@ -152,7 +152,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_method(name = "lastIndexOfRange", descriptor = "(Ljava/lang/Object;II)I"))]
     pub fn lastIndexOfRange(&self, o: Object, start: i32, end: i32) -> Result<i32> {
         let this = self;
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         let mut i: i32 = (end).wrapping_sub(1i32);
         loop {
             if i < start { break; }
@@ -173,30 +173,30 @@ impl<E: Clone + 'static> ArrayList<E> {
     pub fn clone(&self) -> Result<Object> {
         let this = self;
         let mut v: java/util/ArrayList = this;
-        let _t0: Object = Arrays::copyOf(this.elementData.get(), this.size.get())?;
+        let _t0: Vec<Object> = Arrays::copyOf(&this.elementData.get(), this.size.get())?;
         v.elementData.set(_t0);
         v.modCount.set(0i32);
         return Ok(v);
         v = todo!("stack underflow");
-        panic!("{}", /* InternalError::new(v)? */);
+        return Err(JvmError::Custom(String::from("athrow")));
     }
 
     #[cfg_attr(any(), java_method(name = "toArray", descriptor = "()[Ljava/lang/Object;", access = "public"))]
     // java: toArray()[Ljava/lang/Object;
-    pub fn toArray(&self) -> Result<Object> {
+    pub fn toArray(&self) -> Result<Vec<Object>> {
         let this = self;
-        let _t0: Object = Arrays::copyOf(this.elementData.get(), this.size.get())?;
+        let _t0: Vec<Object> = Arrays::copyOf(&this.elementData.get(), this.size.get())?;
         Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "toArray", descriptor = "([Ljava/lang/Object;)[Ljava/lang/Object;", access = "public"))]
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
-    pub fn toArray__arr_obj(&self, a: Object) -> Result<Object> {
+    pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
         let this = self;
         let _t0 = a.getClass()?;
-        let _t1: Object = Arrays::copyOf(this.elementData.get(), this.size.get(), _t0)?;
+        let _t1: Vec<Object> = Arrays::copyOf(&this.elementData.get(), this.size.get(), _t0)?;
         return Ok(_t1);
-        System::arraycopy(this.elementData.get(), 0i32, a, 0i32, this.size.get())?;
+        System::arraycopy(&this.elementData.get(), 0i32, &a, 0i32, this.size.get())?;
         /* TODO: aconst_null  */
         this.size.get()[a as usize] = this.size.get();
         Ok(a)
@@ -209,7 +209,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "elementAt", descriptor = "([Ljava/lang/Object;I)Ljava/lang/Object;", access = "static"))]
-    pub fn elementAt(es: Object, index: i32) -> Result<E> {
+    pub fn elementAt(es: &[Object], index: i32) -> Result<E> {
         Ok(es[index as usize].clone())
     }
 
@@ -224,7 +224,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_method(name = "getFirst", descriptor = "()Ljava/lang/Object;", access = "public"))]
     pub fn getFirst(&self) -> Result<E> {
         let this = self;
-        panic!("{}", /* NoSuchElementException::new()? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         let _t0 = this.elementData(0i32)?;
         Ok(_t0)
     }
@@ -233,7 +233,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     pub fn getLast(&self) -> Result<E> {
         let this = self;
         let mut last: i32 = (this.size.get()).wrapping_sub(1i32);
-        panic!("{}", /* NoSuchElementException::new()? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         let _t0 = this.elementData(last)?;
         Ok(_t0)
     }
@@ -250,7 +250,7 @@ impl<E: Clone + 'static> ArrayList<E> {
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;[Ljava/lang/Object;I)V", access = "private"))]
     // java: add(Ljava/lang/Object;[Ljava/lang/Object;I)V
-    pub fn add__obj_arr_obj_i(&self, e: E, elementData: Object, s: i32) -> Result<()> {
+    pub fn add__obj_arr_obj_i(&self, e: E, elementData: Vec<Object>, s: i32) -> Result<()> {
         let this = self;
         let _t0 = this.grow()?;
         elementData = _t0;
@@ -275,10 +275,10 @@ impl<E: Clone + 'static> ArrayList<E> {
         this.rangeCheckForAdd(index)?;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         let mut s: i32 = this.size.get();
-        let mut elementData: Object = this.elementData.get();
+        let mut elementData: Vec<Object> = this.elementData.get();
         let _t0 = this.grow()?;
         elementData = _t0;
-        System::arraycopy(elementData, index, elementData, (index).wrapping_add(1i32), (s).wrapping_sub(index))?;
+        System::arraycopy(&elementData, index, &elementData, (index).wrapping_add(1i32), (s).wrapping_sub(index))?;
         elementData[index as usize] = element;
         this.size.set((s).wrapping_add(1i32));
         Ok(())
@@ -303,7 +303,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     pub fn remove__i(&self, index: i32) -> Result<E> {
         let this = self;
         let _t0: i32 = Objects::checkIndex(index, this.size.get())?;
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         let mut oldValue: Object = es[index as usize].clone();
         this.fastRemove(es, index)?;
         Ok(oldValue)
@@ -312,8 +312,8 @@ impl<E: Clone + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_method(name = "removeFirst", descriptor = "()Ljava/lang/Object;", access = "public"))]
     pub fn removeFirst(&self) -> Result<E> {
         let this = self;
-        panic!("{}", /* NoSuchElementException::new()? */);
-        let mut es: Object = this.elementData.get();
+        return Err(JvmError::Custom(String::from("athrow")));
+        let mut es: Vec<Object> = this.elementData.get();
         let mut oldValue: Object = es[0i32 as usize].clone();
         this.fastRemove(es, 0i32)?;
         Ok(oldValue)
@@ -323,8 +323,8 @@ impl<E: Clone + 'static> ArrayList<E> {
     pub fn removeLast(&self) -> Result<E> {
         let this = self;
         let mut last: i32 = (this.size.get()).wrapping_sub(1i32);
-        panic!("{}", /* NoSuchElementException::new()? */);
-        let mut es: Object = this.elementData.get();
+        return Err(JvmError::Custom(String::from("athrow")));
+        let mut es: Vec<Object> = this.elementData.get();
         let mut oldValue: Object = es[last as usize].clone();
         this.fastRemove(es, last)?;
         Ok(oldValue)
@@ -345,12 +345,12 @@ impl<E: Clone + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "equalsRange", descriptor = "(Ljava/util/List;II)Z"))]
-    pub fn equalsRange(&self, other: Object, from: i32, to: i32) -> Result<bool> {
+    pub fn equalsRange(&self, other: List, from: i32, to: i32) -> Result<bool> {
         let this = self;
-        let mut es: Object = this.elementData.get();
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        let mut es: Vec<Object> = this.elementData.get();
+        return Err(JvmError::Custom(String::from("athrow")));
         let _t0 = other.iterator()?;
-        let mut oit: Object = _t0;
+        let mut oit: Iterator = _t0;
         loop {
             if from >= to { break; }
             let _t0 = oit.hasNext()?;
@@ -364,14 +364,14 @@ impl<E: Clone + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "equalsArrayList", descriptor = "(Ljava/util/ArrayList;)Z", access = "private"))]
-    pub fn equalsArrayList(&self, other: Object) -> Result<bool> {
+    pub fn equalsArrayList(&self, other: ArrayList) -> Result<bool> {
         let this = self;
         let mut otherModCount: i32 = other.modCount.get();
         let mut s: i32 = this.size.get();
         let mut equal: i32 = s == other.size.get();
-        let mut otherEs: Object = other.elementData.get();
-        let mut es: Object = this.elementData.get();
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        let mut otherEs: Vec<Object> = other.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
+        return Err(JvmError::Custom(String::from("athrow")));
         let mut i: i32 = 0i32;
         loop {
             if i >= s { break; }
@@ -386,7 +386,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_method(name = "checkForComodification", descriptor = "(I)V", access = "private"))]
     pub fn checkForComodification(&self, expectedModCount: i32) -> Result<()> {
         let this = self;
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
@@ -403,8 +403,8 @@ impl<E: Clone + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_method(name = "hashCodeRange", descriptor = "(II)I"))]
     pub fn hashCodeRange(&self, from: i32, to: i32) -> Result<i32> {
         let this = self;
-        let mut es: Object = this.elementData.get();
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        let mut es: Vec<Object> = this.elementData.get();
+        return Err(JvmError::Custom(String::from("athrow")));
         let mut hashCode: i32 = 1i32;
         let mut i: i32 = from;
         loop {
@@ -421,7 +421,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove__obj(&self, o: Object) -> Result<bool> {
         let this = self;
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         let mut size: i32 = this.size.get();
         let mut i: i32 = 0i32;
         loop {
@@ -439,11 +439,11 @@ impl<E: Clone + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "fastRemove", descriptor = "([Ljava/lang/Object;I)V", access = "private"))]
-    pub fn fastRemove(&self, es: Object, i: i32) -> Result<()> {
+    pub fn fastRemove(&self, es: Vec<Object>, i: i32) -> Result<()> {
         let this = self;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         let mut newSize: i32 = (this.size.get()).wrapping_sub(1i32);
-        System::arraycopy(es, (i).wrapping_add(1i32), es, i, (newSize).wrapping_sub(i))?;
+        System::arraycopy(&es, (i).wrapping_add(1i32), &es, i, (newSize).wrapping_sub(i))?;
         this.size.set(newSize);
         /* TODO: aconst_null  */
         i[es as usize] = newSize;
@@ -454,7 +454,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     pub fn clear(&self) -> Result<()> {
         let this = self;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         let mut to: i32 = this.size.get();
         this.size.set(0i32);
         let mut i: i32 = 0i32;
@@ -469,39 +469,39 @@ impl<E: Clone + 'static> ArrayList<E> {
 
     #[cfg_attr(any(), java_method(name = "addAll", descriptor = "(Ljava/util/Collection;)Z", access = "public"))]
     // java: addAll(Ljava/util/Collection;)Z
-    pub fn addAll__coll(&self, c: Object) -> Result<bool> {
+    pub fn addAll__coll(&self, c: Collection) -> Result<bool> {
         let this = self;
         let _t0 = c.toArray()?;
-        let mut a: Object = _t0;
+        let mut a: Vec<Object> = _t0;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         let mut numNew: i32 = (a.len() as i32);
         return Ok(0i32);
-        let mut elementData: Object = this.elementData.get();
+        let mut elementData: Vec<Object> = this.elementData.get();
         let mut s: i32 = this.size.get();
         let _t1 = this.grow((s).wrapping_add(numNew))?;
         elementData = _t1;
-        System::arraycopy(a, 0i32, elementData, s, numNew)?;
+        System::arraycopy(&a, 0i32, &elementData, s, numNew)?;
         this.size.set((s).wrapping_add(numNew));
         Ok(1i32)
     }
 
     #[cfg_attr(any(), java_method(name = "addAll", descriptor = "(ILjava/util/Collection;)Z", access = "public"))]
     // java: addAll(ILjava/util/Collection;)Z
-    pub fn addAll__i_coll(&self, index: i32, c: Object) -> Result<bool> {
+    pub fn addAll__i_coll(&self, index: i32, c: Collection) -> Result<bool> {
         let this = self;
         this.rangeCheckForAdd(index)?;
         let _t0 = c.toArray()?;
-        let mut a: Object = _t0;
+        let mut a: Vec<Object> = _t0;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         let mut numNew: i32 = (a.len() as i32);
         return Ok(0i32);
-        let mut elementData: Object = this.elementData.get();
+        let mut elementData: Vec<Object> = this.elementData.get();
         let mut s: i32 = this.size.get();
         let _t1 = this.grow((s).wrapping_add(numNew))?;
         elementData = _t1;
         let mut numMoved: i32 = (s).wrapping_sub(index);
-        System::arraycopy(elementData, index, elementData, (index).wrapping_add(numNew), numMoved)?;
-        System::arraycopy(a, 0i32, elementData, index, numNew)?;
+        System::arraycopy(&elementData, index, &elementData, (index).wrapping_add(numNew), numMoved)?;
+        System::arraycopy(&a, 0i32, &elementData, index, numNew)?;
         this.size.set((s).wrapping_add(numNew));
         Ok(1i32)
     }
@@ -510,16 +510,16 @@ impl<E: Clone + 'static> ArrayList<E> {
     pub fn removeRange(&self, fromIndex: i32, toIndex: i32) -> Result<()> {
         let this = self;
         let _t0: String = ArrayList::outOfBoundsMsg(fromIndex, toIndex)?;
-        panic!("{}", /* IndexOutOfBoundsException::new(_t0)? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         this.shiftTailOverGap(this.elementData.get(), fromIndex, toIndex)?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "shiftTailOverGap", descriptor = "([Ljava/lang/Object;II)V", access = "private"))]
-    pub fn shiftTailOverGap(&self, es: Object, lo: i32, hi: i32) -> Result<()> {
+    pub fn shiftTailOverGap(&self, es: Vec<Object>, lo: i32, hi: i32) -> Result<()> {
         let this = self;
-        System::arraycopy(es, hi, es, lo, (this.size.get()).wrapping_sub(hi))?;
+        System::arraycopy(&es, hi, &es, lo, (this.size.get()).wrapping_sub(hi))?;
         let mut to: i32 = this.size.get();
         this.size.set((this.size.get()).wrapping_sub((hi).wrapping_sub(lo)));
         let mut i: i32 = (this.size.get()).wrapping_sub((hi).wrapping_sub(lo));
@@ -536,7 +536,7 @@ impl<E: Clone + 'static> ArrayList<E> {
     pub fn rangeCheckForAdd(&self, index: i32) -> Result<()> {
         let this = self;
         let _t0 = this.outOfBoundsMsg(index)?;
-        panic!("{}", /* IndexOutOfBoundsException::new(_t0)? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
@@ -562,24 +562,24 @@ impl<E: Clone + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "removeAll", descriptor = "(Ljava/util/Collection;)Z", access = "public"))]
-    pub fn removeAll(&self, c: Object) -> Result<bool> {
+    pub fn removeAll(&self, c: Collection) -> Result<bool> {
         let this = self;
         let _t0 = this.batchRemove(c, 0i32, 0i32, this.size.get())?;
         Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "retainAll", descriptor = "(Ljava/util/Collection;)Z", access = "public"))]
-    pub fn retainAll(&self, c: Object) -> Result<bool> {
+    pub fn retainAll(&self, c: Collection) -> Result<bool> {
         let this = self;
         let _t0 = this.batchRemove(c, 1i32, 0i32, this.size.get())?;
         Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "batchRemove", descriptor = "(Ljava/util/Collection;ZII)Z"))]
-    pub fn batchRemove(&self, c: Object, complement: bool, from: i32, end: i32) -> Result<bool> {
+    pub fn batchRemove(&self, c: Collection, complement: bool, from: i32, end: i32) -> Result<bool> {
         let this = self;
         let _t0: Object = Objects::requireNonNull(c)?;
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         let mut r: i32 = from;
         return Ok(0i32);
         let _t1 = c.contains(es[r as usize].clone())?;
@@ -597,18 +597,18 @@ impl<E: Clone + 'static> ArrayList<E> {
         this.modCount.set((this.modCount.get()).wrapping_add((end).wrapping_sub(w)));
         this.shiftTailOverGap(es, w, end)?;
         e = complement;
-        System::arraycopy(es, r, es, w, (end).wrapping_sub(r))?;
+        System::arraycopy(&es, r, &es, w, (end).wrapping_sub(r))?;
         w = (w).wrapping_add((end).wrapping_sub(r));
-        panic!("{}", /* e */);
+        return Err(JvmError::Custom(String::from("athrow")));
         let mut local_9: bool = _t1;
         this.modCount.set((this.modCount.get()).wrapping_add((end).wrapping_sub(w)));
         this.shiftTailOverGap(es, w, end)?;
-        panic!("{}", /* local_9 */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(1i32)
     }
 
     #[cfg_attr(any(), java_method(name = "writeObject", descriptor = "(Ljava/io/ObjectOutputStream;)V", access = "private"))]
-    pub fn writeObject(&self, s: Object) -> Result<()> {
+    pub fn writeObject(&self, s: ObjectOutputStream) -> Result<()> {
         let this = self;
         let mut expectedModCount: i32 = this.modCount.get();
         s.defaultWriteObject()?;
@@ -619,16 +619,16 @@ impl<E: Clone + 'static> ArrayList<E> {
             s.writeObject(this.elementData.get()[i as usize].clone())?;
             i = i.wrapping_add(1i32);
         }
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "readObject", descriptor = "(Ljava/io/ObjectInputStream;)V", access = "private"))]
-    pub fn readObject(&self, s: Object) -> Result<()> {
+    pub fn readObject(&self, s: ObjectInputStream) -> Result<()> {
         let this = self;
         s.defaultReadObject()?;
         let _t0 = s.readInt()?;
-        let _t1: Object = SharedSecrets::getJavaObjectInputStreamAccess()?;
+        let _t1: JavaObjectInputStreamAccess = SharedSecrets::getJavaObjectInputStreamAccess()?;
         _t1.checkArray(s, 56i32, this.size.get())?;
         let mut _arr2: Vec<Object> = Vec::with_capacity(this.size.get() as usize);
         let mut elements: Vec<Object> = _arr2;
@@ -643,60 +643,60 @@ impl<E: Clone + 'static> ArrayList<E> {
         this.elementData.set(ArrayList::EMPTY_ELEMENTDATA());
         String::new().append(&String::from("Invalid size:"))?;
         String::new().append(&this.size.get())?;
-        panic!("{}", /* InvalidObjectException::new(String::new())? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "listIterator", descriptor = "(I)Ljava/util/ListIterator;", access = "public"))]
     // java: listIterator(I)Ljava/util/ListIterator;
-    pub fn listIterator__i(&self, index: i32) -> Result<Object> {
+    pub fn listIterator__i(&self, index: i32) -> Result<ListIterator> {
         let this = self;
         this.rangeCheckForAdd(index)?;
-        Ok(ArrayList$ListItr::new(this, index)?)
+        Ok(ArrayList_ListItr::new(this, index)?)
     }
 
     #[cfg_attr(any(), java_method(name = "listIterator", descriptor = "()Ljava/util/ListIterator;", access = "public"))]
     // java: listIterator()Ljava/util/ListIterator;
-    pub fn listIterator(&self) -> Result<Object> {
+    pub fn listIterator(&self) -> Result<ListIterator> {
         let this = self;
-        Ok(ArrayList$ListItr::new(this, 0i32)?)
+        Ok(ArrayList_ListItr::new(this, 0i32)?)
     }
 
     #[cfg_attr(any(), java_method(name = "iterator", descriptor = "()Ljava/util/Iterator;", access = "public"))]
-    pub fn iterator(&self) -> Result<Object> {
+    pub fn iterator(&self) -> Result<Iterator> {
         let this = self;
-        Ok(ArrayList$Itr::new(this)?)
+        Ok(ArrayList_Itr::new(this)?)
     }
 
     #[cfg_attr(any(), java_method(name = "subList", descriptor = "(II)Ljava/util/List;", access = "public"))]
-    pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
+    pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<List> {
         let this = self;
         ArrayList::subListRangeCheck(fromIndex, toIndex, this.size.get())?;
-        Ok(ArrayList$SubList::new(this, fromIndex, toIndex)?)
+        Ok(ArrayList_SubList::new(this, fromIndex, toIndex)?)
     }
 
     #[cfg_attr(any(), java_method(name = "forEach", descriptor = "(Ljava/util/function/Consumer;)V", access = "public"))]
-    pub fn forEach(&self, action: Object) -> Result<()> {
+    pub fn forEach(&self, action: Consumer) -> Result<()> {
         let this = self;
         let _t0: Object = Objects::requireNonNull(action)?;
         let mut expectedModCount: i32 = this.modCount.get();
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         let mut size: i32 = this.size.get();
         let mut i: i32 = 0i32;
         loop {
             if this.modCount.get() != expectedModCount { break; }
-            let _t0: Object = ArrayList::elementAt(es, i)?;
+            let _t0: Object = ArrayList::elementAt(&es, i)?;
             action.accept(_t0)?;
             i = i.wrapping_add(1i32);
         }
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "spliterator", descriptor = "()Ljava/util/Spliterator;", access = "public"))]
-    pub fn spliterator(&self) -> Result<Object> {
+    pub fn spliterator(&self) -> Result<Spliterator> {
         let this = self;
-        Ok(ArrayList$ArrayListSpliterator::new(this, 0i32, -1i32, 0i32)?)
+        Ok(ArrayList_ArrayListSpliterator::new(this, 0i32, -1i32, 0i32)?)
     }
 
     #[cfg_attr(any(), java_method(name = "nBits", descriptor = "(I)[J", access = "private static"))]
@@ -724,7 +724,7 @@ impl<E: Clone + 'static> ArrayList<E> {
 
     #[cfg_attr(any(), java_method(name = "removeIf", descriptor = "(Ljava/util/function/Predicate;)Z", access = "public"))]
     // java: removeIf(Ljava/util/function/Predicate;)Z
-    pub fn removeIf__predic(&self, filter: Object) -> Result<bool> {
+    pub fn removeIf__predic(&self, filter: Predicate) -> Result<bool> {
         let this = self;
         let _t0 = this.removeIf(filter, 0i32, this.size.get())?;
         Ok(_t0)
@@ -732,14 +732,14 @@ impl<E: Clone + 'static> ArrayList<E> {
 
     #[cfg_attr(any(), java_method(name = "removeIf", descriptor = "(Ljava/util/function/Predicate;II)Z"))]
     // java: removeIf(Ljava/util/function/Predicate;II)Z
-    pub fn removeIf__predic_i_i(&self, filter: Object, i: i32, end: i32) -> Result<bool> {
+    pub fn removeIf__predic_i_i(&self, filter: Predicate, i: i32, end: i32) -> Result<bool> {
         let this = self;
         let _t0: Object = Objects::requireNonNull(filter)?;
         let mut expectedModCount: i32 = this.modCount.get();
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         loop {
             if i >= end { break; }
-            let _t0: Object = ArrayList::elementAt(es, i)?;
+            let _t0: Object = ArrayList::elementAt(&es, i)?;
             let _t1 = filter.test(_t0)?;
             i = i.wrapping_add(1i32);
         }
@@ -750,12 +750,12 @@ impl<E: Clone + 'static> ArrayList<E> {
         i = (beg).wrapping_add(1i32);
         loop {
             if i >= end { break; }
-            let _t0: Object = ArrayList::elementAt(es, i)?;
+            let _t0: Object = ArrayList::elementAt(&es, i)?;
             let _t1 = filter.test(_t0)?;
             ArrayList::setBit(&deathRow, (i).wrapping_sub(beg))?;
             i = i.wrapping_add(1i32);
         }
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         let mut w: i32 = beg;
         i = beg;
@@ -768,12 +768,12 @@ impl<E: Clone + 'static> ArrayList<E> {
         }
         this.shiftTailOverGap(es, w, end)?;
         return Ok(1i32);
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(0i32)
     }
 
     #[cfg_attr(any(), java_method(name = "replaceAll", descriptor = "(Ljava/util/function/UnaryOperator;)V", access = "public"))]
-    pub fn replaceAll(&self, operator: Object) -> Result<()> {
+    pub fn replaceAll(&self, operator: UnaryOperator) -> Result<()> {
         let this = self;
         this.replaceAllRange(operator, 0i32, this.size.get())?;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
@@ -781,28 +781,28 @@ impl<E: Clone + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "replaceAllRange", descriptor = "(Ljava/util/function/UnaryOperator;II)V", access = "private"))]
-    pub fn replaceAllRange(&self, operator: Object, i: i32, end: i32) -> Result<()> {
+    pub fn replaceAllRange(&self, operator: UnaryOperator, i: i32, end: i32) -> Result<()> {
         let this = self;
         let _t0: Object = Objects::requireNonNull(operator)?;
         let mut expectedModCount: i32 = this.modCount.get();
-        let mut es: Object = this.elementData.get();
+        let mut es: Vec<Object> = this.elementData.get();
         loop {
             if this.modCount.get() != expectedModCount { break; }
-            let _t0: Object = ArrayList::elementAt(es, i)?;
+            let _t0: Object = ArrayList::elementAt(&es, i)?;
             let _t1 = operator.apply(_t0)?;
             es[i as usize] = _t1;
             i = i.wrapping_add(1i32);
         }
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "sort", descriptor = "(Ljava/util/Comparator;)V", access = "public"))]
-    pub fn sort(&self, c: Object) -> Result<()> {
+    pub fn sort(&self, c: Comparator) -> Result<()> {
         let this = self;
         let mut expectedModCount: i32 = this.modCount.get();
-        Arrays::sort(this.elementData.get(), 0i32, this.size.get(), c)?;
-        panic!("{}", /* ConcurrentModificationException::new()? */);
+        Arrays::sort(&this.elementData.get(), 0i32, this.size.get(), c)?;
+        return Err(JvmError::Custom(String::from("athrow")));
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         Ok(())
     }

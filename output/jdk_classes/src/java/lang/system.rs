@@ -29,94 +29,94 @@ impl System {
     }
 
     #[cfg_attr(any(), java_method(name = "setIn", descriptor = "(Ljava/io/InputStream;)V", access = "public static"))]
-    pub fn setIn(in_: Object) -> Result<()> {
+    pub fn setIn(in_: InputStream) -> Result<()> {
         System::checkIO()?;
         System::setIn0(in_)?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "setOut", descriptor = "(Ljava/io/PrintStream;)V", access = "public static"))]
-    pub fn setOut(out: Object) -> Result<()> {
+    pub fn setOut(out: PrintStream) -> Result<()> {
         System::checkIO()?;
         System::setOut0(out)?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "setErr", descriptor = "(Ljava/io/PrintStream;)V", access = "public static"))]
-    pub fn setErr(err: Object) -> Result<()> {
+    pub fn setErr(err: PrintStream) -> Result<()> {
         System::checkIO()?;
         System::setErr0(err)?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "console", descriptor = "()Ljava/io/Console;", access = "public static"))]
-    pub fn console() -> Result<Object> {
-        let mut c: Object = System::cons();
+    pub fn console() -> Result<Console> {
+        let mut c: Console = System::cons();
         let mut local_1: i32 = 8i32;
         /* TODO: monitorenter  */
         c = System::cons();
-        let _t0: Object = SharedSecrets::getJavaIOAccess()?;
+        let _t0: JavaIOAccess = SharedSecrets::getJavaIOAccess()?;
         let _t1 = _t0.console()?;
         c = _t1;
         System::cons(_t1);
         /* TODO: monitorexit  */
         let mut local_2: i32 = local_1;
         /* TODO: monitorexit  */
-        panic!("{}", /* local_2 */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(c)
     }
 
     #[cfg_attr(any(), java_method(name = "inheritedChannel", descriptor = "()Ljava/nio/channels/Channel;", access = "public static"))]
-    pub fn inheritedChannel() -> Result<Object> {
-        let _t0: Object = SelectorProvider::provider()?;
+    pub fn inheritedChannel() -> Result<Channel> {
+        let _t0: SelectorProvider = SelectorProvider::provider()?;
         let _t1 = _t0.inheritedChannel()?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "checkIO", descriptor = "()V", access = "private static"))]
     pub fn checkIO() -> Result<()> {
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPermission(RuntimePermission::new(String::from("setIO"))?)?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_native(name = "setIn0", descriptor = "(Ljava/io/InputStream;)V", access = "private static native"))]
-    pub fn setIn0(arg0: Object) -> Result<()> {
+    pub fn setIn0(arg0: InputStream) -> Result<()> {
         todo!("native java/lang/System.setIn0")
     }
 
     #[cfg_attr(any(), java_native(name = "setOut0", descriptor = "(Ljava/io/PrintStream;)V", access = "private static native"))]
-    pub fn setOut0(arg0: Object) -> Result<()> {
+    pub fn setOut0(arg0: PrintStream) -> Result<()> {
         todo!("native java/lang/System.setOut0")
     }
 
     #[cfg_attr(any(), java_native(name = "setErr0", descriptor = "(Ljava/io/PrintStream;)V", access = "private static native"))]
-    pub fn setErr0(arg0: Object) -> Result<()> {
+    pub fn setErr0(arg0: PrintStream) -> Result<()> {
         todo!("native java/lang/System.setErr0")
     }
 
     #[cfg_attr(any(), java_method(name = "codeSource", descriptor = "(Ljava/lang/Class;)Ljava/net/URL;", access = "private static"))]
-    pub fn codeSource(clazz: Object) -> Result<Object> {
+    pub fn codeSource(clazz: Class) -> Result<URL> {
         let _t0: Object = Objects::requireNonNull(clazz)?;
         /* TODO: invokedynamic 76 */
-        let mut pa: Object = clazz;
+        let mut pa: Class = clazz;
         let _t1: Object = AccessController::doPrivileged(pa)?;
         let _t2 = _t1.getCodeSource()?;
-        let mut cs: Object = _t2;
+        let mut cs: CodeSource = _t2;
         let _t3 = cs.getLocation()?;
         /* TODO: aconst_null  */
         Ok(_t3)
     }
 
     #[cfg_attr(any(), java_method(name = "setSecurityManager", descriptor = "(Ljava/lang/SecurityManager;)V", access = "public static"))]
-    pub fn setSecurityManager(sm: Object) -> Result<()> {
+    pub fn setSecurityManager(sm: SecurityManager) -> Result<()> {
         let _t0: bool = System::allowSecurityManager()?;
-        let _t1: Object = Reflection::getCallerClass()?;
-        let mut callerClass: Object = _t1;
+        let _t1: Class = Reflection::getCallerClass()?;
+        let mut callerClass: Class = _t1;
         let _t2 = System$CallersHolder::callers().putIfAbsent(callerClass, 1i32)?;
-        let _t3: Object = System::codeSource(callerClass)?;
-        let mut url: Object = _t3;
+        let _t3: URL = System::codeSource(callerClass)?;
+        let mut url: URL = _t3;
         let _t4 = callerClass.getName()?;
         let mut source: String = _t4;
         let _t5 = callerClass.getName()?;
@@ -134,34 +134,34 @@ impl System {
     WARNING: Please consider reporting this to the maintainers of %s
     WARNING: System::setSecurityManager will be removed in a future release"), _arr6)?;
         System::implSetSecurityManager(sm)?;
-        panic!("{}", /* UnsupportedOperationException::new(String::from("The Security Manager is deprecated and will be removed in a future release"))? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "implSetSecurityManager", descriptor = "(Ljava/lang/SecurityManager;)V", access = "private static"))]
-    pub fn implSetSecurityManager(sm: Object) -> Result<()> {
+    pub fn implSetSecurityManager(sm: SecurityManager) -> Result<()> {
         let _t0 = 2i32.getResource(String::from("java/lang/ANY"))?;
-        let _t1: Object = DefaultFileSystemProvider::theFileSystem()?;
+        let _t1: FileSystem = DefaultFileSystemProvider::theFileSystem()?;
         sm.checkPackageAccess(String::from("java.lang"))?;
-        let mut local_1: Object = sm;
+        let mut local_1: SecurityManager = sm;
         System::setSecurityManager0(sm)?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "setSecurityManager0", descriptor = "(Ljava/lang/SecurityManager;)V", access = "private static"))]
-    pub fn setSecurityManager0(s: Object) -> Result<()> {
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+    pub fn setSecurityManager0(s: SecurityManager) -> Result<()> {
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPermission(RuntimePermission::new(String::from("setSecurityManager"))?)?;
         let _t1 = s.getClass()?;
         let _t2 = _t1.getClassLoader()?;
-        let _t3: Object = AccessController::doPrivileged(System$1::new(s)?)?;
+        let _t3: Object = AccessController::doPrivileged(System_1::new(s)?)?;
         System::security(s);
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "getSecurityManager", descriptor = "()Ljava/lang/SecurityManager;", access = "public static"))]
-    pub fn getSecurityManager() -> Result<Object> {
+    pub fn getSecurityManager() -> Result<SecurityManager> {
         let _t0: bool = System::allowSecurityManager()?;
         return Ok(System::security());
         /* TODO: aconst_null  */
@@ -189,9 +189,9 @@ impl System {
     }
 
     #[cfg_attr(any(), java_method(name = "getProperties", descriptor = "()Ljava/util/Properties;", access = "public static"))]
-    pub fn getProperties() -> Result<Object> {
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+    pub fn getProperties() -> Result<Properties> {
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPropertiesAccess()?;
         Ok(System::props())
     }
@@ -202,14 +202,14 @@ impl System {
     }
 
     #[cfg_attr(any(), java_method(name = "setProperties", descriptor = "(Ljava/util/Properties;)V", access = "public static"))]
-    pub fn setProperties(props: Object) -> Result<()> {
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+    pub fn setProperties(props: Properties) -> Result<()> {
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPropertiesAccess()?;
-        let _t1: Object = SystemProps::initProperties()?;
-        let mut tempProps: Object = _t1;
+        let _t1: Map = SystemProps::initProperties()?;
+        let mut tempProps: Map = _t1;
         VersionProps::init(tempProps)?;
-        let _t2: Object = System::createProperties(tempProps)?;
+        let _t2: Properties = System::createProperties(tempProps)?;
         props = _t2;
         System::props(props);
         Ok(())
@@ -219,8 +219,8 @@ impl System {
     // java: getProperty(Ljava/lang/String;)Ljava/lang/String;
     pub fn getProperty__str(key: String) -> Result<String> {
         System::checkKey(key)?;
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPropertyAccess(key)?;
         let _t1 = System::props().getProperty(key)?;
         Ok(_t1)
@@ -230,8 +230,8 @@ impl System {
     // java: getProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
     pub fn getProperty__str_str(key: String, def: String) -> Result<String> {
         System::checkKey(key)?;
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPropertyAccess(key)?;
         let _t1 = System::props().getProperty(key, def)?;
         Ok(_t1)
@@ -240,8 +240,8 @@ impl System {
     #[cfg_attr(any(), java_method(name = "setProperty", descriptor = "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", access = "public static"))]
     pub fn setProperty(key: String, value: String) -> Result<String> {
         System::checkKey(key)?;
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPermission(PropertyPermission::new(key, String::from("write"))?)?;
         let _t1 = System::props().setProperty(key, value)?;
         Ok(_t1)
@@ -250,8 +250,8 @@ impl System {
     #[cfg_attr(any(), java_method(name = "clearProperty", descriptor = "(Ljava/lang/String;)Ljava/lang/String;", access = "public static"))]
     pub fn clearProperty(key: String) -> Result<String> {
         System::checkKey(key)?;
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPermission(PropertyPermission::new(key, String::from("write"))?)?;
         let _t1 = System::props().remove(key)?;
         Ok(_t1)
@@ -259,17 +259,17 @@ impl System {
 
     #[cfg_attr(any(), java_method(name = "checkKey", descriptor = "(Ljava/lang/String;)V", access = "private static"))]
     pub fn checkKey(key: String) -> Result<()> {
-        panic!("{}", /* NullPointerException::new(String::from("key can't be null"))? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         let _t0 = key.isEmpty()?;
-        panic!("{}", /* IllegalArgumentException::new(String::from("key can't be empty"))? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "getenv", descriptor = "(Ljava/lang/String;)Ljava/lang/String;", access = "public static"))]
     // java: getenv(Ljava/lang/String;)Ljava/lang/String;
     pub fn getenv__str(name: String) -> Result<String> {
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         String::new().append(&String::from("getenv."))?;
         String::new().append(&name)?;
         sm.checkPermission(RuntimePermission::new(String::new())?)?;
@@ -279,45 +279,45 @@ impl System {
 
     #[cfg_attr(any(), java_method(name = "getenv", descriptor = "()Ljava/util/Map;", access = "public static"))]
     // java: getenv()Ljava/util/Map;
-    pub fn getenv() -> Result<Object> {
-        let _t0: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t0;
+    pub fn getenv() -> Result<Map> {
+        let _t0: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t0;
         sm.checkPermission(RuntimePermission::new(String::from("getenv.*"))?)?;
-        let _t1: Object = ProcessEnvironment::getenv()?;
+        let _t1: Map = ProcessEnvironment::getenv()?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "getLogger", descriptor = "(Ljava/lang/String;)Ljava/lang/System$Logger;", access = "public static"))]
     // java: getLogger(Ljava/lang/String;)Ljava/lang/System$Logger;
-    pub fn getLogger__str(name: String) -> Result<Object> {
+    pub fn getLogger__str(name: String) -> Result<System_Logger> {
         let _t0: Object = Objects::requireNonNull(name)?;
-        let _t1: Object = Reflection::getCallerClass()?;
-        let mut caller: Object = _t1;
-        panic!("{}", /* IllegalCallerException::new(String::from("no caller frame"))? */);
+        let _t1: Class = Reflection::getCallerClass()?;
+        let mut caller: Class = _t1;
+        return Err(JvmError::Custom(String::from("athrow")));
         let _t2 = caller.getModule()?;
-        let _t3: Object = LazyLoggers::getLogger(name, _t2)?;
+        let _t3: System_Logger = LazyLoggers::getLogger(name, _t2)?;
         Ok(_t3)
     }
 
     #[cfg_attr(any(), java_method(name = "getLogger", descriptor = "(Ljava/lang/String;Ljava/util/ResourceBundle;)Ljava/lang/System$Logger;", access = "public static"))]
     // java: getLogger(Ljava/lang/String;Ljava/util/ResourceBundle;)Ljava/lang/System$Logger;
-    pub fn getLogger__str_resour(name: String, bundle: Object) -> Result<Object> {
+    pub fn getLogger__str_resour(name: String, bundle: ResourceBundle) -> Result<System_Logger> {
         let _t0: Object = Objects::requireNonNull(bundle)?;
         let mut rb: Object = _t0;
         let _t1: Object = Objects::requireNonNull(name)?;
-        let _t2: Object = Reflection::getCallerClass()?;
-        let mut caller: Object = _t2;
-        panic!("{}", /* IllegalCallerException::new(String::from("no caller frame"))? */);
-        let _t3: Object = System::getSecurityManager()?;
-        let mut sm: Object = _t3;
+        let _t2: Class = Reflection::getCallerClass()?;
+        let mut caller: Class = _t2;
+        return Err(JvmError::Custom(String::from("athrow")));
+        let _t3: SecurityManager = System::getSecurityManager()?;
+        let mut sm: SecurityManager = _t3;
         /* TODO: invokedynamic 313 */
-        let mut pa: Object = caller;
+        let mut pa: Class = caller;
         /* TODO: aconst_null  */
-        let mut _arr4: Vec<Object> = Vec::with_capacity(1i32 as usize);
+        let mut _arr4: Vec<Permission> = Vec::with_capacity(1i32 as usize);
         _arr4[0i32 as usize] = System$LoggerFinder::LOGGERFINDER_PERMISSION();
         let _t5: Object = AccessController::doPrivileged(rb, pa, &_arr4)?;
         return Ok(_t5);
-        let _t6: Object = System$LoggerFinder::accessProvider()?;
+        let _t6: System_LoggerFinder = System$LoggerFinder::accessProvider()?;
         let _t7 = caller.getModule()?;
         let _t8 = _t6.getLocalizedLogger(name, rb, _t7)?;
         Ok(_t8)
@@ -325,37 +325,37 @@ impl System {
 
     #[cfg_attr(any(), java_method(name = "exit", descriptor = "(I)V", access = "public static"))]
     pub fn exit(status: i32) -> Result<()> {
-        let _t0: Object = Runtime::getRuntime()?;
+        let _t0: Runtime = Runtime::getRuntime()?;
         _t0.exit(status)?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "gc", descriptor = "()V", access = "public static"))]
     pub fn gc() -> Result<()> {
-        let _t0: Object = Runtime::getRuntime()?;
+        let _t0: Runtime = Runtime::getRuntime()?;
         _t0.gc()?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "runFinalization", descriptor = "()V", access = "public static"))]
     pub fn runFinalization() -> Result<()> {
-        let _t0: Object = Runtime::getRuntime()?;
+        let _t0: Runtime = Runtime::getRuntime()?;
         _t0.runFinalization()?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "load", descriptor = "(Ljava/lang/String;)V", access = "public static"))]
     pub fn load(filename: String) -> Result<()> {
-        let _t0: Object = Runtime::getRuntime()?;
-        let _t1: Object = Reflection::getCallerClass()?;
+        let _t0: Runtime = Runtime::getRuntime()?;
+        let _t1: Class = Reflection::getCallerClass()?;
         _t0.load0(_t1, filename)?;
         Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "loadLibrary", descriptor = "(Ljava/lang/String;)V", access = "public static"))]
     pub fn loadLibrary(libname: String) -> Result<()> {
-        let _t0: Object = Runtime::getRuntime()?;
-        let _t1: Object = Reflection::getCallerClass()?;
+        let _t0: Runtime = Runtime::getRuntime()?;
+        let _t1: Class = Reflection::getCallerClass()?;
         _t0.loadLibrary0(_t1, libname)?;
         Ok(())
     }
@@ -366,27 +366,27 @@ impl System {
     }
 
     #[cfg_attr(any(), java_method(name = "newPrintStream", descriptor = "(Ljava/io/OutputStream;Ljava/lang/String;)Ljava/io/PrintStream;", access = "private static"))]
-    pub fn newPrintStream(out: Object, enc: String) -> Result<Object> {
-        let _t0: Object = Charset::forName(enc, UTF_8::INSTANCE())?;
+    pub fn newPrintStream(out: OutputStream, enc: String) -> Result<PrintStream> {
+        let _t0: Charset = Charset::forName(enc, UTF_8::INSTANCE())?;
         return Ok(PrintStream::new(BufferedOutputStream::new(out, 128i32)?, 1i32, _t0)?);
         Ok(PrintStream::new(BufferedOutputStream::new(out, 128i32)?, 1i32)?)
     }
 
     #[cfg_attr(any(), java_method(name = "logInitException", descriptor = "(ZZLjava/lang/String;Ljava/lang/Throwable;)V", access = "private static"))]
-    pub fn logInitException(printToStderr: bool, printStackTrace: bool, msg: String, e: Object) -> Result<()> {
+    pub fn logInitException(printToStderr: bool, printStackTrace: bool, msg: String, e: Throwable) -> Result<()> {
         let _t0: i32 = VM::initLevel()?;
-        panic!("{}", /* InternalError::new(String::from("system classes not initialized"))? */);
-        let mut log: Object = System::out();
+        return Err(JvmError::Custom(String::from("athrow")));
+        let mut log: PrintStream = System::out();
         log.println(msg)?;
         e.printStackTrace(log)?;
         log.println(e)?;
         let _t1 = e.getSuppressed()?;
-        let mut cause: Object = _t1;
+        let mut cause: Vec<Throwable> = _t1;
         let mut local_6: i32 = (cause.len() as i32);
         let mut local_7: i32 = 0i32;
         loop {
             if local_7 >= local_6 { break; }
-            let mut suppressed: Object = cause[local_7 as usize].clone();
+            let mut suppressed: Throwable = cause[local_7 as usize].clone();
             String::new().append(&String::from("Suppressed:"))?;
             String::new().append(&suppressed)?;
             log.println(String::new())?;
@@ -401,12 +401,12 @@ impl System {
     }
 
     #[cfg_attr(any(), java_method(name = "createProperties", descriptor = "(Ljava/util/Map;)Ljava/util/Properties;", access = "private static"))]
-    pub fn createProperties(initialProps: Object) -> Result<Object> {
+    pub fn createProperties(initialProps: Map) -> Result<Properties> {
         let _t0 = initialProps.size()?;
         let mut properties: Properties = Properties::new(_t0)?;
         let _t1 = initialProps.entrySet()?;
         let _t2 = _t1.iterator()?;
-        let mut local_2: Object = _t2;
+        let mut local_2: Iterator = _t2;
         loop {
             let _t0 = local_2.hasNext()?;
             if _t0==0i32 { break; }
@@ -438,11 +438,11 @@ impl System {
     #[cfg_attr(any(), java_method(name = "initPhase1", descriptor = "()V", access = "private static"))]
     pub fn initPhase1() -> Result<()> {
         System::setJavaLangAccess()?;
-        let _t0: Object = SystemProps::initProperties()?;
-        let mut tempProps: Object = _t0;
+        let _t0: Map = SystemProps::initProperties()?;
+        let mut tempProps: Map = _t0;
         VersionProps::init(tempProps)?;
         VM::saveProperties(tempProps)?;
-        let _t1: Object = System::createProperties(tempProps)?;
+        let _t1: Properties = System::createProperties(tempProps)?;
         System::props(_t1);
         let _t2 = System::props().getProperty(String::from("sun.jnu.encoding"))?;
         let mut jnuEncoding: String = _t2;
@@ -458,14 +458,14 @@ impl System {
         System::initialIn(BufferedInputStream::new(fdIn)?);
         System::setIn0(System::initialIn())?;
         let _t7 = System::props().getProperty(String::from("stdout.encoding"))?;
-        let _t8: Object = System::newPrintStream(fdOut, _t7)?;
+        let _t8: PrintStream = System::newPrintStream(fdOut, _t7)?;
         System::setOut0(_t8)?;
         let _t9 = System::props().getProperty(String::from("stderr.encoding"))?;
-        let _t10: Object = System::newPrintStream(fdErr, _t9)?;
+        let _t10: PrintStream = System::newPrintStream(fdErr, _t9)?;
         System::setErr0(_t10)?;
         Terminator::setup()?;
         VM::initializeOSEnvironment()?;
-        let _t11: Object = SharedSecrets::getJavaLangRefAccess()?;
+        let _t11: JavaLangRefAccess = SharedSecrets::getJavaLangRefAccess()?;
         _t11.startThreads()?;
         VM::initLevel(1i32)?;
         Ok(())
@@ -473,7 +473,7 @@ impl System {
 
     #[cfg_attr(any(), java_method(name = "initPhase2", descriptor = "(ZZ)I", access = "private static"))]
     pub fn initPhase2(printToStderr: bool, printStackTrace: bool) -> Result<i32> {
-        let _t0: Object = ModuleBootstrap::boot()?;
+        let _t0: ModuleLayer = ModuleBootstrap::boot()?;
         System::bootLayer(_t0);
         let mut e: i32 = todo!("stack underflow");
         System::logInitException(printToStderr, printStackTrace, String::from("Error occurred during initialization of boot layer"), e)?;
@@ -484,7 +484,7 @@ impl System {
 
     #[cfg_attr(any(), java_method(name = "initPhase3", descriptor = "()V", access = "private static"))]
     pub fn initPhase3() -> Result<()> {
-        let _t0: Object = Unsafe::getUnsafe()?;
+        let _t0: Unsafe = Unsafe::getUnsafe()?;
         _t0.ensureClassInitialized(578i32)?;
         let _t1: bool = SystemProps::isBadIoTmpdir()?;
         System::err().println(String::from("WARNING: java.io.tmpdir directory does not exist"))?;
@@ -509,13 +509,13 @@ impl System {
         System::implSetSecurityManager(SecurityManager::new()?)?;
         System::allowSecurityManager(2i32);
         needWarning = 1i32;
-        let _t8: Object = ClassLoader::getBuiltinAppClassLoader()?;
-        let mut cl: Object = _t8;
-        let _t9: Object = Class::forName(smProp, 0i32, cl)?;
-        let mut c: Object = _t9;
-        let mut _arr10: Vec<Object> = Vec::with_capacity(0i32 as usize);
+        let _t8: ClassLoader = ClassLoader::getBuiltinAppClassLoader()?;
+        let mut cl: ClassLoader = _t8;
+        let _t9: Class = Class::forName(smProp, 0i32, cl)?;
+        let mut c: Class = _t9;
+        let mut _arr10: Vec<Class> = Vec::with_capacity(0i32 as usize);
         let _t11 = c.getConstructor(_arr10)?;
-        let mut ctor: Object = _t11;
+        let mut ctor: Constructor = _t11;
         let _t12 = 65i32.isAssignableFrom(c)?;
         let _t13 = c.getModifiers()?;
         let _t14: bool = Modifier::isPublic(_t13)?;
@@ -524,7 +524,7 @@ impl System {
         String::new().append(&String::from("Could not create SecurityManager:"))?;
         let _t17 = ctor.toString()?;
         String::new().append(&_t17)?;
-        panic!("{}", /* Error::new(String::new())? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         ctor.setAccessible(1i32)?;
         let mut _arr18: Vec<Object> = Vec::with_capacity(0i32 as usize);
         let _t19 = ctor.newInstance(_arr18)?;
@@ -532,7 +532,7 @@ impl System {
         System::implSetSecurityManager(sm)?;
         needWarning = 1i32;
         cl = _t16;
-        panic!("{}", /* InternalError::new(String::from("Could not create SecurityManager"), cl)? */);
+        return Err(JvmError::Custom(String::from("athrow")));
         System::allowSecurityManager(2i32);
         System::allowSecurityManager(1i32);
         System::err().println(String::from("WARNING: A command line option has enabled the Security Manager
@@ -542,9 +542,9 @@ impl System {
         System::err().println(String::new())?;
         System::initialErrStream(System::err());
         VM::initLevel(3i32)?;
-        let _t20: Object = ClassLoader::initSystemClassLoader()?;
+        let _t20: ClassLoader = ClassLoader::initSystemClassLoader()?;
         scl = _t20;
-        let _t21: Object = Thread::currentThread()?;
+        let _t21: Thread = Thread::currentThread()?;
         _t21.setContextClassLoader(scl)?;
         VM::initLevel(4i32)?;
         Ok(())
@@ -552,7 +552,7 @@ impl System {
 
     #[cfg_attr(any(), java_method(name = "setJavaLangAccess", descriptor = "()V", access = "private static"))]
     pub fn setJavaLangAccess() -> Result<()> {
-        SharedSecrets::setJavaLangAccess(System$2::new()?)?;
+        SharedSecrets::setJavaLangAccess(System_2::new()?)?;
         Ok(())
     }
 }

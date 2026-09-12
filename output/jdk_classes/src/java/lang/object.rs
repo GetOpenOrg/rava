@@ -18,7 +18,7 @@ impl Object {
     }
 
     #[cfg_attr(any(), java_native(name = "getClass", descriptor = "()Ljava/lang/Class;", access = "public final native"))]
-    pub fn getClass(&self) -> Result<Object> {
+    pub fn getClass(&self) -> Result<Class> {
         todo!("native java/lang/Object.getClass")
     }
 
@@ -78,14 +78,14 @@ impl Object {
         this.wait0(timeoutMillis)?;
         Blocker::end(comp)?;
         let mut e: i32 = todo!("stack underflow");
-        let _t1: Object = Thread::currentThread()?;
-        let mut thread: Object = _t1;
+        let _t1: Thread = Thread::currentThread()?;
+        let mut thread: Thread = _t1;
         let _t2 = thread.isVirtual()?;
         let _t3 = thread.getAndClearInterrupt()?;
-        panic!("{}", /* e */);
+        return Err(JvmError::Custom(String::from("athrow")));
         let mut local_7: bool = _t2;
         Blocker::end(comp)?;
-        panic!("{}", /* local_7 */);
+        return Err(JvmError::Custom(String::from("athrow")));
         Ok(())
     }
 
@@ -99,8 +99,8 @@ impl Object {
     pub fn wait__l_i(&self, timeoutMillis: i64, arg_1: i32) -> Result<()> {
         let this = self;
         /* TODO: lcmp  */
-        panic!("{}", /* IllegalArgumentException::new(String::from("timeoutMillis value is negative"))? */);
-        panic!("{}", /* IllegalArgumentException::new(String::from("nanosecond timeout value out of range"))? */);
+        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom(String::from("athrow")));
         /* TODO: lcmp  */
         timeoutMillis = (timeoutMillis).wrapping_add(1i64);
         this.wait(timeoutMillis)?;
