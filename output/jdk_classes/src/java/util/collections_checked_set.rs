@@ -17,23 +17,17 @@ pub struct Collections_CheckedSet<E>(std::marker::PhantomData<E>);
 
 impl<E: Clone + 'static> Collections_CheckedSet<E> {
     // java: <init>(Ljava/util/Set;Ljava/lang/Class;)V
-    pub fn new(s: Object, elementType: Object) -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/Collections$CheckedCollection.<init>:(Ljava/util/Collection;Ljava/lang/Class;)V */
-        Ok(this)
+    pub fn new(&self, s: Object, elementType: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$CheckedSet.<init>")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.c.get().equals(o)?;
-        Ok(_t0!=0i32)
+        todo!("abstract java/util/Collections$CheckedSet.equals")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.c.get().hashCode()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$CheckedSet.hashCode")
     }
 }

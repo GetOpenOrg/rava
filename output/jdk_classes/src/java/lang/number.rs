@@ -17,10 +17,8 @@ pub struct Number;
 
 impl Number {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/Number.<init>")
     }
 
     // java: intValue()I
@@ -45,15 +43,11 @@ impl Number {
 
     // java: byteValue()B
     pub fn byteValue(&self) -> Result<i8> {
-        let this = self;
-        /* TODO: i2b  */
-        Ok(this)
+        todo!("abstract java/lang/Number.byteValue")
     }
 
     // java: shortValue()S
     pub fn shortValue(&self) -> Result<i16> {
-        let this = self;
-        /* TODO: i2s  */
-        Ok(this)
+        todo!("abstract java/lang/Number.shortValue")
     }
 }

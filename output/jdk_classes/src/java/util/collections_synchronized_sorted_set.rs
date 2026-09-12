@@ -21,98 +21,42 @@ pub struct Collections_SynchronizedSortedSet<E> {
 
 impl<E: Clone + 'static> Collections_SynchronizedSortedSet<E> {
     // java: <init>(Ljava/util/SortedSet;)V
-    // java: <init>(Ljava/util/SortedSet;)V
-    pub fn new__sorted(s: Object) -> Result<Self> {
-        let this = Self { ss: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$SynchronizedSet.<init>:(Ljava/util/Set;)V */
-        this.ss.set(s);
-        Ok(this)
+    pub fn new__sorted(&self, s: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedSortedSet.<init>")
     }
 
     // java: <init>(Ljava/util/SortedSet;Ljava/lang/Object;)V
-    // java: <init>(Ljava/util/SortedSet;Ljava/lang/Object;)V
-    pub fn new__sorted_obj(s: Object, mutex: Object) -> Result<Self> {
-        let this = Self { ss: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$SynchronizedSet.<init>:(Ljava/util/Set;Ljava/lang/Object;)V */
-        this.ss.set(s);
-        Ok(this)
+    pub fn new__sorted_obj(&self, s: Object, mutex: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedSortedSet.<init>")
     }
 
     // java: comparator()Ljava/util/Comparator;
     pub fn comparator(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ss.get().comparator()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedSortedSet.comparator")
     }
 
     // java: subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedSet;
-    pub fn subSet(&self, fromElement: E, toElement: E) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ss.get().subSet(fromElement, toElement)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedSortedSet = Collections_SynchronizedSortedSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn subSet(&self, fromElement: Object, toElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedSet.subSet")
     }
 
     // java: headSet(Ljava/lang/Object;)Ljava/util/SortedSet;
-    pub fn headSet(&self, toElement: E) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ss.get().headSet(toElement)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Collections_SynchronizedSortedSet = Collections_SynchronizedSortedSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn headSet(&self, toElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedSet.headSet")
     }
 
     // java: tailSet(Ljava/lang/Object;)Ljava/util/SortedSet;
-    pub fn tailSet(&self, fromElement: E) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ss.get().tailSet(fromElement)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Collections_SynchronizedSortedSet = Collections_SynchronizedSortedSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn tailSet(&self, fromElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedSet.tailSet")
     }
 
     // java: first()Ljava/lang/Object;
-    pub fn first(&self) -> Result<E> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ss.get().first()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn first(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedSet.first")
     }
 
     // java: last()Ljava/lang/Object;
-    pub fn last(&self) -> Result<E> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ss.get().last()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn last(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedSet.last")
     }
 }

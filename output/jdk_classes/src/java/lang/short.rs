@@ -20,199 +20,132 @@ pub struct Short {
 
 impl Short {
     // java: toString(S)Ljava/lang/String;
-    // java: toString(S)Ljava/lang/String;
     pub fn toString__s(s: i16) -> Result<String> {
-        let _t0: String = Integer::toString__i(s)?;
-        Ok(_t0)
+        todo!("abstract java/lang/Short.toString")
     }
 
-    // java: parseShort(Ljava/lang/String;I)S
     // java: parseShort(Ljava/lang/String;I)S
     pub fn parseShort__str_i(s: String, radix: i32) -> Result<i16> {
-        let _t0: i32 = Integer::parseInt__str_i(s, radix)?;
-        let mut i: i32 = _t0;
-        String::new().append(&String::from("Value out of range. Value:\""))?;
-        String::new().append(&s)?;
-        String::new().append(&String::from("\" Radix:"))?;
-        String::new().append(&radix)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        /* TODO: i2s  */
-        Ok(i)
+        todo!("abstract java/lang/Short.parseShort")
     }
 
-    // java: parseShort(Ljava/lang/String;)S
     // java: parseShort(Ljava/lang/String;)S
     pub fn parseShort__str(s: String) -> Result<i16> {
-        let _t0: i16 = Short::parseShort__str_i(s, 10i32)?;
-        Ok(_t0)
+        todo!("abstract java/lang/Short.parseShort")
     }
 
-    // java: valueOf(Ljava/lang/String;I)Ljava/lang/Short;
     // java: valueOf(Ljava/lang/String;I)Ljava/lang/Short;
     pub fn valueOf__str_i(s: String, radix: i32) -> Result<Object> {
-        let _t0: i16 = Short::parseShort__str_i(s, radix)?;
-        let _t1: Object = Short::valueOf__s(_t0)?;
-        Ok(_t1)
+        todo!("abstract java/lang/Short.valueOf")
     }
 
     // java: valueOf(Ljava/lang/String;)Ljava/lang/Short;
-    // java: valueOf(Ljava/lang/String;)Ljava/lang/Short;
     pub fn valueOf__str(s: String) -> Result<Object> {
-        let _t0: Object = Short::valueOf__str_i(s, 10i32)?;
-        Ok(_t0)
+        todo!("abstract java/lang/Short.valueOf")
     }
 
     // java: describeConstable()Ljava/util/Optional;
     pub fn describeConstable(&self) -> Result<Object> {
-        let this = self;
-        let mut _arr0: Vec<Object> = Vec::with_capacity(1i32 as usize);
-        _arr0[0i32 as usize] = this;
-        let _t1: Object = DynamicConstantDesc::ofNamed(ConstantDescs::BSM_EXPLICIT_CAST(), String::from("_"), ConstantDescs::CD_short(), &_arr0)?;
-        let _t2: Object = Optional::of(_t1)?;
-        Ok(_t2)
+        todo!("abstract java/lang/Short.describeConstable")
     }
 
     // java: valueOf(S)Ljava/lang/Short;
-    // java: valueOf(S)Ljava/lang/Short;
     pub fn valueOf__s(s: i16) -> Result<Object> {
-        let mut offset: i32 = 128i32;
-        let mut sAsInt: i32 = s;
-        return Ok(Short_ShortCache::cache()[(sAsInt).wrapping_add(128i32) as usize].clone());
-        Ok(Short::new(s)?)
+        todo!("abstract java/lang/Short.valueOf")
     }
 
     // java: decode(Ljava/lang/String;)Ljava/lang/Short;
     pub fn decode(nm: String) -> Result<Object> {
-        let _t0: i32 = Integer::decode(nm)?;
-        let mut i: i32 = _t0;
-        String::new().append(&String::from("Value"))?;
-        String::new().append(&i)?;
-        String::new().append(&String::from("out of range from input"))?;
-        String::new().append(&nm)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        /* TODO: i2s  */
-        let _t1: Object = Short::valueOf__s(i)?;
-        Ok(_t1)
+        todo!("abstract java/lang/Short.decode")
     }
 
     // java: <init>(S)V
-    // java: <init>(S)V
-    pub fn new__s(value: i16) -> Result<Self> {
-        let this = Self { value: Field::new(Default::default()) };
-        /* invokespecial Method java/lang/Number.<init>:()V */
-        this.value.set(value);
-        Ok(this)
+    pub fn new__s(&self, value: i16) -> Result<()> {
+        todo!("abstract java/lang/Short.<init>")
     }
 
     // java: <init>(Ljava/lang/String;)V
-    // java: <init>(Ljava/lang/String;)V
-    pub fn new__str(s: String) -> Result<Self> {
-        let this = Self { value: Field::new(Default::default()) };
-        /* invokespecial Method java/lang/Number.<init>:()V */
-        let _t0: i16 = Short::parseShort__str_i(s, 10i32)?;
-        this.value.set(_t0);
-        Ok(this)
+    pub fn new__str(&self, s: String) -> Result<()> {
+        todo!("abstract java/lang/Short.<init>")
     }
 
     // java: byteValue()B
     pub fn byteValue(&self) -> Result<i8> {
-        let this = self;
-        /* TODO: i2b  */
-        Ok(this.value.get())
+        todo!("abstract java/lang/Short.byteValue")
     }
 
     // java: shortValue()S
     pub fn shortValue(&self) -> Result<i16> {
-        let this = self;
-        Ok(this.value.get())
+        todo!("abstract java/lang/Short.shortValue")
     }
 
     // java: intValue()I
     pub fn intValue(&self) -> Result<i32> {
-        let this = self;
-        Ok(this.value.get())
+        todo!("abstract java/lang/Short.intValue")
     }
 
     // java: longValue()J
     pub fn longValue(&self) -> Result<i64> {
-        let this = self;
-        Ok((this.value.get() as i64))
+        todo!("abstract java/lang/Short.longValue")
     }
 
     // java: floatValue()F
     pub fn floatValue(&self) -> Result<f32> {
-        let this = self;
-        Ok((this.value.get() as f32))
+        todo!("abstract java/lang/Short.floatValue")
     }
 
     // java: doubleValue()D
     pub fn doubleValue(&self) -> Result<f64> {
-        let this = self;
-        Ok((this.value.get() as f64))
+        todo!("abstract java/lang/Short.doubleValue")
     }
 
-    // java: toString()Ljava/lang/String;
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        let this = self;
-        let _t0: String = Integer::toString__i(this.value.get())?;
-        Ok(_t0)
+        todo!("abstract java/lang/Short.toString")
     }
 
-    // java: hashCode()I
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let _t0: i32 = Short::hashCode__s(this.value.get())?;
-        Ok(_t0)
+        todo!("abstract java/lang/Short.hashCode")
     }
 
     // java: hashCode(S)I
-    // java: hashCode(S)I
     pub fn hashCode__s(value: i16) -> Result<i32> {
-        Ok(value)
+        todo!("abstract java/lang/Short.hashCode")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, obj: Object) -> Result<bool> {
-        let this = self;
-        return Ok(this.value.get() == obj);
-        Ok(0i32)
+        todo!("abstract java/lang/Short.equals")
     }
 
     // java: compareTo(Ljava/lang/Short;)I
     pub fn compareTo(&self, anotherShort: Object) -> Result<i32> {
-        let this = self;
-        let _t0: i32 = Short::compare(this.value.get(), anotherShort.value.get())?;
-        Ok(_t0)
+        todo!("abstract java/lang/Short.compareTo")
     }
 
     // java: compare(SS)I
     pub fn compare(x: i16, y: i16) -> Result<i32> {
-        Ok((x).wrapping_sub(y))
+        todo!("abstract java/lang/Short.compare")
     }
 
     // java: compareUnsigned(SS)I
     pub fn compareUnsigned(x: i16, y: i16) -> Result<i32> {
-        let _t0: i32 = Short::toUnsignedInt(x)?;
-        let _t1: i32 = Short::toUnsignedInt(y)?;
-        Ok((_t0).wrapping_sub(_t1))
+        todo!("abstract java/lang/Short.compareUnsigned")
     }
 
     // java: reverseBytes(S)S
     pub fn reverseBytes(i: i16) -> Result<i16> {
-        /* TODO: i2s  */
-        Ok((((i&65280i32)>>((8i32&0x1f)))|(i<<(8i32&0x1f))))
+        todo!("abstract java/lang/Short.reverseBytes")
     }
 
     // java: toUnsignedInt(S)I
     pub fn toUnsignedInt(x: i16) -> Result<i32> {
-        Ok((x&65535i32))
+        todo!("abstract java/lang/Short.toUnsignedInt")
     }
 
     // java: toUnsignedLong(S)J
     pub fn toUnsignedLong(x: i16) -> Result<i64> {
-        /* TODO: land  */
-        Ok(65535i64)
+        todo!("abstract java/lang/Short.toUnsignedLong")
     }
 }

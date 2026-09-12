@@ -22,81 +22,52 @@ pub struct ReverseOrderListView_DescendingListIterator {
 
 impl ReverseOrderListView_DescendingListIterator {
     // java: <init>(Ljava/util/ReverseOrderListView;II)V
-    pub fn new(this_0: Object, size: i32, pos: i32) -> Result<Self> {
-        let this = Self { it: Field::new(Default::default()), this_0: Field::new(Default::default()) };
-        this.this_0.set(this_0);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        return Err(JvmError::Custom("athrow".to_owned()));
-        let _t0 = this_0.base.get().listIterator((size).wrapping_sub(pos))?;
-        this.it.set(_t0);
-        Ok(this)
+    pub fn new(&self, this_0: Object, size: i32, pos: i32) -> Result<()> {
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.<init>")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        let this = self;
-        let _t0 = this.it.get().hasPrevious()?;
-        Ok(_t0)
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.hasNext")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.it.get().previous()?;
-        Ok(_t0)
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.next")
     }
 
     // java: hasPrevious()Z
     pub fn hasPrevious(&self) -> Result<bool> {
-        let this = self;
-        let _t0 = this.it.get().hasNext()?;
-        Ok(_t0)
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.hasPrevious")
     }
 
     // java: previous()Ljava/lang/Object;
     pub fn previous(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.it.get().next()?;
-        Ok(_t0)
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.previous")
     }
 
     // java: nextIndex()I
     pub fn nextIndex(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.this_0.get().base.get().size()?;
-        let _t1 = this.it.get().nextIndex()?;
-        Ok((_t0).wrapping_sub(_t1))
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.nextIndex")
     }
 
     // java: previousIndex()I
     pub fn previousIndex(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.nextIndex()?;
-        Ok((_t0).wrapping_sub(1i32))
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.previousIndex")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        let this = self;
-        this.this_0.get().checkModifiable()?;
-        this.it.get().remove()?;
-        Ok(())
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.remove")
     }
 
     // java: set(Ljava/lang/Object;)V
     pub fn set(&self, e: Object) -> Result<()> {
-        let this = self;
-        this.this_0.get().checkModifiable()?;
-        this.it.get().set(e)?;
-        Ok(())
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.set")
     }
 
     // java: add(Ljava/lang/Object;)V
     pub fn add(&self, e: Object) -> Result<()> {
-        let this = self;
-        this.this_0.get().checkModifiable()?;
-        this.it.get().add(e)?;
-        let _t0 = this.it.get().previous()?;
-        Ok(())
+        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.add")
     }
 }

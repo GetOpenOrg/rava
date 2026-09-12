@@ -17,9 +17,7 @@ pub struct Character_CharacterCache;
 
 impl Character_CharacterCache {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/Character$CharacterCache.<init>")
     }
 }

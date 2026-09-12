@@ -23,78 +23,52 @@ pub struct ImmutableCollections_Map1<K, V> {
 
 impl<K: Clone + 'static, V: Clone + 'static> ImmutableCollections_Map1<K, V> {
     // java: <init>(Ljava/lang/Object;Ljava/lang/Object;)V
-    pub fn new(k0: K, v0: V) -> Result<Self> {
-        let this = Self { k0: Field::new(Default::default()), v0: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/ImmutableCollections$AbstractImmutableMap.<init>:()V */
-        let _t0: Object = Objects::requireNonNull__obj(k0)?;
-        this.k0.set(_t0);
-        let _t1: Object = Objects::requireNonNull__obj(v0)?;
-        this.v0.set(_t1);
-        Ok(this)
+    pub fn new(&self, k0: Object, v0: Object) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$Map1.<init>")
     }
 
     // java: entrySet()Ljava/util/Set;
     pub fn entrySet(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Set::of__obj(KeyValueHolder::new(this.k0.get(), this.v0.get())?)?;
-        Ok(_t0)
+        todo!("abstract java/util/ImmutableCollections$Map1.entrySet")
     }
 
     // java: get(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn get(&self, o: Object) -> Result<V> {
-        let this = self;
-        let _t0 = o.equals(this.k0.get())?;
-        /* TODO: aconst_null  */
-        Ok(this.v0.get())
+    pub fn get(&self, o: Object) -> Result<Object> {
+        todo!("abstract java/util/ImmutableCollections$Map1.get")
     }
 
     // java: containsKey(Ljava/lang/Object;)Z
     pub fn containsKey(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = o.equals(this.k0.get())?;
-        Ok(_t0)
+        todo!("abstract java/util/ImmutableCollections$Map1.containsKey")
     }
 
     // java: containsValue(Ljava/lang/Object;)Z
     pub fn containsValue(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = o.equals(this.v0.get())?;
-        Ok(_t0)
+        todo!("abstract java/util/ImmutableCollections$Map1.containsValue")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        let this = self;
-        Ok(1i32)
+        todo!("abstract java/util/ImmutableCollections$Map1.size")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        let this = self;
-        Ok(0i32)
+        todo!("abstract java/util/ImmutableCollections$Map1.isEmpty")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, in_: Object) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/ImmutableCollections$Map1.readObject")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        let this = self;
-        let mut _arr0: Vec<Object> = Vec::with_capacity(2i32 as usize);
-        _arr0[0i32 as usize] = this.k0.get();
-        _arr0[1i32 as usize] = this.v0.get();
-        Ok(CollSer::new(3i32, _arr0)?)
+        todo!("abstract java/util/ImmutableCollections$Map1.writeReplace")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.k0.get().hashCode()?;
-        let _t1 = this.v0.get().hashCode()?;
-        Ok((_t0^_t1))
+        todo!("abstract java/util/ImmutableCollections$Map1.hashCode")
     }
 }

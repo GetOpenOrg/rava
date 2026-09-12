@@ -22,49 +22,32 @@ pub struct Collections_2 {
 
 impl Collections_2 {
     // java: <init>(Ljava/lang/Object;)V
-    pub fn new(arg_0: Object) -> Result<Self> {
-        let this = Self { est: Field::new(0), val_element: Field::new(Default::default()) };
-        this.val_element.set(arg_0);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.est.set(1i64);
-        Ok(this)
+    pub fn new(&self, arg0: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$2.<init>")
     }
 
     // java: trySplit()Ljava/util/Spliterator;
     pub fn trySplit(&self) -> Result<Object> {
-        let this = self;
-        /* TODO: aconst_null  */
-        Ok(todo!("stack underflow"))
+        todo!("abstract java/util/Collections$2.trySplit")
     }
 
     // java: tryAdvance(Ljava/util/function/Consumer;)Z
     pub fn tryAdvance(&self, consumer: Object) -> Result<bool> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(consumer)?;
-        /* TODO: lcmp  */
-        this.est.set((this.est.get()).wrapping_sub(1i64));
-        consumer.accept(this.val_element.get())?;
-        return Ok(1i32);
-        Ok(0i32)
+        todo!("abstract java/util/Collections$2.tryAdvance")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, consumer: Object) -> Result<()> {
-        let this = self;
-        let _t0 = this.tryAdvance(consumer)?;
-        Ok(())
+        todo!("abstract java/util/Collections$2.forEachRemaining")
     }
 
     // java: estimateSize()J
     pub fn estimateSize(&self) -> Result<i64> {
-        let this = self;
-        Ok(this.est.get())
+        todo!("abstract java/util/Collections$2.estimateSize")
     }
 
     // java: characteristics()I
     pub fn characteristics(&self) -> Result<i32> {
-        let this = self;
-        let mut value: i32 = 0i32;
-        Ok((((((value|64i32)|16384i32)|1024i32)|1i32)|16i32))
+        todo!("abstract java/util/Collections$2.characteristics")
     }
 }

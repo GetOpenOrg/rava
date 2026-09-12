@@ -22,41 +22,27 @@ pub struct Collections_1 {
 
 impl Collections_1 {
     // java: <init>(Ljava/lang/Object;)V
-    pub fn new(arg_0: Object) -> Result<Self> {
-        let this = Self { hasNext: Field::new(false), val_e: Field::new(Default::default()) };
-        this.val_e.set(arg_0);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.hasNext.set(1i32);
-        Ok(this)
+    pub fn new(&self, arg0: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$1.<init>")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        let this = self;
-        Ok(this.hasNext.get())
+        todo!("abstract java/util/Collections$1.hasNext")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        let this = self;
-        this.hasNext.set(0i32);
-        return Ok(this.val_e.get());
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$1.next")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/Collections$1.remove")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(action)?;
-        this.hasNext.set(0i32);
-        action.accept(this.val_e.get())?;
-        Ok(())
+        todo!("abstract java/util/Collections$1.forEachRemaining")
     }
 }

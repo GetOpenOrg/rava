@@ -17,47 +17,37 @@ pub struct Collections_EmptyListIterator<E>(std::marker::PhantomData<E>);
 
 impl<E: Clone + 'static> Collections_EmptyListIterator<E> {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/Collections$EmptyIterator.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/util/Collections$EmptyListIterator.<init>")
     }
 
     // java: hasPrevious()Z
     pub fn hasPrevious(&self) -> Result<bool> {
-        let this = self;
-        Ok(0i32)
+        todo!("abstract java/util/Collections$EmptyListIterator.hasPrevious")
     }
 
     // java: previous()Ljava/lang/Object;
-    pub fn previous(&self) -> Result<E> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn previous(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$EmptyListIterator.previous")
     }
 
     // java: nextIndex()I
     pub fn nextIndex(&self) -> Result<i32> {
-        let this = self;
-        Ok(0i32)
+        todo!("abstract java/util/Collections$EmptyListIterator.nextIndex")
     }
 
     // java: previousIndex()I
     pub fn previousIndex(&self) -> Result<i32> {
-        let this = self;
-        Ok(-1i32)
+        todo!("abstract java/util/Collections$EmptyListIterator.previousIndex")
     }
 
     // java: set(Ljava/lang/Object;)V
-    pub fn set(&self, e: E) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+    pub fn set(&self, e: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$EmptyListIterator.set")
     }
 
     // java: add(Ljava/lang/Object;)V
-    pub fn add(&self, e: E) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+    pub fn add(&self, e: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$EmptyListIterator.add")
     }
 }

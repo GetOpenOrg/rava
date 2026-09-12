@@ -21,55 +21,37 @@ pub struct Collections_CheckedSortedSet<E> {
 
 impl<E: Clone + 'static> Collections_CheckedSortedSet<E> {
     // java: <init>(Ljava/util/SortedSet;Ljava/lang/Class;)V
-    pub fn new(s: Object, type_: Object) -> Result<Self> {
-        let this = Self { ss: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$CheckedSet.<init>:(Ljava/util/Set;Ljava/lang/Class;)V */
-        this.ss.set(s);
-        Ok(this)
+    pub fn new(&self, s: Object, type_: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$CheckedSortedSet.<init>")
     }
 
     // java: comparator()Ljava/util/Comparator;
     pub fn comparator(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.ss.get().comparator()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$CheckedSortedSet.comparator")
     }
 
     // java: first()Ljava/lang/Object;
-    pub fn first(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.ss.get().first()?;
-        Ok(_t0)
+    pub fn first(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedSet.first")
     }
 
     // java: last()Ljava/lang/Object;
-    pub fn last(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.ss.get().last()?;
-        Ok(_t0)
+    pub fn last(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedSet.last")
     }
 
     // java: subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedSet;
-    pub fn subSet(&self, fromElement: E, toElement: E) -> Result<Object> {
-        let this = self;
-        let _t0 = this.ss.get().subSet(fromElement, toElement)?;
-        let _t1: Object = Collections::checkedSortedSet(_t0, this.type_.get())?;
-        Ok(_t1)
+    pub fn subSet(&self, fromElement: Object, toElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedSet.subSet")
     }
 
     // java: headSet(Ljava/lang/Object;)Ljava/util/SortedSet;
-    pub fn headSet(&self, toElement: E) -> Result<Object> {
-        let this = self;
-        let _t0 = this.ss.get().headSet(toElement)?;
-        let _t1: Object = Collections::checkedSortedSet(_t0, this.type_.get())?;
-        Ok(_t1)
+    pub fn headSet(&self, toElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedSet.headSet")
     }
 
     // java: tailSet(Ljava/lang/Object;)Ljava/util/SortedSet;
-    pub fn tailSet(&self, fromElement: E) -> Result<Object> {
-        let this = self;
-        let _t0 = this.ss.get().tailSet(fromElement)?;
-        let _t1: Object = Collections::checkedSortedSet(_t0, this.type_.get())?;
-        Ok(_t1)
+    pub fn tailSet(&self, fromElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedSet.tailSet")
     }
 }

@@ -81,8 +81,7 @@ path = "src/main.rs"
 
 [dependencies]
 java_runtime = { path = "../java_runtime" }
-# jdk_classes will be added when JDK translations compile successfully
-# jdk_classes = { path = "../jdk_classes" }
+jdk_classes  = { path = "../jdk_classes" }
 """
 
 
@@ -201,6 +200,23 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
         return f'#[{inner}]'
 
 
+_STUB_KEYWORDS = frozenset({
+    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn',
+    'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in',
+    'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return',
+    'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type',
+    'union', 'unsafe', 'use', 'where', 'while',
+})
+
+
+def _safe_param_name(name: str) -> str:
+    """参数名安全化：替换 $，处理 Rust 关键字。"""
+    name = name.replace('$', '_')
+    if name in _STUB_KEYWORDS:
+        name = name + '_'
+    return name
+
+
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None) -> str:
     """为 native / abstract 方法生成 todo! 存根，供手工实现替换。"""
     from .type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
@@ -208,9 +224,21 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     ret    = parse_descriptor_return(m.descriptor)
     rust_ret = jvm_to_rust(ret)
 
-    # 构建参数列表
-    arg_names = [m.local_names.get(i + (0 if m.is_static else 1), f'arg{i}')
+    # 构建参数列表（参数名需转义 $ 和 Rust 关键字）
+    raw_names = [m.local_names.get(i + (0 if m.is_static else 1), f'arg{i}')
                  for i in range(len(params))]
+    arg_names = [_safe_param_name(n) for n in raw_names]
+    # 防止去重后重名：加序号后缀
+    seen: dict[str, int] = {}
+    deduped = []
+    for n in arg_names:
+        if n in seen:
+            seen[n] += 1
+            deduped.append(f'{n}{seen[n]}')
+        else:
+            seen[n] = 0
+            deduped.append(n)
+    arg_names = deduped
     args_str = ', '.join(
         f'{name}: {jvm_to_rust(p)}' for name, p in zip(arg_names, params)
     )
@@ -264,7 +292,8 @@ def _gen_jdk_class_rs(ci: ClassInfo) -> str:
 
 
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
-                  jdk_crate_pkg_paths: list[str] | None = None) -> str:
+                  jdk_crate_pkg_paths: list[str] | None = None,
+                  stub_bodies: bool = False) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -339,6 +368,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     overloaded_names: set[str] = {name for name, count in name_counts.items() if count > 1}
 
     method_blocks: list[str] = []
+    used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
     for m in visible_methods:
         if m.name == '<clinit>':
             continue
@@ -350,9 +380,17 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 rust_name = mangle_name('new', m.descriptor)
             else:
                 rust_name = 'new'
+        # 碰撞去重：若 mangle 后仍重名，追加数字后缀
+        if rust_name in used_rust_names:
+            used_rust_names[rust_name] += 1
+            rust_name = f'{rust_name}_{used_rust_names[rust_name]}'
+        else:
+            used_rust_names[rust_name] = 0
 
         attr_line = _java_method_attr(m, compiled=True)
-        if m.is_native or m.is_abstract:
+        if m.is_native or m.is_abstract or stub_bodies:
+            # native/abstract 方法，或 JDK 类以 stub_bodies=True 模式生成：
+            # 只生成 todo!() 存根，不翻译方法体，确保 jdk_classes 可编译
             stub = _gen_native_stub(m, ci, rust_name=rust_name)
             method_blocks.append(attr_line + '\n' + stub)
         else:
@@ -433,7 +471,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             mod_name  = to_snake(class_name)
             file_path = os.path.join(jdk_src, *pkg_parts, mod_name + '.rs')
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
-                                            jdk_crate_pkg_paths=jdk_crate_pkg_paths))
+                                            jdk_crate_pkg_paths=jdk_crate_pkg_paths,
+                                            stub_bodies=True))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:

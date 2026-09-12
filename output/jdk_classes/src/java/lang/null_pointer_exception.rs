@@ -22,48 +22,23 @@ pub struct NullPointerException {
 
 impl NullPointerException {
     // java: <init>()V
-    // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self { extendedMessageState: Field::new(0), extendedMessage: Field::new(String::new()) };
-        /* invokespecial Method java/lang/RuntimeException.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/NullPointerException.<init>")
     }
 
     // java: <init>(Ljava/lang/String;)V
-    // java: <init>(Ljava/lang/String;)V
-    pub fn new__str(s: String) -> Result<Self> {
-        let this = Self { extendedMessageState: Field::new(0), extendedMessage: Field::new(String::new()) };
-        /* invokespecial Method java/lang/RuntimeException.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__str(&self, s: String) -> Result<()> {
+        todo!("abstract java/lang/NullPointerException.<init>")
     }
 
     // java: fillInStackTrace()Ljava/lang/Throwable;
     pub fn fillInStackTrace(&self) -> Result<Object> {
-        let this = self;
-        this.extendedMessageState.set(1i32);
-        let _t0 = this.getExtendedNPEMessage()?;
-        this.extendedMessage.set(_t0);
-        this.extendedMessageState.set(2i32);
-        let _t1: Object = RuntimeException::fillInStackTrace()?;
-        Ok(_t1)
+        todo!("abstract java/lang/NullPointerException.fillInStackTrace")
     }
 
     // java: getMessage()Ljava/lang/String;
     pub fn getMessage(&self) -> Result<String> {
-        let this = self;
-        let _t0: String = RuntimeException::getMessage()?;
-        let mut message: String = _t0;
-        let mut local_2: NullPointerException = this;
-        /* TODO: monitorenter  */
-        let _t1 = this.getExtendedNPEMessage()?;
-        this.extendedMessage.set(_t1);
-        this.extendedMessageState.set(2i32);
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: String = this.extendedMessage.get();
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(message)
+        todo!("abstract java/lang/NullPointerException.getMessage")
     }
 
     // java: getExtendedNPEMessage()Ljava/lang/String;

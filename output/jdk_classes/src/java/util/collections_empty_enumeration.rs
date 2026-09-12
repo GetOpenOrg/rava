@@ -17,28 +17,22 @@ pub struct Collections_EmptyEnumeration<E>(std::marker::PhantomData<E>);
 
 impl<E: Clone + 'static> Collections_EmptyEnumeration<E> {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/util/Collections$EmptyEnumeration.<init>")
     }
 
     // java: hasMoreElements()Z
     pub fn hasMoreElements(&self) -> Result<bool> {
-        let this = self;
-        Ok(0i32)
+        todo!("abstract java/util/Collections$EmptyEnumeration.hasMoreElements")
     }
 
     // java: nextElement()Ljava/lang/Object;
-    pub fn nextElement(&self) -> Result<E> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn nextElement(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$EmptyEnumeration.nextElement")
     }
 
     // java: asIterator()Ljava/util/Iterator;
     pub fn asIterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Collections::emptyIterator()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$EmptyEnumeration.asIterator")
     }
 }

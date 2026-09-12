@@ -28,21 +28,11 @@ impl<E: Clone + 'static> Iterator<E> {
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/Iterator.remove")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(action)?;
-        loop {
-            let _t0 = this.hasNext()?;
-            if _t0==0i32 { break; }
-            let _t0 = this.next()?;
-            action.accept(_t0)?;
-        }
-        Ok(())
+        todo!("abstract java/util/Iterator.forEachRemaining")
     }
 }

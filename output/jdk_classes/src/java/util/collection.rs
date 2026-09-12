@@ -47,12 +47,8 @@ impl<E: Clone + 'static> Collection<E> {
     }
 
     // java: toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
-    // java: toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
     pub fn toArray__intfun(&self, generator: Object) -> Result<Vec<Object>> {
-        let this = self;
-        let _t0 = generator.apply(0i32)?;
-        let _t1 = this.toArray__arr_obj(_t0)?;
-        Ok(_t1)
+        todo!("abstract java/util/Collection.toArray")
     }
 
     // java: add(Ljava/lang/Object;)Z
@@ -82,20 +78,7 @@ impl<E: Clone + 'static> Collection<E> {
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(filter)?;
-        let mut removed: i32 = 0i32;
-        let _t1 = this.iterator()?;
-        let mut each: Object = _t1;
-        loop {
-            let _t0 = each.hasNext()?;
-            if _t0==0i32 { break; }
-            let _t0 = each.next()?;
-            let _t1 = filter.test(_t0)?;
-            each.remove()?;
-            removed = 1i32;
-        }
-        Ok(removed)
+        todo!("abstract java/util/Collection.removeIf")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
@@ -120,24 +103,16 @@ impl<E: Clone + 'static> Collection<E> {
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Spliterators::spliterator__coll_i(this, 0i32)?;
-        Ok(_t0)
+        todo!("abstract java/util/Collection.spliterator")
     }
 
     // java: stream()Ljava/util/stream/Stream;
     pub fn stream(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.spliterator()?;
-        let _t1: Object = StreamSupport::stream(_t0, 0i32)?;
-        Ok(_t1)
+        todo!("abstract java/util/Collection.stream")
     }
 
     // java: parallelStream()Ljava/util/stream/Stream;
     pub fn parallelStream(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.spliterator()?;
-        let _t1: Object = StreamSupport::stream(_t0, 1i32)?;
-        Ok(_t1)
+        todo!("abstract java/util/Collection.parallelStream")
     }
 }

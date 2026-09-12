@@ -24,45 +24,27 @@ pub struct Spliterators_4Adapter {
 
 impl Spliterators_4Adapter {
     // java: <init>(Ljava/util/Spliterator$OfDouble;)V
-    pub fn new(arg_0: Object) -> Result<Self> {
-        let this = Self { valueReady: Field::new(false), nextElement: Field::new(0.0), val_spliterator: Field::new(Default::default()) };
-        this.val_spliterator.set(arg_0);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.valueReady.set(0i32);
-        Ok(this)
+    pub fn new(&self, arg0: Object) -> Result<()> {
+        todo!("abstract java/util/Spliterators$4Adapter.<init>")
     }
 
     // java: accept(D)V
     pub fn accept(&self, t: f64) -> Result<()> {
-        let this = self;
-        this.valueReady.set(1i32);
-        this.nextElement.set(t);
-        Ok(())
+        todo!("abstract java/util/Spliterators$4Adapter.accept")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        let this = self;
-        let _t0 = this.val_spliterator.get().tryAdvance(this)?;
-        Ok(this.valueReady.get())
+        todo!("abstract java/util/Spliterators$4Adapter.hasNext")
     }
 
     // java: nextDouble()D
     pub fn nextDouble(&self) -> Result<f64> {
-        let this = self;
-        let _t0 = this.hasNext()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        this.valueReady.set(0i32);
-        Ok(this.nextElement.get())
+        todo!("abstract java/util/Spliterators$4Adapter.nextDouble")
     }
 
     // java: forEachRemaining(Ljava/util/function/DoubleConsumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(action)?;
-        this.valueReady.set(0i32);
-        action.accept(this.nextElement.get())?;
-        this.val_spliterator.get().forEachRemaining(action)?;
-        Ok(())
+        todo!("abstract java/util/Spliterators$4Adapter.forEachRemaining")
     }
 }

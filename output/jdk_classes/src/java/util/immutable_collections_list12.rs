@@ -23,117 +23,57 @@ pub struct ImmutableCollections_List12<E> {
 
 impl<E: Clone + 'static> ImmutableCollections_List12<E> {
     // java: <init>(Ljava/lang/Object;)V
-    // java: <init>(Ljava/lang/Object;)V
-    pub fn new__obj(e0: E) -> Result<Self> {
-        let this = Self { e0: Field::new(Default::default()), e1: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/ImmutableCollections$AbstractImmutableList.<init>:()V */
-        let _t0: Object = Objects::requireNonNull__obj(e0)?;
-        this.e0.set(_t0);
-        this.e1.set(ImmutableCollections::EMPTY());
-        Ok(this)
+    pub fn new__obj(&self, e0: Object) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$List12.<init>")
     }
 
     // java: <init>(Ljava/lang/Object;Ljava/lang/Object;)V
-    // java: <init>(Ljava/lang/Object;Ljava/lang/Object;)V
-    pub fn new__obj_obj(e0: E, e1: E) -> Result<Self> {
-        let this = Self { e0: Field::new(Default::default()), e1: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/ImmutableCollections$AbstractImmutableList.<init>:()V */
-        let _t0: Object = Objects::requireNonNull__obj(e0)?;
-        this.e0.set(_t0);
-        let _t1: Object = Objects::requireNonNull__obj(e1)?;
-        this.e1.set(_t1);
-        Ok(this)
+    pub fn new__obj_obj(&self, e0: Object, e1: Object) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$List12.<init>")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        let this = self;
-        Ok(/* if_acmpeq */ true)
+        todo!("abstract java/util/ImmutableCollections$List12.size")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        let this = self;
-        Ok(0i32)
+        todo!("abstract java/util/ImmutableCollections$List12.isEmpty")
     }
 
     // java: get(I)Ljava/lang/Object;
-    pub fn get(&self, index: i32) -> Result<E> {
-        let this = self;
-        return Ok(this.e0.get());
-        return Ok(this.e1.get());
-        let _t0 = this.outOfBounds(index)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn get(&self, index: i32) -> Result<Object> {
+        todo!("abstract java/util/ImmutableCollections$List12.get")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(o)?;
-        let _t1 = o.equals(this.e0.get())?;
-        return Ok(0i32);
-        let _t2 = o.equals(this.e1.get())?;
-        return Ok(1i32);
-        Ok(-1i32)
+        todo!("abstract java/util/ImmutableCollections$List12.indexOf")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(o)?;
-        let _t1 = o.equals(this.e1.get())?;
-        return Ok(1i32);
-        let _t2 = o.equals(this.e0.get())?;
-        return Ok(0i32);
-        Ok(-1i32)
+        todo!("abstract java/util/ImmutableCollections$List12.lastIndexOf")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, in_: Object) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/ImmutableCollections$List12.readObject")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        let this = self;
-        let mut _arr0: Vec<Object> = Vec::with_capacity(1i32 as usize);
-        _arr0[0i32 as usize] = this.e0.get();
-        return Ok(CollSer::new(1i32, _arr0)?);
-        let mut _arr1: Vec<Object> = Vec::with_capacity(2i32 as usize);
-        _arr1[0i32 as usize] = this.e0.get();
-        _arr1[1i32 as usize] = this.e1.get();
-        Ok(CollSer::new(1i32, _arr1)?)
+        todo!("abstract java/util/ImmutableCollections$List12.writeReplace")
     }
 
-    // java: toArray()[Ljava/lang/Object;
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        let this = self;
-        let mut _arr0: Vec<Object> = Vec::with_capacity(1i32 as usize);
-        _arr0[0i32 as usize] = this.e0.get();
-        return Ok(_arr0);
-        let mut _arr1: Vec<Object> = Vec::with_capacity(2i32 as usize);
-        _arr1[0i32 as usize] = this.e0.get();
-        _arr1[1i32 as usize] = this.e1.get();
-        Ok(_arr1)
+        todo!("abstract java/util/ImmutableCollections$List12.toArray")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
-    // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        let this = self;
-        let _t0 = this.size()?;
-        let mut size: i32 = _t0;
-        let _t1 = a.getClass()?;
-        let _t2 = _t1.getComponentType()?;
-        let _t3: Object = Array::newInstance(_t2, size)?;
-        let mut array: Object = _t3;
-        array[0i32 as usize] = this.e0.get();
-        array[1i32 as usize] = this.e1.get();
-        /* TODO: aconst_null  */
-        size[array as usize] = size;
-        Ok(array)
+        todo!("abstract java/util/ImmutableCollections$List12.toArray")
     }
 }

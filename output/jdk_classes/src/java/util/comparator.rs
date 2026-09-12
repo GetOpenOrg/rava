@@ -28,118 +28,81 @@ impl<T: Clone + 'static> Comparator<T> {
 
     // java: reversed()Ljava/util/Comparator;
     pub fn reversed(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Collections::reverseOrder__compar(this)?;
-        Ok(_t0)
+        todo!("abstract java/util/Comparator.reversed")
     }
 
-    // java: thenComparing(Ljava/util/Comparator;)Ljava/util/Comparator;
     // java: thenComparing(Ljava/util/Comparator;)Ljava/util/Comparator;
     pub fn thenComparing__compar(&self, other: Object) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(other)?;
-        /* TODO: invokedynamic 13 */
-        Ok(other)
+        todo!("abstract java/util/Comparator.thenComparing")
     }
 
-    // java: thenComparing(Ljava/util/function/Function;Ljava/util/Comparator;)Ljava/util/Comparator;
     // java: thenComparing(Ljava/util/function/Function;Ljava/util/Comparator;)Ljava/util/Comparator;
     pub fn thenComparing__functi_compar(&self, keyExtractor: Object, keyComparator: Object) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Comparator::comparing__functi_compar(keyExtractor, keyComparator)?;
-        let _t1 = this.thenComparing__compar(_t0)?;
-        Ok(_t1)
+        todo!("abstract java/util/Comparator.thenComparing")
     }
 
     // java: thenComparing(Ljava/util/function/Function;)Ljava/util/Comparator;
-    // java: thenComparing(Ljava/util/function/Function;)Ljava/util/Comparator;
     pub fn thenComparing__functi(&self, keyExtractor: Object) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Comparator::comparing__functi(keyExtractor)?;
-        let _t1 = this.thenComparing__compar(_t0)?;
-        Ok(_t1)
+        todo!("abstract java/util/Comparator.thenComparing")
     }
 
     // java: thenComparingInt(Ljava/util/function/ToIntFunction;)Ljava/util/Comparator;
     pub fn thenComparingInt(&self, keyExtractor: Object) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Comparator::comparingInt(keyExtractor)?;
-        let _t1 = this.thenComparing__compar(_t0)?;
-        Ok(_t1)
+        todo!("abstract java/util/Comparator.thenComparingInt")
     }
 
     // java: thenComparingLong(Ljava/util/function/ToLongFunction;)Ljava/util/Comparator;
     pub fn thenComparingLong(&self, keyExtractor: Object) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Comparator::comparingLong(keyExtractor)?;
-        let _t1 = this.thenComparing__compar(_t0)?;
-        Ok(_t1)
+        todo!("abstract java/util/Comparator.thenComparingLong")
     }
 
     // java: thenComparingDouble(Ljava/util/function/ToDoubleFunction;)Ljava/util/Comparator;
     pub fn thenComparingDouble(&self, keyExtractor: Object) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Comparator::comparingDouble(keyExtractor)?;
-        let _t1 = this.thenComparing__compar(_t0)?;
-        Ok(_t1)
+        todo!("abstract java/util/Comparator.thenComparingDouble")
     }
 
     // java: reverseOrder()Ljava/util/Comparator;
     pub fn reverseOrder() -> Result<Object> {
-        let _t0: Object = Collections::reverseOrder()?;
-        Ok(_t0)
+        todo!("abstract java/util/Comparator.reverseOrder")
     }
 
     // java: naturalOrder()Ljava/util/Comparator;
     pub fn naturalOrder() -> Result<Object> {
-        Ok(Comparators_NaturalOrderComparator::INSTANCE())
+        todo!("abstract java/util/Comparator.naturalOrder")
     }
 
     // java: nullsFirst(Ljava/util/Comparator;)Ljava/util/Comparator;
     pub fn nullsFirst(comparator: Object) -> Result<Object> {
-        Ok(Comparators_NullComparator::new(1i32, comparator)?)
+        todo!("abstract java/util/Comparator.nullsFirst")
     }
 
     // java: nullsLast(Ljava/util/Comparator;)Ljava/util/Comparator;
     pub fn nullsLast(comparator: Object) -> Result<Object> {
-        Ok(Comparators_NullComparator::new(0i32, comparator)?)
+        todo!("abstract java/util/Comparator.nullsLast")
     }
 
-    // java: comparing(Ljava/util/function/Function;Ljava/util/Comparator;)Ljava/util/Comparator;
     // java: comparing(Ljava/util/function/Function;Ljava/util/Comparator;)Ljava/util/Comparator;
     pub fn comparing__functi_compar(keyExtractor: Object, keyComparator: Object) -> Result<Object> {
-        let _t0: Object = Objects::requireNonNull__obj(keyExtractor)?;
-        let _t1: Object = Objects::requireNonNull__obj(keyComparator)?;
-        /* TODO: invokedynamic 58 */
-        Ok(keyExtractor)
+        todo!("abstract java/util/Comparator.comparing")
     }
 
     // java: comparing(Ljava/util/function/Function;)Ljava/util/Comparator;
-    // java: comparing(Ljava/util/function/Function;)Ljava/util/Comparator;
     pub fn comparing__functi(keyExtractor: Object) -> Result<Object> {
-        let _t0: Object = Objects::requireNonNull__obj(keyExtractor)?;
-        /* TODO: invokedynamic 61 */
-        Ok(keyExtractor)
+        todo!("abstract java/util/Comparator.comparing")
     }
 
     // java: comparingInt(Ljava/util/function/ToIntFunction;)Ljava/util/Comparator;
     pub fn comparingInt(keyExtractor: Object) -> Result<Object> {
-        let _t0: Object = Objects::requireNonNull__obj(keyExtractor)?;
-        /* TODO: invokedynamic 63 */
-        Ok(keyExtractor)
+        todo!("abstract java/util/Comparator.comparingInt")
     }
 
     // java: comparingLong(Ljava/util/function/ToLongFunction;)Ljava/util/Comparator;
     pub fn comparingLong(keyExtractor: Object) -> Result<Object> {
-        let _t0: Object = Objects::requireNonNull__obj(keyExtractor)?;
-        /* TODO: invokedynamic 65 */
-        Ok(keyExtractor)
+        todo!("abstract java/util/Comparator.comparingLong")
     }
 
     // java: comparingDouble(Ljava/util/function/ToDoubleFunction;)Ljava/util/Comparator;
     pub fn comparingDouble(keyExtractor: Object) -> Result<Object> {
-        let _t0: Object = Objects::requireNonNull__obj(keyExtractor)?;
-        /* TODO: invokedynamic 67 */
-        Ok(keyExtractor)
+        todo!("abstract java/util/Comparator.comparingDouble")
     }
 }

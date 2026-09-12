@@ -17,37 +17,22 @@ pub struct Collections_SynchronizedRandomAccessList<E>(std::marker::PhantomData<
 
 impl<E: Clone + 'static> Collections_SynchronizedRandomAccessList<E> {
     // java: <init>(Ljava/util/List;)V
-    // java: <init>(Ljava/util/List;)V
-    pub fn new__list(list: Object) -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/Collections$SynchronizedList.<init>:(Ljava/util/List;)V */
-        Ok(this)
+    pub fn new__list(&self, list: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedRandomAccessList.<init>")
     }
 
     // java: <init>(Ljava/util/List;Ljava/lang/Object;)V
-    // java: <init>(Ljava/util/List;Ljava/lang/Object;)V
-    pub fn new__list_obj(list: Object, mutex: Object) -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/Collections$SynchronizedList.<init>:(Ljava/util/List;Ljava/lang/Object;)V */
-        Ok(this)
+    pub fn new__list_obj(&self, list: Object, mutex: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedRandomAccessList.<init>")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.list.get().subList(fromIndex, toIndex)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedRandomAccessList = Collections_SynchronizedRandomAccessList::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedRandomAccessList.subList")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        let this = self;
-        Ok(Collections_SynchronizedList::new(this.list.get())?)
+        todo!("abstract java/util/Collections$SynchronizedRandomAccessList.writeReplace")
     }
 }

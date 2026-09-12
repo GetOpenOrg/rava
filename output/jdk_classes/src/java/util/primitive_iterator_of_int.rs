@@ -22,39 +22,17 @@ impl PrimitiveIterator_OfInt {
     }
 
     // java: forEachRemaining(Ljava/util/function/IntConsumer;)V
-    // java: forEachRemaining(Ljava/util/function/IntConsumer;)V
     pub fn forEachRemaining__intcon(&self, action: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(action)?;
-        loop {
-            let _t0 = this.hasNext()?;
-            if _t0==0i32 { break; }
-            let _t0 = this.nextInt()?;
-            action.accept(_t0)?;
-        }
-        Ok(())
+        todo!("abstract java/util/PrimitiveIterator$OfInt.forEachRemaining")
     }
 
     // java: next()Ljava/lang/Integer;
     pub fn next(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.getClass()?;
-        Tripwire::trip(_t0, String::from("{0} calling PrimitiveIterator.OfInt.nextInt()"))?;
-        let _t1 = this.nextInt()?;
-        Ok(_t1)
+        todo!("abstract java/util/PrimitiveIterator$OfInt.next")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
-    // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining__consum(&self, action: Object) -> Result<()> {
-        let this = self;
-        this.forEachRemaining(action)?;
-        let _t0: Object = Objects::requireNonNull__obj(action)?;
-        let _t1 = this.getClass()?;
-        Tripwire::trip(_t1, String::from("{0} calling PrimitiveIterator.OfInt.forEachRemainingInt(action::accept)"))?;
-        let _t2: Object = Objects::requireNonNull__obj(action)?;
-        /* TODO: invokedynamic 52 */
-        this.forEachRemaining(action)?;
-        Ok(())
+        todo!("abstract java/util/PrimitiveIterator$OfInt.forEachRemaining")
     }
 }

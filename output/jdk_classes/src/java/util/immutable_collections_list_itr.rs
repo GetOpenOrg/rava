@@ -27,106 +27,57 @@ pub struct ImmutableCollections_ListItr<E> {
 
 impl<E: Clone + 'static> ImmutableCollections_ListItr<E> {
     // java: <init>(Ljava/util/List;I)V
-    // java: <init>(Ljava/util/List;I)V
-    pub fn new__list_i(list: Object, size: i32) -> Result<Self> {
-        let this = Self { list: Field::new(Default::default()), size: Field::new(0), isListIterator: Field::new(false), cursor: Field::new(0), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.list.set(list);
-        this.size.set(size);
-        this.cursor.set(0i32);
-        this.isListIterator.set(0i32);
-        Ok(this)
+    pub fn new__list_i(&self, list: Object, size: i32) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$ListItr.<init>")
     }
 
     // java: <init>(Ljava/util/List;II)V
-    // java: <init>(Ljava/util/List;II)V
-    pub fn new__list_i_i(list: Object, size: i32, index: i32) -> Result<Self> {
-        let this = Self { list: Field::new(Default::default()), size: Field::new(0), isListIterator: Field::new(false), cursor: Field::new(0), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.list.set(list);
-        this.size.set(size);
-        this.cursor.set(index);
-        this.isListIterator.set(1i32);
-        Ok(this)
+    pub fn new__list_i_i(&self, list: Object, size: i32, index: i32) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$ListItr.<init>")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        let this = self;
-        Ok(this.cursor.get() != this.size.get())
+        todo!("abstract java/util/ImmutableCollections$ListItr.hasNext")
     }
 
     // java: next()Ljava/lang/Object;
-    pub fn next(&self) -> Result<E> {
-        let this = self;
-        let mut i: i32 = this.cursor.get();
-        let _t0 = this.list.get().get(i)?;
-        let mut next: Object = _t0;
-        this.cursor.set((i).wrapping_add(1i32));
-        return Ok(next);
-        i = todo!("stack underflow");
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn next(&self) -> Result<Object> {
+        todo!("abstract java/util/ImmutableCollections$ListItr.next")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/ImmutableCollections$ListItr.remove")
     }
 
     // java: hasPrevious()Z
     pub fn hasPrevious(&self) -> Result<bool> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(this.cursor.get()!=0i32)
+        todo!("abstract java/util/ImmutableCollections$ListItr.hasPrevious")
     }
 
     // java: previous()Ljava/lang/Object;
-    pub fn previous(&self) -> Result<E> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        let mut i: i32 = (this.cursor.get()).wrapping_sub(1i32);
-        let _t1 = this.list.get().get(i)?;
-        let mut previous: Object = _t1;
-        this.cursor.set(i);
-        return Ok(previous);
-        i = this.isListIterator.get();
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn previous(&self) -> Result<Object> {
+        todo!("abstract java/util/ImmutableCollections$ListItr.previous")
     }
 
     // java: nextIndex()I
     pub fn nextIndex(&self) -> Result<i32> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(this.cursor.get())
+        todo!("abstract java/util/ImmutableCollections$ListItr.nextIndex")
     }
 
     // java: previousIndex()I
     pub fn previousIndex(&self) -> Result<i32> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok((this.cursor.get()).wrapping_sub(1i32))
+        todo!("abstract java/util/ImmutableCollections$ListItr.previousIndex")
     }
 
     // java: set(Ljava/lang/Object;)V
-    pub fn set(&self, e: E) -> Result<()> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+    pub fn set(&self, e: Object) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$ListItr.set")
     }
 
     // java: add(Ljava/lang/Object;)V
-    pub fn add(&self, e: E) -> Result<()> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+    pub fn add(&self, e: Object) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$ListItr.add")
     }
 }

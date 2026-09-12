@@ -83,39 +83,12 @@ impl<E: Clone + 'static> List<E> {
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(operator)?;
-        let _t1 = this.listIterator()?;
-        let mut li: Object = _t1;
-        loop {
-            let _t0 = li.hasNext()?;
-            if _t0==0i32 { break; }
-            let _t0 = li.next()?;
-            let _t1 = operator.apply(_t0)?;
-            li.set(_t1)?;
-        }
-        Ok(())
+        todo!("abstract java/util/List.replaceAll")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        let this = self;
-        let _t0 = this.toArray()?;
-        let mut a: Vec<Object> = _t0;
-        Arrays::sort__arr_obj_compar(&a, c)?;
-        let _t1 = this.listIterator()?;
-        let mut i: Object = _t1;
-        let mut local_4: Vec<Object> = a;
-        let mut local_5: i32 = (local_4.len() as i32);
-        let mut local_6: i32 = 0i32;
-        loop {
-            if local_6 >= local_5 { break; }
-            let mut e: Object = local_4[local_6 as usize].clone();
-            let _t0 = i.next()?;
-            i.set(e)?;
-            local_6 = local_6.wrapping_add(1i32);
-        }
-        Ok(())
+        todo!("abstract java/util/List.sort")
     }
 
     // java: clear()V
@@ -180,220 +153,106 @@ impl<E: Clone + 'static> List<E> {
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        let this = self;
-        return Ok(AbstractList_RandomAccessSpliterator::new(this)?);
-        let _t0: Object = Spliterators::spliterator__coll_i(this, 16i32)?;
-        Ok(_t0)
+        todo!("abstract java/util/List.spliterator")
     }
 
     // java: addFirst(Ljava/lang/Object;)V
-    pub fn addFirst(&self, e: E) -> Result<()> {
-        let this = self;
-        this.add__i_obj(0i32, e)?;
-        Ok(())
+    pub fn addFirst(&self, e: Object) -> Result<()> {
+        todo!("abstract java/util/List.addFirst")
     }
 
     // java: addLast(Ljava/lang/Object;)V
-    pub fn addLast(&self, e: E) -> Result<()> {
-        let this = self;
-        let _t0 = this.add__obj(e)?;
-        Ok(())
+    pub fn addLast(&self, e: Object) -> Result<()> {
+        todo!("abstract java/util/List.addLast")
     }
 
     // java: getFirst()Ljava/lang/Object;
-    pub fn getFirst(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.isEmpty()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        let _t1 = this.get(0i32)?;
-        Ok(_t1)
+    pub fn getFirst(&self) -> Result<Object> {
+        todo!("abstract java/util/List.getFirst")
     }
 
     // java: getLast()Ljava/lang/Object;
-    pub fn getLast(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.isEmpty()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        let _t1 = this.size()?;
-        let _t2 = this.get((_t1).wrapping_sub(1i32))?;
-        Ok(_t2)
+    pub fn getLast(&self) -> Result<Object> {
+        todo!("abstract java/util/List.getLast")
     }
 
     // java: removeFirst()Ljava/lang/Object;
-    pub fn removeFirst(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.isEmpty()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        let _t1 = this.remove__i(0i32)?;
-        Ok(_t1)
+    pub fn removeFirst(&self) -> Result<Object> {
+        todo!("abstract java/util/List.removeFirst")
     }
 
     // java: removeLast()Ljava/lang/Object;
-    pub fn removeLast(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.isEmpty()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        let _t1 = this.size()?;
-        let _t2 = this.remove__i((_t1).wrapping_sub(1i32))?;
-        Ok(_t2)
+    pub fn removeLast(&self) -> Result<Object> {
+        todo!("abstract java/util/List.removeLast")
     }
 
     // java: reversed()Ljava/util/List;
     pub fn reversed(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = ReverseOrderListView::of(this, 1i32)?;
-        Ok(_t0)
+        todo!("abstract java/util/List.reversed")
     }
 
-    // java: of()Ljava/util/List;
     // java: of()Ljava/util/List;
     pub fn of() -> Result<Object> {
-        Ok(ImmutableCollections::EMPTY_LIST())
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj(e1: E) -> Result<Object> {
-        Ok(ImmutableCollections_List12::new(e1)?)
+    pub fn of__obj(e1: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj(e1: E, e2: E) -> Result<Object> {
-        Ok(ImmutableCollections_List12::new(e1, e2)?)
+    pub fn of__obj_obj(e1: Object, e2: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj(e1: E, e2: E, e3: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(3i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
-        Ok(_t1)
+    pub fn of__obj_obj_obj(e1: Object, e2: Object, e3: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(4i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
-        Ok(_t1)
+    pub fn of__obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(5i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
-        Ok(_t1)
+    pub fn of__obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(6i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
-        Ok(_t1)
+    pub fn of__obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(7i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        _arr0[6i32 as usize] = e7;
-        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
-        Ok(_t1)
+    pub fn of__obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(8i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        _arr0[6i32 as usize] = e7;
-        _arr0[7i32 as usize] = e8;
-        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
-        Ok(_t1)
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E, e9: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(9i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        _arr0[6i32 as usize] = e7;
-        _arr0[7i32 as usize] = e8;
-        _arr0[8i32 as usize] = e9;
-        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
-        Ok(_t1)
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object, e9: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E, e9: E, e10: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(10i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        _arr0[6i32 as usize] = e7;
-        _arr0[7i32 as usize] = e8;
-        _arr0[8i32 as usize] = e9;
-        _arr0[9i32 as usize] = e10;
-        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
-        Ok(_t1)
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object, e9: Object, e10: Object) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: of([Ljava/lang/Object;)Ljava/util/List;
-    // java: of([Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__arr_obj(elements: &[Object]) -> Result<Object> {
-        /* TODO: tableswitch default:59 low:0 high:2 */
-        let mut list: Object = ImmutableCollections::EMPTY_LIST();
-        return Ok(list);
-        return Ok(ImmutableCollections_List12::new(elements[0i32 as usize].clone())?);
-        return Ok(ImmutableCollections_List12::new(elements[0i32 as usize].clone(), elements[1i32 as usize].clone())?);
-        let _t0: Object = ImmutableCollections::listFromArray(&elements)?;
-        Ok(_t0)
+    pub fn of__arr_obj(elements: Vec<Object>) -> Result<Object> {
+        todo!("abstract java/util/List.of")
     }
 
     // java: copyOf(Ljava/util/Collection;)Ljava/util/List;
     pub fn copyOf(coll: Object) -> Result<Object> {
-        let _t0: Object = ImmutableCollections::listCopy(coll)?;
-        Ok(_t0)
+        todo!("abstract java/util/List.copyOf")
     }
 }

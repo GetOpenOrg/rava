@@ -29,115 +29,52 @@ pub struct AbstractList_RandomAccessSpliterator<E> {
 
 impl<E: Clone + 'static> AbstractList_RandomAccessSpliterator<E> {
     // java: <init>(Ljava/util/List;)V
-    // java: <init>(Ljava/util/List;)V
-    pub fn new__list(list: Object) -> Result<Self> {
-        let this = Self { list: Field::new(Default::default()), index: Field::new(0), fence: Field::new(0), alist: Field::new(Default::default()), expectedModCount: Field::new(0), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        return Err(JvmError::Custom("athrow".to_owned()));
-        this.list.set(list);
-        this.index.set(0i32);
-        this.fence.set(-1i32);
-        /* TODO: aconst_null  */
-        true.alist.set(list);
-        this.alist.get().modCount.get().expectedModCount.set(0i32);
-        Ok(this)
+    pub fn new__list(&self, list: Object) -> Result<()> {
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.<init>")
     }
 
     // java: <init>(Ljava/util/AbstractList$RandomAccessSpliterator;II)V
-    // java: <init>(Ljava/util/AbstractList$RandomAccessSpliterator;II)V
-    pub fn new__abstra_i_i(parent: Object, origin: i32, fence: i32) -> Result<Self> {
-        let this = Self { list: Field::new(Default::default()), index: Field::new(0), fence: Field::new(0), alist: Field::new(Default::default()), expectedModCount: Field::new(0), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.list.set(parent.list.get());
-        this.index.set(origin);
-        this.fence.set(fence);
-        this.alist.set(parent.alist.get());
-        this.expectedModCount.set(parent.expectedModCount.get());
-        Ok(this)
+    pub fn new__abstra_i_i(&self, parent: Object, origin: i32, fence: i32) -> Result<()> {
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.<init>")
     }
 
     // java: getFence()I
     pub fn getFence(&self) -> Result<i32> {
-        let this = self;
-        let mut lst: Object = this.list.get();
-        let mut hi: i32 = this.fence.get();
-        this.expectedModCount.set(this.alist.get().modCount.get());
-        let _t0 = lst.size()?;
-        this.fence.set(_t0);
-        hi = _t0;
-        Ok(hi)
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.getFence")
     }
 
     // java: trySplit()Ljava/util/Spliterator;
     pub fn trySplit(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.getFence()?;
-        let mut hi: i32 = _t0;
-        let mut lo: i32 = this.index.get();
-        let mut mid: i32 = (((lo).wrapping_add(hi) as u32>>(1i32&0x1f)) as i32);
-        /* TODO: aconst_null  */
-        this.index.set(mid);
-        Ok(AbstractList_RandomAccessSpliterator::new(this, lo, mid)?)
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.trySplit")
     }
 
     // java: tryAdvance(Ljava/util/function/Consumer;)Z
     pub fn tryAdvance(&self, action: Object) -> Result<bool> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        let _t0 = this.getFence()?;
-        let mut hi: i32 = _t0;
-        let mut i: i32 = this.index.get();
-        this.index.set((i).wrapping_add(1i32));
-        let _t1: Object = AbstractList_RandomAccessSpliterator::get(this.list.get(), i)?;
-        action.accept(_t1)?;
-        AbstractList_RandomAccessSpliterator::checkAbstractListModCount(this.alist.get(), this.expectedModCount.get())?;
-        return Ok(1i32);
-        Ok(0i32)
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.tryAdvance")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(action)?;
-        let mut lst: Object = this.list.get();
-        let _t1 = this.getFence()?;
-        let mut hi: i32 = _t1;
-        let mut i: i32 = this.index.get();
-        this.index.set(hi);
-        loop {
-            if i >= hi { break; }
-            let _t0: Object = AbstractList_RandomAccessSpliterator::get(lst, i)?;
-            action.accept(_t0)?;
-            i = i.wrapping_add(1i32);
-        }
-        AbstractList_RandomAccessSpliterator::checkAbstractListModCount(this.alist.get(), this.expectedModCount.get())?;
-        Ok(())
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.forEachRemaining")
     }
 
     // java: estimateSize()J
     pub fn estimateSize(&self) -> Result<i64> {
-        let this = self;
-        let _t0 = this.getFence()?;
-        Ok(((_t0).wrapping_sub(this.index.get()) as i64))
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.estimateSize")
     }
 
     // java: characteristics()I
     pub fn characteristics(&self) -> Result<i32> {
-        let this = self;
-        Ok(16464i32)
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.characteristics")
     }
 
     // java: get(Ljava/util/List;I)Ljava/lang/Object;
-    pub fn get(list: Object, i: i32) -> Result<E> {
-        let _t0 = list.get(i)?;
-        return Ok(_t0);
-        let mut ex: i32 = todo!("stack underflow");
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn get(list: Object, i: i32) -> Result<Object> {
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.get")
     }
 
     // java: checkAbstractListModCount(Ljava/util/AbstractList;I)V
     pub fn checkAbstractListModCount(alist: Object, expectedModCount: i32) -> Result<()> {
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.checkAbstractListModCount")
     }
 }

@@ -93,156 +93,71 @@ impl<E: Clone + 'static> Set<E> {
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Spliterators::spliterator__coll_i(this, 1i32)?;
-        Ok(_t0)
+        todo!("abstract java/util/Set.spliterator")
     }
 
-    // java: of()Ljava/util/Set;
     // java: of()Ljava/util/Set;
     pub fn of() -> Result<Object> {
-        Ok(ImmutableCollections::EMPTY_SET())
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj(e1: E) -> Result<Object> {
-        Ok(ImmutableCollections_Set12::new(e1)?)
+    pub fn of__obj(e1: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj(e1: E, e2: E) -> Result<Object> {
-        Ok(ImmutableCollections_Set12::new(e1, e2)?)
+    pub fn of__obj_obj(e1: Object, e2: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj_obj(e1: E, e2: E, e3: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(3i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        Ok(ImmutableCollections_SetN::new(_arr0)?)
+    pub fn of__obj_obj_obj(e1: Object, e2: Object, e3: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(4i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        Ok(ImmutableCollections_SetN::new(_arr0)?)
+    pub fn of__obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(5i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        Ok(ImmutableCollections_SetN::new(_arr0)?)
+    pub fn of__obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(6i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        Ok(ImmutableCollections_SetN::new(_arr0)?)
+    pub fn of__obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(7i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        _arr0[6i32 as usize] = e7;
-        Ok(ImmutableCollections_SetN::new(_arr0)?)
+    pub fn of__obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(8i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        _arr0[6i32 as usize] = e7;
-        _arr0[7i32 as usize] = e8;
-        Ok(ImmutableCollections_SetN::new(_arr0)?)
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E, e9: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(9i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        _arr0[6i32 as usize] = e7;
-        _arr0[7i32 as usize] = e8;
-        _arr0[8i32 as usize] = e9;
-        Ok(ImmutableCollections_SetN::new(_arr0)?)
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object, e9: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E, e9: E, e10: E) -> Result<Object> {
-        let mut _arr0: Vec<Object> = Vec::with_capacity(10i32 as usize);
-        _arr0[0i32 as usize] = e1;
-        _arr0[1i32 as usize] = e2;
-        _arr0[2i32 as usize] = e3;
-        _arr0[3i32 as usize] = e4;
-        _arr0[4i32 as usize] = e5;
-        _arr0[5i32 as usize] = e6;
-        _arr0[6i32 as usize] = e7;
-        _arr0[7i32 as usize] = e8;
-        _arr0[8i32 as usize] = e9;
-        _arr0[9i32 as usize] = e10;
-        Ok(ImmutableCollections_SetN::new(_arr0)?)
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object, e9: Object, e10: Object) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: of([Ljava/lang/Object;)Ljava/util/Set;
-    // java: of([Ljava/lang/Object;)Ljava/util/Set;
-    pub fn of__arr_obj(elements: &[Object]) -> Result<Object> {
-        /* TODO: tableswitch default:59 low:0 high:2 */
-        let mut set: Object = ImmutableCollections::EMPTY_SET();
-        return Ok(set);
-        return Ok(ImmutableCollections_Set12::new(elements[0i32 as usize].clone())?);
-        return Ok(ImmutableCollections_Set12::new(elements[0i32 as usize].clone(), elements[1i32 as usize].clone())?);
-        Ok(ImmutableCollections_SetN::new(elements)?)
+    pub fn of__arr_obj(elements: Vec<Object>) -> Result<Object> {
+        todo!("abstract java/util/Set.of")
     }
 
     // java: copyOf(Ljava/util/Collection;)Ljava/util/Set;
     pub fn copyOf(coll: Object) -> Result<Object> {
-        return Ok(coll);
-        let _t0 = coll.isEmpty()?;
-        let _t1: Object = Set::of()?;
-        return Ok(_t1);
-        let _t2 = HashSet::<_>::new()?.toArray()?;
-        let _t3: Object = Set::of__arr_obj(&_t2)?;
-        Ok(_t3)
+        todo!("abstract java/util/Set.copyOf")
     }
 }

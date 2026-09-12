@@ -17,32 +17,13 @@ pub struct ImmutableCollections_AbstractImmutableSet<E>(std::marker::PhantomData
 
 impl<E: Clone + 'static> ImmutableCollections_AbstractImmutableSet<E> {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/ImmutableCollections$AbstractImmutableCollection.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableSet.<init>")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        let this = self;
-        return Ok(1i32);
-        return Ok(0i32);
-        let mut c: Object = o;
-        let _t0 = c.size()?;
-        let _t1 = this.size()?;
-        return Ok(0i32);
-        let _t2 = c.iterator()?;
-        let mut local_3: Object = _t2;
-        loop {
-            let _t0 = local_3.hasNext()?;
-            if _t0==0i32 { break; }
-            let _t0 = local_3.next()?;
-            let mut e: Object = _t0;
-            let _t1 = this.contains(e)?;
-            return Ok(0i32);
-        }
-        Ok(1i32)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableSet.equals")
     }
 
     // java: hashCode()I

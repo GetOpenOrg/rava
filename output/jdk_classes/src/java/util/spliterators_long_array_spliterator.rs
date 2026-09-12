@@ -28,98 +28,47 @@ pub struct Spliterators_LongArraySpliterator {
 
 impl Spliterators_LongArraySpliterator {
     // java: <init>([JI)V
-    // java: <init>([JI)V
-    pub fn new__arr_l_i(array: Vec<i64>, additionalCharacteristics: i32) -> Result<Self> {
-        let this = Self { array: Field::new(Default::default()), index: Field::new(0), fence: Field::new(0), characteristics: Field::new(0), estimatedSize: Field::new(0) };
-        /* invokespecial Method java/util/Spliterators$LongArraySpliterator.<init>:([JIII)V */
-        Ok(this)
+    pub fn new__arr_l_i(&self, array: Vec<i64>, additionalCharacteristics: i32) -> Result<()> {
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.<init>")
     }
 
     // java: <init>([JIII)V
-    // java: <init>([JIII)V
-    pub fn new__arr_l_i_i_i(array: Vec<i64>, origin: i32, fence: i32, additionalCharacteristics: i32) -> Result<Self> {
-        let this = Self { array: Field::new(Default::default()), index: Field::new(0), fence: Field::new(0), characteristics: Field::new(0), estimatedSize: Field::new(0) };
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.array.set(array);
-        this.index.set(origin);
-        this.fence.set(fence);
-        this.characteristics.set(((additionalCharacteristics|64i32)|16384i32));
-        this.estimatedSize.set(18446744073709551615i64);
-        Ok(this)
+    pub fn new__arr_l_i_i_i(&self, array: Vec<i64>, origin: i32, fence: i32, additionalCharacteristics: i32) -> Result<()> {
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.<init>")
     }
 
     // java: <init>([JIIIJ)V
-    // java: <init>([JIIIJ)V
-    pub fn new__arr_l_i_i_i_l(array: Vec<i64>, origin: i32, fence: i32, characteristics: i32, estimatedSize: i64) -> Result<Self> {
-        let this = Self { array: Field::new(Default::default()), index: Field::new(0), fence: Field::new(0), characteristics: Field::new(0), estimatedSize: Field::new(0) };
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.array.set(array);
-        this.index.set(origin);
-        this.fence.set(fence);
-        this.characteristics.set((characteristics&-16449i32));
-        this.estimatedSize.set(estimatedSize);
-        Ok(this)
+    pub fn new__arr_l_i_i_i_l(&self, array: Vec<i64>, origin: i32, fence: i32, characteristics: i32, estimatedSize: i64) -> Result<()> {
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.<init>")
     }
 
     // java: trySplit()Ljava/util/Spliterator$OfLong;
     pub fn trySplit(&self) -> Result<Object> {
-        let this = self;
-        let mut lo: i32 = this.index.get();
-        let mut mid: i32 = (((lo).wrapping_add(this.fence.get()) as u32>>(1i32&0x1f)) as i32);
-        /* TODO: aconst_null  */
-        return Ok(mid);
-        /* TODO: lcmp  */
-        this.index.set(mid);
-        return Ok(Spliterators_LongArraySpliterator::new(this.array.get(), lo, mid, this.characteristics.get())?);
-        /* TODO: lushr  */
-        let mut prefixEstimatedSize: i64 = 1i32;
-        this.estimatedSize.set((this.estimatedSize.get()).wrapping_sub(prefixEstimatedSize));
-        this.index.set(mid);
-        Ok(Spliterators_LongArraySpliterator::new(this.array.get(), lo, mid, this.characteristics.get(), prefixEstimatedSize)?)
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.trySplit")
     }
 
     // java: forEachRemaining(Ljava/util/function/LongConsumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        let mut a: Vec<i64> = this.array.get();
-        let mut hi: i32 = this.fence.get();
-        let mut i: i32 = this.index.get();
-        this.index.set(hi);
-        action.accept(a[i as usize])?;
-        i = i.wrapping_add(1i32);
-        Ok(())
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.forEachRemaining")
     }
 
     // java: tryAdvance(Ljava/util/function/LongConsumer;)Z
     pub fn tryAdvance(&self, action: Object) -> Result<bool> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        this.index.set((this.index.get()).wrapping_add(1i32));
-        action.accept(this.array.get()[this.index.get() as usize])?;
-        return Ok(1i32);
-        Ok(0i32)
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.tryAdvance")
     }
 
     // java: estimateSize()J
     pub fn estimateSize(&self) -> Result<i64> {
-        let this = self;
-        /* TODO: lcmp  */
-        Ok(((this.fence.get()).wrapping_sub(this.index.get()) as i64))
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.estimateSize")
     }
 
     // java: characteristics()I
     pub fn characteristics(&self) -> Result<i32> {
-        let this = self;
-        Ok(this.characteristics.get())
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.characteristics")
     }
 
     // java: getComparator()Ljava/util/Comparator;
     pub fn getComparator(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.hasCharacteristics(4i32)?;
-        /* TODO: aconst_null  */
-        return Ok(_t0);
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Spliterators$LongArraySpliterator.getComparator")
     }
 }

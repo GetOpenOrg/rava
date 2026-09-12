@@ -21,80 +21,57 @@ pub struct Collections_SingletonList<E> {
 
 impl<E: Clone + 'static> Collections_SingletonList<E> {
     // java: <init>(Ljava/lang/Object;)V
-    pub fn new(obj: E) -> Result<Self> {
-        let this = Self { element: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/AbstractList.<init>:()V */
-        this.element.set(obj);
-        Ok(this)
+    pub fn new(&self, obj: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SingletonList.<init>")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Collections::singletonIterator(this.element.get())?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SingletonList.iterator")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        let this = self;
-        Ok(1i32)
+        todo!("abstract java/util/Collections$SingletonList.size")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, obj: Object) -> Result<bool> {
-        let this = self;
-        let _t0: bool = Collections::eq(obj, this.element.get())?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SingletonList.contains")
     }
 
     // java: get(I)Ljava/lang/Object;
-    pub fn get(&self, index: i32) -> Result<E> {
-        let this = self;
-        String::new().append(&String::from("Index:"))?;
-        String::new().append(&index)?;
-        String::new().append(&String::from(", Size: 1"))?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(this.element.get())
+    pub fn get(&self, index: i32) -> Result<Object> {
+        todo!("abstract java/util/Collections$SingletonList.get")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        let this = self;
-        action.accept(this.element.get())?;
-        Ok(())
+        todo!("abstract java/util/Collections$SingletonList.forEach")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SingletonList.removeIf")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/Collections$SingletonList.replaceAll")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        let this = self;
-        Ok(())
+        todo!("abstract java/util/Collections$SingletonList.sort")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Collections::singletonSpliterator(this.element.get())?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SingletonList.spliterator")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let _t0: i32 = Objects::hashCode(this.element.get())?;
-        Ok((31i32).wrapping_add(_t0))
+        todo!("abstract java/util/Collections$SingletonList.hashCode")
     }
 }

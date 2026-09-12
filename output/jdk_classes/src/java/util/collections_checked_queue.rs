@@ -21,60 +21,42 @@ pub struct Collections_CheckedQueue<E> {
 
 impl<E: Clone + 'static> Collections_CheckedQueue<E> {
     // java: <init>(Ljava/util/Queue;Ljava/lang/Class;)V
-    pub fn new(queue: Object, elementType: Object) -> Result<Self> {
-        let this = Self { queue: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$CheckedCollection.<init>:(Ljava/util/Collection;Ljava/lang/Class;)V */
-        this.queue.set(queue);
-        Ok(this)
+    pub fn new(&self, queue: Object, elementType: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$CheckedQueue.<init>")
     }
 
     // java: element()Ljava/lang/Object;
-    pub fn element(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.queue.get().element()?;
-        Ok(_t0)
+    pub fn element(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedQueue.element")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.c.get().equals(o)?;
-        Ok(_t0!=0i32)
+        todo!("abstract java/util/Collections$CheckedQueue.equals")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.c.get().hashCode()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$CheckedQueue.hashCode")
     }
 
     // java: peek()Ljava/lang/Object;
-    pub fn peek(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.queue.get().peek()?;
-        Ok(_t0)
+    pub fn peek(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedQueue.peek")
     }
 
     // java: poll()Ljava/lang/Object;
-    pub fn poll(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.queue.get().poll()?;
-        Ok(_t0)
+    pub fn poll(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedQueue.poll")
     }
 
     // java: remove()Ljava/lang/Object;
-    pub fn remove(&self) -> Result<E> {
-        let this = self;
-        let _t0 = this.queue.get().remove()?;
-        Ok(_t0)
+    pub fn remove(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedQueue.remove")
     }
 
     // java: offer(Ljava/lang/Object;)Z
-    pub fn offer(&self, e: E) -> Result<bool> {
-        let this = self;
-        let _t0 = this.typeCheck(e)?;
-        let _t1 = this.queue.get().offer(_t0)?;
-        Ok(_t1)
+    pub fn offer(&self, e: Object) -> Result<bool> {
+        todo!("abstract java/util/Collections$CheckedQueue.offer")
     }
 }

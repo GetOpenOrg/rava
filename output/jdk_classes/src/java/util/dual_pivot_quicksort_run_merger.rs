@@ -32,49 +32,22 @@ pub struct DualPivotQuicksort_RunMerger {
 
 impl DualPivotQuicksort_RunMerger {
     // java: <init>(Ljava/lang/Object;Ljava/lang/Object;II[III)V
-    pub fn new(a: Object, b: Object, offset: i32, aim: i32, run: Vec<i32>, lo: i32, hi: i32) -> Result<Self> {
-        let this = Self { a: Field::new(Default::default()), b: Field::new(Default::default()), run: Field::new(Default::default()), offset: Field::new(0), aim: Field::new(0), lo: Field::new(0), hi: Field::new(0) };
-        /* invokespecial Method java/util/concurrent/RecursiveTask.<init>:()V */
-        this.a.set(a);
-        this.b.set(b);
-        this.offset.set(offset);
-        this.aim.set(aim);
-        this.run.set(run);
-        this.lo.set(lo);
-        this.hi.set(hi);
-        Ok(this)
+    pub fn new(&self, a: Object, b: Object, offset: i32, aim: i32, run: Vec<i32>, lo: i32, hi: i32) -> Result<()> {
+        todo!("abstract java/util/DualPivotQuicksort$RunMerger.<init>")
     }
 
     // java: compute()Ljava/lang/Object;
     pub fn compute(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Vec<i32> = DualPivotQuicksort::mergeRuns__arr_i_arr_i_i_i_z_arr_i_i_i(this.a.get(), this.b.get(), this.offset.get(), this.aim.get(), 1i32, &this.run.get(), this.lo.get(), this.hi.get())?;
-        return Ok(_t0);
-        let _t1: Vec<i64> = DualPivotQuicksort::mergeRuns__arr_l_arr_l_i_i_z_arr_i_i_i(this.a.get(), this.b.get(), this.offset.get(), this.aim.get(), 1i32, &this.run.get(), this.lo.get(), this.hi.get())?;
-        return Ok(_t1);
-        let _t2: Vec<f32> = DualPivotQuicksort::mergeRuns__arr_f_arr_f_i_i_z_arr_i_i_i(this.a.get(), this.b.get(), this.offset.get(), this.aim.get(), 1i32, &this.run.get(), this.lo.get(), this.hi.get())?;
-        return Ok(_t2);
-        let _t3: Vec<f64> = DualPivotQuicksort::mergeRuns__arr_d_arr_d_i_i_z_arr_i_i_i(this.a.get(), this.b.get(), this.offset.get(), this.aim.get(), 1i32, &this.run.get(), this.lo.get(), this.hi.get())?;
-        return Ok(_t3);
-        String::new().append(&String::from("Unknown type of array:"))?;
-        let _t4 = this.a.get().getClass()?;
-        let _t5 = _t4.getName()?;
-        String::new().append(&_t5)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/DualPivotQuicksort$RunMerger.compute")
     }
 
     // java: forkMe()Ljava/util/DualPivotQuicksort$RunMerger;
     pub fn forkMe(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.fork()?;
-        Ok(this)
+        todo!("abstract java/util/DualPivotQuicksort$RunMerger.forkMe")
     }
 
     // java: getDestination()Ljava/lang/Object;
     pub fn getDestination(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.join()?;
-        let _t1 = this.getRawResult()?;
-        Ok(_t1)
+        todo!("abstract java/util/DualPivotQuicksort$RunMerger.getDestination")
     }
 }

@@ -23,170 +23,117 @@ pub struct Collections_SetFromMap<E> {
 
 impl<E: Clone + 'static> Collections_SetFromMap<E> {
     // java: <init>(Ljava/util/Map;)V
-    pub fn new(map: Object) -> Result<Self> {
-        let this = Self { m: Field::new(Default::default()), s: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/AbstractSet.<init>:()V */
-        this.m.set(map);
-        let _t0 = map.keySet()?;
-        this.s.set(_t0);
-        Ok(this)
+    pub fn new(&self, map: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SetFromMap.<init>")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        let this = self;
-        this.m.get().clear()?;
-        Ok(())
+        todo!("abstract java/util/Collections$SetFromMap.clear")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.m.get().size()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.size")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        let this = self;
-        let _t0 = this.m.get().isEmpty()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.isEmpty")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.m.get().containsKey(o)?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.contains")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.m.get().remove(o)?;
-        Ok(!_t0.is_none())
+        todo!("abstract java/util/Collections$SetFromMap.remove")
     }
 
     // java: add(Ljava/lang/Object;)Z
-    pub fn add(&self, e: E) -> Result<bool> {
-        let this = self;
-        let _t0 = this.m.get().put(e, Boolean::TRUE())?;
-        Ok(_t0.is_none())
+    pub fn add(&self, e: Object) -> Result<bool> {
+        todo!("abstract java/util/Collections$SetFromMap.add")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.s.get().iterator()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.iterator")
     }
 
-    // java: toArray()[Ljava/lang/Object;
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        let this = self;
-        let _t0 = this.s.get().toArray()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.toArray")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
-    // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        let this = self;
-        let _t0 = this.s.get().toArray(a)?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.toArray")
     }
 
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        let this = self;
-        let _t0 = this.s.get().toString()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.toString")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.s.get().hashCode()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.hashCode")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.s.get().equals(o)?;
-        Ok(_t0!=0i32)
+        todo!("abstract java/util/Collections$SetFromMap.equals")
     }
 
     // java: containsAll(Ljava/util/Collection;)Z
     pub fn containsAll(&self, c: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.s.get().containsAll(c)?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.containsAll")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, c: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.s.get().removeAll(c)?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.removeAll")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, c: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.s.get().retainAll(c)?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.retainAll")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        let this = self;
-        this.s.get().forEach(action)?;
-        Ok(())
+        todo!("abstract java/util/Collections$SetFromMap.forEach")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.s.get().removeIf(filter)?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.removeIf")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.s.get().spliterator()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.spliterator")
     }
 
     // java: stream()Ljava/util/stream/Stream;
     pub fn stream(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.s.get().stream()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.stream")
     }
 
     // java: parallelStream()Ljava/util/stream/Stream;
     pub fn parallelStream(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.s.get().parallelStream()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SetFromMap.parallelStream")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, stream: Object) -> Result<()> {
-        let this = self;
-        stream.defaultReadObject()?;
-        let _t0 = this.m.get().keySet()?;
-        this.s.set(_t0);
-        Ok(())
+        todo!("abstract java/util/Collections$SetFromMap.readObject")
     }
 
     // java: readObjectNoData()V
     pub fn readObjectNoData(&self) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/Collections$SetFromMap.readObjectNoData")
     }
 }

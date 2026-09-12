@@ -17,35 +17,27 @@ pub struct Collections_EmptyIterator<E>(std::marker::PhantomData<E>);
 
 impl<E: Clone + 'static> Collections_EmptyIterator<E> {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/util/Collections$EmptyIterator.<init>")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        let this = self;
-        Ok(0i32)
+        todo!("abstract java/util/Collections$EmptyIterator.hasNext")
     }
 
     // java: next()Ljava/lang/Object;
-    pub fn next(&self) -> Result<E> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn next(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$EmptyIterator.next")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/Collections$EmptyIterator.remove")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(action)?;
-        Ok(())
+        todo!("abstract java/util/Collections$EmptyIterator.forEachRemaining")
     }
 }

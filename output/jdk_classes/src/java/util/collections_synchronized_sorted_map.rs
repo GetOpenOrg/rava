@@ -21,98 +21,42 @@ pub struct Collections_SynchronizedSortedMap<K, V> {
 
 impl<K: Clone + 'static, V: Clone + 'static> Collections_SynchronizedSortedMap<K, V> {
     // java: <init>(Ljava/util/SortedMap;)V
-    // java: <init>(Ljava/util/SortedMap;)V
-    pub fn new__sorted(m: Object) -> Result<Self> {
-        let this = Self { sm: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$SynchronizedMap.<init>:(Ljava/util/Map;)V */
-        this.sm.set(m);
-        Ok(this)
+    pub fn new__sorted(&self, m: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedSortedMap.<init>")
     }
 
     // java: <init>(Ljava/util/SortedMap;Ljava/lang/Object;)V
-    // java: <init>(Ljava/util/SortedMap;Ljava/lang/Object;)V
-    pub fn new__sorted_obj(m: Object, mutex: Object) -> Result<Self> {
-        let this = Self { sm: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$SynchronizedMap.<init>:(Ljava/util/Map;Ljava/lang/Object;)V */
-        this.sm.set(m);
-        Ok(this)
+    pub fn new__sorted_obj(&self, m: Object, mutex: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedSortedMap.<init>")
     }
 
     // java: comparator()Ljava/util/Comparator;
     pub fn comparator(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.sm.get().comparator()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedSortedMap.comparator")
     }
 
     // java: subMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn subMap(&self, fromKey: K, toKey: K) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.sm.get().subMap(fromKey, toKey)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedSortedMap = Collections_SynchronizedSortedMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn subMap(&self, fromKey: Object, toKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedMap.subMap")
     }
 
     // java: headMap(Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn headMap(&self, toKey: K) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.sm.get().headMap(toKey)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Collections_SynchronizedSortedMap = Collections_SynchronizedSortedMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn headMap(&self, toKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedMap.headMap")
     }
 
     // java: tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn tailMap(&self, fromKey: K) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.sm.get().tailMap(fromKey)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Collections_SynchronizedSortedMap = Collections_SynchronizedSortedMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn tailMap(&self, fromKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedMap.tailMap")
     }
 
     // java: firstKey()Ljava/lang/Object;
-    pub fn firstKey(&self) -> Result<K> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.sm.get().firstKey()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn firstKey(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedMap.firstKey")
     }
 
     // java: lastKey()Ljava/lang/Object;
-    pub fn lastKey(&self) -> Result<K> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.sm.get().lastKey()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn lastKey(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedSortedMap.lastKey")
     }
 }

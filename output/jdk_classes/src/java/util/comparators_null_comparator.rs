@@ -23,38 +23,22 @@ pub struct Comparators_NullComparator<T> {
 
 impl<T: Clone + 'static> Comparators_NullComparator<T> {
     // java: <init>(ZLjava/util/Comparator;)V
-    pub fn new(nullFirst: bool, real: Object) -> Result<Self> {
-        let this = Self { nullFirst: Field::new(false), real: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.nullFirst.set(nullFirst);
-        this.real.set(real);
-        Ok(this)
+    pub fn new(&self, nullFirst: bool, real: Object) -> Result<()> {
+        todo!("abstract java/util/Comparators$NullComparator.<init>")
     }
 
     // java: compare(Ljava/lang/Object;Ljava/lang/Object;)I
-    pub fn compare(&self, a: T, b: T) -> Result<i32> {
-        let this = self;
-        return Ok(this.nullFirst.get()==0i32);
-        return Ok(this.nullFirst.get()==0i32);
-        let _t0 = this.real.get().compare(a, b)?;
-        Ok(_t0)
+    pub fn compare(&self, a: Object, b: Object) -> Result<i32> {
+        todo!("abstract java/util/Comparators$NullComparator.compare")
     }
 
     // java: thenComparing(Ljava/util/Comparator;)Ljava/util/Comparator;
     pub fn thenComparing(&self, other: Object) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Objects::requireNonNull__obj(other)?;
-        let _t1 = this.real.get().thenComparing(other)?;
-        /* invokespecial Method java/util/Comparators$NullComparator.<init>:(ZLjava/util/Comparator;)V */
-        Ok(this.nullFirst.get())
+        todo!("abstract java/util/Comparators$NullComparator.thenComparing")
     }
 
     // java: reversed()Ljava/util/Comparator;
     pub fn reversed(&self) -> Result<Object> {
-        let this = self;
-        /* TODO: aconst_null  */
-        let _t0 = this.real.get().reversed()?;
-        /* invokespecial Method java/util/Comparators$NullComparator.<init>:(ZLjava/util/Comparator;)V */
-        Ok(Comparators_NullComparator::new())
+        todo!("abstract java/util/Comparators$NullComparator.reversed")
     }
 }

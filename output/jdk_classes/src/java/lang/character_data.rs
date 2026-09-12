@@ -17,10 +17,8 @@ pub struct CharacterData;
 
 impl CharacterData {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/CharacterData.<init>")
     }
 
     // java: getProperties(I)I
@@ -145,34 +143,26 @@ impl CharacterData {
 
     // java: toUpperCaseEx(I)I
     pub fn toUpperCaseEx(&self, ch: i32) -> Result<i32> {
-        let this = self;
-        let _t0 = this.toUpperCase(ch)?;
-        Ok(_t0)
+        todo!("abstract java/lang/CharacterData.toUpperCaseEx")
     }
 
     // java: toUpperCaseCharArray(I)[C
     pub fn toUpperCaseCharArray(&self, ch: i32) -> Result<Vec<u16>> {
-        let this = self;
-        /* TODO: aconst_null  */
-        Ok(todo!("stack underflow"))
+        todo!("abstract java/lang/CharacterData.toUpperCaseCharArray")
     }
 
     // java: isOtherAlphabetic(I)Z
     pub fn isOtherAlphabetic(&self, ch: i32) -> Result<bool> {
-        let this = self;
-        Ok(0i32)
+        todo!("abstract java/lang/CharacterData.isOtherAlphabetic")
     }
 
     // java: isIdeographic(I)Z
     pub fn isIdeographic(&self, ch: i32) -> Result<bool> {
-        let this = self;
-        Ok(0i32)
+        todo!("abstract java/lang/CharacterData.isIdeographic")
     }
 
     // java: of(I)Ljava/lang/CharacterData;
     pub fn of(ch: i32) -> Result<Object> {
-        return Ok(CharacterDataLatin1::instance());
-        /* TODO: tableswitch default:132 low:0 high:16 */
-        Ok(CharacterDataUndefined::instance())
+        todo!("abstract java/lang/CharacterData.of")
     }
 }

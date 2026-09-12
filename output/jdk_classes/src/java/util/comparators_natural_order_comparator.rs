@@ -18,34 +18,26 @@ pub struct Comparators_NaturalOrderComparator;
 impl Comparators_NaturalOrderComparator {
     // java: values()[Ljava/util/Comparators$NaturalOrderComparator;
     pub fn values() -> Result<Vec<Object>> {
-        let _t0 = Comparators_NaturalOrderComparator::_VALUES().clone()?;
-        Ok(_t0)
+        todo!("abstract java/util/Comparators$NaturalOrderComparator.values")
     }
 
     // java: valueOf(Ljava/lang/String;)Ljava/util/Comparators$NaturalOrderComparator;
     pub fn valueOf(name: String) -> Result<Object> {
-        let _t0: Object = Enum::valueOf(1i32, name)?;
-        Ok(_t0)
+        todo!("abstract java/util/Comparators$NaturalOrderComparator.valueOf")
     }
 
     // java: <init>(Ljava/lang/String;I)V
-    pub fn new(arg_0: String, arg_1: i32) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Enum.<init>:(Ljava/lang/String;I)V */
-        Ok(this)
+    pub fn new(&self, arg0: String, arg1: i32) -> Result<()> {
+        todo!("abstract java/util/Comparators$NaturalOrderComparator.<init>")
     }
 
     // java: compare(Ljava/lang/Comparable;Ljava/lang/Comparable;)I
     pub fn compare(&self, c1: Object, c2: Object) -> Result<i32> {
-        let this = self;
-        let _t0 = c1.compareTo(c2)?;
-        Ok(_t0)
+        todo!("abstract java/util/Comparators$NaturalOrderComparator.compare")
     }
 
     // java: reversed()Ljava/util/Comparator;
     pub fn reversed(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = Comparator::reverseOrder()?;
-        Ok(_t0)
+        todo!("abstract java/util/Comparators$NaturalOrderComparator.reversed")
     }
 }

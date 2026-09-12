@@ -21,86 +21,62 @@ pub struct Collections_UnmodifiableNavigableSet<E> {
 
 impl<E: Clone + 'static> Collections_UnmodifiableNavigableSet<E> {
     // java: <init>(Ljava/util/NavigableSet;)V
-    pub fn new(s: Object) -> Result<Self> {
-        let this = Self { ns: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$UnmodifiableSortedSet.<init>:(Ljava/util/SortedSet;)V */
-        this.ns.set(s);
-        Ok(this)
+    pub fn new(&self, s: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.<init>")
     }
 
     // java: lower(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn lower(&self, e: E) -> Result<E> {
-        let this = self;
-        let _t0 = this.ns.get().lower(e)?;
-        Ok(_t0)
+    pub fn lower(&self, e: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.lower")
     }
 
     // java: floor(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn floor(&self, e: E) -> Result<E> {
-        let this = self;
-        let _t0 = this.ns.get().floor(e)?;
-        Ok(_t0)
+    pub fn floor(&self, e: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.floor")
     }
 
     // java: ceiling(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn ceiling(&self, e: E) -> Result<E> {
-        let this = self;
-        let _t0 = this.ns.get().ceiling(e)?;
-        Ok(_t0)
+    pub fn ceiling(&self, e: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.ceiling")
     }
 
     // java: higher(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn higher(&self, e: E) -> Result<E> {
-        let this = self;
-        let _t0 = this.ns.get().higher(e)?;
-        Ok(_t0)
+    pub fn higher(&self, e: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.higher")
     }
 
     // java: pollFirst()Ljava/lang/Object;
-    pub fn pollFirst(&self) -> Result<E> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn pollFirst(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.pollFirst")
     }
 
     // java: pollLast()Ljava/lang/Object;
-    pub fn pollLast(&self) -> Result<E> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn pollLast(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.pollLast")
     }
 
     // java: descendingSet()Ljava/util/NavigableSet;
     pub fn descendingSet(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.ns.get().descendingSet()?;
-        Ok(Collections_UnmodifiableNavigableSet::new(_t0)?)
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.descendingSet")
     }
 
     // java: descendingIterator()Ljava/util/Iterator;
     pub fn descendingIterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.descendingSet()?;
-        let _t1 = _t0.iterator()?;
-        Ok(_t1)
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.descendingIterator")
     }
 
     // java: subSet(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableSet;
-    pub fn subSet(&self, fromElement: E, fromInclusive: bool, toElement: E, toInclusive: bool) -> Result<Object> {
-        let this = self;
-        let _t0 = this.ns.get().subSet(fromElement, fromInclusive, toElement, toInclusive)?;
-        Ok(Collections_UnmodifiableNavigableSet::new(_t0)?)
+    pub fn subSet(&self, fromElement: Object, fromInclusive: bool, toElement: Object, toInclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.subSet")
     }
 
     // java: headSet(Ljava/lang/Object;Z)Ljava/util/NavigableSet;
-    pub fn headSet(&self, toElement: E, inclusive: bool) -> Result<Object> {
-        let this = self;
-        let _t0 = this.ns.get().headSet(toElement, inclusive)?;
-        Ok(Collections_UnmodifiableNavigableSet::new(_t0)?)
+    pub fn headSet(&self, toElement: Object, inclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.headSet")
     }
 
     // java: tailSet(Ljava/lang/Object;Z)Ljava/util/NavigableSet;
-    pub fn tailSet(&self, fromElement: E, inclusive: bool) -> Result<Object> {
-        let this = self;
-        let _t0 = this.ns.get().tailSet(fromElement, inclusive)?;
-        Ok(Collections_UnmodifiableNavigableSet::new(_t0)?)
+    pub fn tailSet(&self, fromElement: Object, inclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$UnmodifiableNavigableSet.tailSet")
     }
 }

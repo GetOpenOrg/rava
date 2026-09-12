@@ -17,16 +17,12 @@ pub struct Collections_CheckedRandomAccessList<E>(std::marker::PhantomData<E>);
 
 impl<E: Clone + 'static> Collections_CheckedRandomAccessList<E> {
     // java: <init>(Ljava/util/List;Ljava/lang/Class;)V
-    pub fn new(list: Object, type_: Object) -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/Collections$CheckedList.<init>:(Ljava/util/List;Ljava/lang/Class;)V */
-        Ok(this)
+    pub fn new(&self, list: Object, type_: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$CheckedRandomAccessList.<init>")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        let this = self;
-        let _t0 = this.list.get().subList(fromIndex, toIndex)?;
-        Ok(Collections_CheckedRandomAccessList::new(_t0, this.type_.get())?)
+        todo!("abstract java/util/Collections$CheckedRandomAccessList.subList")
     }
 }

@@ -9,5 +9,4 @@ path = "src/main.rs"
 
 [dependencies]
 java_runtime = { path = "../java_runtime" }
-# jdk_classes will be added when JDK translations compile successfully
-# jdk_classes = { path = "../jdk_classes" }
+jdk_classes  = { path = "../jdk_classes" }

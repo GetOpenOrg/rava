@@ -17,9 +17,7 @@ pub struct Integer_IntegerCache;
 
 impl Integer_IntegerCache {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/Integer$IntegerCache.<init>")
     }
 }

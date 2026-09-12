@@ -20,191 +20,127 @@ pub struct Byte {
 
 impl Byte {
     // java: toString(B)Ljava/lang/String;
-    // java: toString(B)Ljava/lang/String;
     pub fn toString__b(b: i8) -> Result<String> {
-        let _t0: String = Integer::toString__i(b)?;
-        Ok(_t0)
+        todo!("abstract java/lang/Byte.toString")
     }
 
     // java: describeConstable()Ljava/util/Optional;
     pub fn describeConstable(&self) -> Result<Object> {
-        let this = self;
-        let mut _arr0: Vec<Object> = Vec::with_capacity(1i32 as usize);
-        _arr0[0i32 as usize] = this;
-        let _t1: Object = DynamicConstantDesc::ofNamed(ConstantDescs::BSM_EXPLICIT_CAST(), String::from("_"), ConstantDescs::CD_byte(), &_arr0)?;
-        let _t2: Object = Optional::of(_t1)?;
-        Ok(_t2)
+        todo!("abstract java/lang/Byte.describeConstable")
     }
 
-    // java: valueOf(B)Ljava/lang/Byte;
     // java: valueOf(B)Ljava/lang/Byte;
     pub fn valueOf__b(b: i8) -> Result<Object> {
-        let mut offset: i32 = 128i32;
-        Ok(Byte_ByteCache::cache()[(b).wrapping_add(128i32) as usize].clone())
+        todo!("abstract java/lang/Byte.valueOf")
     }
 
-    // java: parseByte(Ljava/lang/String;I)B
     // java: parseByte(Ljava/lang/String;I)B
     pub fn parseByte__str_i(s: String, radix: i32) -> Result<i8> {
-        let _t0: i32 = Integer::parseInt__str_i(s, radix)?;
-        let mut i: i32 = _t0;
-        String::new().append(&String::from("Value out of range. Value:\""))?;
-        String::new().append(&s)?;
-        String::new().append(&String::from("\" Radix:"))?;
-        String::new().append(&radix)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        /* TODO: i2b  */
-        Ok(i)
+        todo!("abstract java/lang/Byte.parseByte")
     }
 
-    // java: parseByte(Ljava/lang/String;)B
     // java: parseByte(Ljava/lang/String;)B
     pub fn parseByte__str(s: String) -> Result<i8> {
-        let _t0: i8 = Byte::parseByte__str_i(s, 10i32)?;
-        Ok(_t0)
+        todo!("abstract java/lang/Byte.parseByte")
     }
 
-    // java: valueOf(Ljava/lang/String;I)Ljava/lang/Byte;
     // java: valueOf(Ljava/lang/String;I)Ljava/lang/Byte;
     pub fn valueOf__str_i(s: String, radix: i32) -> Result<Object> {
-        let _t0: i8 = Byte::parseByte__str_i(s, radix)?;
-        let _t1: Object = Byte::valueOf__b(_t0)?;
-        Ok(_t1)
+        todo!("abstract java/lang/Byte.valueOf")
     }
 
     // java: valueOf(Ljava/lang/String;)Ljava/lang/Byte;
-    // java: valueOf(Ljava/lang/String;)Ljava/lang/Byte;
     pub fn valueOf__str(s: String) -> Result<Object> {
-        let _t0: Object = Byte::valueOf__str_i(s, 10i32)?;
-        Ok(_t0)
+        todo!("abstract java/lang/Byte.valueOf")
     }
 
     // java: decode(Ljava/lang/String;)Ljava/lang/Byte;
     pub fn decode(nm: String) -> Result<Object> {
-        let _t0: i32 = Integer::decode(nm)?;
-        let mut i: i32 = _t0;
-        String::new().append(&String::from("Value"))?;
-        String::new().append(&i)?;
-        String::new().append(&String::from("out of range from input"))?;
-        String::new().append(&nm)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        /* TODO: i2b  */
-        let _t1: Object = Byte::valueOf__b(i)?;
-        Ok(_t1)
+        todo!("abstract java/lang/Byte.decode")
     }
 
     // java: <init>(B)V
-    // java: <init>(B)V
-    pub fn new__b(value: i8) -> Result<Self> {
-        let this = Self { value: Field::new(Default::default()) };
-        /* invokespecial Method java/lang/Number.<init>:()V */
-        this.value.set(value);
-        Ok(this)
+    pub fn new__b(&self, value: i8) -> Result<()> {
+        todo!("abstract java/lang/Byte.<init>")
     }
 
     // java: <init>(Ljava/lang/String;)V
-    // java: <init>(Ljava/lang/String;)V
-    pub fn new__str(s: String) -> Result<Self> {
-        let this = Self { value: Field::new(Default::default()) };
-        /* invokespecial Method java/lang/Number.<init>:()V */
-        let _t0: i8 = Byte::parseByte__str_i(s, 10i32)?;
-        this.value.set(_t0);
-        Ok(this)
+    pub fn new__str(&self, s: String) -> Result<()> {
+        todo!("abstract java/lang/Byte.<init>")
     }
 
     // java: byteValue()B
     pub fn byteValue(&self) -> Result<i8> {
-        let this = self;
-        Ok(this.value.get())
+        todo!("abstract java/lang/Byte.byteValue")
     }
 
     // java: shortValue()S
     pub fn shortValue(&self) -> Result<i16> {
-        let this = self;
-        /* TODO: i2s  */
-        Ok(this.value.get())
+        todo!("abstract java/lang/Byte.shortValue")
     }
 
     // java: intValue()I
     pub fn intValue(&self) -> Result<i32> {
-        let this = self;
-        Ok(this.value.get())
+        todo!("abstract java/lang/Byte.intValue")
     }
 
     // java: longValue()J
     pub fn longValue(&self) -> Result<i64> {
-        let this = self;
-        Ok((this.value.get() as i64))
+        todo!("abstract java/lang/Byte.longValue")
     }
 
     // java: floatValue()F
     pub fn floatValue(&self) -> Result<f32> {
-        let this = self;
-        Ok((this.value.get() as f32))
+        todo!("abstract java/lang/Byte.floatValue")
     }
 
     // java: doubleValue()D
     pub fn doubleValue(&self) -> Result<f64> {
-        let this = self;
-        Ok((this.value.get() as f64))
+        todo!("abstract java/lang/Byte.doubleValue")
     }
 
-    // java: toString()Ljava/lang/String;
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        let this = self;
-        let _t0: String = Integer::toString__i(this.value.get())?;
-        Ok(_t0)
+        todo!("abstract java/lang/Byte.toString")
     }
 
-    // java: hashCode()I
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let _t0: i32 = Byte::hashCode__b(this.value.get())?;
-        Ok(_t0)
+        todo!("abstract java/lang/Byte.hashCode")
     }
 
     // java: hashCode(B)I
-    // java: hashCode(B)I
     pub fn hashCode__b(value: i8) -> Result<i32> {
-        Ok(value)
+        todo!("abstract java/lang/Byte.hashCode")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, obj: Object) -> Result<bool> {
-        let this = self;
-        return Ok(this.value.get() == obj);
-        Ok(0i32)
+        todo!("abstract java/lang/Byte.equals")
     }
 
     // java: compareTo(Ljava/lang/Byte;)I
     pub fn compareTo(&self, anotherByte: Object) -> Result<i32> {
-        let this = self;
-        let _t0: i32 = Byte::compare(this.value.get(), anotherByte.value.get())?;
-        Ok(_t0)
+        todo!("abstract java/lang/Byte.compareTo")
     }
 
     // java: compare(BB)I
     pub fn compare(x: i8, y: i8) -> Result<i32> {
-        Ok((x).wrapping_sub(y))
+        todo!("abstract java/lang/Byte.compare")
     }
 
     // java: compareUnsigned(BB)I
     pub fn compareUnsigned(x: i8, y: i8) -> Result<i32> {
-        let _t0: i32 = Byte::toUnsignedInt(x)?;
-        let _t1: i32 = Byte::toUnsignedInt(y)?;
-        Ok((_t0).wrapping_sub(_t1))
+        todo!("abstract java/lang/Byte.compareUnsigned")
     }
 
     // java: toUnsignedInt(B)I
     pub fn toUnsignedInt(x: i8) -> Result<i32> {
-        Ok((x&255i32))
+        todo!("abstract java/lang/Byte.toUnsignedInt")
     }
 
     // java: toUnsignedLong(B)J
     pub fn toUnsignedLong(x: i8) -> Result<i64> {
-        /* TODO: land  */
-        Ok(255i64)
+        todo!("abstract java/lang/Byte.toUnsignedLong")
     }
 }

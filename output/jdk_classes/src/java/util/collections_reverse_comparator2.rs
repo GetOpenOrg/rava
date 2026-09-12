@@ -21,39 +21,27 @@ pub struct Collections_ReverseComparator2<T> {
 
 impl<T: Clone + 'static> Collections_ReverseComparator2<T> {
     // java: <init>(Ljava/util/Comparator;)V
-    pub fn new(cmp: Object) -> Result<Self> {
-        let this = Self { cmp: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        return Err(JvmError::Custom("athrow".to_owned()));
-        this.cmp.set(cmp);
-        Ok(this)
+    pub fn new(&self, cmp: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$ReverseComparator2.<init>")
     }
 
     // java: compare(Ljava/lang/Object;Ljava/lang/Object;)I
-    pub fn compare(&self, t1: T, t2: T) -> Result<i32> {
-        let this = self;
-        let _t0 = this.cmp.get().compare(t2, t1)?;
-        Ok(_t0)
+    pub fn compare(&self, t1: Object, t2: Object) -> Result<i32> {
+        todo!("abstract java/util/Collections$ReverseComparator2.compare")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let mut that: Object = o;
-        let _t0 = this.cmp.get().equals(that.cmp.get())?;
-        Ok(_t0!=0i32)
+        todo!("abstract java/util/Collections$ReverseComparator2.equals")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let _t0 = this.cmp.get().hashCode()?;
-        Ok((_t0^-2147483648i32))
+        todo!("abstract java/util/Collections$ReverseComparator2.hashCode")
     }
 
     // java: reversed()Ljava/util/Comparator;
     pub fn reversed(&self) -> Result<Object> {
-        let this = self;
-        Ok(this.cmp.get())
+        todo!("abstract java/util/Collections$ReverseComparator2.reversed")
     }
 }

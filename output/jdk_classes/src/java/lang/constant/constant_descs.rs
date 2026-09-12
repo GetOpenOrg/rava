@@ -17,25 +17,17 @@ pub struct ConstantDescs;
 
 impl ConstantDescs {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/constant/ConstantDescs.<init>")
     }
 
     // java: ofCallsiteBootstrap(Ljava/lang/constant/ClassDesc;Ljava/lang/String;Ljava/lang/constant/ClassDesc;[Ljava/lang/constant/ClassDesc;)Ljava/lang/constant/DirectMethodHandleDesc;
-    pub fn ofCallsiteBootstrap(owner: Object, name: String, returnType: Object, paramTypes: &[Object]) -> Result<Object> {
-        let _t0: Object = MethodTypeDesc::of(returnType, &paramTypes)?;
-        let _t1 = _t0.insertParameterTypes(0i32, ConstantDescs::INDY_BOOTSTRAP_ARGS())?;
-        let _t2: Object = MethodHandleDesc::ofMethod(DirectMethodHandleDesc_Kind::STATIC(), owner, name, _t1)?;
-        Ok(_t2)
+    pub fn ofCallsiteBootstrap(owner: Object, name: String, returnType: Object, paramTypes: Vec<Object>) -> Result<Object> {
+        todo!("abstract java/lang/constant/ConstantDescs.ofCallsiteBootstrap")
     }
 
     // java: ofConstantBootstrap(Ljava/lang/constant/ClassDesc;Ljava/lang/String;Ljava/lang/constant/ClassDesc;[Ljava/lang/constant/ClassDesc;)Ljava/lang/constant/DirectMethodHandleDesc;
-    pub fn ofConstantBootstrap(owner: Object, name: String, returnType: Object, paramTypes: &[Object]) -> Result<Object> {
-        let _t0: Object = MethodTypeDesc::of(returnType, &paramTypes)?;
-        let _t1 = _t0.insertParameterTypes(0i32, ConstantDescs::CONDY_BOOTSTRAP_ARGS())?;
-        let _t2: Object = MethodHandleDesc::ofMethod(DirectMethodHandleDesc_Kind::STATIC(), owner, name, _t1)?;
-        Ok(_t2)
+    pub fn ofConstantBootstrap(owner: Object, name: String, returnType: Object, paramTypes: Vec<Object>) -> Result<Object> {
+        todo!("abstract java/lang/constant/ConstantDescs.ofConstantBootstrap")
     }
 }

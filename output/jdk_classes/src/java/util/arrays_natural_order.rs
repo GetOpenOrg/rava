@@ -17,16 +17,12 @@ pub struct Arrays_NaturalOrder;
 
 impl Arrays_NaturalOrder {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/util/Arrays$NaturalOrder.<init>")
     }
 
     // java: compare(Ljava/lang/Object;Ljava/lang/Object;)I
     pub fn compare(&self, first: Object, second: Object) -> Result<i32> {
-        let this = self;
-        let _t0 = first.compareTo(second)?;
-        Ok(_t0)
+        todo!("abstract java/util/Arrays$NaturalOrder.compare")
     }
 }

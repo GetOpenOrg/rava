@@ -22,26 +22,17 @@ pub struct Collections_3 {
 
 impl Collections_3 {
     // java: <init>(Ljava/util/Collection;)V
-    pub fn new(arg_0: Object) -> Result<Self> {
-        let this = Self { i: Field::new(Default::default()), val_c: Field::new(Default::default()) };
-        this.val_c.set(arg_0);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        let _t0 = this.val_c.get().iterator()?;
-        this.i.set(_t0);
-        Ok(this)
+    pub fn new(&self, arg0: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$3.<init>")
     }
 
     // java: hasMoreElements()Z
     pub fn hasMoreElements(&self) -> Result<bool> {
-        let this = self;
-        let _t0 = this.i.get().hasNext()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$3.hasMoreElements")
     }
 
     // java: nextElement()Ljava/lang/Object;
     pub fn nextElement(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.i.get().next()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$3.nextElement")
     }
 }

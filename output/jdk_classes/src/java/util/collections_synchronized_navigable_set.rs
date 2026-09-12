@@ -21,209 +21,82 @@ pub struct Collections_SynchronizedNavigableSet<E> {
 
 impl<E: Clone + 'static> Collections_SynchronizedNavigableSet<E> {
     // java: <init>(Ljava/util/NavigableSet;)V
-    // java: <init>(Ljava/util/NavigableSet;)V
-    pub fn new__naviga(s: Object) -> Result<Self> {
-        let this = Self { ns: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$SynchronizedSortedSet.<init>:(Ljava/util/SortedSet;)V */
-        this.ns.set(s);
-        Ok(this)
+    pub fn new__naviga(&self, s: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.<init>")
     }
 
     // java: <init>(Ljava/util/NavigableSet;Ljava/lang/Object;)V
-    // java: <init>(Ljava/util/NavigableSet;Ljava/lang/Object;)V
-    pub fn new__naviga_obj(s: Object, mutex: Object) -> Result<Self> {
-        let this = Self { ns: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$SynchronizedSortedSet.<init>:(Ljava/util/SortedSet;Ljava/lang/Object;)V */
-        this.ns.set(s);
-        Ok(this)
+    pub fn new__naviga_obj(&self, s: Object, mutex: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.<init>")
     }
 
     // java: lower(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn lower(&self, e: E) -> Result<E> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().lower(e)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn lower(&self, e: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.lower")
     }
 
     // java: floor(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn floor(&self, e: E) -> Result<E> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().floor(e)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn floor(&self, e: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.floor")
     }
 
     // java: ceiling(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn ceiling(&self, e: E) -> Result<E> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().ceiling(e)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn ceiling(&self, e: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.ceiling")
     }
 
     // java: higher(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn higher(&self, e: E) -> Result<E> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().higher(e)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn higher(&self, e: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.higher")
     }
 
     // java: pollFirst()Ljava/lang/Object;
-    pub fn pollFirst(&self) -> Result<E> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().pollFirst()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn pollFirst(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.pollFirst")
     }
 
     // java: pollLast()Ljava/lang/Object;
-    pub fn pollLast(&self) -> Result<E> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().pollLast()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn pollLast(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.pollLast")
     }
 
     // java: descendingSet()Ljava/util/NavigableSet;
     pub fn descendingSet(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().descendingSet()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.descendingSet")
     }
 
     // java: descendingIterator()Ljava/util/Iterator;
     pub fn descendingIterator(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.descendingSet()?;
-        let _t1 = _t0.iterator()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t1;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.descendingIterator")
     }
 
     // java: subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/NavigableSet;
-    // java: subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/NavigableSet;
-    pub fn subSet__obj_obj(&self, fromElement: E, toElement: E) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().subSet(fromElement, 1i32, toElement, 0i32)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn subSet__obj_obj(&self, fromElement: Object, toElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.subSet")
     }
 
     // java: headSet(Ljava/lang/Object;)Ljava/util/NavigableSet;
-    // java: headSet(Ljava/lang/Object;)Ljava/util/NavigableSet;
-    pub fn headSet__obj(&self, toElement: E) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().headSet(toElement, 0i32)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn headSet__obj(&self, toElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.headSet")
     }
 
     // java: tailSet(Ljava/lang/Object;)Ljava/util/NavigableSet;
-    // java: tailSet(Ljava/lang/Object;)Ljava/util/NavigableSet;
-    pub fn tailSet__obj(&self, fromElement: E) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().tailSet(fromElement, 1i32)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn tailSet__obj(&self, fromElement: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.tailSet")
     }
 
     // java: subSet(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableSet;
-    // java: subSet(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableSet;
-    pub fn subSet__obj_z_obj_z(&self, fromElement: E, fromInclusive: bool, toElement: E, toInclusive: bool) -> Result<Object> {
-        let this = self;
-        let mut local_5: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().subSet(fromElement, fromInclusive, toElement, toInclusive)?;
-        /* TODO: monitorexit  */
-        return Ok(local_5);
-        let mut local_6: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn subSet__obj_z_obj_z(&self, fromElement: Object, fromInclusive: bool, toElement: Object, toInclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.subSet")
     }
 
     // java: headSet(Ljava/lang/Object;Z)Ljava/util/NavigableSet;
-    // java: headSet(Ljava/lang/Object;Z)Ljava/util/NavigableSet;
-    pub fn headSet__obj_z(&self, toElement: E, inclusive: bool) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().headSet(toElement, inclusive)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn headSet__obj_z(&self, toElement: Object, inclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.headSet")
     }
 
     // java: tailSet(Ljava/lang/Object;Z)Ljava/util/NavigableSet;
-    // java: tailSet(Ljava/lang/Object;Z)Ljava/util/NavigableSet;
-    pub fn tailSet__obj_z(&self, fromElement: E, inclusive: bool) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.ns.get().tailSet(fromElement, inclusive)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn tailSet__obj_z(&self, fromElement: Object, inclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableSet.tailSet")
     }
 }

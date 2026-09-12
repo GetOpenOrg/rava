@@ -17,18 +17,12 @@ pub struct InvalidObjectException;
 
 impl InvalidObjectException {
     // java: <init>(Ljava/lang/String;)V
-    // java: <init>(Ljava/lang/String;)V
-    pub fn new__str(reason: String) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/io/ObjectStreamException.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__str(&self, reason: String) -> Result<()> {
+        todo!("abstract java/io/InvalidObjectException.<init>")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
-    // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
-    pub fn new__str_throwa(reason: String, cause: Object) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/io/ObjectStreamException.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V */
-        Ok(this)
+    pub fn new__str_throwa(&self, reason: String, cause: Object) -> Result<()> {
+        todo!("abstract java/io/InvalidObjectException.<init>")
     }
 }

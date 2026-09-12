@@ -17,172 +17,87 @@ pub struct ImmutableCollections_AbstractImmutableList<E>(std::marker::PhantomDat
 
 impl<E: Clone + 'static> ImmutableCollections_AbstractImmutableList<E> {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/ImmutableCollections$AbstractImmutableCollection.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.<init>")
     }
 
     // java: add(ILjava/lang/Object;)V
-    pub fn add(&self, index: i32, element: E) -> Result<()> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+    pub fn add(&self, index: i32, element: Object) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.add")
     }
 
     // java: addAll(ILjava/util/Collection;)Z
     pub fn addAll(&self, index: i32, c: Object) -> Result<bool> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.addAll")
     }
 
     // java: remove(I)Ljava/lang/Object;
-    pub fn remove(&self, index: i32) -> Result<E> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn remove(&self, index: i32) -> Result<Object> {
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.remove")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.replaceAll")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
-    pub fn set(&self, index: i32, element: E) -> Result<E> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn set(&self, index: i32, element: Object) -> Result<Object> {
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.set")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.sort")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        let this = self;
-        let _t0 = this.size()?;
-        let mut size: i32 = _t0;
-        ImmutableCollections_AbstractImmutableList::subListRangeCheck(fromIndex, toIndex, size)?;
-        let _t1: Object = ImmutableCollections_SubList::fromList(this, fromIndex, toIndex)?;
-        Ok(_t1)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.subList")
     }
 
     // java: subListRangeCheck(III)V
     pub fn subListRangeCheck(fromIndex: i32, toIndex: i32, size: i32) -> Result<()> {
-        String::new().append(&String::from("fromIndex ="))?;
-        String::new().append(&fromIndex)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        String::new().append(&String::from("toIndex ="))?;
-        String::new().append(&toIndex)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        String::new().append(&String::from("fromIndex("))?;
-        String::new().append(&fromIndex)?;
-        String::new().append(&String::from(") > toIndex("))?;
-        String::new().append(&toIndex)?;
-        String::new().append(&String::from(")"))?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.subListRangeCheck")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.size()?;
-        Ok(ImmutableCollections_ListItr::new(this, _t0)?)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.iterator")
     }
 
-    // java: listIterator()Ljava/util/ListIterator;
     // java: listIterator()Ljava/util/ListIterator;
     pub fn listIterator(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.listIterator(0i32)?;
-        Ok(_t0)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.listIterator")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
-    // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator__i(&self, index: i32) -> Result<Object> {
-        let this = self;
-        let _t0 = this.size()?;
-        let mut size: i32 = _t0;
-        let _t1 = this.outOfBounds(index)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(ImmutableCollections_ListItr::new(this, size, index)?)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.listIterator")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        let this = self;
-        return Ok(1i32);
-        return Ok(0i32);
-        let _t0 = o.iterator()?;
-        let mut oit: Object = _t0;
-        let mut i: i32 = 0i32;
-        let _t1 = this.size()?;
-        let mut s: i32 = _t1;
-        loop {
-            if i >= s { break; }
-            let _t0 = oit.hasNext()?;
-            let _t1 = this.get(i)?;
-            let _t2 = oit.next()?;
-            let _t3: bool = Objects::equals(_t1, _t2)?;
-            return Ok(0i32);
-            i = i.wrapping_add(1i32);
-        }
-        let _t2 = oit.hasNext()?;
-        Ok(_t2==0i32)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.equals")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        let this = self;
-        let mut hash: i32 = 1i32;
-        let mut i: i32 = 0i32;
-        let _t0 = this.size()?;
-        let mut s: i32 = _t0;
-        loop {
-            if i >= s { break; }
-            let _t0 = this.get(i)?;
-            let _t1: i32 = Objects::hashCode(_t0)?;
-            hash = ((31i32).wrapping_mul(hash)).wrapping_add(_t1);
-            i = i.wrapping_add(1i32);
-        }
-        Ok(hash)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.hashCode")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0 = this.indexOf(o)?;
-        Ok(_t0>=0i32)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.contains")
     }
 
     // java: reversed()Ljava/util/List;
     pub fn reversed(&self) -> Result<Object> {
-        let this = self;
-        let _t0: Object = ReverseOrderListView::of(this, 0i32)?;
-        Ok(_t0)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.reversed")
     }
 
     // java: outOfBounds(I)Ljava/lang/IndexOutOfBoundsException;
     pub fn outOfBounds(&self, index: i32) -> Result<Object> {
-        let this = self;
-        String::new().append(&String::from("Index:"))?;
-        String::new().append(&index)?;
-        String::new().append(&String::from("Size:"))?;
-        let _t0 = this.size()?;
-        String::new().append(&_t0)?;
-        Ok(IndexOutOfBoundsException::new(String::new())?)
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.outOfBounds")
     }
 }

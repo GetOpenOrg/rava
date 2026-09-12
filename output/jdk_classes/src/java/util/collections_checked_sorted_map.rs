@@ -21,55 +21,37 @@ pub struct Collections_CheckedSortedMap<K, V> {
 
 impl<K: Clone + 'static, V: Clone + 'static> Collections_CheckedSortedMap<K, V> {
     // java: <init>(Ljava/util/SortedMap;Ljava/lang/Class;Ljava/lang/Class;)V
-    pub fn new(m: Object, keyType: Object, valueType: Object) -> Result<Self> {
-        let this = Self { sm: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$CheckedMap.<init>:(Ljava/util/Map;Ljava/lang/Class;Ljava/lang/Class;)V */
-        this.sm.set(m);
-        Ok(this)
+    pub fn new(&self, m: Object, keyType: Object, valueType: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$CheckedSortedMap.<init>")
     }
 
     // java: comparator()Ljava/util/Comparator;
     pub fn comparator(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.sm.get().comparator()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$CheckedSortedMap.comparator")
     }
 
     // java: firstKey()Ljava/lang/Object;
-    pub fn firstKey(&self) -> Result<K> {
-        let this = self;
-        let _t0 = this.sm.get().firstKey()?;
-        Ok(_t0)
+    pub fn firstKey(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedMap.firstKey")
     }
 
     // java: lastKey()Ljava/lang/Object;
-    pub fn lastKey(&self) -> Result<K> {
-        let this = self;
-        let _t0 = this.sm.get().lastKey()?;
-        Ok(_t0)
+    pub fn lastKey(&self) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedMap.lastKey")
     }
 
     // java: subMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn subMap(&self, fromKey: K, toKey: K) -> Result<Object> {
-        let this = self;
-        let _t0 = this.sm.get().subMap(fromKey, toKey)?;
-        let _t1: Object = Collections::checkedSortedMap(_t0, this.keyType.get(), this.valueType.get())?;
-        Ok(_t1)
+    pub fn subMap(&self, fromKey: Object, toKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedMap.subMap")
     }
 
     // java: headMap(Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn headMap(&self, toKey: K) -> Result<Object> {
-        let this = self;
-        let _t0 = this.sm.get().headMap(toKey)?;
-        let _t1: Object = Collections::checkedSortedMap(_t0, this.keyType.get(), this.valueType.get())?;
-        Ok(_t1)
+    pub fn headMap(&self, toKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedMap.headMap")
     }
 
     // java: tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn tailMap(&self, fromKey: K) -> Result<Object> {
-        let this = self;
-        let _t0 = this.sm.get().tailMap(fromKey)?;
-        let _t1: Object = Collections::checkedSortedMap(_t0, this.keyType.get(), this.valueType.get())?;
-        Ok(_t1)
+    pub fn tailMap(&self, fromKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$CheckedSortedMap.tailMap")
     }
 }

@@ -17,22 +17,17 @@ pub struct Collections_UnmodifiableRandomAccessList<E>(std::marker::PhantomData<
 
 impl<E: Clone + 'static> Collections_UnmodifiableRandomAccessList<E> {
     // java: <init>(Ljava/util/List;)V
-    pub fn new(list: Object) -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/Collections$UnmodifiableList.<init>:(Ljava/util/List;)V */
-        Ok(this)
+    pub fn new(&self, list: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$UnmodifiableRandomAccessList.<init>")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        let this = self;
-        let _t0 = this.list.get().subList(fromIndex, toIndex)?;
-        Ok(Collections_UnmodifiableRandomAccessList::new(_t0)?)
+        todo!("abstract java/util/Collections$UnmodifiableRandomAccessList.subList")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        let this = self;
-        Ok(Collections_UnmodifiableList::new(this.list.get())?)
+        todo!("abstract java/util/Collections$UnmodifiableRandomAccessList.writeReplace")
     }
 }

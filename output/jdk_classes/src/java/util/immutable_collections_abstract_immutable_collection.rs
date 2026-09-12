@@ -17,59 +17,42 @@ pub struct ImmutableCollections_AbstractImmutableCollection<E>(std::marker::Phan
 
 impl<E: Clone + 'static> ImmutableCollections_AbstractImmutableCollection<E> {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self(std::marker::PhantomData);
-        /* invokespecial Method java/util/AbstractCollection.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.<init>")
     }
 
     // java: add(Ljava/lang/Object;)Z
-    pub fn add(&self, e: E) -> Result<bool> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn add(&self, e: Object) -> Result<bool> {
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.add")
     }
 
     // java: addAll(Ljava/util/Collection;)Z
     pub fn addAll(&self, c: Object) -> Result<bool> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.addAll")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.clear")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove(&self, o: Object) -> Result<bool> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.remove")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, c: Object) -> Result<bool> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.removeAll")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.removeIf")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, c: Object) -> Result<bool> {
-        let this = self;
-        let _t0: Object = ImmutableCollections::uoe()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.retainAll")
     }
 }

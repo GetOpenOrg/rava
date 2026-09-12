@@ -17,9 +17,7 @@ pub struct Arrays_LegacyMergeSort;
 
 impl Arrays_LegacyMergeSort {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/util/Arrays$LegacyMergeSort.<init>")
     }
 }

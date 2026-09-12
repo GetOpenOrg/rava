@@ -17,83 +17,52 @@ pub struct AssertionError;
 
 impl AssertionError {
     // java: <init>()V
-    // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Error.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(Ljava/lang/String;)V
-    // java: <init>(Ljava/lang/String;)V
-    pub fn new__str(detailMessage: String) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Error.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__str(&self, detailMessage: String) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(Ljava/lang/Object;)V
-    // java: <init>(Ljava/lang/Object;)V
-    pub fn new__obj(detailMessage: Object) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/AssertionError.<init>:(Ljava/lang/String;)V */
-        let _t0 = this.initCause(detailMessage)?;
-        Ok(this)
+    pub fn new__obj(&self, detailMessage: Object) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(Z)V
-    // java: <init>(Z)V
-    pub fn new__z(detailMessage: bool) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/AssertionError.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__z(&self, detailMessage: bool) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(C)V
-    // java: <init>(C)V
-    pub fn new__c(detailMessage: u16) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/AssertionError.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__c(&self, detailMessage: u16) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(I)V
-    // java: <init>(I)V
-    pub fn new__i(detailMessage: i32) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/AssertionError.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__i(&self, detailMessage: i32) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(J)V
-    // java: <init>(J)V
-    pub fn new__l(detailMessage: i64) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/AssertionError.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__l(&self, detailMessage: i64) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(F)V
-    // java: <init>(F)V
-    pub fn new__f(detailMessage: f32) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/AssertionError.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__f(&self, detailMessage: f32) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(D)V
-    // java: <init>(D)V
-    pub fn new__d(detailMessage: f64) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/AssertionError.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__d(&self, detailMessage: f64) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
-    // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
-    pub fn new__str_throwa(message: String, cause: Object) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Error.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V */
-        Ok(this)
+    pub fn new__str_throwa(&self, message: String, cause: Object) -> Result<()> {
+        todo!("abstract java/lang/AssertionError.<init>")
     }
 }

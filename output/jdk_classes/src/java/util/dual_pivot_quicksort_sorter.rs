@@ -30,55 +30,22 @@ pub struct DualPivotQuicksort_Sorter {
 
 impl DualPivotQuicksort_Sorter {
     // java: <init>(Ljava/util/concurrent/CountedCompleter;Ljava/lang/Object;Ljava/lang/Object;IIII)V
-    pub fn new(parent: Object, a: Object, b: Object, low: i32, size: i32, offset: i32, depth: i32) -> Result<Self> {
-        let this = Self { a: Field::new(Default::default()), b: Field::new(Default::default()), low: Field::new(0), size: Field::new(0), offset: Field::new(0), depth: Field::new(0) };
-        /* invokespecial Method java/util/concurrent/CountedCompleter.<init>:(Ljava/util/concurrent/CountedCompleter;)V */
-        this.a.set(a);
-        this.b.set(b);
-        this.low.set(low);
-        this.size.set(size);
-        this.offset.set(offset);
-        this.depth.set(depth);
-        Ok(this)
+    pub fn new(&self, parent: Object, a: Object, b: Object, low: i32, size: i32, offset: i32, depth: i32) -> Result<()> {
+        todo!("abstract java/util/DualPivotQuicksort$Sorter.<init>")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        let this = self;
-        this.setPendingCount(2i32)?;
-        let mut half: i32 = (this.size.get()>>((1i32&0x1f)));
-        let _t0 = DualPivotQuicksort_Sorter::new(this, this.b.get(), this.a.get(), this.low.get(), half, this.offset.get(), (this.depth.get()).wrapping_add(1i32))?.fork()?;
-        DualPivotQuicksort_Sorter::new(this, this.b.get(), this.a.get(), (this.low.get()).wrapping_add(half), (this.size.get()).wrapping_sub(half), this.offset.get(), (this.depth.get()).wrapping_add(1i32))?.compute()?;
-        DualPivotQuicksort::sort__dualpi_arr_i_i_i_i(this, this.a.get(), this.depth.get(), this.low.get(), (this.low.get()).wrapping_add(this.size.get()))?;
-        DualPivotQuicksort::sort__dualpi_arr_l_i_i_i(this, this.a.get(), this.depth.get(), this.low.get(), (this.low.get()).wrapping_add(this.size.get()))?;
-        DualPivotQuicksort::sort__dualpi_arr_f_i_i_i(this, this.a.get(), this.depth.get(), this.low.get(), (this.low.get()).wrapping_add(this.size.get()))?;
-        DualPivotQuicksort::sort__dualpi_arr_d_i_i_i(this, this.a.get(), this.depth.get(), this.low.get(), (this.low.get()).wrapping_add(this.size.get()))?;
-        String::new().append(&String::from("Unknown type of array:"))?;
-        let _t1 = this.a.get().getClass()?;
-        let _t2 = _t1.getName()?;
-        String::new().append(&_t2)?;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        this.tryComplete()?;
-        Ok(())
+        todo!("abstract java/util/DualPivotQuicksort$Sorter.compute")
     }
 
     // java: onCompletion(Ljava/util/concurrent/CountedCompleter;)V
     pub fn onCompletion(&self, caller: Object) -> Result<()> {
-        let this = self;
-        let mut mi: i32 = (this.low.get()).wrapping_add((this.size.get()>>((1i32&0x1f))));
-        let mut src: i32 = (this.depth.get()&1i32)==0i32;
-        /* TODO: aconst_null  */
-        /* invokespecial Method java/util/DualPivotQuicksort$Merger.<init>:(Ljava/util/concurrent/CountedCompleter;Ljava/lang/Object;ILjava/lang/Object;IILjava/lang/Object;II)V */
-        let _t0 = this.low.get().invoke()?;
-        Ok(())
+        todo!("abstract java/util/DualPivotQuicksort$Sorter.onCompletion")
     }
 
     // java: forkSorter(III)V
     pub fn forkSorter(&self, depth: i32, low: i32, high: i32) -> Result<()> {
-        let this = self;
-        this.addToPendingCount(1i32)?;
-        let mut a: Object = this.a.get();
-        let _t0 = DualPivotQuicksort_Sorter::new(this, a, this.b.get(), low, (high).wrapping_sub(low), this.offset.get(), depth)?.fork()?;
-        Ok(())
+        todo!("abstract java/util/DualPivotQuicksort$Sorter.forkSorter")
     }
 }

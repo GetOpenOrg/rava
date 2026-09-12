@@ -21,306 +21,122 @@ pub struct Collections_SynchronizedNavigableMap<K, V> {
 
 impl<K: Clone + 'static, V: Clone + 'static> Collections_SynchronizedNavigableMap<K, V> {
     // java: <init>(Ljava/util/NavigableMap;)V
-    // java: <init>(Ljava/util/NavigableMap;)V
-    pub fn new__naviga(m: Object) -> Result<Self> {
-        let this = Self { nm: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$SynchronizedSortedMap.<init>:(Ljava/util/SortedMap;)V */
-        this.nm.set(m);
-        Ok(this)
+    pub fn new__naviga(&self, m: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.<init>")
     }
 
     // java: <init>(Ljava/util/NavigableMap;Ljava/lang/Object;)V
-    // java: <init>(Ljava/util/NavigableMap;Ljava/lang/Object;)V
-    pub fn new__naviga_obj(m: Object, mutex: Object) -> Result<Self> {
-        let this = Self { nm: Field::new(Default::default()), _phantom: std::marker::PhantomData };
-        /* invokespecial Method java/util/Collections$SynchronizedSortedMap.<init>:(Ljava/util/SortedMap;Ljava/lang/Object;)V */
-        this.nm.set(m);
-        Ok(this)
+    pub fn new__naviga_obj(&self, m: Object, mutex: Object) -> Result<()> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.<init>")
     }
 
     // java: lowerEntry(Ljava/lang/Object;)Ljava/util/Map$Entry;
-    pub fn lowerEntry(&self, key: K) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().lowerEntry(key)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn lowerEntry(&self, key: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.lowerEntry")
     }
 
     // java: lowerKey(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn lowerKey(&self, key: K) -> Result<K> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().lowerKey(key)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn lowerKey(&self, key: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.lowerKey")
     }
 
     // java: floorEntry(Ljava/lang/Object;)Ljava/util/Map$Entry;
-    pub fn floorEntry(&self, key: K) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().floorEntry(key)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn floorEntry(&self, key: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.floorEntry")
     }
 
     // java: floorKey(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn floorKey(&self, key: K) -> Result<K> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().floorKey(key)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn floorKey(&self, key: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.floorKey")
     }
 
     // java: ceilingEntry(Ljava/lang/Object;)Ljava/util/Map$Entry;
-    pub fn ceilingEntry(&self, key: K) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().ceilingEntry(key)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn ceilingEntry(&self, key: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.ceilingEntry")
     }
 
     // java: ceilingKey(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn ceilingKey(&self, key: K) -> Result<K> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().ceilingKey(key)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn ceilingKey(&self, key: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.ceilingKey")
     }
 
     // java: higherEntry(Ljava/lang/Object;)Ljava/util/Map$Entry;
-    pub fn higherEntry(&self, key: K) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().higherEntry(key)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn higherEntry(&self, key: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.higherEntry")
     }
 
     // java: higherKey(Ljava/lang/Object;)Ljava/lang/Object;
-    pub fn higherKey(&self, key: K) -> Result<K> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().higherKey(key)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn higherKey(&self, key: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.higherKey")
     }
 
     // java: firstEntry()Ljava/util/Map$Entry;
     pub fn firstEntry(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().firstEntry()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.firstEntry")
     }
 
     // java: lastEntry()Ljava/util/Map$Entry;
     pub fn lastEntry(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().lastEntry()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.lastEntry")
     }
 
     // java: pollFirstEntry()Ljava/util/Map$Entry;
     pub fn pollFirstEntry(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().pollFirstEntry()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.pollFirstEntry")
     }
 
     // java: pollLastEntry()Ljava/util/Map$Entry;
     pub fn pollLastEntry(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().pollLastEntry()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Object = _t0;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.pollLastEntry")
     }
 
     // java: descendingMap()Ljava/util/NavigableMap;
     pub fn descendingMap(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().descendingMap()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Collections_SynchronizedNavigableMap = Collections_SynchronizedNavigableMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.descendingMap")
     }
 
     // java: keySet()Ljava/util/NavigableSet;
     pub fn keySet(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.navigableKeySet()?;
-        Ok(_t0)
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.keySet")
     }
 
     // java: navigableKeySet()Ljava/util/NavigableSet;
     pub fn navigableKeySet(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().navigableKeySet()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.navigableKeySet")
     }
 
     // java: descendingKeySet()Ljava/util/NavigableSet;
     pub fn descendingKeySet(&self) -> Result<Object> {
-        let this = self;
-        let mut local_1: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().descendingKeySet()?;
-        /* TODO: monitorexit  */
-        return Ok(local_1);
-        let mut local_2: Collections_SynchronizedNavigableSet = Collections_SynchronizedNavigableSet::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.descendingKeySet")
     }
 
     // java: subMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;
-    // java: subMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn subMap__obj_obj(&self, fromKey: K, toKey: K) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().subMap(fromKey, 1i32, toKey, 0i32)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedNavigableMap = Collections_SynchronizedNavigableMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn subMap__obj_obj(&self, fromKey: Object, toKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.subMap")
     }
 
     // java: headMap(Ljava/lang/Object;)Ljava/util/SortedMap;
-    // java: headMap(Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn headMap__obj(&self, toKey: K) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().headMap(toKey, 0i32)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Collections_SynchronizedNavigableMap = Collections_SynchronizedNavigableMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn headMap__obj(&self, toKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.headMap")
     }
 
     // java: tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;
-    // java: tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;
-    pub fn tailMap__obj(&self, fromKey: K) -> Result<Object> {
-        let this = self;
-        let mut local_2: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().tailMap(fromKey, 1i32)?;
-        /* TODO: monitorexit  */
-        return Ok(local_2);
-        let mut local_3: Collections_SynchronizedNavigableMap = Collections_SynchronizedNavigableMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn tailMap__obj(&self, fromKey: Object) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.tailMap")
     }
 
     // java: subMap(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableMap;
-    // java: subMap(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableMap;
-    pub fn subMap__obj_z_obj_z(&self, fromKey: K, fromInclusive: bool, toKey: K, toInclusive: bool) -> Result<Object> {
-        let this = self;
-        let mut local_5: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().subMap(fromKey, fromInclusive, toKey, toInclusive)?;
-        /* TODO: monitorexit  */
-        return Ok(local_5);
-        let mut local_6: Collections_SynchronizedNavigableMap = Collections_SynchronizedNavigableMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn subMap__obj_z_obj_z(&self, fromKey: Object, fromInclusive: bool, toKey: Object, toInclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.subMap")
     }
 
     // java: headMap(Ljava/lang/Object;Z)Ljava/util/NavigableMap;
-    // java: headMap(Ljava/lang/Object;Z)Ljava/util/NavigableMap;
-    pub fn headMap__obj_z(&self, toKey: K, inclusive: bool) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().headMap(toKey, inclusive)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedNavigableMap = Collections_SynchronizedNavigableMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn headMap__obj_z(&self, toKey: Object, inclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.headMap")
     }
 
     // java: tailMap(Ljava/lang/Object;Z)Ljava/util/NavigableMap;
-    // java: tailMap(Ljava/lang/Object;Z)Ljava/util/NavigableMap;
-    pub fn tailMap__obj_z(&self, fromKey: K, inclusive: bool) -> Result<Object> {
-        let this = self;
-        let mut local_3: Object = this.mutex.get();
-        /* TODO: monitorenter  */
-        let _t0 = this.nm.get().tailMap(fromKey, inclusive)?;
-        /* TODO: monitorexit  */
-        return Ok(local_3);
-        let mut local_4: Collections_SynchronizedNavigableMap = Collections_SynchronizedNavigableMap::new(_t0, this.mutex.get())?;
-        /* TODO: monitorexit  */
-        return Err(JvmError::Custom("athrow".to_owned()));
+    pub fn tailMap__obj_z(&self, fromKey: Object, inclusive: bool) -> Result<Object> {
+        todo!("abstract java/util/Collections$SynchronizedNavigableMap.tailMap")
     }
 }

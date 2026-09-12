@@ -17,28 +17,17 @@ pub struct ArrayIndexOutOfBoundsException;
 
 impl ArrayIndexOutOfBoundsException {
     // java: <init>()V
-    // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/IndexOutOfBoundsException.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/ArrayIndexOutOfBoundsException.<init>")
     }
 
     // java: <init>(Ljava/lang/String;)V
-    // java: <init>(Ljava/lang/String;)V
-    pub fn new__str(s: String) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/IndexOutOfBoundsException.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__str(&self, s: String) -> Result<()> {
+        todo!("abstract java/lang/ArrayIndexOutOfBoundsException.<init>")
     }
 
     // java: <init>(I)V
-    // java: <init>(I)V
-    pub fn new__i(index: i32) -> Result<Self> {
-        let this = Self {};
-        String::new().append(&String::from("Array index out of range:"))?;
-        String::new().append(&index)?;
-        /* invokespecial Method java/lang/IndexOutOfBoundsException.<init>:(Ljava/lang/String;)V */
-        Ok(this)
+    pub fn new__i(&self, index: i32) -> Result<()> {
+        todo!("abstract java/lang/ArrayIndexOutOfBoundsException.<init>")
     }
 }

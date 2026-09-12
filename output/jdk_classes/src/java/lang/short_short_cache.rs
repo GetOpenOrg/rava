@@ -17,9 +17,7 @@ pub struct Short_ShortCache;
 
 impl Short_ShortCache {
     // java: <init>()V
-    pub fn new() -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        Ok(this)
+    pub fn new(&self) -> Result<()> {
+        todo!("abstract java/lang/Short$ShortCache.<init>")
     }
 }

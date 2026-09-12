@@ -17,15 +17,12 @@ pub struct ArraysParallelSortHelpers_EmptyCompleter;
 
 impl ArraysParallelSortHelpers_EmptyCompleter {
     // java: <init>(Ljava/util/concurrent/CountedCompleter;)V
-    pub fn new(p: Object) -> Result<Self> {
-        let this = Self {};
-        /* invokespecial Method java/util/concurrent/CountedCompleter.<init>:(Ljava/util/concurrent/CountedCompleter;)V */
-        Ok(this)
+    pub fn new(&self, p: Object) -> Result<()> {
+        todo!("abstract java/util/ArraysParallelSortHelpers$EmptyCompleter.<init>")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        let this = self;
-        Ok(())
+        todo!("abstract java/util/ArraysParallelSortHelpers$EmptyCompleter.compute")
     }
 }

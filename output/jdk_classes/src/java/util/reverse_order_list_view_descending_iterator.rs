@@ -22,35 +22,22 @@ pub struct ReverseOrderListView_DescendingIterator {
 
 impl ReverseOrderListView_DescendingIterator {
     // java: <init>(Ljava/util/ReverseOrderListView;)V
-    pub fn new(this_0: Object) -> Result<Self> {
-        let this = Self { it: Field::new(Default::default()), this_0: Field::new(Default::default()) };
-        this.this_0.set(this_0);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        let _t0 = this.this_0.get().base.get().size()?;
-        let _t1 = this.this_0.get().base.get().listIterator(_t0)?;
-        this.it.set(_t1);
-        Ok(this)
+    pub fn new(&self, this_0: Object) -> Result<()> {
+        todo!("abstract java/util/ReverseOrderListView$DescendingIterator.<init>")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        let this = self;
-        let _t0 = this.it.get().hasPrevious()?;
-        Ok(_t0)
+        todo!("abstract java/util/ReverseOrderListView$DescendingIterator.hasNext")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        let this = self;
-        let _t0 = this.it.get().previous()?;
-        Ok(_t0)
+        todo!("abstract java/util/ReverseOrderListView$DescendingIterator.next")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        let this = self;
-        this.this_0.get().checkModifiable()?;
-        this.it.get().remove()?;
-        Ok(())
+        todo!("abstract java/util/ReverseOrderListView$DescendingIterator.remove")
     }
 }

@@ -20,70 +20,37 @@ pub struct AbstractList_ListItr {
 
 impl AbstractList_ListItr {
     // java: <init>(Ljava/util/AbstractList;I)V
-    pub fn new(arg_0: Object, index: i32) -> Result<Self> {
-        let this = Self { this_0: Field::new(Default::default()) };
-        this.this_0.set(arg_0);
-        /* invokespecial Method java/util/AbstractList$Itr.<init>:(Ljava/util/AbstractList;)V */
-        this.cursor.set(index);
-        Ok(this)
+    pub fn new(&self, arg0: Object, index: i32) -> Result<()> {
+        todo!("abstract java/util/AbstractList$ListItr.<init>")
     }
 
     // java: hasPrevious()Z
     pub fn hasPrevious(&self) -> Result<bool> {
-        let this = self;
-        Ok(this.cursor.get()!=0i32)
+        todo!("abstract java/util/AbstractList$ListItr.hasPrevious")
     }
 
     // java: previous()Ljava/lang/Object;
     pub fn previous(&self) -> Result<Object> {
-        let this = self;
-        this.checkForComodification()?;
-        let mut i: i32 = (this.cursor.get()).wrapping_sub(1i32);
-        let _t0 = this.this_0.get().get(i)?;
-        let mut previous: Object = _t0;
-        this.cursor.set(i);
-        this.lastRet.set(i);
-        return Ok(previous);
-        i = todo!("stack underflow");
-        this.checkForComodification()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/AbstractList$ListItr.previous")
     }
 
     // java: nextIndex()I
     pub fn nextIndex(&self) -> Result<i32> {
-        let this = self;
-        Ok(this.cursor.get())
+        todo!("abstract java/util/AbstractList$ListItr.nextIndex")
     }
 
     // java: previousIndex()I
     pub fn previousIndex(&self) -> Result<i32> {
-        let this = self;
-        Ok((this.cursor.get()).wrapping_sub(1i32))
+        todo!("abstract java/util/AbstractList$ListItr.previousIndex")
     }
 
     // java: set(Ljava/lang/Object;)V
     pub fn set(&self, e: Object) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        this.checkForComodification()?;
-        let _t0 = this.this_0.get().set(this.lastRet.get(), e)?;
-        this.expectedModCount.set(this.this_0.get().modCount.get());
-        let mut ex: i32 = this.lastRet.get();
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/AbstractList$ListItr.set")
     }
 
     // java: add(Ljava/lang/Object;)V
     pub fn add(&self, e: Object) -> Result<()> {
-        let this = self;
-        this.checkForComodification()?;
-        let mut i: i32 = this.cursor.get();
-        this.this_0.get().add(i, e)?;
-        this.lastRet.set(-1i32);
-        this.cursor.set((i).wrapping_add(1i32));
-        this.expectedModCount.set(this.this_0.get().modCount.get());
-        i = todo!("stack underflow");
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/AbstractList$ListItr.add")
     }
 }

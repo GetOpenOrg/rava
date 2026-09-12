@@ -26,56 +26,27 @@ pub struct AbstractList_Itr {
 
 impl AbstractList_Itr {
     // java: <init>(Ljava/util/AbstractList;)V
-    pub fn new(arg_0: Object) -> Result<Self> {
-        let this = Self { cursor: Field::new(0), lastRet: Field::new(0), expectedModCount: Field::new(0), this_0: Field::new(Default::default()) };
-        this.this_0.set(arg_0);
-        /* invokespecial Method java/lang/Object.<init>:()V */
-        this.cursor.set(0i32);
-        this.lastRet.set(-1i32);
-        this.expectedModCount.set(this.this_0.get().modCount.get());
-        Ok(this)
+    pub fn new(&self, arg0: Object) -> Result<()> {
+        todo!("abstract java/util/AbstractList$Itr.<init>")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        let this = self;
-        let _t0 = this.this_0.get().size()?;
-        Ok(this.cursor.get() != _t0)
+        todo!("abstract java/util/AbstractList$Itr.hasNext")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        let this = self;
-        this.checkForComodification()?;
-        let mut i: i32 = this.cursor.get();
-        let _t0 = this.this_0.get().get(i)?;
-        let mut next: Object = _t0;
-        this.lastRet.set(i);
-        this.cursor.set((i).wrapping_add(1i32));
-        return Ok(next);
-        i = todo!("stack underflow");
-        this.checkForComodification()?;
-        return Err(JvmError::Custom("athrow".to_owned()));
+        todo!("abstract java/util/AbstractList$Itr.next")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        this.checkForComodification()?;
-        let _t0 = this.this_0.get().remove(this.lastRet.get())?;
-        this.cursor.set((this.cursor.get()).wrapping_sub(1i32));
-        this.lastRet.set(-1i32);
-        this.expectedModCount.set(this.this_0.get().modCount.get());
-        let mut e: i32 = this.cursor.get();
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/AbstractList$Itr.remove")
     }
 
     // java: checkForComodification()V
     pub fn checkForComodification(&self) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+        todo!("abstract java/util/AbstractList$Itr.checkForComodification")
     }
 }
