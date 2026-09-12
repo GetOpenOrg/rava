@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeaVM 可达性分析器</title>
+<style>
+  /* ── 设计语言：字节码审查室 ──
+     深黑底 + 冰蓝主调 + 等宽字体
+     一个节点是记忆的最小单元
+  */
+  :root {
+    --bg:        #0b0f14;
+    --surface:   #111820;
+    --surface2:  #1a2332;
+    --border:    #1e2d3d;
+    --border2:   #2a3f55;
+    --text:      #c9d7e3;
+    --text-dim:  #4a6278;
+    --text-muted:#6b8399;
+
+    --blue:      #4fa3e0;
+    --blue-dim:  #2a5a7a;
+    --green:     #4caf82;
+    --amber:     #e0a84f;
+    --purple:    #9d7fe0;
+    --red:       #e06464;
+    --cyan:      #4fd0e0;
+
+    --mono: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'Menlo', monospace;
+    --sans: 'Inter', 'system-ui', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── 顶栏 ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--blue);
+    letter-spacing: .04em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .logo-icon {
+    width: 22px; height: 22px;
+    background: var(--blue);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: var(--bg);
+  }
+  .header-sep { flex: 1; }
+  .header-badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 8px;
+  }
+
+  /* ── 主体布局 ── */
+  .workspace {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    grid-template-rows: 1fr;
+    overflow: hidden;
+  }
+
+  /* ── 左侧面板 ── */
+  .panel-left {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .panel-section {
+    border-bottom: 1px solid var(--border);
+    padding: 16px;
+  }
+  .panel-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  /* 代码编辑区 */
+  .code-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .code-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .file-tab {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--blue);
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: 4px 4px 0 0;
+    padding: 4px 12px;
+  }
+  textarea {
+    flex: 1;
+    background: var(--bg);
+    border: none;
+    outline: none;
+    resize: none;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    padding: 14px 16px;
+    tab-size: 4;
+  }
+  textarea::placeholder { color: var(--text-dim); }
+
+  /* 入口配置 */
+  .input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .input-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    min-width: 56px;
+  }
+  input[type=text] {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 5px 10px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  input[type=text]:focus { border-color: var(--blue); }
+
+  /* 分析按钮 */
+  .btn-analyze {
+    width: 100%;
+    background: var(--blue);
+    color: var(--bg);
+    border: none;
+    border-radius: 5px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    padding: 10px;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+  }
+  .btn-analyze:hover { opacity: .88; }
+  .btn-analyze:active { transform: scale(.98); }
+
+  /* 统计区 */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+  }
+  .stat-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 10px;
+    text-align: center;
+  }
+  .stat-num {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-num.user  { color: var(--blue); }
+  .stat-num.jdk   { color: var(--purple); }
+  .stat-num.inst  { color: var(--green); }
+  .stat-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: .04em;
+  }
+
+  /* NEW 集合 */
+  .new-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .new-pill {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: rgba(76,175,130,.12);
+    border: 1px solid rgba(76,175,130,.3);
+    color: var(--green);
+    border-radius: 4px;
+    padding: 3px 8px;
+  }
+
+  /* ── 右侧调用树区 ── */
+  .panel-right {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .tree-header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .tree-title {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  /* 图例 */
+  .legend {
+    display: flex;
+    gap: 14px;
+    margin-left: auto;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .legend-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .tree-scroll {
+    flex: 1;
+    overflow: auto;
+    padding: 20px 24px;
+  }
+
+  /* ── 树节点 ── */
+  .tree-node {
+    position: relative;
+    user-select: none;
+  }
+
+  .node-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 30px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background .1s;
+    position: relative;
+  }
+  .node-row:hover { background: var(--surface2); }
+
+  .tree-indent {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    flex-shrink: 0;
+  }
+
+  /* 竖线 + 连接线 */
+  .tree-pipe {
+    width: 20px;
+    height: 100%;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .tree-pipe.vertical::before {
+    content: '';
+    position: absolute;
+    left: 9px; top: 0; bottom: 0;
+    width: 1px;
+    background: var(--border2);
+  }
+  .tree-pipe.branch::before {
+    content: '';
+    position: absolute;
+    left: 9px; top: 0; height: 50%;
+    width: 1px;
+    background: var(--border2);
+  }
+  .tree-pipe.branch::after {
+    content: '';
+    position: absolute;
+    left: 9px; top: 50%;
+    width: 10px; height: 1px;
+    background: var(--border2);
+  }
+  .tree-pipe.last::before {
+    content: '';
+    position: absolute;
+    left: 9px; top: 0; height: 50%;
+    width: 1px;
+    background: var(--border2);
+  }
+  .tree-pipe.last::after {
+    content: '';
+    position: absolute;
+    left: 9px; top: 50%;
+    width: 10px; height: 1px;
+    background: var(--border2);
+  }
+
+  /* 展开/折叠图标 */
+  .expand-icon {
+    width: 16px; height: 16px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-right: 7px;
+    flex-shrink: 0;
+    background: var(--surface2);
+    transition: border-color .12s;
+  }
+  .node-row:hover .expand-icon { border-color: var(--blue); color: var(--blue); }
+  .node-leaf-icon {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-right: 17px;
+    flex-shrink: 0;
+  }
+
+  /* 方法标签 */
+  .node-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .node-class {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .node-method {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .call-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    border-radius: 3px;
+    padding: 1px 6px;
+    white-space: nowrap;
+    border: 1px solid;
+  }
+
+  /* 调用类型配色 */
+  .badge-new      { color: var(--green);  border-color: rgba(76,175,130,.4);  background: rgba(76,175,130,.08); }
+  .badge-static   { color: var(--cyan);   border-color: rgba(79,208,224,.4);  background: rgba(79,208,224,.08); }
+  .badge-virtual  { color: var(--amber);  border-color: rgba(224,168,79,.4);  background: rgba(224,168,79,.08); }
+  .badge-jdk      { color: var(--purple); border-color: rgba(157,127,224,.4); background: rgba(157,127,224,.08); }
+  .badge-entry    { color: var(--blue);   border-color: rgba(79,163,224,.4);  background: rgba(79,163,224,.08); }
+
+  .node-method.user-code { color: var(--text); }
+  .node-method.jdk-code  { color: var(--text-dim); }
+  .node-class.jdk-code   { color: var(--text-dim); opacity: .6; }
+
+  .trunc-marker {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-left: 4px;
+  }
+
+  .children-container { display: block; }
+  .children-container.collapsed { display: none; }
+
+  /* ── 空状态 ── */
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-dim);
+  }
+  .empty-icon {
+    font-size: 40px;
+    opacity: .4;
+  }
+  .empty-text {
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+
+  /* ── 错误条 ── */
+  .error-bar {
+    background: rgba(224,100,100,.1);
+    border: 1px solid rgba(224,100,100,.3);
+    color: var(--red);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 8px 14px;
+    margin: 12px 24px 0;
+    border-radius: 5px;
+    display: none;
+  }
+  .error-bar.visible { display: block; }
+
+  /* ── 底部可达列表 ── */
+  .reachable-panel {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 14px 24px;
+    flex-shrink: 0;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+  .reachable-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .reachable-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .reachable-chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    border-radius: 4px;
+    padding: 3px 9px;
+    border: 1px solid;
+    cursor: default;
+    transition: opacity .1s;
+  }
+  .chip-user { color: var(--blue);   border-color: rgba(79,163,224,.3);  background: rgba(79,163,224,.06); }
+  .chip-jdk  { color: var(--purple); border-color: rgba(157,127,224,.3); background: rgba(157,127,224,.06); }
+  .chip-inst { color: var(--green);  border-color: rgba(76,175,130,.3);  background: rgba(76,175,130,.06); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">T</div>
+    TeaVM Reachability Analyzer
+  </div>
+  <div class="header-sep"></div>
+  <div class="header-badge">RTA · Method-Level DCE</div>
+  <div class="header-badge">Java → Call Graph</div>
+</header>
+
+<div class="workspace">
+
+  <!-- ── 左侧输入面板 ── -->
+  <div class="panel-left">
+
+    <!-- 代码编辑 -->
+    <div class="code-area">
+      <div class="code-header">
+        <div class="file-tab">HelloWorld.java</div>
+      </div>
+      <textarea id="javaSource" spellcheck="false" placeholder="// 在此粘贴 Java 源码…">import java.util.ArrayList;
+import java.util.List;
+
+public class HelloWorld {
+
+    private String message;
+
+    public HelloWorld(String message) {
+        this.message = message;
+    }
+
+    public void greet() {
+        System.out.println("Hello, " + message);
+    }
+
+    public static String repeat(String s, int times) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i &lt; times; i++) {
+            sb.append(s);
+        }
+        return sb.toString();
+    }
+
+    public static void main(String[] args) {
+        HelloWorld hw = new HelloWorld("World");
+        hw.greet();
+
+        String r = repeat("ha", 3);
+        System.out.println(r);
+
+        List&lt;String&gt; items = new ArrayList&lt;&gt;();
+        items.add("foo");
+        items.add("bar");
+        System.out.println(items.size());
+    }
+}</textarea>
+    </div>
+
+    <!-- 入口配置 + 按钮 -->
+    <div class="panel-section">
+      <div class="panel-label">入口点配置</div>
+      <div class="input-row">
+        <span class="input-label">类名</span>
+        <input type="text" id="entryClass" value="HelloWorld" placeholder="HelloWorld">
+      </div>
+      <div class="input-row">
+        <span class="input-label">方法名</span>
+        <input type="text" id="entryMethod" value="main" placeholder="main">
+      </div>
+      <button class="btn-analyze" onclick="runAnalysis()">▶ 运行可达性分析</button>
+    </div>
+
+    <!-- 统计 -->
+    <div class="panel-section">
+      <div class="panel-label">分析结果</div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-num user" id="statUser">—</div>
+          <div class="stat-label">用户方法</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num jdk" id="statJdk">—</div>
+          <div class="stat-label">JDK 方法</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num inst" id="statInst">—</div>
+          <div class="stat-label">NEW 类型</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEW 集合 -->
+    <div class="panel-section">
+      <div class="panel-label">RTA 实例化类型集合（NEW 指令）</div>
+      <div class="new-pills" id="newPills">
+        <span style="color:var(--text-dim);font-size:12px;">尚未分析</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── 右侧调用树 ── -->
+  <div class="panel-right">
+    <div class="tree-header">
+      <div class="tree-title" id="treeTitle">调用链树</div>
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-dot" style="background:var(--green)"></div>new
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background:var(--cyan)"></div>static
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background:var(--amber)"></div>virtual
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background:var(--purple)"></div>JDK
+        </div>
+      </div>
+    </div>
+
+    <div id="errorBar" class="error-bar"></div>
+
+    <div class="tree-scroll" id="treeScroll">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">⟨/⟩</div>
+        <div class="empty-text">粘贴 Java 源码后点击分析</div>
+      </div>
+    </div>
+
+    <!-- 底部可达方法列表 -->
+    <div class="reachable-panel" id="reachablePanel" style="display:none">
+      <div class="reachable-title">全部可达方法</div>
+      <div class="reachable-grid" id="reachableGrid"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ────────────────────────────────────────────────
+// Java 源码解析器（纯前端，模拟 TeaVM Dependency Checker）
+// ────────────────────────────────────────────────
+
+const JDK_KNOWN = {
+  System:        { out:'', err:'', exit:[], currentTimeMillis:[], arraycopy:[] },
+  PrintStream:   { println:['java.io.PrintStream#write','java.io.PrintStream#newLine'],
+                   print:['java.io.PrintStream#write'], printf:[], format:[], flush:[], close:[] },
+  String:        { valueOf:[], length:[], charAt:[], substring:[], indexOf:[],
+                   contains:[], replace:[], split:[], trim:[], toUpperCase:[], toLowerCase:[],
+                   equals:['Object#equals'], hashCode:['Object#hashCode'],
+                   toString:[], format:[], concat:[], isEmpty:[], startsWith:[], endsWith:[], intern:[] },
+  StringBuilder: { '<init>':[], append:[], toString:[], length:[], insert:[], delete:[], reverse:[] },
+  Object:        { '<init>':[], toString:[], equals:[], hashCode:[], getClass:[], clone:[], wait:[], notify:[], notifyAll:[] },
+  Integer:       { parseInt:[], valueOf:[], toString:[], intValue:[], compareTo:[] },
+  Long:          { parseLong:[], valueOf:[], toString:[], longValue:[] },
+  Double:        { parseDouble:[], valueOf:[], toString:[], doubleValue:[] },
+  Math:          { abs:[], max:[], min:[], sqrt:[], pow:[], floor:[], ceil:[], round:[], random:[], log:[] },
+  ArrayList:     { '<init>':[], add:['AbstractList#add'], get:['ArrayList#rangeCheck'], size:[], remove:[], clear:[], contains:[], isEmpty:[], iterator:[], toArray:[], set:[] },
+  HashMap:       { '<init>':[], put:['HashMap#putVal'], get:['HashMap#getNode'], containsKey:[], remove:[], size:[], isEmpty:[], keySet:[], values:[] },
+  Arrays:        { sort:[], copyOf:[], asList:[], fill:[], toString:[], equals:[], binarySearch:[] },
+  Collections:   { sort:[], unmodifiableList:[], singletonList:[], emptyList:[], reverse:[], shuffle:[] },
+  List:          { add:[], get:[], size:[], remove:[], clear:[], contains:[], isEmpty:[], iterator:[] },
+  Map:           { put:[], get:[], containsKey:[], remove:[], size:[], isEmpty:[], keySet:[], values:[], entrySet:[] },
+  Set:           { add:[], contains:[], remove:[], size:[], isEmpty:[], iterator:[] },
+  Optional:      { of:[], ofNullable:[], get:[], isPresent:[], orElse:[], map:[], filter:[] },
+};
+
+const CLASS_PKG = {
+  System:'java.lang', String:'java.lang', StringBuilder:'java.lang', Object:'java.lang',
+  Integer:'java.lang', Long:'java.lang', Double:'java.lang', Boolean:'java.lang',
+  Math:'java.lang', PrintStream:'java.io', InputStream:'java.io', OutputStream:'java.io',
+  BufferedReader:'java.io', FileReader:'java.io', File:'java.io',
+  ArrayList:'java.util', HashMap:'java.util', HashSet:'java.util', LinkedList:'java.util',
+  Arrays:'java.util', Collections:'java.util', List:'java.util', Map:'java.util',
+  Set:'java.util', Iterator:'java.util', Optional:'java.util',
+};
+
+const FIELD_TYPES = { 'System.out':'PrintStream', 'System.err':'PrintStream', 'System.in':'InputStream' };
+
+// ── 极简 Java 词法解析 + RTA ──
+
+function tokenize(src) {
+  // 移除字符串字面量和注释，避免干扰解析
+  return src
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/"([^"\\]|\\.)*"/g, '"__STR__"')
+    .replace(/'([^'\\]|\\.)*'/g, "'c'");
+}
+
+function extractClasses(src) {
+  const classes = {};
+  // 匹配类声明（简化，只取顶层类）
+  const classRe = /class\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([\w,\s]+))?\s*\{/g;
+  let m;
+  while ((m = classRe.exec(src)) !== null) {
+    const name = m[1];
+    const ext  = m[2] || null;
+    const impl = m[3] ? m[3].split(',').map(s=>s.trim()) : [];
+    classes[name] = { name, superclass: ext, interfaces: impl, methods: {} };
+  }
+  return classes;
+}
+
+function extractMethods(src, classes) {
+  // 提取方法：返回类型 方法名(参数) { 方法体 }
+  // 使用括号深度匹配找方法体
+  const lines = src.split('\n');
+
+  // 找到每个类的范围（行号）
+  // 简化：假设每个方法属于距它最近的 class 声明
+  const classStarts = {};
+  for (const cls of Object.values(classes)) {
+    const re = new RegExp(`class\\s+${cls.name}[^{]*\\{`);
+    const m = re.exec(src);
+    if (m) classStarts[m.index] = cls.name;
+  }
+
+  // 方法签名正则
+  // 覆盖：public/private/static/void + 返回类型 + 方法名(参数)
+  const methodRe = /(?:(?:public|private|protected|static|final|synchronized|abstract)\s+)*(?:[\w<>\[\],\s]+\s+)?(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*\{/g;
+
+  let mm;
+  while ((mm = methodRe.exec(src)) !== null) {
+    const mname = mm[1];
+    const params = mm[2];
+
+    // 过滤关键字误匹配
+    if (['if','for','while','switch','try','catch','else','new','return','class','interface','enum'].includes(mname)) continue;
+    // 跳过 class 声明本身
+    if (src.slice(Math.max(0,mm.index-20), mm.index).match(/class\s+$/)) continue;
+
+    // 找到属于哪个类
+    let ownerClass = null;
+    let bestStart = -1;
+    for (const [startIdx, cname] of Object.entries(classStarts)) {
+      const si = parseInt(startIdx);
+      if (si < mm.index && si > bestStart) {
+        bestStart = si;
+        ownerClass = cname;
+      }
+    }
+    if (!ownerClass) {
+      // 如果只有一个类，归到它
+      const classNames = Object.keys(classes);
+      if (classNames.length === 1) ownerClass = classNames[0];
+      else continue;
+    }
+
+    const paramCount = params.trim() ? params.split(',').length : 0;
+
+    // 提取方法体
+    const bodyStart = mm.index + mm[0].length - 1; // 指向 {
+    let depth = 0, bodyEnd = bodyStart;
+    for (let i = bodyStart; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') { depth--; if (depth === 0) { bodyEnd = i; break; } }
+    }
+    const body = src.slice(bodyStart + 1, bodyEnd);
+
+    const mi = {
+      name: mname,
+      class_name: ownerClass,
+      param_count: paramCount,
+      calls: extractCalls(body, ownerClass, mname, classes),
+    };
+
+    if (!classes[ownerClass].methods[mname]) {
+      classes[ownerClass].methods[mname] = mi;
+    }
+  }
+}
+
+function resolveQualifier(q, varTypes, ownerClass, classes) {
+  if (!q) return { target: ownerClass, callType: 'static' };
+
+  const parts = q.split('.');
+
+  // System.out → PrintStream
+  const fieldKey = parts.join('.');
+  if (FIELD_TYPES[fieldKey]) {
+    return { target: FIELD_TYPES[fieldKey], callType: 'jdk' };
+  }
+
+  if (parts.length >= 2) {
+    const first = parts[0];
+    // 类名.字段（如 System.out）
+    if (first in JDK_KNOWN || first in classes) {
+      const fk = `${first}.${parts[1]}`;
+      if (FIELD_TYPES[fk]) return { target: FIELD_TYPES[fk], callType: 'jdk' };
+      return { target: first, callType: first in JDK_KNOWN ? 'jdk' : 'static' };
+    }
+    return { target: q, callType: 'virtual' };
+  }
+
+  const v = parts[0];
+  if (v === 'super') return { target: classes[ownerClass]?.superclass || 'Object', callType: 'virtual' };
+  if (v in varTypes) {
+    const t = varTypes[v];
+    return { target: t, callType: t in JDK_KNOWN ? 'jdk' : 'virtual' };
+  }
+  // 首字母大写 → 类名
+  if (v && v[0] === v[0].toUpperCase() && v[0] !== v[0].toLowerCase()) {
+    return { target: v, callType: v in JDK_KNOWN ? 'jdk' : 'static' };
+  }
+  return { target: ownerClass, callType: 'virtual' };
+}
+
+function extractCalls(body, ownerClass, methodName, classes) {
+  const calls = [];
+  const instantiated_local = new Set();
+  const varTypes = {};
+
+  // 局部变量声明：  TypeName varName = ...
+  const varDeclRe = /\b([\w<>]+)\s+(\w+)\s*=/g;
+  let vd;
+  while ((vd = varDeclRe.exec(body)) !== null) {
+    const type = vd[1], name = vd[2];
+    if (!['if','for','while','int','long','boolean','double','float','char','byte','short'].includes(type)) {
+      varTypes[name] = type;
+    }
+  }
+
+  // NEW 指令
+  const newRe = /new\s+(\w+)\s*\(/g;
+  let nm;
+  while ((nm = newRe.exec(body)) !== null) {
+    const created = nm[1];
+    instantiated_local.add(created);
+    // 找参数数量（粗略）
+    const afterParen = body.slice(nm.index + nm[0].length - 1);
+    const argStr = extractArgs(afterParen);
+    const argCount = argStr.trim() ? argStr.split(',').length : 0;
+    calls.push({
+      callee_class: created, callee_method: '<init>',
+      call_type: 'constructor', arg_count: argCount,
+    });
+  }
+
+  // 方法调用：qualifier.method(args)
+  // 注意：需要避免匹配 new Foo() 中的 Foo
+  const callRe = /(?:([\w.]+)\.)?(\w+)\s*\(/g;
+  let cm;
+  while ((cm = callRe.exec(body)) !== null) {
+    const q  = cm[1] || '';
+    const mname = cm[2];
+
+    if (['if','for','while','switch','catch','new','return','class','throw','assert','super','this'].includes(mname)) continue;
+    if (!mname || mname[0] >= '0' && mname[0] <= '9') continue;
+    // 过滤 new Xxx( 中的 Xxx
+    const before = body.slice(0, cm.index).trimEnd();
+    if (before.endsWith('new')) continue;
+
+    const { target, callType } = resolveQualifier(q, varTypes, ownerClass, classes);
+    const afterParen = body.slice(cm.index + cm[0].length - 1);
+    const argStr = extractArgs(afterParen);
+    const argCount = argStr.trim() ? argStr.split(',').length : 0;
+
+    calls.push({
+      callee_class: target, callee_method: mname,
+      call_type: callType in JDK_KNOWN ? 'jdk' : callType,
+      arg_count: argCount,
+    });
+  }
+
+  return { calls, instantiated: [...instantiated_local] };
+}
+
+function extractArgs(src) {
+  // 提取第一层括号内容
+  let depth = 0, i = 0;
+  for (; i < src.length; i++) {
+    if (src[i] === '(') { if (depth === 0) { depth = 1; } else depth++; }
+    else if (src[i] === ')') { depth--; if (depth === 0) return src.slice(1, i); }
+  }
+  return '';
+}
+
+// ── RTA 分析主引擎 ──
+
+function rtaAnalyze(source, entryClass, entryMethod) {
+  const clean = tokenize(source);
+  const classes = extractClasses(clean);
+  if (Object.keys(classes).length === 0) throw new Error('未找到任何类定义');
+
+  extractMethods(clean, classes);
+
+  // 全局 NEW 集合
+  const instantiated = new Set();
+  for (const cls of Object.values(classes)) {
+    for (const mi of Object.values(cls.methods)) {
+      if (mi.calls && mi.calls.instantiated) {
+        for (const inst of mi.calls.instantiated) instantiated.add(inst);
+      }
+    }
+  }
+
+  // 确定入口
+  if (!entryClass) {
+    for (const [cname, ci] of Object.entries(classes)) {
+      if ('main' in ci.methods) { entryClass = cname; break; }
+    }
+    if (!entryClass) entryClass = Object.keys(classes)[0];
+  }
+  if (!entryMethod) entryMethod = 'main';
+
+  // BFS 可达性
+  const entryKey = `${entryClass}#${entryMethod}`;
+  const reachable = new Map();
+  const callGraph = new Map(); // key → [{calleeKey, callType}]
+  const queue = [{ class: entryClass, method: entryMethod, key: entryKey }];
+  reachable.set(entryKey, { class: entryClass, method: entryMethod, is_jdk: false });
+
+  while (queue.length > 0) {
+    const curr = queue.shift();
+    if (!callGraph.has(curr.key)) callGraph.set(curr.key, []);
+
+    const methodInfo = lookupMethod(curr.class, curr.method, classes);
+    if (!methodInfo) continue;
+
+    const edgeList = methodInfo.calls ? methodInfo.calls.calls || methodInfo.calls : [];
+    for (const edge of edgeList) {
+      const targets = resolveVirtual(edge, instantiated, classes);
+      for (const t of targets) {
+        const tkey = `${t.class}#${t.method}`;
+        callGraph.get(curr.key).push({ key: tkey, callType: t.callType });
+
+        if (!reachable.has(tkey)) {
+          const isJdk = t.class in JDK_KNOWN || (CLASS_PKG[t.class] && !(t.class in classes));
+          reachable.set(tkey, { class: t.class, method: t.method, is_jdk: isJdk });
+          queue.push({ class: t.class, method: t.method, key: tkey });
+        }
+      }
+    }
+  }
+
+  // 构建树
+  const tree = buildTree(entryKey, reachable, callGraph, classes, new Set(), 0);
+
+  return {
+    entry: entryKey,
+    tree,
+    reachable: [...reachable.entries()].map(([k,v]) => ({ key: k, ...v, package: CLASS_PKG[v.class] || '用户代码' })),
+    instantiated: [...instantiated].sort(),
+    stats: {
+      total_reachable: reachable.size,
+      user_methods: [...reachable.values()].filter(r => !(r.class in JDK_KNOWN) && r.class in classes).length,
+      jdk_methods: [...reachable.values()].filter(r => r.is_jdk).length,
+    }
+  };
+}
+
+function lookupMethod(className, methodName, classes) {
+  const cls = classes[className];
+  if (cls) {
+    const mi = cls.methods[methodName];
+    if (mi) return mi;
+    // 继承链
+    let parent = cls.superclass;
+    while (parent && classes[parent]) {
+      const pm = classes[parent].methods[methodName];
+      if (pm) return pm;
+      parent = classes[parent].superclass;
+    }
+  }
+  // JDK
+  if (className in JDK_KNOWN && methodName in JDK_KNOWN[className]) {
+    const internalCalls = JDK_KNOWN[className][methodName];
+    const calls = Array.isArray(internalCalls) ? internalCalls.map(ic => {
+      const [cc, cm] = ic.split('#');
+      return { callee_class: cc, callee_method: cm, call_type: 'jdk' };
+    }) : [];
+    return { name: methodName, class_name: className, calls: { calls } };
+  }
+  return null;
+}
+
+function resolveVirtual(edge, instantiated, classes) {
+  const candidates = [];
+  const { callee_class: cc, callee_method: cm, call_type: ct } = edge;
+
+  if (ct === 'constructor' || ct === 'static' || ct === 'jdk') {
+    candidates.push({ class: cc, method: cm, callType: ct });
+  } else {
+    // virtual：查 instantiated 中是否有 override
+    candidates.push({ class: cc, method: cm, callType: ct });
+    for (const inst of instantiated) {
+      if (inst !== cc && implementsOrExtends(inst, cc, classes)) {
+        if (hasMethod(inst, cm, classes)) {
+          candidates.push({ class: inst, method: cm, callType: 'virtual' });
+        }
+      }
+    }
+  }
+  return candidates;
+}
+
+function implementsOrExtends(child, parent, classes) {
+  const ci = classes[child];
+  if (!ci) return false;
+  if (ci.superclass === parent) return true;
+  if (ci.interfaces && ci.interfaces.includes(parent)) return true;
+  if (ci.superclass) return implementsOrExtends(ci.superclass, parent, classes);
+  return false;
+}
+
+function hasMethod(className, methodName, classes) {
+  const cls = classes[className];
+  if (cls && methodName in cls.methods) return true;
+  if (className in JDK_KNOWN && methodName in JDK_KNOWN[className]) return true;
+  return false;
+}
+
+function buildTree(key, reachable, callGraph, classes, visited, depth) {
+  const info = reachable.get(key) || { class: key.split('#')[0], method: key.split('#')[1] || '?', is_jdk: false };
+  const node = {
+    key, class: info.class, method: info.method, is_jdk: info.is_jdk,
+    children: [], truncated: false,
+  };
+  if (visited.has(key) || depth > 15) { node.truncated = true; return node; }
+  visited.add(key);
+
+  const edges = callGraph.get(key) || [];
+  const seen = new Set();
+  for (const e of edges) {
+    if (seen.has(e.key)) continue;
+    seen.add(e.key);
+    const child = buildTree(e.key, reachable, callGraph, classes, new Set([...visited]), depth + 1);
+    child.call_type = e.callType;
+    node.children.push(child);
+  }
+  return node;
+}
+
+// ────────────────────────────────────────────────
+// 渲染层
+// ────────────────────────────────────────────────
+
+const BADGE_CLASS = {
+  new: 'badge-new', constructor: 'badge-new',
+  static: 'badge-static',
+  virtual: 'badge-virtual',
+  jdk: 'badge-jdk',
+  entry: 'badge-entry',
+};
+const BADGE_LABEL = {
+  new: 'new', constructor: 'new',
+  static: 'static', virtual: 'virtual', jdk: 'JDK', entry: 'entry',
+};
+const DOT_COLOR = {
+  new: 'var(--green)', constructor: 'var(--green)',
+  static: 'var(--cyan)', virtual: 'var(--amber)', jdk: 'var(--purple)', entry: 'var(--blue)',
+};
+
+function renderTree(node, parentIndents = [], isRoot = true) {
+  const el = document.createElement('div');
+  el.className = 'tree-node';
+
+  const row = document.createElement('div');
+  row.className = 'node-row';
+
+  // 缩进 + 连接线
+  const indent = document.createElement('div');
+  indent.className = 'tree-indent';
+  indent.style.display = 'flex';
+
+  for (let i = 0; i < parentIndents.length; i++) {
+    const pipe = document.createElement('div');
+    pipe.className = 'tree-pipe';
+    if (i < parentIndents.length - 1) {
+      if (parentIndents[i]) pipe.classList.add('vertical');
+    } else if (!isRoot) {
+      pipe.classList.add(parentIndents[i] ? 'branch' : 'last');
+    }
+    indent.appendChild(pipe);
+  }
+
+  const hasKids = node.children && node.children.length > 0;
+  if (!isRoot) {
+    if (hasKids) {
+      const expandIcon = document.createElement('div');
+      expandIcon.className = 'expand-icon';
+      expandIcon.textContent = '−';
+      indent.appendChild(expandIcon);
+    } else {
+      const leafDot = document.createElement('div');
+      leafDot.className = 'node-leaf-icon';
+      const ct = node.call_type || 'static';
+      leafDot.style.background = DOT_COLOR[ct] || 'var(--text-dim)';
+      indent.appendChild(leafDot);
+    }
+  }
+
+  row.appendChild(indent);
+
+  // 内容
+  const content = document.createElement('div');
+  content.className = 'node-content';
+
+  const classPart = document.createElement('span');
+  classPart.className = 'node-class' + (node.is_jdk ? ' jdk-code' : '');
+  const classDisplay = CLASS_PKG[node.class] ? `${CLASS_PKG[node.class]}.` : '';
+  classPart.textContent = classDisplay + node.class;
+
+  const sep = document.createElement('span');
+  sep.style.cssText = 'color:var(--border2);font-family:var(--mono);font-size:11px;margin:0 2px';
+  sep.textContent = '.';
+
+  const methodPart = document.createElement('span');
+  methodPart.className = 'node-method' + (node.is_jdk ? ' jdk-code' : ' user-code');
+  methodPart.textContent = node.method + '()';
+
+  content.appendChild(classPart);
+  content.appendChild(sep);
+  content.appendChild(methodPart);
+
+  if (!isRoot) {
+    const ct = node.call_type || 'static';
+    const badge = document.createElement('span');
+    badge.className = 'call-badge ' + (BADGE_CLASS[ct] || 'badge-static');
+    badge.textContent = BADGE_LABEL[ct] || ct;
+    content.appendChild(badge);
+  } else {
+    const badge = document.createElement('span');
+    badge.className = 'call-badge badge-entry';
+    badge.textContent = 'entry';
+    content.appendChild(badge);
+  }
+
+  if (node.truncated) {
+    const trunc = document.createElement('span');
+    trunc.className = 'trunc-marker';
+    trunc.textContent = '↩ (已访问)';
+    content.appendChild(trunc);
+  }
+
+  row.appendChild(content);
+  el.appendChild(row);
+
+  // 子节点容器
+  if (hasKids) {
+    const childContainer = document.createElement('div');
+    childContainer.className = 'children-container';
+
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i];
+      const isLast = i === node.children.length - 1;
+      const newIndents = isRoot ? [] : [...parentIndents.slice(0, -1), !isLast, true];
+      const childEl = renderTree(child, [...parentIndents, !isLast], false);
+      childContainer.appendChild(childEl);
+    }
+
+    el.appendChild(childContainer);
+
+    // 展开/折叠
+    if (!isRoot) {
+      const expandIcon = indent.querySelector('.expand-icon');
+      if (expandIcon) {
+        let expanded = true;
+        row.addEventListener('click', e => {
+          e.stopPropagation();
+          expanded = !expanded;
+          expandIcon.textContent = expanded ? '−' : '+';
+          childContainer.classList.toggle('collapsed', !expanded);
+        });
+      }
+    }
+  }
+
+  return el;
+}
+
+// ────────────────────────────────────────────────
+// 主分析入口
+// ────────────────────────────────────────────────
+
+function runAnalysis() {
+  const source = document.getElementById('javaSource').value;
+  const entryClass = document.getElementById('entryClass').value.trim() || null;
+  const entryMethod = document.getElementById('entryMethod').value.trim() || 'main';
+  const errorBar = document.getElementById('errorBar');
+  const treeScroll = document.getElementById('treeScroll');
+  const emptyState = document.getElementById('emptyState');
+
+  errorBar.classList.remove('visible');
+
+  try {
+    const result = rtaAnalyze(source, entryClass, entryMethod);
+
+    // 更新统计
+    document.getElementById('statUser').textContent = result.stats.user_methods;
+    document.getElementById('statJdk').textContent = result.stats.jdk_methods;
+    document.getElementById('statInst').textContent = result.instantiated.length;
+
+    // NEW 集合
+    const pills = document.getElementById('newPills');
+    pills.innerHTML = result.instantiated.length
+      ? result.instantiated.map(c =>
+          `<span class="new-pill">${c}</span>`
+        ).join('')
+      : '<span style="color:var(--text-dim);font-size:12px;">（无 NEW 指令）</span>';
+
+    // 树标题
+    document.getElementById('treeTitle').textContent =
+      `调用链树  —  ${result.entry}  （${result.stats.total_reachable} 个可达方法）`;
+
+    // 渲染树
+    treeScroll.innerHTML = '';
+    const treeEl = renderTree(result.tree, [], true);
+    treeScroll.appendChild(treeEl);
+
+    // 可达方法列表
+    const grid = document.getElementById('reachableGrid');
+    grid.innerHTML = result.reachable.map(r => {
+      const cls = r.is_jdk ? 'chip-jdk' : 'chip-user';
+      const label = r.class in JDK_KNOWN
+        ? `${r.class}.${r.method}()`
+        : `${r.class}.${r.method}()`;
+      return `<span class="reachable-chip ${cls}" title="${r.package}">${label}</span>`;
+    }).join('');
+    document.getElementById('reachablePanel').style.display = 'block';
+
+  } catch(err) {
+    errorBar.textContent = '分析错误：' + err.message;
+    errorBar.classList.add('visible');
+    treeScroll.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<div class="empty-icon">⚠</div><div class="empty-text">请检查 Java 源码语法</div>';
+    treeScroll.appendChild(empty);
+  }
+}
+
+// 页面加载后自动运行一次
+window.addEventListener('DOMContentLoaded', () => {
+  // 把 &lt; &gt; 还原
+  const ta = document.getElementById('javaSource');
+  ta.value = ta.value.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+  setTimeout(runAnalysis, 100);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+
+# Java 编译产物
+*.class
+
+# Rust 构建产物
+output/target/
+
+# macOS
+.DS_Store
