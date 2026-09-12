@@ -55,15 +55,18 @@ UNBOX_VIRTUAL: set[str] = {
 
 # ── 工具函数 ────────────────────────────────────────────────────
 
-def jvm_to_rust(t: str) -> str:
+def jvm_to_rust(t: str, registry: dict | None = None) -> str:
     if t in JVM_RUST:
         return JVM_RUST[t]
     if t.startswith('L') and t.endswith(';'):
         inner = t[1:-1]
-        name = short_cls(inner)
-        return name if name else 'Object'
+        # 只有 registry 中已翻译的类才用具体名称，否则 fallback 到 Object
+        if registry is not None and inner in registry:
+            name = short_cls(inner)
+            return name if name else 'Object'
+        return 'Object'
     if t.startswith('['):
-        elem = jvm_to_rust(t[1:])
+        elem = jvm_to_rust(t[1:], registry)
         return f'Vec<{elem}>'
     return 'Object'
 
