@@ -53,7 +53,13 @@ class RsTuple:
     elems: list[RsType] = field(default_factory=list)
 
 
-RsType = Union[RsPrimitive, RsNamed, RsRef, RsSlice, RsGeneric, RsTuple]
+@dataclass
+class RsInfer:
+    """Rust `_` 类型推断占位符，用于集合泛型参数初始占位。"""
+    pass
+
+
+RsType = Union[RsPrimitive, RsNamed, RsRef, RsSlice, RsGeneric, RsTuple, RsInfer]
 
 # 常用类型快捷构造
 I32   = RsPrimitive('i32')
@@ -165,10 +171,27 @@ class RawExpr:
     code: str
 
 
+@dataclass
+class NewPendingExpr:
+    """对应 JVM `new` 指令。等待后续 invokespecial <init> 确定构造参数。
+    渲染为 ClassName::new()，其中 ClassName 取 class_name 斜杠分隔的最后一段。
+    """
+    class_name: str  # JVM 内部格式，如 "java/util/ArrayList"
+
+
+@dataclass
+class StaticFieldRef:
+    """对应 `getstatic` 指令。渲染为 ClassName::field_name()。"""
+    class_name: str   # JVM 内部格式，如 "java/lang/System"
+    field_name: str   # 字段名，如 "out"
+    ty: RsType        # 字段类型
+
+
 RsExpr = Union[
     Lit, Var, BinOp, UnOp, Call, MethodCall,
     FieldAccess, Index, Cast, RefExpr, DerefExpr,
     BlockExpr, IfExpr, MacroExpr, RawExpr,
+    NewPendingExpr, StaticFieldRef,
 ]
 
 

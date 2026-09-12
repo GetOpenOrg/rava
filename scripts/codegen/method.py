@@ -16,170 +16,51 @@ from .type_map import jvm_to_rust, sig_type, rust_default
 from .stack import StackSim
 from .cfg import find_loops, cmp_op
 from .instr import sim_instr
-from .render import render_stmt
+from .render import render_stmt, render_expr
+from .rs_ir import (
+    RsNamed, RsPrimitive, RsType,
+    AssignStmt, LetStmt, Var, IfStmt, LoopStmt,
+)
+
+_PRIMITIVE_TYPES = {'i32', 'i64', 'f32', 'f64', 'bool', 'usize', '()'}
+
+def _str_to_rs_type(s: str) -> RsType:
+    """将 jvm_to_rust 返回的字符串转换为 RsType 节点。"""
+    if s in _PRIMITIVE_TYPES:
+        return RsPrimitive(s)
+    return RsNamed(s)
 
 
-def _infer_rust_type(expr: str) -> str:
-    """从 Rust 表达式推断基础类型。"""
-    if re.match(r'-?\d+i32$', expr):
-        return 'i32'
-    if re.match(r'-?\d+i64$', expr):
-        return 'i64'
-    if re.match(r'-?\d+\.\d*f64$', expr) or re.match(r'^\d+f64$', expr):
-        return 'f64'
-    if re.match(r'-?\d+\.\d*f32$', expr) or re.match(r'^\d+f32$', expr):
-        return 'f32'
-    if expr.startswith('String::from') or expr.startswith('String::new()'):
-        return 'String'
-    if expr in ('true', 'false'):
-        return 'bool'
-    return ''
+def _analyze_mutation(stmts):
+    """扫描 AssignStmt 目标，将对应的 LetStmt.mutable 设为 True。
 
-
-def _fix_coll_types(lines: list[str]) -> list[str]:
-    """后处理：从 add/put 调用推断集合元素类型，修正默认 String 泛型参数。"""
-    result = list(lines)
-
-    # 收集 varname → (集合类型, 声明行索引)
-    coll_vars: dict[str, tuple[str, int]] = {}
-    for i, line in enumerate(result):
-        m = re.match(r'\s*let\s+(?:mut\s+)?(\w+)\s*:\s*(ArrayList|HashMap|HashSet)<', line)
-        if m:
-            coll_vars[m.group(1)] = (m.group(2), i)
-
-    for var, (ctype, decl_idx) in coll_vars.items():
-        vr = re.escape(var)
-
-        if ctype == 'ArrayList':
-            # 从 var.add(EXPR) 推断元素类型
-            elem = None
-            for line in result:
-                m = re.search(rf'\b{vr}\.add\((.+?)\)\??', line)
-                if m:
-                    elem = _infer_rust_type(m.group(1).strip())
-                    if elem:
-                        break
-            if elem and elem != 'String':
-                result[decl_idx] = re.sub(
-                    r'ArrayList<String>',
-                    f'ArrayList<{elem}>',
-                    result[decl_idx].replace(
-                        'ArrayList::<String>::new()',
-                        f'ArrayList::<{elem}>::new()'
-                    )
-                )
-                # 修正 get 返回类型标注（let _e0: String = var.get(...)）
-                for j in range(len(result)):
-                    result[j] = re.sub(
-                        rf'(let \w+): String = ({vr}\.get\()',
-                        rf'\1: {elem} = \2',
-                        result[j]
-                    )
-
-        elif ctype == 'HashMap':
-            # 从 var.put(K, V) 推断 V 类型
-            val_elem = None
-            for line in result:
-                m = re.search(rf'\b{vr}\.put\(\s*.+?\s*,\s*(.+?)\s*\);', line)
-                if m:
-                    val_elem = _infer_rust_type(m.group(1).strip())
-                    if val_elem:
-                        break
-            if val_elem and val_elem != 'String':
-                result[decl_idx] = re.sub(
-                    r'HashMap<String, String>',
-                    f'HashMap<String, {val_elem}>',
-                    result[decl_idx].replace(
-                        'HashMap::<String, String>::new()',
-                        f'HashMap::<String, {val_elem}>::new()'
-                    )
-                )
-
-        elif ctype == 'HashSet':
-            # 从 var.add(EXPR) 推断元素类型
-            elem = None
-            for line in result:
-                m = re.search(rf'\b{vr}\.add\((.+?)\);', line)
-                if m:
-                    elem = _infer_rust_type(m.group(1).strip())
-                    if elem:
-                        break
-            if elem and elem != 'String':
-                result[decl_idx] = re.sub(
-                    r'HashSet<String>',
-                    f'HashSet<{elem}>',
-                    result[decl_idx].replace(
-                        'HashSet::<String>::new()',
-                        f'HashSet::<{elem}>::new()'
-                    )
-                )
-
-    return result
-
-
-def _merge_aliases(lines: list[str]) -> list[str]:
-    """合并冗余别名：let T a = init; let T b = a;  →  let T b = init;"""
-    result = list(lines)
-    i = 0
-    while i < len(result) - 1:
-        m1 = re.match(r'(\s*)let(?:\s+mut)? (_\w+): (.+?) = (.+);', result[i])
-        m2 = re.match(r'(\s*)let(?:\s+mut)? (\w+): .+? = (\w+);', result[i + 1])
-        if m1 and m2 and m1.group(2) == m2.group(3):
-            src = m1.group(2)
-            # 只在没有其他引用时合并
-            other = sum(
-                1 for j, l in enumerate(result)
-                if j != i and j != i + 1 and re.search(r'\b' + re.escape(src) + r'\b', l)
-            )
-            if other == 0:
-                indent   = m2.group(1)
-                new_name = m2.group(2)
-                ty_str   = m1.group(3)
-                init_str = m1.group(4)
-                result[i + 1] = f'{indent}let mut {new_name}: {ty_str} = {init_str};'
-                result.pop(i)
-                continue
-        i += 1
-    return result
-
-
-def _simplify_wrapping_add(lines: list[str]) -> list[str]:
-    """var = var.wrapping_add(N);  →  var += N;"""
-    result = []
-    for line in lines:
-        m = re.match(r'(\s*)(\w+) = \2\.wrapping_add\((\d+)i32\);', line)
-        if m:
-            result.append(f'{m.group(1)}{m.group(2)} += {m.group(3)};')
-        else:
-            result.append(line)
-    return result
-
-
-def _remove_unnecessary_mut(lines: list[str]) -> list[str]:
-    """删除从未被突变的 let mut 声明中的 mut。
-
-    突变包括：赋值操作和需要 &mut self 的方法调用（如 append）。
-    注意：Field<T>::set / ArrayList::add 等使用内部可变性，不需要 mut。
+    递归处理 IfStmt / LoopStmt 内部语句。
     """
-    result = list(lines)
-    for i, line in enumerate(result):
-        m = re.match(r'(\s*)let mut (\w+)(?:\s*:|\s*=)', line)
-        if not m:
-            continue
-        var = m.group(2)
-        var_re = re.escape(var)
-        mutated = any(
-            # 赋值：var = / var += / var -= / ...
-            re.search(rf'(?<![:\w\.]){var_re}\s*(?:\+|-|\*|/)?\s*=\s*(?!=)', result[j]) or
-            # 数组索引赋值：var[...] = value
-            re.search(rf'\b{var_re}\s*\[.*\]\s*=', result[j]) or
-            # &mut self 方法调用（append 修改 String/StringBuilder）
-            re.search(rf'\b{var_re}\.(push|push_str|append|append_str|extend|truncate|drain|reverse|sort|retain|reserve)\s*\(', result[j])
-            for j in range(i + 1, len(result))
-        )
-        if not mutated:
-            result[i] = re.sub(r'\blet mut\b', 'let', line, count=1)
-    return result
+    assigned: set[str] = set()
+
+    def collect(ss):
+        for stmt in ss:
+            if isinstance(stmt, AssignStmt) and isinstance(stmt.target, Var):
+                assigned.add(stmt.target.name)
+            if isinstance(stmt, IfStmt):
+                collect(stmt.then)
+                collect(stmt.else_)
+            if isinstance(stmt, LoopStmt):
+                collect(stmt.body)
+
+    collect(stmts)
+
+    def mark(ss):
+        for stmt in ss:
+            if isinstance(stmt, LetStmt) and stmt.name in assigned:
+                stmt.mutable = True
+            if isinstance(stmt, IfStmt):
+                mark(stmt.then)
+                mark(stmt.else_)
+            if isinstance(stmt, LoopStmt):
+                mark(stmt.body)
+
+    mark(stmts)
 
 
 def _remove_trailing_return_ok(lines: list[str]) -> list[str]:
@@ -222,12 +103,6 @@ def _add_ok_return(lines: list[str], rust_ret: str) -> list[str]:
                     pass
                 break
     return result
-
-
-def _simplify_format_in_println(lines: list[str]) -> list[str]:
-    """System::out().println(format!("X {}", y))  →  System::out().println(format!("X {}", y))
-    （目前已无 println! 宏，此函数保留备用）"""
-    return lines
 
 
 TWO_OP_CMP = frozenset({
@@ -292,10 +167,15 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
         else:
             sig += " -> Result<()>"
 
-    sim = StackSim(rust_param_types, is_static, method.class_name, local_names)
+    rust_param_type_nodes = [_str_to_rs_type(t) for t in rust_param_types]
+    sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
+
+    # entries: list of (indent: str, item: RsStmt | str)
+    # - str 条目是已缩进的原始代码行（loop {, if cond { break; }, } 等）
+    # - RsStmt 条目是 IR 节点，等待 mutation 分析后再渲染
+    entries: list = []
 
     # ── 构造器：创建 this ───────────────────────────────────────────
-    lines: list[str] = []
     if is_ctor:
         inst_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
         if inst_fields:
@@ -306,16 +186,16 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
             struct_init = f"Self {{ {field_inits} }}"
         else:
             struct_init = "Self {}"
-        lines.append(f"    let this = {struct_init};")
-        sim.locals[0] = ('this', method.class_name, False)
+        entries.append(('', f"    let this = {struct_init};"))
+        sim.locals[0] = ('this', RsNamed(method.class_name), False)
 
     elif not is_static:
         # 实例方法：绑定 this = self，供字节码（aload_0 + getfield/putfield）使用
-        lines.append("    let this = self;")
+        entries.append(('', "    let this = self;"))
 
     def flush(s: StackSim):
         for stmt in s.stmts:
-            lines.append('    ' + render_stmt(stmt).lstrip())
+            entries.append(('    ', stmt))
         s.stmts.clear()
 
     # ── 指令主循环 ──────────────────────────────────────────────────
@@ -326,37 +206,37 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
         # 循环头
         if i in loop_map:
             lp = loop_map[i]
-            lines.append("    loop {")
+            entries.append(('', "    loop {"))
 
-            pre_sim = StackSim(rust_param_types, is_static, method.class_name, local_names)
+            pre_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
             pre_sim.locals = dict(sim.locals)
             for k in range(lp.start_idx, lp.cond_idx):
                 sim_instr(instrs[k], pre_sim, method.class_name)
             sim.locals = pre_sim.locals
             for s in pre_sim.stmts:
-                lines.append("        " + render_stmt(s).lstrip())
+                entries.append(('        ', s))
 
             ci_ins   = instrs[lp.cond_idx]
-            cond_sim = StackSim(rust_param_types, is_static, method.class_name, local_names)
+            cond_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
             cond_sim.locals = dict(sim.locals)
             cond_sim.stack  = list(pre_sim.stack)
             if ci_ins.opcode in TWO_OP_CMP:
-                b, _ = cond_sim.pop_str(); a, _ = cond_sim.pop_str()
-                cond = cmp_op(ci_ins.opcode, a, b)
+                b_expr, _ = cond_sim.pop(); a_expr, _ = cond_sim.pop()
+                cond = cmp_op(ci_ins.opcode, render_expr(a_expr), render_expr(b_expr))
             else:
-                a, _ = cond_sim.pop_str()
-                cond = cmp_op(ci_ins.opcode, a, '')
-            lines.append(f"        if {cond} {{ break; }}")
+                a_expr, _ = cond_sim.pop()
+                cond = cmp_op(ci_ins.opcode, render_expr(a_expr), '')
+            entries.append(('', f"        if {cond} {{ break; }}"))
 
-            body_sim = StackSim(rust_param_types, is_static, method.class_name, local_names)
+            body_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
             body_sim.locals = dict(sim.locals)
             for k in range(lp.cond_idx + 1, lp.end_idx):
                 sim_instr(instrs[k], body_sim, method.class_name)
             sim.locals = body_sim.locals
             for s in body_sim.stmts:
-                lines.append("        " + render_stmt(s).lstrip())
+                entries.append(('        ', s))
 
-            lines.append("    }")
+            entries.append(('', "    }"))
             i = lp.end_idx + 1
             continue
 
@@ -364,6 +244,18 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
         sim_instr(ins, sim, method.class_name)
         flush(sim)
         i += 1
+
+    # ── IR mutation 分析（渲染前）────────────────────────────────────
+    ir_stmts = [item for _, item in entries if not isinstance(item, str)]
+    _analyze_mutation(ir_stmts)
+
+    # ── 渲染 entries → lines ─────────────────────────────────────────
+    lines: list[str] = []
+    for indent, item in entries:
+        if isinstance(item, str):
+            lines.append(item)
+        else:
+            lines.append(indent + render_stmt(item).lstrip())
 
     # ── 构造器末尾返回 Ok(this) ────────────────────────────────────
     if is_ctor:
@@ -376,10 +268,5 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
         lines = _remove_trailing_return_ok(lines)
         lines = _add_ok_return(lines, rust_ret)
 
-    lines = _fix_coll_types(lines)
-    lines = _merge_aliases(lines)
-    lines = _simplify_wrapping_add(lines)
-    lines = _remove_unnecessary_mut(lines)
-    lines = _simplify_format_in_println(lines)
     body = '\n'.join(lines)
     return f"{sig} {{\n{body}\n}}"

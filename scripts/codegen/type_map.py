@@ -36,12 +36,12 @@ NEWARRAY_TYPES: dict[str, tuple[str, str]] = {
 # JDK 集合类 → (Rust 类型, 初始化表达式)
 # 所有集合类型用 java::util 的同构类型；初始化用 new()? 因为返回 Result
 JDK_COLL_TYPES: dict[str, tuple[str, str]] = {
-    'ArrayList':           ('ArrayList<String>',        'ArrayList::<String>::new()?'),
-    'java/util/ArrayList': ('ArrayList<String>',        'ArrayList::<String>::new()?'),
-    'HashMap':             ('HashMap<String, String>',  'HashMap::<String, String>::new()?'),
-    'java/util/HashMap':   ('HashMap<String, String>',  'HashMap::<String, String>::new()?'),
-    'HashSet':             ('HashSet<String>',          'HashSet::<String>::new()?'),
-    'java/util/HashSet':   ('HashSet<String>',          'HashSet::<String>::new()?'),
+    'ArrayList':           ('ArrayList<_>',        'ArrayList::<_>::new()?'),
+    'java/util/ArrayList': ('ArrayList<_>',        'ArrayList::<_>::new()?'),
+    'HashMap':             ('HashMap<_, _>',       'HashMap::<_, _>::new()?'),
+    'java/util/HashMap':   ('HashMap<_, _>',       'HashMap::<_, _>::new()?'),
+    'HashSet':             ('HashSet<_>',          'HashSet::<_>::new()?'),
+    'java/util/HashSet':   ('HashSet<_>',          'HashSet::<_>::new()?'),
 }
 
 # 已知 JDK 类名（短名，无包路径）

@@ -8,10 +8,11 @@ render_item / render_stmt / render_expr / render_type 递归将 IR 树转为字�
 from __future__ import annotations
 from .rs_ir import (
     # 类型
-    RsPrimitive, RsNamed, RsRef, RsSlice, RsGeneric, RsTuple,
+    RsPrimitive, RsNamed, RsRef, RsSlice, RsGeneric, RsTuple, RsInfer,
     # 表达式
     Lit, Var, BinOp, UnOp, Call, MethodCall, FieldAccess, Index,
     Cast, RefExpr, DerefExpr, BlockExpr, IfExpr, MacroExpr, RawExpr,
+    NewPendingExpr, StaticFieldRef,
     # 语句
     LetStmt, AssignStmt, ExprStmt, ReturnStmt,
     BreakStmt, ContinueStmt, LoopStmt, IfStmt, RawStmt,
@@ -47,6 +48,8 @@ def render_type(ty) -> str:
         if not ty.elems:
             return '()'
         return '(' + ', '.join(render_type(e) for e in ty.elems) + ')'
+    if isinstance(ty, RsInfer):
+        return '_'
     # 兜底：str 原样
     return str(ty)
 
@@ -118,6 +121,12 @@ def render_expr(expr) -> str:
             args = ', '.join(expr.args)
             return f'{expr.name}!({args})'
         return f'{expr.name}!()'
+    if isinstance(expr, NewPendingExpr):
+        simple_name = expr.class_name.rsplit('/', 1)[-1]
+        return f'{simple_name}::new()'
+    if isinstance(expr, StaticFieldRef):
+        simple_name = expr.class_name.rsplit('/', 1)[-1]
+        return f'{simple_name}::{expr.field_name}()'
     if isinstance(expr, RawExpr):
         return expr.code
     return f'/* unknown expr {type(expr).__name__} */'

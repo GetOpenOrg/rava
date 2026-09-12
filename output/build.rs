@@ -1,7 +1,7 @@
 /// build.rs — 自动扫描生成的 .rs 文件，维护 native_status.toml
 ///
 /// 职责：
-///   1. 扫描 src/ 下所有 .rs 文件，提取 @java_class / @java_native 注释
+///   1. 扫描 src/ 下所有 .rs 文件，提取 #[java_class] / #[java_native] 属性
 ///   2. 扫描 native_impls/ 目录，对照已实现的方法
 ///   3. 更新 native_status.toml：implemented / needed / stub / not-needed
 ///   4. 打印 "needed" 状态的 native 方法清单（警告，不阻断构建）
@@ -96,23 +96,46 @@ fn scan_native_methods(src_dir: &Path) -> Vec<NativeMethod> {
 }
 
 fn parse_native_comments(content: &str, out: &mut Vec<NativeMethod>) {
-    // 当前所在的类（从最近的 @java_class 注释提取）
+    // 当前所在的类（从最近的 java_class 属性提取 binary_name）
+    //
+    // 支持两种格式：
+    //   #[java_class(...)]                      — JDK 元数据存根（不参与编译）
+    //   #[cfg_attr(any(), java_class(...))]     — 编译期用户类文件（cfg_attr 包裹避免编译错误）
     let mut current_class = String::new();
+    let mut in_class_attr = false;
+    let mut class_attr_buf = String::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // 匹配类声明注释：// @java_class(name="...", ...)
-        if let Some(rest) = trimmed.strip_prefix("// @java_class(") {
-            if let Some(name) = extract_attr(rest, "name") {
-                current_class = name;
-            }
+        // 检测 java_class 属性开始（支持两种前缀）
+        let is_class_attr_start = trimmed.starts_with("#[java_class(")
+            || trimmed.starts_with("#[cfg_attr(any(), java_class(");
+
+        if is_class_attr_start {
+            in_class_attr = true;
+            class_attr_buf = trimmed.to_owned();
+        } else if in_class_attr {
+            class_attr_buf.push(' ');
+            class_attr_buf.push_str(trimmed);
         }
 
-        // 匹配 native 方法注释：// @java_native(name="...", descriptor="...", ...)
-        if let Some(rest) = trimmed.strip_prefix("// @java_native(") {
-            if let Some(method) = extract_attr(rest, "name") {
-                let descriptor = extract_attr(rest, "descriptor").unwrap_or_default();
+        // 检测属性块结束（含 )]）
+        if in_class_attr && class_attr_buf.contains(")]") {
+            if let Some(name) = extract_attr(&class_attr_buf, "binary_name") {
+                current_class = name;
+            }
+            in_class_attr = false;
+            class_attr_buf.clear();
+        }
+
+        // 检测 java_native 属性（单行，支持两种前缀）
+        let is_native_attr = trimmed.starts_with("#[java_native(")
+            || trimmed.starts_with("#[cfg_attr(any(), java_native(");
+
+        if is_native_attr {
+            if let Some(method) = extract_attr(trimmed, "name") {
+                let descriptor = extract_attr(trimmed, "descriptor").unwrap_or_default();
                 if !current_class.is_empty() {
                     out.push(NativeMethod {
                         class: current_class.clone(),
@@ -126,7 +149,8 @@ fn parse_native_comments(content: &str, out: &mut Vec<NativeMethod>) {
 }
 
 fn extract_attr(s: &str, key: &str) -> Option<String> {
-    let pattern = format!("{}=\"", key);
+    // 匹配 key = "value" 格式（属性风格）
+    let pattern = format!("{} = \"", key);
     let start = s.find(&pattern)? + pattern.len();
     let end = s[start..].find('"')? + start;
     Some(s[start..end].to_owned())

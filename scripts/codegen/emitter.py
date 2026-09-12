@@ -6,7 +6,7 @@ Rust 文件生成器：将 ClassInfo 列表写出为 Cargo 项目，
 - 生成代码使用 java_runtime prelude（String, ArrayList, Field 等）
 - struct 直接包含 Field<T> 字段，不生成 raw:: 子模块
 - 所有方法返回 Result<T>
-- 每个类/字段/方法携带 // @java_class / @java_field / @java_method 注释，
+- 每个类/字段/方法携带 #[java_class] / #[java_field] / #[java_method] 属性，
   供 build.rs 自动解析继承链与 native 状态
 """
 
@@ -82,51 +82,55 @@ def _access_str(flags: int) -> str:
     return ' '.join(parts)
 
 
-def _java_class_attr(ci: ClassInfo) -> str:
-    """生成 // @java_class(...) 注释行，供 build.rs 解析类层次。"""
-    parts = [f'name="{ci.name}"']
-    if ci.super_class:
-        parts.append(f'super="{ci.super_class}"')
-    if ci.interfaces:
-        ifaces = ','.join(ci.interfaces)
-        parts.append(f'interfaces="{ifaces}"')
-    if ci.access_flags:
-        parts.append(f'access="{_access_str(ci.access_flags)}"')
-    if ci.is_interface:
-        parts.append('kind="interface"')
-    elif ci.is_enum:
-        parts.append('kind="enum"')
-    elif ci.is_abstract:
-        parts.append('kind="abstract"')
-    if ci.generic_signature:
-        parts.append(f'signature="{ci.generic_signature}"')
-    if ci.source_file:
-        parts.append(f'source="{ci.source_file}"')
-    return '// @java_class(' + ', '.join(parts) + ')'
+def _java_class_attr(ci: ClassInfo, compiled: bool = False) -> str:
+    """生成 #[java_class(...)] 属性块，供 build.rs 解析类层次。
+
+    compiled=True：包裹在 cfg_attr(any(), ...) 内，用于参与 Rust 编译的用户类文件，
+    避免未注册属性导致的编译错误（any() 永远为 false，inner attr 不被校验）。
+    compiled=False：原生属性格式，用于不参与编译的 JDK 元数据存根文件。
+    """
+    binary_name = ci.name
+    super_class = ci.super_class or ""
+    interfaces  = ','.join(ci.interfaces) if ci.interfaces else ""
+    access      = _access_str(ci.access_flags) if ci.access_flags else ""
+    source      = ci.source_file or ""
+    inner_lines = [
+        f'    binary_name = "{binary_name}",',
+        f'    super_class = "{super_class}",',
+        f'    interfaces  = "{interfaces}",',
+        f'    access      = "{access}",',
+        f'    source      = "{source}",',
+    ]
+    inner = '\n'.join(inner_lines)
+    if compiled:
+        return f'#[cfg_attr(any(), java_class(\n{inner}\n))]'
+    else:
+        return f'#[java_class(\n{inner}\n)]'
 
 
 def _java_field_attr(f: FieldInfo) -> str:
-    """生成 // @java_field(...) 注释行。"""
-    parts = [f'name="{f.name}"', f'descriptor="{f.descriptor}"']
+    """生成 #[cfg_attr(any(), java_field(...))] 属性行（编译安全）。"""
+    parts = [f'name = "{f.name}"', f'descriptor = "{f.descriptor}"']
     if f.access_flags:
-        parts.append(f'access="{_access_str(f.access_flags)}"')
-    if f.generic_signature:
-        parts.append(f'signature="{f.generic_signature}"')
-    return '// @java_field(' + ', '.join(parts) + ')'
+        parts.append(f'access = "{_access_str(f.access_flags)}"')
+    return '#[cfg_attr(any(), java_field(' + ', '.join(parts) + '))]'
 
 
-def _java_method_attr(m: ParsedMethod) -> str:
-    """生成 // @java_method(...) 或 // @java_native(...) 注释行。"""
-    tag = '@java_native' if (m.is_native or m.is_abstract) else '@java_method'
-    parts = [f'name="{m.name}"', f'descriptor="{m.descriptor}"']
+def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
+    """生成 #[java_method(...)] 或 #[java_native(...)] 属性行。
+
+    compiled=True：包裹在 cfg_attr(any(), ...) 内，防止编译错误。
+    compiled=False：原生属性格式，用于不参与编译的 JDK 元数据存根文件。
+    """
+    tag = 'java_native' if (m.is_native or m.is_abstract) else 'java_method'
+    parts = [f'name = "{m.name}"', f'descriptor = "{m.descriptor}"']
     if m.access_flags:
-        parts.append(f'access="{_access_str(m.access_flags)}"')
-    if m.exceptions:
-        excs = ','.join(m.exceptions)
-        parts.append(f'exceptions="{excs}"')
-    if m.generic_signature:
-        parts.append(f'signature="{m.generic_signature}"')
-    return f'// {tag}(' + ', '.join(parts) + ')'
+        parts.append(f'access = "{_access_str(m.access_flags)}"')
+    inner = f'{tag}(' + ', '.join(parts) + ')'
+    if compiled:
+        return f'#[cfg_attr(any(), {inner})]'
+    else:
+        return f'#[{inner}]'
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo) -> str:
@@ -170,20 +174,23 @@ def _jdk_class_file_path(src_dir: str, binary_name: str) -> str:
 
 
 def _gen_jdk_class_rs(ci: ClassInfo) -> str:
-    """为 JDK 类生成元数据注释文件。
+    """为 JDK 类生成元数据属性文件。
 
-    文件仅含 // @java_class / @java_native 注释，供 build.rs 扫描维护
+    文件使用 #[java_class] / #[java_native] 属性格式，供 build.rs 扫描维护
     native_status.toml，不参与 Rust 模块编译（无 mod 声明引用此路径）。
     """
     lines = [
-        "// 此文件由 java_rta 自动生成，仅供 build.rs 扫描 Java 元数据。",
-        "// 不参与 Rust 模块编译。",
+        "// 此文件由 java_rta 自动生成，仅供 build.rs 扫描。不参与 Rust 模块编译。",
         "",
         _java_class_attr(ci),
+        "struct _JavaClassMarker;",
     ]
     for m in ci.methods:
         if m.is_native:  # 只记录真正的 native 方法，abstract 接口方法不需要 native 实现
+            lines.append("")
             lines.append(_java_method_attr(m))
+            sanitized = m.name.replace('<', '_').replace('>', '_')
+            lines.append(f"fn _{sanitized}() {{}}")
     return '\n'.join(lines) + '\n'
 
 
@@ -200,7 +207,7 @@ def _gen_class_rs(ci: ClassInfo) -> str:
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
         "use crate::java_runtime::prelude::*;",
         "",
-        _java_class_attr(ci),
+        _java_class_attr(ci, compiled=True),
     ]
 
     inst_fields = [f for f in ci.fields if not f.is_static]
@@ -209,7 +216,7 @@ def _gen_class_rs(ci: ClassInfo) -> str:
     if inst_fields:
         field_lines = []
         for f in inst_fields:
-            field_lines.append(_java_field_attr(f))
+            field_lines.append("    " + _java_field_attr(f))
             field_lines.append(f"    pub {f.name}: Field<{jvm_to_rust(f.descriptor)}>,")
         decls = '\n'.join(field_lines)
         parts.append(f"pub struct {ci.name} {{\n{decls}\n}}\n")
@@ -220,7 +227,7 @@ def _gen_class_rs(ci: ClassInfo) -> str:
     for m in ci.methods:
         if m.name == '<clinit>':
             continue
-        attr_line = _java_method_attr(m)
+        attr_line = _java_method_attr(m, compiled=True)
         if m.is_native or m.is_abstract:
             stub = _gen_native_stub(m, ci)
             method_blocks.append(attr_line + '\n' + stub)

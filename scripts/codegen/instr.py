@@ -11,7 +11,14 @@ JVM 字节码指令 → Rust 语句转换。
 """
 
 import re
-from .stack import StackSim
+from .stack import StackSim, I32, I64, F32, F64, BOOL, UNIT
+from .rs_ir import (
+    Lit, Var, BinOp, UnOp, Call, MethodCall, FieldAccess, Index,
+    Cast, RawExpr, RawStmt, LetStmt, AssignStmt, ExprStmt, ReturnStmt,
+    IfStmt, LoopStmt, BreakStmt, RsNamed, RsGeneric, RsRef, RsSlice, RsInfer,
+    NewPendingExpr, StaticFieldRef,
+)
+from .render import render_expr, render_type
 from .type_map import (
     jvm_to_rust, sig_type, is_jdk, short_cls,
     NEWARRAY_TYPES, JDK_COLL_TYPES,
@@ -59,6 +66,25 @@ def _parse_slot(op: str, operand: str) -> int:
     return int(operand.strip()) if operand else 0
 
 
+def _parse_field_ref(comment: str) -> tuple[str, str, str]:
+    """解析 'Field java/lang/System.out:Ljava/io/PrintStream;' 格式。
+    返回 (class_binary_name, field_name, descriptor)。"""
+    comment = comment.strip()
+    for prefix in ('Field ', 'InterfaceField '):
+        if comment.startswith(prefix):
+            comment = comment[len(prefix):]
+    # 格式：java/lang/System.out:Ljava/io/PrintStream;
+    if ':' in comment:
+        ref_part, descriptor = comment.split(':', 1)
+    else:
+        ref_part, descriptor = comment, 'Ljava/lang/Object;'
+    if '.' in ref_part:
+        cls, field = ref_part.rsplit('.', 1)
+    else:
+        cls, field = '', ref_part
+    return cls, field, descriptor
+
+
 # ── 主分发函数 ────────────────────────────────────────────────────
 
 def sim_instr(ins: Instr, sim: StackSim, class_name: str):
@@ -67,90 +93,138 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str):
     comment = ins.comment or ''
 
     # ── 整型常量 ──
-    if   op == 'iconst_m1':                      sim.push('-1i32')
-    elif op.startswith('iconst_'):               sim.push(f"{op[-1]}i32")
-    elif op in ('lconst_0', 'lconst_1'):         sim.push(f"{op[-1]}i64", 'i64')
-    elif op in ('fconst_0', 'fconst_1', 'fconst_2'): sim.push(f"{op[-1]}f32", 'f32')
-    elif op in ('dconst_0', 'dconst_1'):         sim.push(f"{op[-1]}f64", 'f64')
-    elif op == 'bipush':                         sim.push(f"{operand}i32")
-    elif op == 'sipush':                         sim.push(f"{operand}i32")
+    if   op == 'iconst_m1':                      sim.push(Lit('-1i32'), I32)
+    elif op.startswith('iconst_'):               sim.push(Lit(f"{op[-1]}i32"), I32)
+    elif op in ('lconst_0', 'lconst_1'):         sim.push(Lit(f"{op[-1]}i64"), I64)
+    elif op in ('fconst_0', 'fconst_1', 'fconst_2'): sim.push(Lit(f"{op[-1]}f32"), F32)
+    elif op in ('dconst_0', 'dconst_1'):         sim.push(Lit(f"{op[-1]}f64"), F64)
+    elif op == 'bipush':                         sim.push(Lit(f"{operand}i32"), I32)
+    elif op == 'sipush':                         sim.push(Lit(f"{operand}i32"), I32)
     elif op == 'ldc':
         if operand.startswith('"'):
             # 字符串字面量 → java.lang.String
-            sim.push(f"String::from({operand})", 'String')
+            sim.push(Lit(f"String::from({operand})"), RsNamed('String'))
         elif comment.startswith('String '):
             lit = comment[7:].strip()
-            sim.push(f'String::from("{lit}")', 'String')
-        elif comment.startswith('int '):    sim.push(comment[4:].strip() + 'i32')
-        elif comment.startswith('float '): sim.push(comment[6:].strip() + 'f32', 'f32')
-        elif comment.startswith('long '):  sim.push(comment[5:].strip() + 'i64', 'i64')
-        elif comment.startswith('double '): sim.push(comment[7:].strip() + 'f64', 'f64')
-        else: sim.push(f"{operand}i32")
+            sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
+        elif comment.startswith('int '):    sim.push(Lit(comment[4:].strip() + 'i32'), I32)
+        elif comment.startswith('float '): sim.push(Lit(comment[6:].strip() + 'f32'), F32)
+        elif comment.startswith('long '):  sim.push(Lit(comment[5:].strip() + 'i64'), I64)
+        elif comment.startswith('double '): sim.push(Lit(comment[7:].strip() + 'f64'), F64)
+        else: sim.push(Lit(f"{operand}i32"), I32)
     elif op in ('ldc2_w', 'ldc_w'):
-        if comment.startswith('long '):   sim.push(comment[5:].strip() + 'i64', 'i64')
-        elif comment.startswith('double '): sim.push(comment[7:].strip() + 'f64', 'f64')
+        if comment.startswith('long '):   sim.push(Lit(comment[5:].strip() + 'i64'), I64)
+        elif comment.startswith('double '): sim.push(Lit(comment[7:].strip() + 'f64'), F64)
         elif comment.startswith('String '):
             lit = comment[7:].strip()
-            sim.push(f'String::from("{lit}")', 'String')
-        else: sim.push(f"{operand}i32")
+            sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
+        else: sim.push(Lit(f"{operand}i32"), I32)
 
     # ── load ──
-    elif op.startswith('iload'): sim.push(*sim.load_local_str(_parse_slot(op, operand)))
-    elif op.startswith('lload'): e, _ = sim.load_local_str(_parse_slot(op, operand)); sim.push(e, 'i64')
-    elif op.startswith('fload'): e, _ = sim.load_local_str(_parse_slot(op, operand)); sim.push(e, 'f32')
-    elif op.startswith('dload'): e, _ = sim.load_local_str(_parse_slot(op, operand)); sim.push(e, 'f64')
-    elif op.startswith('aload'): sim.push(*sim.load_local_str(_parse_slot(op, operand)))
+    elif op.startswith('iload'): sim.push(*sim.load_local(_parse_slot(op, operand)))
+    elif op.startswith('lload'): e, _ = sim.load_local(_parse_slot(op, operand)); sim.push(e, I64)
+    elif op.startswith('fload'): e, _ = sim.load_local(_parse_slot(op, operand)); sim.push(e, F32)
+    elif op.startswith('dload'): e, _ = sim.load_local(_parse_slot(op, operand)); sim.push(e, F64)
+    elif op.startswith('aload'): sim.push(*sim.load_local(_parse_slot(op, operand)))
 
     # ── store ──
-    elif op.startswith('istore'): e, _ = sim.pop_str(); sim.store_local(_parse_slot(op, operand), e, 'i32')
-    elif op.startswith('lstore'): e, _ = sim.pop_str(); sim.store_local(_parse_slot(op, operand), e, 'i64')
-    elif op.startswith('fstore'): e, _ = sim.pop_str(); sim.store_local(_parse_slot(op, operand), e, 'f32')
-    elif op.startswith('dstore'): e, _ = sim.pop_str(); sim.store_local(_parse_slot(op, operand), e, 'f64')
+    elif op.startswith('istore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, I32)
+    elif op.startswith('lstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, I64)
+    elif op.startswith('fstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F32)
+    elif op.startswith('dstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F64)
     elif op.startswith('astore'):
-        e, ty = sim.pop_str()
-        sim.store_local(_parse_slot(op, operand), e, ty or 'JvmObject')
+        e, ty = sim.pop()
+        sim.store_local(_parse_slot(op, operand), e, ty)
 
     # ── 整数算术 ──
-    elif op == 'iadd': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}).wrapping_add({b})")
-    elif op == 'isub': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}).wrapping_sub({b})")
-    elif op == 'imul': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}).wrapping_mul({b})")
-    elif op == 'idiv': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}/{b})")
-    elif op == 'irem': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}%{b})")
-    elif op == 'ineg': a,_=sim.pop_str();sim.push(f"({a}).wrapping_neg()")
-    elif op == 'ishl': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}<<({b}&0x1f))")
-    elif op == 'ishr': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}>>({b}&0x1f))")
-    elif op == 'iushr': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"(({a} as u32>>({b}&0x1f)) as i32)")
-    elif op == 'iand': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}&{b})")
-    elif op == 'ior':  b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}|{b})")
-    elif op == 'ixor': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}^{b})")
+    elif op == 'iadd':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_add({render_expr(b)})"), I32)
+    elif op == 'isub':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_sub({render_expr(b)})"), I32)
+    elif op == 'imul':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_mul({render_expr(b)})"), I32)
+    elif op == 'idiv':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}/{render_expr(b)})"), I32)
+    elif op == 'irem':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}%{render_expr(b)})"), I32)
+    elif op == 'ineg':
+        a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_neg()"), I32)
+    elif op == 'ishl':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}<<({render_expr(b)}&0x1f))"), I32)
+    elif op == 'ishr':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}>>(({render_expr(b)}&0x1f)))"), I32)
+    elif op == 'iushr':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"(({render_expr(a)} as u32>>({render_expr(b)}&0x1f)) as i32)"), I32)
+    elif op == 'iand':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}&{render_expr(b)})"), I32)
+    elif op == 'ior':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}|{render_expr(b)})"), I32)
+    elif op == 'ixor':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}^{render_expr(b)})"), I32)
     elif op == 'iinc':
         parts = operand.replace(',', ' ').split()
         slot, delta = int(parts[0]), int(parts[1])
-        name, _, _ = sim.locals.get(slot, (f"local_{slot}", 'i32', True))
-        if delta >= 0: sim.emit(f"    {name} = {name}.wrapping_add({delta}i32);")
-        else:          sim.emit(f"    {name} = {name}.wrapping_sub({-delta}i32);")
-    elif op == 'ladd': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}).wrapping_add({b})", 'i64')
-    elif op == 'lsub': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}).wrapping_sub({b})", 'i64')
-    elif op == 'lmul': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}).wrapping_mul({b})", 'i64')
-    elif op == 'ldiv': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}/{b})", 'i64')
-    elif op == 'fadd': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}+{b})", 'f32')
-    elif op == 'fsub': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}-{b})", 'f32')
-    elif op == 'fmul': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}*{b})", 'f32')
-    elif op == 'fdiv': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}/{b})", 'f32')
-    elif op == 'dadd': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}+{b})", 'f64')
-    elif op == 'dsub': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}-{b})", 'f64')
-    elif op == 'dmul': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}*{b})", 'f64')
-    elif op == 'ddiv': b,_=sim.pop_str();a,_=sim.pop_str();sim.push(f"({a}/{b})", 'f64')
+        name, _, _ = sim.locals.get(slot, (f"local_{slot}", I32, True))
+        if delta >= 0: sim.emit(RawStmt(f"{name} = {name}.wrapping_add({delta}i32);"))
+        else:          sim.emit(RawStmt(f"{name} = {name}.wrapping_sub({-delta}i32);"))
+    elif op == 'ladd':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_add({render_expr(b)})"), I64)
+    elif op == 'lsub':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_sub({render_expr(b)})"), I64)
+    elif op == 'lmul':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_mul({render_expr(b)})"), I64)
+    elif op == 'ldiv':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}/{render_expr(b)})"), I64)
+    elif op == 'fadd':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}+{render_expr(b)})"), F32)
+    elif op == 'fsub':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}-{render_expr(b)})"), F32)
+    elif op == 'fmul':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}*{render_expr(b)})"), F32)
+    elif op == 'fdiv':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}/{render_expr(b)})"), F32)
+    elif op == 'dadd':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}+{render_expr(b)})"), F64)
+    elif op == 'dsub':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}-{render_expr(b)})"), F64)
+    elif op == 'dmul':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}*{render_expr(b)})"), F64)
+    elif op == 'ddiv':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}/{render_expr(b)})"), F64)
 
     # ── 类型转换 ──
-    elif op == 'i2l': a,_=sim.pop_str();sim.push(f"({a} as i64)", 'i64')
-    elif op == 'i2f': a,_=sim.pop_str();sim.push(f"({a} as f32)", 'f32')
-    elif op == 'i2d': a,_=sim.pop_str();sim.push(f"({a} as f64)", 'f64')
-    elif op == 'l2i': a,_=sim.pop_str();sim.push(f"({a} as i32)")
-    elif op == 'f2i': a,_=sim.pop_str();sim.push(f"({a} as i32)")
-    elif op == 'd2i': a,_=sim.pop_str();sim.push(f"({a} as i32)")
-    elif op == 'd2f': a,_=sim.pop_str();sim.push(f"({a} as f32)", 'f32')
-    elif op == 'f2d': a,_=sim.pop_str();sim.push(f"({a} as f64)", 'f64')
+    elif op == 'i2l': a, _ = sim.pop(); sim.push(Cast(a, I64), I64)
+    elif op == 'i2f': a, _ = sim.pop(); sim.push(Cast(a, F32), F32)
+    elif op == 'i2d': a, _ = sim.pop(); sim.push(Cast(a, F64), F64)
+    elif op == 'l2i': a, _ = sim.pop(); sim.push(Cast(a, I32), I32)
+    elif op == 'f2i': a, _ = sim.pop(); sim.push(Cast(a, I32), I32)
+    elif op == 'd2i': a, _ = sim.pop(); sim.push(Cast(a, I32), I32)
+    elif op == 'd2f': a, _ = sim.pop(); sim.push(Cast(a, F32), F32)
+    elif op == 'f2d': a, _ = sim.pop(); sim.push(Cast(a, F64), F64)
 
     # ── dup / pop ──
     elif op == 'dup':
@@ -161,20 +235,20 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str):
             sim.stack += [v1, v2, v1]
     elif op == 'pop':
         if sim.stack:
-            e, _ = sim.pop_str()
+            e_expr, _ = sim.pop()
+            e = render_expr(e_expr)
             # 只有在弹出的是有副作用的表达式时才发出 let _ = ...
             if any(c in e for c in ['(', 'push', 'insert']):
-                sim.emit(f"    let _ = {e};")
+                sim.emit(RawStmt(f"let _ = {e};"))
     elif op == 'pop2':
-        sim.pop_str()
-        if sim.stack: sim.pop_str()
+        sim.pop()
+        if sim.stack: sim.pop()
 
     # ── 对象创建 ──
     elif op == 'new':
         raw = (comment or operand).strip()
         if raw.startswith('class '): raw = raw[6:]
-        cls = short_cls(raw) or raw
-        sim.push(f"__new__{cls}__", f"__pending__{cls}")
+        sim.push(NewPendingExpr(raw), RsNamed(raw.split('/')[-1]))
 
     # ── invokespecial（含构造器）──
     elif op == 'invokespecial':
@@ -182,73 +256,80 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str):
 
     # ── 字段访问 ──
     elif op == 'getfield':
-        obj, obj_ty = sim.pop_str()
+        obj_expr, obj_ty = sim.pop()
         fm = re.search(r'Field\s+(?:\w+\.)?(\w+):(\S+)', comment)
         if fm:
             fname = fm.group(1)
             ftype = jvm_to_rust(fm.group(2))
             # 字段通过 Field<T>::get() 访问
-            sim.push(f"{obj}.{fname}.get()", ftype)
+            sim.push(RawExpr(f"{render_expr(obj_expr)}.{fname}.get()"), RsNamed(ftype))
         else:
-            sim.push(f"{obj}.field", 'i32')
+            sim.push(RawExpr(f"{render_expr(obj_expr)}.field"), I32)
 
     elif op == 'putfield':
-        val, _ = sim.pop_str()
-        obj, obj_ty = sim.pop_str()
+        val_expr, _ = sim.pop()
+        obj_expr, obj_ty = sim.pop()
         fm = re.search(r'Field\s+(?:\w+\.)?(\w+):(\S+)', comment)
         if fm:
             fname = fm.group(1)
             # 字段通过 Field<T>::set() 写入
-            sim.emit(f"    {obj}.{fname}.set({val});")
+            sim.emit(RawStmt(f"{render_expr(obj_expr)}.{fname}.set({render_expr(val_expr)});"))
         else:
-            sim.emit(f"    /* putfield {val} */")
+            sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))
 
     elif op == 'getstatic':
-        if 'System.out' in comment:   sim.push('__stdout__', 'PrintStream')
-        elif 'System.err' in comment: sim.push('__stderr__', 'PrintStream')
-        else: sim.push(f"/* getstatic {comment} */", 'JvmObject')
+        cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
+        if field_name:
+            ty_str = jvm_to_rust(descriptor) if descriptor else 'JvmObject'
+            sim.push(StaticFieldRef(cls, field_name, RsNamed(ty_str)), RsNamed(ty_str))
+        else:
+            sim.push(RawExpr(f"/* getstatic {comment} */"), RsNamed('JvmObject'))
     elif op == 'putstatic':
-        sim.pop_str()
+        val_expr, _ = sim.pop()
+        cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
+        cls_simple = cls.split('/')[-1] if cls else 'UnknownClass'
+        sim.emit(RawStmt(f"{cls_simple}::{field_name}({render_expr(val_expr)});"))
 
     # ── 数组 ──
     elif op == 'newarray':
-        count, _ = sim.pop_str()
+        count_expr, _ = sim.pop()
         elem_t, zero = NEWARRAY_TYPES.get(operand.strip(), ('i32', '0i32'))
         v = sim.fresh('_arr')
-        sim.emit(f"    let mut {v}: Vec<{elem_t}> = vec![{zero}; {count} as usize];")
-        sim.push(v, f"Vec<{elem_t}>")
+        sim.emit(RawStmt(f"let mut {v}: Vec<{elem_t}> = vec![{zero}; {render_expr(count_expr)} as usize];"))
+        sim.push(Var(v), RsGeneric('Vec', [RsNamed(elem_t)]))
     elif op == 'anewarray':
-        count, _ = sim.pop_str()
+        count_expr, _ = sim.pop()
         cls = short_cls(comment) or 'JvmObject'
         elem_t = jvm_to_rust(f'L{cls};') if cls != 'JvmObject' else 'JvmObject'
         v = sim.fresh('_arr')
-        sim.emit(f"    let mut {v}: Vec<{elem_t}> = Vec::with_capacity({count} as usize);")
-        sim.push(v, f"Vec<{elem_t}>")
+        sim.emit(RawStmt(f"let mut {v}: Vec<{elem_t}> = Vec::with_capacity({render_expr(count_expr)} as usize);"))
+        sim.push(Var(v), RsGeneric('Vec', [RsNamed(elem_t)]))
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
         dims = int(dims_str) if dims_str.isdigit() else 2
-        sizes = [sim.pop_str()[0] for _ in range(dims)][::-1]
+        sizes = [render_expr(sim.pop()[0]) for _ in range(dims)][::-1]
         v = sim.fresh('_arr')
-        sim.emit(f"    let mut {v}: Vec<Vec<i32>> = vec![vec![0i32; {sizes[-1]} as usize]; {sizes[0]} as usize];")
-        sim.push(v, "Vec<Vec<i32>>")
+        sim.emit(RawStmt(f"let mut {v}: Vec<Vec<i32>> = vec![vec![0i32; {sizes[-1]} as usize]; {sizes[0]} as usize];"))
+        sim.push(Var(v), RsGeneric('Vec', [RsGeneric('Vec', [I32])]))
     elif op in ('iastore', 'bastore', 'sastore', 'castore',
                 'lastore', 'fastore', 'dastore', 'aastore'):
-        val, _ = sim.pop_str(); idx, _ = sim.pop_str(); arr, _ = sim.pop_str()
-        sim.emit(f"    {arr}[{idx} as usize] = {val};")
+        val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize] = {render_expr(val_expr)};"))
     elif op in ('iaload', 'baload', 'saload', 'caload'):
-        idx, _ = sim.pop_str(); arr, _ = sim.pop_str()
-        sim.push(f"{arr}[{idx} as usize]")
+        idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        sim.push(RawExpr(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize]"), I32)
     elif op in ('laload', 'faload', 'daload'):
-        idx, _ = sim.pop_str(); arr, _ = sim.pop_str()
-        ty = {'l': 'i64', 'f': 'f32', 'd': 'f64'}.get(op[0], 'i32')
-        sim.push(f"{arr}[{idx} as usize]", ty)
+        idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        ty = {'l': I64, 'f': F32, 'd': F64}.get(op[0], I32)
+        sim.push(RawExpr(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize]"), ty)
     elif op == 'aaload':
-        idx, _ = sim.pop_str(); arr, arr_ty = sim.pop_str()
-        elem_ty = arr_ty[4:-1] if arr_ty.startswith('Vec<') else 'JvmObject'
-        sim.push(f"{arr}[{idx} as usize].clone()", elem_ty)
+        idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
+        arr_ty_str = render_type(arr_ty)
+        elem_ty_str = arr_ty_str[4:-1] if arr_ty_str.startswith('Vec<') else 'JvmObject'
+        sim.push(RawExpr(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize].clone()"), RsNamed(elem_ty_str))
     elif op == 'arraylength':
-        arr, _ = sim.pop_str()
-        sim.push(f"({arr}.len() as i32)")
+        arr_expr, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(arr_expr)}.len() as i32)"), I32)
 
     # ── 方法调用 ──
     elif op == 'invokestatic':
@@ -258,13 +339,13 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str):
 
     # ── 返回 ──
     elif op == 'return':
-        sim.emit('    return Ok(());')
+        sim.emit(RawStmt('return Ok(());'))
     elif op in ('ireturn', 'lreturn', 'freturn', 'dreturn'):
-        e, _ = sim.pop_str()
-        sim.emit(f"    return Ok({e});")
+        e_expr, _ = sim.pop()
+        sim.emit(RawStmt(f"return Ok({render_expr(e_expr)});"))
     elif op == 'areturn':
-        e, _ = sim.pop_str()
-        sim.emit(f"    return Ok({e});")
+        e_expr, _ = sim.pop()
+        sim.emit(RawStmt(f"return Ok({render_expr(e_expr)});"))
 
     # ── 控制流（循环由 method.py 处理，此处跳过）──
     elif op.startswith('if_icmp') or op.startswith('if') or op == 'goto':
@@ -272,21 +353,22 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str):
 
     # ── checkcast / instanceof ──
     elif op == 'checkcast': pass
-    elif op == 'instanceof': sim.push('true', 'bool')
+    elif op == 'instanceof': sim.push(Lit('true'), BOOL)
 
     # ── invokedynamic ──
     elif op == 'invokedynamic':
         if comment and 'makeConcatWithConstants' in comment:
             _gen_string_concat(sim, comment)
         else:
-            sim.emit(f"    /* TODO: {op} {operand} */")
+            sim.emit(RawStmt(f"/* TODO: {op} {operand} */"))
 
     # ── 杂项 ──
     elif op in ('nop', 'wide'): pass
     elif op == 'athrow':
-        e, _ = sim.pop_str(); sim.emit(f'    panic!("{{}}", /* {e} */);')
+        e_expr, _ = sim.pop()
+        sim.emit(RawStmt(f'panic!("{{}}", /* {render_expr(e_expr)} */);'))
     else:
-        sim.emit(f"    /* TODO: {op} {operand} */")
+        sim.emit(RawStmt(f"/* TODO: {op} {operand} */"))
 
 
 # ── invoke 生成器 ─────────────────────────────────────────────────
@@ -301,8 +383,8 @@ def _gen_string_concat(sim: StackSim, comment: str):
 
     args = []
     for _ in range(len(params)):
-        e, _ = sim.pop_str()
-        args.insert(0, e)
+        e_expr, _ = sim.pop()
+        args.insert(0, render_expr(e_expr))
 
     tmpl_m = re.search(r' template:(.+)$', comment)
     if tmpl_m:
@@ -317,20 +399,20 @@ def _gen_string_concat(sim: StackSim, comment: str):
             fmt_args = ', '.join(args)
             if fmt_args:
                 # 用 from_owned 避免 From<&str> vs From<std::string::String> 歧义
-                sim.push(f'String::from_owned(format!("{fmt_str}", {fmt_args}))', 'String')
+                sim.push(Lit(f'String::from_owned(format!("{fmt_str}", {fmt_args}))'), RsNamed('String'))
             else:
-                sim.push(f'String::from("{fmt_str}")', 'String')
+                sim.push(Lit(f'String::from("{fmt_str}")'), RsNamed('String'))
             return
 
     # fallback
     if not args:
-        sim.push('String::new()', 'String')
+        sim.push(Lit('String::new()'), RsNamed('String'))
     elif len(args) == 1:
-        sim.push(f'String::from_owned(format!("{{}}", {args[0]}))', 'String')
+        sim.push(Lit(f'String::from_owned(format!("{{}}", {args[0]}))'), RsNamed('String'))
     else:
         fmt = '{}'.join([''] * (len(args) + 1))  # "{}{}{}" for 3 args
         fmt_args = ', '.join(args)
-        sim.push(f'String::from_owned(format!("{fmt}", {fmt_args}))', 'String')
+        sim.push(Lit(f'String::from_owned(format!("{fmt}", {fmt_args}))'), RsNamed('String'))
 
 
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str):
@@ -344,12 +426,12 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str):
     cls, _, params, _ = parse_method_ref(comment)
     args = []
     for _ in range(len(params)):
-        e, _ = sim.pop_str()
-        args.insert(0, e)
-    obj_e, obj_ty = sim.pop_str()
+        e_expr, _ = sim.pop()
+        args.insert(0, render_expr(e_expr))
+    obj_expr, obj_ty_node = sim.pop()
 
-    if obj_e.startswith('__new__') or '__pending__' in obj_ty:
-        raw_cls = obj_e.replace('__new__', '').replace('__', '') or cls or class_name
+    if isinstance(obj_expr, NewPendingExpr):
+        raw_cls = obj_expr.class_name.rsplit('/', 1)[-1]
         raw_cls = short_cls(raw_cls) or raw_cls
 
         if raw_cls in JDK_COLL_TYPES:
@@ -364,16 +446,14 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str):
             init_expr = f"/* {raw_cls}::new() */"
             rust_ty   = raw_cls
 
-        from .rs_ir import RawExpr
-        from .render import render_expr
-        if sim.stack and render_expr(sim.stack[-1][0]) == obj_e:
-            sim.stack[-1] = (RawExpr(init_expr), rust_ty)
+        if sim.stack and isinstance(sim.stack[-1][0], NewPendingExpr):
+            sim.stack[-1] = (RawExpr(init_expr), RsNamed(rust_ty))
         else:
             v = sim.fresh('_obj')
-            sim.emit(f"    let mut {v}: {rust_ty} = {init_expr};")
-            sim.push(v, rust_ty)
+            sim.emit(RawStmt(f"let mut {v}: {rust_ty} = {init_expr};"))
+            sim.push(Var(v), RsNamed(rust_ty))
     else:
-        sim.emit(f"    /* invokespecial {comment} */")
+        sim.emit(RawStmt(f"/* invokespecial {comment} */"))
 
 
 def _gen_invokestatic(sim: StackSim, comment: str, class_name: str):
@@ -382,14 +462,17 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str):
             return  # 自动装箱：栈顶值保留
 
     if 'String.valueOf' in comment:
-        a, _ = sim.pop_str()
-        sim.push(f"String::from_owned(format!(\"{{}}\", {a}))", 'String')
+        a_expr, _ = sim.pop()
+        a = render_expr(a_expr)
+        sim.push(Lit(f'String::from_owned(format!("{{}}", {a}))'), RsNamed('String'))
         return
 
     cls, mname, params, ret = parse_method_ref(comment)
     args = []
     for _ in range(len(params)):
-        e, ty = sim.pop_str()
+        e_expr, ty_node = sim.pop()
+        e = render_expr(e_expr)
+        ty = render_type(ty_node)
         args.insert(0, f"&{e}" if ty.startswith('Vec<') else e)
 
     needs_q = False  # 是否加 ?（用户类方法返回 Result）
@@ -422,44 +505,51 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str):
     q = '?' if needs_q else ''
     rust_ret = jvm_to_rust(ret)
     if rust_ret == '()':
-        sim.emit(f"    {call}{q};")
+        sim.emit(RawStmt(f"{call}{q};"))
     else:
         v = sim.fresh()
-        sim.emit(f"    let {v}: {rust_ret} = {call}{q};")
-        sim.push(v, rust_ret)
+        sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
+        sim.push(Var(v), RsNamed(rust_ret))
 
 
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str):
     cls, mname, params, ret = parse_method_ref(comment)
     args = []
     for _ in range(len(params)):
-        e, _ = sim.pop_str()
-        args.insert(0, e)
-    obj_e, obj_ty = sim.pop_str()
+        e_expr, _ = sim.pop()
+        args.insert(0, render_expr(e_expr))
+    obj_expr, obj_ty_node = sim.pop()
+    obj_e = render_expr(obj_expr)
+    obj_ty = render_type(obj_ty_node)
 
     # 拆箱：identity
     if mname in UNBOX_VIRTUAL:
-        sim.push(obj_e, obj_ty)
+        sim.push(obj_expr, obj_ty_node)
         return
 
     # System.out.println / System.err.println
-    if obj_e in ('__stdout__', '__stderr__') or obj_ty == 'PrintStream':
-        stream = 'System::err()' if 'stderr' in obj_e else 'System::out()'
+    is_stdout = (
+        (isinstance(obj_expr, StaticFieldRef) and obj_expr.field_name in ('out', 'err'))
+        or (isinstance(obj_ty_node, RsNamed) and obj_ty_node.name == 'PrintStream')
+    )
+    if is_stdout:
+        is_err = isinstance(obj_expr, StaticFieldRef) and obj_expr.field_name == 'err'
+        stream = 'System::err()' if is_err else 'System::out()'
         if not args:
-            sim.emit(f"    {stream}.println_empty()?;")
+            sim.emit(RawStmt(f"{stream}.println_empty()?;"))
         else:
-            sim.emit(f"    {stream}.println({args[0]})?;")
+            sim.emit(RawStmt(f"{stream}.println({args[0]})?;"))
         return
 
     # StringBuilder.append / toString （映射到 java.lang.String）
     if cls in ('StringBuilder', 'StringBuffer') or (obj_ty == 'String' and mname in ('append', 'toString')):
         if mname == 'append':
             a = args[0] if args else 'String::new()'
-            sim.emit(f"    {obj_e}.append(&{a});")
-            sim.push(obj_e, 'String')
+            sim.emit(RawStmt(f"{obj_e}.append(&{a});"))
+            sim.push(RawExpr(obj_e), RsNamed('String'))
             return
         if mname == 'toString':
-            sim.push(obj_e, 'String')
+            sim.push(RawExpr(obj_e), RsNamed('String'))
             return
         if mname == '<init>':
             return
@@ -486,22 +576,22 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str):
         call     = f"{obj_e}.{mname}({arg_str})"
         rust_ret = jvm_to_rust(ret)
         if rust_ret == '()':
-            sim.emit(f"    {call}?;")
+            sim.emit(RawStmt(f"{call}?;"))
         else:
             v = sim.fresh()
-            sim.emit(f"    let {v}: {rust_ret} = {call}?;")
-            sim.push(v, rust_ret)
+            sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}?;"))
+            sim.push(Var(v), RsNamed(rust_ret))
         return
 
-    sim.emit(f"    /* {cls}.{mname}({', '.join(args)}) */")
+    sim.emit(RawStmt(f"/* {cls}.{mname}({', '.join(args)}) */"))
 
 
 def _dispatch_list(sim: StackSim, obj: str, obj_ty: str, mname: str, args: list):
     """ArrayList 方法分发（java.util.ArrayList 同构 API）"""
     if mname == 'add':
         item = args[0] if args else 'String::new()'
-        sim.emit(f"    {obj}.add({item})?;")
-        sim.push('true', 'bool')  # 占位，会被 pop 丢弃
+        sim.emit(RawStmt(f"{obj}.add({item})?;"))
+        sim.push(Lit('true'), BOOL)  # 占位，会被 pop 丢弃
     elif mname == 'get':
         idx = args[0] if args else '0i32'
         if obj_ty.startswith('ArrayList<'):
@@ -511,70 +601,70 @@ def _dispatch_list(sim: StackSim, obj: str, obj_ty: str, mname: str, args: list)
         else:
             elem_ty = 'String'
         v = sim.fresh('_e')
-        sim.emit(f"    let {v}: {elem_ty} = {obj}.get({idx})?;")
-        sim.push(v, elem_ty)
+        sim.emit(RawStmt(f"let {v}: {elem_ty} = {obj}.get({idx})?;"))
+        sim.push(Var(v), RsNamed(elem_ty))
     elif mname == 'size':
-        sim.push(f"{obj}.size()")
+        sim.push(RawExpr(f"{obj}.size()"), I32)
     elif mname == 'isEmpty':
-        sim.push(f"{obj}.is_empty()", 'bool')
+        sim.push(RawExpr(f"{obj}.is_empty()"), BOOL)
     elif mname == 'remove':
         idx = args[0] if args else '0i32'
-        sim.emit(f"    {obj}.remove_at({idx});")
+        sim.emit(RawStmt(f"{obj}.remove_at({idx});"))
     elif mname == 'set':
         idx = args[0]; val = args[1] if len(args) > 1 else 'String::new()'
         v = sim.fresh('_old')
-        sim.emit(f"    let {v} = {obj}.set_at({idx}, {val})?;")
-        sim.push(v, 'String')
+        sim.emit(RawStmt(f"let {v} = {obj}.set_at({idx}, {val})?;"))
+        sim.push(Var(v), RsNamed('String'))
     elif mname == 'contains':
-        sim.push(f"{obj}.contains(&{args[0] if args else 'String::new()'})", 'bool')
+        sim.push(RawExpr(f"{obj}.contains(&{args[0] if args else 'String::new()'})"), BOOL)
     elif mname == 'clear':
-        sim.emit(f"    {obj}.clear();")
+        sim.emit(RawStmt(f"{obj}.clear();"))
     else:
-        sim.emit(f"    /* ArrayList.{mname} */")
+        sim.emit(RawStmt(f"/* ArrayList.{mname} */"))
 
 
 def _dispatch_map(sim: StackSim, obj: str, mname: str, args: list):
     """HashMap 方法分发（java.util.HashMap 同构 API）"""
     if mname == 'put':
         k = args[0]; v_val = args[1] if len(args) > 1 else 'String::new()'
-        sim.emit(f"    {obj}.put({k}, {v_val});")
-        sim.push('None::<String>', 'Option<String>')  # 占位
+        sim.emit(RawStmt(f"{obj}.put({k}, {v_val});"))
+        sim.push(RawExpr('None::<String>'), RsGeneric('Option', [RsNamed('String')]))  # 占位
     elif mname == 'get':
         k = args[0] if args else 'String::new()'
         v = sim.fresh('_v')
-        sim.emit(f"    let {v} = {obj}.get(&{k}).unwrap_or_default();")
-        sim.push(v, 'String')  # 实际类型由 _fix_coll_types 后处理修正
+        sim.emit(RawStmt(f"let {v} = {obj}.get(&{k}).unwrap_or_default();"))
+        sim.push(Var(v), RsNamed('String'))  # 实际类型由 _fix_coll_types 后处理修正
     elif mname == 'getOrDefault':
         k = args[0]; d = args[1] if len(args) > 1 else 'String::new()'
         v = sim.fresh('_v')
-        sim.emit(f"    let {v} = {obj}.get_or_default(&{k}, {d});")
-        sim.push(v, 'String')
+        sim.emit(RawStmt(f"let {v} = {obj}.get_or_default(&{k}, {d});"))
+        sim.push(Var(v), RsNamed('String'))
     elif mname == 'size':
-        sim.push(f"{obj}.size()")
+        sim.push(RawExpr(f"{obj}.size()"), I32)
     elif mname == 'containsKey':
-        sim.push(f"{obj}.contains_key(&{args[0] if args else 'String::new()'})", 'bool')
+        sim.push(RawExpr(f"{obj}.contains_key(&{args[0] if args else 'String::new()'})"), BOOL)
     elif mname == 'containsValue':
-        sim.push('false', 'bool')  # 简化实现
+        sim.push(Lit('false'), BOOL)  # 简化实现
     elif mname == 'remove':
-        sim.emit(f"    {obj}.remove(&{args[0] if args else 'String::new()'});")
+        sim.emit(RawStmt(f"{obj}.remove(&{args[0] if args else 'String::new()'});"))
     elif mname == 'isEmpty':
-        sim.push(f"{obj}.is_empty()", 'bool')
+        sim.push(RawExpr(f"{obj}.is_empty()"), BOOL)
     else:
-        sim.emit(f"    /* HashMap.{mname} */")
+        sim.emit(RawStmt(f"/* HashMap.{mname} */"))
 
 
 def _dispatch_set(sim: StackSim, obj: str, mname: str, args: list):
     """HashSet 方法分发（java.util.HashSet 同构 API）"""
     if mname == 'add':
-        sim.emit(f"    {obj}.add({args[0] if args else 'String::new()'});")
-        sim.push('true', 'bool')
+        sim.emit(RawStmt(f"{obj}.add({args[0] if args else 'String::new()'});"))
+        sim.push(Lit('true'), BOOL)
     elif mname == 'contains':
-        sim.push(f"{obj}.contains(&{args[0] if args else 'String::new()'})", 'bool')
+        sim.push(RawExpr(f"{obj}.contains(&{args[0] if args else 'String::new()'})"), BOOL)
     elif mname == 'size':
-        sim.push(f"{obj}.size()")
+        sim.push(RawExpr(f"{obj}.size()"), I32)
     elif mname == 'remove':
-        sim.emit(f"    {obj}.remove(&{args[0] if args else 'String::new()'});")
+        sim.emit(RawStmt(f"{obj}.remove(&{args[0] if args else 'String::new()'});"))
     elif mname == 'isEmpty':
-        sim.push(f"{obj}.is_empty()", 'bool')
+        sim.push(RawExpr(f"{obj}.is_empty()"), BOOL)
     else:
-        sim.emit(f"    /* HashSet.{mname} */")
+        sim.emit(RawStmt(f"/* HashSet.{mname} */"))
