@@ -17,6 +17,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=native_impls/");
+    println!("cargo:rerun-if-env-changed=JAVA_RTA_STRICT");
 
     // 1. 扫描 src/，提取所有 @java_native 声明
     let native_methods = scan_native_methods(src_dir);
@@ -53,7 +54,9 @@ fn main() {
     // 5. 写出 native_status.toml
     write_status(status_file, &new_status);
 
-    // 6. 打印 "needed" 方法清单作为警告
+    // 6. 打印 "needed" 方法清单；JAVA_RTA_STRICT=1 时升级为编译错误
+    let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
+
     let needed: Vec<_> = new_status.iter()
         .flat_map(|(cls, methods)| {
             methods.iter()
@@ -63,13 +66,21 @@ fn main() {
         .collect();
 
     if !needed.is_empty() {
-        println!("cargo:warning=");
-        println!("cargo:warning=─── native methods needing implementation ───");
-        for line in &needed {
-            println!("cargo:warning={}", line);
+        if strict {
+            for line in &needed {
+                // strip leading spaces for cleaner error output
+                let method = line.trim_start_matches("  → ");
+                println!("cargo::error=native method not implemented: {}", method);
+            }
+        } else {
+            println!("cargo:warning=");
+            println!("cargo:warning=─── native methods needing implementation ───");
+            for line in &needed {
+                println!("cargo:warning={}", line);
+            }
+            println!("cargo:warning=Add implementations to native_impls/<class>.rs");
+            println!("cargo:warning=");
         }
-        println!("cargo:warning=Add implementations to native_impls/<class>.rs");
-        println!("cargo:warning=");
     }
 }
 
