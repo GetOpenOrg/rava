@@ -542,8 +542,8 @@ def _dispatch_map(sim: StackSim, obj: str, mname: str, args: list):
     elif mname == 'get':
         k = args[0] if args else 'String::new()'
         v = sim.fresh('_v')
-        sim.emit(f"    let {v} = {obj}.get(&{k});")
-        sim.push(v, 'Option<String>')
+        sim.emit(f"    let {v} = {obj}.get(&{k}).unwrap_or_default();")
+        sim.push(v, 'String')  # 实际类型由 _fix_coll_types 后处理修正
     elif mname == 'getOrDefault':
         k = args[0]; d = args[1] if len(args) > 1 else 'String::new()'
         v = sim.fresh('_v')

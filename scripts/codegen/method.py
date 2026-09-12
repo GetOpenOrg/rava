@@ -19,11 +19,102 @@ from .instr import sim_instr
 from .render import render_stmt
 
 
+def _infer_rust_type(expr: str) -> str:
+    """从 Rust 表达式推断基础类型。"""
+    if re.match(r'-?\d+i32$', expr):
+        return 'i32'
+    if re.match(r'-?\d+i64$', expr):
+        return 'i64'
+    if re.match(r'-?\d+\.\d*f64$', expr) or re.match(r'^\d+f64$', expr):
+        return 'f64'
+    if re.match(r'-?\d+\.\d*f32$', expr) or re.match(r'^\d+f32$', expr):
+        return 'f32'
+    if expr.startswith('String::from') or expr.startswith('String::new()'):
+        return 'String'
+    if expr in ('true', 'false'):
+        return 'bool'
+    return ''
+
+
 def _fix_coll_types(lines: list[str]) -> list[str]:
-    """后处理：修正集合元素类型（根据 add/put 参数推断）。"""
-    # ArrayList<String>: 已经从 JDK_COLL_TYPES 获得正确类型，不需要修正
-    # 保留此函数以便未来扩展
-    return list(lines)
+    """后处理：从 add/put 调用推断集合元素类型，修正默认 String 泛型参数。"""
+    result = list(lines)
+
+    # 收集 varname → (集合类型, 声明行索引)
+    coll_vars: dict[str, tuple[str, int]] = {}
+    for i, line in enumerate(result):
+        m = re.match(r'\s*let\s+(?:mut\s+)?(\w+)\s*:\s*(ArrayList|HashMap|HashSet)<', line)
+        if m:
+            coll_vars[m.group(1)] = (m.group(2), i)
+
+    for var, (ctype, decl_idx) in coll_vars.items():
+        vr = re.escape(var)
+
+        if ctype == 'ArrayList':
+            # 从 var.add(EXPR) 推断元素类型
+            elem = None
+            for line in result:
+                m = re.search(rf'\b{vr}\.add\((.+?)\)\??', line)
+                if m:
+                    elem = _infer_rust_type(m.group(1).strip())
+                    if elem:
+                        break
+            if elem and elem != 'String':
+                result[decl_idx] = re.sub(
+                    r'ArrayList<String>',
+                    f'ArrayList<{elem}>',
+                    result[decl_idx].replace(
+                        'ArrayList::<String>::new()',
+                        f'ArrayList::<{elem}>::new()'
+                    )
+                )
+                # 修正 get 返回类型标注（let _e0: String = var.get(...)）
+                for j in range(len(result)):
+                    result[j] = re.sub(
+                        rf'(let \w+): String = ({vr}\.get\()',
+                        rf'\1: {elem} = \2',
+                        result[j]
+                    )
+
+        elif ctype == 'HashMap':
+            # 从 var.put(K, V) 推断 V 类型
+            val_elem = None
+            for line in result:
+                m = re.search(rf'\b{vr}\.put\(\s*.+?\s*,\s*(.+?)\s*\);', line)
+                if m:
+                    val_elem = _infer_rust_type(m.group(1).strip())
+                    if val_elem:
+                        break
+            if val_elem and val_elem != 'String':
+                result[decl_idx] = re.sub(
+                    r'HashMap<String, String>',
+                    f'HashMap<String, {val_elem}>',
+                    result[decl_idx].replace(
+                        'HashMap::<String, String>::new()',
+                        f'HashMap::<String, {val_elem}>::new()'
+                    )
+                )
+
+        elif ctype == 'HashSet':
+            # 从 var.add(EXPR) 推断元素类型
+            elem = None
+            for line in result:
+                m = re.search(rf'\b{vr}\.add\((.+?)\);', line)
+                if m:
+                    elem = _infer_rust_type(m.group(1).strip())
+                    if elem:
+                        break
+            if elem and elem != 'String':
+                result[decl_idx] = re.sub(
+                    r'HashSet<String>',
+                    f'HashSet<{elem}>',
+                    result[decl_idx].replace(
+                        'HashSet::<String>::new()',
+                        f'HashSet::<{elem}>::new()'
+                    )
+                )
+
+    return result
 
 
 def _merge_aliases(lines: list[str]) -> list[str]:
@@ -80,6 +171,8 @@ def _remove_unnecessary_mut(lines: list[str]) -> list[str]:
         mutated = any(
             # 赋值：var = / var += / var -= / ...
             re.search(rf'(?<![:\w\.]){var_re}\s*(?:\+|-|\*|/)?\s*=\s*(?!=)', result[j]) or
+            # 数组索引赋值：var[...] = value
+            re.search(rf'\b{var_re}\s*\[.*\]\s*=', result[j]) or
             # &mut self 方法调用（append 修改 String/StringBuilder）
             re.search(rf'\b{var_re}\.(push|push_str|append|append_str|extend|truncate|drain|reverse|sort|retain|reserve)\s*\(', result[j])
             for j in range(i + 1, len(result))

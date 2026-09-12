@@ -287,7 +287,7 @@ class MethodCategory(Enum):
 ---
 
 ### T13 · Hello World 端到端验证
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`tests/HelloWorld.java`
 
 **目标**：`tests/HelloWorld.java` 经完整流水线（RTA → manifest → stub gen → auto-transpile → cargo build → 运行）输出 `Hello, World!`，与 `java HelloWorld` 一致。
@@ -347,7 +347,7 @@ T13 (Hello World) ─ 依赖 T12
 > 详细设计见：`docs/plans/2026-09-12-jdk-bytecode-translation.md`
 
 ### T14 · classfile.py 完整元信息扩展
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/classfile.py`（修改），`scripts/codegen/types.py`（修改）  
 **依赖**：T01（已完成）
 
@@ -362,7 +362,7 @@ T13 (Hello World) ─ 依赖 T12
 ---
 
 ### T15 · JDK Class 解析器
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/jdk_resolver.py`（新建）  
 **依赖**：T14
 
@@ -387,7 +387,7 @@ assert 'java/util/List' in cls.interfaces
 ---
 
 ### T16 · emitter.py 生成 Java 元信息属性宏
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/emitter.py`（修改）  
 **依赖**：T14
 
@@ -425,7 +425,7 @@ impl<E: Clone> ArrayList<E> {
 ---
 
 ### T17 · build.rs 属性扫描与 native_status.toml 自动维护
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`output/build.rs`（新建），`output/build_support/java_meta.rs`（新建）  
 **依赖**：T16
 
@@ -445,7 +445,7 @@ impl<E: Clone> ArrayList<E> {
 ---
 
 ### T18 · native_impls 目录建立与 HelloWorld 最小 native 实现
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`native_impls/java/lang/system.rs` 等（新建）  
 **依赖**：T17
 

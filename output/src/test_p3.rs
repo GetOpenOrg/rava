@@ -1,41 +1,40 @@
 #![allow(unused_variables, unused_mut, dead_code, non_snake_case)]
-use std::rc::Rc;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use crate::java_runtime::prelude::*;
 
+// @java_class(name="TestP3", super="java/lang/Object", access="public", source="TestP3.java")
 pub struct TestP3;
 
 impl TestP3 {
-    pub fn new() -> Rc<RefCell<Self>> {
-        let this: Rc<RefCell<Self>> = Rc::new(RefCell::new(Self {}));
+    // @java_method(name="<init>", descriptor="()V", access="public")
+    pub fn new() -> Result<Self> {
+        let this = Self {};
         /* invokespecial Method java/lang/Object.<init>:()V */
-        this
+        Ok(this)
     }
 
-    pub fn main() {
-        let mut _obj0: Vec<i32> = Vec::new();
-        let mut local_1: Vec<i32> = _obj0;
-        local_1.push(10i32);
-        local_1.push(20i32);
-        local_1.push(30i32);
-        println!("{}", (local_1.len() as i32));
-        println!("{}", local_1[1i32 as usize]);
-        let mut _obj1: HashMap<String,i32> = HashMap::new();
-        let mut local_2: HashMap<String,i32> = _obj1;
-        local_2.insert("one".to_string(), 1i32);
-        local_2.insert("two".to_string(), 2i32);
-        local_2.insert("three".to_string(), 3i32);
-        println!("{}", (local_2.len() as i32));
-        println!("{}", local_2.get(&"two".to_string()).copied().unwrap_or(0));
-        println!("{}", local_2.contains_key(&"one".to_string()));
-        let mut _obj2: HashSet<i32> = HashSet::new();
-        let mut local_3: HashSet<i32> = _obj2;
-        local_3.insert(100i32);
-        local_3.insert(200i32);
-        local_3.insert(100i32);
-        println!("{}", (local_3.len() as i32));
-        println!("{}", local_3.contains(&200i32));
-        return;
+    // @java_method(name="main", descriptor="([Ljava/lang/String;)V", access="public static")
+    pub fn main() -> Result<()> {
+        let list: ArrayList<i32> = ArrayList::<i32>::new()?;
+        list.add(10i32)?;
+        list.add(20i32)?;
+        list.add(30i32)?;
+        System::out().println(list.size())?;
+        let _e0: i32 = list.get(1i32)?;
+        System::out().println(_e0)?;
+        let map: HashMap<String, i32> = HashMap::<String, i32>::new()?;
+        map.put(String::from("one"), 1i32);
+        map.put(String::from("two"), 2i32);
+        map.put(String::from("three"), 3i32);
+        System::out().println(map.size())?;
+        let _v1 = map.get(&String::from("two")).unwrap_or_default();
+        System::out().println(_v1)?;
+        System::out().println(map.contains_key(&String::from("one")))?;
+        let set: HashSet<i32> = HashSet::<i32>::new()?;
+        set.add(100i32);
+        set.add(200i32);
+        set.add(100i32);
+        System::out().println(set.size())?;
+        System::out().println(set.contains(&200i32))?;
+        Ok(())
     }
 }
