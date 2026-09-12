@@ -90,6 +90,78 @@ def parse_descriptor_return(desc: str) -> str:
     return m.group(1) if m else 'V'
 
 
+_PRIM_SUFFIX: dict[str, str] = {
+    'I': 'i', 'J': 'l', 'Z': 'z', 'B': 'b',
+    'S': 's', 'F': 'f', 'D': 'd', 'C': 'c',
+}
+_CLS_ABBREV: dict[str, str] = {
+    'object': 'obj',   'string': 'str',    'integer': 'int',
+    'long': 'lng',     'double': 'dbl',    'boolean': 'bool',
+    'charsequence': 'seq', 'stringbuilder': 'sb', 'comparable': 'cmp',
+    'iterable': 'iter', 'collection': 'coll', 'list': 'list',
+    'map': 'map',      'set': 'set',       'number': 'num',
+}
+
+
+def descriptor_to_suffix(descriptor: str) -> str:
+    """把描述符参数部分 '(ITE;)V' 转成后缀字符串（不含 __），如 'i_e'。"""
+    m = re.match(r'\(([^)]*)\)', descriptor)
+    if not m:
+        return ''
+    s = m.group(1)
+    if not s:
+        return ''
+    parts: list[str] = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c in _PRIM_SUFFIX:
+            parts.append(_PRIM_SUFFIX[c]); i += 1
+        elif c == 'T':
+            try:
+                end = s.index(';', i + 1)
+                parts.append(s[i+1:end].lower()); i = end + 1
+            except ValueError:
+                i += 1
+        elif c == 'L':
+            try:
+                end = s.index(';', i + 1)
+                short = s[i+1:end].split('/')[-1].lower()
+                parts.append(_CLS_ABBREV.get(short, short[:6])); i = end + 1
+            except ValueError:
+                i += 1
+        elif c == '[':
+            j = i + 1
+            while j < len(s) and s[j] == '[':
+                j += 1
+            if j < len(s) and s[j] == 'L':
+                try:
+                    end = s.index(';', j + 1)
+                    short = s[j+1:end].split('/')[-1].lower()
+                    parts.append('arr_' + _CLS_ABBREV.get(short, short[:3])); i = end + 1
+                except ValueError:
+                    i = j + 1
+            elif j < len(s) and s[j] == 'T':
+                try:
+                    end = s.index(';', j + 1)
+                    parts.append('arr_' + s[j+1:end].lower()); i = end + 1
+                except ValueError:
+                    i = j + 1
+            elif j < len(s):
+                parts.append('arr_' + _PRIM_SUFFIX.get(s[j], 'x')); i = j + 1
+            else:
+                i += 1
+        else:
+            i += 1
+    return '_'.join(parts)
+
+
+def mangle_name(name: str, descriptor: str) -> str:
+    """方法名 + 描述符 → 含后缀的唯一 Rust 名，无参数时返回原名。"""
+    suffix = descriptor_to_suffix(descriptor)
+    return f"{name}__{suffix}" if suffix else name
+
+
 def _parse_type_list(s: str) -> list[str]:
     types, i = [], 0
     while i < len(s):

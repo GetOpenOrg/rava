@@ -24,6 +24,7 @@ from .type_map import (
     NEWARRAY_TYPES,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
     parse_descriptor_params, parse_descriptor_return,
+    mangle_name,
 )
 
 # 集合类构造时的 IR 类型节点和初始化表达式
@@ -552,15 +553,30 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         if mname == '<init>':
             return
 
+    # 对于用户类（无 /），查 registry 确认是否有重载，有则 mangle 调用名
+    rust_mname = mname
+    if registry and cls:
+        target_ci = registry.get(cls)
+        if target_ci is not None and '/' not in target_ci.name:
+            # 用户类：检查重载
+            visible = [m for m in target_ci.methods if not m.is_synthetic]
+            same = sum(1 for m in visible if m.name == mname)
+            if same > 1:
+                # 从 comment 提取原始描述符
+                desc_m = re.search(r':(\([^)]*\)\S+)', comment)
+                raw_desc = desc_m.group(1) if desc_m else ''
+                if raw_desc:
+                    rust_mname = mangle_name(mname, raw_desc)
+
     # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
     arg_str = ', '.join(args)
     rust_ret = jvm_to_rust(ret)
     if rust_ret == '()':
-        sim.emit(RawStmt(f"{obj_e}.{mname}({arg_str})?;"))
+        sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))
     else:
         v = sim.fresh()
         # 不写出显式类型注解，让 Rust 从方法返回类型推断（避免 JDK 类型擦除问题）
-        sim.emit(RawStmt(f"let {v} = {obj_e}.{mname}({arg_str})?;"))
+        sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
         sim.push(Var(v), RsNamed(rust_ret))
 
 

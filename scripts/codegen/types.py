@@ -36,6 +36,7 @@ class ParsedMethod:
     access_flags:      int  = 0
     is_native:         bool = False
     is_abstract:       bool = False
+    is_synthetic:      bool = False
     exceptions:        list = None   # list[str] binary names
     generic_signature: str  = ''
 

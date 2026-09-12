@@ -12,7 +12,7 @@
 
 import re
 from .types import ParsedMethod, ClassInfo
-from .type_map import jvm_to_rust, sig_type, rust_default
+from .type_map import jvm_to_rust, sig_type, rust_default, mangle_name
 from .stack import StackSim
 from .cfg import find_loops, find_boolean_conditions, cmp_op, neg_cmp_op
 from .instr import sim_instr
@@ -122,6 +122,7 @@ def gen_method_body(
     class_info: ClassInfo,
     registry: dict | None = None,
     class_type_params: list[str] | None = None,
+    overloaded_names: set[str] | None = None,
 ) -> str:
     from .sig_parser import parse_method_param_types
     _class_tparams = class_type_params or []
@@ -158,6 +159,15 @@ def gen_method_body(
 
     local_names = method.local_names or {}
 
+    # 计算最终 Rust 方法名（有重载则加描述符后缀）
+    _overloaded = overloaded_names is not None and method.name in overloaded_names
+    if is_ctor:
+        rust_fn_name = mangle_name('new', method.descriptor) if _overloaded else 'new'
+    elif _overloaded:
+        rust_fn_name = mangle_name(method.name, method.descriptor)
+    else:
+        rust_fn_name = method.name
+
     def _param_name(slot: int, fallback: str) -> str:
         from .stack import _safe_name
         return _safe_name(local_names.get(slot, fallback))
@@ -169,7 +179,7 @@ def gen_method_body(
             f"{_param_name(k + 1, f'arg_{k}')}: {rt}"
             for k, rt in enumerate(rust_param_types)
         ]
-        sig = f"pub fn new({', '.join(params)}) -> Result<Self>"
+        sig = f"pub fn {rust_fn_name}({', '.join(params)}) -> Result<Self>"
 
     elif method.name == 'main' and method.descriptor == '([Ljava/lang/String;)V':
         sig = "pub fn main() -> Result<()>"
@@ -179,7 +189,7 @@ def gen_method_body(
             f"{_param_name(k, f'arg_{k}')}: {sig_type(rt)}"
             for k, rt in enumerate(rust_param_types)
         ]
-        sig = f"pub fn {method.name}({', '.join(params)})"
+        sig = f"pub fn {rust_fn_name}({', '.join(params)})"
         if rust_ret != '()':
             sig += f" -> Result<{rust_ret}>"
         else:
@@ -192,7 +202,7 @@ def gen_method_body(
             f"{_param_name(k + 1, f'arg_{k}')}: {rt}"
             for k, rt in enumerate(rust_param_types)
         ]
-        sig = f"pub fn {method.name}({', '.join(params)})"
+        sig = f"pub fn {rust_fn_name}({', '.join(params)})"
         if rust_ret != '()':
             sig += f" -> Result<{rust_ret}>"
         else:
@@ -321,4 +331,6 @@ def gen_method_body(
         lines = _add_ok_return(lines, rust_ret)
 
     body = '\n'.join(lines)
-    return f"{sig} {{\n{body}\n}}"
+    # 有重载时在方法前加注释，标注原始 Java 签名
+    prefix = f"// java: {method.name}{method.descriptor}\n" if _overloaded else ""
+    return f"{prefix}{sig} {{\n{body}\n}}"

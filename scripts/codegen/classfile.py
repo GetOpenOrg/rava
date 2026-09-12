@@ -544,7 +544,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         ))
 
     # ── methods（第一步：收集原始数据，延迟解码字节码）─────────────────────
-    # tuple: (flags, name, desc, code_attr_bytes | None, exceptions, generic_sig)
+    # tuple: (flags, name, desc, code_attr_bytes | None, exceptions, generic_sig, is_synthetic)
     raw_methods: list[tuple] = []
     method_count = r.u2()
     for _ in range(method_count):
@@ -555,6 +555,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         code_attr_bytes: Optional[bytes] = None
         m_exceptions: list[str] = []
         m_generic_sig = ''
+        m_is_synthetic = bool(m_flags & 0x1000)  # ACC_SYNTHETIC flag
         for _ in range(attr_count):
             attr_name_idx = r.u2()
             attr_len      = r.u4()
@@ -571,9 +572,11 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
             elif attr_name == 'Signature':
                 sig_idx = struct.unpack_from('>H', r.read(2))[0]
                 m_generic_sig = _utf8(pool, sig_idx)
+            elif attr_name == 'Synthetic':
+                m_is_synthetic = True  # 属性体为空，length 已由 u4() 读取
             else:
                 r.skip(attr_len)
-        raw_methods.append((m_flags, m_name, m_desc, code_attr_bytes, m_exceptions, m_generic_sig))
+        raw_methods.append((m_flags, m_name, m_desc, code_attr_bytes, m_exceptions, m_generic_sig, m_is_synthetic))
 
     # ── 类级 attribute（含 BootstrapMethods、Signature、SourceFile）────────
     bootstrap_methods: list[dict] = []
@@ -599,7 +602,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
     # ── methods（第二步：解码字节码，包含 native/abstract 方法）────────────
     from .type_map import parse_descriptor_params
     methods: list[ParsedMethod] = []
-    for (m_flags, m_name, m_desc, code_attr_bytes, m_exceptions, m_generic_sig) in raw_methods:
+    for (m_flags, m_name, m_desc, code_attr_bytes, m_exceptions, m_generic_sig, m_is_synthetic) in raw_methods:
         is_native   = bool(m_flags & ACC_NATIVE)
         is_abstract = bool(m_flags & ACC_ABSTRACT)
         is_static   = bool(m_flags & ACC_STATIC)
@@ -618,6 +621,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 access_flags=m_flags,
                 is_native=is_native,
                 is_abstract=is_abstract,
+                is_synthetic=m_is_synthetic,
                 exceptions=m_exceptions,
                 generic_signature=m_generic_sig,
             ))
@@ -630,6 +634,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 parsed.access_flags      = m_flags
                 parsed.is_native         = is_native
                 parsed.is_abstract       = is_abstract
+                parsed.is_synthetic      = m_is_synthetic
                 parsed.exceptions        = m_exceptions
                 parsed.generic_signature = m_generic_sig
                 methods.append(parsed)

@@ -134,7 +134,7 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
         return f'#[{inner}]'
 
 
-def _gen_native_stub(m: ParsedMethod, ci: ClassInfo) -> str:
+def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None) -> str:
     """为 native / abstract 方法生成 todo! 存根，供手工实现替换。"""
     from .type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
     params = parse_descriptor_params(m.descriptor)
@@ -157,10 +157,11 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo) -> str:
 
     ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
     label = 'native' if m.is_native else 'abstract'
+    fn_name = rust_name or m.name
     body = f'todo!("{label} {ci.name}.{m.name}")'
 
     return (
-        f'pub fn {m.name}({sig_self}{args_str}) -> {ret_type} {{\n'
+        f'pub fn {fn_name}({sig_self}{args_str}) -> {ret_type} {{\n'
         f'    {body}\n'
         f'}}'
     )
@@ -204,6 +205,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
     - 所有方法返回 Result<T>
     - 每个 struct / field / method 前加 // @java_* 注释供 build.rs 扫描
     """
+    from collections import Counter
+    from .type_map import mangle_name
+
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
         "use crate::java_runtime::prelude::*;",
@@ -212,7 +216,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
     ]
 
     inst_fields = [f for f in ci.fields if not f.is_static]
-    has_instance_methods = any(not m.is_static and not m.is_constructor for m in ci.methods)
 
     # 用短名作为 Rust 标识符（JDK 类的 ci.name 含 /，不是合法 Rust 名）
     struct_name = short_cls(ci.name) if '/' in ci.name else ci.name
@@ -240,17 +243,35 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
     else:
         parts.append(f"pub struct {struct_name}{struct_generic};\n")
 
+    # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
+    visible_methods = [m for m in ci.methods if not m.is_synthetic]
+    name_counts = Counter(m.name for m in visible_methods if m.name != '<clinit>')
+    overloaded_names: set[str] = {name for name, count in name_counts.items() if count > 1}
+
     method_blocks: list[str] = []
-    for m in ci.methods:
+    for m in visible_methods:
         if m.name == '<clinit>':
             continue
+        # 确定最终 Rust 方法名（有重载则加描述符后缀）
+        rust_name = mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name
+        # 构造器统一用 new / new__suffix
+        if m.is_constructor:
+            if '<init>' in overloaded_names:
+                rust_name = mangle_name('new', m.descriptor)
+            else:
+                rust_name = 'new'
+
         attr_line = _java_method_attr(m, compiled=True)
         if m.is_native or m.is_abstract:
-            stub = _gen_native_stub(m, ci)
+            stub = _gen_native_stub(m, ci, rust_name=rust_name)
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
-                body = gen_method_body(m, ci, registry=registry, class_type_params=class_type_params)
+                body = gen_method_body(
+                    m, ci, registry=registry,
+                    class_type_params=class_type_params,
+                    overloaded_names=overloaded_names,
+                )
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:
                 method_blocks.append(f"/* codegen error {m.name}: {e} */")
