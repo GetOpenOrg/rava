@@ -472,3 +472,206 @@ T18 (native impls)    ─ 依赖 T17
 ```
 
 **最优执行序**：T14 → T15（并行 T16）→ T17 → T18
+
+---
+
+## 阶段六：架构重新设计（Phase 6 — Architecture Redesign）
+
+> 详细设计见：`docs/plans/2026-09-12-architecture-redesign.md`  
+> 设计规则见：`docs/rules.md`
+
+**背景**：代码审计发现代码生成层存在 5 个根本性问题（魔法字符串、字符串类型标注、if-chain 分派、正则后处理、RawExpr 泛滥），需要从架构层面系统性修复。
+
+### T19 · rs_ir.py 扩展新 IR 节点
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/rs_ir.py`、`scripts/codegen/render.py`  
+**依赖**：T02（已完成）
+
+**目标**：扩展 3 个新节点：
+- `NewPendingExpr(class_name: str)`：对应 `new` 指令，等待 `<init>` 完成
+- `StaticFieldRef(class_name: str, field_name: str, ty: RsType)`：对应 `getstatic`
+- `RsInfer`：对应 Rust `_`，用于集合泛型占位
+
+同时在 `render.py` 中补充这 3 个节点的渲染逻辑。
+
+**验收**：3 个新节点能通过 `render_expr()` / `render_type()` 正确渲染。
+
+---
+
+### T20 · stack.py 删除字符串兼容路径
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/stack.py`  
+**依赖**：T19
+
+**目标**：删除所有向后兼容的字符串接受路径：
+- `push()` 只接受 `(RsExpr, RsType)`，不再接受 `str`
+- `pop()` 返回 `(RsExpr, RsType)`
+- 删除 `pop_str()`、`load_local_str()` 方法
+- `store_local()` 生成 `LetStmt(mutable=False, ...)`，不再拼字符串
+- `emit()` 只接受 `RsStmt`，不再接受 `str`
+
+**验收**：`stack.py` 中无任何 `str` 类型的 `push`/`emit` 调用。
+
+---
+
+### T21 · instr.py 全量 IR 化（消灭魔法字符串）
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/instr.py`  
+**依赖**：T20
+
+**目标**：全部 JVM 指令改为产生 IR 节点，消灭所有 f-string 拼接：
+- 整型/浮点常量 → `Lit(val, ty)`
+- 算术运算 → `BinOp`
+- `new` 指令 → `NewPendingExpr(class_binary_name)`（从注释通用解析，无类名硬编码）
+- `getstatic/putstatic` → `StaticFieldRef` / `StaticFieldAssign`（从注释通用解析）
+- `getfield/putfield` → `FieldAccess` / `AssignStmt`（从注释通用解析）
+- `invokevirtual`（JDK）→ 保留 if-chain 暂时不动（T22 处理）
+- `invokevirtual`（用户类）→ `MethodCall`
+- store/load → `LetStmt` / `Var`
+
+**验收**：`instr.py` 中无 `f"..."` 字符串拼接，无 `__new__`/`__stdout__` 魔法字符串。
+
+---
+
+### T22 · method.py 删除正则后处理，改为 IR mutation 分析
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/method.py`  
+**依赖**：T21
+
+**目标**：删除 4 个正则后处理函数，替换为 IR 级分析：
+- 删 `_fix_coll_types`（类型由 IR 构建时确定）
+- 删 `_remove_unnecessary_mut`（替换为 `_analyze_mutation()` 扫描 `AssignStmt`）
+- 删 `_merge_aliases`（`store_local` 直接使用目标变量名）
+- 删 `_simplify_wrapping_add`（`iinc` 改为输出 `AssignStmt(BinOp("+="))`）
+
+新增 `_analyze_mutation(stmts) -> set[str]`，在渲染前遍历 IR 设置 `LetStmt.mutable`。
+
+**验收**：`method.py` 中无 `import re`，无任何正则操作。
+
+---
+
+### T23 · 阶段 A 回归验证
+**状态**：`[ ]`  
+**依赖**：T22
+
+**目标**：确认 A1–A4 改造后全部测试仍正确。
+
+**验收**：
+```bash
+cargo check   # 0 errors
+# Java vs Rust 输出对比
+for f in TestP0 TestP1 TestP2 TestP3; do
+  java_out=$(java -cp tests/classes $f)
+  rust_out=$(cd output && cargo run --release 2>/dev/null)
+  [ "$java_out" = "$rust_out" ] && echo "✓ $f" || echo "✗ $f"
+done
+# HelloWorld 端到端
+cd output && cargo run --release  # 输出 Hello, World!
+```
+
+---
+
+### T24 · jdk_dispatch.py 新建（过渡注册表）
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/jdk_dispatch.py`（新建）  
+**依赖**：T21
+
+**目标**：用注册表替代 `instr.py` 中的 if-chain：
+- `JDK_INTERFACE_GROUPS`：接口 binary name → 组 ID（不枚举实现类）
+- `get_dispatch_group(class_binary_name, registry)`：从 `ClassInfo.all_interfaces()` 动态推导组 ID
+- `JDK_VIRTUAL_METHODS`：`(组ID, 方法名)` → handler 函数（返回 IR 节点）
+- `instr.py` 的 `_gen_invokevirtual` 改为查注册表，删除所有 `_dispatch_list/map/set` 函数
+
+**注意**：`jdk_dispatch.py` 是过渡产物，Phase D（T27）完成后整个文件删除。
+
+**验收**：`instr.py` 中无 `if cls in (...)` JDK 分派 if-chain。
+
+---
+
+### T25 · 泛型类型实时确定（删除 JDK_COLL_TYPES）
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/jdk_dispatch.py`、`scripts/codegen/type_map.py`  
+**依赖**：T24
+
+**目标**：
+- `new ArrayList` 时压 `RsGeneric('ArrayList', [RsInfer()])`
+- 第一次 `list.add(elem)` 时，handler 调用 `_resolve_coll_type(sim, obj, elem_ty)` 将 `RsInfer` 替换为实际类型
+- 删除 `type_map.py` 中的 `JDK_COLL_TYPES`
+
+**验收**：`type_map.py` 中无 `JDK_COLL_TYPES`，`ArrayList<i32>` 类型由 IR 自动推导，无正则修补。
+
+---
+
+### T26 · 阶段 B 回归验证
+**状态**：`[ ]`  
+**依赖**：T25
+
+**目标**：确认 B1–B3 改造后全部测试仍正确，重点验证 TestP3（集合泛型）。
+
+**验收**：P0–P3 + HelloWorld 全部通过，TestP3 的 `ArrayList<i32>`/`HashMap<String,i32>` 类型正确。
+
+---
+
+### T27 · emitter.py 升级属性格式，build.rs 同步更新
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/emitter.py`、`output/build.rs`  
+**依赖**：T17（已完成）
+
+**目标**：
+- `emitter.py`：JDK 元数据文件从 `// @java_class(...)` 注释格式升级为 `#[java_class(...)]` 属性格式，嵌入完整元信息（`binary_name`、`super_class`、`interfaces`、`generic_sig`、`access`、`source`）
+- 接口类生成 `#[java_interface(...)]`，方法生成 `#[java_method(...)]` / `#[java_native(...)]`
+- `build.rs`：扫描正则从 `// @java_*` 改为 `#[java_*]`，从属性自动重建 `ClassRegistry`（含完整类层次图）
+- `build.rs` 中无任何手工维护的类名/接口名常量
+
+**验收**：生成的 `.rs` 文件使用 `#[java_class(...)]` 语法；`build.rs` 能从属性中正确重建继承链；`native_status.toml` 内容与之前一致。
+
+---
+
+### T28 · 完整 JDK 字节码翻译
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/emitter.py`  
+**依赖**：T23、T27
+
+**目标**：
+- `_gen_jdk_class_rs()` 从"生成元数据存根"改为调用与用户类相同的完整翻译流程
+- `write_cargo_project()` 中用户类和 JDK 类使用统一翻译入口 `write_class()`
+- 删除 `jdk_dispatch.py`（整个文件）
+- 删除 `type_map.py` 中剩余的任何 JDK 类名常量
+- `instr.py` 的 `_gen_invokevirtual` 退化为全类统一处理，无任何 JDK 特判
+
+**验收**：
+- `jdk_dispatch.py` 文件不存在
+- Python 代码中无任何 JDK 类名字符串常量
+- JDK 类的 `.rs` 文件有完整 Rust 方法体（非 `todo!` 存根）
+- 全部测试通过
+
+---
+
+### T29 · build.rs 构建阻断升级
+**状态**：`[ ]`  
+**文件**：`output/build.rs`  
+**依赖**：T27
+
+**目标**：将 `native_status.toml` 中 `needed` 状态的 native 方法从 `cargo:warning=` 升级为 `cargo:error=`，阻断构建并打印清晰错误信息。
+
+**验收**：当 `native_status.toml` 存在 `needed` 条目时，`cargo build` 报错并列出需要实现的方法；无 `needed` 条目时构建成功。
+
+---
+
+**阶段六任务依赖**：
+
+```
+T19 (rs_ir 扩展)      ─ 依赖 T02
+T20 (stack.py 严格化) ─ 依赖 T19
+T21 (instr.py IR化)   ─ 依赖 T20
+T22 (method.py 清理)  ─ 依赖 T21
+T23 (阶段A验证)       ─ 依赖 T22
+T24 (jdk_dispatch)    ─ 依赖 T21
+T25 (泛型推导)        ─ 依赖 T24
+T26 (阶段B验证)       ─ 依赖 T25
+T27 (属性格式升级)    ─ 依赖 T17
+T28 (JDK完整翻译)     ─ 依赖 T23, T27（删除 jdk_dispatch.py）
+T29 (构建阻断)        ─ 依赖 T27
+```
+
+**最优执行序**：T19 → T20 → T21 → T22 → T23（阶段A）→ T24 → T25 → T26（阶段B）→ T27（阶段C）→ T28（阶段D）→ T29（阶段E）
