@@ -9,8 +9,8 @@ JVM Generic Signature 解析器（JVMS §4.7.9）。
 # 已知类名 → Rust 类型映射
 _CLASSNAME_MAP: dict[str, str] = {
     'java/lang/String':        'String',
-    'java/lang/Object':        'JvmObject',
-    'java/lang/CharSequence':  'JvmObject',
+    'java/lang/Object':        'Object',
+    'java/lang/CharSequence':  'Object',
     'java/lang/Integer':       'i32',
     'java/lang/Long':          'i64',
     'java/lang/Double':        'f64',
@@ -76,12 +76,12 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
     - 基本类型 → 对应 Rust 基本类型
     - TypeVariable T<name>; 且 name 在 class_type_params → 类型变量名
     - ClassTypeSig（不带泛型参数）→ 按 _CLASSNAME_MAP 映射；未知则取短类名
-    - ClassTypeSig（带泛型参数）→ 'JvmObject'（暂时简化）
-    - 数组 → 'JvmObject'（暂时简化）
-    - 通配符 +/- → 取内部类型；* → 'JvmObject'
+    - ClassTypeSig（带泛型参数）→ 'Object'（暂时简化）
+    - 数组 → 'Object'（暂时简化）
+    - 通配符 +/- → 取内部类型；* → 'Object'
     """
     if i >= len(sig):
-        return 'JvmObject', i
+        return 'Object', i
 
     c = sig[i]
 
@@ -93,15 +93,15 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
         try:
             end = sig.index(';', i + 1)
         except ValueError:
-            return 'JvmObject', len(sig)
+            return 'Object', len(sig)
         name = sig[i + 1:end]
-        rust_type = name if name in class_type_params else 'JvmObject'
+        rust_type = name if name in class_type_params else 'Object'
         return rust_type, end + 1
 
     if c == '[':
-        # Array — 跳过整个 component，返回 JvmObject
+        # Array — 跳过整个 component，返回 Object
         _, next_i = _parse_one_type(sig, i + 1, class_type_params)
-        return 'JvmObject', next_i
+        return 'Object', next_i
 
     if c == '+' or c == '-':
         # 上下界通配符 — 取内部类型
@@ -109,7 +109,7 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
 
     if c == '*':
         # 无界通配符
-        return 'JvmObject', i + 1
+        return 'Object', i + 1
 
     if c == 'L':
         # ClassTypeSig: L<classname>(<TypeArgs>)?;
@@ -152,8 +152,8 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
             j += 1
 
         if has_type_args:
-            # 带泛型参数的类类型 → 暂时简化为 JvmObject
-            rust_type = 'JvmObject'
+            # 带泛型参数的类类型 → 暂时简化为 Object
+            rust_type = 'Object'
         else:
             rust_type = _CLASSNAME_MAP.get(
                 class_name,
@@ -162,7 +162,7 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
         return rust_type, j
 
     # 未知 — 前进一步
-    return 'JvmObject', i + 1
+    return 'Object', i + 1
 
 
 # ── 公开 API ──────────────────────────────────────────────────────
@@ -222,7 +222,7 @@ def parse_method_param_types(
       '(TE;)Z'    → (['E'], 'bool')
       '(I)TE;'    → (['i32'], 'E')
       '(TE;I)V'   → (['E', 'i32'], '()')
-      '(Ljava/lang/String;)Ljava/lang/Object;' → (['String'], 'JvmObject')
+      '(Ljava/lang/String;)Ljava/lang/Object;' → (['String'], 'Object')
 
     遇到解析错误时返回 ([], '')。
     """

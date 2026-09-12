@@ -271,7 +271,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         obj_expr, obj_ty = sim.pop()
         if comment:
             _, fname, fdesc = _parse_field_ref(comment)
-            ftype = jvm_to_rust(fdesc) if fdesc else 'JvmObject'
+            ftype = jvm_to_rust(fdesc) if fdesc else 'Object'
             sim.push(RawExpr(f"{render_expr(obj_expr)}.{fname}.get()"), RsNamed(ftype))
         else:
             sim.push(RawExpr(f"{render_expr(obj_expr)}.field"), I32)
@@ -288,10 +288,10 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'getstatic':
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
         if field_name:
-            ty_str = jvm_to_rust(descriptor) if descriptor else 'JvmObject'
+            ty_str = jvm_to_rust(descriptor) if descriptor else 'Object'
             sim.push(StaticFieldRef(cls, field_name, RsNamed(ty_str)), RsNamed(ty_str))
         else:
-            sim.push(RawExpr(f"/* getstatic {comment} */"), RsNamed('JvmObject'))
+            sim.push(RawExpr(f"/* getstatic {comment} */"), RsNamed('Object'))
     elif op == 'putstatic':
         val_expr, _ = sim.pop()
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
@@ -307,8 +307,8 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         sim.push(Var(v), RsGeneric('Vec', [RsNamed(elem_t)]))
     elif op == 'anewarray':
         count_expr, _ = sim.pop()
-        cls = short_cls(comment) or 'JvmObject'
-        elem_t = jvm_to_rust(f'L{cls};') if cls != 'JvmObject' else 'JvmObject'
+        cls = short_cls(comment) or 'Object'
+        elem_t = jvm_to_rust(f'L{cls};') if cls != 'Object' else 'Object'
         v = sim.fresh('_arr')
         sim.emit(RawStmt(f"let mut {v}: Vec<{elem_t}> = Vec::with_capacity({render_expr(count_expr)} as usize);"))
         sim.push(Var(v), RsGeneric('Vec', [RsNamed(elem_t)]))
@@ -333,7 +333,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'aaload':
         idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
-        elem_ty_str = arr_ty_str[4:-1] if arr_ty_str.startswith('Vec<') else 'JvmObject'
+        elem_ty_str = arr_ty_str[4:-1] if arr_ty_str.startswith('Vec<') else 'Object'
         sim.push(RawExpr(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize].clone()"), RsNamed(elem_ty_str))
     elif op == 'arraylength':
         arr_expr, _ = sim.pop()

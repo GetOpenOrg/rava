@@ -31,7 +31,7 @@ pub mod java;
 
 pub use error::{JvmError, Result};
 pub use types::Field;
-pub use java::lang::{String, System};
+pub use java::lang::{Object, String, System};
 pub use java::util::{ArrayList, HashMap, HashSet};
 
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
@@ -41,7 +41,7 @@ pub mod prelude {
     #![allow(unused_imports)]
     pub use super::error::{JvmError, Result};
     pub use super::types::Field;
-    pub use super::java::lang::{String, System};
+    pub use super::java::lang::{Object, String, System};
     pub use super::java::util::{ArrayList, HashMap, HashSet};
 }
 """,
@@ -89,12 +89,41 @@ pub mod util;
 
     # ── java/lang/ ─────────────────────────────────────────────────────
     "java/lang/mod.rs": """\
+pub mod math;
+pub mod object;
 pub mod string;
 pub mod system;
-pub mod math;
 
+pub use object::Object;
 pub use string::String;
 pub use system::System;
+""",
+
+    "java/lang/object.rs": """\
+//! java.lang.Object — 所有 Java 类的根类型
+
+#[doc(hidden)]
+pub mod raw {
+    use std::rc::Rc;
+
+    /// 存储层：内部路径 crate::java::lang::object::raw::Object
+    pub struct Object(pub Rc<dyn std::any::Any>);
+
+    impl Clone for Object {
+        fn clone(&self) -> Self {
+            Object(self.0.clone())
+        }
+    }
+
+    impl Default for Object {
+        fn default() -> Self {
+            Object(Rc::new(()))
+        }
+    }
+}
+
+/// 公开 API：re-export raw::Object 为 java.lang.Object
+pub use raw::Object;
 """,
 
     "java/lang/string.rs": """\

@@ -18,7 +18,7 @@ impl Object {
     }
 
     #[cfg_attr(any(), java_native(name = "getClass", descriptor = "()Ljava/lang/Class;", access = "public final native"))]
-    pub fn getClass(&self) -> Result<JvmObject> {
+    pub fn getClass(&self) -> Result<Object> {
         todo!("native java/lang/Object.getClass")
     }
 
@@ -28,13 +28,13 @@ impl Object {
     }
 
     #[cfg_attr(any(), java_method(name = "equals", descriptor = "(Ljava/lang/Object;)Z", access = "public"))]
-    pub fn equals(&self, obj: JvmObject) -> Result<bool> {
+    pub fn equals(&self, obj: Object) -> Result<bool> {
         let this = self;
         Ok(/* if_acmpne */ true)
     }
 
     #[cfg_attr(any(), java_native(name = "clone", descriptor = "()Ljava/lang/Object;", access = "protected native"))]
-    pub fn clone(&self) -> Result<JvmObject> {
+    pub fn clone(&self) -> Result<Object> {
         todo!("native java/lang/Object.clone")
     }
 
@@ -78,8 +78,8 @@ impl Object {
         this.wait0(timeoutMillis)?;
         Blocker::end(comp)?;
         let mut e: i32 = /* UNDERFLOW */;
-        let _t1: JvmObject = Thread::currentThread()?;
-        let mut thread: JvmObject = _t1;
+        let _t1: Object = Thread::currentThread()?;
+        let mut thread: Object = _t1;
         let _t2 = thread.isVirtual()?;
         let _t3 = thread.getAndClearInterrupt()?;
         panic!("{}", /* e */);

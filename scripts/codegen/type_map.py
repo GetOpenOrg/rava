@@ -11,7 +11,7 @@ JVM_RUST: dict[str, str] = {
     'I': 'i32', 'J': 'i64', 'F': 'f32', 'D': 'f64', 'Z': 'bool',
     'B': 'i8',  'S': 'i16', 'C': 'u16', 'V': '()',
     'Ljava/lang/String;':  'String',     # java.lang.String（不是 std::string::String）
-    'Ljava/lang/Object;':  'JvmObject',
+    'Ljava/lang/Object;':  'Object',
     'Ljava/lang/Integer;': 'i32',
     'Ljava/lang/Long;':    'i64',
     'Ljava/lang/Double;':  'f64',
@@ -53,7 +53,7 @@ UNBOX_VIRTUAL: set[str] = {
 # ── 工具函数 ────────────────────────────────────────────────────
 
 def jvm_to_rust(t: str) -> str:
-    return JVM_RUST.get(t, 'JvmObject')
+    return JVM_RUST.get(t, 'Object')
 
 
 def sig_type(rt: str) -> str:

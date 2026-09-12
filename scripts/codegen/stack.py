@@ -69,7 +69,7 @@ class StackSim:
                 self.locals[slot] = (name, rt, False)
         else:
             # this 是当前类的句柄（不再用 Rc<RefCell<...>>，直接用类名）
-            this_ty = RsNamed(class_name) if class_name else RsNamed("JvmObject")
+            this_ty = RsNamed(class_name) if class_name else RsNamed("Object")
             self.locals[0] = ("this", this_ty, False)
             for slot, rt in enumerate(param_rust_types):
                 name = _safe_name(self._loc_names.get(slot + 1, f"arg_{slot}"))

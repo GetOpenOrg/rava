@@ -22,66 +22,66 @@ impl<E: Clone + 'static> List<E> {
     }
 
     #[cfg_attr(any(), java_native(name = "contains", descriptor = "(Ljava/lang/Object;)Z", access = "public abstract"))]
-    pub fn contains(&self, arg0: JvmObject) -> Result<bool> {
+    pub fn contains(&self, arg0: Object) -> Result<bool> {
         todo!("abstract java/util/List.contains")
     }
 
     #[cfg_attr(any(), java_native(name = "iterator", descriptor = "()Ljava/util/Iterator;", access = "public abstract"))]
-    pub fn iterator(&self) -> Result<JvmObject> {
+    pub fn iterator(&self) -> Result<Object> {
         todo!("abstract java/util/List.iterator")
     }
 
     #[cfg_attr(any(), java_native(name = "toArray", descriptor = "()[Ljava/lang/Object;", access = "public abstract"))]
-    pub fn toArray(&self) -> Result<JvmObject> {
+    pub fn toArray(&self) -> Result<Object> {
         todo!("abstract java/util/List.toArray")
     }
 
     #[cfg_attr(any(), java_native(name = "toArray", descriptor = "([Ljava/lang/Object;)[Ljava/lang/Object;", access = "public abstract"))]
-    pub fn toArray__arr_obj(&self, arg0: JvmObject) -> Result<JvmObject> {
+    pub fn toArray__arr_obj(&self, arg0: Object) -> Result<Object> {
         todo!("abstract java/util/List.toArray")
     }
 
     #[cfg_attr(any(), java_native(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public abstract"))]
-    pub fn add__obj(&self, arg0: JvmObject) -> Result<bool> {
+    pub fn add__obj(&self, arg0: Object) -> Result<bool> {
         todo!("abstract java/util/List.add")
     }
 
     #[cfg_attr(any(), java_native(name = "remove", descriptor = "(Ljava/lang/Object;)Z", access = "public abstract"))]
-    pub fn remove__obj(&self, arg0: JvmObject) -> Result<bool> {
+    pub fn remove__obj(&self, arg0: Object) -> Result<bool> {
         todo!("abstract java/util/List.remove")
     }
 
     #[cfg_attr(any(), java_native(name = "containsAll", descriptor = "(Ljava/util/Collection;)Z", access = "public abstract"))]
-    pub fn containsAll(&self, arg0: JvmObject) -> Result<bool> {
+    pub fn containsAll(&self, arg0: Object) -> Result<bool> {
         todo!("abstract java/util/List.containsAll")
     }
 
     #[cfg_attr(any(), java_native(name = "addAll", descriptor = "(Ljava/util/Collection;)Z", access = "public abstract"))]
-    pub fn addAll__coll(&self, arg0: JvmObject) -> Result<bool> {
+    pub fn addAll__coll(&self, arg0: Object) -> Result<bool> {
         todo!("abstract java/util/List.addAll")
     }
 
     #[cfg_attr(any(), java_native(name = "addAll", descriptor = "(ILjava/util/Collection;)Z", access = "public abstract"))]
-    pub fn addAll__i_coll(&self, arg0: i32, arg1: JvmObject) -> Result<bool> {
+    pub fn addAll__i_coll(&self, arg0: i32, arg1: Object) -> Result<bool> {
         todo!("abstract java/util/List.addAll")
     }
 
     #[cfg_attr(any(), java_native(name = "removeAll", descriptor = "(Ljava/util/Collection;)Z", access = "public abstract"))]
-    pub fn removeAll(&self, arg0: JvmObject) -> Result<bool> {
+    pub fn removeAll(&self, arg0: Object) -> Result<bool> {
         todo!("abstract java/util/List.removeAll")
     }
 
     #[cfg_attr(any(), java_native(name = "retainAll", descriptor = "(Ljava/util/Collection;)Z", access = "public abstract"))]
-    pub fn retainAll(&self, arg0: JvmObject) -> Result<bool> {
+    pub fn retainAll(&self, arg0: Object) -> Result<bool> {
         todo!("abstract java/util/List.retainAll")
     }
 
     #[cfg_attr(any(), java_method(name = "replaceAll", descriptor = "(Ljava/util/function/UnaryOperator;)V", access = "public"))]
-    pub fn replaceAll(&self, operator: JvmObject) -> Result<()> {
+    pub fn replaceAll(&self, operator: Object) -> Result<()> {
         let this = self;
-        let _t0: JvmObject = Objects::requireNonNull(operator)?;
+        let _t0: Object = Objects::requireNonNull(operator)?;
         let _t1 = this.listIterator()?;
-        let mut li: JvmObject = _t1;
+        let mut li: Object = _t1;
         loop {
             let _t0 = li.hasNext()?;
             if _t0==0i32 { break; }
@@ -93,19 +93,19 @@ impl<E: Clone + 'static> List<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "sort", descriptor = "(Ljava/util/Comparator;)V", access = "public"))]
-    pub fn sort(&self, c: JvmObject) -> Result<()> {
+    pub fn sort(&self, c: Object) -> Result<()> {
         let this = self;
         let _t0 = this.toArray()?;
-        let mut a: JvmObject = _t0;
+        let mut a: Object = _t0;
         Arrays::sort(a, c)?;
         let _t1 = this.listIterator()?;
-        let mut i: JvmObject = _t1;
-        let mut local_4: JvmObject = a;
+        let mut i: Object = _t1;
+        let mut local_4: Object = a;
         let mut local_5: i32 = (local_4.len() as i32);
         let mut local_6: i32 = 0i32;
         loop {
             if local_6 >= local_5 { break; }
-            let mut e: JvmObject = local_4[local_6 as usize].clone();
+            let mut e: Object = local_4[local_6 as usize].clone();
             let _t0 = i.next()?;
             i.set(e)?;
             local_6 = local_6.wrapping_add(1i32);
@@ -119,7 +119,7 @@ impl<E: Clone + 'static> List<E> {
     }
 
     #[cfg_attr(any(), java_native(name = "equals", descriptor = "(Ljava/lang/Object;)Z", access = "public abstract"))]
-    pub fn equals(&self, arg0: JvmObject) -> Result<bool> {
+    pub fn equals(&self, arg0: Object) -> Result<bool> {
         todo!("abstract java/util/List.equals")
     }
 
@@ -129,55 +129,55 @@ impl<E: Clone + 'static> List<E> {
     }
 
     #[cfg_attr(any(), java_native(name = "get", descriptor = "(I)Ljava/lang/Object;", access = "public abstract"))]
-    pub fn get(&self, arg0: i32) -> Result<JvmObject> {
+    pub fn get(&self, arg0: i32) -> Result<Object> {
         todo!("abstract java/util/List.get")
     }
 
     #[cfg_attr(any(), java_native(name = "set", descriptor = "(ILjava/lang/Object;)Ljava/lang/Object;", access = "public abstract"))]
-    pub fn set(&self, arg0: i32, arg1: JvmObject) -> Result<JvmObject> {
+    pub fn set(&self, arg0: i32, arg1: Object) -> Result<Object> {
         todo!("abstract java/util/List.set")
     }
 
     #[cfg_attr(any(), java_native(name = "add", descriptor = "(ILjava/lang/Object;)V", access = "public abstract"))]
-    pub fn add__i_obj(&self, arg0: i32, arg1: JvmObject) -> Result<()> {
+    pub fn add__i_obj(&self, arg0: i32, arg1: Object) -> Result<()> {
         todo!("abstract java/util/List.add")
     }
 
     #[cfg_attr(any(), java_native(name = "remove", descriptor = "(I)Ljava/lang/Object;", access = "public abstract"))]
-    pub fn remove__i(&self, arg0: i32) -> Result<JvmObject> {
+    pub fn remove__i(&self, arg0: i32) -> Result<Object> {
         todo!("abstract java/util/List.remove")
     }
 
     #[cfg_attr(any(), java_native(name = "indexOf", descriptor = "(Ljava/lang/Object;)I", access = "public abstract"))]
-    pub fn indexOf(&self, arg0: JvmObject) -> Result<i32> {
+    pub fn indexOf(&self, arg0: Object) -> Result<i32> {
         todo!("abstract java/util/List.indexOf")
     }
 
     #[cfg_attr(any(), java_native(name = "lastIndexOf", descriptor = "(Ljava/lang/Object;)I", access = "public abstract"))]
-    pub fn lastIndexOf(&self, arg0: JvmObject) -> Result<i32> {
+    pub fn lastIndexOf(&self, arg0: Object) -> Result<i32> {
         todo!("abstract java/util/List.lastIndexOf")
     }
 
     #[cfg_attr(any(), java_native(name = "listIterator", descriptor = "()Ljava/util/ListIterator;", access = "public abstract"))]
-    pub fn listIterator(&self) -> Result<JvmObject> {
+    pub fn listIterator(&self) -> Result<Object> {
         todo!("abstract java/util/List.listIterator")
     }
 
     #[cfg_attr(any(), java_native(name = "listIterator", descriptor = "(I)Ljava/util/ListIterator;", access = "public abstract"))]
-    pub fn listIterator__i(&self, arg0: i32) -> Result<JvmObject> {
+    pub fn listIterator__i(&self, arg0: i32) -> Result<Object> {
         todo!("abstract java/util/List.listIterator")
     }
 
     #[cfg_attr(any(), java_native(name = "subList", descriptor = "(II)Ljava/util/List;", access = "public abstract"))]
-    pub fn subList(&self, arg0: i32, arg1: i32) -> Result<JvmObject> {
+    pub fn subList(&self, arg0: i32, arg1: i32) -> Result<Object> {
         todo!("abstract java/util/List.subList")
     }
 
     #[cfg_attr(any(), java_method(name = "spliterator", descriptor = "()Ljava/util/Spliterator;", access = "public"))]
-    pub fn spliterator(&self) -> Result<JvmObject> {
+    pub fn spliterator(&self) -> Result<Object> {
         let this = self;
         return Ok(AbstractList$RandomAccessSpliterator::new(this)?);
-        let _t0: JvmObject = Spliterators::spliterator(this, 16i32)?;
+        let _t0: Object = Spliterators::spliterator(this, 16i32)?;
         Ok(_t0)
     }
 
@@ -234,84 +234,84 @@ impl<E: Clone + 'static> List<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "reversed", descriptor = "()Ljava/util/List;", access = "public"))]
-    pub fn reversed(&self) -> Result<JvmObject> {
+    pub fn reversed(&self) -> Result<Object> {
         let this = self;
-        let _t0: JvmObject = ReverseOrderListView::of(this, 1i32)?;
+        let _t0: Object = ReverseOrderListView::of(this, 1i32)?;
         Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "()Ljava/util/List;", access = "public static"))]
     // java: of()Ljava/util/List;
-    pub fn of() -> Result<JvmObject> {
+    pub fn of() -> Result<Object> {
         Ok(ImmutableCollections::EMPTY_LIST())
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj(e1: E) -> Result<JvmObject> {
+    pub fn of__obj(e1: E) -> Result<Object> {
         Ok(ImmutableCollections$List12::new(e1)?)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj(e1: E, e2: E) -> Result<JvmObject> {
+    pub fn of__obj_obj(e1: E, e2: E) -> Result<Object> {
         Ok(ImmutableCollections$List12::new(e1, e2)?)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj(e1: E, e2: E, e3: E) -> Result<JvmObject> {
-        let mut _arr0: Vec<JvmObject> = Vec::with_capacity(3i32 as usize);
+    pub fn of__obj_obj_obj(e1: E, e2: E, e3: E) -> Result<Object> {
+        let mut _arr0: Vec<Object> = Vec::with_capacity(3i32 as usize);
         _arr0[0i32 as usize] = e1;
         _arr0[1i32 as usize] = e2;
         _arr0[2i32 as usize] = e3;
-        let _t1: JvmObject = ImmutableCollections::listFromTrustedArray(&_arr0)?;
+        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E) -> Result<JvmObject> {
-        let mut _arr0: Vec<JvmObject> = Vec::with_capacity(4i32 as usize);
+    pub fn of__obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E) -> Result<Object> {
+        let mut _arr0: Vec<Object> = Vec::with_capacity(4i32 as usize);
         _arr0[0i32 as usize] = e1;
         _arr0[1i32 as usize] = e2;
         _arr0[2i32 as usize] = e3;
         _arr0[3i32 as usize] = e4;
-        let _t1: JvmObject = ImmutableCollections::listFromTrustedArray(&_arr0)?;
+        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E) -> Result<JvmObject> {
-        let mut _arr0: Vec<JvmObject> = Vec::with_capacity(5i32 as usize);
+    pub fn of__obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E) -> Result<Object> {
+        let mut _arr0: Vec<Object> = Vec::with_capacity(5i32 as usize);
         _arr0[0i32 as usize] = e1;
         _arr0[1i32 as usize] = e2;
         _arr0[2i32 as usize] = e3;
         _arr0[3i32 as usize] = e4;
         _arr0[4i32 as usize] = e5;
-        let _t1: JvmObject = ImmutableCollections::listFromTrustedArray(&_arr0)?;
+        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E) -> Result<JvmObject> {
-        let mut _arr0: Vec<JvmObject> = Vec::with_capacity(6i32 as usize);
+    pub fn of__obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E) -> Result<Object> {
+        let mut _arr0: Vec<Object> = Vec::with_capacity(6i32 as usize);
         _arr0[0i32 as usize] = e1;
         _arr0[1i32 as usize] = e2;
         _arr0[2i32 as usize] = e3;
         _arr0[3i32 as usize] = e4;
         _arr0[4i32 as usize] = e5;
         _arr0[5i32 as usize] = e6;
-        let _t1: JvmObject = ImmutableCollections::listFromTrustedArray(&_arr0)?;
+        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E) -> Result<JvmObject> {
-        let mut _arr0: Vec<JvmObject> = Vec::with_capacity(7i32 as usize);
+    pub fn of__obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E) -> Result<Object> {
+        let mut _arr0: Vec<Object> = Vec::with_capacity(7i32 as usize);
         _arr0[0i32 as usize] = e1;
         _arr0[1i32 as usize] = e2;
         _arr0[2i32 as usize] = e3;
@@ -319,14 +319,14 @@ impl<E: Clone + 'static> List<E> {
         _arr0[4i32 as usize] = e5;
         _arr0[5i32 as usize] = e6;
         _arr0[6i32 as usize] = e7;
-        let _t1: JvmObject = ImmutableCollections::listFromTrustedArray(&_arr0)?;
+        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E) -> Result<JvmObject> {
-        let mut _arr0: Vec<JvmObject> = Vec::with_capacity(8i32 as usize);
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E) -> Result<Object> {
+        let mut _arr0: Vec<Object> = Vec::with_capacity(8i32 as usize);
         _arr0[0i32 as usize] = e1;
         _arr0[1i32 as usize] = e2;
         _arr0[2i32 as usize] = e3;
@@ -335,14 +335,14 @@ impl<E: Clone + 'static> List<E> {
         _arr0[5i32 as usize] = e6;
         _arr0[6i32 as usize] = e7;
         _arr0[7i32 as usize] = e8;
-        let _t1: JvmObject = ImmutableCollections::listFromTrustedArray(&_arr0)?;
+        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E, e9: E) -> Result<JvmObject> {
-        let mut _arr0: Vec<JvmObject> = Vec::with_capacity(9i32 as usize);
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E, e9: E) -> Result<Object> {
+        let mut _arr0: Vec<Object> = Vec::with_capacity(9i32 as usize);
         _arr0[0i32 as usize] = e1;
         _arr0[1i32 as usize] = e2;
         _arr0[2i32 as usize] = e3;
@@ -352,14 +352,14 @@ impl<E: Clone + 'static> List<E> {
         _arr0[6i32 as usize] = e7;
         _arr0[7i32 as usize] = e8;
         _arr0[8i32 as usize] = e9;
-        let _t1: JvmObject = ImmutableCollections::listFromTrustedArray(&_arr0)?;
+        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E, e9: E, e10: E) -> Result<JvmObject> {
-        let mut _arr0: Vec<JvmObject> = Vec::with_capacity(10i32 as usize);
+    pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: E, e2: E, e3: E, e4: E, e5: E, e6: E, e7: E, e8: E, e9: E, e10: E) -> Result<Object> {
+        let mut _arr0: Vec<Object> = Vec::with_capacity(10i32 as usize);
         _arr0[0i32 as usize] = e1;
         _arr0[1i32 as usize] = e2;
         _arr0[2i32 as usize] = e3;
@@ -370,25 +370,25 @@ impl<E: Clone + 'static> List<E> {
         _arr0[7i32 as usize] = e8;
         _arr0[8i32 as usize] = e9;
         _arr0[9i32 as usize] = e10;
-        let _t1: JvmObject = ImmutableCollections::listFromTrustedArray(&_arr0)?;
+        let _t1: Object = ImmutableCollections::listFromTrustedArray(&_arr0)?;
         Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "of", descriptor = "([Ljava/lang/Object;)Ljava/util/List;", access = "public static"))]
     // java: of([Ljava/lang/Object;)Ljava/util/List;
-    pub fn of__arr_obj(elements: JvmObject) -> Result<JvmObject> {
+    pub fn of__arr_obj(elements: Object) -> Result<Object> {
         /* TODO: tableswitch default:59 low:0 high:2 */
-        let mut list: JvmObject = ImmutableCollections::EMPTY_LIST();
+        let mut list: Object = ImmutableCollections::EMPTY_LIST();
         return Ok(list);
         return Ok(ImmutableCollections$List12::new(elements[0i32 as usize].clone())?);
         return Ok(ImmutableCollections$List12::new(elements[0i32 as usize].clone(), elements[1i32 as usize].clone())?);
-        let _t0: JvmObject = ImmutableCollections::listFromArray(elements)?;
+        let _t0: Object = ImmutableCollections::listFromArray(elements)?;
         Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "(Ljava/util/Collection;)Ljava/util/List;", access = "public static"))]
-    pub fn copyOf(coll: JvmObject) -> Result<JvmObject> {
-        let _t0: JvmObject = ImmutableCollections::listCopy(coll)?;
+    pub fn copyOf(coll: Object) -> Result<Object> {
+        let _t0: Object = ImmutableCollections::listCopy(coll)?;
         Ok(_t0)
     }
 }
