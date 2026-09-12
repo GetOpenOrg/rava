@@ -16,6 +16,7 @@ from .types import ClassInfo, FieldInfo, ParsedMethod
 from .type_map import jvm_to_rust, rust_default, short_cls
 from .method import gen_method_body, _indent
 from .runtime import RUNTIME_FILES
+from .sig_parser import parse_class_type_params
 
 # Access flags
 _ACC_PUBLIC    = 0x0001
@@ -216,15 +217,28 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
     # 用短名作为 Rust 标识符（JDK 类的 ci.name 含 /，不是合法 Rust 名）
     struct_name = short_cls(ci.name) if '/' in ci.name else ci.name
 
+    # 解析类级泛型参数（如 ArrayList<E>、HashMap<K,V>）
+    class_type_params = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+
+    # 构建泛型参数字符串（用于 struct 和 impl 头）
+    if class_type_params:
+        type_params_str = ', '.join(class_type_params)
+        bounds_str = ', '.join(f"{p}: Clone + 'static" for p in class_type_params)
+        struct_generic = f"<{type_params_str}>"
+        impl_header   = f"impl<{bounds_str}> {struct_name}<{type_params_str}>"
+    else:
+        struct_generic = ''
+        impl_header   = f"impl {struct_name}"
+
     if inst_fields:
         field_lines = []
         for f in inst_fields:
             field_lines.append("    " + _java_field_attr(f))
             field_lines.append(f"    pub {f.name}: Field<{jvm_to_rust(f.descriptor)}>,")
         decls = '\n'.join(field_lines)
-        parts.append(f"pub struct {struct_name} {{\n{decls}\n}}\n")
+        parts.append(f"pub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
     else:
-        parts.append(f"pub struct {struct_name};\n")
+        parts.append(f"pub struct {struct_name}{struct_generic};\n")
 
     method_blocks: list[str] = []
     for m in ci.methods:
@@ -236,13 +250,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
-                body = gen_method_body(m, ci, registry=registry)
+                body = gen_method_body(m, ci, registry=registry, class_type_params=class_type_params)
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:
                 method_blocks.append(f"/* codegen error {m.name}: {e} */")
 
     impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
-    parts.append(f"impl {struct_name} {{\n{impl_body}\n}}\n")
+    parts.append(f"{impl_header} {{\n{impl_body}\n}}\n")
     return '\n'.join(parts)
 
 

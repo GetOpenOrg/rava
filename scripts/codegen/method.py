@@ -117,13 +117,42 @@ def _indent(block: str, n: int = 4) -> str:
     return '\n'.join(pad + ln if ln.strip() else '' for ln in block.split('\n'))
 
 
-def gen_method_body(method: ParsedMethod, class_info: ClassInfo, registry: dict | None = None) -> str:
+def gen_method_body(
+    method: ParsedMethod,
+    class_info: ClassInfo,
+    registry: dict | None = None,
+    class_type_params: list[str] | None = None,
+) -> str:
+    from .sig_parser import parse_method_param_types
+    _class_tparams = class_type_params or []
+
+    # 如果方法有泛型签名且类有类型参数，用签名推断参数/返回类型
+    if method.generic_signature and _class_tparams:
+        sig_param_types, sig_ret_type = parse_method_param_types(
+            method.generic_signature, _class_tparams
+        )
+    else:
+        sig_param_types, sig_ret_type = [], ''
+
     instrs           = method.instrs
     loop_map         = {lp.start_idx: lp for lp in find_loops(instrs)}
     bool_cond_map    = find_boolean_conditions(instrs)
     param_types      = method.param_types
-    rust_param_types = [jvm_to_rust(t) for t in param_types]
-    rust_ret         = jvm_to_rust(method.return_type)
+
+    # 参数类型：如果泛型签名提供了类型变量，优先使用
+    if sig_param_types and len(sig_param_types) == len(param_types):
+        rust_param_types = [
+            sp if sp in _class_tparams else jp
+            for sp, jp in zip(sig_param_types, [jvm_to_rust(t) for t in param_types])
+        ]
+    else:
+        rust_param_types = [jvm_to_rust(t) for t in param_types]
+
+    # 返回类型：如果泛型签名返回值是类型变量，优先使用
+    if sig_ret_type and sig_ret_type in _class_tparams:
+        rust_ret = sig_ret_type
+    else:
+        rust_ret = jvm_to_rust(method.return_type)
     is_ctor          = method.is_constructor
     is_static        = method.is_static
 
