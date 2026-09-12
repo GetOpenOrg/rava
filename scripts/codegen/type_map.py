@@ -18,7 +18,10 @@ JVM_RUST: dict[str, str] = {
     'Ljava/lang/Boolean;': 'bool',
     '[I': 'Vec<i32>', '[J': 'Vec<i64>',
     '[F': 'Vec<f32>', '[D': 'Vec<f64>',
+    '[B': 'Vec<i8>',  '[S': 'Vec<i16>',
+    '[C': 'Vec<u16>', '[Z': 'Vec<bool>',
     '[Ljava/lang/String;': 'Vec<String>',
+    '[Ljava/lang/Object;': 'Vec<Object>',
 }
 
 # newarray 操作数 → (Rust 元素类型, 零值字面量)
@@ -53,7 +56,16 @@ UNBOX_VIRTUAL: set[str] = {
 # ── 工具函数 ────────────────────────────────────────────────────
 
 def jvm_to_rust(t: str) -> str:
-    return JVM_RUST.get(t, 'Object')
+    if t in JVM_RUST:
+        return JVM_RUST[t]
+    if t.startswith('L') and t.endswith(';'):
+        inner = t[1:-1]
+        name = short_cls(inner)
+        return name if name else 'Object'
+    if t.startswith('['):
+        elem = jvm_to_rust(t[1:])
+        return f'Vec<{elem}>'
+    return 'Object'
 
 
 def sig_type(rt: str) -> str:
@@ -77,7 +89,8 @@ def is_jdk(cls: str) -> bool:
 
 
 def short_cls(cls: str) -> str:
-    return cls.split('/')[-1].split('.')[-1] if cls else ''
+    name = cls.split('/')[-1].split('.')[-1] if cls else ''
+    return name.replace('$', '_')
 
 
 def parse_descriptor_params(desc: str) -> list[str]:
