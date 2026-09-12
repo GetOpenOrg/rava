@@ -26,6 +26,7 @@ from .type_map import (
     parse_descriptor_params, parse_descriptor_return,
 )
 from .types import Instr
+from .jdk_dispatch import dispatch_virtual
 
 
 # ── 辅助：解析 javap 注释中的方法引用 ────────────────────────────
@@ -87,7 +88,7 @@ def _parse_field_ref(comment: str) -> tuple[str, str, str]:
 
 # ── 主分发函数 ────────────────────────────────────────────────────
 
-def sim_instr(ins: Instr, sim: StackSim, class_name: str):
+def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None = None):
     op      = ins.opcode
     operand = ins.operand or ''
     comment = ins.comment or ''
@@ -335,7 +336,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str):
     elif op == 'invokestatic':
         _gen_invokestatic(sim, comment, class_name)
     elif op in ('invokevirtual', 'invokeinterface'):
-        _gen_invokevirtual(sim, comment, class_name)
+        _gen_invokevirtual(sim, comment, class_name, registry=registry)
 
     # ── 返回 ──
     elif op == 'return':
@@ -512,7 +513,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str):
         sim.push(Var(v), RsNamed(rust_ret))
 
 
-def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str):
+def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
     args = []
     for _ in range(len(params)):
@@ -554,19 +555,8 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str):
         if mname == '<init>':
             return
 
-    # ArrayList / List
-    if cls in ('ArrayList', 'List', 'Collection') or obj_ty.startswith('Vec<') or obj_ty.startswith('ArrayList<'):
-        _dispatch_list(sim, obj_e, obj_ty, mname, args)
-        return
-
-    # HashMap / Map
-    if cls in ('HashMap', 'LinkedHashMap', 'TreeMap', 'Map') or obj_ty.startswith('HashMap<'):
-        _dispatch_map(sim, obj_e, mname, args)
-        return
-
-    # HashSet / Set
-    if cls in ('HashSet', 'TreeSet', 'Set') or obj_ty.startswith('HashSet<'):
-        _dispatch_set(sim, obj_e, mname, args)
+    # JDK 集合虚方法分派（接口驱动，降级到类名前缀匹配）
+    if dispatch_virtual(sim, obj_expr, obj_ty_node, obj_e, obj_ty, cls, mname, args, class_name, registry=registry):
         return
 
     # 用户类实例方法：obj.method(args)?
@@ -586,85 +576,3 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str):
     sim.emit(RawStmt(f"/* {cls}.{mname}({', '.join(args)}) */"))
 
 
-def _dispatch_list(sim: StackSim, obj: str, obj_ty: str, mname: str, args: list):
-    """ArrayList 方法分发（java.util.ArrayList 同构 API）"""
-    if mname == 'add':
-        item = args[0] if args else 'String::new()'
-        sim.emit(RawStmt(f"{obj}.add({item})?;"))
-        sim.push(Lit('true'), BOOL)  # 占位，会被 pop 丢弃
-    elif mname == 'get':
-        idx = args[0] if args else '0i32'
-        if obj_ty.startswith('ArrayList<'):
-            elem_ty = obj_ty[10:-1]
-        elif obj_ty.startswith('Vec<'):
-            elem_ty = obj_ty[4:-1]
-        else:
-            elem_ty = 'String'
-        v = sim.fresh('_e')
-        sim.emit(RawStmt(f"let {v}: {elem_ty} = {obj}.get({idx})?;"))
-        sim.push(Var(v), RsNamed(elem_ty))
-    elif mname == 'size':
-        sim.push(RawExpr(f"{obj}.size()"), I32)
-    elif mname == 'isEmpty':
-        sim.push(RawExpr(f"{obj}.is_empty()"), BOOL)
-    elif mname == 'remove':
-        idx = args[0] if args else '0i32'
-        sim.emit(RawStmt(f"{obj}.remove_at({idx});"))
-    elif mname == 'set':
-        idx = args[0]; val = args[1] if len(args) > 1 else 'String::new()'
-        v = sim.fresh('_old')
-        sim.emit(RawStmt(f"let {v} = {obj}.set_at({idx}, {val})?;"))
-        sim.push(Var(v), RsNamed('String'))
-    elif mname == 'contains':
-        sim.push(RawExpr(f"{obj}.contains(&{args[0] if args else 'String::new()'})"), BOOL)
-    elif mname == 'clear':
-        sim.emit(RawStmt(f"{obj}.clear();"))
-    else:
-        sim.emit(RawStmt(f"/* ArrayList.{mname} */"))
-
-
-def _dispatch_map(sim: StackSim, obj: str, mname: str, args: list):
-    """HashMap 方法分发（java.util.HashMap 同构 API）"""
-    if mname == 'put':
-        k = args[0]; v_val = args[1] if len(args) > 1 else 'String::new()'
-        sim.emit(RawStmt(f"{obj}.put({k}, {v_val});"))
-        sim.push(RawExpr('None::<String>'), RsGeneric('Option', [RsNamed('String')]))  # 占位
-    elif mname == 'get':
-        k = args[0] if args else 'String::new()'
-        v = sim.fresh('_v')
-        sim.emit(RawStmt(f"let {v} = {obj}.get(&{k}).unwrap_or_default();"))
-        sim.push(Var(v), RsNamed('String'))  # 实际类型由 _fix_coll_types 后处理修正
-    elif mname == 'getOrDefault':
-        k = args[0]; d = args[1] if len(args) > 1 else 'String::new()'
-        v = sim.fresh('_v')
-        sim.emit(RawStmt(f"let {v} = {obj}.get_or_default(&{k}, {d});"))
-        sim.push(Var(v), RsNamed('String'))
-    elif mname == 'size':
-        sim.push(RawExpr(f"{obj}.size()"), I32)
-    elif mname == 'containsKey':
-        sim.push(RawExpr(f"{obj}.contains_key(&{args[0] if args else 'String::new()'})"), BOOL)
-    elif mname == 'containsValue':
-        sim.push(Lit('false'), BOOL)  # 简化实现
-    elif mname == 'remove':
-        sim.emit(RawStmt(f"{obj}.remove(&{args[0] if args else 'String::new()'});"))
-    elif mname == 'isEmpty':
-        sim.push(RawExpr(f"{obj}.is_empty()"), BOOL)
-    else:
-        sim.emit(RawStmt(f"/* HashMap.{mname} */"))
-
-
-def _dispatch_set(sim: StackSim, obj: str, mname: str, args: list):
-    """HashSet 方法分发（java.util.HashSet 同构 API）"""
-    if mname == 'add':
-        sim.emit(RawStmt(f"{obj}.add({args[0] if args else 'String::new()'});"))
-        sim.push(Lit('true'), BOOL)
-    elif mname == 'contains':
-        sim.push(RawExpr(f"{obj}.contains(&{args[0] if args else 'String::new()'})"), BOOL)
-    elif mname == 'size':
-        sim.push(RawExpr(f"{obj}.size()"), I32)
-    elif mname == 'remove':
-        sim.emit(RawStmt(f"{obj}.remove(&{args[0] if args else 'String::new()'});"))
-    elif mname == 'isEmpty':
-        sim.push(RawExpr(f"{obj}.is_empty()"), BOOL)
-    else:
-        sim.emit(RawStmt(f"/* HashSet.{mname} */"))

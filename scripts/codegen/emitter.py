@@ -194,7 +194,7 @@ def _gen_jdk_class_rs(ci: ClassInfo) -> str:
     return '\n'.join(lines) + '\n'
 
 
-def _gen_class_rs(ci: ClassInfo) -> str:
+def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -233,7 +233,7 @@ def _gen_class_rs(ci: ClassInfo) -> str:
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
-                body = gen_method_body(m, ci)
+                body = gen_method_body(m, ci, registry=registry)
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:
                 method_blocks.append(f"/* codegen error {m.name}: {e} */")
@@ -292,11 +292,17 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         reexport.setdefault(parent, set()).add((mod_name, ci.name))
 
     # 6. 写各类的 .rs 文件
+    # 构建 registry：所有已知类（用户类 + JDK 类）的 binary_name → ClassInfo 映射
+    registry: dict = {ci.name: ci for ci in class_infos}
+    if jdk_class_infos:
+        for jci in jdk_class_infos:
+            registry.setdefault(jci.name, jci)
+
     for ci in class_infos:
         file_path, _, _ = layout[ci.name]
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, 'w') as f:
-            f.write(_gen_class_rs(ci))
+            f.write(_gen_class_rs(ci, registry=registry))
 
     # 7. 写中间包目录的 mod.rs（含 pub mod 和 pub use 再导出）
     for dir_path, children in mod_tree.items():

@@ -116,7 +116,7 @@ def _indent(block: str, n: int = 4) -> str:
     return '\n'.join(pad + ln if ln.strip() else '' for ln in block.split('\n'))
 
 
-def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
+def gen_method_body(method: ParsedMethod, class_info: ClassInfo, registry: dict | None = None) -> str:
     instrs           = method.instrs
     loop_map         = {lp.start_idx: lp for lp in find_loops(instrs)}
     param_types      = method.param_types
@@ -211,7 +211,7 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
             pre_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
             pre_sim.locals = dict(sim.locals)
             for k in range(lp.start_idx, lp.cond_idx):
-                sim_instr(instrs[k], pre_sim, method.class_name)
+                sim_instr(instrs[k], pre_sim, method.class_name, registry=registry)
             sim.locals = pre_sim.locals
             for s in pre_sim.stmts:
                 entries.append(('        ', s))
@@ -231,7 +231,7 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
             body_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
             body_sim.locals = dict(sim.locals)
             for k in range(lp.cond_idx + 1, lp.end_idx):
-                sim_instr(instrs[k], body_sim, method.class_name)
+                sim_instr(instrs[k], body_sim, method.class_name, registry=registry)
             sim.locals = body_sim.locals
             for s in body_sim.stmts:
                 entries.append(('        ', s))
@@ -241,7 +241,7 @@ def gen_method_body(method: ParsedMethod, class_info: ClassInfo) -> str:
             continue
 
         # 普通指令
-        sim_instr(ins, sim, method.class_name)
+        sim_instr(ins, sim, method.class_name, registry=registry)
         flush(sim)
         i += 1
 
