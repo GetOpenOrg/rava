@@ -1,11 +1,12 @@
 """
-Rust 文件生成器：将 ClassInfo 列表写出为 Cargo 项目，
-按 Java 包路径组织模块（Java 命名空间同构）。
+Rust 文件生成器：将 ClassInfo 列表写出为 Cargo workspace，
+包含三个子 crate：java_runtime / jdk_classes / user。
 
 结构原则：
-- 生成代码使用 java_runtime prelude（String, ArrayList, Field 等）
-- struct 直接包含 Field<T> 字段，不生成 raw:: 子模块
-- 所有方法返回 Result<T>
+- java_runtime：手写运行时（Field<T>、String、Result 等），独立 lib crate
+- jdk_classes：JDK 字节码翻译，lib crate，依赖 java_runtime
+- user：用户 Java 翻译，bin crate，依赖 java_runtime + jdk_classes
+- 生成代码用 `use java_runtime::prelude::*;`（外部 crate，无 crate:: 前缀）
 - 每个类/字段/方法携带 #[java_class] / #[java_field] / #[java_method] 属性，
   供 build.rs 自动解析继承链与 native 状态
 """
@@ -29,17 +30,59 @@ _ACC_INTERFACE = 0x0200
 _ACC_ABSTRACT  = 0x0400
 _ACC_ENUM      = 0x4000
 
-CARGO_TOML = """\
-[package]
-name = "java_transpiled"
-version = "0.1.0"
-edition = "2021"
+# ── Cargo.toml 模板 ──────────────────────────────────────────────
+
+WORKSPACE_CARGO_TOML = """\
+[workspace]
+members = ["java_runtime", "jdk_classes", "user"]
+resolver = "2"
 
 [profile.release]
 opt-level = 3
 lto       = true
 codegen-units = 1
 strip     = "symbols"
+"""
+
+JAVA_RUNTIME_CARGO_TOML = """\
+[package]
+name = "java_runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "java_runtime"
+path = "src/lib.rs"
+"""
+
+JDK_CLASSES_CARGO_TOML = """\
+[package]
+name = "jdk_classes"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "jdk_classes"
+path = "src/lib.rs"
+
+[dependencies]
+java_runtime = { path = "../java_runtime" }
+"""
+
+USER_CARGO_TOML = """\
+[package]
+name = "user"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "user"
+path = "src/main.rs"
+
+[dependencies]
+java_runtime = { path = "../java_runtime" }
+# jdk_classes will be added when JDK translations compile successfully
+# jdk_classes = { path = "../jdk_classes" }
 """
 
 
@@ -210,7 +253,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
 
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
-        "use crate::java_runtime::prelude::*;",
+        "use java_runtime::prelude::*;",
         "",
         _java_class_attr(ci, compiled=True),
     ]
@@ -283,108 +326,164 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
 
 # ── 主函数 ────────────────────────────────────────────────────────
 
+def _write(path: str, content: str) -> None:
+    """创建目录并写文件。"""
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    with open(path, 'w') as f:
+        f.write(content)
+
+
 def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                          jdk_class_infos: list[ClassInfo] | None = None,
                          java_files: list[str] | None = None):
-    src_dir = os.path.join(out_dir, 'src')
-    rt_dir  = os.path.join(src_dir, 'java_runtime')
+    """
+    生成 Cargo workspace，包含三个子 crate：
+      java_runtime/  — 手写运行时（来自 RUNTIME_FILES）
+      jdk_classes/   — JDK 字节码翻译
+      user/          — 用户 Java 代码翻译
+    """
+    import shutil
 
-    # 1. 写 Cargo.toml
-    with open(os.path.join(out_dir, 'Cargo.toml'), 'w') as f:
-        f.write(CARGO_TOML)
+    rt_dir   = os.path.join(out_dir, 'java_runtime')
+    jdk_dir  = os.path.join(out_dir, 'jdk_classes')
+    user_dir = os.path.join(out_dir, 'user')
 
-    # 2. 写 java_runtime（按 JDK 包路径）
+    # 1. workspace 根 Cargo.toml
+    _write(os.path.join(out_dir, 'Cargo.toml'), WORKSPACE_CARGO_TOML)
+
+    # 2. java_runtime crate（来自 RUNTIME_FILES）
+    _write(os.path.join(rt_dir, 'Cargo.toml'), JAVA_RUNTIME_CARGO_TOML)
+    rt_src = os.path.join(rt_dir, 'src')
     for rel_path, content in RUNTIME_FILES.items():
-        abs_path = os.path.join(rt_dir, rel_path)
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        with open(abs_path, 'w') as f:
-            f.write(content)
+        # mod.rs 是 crate 根，对应 lib crate 的 src/lib.rs
+        dest = 'lib.rs' if rel_path == 'mod.rs' else rel_path
+        _write(os.path.join(rt_src, dest), content)
 
-    # 3. 提取每个类的 Java 包名
-    packages: dict[str, str] = {}
-    if java_files:
-        for jf, ci in zip(java_files, class_infos):
-            packages[ci.name] = pkg_from_java(jf)
+    # 3. jdk_classes crate（JDK 字节码翻译）
+    _write(os.path.join(jdk_dir, 'Cargo.toml'), JDK_CLASSES_CARGO_TOML)
+    jdk_src = os.path.join(jdk_dir, 'src')
 
-    # 4. 计算每个类的文件路径
-    #    layout[class_name] = (abs_file_path, pkg_parts, mod_name)
-    layout: dict[str, tuple] = {}
-    for ci in class_infos:
-        pkg       = packages.get(ci.name, '')
-        pkg_parts = pkg.split('.') if pkg else []
-        mod_name  = to_snake(ci.name)
-        file_path = os.path.join(src_dir, *pkg_parts, mod_name + '.rs')
-        layout[ci.name] = (file_path, pkg_parts, mod_name)
-
-    # 5. 构建模块树：dir → {子模块名}
-    #    同时构建 reexport 表：dir → {(mod_name, ClassName)} 用于生成 pub use
-    mod_tree:    dict[str, set[str]]            = {}
-    reexport:    dict[str, set[tuple[str,str]]] = {}   # dir → {(mod, ClassName)}
-    for ci in class_infos:
-        _, pkg_parts, mod_name = layout[ci.name]
-        parent = src_dir
-        for part in pkg_parts:
-            mod_tree.setdefault(parent, set()).add(part)
-            parent = os.path.join(parent, part)
-        mod_tree.setdefault(parent, set()).add(mod_name)
-        reexport.setdefault(parent, set()).add((mod_name, ci.name))
-
-    # 6. 写各类的 .rs 文件
-    # 构建 registry：所有已知类（用户类 + JDK 类）的 binary_name → ClassInfo 映射
+    # 构建 registry（用户类 + JDK 类）
     registry: dict = {ci.name: ci for ci in class_infos}
     if jdk_class_infos:
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
 
-    for ci in class_infos:
-        file_path, _, _ = layout[ci.name]
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, 'w') as f:
-            f.write(_gen_class_rs(ci, registry=registry))
-
-    # 7. 写中间包目录的 mod.rs（含 pub mod 和 pub use 再导出）
-    for dir_path, children in mod_tree.items():
-        if dir_path == src_dir:
-            continue
-        os.makedirs(dir_path, exist_ok=True)
-        mod_lines = [f"pub mod {c};" for c in sorted(children)]
-        # pub use ClassX; 让上层可以通过短路径引用
-        for mod_name, cls_name in sorted(reexport.get(dir_path, set())):
-            mod_lines.append(f"pub use {mod_name}::{cls_name};")
-        with open(os.path.join(dir_path, 'mod.rs'), 'w') as f:
-            f.write('\n'.join(mod_lines) + '\n')
-
-    # 8. 写 main.rs
-    main_class = class_infos[0].name if class_infos else 'Main'
-    top_mods   = sorted(mod_tree.get(src_dir, set()))
-
-    _, pkg_parts, mod_name = layout[main_class]
-    if pkg_parts:
-        use_path = '::'.join(pkg_parts + [main_class])  # com::example::HelloWorld
-    else:
-        use_path = f"{mod_name}::{main_class}"
-
-    main_lines = [
-        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
-        "mod java_runtime;",
-        *[f"mod {m};" for m in top_mods],
-        f"use {use_path};",
-        "",
-        f"fn main() {{",
-        f"    {main_class}::main().unwrap_or_else(|e| eprintln!(\"JVM Error: {{:?}}\", e));",
-        f"}}",
-        "",
-    ]
-    with open(os.path.join(src_dir, 'main.rs'), 'w') as f:
-        f.write('\n'.join(main_lines))
-
-    # 9. 写 JDK 类完整翻译文件（不在 mod 树中，不参与 Rust 模块编译）
+    # 写 JDK 翻译文件，构建 jdk mod 树
+    jdk_mod_tree: dict[str, set[str]] = {}
     if jdk_class_infos:
         for jdk_ci in jdk_class_infos:
-            file_path = _jdk_class_file_path(src_dir, jdk_ci.name)
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w') as f:
-                f.write(_gen_class_rs(jdk_ci, registry=registry))
-        print(f"[codegen] JDK 翻译 → {len(jdk_class_infos)} 个类")
+            parts = jdk_ci.name.split('/')          # e.g. ['java','util','ArrayList']
+            *pkg_parts, class_name = parts
+            mod_name  = to_snake(class_name)
+            file_path = os.path.join(jdk_src, *pkg_parts, mod_name + '.rs')
+            _write(file_path, _gen_class_rs(jdk_ci, registry=registry))
+            # 更新 mod 树
+            parent = jdk_src
+            for part in pkg_parts:
+                jdk_mod_tree.setdefault(parent, set()).add(part)
+                parent = os.path.join(parent, part)
+            jdk_mod_tree.setdefault(parent, set()).add(mod_name)
 
-    print(f"[codegen] Cargo project → {out_dir}/")
+    # jdk_classes/src/lib.rs
+    top_jdk = sorted(jdk_mod_tree.get(jdk_src, set()))
+    jdk_lib_lines = [
+        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]',
+        *[f'pub mod {m};' for m in top_jdk],
+        '',
+    ]
+    _write(os.path.join(jdk_src, 'lib.rs'), '\n'.join(jdk_lib_lines))
+
+    # 中间 mod.rs（jdk 子包）
+    for dir_path, children in jdk_mod_tree.items():
+        if dir_path == jdk_src:
+            continue
+        mod_lines = [f'pub mod {c};' for c in sorted(children)]
+        _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
+
+    # build.rs：优先使用 out_dir 已有的 build.rs，迁移到 jdk_classes/
+    old_build_rs = os.path.join(out_dir, 'build.rs')
+    new_build_rs = os.path.join(jdk_dir, 'build.rs')
+    if os.path.exists(old_build_rs) and not os.path.exists(new_build_rs):
+        shutil.copy2(old_build_rs, new_build_rs)
+
+    # native_impls/：迁移到 jdk_classes/native_impls/
+    old_native = os.path.join(out_dir, 'native_impls')
+    new_native  = os.path.join(jdk_dir, 'native_impls')
+    os.makedirs(new_native, exist_ok=True)
+    if os.path.isdir(old_native):
+        for item in os.listdir(old_native):
+            src_item = os.path.join(old_native, item)
+            dst_item = os.path.join(new_native, item)
+            if not os.path.exists(dst_item):
+                if os.path.isdir(src_item):
+                    shutil.copytree(src_item, dst_item)
+                else:
+                    shutil.copy2(src_item, dst_item)
+
+    # 4. user crate（用户 Java 翻译）
+    _write(os.path.join(user_dir, 'Cargo.toml'), USER_CARGO_TOML)
+    user_src = os.path.join(user_dir, 'src')
+
+    # 提取包名
+    packages: dict[str, str] = {}
+    if java_files:
+        for jf, ci in zip(java_files, class_infos):
+            packages[ci.name] = pkg_from_java(jf)
+
+    # 计算文件路径
+    layout: dict[str, tuple] = {}
+    for ci in class_infos:
+        pkg       = packages.get(ci.name, '')
+        pkg_parts = pkg.split('.') if pkg else []
+        mod_name  = to_snake(ci.name)
+        file_path = os.path.join(user_src, *pkg_parts, mod_name + '.rs')
+        layout[ci.name] = (file_path, pkg_parts, mod_name)
+
+    # 构建用户 mod 树
+    user_mod_tree: dict[str, set[str]]            = {}
+    user_reexport: dict[str, set[tuple[str,str]]] = {}
+    for ci in class_infos:
+        _, pkg_parts, mod_name = layout[ci.name]
+        parent = user_src
+        for part in pkg_parts:
+            user_mod_tree.setdefault(parent, set()).add(part)
+            parent = os.path.join(parent, part)
+        user_mod_tree.setdefault(parent, set()).add(mod_name)
+        user_reexport.setdefault(parent, set()).add((mod_name, ci.name))
+
+    # 写用户类文件
+    for ci in class_infos:
+        file_path, _, _ = layout[ci.name]
+        _write(file_path, _gen_class_rs(ci, registry=registry))
+
+    # 中间 mod.rs（用户子包）
+    for dir_path, children in user_mod_tree.items():
+        if dir_path == user_src:
+            continue
+        mod_lines = [f'pub mod {c};' for c in sorted(children)]
+        for mod_name, cls_name in sorted(user_reexport.get(dir_path, set())):
+            mod_lines.append(f'pub use {mod_name}::{cls_name};')
+        _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
+
+    # user/src/main.rs
+    main_class = class_infos[0].name if class_infos else 'Main'
+    _, pkg_parts, mod_name = layout[main_class]
+    top_user_mods = sorted(user_mod_tree.get(user_src, set()))
+    use_path = '::'.join(pkg_parts + [main_class]) if pkg_parts else f'{mod_name}::{main_class}'
+
+    main_lines = [
+        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]',
+        *[f'mod {m};' for m in top_user_mods],
+        f'use {use_path};',
+        '',
+        'fn main() {',
+        f'    {main_class}::main().unwrap_or_else(|e| eprintln!("JVM Error: {{:?}}", e));',
+        '}',
+        '',
+    ]
+    _write(os.path.join(user_src, 'main.rs'), '\n'.join(main_lines))
+
+    if jdk_class_infos:
+        print(f'[codegen] JDK 翻译 → {len(jdk_class_infos)} 个类')
+    print(f'[codegen] Cargo workspace → {out_dir}/')

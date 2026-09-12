@@ -34,7 +34,7 @@ pub use types::Field;
 pub use java::lang::{String, System};
 pub use java::util::{ArrayList, HashMap, HashSet};
 
-/// prelude：生成代码用 `use crate::java_runtime::prelude::*;` 引入所有必要符号。
+/// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 /// 这会遮蔽 Rust 的 std::string::String——这是预期行为，
 /// 用户看到的 String 即 Java 的 String。
 pub mod prelude {
@@ -100,7 +100,7 @@ pub use system::System;
     "java/lang/string.rs": """\
 //! java.lang.String 同构类型。
 //! 遮蔽 Rust 的 std::string::String，是预期行为。
-use crate::java_runtime::error::Result;
+use crate::error::Result;
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -176,7 +176,7 @@ impl From<bool> for String { fn from(v: bool) -> Self { String(v.to_string()) } 
 
     "java/lang/system.rs": """\
 //! java.lang.System 同构类型
-use crate::java_runtime::error::Result;
+use crate::error::Result;
 
 pub struct System;
 pub struct PrintStream { pub is_err: bool }
@@ -244,7 +244,7 @@ pub use hash_set::HashSet;
 
     "java/util/array_list.rs": """\
 //! java.util.ArrayList<T> 同构类型（内部用 Rc<RefCell<Vec<T>>>）
-use crate::java_runtime::error::{JvmError, Result};
+use crate::error::{JvmError, Result};
 use std::rc::Rc;
 use std::cell::RefCell;
 
@@ -292,7 +292,7 @@ impl<T> Clone for ArrayList<T> {
 
     "java/util/hash_map.rs": """\
 //! java.util.HashMap<K,V> 同构类型
-use crate::java_runtime::error::Result;
+use crate::error::Result;
 use std::rc::Rc;
 use std::cell::RefCell;
 
@@ -334,7 +334,7 @@ impl<K, V> Clone for HashMap<K, V> {
 
     "java/util/hash_set.rs": """\
 //! java.util.HashSet<T> 同构类型
-use crate::java_runtime::error::Result;
+use crate::error::Result;
 use std::rc::Rc;
 use std::cell::RefCell;
 
