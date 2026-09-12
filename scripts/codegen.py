@@ -1070,17 +1070,21 @@ def transpile(java_files: list, out_dir: str):
         if not os.path.exists(jf):
             sys.exit(f"File not found: {jf}")
 
+    # .class 文件统一输出到与 .java 同级的 classes/ 子目录
+    src_dir    = os.path.dirname(os.path.abspath(java_files[0]))
+    class_dir  = os.path.join(src_dir, 'classes')
+    os.makedirs(class_dir, exist_ok=True)
+
     # 1. javac 编译
     print(f"[1/4] javac {' '.join(java_files)}")
-    r = subprocess.run(['javac'] + java_files, capture_output=True, text=True)
+    r = subprocess.run(['javac', '-d', class_dir] + java_files, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"javac failed:\n{r.stderr}")
 
     class_infos = []
     for jf in java_files:
         class_name = os.path.splitext(os.path.basename(jf))[0]
-        work_dir   = os.path.dirname(os.path.abspath(jf))
-        class_file = os.path.join(work_dir, class_name + '.class')
+        class_file = os.path.join(class_dir, class_name + '.class')
 
         # 2. javap -verbose
         print(f"[2/4] javap {class_name}")
