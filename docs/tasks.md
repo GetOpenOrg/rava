@@ -628,7 +628,7 @@ cd output && cargo run --release  # 输出 Hello, World!
 ---
 
 ### T28 · 完整 JDK 字节码翻译
-**状态**：`[ ]`  
+**状态**：`[x]`  
 **文件**：`scripts/codegen/emitter.py`  
 **依赖**：T23、T27
 
