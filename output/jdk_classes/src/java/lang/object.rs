@@ -11,34 +11,34 @@ use java_runtime::prelude::*;
 pub struct Object;
 
 impl Object {
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public"))]
+    // java: <init>()V
     pub fn new() -> Result<Self> {
         let this = Self {};
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_native(name = "getClass", descriptor = "()Ljava/lang/Class;", access = "public final native"))]
-    pub fn getClass(&self) -> Result<Class> {
+    // java: getClass()Ljava/lang/Class;
+    pub fn getClass(&self) -> Result<Object> {
         todo!("native java/lang/Object.getClass")
     }
 
-    #[cfg_attr(any(), java_native(name = "hashCode", descriptor = "()I", access = "public native"))]
+    // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
         todo!("native java/lang/Object.hashCode")
     }
 
-    #[cfg_attr(any(), java_method(name = "equals", descriptor = "(Ljava/lang/Object;)Z", access = "public"))]
+    // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, obj: Object) -> Result<bool> {
         let this = self;
         Ok(/* if_acmpne */ true)
     }
 
-    #[cfg_attr(any(), java_native(name = "clone", descriptor = "()Ljava/lang/Object;", access = "protected native"))]
+    // java: clone()Ljava/lang/Object;
     pub fn clone(&self) -> Result<Object> {
         todo!("native java/lang/Object.clone")
     }
 
-    #[cfg_attr(any(), java_method(name = "toString", descriptor = "()Ljava/lang/String;", access = "public"))]
+    // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
         let this = self;
         let _t0 = this.getClass()?;
@@ -51,17 +51,17 @@ impl Object {
         Ok(String::new())
     }
 
-    #[cfg_attr(any(), java_native(name = "notify", descriptor = "()V", access = "public final native"))]
+    // java: notify()V
     pub fn notify(&self) -> Result<()> {
         todo!("native java/lang/Object.notify")
     }
 
-    #[cfg_attr(any(), java_native(name = "notifyAll", descriptor = "()V", access = "public final native"))]
+    // java: notifyAll()V
     pub fn notifyAll(&self) -> Result<()> {
         todo!("native java/lang/Object.notifyAll")
     }
 
-    #[cfg_attr(any(), java_method(name = "wait", descriptor = "()V", access = "public final"))]
+    // java: wait()V
     // java: wait()V
     pub fn wait(&self) -> Result<()> {
         let this = self;
@@ -69,7 +69,7 @@ impl Object {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "wait", descriptor = "(J)V", access = "public final"))]
+    // java: wait(J)V
     // java: wait(J)V
     pub fn wait__l(&self, timeoutMillis: i64) -> Result<()> {
         let this = self;
@@ -78,36 +78,36 @@ impl Object {
         this.wait0(timeoutMillis)?;
         Blocker::end(comp)?;
         let mut e: i32 = todo!("stack underflow");
-        let _t1: Thread = Thread::currentThread()?;
-        let mut thread: Thread = _t1;
+        let _t1: Object = Thread::currentThread()?;
+        let mut thread: Object = _t1;
         let _t2 = thread.isVirtual()?;
         let _t3 = thread.getAndClearInterrupt()?;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let mut local_7: bool = _t2;
         Blocker::end(comp)?;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_native(name = "wait0", descriptor = "(J)V", access = "private final native"))]
+    // java: wait0(J)V
     pub fn wait0(&self, arg0: i64) -> Result<()> {
         todo!("native java/lang/Object.wait0")
     }
 
-    #[cfg_attr(any(), java_method(name = "wait", descriptor = "(JI)V", access = "public final"))]
+    // java: wait(JI)V
     // java: wait(JI)V
     pub fn wait__l_i(&self, timeoutMillis: i64, arg_1: i32) -> Result<()> {
         let this = self;
         /* TODO: lcmp  */
-        return Err(JvmError::Custom(String::from("athrow")));
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
+        return Err(JvmError::Custom("athrow".to_owned()));
         /* TODO: lcmp  */
         timeoutMillis = (timeoutMillis).wrapping_add(1i64);
         this.wait(timeoutMillis)?;
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "finalize", descriptor = "()V", access = "protected"))]
+    // java: finalize()V
     pub fn finalize(&self) -> Result<()> {
         let this = self;
         Ok(())

@@ -88,11 +88,33 @@ java_runtime = { path = "../java_runtime" }
 
 # ── 辅助 ─────────────────────────────────────────────────────────
 
+_RUST_KEYWORDS = frozenset({
+    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn',
+    'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in',
+    'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return',
+    'self', 'static', 'struct', 'super', 'trait', 'true', 'type',
+    'union', 'unsafe', 'use', 'where', 'while',
+})
+
+
+def _safe_field_name(name: str) -> str:
+    """字段名安全化：$ → _，Rust 关键字加 _。"""
+    name = name.replace('$', '_')
+    if name in _RUST_KEYWORDS:
+        return name + '_'
+    return name
+
+
 def to_snake(name: str) -> str:
-    """PascalCase / camelCase → snake_case（Rust 模块文件名）"""
+    """PascalCase / camelCase → snake_case（Rust 模块文件名）。
+    $ (内部类分隔符) → _ ，Rust 关键字加 _ 后缀。"""
+    name = name.replace('$', '_')
     s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
     s = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', s)
-    return s.lower()
+    s = s.lower()
+    if s in _RUST_KEYWORDS:
+        s = s + '_'
+    return s
 
 
 def pkg_from_java(java_file: str) -> str:
@@ -161,10 +183,11 @@ def _java_field_attr(f: FieldInfo) -> str:
 
 
 def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
-    """生成 #[java_method(...)] 或 #[java_native(...)] 属性行。
+    """生成方法元数据标注行。
 
-    compiled=True：包裹在 cfg_attr(any(), ...) 内，防止编译错误。
-    compiled=False：原生属性格式，用于不参与编译的 JDK 元数据存根文件。
+    compiled=True（JDK 类生成）：输出为行注释 `// java: ...`，
+    避免 cfg_attr 内字符串包含关键字（如 static）导致词法解析失败。
+    compiled=False（元数据存根）：原生属性格式 #[java_method(...)]。
     """
     tag = 'java_native' if (m.is_native or m.is_abstract) else 'java_method'
     parts = [f'name = "{m.name}"', f'descriptor = "{m.descriptor}"']
@@ -172,7 +195,8 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
         parts.append(f'access = "{_access_str(m.access_flags)}"')
     inner = f'{tag}(' + ', '.join(parts) + ')'
     if compiled:
-        return f'#[cfg_attr(any(), {inner})]'
+        # 注释形式，避免 cfg_attr 内 "public static" 等含关键字字符串触发词法错误
+        return f'// java: {m.name}{m.descriptor}'
     else:
         return f'#[{inner}]'
 
@@ -239,7 +263,8 @@ def _gen_jdk_class_rs(ci: ClassInfo) -> str:
     return '\n'.join(lines) + '\n'
 
 
-def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
+def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
+                  jdk_crate_pkg_paths: list[str] | None = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -251,9 +276,16 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
     from collections import Counter
     from .type_map import mangle_name
 
+    # 跨包 glob import：让生成代码能直接用 Objects、Integer 等翻译过的 JDK 类型
+    cross_imports: list[str] = []
+    if jdk_crate_pkg_paths:
+        for pkg_path in jdk_crate_pkg_paths:
+            cross_imports.append(f"use crate::{pkg_path}::*;")
+
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
         "use java_runtime::prelude::*;",
+        *cross_imports,
         "",
         _java_class_attr(ci, compiled=True),
     ]
@@ -279,12 +311,27 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None) -> str:
     if inst_fields:
         field_lines = []
         for f in inst_fields:
+            safe_fname = _safe_field_name(f.name)
             field_lines.append("    " + _java_field_attr(f))
-            field_lines.append(f"    pub {f.name}: Field<{jvm_to_rust(f.descriptor)}>,")
+            field_lines.append(f"    pub {safe_fname}: Field<{jvm_to_rust(f.descriptor)}>,")
+        # 若有泛型参数但字段中未用到，加 PhantomData 防止 E0392
+        if class_type_params:
+            phantom_ty = ', '.join(f'std::marker::PhantomData<{p}>' for p in class_type_params)
+            if len(class_type_params) > 1:
+                phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
+            field_lines.append(f"    pub _phantom: {phantom_ty},")
         decls = '\n'.join(field_lines)
         parts.append(f"pub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
     else:
-        parts.append(f"pub struct {struct_name}{struct_generic};\n")
+        if class_type_params:
+            # 无字段但有泛型参数：改用 tuple struct 包含 PhantomData
+            if len(class_type_params) == 1:
+                phantom_ty = f'std::marker::PhantomData<{class_type_params[0]}>'
+            else:
+                phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
+            parts.append(f"pub struct {struct_name}{struct_generic}({phantom_ty});\n")
+        else:
+            parts.append(f"pub struct {struct_name}{struct_generic};\n")
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
@@ -372,12 +419,21 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
     if jdk_class_infos:
+        # 先收集所有翻译包的 crate 路径（用于 cross-module glob import）
+        jdk_pkg_set: set[str] = set()
+        for jdk_ci in jdk_class_infos:
+            pkg_parts = jdk_ci.name.split('/')[:-1]
+            if pkg_parts:
+                jdk_pkg_set.add('::'.join(pkg_parts))
+        jdk_crate_pkg_paths = sorted(jdk_pkg_set)
+
         for jdk_ci in jdk_class_infos:
             parts = jdk_ci.name.split('/')          # e.g. ['java','util','ArrayList']
             *pkg_parts, class_name = parts
             mod_name  = to_snake(class_name)
             file_path = os.path.join(jdk_src, *pkg_parts, mod_name + '.rs')
-            _write(file_path, _gen_class_rs(jdk_ci, registry=registry))
+            _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
+                                            jdk_crate_pkg_paths=jdk_crate_pkg_paths))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
@@ -394,11 +450,14 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     ]
     _write(os.path.join(jdk_src, 'lib.rs'), '\n'.join(jdk_lib_lines))
 
-    # 中间 mod.rs（jdk 子包）
+    # 中间 mod.rs（jdk 子包）：pub mod + pub use *（使 glob import 能拿到类型）
     for dir_path, children in jdk_mod_tree.items():
         if dir_path == jdk_src:
             continue
-        mod_lines = [f'pub mod {c};' for c in sorted(children)]
+        mod_lines = []
+        for c in sorted(children):
+            mod_lines.append(f'pub mod {c};')
+            mod_lines.append(f'pub use {c}::*;')
         _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
 
     # build.rs：优先使用 out_dir 已有的 build.rs，迁移到 jdk_classes/

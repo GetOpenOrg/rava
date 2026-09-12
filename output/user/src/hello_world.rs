@@ -14,7 +14,7 @@ pub struct HelloWorld {
 }
 
 impl HelloWorld {
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public"))]
+    // java: <init>(Ljava/lang/String;)V
     pub fn new(message: String) -> Result<Self> {
         let this = Self { message: Field::new(String::new()) };
         /* invokespecial Method java/lang/Object.<init>:()V */
@@ -22,14 +22,14 @@ impl HelloWorld {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "greet", descriptor = "()V", access = "public"))]
+    // java: greet()V
     pub fn greet(&self) -> Result<()> {
         let this = self;
         System::out().println(String::from_owned(format!("Hello, {}", this.message.get())))?;
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "repeat", descriptor = "(Ljava/lang/String;I)Ljava/lang/String;", access = "public static"))]
+    // java: repeat(Ljava/lang/String;I)Ljava/lang/String;
     pub fn repeat(s: String, times: i32) -> Result<String> {
         let mut sb: String = String::new();
         let mut i: i32 = 0i32;
@@ -41,7 +41,7 @@ impl HelloWorld {
         Ok(sb)
     }
 
-    #[cfg_attr(any(), java_method(name = "main", descriptor = "([Ljava/lang/String;)V", access = "public static"))]
+    // java: main([Ljava/lang/String;)V
     pub fn main() -> Result<()> {
         let mut hw: HelloWorld = HelloWorld::new(String::from("World"))?;
         hw.greet()?;

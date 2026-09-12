@@ -11,7 +11,7 @@ use java_runtime::prelude::*;
 pub struct StringBuilder;
 
 impl StringBuilder {
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public"))]
+    // java: <init>()V
     // java: <init>()V
     pub fn new() -> Result<Self> {
         let this = Self {};
@@ -19,7 +19,7 @@ impl StringBuilder {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(I)V", access = "public"))]
+    // java: <init>(I)V
     // java: <init>(I)V
     pub fn new__i(capacity: i32) -> Result<Self> {
         let this = Self {};
@@ -27,7 +27,7 @@ impl StringBuilder {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public"))]
+    // java: <init>(Ljava/lang/String;)V
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(str: String) -> Result<Self> {
         let this = Self {};
@@ -35,250 +35,250 @@ impl StringBuilder {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/CharSequence;)V", access = "public"))]
     // java: <init>(Ljava/lang/CharSequence;)V
-    pub fn new__seq(seq: CharSequence) -> Result<Self> {
+    // java: <init>(Ljava/lang/CharSequence;)V
+    pub fn new__seq(seq: Object) -> Result<Self> {
         let this = Self {};
         /* invokespecial Method java/lang/AbstractStringBuilder.<init>:(Ljava/lang/CharSequence;)V */
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/StringBuilder;)I", access = "public"))]
-    pub fn compareTo(&self, another: StringBuilder) -> Result<i32> {
+    // java: compareTo(Ljava/lang/StringBuilder;)I
+    pub fn compareTo(&self, another: Object) -> Result<i32> {
         let this = self;
         let _t0: i32 = AbstractStringBuilder::compareTo(another)?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(Ljava/lang/Object;)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(Ljava/lang/Object;)Ljava/lang/StringBuilder;
-    pub fn append__obj(&self, obj: Object) -> Result<StringBuilder> {
+    // java: append(Ljava/lang/Object;)Ljava/lang/StringBuilder;
+    pub fn append__obj(&self, obj: Object) -> Result<Object> {
         let this = self;
         this.append(&String::from_owned(format!("{}", obj)))?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(Ljava/lang/String;)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    pub fn append__str(&self, str: String) -> Result<StringBuilder> {
+    // java: append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    pub fn append__str(&self, str: String) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(str)?;
+        let _t0: Object = AbstractStringBuilder::append(str)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(Ljava/lang/StringBuffer;)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(Ljava/lang/StringBuffer;)Ljava/lang/StringBuilder;
-    pub fn append__string(&self, sb: StringBuffer) -> Result<StringBuilder> {
+    // java: append(Ljava/lang/StringBuffer;)Ljava/lang/StringBuilder;
+    pub fn append__string(&self, sb: Object) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(sb)?;
+        let _t0: Object = AbstractStringBuilder::append(sb)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;
-    pub fn append__seq(&self, s: CharSequence) -> Result<StringBuilder> {
+    // java: append(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;
+    pub fn append__seq(&self, s: Object) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(s)?;
+        let _t0: Object = AbstractStringBuilder::append(s)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;
-    pub fn append__seq_i_i(&self, s: CharSequence, start: i32, end: i32) -> Result<StringBuilder> {
+    // java: append(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;
+    pub fn append__seq_i_i(&self, s: Object, start: i32, end: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(s, start, end)?;
+        let _t0: Object = AbstractStringBuilder::append(s, start, end)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "([C)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append([C)Ljava/lang/StringBuilder;
-    pub fn append__arr_c(&self, str: Vec<u16>) -> Result<StringBuilder> {
+    // java: append([C)Ljava/lang/StringBuilder;
+    pub fn append__arr_c(&self, str: Vec<u16>) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(&str)?;
+        let _t0: Object = AbstractStringBuilder::append(&str)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "([CII)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append([CII)Ljava/lang/StringBuilder;
-    pub fn append__arr_c_i_i(&self, str: Vec<u16>, offset: i32, len: i32) -> Result<StringBuilder> {
+    // java: append([CII)Ljava/lang/StringBuilder;
+    pub fn append__arr_c_i_i(&self, str: Vec<u16>, offset: i32, len: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(&str, offset, len)?;
+        let _t0: Object = AbstractStringBuilder::append(&str, offset, len)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(Z)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(Z)Ljava/lang/StringBuilder;
-    pub fn append__z(&self, b: bool) -> Result<StringBuilder> {
+    // java: append(Z)Ljava/lang/StringBuilder;
+    pub fn append__z(&self, b: bool) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(b)?;
+        let _t0: Object = AbstractStringBuilder::append(b)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(C)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(C)Ljava/lang/StringBuilder;
-    pub fn append__c(&self, c: u16) -> Result<StringBuilder> {
+    // java: append(C)Ljava/lang/StringBuilder;
+    pub fn append__c(&self, c: u16) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(c)?;
+        let _t0: Object = AbstractStringBuilder::append(c)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(I)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(I)Ljava/lang/StringBuilder;
-    pub fn append__i(&self, i: i32) -> Result<StringBuilder> {
+    // java: append(I)Ljava/lang/StringBuilder;
+    pub fn append__i(&self, i: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(i)?;
+        let _t0: Object = AbstractStringBuilder::append(i)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(J)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(J)Ljava/lang/StringBuilder;
-    pub fn append__l(&self, lng: i64) -> Result<StringBuilder> {
+    // java: append(J)Ljava/lang/StringBuilder;
+    pub fn append__l(&self, lng: i64) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(lng)?;
+        let _t0: Object = AbstractStringBuilder::append(lng)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(F)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(F)Ljava/lang/StringBuilder;
-    pub fn append__f(&self, f: f32) -> Result<StringBuilder> {
+    // java: append(F)Ljava/lang/StringBuilder;
+    pub fn append__f(&self, f: f32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(f)?;
+        let _t0: Object = AbstractStringBuilder::append(f)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "append", descriptor = "(D)Ljava/lang/StringBuilder;", access = "public"))]
     // java: append(D)Ljava/lang/StringBuilder;
-    pub fn append__d(&self, d: f64) -> Result<StringBuilder> {
+    // java: append(D)Ljava/lang/StringBuilder;
+    pub fn append__d(&self, d: f64) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::append(d)?;
+        let _t0: Object = AbstractStringBuilder::append(d)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "appendCodePoint", descriptor = "(I)Ljava/lang/StringBuilder;", access = "public"))]
-    pub fn appendCodePoint(&self, codePoint: i32) -> Result<StringBuilder> {
+    // java: appendCodePoint(I)Ljava/lang/StringBuilder;
+    pub fn appendCodePoint(&self, codePoint: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::appendCodePoint(codePoint)?;
+        let _t0: Object = AbstractStringBuilder::appendCodePoint(codePoint)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "delete", descriptor = "(II)Ljava/lang/StringBuilder;", access = "public"))]
-    pub fn delete(&self, start: i32, end: i32) -> Result<StringBuilder> {
+    // java: delete(II)Ljava/lang/StringBuilder;
+    pub fn delete(&self, start: i32, end: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::delete(start, end)?;
+        let _t0: Object = AbstractStringBuilder::delete(start, end)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "deleteCharAt", descriptor = "(I)Ljava/lang/StringBuilder;", access = "public"))]
-    pub fn deleteCharAt(&self, index: i32) -> Result<StringBuilder> {
+    // java: deleteCharAt(I)Ljava/lang/StringBuilder;
+    pub fn deleteCharAt(&self, index: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::deleteCharAt(index)?;
+        let _t0: Object = AbstractStringBuilder::deleteCharAt(index)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "replace", descriptor = "(IILjava/lang/String;)Ljava/lang/StringBuilder;", access = "public"))]
-    pub fn replace(&self, start: i32, end: i32, str: String) -> Result<StringBuilder> {
+    // java: replace(IILjava/lang/String;)Ljava/lang/StringBuilder;
+    pub fn replace(&self, start: i32, end: i32, str: String) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::replace(start, end, str)?;
+        let _t0: Object = AbstractStringBuilder::replace(start, end, str)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(I[CII)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(I[CII)Ljava/lang/StringBuilder;
-    pub fn insert__i_arr_c_i_i(&self, index: i32, str: Vec<u16>, offset: i32, len: i32) -> Result<StringBuilder> {
+    // java: insert(I[CII)Ljava/lang/StringBuilder;
+    pub fn insert__i_arr_c_i_i(&self, index: i32, str: Vec<u16>, offset: i32, len: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(index, &str, offset, len)?;
+        let _t0: Object = AbstractStringBuilder::insert(index, &str, offset, len)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(ILjava/lang/Object;)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(ILjava/lang/Object;)Ljava/lang/StringBuilder;
-    pub fn insert__i_obj(&self, offset: i32, obj: Object) -> Result<StringBuilder> {
+    // java: insert(ILjava/lang/Object;)Ljava/lang/StringBuilder;
+    pub fn insert__i_obj(&self, offset: i32, obj: Object) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, obj)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, obj)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(ILjava/lang/String;)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(ILjava/lang/String;)Ljava/lang/StringBuilder;
-    pub fn insert__i_str(&self, offset: i32, str: String) -> Result<StringBuilder> {
+    // java: insert(ILjava/lang/String;)Ljava/lang/StringBuilder;
+    pub fn insert__i_str(&self, offset: i32, str: String) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, str)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, str)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(I[C)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(I[C)Ljava/lang/StringBuilder;
-    pub fn insert__i_arr_c(&self, offset: i32, str: Vec<u16>) -> Result<StringBuilder> {
+    // java: insert(I[C)Ljava/lang/StringBuilder;
+    pub fn insert__i_arr_c(&self, offset: i32, str: Vec<u16>) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, &str)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, &str)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(ILjava/lang/CharSequence;)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(ILjava/lang/CharSequence;)Ljava/lang/StringBuilder;
-    pub fn insert__i_seq(&self, dstOffset: i32, s: CharSequence) -> Result<StringBuilder> {
+    // java: insert(ILjava/lang/CharSequence;)Ljava/lang/StringBuilder;
+    pub fn insert__i_seq(&self, dstOffset: i32, s: Object) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(dstOffset, s)?;
+        let _t0: Object = AbstractStringBuilder::insert(dstOffset, s)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(ILjava/lang/CharSequence;II)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(ILjava/lang/CharSequence;II)Ljava/lang/StringBuilder;
-    pub fn insert__i_seq_i_i(&self, dstOffset: i32, s: CharSequence, start: i32, end: i32) -> Result<StringBuilder> {
+    // java: insert(ILjava/lang/CharSequence;II)Ljava/lang/StringBuilder;
+    pub fn insert__i_seq_i_i(&self, dstOffset: i32, s: Object, start: i32, end: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(dstOffset, s, start, end)?;
+        let _t0: Object = AbstractStringBuilder::insert(dstOffset, s, start, end)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(IZ)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(IZ)Ljava/lang/StringBuilder;
-    pub fn insert__i_z(&self, offset: i32, b: bool) -> Result<StringBuilder> {
+    // java: insert(IZ)Ljava/lang/StringBuilder;
+    pub fn insert__i_z(&self, offset: i32, b: bool) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, b)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, b)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(IC)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(IC)Ljava/lang/StringBuilder;
-    pub fn insert__i_c(&self, offset: i32, c: u16) -> Result<StringBuilder> {
+    // java: insert(IC)Ljava/lang/StringBuilder;
+    pub fn insert__i_c(&self, offset: i32, c: u16) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, c)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, c)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(II)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(II)Ljava/lang/StringBuilder;
-    pub fn insert__i_i(&self, offset: i32, i: i32) -> Result<StringBuilder> {
+    // java: insert(II)Ljava/lang/StringBuilder;
+    pub fn insert__i_i(&self, offset: i32, i: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, i)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, i)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(IJ)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(IJ)Ljava/lang/StringBuilder;
-    pub fn insert__i_l(&self, offset: i32, l: i64) -> Result<StringBuilder> {
+    // java: insert(IJ)Ljava/lang/StringBuilder;
+    pub fn insert__i_l(&self, offset: i32, l: i64) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, l)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, l)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(IF)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(IF)Ljava/lang/StringBuilder;
-    pub fn insert__i_f(&self, offset: i32, f: f32) -> Result<StringBuilder> {
+    // java: insert(IF)Ljava/lang/StringBuilder;
+    pub fn insert__i_f(&self, offset: i32, f: f32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, f)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, f)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "insert", descriptor = "(ID)Ljava/lang/StringBuilder;", access = "public"))]
     // java: insert(ID)Ljava/lang/StringBuilder;
-    pub fn insert__i_d(&self, offset: i32, d: f64) -> Result<StringBuilder> {
+    // java: insert(ID)Ljava/lang/StringBuilder;
+    pub fn insert__i_d(&self, offset: i32, d: f64) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::insert(offset, d)?;
+        let _t0: Object = AbstractStringBuilder::insert(offset, d)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "indexOf", descriptor = "(Ljava/lang/String;)I", access = "public"))]
+    // java: indexOf(Ljava/lang/String;)I
     // java: indexOf(Ljava/lang/String;)I
     pub fn indexOf__str(&self, str: String) -> Result<i32> {
         let this = self;
@@ -286,7 +286,7 @@ impl StringBuilder {
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "indexOf", descriptor = "(Ljava/lang/String;I)I", access = "public"))]
+    // java: indexOf(Ljava/lang/String;I)I
     // java: indexOf(Ljava/lang/String;I)I
     pub fn indexOf__str_i(&self, str: String, fromIndex: i32) -> Result<i32> {
         let this = self;
@@ -294,7 +294,7 @@ impl StringBuilder {
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "lastIndexOf", descriptor = "(Ljava/lang/String;)I", access = "public"))]
+    // java: lastIndexOf(Ljava/lang/String;)I
     // java: lastIndexOf(Ljava/lang/String;)I
     pub fn lastIndexOf__str(&self, str: String) -> Result<i32> {
         let this = self;
@@ -302,7 +302,7 @@ impl StringBuilder {
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "lastIndexOf", descriptor = "(Ljava/lang/String;I)I", access = "public"))]
+    // java: lastIndexOf(Ljava/lang/String;I)I
     // java: lastIndexOf(Ljava/lang/String;I)I
     pub fn lastIndexOf__str_i(&self, str: String, fromIndex: i32) -> Result<i32> {
         let this = self;
@@ -310,37 +310,37 @@ impl StringBuilder {
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "reverse", descriptor = "()Ljava/lang/StringBuilder;", access = "public"))]
-    pub fn reverse(&self) -> Result<StringBuilder> {
+    // java: reverse()Ljava/lang/StringBuilder;
+    pub fn reverse(&self) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::reverse()?;
+        let _t0: Object = AbstractStringBuilder::reverse()?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "repeat", descriptor = "(II)Ljava/lang/StringBuilder;", access = "public"))]
     // java: repeat(II)Ljava/lang/StringBuilder;
-    pub fn repeat__i_i(&self, codePoint: i32, count: i32) -> Result<StringBuilder> {
+    // java: repeat(II)Ljava/lang/StringBuilder;
+    pub fn repeat__i_i(&self, codePoint: i32, count: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::repeat(codePoint, count)?;
+        let _t0: Object = AbstractStringBuilder::repeat(codePoint, count)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "repeat", descriptor = "(Ljava/lang/CharSequence;I)Ljava/lang/StringBuilder;", access = "public"))]
     // java: repeat(Ljava/lang/CharSequence;I)Ljava/lang/StringBuilder;
-    pub fn repeat__seq_i(&self, cs: CharSequence, count: i32) -> Result<StringBuilder> {
+    // java: repeat(Ljava/lang/CharSequence;I)Ljava/lang/StringBuilder;
+    pub fn repeat__seq_i(&self, cs: Object, count: i32) -> Result<Object> {
         let this = self;
-        let _t0: AbstractStringBuilder = AbstractStringBuilder::repeat(cs, count)?;
+        let _t0: Object = AbstractStringBuilder::repeat(cs, count)?;
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "toString", descriptor = "()Ljava/lang/String;", access = "public"))]
+    // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
         let this = self;
         Ok(String::new(this)?)
     }
 
-    #[cfg_attr(any(), java_method(name = "writeObject", descriptor = "(Ljava/io/ObjectOutputStream;)V", access = "private"))]
-    pub fn writeObject(&self, s: ObjectOutputStream) -> Result<()> {
+    // java: writeObject(Ljava/io/ObjectOutputStream;)V
+    pub fn writeObject(&self, s: Object) -> Result<()> {
         let this = self;
         s.defaultWriteObject()?;
         s.writeInt(this.count.get())?;
@@ -354,15 +354,15 @@ impl StringBuilder {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "readObject", descriptor = "(Ljava/io/ObjectInputStream;)V", access = "private"))]
-    pub fn readObject(&self, s: ObjectInputStream) -> Result<()> {
+    // java: readObject(Ljava/io/ObjectInputStream;)V
+    pub fn readObject(&self, s: Object) -> Result<()> {
         let this = self;
         s.defaultReadObject()?;
         let _t0 = s.readInt()?;
         let mut c: i32 = _t0;
         let _t1 = s.readObject()?;
         let mut val: Object = _t1;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         this.initBytes(val, 0i32, (val.len() as i32))?;
         this.count.set(c);
         Ok(())

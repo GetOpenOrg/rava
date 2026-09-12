@@ -122,10 +122,10 @@ def render_expr(expr) -> str:
             return f'{expr.name}!({args})'
         return f'{expr.name}!()'
     if isinstance(expr, NewPendingExpr):
-        simple_name = expr.class_name.rsplit('/', 1)[-1]
+        simple_name = expr.class_name.rsplit('/', 1)[-1].replace('$', '_')
         return f'{simple_name}::new()'
     if isinstance(expr, StaticFieldRef):
-        simple_name = expr.class_name.rsplit('/', 1)[-1]
+        simple_name = expr.class_name.rsplit('/', 1)[-1].replace('$', '_')
         return f'{simple_name}::{expr.field_name}()'
     if isinstance(expr, RawExpr):
         return expr.code

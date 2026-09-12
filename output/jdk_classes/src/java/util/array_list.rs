@@ -16,7 +16,7 @@ pub struct ArrayList<E> {
 }
 
 impl<E: Clone + 'static> ArrayList<E> {
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(I)V", access = "public"))]
+    // java: <init>(I)V
     // java: <init>(I)V
     pub fn new__i(initialCapacity: i32) -> Result<Self> {
         let this = Self { elementData: Field::new(Default::default()), size: Field::new(0) };
@@ -26,11 +26,11 @@ impl<E: Clone + 'static> ArrayList<E> {
         this.elementData.set(ArrayList::EMPTY_ELEMENTDATA());
         String::new().append(&String::from("Illegal Capacity:"))?;
         String::new().append(&initialCapacity)?;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public"))]
+    // java: <init>()V
     // java: <init>()V
     pub fn new() -> Result<Self> {
         let this = Self { elementData: Field::new(Default::default()), size: Field::new(0) };
@@ -39,9 +39,9 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/util/Collection;)V", access = "public"))]
     // java: <init>(Ljava/util/Collection;)V
-    pub fn new__coll(c: Collection) -> Result<Self> {
+    // java: <init>(Ljava/util/Collection;)V
+    pub fn new__coll(c: Object) -> Result<Self> {
         let this = Self { elementData: Field::new(Default::default()), size: Field::new(0) };
         /* invokespecial Method java/util/AbstractList.<init>:()V */
         let _t0 = c.toArray()?;
@@ -55,7 +55,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "trimToSize", descriptor = "()V", access = "public"))]
+    // java: trimToSize()V
     pub fn trimToSize(&self) -> Result<()> {
         let this = self;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
@@ -64,7 +64,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "ensureCapacity", descriptor = "(I)V", access = "public"))]
+    // java: ensureCapacity(I)V
     pub fn ensureCapacity(&self, minCapacity: i32) -> Result<()> {
         let this = self;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
@@ -72,7 +72,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "grow", descriptor = "(I)[Ljava/lang/Object;", access = "private"))]
+    // java: grow(I)[Ljava/lang/Object;
     // java: grow(I)[Ljava/lang/Object;
     pub fn grow__i(&self, minCapacity: i32) -> Result<Vec<Object>> {
         let this = self;
@@ -88,7 +88,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(_arr3)
     }
 
-    #[cfg_attr(any(), java_method(name = "grow", descriptor = "()[Ljava/lang/Object;", access = "private"))]
+    // java: grow()[Ljava/lang/Object;
     // java: grow()[Ljava/lang/Object;
     pub fn grow(&self) -> Result<Vec<Object>> {
         let this = self;
@@ -96,33 +96,33 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "size", descriptor = "()I", access = "public"))]
+    // java: size()I
     pub fn size(&self) -> Result<i32> {
         let this = self;
         Ok(this.size.get())
     }
 
-    #[cfg_attr(any(), java_method(name = "isEmpty", descriptor = "()Z", access = "public"))]
+    // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
         let this = self;
         Ok(this.size.get()==0i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "contains", descriptor = "(Ljava/lang/Object;)Z", access = "public"))]
+    // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
         let this = self;
         let _t0 = this.indexOf(o)?;
         Ok(_t0>=0i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "indexOf", descriptor = "(Ljava/lang/Object;)I", access = "public"))]
+    // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
         let this = self;
         let _t0 = this.indexOfRange(o, 0i32, this.size.get())?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "indexOfRange", descriptor = "(Ljava/lang/Object;II)I"))]
+    // java: indexOfRange(Ljava/lang/Object;II)I
     pub fn indexOfRange(&self, o: Object, start: i32, end: i32) -> Result<i32> {
         let this = self;
         let mut es: Vec<Object> = this.elementData.get();
@@ -142,14 +142,14 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(-1i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "lastIndexOf", descriptor = "(Ljava/lang/Object;)I", access = "public"))]
+    // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
         let this = self;
         let _t0 = this.lastIndexOfRange(o, 0i32, this.size.get())?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "lastIndexOfRange", descriptor = "(Ljava/lang/Object;II)I"))]
+    // java: lastIndexOfRange(Ljava/lang/Object;II)I
     pub fn lastIndexOfRange(&self, o: Object, start: i32, end: i32) -> Result<i32> {
         let this = self;
         let mut es: Vec<Object> = this.elementData.get();
@@ -169,19 +169,19 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(-1i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "clone", descriptor = "()Ljava/lang/Object;", access = "public"))]
+    // java: clone()Ljava/lang/Object;
     pub fn clone(&self) -> Result<Object> {
         let this = self;
-        let mut v: java/util/ArrayList = this;
+        let mut v: ArrayList = this;
         let _t0: Vec<Object> = Arrays::copyOf(&this.elementData.get(), this.size.get())?;
         v.elementData.set(_t0);
         v.modCount.set(0i32);
         return Ok(v);
         v = todo!("stack underflow");
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
     }
 
-    #[cfg_attr(any(), java_method(name = "toArray", descriptor = "()[Ljava/lang/Object;", access = "public"))]
+    // java: toArray()[Ljava/lang/Object;
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
         let this = self;
@@ -189,7 +189,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "toArray", descriptor = "([Ljava/lang/Object;)[Ljava/lang/Object;", access = "public"))]
+    // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
         let this = self;
@@ -202,18 +202,18 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(a)
     }
 
-    #[cfg_attr(any(), java_method(name = "elementData", descriptor = "(I)Ljava/lang/Object;"))]
+    // java: elementData(I)Ljava/lang/Object;
     pub fn elementData(&self, index: i32) -> Result<E> {
         let this = self;
         Ok(this.elementData.get()[index as usize].clone())
     }
 
-    #[cfg_attr(any(), java_method(name = "elementAt", descriptor = "([Ljava/lang/Object;I)Ljava/lang/Object;", access = "static"))]
+    // java: elementAt([Ljava/lang/Object;I)Ljava/lang/Object;
     pub fn elementAt(es: &[Object], index: i32) -> Result<E> {
         Ok(es[index as usize].clone())
     }
 
-    #[cfg_attr(any(), java_method(name = "get", descriptor = "(I)Ljava/lang/Object;", access = "public"))]
+    // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<E> {
         let this = self;
         let _t0: i32 = Objects::checkIndex(index, this.size.get())?;
@@ -221,24 +221,24 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(_t1)
     }
 
-    #[cfg_attr(any(), java_method(name = "getFirst", descriptor = "()Ljava/lang/Object;", access = "public"))]
+    // java: getFirst()Ljava/lang/Object;
     pub fn getFirst(&self) -> Result<E> {
         let this = self;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let _t0 = this.elementData(0i32)?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "getLast", descriptor = "()Ljava/lang/Object;", access = "public"))]
+    // java: getLast()Ljava/lang/Object;
     pub fn getLast(&self) -> Result<E> {
         let this = self;
         let mut last: i32 = (this.size.get()).wrapping_sub(1i32);
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let _t0 = this.elementData(last)?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "set", descriptor = "(ILjava/lang/Object;)Ljava/lang/Object;", access = "public"))]
+    // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, index: i32, element: E) -> Result<E> {
         let this = self;
         let _t0: i32 = Objects::checkIndex(index, this.size.get())?;
@@ -248,7 +248,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(oldValue)
     }
 
-    #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;[Ljava/lang/Object;I)V", access = "private"))]
+    // java: add(Ljava/lang/Object;[Ljava/lang/Object;I)V
     // java: add(Ljava/lang/Object;[Ljava/lang/Object;I)V
     pub fn add__obj_arr_obj_i(&self, e: E, elementData: Vec<Object>, s: i32) -> Result<()> {
         let this = self;
@@ -259,7 +259,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public"))]
+    // java: add(Ljava/lang/Object;)Z
     // java: add(Ljava/lang/Object;)Z
     pub fn add__obj(&self, e: E) -> Result<bool> {
         let this = self;
@@ -268,7 +268,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(1i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "add", descriptor = "(ILjava/lang/Object;)V", access = "public"))]
+    // java: add(ILjava/lang/Object;)V
     // java: add(ILjava/lang/Object;)V
     pub fn add__i_obj(&self, index: i32, element: E) -> Result<()> {
         let this = self;
@@ -284,21 +284,21 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "addFirst", descriptor = "(Ljava/lang/Object;)V", access = "public"))]
+    // java: addFirst(Ljava/lang/Object;)V
     pub fn addFirst(&self, element: E) -> Result<()> {
         let this = self;
         this.add(0i32, element)?;
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "addLast", descriptor = "(Ljava/lang/Object;)V", access = "public"))]
+    // java: addLast(Ljava/lang/Object;)V
     pub fn addLast(&self, element: E) -> Result<()> {
         let this = self;
         let _t0 = this.add(element)?;
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "remove", descriptor = "(I)Ljava/lang/Object;", access = "public"))]
+    // java: remove(I)Ljava/lang/Object;
     // java: remove(I)Ljava/lang/Object;
     pub fn remove__i(&self, index: i32) -> Result<E> {
         let this = self;
@@ -309,28 +309,28 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(oldValue)
     }
 
-    #[cfg_attr(any(), java_method(name = "removeFirst", descriptor = "()Ljava/lang/Object;", access = "public"))]
+    // java: removeFirst()Ljava/lang/Object;
     pub fn removeFirst(&self) -> Result<E> {
         let this = self;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let mut es: Vec<Object> = this.elementData.get();
         let mut oldValue: Object = es[0i32 as usize].clone();
         this.fastRemove(es, 0i32)?;
         Ok(oldValue)
     }
 
-    #[cfg_attr(any(), java_method(name = "removeLast", descriptor = "()Ljava/lang/Object;", access = "public"))]
+    // java: removeLast()Ljava/lang/Object;
     pub fn removeLast(&self) -> Result<E> {
         let this = self;
         let mut last: i32 = (this.size.get()).wrapping_sub(1i32);
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let mut es: Vec<Object> = this.elementData.get();
         let mut oldValue: Object = es[last as usize].clone();
         this.fastRemove(es, last)?;
         Ok(oldValue)
     }
 
-    #[cfg_attr(any(), java_method(name = "equals", descriptor = "(Ljava/lang/Object;)Z", access = "public"))]
+    // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
         let this = self;
         return Ok(1i32);
@@ -344,13 +344,13 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(equal)
     }
 
-    #[cfg_attr(any(), java_method(name = "equalsRange", descriptor = "(Ljava/util/List;II)Z"))]
-    pub fn equalsRange(&self, other: List, from: i32, to: i32) -> Result<bool> {
+    // java: equalsRange(Ljava/util/List;II)Z
+    pub fn equalsRange(&self, other: Object, from: i32, to: i32) -> Result<bool> {
         let this = self;
         let mut es: Vec<Object> = this.elementData.get();
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let _t0 = other.iterator()?;
-        let mut oit: Iterator = _t0;
+        let mut oit: Object = _t0;
         loop {
             if from >= to { break; }
             let _t0 = oit.hasNext()?;
@@ -363,15 +363,15 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(_t1==0i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "equalsArrayList", descriptor = "(Ljava/util/ArrayList;)Z", access = "private"))]
-    pub fn equalsArrayList(&self, other: ArrayList) -> Result<bool> {
+    // java: equalsArrayList(Ljava/util/ArrayList;)Z
+    pub fn equalsArrayList(&self, other: Object) -> Result<bool> {
         let this = self;
         let mut otherModCount: i32 = other.modCount.get();
         let mut s: i32 = this.size.get();
         let mut equal: i32 = s == other.size.get();
         let mut otherEs: Vec<Object> = other.elementData.get();
         let mut es: Vec<Object> = this.elementData.get();
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let mut i: i32 = 0i32;
         loop {
             if i >= s { break; }
@@ -383,14 +383,14 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(equal)
     }
 
-    #[cfg_attr(any(), java_method(name = "checkForComodification", descriptor = "(I)V", access = "private"))]
+    // java: checkForComodification(I)V
     pub fn checkForComodification(&self, expectedModCount: i32) -> Result<()> {
         let this = self;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "hashCode", descriptor = "()I", access = "public"))]
+    // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
         let this = self;
         let mut expectedModCount: i32 = this.modCount.get();
@@ -400,11 +400,11 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(hash)
     }
 
-    #[cfg_attr(any(), java_method(name = "hashCodeRange", descriptor = "(II)I"))]
+    // java: hashCodeRange(II)I
     pub fn hashCodeRange(&self, from: i32, to: i32) -> Result<i32> {
         let this = self;
         let mut es: Vec<Object> = this.elementData.get();
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let mut hashCode: i32 = 1i32;
         let mut i: i32 = from;
         loop {
@@ -417,7 +417,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(hashCode)
     }
 
-    #[cfg_attr(any(), java_method(name = "remove", descriptor = "(Ljava/lang/Object;)Z", access = "public"))]
+    // java: remove(Ljava/lang/Object;)Z
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove__obj(&self, o: Object) -> Result<bool> {
         let this = self;
@@ -438,7 +438,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(1i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "fastRemove", descriptor = "([Ljava/lang/Object;I)V", access = "private"))]
+    // java: fastRemove([Ljava/lang/Object;I)V
     pub fn fastRemove(&self, es: Vec<Object>, i: i32) -> Result<()> {
         let this = self;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
@@ -450,7 +450,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "clear", descriptor = "()V", access = "public"))]
+    // java: clear()V
     pub fn clear(&self) -> Result<()> {
         let this = self;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
@@ -467,9 +467,9 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "addAll", descriptor = "(Ljava/util/Collection;)Z", access = "public"))]
     // java: addAll(Ljava/util/Collection;)Z
-    pub fn addAll__coll(&self, c: Collection) -> Result<bool> {
+    // java: addAll(Ljava/util/Collection;)Z
+    pub fn addAll__coll(&self, c: Object) -> Result<bool> {
         let this = self;
         let _t0 = c.toArray()?;
         let mut a: Vec<Object> = _t0;
@@ -485,9 +485,9 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(1i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "addAll", descriptor = "(ILjava/util/Collection;)Z", access = "public"))]
     // java: addAll(ILjava/util/Collection;)Z
-    pub fn addAll__i_coll(&self, index: i32, c: Collection) -> Result<bool> {
+    // java: addAll(ILjava/util/Collection;)Z
+    pub fn addAll__i_coll(&self, index: i32, c: Object) -> Result<bool> {
         let this = self;
         this.rangeCheckForAdd(index)?;
         let _t0 = c.toArray()?;
@@ -506,17 +506,17 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(1i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "removeRange", descriptor = "(II)V", access = "protected"))]
+    // java: removeRange(II)V
     pub fn removeRange(&self, fromIndex: i32, toIndex: i32) -> Result<()> {
         let this = self;
         let _t0: String = ArrayList::outOfBoundsMsg(fromIndex, toIndex)?;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         this.shiftTailOverGap(this.elementData.get(), fromIndex, toIndex)?;
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "shiftTailOverGap", descriptor = "([Ljava/lang/Object;II)V", access = "private"))]
+    // java: shiftTailOverGap([Ljava/lang/Object;II)V
     pub fn shiftTailOverGap(&self, es: Vec<Object>, lo: i32, hi: i32) -> Result<()> {
         let this = self;
         System::arraycopy(&es, hi, &es, lo, (this.size.get()).wrapping_sub(hi))?;
@@ -532,15 +532,15 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "rangeCheckForAdd", descriptor = "(I)V", access = "private"))]
+    // java: rangeCheckForAdd(I)V
     pub fn rangeCheckForAdd(&self, index: i32) -> Result<()> {
         let this = self;
         let _t0 = this.outOfBoundsMsg(index)?;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsMsg", descriptor = "(I)Ljava/lang/String;", access = "private"))]
+    // java: outOfBoundsMsg(I)Ljava/lang/String;
     // java: outOfBoundsMsg(I)Ljava/lang/String;
     pub fn outOfBoundsMsg__i(&self, index: i32) -> Result<String> {
         let this = self;
@@ -551,7 +551,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(String::new())
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsMsg", descriptor = "(II)Ljava/lang/String;", access = "private static"))]
+    // java: outOfBoundsMsg(II)Ljava/lang/String;
     // java: outOfBoundsMsg(II)Ljava/lang/String;
     pub fn outOfBoundsMsg__i_i(fromIndex: i32, toIndex: i32) -> Result<String> {
         String::new().append(&String::from("From Index:"))?;
@@ -561,22 +561,22 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(String::new())
     }
 
-    #[cfg_attr(any(), java_method(name = "removeAll", descriptor = "(Ljava/util/Collection;)Z", access = "public"))]
-    pub fn removeAll(&self, c: Collection) -> Result<bool> {
+    // java: removeAll(Ljava/util/Collection;)Z
+    pub fn removeAll(&self, c: Object) -> Result<bool> {
         let this = self;
         let _t0 = this.batchRemove(c, 0i32, 0i32, this.size.get())?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "retainAll", descriptor = "(Ljava/util/Collection;)Z", access = "public"))]
-    pub fn retainAll(&self, c: Collection) -> Result<bool> {
+    // java: retainAll(Ljava/util/Collection;)Z
+    pub fn retainAll(&self, c: Object) -> Result<bool> {
         let this = self;
         let _t0 = this.batchRemove(c, 1i32, 0i32, this.size.get())?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "batchRemove", descriptor = "(Ljava/util/Collection;ZII)Z"))]
-    pub fn batchRemove(&self, c: Collection, complement: bool, from: i32, end: i32) -> Result<bool> {
+    // java: batchRemove(Ljava/util/Collection;ZII)Z
+    pub fn batchRemove(&self, c: Object, complement: bool, from: i32, end: i32) -> Result<bool> {
         let this = self;
         let _t0: Object = Objects::requireNonNull(c)?;
         let mut es: Vec<Object> = this.elementData.get();
@@ -599,16 +599,16 @@ impl<E: Clone + 'static> ArrayList<E> {
         e = complement;
         System::arraycopy(&es, r, &es, w, (end).wrapping_sub(r))?;
         w = (w).wrapping_add((end).wrapping_sub(r));
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         let mut local_9: bool = _t1;
         this.modCount.set((this.modCount.get()).wrapping_add((end).wrapping_sub(w)));
         this.shiftTailOverGap(es, w, end)?;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(1i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "writeObject", descriptor = "(Ljava/io/ObjectOutputStream;)V", access = "private"))]
-    pub fn writeObject(&self, s: ObjectOutputStream) -> Result<()> {
+    // java: writeObject(Ljava/io/ObjectOutputStream;)V
+    pub fn writeObject(&self, s: Object) -> Result<()> {
         let this = self;
         let mut expectedModCount: i32 = this.modCount.get();
         s.defaultWriteObject()?;
@@ -619,16 +619,16 @@ impl<E: Clone + 'static> ArrayList<E> {
             s.writeObject(this.elementData.get()[i as usize].clone())?;
             i = i.wrapping_add(1i32);
         }
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "readObject", descriptor = "(Ljava/io/ObjectInputStream;)V", access = "private"))]
-    pub fn readObject(&self, s: ObjectInputStream) -> Result<()> {
+    // java: readObject(Ljava/io/ObjectInputStream;)V
+    pub fn readObject(&self, s: Object) -> Result<()> {
         let this = self;
         s.defaultReadObject()?;
         let _t0 = s.readInt()?;
-        let _t1: JavaObjectInputStreamAccess = SharedSecrets::getJavaObjectInputStreamAccess()?;
+        let _t1: Object = SharedSecrets::getJavaObjectInputStreamAccess()?;
         _t1.checkArray(s, 56i32, this.size.get())?;
         let mut _arr2: Vec<Object> = Vec::with_capacity(this.size.get() as usize);
         let mut elements: Vec<Object> = _arr2;
@@ -643,40 +643,40 @@ impl<E: Clone + 'static> ArrayList<E> {
         this.elementData.set(ArrayList::EMPTY_ELEMENTDATA());
         String::new().append(&String::from("Invalid size:"))?;
         String::new().append(&this.size.get())?;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "listIterator", descriptor = "(I)Ljava/util/ListIterator;", access = "public"))]
     // java: listIterator(I)Ljava/util/ListIterator;
-    pub fn listIterator__i(&self, index: i32) -> Result<ListIterator> {
+    // java: listIterator(I)Ljava/util/ListIterator;
+    pub fn listIterator__i(&self, index: i32) -> Result<Object> {
         let this = self;
         this.rangeCheckForAdd(index)?;
         Ok(ArrayList_ListItr::new(this, index)?)
     }
 
-    #[cfg_attr(any(), java_method(name = "listIterator", descriptor = "()Ljava/util/ListIterator;", access = "public"))]
     // java: listIterator()Ljava/util/ListIterator;
-    pub fn listIterator(&self) -> Result<ListIterator> {
+    // java: listIterator()Ljava/util/ListIterator;
+    pub fn listIterator(&self) -> Result<Object> {
         let this = self;
         Ok(ArrayList_ListItr::new(this, 0i32)?)
     }
 
-    #[cfg_attr(any(), java_method(name = "iterator", descriptor = "()Ljava/util/Iterator;", access = "public"))]
-    pub fn iterator(&self) -> Result<Iterator> {
+    // java: iterator()Ljava/util/Iterator;
+    pub fn iterator(&self) -> Result<Object> {
         let this = self;
         Ok(ArrayList_Itr::new(this)?)
     }
 
-    #[cfg_attr(any(), java_method(name = "subList", descriptor = "(II)Ljava/util/List;", access = "public"))]
-    pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<List> {
+    // java: subList(II)Ljava/util/List;
+    pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
         let this = self;
         ArrayList::subListRangeCheck(fromIndex, toIndex, this.size.get())?;
         Ok(ArrayList_SubList::new(this, fromIndex, toIndex)?)
     }
 
-    #[cfg_attr(any(), java_method(name = "forEach", descriptor = "(Ljava/util/function/Consumer;)V", access = "public"))]
-    pub fn forEach(&self, action: Consumer) -> Result<()> {
+    // java: forEach(Ljava/util/function/Consumer;)V
+    pub fn forEach(&self, action: Object) -> Result<()> {
         let this = self;
         let _t0: Object = Objects::requireNonNull(action)?;
         let mut expectedModCount: i32 = this.modCount.get();
@@ -689,23 +689,23 @@ impl<E: Clone + 'static> ArrayList<E> {
             action.accept(_t0)?;
             i = i.wrapping_add(1i32);
         }
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "spliterator", descriptor = "()Ljava/util/Spliterator;", access = "public"))]
-    pub fn spliterator(&self) -> Result<Spliterator> {
+    // java: spliterator()Ljava/util/Spliterator;
+    pub fn spliterator(&self) -> Result<Object> {
         let this = self;
         Ok(ArrayList_ArrayListSpliterator::new(this, 0i32, -1i32, 0i32)?)
     }
 
-    #[cfg_attr(any(), java_method(name = "nBits", descriptor = "(I)[J", access = "private static"))]
+    // java: nBits(I)[J
     pub fn nBits(n: i32) -> Result<Vec<i64>> {
         let mut _arr0: Vec<i64> = vec![0i64; (((n).wrapping_sub(1i32)>>((6i32&0x1f)))).wrapping_add(1i32) as usize];
         Ok(_arr0)
     }
 
-    #[cfg_attr(any(), java_method(name = "setBit", descriptor = "([JI)V", access = "private static"))]
+    // java: setBit([JI)V
     pub fn setBit(bits: &[i64], i: i32) -> Result<()> {
         /* TODO: dup2  */
         /* TODO: lshl  */
@@ -714,7 +714,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "isClear", descriptor = "([JI)Z", access = "private static"))]
+    // java: isClear([JI)Z
     pub fn isClear(bits: &[i64], i: i32) -> Result<bool> {
         /* TODO: lshl  */
         /* TODO: land  */
@@ -722,17 +722,17 @@ impl<E: Clone + 'static> ArrayList<E> {
         Ok(0i64==0i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "removeIf", descriptor = "(Ljava/util/function/Predicate;)Z", access = "public"))]
     // java: removeIf(Ljava/util/function/Predicate;)Z
-    pub fn removeIf__predic(&self, filter: Predicate) -> Result<bool> {
+    // java: removeIf(Ljava/util/function/Predicate;)Z
+    pub fn removeIf__predic(&self, filter: Object) -> Result<bool> {
         let this = self;
         let _t0 = this.removeIf(filter, 0i32, this.size.get())?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "removeIf", descriptor = "(Ljava/util/function/Predicate;II)Z"))]
     // java: removeIf(Ljava/util/function/Predicate;II)Z
-    pub fn removeIf__predic_i_i(&self, filter: Predicate, i: i32, end: i32) -> Result<bool> {
+    // java: removeIf(Ljava/util/function/Predicate;II)Z
+    pub fn removeIf__predic_i_i(&self, filter: Object, i: i32, end: i32) -> Result<bool> {
         let this = self;
         let _t0: Object = Objects::requireNonNull(filter)?;
         let mut expectedModCount: i32 = this.modCount.get();
@@ -755,7 +755,7 @@ impl<E: Clone + 'static> ArrayList<E> {
             ArrayList::setBit(&deathRow, (i).wrapping_sub(beg))?;
             i = i.wrapping_add(1i32);
         }
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         let mut w: i32 = beg;
         i = beg;
@@ -768,20 +768,20 @@ impl<E: Clone + 'static> ArrayList<E> {
         }
         this.shiftTailOverGap(es, w, end)?;
         return Ok(1i32);
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(0i32)
     }
 
-    #[cfg_attr(any(), java_method(name = "replaceAll", descriptor = "(Ljava/util/function/UnaryOperator;)V", access = "public"))]
-    pub fn replaceAll(&self, operator: UnaryOperator) -> Result<()> {
+    // java: replaceAll(Ljava/util/function/UnaryOperator;)V
+    pub fn replaceAll(&self, operator: Object) -> Result<()> {
         let this = self;
         this.replaceAllRange(operator, 0i32, this.size.get())?;
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "replaceAllRange", descriptor = "(Ljava/util/function/UnaryOperator;II)V", access = "private"))]
-    pub fn replaceAllRange(&self, operator: UnaryOperator, i: i32, end: i32) -> Result<()> {
+    // java: replaceAllRange(Ljava/util/function/UnaryOperator;II)V
+    pub fn replaceAllRange(&self, operator: Object, i: i32, end: i32) -> Result<()> {
         let this = self;
         let _t0: Object = Objects::requireNonNull(operator)?;
         let mut expectedModCount: i32 = this.modCount.get();
@@ -793,21 +793,21 @@ impl<E: Clone + 'static> ArrayList<E> {
             es[i as usize] = _t1;
             i = i.wrapping_add(1i32);
         }
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "sort", descriptor = "(Ljava/util/Comparator;)V", access = "public"))]
-    pub fn sort(&self, c: Comparator) -> Result<()> {
+    // java: sort(Ljava/util/Comparator;)V
+    pub fn sort(&self, c: Object) -> Result<()> {
         let this = self;
         let mut expectedModCount: i32 = this.modCount.get();
         Arrays::sort(&this.elementData.get(), 0i32, this.size.get(), c)?;
-        return Err(JvmError::Custom(String::from("athrow")));
+        return Err(JvmError::Custom("athrow".to_owned()));
         this.modCount.set((this.modCount.get()).wrapping_add(1i32));
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "checkInvariants", descriptor = "()V"))]
+    // java: checkInvariants()V
     pub fn checkInvariants(&self) -> Result<()> {
         let this = self;
         Ok(())

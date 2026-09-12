@@ -14,6 +14,7 @@ from .rs_ir import (
     RsGeneric, RsPrimitive, RsNamed,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
 )
+from .type_map import short_cls as _short_cls
 
 # ── 类型常量（供外部导入使用）────────────────────────────────────────────────
 I32  = _I32
@@ -68,8 +69,9 @@ class StackSim:
                 name = _safe_name(self._loc_names.get(slot, f"arg_{slot}"))
                 self.locals[slot] = (name, rt, False)
         else:
-            # this 是当前类的句柄（不再用 Rc<RefCell<...>>，直接用类名）
-            this_ty = RsNamed(class_name) if class_name else RsNamed("Object")
+            # this 是当前类的句柄，用 short_cls 转换 JVM 二进制名到 Rust 短名
+            rust_cls = _short_cls(class_name) if class_name else 'Object'
+            this_ty = RsNamed(rust_cls) if rust_cls else RsNamed("Object")
             self.locals[0] = ("this", this_ty, False)
             for slot, rt in enumerate(param_rust_types):
                 name = _safe_name(self._loc_names.get(slot + 1, f"arg_{slot}"))

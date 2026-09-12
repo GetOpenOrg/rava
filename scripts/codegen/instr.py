@@ -12,6 +12,48 @@ JVM 字节码指令 → Rust 语句转换。
 
 import re
 from .stack import StackSim, I32, I64, F32, F64, BOOL, UNIT
+
+
+def _escape_str(s: str) -> str:
+    """将原始字符串内容转义为 Rust 字符串字面量内容（不含两端的 "）。
+    处理：\ → \\，" → \"，控制字符，以及无效的 \% 等 Java 格式化符号。"""
+    result = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == '\\':
+            # 已有反斜杠：检查下一个字符是否构成合法 Rust 转义序列
+            if i + 1 < len(s):
+                nc = s[i + 1]
+                if nc in ('"', "'", '\\', 'n', 'r', 't', '0', 'x', 'u'):
+                    result.append('\\')
+                    result.append(nc)
+                    i += 2
+                    continue
+                else:
+                    # 非法转义（如 \%、\u 后跟非十六进制）→ 转义为 \\
+                    result.append('\\\\')
+                    i += 1
+                    continue
+            else:
+                result.append('\\\\')
+                i += 1
+        elif c == '"':
+            result.append('\\"')
+            i += 1
+        elif c == '\n':
+            result.append('\\n')
+            i += 1
+        elif c == '\r':
+            result.append('\\r')
+            i += 1
+        elif c == '\t':
+            result.append('\\t')
+            i += 1
+        else:
+            result.append(c)
+            i += 1
+    return ''.join(result)
 from .rs_ir import (
     Lit, Var, BinOp, UnOp, Call, MethodCall, FieldAccess, Index,
     Cast, RawExpr, RawStmt, LetStmt, AssignStmt, ExprStmt, ReturnStmt,
@@ -67,7 +109,7 @@ def parse_method_ref(comment: str) -> tuple[str | None, str, list, str]:
     desc    = m.group(3)
 
     if raw_cls:
-        raw_cls = raw_cls.split('/')[-1].split('.')[-1]
+        raw_cls = raw_cls.split('/')[-1].split('.')[-1].replace('$', '_')
 
     return (raw_cls, mname, parse_descriptor_params(desc), parse_descriptor_return(desc))
 
@@ -78,9 +120,33 @@ def _parse_slot(op: str, operand: str) -> int:
     return int(operand.strip()) if operand else 0
 
 
+_RUST_KEYWORDS = frozenset({
+    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn',
+    'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in',
+    'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return',
+    'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type',
+    'union', 'unsafe', 'use', 'where', 'while',
+})
+
+# java_runtime 手写实现的短类名：这些类的方法名不经过 mangle（hand-written API 已定好名称）
+_JAVA_RUNTIME_SHORT_NAMES: frozenset[str] = frozenset({
+    'Object', 'String', 'System', 'ArrayList', 'HashMap', 'HashSet',
+    'StringBuilder', 'Math', 'PrintStream',
+})
+
+
+def _safe_field(name: str) -> str:
+    """字段名安全化：替换 $，处理 Rust 关键字冲突。"""
+    name = name.replace('$', '_')
+    if name in _RUST_KEYWORDS:
+        return name + '_'
+    return name
+
+
 def _parse_field_ref(comment: str) -> tuple[str, str, str]:
     """解析 'Field java/lang/System.out:Ljava/io/PrintStream;' 格式。
-    返回 (class_binary_name, field_name, descriptor)。"""
+    返回 (class_binary_name, field_name, descriptor)。
+    field_name 已经过 _safe_field 处理（$ → _, Rust 关键字加 _）。"""
     comment = comment.strip()
     for prefix in ('Field ', 'InterfaceField '):
         if comment.startswith(prefix):
@@ -94,7 +160,7 @@ def _parse_field_ref(comment: str) -> tuple[str, str, str]:
         cls, field = ref_part.rsplit('.', 1)
     else:
         cls, field = '', ref_part
-    return cls, field, descriptor
+    return cls, _safe_field(field), descriptor
 
 
 # ── 主分发函数 ────────────────────────────────────────────────────
@@ -114,10 +180,10 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'sipush':                         sim.push(Lit(f"{operand}i32"), I32)
     elif op == 'ldc':
         if operand.startswith('"'):
-            # 字符串字面量 → java.lang.String
+            # javap 已经以 "..." 格式给出（operand 是完整的带引号字符串），直接用
             sim.push(Lit(f"String::from({operand})"), RsNamed('String'))
         elif comment.startswith('String '):
-            lit = comment[7:].strip()
+            lit = _escape_str(comment[7:].strip())
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         elif comment.startswith('int '):    sim.push(Lit(comment[4:].strip() + 'i32'), I32)
         elif comment.startswith('float '): sim.push(Lit(comment[6:].strip() + 'f32'), F32)
@@ -128,7 +194,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment.startswith('long '):   sim.push(Lit(comment[5:].strip() + 'i64'), I64)
         elif comment.startswith('double '): sim.push(Lit(comment[7:].strip() + 'f64'), F64)
         elif comment.startswith('String '):
-            lit = comment[7:].strip()
+            lit = _escape_str(comment[7:].strip())
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         else: sim.push(Lit(f"{operand}i32"), I32)
 
@@ -264,7 +330,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
 
     # ── invokespecial（含构造器）──
     elif op == 'invokespecial':
-        _gen_invokespecial(sim, comment, class_name)
+        _gen_invokespecial(sim, comment, class_name, registry=registry)
 
     # ── 字段访问 ──
     elif op == 'getfield':
@@ -295,7 +361,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'putstatic':
         val_expr, _ = sim.pop()
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
-        cls_simple = cls.split('/')[-1] if cls else 'UnknownClass'
+        cls_simple = (cls.split('/')[-1].replace('$', '_')) if cls else 'UnknownClass'
         sim.emit(RawStmt(f"{cls_simple}::{field_name}({render_expr(val_expr)});"))
 
     # ── 数组 ──
@@ -341,7 +407,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
 
     # ── 方法调用 ──
     elif op == 'invokestatic':
-        _gen_invokestatic(sim, comment, class_name)
+        _gen_invokestatic(sim, comment, class_name, registry=registry)
     elif op in ('invokevirtual', 'invokeinterface'):
         _gen_invokevirtual(sim, comment, class_name, registry=registry)
 
@@ -374,7 +440,8 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op in ('nop', 'wide'): pass
     elif op == 'athrow':
         e_expr, _ = sim.pop()
-        sim.emit(RawStmt(f'return Err(JvmError::Custom(String::from("athrow")));'))
+        # "athrow".to_owned() 使用 std::string::String，避免与 java_runtime::String 遮蔽冲突
+        sim.emit(RawStmt(f'return Err(JvmError::Custom("athrow".to_owned()));'))
     else:
         sim.emit(RawStmt(f"/* TODO: {op} {operand} */"))
 
@@ -423,12 +490,12 @@ def _gen_string_concat(sim: StackSim, comment: str):
         sim.push(Lit(f'String::from_owned(format!("{fmt}", {fmt_args}))'), RsNamed('String'))
 
 
-def _gen_invokespecial(sim: StackSim, comment: str, class_name: str):
+def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     if '<init>' not in comment and '"<init>"' not in comment:
         cls, _, _, _ = parse_method_ref(comment)
         if not cls or cls == 'Object':
             return  # super() 忽略
-        _gen_invokestatic(sim, comment, class_name)
+        _gen_invokestatic(sim, comment, class_name, registry=registry)
         return
 
     cls, _, params, _ = parse_method_ref(comment)
@@ -469,7 +536,39 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str):
         sim.emit(RawStmt(f"/* invokespecial {comment} */"))
 
 
-def _gen_invokestatic(sim: StackSim, comment: str, class_name: str):
+def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dict | None) -> str:
+    """查找 registry 中 cls_name 类的 mname 方法是否重载，重载则返回 mangled 名，否则原名。
+    支持短名（Objects）和全路径名（java/util/Objects）查找。
+    java_runtime 手写类（ArrayList/Object 等）不做 mangle，其 API 已固定。"""
+    if not registry or not mname or mname.startswith('<'):
+        return mname
+    # java_runtime 手写类直接跳过 mangle（其 API 已固定，不走 jdk_classes 重命名逻辑）
+    short = cls_name.rsplit('/', 1)[-1]
+    if short in _JAVA_RUNTIME_SHORT_NAMES:
+        return mname
+    # 直接查（可能是全路径）
+    target_ci = registry.get(cls_name)
+    # 短名查（用全路径反查）
+    if target_ci is None and '/' not in cls_name:
+        for key, ci in registry.items():
+            if key.rsplit('/', 1)[-1] == cls_name:
+                target_ci = ci
+                break
+    if target_ci is None:
+        return mname
+    # 排除 java_runtime 类（registry 中仍有其 JDK 字节码副本，但方法名不 mangle）
+    if target_ci.name.rsplit('/', 1)[-1] in _JAVA_RUNTIME_SHORT_NAMES:
+        return mname
+    visible = [m for m in target_ci.methods if not m.is_synthetic]
+    same = sum(1 for m in visible if m.name == mname)
+    if same <= 1:
+        return mname
+    desc_m = re.search(r':(\([^)]*\)\S+)', comment)
+    raw_desc = desc_m.group(1) if desc_m else ''
+    return mangle_name(mname, raw_desc) if raw_desc else mname
+
+
+def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     for skip in BOXING_SKIP_STATIC:
         if skip in comment:
             return  # 自动装箱：栈顶值保留
@@ -507,12 +606,14 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str):
         else:
             call = f"({args[0]}).abs()"
     elif cls is None or cls == class_name:
-        call = f"Self::{mname}({', '.join(args)})"
+        rust_mname = _mangle_if_overloaded(class_name, mname, comment, registry)
+        call = f"Self::{rust_mname}({', '.join(args)})"
         needs_q = True
     elif cls and '/' in cls:
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
-        call = f"{cls}::{mname}({', '.join(args)})"
+        rust_mname = _mangle_if_overloaded(cls, mname, comment, registry)
+        call = f"{cls}::{rust_mname}({', '.join(args)})"
         needs_q = True
 
     q = '?' if needs_q else ''
@@ -553,20 +654,13 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         if mname == '<init>':
             return
 
-    # 对于用户类（无 /），查 registry 确认是否有重载，有则 mangle 调用名
-    rust_mname = mname
-    if registry and cls:
-        target_ci = registry.get(cls)
-        if target_ci is not None and '/' not in target_ci.name:
-            # 用户类：检查重载
-            visible = [m for m in target_ci.methods if not m.is_synthetic]
-            same = sum(1 for m in visible if m.name == mname)
-            if same > 1:
-                # 从 comment 提取原始描述符
-                desc_m = re.search(r':(\([^)]*\)\S+)', comment)
-                raw_desc = desc_m.group(1) if desc_m else ''
-                if raw_desc:
-                    rust_mname = mangle_name(mname, raw_desc)
+    # 若接收方 Rust 类型是 java_runtime 手写类，不做 mangle
+    obj_base = obj_ty.split('<')[0].strip()  # 去泛型后缀（ArrayList<T> → ArrayList）
+    if obj_base in _JAVA_RUNTIME_SHORT_NAMES:
+        rust_mname = mname
+    else:
+        # 查 registry 确认是否有重载（用户类 + JDK 类均检查），有则 mangle 调用名
+        rust_mname = _mangle_if_overloaded(cls or '', mname, comment, registry)
 
     # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
     arg_str = ', '.join(args)

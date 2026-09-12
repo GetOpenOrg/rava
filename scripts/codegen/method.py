@@ -218,13 +218,32 @@ def gen_method_body(
 
     # ── 构造器：创建 this ───────────────────────────────────────────
     if is_ctor:
+        from .sig_parser import parse_class_type_params
         inst_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
-        if inst_fields:
-            field_inits = ', '.join(
-                f"{f.name}: Field::new({rust_default(jvm_to_rust(f.descriptor))})"
+        class_tparams = parse_class_type_params(class_info.generic_signature) if (class_info and class_info.generic_signature) else []
+        def _safe_fname(n: str) -> str:
+            n = n.replace('$', '_')
+            _kw = frozenset({'in', 'type', 'enum', 'mod', 'use', 'fn', 'let',
+                             'mut', 'ref', 'pub', 'self', 'static', 'struct'})
+            return n + '_' if n in _kw else n
+        if inst_fields and class_tparams:
+            # 命名 struct，有实例字段且有泛型参数
+            parts_init = [
+                f"{_safe_fname(f.name)}: Field::new({rust_default(jvm_to_rust(f.descriptor))})"
                 for f in inst_fields
-            )
-            struct_init = f"Self {{ {field_inits} }}"
+            ]
+            parts_init.append("_phantom: std::marker::PhantomData")
+            struct_init = f"Self {{ {', '.join(parts_init)} }}"
+        elif inst_fields:
+            # 命名 struct，只有实例字段，无泛型参数
+            parts_init = [
+                f"{_safe_fname(f.name)}: Field::new({rust_default(jvm_to_rust(f.descriptor))})"
+                for f in inst_fields
+            ]
+            struct_init = f"Self {{ {', '.join(parts_init)} }}"
+        elif class_tparams:
+            # 无实例字段但有泛型参数：tuple struct，用 Self(PhantomData)
+            struct_init = "Self(std::marker::PhantomData)"
         else:
             struct_init = "Self {}"
         entries.append(('', f"    let this = {struct_init};"))
