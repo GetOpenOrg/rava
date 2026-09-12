@@ -475,7 +475,7 @@ impl System {
     pub fn initPhase2(printToStderr: bool, printStackTrace: bool) -> Result<i32> {
         let _t0: Object = ModuleBootstrap::boot()?;
         System::bootLayer(_t0);
-        let mut e: i32 = /* UNDERFLOW */;
+        let mut e: i32 = todo!("stack underflow");
         System::logInitException(printToStderr, printStackTrace, String::from("Error occurred during initialization of boot layer"), e)?;
         return Ok(-1i32);
         VM::initLevel(2i32)?;

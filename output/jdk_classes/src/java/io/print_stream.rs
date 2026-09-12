@@ -39,7 +39,7 @@ impl PrintStream {
         let _t0: Object = PrintStream::requireNonNull(csn, String::from("charsetName"))?;
         let _t1: Object = Charset::forName(csn)?;
         return Ok(_t1);
-        let mut unused: i32 = /* UNDERFLOW */;
+        let mut unused: i32 = todo!("stack underflow");
         panic!("{}", /* UnsupportedEncodingException::new(csn)? */);
     }
 
@@ -202,7 +202,7 @@ impl PrintStream {
         let this = self;
         this.ensureOpen()?;
         this.out.get().flush()?;
-        let mut x: i32 = /* UNDERFLOW */;
+        let mut x: i32 = todo!("stack underflow");
         this.trouble.set(1i32);
         Ok(())
     }
@@ -235,11 +235,11 @@ impl PrintStream {
         let mut x: bool = this.closing.get();
         this.trouble.set(1i32);
         /* TODO: aconst_null  */
-        /* UNDERFLOW */.textOut.set(this);
+        todo!("stack underflow").textOut.set(this);
         /* TODO: aconst_null  */
-        /* UNDERFLOW */.charOut.set(this);
+        todo!("stack underflow").charOut.set(this);
         /* TODO: aconst_null  */
-        /* UNDERFLOW */.out.set(this);
+        todo!("stack underflow").out.set(this);
         Ok(())
     }
 

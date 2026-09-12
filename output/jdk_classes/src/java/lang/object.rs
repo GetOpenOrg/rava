@@ -77,7 +77,7 @@ impl Object {
         let mut comp: i64 = _t0;
         this.wait0(timeoutMillis)?;
         Blocker::end(comp)?;
-        let mut e: i32 = /* UNDERFLOW */;
+        let mut e: i32 = todo!("stack underflow");
         let _t1: Object = Thread::currentThread()?;
         let mut thread: Object = _t1;
         let _t2 = thread.isVirtual()?;

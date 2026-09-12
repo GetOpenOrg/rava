@@ -177,7 +177,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         v.elementData.set(_t0);
         v.modCount.set(0i32);
         return Ok(v);
-        v = /* UNDERFLOW */;
+        v = todo!("stack underflow");
         panic!("{}", /* InternalError::new(v)? */);
     }
 
@@ -461,7 +461,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         loop {
             if i >= to { break; }
             /* TODO: aconst_null  */
-            /* UNDERFLOW */[es as usize] = i;
+            todo!("stack underflow")[es as usize] = i;
             i = i.wrapping_add(1i32);
         }
         Ok(())
@@ -526,7 +526,7 @@ impl<E: Clone + 'static> ArrayList<E> {
         loop {
             if i >= to { break; }
             /* TODO: aconst_null  */
-            /* UNDERFLOW */[es as usize] = i;
+            todo!("stack underflow")[es as usize] = i;
             i = i.wrapping_add(1i32);
         }
         Ok(())

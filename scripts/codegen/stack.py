@@ -94,7 +94,10 @@ class StackSim:
 
     def pop(self) -> tuple[RsExpr, RsType]:
         """弹栈，返回 (RsExpr, RsType)。"""
-        return self.stack.pop() if self.stack else (RawExpr('/* UNDERFLOW */'), I32)
+        if self.stack:
+            return self.stack.pop()
+        # 栈下溢：常见于 catch 块隐式压栈的异常对象、复杂控制流分析失败
+        return (RawExpr('todo!("stack underflow")'), I32)
 
     # ── 语句输出 ─────────────────────────────────────────────────────────────
 
