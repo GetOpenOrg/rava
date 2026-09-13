@@ -125,7 +125,7 @@ def _parse_slot(op: str, operand: str) -> int:
 # System 和 PrintStream 已迁移到 jdk_classes + native_impls，不在此列表中
 _JAVA_RUNTIME_SHORT_NAMES: frozenset[str] = frozenset({
     'Object', 'String', 'ArrayList', 'HashMap', 'HashSet',
-    'StringBuilder', 'Math',
+    'StringBuilder',
 })
 
 

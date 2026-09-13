@@ -18,9 +18,8 @@ _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
     'java/util/HashMap',
     'java/util/HashSet',
     'java/lang/StringBuilder',  # java_runtime 通过 prelude 导出
-    'java/lang/Math',           # java_runtime 有 Math stubs
     # 已迁移到 jdk_classes + native_impls:
-    # 'java/lang/System', 'java/io/PrintStream', 'java/lang/String'
+    # 'java/lang/System', 'java/io/PrintStream', 'java/lang/String', 'java/lang/Math'
 })
 
 # BFS 截断规则（见设计文档 §6.3）：进入这些类到此为止，不继续追踪
