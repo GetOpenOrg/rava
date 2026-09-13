@@ -472,17 +472,20 @@ def _parse_synthetic_fn(line: str) -> dict | None:
     }
 
 
-def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
+def _scan_native_impls(workspace_root: str) -> tuple[dict, dict, dict]:
     """扫描 native_impls/ 目录，解析 /// java/Class.method:descriptor 注释。
     返回:
-      native_map:  {(class_binary_name, member_name, descriptor): (rust_fn_name, rel_file)}
-      synthetics:  {class_binary_name: [synthetic_info_dict, ...]}
+      native_map:   {(class_binary_name, member_name, descriptor): (rust_fn_name, rel_file)}
+      synthetics:   {class_binary_name: [synthetic_info_dict, ...]}
+      extra_fields: {class_binary_name: [(field_name, rust_type), ...]}
     rel_file 相对于 workspace_root。
     synthetic 函数用 /// @synthetic 标注（不对应任何 Java 方法）。
+    extra_fields 通过 /// @field name: RustType 注释声明，注入到生成的 struct 中。
     """
     impls_dir = os.path.join(workspace_root, 'native_impls')
     result: dict = {}
     synthetics: dict = {}
+    extra_fields: dict = {}
     if not os.path.isdir(impls_dir):
         return result, synthetics
     for dirpath, _, files in os.walk(impls_dir):
@@ -513,7 +516,15 @@ def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
             i = 0
             while i < len(lines):
                 stripped = lines[i].strip()
-                if stripped == '/// @synthetic':
+                if stripped.startswith('/// @field ') and ':' in stripped and class_binary:
+                    # /// @field field_name: RustType → 注入额外的 struct 字段
+                    field_decl = stripped[len('/// @field '):].strip()
+                    colon = field_decl.index(':')
+                    fname = field_decl[:colon].strip()
+                    ftype = field_decl[colon + 1:].strip()
+                    extra_fields.setdefault(class_binary, []).append((fname, ftype))
+                    i += 1
+                elif stripped == '/// @synthetic':
                     # 找下一个 pub fn
                     j = i + 1
                     while j < len(lines) and not lines[j].strip().startswith('pub fn'):
@@ -560,7 +571,7 @@ def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
                     i = j + 1
                 else:
                     i += 1
-    return result, synthetics
+    return result, synthetics, extra_fields
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None,
@@ -626,7 +637,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   native_impls_map: dict | None = None,
                   workspace_root: str | None = None,
                   user_crate_prefix: str | None = None,
-                  synthetics: dict | None = None) -> str:
+                  synthetics: dict | None = None,
+                  extra_fields: dict | None = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -673,12 +685,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         struct_generic = ''
         impl_header   = f"impl {struct_name}"
 
-    if inst_fields:
+    cls_extra_fields = (extra_fields or {}).get(ci.name, [])
+    if inst_fields or cls_extra_fields:
         field_lines = []
         for f in inst_fields:
             safe_fname = _safe_field_name(f.name)
             field_lines.append("    " + _java_field_attr(f))
             field_lines.append(f"    pub {safe_fname}: Field<{jvm_to_rust(f.descriptor)}>,")
+        for ef_name, ef_type in cls_extra_fields:
+            field_lines.append(f"    pub {ef_name}: {ef_type},")
         # 若有泛型参数但字段中未用到，加 PhantomData 防止 E0392
         if class_type_params:
             phantom_ty = ', '.join(f'std::marker::PhantomData<{p}>' for p in class_type_params)
@@ -875,7 +890,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             registry.setdefault(jci.name, jci)
 
     # 扫描 native_impls/ 目录，构建 native 映射和 synthetic 方法映射
-    native_impls_map, synthetics_map = _scan_native_impls(out_dir)
+    native_impls_map, synthetics_map, extra_fields_map = _scan_native_impls(out_dir)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
@@ -903,7 +918,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                             stub_bodies=use_stubs,
                                             native_impls_map=native_impls_map,
                                             workspace_root=out_dir,
-                                            synthetics=synthetics_map))
+                                            synthetics=synthetics_map,
+                                            extra_fields=extra_fields_map))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
@@ -973,7 +989,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                         user_crate_prefix='jdk_classes',
                                         native_impls_map=native_impls_map,
                                         workspace_root=out_dir,
-                                        synthetics=synthetics_map))
+                                        synthetics=synthetics_map,
+                                        extra_fields=extra_fields_map))
 
     # 中间 mod.rs（用户子包）
     for dir_path, children in user_mod_tree.items():

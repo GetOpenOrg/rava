@@ -111,9 +111,9 @@ def _parse_slot(op: str, operand: str) -> int:
 
 
 # java_runtime 手写实现的短类名：这些类的方法名不经过 mangle（hand-written API 已定好名称）
-# System/PrintStream/String/Math/ArrayList/HashMap/HashSet 已迁移到 jdk_classes + native_impls
+# System/PrintStream/String/Math/ArrayList/HashMap/HashSet/StringBuilder 已迁移到 jdk_classes + native_impls
 _JAVA_RUNTIME_SHORT_NAMES: frozenset[str] = frozenset({
-    'Object', 'String', 'StringBuilder',
+    'Object', 'String',
 })
 
 
@@ -495,12 +495,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         raw_cls = full_cls.rsplit('/', 1)[-1]
         raw_cls = short_cls(raw_cls) or raw_cls
 
-        if raw_cls in ('StringBuilder', 'StringBuffer'):
-            # StringBuilder → mapped to jdk_classes String
-            rust_ty_node = RsNamed('String')
-            rust_ty      = 'String'
-            init_expr    = 'String::from("")'
-        elif '/' in full_cls:
+        if '/' in full_cls:
             # JDK class（含包路径）→ 用 new_default() 工厂（@synthetic）
             rust_ty_str = jvm_to_rust(f'L{full_cls};', registry)
             if rust_ty_str != 'Object' and '<' in rust_ty_str:
@@ -650,6 +645,9 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         actual_rust = render_type(e_ty_node)
         if expected_rust == 'Object' and actual_rust != 'Object' and actual_rust not in _PRIMITIVE_RUST_TYPES:
             e_str = f"{e_str}.into()"
+        elif actual_rust not in _PRIMITIVE_RUST_TYPES and not actual_rust.startswith('Rc<'):
+            # 类类型按 Java 引用语义传递：clone 防止移动（Rc clone 共享所有权，廉价）
+            e_str = f"{e_str}.clone()"
         args.insert(0, e_str)
     obj_expr, obj_ty_node = sim.pop()
     obj_e = render_expr(obj_expr)
@@ -659,19 +657,6 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     if mname in UNBOX_VIRTUAL:
         sim.push(obj_expr, obj_ty_node)
         return
-
-    # StringBuilder.append / toString（保留：Rust 引用语义特殊处理）
-    if cls in ('StringBuilder', 'StringBuffer') or (obj_ty == 'String' and mname in ('append', 'toString')):
-        if mname == 'append':
-            a = args[0] if args else 'String::new()'
-            sim.emit(RawStmt(f"{obj_e}.append(&{a})?;"))
-            sim.push(RawExpr(obj_e), RsNamed('String'))
-            return
-        if mname == 'toString':
-            sim.push(RawExpr(obj_e), RsNamed('String'))
-            return
-        if mname == '<init>':
-            return
 
     # 若接收方 Rust 类型是 java_runtime 手写类，不做 mangle
     obj_base = obj_ty.split('<')[0].strip()  # 去泛型后缀（ArrayList<T> → ArrayList）

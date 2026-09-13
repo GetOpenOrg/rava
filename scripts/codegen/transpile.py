@@ -14,10 +14,10 @@ _JDK_PREFIXES = ('java/', 'javax/', 'sun/', 'com/sun/', 'com/oracle/')
 # java_runtime 已手写实现的类：这些类不再由 jdk_classes 翻译，避免重复定义和命名冲突
 _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
     'java/lang/Object',
-    'java/lang/StringBuilder',  # java_runtime 通过 prelude 导出
     # 已迁移到 jdk_classes + native_impls:
     # 'java/lang/System', 'java/io/PrintStream', 'java/lang/String', 'java/lang/Math'
     # 'java/util/ArrayList', 'java/util/HashMap', 'java/util/HashSet'  (P7: migrated)
+    # 'java/lang/StringBuilder'  (P10: migrated)
 })
 
 # BFS 截断规则（见设计文档 §6.3）：进入这些类到此为止，不继续追踪
