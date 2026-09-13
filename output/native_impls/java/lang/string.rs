@@ -39,9 +39,3 @@ impl From<&str> for String {
     }
 }
 
-impl Into<Object> for String {
-    fn into(self) -> Object {
-        let rc: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(self);
-        Object(rc)
-    }
-}

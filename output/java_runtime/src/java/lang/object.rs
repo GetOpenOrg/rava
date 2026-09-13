@@ -26,6 +26,18 @@ pub use raw::Object;
 use crate::error::Result;
 
 impl Object {
+    /// 将任意 'static 值装入 Object（upcasting 工厂方法）
+    pub fn from_any<T: std::any::Any + 'static>(v: T) -> Self {
+        Object(std::rc::Rc::new(v))
+    }
+
+    /// 从 Object 中取出 T 的引用（downcasting），类型不符则 panic（ClassCastException）
+    pub fn downcast<T: std::any::Any + Clone + 'static>(&self) -> T {
+        self.0.downcast_ref::<T>()
+            .expect("ClassCastException")
+            .clone()
+    }
+
     /// monitorenter — synchronized 块进入（stub，单线程环境无需真正加锁）
     #[allow(non_snake_case)]
     pub fn lock(&self) -> Result<()> { Ok(()) }

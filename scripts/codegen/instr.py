@@ -404,13 +404,16 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
 
     # ── checkcast / instanceof ──
     elif op == 'checkcast':
-        # 更新栈顶值的 Rust 类型为 cast 目标类型，让后续方法调用能正确类型检查
+        # 更新栈顶类型为 cast 目标类型；若源类型为 Object，插入运行时 downcast
         if comment and sim.stack:
             if comment.startswith('['):
                 cast_rust = jvm_to_rust(comment, registry)
             else:
                 cast_rust = jvm_to_rust(f'L{comment};', registry)
-            expr, _ = sim.pop()
+            expr, src_ty = sim.pop()
+            src_name = getattr(src_ty, 'name', str(src_ty))
+            if src_name == 'Object' and cast_rust not in ('Object', '()'):
+                expr = RawExpr(f"({render_expr(expr)}).downcast::<{cast_rust}>()")
             sim.push(expr, RsNamed(cast_rust))
     elif op == 'instanceof': sim.push(Lit('true'), BOOL)
 

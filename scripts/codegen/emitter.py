@@ -551,6 +551,37 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
     parts.append(f"{impl_header} {{\n{impl_body}\n}}\n")
+
+    # 自动生成 Into<Object> / From<Object> trait impl（所有非 Object 类均需要）
+    # Into<Object>：将该类型装入 Object（JVM upcasting）
+    # From<Object>：从 Object 中取出该类型（JVM checkcast / downcasting）
+    if struct_name != 'Object':
+        if class_type_params:
+            tp_str  = ', '.join(class_type_params)
+            bd_str  = ', '.join(f"{p}: Clone + 'static" for p in class_type_params)
+            full_ty = f"{struct_name}<{tp_str}>"
+            parts.append(
+                f"impl<{bd_str}> Into<Object> for {full_ty} {{\n"
+                f"    fn into(self) -> Object {{ Object::from_any(self) }}\n"
+                f"}}\n"
+            )
+            parts.append(
+                f"impl<{bd_str}> From<Object> for {full_ty} {{\n"
+                f"    fn from(obj: Object) -> {full_ty} {{ obj.downcast::<{full_ty}>() }}\n"
+                f"}}\n"
+            )
+        else:
+            parts.append(
+                f"impl Into<Object> for {struct_name} {{\n"
+                f"    fn into(self) -> Object {{ Object::from_any(self) }}\n"
+                f"}}\n"
+            )
+            parts.append(
+                f"impl From<Object> for {struct_name} {{\n"
+                f"    fn from(obj: Object) -> {struct_name} {{ obj.downcast::<{struct_name}>() }}\n"
+                f"}}\n"
+            )
+
     return '\n'.join(parts)
 
 
