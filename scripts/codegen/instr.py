@@ -122,9 +122,10 @@ def _parse_slot(op: str, operand: str) -> int:
 
 
 # java_runtime 手写实现的短类名：这些类的方法名不经过 mangle（hand-written API 已定好名称）
+# System 和 PrintStream 已迁移到 jdk_classes + native_impls，不在此列表中
 _JAVA_RUNTIME_SHORT_NAMES: frozenset[str] = frozenset({
-    'Object', 'String', 'System', 'ArrayList', 'HashMap', 'HashSet',
-    'StringBuilder', 'Math', 'PrintStream',
+    'Object', 'String', 'ArrayList', 'HashMap', 'HashSet',
+    'StringBuilder', 'Math',
 })
 
 

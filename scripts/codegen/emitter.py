@@ -427,8 +427,73 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
 _safe_param_name = safe_ident
 
 
-def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None) -> str:
-    """为 native / abstract 方法生成 todo! 存根，供手工实现替换。"""
+def _scan_native_impls(workspace_root: str) -> dict:
+    """扫描 native_impls/ 目录，解析 /// java/Class.method:descriptor 注释。
+    返回: {(class_binary_name, member_name, descriptor): (rust_fn_name, rel_file)}
+    rel_file 相对于 workspace_root。
+    同时处理静态字段 getter（descriptor 不以 '(' 开头的条目）。
+    """
+    impls_dir = os.path.join(workspace_root, 'native_impls')
+    result: dict = {}
+    if not os.path.isdir(impls_dir):
+        return result
+    for dirpath, _, files in os.walk(impls_dir):
+        for fname in sorted(files):
+            if not fname.endswith('.rs'):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            rel = os.path.relpath(fpath, workspace_root).replace('\\', '/')
+            try:
+                content = open(fpath, encoding='utf-8').read()
+            except Exception:
+                continue
+            lines = content.splitlines()
+            i = 0
+            while i < len(lines):
+                stripped = lines[i].strip()
+                if stripped.startswith('/// java/') and '.' in stripped:
+                    java_ref = stripped[4:].strip()
+                    dot_idx = java_ref.rfind('.')
+                    if dot_idx < 0:
+                        i += 1
+                        continue
+                    class_part = java_ref[:dot_idx]
+                    rest = java_ref[dot_idx + 1:]
+                    colon_idx = rest.find(':')
+                    if colon_idx >= 0:
+                        member_name = rest[:colon_idx]
+                        descriptor = rest[colon_idx + 1:]
+                    else:
+                        member_name = rest
+                        descriptor = ''
+                    # 收集后续 /// 注释行，检查 not-needed 标记
+                    j = i + 1
+                    not_needed = False
+                    while j < len(lines) and lines[j].strip().startswith('///'):
+                        if 'not-needed' in lines[j]:
+                            not_needed = True
+                        j += 1
+                    if not_needed:
+                        i = j
+                        continue
+                    # 找下一个 pub fn
+                    while j < len(lines) and not lines[j].strip().startswith('pub fn'):
+                        j += 1
+                    if j < len(lines):
+                        m2 = re.match(r'\s*pub fn\s+(\w+)', lines[j])
+                        if m2:
+                            rust_fn = m2.group(1)
+                            key = (class_part, member_name, descriptor)
+                            result[key] = (rust_fn, rel)
+                    i = j + 1
+                else:
+                    i += 1
+    return result
+
+
+def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None,
+                     native_fn: str | None = None) -> str:
+    """为 native / abstract / stub 方法生成存根，若有 native_fn 则调用 _native 模块。"""
     from .type_map import jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return
     params = parse_descriptor_params(m.descriptor)
     ret    = parse_descriptor_return(m.descriptor)
@@ -463,9 +528,18 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             sig_self += ', '
 
     ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
-    label = 'native' if m.is_native else 'stub'
-    fn_name = rust_name or m.name
-    body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
+    fn_name = safe_ident(rust_name or m.name)
+    if native_fn:
+        # 调用 _native 模块中的手写实现
+        if m.is_static:
+            call_args = ', '.join(arg_names)
+            body = f'_native::{native_fn}({call_args})'
+        else:
+            call_args = ', '.join(['self'] + arg_names)
+            body = f'_native::{native_fn}({call_args})'
+    else:
+        label = 'native' if m.is_native else 'stub'
+        body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
 
     return (
         f'pub fn {fn_name}({sig_self}{args_str}) -> {ret_type} {{\n'
@@ -476,7 +550,10 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
 
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   jdk_crate_pkg_paths: list[str] | None = None,
-                  stub_bodies: bool = False) -> str:
+                  stub_bodies: bool = False,
+                  native_impls_map: dict | None = None,
+                  workspace_root: str | None = None,
+                  user_crate_prefix: str | None = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -484,6 +561,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     - 方法直接在 impl 块中，无 raw:: 子模块
     - 所有方法返回 Result<T>
     - 每个 struct / field / method 前加 // @java_* 注释供 build.rs 扫描
+    - native_impls_map: 若提供，则为有实现的方法调用 _native::fn()，并插入 mod _native
+    - user_crate_prefix: 若提供（如 'jdk_classes'），cross_imports 用该 crate 前缀
     """
     from collections import Counter
     from .type_map import mangle_name
@@ -491,8 +570,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 跨包 glob import：让生成代码能直接用 Objects、Integer 等翻译过的 JDK 类型
     cross_imports: list[str] = []
     if jdk_crate_pkg_paths:
+        prefix = user_crate_prefix or 'crate'
         for pkg_path in jdk_crate_pkg_paths:
-            cross_imports.append(f"use crate::{pkg_path}::*;")
+            cross_imports.append(f"use {prefix}::{pkg_path}::*;")
 
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
@@ -533,7 +613,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
             field_lines.append(f"    pub _phantom: {phantom_ty},")
         decls = '\n'.join(field_lines)
-        parts.append(f"pub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
+        parts.append(f"#[derive(Default)]\npub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
     else:
         if class_type_params:
             # 无字段但有泛型参数：改用 tuple struct 包含 PhantomData
@@ -541,9 +621,31 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 phantom_ty = f'std::marker::PhantomData<{class_type_params[0]}>'
             else:
                 phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
-            parts.append(f"pub struct {struct_name}{struct_generic}({phantom_ty});\n")
+            parts.append(f"#[derive(Default)]\npub struct {struct_name}{struct_generic}({phantom_ty});\n")
         else:
-            parts.append(f"pub struct {struct_name}{struct_generic};\n")
+            parts.append(f"#[derive(Default)]\npub struct {struct_name}{struct_generic};\n")
+
+    # 若有 native_impls，插入 mod _native { include!("..."); } 块
+    if native_impls_map and workspace_root:
+        class_native_impls = {k: v for k, v in native_impls_map.items() if k[0] == ci.name}
+        if class_native_impls:
+            any_val = next(iter(class_native_impls.values()))
+            rel_file = any_val[1]
+            # 从生成文件目录到 workspace_root 的相对层数
+            pkg_depth = len(ci.name.split('/')) - 1
+            ups = '../' * (pkg_depth + 2)
+            include_path = ups + rel_file
+            native_mod_lines = [
+                'mod _native {',
+                '    #![allow(unused_imports, dead_code, unused_variables, non_snake_case)]',
+                '    use java_runtime::prelude::*;',
+                '    use super::*;',
+            ]
+            for imp in cross_imports:
+                native_mod_lines.append(f'    {imp}')
+            native_mod_lines.append(f'    include!("{include_path}");')
+            native_mod_lines.append('}')
+            parts.append('\n'.join(native_mod_lines) + '\n')
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
@@ -551,6 +653,23 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     overloaded_names: set[str] = {name for name, count in name_counts.items() if count > 1}
 
     method_blocks: list[str] = []
+
+    # public static 字段的 getter 方法（用于 getstatic 访问，如 System::out()）
+    # 只生成 native_impls 中有明确实现的字段 getter（避免与同名方法冲突）
+    static_fields = [f for f in ci.fields if f.is_static]
+    existing_method_names: set[str] = {m.name for m in visible_methods}
+    for sf in static_fields:
+        native_fn_key = (ci.name, sf.name, sf.descriptor)
+        if not (native_impls_map and native_fn_key in native_impls_map):
+            continue  # 只为有 native_impls 实现的字段生成 getter
+        safe_fname = _safe_field_name(sf.name)
+        if safe_fname in existing_method_names:
+            continue  # 有同名方法，跳过（方法已覆盖此访问路径）
+        rust_ret = jvm_to_rust(sf.descriptor, registry=registry)
+        native_fn = native_impls_map[native_fn_key][0]
+        body = f'_native::{native_fn}()'
+        method_blocks.append(f'// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
+
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
     for m in visible_methods:
         if m.name == '<clinit>':
@@ -573,8 +692,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         attr_line = _java_method_attr(m, compiled=True)
         if m.is_native or m.is_abstract or stub_bodies:
             # native/abstract 方法，或 JDK 类以 stub_bodies=True 模式生成：
-            # 只生成 todo!() 存根，不翻译方法体，确保 jdk_classes 可编译
-            stub = _gen_native_stub(m, ci, rust_name=rust_name)
+            # 只生成存根（或调用 _native 实现），确保 jdk_classes 可编译
+            native_fn = None
+            if native_impls_map:
+                nkey = (ci.name, m.name, m.descriptor)
+                if nkey in native_impls_map:
+                    native_fn = native_impls_map[nkey][0]
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=native_fn)
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
@@ -643,6 +767,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
 
+    # 扫描 native_impls/ 目录，构建 {(class, member, descriptor): (rust_fn, rel_file)} 映射
+    native_impls_map = _scan_native_impls(out_dir)
+
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
     if jdk_class_infos:
@@ -666,7 +793,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             use_stubs = jdk_ci.name not in _TRANSLATE_BODIES
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
                                             jdk_crate_pkg_paths=jdk_crate_pkg_paths,
-                                            stub_bodies=use_stubs))
+                                            stub_bodies=use_stubs,
+                                            native_impls_map=native_impls_map,
+                                            workspace_root=out_dir))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
@@ -728,9 +857,14 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         user_reexport.setdefault(parent, set()).add((mod_name, ci.name))
 
     # 写用户类文件
+    user_pkg_paths = jdk_crate_pkg_paths if jdk_class_infos else None
     for ci in class_infos:
         file_path, _, _ = layout[ci.name]
-        _write(file_path, _gen_class_rs(ci, registry=registry))
+        _write(file_path, _gen_class_rs(ci, registry=registry,
+                                        jdk_crate_pkg_paths=user_pkg_paths,
+                                        user_crate_prefix='jdk_classes',
+                                        native_impls_map=native_impls_map,
+                                        workspace_root=out_dir))
 
     # 中间 mod.rs（用户子包）
     for dir_path, children in user_mod_tree.items():

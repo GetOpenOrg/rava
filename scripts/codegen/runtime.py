@@ -31,7 +31,7 @@ pub mod java;
 
 pub use error::{JvmError, Result};
 pub use types::Field;
-pub use java::lang::{Object, String, System};
+pub use java::lang::{Object, String};
 pub use java::util::{ArrayList, HashMap, HashSet};
 
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
@@ -41,7 +41,7 @@ pub mod prelude {
     #![allow(unused_imports)]
     pub use super::error::{JvmError, Result};
     pub use super::types::Field;
-    pub use super::java::lang::{Object, String, System};
+    pub use super::java::lang::{Object, String};
     pub use super::java::util::{ArrayList, HashMap, HashSet};
 }
 """,
@@ -92,11 +92,9 @@ pub mod util;
 pub mod math;
 pub mod object;
 pub mod string;
-pub mod system;
 
 pub use object::Object;
 pub use string::String;
-pub use system::System;
 """,
 
     "java/lang/object.rs": """\
@@ -246,40 +244,6 @@ impl From<i32>  for String { fn from(v: i32)  -> Self { String(v.to_string()) } 
 impl From<i64>  for String { fn from(v: i64)  -> Self { String(v.to_string()) } }
 impl From<f64>  for String { fn from(v: f64)  -> Self { String(v.to_string()) } }
 impl From<bool> for String { fn from(v: bool) -> Self { String(v.to_string()) } }
-""",
-
-    "java/lang/system.rs": """\
-//! java.lang.System 同构类型
-use crate::error::Result;
-
-pub struct System;
-pub struct PrintStream { pub is_err: bool }
-
-impl System {
-    pub fn out() -> PrintStream { PrintStream { is_err: false } }
-    pub fn err() -> PrintStream { PrintStream { is_err: true } }
-    pub fn exit(code: i32) -> ! { std::process::exit(code); }
-    pub fn current_time_millis() -> i64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64
-    }
-}
-
-impl PrintStream {
-    pub fn println<T: std::fmt::Display>(&self, v: T) -> Result<()> {
-        if self.is_err { eprintln!("{}", v); } else { println!("{}", v); }
-        Ok(())
-    }
-    pub fn println_empty(&self) -> Result<()> {
-        if self.is_err { eprintln!(); } else { println!(); }
-        Ok(())
-    }
-    pub fn print<T: std::fmt::Display>(&self, v: T) -> Result<()> {
-        if self.is_err { eprint!("{}", v); } else { print!("{}", v); }
-        Ok(())
-    }
-    pub fn flush(&self) -> Result<()> { Ok(()) }
-}
 """,
 
     "java/lang/math.rs": """\

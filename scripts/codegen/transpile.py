@@ -15,13 +15,12 @@ _JDK_PREFIXES = ('java/', 'javax/', 'sun/', 'com/sun/', 'com/oracle/')
 _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
     'java/lang/Object',
     'java/lang/String',
-    'java/lang/System',
     'java/util/ArrayList',
     'java/util/HashMap',
     'java/util/HashSet',
     'java/lang/StringBuilder',  # java_runtime 通过 prelude 导出
     'java/lang/Math',           # java_runtime 有 Math stubs
-    'java/io/PrintStream',      # java_runtime System.out 已封装
+    # java/lang/System 和 java/io/PrintStream 已迁移到 jdk_classes + native_impls
 })
 
 # BFS 截断规则（见设计文档 §6.3）：进入这些类到此为止，不继续追踪

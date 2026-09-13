@@ -1,13 +1,13 @@
 /// java/lang/System.currentTimeMillis:()J
-pub fn currentTimeMillis() -> i64 {
+pub fn currentTimeMillis() -> Result<i64> {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
 }
 
 /// java/lang/System.nanoTime:()J
-pub fn nanoTime() -> i64 {
+pub fn nanoTime() -> Result<i64> {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64)
 }
 
 /// java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V
@@ -24,3 +24,13 @@ pub fn nanoTime() -> i64 {
 
 /// java/lang/System.setErr0:(Ljava/io/PrintStream;)V
 /// not-needed
+
+/// java/lang/System.out:Ljava/io/PrintStream;
+pub fn out() -> PrintStream {
+    PrintStream::default()
+}
+
+/// java/lang/System.err:Ljava/io/PrintStream;
+pub fn err() -> PrintStream {
+    PrintStream::default()
+}

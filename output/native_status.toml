@@ -1,6 +1,32 @@
 # native_status.toml — 由 build.rs 自动维护
 # status: "implemented" | "needed" | "stub" | "not-needed"
 
+[java.io.FileCleanable]
+cleanupClose0 = "needed",
+
+[java.io.FileDescriptor]
+close0 = "needed",
+getAppend = "needed",
+getHandle = "needed",
+initIDs = "needed",
+sync0 = "needed",
+
+[java.io.FileInputStream]
+available0 = "needed",
+initIDs = "needed",
+length0 = "needed",
+open0 = "needed",
+position0 = "needed",
+read0 = "needed",
+readBytes = "needed",
+skip0 = "needed",
+
+[java.io.FileOutputStream]
+initIDs = "needed",
+open0 = "needed",
+write = "needed",
+writeBytes = "needed",
+
 [java.lang.Double]
 doubleToRawLongBits = "implemented",
 longBitsToDouble = "implemented",
@@ -9,9 +35,43 @@ longBitsToDouble = "implemented",
 floatToRawIntBits = "implemented",
 intBitsToFloat = "implemented",
 
+[java.lang.Module]
+addExports0 = "needed",
+addExportsToAll0 = "needed",
+addExportsToAllUnnamed0 = "needed",
+addReads0 = "needed",
+defineModule0 = "needed",
+
 [java.lang.NullPointerException]
 getExtendedNPEMessage = "implemented",
 
+[java.lang.Shutdown]
+beforeHalt = "needed",
+halt0 = "needed",
+
+[java.lang.StackTraceElement]
+initStackTraceElement = "needed",
+initStackTraceElements = "needed",
+
+[java.lang.System]
+arraycopy = "implemented",
+currentTimeMillis = "implemented",
+identityHashCode = "needed",
+mapLibraryName = "needed",
+nanoTime = "implemented",
+registerNatives = "implemented",
+setErr0 = "implemented",
+setIn0 = "implemented",
+setOut0 = "implemented",
+
 [java.lang.Throwable]
 fillInStackTrace = "implemented",
+
+[java.lang.VirtualThread]
+notifyJvmtiEnd = "needed",
+notifyJvmtiHideFrames = "needed",
+notifyJvmtiMount = "needed",
+notifyJvmtiStart = "needed",
+notifyJvmtiUnmount = "needed",
+registerNatives = "needed",
 
