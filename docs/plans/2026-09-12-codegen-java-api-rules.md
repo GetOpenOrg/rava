@@ -68,6 +68,35 @@ let list: Vec<String> = Vec::new();        // 不用 Rust 标准库类型
 use java_runtime::prelude::*;
 ```
 
+### R-05b：runtime 存储层用 `mod raw` 封装
+
+`java_runtime` 内每个 Java 类的实现文件均采用 `mod raw` 模式：存储层 struct 名称与 Java 类同名，封装在 `#[doc(hidden)] pub mod raw` 子模块中，对外 re-export 为公共 API。
+
+```rust
+// java_runtime/src/java/lang/object.rs
+
+#[doc(hidden)]
+pub mod raw {
+    use std::rc::Rc;
+
+    // 存储层：路径 crate::java::lang::object::raw::Object
+    // Rc<dyn Any> 完全不对外暴露
+    pub struct Object(pub Rc<dyn std::any::Any>);
+
+    impl Clone for Object { ... }
+}
+
+// 公开 API：re-export，用户只见 Object，不见 Rc
+pub use raw::Object;
+```
+
+完整路径规则：
+| 层次 | 路径示例 | 可见性 |
+|------|---------|--------|
+| 存储层 | `crate::java::lang::object::raw::Object` | `#[doc(hidden)]`，不在文档中暴露 |
+| 公开 API | `crate::java::lang::Object` | 通过 prelude `pub use` 引入 |
+| 使用方 | `Object` | 生成代码直接使用短名 |
+
 ---
 
 ## 类型映射规则

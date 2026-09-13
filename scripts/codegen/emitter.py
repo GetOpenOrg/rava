@@ -224,9 +224,9 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             sig_self += ', '
 
     ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
-    label = 'native' if m.is_native else 'abstract'
+    label = 'native' if m.is_native else 'stub'
     fn_name = rust_name or m.name
-    body = f'todo!("{label} {ci.name}.{m.name}")'
+    body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
 
     return (
         f'pub fn {fn_name}({sig_self}{args_str}) -> {ret_type} {{\n'
