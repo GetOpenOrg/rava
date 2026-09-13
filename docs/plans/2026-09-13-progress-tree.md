@@ -34,12 +34,14 @@
 │   └── ✅ Cargo workspace 生成
 │           三层 crate：java_runtime / jdk_classes / user
 │           java_runtime 提交到 git（VM 基础设施）
-│           jdk_classes / user gitignored（代码生成产物）
+│           jdk_classes / user 的 src/ gitignored（代码生成产物）
+│           Cargo.toml / build.rs 由 git 直接管理，emitter 不再写入
 │           native_impls/ 在 workspace 根，提交到 git
 │
 ├── 第 2 层：用户类翻译（HelloWorld.java → hello_world.rs）
 │   ├── ✅ 类结构生成（struct + impl）
-│   ├── ✅ 字段生成（Field<T> 封装）
+│   ├── ✅ 字段生成（JField<T> 封装）
+│   │       注：Field<T> 已重命名为 JField<T>，避免与 java/lang/reflect/Field 命名冲突
 │   ├── ✅ 泛型参数（PhantomData 补全）
 │   │       原因：无实例字段的泛型 struct 触发 E0392
 │   │       解决：检测 class_tparams，注入 PhantomData 字段或 tuple struct
@@ -52,22 +54,18 @@
 │   │       解决：constants.py 统一 safe_ident()，所有标识符经此过滤
 │   └── ✅ 局部变量名安全化（关键字、$ 处理）
 │
-├── 第 3 层：JDK 类发现（BFS 调用链扫描）
-│   ├── ✅ 从用户类指令注释提取 JDK 类引用
-│   ├── ✅ BFS 传递闭包扫描（transpile.py _discover_jdk_classes）
-│   ├── ✅ 截断规则（_CUTOFF_PREFIXES / _CUTOFF_CLASSES）
-│   │       防止 NIO/reflect/Unsafe/并发框架导致依赖爆炸
-│   ├── ✅ 手写运行时排除（_JAVA_RUNTIME_CLASSES）
-│   │       排除 Object/Math/ArrayList 等，避免与 java_runtime 重复定义
-│   │       已迁移：String / System / PrintStream 已从排除集移除
-│   └── ⚠️ 扫描粒度：类级别，未到方法级别
-│           现状：BFS 按类扫描，把整个 ArrayList 拉进来
-│                 即使 HelloWorld 只用了 ArrayList.add，排序相关类也被拉入
-│           目标：按方法调用链扫描，未调用的方法其依赖类不纳入 BFS
-│           解决方案：解析每个方法的 invokevirtual/invokestatic/invokespecial 指令，
-│                     构建方法级调用图，BFS 只追踪实际调用的方法
+├── 第 3 层：JDK 类发现（方法级调用链 BFS）
+│   ├── ✅ 从用户类指令注释提取 JDK 方法引用（class + method + descriptor）
+│   ├── ✅ 方法级调用链 BFS（_discover_jdk_classes_method_level）
+│   │       只追踪实际被调用的方法，未调用方法的依赖类不展开
+│   │       HelloWorld 自然收敛到 879 个 JDK 类，无需任何人工截断
+│   ├── ✅ 截断规则已删除（_CUTOFF_CLASSES / _CUTOFF_PREFIXES / _CUTOFF_EXTRA_CLASSES）
+│   │       原因：这些规则是类级 BFS 爆炸的补丁（类级无截断→3129 类）
+│   │       解决：方法级 BFS 自然收敛，无需人工黑名单
+│   └── ✅ 手写运行时排除（_JAVA_RUNTIME_CLASSES）
+│           仅保留 java/lang/Object（VM 基础设施，永久由 java_runtime 提供）
 │
-├── 第 4 层：jdk_classes 生成（150 个 JDK 类的 Rust 存根）
+├── 第 4 层：jdk_classes 生成（879 个 JDK 类的 Rust 存根）
 │   ├── ✅ 跨包 glob import（use crate::java::pkg::*）
 │   │       原因：Objects/Integer 等类引用同 crate 其他类型，编译报"找不到类型"
 │   │       解决：mod.rs 加 pub use module::*，每个文件头加 use crate::pkg::*
@@ -86,30 +84,30 @@
 │   ├── ✅ #[derive(Default)] 添加到所有 struct
 │   │       原因：PrintStream::default()、String::default() 被 native_impls 调用
 │   │       解决：emitter._gen_class_rs 对所有生成 struct 加 #[derive(Clone, Default)]
-│   └── ✅ 公开静态字段 getter 方法生成（System::out()）
-│           原因：getstatic 渲染为 System::out() 调用，但 jdk_classes System 无此方法
-│           解决：emitter 扫描 public static 字段，为每个生成 pub fn field_name() 存根
-│                 若 native_impls 有对应实现则 dispatch 到 _native::field_name()
+│   ├── ✅ 公开静态字段 getter 方法生成（System::out()）
+│   │       原因：getstatic 渲染为 System::out() 调用，但 jdk_classes System 无此方法
+│   │       解决：emitter 扫描 public static 字段，为每个生成 pub fn field_name() 存根
+│   │             若 native_impls 有对应实现则 dispatch 到 _native::field_name()
+│   └── ✅ 编译警告全部消除
+│           non_camel_case_types（内部类 $ → _ 后名称不符合 CamelCase）
+│           unused_imports（glob import 引入未用类型）
+│           ambiguous_glob_reexports（多子模块导出同名类型）
+│           → 生成文件头 #![allow(...)] 覆盖所有情况
 │
 ├── 第 5 层：invokevirtual / invokestatic 指令翻译
 │   ├── ✅ invokevirtual 统一路径（obj.method(args)?）
 │   ├── ✅ invokestatic 通用解析
 │   ├── ✅ invokespecial（构造器 + super 调用）
-│   ├── ⚠️ StringBuilder.append / String.append 特殊分支（硬编码）
-│   │       现状：instr.py 对 StringBuilder/StringBuffer 做特判，映射到 String 类型
-│   │       问题：Python 代码中出现 JDK 类名（违反架构原则）
-│   │       缓解：String 已迁移到 jdk_classes，append 通过 @synthetic native_impls 实现
-│   │       剩余：消除 instr.py 中 'StringBuilder', 'StringBuffer' 字面量，
-│   │             需先完成数组类型支持（第 11 层），使 StringBuilder 可从 JDK 字节码翻译
-│   ├── ⚠️ _COLL_IR_TYPES 硬编码（ArrayList/HashMap/HashSet new）
-│   │       现状：instr.py 对集合类构造做特判
-│   │       问题：Python 代码中出现 JDK 类名（违反架构原则）
-│   │       解决方案：第 11 层（数组类型支持）完成后，集合类可从 JDK 字节码翻译
-│   └── ⚠️ _JAVA_RUNTIME_SHORT_NAMES 硬编码
-│           现状：Object/String/Math 等在此集合，方法调用不加 mangle suffix
-│           已清理：System / PrintStream / String 已从此集合移除
-│           剩余：Object / Math / ArrayList / HashMap / HashSet / StringBuilder
-│           解决方案：对应类迁移到 jdk_classes 后逐步移除
+│   ├── ✅ StringBuilder 迁移（P10）
+│   │       StringBuilder 从 java_runtime 迁移到 jdk_classes + native_impls
+│   │       /// @field 机制：native_impls 向生成 struct 注入额外字段（_sb）
+│   │       instr.py 中 StringBuilder/StringBuffer 字面量已全部删除
+│   ├── ✅ _COLL_IR_TYPES 硬编码删除（P9）
+│   │       invokespecial ClassName.<init>:()V 改为动态逻辑
+│   │       '/' in full_cls 判断 JDK 类 → 生成 ClassName::new_default()
+│   └── ✅ _JAVA_RUNTIME_SHORT_NAMES 清理完成
+│           仅保留 Object（java_runtime 永久基础设施）
+│           已移除：String / Math / ArrayList / HashMap / HashSet / StringBuilder
 │
 ├── 第 6 层：JDK 方法体字节码翻译（stub_bodies=False）
 │   │       ← 实验结果：全量开启曾触发 3808 个编译错误，逐步修复
@@ -130,43 +128,16 @@
 │   │         - checkcast 指令实现类型更新 → midVal:Comparable 等
 │   │       剩余：泛型集合 get() 返回 Object（真实类型擦除），待后续层解决
 │   │
-│   ├── ✅ 内部类引用（Preconditions 等）生成 panic! 存根
-│   │       原因：Objects.checkIndex 调用 jdk.internal.util.Preconditions（被截断）
-│   │       解决：instr.py _class_known() + _gen_invokestatic 内部类检测
+│   ├── ✅ 内部类引用生成 panic! 存根
+│   │       原因：Objects.checkIndex 调用 jdk.internal.util.Preconditions 等内部类
+│   │       解决：instr.py _class_known() 检测，未知类生成 panic! 存根
 │   │
 │   ├── ✅ aconst_null 指令推送 Object::default() 到操作数栈
-│   │       原因：null 参数导致 todo!("stack underflow") 生成
-│   │       解决：instr.py 添加 aconst_null 处理
-│   │
 │   ├── ✅ 泛型类型参数推断（Comparator → Comparator<Object>）
-│   │       原因：jvm_to_rust 对泛型类只返回短名，函数签名中触发 E0107
-│   │       解决：type_map.py jvm_to_rust() 读 generic_signature 附加 <Object,...>
-│   │
 │   ├── ✅ bool 返回类型转换（iconst_1/0 → true/false）
-│   │       原因：ireturn 将 1i32/0i32 写入 Ok()，与 Result<bool> 不符（E0308）
-│   │       解决：method.py _fix_bool_returns() 后处理 Ok(1i32)→Ok(true)
-│   │
-│   ├── ✅ 静态方法数组参数双重引用（Vec<T> → &&[T]）
-│   │       原因：sig_type 把 Vec<T> 转为 &[T]（签名），但 sim 仍用 Vec<T>
-│   │       解决：method.py sim 初始化用 sig_type 类型
-│   │
-│   ├── ✅ bool vs i32 比较（ifne 条件 {a}!=0i32 当 a: bool 时 E0308）
-│   │       原因：cfg.py cmp_op 生成 "a!=0i32"，不区分 bool/int 操作数类型
-│   │       解决：method.py bool_cond_map handler 检测 a_type 是 bool，
-│   │             ifne → 直接用布尔值，ifeq → !bool，跳过 !=0i32 比较
-│   │
+│   ├── ✅ bool vs i32 比较（ifne/ifeq 条件区分 bool/int 操作数类型）
 │   ├── ✅ Object 缺少 null 语义方法（is_none/get）
-│   │       原因：ifnull/ifnonnull 生成 .is_none() 调用，Object 无此方法
-│   │       解决：runtime.py object.rs 模板添加 is_none()→false, get()→Ok(self.clone())
-│   │
 │   ├── ✅ Object 缺少 Display trait
-│   │       原因：toIdentityString 用 format!("{}", o) 但 Object 无 Display
-│   │       解决：runtime.py object.rs 模板添加 impl Display for Object
-│   │
-│   ├── ✅ _TRANSLATE_BODIES 测试残留（java/util/Objects 留在集合里）
-│   │       原因：调试期间向 _TRANSLATE_BODIES 添加了 'java/util/Objects'，未清理
-│   │       后果：Objects.toString() 被翻译，引用了 getName/identityHashCode 触发 E0599
-│   │       解决：emitter.py _TRANSLATE_BODIES 恢复为 set()（空集合）
 │   │
 │   └── ⚠️ 泛型集合 get() 返回 Object（类型擦除根因）
 │           现状：ArrayList<E>.get() 在字节码中返回 Object，Rust 类型为 Object
@@ -178,106 +149,68 @@
 │   │       ✅ native_impls/java/lang/system.rs（currentTimeMillis/nanoTime/out/err）
 │   │       ✅ native_impls/java/io/print_stream.rs（println__str/println__i/flush）
 │   │       ✅ native_impls/java/lang/string.rs（from_owned/append/Display/From<&str>）
-│   │       ✅ native_impls/java/lang/double.rs（doubleToRawLongBits/longBitsToDouble）
-│   │       ✅ native_impls/java/lang/float.rs（floatToRawIntBits/intBitsToFloat）
-│   │       ✅ native_impls/java/lang/throwable.rs（fillInStackTrace no-op）
-│   │       ✅ native_impls/java/lang/null_pointer_exception.rs（getExtendedNPEMessage）
+│   │       ✅ native_impls/java/lang/string_builder.rs（new_default/append__str/toString）
+│   │       ✅ native_impls/java/lang/math.rs（sin/cos/sqrt/pow/log 等 30+ 方法）
+│   │       ✅ native_impls/java/lang/double.rs / float.rs / throwable.rs 等
+│   │       ✅ native_impls/java/util/array_list.rs / hash_map.rs / hash_set.rs
 │   │
 │   ├── ✅ mod _native { include!(...) } 链接机制
-│   │       原因：native_impls/ 文件此前只被 build.rs 追踪，不被任何 crate 编译
 │   │       解决：emitter 在有 native_impls 的类文件中插入
 │   │             mod _native { use java_runtime::prelude::*; use super::*; include!("../..../file.rs"); }
 │   │             方法 stub 改为 _native::fn_name(args) dispatch
 │   │       include! 路径公式：(pkg_depth + 2) 个 "../" + "native_impls/pkg/class.rs"
 │   │
 │   ├── ✅ /// @synthetic 合成方法机制
-│   │       原因：native_impls 需要提供不对应任何 Java 方法的 Rust 辅助函数
-│   │             （如 String::from_owned, String::append）
-│   │       解决：native_impls 文件中用 /// @synthetic 标注的 pub fn，
-│   │             emitter 在生成的 impl 块中自动生成 wrapper 方法
-│   │             静态（无 _this 参数）→ pub fn name(args) { _native::name(args) }
-│   │             实例（_this: &T）→ pub fn name(&self, args) { _native::name(self, args) }
-│   │             实例可变（_this: &mut T）→ pub fn name(&mut self, ...) { ... }
+│   │       native_impls 文件中用 /// @synthetic 标注的 pub fn，
+│   │       emitter 在生成的 impl 块中自动生成 wrapper 方法
+│   │
+│   ├── ✅ /// @field name: RustType 字段注入机制
+│   │       native_impls 向生成 struct 注入额外字段（如 StringBuilder._sb）
 │   │
 │   └── ✅ build.rs native_status.toml 追踪
 │           所有 native 方法实现状态：implemented / needed / stub / not-needed
-│           当前：所有 needed 方法已标记 implemented
 │
 ├── 第 8 层：_JAVA_RUNTIME_CLASSES 迁移（手写 → 字节码翻译）
 │   │       ← HelloWorld 目标架构的核心工作
 │   │
 │   ├── ✅ java/io/PrintStream 迁移（P4）
-│   │       方案：JDK PrintStream.class 字节码翻译（stub 方法体）
-│   │             native_impls 短路 println__str/println__i 直接调用 Rust println!
-│   │             System::out() 通过 native_impls 返回 PrintStream::default()
-│   │       已移除：_JAVA_RUNTIME_CLASSES / _JAVA_RUNTIME_SHORT_NAMES / runtime.py
-│   │
 │   ├── ✅ java/lang/System 迁移（P4）
-│   │       方案：JDK System.class 字节码翻译（unit struct，无实例字段）
-│   │             静态字段 out/err 通过 getter stub + native_impls 实现
-│   │       已移除：_JAVA_RUNTIME_CLASSES / _JAVA_RUNTIME_SHORT_NAMES / runtime.py
-│   │
 │   ├── ✅ java/lang/String 迁移（P5）
-│   │       关键挑战：
-│   │         1. 循环依赖：java_runtime::Object 内部使用 String 返回类型
-│   │            解决：Object.getClass/toString 改为返回 Result<Object>，
-│   │                  java_runtime 不再引用 String，String 可放入 jdk_classes
-│   │         2. byte[] value 字段被 cut-off 为 Field<Object>
-│   │            解决：native_impls 通过 Object(Rc::new(rust_string)) 将
-│   │                  真实字符串数据存入 Object 字段，Display/append 通过 downcast 读回
-│   │         3. String::new() 构造器不兼容（jdk_classes 版本是 stub）
-│   │            解决：instr.py StringBuilder 映射改用 String::from("")，
-│   │                  type_map.py String 默认值改为 String::default()
-│   │         4. from_owned / append 不是 Java 方法
-│   │            解决：/// @synthetic 机制，emitter 生成 wrapper
-│   │       已移除：_JAVA_RUNTIME_CLASSES / runtime.py string.rs 条目
-│   │       保留：_JAVA_RUNTIME_SHORT_NAMES 中的 String（避免方法名加 suffix）
-│   │
 │   ├── ✅ java/util/ArrayList / HashMap / HashSet 迁移（P7）
-│   │       方案：JDK 字节码翻译生成 struct 骨架（存根方法体）
-│   │             native_impls 通过 /// @synthetic 提供 new_default/add__obj/get__i/size 等
-│   │             impl Into<Object> for String 解决 JVM 引用协变问题
-│   │             _gen_invokevirtual 自动为 Object 参数插入 .into() 转换
-│   │       已移除：_JAVA_RUNTIME_CLASSES / runtime.py array_list/hash_map/hash_set 条目
-│   │       已移除：prelude 不再导出 ArrayList / HashMap / HashSet
-│   │
-│   └── ✅ java/lang/Math 迁移（P8）
-│           Math：全部 native 方法，通过 native_impls/java/lang/math.rs 实现 30+ 方法
-│           已移除：_JAVA_RUNTIME_CLASSES / runtime.py math.rs 条目
+│   │       impl Into<Object> for String 解决 JVM 引用协变问题
+│   ├── ✅ java/lang/Math 迁移（P8）
+│   └── ✅ java/lang/StringBuilder 迁移（P10）
+│           /// @field 机制注入 _sb 字段，native_impls 完整实现
 │           保留：Object 在 java_runtime（VM 基础设施，永久保留）
 │
-├── 第 9 层：手写 runtime 清理（最终态）
-│   ├── ✅ System 从 runtime.py 移除
-│   ├── ✅ PrintStream 从 runtime.py 移除
-│   ├── ✅ String 从 runtime.py 移除
-│   ├── ✅ java_runtime prelude 不再导出 System / PrintStream / String
-│   ├── ✅ ArrayList / HashMap / HashSet 从 runtime.py 移除（P7）
-│   ├── ✅ Math 从 runtime.py 移除（P8）
-│   ├── ❌ Object 仍在 runtime.py（VM 基础设施，部分永久保留）
-│   │       object.rs: lock/unlock/hashCode/equals 是 VM 设施，永久保留
-│   │       getClass/toString 已改为返回 Object（不再依赖 String）
-│   └── ❌ _COLL_IR_TYPES / StringBuilder 特判仍在 instr.py
+├── 第 9 层：代码架构清理
+│   ├── ✅ runtime.py 删除（P11）
+│   │       java_runtime/src/ 文件由 git 直接管理，不再由转译器写入
+│   ├── ✅ Cargo.toml / build.rs 由 git 管理（P12）
+│   │       .gitignore 改为只忽略 jdk_classes/src/ 和 user/src/
+│   │       output/Cargo.toml、java_runtime/Cargo.toml、jdk_classes/Cargo.toml、
+│   │       user/Cargo.toml、jdk_classes/build.rs 全部直接提交到 git
+│   │       emitter.py 删除所有静态文件常量（-297 行）
+│   ├── ✅ JField<T> 重命名（消除 reflect.Field 命名冲突）
+│   │       java_runtime::types::Field → JField，删除 emitter is_named_field 特判
+│   ├── ✅ 废弃脚本清理
+│   │       删除：scripts/javalang/（旧 AST 解析器）、classify.py（无调用方）
+│   │             gen_manifest.py、gen_stubs.py、java_rta.py、javap.py
+│   │             analyze_callchain.py（验证完成）
+│   └── ✅ Python 代码中 JDK 类名字面量清零
+│           删除 _COLL_IR_TYPES、StringBuilder 特判、Math 特判
+│           instr.py 中活跃代码零 JDK 类名字面量
 │
 ├── 第 10 层：当前验收状态
-│   ├── ✅ cargo check 0 errors
+│   ├── ✅ cargo check 0 errors，0 code-quality warnings
 │   ├── ✅ HelloWorld 输出 "Hello, World / hahaha / 2"
-│   ├── ✅ System → jdk_classes（JDK 字节码翻译 + native_impls）
-│   ├── ✅ PrintStream → jdk_classes（JDK 字节码翻译 + native_impls）
-│   ├── ✅ String → jdk_classes（JDK 字节码翻译 + native_impls）
-│   ├── ✅ ArrayList → jdk_classes + native_impls（P7 完成）
-│   ├── ✅ Math → jdk_classes + native_impls（P8 完成）
+│   ├── ✅ python3 scripts/main.py 默认转译并运行（无参数即完整流程）
+│   ├── ✅ System / PrintStream / String / Math / ArrayList / HashMap / HashSet / StringBuilder
+│   │       全部来自 JDK 字节码翻译 + native_impls
+│   ├── ✅ BFS 方法级调用链（879 类，自然收敛，无截断规则）
 │   └── ⚠️ Object → java_runtime（VM 基础设施，lock/unlock/hashCode 永久保留）
 │
 └── 第 11 层：后续架构工作（达到完全目标）
-    │
-    ├── ✅ 数组类型支持（P6 完成）
-    │       类型：所有 Java 数组 Vec<T> → Rc<RefCell<Vec<T>>>（引用语义）
-    │       指令：newarray/anewarray、aaload/aastore/arraylength 全部更新
-    │       影响：ArrayList 内部 Object[] elementData 正确映射，P7 得以完成
-    │
-    ├── ✅ Math 迁移（P8 完成）
-    │       native_impls/java/lang/math.rs 实现 sin/cos/sqrt/pow/log 等 30+ 方法
-    │       已移除：_JAVA_RUNTIME_CLASSES / runtime.py math.rs 条目
     │
     ├── ❌ 泛型类型推断（集合 get() 返回 Object 问题）
     │       问题：ArrayList<E>.get() 字节码返回 Object，
@@ -285,24 +218,15 @@
     │       方案 A：翻译时追踪 checkcast 指令，将变量类型 narrow 到 cast 目标类型
     │       方案 B：保持 Object 类型，但 Object 实现 Into<T> via downcast
     │
-    ├── ❌ BFS 方法级扫描（减少 jdk_classes 类数量）
-    │       现状：BFS 按类展开，150 个类上限可能不够
-    │       目标：只扫描调用链上的方法，未调用方法的依赖类不纳入
-    │
-    ├── ❌ 单 crate 架构（最终目标态）
-    │       现状：三层 crate（java_runtime / jdk_classes / user）
-    │       目标：合并为单 crate（消除循环依赖问题，简化构建）
-    │       前提：所有手写 runtime 完成迁移
-    │
-    └── ❌ _JAVA_RUNTIME_SHORT_NAMES / _COLL_IR_TYPES 清理
-            当对应类完成迁移后，从 instr.py 移除相关硬编码
+    └── ❌ 单 crate 架构（最终目标态）
+            现状：三层 crate（java_runtime / jdk_classes / user）
+            目标：合并为单 crate（消除循环依赖问题，简化构建）
+            前提：所有手写 runtime 完成迁移（已满足）
 ```
 
 ---
 
-## 当前推进状态（2026-09-13）
-
-### 已完成轮次
+## 推进历史
 
 | 轮次 | 内容 | 提交 |
 |------|------|------|
@@ -315,56 +239,45 @@
 | P8 | Math 迁移（native_impls 实现 30+ 方法）| 89e1cab |
 | P6 | 数组类型 Vec<T> → Rc<RefCell<Vec<T>>>，引用语义修复 | c667875 |
 | P7 | ArrayList/HashMap/HashSet 迁移，impl Into<Object> for String | 548df61 |
-
-### 当前状态（P7 完成后）
-
-**已迁移到 jdk_classes + native_impls：**
-- System、PrintStream（P4）
-- String（P5）
-- Math（P8）
-- ArrayList、HashMap、HashSet（P7）
-
-**仍在 java_runtime（永久保留基础设施）：**
-- Object（lock/unlock/hashCode/equals 是 VM 基础设施）
-- error.rs（JvmError/Result）
-- types.rs（Field<T>）
-
-### 下一步（按优先级）
-
-**P9：消除 Python 代码中的 JDK 类名常量（架构规范要求）**
-```
-files: scripts/codegen/instr.py
-修改：_COLL_IR_TYPES 硬编码（ArrayList/HashMap/HashSet new 的初始化表达式）
-      _JAVA_RUNTIME_SHORT_NAMES 硬编码（Object/Math/ArrayList 等）
-      StringBuilder 特殊分支（映射到 String 类型）
-目标：instr.py 中不出现任何 JDK 类名字面量
-```
-
-**P10：单 crate 架构（最终目标态）**
-```
-前提：所有手写 runtime 迁移完成（P7/P8 后满足）
-目标：合并 java_runtime/jdk_classes/user 为单 crate
-```
+| P9 | 消除 instr.py JDK 类名硬编码（_COLL_IR_TYPES / StringBuilder）| 9d5346e |
+| P10 | StringBuilder 迁移，/// @field 机制，instr.py 零类名字面量 | 72c5f48 |
+| P11 | runtime.py 固化删除，java_runtime 由 git 直接管理 | 02b9128 |
+| P12 | Cargo.toml/build.rs 由 git 管理，gitignore 只忽略 src/ | df35729 |
+| — | 方法级 BFS，删除截断规则（879 类自然收敛）| ed8818c |
+| — | JField<T> 重命名，消除 reflect.Field 命名冲突 | e3adee8 |
+| — | 废弃脚本清理（javalang/classify/gen_manifest 等）| 55697dc |
+| — | main.py 默认运行 HelloWorld，消除所有编译警告 | ae34a89 |
 
 ---
+
+## 当前状态
+
+**java_runtime 只保留 VM 基础设施（永久）：**
+- `error.rs`（JvmError / Result）
+- `types.rs`（JField<T>）
+- `java/lang/object.rs`（Object，lock/unlock/hashCode 等 VM 语义）
+
+**所有 JDK 标准库类来自字节码翻译 + native_impls：**
+System、PrintStream、String、Math、ArrayList、HashMap、HashSet、StringBuilder
+
+**转译器产物完全由 git 管理：**
+- `java_runtime/`、`native_impls/`、`Cargo.toml`×4、`jdk_classes/build.rs` 提交到 git
+- 仅 `jdk_classes/src/` 和 `user/src/` gitignored（生成产物）
 
 ## 各层依赖关系
 
 ```
 第 1-4 层（基础设施）✅
     ↓
-第 5-6 层（指令翻译）✅（大部分，剩余集合类型擦除问题）
+第 5-6 层（指令翻译）✅（剩余：泛型集合类型擦除）
     ↓
 第 7 层（native_impls 链接）✅
     ↓
-第 8 层（_JAVA_RUNTIME_CLASSES 迁移）
-    ├── PrintStream ✅（P4）→ System ✅（P4）→ String ✅（P5）
-    ├── Math ✅（P8）
-    └── ArrayList/HashMap/HashSet ✅（P7，@synthetic native_impls 方案）
-        ↓
-第 9 层（runtime 清理）✅（所有临时实现已清除，只保留 VM 基础设施）
+第 8 层（全部 JDK 标准库迁移）✅
     ↓
-第 10 层当前状态：HelloWorld 运行正确，所有 JDK 类使用字节码翻译 + native_impls
+第 9 层（代码架构清理）✅
     ↓
-第 11 层（代码质量：消除硬编码类名 → 单 crate → 完全目标）
+第 10 层：HelloWorld 完全运行在 JDK 字节码翻译 + native_impls ✅
+    ↓
+第 11 层（泛型推断 → 单 crate → 完全目标）❌
 ```
