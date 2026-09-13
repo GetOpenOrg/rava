@@ -675,3 +675,93 @@ T29 (构建阻断)        ─ 依赖 T27
 ```
 
 **最优执行序**：T19 → T20 → T21 → T22 → T23（阶段A）→ T24 → T25 → T26（阶段B）→ T27（阶段C）→ T28（阶段D）→ T29（阶段E）
+
+---
+
+## 阶段七：泛型支持 + 字节码属性完善（Phase 7 — Generics & Attributes）
+
+> 覆盖 T29 之后的全部工作：方法级 BFS、checkcast 驱动的类型擦除方案、字段 Signature 使用。
+
+### T30 · 方法级 BFS（879 类完整 JDK 依赖图）
+**状态**：`[x]`  
+**文件**：`scripts/codegen/transpile.py`
+
+**目标**：将 BFS 深度从"类级引用"改为"方法级调用图"，精确追踪实际调用链上的类，不添加多余类。
+
+**结果**：BFS 发现 879 个 JDK 类，生成 `jdk_classes` crate；JField 由 `Field` 重命名为 `JField` 以避免语义歧义；脚本清理删除废弃代码。
+
+**验收**：`cargo check` 零错误，HelloWorld 和 TestP0–P3 全部通过。
+
+---
+
+### T31 · checkcast 驱动的泛型类型擦除方案
+**状态**：`[x]`  
+**文件**：`output/java_runtime/src/java/lang/object.rs`、`scripts/codegen/instr.py`、`scripts/codegen/emitter.py`
+
+**背景**：Java 泛型在字节码层面被类型擦除（`ArrayList<String>.get()` 返回 `Object`）。JVM 在赋值给具体类型变量时插入 `checkcast` 指令做运行时类型收窄。
+
+**实现**：
+- `Object` 新增 `from_any<T>()` 工厂方法和 `downcast<T>()` 方法（内部存 `Rc<dyn Any>`）
+- `checkcast` 指令处理器：当栈顶是 `Object` 类型时，自动包装 `.downcast::<T>()` 表达式
+- `emitter.py` 为每个非 Object 类自动生成 `impl Into<Object>` 和 `impl From<Object>` trait
+
+**验收**：`tests/TestGenerics.java`（ArrayList<String>）输出 `Alice / Bob / Charlie / 3`，与 Java 运行结果一致。
+
+---
+
+### T32 · 字段级 Signature 支持
+**状态**：`[x]`  
+**文件**：`scripts/codegen/sig_parser.py`、`scripts/codegen/emitter.py`
+
+**背景**：`FieldInfo.generic_signature` 已被解析并存储（如 `elementData` 的 `[TE;`），但 emitter 生成字段时仍用裸描述符，导致 `JField<Object>` 而非 `JField<E>`。
+
+**实现**：
+- `sig_parser.py` 新增 `parse_field_type(sig, class_type_params) -> str`：解析字段 Signature 为 Rust 类型
+- `emitter.py`：字段类型优先用 `generic_signature`，回退到裸描述符
+- **关键修复**：泛型 struct bounds 从 `E: Clone + Default + 'static` 改为 `E: Clone + 'static`，让 `#[derive(Default)]` 在 impl Default 的 where 子句中自动添加 `Default`，避免 native_impls 函数需要 `E: Default`
+
+**验收**：`cargo check` 零错误；TestGenerics 仍输出正确结果；`jdk_classes` 中泛型字段类型更精确。
+
+---
+
+### T33 · 单 crate 架构迁移
+**状态**：`[ ]`  
+**文件**：`output/Cargo.toml`、`scripts/codegen/emitter.py`
+
+**背景**：当前 workspace 有 `java_runtime`、`jdk_classes`、`user` 三个 crate，目标态是合并为单 crate（只保留 `user`）。
+
+**目标**：
+- `jdk_classes` 内容内联到 `user/src/java/`
+- `java_runtime` 的 `error.rs`、`types.rs` 内联到 `user/src/`
+- `java_runtime/src/java/` 临时手写层由字节码翻译替换后删除
+- Cargo.toml 只剩一个 `[[bin]]` 条目
+
+**验收**：`output/` 下无 `jdk_classes`、`java_runtime` 子目录；`cargo run` 仍输出正确结果。
+
+---
+
+### T34 · LocalVariableTypeTable 解析（泛型局部变量）
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/classfile.py`、`scripts/codegen/instr.py`
+
+**背景**：`LocalVariableTable` 给出局部变量名，但对泛型变量只有裸描述符（如 `Ljava/lang/Object;`）。`LocalVariableTypeTable` 保存带泛型签名的类型（如 `TE;` 表示类型变量 `E`）。
+
+**目标**：
+- `classfile.py` 解析 `LocalVariableTypeTable` 属性，存入 `ParsedMethod.local_types`（slot → Signature 映射）
+- `instr.py` 在生成 `let` 语句时，用 `local_types[slot]` 得到精确泛型类型，替代 `Object`
+
+**验收**：TestGenerics 的局部变量 `first`、`second`、`third` 生成类型为 `String` 而非 `Object`。
+
+---
+
+**阶段七任务依赖**：
+
+```
+T30 (方法级 BFS)          ─ 依赖 T28（已完成）
+T31 (checkcast 类型擦除)  ─ 依赖 T30
+T32 (字段 Signature 使用) ─ 依赖 T31
+T33 (单 crate 迁移)       ─ 依赖 T32
+T34 (LocalVariableTypeTable) ─ 依赖 T32
+```
+
+**最优执行序**：T30 → T31 → T32（已全部完成）→ T33、T34（并行，待执行）
