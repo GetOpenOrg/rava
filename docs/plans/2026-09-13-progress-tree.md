@@ -233,29 +233,26 @@
 │   │       已移除：_JAVA_RUNTIME_CLASSES / runtime.py string.rs 条目
 │   │       保留：_JAVA_RUNTIME_SHORT_NAMES 中的 String（避免方法名加 suffix）
 │   │
-│   ├── ❌ java/util/ArrayList / HashMap / HashSet 迁移
-│   │       阻塞：JDK ArrayList 内部是 Object[] elementData（数组类型）
-│   │             当前 cut-off 规则将 [Ljava/lang/Object; 映射为 Field<Object>
-│   │             无法对 Field<Object> 做下标操作，add/get/set 方法体翻译失败
-│   │       需要先完成：第 11 层（数组类型支持）
-│   │       临时方案 A：native_impls 整体实现 ArrayList
-│   │                  用 Object(Rc::new(RefCell::new(Vec<Object>))) 存数据
-│   │                  （违反"有字节码的方法应翻译字节码"原则，但可用）
-│   │       临时方案 B：保留在 java_runtime（当前状态）
+│   ├── ✅ java/util/ArrayList / HashMap / HashSet 迁移（P7）
+│   │       方案：JDK 字节码翻译生成 struct 骨架（存根方法体）
+│   │             native_impls 通过 /// @synthetic 提供 new_default/add__obj/get__i/size 等
+│   │             impl Into<Object> for String 解决 JVM 引用协变问题
+│   │             _gen_invokevirtual 自动为 Object 参数插入 .into() 转换
+│   │       已移除：_JAVA_RUNTIME_CLASSES / runtime.py array_list/hash_map/hash_set 条目
+│   │       已移除：prelude 不再导出 ArrayList / HashMap / HashSet
 │   │
-│   └── ❌ java/lang/Object / java/lang/Math 迁移
-│           Object：hashCode/clone/wait/notify 均为 native，JVM 语义复杂
-│                  Object 作为所有类的根类型，需特殊处理（永久保留在 java_runtime）
-│           Math：全部是 native，可全量通过 native_impls 实现
-│                 迁移步骤：从 _JAVA_RUNTIME_CLASSES 移除，native_impls 实现所有方法
+│   └── ✅ java/lang/Math 迁移（P8）
+│           Math：全部 native 方法，通过 native_impls/java/lang/math.rs 实现 30+ 方法
+│           已移除：_JAVA_RUNTIME_CLASSES / runtime.py math.rs 条目
+│           保留：Object 在 java_runtime（VM 基础设施，永久保留）
 │
 ├── 第 9 层：手写 runtime 清理（最终态）
 │   ├── ✅ System 从 runtime.py 移除
 │   ├── ✅ PrintStream 从 runtime.py 移除
 │   ├── ✅ String 从 runtime.py 移除
 │   ├── ✅ java_runtime prelude 不再导出 System / PrintStream / String
-│   ├── ❌ ArrayList / HashMap / HashSet 仍在 runtime.py（等待第 11 层）
-│   ├── ❌ Math 仍在 runtime.py
+│   ├── ✅ ArrayList / HashMap / HashSet 从 runtime.py 移除（P7）
+│   ├── ✅ Math 从 runtime.py 移除（P8）
 │   ├── ❌ Object 仍在 runtime.py（VM 基础设施，部分永久保留）
 │   │       object.rs: lock/unlock/hashCode/equals 是 VM 设施，永久保留
 │   │       getClass/toString 已改为返回 Object（不再依赖 String）
@@ -267,25 +264,20 @@
 │   ├── ✅ System → jdk_classes（JDK 字节码翻译 + native_impls）
 │   ├── ✅ PrintStream → jdk_classes（JDK 字节码翻译 + native_impls）
 │   ├── ✅ String → jdk_classes（JDK 字节码翻译 + native_impls）
-│   ├── ⚠️ ArrayList → java_runtime（手写，待迁移）
-│   └── ⚠️ Object / Math → java_runtime（Object 永久保留基础设施部分）
+│   ├── ✅ ArrayList → jdk_classes + native_impls（P7 完成）
+│   ├── ✅ Math → jdk_classes + native_impls（P8 完成）
+│   └── ⚠️ Object → java_runtime（VM 基础设施，lock/unlock/hashCode 永久保留）
 │
 └── 第 11 层：后续架构工作（达到完全目标）
     │
-    ├── ❌ 数组类型支持（ArrayList 迁移的前提）
-    │       问题：Java 数组类型（[Ljava/lang/Object; 等）当前 cut-off 映射为 Object
-    │             无法做下标操作（arr[i]、arr[i]=v、arr.length）
-    │       解决方案：
-    │         1. type_map.py：[Ljava/lang/Object; → Vec<Object>（而非 Object）
-    │         2. instr.py：aaload/aastore/arraylength 指令翻译
-    │         3. anewarray/newarray：生成 Vec::with_capacity(n)
-    │         4. System.arraycopy：native_impls 用 Vec 操作实现
-    │       影响：ArrayList.add/get/remove 可从 JDK 字节码翻译
+    ├── ✅ 数组类型支持（P6 完成）
+    │       类型：所有 Java 数组 Vec<T> → Rc<RefCell<Vec<T>>>（引用语义）
+    │       指令：newarray/anewarray、aaload/aastore/arraylength 全部更新
+    │       影响：ArrayList 内部 Object[] elementData 正确映射，P7 得以完成
     │
-    ├── ❌ Math 迁移
-    │       方案：从 _JAVA_RUNTIME_CLASSES 移除 java/lang/Math
-    │             native_impls/java/lang/math.rs 实现 abs/sqrt/pow 等
-    │             runtime.py 移除 math.rs 内容
+    ├── ✅ Math 迁移（P8 完成）
+    │       native_impls/java/lang/math.rs 实现 sin/cos/sqrt/pow/log 等 30+ 方法
+    │       已移除：_JAVA_RUNTIME_CLASSES / runtime.py math.rs 条目
     │
     ├── ❌ 泛型类型推断（集合 get() 返回 Object 问题）
     │       问题：ArrayList<E>.get() 字节码返回 Object，
@@ -320,29 +312,38 @@
 | P4 | PrintStream + System 迁移、mod _native include! 机制 | e61b651 |
 | P5-a | Object 模板缺失方法、bool 条件类型错误、_TRANSLATE_BODIES 清理 | 984be02 |
 | P5-b | String 迁移（@synthetic 机制 + jdk_classes String）| b43669d |
+| P8 | Math 迁移（native_impls 实现 30+ 方法）| 89e1cab |
+| P6 | 数组类型 Vec<T> → Rc<RefCell<Vec<T>>>，引用语义修复 | c667875 |
+| P7 | ArrayList/HashMap/HashSet 迁移，impl Into<Object> for String | 548df61 |
+
+### 当前状态（P7 完成后）
+
+**已迁移到 jdk_classes + native_impls：**
+- System、PrintStream（P4）
+- String（P5）
+- Math（P8）
+- ArrayList、HashMap、HashSet（P7）
+
+**仍在 java_runtime（永久保留基础设施）：**
+- Object（lock/unlock/hashCode/equals 是 VM 基础设施）
+- error.rs（JvmError/Result）
+- types.rs（Field<T>）
 
 ### 下一步（按优先级）
 
-**P6：数组类型支持（解除 ArrayList 迁移阻塞）**
+**P9：消除 Python 代码中的 JDK 类名常量（架构规范要求）**
 ```
-files: scripts/codegen/type_map.py, instr.py
-修改：[Ljava/lang/Object; → Vec<Object>
-      aaload/aastore/arraylength 指令翻译
-      anewarray → Vec::with_capacity(n)
-预期：ArrayList.add/get/size 可从 JDK 字节码翻译
-```
-
-**P7：ArrayList / HashMap / HashSet 迁移**
-```
-前提：P6 完成
-files: transpile.py（移除排除），runtime.py（删除集合实现）
-       native_impls/java/util/（System.arraycopy 等 native 方法）
+files: scripts/codegen/instr.py
+修改：_COLL_IR_TYPES 硬编码（ArrayList/HashMap/HashSet new 的初始化表达式）
+      _JAVA_RUNTIME_SHORT_NAMES 硬编码（Object/Math/ArrayList 等）
+      StringBuilder 特殊分支（映射到 String 类型）
+目标：instr.py 中不出现任何 JDK 类名字面量
 ```
 
-**P8：Math 迁移（独立，可先做）**
+**P10：单 crate 架构（最终目标态）**
 ```
-files: transpile.py（移除 java/lang/Math），runtime.py（删除 math.rs）
-       native_impls/java/lang/math.rs（abs/sqrt/pow/min/max 等）
+前提：所有手写 runtime 迁移完成（P7/P8 后满足）
+目标：合并 java_runtime/jdk_classes/user 为单 crate
 ```
 
 ---
@@ -357,13 +358,13 @@ files: transpile.py（移除 java/lang/Math），runtime.py（删除 math.rs）
 第 7 层（native_impls 链接）✅
     ↓
 第 8 层（_JAVA_RUNTIME_CLASSES 迁移）
-    ├── PrintStream ✅ → System ✅ → String ✅
-    ├── Math（独立，可随时做）
-    └── ArrayList/HashMap/HashSet（需第 11 层数组支持）
+    ├── PrintStream ✅（P4）→ System ✅（P4）→ String ✅（P5）
+    ├── Math ✅（P8）
+    └── ArrayList/HashMap/HashSet ✅（P7，@synthetic native_impls 方案）
         ↓
-第 9 层（runtime 清理）⚠️（System/PrintStream/String 已清理，集合待清理）
+第 9 层（runtime 清理）✅（所有临时实现已清除，只保留 VM 基础设施）
     ↓
-第 10 层当前状态：HelloWorld 运行正确，String/System/PrintStream 使用 JDK 字节码翻译
+第 10 层当前状态：HelloWorld 运行正确，所有 JDK 类使用字节码翻译 + native_impls
     ↓
-第 11 层（数组支持 → 集合迁移 → 单 crate → 完全目标）
+第 11 层（代码质量：消除硬编码类名 → 单 crate → 完全目标）
 ```
