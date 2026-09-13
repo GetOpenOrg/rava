@@ -2,16 +2,16 @@
 # status: "implemented" | "needed" | "stub" | "not-needed"
 
 [java.lang.Double]
-doubleToRawLongBits = "needed",
-longBitsToDouble = "needed",
+doubleToRawLongBits = "implemented",
+longBitsToDouble = "implemented",
 
 [java.lang.Float]
-floatToRawIntBits = "needed",
-intBitsToFloat = "needed",
+floatToRawIntBits = "implemented",
+intBitsToFloat = "implemented",
 
 [java.lang.NullPointerException]
-getExtendedNPEMessage = "needed",
+getExtendedNPEMessage = "implemented",
 
 [java.lang.Throwable]
-fillInStackTrace = "needed",
+fillInStackTrace = "implemented",
 
