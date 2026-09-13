@@ -1,5 +1,5 @@
 /// @synthetic
-pub fn new_default() -> Result<HashMap<Object, Object>> {
+pub fn new() -> Result<HashMap<Object, Object>> {
     let map = HashMap::default();
     let store: Rc<RefCell<Vec<(Object, Object)>>> = Rc::new(RefCell::new(vec![]));
     map.table.set(Object::from_any(store));

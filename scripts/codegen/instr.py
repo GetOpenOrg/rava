@@ -499,7 +499,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         raw_cls = short_cls(raw_cls) or raw_cls
 
         if '/' in full_cls:
-            # JDK class（含包路径）→ 用 new_default() 工厂（@synthetic）
+            # JDK class（含包路径）→ 用 new() 工厂（@synthetic）
             rust_ty_str = jvm_to_rust(f'L{full_cls};', registry)
             if rust_ty_str != 'Object' and '<' in rust_ty_str:
                 type_params_str = rust_ty_str[len(raw_cls):]   # '<Object>' / '<Object, Object>'
@@ -511,7 +511,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 init_expr = f"{raw_cls}::new({', '.join(args)})?"
             else:
                 turbofish = '::' + type_params_str if type_params_str else ''
-                init_expr = f"{raw_cls}{turbofish}::new_default()?"
+                init_expr = f"{raw_cls}{turbofish}::new()?"
         elif raw_cls and '/' not in raw_cls:
             # 用户类：new()? 返回 Result<Self>
             init_expr    = f"{raw_cls}::new({', '.join(args)})?"
@@ -659,6 +659,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 拆箱：identity
     if mname in UNBOX_VIRTUAL:
         sim.push(obj_expr, obj_ty_node)
+        return
+
+    # T38：PrintStream.println 有参版本 → 统一生成 println_v(x)（Printable trait 派发）
+    # 注：无参 println() 保持原名；println_v<T: Printable> 处理所有有参版本
+    if mname == 'println' and cls and cls.endswith('PrintStream') and len(args) == 1:
+        sim.emit(RawStmt(f"{obj_e}.println_v({args[0]})?;"))
         return
 
     # 若接收方 Rust 类型是 java_runtime 手写类，不做 mangle

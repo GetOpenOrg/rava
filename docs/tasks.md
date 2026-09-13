@@ -795,34 +795,31 @@ T29 (构建阻断)        ─ 依赖 T27
 ---
 
 ### T37 · 方法名去 mangle + 构造器 `new()`
-**状态**：`[ ]`  
-**文件**：`scripts/codegen/emitter.py`、`scripts/codegen/instr.py`
+**状态**：`[x]` 已完成（本 session）  
+**文件**：`scripts/codegen/type_map.py`、`scripts/codegen/emitter.py`、`scripts/codegen/instr.py`
 
 **目标**：
-1. 每组重载中参数最少（JVM 擦除后的 Object 参数）的版本保留 Java 原始名（`add`、`get`、`put`）；同时生成带 `_obj` 后缀的别名供字节码翻译代码调用
-2. `new_default()` → `new()`（无参 `<init>` 的 synthetic 构造器）
+1. 重载后缀从 `__` 改为 `_`：`add__obj` → `add_obj`，`println__i` → `println_i`
+2. `@synthetic new()` 工厂：`new_default()` → `new()`
+3. `emitter.py` 检测 `@synthetic new` 占用时，将 JDK `<init>` 存根改名为 `new_init` 避免冲突
 
-**规则**：
-- `add__obj(Object)` → 保留为 `add(Object)`，方法签名不变
-- `println__i(i32)` / `println__str(String)` / `println__obj(Object)` → 由 T38 的 trait 统一，不需要这些重载了
-- `new_default()` → `new()`
-
-**验收**：`ArrayList::new()?`、`list.add(x)?` 编译通过
+**验收**：`ArrayList::<Object>::new()?`、`list.add_obj(x.into())?`、`println_v` 编译通过；`cargo check` 零错误
 
 ---
 
 ### T38 · println 统一 trait 派发
-**状态**：`[~]` 部分完成（Printable trait 已定义，instr.py 统一生成待实现）  
-**文件**：`output/java_runtime/src/java/lang/object.rs`（定义 Printable）、`output/native_impls/java/io/print_stream.rs`（统一 println）、`scripts/codegen/instr.py`（生成 println(x)）
+**状态**：`[x]` 已完成（本 session）  
+**文件**：`output/java_runtime/src/lib.rs`（Printable trait）、`output/native_impls/java/io/print_stream_ergonomic.rs`（println_v）、`scripts/codegen/instr.py`（生成 println_v(x)）
 
-**目标**：所有 `println__*` 重载统一为 `println<T: Printable>(v: T)`，代码生成器生成统一调用 `println(x)`
+**目标**：所有有参 println 重载通过 `Printable` trait 统一派发
 
 **实现**：
-- `java_runtime` 中定义 `Printable` trait，i32/i64/bool/f32/f64/Object 均实现
-- `PrintStream::println<T: Printable>` 替换 `println__i/println__str/println__obj`
-- `instr.py` 中 `invokevirtual println:*` 统一生成 `println(x)`
+- `java_runtime/src/lib.rs` 中定义 `Printable` trait，i32/i64/bool/f32/f64/String/Object 均实现
+- 无参 `println()` 保留原名（JDK 生成）；有参版本通过 `println_v<T: Printable>` 派发
+- `print_stream_ergonomic.rs`：`impl PrintStream { pub fn println_v<T: Printable>(&self, v: T) }`
+- `instr.py`：有参 `invokevirtual println` → 生成 `println_v(x)` 调用
 
-**验收**：`System::out().println(42)?`、`System::out().println(true)?`、`System::out().println(s)?` 均编译通过
+**验收**：`System::out().println_v(42)?`、`System::out().println_v(true)?`、`System::out().println_v(s)?` 均编译通过；TestArrayList 两个 binary 输出完全一致
 
 ---
 
@@ -917,8 +914,8 @@ T36 + T37 + T38（可并行）→ T39 → T40
 ---
 
 ### T42 · for-each 增强循环代码生成 bug
-**状态**：`[ ]`  
-**文件**：`scripts/codegen/instr.py`（或 `emitter.py`）
+**状态**：`[~]` 修复已应用（本 session），待测试验证  
+**文件**：`scripts/codegen/stack.py`
 
 **问题**：Java `for (String name : names)` 编译为 `names.iterator()` + `hasNext()` + `next()` 字节码。JVM 编译器将 for-each 的匿名迭代器存入一个局部变量 slot，该 slot 在循环结束后**被后续变量复用**（Java 编译器的 slot reuse 优化）。代码生成器按 slot 分配 Rust 变量名，导致后续变量被错误地类型声明为 `Iterator<Object>`。
 
@@ -932,8 +929,10 @@ ages = HashMap::<Object, Object>::new_default()?;  // ← 赋值类型不符
 
 **根因**：for-each 的合成迭代器变量没有 LVT entry（编译器合成，匿名），但 `ages` 的 LVT entry start_pc 可能覆盖了迭代器的 store 指令，或者 slot 分配逻辑没有正确处理 slot 生命周期边界。
 
-**修复方向**：
-1. 在 for-each 模式检测时（`invokeinterface Iterator.hasNext + next`），将迭代器 slot 的生命周期限定在循环体内，不延续到循环后
-2. 或：识别 for-each 字节码模式，生成 Rust `for v in list.iter()` 语法
+**已实现修复**（`scripts/codegen/stack.py`）：
+- `store_local()` 中检测 slot 类型变化，当新类型与旧类型不同时，生成 `LetStmt`（let 重新绑定/shadowing）而非 `AssignStmt`
+- 这样 `ages: HashMap` 会用 `let` 重新声明，与 `Iterator` 类型的旧 slot 断开绑定
+
+**待验证**：需要在 `TestArrayList.java` 中取消 for-each 注释，重新生成并 `cargo check` 验证
 
 **验收**：TestArrayList.java 的 for-each 段可以正确生成并运行

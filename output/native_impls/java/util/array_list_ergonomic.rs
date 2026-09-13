@@ -6,7 +6,7 @@
 impl<E: Clone + Into<Object> + From<Object> + 'static> ArrayList<E> {
     /// Java: list.add(e)  — no .into() needed
     pub fn add(&self, e: E) -> Result<bool> {
-        self.add__obj(e.into())
+        self.add_obj(e.into())
     }
 
     /// Java: E e = list.get(i)  — returns typed E, no .downcast() needed

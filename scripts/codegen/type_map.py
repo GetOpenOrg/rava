@@ -181,9 +181,10 @@ def descriptor_to_suffix(descriptor: str) -> str:
 
 
 def mangle_name(name: str, descriptor: str) -> str:
-    """方法名 + 描述符 → 含后缀的唯一 Rust 名，无参数时返回原名。"""
+    """方法名 + 描述符 → 含后缀的唯一 Rust 名，无参数时返回原名。
+    使用单下划线分隔符（`add_obj` 而非 `add__obj`），留出双下划线给 Rust 保留名。"""
     suffix = descriptor_to_suffix(descriptor)
-    return f"{name}__{suffix}" if suffix else name
+    return f"{name}_{suffix}" if suffix else name
 
 
 def _parse_type_list(s: str) -> list[str]:

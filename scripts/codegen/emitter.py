@@ -494,12 +494,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             continue
         # 确定最终 Rust 方法名（有重载则加描述符后缀）
         rust_name = mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name
-        # 构造器统一用 new / new__suffix
+        # 构造器统一用 new / new_suffix
         if m.is_constructor:
             if '<init>' in overloaded_names:
                 rust_name = mangle_name('new', m.descriptor)
             else:
                 rust_name = 'new'
+            # 若 @synthetic 已占用 'new'（工厂函数），将 JDK <init> 存根改名为 new_init*
+            # 避免：pub fn new(&self) 与 pub fn new() 同名冲突
+            if rust_name == 'new' and synthetics and ci.name in synthetics:
+                syn_names = {s['fn_name'] for s in synthetics[ci.name]}
+                if 'new' in syn_names:
+                    rust_name = 'new_init'
         # 碰撞去重：若 mangle 后仍重名，追加数字后缀
         if rust_name in used_rust_names:
             used_rust_names[rust_name] += 1

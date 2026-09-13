@@ -1,5 +1,5 @@
 /// @synthetic
-pub fn new_default() -> Result<HashSet<Object>> {
+pub fn new() -> Result<HashSet<Object>> {
     let set = HashSet::default();
     let store: Rc<RefCell<Vec<Object>>> = Rc::new(RefCell::new(vec![]));
     set.map.set(Object::from_any(store));

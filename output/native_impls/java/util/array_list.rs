@@ -1,5 +1,5 @@
 /// @synthetic
-pub fn new_default() -> Result<ArrayList<Object>> {
+pub fn new() -> Result<ArrayList<Object>> {
     Ok(ArrayList::default())
 }
 

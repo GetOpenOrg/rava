@@ -14,6 +14,7 @@ from .rs_ir import (
     RsGeneric, RsPrimitive, RsNamed,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
 )
+from .render import render_type
 from .type_map import short_cls as _short_cls
 from .constants import safe_ident
 
@@ -113,8 +114,15 @@ class StackSim:
         if hint is not None and isinstance(ty, RsNamed) and ty.name == 'Object':
             ty = hint
         if slot in self.locals:
-            name, _, _ = self.locals[slot]
-            self.stmts.append(AssignStmt(Var(name), expr))
+            name, old_ty, _ = self.locals[slot]
+            # T42: slot 类型发生变化时（如 for-each 迭代器 slot 被后续变量复用），
+            # 用 let 阴影（shadowing）而非赋值，避免 Rust 类型不匹配
+            if render_type(old_ty) != render_type(ty):
+                self.locals[slot] = (name, ty, True)
+                let_ty = None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty
+                self.stmts.append(LetStmt(name, let_ty, mutable=True, value=expr))
+            else:
+                self.stmts.append(AssignStmt(Var(name), expr))
         else:
             name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
             self.locals[slot] = (name, ty, True)
