@@ -120,17 +120,43 @@
 │   │         - checkcast 指令实现类型更新 → midVal:Comparable 等
 │   │       剩余：泛型集合 get() 返回 Object（真实类型擦除），待后续层解决
 │   │
-│   ├── ❌ 内部类引用（ArraysSupport 等）找不到（67+ 错误）
-│   │       原因：Arrays.copyOf 内部调用 ArraysSupport，
-│   │             而 ArraysSupport 被 BFS 截断规则排除，未生成代码
-│   │       解决方案：对这类工具类保持 stub_bodies=True（永远 panic! 存根），
-│   │                 不翻译字节码，从而不引入其依赖的类
+│   ├── ✅ 内部类引用（Preconditions 等）生成 panic! 存根
+│   │       原因：Objects.checkIndex 调用 jdk.internal.util.Preconditions（被截断）
+│   │       解决：instr.py _class_known() + _gen_invokestatic 内部类检测：
+│   │             目标类不在 registry 时生成 panic!("stub: Class.method") 而非无效类型引用
+│   │       修复：E0433 "cannot find type Preconditions" 消除（6个）
 │   │
-│   └── ❌ 数组通过 & 引用赋值（39 错误）
-│           原因：JVM 数组是引用语义，可通过不可变引用修改元素；
-│                 Rust 数组切片 &[T] 不能赋值，需要 &mut [T]
-│           解决方案：array 类型生成 Field<Vec<T>> 而不是 &[T]，
-│                     或将接收 array 的方法参数改为 &mut Vec<T>
+│   ├── ✅ aconst_null 指令推送 Object::default() 到操作数栈
+│   │       原因：null 参数导致 todo!("stack underflow") 生成
+│   │       解决：instr.py 添加 aconst_null 处理
+│   │
+│   ├── ✅ 泛型类型参数推断（Comparator → Comparator<Object>）
+│   │       原因：jvm_to_rust 对泛型类只返回短名，函数签名中用 Comparator 触发 E0107
+│   │       解决：type_map.py jvm_to_rust() 读 generic_signature 附加 <Object,...>
+│   │       修复：E0107 消除
+│   │
+│   ├── ✅ bool 返回类型转换（iconst_1/0 → true/false）
+│   │       原因：ireturn 将 1i32/0i32 写入 Ok()，与 Result<bool> 不符（E0308）
+│   │       解决：method.py _fix_bool_returns() 后处理 Ok(1i32)→Ok(true)
+│   │
+│   ├── ✅ 静态方法数组参数双重引用修复（Vec<T> → &&[T] → &[T]）
+│   │       原因：sig_type 把 Vec<T> 转为 &[T]（签名），但 sim 仍用 Vec<T>（调用端加&→&&）
+│   │       解决：method.py sim 初始化用 sig_type 类型；_gen_native_stub 同步修改
+│   │       修复：E0308 "expected Vec<Object>, found &&[Object]" 消除
+│   │
+│   ├── ⚠️ bool vs i32 比较 (1 error: _t0!=0i32 where _t0: bool)
+│   │       原因：ifne 条件生成 {a}!=0i32，当 a 为 bool 时类型不符
+│   │       待解：cfg.py 需要类型信息才能区分 bool 和 int 的条件生成
+│   │
+│   ├── ⚠️ Object 缺少 null 语义方法（is_none/get）（4 errors）
+│   │       原因：ifnull/ifnonnull → .is_none()，Object 没有此方法
+│   │       java_runtime Object 是永远非 null 的 struct，无 Option 包装
+│   │       待解：添加 is_none()→false, get()→self 到 Object（临时 hack）
+│   │             或引入 Option<Object> 支持真正的 null 语义
+│   │
+│   └── ⚠️ Object 缺少 Display + 少数方法（3 errors: getName/identityHashCode/format）
+│           原因：toIdentityString 用 format!("{}", o) 但 Object 无 Display
+│           待解：Object 实现 Display trait
 │
 ├── 第 7 层：_JAVA_RUNTIME_CLASSES 迁移（手写 → 字节码翻译）
 │   │       ← 这是 HelloWorld 目标架构的核心障碍
