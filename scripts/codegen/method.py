@@ -65,6 +65,37 @@ def _analyze_mutation(stmts):
     mark(stmts)
 
 
+def _promote_undeclared_assigns(entries: list, predeclared: set[str]):
+    """将在当前词法作用域中无对应 LetStmt 的 AssignStmt 提升为 LetStmt(mutable=True)。
+
+    JVM 局部变量槽可在不同词法作用域中复用同一名字：例如变量 j 在 loop{} 内声明，
+    loop 结束后又被赋值 j = high，此时 j 已出作用域，Rust 报 E0425。
+    修复：追踪各变量声明时的嵌套深度，退出该层作用域后将同名 AssignStmt 提升为 LetStmt。
+    """
+    declared: dict[str, int] = {}  # name → 声明时的嵌套深度
+    nesting = 0
+
+    for k, (indent, item) in enumerate(entries):
+        if isinstance(item, str):
+            delta = item.count('{') - item.count('}')
+            if delta < 0:
+                nesting += delta
+                # 移除在已退出作用域层声明的变量
+                declared = {n: d for n, d in declared.items() if d <= nesting}
+            else:
+                nesting += delta
+            continue
+
+        if isinstance(item, LetStmt):
+            declared[item.name] = nesting
+        elif isinstance(item, AssignStmt) and isinstance(item.target, Var):
+            name = item.target.name
+            if name not in predeclared and name not in declared:
+                # 变量在当前词法作用域不可见 → 提升为 LetStmt（类型由 Rust 推断）
+                entries[k] = (indent, LetStmt(name, None, True, item.value))
+                declared[name] = nesting
+
+
 def _remove_trailing_return_ok(lines: list[str]) -> list[str]:
     """删除函数末尾多余的 return Ok(()); 语句（void 函数）。"""
     result = list(lines)
@@ -210,6 +241,8 @@ def gen_method_body(
 
     rust_param_type_nodes = [_str_to_rs_type(t) for t in rust_param_types]
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
+    # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
+    predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
 
     # entries: list of (indent: str, item: RsStmt | str)
     # - str 条目是已缩进的原始代码行（loop {, if cond { break; }, } 等）
@@ -325,6 +358,7 @@ def gen_method_body(
     # ── IR mutation 分析（渲染前）────────────────────────────────────
     ir_stmts = [item for _, item in entries if not isinstance(item, str)]
     _analyze_mutation(ir_stmts)
+    _promote_undeclared_assigns(entries, predeclared)
 
     # ── 渲染 entries → lines ─────────────────────────────────────────
     lines: list[str] = []
