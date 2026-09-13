@@ -10,7 +10,6 @@ java_runtime 运行时存根 — 新模块结构，Java 命名空间同构。
       ├── mod.rs
       ├── lang/
       │   ├── mod.rs
-      │   ├── string.rs   ← java.lang.String
       │   └── math.rs     ← java.lang.Math native stubs
       └── util/
           ├── mod.rs

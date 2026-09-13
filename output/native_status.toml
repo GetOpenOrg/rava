@@ -53,6 +53,9 @@ halt0 = "needed",
 initStackTraceElement = "needed",
 initStackTraceElements = "needed",
 
+[java.lang.String]
+intern = "needed",
+
 [java.lang.System]
 arraycopy = "implemented",
 currentTimeMillis = "implemented",
