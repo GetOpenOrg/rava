@@ -672,7 +672,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     for dir_path, children in jdk_mod_tree.items():
         if dir_path == jdk_src:
             continue
-        mod_lines = []
+        mod_lines = ['#![allow(ambiguous_glob_reexports)]']
         for c in sorted(children):
             mod_lines.append(_mod_decl(c))
             mod_lines.append(_use_decl(c))
