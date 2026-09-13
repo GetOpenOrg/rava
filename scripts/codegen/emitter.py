@@ -404,16 +404,20 @@ def _java_field_attr(f: FieldInfo) -> str:
 def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
     """生成方法元数据标注行。
 
-    compiled=True（JDK 类生成）：输出为行注释 `// java: ...`，
-    避免 cfg_attr 内字符串包含关键字（如 static）导致词法解析失败。
-    compiled=False（元数据存根）：原生属性格式 #[java_method(...)]。
+    compiled=True（JDK 类生成）：
+      - 真正的 native 方法：输出 #[cfg_attr(any(), java_native(...))]，供 build.rs 扫描
+      - 其他方法：输出行注释 `// java: ...`（避免关键字字符串引发词法错误）
+    compiled=False（元数据存根）：原生属性格式 #[java_method(...)] / #[java_native(...)]。
     """
-    tag = 'java_native' if (m.is_native or m.is_abstract) else 'java_method'
+    tag = 'java_native' if m.is_native else 'java_method'
     parts = [f'name = "{m.name}"', f'descriptor = "{m.descriptor}"']
     if m.access_flags:
         parts.append(f'access = "{_access_str(m.access_flags)}"')
     inner = f'{tag}(' + ', '.join(parts) + ')'
     if compiled:
+        if m.is_native:
+            # native 方法用 cfg_attr 包裹，让 build.rs 能扫描到
+            return f'#[cfg_attr(any(), java_native(' + ', '.join(parts) + '))]'
         # 注释形式，避免 cfg_attr 内 "public static" 等含关键字字符串触发词法错误
         return f'// java: {m.name}{m.descriptor}'
     else:
@@ -624,6 +628,12 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 3. jdk_classes crate（JDK 字节码翻译）
     _write(os.path.join(jdk_dir, 'Cargo.toml'), JDK_CLASSES_CARGO_TOML)
     jdk_src = os.path.join(jdk_dir, 'src')
+    # 清理旧版生成文件：删除 src/ 下所有 .rs 文件，防止 stale 文件影响 native_status.toml
+    if os.path.isdir(jdk_src):
+        for root, _dirs, files in os.walk(jdk_src):
+            for fname in files:
+                if fname.endswith('.rs'):
+                    os.remove(os.path.join(root, fname))
 
     # 构建 registry（用户类 + JDK 类）
     registry: dict = {ci.name: ci for ci in class_infos}
