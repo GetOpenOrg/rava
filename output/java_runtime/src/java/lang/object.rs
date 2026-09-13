@@ -75,6 +75,63 @@ impl Object {
 
 impl std::fmt::Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(r) = self.fmt_primitive(f) { return r; }
         write!(f, "Object")
+    }
+}
+
+// Java autoboxing: 基本类型自动装箱为 Object
+impl From<i32>  for Object { fn from(v: i32)  -> Self { Object::from_any(v) } }
+impl From<i64>  for Object { fn from(v: i64)  -> Self { Object::from_any(v) } }
+impl From<f32>  for Object { fn from(v: f32)  -> Self { Object::from_any(v) } }
+impl From<f64>  for Object { fn from(v: f64)  -> Self { Object::from_any(v) } }
+impl From<bool> for Object { fn from(v: bool) -> Self { Object::from_any(v) } }
+impl From<i8>   for Object { fn from(v: i8)   -> Self { Object::from_any(v) } }
+impl From<i16>  for Object { fn from(v: i16)  -> Self { Object::from_any(v) } }
+impl From<u16>  for Object { fn from(v: u16)  -> Self { Object::from_any(v) } }
+
+// Object equality: 比较原始类型值，其他类型回退到指针相等（Java Object.equals 语义）
+// 注：String 等引用类型的值比较由 jdk_classes 的 native 实现负责（它能引用 String 类型）
+impl PartialEq for Object {
+    fn eq(&self, other: &Self) -> bool {
+        macro_rules! try_eq {
+            ($t:ty) => {
+                if let (Some(a), Some(b)) = (self.0.downcast_ref::<$t>(), other.0.downcast_ref::<$t>()) {
+                    return a == b;
+                }
+            };
+        }
+        try_eq!(i32);
+        try_eq!(i64);
+        try_eq!(bool);
+        try_eq!(f32);
+        try_eq!(f64);
+        try_eq!(i8);
+        try_eq!(i16);
+        try_eq!(u16);
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Object {}
+
+impl Object {
+    /// 格式化原始类型的 Object，返回 None 表示需要调用方处理
+    pub fn fmt_primitive(&self, f: &mut std::fmt::Formatter<'_>) -> Option<std::fmt::Result> {
+        macro_rules! try_fmt {
+            ($t:ty) => {
+                if let Some(v) = self.0.downcast_ref::<$t>() {
+                    return Some(write!(f, "{}", v));
+                }
+            };
+        }
+        try_fmt!(i32);
+        try_fmt!(i64);
+        try_fmt!(bool);
+        try_fmt!(f32);
+        try_fmt!(f64);
+        try_fmt!(i8);
+        try_fmt!(i16);
+        try_fmt!(u16);
+        None
     }
 }

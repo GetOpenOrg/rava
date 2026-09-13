@@ -646,7 +646,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         e_str = render_expr(e_expr)
         expected_rust = jvm_to_rust(param_jvm, registry)
         actual_rust = render_type(e_ty_node)
-        if expected_rust == 'Object' and actual_rust != 'Object' and actual_rust not in _PRIMITIVE_RUST_TYPES:
+        if expected_rust == 'Object' and actual_rust not in ('Object', '()'):
             e_str = f"{e_str}.into()"
         elif actual_rust not in _PRIMITIVE_RUST_TYPES and not actual_rust.startswith('Rc<'):
             # 类类型按 Java 引用语义传递：clone 防止移动（Rc clone 共享所有权，廉价）
