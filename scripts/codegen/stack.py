@@ -14,7 +14,7 @@ from .rs_ir import (
     RsGeneric, RsPrimitive, RsNamed,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
 )
-from .render import render_type
+from .render import render_type, render_expr
 from .type_map import short_cls as _short_cls
 from .constants import safe_ident
 
@@ -33,6 +33,17 @@ UNIT = RsPrimitive('()')
 _EXPR_CLASSES = get_args(RsExpr)
 _TYPE_CLASSES = get_args(RsType)
 _STMT_CLASSES = tuple(get_args(RsStmt))
+
+
+def _maybe_downcast(expr: RsExpr, ty: RsType) -> RsExpr:
+    """当 expr 是 Var（新鲜临时变量）且目标类型含泛型参数时，
+    JDK stub 因类型擦除实际返回 Object，需要 downcast 恢复具体类型。
+    对工厂方法 / @synthetic（expr 为 RawExpr）不添加 downcast。
+    """
+    if (isinstance(expr, Var) and isinstance(ty, RsNamed)
+            and '<' in ty.name and not ty.name.startswith('Rc<')):
+        return RawExpr(f"({render_expr(expr)}).downcast::<{ty.name}>()")
+    return expr
 
 
 
@@ -119,17 +130,18 @@ class StackSim:
             # 用 let 阴影（shadowing）而非赋值，避免 Rust 类型不匹配
             if render_type(old_ty) != render_type(ty):
                 self.locals[slot] = (name, ty, True)
-                let_ty = None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty
-                self.stmts.append(LetStmt(name, let_ty, mutable=True, value=expr))
+                value = _maybe_downcast(expr, ty)
+                let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)
+                self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
             else:
                 self.stmts.append(AssignStmt(Var(name), expr))
         else:
             name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
             self.locals[slot] = (name, ty, True)
-            # 若值是对已声明临时变量的引用，让 Rust 推断类型（避免 newarray 的
-            # Vec<T> 注解与实际 Rc<RefCell<Vec<T>>> 类型不匹配）
-            let_ty = None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty
-            self.stmts.append(LetStmt(name, let_ty, mutable=True, value=expr))
+            value = _maybe_downcast(expr, ty)
+            # downcast 时让 Rust 推断类型；RsGeneric 也让 Rust 推断；否则写显式类型
+            let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)
+            self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
 
     def load_local(self, slot: int) -> tuple[RsExpr, RsType]:
         """从局部变量槽加载，返回 (RsExpr, RsType)。"""

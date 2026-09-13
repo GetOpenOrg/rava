@@ -824,7 +824,7 @@ T29 (构建阻断)        ─ 依赖 T27
 ---
 
 ### T39 · 集合 ergonomic 泛型方法层
-**状态**：`[~]` 部分完成（ergonomic 方法已实现，命名待 T37 统一）  
+**状态**：`[x]` 完成  
 **文件**：`output/native_impls/java/util/array_list_ergonomic.rs`、`output/native_impls/java/util/hash_map_ergonomic.rs`、`output/native_impls/java/util/hash_set_ergonomic.rs`（新建）；`scripts/codegen/emitter.py`（添加 _ergonomic.rs 自动 include 机制）
 
 **目标**：`ArrayList<String>` 可直接 `list.add(s)` 和 `let v: String = list.get(0)?`，不需要 `.into()`/`.downcast()`
@@ -914,7 +914,7 @@ T36 + T37 + T38（可并行）→ T39 → T40
 ---
 
 ### T42 · for-each 增强循环代码生成 bug
-**状态**：`[~]` 修复已应用（本 session），待测试验证  
+**状态**：`[x]` 完成  
 **文件**：`scripts/codegen/stack.py`
 
 **问题**：Java `for (String name : names)` 编译为 `names.iterator()` + `hasNext()` + `next()` 字节码。JVM 编译器将 for-each 的匿名迭代器存入一个局部变量 slot，该 slot 在循环结束后**被后续变量复用**（Java 编译器的 slot reuse 优化）。代码生成器按 slot 分配 Rust 变量名，导致后续变量被错误地类型声明为 `Iterator<Object>`。

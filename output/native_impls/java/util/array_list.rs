@@ -36,3 +36,21 @@ pub fn clear<E: Clone + 'static>(_this: &ArrayList<E>) -> Result<()> {
     _this.size.set(0);
     Ok(())
 }
+
+/// java/util/ArrayList.iterator:()Ljava/util/Iterator;
+pub fn iterator<E: Clone + 'static>(_this: &ArrayList<E>) -> Result<Object> {
+    let iter = Iterator::<Object> {
+        _data: JField::new(_this.elementData.get()),
+        _pos: JField::new(0i32),
+        _phantom: std::marker::PhantomData,
+    };
+    Ok(Object::from_any(iter))
+}
+
+/// java/util/ArrayList.contains:(Ljava/lang/Object;)Z
+pub fn contains__obj<E: Clone + 'static>(_this: &ArrayList<E>, o: Object) -> Result<bool> {
+    let data = _this.elementData.get();
+    let vec = data.borrow();
+    let found = vec.iter().any(|x| std::rc::Rc::ptr_eq(&x.0, &o.0));
+    Ok(found)
+}

@@ -32,10 +32,9 @@ public class TestArrayList {
         System.out.println(scores.get(1));          // 95
 
         // === 3. 遍历 ArrayList（增强 for 循环）===
-        // TODO(T42): for-each 生成代码存在局部变量 slot 复用 bug，当前跳过
-        // for (String name : names) {
-        //     System.out.println(name);
-        // }
+        for (String name : names) {
+            System.out.println(name);
+        }
 
         // === 4. HashMap<String, Integer> ===
         HashMap<String, Integer> ages = new HashMap<>();

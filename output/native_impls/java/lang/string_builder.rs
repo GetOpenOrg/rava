@@ -2,7 +2,7 @@
 /// @field _sb: JField<Rc<RefCell<std::string::String>>>
 
 /// @synthetic
-pub fn new_default() -> Result<StringBuilder> {
+pub fn new() -> Result<StringBuilder> {
     Ok(StringBuilder::default())
 }
 

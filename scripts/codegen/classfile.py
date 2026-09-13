@@ -460,11 +460,14 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
             for _ in range(count):
                 _start_pc = lvtt_r.u2()
                 _length   = lvtt_r.u2()
-                _name_idx = lvtt_r.u2()
+                name_idx  = lvtt_r.u2()
                 sig_idx   = lvtt_r.u2()
                 slot      = lvtt_r.u2()
                 sig       = _utf8(pool, sig_idx)
-                if slot not in local_types:  # 取第一个（作用域最广的）
+                lvtt_name = _utf8(pool, name_idx)
+                # 只有当 LVTT 变量名与 LVT 同 slot 名字一致时才采用精确类型，
+                # 避免合成迭代器（无 LVT entry）的 LVTT 污染后续复用该 slot 的变量
+                if slot not in local_types and local_names.get(slot) == lvtt_name:
                     local_types[slot] = sig
         else:
             r.skip(sub_len)

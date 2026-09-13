@@ -341,8 +341,14 @@ def gen_method_body(
                 b_expr, _ = cond_sim.pop(); a_expr, _ = cond_sim.pop()
                 cond = cmp_op(ci_ins.opcode, render_expr(a_expr), render_expr(b_expr))
             else:
-                a_expr, _ = cond_sim.pop()
-                cond = cmp_op(ci_ins.opcode, render_expr(a_expr), '')
+                a_expr, a_ty = cond_sim.pop()
+                a_str = render_expr(a_expr)
+                a_is_bool = (str(a_ty) == 'bool' or getattr(a_ty, 'name', '') == 'bool')
+                if a_is_bool and ci_ins.opcode in ('ifeq', 'ifne'):
+                    # bool 操作数：ifeq=等于 false 时 break，ifne=不等于 false 时 break
+                    cond = f'!({a_str})' if ci_ins.opcode == 'ifeq' else a_str
+                else:
+                    cond = cmp_op(ci_ins.opcode, a_str, '')
             entries.append(('', f"        if {cond} {{ break; }}"))
 
             body_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
