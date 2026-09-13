@@ -92,7 +92,7 @@ def rust_default(rt: str) -> str:
     return {
         'i32': '0', 'i64': '0', 'f32': '0.0', 'f64': '0.0',
         'bool': 'false',
-        'String': 'String::new()',  # java.lang.String 默认值
+        'String': 'String::default()',
     }.get(rt, 'Default::default()')
 
 

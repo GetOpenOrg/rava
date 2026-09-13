@@ -427,22 +427,84 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
 _safe_param_name = safe_ident
 
 
-def _scan_native_impls(workspace_root: str) -> dict:
+def _parse_synthetic_fn(line: str) -> dict | None:
+    """解析 'pub fn name(params) -> ret' 行，返回 synthetic 方法信息。"""
+    m = re.match(r'\s*pub fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*(.+?))?\s*\{?\s*$', line)
+    if not m:
+        return None
+    fn_name = m.group(1)
+    raw_params = m.group(2).strip()
+    ret_type = (m.group(3) or '()').strip().rstrip('{').strip()
+
+    # 解析参数列表，确定 self 类型和其余参数
+    param_parts = [p.strip() for p in raw_params.split(',') if p.strip()]
+    is_static = True
+    is_mut_self = False
+    rest_params = param_parts
+
+    if param_parts and param_parts[0].startswith('_this:'):
+        is_static = False
+        self_decl = param_parts[0]
+        is_mut_self = '&mut' in self_decl
+        rest_params = param_parts[1:]
+
+    # 提取参数名和类型（用于 wrapper 声明和调用）
+    params_decl_parts = []
+    call_arg_names = []
+    for p in rest_params:
+        colon_idx = p.find(':')
+        if colon_idx > 0:
+            pname = p[:colon_idx].strip()
+            ptype = p[colon_idx+1:].strip()
+            params_decl_parts.append(f'{pname}: {ptype}')
+            call_arg_names.append(pname)
+        else:
+            params_decl_parts.append(p)
+            call_arg_names.append(p)
+
+    return {
+        'fn_name': fn_name,
+        'is_static': is_static,
+        'is_mut_self': is_mut_self,
+        'params_decl': ', '.join(params_decl_parts),
+        'call_args': ', '.join(call_arg_names),
+        'ret_type': ret_type,
+    }
+
+
+def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
     """扫描 native_impls/ 目录，解析 /// java/Class.method:descriptor 注释。
-    返回: {(class_binary_name, member_name, descriptor): (rust_fn_name, rel_file)}
+    返回:
+      native_map:  {(class_binary_name, member_name, descriptor): (rust_fn_name, rel_file)}
+      synthetics:  {class_binary_name: [synthetic_info_dict, ...]}
     rel_file 相对于 workspace_root。
-    同时处理静态字段 getter（descriptor 不以 '(' 开头的条目）。
+    synthetic 函数用 /// @synthetic 标注（不对应任何 Java 方法）。
     """
     impls_dir = os.path.join(workspace_root, 'native_impls')
     result: dict = {}
+    synthetics: dict = {}
     if not os.path.isdir(impls_dir):
-        return result
+        return result, synthetics
     for dirpath, _, files in os.walk(impls_dir):
         for fname in sorted(files):
             if not fname.endswith('.rs'):
                 continue
             fpath = os.path.join(dirpath, fname)
             rel = os.path.relpath(fpath, workspace_root).replace('\\', '/')
+            # 从文件路径推断 class binary name（去掉 native_impls/ 前缀和 .rs 后缀）
+            rel_no_ext = rel[:-3] if rel.endswith('.rs') else rel
+            # native_impls/java/lang/string.rs → java/lang/String
+            parts_from_rel = rel_no_ext.replace('\\', '/').split('/')
+            if parts_from_rel and parts_from_rel[0] == 'native_impls':
+                parts_from_rel = parts_from_rel[1:]
+            # snake_to_class: string → String, print_stream → PrintStream
+            def _snake_to_class(s: str) -> str:
+                return ''.join(w.capitalize() for w in s.split('_'))
+            if parts_from_rel:
+                *pkg, cls_snake = parts_from_rel
+                class_binary = '/'.join(pkg + [_snake_to_class(cls_snake)])
+            else:
+                class_binary = ''
             try:
                 content = open(fpath, encoding='utf-8').read()
             except Exception:
@@ -451,7 +513,17 @@ def _scan_native_impls(workspace_root: str) -> dict:
             i = 0
             while i < len(lines):
                 stripped = lines[i].strip()
-                if stripped.startswith('/// java/') and '.' in stripped:
+                if stripped == '/// @synthetic':
+                    # 找下一个 pub fn
+                    j = i + 1
+                    while j < len(lines) and not lines[j].strip().startswith('pub fn'):
+                        j += 1
+                    if j < len(lines) and class_binary:
+                        info = _parse_synthetic_fn(lines[j])
+                        if info:
+                            synthetics.setdefault(class_binary, []).append(info)
+                    i = j + 1
+                elif stripped.startswith('/// java/') and '.' in stripped:
                     java_ref = stripped[4:].strip()
                     dot_idx = java_ref.rfind('.')
                     if dot_idx < 0:
@@ -488,7 +560,7 @@ def _scan_native_impls(workspace_root: str) -> dict:
                     i = j + 1
                 else:
                     i += 1
-    return result
+    return result, synthetics
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None,
@@ -553,7 +625,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   stub_bodies: bool = False,
                   native_impls_map: dict | None = None,
                   workspace_root: str | None = None,
-                  user_crate_prefix: str | None = None) -> str:
+                  user_crate_prefix: str | None = None,
+                  synthetics: dict | None = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -613,7 +686,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
             field_lines.append(f"    pub _phantom: {phantom_ty},")
         decls = '\n'.join(field_lines)
-        parts.append(f"#[derive(Default)]\npub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
+        parts.append(f"#[derive(Clone, Default)]\npub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
     else:
         if class_type_params:
             # 无字段但有泛型参数：改用 tuple struct 包含 PhantomData
@@ -621,31 +694,40 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 phantom_ty = f'std::marker::PhantomData<{class_type_params[0]}>'
             else:
                 phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
-            parts.append(f"#[derive(Default)]\npub struct {struct_name}{struct_generic}({phantom_ty});\n")
+            parts.append(f"#[derive(Clone, Default)]\npub struct {struct_name}{struct_generic}({phantom_ty});\n")
         else:
-            parts.append(f"#[derive(Default)]\npub struct {struct_name}{struct_generic};\n")
+            parts.append(f"#[derive(Clone, Default)]\npub struct {struct_name}{struct_generic};\n")
 
-    # 若有 native_impls，插入 mod _native { include!("..."); } 块
-    if native_impls_map and workspace_root:
+    # 若有 native_impls 或 synthetics，插入 mod _native { include!("..."); } 块
+    has_synthetics_here = synthetics and ci.name in synthetics
+    _native_rel_file: str | None = None
+    if native_impls_map:
         class_native_impls = {k: v for k, v in native_impls_map.items() if k[0] == ci.name}
         if class_native_impls:
-            any_val = next(iter(class_native_impls.values()))
-            rel_file = any_val[1]
-            # 从生成文件目录到 workspace_root 的相对层数
-            pkg_depth = len(ci.name.split('/')) - 1
-            ups = '../' * (pkg_depth + 2)
-            include_path = ups + rel_file
-            native_mod_lines = [
-                'mod _native {',
-                '    #![allow(unused_imports, dead_code, unused_variables, non_snake_case)]',
-                '    use java_runtime::prelude::*;',
-                '    use super::*;',
-            ]
-            for imp in cross_imports:
-                native_mod_lines.append(f'    {imp}')
-            native_mod_lines.append(f'    include!("{include_path}");')
-            native_mod_lines.append('}')
-            parts.append('\n'.join(native_mod_lines) + '\n')
+            _native_rel_file = next(iter(class_native_impls.values()))[1]
+    # 若没有 /// java/ 条目但有 synthetics，也需要找 native_impls 文件路径
+    if _native_rel_file is None and has_synthetics_here and workspace_root:
+        # 推断路径：native_impls/java/pkg/class_snake.rs
+        *pkg_parts_ci, cls_ci = ci.name.split('/')
+        cls_snake = to_snake(cls_ci)
+        candidate = os.path.join('native_impls', *pkg_parts_ci, cls_snake + '.rs')
+        if os.path.isfile(os.path.join(workspace_root, candidate)):
+            _native_rel_file = candidate.replace('\\', '/')
+    if _native_rel_file and workspace_root:
+        pkg_depth = len(ci.name.split('/')) - 1
+        ups = '../' * (pkg_depth + 2)
+        include_path = ups + _native_rel_file
+        native_mod_lines = [
+            'mod _native {',
+            '    #![allow(unused_imports, dead_code, unused_variables, non_snake_case)]',
+            '    use java_runtime::prelude::*;',
+            '    use super::*;',
+        ]
+        for imp in cross_imports:
+            native_mod_lines.append(f'    {imp}')
+        native_mod_lines.append(f'    include!("{include_path}");')
+        native_mod_lines.append('}')
+        parts.append('\n'.join(native_mod_lines) + '\n')
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
@@ -711,6 +793,31 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             except Exception as e:
                 method_blocks.append(f"/* codegen error {m.name}: {e} */")
 
+    # 合成方法 wrapper（来自 native_impls 中 /// @synthetic 标注的函数）
+    if synthetics and ci.name in synthetics:
+        for syn in synthetics[ci.name]:
+            if syn['is_static']:
+                wrapper = (
+                    f"pub fn {syn['fn_name']}({syn['params_decl']}) -> {syn['ret_type']} {{\n"
+                    f"    _native::{syn['fn_name']}({syn['call_args']})\n"
+                    f"}}"
+                )
+            elif syn['is_mut_self']:
+                sep = ', ' if syn['params_decl'] else ''
+                wrapper = (
+                    f"pub fn {syn['fn_name']}(&mut self{sep}{syn['params_decl']}) -> {syn['ret_type']} {{\n"
+                    f"    _native::{syn['fn_name']}(self{', ' if syn['call_args'] else ''}{syn['call_args']})\n"
+                    f"}}"
+                )
+            else:
+                sep = ', ' if syn['params_decl'] else ''
+                wrapper = (
+                    f"pub fn {syn['fn_name']}(&self{sep}{syn['params_decl']}) -> {syn['ret_type']} {{\n"
+                    f"    _native::{syn['fn_name']}(self{', ' if syn['call_args'] else ''}{syn['call_args']})\n"
+                    f"}}"
+                )
+            method_blocks.append(wrapper)
+
     impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
     parts.append(f"{impl_header} {{\n{impl_body}\n}}\n")
     return '\n'.join(parts)
@@ -767,8 +874,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
 
-    # 扫描 native_impls/ 目录，构建 {(class, member, descriptor): (rust_fn, rel_file)} 映射
-    native_impls_map = _scan_native_impls(out_dir)
+    # 扫描 native_impls/ 目录，构建 native 映射和 synthetic 方法映射
+    native_impls_map, synthetics_map = _scan_native_impls(out_dir)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
@@ -795,7 +902,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                             jdk_crate_pkg_paths=jdk_crate_pkg_paths,
                                             stub_bodies=use_stubs,
                                             native_impls_map=native_impls_map,
-                                            workspace_root=out_dir))
+                                            workspace_root=out_dir,
+                                            synthetics=synthetics_map))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
@@ -864,7 +972,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                         jdk_crate_pkg_paths=user_pkg_paths,
                                         user_crate_prefix='jdk_classes',
                                         native_impls_map=native_impls_map,
-                                        workspace_root=out_dir))
+                                        workspace_root=out_dir,
+                                        synthetics=synthetics_map))
 
     # 中间 mod.rs（用户子包）
     for dir_path, children in user_mod_tree.items():

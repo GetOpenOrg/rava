@@ -7,6 +7,10 @@ impl<T: Clone> Field<T> {
     pub fn set(&self, v: T) { *self.0.borrow_mut() = v; }
 }
 
+impl<T: Clone> Clone for Field<T> {
+    fn clone(&self) -> Self { Field::new(self.get()) }
+}
+
 impl<T: Default + Clone> Default for Field<T> {
     fn default() -> Self { Field::new(T::default()) }
 }

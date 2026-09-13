@@ -512,7 +512,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         elif raw_cls in ('StringBuilder', 'StringBuffer'):
             rust_ty_node = RsNamed('String')
             rust_ty      = 'String'
-            init_expr    = 'String::new()'
+            init_expr    = 'String::from("")'
         elif raw_cls and '/' not in raw_cls:
             # 用户类：new()? 返回 Result<Self>
             init_expr    = f"{raw_cls}::new({', '.join(args)})?"

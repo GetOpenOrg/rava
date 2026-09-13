@@ -24,7 +24,6 @@ pub mod raw {
 pub use raw::Object;
 
 use crate::error::Result;
-use crate::java::lang::String;
 
 impl Object {
     /// monitorenter — synchronized 块进入（stub，单线程环境无需真正加锁）
@@ -37,7 +36,7 @@ impl Object {
 
     /// java.lang.Object.getClass()
     #[allow(non_snake_case)]
-    pub fn getClass(&self) -> Result<String> { Ok(String::from("Object")) }
+    pub fn getClass(&self) -> Result<Object> { Ok(self.clone()) }
 
     /// java.lang.Object.hashCode()
     #[allow(non_snake_case)]
@@ -49,7 +48,7 @@ impl Object {
 
     /// java.lang.Object.toString()
     #[allow(non_snake_case)]
-    pub fn toString(&self) -> Result<String> { Ok(String::from("Object")) }
+    pub fn toString(&self) -> Result<Object> { Ok(self.clone()) }
 
     /// java.io.PrintStream 内部缓冲刷新（stub）
     #[allow(non_snake_case)]
