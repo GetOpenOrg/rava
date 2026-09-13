@@ -374,10 +374,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         for pkg_path in jdk_crate_pkg_paths:
             cross_imports.append(f"use {prefix}::{pkg_path}::*;")
 
+    # 结构体字段中使用的 Field<T> 前缀：
+    # 若本类名为 Field（如 java/lang/reflect/Field），本地 struct 会遮蔽 prelude 中的 Field<T>，
+    # 需用全限定路径；否则显式 import 覆盖 glob import 中可能引入的同名 Field。
+    is_named_field = short_cls(ci.name) == 'Field'
+    field_type_prefix = "java_runtime::types::Field" if is_named_field else "Field"
+    field_import = [] if is_named_field else ["use java_runtime::types::Field;"]
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
         "use java_runtime::prelude::*;",
         *cross_imports,
+        # 显式 import 覆盖 glob import 中可能引入的同名类型（如 java/lang/reflect/Field）
+        *field_import,
         "",
         _java_class_attr(ci, compiled=True),
     ]
@@ -406,7 +414,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         for f in inst_fields:
             safe_fname = _safe_field_name(f.name)
             field_lines.append("    " + _java_field_attr(f))
-            field_lines.append(f"    pub {safe_fname}: Field<{jvm_to_rust(f.descriptor)}>,")
+            field_lines.append(f"    pub {safe_fname}: {field_type_prefix}<{jvm_to_rust(f.descriptor)}>,")
         for ef_name, ef_type in cls_extra_fields:
             field_lines.append(f"    pub {ef_name}: {ef_type},")
         # 若有泛型参数但字段中未用到，加 PhantomData 防止 E0392
@@ -599,12 +607,25 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
     if jdk_class_infos:
+        # 先确定哪些 snake_cased 包名会成为目录（用于检测类/包名冲突）
+        pkg_dir_names: dict[str, set[str]] = {}  # parent_dir → set of pkg subdir names
+        for jdk_ci in jdk_class_infos:
+            pkg_parts = jdk_ci.name.split('/')[:-1]
+            parent = jdk_src
+            for part in pkg_parts:
+                pkg_dir_names.setdefault(parent, set()).add(part)
+                parent = os.path.join(parent, part)
+
         # 先收集所有翻译包的 crate 路径（用于 cross-module glob import）
+        # 关键字包名用 r# 转义（如 java::lang::r#ref）
+        def _safe_pkg_part(p: str) -> str:
+            return f'r#{p}' if p in _RUST_KEYWORDS else p
+
         jdk_pkg_set: set[str] = set()
         for jdk_ci in jdk_class_infos:
             pkg_parts = jdk_ci.name.split('/')[:-1]
             if pkg_parts:
-                jdk_pkg_set.add('::'.join(pkg_parts))
+                jdk_pkg_set.add('::'.join(_safe_pkg_part(p) for p in pkg_parts))
         jdk_crate_pkg_paths = sorted(jdk_pkg_set)
 
         # 按调用链选择性开启字节码翻译；未列出的类保持 stub_bodies=True
@@ -615,7 +636,11 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             parts = jdk_ci.name.split('/')          # e.g. ['java','util','ArrayList']
             *pkg_parts, class_name = parts
             mod_name  = to_snake(class_name)
-            file_path = os.path.join(jdk_src, *pkg_parts, mod_name + '.rs')
+            parent_dir = os.path.join(jdk_src, *pkg_parts)
+            # 跳过与子包目录同名的类文件（E0761：module.rs 和 module/mod.rs 不能共存）
+            if mod_name in pkg_dir_names.get(parent_dir, set()):
+                continue
+            file_path = os.path.join(parent_dir, mod_name + '.rs')
             use_stubs = jdk_ci.name not in _TRANSLATE_BODIES
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
                                             jdk_crate_pkg_paths=jdk_crate_pkg_paths,
@@ -631,11 +656,21 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 parent = os.path.join(parent, part)
             jdk_mod_tree.setdefault(parent, set()).add(mod_name)
 
+    def _mod_decl(name: str) -> str:
+        """生成 pub mod 声明，对 Rust 关键字用 r# 转义。"""
+        safe = f'r#{name}' if name in _RUST_KEYWORDS else name
+        return f'pub mod {safe};'
+
+    def _use_decl(name: str) -> str:
+        """生成 pub use *::* 声明，对 Rust 关键字用 r# 转义。"""
+        safe = f'r#{name}' if name in _RUST_KEYWORDS else name
+        return f'pub use {safe}::*;'
+
     # jdk_classes/src/lib.rs
     top_jdk = sorted(jdk_mod_tree.get(jdk_src, set()))
     jdk_lib_lines = [
         '#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]',
-        *[f'pub mod {m};' for m in top_jdk],
+        *[_mod_decl(m) for m in top_jdk],
         '',
     ]
     _write(os.path.join(jdk_src, 'lib.rs'), '\n'.join(jdk_lib_lines))
@@ -646,8 +681,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             continue
         mod_lines = []
         for c in sorted(children):
-            mod_lines.append(f'pub mod {c};')
-            mod_lines.append(f'pub use {c}::*;')
+            mod_lines.append(_mod_decl(c))
+            mod_lines.append(_use_decl(c))
         _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
 
     # 4. user crate（用户 Java 翻译）
