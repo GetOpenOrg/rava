@@ -7,7 +7,6 @@ JVM 字节码指令 → Rust 语句转换。
 - 字段通过 Field<T>::get()/set() 访问
 - println → System::out().println(...)?
 - 所有用户类方法调用加 ?（返回 Result<T>）
-- ArrayList::add()?  HashMap::put  HashSet::add
 """
 
 import re
@@ -70,17 +69,6 @@ from .type_map import (
     mangle_name,
 )
 
-# 集合类构造时的 IR 类型节点和初始化表达式
-# P7: 集合已迁移到 jdk_classes + native_impls，jdk_classes 生成的 struct 带有 PhantomData<E>
-# 使用 Object 作为具体类型参数（JVM 类型擦除后所有元素均为 Object）
-_COLL_IR_TYPES: dict[str, tuple] = {
-    'ArrayList':           (RsGeneric('ArrayList', [RsNamed('Object')]),         'ArrayList::<Object>::new_default()?'),
-    'java/util/ArrayList': (RsGeneric('ArrayList', [RsNamed('Object')]),         'ArrayList::<Object>::new_default()?'),
-    'HashMap':             (RsGeneric('HashMap',   [RsNamed('Object'), RsNamed('Object')]), 'HashMap::<Object, Object>::new_default()?'),
-    'java/util/HashMap':   (RsGeneric('HashMap',   [RsNamed('Object'), RsNamed('Object')]), 'HashMap::<Object, Object>::new_default()?'),
-    'HashSet':             (RsGeneric('HashSet',   [RsNamed('Object')]),         'HashSet::<Object>::new_default()?'),
-    'java/util/HashSet':   (RsGeneric('HashSet',   [RsNamed('Object')]),         'HashSet::<Object>::new_default()?'),
-}
 from .types import Instr
 
 
@@ -503,16 +491,29 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
     obj_expr, obj_ty_node = sim.pop()
 
     if isinstance(obj_expr, NewPendingExpr):
-        raw_cls = obj_expr.class_name.rsplit('/', 1)[-1]
+        full_cls = obj_expr.class_name          # e.g. 'java/util/ArrayList'
+        raw_cls = full_cls.rsplit('/', 1)[-1]
         raw_cls = short_cls(raw_cls) or raw_cls
 
-        if raw_cls in _COLL_IR_TYPES:
-            rust_ty_node, init_expr = _COLL_IR_TYPES[raw_cls]
-            rust_ty = render_type(rust_ty_node)
-        elif raw_cls in ('StringBuilder', 'StringBuffer'):
+        if raw_cls in ('StringBuilder', 'StringBuffer'):
+            # StringBuilder → mapped to jdk_classes String
             rust_ty_node = RsNamed('String')
             rust_ty      = 'String'
             init_expr    = 'String::from("")'
+        elif '/' in full_cls:
+            # JDK class（含包路径）→ 用 new_default() 工厂（@synthetic）
+            rust_ty_str = jvm_to_rust(f'L{full_cls};', registry)
+            if rust_ty_str != 'Object' and '<' in rust_ty_str:
+                type_params_str = rust_ty_str[len(raw_cls):]   # '<Object>' / '<Object, Object>'
+            else:
+                type_params_str = ''
+            rust_ty = raw_cls + type_params_str
+            rust_ty_node = RsNamed(rust_ty)
+            if args:
+                init_expr = f"{raw_cls}::new({', '.join(args)})?"
+            else:
+                turbofish = '::' + type_params_str if type_params_str else ''
+                init_expr = f"{raw_cls}{turbofish}::new_default()?"
         elif raw_cls and '/' not in raw_cls:
             # 用户类：new()? 返回 Result<Self>
             init_expr    = f"{raw_cls}::new({', '.join(args)})?"
@@ -612,23 +613,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             sim.push(Var(v), RsNamed(rust_ret))
         return
 
-    if cls in ('Math', 'java/lang/Math'):
-        fn_map = {
-            'abs': 'abs', 'max': 'max', 'min': 'min',
-            'sqrt': 'sqrt', 'pow': 'powf',
-            'floor': 'floor', 'ceil': 'ceil',
-            'log': 'ln', 'log10': 'log10',
-        }
-        rust_fn = fn_map.get(mname, mname)
-        if mname in ('max', 'min') and len(args) >= 2:
-            call = f"({args[0]}).{rust_fn}({args[1]})"
-        elif mname == 'pow':
-            call = f"({args[0]} as f64).powf({args[1]} as f64)"
-        elif mname in ('sqrt', 'floor', 'ceil', 'log', 'log10'):
-            call = f"({args[0]} as f64).{rust_fn}()"
-        else:
-            call = f"({args[0]}).abs()"
-    elif cls is None or cls == class_name:
+    if cls is None or cls == class_name:
         rust_mname = _mangle_if_overloaded(class_name, mname, comment, registry)
         call = f"Self::{rust_mname}({', '.join(args)})"
         needs_q = True
