@@ -177,21 +177,26 @@
 │           Object：hashCode/clone/wait/notify 均为 native，较难
 │           Math：全部是 native，需要 native_impls/ 逐一实现
 │
-├── 第 8 层：native_impls/ 基础设施（Phase E）
-│   ├── ⚠️ 目录结构建立
+├── ✅ 第 8 层：native_impls/ 基础设施（Phase E）
+│   ├── ✅ 目录结构建立
 │   │       ✅ output/native_impls/java/lang/system.rs（currentTimeMillis/nanoTime/arraycopy）
+│   │       ✅ output/native_impls/java/lang/double.rs（doubleToRawLongBits/longBitsToDouble）
+│   │       ✅ output/native_impls/java/lang/float.rs（floatToRawIntBits/intBitsToFloat）
+│   │       ✅ output/native_impls/java/lang/throwable.rs（fillInStackTrace no-op）
+│   │       ✅ output/native_impls/java/lang/null_pointer_exception.rs（getExtendedNPEMessage）
 │   │       ⚠️ output/native_impls/java/lang/string.rs（文件存在但实现为空）
 │   │       ❌ output/native_impls/java/io/print_stream.rs（尚未建立）
 │   │
-│   ├── ⚠️ HelloWorld 最小 native 集合实现
-│   │       ✅ System.currentTimeMillis → std::time::SystemTime
-│   │       ✅ System.arraycopy → 标记 not-needed（HelloWorld 不调用）
-│   │       ❌ PrintStream.write(byte[]) → 尚未实现
-│   │       ❌ String.charAt / String.length → 尚未实现
+│   ├── ✅ native_status.toml 全部从 needed → implemented（6个）
+│   │       ✅ Double.doubleToRawLongBits / longBitsToDouble
+│   │       ✅ Float.floatToRawIntBits / intBitsToFloat
+│   │       ✅ Throwable.fillInStackTrace
+│   │       ✅ NullPointerException.getExtendedNPEMessage
 │   │
 │   └── ⚠️ build.rs 构建阻断
 │           ✅ build.rs 已从模板生成，扫描 ../native_impls/，维护 ../native_status.toml
 │           ❌ JAVA_RTA_STRICT=1 严格模式未默认开启（needed 方法只警告，不阻断编译）
+│           注：当前 native_status.toml 全部 implemented，strict 模式不影响当前构建
 │
 ├── 第 9 层：手写 runtime 清理（最终态）
 │   ├── 🔜 删除 runtime.py 中所有 Rust 字符串内容
