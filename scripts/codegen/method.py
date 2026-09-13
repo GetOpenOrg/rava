@@ -251,7 +251,9 @@ def gen_method_body(
         else:
             sig += " -> Result<()>"
 
-    rust_param_type_nodes = [_str_to_rs_type(t) for t in rust_param_types]
+    # 静态方法参数签名用 sig_type（Vec<T> → &[T]），sim 需与签名一致避免双重引用
+    sim_param_types = [sig_type(t) if is_static else t for t in rust_param_types]
+    rust_param_type_nodes = [_str_to_rs_type(t) for t in sim_param_types]
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}

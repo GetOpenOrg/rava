@@ -429,7 +429,7 @@ _safe_param_name = safe_ident
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None) -> str:
     """为 native / abstract 方法生成 todo! 存根，供手工实现替换。"""
-    from .type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
+    from .type_map import jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return
     params = parse_descriptor_params(m.descriptor)
     ret    = parse_descriptor_return(m.descriptor)
     rust_ret = jvm_to_rust(ret)
@@ -449,8 +449,10 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             seen[n] = 0
             deduped.append(n)
     arg_names = deduped
+    # 静态方法用 sig_type（Vec<T> → &[T]），与 gen_method_body 保持一致
+    param_type_fn = (lambda p: sig_type(jvm_to_rust(p))) if m.is_static else jvm_to_rust
     args_str = ', '.join(
-        f'{name}: {jvm_to_rust(p)}' for name, p in zip(arg_names, params)
+        f'{name}: {param_type_fn(p)}' for name, p in zip(arg_names, params)
     )
 
     if m.is_static:
