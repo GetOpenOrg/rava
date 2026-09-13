@@ -104,29 +104,21 @@
 ├── 第 6 层：JDK 方法体字节码翻译（stub_bodies=False）
 │   │       ← 实验结果：全量开启触发 3808 个编译错误
 │   │
-│   ├── ❌ loop 变量先 assign 后 let（300+ 错误）
+│   ├── ✅ loop 变量先 assign 后 let（300+ 错误 → 0）
 │   │       原因：JVM 循环中局部变量先被 istore 赋值（生成 AssignStmt），
 │   │             后在 LocalVariableTable 里才有 let 声明（生成 LetStmt）
 │   │             导致 Rust 看到变量在声明前被使用
-│   │       示例：
-│   │           i = 0i32;        // AssignStmt：i 未声明
-│   │           loop {
-│   │               let mut i: i32 = 0i32;  // LetStmt：声明在赋值之后
-│   │           }
-│   │       解决方案：method.py 在渲染前做"首次赋值提升"：
-│   │                 如果 AssignStmt 的目标变量在当前作用域没有对应 LetStmt，
-│   │                 将该 AssignStmt 替换为 LetStmt（mutable=True）
+│   │       解决：method.py _promote_undeclared_assigns()：追踪嵌套深度，
+│   │             将出作用域后再 assign 的 AssignStmt 提升为 LetStmt(mutable=True)
 │   │
-│   ├── ❌ Object 类型接收方调用具体方法（1071+ 错误）
-│   │       原因：JVM 类型擦除后泛型集合元素类型为 Object，
-│   │             但翻译后的 Rust 变量类型也是 Object，
-│   │             而 Object struct 上没有 size/hasNext/next/compare 等方法
-│   │       示例：
-│   │           let _t0: Object = list.get(0)?;
-│   │           _t0.hasNext()?;  // Object 上没有 hasNext
-│   │       解决方案：
-│   │             短期：泛型擦除处的 Object 类型用 RsInfer（_）替代，让 Rust 推断
-│   │             长期：Phase B 数据驱动分派 + 接口映射
+│   ├── ⚠️ Object 类型接收方调用具体方法（大幅减少）
+│   │       原因：JVM 类型擦除，接口参数/返回值类型降级为 Object
+│   │       已修复：
+│   │         - gen_method_body 传 registry → 参数 list:List, c:Comparator 等
+│   │         - _gen_invokevirtual/_gen_invokestatic 传 registry → 返回类型更精确
+│   │         - getfield/getstatic 传 registry → 字段类型更精确
+│   │         - checkcast 指令实现类型更新 → midVal:Comparable 等
+│   │       剩余：泛型集合 get() 返回 Object（真实类型擦除），待后续层解决
 │   │
 │   ├── ❌ 内部类引用（ArraysSupport 等）找不到（67+ 错误）
 │   │       原因：Arrays.copyOf 内部调用 ArraysSupport，
