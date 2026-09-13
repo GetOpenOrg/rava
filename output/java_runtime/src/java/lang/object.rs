@@ -54,4 +54,16 @@ impl Object {
     /// java.io.PrintStream 内部缓冲刷新（stub）
     #[allow(non_snake_case)]
     pub fn flushBuffer(&self) -> Result<()> { Ok(()) }
+
+    /// null 检查：在转译模型中 Object 永远非 null，始终返回 false
+    pub fn is_none(&self) -> bool { false }
+
+    /// Option::get 兼容接口：Object 始终存在，返回 self 的克隆
+    pub fn get(&self) -> Result<Object> { Ok(self.clone()) }
+}
+
+impl std::fmt::Display for Object {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Object")
+    }
 }

@@ -656,7 +656,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
 
         # 按调用链选择性开启字节码翻译；未列出的类保持 stub_bodies=True
         # 选择性开启字节码翻译的类集合（当前留空，按需添加）
-        _TRANSLATE_BODIES: set[str] = set()
+        _TRANSLATE_BODIES: set[str] = set()  # 按需添加要翻译方法体的类
 
         for jdk_ci in jdk_class_infos:
             parts = jdk_ci.name.split('/')          # e.g. ['java','util','ArrayList']

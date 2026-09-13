@@ -351,8 +351,17 @@ def gen_method_body(
                 b_expr, _ = sim.pop(); a_expr, _ = sim.pop()
                 a_str = render_expr(a_expr); b_str = render_expr(b_expr)
             else:
-                a_expr, _ = sim.pop()
+                a_expr, a_type = sim.pop()
                 a_str = render_expr(a_expr); b_str = ''
+                # 若操作数已是 bool，ifne/ifeq 直接用 bool 值，不做 !=0i32 比较
+                a_is_bool = (str(a_type) == 'bool' or getattr(a_type, 'name', '') == 'bool')
+                if a_is_bool and ins.opcode in ('ifne', 'ifeq'):
+                    base_bool = a_str if ins.opcode == 'ifne' else f'!({a_str})'
+                    bool_expr = f'!({base_bool})' if (true_val == 1 and false_val == 0) else base_bool
+                    sim.push(RawExpr(bool_expr), BOOL)
+                    flush(sim)
+                    i = end_idx
+                    continue
             # true_val=1,false_val=0 → fall-through 为 true → 用 neg_cmp_op（取反跳转条件）
             # true_val=0,false_val=1 → jump 为 true    → 用 cmp_op（跳转条件即为 true）
             if true_val == 1 and false_val == 0:
