@@ -38,14 +38,16 @@ _STMT_CLASSES = tuple(get_args(RsStmt))
 
 class StackSim:
     def __init__(self, param_rust_types: list[RsType], is_static: bool, class_name: str,
-                 local_names: dict[int, str] | None = None):
+                 local_names: dict[int, str] | None = None,
+                 slot_hint_types: dict[int, RsType] | None = None):
         self.stack:      list[tuple[RsExpr, RsType]] = []
         self._ctr:       int                         = 0
         self.locals:     dict[int, tuple]            = {}   # slot → (name, RsType, is_new)
         self.stmts:      list[RsStmt]                = []
         self.is_static   = is_static
         self.class_name  = class_name
-        self._loc_names  = local_names or {}  # slot → Java variable name
+        self._loc_names  = local_names or {}     # slot → Java variable name
+        self._hint_types = slot_hint_types or {}  # slot → precise RsType from LocalVariableTypeTable
 
         if is_static:
             for slot, rt in enumerate(param_rust_types):
@@ -99,19 +101,27 @@ class StackSim:
         存储到局部变量槽。
         - 若槽已存在：生成 AssignStmt 节点
         - 若槽不存在：生成 LetStmt 节点并注册
+        - 若栈顶类型是 Object 且 _hint_types 有更精确的类型（来自 LocalVariableTypeTable），
+          用精确类型替换（如 String 替代 Object）
         """
         assert isinstance(expr, _EXPR_CLASSES), \
             f"store_local() requires RsExpr, got {type(expr)}: {expr!r}"
         assert isinstance(ty, _TYPE_CLASSES), \
             f"store_local() requires RsType, got {type(ty)}: {ty!r}"
+        # 用 LocalVariableTypeTable 提供的精确类型覆盖泛型擦除后的 Object
+        hint = self._hint_types.get(slot)
+        if hint is not None and isinstance(ty, RsNamed) and ty.name == 'Object':
+            ty = hint
         if slot in self.locals:
             name, _, _ = self.locals[slot]
             self.stmts.append(AssignStmt(Var(name), expr))
         else:
             name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
             self.locals[slot] = (name, ty, True)
-            # mutable=True，后续 mutation 分析会移除不必要的 mut
-            self.stmts.append(LetStmt(name, ty, mutable=True, value=expr))
+            # 若值是对已声明临时变量的引用，让 Rust 推断类型（避免 newarray 的
+            # Vec<T> 注解与实际 Rc<RefCell<Vec<T>>> 类型不匹配）
+            let_ty = None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty
+            self.stmts.append(LetStmt(name, let_ty, mutable=True, value=expr))
 
     def load_local(self, slot: int) -> tuple[RsExpr, RsType]:
         """从局部变量槽加载，返回 (RsExpr, RsType)。"""

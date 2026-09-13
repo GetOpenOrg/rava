@@ -254,7 +254,19 @@ def gen_method_body(
     # 静态方法参数签名用 sig_type（Vec<T> → &[T]），sim 需与签名一致避免双重引用
     sim_param_types = [sig_type(t) if is_static else t for t in rust_param_types]
     rust_param_type_nodes = [_str_to_rs_type(t) for t in sim_param_types]
-    sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
+
+    # 从 LocalVariableTypeTable 预计算精确类型提示（slot → RsType）
+    # 仅对引用类型（Object 类型擦除后变成 Object 的槽）有意义
+    slot_hint_types: dict[int, RsNamed] = {}
+    if method.local_types:
+        from .sig_parser import parse_field_type
+        for _hint_slot, _hint_sig in method.local_types.items():
+            rust_ty_name = parse_field_type(_hint_sig, _class_tparams)
+            if rust_ty_name and rust_ty_name != 'Object':
+                slot_hint_types[_hint_slot] = RsNamed(rust_ty_name)
+
+    sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
+                   slot_hint_types=slot_hint_types)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
 
@@ -311,7 +323,8 @@ def gen_method_body(
             lp = loop_map[i]
             entries.append(('', "    loop {"))
 
-            pre_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
+            pre_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
+                               slot_hint_types=slot_hint_types)
             pre_sim.locals = dict(sim.locals)
             for k in range(lp.start_idx, lp.cond_idx):
                 sim_instr(instrs[k], pre_sim, method.class_name, registry=registry)
@@ -320,7 +333,8 @@ def gen_method_body(
                 entries.append(('        ', s))
 
             ci_ins   = instrs[lp.cond_idx]
-            cond_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
+            cond_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
+                                slot_hint_types=slot_hint_types)
             cond_sim.locals = dict(sim.locals)
             cond_sim.stack  = list(pre_sim.stack)
             if ci_ins.opcode in TWO_OP_CMP:
@@ -331,7 +345,8 @@ def gen_method_body(
                 cond = cmp_op(ci_ins.opcode, render_expr(a_expr), '')
             entries.append(('', f"        if {cond} {{ break; }}"))
 
-            body_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names)
+            body_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
+                                slot_hint_types=slot_hint_types)
             body_sim.locals = dict(sim.locals)
             for k in range(lp.cond_idx + 1, lp.end_idx):
                 sim_instr(instrs[k], body_sim, method.class_name, registry=registry)

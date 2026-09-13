@@ -33,6 +33,7 @@ class ParsedMethod:
     args_size:         int
     instrs:            list
     local_names:       dict = None
+    local_types:       dict = None   # slot → Signature string (LocalVariableTypeTable)
     access_flags:      int  = 0
     is_native:         bool = False
     is_abstract:       bool = False
@@ -43,6 +44,8 @@ class ParsedMethod:
     def __post_init__(self):
         if self.local_names is None:
             self.local_names = {}
+        if self.local_types is None:
+            self.local_types = {}
         if self.exceptions is None:
             self.exceptions = []
 

@@ -595,7 +595,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         e_expr, ty_node = sim.pop()
         e = render_expr(e_expr)
         ty = render_type(ty_node)
-        args.insert(0, f"&{e}" if ty.startswith('Vec<') else e)
+        args.insert(0, f"{e}.clone()" if ty.startswith('Vec<') else e)
 
     needs_q = False  # 是否加 ?（用户类方法返回 Result）
 

@@ -431,9 +431,10 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     for _ in range(exc_count):
         r.skip(8)  # start_pc, end_pc, handler_pc, catch_type
 
-    # sub-attributes：解析 LocalVariableTable，跳过其他
+    # sub-attributes：解析 LocalVariableTable 和 LocalVariableTypeTable，跳过其他
     sub_attr_count = r.u2()
     local_names: dict[int, str] = {}
+    local_types: dict[int, str] = {}  # slot → generic Signature string
     for _ in range(sub_attr_count):
         sub_name_idx = r.u2()
         sub_len      = r.u4()
@@ -451,6 +452,20 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
                 name      = _utf8(pool, name_idx)
                 if slot not in local_names:  # 取第一个（作用域最广的）
                     local_names[slot] = name
+        elif sub_name == 'LocalVariableTypeTable':
+            # 格式与 LocalVariableTable 相同，但 descriptor 换成 Signature
+            sub_data = r.read(sub_len)
+            lvtt_r   = _Reader(sub_data)
+            count    = lvtt_r.u2()
+            for _ in range(count):
+                _start_pc = lvtt_r.u2()
+                _length   = lvtt_r.u2()
+                _name_idx = lvtt_r.u2()
+                sig_idx   = lvtt_r.u2()
+                slot      = lvtt_r.u2()
+                sig       = _utf8(pool, sig_idx)
+                if slot not in local_types:  # 取第一个（作用域最广的）
+                    local_types[slot] = sig
         else:
             r.skip(sub_len)
 
@@ -471,6 +486,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
         args_size=args_size,
         instrs=instrs,
         local_names=local_names,
+        local_types=local_types,
     )
 
 
