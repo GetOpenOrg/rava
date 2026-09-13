@@ -38,3 +38,10 @@ impl From<&str> for String {
         from_owned(s.to_owned())
     }
 }
+
+impl Into<Object> for String {
+    fn into(self) -> Object {
+        let rc: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(self);
+        Object(rc)
+    }
+}

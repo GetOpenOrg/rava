@@ -71,14 +71,15 @@ from .type_map import (
 )
 
 # 集合类构造时的 IR 类型节点和初始化表达式
-# 用 RsInfer() 占位，Rust 编译器从首次 add/put 调用推断实际元素类型
+# P7: 集合已迁移到 jdk_classes + native_impls，jdk_classes 生成的 struct 带有 PhantomData<E>
+# 使用 Object 作为具体类型参数（JVM 类型擦除后所有元素均为 Object）
 _COLL_IR_TYPES: dict[str, tuple] = {
-    'ArrayList':           (RsGeneric('ArrayList', [RsInfer()]),         'ArrayList::<_>::new()?'),
-    'java/util/ArrayList': (RsGeneric('ArrayList', [RsInfer()]),         'ArrayList::<_>::new()?'),
-    'HashMap':             (RsGeneric('HashMap',   [RsInfer(), RsInfer()]), 'HashMap::<_, _>::new()?'),
-    'java/util/HashMap':   (RsGeneric('HashMap',   [RsInfer(), RsInfer()]), 'HashMap::<_, _>::new()?'),
-    'HashSet':             (RsGeneric('HashSet',   [RsInfer()]),         'HashSet::<_>::new()?'),
-    'java/util/HashSet':   (RsGeneric('HashSet',   [RsInfer()]),         'HashSet::<_>::new()?'),
+    'ArrayList':           (RsGeneric('ArrayList', [RsNamed('Object')]),         'ArrayList::<Object>::new_default()?'),
+    'java/util/ArrayList': (RsGeneric('ArrayList', [RsNamed('Object')]),         'ArrayList::<Object>::new_default()?'),
+    'HashMap':             (RsGeneric('HashMap',   [RsNamed('Object'), RsNamed('Object')]), 'HashMap::<Object, Object>::new_default()?'),
+    'java/util/HashMap':   (RsGeneric('HashMap',   [RsNamed('Object'), RsNamed('Object')]), 'HashMap::<Object, Object>::new_default()?'),
+    'HashSet':             (RsGeneric('HashSet',   [RsNamed('Object')]),         'HashSet::<Object>::new_default()?'),
+    'java/util/HashSet':   (RsGeneric('HashSet',   [RsNamed('Object')]),         'HashSet::<Object>::new_default()?'),
 }
 from .types import Instr
 
@@ -122,10 +123,9 @@ def _parse_slot(op: str, operand: str) -> int:
 
 
 # java_runtime 手写实现的短类名：这些类的方法名不经过 mangle（hand-written API 已定好名称）
-# System 和 PrintStream 已迁移到 jdk_classes + native_impls，不在此列表中
+# System/PrintStream/String/Math/ArrayList/HashMap/HashSet 已迁移到 jdk_classes + native_impls
 _JAVA_RUNTIME_SHORT_NAMES: frozenset[str] = frozenset({
-    'Object', 'String', 'ArrayList', 'HashMap', 'HashSet',
-    'StringBuilder',
+    'Object', 'String', 'StringBuilder',
 })
 
 
@@ -649,12 +649,23 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         sim.push(Var(v), RsNamed(rust_ret))
 
 
+# Java 中任何对象都可以传递给 Object 参数（引用协变），Rust 需要显式 Into<Object> 转换
+_PRIMITIVE_RUST_TYPES: frozenset[str] = frozenset({
+    'i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16', '()'
+})
+
+
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
     args = []
-    for _ in range(len(params)):
-        e_expr, _ = sim.pop()
-        args.insert(0, render_expr(e_expr))
+    for param_jvm in reversed(params):
+        e_expr, e_ty_node = sim.pop()
+        e_str = render_expr(e_expr)
+        expected_rust = jvm_to_rust(param_jvm, registry)
+        actual_rust = render_type(e_ty_node)
+        if expected_rust == 'Object' and actual_rust != 'Object' and actual_rust not in _PRIMITIVE_RUST_TYPES:
+            e_str = f"{e_str}.into()"
+        args.insert(0, e_str)
     obj_expr, obj_ty_node = sim.pop()
     obj_e = render_expr(obj_expr)
     obj_ty = render_type(obj_ty_node)

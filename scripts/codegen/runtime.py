@@ -8,13 +8,10 @@ java_runtime 运行时存根 — 新模块结构，Java 命名空间同构。
   ├── types.rs         ← Field<T>（内部基础设施）
   └── java/
       ├── mod.rs
-      ├── lang/
-      │   └── mod.rs
-      └── util/
-          ├── mod.rs
-          ├── array_list.rs  ← java.util.ArrayList<T>
-          ├── hash_map.rs    ← java.util.HashMap<K,V>
-          └── hash_set.rs    ← java.util.HashSet<T>
+      └── lang/
+          └── mod.rs   ← Object（永久保留）
+
+  注：java/util/ 已在 P7 迁移到 jdk_classes + native_impls
 """
 
 # key = 相对于 java_runtime/ 的路径，value = 文件内容
@@ -29,7 +26,6 @@ pub mod java;
 pub use error::{JvmError, Result};
 pub use types::Field;
 pub use java::lang::Object;
-pub use java::util::{ArrayList, HashMap, HashSet};
 
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 pub mod prelude {
@@ -37,7 +33,6 @@ pub mod prelude {
     pub use super::error::{JvmError, Result};
     pub use super::types::Field;
     pub use super::java::lang::Object;
-    pub use super::java::util::{ArrayList, HashMap, HashSet};
     pub use std::rc::Rc;
     pub use std::cell::RefCell;
 }
@@ -85,7 +80,6 @@ impl<T: Default + Clone> Default for Field<T> {
     # ── java/ ──────────────────────────────────────────────────────────
     "java/mod.rs": """\
 pub mod lang;
-pub mod util;
 """,
 
     # ── java/lang/ ─────────────────────────────────────────────────────
@@ -166,133 +160,5 @@ impl std::fmt::Display for Object {
 }
 """,
 
-    # ── java/util/ ─────────────────────────────────────────────────────
-    "java/util/mod.rs": """\
-pub mod array_list;
-pub mod hash_map;
-pub mod hash_set;
-
-pub use array_list::ArrayList;
-pub use hash_map::HashMap;
-pub use hash_set::HashSet;
-""",
-
-    "java/util/array_list.rs": """\
-//! java.util.ArrayList<T> 同构类型（内部用 Rc<RefCell<Vec<T>>>）
-use crate::error::{JvmError, Result};
-use std::rc::Rc;
-use std::cell::RefCell;
-
-pub struct ArrayList<T>(Rc<RefCell<Vec<T>>>);
-
-impl<T: Clone + 'static> ArrayList<T> {
-    pub fn new() -> Result<Self> {
-        Ok(ArrayList(Rc::new(RefCell::new(Vec::new()))))
-    }
-    pub fn add(&self, v: T) -> Result<bool> {
-        self.0.borrow_mut().push(v);
-        Ok(true)
-    }
-    pub fn get(&self, i: i32) -> Result<T> {
-        self.0.borrow().get(i as usize).cloned()
-            .ok_or(JvmError::ArrayIndexOutOfBoundsException(i))
-    }
-    pub fn set_at(&self, i: i32, v: T) -> Result<T> {
-        let mut b = self.0.borrow_mut();
-        let old = b.get(i as usize).cloned()
-            .ok_or(JvmError::ArrayIndexOutOfBoundsException(i))?;
-        b[i as usize] = v;
-        Ok(old)
-    }
-    pub fn size(&self) -> Result<i32> { Ok(self.0.borrow().len() as i32) }
-    pub fn is_empty(&self) -> Result<bool> { Ok(self.0.borrow().is_empty()) }
-    pub fn isEmpty(&self) -> Result<bool> { self.is_empty() }
-    pub fn remove_at(&self, i: i32) -> Result<()> {
-        self.0.borrow_mut().remove(i as usize);
-        Ok(())
-    }
-    pub fn clear(&self) -> Result<()> { self.0.borrow_mut().clear(); Ok(()) }
-    pub fn contains(&self, v: T) -> Result<bool> where T: PartialEq {
-        Ok(self.0.borrow().contains(&v))
-    }
-    pub fn for_each<F: FnMut(&T)>(&self, mut f: F) {
-        for item in self.0.borrow().iter() { f(item); }
-    }
 }
-
-impl<T> Clone for ArrayList<T> {
-    fn clone(&self) -> Self { ArrayList(self.0.clone()) }
-}
-""",
-
-    "java/util/hash_map.rs": """\
-//! java.util.HashMap<K,V> 同构类型
-use crate::error::Result;
-use std::rc::Rc;
-use std::cell::RefCell;
-
-pub struct HashMap<K, V>(Rc<RefCell<std::collections::HashMap<K, V>>>);
-
-impl<K: Clone + Eq + std::hash::Hash + 'static, V: Clone + 'static> HashMap<K, V> {
-    pub fn new() -> Result<Self> {
-        Ok(HashMap(Rc::new(RefCell::new(std::collections::HashMap::new()))))
-    }
-    pub fn put(&self, k: K, v: V) -> Result<Option<V>> {
-        Ok(self.0.borrow_mut().insert(k, v))
-    }
-    pub fn get(&self, k: K) -> Result<V> where V: Default {
-        Ok(self.0.borrow().get(&k).cloned().unwrap_or_default())
-    }
-    pub fn get_or_default(&self, k: K, d: V) -> Result<V> {
-        Ok(self.0.borrow().get(&k).cloned().unwrap_or(d))
-    }
-    pub fn contains_key(&self, k: K) -> Result<bool> {
-        Ok(self.0.borrow().contains_key(&k))
-    }
-    /// Java camelCase alias for contains_key
-    #[allow(non_snake_case)]
-    pub fn containsKey(&self, k: K) -> Result<bool> {
-        self.contains_key(k)
-    }
-    pub fn remove(&self, k: K) -> Result<Option<V>> {
-        Ok(self.0.borrow_mut().remove(&k))
-    }
-    pub fn size(&self) -> Result<i32>  { Ok(self.0.borrow().len() as i32) }
-    pub fn is_empty(&self) -> Result<bool> { Ok(self.0.borrow().is_empty()) }
-    pub fn isEmpty(&self) -> Result<bool> { self.is_empty() }
-}
-
-impl<K, V> Clone for HashMap<K, V> {
-    fn clone(&self) -> Self { HashMap(self.0.clone()) }
-}
-""",
-
-    "java/util/hash_set.rs": """\
-//! java.util.HashSet<T> 同构类型
-use crate::error::Result;
-use std::rc::Rc;
-use std::cell::RefCell;
-
-pub struct HashSet<T>(Rc<RefCell<std::collections::HashSet<T>>>);
-
-impl<T: Clone + Eq + std::hash::Hash + 'static> HashSet<T> {
-    pub fn new() -> Result<Self> {
-        Ok(HashSet(Rc::new(RefCell::new(std::collections::HashSet::new()))))
-    }
-    pub fn add(&self, v: T) -> Result<bool> { Ok(self.0.borrow_mut().insert(v)) }
-    pub fn contains(&self, v: T) -> Result<bool> {
-        Ok(self.0.borrow().contains(&v))
-    }
-    pub fn remove(&self, v: T) -> Result<bool> {
-        Ok(self.0.borrow_mut().remove(&v))
-    }
-    pub fn size(&self) -> Result<i32>  { Ok(self.0.borrow().len() as i32) }
-    pub fn is_empty(&self) -> Result<bool> { Ok(self.0.borrow().is_empty()) }
-    pub fn isEmpty(&self) -> Result<bool> { self.is_empty() }
-}
-
-impl<T> Clone for HashSet<T> {
-    fn clone(&self) -> Self { HashSet(self.0.clone()) }
-}
-""",
-}
+# java/util 已在 P7 迁移到 jdk_classes + native_impls，runtime.py 不再包含 util 实现
