@@ -14,7 +14,7 @@ Rust 文件生成器：将 ClassInfo 列表写出为 Cargo workspace，
 import os
 import re
 from .types import ClassInfo, FieldInfo, ParsedMethod
-from .type_map import jvm_to_rust, rust_default, short_cls
+from .type_map import jvm_to_rust, rust_default, short_cls, get_ergonomic_jvm_rename
 from .method import gen_method_body, _indent
 from .sig_parser import parse_class_type_params, parse_field_type
 from .constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
@@ -494,6 +494,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             continue
         # 确定最终 Rust 方法名（有重载则加描述符后缀）
         rust_name = mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name
+        # T39：若 _ergonomic.rs 有 @jvm_rename 指令，将非重载方法改名（腾出干净名称给 ergonomic 层）
+        if not m.is_constructor and m.name not in overloaded_names:
+            erg_rename = get_ergonomic_jvm_rename(ci.name, m.name)
+            if erg_rename is not None:
+                rust_name = erg_rename
         # 构造器统一用 new / new_suffix
         if m.is_constructor:
             if '<init>' in overloaded_names:

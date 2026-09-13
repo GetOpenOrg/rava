@@ -7,6 +7,7 @@ import sys
 import os
 from .classfile import parse_class
 from .emitter import write_cargo_project
+from .type_map import load_ergonomic_renames
 
 # JDK 包前缀（binary name 斜线分隔）
 _JDK_PREFIXES = ('java/', 'javax/', 'sun/', 'com/sun/', 'com/oracle/')
@@ -53,6 +54,8 @@ def transpile(java_files: list[str], out_dir: str):
 
     # 4. 生成 Rust
     print(f"[4/4] 生成 Rust → {out_dir}/")
+    # 预加载 ergonomic @jvm_rename 指令（T39：为 ergonomic 层腾出干净方法名）
+    load_ergonomic_renames(os.path.abspath(out_dir))
     write_cargo_project(out_dir, class_infos, jdk_class_infos, java_files)
     print(f"\n✓ 完成。运行方式：\n  cd {out_dir} && cargo run --release")
 

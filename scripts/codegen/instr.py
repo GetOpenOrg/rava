@@ -66,7 +66,7 @@ from .type_map import (
     NEWARRAY_TYPES,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
     parse_descriptor_params, parse_descriptor_return,
-    mangle_name,
+    mangle_name, get_ergonomic_jvm_rename,
 )
 
 from .types import Instr
@@ -572,6 +572,10 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     visible = [m for m in target_ci.methods if not m.is_synthetic]
     same = sum(1 for m in visible if m.name == mname)
     if same <= 1:
+        # 非重载方法：检查 T39 ergonomic @jvm_rename 指令
+        erg_rename = get_ergonomic_jvm_rename(target_ci.name, mname)
+        if erg_rename is not None:
+            return erg_rename
         return mname
     desc_m = re.search(r':(\([^)]*\)\S+)', comment)
     raw_desc = desc_m.group(1) if desc_m else ''
