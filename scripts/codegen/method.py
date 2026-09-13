@@ -108,6 +108,18 @@ def _remove_trailing_return_ok(lines: list[str]) -> list[str]:
     return result
 
 
+def _fix_bool_returns(lines: list[str]) -> list[str]:
+    """将 bool 返回方法中的 Ok(1i32)/Ok(0i32) 转换为 Ok(true)/Ok(false)。
+    JVM 中 boolean 用 int 0/1 表示，直接 ireturn 时会生成 Ok(1i32)。"""
+    result = []
+    for line in lines:
+        line = line.replace('Ok(1i32)', 'Ok(true)')
+        line = line.replace('Ok(0i32)', 'Ok(false)')
+        # 也修正裸 return Ok(1i32)
+        result.append(line)
+    return result
+
+
 def _add_ok_return(lines: list[str], rust_ret: str) -> list[str]:
     """在方法末尾添加正确的 Ok(?) 返回表达式。"""
     result = list(lines)
@@ -376,6 +388,8 @@ def gen_method_body(
 
     # ── 其他方法的后处理 ──────────────────────────────────────────
     if not is_ctor:
+        if rust_ret == 'bool':
+            lines = _fix_bool_returns(lines)
         lines = _remove_trailing_return_ok(lines)
         lines = _add_ok_return(lines, rust_ret)
 
