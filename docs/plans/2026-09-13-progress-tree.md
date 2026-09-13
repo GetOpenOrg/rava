@@ -34,6 +34,9 @@
 │   │       从 $JAVA_HOME/jmods/java.base.jmod 解析 .class 字节流
 │   └── ✅ Cargo workspace 生成
 │           三层 crate：java_runtime / jdk_classes / user
+│           java_runtime 提交到 git（VM 基础设施）
+│           jdk_classes / user gitignored（代码生成产物）
+│           native_impls/ 在 workspace 根，提交到 git
 │
 ├── 第 2 层：用户类翻译（HelloWorld.java → hello_world.rs）
 │   ├── ✅ 类结构生成（struct + impl）
@@ -78,11 +81,8 @@
 │   ├── ✅ 调用链路上方法调用 mangle（_mangle_if_overloaded）
 │   │       原因：invokestatic Objects.requireNonNull 有两个重载，调用名需 mangle
 │   │       解决：instr.py 查 registry 检测重载数，手写运行时类跳过 mangle
-│   └── ❌ $-命名的 .rs 文件（array_list$itr.rs 等）残留
-│           现状：output-survey agent 已清理历史遗留，但生成器本身未修复
-│           原因：to_snake() 未处理 $ 符号，内部类名直接变文件名
-│           解决方案：emitter.py 的 mod_name 生成时先 replace('$', '_')，
-│                     mod.rs 中的 mod 声明同步清理
+│   └── ✅ $-命名的 .rs 文件（array_list$itr.rs 等）残留
+│           解决：to_snake() 已有 name.replace('$', '_')，0 个残留文件已验证
 │
 ├── 第 5 层：invokevirtual / invokestatic 指令翻译
 │   ├── ✅ invokevirtual 统一路径（obj.method(args)?）
@@ -186,25 +186,25 @@
 │           Math：全部是 native，需要 native_impls/ 逐一实现
 │
 ├── 第 8 层：native_impls/ 基础设施（Phase E）
-│   ├── 🔜 目录结构建立
-│   │       output/native_impls/java/lang/system.rs
-│   │       output/native_impls/java/lang/string.rs
-│   │       output/native_impls/java/io/print_stream.rs
+│   ├── ⚠️ 目录结构建立
+│   │       ✅ output/native_impls/java/lang/system.rs（currentTimeMillis/nanoTime/arraycopy）
+│   │       ⚠️ output/native_impls/java/lang/string.rs（文件存在但实现为空）
+│   │       ❌ output/native_impls/java/io/print_stream.rs（尚未建立）
 │   │
-│   ├── 🔜 HelloWorld 最小 native 集合实现
-│   │       System.currentTimeMillis → std::time::SystemTime
-│   │       System.arraycopy → slice::copy_from_slice
-│   │       PrintStream.write(byte[]) → std::io::Write::write
-│   │       String.charAt → str::chars().nth()
-│   │       String.length → str::len()
+│   ├── ⚠️ HelloWorld 最小 native 集合实现
+│   │       ✅ System.currentTimeMillis → std::time::SystemTime
+│   │       ✅ System.arraycopy → 标记 not-needed（HelloWorld 不调用）
+│   │       ❌ PrintStream.write(byte[]) → 尚未实现
+│   │       ❌ String.charAt / String.length → 尚未实现
 │   │
-│   └── 🔜 build.rs 构建阻断
-│           扫描 #[java_native] 属性，对 needed 状态的 native 方法报错
-│           防止漏实现的 native 方法在运行时才发现
+│   └── ⚠️ build.rs 构建阻断
+│           ✅ build.rs 已从模板生成，扫描 ../native_impls/，维护 ../native_status.toml
+│           ❌ JAVA_RTA_STRICT=1 严格模式未默认开启（needed 方法只警告，不阻断编译）
 │
 ├── 第 9 层：手写 runtime 清理（最终态）
 │   ├── 🔜 删除 runtime.py 中所有 Rust 字符串内容
-│   ├── 🔜 删除 java_runtime crate（或仅保留 error.rs / types.rs）
+│   ├── 🔜 删除 java_runtime/src/java/ 子目录（手写 Java 类实现）
+│   │       注：java_runtime/src/error.rs 和 types.rs 是 VM 基础设施，永久保留
 │   ├── 🔜 删除 _JAVA_RUNTIME_CLASSES 排除集（不再需要）
 │   ├── 🔜 删除 _JAVA_RUNTIME_SHORT_NAMES（不再需要 mangle 豁免）
 │   └── 🔜 删除 _COLL_IR_TYPES 硬编码
