@@ -741,16 +741,19 @@ T29 (构建阻断)        ─ 依赖 T27
 ---
 
 ### T34 · LocalVariableTypeTable 解析（泛型局部变量）
-**状态**：`[ ]`  
-**文件**：`scripts/codegen/classfile.py`、`scripts/codegen/instr.py`
+**状态**：`[x]` 已完成（commit `223a54c`）  
+**文件**：`scripts/codegen/classfile.py`、`scripts/codegen/types.py`、`scripts/codegen/stack.py`、`scripts/codegen/method.py`、`scripts/codegen/instr.py`
 
 **背景**：`LocalVariableTable` 给出局部变量名，但对泛型变量只有裸描述符（如 `Ljava/lang/Object;`）。`LocalVariableTypeTable` 保存带泛型签名的类型（如 `TE;` 表示类型变量 `E`）。
 
-**目标**：
-- `classfile.py` 解析 `LocalVariableTypeTable` 属性，存入 `ParsedMethod.local_types`（slot → Signature 映射）
-- `instr.py` 在生成 `let` 语句时，用 `local_types[slot]` 得到精确泛型类型，替代 `Object`
+**实现**：
+- `classfile.py`：解析 LVTT 子属性，`slot → Signature` 映射
+- `types.py`：`ParsedMethod.local_types` 字段存储 LVTT 映射
+- `method.py`：预计算 `slot_hint_types`（调用 `parse_field_type` 转换），传入所有 `StackSim` 构造器
+- `stack.py`：`store_local` 在栈顶类型为 `Object` 时用 LVTT hint 覆盖；`Var+RsGeneric` 时 `let_ty=None` 避免 `newarray` 类型不匹配
+- `instr.py`：Vec 类型参数从 `&arr` 改为 `arr.clone()`，修复 `Rc<RefCell<Vec<T>>>` 传参
 
-**验收**：TestGenerics 的局部变量 `first`、`second`、`third` 生成类型为 `String` 而非 `Object`。
+**验收结果**：TestGenerics `first/second/third` 已通过 `checkcast` 得到 `String` 类型（LVTT 与 checkcast 结果一致）；类型变量场景（`TE;` → `E`）在泛型类方法（如 ArrayList.set 的 `oldValue: E`）中生效，但这些方法目前是 stub 所以效果不可见。
 
 ---
 
