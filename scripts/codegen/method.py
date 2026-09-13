@@ -176,16 +176,16 @@ def gen_method_body(
     if sig_param_types and len(sig_param_types) == len(param_types):
         rust_param_types = [
             sp if sp in _class_tparams else jp
-            for sp, jp in zip(sig_param_types, [jvm_to_rust(t) for t in param_types])
+            for sp, jp in zip(sig_param_types, [jvm_to_rust(t, registry) for t in param_types])
         ]
     else:
-        rust_param_types = [jvm_to_rust(t) for t in param_types]
+        rust_param_types = [jvm_to_rust(t, registry) for t in param_types]
 
     # 返回类型：如果泛型签名返回值是类型变量，优先使用
     if sig_ret_type and sig_ret_type in _class_tparams:
         rust_ret = sig_ret_type
     else:
-        rust_ret = jvm_to_rust(method.return_type)
+        rust_ret = jvm_to_rust(method.return_type, registry)
     is_ctor          = method.is_constructor
     is_static        = method.is_static
 

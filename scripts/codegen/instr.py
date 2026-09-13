@@ -322,7 +322,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         obj_expr, obj_ty = sim.pop()
         if comment:
             _, fname, fdesc = _parse_field_ref(comment)
-            ftype = jvm_to_rust(fdesc) if fdesc else 'Object'
+            ftype = jvm_to_rust(fdesc, registry) if fdesc else 'Object'
             sim.push(RawExpr(f"{render_expr(obj_expr)}.{fname}.get()"), RsNamed(ftype))
         else:
             sim.push(RawExpr(f"{render_expr(obj_expr)}.field"), I32)
@@ -339,7 +339,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'getstatic':
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
         if field_name:
-            ty_str = jvm_to_rust(descriptor) if descriptor else 'Object'
+            ty_str = jvm_to_rust(descriptor, registry) if descriptor else 'Object'
             sim.push(StaticFieldRef(cls, field_name, RsNamed(ty_str)), RsNamed(ty_str))
         else:
             sim.push(RawExpr(f"/* getstatic {comment} */"), RsNamed('Object'))
@@ -411,7 +411,15 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         pass
 
     # ── checkcast / instanceof ──
-    elif op == 'checkcast': pass
+    elif op == 'checkcast':
+        # 更新栈顶值的 Rust 类型为 cast 目标类型，让后续方法调用能正确类型检查
+        if comment and sim.stack:
+            if comment.startswith('['):
+                cast_rust = jvm_to_rust(comment, registry)
+            else:
+                cast_rust = jvm_to_rust(f'L{comment};', registry)
+            expr, _ = sim.pop()
+            sim.push(expr, RsNamed(cast_rust))
     elif op == 'instanceof': sim.push(Lit('true'), BOOL)
 
     # ── invokedynamic ──
@@ -602,7 +610,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         needs_q = True
 
     q = '?' if needs_q else ''
-    rust_ret = jvm_to_rust(ret)
+    rust_ret = jvm_to_rust(ret, registry)
     if rust_ret == '()':
         sim.emit(RawStmt(f"{call}{q};"))
     else:
@@ -649,7 +657,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
 
     # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
     arg_str = ', '.join(args)
-    rust_ret = jvm_to_rust(ret)
+    rust_ret = jvm_to_rust(ret, registry)
     if rust_ret == '()':
         sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))
     else:
