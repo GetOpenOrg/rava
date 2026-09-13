@@ -32,7 +32,9 @@
 
 | 属性名 | 作用域 | 解析状态 | 使用状态 | 说明 | 优先级 |
 |--------|--------|----------|----------|------|--------|
-| `Signature` | Class / Field / Method | ✅ 已解析 | 🟢 已用 | 泛型签名，`ClassInfo.generic_signature` → `parse_class_type_params()` → 生成 `struct ArrayList<E>`；`ParsedMethod.generic_signature` → method.py 推断参数/返回类型 | — |
+| `Signature` | Class | ✅ 已解析 | 🟢 已用 | `ClassInfo.generic_signature` → `parse_class_type_params()` → 生成 `struct ArrayList<E>` 等泛型结构 | — |
+| `Signature` | Method | ✅ 已解析 | 🟢 已用 | `ParsedMethod.generic_signature` → method.py 推断泛型参数/返回类型 | — |
+| `Signature` | Field | ✅ 已解析 | 🟡 已存储未使用 | `FieldInfo.generic_signature` 存有字段泛型类型（如 `E`），但 emitter 生成字段时仍用裸描述符，`elementData` 生成为 `JField<Object>` 而非 `JField<E>` | **中** |
 
 ### 3. 常量与初始化
 
@@ -114,9 +116,9 @@
 | 类别 | 数量 |
 |------|------|
 | 总属性数（JVMS Java 21） | 30 |
-| ✅ 已解析 | 7（`Code`、`LocalVariableTable`、`Signature`、`Exceptions`、`BootstrapMethods`、`SourceFile`、`Synthetic`） |
-| 🟢 已用于 codegen | 5（`Code`、`LocalVariableTable`、`BootstrapMethods`、`Signature`、`Synthetic`） |
-| 🟡 已存储未使用 | 2（`Exceptions`、`SourceFile`） |
+| ✅ 已解析 | 7（`Code`、`LocalVariableTable`、`Signature`×3、`Exceptions`、`BootstrapMethods`、`SourceFile`、`Synthetic`） |
+| 🟢 已用于 codegen | 5（`Code`、`LocalVariableTable`、`BootstrapMethods`、`Signature`[Class+Method]、`Synthetic`） |
+| 🟡 已存储未使用 | 3（`Signature`[Field]、`Exceptions`、`SourceFile`） |
 | ❌ 未解析 | 23 |
 
 ---
@@ -129,24 +131,28 @@
 
 ### 中优先级（改善代码生成质量）
 
-1. **`ConstantValue`（解析+使用）** — `static final` 字段正确初始化
+1. **`Signature`（Field 级，使用）** — 生成字段的精确泛型类型
+   - 影响：`elementData: JField<Object>` → `JField<E>`，struct 内部类型更准确
+   - 改动：emitter 在生成字段时优先用 `FieldInfo.generic_signature`，回退到 `descriptor`
+
+2. **`ConstantValue`（解析+使用）** — `static final` 字段正确初始化
    - 影响：`public static final int MAX = 100` 等常量
 
-2. **`MethodParameters`（解析+使用）** — 补全方法参数名
+4. **`MethodParameters`（解析+使用）** — 补全方法参数名
    - 影响：LocalVariableTable 有时不含参数名（如编译时未带 `-g`）
 
-3. **`InnerClasses`（解析+使用）** — 生成正确的嵌套 mod 结构
+5. **`InnerClasses`（解析+使用）** — 生成正确的嵌套 mod 结构
    - 影响：匿名类、内部类的翻译
 
-4. **`LocalVariableTypeTable`（解析+使用）** — 泛型局部变量的精确类型
+6. **`LocalVariableTypeTable`（解析+使用）** — 泛型局部变量的精确类型
    - 影响：配合 Signature 可将 `let x: Object` 收窄为具体泛型类型
 
 ### 低优先级（调试信息、历史遗留）
 
-5. `Exceptions`（使用）— 生成更精确的 `Result<T, E>` 错误类型
-6. `Deprecated`（解析+使用）— 生成 `#[deprecated]` 属性
-7. `Record`（解析+使用）— Java record 类映射为 Rust struct
-8. 注解相关属性 — 大多数对代码生成无实际影响
+7. `Exceptions`（使用）— 生成更精确的 `Result<T, E>` 错误类型
+8. `Deprecated`（解析+使用）— 生成 `#[deprecated]` 属性
+9. `Record`（解析+使用）— Java record 类映射为 Rust struct
+10. 注解相关属性 — 大多数对代码生成无实际影响
 
 ---
 
@@ -156,7 +162,7 @@
 classfile.py 解析的属性（按出现位置）：
 
 字段属性：
-  ✅ Signature → FieldInfo.generic_signature
+  ✅ Signature → FieldInfo.generic_signature（已存储，emitter 尚未使用，字段类型仍用裸描述符）
 
 方法属性：
   ✅ Code     → ParsedMethod（字节码 + 异常表）
