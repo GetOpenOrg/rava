@@ -1,44 +1,208 @@
 # native_status.toml — 由 build.rs 自动维护
 # status: "implemented" | "needed" | "stub" | "not-needed"
 
-[java.lang.Object]
-clone = "implemented"
-getClass = "implemented"
-hashCode = "implemented"
-notify = "implemented"
-notifyAll = "implemented"
-wait0 = "implemented"
+[java.io.Flushable]
+flush = "needed",
 
-[java.lang.System]
-arraycopy = "implemented"
-currentTimeMillis = "implemented"
-identityHashCode = "needed"
-mapLibraryName = "needed"
-nanoTime = "implemented"
-registerNatives = "implemented"
-setErr0 = "implemented"
-setIn0 = "implemented"
-setOut0 = "implemented"
+[java.io.Writer]
+close = "needed",
+flush = "needed",
+write = "needed",
 
-[java.util.List]
-add = "needed"
-addAll = "needed"
-clear = "needed"
-contains = "needed"
-containsAll = "needed"
-equals = "needed"
-get = "needed"
-hashCode = "needed"
-indexOf = "needed"
-isEmpty = "needed"
-iterator = "needed"
-lastIndexOf = "needed"
-listIterator = "needed"
-remove = "needed"
-removeAll = "needed"
-retainAll = "needed"
-set = "needed"
-size = "needed"
-subList = "needed"
-toArray = "needed"
+[java.lang.Appendable]
+append = "needed",
+
+[java.lang.Class]
+desiredAssertionStatus0 = "needed",
+forName0 = "needed",
+getClassAccessFlagsRaw0 = "needed",
+getClassFileVersion0 = "needed",
+getConstantPool = "needed",
+getDeclaredClasses0 = "needed",
+getDeclaredConstructors0 = "needed",
+getDeclaredFields0 = "needed",
+getDeclaredMethods0 = "needed",
+getDeclaringClass0 = "needed",
+getEnclosingMethod0 = "needed",
+getGenericSignature0 = "needed",
+getInterfaces0 = "needed",
+getModifiers = "needed",
+getNestHost0 = "needed",
+getNestMembers0 = "needed",
+getPermittedSubclasses0 = "needed",
+getPrimitiveClass = "needed",
+getProtectionDomain0 = "needed",
+getRawAnnotations = "needed",
+getRawTypeAnnotations = "needed",
+getRecordComponents0 = "needed",
+getSigners = "needed",
+getSimpleBinaryName0 = "needed",
+getSuperclass = "needed",
+initClassName = "needed",
+isArray = "needed",
+isAssignableFrom = "needed",
+isHidden = "needed",
+isInstance = "needed",
+isInterface = "needed",
+isPrimitive = "needed",
+isRecord0 = "needed",
+registerNatives = "needed",
+setSigners = "needed",
+
+[java.lang.ProcessEnvironment]
+environ = "needed",
+
+[java.lang.Runtime]
+availableProcessors = "needed",
+freeMemory = "needed",
+gc = "needed",
+maxMemory = "needed",
+totalMemory = "needed",
+
+[java.lang.SecurityManager]
+getClassContext = "needed",
+
+[java.lang.StringUTF16]
+isBigEndian = "needed",
+
+[java.nio.ByteBuffer]
+asCharBuffer = "needed",
+asDoubleBuffer = "needed",
+asFloatBuffer = "needed",
+asIntBuffer = "needed",
+asLongBuffer = "needed",
+asReadOnlyBuffer = "needed",
+asShortBuffer = "needed",
+compact = "needed",
+duplicate = "needed",
+get = "needed",
+getChar = "needed",
+getDouble = "needed",
+getFloat = "needed",
+getInt = "needed",
+getLong = "needed",
+getShort = "needed",
+isDirect = "needed",
+put = "needed",
+putChar = "needed",
+putDouble = "needed",
+putFloat = "needed",
+putInt = "needed",
+putLong = "needed",
+putShort = "needed",
+slice = "needed",
+
+[java.nio.CharBuffer]
+asReadOnlyBuffer = "needed",
+charRegionOrder = "needed",
+compact = "needed",
+duplicate = "needed",
+get = "needed",
+getUnchecked = "needed",
+isDirect = "needed",
+order = "needed",
+put = "needed",
+slice = "needed",
+subSequence = "needed",
+toString = "needed",
+
+[java.nio.channels.FileChannel]
+force = "needed",
+lock = "needed",
+map = "needed",
+position = "needed",
+read = "needed",
+size = "needed",
+transferFrom = "needed",
+transferTo = "needed",
+truncate = "needed",
+tryLock = "needed",
+write = "needed",
+
+[java.nio.channels.spi.SelectorProvider]
+openDatagramChannel = "needed",
+openPipe = "needed",
+openSelector = "needed",
+openServerSocketChannel = "needed",
+openSocketChannel = "needed",
+
+[java.nio.charset.Charset]
+contains = "needed",
+newDecoder = "needed",
+newEncoder = "needed",
+
+[java.nio.charset.CharsetDecoder]
+decodeLoop = "needed",
+
+[java.nio.charset.CharsetEncoder]
+encodeLoop = "needed",
+
+[java.nio.charset.spi.CharsetProvider]
+charsetForName = "needed",
+charsets = "needed",
+
+[java.security.Permission]
+equals = "needed",
+getActions = "needed",
+hashCode = "needed",
+implies = "needed",
+
+[java.util.ResourceBundle]
+getKeys = "needed",
+handleGetObject = "needed",
+
+[java.util.SortedMap]
+comparator = "needed",
+entrySet = "needed",
+firstKey = "needed",
+headMap = "needed",
+keySet = "needed",
+lastKey = "needed",
+subMap = "needed",
+tailMap = "needed",
+values = "needed",
+
+[java.util.function.Consumer]
+accept = "needed",
+
+[java.util.function.Function]
+apply = "needed",
+
+[java.util.function.Predicate]
+test = "needed",
+
+[java.util.stream.Stream]
+allMatch = "needed",
+anyMatch = "needed",
+collect = "needed",
+count = "needed",
+distinct = "needed",
+filter = "needed",
+findAny = "needed",
+findFirst = "needed",
+flatMap = "needed",
+flatMapToDouble = "needed",
+flatMapToInt = "needed",
+flatMapToLong = "needed",
+forEach = "needed",
+forEachOrdered = "needed",
+limit = "needed",
+map = "needed",
+mapToDouble = "needed",
+mapToInt = "needed",
+mapToLong = "needed",
+max = "needed",
+min = "needed",
+noneMatch = "needed",
+peek = "needed",
+reduce = "needed",
+skip = "needed",
+sorted = "needed",
+toArray = "needed",
+
+[sun.nio.cs.ArrayDecoder]
+decode = "needed",
+
+[sun.nio.cs.ArrayEncoder]
+encode = "needed",
 

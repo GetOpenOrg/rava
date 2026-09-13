@@ -13,5 +13,9 @@ wheels/
 # Rust 构建产物
 output/target/
 
+# 代码生成产物（由 codegen 脚本生成，不提交）
+output/jdk_classes/
+output/user/
+
 # macOS
 .DS_Store
