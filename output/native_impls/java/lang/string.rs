@@ -10,25 +10,26 @@ fn _from_bytes(bytes: &[i8]) -> std::string::String {
 /// @synthetic
 pub fn from_owned(s: std::string::String) -> String {
     let result = String::default();
-    result.value.set(_to_bytes(&s));
+    result.value.set(Rc::new(RefCell::new(_to_bytes(&s))));
     result
 }
 
 /// @synthetic
 pub fn append(_this: &mut String, s: &String) -> Result<()> {
-    let self_bytes = _this.value.get();
-    let s_bytes = s.value.get();
-    let mut self_str = _from_bytes(&self_bytes);
-    let s_str = _from_bytes(&s_bytes);
+    let self_rc = _this.value.get();
+    let s_rc = s.value.get();
+    let mut self_str = _from_bytes(&self_rc.borrow());
+    let s_str = _from_bytes(&s_rc.borrow());
     self_str.push_str(&s_str);
-    _this.value.set(_to_bytes(&self_str));
+    _this.value.set(Rc::new(RefCell::new(_to_bytes(&self_str))));
     Ok(())
 }
 
 impl std::fmt::Display for String {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let bytes = self.value.get();
-        write!(f, "{}", _from_bytes(&bytes))
+        let rc = self.value.get();
+        let s = _from_bytes(&rc.borrow());
+        write!(f, "{}", s)
     }
 }
 

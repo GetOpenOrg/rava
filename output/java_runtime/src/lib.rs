@@ -15,4 +15,6 @@ pub mod prelude {
     pub use super::types::Field;
     pub use super::java::lang::Object;
     pub use super::java::util::{ArrayList, HashMap, HashSet};
+    pub use std::rc::Rc;
+    pub use std::cell::RefCell;
 }

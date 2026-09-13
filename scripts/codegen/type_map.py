@@ -17,12 +17,12 @@ JVM_RUST: dict[str, str] = {
     'Ljava/lang/Long;':    'i64',
     'Ljava/lang/Double;':  'f64',
     'Ljava/lang/Boolean;': 'bool',
-    '[I': 'Vec<i32>', '[J': 'Vec<i64>',
-    '[F': 'Vec<f32>', '[D': 'Vec<f64>',
-    '[B': 'Vec<i8>',  '[S': 'Vec<i16>',
-    '[C': 'Vec<u16>', '[Z': 'Vec<bool>',
-    '[Ljava/lang/String;': 'Vec<String>',
-    '[Ljava/lang/Object;': 'Vec<Object>',
+    '[I': 'Rc<RefCell<Vec<i32>>>', '[J': 'Rc<RefCell<Vec<i64>>>',
+    '[F': 'Rc<RefCell<Vec<f32>>>', '[D': 'Rc<RefCell<Vec<f64>>>',
+    '[B': 'Rc<RefCell<Vec<i8>>>',  '[S': 'Rc<RefCell<Vec<i16>>>',
+    '[C': 'Rc<RefCell<Vec<u16>>>', '[Z': 'Rc<RefCell<Vec<bool>>>',
+    '[Ljava/lang/String;': 'Rc<RefCell<Vec<String>>>',
+    '[Ljava/lang/Object;': 'Rc<RefCell<Vec<Object>>>',
 }
 
 # newarray 操作数 → (Rust 元素类型, 零值字面量)
@@ -77,14 +77,12 @@ def jvm_to_rust(t: str, registry: dict | None = None) -> str:
         return 'Object'
     if t.startswith('['):
         elem = jvm_to_rust(t[1:], registry)
-        return f'Vec<{elem}>'
+        return f'Rc<RefCell<Vec<{elem}>>>'
     return 'Object'
 
 
 def sig_type(rt: str) -> str:
-    """函数签名中 Vec<T> → &[T]（数组按引用传递，避免 ownership 转移）"""
-    if rt.startswith('Vec<'):
-        return f"&[{rt[4:-1]}]"
+    """函数签名中数组类型直接传递（Rc clone 语义，共享所有权）"""
     return rt
 
 

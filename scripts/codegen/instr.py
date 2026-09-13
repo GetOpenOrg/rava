@@ -358,14 +358,14 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         count_expr, _ = sim.pop()
         elem_t, zero = NEWARRAY_TYPES.get(operand.strip(), ('i32', '0i32'))
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: Vec<{elem_t}> = vec![{zero}; {render_expr(count_expr)} as usize];"))
+        sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![{zero}; {render_expr(count_expr)} as usize]));"))
         sim.push(Var(v), RsGeneric('Vec', [RsNamed(elem_t)]))
     elif op == 'anewarray':
         count_expr, _ = sim.pop()
         cls = short_cls(comment) or 'Object'
         elem_t = jvm_to_rust(f'L{cls};') if cls != 'Object' else 'Object'
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: Vec<{elem_t}> = Vec::with_capacity({render_expr(count_expr)} as usize);"))
+        sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(Vec::with_capacity({render_expr(count_expr)} as usize)));"))
         sim.push(Var(v), RsGeneric('Vec', [RsNamed(elem_t)]))
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
@@ -377,22 +377,22 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op in ('iastore', 'bastore', 'sastore', 'castore',
                 'lastore', 'fastore', 'dastore', 'aastore'):
         val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize] = {render_expr(val_expr)};"))
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {render_expr(val_expr)};"))
     elif op in ('iaload', 'baload', 'saload', 'caload'):
         idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize]"), I32)
+        sim.push(RawExpr(f"{render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize]"), I32)
     elif op in ('laload', 'faload', 'daload'):
         idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
         ty = {'l': I64, 'f': F32, 'd': F64}.get(op[0], I32)
-        sim.push(RawExpr(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize]"), ty)
+        sim.push(RawExpr(f"{render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize]"), ty)
     elif op == 'aaload':
         idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
         elem_ty_str = arr_ty_str[4:-1] if arr_ty_str.startswith('Vec<') else 'Object'
-        sim.push(RawExpr(f"{render_expr(arr_expr)}[{render_expr(idx_expr)} as usize].clone()"), RsNamed(elem_ty_str))
+        sim.push(RawExpr(f"{render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize].clone()"), RsNamed(elem_ty_str))
     elif op == 'arraylength':
         arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(arr_expr)}.len() as i32)"), I32)
+        sim.push(RawExpr(f"({render_expr(arr_expr)}.borrow().len() as i32)"), I32)
 
     # ── 方法调用 ──
     elif op == 'invokestatic':
