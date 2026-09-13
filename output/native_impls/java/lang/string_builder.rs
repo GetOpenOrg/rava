@@ -1,5 +1,5 @@
 // StringBuilder 内部字符串内容通过注入字段 _sb 存储（Rc<RefCell<String>> 支持共享可变）。
-/// @field _sb: Field<Rc<RefCell<std::string::String>>>
+/// @field _sb: JField<Rc<RefCell<std::string::String>>>
 
 /// @synthetic
 pub fn new_default() -> Result<StringBuilder> {

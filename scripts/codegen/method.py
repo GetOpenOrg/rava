@@ -272,7 +272,7 @@ def gen_method_body(
         if inst_fields and class_tparams:
             # 命名 struct，有实例字段且有泛型参数
             parts_init = [
-                f"{_safe_fname(f.name)}: Field::new({rust_default(jvm_to_rust(f.descriptor))})"
+                f"{_safe_fname(f.name)}: JField::new({rust_default(jvm_to_rust(f.descriptor))})"
                 for f in inst_fields
             ]
             parts_init.append("_phantom: std::marker::PhantomData")
@@ -280,7 +280,7 @@ def gen_method_body(
         elif inst_fields:
             # 命名 struct，只有实例字段，无泛型参数
             parts_init = [
-                f"{_safe_fname(f.name)}: Field::new({rust_default(jvm_to_rust(f.descriptor))})"
+                f"{_safe_fname(f.name)}: JField::new({rust_default(jvm_to_rust(f.descriptor))})"
                 for f in inst_fields
             ]
             struct_init = f"Self {{ {', '.join(parts_init)} }}"

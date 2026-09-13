@@ -374,21 +374,14 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         for pkg_path in jdk_crate_pkg_paths:
             cross_imports.append(f"use {prefix}::{pkg_path}::*;")
 
-    # 结构体字段中使用的 Field<T> 前缀：
-    # 若本类名为 Field（如 java/lang/reflect/Field），本地 struct 会遮蔽 prelude 中的 Field<T>，
-    # 需用全限定路径；否则显式 import 覆盖 glob import 中可能引入的同名 Field。
-    is_named_field = short_cls(ci.name) == 'Field'
-    field_type_prefix = "java_runtime::types::Field" if is_named_field else "Field"
-    field_import = [] if is_named_field else ["use java_runtime::types::Field;"]
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
         "use java_runtime::prelude::*;",
         *cross_imports,
-        # 显式 import 覆盖 glob import 中可能引入的同名类型（如 java/lang/reflect/Field）
-        *field_import,
         "",
         _java_class_attr(ci, compiled=True),
     ]
+    field_type_prefix = "JField"
 
     inst_fields = [f for f in ci.fields if not f.is_static]
 
