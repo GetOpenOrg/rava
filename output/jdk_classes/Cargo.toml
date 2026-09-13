@@ -8,4 +8,5 @@ name = "jdk_classes"
 path = "src/lib.rs"
 
 [dependencies]
-java_runtime = { path = "../java_runtime" }
+java_runtime    = { path = "../java_runtime" }
+java_rta_macros = { path = "../java_rta_macros" }

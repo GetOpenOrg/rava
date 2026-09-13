@@ -83,10 +83,10 @@ def _access_str(flags: int) -> str:
 
 
 def _java_class_attr(ci: ClassInfo, compiled: bool = False) -> str:
-    """生成 #[java_class(...)] 属性块，供 build.rs 解析类层次。
+    """生成 #[java_class(...)] 属性块。
 
-    compiled=True：包裹在 cfg_attr(any(), ...) 内，用于参与 Rust 编译的用户类文件，
-    避免未注册属性导致的编译错误（any() 永远为 false，inner attr 不被校验）。
+    compiled=True：生成真实的 #[java_rta_macros::java_class(...)]，proc-macro 会自动派生
+                   Into<Object>、From<Object>、Debug（Object 类除外）。
     compiled=False：原生属性格式，用于不参与编译的 JDK 元数据存根文件。
     """
     binary_name = ci.name
@@ -103,7 +103,11 @@ def _java_class_attr(ci: ClassInfo, compiled: bool = False) -> str:
     ]
     inner = '\n'.join(inner_lines)
     if compiled:
-        return f'#[cfg_attr(any(), java_class(\n{inner}\n))]'
+        # Object 类自身不使用宏（from_any/downcast 定义在 Object 上，循环依赖）
+        struct_name = ci.name.split('/')[-1]
+        if struct_name == 'Object':
+            return f'#[cfg_attr(any(), java_class(\n{inner}\n))]'
+        return f'#[java_rta_macros::java_class(\n{inner}\n)]'
     else:
         return f'#[java_class(\n{inner}\n)]'
 
@@ -568,35 +572,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
     parts.append(f"{impl_header} {{\n{impl_body}\n}}\n")
 
-    # 自动生成 Into<Object> / From<Object> trait impl（所有非 Object 类均需要）
-    # Into<Object>：将该类型装入 Object（JVM upcasting）
-    # From<Object>：从 Object 中取出该类型（JVM checkcast / downcasting）
-    if struct_name != 'Object':
-        if class_type_params:
-            tp_str  = ', '.join(class_type_params)
-            bd_str  = ', '.join(f"{p}: Clone + 'static" for p in class_type_params)
-            full_ty = f"{struct_name}<{tp_str}>"
-            parts.append(
-                f"impl<{bd_str}> Into<Object> for {full_ty} {{\n"
-                f"    fn into(self) -> Object {{ Object::from_any(self) }}\n"
-                f"}}\n"
-            )
-            parts.append(
-                f"impl<{bd_str}> From<Object> for {full_ty} {{\n"
-                f"    fn from(obj: Object) -> {full_ty} {{ obj.downcast::<{full_ty}>() }}\n"
-                f"}}\n"
-            )
-        else:
-            parts.append(
-                f"impl Into<Object> for {struct_name} {{\n"
-                f"    fn into(self) -> Object {{ Object::from_any(self) }}\n"
-                f"}}\n"
-            )
-            parts.append(
-                f"impl From<Object> for {struct_name} {{\n"
-                f"    fn from(obj: Object) -> {struct_name} {{ obj.downcast::<{struct_name}>() }}\n"
-                f"}}\n"
-            )
+    # Into<Object> / From<Object> / Debug 由 #[java_rta_macros::java_class] proc-macro 自动生成
+    # （Object 类走手写路径 java_runtime/，不经过此函数）
 
     # 若存在同名 _ergonomic.rs，则直接 include! 到生成文件顶层（不在 mod _native 内）
     # 用于 ergonomic 泛型方法：impl<E: Into<Object> + From<Object>> Collection<E> { add/get_item/... }

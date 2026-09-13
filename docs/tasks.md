@@ -842,7 +842,7 @@ T29 (构建阻断)        ─ 依赖 T27
 ---
 
 ### T40 · `java_rta_macros` proc-macro crate
-**状态**：`[ ]`  
+**状态**：`[x]` 完成  
 **文件**：新建 `java_rta_macros/` crate
 
 **目标**：将 `cfg_attr(any(), java_class(...))` 中的死属性变为真实激活的 proc-macro，自动为所有 java class 生成：`Into<Object>`、`From<Object>`、`Display`、`Debug`；用户自定义 struct 也可使用 `#[java_class]`

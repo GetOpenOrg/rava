@@ -12,5 +12,6 @@ name = "test_array_list_rust"
 path = "../../tests/test_array_list_rust.rs"
 
 [dependencies]
-java_runtime = { path = "../java_runtime" }
-jdk_classes  = { path = "../jdk_classes" }
+java_runtime    = { path = "../java_runtime" }
+java_rta_macros = { path = "../java_rta_macros" }
+jdk_classes     = { path = "../jdk_classes" }
