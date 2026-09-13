@@ -375,7 +375,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             cross_imports.append(f"use {prefix}::{pkg_path}::*;")
 
     parts: list[str] = [
-        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports)]",
+        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]",
         "use java_runtime::prelude::*;",
         *cross_imports,
         "",
@@ -450,7 +450,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         include_path = ups + _native_rel_file
         native_mod_lines = [
             'mod _native {',
-            '    #![allow(unused_imports, dead_code, unused_variables, non_snake_case)]',
+            '    #![allow(unused_imports, dead_code, unused_variables, non_snake_case, non_camel_case_types)]',
             '    use java_runtime::prelude::*;',
             '    use super::*;',
         ]
@@ -662,7 +662,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # jdk_classes/src/lib.rs
     top_jdk = sorted(jdk_mod_tree.get(jdk_src, set()))
     jdk_lib_lines = [
-        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports)]',
+        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
         *[_mod_decl(m) for m in top_jdk],
         '',
     ]
@@ -737,7 +737,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     use_path = '::'.join(pkg_parts + [main_class]) if pkg_parts else f'{mod_name}::{main_class}'
 
     main_lines = [
-        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports)]',
+        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
         *[f'mod {m};' for m in top_user_mods],
         f'use {use_path};',
         '',
