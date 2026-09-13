@@ -757,6 +757,23 @@ T29 (构建阻断)        ─ 依赖 T27
 
 ---
 
+### T35 · Autoboxing + HashMap/HashSet native 实现
+**状态**：`[x]` 已完成（commit `2f692f1`）  
+**文件**：`scripts/codegen/instr.py`、`output/java_runtime/src/java/lang/object.rs`、`output/native_impls/java/io/print_stream.rs`、`output/native_impls/java/util/hash_map.rs`、`output/native_impls/java/util/hash_set.rs`
+
+**背景**：Java primitive → Object 参数传递时需要自动装箱；生成代码对 `ArrayList<Integer>` 等集合传入 `i32` 但方法期望 `Object`，导致 10 处编译错误。HashMap/HashSet 的 put/get/containsKey/add/contains 均为 stub。
+
+**实现**：
+- `instr.py`：`_gen_invokevirtual` 中对所有传入 Object 参数的值统一插入 `.into()`（含 primitive）
+- `object.rs`：`impl From<i32/i64/...> for Object`；`PartialEq`（primitive 值比较 + ptr_eq）；`Display` 展示 primitive 值；`fmt_primitive()` 供 jdk_classes 扩展
+- `print_stream.rs`：新增 `println__z`、`println__j`、`println__obj`；后者在 jdk_classes 上下文 downcast String 正确显示
+- `hash_map.rs`：put/get/containsKey/size/isEmpty；`Vec<(Object,Object)>` 存入 `table` 字段；`_obj_eq` 支持 String 内容比较
+- `hash_set.rs`：add/contains/size/isEmpty；`Vec<Object>` 存入 `map` 字段
+
+**验收**：TestP3 输出 `3 / 20 / 3 / 2 / true / 2 / true` ✓
+
+---
+
 **阶段七任务依赖**：
 
 ```
@@ -765,6 +782,7 @@ T31 (checkcast 类型擦除)  ─ 依赖 T30
 T32 (字段 Signature 使用) ─ 依赖 T31
 T33 (单 crate 迁移)       ─ 依赖 T32
 T34 (LocalVariableTypeTable) ─ 依赖 T32
+T35 (Autoboxing + HashMap/HashSet) ─ 依赖 T34（已完成）
 ```
 
 **最优执行序**：T30 → T31 → T32（已全部完成）→ T33、T34（并行，待执行）
