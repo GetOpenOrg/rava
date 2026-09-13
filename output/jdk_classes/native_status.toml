@@ -4,15 +4,6 @@
 [java.io.Flushable]
 flush = "needed"
 
-[java.io.ObjectInputStream$GetField]
-defaulted = "needed"
-get = "needed"
-getObjectStreamClass = "needed"
-
-[java.io.ObjectOutputStream$PutField]
-put = "needed"
-write = "needed"
-
 [java.io.Writer]
 close = "needed"
 flush = "needed"
@@ -73,18 +64,6 @@ getClassContext = "needed"
 
 [java.lang.StringUTF16]
 isBigEndian = "needed"
-
-[java.lang.System$Logger]
-getName = "needed"
-isLoggable = "needed"
-log = "needed"
-
-[java.lang.System$LoggerFinder]
-getLogger = "needed"
-
-[java.lang.Throwable$PrintStreamOrWriter]
-lock = "needed"
-println = "needed"
 
 [java.nio.ByteBuffer]
 asCharBuffer = "needed"
@@ -167,21 +146,6 @@ equals = "needed"
 getActions = "needed"
 hashCode = "needed"
 implies = "needed"
-
-[java.util.Formatter$FormatString]
-index = "needed"
-print = "needed"
-toString = "needed"
-
-[java.util.ImmutableCollections$AbstractImmutableSet]
-hashCode = "needed"
-
-[java.util.Map$Entry]
-equals = "needed"
-getKey = "needed"
-getValue = "needed"
-hashCode = "needed"
-setValue = "needed"
 
 [java.util.ResourceBundle]
 getKeys = "needed"

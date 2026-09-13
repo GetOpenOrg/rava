@@ -12,6 +12,7 @@ JVM 字节码指令 → Rust 语句转换。
 
 import re
 from .stack import StackSim, I32, I64, F32, F64, BOOL, UNIT
+from .constants import safe_ident as _safe_field
 
 
 def _escape_str(s: str) -> str:
@@ -120,27 +121,11 @@ def _parse_slot(op: str, operand: str) -> int:
     return int(operand.strip()) if operand else 0
 
 
-_RUST_KEYWORDS = frozenset({
-    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn',
-    'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in',
-    'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return',
-    'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type',
-    'union', 'unsafe', 'use', 'where', 'while',
-})
-
 # java_runtime 手写实现的短类名：这些类的方法名不经过 mangle（hand-written API 已定好名称）
 _JAVA_RUNTIME_SHORT_NAMES: frozenset[str] = frozenset({
     'Object', 'String', 'System', 'ArrayList', 'HashMap', 'HashSet',
     'StringBuilder', 'Math', 'PrintStream',
 })
-
-
-def _safe_field(name: str) -> str:
-    """字段名安全化：替换 $，处理 Rust 关键字冲突。"""
-    name = name.replace('$', '_')
-    if name in _RUST_KEYWORDS:
-        return name + '_'
-    return name
 
 
 def _parse_field_ref(comment: str) -> tuple[str, str, str]:

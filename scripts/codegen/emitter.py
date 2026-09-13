@@ -18,6 +18,7 @@ from .type_map import jvm_to_rust, rust_default, short_cls
 from .method import gen_method_body, _indent
 from .runtime import RUNTIME_FILES
 from .sig_parser import parse_class_type_params
+from .constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
 
 # Access flags
 _ACC_PUBLIC    = 0x0001
@@ -87,21 +88,7 @@ jdk_classes  = { path = "../jdk_classes" }
 
 # ── 辅助 ─────────────────────────────────────────────────────────
 
-_RUST_KEYWORDS = frozenset({
-    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn',
-    'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in',
-    'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return',
-    'self', 'static', 'struct', 'super', 'trait', 'true', 'type',
-    'union', 'unsafe', 'use', 'where', 'while',
-})
-
-
-def _safe_field_name(name: str) -> str:
-    """字段名安全化：$ → _，Rust 关键字加 _。"""
-    name = name.replace('$', '_')
-    if name in _RUST_KEYWORDS:
-        return name + '_'
-    return name
+_safe_field_name = safe_ident
 
 
 def to_snake(name: str) -> str:
@@ -200,21 +187,7 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
         return f'#[{inner}]'
 
 
-_STUB_KEYWORDS = frozenset({
-    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn',
-    'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in',
-    'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return',
-    'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type',
-    'union', 'unsafe', 'use', 'where', 'while',
-})
-
-
-def _safe_param_name(name: str) -> str:
-    """参数名安全化：替换 $，处理 Rust 关键字。"""
-    name = name.replace('$', '_')
-    if name in _STUB_KEYWORDS:
-        name = name + '_'
-    return name
+_safe_param_name = safe_ident
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None) -> str:
@@ -260,35 +233,6 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
         f'    {body}\n'
         f'}}'
     )
-
-
-def _jdk_class_file_path(src_dir: str, binary_name: str) -> str:
-    """将 JDK 类 binary name 转为 src/ 下的元数据文件路径。"""
-    parts = binary_name.split('/')
-    *pkg_parts, class_name = parts
-    mod_name = to_snake(class_name)
-    return os.path.join(src_dir, *pkg_parts, mod_name + '.rs')
-
-
-def _gen_jdk_class_rs(ci: ClassInfo) -> str:
-    """为 JDK 类生成元数据属性文件。
-
-    文件使用 #[java_class] / #[java_native] 属性格式，供 build.rs 扫描维护
-    native_status.toml，不参与 Rust 模块编译（无 mod 声明引用此路径）。
-    """
-    lines = [
-        "// 此文件由 java_rta 自动生成，仅供 build.rs 扫描。不参与 Rust 模块编译。",
-        "",
-        _java_class_attr(ci),
-        "struct _JavaClassMarker;",
-    ]
-    for m in ci.methods:
-        if m.is_native:  # 只记录真正的 native 方法，abstract 接口方法不需要 native 实现
-            lines.append("")
-            lines.append(_java_method_attr(m))
-            sanitized = m.name.replace('<', '_').replace('>', '_')
-            lines.append(f"fn _{sanitized}() {{}}")
-    return '\n'.join(lines) + '\n'
 
 
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,

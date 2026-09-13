@@ -1,10 +1,10 @@
 pub mod character_coding_exception;
 pub mod charset;
-pub mod charset$1;
-pub mod charset$2;
-pub mod charset$3;
-pub mod charset$extended_provider_holder;
-pub mod charset$thread_track_holder;
+pub mod charset_1;
+pub mod charset_2;
+pub mod charset_3;
+pub mod charset_extended_provider_holder;
+pub mod charset_thread_track_holder;
 pub mod charset_decoder;
 pub mod charset_encoder;
 pub mod coder_result;

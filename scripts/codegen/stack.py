@@ -15,6 +15,10 @@ from .rs_ir import (
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
 )
 from .type_map import short_cls as _short_cls
+from .constants import safe_ident
+
+# _safe_name 保留为别名，供 method.py 等现有代码导入
+_safe_name = safe_ident
 
 # ── 类型常量（供外部导入使用）────────────────────────────────────────────────
 I32  = _I32
@@ -30,27 +34,6 @@ _TYPE_CLASSES = get_args(RsType)
 _STMT_CLASSES = tuple(get_args(RsStmt))
 
 
-# Rust 关键字集合（变量名不能与之重名）
-_RUST_KEYWORDS = frozenset({
-    'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn',
-    'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in',
-    'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return',
-    'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type',
-    'union', 'unsafe', 'use', 'where', 'while', 'abstract', 'become',
-    'box', 'do', 'final', 'macro', 'override', 'priv', 'try', 'typeof',
-    'unsized', 'virtual', 'yield',
-})
-
-
-def _safe_name(name: str) -> str:
-    """确保变量名是合法的 Rust 标识符（避开关键字）。"""
-    if name in _RUST_KEYWORDS:
-        return name + '_'
-    # 将 Java 合法但 Rust 不合法的字符替换
-    name = name.replace('$', '_')
-    if name and name[0].isdigit():
-        name = '_' + name
-    return name
 
 
 class StackSim:

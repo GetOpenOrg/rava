@@ -13,6 +13,7 @@
 import re
 from .types import ParsedMethod, ClassInfo
 from .type_map import jvm_to_rust, sig_type, rust_default, mangle_name
+from .constants import safe_ident
 from .stack import StackSim
 from .cfg import find_loops, find_boolean_conditions, cmp_op, neg_cmp_op
 from .instr import sim_instr
@@ -169,8 +170,7 @@ def gen_method_body(
         rust_fn_name = method.name
 
     def _param_name(slot: int, fallback: str) -> str:
-        from .stack import _safe_name
-        return _safe_name(local_names.get(slot, fallback))
+        return safe_ident(local_names.get(slot, fallback))
 
     # ── 函数签名 ──────────────────────────────────────────────────────
     if is_ctor:
@@ -221,11 +221,7 @@ def gen_method_body(
         from .sig_parser import parse_class_type_params
         inst_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
         class_tparams = parse_class_type_params(class_info.generic_signature) if (class_info and class_info.generic_signature) else []
-        def _safe_fname(n: str) -> str:
-            n = n.replace('$', '_')
-            _kw = frozenset({'in', 'type', 'enum', 'mod', 'use', 'fn', 'let',
-                             'mut', 'ref', 'pub', 'self', 'static', 'struct'})
-            return n + '_' if n in _kw else n
+        _safe_fname = safe_ident
         if inst_fields and class_tparams:
             # 命名 struct，有实例字段且有泛型参数
             parts_init = [
