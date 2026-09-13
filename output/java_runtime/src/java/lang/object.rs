@@ -90,6 +90,17 @@ impl From<i8>   for Object { fn from(v: i8)   -> Self { Object::from_any(v) } }
 impl From<i16>  for Object { fn from(v: i16)  -> Self { Object::from_any(v) } }
 impl From<u16>  for Object { fn from(v: u16)  -> Self { Object::from_any(v) } }
 
+// Java unboxing: Object 反向解包为基本类型（T36）
+// 用于 ArrayList<i32>::get(0) → i32 等场景
+impl From<Object> for i32   { fn from(o: Object) -> i32   { o.downcast::<i32>()   } }
+impl From<Object> for i64   { fn from(o: Object) -> i64   { o.downcast::<i64>()   } }
+impl From<Object> for f32   { fn from(o: Object) -> f32   { o.downcast::<f32>()   } }
+impl From<Object> for f64   { fn from(o: Object) -> f64   { o.downcast::<f64>()   } }
+impl From<Object> for bool  { fn from(o: Object) -> bool  { o.downcast::<bool>()  } }
+impl From<Object> for i8    { fn from(o: Object) -> i8    { o.downcast::<i8>()    } }
+impl From<Object> for i16   { fn from(o: Object) -> i16   { o.downcast::<i16>()   } }
+impl From<Object> for u16   { fn from(o: Object) -> u16   { o.downcast::<u16>()   } }
+
 // Object equality: 比较原始类型值，其他类型回退到指针相等（Java Object.equals 语义）
 // 注：String 等引用类型的值比较由 jdk_classes 的 native 实现负责（它能引用 String 类型）
 impl PartialEq for Object {

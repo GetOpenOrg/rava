@@ -587,6 +587,19 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 f"}}\n"
             )
 
+    # 若存在同名 _ergonomic.rs，则直接 include! 到生成文件顶层（不在 mod _native 内）
+    # 用于 ergonomic 泛型方法：impl<E: Into<Object> + From<Object>> Collection<E> { add/get_item/... }
+    if _native_rel_file and workspace_root:
+        ergonomic_rel = _native_rel_file.replace('.rs', '_ergonomic.rs')
+        if os.path.isfile(os.path.join(workspace_root, ergonomic_rel)):
+            pkg_depth = len(ci.name.split('/')) - 1
+            ups = '../' * (pkg_depth + 2)
+            erg_path = ups + ergonomic_rel
+            parts.append(
+                f"// ergonomic API: typed add/get using E directly (T39)\n"
+                f"include!(\"{erg_path}\");\n"
+            )
+
     return '\n'.join(parts)
 
 

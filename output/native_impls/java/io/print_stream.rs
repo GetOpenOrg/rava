@@ -51,3 +51,11 @@ pub fn print__str(_this: &PrintStream, x: String) -> Result<()> {
     print!("{}", x);
     Ok(())
 }
+
+// String 实现 Printable（在 jdk_classes 上下文中定义，因为 String 类型在此）
+impl Printable for String {
+    fn to_print_string(&self) -> std::string::String {
+        format!("{}", self)
+    }
+}
+

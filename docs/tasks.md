@@ -780,7 +780,7 @@ T29 (构建阻断)        ─ 依赖 T27
 > 完整设计见：`docs/plans/2026-09-13-java-like-api-roadmap.md`
 
 ### T36 · Unboxing：Object → primitive 反向转换
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（本 session）  
 **文件**：`output/java_runtime/src/java/lang/object.rs`
 
 **目标**：添加 `impl From<Object> for i32/i64/f32/f64/bool`，使 `ArrayList<i32>` 的 `get(0) -> i32` 可直接工作，不需要用户手动 downcast。
@@ -812,7 +812,7 @@ T29 (构建阻断)        ─ 依赖 T27
 ---
 
 ### T38 · println 统一 trait 派发
-**状态**：`[ ]`  
+**状态**：`[~]` 部分完成（Printable trait 已定义，instr.py 统一生成待实现）  
 **文件**：`output/java_runtime/src/java/lang/object.rs`（定义 Printable）、`output/native_impls/java/io/print_stream.rs`（统一 println）、`scripts/codegen/instr.py`（生成 println(x)）
 
 **目标**：所有 `println__*` 重载统一为 `println<T: Printable>(v: T)`，代码生成器生成统一调用 `println(x)`
@@ -827,8 +827,8 @@ T29 (构建阻断)        ─ 依赖 T27
 ---
 
 ### T39 · 集合 ergonomic 泛型方法层
-**状态**：`[ ]`  
-**文件**：`output/native_impls/java/util/array_list.rs`、`output/native_impls/java/util/hash_map.rs`、`output/native_impls/java/util/hash_set.rs`
+**状态**：`[~]` 部分完成（ergonomic 方法已实现，命名待 T37 统一）  
+**文件**：`output/native_impls/java/util/array_list_ergonomic.rs`、`output/native_impls/java/util/hash_map_ergonomic.rs`、`output/native_impls/java/util/hash_set_ergonomic.rs`（新建）；`scripts/codegen/emitter.py`（添加 _ergonomic.rs 自动 include 机制）
 
 **目标**：`ArrayList<String>` 可直接 `list.add(s)` 和 `let v: String = list.get(0)?`，不需要 `.into()`/`.downcast()`
 
@@ -892,3 +892,48 @@ T40 (proc-macro crate)     ─ 依赖 T36、T37、T39
 
 **最优执行序**：T30 → T31 → T32（已全部完成）→ T33、T34（并行，待执行）
 T36 + T37 + T38（可并行）→ T39 → T40
+
+---
+
+### T41 · ArrayList/HashMap/HashSet 对比测试（Java vs Rust）
+**状态**：`[x]` 已完成（本 session 验证）  
+**文件**：`tests/TestArrayList.java`、`tests/test_array_list_rust.rs`、`output/user/src/test_array_list_ergonomic.rs`
+
+**目标**：证明生成的 Rust API 与 Java 代码高度相似；记录当前差距和目标写法。
+
+**实现**：
+- `tests/TestArrayList.java`：完整 Java 测试（ArrayList/HashMap/HashSet 基本操作）
+- `output/user/src/test_array_list_ergonomic.rs`：可编译的 Rust 对比测试，展示当前写法
+- `tests/test_array_list_rust.rs`：对比文档，Java vs 当前 Rust vs 目标 Rust 逐段注释
+
+**验证结果**：Java 输出与生成 Rust 输出逐行一致（14 行全部匹配）：
+```
+3 / Alice / Bob / Charlie / 3 / 100 / 95 / 3 / 30 / 25 / true / false / 2 / true / false
+```
+
+**待修复（记录）**：
+- T42：for-each 增强循环代码生成 bug（局部变量 slot 复用导致类型冲突，在 TestArrayList.java 中注释标注）
+
+---
+
+### T42 · for-each 增强循环代码生成 bug
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/instr.py`（或 `emitter.py`）
+
+**问题**：Java `for (String name : names)` 编译为 `names.iterator()` + `hasNext()` + `next()` 字节码。JVM 编译器将 for-each 的匿名迭代器存入一个局部变量 slot，该 slot 在循环结束后**被后续变量复用**（Java 编译器的 slot reuse 优化）。代码生成器按 slot 分配 Rust 变量名，导致后续变量被错误地类型声明为 `Iterator<Object>`。
+
+**症状**：
+```rust
+// 生成的错误代码（slot 3 被 Iterator 和 HashMap 复用）：
+let _t13 = names.iterator()?;
+let mut ages: Iterator<Object> = _t13;   // ← 类型错误，应为 HashMap
+ages = HashMap::<Object, Object>::new_default()?;  // ← 赋值类型不符
+```
+
+**根因**：for-each 的合成迭代器变量没有 LVT entry（编译器合成，匿名），但 `ages` 的 LVT entry start_pc 可能覆盖了迭代器的 store 指令，或者 slot 分配逻辑没有正确处理 slot 生命周期边界。
+
+**修复方向**：
+1. 在 for-each 模式检测时（`invokeinterface Iterator.hasNext + next`），将迭代器 slot 的生命周期限定在循环体内，不延续到循环后
+2. 或：识别 for-each 字节码模式，生成 Rust `for v in list.iter()` 语法
+
+**验收**：TestArrayList.java 的 for-each 段可以正确生成并运行
