@@ -652,14 +652,19 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 jdk_pkg_set.add('::'.join(pkg_parts))
         jdk_crate_pkg_paths = sorted(jdk_pkg_set)
 
+        # 按调用链选择性开启字节码翻译；未列出的类保持 stub_bodies=True
+        # 选择性开启字节码翻译的类集合（当前留空，按需添加）
+        _TRANSLATE_BODIES: set[str] = set()
+
         for jdk_ci in jdk_class_infos:
             parts = jdk_ci.name.split('/')          # e.g. ['java','util','ArrayList']
             *pkg_parts, class_name = parts
             mod_name  = to_snake(class_name)
             file_path = os.path.join(jdk_src, *pkg_parts, mod_name + '.rs')
+            use_stubs = jdk_ci.name not in _TRANSLATE_BODIES
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
                                             jdk_crate_pkg_paths=jdk_crate_pkg_paths,
-                                            stub_bodies=True))
+                                            stub_bodies=use_stubs))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:

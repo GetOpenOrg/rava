@@ -183,6 +183,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         else: sim.push(Lit(f"{operand}i32"), I32)
 
+    # ── null ──
+    elif op == 'aconst_null': sim.push(Lit('Object::default()'), RsNamed('Object'))
+
     # ── load ──
     elif op.startswith('iload'): sim.push(*sim.load_local(_parse_slot(op, operand)))
     elif op.startswith('lload'): e, _ = sim.load_local(_parse_slot(op, operand)); sim.push(e, I64)
@@ -529,6 +532,20 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         sim.emit(RawStmt(f"/* invokespecial {comment} */"))
 
 
+def _class_known(cls_short: str, registry: dict | None) -> bool:
+    """判断短类名是否已知（registry 中存在或是 java_runtime 手写类）。"""
+    if not registry:
+        return True
+    if not cls_short or cls_short in _JAVA_RUNTIME_SHORT_NAMES:
+        return True
+    if cls_short in registry:
+        return True
+    for key in registry:
+        if key.rsplit('/', 1)[-1] == cls_short:
+            return True
+    return False
+
+
 def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dict | None) -> str:
     """查找 registry 中 cls_name 类的 mname 方法是否重载，重载则返回 mangled 名，否则原名。
     支持短名（Objects）和全路径名（java/util/Objects）查找。
@@ -581,6 +598,18 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         args.insert(0, f"&{e}" if ty.startswith('Vec<') else e)
 
     needs_q = False  # 是否加 ?（用户类方法返回 Result）
+
+    # 目标类不在 registry（被截断的内部类如 jdk.internal.*）→ 生成 panic 存根
+    if cls and not _class_known(cls, registry):
+        rust_ret = jvm_to_rust(ret, registry)
+        stub_msg = f"stub: {cls}.{mname}"
+        if rust_ret == '()':
+            sim.emit(RawStmt(f'panic!("{stub_msg}");'))
+        else:
+            v = sim.fresh()
+            sim.emit(RawStmt(f'let {v}: {rust_ret} = panic!("{stub_msg}");'))
+            sim.push(Var(v), RsNamed(rust_ret))
+        return
 
     if cls in ('Math', 'java/lang/Math'):
         fn_map = {
