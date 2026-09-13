@@ -32,11 +32,10 @@ def main():
     transpile(java_files, args.out)
 
     if not args.no_run:
-        print(f"\n[run] cargo run --manifest-path {args.out}/Cargo.toml")
-        r = subprocess.run(
-            ['cargo', 'run', '--manifest-path', os.path.join(args.out, 'Cargo.toml')],
-            cwd=os.path.dirname(__file__),
-        )
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        manifest = os.path.join(project_root, args.out, 'Cargo.toml')
+        print(f"\n[run] cargo run")
+        r = subprocess.run(['cargo', 'run'], cwd=os.path.join(project_root, args.out))
         sys.exit(r.returncode)
 
 

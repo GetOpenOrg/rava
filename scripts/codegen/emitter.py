@@ -375,7 +375,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             cross_imports.append(f"use {prefix}::{pkg_path}::*;")
 
     parts: list[str] = [
-        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]",
+        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports)]",
         "use java_runtime::prelude::*;",
         *cross_imports,
         "",
@@ -662,7 +662,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # jdk_classes/src/lib.rs
     top_jdk = sorted(jdk_mod_tree.get(jdk_src, set()))
     jdk_lib_lines = [
-        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]',
+        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports)]',
         *[_mod_decl(m) for m in top_jdk],
         '',
     ]
@@ -737,7 +737,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     use_path = '::'.join(pkg_parts + [main_class]) if pkg_parts else f'{mod_name}::{main_class}'
 
     main_lines = [
-        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case)]',
+        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports)]',
         *[f'mod {m};' for m in top_user_mods],
         f'use {use_path};',
         '',
