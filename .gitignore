@@ -14,8 +14,9 @@ wheels/
 output/target/
 
 # 代码生成产物（由 codegen 脚本生成，不提交）
-output/jdk_classes/
-output/user/
+# Cargo.toml / build.rs 由 git 管理，只忽略生成的 .rs 源文件
+output/jdk_classes/src/
+output/user/src/
 
 # macOS
 .DS_Store

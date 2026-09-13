@@ -1,0 +1,12 @@
+[package]
+name = "user"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "user"
+path = "src/main.rs"
+
+[dependencies]
+java_runtime = { path = "../java_runtime" }
+jdk_classes  = { path = "../jdk_classes" }

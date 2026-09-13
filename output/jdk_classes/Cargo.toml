@@ -1,0 +1,11 @@
+[package]
+name = "jdk_classes"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "jdk_classes"
+path = "src/lib.rs"
+
+[dependencies]
+java_runtime = { path = "../java_runtime" }
