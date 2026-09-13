@@ -167,6 +167,25 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
 
 # ── 公开 API ──────────────────────────────────────────────────────
 
+def parse_field_type(sig: str, class_type_params: list[str]) -> str:
+    """从字段级 Signature 解析 Rust 类型字符串。
+
+    示例（class_type_params=['E']）：
+      'TE;'                        → 'E'
+      'Ljava/lang/String;'         → 'String'
+      'Ljava/util/List<TE;>;'      → 'Object'（泛型参数暂简化）
+      '[TE;'                       → 'Object'（数组暂简化）
+      ''                           → ''（无签名，使用原始描述符）
+    """
+    if not sig:
+        return ''
+    try:
+        rust_type, _ = _parse_one_type(sig, 0, class_type_params)
+        return rust_type
+    except Exception:
+        return ''
+
+
 def parse_class_type_params(sig: str) -> list[str]:
     """从类级 Signature 中提取类型参数名列表。
 

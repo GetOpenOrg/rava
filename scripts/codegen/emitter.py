@@ -16,7 +16,7 @@ import re
 from .types import ClassInfo, FieldInfo, ParsedMethod
 from .type_map import jvm_to_rust, rust_default, short_cls
 from .method import gen_method_body, _indent
-from .sig_parser import parse_class_type_params
+from .sig_parser import parse_class_type_params, parse_field_type
 from .constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
 
 # Access flags
@@ -394,8 +394,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 构建泛型参数字符串（用于 struct 和 impl 头）
     if class_type_params:
         type_params_str = ', '.join(class_type_params)
+        # 结构体和 impl 只需 Clone + 'static；#[derive(Default)] 宏会自动在 impl Default
+        # 的 where 子句中添加 E: Default，不影响普通 use 场景（不需要 E: Default）
         bounds_str = ', '.join(f"{p}: Clone + 'static" for p in class_type_params)
-        struct_generic = f"<{type_params_str}>"
+        struct_generic = f"<{bounds_str}>"
         impl_header   = f"impl<{bounds_str}> {struct_name}<{type_params_str}>"
     else:
         struct_generic = ''
@@ -407,7 +409,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         for f in inst_fields:
             safe_fname = _safe_field_name(f.name)
             field_lines.append("    " + _java_field_attr(f))
-            field_lines.append(f"    pub {safe_fname}: {field_type_prefix}<{jvm_to_rust(f.descriptor)}>,")
+            # 优先用字段级 generic_signature（如 TE; → E），回退到裸描述符
+            field_rust = (parse_field_type(f.generic_signature, class_type_params)
+                          if f.generic_signature else '') or jvm_to_rust(f.descriptor)
+            field_lines.append(f"    pub {safe_fname}: {field_type_prefix}<{field_rust}>,")
         for ef_name, ef_type in cls_extra_fields:
             field_lines.append(f"    pub {ef_name}: {ef_type},")
         # 若有泛型参数但字段中未用到，加 PhantomData 防止 E0392

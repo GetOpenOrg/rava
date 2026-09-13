@@ -1,6 +1,10 @@
 # native_status.toml — 由 build.rs 自动维护
 # status: "implemented" | "needed" | "stub" | "not-needed"
 
+[java.io.Console]
+encoding = "needed",
+ttyStatus = "needed",
+
 [java.io.FileCleanable]
 cleanupClose0 = "needed",
 
@@ -27,6 +31,56 @@ open0 = "needed",
 write = "needed",
 writeBytes = "needed",
 
+[java.io.ObjectStreamClass]
+hasStaticInitializer = "needed",
+initNative = "needed",
+
+[java.lang.Class]
+desiredAssertionStatus0 = "needed",
+forName0 = "needed",
+getClassAccessFlagsRaw0 = "needed",
+getClassFileVersion0 = "needed",
+getConstantPool = "needed",
+getDeclaredClasses0 = "needed",
+getDeclaredConstructors0 = "needed",
+getDeclaredFields0 = "needed",
+getDeclaredMethods0 = "needed",
+getDeclaringClass0 = "needed",
+getEnclosingMethod0 = "needed",
+getGenericSignature0 = "needed",
+getInterfaces0 = "needed",
+getModifiers = "needed",
+getNestHost0 = "needed",
+getNestMembers0 = "needed",
+getPermittedSubclasses0 = "needed",
+getPrimitiveClass = "needed",
+getProtectionDomain0 = "needed",
+getRawAnnotations = "needed",
+getRawTypeAnnotations = "needed",
+getRecordComponents0 = "needed",
+getSigners = "needed",
+getSimpleBinaryName0 = "needed",
+getSuperclass = "needed",
+initClassName = "needed",
+isArray = "needed",
+isAssignableFrom = "needed",
+isHidden = "needed",
+isInstance = "needed",
+isInterface = "needed",
+isPrimitive = "needed",
+isRecord0 = "needed",
+registerNatives = "needed",
+setSigners = "needed",
+
+[java.lang.ClassLoader]
+defineClass0 = "needed",
+defineClass1 = "needed",
+defineClass2 = "needed",
+findBootstrapClass = "needed",
+findLoadedClass0 = "needed",
+registerNatives = "needed",
+retrieveDirectives = "needed",
+
 [java.lang.Double]
 doubleToRawLongBits = "implemented",
 longBitsToDouble = "implemented",
@@ -35,19 +89,19 @@ longBitsToDouble = "implemented",
 floatToRawIntBits = "implemented",
 intBitsToFloat = "implemented",
 
-[java.lang.Module]
-addExports0 = "needed",
-addExportsToAll0 = "needed",
-addExportsToAllUnnamed0 = "needed",
-addReads0 = "needed",
-defineModule0 = "needed",
-
 [java.lang.NullPointerException]
 getExtendedNPEMessage = "implemented",
 
-[java.lang.Shutdown]
-beforeHalt = "needed",
-halt0 = "needed",
+[java.lang.SecurityManager]
+getClassContext = "needed",
+
+[java.lang.StackStreamFactory]
+checkStackWalkModes = "needed",
+
+[java.lang.StackStreamFactory$AbstractStackWalker]
+callStackWalk = "needed",
+fetchStackFrames = "needed",
+setContinuation = "needed",
 
 [java.lang.StackTraceElement]
 initStackTraceElement = "needed",
@@ -55,6 +109,9 @@ initStackTraceElements = "needed",
 
 [java.lang.String]
 intern = "needed",
+
+[java.lang.StringUTF16]
+isBigEndian = "needed",
 
 [java.lang.System]
 arraycopy = "implemented",
@@ -67,6 +124,28 @@ setErr0 = "implemented",
 setIn0 = "implemented",
 setOut0 = "implemented",
 
+[java.lang.Thread]
+clearInterruptEvent = "needed",
+currentCarrierThread = "needed",
+currentThread = "needed",
+dumpThreads = "needed",
+ensureMaterializedForStackWalk = "needed",
+findScopedValueBindings = "needed",
+getNextThreadIdOffset = "needed",
+getStackTrace0 = "needed",
+getThreads = "needed",
+holdsLock = "needed",
+interrupt0 = "needed",
+registerNatives = "needed",
+scopedValueCache = "needed",
+setCurrentThread = "needed",
+setNativeName = "needed",
+setPriority0 = "needed",
+setScopedValueCache = "needed",
+sleep0 = "needed",
+start0 = "needed",
+yield0 = "needed",
+
 [java.lang.Throwable]
 fillInStackTrace = "implemented",
 
@@ -77,4 +156,121 @@ notifyJvmtiMount = "needed",
 notifyJvmtiStart = "needed",
 notifyJvmtiUnmount = "needed",
 registerNatives = "needed",
+
+[java.lang.invoke.MethodHandle]
+invoke = "needed",
+invokeBasic = "needed",
+invokeExact = "needed",
+linkToInterface = "needed",
+linkToNative = "needed",
+linkToSpecial = "needed",
+linkToStatic = "needed",
+linkToVirtual = "needed",
+
+[java.lang.invoke.MethodHandleNatives]
+copyOutBootstrapArguments = "needed",
+expand = "needed",
+getMemberVMInfo = "needed",
+getNamedCon = "needed",
+init = "needed",
+objectFieldOffset = "needed",
+registerNatives = "needed",
+resolve = "needed",
+setCallSiteTargetNormal = "needed",
+setCallSiteTargetVolatile = "needed",
+staticFieldBase = "needed",
+staticFieldOffset = "needed",
+
+[java.lang.ref.Reference]
+clear0 = "needed",
+getAndClearReferencePendingList = "needed",
+hasReferencePendingList = "needed",
+refersTo0 = "needed",
+waitForReferencePendingList = "needed",
+
+[java.lang.reflect.Array]
+get = "needed",
+getBoolean = "needed",
+getByte = "needed",
+getChar = "needed",
+getDouble = "needed",
+getFloat = "needed",
+getInt = "needed",
+getLength = "needed",
+getLong = "needed",
+getShort = "needed",
+multiNewArray = "needed",
+newArray = "needed",
+set = "needed",
+setBoolean = "needed",
+setByte = "needed",
+setChar = "needed",
+setDouble = "needed",
+setFloat = "needed",
+setInt = "needed",
+setLong = "needed",
+setShort = "needed",
+
+[java.lang.reflect.Executable]
+getParameters0 = "needed",
+getTypeAnnotationBytes0 = "needed",
+
+[java.lang.reflect.Field]
+getTypeAnnotationBytes0 = "needed",
+
+[java.net.Inet4Address]
+init = "needed",
+
+[java.net.Inet6Address]
+init = "needed",
+
+[java.net.InetAddress]
+init = "needed",
+isIPv4Available = "needed",
+isIPv6Supported = "needed",
+
+[java.net.NetworkInterface]
+boundInetAddress0 = "needed",
+getAll = "needed",
+getByIndex0 = "needed",
+getByInetAddress0 = "needed",
+getByName0 = "needed",
+getMTU0 = "needed",
+getMacAddr0 = "needed",
+init = "needed",
+isLoopback0 = "needed",
+isP2P0 = "needed",
+isUp0 = "needed",
+supportsMulticast0 = "needed",
+
+[java.security.AccessController]
+ensureMaterializedForStackWalk = "needed",
+getInheritedAccessControlContext = "needed",
+getProtectionDomain = "needed",
+getStackAccessControlContext = "needed",
+
+[java.util.TimeZone]
+getSystemGMTOffsetID = "needed",
+getSystemTimeZoneID = "needed",
+
+[java.util.concurrent.atomic.AtomicLong]
+VMSupportsCS8 = "needed",
+
+[java.util.zip.CRC32]
+update = "needed",
+updateByteBuffer0 = "needed",
+updateBytes0 = "needed",
+
+[java.util.zip.Inflater]
+end = "needed",
+getAdler = "needed",
+inflateBufferBuffer = "needed",
+inflateBufferBytes = "needed",
+inflateBytesBuffer = "needed",
+inflateBytesBytes = "needed",
+init = "needed",
+initIDs = "needed",
+reset = "needed",
+setDictionary = "needed",
+setDictionaryBuffer = "needed",
 
