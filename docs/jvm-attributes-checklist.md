@@ -1,7 +1,7 @@
 # JVM Class File 属性检查清单
 
 > 基于 JVMS §4.7（Java SE 21）  
-> 最后更新：2026-09-12
+> 最后更新：2026-09-13
 
 ## 说明
 
@@ -32,9 +32,7 @@
 
 | 属性名 | 作用域 | 解析状态 | 使用状态 | 说明 | 优先级 |
 |--------|--------|----------|----------|------|--------|
-| `Signature` | Class / Field / Method | ✅ 已解析 | 🟡 已存储未使用 | 泛型签名（如 `<E:Ljava/lang/Object;>`），存入 `generic_signature` 字段 | **高** |
-
-> **当前进展**：T29 任务正在将 Signature 用于 emitter.py，生成 `struct ArrayList<E>` 等泛型结构。
+| `Signature` | Class / Field / Method | ✅ 已解析 | 🟢 已用 | 泛型签名，`ClassInfo.generic_signature` → `parse_class_type_params()` → 生成 `struct ArrayList<E>`；`ParsedMethod.generic_signature` → method.py 推断参数/返回类型 | — |
 
 ### 3. 常量与初始化
 
@@ -81,9 +79,7 @@
 | `SourceFile` | Class | ✅ 已解析 | 🟡 已存储未使用 | 原始 .java 文件名，存入 `ClassInfo.source_file` | 低 |
 | `SourceDebugExtension` | Class | ❌ 未解析 | ⚪ 不适用 | JSR 45 调试扩展（JSP 等） | 低 |
 | `Deprecated` | Class/Field/Method | ❌ 未解析 | 🟡 待用 | `@Deprecated` 标记，可生成 `#[deprecated]` 属性 | 低 |
-| `Synthetic` | Class/Field/Method | ❌ 未解析 | 🟡 待用 | 编译器合成成员，应跳过不生成 | **中** |
-
-> **影响**：合成方法（如 lambda 桥接方法）目前会被错误地当成普通方法翻译，增加 Synthetic 解析可以过滤掉它们。
+| `Synthetic` | Class/Field/Method | ✅ 已解析 | 🟢 已用 | 编译器合成成员；与 `ACC_SYNTHETIC`（0x1000）访问标志等价，两者均设置 `is_synthetic=True`，emitter 用 `m.is_synthetic` 过滤合成方法 | — |
 
 ### 8. 动态调用与 lambda
 
@@ -118,10 +114,10 @@
 | 类别 | 数量 |
 |------|------|
 | 总属性数（JVMS Java 21） | 30 |
-| ✅ 已解析 | 5（`Code`、`LocalVariableTable`、`Signature`、`Exceptions`、`BootstrapMethods`、`SourceFile` → 实际 6） |
-| 🟢 已用于 codegen | 3（`Code`、`LocalVariableTable`、`BootstrapMethods`） |
-| 🟡 已存储未使用 | 3（`Signature`、`Exceptions`、`SourceFile`） |
-| ❌ 未解析 | 24 |
+| ✅ 已解析 | 7（`Code`、`LocalVariableTable`、`Signature`、`Exceptions`、`BootstrapMethods`、`SourceFile`、`Synthetic`） |
+| 🟢 已用于 codegen | 5（`Code`、`LocalVariableTable`、`BootstrapMethods`、`Signature`、`Synthetic`） |
+| 🟡 已存储未使用 | 2（`Exceptions`、`SourceFile`） |
+| ❌ 未解析 | 23 |
 
 ---
 
@@ -129,33 +125,28 @@
 
 ### 高优先级（影响当前功能正确性）
 
-1. **`Signature`（使用）** — 已解析，需在 emitter.py/method.py 中生成泛型代码
-   - 影响：`struct ArrayList<E>`、`HashMap<K, V>` 等
-   - 任务：T29（进行中）
+> 无——此类已全部完成。
 
 ### 中优先级（改善代码生成质量）
 
-2. **`Synthetic`（解析+使用）** — 过滤编译器合成的桥接方法
-   - 影响：减少无意义的 Rust 方法生成，避免名称冲突
-   
-3. **`ConstantValue`（解析+使用）** — `static final` 字段正确初始化
+1. **`ConstantValue`（解析+使用）** — `static final` 字段正确初始化
    - 影响：`public static final int MAX = 100` 等常量
-   
-4. **`MethodParameters`（解析+使用）** — 补全方法参数名
+
+2. **`MethodParameters`（解析+使用）** — 补全方法参数名
    - 影响：LocalVariableTable 有时不含参数名（如编译时未带 `-g`）
-   
-5. **`InnerClasses`（解析+使用）** — 生成正确的嵌套 mod 结构
+
+3. **`InnerClasses`（解析+使用）** — 生成正确的嵌套 mod 结构
    - 影响：匿名类、内部类的翻译
 
-6. **`LocalVariableTypeTable`（解析+使用）** — 泛型局部变量的精确类型
-   - 影响：配合 Signature 生成 `let x: Vec<String>` 而非 `let x: JvmObject`
+4. **`LocalVariableTypeTable`（解析+使用）** — 泛型局部变量的精确类型
+   - 影响：配合 Signature 可将 `let x: Object` 收窄为具体泛型类型
 
 ### 低优先级（调试信息、历史遗留）
 
-7. `Exceptions`（使用）— 生成更精确的 `Result<T, E>` 错误类型
-8. `Deprecated`（解析+使用）— 生成 `#[deprecated]` 属性
-9. `Record`（解析+使用）— Java record 类映射为 Rust struct
-10. 注解相关属性 — 大多数对代码生成无实际影响
+5. `Exceptions`（使用）— 生成更精确的 `Result<T, E>` 错误类型
+6. `Deprecated`（解析+使用）— 生成 `#[deprecated]` 属性
+7. `Record`（解析+使用）— Java record 类映射为 Rust struct
+8. 注解相关属性 — 大多数对代码生成无实际影响
 
 ---
 
@@ -171,6 +162,7 @@ classfile.py 解析的属性（按出现位置）：
   ✅ Code     → ParsedMethod（字节码 + 异常表）
   ✅ Exceptions → ParsedMethod.exceptions
   ✅ Signature → ParsedMethod.generic_signature
+  ✅ Synthetic → ParsedMethod.is_synthetic（与 ACC_SYNTHETIC 标志等价，二者均处理）
 
 Code 子属性：
   ✅ LocalVariableTable → ParsedMethod.local_names
@@ -185,4 +177,7 @@ Code 子属性：
   ✅ SourceFile       → ClassInfo.source_file
   ❌ InnerClasses     → _skip_attribute
   ❌ 其他             → _skip_attribute
+
+注：字段/类级别的 Synthetic 属性目前未解析（现代 Java 均用 ACC_SYNTHETIC 标志），
+    方法级 Synthetic 属性已解析（兼容旧版 class 文件）。
 ```
