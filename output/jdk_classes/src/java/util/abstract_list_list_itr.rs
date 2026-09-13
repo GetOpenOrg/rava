@@ -21,36 +21,36 @@ pub struct AbstractList_ListItr {
 impl AbstractList_ListItr {
     // java: <init>(Ljava/util/AbstractList;I)V
     pub fn new(&self, arg0: Object, index: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$ListItr.<init>")
+        panic!("stub: java/util/AbstractList$ListItr.<init>:(Ljava/util/AbstractList;I)V")
     }
 
     // java: hasPrevious()Z
     pub fn hasPrevious(&self) -> Result<bool> {
-        todo!("abstract java/util/AbstractList$ListItr.hasPrevious")
+        panic!("stub: java/util/AbstractList$ListItr.hasPrevious:()Z")
     }
 
     // java: previous()Ljava/lang/Object;
     pub fn previous(&self) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$ListItr.previous")
+        panic!("stub: java/util/AbstractList$ListItr.previous:()Ljava/lang/Object;")
     }
 
     // java: nextIndex()I
     pub fn nextIndex(&self) -> Result<i32> {
-        todo!("abstract java/util/AbstractList$ListItr.nextIndex")
+        panic!("stub: java/util/AbstractList$ListItr.nextIndex:()I")
     }
 
     // java: previousIndex()I
     pub fn previousIndex(&self) -> Result<i32> {
-        todo!("abstract java/util/AbstractList$ListItr.previousIndex")
+        panic!("stub: java/util/AbstractList$ListItr.previousIndex:()I")
     }
 
     // java: set(Ljava/lang/Object;)V
     pub fn set(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/AbstractList$ListItr.set")
+        panic!("stub: java/util/AbstractList$ListItr.set:(Ljava/lang/Object;)V")
     }
 
     // java: add(Ljava/lang/Object;)V
     pub fn add(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/AbstractList$ListItr.add")
+        panic!("stub: java/util/AbstractList$ListItr.add:(Ljava/lang/Object;)V")
     }
 }

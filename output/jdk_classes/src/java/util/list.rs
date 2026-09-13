@@ -18,241 +18,241 @@ pub struct List<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> List<E> {
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/List.size")
+        panic!("stub: java/util/List.size:()I")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/List.isEmpty")
+        panic!("stub: java/util/List.isEmpty:()Z")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, arg0: Object) -> Result<bool> {
-        todo!("abstract java/util/List.contains")
+        panic!("stub: java/util/List.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/List.iterator")
+        panic!("stub: java/util/List.iterator:()Ljava/util/Iterator;")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/List.toArray")
+        panic!("stub: java/util/List.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, arg0: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/List.toArray")
+        panic!("stub: java/util/List.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: add(Ljava/lang/Object;)Z
     pub fn add__obj(&self, arg0: Object) -> Result<bool> {
-        todo!("abstract java/util/List.add")
+        panic!("stub: java/util/List.add:(Ljava/lang/Object;)Z")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove__obj(&self, arg0: Object) -> Result<bool> {
-        todo!("abstract java/util/List.remove")
+        panic!("stub: java/util/List.remove:(Ljava/lang/Object;)Z")
     }
 
     // java: containsAll(Ljava/util/Collection;)Z
     pub fn containsAll(&self, arg0: Object) -> Result<bool> {
-        todo!("abstract java/util/List.containsAll")
+        panic!("stub: java/util/List.containsAll:(Ljava/util/Collection;)Z")
     }
 
     // java: addAll(Ljava/util/Collection;)Z
     pub fn addAll__coll(&self, arg0: Object) -> Result<bool> {
-        todo!("abstract java/util/List.addAll")
+        panic!("stub: java/util/List.addAll:(Ljava/util/Collection;)Z")
     }
 
     // java: addAll(ILjava/util/Collection;)Z
     pub fn addAll__i_coll(&self, arg0: i32, arg1: Object) -> Result<bool> {
-        todo!("abstract java/util/List.addAll")
+        panic!("stub: java/util/List.addAll:(ILjava/util/Collection;)Z")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, arg0: Object) -> Result<bool> {
-        todo!("abstract java/util/List.removeAll")
+        panic!("stub: java/util/List.removeAll:(Ljava/util/Collection;)Z")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, arg0: Object) -> Result<bool> {
-        todo!("abstract java/util/List.retainAll")
+        panic!("stub: java/util/List.retainAll:(Ljava/util/Collection;)Z")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        todo!("abstract java/util/List.replaceAll")
+        panic!("stub: java/util/List.replaceAll:(Ljava/util/function/UnaryOperator;)V")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/List.sort")
+        panic!("stub: java/util/List.sort:(Ljava/util/Comparator;)V")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        todo!("abstract java/util/List.clear")
+        panic!("stub: java/util/List.clear:()V")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, arg0: Object) -> Result<bool> {
-        todo!("abstract java/util/List.equals")
+        panic!("stub: java/util/List.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/List.hashCode")
+        panic!("stub: java/util/List.hashCode:()I")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, arg0: i32) -> Result<Object> {
-        todo!("abstract java/util/List.get")
+        panic!("stub: java/util/List.get:(I)Ljava/lang/Object;")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, arg0: i32, arg1: Object) -> Result<Object> {
-        todo!("abstract java/util/List.set")
+        panic!("stub: java/util/List.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: add(ILjava/lang/Object;)V
     pub fn add__i_obj(&self, arg0: i32, arg1: Object) -> Result<()> {
-        todo!("abstract java/util/List.add")
+        panic!("stub: java/util/List.add:(ILjava/lang/Object;)V")
     }
 
     // java: remove(I)Ljava/lang/Object;
     pub fn remove__i(&self, arg0: i32) -> Result<Object> {
-        todo!("abstract java/util/List.remove")
+        panic!("stub: java/util/List.remove:(I)Ljava/lang/Object;")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, arg0: Object) -> Result<i32> {
-        todo!("abstract java/util/List.indexOf")
+        panic!("stub: java/util/List.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, arg0: Object) -> Result<i32> {
-        todo!("abstract java/util/List.lastIndexOf")
+        panic!("stub: java/util/List.lastIndexOf:(Ljava/lang/Object;)I")
     }
 
     // java: listIterator()Ljava/util/ListIterator;
     pub fn listIterator(&self) -> Result<Object> {
-        todo!("abstract java/util/List.listIterator")
+        panic!("stub: java/util/List.listIterator:()Ljava/util/ListIterator;")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator__i(&self, arg0: i32) -> Result<Object> {
-        todo!("abstract java/util/List.listIterator")
+        panic!("stub: java/util/List.listIterator:(I)Ljava/util/ListIterator;")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, arg0: i32, arg1: i32) -> Result<Object> {
-        todo!("abstract java/util/List.subList")
+        panic!("stub: java/util/List.subList:(II)Ljava/util/List;")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/List.spliterator")
+        panic!("stub: java/util/List.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: addFirst(Ljava/lang/Object;)V
     pub fn addFirst(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/List.addFirst")
+        panic!("stub: java/util/List.addFirst:(Ljava/lang/Object;)V")
     }
 
     // java: addLast(Ljava/lang/Object;)V
     pub fn addLast(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/List.addLast")
+        panic!("stub: java/util/List.addLast:(Ljava/lang/Object;)V")
     }
 
     // java: getFirst()Ljava/lang/Object;
     pub fn getFirst(&self) -> Result<Object> {
-        todo!("abstract java/util/List.getFirst")
+        panic!("stub: java/util/List.getFirst:()Ljava/lang/Object;")
     }
 
     // java: getLast()Ljava/lang/Object;
     pub fn getLast(&self) -> Result<Object> {
-        todo!("abstract java/util/List.getLast")
+        panic!("stub: java/util/List.getLast:()Ljava/lang/Object;")
     }
 
     // java: removeFirst()Ljava/lang/Object;
     pub fn removeFirst(&self) -> Result<Object> {
-        todo!("abstract java/util/List.removeFirst")
+        panic!("stub: java/util/List.removeFirst:()Ljava/lang/Object;")
     }
 
     // java: removeLast()Ljava/lang/Object;
     pub fn removeLast(&self) -> Result<Object> {
-        todo!("abstract java/util/List.removeLast")
+        panic!("stub: java/util/List.removeLast:()Ljava/lang/Object;")
     }
 
     // java: reversed()Ljava/util/List;
     pub fn reversed(&self) -> Result<Object> {
-        todo!("abstract java/util/List.reversed")
+        panic!("stub: java/util/List.reversed:()Ljava/util/List;")
     }
 
     // java: of()Ljava/util/List;
     pub fn of() -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:()Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj(e1: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj(e1: Object, e2: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj_obj(e1: Object, e2: Object, e3: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object, e9: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;
     pub fn of__obj_obj_obj_obj_obj_obj_obj_obj_obj_obj(e1: Object, e2: Object, e3: Object, e4: Object, e5: Object, e6: Object, e7: Object, e8: Object, e9: Object, e10: Object) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: of([Ljava/lang/Object;)Ljava/util/List;
     pub fn of__arr_obj(elements: Vec<Object>) -> Result<Object> {
-        todo!("abstract java/util/List.of")
+        panic!("stub: java/util/List.of:([Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: copyOf(Ljava/util/Collection;)Ljava/util/List;
     pub fn copyOf(coll: Object) -> Result<Object> {
-        todo!("abstract java/util/List.copyOf")
+        panic!("stub: java/util/List.copyOf:(Ljava/util/Collection;)Ljava/util/List;")
     }
 }

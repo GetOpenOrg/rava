@@ -30,46 +30,46 @@ pub struct Spliterators_ArraySpliterator<T> {
 impl<T: Clone + 'static> Spliterators_ArraySpliterator<T> {
     // java: <init>([Ljava/lang/Object;I)V
     pub fn new__arr_obj_i(&self, array: Vec<Object>, additionalCharacteristics: i32) -> Result<()> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.<init>")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.<init>:([Ljava/lang/Object;I)V")
     }
 
     // java: <init>([Ljava/lang/Object;III)V
     pub fn new__arr_obj_i_i_i(&self, array: Vec<Object>, origin: i32, fence: i32, additionalCharacteristics: i32) -> Result<()> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.<init>")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.<init>:([Ljava/lang/Object;III)V")
     }
 
     // java: <init>([Ljava/lang/Object;IIIJ)V
     pub fn new__arr_obj_i_i_i_l(&self, array: Vec<Object>, origin: i32, fence: i32, characteristics: i32, estimatedSize: i64) -> Result<()> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.<init>")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.<init>:([Ljava/lang/Object;IIIJ)V")
     }
 
     // java: trySplit()Ljava/util/Spliterator;
     pub fn trySplit(&self) -> Result<Object> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.trySplit")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.trySplit:()Ljava/util/Spliterator;")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.forEachRemaining")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 
     // java: tryAdvance(Ljava/util/function/Consumer;)Z
     pub fn tryAdvance(&self, action: Object) -> Result<bool> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.tryAdvance")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.tryAdvance:(Ljava/util/function/Consumer;)Z")
     }
 
     // java: estimateSize()J
     pub fn estimateSize(&self) -> Result<i64> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.estimateSize")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.estimateSize:()J")
     }
 
     // java: characteristics()I
     pub fn characteristics(&self) -> Result<i32> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.characteristics")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.characteristics:()I")
     }
 
     // java: getComparator()Ljava/util/Comparator;
     pub fn getComparator(&self) -> Result<Object> {
-        todo!("abstract java/util/Spliterators$ArraySpliterator.getComparator")
+        panic!("stub: java/util/Spliterators$ArraySpliterator.getComparator:()Ljava/util/Comparator;")
     }
 }

@@ -18,16 +18,16 @@ pub struct Collections_UnmodifiableRandomAccessList<E>(std::marker::PhantomData<
 impl<E: Clone + 'static> Collections_UnmodifiableRandomAccessList<E> {
     // java: <init>(Ljava/util/List;)V
     pub fn new(&self, list: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$UnmodifiableRandomAccessList.<init>")
+        panic!("stub: java/util/Collections$UnmodifiableRandomAccessList.<init>:(Ljava/util/List;)V")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableRandomAccessList.subList")
+        panic!("stub: java/util/Collections$UnmodifiableRandomAccessList.subList:(II)Ljava/util/List;")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableRandomAccessList.writeReplace")
+        panic!("stub: java/util/Collections$UnmodifiableRandomAccessList.writeReplace:()Ljava/lang/Object;")
     }
 }

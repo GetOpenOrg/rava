@@ -24,56 +24,56 @@ pub struct ImmutableCollections_MapN<K, V> {
 impl<K: Clone + 'static, V: Clone + 'static> ImmutableCollections_MapN<K, V> {
     // java: <init>([Ljava/lang/Object;)V
     pub fn new(&self, input: Vec<Object>) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$MapN.<init>")
+        panic!("stub: java/util/ImmutableCollections$MapN.<init>:([Ljava/lang/Object;)V")
     }
 
     // java: containsKey(Ljava/lang/Object;)Z
     pub fn containsKey(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$MapN.containsKey")
+        panic!("stub: java/util/ImmutableCollections$MapN.containsKey:(Ljava/lang/Object;)Z")
     }
 
     // java: containsValue(Ljava/lang/Object;)Z
     pub fn containsValue(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$MapN.containsValue")
+        panic!("stub: java/util/ImmutableCollections$MapN.containsValue:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$MapN.hashCode")
+        panic!("stub: java/util/ImmutableCollections$MapN.hashCode:()I")
     }
 
     // java: get(Ljava/lang/Object;)Ljava/lang/Object;
     pub fn get(&self, o: Object) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$MapN.get")
+        panic!("stub: java/util/ImmutableCollections$MapN.get:(Ljava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$MapN.size")
+        panic!("stub: java/util/ImmutableCollections$MapN.size:()I")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$MapN.isEmpty")
+        panic!("stub: java/util/ImmutableCollections$MapN.isEmpty:()Z")
     }
 
     // java: entrySet()Ljava/util/Set;
     pub fn entrySet(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$MapN.entrySet")
+        panic!("stub: java/util/ImmutableCollections$MapN.entrySet:()Ljava/util/Set;")
     }
 
     // java: probe(Ljava/lang/Object;)I
     pub fn probe(&self, pk: Object) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$MapN.probe")
+        panic!("stub: java/util/ImmutableCollections$MapN.probe:(Ljava/lang/Object;)I")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, in_: Object) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$MapN.readObject")
+        panic!("stub: java/util/ImmutableCollections$MapN.readObject:(Ljava/io/ObjectInputStream;)V")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$MapN.writeReplace")
+        panic!("stub: java/util/ImmutableCollections$MapN.writeReplace:()Ljava/lang/Object;")
     }
 }

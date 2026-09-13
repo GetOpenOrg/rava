@@ -22,81 +22,81 @@ pub struct Collections_UnmodifiableList<E> {
 impl<E: Clone + 'static> Collections_UnmodifiableList<E> {
     // java: <init>(Ljava/util/List;)V
     pub fn new(&self, list: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$UnmodifiableList.<init>")
+        panic!("stub: java/util/Collections$UnmodifiableList.<init>:(Ljava/util/List;)V")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableList.equals")
+        panic!("stub: java/util/Collections$UnmodifiableList.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$UnmodifiableList.hashCode")
+        panic!("stub: java/util/Collections$UnmodifiableList.hashCode:()I")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableList.get")
+        panic!("stub: java/util/Collections$UnmodifiableList.get:(I)Ljava/lang/Object;")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, index: i32, element: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableList.set")
+        panic!("stub: java/util/Collections$UnmodifiableList.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: add(ILjava/lang/Object;)V
     pub fn add(&self, index: i32, element: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$UnmodifiableList.add")
+        panic!("stub: java/util/Collections$UnmodifiableList.add:(ILjava/lang/Object;)V")
     }
 
     // java: remove(I)Ljava/lang/Object;
     pub fn remove(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableList.remove")
+        panic!("stub: java/util/Collections$UnmodifiableList.remove:(I)Ljava/lang/Object;")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/Collections$UnmodifiableList.indexOf")
+        panic!("stub: java/util/Collections$UnmodifiableList.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/Collections$UnmodifiableList.lastIndexOf")
+        panic!("stub: java/util/Collections$UnmodifiableList.lastIndexOf:(Ljava/lang/Object;)I")
     }
 
     // java: addAll(ILjava/util/Collection;)Z
     pub fn addAll(&self, index: i32, c: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableList.addAll")
+        panic!("stub: java/util/Collections$UnmodifiableList.addAll:(ILjava/util/Collection;)Z")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$UnmodifiableList.replaceAll")
+        panic!("stub: java/util/Collections$UnmodifiableList.replaceAll:(Ljava/util/function/UnaryOperator;)V")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$UnmodifiableList.sort")
+        panic!("stub: java/util/Collections$UnmodifiableList.sort:(Ljava/util/Comparator;)V")
     }
 
     // java: listIterator()Ljava/util/ListIterator;
     pub fn listIterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableList.listIterator")
+        panic!("stub: java/util/Collections$UnmodifiableList.listIterator:()Ljava/util/ListIterator;")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator__i(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableList.listIterator")
+        panic!("stub: java/util/Collections$UnmodifiableList.listIterator:(I)Ljava/util/ListIterator;")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableList.subList")
+        panic!("stub: java/util/Collections$UnmodifiableList.subList:(II)Ljava/util/List;")
     }
 
     // java: readResolve()Ljava/lang/Object;
     pub fn readResolve(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableList.readResolve")
+        panic!("stub: java/util/Collections$UnmodifiableList.readResolve:()Ljava/lang/Object;")
     }
 }

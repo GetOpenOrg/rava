@@ -31,136 +31,136 @@ pub struct Throwable {
 impl Throwable {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/Throwable.<init>")
+        panic!("stub: java/lang/Throwable.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, message: String) -> Result<()> {
-        todo!("abstract java/lang/Throwable.<init>")
+        panic!("stub: java/lang/Throwable.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
     pub fn new__str_throwa(&self, message: String, cause: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.<init>")
+        panic!("stub: java/lang/Throwable.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")
     }
 
     // java: <init>(Ljava/lang/Throwable;)V
     pub fn new__throwa(&self, cause: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.<init>")
+        panic!("stub: java/lang/Throwable.<init>:(Ljava/lang/Throwable;)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V
     pub fn new__str_throwa_z_z(&self, message: String, cause: Object, enableSuppression: bool, writableStackTrace: bool) -> Result<()> {
-        todo!("abstract java/lang/Throwable.<init>")
+        panic!("stub: java/lang/Throwable.<init>:(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V")
     }
 
     // java: getMessage()Ljava/lang/String;
     pub fn getMessage(&self) -> Result<String> {
-        todo!("abstract java/lang/Throwable.getMessage")
+        panic!("stub: java/lang/Throwable.getMessage:()Ljava/lang/String;")
     }
 
     // java: getLocalizedMessage()Ljava/lang/String;
     pub fn getLocalizedMessage(&self) -> Result<String> {
-        todo!("abstract java/lang/Throwable.getLocalizedMessage")
+        panic!("stub: java/lang/Throwable.getLocalizedMessage:()Ljava/lang/String;")
     }
 
     // java: getCause()Ljava/lang/Throwable;
     pub fn getCause(&self) -> Result<Object> {
-        todo!("abstract java/lang/Throwable.getCause")
+        panic!("stub: java/lang/Throwable.getCause:()Ljava/lang/Throwable;")
     }
 
     // java: initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;
     pub fn initCause(&self, cause: Object) -> Result<Object> {
-        todo!("abstract java/lang/Throwable.initCause")
+        panic!("stub: java/lang/Throwable.initCause:(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
     }
 
     // java: setCause(Ljava/lang/Throwable;)V
     pub fn setCause(&self, t: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.setCause")
+        panic!("stub: java/lang/Throwable.setCause:(Ljava/lang/Throwable;)V")
     }
 
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        todo!("abstract java/lang/Throwable.toString")
+        panic!("stub: java/lang/Throwable.toString:()Ljava/lang/String;")
     }
 
     // java: printStackTrace()V
     pub fn printStackTrace(&self) -> Result<()> {
-        todo!("abstract java/lang/Throwable.printStackTrace")
+        panic!("stub: java/lang/Throwable.printStackTrace:()V")
     }
 
     // java: printStackTrace(Ljava/io/PrintStream;)V
     pub fn printStackTrace__prints(&self, s: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.printStackTrace")
+        panic!("stub: java/lang/Throwable.printStackTrace:(Ljava/io/PrintStream;)V")
     }
 
     // java: printStackTrace(Ljava/lang/Throwable$PrintStreamOrWriter;)V
     pub fn printStackTrace__throwa(&self, s: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.printStackTrace")
+        panic!("stub: java/lang/Throwable.printStackTrace:(Ljava/lang/Throwable$PrintStreamOrWriter;)V")
     }
 
     // java: lockedPrintStackTrace(Ljava/lang/Throwable$PrintStreamOrWriter;)V
     pub fn lockedPrintStackTrace(&self, s: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.lockedPrintStackTrace")
+        panic!("stub: java/lang/Throwable.lockedPrintStackTrace:(Ljava/lang/Throwable$PrintStreamOrWriter;)V")
     }
 
     // java: printEnclosedStackTrace(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V
     pub fn printEnclosedStackTrace(&self, s: Object, enclosingTrace: Vec<Object>, caption: String, prefix: String, dejaVu: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.printEnclosedStackTrace")
+        panic!("stub: java/lang/Throwable.printEnclosedStackTrace:(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V")
     }
 
     // java: printStackTrace(Ljava/io/PrintWriter;)V
     pub fn printStackTrace__printw(&self, s: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.printStackTrace")
+        panic!("stub: java/lang/Throwable.printStackTrace:(Ljava/io/PrintWriter;)V")
     }
 
     // java: fillInStackTrace()Ljava/lang/Throwable;
     pub fn fillInStackTrace(&self) -> Result<Object> {
-        todo!("abstract java/lang/Throwable.fillInStackTrace")
+        panic!("stub: java/lang/Throwable.fillInStackTrace:()Ljava/lang/Throwable;")
     }
 
     // java: fillInStackTrace(I)Ljava/lang/Throwable;
     pub fn fillInStackTrace__i(&self, arg0: i32) -> Result<Object> {
-        todo!("native java/lang/Throwable.fillInStackTrace")
+        panic!("native: java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;")
     }
 
     // java: getStackTrace()[Ljava/lang/StackTraceElement;
     pub fn getStackTrace(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/lang/Throwable.getStackTrace")
+        panic!("stub: java/lang/Throwable.getStackTrace:()[Ljava/lang/StackTraceElement;")
     }
 
     // java: getOurStackTrace()[Ljava/lang/StackTraceElement;
     pub fn getOurStackTrace(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/lang/Throwable.getOurStackTrace")
+        panic!("stub: java/lang/Throwable.getOurStackTrace:()[Ljava/lang/StackTraceElement;")
     }
 
     // java: setStackTrace([Ljava/lang/StackTraceElement;)V
     pub fn setStackTrace(&self, stackTrace: Vec<Object>) -> Result<()> {
-        todo!("abstract java/lang/Throwable.setStackTrace")
+        panic!("stub: java/lang/Throwable.setStackTrace:([Ljava/lang/StackTraceElement;)V")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, s: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.readObject")
+        panic!("stub: java/lang/Throwable.readObject:(Ljava/io/ObjectInputStream;)V")
     }
 
     // java: validateSuppressedExceptionsList(Ljava/util/List;)I
     pub fn validateSuppressedExceptionsList(&self, deserSuppressedExceptions: Object) -> Result<i32> {
-        todo!("abstract java/lang/Throwable.validateSuppressedExceptionsList")
+        panic!("stub: java/lang/Throwable.validateSuppressedExceptionsList:(Ljava/util/List;)I")
     }
 
     // java: writeObject(Ljava/io/ObjectOutputStream;)V
     pub fn writeObject(&self, s: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.writeObject")
+        panic!("stub: java/lang/Throwable.writeObject:(Ljava/io/ObjectOutputStream;)V")
     }
 
     // java: addSuppressed(Ljava/lang/Throwable;)V
     pub fn addSuppressed(&self, exception: Object) -> Result<()> {
-        todo!("abstract java/lang/Throwable.addSuppressed")
+        panic!("stub: java/lang/Throwable.addSuppressed:(Ljava/lang/Throwable;)V")
     }
 
     // java: getSuppressed()[Ljava/lang/Throwable;
     pub fn getSuppressed(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/lang/Throwable.getSuppressed")
+        panic!("stub: java/lang/Throwable.getSuppressed:()[Ljava/lang/Throwable;")
     }
 }

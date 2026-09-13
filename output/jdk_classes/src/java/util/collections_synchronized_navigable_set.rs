@@ -22,81 +22,81 @@ pub struct Collections_SynchronizedNavigableSet<E> {
 impl<E: Clone + 'static> Collections_SynchronizedNavigableSet<E> {
     // java: <init>(Ljava/util/NavigableSet;)V
     pub fn new__naviga(&self, s: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.<init>")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.<init>:(Ljava/util/NavigableSet;)V")
     }
 
     // java: <init>(Ljava/util/NavigableSet;Ljava/lang/Object;)V
     pub fn new__naviga_obj(&self, s: Object, mutex: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.<init>")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.<init>:(Ljava/util/NavigableSet;Ljava/lang/Object;)V")
     }
 
     // java: lower(Ljava/lang/Object;)Ljava/lang/Object;
     pub fn lower(&self, e: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.lower")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.lower:(Ljava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: floor(Ljava/lang/Object;)Ljava/lang/Object;
     pub fn floor(&self, e: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.floor")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.floor:(Ljava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: ceiling(Ljava/lang/Object;)Ljava/lang/Object;
     pub fn ceiling(&self, e: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.ceiling")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.ceiling:(Ljava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: higher(Ljava/lang/Object;)Ljava/lang/Object;
     pub fn higher(&self, e: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.higher")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.higher:(Ljava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: pollFirst()Ljava/lang/Object;
     pub fn pollFirst(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.pollFirst")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.pollFirst:()Ljava/lang/Object;")
     }
 
     // java: pollLast()Ljava/lang/Object;
     pub fn pollLast(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.pollLast")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.pollLast:()Ljava/lang/Object;")
     }
 
     // java: descendingSet()Ljava/util/NavigableSet;
     pub fn descendingSet(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.descendingSet")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.descendingSet:()Ljava/util/NavigableSet;")
     }
 
     // java: descendingIterator()Ljava/util/Iterator;
     pub fn descendingIterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.descendingIterator")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.descendingIterator:()Ljava/util/Iterator;")
     }
 
     // java: subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/NavigableSet;
     pub fn subSet__obj_obj(&self, fromElement: Object, toElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.subSet")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.subSet:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/NavigableSet;")
     }
 
     // java: headSet(Ljava/lang/Object;)Ljava/util/NavigableSet;
     pub fn headSet__obj(&self, toElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.headSet")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.headSet:(Ljava/lang/Object;)Ljava/util/NavigableSet;")
     }
 
     // java: tailSet(Ljava/lang/Object;)Ljava/util/NavigableSet;
     pub fn tailSet__obj(&self, fromElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.tailSet")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.tailSet:(Ljava/lang/Object;)Ljava/util/NavigableSet;")
     }
 
     // java: subSet(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableSet;
     pub fn subSet__obj_z_obj_z(&self, fromElement: Object, fromInclusive: bool, toElement: Object, toInclusive: bool) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.subSet")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.subSet:(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableSet;")
     }
 
     // java: headSet(Ljava/lang/Object;Z)Ljava/util/NavigableSet;
     pub fn headSet__obj_z(&self, toElement: Object, inclusive: bool) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.headSet")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.headSet:(Ljava/lang/Object;Z)Ljava/util/NavigableSet;")
     }
 
     // java: tailSet(Ljava/lang/Object;Z)Ljava/util/NavigableSet;
     pub fn tailSet__obj_z(&self, fromElement: Object, inclusive: bool) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedNavigableSet.tailSet")
+        panic!("stub: java/util/Collections$SynchronizedNavigableSet.tailSet:(Ljava/lang/Object;Z)Ljava/util/NavigableSet;")
     }
 }

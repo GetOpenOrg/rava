@@ -18,6 +18,6 @@ pub struct Byte_ByteCache;
 impl Byte_ByteCache {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/Byte$ByteCache.<init>")
+        panic!("stub: java/lang/Byte$ByteCache.<init>:()V")
     }
 }

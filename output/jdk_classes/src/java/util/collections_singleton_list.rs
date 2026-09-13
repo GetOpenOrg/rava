@@ -22,56 +22,56 @@ pub struct Collections_SingletonList<E> {
 impl<E: Clone + 'static> Collections_SingletonList<E> {
     // java: <init>(Ljava/lang/Object;)V
     pub fn new(&self, obj: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SingletonList.<init>")
+        panic!("stub: java/util/Collections$SingletonList.<init>:(Ljava/lang/Object;)V")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SingletonList.iterator")
+        panic!("stub: java/util/Collections$SingletonList.iterator:()Ljava/util/Iterator;")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$SingletonList.size")
+        panic!("stub: java/util/Collections$SingletonList.size:()I")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, obj: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SingletonList.contains")
+        panic!("stub: java/util/Collections$SingletonList.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$SingletonList.get")
+        panic!("stub: java/util/Collections$SingletonList.get:(I)Ljava/lang/Object;")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SingletonList.forEach")
+        panic!("stub: java/util/Collections$SingletonList.forEach:(Ljava/util/function/Consumer;)V")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SingletonList.removeIf")
+        panic!("stub: java/util/Collections$SingletonList.removeIf:(Ljava/util/function/Predicate;)Z")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SingletonList.replaceAll")
+        panic!("stub: java/util/Collections$SingletonList.replaceAll:(Ljava/util/function/UnaryOperator;)V")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SingletonList.sort")
+        panic!("stub: java/util/Collections$SingletonList.sort:(Ljava/util/Comparator;)V")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SingletonList.spliterator")
+        panic!("stub: java/util/Collections$SingletonList.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$SingletonList.hashCode")
+        panic!("stub: java/util/Collections$SingletonList.hashCode:()I")
     }
 }

@@ -18,21 +18,21 @@ pub struct Collections_ReverseComparator;
 impl Collections_ReverseComparator {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$ReverseComparator.<init>")
+        panic!("stub: java/util/Collections$ReverseComparator.<init>:()V")
     }
 
     // java: compare(Ljava/lang/Comparable;Ljava/lang/Comparable;)I
     pub fn compare(&self, c1: Object, c2: Object) -> Result<i32> {
-        todo!("abstract java/util/Collections$ReverseComparator.compare")
+        panic!("stub: java/util/Collections$ReverseComparator.compare:(Ljava/lang/Comparable;Ljava/lang/Comparable;)I")
     }
 
     // java: readResolve()Ljava/lang/Object;
     pub fn readResolve(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$ReverseComparator.readResolve")
+        panic!("stub: java/util/Collections$ReverseComparator.readResolve:()Ljava/lang/Object;")
     }
 
     // java: reversed()Ljava/util/Comparator;
     pub fn reversed(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$ReverseComparator.reversed")
+        panic!("stub: java/util/Collections$ReverseComparator.reversed:()Ljava/util/Comparator;")
     }
 }

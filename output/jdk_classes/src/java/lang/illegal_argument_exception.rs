@@ -18,21 +18,21 @@ pub struct IllegalArgumentException;
 impl IllegalArgumentException {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/IllegalArgumentException.<init>")
+        panic!("stub: java/lang/IllegalArgumentException.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, s: String) -> Result<()> {
-        todo!("abstract java/lang/IllegalArgumentException.<init>")
+        panic!("stub: java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
     pub fn new__str_throwa(&self, message: String, cause: Object) -> Result<()> {
-        todo!("abstract java/lang/IllegalArgumentException.<init>")
+        panic!("stub: java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")
     }
 
     // java: <init>(Ljava/lang/Throwable;)V
     pub fn new__throwa(&self, cause: Object) -> Result<()> {
-        todo!("abstract java/lang/IllegalArgumentException.<init>")
+        panic!("stub: java/lang/IllegalArgumentException.<init>:(Ljava/lang/Throwable;)V")
     }
 }

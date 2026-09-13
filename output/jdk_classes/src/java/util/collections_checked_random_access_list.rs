@@ -18,11 +18,11 @@ pub struct Collections_CheckedRandomAccessList<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> Collections_CheckedRandomAccessList<E> {
     // java: <init>(Ljava/util/List;Ljava/lang/Class;)V
     pub fn new(&self, list: Object, type_: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CheckedRandomAccessList.<init>")
+        panic!("stub: java/util/Collections$CheckedRandomAccessList.<init>:(Ljava/util/List;Ljava/lang/Class;)V")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedRandomAccessList.subList")
+        panic!("stub: java/util/Collections$CheckedRandomAccessList.subList:(II)Ljava/util/List;")
     }
 }

@@ -42,16 +42,16 @@ pub struct ArrayPrefixHelpers_CumulateTask<T> {
 impl<T: Clone + 'static> ArrayPrefixHelpers_CumulateTask<T> {
     // java: <init>(Ljava/util/ArrayPrefixHelpers$CumulateTask;Ljava/util/function/BinaryOperator;[Ljava/lang/Object;II)V
     pub fn new__arrayp_binary_arr_obj_i_i(&self, parent: Object, function: Object, array: Vec<Object>, lo: i32, hi: i32) -> Result<()> {
-        todo!("abstract java/util/ArrayPrefixHelpers$CumulateTask.<init>")
+        panic!("stub: java/util/ArrayPrefixHelpers$CumulateTask.<init>:(Ljava/util/ArrayPrefixHelpers$CumulateTask;Ljava/util/function/BinaryOperator;[Ljava/lang/Object;II)V")
     }
 
     // java: <init>(Ljava/util/ArrayPrefixHelpers$CumulateTask;Ljava/util/function/BinaryOperator;[Ljava/lang/Object;IIIII)V
     pub fn new__arrayp_binary_arr_obj_i_i_i_i_i(&self, parent: Object, function: Object, array: Vec<Object>, origin: i32, fence: i32, threshold: i32, lo: i32, hi: i32) -> Result<()> {
-        todo!("abstract java/util/ArrayPrefixHelpers$CumulateTask.<init>")
+        panic!("stub: java/util/ArrayPrefixHelpers$CumulateTask.<init>:(Ljava/util/ArrayPrefixHelpers$CumulateTask;Ljava/util/function/BinaryOperator;[Ljava/lang/Object;IIIII)V")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        todo!("abstract java/util/ArrayPrefixHelpers$CumulateTask.compute")
+        panic!("stub: java/util/ArrayPrefixHelpers$CumulateTask.compute:()V")
     }
 }

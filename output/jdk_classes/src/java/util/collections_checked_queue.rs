@@ -22,41 +22,41 @@ pub struct Collections_CheckedQueue<E> {
 impl<E: Clone + 'static> Collections_CheckedQueue<E> {
     // java: <init>(Ljava/util/Queue;Ljava/lang/Class;)V
     pub fn new(&self, queue: Object, elementType: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CheckedQueue.<init>")
+        panic!("stub: java/util/Collections$CheckedQueue.<init>:(Ljava/util/Queue;Ljava/lang/Class;)V")
     }
 
     // java: element()Ljava/lang/Object;
     pub fn element(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedQueue.element")
+        panic!("stub: java/util/Collections$CheckedQueue.element:()Ljava/lang/Object;")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedQueue.equals")
+        panic!("stub: java/util/Collections$CheckedQueue.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$CheckedQueue.hashCode")
+        panic!("stub: java/util/Collections$CheckedQueue.hashCode:()I")
     }
 
     // java: peek()Ljava/lang/Object;
     pub fn peek(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedQueue.peek")
+        panic!("stub: java/util/Collections$CheckedQueue.peek:()Ljava/lang/Object;")
     }
 
     // java: poll()Ljava/lang/Object;
     pub fn poll(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedQueue.poll")
+        panic!("stub: java/util/Collections$CheckedQueue.poll:()Ljava/lang/Object;")
     }
 
     // java: remove()Ljava/lang/Object;
     pub fn remove(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedQueue.remove")
+        panic!("stub: java/util/Collections$CheckedQueue.remove:()Ljava/lang/Object;")
     }
 
     // java: offer(Ljava/lang/Object;)Z
     pub fn offer(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedQueue.offer")
+        panic!("stub: java/util/Collections$CheckedQueue.offer:(Ljava/lang/Object;)Z")
     }
 }

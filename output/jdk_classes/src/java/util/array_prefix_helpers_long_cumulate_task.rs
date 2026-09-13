@@ -41,16 +41,16 @@ pub struct ArrayPrefixHelpers_LongCumulateTask {
 impl ArrayPrefixHelpers_LongCumulateTask {
     // java: <init>(Ljava/util/ArrayPrefixHelpers$LongCumulateTask;Ljava/util/function/LongBinaryOperator;[JII)V
     pub fn new__arrayp_longbi_arr_l_i_i(&self, parent: Object, function: Object, array: Vec<i64>, lo: i32, hi: i32) -> Result<()> {
-        todo!("abstract java/util/ArrayPrefixHelpers$LongCumulateTask.<init>")
+        panic!("stub: java/util/ArrayPrefixHelpers$LongCumulateTask.<init>:(Ljava/util/ArrayPrefixHelpers$LongCumulateTask;Ljava/util/function/LongBinaryOperator;[JII)V")
     }
 
     // java: <init>(Ljava/util/ArrayPrefixHelpers$LongCumulateTask;Ljava/util/function/LongBinaryOperator;[JIIIII)V
     pub fn new__arrayp_longbi_arr_l_i_i_i_i_i(&self, parent: Object, function: Object, array: Vec<i64>, origin: i32, fence: i32, threshold: i32, lo: i32, hi: i32) -> Result<()> {
-        todo!("abstract java/util/ArrayPrefixHelpers$LongCumulateTask.<init>")
+        panic!("stub: java/util/ArrayPrefixHelpers$LongCumulateTask.<init>:(Ljava/util/ArrayPrefixHelpers$LongCumulateTask;Ljava/util/function/LongBinaryOperator;[JIIIII)V")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        todo!("abstract java/util/ArrayPrefixHelpers$LongCumulateTask.compute")
+        panic!("stub: java/util/ArrayPrefixHelpers$LongCumulateTask.compute:()V")
     }
 }

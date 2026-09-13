@@ -31,21 +31,21 @@ pub struct DualPivotQuicksort_Sorter {
 impl DualPivotQuicksort_Sorter {
     // java: <init>(Ljava/util/concurrent/CountedCompleter;Ljava/lang/Object;Ljava/lang/Object;IIII)V
     pub fn new(&self, parent: Object, a: Object, b: Object, low: i32, size: i32, offset: i32, depth: i32) -> Result<()> {
-        todo!("abstract java/util/DualPivotQuicksort$Sorter.<init>")
+        panic!("stub: java/util/DualPivotQuicksort$Sorter.<init>:(Ljava/util/concurrent/CountedCompleter;Ljava/lang/Object;Ljava/lang/Object;IIII)V")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        todo!("abstract java/util/DualPivotQuicksort$Sorter.compute")
+        panic!("stub: java/util/DualPivotQuicksort$Sorter.compute:()V")
     }
 
     // java: onCompletion(Ljava/util/concurrent/CountedCompleter;)V
     pub fn onCompletion(&self, caller: Object) -> Result<()> {
-        todo!("abstract java/util/DualPivotQuicksort$Sorter.onCompletion")
+        panic!("stub: java/util/DualPivotQuicksort$Sorter.onCompletion:(Ljava/util/concurrent/CountedCompleter;)V")
     }
 
     // java: forkSorter(III)V
     pub fn forkSorter(&self, depth: i32, low: i32, high: i32) -> Result<()> {
-        todo!("abstract java/util/DualPivotQuicksort$Sorter.forkSorter")
+        panic!("stub: java/util/DualPivotQuicksort$Sorter.forkSorter:(III)V")
     }
 }

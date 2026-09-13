@@ -18,26 +18,26 @@ pub struct Collections_EmptyIterator<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> Collections_EmptyIterator<E> {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$EmptyIterator.<init>")
+        panic!("stub: java/util/Collections$EmptyIterator.<init>:()V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/Collections$EmptyIterator.hasNext")
+        panic!("stub: java/util/Collections$EmptyIterator.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$EmptyIterator.next")
+        panic!("stub: java/util/Collections$EmptyIterator.next:()Ljava/lang/Object;")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$EmptyIterator.remove")
+        panic!("stub: java/util/Collections$EmptyIterator.remove:()V")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$EmptyIterator.forEachRemaining")
+        panic!("stub: java/util/Collections$EmptyIterator.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 }

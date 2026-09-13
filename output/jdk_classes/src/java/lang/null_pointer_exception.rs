@@ -23,26 +23,26 @@ pub struct NullPointerException {
 impl NullPointerException {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/NullPointerException.<init>")
+        panic!("stub: java/lang/NullPointerException.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, s: String) -> Result<()> {
-        todo!("abstract java/lang/NullPointerException.<init>")
+        panic!("stub: java/lang/NullPointerException.<init>:(Ljava/lang/String;)V")
     }
 
     // java: fillInStackTrace()Ljava/lang/Throwable;
     pub fn fillInStackTrace(&self) -> Result<Object> {
-        todo!("abstract java/lang/NullPointerException.fillInStackTrace")
+        panic!("stub: java/lang/NullPointerException.fillInStackTrace:()Ljava/lang/Throwable;")
     }
 
     // java: getMessage()Ljava/lang/String;
     pub fn getMessage(&self) -> Result<String> {
-        todo!("abstract java/lang/NullPointerException.getMessage")
+        panic!("stub: java/lang/NullPointerException.getMessage:()Ljava/lang/String;")
     }
 
     // java: getExtendedNPEMessage()Ljava/lang/String;
     pub fn getExtendedNPEMessage(&self) -> Result<String> {
-        todo!("native java/lang/NullPointerException.getExtendedNPEMessage")
+        panic!("native: java/lang/NullPointerException.getExtendedNPEMessage:()Ljava/lang/String;")
     }
 }

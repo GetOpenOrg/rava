@@ -18,6 +18,6 @@ pub struct ReverseOrderListView_Rand<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> ReverseOrderListView_Rand<E> {
     // java: <init>(Ljava/util/List;Z)V
     pub fn new(&self, list: Object, modifiable: bool) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView$Rand.<init>")
+        panic!("stub: java/util/ReverseOrderListView$Rand.<init>:(Ljava/util/List;Z)V")
     }
 }

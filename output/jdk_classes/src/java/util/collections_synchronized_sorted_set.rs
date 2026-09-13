@@ -22,41 +22,41 @@ pub struct Collections_SynchronizedSortedSet<E> {
 impl<E: Clone + 'static> Collections_SynchronizedSortedSet<E> {
     // java: <init>(Ljava/util/SortedSet;)V
     pub fn new__sorted(&self, s: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedSortedSet.<init>")
+        panic!("stub: java/util/Collections$SynchronizedSortedSet.<init>:(Ljava/util/SortedSet;)V")
     }
 
     // java: <init>(Ljava/util/SortedSet;Ljava/lang/Object;)V
     pub fn new__sorted_obj(&self, s: Object, mutex: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedSortedSet.<init>")
+        panic!("stub: java/util/Collections$SynchronizedSortedSet.<init>:(Ljava/util/SortedSet;Ljava/lang/Object;)V")
     }
 
     // java: comparator()Ljava/util/Comparator;
     pub fn comparator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedSet.comparator")
+        panic!("stub: java/util/Collections$SynchronizedSortedSet.comparator:()Ljava/util/Comparator;")
     }
 
     // java: subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedSet;
     pub fn subSet(&self, fromElement: Object, toElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedSet.subSet")
+        panic!("stub: java/util/Collections$SynchronizedSortedSet.subSet:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedSet;")
     }
 
     // java: headSet(Ljava/lang/Object;)Ljava/util/SortedSet;
     pub fn headSet(&self, toElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedSet.headSet")
+        panic!("stub: java/util/Collections$SynchronizedSortedSet.headSet:(Ljava/lang/Object;)Ljava/util/SortedSet;")
     }
 
     // java: tailSet(Ljava/lang/Object;)Ljava/util/SortedSet;
     pub fn tailSet(&self, fromElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedSet.tailSet")
+        panic!("stub: java/util/Collections$SynchronizedSortedSet.tailSet:(Ljava/lang/Object;)Ljava/util/SortedSet;")
     }
 
     // java: first()Ljava/lang/Object;
     pub fn first(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedSet.first")
+        panic!("stub: java/util/Collections$SynchronizedSortedSet.first:()Ljava/lang/Object;")
     }
 
     // java: last()Ljava/lang/Object;
     pub fn last(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedSet.last")
+        panic!("stub: java/util/Collections$SynchronizedSortedSet.last:()Ljava/lang/Object;")
     }
 }

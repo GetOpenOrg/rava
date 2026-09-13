@@ -18,51 +18,51 @@ pub struct Collections_SequencedSetFromMap<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> Collections_SequencedSetFromMap<E> {
     // java: nsee(Ljava/util/Map$Entry;)Ljava/lang/Object;
     pub fn nsee(&self, e: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.nsee")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.nsee:(Ljava/util/Map$Entry;)Ljava/lang/Object;")
     }
 
     // java: map()Ljava/util/SequencedMap;
     pub fn map(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.map")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.map:()Ljava/util/SequencedMap;")
     }
 
     // java: <init>(Ljava/util/SequencedMap;)V
     pub fn new(&self, map: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.<init>")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.<init>:(Ljava/util/SequencedMap;)V")
     }
 
     // java: reversed()Ljava/util/SequencedSet;
     pub fn reversed(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.reversed")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.reversed:()Ljava/util/SequencedSet;")
     }
 
     // java: addFirst(Ljava/lang/Object;)V
     pub fn addFirst(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.addFirst")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.addFirst:(Ljava/lang/Object;)V")
     }
 
     // java: addLast(Ljava/lang/Object;)V
     pub fn addLast(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.addLast")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.addLast:(Ljava/lang/Object;)V")
     }
 
     // java: getFirst()Ljava/lang/Object;
     pub fn getFirst(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.getFirst")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.getFirst:()Ljava/lang/Object;")
     }
 
     // java: getLast()Ljava/lang/Object;
     pub fn getLast(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.getLast")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.getLast:()Ljava/lang/Object;")
     }
 
     // java: removeFirst()Ljava/lang/Object;
     pub fn removeFirst(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.removeFirst")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.removeFirst:()Ljava/lang/Object;")
     }
 
     // java: removeLast()Ljava/lang/Object;
     pub fn removeLast(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SequencedSetFromMap.removeLast")
+        panic!("stub: java/util/Collections$SequencedSetFromMap.removeLast:()Ljava/lang/Object;")
     }
 }

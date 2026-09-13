@@ -18,21 +18,21 @@ pub struct PrimitiveIterator_OfLong;
 impl PrimitiveIterator_OfLong {
     // java: nextLong()J
     pub fn nextLong(&self) -> Result<i64> {
-        todo!("abstract java/util/PrimitiveIterator$OfLong.nextLong")
+        panic!("stub: java/util/PrimitiveIterator$OfLong.nextLong:()J")
     }
 
     // java: forEachRemaining(Ljava/util/function/LongConsumer;)V
     pub fn forEachRemaining__longco(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/PrimitiveIterator$OfLong.forEachRemaining")
+        panic!("stub: java/util/PrimitiveIterator$OfLong.forEachRemaining:(Ljava/util/function/LongConsumer;)V")
     }
 
     // java: next()Ljava/lang/Long;
     pub fn next(&self) -> Result<i64> {
-        todo!("abstract java/util/PrimitiveIterator$OfLong.next")
+        panic!("stub: java/util/PrimitiveIterator$OfLong.next:()Ljava/lang/Long;")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining__consum(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/PrimitiveIterator$OfLong.forEachRemaining")
+        panic!("stub: java/util/PrimitiveIterator$OfLong.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 }

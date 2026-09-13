@@ -33,21 +33,21 @@ pub struct DualPivotQuicksort_RunMerger {
 impl DualPivotQuicksort_RunMerger {
     // java: <init>(Ljava/lang/Object;Ljava/lang/Object;II[III)V
     pub fn new(&self, a: Object, b: Object, offset: i32, aim: i32, run: Vec<i32>, lo: i32, hi: i32) -> Result<()> {
-        todo!("abstract java/util/DualPivotQuicksort$RunMerger.<init>")
+        panic!("stub: java/util/DualPivotQuicksort$RunMerger.<init>:(Ljava/lang/Object;Ljava/lang/Object;II[III)V")
     }
 
     // java: compute()Ljava/lang/Object;
     pub fn compute(&self) -> Result<Object> {
-        todo!("abstract java/util/DualPivotQuicksort$RunMerger.compute")
+        panic!("stub: java/util/DualPivotQuicksort$RunMerger.compute:()Ljava/lang/Object;")
     }
 
     // java: forkMe()Ljava/util/DualPivotQuicksort$RunMerger;
     pub fn forkMe(&self) -> Result<Object> {
-        todo!("abstract java/util/DualPivotQuicksort$RunMerger.forkMe")
+        panic!("stub: java/util/DualPivotQuicksort$RunMerger.forkMe:()Ljava/util/DualPivotQuicksort$RunMerger;")
     }
 
     // java: getDestination()Ljava/lang/Object;
     pub fn getDestination(&self) -> Result<Object> {
-        todo!("abstract java/util/DualPivotQuicksort$RunMerger.getDestination")
+        panic!("stub: java/util/DualPivotQuicksort$RunMerger.getDestination:()Ljava/lang/Object;")
     }
 }

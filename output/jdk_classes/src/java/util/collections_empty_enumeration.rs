@@ -18,21 +18,21 @@ pub struct Collections_EmptyEnumeration<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> Collections_EmptyEnumeration<E> {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$EmptyEnumeration.<init>")
+        panic!("stub: java/util/Collections$EmptyEnumeration.<init>:()V")
     }
 
     // java: hasMoreElements()Z
     pub fn hasMoreElements(&self) -> Result<bool> {
-        todo!("abstract java/util/Collections$EmptyEnumeration.hasMoreElements")
+        panic!("stub: java/util/Collections$EmptyEnumeration.hasMoreElements:()Z")
     }
 
     // java: nextElement()Ljava/lang/Object;
     pub fn nextElement(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$EmptyEnumeration.nextElement")
+        panic!("stub: java/util/Collections$EmptyEnumeration.nextElement:()Ljava/lang/Object;")
     }
 
     // java: asIterator()Ljava/util/Iterator;
     pub fn asIterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$EmptyEnumeration.asIterator")
+        panic!("stub: java/util/Collections$EmptyEnumeration.asIterator:()Ljava/util/Iterator;")
     }
 }

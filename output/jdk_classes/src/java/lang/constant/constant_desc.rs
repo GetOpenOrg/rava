@@ -18,6 +18,6 @@ pub struct ConstantDesc;
 impl ConstantDesc {
     // java: resolveConstantDesc(Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/Object;
     pub fn resolveConstantDesc(&self, arg0: Object) -> Result<Object> {
-        todo!("abstract java/lang/constant/ConstantDesc.resolveConstantDesc")
+        panic!("stub: java/lang/constant/ConstantDesc.resolveConstantDesc:(Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/Object;")
     }
 }

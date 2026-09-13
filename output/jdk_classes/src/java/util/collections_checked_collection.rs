@@ -26,126 +26,126 @@ pub struct Collections_CheckedCollection<E> {
 impl<E: Clone + 'static> Collections_CheckedCollection<E> {
     // java: typeCheck(Ljava/lang/Object;)Ljava/lang/Object;
     pub fn typeCheck(&self, o: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedCollection.typeCheck")
+        panic!("stub: java/util/Collections$CheckedCollection.typeCheck:(Ljava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: badElementMsg(Ljava/lang/Object;)Ljava/lang/String;
     pub fn badElementMsg(&self, o: Object) -> Result<String> {
-        todo!("abstract java/util/Collections$CheckedCollection.badElementMsg")
+        panic!("stub: java/util/Collections$CheckedCollection.badElementMsg:(Ljava/lang/Object;)Ljava/lang/String;")
     }
 
     // java: <init>(Ljava/util/Collection;Ljava/lang/Class;)V
     pub fn new(&self, c: Object, type_: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CheckedCollection.<init>")
+        panic!("stub: java/util/Collections$CheckedCollection.<init>:(Ljava/util/Collection;Ljava/lang/Class;)V")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$CheckedCollection.size")
+        panic!("stub: java/util/Collections$CheckedCollection.size:()I")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.isEmpty")
+        panic!("stub: java/util/Collections$CheckedCollection.isEmpty:()Z")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.contains")
+        panic!("stub: java/util/Collections$CheckedCollection.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$CheckedCollection.toArray")
+        panic!("stub: java/util/Collections$CheckedCollection.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$CheckedCollection.toArray")
+        panic!("stub: java/util/Collections$CheckedCollection.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
     pub fn toArray__intfun(&self, f: Object) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$CheckedCollection.toArray")
+        panic!("stub: java/util/Collections$CheckedCollection.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;")
     }
 
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        todo!("abstract java/util/Collections$CheckedCollection.toString")
+        panic!("stub: java/util/Collections$CheckedCollection.toString:()Ljava/lang/String;")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.remove")
+        panic!("stub: java/util/Collections$CheckedCollection.remove:(Ljava/lang/Object;)Z")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$CheckedCollection.clear")
+        panic!("stub: java/util/Collections$CheckedCollection.clear:()V")
     }
 
     // java: containsAll(Ljava/util/Collection;)Z
     pub fn containsAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.containsAll")
+        panic!("stub: java/util/Collections$CheckedCollection.containsAll:(Ljava/util/Collection;)Z")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.removeAll")
+        panic!("stub: java/util/Collections$CheckedCollection.removeAll:(Ljava/util/Collection;)Z")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.retainAll")
+        panic!("stub: java/util/Collections$CheckedCollection.retainAll:(Ljava/util/Collection;)Z")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedCollection.iterator")
+        panic!("stub: java/util/Collections$CheckedCollection.iterator:()Ljava/util/Iterator;")
     }
 
     // java: add(Ljava/lang/Object;)Z
     pub fn add(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.add")
+        panic!("stub: java/util/Collections$CheckedCollection.add:(Ljava/lang/Object;)Z")
     }
 
     // java: zeroLengthElementArray()[Ljava/lang/Object;
     pub fn zeroLengthElementArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$CheckedCollection.zeroLengthElementArray")
+        panic!("stub: java/util/Collections$CheckedCollection.zeroLengthElementArray:()[Ljava/lang/Object;")
     }
 
     // java: checkedCopyOf(Ljava/util/Collection;)Ljava/util/Collection;
     pub fn checkedCopyOf(&self, coll: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedCollection.checkedCopyOf")
+        panic!("stub: java/util/Collections$CheckedCollection.checkedCopyOf:(Ljava/util/Collection;)Ljava/util/Collection;")
     }
 
     // java: addAll(Ljava/util/Collection;)Z
     pub fn addAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.addAll")
+        panic!("stub: java/util/Collections$CheckedCollection.addAll:(Ljava/util/Collection;)Z")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CheckedCollection.forEach")
+        panic!("stub: java/util/Collections$CheckedCollection.forEach:(Ljava/util/function/Consumer;)V")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CheckedCollection.removeIf")
+        panic!("stub: java/util/Collections$CheckedCollection.removeIf:(Ljava/util/function/Predicate;)Z")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedCollection.spliterator")
+        panic!("stub: java/util/Collections$CheckedCollection.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: stream()Ljava/util/stream/Stream;
     pub fn stream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedCollection.stream")
+        panic!("stub: java/util/Collections$CheckedCollection.stream:()Ljava/util/stream/Stream;")
     }
 
     // java: parallelStream()Ljava/util/stream/Stream;
     pub fn parallelStream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedCollection.parallelStream")
+        panic!("stub: java/util/Collections$CheckedCollection.parallelStream:()Ljava/util/stream/Stream;")
     }
 }

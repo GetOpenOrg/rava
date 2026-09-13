@@ -22,41 +22,41 @@ pub struct Collections_SynchronizedSortedMap<K, V> {
 impl<K: Clone + 'static, V: Clone + 'static> Collections_SynchronizedSortedMap<K, V> {
     // java: <init>(Ljava/util/SortedMap;)V
     pub fn new__sorted(&self, m: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedSortedMap.<init>")
+        panic!("stub: java/util/Collections$SynchronizedSortedMap.<init>:(Ljava/util/SortedMap;)V")
     }
 
     // java: <init>(Ljava/util/SortedMap;Ljava/lang/Object;)V
     pub fn new__sorted_obj(&self, m: Object, mutex: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedSortedMap.<init>")
+        panic!("stub: java/util/Collections$SynchronizedSortedMap.<init>:(Ljava/util/SortedMap;Ljava/lang/Object;)V")
     }
 
     // java: comparator()Ljava/util/Comparator;
     pub fn comparator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedMap.comparator")
+        panic!("stub: java/util/Collections$SynchronizedSortedMap.comparator:()Ljava/util/Comparator;")
     }
 
     // java: subMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;
     pub fn subMap(&self, fromKey: Object, toKey: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedMap.subMap")
+        panic!("stub: java/util/Collections$SynchronizedSortedMap.subMap:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;")
     }
 
     // java: headMap(Ljava/lang/Object;)Ljava/util/SortedMap;
     pub fn headMap(&self, toKey: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedMap.headMap")
+        panic!("stub: java/util/Collections$SynchronizedSortedMap.headMap:(Ljava/lang/Object;)Ljava/util/SortedMap;")
     }
 
     // java: tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;
     pub fn tailMap(&self, fromKey: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedMap.tailMap")
+        panic!("stub: java/util/Collections$SynchronizedSortedMap.tailMap:(Ljava/lang/Object;)Ljava/util/SortedMap;")
     }
 
     // java: firstKey()Ljava/lang/Object;
     pub fn firstKey(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedMap.firstKey")
+        panic!("stub: java/util/Collections$SynchronizedSortedMap.firstKey:()Ljava/lang/Object;")
     }
 
     // java: lastKey()Ljava/lang/Object;
     pub fn lastKey(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedSortedMap.lastKey")
+        panic!("stub: java/util/Collections$SynchronizedSortedMap.lastKey:()Ljava/lang/Object;")
     }
 }

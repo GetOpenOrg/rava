@@ -23,31 +23,31 @@ pub struct Collections_2 {
 impl Collections_2 {
     // java: <init>(Ljava/lang/Object;)V
     pub fn new(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$2.<init>")
+        panic!("stub: java/util/Collections$2.<init>:(Ljava/lang/Object;)V")
     }
 
     // java: trySplit()Ljava/util/Spliterator;
     pub fn trySplit(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$2.trySplit")
+        panic!("stub: java/util/Collections$2.trySplit:()Ljava/util/Spliterator;")
     }
 
     // java: tryAdvance(Ljava/util/function/Consumer;)Z
     pub fn tryAdvance(&self, consumer: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$2.tryAdvance")
+        panic!("stub: java/util/Collections$2.tryAdvance:(Ljava/util/function/Consumer;)Z")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, consumer: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$2.forEachRemaining")
+        panic!("stub: java/util/Collections$2.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 
     // java: estimateSize()J
     pub fn estimateSize(&self) -> Result<i64> {
-        todo!("abstract java/util/Collections$2.estimateSize")
+        panic!("stub: java/util/Collections$2.estimateSize:()J")
     }
 
     // java: characteristics()I
     pub fn characteristics(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$2.characteristics")
+        panic!("stub: java/util/Collections$2.characteristics:()I")
     }
 }

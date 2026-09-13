@@ -18,11 +18,11 @@ pub struct ArraysParallelSortHelpers_EmptyCompleter;
 impl ArraysParallelSortHelpers_EmptyCompleter {
     // java: <init>(Ljava/util/concurrent/CountedCompleter;)V
     pub fn new(&self, p: Object) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$EmptyCompleter.<init>")
+        panic!("stub: java/util/ArraysParallelSortHelpers$EmptyCompleter.<init>:(Ljava/util/concurrent/CountedCompleter;)V")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$EmptyCompleter.compute")
+        panic!("stub: java/util/ArraysParallelSortHelpers$EmptyCompleter.compute:()V")
     }
 }

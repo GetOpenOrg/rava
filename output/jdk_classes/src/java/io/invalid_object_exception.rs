@@ -18,11 +18,11 @@ pub struct InvalidObjectException;
 impl InvalidObjectException {
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, reason: String) -> Result<()> {
-        todo!("abstract java/io/InvalidObjectException.<init>")
+        panic!("stub: java/io/InvalidObjectException.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
     pub fn new__str_throwa(&self, reason: String, cause: Object) -> Result<()> {
-        todo!("abstract java/io/InvalidObjectException.<init>")
+        panic!("stub: java/io/InvalidObjectException.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")
     }
 }

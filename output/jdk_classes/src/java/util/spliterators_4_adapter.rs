@@ -25,26 +25,26 @@ pub struct Spliterators_4Adapter {
 impl Spliterators_4Adapter {
     // java: <init>(Ljava/util/Spliterator$OfDouble;)V
     pub fn new(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$4Adapter.<init>")
+        panic!("stub: java/util/Spliterators$4Adapter.<init>:(Ljava/util/Spliterator$OfDouble;)V")
     }
 
     // java: accept(D)V
     pub fn accept(&self, t: f64) -> Result<()> {
-        todo!("abstract java/util/Spliterators$4Adapter.accept")
+        panic!("stub: java/util/Spliterators$4Adapter.accept:(D)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/Spliterators$4Adapter.hasNext")
+        panic!("stub: java/util/Spliterators$4Adapter.hasNext:()Z")
     }
 
     // java: nextDouble()D
     pub fn nextDouble(&self) -> Result<f64> {
-        todo!("abstract java/util/Spliterators$4Adapter.nextDouble")
+        panic!("stub: java/util/Spliterators$4Adapter.nextDouble:()D")
     }
 
     // java: forEachRemaining(Ljava/util/function/DoubleConsumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$4Adapter.forEachRemaining")
+        panic!("stub: java/util/Spliterators$4Adapter.forEachRemaining:(Ljava/util/function/DoubleConsumer;)V")
     }
 }

@@ -27,26 +27,26 @@ pub struct AbstractList_Itr {
 impl AbstractList_Itr {
     // java: <init>(Ljava/util/AbstractList;)V
     pub fn new(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/AbstractList$Itr.<init>")
+        panic!("stub: java/util/AbstractList$Itr.<init>:(Ljava/util/AbstractList;)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/AbstractList$Itr.hasNext")
+        panic!("stub: java/util/AbstractList$Itr.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$Itr.next")
+        panic!("stub: java/util/AbstractList$Itr.next:()Ljava/lang/Object;")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        todo!("abstract java/util/AbstractList$Itr.remove")
+        panic!("stub: java/util/AbstractList$Itr.remove:()V")
     }
 
     // java: checkForComodification()V
     pub fn checkForComodification(&self) -> Result<()> {
-        todo!("abstract java/util/AbstractList$Itr.checkForComodification")
+        panic!("stub: java/util/AbstractList$Itr.checkForComodification:()V")
     }
 }

@@ -24,116 +24,116 @@ pub struct Collections_SynchronizedCollection<E> {
 impl<E: Clone + 'static> Collections_SynchronizedCollection<E> {
     // java: <init>(Ljava/util/Collection;)V
     pub fn new__coll(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.<init>")
+        panic!("stub: java/util/Collections$SynchronizedCollection.<init>:(Ljava/util/Collection;)V")
     }
 
     // java: <init>(Ljava/util/Collection;Ljava/lang/Object;)V
     pub fn new__coll_obj(&self, c: Object, mutex: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.<init>")
+        panic!("stub: java/util/Collections$SynchronizedCollection.<init>:(Ljava/util/Collection;Ljava/lang/Object;)V")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.size")
+        panic!("stub: java/util/Collections$SynchronizedCollection.size:()I")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.isEmpty")
+        panic!("stub: java/util/Collections$SynchronizedCollection.isEmpty:()Z")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.contains")
+        panic!("stub: java/util/Collections$SynchronizedCollection.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.toArray")
+        panic!("stub: java/util/Collections$SynchronizedCollection.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.toArray")
+        panic!("stub: java/util/Collections$SynchronizedCollection.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
     pub fn toArray__intfun(&self, f: Object) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.toArray")
+        panic!("stub: java/util/Collections$SynchronizedCollection.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.iterator")
+        panic!("stub: java/util/Collections$SynchronizedCollection.iterator:()Ljava/util/Iterator;")
     }
 
     // java: add(Ljava/lang/Object;)Z
     pub fn add(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.add")
+        panic!("stub: java/util/Collections$SynchronizedCollection.add:(Ljava/lang/Object;)Z")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.remove")
+        panic!("stub: java/util/Collections$SynchronizedCollection.remove:(Ljava/lang/Object;)Z")
     }
 
     // java: containsAll(Ljava/util/Collection;)Z
     pub fn containsAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.containsAll")
+        panic!("stub: java/util/Collections$SynchronizedCollection.containsAll:(Ljava/util/Collection;)Z")
     }
 
     // java: addAll(Ljava/util/Collection;)Z
     pub fn addAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.addAll")
+        panic!("stub: java/util/Collections$SynchronizedCollection.addAll:(Ljava/util/Collection;)Z")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.removeAll")
+        panic!("stub: java/util/Collections$SynchronizedCollection.removeAll:(Ljava/util/Collection;)Z")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.retainAll")
+        panic!("stub: java/util/Collections$SynchronizedCollection.retainAll:(Ljava/util/Collection;)Z")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.clear")
+        panic!("stub: java/util/Collections$SynchronizedCollection.clear:()V")
     }
 
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.toString")
+        panic!("stub: java/util/Collections$SynchronizedCollection.toString:()Ljava/lang/String;")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, consumer: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.forEach")
+        panic!("stub: java/util/Collections$SynchronizedCollection.forEach:(Ljava/util/function/Consumer;)V")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.removeIf")
+        panic!("stub: java/util/Collections$SynchronizedCollection.removeIf:(Ljava/util/function/Predicate;)Z")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.spliterator")
+        panic!("stub: java/util/Collections$SynchronizedCollection.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: stream()Ljava/util/stream/Stream;
     pub fn stream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.stream")
+        panic!("stub: java/util/Collections$SynchronizedCollection.stream:()Ljava/util/stream/Stream;")
     }
 
     // java: parallelStream()Ljava/util/stream/Stream;
     pub fn parallelStream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.parallelStream")
+        panic!("stub: java/util/Collections$SynchronizedCollection.parallelStream:()Ljava/util/stream/Stream;")
     }
 
     // java: writeObject(Ljava/io/ObjectOutputStream;)V
     pub fn writeObject(&self, s: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedCollection.writeObject")
+        panic!("stub: java/util/Collections$SynchronizedCollection.writeObject:(Ljava/io/ObjectOutputStream;)V")
     }
 }

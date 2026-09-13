@@ -24,56 +24,56 @@ pub struct ImmutableCollections_SetN<E> {
 impl<E: Clone + 'static> ImmutableCollections_SetN<E> {
     // java: <init>([Ljava/lang/Object;)V
     pub fn new(&self, input: Vec<Object>) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$SetN.<init>")
+        panic!("stub: java/util/ImmutableCollections$SetN.<init>:([Ljava/lang/Object;)V")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$SetN.size")
+        panic!("stub: java/util/ImmutableCollections$SetN.size:()I")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$SetN.isEmpty")
+        panic!("stub: java/util/ImmutableCollections$SetN.isEmpty:()Z")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$SetN.contains")
+        panic!("stub: java/util/ImmutableCollections$SetN.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$SetN.iterator")
+        panic!("stub: java/util/ImmutableCollections$SetN.iterator:()Ljava/util/Iterator;")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$SetN.hashCode")
+        panic!("stub: java/util/ImmutableCollections$SetN.hashCode:()I")
     }
 
     // java: probe(Ljava/lang/Object;)I
     pub fn probe(&self, pe: Object) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$SetN.probe")
+        panic!("stub: java/util/ImmutableCollections$SetN.probe:(Ljava/lang/Object;)I")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, in_: Object) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$SetN.readObject")
+        panic!("stub: java/util/ImmutableCollections$SetN.readObject:(Ljava/io/ObjectInputStream;)V")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$SetN.writeReplace")
+        panic!("stub: java/util/ImmutableCollections$SetN.writeReplace:()Ljava/lang/Object;")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ImmutableCollections$SetN.toArray")
+        panic!("stub: java/util/ImmutableCollections$SetN.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ImmutableCollections$SetN.toArray")
+        panic!("stub: java/util/ImmutableCollections$SetN.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 }

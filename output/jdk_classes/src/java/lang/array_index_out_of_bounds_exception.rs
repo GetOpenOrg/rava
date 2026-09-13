@@ -18,16 +18,16 @@ pub struct ArrayIndexOutOfBoundsException;
 impl ArrayIndexOutOfBoundsException {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/ArrayIndexOutOfBoundsException.<init>")
+        panic!("stub: java/lang/ArrayIndexOutOfBoundsException.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, s: String) -> Result<()> {
-        todo!("abstract java/lang/ArrayIndexOutOfBoundsException.<init>")
+        panic!("stub: java/lang/ArrayIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(I)V
     pub fn new__i(&self, index: i32) -> Result<()> {
-        todo!("abstract java/lang/ArrayIndexOutOfBoundsException.<init>")
+        panic!("stub: java/lang/ArrayIndexOutOfBoundsException.<init>:(I)V")
     }
 }

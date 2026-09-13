@@ -18,41 +18,41 @@ pub struct ImmutableCollections_AbstractImmutableCollection<E>(std::marker::Phan
 impl<E: Clone + 'static> ImmutableCollections_AbstractImmutableCollection<E> {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.<init>")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableCollection.<init>:()V")
     }
 
     // java: add(Ljava/lang/Object;)Z
     pub fn add(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.add")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableCollection.add:(Ljava/lang/Object;)Z")
     }
 
     // java: addAll(Ljava/util/Collection;)Z
     pub fn addAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.addAll")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableCollection.addAll:(Ljava/util/Collection;)Z")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.clear")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableCollection.clear:()V")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.remove")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableCollection.remove:(Ljava/lang/Object;)Z")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.removeAll")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableCollection.removeAll:(Ljava/util/Collection;)Z")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.removeIf")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableCollection.removeIf:(Ljava/util/function/Predicate;)Z")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableCollection.retainAll")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableCollection.retainAll:(Ljava/util/Collection;)Z")
     }
 }

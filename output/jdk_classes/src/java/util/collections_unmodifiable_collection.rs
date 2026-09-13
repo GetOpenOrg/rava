@@ -22,106 +22,106 @@ pub struct Collections_UnmodifiableCollection<E> {
 impl<E: Clone + 'static> Collections_UnmodifiableCollection<E> {
     // java: <init>(Ljava/util/Collection;)V
     pub fn new(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.<init>")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.<init>:(Ljava/util/Collection;)V")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.size")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.size:()I")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.isEmpty")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.isEmpty:()Z")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.contains")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.toArray")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.toArray")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
     pub fn toArray__intfun(&self, f: Object) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.toArray")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;")
     }
 
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.toString")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.toString:()Ljava/lang/String;")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.iterator")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.iterator:()Ljava/util/Iterator;")
     }
 
     // java: add(Ljava/lang/Object;)Z
     pub fn add(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.add")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.add:(Ljava/lang/Object;)Z")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.remove")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.remove:(Ljava/lang/Object;)Z")
     }
 
     // java: containsAll(Ljava/util/Collection;)Z
     pub fn containsAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.containsAll")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.containsAll:(Ljava/util/Collection;)Z")
     }
 
     // java: addAll(Ljava/util/Collection;)Z
     pub fn addAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.addAll")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.addAll:(Ljava/util/Collection;)Z")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.removeAll")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.removeAll:(Ljava/util/Collection;)Z")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, coll: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.retainAll")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.retainAll:(Ljava/util/Collection;)Z")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.clear")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.clear:()V")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.forEach")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.forEach:(Ljava/util/function/Consumer;)V")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.removeIf")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.removeIf:(Ljava/util/function/Predicate;)Z")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.spliterator")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: stream()Ljava/util/stream/Stream;
     pub fn stream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.stream")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.stream:()Ljava/util/stream/Stream;")
     }
 
     // java: parallelStream()Ljava/util/stream/Stream;
     pub fn parallelStream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$UnmodifiableCollection.parallelStream")
+        panic!("stub: java/util/Collections$UnmodifiableCollection.parallelStream:()Ljava/util/stream/Stream;")
     }
 }

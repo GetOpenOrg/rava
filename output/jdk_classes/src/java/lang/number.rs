@@ -18,36 +18,36 @@ pub struct Number;
 impl Number {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/Number.<init>")
+        panic!("stub: java/lang/Number.<init>:()V")
     }
 
     // java: intValue()I
     pub fn intValue(&self) -> Result<i32> {
-        todo!("abstract java/lang/Number.intValue")
+        panic!("stub: java/lang/Number.intValue:()I")
     }
 
     // java: longValue()J
     pub fn longValue(&self) -> Result<i64> {
-        todo!("abstract java/lang/Number.longValue")
+        panic!("stub: java/lang/Number.longValue:()J")
     }
 
     // java: floatValue()F
     pub fn floatValue(&self) -> Result<f32> {
-        todo!("abstract java/lang/Number.floatValue")
+        panic!("stub: java/lang/Number.floatValue:()F")
     }
 
     // java: doubleValue()D
     pub fn doubleValue(&self) -> Result<f64> {
-        todo!("abstract java/lang/Number.doubleValue")
+        panic!("stub: java/lang/Number.doubleValue:()D")
     }
 
     // java: byteValue()B
     pub fn byteValue(&self) -> Result<i8> {
-        todo!("abstract java/lang/Number.byteValue")
+        panic!("stub: java/lang/Number.byteValue:()B")
     }
 
     // java: shortValue()S
     pub fn shortValue(&self) -> Result<i16> {
-        todo!("abstract java/lang/Number.shortValue")
+        panic!("stub: java/lang/Number.shortValue:()S")
     }
 }

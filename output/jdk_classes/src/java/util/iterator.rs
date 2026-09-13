@@ -18,21 +18,21 @@ pub struct Iterator<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> Iterator<E> {
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/Iterator.hasNext")
+        panic!("stub: java/util/Iterator.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/Iterator.next")
+        panic!("stub: java/util/Iterator.next:()Ljava/lang/Object;")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        todo!("abstract java/util/Iterator.remove")
+        panic!("stub: java/util/Iterator.remove:()V")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Iterator.forEachRemaining")
+        panic!("stub: java/util/Iterator.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 }

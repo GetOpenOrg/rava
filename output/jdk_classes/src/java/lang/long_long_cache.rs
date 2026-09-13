@@ -18,6 +18,6 @@ pub struct Long_LongCache;
 impl Long_LongCache {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/Long$LongCache.<init>")
+        panic!("stub: java/lang/Long$LongCache.<init>:()V")
     }
 }

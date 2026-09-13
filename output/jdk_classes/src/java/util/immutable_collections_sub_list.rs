@@ -26,71 +26,71 @@ pub struct ImmutableCollections_SubList<E> {
 impl<E: Clone + 'static> ImmutableCollections_SubList<E> {
     // java: <init>(Ljava/util/ImmutableCollections$AbstractImmutableList;II)V
     pub fn new(&self, root: Object, offset: i32, size: i32) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$SubList.<init>")
+        panic!("stub: java/util/ImmutableCollections$SubList.<init>:(Ljava/util/ImmutableCollections$AbstractImmutableList;II)V")
     }
 
     // java: fromSubList(Ljava/util/ImmutableCollections$SubList;II)Ljava/util/ImmutableCollections$SubList;
     pub fn fromSubList(parent: Object, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$SubList.fromSubList")
+        panic!("stub: java/util/ImmutableCollections$SubList.fromSubList:(Ljava/util/ImmutableCollections$SubList;II)Ljava/util/ImmutableCollections$SubList;")
     }
 
     // java: fromList(Ljava/util/ImmutableCollections$AbstractImmutableList;II)Ljava/util/ImmutableCollections$SubList;
     pub fn fromList(list: Object, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$SubList.fromList")
+        panic!("stub: java/util/ImmutableCollections$SubList.fromList:(Ljava/util/ImmutableCollections$AbstractImmutableList;II)Ljava/util/ImmutableCollections$SubList;")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$SubList.get")
+        panic!("stub: java/util/ImmutableCollections$SubList.get:(I)Ljava/lang/Object;")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$SubList.size")
+        panic!("stub: java/util/ImmutableCollections$SubList.size:()I")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$SubList.iterator")
+        panic!("stub: java/util/ImmutableCollections$SubList.iterator:()Ljava/util/Iterator;")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$SubList.listIterator")
+        panic!("stub: java/util/ImmutableCollections$SubList.listIterator:(I)Ljava/util/ListIterator;")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$SubList.subList")
+        panic!("stub: java/util/ImmutableCollections$SubList.subList:(II)Ljava/util/List;")
     }
 
     // java: rangeCheck(I)V
     pub fn rangeCheck(&self, index: i32) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$SubList.rangeCheck")
+        panic!("stub: java/util/ImmutableCollections$SubList.rangeCheck:(I)V")
     }
 
     // java: allowNulls()Z
     pub fn allowNulls(&self) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$SubList.allowNulls")
+        panic!("stub: java/util/ImmutableCollections$SubList.allowNulls:()Z")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$SubList.indexOf")
+        panic!("stub: java/util/ImmutableCollections$SubList.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$SubList.lastIndexOf")
+        panic!("stub: java/util/ImmutableCollections$SubList.lastIndexOf:(Ljava/lang/Object;)I")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ImmutableCollections$SubList.toArray")
+        panic!("stub: java/util/ImmutableCollections$SubList.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ImmutableCollections$SubList.toArray")
+        panic!("stub: java/util/ImmutableCollections$SubList.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 }

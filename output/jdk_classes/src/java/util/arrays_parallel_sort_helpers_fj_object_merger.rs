@@ -38,11 +38,11 @@ pub struct ArraysParallelSortHelpers_FJObject_Merger<T> {
 impl<T: Clone + 'static> ArraysParallelSortHelpers_FJObject_Merger<T> {
     // java: <init>(Ljava/util/concurrent/CountedCompleter;[Ljava/lang/Object;[Ljava/lang/Object;IIIIIILjava/util/Comparator;)V
     pub fn new(&self, par: Object, a: Vec<Object>, w: Vec<Object>, lbase: i32, lsize: i32, rbase: i32, rsize: i32, wbase: i32, gran: i32, comparator: Object) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$FJObject$Merger.<init>")
+        panic!("stub: java/util/ArraysParallelSortHelpers$FJObject$Merger.<init>:(Ljava/util/concurrent/CountedCompleter;[Ljava/lang/Object;[Ljava/lang/Object;IIIIIILjava/util/Comparator;)V")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$FJObject$Merger.compute")
+        panic!("stub: java/util/ArraysParallelSortHelpers$FJObject$Merger.compute:()V")
     }
 }

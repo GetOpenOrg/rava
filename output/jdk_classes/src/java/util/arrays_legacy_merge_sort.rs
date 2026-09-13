@@ -18,6 +18,6 @@ pub struct Arrays_LegacyMergeSort;
 impl Arrays_LegacyMergeSort {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/Arrays$LegacyMergeSort.<init>")
+        panic!("stub: java/util/Arrays$LegacyMergeSort.<init>:()V")
     }
 }

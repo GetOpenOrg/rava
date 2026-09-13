@@ -18,31 +18,31 @@ pub struct Character_UnicodeBlock;
 impl Character_UnicodeBlock {
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, idName: String) -> Result<()> {
-        todo!("abstract java/lang/Character$UnicodeBlock.<init>")
+        panic!("stub: java/lang/Character$UnicodeBlock.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/String;)V
     pub fn new__str_str(&self, idName: String, alias: String) -> Result<()> {
-        todo!("abstract java/lang/Character$UnicodeBlock.<init>")
+        panic!("stub: java/lang/Character$UnicodeBlock.<init>:(Ljava/lang/String;Ljava/lang/String;)V")
     }
 
     // java: <init>(Ljava/lang/String;[Ljava/lang/String;)V
     pub fn new__str_arr_str(&self, idName: String, aliases: Vec<String>) -> Result<()> {
-        todo!("abstract java/lang/Character$UnicodeBlock.<init>")
+        panic!("stub: java/lang/Character$UnicodeBlock.<init>:(Ljava/lang/String;[Ljava/lang/String;)V")
     }
 
     // java: of(C)Ljava/lang/Character$UnicodeBlock;
     pub fn of__c(c: u16) -> Result<Object> {
-        todo!("abstract java/lang/Character$UnicodeBlock.of")
+        panic!("stub: java/lang/Character$UnicodeBlock.of:(C)Ljava/lang/Character$UnicodeBlock;")
     }
 
     // java: of(I)Ljava/lang/Character$UnicodeBlock;
     pub fn of__i(codePoint: i32) -> Result<Object> {
-        todo!("abstract java/lang/Character$UnicodeBlock.of")
+        panic!("stub: java/lang/Character$UnicodeBlock.of:(I)Ljava/lang/Character$UnicodeBlock;")
     }
 
     // java: forName(Ljava/lang/String;)Ljava/lang/Character$UnicodeBlock;
     pub fn forName(blockName: String) -> Result<Object> {
-        todo!("abstract java/lang/Character$UnicodeBlock.forName")
+        panic!("stub: java/lang/Character$UnicodeBlock.forName:(Ljava/lang/String;)Ljava/lang/Character$UnicodeBlock;")
     }
 }

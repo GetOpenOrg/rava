@@ -18,16 +18,16 @@ pub struct ImmutableCollections_AbstractImmutableSet<E>(std::marker::PhantomData
 impl<E: Clone + 'static> ImmutableCollections_AbstractImmutableSet<E> {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableSet.<init>")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableSet.<init>:()V")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableSet.equals")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableSet.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableSet.hashCode")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableSet.hashCode:()I")
     }
 }

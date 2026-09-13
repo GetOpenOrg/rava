@@ -21,16 +21,16 @@ pub struct ArraysParallelSortHelpers_Relay {
 impl ArraysParallelSortHelpers_Relay {
     // java: <init>(Ljava/util/concurrent/CountedCompleter;)V
     pub fn new(&self, task: Object) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$Relay.<init>")
+        panic!("stub: java/util/ArraysParallelSortHelpers$Relay.<init>:(Ljava/util/concurrent/CountedCompleter;)V")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$Relay.compute")
+        panic!("stub: java/util/ArraysParallelSortHelpers$Relay.compute:()V")
     }
 
     // java: onCompletion(Ljava/util/concurrent/CountedCompleter;)V
     pub fn onCompletion(&self, t: Object) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$Relay.onCompletion")
+        panic!("stub: java/util/ArraysParallelSortHelpers$Relay.onCompletion:(Ljava/util/concurrent/CountedCompleter;)V")
     }
 }

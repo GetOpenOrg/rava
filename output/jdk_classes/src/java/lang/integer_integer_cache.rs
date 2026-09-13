@@ -18,6 +18,6 @@ pub struct Integer_IntegerCache;
 impl Integer_IntegerCache {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/Integer$IntegerCache.<init>")
+        panic!("stub: java/lang/Integer$IntegerCache.<init>:()V")
     }
 }

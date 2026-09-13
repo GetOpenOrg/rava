@@ -18,21 +18,21 @@ pub struct PrimitiveIterator_OfDouble;
 impl PrimitiveIterator_OfDouble {
     // java: nextDouble()D
     pub fn nextDouble(&self) -> Result<f64> {
-        todo!("abstract java/util/PrimitiveIterator$OfDouble.nextDouble")
+        panic!("stub: java/util/PrimitiveIterator$OfDouble.nextDouble:()D")
     }
 
     // java: forEachRemaining(Ljava/util/function/DoubleConsumer;)V
     pub fn forEachRemaining__double(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/PrimitiveIterator$OfDouble.forEachRemaining")
+        panic!("stub: java/util/PrimitiveIterator$OfDouble.forEachRemaining:(Ljava/util/function/DoubleConsumer;)V")
     }
 
     // java: next()Ljava/lang/Double;
     pub fn next(&self) -> Result<f64> {
-        todo!("abstract java/util/PrimitiveIterator$OfDouble.next")
+        panic!("stub: java/util/PrimitiveIterator$OfDouble.next:()Ljava/lang/Double;")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining__consum(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/PrimitiveIterator$OfDouble.forEachRemaining")
+        panic!("stub: java/util/PrimitiveIterator$OfDouble.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 }

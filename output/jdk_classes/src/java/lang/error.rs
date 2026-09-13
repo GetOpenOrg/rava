@@ -18,26 +18,26 @@ pub struct Error;
 impl Error {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/Error.<init>")
+        panic!("stub: java/lang/Error.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, message: String) -> Result<()> {
-        todo!("abstract java/lang/Error.<init>")
+        panic!("stub: java/lang/Error.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
     pub fn new__str_throwa(&self, message: String, cause: Object) -> Result<()> {
-        todo!("abstract java/lang/Error.<init>")
+        panic!("stub: java/lang/Error.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")
     }
 
     // java: <init>(Ljava/lang/Throwable;)V
     pub fn new__throwa(&self, cause: Object) -> Result<()> {
-        todo!("abstract java/lang/Error.<init>")
+        panic!("stub: java/lang/Error.<init>:(Ljava/lang/Throwable;)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V
     pub fn new__str_throwa_z_z(&self, message: String, cause: Object, enableSuppression: bool, writableStackTrace: bool) -> Result<()> {
-        todo!("abstract java/lang/Error.<init>")
+        panic!("stub: java/lang/Error.<init>:(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V")
     }
 }

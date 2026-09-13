@@ -18,21 +18,21 @@ pub struct PrimitiveIterator_OfInt;
 impl PrimitiveIterator_OfInt {
     // java: nextInt()I
     pub fn nextInt(&self) -> Result<i32> {
-        todo!("abstract java/util/PrimitiveIterator$OfInt.nextInt")
+        panic!("stub: java/util/PrimitiveIterator$OfInt.nextInt:()I")
     }
 
     // java: forEachRemaining(Ljava/util/function/IntConsumer;)V
     pub fn forEachRemaining__intcon(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/PrimitiveIterator$OfInt.forEachRemaining")
+        panic!("stub: java/util/PrimitiveIterator$OfInt.forEachRemaining:(Ljava/util/function/IntConsumer;)V")
     }
 
     // java: next()Ljava/lang/Integer;
     pub fn next(&self) -> Result<i32> {
-        todo!("abstract java/util/PrimitiveIterator$OfInt.next")
+        panic!("stub: java/util/PrimitiveIterator$OfInt.next:()Ljava/lang/Integer;")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining__consum(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/PrimitiveIterator$OfInt.forEachRemaining")
+        panic!("stub: java/util/PrimitiveIterator$OfInt.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 }

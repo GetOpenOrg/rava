@@ -18,31 +18,31 @@ pub struct ImmutableCollections;
 impl ImmutableCollections {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections.<init>")
+        panic!("stub: java/util/ImmutableCollections.<init>:()V")
     }
 
     // java: uoe()Ljava/lang/UnsupportedOperationException;
     pub fn uoe() -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections.uoe")
+        panic!("stub: java/util/ImmutableCollections.uoe:()Ljava/lang/UnsupportedOperationException;")
     }
 
     // java: listCopy(Ljava/util/Collection;)Ljava/util/List;
     pub fn listCopy(coll: Object) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections.listCopy")
+        panic!("stub: java/util/ImmutableCollections.listCopy:(Ljava/util/Collection;)Ljava/util/List;")
     }
 
     // java: listFromArray([Ljava/lang/Object;)Ljava/util/List;
     pub fn listFromArray(input: Vec<Object>) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections.listFromArray")
+        panic!("stub: java/util/ImmutableCollections.listFromArray:([Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: listFromTrustedArray([Ljava/lang/Object;)Ljava/util/List;
     pub fn listFromTrustedArray(input: Vec<Object>) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections.listFromTrustedArray")
+        panic!("stub: java/util/ImmutableCollections.listFromTrustedArray:([Ljava/lang/Object;)Ljava/util/List;")
     }
 
     // java: listFromTrustedArrayNullsAllowed([Ljava/lang/Object;)Ljava/util/List;
     pub fn listFromTrustedArrayNullsAllowed(input: Vec<Object>) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections.listFromTrustedArrayNullsAllowed")
+        panic!("stub: java/util/ImmutableCollections.listFromTrustedArrayNullsAllowed:([Ljava/lang/Object;)Ljava/util/List;")
     }
 }

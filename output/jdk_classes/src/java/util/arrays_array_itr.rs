@@ -24,16 +24,16 @@ pub struct Arrays_ArrayItr<E> {
 impl<E: Clone + 'static> Arrays_ArrayItr<E> {
     // java: <init>([Ljava/lang/Object;)V
     pub fn new(&self, a: Vec<Object>) -> Result<()> {
-        todo!("abstract java/util/Arrays$ArrayItr.<init>")
+        panic!("stub: java/util/Arrays$ArrayItr.<init>:([Ljava/lang/Object;)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/Arrays$ArrayItr.hasNext")
+        panic!("stub: java/util/Arrays$ArrayItr.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/Arrays$ArrayItr.next")
+        panic!("stub: java/util/Arrays$ArrayItr.next:()Ljava/lang/Object;")
     }
 }

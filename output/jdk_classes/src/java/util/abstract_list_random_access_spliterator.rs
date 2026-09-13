@@ -30,51 +30,51 @@ pub struct AbstractList_RandomAccessSpliterator<E> {
 impl<E: Clone + 'static> AbstractList_RandomAccessSpliterator<E> {
     // java: <init>(Ljava/util/List;)V
     pub fn new__list(&self, list: Object) -> Result<()> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.<init>")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.<init>:(Ljava/util/List;)V")
     }
 
     // java: <init>(Ljava/util/AbstractList$RandomAccessSpliterator;II)V
     pub fn new__abstra_i_i(&self, parent: Object, origin: i32, fence: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.<init>")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.<init>:(Ljava/util/AbstractList$RandomAccessSpliterator;II)V")
     }
 
     // java: getFence()I
     pub fn getFence(&self) -> Result<i32> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.getFence")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.getFence:()I")
     }
 
     // java: trySplit()Ljava/util/Spliterator;
     pub fn trySplit(&self) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.trySplit")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.trySplit:()Ljava/util/Spliterator;")
     }
 
     // java: tryAdvance(Ljava/util/function/Consumer;)Z
     pub fn tryAdvance(&self, action: Object) -> Result<bool> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.tryAdvance")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.tryAdvance:(Ljava/util/function/Consumer;)Z")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.forEachRemaining")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 
     // java: estimateSize()J
     pub fn estimateSize(&self) -> Result<i64> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.estimateSize")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.estimateSize:()J")
     }
 
     // java: characteristics()I
     pub fn characteristics(&self) -> Result<i32> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.characteristics")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.characteristics:()I")
     }
 
     // java: get(Ljava/util/List;I)Ljava/lang/Object;
     pub fn get(list: Object, i: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.get")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.get:(Ljava/util/List;I)Ljava/lang/Object;")
     }
 
     // java: checkAbstractListModCount(Ljava/util/AbstractList;I)V
     pub fn checkAbstractListModCount(alist: Object, expectedModCount: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$RandomAccessSpliterator.checkAbstractListModCount")
+        panic!("stub: java/util/AbstractList$RandomAccessSpliterator.checkAbstractListModCount:(Ljava/util/AbstractList;I)V")
     }
 }

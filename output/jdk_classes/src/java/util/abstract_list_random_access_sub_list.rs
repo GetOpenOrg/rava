@@ -18,16 +18,16 @@ pub struct AbstractList_RandomAccessSubList<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> AbstractList_RandomAccessSubList<E> {
     // java: <init>(Ljava/util/AbstractList;II)V
     pub fn new__abstra_i_i(&self, root: Object, fromIndex: i32, toIndex: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$RandomAccessSubList.<init>")
+        panic!("stub: java/util/AbstractList$RandomAccessSubList.<init>:(Ljava/util/AbstractList;II)V")
     }
 
     // java: <init>(Ljava/util/AbstractList$RandomAccessSubList;II)V
     pub fn new__abstra_i_i_1(&self, parent: Object, fromIndex: i32, toIndex: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$RandomAccessSubList.<init>")
+        panic!("stub: java/util/AbstractList$RandomAccessSubList.<init>:(Ljava/util/AbstractList$RandomAccessSubList;II)V")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$RandomAccessSubList.subList")
+        panic!("stub: java/util/AbstractList$RandomAccessSubList.subList:(II)Ljava/util/List;")
     }
 }

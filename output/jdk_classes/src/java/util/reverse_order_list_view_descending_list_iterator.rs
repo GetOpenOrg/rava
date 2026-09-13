@@ -23,51 +23,51 @@ pub struct ReverseOrderListView_DescendingListIterator {
 impl ReverseOrderListView_DescendingListIterator {
     // java: <init>(Ljava/util/ReverseOrderListView;II)V
     pub fn new(&self, this_0: Object, size: i32, pos: i32) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.<init>")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.<init>:(Ljava/util/ReverseOrderListView;II)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.hasNext")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.next")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.next:()Ljava/lang/Object;")
     }
 
     // java: hasPrevious()Z
     pub fn hasPrevious(&self) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.hasPrevious")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.hasPrevious:()Z")
     }
 
     // java: previous()Ljava/lang/Object;
     pub fn previous(&self) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.previous")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.previous:()Ljava/lang/Object;")
     }
 
     // java: nextIndex()I
     pub fn nextIndex(&self) -> Result<i32> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.nextIndex")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.nextIndex:()I")
     }
 
     // java: previousIndex()I
     pub fn previousIndex(&self) -> Result<i32> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.previousIndex")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.previousIndex:()I")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.remove")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.remove:()V")
     }
 
     // java: set(Ljava/lang/Object;)V
     pub fn set(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.set")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.set:(Ljava/lang/Object;)V")
     }
 
     // java: add(Ljava/lang/Object;)V
     pub fn add(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingListIterator.add")
+        panic!("stub: java/util/ReverseOrderListView$DescendingListIterator.add:(Ljava/lang/Object;)V")
     }
 }

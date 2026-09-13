@@ -24,21 +24,21 @@ pub struct Comparators_NullComparator<T> {
 impl<T: Clone + 'static> Comparators_NullComparator<T> {
     // java: <init>(ZLjava/util/Comparator;)V
     pub fn new(&self, nullFirst: bool, real: Object) -> Result<()> {
-        todo!("abstract java/util/Comparators$NullComparator.<init>")
+        panic!("stub: java/util/Comparators$NullComparator.<init>:(ZLjava/util/Comparator;)V")
     }
 
     // java: compare(Ljava/lang/Object;Ljava/lang/Object;)I
     pub fn compare(&self, a: Object, b: Object) -> Result<i32> {
-        todo!("abstract java/util/Comparators$NullComparator.compare")
+        panic!("stub: java/util/Comparators$NullComparator.compare:(Ljava/lang/Object;Ljava/lang/Object;)I")
     }
 
     // java: thenComparing(Ljava/util/Comparator;)Ljava/util/Comparator;
     pub fn thenComparing(&self, other: Object) -> Result<Object> {
-        todo!("abstract java/util/Comparators$NullComparator.thenComparing")
+        panic!("stub: java/util/Comparators$NullComparator.thenComparing:(Ljava/util/Comparator;)Ljava/util/Comparator;")
     }
 
     // java: reversed()Ljava/util/Comparator;
     pub fn reversed(&self) -> Result<Object> {
-        todo!("abstract java/util/Comparators$NullComparator.reversed")
+        panic!("stub: java/util/Comparators$NullComparator.reversed:()Ljava/util/Comparator;")
     }
 }

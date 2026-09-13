@@ -22,66 +22,66 @@ pub struct Arrays_ArrayList<E> {
 impl<E: Clone + 'static> Arrays_ArrayList<E> {
     // java: <init>([Ljava/lang/Object;)V
     pub fn new(&self, array: Vec<Object>) -> Result<()> {
-        todo!("abstract java/util/Arrays$ArrayList.<init>")
+        panic!("stub: java/util/Arrays$ArrayList.<init>:([Ljava/lang/Object;)V")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/Arrays$ArrayList.size")
+        panic!("stub: java/util/Arrays$ArrayList.size:()I")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Arrays$ArrayList.toArray")
+        panic!("stub: java/util/Arrays$ArrayList.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Arrays$ArrayList.toArray")
+        panic!("stub: java/util/Arrays$ArrayList.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Arrays$ArrayList.get")
+        panic!("stub: java/util/Arrays$ArrayList.get:(I)Ljava/lang/Object;")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, index: i32, element: Object) -> Result<Object> {
-        todo!("abstract java/util/Arrays$ArrayList.set")
+        panic!("stub: java/util/Arrays$ArrayList.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/Arrays$ArrayList.indexOf")
+        panic!("stub: java/util/Arrays$ArrayList.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Arrays$ArrayList.contains")
+        panic!("stub: java/util/Arrays$ArrayList.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Arrays$ArrayList.spliterator")
+        panic!("stub: java/util/Arrays$ArrayList.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Arrays$ArrayList.forEach")
+        panic!("stub: java/util/Arrays$ArrayList.forEach:(Ljava/util/function/Consumer;)V")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        todo!("abstract java/util/Arrays$ArrayList.replaceAll")
+        panic!("stub: java/util/Arrays$ArrayList.replaceAll:(Ljava/util/function/UnaryOperator;)V")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/Arrays$ArrayList.sort")
+        panic!("stub: java/util/Arrays$ArrayList.sort:(Ljava/util/Comparator;)V")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Arrays$ArrayList.iterator")
+        panic!("stub: java/util/Arrays$ArrayList.iterator:()Ljava/util/Iterator;")
     }
 }

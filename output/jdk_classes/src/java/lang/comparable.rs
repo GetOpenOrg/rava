@@ -18,6 +18,6 @@ pub struct Comparable<T>(std::marker::PhantomData<T>);
 impl<T: Clone + 'static> Comparable<T> {
     // java: compareTo(Ljava/lang/Object;)I
     pub fn compareTo(&self, arg0: Object) -> Result<i32> {
-        todo!("abstract java/lang/Comparable.compareTo")
+        panic!("stub: java/lang/Comparable.compareTo:(Ljava/lang/Object;)I")
     }
 }

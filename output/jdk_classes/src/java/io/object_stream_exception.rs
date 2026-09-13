@@ -18,21 +18,21 @@ pub struct ObjectStreamException;
 impl ObjectStreamException {
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, message: String) -> Result<()> {
-        todo!("abstract java/io/ObjectStreamException.<init>")
+        panic!("stub: java/io/ObjectStreamException.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
     pub fn new__str_throwa(&self, message: String, cause: Object) -> Result<()> {
-        todo!("abstract java/io/ObjectStreamException.<init>")
+        panic!("stub: java/io/ObjectStreamException.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")
     }
 
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/io/ObjectStreamException.<init>")
+        panic!("stub: java/io/ObjectStreamException.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/Throwable;)V
     pub fn new__throwa(&self, cause: Object) -> Result<()> {
-        todo!("abstract java/io/ObjectStreamException.<init>")
+        panic!("stub: java/io/ObjectStreamException.<init>:(Ljava/lang/Throwable;)V")
     }
 }

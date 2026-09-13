@@ -18,21 +18,21 @@ pub struct NoSuchElementException;
 impl NoSuchElementException {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/NoSuchElementException.<init>")
+        panic!("stub: java/util/NoSuchElementException.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
     pub fn new__str_throwa(&self, s: String, cause: Object) -> Result<()> {
-        todo!("abstract java/util/NoSuchElementException.<init>")
+        panic!("stub: java/util/NoSuchElementException.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")
     }
 
     // java: <init>(Ljava/lang/Throwable;)V
     pub fn new__throwa(&self, cause: Object) -> Result<()> {
-        todo!("abstract java/util/NoSuchElementException.<init>")
+        panic!("stub: java/util/NoSuchElementException.<init>:(Ljava/lang/Throwable;)V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, s: String) -> Result<()> {
-        todo!("abstract java/util/NoSuchElementException.<init>")
+        panic!("stub: java/util/NoSuchElementException.<init>:(Ljava/lang/String;)V")
     }
 }

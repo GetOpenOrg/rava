@@ -38,76 +38,76 @@ pub struct TimSort<T> {
 impl<T: Clone + 'static> TimSort<T> {
     // java: <init>([Ljava/lang/Object;Ljava/util/Comparator;[Ljava/lang/Object;II)V
     pub fn new(&self, a: Vec<Object>, c: Object, work: Vec<Object>, workBase: i32, workLen: i32) -> Result<()> {
-        todo!("abstract java/util/TimSort.<init>")
+        panic!("stub: java/util/TimSort.<init>:([Ljava/lang/Object;Ljava/util/Comparator;[Ljava/lang/Object;II)V")
     }
 
     // java: sort([Ljava/lang/Object;IILjava/util/Comparator;[Ljava/lang/Object;II)V
     pub fn sort(a: Vec<Object>, lo: i32, hi: i32, c: Object, work: Vec<Object>, workBase: i32, workLen: i32) -> Result<()> {
-        todo!("abstract java/util/TimSort.sort")
+        panic!("stub: java/util/TimSort.sort:([Ljava/lang/Object;IILjava/util/Comparator;[Ljava/lang/Object;II)V")
     }
 
     // java: binarySort([Ljava/lang/Object;IIILjava/util/Comparator;)V
     pub fn binarySort(a: Vec<Object>, lo: i32, hi: i32, start: i32, c: Object) -> Result<()> {
-        todo!("abstract java/util/TimSort.binarySort")
+        panic!("stub: java/util/TimSort.binarySort:([Ljava/lang/Object;IIILjava/util/Comparator;)V")
     }
 
     // java: countRunAndMakeAscending([Ljava/lang/Object;IILjava/util/Comparator;)I
     pub fn countRunAndMakeAscending(a: Vec<Object>, lo: i32, hi: i32, c: Object) -> Result<i32> {
-        todo!("abstract java/util/TimSort.countRunAndMakeAscending")
+        panic!("stub: java/util/TimSort.countRunAndMakeAscending:([Ljava/lang/Object;IILjava/util/Comparator;)I")
     }
 
     // java: reverseRange([Ljava/lang/Object;II)V
     pub fn reverseRange(a: Vec<Object>, lo: i32, hi: i32) -> Result<()> {
-        todo!("abstract java/util/TimSort.reverseRange")
+        panic!("stub: java/util/TimSort.reverseRange:([Ljava/lang/Object;II)V")
     }
 
     // java: minRunLength(I)I
     pub fn minRunLength(n: i32) -> Result<i32> {
-        todo!("abstract java/util/TimSort.minRunLength")
+        panic!("stub: java/util/TimSort.minRunLength:(I)I")
     }
 
     // java: pushRun(II)V
     pub fn pushRun(&self, runBase: i32, runLen: i32) -> Result<()> {
-        todo!("abstract java/util/TimSort.pushRun")
+        panic!("stub: java/util/TimSort.pushRun:(II)V")
     }
 
     // java: mergeCollapse()V
     pub fn mergeCollapse(&self) -> Result<()> {
-        todo!("abstract java/util/TimSort.mergeCollapse")
+        panic!("stub: java/util/TimSort.mergeCollapse:()V")
     }
 
     // java: mergeForceCollapse()V
     pub fn mergeForceCollapse(&self) -> Result<()> {
-        todo!("abstract java/util/TimSort.mergeForceCollapse")
+        panic!("stub: java/util/TimSort.mergeForceCollapse:()V")
     }
 
     // java: mergeAt(I)V
     pub fn mergeAt(&self, i: i32) -> Result<()> {
-        todo!("abstract java/util/TimSort.mergeAt")
+        panic!("stub: java/util/TimSort.mergeAt:(I)V")
     }
 
     // java: gallopLeft(Ljava/lang/Object;[Ljava/lang/Object;IIILjava/util/Comparator;)I
     pub fn gallopLeft(key: Object, a: Vec<Object>, base: i32, len: i32, hint: i32, c: Object) -> Result<i32> {
-        todo!("abstract java/util/TimSort.gallopLeft")
+        panic!("stub: java/util/TimSort.gallopLeft:(Ljava/lang/Object;[Ljava/lang/Object;IIILjava/util/Comparator;)I")
     }
 
     // java: gallopRight(Ljava/lang/Object;[Ljava/lang/Object;IIILjava/util/Comparator;)I
     pub fn gallopRight(key: Object, a: Vec<Object>, base: i32, len: i32, hint: i32, c: Object) -> Result<i32> {
-        todo!("abstract java/util/TimSort.gallopRight")
+        panic!("stub: java/util/TimSort.gallopRight:(Ljava/lang/Object;[Ljava/lang/Object;IIILjava/util/Comparator;)I")
     }
 
     // java: mergeLo(IIII)V
     pub fn mergeLo(&self, base1: i32, len1: i32, base2: i32, len2: i32) -> Result<()> {
-        todo!("abstract java/util/TimSort.mergeLo")
+        panic!("stub: java/util/TimSort.mergeLo:(IIII)V")
     }
 
     // java: mergeHi(IIII)V
     pub fn mergeHi(&self, base1: i32, len1: i32, base2: i32, len2: i32) -> Result<()> {
-        todo!("abstract java/util/TimSort.mergeHi")
+        panic!("stub: java/util/TimSort.mergeHi:(IIII)V")
     }
 
     // java: ensureCapacity(I)[Ljava/lang/Object;
     pub fn ensureCapacity(&self, minCapacity: i32) -> Result<Vec<Object>> {
-        todo!("abstract java/util/TimSort.ensureCapacity")
+        panic!("stub: java/util/TimSort.ensureCapacity:(I)[Ljava/lang/Object;")
     }
 }

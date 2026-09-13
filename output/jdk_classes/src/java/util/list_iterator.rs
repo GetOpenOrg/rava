@@ -18,46 +18,46 @@ pub struct ListIterator<E>(std::marker::PhantomData<E>);
 impl<E: Clone + 'static> ListIterator<E> {
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/ListIterator.hasNext")
+        panic!("stub: java/util/ListIterator.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/ListIterator.next")
+        panic!("stub: java/util/ListIterator.next:()Ljava/lang/Object;")
     }
 
     // java: hasPrevious()Z
     pub fn hasPrevious(&self) -> Result<bool> {
-        todo!("abstract java/util/ListIterator.hasPrevious")
+        panic!("stub: java/util/ListIterator.hasPrevious:()Z")
     }
 
     // java: previous()Ljava/lang/Object;
     pub fn previous(&self) -> Result<Object> {
-        todo!("abstract java/util/ListIterator.previous")
+        panic!("stub: java/util/ListIterator.previous:()Ljava/lang/Object;")
     }
 
     // java: nextIndex()I
     pub fn nextIndex(&self) -> Result<i32> {
-        todo!("abstract java/util/ListIterator.nextIndex")
+        panic!("stub: java/util/ListIterator.nextIndex:()I")
     }
 
     // java: previousIndex()I
     pub fn previousIndex(&self) -> Result<i32> {
-        todo!("abstract java/util/ListIterator.previousIndex")
+        panic!("stub: java/util/ListIterator.previousIndex:()I")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        todo!("abstract java/util/ListIterator.remove")
+        panic!("stub: java/util/ListIterator.remove:()V")
     }
 
     // java: set(Ljava/lang/Object;)V
     pub fn set(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/ListIterator.set")
+        panic!("stub: java/util/ListIterator.set:(Ljava/lang/Object;)V")
     }
 
     // java: add(Ljava/lang/Object;)V
     pub fn add(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/ListIterator.add")
+        panic!("stub: java/util/ListIterator.add:(Ljava/lang/Object;)V")
     }
 }

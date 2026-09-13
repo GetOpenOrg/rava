@@ -18,21 +18,21 @@ pub struct Collections_SynchronizedRandomAccessList<E>(std::marker::PhantomData<
 impl<E: Clone + 'static> Collections_SynchronizedRandomAccessList<E> {
     // java: <init>(Ljava/util/List;)V
     pub fn new__list(&self, list: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedRandomAccessList.<init>")
+        panic!("stub: java/util/Collections$SynchronizedRandomAccessList.<init>:(Ljava/util/List;)V")
     }
 
     // java: <init>(Ljava/util/List;Ljava/lang/Object;)V
     pub fn new__list_obj(&self, list: Object, mutex: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedRandomAccessList.<init>")
+        panic!("stub: java/util/Collections$SynchronizedRandomAccessList.<init>:(Ljava/util/List;Ljava/lang/Object;)V")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedRandomAccessList.subList")
+        panic!("stub: java/util/Collections$SynchronizedRandomAccessList.subList:(II)Ljava/util/List;")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedRandomAccessList.writeReplace")
+        panic!("stub: java/util/Collections$SynchronizedRandomAccessList.writeReplace:()Ljava/lang/Object;")
     }
 }

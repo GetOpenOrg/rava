@@ -34,11 +34,11 @@ pub struct ArraysParallelSortHelpers_FJObject_Sorter<T> {
 impl<T: Clone + 'static> ArraysParallelSortHelpers_FJObject_Sorter<T> {
     // java: <init>(Ljava/util/concurrent/CountedCompleter;[Ljava/lang/Object;[Ljava/lang/Object;IIIILjava/util/Comparator;)V
     pub fn new(&self, par: Object, a: Vec<Object>, w: Vec<Object>, base: i32, size: i32, wbase: i32, gran: i32, comparator: Object) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$FJObject$Sorter.<init>")
+        panic!("stub: java/util/ArraysParallelSortHelpers$FJObject$Sorter.<init>:(Ljava/util/concurrent/CountedCompleter;[Ljava/lang/Object;[Ljava/lang/Object;IIIILjava/util/Comparator;)V")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        todo!("abstract java/util/ArraysParallelSortHelpers$FJObject$Sorter.compute")
+        panic!("stub: java/util/ArraysParallelSortHelpers$FJObject$Sorter.compute:()V")
     }
 }

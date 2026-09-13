@@ -24,191 +24,191 @@ pub struct ReverseOrderListView<E> {
 impl<E: Clone + 'static> ReverseOrderListView<E> {
     // java: of(Ljava/util/List;Z)Ljava/util/List;
     pub fn of(list: Object, modifiable: bool) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.of")
+        panic!("stub: java/util/ReverseOrderListView.of:(Ljava/util/List;Z)Ljava/util/List;")
     }
 
     // java: <init>(Ljava/util/List;Z)V
     pub fn new(&self, list: Object, modifiable: bool) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView.<init>")
+        panic!("stub: java/util/ReverseOrderListView.<init>:(Ljava/util/List;Z)V")
     }
 
     // java: checkModifiable()V
     pub fn checkModifiable(&self) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView.checkModifiable")
+        panic!("stub: java/util/ReverseOrderListView.checkModifiable:()V")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView.forEach")
+        panic!("stub: java/util/ReverseOrderListView.forEach:(Ljava/util/function/Consumer;)V")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.iterator")
+        panic!("stub: java/util/ReverseOrderListView.iterator:()Ljava/util/Iterator;")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.spliterator")
+        panic!("stub: java/util/ReverseOrderListView.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: add(Ljava/lang/Object;)Z
     pub fn add__obj(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.add")
+        panic!("stub: java/util/ReverseOrderListView.add:(Ljava/lang/Object;)Z")
     }
 
     // java: addAll(Ljava/util/Collection;)Z
     pub fn addAll__coll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.addAll")
+        panic!("stub: java/util/ReverseOrderListView.addAll:(Ljava/util/Collection;)Z")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView.clear")
+        panic!("stub: java/util/ReverseOrderListView.clear:()V")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.contains")
+        panic!("stub: java/util/ReverseOrderListView.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: containsAll(Ljava/util/Collection;)Z
     pub fn containsAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.containsAll")
+        panic!("stub: java/util/ReverseOrderListView.containsAll:(Ljava/util/Collection;)Z")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.equals")
+        panic!("stub: java/util/ReverseOrderListView.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/ReverseOrderListView.hashCode")
+        panic!("stub: java/util/ReverseOrderListView.hashCode:()I")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.isEmpty")
+        panic!("stub: java/util/ReverseOrderListView.isEmpty:()Z")
     }
 
     // java: parallelStream()Ljava/util/stream/Stream;
     pub fn parallelStream(&self) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.parallelStream")
+        panic!("stub: java/util/ReverseOrderListView.parallelStream:()Ljava/util/stream/Stream;")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove__obj(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.remove")
+        panic!("stub: java/util/ReverseOrderListView.remove:(Ljava/lang/Object;)Z")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.removeAll")
+        panic!("stub: java/util/ReverseOrderListView.removeAll:(Ljava/util/Collection;)Z")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.retainAll")
+        panic!("stub: java/util/ReverseOrderListView.retainAll:(Ljava/util/Collection;)Z")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/ReverseOrderListView.size")
+        panic!("stub: java/util/ReverseOrderListView.size:()I")
     }
 
     // java: stream()Ljava/util/stream/Stream;
     pub fn stream(&self) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.stream")
+        panic!("stub: java/util/ReverseOrderListView.stream:()Ljava/util/stream/Stream;")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ReverseOrderListView.toArray")
+        panic!("stub: java/util/ReverseOrderListView.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ReverseOrderListView.toArray")
+        panic!("stub: java/util/ReverseOrderListView.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
     pub fn toArray__intfun(&self, generator: Object) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ReverseOrderListView.toArray")
+        panic!("stub: java/util/ReverseOrderListView.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;")
     }
 
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        todo!("abstract java/util/ReverseOrderListView.toString")
+        panic!("stub: java/util/ReverseOrderListView.toString:()Ljava/lang/String;")
     }
 
     // java: add(ILjava/lang/Object;)V
     pub fn add__i_obj(&self, index: i32, element: Object) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView.add")
+        panic!("stub: java/util/ReverseOrderListView.add:(ILjava/lang/Object;)V")
     }
 
     // java: addAll(ILjava/util/Collection;)Z
     pub fn addAll__i_coll(&self, index: i32, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.addAll")
+        panic!("stub: java/util/ReverseOrderListView.addAll:(ILjava/util/Collection;)Z")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, i: i32) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.get")
+        panic!("stub: java/util/ReverseOrderListView.get:(I)Ljava/lang/Object;")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/ReverseOrderListView.indexOf")
+        panic!("stub: java/util/ReverseOrderListView.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/ReverseOrderListView.lastIndexOf")
+        panic!("stub: java/util/ReverseOrderListView.lastIndexOf:(Ljava/lang/Object;)I")
     }
 
     // java: listIterator()Ljava/util/ListIterator;
     pub fn listIterator(&self) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.listIterator")
+        panic!("stub: java/util/ReverseOrderListView.listIterator:()Ljava/util/ListIterator;")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator__i(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.listIterator")
+        panic!("stub: java/util/ReverseOrderListView.listIterator:(I)Ljava/util/ListIterator;")
     }
 
     // java: remove(I)Ljava/lang/Object;
     pub fn remove__i(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.remove")
+        panic!("stub: java/util/ReverseOrderListView.remove:(I)Ljava/lang/Object;")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView.removeIf")
+        panic!("stub: java/util/ReverseOrderListView.removeIf:(Ljava/util/function/Predicate;)Z")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView.replaceAll")
+        panic!("stub: java/util/ReverseOrderListView.replaceAll:(Ljava/util/function/UnaryOperator;)V")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView.sort")
+        panic!("stub: java/util/ReverseOrderListView.sort:(Ljava/util/Comparator;)V")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, index: i32, element: Object) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.set")
+        panic!("stub: java/util/ReverseOrderListView.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView.subList")
+        panic!("stub: java/util/ReverseOrderListView.subList:(II)Ljava/util/List;")
     }
 
     // java: checkClosedRange(II)V
     pub fn checkClosedRange(index: i32, size: i32) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView.checkClosedRange")
+        panic!("stub: java/util/ReverseOrderListView.checkClosedRange:(II)V")
     }
 }

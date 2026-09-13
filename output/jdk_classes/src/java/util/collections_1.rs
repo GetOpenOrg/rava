@@ -23,26 +23,26 @@ pub struct Collections_1 {
 impl Collections_1 {
     // java: <init>(Ljava/lang/Object;)V
     pub fn new(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$1.<init>")
+        panic!("stub: java/util/Collections$1.<init>:(Ljava/lang/Object;)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/Collections$1.hasNext")
+        panic!("stub: java/util/Collections$1.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$1.next")
+        panic!("stub: java/util/Collections$1.next:()Ljava/lang/Object;")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$1.remove")
+        panic!("stub: java/util/Collections$1.remove:()V")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$1.forEachRemaining")
+        panic!("stub: java/util/Collections$1.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 }

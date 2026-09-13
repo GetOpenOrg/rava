@@ -18,26 +18,26 @@ pub struct Comparators_NaturalOrderComparator;
 impl Comparators_NaturalOrderComparator {
     // java: values()[Ljava/util/Comparators$NaturalOrderComparator;
     pub fn values() -> Result<Vec<Object>> {
-        todo!("abstract java/util/Comparators$NaturalOrderComparator.values")
+        panic!("stub: java/util/Comparators$NaturalOrderComparator.values:()[Ljava/util/Comparators$NaturalOrderComparator;")
     }
 
     // java: valueOf(Ljava/lang/String;)Ljava/util/Comparators$NaturalOrderComparator;
     pub fn valueOf(name: String) -> Result<Object> {
-        todo!("abstract java/util/Comparators$NaturalOrderComparator.valueOf")
+        panic!("stub: java/util/Comparators$NaturalOrderComparator.valueOf:(Ljava/lang/String;)Ljava/util/Comparators$NaturalOrderComparator;")
     }
 
     // java: <init>(Ljava/lang/String;I)V
     pub fn new(&self, arg0: String, arg1: i32) -> Result<()> {
-        todo!("abstract java/util/Comparators$NaturalOrderComparator.<init>")
+        panic!("stub: java/util/Comparators$NaturalOrderComparator.<init>:(Ljava/lang/String;I)V")
     }
 
     // java: compare(Ljava/lang/Comparable;Ljava/lang/Comparable;)I
     pub fn compare(&self, c1: Object, c2: Object) -> Result<i32> {
-        todo!("abstract java/util/Comparators$NaturalOrderComparator.compare")
+        panic!("stub: java/util/Comparators$NaturalOrderComparator.compare:(Ljava/lang/Comparable;Ljava/lang/Comparable;)I")
     }
 
     // java: reversed()Ljava/util/Comparator;
     pub fn reversed(&self) -> Result<Object> {
-        todo!("abstract java/util/Comparators$NaturalOrderComparator.reversed")
+        panic!("stub: java/util/Comparators$NaturalOrderComparator.reversed:()Ljava/util/Comparator;")
     }
 }

@@ -24,51 +24,51 @@ pub struct ImmutableCollections_ListN<E> {
 impl<E: Clone + 'static> ImmutableCollections_ListN<E> {
     // java: <init>([Ljava/lang/Object;Z)V
     pub fn new(&self, elements: Vec<Object>, allowNulls: bool) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$ListN.<init>")
+        panic!("stub: java/util/ImmutableCollections$ListN.<init>:([Ljava/lang/Object;Z)V")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$ListN.isEmpty")
+        panic!("stub: java/util/ImmutableCollections$ListN.isEmpty:()Z")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$ListN.size")
+        panic!("stub: java/util/ImmutableCollections$ListN.size:()I")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$ListN.get")
+        panic!("stub: java/util/ImmutableCollections$ListN.get:(I)Ljava/lang/Object;")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, in_: Object) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$ListN.readObject")
+        panic!("stub: java/util/ImmutableCollections$ListN.readObject:(Ljava/io/ObjectInputStream;)V")
     }
 
     // java: writeReplace()Ljava/lang/Object;
     pub fn writeReplace(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$ListN.writeReplace")
+        panic!("stub: java/util/ImmutableCollections$ListN.writeReplace:()Ljava/lang/Object;")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ImmutableCollections$ListN.toArray")
+        panic!("stub: java/util/ImmutableCollections$ListN.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/ImmutableCollections$ListN.toArray")
+        panic!("stub: java/util/ImmutableCollections$ListN.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$ListN.indexOf")
+        panic!("stub: java/util/ImmutableCollections$ListN.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$ListN.lastIndexOf")
+        panic!("stub: java/util/ImmutableCollections$ListN.lastIndexOf:(Ljava/lang/Object;)I")
     }
 }

@@ -23,16 +23,16 @@ pub struct Collections_3 {
 impl Collections_3 {
     // java: <init>(Ljava/util/Collection;)V
     pub fn new(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$3.<init>")
+        panic!("stub: java/util/Collections$3.<init>:(Ljava/util/Collection;)V")
     }
 
     // java: hasMoreElements()Z
     pub fn hasMoreElements(&self) -> Result<bool> {
-        todo!("abstract java/util/Collections$3.hasMoreElements")
+        panic!("stub: java/util/Collections$3.hasMoreElements:()Z")
     }
 
     // java: nextElement()Ljava/lang/Object;
     pub fn nextElement(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$3.nextElement")
+        panic!("stub: java/util/Collections$3.nextElement:()Ljava/lang/Object;")
     }
 }

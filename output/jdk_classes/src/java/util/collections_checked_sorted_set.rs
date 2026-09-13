@@ -22,36 +22,36 @@ pub struct Collections_CheckedSortedSet<E> {
 impl<E: Clone + 'static> Collections_CheckedSortedSet<E> {
     // java: <init>(Ljava/util/SortedSet;Ljava/lang/Class;)V
     pub fn new(&self, s: Object, type_: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CheckedSortedSet.<init>")
+        panic!("stub: java/util/Collections$CheckedSortedSet.<init>:(Ljava/util/SortedSet;Ljava/lang/Class;)V")
     }
 
     // java: comparator()Ljava/util/Comparator;
     pub fn comparator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedSet.comparator")
+        panic!("stub: java/util/Collections$CheckedSortedSet.comparator:()Ljava/util/Comparator;")
     }
 
     // java: first()Ljava/lang/Object;
     pub fn first(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedSet.first")
+        panic!("stub: java/util/Collections$CheckedSortedSet.first:()Ljava/lang/Object;")
     }
 
     // java: last()Ljava/lang/Object;
     pub fn last(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedSet.last")
+        panic!("stub: java/util/Collections$CheckedSortedSet.last:()Ljava/lang/Object;")
     }
 
     // java: subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedSet;
     pub fn subSet(&self, fromElement: Object, toElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedSet.subSet")
+        panic!("stub: java/util/Collections$CheckedSortedSet.subSet:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedSet;")
     }
 
     // java: headSet(Ljava/lang/Object;)Ljava/util/SortedSet;
     pub fn headSet(&self, toElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedSet.headSet")
+        panic!("stub: java/util/Collections$CheckedSortedSet.headSet:(Ljava/lang/Object;)Ljava/util/SortedSet;")
     }
 
     // java: tailSet(Ljava/lang/Object;)Ljava/util/SortedSet;
     pub fn tailSet(&self, fromElement: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedSet.tailSet")
+        panic!("stub: java/util/Collections$CheckedSortedSet.tailSet:(Ljava/lang/Object;)Ljava/util/SortedSet;")
     }
 }

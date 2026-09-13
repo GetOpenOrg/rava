@@ -18,6 +18,6 @@ pub struct Short_ShortCache;
 impl Short_ShortCache {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/Short$ShortCache.<init>")
+        panic!("stub: java/lang/Short$ShortCache.<init>:()V")
     }
 }

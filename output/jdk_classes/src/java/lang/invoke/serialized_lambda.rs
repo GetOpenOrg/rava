@@ -39,71 +39,71 @@ pub struct SerializedLambda {
 impl SerializedLambda {
     // java: <init>(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/Object;)V
     pub fn new(&self, capturingClass: Object, functionalInterfaceClass: String, functionalInterfaceMethodName: String, functionalInterfaceMethodSignature: String, implMethodKind: i32, implClass: String, implMethodName: String, implMethodSignature: String, instantiatedMethodType: String, capturedArgs: Vec<Object>) -> Result<()> {
-        todo!("abstract java/lang/invoke/SerializedLambda.<init>")
+        panic!("stub: java/lang/invoke/SerializedLambda.<init>:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/Object;)V")
     }
 
     // java: getCapturingClass()Ljava/lang/String;
     pub fn getCapturingClass(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getCapturingClass")
+        panic!("stub: java/lang/invoke/SerializedLambda.getCapturingClass:()Ljava/lang/String;")
     }
 
     // java: getFunctionalInterfaceClass()Ljava/lang/String;
     pub fn getFunctionalInterfaceClass(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getFunctionalInterfaceClass")
+        panic!("stub: java/lang/invoke/SerializedLambda.getFunctionalInterfaceClass:()Ljava/lang/String;")
     }
 
     // java: getFunctionalInterfaceMethodName()Ljava/lang/String;
     pub fn getFunctionalInterfaceMethodName(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getFunctionalInterfaceMethodName")
+        panic!("stub: java/lang/invoke/SerializedLambda.getFunctionalInterfaceMethodName:()Ljava/lang/String;")
     }
 
     // java: getFunctionalInterfaceMethodSignature()Ljava/lang/String;
     pub fn getFunctionalInterfaceMethodSignature(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getFunctionalInterfaceMethodSignature")
+        panic!("stub: java/lang/invoke/SerializedLambda.getFunctionalInterfaceMethodSignature:()Ljava/lang/String;")
     }
 
     // java: getImplClass()Ljava/lang/String;
     pub fn getImplClass(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getImplClass")
+        panic!("stub: java/lang/invoke/SerializedLambda.getImplClass:()Ljava/lang/String;")
     }
 
     // java: getImplMethodName()Ljava/lang/String;
     pub fn getImplMethodName(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getImplMethodName")
+        panic!("stub: java/lang/invoke/SerializedLambda.getImplMethodName:()Ljava/lang/String;")
     }
 
     // java: getImplMethodSignature()Ljava/lang/String;
     pub fn getImplMethodSignature(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getImplMethodSignature")
+        panic!("stub: java/lang/invoke/SerializedLambda.getImplMethodSignature:()Ljava/lang/String;")
     }
 
     // java: getImplMethodKind()I
     pub fn getImplMethodKind(&self) -> Result<i32> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getImplMethodKind")
+        panic!("stub: java/lang/invoke/SerializedLambda.getImplMethodKind:()I")
     }
 
     // java: getInstantiatedMethodType()Ljava/lang/String;
     pub fn getInstantiatedMethodType(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getInstantiatedMethodType")
+        panic!("stub: java/lang/invoke/SerializedLambda.getInstantiatedMethodType:()Ljava/lang/String;")
     }
 
     // java: getCapturedArgCount()I
     pub fn getCapturedArgCount(&self) -> Result<i32> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getCapturedArgCount")
+        panic!("stub: java/lang/invoke/SerializedLambda.getCapturedArgCount:()I")
     }
 
     // java: getCapturedArg(I)Ljava/lang/Object;
     pub fn getCapturedArg(&self, i: i32) -> Result<Object> {
-        todo!("abstract java/lang/invoke/SerializedLambda.getCapturedArg")
+        panic!("stub: java/lang/invoke/SerializedLambda.getCapturedArg:(I)Ljava/lang/Object;")
     }
 
     // java: readResolve()Ljava/lang/Object;
     pub fn readResolve(&self) -> Result<Object> {
-        todo!("abstract java/lang/invoke/SerializedLambda.readResolve")
+        panic!("stub: java/lang/invoke/SerializedLambda.readResolve:()Ljava/lang/Object;")
     }
 
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        todo!("abstract java/lang/invoke/SerializedLambda.toString")
+        panic!("stub: java/lang/invoke/SerializedLambda.toString:()Ljava/lang/String;")
     }
 }

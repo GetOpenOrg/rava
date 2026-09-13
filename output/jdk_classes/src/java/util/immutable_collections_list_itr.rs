@@ -28,56 +28,56 @@ pub struct ImmutableCollections_ListItr<E> {
 impl<E: Clone + 'static> ImmutableCollections_ListItr<E> {
     // java: <init>(Ljava/util/List;I)V
     pub fn new__list_i(&self, list: Object, size: i32) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.<init>")
+        panic!("stub: java/util/ImmutableCollections$ListItr.<init>:(Ljava/util/List;I)V")
     }
 
     // java: <init>(Ljava/util/List;II)V
     pub fn new__list_i_i(&self, list: Object, size: i32, index: i32) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.<init>")
+        panic!("stub: java/util/ImmutableCollections$ListItr.<init>:(Ljava/util/List;II)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.hasNext")
+        panic!("stub: java/util/ImmutableCollections$ListItr.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.next")
+        panic!("stub: java/util/ImmutableCollections$ListItr.next:()Ljava/lang/Object;")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.remove")
+        panic!("stub: java/util/ImmutableCollections$ListItr.remove:()V")
     }
 
     // java: hasPrevious()Z
     pub fn hasPrevious(&self) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.hasPrevious")
+        panic!("stub: java/util/ImmutableCollections$ListItr.hasPrevious:()Z")
     }
 
     // java: previous()Ljava/lang/Object;
     pub fn previous(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.previous")
+        panic!("stub: java/util/ImmutableCollections$ListItr.previous:()Ljava/lang/Object;")
     }
 
     // java: nextIndex()I
     pub fn nextIndex(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.nextIndex")
+        panic!("stub: java/util/ImmutableCollections$ListItr.nextIndex:()I")
     }
 
     // java: previousIndex()I
     pub fn previousIndex(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.previousIndex")
+        panic!("stub: java/util/ImmutableCollections$ListItr.previousIndex:()I")
     }
 
     // java: set(Ljava/lang/Object;)V
     pub fn set(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.set")
+        panic!("stub: java/util/ImmutableCollections$ListItr.set:(Ljava/lang/Object;)V")
     }
 
     // java: add(Ljava/lang/Object;)V
     pub fn add(&self, e: Object) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$ListItr.add")
+        panic!("stub: java/util/ImmutableCollections$ListItr.add:(Ljava/lang/Object;)V")
     }
 }

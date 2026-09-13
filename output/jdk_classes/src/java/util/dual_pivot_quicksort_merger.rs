@@ -35,16 +35,16 @@ pub struct DualPivotQuicksort_Merger {
 impl DualPivotQuicksort_Merger {
     // java: <init>(Ljava/util/concurrent/CountedCompleter;Ljava/lang/Object;ILjava/lang/Object;IILjava/lang/Object;II)V
     pub fn new(&self, parent: Object, dst: Object, k: i32, a1: Object, lo1: i32, hi1: i32, a2: Object, lo2: i32, hi2: i32) -> Result<()> {
-        todo!("abstract java/util/DualPivotQuicksort$Merger.<init>")
+        panic!("stub: java/util/DualPivotQuicksort$Merger.<init>:(Ljava/util/concurrent/CountedCompleter;Ljava/lang/Object;ILjava/lang/Object;IILjava/lang/Object;II)V")
     }
 
     // java: compute()V
     pub fn compute(&self) -> Result<()> {
-        todo!("abstract java/util/DualPivotQuicksort$Merger.compute")
+        panic!("stub: java/util/DualPivotQuicksort$Merger.compute:()V")
     }
 
     // java: forkMerger(Ljava/lang/Object;ILjava/lang/Object;IILjava/lang/Object;II)V
     pub fn forkMerger(&self, dst: Object, k: i32, a1: Object, lo1: i32, hi1: i32, a2: Object, lo2: i32, hi2: i32) -> Result<()> {
-        todo!("abstract java/util/DualPivotQuicksort$Merger.forkMerger")
+        panic!("stub: java/util/DualPivotQuicksort$Merger.forkMerger:(Ljava/lang/Object;ILjava/lang/Object;IILjava/lang/Object;II)V")
     }
 }

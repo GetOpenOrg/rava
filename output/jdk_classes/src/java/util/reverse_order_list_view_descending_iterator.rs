@@ -23,21 +23,21 @@ pub struct ReverseOrderListView_DescendingIterator {
 impl ReverseOrderListView_DescendingIterator {
     // java: <init>(Ljava/util/ReverseOrderListView;)V
     pub fn new(&self, this_0: Object) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingIterator.<init>")
+        panic!("stub: java/util/ReverseOrderListView$DescendingIterator.<init>:(Ljava/util/ReverseOrderListView;)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingIterator.hasNext")
+        panic!("stub: java/util/ReverseOrderListView$DescendingIterator.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingIterator.next")
+        panic!("stub: java/util/ReverseOrderListView$DescendingIterator.next:()Ljava/lang/Object;")
     }
 
     // java: remove()V
     pub fn remove(&self) -> Result<()> {
-        todo!("abstract java/util/ReverseOrderListView$DescendingIterator.remove")
+        panic!("stub: java/util/ReverseOrderListView$DescendingIterator.remove:()V")
     }
 }

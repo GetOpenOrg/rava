@@ -27,41 +27,41 @@ pub struct Spliterators_IntIteratorSpliterator {
 impl Spliterators_IntIteratorSpliterator {
     // java: <init>(Ljava/util/PrimitiveIterator$OfInt;JI)V
     pub fn new__primit_l_i(&self, iterator: Object, size: i64, arg2: i32) -> Result<()> {
-        todo!("abstract java/util/Spliterators$IntIteratorSpliterator.<init>")
+        panic!("stub: java/util/Spliterators$IntIteratorSpliterator.<init>:(Ljava/util/PrimitiveIterator$OfInt;JI)V")
     }
 
     // java: <init>(Ljava/util/PrimitiveIterator$OfInt;I)V
     pub fn new__primit_i(&self, iterator: Object, characteristics: i32) -> Result<()> {
-        todo!("abstract java/util/Spliterators$IntIteratorSpliterator.<init>")
+        panic!("stub: java/util/Spliterators$IntIteratorSpliterator.<init>:(Ljava/util/PrimitiveIterator$OfInt;I)V")
     }
 
     // java: trySplit()Ljava/util/Spliterator$OfInt;
     pub fn trySplit(&self) -> Result<Object> {
-        todo!("abstract java/util/Spliterators$IntIteratorSpliterator.trySplit")
+        panic!("stub: java/util/Spliterators$IntIteratorSpliterator.trySplit:()Ljava/util/Spliterator$OfInt;")
     }
 
     // java: forEachRemaining(Ljava/util/function/IntConsumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$IntIteratorSpliterator.forEachRemaining")
+        panic!("stub: java/util/Spliterators$IntIteratorSpliterator.forEachRemaining:(Ljava/util/function/IntConsumer;)V")
     }
 
     // java: tryAdvance(Ljava/util/function/IntConsumer;)Z
     pub fn tryAdvance(&self, action: Object) -> Result<bool> {
-        todo!("abstract java/util/Spliterators$IntIteratorSpliterator.tryAdvance")
+        panic!("stub: java/util/Spliterators$IntIteratorSpliterator.tryAdvance:(Ljava/util/function/IntConsumer;)Z")
     }
 
     // java: estimateSize()J
     pub fn estimateSize(&self) -> Result<i64> {
-        todo!("abstract java/util/Spliterators$IntIteratorSpliterator.estimateSize")
+        panic!("stub: java/util/Spliterators$IntIteratorSpliterator.estimateSize:()J")
     }
 
     // java: characteristics()I
     pub fn characteristics(&self) -> Result<i32> {
-        todo!("abstract java/util/Spliterators$IntIteratorSpliterator.characteristics")
+        panic!("stub: java/util/Spliterators$IntIteratorSpliterator.characteristics:()I")
     }
 
     // java: getComparator()Ljava/util/Comparator;
     pub fn getComparator(&self) -> Result<Object> {
-        todo!("abstract java/util/Spliterators$IntIteratorSpliterator.getComparator")
+        panic!("stub: java/util/Spliterators$IntIteratorSpliterator.getComparator:()Ljava/util/Comparator;")
     }
 }

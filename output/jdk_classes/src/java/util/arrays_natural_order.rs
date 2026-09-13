@@ -18,11 +18,11 @@ pub struct Arrays_NaturalOrder;
 impl Arrays_NaturalOrder {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/Arrays$NaturalOrder.<init>")
+        panic!("stub: java/util/Arrays$NaturalOrder.<init>:()V")
     }
 
     // java: compare(Ljava/lang/Object;Ljava/lang/Object;)I
     pub fn compare(&self, first: Object, second: Object) -> Result<i32> {
-        todo!("abstract java/util/Arrays$NaturalOrder.compare")
+        panic!("stub: java/util/Arrays$NaturalOrder.compare:(Ljava/lang/Object;Ljava/lang/Object;)I")
     }
 }

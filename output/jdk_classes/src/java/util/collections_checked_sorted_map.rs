@@ -22,36 +22,36 @@ pub struct Collections_CheckedSortedMap<K, V> {
 impl<K: Clone + 'static, V: Clone + 'static> Collections_CheckedSortedMap<K, V> {
     // java: <init>(Ljava/util/SortedMap;Ljava/lang/Class;Ljava/lang/Class;)V
     pub fn new(&self, m: Object, keyType: Object, valueType: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CheckedSortedMap.<init>")
+        panic!("stub: java/util/Collections$CheckedSortedMap.<init>:(Ljava/util/SortedMap;Ljava/lang/Class;Ljava/lang/Class;)V")
     }
 
     // java: comparator()Ljava/util/Comparator;
     pub fn comparator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedMap.comparator")
+        panic!("stub: java/util/Collections$CheckedSortedMap.comparator:()Ljava/util/Comparator;")
     }
 
     // java: firstKey()Ljava/lang/Object;
     pub fn firstKey(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedMap.firstKey")
+        panic!("stub: java/util/Collections$CheckedSortedMap.firstKey:()Ljava/lang/Object;")
     }
 
     // java: lastKey()Ljava/lang/Object;
     pub fn lastKey(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedMap.lastKey")
+        panic!("stub: java/util/Collections$CheckedSortedMap.lastKey:()Ljava/lang/Object;")
     }
 
     // java: subMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;
     pub fn subMap(&self, fromKey: Object, toKey: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedMap.subMap")
+        panic!("stub: java/util/Collections$CheckedSortedMap.subMap:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;")
     }
 
     // java: headMap(Ljava/lang/Object;)Ljava/util/SortedMap;
     pub fn headMap(&self, toKey: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedMap.headMap")
+        panic!("stub: java/util/Collections$CheckedSortedMap.headMap:(Ljava/lang/Object;)Ljava/util/SortedMap;")
     }
 
     // java: tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;
     pub fn tailMap(&self, fromKey: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$CheckedSortedMap.tailMap")
+        panic!("stub: java/util/Collections$CheckedSortedMap.tailMap:(Ljava/lang/Object;)Ljava/util/SortedMap;")
     }
 }

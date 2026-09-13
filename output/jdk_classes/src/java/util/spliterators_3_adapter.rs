@@ -25,26 +25,26 @@ pub struct Spliterators_3Adapter {
 impl Spliterators_3Adapter {
     // java: <init>(Ljava/util/Spliterator$OfLong;)V
     pub fn new(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$3Adapter.<init>")
+        panic!("stub: java/util/Spliterators$3Adapter.<init>:(Ljava/util/Spliterator$OfLong;)V")
     }
 
     // java: accept(J)V
     pub fn accept(&self, t: i64) -> Result<()> {
-        todo!("abstract java/util/Spliterators$3Adapter.accept")
+        panic!("stub: java/util/Spliterators$3Adapter.accept:(J)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/Spliterators$3Adapter.hasNext")
+        panic!("stub: java/util/Spliterators$3Adapter.hasNext:()Z")
     }
 
     // java: nextLong()J
     pub fn nextLong(&self) -> Result<i64> {
-        todo!("abstract java/util/Spliterators$3Adapter.nextLong")
+        panic!("stub: java/util/Spliterators$3Adapter.nextLong:()J")
     }
 
     // java: forEachRemaining(Ljava/util/function/LongConsumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$3Adapter.forEachRemaining")
+        panic!("stub: java/util/Spliterators$3Adapter.forEachRemaining:(Ljava/util/function/LongConsumer;)V")
     }
 }

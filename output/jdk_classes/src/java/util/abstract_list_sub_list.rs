@@ -28,86 +28,86 @@ pub struct AbstractList_SubList<E> {
 impl<E: Clone + 'static> AbstractList_SubList<E> {
     // java: <init>(Ljava/util/AbstractList;II)V
     pub fn new__abstra_i_i(&self, root: Object, fromIndex: i32, toIndex: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$SubList.<init>")
+        panic!("stub: java/util/AbstractList$SubList.<init>:(Ljava/util/AbstractList;II)V")
     }
 
     // java: <init>(Ljava/util/AbstractList$SubList;II)V
     pub fn new__abstra_i_i_1(&self, parent: Object, fromIndex: i32, toIndex: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$SubList.<init>")
+        panic!("stub: java/util/AbstractList$SubList.<init>:(Ljava/util/AbstractList$SubList;II)V")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, index: i32, element: Object) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$SubList.set")
+        panic!("stub: java/util/AbstractList$SubList.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$SubList.get")
+        panic!("stub: java/util/AbstractList$SubList.get:(I)Ljava/lang/Object;")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/AbstractList$SubList.size")
+        panic!("stub: java/util/AbstractList$SubList.size:()I")
     }
 
     // java: add(ILjava/lang/Object;)V
     pub fn add(&self, index: i32, element: Object) -> Result<()> {
-        todo!("abstract java/util/AbstractList$SubList.add")
+        panic!("stub: java/util/AbstractList$SubList.add:(ILjava/lang/Object;)V")
     }
 
     // java: remove(I)Ljava/lang/Object;
     pub fn remove(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$SubList.remove")
+        panic!("stub: java/util/AbstractList$SubList.remove:(I)Ljava/lang/Object;")
     }
 
     // java: removeRange(II)V
     pub fn removeRange(&self, fromIndex: i32, toIndex: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$SubList.removeRange")
+        panic!("stub: java/util/AbstractList$SubList.removeRange:(II)V")
     }
 
     // java: addAll(Ljava/util/Collection;)Z
     pub fn addAll__coll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/AbstractList$SubList.addAll")
+        panic!("stub: java/util/AbstractList$SubList.addAll:(Ljava/util/Collection;)Z")
     }
 
     // java: addAll(ILjava/util/Collection;)Z
     pub fn addAll__i_coll(&self, index: i32, c: Object) -> Result<bool> {
-        todo!("abstract java/util/AbstractList$SubList.addAll")
+        panic!("stub: java/util/AbstractList$SubList.addAll:(ILjava/util/Collection;)Z")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$SubList.iterator")
+        panic!("stub: java/util/AbstractList$SubList.iterator:()Ljava/util/Iterator;")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$SubList.listIterator")
+        panic!("stub: java/util/AbstractList$SubList.listIterator:(I)Ljava/util/ListIterator;")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList$SubList.subList")
+        panic!("stub: java/util/AbstractList$SubList.subList:(II)Ljava/util/List;")
     }
 
     // java: rangeCheckForAdd(I)V
     pub fn rangeCheckForAdd(&self, index: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$SubList.rangeCheckForAdd")
+        panic!("stub: java/util/AbstractList$SubList.rangeCheckForAdd:(I)V")
     }
 
     // java: outOfBoundsMsg(I)Ljava/lang/String;
     pub fn outOfBoundsMsg(&self, index: i32) -> Result<String> {
-        todo!("abstract java/util/AbstractList$SubList.outOfBoundsMsg")
+        panic!("stub: java/util/AbstractList$SubList.outOfBoundsMsg:(I)Ljava/lang/String;")
     }
 
     // java: checkForComodification()V
     pub fn checkForComodification(&self) -> Result<()> {
-        todo!("abstract java/util/AbstractList$SubList.checkForComodification")
+        panic!("stub: java/util/AbstractList$SubList.checkForComodification:()V")
     }
 
     // java: updateSizeAndModCount(I)V
     pub fn updateSizeAndModCount(&self, sizeChange: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList$SubList.updateSizeAndModCount")
+        panic!("stub: java/util/AbstractList$SubList.updateSizeAndModCount:(I)V")
     }
 }

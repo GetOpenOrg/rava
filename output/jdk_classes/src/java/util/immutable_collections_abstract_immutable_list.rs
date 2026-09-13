@@ -18,86 +18,86 @@ pub struct ImmutableCollections_AbstractImmutableList<E>(std::marker::PhantomDat
 impl<E: Clone + 'static> ImmutableCollections_AbstractImmutableList<E> {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.<init>")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.<init>:()V")
     }
 
     // java: add(ILjava/lang/Object;)V
     pub fn add(&self, index: i32, element: Object) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.add")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.add:(ILjava/lang/Object;)V")
     }
 
     // java: addAll(ILjava/util/Collection;)Z
     pub fn addAll(&self, index: i32, c: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.addAll")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.addAll:(ILjava/util/Collection;)Z")
     }
 
     // java: remove(I)Ljava/lang/Object;
     pub fn remove(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.remove")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.remove:(I)Ljava/lang/Object;")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.replaceAll")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.replaceAll:(Ljava/util/function/UnaryOperator;)V")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, index: i32, element: Object) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.set")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.sort")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.sort:(Ljava/util/Comparator;)V")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.subList")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.subList:(II)Ljava/util/List;")
     }
 
     // java: subListRangeCheck(III)V
     pub fn subListRangeCheck(fromIndex: i32, toIndex: i32, size: i32) -> Result<()> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.subListRangeCheck")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.subListRangeCheck:(III)V")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.iterator")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.iterator:()Ljava/util/Iterator;")
     }
 
     // java: listIterator()Ljava/util/ListIterator;
     pub fn listIterator(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.listIterator")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.listIterator:()Ljava/util/ListIterator;")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator__i(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.listIterator")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.listIterator:(I)Ljava/util/ListIterator;")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.equals")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.hashCode")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.hashCode:()I")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.contains")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: reversed()Ljava/util/List;
     pub fn reversed(&self) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.reversed")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.reversed:()Ljava/util/List;")
     }
 
     // java: outOfBounds(I)Ljava/lang/IndexOutOfBoundsException;
     pub fn outOfBounds(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/ImmutableCollections$AbstractImmutableList.outOfBounds")
+        panic!("stub: java/util/ImmutableCollections$AbstractImmutableList.outOfBounds:(I)Ljava/lang/IndexOutOfBoundsException;")
     }
 }

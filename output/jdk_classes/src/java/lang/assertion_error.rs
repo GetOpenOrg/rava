@@ -18,51 +18,51 @@ pub struct AssertionError;
 impl AssertionError {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, detailMessage: String) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(Ljava/lang/Object;)V
     pub fn new__obj(&self, detailMessage: Object) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(Ljava/lang/Object;)V")
     }
 
     // java: <init>(Z)V
     pub fn new__z(&self, detailMessage: bool) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(Z)V")
     }
 
     // java: <init>(C)V
     pub fn new__c(&self, detailMessage: u16) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(C)V")
     }
 
     // java: <init>(I)V
     pub fn new__i(&self, detailMessage: i32) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(I)V")
     }
 
     // java: <init>(J)V
     pub fn new__l(&self, detailMessage: i64) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(J)V")
     }
 
     // java: <init>(F)V
     pub fn new__f(&self, detailMessage: f32) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(F)V")
     }
 
     // java: <init>(D)V
     pub fn new__d(&self, detailMessage: f64) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(D)V")
     }
 
     // java: <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
     pub fn new__str_throwa(&self, message: String, cause: Object) -> Result<()> {
-        todo!("abstract java/lang/AssertionError.<init>")
+        panic!("stub: java/lang/AssertionError.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")
     }
 }

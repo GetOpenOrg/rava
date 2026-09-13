@@ -23,21 +23,21 @@ pub struct CollSer {
 impl CollSer {
     // java: <init>(I[Ljava/lang/Object;)V
     pub fn new(&self, t: i32, a: Vec<Object>) -> Result<()> {
-        todo!("abstract java/util/CollSer.<init>")
+        panic!("stub: java/util/CollSer.<init>:(I[Ljava/lang/Object;)V")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, ois: Object) -> Result<()> {
-        todo!("abstract java/util/CollSer.readObject")
+        panic!("stub: java/util/CollSer.readObject:(Ljava/io/ObjectInputStream;)V")
     }
 
     // java: writeObject(Ljava/io/ObjectOutputStream;)V
     pub fn writeObject(&self, oos: Object) -> Result<()> {
-        todo!("abstract java/util/CollSer.writeObject")
+        panic!("stub: java/util/CollSer.writeObject:(Ljava/io/ObjectOutputStream;)V")
     }
 
     // java: readResolve()Ljava/lang/Object;
     pub fn readResolve(&self) -> Result<Object> {
-        todo!("abstract java/util/CollSer.readResolve")
+        panic!("stub: java/util/CollSer.readResolve:()Ljava/lang/Object;")
     }
 }

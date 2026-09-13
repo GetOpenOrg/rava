@@ -18,21 +18,21 @@ pub struct IndexOutOfBoundsException;
 impl IndexOutOfBoundsException {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/IndexOutOfBoundsException.<init>")
+        panic!("stub: java/lang/IndexOutOfBoundsException.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, s: String) -> Result<()> {
-        todo!("abstract java/lang/IndexOutOfBoundsException.<init>")
+        panic!("stub: java/lang/IndexOutOfBoundsException.<init>:(Ljava/lang/String;)V")
     }
 
     // java: <init>(I)V
     pub fn new__i(&self, index: i32) -> Result<()> {
-        todo!("abstract java/lang/IndexOutOfBoundsException.<init>")
+        panic!("stub: java/lang/IndexOutOfBoundsException.<init>:(I)V")
     }
 
     // java: <init>(J)V
     pub fn new__l(&self, index: i64) -> Result<()> {
-        todo!("abstract java/lang/IndexOutOfBoundsException.<init>")
+        panic!("stub: java/lang/IndexOutOfBoundsException.<init>:(J)V")
     }
 }

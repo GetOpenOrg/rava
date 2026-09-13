@@ -18,21 +18,21 @@ pub struct NumberFormatException;
 impl NumberFormatException {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/NumberFormatException.<init>")
+        panic!("stub: java/lang/NumberFormatException.<init>:()V")
     }
 
     // java: <init>(Ljava/lang/String;)V
     pub fn new__str(&self, s: String) -> Result<()> {
-        todo!("abstract java/lang/NumberFormatException.<init>")
+        panic!("stub: java/lang/NumberFormatException.<init>:(Ljava/lang/String;)V")
     }
 
     // java: forInputString(Ljava/lang/String;I)Ljava/lang/NumberFormatException;
     pub fn forInputString(s: String, radix: i32) -> Result<Object> {
-        todo!("abstract java/lang/NumberFormatException.forInputString")
+        panic!("stub: java/lang/NumberFormatException.forInputString:(Ljava/lang/String;I)Ljava/lang/NumberFormatException;")
     }
 
     // java: forCharSequence(Ljava/lang/CharSequence;III)Ljava/lang/NumberFormatException;
     pub fn forCharSequence(s: Object, beginIndex: i32, endIndex: i32, errorIndex: i32) -> Result<Object> {
-        todo!("abstract java/lang/NumberFormatException.forCharSequence")
+        panic!("stub: java/lang/NumberFormatException.forCharSequence:(Ljava/lang/CharSequence;III)Ljava/lang/NumberFormatException;")
     }
 }

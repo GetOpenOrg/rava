@@ -22,101 +22,101 @@ pub struct AbstractList<E> {
 impl<E: Clone + 'static> AbstractList<E> {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/util/AbstractList.<init>")
+        panic!("stub: java/util/AbstractList.<init>:()V")
     }
 
     // java: add(Ljava/lang/Object;)Z
     pub fn add__obj(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/AbstractList.add")
+        panic!("stub: java/util/AbstractList.add:(Ljava/lang/Object;)Z")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, arg0: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList.get")
+        panic!("stub: java/util/AbstractList.get:(I)Ljava/lang/Object;")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, index: i32, element: Object) -> Result<Object> {
-        todo!("abstract java/util/AbstractList.set")
+        panic!("stub: java/util/AbstractList.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: add(ILjava/lang/Object;)V
     pub fn add__i_obj(&self, index: i32, element: Object) -> Result<()> {
-        todo!("abstract java/util/AbstractList.add")
+        panic!("stub: java/util/AbstractList.add:(ILjava/lang/Object;)V")
     }
 
     // java: remove(I)Ljava/lang/Object;
     pub fn remove(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList.remove")
+        panic!("stub: java/util/AbstractList.remove:(I)Ljava/lang/Object;")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/AbstractList.indexOf")
+        panic!("stub: java/util/AbstractList.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/AbstractList.lastIndexOf")
+        panic!("stub: java/util/AbstractList.lastIndexOf:(Ljava/lang/Object;)I")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        todo!("abstract java/util/AbstractList.clear")
+        panic!("stub: java/util/AbstractList.clear:()V")
     }
 
     // java: addAll(ILjava/util/Collection;)Z
     pub fn addAll(&self, index: i32, c: Object) -> Result<bool> {
-        todo!("abstract java/util/AbstractList.addAll")
+        panic!("stub: java/util/AbstractList.addAll:(ILjava/util/Collection;)Z")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/AbstractList.iterator")
+        panic!("stub: java/util/AbstractList.iterator:()Ljava/util/Iterator;")
     }
 
     // java: listIterator()Ljava/util/ListIterator;
     pub fn listIterator(&self) -> Result<Object> {
-        todo!("abstract java/util/AbstractList.listIterator")
+        panic!("stub: java/util/AbstractList.listIterator:()Ljava/util/ListIterator;")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator__i(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList.listIterator")
+        panic!("stub: java/util/AbstractList.listIterator:(I)Ljava/util/ListIterator;")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/AbstractList.subList")
+        panic!("stub: java/util/AbstractList.subList:(II)Ljava/util/List;")
     }
 
     // java: subListRangeCheck(III)V
     pub fn subListRangeCheck(fromIndex: i32, toIndex: i32, size: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList.subListRangeCheck")
+        panic!("stub: java/util/AbstractList.subListRangeCheck:(III)V")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/AbstractList.equals")
+        panic!("stub: java/util/AbstractList.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/AbstractList.hashCode")
+        panic!("stub: java/util/AbstractList.hashCode:()I")
     }
 
     // java: removeRange(II)V
     pub fn removeRange(&self, fromIndex: i32, toIndex: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList.removeRange")
+        panic!("stub: java/util/AbstractList.removeRange:(II)V")
     }
 
     // java: rangeCheckForAdd(I)V
     pub fn rangeCheckForAdd(&self, index: i32) -> Result<()> {
-        todo!("abstract java/util/AbstractList.rangeCheckForAdd")
+        panic!("stub: java/util/AbstractList.rangeCheckForAdd:(I)V")
     }
 
     // java: outOfBoundsMsg(I)Ljava/lang/String;
     pub fn outOfBoundsMsg(&self, index: i32) -> Result<String> {
-        todo!("abstract java/util/AbstractList.outOfBoundsMsg")
+        panic!("stub: java/util/AbstractList.outOfBoundsMsg:(I)Ljava/lang/String;")
     }
 }

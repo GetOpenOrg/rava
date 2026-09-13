@@ -22,86 +22,86 @@ pub struct Collections_SynchronizedList<E> {
 impl<E: Clone + 'static> Collections_SynchronizedList<E> {
     // java: <init>(Ljava/util/List;)V
     pub fn new__list(&self, list: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedList.<init>")
+        panic!("stub: java/util/Collections$SynchronizedList.<init>:(Ljava/util/List;)V")
     }
 
     // java: <init>(Ljava/util/List;Ljava/lang/Object;)V
     pub fn new__list_obj(&self, list: Object, mutex: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedList.<init>")
+        panic!("stub: java/util/Collections$SynchronizedList.<init>:(Ljava/util/List;Ljava/lang/Object;)V")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedList.equals")
+        panic!("stub: java/util/Collections$SynchronizedList.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$SynchronizedList.hashCode")
+        panic!("stub: java/util/Collections$SynchronizedList.hashCode:()I")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedList.get")
+        panic!("stub: java/util/Collections$SynchronizedList.get:(I)Ljava/lang/Object;")
     }
 
     // java: set(ILjava/lang/Object;)Ljava/lang/Object;
     pub fn set(&self, index: i32, element: Object) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedList.set")
+        panic!("stub: java/util/Collections$SynchronizedList.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     // java: add(ILjava/lang/Object;)V
     pub fn add(&self, index: i32, element: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedList.add")
+        panic!("stub: java/util/Collections$SynchronizedList.add:(ILjava/lang/Object;)V")
     }
 
     // java: remove(I)Ljava/lang/Object;
     pub fn remove(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedList.remove")
+        panic!("stub: java/util/Collections$SynchronizedList.remove:(I)Ljava/lang/Object;")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/Collections$SynchronizedList.indexOf")
+        panic!("stub: java/util/Collections$SynchronizedList.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/Collections$SynchronizedList.lastIndexOf")
+        panic!("stub: java/util/Collections$SynchronizedList.lastIndexOf:(Ljava/lang/Object;)I")
     }
 
     // java: addAll(ILjava/util/Collection;)Z
     pub fn addAll(&self, index: i32, c: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$SynchronizedList.addAll")
+        panic!("stub: java/util/Collections$SynchronizedList.addAll:(ILjava/util/Collection;)Z")
     }
 
     // java: listIterator()Ljava/util/ListIterator;
     pub fn listIterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedList.listIterator")
+        panic!("stub: java/util/Collections$SynchronizedList.listIterator:()Ljava/util/ListIterator;")
     }
 
     // java: listIterator(I)Ljava/util/ListIterator;
     pub fn listIterator__i(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedList.listIterator")
+        panic!("stub: java/util/Collections$SynchronizedList.listIterator:(I)Ljava/util/ListIterator;")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedList.subList")
+        panic!("stub: java/util/Collections$SynchronizedList.subList:(II)Ljava/util/List;")
     }
 
     // java: replaceAll(Ljava/util/function/UnaryOperator;)V
     pub fn replaceAll(&self, operator: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedList.replaceAll")
+        panic!("stub: java/util/Collections$SynchronizedList.replaceAll:(Ljava/util/function/UnaryOperator;)V")
     }
 
     // java: sort(Ljava/util/Comparator;)V
     pub fn sort(&self, c: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$SynchronizedList.sort")
+        panic!("stub: java/util/Collections$SynchronizedList.sort:(Ljava/util/Comparator;)V")
     }
 
     // java: readResolve()Ljava/lang/Object;
     pub fn readResolve(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$SynchronizedList.readResolve")
+        panic!("stub: java/util/Collections$SynchronizedList.readResolve:()Ljava/lang/Object;")
     }
 }

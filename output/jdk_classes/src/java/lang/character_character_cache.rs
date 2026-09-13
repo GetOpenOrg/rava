@@ -18,6 +18,6 @@ pub struct Character_CharacterCache;
 impl Character_CharacterCache {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/Character$CharacterCache.<init>")
+        panic!("stub: java/lang/Character$CharacterCache.<init>:()V")
     }
 }

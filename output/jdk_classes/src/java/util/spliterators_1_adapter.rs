@@ -25,26 +25,26 @@ pub struct Spliterators_1Adapter {
 impl Spliterators_1Adapter {
     // java: <init>(Ljava/util/Spliterator;)V
     pub fn new(&self, arg0: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$1Adapter.<init>")
+        panic!("stub: java/util/Spliterators$1Adapter.<init>:(Ljava/util/Spliterator;)V")
     }
 
     // java: accept(Ljava/lang/Object;)V
     pub fn accept(&self, t: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$1Adapter.accept")
+        panic!("stub: java/util/Spliterators$1Adapter.accept:(Ljava/lang/Object;)V")
     }
 
     // java: hasNext()Z
     pub fn hasNext(&self) -> Result<bool> {
-        todo!("abstract java/util/Spliterators$1Adapter.hasNext")
+        panic!("stub: java/util/Spliterators$1Adapter.hasNext:()Z")
     }
 
     // java: next()Ljava/lang/Object;
     pub fn next(&self) -> Result<Object> {
-        todo!("abstract java/util/Spliterators$1Adapter.next")
+        panic!("stub: java/util/Spliterators$1Adapter.next:()Ljava/lang/Object;")
     }
 
     // java: forEachRemaining(Ljava/util/function/Consumer;)V
     pub fn forEachRemaining(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Spliterators$1Adapter.forEachRemaining")
+        panic!("stub: java/util/Spliterators$1Adapter.forEachRemaining:(Ljava/util/function/Consumer;)V")
     }
 }

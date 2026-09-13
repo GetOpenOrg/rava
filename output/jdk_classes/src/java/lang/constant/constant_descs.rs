@@ -18,16 +18,16 @@ pub struct ConstantDescs;
 impl ConstantDescs {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/constant/ConstantDescs.<init>")
+        panic!("stub: java/lang/constant/ConstantDescs.<init>:()V")
     }
 
     // java: ofCallsiteBootstrap(Ljava/lang/constant/ClassDesc;Ljava/lang/String;Ljava/lang/constant/ClassDesc;[Ljava/lang/constant/ClassDesc;)Ljava/lang/constant/DirectMethodHandleDesc;
     pub fn ofCallsiteBootstrap(owner: Object, name: String, returnType: Object, paramTypes: Vec<Object>) -> Result<Object> {
-        todo!("abstract java/lang/constant/ConstantDescs.ofCallsiteBootstrap")
+        panic!("stub: java/lang/constant/ConstantDescs.ofCallsiteBootstrap:(Ljava/lang/constant/ClassDesc;Ljava/lang/String;Ljava/lang/constant/ClassDesc;[Ljava/lang/constant/ClassDesc;)Ljava/lang/constant/DirectMethodHandleDesc;")
     }
 
     // java: ofConstantBootstrap(Ljava/lang/constant/ClassDesc;Ljava/lang/String;Ljava/lang/constant/ClassDesc;[Ljava/lang/constant/ClassDesc;)Ljava/lang/constant/DirectMethodHandleDesc;
     pub fn ofConstantBootstrap(owner: Object, name: String, returnType: Object, paramTypes: Vec<Object>) -> Result<Object> {
-        todo!("abstract java/lang/constant/ConstantDescs.ofConstantBootstrap")
+        panic!("stub: java/lang/constant/ConstantDescs.ofConstantBootstrap:(Ljava/lang/constant/ClassDesc;Ljava/lang/String;Ljava/lang/constant/ClassDesc;[Ljava/lang/constant/ClassDesc;)Ljava/lang/constant/DirectMethodHandleDesc;")
     }
 }

@@ -22,26 +22,26 @@ pub struct Collections_ReverseComparator2<T> {
 impl<T: Clone + 'static> Collections_ReverseComparator2<T> {
     // java: <init>(Ljava/util/Comparator;)V
     pub fn new(&self, cmp: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$ReverseComparator2.<init>")
+        panic!("stub: java/util/Collections$ReverseComparator2.<init>:(Ljava/util/Comparator;)V")
     }
 
     // java: compare(Ljava/lang/Object;Ljava/lang/Object;)I
     pub fn compare(&self, t1: Object, t2: Object) -> Result<i32> {
-        todo!("abstract java/util/Collections$ReverseComparator2.compare")
+        panic!("stub: java/util/Collections$ReverseComparator2.compare:(Ljava/lang/Object;Ljava/lang/Object;)I")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$ReverseComparator2.equals")
+        panic!("stub: java/util/Collections$ReverseComparator2.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$ReverseComparator2.hashCode")
+        panic!("stub: java/util/Collections$ReverseComparator2.hashCode:()I")
     }
 
     // java: reversed()Ljava/util/Comparator;
     pub fn reversed(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$ReverseComparator2.reversed")
+        panic!("stub: java/util/Collections$ReverseComparator2.reversed:()Ljava/util/Comparator;")
     }
 }

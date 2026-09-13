@@ -29,46 +29,46 @@ pub struct CharacterName {
 impl CharacterName {
     // java: <init>()V
     pub fn new(&self) -> Result<()> {
-        todo!("abstract java/lang/CharacterName.<init>")
+        panic!("stub: java/lang/CharacterName.<init>:()V")
     }
 
     // java: hashN([BII)I
     pub fn hashN(a: Vec<i8>, off: i32, len: i32) -> Result<i32> {
-        todo!("abstract java/lang/CharacterName.hashN")
+        panic!("stub: java/lang/CharacterName.hashN:([BII)I")
     }
 
     // java: addCp(IIII)I
     pub fn addCp(&self, idx: i32, hash: i32, next: i32, cp: i32) -> Result<i32> {
-        todo!("abstract java/lang/CharacterName.addCp")
+        panic!("stub: java/lang/CharacterName.addCp:(IIII)I")
     }
 
     // java: getCpHash(I)I
     pub fn getCpHash(&self, idx: i32) -> Result<i32> {
-        todo!("abstract java/lang/CharacterName.getCpHash")
+        panic!("stub: java/lang/CharacterName.getCpHash:(I)I")
     }
 
     // java: getCpNext(I)I
     pub fn getCpNext(&self, idx: i32) -> Result<i32> {
-        todo!("abstract java/lang/CharacterName.getCpNext")
+        panic!("stub: java/lang/CharacterName.getCpNext:(I)I")
     }
 
     // java: getCp(I)I
     pub fn getCp(&self, idx: i32) -> Result<i32> {
-        todo!("abstract java/lang/CharacterName.getCp")
+        panic!("stub: java/lang/CharacterName.getCp:(I)I")
     }
 
     // java: getInstance()Ljava/lang/CharacterName;
     pub fn getInstance() -> Result<Object> {
-        todo!("abstract java/lang/CharacterName.getInstance")
+        panic!("stub: java/lang/CharacterName.getInstance:()Ljava/lang/CharacterName;")
     }
 
     // java: getName(I)Ljava/lang/String;
     pub fn getName(&self, cp: i32) -> Result<String> {
-        todo!("abstract java/lang/CharacterName.getName")
+        panic!("stub: java/lang/CharacterName.getName:(I)Ljava/lang/String;")
     }
 
     // java: getCodePoint(Ljava/lang/String;)I
     pub fn getCodePoint(&self, name: String) -> Result<i32> {
-        todo!("abstract java/lang/CharacterName.getCodePoint")
+        panic!("stub: java/lang/CharacterName.getCodePoint:(Ljava/lang/String;)I")
     }
 }

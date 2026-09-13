@@ -24,81 +24,81 @@ pub struct Collections_CopiesList<E> {
 impl<E: Clone + 'static> Collections_CopiesList<E> {
     // java: <init>(ILjava/lang/Object;)V
     pub fn new(&self, n: i32, e: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CopiesList.<init>")
+        panic!("stub: java/util/Collections$CopiesList.<init>:(ILjava/lang/Object;)V")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$CopiesList.size")
+        panic!("stub: java/util/Collections$CopiesList.size:()I")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, obj: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CopiesList.contains")
+        panic!("stub: java/util/Collections$CopiesList.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: indexOf(Ljava/lang/Object;)I
     pub fn indexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/Collections$CopiesList.indexOf")
+        panic!("stub: java/util/Collections$CopiesList.indexOf:(Ljava/lang/Object;)I")
     }
 
     // java: lastIndexOf(Ljava/lang/Object;)I
     pub fn lastIndexOf(&self, o: Object) -> Result<i32> {
-        todo!("abstract java/util/Collections$CopiesList.lastIndexOf")
+        panic!("stub: java/util/Collections$CopiesList.lastIndexOf:(Ljava/lang/Object;)I")
     }
 
     // java: get(I)Ljava/lang/Object;
     pub fn get(&self, index: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$CopiesList.get")
+        panic!("stub: java/util/Collections$CopiesList.get:(I)Ljava/lang/Object;")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CopiesList.forEach")
+        panic!("stub: java/util/Collections$CopiesList.forEach:(Ljava/util/function/Consumer;)V")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$CopiesList.toArray")
+        panic!("stub: java/util/Collections$CopiesList.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$CopiesList.toArray")
+        panic!("stub: java/util/Collections$CopiesList.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: subList(II)Ljava/util/List;
     pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
-        todo!("abstract java/util/Collections$CopiesList.subList")
+        panic!("stub: java/util/Collections$CopiesList.subList:(II)Ljava/util/List;")
     }
 
     // java: hashCode()I
     pub fn hashCode(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$CopiesList.hashCode")
+        panic!("stub: java/util/Collections$CopiesList.hashCode:()I")
     }
 
     // java: equals(Ljava/lang/Object;)Z
     pub fn equals(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$CopiesList.equals")
+        panic!("stub: java/util/Collections$CopiesList.equals:(Ljava/lang/Object;)Z")
     }
 
     // java: stream()Ljava/util/stream/Stream;
     pub fn stream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CopiesList.stream")
+        panic!("stub: java/util/Collections$CopiesList.stream:()Ljava/util/stream/Stream;")
     }
 
     // java: parallelStream()Ljava/util/stream/Stream;
     pub fn parallelStream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CopiesList.parallelStream")
+        panic!("stub: java/util/Collections$CopiesList.parallelStream:()Ljava/util/stream/Stream;")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$CopiesList.spliterator")
+        panic!("stub: java/util/Collections$CopiesList.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: readObject(Ljava/io/ObjectInputStream;)V
     pub fn readObject(&self, ois: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$CopiesList.readObject")
+        panic!("stub: java/util/Collections$CopiesList.readObject:(Ljava/io/ObjectInputStream;)V")
     }
 }

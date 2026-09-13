@@ -22,126 +22,126 @@ pub struct Collections_AsLIFOQueue<E> {
 impl<E: Clone + 'static> Collections_AsLIFOQueue<E> {
     // java: <init>(Ljava/util/Deque;)V
     pub fn new(&self, q: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.<init>")
+        panic!("stub: java/util/Collections$AsLIFOQueue.<init>:(Ljava/util/Deque;)V")
     }
 
     // java: add(Ljava/lang/Object;)Z
     pub fn add(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.add")
+        panic!("stub: java/util/Collections$AsLIFOQueue.add:(Ljava/lang/Object;)Z")
     }
 
     // java: offer(Ljava/lang/Object;)Z
     pub fn offer(&self, e: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.offer")
+        panic!("stub: java/util/Collections$AsLIFOQueue.offer:(Ljava/lang/Object;)Z")
     }
 
     // java: poll()Ljava/lang/Object;
     pub fn poll(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.poll")
+        panic!("stub: java/util/Collections$AsLIFOQueue.poll:()Ljava/lang/Object;")
     }
 
     // java: remove()Ljava/lang/Object;
     pub fn remove(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.remove")
+        panic!("stub: java/util/Collections$AsLIFOQueue.remove:()Ljava/lang/Object;")
     }
 
     // java: peek()Ljava/lang/Object;
     pub fn peek(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.peek")
+        panic!("stub: java/util/Collections$AsLIFOQueue.peek:()Ljava/lang/Object;")
     }
 
     // java: element()Ljava/lang/Object;
     pub fn element(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.element")
+        panic!("stub: java/util/Collections$AsLIFOQueue.element:()Ljava/lang/Object;")
     }
 
     // java: clear()V
     pub fn clear(&self) -> Result<()> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.clear")
+        panic!("stub: java/util/Collections$AsLIFOQueue.clear:()V")
     }
 
     // java: size()I
     pub fn size(&self) -> Result<i32> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.size")
+        panic!("stub: java/util/Collections$AsLIFOQueue.size:()I")
     }
 
     // java: isEmpty()Z
     pub fn isEmpty(&self) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.isEmpty")
+        panic!("stub: java/util/Collections$AsLIFOQueue.isEmpty:()Z")
     }
 
     // java: contains(Ljava/lang/Object;)Z
     pub fn contains(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.contains")
+        panic!("stub: java/util/Collections$AsLIFOQueue.contains:(Ljava/lang/Object;)Z")
     }
 
     // java: remove(Ljava/lang/Object;)Z
     pub fn remove__obj(&self, o: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.remove")
+        panic!("stub: java/util/Collections$AsLIFOQueue.remove:(Ljava/lang/Object;)Z")
     }
 
     // java: iterator()Ljava/util/Iterator;
     pub fn iterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.iterator")
+        panic!("stub: java/util/Collections$AsLIFOQueue.iterator:()Ljava/util/Iterator;")
     }
 
     // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.toArray")
+        panic!("stub: java/util/Collections$AsLIFOQueue.toArray:()[Ljava/lang/Object;")
     }
 
     // java: toArray([Ljava/lang/Object;)[Ljava/lang/Object;
     pub fn toArray__arr_obj(&self, a: Vec<Object>) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.toArray")
+        panic!("stub: java/util/Collections$AsLIFOQueue.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
     // java: toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
     pub fn toArray__intfun(&self, f: Object) -> Result<Vec<Object>> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.toArray")
+        panic!("stub: java/util/Collections$AsLIFOQueue.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;")
     }
 
     // java: toString()Ljava/lang/String;
     pub fn toString(&self) -> Result<String> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.toString")
+        panic!("stub: java/util/Collections$AsLIFOQueue.toString:()Ljava/lang/String;")
     }
 
     // java: containsAll(Ljava/util/Collection;)Z
     pub fn containsAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.containsAll")
+        panic!("stub: java/util/Collections$AsLIFOQueue.containsAll:(Ljava/util/Collection;)Z")
     }
 
     // java: removeAll(Ljava/util/Collection;)Z
     pub fn removeAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.removeAll")
+        panic!("stub: java/util/Collections$AsLIFOQueue.removeAll:(Ljava/util/Collection;)Z")
     }
 
     // java: retainAll(Ljava/util/Collection;)Z
     pub fn retainAll(&self, c: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.retainAll")
+        panic!("stub: java/util/Collections$AsLIFOQueue.retainAll:(Ljava/util/Collection;)Z")
     }
 
     // java: forEach(Ljava/util/function/Consumer;)V
     pub fn forEach(&self, action: Object) -> Result<()> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.forEach")
+        panic!("stub: java/util/Collections$AsLIFOQueue.forEach:(Ljava/util/function/Consumer;)V")
     }
 
     // java: removeIf(Ljava/util/function/Predicate;)Z
     pub fn removeIf(&self, filter: Object) -> Result<bool> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.removeIf")
+        panic!("stub: java/util/Collections$AsLIFOQueue.removeIf:(Ljava/util/function/Predicate;)Z")
     }
 
     // java: spliterator()Ljava/util/Spliterator;
     pub fn spliterator(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.spliterator")
+        panic!("stub: java/util/Collections$AsLIFOQueue.spliterator:()Ljava/util/Spliterator;")
     }
 
     // java: stream()Ljava/util/stream/Stream;
     pub fn stream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.stream")
+        panic!("stub: java/util/Collections$AsLIFOQueue.stream:()Ljava/util/stream/Stream;")
     }
 
     // java: parallelStream()Ljava/util/stream/Stream;
     pub fn parallelStream(&self) -> Result<Object> {
-        todo!("abstract java/util/Collections$AsLIFOQueue.parallelStream")
+        panic!("stub: java/util/Collections$AsLIFOQueue.parallelStream:()Ljava/util/stream/Stream;")
     }
 }
