@@ -3,6 +3,7 @@ JVM 类型描述符 → Rust 类型的映射与解析工具。
 """
 
 import re
+from .sig_parser import parse_class_type_params
 
 # ── JVM descriptor → Rust 类型 ──────────────────────────────────
 # 注：String 是 java::lang::String（通过 prelude 引入），
@@ -63,7 +64,16 @@ def jvm_to_rust(t: str, registry: dict | None = None) -> str:
         # 只有 registry 中已翻译的类才用具体名称，否则 fallback 到 Object
         if registry is not None and inner in registry:
             name = short_cls(inner)
-            return name if name else 'Object'
+            if not name:
+                return 'Object'
+            ci = registry[inner]
+            if ci.generic_signature:
+                tparams = parse_class_type_params(ci.generic_signature)
+                if tparams:
+                    # 所有类型参数填 Object（JVM 类型擦除的 Rust 表现）
+                    objects = ', '.join('Object' for _ in tparams)
+                    return f"{name}<{objects}>"
+            return name
         return 'Object'
     if t.startswith('['):
         elem = jvm_to_rust(t[1:], registry)
