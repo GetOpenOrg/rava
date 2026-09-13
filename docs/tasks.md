@@ -774,6 +774,101 @@ T29 (构建阻断)        ─ 依赖 T27
 
 ---
 
+## 阶段八：Java 风格 Ergonomic API（Phase 8 — Java-like API）
+
+> 目标：用户用 Rust 调用生成 API 时，代码写法与 Java 高度相似。差异通过宏/VM 层吸收，对用户透明。
+> 完整设计见：`docs/plans/2026-09-13-java-like-api-roadmap.md`
+
+### T36 · Unboxing：Object → primitive 反向转换
+**状态**：`[ ]`  
+**文件**：`output/java_runtime/src/java/lang/object.rs`
+
+**目标**：添加 `impl From<Object> for i32/i64/f32/f64/bool`，使 `ArrayList<i32>` 的 `get(0) -> i32` 可直接工作，不需要用户手动 downcast。
+
+**实现**：
+- `Object` 中添加 `downcast::<T>()` 辅助方法（panic on wrong type）或返回 `Option`
+- `impl From<Object> for i32 { fn from(o: Object) -> i32 { *o.0.downcast_ref::<i32>().unwrap() } }`
+- 同理 i64、f32、f64、bool、i8、i16、u16
+
+**验收**：`let n: i32 = ArrayList::<i32>::new_default()?.get(0)?;` 编译通过
+
+---
+
+### T37 · 方法名去 mangle + 构造器 `new()`
+**状态**：`[ ]`  
+**文件**：`scripts/codegen/emitter.py`、`scripts/codegen/instr.py`
+
+**目标**：
+1. 每组重载中参数最少（JVM 擦除后的 Object 参数）的版本保留 Java 原始名（`add`、`get`、`put`）；同时生成带 `_obj` 后缀的别名供字节码翻译代码调用
+2. `new_default()` → `new()`（无参 `<init>` 的 synthetic 构造器）
+
+**规则**：
+- `add__obj(Object)` → 保留为 `add(Object)`，方法签名不变
+- `println__i(i32)` / `println__str(String)` / `println__obj(Object)` → 由 T38 的 trait 统一，不需要这些重载了
+- `new_default()` → `new()`
+
+**验收**：`ArrayList::new()?`、`list.add(x)?` 编译通过
+
+---
+
+### T38 · println 统一 trait 派发
+**状态**：`[ ]`  
+**文件**：`output/java_runtime/src/java/lang/object.rs`（定义 Printable）、`output/native_impls/java/io/print_stream.rs`（统一 println）、`scripts/codegen/instr.py`（生成 println(x)）
+
+**目标**：所有 `println__*` 重载统一为 `println<T: Printable>(v: T)`，代码生成器生成统一调用 `println(x)`
+
+**实现**：
+- `java_runtime` 中定义 `Printable` trait，i32/i64/bool/f32/f64/Object 均实现
+- `PrintStream::println<T: Printable>` 替换 `println__i/println__str/println__obj`
+- `instr.py` 中 `invokevirtual println:*` 统一生成 `println(x)`
+
+**验收**：`System::out().println(42)?`、`System::out().println(true)?`、`System::out().println(s)?` 均编译通过
+
+---
+
+### T39 · 集合 ergonomic 泛型方法层
+**状态**：`[ ]`  
+**文件**：`output/native_impls/java/util/array_list.rs`、`output/native_impls/java/util/hash_map.rs`、`output/native_impls/java/util/hash_set.rs`
+
+**目标**：`ArrayList<String>` 可直接 `list.add(s)` 和 `let v: String = list.get(0)?`，不需要 `.into()`/`.downcast()`
+
+**实现**：在 native_impls 中为集合类添加泛型 ergonomic 方法，约束 `E: Clone + Into<Object> + From<Object> + 'static`：
+- `ArrayList<E>::add(e: E)` → 内部调用 `add_obj(e.into())`
+- `ArrayList<E>::get(i: i32) -> Result<E>` → 内部调用 `get_obj(i)` 再 `E::from(obj)`
+- `HashMap<K,V>::put(k: K, v: V)` / `get(k: K) -> Result<V>`
+- `HashSet<E>::add(e: E)` / `contains(e: E) -> Result<bool>`
+
+**依赖**：T36（From<Object> for primitive）
+
+**验收**：`let v: String = list.get(0)?;`、`let n: i32 = nums.get(0)?;` 均无需手动类型转换，编译通过
+
+---
+
+### T40 · `java_rta_macros` proc-macro crate
+**状态**：`[ ]`  
+**文件**：新建 `java_rta_macros/` crate
+
+**目标**：将 `cfg_attr(any(), java_class(...))` 中的死属性变为真实激活的 proc-macro，自动为所有 java class 生成：`Into<Object>`、`From<Object>`、`Display`、`Debug`；用户自定义 struct 也可使用 `#[java_class]`
+
+**实现**：
+- 新建 proc-macro crate，加入 workspace
+- `#[java_class(binary_name = "...")]` 展开：`impl Into<Object>`、`impl From<Object>`、`impl Display`、`impl Debug`
+- 修改 emitter.py 将 `cfg_attr(any(), java_class(...))` 改为 `#[java_class(...)]`
+- 用户文档：如何在自定义 Rust struct 上使用 `#[java_class]` 接入 JDK 集合 API
+
+**依赖**：T36、T37、T39
+
+**验收**：
+```rust
+#[java_class(binary_name = "com/example/Person")]
+struct Person { pub name: JField<String> }
+let persons: ArrayList<Person> = ArrayList::new()?;
+persons.add(Person::default())?;
+let p: Person = persons.get(0)?;
+```
+
+---
+
 **阶段七任务依赖**：
 
 ```
@@ -785,4 +880,15 @@ T34 (LocalVariableTypeTable) ─ 依赖 T32
 T35 (Autoboxing + HashMap/HashSet) ─ 依赖 T34（已完成）
 ```
 
+**阶段八任务依赖**：
+
+```
+T36 (Unboxing)             ─ 依赖 T35（已完成）
+T37 (方法名去 mangle)      ─ 依赖 T35（已完成）
+T38 (println trait)        ─ 独立（可并行 T36/T37）
+T39 (集合 ergonomic 方法)  ─ 依赖 T36
+T40 (proc-macro crate)     ─ 依赖 T36、T37、T39
+```
+
 **最优执行序**：T30 → T31 → T32（已全部完成）→ T33、T34（并行，待执行）
+T36 + T37 + T38（可并行）→ T39 → T40
