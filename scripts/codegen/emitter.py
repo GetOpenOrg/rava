@@ -16,7 +16,6 @@ import re
 from .types import ClassInfo, FieldInfo, ParsedMethod
 from .type_map import jvm_to_rust, rust_default, short_cls
 from .method import gen_method_body, _indent
-from .runtime import RUNTIME_FILES
 from .sig_parser import parse_class_type_params
 from .constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
 
@@ -852,7 +851,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                          java_files: list[str] | None = None):
     """
     生成 Cargo workspace，包含三个子 crate：
-      java_runtime/  — 手写运行时（来自 RUNTIME_FILES）
+      java_runtime/  — 手写 VM 基础设施（git 管理，不由转译器写入）
       jdk_classes/   — JDK 字节码翻译
       user/          — 用户 Java 代码翻译
     """
@@ -865,13 +864,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 1. workspace 根 Cargo.toml
     _write(os.path.join(out_dir, 'Cargo.toml'), WORKSPACE_CARGO_TOML)
 
-    # 2. java_runtime crate（来自 RUNTIME_FILES）
+    # 2. java_runtime crate（手写 VM 基础设施，直接提交到 git，不由转译器管理）
     _write(os.path.join(rt_dir, 'Cargo.toml'), JAVA_RUNTIME_CARGO_TOML)
-    rt_src = os.path.join(rt_dir, 'src')
-    for rel_path, content in RUNTIME_FILES.items():
-        # mod.rs 是 crate 根，对应 lib crate 的 src/lib.rs
-        dest = 'lib.rs' if rel_path == 'mod.rs' else rel_path
-        _write(os.path.join(rt_src, dest), content)
 
     # 3. jdk_classes crate（JDK 字节码翻译）
     _write(os.path.join(jdk_dir, 'Cargo.toml'), JDK_CLASSES_CARGO_TOML)
