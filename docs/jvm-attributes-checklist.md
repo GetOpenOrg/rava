@@ -26,7 +26,7 @@
 | `StackMapTable` | Code | ❌ 未解析 | ⚪ 不适用 | JVM 类型验证用，转译时不需要 | 低 |
 | `LineNumberTable` | Code | ❌ 未解析 | ⚪ 不适用 | 调试信息，转译不需要 | 低 |
 | `LocalVariableTable` | Code | ✅ 已解析 | 🟢 已用 | 局部变量名（slot→name 映射），用于生成可读变量名 | — |
-| `LocalVariableTypeTable` | Code | ❌ 未解析 | 🟡 待用 | 泛型版本的局部变量类型，配合 Signature 生成精确泛型类型 | **中** |
+| `LocalVariableTypeTable` | Code | ✅ 已解析 | 🟢 已用 | 泛型版本的局部变量类型，slot→Signature 映射，覆盖 Object 为精确类型（TE; → E，Ljava/lang/String; → String） | — |
 
 ### 2. 泛型与签名
 
@@ -144,8 +144,7 @@
 5. **`InnerClasses`（解析+使用）** — 生成正确的嵌套 mod 结构
    - 影响：匿名类、内部类的翻译
 
-6. **`LocalVariableTypeTable`（解析+使用）** — 泛型局部变量的精确类型
-   - 影响：配合 Signature 可将 `let x: Object` 收窄为具体泛型类型
+6. ~~**`LocalVariableTypeTable`**~~ — ✅ **已完成（T34）**：slot→Signature 映射，覆盖 Object 为精确类型（TE; → E，Ljava/lang/String; → String）
 
 ### 低优先级（调试信息、历史遗留）
 
@@ -174,7 +173,7 @@ Code 子属性：
   ✅ LocalVariableTable → ParsedMethod.local_names
   ❌ StackMapTable      → _skip_attribute
   ❌ LineNumberTable    → _skip_attribute
-  ❌ LocalVariableTypeTable → _skip_attribute
+  ✅ LocalVariableTypeTable → ParsedMethod.local_types（slot → Signature）
   ❌ 其他              → _skip_attribute
 
 类属性：
