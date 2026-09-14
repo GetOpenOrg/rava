@@ -21,17 +21,28 @@
 
 ---
 
+## 已完成（本次修复）
+
+| 功能 | 状态 |
+|------|------|
+| do-while 检测（后向条件 back-edge） | ✅ |
+| switch/tableswitch/lookupswitch → Rust match | ✅ |
+| for-loop continue（goto increment → if-else 空 then-body） | ✅ |
+| while 的 pre-block 递归 process_block（支持 loop body 内嵌 if）| ✅ |
+| cfg.py find_if_else：允许空 then-body（>= 替换 >）| ✅ |
+| cfg.py find_if_guards：移除误判 increment-area-continue 条件 | ✅ |
+
+---
+
 ## P1 未解决问题
 
-### 1. continue 指令（goto → loop_start）
+### 1. while-loop continue 指令（goto → loop_start）✅ 已修复
 
-**现象**：`goto <loop_start>` 在 loop body 内部时应生成 `continue;`，当前生成空 if body 或跳过。
-
-**根因**：`find_if_guards` 只检测 `goto >= exit_offset`（break），未处理 `goto == loop_start`（continue）。
-
-**修复方向**：
-- 在 `find_if_guards` 的 break 检测逻辑中，同时检测 `goto_tgt == instrs[lp.start_idx].offset`（= loop start offset）
-- 在 `method.py` guard body 处理中，与 break 并列地生成 `continue;`
+**修复**：
+- `find_if_guards`：`goto == instrs[lp.start_idx].offset` → exits=True
+- `find_if_guards`：移除误判 `lp.cond_idx < goto_tgt_idx <= lp.end_idx`（for-increment area）
+- `find_if_else`：`then_end >= body_start`（允许空 then-body）
+- for-loop continue 变为空 then-body if-else，println 在 else 分支
 
 ---
 

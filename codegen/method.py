@@ -441,7 +441,7 @@ def gen_method_body(
                 struct_init = f"Self {{ {', '.join(parts_init)}, ..Default::default() }}"
             else:
                 struct_init = "Self::default()"
-        entries.append(('', f"    let this = {struct_init};"))
+        entries.append(('', f"    let mut this = {struct_init};"))
         sim.locals[0] = ('this', RsNamed(short_cls(method.class_name)), False)
 
     elif not is_static:

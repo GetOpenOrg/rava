@@ -65,7 +65,11 @@ def _escape_str(s: str) -> str:
             result.append('\\t')
             i += 1
         else:
-            result.append(c)
+            cp = ord(c)
+            if cp < 0x20 or (0x7f <= cp <= 0x9f):
+                result.append(f'\\u{{{cp:04x}}}')
+            else:
+                result.append(c)
             i += 1
     return ''.join(result)
 from .rs_ir import (
@@ -810,7 +814,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         cls = short_cls(comment) or 'Object'
         elem_t = jvm_to_rust(f'L{cls};') if cls != 'Object' else 'Object'
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(Vec::with_capacity({render_expr(count_expr)} as usize)));"))
+        sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![{elem_t}::default(); {render_expr(count_expr)} as usize]));"))
         sim.push(Var(v), RsNamed(f'Rc<RefCell<Vec<{elem_t}>>>'))
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
@@ -1129,7 +1133,28 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             sim.emit(RawStmt(f"let mut {v}: {rust_ty} = {init_expr};"))
             sim.push(Var(v), rust_ty_node)
     else:
-        sim.emit(RawStmt(f"/* invokespecial {comment} */"))
+        obj_e = render_expr(obj_expr)
+        obj_e = render_expr(obj_expr)
+        if obj_e in ('this', 'self') and cls:
+            # super(args) 调用：在子类构造器中初始化 _super 字段
+            # java/lang/Object 的 super() 是 no-op（Rust 不需要 Object 初始化）
+            raw_cls = cls.rsplit('/', 1)[-1]
+            raw_cls_rust = short_cls(raw_cls.replace('$', '_')) or raw_cls.replace('$', '_')
+            if raw_cls_rust in ('Object',) or cls in ('java/lang/Object',):
+                sim.emit(RawStmt(f"/* invokespecial {comment} (Object no-op) */"))
+            else:
+                _init_mangled = _mangle_if_overloaded(cls, '<init>', comment, registry)
+                ctor_name = _safe_field(_init_mangled.replace('<init>', 'new'))
+                arg_str = ', '.join(args)
+                ctor_call = f"{raw_cls_rust}::{ctor_name}({arg_str})"
+                super_pfx = _find_super_chain_to_class(class_name, raw_cls_rust, registry) if registry else '_super.'
+                if super_pfx:
+                    field_path = super_pfx.rstrip('.')
+                    sim.emit(RawStmt(f"this.{field_path} = {ctor_call}?;"))
+                else:
+                    sim.emit(RawStmt(f"/* invokespecial {comment} (same class) */"))
+        else:
+            sim.emit(RawStmt(f"/* invokespecial {comment} */"))
 
 
 def _class_known(cls_short: str, registry: dict | None) -> bool:

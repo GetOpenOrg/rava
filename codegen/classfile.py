@@ -423,7 +423,25 @@ def _constant_value_str(pool: list, cv_idx: int) -> str:
         return repr(v)
     if tag == 'String':
         s = _utf8(pool, entry[1])
-        return s.replace('\\', '\\\\').replace('"', '\\"')
+        parts = []
+        for ch in s:
+            cp = ord(ch)
+            if ch == '\\':
+                parts.append('\\\\')
+            elif ch == '"':
+                parts.append('\\"')
+            elif ch == '\n':
+                parts.append('\\n')
+            elif ch == '\r':
+                parts.append('\\r')
+            elif ch == '\t':
+                parts.append('\\t')
+            elif cp < 0x20 or (0x7f <= cp <= 0x9f):
+                # Rust lexer rejects raw control chars in source — escape them
+                parts.append(f'\\u{{{cp:04x}}}')
+            else:
+                parts.append(ch)
+        return ''.join(parts)
     return ''
 
 
