@@ -391,19 +391,13 @@ def gen_method_body(
     # ── 构造器：创建 this ───────────────────────────────────────────
     if is_ctor:
         from .sig_parser import parse_class_type_params
-        # 包含继承字段：遍历超类链收集所有实例字段，与 emitter.py 的 struct 定义保持一致
-        _direct_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
-        _seen_ctor_names = {f.name for f in _direct_fields}
-        _inherited_fields = []
-        _sc = class_info.super_class if class_info else ''
-        while _sc and _sc != 'java/lang/Object' and registry and _sc in registry:
-            _sci2 = registry[_sc]
-            for _f2 in _sci2.fields:
-                if not _f2.is_static and _f2.name not in _seen_ctor_names:
-                    _inherited_fields.append(_f2)
-                    _seen_ctor_names.add(_f2.name)
-            _sc = _sci2.super_class
-        inst_fields = _direct_fields + _inherited_fields
+        # T76: struct 使用 _super 嵌套，不再展平继承字段
+        # 只初始化本类直接字段，父类通过 _super: Default::default() 初始化
+        inst_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
+        _ctor_has_super = bool(
+            class_info and class_info.super_class
+            and class_info.super_class != 'java/lang/Object'
+        )
         class_tparams = parse_class_type_params(class_info.generic_signature) if (class_info and class_info.generic_signature) else []
         _safe_fname = safe_ident
         from .sig_parser import parse_field_type as _pft
@@ -417,17 +411,18 @@ def gen_method_body(
                 return f"{_safe_fname(f.name)}: JField::new_uninit()"
             return f"{_safe_fname(f.name)}: JField::new({rust_default(jvm_to_rust(f.descriptor))})"
 
-        if inst_fields and class_tparams:
-            # 命名 struct，有实例字段且有泛型参数
-            parts_init = [_field_init(f) for f in inst_fields]
+        # 按照 emitter.py 的 struct 字段顺序：_super → 本类字段 → _phantom
+        parts_init = []
+        if _ctor_has_super:
+            parts_init.append("_super: Default::default()")
+        parts_init.extend(_field_init(f) for f in inst_fields)
+        if class_tparams:
             parts_init.append("_phantom: std::marker::PhantomData")
-            struct_init = f"Self {{ {', '.join(parts_init)} }}"
-        elif inst_fields:
-            # 命名 struct，只有实例字段，无泛型参数
-            parts_init = [_field_init(f) for f in inst_fields]
+
+        if parts_init:
             struct_init = f"Self {{ {', '.join(parts_init)} }}"
         elif class_tparams:
-            # 无实例字段但有泛型参数：tuple struct，用 Self(PhantomData)
+            # 无字段无 _super 但有泛型参数：tuple struct
             struct_init = "Self(std::marker::PhantomData)"
         else:
             struct_init = "Self {}"

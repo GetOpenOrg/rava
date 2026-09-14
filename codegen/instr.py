@@ -229,6 +229,107 @@ def _coerce_value(val_str: str, val_ty: 'RsType', target: str) -> str:
     return val_str
 
 
+def _super_path_to_class(from_cls: str, to_cls: str, registry: dict | None) -> str:
+    """计算从 from_cls 到 to_cls 的 _super 访问路径。
+    返回如 '_super._super.' 形式的前缀，若 from_cls == to_cls 或未找到则返回 ''。
+    用于 T76：父类字段/方法的访问需要通过 _super 链路由。"""
+    if not registry or not from_cls or not to_cls or from_cls == to_cls:
+        return ''
+    path_parts: list[str] = []
+    ci = registry.get(from_cls)
+    while ci:
+        sc = ci.super_class
+        if not sc or sc == 'java/lang/Object':
+            break
+        path_parts.append('_super')
+        if sc == to_cls:
+            return '.'.join(path_parts) + '.'
+        ci = registry.get(sc)
+    return ''
+
+
+def _find_field_super_prefix(class_name: str, safe_fname: str, registry: dict | None) -> str:
+    """T76: 找到字段 safe_fname 在继承链中的位置，返回 _super 访问前缀。
+    bytecode getfield/putfield 的 comment 里的 cls 是接收者静态类型（不是声明类），
+    所以需要通过字段名在注册表中查找来计算 _super 路径。
+    返回 '' 表示字段在当前类直接字段中，返回 '_super.' 或 '_super._super.' 等。"""
+    if not registry or not class_name:
+        return ''
+    ci = registry.get(class_name)
+    if ci is None:
+        return ''
+    # 当前类直接字段中是否有该字段
+    direct_names = {_safe_field(f.name) for f in ci.fields if not f.is_static}
+    if safe_fname in direct_names:
+        return ''
+    # 向上遍历继承链查找
+    path_parts: list[str] = []
+    sc = ci.super_class
+    while sc and sc != 'java/lang/Object' and sc in registry:
+        path_parts.append('_super')
+        parent_ci = registry[sc]
+        parent_names = {_safe_field(f.name) for f in parent_ci.fields if not f.is_static}
+        if safe_fname in parent_names:
+            return '.'.join(path_parts) + '.'
+        sc = parent_ci.super_class
+    return ''
+
+
+def _find_method_super_prefix(class_name: str, mname: str, registry: dict | None) -> str:
+    """T76: 找到方法 mname 在继承链中的位置，返回 _super 访问前缀。
+    若当前类有该方法名（包含任何重载），返回 ''（不需要路由）。
+    若只在父类/祖先类有，返回 '_super.' 等前缀。"""
+    if not registry or not class_name:
+        return ''
+    ci = registry.get(class_name)
+    if ci is None:
+        return ''
+    # 当前类直接方法中是否有该方法名
+    direct_method_names = {m.name for m in ci.methods}
+    if mname in direct_method_names:
+        return ''
+    # 向上遍历继承链查找
+    path_parts: list[str] = []
+    sc = ci.super_class
+    while sc and sc != 'java/lang/Object' and sc in registry:
+        path_parts.append('_super')
+        parent_ci = registry[sc]
+        parent_method_names = {m.name for m in parent_ci.methods}
+        if mname in parent_method_names:
+            return '.'.join(path_parts) + '.'
+        sc = parent_ci.super_class
+    return ''
+
+
+def _rust_type_to_binary(rust_short: str, registry: dict | None) -> str:
+    """将 Rust 短类名转换为 binary class name（首个匹配）。用于 T76 接收者类型路由。
+    注意：Java 内部类 $ 在 Rust 中转为 _，比较时需转换。"""
+    if not registry:
+        return ''
+    for binary in registry:
+        last = binary.rsplit('/', 1)[-1] if '/' in binary else binary
+        # Java 内部类 $ → Rust _
+        if last.replace('$', '_') == rust_short:
+            return binary
+    return ''
+
+
+def _find_field_super_prefix_for_type(recv_rust_type: str, fname: str, registry: dict | None) -> str:
+    """基于接收者 Rust 类型（短名）查找字段 _super 前缀。"""
+    binary = _rust_type_to_binary(recv_rust_type, registry)
+    if binary:
+        return _find_field_super_prefix(binary, fname, registry)
+    return ''
+
+
+def _find_method_super_prefix_for_type(recv_rust_type: str, mname: str, registry: dict | None) -> str:
+    """基于接收者 Rust 类型（短名）查找方法 _super 前缀。"""
+    binary = _rust_type_to_binary(recv_rust_type, registry)
+    if binary:
+        return _find_method_super_prefix(binary, mname, registry)
+    return ''
+
+
 def _parse_field_ref(comment: str) -> tuple[str, str, str]:
     """解析 'Field java/lang/System.out:Ljava/io/PrintStream;' 格式。
     返回 (class_binary_name, field_name, descriptor)。
@@ -544,7 +645,14 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment:
             _, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'Object'
-            sim.push(RawExpr(f"{render_expr(obj_expr)}.{fname}.get()"), RsNamed(ftype))
+            # T76: 基于接收者实际 Rust 类型查找字段的 _super 路径
+            recv_base = render_type(obj_ty).split('<')[0].strip()
+            cls_short = class_name.rsplit('/', 1)[-1] if '/' in class_name else class_name
+            if recv_base == cls_short:
+                super_pfx = _find_field_super_prefix(class_name, fname, registry)
+            else:
+                super_pfx = _find_field_super_prefix_for_type(recv_base, fname, registry)
+            sim.push(RawExpr(f"{render_expr(obj_expr)}.{super_pfx}{fname}.get()"), RsNamed(ftype))
         else:
             sim.push(RawExpr(f"{render_expr(obj_expr)}.field"), I32)
 
@@ -570,7 +678,14 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                     and '.clone()' not in val_str
                     and val_str != 'this'):
                 val_str = f'{val_str}.clone()'
-            sim.emit(RawStmt(f"{render_expr(obj_expr)}.{fname}.set({val_str});"))
+            # T76: 基于接收者实际 Rust 类型查找字段的 _super 路径
+            recv_base = render_type(obj_ty).split('<')[0].strip()
+            cls_short = class_name.rsplit('/', 1)[-1] if '/' in class_name else class_name
+            if recv_base == cls_short:
+                super_pfx = _find_field_super_prefix(class_name, fname, registry)
+            else:
+                super_pfx = _find_field_super_prefix_for_type(recv_base, fname, registry)
+            sim.emit(RawStmt(f"{render_expr(obj_expr)}.{super_pfx}{fname}.set({val_str});"))
         else:
             sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))
 
@@ -1044,6 +1159,19 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     else:
         # 查 registry 确认是否有重载（用户类 + JDK 类均检查），有则 mangle 调用名
         rust_mname = _safe_field(_mangle_if_overloaded(cls or '', mname, comment, registry))
+
+    # T76：若方法定义在父类（继承方法），通过 _super 链路由调用
+    # 基于接收者实际 Rust 类型查找方法是否需要通过 _super 路由
+    super_method_pfx = ''
+    if registry:
+        recv_base = obj_ty.split('<')[0].strip()
+        cls_short = class_name.rsplit('/', 1)[-1] if class_name and '/' in class_name else (class_name or '')
+        if recv_base == cls_short:
+            super_method_pfx = _find_method_super_prefix(class_name, mname, registry)
+        elif recv_base and recv_base not in ('Object', '()'):
+            super_method_pfx = _find_method_super_prefix_for_type(recv_base, mname, registry)
+    if super_method_pfx:
+        obj_e = f"{obj_e}.{super_method_pfx.rstrip('.')}"
 
     # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
     arg_str = ', '.join(args)

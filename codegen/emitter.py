@@ -20,15 +20,20 @@ from .sig_parser import parse_class_type_params, parse_field_type
 from .constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
 
 # Access flags
-_ACC_PUBLIC    = 0x0001
-_ACC_PRIVATE   = 0x0002
-_ACC_PROTECTED = 0x0004
-_ACC_STATIC    = 0x0008
-_ACC_FINAL     = 0x0010
-_ACC_NATIVE    = 0x0100
-_ACC_INTERFACE = 0x0200
-_ACC_ABSTRACT  = 0x0400
-_ACC_ENUM      = 0x4000
+_ACC_PUBLIC       = 0x0001
+_ACC_PRIVATE      = 0x0002
+_ACC_PROTECTED    = 0x0004
+_ACC_STATIC       = 0x0008
+_ACC_FINAL        = 0x0010
+_ACC_SYNCHRONIZED = 0x0020
+_ACC_VOLATILE     = 0x0040  # 字段：volatile；方法：bridge
+_ACC_TRANSIENT    = 0x0080  # 字段：transient；方法：varargs
+_ACC_NATIVE       = 0x0100
+_ACC_INTERFACE    = 0x0200
+_ACC_ABSTRACT     = 0x0400
+_ACC_SYNTHETIC    = 0x1000
+_ACC_ANNOTATION   = 0x2000
+_ACC_ENUM         = 0x4000
 
 # ── Cargo.toml 模板 ──────────────────────────────────────────────
 
@@ -70,15 +75,47 @@ def pkg_from_java(java_file: str) -> str:
 # ── Java 元数据注释生成（供 build.rs 扫描）──────────────────────
 
 def _access_str(flags: int) -> str:
-    """将 access_flags 整数转为可读字符串，如 'public static final'。"""
+    """将 access_flags 整数转为访问权限字符串（public/protected/private/package）。"""
+    if flags & _ACC_PUBLIC:    return 'public'
+    if flags & _ACC_PRIVATE:   return 'private'
+    if flags & _ACC_PROTECTED: return 'protected'
+    return 'package'
+
+
+def _class_modifiers_str(flags: int) -> str:
+    """从类 access_flags 提取修饰符（排除访问权限）。"""
     parts = []
-    if flags & _ACC_PUBLIC:    parts.append('public')
-    if flags & _ACC_PRIVATE:   parts.append('private')
-    if flags & _ACC_PROTECTED: parts.append('protected')
+    if flags & _ACC_FINAL:      parts.append('final')
+    if flags & _ACC_ABSTRACT:   parts.append('abstract')
+    if flags & _ACC_INTERFACE:  parts.append('interface')
+    if flags & _ACC_ENUM:       parts.append('enum')
+    if flags & _ACC_ANNOTATION: parts.append('annotation')
+    if flags & _ACC_SYNTHETIC:  parts.append('synthetic')
+    return ' '.join(parts)
+
+
+def _field_modifiers_str(flags: int) -> str:
+    """从字段 access_flags 提取修饰符（static/final/volatile/transient/synthetic）。"""
+    parts = []
     if flags & _ACC_STATIC:    parts.append('static')
     if flags & _ACC_FINAL:     parts.append('final')
-    if flags & _ACC_ABSTRACT:  parts.append('abstract')
-    if flags & _ACC_NATIVE:    parts.append('native')
+    if flags & _ACC_VOLATILE:  parts.append('volatile')
+    if flags & _ACC_TRANSIENT: parts.append('transient')
+    if flags & _ACC_SYNTHETIC: parts.append('synthetic')
+    return ' '.join(parts)
+
+
+def _method_modifiers_str(flags: int) -> str:
+    """从方法 access_flags 提取修饰符（static/final/synchronized/native/abstract/bridge/varargs）。"""
+    parts = []
+    if flags & _ACC_STATIC:       parts.append('static')
+    if flags & _ACC_FINAL:        parts.append('final')
+    if flags & _ACC_SYNCHRONIZED: parts.append('synchronized')
+    if flags & _ACC_NATIVE:       parts.append('native')
+    if flags & _ACC_ABSTRACT:     parts.append('abstract')
+    if flags & _ACC_VOLATILE:     parts.append('bridge')    # ACC_BRIDGE 与 ACC_VOLATILE 同值
+    if flags & _ACC_TRANSIENT:    parts.append('varargs')   # ACC_VARARGS 与 ACC_TRANSIENT 同值
+    if flags & _ACC_SYNTHETIC:    parts.append('synthetic')
     return ' '.join(parts)
 
 
@@ -93,12 +130,14 @@ def _java_class_attr(ci: ClassInfo, compiled: bool = False) -> str:
     super_class = ci.super_class or ""
     interfaces  = ','.join(ci.interfaces) if ci.interfaces else ""
     access      = _access_str(ci.access_flags) if ci.access_flags else ""
+    modifiers   = _class_modifiers_str(ci.access_flags) if ci.access_flags else ""
     source      = ci.source_file or ""
     inner_lines = [
         f'    binary_name = "{binary_name}",',
         f'    super_class = "{super_class}",',
         f'    interfaces  = "{interfaces}",',
         f'    access      = "{access}",',
+        f'    modifiers   = "{modifiers}",',
         f'    source      = "{source}",',
     ]
     inner = '\n'.join(inner_lines)
@@ -117,6 +156,8 @@ def _java_field_attr(f: FieldInfo) -> str:
     parts = [f'name = "{f.name}"', f'descriptor = "{f.descriptor}"']
     if f.access_flags:
         parts.append(f'access = "{_access_str(f.access_flags)}"')
+        mods = _field_modifiers_str(f.access_flags)
+        parts.append(f'modifiers = "{mods}"')
     return '#[cfg_attr(any(), java_field(' + ', '.join(parts) + '))]'
 
 
@@ -132,12 +173,14 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
     parts = [f'name = "{m.name}"', f'descriptor = "{m.descriptor}"']
     if m.access_flags:
         parts.append(f'access = "{_access_str(m.access_flags)}"')
+        mods = _method_modifiers_str(m.access_flags)
+        parts.append(f'modifiers = "{mods}"')
     inner = f'{tag}(' + ', '.join(parts) + ')'
     if compiled:
         if m.is_native:
             # native 方法用 cfg_attr 包裹，让 build.rs 能扫描到
             return f'#[cfg_attr(any(), java_native(' + ', '.join(parts) + '))]'
-        # 注释形式，避免 cfg_attr 内 "public static" 等含关键字字符串触发词法错误
+        # 注释形式，避免 cfg_attr 内关键字字符串触发词法错误
         return f'// java: {m.name}{m.descriptor}'
     else:
         return f'#[{inner}]'
@@ -510,17 +553,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     inst_fields = [f for f in ci.fields if not f.is_static]
 
-    # 超类字段继承：Java 允许子类访问父类字段，Rust struct 需要将其包含进来
-    # 遍历超类链，把父类的实例字段（未被当前类声明的）追加到 inst_fields 末尾
-    _seen_field_names = {f.name for f in inst_fields}
-    _super = ci.super_class
-    while _super and _super != 'java/lang/Object' and registry and _super in registry:
-        _sci = registry[_super]
-        for _f in _sci.fields:
-            if not _f.is_static and _f.name not in _seen_field_names:
-                inst_fields.append(_f)
-                _seen_field_names.add(_f.name)
-        _super = _sci.super_class
+    # T76：_super 嵌套字段替代字段展平
+    # 若有父类（且不是 Object），在实例字段前插入 _super: ParentType
+    # proc-macro 读 super_class 注解，自动生成 From<Self> for Parent
+    # emitter 在 struct 定义后额外生成显式 upcast 方法（as_xxx / into_xxx）
+    _has_super = bool(
+        ci.super_class and ci.super_class != 'java/lang/Object'
+    )
 
     # 用短名作为 Rust 标识符（JDK 类的 ci.name 含 /，不是合法 Rust 名）
     struct_name = short_cls(ci.name) if '/' in ci.name else ci.name
@@ -531,8 +570,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 构建泛型参数字符串（用于 struct 和 impl 头）
     if class_type_params:
         type_params_str = ', '.join(class_type_params)
-        # 泛型参数只需 Clone + 'static；Default 不能加到结构体级别，会级联要求所有类型参数实现 Default
-        bounds_str = ', '.join(f"{p}: Clone + 'static" for p in class_type_params)
+        # 泛型参数需要 Clone + Default + 'static；Default 是必须的，因为 _super: Default::default() 要求父链所有类型参数实现 Default
+        bounds_str = ', '.join(f"{p}: Clone + Default + 'static" for p in class_type_params)
         struct_generic = f"<{bounds_str}>"
         impl_header   = f"impl<{bounds_str}> {struct_name}<{type_params_str}>"
     else:
@@ -540,8 +579,25 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         impl_header   = f"impl {struct_name}"
 
     cls_extra_fields = (extra_fields or {}).get(ci.name, [])
-    if inst_fields or cls_extra_fields:
+    if inst_fields or cls_extra_fields or _has_super:
         field_lines = []
+        # _super 字段：嵌入直接父类（T76，替代字段展平）
+        if _has_super:
+            parent_rust = short_cls(ci.super_class)
+            if registry and ci.super_class in registry:
+                parent_ci = registry[ci.super_class]
+                parent_params = parse_class_type_params(parent_ci.generic_signature) if parent_ci.generic_signature else []
+                if parent_params:
+                    if class_type_params:
+                        # 子类有泛型参数：传播给父类，不足的用 Object 填充
+                        args = class_type_params[:len(parent_params)]
+                        while len(args) < len(parent_params):
+                            args.append('Object')
+                        parent_rust += '<' + ', '.join(args) + '>'
+                    else:
+                        # 子类无泛型参数但父类需要（如 CharacterUnicodeScript extends Enum<E>）：用 Object 后备
+                        parent_rust += '<' + ', '.join('Object' for _ in parent_params) + '>'
+            field_lines.append(f"    pub _super: {parent_rust},")
         for f in inst_fields:
             safe_fname = _safe_field_name(f.name)
             field_lines.append("    " + _java_field_attr(f))
@@ -572,6 +628,38 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             parts.append(f"#[derive(Clone, Default)]\npub struct {struct_name}{struct_generic}({phantom_ty});\n")
         else:
             parts.append(f"#[derive(Clone, Default)]\npub struct {struct_name}{struct_generic};\n")
+
+    # T76：为有父类的类生成显式 upcast 方法（as_xxx / into_xxx）
+    # 不使用 Deref（Rust 反模式），改用显式方法，语义清晰
+    if _has_super and registry:
+        upcast_lines = [f'{impl_header} {{']
+        access_path = '_super'
+        cur_super = ci.super_class
+        # upcast 方法只使用子类自身的类型参数（child_tparams 在 impl block 中始终可用）
+        # 不传播祖先的参数名（祖先参数名在子类 impl block 中不可见）
+        child_tparams: list[str] = list(class_type_params)
+        while cur_super and cur_super != 'java/lang/Object':
+            parent_rust_name = short_cls(cur_super)
+            snake = to_snake(parent_rust_name.replace('$', '_'))
+            # 计算该祖先级的完整类型表达式（含泛型参数），只用子类自身参数名
+            parent_full_type = parent_rust_name
+            ancestor_ci = registry.get(cur_super)
+            if ancestor_ci:
+                ancestor_params = parse_class_type_params(ancestor_ci.generic_signature) if ancestor_ci.generic_signature else []
+                if ancestor_params:
+                    if child_tparams:
+                        args = child_tparams[:len(ancestor_params)]
+                        while len(args) < len(ancestor_params):
+                            args.append('Object')
+                    else:
+                        args = ['Object'] * len(ancestor_params)
+                    parent_full_type += '<' + ', '.join(args) + '>'
+            upcast_lines.append(f'    pub fn as_{snake}(&self) -> &{parent_full_type} {{ &self.{access_path} }}')
+            upcast_lines.append(f'    pub fn into_{snake}(self) -> {parent_full_type} {{ self.{access_path} }}')
+            cur_super = ancestor_ci.super_class if ancestor_ci else None
+            access_path += '._super'
+        upcast_lines.append('}')
+        parts.append('\n'.join(upcast_lines) + '\n')
 
     # 若有 native_impls 或 synthetics，插入 mod _native { include!("..."); } 块
     has_synthetics_here = synthetics and ci.name in synthetics

@@ -224,16 +224,52 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 if m.name == meth and m.descriptor == desc:
                     enqueue_refs(m.instrs or [])
 
-        # field_discover_classes：只需生成类型存根，所有方法均为 panic! stub，不展开
-        for cls in field_discover_classes:
-            if cls not in jdk_infos:
-                data = resolver.resolve(cls)
-                if data is None:
-                    continue
-                try:
-                    ci = parse_class_bytes(data, cls)
-                    jdk_infos[cls] = ci
-                except Exception:
-                    pass
+        # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
+        # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
+        _stub_queue: deque[str] = deque(field_discover_classes)
+        _stub_visited: set[str] = set(field_discover_classes)
+        while _stub_queue:
+            cls = _stub_queue.popleft()
+            if cls in jdk_infos:
+                continue
+            data = resolver.resolve(cls)
+            if data is None:
+                continue
+            try:
+                ci = parse_class_bytes(data, cls)
+                jdk_infos[cls] = ci
+                # 递归添加父类（_super 字段需要父类类型存在）
+                if (ci.super_class and ci.super_class != 'java/lang/Object'
+                        and ci.super_class not in _JAVA_RUNTIME_CLASSES
+                        and ci.super_class not in jdk_infos
+                        and ci.super_class not in _stub_visited):
+                    _stub_visited.add(ci.super_class)
+                    _stub_queue.append(ci.super_class)
+            except Exception:
+                pass
+
+        # 同样为 BFS 调用链中发现的类递归添加父类
+        _parent_queue: deque[str] = deque()
+        for _ci in list(jdk_infos.values()):
+            if (_ci and _ci.super_class and _ci.super_class != 'java/lang/Object'
+                    and _ci.super_class not in _JAVA_RUNTIME_CLASSES
+                    and _ci.super_class not in jdk_infos):
+                _parent_queue.append(_ci.super_class)
+        while _parent_queue:
+            cls = _parent_queue.popleft()
+            if cls in jdk_infos:
+                continue
+            data = resolver.resolve(cls)
+            if data is None:
+                continue
+            try:
+                ci = parse_class_bytes(data, cls)
+                jdk_infos[cls] = ci
+                if (ci.super_class and ci.super_class != 'java/lang/Object'
+                        and ci.super_class not in _JAVA_RUNTIME_CLASSES
+                        and ci.super_class not in jdk_infos):
+                    _parent_queue.append(ci.super_class)
+            except Exception:
+                pass
 
     return list(jdk_infos.values()), visited_methods, field_discover_classes
