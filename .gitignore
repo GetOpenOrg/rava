@@ -17,6 +17,7 @@ output/target/
 # Cargo.toml / build.rs 由 git 管理，只忽略生成的 .rs 源文件
 output/jdk_classes/src/
 output/user/src/
+output/user/Cargo.toml
 
 # macOS
 .DS_Store
