@@ -152,7 +152,7 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
             continue
         # 获取 loop 行的 indent 作为插入位置的 indent
         loop_indent = entries[loop_k][0]
-        insertions.append((loop_k, (loop_indent, LetStmt(name, None, True, RawExpr('Default::default()')))))
+        insertions.append((loop_k, (loop_indent, LetStmt(name, None, True, RawExpr('unsafe { std::mem::MaybeUninit::uninit().assume_init() }')))))
         # 将 loop 内的 LetStmt 改为 AssignStmt
         inner_indent, inner_item = entries[decl_k]
         if isinstance(inner_item, LetStmt):

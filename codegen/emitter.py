@@ -405,6 +405,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     _need_refs = bool(conflict_map or skipped_classes)
     _referenced: set[str] = set()
     if _need_refs:
+        # 扫描方法指令中的类型引用
         for _m in ci.methods:
             for _instr in (_m.instrs or []):
                 _c = _instr.comment
@@ -420,6 +421,30 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     _dot = _rest.find('.')
                     if _dot > 0:
                         _referenced.add(_rest[:_dot])
+        # 扫描字段描述符（含超类链继承字段）中引用的类型（含 jdk/ 等跨包引用）
+        import re as _re
+        _all_fields_to_scan = list(ci.fields)
+        if registry:
+            _sc_scan = ci.super_class
+            _seen_scan: set[str] = {f.name for f in ci.fields}
+            while _sc_scan and _sc_scan != 'java/lang/Object' and _sc_scan in registry:
+                _sci_scan = registry[_sc_scan]
+                for _f2 in _sci_scan.fields:
+                    if not _f2.is_static and _f2.name not in _seen_scan:
+                        _all_fields_to_scan.append(_f2)
+                        _seen_scan.add(_f2.name)
+                _sc_scan = _sci_scan.super_class
+        for _f in _all_fields_to_scan:
+            for _m in _re.finditer(r'L([^;]+);', _f.descriptor or ''):
+                _referenced.add(_m.group(1))
+            for _m in _re.finditer(r'L([^;]+);', _f.generic_signature or ''):
+                _referenced.add(_m.group(1))
+        # 扫描方法描述符（参数和返回值）中引用的类型
+        for _method in ci.methods:
+            for _m in _re.finditer(r'L([^;]+);', _method.descriptor or ''):
+                _referenced.add(_m.group(1))
+            for _m in _re.finditer(r'L([^;]+);', getattr(_method, 'generic_signature', '') or ''):
+                _referenced.add(_m.group(1))
 
     # 消歧：当同一简单名存在于多个包中时，追加显式 use 覆盖 glob 歧义
     if conflict_map:
