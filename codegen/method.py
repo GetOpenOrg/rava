@@ -73,6 +73,96 @@ def _analyze_mutation(stmts):
     mark(stmts)
 
 
+def _hoist_loop_vars(entries: list, predeclared: set[str]):
+    """将在 loop{} 内 let-声明但在 loop 外被读取的变量提升到 loop 前。
+
+    JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 loop 内首次 let-声明，
+    但在 loop 退出后被读取，Rust 报 E0425。
+    修复：在 loop 前插入 let mut NAME = Default::default();，loop 内改为赋值。
+    """
+    # Pass 1: 收集所有在嵌套块中声明的变量及其位置
+    nesting = 0
+    declared_at: dict[str, tuple[int, int]] = {}  # name → (index, nesting_depth)
+    loop_entry_indices: list[int] = []  # loop { 的索引
+
+    for k, (indent, item) in enumerate(entries):
+        if isinstance(item, str):
+            if item.rstrip().endswith('loop {'):
+                loop_entry_indices.append(k)
+            delta = item.count('{') - item.count('}')
+            nesting += delta
+        elif isinstance(item, LetStmt):
+            if nesting > 0 and item.name not in declared_at and item.name not in predeclared:
+                declared_at[item.name] = (k, nesting)
+
+    if not declared_at or not loop_entry_indices:
+        return
+
+    # Pass 2: 将 entries 渲染为字符串，检测哪些 loop 内变量在 loop 外被引用
+    rendered: list[str] = []
+    for _, item in entries:
+        if isinstance(item, str):
+            rendered.append(item)
+        else:
+            try:
+                rendered.append(render_stmt(item))
+            except Exception:
+                rendered.append('')
+
+    # 追踪每个条目的嵌套深度
+    entry_nesting: list[int] = []
+    cur = 0
+    for text in rendered:
+        entry_nesting.append(cur)
+        cur += text.count('{') - text.count('}')
+
+    vars_to_hoist: set[str] = set()
+    for name, (decl_k, decl_nesting) in declared_at.items():
+        # 找到该变量作用域关闭的第一个索引（nesting 降回 decl_nesting - 1）
+        scope_close = None
+        for k2 in range(decl_k + 1, len(entries)):
+            if entry_nesting[k2] < decl_nesting:
+                scope_close = k2
+                break
+        if scope_close is None:
+            continue
+        # 检查 scope_close 之后是否有该变量名的引用
+        word = re.compile(r'\b' + re.escape(name) + r'\b')
+        for k2 in range(scope_close, len(rendered)):
+            if word.search(rendered[k2]):
+                vars_to_hoist.add(name)
+                break
+
+    if not vars_to_hoist:
+        return
+
+    # Pass 3: 对需要提升的变量进行修改
+    # 先收集所有插入操作（在 loop 前插入 let mut NAME = Default::default();）
+    # 用倒序插入，避免索引偏移
+    insertions: list[tuple[int, tuple]] = []  # (index, entry) to insert BEFORE
+    for name in vars_to_hoist:
+        decl_k, decl_nesting = declared_at[name]
+        # 找到包含此声明的最近的 loop { 索引
+        loop_k = None
+        for lk in reversed(loop_entry_indices):
+            if lk < decl_k:
+                loop_k = lk
+                break
+        if loop_k is None:
+            continue
+        # 获取 loop 行的 indent 作为插入位置的 indent
+        loop_indent = entries[loop_k][0]
+        insertions.append((loop_k, (loop_indent, LetStmt(name, None, True, RawExpr('Default::default()')))))
+        # 将 loop 内的 LetStmt 改为 AssignStmt
+        inner_indent, inner_item = entries[decl_k]
+        if isinstance(inner_item, LetStmt):
+            entries[decl_k] = (inner_indent, AssignStmt(Var(inner_item.name), inner_item.value))
+
+    # 倒序插入，避免索引偏移（同一 loop 有多个变量时均插入到 loop 前）
+    for ins_k, ins_entry in sorted(insertions, key=lambda x: -x[0]):
+        entries.insert(ins_k, ins_entry)
+
+
 def _promote_undeclared_assigns(entries: list, predeclared: set[str]):
     """将在当前词法作用域中无对应 LetStmt 的 AssignStmt 提升为 LetStmt(mutable=True)。
 
@@ -175,6 +265,7 @@ def gen_method_body(
     registry: dict | None = None,
     class_type_params: list[str] | None = None,
     overloaded_names: set[str] | None = None,
+    rust_name: str | None = None,
 ) -> str:
     from .sig_parser import parse_method_param_types
     _class_tparams = class_type_params or []
@@ -212,8 +303,11 @@ def gen_method_body(
     local_names = method.local_names or {}
 
     # 计算最终 Rust 方法名（有重载则加描述符后缀；Rust 关键字加 _ 后缀）
+    # 若 emitter 传入经过去重的 rust_name，直接使用（避免 E0592 重复定义）
     _overloaded = overloaded_names is not None and method.name in overloaded_names
-    if is_ctor:
+    if rust_name is not None:
+        rust_fn_name = safe_ident(rust_name)
+    elif is_ctor:
         rust_fn_name = mangle_name('new', method.descriptor) if _overloaded else 'new'
     elif _overloaded:
         rust_fn_name = mangle_name(method.name, method.descriptor)
@@ -285,7 +379,7 @@ def gen_method_body(
 
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                    slot_hint_types=slot_hint_types, return_type=rust_ret,
-                   is_constructor=is_ctor)
+                   is_constructor=is_ctor, class_type_params=_class_tparams)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
 
@@ -297,23 +391,40 @@ def gen_method_body(
     # ── 构造器：创建 this ───────────────────────────────────────────
     if is_ctor:
         from .sig_parser import parse_class_type_params
-        inst_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
+        # 包含继承字段：遍历超类链收集所有实例字段，与 emitter.py 的 struct 定义保持一致
+        _direct_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
+        _seen_ctor_names = {f.name for f in _direct_fields}
+        _inherited_fields = []
+        _sc = class_info.super_class if class_info else ''
+        while _sc and _sc != 'java/lang/Object' and registry and _sc in registry:
+            _sci2 = registry[_sc]
+            for _f2 in _sci2.fields:
+                if not _f2.is_static and _f2.name not in _seen_ctor_names:
+                    _inherited_fields.append(_f2)
+                    _seen_ctor_names.add(_f2.name)
+            _sc = _sci2.super_class
+        inst_fields = _direct_fields + _inherited_fields
         class_tparams = parse_class_type_params(class_info.generic_signature) if (class_info and class_info.generic_signature) else []
         _safe_fname = safe_ident
+        from .sig_parser import parse_field_type as _pft
+        _class_tparams_set = set(class_tparams)
+
+        def _field_init(f) -> str:
+            # 若字段的泛型签名解析到类型参数（如 T、K、V），不能用 Default::default()
+            # 因为类型参数 T 不一定实现 Default；用 JField::new_uninit() 代替
+            gen_ty = _pft(f.generic_signature, class_tparams) if (f.generic_signature and class_tparams) else ''
+            if gen_ty and gen_ty in _class_tparams_set:
+                return f"{_safe_fname(f.name)}: JField::new_uninit()"
+            return f"{_safe_fname(f.name)}: JField::new({rust_default(jvm_to_rust(f.descriptor))})"
+
         if inst_fields and class_tparams:
             # 命名 struct，有实例字段且有泛型参数
-            parts_init = [
-                f"{_safe_fname(f.name)}: JField::new({rust_default(jvm_to_rust(f.descriptor))})"
-                for f in inst_fields
-            ]
+            parts_init = [_field_init(f) for f in inst_fields]
             parts_init.append("_phantom: std::marker::PhantomData")
             struct_init = f"Self {{ {', '.join(parts_init)} }}"
         elif inst_fields:
             # 命名 struct，只有实例字段，无泛型参数
-            parts_init = [
-                f"{_safe_fname(f.name)}: JField::new({rust_default(jvm_to_rust(f.descriptor))})"
-                for f in inst_fields
-            ]
+            parts_init = [_field_init(f) for f in inst_fields]
             struct_init = f"Self {{ {', '.join(parts_init)} }}"
         elif class_tparams:
             # 无实例字段但有泛型参数：tuple struct，用 Self(PhantomData)
@@ -344,7 +455,7 @@ def gen_method_body(
 
             pre_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                                slot_hint_types=slot_hint_types, return_type=rust_ret,
-                               is_constructor=is_ctor)
+                               is_constructor=is_ctor, class_type_params=_class_tparams)
             pre_sim.locals = dict(sim.locals)
             pre_sim._slot_decl_depth = dict(sim._slot_decl_depth)
             for k in range(lp.start_idx, lp.cond_idx):
@@ -357,7 +468,7 @@ def gen_method_body(
             ci_ins   = instrs[lp.cond_idx]
             cond_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                                 slot_hint_types=slot_hint_types, return_type=rust_ret,
-                                is_constructor=is_ctor)
+                                is_constructor=is_ctor, class_type_params=_class_tparams)
             cond_sim.locals = dict(sim.locals)
             cond_sim._slot_decl_depth = dict(sim._slot_decl_depth)
             cond_sim.stack  = list(pre_sim.stack)
@@ -379,7 +490,7 @@ def gen_method_body(
 
             body_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                                 slot_hint_types=slot_hint_types, return_type=rust_ret,
-                                is_constructor=is_ctor)
+                                is_constructor=is_ctor, class_type_params=_class_tparams)
             body_sim.locals = dict(sim.locals)
             body_sim._slot_decl_depth = dict(sim._slot_decl_depth)
             body_sim.enter_scope()  # T68: 循环体是内层作用域，新声明的 slot depth=1
@@ -436,6 +547,7 @@ def gen_method_body(
     # ── IR mutation 分析（渲染前）────────────────────────────────────
     ir_stmts = [item for _, item in entries if not isinstance(item, str)]
     _analyze_mutation(ir_stmts)
+    _hoist_loop_vars(entries, predeclared)
     _promote_undeclared_assigns(entries, predeclared)
 
     # ── 渲染 entries → lines ─────────────────────────────────────────

@@ -485,6 +485,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     inst_fields = [f for f in ci.fields if not f.is_static]
 
+    # 超类字段继承：Java 允许子类访问父类字段，Rust struct 需要将其包含进来
+    # 遍历超类链，把父类的实例字段（未被当前类声明的）追加到 inst_fields 末尾
+    _seen_field_names = {f.name for f in inst_fields}
+    _super = ci.super_class
+    while _super and _super != 'java/lang/Object' and registry and _super in registry:
+        _sci = registry[_super]
+        for _f in _sci.fields:
+            if not _f.is_static and _f.name not in _seen_field_names:
+                inst_fields.append(_f)
+                _seen_field_names.add(_f.name)
+        _super = _sci.super_class
+
     # 用短名作为 Rust 标识符（JDK 类的 ci.name 含 /，不是合法 Rust 名）
     struct_name = short_cls(ci.name) if '/' in ci.name else ci.name
 
@@ -494,8 +506,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 构建泛型参数字符串（用于 struct 和 impl 头）
     if class_type_params:
         type_params_str = ', '.join(class_type_params)
-        # 结构体和 impl 只需 Clone + 'static；#[derive(Default)] 宏会自动在 impl Default
-        # 的 where 子句中添加 E: Default，不影响普通 use 场景（不需要 E: Default）
+        # 泛型参数只需 Clone + 'static；Default 不能加到结构体级别，会级联要求所有类型参数实现 Default
         bounds_str = ', '.join(f"{p}: Clone + 'static" for p in class_type_params)
         struct_generic = f"<{bounds_str}>"
         impl_header   = f"impl<{bounds_str}> {struct_name}<{type_params_str}>"
@@ -651,6 +662,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     m, ci, registry=registry,
                     class_type_params=class_type_params,
                     overloaded_names=overloaded_names,
+                    rust_name=rust_name,
                 )
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:

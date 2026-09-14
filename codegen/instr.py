@@ -682,13 +682,18 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         expr_s = render_expr(e_expr)
         actual_ty = render_type(e_ty)
         ret_ty = getattr(sim, 'return_type', 'Object')
+        _ctparams = getattr(sim, 'class_type_params', frozenset())
         # 实例方法返回 this 时，this 是 &Self 引用，需要 clone() 才能返回 owned 值
         if expr_s == 'this' and not sim.is_static:
             expr_s = 'this.clone()'
         elif ret_ty == 'Object' and actual_ty not in ('Object', '()'):
             expr_s = _coerce_to_object(expr_s, actual_ty)
         elif ret_ty != 'Object' and actual_ty == 'Object':
-            expr_s = f"Default::default()"
+            # 泛型类型参数（如 T、K、V、E）不实现 Default，用 panic!("null") 代替
+            if ret_ty in _ctparams:
+                expr_s = 'panic!("null")'
+            else:
+                expr_s = f"Default::default()"
         sim.emit(RawStmt(f"return Ok({expr_s});"))
 
     # ── 控制流（循环由 method.py 处理，此处跳过）──

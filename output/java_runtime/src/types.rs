@@ -7,6 +7,12 @@ impl<T: Clone> JField<T> {
     pub fn new(v: T) -> Self { JField(Box::new(std::cell::RefCell::new(v))) }
     pub fn get(&self) -> T  { self.0.borrow().clone() }
     pub fn set(&self, v: T) { *self.0.borrow_mut() = v; }
+    /// 不需要 T: Default 的未初始化字段。用于泛型类型参数字段（如 Reference<T>.referent）
+    pub fn new_uninit() -> Self {
+        JField(Box::new(std::cell::RefCell::new(
+            unsafe { std::mem::MaybeUninit::<T>::uninit().assume_init() }
+        )))
+    }
 }
 
 impl<T: Clone> Clone for JField<T> {
