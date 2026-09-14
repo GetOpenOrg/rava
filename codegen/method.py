@@ -15,12 +15,15 @@ from .types import ParsedMethod, ClassInfo
 from .type_map import jvm_to_rust, sig_type, rust_default, mangle_name, short_cls, get_ergonomic_jvm_rename
 from .constants import safe_ident
 from .stack import StackSim
-from .cfg import find_loops, find_boolean_conditions, find_if_guards, cmp_op, neg_cmp_op, _TWO_OP_BRANCH_OPS
+from .cfg import (
+    find_loops, find_boolean_conditions, find_if_guards, find_if_else,
+    cmp_op, neg_cmp_op, _TWO_OP_BRANCH_OPS,
+)
 from .instr import sim_instr
 from .render import render_stmt, render_expr, render_type
 from .rs_ir import (
     RsNamed, RsPrimitive, RsType,
-    AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr,
+    AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
 )
 from .stack import BOOL
 
@@ -286,6 +289,8 @@ def gen_method_body(
     _raw_guards      = find_if_guards(instrs, _loops)
     # boolean-condition 模式优先级更高，排除重叠的 guard 检测
     if_guard_map     = {k: v for k, v in _raw_guards.items() if k not in bool_cond_map}
+    # if-else / simple if-then（排除已处理的模式）
+    if_else_map      = find_if_else(instrs, _loops, bool_cond_map, if_guard_map)
     param_types      = method.param_types
 
     # 参数类型：如果泛型签名提供了类型变量，优先使用
@@ -440,151 +445,227 @@ def gen_method_body(
         # 实例方法：绑定 this = self，供字节码（aload_0 + getfield/putfield）使用
         entries.append(('', "    let this = self;"))
 
-    def flush(s: StackSim):
-        for stmt in s.stmts:
-            entries.append(('    ', stmt))
-        s.stmts.clear()
+    # ── 递归指令处理器 ──────────────────────────────────────────────────
+    # process_block(start, end, cur_sim, out, ind) 处理 instrs[start:end]，
+    # 支持任意嵌套的 loop / guard / if-else，正确管理缩进级别。
+    def process_block(start: int, end: int, cur_sim: StackSim,
+                      out: list, ind: str) -> None:
 
-    # ── 指令主循环 ──────────────────────────────────────────────────
-    i = 0
-    while i < len(instrs):
-        ins = instrs[i]
+        def flush_here() -> None:
+            for stmt in cur_sim.stmts:
+                out.append((ind, stmt))
+            cur_sim.stmts.clear()
 
-        # 循环头
-        if i in loop_map:
-            lp = loop_map[i]
-            entries.append(('', "    loop {"))
-
-            pre_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                               slot_hint_types=slot_hint_types, return_type=rust_ret,
-                               is_constructor=is_ctor, class_type_params=_class_tparams)
-            pre_sim.locals = dict(sim.locals)
-            pre_sim._slot_decl_depth = dict(sim._slot_decl_depth)
-            for k in range(lp.start_idx, lp.cond_idx):
-                sim_instr(instrs[k], pre_sim, method.class_name, registry=registry)
-            sim.locals = pre_sim.locals
-            sim._slot_decl_depth = pre_sim._slot_decl_depth
-            for s in pre_sim.stmts:
-                entries.append(('        ', s))
-
-            ci_ins   = instrs[lp.cond_idx]
-            cond_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                                slot_hint_types=slot_hint_types, return_type=rust_ret,
-                                is_constructor=is_ctor, class_type_params=_class_tparams)
-            cond_sim.locals = dict(sim.locals)
-            cond_sim._slot_decl_depth = dict(sim._slot_decl_depth)
-            cond_sim.stack  = list(pre_sim.stack)
-            if ci_ins.opcode in TWO_OP_CMP:
-                b_expr, b_ty = cond_sim.pop(); a_expr, a_ty = cond_sim.pop()
-                a_cond = _coerce_icmp_operand(render_expr(a_expr), a_ty)
-                b_cond = _coerce_icmp_operand(render_expr(b_expr), b_ty)
-                cond = cmp_op(ci_ins.opcode, a_cond, b_cond)
-            else:
-                a_expr, a_ty = cond_sim.pop()
-                a_str = render_expr(a_expr)
-                a_is_bool = (str(a_ty) == 'bool' or getattr(a_ty, 'name', '') == 'bool')
-                if a_is_bool and ci_ins.opcode in ('ifeq', 'ifne'):
-                    # bool 操作数：ifeq=等于 false 时 break，ifne=不等于 false 时 break
-                    cond = f'!({a_str})' if ci_ins.opcode == 'ifeq' else a_str
-                else:
-                    cond = cmp_op(ci_ins.opcode, a_str, '')
-            entries.append(('', f"        if {cond} {{ break; }}"))
-
-            body_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                                slot_hint_types=slot_hint_types, return_type=rust_ret,
-                                is_constructor=is_ctor, class_type_params=_class_tparams)
-            body_sim.locals = dict(sim.locals)
-            body_sim._slot_decl_depth = dict(sim._slot_decl_depth)
-            body_sim.enter_scope()  # T68: 循环体是内层作用域，新声明的 slot depth=1
-            for k in range(lp.cond_idx + 1, lp.end_idx):
-                sim_instr(instrs[k], body_sim, method.class_name, registry=registry)
-            body_sim.exit_scope()
-            # T68: 传播 locals 和深度信息；内层新声明 slot 的 depth=1 > outer depth=0，
-            # 外层代码再访问时会生成新 let 而非 assign，避免 E0425（cannot find value）
-            sim.locals = body_sim.locals
-            sim._slot_decl_depth = body_sim._slot_decl_depth
-            for s in body_sim.stmts:
-                entries.append(('        ', s))
-
-            entries.append(('', "    }"))
-            i = lp.end_idx + 1
-            continue
-
-        # condition→boolean 模式（if* iconst_X goto iconst_Y）
-        if i in bool_cond_map:
-            true_val, false_val, false_idx, end_idx = bool_cond_map[i]
-            is_two_op = ins.opcode in TWO_OP_CMP
-            if is_two_op:
-                b_expr, b_ty = sim.pop(); a_expr, a_ty = sim.pop()
-                a_str = _coerce_icmp_operand(render_expr(a_expr), a_ty)
-                b_str = _coerce_icmp_operand(render_expr(b_expr), b_ty)
-            else:
-                a_expr, a_type = sim.pop()
-                a_str = render_expr(a_expr); b_str = ''
-                # 若操作数已是 bool，ifne/ifeq 直接用 bool 值，不做 !=0i32 比较
-                a_is_bool = (str(a_type) == 'bool' or getattr(a_type, 'name', '') == 'bool')
-                if a_is_bool and ins.opcode in ('ifne', 'ifeq'):
-                    base_bool = a_str if ins.opcode == 'ifne' else f'!({a_str})'
-                    bool_expr = f'!({base_bool})' if (true_val == 1 and false_val == 0) else base_bool
-                    sim.push(RawExpr(bool_expr), BOOL)
-                    flush(sim)
-                    i = end_idx
-                    continue
-            # true_val=1,false_val=0 → fall-through 为 true → 用 neg_cmp_op（取反跳转条件）
-            # true_val=0,false_val=1 → jump 为 true    → 用 cmp_op（跳转条件即为 true）
-            if true_val == 1 and false_val == 0:
-                bool_expr = neg_cmp_op(ins.opcode, a_str, b_str)
-            else:
-                bool_expr = cmp_op(ins.opcode, a_str, b_str)
-            sim.push(RawExpr(bool_expr), BOOL)
-            flush(sim)
-            i = end_idx
-            continue
-
-        # if-guard：条件跳转 + fall-through 必定退出
-        if i in if_guard_map:
-            guard = if_guard_map[i]
-            op = ins.opcode
-            if guard.is_two_op:
-                b_expr, b_ty = sim.pop()
-                a_expr, a_ty = sim.pop()
-                a_str = _coerce_icmp_operand(render_expr(a_expr), a_ty)
-                b_str = _coerce_icmp_operand(render_expr(b_expr), b_ty)
-                fall_cond = neg_cmp_op(op, a_str, b_str)
-            else:
-                a_expr, a_ty = sim.pop()
-                a_str = render_expr(a_expr)
-                a_is_bool = (str(a_ty) == 'bool' or getattr(a_ty, 'name', '') == 'bool')
-                if a_is_bool and op in ('ifeq', 'ifne'):
-                    # bool 操作数：ifeq = 条件为 false 时跳转 → fall-through = true
-                    # neg: ifeq→ifne，但 bool 要生成 a 而非 (a!=0)
-                    fall_cond = f'!({a_str})' if op == 'ifne' else a_str
-                else:
-                    fall_cond = neg_cmp_op(op, a_str, '')
-            flush(sim)
-            entries.append(('', f"    if {fall_cond} {{"))
-            inner_sim = StackSim(
+        def make_sub() -> StackSim:
+            s = StackSim(
                 rust_param_type_nodes, is_static, method.class_name, local_names,
                 slot_hint_types=slot_hint_types, return_type=rust_ret,
                 is_constructor=is_ctor, class_type_params=_class_tparams,
             )
-            inner_sim.locals = dict(sim.locals)
-            inner_sim._slot_decl_depth = dict(sim._slot_decl_depth)
-            inner_sim.stack = list(sim.stack)
-            inner_sim.enter_scope()
-            for k in range(guard.body_start_idx, guard.continue_idx):
-                sim_instr(instrs[k], inner_sim, method.class_name, registry=registry)
-            inner_sim.exit_scope()
-            for s in inner_sim.stmts:
-                entries.append(('        ', s))
-            entries.append(('', '    }'))
-            i = guard.continue_idx
-            continue
+            s.locals = dict(cur_sim.locals)
+            s._slot_decl_depth = dict(cur_sim._slot_decl_depth)
+            s.stack = list(cur_sim.stack)
+            return s
 
-        # 普通指令
-        sim_instr(ins, sim, method.class_name, registry=registry)
-        flush(sim)
-        i += 1
+        def pop_fall_cond(op: str) -> str:
+            """弹出操作数，返回 fall-through 条件（跳转条件的否定）。"""
+            if op in TWO_OP_CMP:
+                b_e, b_t = cur_sim.pop(); a_e, a_t = cur_sim.pop()
+                a_s = _coerce_icmp_operand(render_expr(a_e), a_t)
+                b_s = _coerce_icmp_operand(render_expr(b_e), b_t)
+                return neg_cmp_op(op, a_s, b_s)
+            else:
+                a_e, a_t = cur_sim.pop()
+                a_s = render_expr(a_e)
+                a_is_b = (str(a_t) == 'bool' or getattr(a_t, 'name', '') == 'bool')
+                if a_is_b and op in ('ifeq', 'ifne'):
+                    return f'!({a_s})' if op == 'ifne' else a_s
+                return neg_cmp_op(op, a_s, '')
+
+        i = start
+        while i < end:
+            ins = instrs[i]
+            op  = ins.opcode
+
+            # ── 循环 ──────────────────────────────────────────────────
+            if i in loop_map:
+                lp = loop_map[i]
+                if lp.end_idx >= end:
+                    # 循环超出当前块范围（不应发生），当普通指令处理
+                    sim_instr(ins, cur_sim, method.class_name, registry=registry)
+                    flush_here()
+                    i += 1
+                    continue
+
+                out.append(('', f"{ind}loop {{"))
+
+                # pre-condition（start_idx .. cond_idx）
+                pre = make_sub()
+                for k in range(lp.start_idx, lp.cond_idx):
+                    sim_instr(instrs[k], pre, method.class_name, registry=registry)
+                for s in pre.stmts:
+                    out.append((ind + "    ", s))
+                pre.stmts.clear()
+                cur_sim.locals = pre.locals
+                cur_sim._slot_decl_depth = pre._slot_decl_depth
+
+                # 循环条件
+                ci = instrs[lp.cond_idx]
+                cond_s = make_sub()
+                cond_s.stack = list(pre.stack)
+                if ci.opcode in TWO_OP_CMP:
+                    b_e, b_t = cond_s.pop(); a_e, a_t = cond_s.pop()
+                    a_c = _coerce_icmp_operand(render_expr(a_e), a_t)
+                    b_c = _coerce_icmp_operand(render_expr(b_e), b_t)
+                    cond_str = cmp_op(ci.opcode, a_c, b_c)
+                else:
+                    a_e, a_t = cond_s.pop()
+                    a_s2 = render_expr(a_e)
+                    a_is_b2 = (str(a_t) == 'bool' or getattr(a_t, 'name', '') == 'bool')
+                    if a_is_b2 and ci.opcode in ('ifeq', 'ifne'):
+                        cond_str = f'!({a_s2})' if ci.opcode == 'ifeq' else a_s2
+                    else:
+                        cond_str = cmp_op(ci.opcode, a_s2, '')
+                out.append(('', f"{ind}    if {cond_str} {{ break; }}"))
+
+                # 循环体（递归）
+                body_s = make_sub()
+                body_s.enter_scope()
+                process_block(lp.cond_idx + 1, lp.end_idx, body_s, out, ind + "    ")
+                body_s.exit_scope()
+                cur_sim.locals = body_s.locals
+                cur_sim._slot_decl_depth = body_s._slot_decl_depth
+
+                out.append(('', f"{ind}}}"))
+                i = lp.end_idx + 1
+                continue
+
+            # ── condition→boolean ─────────────────────────────────────
+            if i in bool_cond_map:
+                true_val, false_val, false_idx, end_idx = bool_cond_map[i]
+                is_two_op = op in TWO_OP_CMP
+                if is_two_op:
+                    b_expr, b_ty = cur_sim.pop(); a_expr, a_ty = cur_sim.pop()
+                    a_str = _coerce_icmp_operand(render_expr(a_expr), a_ty)
+                    b_str = _coerce_icmp_operand(render_expr(b_expr), b_ty)
+                else:
+                    a_expr, a_type = cur_sim.pop()
+                    a_str = render_expr(a_expr); b_str = ''
+                    a_is_bool = (str(a_type) == 'bool' or getattr(a_type, 'name', '') == 'bool')
+                    if a_is_bool and op in ('ifne', 'ifeq'):
+                        base_bool = a_str if op == 'ifne' else f'!({a_str})'
+                        bool_expr = f'!({base_bool})' if (true_val == 1 and false_val == 0) else base_bool
+                        cur_sim.push(RawExpr(bool_expr), BOOL)
+                        flush_here()
+                        i = end_idx
+                        continue
+                if true_val == 1 and false_val == 0:
+                    bool_expr = neg_cmp_op(op, a_str, b_str)
+                else:
+                    bool_expr = cmp_op(op, a_str, b_str)
+                cur_sim.push(RawExpr(bool_expr), BOOL)
+                flush_here()
+                i = end_idx
+                continue
+
+            # ── if-guard（fall-through 必定退出）──────────────────────
+            if i in if_guard_map:
+                guard = if_guard_map[i]
+                fall_cond = pop_fall_cond(op)
+                flush_here()
+                out.append(('', f"{ind}if {fall_cond} {{"))
+                inner = make_sub()
+                inner.enter_scope()
+                for k in range(guard.body_start_idx, guard.continue_idx):
+                    ki = instrs[k]
+                    # goto → 循环出口（break）
+                    if ki.opcode == 'goto' and ki.operand:
+                        goto_tgt = int(ki.operand)
+                        is_brk = any(
+                            lp.exit_offset is not None and goto_tgt >= lp.exit_offset
+                            for lp in _loops
+                            if lp.start_idx <= k <= lp.end_idx
+                        )
+                        if is_brk:
+                            inner.emit(RawStmt('break;'))
+                            continue
+                    sim_instr(ki, inner, method.class_name, registry=registry)
+                inner.exit_scope()
+                for s in inner.stmts:
+                    out.append((ind + "    ", s))
+                out.append(('', f"{ind}}}"))
+                i = guard.continue_idx
+                continue
+
+            # ── if-else / simple if-then ──────────────────────────────
+            if i in if_else_map:
+                ie = if_else_map[i]
+                fall_cond = pop_fall_cond(op)
+                flush_here()
+
+                # 用递归 process_block 处理 then/else，支持嵌套控制流
+                then_out: list = []
+                then_s = make_sub()
+                then_s.enter_scope()
+                process_block(ie.then_start, ie.then_end, then_s, then_out, ind + "    ")
+                then_s.exit_scope()
+
+                else_out: list = []
+                else_s = None
+                if ie.has_else:
+                    else_s = make_sub()
+                    else_s.enter_scope()
+                    process_block(ie.else_start, ie.else_end, else_s, else_out, ind + "    ")
+                    else_s.exit_scope()
+
+                outer_len  = len(cur_sim.stack)
+                then_extra = len(then_s.stack) - outer_len
+                else_extra = (len(else_s.stack) - outer_len) if else_s else 0
+
+                if (ie.has_else and then_extra == 1 and else_extra == 1
+                        and not then_s.stmts and not else_s.stmts
+                        and not then_out and not else_out):
+                    # 三元：两个分支各留一个值在栈上，无语句无嵌套输出
+                    tv = render_expr(then_s.stack[-1][0])
+                    ev = render_expr(else_s.stack[-1][0])
+                    ty  = then_s.stack[-1][1]
+                    ety = else_s.stack[-1][1]
+                    ty_str  = render_type(ty)
+                    ety_str = render_type(ety)
+                    # 类型不一致时强转 else 侧以匹配 then 侧
+                    if ty_str != ety_str:
+                        _int_types = {'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64'}
+                        if ty_str == 'bool' and ety_str in _int_types:
+                            ev = f"({ev} != 0)"
+                        elif ety_str == 'bool' and ty_str in _int_types:
+                            tv = f"({tv} != 0)"
+                            ty = ety; ty_str = ety_str
+                        else:
+                            ev = f"({ev} as {ty_str})"
+                    cur_sim.push(RawExpr(f"(if {fall_cond} {{ {tv} }} else {{ {ev} }})"), ty)
+                else:
+                    out.append(('', f"{ind}if {fall_cond} {{"))
+                    out.extend(then_out)
+                    for s in then_s.stmts:
+                        out.append((ind + "    ", s))
+                    if ie.has_else:
+                        out.append(('', f"{ind}}} else {{"))
+                        out.extend(else_out)
+                        for s in else_s.stmts:
+                            out.append((ind + "    ", s))
+                    out.append(('', f"{ind}}}"))
+                    cur_sim.locals = then_s.locals
+                    cur_sim._slot_decl_depth = then_s._slot_decl_depth
+
+                i = ie.merge_idx
+                continue
+
+            # ── 普通指令 ──────────────────────────────────────────────
+            sim_instr(ins, cur_sim, method.class_name, registry=registry)
+            flush_here()
+            i += 1
+
+    process_block(0, len(instrs), sim, entries, "    ")
 
     # ── IR mutation 分析（渲染前）────────────────────────────────────
     ir_stmts = [item for _, item in entries if not isinstance(item, str)]
