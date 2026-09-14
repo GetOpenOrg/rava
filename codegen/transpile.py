@@ -50,13 +50,14 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
 
     # 3. 方法级调用链 BFS 发现 JDK 类
     print(f"[3/4] 扫描 JDK 类引用...")
-    jdk_class_infos = _discover_jdk_classes_method_level(class_infos)
+    jdk_class_infos, visited_methods = _discover_jdk_classes_method_level(class_infos)
 
     # 4. 生成 Rust
     print(f"[4/4] 生成 Rust → {out_dir}/")
     # 预加载 ergonomic @jvm_rename 指令（T39：为 ergonomic 层腾出干净方法名）
     load_ergonomic_renames(os.path.abspath(out_dir))
-    write_cargo_project(out_dir, class_infos, jdk_class_infos, java_files, batch_bin=batch_bin)
+    write_cargo_project(out_dir, class_infos, jdk_class_infos, java_files,
+                        batch_bin=batch_bin, visited_methods=visited_methods)
     print(f"\n✓ 完成。运行方式：\n  cd {out_dir} && cargo run --release")
 
 
@@ -109,7 +110,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
 
     if not queue:
         print("      无 JDK 类引用")
-        return []
+        return [], set()
 
     class_cache: dict[str, object] = {}
     jdk_infos: dict[str, object] = {}
@@ -118,7 +119,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
         resolver = JdkResolver()
     except RuntimeError as e:
         print(f"      警告：{e}，跳过 JDK 元数据生成")
-        return []
+        return [], set()
 
     with resolver:
         while queue:
@@ -155,4 +156,4 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                     enqueue_refs(m.instrs or [])
 
     print(f"      共解析 {len(jdk_infos)} 个 JDK 类（方法级调用链 BFS）")
-    return list(jdk_infos.values())
+    return list(jdk_infos.values()), visited_methods

@@ -353,6 +353,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   jdk_crate_pkg_paths: list[str] | None = None,
                   stub_bodies: bool = False,
+                  call_chain: set | None = None,
                   native_impls_map: dict | None = None,
                   workspace_root: str | None = None,
                   user_crate_prefix: str | None = None,
@@ -523,15 +524,26 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             used_rust_names[rust_name] = 0
 
         attr_line = _java_method_attr(m, compiled=True)
-        if m.is_native or m.is_abstract or stub_bodies:
-            # native/abstract 方法，或 JDK 类以 stub_bodies=True 模式生成：
-            # 只生成存根（或调用 _native 实现），确保 jdk_classes 可编译
+        # 判断该方法是否需要翻译字节码：
+        #   1. native / abstract → 永远生成 stub（调用 _native 或 panic!）
+        #   2. call_chain 不为空 且 此方法不在调用链上 → panic!("stub: ...")
+        #   3. stub_bodies=True（兜底/fallback）→ stub
+        #   4. 其他 → 翻译字节码
+        in_call_chain = (
+            call_chain is None or
+            (ci.name, m.name, m.descriptor) in call_chain
+        )
+        if m.is_native or m.is_abstract:
             native_fn = None
             if native_impls_map:
                 nkey = (ci.name, m.name, m.descriptor)
                 if nkey in native_impls_map:
                     native_fn = native_impls_map[nkey][0]
             stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=native_fn)
+            method_blocks.append(attr_line + '\n' + stub)
+        elif not in_call_chain or stub_bodies:
+            # 不在调用链上，或兜底 stub 模式：生成 panic! 存根
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=None)
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
@@ -542,7 +554,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 )
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:
-                method_blocks.append(f"/* codegen error {m.name}: {e} */")
+                # 翻译失败：退化为 stub，避免生成无效 Rust
+                stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=None)
+                method_blocks.append(attr_line + '\n' + stub)
 
     # 合成方法 wrapper（来自 native_impls 中 /// @synthetic 标注的函数）
     if synthetics and ci.name in synthetics:
@@ -650,7 +664,8 @@ def _append_cargo_bin(user_dir: str, bin_name: str, bin_src: str) -> None:
 def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                          jdk_class_infos: list[ClassInfo] | None = None,
                          java_files: list[str] | None = None,
-                         batch_bin: bool = False):
+                         batch_bin: bool = False,
+                         visited_methods: set | None = None):
     """
     生成 Cargo workspace，包含三个子 crate：
       java_runtime/  — 手写 VM 基础设施（git 管理，不由转译器写入）
@@ -706,10 +721,6 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 jdk_pkg_set.add('::'.join(_safe_pkg_part(p) for p in pkg_parts))
         jdk_crate_pkg_paths = sorted(jdk_pkg_set)
 
-        # 按调用链选择性开启字节码翻译；未列出的类保持 stub_bodies=True
-        # 选择性开启字节码翻译的类集合（当前留空，按需添加）
-        _TRANSLATE_BODIES: set[str] = set()  # 按需添加要翻译方法体的类
-
         for jdk_ci in jdk_class_infos:
             parts = jdk_ci.name.split('/')          # e.g. ['java','util','ArrayList']
             *pkg_parts, class_name = parts
@@ -719,10 +730,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if mod_name in pkg_dir_names.get(parent_dir, set()):
                 continue
             file_path = os.path.join(parent_dir, mod_name + '.rs')
-            use_stubs = jdk_ci.name not in _TRANSLATE_BODIES
+            # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
                                             jdk_crate_pkg_paths=jdk_crate_pkg_paths,
-                                            stub_bodies=use_stubs,
+                                            call_chain=visited_methods,
                                             native_impls_map=native_impls_map,
                                             workspace_root=out_dir,
                                             synthetics=synthetics_map,
