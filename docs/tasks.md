@@ -2254,3 +2254,286 @@ T72 (语义桩追踪)   ─ 独立，可立即开始；Step 1-3 不改变生成�
 - 立即（低风险高价值）：T71 Step 3（扫描 replace('$') 调用点，判断正误）、T72 Step 4（main.py 汇总报告）
 - 短期：T70（布尔压缩，改善代码质量，减少 E0308）、T71 Step 1-2（规范化函数）
 - 中期：T72 Step 5（将现有桩迁移到统一接口）
+
+---
+
+## 阶段十四：跨项目历史教训（来源：JNC/ruva 任务文档）
+
+> 来源：`/Users/yuwei/dev/workspace/jnc/docs/TASKS.md`、`/Users/yuwei/dev/workspace/ruva/docs/task-history.md`、`/Users/yuwei/dev/workspace/ruva/docs/task.md`
+>
+> 这三份文档是 JNC（Java→Rust transpiler v2）和 ruva（Ruby→Rust transpiler）的任务历史。
+> 它们已经历了完整的开发周期，踩过大量坑并修复。
+> 以下任务是在 java_rta 中**提前规避**这些已知问题的行动项。
+
+---
+
+### T73 · 整数算术溢出语义修复（`wrapping_add/sub/mul`）
+
+**状态**：`[ ]`  
+**文件**：`codegen/instr.py`  
+**优先级**：P1（正确性 bug，Java 与 Rust 行为不同，release 编译才会出现差异）  
+**来源**：ruva `SEM-1`（task-history.md）、ruva `PH1-11`（task.md）
+
+**背景**：
+
+Java 的整数运算（`int`、`long`）语义是 **wrap-around（模 2^32/2^64）**，溢出时回绕，不会报错。  
+Rust 在 **debug 模式**下整数溢出会 **panic**；release 模式下虽然回绕，但行为与 debug 不一致。
+
+当前 java_rta 生成形如：
+```rust
+let _v3 = _v1 + _v2;
+```
+这在 debug 模式下运行到溢出场景时会 panic（例如 JDK `String.hashCode()`、`HashMap` 哈希计算等都依赖整数溢出）。
+
+ruva 项目在 `SEM-1` 任务中修复了全部整数运算，将所有 `+/-/*` 替换为 `wrapping_add/sub/mul`，并将这一修复纳入 P1 优先级。这是生成代码语义正确性的根本保证之一。
+
+**实施步骤**：
+
+**Step 1：instr.py 所有整数二元运算改为 wrapping 版本**
+
+定位 `iadd`、`isub`、`imul`、`ladd`、`lsub`、`lmul` 等算术指令的生成代码：
+
+```python
+# 修改前
+case 'iadd': _gen_binop(sim, '+', I32)
+case 'isub': _gen_binop(sim, '-', I32)
+case 'imul': _gen_binop(sim, '*', I32)
+case 'ladd': _gen_binop(sim, '+', I64)
+case 'lsub': _gen_binop(sim, '-', I64)
+case 'lmul': _gen_binop(sim, '*', I64)
+
+# 修改后（对应 _gen_wrapping_binop）
+case 'iadd': _gen_wrapping_binop(sim, 'wrapping_add', I32)
+case 'isub': _gen_wrapping_binop(sim, 'wrapping_sub', I32)
+case 'imul': _gen_wrapping_binop(sim, 'wrapping_mul', I32)
+case 'ladd': _gen_wrapping_binop(sim, 'wrapping_add', I64)
+case 'lsub': _gen_wrapping_binop(sim, 'wrapping_sub', I64)
+case 'lmul': _gen_wrapping_binop(sim, 'wrapping_mul', I64)
+```
+
+新增辅助函数：
+```python
+def _gen_wrapping_binop(sim: StackSim, method: str, ty: RsType):
+    b, _ = sim.pop()
+    a, _ = sim.pop()
+    v = sim.fresh()
+    sim.emit(RawStmt(f"let {v} = {a}.{method}({b});"))
+    sim.push(Var(v), ty)
+```
+
+**Step 2：整数除法与取模（保留标准运算符）**
+
+`idiv`、`irem`、`ldiv`、`lrem` 除法在 Java 中会抛 `ArithmeticException`，Rust 会 panic（除零），语义一致，无需 wrapping 版本。但需确保保留现有的除零错误传播。
+
+**Step 3：一元取反不需改动**
+
+`ineg`/`lneg` 生成 `-_v1`，在 Rust 中 `i32::MIN.wrapping_neg() == i32::MIN`，语义与 Java 一致。可选：改为 `wrapping_neg()` 以明确意图。
+
+**Step 4：移位运算屏蔽高位**
+
+Java 的 `ishl`、`ishr`、`iushr`（及 long 版本）对移位量用 `& 0x1f`（`& 0x3f` for long）屏蔽。Rust `<<`/`>>` 在超出位宽时是 undefined behavior（debug 下 panic）。
+
+修改生成代码：
+```rust
+// Java ishl x, n → Rust
+let _v3 = _v1.wrapping_shl((_v2 & 0x1f) as u32);
+// Java ishr x, n → Rust (算术右移)
+let _v3 = _v1.wrapping_shr((_v2 & 0x1f) as u32);
+// Java iushr x, n → Rust (逻辑右移)
+let _v3 = ((_v1 as u32).wrapping_shr((_v2 & 0x1f) as u32)) as i32;
+```
+
+**验收**：
+- 生成的 Rust 代码中 `iadd/isub/imul/ladd/lsub/lmul` 全部对应 `wrapping_*` 方法调用
+- `cargo check` 不引入新错误
+- `ishl/ishr/iushr` 生成带 `& 0x1f` 屏蔽的 `wrapping_shl/shr`
+
+---
+
+### T74 · `$assertionsDisabled` 合成字段识别
+
+**状态**：`[ ]`  
+**文件**：`codegen/instr.py`（`getstatic` 处理）、`codegen/emitter.py`（字段生成）  
+**优先级**：P2（正确性 bug，JDK 断言机制产生静默错误行为）  
+**来源**：ruva `SEM-4`（task-history.md）
+
+**背景**：
+
+Java 编译器在任何使用 `assert` 关键字的类中自动插入一个合成字段：
+```java
+static final boolean $assertionsDisabled;
+static {
+    $assertionsDisabled = !ClassName.class.desiredAssertionStatus();
+}
+```
+该字段用于控制 `assert` 语句是否执行：
+```java
+if (!$assertionsDisabled) {
+    if (!(condition)) throw new AssertionError(...);
+}
+```
+
+在生成的 Rust 代码中，若 `getstatic $assertionsDisabled` 被翻译为读取一个正常字段，则：
+- 字段默认值为 `false`（断言未禁用 → 断言启用）→ 断言检查会执行
+- 被断言包裹的代码（如集合边界检查）会触发额外的 `Result::Err` 传播，导致测试失败
+
+ruva 的修复方案是：识别名称为 `$assertionsDisabled` 的 `getstatic` 调用，**直接返回常量 `true`**（即"断言已禁用"，等价于 JVM 默认以 `-da` 运行）。
+
+**实施步骤**：
+
+**Step 1：instr.py 中 getstatic 特殊处理**
+
+```python
+def _gen_getstatic(sim, class_name, field_name, descriptor):
+    # 合成字段：断言控制标志，始终视为禁用（= true）
+    if field_name == '$assertionsDisabled':
+        sim.push(Lit('true'), BOOL)
+        return
+    # ... 正常 getstatic 逻辑
+```
+
+**Step 2：emitter.py 跳过合成字段生成**
+
+在生成字段声明时过滤掉该字段，避免生成无意义的 `$assertionsDisabled: bool = false;`：
+```python
+SYNTHETIC_SKIP_FIELDS = {'$assertionsDisabled'}
+
+for field in cls.fields:
+    if field.name in SYNTHETIC_SKIP_FIELDS:
+        continue
+    # 正常生成字段
+```
+
+**验收**：
+- `getstatic $assertionsDisabled` 生成 `true`（常量）而非字段访问
+- `cargo check` 不引入新错误
+- 对含 `assert` 关键字的 JDK 类（如 `ArrayList`）生成代码不再因断言路径产生类型不匹配
+
+---
+
+### T75 · 无 checked exception 方法裁剪返回类型（`T` 而非 `Result<T, E>`）
+
+**状态**：`[ ]`  
+**文件**：`codegen/emitter.py`（方法签名生成）、`codegen/method.py`（`?` 运算符使用）  
+**优先级**：P3（代码质量优化，减少冗余 Ok/Err 包装，不影响正确性）  
+**来源**：ruva task.md `13.4-T3`（无异常 Result 裁剪）
+
+**背景**：
+
+当前 java_rta 将所有生成的 Java 方法签名包装为 `Result<T, JvmError>`，并在方法体内统一使用 `?` 运算符传播错误。  
+但 Java 的 checked exception 机制允许区分：
+- 有 `throws` 声明的方法 → 可抛 checked exception，翻译为 `Result<T, JvmError>` 合理
+- 无 `throws` 声明（且方法体不抛 checked exception）的方法 → 不需要 `Result` 包装
+
+过度包装导致：
+1. 调用链末端大量 `.ok()?` / `unwrap_or_default()` 噪音
+2. 无法利用 Rust 类型系统精确区分"可能失败"和"不可能失败"的方法
+
+**实施步骤**：
+
+**Step 1：classfile.py 解析 Exceptions attribute**
+
+`ParsedMethod` 已有 `descriptor`，但需要解析 `Code` attribute 中的 `Exceptions` 属性，提取 checked exception 类列表：
+
+```python
+@dataclass
+class ParsedMethod:
+    ...
+    checked_exceptions: list[str]  # 来自 Exceptions attribute，空列表表示无 checked exception
+```
+
+**Step 2：emitter.py 条件生成返回类型**
+
+```python
+def method_return_type(method: ParsedMethod, base_ty: str) -> str:
+    if method.checked_exceptions or method.is_virtual or method.calls_throwing_methods:
+        return f"Result<{base_ty}, JvmError>"
+    else:
+        return base_ty
+```
+
+**Step 3：method.py 条件生成 `?` 运算符**
+
+只有在方法签名为 `Result<T>` 时，调用内部函数才追加 `?`。若当前方法返回值不是 Result，则被调函数若返回 Result，需 `.unwrap_or_default()` 或重构调用链。
+
+**注意**：此任务属于**优化阶段**，完整实现需确保调用链一致性。建议在 T62（异常表解析）完成后再实施，否则"无 checked exception"的判断可能不准确。
+
+**验收**：
+- 无 `throws` 声明且方法体中不直接调用可抛方法的简单方法（如 `getter/setter`）生成为 `fn get_x(&self) -> i32` 而非 `fn get_x(&self) -> Result<i32, JvmError>`
+- `cargo check` 不引入新错误
+- 调用这类方法的代码不再出现多余的 `?`
+
+---
+
+### 附录：T56/T62 CFG 实现时的已知陷阱
+
+> 来源：ruva `task-history.md`（CFG-F1/F2/F4）、`task.md`（F-RECORD-2、CFG-ARCH-1a）
+>
+> 以下 bug 是 ruva 在实现 CFG 结构恢复时实际遇到并修复的。  
+> java_rta 实现 T56（CFG 支配树）和 T62（异常表建模）时，应**提前规避**这些问题，而不是等到出现再修复。
+
+**CFG-F1：嵌套 try-catch 内层 catch 丢失**
+
+Java 允许 try 嵌套：
+```java
+try {
+    try { ... } catch (IOEx e) { ... }  // 内层
+} catch (Ex e) { ... }                  // 外层
+```
+朴素的 CFG 建模若只看 handler_pc 不区分嵌套层级，会将内层 handler 的 successors 连接到外层 handler，导致内层 catch block 在结构恢复时被"吞掉"。
+
+**防范**：按 `[start_pc, end_pc)` 区间严格区分 handler 的保护范围；同一 handler_pc 可出现多次（对应多个 try 范围），需全部记录。
+
+---
+
+**CFG-F2：loop exit 检测未涵盖 Switch/Jump**
+
+back-edge 检测只考虑 `if*` 系指令作为循环 exit，遗漏了 `tableswitch`/`lookupswitch` 作为循环 exit 条件（Java switch 可出现在循环末尾），以及无条件 `goto` 的 long-range jump。
+
+**防范**：loop exit 检测需对所有跳转指令（`if*`、`switch*`、`goto`）统一处理。
+
+---
+
+**CFG-F4：`try end_pc` 必须加入 leader set**
+
+基本块切割时，leader 识别通常包含：方法入口、跳转目标、跳转后的下一条指令。  
+但 `exception_table.end_pc`（受保护区间结束处）并不是跳转目标，朴素实现会遗漏这个 leader，导致基本块边界错误，handler_pc 块的前驱建立出错。
+
+**防范**：将所有 `exception_table` 的 `start_pc`、`end_pc`、`handler_pc` 三个值都加入 leader set。
+
+---
+
+**F-RECORD-2：离散 try 区间共享同一 handler 必须合并**
+
+JVM 允许多个不相邻的 try 区间共享同一个 handler：
+```
+try_range [10, 20) → handler 50
+try_range [40, 60) → handler 50
+```
+若直接按条目建模，会生成两个独立的 `TryCatchStmt`，但实际上两者应对应同一个逻辑处理块。
+
+**防范**：按 `(handler_pc, catch_type)` 对区间分组，合并共享同一 handler 的所有 try 区间为 `union([10,20), [40,60))`，生成一个 `TryCatchStmt`。
+
+---
+
+**CFG-ARCH-1a：handler block 必须加入 successors 列表**
+
+在 phi 节点插入算法（支配边界计算）中，若 handler_pc 对应的基本块没有被加入 predecessors 处于保护区间内的任意 BB 的 `successors` 列表，则 phi 插入时不会在 handler block 的汇合点插入 phi 节点，导致 handler 块内的变量访问拿到的是未定义值（Rust E0425 或错误初始值）。
+
+**防范**：建 CFG 时，对受保护区间内的每个 BB，除正常的控制流后继外，额外加入 `handler_bb` 到 `successors`。
+
+---
+
+**阶段十四任务依赖**：
+
+```
+T73 (wrapping 算术)    ─ 独立，可立即开始；改动集中在 instr.py，低风险
+T74 ($assertionsDisabled) ─ 独立，可立即开始；两处改动，零风险
+T75 (Result 裁剪)      ─ 依赖 T62 异常表解析完成后再实施
+CFG 陷阱清单           ─ 作为 T56/T62 实施时的检查清单使用，不单独执行
+```
+
+**推荐执行序**：
+- 立即（P1 正确性）：T73（wrapping 算术，避免 debug 模式 panic）
+- 短期：T74（`$assertionsDisabled` 一处改动，五分钟可完成）
+- 长期（依赖 T62）：T75（Result 裁剪，需异常表解析作为基础）
