@@ -16,7 +16,7 @@ public class TestObjects {
     }
 
     public static void main(String[] args) {
-        TestP1 p = new TestP1(3, 4);
+        TestObjects p = new TestObjects(3, 4);
         System.out.println(p.sum());    // 7
         p.setX(10);
         System.out.println(p.sum());    // 14

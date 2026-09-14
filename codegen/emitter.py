@@ -823,15 +823,22 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     bin_name = to_snake(main_class.split('/')[-1])   # snake_case，如 TestArrayList → test_array_list
 
     if batch_bin:
-        # 批量模式：每个测试写独立的 src/bin/<class>.rs + 共享 src/lib.rs + 追加 Cargo.toml [[bin]]
+        # 批量模式：每个 bin 用 #[path] 独立包含自己的类文件，不共享 lib.rs。
+        # 这样某个测试编译失败不会影响其他测试。
+        path_decls: list[str] = []
+        for m in top_user_mods:
+            path_decls += [f'#[path = "../{m}.rs"]', f'mod {m};']
         bin_lines = [
+            '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
+            *path_decls,
+            f'use {use_path};',
+            '',
             'fn main() {',
-            f'    user::{use_path}::main().unwrap_or_else(|e| eprintln!("JVM Error: {{:?}}", e));',
+            f'    {main_class}::main().unwrap_or_else(|e| eprintln!("JVM Error: {{:?}}", e));',
             '}',
             '',
         ]
         _write(os.path.join(user_src, 'bin', bin_name + '.rs'), '\n'.join(bin_lines))
-        _update_user_lib_rs(user_src, top_user_mods)
         _append_cargo_bin(user_dir, bin_name, f'src/bin/{bin_name}.rs')
     else:
         # 单测试模式（默认）：写 src/main.rs + 覆写 Cargo.toml

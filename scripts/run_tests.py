@@ -132,9 +132,9 @@ def _reset_batch_workspace() -> None:
         shutil.rmtree(bin_dir)
     bin_dir.mkdir(parents=True, exist_ok=True)
 
-    # 删除 user/src/ 顶层所有 .rs 文件（lib.rs, main.rs, 用户类文件）
+    # 删除 user/src/ 顶层所有 .rs 文件（main.rs, 用户类文件等）
     for rs_file in user_src.glob("*.rs"):
-        rs_file.unlink()
+        rs_file.unlink(missing_ok=True)
 
     # 清空 jdk_classes/src/ 下所有 .rs 文件（lib.rs 由转译器重建）
     jdk_src = OUT / "jdk_classes" / "src"
@@ -260,18 +260,37 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
         print("所有转译均失败，退出。")
         return 1
 
-    # 3. 一次性 cargo build --bins
-    print(f"\n[batch] cargo build --bins (cargo -j {jobs})…")
-    r = _run(["cargo", "build", f"--jobs={jobs}", "--bins"], cwd=OUT)
+    # 3. 预清理目标 binary（确保构建后只有新编译成功的才存在）
+    for java_file in transpile_ok:
+        bin_path = OUT / "target" / "debug" / _to_bin_name(_class_name(java_file))
+        if bin_path.exists():
+            bin_path.unlink()
+
+    # 4. 一次性 cargo build --bins --keep-going（遇到单个 binary 错误仍继续其余）
+    print(f"\n[batch] cargo build --bins --keep-going (cargo -j {jobs})…")
+    r = _run(["cargo", "build", f"--jobs={jobs}", "--bins", "--keep-going"], cwd=OUT)
     if r.returncode != 0:
-        print(f"cargo build FAILED:\n{r.stderr[-1000:]}")
-        return 1
-    print("[batch] build OK")
+        # 有编译失败，但部分 binary 可能已成功——继续后续步骤
+        failed_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("error")]
+        print(f"[batch] build 部分失败（{len(failed_lines)} 个 error），继续运行已成功的 binary…")
+    else:
+        print("[batch] build OK")
 
     # 4. 并行运行所有 binary（直接执行 target/debug/<bin>，不经 cargo）
     print(f"\n[batch] 并行运行 {len(transpile_ok)} 个 binary (max_workers={jobs})…\n")
 
     passed = failed = 0
+
+    # 按 binary 是否存在区分编译成功/失败
+    build_ok: list[Path] = []
+    build_fail: list[Path] = []
+    for java_file in transpile_ok:
+        bin_path = OUT / "target" / "debug" / _to_bin_name(_class_name(java_file))
+        (build_ok if bin_path.exists() else build_fail).append(java_file)
+
+    for java_file in build_fail:
+        print(f"[ FAIL ] {java_file.relative_to(ROOT)}  — compile error")
+        failed += 1
 
     def _run_one(java_file: Path) -> tuple[Path, bool, str, list[str]]:
         class_name = _class_name(java_file)
@@ -283,7 +302,7 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
         return java_file, len(diff) == 0, "", diff
 
     with ThreadPoolExecutor(max_workers=jobs) as executor:
-        futures = {executor.submit(_run_one, f): f for f in transpile_ok}
+        futures = {executor.submit(_run_one, f): f for f in build_ok}
         for fut in as_completed(futures):
             java_file, ok, err_msg, diff = fut.result()
             rel = java_file.relative_to(ROOT)
