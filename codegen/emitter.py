@@ -323,14 +323,18 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
         f'{name}: {param_type_fn(p)}' for name, p in zip(arg_names, params)
     )
 
-    if m.is_static:
+    if m.is_static or m.is_constructor:
         sig_self = ''
     else:
         sig_self = '&self'
         if args_str:
             sig_self += ', '
 
-    ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
+    # 构造器返回 Result<Self>，其他方法按描述符决定
+    if m.is_constructor:
+        ret_type = 'Result<Self>'
+    else:
+        ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
     fn_name = safe_ident(rust_name or m.name)
     # Java clone() 与 Rust Clone trait 同名冲突：重命名为 jvm_clone
     if fn_name == 'clone':
@@ -572,19 +576,21 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     method_blocks: list[str] = []
 
     # public static 字段的 getter 方法（用于 getstatic 访问，如 System::out()）
-    # 只生成 native_impls 中有明确实现的字段 getter（避免与同名方法冲突）
+    # 生成静态字段 getter：有 native_impls 的用真实实现，其余生成 panic stub
     static_fields = [f for f in ci.fields if f.is_static]
     existing_method_names: set[str] = {m.name for m in visible_methods}
     for sf in static_fields:
-        native_fn_key = (ci.name, sf.name, sf.descriptor)
-        if not (native_impls_map and native_fn_key in native_impls_map):
-            continue  # 只为有 native_impls 实现的字段生成 getter
         safe_fname = _safe_field_name(sf.name)
         if safe_fname in existing_method_names:
             continue  # 有同名方法，跳过（方法已覆盖此访问路径）
         rust_ret = jvm_to_rust(sf.descriptor, registry=registry)
-        native_fn = native_impls_map[native_fn_key][0]
-        body = f'_native::{native_fn}()'
+        native_fn_key = (ci.name, sf.name, sf.descriptor)
+        if native_impls_map and native_fn_key in native_impls_map:
+            native_fn = native_impls_map[native_fn_key][0]
+            body = f'_native::{native_fn}()'
+        else:
+            # 生成 panic stub，确保 getstatic 对应的 ClassName::fieldName() 能编译
+            body = f'panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")'
         method_blocks.append(f'// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
 
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名

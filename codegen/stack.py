@@ -175,6 +175,15 @@ class StackSim:
         src_is_object = isinstance(ty, RsNamed) and ty.name == 'Object'
         if hint is not None and src_is_object:
             ty = hint
+        # `this` 在 Rust 方法中是 &Self，赋值给类型标注变量时需 clone()
+        _is_this = isinstance(expr, Var) and expr.name == 'this'
+        _is_ref_ty = isinstance(ty, RsNamed) and ty.name not in (
+            'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64',
+            'f32', 'f64', 'bool', 'char', '()', 'Object',
+        )
+        if _is_this and _is_ref_ty:
+            expr = RawExpr("this.clone()")
+
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
             decl_depth = self._slot_decl_depth.get(slot, 0)

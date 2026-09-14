@@ -587,8 +587,8 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'putstatic':
         val_expr, _ = sim.pop()
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
-        cls_simple = (cls.split('/')[-1].replace('$', '_')) if cls else 'UnknownClass'
-        sim.emit(RawStmt(f"{cls_simple}::{field_name}({render_expr(val_expr)});"))
+        # putstatic: 静态字段写入用注释占位，stub getter 已生成 panic!() 实现
+        sim.emit(RawStmt(f"/* putstatic {cls}.{field_name} = {render_expr(val_expr)} */"))
 
     # ── 数组 ──
     elif op == 'newarray':
