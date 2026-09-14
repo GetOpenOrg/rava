@@ -169,7 +169,7 @@ def main():
     os.makedirs(reports_dir, exist_ok=True)
     stem0 = os.path.splitext(os.path.basename(java_files[0]))[0]
     from datetime import date
-    report_path = os.path.join(reports_dir, f"{date.today()}-callchain-{stem0}.md")
+    report_path = os.path.join(reports_dir, f"callchain-{stem0}.md")
 
     user_names = [ci.name for ci in user_infos]
     print(f"用户类：{user_names}")
