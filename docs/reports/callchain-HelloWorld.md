@@ -7,8 +7,10 @@
 | 策略 | 类数 | 方法数 |
 |------|-----:|-------:|
 | 类级 BFS | 3129 | — |
-| 方法级 BFS | 880 | 5855 |
-| 节省（方法级不需要） | 2249 | — |
+| 方法级 BFS（调用链） | 880 | 5855 |
+| 方法级 BFS（field-only stub） | 61 | — |
+| 方法级 BFS 合计 | 941 | 5855 |
+| 节省（方法级不需要） | 2235 | — |
 
 ## 类级 BFS 发现的类
 
@@ -11641,6 +11643,72 @@
 
 - `getObject(Ljava/util/spi/LocaleServiceProvider;Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;`
 
+## Field-only Stub 类（仅通过字段访问发现）
+
+| 类名 | 方法数 | native 数 |
+|------|-------:|----------:|
+| `java/io/File$PathStatus` | 5 | 0 |
+| `java/io/ObjectInputStream$Caches` | 2 | 0 |
+| `java/io/ObjectInputStream$Logging` | 2 | 0 |
+| `java/io/ObjectInputStream$ValidationList$Callback` | 1 | 0 |
+| `java/io/ObjectStreamClass$Caches` | 2 | 0 |
+| `java/lang/Byte$ByteCache` | 2 | 0 |
+| `java/lang/Character$CharacterCache` | 2 | 0 |
+| `java/lang/CharacterData00` | 32 | 0 |
+| `java/lang/CharacterData01` | 29 | 0 |
+| `java/lang/CharacterData02` | 29 | 0 |
+| `java/lang/CharacterData03` | 29 | 0 |
+| `java/lang/CharacterData0E` | 29 | 0 |
+| `java/lang/CharacterDataPrivateUse` | 26 | 0 |
+| `java/lang/CharacterDataUndefined` | 26 | 0 |
+| `java/lang/Integer$IntegerCache` | 2 | 0 |
+| `java/lang/Long$LongCache` | 2 | 0 |
+| `java/lang/Module$ReflectionData` | 2 | 0 |
+| `java/lang/Short$ShortCache` | 2 | 0 |
+| `java/lang/StackWalker$ExtendedOption` | 5 | 0 |
+| `java/lang/Thread$Caches` | 2 | 0 |
+| `java/lang/Thread$Constants` | 2 | 0 |
+| `java/lang/Thread$State` | 5 | 0 |
+| `java/lang/ThreadLocal$StackWalkerHolder` | 2 | 0 |
+| `java/lang/invoke/ClassSpecializer` | 22 | 0 |
+| `java/lang/invoke/DirectMethodHandle$2` | 1 | 0 |
+| `java/lang/invoke/InvokerBytecodeGenerator$1` | 1 | 0 |
+| `java/lang/invoke/MethodHandleImpl$Makers` | 2 | 0 |
+| `java/lang/invoke/MethodHandles$1` | 1 | 0 |
+| `java/lang/module/ModuleDescriptor$Modifier` | 6 | 0 |
+| `java/lang/module/ModuleDescriptor$Requires$Modifier` | 6 | 0 |
+| `java/math/MathContext` | 10 | 0 |
+| `java/net/Proxy$Type` | 5 | 0 |
+| `java/net/URL$ThreadTrackHolder` | 2 | 0 |
+| `java/nio/charset/Charset$ExtendedProviderHolder` | 3 | 0 |
+| `java/nio/charset/Charset$ThreadTrackHolder` | 2 | 0 |
+| `java/nio/charset/CoderResult$Cache` | 2 | 0 |
+| `java/nio/charset/CodingErrorAction` | 3 | 0 |
+| `java/nio/charset/StandardCharsets` | 2 | 0 |
+| `java/security/AccessController$AccHolder` | 2 | 0 |
+| `java/text/Normalizer$Form` | 5 | 0 |
+| `java/time/LocalDate$1` | 1 | 0 |
+| `java/time/LocalTime$1` | 1 | 0 |
+| `java/util/Arrays$LegacyMergeSort` | 2 | 0 |
+| `java/util/Locale$Category` | 5 | 0 |
+| `java/util/ResourceBundle$NoFallbackControl` | 3 | 0 |
+| `java/util/ResourceBundle$SingleFormatControl` | 3 | 0 |
+| `java/util/regex/Pattern$LookBehindEndNode` | 3 | 0 |
+| `java/util/regex/Pattern$Qtype` | 5 | 0 |
+| `java/util/stream/Collector$Characteristics` | 5 | 0 |
+| `java/util/zip/ZipUtils` | 66 | 0 |
+| `sun/invoke/util/ValueConversions$1` | 1 | 0 |
+| `sun/net/util/IPAddressUtil$MASKS` | 2 | 0 |
+| `sun/nio/cs/ISO_8859_1` | 6 | 0 |
+| `sun/nio/cs/US_ASCII` | 6 | 0 |
+| `sun/security/pkcs/PKCS9Attribute` | 16 | 0 |
+| `sun/security/util/CryptoAlgorithmConstraints$CryptoHolder` | 2 | 0 |
+| `sun/security/util/Debug$FormatHolder` | 2 | 0 |
+| `sun/security/util/SecurityConstants` | 2 | 0 |
+| `sun/security/x509/PKIXExtensions` | 2 | 0 |
+| `sun/util/calendar/CalendarSystem$GregorianHolder` | 2 | 0 |
+| `sun/util/locale/provider/CalendarDataUtility$CalendarWeekParameterGetter` | 4 | 0 |
+
 ## 仅类级 BFS 拉入（方法级不需要）
 
 | 类名 | 方法数 |
@@ -11673,7 +11741,6 @@
 | `java/io/ObjectInputFilter$Config$RejectUndecidedFilter$SerialInfo` | 6 |
 | `java/io/ObjectInputFilter$FilterInfo` | 5 |
 | `java/io/ObjectInputStream$1` | 3 |
-| `java/io/ObjectInputStream$ValidationList$Callback` | 1 |
 | `java/io/ObjectInputValidation` | 1 |
 | `java/io/ObjectOutput` | 6 |
 | `java/io/ObjectOutputStream` | 56 |
@@ -11814,7 +11881,6 @@
 | `java/lang/Terminator$1` | 2 |
 | `java/lang/Thread$1` | 3 |
 | `java/lang/Thread$Builder$OfVirtual` | 8 |
-| `java/lang/Thread$State` | 5 |
 | `java/lang/Thread$UncaughtExceptionHandler` | 1 |
 | `java/lang/ThreadBuilders` | 2 |
 | `java/lang/ThreadBuilders$BaseThreadBuilder` | 10 |
@@ -11856,7 +11922,6 @@
 | `java/lang/invoke/BootstrapMethodInvoker$VM_BSCI` | 6 |
 | `java/lang/invoke/BoundMethodHandle$Specializer$Factory` | 2 |
 | `java/lang/invoke/CallSite` | 20 |
-| `java/lang/invoke/ClassSpecializer` | 22 |
 | `java/lang/invoke/ClassSpecializer$Factory` | 18 |
 | `java/lang/invoke/ClassSpecializer$Factory$1Var` | 11 |
 | `java/lang/invoke/ConstantBootstraps` | 13 |
@@ -11960,9 +12025,7 @@
 | `java/lang/invoke/VarHandles` | 30 |
 | `java/lang/module/ModuleDescriptor$Builder` | 27 |
 | `java/lang/module/ModuleDescriptor$Exports$Modifier` | 6 |
-| `java/lang/module/ModuleDescriptor$Modifier` | 6 |
 | `java/lang/module/ModuleDescriptor$Opens$Modifier` | 6 |
-| `java/lang/module/ModuleDescriptor$Requires$Modifier` | 6 |
 | `java/lang/module/ModuleFinder$1` | 3 |
 | `java/lang/module/ModuleFinder$2` | 7 |
 | `java/lang/ref/Reference$ReferenceHandler` | 2 |
@@ -11999,7 +12062,6 @@
 | `java/math/BigDecimal$StringBuilderHelper` | 5 |
 | `java/math/BigDecimal$UnsafeHolder` | 4 |
 | `java/math/BigInteger$UnsafeHolder` | 3 |
-| `java/math/MathContext` | 10 |
 | `java/net/Authenticator` | 18 |
 | `java/net/BindException` | 2 |
 | `java/net/ContentHandler` | 3 |
@@ -12021,7 +12083,6 @@
 | `java/net/PasswordAuthentication` | 3 |
 | `java/net/ProtocolException` | 2 |
 | `java/net/ProtocolFamily` | 1 |
-| `java/net/Proxy$Type` | 5 |
 | `java/net/ProxySelector` | 7 |
 | `java/net/ProxySelector$StaticProxySelector` | 4 |
 | `java/net/Socket` | 72 |
@@ -12581,7 +12642,6 @@
 | `java/util/LinkedList$ListItr` | 12 |
 | `java/util/LinkedList$ReverseOrderLinkedListView` | 63 |
 | `java/util/ListResourceBundle` | 6 |
-| `java/util/Locale$Category` | 5 |
 | `java/util/Locale$IsoCountryCode` | 7 |
 | `java/util/Locale$LanguageRange` | 11 |
 | `java/util/LongSummaryStatistics` | 11 |
@@ -12605,7 +12665,6 @@
 | `java/util/ResourceBundle$KeyElementReference` | 2 |
 | `java/util/ResourceBundle$ResourceBundleControlProviderHolder` | 5 |
 | `java/util/ResourceBundle$ResourceBundleProviderHelper` | 9 |
-| `java/util/ResourceBundle$SingleFormatControl` | 3 |
 | `java/util/ReverseOrderDequeView` | 43 |
 | `java/util/ReverseOrderListView` | 38 |
 | `java/util/ReverseOrderListView$DescendingIterator` | 4 |
@@ -12950,7 +13009,6 @@
 | `java/util/regex/Matcher$1MatchResultIterator` | 5 |
 | `java/util/regex/Matcher$ImmutableMatchResult` | 12 |
 | `java/util/regex/Pattern$1MatcherIterator` | 4 |
-| `java/util/regex/Pattern$Qtype` | 5 |
 | `java/util/spi/CalendarDataProvider` | 3 |
 | `java/util/spi/CalendarNameProvider` | 3 |
 | `java/util/spi/CurrencyNameProvider` | 3 |
@@ -13332,7 +13390,6 @@
 | `java/util/zip/ZipFile$ZipFileInflaterInputStream` | 5 |
 | `java/util/zip/ZipFile$ZipFileInputStream` | 9 |
 | `java/util/zip/ZipInputStream` | 19 |
-| `java/util/zip/ZipUtils` | 66 |
 | `javax/crypto/Cipher` | 58 |
 | `javax/crypto/Cipher$Transform` | 8 |
 | `javax/crypto/CipherSpi` | 23 |
@@ -13503,7 +13560,6 @@
 | `sun/nio/cs/CESU_8$Decoder` | 17 |
 | `sun/nio/cs/CESU_8$Encoder` | 11 |
 | `sun/nio/cs/HistoricallyNamedCharset` | 1 |
-| `sun/nio/cs/ISO_8859_1` | 6 |
 | `sun/nio/cs/ISO_8859_1$Decoder` | 5 |
 | `sun/nio/cs/ISO_8859_1$Encoder` | 10 |
 | `sun/nio/cs/ISO_8859_15` | 5 |
@@ -13520,7 +13576,6 @@
 | `sun/nio/cs/Surrogate$Parser` | 9 |
 | `sun/nio/cs/ThreadLocalCoders` | 4 |
 | `sun/nio/cs/ThreadLocalCoders$Cache` | 5 |
-| `sun/nio/cs/US_ASCII` | 6 |
 | `sun/nio/cs/US_ASCII$Decoder` | 4 |
 | `sun/nio/cs/US_ASCII$Encoder` | 7 |
 | `sun/nio/cs/UTF_16` | 5 |
@@ -13693,7 +13748,6 @@
 | `sun/security/jca/ProviderList$ServiceList$1` | 5 |
 | `sun/security/pkcs/ContentInfo` | 11 |
 | `sun/security/pkcs/PKCS7` | 29 |
-| `sun/security/pkcs/PKCS9Attribute` | 16 |
 | `sun/security/pkcs/PKCS9Attributes` | 14 |
 | `sun/security/pkcs/ParsingException` | 2 |
 | `sun/security/pkcs/SignerInfo` | 25 |
@@ -13894,3 +13948,53 @@
 | `sun/util/resources/ParallelListResourceBundle$KeySet$1` | 5 |
 | `sun/util/resources/TimeZoneNamesBundle` | 5 |
 | `sun/util/spi/CalendarProvider` | 2 |
+
+## 仅方法级 BFS 发现（类级未发现）
+
+- `java/io/File$PathStatus`
+- `java/io/ObjectInputStream$Caches`
+- `java/io/ObjectInputStream$Logging`
+- `java/io/ObjectStreamClass$Caches`
+- `java/lang/Byte$ByteCache`
+- `java/lang/Character$CharacterCache`
+- `java/lang/CharacterData00`
+- `java/lang/CharacterData01`
+- `java/lang/CharacterData02`
+- `java/lang/CharacterData03`
+- `java/lang/CharacterData0E`
+- `java/lang/CharacterDataPrivateUse`
+- `java/lang/CharacterDataUndefined`
+- `java/lang/Integer$IntegerCache`
+- `java/lang/Long$LongCache`
+- `java/lang/Module$ReflectionData`
+- `java/lang/Short$ShortCache`
+- `java/lang/StackWalker$ExtendedOption`
+- `java/lang/Thread$Caches`
+- `java/lang/Thread$Constants`
+- `java/lang/ThreadLocal$StackWalkerHolder`
+- `java/lang/invoke/DirectMethodHandle$2`
+- `java/lang/invoke/InvokerBytecodeGenerator$1`
+- `java/lang/invoke/MethodHandleImpl$Makers`
+- `java/lang/invoke/MethodHandles$1`
+- `java/net/URL$ThreadTrackHolder`
+- `java/nio/charset/Charset$ExtendedProviderHolder`
+- `java/nio/charset/Charset$ThreadTrackHolder`
+- `java/nio/charset/CoderResult$Cache`
+- `java/nio/charset/CodingErrorAction`
+- `java/nio/charset/StandardCharsets`
+- `java/security/AccessController$AccHolder`
+- `java/text/Normalizer$Form`
+- `java/time/LocalDate$1`
+- `java/time/LocalTime$1`
+- `java/util/Arrays$LegacyMergeSort`
+- `java/util/ResourceBundle$NoFallbackControl`
+- `java/util/regex/Pattern$LookBehindEndNode`
+- `java/util/stream/Collector$Characteristics`
+- `sun/invoke/util/ValueConversions$1`
+- `sun/net/util/IPAddressUtil$MASKS`
+- `sun/security/util/CryptoAlgorithmConstraints$CryptoHolder`
+- `sun/security/util/Debug$FormatHolder`
+- `sun/security/util/SecurityConstants`
+- `sun/security/x509/PKIXExtensions`
+- `sun/util/calendar/CalendarSystem$GregorianHolder`
+- `sun/util/locale/provider/CalendarDataUtility$CalendarWeekParameterGetter`
