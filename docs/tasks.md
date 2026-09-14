@@ -725,16 +725,19 @@ T29 (构建阻断)        ─ 依赖 T27
 ---
 
 ### T33 · 单 crate 架构迁移
-**状态**：`[ ]`  
+**状态**：`[ ]` 推迟（前置条件未满足）
 **文件**：`output/Cargo.toml`、`scripts/codegen/emitter.py`
 
-**背景**：当前 workspace 有 `java_runtime`、`jdk_classes`、`user` 三个 crate，目标态是合并为单 crate（只保留 `user`）。
+**背景**：当前 workspace 有 `java_runtime`、`java_rta_macros`、`jdk_classes`、`user` 四个 crate，目标态是合并为单 crate（只保留 `user`）。
+
+**真正的前置条件**：`java_runtime/src/java/` 中的手写 String/ArrayList/System 等实现必须先被字节码翻译替换（T46 系列）。在此之前做 T33 只是搬移手写代码，没有实质收益。推迟到 `java_runtime/java/` 目录可以删除之后再做。
 
 **目标**：
 - `jdk_classes` 内容内联到 `user/src/java/`
-- `java_runtime` 的 `error.rs`、`types.rs` 内联到 `user/src/`
+- `java_runtime` 的 `error.rs`、`types.rs` 内联到 `user/src/`（永久保留的 VM 基础设施）
 - `java_runtime/src/java/` 临时手写层由字节码翻译替换后删除
-- Cargo.toml 只剩一个 `[[bin]]` 条目
+- `java_rta_macros` 保留为独立 crate（proc-macro 必须独立编译）
+- Cargo.toml 只剩 `user` + `java_rta_macros` 两个成员
 
 **验收**：`output/` 下无 `jdk_classes`、`java_runtime` 子目录；`cargo run` 仍输出正确结果。
 
@@ -936,3 +939,158 @@ ages = HashMap::<Object, Object>::new_default()?;  // ← 赋值类型不符
 **待验证**：需要在 `TestArrayList.java` 中取消 for-each 注释，重新生成并 `cargo check` 验证
 
 **验收**：TestArrayList.java 的 for-each 段可以正确生成并运行
+
+---
+
+## 阶段九：字节码翻译覆盖率扩展（Phase 9 — Bytecode Translation Coverage）
+
+> 目标：逐步将 `java_runtime/src/java/` 中的手写实现替换为字节码翻译，消灭 `panic!("stub: ...")` 存根。每个任务对应一条完整调用链，从用户代码出发，追踪到 native 方法为止。
+
+---
+
+### T43 · StringBuilder 字节码翻译
+**状态**：`[ ]`
+**文件**：`output/native_impls/java/lang/string_builder.rs`、`scripts/codegen/transpile.py`
+
+**背景**：Java `"Hello" + name` 在字节码层面编译为：
+```java
+new StringBuilder()
+  .append("Hello")
+  .append(name)
+  .toString()
+```
+当前 `StringBuilder.new()` 有 native 实现，但 `append(String)`、`append(int)` 等重载和 `toString()` 均是 `panic!` 存根。
+
+**目标**：
+- 将 `java/lang/StringBuilder` 加入调用链翻译（翻译 `append`/`toString` 字节码）
+- 在 `native_impls/java/lang/string_builder.rs` 中实现底层 `append`/`toString` native 方法
+- 验证：`"Hello " + name` 字符串拼接能正确运行
+
+**验收**：包含字符串拼接的 Java 程序翻译后正确输出
+
+---
+
+### T44 · 虚方法派发（invokevirtual 多态）
+**状态**：`[ ]`
+**文件**：`scripts/codegen/instr.py`、`scripts/codegen/emitter.py`
+
+**背景**：当前 `invokevirtual` 生成的是静态直接调用（`obj.method()`），没有多态分派。若 `obj` 的运行时类型是子类，调用的仍是父类方法，行为错误。
+
+**目标**：
+- 分析 `invokevirtual` 生成逻辑，确定当前的静态调用边界
+- 对需要多态的场景（接口调用、抽象类方法）生成正确的 trait 对象派发或 downcast 后调用
+- 至少覆盖：父类引用调用子类覆写方法的场景
+
+**验收**：包含单层继承+方法覆写的 Java 测试翻译后行为正确
+
+---
+
+### T45 · 异常处理（try/catch/finally）
+**状态**：`[ ]`
+**文件**：`scripts/codegen/method.py`、`scripts/codegen/stack.py`
+
+**背景**：Java 异常在字节码层面通过异常表（exception table）表达，不是结构化控制流。当前代码生成器不处理异常表，遇到 try/catch 的字节码会生成错误代码或直接 panic。
+
+**目标**：
+- `classfile.py` 解析方法的异常表（exception handlers）
+- `method.py` 根据异常表生成 Rust `match` 或 `if let Err(e) = ...` 结构
+- 至少覆盖：单个 `catch` 子句、`finally` 块
+
+**验收**：包含 try/catch 的 Java 程序翻译后正确处理异常
+
+---
+
+### T46 · java/lang/String 字节码翻译
+**状态**：`[ ]`
+**文件**：`output/native_impls/java/lang/string.rs`（新建）、`scripts/codegen/transpile.py`
+
+**背景**：`java/lang/String` 目前由 `java_runtime/src/java/lang/string.rs` 手写实现。目标是将其替换为从 `String.class` 字节码翻译出的版本，只保留真正的 native 方法（`charAt`、`length` 等）在 `native_impls/` 中手写。
+
+**目标**：
+- 将 `java/lang/String` 从 `_JAVA_RUNTIME_CLASSES` 排除，走 codegen 路径
+- 在 `native_impls/java/lang/string.rs` 实现 native 方法
+- 删除 `java_runtime/src/java/lang/string.rs` 手写层
+
+**依赖**：此任务是 T33（单 crate 迁移）的真正前置条件之一
+
+**验收**：HelloWorld 在删除手写 String 后仍能正确运行
+
+---
+
+### T47 · java/lang/System + PrintStream 字节码翻译
+**状态**：`[ ]`
+**文件**：`output/native_impls/java/lang/system.rs`、`output/native_impls/java/io/print_stream.rs`
+
+**背景**：`System.out.println` 是最常用的调用链起点，当前由手写实现驱动。目标是将 `java/lang/System` 和 `java/io/PrintStream` 加入字节码翻译路径，只保留真正的 native 底层（write syscall 等）在 `native_impls/` 中。
+
+**依赖**：T46（String 需要先翻译）
+
+**验收**：System.out.println 通过字节码翻译路径运行，`java_runtime/src/java/` 对应文件可删除
+
+---
+
+### T48 · 类继承与接口实现场景测试
+**状态**：`[ ]`
+**文件**：`tests/TestInheritance.java`（新建）
+
+**背景**：目前所有测试都是单类场景。需要验证：子类继承父类字段/方法、接口实现、`instanceof` 检查、`super` 调用等是否能正确翻译。
+
+**目标**：
+- 编写包含继承、接口、`instanceof` 的 Java 测试
+- 运行翻译器，确认生成代码编译并输出正确结果
+- 记录并修复发现的 bug
+
+**验收**：`TestInheritance.java` 翻译后与 `java TestInheritance` 输出一致
+
+---
+
+### T49 · Lambda 与匿名类翻译
+**状态**：`[ ]`
+**文件**：`scripts/codegen/instr.py`（invokedynamic 处理）
+
+**背景**：Java lambda（`() -> ...`、`x -> x.toString()`）在字节码层面通过 `invokedynamic` + `bootstrap method` 实现。当前 `invokedynamic` 未实现，遇到 lambda 代码直接 panic 或生成错误代码。
+
+**目标**：
+- 理解 Java lambda 的 `invokedynamic` 字节码结构（LambdaMetafactory bootstrap）
+- 设计 Rust 侧的表示方案（闭包 / trait object）
+- 实现至少无捕获变量的简单 lambda 翻译
+
+**验收**：`list.forEach(x -> System.out.println(x))` 能翻译并正确运行
+
+---
+
+### T50 · IR 对象化完成（T05/T06/T07 收尾）
+**状态**：`[ ]`
+**文件**：`scripts/codegen/instr.py`、`scripts/codegen/method.py`、`scripts/codegen/emitter.py`
+
+**背景**：T05/T06 是 `[~]` 过渡状态——IR 基础设施已建立，但 `instr.py` 仍用 `RawExpr/RawStmt` 包字符串，`method.py` 仍输出字符串列表。这让代码生成逻辑难以分析和变换。
+
+**目标**：
+- `instr.py`：所有指令生成真正的 IR 节点（`CallExpr`、`BinOp`、`FieldAccess` 等），消灭 `RawExpr`
+- `method.py`：方法体改为 `RsFn` IR 节点，通过 `render()` 输出
+- `emitter.py`（T07）：使用 IR render 输出，删除字符串拼接残留
+
+**依赖**：T05、T06 先各自推进，T07 等两者完成后合并
+
+**验收**：`grep -r 'RawExpr\|RawStmt' scripts/` 无输出；所有现有测试仍通过
+
+---
+
+**阶段九任务依赖**：
+
+```
+T43 (StringBuilder)       ─ 独立，可立即开始
+T44 (虚方法派发)          ─ 独立，可立即开始
+T45 (异常处理)            ─ 独立，可立即开始
+T46 (String 字节码翻译)   ─ 独立（T33 的真正前置）
+T47 (System/PrintStream)  ─ 依赖 T46
+T48 (继承/接口测试)       ─ 依赖 T44
+T49 (Lambda/invokedynamic)─ 独立（高难度）
+T50 (IR 对象化)           ─ 独立（内部质量，不阻塞功能）
+T33 (单 crate 迁移)       ─ 依赖 T46、T47（手写层消灭后再做）
+```
+
+**推荐执行序**：
+- 短期：T43（最小工作量，高价值）或 T44（解锁继承场景）
+- 中期：T46 → T47（消灭手写层，推进目标架构）
+- 长期：T49（Lambda）、T50（IR 质量）、T33（单 crate）
