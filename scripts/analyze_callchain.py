@@ -163,9 +163,13 @@ def main():
             with open(class_file, 'rb') as f:
                 user_infos.append(parse_class_bytes(f.read(), stem))
 
-    # 输出文件放在第一个 .java 文件同目录
-    out_dir = os.path.dirname(os.path.abspath(java_files[0]))
-    report_path = os.path.join(out_dir, 'callchain_report.txt')
+    # 报告写到项目根目录 docs/reports/
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    reports_dir = os.path.join(project_root, 'docs', 'reports')
+    os.makedirs(reports_dir, exist_ok=True)
+    stem0 = os.path.splitext(os.path.basename(java_files[0]))[0]
+    from datetime import date
+    report_path = os.path.join(reports_dir, f"{date.today()}-callchain-{stem0}.md")
 
     user_names = [ci.name for ci in user_infos]
     print(f"用户类：{user_names}")
@@ -194,36 +198,48 @@ def main():
             print(f"  方法级额外发现: {len(only_in_method_bfs)} 个类")
         print(f"\n详细报告 → {report_path}")
 
-        # 写详细报告到文件
+        # 写详细报告（Markdown）
         with open(report_path, 'w', encoding='utf-8') as rpt:
-            rpt.write(f"用户类：{user_names}\n")
-            rpt.write("=" * 70 + "\n")
+            rpt.write(f"# 调用链分析报告：{', '.join(user_names)}\n\n")
+            rpt.write(f"生成时间：{date.today()}\n\n")
 
-            rpt.write("\n【类级 BFS】\n")
+            rpt.write("## 摘要\n\n")
+            rpt.write(f"| 策略 | 类数 | 方法数 |\n")
+            rpt.write(f"|------|-----:|-------:|\n")
+            rpt.write(f"| 类级 BFS | {len(cls_infos)} | — |\n")
+            rpt.write(f"| 方法级 BFS | {len(reach_classes)} | {len(reach_methods)} |\n")
+            rpt.write(f"| 节省（方法级不需要） | {len(only_in_class_bfs)} | — |\n\n")
+
+            rpt.write("## 类级 BFS 发现的类\n\n")
+            rpt.write("| 类名 | 方法数 | native 数 |\n")
+            rpt.write("|------|-------:|----------:|\n")
             for name in sorted(cls_infos):
                 ci = cls_infos[name]
                 total = len(ci.methods)
                 native = sum(1 for m in ci.methods if m.is_native)
-                rpt.write(f"  {name}  ({total} 方法, {native} native)\n")
+                rpt.write(f"| `{name}` | {total} | {native} |\n")
 
-            rpt.write("\n【方法级调用链 BFS】\n")
+            rpt.write("\n## 方法级 BFS 可达方法\n\n")
             by_cls = defaultdict(list)
             for cls, meth, desc in sorted(reach_methods):
                 by_cls[cls].append(f"{meth}{desc}")
             for cls in sorted(by_cls):
-                rpt.write(f"  {cls}\n")
+                rpt.write(f"### `{cls}`\n\n")
                 for sig in sorted(by_cls[cls]):
-                    rpt.write(f"    ↳ {sig}\n")
+                    rpt.write(f"- `{sig}`\n")
+                rpt.write("\n")
 
-            rpt.write("\n【仅类级 BFS 拉入（方法级不需要）】\n")
+            rpt.write("## 仅类级 BFS 拉入（方法级不需要）\n\n")
+            rpt.write("| 类名 | 方法数 |\n")
+            rpt.write("|------|-------:|\n")
             for c in sorted(only_in_class_bfs):
                 ci = cls_infos[c]
-                rpt.write(f"  {c}  ({len(ci.methods)} 方法)\n")
+                rpt.write(f"| `{c}` | {len(ci.methods)} |\n")
 
             if only_in_method_bfs:
-                rpt.write("\n【仅方法级 BFS 发现（类级未发现）】\n")
+                rpt.write("\n## 仅方法级 BFS 发现（类级未发现）\n\n")
                 for c in sorted(only_in_method_bfs):
-                    rpt.write(f"  {c}\n")
+                    rpt.write(f"- `{c}`\n")
 
 
 if __name__ == '__main__':
