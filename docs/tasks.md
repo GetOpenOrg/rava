@@ -1270,48 +1270,55 @@ elif op == 'instanceof':
 
 ---
 
-### T55 · 构建 ClassHierarchy 类层次图
+### T55 · 注解驱动的继承图：build.rs 扫描生成跨层 From impl
 **状态**：`[ ]`  
-**文件**：`codegen/hierarchy.py`（新建）、`codegen/transpile.py`、`codegen/emitter.py`  
-**优先级**：**P0（与 T76 并列，是 T76 的基础设施）**
+**文件**：`output/jdk_classes/build.rs`（扩展）  
+**优先级**：**P0（与 T78/T76 并列，依赖 T78 注解完整化先完成）**  
+**方案文档**：`docs/plans/2026-09-14-annotation-driven-java-metadata.md`
 
-**背景**：codegen 完全没有继承关系信息，无法做多态路由、instanceof 判断、继承字段/方法查找。
-这是当前 2333 个编译错误中 1422 个（61%）的根本原因。T55 是 T76（字段展平）的必要前置条件，
-两者应同时开始，T55 完成后立即实施 T76。详细实施规格见 T76。
+**背景**：
+
+> **设计变更（2026-09-14）**：原方案是在 Python 侧构建 ClassHierarchy 数据结构，
+> 在转译时展平字段。新方案改为注解驱动：每个生成的 Rust 文件通过 `#[java_class(...)]`
+> 注解承载完整 Java 元数据，build.rs 在编译时扫描这些注解来构建继承关系，
+> 无需 Python 运行时数据结构。
+
+每个 Rust 文件只标注自己直接声明的父类和接口（镜像 Java 声明），链路由遍历解析：
+
+```
+FileNotFoundException（super_class=IOException）
+  → IOException（super_class=Exception）
+    → Exception（super_class=Throwable）→ ...
+```
 
 **实施步骤**：
 
-1. 新建 `codegen/hierarchy.py`，定义数据结构：
-   ```python
-   @dataclass
-   class ClassHierarchy:
-       classes: dict[str, ClassInfo]  # binary_name → ClassInfo
-       
-       def is_subtype(self, sub: str, sup: str) -> bool:
-           """判断 sub 是否是 sup 的子类型（包括接口实现）"""
-       
-       def lookup_virtual(self, recv_class: str, method_name: str, desc: str) -> str | None:
-           """沿继承链查找方法定义所在的类"""
-       
-       def inherited_fields(self, class_name: str) -> list[tuple[str, str]]:
-           """返回该类从所有父类继承的字段（field_name, rust_type）"""
-   ```
+1. 依赖 T78（注解完整化）先完成，确保 `java_class` 注解包含 `super_class`/`interfaces`/`modifiers`
 
-2. `transpile.py`：在生成代码前，遍历所有已解析的 `ClassInfo` 构建 `ClassHierarchy`，传入 emitter。
+2. 扩展 `output/jdk_classes/build.rs`：
+   - 遍历 `src/**/*.rs`，用正则提取所有 `#[java_class(...)]` 注解
+   - 构建内存继承图 `HashMap<binary_name, (super_class, interfaces)>`
+   - 对每对祖先-后代生成 `From<Child> for Ancestor` impl：
+     ```rust
+     // build.rs 写入 OUT_DIR/java_from_impls.rs
+     impl From<FileNotFoundException> for Exception {
+         fn from(v: FileNotFoundException) -> Exception { v._super.into() }
+     }
+     ```
+   - `mod.rs` 中 `include!(concat!(env!("OUT_DIR"), "/java_from_impls.rs"))`
 
-3. `emitter.py`：生成 struct 时，通过 `hierarchy.inherited_fields(class_name)` 自动注入父类字段（解决 E0609）。
-
-4. 近期前置优化（不需要完整 ClassHierarchy）：在 `emitter.py` 中利用现有 `ClassInfo.super_class` 直接查找父类字段。
+**为什么 build.rs 而非 proc-macro**：
+- proc-macro 处理单个 item，无法访问其他文件的注解
+- build.rs 在编译前运行，可扫描所有文件，构建全局继承图
 
 **影响范围**：
-- 解决 E0609（字段找不到）中的继承字段缺失问题（约 449 cases）
-- 解决 E0599 中父类方法找不到问题（部分 cases）
-- 为 T53（instanceof）提供完整语义支持
+- 跨层 From impl：`FileNotFoundException → Exception`、`→ Throwable` 等
+- 消除 E0308 中"expected Ancestor, found Descendant"类型错误
+- 为 T53（instanceof）提供 `is_subtype` 查询能力
 
 **验收**：
-- `AbstractList.modCount` 出现在 `ArrayList` 的结构体中
-- `MutableBigInteger.add` 在 `SignedMutableBigInteger` 上可调用
-- E0609 错误数量下降
+- `FileNotFoundException` 可以直接 `.into()` 得到 `Throwable`
+- E0308 中继承类型不匹配错误数量下降 50% 以上
 
 ---
 
@@ -2548,130 +2555,178 @@ CFG 陷阱清单           ─ 作为 T56/T62 实施时的检查清单使用，�
 > Java 类继承层次在生成的 Rust 代码中完全缺失。所有基于错误码的补丁式修复（T68/T64/E0277 等）
 > 都无法触及这一问题。本阶段的两个任务是从架构层面解决这 1422 个错误的唯一正确路径。
 
-### T76 · 类继承：字段展平 + 上转型 From impl
+### T78 · 注解完整化：补全 java_class/java_field/java_method 的 modifiers 字段
 
 **状态**：`[ ]`  
-**文件**：`codegen/hierarchy.py`（新建，T55 前置）、`codegen/emitter.py`（struct 生成段扩展）  
-**优先级**：**P0（架构级，高于所有其他任务）**  
-**依赖**：T55（ClassHierarchy 继承图），两者可并行开发，T76 的 Step 1-2 即是 T55 的核心
+**文件**：`codegen/emitter.py`（`_java_class_attr`、`_java_field_attr`、`_java_method_attr`）  
+**优先级**：**P0（T76/T55 的前置条件，改动量小，应最先完成）**  
+**方案文档**：`docs/plans/2026-09-14-annotation-driven-java-metadata.md`
 
 **背景**：
 
-Java 的单继承体系在生成的 Rust 代码中完全缺失：
-
-```
-Java:   FileNotFoundException  extends  IOException  extends  Exception
-Rust:   三个完全独立的 struct，互不认识
-```
-
-这导致了三类级联错误（共 1422 个，占总错误 61%）：
-- **E0609（64 个）**：`no field 'lock' on BufferedReader` — 父类字段没有被子类 struct 包含
-- **E0308（~1200 个子集）**：`expected IOException, found FileNotFoundException` — 子类不能用于父类期望的位置
-- **E0599（部分）**：父类方法在子类 struct 上找不到
-
-**为什么补丁式修复无效**：
-- E0609 每次只能修一个字段，无法系统性覆盖
-- E0308 每次只能修一个调用点，但同类错误有 1358 个
-- 根因是代码生成模型缺少继承关系，单靠修改生成后的代码无法解决
+当前注解缺少 `modifiers` 字段，无法区分 `static`/`final`/`native`/`abstract` 等修饰符。
+补全后，注解成为 Java 类文件的完整元数据镜像，后续 proc-macro 和 build.rs 可仅依赖注解工作。
 
 **实施步骤**：
 
-**Step 1：继承图（hierarchy.py）**
+**Step 1：`_java_class_attr` 补充 `modifiers`**
 
 ```python
-# codegen/hierarchy.py
-@dataclass
-class ClassHierarchy:
-    _classes: dict[str, ClassInfo]   # binary_name → ClassInfo
+# codegen/emitter.py
+_ACC_SYNTHETIC  = 0x1000
+_ACC_ANNOTATION = 0x2000
 
-    def all_superclasses(self, name: str) -> list[str]:
-        """按 [直接父类, 祖父类, ...] 顺序返回祖先链（不含 Object）"""
-        result = []
-        cur = self._classes.get(name)
-        while cur and cur.super_class and cur.super_class != 'java/lang/Object':
-            result.append(cur.super_class)
-            cur = self._classes.get(cur.super_class)
-        return result
+def _class_modifiers_str(flags: int) -> str:
+    parts = []
+    if flags & _ACC_FINAL:      parts.append('final')
+    if flags & _ACC_ABSTRACT:   parts.append('abstract')
+    if flags & _ACC_INTERFACE:  parts.append('interface')
+    if flags & _ACC_ENUM:       parts.append('enum')
+    if flags & _ACC_SYNTHETIC:  parts.append('synthetic')
+    if flags & _ACC_ANNOTATION: parts.append('annotation')
+    return ' '.join(parts)
 
-    def all_fields(self, name: str) -> list[FieldInfo]:
-        """收集该类及所有祖先类的字段（子类优先，祖先类字段追加在后）"""
-        own = list(self._classes.get(name, ClassInfo()).fields)
-        for anc in self.all_superclasses(name):
-            anc_ci = self._classes.get(anc)
-            if anc_ci:
-                own.extend(f for f in anc_ci.fields
-                           if f.name not in {x.name for x in own})
-        return own
-
-    def is_subtype(self, sub: str, sup: str) -> bool:
-        """判断 sub 是否是 sup 的子类型（含接口）"""
-        if sub == sup:
-            return True
-        ci = self._classes.get(sub)
-        if ci is None:
-            return False
-        if ci.super_class and self.is_subtype(ci.super_class, sup):
-            return True
-        return any(self.is_subtype(iface, sup) for iface in (ci.interfaces or []))
+# 在 _java_class_attr inner_lines 中追加：
+inner_lines.append(f'    modifiers   = "{_class_modifiers_str(ci.access_flags)}",')
 ```
 
-**Step 2：struct 生成时字段展平（emitter.py）**
-
-在 `_gen_struct_fields` 中（当前只用 `ci.fields`），改为：
+**Step 2：`_java_field_attr` 补充 `modifiers`**
 
 ```python
-# 用继承图收集全部字段（含父类字段）
-all_fields = hierarchy.all_fields(ci.name) if hierarchy else ci.fields
-for f in all_fields:
-    # ... 生成 pub field_name: JField<Type>
+_ACC_VOLATILE   = 0x0040
+_ACC_TRANSIENT  = 0x0080
+
+def _field_modifiers_str(flags: int) -> str:
+    parts = []
+    if flags & _ACC_STATIC:    parts.append('static')
+    if flags & _ACC_FINAL:     parts.append('final')
+    if flags & _ACC_VOLATILE:  parts.append('volatile')
+    if flags & _ACC_TRANSIENT: parts.append('transient')
+    if flags & _ACC_SYNTHETIC: parts.append('synthetic')
+    return ' '.join(parts)
 ```
 
-此步消除所有 E0609 错误（64 个）。
-
-**Step 3：生成 From impl（emitter.py）**
-
-对每个有父类的类，在 struct 定义后追加：
+**Step 3：`_java_method_attr` 补充 `modifiers`**
 
 ```python
-# 生成：impl From<FileNotFoundException> for IOException { ... }
-def _gen_from_impls(ci: ClassInfo, hierarchy: ClassHierarchy) -> str:
-    lines = []
-    child_name = ci.name.split('/')[-1]
-    for anc in hierarchy.all_superclasses(ci.name):
-        anc_name = anc.split('/')[-1]
-        anc_ci = hierarchy._classes.get(anc)
-        if anc_ci is None:
-            continue
-        field_inits = ', '.join(
-            f'{f.name}: v.{f.name}.clone()'
-            for f in anc_ci.fields
-        )
-        lines.append(
-            f'impl From<{child_name}> for {anc_name} {{\n'
-            f'    fn from(v: {child_name}) -> Self {{\n'
-            f'        {anc_name} {{ {field_inits} }}\n'
-            f'    }}\n'
-            f'}}'
-        )
-    return '\n'.join(lines)
+_ACC_SYNCHRONIZED = 0x0020
+_ACC_BRIDGE       = 0x0040
+_ACC_VARARGS      = 0x0080
+
+def _method_modifiers_str(flags: int) -> str:
+    parts = []
+    if flags & _ACC_STATIC:       parts.append('static')
+    if flags & _ACC_FINAL:        parts.append('final')
+    if flags & _ACC_SYNCHRONIZED: parts.append('synchronized')
+    if flags & _ACC_NATIVE:       parts.append('native')
+    if flags & _ACC_ABSTRACT:     parts.append('abstract')
+    if flags & _ACC_BRIDGE:       parts.append('bridge')
+    if flags & _ACC_VARARGS:      parts.append('varargs')
+    if flags & _ACC_SYNTHETIC:    parts.append('synthetic')
+    return ' '.join(parts)
 ```
-
-**Step 4：调用侧插入 .into()（emitter.py / instr.py）**
-
-当 Rust 类型系统期望父类类型但实际是子类时，在生成的调用代码中插入 `.into()`。
-这需要在 instr.py 的 invokevirtual/invokestatic 参数生成处，对比参数的期望类型与实际类型，
-使用 `hierarchy.is_subtype(actual, expected)` 判断是否需要转换。
-
-**预计收益**：
-- E0609（64 个）：完全消除
-- E0308（1358 个中的 ~1000 个）：消除"expected Parent, found Child"类型
-- 错误总数预计从 2333 降至约 900-1200
 
 **验收**：
-- `AbstractList.modCount` 出现在 `ArrayList` struct 中（字段展平）
-- `FileNotFoundException` 可以赋值给 `IOException` 类型的变量（From impl）
+- 重新生成代码后，任意类文件（如 `ArrayList`）的 `java_class` 注解包含 `modifiers` 字段
+- 任意静态字段（如 `SIZE`）的 `java_field` 注解包含 `modifiers = "static final"`
+- 任意 native 方法的 `java_method` 注解包含 `modifiers = "static native"` 或类似
+
+---
+
+### T76 · 继承基础：`_super` 字段 + proc-macro Deref/From
+
+**状态**：`[ ]`  
+**文件**：`codegen/emitter.py`（struct 生成段）、`java_rta_macros/src/lib.rs`（proc-macro 扩展）  
+**优先级**：**P0（架构级，高于所有其他任务）**  
+**依赖**：T78（注解完整化先完成，确保 `super_class` 已正确生成）  
+**方案文档**：`docs/plans/2026-09-14-annotation-driven-java-metadata.md`
+
+**背景**：
+
+> **设计变更（2026-09-14）**：原方案是 Python 侧字段展平（把父类所有字段复制进子类 struct）。
+> 新方案改为注解驱动：每个 struct 嵌入 `pub _super: ParentType` 字段，
+> proc-macro 读 `super_class` 注解自动生成 `Deref` + `From`，
+> 通过 Deref 链透明访问祖先字段，无需展平。
+
+这导致了三类级联错误（共 1422 个，占总错误 61%）：
+- **E0609（64 个）**：父类字段在子类上不可见 → `_super` + `Deref` 解决
+- **E0308（~1000 个）**：子类不能用于父类类型的位置 → `From` impl 解决
+- **E0599（部分）**：父类方法在子类 struct 上不可见 → `Deref` 使父类方法穿透可见
+
+**实施步骤**：
+
+**Step 1：emitter.py 生成 `_super` 字段**
+
+```python
+# codegen/emitter.py: _gen_struct_fields()
+def _gen_struct_fields(ci: ClassInfo, ...) -> list[str]:
+    lines = []
+    # 有父类（且不是 Object）时，第一个字段为 _super
+    if ci.super_class and ci.super_class != 'java/lang/Object':
+        parent_rust = short_cls(ci.super_class)
+        # 父类有泛型参数时用占位（暂用无参数形式，后续 T66 精化）
+        lines.append(f'    pub _super: {parent_rust},')
+    # 自身字段（不变）
+    for f in ci.fields:
+        lines.append(_gen_field_line(f, ...))
+    return lines
+```
+
+此步让每个子类 struct 嵌入直接父类，通过 Deref 链自动穿透：
+
+```
+fnfe._super             → IOException
+fnfe._super._super      → Exception（通过 IOException 的 _super）
+fnfe.detailMessage      → 自动 Deref 三层找到 Throwable.detailMessage ✓
+```
+
+**Step 2：proc-macro 读 `super_class` 生成 Deref + From**
+
+```rust
+// java_rta_macros/src/lib.rs 扩展 java_class 宏：
+// 读取 super_class = "java/io/IOException" 后生成：
+
+impl std::ops::Deref for FileNotFoundException {
+    type Target = IOException;
+    fn deref(&self) -> &IOException { &self._super }
+}
+impl std::ops::DerefMut for FileNotFoundException {
+    fn deref_mut(&mut self) -> &mut IOException { &mut self._super }
+}
+impl From<FileNotFoundException> for IOException {
+    fn from(v: FileNotFoundException) -> IOException { v._super }
+}
+```
+
+**Step 3：proc-macro 读 `interfaces` 生成 trait impl**
+
+```rust
+// 读取 interfaces = "java/io/Serializable,java/lang/Cloneable" 后生成：
+impl Serializable for FileNotFoundException {}
+impl Cloneable for FileNotFoundException {}
+```
+
+**Step 4：调用侧插入 `.into()` 转换（emitter.py / instr.py）**
+
+在类型期望父类、实际为子类的位置，生成显式转换：
+```rust
+// 期望 IOException，实际 FileNotFoundException
+let e: IOException = fnfe.into();   // 由 From impl 支持
+```
+
+需在 instr.py 的参数传递处识别子类型关系（此时可直接查 `ClassInfo.super_class` 逐层比对，
+不依赖完整继承图）。
+
+**预计收益**：
+- E0609（64 个）：完全消除（Deref 透明穿透）
+- E0308（~1000 个）：消除直接父子类型不匹配（跨层 From 由 T55 补全）
+- 错误总数预计从 2333 降至约 1000-1200
+
+**验收**：
+- `fnfe.detailMessage` 通过 Deref 链访问成功（不再需要 `.as_throwable().detailMessage`）
+- `let e: IOException = fnfe.into()` 编译通过
 - E0609 错误数为 0
-- E0308 错误数下降 50% 以上
+- E0308 中直接父子类型不匹配错误消除
 
 ---
 
@@ -2717,16 +2772,20 @@ self.add(obj)?  // E0308: expected String, found Object
 **阶段十五任务依赖**：
 
 ```
-T55（ClassHierarchy 继承图）─────────────────────→ T76（字段展平 + From impl）★ 最高优先
-                            │                              │
-                            ├──→ T53（instanceof）        消除 E0609 + 大部分 E0308
-                            ├──→ T69（virtual BFS）       预计从 2333 降至 ~900
-                            └──→ T66（泛型推断）
-
-T76（字段展平）完成后 ──→ T77（类型擦除一致性）──→ 消除剩余 E0308
+T78（注解完整化）
+  ├──→ T76（_super 字段 + proc-macro Deref/From）★ 消除 E0609 + 直接 E0308
+  │         │
+  │         └──→ T77（类型擦除一致性）──→ 消除剩余 E0308
+  │
+  └──→ T55（build.rs 扫描注解 → 跨层 From impl）★ 消除跨层 E0308
+            │
+            ├──→ T53（instanceof 语义）
+            ├──→ T69（virtual BFS 完整性）
+            └──→ T66（泛型推断）
 ```
 
 **推荐执行序**：
-1. **立即**：T55 + T76 并行开始（T55 是 T76 的前置，但可同步设计）
-2. **T76 完成后**：重新 cargo check，评估剩余 E0308 数量
-3. **视剩余量**：决定是否执行 T77，还是先做 T53（instanceof）/ T62（异常表）
+1. **立即**：T78（注解完整化，emitter.py 三处加 modifiers，改动量小，低风险）
+2. **T78 完成后**：T76（emitter.py 加 `_super` 字段 + proc-macro 扩展）
+3. **T76 完成后**：T55（build.rs 扫描注解，生成跨层 From impl）
+4. **T55 完成后**：重新 cargo check，评估剩余 E0308 数量，决定后续顺序
