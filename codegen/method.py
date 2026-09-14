@@ -231,22 +231,29 @@ def gen_method_body(
         return safe_ident(local_names.get(slot, fallback))
 
     # ── 函数签名 ──────────────────────────────────────────────────────
+    # JVM wide 类型（J=long, D=double）各占 2 个 slot；签名生成需按实际 slot 查名字
+    def _params_with_slot(start_slot: int, type_strings: list[str], use_sig_type: bool) -> list[str]:
+        """生成参数列表，正确追踪 wide 类型（J/D）占用的 slot 数量。"""
+        result = []
+        slot = start_slot
+        for k, rt in enumerate(type_strings):
+            raw_jvm = param_types[k] if k < len(param_types) else ''
+            name = _param_name(slot, f'arg_{k}')
+            ty = sig_type(rt) if use_sig_type else rt
+            result.append(f"mut {name}: {ty}")
+            slot += 2 if raw_jvm in ('J', 'D') else 1
+        return result
+
     if is_ctor:
         # 构造器：Result<Self>，参数从 slot 1 开始
-        params = [
-            f"mut {_param_name(k + 1, f'arg_{k}')}: {rt}"
-            for k, rt in enumerate(rust_param_types)
-        ]
+        params = _params_with_slot(1, rust_param_types, use_sig_type=False)
         sig = f"pub fn {rust_fn_name}({', '.join(params)}) -> Result<Self>"
 
     elif method.name == 'main' and method.descriptor == '([Ljava/lang/String;)V':
         sig = "pub fn main() -> Result<()>"
 
     elif is_static:
-        params = [
-            f"mut {_param_name(k, f'arg_{k}')}: {sig_type(rt)}"
-            for k, rt in enumerate(rust_param_types)
-        ]
+        params = _params_with_slot(0, rust_param_types, use_sig_type=True)
         sig = f"pub fn {rust_fn_name}({', '.join(params)})"
         if rust_ret != '()':
             sig += f" -> Result<{rust_ret}>"
@@ -254,12 +261,8 @@ def gen_method_body(
             sig += " -> Result<()>"
 
     else:
-        # 实例方法：&self，Result<T>
-        params = ["&self"]
-        params += [
-            f"mut {_param_name(k + 1, f'arg_{k}')}: {rt}"
-            for k, rt in enumerate(rust_param_types)
-        ]
+        # 实例方法：&self，参数从 slot 1 开始
+        params = ["&self"] + _params_with_slot(1, rust_param_types, use_sig_type=False)
         sig = f"pub fn {rust_fn_name}({', '.join(params)})"
         if rust_ret != '()':
             sig += f" -> Result<{rust_ret}>"
@@ -343,9 +346,11 @@ def gen_method_body(
                                slot_hint_types=slot_hint_types, return_type=rust_ret,
                                is_constructor=is_ctor)
             pre_sim.locals = dict(sim.locals)
+            pre_sim._slot_decl_depth = dict(sim._slot_decl_depth)
             for k in range(lp.start_idx, lp.cond_idx):
                 sim_instr(instrs[k], pre_sim, method.class_name, registry=registry)
             sim.locals = pre_sim.locals
+            sim._slot_decl_depth = pre_sim._slot_decl_depth
             for s in pre_sim.stmts:
                 entries.append(('        ', s))
 
@@ -354,6 +359,7 @@ def gen_method_body(
                                 slot_hint_types=slot_hint_types, return_type=rust_ret,
                                 is_constructor=is_ctor)
             cond_sim.locals = dict(sim.locals)
+            cond_sim._slot_decl_depth = dict(sim._slot_decl_depth)
             cond_sim.stack  = list(pre_sim.stack)
             if ci_ins.opcode in TWO_OP_CMP:
                 b_expr, b_ty = cond_sim.pop(); a_expr, a_ty = cond_sim.pop()
@@ -375,9 +381,15 @@ def gen_method_body(
                                 slot_hint_types=slot_hint_types, return_type=rust_ret,
                                 is_constructor=is_ctor)
             body_sim.locals = dict(sim.locals)
+            body_sim._slot_decl_depth = dict(sim._slot_decl_depth)
+            body_sim.enter_scope()  # T68: 循环体是内层作用域，新声明的 slot depth=1
             for k in range(lp.cond_idx + 1, lp.end_idx):
                 sim_instr(instrs[k], body_sim, method.class_name, registry=registry)
+            body_sim.exit_scope()
+            # T68: 传播 locals 和深度信息；内层新声明 slot 的 depth=1 > outer depth=0，
+            # 外层代码再访问时会生成新 let 而非 assign，避免 E0425（cannot find value）
             sim.locals = body_sim.locals
+            sim._slot_decl_depth = body_sim._slot_decl_depth
             for s in body_sim.stmts:
                 entries.append(('        ', s))
 

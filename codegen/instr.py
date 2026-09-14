@@ -552,7 +552,10 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
 
     elif op == 'getstatic':
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
-        if field_name:
+        if field_name == '$assertionsDisabled':
+            # 合成字段：断言控制标志，始终视为已禁用（= true），等价于以 -da 运行 JVM
+            sim.push(Lit('true'), BOOL)
+        elif field_name:
             ty_str = jvm_to_rust(descriptor, registry) if descriptor else 'Object'
             sim.push(StaticFieldRef(cls, field_name, RsNamed(ty_str)), RsNamed(ty_str))
         else:

@@ -5,6 +5,7 @@
 import subprocess
 import sys
 import os
+from collections import deque
 from .classfile import parse_class
 from .emitter import write_cargo_project
 from .type_map import load_ergonomic_renames
@@ -92,7 +93,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
     from .jdk_resolver import JdkResolver
 
     visited_methods: set[tuple[str, str, str]] = set()
-    queue: list[tuple[str, str, str]] = []
+    queue: deque[tuple[str, str, str]] = deque()
 
     def enqueue_refs(instrs):
         for key in _collect_method_refs(instrs):
@@ -123,7 +124,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
 
     with resolver:
         while queue:
-            cls, meth, desc = queue.pop(0)
+            cls, meth, desc = queue.popleft()
 
             # 解析类（首次遇到时）
             if cls not in class_cache:
