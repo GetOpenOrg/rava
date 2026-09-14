@@ -2636,17 +2636,18 @@ def _method_modifiers_str(flags: int) -> str:
 ### T76 · 继承基础：`_super` 字段 + proc-macro Deref/From
 
 **状态**：`[ ]`  
-**文件**：`codegen/emitter.py`（struct 生成段）、`java_rta_macros/src/lib.rs`（proc-macro 扩展）  
+**文件**：`codegen/emitter.py`（struct 生成段 + upcast 方法生成）、`java_rta_macros/src/lib.rs`（直接父类 From impl）  
 **优先级**：**P0（架构级，高于所有其他任务）**  
-**依赖**：T78（注解完整化先完成，确保 `super_class` 已正确生成）  
+**依赖**：T78（注解完整化先完成）  
 **方案文档**：`docs/plans/2026-09-14-annotation-driven-java-metadata.md`
 
 **背景**：
 
-> **设计变更（2026-09-14）**：原方案是 Python 侧字段展平（把父类所有字段复制进子类 struct）。
-> 新方案改为注解驱动：每个 struct 嵌入 `pub _super: ParentType` 字段，
-> proc-macro 读 `super_class` 注解自动生成 `Deref` + `From`，
-> 通过 Deref 链透明访问祖先字段，无需展平。
+> **设计变更（2026-09-14）**：
+> - 原方案（字段展平）：Python 把祖先字段复制进子类——有字段副本语义缺陷
+> - 中间方案（Deref）：_super + proc-macro 生成 Deref——Rust 反模式，违反 API Guidelines
+> - **选定方案**：_super 嵌套 + 显式 upcast 方法（`as_io_exception` / `into_io_exception`）
+>   — 字段语义正确，符合 Rust 惯用法，调用侧完全显式
 
 这导致了三类级联错误（共 1422 个，占总错误 61%）：
 - **E0609（64 个）**：父类字段在子类上不可见 → `_super` + `Deref` 解决
@@ -2680,50 +2681,78 @@ fnfe._super._super      → Exception（通过 IOException 的 _super）
 fnfe.detailMessage      → 自动 Deref 三层找到 Throwable.detailMessage ✓
 ```
 
-**Step 2：proc-macro 读 `super_class` 生成 Deref + From**
+**Step 2：emitter.py 生成显式 upcast 方法（不使用 Deref）**
+
+> **设计决策（2026-09-14）**：Deref 模拟继承是 Rust 社区明确的反模式
+> （违反 Deref 语义预期，深层继承时错误信息难读，与 Rust API Guidelines 冲突）。
+> 改用显式 upcast 方法，语义清晰，符合 Rust 惯用法。
+
+```python
+# codegen/emitter.py: _gen_upcast_methods()
+def _gen_upcast_methods(ci: ClassInfo, registry: dict) -> str:
+    if not ci.super_class or ci.super_class == 'java/lang/Object':
+        return ''
+    lines = [f'impl {short_cls(ci.name)} {{']
+    access_path = '_super'
+    cur = ci.super_class
+    while cur and cur != 'java/lang/Object':
+        rust_name = short_cls(cur)
+        snake = to_snake(rust_name)
+        lines.append(f'    pub fn as_{snake}(&self) -> &{rust_name} {{ &self.{access_path} }}')
+        lines.append(f'    pub fn into_{snake}(self) -> {rust_name} {{ self.{access_path} }}')
+        parent_ci = registry.get(cur)
+        cur = parent_ci.super_class if parent_ci else None
+        access_path += '._super'
+    lines.append('}')
+    return '\n'.join(lines)
+```
+
+生成结果：
 
 ```rust
-// java_rta_macros/src/lib.rs 扩展 java_class 宏：
-// 读取 super_class = "java/io/IOException" 后生成：
+impl FileNotFoundException {
+    pub fn as_io_exception(&self)  -> &IOException  { &self._super }
+    pub fn into_io_exception(self) ->  IOException  { self._super }
+    pub fn as_exception(&self)     -> &Exception    { &self._super._super }
+    pub fn into_exception(self)    ->  Exception    { self._super._super }
+    pub fn as_throwable(&self)     -> &Throwable    { &self._super._super._super }
+    pub fn into_throwable(self)    ->  Throwable    { self._super._super._super }
+}
+```
 
-impl std::ops::Deref for FileNotFoundException {
-    type Target = IOException;
-    fn deref(&self) -> &IOException { &self._super }
-}
-impl std::ops::DerefMut for FileNotFoundException {
-    fn deref_mut(&mut self) -> &mut IOException { &mut self._super }
-}
+**Step 3：proc-macro 生成直接父类 From impl + 接口 trait impl**
+
+proc-macro 读 `super_class` 只生成**直接父类** `From`（不跨层，不生成 Deref）：
+
+```rust
 impl From<FileNotFoundException> for IOException {
     fn from(v: FileNotFoundException) -> IOException { v._super }
 }
 ```
 
-**Step 3：proc-macro 读 `interfaces` 生成 trait impl**
+读 `interfaces` 生成接口 trait 的空 impl：
 
 ```rust
-// 读取 interfaces = "java/io/Serializable,java/lang/Cloneable" 后生成：
 impl Serializable for FileNotFoundException {}
-impl Cloneable for FileNotFoundException {}
 ```
 
-**Step 4：调用侧插入 `.into()` 转换（emitter.py / instr.py）**
+**Step 4：调用侧插入显式转换（emitter.py / instr.py）**
 
-在类型期望父类、实际为子类的位置，生成显式转换：
+在类型期望父类、实际为子类的位置，插入显式 upcast：
 ```rust
 // 期望 IOException，实际 FileNotFoundException
-let e: IOException = fnfe.into();   // 由 From impl 支持
+let e = fnfe.into_io_exception();
+// 或利用 From：
+let e: IOException = fnfe.into();
 ```
 
-需在 instr.py 的参数传递处识别子类型关系（此时可直接查 `ClassInfo.super_class` 逐层比对，
-不依赖完整继承图）。
-
 **预计收益**：
-- E0609（64 个）：完全消除（Deref 透明穿透）
+- E0609（64 个）：完全消除（`_super` 字段提供字段访问路径）
 - E0308（~1000 个）：消除直接父子类型不匹配（跨层 From 由 T55 补全）
 - 错误总数预计从 2333 降至约 1000-1200
 
 **验收**：
-- `fnfe.detailMessage` 通过 Deref 链访问成功（不再需要 `.as_throwable().detailMessage`）
+- `fnfe.as_throwable().detailMessage.get()` 编译通过
 - `let e: IOException = fnfe.into()` 编译通过
 - E0609 错误数为 0
 - E0308 中直接父子类型不匹配错误消除
