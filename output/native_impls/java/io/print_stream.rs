@@ -3,17 +3,24 @@ use super::*;
 use crate::java::lang::*;
 
 impl super::PrintStream {
-    pub fn println__str(&self, x: String) -> Result<()> {
-        println!("{}", x);
+    // ── 流状态 ──────────────────────────────────────────────────────────────
+    // 原始翻译因异常表缺失而提前 athrow，直接 no-op 覆盖
+    pub fn ensureOpen(&self) -> Result<()> {
         Ok(())
     }
 
-    pub fn println__i(&self, v: i32) -> Result<()> {
-        println!("{}", v);
+    // ── 底层写入（synchronized 翻译 broken，用直写替换）────────────────────
+    pub fn write_str(&self, s: String) -> Result<()> {
+        print!("{}", s);
         Ok(())
     }
 
-    pub fn println(&self) -> Result<()> {
+    pub fn writeln_str(&self, s: String) -> Result<()> {
+        println!("{}", s);
+        Ok(())
+    }
+
+    pub fn newLine(&self) -> Result<()> {
         println!();
         Ok(())
     }
@@ -24,17 +31,39 @@ impl super::PrintStream {
         Ok(())
     }
 
-    pub fn println__z(&self, v: bool) -> Result<()> {
-        println!("{}", v);
+    // ── print（无换行）──────────────────────────────────────────────────────
+    pub fn print_str(&self, x: String) -> Result<()> {
+        print!("{}", x);
         Ok(())
     }
 
-    pub fn println__j(&self, v: i64) -> Result<()> {
-        println!("{}", v);
+    pub fn print_i(&self, i: i32) -> Result<()> {
+        print!("{}", i);
         Ok(())
     }
 
-    pub fn println__obj(&self, x: Object) -> Result<()> {
+    // ── println（带换行）────────────────────────────────────────────────────
+    pub fn println_str(&self, x: String) -> Result<()> {
+        println!("{}", x);
+        Ok(())
+    }
+
+    pub fn println_i(&self, x: i32) -> Result<()> {
+        println!("{}", x);
+        Ok(())
+    }
+
+    pub fn println_z(&self, x: bool) -> Result<()> {
+        println!("{}", x);
+        Ok(())
+    }
+
+    pub fn println_l(&self, x: i64) -> Result<()> {
+        println!("{}", x);
+        Ok(())
+    }
+
+    pub fn println_obj(&self, x: Object) -> Result<()> {
         if let Some(s) = x.0.downcast_ref::<String>() {
             println!("{}", s);
         } else {
@@ -43,19 +72,17 @@ impl super::PrintStream {
         Ok(())
     }
 
-    pub fn print__str(&self, x: String) -> Result<()> {
-        print!("{}", x);
+    pub fn println(&self) -> Result<()> {
+        println!();
         Ok(())
     }
 
-    /// Java: System.out.println(x) — 统一 Printable 派发
     pub fn println_v<T: Printable>(&self, v: T) -> Result<()> {
         println!("{}", v.to_print_string());
         Ok(())
     }
 }
 
-// String 实现 Printable（在 jdk_classes 上下文中定义，因为 String 类型在此）
 impl Printable for String {
     fn to_print_string(&self) -> std::string::String {
         format!("{}", self)

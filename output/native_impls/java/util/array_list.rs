@@ -8,7 +8,7 @@ impl<E: Clone + Default + 'static> super::ArrayList<E> {
         Ok(ArrayList::default())
     }
 
-    pub fn add__obj(&self, e: Object) -> Result<bool> {
+    pub fn add_obj(&self, e: Object) -> Result<bool> {
         let rc = self.elementData.get();
         rc.borrow_mut().push(e);
         self.size.set(self.size.get() + 1);

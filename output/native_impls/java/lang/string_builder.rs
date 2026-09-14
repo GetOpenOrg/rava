@@ -9,45 +9,56 @@ impl super::StringBuilder {
         Ok(StringBuilder::default())
     }
 
-    pub fn append__str(&self, s: String) -> Result<StringBuilder> {
-        let content = format!("{}", s);
-        self._sb.get().borrow_mut().push_str(&content);
+    pub fn new_i(_capacity: i32) -> Result<Self> {
+        Ok(Self::default())
+    }
+
+    pub fn new_str(str: String) -> Result<Self> {
+        let sb = Self::default();
+        sb._sb.get().borrow_mut().push_str(&format!("{}", str));
+        Ok(sb)
+    }
+
+    // ── append 重载 ──────────────────────────────────────────────────────────
+
+    pub fn append_str(&self, s: String) -> Result<StringBuilder> {
+        self._sb.get().borrow_mut().push_str(&format!("{}", s));
         Ok(self.clone())
     }
 
-    pub fn append__i(&self, v: i32) -> Result<StringBuilder> {
+    pub fn append_i(&self, v: i32) -> Result<StringBuilder> {
         self._sb.get().borrow_mut().push_str(&v.to_string());
         Ok(self.clone())
     }
 
-    pub fn append__l(&self, v: i64) -> Result<StringBuilder> {
+    pub fn append_l(&self, v: i64) -> Result<StringBuilder> {
         self._sb.get().borrow_mut().push_str(&v.to_string());
         Ok(self.clone())
     }
 
-    pub fn append__d(&self, v: f64) -> Result<StringBuilder> {
+    pub fn append_d(&self, v: f64) -> Result<StringBuilder> {
         self._sb.get().borrow_mut().push_str(&v.to_string());
         Ok(self.clone())
     }
 
-    pub fn append__f(&self, v: f32) -> Result<StringBuilder> {
+    pub fn append_f(&self, v: f32) -> Result<StringBuilder> {
         self._sb.get().borrow_mut().push_str(&v.to_string());
         Ok(self.clone())
     }
 
-    pub fn append__z(&self, v: bool) -> Result<StringBuilder> {
+    pub fn append_z(&self, v: bool) -> Result<StringBuilder> {
         self._sb.get().borrow_mut().push_str(&v.to_string());
         Ok(self.clone())
     }
 
-    pub fn append__c(&self, v: u16) -> Result<StringBuilder> {
+    pub fn append_c(&self, v: u16) -> Result<StringBuilder> {
         if let Some(c) = char::from_u32(v as u32) {
             self._sb.get().borrow_mut().push(c);
         }
         Ok(self.clone())
     }
 
-    pub fn append__obj(&self, obj: Object) -> Result<StringBuilder> {
+    pub fn append_obj(&self, obj: Object) -> Result<StringBuilder> {
         self._sb.get().borrow_mut().push_str("Object");
         Ok(self.clone())
     }
