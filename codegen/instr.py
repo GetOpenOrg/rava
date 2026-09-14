@@ -134,6 +134,53 @@ def _coerce_to_object(val_str: str, ty: str) -> str:
     return f"Object::from_any({val_str}.clone())"
 
 
+_NULL_OBJECT_EXPRS = frozenset({'Object::default()', 'Object::default().clone()'})
+
+# 接口类型 → 已知实现类型集合（用于接口子类型强制转换）
+_INTERFACE_IMPLS: dict[str, frozenset[str]] = {
+    'CharSequence': frozenset({'String', 'StringBuilder', 'StringBuffer', 'AbstractStringBuilder'}),
+    'Map': frozenset({'HashMap', 'TreeMap', 'LinkedHashMap', 'Hashtable', 'WeakHashMap',
+                      'IdentityHashMap', 'ConcurrentHashMap', 'Properties', 'EnumMap',
+                      'ImmutableCollections_Map1', 'ImmutableCollections_MapN'}),
+    'List': frozenset({'ArrayList', 'LinkedList', 'Vector', 'Stack', 'AbstractList',
+                       'ImmutableCollections_List12', 'ImmutableCollections_ListN',
+                       'ProviderList_ServiceList', 'ImmutableCollections_SubList'}),
+    'Set': frozenset({'HashSet', 'LinkedHashSet', 'TreeSet', 'EnumSet',
+                      'ImmutableCollections_Set12', 'ImmutableCollections_SetN',
+                      'TreeMap_EntrySet', 'HashMap_KeySet', 'ConcurrentHashMap_KeySetView'}),
+    'Collection': frozenset({'List', 'Set', 'ArrayList', 'LinkedList', 'HashSet',
+                              'LinkedHashSet', 'TreeSet', 'Vector', 'ArrayDeque'}),
+    'Iterable': frozenset({'Collection', 'List', 'Set', 'ArrayList', 'HashSet', 'LinkedList'}),
+    'Queue': frozenset({'LinkedList', 'ArrayDeque', 'PriorityQueue'}),
+    'Deque': frozenset({'LinkedList', 'ArrayDeque'}),
+    'SortedMap': frozenset({'TreeMap'}),
+    'SortedSet': frozenset({'TreeSet'}),
+    'NavigableMap': frozenset({'TreeMap'}),
+    'NavigableSet': frozenset({'TreeSet'}),
+}
+
+
+def _coerce_to_interface(actual: str, expected: str) -> bool:
+    """当 actual 是 expected 接口的已知实现类时返回 True（需要强制转换为 Default::default()）。"""
+    exp_base = expected.split('<')[0]
+    act_base = actual.split('<')[0]
+    if exp_base == act_base:
+        return False
+    return act_base in _INTERFACE_IMPLS.get(exp_base, frozenset())
+
+
+def _coerce_from_null(val_str: str, expected: str) -> str | None:
+    """若 val_str 是 aconst_null 的结果（Object::default()），
+    且 expected 是具体的引用类型，返回 Default::default() 作为替代。
+    否则返回 None 表示无需特殊处理。"""
+    if val_str not in _NULL_OBJECT_EXPRS:
+        return None
+    if expected in ('Object', '()') or expected in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
+        return None
+    # null 作为参数：用 Default::default() 提供类型安全的零值
+    return 'Default::default()'
+
+
 def _coerce_value(val_str: str, val_ty: 'RsType', target: str) -> str:
     """将 val 强制转换为 target 字段/参数类型，避免窄类型与 i32 不匹配。
     只在必要时插入 cast，若类型已匹配则原样返回。"""
@@ -201,6 +248,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif comment.startswith('float '): sim.push(Lit(comment[6:].strip() + 'f32'), F32)
         elif comment.startswith('long '):  sim.push(Lit(comment[5:].strip() + 'i64'), I64)
         elif comment.startswith('double '): sim.push(Lit(comment[7:].strip() + 'f64'), F64)
+        elif comment.startswith('class '): sim.push(Lit('Class::<Object>::default()'), RsGeneric('Class', [RsNamed('Object')]))
         else: sim.push(Lit(f"{operand}i32"), I32)
     elif op in ('ldc2_w', 'ldc_w'):
         if comment.startswith('long '):   sim.push(Lit(comment[5:].strip() + 'i64'), I64)
@@ -208,6 +256,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif comment.startswith('String '):
             lit = _escape_str(comment[7:].strip())
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
+        elif comment.startswith('class '): sim.push(Lit('Class::<Object>::default()'), RsGeneric('Class', [RsNamed('Object')]))
         else: sim.push(Lit(f"{operand}i32"), I32)
 
     # ── null ──
@@ -279,17 +328,29 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if delta >= 0: sim.emit(RawStmt(f"{name} = {name}.wrapping_add({delta}i32);"))
         else:          sim.emit(RawStmt(f"{name} = {name}.wrapping_sub({-delta}i32);"))
     elif op == 'ladd':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}).wrapping_add({render_expr(b)})"), I64)
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
+        sim.push(RawExpr(f"({a_s}).wrapping_add({b_s})"), I64)
     elif op == 'lsub':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}).wrapping_sub({render_expr(b)})"), I64)
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
+        sim.push(RawExpr(f"({a_s}).wrapping_sub({b_s})"), I64)
     elif op == 'lmul':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}).wrapping_mul({render_expr(b)})"), I64)
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
+        sim.push(RawExpr(f"({a_s}).wrapping_mul({b_s})"), I64)
     elif op == 'ldiv':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}/{render_expr(b)})"), I64)
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
+        sim.push(RawExpr(f"({a_s}/{b_s})"), I64)
     elif op == 'fadd':
         b, _ = sim.pop(); a, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(a)}+{render_expr(b)})"), F32)
@@ -317,20 +378,32 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
 
     # ── long 算术（lrem/lneg/land/lor/lxor/lshl/lshr/lushr）──
     elif op == 'lrem':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}%({render_expr(b)}))"), I64)
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
+        sim.push(RawExpr(f"({a_s}%({b_s}))"), I64)
     elif op == 'lneg':
         a, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(a)}).wrapping_neg()"), I64)
     elif op == 'land':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}&({render_expr(b)}))"), I64)
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
+        sim.push(RawExpr(f"({a_s}&({b_s}))"), I64)
     elif op == 'lor':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}|({render_expr(b)}))"), I64)
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
+        sim.push(RawExpr(f"({a_s}|({b_s}))"), I64)
     elif op == 'lxor':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)})^({render_expr(b)})"), I64)
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
+        sim.push(RawExpr(f"({a_s})^({b_s})"), I64)
     elif op == 'lshl':
         b, _ = sim.pop(); a, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(a)}).wrapping_shl(({render_expr(b)}&0x3f) as u32)"), I64)
@@ -357,8 +430,10 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
 
     # ── 比较指令（lcmp/fcmpl/fcmpg/dcmpl/dcmpg）→ 压 i32 结果 ──
     elif op == 'lcmp':
-        b, _ = sim.pop(); a, _ = sim.pop()
+        b, b_ty = sim.pop(); a, a_ty = sim.pop()
         a_s = render_expr(a); b_s = render_expr(b)
+        if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
+        if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
         sim.push(RawExpr(f"(({a_s}>({b_s})) as i32-(({a_s})<({b_s})) as i32)"), I32)
     elif op in ('fcmpl', 'fcmpg', 'dcmpl', 'dcmpg'):
         b, _ = sim.pop(); a, _ = sim.pop()
@@ -496,9 +571,22 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         v = sim.fresh('_arr')
         sim.emit(RawStmt(f"let mut {v}: Vec<Vec<i32>> = vec![vec![0i32; {sizes[-1]} as usize]; {sizes[0]} as usize];"))
         sim.push(Var(v), RsGeneric('Vec', [RsGeneric('Vec', [I32])]))
-    elif op in ('iastore', 'lastore', 'fastore', 'dastore', 'aastore'):
+    elif op in ('iastore', 'lastore', 'fastore', 'dastore'):
         val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {render_expr(val_expr)};"))
+    elif op == 'aastore':
+        val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
+        arr_ty_str = render_type(arr_ty)
+        elem_ty = arr_ty_str[4:-1] if arr_ty_str.startswith('Vec<') else 'Object'
+        val_str = render_expr(val_expr)
+        val_ty_str = render_type(val_ty)
+        if elem_ty == 'Object' and val_ty_str not in ('Object', '()'):
+            val_str = _coerce_to_object(val_str, val_ty_str)
+        elif elem_ty != 'Object' and val_ty_str == 'Object':
+            val_str = f"Default::default()"
+        elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
+            val_str = f"{val_str}.clone()"
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {val_str};"))
     elif op == 'bastore':
         val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as i8;"))
@@ -552,9 +640,15 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'areturn':
         e_expr, e_ty = sim.pop()
         expr_s = render_expr(e_expr)
+        actual_ty = render_type(e_ty)
+        ret_ty = getattr(sim, 'return_type', 'Object')
         # 实例方法返回 this 时，this 是 &Self 引用，需要 clone() 才能返回 owned 值
         if expr_s == 'this' and not sim.is_static:
             expr_s = 'this.clone()'
+        elif ret_ty == 'Object' and actual_ty not in ('Object', '()'):
+            expr_s = _coerce_to_object(expr_s, actual_ty)
+        elif ret_ty != 'Object' and actual_ty == 'Object':
+            expr_s = f"Default::default()"
         sim.emit(RawStmt(f"return Ok({expr_s});"))
 
     # ── 控制流（循环由 method.py 处理，此处跳过）──
@@ -664,8 +758,12 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         e = render_expr(e_expr)
         expected = jvm_to_rust(param_jvm, registry)
         ty = render_type(e_ty_node)
-        # Rc<>/数组类型和 this 引用不能 into()；普通类类型才能 into()
-        if expected == 'Object' and ty not in ('Object', '()') and e != 'this':
+        null_coerce = _coerce_from_null(e, expected)
+        if null_coerce is not None:
+            e = null_coerce
+        elif _coerce_to_interface(ty, expected):
+            e = 'Default::default()'
+        elif expected == 'Object' and ty not in ('Object', '()') and e != 'this':
             e = _coerce_to_object(e, ty)
         elif expected == 'Object' and ty not in ('Object', '()') and e == 'this':
             e = f"Object::from_any(self.clone())"
@@ -800,7 +898,12 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         e = render_expr(e_expr)
         ty = render_type(ty_node)
         expected = jvm_to_rust(param_jvm, registry)
-        if expected == 'Object' and ty not in ('Object', '()'):
+        null_coerce = _coerce_from_null(e, expected)
+        if null_coerce is not None:
+            e = null_coerce
+        elif _coerce_to_interface(ty, expected):
+            e = 'Default::default()'
+        elif expected == 'Object' and ty not in ('Object', '()'):
             e = _coerce_to_object(e, ty)
         elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, ty_node, expected)
@@ -859,7 +962,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         e_str = render_expr(e_expr)
         expected_rust = jvm_to_rust(param_jvm, registry)
         actual_rust = render_type(e_ty_node)
-        if expected_rust == 'Object' and actual_rust not in ('Object', '()'):
+        null_coerce = _coerce_from_null(e_str, expected_rust)
+        if null_coerce is not None:
+            e_str = null_coerce
+        elif _coerce_to_interface(actual_rust, expected_rust):
+            e_str = 'Default::default()'
+        elif expected_rust == 'Object' and actual_rust not in ('Object', '()'):
             e_str = _coerce_to_object(e_str, actual_rust)
         elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
             e_str = _coerce_value(e_str, e_ty_node, expected_rust)

@@ -17,12 +17,20 @@ from .constants import safe_ident
 from .stack import StackSim
 from .cfg import find_loops, find_boolean_conditions, cmp_op, neg_cmp_op
 from .instr import sim_instr
-from .render import render_stmt, render_expr
+from .render import render_stmt, render_expr, render_type
 from .rs_ir import (
     RsNamed, RsPrimitive, RsType,
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr,
 )
 from .stack import BOOL
+
+
+def _coerce_icmp_operand(expr_str: str, ty_node) -> str:
+    """为 if_icmpX 比较的操作数做类型强制转换：u16/i8/i16 → i32"""
+    ty = render_type(ty_node)
+    if ty in ('u16', 'i8', 'i16'):
+        return f"({expr_str} as i32)"
+    return expr_str
 
 _PRIMITIVE_TYPES = {'i32', 'i64', 'f32', 'f64', 'bool', 'usize', '()'}
 
@@ -348,8 +356,10 @@ def gen_method_body(
             cond_sim.locals = dict(sim.locals)
             cond_sim.stack  = list(pre_sim.stack)
             if ci_ins.opcode in TWO_OP_CMP:
-                b_expr, _ = cond_sim.pop(); a_expr, _ = cond_sim.pop()
-                cond = cmp_op(ci_ins.opcode, render_expr(a_expr), render_expr(b_expr))
+                b_expr, b_ty = cond_sim.pop(); a_expr, a_ty = cond_sim.pop()
+                a_cond = _coerce_icmp_operand(render_expr(a_expr), a_ty)
+                b_cond = _coerce_icmp_operand(render_expr(b_expr), b_ty)
+                cond = cmp_op(ci_ins.opcode, a_cond, b_cond)
             else:
                 a_expr, a_ty = cond_sim.pop()
                 a_str = render_expr(a_expr)
@@ -380,8 +390,9 @@ def gen_method_body(
             true_val, false_val, false_idx, end_idx = bool_cond_map[i]
             is_two_op = ins.opcode in TWO_OP_CMP
             if is_two_op:
-                b_expr, _ = sim.pop(); a_expr, _ = sim.pop()
-                a_str = render_expr(a_expr); b_str = render_expr(b_expr)
+                b_expr, b_ty = sim.pop(); a_expr, a_ty = sim.pop()
+                a_str = _coerce_icmp_operand(render_expr(a_expr), a_ty)
+                b_str = _coerce_icmp_operand(render_expr(b_expr), b_ty)
             else:
                 a_expr, a_type = sim.pop()
                 a_str = render_expr(a_expr); b_str = ''
