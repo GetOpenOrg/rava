@@ -275,27 +275,38 @@ def _find_field_super_prefix(class_name: str, safe_fname: str, registry: dict | 
     return ''
 
 
-def _find_method_super_prefix(class_name: str, mname: str, registry: dict | None) -> str:
+def _find_method_super_prefix(class_name: str, mname: str, registry: dict | None,
+                              descriptor: str = '') -> str:
     """T76: 找到方法 mname 在继承链中的位置，返回 _super 访问前缀。
-    若当前类有该方法名（包含任何重载），返回 ''（不需要路由）。
-    若只在父类/祖先类有，返回 '_super.' 等前缀。"""
+    若当前类有该方法名/重载，返回 ''（不需要路由）。
+    若只在父类/祖先类有，返回 '_super.' 等前缀。
+    descriptor: JVM 描述符（如 '(Ljava/lang/String;)V'），用于精确重载匹配。
+    提供 descriptor 时仅匹配该特定重载；否则匹配任意同名方法。"""
     if not registry or not class_name:
         return ''
     ci = registry.get(class_name)
     if ci is None:
         return ''
-    # 当前类直接方法中是否有该方法名
-    direct_method_names = {m.name for m in ci.methods}
-    if mname in direct_method_names:
-        return ''
-    # 向上遍历继承链查找
+    # 当前类直接方法中是否有该方法名（排除 synthetic/bridge 桥接方法，它们不会生成 Rust 实现）
+    real_methods = [m for m in ci.methods if not m.is_synthetic]
+    if descriptor:
+        if any(m.name == mname and m.descriptor == descriptor for m in real_methods):
+            return ''
+    else:
+        if any(m.name == mname for m in real_methods):
+            return ''
+    # 向上遍历继承链查找（同样排除 synthetic/bridge）
     path_parts: list[str] = []
     sc = ci.super_class
     while sc and sc != 'java/lang/Object' and sc in registry:
         path_parts.append('_super')
         parent_ci = registry[sc]
-        parent_method_names = {m.name for m in parent_ci.methods}
-        if mname in parent_method_names:
+        parent_real_methods = [m for m in parent_ci.methods if not m.is_synthetic]
+        if descriptor:
+            found = any(m.name == mname and m.descriptor == descriptor for m in parent_real_methods)
+        else:
+            found = any(m.name == mname for m in parent_real_methods)
+        if found:
             return '.'.join(path_parts) + '.'
         sc = parent_ci.super_class
     return ''
@@ -322,11 +333,12 @@ def _find_field_super_prefix_for_type(recv_rust_type: str, fname: str, registry:
     return ''
 
 
-def _find_method_super_prefix_for_type(recv_rust_type: str, mname: str, registry: dict | None) -> str:
+def _find_method_super_prefix_for_type(recv_rust_type: str, mname: str, registry: dict | None,
+                                       descriptor: str = '') -> str:
     """基于接收者 Rust 类型（短名）查找方法 _super 前缀。"""
     binary = _rust_type_to_binary(recv_rust_type, registry)
     if binary:
-        return _find_method_super_prefix(binary, mname, registry)
+        return _find_method_super_prefix(binary, mname, registry, descriptor=descriptor)
     return ''
 
 
@@ -1162,14 +1174,16 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
 
     # T76：若方法定义在父类（继承方法），通过 _super 链路由调用
     # 基于接收者实际 Rust 类型查找方法是否需要通过 _super 路由
+    # 用 JVM 描述符精确匹配重载，避免同名但不同参数的方法干扰路由判断
     super_method_pfx = ''
     if registry:
         recv_base = obj_ty.split('<')[0].strip()
         cls_short = class_name.rsplit('/', 1)[-1] if class_name and '/' in class_name else (class_name or '')
+        jvm_desc = f"({''.join(params)}){ret}"
         if recv_base == cls_short:
-            super_method_pfx = _find_method_super_prefix(class_name, mname, registry)
+            super_method_pfx = _find_method_super_prefix(class_name, mname, registry, descriptor=jvm_desc)
         elif recv_base and recv_base not in ('Object', '()'):
-            super_method_pfx = _find_method_super_prefix_for_type(recv_base, mname, registry)
+            super_method_pfx = _find_method_super_prefix_for_type(recv_base, mname, registry, descriptor=jvm_desc)
     if super_method_pfx:
         obj_e = f"{obj_e}.{super_method_pfx.rstrip('.')}"
 
