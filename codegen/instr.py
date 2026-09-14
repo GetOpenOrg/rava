@@ -513,8 +513,14 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'return':
         sim.emit(RawStmt('return Ok(());'))
     elif op in ('ireturn', 'lreturn', 'freturn', 'dreturn'):
-        e_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"return Ok({render_expr(e_expr)});"))
+        e_expr, e_ty = sim.pop()
+        expr_s = render_expr(e_expr)
+        # 若方法返回窄类型（i8/i16/u16/bool）但栈上是 i32，做显式转换
+        ret_ty = getattr(sim, 'return_type', 'i32')
+        actual_ty = render_type(e_ty)
+        if ret_ty in ('i8', 'i16', 'u16', 'bool') and actual_ty != ret_ty:
+            expr_s = _coerce_value(expr_s, e_ty, ret_ty)
+        sim.emit(RawStmt(f"return Ok({expr_s});"))
     elif op == 'areturn':
         e_expr, e_ty = sim.pop()
         expr_s = render_expr(e_expr)
@@ -625,9 +631,21 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
 
     cls, _, params, _ = parse_method_ref(comment)
     args = []
-    for _ in range(len(params)):
-        e_expr, _ = sim.pop()
-        args.insert(0, render_expr(e_expr))
+    for param_jvm in reversed(params):
+        e_expr, e_ty_node = sim.pop()
+        e = render_expr(e_expr)
+        expected = jvm_to_rust(param_jvm, registry)
+        ty = render_type(e_ty_node)
+        # Rc<>/数组类型和 this 引用不能 into()；普通类类型才能 into()
+        if expected == 'Object' and ty not in ('Object', '()') and not ty.startswith('Rc<') and e != 'this':
+            e = f"{e}.into()"
+        elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
+            e = _coerce_value(e, e_ty_node, expected)
+        elif expected == 'i32' and ty in ('i8', 'i16', 'u16'):
+            e = f"({e} as i32)"
+        elif ty not in _PRIMITIVE_RUST_TYPES:
+            e = f"{e}.clone()"
+        args.insert(0, e)
     obj_expr, obj_ty_node = sim.pop()
 
     if isinstance(obj_expr, NewPendingExpr):
@@ -644,14 +662,19 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 type_params_str = ''
             rust_ty = raw_cls + type_params_str
             rust_ty_node = RsNamed(rust_ty)
+            # 重载构造器：用 '<init>' 查重载再替换为 'new'，以匹配 method.py 生成的定义
+            _init_mangled = _mangle_if_overloaded(full_cls, '<init>', comment, registry)
+            ctor_name = _safe_field(_init_mangled.replace('<init>', 'new'))
             if args:
-                init_expr = f"{raw_cls}::new({', '.join(args)})?"
+                init_expr = f"{raw_cls}::{ctor_name}({', '.join(args)})?"
             else:
                 turbofish = '::' + type_params_str if type_params_str else ''
-                init_expr = f"{raw_cls}{turbofish}::new()?"
+                init_expr = f"{raw_cls}{turbofish}::{ctor_name}()?"
         elif raw_cls and '/' not in raw_cls:
-            # 用户类：new()? 返回 Result<Self>
-            init_expr    = f"{raw_cls}::new({', '.join(args)})?"
+            # 用户类：new()? 返回 Result<Self>，同样 mangle 重载构造器
+            _init_mangled2 = _mangle_if_overloaded(raw_cls, '<init>', comment, registry)
+            ctor_name    = _safe_field(_init_mangled2.replace('<init>', 'new'))
+            init_expr    = f"{raw_cls}::{ctor_name}({', '.join(args)})?"
             rust_ty      = raw_cls
             rust_ty_node = RsNamed(rust_ty)
         else:
@@ -687,7 +710,7 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     """查找 registry 中 cls_name 类的 mname 方法是否重载，重载则返回 mangled 名，否则原名。
     支持短名（Objects）和全路径名（java/util/Objects）查找。
     java_runtime 手写类（ArrayList/Object 等）不做 mangle，其 API 已固定。"""
-    if not registry or not mname or mname.startswith('<'):
+    if not registry or not mname or (mname.startswith('<') and mname != '<init>'):
         return mname
     # java_runtime 手写类直接跳过 mangle（其 API 已固定，不走 jdk_classes 重命名逻辑）
     short = cls_name.rsplit('/', 1)[-1]
@@ -795,8 +818,9 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         e_str = render_expr(e_expr)
         expected_rust = jvm_to_rust(param_jvm, registry)
         actual_rust = render_type(e_ty_node)
-        if expected_rust == 'Object' and actual_rust not in ('Object', '()'):
-            e_str = f"{e_str}.into()"
+        if expected_rust == 'Object' and actual_rust not in ('Object', '()') and not actual_rust.startswith('Rc<'):
+            # this 是 &Self 引用，需要 clone 后再 into()；其他类型直接 into()
+            e_str = f"{e_str}.clone().into()" if e_str == 'this' else f"{e_str}.into()"
         elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
             e_str = _coerce_value(e_str, e_ty_node, expected_rust)
         elif expected_rust == 'i32' and actual_rust in ('i8', 'i16', 'u16'):
