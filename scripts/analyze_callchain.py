@@ -163,52 +163,67 @@ def main():
             with open(class_file, 'rb') as f:
                 user_infos.append(parse_class_bytes(f.read(), stem))
 
-    print(f"\n用户类：{[ci.name for ci in user_infos]}")
-    print("=" * 70)
+    # 输出文件放在第一个 .java 文件同目录
+    out_dir = os.path.dirname(os.path.abspath(java_files[0]))
+    report_path = os.path.join(out_dir, 'callchain_report.txt')
+
+    user_names = [ci.name for ci in user_infos]
+    print(f"用户类：{user_names}")
 
     with JdkResolver() as resolver:
-        # 1. 类级 BFS（当前实现）
-        print("\n【当前：类级 BFS】")
+        # 1. 类级 BFS
+        print("运行类级 BFS ...", end=' ', flush=True)
         cls_infos = class_level_bfs(user_infos, resolver)
-        print(f"  发现 JDK 类：{len(cls_infos)} 个")
-        for name in sorted(cls_infos):
-            ci = cls_infos[name]
-            total = len(ci.methods)
-            native = sum(1 for m in ci.methods if m.is_native)
-            print(f"    {name}  ({total} 方法, {native} native)")
+        print(f"完成，{len(cls_infos)} 个类")
 
         # 2. 方法级 BFS
-        print("\n【方法级调用链 BFS】")
+        print("运行方法级 BFS ...", end=' ', flush=True)
         reach_methods, reach_classes, cache = method_level_bfs(user_infos, resolver)
-        print(f"  可达 JDK 方法：{len(reach_methods)} 个")
-        print(f"  涉及 JDK 类：{len(reach_classes)} 个")
-
-        # 按类分组展示
-        by_cls = defaultdict(list)
-        for cls, meth, desc in sorted(reach_methods):
-            by_cls[cls].append(f"{meth}{desc}")
-        for cls in sorted(by_cls):
-            print(f"    {cls}")
-            for sig in sorted(by_cls[cls]):
-                print(f"      ↳ {sig}")
-
-        # 3. 对比
-        print("\n【对比】")
-        print(f"  类级 BFS：{len(cls_infos)} 个类")
-        print(f"  方法级：  {len(reach_classes)} 个类（节省 {len(cls_infos)-len(reach_classes)} 个）")
+        print(f"完成，{len(reach_classes)} 个类 / {len(reach_methods)} 个方法")
 
         only_in_class_bfs = set(cls_infos) - reach_classes
-        if only_in_class_bfs:
-            print(f"\n  仅类级 BFS 拉入（方法级不需要）的 {len(only_in_class_bfs)} 个类：")
+        only_in_method_bfs = reach_classes - set(cls_infos)
+
+        # 控制台摘要
+        print()
+        print(f"【摘要】")
+        print(f"  类级 BFS  : {len(cls_infos)} 个类")
+        print(f"  方法级 BFS: {len(reach_classes)} 个类，{len(reach_methods)} 个方法")
+        print(f"  节省       : {len(only_in_class_bfs)} 个类（方法级不需要）")
+        if only_in_method_bfs:
+            print(f"  方法级额外发现: {len(only_in_method_bfs)} 个类")
+        print(f"\n详细报告 → {report_path}")
+
+        # 写详细报告到文件
+        with open(report_path, 'w', encoding='utf-8') as rpt:
+            rpt.write(f"用户类：{user_names}\n")
+            rpt.write("=" * 70 + "\n")
+
+            rpt.write("\n【类级 BFS】\n")
+            for name in sorted(cls_infos):
+                ci = cls_infos[name]
+                total = len(ci.methods)
+                native = sum(1 for m in ci.methods if m.is_native)
+                rpt.write(f"  {name}  ({total} 方法, {native} native)\n")
+
+            rpt.write("\n【方法级调用链 BFS】\n")
+            by_cls = defaultdict(list)
+            for cls, meth, desc in sorted(reach_methods):
+                by_cls[cls].append(f"{meth}{desc}")
+            for cls in sorted(by_cls):
+                rpt.write(f"  {cls}\n")
+                for sig in sorted(by_cls[cls]):
+                    rpt.write(f"    ↳ {sig}\n")
+
+            rpt.write("\n【仅类级 BFS 拉入（方法级不需要）】\n")
             for c in sorted(only_in_class_bfs):
                 ci = cls_infos[c]
-                print(f"    {c}  ({len(ci.methods)} 方法)")
+                rpt.write(f"  {c}  ({len(ci.methods)} 方法)\n")
 
-        only_in_method_bfs = reach_classes - set(cls_infos)
-        if only_in_method_bfs:
-            print(f"\n  仅方法级 BFS 发现（类级未发现）的 {len(only_in_method_bfs)} 个类：")
-            for c in sorted(only_in_method_bfs):
-                print(f"    {c}")
+            if only_in_method_bfs:
+                rpt.write("\n【仅方法级 BFS 发现（类级未发现）】\n")
+                for c in sorted(only_in_method_bfs):
+                    rpt.write(f"  {c}\n")
 
 
 if __name__ == '__main__':
