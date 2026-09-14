@@ -1,0 +1,10 @@
+5
+caught: division by zero
+try
+catch: boom
+finally
+app error code=404
+null pointer
+index out of bounds
+illegal: bad arg
+done

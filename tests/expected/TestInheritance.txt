@@ -1,0 +1,12 @@
+Animal makes a sound
+Rex barks
+Whiskers meows
+Buddy barks (guide)
+Rex
+Animal makes a sound
+Rex barks
+Whiskers meows
+Buddy barks (guide)
+true
+true
+false

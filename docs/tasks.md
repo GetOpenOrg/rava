@@ -1094,3 +1094,45 @@ T33 (单 crate 迁移)       ─ 依赖 T46、T47（手写层消灭后再做）
 - 短期：T43（最小工作量，高价值）或 T44（解锁继承场景）
 - 中期：T46 → T47（消灭手写层，推进目标架构）
 - 长期：T49（Lambda）、T50（IR 质量）、T33（单 crate）
+
+---
+
+### T51 · 端到端测试自动化框架
+**状态**：`[ ]`
+**文件**：`scripts/run_tests.py`（新建）
+
+**背景**：测试文件已按特性分类存放于 `tests/e2e/`，期望输出存于 `tests/expected/`。
+目前每次验证需要手动对比 `java` 和 `cargo run` 的输出，无法自动化回归。
+
+**目录结构（已建立）**：
+```
+tests/
+├── e2e/
+│   ├── 01_basics/    HelloWorld, TestArithmetic, TestArrays, TestControlFlow
+│   ├── 02_oop/       TestObjects, TestInheritance, TestInterfaces
+│   ├── 03_generics/  TestGenerics
+│   ├── 04_collections/ TestCollections, TestArrayList
+│   ├── 05_strings/   TestStringBuilder
+│   ├── 06_exceptions/ TestExceptions
+│   └── 07_lambdas/   TestLambda
+├── expected/         *.txt  ← java 运行输出（ground truth）
+└── compare/          Java vs Rust API 对比文档（手动阅读）
+```
+
+**目标**：`python3 scripts/run_tests.py` 自动完成：
+1. 发现 `tests/e2e/**/*.java` 下所有测试文件
+2. 对每个文件运行转译器 → 编译 Rust → 执行二进制，捕获 stdout
+3. 与 `tests/expected/<ClassName>.txt` diff
+4. 报告 PASS / FAIL，打印不匹配的行
+
+**实现要点**：
+- `--filter` 参数支持按目录或类名过滤（如 `--filter 01_basics`）
+- `--update-expected` 参数：覆写 `expected/` 文件（更新 ground truth 时使用）
+- 失败时打印 unified diff，方便定位代码生成问题
+- 已知不支持的特性（T44/T45/T49 未完成时）可用 `# skip` 注释标记跳过
+
+**验收**：
+```bash
+python3 scripts/run_tests.py --filter 01_basics   # 基础场景全部 PASS
+python3 scripts/run_tests.py                       # 全量运行，输出每项状态
+```
