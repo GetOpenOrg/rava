@@ -706,6 +706,39 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         upcast_lines.append('}')
         parts.append('\n'.join(upcast_lines) + '\n')
 
+    # T55：为每个祖先生成 From<Self> for Ancestor（含直接父类 + 所有祖先链）
+    # 这让 child.into() 在期望父类类型的位置自动工作，避免 E0308
+    if _has_super and registry:
+        child_full = struct_name
+        if class_type_params:
+            child_full += '<' + ', '.join(class_type_params) + '>'
+        impl_generics_for_from = f"<{bounds_str}>" if class_type_params else ''
+
+        access_path = '_super'
+        cur_super = ci.super_class
+        child_tparams_t55: list[str] = list(class_type_params)
+        while cur_super and cur_super != 'java/lang/Object':
+            parent_rust_name = short_cls(cur_super)
+            parent_full_type = parent_rust_name
+            ancestor_ci = registry.get(cur_super)
+            if ancestor_ci:
+                ancestor_params = parse_class_type_params(ancestor_ci.generic_signature) if ancestor_ci.generic_signature else []
+                if ancestor_params:
+                    if child_tparams_t55:
+                        args = child_tparams_t55[:len(ancestor_params)]
+                        while len(args) < len(ancestor_params):
+                            args.append('Object')
+                    else:
+                        args = ['Object'] * len(ancestor_params)
+                    parent_full_type += '<' + ', '.join(args) + '>'
+            parts.append(
+                f"impl{impl_generics_for_from} From<{child_full}> for {parent_full_type} {{\n"
+                f"    fn from(v: {child_full}) -> {parent_full_type} {{ v.{access_path} }}\n"
+                f"}}\n"
+            )
+            cur_super = ancestor_ci.super_class if ancestor_ci else None
+            access_path += '._super'
+
     # 若有 native_impls 或 synthetics，插入 mod _native { include!("..."); } 块
     has_synthetics_here = synthetics and ci.name in synthetics
     _native_rel_file: str | None = None

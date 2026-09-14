@@ -326,6 +326,28 @@ def _rust_type_to_binary(rust_short: str, registry: dict | None) -> str:
     return ''
 
 
+def _is_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> bool:
+    """判断 child_rust 是否是 parent_rust 的子类型（通过 registry 继承链查找）。
+    两个参数都是 Rust 短类名（如 IOException, Throwable）。"""
+    if not registry or child_rust == parent_rust:
+        return False
+    child_bin = _rust_type_to_binary(child_rust, registry)
+    if not child_bin:
+        return False
+    ci = registry.get(child_bin)
+    visited: set[str] = {child_bin}
+    while ci and ci.super_class and ci.super_class != 'java/lang/Object':
+        sc = ci.super_class
+        if sc in visited:
+            break
+        visited.add(sc)
+        sc_short = sc.rsplit('/', 1)[-1].replace('$', '_') if '/' in sc else sc
+        if sc_short == parent_rust:
+            return True
+        ci = registry.get(sc)
+    return False
+
+
 def _find_field_super_prefix_for_type(recv_rust_type: str, fname: str, registry: dict | None) -> str:
     """基于接收者 Rust 类型（短名）查找字段 _super 前缀。"""
     binary = _rust_type_to_binary(recv_rust_type, registry)
@@ -683,6 +705,11 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                 val_str = null_coerce
             elif ftype == 'Object' and val_ty_name not in ('Object', '()') and val_str_raw != 'this':
                 val_str = _coerce_to_object(val_str_raw, val_ty_name)
+            elif (ftype not in _PRIMITIVE_RUST_TYPES and val_ty_name not in _PRIMITIVE_RUST_TYPES
+                  and ftype not in ('Object', '()', val_ty_name)
+                  and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
+                # T55：子类型赋给父类型字段
+                val_str = f"{val_str_raw}.into()"
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
             # 引用类型赋值时加 .clone()，避免 E0382（move after use）
@@ -862,6 +889,11 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                 expr_s = 'panic!("null")'
             else:
                 expr_s = f"Default::default()"
+        elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
+              and ret_ty not in ('Object', '()', actual_ty)
+              and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
+            # T55：返回值是子类型，方法声明返回父类型
+            expr_s = f"{expr_s}.into()"
         sim.emit(RawStmt(f"return Ok({expr_s});"))
 
     # ── 控制流（循环由 method.py 处理，此处跳过）──
@@ -1128,6 +1160,11 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             e = _coerce_value(e, ty_node, expected)
         elif expected == 'i32' and ty in ('i8', 'i16', 'u16', 'bool'):
             e = f"({e} as i32)"
+        elif (expected not in _PRIMITIVE_RUST_TYPES and ty not in _PRIMITIVE_RUST_TYPES
+              and expected not in ('Object', '()', ty)
+              and _is_subtype(ty.split('<')[0], expected.split('<')[0], registry)):
+            # T55：子类型传给父类型参数位置，插入 .into() 类型提升
+            e = f"{e}.into()"
         elif ty not in _PRIMITIVE_RUST_TYPES:
             e = f"{e}.clone()"
         args.insert(0, e)
@@ -1202,6 +1239,11 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             e_str = _coerce_value(e_str, e_ty_node, expected_rust)
         elif expected_rust == 'i32' and actual_rust in ('i8', 'i16', 'u16'):
             e_str = f"({e_str} as i32)"
+        elif (expected_rust not in _PRIMITIVE_RUST_TYPES and actual_rust not in _PRIMITIVE_RUST_TYPES
+              and expected_rust not in ('Object', '()', actual_rust)
+              and _is_subtype(actual_rust.split('<')[0], expected_rust.split('<')[0], registry)):
+            # T55：子类型传给父类型参数位置，插入 .into() 类型提升
+            e_str = f"{e_str}.into()"
         elif actual_rust not in _PRIMITIVE_RUST_TYPES:
             e_str = f"{e_str}.clone()"
         args.insert(0, e_str)
