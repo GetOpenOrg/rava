@@ -1,0 +1,7 @@
+78.54
+24.00
+12.00
+positive int: 42
+non-positive int: -1
+empty string
+string: hello

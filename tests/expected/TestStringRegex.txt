@@ -1,0 +1,20 @@
+true
+false
+true
+foo bar baz qux
+1234
+abcd
+one
+two
+three
+four
+2
+one
+two,three,four
+user@example.com
+info@test.org
+found: 2
+2026
+09
+15
+mango banana apple cherry

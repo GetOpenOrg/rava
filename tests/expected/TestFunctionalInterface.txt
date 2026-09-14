@@ -1,0 +1,12 @@
+HELLO
+42
+7
+ababab
+5
+25
+true
+true
+false
+consumer works
+hello supplier
+42

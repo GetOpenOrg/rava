@@ -1,0 +1,7 @@
+3
+4
+5.0
+Point[x=3, y=4]
+true
+Alice
+30

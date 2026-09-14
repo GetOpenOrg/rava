@@ -1,0 +1,4 @@
+[apple, banana, cherry, date]
+[date, apple, banana, cherry]
+[date, apple, banana, cherry]
+[date, cherry, banana, apple]

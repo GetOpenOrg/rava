@@ -1,0 +1,14 @@
+open: R1
+use: R1
+close: R1
+---
+open: R1
+open: R2
+use: R1
+use: R2
+close: R2
+close: R1
+---
+open: failing
+close: failing
+caught: use failed

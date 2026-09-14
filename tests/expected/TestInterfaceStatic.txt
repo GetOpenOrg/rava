@@ -1,0 +1,13 @@
+25
+27
+true
+false
+true
+10
+0
+5
+ababab
+true
+false
+Hello
+

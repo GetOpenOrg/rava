@@ -1,0 +1,6 @@
+hello
+world
+java
+10
+>>>>test
+initial

@@ -1,0 +1,10 @@
+{
+    "name": "Alice",
+    "age": 30
+}
+<html>
+  <body>Hello</body>
+</html>
+SELECT *
+FROM users
+WHERE age > 18

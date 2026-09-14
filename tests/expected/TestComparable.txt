@@ -1,0 +1,11 @@
+Alice:3.9
+Bob:3.9
+Charlie:3.5
+Dave:3.2
+true
+true
+true
+true
+1.2.3
+1.2.4
+2.0.0

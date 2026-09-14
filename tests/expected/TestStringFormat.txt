@@ -1,0 +1,6 @@
+Name: Alice, Age: 30
+Score: 98.5
+Hex: ff
+Padded:         hi|
+Left: hi        |
+(Alice, 30)
