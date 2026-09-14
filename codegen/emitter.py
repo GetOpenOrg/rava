@@ -294,12 +294,13 @@ def _scan_native_impls(workspace_root: str) -> tuple[dict, dict, dict]:
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None,
-                     native_fn: str | None = None) -> str:
+                     native_fn: str | None = None,
+                     registry: dict | None = None) -> str:
     """为 native / abstract / stub 方法生成存根，若有 native_fn 则调用 _native 模块。"""
     from .type_map import jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return
     params = parse_descriptor_params(m.descriptor)
     ret    = parse_descriptor_return(m.descriptor)
-    rust_ret = jvm_to_rust(ret)
+    rust_ret = jvm_to_rust(ret, registry)
 
     # 构建参数列表（参数名需转义 $ 和 Rust 关键字）
     raw_names = [m.local_names.get(i + (0 if m.is_static else 1), f'arg{i}')
@@ -317,7 +318,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             deduped.append(n)
     arg_names = deduped
     # 静态方法用 sig_type（Vec<T> → &[T]），与 gen_method_body 保持一致
-    param_type_fn = (lambda p: sig_type(jvm_to_rust(p))) if m.is_static else jvm_to_rust
+    param_type_fn = (lambda p: sig_type(jvm_to_rust(p, registry))) if m.is_static else (lambda p: jvm_to_rust(p, registry))
     args_str = ', '.join(
         f'{name}: {param_type_fn(p)}' for name, p in zip(arg_names, params)
     )
@@ -542,11 +543,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 nkey = (ci.name, m.name, m.descriptor)
                 if nkey in native_impls_map:
                     native_fn = native_impls_map[nkey][0]
-            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=native_fn)
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=native_fn, registry=registry)
             method_blocks.append(attr_line + '\n' + stub)
         elif not in_call_chain or stub_bodies:
             # 不在调用链上，或兜底 stub 模式：生成 panic! 存根
-            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=None)
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=None, registry=registry)
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
@@ -558,7 +559,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:
                 # 翻译失败：退化为 stub，避免生成无效 Rust
-                stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=None)
+                stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=None, registry=registry)
                 method_blocks.append(attr_line + '\n' + stub)
 
     # 合成方法 wrapper（来自 native_impls 中 /// @synthetic 标注的函数）

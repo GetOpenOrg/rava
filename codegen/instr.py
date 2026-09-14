@@ -125,6 +125,15 @@ def _to_i32(expr_str: str, ty: 'RsType') -> str:
     return expr_str
 
 
+def _coerce_to_object(val_str: str, ty: str) -> str:
+    """将任意类型的值强制转换为 Object。
+    基本类型用 .into()（有 From<T> for Object 实现）；
+    其他类型用 Object::from_any(.clone())（通用装箱）。"""
+    if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
+        return f"{val_str}.into()"
+    return f"Object::from_any({val_str}.clone())"
+
+
 def _coerce_value(val_str: str, val_ty: 'RsType', target: str) -> str:
     """将 val 强制转换为 target 字段/参数类型，避免窄类型与 i32 不匹配。
     只在必要时插入 cast，若类型已匹配则原样返回。"""
@@ -445,8 +454,8 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'i32'
             val_str_raw = render_expr(val_expr)
             val_ty_name = render_type(val_ty)
-            if ftype == 'Object' and val_ty_name not in ('Object', '()') and not val_ty_name.startswith('Rc<') and val_str_raw != 'this':
-                val_str = f"{val_str_raw}.into()"
+            if ftype == 'Object' and val_ty_name not in ('Object', '()') and val_str_raw != 'this':
+                val_str = _coerce_to_object(val_str_raw, val_ty_name)
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
             sim.emit(RawStmt(f"{render_expr(obj_expr)}.{fname}.set({val_str});"))
@@ -656,8 +665,10 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         expected = jvm_to_rust(param_jvm, registry)
         ty = render_type(e_ty_node)
         # Rc<>/数组类型和 this 引用不能 into()；普通类类型才能 into()
-        if expected == 'Object' and ty not in ('Object', '()') and not ty.startswith('Rc<') and e != 'this':
-            e = f"{e}.into()"
+        if expected == 'Object' and ty not in ('Object', '()') and e != 'this':
+            e = _coerce_to_object(e, ty)
+        elif expected == 'Object' and ty not in ('Object', '()') and e == 'this':
+            e = f"Object::from_any(self.clone())"
         elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, e_ty_node, expected)
         elif expected == 'i32' and ty in ('i8', 'i16', 'u16'):
@@ -789,8 +800,8 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         e = render_expr(e_expr)
         ty = render_type(ty_node)
         expected = jvm_to_rust(param_jvm, registry)
-        if expected == 'Object' and ty not in ('Object', '()') and not ty.startswith('Rc<'):
-            e = f"{e}.clone().into()" if e == 'this' else f"{e}.into()"
+        if expected == 'Object' and ty not in ('Object', '()'):
+            e = _coerce_to_object(e, ty)
         elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, ty_node, expected)
         elif expected == 'i32' and ty in ('i8', 'i16', 'u16'):
@@ -848,9 +859,8 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         e_str = render_expr(e_expr)
         expected_rust = jvm_to_rust(param_jvm, registry)
         actual_rust = render_type(e_ty_node)
-        if expected_rust == 'Object' and actual_rust not in ('Object', '()') and not actual_rust.startswith('Rc<'):
-            # this 是 &Self 引用，需要 clone 后再 into()；Clone::clone 避免调用 Java clone()
-            e_str = f"{e_str}.clone().into()" if e_str == 'this' else f"{e_str}.into()"
+        if expected_rust == 'Object' and actual_rust not in ('Object', '()'):
+            e_str = _coerce_to_object(e_str, actual_rust)
         elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
             e_str = _coerce_value(e_str, e_ty_node, expected_rust)
         elif expected_rust == 'i32' and actual_rust in ('i8', 'i16', 'u16'):
