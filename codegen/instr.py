@@ -161,7 +161,20 @@ _INTERFACE_IMPLS: dict[str, frozenset[str]] = {
 
 
 def _coerce_to_interface(actual: str, expected: str) -> bool:
-    """当 actual 是 expected 接口的已知实现类时返回 True（需要强制转换为 Default::default()）。"""
+    """当 actual 需要强制转换为 Default::default() 时返回 True。
+    覆盖两类情况：
+    1. actual 是 expected 接口的已知实现类（如 HashMap → Map）
+    2. Vec 元素类型不匹配（Rc<RefCell<Vec<Object>>> → Rc<RefCell<Vec<T>>>）
+    """
+    # Vec 元素类型不匹配：两者都是 Rc<RefCell<Vec<T>>> 但元素类型不同
+    _VEC_PREFIX = 'Rc<RefCell<Vec<'
+    _VEC_SUFFIX = '>>>'
+    if (expected.startswith(_VEC_PREFIX) and expected.endswith(_VEC_SUFFIX) and
+            actual.startswith(_VEC_PREFIX) and actual.endswith(_VEC_SUFFIX)):
+        exp_elem = expected[len(_VEC_PREFIX):-len(_VEC_SUFFIX)]
+        act_elem = actual[len(_VEC_PREFIX):-len(_VEC_SUFFIX)]
+        if exp_elem != act_elem:
+            return True
     exp_base = expected.split('<')[0]
     act_base = actual.split('<')[0]
     if exp_base == act_base:

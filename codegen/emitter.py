@@ -419,8 +419,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             safe_fname = _safe_field_name(f.name)
             field_lines.append("    " + _java_field_attr(f))
             # 优先用字段级 generic_signature（如 TE; → E），回退到裸描述符
-            field_rust = (parse_field_type(f.generic_signature, class_type_params)
-                          if f.generic_signature else '') or jvm_to_rust(f.descriptor)
+            # 若 generic_signature 解析结果是 Object（简化），用描述符推断更精确的类型
+            gen_rust = (parse_field_type(f.generic_signature, class_type_params)
+                        if f.generic_signature else '')
+            desc_rust = jvm_to_rust(f.descriptor)
+            field_rust = gen_rust if (gen_rust and gen_rust != 'Object') else desc_rust
             field_lines.append(f"    pub {safe_fname}: {field_type_prefix}<{field_rust}>,")
         for ef_name, ef_type in cls_extra_fields:
             field_lines.append(f"    pub {ef_name}: {ef_type},")
