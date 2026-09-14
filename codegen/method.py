@@ -12,7 +12,7 @@
 
 import re
 from .types import ParsedMethod, ClassInfo
-from .type_map import jvm_to_rust, sig_type, rust_default, mangle_name
+from .type_map import jvm_to_rust, sig_type, rust_default, mangle_name, short_cls
 from .constants import safe_ident
 from .stack import StackSim
 from .cfg import find_loops, find_boolean_conditions, cmp_op, neg_cmp_op
@@ -203,14 +203,14 @@ def gen_method_body(
 
     local_names = method.local_names or {}
 
-    # 计算最终 Rust 方法名（有重载则加描述符后缀）
+    # 计算最终 Rust 方法名（有重载则加描述符后缀；Rust 关键字加 _ 后缀）
     _overloaded = overloaded_names is not None and method.name in overloaded_names
     if is_ctor:
         rust_fn_name = mangle_name('new', method.descriptor) if _overloaded else 'new'
     elif _overloaded:
         rust_fn_name = mangle_name(method.name, method.descriptor)
     else:
-        rust_fn_name = method.name
+        rust_fn_name = safe_ident(method.name)
 
     def _param_name(slot: int, fallback: str) -> str:
         return safe_ident(local_names.get(slot, fallback))
@@ -219,7 +219,7 @@ def gen_method_body(
     if is_ctor:
         # 构造器：Result<Self>，参数从 slot 1 开始
         params = [
-            f"{_param_name(k + 1, f'arg_{k}')}: {rt}"
+            f"mut {_param_name(k + 1, f'arg_{k}')}: {rt}"
             for k, rt in enumerate(rust_param_types)
         ]
         sig = f"pub fn {rust_fn_name}({', '.join(params)}) -> Result<Self>"
@@ -229,7 +229,7 @@ def gen_method_body(
 
     elif is_static:
         params = [
-            f"{_param_name(k, f'arg_{k}')}: {sig_type(rt)}"
+            f"mut {_param_name(k, f'arg_{k}')}: {sig_type(rt)}"
             for k, rt in enumerate(rust_param_types)
         ]
         sig = f"pub fn {rust_fn_name}({', '.join(params)})"
@@ -242,7 +242,7 @@ def gen_method_body(
         # 实例方法：&self，Result<T>
         params = ["&self"]
         params += [
-            f"{_param_name(k + 1, f'arg_{k}')}: {rt}"
+            f"mut {_param_name(k + 1, f'arg_{k}')}: {rt}"
             for k, rt in enumerate(rust_param_types)
         ]
         sig = f"pub fn {rust_fn_name}({', '.join(params)})"
@@ -302,7 +302,7 @@ def gen_method_body(
         else:
             struct_init = "Self {}"
         entries.append(('', f"    let this = {struct_init};"))
-        sim.locals[0] = ('this', RsNamed(method.class_name), False)
+        sim.locals[0] = ('this', RsNamed(short_cls(method.class_name)), False)
 
     elif not is_static:
         # 实例方法：绑定 this = self，供字节码（aload_0 + getfield/putfield）使用

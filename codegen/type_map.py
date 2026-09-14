@@ -188,7 +188,7 @@ def descriptor_to_suffix(descriptor: str) -> str:
         elif c == 'L':
             try:
                 end = s.index(';', i + 1)
-                short = s[i+1:end].split('/')[-1].lower()
+                short = s[i+1:end].split('/')[-1].lower().replace('$', '_')
                 parts.append(_CLS_ABBREV.get(short, short[:6])); i = end + 1
             except ValueError:
                 i += 1
@@ -199,7 +199,7 @@ def descriptor_to_suffix(descriptor: str) -> str:
             if j < len(s) and s[j] == 'L':
                 try:
                     end = s.index(';', j + 1)
-                    short = s[j+1:end].split('/')[-1].lower()
+                    short = s[j+1:end].split('/')[-1].lower().replace('$', '_')
                     parts.append('arr_' + _CLS_ABBREV.get(short, short[:3])); i = end + 1
                 except ValueError:
                     i = j + 1

@@ -113,8 +113,33 @@ def _parse_slot(op: str, operand: str) -> int:
 # java_runtime 手写实现的短类名：这些类的方法名不经过 mangle（hand-written API 已定好名称）
 # System/PrintStream/String/Math/ArrayList/HashMap/HashSet/StringBuilder 已迁移到 jdk_classes + native_impls
 _JAVA_RUNTIME_SHORT_NAMES: frozenset[str] = frozenset({
-    'Object', 'String',
+    'Object',
 })
+
+
+def _to_i32(expr_str: str, ty: 'RsType') -> str:
+    """窄类型（i8/i16/u16/bool）向上转为 i32，避免 JVM int 运算中的类型不匹配。"""
+    ty_name = getattr(ty, 'name', '')
+    if ty_name in ('i8', 'i16', 'u16', 'bool'):
+        return f"({expr_str} as i32)"
+    return expr_str
+
+
+def _coerce_value(val_str: str, val_ty: 'RsType', target: str) -> str:
+    """将 val 强制转换为 target 字段/参数类型，避免窄类型与 i32 不匹配。
+    只在必要时插入 cast，若类型已匹配则原样返回。"""
+    src = getattr(val_ty, 'name', '')
+    if target == src or target == 'i32':
+        return val_str
+    if target == 'bool':
+        if src == 'bool':
+            return val_str
+        return f"({val_str} != 0i32)"
+    if target in ('i8', 'i16', 'u16'):
+        if src != 'i32':
+            val_str = f"({val_str} as i32)"
+        return f"(({val_str}) as {target})"
+    return val_str
 
 
 def _parse_field_ref(comment: str) -> tuple[str, str, str]:
@@ -183,7 +208,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op.startswith('aload'): sim.push(*sim.load_local(_parse_slot(op, operand)))
 
     # ── store ──
-    elif op.startswith('istore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, I32)
+    elif op.startswith('istore'): e, ty = sim.pop(); sim.store_local(_parse_slot(op, operand), e, ty)
     elif op.startswith('lstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, I64)
     elif op.startswith('fstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F32)
     elif op.startswith('dstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F64)
@@ -193,41 +218,41 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
 
     # ── 整数算术 ──
     elif op == 'iadd':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}).wrapping_add({render_expr(b)})"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_add({_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'isub':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}).wrapping_sub({render_expr(b)})"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_sub({_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'imul':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}).wrapping_mul({render_expr(b)})"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_mul({_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'idiv':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}/{render_expr(b)})"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}/{_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'irem':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}%{render_expr(b)})"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}%{_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'ineg':
-        a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}).wrapping_neg()"), I32)
+        a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_neg()"), I32)
     elif op == 'ishl':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}<<({render_expr(b)}&0x1f))"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}<<({_to_i32(render_expr(b), bt)}&0x1f))"), I32)
     elif op == 'ishr':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}>>(({render_expr(b)}&0x1f)))"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}>>(({_to_i32(render_expr(b), bt)}&0x1f)))"), I32)
     elif op == 'iushr':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"(({render_expr(a)} as u32>>({render_expr(b)}&0x1f)) as i32)"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"(({_to_i32(render_expr(a), at)} as u32>>({_to_i32(render_expr(b), bt)}&0x1f)) as i32)"), I32)
     elif op == 'iand':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}&{render_expr(b)})"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}&{_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'ior':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}|{render_expr(b)})"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}|{_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'ixor':
-        b, _ = sim.pop(); a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}^{render_expr(b)})"), I32)
+        b, bt = sim.pop(); a, at = sim.pop()
+        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}^{_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'iinc':
         parts = operand.replace(',', ' ').split()
         slot, delta = int(parts[0]), int(parts[1])
@@ -271,23 +296,106 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         b, _ = sim.pop(); a, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(a)}/{render_expr(b)})"), F64)
 
+    # ── long 算术（lrem/lneg/land/lor/lxor/lshl/lshr/lushr）──
+    elif op == 'lrem':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}%({render_expr(b)}))"), I64)
+    elif op == 'lneg':
+        a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_neg()"), I64)
+    elif op == 'land':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}&({render_expr(b)}))"), I64)
+    elif op == 'lor':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}|({render_expr(b)}))"), I64)
+    elif op == 'lxor':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)})^({render_expr(b)})"), I64)
+    elif op == 'lshl':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_shl(({render_expr(b)}&0x3f) as u32)"), I64)
+    elif op == 'lshr':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}).wrapping_shr(({render_expr(b)}&0x3f) as u32)"), I64)
+    elif op == 'lushr':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"(({render_expr(a)} as u64).wrapping_shr(({render_expr(b)}&0x3f) as u32) as i64)"), I64)
+
+    # ── float/double 取余与取负 ──
+    elif op == 'frem':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}%({render_expr(b)}))"), F32)
+    elif op == 'fneg':
+        a, _ = sim.pop()
+        sim.push(RawExpr(f"(-({render_expr(a)}))"), F32)
+    elif op == 'drem':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(a)}%({render_expr(b)}))"), F64)
+    elif op == 'dneg':
+        a, _ = sim.pop()
+        sim.push(RawExpr(f"(-({render_expr(a)}))"), F64)
+
+    # ── 比较指令（lcmp/fcmpl/fcmpg/dcmpl/dcmpg）→ 压 i32 结果 ──
+    elif op == 'lcmp':
+        b, _ = sim.pop(); a, _ = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        sim.push(RawExpr(f"(({a_s}>({b_s})) as i32-(({a_s})<({b_s})) as i32)"), I32)
+    elif op in ('fcmpl', 'fcmpg', 'dcmpl', 'dcmpg'):
+        b, _ = sim.pop(); a, _ = sim.pop()
+        a_s = render_expr(a); b_s = render_expr(b)
+        sim.push(RawExpr(f"(({a_s}>({b_s})) as i32-(({a_s})<({b_s})) as i32)"), I32)
+
     # ── 类型转换 ──
     elif op == 'i2l': a, _ = sim.pop(); sim.push(Cast(a, I64), I64)
     elif op == 'i2f': a, _ = sim.pop(); sim.push(Cast(a, F32), F32)
     elif op == 'i2d': a, _ = sim.pop(); sim.push(Cast(a, F64), F64)
+    elif op == 'i2b': a, _ = sim.pop(); sim.push(RawExpr(f"(({render_expr(a)}) as i8 as i32)"), I32)
+    elif op == 'i2s': a, _ = sim.pop(); sim.push(RawExpr(f"(({render_expr(a)}) as i16 as i32)"), I32)
+    elif op == 'i2c': a, _ = sim.pop(); sim.push(RawExpr(f"(({render_expr(a)}) as u16 as i32)"), I32)
     elif op == 'l2i': a, _ = sim.pop(); sim.push(Cast(a, I32), I32)
+    elif op == 'l2f': a, _ = sim.pop(); sim.push(Cast(a, F32), F32)
+    elif op == 'l2d': a, _ = sim.pop(); sim.push(Cast(a, F64), F64)
     elif op == 'f2i': a, _ = sim.pop(); sim.push(Cast(a, I32), I32)
+    elif op == 'f2l': a, _ = sim.pop(); sim.push(Cast(a, I64), I64)
     elif op == 'd2i': a, _ = sim.pop(); sim.push(Cast(a, I32), I32)
+    elif op == 'd2l': a, _ = sim.pop(); sim.push(Cast(a, I64), I64)
     elif op == 'd2f': a, _ = sim.pop(); sim.push(Cast(a, F32), F32)
     elif op == 'f2d': a, _ = sim.pop(); sim.push(Cast(a, F64), F64)
 
-    # ── dup / pop ──
+    # ── dup / pop / swap ──
     elif op == 'dup':
         if sim.stack: sim.stack.append(sim.stack[-1])
     elif op == 'dup_x1':
         if len(sim.stack) >= 2:
             v1 = sim.stack.pop(); v2 = sim.stack.pop()
             sim.stack += [v1, v2, v1]
+    elif op == 'dup2':
+        # 简化：对 category-1 复制前两项；category-2（long/double）复制栈顶一项
+        if len(sim.stack) >= 2:
+            v1 = sim.stack[-1]; v2 = sim.stack[-2]
+            sim.stack += [v2, v1]
+        elif sim.stack:
+            sim.stack.append(sim.stack[-1])
+    elif op == 'dup_x2':
+        if len(sim.stack) >= 3:
+            v1 = sim.stack.pop(); v2 = sim.stack.pop(); v3 = sim.stack.pop()
+            sim.stack += [v1, v3, v2, v1]
+        elif len(sim.stack) == 2:
+            v1 = sim.stack.pop(); v2 = sim.stack.pop()
+            sim.stack += [v1, v2, v1]
+    elif op == 'dup2_x1':
+        if len(sim.stack) >= 3:
+            v1 = sim.stack.pop(); v2 = sim.stack.pop(); v3 = sim.stack.pop()
+            sim.stack += [v2, v1, v3, v2, v1]
+    elif op == 'dup2_x2':
+        if len(sim.stack) >= 4:
+            v1 = sim.stack.pop(); v2 = sim.stack.pop()
+            v3 = sim.stack.pop(); v4 = sim.stack.pop()
+            sim.stack += [v2, v1, v4, v3, v2, v1]
+    elif op == 'swap':
+        if len(sim.stack) >= 2:
+            sim.stack[-1], sim.stack[-2] = sim.stack[-2], sim.stack[-1]
     elif op == 'pop':
         if sim.stack:
             e_expr, _ = sim.pop()
@@ -320,11 +428,13 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             sim.push(RawExpr(f"{render_expr(obj_expr)}.field"), I32)
 
     elif op == 'putfield':
-        val_expr, _ = sim.pop()
+        val_expr, val_ty = sim.pop()
         obj_expr, obj_ty = sim.pop()
         if comment:
-            _, fname, _ = _parse_field_ref(comment)
-            sim.emit(RawStmt(f"{render_expr(obj_expr)}.{fname}.set({render_expr(val_expr)});"))
+            _, fname, fdesc = _parse_field_ref(comment)
+            ftype = jvm_to_rust(fdesc, registry) if fdesc else 'i32'
+            val_str = _coerce_value(render_expr(val_expr), val_ty, ftype)
+            sim.emit(RawStmt(f"{render_expr(obj_expr)}.{fname}.set({val_str});"))
         else:
             sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))
 
@@ -362,13 +472,24 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         v = sim.fresh('_arr')
         sim.emit(RawStmt(f"let mut {v}: Vec<Vec<i32>> = vec![vec![0i32; {sizes[-1]} as usize]; {sizes[0]} as usize];"))
         sim.push(Var(v), RsGeneric('Vec', [RsGeneric('Vec', [I32])]))
-    elif op in ('iastore', 'bastore', 'sastore', 'castore',
-                'lastore', 'fastore', 'dastore', 'aastore'):
+    elif op in ('iastore', 'lastore', 'fastore', 'dastore', 'aastore'):
         val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {render_expr(val_expr)};"))
-    elif op in ('iaload', 'baload', 'saload', 'caload'):
+    elif op == 'bastore':
+        val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as i8;"))
+    elif op == 'sastore':
+        val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as i16;"))
+    elif op == 'castore':
+        val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as u16;"))
+    elif op == 'iaload':
         idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
         sim.push(RawExpr(f"{render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize]"), I32)
+    elif op in ('baload', 'saload', 'caload'):
+        idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        sim.push(RawExpr(f"({render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize] as i32)"), I32)
     elif op in ('laload', 'faload', 'daload'):
         idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
         ty = {'l': I64, 'f': F32, 'd': F64}.get(op[0], I32)
@@ -395,8 +516,12 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         e_expr, _ = sim.pop()
         sim.emit(RawStmt(f"return Ok({render_expr(e_expr)});"))
     elif op == 'areturn':
-        e_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"return Ok({render_expr(e_expr)});"))
+        e_expr, e_ty = sim.pop()
+        expr_s = render_expr(e_expr)
+        # 实例方法返回 this 时，this 是 &Self 引用，需要 clone() 才能返回 owned 值
+        if expr_s == 'this' and not sim.is_static:
+            expr_s = 'this.clone()'
+        sim.emit(RawStmt(f"return Ok({expr_s});"))
 
     # ── 控制流（循环由 method.py 处理，此处跳过）──
     elif op.startswith('if_icmp') or op.startswith('if') or op == 'goto':
@@ -423,6 +548,18 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             _gen_string_concat(sim, comment)
         else:
             sim.emit(RawStmt(f"/* TODO: {op} {operand} */"))
+
+    # ── 同步（忽略，不支持多线程语义）──
+    elif op == 'monitorenter':
+        sim.pop()  # pop object reference，忽略 monitor
+    elif op == 'monitorexit':
+        sim.pop()  # pop object reference，忽略 monitor
+
+    # ── switch（弹出 key，线性继续，不跳转）──
+    elif op in ('tableswitch', 'lookupswitch'):
+        key, _ = sim.pop()
+        key_s = render_expr(key)
+        sim.emit(RawStmt(f"let _switch_key = {key_s};"))
 
     # ── 杂项 ──
     elif op in ('nop', 'wide'): pass
@@ -595,11 +732,19 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
 
     cls, mname, params, ret = parse_method_ref(comment)
     args = []
-    for _ in range(len(params)):
+    for param_jvm in reversed(params):
         e_expr, ty_node = sim.pop()
         e = render_expr(e_expr)
         ty = render_type(ty_node)
-        args.insert(0, f"{e}.clone()" if ty.startswith('Vec<') else e)
+        expected = jvm_to_rust(param_jvm, registry)
+        if expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
+            e = _coerce_value(e, ty_node, expected)
+        elif expected == 'i32' and ty in ('i8', 'i16', 'u16'):
+            e = f"({e} as i32)"
+        elif ty not in _PRIMITIVE_RUST_TYPES:
+            # 引用类型（含 Rc<>）按 Java 引用语义传递：clone 防止移动
+            e = f"{e}.clone()"
+        args.insert(0, e)
 
     needs_q = False  # 是否加 ?（用户类方法返回 Result）
 
@@ -616,13 +761,13 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         return
 
     if cls is None or cls == class_name:
-        rust_mname = _mangle_if_overloaded(class_name, mname, comment, registry)
+        rust_mname = _safe_field(_mangle_if_overloaded(class_name, mname, comment, registry))
         call = f"Self::{rust_mname}({', '.join(args)})"
         needs_q = True
     elif cls and '/' in cls:
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
-        rust_mname = _mangle_if_overloaded(cls, mname, comment, registry)
+        rust_mname = _safe_field(_mangle_if_overloaded(cls, mname, comment, registry))
         call = f"{cls}::{rust_mname}({', '.join(args)})"
         needs_q = True
 
@@ -652,8 +797,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         actual_rust = render_type(e_ty_node)
         if expected_rust == 'Object' and actual_rust not in ('Object', '()'):
             e_str = f"{e_str}.into()"
-        elif actual_rust not in _PRIMITIVE_RUST_TYPES and not actual_rust.startswith('Rc<'):
-            # 类类型按 Java 引用语义传递：clone 防止移动（Rc clone 共享所有权，廉价）
+        elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
+            e_str = _coerce_value(e_str, e_ty_node, expected_rust)
+        elif expected_rust == 'i32' and actual_rust in ('i8', 'i16', 'u16'):
+            e_str = f"({e_str} as i32)"
+        elif actual_rust not in _PRIMITIVE_RUST_TYPES:
+            # 类类型和 Rc 类型按 Java 引用语义传递：clone 防止移动（Rc clone 共享所有权，廉价）
             e_str = f"{e_str}.clone()"
         args.insert(0, e_str)
     obj_expr, obj_ty_node = sim.pop()
@@ -674,10 +823,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 若接收方 Rust 类型是 java_runtime 手写类，不做 mangle
     obj_base = obj_ty.split('<')[0].strip()  # 去泛型后缀（ArrayList<T> → ArrayList）
     if obj_base in _JAVA_RUNTIME_SHORT_NAMES:
-        rust_mname = mname
+        rust_mname = _safe_field(mname)
     else:
         # 查 registry 确认是否有重载（用户类 + JDK 类均检查），有则 mangle 调用名
-        rust_mname = _mangle_if_overloaded(cls or '', mname, comment, registry)
+        rust_mname = _safe_field(_mangle_if_overloaded(cls or '', mname, comment, registry))
 
     # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
     arg_str = ', '.join(args)

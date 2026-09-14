@@ -61,18 +61,26 @@ class StackSim:
         self._loc_names  = local_names or {}     # slot → Java variable name
         self._hint_types = slot_hint_types or {}  # slot → precise RsType from LocalVariableTypeTable
 
+        def _is_wide(rt: RsType) -> bool:
+            """long (i64) 和 double (f64) 在 JVM 中各占 2 个局部变量槽。"""
+            return isinstance(rt, RsPrimitive) and rt.name in ('i64', 'f64')
+
         if is_static:
-            for slot, rt in enumerate(param_rust_types):
+            slot = 0
+            for rt in param_rust_types:
                 name = _safe_name(self._loc_names.get(slot, f"arg_{slot}"))
                 self.locals[slot] = (name, rt, False)
+                slot += 2 if _is_wide(rt) else 1
         else:
             # this 是当前类的句柄，用 short_cls 转换 JVM 二进制名到 Rust 短名
             rust_cls = _short_cls(class_name) if class_name else 'Object'
             this_ty = RsNamed(rust_cls) if rust_cls else RsNamed("Object")
             self.locals[0] = ("this", this_ty, False)
-            for slot, rt in enumerate(param_rust_types):
-                name = _safe_name(self._loc_names.get(slot + 1, f"arg_{slot}"))
-                self.locals[slot + 1] = (name, rt, False)
+            slot = 1
+            for idx, rt in enumerate(param_rust_types):
+                name = _safe_name(self._loc_names.get(slot, f"arg_{idx}"))
+                self.locals[slot] = (name, rt, False)
+                slot += 2 if _is_wide(rt) else 1
 
     # ── 生成新的临时变量名 ───────────────────────────────────────────────────
 
