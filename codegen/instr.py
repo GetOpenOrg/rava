@@ -785,10 +785,8 @@ def _gen_string_concat(sim: StackSim, comment: str):
 
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     if '<init>' not in comment and '"<init>"' not in comment:
-        cls, _, _, _ = parse_method_ref(comment)
-        if not cls or cls == 'Object':
-            return  # super() 忽略
-        _gen_invokestatic(sim, comment, class_name, registry=registry)
+        # super.method() 调用：用 invokevirtual 语义（弹出 receiver + args）
+        _gen_invokevirtual(sim, comment, class_name, registry=registry)
         return
 
     cls, _, params, _ = parse_method_ref(comment)
@@ -809,7 +807,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             e = f"Object::from_any(self.clone())"
         elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, e_ty_node, expected)
-        elif expected == 'i32' and ty in ('i8', 'i16', 'u16'):
+        elif expected == 'i32' and ty in ('i8', 'i16', 'u16', 'bool'):
             e = f"({e} as i32)"
         elif ty not in _PRIMITIVE_RUST_TYPES:
             e = f"{e}.clone()"
@@ -950,7 +948,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             e = _coerce_to_object(e, ty)
         elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, ty_node, expected)
-        elif expected == 'i32' and ty in ('i8', 'i16', 'u16'):
+        elif expected == 'i32' and ty in ('i8', 'i16', 'u16', 'bool'):
             e = f"({e} as i32)"
         elif ty not in _PRIMITIVE_RUST_TYPES:
             e = f"{e}.clone()"
