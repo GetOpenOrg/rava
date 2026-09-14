@@ -4,7 +4,7 @@ pub fn new() -> Result<ArrayList<Object>> {
 }
 
 /// java/util/ArrayList.add:(Ljava/lang/Object;)Z
-pub fn add__obj<E: Clone + 'static>(_this: &ArrayList<E>, e: Object) -> Result<bool> {
+pub fn add__obj<E: Clone + Default + 'static>(_this: &ArrayList<E>, e: Object) -> Result<bool> {
     let rc = _this.elementData.get();
     rc.borrow_mut().push(e);
     _this.size.set(_this.size.get() + 1);
@@ -12,12 +12,12 @@ pub fn add__obj<E: Clone + 'static>(_this: &ArrayList<E>, e: Object) -> Result<b
 }
 
 /// java/util/ArrayList.size:()I
-pub fn size<E: Clone + 'static>(_this: &ArrayList<E>) -> Result<i32> {
+pub fn size<E: Clone + Default + 'static>(_this: &ArrayList<E>) -> Result<i32> {
     Ok(_this.size.get())
 }
 
 /// java/util/ArrayList.get:(I)Ljava/lang/Object;
-pub fn get__i<E: Clone + 'static>(_this: &ArrayList<E>, index: i32) -> Result<Object> {
+pub fn get__i<E: Clone + Default + 'static>(_this: &ArrayList<E>, index: i32) -> Result<Object> {
     let rc = _this.elementData.get();
     let vec = rc.borrow();
     vec.get(index as usize).cloned()
@@ -25,12 +25,12 @@ pub fn get__i<E: Clone + 'static>(_this: &ArrayList<E>, index: i32) -> Result<Ob
 }
 
 /// java/util/ArrayList.isEmpty:()Z
-pub fn isEmpty<E: Clone + 'static>(_this: &ArrayList<E>) -> Result<bool> {
+pub fn isEmpty<E: Clone + Default + 'static>(_this: &ArrayList<E>) -> Result<bool> {
     Ok(_this.size.get() == 0)
 }
 
 /// java/util/ArrayList.clear:()V
-pub fn clear<E: Clone + 'static>(_this: &ArrayList<E>) -> Result<()> {
+pub fn clear<E: Clone + Default + 'static>(_this: &ArrayList<E>) -> Result<()> {
     let rc = _this.elementData.get();
     rc.borrow_mut().clear();
     _this.size.set(0);
@@ -38,7 +38,7 @@ pub fn clear<E: Clone + 'static>(_this: &ArrayList<E>) -> Result<()> {
 }
 
 /// java/util/ArrayList.iterator:()Ljava/util/Iterator;
-pub fn iterator<E: Clone + 'static>(_this: &ArrayList<E>) -> Result<Object> {
+pub fn iterator<E: Clone + Default + 'static>(_this: &ArrayList<E>) -> Result<Object> {
     let iter = Iterator::<Object> {
         _data: JField::new(_this.elementData.get()),
         _pos: JField::new(0i32),
@@ -48,7 +48,7 @@ pub fn iterator<E: Clone + 'static>(_this: &ArrayList<E>) -> Result<Object> {
 }
 
 /// java/util/ArrayList.contains:(Ljava/lang/Object;)Z
-pub fn contains__obj<E: Clone + 'static>(_this: &ArrayList<E>, o: Object) -> Result<bool> {
+pub fn contains__obj<E: Clone + Default + 'static>(_this: &ArrayList<E>, o: Object) -> Result<bool> {
     let data = _this.elementData.get();
     let vec = data.borrow();
     let found = vec.iter().any(|x| std::rc::Rc::ptr_eq(&x.0, &o.0));

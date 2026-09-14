@@ -219,9 +219,9 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
             if cls not in jdk_infos:
                 jdk_infos[cls] = ci
 
-            # 追踪该方法的指令引用
+            # 追踪该方法的指令引用（精确匹配名字+描述符，避免重载方法误展开）
             for m in ci.methods:
-                if m.name == meth:
+                if m.name == meth and m.descriptor == desc:
                     enqueue_refs(m.instrs or [])
 
         # field_discover_classes：只需生成类型存根，所有方法均为 panic! stub，不展开

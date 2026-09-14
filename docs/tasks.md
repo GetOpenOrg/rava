@@ -1273,9 +1273,11 @@ elif op == 'instanceof':
 ### T55 · 构建 ClassHierarchy 类层次图
 **状态**：`[ ]`  
 **文件**：`codegen/hierarchy.py`（新建）、`codegen/transpile.py`、`codegen/emitter.py`  
-**优先级**：P2
+**优先级**：**P0（与 T76 并列，是 T76 的基础设施）**
 
-**背景**：codegen 完全没有继承关系信息，无法做多态路由、instanceof 判断、继承字段/方法查找。这导致大量 E0609（继承字段缺失）和 E0599（父类方法找不到）错误。
+**背景**：codegen 完全没有继承关系信息，无法做多态路由、instanceof 判断、继承字段/方法查找。
+这是当前 2333 个编译错误中 1422 个（61%）的根本原因。T55 是 T76（字段展平）的必要前置条件，
+两者应同时开始，T55 完成后立即实施 T76。详细实施规格见 T76。
 
 **实施步骤**：
 
@@ -2537,3 +2539,194 @@ CFG 陷阱清单           ─ 作为 T56/T62 实施时的检查清单使用，�
 - 立即（P1 正确性）：T73（wrapping 算术，避免 debug 模式 panic）
 - 短期：T74（`$assertionsDisabled` 一处改动，五分钟可完成）
 - 长期（依赖 T62）：T75（Result 裁剪，需异常表解析作为基础）
+
+---
+
+## 阶段十五：架构级修复（消除 61% 错误的根因）
+
+> **背景（2026-09-14）**：当前 2333 个编译错误中，61%（约 1422 个）来自同一根因——
+> Java 类继承层次在生成的 Rust 代码中完全缺失。所有基于错误码的补丁式修复（T68/T64/E0277 等）
+> 都无法触及这一问题。本阶段的两个任务是从架构层面解决这 1422 个错误的唯一正确路径。
+
+### T76 · 类继承：字段展平 + 上转型 From impl
+
+**状态**：`[ ]`  
+**文件**：`codegen/hierarchy.py`（新建，T55 前置）、`codegen/emitter.py`（struct 生成段扩展）  
+**优先级**：**P0（架构级，高于所有其他任务）**  
+**依赖**：T55（ClassHierarchy 继承图），两者可并行开发，T76 的 Step 1-2 即是 T55 的核心
+
+**背景**：
+
+Java 的单继承体系在生成的 Rust 代码中完全缺失：
+
+```
+Java:   FileNotFoundException  extends  IOException  extends  Exception
+Rust:   三个完全独立的 struct，互不认识
+```
+
+这导致了三类级联错误（共 1422 个，占总错误 61%）：
+- **E0609（64 个）**：`no field 'lock' on BufferedReader` — 父类字段没有被子类 struct 包含
+- **E0308（~1200 个子集）**：`expected IOException, found FileNotFoundException` — 子类不能用于父类期望的位置
+- **E0599（部分）**：父类方法在子类 struct 上找不到
+
+**为什么补丁式修复无效**：
+- E0609 每次只能修一个字段，无法系统性覆盖
+- E0308 每次只能修一个调用点，但同类错误有 1358 个
+- 根因是代码生成模型缺少继承关系，单靠修改生成后的代码无法解决
+
+**实施步骤**：
+
+**Step 1：继承图（hierarchy.py）**
+
+```python
+# codegen/hierarchy.py
+@dataclass
+class ClassHierarchy:
+    _classes: dict[str, ClassInfo]   # binary_name → ClassInfo
+
+    def all_superclasses(self, name: str) -> list[str]:
+        """按 [直接父类, 祖父类, ...] 顺序返回祖先链（不含 Object）"""
+        result = []
+        cur = self._classes.get(name)
+        while cur and cur.super_class and cur.super_class != 'java/lang/Object':
+            result.append(cur.super_class)
+            cur = self._classes.get(cur.super_class)
+        return result
+
+    def all_fields(self, name: str) -> list[FieldInfo]:
+        """收集该类及所有祖先类的字段（子类优先，祖先类字段追加在后）"""
+        own = list(self._classes.get(name, ClassInfo()).fields)
+        for anc in self.all_superclasses(name):
+            anc_ci = self._classes.get(anc)
+            if anc_ci:
+                own.extend(f for f in anc_ci.fields
+                           if f.name not in {x.name for x in own})
+        return own
+
+    def is_subtype(self, sub: str, sup: str) -> bool:
+        """判断 sub 是否是 sup 的子类型（含接口）"""
+        if sub == sup:
+            return True
+        ci = self._classes.get(sub)
+        if ci is None:
+            return False
+        if ci.super_class and self.is_subtype(ci.super_class, sup):
+            return True
+        return any(self.is_subtype(iface, sup) for iface in (ci.interfaces or []))
+```
+
+**Step 2：struct 生成时字段展平（emitter.py）**
+
+在 `_gen_struct_fields` 中（当前只用 `ci.fields`），改为：
+
+```python
+# 用继承图收集全部字段（含父类字段）
+all_fields = hierarchy.all_fields(ci.name) if hierarchy else ci.fields
+for f in all_fields:
+    # ... 生成 pub field_name: JField<Type>
+```
+
+此步消除所有 E0609 错误（64 个）。
+
+**Step 3：生成 From impl（emitter.py）**
+
+对每个有父类的类，在 struct 定义后追加：
+
+```python
+# 生成：impl From<FileNotFoundException> for IOException { ... }
+def _gen_from_impls(ci: ClassInfo, hierarchy: ClassHierarchy) -> str:
+    lines = []
+    child_name = ci.name.split('/')[-1]
+    for anc in hierarchy.all_superclasses(ci.name):
+        anc_name = anc.split('/')[-1]
+        anc_ci = hierarchy._classes.get(anc)
+        if anc_ci is None:
+            continue
+        field_inits = ', '.join(
+            f'{f.name}: v.{f.name}.clone()'
+            for f in anc_ci.fields
+        )
+        lines.append(
+            f'impl From<{child_name}> for {anc_name} {{\n'
+            f'    fn from(v: {child_name}) -> Self {{\n'
+            f'        {anc_name} {{ {field_inits} }}\n'
+            f'    }}\n'
+            f'}}'
+        )
+    return '\n'.join(lines)
+```
+
+**Step 4：调用侧插入 .into()（emitter.py / instr.py）**
+
+当 Rust 类型系统期望父类类型但实际是子类时，在生成的调用代码中插入 `.into()`。
+这需要在 instr.py 的 invokevirtual/invokestatic 参数生成处，对比参数的期望类型与实际类型，
+使用 `hierarchy.is_subtype(actual, expected)` 判断是否需要转换。
+
+**预计收益**：
+- E0609（64 个）：完全消除
+- E0308（1358 个中的 ~1000 个）：消除"expected Parent, found Child"类型
+- 错误总数预计从 2333 降至约 900-1200
+
+**验收**：
+- `AbstractList.modCount` 出现在 `ArrayList` struct 中（字段展平）
+- `FileNotFoundException` 可以赋值给 `IOException` 类型的变量（From impl）
+- E0609 错误数为 0
+- E0308 错误数下降 50% 以上
+
+---
+
+### T77 · 类型擦除一致性（方法边界 Object 化）
+
+**状态**：`[ ]`  
+**文件**：`codegen/emitter.py`（方法签名生成）、`codegen/instr.py`（调用侧参数传递）  
+**优先级**：P1  
+**依赖**：T76 完成后实施（T76 消除了继承类型的不匹配，T77 处理剩余的擦除不一致问题）
+
+**背景**：
+
+JVM 字节码层面，所有引用类型在方法边界上都是 `Object`（类型擦除）。生成的 Rust 代码在某些地方用具体类型，在某些地方用 `Object`，导致不匹配：
+
+```rust
+// 生成的方法签名（具体类型）：
+fn add(&self, e: String) -> Result<bool>
+
+// 调用侧（传 Object）：
+self.add(obj)?  // E0308: expected String, found Object
+```
+
+而 JVM 真实情况是：`ArrayList.add(Ljava/lang/Object;)Z` 的参数类型在字节码层就是 Object。
+
+**解决方向**：
+
+对于方法参数类型，遵循 JVM 字节码的实际描述符，而非 Java 源码层的泛型参数：
+- `ArrayList.add(Ljava/lang/Object;)Z` → 参数类型 `Object`，不是 `E`
+- 在调用侧自动插入 `Object::from_any(val)` 将具体类型擦除为 Object
+- 在方法体内需要具体类型时，用 `downcast` 恢复
+
+这与当前 `Object::from_any` + downcast 机制的方向一致，但需要系统性地在所有方法边界执行，而非只在特定位置手动处理。
+
+**注意**：此任务与 T76 有交叉，T76 优先。T76 完成后通过编译日志重新评估 E0308 剩余量，
+再决定 T77 的实施范围。
+
+**验收**：
+- 所有 `ArrayList.add` / `HashMap.put` 等泛型集合方法的参数接收 Object
+- E0308 中"expected Object, found ConcreteType"类错误数为 0
+
+---
+
+**阶段十五任务依赖**：
+
+```
+T55（ClassHierarchy 继承图）─────────────────────→ T76（字段展平 + From impl）★ 最高优先
+                            │                              │
+                            ├──→ T53（instanceof）        消除 E0609 + 大部分 E0308
+                            ├──→ T69（virtual BFS）       预计从 2333 降至 ~900
+                            └──→ T66（泛型推断）
+
+T76（字段展平）完成后 ──→ T77（类型擦除一致性）──→ 消除剩余 E0308
+```
+
+**推荐执行序**：
+1. **立即**：T55 + T76 并行开始（T55 是 T76 的前置，但可同步设计）
+2. **T76 完成后**：重新 cargo check，评估剩余 E0308 数量
+3. **视剩余量**：决定是否执行 T77，还是先做 T53（instanceof）/ T62（异常表）

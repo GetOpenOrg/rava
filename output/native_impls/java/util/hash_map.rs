@@ -6,7 +6,7 @@ pub fn new() -> Result<HashMap<Object, Object>> {
     Ok(map)
 }
 
-fn _get_store<K: Clone + 'static, V: Clone + 'static>(this: &HashMap<K, V>) -> Rc<RefCell<Vec<(Object, Object)>>> {
+fn _get_store<K: Clone + Default + 'static, V: Clone + Default + 'static>(this: &HashMap<K, V>) -> Rc<RefCell<Vec<(Object, Object)>>> {
     this.table.get().downcast::<Rc<RefCell<Vec<(Object, Object)>>>>()
 }
 
@@ -20,7 +20,7 @@ fn _obj_eq(a: &Object, b: &Object) -> bool {
 }
 
 /// java/util/HashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
-pub fn put<K: Clone + 'static, V: Clone + 'static>(_this: &HashMap<K, V>, key: Object, value: Object) -> Result<Object> {
+pub fn put<K: Clone + Default + 'static, V: Clone + Default + 'static>(_this: &HashMap<K, V>, key: Object, value: Object) -> Result<Object> {
     let store = _get_store(_this);
     let mut vec = store.borrow_mut();
     for (k, v) in vec.iter_mut() {
@@ -36,7 +36,7 @@ pub fn put<K: Clone + 'static, V: Clone + 'static>(_this: &HashMap<K, V>, key: O
 }
 
 /// java/util/HashMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
-pub fn get<K: Clone + 'static, V: Clone + 'static>(_this: &HashMap<K, V>, key: Object) -> Result<Object> {
+pub fn get<K: Clone + Default + 'static, V: Clone + Default + 'static>(_this: &HashMap<K, V>, key: Object) -> Result<Object> {
     let store = _get_store(_this);
     let vec = store.borrow();
     for (k, v) in vec.iter() {
@@ -48,21 +48,21 @@ pub fn get<K: Clone + 'static, V: Clone + 'static>(_this: &HashMap<K, V>, key: O
 }
 
 /// java/util/HashMap.containsKey:(Ljava/lang/Object;)Z
-pub fn containsKey<K: Clone + 'static, V: Clone + 'static>(_this: &HashMap<K, V>, key: Object) -> Result<bool> {
+pub fn containsKey<K: Clone + Default + 'static, V: Clone + Default + 'static>(_this: &HashMap<K, V>, key: Object) -> Result<bool> {
     let store = _get_store(_this);
     let vec = store.borrow();
     Ok(vec.iter().any(|(k, _)| _obj_eq(k, &key)))
 }
 
 /// java/util/HashMap.size:()I
-pub fn size<K: Clone + 'static, V: Clone + 'static>(_this: &HashMap<K, V>) -> Result<i32> {
+pub fn size<K: Clone + Default + 'static, V: Clone + Default + 'static>(_this: &HashMap<K, V>) -> Result<i32> {
     let store = _get_store(_this);
     let n = store.borrow().len() as i32;
     Ok(n)
 }
 
 /// java/util/HashMap.isEmpty:()Z
-pub fn isEmpty<K: Clone + 'static, V: Clone + 'static>(_this: &HashMap<K, V>) -> Result<bool> {
+pub fn isEmpty<K: Clone + Default + 'static, V: Clone + Default + 'static>(_this: &HashMap<K, V>) -> Result<bool> {
     let store = _get_store(_this);
     let empty = store.borrow().is_empty();
     Ok(empty)

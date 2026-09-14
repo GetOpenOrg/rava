@@ -2,7 +2,7 @@
 // @jvm_class: java/util/HashSet
 // @jvm_rename: add -> add_obj, contains -> contains_obj
 
-impl<E: Clone + Into<Object> + From<Object> + 'static> HashSet<E> {
+impl<E: Clone + Default + Into<Object> + From<Object> + 'static> HashSet<E> {
     /// Java: new HashSet<E>() — 类型安全构造器
     pub fn new_typed() -> Result<HashSet<E>> {
         let base = HashSet::<Object>::new()?;

@@ -6,7 +6,7 @@ pub fn new() -> Result<HashSet<Object>> {
     Ok(set)
 }
 
-fn _get_store<E: Clone + 'static>(this: &HashSet<E>) -> Rc<RefCell<Vec<Object>>> {
+fn _get_store<E: Clone + Default + 'static>(this: &HashSet<E>) -> Rc<RefCell<Vec<Object>>> {
     this.map.get().downcast::<Rc<RefCell<Vec<Object>>>>()
 }
 
@@ -19,7 +19,7 @@ fn _obj_eq(a: &Object, b: &Object) -> bool {
 }
 
 /// java/util/HashSet.add:(Ljava/lang/Object;)Z
-pub fn add<E: Clone + 'static>(_this: &HashSet<E>, e: Object) -> Result<bool> {
+pub fn add<E: Clone + Default + 'static>(_this: &HashSet<E>, e: Object) -> Result<bool> {
     let store = _get_store(_this);
     let mut vec = store.borrow_mut();
     if vec.iter().any(|x| _obj_eq(x, &e)) {
@@ -30,21 +30,21 @@ pub fn add<E: Clone + 'static>(_this: &HashSet<E>, e: Object) -> Result<bool> {
 }
 
 /// java/util/HashSet.contains:(Ljava/lang/Object;)Z
-pub fn contains<E: Clone + 'static>(_this: &HashSet<E>, o: Object) -> Result<bool> {
+pub fn contains<E: Clone + Default + 'static>(_this: &HashSet<E>, o: Object) -> Result<bool> {
     let store = _get_store(_this);
     let vec = store.borrow();
     Ok(vec.iter().any(|x| _obj_eq(x, &o)))
 }
 
 /// java/util/HashSet.size:()I
-pub fn size<E: Clone + 'static>(_this: &HashSet<E>) -> Result<i32> {
+pub fn size<E: Clone + Default + 'static>(_this: &HashSet<E>) -> Result<i32> {
     let store = _get_store(_this);
     let n = store.borrow().len() as i32;
     Ok(n)
 }
 
 /// java/util/HashSet.isEmpty:()Z
-pub fn isEmpty<E: Clone + 'static>(_this: &HashSet<E>) -> Result<bool> {
+pub fn isEmpty<E: Clone + Default + 'static>(_this: &HashSet<E>) -> Result<bool> {
     let store = _get_store(_this);
     let empty = store.borrow().is_empty();
     Ok(empty)

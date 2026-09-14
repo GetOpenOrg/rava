@@ -2,8 +2,25 @@
 
 **日期**：2026-09-14（持续更新）  
 **目标**：`cd output && cargo check` 输出 `error[E*]: 0`  
-**当前**：6224 errors（2026-09-14）  
-**基线**：8251 errors（项目启动）→ 已降 24.6%
+**当前**：2333 errors（2026-09-14，cargo_check_method_import.log）  
+**基线**：8251 errors（项目启动）→ 已降 71.7%
+
+---
+
+## ⚠️ 架构警示：补丁式修复的局限
+
+**当前 2333 个错误中，61%（~1422 个）来自同一根因：Java 类继承层次在 Rust 中没有任何表示。**
+
+这意味着以下类别的错误，无论如何打补丁都无法消除：
+
+- **E0308（1358 个）**：`expected IOException, found FileNotFoundException`
+  — 子类无法用于父类期望的位置，因为 Rust 中两者是完全独立的 struct
+- **E0609（64 个）**：`no field 'lock' on BufferedReader`
+  — 父类字段没有被子类 struct 继承
+- **E0599 大量**：继承来的方法在子类 struct 上找不到
+
+**唯一正确的解法是 T76（字段展平 + 上转型 impl）+ T55（ClassHierarchy）**。
+在完成这两个任务之前，不应继续以打补丁方式处理 E0308/E0609。
 
 ---
 
@@ -91,7 +108,78 @@
 │           根因：transpile.py BFS 用 list.pop(0)，大型类图下 O(n²)
 │           解决：from collections import deque，push_back + popleft，均摊 O(1)
 │
-├── 第 3 层：P2 类型不匹配（E0308 主力修复）
+├── 第 3 层：P2 类型不匹配（E0308 主力修复）★ 当前瓶颈层，61% 错误在此
+│   │
+│   ├── ❌ 类继承层次：字段展平 + 上转型 impl（T76 · P0 → 立即执行）
+│   │       错误类型：E0308（1358个）+ E0609（64个）= 共 1422 个，占总错误 61%
+│   │       根因：Java 的单继承体系在 Rust 中完全缺失。
+│   │             `FileNotFoundException extends IOException extends Exception` 在 Rust 中
+│   │             是三个独立 struct，互不认识：
+│   │             • E0609：子类 struct 不包含父类字段（如 lock、buf 等继承字段）
+│   │             • E0308：子类实例不能传给期望父类类型的参数/变量
+│   │             • E0599（部分）：父类的方法对子类 struct 不可见
+│   │       解决（架构级，非补丁）：
+│   │         Step 1 - 构建继承图（T55 前置）
+│   │           读取每个 ClassInfo 的 super_class / interfaces 字段，
+│   │           建立 `class → (super, [interface...])` 映射。
+│   │         Step 2 - 字段展平（Field Flattening）
+│   │           生成子类 struct 时，递归收集所有祖先类的字段并内联到子类 struct 中。
+│   │           ```rust
+│   │           // Java: IOException extends Exception
+│   │           // 生成时合并 Exception 的字段到 IOException
+│   │           pub struct IOException {
+│   │               // 继承自 Throwable:
+│   │               pub detailMessage: JField<String>,
+│   │               pub cause:         JField<Object>,
+│   │               // 继承自 Exception: (无新字段)
+│   │               // IOException 自己的字段:
+│   │               // (无)
+│   │           }
+│   │           ```
+│   │           此举一次性消除所有 E0609 错误。
+│   │         Step 3 - 上转型 From impl
+│   │           为每对父子类生成 `impl From<Child> for Parent`，
+│   │           使子类实例可以通过 `.into()` 转换为父类类型。
+│   │           ```rust
+│   │           impl From<FileNotFoundException> for IOException {
+│   │               fn from(v: FileNotFoundException) -> Self {
+│   │                   IOException { detailMessage: v.detailMessage, cause: v.cause }
+│   │               }
+│   │           }
+│   │           impl From<FileNotFoundException> for Exception { ... }
+│   │           impl From<FileNotFoundException> for Throwable { ... }
+│   │           ```
+│   │         Step 4 - 调用侧插入 .into() 强转
+│   │           在 emitter/instr.py 的类型不匹配位置（期望父类、实际子类），
+│   │           自动插入 `.into()` 或 `Parent::from(child)` 进行显式转换。
+│   │           此举消除 E0308 中"expected ParentType, found ChildType"类型的错误。
+│   │         Step 5 - 方法转发（可选，解决 E0599 继承方法缺失）
+│   │           子类 struct 上添加对父类方法的委托调用：
+│   │           ```rust
+│   │           impl FileNotFoundException {
+│   │               pub fn getMessage(&self) -> Result<String> {
+│   │                   // 委托给 Exception 的实现（字段展平后直接访问）
+│   │                   Exception::getMessage_impl(&self.detailMessage)
+│   │               }
+│   │           }
+│   │           ```
+│   │       实现位置：`codegen/emitter.py`（struct 生成段），
+│   │                  新建 `codegen/hierarchy.py`（继承图 + 字段收集）
+│   │       预计收益：消除 ~1422 个错误（E0308 大部分 + E0609 全部），
+│   │                  错误总数从 2333 降至约 900。
+│   │       注意：字段展平可能导致部分 native_impls 的 struct 初始化需要更新。
+│   │
+│   ├── ❌ 类型擦除不一致（T77 · P1）
+│   │       错误类型：E0308（约 200-300 个，去除继承问题后的剩余）
+│   │       根因：JVM 在运行时擦除泛型，一切都是 Object。
+│   │             生成代码在某些地方用具体类型，某些地方用 Object，导致不匹配。
+│   │             例：method 接受 `Object`，调用侧传 `String`，Rust 报类型不匹配。
+│   │       解决（架构级）：
+│   │         在方法边界处（参数/返回值），统一用 `Object` 进行类型擦除。
+│   │         在方法体内部，从 Object downcast 到具体类型。
+│   │         调用侧传参时，自动插入 `Object::from_any(val)` 或 `val.into()`。
+│   │         这与 JVM 真实语义一致（字节码层面所有引用类型传参都是 Object）。
+│   │       注意：此任务与 T76 有交叉，T76 完成后再评估剩余的 E0308 数量。
 │   │
 │   ├── ❌ instanceof 语义修复（T53 · P1→P2）
 │   │       错误类型：E0308（bool ← i32）+ 运行时语义错误
@@ -99,11 +187,18 @@
 │   │       解决：接入 ClassHierarchy（T55）后实现真实 is_instance_of 检查
 │   │       依赖：T55 ClassHierarchy 完成后
 │   │
-│   ├── ❌ ClassHierarchy 类层次图（T55 · P2）← T53/T69 的前置条件
-│   │       错误类型：不直接产生编译错误，是 T53/T69 的基础设施
-│   │       根因：缺少继承图导致 instanceof/invokevirtual 无法正确解析
-│   │       解决：构建 {class → [superclass, interfaces]} 图
-│   │             支持 is_subtype(A, B)、all_subclasses(C)、field_lookup(C, f)
+│   ├── ❌ ClassHierarchy 类层次图（T55 · P2）← T53/T69/T76 的前置条件
+│   │       错误类型：不直接产生编译错误，是 T53/T69/T76 的基础设施
+│   │       根因：缺少继承图导致 instanceof/invokevirtual 无法正确解析；
+│   │             字段展平（T76）也依赖此图确定哪些字段需要从祖先类复制
+│   │       解决：构建 {class → (superclass, [interfaces], [fields], [methods])} 图
+│   │             支持：
+│   │               is_subtype(A, B) → bool
+│   │               all_superclasses(C) → list[str]（按继承链顺序）
+│   │               all_fields(C) → list[FieldInfo]（含继承字段，去重）
+│   │               lookup_virtual(class, method, desc) → str | None
+│   │             数据来源：ClassInfo.super_class + ClassInfo.interfaces（已解析）
+│   │       实现位置：新建 `codegen/hierarchy.py`，在 transpile.py 中构建并传入 emitter
 │   │
 │   ├── ❌ invokevirtual BFS 完整性（T69 · P2）
 │   │       错误类型：E0308（实际调用子类方法，Rust 类型不匹配）
@@ -229,21 +324,33 @@
 | aastore/areturn | 2026-09 | Object 强制转换 | 6445 | — |
 | icmp 操作数 | 2026-09-14 | _coerce_icmp_operand（u16/i8/i16 → i32）| 6420 | `method.py` |
 | Object 返回类型 | 2026-09-14 | Object 接收方调用返回具体类型时 Default::default() 占位 | 6224 | `instr.py` |
+| E0072 JField Box化 | 2026-09-14 | JField<T> → Box<RefCell<T>>，修复递归类型错误 | 3796 | `types.rs`（注：暴露了原被掩盖的 3000 个错误）|
+| 构造器存根 + 静态字段 | 2026-09-14 | _gen_native_stub 构造器签名修复；静态字段 getter stub | 2551 | `emitter.py` |
+| loop 变量提升 | 2026-09-14 | _hoist_loop_vars：JVM 函数级作用域 vs Rust 块级 | 2420 | `method.py` |
+| E0592 方法名去重 | 2026-09-14 | mangle_name 碰撞修复，rust_name 传入 gen_method_body | 2501 | `emitter.py`（注：暴露了约 100 个新错误）|
+| E0277 Default 约束 | 2026-09-14 | native_impls 7 个文件添加 E: Default 约束 | 2358 | native_impls/*.rs |
+| method import 修复 | 2026-09-14 | 方法级 import 路径问题 | 2333 | — |
+
+**⚠️ 上表中从 2551 至 2333 的所有修复均为补丁式**，解决的是表层症状，不解决继承层次缺失这一根因。
+后续不应再按此模式推进，应优先完成 T76 + T55。
 
 ---
 
 ## 任务依赖图
 
 ```
+T55（ClassHierarchy 继承图）─────────────────────────────────────→ T76（字段展平 + 上转型 impl）★ 最高优先
+                           │                                              │
+                           ├──→ T53（instanceof 语义）                  消除 E0308（1358）+ E0609（64）
+                           ├──→ T69（virtual BFS 完整性）               预计从 2333 降至 ~900
+                           └──→ T66（泛型推断）
+
+T76（字段展平）完成后 ──→ T77（类型擦除一致性）──→ 消除剩余 E0308
+
 T62（异常表）─────────────────────────────→ T75（Result裁剪）
      │
      ↓（CFG 基础）
 T56（if/else CFG）──→ T61（SSA）
-     │
-     ↓
-T55（ClassHierarchy）──→ T53（instanceof 语义）
-                    └──→ T69（virtual BFS 完整性）
-                    └──→ T66（泛型推断）
 
 T68（slot 复用）──→ 消除 E0425（独立，立即可做）
 T71（键规范化）──→ 消除静默失败（独立，立即可做）

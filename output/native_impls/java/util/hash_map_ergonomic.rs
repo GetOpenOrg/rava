@@ -2,8 +2,8 @@
 // @jvm_class: java/util/HashMap
 // @jvm_rename: put -> put_obj, get -> get_obj
 
-impl<K: Clone + Into<Object> + From<Object> + 'static,
-     V: Clone + Into<Object> + From<Object> + 'static> HashMap<K, V>
+impl<K: Clone + Default + Into<Object> + From<Object> + 'static,
+     V: Clone + Default + Into<Object> + From<Object> + 'static> HashMap<K, V>
 {
     /// Java: new HashMap<K,V>() — 类型安全构造器
     pub fn new_typed() -> Result<HashMap<K, V>> {

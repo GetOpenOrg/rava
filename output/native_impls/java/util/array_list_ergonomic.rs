@@ -10,7 +10,7 @@
 //
 // new_typed() 是 new() 的类型安全版本（用于 ergonomic 场景）
 
-impl<E: Clone + Into<Object> + From<Object> + 'static> ArrayList<E> {
+impl<E: Clone + Default + Into<Object> + From<Object> + 'static> ArrayList<E> {
     /// Java: new ArrayList<E>() — 类型安全构造器
     pub fn new_typed() -> Result<ArrayList<E>> {
         let base = ArrayList::<Object>::new()?;
