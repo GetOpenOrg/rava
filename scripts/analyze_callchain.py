@@ -14,7 +14,7 @@ from collections import deque, defaultdict
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from codegen.classfile import parse_class_bytes
 from codegen.jdk_resolver import JdkResolver
-from codegen.transpile import _JDK_PREFIXES
+from codegen.transpile import _JDK_PREFIXES, _JDK_STUB_ONLY_PREFIXES
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
@@ -44,18 +44,25 @@ def _parse_instr_refs(instrs):
                 desc = rest[colon+1:]
                 if cls.startswith(_JDK_PREFIXES) and '[' not in cls:
                     method_refs.append((cls, meth, desc))
+                elif cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
+                    # jdk/ 内部类方法调用 → 只生成类型存根，不展开方法体
+                    field_classes.append(cls)
         elif c.startswith('Field '):
             # "Field java/nio/charset/CodingErrorAction.REPLACE:..."
             rest = c[6:]
             dot = rest.find('.')
             if dot > 0:
                 cls = rest[:dot]
-                if cls.startswith(_JDK_PREFIXES) and '[' not in cls:
+                if (cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES)) and '[' not in cls:
                     field_classes.append(cls)
         elif c.startswith(_JDK_PREFIXES) and '[' not in c:
             # new / checkcast / anewarray: comment = class binary name
             cls = c.split()[0]
             method_refs.append((cls, '<init>', '()V'))
+        elif c.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in c:
+            # jdk/ 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
+            cls = c.split()[0]
+            field_classes.append(cls)
     return method_refs, field_classes
 
 
