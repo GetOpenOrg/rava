@@ -16,6 +16,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from codegen import transpile
+from codegen.emitter import to_snake
 
 _DEFAULT_JAVA = os.path.join(os.path.dirname(__file__), '..', 'tests', 'e2e', '01_basics', 'HelloWorld.java')
 
@@ -33,9 +34,10 @@ def main():
 
     if not args.no_run:
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        manifest = os.path.join(project_root, args.out, 'Cargo.toml')
-        print(f"\n[run] cargo run")
-        r = subprocess.run(['cargo', 'run'], cwd=os.path.join(project_root, args.out))
+        bin_name = to_snake(os.path.splitext(os.path.basename(java_files[0]))[0])
+        print(f"\n[run] cargo run --bin {bin_name}")
+        r = subprocess.run(['cargo', 'run', '--bin', bin_name],
+                           cwd=os.path.join(project_root, args.out))
         sys.exit(r.returncode)
 
 
