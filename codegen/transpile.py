@@ -10,8 +10,12 @@ from .classfile import parse_class
 from .emitter import write_cargo_project
 from .type_map import load_ergonomic_renames
 
-# JDK 包前缀（binary name 斜线分隔）
+# JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
 _JDK_PREFIXES = ('java/', 'javax/', 'sun/', 'com/sun/', 'com/oracle/')
+
+# 仅生成存根的包前缀：通过 Field/Method 指令发现后加入 field_discover_classes，
+# 方法体全部为 panic! stub，不展开调用链
+_JDK_STUB_ONLY_PREFIXES = ('jdk/',)
 
 # java_runtime 已手写实现的类：这些类不再由 jdk_classes 翻译，避免重复定义和命名冲突
 _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
@@ -125,6 +129,9 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                 desc = rest[colon+1:]
                 if cls.startswith(_JDK_PREFIXES) and '[' not in cls:
                     method_refs.append((cls, meth, desc))
+                elif cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
+                    # jdk/ 内部类方法调用 → 只生成类型存根，不展开方法体
+                    field_classes.append(cls)
         elif c.startswith('Field '):
             # "Field java/nio/charset/CodingErrorAction.REPLACE:Ljava/nio/charset/CodingErrorAction;"
             # getstatic/putstatic/getfield/putfield - 只发现声明类，不展开其方法体
@@ -132,12 +139,16 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
             dot = rest.find('.')
             if dot > 0:
                 cls = rest[:dot]
-                if cls.startswith(_JDK_PREFIXES) and '[' not in cls:
+                if (cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES)) and '[' not in cls:
                     field_classes.append(cls)
         elif c.startswith(_JDK_PREFIXES) and '[' not in c:
             # new / checkcast / anewarray: comment = class binary name
             cls = c.split()[0]
             method_refs.append((cls, '<init>', '()V'))
+        elif c.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in c:
+            # jdk/ 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
+            cls = c.split()[0]
+            field_classes.append(cls)
     return method_refs, field_classes
 
 

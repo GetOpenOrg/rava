@@ -556,10 +556,20 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'i32'
             val_str_raw = render_expr(val_expr)
             val_ty_name = render_type(val_ty)
-            if ftype == 'Object' and val_ty_name not in ('Object', '()') and val_str_raw != 'this':
+            # null 值（aconst_null → Object::default()）赋给具体类型字段时用 Default::default()
+            null_coerce = _coerce_from_null(val_str_raw, ftype)
+            if null_coerce is not None:
+                val_str = null_coerce
+            elif ftype == 'Object' and val_ty_name not in ('Object', '()') and val_str_raw != 'this':
                 val_str = _coerce_to_object(val_str_raw, val_ty_name)
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
+            # 引用类型赋值时加 .clone()，避免 E0382（move after use）
+            if (val_ty_name not in _PRIMITIVE_RUST_TYPES
+                    and not val_str.startswith('Default::')
+                    and '.clone()' not in val_str
+                    and val_str != 'this'):
+                val_str = f'{val_str}.clone()'
             sim.emit(RawStmt(f"{render_expr(obj_expr)}.{fname}.set({val_str});"))
         else:
             sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))

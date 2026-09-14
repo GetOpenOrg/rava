@@ -362,7 +362,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   workspace_root: str | None = None,
                   user_crate_prefix: str | None = None,
                   synthetics: dict | None = None,
-                  extra_fields: dict | None = None) -> str:
+                  extra_fields: dict | None = None,
+                  conflict_map: dict | None = None,
+                  skipped_classes: set | None = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -382,6 +384,91 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         prefix = user_crate_prefix or 'crate'
         for pkg_path in jdk_crate_pkg_paths:
             cross_imports.append(f"use {prefix}::{pkg_path}::*;")
+
+    # 若文件所在包未包含在全局 glob 导入中（如 jdk/ 前缀），则补充自身包的 glob 导入
+    # 以确保同包兄弟类型（如内部接口）可直接引用
+    if ci.name and '/' in ci.name:
+        _own_pkg_parts = ci.name.split('/')[:-1]
+        _own_pkg_path = '::'.join(
+            f'r#{p}' if p in _RUST_KEYWORDS else p for p in _own_pkg_parts
+        )
+        _existing_pkgs = set(jdk_crate_pkg_paths) if jdk_crate_pkg_paths else set()
+        if _own_pkg_path not in _existing_pkgs:
+            _pfx = user_crate_prefix or 'crate'
+            cross_imports.append(f"use {_pfx}::{_own_pkg_path}::*;")
+
+    # 以下两个机制（冲突消歧 + jdk/ 显式导入）共享同一次指令扫描
+    _need_refs = bool(conflict_map or skipped_classes)
+    _referenced: set[str] = set()
+    if _need_refs:
+        for _m in ci.methods:
+            for _instr in (_m.instrs or []):
+                _c = _instr.comment
+                if not _c:
+                    continue
+                if _c.startswith(('Method ', 'InterfaceMethod ')):
+                    _rest = _c.split(' ', 1)[1]
+                    _dot = _rest.find('.')
+                    if _dot > 0:
+                        _referenced.add(_rest[:_dot])
+                elif _c.startswith('Field '):
+                    _rest = _c[6:]
+                    _dot = _rest.find('.')
+                    if _dot > 0:
+                        _referenced.add(_rest[:_dot])
+
+    # 消歧：当同一简单名存在于多个包中时，追加显式 use 覆盖 glob 歧义
+    if conflict_map:
+        _own_pkg = '/'.join(ci.name.split('/')[:-1]) if '/' in ci.name else ''
+        _prefix = user_crate_prefix or 'crate'
+
+        def _pkg_to_use(pkg_slash: str) -> str:
+            return _prefix + '::' + '::'.join(
+                f'r#{p}' if p in _RUST_KEYWORDS else p
+                for p in pkg_slash.split('/')
+            )
+
+        # 本文件自身定义的类型简名（跳过：不能 use 自己定义的名字）
+        # Java 内部类用 $ 分隔，Rust struct 名用 _ 替代
+        _self_simple = (ci.name.split('/')[-1] if '/' in ci.name else ci.name).replace('$', '_')
+
+        for _sn, _pkgs in conflict_map.items():
+            # 跳过：本文件就是该类型的定义文件（struct 名会与 use 重复导致 E0255）
+            if _sn.replace('$', '_') == _self_simple:
+                continue
+            # 优先：指令中有直接引用的包
+            _matches = [p for p in _pkgs if f'{p}/{_sn}' in _referenced]
+            if len(_matches) == 1:
+                _chosen = _matches[0]
+            elif _own_pkg in _pkgs:
+                # 次优：文件自身所在包（引用了与本包同名的类型，用本包版本）
+                _chosen = _own_pkg
+            elif _matches:
+                _chosen = _matches[0]
+            else:
+                # 回退：优先 java/ 包，否则取第一个
+                _java = [p for p in _pkgs if p.startswith('java/')]
+                _chosen = _java[0] if _java else _pkgs[0]
+            # Java 内部类 $ → Rust struct 名用 _
+            cross_imports.append(f"use {_pkg_to_use(_chosen)}::{_sn.replace('$', '_')};")
+
+    # 为被跳过全局导入的包（如 jdk/）中的类型，按需添加逐文件显式导入
+    if skipped_classes and _referenced:
+        _prefix2 = user_crate_prefix or 'crate'
+        _self_simple2 = (ci.name.split('/')[-1] if '/' in ci.name else ci.name).replace('$', '_')
+        _added_skipped: set[str] = set()
+        for _full_cls in sorted(_referenced):
+            _cls_parts = _full_cls.split('/')
+            if len(_cls_parts) < 2:
+                continue
+            _rust_pkg = '::'.join(
+                f'r#{p}' if p in _RUST_KEYWORDS else p for p in _cls_parts[:-1]
+            )
+            # Java 内部类 $ → Rust struct 名用 _
+            _simple = _cls_parts[-1].replace('$', '_')
+            if f"{_rust_pkg}::{_simple}" in skipped_classes and _simple != _self_simple2 and _simple not in _added_skipped:
+                cross_imports.append(f"use {_prefix2}::{_rust_pkg}::{_simple};")
+                _added_skipped.add(_simple)
 
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]",
@@ -422,7 +509,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             # 若 generic_signature 解析结果是 Object（简化），用描述符推断更精确的类型
             gen_rust = (parse_field_type(f.generic_signature, class_type_params)
                         if f.generic_signature else '')
-            desc_rust = jvm_to_rust(f.descriptor)
+            desc_rust = jvm_to_rust(f.descriptor, registry)
             field_rust = gen_rust if (gen_rust and gen_rust != 'Object') else desc_rust
             field_lines.append(f"    pub {safe_fname}: {field_type_prefix}<{field_rust}>,")
         for ef_name, ef_type in cls_extra_fields:
@@ -721,7 +808,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         def _safe_pkg_part(p: str) -> str:
             return f'r#{p}' if p in _RUST_KEYWORDS else p
 
-        # jdk/ 内部实现类不加入全局跨包 glob 导入，避免 Type 等名称冲突
+        # jdk/ 内部实现类不加入全局跨包 glob 导入，避免大量命名冲突
         _SKIP_GLOBAL_IMPORT_PREFIXES = ('jdk/',)
         jdk_pkg_set: set[str] = set()
         for jdk_ci in jdk_class_infos:
@@ -731,6 +818,30 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if pkg_parts:
                 jdk_pkg_set.add('::'.join(_safe_pkg_part(p) for p in pkg_parts))
         jdk_crate_pkg_paths = sorted(jdk_pkg_set)
+
+        # 构建冲突消歧表：同一简单类名出现在多个包中时，需要在每个文件里用显式 use 覆盖
+        from collections import defaultdict as _defaultdict
+        _sn_to_pkgs: dict[str, list[str]] = _defaultdict(list)
+        # skipped_classes：被跳过全局导入、但实际已生成 stub 的类的完整 rust 路径集合
+        # 格式：{"jdk::internal::util::StaticProperty", ...}
+        # 只包含确实生成了 stub 文件的类（防止 E0432：引用了不存在的 use 路径）
+        skipped_classes: set[str] = set()
+        for jdk_ci in jdk_class_infos:
+            _parts = jdk_ci.name.split('/')
+            if len(_parts) >= 2:
+                _sn_to_pkgs[_parts[-1]].append('/'.join(_parts[:-1]))
+                if jdk_ci.name.startswith(_SKIP_GLOBAL_IMPORT_PREFIXES):
+                    _rust_pkg = '::'.join(_safe_pkg_part(x) for x in _parts[:-1])
+                    # Java 内部类 $ → Rust struct 名用 _
+                    _simple_cls = _parts[-1].replace('$', '_')
+                    skipped_classes.add(f"{_rust_pkg}::{_simple_cls}")
+        _jdk_pkg_path_set = set(jdk_crate_pkg_paths)
+        conflict_map: dict[str, list[str]] = {}
+        for _sn, _pkgs in _sn_to_pkgs.items():
+            _in_scope = list({p for p in _pkgs
+                              if '::'.join(_safe_pkg_part(x) for x in p.split('/')) in _jdk_pkg_path_set})
+            if len(_in_scope) >= 2:
+                conflict_map[_sn] = _in_scope
 
         for jdk_ci in jdk_class_infos:
             parts = jdk_ci.name.split('/')          # e.g. ['java','util','ArrayList']
@@ -749,7 +860,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                             native_impls_map=native_impls_map,
                                             workspace_root=out_dir,
                                             synthetics=synthetics_map,
-                                            extra_fields=extra_fields_map))
+                                            extra_fields=extra_fields_map,
+                                            conflict_map=conflict_map,
+                                            skipped_classes=skipped_classes))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
@@ -827,7 +940,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                         native_impls_map=native_impls_map,
                                         workspace_root=out_dir,
                                         synthetics=synthetics_map,
-                                        extra_fields=extra_fields_map))
+                                        extra_fields=extra_fields_map,
+                                        conflict_map=conflict_map if jdk_class_infos else None,
+                                        skipped_classes=skipped_classes if jdk_class_infos else None))
 
     # 中间 mod.rs（用户子包）
     for dir_path, children in user_mod_tree.items():
