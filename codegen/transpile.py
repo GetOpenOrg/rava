@@ -62,9 +62,16 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
     print(f"\n✓ 完成。运行方式：\n  cd {out_dir} && cargo run --release")
 
 
-def _collect_method_refs(instrs) -> list[tuple[str, str, str]]:
-    """从指令注释中提取 (class, method, descriptor) 三元组（仅 JDK 类）。"""
-    refs = []
+def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """从指令注释中提取方法引用和字段所属类引用（仅 JDK 类）。
+
+    Returns:
+        (method_refs, field_classes):
+          method_refs   - (cls, method, descriptor) 三元组，用于 BFS 展开
+          field_classes - 通过 getstatic/Field 指令发现的类名，只生成存根不展开方法体
+    """
+    method_refs = []
+    field_classes = []
     for instr in (instrs or []):
         c = instr.comment
         if not c:
@@ -79,12 +86,21 @@ def _collect_method_refs(instrs) -> list[tuple[str, str, str]]:
                 meth = rest[dot+1:colon]
                 desc = rest[colon+1:]
                 if cls.startswith(_JDK_PREFIXES) and '[' not in cls:
-                    refs.append((cls, meth, desc))
+                    method_refs.append((cls, meth, desc))
+        elif c.startswith('Field '):
+            # "Field java/nio/charset/CodingErrorAction.REPLACE:Ljava/nio/charset/CodingErrorAction;"
+            # getstatic/putstatic/getfield/putfield - 只发现声明类，不展开其方法体
+            rest = c[6:]  # 去掉 "Field "
+            dot = rest.find('.')
+            if dot > 0:
+                cls = rest[:dot]
+                if cls.startswith(_JDK_PREFIXES) and '[' not in cls:
+                    field_classes.append(cls)
         elif c.startswith(_JDK_PREFIXES) and '[' not in c:
             # new / checkcast / anewarray: comment = class binary name
             cls = c.split()[0]
-            refs.append((cls, '<init>', '()V'))
-    return refs
+            method_refs.append((cls, '<init>', '()V'))
+    return method_refs, field_classes
 
 
 def _discover_jdk_classes_method_level(class_infos: list) -> list:
@@ -94,9 +110,15 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
 
     visited_methods: set[tuple[str, str, str]] = set()
     queue: deque[tuple[str, str, str]] = deque()
+    # 通过 getstatic/Field 指令发现的类：只生成存根，不展开方法体
+    field_discover_classes: set[str] = set()
 
     def enqueue_refs(instrs):
-        for key in _collect_method_refs(instrs):
+        method_refs, f_classes = _collect_method_refs(instrs)
+        for cls in f_classes:
+            if cls not in _JAVA_RUNTIME_CLASSES:
+                field_discover_classes.add(cls)
+        for key in method_refs:
             cls = key[0]
             if cls in _JAVA_RUNTIME_CLASSES:
                 continue
@@ -156,5 +178,17 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 if m.name == meth:
                     enqueue_refs(m.instrs or [])
 
-    print(f"      共解析 {len(jdk_infos)} 个 JDK 类（方法级调用链 BFS）")
+        # field_discover_classes：只需生成类型存根，所有方法均为 panic! stub，不展开
+        for cls in field_discover_classes:
+            if cls not in jdk_infos:
+                data = resolver.resolve(cls)
+                if data is None:
+                    continue
+                try:
+                    ci = parse_class_bytes(data, cls)
+                    jdk_infos[cls] = ci
+                except Exception as e:
+                    print(f"      解析失败(field-stub) {cls}: {e}")
+
+    print(f"      共解析 {len(jdk_infos)} 个 JDK 类（BFS，含 {len(field_discover_classes)} 个 field-only stub）")
     return list(jdk_infos.values()), visited_methods
