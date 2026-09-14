@@ -379,7 +379,7 @@ def _decode_bytecode(code: bytes, pool: list, bootstrap_methods: list[dict] | No
             offsets = []
             for _ in range(high - low + 1):
                 offsets.append(pc + struct.unpack_from('>i', code, pos)[0]); pos += 4
-            operand = f'default:{default} low:{low} high:{high}'
+            operand = f'default:{default} low:{low} high:{high} offs:{",".join(str(o) for o in offsets)}'
         elif op == 0xab:   # lookupswitch
             pad = (4 - (pos % 4)) % 4
             pos += pad

@@ -17,6 +17,7 @@ from .constants import safe_ident
 from .stack import StackSim
 from .cfg import (
     find_loops, find_boolean_conditions, find_if_guards, find_if_else,
+    find_switches,
     cmp_op, neg_cmp_op, _TWO_OP_BRANCH_OPS,
 )
 from .instr import sim_instr
@@ -283,6 +284,7 @@ def gen_method_body(
         sig_param_types, sig_ret_type = [], ''
 
     instrs           = method.instrs
+    off2idx          = {ins.offset: idx for idx, ins in enumerate(instrs)}
     _loops           = find_loops(instrs)
     loop_map         = {lp.start_idx: lp for lp in _loops}
     bool_cond_map    = find_boolean_conditions(instrs)
@@ -291,6 +293,7 @@ def gen_method_body(
     if_guard_map     = {k: v for k, v in _raw_guards.items() if k not in bool_cond_map}
     # if-else / simple if-then（排除已处理的模式）
     if_else_map      = find_if_else(instrs, _loops, bool_cond_map, if_guard_map)
+    switch_map       = find_switches(instrs)
     param_types      = method.param_types
 
     # 参数类型：如果泛型签名提供了类型变量，优先使用
@@ -499,42 +502,73 @@ def gen_method_body(
 
                 out.append(('', f"{ind}loop {{"))
 
-                # pre-condition（start_idx .. cond_idx）
-                pre = make_sub()
-                for k in range(lp.start_idx, lp.cond_idx):
-                    sim_instr(instrs[k], pre, method.class_name, registry=registry)
-                for s in pre.stmts:
-                    out.append((ind + "    ", s))
-                pre.stmts.clear()
-                cur_sim.locals = pre.locals
-                cur_sim._slot_decl_depth = pre._slot_decl_depth
+                is_do_while = (lp.cond_idx == lp.end_idx)
 
-                # 循环条件
-                ci = instrs[lp.cond_idx]
-                cond_s = make_sub()
-                cond_s.stack = list(pre.stack)
-                if ci.opcode in TWO_OP_CMP:
-                    b_e, b_t = cond_s.pop(); a_e, a_t = cond_s.pop()
-                    a_c = _coerce_icmp_operand(render_expr(a_e), a_t)
-                    b_c = _coerce_icmp_operand(render_expr(b_e), b_t)
-                    cond_str = cmp_op(ci.opcode, a_c, b_c)
-                else:
-                    a_e, a_t = cond_s.pop()
-                    a_s2 = render_expr(a_e)
-                    a_is_b2 = (str(a_t) == 'bool' or getattr(a_t, 'name', '') == 'bool')
-                    if a_is_b2 and ci.opcode in ('ifeq', 'ifne'):
-                        cond_str = f'!({a_s2})' if ci.opcode == 'ifeq' else a_s2
+                if is_do_while:
+                    # do-while：先执行体，再检测后向条件
+                    body_s = make_sub()
+                    body_s.enter_scope()
+                    process_block(lp.start_idx, lp.cond_idx, body_s, out, ind + "    ")
+                    body_s.exit_scope()
+                    cur_sim.locals = body_s.locals
+                    cur_sim._slot_decl_depth = body_s._slot_decl_depth
+
+                    # 条件：后向分支 "if cond goto start" → Rust "if !cond { break; }"
+                    ci = instrs[lp.cond_idx]
+                    cond_s = make_sub()
+                    cond_s.stack = list(body_s.stack)
+                    if ci.opcode in TWO_OP_CMP:
+                        b_e, b_t = cond_s.pop(); a_e, a_t = cond_s.pop()
+                        a_c = _coerce_icmp_operand(render_expr(a_e), a_t)
+                        b_c = _coerce_icmp_operand(render_expr(b_e), b_t)
+                        cond_str = neg_cmp_op(ci.opcode, a_c, b_c)
                     else:
-                        cond_str = cmp_op(ci.opcode, a_s2, '')
-                out.append(('', f"{ind}    if {cond_str} {{ break; }}"))
+                        a_e, a_t = cond_s.pop()
+                        a_s2 = render_expr(a_e)
+                        a_is_b2 = (str(a_t) == 'bool' or getattr(a_t, 'name', '') == 'bool')
+                        if a_is_b2 and ci.opcode in ('ifeq', 'ifne'):
+                            cond_str = f'!({a_s2})' if ci.opcode == 'ifne' else a_s2
+                        else:
+                            cond_str = neg_cmp_op(ci.opcode, a_s2, '')
+                    out.append(('', f"{ind}    if {cond_str} {{ break; }}"))
+                else:
+                    # while：先 pre-condition（递归，支持 body 内嵌 if/guard），再检测条件，再执行体
+                    pre = make_sub()
+                    pre.enter_scope()
+                    pre_out: list = []
+                    process_block(lp.start_idx, lp.cond_idx, pre, pre_out, ind + "    ")
+                    pre.exit_scope()
+                    out.extend(pre_out)
+                    for s in pre.stmts:
+                        out.append((ind + "    ", s))
+                    pre.stmts.clear()
+                    cur_sim.locals = pre.locals
+                    cur_sim._slot_decl_depth = pre._slot_decl_depth
 
-                # 循环体（递归）
-                body_s = make_sub()
-                body_s.enter_scope()
-                process_block(lp.cond_idx + 1, lp.end_idx, body_s, out, ind + "    ")
-                body_s.exit_scope()
-                cur_sim.locals = body_s.locals
-                cur_sim._slot_decl_depth = body_s._slot_decl_depth
+                    ci = instrs[lp.cond_idx]
+                    cond_s = make_sub()
+                    cond_s.stack = list(pre.stack)
+                    if ci.opcode in TWO_OP_CMP:
+                        b_e, b_t = cond_s.pop(); a_e, a_t = cond_s.pop()
+                        a_c = _coerce_icmp_operand(render_expr(a_e), a_t)
+                        b_c = _coerce_icmp_operand(render_expr(b_e), b_t)
+                        cond_str = cmp_op(ci.opcode, a_c, b_c)
+                    else:
+                        a_e, a_t = cond_s.pop()
+                        a_s2 = render_expr(a_e)
+                        a_is_b2 = (str(a_t) == 'bool' or getattr(a_t, 'name', '') == 'bool')
+                        if a_is_b2 and ci.opcode in ('ifeq', 'ifne'):
+                            cond_str = f'!({a_s2})' if ci.opcode == 'ifeq' else a_s2
+                        else:
+                            cond_str = cmp_op(ci.opcode, a_s2, '')
+                    out.append(('', f"{ind}    if {cond_str} {{ break; }}"))
+
+                    body_s = make_sub()
+                    body_s.enter_scope()
+                    process_block(lp.cond_idx + 1, lp.end_idx, body_s, out, ind + "    ")
+                    body_s.exit_scope()
+                    cur_sim.locals = body_s.locals
+                    cur_sim._slot_decl_depth = body_s._slot_decl_depth
 
                 out.append(('', f"{ind}}}"))
                 i = lp.end_idx + 1
@@ -578,16 +612,23 @@ def gen_method_body(
                 inner.enter_scope()
                 for k in range(guard.body_start_idx, guard.continue_idx):
                     ki = instrs[k]
-                    # goto → 循环出口（break）
+                    # goto → 循环出口（break）或循环起始（continue）
                     if ki.opcode == 'goto' and ki.operand:
                         goto_tgt = int(ki.operand)
+                        enclosing = [lp for lp in _loops if lp.start_idx <= k <= lp.end_idx]
                         is_brk = any(
                             lp.exit_offset is not None and goto_tgt >= lp.exit_offset
-                            for lp in _loops
-                            if lp.start_idx <= k <= lp.end_idx
+                            for lp in enclosing
                         )
                         if is_brk:
                             inner.emit(RawStmt('break;'))
+                            continue
+                        is_cont = any(
+                            instrs[lp.start_idx].offset == goto_tgt
+                            for lp in enclosing
+                        )
+                        if is_cont:
+                            inner.emit(RawStmt('continue;'))
                             continue
                     sim_instr(ki, inner, method.class_name, registry=registry)
                 inner.exit_scope()
@@ -658,6 +699,63 @@ def gen_method_body(
                     cur_sim._slot_decl_depth = then_s._slot_decl_depth
 
                 i = ie.merge_idx
+                continue
+
+            # ── switch / tableswitch / lookupswitch ───────────────────
+            if i in switch_map:
+                sw = switch_map[i]
+                # 弹出 switch 操作数
+                key_e, key_t = cur_sim.pop()
+                key_s = render_expr(key_e)
+                flush_here()
+                out.append(('', f"{ind}match {key_s} {{"))
+                for value, cs, ce in sw.cases:
+                    out.append(('', f"{ind}    {value} => {{"))
+                    case_s = make_sub()
+                    case_s.enter_scope()
+                    process_block(cs, ce, case_s, out, ind + "        ")
+                    case_s.exit_scope()
+                    out.append(('', f"{ind}    }}"))
+                # default case
+                out.append(('', f"{ind}    _ => {{"))
+                def_s = make_sub()
+                def_s.enter_scope()
+                process_block(sw.default_start, sw.default_end, def_s, out, ind + "        ")
+                def_s.exit_scope()
+                out.append(('', f"{ind}    }}"))
+                out.append(('', f"{ind}}}"))
+                i = sw.merge_idx
+                continue
+
+            # ── goto: forward-skip / continue / break ─────────────────
+            if op == 'goto' and ins.operand:
+                target_off = int(ins.operand)
+                target_idx = off2idx.get(target_off)
+                # 当前块内向前跳转（if-then 末尾跳到 merge）→ 直接跳过
+                if target_idx is not None and i < target_idx <= end:
+                    flush_here()
+                    i = target_idx
+                    continue
+                # 在循环中：检测 continue / break
+                enclosing = None
+                for lp in _loops:
+                    if lp.start_idx <= i <= lp.end_idx:
+                        if enclosing is None or (lp.end_idx - lp.start_idx) < (enclosing.end_idx - enclosing.start_idx):
+                            enclosing = lp
+                if enclosing is not None:
+                    loop_start_off = instrs[enclosing.start_idx].offset
+                    if target_off == loop_start_off:
+                        flush_here()
+                        out.append(('', f"{ind}continue;"))
+                        i += 1
+                        continue
+                    if enclosing.exit_offset is not None and target_off >= enclosing.exit_offset:
+                        flush_here()
+                        out.append(('', f"{ind}break;"))
+                        i += 1
+                        continue
+                # 其他 goto（向前超出块范围等）：忽略
+                i += 1
                 continue
 
             # ── 普通指令 ──────────────────────────────────────────────
