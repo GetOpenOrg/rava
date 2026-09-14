@@ -273,7 +273,8 @@ def gen_method_body(
                 slot_hint_types[_hint_slot] = RsNamed(rust_ty_name)
 
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                   slot_hint_types=slot_hint_types, return_type=rust_ret)
+                   slot_hint_types=slot_hint_types, return_type=rust_ret,
+                   is_constructor=is_ctor)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
 
@@ -331,7 +332,8 @@ def gen_method_body(
             entries.append(('', "    loop {"))
 
             pre_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                               slot_hint_types=slot_hint_types, return_type=rust_ret)
+                               slot_hint_types=slot_hint_types, return_type=rust_ret,
+                               is_constructor=is_ctor)
             pre_sim.locals = dict(sim.locals)
             for k in range(lp.start_idx, lp.cond_idx):
                 sim_instr(instrs[k], pre_sim, method.class_name, registry=registry)
@@ -341,7 +343,8 @@ def gen_method_body(
 
             ci_ins   = instrs[lp.cond_idx]
             cond_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                                slot_hint_types=slot_hint_types, return_type=rust_ret)
+                                slot_hint_types=slot_hint_types, return_type=rust_ret,
+                                is_constructor=is_ctor)
             cond_sim.locals = dict(sim.locals)
             cond_sim.stack  = list(pre_sim.stack)
             if ci_ins.opcode in TWO_OP_CMP:
@@ -359,7 +362,8 @@ def gen_method_body(
             entries.append(('', f"        if {cond} {{ break; }}"))
 
             body_sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                                slot_hint_types=slot_hint_types, return_type=rust_ret)
+                                slot_hint_types=slot_hint_types, return_type=rust_ret,
+                                is_constructor=is_ctor)
             body_sim.locals = dict(sim.locals)
             for k in range(lp.cond_idx + 1, lp.end_idx):
                 sim_instr(instrs[k], body_sim, method.class_name, registry=registry)
@@ -421,7 +425,7 @@ def gen_method_body(
 
     # ── 构造器末尾返回 Ok(this) ────────────────────────────────────
     if is_ctor:
-        while lines and lines[-1].strip() in ('return;', 'return Ok(());'):
+        while lines and lines[-1].strip() in ('return;', 'return Ok(());', 'return Ok(this);'):
             lines.pop()
         lines.append("    Ok(this)")
 

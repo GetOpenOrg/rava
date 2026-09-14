@@ -129,7 +129,11 @@ def _coerce_value(val_str: str, val_ty: 'RsType', target: str) -> str:
     """将 val 强制转换为 target 字段/参数类型，避免窄类型与 i32 不匹配。
     只在必要时插入 cast，若类型已匹配则原样返回。"""
     src = getattr(val_ty, 'name', '')
-    if target == src or target == 'i32':
+    if target == src:
+        return val_str
+    if target == 'i32':
+        if src == 'bool':
+            return f"({val_str}) as i32"
         return val_str
     if target == 'bool':
         if src == 'bool':
@@ -208,7 +212,13 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op.startswith('aload'): sim.push(*sim.load_local(_parse_slot(op, operand)))
 
     # ── store ──
-    elif op.startswith('istore'): e, ty = sim.pop(); sim.store_local(_parse_slot(op, operand), e, ty)
+    elif op.startswith('istore'):
+        e, ty = sim.pop()
+        # istore 在 JVM 中存储 int；bool 比较结果需要强制转换
+        if getattr(ty, 'name', '') == 'bool':
+            e = RawExpr(f"({render_expr(e)}) as i32")
+            ty = I32
+        sim.store_local(_parse_slot(op, operand), e, ty)
     elif op.startswith('lstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, I64)
     elif op.startswith('fstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F32)
     elif op.startswith('dstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F64)
@@ -516,14 +526,18 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
 
     # ── 返回 ──
     elif op == 'return':
-        sim.emit(RawStmt('return Ok(());'))
+        # 构造函数 return 指令：返回 Ok(this) 而非 Ok(())
+        if sim.is_constructor:
+            sim.emit(RawStmt('return Ok(this);'))
+        else:
+            sim.emit(RawStmt('return Ok(());'))
     elif op in ('ireturn', 'lreturn', 'freturn', 'dreturn'):
         e_expr, e_ty = sim.pop()
         expr_s = render_expr(e_expr)
-        # 若方法返回窄类型（i8/i16/u16/bool）但栈上是 i32，做显式转换
+        # 若返回类型与栈类型不匹配（窄类型/bool→i32），做显式转换
         ret_ty = getattr(sim, 'return_type', 'i32')
         actual_ty = render_type(e_ty)
-        if ret_ty in ('i8', 'i16', 'u16', 'bool') and actual_ty != ret_ty:
+        if actual_ty != ret_ty and ret_ty in ('i8', 'i16', 'u16', 'bool', 'i32'):
             expr_s = _coerce_value(expr_s, e_ty, ret_ty)
         sim.emit(RawStmt(f"return Ok({expr_s});"))
     elif op == 'areturn':

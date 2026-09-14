@@ -52,7 +52,8 @@ class StackSim:
     def __init__(self, param_rust_types: list[RsType], is_static: bool, class_name: str,
                  local_names: dict[int, str] | None = None,
                  slot_hint_types: dict[int, RsType] | None = None,
-                 return_type: str = 'Object'):
+                 return_type: str = 'Object',
+                 is_constructor: bool = False):
         self.stack:      list[tuple[RsExpr, RsType]] = []
         self._ctr:       int                         = 0
         self.locals:     dict[int, tuple]            = {}   # slot → (name, RsType, is_new)
@@ -60,6 +61,7 @@ class StackSim:
         self.is_static   = is_static
         self.class_name  = class_name
         self.return_type = return_type
+        self.is_constructor = is_constructor
         self._loc_names  = local_names or {}     # slot → Java variable name
         self._hint_types = slot_hint_types or {}  # slot → precise RsType from LocalVariableTypeTable
 

@@ -331,6 +331,9 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
 
     ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
     fn_name = safe_ident(rust_name or m.name)
+    # Java clone() 与 Rust Clone trait 同名冲突：重命名为 jvm_clone
+    if fn_name == 'clone':
+        fn_name = 'jvm_clone'
     if native_fn:
         # 调用 _native 模块中的手写实现
         if m.is_static:
