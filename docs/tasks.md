@@ -1136,3 +1136,418 @@ tests/
 python3 scripts/run_tests.py --filter 01_basics   # 基础场景全部 PASS
 python3 scripts/run_tests.py                       # 全量运行，输出每项状态
 ```
+
+---
+
+## 阶段十：代码生成器架构改进（Phase 10 — Codegen Architecture）
+
+> 详细设计见：`docs/plans/2026-09-14-codegen-improvement-plan.md`  
+> 目标：系统性修复 codegen 的结构缺陷，提升类型正确性和代码质量。
+
+---
+
+### T52 · 降低编译错误至 0（持续任务）
+**状态**：`[~]` 进行中（2026-09-14 当前：6445 errors）  
+**文件**：`codegen/instr.py`、`codegen/method.py`、`codegen/emitter.py`
+
+**背景**：JDK 字节码翻译生成的 `jdk_classes` crate 存在大量编译错误，阻止整体流水线验证。目标是将 `cargo check` 错误降至 0。
+
+**错误演变**：
+| 时间 | 错误数 | 主要修复 |
+|------|--------|---------|
+| 2026-09-13 | 8251 | 起始 |
+| 2026-09-14 早 | 7873 | 上一 session 结束 |
+| 2026-09-14 | 7704 | clone→jvm_clone rename |
+| 2026-09-14 | 7668 | bool→i32 类型转换 |
+| 2026-09-14 | 7644 | 构造函数 return Ok(this) |
+| 2026-09-14 | 7433 | Object::from_any 非基本类型 coerce |
+| 2026-09-14 | 7275 | stub 与调用点类型一致 |
+| 2026-09-14 | 7134 | invokevirtual null coerce |
+| 2026-09-14 | 6928 | ldc class 常量 + 接口类型 coerce |
+| 2026-09-14 | 6445 | aastore/areturn Object coerce，lcmp/ldiv 类型转换 |
+
+**剩余主要错误类别（6445 errors）**：
+- E0308 (2245)：Class<Object>/String/Object 双向、Vec<Class<Object>> vs Vec<Object>、i64/i32
+- E0599 (2840)：Object 类型变量上调用具体方法（类型追踪缺失）
+- E0609 (449)：字段找不到（继承字段缺失）
+- E0425 (310)：变量找不到
+- E0433 (152)：类型不在作用域
+- E0061 (156)：参数数量错误
+
+**下一步行动**：
+1. 验证 `_coerce_icmp_operand` 修复（u16/i32 比较运算符，约 13 cases）
+2. 分析 E0425 变量找不到根因（310 cases）
+3. 分析 E0599 高频缺失方法（borrow/borrow_mut on Object 90 cases）
+
+**验收**：`cd output && cargo check` 零错误。
+
+---
+
+### T53 · 修复 instanceof 语义错误
+**状态**：`[ ]`  
+**文件**：`codegen/instr.py`、`output/java_runtime/src/lib.rs`  
+**优先级**：P1  
+**依赖**：T52 编译错误降至合理水平（<2000）后更容易验证效果
+
+**背景**：`instr.py` 中 `instanceof` 指令硬编码压入 `Lit("true")`，语义完全错误。任何依赖 `instanceof` 结果的分支都会产生错误的运行时行为，且无编译期警告（见计划文档 §5.1 和 §1.2）。
+
+**当前错误代码**（instr.py）：
+```python
+elif op == 'instanceof':
+    sim.push(Lit('true'), BOOL)
+```
+
+**实施步骤**：
+
+1. `java_runtime/src/lib.rs`：为 `Object` 添加 `downcast_ref::<T>() -> Option<&T>` 方法：
+   ```rust
+   impl Object {
+       pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
+           self.0.downcast_ref::<T>()
+       }
+   }
+   ```
+   （`Object::from_any` 已用 `Rc<dyn Any>` 存储，可直接使用 `downcast_ref`）
+
+2. `instr.py` 修改 `instanceof` 处理：
+   ```python
+   elif op == 'instanceof':
+       obj_expr, obj_ty = sim.pop()
+       if comment:
+           check_rust = jvm_to_rust(comment.strip(), registry)
+           result = RawExpr(f'({render_expr(obj_expr)}).downcast_ref::<{check_rust}>().is_some()')
+       else:
+           result = Lit('false')
+       sim.push(result, BOOL)
+   ```
+
+3. 对接口类型的 `instanceof`，完整语义需依赖类层次图（T55），暂时返回 `false` 作为保守值。
+
+**验收**：
+- `obj instanceof String` 在 obj 确实是 String 时编译通过且运行时返回 `true`
+- `instanceof` 结果驱动的分支行为正确
+
+---
+
+### T54 · 精确 mut 标注（扩展 _analyze_mutation 递归覆盖嵌套块）
+**状态**：`[ ]`  
+**文件**：`codegen/method.py`、`codegen/stack.py`  
+**优先级**：P1
+
+**背景**：`stack.py` 的 `store_local` 一律生成 `let mut`，导致所有局部变量都带无用 `mut`，Clippy 报大量 `unused_mut` 警告（当前靠全局 `#[allow(unused_mut)]` 压制）。
+
+根本原因：`method.py` 的 `_analyze_mutation` 不递归进入 `IfStmt.then`、`IfStmt.else_`、`LoopStmt.body`，且对 `else_=None` 有 bug。
+
+**实施步骤**：
+
+1. 修复 `_analyze_mutation`（method.py）：
+   ```python
+   def _analyze_mutation(stmts):
+       assigned = set()
+       def collect(ss):
+           for stmt in ss:
+               if isinstance(stmt, AssignStmt) and isinstance(stmt.target, Var):
+                   assigned.add(stmt.target.name)
+               elif isinstance(stmt, IfStmt):
+                   collect(stmt.then)
+                   if stmt.else_:        # ← 修复 None 判断
+                       collect(stmt.else_)
+               elif isinstance(stmt, LoopStmt):
+                   collect(stmt.body)
+               # RawStmt 保守处理：不尝试解析字符串
+       collect(stmts)
+       # 对 first_decl 中未被赋值的 LetStmt，将 mutable 改为 False
+   ```
+
+2. 修改 `StackSim.store_local`（stack.py）：初始生成 `LetStmt(mutable=False)`，由 `_analyze_mutation` 在渲染前决定是否改为 `True`。
+
+3. `_analyze_mutation` 在渲染前执行，根据 `assigned` 集合更新 `LetStmt.mutable`。
+
+**验收**：
+- 被二次赋值的变量仍为 `let mut`
+- 未被赋值的变量降级为 `let`（不可变）
+- `cargo check` 的 `unused_mut` 警告大幅减少
+
+---
+
+### T55 · 构建 ClassHierarchy 类层次图
+**状态**：`[ ]`  
+**文件**：`codegen/hierarchy.py`（新建）、`codegen/transpile.py`、`codegen/emitter.py`  
+**优先级**：P2
+
+**背景**：codegen 完全没有继承关系信息，无法做多态路由、instanceof 判断、继承字段/方法查找。这导致大量 E0609（继承字段缺失）和 E0599（父类方法找不到）错误。
+
+**实施步骤**：
+
+1. 新建 `codegen/hierarchy.py`，定义数据结构：
+   ```python
+   @dataclass
+   class ClassHierarchy:
+       classes: dict[str, ClassInfo]  # binary_name → ClassInfo
+       
+       def is_subtype(self, sub: str, sup: str) -> bool:
+           """判断 sub 是否是 sup 的子类型（包括接口实现）"""
+       
+       def lookup_virtual(self, recv_class: str, method_name: str, desc: str) -> str | None:
+           """沿继承链查找方法定义所在的类"""
+       
+       def inherited_fields(self, class_name: str) -> list[tuple[str, str]]:
+           """返回该类从所有父类继承的字段（field_name, rust_type）"""
+   ```
+
+2. `transpile.py`：在生成代码前，遍历所有已解析的 `ClassInfo` 构建 `ClassHierarchy`，传入 emitter。
+
+3. `emitter.py`：生成 struct 时，通过 `hierarchy.inherited_fields(class_name)` 自动注入父类字段（解决 E0609）。
+
+4. 近期前置优化（不需要完整 ClassHierarchy）：在 `emitter.py` 中利用现有 `ClassInfo.super_class` 直接查找父类字段。
+
+**影响范围**：
+- 解决 E0609（字段找不到）中的继承字段缺失问题（约 449 cases）
+- 解决 E0599 中父类方法找不到问题（部分 cases）
+- 为 T53（instanceof）提供完整语义支持
+
+**验收**：
+- `AbstractList.modCount` 出现在 `ArrayList` 的结构体中
+- `MutableBigInteger.add` 在 `SignedMutableBigInteger` 上可调用
+- E0609 错误数量下降
+
+---
+
+### T56 · 实现 if/else 控制流结构恢复（CFG + 支配树）
+**状态**：`[ ]`  
+**文件**：`codegen/cfg.py`（扩展）、`codegen/method.py`（扩展）  
+**优先级**：P2  
+**依赖**：T52 编译错误降至 2000 以下后再实施，避免回归难以判断
+
+**背景**：`cfg.py` 只做 back-edge goto 检测（识别 while 循环）和三指令布尔模式。`if/else` 完全没有结构化恢复，是当前所有覆盖率瓶颈的根本原因（见计划文档 §1.1 和 §四）。
+
+**三阶段实施路线**：
+
+**Step 1：基本块切割**（约 150 行，`cfg.py` 新增）
+```python
+@dataclass
+class BasicBlock:
+    id: int
+    instrs: list[Instr]
+    succs: list[int]   # 后继 BB id
+    preds: list[int]   # 前驱 BB id
+
+def build_basic_blocks(instrs: list[Instr]) -> list[BasicBlock]:
+    # 识别 leader：方法入口 + 跳转目标 + 跳转后的下一条
+    # 切割基本块，建立前驱/后继边
+```
+
+**Step 2：支配树计算**（约 60 行，迭代式算法）
+```python
+def compute_dominators(bbs: list[BasicBlock]) -> dict[int, int]:
+    # 返回 {bb_id: idom_id}（immediate dominator）
+    # Cooper et al. 迭代式算法
+```
+
+**Step 3：结构恢复**（约 200 行）
+```python
+def recover_structure(bbs, idom) -> list[StructNode]:
+    # 识别自然循环（回边 n→h，h dom n）→ LoopStmt
+    # 识别 if/else（条件跳转 → then_bb/else_bb → merge_bb）→ IfStmt
+    # 识别 switch（tableswitch/lookupswitch）→ 新 MatchStmt IR 节点
+```
+
+每步完成后独立测试，不影响现有正常工作的代码路径。
+
+**验收**：
+- 含 if/else 的简单 Java 方法生成正确的 Rust `if/else`
+- 原有 while 循环测试通过
+- 嵌套 if/loop 结构不产生错误
+
+---
+
+### T57 · 实现 switch/tableswitch/lookupswitch 指令
+**状态**：`[ ]`  
+**文件**：`codegen/instr.py`、`codegen/method.py`（新 MatchStmt IR 节点）  
+**优先级**：P3  
+**依赖**：T56（最好在 CFG 基础上实现，正确处理 fallthrough）
+
+**背景**：`tableswitch` 和 `lookupswitch` 指令只弹出 key，完全未生成 `match` 分支。这是语义级 bug——任何 switch 语句都静默产生错误行为（见计划文档 §5.1）。
+
+**JVM 字节码格式**：
+- `tableswitch`：连续整数范围 [low, high]，每个值对应一个跳转偏移
+- `lookupswitch`：任意整数值 → 偏移的键值对列表
+
+**目标生成结果**：
+```rust
+match key {
+    0 => { /* case 0 */ }
+    1 => { /* case 1 */ }
+    _ => { /* default */ }
+}
+```
+
+**实施步骤**：
+1. `rs_ir.py` 新增 `MatchStmt` IR 节点：`arms: list[(pattern, body)]`，`default_body: list`
+2. `classfile.py` 已解析 switch 操作数（`default +X, low Y, high Z`），在 `method.py` 中识别 switch 块边界
+3. `instr.py` 中 `tableswitch`/`lookupswitch` 生成 `MatchStmt`
+4. `render.py` 新增 `MatchStmt` 渲染（`match key { pattern => { ... } }`）
+
+**验收**：
+- 含 switch 语句的 Java 方法生成正确的 Rust `match`
+- default 分支对应 `_` arm
+- 运行结果与 Java 一致
+
+---
+
+### T58 · 类型系统 RsType 化（jvm_to_rust 返回 RsType 节点）
+**状态**：`[ ]`  
+**文件**：`codegen/type_map.py`、`codegen/instr.py`、`codegen/emitter.py`  
+**优先级**：P3
+
+**背景**：`type_map.py` 的 `jvm_to_rust` 返回 `str`，导致后续所有类型判断脆弱：
+
+```python
+# 当前脆弱写法（格式稍变即失效）
+if rt.startswith('Rc<RefCell<Vec<'):
+    elem = rt[len('Rc<RefCell<Vec<'):-3]  # 魔法切片
+
+# 应改为结构化查询
+if isinstance(ty, RsGeneric) and ty.outer == 'Rc':
+    vec_ty = ty.params[0].params[0]  # RefCell<Vec<T>>
+```
+
+`rs_ir.py` 已定义完整的 `RsType` ADT，但 `type_map.py` 未打通。
+
+**实施步骤（渐进替换）**：
+
+1. `type_map.py` 新增 `jvm_to_rs_type(desc, registry) -> RsType`，与旧 `jvm_to_rust` 并行：
+   ```python
+   def jvm_to_rs_type(desc: str, registry=None) -> RsType:
+       if desc == 'V': return RsPrimitive('()')
+       if desc == 'I': return RsPrimitive('i32')
+       if desc == 'J': return RsPrimitive('i64')
+       if desc.startswith('['):
+           elem = jvm_to_rs_type(desc[1:], registry)
+           return RsGeneric('Rc', [RsGeneric('RefCell', [RsGeneric('Vec', [elem])])])
+       cls = desc[1:-1].split('/')[-1].replace('$', '_') if desc.startswith('L') else desc
+       return RsNamed(cls)
+   ```
+
+2. 将 `instr.py`、`emitter.py` 中高频字符串类型判断改为 `isinstance` 检查（渐进）
+
+3. 最终弃用旧 `jvm_to_rust`（字符串版），所有调用点迁移到 `jvm_to_rs_type`
+
+**验收**：
+- 所有现有测试通过
+- 生成代码与重构前一致（diff 为零）
+- 消除所有 `startswith('Rc<RefCell<Vec<')` 形式的字符串比较
+
+---
+
+### T59 · 方法级 native 实现注入（细粒度覆盖机制）
+**状态**：`[ ]`  
+**文件**：`codegen/emitter.py`、`output/native_impls/`（目录约定）  
+**优先级**：P3  
+**来源**：参考 ruva 项目 `docs/plans/2026-09-14-codegen-improvement-plan.md` §1.3
+
+**背景**：当前 `native_impls/` 以文件为粒度替换整个类（整类手写）。当一个类只有少数方法需要手写时，不得不维护整个类的所有方法，随着生成逻辑改进，手写版本与生成版本差距越来越大（见计划文档 §5.5）。
+
+**目标**：引入**方法级注入协议**，允许只覆盖特定方法：
+
+```
+native_impls/
+└── java/
+    └── lang/
+        └── string.rs   # 只包含需要手写的 java/lang/String 方法
+```
+
+`string.rs` 内容约定：
+```rust
+/// java/lang/String.intern:()Ljava/lang/String;
+pub fn intern(&self) -> Result<String> {
+    // 手写实现
+}
+
+/// @synthetic
+pub fn helper_method(&self) -> String {
+    // 注入 Java 中不存在的辅助方法
+}
+```
+
+**实施步骤**：
+1. `emitter.py` 在生成类文件时，扫描 `native_impls/{binary_name_snake}.rs`
+2. 解析 `/// java/ClassName.methodName:descriptor` 注释头，识别覆盖方法
+3. 对匹配方法：不生成 stub，而是生成 `// see native_impls/` 注释 + `pub use` 或直接 `include!`
+4. 对 `@synthetic`：直接注入到 impl 块，不需要对应 Java 方法
+
+**验收**：
+- 只包含单个方法手写覆盖的 `native_impls/*.rs` 文件正确注入
+- 其他方法仍由 codegen 自动生成
+- 现有 `native_impls/java/lang/system.rs` 等整类覆盖仍向后兼容
+
+---
+
+### T60 · 表达式优先级括号优化
+**状态**：`[ ]`  
+**文件**：`codegen/render.py`、`codegen/rs_ir.py`  
+**优先级**：P3  
+**来源**：参考 ruva 项目 `docs/plans/2026-09-14-codegen-improvement-plan.md` §1.7
+
+**背景**：`render.py` 生成的表达式不做优先级分析，复杂嵌套表达式可能产生语义错误代码（如 `a + b * c` 被生成为 `(a + b) * c`）。目前只靠大量保守括号规避，导致生成代码括号过多，可读性差。
+
+**实施步骤**：
+1. `rs_ir.py` 的 `BinOp` 节点添加优先级属性：
+   ```python
+   _BIN_OP_PREC = {
+       '||': 1, '&&': 2, '|': 3, '^': 4, '&': 5,
+       '==': 6, '!=': 6, '<': 7, '>': 7, '<=': 7, '>=': 7,
+       '+': 10, '-': 10, '*': 11, '/': 11, '%': 11,
+   }
+   ```
+2. `render.py` 中 `render_expr(BinOp)` 只在子表达式优先级低于父表达式时加括号
+3. 同步修复 `RawExpr` 中手动拼接的过度括号（渐进）
+
+**验收**：
+- 生成代码中不出现 `(((a + b)))` 多余括号
+- 不出现语义错误的优先级（如乘法被错误加括号变成加法先算）
+- 现有所有测试通过（括号优化不改变语义）
+
+---
+
+### T61 · SSA 构建（架构级，长期目标）
+**状态**：`[ ]`  
+**优先级**：P4（高成本，依赖 T56 CFG）  
+**依赖**：T56（需要先有完整 CFG）
+
+**背景**：`StackSim` 在每条指令处理后立即生成 `LetStmt`，不同分支路径上相同 slot 的变量类型不一致，无合并（φ）逻辑。导致复杂分支结构下类型不稳定，产生大量编译错误。
+
+**目标架构**：
+- 引入 SSA（Static Single Assignment）构建阶段
+- 每个 slot 在不同赋值点分配新的 SSA 变量（`v0`, `v1`, `v2`）
+- 在控制流汇聚点插入 φ 函数确定合并类型
+- 变量的最终 Rust 类型由 φ 函数操作数的公共超类型决定
+
+**影响**：这是类型精确性的根本性改进，但工程量极大，且需要 T56（CFG）作为基础。
+
+**验收**：
+- 跨分支变量类型正确合并（`Object x = cond ? new Foo() : new Bar()` 中 x 类型为公共父类）
+- 循环变量类型稳定
+
+---
+
+**阶段十任务依赖**：
+
+```
+T52 (降低编译错误) ─ 持续进行，独立
+T53 (instanceof)   ─ 依赖 T52 (<2000 后验证更清晰)；完整语义依赖 T55
+T54 (精确 mut)     ─ 独立，可立即开始
+T55 (类层次图)     ─ 独立，可立即开始（先做父类字段注入的简化版）
+T56 (if/else CFG)  ─ 依赖 T52 (<2000 后避免回归难判断)
+T57 (switch)       ─ 依赖 T56（建议），或独立实现简化版
+T58 (RsType 化)    ─ 独立，渐进替换，可与其他任务并行
+T59 (方法级 native) ─ 独立，可立即开始
+T60 (优先级括号)   ─ 独立，低风险，可随时处理
+T61 (SSA)          ─ 依赖 T56，长期目标
+```
+
+**推荐执行序**：
+- 立即：T52（持续）、T54（低成本 P1）、T59（独立 P3）
+- 短期：T53（P1，依赖 T52 降至 <2000）、T55（P2，近期前置优化可立即做）
+- 中期：T56（P2，CFG 结构恢复）、T58（P3，类型系统重构）
+- 长期：T57（P3，switch）、T60（P3，括号）、T61（P4，SSA）
