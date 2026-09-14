@@ -733,9 +733,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             *pkg_parts, class_name = parts
             mod_name  = to_snake(class_name)
             parent_dir = os.path.join(jdk_src, *pkg_parts)
-            # 跳过与子包目录同名的类文件（E0761：module.rs 和 module/mod.rs 不能共存）
+            # 类名与子包目录同名时（E0761：module.rs 和 module/mod.rs 不能共存），
+            # 改用 module_t.rs 文件名（类型名仍是 Module）
             if mod_name in pkg_dir_names.get(parent_dir, set()):
-                continue
+                mod_name = mod_name + '_t'
             file_path = os.path.join(parent_dir, mod_name + '.rs')
             # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,

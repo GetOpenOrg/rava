@@ -64,6 +64,8 @@ class StackSim:
         self.is_constructor = is_constructor
         self._loc_names  = local_names or {}     # slot → Java variable name
         self._hint_types = slot_hint_types or {}  # slot → precise RsType from LocalVariableTypeTable
+        self._current_depth: int                     = 0
+        self._slot_decl_depth: dict[int, int]        = {}  # slot → 首次声明时的嵌套深度
 
         def _is_wide(rt: RsType) -> bool:
             """long (i64) 和 double (f64) 在 JVM 中各占 2 个局部变量槽。"""
@@ -74,17 +76,31 @@ class StackSim:
             for rt in param_rust_types:
                 name = _safe_name(self._loc_names.get(slot, f"arg_{slot}"))
                 self.locals[slot] = (name, rt, False)
+                self._slot_decl_depth[slot] = 0
                 slot += 2 if _is_wide(rt) else 1
         else:
             # this 是当前类的句柄，用 short_cls 转换 JVM 二进制名到 Rust 短名
             rust_cls = _short_cls(class_name) if class_name else 'Object'
             this_ty = RsNamed(rust_cls) if rust_cls else RsNamed("Object")
             self.locals[0] = ("this", this_ty, False)
+            self._slot_decl_depth[0] = 0
             slot = 1
             for idx, rt in enumerate(param_rust_types):
                 name = _safe_name(self._loc_names.get(slot, f"arg_{idx}"))
                 self.locals[slot] = (name, rt, False)
+                self._slot_decl_depth[slot] = 0
                 slot += 2 if _is_wide(rt) else 1
+
+    # ── 作用域深度追踪（T68：JVM slot 复用检测）────────────────────────────
+
+    def enter_scope(self):
+        """进入嵌套作用域（循环体 / if 体等）。"""
+        self._current_depth += 1
+
+    def exit_scope(self):
+        """退出嵌套作用域。"""
+        if self._current_depth > 0:
+            self._current_depth -= 1
 
     # ── 生成新的临时变量名 ───────────────────────────────────────────────────
 
@@ -140,10 +156,13 @@ class StackSim:
             ty = hint
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
+            decl_depth = self._slot_decl_depth.get(slot, 0)
             # T42: slot 类型发生变化时（如 for-each 迭代器 slot 被后续变量复用），
             # 用 let 阴影（shadowing）而非赋值，避免 Rust 类型不匹配
-            if render_type(old_ty) != render_type(ty):
+            # T68: slot 在内层作用域（depth > current）中首次声明时，在外层访问必须用 let
+            if render_type(old_ty) != render_type(ty) or decl_depth > self._current_depth:
                 self.locals[slot] = (name, ty, True)
+                self._slot_decl_depth[slot] = self._current_depth
                 value = _maybe_downcast(expr, ty) if src_is_object else expr
                 let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)
                 self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
@@ -152,6 +171,7 @@ class StackSim:
         else:
             name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
             self.locals[slot] = (name, ty, True)
+            self._slot_decl_depth[slot] = self._current_depth
             value = _maybe_downcast(expr, ty) if src_is_object else expr
             # downcast 时让 Rust 推断类型；RsGeneric 也让 Rust 推断；否则写显式类型
             let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)

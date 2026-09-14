@@ -837,15 +837,17 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
 
 
 def _class_known(cls_short: str, registry: dict | None) -> bool:
-    """判断短类名是否已知（registry 中存在或是 java_runtime 手写类）。"""
+    """判断短类名是否已知（registry 中存在或是 java_runtime 手写类）。
+    T71：比较时统一将 $ 替换为 _，避免 JVM 格式（Outer$Inner）与 Rust 格式（Outer_Inner）不一致。"""
     if not registry:
         return True
     if not cls_short or cls_short in _JAVA_RUNTIME_SHORT_NAMES:
         return True
     if cls_short in registry:
         return True
+    norm = cls_short.replace('$', '_')
     for key in registry:
-        if key.rsplit('/', 1)[-1] == cls_short:
+        if key.rsplit('/', 1)[-1].replace('$', '_') == norm:
             return True
     return False
 
@@ -866,10 +868,11 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
         return mname
     # 直接查（可能是全路径）
     target_ci = registry.get(cls_name)
-    # 短名查（用全路径反查）
+    # 短名查（用全路径反查）；T71：统一 $ → _ 后比较
     if target_ci is None and '/' not in cls_name:
+        norm = cls_name.replace('$', '_')
         for key, ci in registry.items():
-            if key.rsplit('/', 1)[-1] == cls_name:
+            if key.rsplit('/', 1)[-1].replace('$', '_') == norm:
                 target_ci = ci
                 break
     if target_ci is None:
@@ -1018,16 +1021,15 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
     arg_str = ', '.join(args)
     rust_ret = jvm_to_rust(ret, registry)
+    # E0599 防护：接收者是 Object 类型时，Object 结构体不定义具体子类方法，
+    # 直接调用会产生 E0599。对 void 返回跳过调用，对非 void 用 Default::default()。
+    obj_is_bare = (obj_ty == 'Object')
     if rust_ret == '()':
-        sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))
+        if not obj_is_bare:
+            sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))
     else:
         v = sim.fresh()
-        # 接收者是 Object 类型时，java_runtime 中方法返回 Result<Object>，
-        # 而 StackSim 跟踪的是 JVM 描述符中声明的具体返回类型（如 String）。
-        # 若不处理，Rust 会推断 v: Object，后续用到 v 时出现类型不匹配。
-        # 解决方案：丢弃方法返回值（保留 ? 错误传播），用 Default::default() 提供具体类型。
-        if obj_ty == 'Object' and rust_ret not in ('Object', '()') and rust_ret not in _PRIMITIVE_RUST_TYPES:
-            sim.emit(RawStmt(f"let _ = {obj_e}.{rust_mname}({arg_str})?;"))
+        if obj_is_bare and rust_ret not in ('Object', '()') and rust_ret not in _PRIMITIVE_RUST_TYPES:
             sim.emit(RawStmt(f"let {v}: {rust_ret} = Default::default();"))
         else:
             sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
