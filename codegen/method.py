@@ -412,20 +412,22 @@ def gen_method_body(
             return f"{_safe_fname(f.name)}: JField::new({rust_default(jvm_to_rust(f.descriptor))})"
 
         # 按照 emitter.py 的 struct 字段顺序：_super → 本类字段 → _phantom
-        parts_init = []
-        if _ctor_has_super:
-            parts_init.append("_super: Default::default()")
-        parts_init.extend(_field_init(f) for f in inst_fields)
-        if class_tparams:
-            parts_init.append("_phantom: std::marker::PhantomData")
-
-        if parts_init:
-            struct_init = f"Self {{ {', '.join(parts_init)} }}"
-        elif class_tparams:
-            # 无字段无 _super 但有泛型参数：tuple struct
+        # 特例：无 _super、无字段、有泛型参数 → tuple struct，用 Self(PhantomData) 而非具名字段
+        _is_tuple_struct = (not _ctor_has_super and not inst_fields and bool(class_tparams))
+        if _is_tuple_struct:
             struct_init = "Self(std::marker::PhantomData)"
         else:
-            struct_init = "Self {}"
+            parts_init = []
+            if _ctor_has_super:
+                parts_init.append("_super: Default::default()")
+            parts_init.extend(_field_init(f) for f in inst_fields)
+            if class_tparams:
+                parts_init.append("_phantom: std::marker::PhantomData")
+            if parts_init:
+                # 用 ..Default::default() 兜底额外字段（如 native_impls @field 注入的字段）
+                struct_init = f"Self {{ {', '.join(parts_init)}, ..Default::default() }}"
+            else:
+                struct_init = "Self::default()"
         entries.append(('', f"    let this = {struct_init};"))
         sim.locals[0] = ('this', RsNamed(short_cls(method.class_name)), False)
 

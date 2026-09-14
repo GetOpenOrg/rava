@@ -9,6 +9,7 @@ impl<K: Clone + Default + Into<Object> + From<Object> + 'static,
     pub fn new_typed() -> Result<HashMap<K, V>> {
         let base = HashMap::<Object, Object>::new()?;
         Ok(HashMap {
+            _super: base._super,
             table: base.table,
             entrySet: base.entrySet,
             size: base.size,

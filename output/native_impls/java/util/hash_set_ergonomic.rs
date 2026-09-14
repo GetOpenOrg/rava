@@ -7,6 +7,7 @@ impl<E: Clone + Default + Into<Object> + From<Object> + 'static> HashSet<E> {
     pub fn new_typed() -> Result<HashSet<E>> {
         let base = HashSet::<Object>::new()?;
         Ok(HashSet {
+            _super: base._super,
             map: base.map,
             _phantom: std::marker::PhantomData,
         })

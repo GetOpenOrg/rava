@@ -768,8 +768,19 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             val_str = f"{val_str}.clone()"
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {val_str};"))
     elif op == 'bastore':
-        val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as i8;"))
+        val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
+        arr_ty_str = render_type(arr_ty)
+        # boolean[] 在 JVM 中以 bastore 写入，Rust 映射为 Vec<bool>，需要 != 0 转换
+        if arr_ty_str in ('Vec<bool>', 'Rc<RefCell<Vec<bool>>>'):
+            val_s = render_expr(val_expr)
+            val_ty_s = render_type(val_ty)
+            if val_ty_s == 'bool':
+                coerced = val_s
+            else:
+                coerced = f"(({val_s}) as i8 != 0)"
+            sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {coerced};"))
+        else:
+            sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as i8;"))
     elif op == 'sastore':
         val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as i16;"))
