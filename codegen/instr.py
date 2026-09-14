@@ -433,7 +433,12 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment:
             _, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'i32'
-            val_str = _coerce_value(render_expr(val_expr), val_ty, ftype)
+            val_str_raw = render_expr(val_expr)
+            val_ty_name = render_type(val_ty)
+            if ftype == 'Object' and val_ty_name not in ('Object', '()') and not val_ty_name.startswith('Rc<') and val_str_raw != 'this':
+                val_str = f"{val_str_raw}.into()"
+            else:
+                val_str = _coerce_value(val_str_raw, val_ty, ftype)
             sim.emit(RawStmt(f"{render_expr(obj_expr)}.{fname}.set({val_str});"))
         else:
             sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))
@@ -457,14 +462,14 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elem_t, zero = NEWARRAY_TYPES.get(operand.strip(), ('i32', '0i32'))
         v = sim.fresh('_arr')
         sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![{zero}; {render_expr(count_expr)} as usize]));"))
-        sim.push(Var(v), RsGeneric('Vec', [RsNamed(elem_t)]))
+        sim.push(Var(v), RsNamed(f'Rc<RefCell<Vec<{elem_t}>>>'))
     elif op == 'anewarray':
         count_expr, _ = sim.pop()
         cls = short_cls(comment) or 'Object'
         elem_t = jvm_to_rust(f'L{cls};') if cls != 'Object' else 'Object'
         v = sim.fresh('_arr')
         sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(Vec::with_capacity({render_expr(count_expr)} as usize)));"))
-        sim.push(Var(v), RsGeneric('Vec', [RsNamed(elem_t)]))
+        sim.push(Var(v), RsNamed(f'Rc<RefCell<Vec<{elem_t}>>>'))
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
         dims = int(dims_str) if dims_str.isdigit() else 2
@@ -706,6 +711,10 @@ def _class_known(cls_short: str, registry: dict | None) -> bool:
     return False
 
 
+_JAVA_RUST_NAME_CONFLICTS = frozenset({'clone'})
+_JAVA_RUST_RENAME = {'clone': 'jvm_clone'}
+
+
 def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dict | None) -> str:
     """查找 registry 中 cls_name 类的 mname 方法是否重载，重载则返回 mangled 名，否则原名。
     支持短名（Objects）和全路径名（java/util/Objects）查找。
@@ -725,7 +734,7 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
                 target_ci = ci
                 break
     if target_ci is None:
-        return mname
+        return _JAVA_RUST_RENAME.get(mname, mname)
     # 排除 java_runtime 类（registry 中仍有其 JDK 字节码副本，但方法名不 mangle）
     if target_ci.name.rsplit('/', 1)[-1] in _JAVA_RUNTIME_SHORT_NAMES:
         return mname
@@ -736,10 +745,16 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
         erg_rename = get_ergonomic_jvm_rename(target_ci.name, mname)
         if erg_rename is not None:
             return erg_rename
+        # Java→Rust 名字冲突重命名（如 clone→jvm_clone）
+        erg_name = _JAVA_RUST_RENAME.get(mname)
+        if erg_name is not None:
+            return erg_name
         return mname
     desc_m = re.search(r':(\([^)]*\)\S+)', comment)
     raw_desc = desc_m.group(1) if desc_m else ''
-    return mangle_name(mname, raw_desc) if raw_desc else mname
+    result = mangle_name(mname, raw_desc) if raw_desc else mname
+    # 重载后的名字若与 Rust 原生名字冲突也需重命名
+    return _JAVA_RUST_RENAME.get(result, result)
 
 
 def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
@@ -760,12 +775,13 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         e = render_expr(e_expr)
         ty = render_type(ty_node)
         expected = jvm_to_rust(param_jvm, registry)
-        if expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
+        if expected == 'Object' and ty not in ('Object', '()') and not ty.startswith('Rc<'):
+            e = f"{e}.clone().into()" if e == 'this' else f"{e}.into()"
+        elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, ty_node, expected)
         elif expected == 'i32' and ty in ('i8', 'i16', 'u16'):
             e = f"({e} as i32)"
         elif ty not in _PRIMITIVE_RUST_TYPES:
-            # 引用类型（含 Rc<>）按 Java 引用语义传递：clone 防止移动
             e = f"{e}.clone()"
         args.insert(0, e)
 
@@ -819,14 +835,13 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         expected_rust = jvm_to_rust(param_jvm, registry)
         actual_rust = render_type(e_ty_node)
         if expected_rust == 'Object' and actual_rust not in ('Object', '()') and not actual_rust.startswith('Rc<'):
-            # this 是 &Self 引用，需要 clone 后再 into()；其他类型直接 into()
+            # this 是 &Self 引用，需要 clone 后再 into()；Clone::clone 避免调用 Java clone()
             e_str = f"{e_str}.clone().into()" if e_str == 'this' else f"{e_str}.into()"
         elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
             e_str = _coerce_value(e_str, e_ty_node, expected_rust)
         elif expected_rust == 'i32' and actual_rust in ('i8', 'i16', 'u16'):
             e_str = f"({e_str} as i32)"
         elif actual_rust not in _PRIMITIVE_RUST_TYPES:
-            # 类类型和 Rc 类型按 Java 引用语义传递：clone 防止移动（Rc clone 共享所有权，廉价）
             e_str = f"{e_str}.clone()"
         args.insert(0, e_str)
     obj_expr, obj_ty_node = sim.pop()

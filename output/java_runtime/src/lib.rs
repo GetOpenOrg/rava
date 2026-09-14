@@ -24,6 +24,37 @@ impl Printable for java::lang::Object {
     fn to_print_string(&self) -> String { format!("{}", self) }
 }
 
+/// JVM null 检查：ifnull/ifnonnull 字节码翻译辅助。
+/// Rust 类型不可为 null，此函数始终返回 false。
+/// Option<T> 类型单独通过 Option::is_none() 处理。
+#[inline(always)]
+pub fn _is_jnull<T>(_val: &T) -> bool { false }
+
+/// JVM Enum 基类方法：为所有类型提供默认 ordinal/name stub，
+/// 避免 E0599 "no method named `ordinal`"。
+/// 具体 enum 类的 inherent 方法会优先于此 trait 方法。
+pub trait JvmEnum {
+    fn ordinal(&self) -> Result<i32> {
+        panic!("stub: Enum.ordinal() - enum field not initialized")
+    }
+}
+impl<T> JvmEnum for T {}
+
+/// JVM Object 基类方法：为所有类型提供默认 stub，
+/// 避免 E0599 "no method named `getClass`/`hashCode`"。
+/// 具体类的 inherent 方法会优先于此 trait 方法。
+pub trait JvmObjectBase {
+    fn getClass(&self) -> Result<java::lang::Object> {
+        panic!("stub: Object.getClass()")
+    }
+    fn hashCode(&self) -> Result<i32> { Ok(0) }
+    fn equals(&self, _other: java::lang::Object) -> Result<bool> { Ok(false) }
+    fn jvm_clone(&self) -> Result<java::lang::Object> {
+        panic!("stub: Object.clone()")
+    }
+}
+impl<T> JvmObjectBase for T {}
+
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 pub mod prelude {
     #![allow(unused_imports)]
@@ -31,6 +62,9 @@ pub mod prelude {
     pub use super::types::JField;
     pub use super::java::lang::Object;
     pub use super::Printable;
+    pub use super::_is_jnull;
+    pub use super::JvmEnum;
+    pub use super::JvmObjectBase;
     pub use std::rc::Rc;
     pub use std::cell::RefCell;
 }

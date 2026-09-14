@@ -132,7 +132,9 @@ class StackSim:
             f"store_local() requires RsType, got {type(ty)}: {ty!r}"
         # 用 LocalVariableTypeTable 提供的精确类型覆盖泛型擦除后的 Object
         hint = self._hint_types.get(slot)
-        if hint is not None and isinstance(ty, RsNamed) and ty.name == 'Object':
+        # 记录原始栈类型：只有在栈类型为 Object 时才需要 downcast
+        src_is_object = isinstance(ty, RsNamed) and ty.name == 'Object'
+        if hint is not None and src_is_object:
             ty = hint
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
@@ -140,7 +142,7 @@ class StackSim:
             # 用 let 阴影（shadowing）而非赋值，避免 Rust 类型不匹配
             if render_type(old_ty) != render_type(ty):
                 self.locals[slot] = (name, ty, True)
-                value = _maybe_downcast(expr, ty)
+                value = _maybe_downcast(expr, ty) if src_is_object else expr
                 let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)
                 self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
             else:
@@ -148,7 +150,7 @@ class StackSim:
         else:
             name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
             self.locals[slot] = (name, ty, True)
-            value = _maybe_downcast(expr, ty)
+            value = _maybe_downcast(expr, ty) if src_is_object else expr
             # downcast 时让 Rust 推断类型；RsGeneric 也让 Rust 推断；否则写显式类型
             let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)
             self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))

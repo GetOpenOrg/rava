@@ -211,6 +211,9 @@ def gen_method_body(
         rust_fn_name = mangle_name(method.name, method.descriptor)
     else:
         rust_fn_name = safe_ident(method.name)
+        # Java clone() 与 Rust Clone::clone() 同名冲突：重命名为 jvm_clone
+        if rust_fn_name == 'clone':
+            rust_fn_name = 'jvm_clone'
         # ergonomic @jvm_rename 指令：定义侧同步重命名（与调用侧的 _mangle_if_overloaded 保持一致）
         erg = get_ergonomic_jvm_rename(method.class_name, method.name)
         if erg is not None:

@@ -51,8 +51,8 @@ def cmp_op(opcode: str, a: str, b: str) -> str:
         'ifeq': f"({a}==0i32)", 'ifne': f"({a}!=0i32)",
         'iflt': f"({a}<0i32)",  'ifge': f"({a}>=0i32)",
         'ifle': f"({a}<=0i32)", 'ifgt': f"({a}>0i32)",
-        'ifnull':    f"{a}.is_none()",
-        'ifnonnull': f"!{a}.is_none()",
+        'ifnull':    f"_is_jnull(&{a})",
+        'ifnonnull': f"!_is_jnull(&{a})",
     }
     return one_ops.get(opcode, f"/* {opcode} */ true")
 
