@@ -15,7 +15,7 @@ from .types import ParsedMethod, ClassInfo
 from .type_map import jvm_to_rust, sig_type, rust_default, mangle_name, short_cls, get_ergonomic_jvm_rename
 from .constants import safe_ident
 from .stack import StackSim
-from .cfg import find_loops, find_boolean_conditions, cmp_op, neg_cmp_op
+from .cfg import find_loops, find_boolean_conditions, find_if_guards, cmp_op, neg_cmp_op, _TWO_OP_BRANCH_OPS
 from .instr import sim_instr
 from .render import render_stmt, render_expr, render_type
 from .rs_ir import (
@@ -251,6 +251,7 @@ def _add_ok_return(lines: list[str], rust_ret: str) -> list[str]:
 TWO_OP_CMP = frozenset({
     'if_icmpeq', 'if_icmpne', 'if_icmplt',
     'if_icmpge', 'if_icmple', 'if_icmpgt',
+    'if_acmpeq', 'if_acmpne',
 })
 
 
@@ -279,8 +280,12 @@ def gen_method_body(
         sig_param_types, sig_ret_type = [], ''
 
     instrs           = method.instrs
-    loop_map         = {lp.start_idx: lp for lp in find_loops(instrs)}
+    _loops           = find_loops(instrs)
+    loop_map         = {lp.start_idx: lp for lp in _loops}
     bool_cond_map    = find_boolean_conditions(instrs)
+    _raw_guards      = find_if_guards(instrs, _loops)
+    # boolean-condition 模式优先级更高，排除重叠的 guard 检测
+    if_guard_map     = {k: v for k, v in _raw_guards.items() if k not in bool_cond_map}
     param_types      = method.param_types
 
     # 参数类型：如果泛型签名提供了类型变量，优先使用
@@ -534,6 +539,46 @@ def gen_method_body(
             sim.push(RawExpr(bool_expr), BOOL)
             flush(sim)
             i = end_idx
+            continue
+
+        # if-guard：条件跳转 + fall-through 必定退出
+        if i in if_guard_map:
+            guard = if_guard_map[i]
+            op = ins.opcode
+            if guard.is_two_op:
+                b_expr, b_ty = sim.pop()
+                a_expr, a_ty = sim.pop()
+                a_str = _coerce_icmp_operand(render_expr(a_expr), a_ty)
+                b_str = _coerce_icmp_operand(render_expr(b_expr), b_ty)
+                fall_cond = neg_cmp_op(op, a_str, b_str)
+            else:
+                a_expr, a_ty = sim.pop()
+                a_str = render_expr(a_expr)
+                a_is_bool = (str(a_ty) == 'bool' or getattr(a_ty, 'name', '') == 'bool')
+                if a_is_bool and op in ('ifeq', 'ifne'):
+                    # bool 操作数：ifeq = 条件为 false 时跳转 → fall-through = true
+                    # neg: ifeq→ifne，但 bool 要生成 a 而非 (a!=0)
+                    fall_cond = f'!({a_str})' if op == 'ifne' else a_str
+                else:
+                    fall_cond = neg_cmp_op(op, a_str, '')
+            flush(sim)
+            entries.append(('', f"    if {fall_cond} {{"))
+            inner_sim = StackSim(
+                rust_param_type_nodes, is_static, method.class_name, local_names,
+                slot_hint_types=slot_hint_types, return_type=rust_ret,
+                is_constructor=is_ctor, class_type_params=_class_tparams,
+            )
+            inner_sim.locals = dict(sim.locals)
+            inner_sim._slot_decl_depth = dict(sim._slot_decl_depth)
+            inner_sim.stack = list(sim.stack)
+            inner_sim.enter_scope()
+            for k in range(guard.body_start_idx, guard.continue_idx):
+                sim_instr(instrs[k], inner_sim, method.class_name, registry=registry)
+            inner_sim.exit_scope()
+            for s in inner_sim.stmts:
+                entries.append(('        ', s))
+            entries.append(('', '    }'))
+            i = guard.continue_idx
             continue
 
         # 普通指令

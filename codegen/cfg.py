@@ -1,7 +1,11 @@
 """
-控制流分析：检测 while 循环（back-edge goto → loop { if cond { break; } body }）。
+控制流分析：
+- find_loops: 检测 while 循环（back-edge goto → loop { if cond { break; } body }）
+- find_if_guards: 检测 guard 模式（条件跳转 + fall-through 必定退出）
+- find_boolean_conditions: 检测 condition→boolean 赋值模式
 """
 
+from dataclasses import dataclass
 from .types import Instr, LoopInfo
 
 
@@ -43,6 +47,7 @@ def cmp_op(opcode: str, a: str, b: str) -> str:
         'if_icmpeq': '==', 'if_icmpne': '!=',
         'if_icmplt': '<',  'if_icmpge': '>=',
         'if_icmple': '<=', 'if_icmpgt': '>',
+        'if_acmpeq': '==', 'if_acmpne': '!=',
     }
     if opcode in two_ops:
         return f"{a} {two_ops[opcode]} {b}"
@@ -64,6 +69,7 @@ _NEGATE_CMP: dict[str, str] = {
     'if_icmpeq': 'if_icmpne', 'if_icmpne': 'if_icmpeq',
     'if_icmplt': 'if_icmpge', 'if_icmpge': 'if_icmplt',
     'if_icmple': 'if_icmpgt', 'if_icmpgt': 'if_icmple',
+    'if_acmpeq': 'if_acmpne', 'if_acmpne': 'if_acmpeq',
     'ifnull': 'ifnonnull', 'ifnonnull': 'ifnull',
 }
 
@@ -72,6 +78,103 @@ def neg_cmp_op(opcode: str, a: str, b: str) -> str:
     """返回 fall-through 条件（跳转条件的否定）。"""
     return cmp_op(_NEGATE_CMP.get(opcode, opcode), a, b)
 
+
+# ── if-guard 检测 ──────────────────────────────────────────────────────────────
+
+_BRANCH_OPS = frozenset([
+    'if_icmpeq', 'if_icmpne', 'if_icmplt', 'if_icmpge', 'if_icmple', 'if_icmpgt',
+    'if_acmpeq', 'if_acmpne',
+    'ifeq', 'ifne', 'iflt', 'ifge', 'ifle', 'ifgt', 'ifnull', 'ifnonnull',
+])
+
+_TWO_OP_BRANCH_OPS = frozenset([
+    'if_icmpeq', 'if_icmpne', 'if_icmplt', 'if_icmpge', 'if_icmple', 'if_icmpgt',
+    'if_acmpeq', 'if_acmpne',
+])
+
+_EXIT_OPS = frozenset([
+    'return', 'ireturn', 'lreturn', 'freturn', 'dreturn', 'areturn', 'athrow',
+])
+
+
+@dataclass
+class IfGuardInfo:
+    """
+    一个 if-guard：条件跳转，fall-through 分支必定退出（athrow / *return / goto-past-T）。
+
+    生成模式：
+        if <fall_cond> {
+            // fall-through body (always exits)
+        }
+        // continue at continue_idx
+    """
+    body_start_idx: int   # 第一条 body 指令的索引
+    continue_idx: int     # guard 之后继续执行的指令索引（= 条件跳转的目标）
+    is_two_op: bool       # True = 条件需要两个操作数（if_icmp* / if_acmp*）
+
+
+def find_if_guards(instrs: list[Instr], loops: list[LoopInfo] | None = None) -> dict[int, IfGuardInfo]:
+    """
+    检测 guard 模式：
+      ifX <T>        # 条件为 TRUE → 跳到 T（正常路径）
+      <body>         # fall-through：必定退出（athrow / *return / forward goto-past-T）
+      <T>:           # 继续执行
+
+    返回 {branch_instr_idx: IfGuardInfo}。
+
+    排除循环体内部和循环条件指令，避免与 find_loops 冲突。
+    """
+    off2idx = {ins.offset: i for i, ins in enumerate(instrs)}
+
+    # 收集所有循环体范围和条件索引，排除它们
+    excluded: set[int] = set()
+    if loops:
+        for lp in loops:
+            excluded.update(range(lp.start_idx, lp.end_idx + 1))
+            excluded.add(lp.cond_idx)
+
+    result: dict[int, IfGuardInfo] = {}
+
+    for i, ins in enumerate(instrs):
+        if i in excluded:
+            continue
+        op = ins.opcode
+        if op not in _BRANCH_OPS or not ins.operand:
+            continue
+
+        target_offset = int(ins.operand)
+        if target_offset <= ins.offset:
+            continue  # 后向跳转（已被 find_loops 处理）
+
+        target_idx = off2idx.get(target_offset)
+        if target_idx is None:
+            continue
+
+        body_start_idx = i + 1
+        if body_start_idx >= target_idx:
+            continue  # 空 body，无意义
+
+        body_instrs = instrs[body_start_idx:target_idx]
+
+        # body 内不能有条件分支（保持线性，复杂嵌套暂不处理）
+        if any(bi.opcode in _BRANCH_OPS for bi in body_instrs):
+            continue
+
+        # body 必须必定退出：包含 *return / athrow
+        # 注意：不把 goto 当退出——goto-to-merge 在 boolean-condition 模式中也出现
+        exits = any(bi.opcode in _EXIT_OPS for bi in body_instrs)
+
+        if exits:
+            result[i] = IfGuardInfo(
+                body_start_idx=body_start_idx,
+                continue_idx=target_idx,
+                is_two_op=(op in _TWO_OP_BRANCH_OPS),
+            )
+
+    return result
+
+
+# ── boolean-condition 检测 ─────────────────────────────────────────────────────
 
 def find_boolean_conditions(instrs: list[Instr]) -> dict[int, tuple]:
     """
