@@ -778,7 +778,8 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
         use_vta: bool = False,
         cutoff_classes: frozenset | None = None,
         return_summaries: dict | None = None,
-        shared_cache: dict | None = None):
+        shared_cache: dict | None = None,
+        call_graph: dict | None = None):
     """
     通用 BFS 入口。
 
@@ -801,6 +802,7 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
     hier_super:  dict[str, str | None] = {}
     hier_ifaces: dict[str, list[str]]  = {}
     cache: dict = shared_cache if shared_cache is not None else {}
+    _cur: list = [None]   # 当前正在处理的方法 key，用于构建调用图边
 
     def get(cls):
         if cls in cache: return cache[cls]
@@ -832,6 +834,8 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
         if name == '<clinit>' and cls not in instantiated:
             return
         key = (cls, name, desc)
+        if call_graph is not None and _cur[0] is not None:
+            call_graph.setdefault(_cur[0], set()).add(key)
         if key not in visited:
             visited.add(key)
             queue.append(key)
@@ -862,12 +866,17 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
 
     for path in user_class_files:
         with open(path, 'rb') as f: data = f.read()
-        _, pool, methods, _, _ = _parse_class(data)
-        for _, _, bc, _ in methods:
-            if bc: process(bc, pool)
+        ucls, pool, methods, _, _ = _parse_class(data)
+        for mname, mdesc, bc, _ in methods:
+            if bc:
+                if call_graph is not None:
+                    _cur[0] = (ucls, mname, mdesc)
+                process(bc, pool)
 
     while queue:
         cls, name, desc = queue.popleft()
+        if call_graph is not None:
+            _cur[0] = (cls, name, desc)
         parsed = get(cls)
         if parsed is None: continue
         _, pool, methods, _, _ = parsed
@@ -890,6 +899,21 @@ def bfs_two_pass(user_class_files: list[str], resolver: JdkResolver,
                                   use_rta=False, shared_cache=sc)
     return bfs(user_class_files, resolver,
                seed_instantiated=inst, use_rta=True, shared_cache=sc)
+
+
+def bfs_two_pass_with_graph(user_class_files: list[str], resolver: JdkResolver,
+                             shared_cache: dict | None = None):
+    """Two-pass RTA + 调用图收集，供树状打印使用。"""
+    sc = shared_cache if shared_cache is not None else {}
+    _, _, _, inst, _ = bfs(user_class_files, resolver,
+                            use_rta=False, shared_cache=sc)
+    cg: dict = {}
+    visited, all_cls, native_stubs, _, cache = bfs(
+        user_class_files, resolver,
+        seed_instantiated=inst, use_rta=True,
+        call_graph=cg, shared_cache=sc,
+    )
+    return visited, all_cls, native_stubs, cg, cache
 
 
 def bfs_vta(user_class_files: list[str], resolver: JdkResolver,
@@ -974,12 +998,111 @@ def bfs_internal_boundary(user_class_files: list[str], resolver: JdkResolver,
                cutoff_classes=internal_classes, shared_cache=sc)
 
 
+# ─── 调用树打印 ──────────────────────────────────────────────────────────────────
+
+def _get_user_methods(user_class_files: list[str]) -> list[tuple]:
+    """从用户 .class 文件提取所有有字节码的方法签名，作为调用树根节点。"""
+    roots = []
+    for path in user_class_files:
+        with open(path, 'rb') as f: data = f.read()
+        cls_name, _, methods, _, _ = _parse_class(data)
+        for mname, mdesc, bc, _ in methods:
+            if mname != '<clinit>' and bc:
+                roots.append((cls_name, mname, mdesc))
+    return roots
+
+
+def print_call_tree(
+    roots: list[tuple],
+    call_graph: dict,
+    native_stubs: set,
+    max_depth: int = 8,
+) -> None:
+    """以树状图打印方法调用链。"""
+    shown: set[tuple] = set()  # 已展开过的节点（跨分支去重）
+
+    def _fmt(key: tuple) -> str:
+        cls, name, desc = key
+        short = cls.split('/')[-1]
+        tags = []
+        if key in native_stubs:
+            tags.append('native')
+        if _is_internal(cls):
+            tags.append('internal')
+        tag_str = '  [' + ', '.join(tags) + ']' if tags else ''
+        return f'{short}.{name}{desc}{tag_str}'
+
+    def _recurse(key: tuple, prefix: str, is_last: bool, depth: int,
+                 ancestors: frozenset) -> None:
+        conn = '└─ ' if is_last else '├─ '
+        print(f'{prefix}{conn}{_fmt(key)}')
+        child_prefix = prefix + ('   ' if is_last else '│  ')
+        children = sorted(call_graph.get(key, set()))
+        if not children:
+            return
+        if key in ancestors:
+            print(f'{child_prefix}└─ ↺ 循环引用，略')
+            return
+        if depth >= max_depth:
+            print(f'{child_prefix}└─ … 超过深度限制（{len(children)} 个调用，'
+                  f'用 --max-depth 调整）')
+            return
+        if key in shown:
+            print(f'{child_prefix}└─ → 已展开（{len(children)} 个子调用）')
+            return
+        shown.add(key)
+        new_anc = ancestors | {key}
+        for i, child in enumerate(children):
+            _recurse(child, child_prefix, i == len(children) - 1,
+                     depth + 1, new_anc)
+
+    print()
+    print('【方法调用链树状图】')
+    print()
+    for i, root in enumerate(roots):
+        cls, name, desc = root
+        short = cls.split('/')[-1]
+        is_last = i == len(roots) - 1
+        conn = '└─ ' if is_last else '├─ '
+        print(f'{conn}{short}.{name}{desc}')
+        prefix = '   ' if is_last else '│  '
+        children = sorted(call_graph.get(root, set()))
+        shown.add(root)
+        if children:
+            new_anc: frozenset = frozenset({root})
+            for j, child in enumerate(children):
+                _recurse(child, prefix, j == len(children) - 1, 1, new_anc)
+    print()
+    print('  标注说明：[native] = ACC_NATIVE 方法，需手写实现')
+    print('           [internal] = sun/jdk/com.sun 内部类（截断边界）')
+    print('           ↺ = 循环引用   → = 已展开（跳过重复子树）')
+
+
 # ─── 主程序 ─────────────────────────────────────────────────────────────────────
 def main():
-    if len(sys.argv) < 2:
-        sys.exit('用法: python3 scripts/trace_callchain.py <File.java> ...')
+    import argparse
+    ap = argparse.ArgumentParser(
+        description='方法级调用链追踪',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='示例:\n'
+               '  python3 scripts/trace_callchain.py tests/e2e/01_basics/HelloWorld.java\n'
+               '  python3 scripts/trace_callchain.py HelloWorld.java --tree\n'
+               '  python3 scripts/trace_callchain.py HelloWorld.java --tree --max-depth 6\n'
+               '  python3 scripts/trace_callchain.py HelloWorld.java --tree-only',
+    )
+    ap.add_argument('files', nargs='+', metavar='FILE.java')
+    ap.add_argument('--tree', action='store_true',
+                    help='在统计分析后追加树状调用链图')
+    ap.add_argument('--tree-only', action='store_true',
+                    help='只显示树状调用链图，跳过统计分析（速度更快）')
+    ap.add_argument('--max-depth', type=int, default=8, metavar='N',
+                    help='树状图最大展开深度（默认 8）')
+    args = ap.parse_args()
 
-    java_files = sys.argv[1:]
+    show_tree  = args.tree or args.tree_only
+    skip_stats = args.tree_only
+
+    java_files = args.files
     src_dir    = os.path.dirname(os.path.abspath(java_files[0]))
     class_dir  = os.path.join(src_dir, 'classes')
     os.makedirs(class_dir, exist_ok=True)
@@ -1005,6 +1128,16 @@ def main():
 
     with JdkResolver(jmods) as resolver:
         shared = {}  # 所有模式共享类解析缓存，避免重复读取字节码
+
+        if skip_stats:
+            # --tree-only：只做两遍 RTA，收集调用图，直接打印树
+            print('[3/3] Two-pass RTA + 调用图 ...', end=' ', flush=True)
+            _, _, tree_nat, tree_cg, _ = bfs_two_pass_with_graph(
+                user_classes, resolver, shared)
+            print('完成')
+            roots = _get_user_methods(user_classes)
+            print_call_tree(roots, tree_cg, tree_nat, max_depth=args.max_depth)
+            return
 
         print('[3/N] 单程 RTA ...', end=' ', flush=True)
         r1_m, r1_cls, r1_nat, _, _ = bfs(user_classes, resolver, shared_cache=shared)
@@ -1119,8 +1252,8 @@ def main():
     print('[分析] 调用链深度分析...', end=' ', flush=True)
     with JdkResolver(jmods) as resolver2:
         class_depth, layers = bfs_depth_analysis(user_classes, resolver2, shared)
-    max_depth = max(layers) if layers else 0
-    print(f'完成  最大深度 {max_depth}，涉及 {len(class_depth)} 个类')
+    chain_max_depth = max(layers) if layers else 0
+    print(f'完成  最大深度 {chain_max_depth}，涉及 {len(class_depth)} 个类')
 
     print()
     print('【调用链深度分层（每层新引入的类数）】')
@@ -1225,6 +1358,18 @@ def main():
             for cls in sorted(ro5_list): f.write(f'- `{cls}`\n')
 
     print(f'\n详细报告 → {report}')
+
+    # ── 树状调用链图（--tree 模式） ──────────────────────────────────────────────
+    if show_tree:
+        print()
+        print('[分析] 构建调用图（Two-pass RTA）...', end=' ', flush=True)
+        with JdkResolver(jmods) as resolver3:
+            shared3: dict = {}
+            _, _, tree_nat, tree_cg, _ = bfs_two_pass_with_graph(
+                user_classes, resolver3, shared3)
+        print('完成')
+        roots = _get_user_methods(user_classes)
+        print_call_tree(roots, tree_cg, tree_nat, max_depth=args.max_depth)
 
 
 if __name__ == '__main__':

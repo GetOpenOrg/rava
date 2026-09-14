@@ -2818,3 +2818,133 @@ T78（注解完整化）
 2. **T78 完成后**：T76（emitter.py 加 `_super` 字段 + proc-macro 扩展）
 3. **T76 完成后**：T55（build.rs 扫描注解，生成跨层 From impl）
 4. **T55 完成后**：重新 cargo check，评估剩余 E0308 数量，决定后续顺序
+
+---
+
+## 阶段十六：同步与锁机制（Phase 16 — Synchronization）
+
+**目标**：正确翻译 Java 的两套同步语义（`InternalLock` 和 `monitorenter`/`monitorexit`），并消除 PrintStream 手写实现。  
+**方案文档**：`docs/plans/2026-09-14-java-sync-threading.md`
+
+---
+
+### T79：实现 `InternalLock` native 方法
+
+**类型**：native 实现  
+**文件**：`output/native_impls/jdk/internal/misc/internal_lock.rs`
+
+**背景**：`jdk/internal/misc/InternalLock` 是 JDK 21 I/O 类（PrintStream、BufferedWriter 等）使用的内部锁。
+`lock()` / `unlock()` 是 ACC_NATIVE，必须手写。当前 PrintStream 手写实现完全绕过了此锁，
+单线程可用但多线程不安全。
+
+**实现**：
+
+```rust
+use parking_lot::ReentrantMutex;
+use std::cell::RefCell;
+use std::sync::Arc;
+
+pub struct InternalLock {
+    inner: Arc<ReentrantMutex<()>>,
+}
+
+thread_local! {
+    static GUARDS: RefCell<Vec<parking_lot::ReentrantMutexGuard<'static, ()>>>
+        = RefCell::new(Vec::new());
+}
+
+impl InternalLock {
+    pub fn new_instance() -> Self {
+        Self { inner: Arc::new(ReentrantMutex::new(())) }
+    }
+
+    pub fn lock(&self) {
+        // SAFETY: guard 生命周期与 inner Arc 绑定，Arc 保证内存存活
+        let guard = unsafe {
+            std::mem::transmute::<
+                parking_lot::ReentrantMutexGuard<'_, ()>,
+                parking_lot::ReentrantMutexGuard<'static, ()>,
+            >(self.inner.lock())
+        };
+        GUARDS.with(|g| g.borrow_mut().push(guard));
+    }
+
+    pub fn unlock(&self) {
+        GUARDS.with(|g| { g.borrow_mut().pop(); });
+    }
+}
+```
+
+Cargo 依赖：`parking_lot = { version = "0.12", features = ["arc_lock"] }`
+
+**验收**：HelloWorld 在 `lock != null` 分支正确执行；`cargo check` 零错误
+
+---
+
+### T80：翻译 `monitorenter` / `monitorexit` 字节码
+
+**类型**：codegen（`codegen/instr.py`）+ runtime  
+**文件**：`codegen/instr.py`、`output/java_runtime/src/monitor.rs`（新建）
+
+**背景**：Java `synchronized` 块编译为 `monitorenter`/`monitorexit` 指令对。
+当前 `instr.py` 对这两条指令生成存根，导致 synchronized 语义丢失。
+
+**实现（惰性全局 monitor 表）**：
+
+```rust
+// output/java_runtime/src/monitor.rs
+use dashmap::DashMap;
+use std::sync::{Arc, OnceLock};
+
+static MONITORS: OnceLock<DashMap<usize, Arc<parking_lot::Mutex<()>>>> = OnceLock::new();
+
+pub fn get_monitor(ptr: usize) -> Arc<parking_lot::Mutex<()>> {
+    MONITORS.get_or_init(DashMap::new)
+            .entry(ptr).or_insert_with(|| Arc::new(parking_lot::Mutex::new(()))).clone()
+}
+```
+
+`instr.py` 翻译规则：
+```
+monitorenter  →  let _mon_N = crate::monitor::get_monitor(&*obj_ref as *const _ as usize).lock();
+monitorexit   →  drop(_mon_N);
+```
+
+Cargo 依赖：`dashmap = "6"`、`parking_lot = "0.12"`
+
+**验收**：含 `synchronized` 的 Java 类翻译后 `cargo check` 通过；2 线程并发 smoke test 无 panic
+
+---
+
+### T81：PrintStream 等 I/O 方法改为字节码翻译
+
+**类型**：字节码翻译（依赖 T79）  
+**文件**：删除 `output/native_impls/java/io/print_stream.rs` 中的手写 write/print/println 方法
+
+**背景**：T79 完成后，PrintStream 的 `writeln`、`newLine`、`write` 等方法体中的
+`InternalLock.lock()` / `unlock()` 调用已可翻译，29 个手写方法可全部删除，改为字节码自动生成。
+
+**步骤**：
+1. 确认 T79 已完成，InternalLock native 实现通过测试
+2. 重新运行 codegen，生成 PrintStream 的字节码翻译版
+3. 删除 `native_impls/java/io/print_stream.rs` 中的手写 write/print/println 实现
+4. `cargo check` + HelloWorld e2e 测试通过
+
+**验收**：`native_impls/java/io/print_stream.rs` 不含任何 print/write/println 手写方法；HelloWorld 输出不变
+
+---
+
+**阶段十六任务依赖**：
+
+```
+T79（InternalLock native 实现）
+  └──→ T81（PrintStream 字节码翻译，删除 29 个手写方法）
+
+T80（monitorenter/monitorexit 翻译）
+  └── 独立，不依赖 T79
+```
+
+**推荐执行序**：
+1. **T79**：实现 InternalLock，添加 parking_lot 依赖，cargo check
+2. **T80**：codegen/instr.py 翻译 monitorenter/monitorexit，新建 monitor.rs
+3. **T81**（T79 完成后）：重新生成 PrintStream，删除手写实现，验收

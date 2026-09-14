@@ -6,3 +6,6 @@ edition = "2021"
 [lib]
 name = "java_runtime"
 path = "src/lib.rs"
+
+[dependencies]
+parking_lot = "0.12"
