@@ -1986,3 +1986,271 @@ T69 (BFS 虚方法) ─ 依赖 T55（ClassHierarchy），需要 concrete_subclas
 **推荐执行序**：
 - 立即：T68（P1，独立可做，可能修复大量 E0425）
 - 中期：T69（P2，等 T55 ClassHierarchy 完成后）
+
+---
+
+## 阶段十三：多文档 Gap 补全（Phase 13 — Cross-Plan Gap Fill）
+
+> 来源：对 ruva 计划（§1.5 / §5.1 / §5.4）+ JNC 计划（I-4）与 T01-T69 全量对照后的剩余 gap  
+> T71（注册表键规范化）是隐蔽性最高的架构正确性 bug，T70（布尔压缩）是代码质量，T72（语义桩追踪）是可维护性基础设施
+
+---
+
+### T70 · 布尔值 i32 模式压缩（`if c {1i32} else {0i32}` → bool 表达式）
+**状态**：`[ ]`  
+**文件**：`codegen/method.py`、`codegen/instr.py`、`codegen/stack.py`  
+**优先级**：P2  
+**来源**：ruva 计划 §1.5 + JNC 计划 I-4
+
+**背景**：JVM 用 `i32`（0/1）表示 boolean，Java 编译器在需要将 boolean 表达式结果存入变量时，会生成以下字节码模式：
+
+```
+; 源码：boolean flag = (a > b);
+if_icmple <false_label>   ; a <= b 时跳转
+iconst_1                  ; push 1（true）
+goto <end_label>
+false_label: iconst_0     ; push 0（false）
+end_label: istore <slot>
+```
+
+当前 java_rta 将这个模式直接翻译为：
+```rust
+let mut v5: i32 = if v1 > v2 { 1i32 } else { 0i32 };
+```
+
+而实际上应该生成：
+```rust
+let mut v5: bool = v1 > v2;
+```
+
+同样的问题出现在 `ifeq`/`ifne` 将 bool 存回 i32，以及方法调用返回 bool 时的 0/1 转换。
+
+**影响**：
+- 生成代码充满 `!= 0i32`、`== 0i32` 噪音（每次使用 bool 变量时都要转换）
+- 类型推导链中断：变量被推断为 `i32` 而非 `bool`，导致后续比较产生类型不匹配
+- 可读性极差，难以人工审查
+
+**实施步骤**：
+
+**Step 1：cfg.py 中扩展现有布尔模式识别**
+
+`cfg.py` 已有三指令布尔模式检测（`bool_cond_map`）。在此基础上，识别四指令模式：
+```
+if_icmpXX <false>   或  ifXX <false>
+iconst_1
+goto <end>
+false: iconst_0     (或 iconst_0 / goto / iconst_1 的镜像)
+end: ...
+```
+
+检测逻辑：
+```python
+def detect_bool_pattern(instrs, idx) -> tuple[str, int] | None:
+    """
+    返回 (cond_expr_str, consumed_count) 或 None。
+    cond_expr_str: 如 "v1 > v2"（从 if_icmpXX 推导）
+    consumed_count: 消耗的指令数（3 或 4）
+    """
+```
+
+**Step 2：StackSim 类型追踪**
+
+识别到布尔模式后，推入 `(BoolExpr, BOOL)` 而非 `(Lit('1i32'), I32)` 或 `(IfExpr(...), I32)`。这样后续 `istore` 生成 `let v5: bool = ...` 而非 `let v5: i32 = ...`。
+
+**Step 3：BOOL 类型在比较中的使用**
+
+当 `ifeq`/`ifne` 的操作数类型已知为 `BOOL` 时，直接使用 `if expr { ... }` 或 `if !expr { ... }`，不再生成 `if expr != 0 { ... }`。
+
+**Step 4：方法返回 bool 的处理**
+
+`jvm_to_rust` 中 `Z` 描述符已映射为 `bool`，确保方法调用结果被压入 `BOOL` 类型而非 `I32`，消除 `result != 0` 转换。
+
+**验收**：
+- 含 `boolean flag = (a > b)` 的 Java 方法生成 `let mut flag: bool = a > b;`，无 `i32`/`!= 0` 噪音
+- 含 `if (obj.isEmpty())` 的代码生成 `if obj.is_empty()` 而非 `if obj.is_empty() != 0`
+- E0308 中的 `expected bool, found i32`（或反向）错误数量减少
+
+---
+
+### T71 · 内部类名注册表键规范化（防止静默查找失败）
+**状态**：`[ ]`  
+**文件**：`codegen/type_map.py`、`codegen/emitter.py`、`codegen/transpile.py`  
+**优先级**：P1（静默失败，极难排查）  
+**来源**：ruva 计划 §5.1
+
+**背景**：Java 内部类名有两种合法形式：
+
+| 形式 | 示例 | 使用场景 |
+|------|------|---------|
+| JVM 二进制格式 | `java/util/AbstractMap$SimpleEntry` | `.class` 文件、字节码注释、BFS 队列 |
+| Rust 安全标识符 | `AbstractMap__SimpleEntry` | 生成的 `.rs` 文件、`use` 语句 |
+
+**当前风险**：`$` → `__` 转换（`replace('$', '__')` 或 `replace('$', '_')`）在代码中的多个位置独立发生，时机不一致：
+
+```python
+# type_map.py 中某处
+cls = cls.replace('$', '__')  # 提前转换
+
+# emitter.py 中另一处  
+name = binary.split('/')[-1]  # 未转换，含 $
+
+# registry 查找时
+info = registry.get(cls_with_dollar)   # 用 $ 形式查找
+info = registry.get(cls_with_underscore)  # 用 __ 形式查找，取决于注册时的形式
+```
+
+若注册表以 `$` 格式存储键，而查找时用 `__` 格式（或反之），`registry.get(...)` 返回 `None`，触发 fallback（生成 `Object` 或跳过），产生**静默的语义错误**，完全没有任何警告或异常。
+
+这类 bug 极难排查：编译错误消息只显示最终症状（类型不匹配、方法找不到），根因是两处相隔很远的命名形式不一致。
+
+**实施步骤**：
+
+**Step 1：审查并确立规范**
+
+确定注册表键的权威形式（推荐：JVM 二进制格式，即含 `$`，如 `java/util/AbstractMap$SimpleEntry`）：
+- `registry`：始终以 JVM 二进制格式为键
+- `$` → `__` 的转换**只在最终生成 Rust 标识符时**进行，其他任何地方不做此转换
+
+**Step 2：定义规范化入口函数**
+
+```python
+# type_map.py
+def jvm_binary_name(name: str) -> str:
+    """确保是 JVM 二进制格式（斜杠分隔，$ 内部类），不做任何 $ 转换。
+    这是注册表查找的唯一合法输入形式。"""
+    return name.replace('.', '/')  # 只处理点→斜杠，绝不改 $
+
+def rust_ident_name(binary_name: str) -> str:
+    """JVM 二进制格式 → Rust 标识符（最后一步转换，只在生成文件时调用）"""
+    return binary_name.split('/')[-1].replace('$', '__')
+```
+
+**Step 3：扫描代码中所有 `replace('$', ...)` 调用**
+
+```bash
+grep -rn "replace('\$'" codegen/
+grep -rn 'replace("\$"' codegen/
+```
+
+对每处调用，判断：
+- 是否在"最终生成标识符"时？→ 保留，改用 `rust_ident_name`
+- 是否在"查找/比较"时？→ 删除，使用原始 JVM 格式
+
+**Step 4：注册表查找断言（调试期）**
+
+在开发期加入断言，确保查找键不含 `__`：
+```python
+def registry_get(registry, key):
+    assert '__' not in key, f"registry 查找使用了 Rust 格式键: {key!r}，应使用 JVM 格式"
+    return registry.get(key)
+```
+
+**验收**：
+- `grep -rn "replace('\$'" codegen/` 所有调用点都有注释说明是 JVM 还是 Rust 形式
+- 含内部类的 Java 类（如 `Map.Entry`、`Thread.State`）正确翻译，不产生 fallback Object
+- 在涉及内部类的场景下，`cargo check` 中无新增 E0433/E0412 错误
+
+---
+
+### T72 · 语义桩显式追踪（未实现指令统一标记与计数）
+**状态**：`[ ]`  
+**文件**：`codegen/instr.py`、`codegen/emitter.py`、`scripts/main.py`  
+**优先级**：P2  
+**来源**：ruva 计划 §5.4 + java_rta 改进计划 §5.1
+
+**背景**："语义桩"是指以看似合理但实际语义错误的代码替代未实现功能，而非显式 `todo!()` 或编译错误。java_rta 当前已知的语义桩：
+
+| 指令 | 当前行为 | 正确行为 |
+|------|---------|---------|
+| `instanceof` | 硬编码返回 `true` | 运行时类型检查（T53） |
+| `tableswitch` | 只弹出 key，无 match 分支 | 生成 `match` 语句（T57） |
+| `lookupswitch` | 只弹出 key，无 match 分支 | 生成 `match` 语句（T57） |
+| `try/catch` | 异常表被 skip(8) 完全丢弃 | 结构化异常处理（T62） |
+| `invokedynamic` | 未知处理 | Lambda 翻译（T49） |
+| `monitorenter/exit` | 未知处理 | 忽略或映射到 Mutex |
+
+**问题**：
+1. **无法统计**：不知道代码库中有多少处语义桩，无法追踪进度
+2. **无法检测**：语义桩在运行时静默产生错误行为，没有任何警告
+3. **易被遗忘**：硬编码 `true`/`false` 等值看起来"合法"，代码审查很容易漏掉
+
+**实施步骤**：
+
+**Step 1：定义语义桩生成函数**
+
+在 `instr.py` 中，将所有语义桩替换为统一的辅助函数：
+```python
+def _semantic_stub(sim, opcode: str, description: str, stub_value=None, stub_ty=None):
+    """生成语义桩，并向 sim 注册该 stub 信息（用于统计和审计）。"""
+    sim.record_stub(opcode, description)  # 记录到 sim 的 stub 列表
+    if stub_value is not None:
+        sim.push(stub_value, stub_ty)
+    else:
+        # 生成 todo!() 表达式（在 Rust 中会 panic，不静默）
+        sim.push(RawExpr(f'todo!("stub: {opcode} in {{}}", file!())'), RsNamed('!'))
+```
+
+**Step 2：StackSim 增加 stub 记录**
+
+```python
+class StackSim:
+    def __init__(self, ...):
+        ...
+        self.stubs: list[tuple[str, str]] = []  # [(opcode, description)]
+    
+    def record_stub(self, opcode, description):
+        self.stubs.append((opcode, description))
+```
+
+**Step 3：emitter.py 生成桩统计注释**
+
+在每个翻译的方法头部，若 `sim.stubs` 非空，生成注释：
+```rust
+// SEMANTIC_STUBS: instanceof(line 42), tableswitch(line 67)
+pub fn some_method(&self) -> Result<i32> {
+    ...
+}
+```
+
+**Step 4：scripts/main.py 生成汇总报告**
+
+代码生成完成后，汇总所有方法中的 stub 记录：
+```python
+# 输出 stub 汇总
+stub_summary = {}
+for cls, method, stubs in all_stubs:
+    for opcode, desc in stubs:
+        stub_summary[opcode] = stub_summary.get(opcode, 0) + 1
+
+print("=== Semantic Stubs Summary ===")
+for opcode, count in sorted(stub_summary.items(), key=lambda x: -x[1]):
+    print(f"  {opcode}: {count} occurrences")
+print(f"  Total: {sum(stub_summary.values())} stubs")
+```
+
+**Step 5：将现有硬编码语义桩迁移到 `_semantic_stub`**
+
+- `instanceof`: `sim.push(Lit('true'), BOOL)` → `_semantic_stub(sim, 'instanceof', 'hardcoded true')`
+- `tableswitch`/`lookupswitch`: 只弹栈 → `_semantic_stub(sim, 'tableswitch', 'no match generated')`
+
+**目标**：每个 Release 版本，语义桩总数应单调递减。
+
+**验收**：
+- `python3 scripts/main.py` 输出末尾显示 stub 汇总表
+- `instanceof`、`tableswitch` 等已知桩出现在汇总中，数量可追踪
+- 不存在硬编码 `Lit('true')` / `Lit('false')` 用于表示未实现指令结果的情况
+
+---
+
+**阶段十三任务依赖**：
+
+```
+T70 (布尔压缩)     ─ 独立，可立即开始；cfg.py 布尔模式识别基础上扩展
+T71 (键规范化)     ─ 独立，可立即开始；优先做 Step 3 扫描（低风险）
+T72 (语义桩追踪)   ─ 独立，可立即开始；Step 1-3 不改变生成结果，只增加统计
+```
+
+**推荐执行序**：
+- 立即（低风险高价值）：T71 Step 3（扫描 replace('$') 调用点，判断正误）、T72 Step 4（main.py 汇总报告）
+- 短期：T70（布尔压缩，改善代码质量，减少 E0308）、T71 Step 1-2（规范化函数）
+- 中期：T72 Step 5（将现有桩迁移到统一接口）
