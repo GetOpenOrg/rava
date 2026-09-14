@@ -186,7 +186,10 @@ def _parse_constant_pool(r: _Reader, count: int) -> list:
             pool[i] = ('Float', struct.unpack_from('>f', r.read(4))[0])
         elif tag == TAG_LONG:
             hi, lo = r.u4(), r.u4()
-            pool[i] = ('Long', (hi << 32) | lo)
+            val = (hi << 32) | lo
+            if val >= (1 << 63):   # 转换为有符号 i64
+                val -= (1 << 64)
+            pool[i] = ('Long', val)
             pool[i + 1] = None   # long/double 占两个槽
             i += 1
         elif tag == TAG_DOUBLE:
@@ -406,11 +409,7 @@ def _constant_value_str(pool: list, cv_idx: int) -> str:
     if tag == 'Integer':
         return str(entry[1])
     if tag == 'Long':
-        # 常量池以无符号 u64 存储，转换为有符号 i64
-        val = entry[1]
-        if val >= (1 << 63):
-            val -= (1 << 64)
-        return str(val)
+        return str(entry[1])
     if tag == 'Float':
         v = entry[1]
         if v != v:           # NaN

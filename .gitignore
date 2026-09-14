@@ -22,3 +22,4 @@ output/user/Cargo.toml
 # macOS
 .DS_Store
 docs/reports/jdk-scan-*
+/.claude/worktrees

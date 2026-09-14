@@ -91,7 +91,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for root, _dirs, files in os.walk(jdk_src):
             for fname in files:
                 if fname.endswith('.rs'):
-                    os.remove(os.path.join(root, fname))
+                    try:
+                        os.remove(os.path.join(root, fname))
+                    except FileNotFoundError:
+                        pass
 
     # 构建 registry（用户类 + JDK 类）
     registry: dict = {ci.name: ci for ci in class_infos}
@@ -217,7 +220,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for root, _dirs, files in os.walk(user_src):
             for fname in files:
                 if fname.endswith('.rs'):
-                    os.remove(os.path.join(root, fname))
+                    try:
+                        os.remove(os.path.join(root, fname))
+                    except FileNotFoundError:
+                        pass
 
     # 提取包名
     packages: dict[str, str] = {}

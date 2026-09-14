@@ -66,6 +66,24 @@ impl Object {
     #[allow(non_snake_case)]
     pub fn flushBuffer(&self) -> Result<()> { Ok(()) }
 
+    /// java.lang.Class.getComponentType() - 数组类型的元素类型（stub，非数组返回 null）
+    #[allow(non_snake_case)]
+    pub fn getComponentType(&self) -> Result<Object> {
+        panic!("stub: Class.getComponentType()")
+    }
+
+    /// java.lang.Class.getName()
+    #[allow(non_snake_case)]
+    pub fn getName(&self) -> Result<Object> {
+        panic!("stub: Class.getName()")
+    }
+
+    /// java.lang.Class.isArray()
+    #[allow(non_snake_case)]
+    pub fn isArray(&self) -> Result<bool> {
+        panic!("stub: Class.isArray()")
+    }
+
     /// null 检查：在转译模型中 Object 永远非 null，始终返回 false
     pub fn is_none(&self) -> bool { false }
 

@@ -75,6 +75,12 @@ def _cargo_run(class_name: str) -> tuple[bool, str]:
     """顺序模式：cargo run --bin <class>。"""
     bin_name = _to_bin_name(class_name)
     r = _run(["cargo", "run", "--bin", bin_name], cwd=OUT)
+    if r.returncode != 0:
+        # 打印首条 error 行帮助诊断
+        for line in r.stderr.splitlines():
+            if line.startswith('error'):
+                print(f"  stderr: {line[:120]}", flush=True)
+                break
     return r.returncode == 0, r.stdout
 
 
