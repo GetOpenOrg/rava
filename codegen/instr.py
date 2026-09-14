@@ -1019,8 +1019,15 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))
     else:
         v = sim.fresh()
-        # 不写出显式类型注解，让 Rust 从方法返回类型推断（避免 JDK 类型擦除问题）
-        sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
+        # 接收者是 Object 类型时，java_runtime 中方法返回 Result<Object>，
+        # 而 StackSim 跟踪的是 JVM 描述符中声明的具体返回类型（如 String）。
+        # 若不处理，Rust 会推断 v: Object，后续用到 v 时出现类型不匹配。
+        # 解决方案：丢弃方法返回值（保留 ? 错误传播），用 Default::default() 提供具体类型。
+        if obj_ty == 'Object' and rust_ret not in ('Object', '()') and rust_ret not in _PRIMITIVE_RUST_TYPES:
+            sim.emit(RawStmt(f"let _ = {obj_e}.{rust_mname}({arg_str})?;"))
+            sim.emit(RawStmt(f"let {v}: {rust_ret} = Default::default();"))
+        else:
+            sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
         sim.push(Var(v), RsNamed(rust_ret))
 
 

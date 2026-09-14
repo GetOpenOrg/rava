@@ -1147,7 +1147,7 @@ python3 scripts/run_tests.py                       # 全量运行，输出每项
 ---
 
 ### T52 · 降低编译错误至 0（持续任务）
-**状态**：`[~]` 进行中（2026-09-14 当前：6445 errors）  
+**状态**：`[~]` 进行中（2026-09-14 当前：6224 errors）  
 **文件**：`codegen/instr.py`、`codegen/method.py`、`codegen/emitter.py`
 
 **背景**：JDK 字节码翻译生成的 `jdk_classes` crate 存在大量编译错误，阻止整体流水线验证。目标是将 `cargo check` 错误降至 0。
