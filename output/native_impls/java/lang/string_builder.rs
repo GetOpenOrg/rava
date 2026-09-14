@@ -7,54 +7,54 @@ pub fn new() -> Result<StringBuilder> {
 }
 
 /// java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
-pub fn append__str(_this: &StringBuilder, s: String) -> Result<Object> {
+pub fn append__str(_this: &StringBuilder, s: String) -> Result<StringBuilder> {
     let content = format!("{}", s);
     _this._sb.get().borrow_mut().push_str(&content);
-    Ok(Object::default())
+    Ok(_this.clone())
 }
 
 /// java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;
-pub fn append__i(_this: &StringBuilder, v: i32) -> Result<Object> {
+pub fn append__i(_this: &StringBuilder, v: i32) -> Result<StringBuilder> {
     _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(Object::default())
+    Ok(_this.clone())
 }
 
 /// java/lang/StringBuilder.append:(J)Ljava/lang/StringBuilder;
-pub fn append__l(_this: &StringBuilder, v: i64) -> Result<Object> {
+pub fn append__l(_this: &StringBuilder, v: i64) -> Result<StringBuilder> {
     _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(Object::default())
+    Ok(_this.clone())
 }
 
 /// java/lang/StringBuilder.append:(D)Ljava/lang/StringBuilder;
-pub fn append__d(_this: &StringBuilder, v: f64) -> Result<Object> {
+pub fn append__d(_this: &StringBuilder, v: f64) -> Result<StringBuilder> {
     _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(Object::default())
+    Ok(_this.clone())
 }
 
 /// java/lang/StringBuilder.append:(F)Ljava/lang/StringBuilder;
-pub fn append__f(_this: &StringBuilder, v: f32) -> Result<Object> {
+pub fn append__f(_this: &StringBuilder, v: f32) -> Result<StringBuilder> {
     _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(Object::default())
+    Ok(_this.clone())
 }
 
 /// java/lang/StringBuilder.append:(Z)Ljava/lang/StringBuilder;
-pub fn append__z(_this: &StringBuilder, v: bool) -> Result<Object> {
+pub fn append__z(_this: &StringBuilder, v: bool) -> Result<StringBuilder> {
     _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(Object::default())
+    Ok(_this.clone())
 }
 
 /// java/lang/StringBuilder.append:(C)Ljava/lang/StringBuilder;
-pub fn append__c(_this: &StringBuilder, v: u16) -> Result<Object> {
+pub fn append__c(_this: &StringBuilder, v: u16) -> Result<StringBuilder> {
     if let Some(c) = char::from_u32(v as u32) {
         _this._sb.get().borrow_mut().push(c);
     }
-    Ok(Object::default())
+    Ok(_this.clone())
 }
 
 /// java/lang/StringBuilder.append:(Ljava/lang/Object;)Ljava/lang/StringBuilder;
-pub fn append__obj(_this: &StringBuilder, obj: Object) -> Result<Object> {
+pub fn append__obj(_this: &StringBuilder, obj: Object) -> Result<StringBuilder> {
     _this._sb.get().borrow_mut().push_str("Object");
-    Ok(Object::default())
+    Ok(_this.clone())
 }
 
 /// java/lang/StringBuilder.toString:()Ljava/lang/String;

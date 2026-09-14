@@ -132,14 +132,27 @@ def _java_class_attr(ci: ClassInfo, compiled: bool = False) -> str:
     access      = _access_str(ci.access_flags) if ci.access_flags else ""
     modifiers   = _class_modifiers_str(ci.access_flags) if ci.access_flags else ""
     source      = ci.source_file or ""
+    generic_sig = (ci.generic_signature or "").replace('"', '\\"')
     inner_lines = [
-        f'    binary_name = "{binary_name}",',
-        f'    super_class = "{super_class}",',
-        f'    interfaces  = "{interfaces}",',
-        f'    access      = "{access}",',
-        f'    modifiers   = "{modifiers}",',
-        f'    source      = "{source}",',
+        f'    binary_name       = "{binary_name}",',
+        f'    super_class       = "{super_class}",',
+        f'    interfaces        = "{interfaces}",',
+        f'    access            = "{access}",',
+        f'    modifiers         = "{modifiers}",',
+        f'    generic_signature = "{generic_sig}",',
+        f'    is_interface      = {str(ci.is_interface).lower()},',
+        f'    is_abstract       = {str(ci.is_abstract).lower()},',
+        f'    is_enum           = {str(ci.is_enum).lower()},',
+        f'    is_deprecated     = {str(ci.is_deprecated).lower()},',
+        f'    source            = "{source}",',
     ]
+    # inner_classes：以 "inner/Class:outer/Class:simple:flags" 形式编码，逗号分隔
+    if ci.inner_classes:
+        ic_strs = ';'.join(
+            f'{ic.inner_class}:{ic.outer_class}:{ic.inner_name}:{ic.access_flags}'
+            for ic in ci.inner_classes
+        )
+        inner_lines.append(f'    inner_classes     = "{ic_strs}",')
     inner = '\n'.join(inner_lines)
     if compiled:
         # Object 类自身不使用宏（from_any/downcast 定义在 Object 上，循环依赖）
@@ -158,6 +171,15 @@ def _java_field_attr(f: FieldInfo) -> str:
         parts.append(f'access = "{_access_str(f.access_flags)}"')
         mods = _field_modifiers_str(f.access_flags)
         parts.append(f'modifiers = "{mods}"')
+    parts.append(f'is_static = {str(f.is_static).lower()}')
+    if f.generic_signature:
+        sig = f.generic_signature.replace('"', '\\"')
+        parts.append(f'generic_signature = "{sig}"')
+    if f.constant_value:
+        cv = f.constant_value.replace('"', '\\"')
+        parts.append(f'constant_value = "{cv}"')
+    if f.is_deprecated:
+        parts.append('is_deprecated = true')
     return '#[cfg_attr(any(), java_field(' + ', '.join(parts) + '))]'
 
 
@@ -165,25 +187,39 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
     """生成方法元数据标注行。
 
     compiled=True（JDK 类生成）：
-      - 真正的 native 方法：输出 #[cfg_attr(any(), java_native(...))]，供 build.rs 扫描
-      - 其他方法：输出行注释 `// java: ...`（避免关键字字符串引发词法错误）
+      - native 方法：#[cfg_attr(any(), java_native(...))]，供 build.rs 扫描
+      - 其他方法：#[cfg_attr(any(), java_method(...))]，含完整元数据
     compiled=False（元数据存根）：原生属性格式 #[java_method(...)] / #[java_native(...)]。
     """
     tag = 'java_native' if m.is_native else 'java_method'
-    parts = [f'name = "{m.name}"', f'descriptor = "{m.descriptor}"']
+    desc = m.descriptor.replace('"', '\\"')
+    name = m.name.replace('"', '\\"')
+    parts = [f'name = "{name}"', f'descriptor = "{desc}"']
     if m.access_flags:
         parts.append(f'access = "{_access_str(m.access_flags)}"')
         mods = _method_modifiers_str(m.access_flags)
         parts.append(f'modifiers = "{mods}"')
-    inner = f'{tag}(' + ', '.join(parts) + ')'
+    # 补全全部元数据字段
+    parts.append(f'is_static    = {str(m.is_static).lower()}')
+    parts.append(f'is_native    = {str(m.is_native).lower()}')
+    parts.append(f'is_abstract  = {str(m.is_abstract).lower()}')
+    parts.append(f'is_synthetic = {str(m.is_synthetic).lower()}')
+    if m.exceptions:
+        excs = ','.join(m.exceptions).replace('"', '\\"')
+        parts.append(f'exceptions = "{excs}"')
+    if m.generic_signature:
+        sig = m.generic_signature.replace('"', '\\"')
+        parts.append(f'generic_signature = "{sig}"')
+    if m.is_deprecated:
+        parts.append('is_deprecated = true')
+    if m.method_parameters:
+        mp_str = ';'.join(f'{n}:{a}' for n, a in m.method_parameters).replace('"', '\\"')
+        parts.append(f'method_parameters = "{mp_str}"')
     if compiled:
-        if m.is_native:
-            # native 方法用 cfg_attr 包裹，让 build.rs 能扫描到
-            return f'#[cfg_attr(any(), java_native(' + ', '.join(parts) + '))]'
-        # 注释形式，避免 cfg_attr 内关键字字符串触发词法错误
-        return f'// java: {m.name}{m.descriptor}'
+        # 所有方法统一用 cfg_attr 包裹（编译安全，同时保留机器可读元数据）
+        return f'#[cfg_attr(any(), {tag}(' + ', '.join(parts) + '))]'
     else:
-        return f'#[{inner}]'
+        return f'#[{tag}(' + ', '.join(parts) + ')]'
 
 
 _safe_param_name = safe_ident
@@ -296,7 +332,11 @@ def _scan_native_impls(workspace_root: str) -> tuple[dict, dict, dict]:
                         if info:
                             synthetics.setdefault(class_binary, []).append(info)
                     i = j + 1
-                elif stripped.startswith('/// java/') and '.' in stripped:
+                elif (stripped.startswith('/// java/')
+                      or stripped.startswith('/// javax/')
+                      or stripped.startswith('/// jdk/')
+                      or stripped.startswith('/// sun/')
+                      or stripped.startswith('/// com/')) and '.' in stripped:
                     java_ref = stripped[4:].strip()
                     dot_idx = java_ref.rfind('.')
                     if dot_idx < 0:
@@ -411,7 +451,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   synthetics: dict | None = None,
                   extra_fields: dict | None = None,
                   conflict_map: dict | None = None,
-                  skipped_classes: set | None = None) -> str:
+                  skipped_classes: set | None = None,
+                  user_sibling_imports: list[str] | None = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -542,6 +583,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 cross_imports.append(f"use {_prefix2}::{_rust_pkg}::{_simple};")
                 _added_skipped.add(_simple)
 
+    # 用户内部类兄弟模块导入（crate::mod_name::TypeName）
+    if user_sibling_imports:
+        cross_imports.extend(user_sibling_imports)
+
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]",
         "use java_runtime::prelude::*;",
@@ -561,8 +606,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         ci.super_class and ci.super_class != 'java/lang/Object'
     )
 
-    # 用短名作为 Rust 标识符（JDK 类的 ci.name 含 /，不是合法 Rust 名）
-    struct_name = short_cls(ci.name) if '/' in ci.name else ci.name
+    # 用短名作为 Rust 标识符（JDK 类含 /，内部类含 $，均需转换为合法 Rust 名）
+    struct_name = short_cls(ci.name) if ('/' in ci.name or '$' in ci.name) else ci.name
 
     # 解析类级泛型参数（如 ArrayList<E>、HashMap<K,V>）
     class_type_params = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
@@ -706,16 +751,33 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     for sf in static_fields:
         safe_fname = _safe_field_name(sf.name)
         if safe_fname in existing_method_names:
-            continue  # 有同名方法，跳过（方法已覆盖此访问路径）
+            # 字段名与方法名冲突：改用 _field 后缀，让 getstatic 仍能访问该字段
+            safe_fname = safe_fname + '_field'
         rust_ret = jvm_to_rust(sf.descriptor, registry=registry)
         native_fn_key = (ci.name, sf.name, sf.descriptor)
         if native_impls_map and native_fn_key in native_impls_map:
             native_fn = native_impls_map[native_fn_key][0]
             body = f'_native::{native_fn}()'
+        elif sf.constant_value:
+            # ConstantValue attribute：static final 字段有确定字面量，直接返回
+            cv = sf.constant_value
+            if rust_ret == 'String':
+                body = f'String::from("{cv}")'
+            elif rust_ret == 'f32':
+                body = f'{cv}f32'
+            elif rust_ret == 'f64':
+                body = f'{cv}f64'
+            elif rust_ret == 'i64':
+                body = f'{cv}i64'
+            elif rust_ret == 'bool':
+                body = 'true' if cv == '1' else 'false'
+            else:
+                body = cv
         else:
             # 生成 panic stub，确保 getstatic 对应的 ClassName::fieldName() 能编译
             body = f'panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")'
-        method_blocks.append(f'// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
+        field_meta = _java_field_attr(sf)
+        method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
 
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
     for m in visible_methods:
@@ -766,8 +828,14 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=native_fn, registry=registry)
             method_blocks.append(attr_line + '\n' + stub)
         elif not in_call_chain or stub_bodies:
-            # 不在调用链上，或兜底 stub 模式：生成 panic! 存根
-            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=None, registry=registry)
+            # 不在调用链上，或兜底 stub 模式：生成存根
+            # 若 native_impls 有覆盖（即使方法不是 ACC_NATIVE），优先使用手写实现
+            native_fn = None
+            if native_impls_map:
+                nkey = (ci.name, m.name, m.descriptor)
+                if nkey in native_impls_map:
+                    native_fn = native_impls_map[nkey][0]
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=native_fn, registry=registry)
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
@@ -1033,6 +1101,12 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 4. user crate（用户 Java 翻译）
     # Cargo.toml 由 git 直接管理，emitter 不再写出
     user_src = os.path.join(user_dir, 'src')
+    # 清理旧版生成文件（保证当前运行不被历史文件污染）
+    if not batch_bin and os.path.isdir(user_src):
+        for root, _dirs, files in os.walk(user_src):
+            for fname in files:
+                if fname.endswith('.rs'):
+                    os.remove(os.path.join(root, fname))
 
     # 提取包名
     packages: dict[str, str] = {}
@@ -1061,6 +1135,43 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         user_mod_tree.setdefault(parent, set()).add(mod_name)
         user_reexport.setdefault(parent, set()).add((mod_name, ci.name))
 
+    # 构建每个用户类所需的兄弟内部类导入（crate::mod::Type）
+    # 原则：一个外部类文件引用其内部类时，需要 use crate::{inner_mod}::{InnerType}
+    _user_layout_names: set[str] = set(layout.keys())
+    _sibling_imports: dict[str, list[str]] = {}
+    for ci in class_infos:
+        seen_imports: set[str] = set()
+        imports: list[str] = []
+
+        def _add_import(class_name: str) -> None:
+            if class_name not in _user_layout_names or class_name == ci.name:
+                return
+            mod_n = to_snake(class_name)
+            type_n = short_cls(class_name)
+            line = f"use crate::{mod_n}::{type_n};"
+            if line not in seen_imports:
+                seen_imports.add(line)
+                imports.append(line)
+
+        # 通过 InnerClasses 属性发现该类定义的内部类
+        for ic in (ci.inner_classes or []):
+            _add_import(ic.inner_class)
+
+        # 同时：内部类本身需要导入其外部类及同级内部类（通过 outer_class 字段）
+        outer_class = next(
+            (ic.outer_class for ic in (ci.inner_classes or []) if ic.inner_class == ci.name),
+            None
+        )
+        if outer_class and outer_class in _user_layout_names:
+            _add_import(outer_class)
+            # 同级内部类（同一外部类下的其他内部类）
+            outer_ci = next((c for c in class_infos if c.name == outer_class), None)
+            if outer_ci:
+                for sib_ic in (outer_ci.inner_classes or []):
+                    _add_import(sib_ic.inner_class)
+
+        _sibling_imports[ci.name] = imports
+
     # 写用户类文件
     user_pkg_paths = jdk_crate_pkg_paths if jdk_class_infos else None
     for ci in class_infos:
@@ -1073,7 +1184,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                         synthetics=synthetics_map,
                                         extra_fields=extra_fields_map,
                                         conflict_map=conflict_map if jdk_class_infos else None,
-                                        skipped_classes=skipped_classes if jdk_class_infos else None))
+                                        skipped_classes=skipped_classes if jdk_class_infos else None,
+                                        user_sibling_imports=_sibling_imports.get(ci.name)))
 
     # 中间 mod.rs（用户子包）
     for dir_path, children in user_mod_tree.items():

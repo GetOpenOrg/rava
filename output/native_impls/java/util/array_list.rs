@@ -39,12 +39,7 @@ pub fn clear<E: Clone + Default + 'static>(_this: &ArrayList<E>) -> Result<()> {
 
 /// java/util/ArrayList.iterator:()Ljava/util/Iterator;
 pub fn iterator<E: Clone + Default + 'static>(_this: &ArrayList<E>) -> Result<Object> {
-    let iter = Iterator::<Object> {
-        _data: JField::new(_this.elementData.get()),
-        _pos: JField::new(0i32),
-        _phantom: std::marker::PhantomData,
-    };
-    Ok(Object::from_any(iter))
+    panic!("stub: java/util/ArrayList.iterator:()Ljava/util/Iterator;")
 }
 
 /// java/util/ArrayList.contains:(Ljava/lang/Object;)Z

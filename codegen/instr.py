@@ -389,7 +389,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif comment.startswith('float '): sim.push(Lit(_float_lit(comment[6:].strip(), 'f32')), F32)
         elif comment.startswith('long '):  sim.push(Lit(comment[5:].strip() + 'i64'), I64)
         elif comment.startswith('double '): sim.push(Lit(_float_lit(comment[7:].strip(), 'f64')), F64)
-        elif comment.startswith('class '): sim.push(Lit('Class::<Object>::default()'), RsGeneric('Class', [RsNamed('Object')]))
+        elif comment.startswith('class '): sim.push(Lit('Object::default()'), RsNamed('Object'))
         else: sim.push(Lit(f"{operand}i32"), I32)
     elif op in ('ldc2_w', 'ldc_w'):
         if comment.startswith('long '):   sim.push(Lit(comment[5:].strip() + 'i64'), I64)
@@ -397,7 +397,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif comment.startswith('String '):
             lit = _escape_str(comment[7:].strip())
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
-        elif comment.startswith('class '): sim.push(Lit('Class::<Object>::default()'), RsGeneric('Class', [RsNamed('Object')]))
+        elif comment.startswith('class '): sim.push(Lit('Object::default()'), RsNamed('Object'))
         else: sim.push(Lit(f"{operand}i32"), I32)
 
     # ── null ──
@@ -686,11 +686,15 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
             # 引用类型赋值时加 .clone()，避免 E0382（move after use）
+            _obj_str = render_expr(obj_expr)
             if (val_ty_name not in _PRIMITIVE_RUST_TYPES
                     and not val_str.startswith('Default::')
-                    and '.clone()' not in val_str
-                    and val_str != 'this'):
-                val_str = f'{val_str}.clone()'
+                    and '.clone()' not in val_str):
+                if val_str == 'this' and 'this' in _obj_str:
+                    # this.field.set(this) → 借用与移动冲突，需 .clone()
+                    val_str = 'this.clone()'
+                elif val_str != 'this':
+                    val_str = f'{val_str}.clone()'
             # T76: 基于接收者实际 Rust 类型查找字段的 _super 路径
             recv_base = render_type(obj_ty).split('<')[0].strip()
             cls_short = class_name.rsplit('/', 1)[-1] if '/' in class_name else class_name
@@ -711,17 +715,24 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             ty_str = jvm_to_rust(descriptor, registry) if descriptor else 'Object'
             # 泛型类静态字段访问需要 turbofish，避免 E0283 类型推断歧义
             _getstatic_turbofish = ''
+            _getstatic_cls_ci = None
             if registry and cls:
                 _cls_bin = _rust_type_to_binary(cls.rsplit('/', 1)[-1].replace('$', '_'), registry) if '/' in cls else _rust_type_to_binary(cls.replace('$', '_'), registry)
                 if not _cls_bin and cls in registry:
                     _cls_bin = cls
                 if _cls_bin:
-                    _cls_ci = registry.get(_cls_bin)
-                    if _cls_ci and _cls_ci.generic_signature:
-                        _tparams = _parse_class_type_params(_cls_ci.generic_signature)
+                    _getstatic_cls_ci = registry.get(_cls_bin)
+                    if _getstatic_cls_ci and _getstatic_cls_ci.generic_signature:
+                        _tparams = _parse_class_type_params(_getstatic_cls_ci.generic_signature)
                         if _tparams:
                             _getstatic_turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
-            sim.push(StaticFieldRef(cls, field_name, RsNamed(ty_str), turbofish=_getstatic_turbofish), RsNamed(ty_str))
+            # 若字段名与方法名冲突，emitter 生成了 fieldname_field 后缀，调用方也须一致
+            _actual_field_name = field_name
+            if _getstatic_cls_ci is not None:
+                _method_names = {m.name for m in _getstatic_cls_ci.methods}
+                if field_name in _method_names:
+                    _actual_field_name = field_name + '_field'
+            sim.push(StaticFieldRef(cls, _actual_field_name, RsNamed(ty_str), turbofish=_getstatic_turbofish), RsNamed(ty_str))
         else:
             sim.push(RawExpr(f"/* getstatic {comment} */"), RsNamed('Object'))
     elif op == 'putstatic':
@@ -800,7 +811,13 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'aaload':
         idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
-        elem_ty_str = arr_ty_str[4:-1] if arr_ty_str.startswith('Vec<') else 'Object'
+        if arr_ty_str.startswith('Vec<'):
+            elem_ty_str = arr_ty_str[4:-1]
+        else:
+            # 处理 Rc<RefCell<Vec<T>>> 形式（java 数组在 Rust 中的标准编码）
+            import re as _re
+            _m = _re.match(r'Rc<RefCell<Vec<(.+)>>>$', arr_ty_str)
+            elem_ty_str = _m.group(1) if _m else 'Object'
         sim.push(RawExpr(f"{render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize].clone()"), RsNamed(elem_ty_str))
     elif op == 'arraylength':
         arr_expr, _ = sim.pop()
@@ -864,7 +881,12 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
                 expr = RawExpr(f"({render_expr(expr)}).downcast::<{cast_rust}>()")
             sim.push(expr, RsNamed(cast_rust))
-    elif op == 'instanceof': sim.push(Lit('true'), BOOL)
+    elif op == 'instanceof':
+        # JVM 语义: pop objectref, push int(0/1)
+        # 暂用 true 作为 stub，但必须消耗栈上的对象引用
+        if sim.stack:
+            sim.pop()
+        sim.push(Lit('true'), BOOL)
 
     # ── invokedynamic ──
     elif op == 'invokedynamic':
@@ -1203,8 +1225,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     if obj_base in _JAVA_RUNTIME_SHORT_NAMES:
         rust_mname = _safe_field(mname)
     else:
-        # 查 registry 确认是否有重载（用户类 + JDK 类均检查），有则 mangle 调用名
-        rust_mname = _safe_field(_mangle_if_overloaded(cls or '', mname, comment, registry))
+        # 优先用接收者实际类型 mangle（invokeinterface 通过接口调用时 cls 是接口，
+        # 接口只有一个方法→漏判重载；用实际 receiver 类型能正确找到重载）
+        mangle_cls = obj_base if (obj_base and obj_base not in ('Object', '()')) else (cls or '')
+        rust_mname = _safe_field(_mangle_if_overloaded(mangle_cls, mname, comment, registry))
 
     # T76：若方法定义在父类（继承方法），通过 _super 链路由调用
     # 基于接收者实际 Rust 类型查找方法是否需要通过 _super 路由

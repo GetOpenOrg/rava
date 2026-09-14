@@ -51,6 +51,7 @@ JVM_RUST: dict[str, str] = {
     'B': 'i8',  'S': 'i16', 'C': 'u16', 'V': '()',
     'Ljava/lang/String;':  'String',     # java.lang.String（不是 std::string::String）
     'Ljava/lang/Object;':  'Object',
+    'Ljava/lang/Class;':   'Object',     # Class<T> 反射对象映射为 Object（转译中不使用反射）
     'Ljava/lang/Integer;': 'i32',
     'Ljava/lang/Long;':    'i64',
     'Ljava/lang/Double;':  'f64',

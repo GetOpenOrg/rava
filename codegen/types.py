@@ -15,31 +15,44 @@ class Instr:
 
 
 @dataclass
+class InnerClassInfo:
+    """内部类关系（InnerClasses attribute 中的一条记录）。"""
+    inner_class:  str        # binary name，如 java/util/HashMap$Node
+    outer_class:  str = ''   # 外围类 binary name；匿名类为空
+    inner_name:   str = ''   # 简单名称；匿名类为空
+    access_flags: int = 0
+
+
+@dataclass
 class FieldInfo:
     name:              str
     descriptor:        str
     is_static:         bool = False
     access_flags:      int  = 0
     generic_signature: str  = ''
+    constant_value:    str  = ''   # static final 字段的字面量（ConstantValue attribute）
+    is_deprecated:     bool = False
 
 
 @dataclass
 class ParsedMethod:
-    class_name:        str
-    name:              str
-    descriptor:        str
-    is_static:         bool
-    locals_count:      int
-    args_size:         int
-    instrs:            list
-    local_names:       dict = None
-    local_types:       dict = None   # slot → Signature string (LocalVariableTypeTable)
-    access_flags:      int  = 0
-    is_native:         bool = False
-    is_abstract:       bool = False
-    is_synthetic:      bool = False
-    exceptions:        list = None   # list[str] binary names
-    generic_signature: str  = ''
+    class_name:         str
+    name:               str
+    descriptor:         str
+    is_static:          bool
+    locals_count:       int
+    args_size:          int
+    instrs:             list
+    local_names:        dict = None
+    local_types:        dict = None   # slot → Signature string (LocalVariableTypeTable)
+    access_flags:       int  = 0
+    is_native:          bool = False
+    is_abstract:        bool = False
+    is_synthetic:       bool = False
+    exceptions:         list = None   # list[str] binary names（Exceptions attribute）
+    generic_signature:  str  = ''
+    is_deprecated:      bool = False
+    method_parameters:  list = None   # list of (name: str, access_flags: int)
 
     def __post_init__(self):
         if self.local_names is None:
@@ -48,6 +61,8 @@ class ParsedMethod:
             self.local_types = {}
         if self.exceptions is None:
             self.exceptions = []
+        if self.method_parameters is None:
+            self.method_parameters = []
 
     @property
     def param_types(self):
@@ -77,10 +92,14 @@ class ClassInfo:
     is_enum:           bool = False
     generic_signature: str  = ''
     source_file:       str  = ''
+    inner_classes:     list = None   # list[InnerClassInfo]
+    is_deprecated:     bool = False
 
     def __post_init__(self):
         if self.interfaces is None:
             self.interfaces = []
+        if self.inner_classes is None:
+            self.inner_classes = []
 
 
 @dataclass

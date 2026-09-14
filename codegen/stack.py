@@ -171,12 +171,19 @@ class StackSim:
             f"store_local() requires RsExpr, got {type(expr)}: {expr!r}"
         assert isinstance(ty, _TYPE_CLASSES), \
             f"store_local() requires RsType, got {type(ty)}: {ty!r}"
-        # 用 LocalVariableTypeTable 提供的精确类型覆盖泛型擦除后的 Object
+        # 用 LocalVariableTypeTable 提供的精确类型覆盖泛型擦除后的 Object 或裸类名
         hint = self._hint_types.get(slot)
         # 记录原始栈类型：只有在栈类型为 Object 时才需要 downcast
         src_is_object = isinstance(ty, RsNamed) and ty.name == 'Object'
-        if hint is not None and src_is_object:
-            ty = hint
+        if hint is not None:
+            if src_is_object:
+                ty = hint
+            elif (isinstance(ty, RsNamed) and isinstance(hint, (RsNamed, RsGeneric))):
+                # 裸类名（如 HashMap_TreeNode）→ hint 带泛型（HashMap_TreeNode<K,V>）
+                # 条件：hint 的 base 名和当前 ty 名相同，或 hint 是更精确的泛型形式
+                hint_base = hint.name if isinstance(hint, RsNamed) else hint.name
+                if hint_base == ty.name or (isinstance(hint, RsGeneric) and hint.name == ty.name):
+                    ty = hint
         # `this` 在 Rust 方法中是 &Self，赋值给类型标注变量时需 clone()
         _is_this = isinstance(expr, Var) and expr.name == 'this'
         _is_ref_ty = isinstance(ty, RsNamed) and ty.name not in (

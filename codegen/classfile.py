@@ -7,7 +7,7 @@
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
-from .types import ClassInfo, FieldInfo, ParsedMethod, Instr
+from .types import ClassInfo, FieldInfo, ParsedMethod, Instr, InnerClassInfo
 
 # ── 常量池 tag ───────────────────────────────────────────────────────────────
 TAG_UTF8               = 1
@@ -397,6 +397,36 @@ def _decode_bytecode(code: bytes, pool: list, bootstrap_methods: list[dict] | No
     return instrs
 
 
+def _constant_value_str(pool: list, cv_idx: int) -> str:
+    """将 ConstantValue attribute 的常量池索引转换为可读字符串（作为元数据存储）。"""
+    entry = pool[cv_idx] if cv_idx < len(pool) else None
+    if entry is None:
+        return ''
+    tag = entry[0]
+    if tag == 'Integer':
+        return str(entry[1])
+    if tag == 'Long':
+        # 常量池以无符号 u64 存储，转换为有符号 i64
+        val = entry[1]
+        if val >= (1 << 63):
+            val -= (1 << 64)
+        return str(val)
+    if tag == 'Float':
+        v = entry[1]
+        if v != v:           # NaN
+            return 'NaN'
+        return repr(float(v))
+    if tag == 'Double':
+        v = entry[1]
+        if v != v:
+            return 'NaN'
+        return repr(v)
+    if tag == 'String':
+        s = _utf8(pool, entry[1])
+        return s.replace('\\', '\\\\').replace('"', '\\"')
+    return ''
+
+
 def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
     """解析 BootstrapMethods attribute，返回 bootstrap method 信息列表。"""
     r = _Reader(data)
@@ -543,7 +573,9 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         f_flags = r.u2()
         f_name  = _utf8(pool, r.u2())
         f_desc  = _utf8(pool, r.u2())
-        f_generic_sig = ''
+        f_generic_sig  = ''
+        f_constant_val = ''
+        f_deprecated   = False
         attr_count = r.u2()
         for _ in range(attr_count):
             a_name_idx = r.u2()
@@ -552,6 +584,11 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
             if a_name == 'Signature':
                 sig_idx = struct.unpack_from('>H', r.read(2))[0]
                 f_generic_sig = _utf8(pool, sig_idx)
+            elif a_name == 'ConstantValue':
+                cv_idx = struct.unpack_from('>H', r.read(2))[0]
+                f_constant_val = _constant_value_str(pool, cv_idx)
+            elif a_name == 'Deprecated':
+                f_deprecated = True  # 属性体长度为 0
             else:
                 r.skip(a_len)
         fields.append(FieldInfo(
@@ -560,6 +597,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
             is_static=bool(f_flags & ACC_STATIC),
             access_flags=f_flags,
             generic_signature=f_generic_sig,
+            constant_value=f_constant_val,
+            is_deprecated=f_deprecated,
         ))
 
     # ── methods（第一步：收集原始数据，延迟解码字节码）─────────────────────
@@ -573,8 +612,10 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         attr_count = r.u2()
         code_attr_bytes: Optional[bytes] = None
         m_exceptions: list[str] = []
-        m_generic_sig = ''
+        m_generic_sig  = ''
         m_is_synthetic = bool(m_flags & 0x1000)  # ACC_SYNTHETIC flag
+        m_deprecated   = False
+        m_parameters: list[tuple[str, int]] = []  # (name, access_flags)
         for _ in range(attr_count):
             attr_name_idx = r.u2()
             attr_len      = r.u4()
@@ -592,15 +633,30 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 sig_idx = struct.unpack_from('>H', r.read(2))[0]
                 m_generic_sig = _utf8(pool, sig_idx)
             elif attr_name == 'Synthetic':
-                m_is_synthetic = True  # 属性体为空，length 已由 u4() 读取
+                m_is_synthetic = True
+            elif attr_name == 'Deprecated':
+                m_deprecated = True
+            elif attr_name == 'MethodParameters':
+                mp_data = r.read(attr_len)
+                mp_r = _Reader(mp_data)
+                n_params = mp_r.u1()
+                for _ in range(n_params):
+                    p_name_idx   = mp_r.u2()
+                    p_access     = mp_r.u2()
+                    p_name       = _utf8(pool, p_name_idx) if p_name_idx else ''
+                    m_parameters.append((p_name, p_access))
             else:
                 r.skip(attr_len)
-        raw_methods.append((m_flags, m_name, m_desc, code_attr_bytes, m_exceptions, m_generic_sig, m_is_synthetic))
+        raw_methods.append((m_flags, m_name, m_desc, code_attr_bytes,
+                            m_exceptions, m_generic_sig, m_is_synthetic,
+                            m_deprecated, m_parameters))
 
     # ── 类级 attribute（含 BootstrapMethods、Signature、SourceFile）────────
     bootstrap_methods: list[dict] = []
-    cls_generic_sig = ''
-    cls_source_file = ''
+    cls_generic_sig  = ''
+    cls_source_file  = ''
+    cls_deprecated   = False
+    cls_inner_classes: list[InnerClassInfo] = []
     cls_attr_count = r.u2()
     for _ in range(cls_attr_count):
         attr_name_idx = r.u2()
@@ -615,13 +671,35 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         elif attr_name == 'SourceFile':
             sf_idx = struct.unpack_from('>H', r.read(2))[0]
             cls_source_file = _utf8(pool, sf_idx)
+        elif attr_name == 'Deprecated':
+            cls_deprecated = True
+        elif attr_name == 'InnerClasses':
+            ic_data = r.read(attr_len)
+            ic_r = _Reader(ic_data)
+            n_ic = ic_r.u2()
+            for _ in range(n_ic):
+                inner_idx = ic_r.u2()
+                outer_idx = ic_r.u2()
+                iname_idx = ic_r.u2()
+                ic_flags  = ic_r.u2()
+                inner_name_str = _utf8(pool, pool[inner_idx][1]) if inner_idx else ''
+                outer_name_str = _utf8(pool, pool[outer_idx][1]) if outer_idx else ''
+                simple_name    = _utf8(pool, iname_idx) if iname_idx else ''
+                cls_inner_classes.append(InnerClassInfo(
+                    inner_class  = inner_name_str,
+                    outer_class  = outer_name_str,
+                    inner_name   = simple_name,
+                    access_flags = ic_flags,
+                ))
         else:
             r.skip(attr_len)
 
     # ── methods（第二步：解码字节码，包含 native/abstract 方法）────────────
     from .type_map import parse_descriptor_params
     methods: list[ParsedMethod] = []
-    for (m_flags, m_name, m_desc, code_attr_bytes, m_exceptions, m_generic_sig, m_is_synthetic) in raw_methods:
+    for (m_flags, m_name, m_desc, code_attr_bytes,
+         m_exceptions, m_generic_sig, m_is_synthetic,
+         m_deprecated, m_parameters) in raw_methods:
         is_native   = bool(m_flags & ACC_NATIVE)
         is_abstract = bool(m_flags & ACC_ABSTRACT)
         is_static   = bool(m_flags & ACC_STATIC)
@@ -643,6 +721,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 is_synthetic=m_is_synthetic,
                 exceptions=m_exceptions,
                 generic_signature=m_generic_sig,
+                is_deprecated=m_deprecated,
+                method_parameters=m_parameters,
             ))
         else:
             sub_r = _Reader(code_attr_bytes)
@@ -650,12 +730,14 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 sub_r, pool, class_name, m_name, m_desc, m_flags, bootstrap_methods
             )
             if parsed is not None:
-                parsed.access_flags      = m_flags
-                parsed.is_native         = is_native
-                parsed.is_abstract       = is_abstract
-                parsed.is_synthetic      = m_is_synthetic
-                parsed.exceptions        = m_exceptions
-                parsed.generic_signature = m_generic_sig
+                parsed.access_flags       = m_flags
+                parsed.is_native          = is_native
+                parsed.is_abstract        = is_abstract
+                parsed.is_synthetic       = m_is_synthetic
+                parsed.exceptions         = m_exceptions
+                parsed.generic_signature  = m_generic_sig
+                parsed.is_deprecated      = m_deprecated
+                parsed.method_parameters  = m_parameters
                 methods.append(parsed)
 
     return ClassInfo(
@@ -670,4 +752,6 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         is_enum=bool(access_flags & ACC_ENUM),
         generic_signature=cls_generic_sig,
         source_file=cls_source_file,
+        inner_classes=cls_inner_classes,
+        is_deprecated=cls_deprecated,
     )

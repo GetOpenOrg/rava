@@ -48,9 +48,9 @@ def cmp_op(opcode: str, a: str, b: str) -> str:
         return f"{a} {two_ops[opcode]} {b}"
 
     one_ops = {
-        'ifeq': f"({a}==0i32)", 'ifne': f"({a}!=0i32)",
-        'iflt': f"({a}<0i32)",  'ifge': f"({a}>=0i32)",
-        'ifle': f"({a}<=0i32)", 'ifgt': f"({a}>0i32)",
+        'ifeq': f"({a}==0)", 'ifne': f"({a}!=0)",
+        'iflt': f"({a}<0)",  'ifge': f"({a}>=0)",
+        'ifle': f"({a}<=0)", 'ifgt': f"({a}>0)",
         'ifnull':    f"_is_jnull(&{a})",
         'ifnonnull': f"!_is_jnull(&{a})",
     }

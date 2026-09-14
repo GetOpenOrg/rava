@@ -15,7 +15,7 @@ impl<E: Clone + Default + Into<Object> + From<Object> + 'static> ArrayList<E> {
     pub fn new_typed() -> Result<ArrayList<E>> {
         let base = ArrayList::<Object>::new()?;
         Ok(ArrayList {
-            _super: base._super,
+            _super: Default::default(),
             elementData: base.elementData,
             size: base.size,
             _phantom: std::marker::PhantomData,

@@ -11,11 +11,13 @@ from .emitter import write_cargo_project
 from .type_map import load_ergonomic_renames
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
-_JDK_PREFIXES = ('java/', 'javax/', 'sun/', 'com/sun/', 'com/oracle/')
+# 只展开公开 API（java/ javax/）；内部实现包（sun/ jdk/ com.sun/ com.oracle/）截断为 stub
+_JDK_PREFIXES = ('java/', 'javax/')
 
-# 仅生成存根的包前缀：通过 Field/Method 指令发现后加入 field_discover_classes，
-# 方法体全部为 panic! stub，不展开调用链
-_JDK_STUB_ONLY_PREFIXES = ('jdk/',)
+# 内部包边界：方法体全部为 panic! stub，不展开调用链
+# 这是内部边界截断策略的核心——sun/ 等包的实现细节不翻译，只生成类型占位符
+# java/security/ 是 JVM 安全服务层（JDK 21 的 SecurityManager 始终为 null），视为内部边界
+_JDK_STUB_ONLY_PREFIXES = ('sun/', 'jdk/', 'com/sun/', 'com/oracle/', 'java/security/')
 
 # java_runtime 已手写实现的类：这些类不再由 jdk_classes 翻译，避免重复定义和命名冲突
 _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
@@ -40,8 +42,9 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
     if r.returncode != 0:
         sys.exit(f"javac failed:\n{r.stderr}")
 
-    # 2. 解析用户 .class 二进制
+    # 2. 解析用户 .class 二进制（含内部类 $ 文件）
     class_infos = []
+    _seen_class_files: set[str] = set()
     for jf in java_files:
         class_name = os.path.splitext(os.path.basename(jf))[0]
         class_file = os.path.join(class_dir, class_name + '.class')
@@ -52,6 +55,19 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
         print(f"      字段: {[f.name for f in ci.fields]}")
         print(f"      方法: {[m.name for m in ci.methods]}")
         class_infos.append(ci)
+        _seen_class_files.add(class_file)
+
+        # 发现同目录下的内部类（OuterClass$Inner.class）
+        for fname in sorted(os.listdir(class_dir)):
+            if fname.startswith(class_name + '$') and fname.endswith('.class'):
+                inner_file = os.path.join(class_dir, fname)
+                if inner_file in _seen_class_files:
+                    continue
+                _seen_class_files.add(inner_file)
+                inner_ci = parse_class(inner_file)
+                inner_ci.methods = [m for m in inner_ci.methods if m.name != '<clinit>']
+                print(f"      内部类: {fname[:-6]} (字段: {[f.name for f in inner_ci.fields]}, 方法: {[m.name for m in inner_ci.methods]})")
+                class_infos.append(inner_ci)
 
     # 3. 方法级调用链 BFS 发现 JDK 类
     print(f"[3/4] 扫描 JDK 类引用...", end=' ', flush=True)
@@ -127,11 +143,11 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                 cls = rest[:dot]
                 meth = rest[dot+1:colon]
                 desc = rest[colon+1:]
-                if cls.startswith(_JDK_PREFIXES) and '[' not in cls:
-                    method_refs.append((cls, meth, desc))
-                elif cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
-                    # jdk/ 内部类方法调用 → 只生成类型存根，不展开方法体
+                # stub-only 优先检查（java/security/ 等是 java/ 的子前缀，必须先匹配）
+                if cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
                     field_classes.append(cls)
+                elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
+                    method_refs.append((cls, meth, desc))
         elif c.startswith('Field '):
             # "Field java/nio/charset/CodingErrorAction.REPLACE:Ljava/nio/charset/CodingErrorAction;"
             # getstatic/putstatic/getfield/putfield - 只发现声明类，不展开其方法体
@@ -141,14 +157,14 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                 cls = rest[:dot]
                 if (cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES)) and '[' not in cls:
                     field_classes.append(cls)
+        elif c.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in c:
+            # stub-only 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
+            cls = c.split()[0]
+            field_classes.append(cls)
         elif c.startswith(_JDK_PREFIXES) and '[' not in c:
             # new / checkcast / anewarray: comment = class binary name
             cls = c.split()[0]
             method_refs.append((cls, '<init>', '()V'))
-        elif c.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in c:
-            # jdk/ 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
-            cls = c.split()[0]
-            field_classes.append(cls)
     return method_refs, field_classes
 
 
