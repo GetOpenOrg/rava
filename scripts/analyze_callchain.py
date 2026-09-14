@@ -149,7 +149,7 @@ def method_level_bfs(user_class_infos, resolver):
             ci = parse_class_bytes(data, cls)
             ci._method_index = defaultdict(list)
             for m in ci.methods:
-                ci._method_index[m.name].append(m)
+                ci._method_index[(m.name, m.descriptor)].append(m)
             class_cache[cls] = ci
             return ci
         except Exception:
@@ -161,7 +161,7 @@ def method_level_bfs(user_class_infos, resolver):
         ci = get_ci(cls)
         if ci is None:
             continue
-        for m in ci._method_index.get(meth, []):
+        for m in ci._method_index.get((meth, desc), []):
             enqueue(m.instrs or [])
 
     reachable_classes = {cls for cls, _, _ in reachable_methods}
