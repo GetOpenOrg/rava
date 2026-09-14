@@ -1843,3 +1843,146 @@ T67 (消除 Raw)   ─ 持续改进，与其他任务并行
 - 短期：T62 Step 1/2（异常表解析，P0），T62 Step 3/4 依赖 T56
 - 中期：T66 阶段一（LVTT 驱动泛型，独立可做）
 - 长期：T65（并行处理，待代码稳定后）、T66 阶段二（依赖 SSA）、T67（持续）
+
+---
+
+## 阶段十二：JNC 计划参考项（Phase 12 — JNC Reference）
+
+> 来源：`/Users/yuwei/dev/workspace/jnc/docs/plans/2026-09-14-codegen-improvement-plan.md`  
+> 新增洞察：JVM slot 复用根因分析（R2）、虚方法 BFS 完整性（R3）
+
+---
+
+### T68 · JVM slot 复用与变量作用域追踪（E0425 根因修复）
+**状态**：`[ ]`  
+**文件**：`codegen/stack.py`、`codegen/method.py`  
+**优先级**：P1（当前 310 个 E0425 错误的主要根因）
+
+**背景**：JVM 局部变量槽（slot）允许在不同词法作用域中复用同一编号。例如：
+
+```java
+for (int i = 0; i < n; i++) {
+    String s = items[i];  // slot 2 = s
+}
+// 循环结束后 slot 2 被复用
+for (int i = 0; i < m; i++) {
+    int x = values[i];    // slot 2 = x（与上面的 s 同一编号）
+}
+```
+
+当前 `StackSim.store_local` 对同一 slot 的第二次赋值生成 `AssignStmt`（`v2 = ...`），但如果该 slot 对应的 `LetStmt`（`let mut v2: String`）已在第一个循环内作用域被声明，第二个循环中的 `v2` 引用就会产生 E0425（找不到变量）或 E0308（类型不匹配）。
+
+**根本原因**：`store_local` 不追踪当前嵌套深度，无法区分"同一作用域内的重新赋值"和"新作用域内对同一 slot 编号的复用"。
+
+**实施步骤**：
+
+**Step 1：追踪变量声明的作用域深度**
+
+在 `StackSim`（stack.py）中增加深度追踪：
+```python
+self._slot_decl_depth: dict[int, int] = {}   # slot → 声明时的嵌套深度
+self._current_depth: int = 0                  # 当前嵌套层级
+```
+
+进入 `LoopStmt`/`IfStmt` 体时深度 +1，退出时深度 -1。
+
+**Step 2：slot 复用时生成新 LetStmt**
+
+修改 `store_local`（stack.py）：
+```python
+def store_local(self, idx, expr, ty):
+    decl_depth = self._slot_decl_depth.get(idx)
+    if decl_depth is None:
+        # 首次声明：生成 LetStmt
+        self._slot_decl_depth[idx] = self._current_depth
+        self.emit(LetStmt(name=f'v{idx}', ty=ty, value=expr, mutable=True))
+    elif decl_depth == self._current_depth:
+        # 同作用域：生成 AssignStmt（重新赋值）
+        self.emit(AssignStmt(target=Var(f'v{idx}'), value=expr))
+    else:
+        # 不同作用域：slot 复用，用 Rust shadowing（新 LetStmt）
+        self._slot_decl_depth[idx] = self._current_depth
+        self.emit(LetStmt(name=f'v{idx}', ty=ty, value=expr, mutable=True))
+```
+
+Rust 的变量遮蔽（shadowing）语义天然支持这个模式：同名 `let mut v2` 可以声明多次，各自独立作用域。
+
+**Step 3：method.py 通知深度变化**
+
+在 `method.py` 的 `LoopStmt`/`IfStmt` 生成点，调用 `sim.enter_scope()` / `sim.exit_scope()`：
+```python
+sim.enter_scope()   # depth += 1
+# 生成循环体指令
+sim.exit_scope()    # depth -= 1，清理该深度的 _slot_decl_depth 记录
+```
+
+**特殊情况**：
+- `iinc` 指令（`i++`）直接修改 slot，不经过 `store_local`，需要单独处理（生成 `v2 += 1`，不创建新 LetStmt）
+- 参数 slot（slot 0 = this，slot 1-N = 参数）永远不会在同一方法内被"复用"，不需要深度追踪
+
+**验收**：
+- 含两个连续 for 循环且各自 slot 复用的 Java 方法生成合法 Rust（无 E0425）
+- E0425 错误数从 310 下降（预期降低 50%+）
+- 原有循环变量正确性不退化
+
+---
+
+### T69 · 虚方法 BFS 完整性（invokevirtual 展开子类实现）
+**状态**：`[ ]`  
+**文件**：`codegen/transpile.py`、`codegen/hierarchy.py`（T55 依赖）  
+**优先级**：P2  
+**依赖**：T55（ClassHierarchy）完成后才能枚举已知实现类
+
+**背景**：当前方法级调用链 BFS 只追踪静态可达路径。对于 `invokevirtual` 指令，字节码记录的是声明类（如 `AbstractList.add`），而运行时实际调用的是子类实现（如 `ArrayList.add`）。若子类实现未被 BFS 发现，翻译后子类方法保持为 `panic!("stub: ...")`，运行时崩溃。
+
+**示例**：
+```java
+List<String> list = new ArrayList<>();
+list.add("hello");  // invokevirtual List.add
+                    // 实际调用 ArrayList.add（但 BFS 只发现了 AbstractList.add）
+```
+
+**实施步骤**：
+
+**Step 1：在 BFS 处理 invokevirtual 时展开子类**
+
+修改 `transpile.py` 的 `_discover_jdk_classes_method_level`，在入队 `invokevirtual` 目标时：
+```python
+if instr.opcode == 'invokevirtual':
+    # 入队声明类中的方法（现有行为）
+    queue.append((decl_class, method_name, descriptor))
+    
+    # 新增：通过 ClassHierarchy 找到所有已知子类的同名方法，一并入队
+    if hierarchy:
+        for impl_class in hierarchy.concrete_subclasses(decl_class):
+            if hierarchy.overrides(impl_class, method_name, descriptor):
+                queue.append((impl_class, method_name, descriptor))
+```
+
+**Step 2：invokeinterface 同理**
+
+`invokeinterface` 的情况更典型：接口声明类（如 `Iterable`）本身没有实现，必须展开所有已知实现类（`ArrayList`、`LinkedList` 等）。
+
+**Step 3：BFS 深度限制**
+
+子类展开可能引入大量新类（每个接口有数十个实现类），需要：
+- 只展开当前 workspace 中已解析到的类（不无限延伸）
+- 保留现有的 `MAX_BFS_DEPTH` 或等效限制
+
+**验收**：
+- `ArrayList.add` 在 `list.add("hello")` 调用链上被发现并翻译（不再是 stub）
+- BFS 生成的类数量合理增加（不爆炸式增长）
+- `cargo check` 中相关 E0599（方法找不到）数量下降
+
+---
+
+**阶段十二任务依赖**：
+
+```
+T68 (slot 复用)   ─ 独立，可立即开始；不依赖其他任务
+T69 (BFS 虚方法) ─ 依赖 T55（ClassHierarchy），需要 concrete_subclasses() API
+```
+
+**推荐执行序**：
+- 立即：T68（P1，独立可做，可能修复大量 E0425）
+- 中期：T69（P2，等 T55 ClassHierarchy 完成后）
