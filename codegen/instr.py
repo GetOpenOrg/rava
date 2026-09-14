@@ -10,8 +10,22 @@ JVM 字节码指令 → Rust 语句转换。
 """
 
 import re
+import math
 from .stack import StackSim, I32, I64, F32, F64, BOOL, UNIT
 from .constants import safe_ident as _safe_field
+
+# Python float → Rust 字面量（处理 nan/inf/-inf 等特殊值）
+_FLOAT_SPECIAL = {
+    'nan': '{ty}::NAN', 'inf': '{ty}::INFINITY', '-inf': '{ty}::NEG_INFINITY',
+    'infinity': '{ty}::INFINITY', '-infinity': '{ty}::NEG_INFINITY',
+}
+
+def _float_lit(val_str: str, ty: str) -> str:
+    """将 Python float repr 转为合法 Rust 字面量，处理 nan/inf/-inf。"""
+    key = val_str.lower()
+    if key in _FLOAT_SPECIAL:
+        return _FLOAT_SPECIAL[key].format(ty=ty)
+    return val_str + ty
 
 
 def _escape_str(s: str) -> str:
@@ -258,14 +272,14 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             lit = _escape_str(comment[7:].strip())
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         elif comment.startswith('int '):    sim.push(Lit(comment[4:].strip() + 'i32'), I32)
-        elif comment.startswith('float '): sim.push(Lit(comment[6:].strip() + 'f32'), F32)
+        elif comment.startswith('float '): sim.push(Lit(_float_lit(comment[6:].strip(), 'f32')), F32)
         elif comment.startswith('long '):  sim.push(Lit(comment[5:].strip() + 'i64'), I64)
-        elif comment.startswith('double '): sim.push(Lit(comment[7:].strip() + 'f64'), F64)
+        elif comment.startswith('double '): sim.push(Lit(_float_lit(comment[7:].strip(), 'f64')), F64)
         elif comment.startswith('class '): sim.push(Lit('Class::<Object>::default()'), RsGeneric('Class', [RsNamed('Object')]))
         else: sim.push(Lit(f"{operand}i32"), I32)
     elif op in ('ldc2_w', 'ldc_w'):
         if comment.startswith('long '):   sim.push(Lit(comment[5:].strip() + 'i64'), I64)
-        elif comment.startswith('double '): sim.push(Lit(comment[7:].strip() + 'f64'), F64)
+        elif comment.startswith('double '): sim.push(Lit(_float_lit(comment[7:].strip(), 'f64')), F64)
         elif comment.startswith('String '):
             lit = _escape_str(comment[7:].strip())
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))

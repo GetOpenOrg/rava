@@ -721,8 +721,12 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         def _safe_pkg_part(p: str) -> str:
             return f'r#{p}' if p in _RUST_KEYWORDS else p
 
+        # jdk/ 内部实现类不加入全局跨包 glob 导入，避免 Type 等名称冲突
+        _SKIP_GLOBAL_IMPORT_PREFIXES = ('jdk/',)
         jdk_pkg_set: set[str] = set()
         for jdk_ci in jdk_class_infos:
+            if jdk_ci.name.startswith(_SKIP_GLOBAL_IMPORT_PREFIXES):
+                continue
             pkg_parts = jdk_ci.name.split('/')[:-1]
             if pkg_parts:
                 jdk_pkg_set.add('::'.join(_safe_pkg_part(p) for p in pkg_parts))

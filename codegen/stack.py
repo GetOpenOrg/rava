@@ -18,8 +18,16 @@ from .render import render_type, render_expr
 from .type_map import short_cls as _short_cls
 from .constants import safe_ident
 
-# _safe_name 保留为别名，供 method.py 等现有代码导入
-_safe_name = safe_ident
+
+def _safe_name(name: str) -> str:
+    """局部变量名安全化，在 safe_ident 基础上额外处理：
+    PascalCase 名（如 IOException 用作 catch 变量）首字母小写，
+    避免遮蔽 Rust unit struct（E0530）。"""
+    s = safe_ident(name)
+    # PascalCase（首字母大写 + 次字母小写）→ 首字母小写（避免 E0530）
+    if s and s[0].isupper() and len(s) > 1 and s[1].islower():
+        s = s[0].lower() + s[1:]
+    return s
 
 # ── 类型常量（供外部导入使用）────────────────────────────────────────────────
 I32  = _I32
