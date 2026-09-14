@@ -9,13 +9,12 @@
 import sys
 import os
 import subprocess
+from collections import deque, defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from codegen.classfile import parse_class_bytes
 from codegen.jdk_resolver import JdkResolver
 from codegen.transpile import _JDK_PREFIXES
-
-_MAX = 5000  # 无截断，观察真实数量
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
@@ -60,7 +59,6 @@ def _collect_class_refs_all_methods(ci):
 
 def class_level_bfs(user_class_infos, resolver):
     """复现 transpile.py _discover_jdk_classes 的类级 BFS。"""
-    # 初始引用：用户类的所有方法
     initial = set()
     for ci in user_class_infos:
         for m in ci.methods:
@@ -68,11 +66,11 @@ def class_level_bfs(user_class_infos, resolver):
                 initial.add(cls)
 
     visited_classes = set()
-    queue = sorted(initial)
+    queue = deque(initial)
     infos = {}
 
-    while queue and len(infos) < _MAX:
-        cls = queue.pop(0)
+    while queue:
+        cls = queue.popleft()
         if cls in visited_classes:
             continue
         visited_classes.add(cls)
@@ -95,18 +93,16 @@ def class_level_bfs(user_class_infos, resolver):
 
 def method_level_bfs(user_class_infos, resolver):
     """方法级 BFS：只追踪实际被调用的方法，未被调用的方法不展开其依赖。"""
-    # 初始种子：用户类中被调用的 JDK 方法
-    visited_methods = set()  # (class, method, descriptor)
-    queue = []
+    reachable_methods = set()
+    queue = deque()
     for ci in user_class_infos:
         for m in ci.methods:
             for ref in _parse_instr_refs(m.instrs):
-                key = ref
-                if key not in visited_methods:
-                    visited_methods.add(key)
-                    queue.append(key)
+                if ref not in reachable_methods:
+                    reachable_methods.add(ref)
+                    queue.append(ref)
 
-    class_cache = {}  # binary_name → ClassInfo
+    class_cache = {}  # binary_name → ClassInfo，value 附带 _method_index
 
     def get_ci(cls):
         if cls in class_cache:
@@ -117,26 +113,26 @@ def method_level_bfs(user_class_infos, resolver):
             return None
         try:
             ci = parse_class_bytes(data, cls)
+            # 建立方法名索引，避免后续每次线性扫描
+            ci._method_index = defaultdict(list)
+            for m in ci.methods:
+                ci._method_index[m.name].append(m)
             class_cache[cls] = ci
             return ci
         except Exception:
             class_cache[cls] = None
             return None
 
-    reachable_methods = set(visited_methods)
-
-    while queue and len(reachable_methods) < _MAX:
-        cls, meth, desc = queue.pop(0)
+    while queue:
+        cls, meth, desc = queue.popleft()
         ci = get_ci(cls)
         if ci is None:
             continue
-        # 找到这个具体方法，追踪它的指令
-        for m in ci.methods:
-            if m.name == meth:
-                for ref in _parse_instr_refs(m.instrs):
-                    if ref not in reachable_methods:
-                        reachable_methods.add(ref)
-                        queue.append(ref)
+        for m in ci._method_index.get(meth, []):
+            for ref in _parse_instr_refs(m.instrs):
+                if ref not in reachable_methods:
+                    reachable_methods.add(ref)
+                    queue.append(ref)
 
     reachable_classes = {cls for cls, _, _ in reachable_methods}
     return reachable_methods, reachable_classes, class_cache
@@ -159,13 +155,13 @@ def main():
         sys.exit(f"javac failed:\n{r.stderr}")
 
     # 解析用户类
-    from codegen.classfile import parse_class_bytes as pcb
     user_infos = []
     for jf in java_files:
         stem = os.path.splitext(os.path.basename(jf))[0]
         class_file = os.path.join(class_dir, stem + '.class')
         if os.path.exists(class_file):
-            user_infos.append(pcb(open(class_file, 'rb').read(), stem))
+            with open(class_file, 'rb') as f:
+                user_infos.append(parse_class_bytes(f.read(), stem))
 
     print(f"\n用户类：{[ci.name for ci in user_infos]}")
     print("=" * 70)
@@ -188,7 +184,6 @@ def main():
         print(f"  涉及 JDK 类：{len(reach_classes)} 个")
 
         # 按类分组展示
-        from collections import defaultdict
         by_cls = defaultdict(list)
         for cls, meth, desc in sorted(reach_methods):
             by_cls[cls].append(f"{meth}{desc}")
