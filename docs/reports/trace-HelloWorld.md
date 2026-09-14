@@ -2,16 +2,578 @@
 
 生成时间：2026-09-14
 
-## 摘要
+## 模式对比
 
-| | 数量 |
-|---|---:|
-| 调用链涉及类（有方法调用） | 577 |
-| 仅引用类（new/field，无方法调用） | 58 |
-| 合计 | 635 |
-| 可达方法数 | 3124 |
+| 模式 | 类（调用链+引用） | 方法数 | native 边界 |
+|------|----------------:|-------:|------------:|
+| 单程 RTA | 621+66=687 | 4054 | 79 |
+| Two-pass RTA | 577+58=635 | 3124 | 76 |
+| VTA + Two-pass RTA | 566+59=625 | 3140 | 74 |
+| Inter-proc VTA | 564+57=621 | 3091 | 74 |
+| Cutoff（手动 11 类） | 549+63=612 | 3053 | 73 |
+| Internal Boundary（sun/jdk/…） | 86+25=111 | 366 | 20 |
 
-## 调用链方法（按类分组）
+## 边界方法（公开API直接调用内部类，需手写native实现）
+
+> 这些方法属于 `java/`/`javax/` 公开API，但方法体内调用了 `sun/`/`jdk/` 内部类。
+> 采用内部包边界截断策略时，**这些方法需要在 `native_impls/` 中手写实现**。
+
+### `java/io/BufferedWriter`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `flushBuffer()V` | `jdk/internal/misc/InternalLock` |
+### `java/io/DataInputStream`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `readInt()I` | `jdk/internal/util/ByteArray` |
+### `java/io/OutputStreamWriter`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `flushBuffer()V` | `sun/nio/cs/StreamEncoder` |
+### `java/io/PrintStream`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `newLine()V` | `jdk/internal/misc/InternalLock` |
+| `write(Ljava/lang/String;)V` | `jdk/internal/misc/InternalLock` |
+| `writeln(Ljava/lang/String;)V` | `jdk/internal/misc/InternalLock` |
+### `java/lang/AbstractStringBuilder`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `append(F)Ljava/lang/AbstractStringBuilder;` | `jdk/internal/math/FloatToDecimal` |
+| `append(Ljava/lang/CharSequence;II)Ljava/lang/AbstractStringBuilder;` | `jdk/internal/util/Preconditions` |
+| `delete(II)Ljava/lang/AbstractStringBuilder;` | `jdk/internal/util/Preconditions` |
+| `newCapacity(I)I` | `jdk/internal/util/ArraysSupport` |
+### `java/lang/CharacterName`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `getCodePoint(Ljava/lang/String;)I` | `sun/nio/cs/ISO_8859_1` |
+| `hashN([BII)I` | `jdk/internal/util/ArraysSupport` |
+### `java/lang/Class`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `checkMemberAccess(Ljava/lang/SecurityManager;ILjava/lang/Class;Z)V` | `sun/security/util/SecurityConstants` |
+| `checkPackageAccess(Ljava/lang/SecurityManager;Ljava/lang/ClassLoader;Z)V` | `sun/reflect/misc/ReflectUtil` |
+| `descriptorString()Ljava/lang/String;` | `sun/invoke/util/Wrapper` |
+| `forName(Ljava/lang/String;)Ljava/lang/Class;` | `jdk/internal/reflect/Reflection` |
+| `forName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;` | `jdk/internal/reflect/Reflection` |
+| `forName(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;` | `sun/security/util/SecurityConstants` |
+| `getClassLoader()Ljava/lang/ClassLoader;` | `jdk/internal/reflect/Reflection` |
+| `getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;` | `jdk/internal/reflect/Reflection`, `jdk/internal/reflect/ReflectionFactory` |
+| `getConstructor0([Ljava/lang/Class;I)Ljava/lang/reflect/Constructor;` | `jdk/internal/reflect/ReflectionFactory` |
+| `getDeclaredConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;` | `jdk/internal/reflect/Reflection`, `jdk/internal/reflect/ReflectionFactory` |
+| `getDeclaredMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;` | `jdk/internal/reflect/Reflection`, `jdk/internal/reflect/ReflectionFactory` |
+| `getDeclaringClass()Ljava/lang/Class;` | `jdk/internal/reflect/Reflection` |
+| `getEnclosingClass()Ljava/lang/Class;` | `jdk/internal/reflect/Reflection` |
+| `getFactory()Lsun/reflect/generics/factory/GenericsFactory;` | `sun/reflect/generics/factory/CoreReflectionFactory`, `sun/reflect/generics/scope/ClassScope` |
+| `getGenericInfo()Lsun/reflect/generics/repository/ClassRepository;` | `sun/reflect/generics/repository/ClassRepository` |
+| `getGenericInterfaces()[Ljava/lang/reflect/Type;` | `sun/reflect/generics/repository/ClassRepository` |
+| `getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;` | `jdk/internal/reflect/Reflection`, `jdk/internal/reflect/ReflectionFactory` |
+| `getNestHost()Ljava/lang/Class;` | `jdk/internal/reflect/Reflection` |
+| `getReflectionFactory()Ljdk/internal/reflect/ReflectionFactory;` | `jdk/internal/reflect/ReflectionFactory`, `jdk/internal/reflect/ReflectionFactory$GetReflectionFactoryAction` |
+| `isUnnamedClass()Z` | `jdk/internal/misc/PreviewFeatures` |
+| `privateGetDeclaredMethods(Z)[Ljava/lang/reflect/Method;` | `jdk/internal/reflect/Reflection` |
+| `searchMethods([Ljava/lang/reflect/Method;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;` | `jdk/internal/reflect/ReflectionFactory` |
+### `java/lang/Class$Atomic`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `casReflectionData(Ljava/lang/Class;Ljava/lang/ref/SoftReference;Ljava/lang/ref/SoftReference;)Z` | `jdk/internal/misc/Unsafe` |
+### `java/lang/ClassLoader`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `checkClassLoaderPermission(Ljava/lang/ClassLoader;Ljava/lang/Class;)V` | `sun/security/util/SecurityConstants` |
+| `getBuiltinAppClassLoader()Ljava/lang/ClassLoader;` | `jdk/internal/loader/ClassLoaders` |
+| `getBuiltinPlatformClassLoader()Ljava/lang/ClassLoader;` | `jdk/internal/loader/ClassLoaders` |
+| `getParent()Ljava/lang/ClassLoader;` | `jdk/internal/reflect/Reflection` |
+| `getPlatformClassLoader()Ljava/lang/ClassLoader;` | `jdk/internal/reflect/Reflection` |
+| `getSystemClassLoader()Ljava/lang/ClassLoader;` | `jdk/internal/misc/VM`, `jdk/internal/reflect/Reflection` |
+### `java/lang/ClassValue`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `initializeMap(Ljava/lang/Class;)Ljava/lang/ClassValue$ClassValueMap;` | `jdk/internal/misc/Unsafe` |
+### `java/lang/ConditionalSpecialCasing`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `isAfterI(Ljava/lang/String;I)Z` | `sun/text/Normalizer` |
+| `isAfterSoftDotted(Ljava/lang/String;I)Z` | `sun/text/Normalizer` |
+| `isBeforeDot(Ljava/lang/String;I)Z` | `sun/text/Normalizer` |
+| `isMoreAbove(Ljava/lang/String;I)Z` | `sun/text/Normalizer` |
+### `java/lang/PublicMethods$Key`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `matches(Ljava/lang/reflect/Method;Ljava/lang/String;[Ljava/lang/Class;)Z` | `jdk/internal/reflect/ReflectionFactory` |
+### `java/lang/SecurityManager`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `checkAccess(Ljava/lang/Thread;)V` | `sun/security/util/SecurityConstants` |
+### `java/lang/String`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `checkBoundsBeginEnd(III)V` | `jdk/internal/util/Preconditions` |
+| `checkBoundsOffCount(III)I` | `jdk/internal/util/Preconditions` |
+| `checkIndex(II)V` | `jdk/internal/util/Preconditions` |
+| `checkOffset(II)V` | `jdk/internal/util/Preconditions` |
+| `encode(Ljava/nio/charset/Charset;B[B)[B` | `sun/nio/cs/ISO_8859_1`, `sun/nio/cs/US_ASCII`, `sun/nio/cs/UTF_8` |
+| `encodeWithEncoder(Ljava/nio/charset/Charset;B[BZ)[B` | `sun/nio/cs/ArrayEncoder` |
+| `startsWith(Ljava/lang/String;I)Z` | `jdk/internal/util/ArraysSupport` |
+### `java/lang/StringConcatHelper`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `newArray(J)[B` | `jdk/internal/misc/Unsafe` |
+### `java/lang/StringLatin1`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `compareTo([B[BII)I` | `jdk/internal/util/ArraysSupport` |
+| `hashCode([B)I` | `jdk/internal/util/ArraysSupport` |
+### `java/lang/StringUTF16`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `hashCode([B)I` | `jdk/internal/util/ArraysSupport` |
+### `java/lang/Thread`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `interrupt()V` | `sun/nio/ch/Interruptible` |
+| `threadState()Ljava/lang/Thread$State;` | `jdk/internal/misc/VM` |
+### `java/lang/VirtualThread`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `yieldContinuation()Z` | `jdk/internal/vm/Continuation` |
+### `java/lang/invoke/DirectMethodHandle`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `ftypeKind(Ljava/lang/Class;)I` | `sun/invoke/util/Wrapper` |
+| `getFieldKind(ZZLsun/invoke/util/Wrapper;)Ljava/lang/invoke/LambdaForm$Kind;` | `sun/invoke/util/Wrapper` |
+| `makePreparedFieldLambdaForm(BZI)Ljava/lang/invoke/LambdaForm;` | `sun/invoke/util/Wrapper` |
+| `maybeCompile(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/MemberName;)V` | `sun/invoke/util/VerifyAccess` |
+| `shouldBeInitialized(Ljava/lang/invoke/MemberName;)Z` | `jdk/internal/misc/Unsafe`, `sun/invoke/util/VerifyAccess` |
+### `java/lang/invoke/InvokerBytecodeGenerator`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/invoke/MethodType;)V` | `sun/invoke/util/Wrapper` |
+| `<init>(Ljava/lang/invoke/LambdaForm;ILjava/lang/String;Ljava/lang/String;Ljava/lang/invoke/MethodType;)V` | `jdk/internal/util/ClassFileDumper` |
+| `addMethod()V` | `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `arrayTypeCode(Lsun/invoke/util/Wrapper;)B` | `sun/invoke/util/Wrapper` |
+| `bogusMethod(Ljava/lang/Object;)V` | `jdk/internal/org/objectweb/asm/ClassWriter`, `jdk/internal/org/objectweb/asm/MethodVisitor`, `jdk/internal/util/ClassFileDumper` |
+| `checkActualReceiver()Z` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `classData(Ljava/lang/Object;)Ljava/lang/String;` | `jdk/internal/util/ClassFileDumper` |
+| `classFilePrologue()Ljdk/internal/org/objectweb/asm/ClassWriter;` | `jdk/internal/org/objectweb/asm/ClassWriter` |
+| `clinit(Ljdk/internal/org/objectweb/asm/ClassWriter;Ljava/lang/String;Ljava/util/List;)V` | `jdk/internal/org/objectweb/asm/ClassWriter`, `jdk/internal/org/objectweb/asm/FieldVisitor`, `jdk/internal/org/objectweb/asm/MethodVisitor`, `jdk/internal/org/objectweb/asm/Type` |
+| `emitArrayOp(Ljava/lang/invoke/LambdaForm$Name;I)V` | `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `emitBoxing(Lsun/invoke/util/Wrapper;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `emitConst(Ljava/lang/Object;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitGuardWithCatch(I)Ljava/lang/invoke/LambdaForm$Name;` | `jdk/internal/org/objectweb/asm/Label`, `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitI2X(Lsun/invoke/util/Wrapper;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `emitIconstInsn(Ljdk/internal/org/objectweb/asm/MethodVisitor;I)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitImplicitConversion(Ljava/lang/invoke/LambdaForm$BasicType;Ljava/lang/Class;Ljava/lang/Object;)V` | `sun/invoke/util/VerifyType`, `sun/invoke/util/Wrapper` |
+| `emitInvoke(Ljava/lang/invoke/LambdaForm$Name;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitLoadInsn(Ljava/lang/invoke/LambdaForm$BasicType;I)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitLoop(I)Ljava/lang/invoke/LambdaForm$Name;` | `jdk/internal/org/objectweb/asm/Label`, `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitLoopHandleInvoke(Ljava/lang/invoke/LambdaForm$Name;IILjava/lang/invoke/LambdaForm$Name;ZLjava/lang/invoke/MethodType;[Ljava/lang/Class;II)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitPopInsn(Ljava/lang/invoke/LambdaForm$BasicType;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitPrimCast(Lsun/invoke/util/Wrapper;Lsun/invoke/util/Wrapper;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `emitPushArgument(Ljava/lang/Class;Ljava/lang/Object;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `emitPushClauseArray(II)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitReferenceCast(Ljava/lang/Class;Ljava/lang/Object;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitReturn(Ljava/lang/invoke/LambdaForm$Name;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitReturnInsn(Ljava/lang/invoke/LambdaForm$BasicType;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitSelectAlternative(Ljava/lang/invoke/LambdaForm$Name;Ljava/lang/invoke/LambdaForm$Name;)Ljava/lang/invoke/LambdaForm$Name;` | `jdk/internal/org/objectweb/asm/Label`, `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitStaticInvoke(Ljava/lang/invoke/MemberName;Ljava/lang/invoke/LambdaForm$Name;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitStoreInsn(Ljava/lang/invoke/LambdaForm$BasicType;I)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitTableSwitch(II)Ljava/lang/invoke/LambdaForm$Name;` | `jdk/internal/org/objectweb/asm/Label`, `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitTryFinally(I)Ljava/lang/invoke/LambdaForm$Name;` | `jdk/internal/org/objectweb/asm/Label`, `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `emitUnboxing(Lsun/invoke/util/Wrapper;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `emitX2I(Lsun/invoke/util/Wrapper;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `emitZero(Ljava/lang/invoke/LambdaForm$BasicType;)V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `generateLambdaFormInterpreterEntryPointBytes()[B` | `jdk/internal/org/objectweb/asm/ClassWriter`, `jdk/internal/org/objectweb/asm/MethodVisitor`, `sun/invoke/util/Wrapper` |
+| `getInternalName(Ljava/lang/Class;)Ljava/lang/String;` | `sun/invoke/util/VerifyAccess` |
+| `isStaticallyInvocable(Ljava/lang/invoke/MemberName;)Z` | `sun/invoke/util/VerifyAccess` |
+| `isStaticallyNameable(Ljava/lang/Class;)Z` | `sun/invoke/util/VerifyAccess` |
+| `methodEpilogue()V` | `jdk/internal/org/objectweb/asm/MethodVisitor` |
+| `methodPrologue()V` | `jdk/internal/org/objectweb/asm/ClassWriter` |
+| `resolveFrom(Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)Ljava/lang/invoke/MemberName;` | `jdk/internal/misc/Unsafe` |
+| `toByteArray()[B` | `jdk/internal/org/objectweb/asm/ClassWriter` |
+### `java/lang/invoke/LambdaForm`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `compileToBytecode()V` | `jdk/internal/perf/PerfCounter` |
+| `createFormsFor(Ljava/lang/invoke/LambdaForm$BasicType;)V` | `jdk/internal/misc/Unsafe`, `sun/invoke/util/Wrapper` |
+| `failedCompilationCounter()Ljdk/internal/perf/PerfCounter;` | `jdk/internal/perf/PerfCounter` |
+### `java/lang/invoke/LambdaForm$BasicType`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `basicType(Ljava/lang/Class;)Ljava/lang/invoke/LambdaForm$BasicType;` | `sun/invoke/util/Wrapper` |
+| `basicTypeSlots()I` | `sun/invoke/util/Wrapper` |
+### `java/lang/invoke/LambdaFormEditor`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `spreadArgumentsForm(ILjava/lang/Class;I)Ljava/lang/invoke/LambdaForm;` | `sun/invoke/util/Wrapper` |
+### `java/lang/invoke/MemberName`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `checkForTypeAlias(Ljava/lang/Class;)V` | `sun/invoke/util/VerifyAccess` |
+### `java/lang/invoke/MethodHandle`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `isBuiltinLoader(Ljava/lang/ClassLoader;)Z` | `jdk/internal/loader/ClassLoaders` |
+### `java/lang/invoke/MethodHandleImpl`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `computeValueConversions(Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;ZZ)[Ljava/lang/Object;` | `sun/invoke/util/VerifyType` |
+| `valueConversion(Ljava/lang/Class;Ljava/lang/Class;ZZ)Ljava/lang/Object;` | `sun/invoke/util/ValueConversions`, `sun/invoke/util/VerifyType`, `sun/invoke/util/Wrapper` |
+| `varargsArray(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;` | `sun/invoke/util/Wrapper` |
+### `java/lang/invoke/MethodHandleImpl$ArrayAccessor`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `name(Ljava/lang/Class;Ljava/lang/invoke/MethodHandleImpl$ArrayAccess;)Ljava/lang/String;` | `sun/invoke/util/Wrapper` |
+### `java/lang/invoke/MethodHandleStatics`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `traceLambdaForm(Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/invoke/MemberName;)V` | `jdk/internal/misc/CDS` |
+### `java/lang/invoke/MethodHandles`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `identity(Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;` | `sun/invoke/util/Wrapper` |
+| `insertArgumentPrimitive(Ljava/lang/invoke/BoundMethodHandle;ILjava/lang/Class;Ljava/lang/Object;)Ljava/lang/invoke/BoundMethodHandle;` | `sun/invoke/util/ValueConversions`, `sun/invoke/util/Wrapper` |
+| `lookup()Ljava/lang/invoke/MethodHandles$Lookup;` | `jdk/internal/reflect/Reflection` |
+### `java/lang/invoke/MethodHandles$Lookup`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `accessFailedMessage(Ljava/lang/Class;Ljava/lang/invoke/MemberName;)Ljava/lang/String;` | `sun/invoke/util/VerifyAccess` |
+| `checkAccess(BLjava/lang/Class;Ljava/lang/invoke/MemberName;)V` | `sun/invoke/util/VerifyAccess` |
+| `checkSecurityManager(Ljava/lang/Class;)V` | `sun/invoke/util/VerifyAccess`, `sun/reflect/misc/ReflectUtil`, `sun/security/util/SecurityConstants` |
+| `checkSecurityManager(Ljava/lang/Class;Ljava/lang/invoke/MemberName;)V` | `sun/invoke/util/VerifyAccess`, `sun/reflect/misc/ReflectUtil`, `sun/security/util/SecurityConstants` |
+| `ensureInitialized(Ljava/lang/Class;)Ljava/lang/Class;` | `jdk/internal/misc/Unsafe`, `sun/invoke/util/VerifyAccess` |
+| `isClassAccessible(Ljava/lang/Class;)Z` | `sun/invoke/util/VerifyAccess` |
+| `lookupClassProtectionDomain()Ljava/security/ProtectionDomain;` | `jdk/internal/access/JavaLangAccess`, `jdk/internal/access/SharedSecrets` |
+| `makeHiddenClassDefiner(Ljava/lang/invoke/MethodHandles$Lookup$ClassFile;Ljava/util/Set;ZLjdk/internal/util/ClassFileDumper;)Ljava/lang/invoke/MethodHandles$Lookup$ClassDefiner;` | `jdk/internal/misc/VM` |
+| `restrictProtectedReceiver(Ljava/lang/invoke/MemberName;)Z` | `sun/invoke/util/VerifyAccess` |
+### `java/lang/invoke/MethodHandles$Lookup$ClassDefiner`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `defineClass(ZLjava/lang/Object;)Ljava/lang/Class;` | `jdk/internal/access/JavaLangAccess`, `jdk/internal/access/SharedSecrets`, `jdk/internal/util/ClassFileDumper` |
+### `java/lang/invoke/MethodType`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `canConvert(Ljava/lang/Class;Ljava/lang/Class;)Z` | `sun/invoke/util/Wrapper` |
+| `fromDescriptor(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;` | `sun/invoke/util/BytecodeDescriptor` |
+| `isViewableAs(Ljava/lang/invoke/MethodType;Z)Z` | `sun/invoke/util/VerifyType` |
+| `makeImpl(Ljava/lang/Class;[Ljava/lang/Class;Z)Ljava/lang/invoke/MethodType;` | `jdk/internal/util/ReferencedKeySet` |
+| `toFieldDescriptorString(Ljava/lang/Class;)Ljava/lang/String;` | `sun/invoke/util/BytecodeDescriptor` |
+| `toMethodDescriptorString()Ljava/lang/String;` | `sun/invoke/util/BytecodeDescriptor` |
+### `java/lang/invoke/MethodTypeForm`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `<init>(Ljava/lang/invoke/MethodType;)V` | `sun/invoke/util/Wrapper` |
+| `canonicalize(Ljava/lang/Class;I)Ljava/lang/Class;` | `sun/invoke/util/Wrapper` |
+### `java/lang/ref/Cleaner`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `register(Ljava/lang/Object;Ljava/lang/Runnable;)Ljava/lang/ref/Cleaner$Cleanable;` | `jdk/internal/ref/CleanerImpl$PhantomCleanableRef` |
+### `java/lang/ref/ReferenceQueue`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `poll0()Ljava/lang/ref/Reference;` | `jdk/internal/misc/VM` |
+### `java/lang/reflect/Constructor`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `acquireConstructorAccessor()Ljdk/internal/reflect/ConstructorAccessor;` | `jdk/internal/misc/VM`, `jdk/internal/reflect/ReflectionFactory` |
+| `newInstance([Ljava/lang/Object;)Ljava/lang/Object;` | `jdk/internal/reflect/Reflection` |
+| `newInstanceWithCaller([Ljava/lang/Object;ZLjava/lang/Class;)Ljava/lang/Object;` | `jdk/internal/reflect/ConstructorAccessor` |
+### `java/lang/reflect/Method`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `acquireMethodAccessor()Ljdk/internal/reflect/MethodAccessor;` | `jdk/internal/misc/VM`, `jdk/internal/reflect/ReflectionFactory` |
+| `invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;` | `jdk/internal/reflect/MethodAccessor`, `jdk/internal/reflect/Reflection` |
+| `isCallerSensitive()Z` | `jdk/internal/reflect/Reflection` |
+### `java/lang/reflect/Proxy$ProxyBuilder`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `isProxyClass(Ljava/lang/Class;)Z` | `jdk/internal/loader/AbstractClassLoaderValue$Sub`, `jdk/internal/loader/ClassLoaderValue` |
+### `java/nio/ByteBuffer`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `putArray(I[BII)Ljava/nio/ByteBuffer;` | `jdk/internal/misc/ScopedMemoryAccess` |
+### `java/nio/file/FileSystems`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `getDefault()Ljava/nio/file/FileSystem;` | `jdk/internal/misc/VM`, `sun/nio/fs/DefaultFileSystemProvider` |
+### `java/security/AccessControlContext`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `checkPermission(Ljava/security/Permission;)V` | `sun/security/util/Debug` |
+| `getDebug()Lsun/security/util/Debug;` | `sun/security/util/Debug` |
+| `optimize()Ljava/security/AccessControlContext;` | `sun/security/util/Debug` |
+### `java/security/AccessController`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `checkPermission(Ljava/security/Permission;)V` | `sun/security/util/Debug` |
+| `doPrivileged(Ljava/security/PrivilegedAction;)Ljava/lang/Object;` | `jdk/internal/reflect/Reflection` |
+### `java/security/Policy`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `initPolicy(Ljava/security/Policy;)V` | `sun/security/util/SecurityConstants` |
+| `loadPolicyProvider()Ljava/security/Policy;` | `sun/security/provider/PolicyFile`, `sun/security/util/Debug` |
+### `java/security/ProtectionDomain`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `impliesWithAltFilePerm(Ljava/security/Permission;)Z` | `sun/security/provider/PolicyFile`, `sun/security/util/FilePermCompat` |
+### `java/security/UnresolvedPermission`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `resolve(Ljava/security/Permission;[Ljava/security/cert/Certificate;)Ljava/security/Permission;` | `sun/security/util/Debug` |
+### `java/security/cert/Certificate`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `equals(Ljava/lang/Object;)Z` | `sun/security/x509/X509CertImpl` |
+### `java/text/BreakIterator`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `createBreakInstance(Ljava/util/Locale;I)Ljava/text/BreakIterator;` | `sun/util/locale/provider/LocaleProviderAdapter` |
+| `createBreakInstance(Lsun/util/locale/provider/LocaleProviderAdapter;Ljava/util/Locale;I)Ljava/text/BreakIterator;` | `sun/util/locale/provider/LocaleProviderAdapter` |
+### `java/text/Normalizer`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `normalize(Ljava/lang/CharSequence;Ljava/text/Normalizer$Form;)Ljava/lang/String;` | `jdk/internal/icu/text/NormalizerBase` |
+### `java/time/Clock`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `currentInstant()Ljava/time/Instant;` | `jdk/internal/misc/VM` |
+### `java/util/ArrayList`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `grow(I)[Ljava/lang/Object;` | `jdk/internal/util/ArraysSupport` |
+### `java/util/Arrays`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `equals([B[B)Z` | `jdk/internal/util/ArraysSupport` |
+### `java/util/Locale`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `convertOldISOCodes(Ljava/lang/String;)Ljava/lang/String;` | `sun/util/locale/BaseLocale`, `sun/util/locale/LocaleUtils` |
+| `equals(Ljava/lang/Object;)Z` | `sun/util/locale/BaseLocale`, `sun/util/locale/LocaleExtensions` |
+| `getCompatibilityExtensions(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsun/util/locale/LocaleExtensions;` | `sun/util/locale/LocaleExtensions`, `sun/util/locale/LocaleUtils` |
+| `getDefaultExtensions(Ljava/lang/String;)Ljava/util/Optional;` | `sun/util/locale/InternalLocaleBuilder`, `sun/util/locale/LocaleUtils` |
+| `getInstance(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lsun/util/locale/LocaleExtensions;)Ljava/util/Locale;` | `sun/util/locale/BaseLocale` |
+| `getLanguage()Ljava/lang/String;` | `sun/util/locale/BaseLocale` |
+| `initDefault(Ljava/util/Locale$Category;)Ljava/util/Locale;` | `jdk/internal/util/StaticProperty`, `sun/util/locale/LocaleExtensions` |
+### `java/util/Locale$LocaleKey`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `<init>(Lsun/util/locale/BaseLocale;Lsun/util/locale/LocaleExtensions;)V` | `sun/util/locale/BaseLocale`, `sun/util/locale/LocaleExtensions` |
+### `java/util/Objects`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `checkFromIndexSize(III)I` | `jdk/internal/util/Preconditions` |
+| `checkFromToIndex(III)I` | `jdk/internal/util/Preconditions` |
+### `java/util/StringJoiner`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `toString()Ljava/lang/String;` | `jdk/internal/access/JavaLangAccess` |
+### `java/util/concurrent/ConcurrentHashMap`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `addCount(JI)V` | `jdk/internal/misc/Unsafe` |
+| `casTabAt([Ljava/util/concurrent/ConcurrentHashMap$Node;ILjava/util/concurrent/ConcurrentHashMap$Node;Ljava/util/concurrent/ConcurrentHashMap$Node;)Z` | `jdk/internal/misc/Unsafe` |
+| `fullAddCount(JZ)V` | `jdk/internal/misc/Unsafe` |
+| `helpTransfer([Ljava/util/concurrent/ConcurrentHashMap$Node;Ljava/util/concurrent/ConcurrentHashMap$Node;)[Ljava/util/concurrent/ConcurrentHashMap$Node;` | `jdk/internal/misc/Unsafe` |
+| `initTable()[Ljava/util/concurrent/ConcurrentHashMap$Node;` | `jdk/internal/misc/Unsafe` |
+| `setTabAt([Ljava/util/concurrent/ConcurrentHashMap$Node;ILjava/util/concurrent/ConcurrentHashMap$Node;)V` | `jdk/internal/misc/Unsafe` |
+| `tabAt([Ljava/util/concurrent/ConcurrentHashMap$Node;I)Ljava/util/concurrent/ConcurrentHashMap$Node;` | `jdk/internal/misc/Unsafe` |
+| `transfer([Ljava/util/concurrent/ConcurrentHashMap$Node;[Ljava/util/concurrent/ConcurrentHashMap$Node;)V` | `jdk/internal/misc/Unsafe` |
+| `tryPresize(I)V` | `jdk/internal/misc/Unsafe` |
+### `java/util/concurrent/ConcurrentHashMap$TreeBin`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `contendedLock()V` | `jdk/internal/misc/Unsafe` |
+| `lockRoot()V` | `jdk/internal/misc/Unsafe` |
+### `java/util/concurrent/ThreadLocalRandom`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `advanceProbe(I)I` | `jdk/internal/misc/Unsafe` |
+| `getProbe()I` | `jdk/internal/misc/Unsafe` |
+| `localInit()V` | `jdk/internal/misc/Unsafe`, `jdk/internal/util/random/RandomSupport` |
+### `java/util/concurrent/atomic/AtomicInteger`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `addAndGet(I)I` | `jdk/internal/misc/Unsafe` |
+| `incrementAndGet()I` | `jdk/internal/misc/Unsafe` |
+### `java/util/concurrent/atomic/AtomicLong`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `compareAndSet(JJ)Z` | `jdk/internal/misc/Unsafe` |
+| `getAndAdd(J)J` | `jdk/internal/misc/Unsafe` |
+| `set(J)V` | `jdk/internal/misc/Unsafe` |
+### `java/util/concurrent/locks/LockSupport`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `park(Ljava/lang/Object;)V` | `jdk/internal/misc/Unsafe`, `jdk/internal/misc/VirtualThreads` |
+| `setBlocker(Ljava/lang/Thread;Ljava/lang/Object;)V` | `jdk/internal/misc/Unsafe` |
+### `java/util/regex/Pattern`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `append(II)V` | `jdk/internal/util/ArraysSupport` |
+| `getClass(I)I` | `sun/text/Normalizer` |
+| `normalizeSlice(Ljava/lang/String;IILjava/lang/StringBuilder;)V` | `jdk/internal/util/regex/Grapheme` |
+### `java/util/zip/Inflater$InflaterZStreamRef`
+
+| 方法签名 | 调用的内部类 |
+|---------|------------|
+| `<init>(Ljava/util/zip/Inflater;J)V` | `jdk/internal/ref/CleanerFactory` |
+
+## 调用链深度分层
+
+> 深度 1 = 直接从用户代码调用的 JDK 类；每深一层 = 再经过一次方法调用。
+
+| 深度 | 本层新增类 | 累计类数 | 代表性类（前 5） |
+|-----:|----------:|---------:|----------------|
+| 1 | 5 | 5 | `java/io/PrintStream`, `java/lang/Object`, `java/lang/StringBuilder`, `java/util/ArrayList`, `java/util/List` |
+| 2 | 3 | 8 | `java/lang/AbstractStringBuilder`, `java/lang/String`, `java/util/AbstractList` |
+| 3 | 5 | 13 | `java/lang/Integer`, `java/lang/StringUTF16`, `java/lang/Thread`, `java/util/AbstractCollection`, `jdk/internal/misc/InternalLock` |
+| 4 | 7 | 20 | `java/io/BufferedWriter`, `java/io/OutputStream`, `java/io/OutputStreamWriter`, `java/lang/Class`, `java/util/Arrays`, …+2 |
+| 5 | 11 | 31 | `java/io/IOException`, `java/lang/AssertionError`, `java/lang/Math`, `java/lang/NegativeArraySizeException`, `java/lang/OutOfMemoryError`, …+6 |
+| 6 | 6 | 37 | `java/io/Writer`, `java/lang/Error`, `java/lang/Exception`, `java/lang/NullPointerException`, `java/lang/RuntimeException`, …+1 |
+| 7 | 4 | 41 | `java/lang/IllegalArgumentException`, `java/lang/Throwable`, `java/security/AccessController`, `jdk/internal/util/Preconditions` |
+| 8 | 3 | 44 | `java/nio/ByteBuffer`, `java/security/AccessControlContext`, `sun/security/util/Debug` |
+| 9 | 10 | 54 | `java/lang/Character`, `java/net/URL`, `java/nio/channels/WritableByteChannel`, `java/security/AccessControlContext$1`, `java/security/AccessControlException`, …+5 |
+| 10 | 18 | 72 | `java/lang/CharSequence`, `java/lang/IndexOutOfBoundsException`, `java/lang/Long`, `java/lang/SecurityException`, `java/lang/UnsupportedOperationException`, …+13 |
+| 11 | 17 | 89 | `java/lang/Class$Atomic`, `java/lang/Class$EnclosingMethodInfo`, `java/lang/Class$ReflectionData`, `java/lang/ClassLoader`, `java/lang/InternalError`, …+12 |
+| 12 | 22 | 111 | `java/lang/Appendable`, `java/lang/CharacterDataLatin1`, `java/lang/StackStreamFactory`, `java/lang/StackStreamFactory$StackFrameTraverser`, `java/lang/reflect/Proxy`, …+17 |
+| 13 | 14 | 125 | `java/lang/CharacterData`, `java/lang/ConditionalSpecialCasing`, `java/lang/RuntimePermission`, `java/lang/SecurityManager$1`, `java/lang/StackStreamFactory$LiveStackInfoTraverser`, …+9 |
+| 14 | 25 | 150 | `java/lang/ArithmeticException`, `java/lang/Float`, `java/lang/IllegalCallerException`, `java/lang/ref/ReferenceQueue`, `java/security/BasicPermission`, …+20 |
+| 15 | 28 | 178 | `java/lang/ConditionalSpecialCasing$Entry`, `java/lang/IllegalAccessException`, `java/lang/IllegalStateException`, `java/lang/Module`, `java/lang/StackStreamFactory$AbstractStackWalker`, …+23 |
+| 16 | 17 | 195 | `java/lang/Boolean`, `java/lang/NumberFormatException`, `java/lang/ReflectiveOperationException`, `java/security/UnresolvedPermission`, `java/security/UnresolvedPermissionCollection`, …+12 |
+| 17 | 33 | 228 | `java/lang/NoSuchMethodException`, `java/lang/VirtualThread`, `java/lang/WeakPairMap`, `java/lang/module/ModuleDescriptor`, `java/lang/reflect/Constructor`, …+28 |
+| 18 | 36 | 264 | `java/lang/ArrayIndexOutOfBoundsException`, `java/lang/StringBuffer`, `java/lang/WeakPairMap$Pair`, `java/text/StringCharacterIterator`, `java/time/DayOfWeek`, …+31 |
+| 19 | 33 | 297 | `java/lang/Comparable`, `java/lang/WeakPairMap$Pair$Lookup`, `java/lang/WeakPairMap$WeakRefPeer`, `java/lang/reflect/ParameterizedType`, `java/text/BreakIterator$BreakIteratorCache`, …+28 |
+| 20 | 27 | 324 | `java/util/StringJoiner`, `java/util/concurrent/atomic/AtomicInteger`, `java/util/concurrent/locks/LockSupport`, `java/util/regex/CharPredicates`, `java/util/regex/Pattern$Behind`, …+22 |
+| 21 | 27 | 351 | `java/lang/Character$UnicodeBlock`, `java/lang/Character$UnicodeScript`, `java/lang/reflect/Array`, `java/text/spi/BreakIteratorProvider`, `java/util/LinkedHashMap`, …+22 |
+| 22 | 21 | 372 | `java/lang/Record`, `java/lang/StrictMath`, `java/lang/invoke/MethodHandle`, `java/lang/invoke/MethodType`, `java/text/Normalizer$Form`, …+16 |
+| 23 | 14 | 386 | `java/lang/CharacterName`, `java/lang/Enum`, `java/lang/reflect/Executable`, `java/util/Collection`, `java/util/Spliterators`, …+9 |
+| 24 | 17 | 403 | `java/lang/Double`, `java/lang/invoke/BoundMethodHandle`, `java/lang/invoke/LambdaFormEditor`, `java/lang/invoke/MethodHandleImpl`, `java/lang/invoke/WrongMethodTypeException`, …+12 |
+| 25 | 15 | 418 | `java/io/DataInputStream`, `java/lang/CharacterName$1`, `java/lang/invoke/LambdaForm`, `java/lang/invoke/LambdaForm$BasicType`, `java/lang/invoke/LambdaForm$Name`, …+10 |
+| 26 | 12 | 430 | `java/io/FilterInputStream`, `java/lang/Class$3`, `java/lang/invoke/LambdaFormEditor$Transform`, `java/util/ImmutableCollections$Map1`, `java/util/ImmutableCollections$MapN`, …+7 |
+| 27 | 16 | 446 | `java/io/EOFException`, `java/io/InputStream`, `java/lang/ClassValue`, `java/lang/StringCoding`, `java/lang/invoke/MethodHandleImpl$ArrayAccess`, …+11 |
+| 28 | 17 | 463 | `java/lang/ClassValue$ClassValueMap`, `java/lang/ClassValue$Entry`, `java/lang/PublicMethods$MethodList`, `java/lang/invoke/BoundMethodHandle$SpeciesData`, `java/lang/invoke/DelegatingMethodHandle`, …+12 |
+| 29 | 15 | 478 | `java/lang/ClassCastException`, `java/lang/invoke/BoundMethodHandle$Species_L`, `java/lang/invoke/InvokerBytecodeGenerator`, `java/lang/invoke/InvokerBytecodeGenerator$BytecodeGenerationException`, `java/lang/invoke/LambdaFormEditor$1`, …+10 |
+| 30 | 16 | 494 | `java/lang/AbstractMethodError`, `java/lang/LinkageError`, `java/lang/PublicMethods$Key`, `java/lang/invoke/BoundMethodHandle$Specializer`, `java/lang/invoke/Invokers`, …+11 |
+| 31 | 16 | 510 | `java/lang/Byte`, `java/lang/ClassValue$Version`, `java/lang/IncompatibleClassChangeError`, `java/lang/Short`, `java/lang/invoke/DirectMethodHandle`, …+11 |
+| 32 | 18 | 528 | `java/lang/NoSuchFieldException`, `java/lang/invoke/DirectMethodHandle$Accessor`, `java/lang/invoke/DirectMethodHandle$Interface`, `java/lang/invoke/DirectMethodHandle$Special`, `java/lang/invoke/DirectMethodHandle$StaticAccessor`, …+13 |
+| 33 | 17 | 545 | `java/lang/invoke/DirectMethodHandle$Constructor`, `java/lang/invoke/InvokerBytecodeGenerator$ClassData`, `java/lang/invoke/MethodHandleImpl$BindCaller`, `java/lang/invoke/MethodHandles$Lookup$ClassOption`, `java/util/function/Supplier`, …+12 |
+| 34 | 12 | 557 | `java/lang/TypeNotPresentException`, `java/lang/invoke/MethodHandleImpl$WrappedMember`, `java/lang/invoke/VarHandle$AccessDescriptor`, `java/lang/invoke/VarHandle$AccessType`, `java/nio/file/Path`, …+7 |
+| 35 | 11 | 568 | `java/lang/invoke/MethodHandleImpl$AsVarargsCollector`, `java/lang/invoke/MethodHandleImpl$BindCaller$InjectedInvokerHolder`, `java/nio/file/FileSystem`, `java/nio/file/FileSystems`, `java/util/HexFormat`, …+6 |
+| 36 | 7 | 575 | `java/io/UncheckedIOException`, `jdk/internal/org/objectweb/asm/AnnotationVisitor`, `jdk/internal/org/objectweb/asm/Edge`, `jdk/internal/org/objectweb/asm/ModuleVisitor`, `jdk/internal/org/objectweb/asm/RecordComponentVisitor`, …+2 |
+| 37 | 1 | 576 | `sun/nio/fs/MacOSXFileSystemProvider` |
+| 40 | 1 | 577 | `java/util/Collections$CopiesList` |
+
+## 截断候选分析（Top 25）
+
+> 依据：截断该类后，从调用链中消除的下游类数。消除数越高 = 截断价值越大。
+
+| 排名 | 消除类数 | native/总方法 | 天然边界 | 类名 | 需手写方法 |
+|-----:|---------:|-------------:|:--------:|------|----------|
+| 1 | 7 | 0/30 |  | `java/lang/CharacterData` | `getType(I)I`<br>`isExtendedPictographic(I)Z`<br>`digit(II)I`<br>`toUpperCaseCharArray(I)[C`<br>`isUpperCase(I)Z`<br>+4 more |
+| 2 | 3 | 20/114 |  | `java/lang/Thread` | `isVirtual()Z`<br>`threadState()Ljava/lang/Thread$State;`<br>`checkAccess()V`<br>`yield0()V`<br>`threadId()J`<br>+9 more |
+| 3 | 3 | 0/119 |  | `java/util/regex/Pattern` | `VertWS()Ljava/util/regex/Pattern$BmpCharPredicate;`<br>`RemoveQEQuoting()V`<br>`union(Ljava/util/regex/Pattern$CharPredicate;Ljava/util/regex/Pattern$CharPredicate;Z)Ljava/util/regex/Pattern$CharPredicate;`<br>`ref(I)Ljava/util/regex/Pattern$Node;`<br>`getClass(I)I`<br>+73 more |
+| 4 | 2 | 1/168 |  | `java/lang/String` | `toCharArray()[C`<br>`<init>([BIII)V`<br>`throwUnmappable(I)V`<br>`startsWith(Ljava/lang/String;I)Z`<br>`checkOffset(II)V`<br>+63 more |
+| 5 | 2 | 0/83 |  | `java/lang/invoke/MemberName` | `isVarargs()Z`<br>`isGetter()Z`<br>`anyFlagSet(I)Z`<br>`getName()Ljava/lang/String;`<br>`makeAccessException(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/IllegalAccessException;`<br>+60 more |
+| 6 | 2 | 0/5 |  | `jdk/internal/icu/impl/Norm2AllModes` | `getInstanceFromSingleton(Ljdk/internal/icu/impl/Norm2AllModes$Norm2AllModesSingleton;)Ljdk/internal/icu/impl/Norm2AllModes;`<br>`getNFCInstance()Ljdk/internal/icu/impl/Norm2AllModes;` |
+| 7 | 1 | 0/27 |  | `java/lang/Byte` | `intValue()I`<br>`valueOf(B)Ljava/lang/Byte;`<br>`byteValue()B` |
+| 8 | 1 | 0/105 |  | `java/lang/Character` | `charValue()C`<br>`toUpperCase(C)C`<br>`toUpperCase(I)I`<br>`lowSurrogate(I)C`<br>`getType(I)I`<br>+25 more |
+| 9 | 1 | 0/65 |  | `java/lang/Integer` | `toString()Ljava/lang/String;`<br>`getChars(II[B)I`<br>`<init>(I)V`<br>`parseInt(Ljava/lang/CharSequence;III)I`<br>`formatUnsignedInt(II[BI)V`<br>+11 more |
+| 10 | 1 | 0/66 |  | `java/lang/Long` | `longValue()J`<br>`getChars(JI[B)I`<br>`toString(J)Ljava/lang/String;`<br>`formatUnsignedLong0UTF16(JI[BII)V`<br>`stringSize(J)I`<br>+7 more |
+| 11 | 1 | 5/71 |  | `java/lang/Module` | `isNamed()Z`<br>`isStaticallyExportedOrOpen(Ljava/lang/String;Ljava/lang/Module;Z)Z`<br>`canRead(Ljava/lang/Module;)Z`<br>`isExported(Ljava/lang/String;)Z`<br>`allows(Ljava/util/Set;Ljava/lang/Module;)Z`<br>+3 more |
+| 12 | 1 | 0/28 |  | `java/lang/Short` | `intValue()I`<br>`valueOf(S)Ljava/lang/Short;`<br>`<init>(S)V`<br>`shortValue()S` |
+| 13 | 1 | 3/24 |  | `java/lang/StackStreamFactory$AbstractStackWalker` | `<init>(Ljava/lang/StackWalker;I)V`<br>`toStackWalkMode(Ljava/lang/StackWalker;I)I`<br>`<init>(Ljava/lang/StackWalker;II)V` |
+| 14 | 1 | 0/29 |  | `java/lang/StackWalker` | `getInstance()Ljava/lang/StackWalker;`<br>`getContScope()Ljdk/internal/vm/ContinuationScope;`<br>`hasLocalsOperandsOption()Z`<br>`hasOption(Ljava/lang/StackWalker$Option;)Z`<br>`getContinuation()Ljdk/internal/vm/Continuation;`<br>+1 more |
+| 15 | 1 | 0/44 |  | `java/lang/invoke/DirectMethodHandle` | `getNamedFunction(Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/LambdaForm$NamedFunction;`<br>`viewAsTypeChecks(Ljava/lang/invoke/MethodType;Z)Z`<br>`shouldBeInitialized(Ljava/lang/invoke/MemberName;)Z`<br>`makePreparedFieldLambdaForm(BZI)Ljava/lang/invoke/LambdaForm;`<br>`makeAllocator(Ljava/lang/invoke/MemberName;)Ljava/lang/invoke/DirectMethodHandle;`<br>+20 more |
+| 16 | 1 | 0/83 |  | `java/lang/invoke/InvokerBytecodeGenerator` | `emitPushArgument(Ljava/lang/Class;Ljava/lang/Object;)V`<br>`emitLoopHandleInvoke(Ljava/lang/invoke/LambdaForm$Name;IILjava/lang/invoke/LambdaForm$Name;ZLjava/lang/invoke/MethodType;[Ljava/lang/Class;II)V`<br>`emitArrayLength(Ljava/lang/invoke/LambdaForm$Name;)V`<br>`emitAstoreInsn(I)V`<br>`emitStaticInvoke(Ljava/lang/invoke/LambdaForm$Name;)V`<br>+69 more |
+| 17 | 1 | 0/38 |  | `java/lang/invoke/LambdaForm$Name` | `<init>(Ljava/lang/invoke/LambdaForm$NamedFunction;Ljava/lang/Object;Ljava/lang/Object;)V`<br>`isConstantZero()Z`<br>`cloneWithIndex(I)Ljava/lang/invoke/LambdaForm$Name;`<br>`<init>(Ljava/lang/invoke/LambdaForm$NamedFunction;)V`<br>`<init>(Ljava/lang/invoke/MemberName;[Ljava/lang/Object;)V`<br>+28 more |
+| 18 | 1 | 0/62 |  | `java/lang/invoke/MethodHandleImpl` | `makeWrappedMember(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MemberName;Z)Ljava/lang/invoke/MethodHandle;`<br>`getConstantHandle(I)Ljava/lang/invoke/MethodHandle;`<br>`varargsArray(I)Ljava/lang/invoke/MethodHandle;`<br>`computeValueConversions(Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;ZZ)[Ljava/lang/Object;`<br>`unmatchedArrayAccess(Ljava/lang/invoke/MethodHandleImpl$ArrayAccess;)Ljava/lang/InternalError;`<br>+19 more |
+| 19 | 1 | 0/113 |  | `java/lang/invoke/MethodHandles` | `identity(Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;`<br>`insertArgumentPrimitive(Ljava/lang/invoke/BoundMethodHandle;ILjava/lang/Class;Ljava/lang/Object;)Ljava/lang/invoke/BoundMethodHandle;`<br>`makeIdentity(Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;`<br>`dropArguments(Ljava/lang/invoke/MethodHandle;I[Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;`<br>`dropArgumentChecks(Ljava/lang/invoke/MethodType;I[Ljava/lang/Class;)I`<br>+12 more |
+| 20 | 1 | 0/16 |  | `java/lang/ref/ReferenceQueue` | `poll0()Ljava/lang/ref/Reference;`<br>`poll()Ljava/lang/ref/Reference;`<br>`headIsNull()Z`<br>`<init>()V` |
+| 21 | 1 | 0/14 |  | `java/nio/charset/CoderResult` | `isError()Z`<br>`toString()Ljava/lang/String;`<br>`malformedForLength(I)Ljava/nio/charset/CoderResult;`<br>`throwException()V`<br>`isUnderflow()Z`<br>+4 more |
+| 22 | 1 | 0/9 |  | `java/nio/file/FileSystems` | `getDefault()Ljava/nio/file/FileSystem;` |
+| 23 | 1 | 0/10 |  | `java/security/Permissions` | `getUnresolvedPermissions(Ljava/security/Permission;)Ljava/security/PermissionCollection;`<br>`isReadOnly()Z`<br>`add(Ljava/security/Permission;)V`<br>`createPermissionCollection(Ljava/security/Permission;Z)Ljava/security/PermissionCollection;`<br>`getPermissionCollection(Ljava/security/Permission;Z)Ljava/security/PermissionCollection;`<br>+1 more |
+| 24 | 1 | 0/80 |  | `java/util/Locale` | `getDefault(Ljava/util/Locale$Category;)Ljava/util/Locale;`<br>`getBaseLocale()Lsun/util/locale/BaseLocale;`<br>`getDefaultExtensions(Ljava/lang/String;)Ljava/util/Optional;`<br>`equals(Ljava/lang/Object;)Z`<br>`getCompatibilityExtensions(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lsun/util/locale/LocaleExtensions;`<br>+10 more |
+| 25 | 1 | 0/15 |  | `java/util/ResourceBundle$Control` | `getControl(Ljava/util/List;)Ljava/util/ResourceBundle$Control;`<br>`getCandidateLocales(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/List;` |
+
+## Cutoff 截断边界
+
+- `java/io/FileDescriptor`
+- `java/io/FileOutputStream`
+- `java/lang/ref/ReferenceQueue`
+- `java/lang/ref/SoftReference`
+- `java/lang/ref/WeakReference`
+- `java/nio/charset/Charset`
+- `java/nio/charset/CharsetDecoder`
+- `java/nio/charset/CharsetEncoder`
+- `sun/nio/cs/FastCharsetProvider`
+- `sun/nio/cs/StandardCharsets`
+- `sun/nio/cs/StreamEncoder`
+
+## Cutoff 模式调用链方法
 
 ### `java/io/BufferedWriter`
 
@@ -52,8 +614,6 @@
 ### `java/io/OutputStream`
 
 - `flush()V`
-- `write(I)V`
-- `write([BII)V`
 
 ### `java/io/OutputStreamWriter`
 
@@ -84,13 +644,13 @@
 ### `java/lang/AbstractMethodError`
 
 - `<init>(Ljava/lang/String;)V`
+- `changeReferenceKind(BB)Ljava/lang/invoke/MemberName;`
 
 ### `java/lang/AbstractStringBuilder`
 
 - `<init>(I)V`
 - `<init>(Ljava/lang/String;)V`
 - `append(C)Ljava/lang/AbstractStringBuilder;`
-- `append(F)Ljava/lang/AbstractStringBuilder;`
 - `append(I)Ljava/lang/AbstractStringBuilder;`
 - `append(J)Ljava/lang/AbstractStringBuilder;`
 - `append(Ljava/lang/CharSequence;II)Ljava/lang/AbstractStringBuilder;`
@@ -101,6 +661,7 @@
 - `appendChars([CII)V`
 - `appendCodePoint(I)Ljava/lang/AbstractStringBuilder;`
 - `appendNull()Ljava/lang/AbstractStringBuilder;`
+- `charAt(I)C`
 - `delete(II)Ljava/lang/AbstractStringBuilder;`
 - `ensureCapacityInternal(I)V`
 - `getValue()[B`
@@ -129,15 +690,47 @@
 
 - `<init>(I)V`
 - `<init>(Ljava/lang/String;)V`
+- `append(I)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/AssertionError`
 
 - `<init>()V`
-- `<init>(I)V`
 - `<init>(J)V`
 - `<init>(Ljava/lang/Object;)V`
 - `<init>(Ljava/lang/String;)V`
+- `append(I)Ljava/lang/StringBuilder;`
+- `append(J)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
+- `bindArgumentType(Ljava/lang/invoke/BoundMethodHandle;ILjava/lang/invoke/LambdaForm$BasicType;)Ljava/lang/invoke/MethodType;`
+- `dropParameterTypes(II)Ljava/lang/invoke/MethodType;`
+- `emitGuardWithCatch(I)Ljava/lang/invoke/LambdaForm$Name;`
+- `emitLoop(I)Ljava/lang/invoke/LambdaForm$Name;`
+- `emitPushArgument(Ljava/lang/invoke/LambdaForm$Name;I)V`
+- `emitPushArguments(Ljava/lang/invoke/LambdaForm$Name;I)V`
+- `emitTableSwitch(II)Ljava/lang/invoke/LambdaForm$Name;`
+- `emitTryFinally(I)Ljava/lang/invoke/LambdaForm$Name;`
+- `equals(Ljava/lang/Object;)Z`
+- `filterReturnForm(Ljava/lang/invoke/LambdaForm$BasicType;Z)Ljava/lang/invoke/LambdaForm;`
+- `findStatic(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;`
+- `getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;`
+- `growNames(II)V`
 - `initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;`
+- `initResolved(Z)V`
+- `insertParameter(ILjava/lang/invoke/LambdaForm$Name;)Ljava/lang/invoke/LambdaFormBuffer;`
+- `parameter(I)Ljava/lang/invoke/LambdaForm$Name;`
+- `parameterType(I)Ljava/lang/Class;`
+- `readElementValues(Ljdk/internal/org/objectweb/asm/AnnotationVisitor;IZ[C)I`
+- `replaceName(ILjava/lang/invoke/LambdaForm$Name;)V`
+- `replaceParameterByCopy(II)Ljava/lang/invoke/LambdaFormBuffer;`
+- `replaceParameterByNewExpression(ILjava/lang/invoke/LambdaForm$Name;)Ljava/lang/invoke/LambdaFormBuffer;`
+- `setCachedLambdaForm(ILjava/lang/invoke/LambdaForm;)Ljava/lang/invoke/LambdaForm;`
+- `setCachedMethodHandle(ILjava/lang/invoke/MethodHandle;)Ljava/lang/invoke/MethodHandle;`
+- `setState(I)V`
+- `substring(II)Ljava/lang/String;`
+- `viewAsType(Ljava/lang/invoke/MethodType;Z)Ljava/lang/invoke/MethodHandle;`
+- `visitAnnotation(Ljava/lang/String;Z)Ljdk/internal/org/objectweb/asm/AnnotationVisitor;`
+- `visitVarInsn(II)V`
 
 ### `java/lang/Boolean`
 
@@ -259,10 +852,6 @@
 - `getClassLoader()Ljava/lang/ClassLoader;`
 - `getClassLoader0()Ljava/lang/ClassLoader;`
 - `getComponentType()Ljava/lang/Class;`
-- `getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;`
-- `getConstructor0([Ljava/lang/Class;I)Ljava/lang/reflect/Constructor;`
-- `getDeclaredConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;`
-- `getDeclaredConstructors0(Z)[Ljava/lang/reflect/Constructor;`
 - `getDeclaredMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;`
 - `getDeclaredMethods0(Z)[Ljava/lang/reflect/Method;`
 - `getDeclaringClass()Ljava/lang/Class;`
@@ -288,7 +877,6 @@
 - `getNestHost0()Ljava/lang/Class;`
 - `getPackageName()Ljava/lang/String;`
 - `getReflectionFactory()Ljdk/internal/reflect/ReflectionFactory;`
-- `getSigners()[Ljava/lang/Object;`
 - `getSimpleBinaryName()Ljava/lang/String;`
 - `getSimpleBinaryName0()Ljava/lang/String;`
 - `getSimpleName()Ljava/lang/String;`
@@ -310,8 +898,6 @@
 - `isTopLevelClass()Z`
 - `isUnnamedClass()Z`
 - `methodToString(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/String;`
-- `newReflectionData(Ljava/lang/ref/SoftReference;I)Ljava/lang/Class$ReflectionData;`
-- `privateGetDeclaredConstructors(Z)[Ljava/lang/reflect/Constructor;`
 - `privateGetDeclaredMethods(Z)[Ljava/lang/reflect/Method;`
 - `reflectionData()Ljava/lang/Class$ReflectionData;`
 - `searchMethods([Ljava/lang/reflect/Method;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;`
@@ -319,10 +905,6 @@
 ### `java/lang/Class$3`
 
 - `<init>(Ljava/lang/Class;Ljava/lang/reflect/Method;)V`
-
-### `java/lang/Class$Atomic`
-
-- `casReflectionData(Ljava/lang/Class;Ljava/lang/ref/SoftReference;Ljava/lang/ref/SoftReference;)Z`
 
 ### `java/lang/Class$EnclosingMethodInfo`
 
@@ -332,11 +914,12 @@
 
 ### `java/lang/Class$ReflectionData`
 
-- `<init>(I)V`
+- `newReflectionData(Ljava/lang/ref/SoftReference;I)Ljava/lang/Class$ReflectionData;`
 
 ### `java/lang/ClassCastException`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/ClassLoader`
 
@@ -476,6 +1059,7 @@
 ### `java/lang/IllegalAccessException`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/IllegalArgumentException`
 
@@ -483,6 +1067,12 @@
 - `<init>(Ljava/lang/String;)V`
 - `<init>(Ljava/lang/String;Ljava/lang/Throwable;)V`
 - `<init>(Ljava/lang/Throwable;)V`
+- `append(F)Ljava/lang/StringBuilder;`
+- `append(I)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
+- `createLabel(I[Ljdk/internal/org/objectweb/asm/Label;)Ljdk/internal/org/objectweb/asm/Label;`
+- `readByte(I)I`
+- `readUnsignedShort(I)I`
 
 ### `java/lang/IllegalCallerException`
 
@@ -492,6 +1082,7 @@
 
 - `<init>()V`
 - `<init>(Ljava/lang/String;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/IncompatibleClassChangeError`
 
@@ -501,10 +1092,13 @@
 
 - `<init>()V`
 - `<init>(Ljava/lang/String;)V`
+- `append(I)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/Integer`
 
 - `<init>(I)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 - `formatUnsignedInt(II[BI)V`
 - `formatUnsignedIntUTF16(II[BI)V`
 - `getChars(II[B)I`
@@ -527,10 +1121,16 @@
 - `<init>(Ljava/lang/String;)V`
 - `<init>(Ljava/lang/String;Ljava/lang/Throwable;)V`
 - `<init>(Ljava/lang/Throwable;)V`
+- `append(I)Ljava/lang/StringBuilder;`
+- `append(J)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
+- `cachedLambdaForm(I)Ljava/lang/invoke/LambdaForm;`
+- `checkMethod(BLjava/lang/Class;Ljava/lang/invoke/MemberName;)V`
 
 ### `java/lang/LinkageError`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/Long`
 
@@ -562,7 +1162,6 @@
 - `min(II)I`
 - `min(JJ)J`
 - `multiplyExact(II)I`
-- `multiplyHigh(JJ)J`
 
 ### `java/lang/Module`
 
@@ -578,15 +1177,17 @@
 ### `java/lang/NegativeArraySizeException`
 
 - `<init>()V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/NoSuchFieldException`
 
 - `<init>(Ljava/lang/String;)V`
+- `initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;`
 
 ### `java/lang/NoSuchMethodException`
 
 - `<init>(Ljava/lang/String;)V`
-- `printStackTrace()V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/NullPointerException`
 
@@ -605,6 +1206,8 @@
 ### `java/lang/NumberFormatException`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(I)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 - `forCharSequence(Ljava/lang/CharSequence;III)Ljava/lang/NumberFormatException;`
 - `forInputString(Ljava/lang/String;I)Ljava/lang/NumberFormatException;`
 
@@ -620,6 +1223,8 @@
 ### `java/lang/OutOfMemoryError`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(I)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/PublicMethods$Key`
 
@@ -640,7 +1245,6 @@
 ### `java/lang/ReflectiveOperationException`
 
 - `<init>(Ljava/lang/String;)V`
-- `initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;`
 
 ### `java/lang/RuntimeException`
 
@@ -652,6 +1256,7 @@
 ### `java/lang/RuntimePermission`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/SecurityException`
 
@@ -781,27 +1386,23 @@
 - `valueOf(Ljava/lang/Object;)Ljava/lang/String;`
 - `valueOf([C)Ljava/lang/String;`
 
-### `java/lang/StringBuffer`
-
-- `append([C)Ljava/lang/StringBuffer;`
-
 ### `java/lang/StringBuilder`
 
 - `<init>()V`
 - `<init>(I)V`
 - `<init>(Ljava/lang/String;)V`
 - `append(C)Ljava/lang/StringBuilder;`
-- `append(F)Ljava/lang/StringBuilder;`
 - `append(I)Ljava/lang/StringBuilder;`
 - `append(J)Ljava/lang/StringBuilder;`
 - `append(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;`
 - `append(Ljava/lang/Object;)Ljava/lang/StringBuilder;`
 - `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
-- `append([C)Ljava/lang/StringBuilder;`
 - `appendCodePoint(I)Ljava/lang/StringBuilder;`
+- `charAt(I)C`
 - `delete(II)Ljava/lang/StringBuilder;`
 - `insert(IC)Ljava/lang/StringBuilder;`
 - `length()I`
+- `parameterType(I)Ljava/lang/invoke/LambdaForm$BasicType;`
 - `setLength(I)V`
 - `toString()Ljava/lang/String;`
 
@@ -970,7 +1571,6 @@
 
 ### `java/lang/UnsupportedOperationException`
 
-- `<init>()V`
 - `<init>(Ljava/lang/String;)V`
 
 ### `java/lang/VirtualMachineError`
@@ -985,7 +1585,6 @@
 - `continuationScope()Ljdk/internal/vm/ContinuationScope;`
 - `notifyJvmtiMount(Z)V`
 - `notifyJvmtiUnmount(Z)V`
-- `setState(I)V`
 - `state()I`
 - `tryYield()V`
 - `yieldContinuation()Z`
@@ -1132,21 +1731,15 @@
 - `emitAstoreInsn(I)V`
 - `emitBoxing(Lsun/invoke/util/Wrapper;)V`
 - `emitConst(Ljava/lang/Object;)V`
-- `emitGuardWithCatch(I)Ljava/lang/invoke/LambdaForm$Name;`
 - `emitI2X(Lsun/invoke/util/Wrapper;)V`
 - `emitIconstInsn(I)V`
 - `emitIconstInsn(Ljdk/internal/org/objectweb/asm/MethodVisitor;I)V`
 - `emitImplicitConversion(Ljava/lang/invoke/LambdaForm$BasicType;Ljava/lang/Class;Ljava/lang/Object;)V`
 - `emitInvoke(Ljava/lang/invoke/LambdaForm$Name;)V`
 - `emitLoadInsn(Ljava/lang/invoke/LambdaForm$BasicType;I)V`
-- `emitLoop(I)Ljava/lang/invoke/LambdaForm$Name;`
-- `emitLoopHandleInvoke(Ljava/lang/invoke/LambdaForm$Name;IILjava/lang/invoke/LambdaForm$Name;ZLjava/lang/invoke/MethodType;[Ljava/lang/Class;II)V`
-- `emitPopInsn(Ljava/lang/invoke/LambdaForm$BasicType;)V`
 - `emitPrimCast(Lsun/invoke/util/Wrapper;Lsun/invoke/util/Wrapper;)V`
 - `emitPushArgument(Ljava/lang/Class;Ljava/lang/Object;)V`
 - `emitPushArgument(Ljava/lang/invoke/LambdaForm$Name;I)V`
-- `emitPushArguments(Ljava/lang/invoke/LambdaForm$Name;I)V`
-- `emitPushClauseArray(II)V`
 - `emitReferenceCast(Ljava/lang/Class;Ljava/lang/Object;)V`
 - `emitReturn(Ljava/lang/invoke/LambdaForm$Name;)V`
 - `emitReturnInsn(Ljava/lang/invoke/LambdaForm$BasicType;)V`
@@ -1155,12 +1748,8 @@
 - `emitStaticInvoke(Ljava/lang/invoke/MemberName;Ljava/lang/invoke/LambdaForm$Name;)V`
 - `emitStoreInsn(Ljava/lang/invoke/LambdaForm$BasicType;I)V`
 - `emitStoreResult(Ljava/lang/invoke/LambdaForm$Name;)V`
-- `emitTableSwitch(II)Ljava/lang/invoke/LambdaForm$Name;`
-- `emitTryFinally(I)Ljava/lang/invoke/LambdaForm$Name;`
 - `emitUnboxing(Lsun/invoke/util/Wrapper;)V`
 - `emitX2I(Lsun/invoke/util/Wrapper;)V`
-- `emitZero(Ljava/lang/invoke/LambdaForm$BasicType;)V`
-- `extendLocalsMap([Ljava/lang/Class;)I`
 - `generateCustomizedCode(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;`
 - `generateCustomizedCodeBytes()[B`
 - `generateLambdaFormInterpreterEntryPoint(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;`
@@ -1177,7 +1766,6 @@
 - `makeDumpableClassName(Ljava/lang/String;)Ljava/lang/String;`
 - `methodEpilogue()V`
 - `methodPrologue()V`
-- `popInsnOpcode(Ljava/lang/invoke/LambdaForm$BasicType;)I`
 - `refKindOpcode(B)I`
 - `resolveFrom(Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)Ljava/lang/invoke/MemberName;`
 - `resolveInvokerMember(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;`
@@ -1266,6 +1854,7 @@
 - `parameterConstraint(I)Ljava/lang/Object;`
 - `parameterType(I)Ljava/lang/invoke/LambdaForm$BasicType;`
 - `prepare()V`
+- `put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;`
 - `returnType()Ljava/lang/invoke/LambdaForm$BasicType;`
 - `shortenSignature(Ljava/lang/String;)Ljava/lang/String;`
 - `toString()Ljava/lang/String;`
@@ -1304,11 +1893,14 @@
 - `<init>(Ljava/lang/invoke/MemberName;[Ljava/lang/Object;)V`
 - `<init>(Ljava/lang/invoke/MethodHandle;[Ljava/lang/Object;)V`
 - `<init>(Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 - `cloneWithIndex(I)Ljava/lang/invoke/LambdaForm$Name;`
 - `debugString()Ljava/lang/String;`
 - `exprString()Ljava/lang/String;`
+- `getterFunction(I)Ljava/lang/invoke/LambdaForm$NamedFunction;`
 - `index()I`
 - `initIndex(I)Z`
+- `insertExpression(ILjava/lang/invoke/LambdaForm$Name;)Ljava/lang/invoke/LambdaFormBuffer;`
 - `internArguments()V`
 - `isConstantZero()Z`
 - `isInvokeBasic()Z`
@@ -1317,14 +1909,18 @@
 - `lastUseIndex(Ljava/lang/invoke/LambdaForm$Name;)I`
 - `newIndex(I)Ljava/lang/invoke/LambdaForm$Name;`
 - `paramString()Ljava/lang/String;`
+- `parameterType(I)Ljava/lang/Class;`
+- `put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;`
 - `refersTo(Ljava/lang/Class;Ljava/lang/String;)Z`
 - `replaceNames([Ljava/lang/invoke/LambdaForm$Name;[Ljava/lang/invoke/LambdaForm$Name;II)Ljava/lang/invoke/LambdaForm$Name;`
+- `setCachedLambdaForm(ILjava/lang/invoke/LambdaForm;)Ljava/lang/invoke/LambdaForm;`
 - `toString()Ljava/lang/String;`
 - `type()Ljava/lang/invoke/LambdaForm$BasicType;`
 - `typeChar()C`
 - `typesMatch(Ljava/lang/invoke/LambdaForm$BasicType;Ljava/lang/Object;)Z`
 - `typesMatch(Ljava/lang/invoke/LambdaForm$NamedFunction;[Ljava/lang/Object;)Z`
 - `useCount(Ljava/lang/invoke/LambdaForm$Name;)I`
+- `visitInsn(I)V`
 - `withConstraint(Ljava/lang/Object;)Ljava/lang/invoke/LambdaForm$Name;`
 
 ### `java/lang/invoke/LambdaForm$NamedFunction`
@@ -1338,6 +1934,7 @@
 - `assertMemberIsConsistent()Z`
 - `calculateMethodType(Ljava/lang/invoke/MemberName;Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/MethodType;`
 - `equals(Ljava/lang/Object;)Z`
+- `getDeclaredMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;`
 - `intrinsicData()Ljava/lang/Object;`
 - `intrinsicName()Ljava/lang/invoke/MethodHandleImpl$Intrinsic;`
 - `isConstantZero()Z`
@@ -1349,6 +1946,7 @@
 - `resolve()V`
 - `resolvedHandle()Ljava/lang/invoke/MethodHandle;`
 - `returnType()Ljava/lang/invoke/LambdaForm$BasicType;`
+- `setCachedLambdaForm(ILjava/lang/invoke/LambdaForm;)Ljava/lang/invoke/LambdaForm;`
 - `toString()Ljava/lang/String;`
 
 ### `java/lang/invoke/LambdaFormBuffer`
@@ -1372,12 +1970,10 @@
 - `ownedCount()I`
 - `renameParameter(ILjava/lang/invoke/LambdaForm$Name;)Ljava/lang/invoke/LambdaFormBuffer;`
 - `replaceFunctions(Ljava/util/List;Ljava/util/List;[Ljava/lang/Object;)Ljava/lang/invoke/LambdaFormBuffer;`
-- `replaceName(ILjava/lang/invoke/LambdaForm$Name;)V`
 - `replaceParameterByCopy(II)Ljava/lang/invoke/LambdaFormBuffer;`
 - `replaceParameterByNewExpression(ILjava/lang/invoke/LambdaForm$Name;)Ljava/lang/invoke/LambdaFormBuffer;`
 - `resultIndex()I`
 - `setNames([Ljava/lang/invoke/LambdaForm$Name;)V`
-- `setResult(Ljava/lang/invoke/LambdaForm$Name;)V`
 - `startEdit()V`
 - `verifyArity()Z`
 - `verifyFirstChange()Z`
@@ -1392,12 +1988,10 @@
 - `bindArgumentI(Ljava/lang/invoke/BoundMethodHandle;II)Ljava/lang/invoke/BoundMethodHandle;`
 - `bindArgumentJ(Ljava/lang/invoke/BoundMethodHandle;IJ)Ljava/lang/invoke/BoundMethodHandle;`
 - `bindArgumentL(Ljava/lang/invoke/BoundMethodHandle;ILjava/lang/Object;)Ljava/lang/invoke/BoundMethodHandle;`
-- `bindArgumentType(Ljava/lang/invoke/BoundMethodHandle;ILjava/lang/invoke/LambdaForm$BasicType;)Ljava/lang/invoke/MethodType;`
 - `buffer()Ljava/lang/invoke/LambdaFormBuffer;`
 - `collectArgumentsForm(ILjava/lang/invoke/MethodType;)Ljava/lang/invoke/LambdaForm;`
 - `filterArgumentForm(ILjava/lang/invoke/LambdaForm$BasicType;)Ljava/lang/invoke/LambdaForm;`
 - `filterRepeatedArgumentForm(Ljava/lang/invoke/LambdaForm$BasicType;[I)Ljava/lang/invoke/LambdaForm;`
-- `filterReturnForm(Ljava/lang/invoke/LambdaForm$BasicType;Z)Ljava/lang/invoke/LambdaForm;`
 - `formParametersMatch(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/LambdaForm$BasicType;[I)Z`
 - `getInCache(Ljava/lang/invoke/LambdaFormEditor$TransformKey;)Ljava/lang/invoke/LambdaForm;`
 - `lambdaFormEditor(Ljava/lang/invoke/LambdaForm;)Ljava/lang/invoke/LambdaFormEditor;`
@@ -1450,6 +2044,8 @@
 - `<init>(Ljava/lang/reflect/Method;Z)V`
 - `allFlagsSet(I)Z`
 - `anyFlagSet(I)Z`
+- `append(C)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 - `asConstructor()Ljava/lang/invoke/MemberName;`
 - `asSpecial()Ljava/lang/invoke/MemberName;`
 - `canBeStaticallyBound()Z`
@@ -1533,6 +2129,7 @@
 - `bindTo(Ljava/lang/Object;)Ljava/lang/invoke/MethodHandle;`
 - `copyWith(Ljava/lang/invoke/MethodType;Ljava/lang/invoke/LambdaForm;)Ljava/lang/invoke/MethodHandle;`
 - `debugPrefix(I)Ljava/lang/String;`
+- `filterReturnForm(Ljava/lang/invoke/LambdaForm$BasicType;Z)Ljava/lang/invoke/LambdaForm;`
 - `getApproximateCommonClassLoader(Ljava/lang/invoke/MethodType;)Ljava/lang/ClassLoader;`
 - `internalForm()Ljava/lang/invoke/LambdaForm;`
 - `internalMemberName()Ljava/lang/invoke/MemberName;`
@@ -1801,7 +2398,6 @@
 - `hasPrimitives()Z`
 - `parameterSlotCount()I`
 - `setCachedLambdaForm(ILjava/lang/invoke/LambdaForm;)Ljava/lang/invoke/LambdaForm;`
-- `setCachedMethodHandle(ILjava/lang/invoke/MethodHandle;)Ljava/lang/invoke/MethodHandle;`
 
 ### `java/lang/invoke/SimpleMethodHandle`
 
@@ -1829,6 +2425,7 @@
 ### `java/lang/invoke/WrongMethodTypeException`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/lang/module/ModuleDescriptor`
 
@@ -1846,28 +2443,8 @@
 
 ### `java/lang/ref/Reference`
 
-- `<init>(Ljava/lang/Object;)V`
 - `<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V`
-- `get()Ljava/lang/Object;`
 - `reachabilityFence(Ljava/lang/Object;)V`
-
-### `java/lang/ref/ReferenceQueue`
-
-- `<init>()V`
-- `headIsNull()Z`
-- `poll()Ljava/lang/ref/Reference;`
-- `poll0()Ljava/lang/ref/Reference;`
-
-### `java/lang/ref/SoftReference`
-
-- `<init>(Ljava/lang/Object;)V`
-- `<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V`
-- `get()Ljava/lang/Object;`
-
-### `java/lang/ref/WeakReference`
-
-- `<init>(Ljava/lang/Object;)V`
-- `<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V`
 
 ### `java/lang/reflect/Array`
 
@@ -1961,11 +2538,9 @@
 ### `java/nio/Buffer`
 
 - `<init>(IIIILjava/lang/foreign/MemorySegment;)V`
-- `clear()Ljava/nio/Buffer;`
 - `createCapacityException(I)Ljava/lang/IllegalArgumentException;`
 - `createLimitException(I)Ljava/lang/IllegalArgumentException;`
 - `createPositionException(I)Ljava/lang/IllegalArgumentException;`
-- `flip()Ljava/nio/Buffer;`
 - `limit(I)Ljava/nio/Buffer;`
 - `position(I)Ljava/nio/Buffer;`
 
@@ -1980,23 +2555,9 @@
 ### `java/nio/ByteBuffer`
 
 - `<init>(IIII[BILjava/lang/foreign/MemorySegment;)V`
-- `array()[B`
-- `arrayOffset()I`
 - `asLongBuffer()Ljava/nio/LongBuffer;`
-- `base()Ljava/lang/Object;`
-- `clear()Ljava/nio/ByteBuffer;`
-- `flip()Ljava/nio/ByteBuffer;`
-- `isReadOnly()Z`
-- `limit()I`
 - `order(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;`
 - `position()I`
-- `position(I)Ljava/nio/ByteBuffer;`
-- `put(IB)Ljava/nio/ByteBuffer;`
-- `put([B)Ljava/nio/ByteBuffer;`
-- `put([BII)Ljava/nio/ByteBuffer;`
-- `putArray(I[BII)Ljava/nio/ByteBuffer;`
-- `remaining()I`
-- `session()Ljdk/internal/foreign/MemorySessionImpl;`
 - `wrap([B)Ljava/nio/ByteBuffer;`
 - `wrap([BII)Ljava/nio/ByteBuffer;`
 
@@ -2007,10 +2568,6 @@
 ### `java/nio/CharBuffer`
 
 - `<init>(IIII[CILjava/lang/foreign/MemorySegment;)V`
-- `hasRemaining()Z`
-- `position()I`
-- `position(I)Ljava/nio/CharBuffer;`
-- `remaining()I`
 - `wrap([CII)Ljava/nio/CharBuffer;`
 
 ### `java/nio/HeapByteBuffer`
@@ -2026,50 +2583,14 @@
 - `get(I)J`
 - `put(IJ)Ljava/nio/LongBuffer;`
 
-### `java/nio/ReadOnlyBufferException`
-
-- `<init>()V`
-
-### `java/nio/channels/WritableByteChannel`
-
-- `write(Ljava/nio/ByteBuffer;)I`
-
 ### `java/nio/charset/CharacterCodingException`
 
 - `<init>()V`
 
-### `java/nio/charset/Charset`
-
-- `newEncoder()Ljava/nio/charset/CharsetEncoder;`
-
-### `java/nio/charset/CharsetEncoder`
-
-- `encode(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;`
-- `encodeLoop(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;`
-- `flush(Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;`
-- `implFlush(Ljava/nio/ByteBuffer;)Ljava/nio/charset/CoderResult;`
-- `implOnMalformedInput(Ljava/nio/charset/CodingErrorAction;)V`
-- `implOnUnmappableCharacter(Ljava/nio/charset/CodingErrorAction;)V`
-- `maxBytesPerChar()F`
-- `onMalformedInput(Ljava/nio/charset/CodingErrorAction;)Ljava/nio/charset/CharsetEncoder;`
-- `onUnmappableCharacter(Ljava/nio/charset/CodingErrorAction;)Ljava/nio/charset/CharsetEncoder;`
-- `throwIllegalStateException(II)V`
-
-### `java/nio/charset/CoderMalfunctionError`
-
-- `<init>(Ljava/lang/Exception;)V`
-
 ### `java/nio/charset/CoderResult`
 
-- `isError()Z`
-- `isMalformed()Z`
-- `isOverflow()Z`
 - `isUnderflow()Z`
-- `isUnmappable()Z`
-- `length()I`
-- `malformedForLength(I)Ljava/nio/charset/CoderResult;`
 - `throwException()V`
-- `toString()Ljava/lang/String;`
 
 ### `java/nio/charset/MalformedInputException`
 
@@ -2109,6 +2630,7 @@
 ### `java/security/AccessControlException`
 
 - `<init>(Ljava/lang/String;Ljava/security/Permission;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/security/AccessController`
 
@@ -2138,12 +2660,12 @@
 
 - `<init>(Ljava/lang/String;)V`
 - `implies(Ljava/security/Permission;)Z`
-- `newPermissionCollection()Ljava/security/PermissionCollection;`
 
 ### `java/security/PermissionCollection`
 
 - `<init>()V`
 - `add(Ljava/security/Permission;)V`
+- `createPermissionCollection(Ljava/security/Permission;Z)Ljava/security/PermissionCollection;`
 - `elements()Ljava/util/Enumeration;`
 - `implies(Ljava/security/Permission;)Z`
 
@@ -2151,14 +2673,8 @@
 
 - `<init>()V`
 - `add(Ljava/security/Permission;)V`
-- `createPermissionCollection(Ljava/security/Permission;Z)Ljava/security/PermissionCollection;`
 - `getPermissionCollection(Ljava/security/Permission;Z)Ljava/security/PermissionCollection;`
-- `getUnresolvedPermissions(Ljava/security/Permission;)Ljava/security/PermissionCollection;`
 - `isReadOnly()Z`
-
-### `java/security/PermissionsHash`
-
-- `<init>()V`
 
 ### `java/security/Policy`
 
@@ -2198,19 +2714,6 @@
 - `getPermissions()Ljava/security/PermissionCollection;`
 - `implies(Ljava/security/Permission;)Z`
 - `impliesWithAltFilePerm(Ljava/security/Permission;)Z`
-
-### `java/security/UnresolvedPermission`
-
-- `resolve(Ljava/security/Permission;[Ljava/security/cert/Certificate;)Ljava/security/Permission;`
-
-### `java/security/UnresolvedPermissionCollection`
-
-- `getUnresolvedPermissions(Ljava/security/Permission;)Ljava/util/List;`
-
-### `java/security/cert/Certificate`
-
-- `equals(Ljava/lang/Object;)Z`
-- `getEncoded()[B`
 
 ### `java/text/BreakIterator`
 
@@ -2259,6 +2762,9 @@
 
 - `<init>(Ljava/lang/String;)V`
 - `<init>(Ljava/lang/String;Ljava/lang/Throwable;)V`
+- `append(I)Ljava/lang/StringBuilder;`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
+- `genInvalidFieldMessage(Ljava/time/temporal/TemporalField;J)Ljava/lang/String;`
 
 ### `java/time/DayOfWeek`
 
@@ -2420,11 +2926,11 @@
 ### `java/time/temporal/UnsupportedTemporalTypeException`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/time/temporal/ValueRange`
 
 - `checkValidValue(JLjava/time/temporal/TemporalField;)J`
-- `genInvalidFieldMessage(Ljava/time/temporal/TemporalField;J)Ljava/lang/String;`
 - `getMaximum()J`
 - `getMinimum()J`
 - `isIntValue()Z`
@@ -2535,10 +3041,6 @@
 
 - `<init>(Ljava/util/Map;)V`
 
-### `java/util/Comparator`
-
-- `compare(Ljava/lang/Object;Ljava/lang/Object;)I`
-
 ### `java/util/DuplicateFormatFlagsException`
 
 - `<init>(Ljava/lang/String;)V`
@@ -2631,7 +3133,6 @@
 - `entrySet()Ljava/util/Set;`
 - `get(Ljava/lang/Object;)Ljava/lang/Object;`
 - `getNode(Ljava/lang/Object;)Ljava/util/HashMap$Node;`
-- `getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;`
 - `hash(Ljava/lang/Object;)I`
 - `keySet()Ljava/util/Set;`
 - `newHashMap(I)Ljava/util/HashMap;`
@@ -2702,6 +3203,7 @@
 ### `java/util/IllegalFormatPrecisionException`
 
 - `<init>(I)V`
+- `checkBadFlags(I)V`
 
 ### `java/util/IllegalFormatWidthException`
 
@@ -2806,7 +3308,6 @@
 ### `java/util/Map`
 
 - `clear()V`
-- `computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;`
 - `containsKey(Ljava/lang/Object;)Z`
 - `copyOf(Ljava/util/Map;)Ljava/util/Map;`
 - `entrySet()Ljava/util/Set;`
@@ -2830,6 +3331,7 @@
 ### `java/util/MissingFormatWidthException`
 
 - `<init>(Ljava/lang/String;)V`
+- `checkBadFlags(I)V`
 
 ### `java/util/NoSuchElementException`
 
@@ -2883,6 +3385,7 @@
 ### `java/util/ServiceConfigurationError`
 
 - `<init>(Ljava/lang/String;Ljava/lang/Throwable;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/util/Set`
 
@@ -2944,24 +3447,7 @@
 
 - `<init>()V`
 - `<init>(Ljava/util/Comparator;)V`
-- `addEntry(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/TreeMap$Entry;Z)V`
-- `addEntryToEmptyMap(Ljava/lang/Object;Ljava/lang/Object;)V`
-- `colorOf(Ljava/util/TreeMap$Entry;)Z`
-- `compare(Ljava/lang/Object;Ljava/lang/Object;)I`
 - `entrySet()Ljava/util/Set;`
-- `fixAfterInsertion(Ljava/util/TreeMap$Entry;)V`
-- `leftOf(Ljava/util/TreeMap$Entry;)Ljava/util/TreeMap$Entry;`
-- `parentOf(Ljava/util/TreeMap$Entry;)Ljava/util/TreeMap$Entry;`
-- `put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;`
-- `put(Ljava/lang/Object;Ljava/lang/Object;Z)Ljava/lang/Object;`
-- `rightOf(Ljava/util/TreeMap$Entry;)Ljava/util/TreeMap$Entry;`
-- `rotateLeft(Ljava/util/TreeMap$Entry;)V`
-- `rotateRight(Ljava/util/TreeMap$Entry;)V`
-- `setColor(Ljava/util/TreeMap$Entry;Z)V`
-
-### `java/util/TreeMap$Entry`
-
-- `<init>(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/TreeMap$Entry;)V`
 
 ### `java/util/TreeMap$EntrySet`
 
@@ -2975,6 +3461,7 @@
 ### `java/util/UnknownFormatConversionException`
 
 - `<init>(Ljava/lang/String;)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `java/util/UnknownFormatFlagsException`
 
@@ -3016,7 +3503,6 @@
 - `get(Ljava/lang/Object;)Ljava/lang/Object;`
 - `helpTransfer([Ljava/util/concurrent/ConcurrentHashMap$Node;Ljava/util/concurrent/ConcurrentHashMap$Node;)[Ljava/util/concurrent/ConcurrentHashMap$Node;`
 - `initTable()[Ljava/util/concurrent/ConcurrentHashMap$Node;`
-- `put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;`
 - `putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;`
 - `putVal(Ljava/lang/Object;Ljava/lang/Object;Z)Ljava/lang/Object;`
 - `remove(Ljava/lang/Object;)Ljava/lang/Object;`
@@ -3092,18 +3578,6 @@
 - `getAndAdd(J)J`
 - `set(J)V`
 
-### `java/util/concurrent/locks/AbstractOwnableSynchronizer`
-
-- `<init>()V`
-
-### `java/util/concurrent/locks/AbstractQueuedSynchronizer`
-
-- `<init>()V`
-
-### `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject`
-
-- `<init>(Ljava/util/concurrent/locks/AbstractQueuedSynchronizer;)V`
-
 ### `java/util/concurrent/locks/LockSupport`
 
 - `park(Ljava/lang/Object;)V`
@@ -3111,22 +3585,14 @@
 
 ### `java/util/concurrent/locks/ReentrantLock`
 
-- `<init>()V`
 - `lock()V`
-- `newCondition()Ljava/util/concurrent/locks/Condition;`
 - `unlock()V`
-
-### `java/util/concurrent/locks/ReentrantLock$NonfairSync`
-
-- `<init>()V`
 
 ### `java/util/concurrent/locks/ReentrantLock$Sync`
 
-- `<init>()V`
 - `acquire(I)V`
 - `initialTryLock()Z`
 - `lock()V`
-- `newCondition()Ljava/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject;`
 - `release(I)Z`
 
 ### `java/util/function/BiFunction`
@@ -3136,10 +3602,6 @@
 ### `java/util/function/Function`
 
 - `apply(Ljava/lang/Object;)Ljava/lang/Object;`
-
-### `java/util/function/Supplier`
-
-- `get()Ljava/lang/Object;`
 
 ### `java/util/regex/ASCII`
 
@@ -3241,7 +3703,6 @@
 - `SingleU(I)Ljava/util/regex/Pattern$CharPredicate;`
 - `UNIXDOT()Ljava/util/regex/Pattern$CharPredicate;`
 - `VertWS()Ljava/util/regex/Pattern$BmpCharPredicate;`
-- `accept(ILjava/lang/String;)V`
 - `addFlag()V`
 - `and(Ljava/util/regex/Pattern$CharPredicate;Ljava/util/regex/Pattern$CharPredicate;Z)Ljava/util/regex/Pattern$CharPredicate;`
 - `append(II)V`
@@ -3320,6 +3781,7 @@
 ### `java/util/regex/Pattern$BehindS`
 
 - `<init>(Ljava/util/regex/Pattern$Node;II)V`
+- `accept(ILjava/lang/String;)V`
 
 ### `java/util/regex/Pattern$BitClass`
 
@@ -3350,11 +3812,13 @@
 ### `java/util/regex/Pattern$Bound`
 
 - `<init>(IZ)V`
+- `has(I)Z`
 
 ### `java/util/regex/Pattern$Branch`
 
 - `<init>(Ljava/util/regex/Pattern$Node;Ljava/util/regex/Pattern$Node;Ljava/util/regex/Pattern$Node;)V`
 - `add(Ljava/util/regex/Pattern$Node;)V`
+- `study(Ljava/util/regex/Pattern$TreeInfo;)Z`
 
 ### `java/util/regex/Pattern$BranchConn`
 
@@ -3363,6 +3827,7 @@
 ### `java/util/regex/Pattern$CIBackRef`
 
 - `<init>(IZ)V`
+- `has(I)Z`
 
 ### `java/util/regex/Pattern$Caret`
 
@@ -3390,6 +3855,7 @@
 ### `java/util/regex/Pattern$Dollar`
 
 - `<init>(Z)V`
+- `has(I)Z`
 
 ### `java/util/regex/Pattern$End`
 
@@ -3430,6 +3896,8 @@
 ### `java/util/regex/Pattern$NFCCharProperty`
 
 - `<init>(Ljava/util/regex/Pattern$CharPredicate;)V`
+- `clazz(Z)Ljava/util/regex/Pattern$CharPredicate;`
+- `family(ZZ)Ljava/util/regex/Pattern$CharPredicate;`
 
 ### `java/util/regex/Pattern$Neg`
 
@@ -3448,6 +3916,7 @@
 ### `java/util/regex/Pattern$NotBehindS`
 
 - `<init>(Ljava/util/regex/Pattern$Node;II)V`
+- `error(Ljava/lang/String;)Ljava/util/regex/PatternSyntaxException;`
 
 ### `java/util/regex/Pattern$Pos`
 
@@ -3456,10 +3925,12 @@
 ### `java/util/regex/Pattern$Prolog`
 
 - `<init>(Ljava/util/regex/Pattern$Loop;)V`
+- `error(Ljava/lang/String;)Ljava/util/regex/PatternSyntaxException;`
 
 ### `java/util/regex/Pattern$Ques`
 
 - `<init>(Ljava/util/regex/Pattern$Node;Ljava/util/regex/Pattern$Qtype;)V`
+- `curly(Ljava/util/regex/Pattern$Node;I)Ljava/util/regex/Pattern$Node;`
 
 ### `java/util/regex/Pattern$Slice`
 
@@ -3509,6 +3980,7 @@
 ### `java/util/regex/Pattern$UnixDollar`
 
 - `<init>(Z)V`
+- `has(I)Z`
 
 ### `java/util/regex/Pattern$XGrapheme`
 
@@ -3550,10 +4022,7 @@
 ### `java/util/stream/Stream`
 
 - `collect(Ljava/util/stream/Collector;)Ljava/lang/Object;`
-- `filter(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;`
 - `map(Ljava/util/function/Function;)Ljava/util/stream/Stream;`
-- `of([Ljava/lang/Object;)Ljava/util/stream/Stream;`
-- `toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;`
 
 ### `java/util/stream/StreamOpFlag`
 
@@ -3601,7 +4070,6 @@
 
 ### `jdk/internal/access/JavaLangReflectAccess`
 
-- `copyConstructor(Ljava/lang/reflect/Constructor;)Ljava/lang/reflect/Constructor;`
 - `copyMethod(Ljava/lang/reflect/Method;)Ljava/lang/reflect/Method;`
 - `getExecutableSharedParameterTypes(Ljava/lang/reflect/Executable;)[Ljava/lang/Class;`
 - `getRoot(Ljava/lang/reflect/AccessibleObject;)Ljava/lang/reflect/AccessibleObject;`
@@ -3616,10 +4084,6 @@
 - `getJavaIOFilePermissionAccess()Ljdk/internal/access/JavaIOFilePermissionAccess;`
 - `getJavaLangAccess()Ljdk/internal/access/JavaLangAccess;`
 - `getJavaSecurityAccess()Ljdk/internal/access/JavaSecurityAccess;`
-
-### `jdk/internal/foreign/MemorySessionImpl`
-
-- `checkValidStateRaw()V`
 
 ### `jdk/internal/icu/impl/Norm2AllModes`
 
@@ -3662,33 +4126,6 @@
 - `appClassLoader()Ljava/lang/ClassLoader;`
 - `platformClassLoader()Ljava/lang/ClassLoader;`
 
-### `jdk/internal/math/FloatToDecimal`
-
-- `<init>()V`
-- `append(I)V`
-- `append8Digits(I)V`
-- `appendDecimalTo(FLjava/lang/Appendable;)Ljava/lang/Appendable;`
-- `appendDigit(I)V`
-- `appendTo(FLjava/lang/Appendable;)Ljava/lang/Appendable;`
-- `exponent(I)V`
-- `removeTrailingZeroes()V`
-- `rop(JJ)I`
-- `toChars(II)I`
-- `toChars1(III)I`
-- `toChars2(III)I`
-- `toChars3(III)I`
-- `toDecimal(F)I`
-- `toDecimal(III)I`
-- `y(I)I`
-
-### `jdk/internal/math/MathUtils`
-
-- `flog10pow2(I)I`
-- `flog10threeQuartersPow2(I)I`
-- `flog2pow10(I)I`
-- `g1(I)J`
-- `pow10(I)J`
-
 ### `jdk/internal/misc/CDS`
 
 - `isDumpingClassList()Z`
@@ -3704,31 +4141,13 @@
 
 - `isEnabled()Z`
 
-### `jdk/internal/misc/ScopedMemoryAccess`
-
-- `copyMemory(Ljdk/internal/foreign/MemorySessionImpl;Ljdk/internal/foreign/MemorySessionImpl;Ljava/lang/Object;JLjava/lang/Object;JJ)V`
-- `copyMemoryInternal(Ljdk/internal/foreign/MemorySessionImpl;Ljdk/internal/foreign/MemorySessionImpl;Ljava/lang/Object;JLjava/lang/Object;JJ)V`
-
-### `jdk/internal/misc/ScopedMemoryAccess$ScopedAccessError`
-
-- `newRuntimeException()Ljava/lang/RuntimeException;`
-
 ### `jdk/internal/misc/Unsafe`
 
 - `allocateUninitializedArray(Ljava/lang/Class;I)Ljava/lang/Object;`
 - `allocateUninitializedArray0(Ljava/lang/Class;I)Ljava/lang/Object;`
-- `checkNativeAddress(J)V`
-- `checkOffset(Ljava/lang/Object;J)V`
-- `checkPointer(Ljava/lang/Object;J)V`
-- `checkPrimitiveArray(Ljava/lang/Class;)V`
-- `checkPrimitivePointer(Ljava/lang/Object;J)V`
-- `checkSize(J)V`
 - `compareAndSetInt(Ljava/lang/Object;JII)Z`
 - `compareAndSetLong(Ljava/lang/Object;JJJ)Z`
 - `compareAndSetReference(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z`
-- `copyMemory(Ljava/lang/Object;JLjava/lang/Object;JJ)V`
-- `copyMemory0(Ljava/lang/Object;JLjava/lang/Object;JJ)V`
-- `copyMemoryChecks(Ljava/lang/Object;JLjava/lang/Object;JJ)V`
 - `ensureClassInitialized(Ljava/lang/Class;)V`
 - `ensureClassInitialized0(Ljava/lang/Class;)V`
 - `fullFence()V`
@@ -3745,8 +4164,6 @@
 - `getReferenceVolatile(Ljava/lang/Object;J)Ljava/lang/Object;`
 - `getShort(Ljava/lang/Object;J)S`
 - `getUnsafe()Ljdk/internal/misc/Unsafe;`
-- `invalidInput()Ljava/lang/RuntimeException;`
-- `is32BitClean(J)Z`
 - `makeInt(BBBB)I`
 - `makeInt(SS)I`
 - `makeLong(BBBBBBBB)J`
@@ -3773,7 +4190,6 @@
 
 ### `jdk/internal/misc/VM`
 
-- `addFinalRefCount(I)V`
 - `getNanoTimeAdjustment(J)J`
 - `initLevel()I`
 - `isBooted()Z`
@@ -3982,6 +4398,7 @@
 ### `jdk/internal/org/objectweb/asm/MethodTooLargeException`
 
 - `<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V`
+- `addConstantUtf8(Ljava/lang/String;)I`
 
 ### `jdk/internal/org/objectweb/asm/MethodVisitor`
 
@@ -4131,6 +4548,7 @@
 ### `jdk/internal/org/objectweb/asm/Type`
 
 - `<init>(ILjava/lang/String;II)V`
+- `charAt(I)C`
 - `getArgumentsAndReturnSizes(Ljava/lang/String;)I`
 - `getDescriptor()Ljava/lang/String;`
 - `getInternalName()Ljava/lang/String;`
@@ -4237,7 +4655,6 @@
 - `opc_ifnonnull(Ljdk/internal/reflect/Label;)V`
 - `opc_ifnull(Ljdk/internal/reflect/Label;)V`
 - `opc_instanceof(S)V`
-- `opc_invokeinterface(SIBI)V`
 - `opc_invokespecial(SII)V`
 - `opc_invokestatic(SII)V`
 - `opc_invokevirtual(SII)V`
@@ -4295,6 +4712,7 @@
 - `<init>()V`
 - `add(Ljdk/internal/reflect/ClassFileAssembler;SSI)V`
 - `bind()V`
+- `opc_invokeinterface(SIBI)V`
 
 ### `jdk/internal/reflect/Label$PatchInfo`
 
@@ -4383,7 +4801,6 @@
 ### `jdk/internal/reflect/ReflectionFactory`
 
 - `config()Ljdk/internal/reflect/ReflectionFactory$Config;`
-- `copyConstructor(Ljava/lang/reflect/Constructor;)Ljava/lang/reflect/Constructor;`
 - `copyMethod(Ljava/lang/reflect/Method;)Ljava/lang/reflect/Method;`
 - `generateMethodAccessor(Ljava/lang/reflect/Method;)Ljdk/internal/reflect/MethodAccessorImpl;`
 - `getExecutableSharedParameterTypes(Ljava/lang/reflect/Executable;)[Ljava/lang/Class;`
@@ -4611,14 +5028,6 @@
 - `encodeFromUTF16([BII[B)I`
 - `isASCIICompatible()Z`
 
-### `sun/nio/cs/StreamEncoder`
-
-- `flushBuffer()V`
-- `implFlushBuffer()V`
-- `isOpen()Z`
-- `lockedFlushBuffer()V`
-- `writeBytes()V`
-
 ### `sun/nio/fs/DefaultFileSystemProvider`
 
 - `theFileSystem()Ljava/nio/file/FileSystem;`
@@ -4736,11 +5145,6 @@
 
 - `newPermUsingAltPath(Ljava/security/Permission;)Ljava/security/Permission;`
 
-### `sun/security/x509/X509CertImpl`
-
-- `getEncodedInternal()[B`
-- `getEncodedInternal(Ljava/security/cert/Certificate;)[B`
-
 ### `sun/text/Normalizer`
 
 - `getCombiningClass(I)I`
@@ -4786,6 +5190,7 @@
 
 - `<init>(C)V`
 - `<init>(Ljava/lang/String;)V`
+- `substring(I)Ljava/lang/String;`
 - `value()C`
 
 ### `sun/util/locale/InternalLocaleBuilder$CaseInsensitiveString`
@@ -4812,6 +5217,7 @@
 ### `sun/util/locale/LocaleSyntaxException`
 
 - `<init>(Ljava/lang/String;I)V`
+- `append(Ljava/lang/String;)Ljava/lang/StringBuilder;`
 
 ### `sun/util/locale/LocaleUtils`
 
@@ -4861,6 +5267,7 @@
 - `getAdapter(Ljava/lang/Class;Ljava/util/Locale;)Lsun/util/locale/provider/LocaleProviderAdapter;`
 - `getAdapterPreference()Ljava/util/List;`
 - `getBreakIteratorProvider()Ljava/text/spi/BreakIteratorProvider;`
+- `getDeclaredConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;`
 - `getLocaleServiceProvider(Ljava/lang/Class;)Ljava/util/spi/LocaleServiceProvider;`
 
 ### `sun/util/locale/provider/LocaleProviderAdapter$Type`
@@ -4868,7 +5275,83 @@
 - `getAdapterClassName()Ljava/lang/String;`
 - `ordinal()I`
 
-## 仅引用类（new/field，无方法调用）
+## Native 边界方法
+
+- `java/lang/Class.desiredAssertionStatus0(Ljava/lang/Class;)Z`
+- `java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;`
+- `java/lang/Class.getDeclaredMethods0(Z)[Ljava/lang/reflect/Method;`
+- `java/lang/Class.getDeclaringClass0()Ljava/lang/Class;`
+- `java/lang/Class.getEnclosingMethod0()[Ljava/lang/Object;`
+- `java/lang/Class.getGenericSignature0()Ljava/lang/String;`
+- `java/lang/Class.getInterfaces0()[Ljava/lang/Class;`
+- `java/lang/Class.getModifiers()I`
+- `java/lang/Class.getNestHost0()Ljava/lang/Class;`
+- `java/lang/Class.getSimpleBinaryName0()Ljava/lang/String;`
+- `java/lang/Class.getSuperclass()Ljava/lang/Class;`
+- `java/lang/Class.initClassName()Ljava/lang/String;`
+- `java/lang/Class.isArray()Z`
+- `java/lang/Class.isAssignableFrom(Ljava/lang/Class;)Z`
+- `java/lang/Class.isHidden()Z`
+- `java/lang/Class.isInstance(Ljava/lang/Object;)Z`
+- `java/lang/Class.isInterface()Z`
+- `java/lang/Class.isPrimitive()Z`
+- `java/lang/Double.doubleToRawLongBits(D)J`
+- `java/lang/Double.longBitsToDouble(J)D`
+- `java/lang/Float.floatToRawIntBits(F)I`
+- `java/lang/Float.intBitsToFloat(I)F`
+- `java/lang/Object.clone()Ljava/lang/Object;`
+- `java/lang/Object.getClass()Ljava/lang/Class;`
+- `java/lang/Object.hashCode()I`
+- `java/lang/String.intern()Ljava/lang/String;`
+- `java/lang/System.arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V`
+- `java/lang/System.currentTimeMillis()J`
+- `java/lang/System.identityHashCode(Ljava/lang/Object;)I`
+- `java/lang/System.nanoTime()J`
+- `java/lang/Thread.currentThread()Ljava/lang/Thread;`
+- `java/lang/Thread.interrupt0()V`
+- `java/lang/Thread.yield0()V`
+- `java/lang/Throwable.fillInStackTrace(I)Ljava/lang/Throwable;`
+- `java/lang/VirtualThread.notifyJvmtiMount(Z)V`
+- `java/lang/VirtualThread.notifyJvmtiUnmount(Z)V`
+- `java/lang/invoke/MethodHandleNatives.expand(Ljava/lang/invoke/MemberName;)V`
+- `java/lang/invoke/MethodHandleNatives.getMemberVMInfo(Ljava/lang/invoke/MemberName;)Ljava/lang/Object;`
+- `java/lang/invoke/MethodHandleNatives.init(Ljava/lang/invoke/MemberName;Ljava/lang/Object;)V`
+- `java/lang/invoke/MethodHandleNatives.objectFieldOffset(Ljava/lang/invoke/MemberName;)J`
+- `java/lang/invoke/MethodHandleNatives.resolve(Ljava/lang/invoke/MemberName;Ljava/lang/Class;IZ)Ljava/lang/invoke/MemberName;`
+- `java/lang/invoke/MethodHandleNatives.staticFieldBase(Ljava/lang/invoke/MemberName;)Ljava/lang/Object;`
+- `java/lang/invoke/MethodHandleNatives.staticFieldOffset(Ljava/lang/invoke/MemberName;)J`
+- `java/lang/reflect/Array.newArray(Ljava/lang/Class;I)Ljava/lang/Object;`
+- `java/security/AccessController.ensureMaterializedForStackWalk(Ljava/lang/Object;)V`
+- `java/security/AccessController.getInheritedAccessControlContext()Ljava/security/AccessControlContext;`
+- `java/security/AccessController.getStackAccessControlContext()Ljava/security/AccessControlContext;`
+- `java/util/zip/Inflater.init(Z)J`
+- `jdk/internal/misc/CDS.logLambdaFormInvoker(Ljava/lang/String;)V`
+- `jdk/internal/misc/Unsafe.compareAndSetInt(Ljava/lang/Object;JII)Z`
+- `jdk/internal/misc/Unsafe.compareAndSetLong(Ljava/lang/Object;JJJ)Z`
+- `jdk/internal/misc/Unsafe.compareAndSetReference(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z`
+- `jdk/internal/misc/Unsafe.ensureClassInitialized0(Ljava/lang/Class;)V`
+- `jdk/internal/misc/Unsafe.fullFence()V`
+- `jdk/internal/misc/Unsafe.getByte(Ljava/lang/Object;J)B`
+- `jdk/internal/misc/Unsafe.getInt(Ljava/lang/Object;J)I`
+- `jdk/internal/misc/Unsafe.getIntVolatile(Ljava/lang/Object;J)I`
+- `jdk/internal/misc/Unsafe.getLong(Ljava/lang/Object;J)J`
+- `jdk/internal/misc/Unsafe.getLongVolatile(Ljava/lang/Object;J)J`
+- `jdk/internal/misc/Unsafe.getReferenceVolatile(Ljava/lang/Object;J)Ljava/lang/Object;`
+- `jdk/internal/misc/Unsafe.getShort(Ljava/lang/Object;J)S`
+- `jdk/internal/misc/Unsafe.park(ZJ)V`
+- `jdk/internal/misc/Unsafe.putInt(Ljava/lang/Object;JI)V`
+- `jdk/internal/misc/Unsafe.putLong(Ljava/lang/Object;JJ)V`
+- `jdk/internal/misc/Unsafe.putLongVolatile(Ljava/lang/Object;JJ)V`
+- `jdk/internal/misc/Unsafe.putReferenceVolatile(Ljava/lang/Object;JLjava/lang/Object;)V`
+- `jdk/internal/misc/Unsafe.shouldBeInitialized0(Ljava/lang/Class;)Z`
+- `jdk/internal/misc/VM.getNanoTimeAdjustment(J)J`
+- `jdk/internal/perf/Perf.createLong(Ljava/lang/String;IIJ)Ljava/nio/ByteBuffer;`
+- `jdk/internal/reflect/Reflection.areNestMates(Ljava/lang/Class;Ljava/lang/Class;)Z`
+- `jdk/internal/reflect/Reflection.getCallerClass()Ljava/lang/Class;`
+- `jdk/internal/reflect/Reflection.getClassAccessFlags(Ljava/lang/Class;)I`
+- `jdk/internal/vm/Continuation.doYield()I`
+
+## 仅引用类（截断边界内）
 
 - `java/io/FilePermission`
 - `java/io/Serializable`
@@ -4900,12 +5383,16 @@
 - `java/lang/invoke/InvokerBytecodeGenerator$1`
 - `java/lang/invoke/MethodHandleImpl$Makers`
 - `java/lang/invoke/MethodHandles$1`
-- `java/lang/ref/FinalReference`
+- `java/lang/ref/ReferenceQueue`
+- `java/lang/ref/SoftReference`
+- `java/lang/ref/WeakReference`
 - `java/lang/reflect/Type`
-- `java/nio/charset/CoderResult$Cache`
+- `java/nio/charset/Charset`
+- `java/nio/charset/CharsetEncoder`
 - `java/nio/charset/CodingErrorAction`
 - `java/nio/file/FileSystems$DefaultFileSystemHolder`
 - `java/security/AllPermission`
+- `java/security/UnresolvedPermission`
 - `java/util/Locale$Category`
 - `java/util/ResourceBundle$SingleFormatControl`
 - `java/util/concurrent/ConcurrentHashMap$ReservationNode`
@@ -4924,6 +5411,7 @@
 - `jdk/internal/vm/Continuation$Pinned`
 - `sun/invoke/util/ValueConversions$1`
 - `sun/nio/cs/ISO_8859_1`
+- `sun/nio/cs/StreamEncoder`
 - `sun/nio/cs/US_ASCII`
 - `sun/nio/cs/UTF_8`
 - `sun/security/util/Debug$FormatHolder`

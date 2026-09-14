@@ -182,9 +182,10 @@ class NewPendingExpr:
 @dataclass
 class StaticFieldRef:
     """对应 `getstatic` 指令。渲染为 ClassName::field_name()。"""
-    class_name: str   # JVM 内部格式，如 "java/lang/System"
-    field_name: str   # 字段名，如 "out"
-    ty: RsType        # 字段类型
+    class_name: str       # JVM 内部格式，如 "java/lang/System"
+    field_name: str       # 字段名，如 "out"
+    ty: RsType            # 字段类型
+    turbofish: str = ''   # 泛型类型参数，如 '::<Object>' 用于消歧 E0283
 
 
 RsExpr = Union[

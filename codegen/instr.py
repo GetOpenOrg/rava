@@ -75,6 +75,7 @@ from .rs_ir import (
     NewPendingExpr, StaticFieldRef,
 )
 from .render import render_expr, render_type
+from .sig_parser import parse_class_type_params as _parse_class_type_params
 from .type_map import (
     jvm_to_rust, sig_type, short_cls,
     NEWARRAY_TYPES,
@@ -708,7 +709,19 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             sim.push(Lit('true'), BOOL)
         elif field_name:
             ty_str = jvm_to_rust(descriptor, registry) if descriptor else 'Object'
-            sim.push(StaticFieldRef(cls, field_name, RsNamed(ty_str)), RsNamed(ty_str))
+            # 泛型类静态字段访问需要 turbofish，避免 E0283 类型推断歧义
+            _getstatic_turbofish = ''
+            if registry and cls:
+                _cls_bin = _rust_type_to_binary(cls.rsplit('/', 1)[-1].replace('$', '_'), registry) if '/' in cls else _rust_type_to_binary(cls.replace('$', '_'), registry)
+                if not _cls_bin and cls in registry:
+                    _cls_bin = cls
+                if _cls_bin:
+                    _cls_ci = registry.get(_cls_bin)
+                    if _cls_ci and _cls_ci.generic_signature:
+                        _tparams = _parse_class_type_params(_cls_ci.generic_signature)
+                        if _tparams:
+                            _getstatic_turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
+            sim.push(StaticFieldRef(cls, field_name, RsNamed(ty_str), turbofish=_getstatic_turbofish), RsNamed(ty_str))
         else:
             sim.push(RawExpr(f"/* getstatic {comment} */"), RsNamed('Object'))
     elif op == 'putstatic':
@@ -1108,7 +1121,17 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
         rust_mname = _safe_field(_mangle_if_overloaded(cls, mname, comment, registry))
-        call = f"{cls}::{rust_mname}({', '.join(args)})"
+        # 泛型类静态方法需要 turbofish，避免 E0283 类型推断歧义
+        turbofish = ''
+        if registry:
+            _cls_bin = _rust_type_to_binary(cls, registry)
+            if _cls_bin:
+                _cls_ci = registry.get(_cls_bin)
+                if _cls_ci and _cls_ci.generic_signature:
+                    _tparams = _parse_class_type_params(_cls_ci.generic_signature)
+                    if _tparams:
+                        turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
+        call = f"{cls}{turbofish}::{rust_mname}({', '.join(args)})"
         needs_q = True
 
     q = '?' if needs_q else ''
