@@ -714,9 +714,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             if rust_ret == 'String':
                 body = f'String::from("{cv}")'
             elif rust_ret == 'f32':
-                body = f'{cv}f32'
+                if cv == 'inf':      body = 'f32::INFINITY'
+                elif cv == '-inf':   body = 'f32::NEG_INFINITY'
+                elif cv == 'NaN':    body = 'f32::NAN'
+                else:                body = f'{cv}f32'
             elif rust_ret == 'f64':
-                body = f'{cv}f64'
+                if cv == 'inf':      body = 'f64::INFINITY'
+                elif cv == '-inf':   body = 'f64::NEG_INFINITY'
+                elif cv == 'NaN':    body = 'f64::NAN'
+                else:                body = f'{cv}f64'
             elif rust_ret == 'i64':
                 body = f'{cv}i64'
             elif rust_ret == 'bool':

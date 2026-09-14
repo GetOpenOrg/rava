@@ -276,6 +276,36 @@ def _find_field_super_prefix(class_name: str, safe_fname: str, registry: dict | 
     return ''
 
 
+def _find_super_chain_to_class(current_binary: str, target_cls_short: str, registry: dict | None) -> str:
+    """从 current_binary 到 target_cls_short（Rust 短名）的 _super 链前缀。
+    用于 invokespecial super.method() 的精确路由（跳过虚拟派发，直接访问目标父类实例）。
+    返回类似 '_super.' 或 '_super._super.' 的前缀：
+      - 若目标即为当前类本身（私有方法调用）返回 ''
+      - 若找到父类路径返回 '_super.' 链
+      - 若无注册信息 fallback 到 '_super.'"""
+    if not registry or not current_binary or not target_cls_short:
+        return '_super.'
+    # 当前类短名（私有方法 invokespecial 时 target == current）
+    cur_short = current_binary.rsplit('/', 1)[-1].replace('$', '_') if '/' in current_binary else current_binary.replace('$', '_')
+    if target_cls_short == cur_short or target_cls_short == current_binary:
+        return ''  # 同类调用（私有方法）：不需要 _super 路由
+    ci = registry.get(current_binary)
+    if ci is None:
+        return '_super.'  # fallback
+    path_parts: list[str] = []
+    sc = ci.super_class
+    while sc and sc != 'java/lang/Object':
+        path_parts.append('_super')
+        sc_short = sc.rsplit('/', 1)[-1].replace('$', '_') if '/' in sc else sc.replace('$', '_')
+        if sc_short == target_cls_short or sc == target_cls_short:
+            return '.'.join(path_parts) + '.'
+        sc_ci = registry.get(sc)
+        if sc_ci is None:
+            break
+        sc = sc_ci.super_class
+    return '_super.'  # fallback: 至少一级 _super（目标类在继承链上但未在 registry 中）
+
+
 def _find_method_super_prefix(class_name: str, mname: str, registry: dict | None,
                               descriptor: str = '') -> str:
     """T76: 找到方法 mname 在继承链中的位置，返回 _super 访问前缀。
@@ -995,8 +1025,42 @@ def _gen_string_concat(sim: StackSim, comment: str):
 
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     if '<init>' not in comment and '"<init>"' not in comment:
-        # super.method() 调用：用 invokevirtual 语义（弹出 receiver + args）
-        _gen_invokevirtual(sim, comment, class_name, registry=registry)
+        # super.method() 调用（invokespecial 非构造器）：
+        # 不能用 invokevirtual 语义——否则 this.method() 会对被覆盖方法产生无限递归。
+        # 必须精确路由到目标父类的 ._super 链，直接调用父类实现，跳过虚拟派发。
+        cls_short, mname, params, ret = parse_method_ref(comment)
+        args: list[str] = []
+        for param_jvm in reversed(params):
+            e_expr, e_ty_node = sim.pop()
+            e_str = render_expr(e_expr)
+            expected_rust = jvm_to_rust(param_jvm, registry)
+            actual_rust = render_type(e_ty_node)
+            null_coerce = _coerce_from_null(e_str, expected_rust)
+            if null_coerce is not None:
+                e_str = null_coerce
+            elif _coerce_to_interface(actual_rust, expected_rust):
+                e_str = 'Default::default()'
+            elif expected_rust == 'Object' and actual_rust not in ('Object', '()'):
+                e_str = _coerce_to_object(e_str, actual_rust)
+            elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
+                e_str = _coerce_value(e_str, e_ty_node, expected_rust)
+            elif actual_rust not in _PRIMITIVE_RUST_TYPES:
+                e_str = f"{e_str}.clone()"
+            args.insert(0, e_str)
+        obj_expr, _ = sim.pop()
+        obj_e = render_expr(obj_expr)
+        # 找到 ._super 链：class_name（当前类 binary）→ cls_short（目标父类 Rust 短名）
+        super_pfx = _find_super_chain_to_class(class_name, cls_short or '', registry) if registry else '_super.'
+        recv_e = f"{obj_e}.{super_pfx.rstrip('.')}" if super_pfx else obj_e
+        rust_mname = _safe_field(_mangle_if_overloaded(cls_short or '', mname, comment, registry))
+        arg_str = ', '.join(args)
+        rust_ret = jvm_to_rust(ret, registry)
+        if rust_ret == '()':
+            sim.emit(RawStmt(f"{recv_e}.{rust_mname}({arg_str})?;"))
+        else:
+            v = sim.fresh()
+            sim.emit(RawStmt(f"let {v} = {recv_e}.{rust_mname}({arg_str})?;"))
+            sim.push(Var(v), RsNamed(rust_ret))
         return
 
     cls, _, params, _ = parse_method_ref(comment)
