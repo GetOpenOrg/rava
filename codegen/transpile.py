@@ -18,7 +18,7 @@ _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
 })
 
 
-def transpile(java_files: list[str], out_dir: str):
+def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
     for jf in java_files:
         if not os.path.exists(jf):
             sys.exit(f"File not found: {jf}")
@@ -56,7 +56,7 @@ def transpile(java_files: list[str], out_dir: str):
     print(f"[4/4] 生成 Rust → {out_dir}/")
     # 预加载 ergonomic @jvm_rename 指令（T39：为 ergonomic 层腾出干净方法名）
     load_ergonomic_renames(os.path.abspath(out_dir))
-    write_cargo_project(out_dir, class_infos, jdk_class_infos, java_files)
+    write_cargo_project(out_dir, class_infos, jdk_class_infos, java_files, batch_bin=batch_bin)
     print(f"\n✓ 完成。运行方式：\n  cd {out_dir} && cargo run --release")
 
 

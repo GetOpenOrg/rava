@@ -600,9 +600,57 @@ def _write(path: str, content: str) -> None:
         f.write(content)
 
 
+def _update_user_lib_rs(user_src: str, new_mods: list[str]) -> None:
+    """追加新的 pub mod 声明到 user/src/lib.rs（重复则跳过）。"""
+    lib_path = os.path.join(user_src, 'lib.rs')
+    header = '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]'
+    existing: set[str] = set()
+    if os.path.exists(lib_path):
+        with open(lib_path) as f:
+            for line in f:
+                m = re.match(r'pub mod (\w+);', line)
+                if m:
+                    existing.add(m.group(1))
+    to_add = [m for m in new_mods if m not in existing]
+    if not to_add:
+        return
+    all_mods = sorted(existing | set(new_mods))
+    lines = [header] + [f'pub mod {m};' for m in all_mods] + ['']
+    _write(lib_path, '\n'.join(lines))
+
+
+def _append_cargo_bin(user_dir: str, bin_name: str, bin_src: str) -> None:
+    """向 user/Cargo.toml 追加一个 [[bin]] 条目（已存在则跳过）。"""
+    cargo_path = os.path.join(user_dir, 'Cargo.toml')
+    base = '\n'.join([
+        '[package]', 'name = "user"', 'version = "0.1.0"', 'edition = "2021"', '',
+        '[dependencies]',
+        'java_runtime    = { path = "../java_runtime" }',
+        'java_rta_macros = { path = "../java_rta_macros" }',
+        'jdk_classes     = { path = "../jdk_classes" }', '',
+    ])
+    new_bin = f'\n[[bin]]\nname = "{bin_name}"\npath = "{bin_src}"\n'
+    if not os.path.exists(cargo_path):
+        dep_idx = base.index('[dependencies]')
+        _write(cargo_path, base[:dep_idx] + new_bin + '\n' + base[dep_idx:])
+        return
+    with open(cargo_path) as f:
+        content = f.read()
+    if f'name = "{bin_name}"' in content:
+        return
+    dep_idx = content.find('[dependencies]')
+    if dep_idx >= 0:
+        content = content[:dep_idx] + new_bin + '\n' + content[dep_idx:]
+    else:
+        content += new_bin
+    with open(cargo_path, 'w') as f:
+        f.write(content)
+
+
 def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                          jdk_class_infos: list[ClassInfo] | None = None,
-                         java_files: list[str] | None = None):
+                         java_files: list[str] | None = None,
+                         batch_bin: bool = False):
     """
     生成 Cargo workspace，包含三个子 crate：
       java_runtime/  — 手写 VM 基础设施（git 管理，不由转译器写入）
@@ -618,8 +666,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 3. jdk_classes crate（JDK 字节码翻译）
     # Cargo.toml / build.rs 由 git 直接管理，emitter 不再写出
     jdk_src = os.path.join(jdk_dir, 'src')
-    # 清理旧版生成文件：删除 src/ 下所有 .rs 文件，防止 stale 文件影响 native_status.toml
-    if os.path.isdir(jdk_src):
+    # 清理旧版生成文件（batch 模式由调用方在批次开始前统一清理）
+    if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):
             for fname in files:
                 if fname.endswith('.rs'):
@@ -767,23 +815,54 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             mod_lines.append(f'pub use {mod_name}::{cls_name};')
         _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
 
-    # user/src/main.rs
+    # user/src/main.rs（单测试模式）或 src/bin/<class>.rs（批量模式）
     main_class = class_infos[0].name if class_infos else 'Main'
     _, pkg_parts, mod_name = layout[main_class]
     top_user_mods = sorted(user_mod_tree.get(user_src, set()))
     use_path = '::'.join(pkg_parts + [main_class]) if pkg_parts else f'{mod_name}::{main_class}'
+    bin_name = to_snake(main_class.split('/')[-1])   # snake_case，如 TestArrayList → test_array_list
 
-    main_lines = [
-        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
-        *[f'mod {m};' for m in top_user_mods],
-        f'use {use_path};',
-        '',
-        'fn main() {',
-        f'    {main_class}::main().unwrap_or_else(|e| eprintln!("JVM Error: {{:?}}", e));',
-        '}',
-        '',
-    ]
-    _write(os.path.join(user_src, 'main.rs'), '\n'.join(main_lines))
+    if batch_bin:
+        # 批量模式：每个测试写独立的 src/bin/<class>.rs + 共享 src/lib.rs + 追加 Cargo.toml [[bin]]
+        bin_lines = [
+            'fn main() {',
+            f'    user::{use_path}::main().unwrap_or_else(|e| eprintln!("JVM Error: {{:?}}", e));',
+            '}',
+            '',
+        ]
+        _write(os.path.join(user_src, 'bin', bin_name + '.rs'), '\n'.join(bin_lines))
+        _update_user_lib_rs(user_src, top_user_mods)
+        _append_cargo_bin(user_dir, bin_name, f'src/bin/{bin_name}.rs')
+    else:
+        # 单测试模式（默认）：写 src/main.rs + 覆写 Cargo.toml
+        main_lines = [
+            '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
+            *[f'mod {m};' for m in top_user_mods],
+            f'use {use_path};',
+            '',
+            'fn main() {',
+            f'    {main_class}::main().unwrap_or_else(|e| eprintln!("JVM Error: {{:?}}", e));',
+            '}',
+            '',
+        ]
+        _write(os.path.join(user_src, 'main.rs'), '\n'.join(main_lines))
+        cargo_toml_lines = [
+            '[package]',
+            'name = "user"',
+            'version = "0.1.0"',
+            'edition = "2021"',
+            '',
+            '[[bin]]',
+            f'name = "{bin_name}"',
+            'path = "src/main.rs"',
+            '',
+            '[dependencies]',
+            'java_runtime    = { path = "../java_runtime" }',
+            'java_rta_macros = { path = "../java_rta_macros" }',
+            'jdk_classes     = { path = "../jdk_classes" }',
+            '',
+        ]
+        _write(os.path.join(user_dir, 'Cargo.toml'), '\n'.join(cargo_toml_lines))
 
     if jdk_class_infos:
         print(f'[codegen] JDK 翻译 → {len(jdk_class_infos)} 个类')
