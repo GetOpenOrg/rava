@@ -123,7 +123,29 @@ class ClassHierarchy:
 
 ---
 
-### 1.6 类型系统过度依赖字符串
+### 1.6 异常表完全忽略（语义级 bug）
+
+**现状**：`classfile.py` 的 `_parse_code_attribute` 解析 exception table 时直接 skip：
+
+```python
+exc_count = r.u2()
+for _ in range(exc_count):
+    r.skip(8)  # start_pc, end_pc, handler_pc, catch_type
+```
+
+**影响**：任何包含 `try/catch` 的 Java 方法，其异常处理块完全被丢弃：
+- 捕获异常后的恢复逻辑不会执行
+- `finally` 块（JVM 用 `jsr/ret` 或重复代码实现）被忽略
+- 涉及异常处理的分支永远走"正常路径"，生成语义错误的 Rust 代码
+
+**改进方向**：
+1. 解析 exception table，保存四元组 `(start_pc, end_pc, handler_pc, catch_class)`
+2. 在 CFG 构建阶段，将受保护区间建模为"可能跳转到 handler_pc"的异常边
+3. 生成对应的 `let result = std::panic::catch_unwind(|| { ... });` 或自定义 `try_block!()` 宏
+
+---
+
+### 1.7 类型系统过度依赖字符串
 
 **现状**：`jvm_to_rust` 返回 `str`，后续的类型判断全是字符串比较：
 
@@ -155,7 +177,46 @@ def jvm_to_rs_type(desc: str, registry=None) -> RsType:
 
 ---
 
-### 1.7 泛型类型精确度不足
+### 1.8 BFS 性能：`list.pop(0)` 是 O(n) 操作
+
+**现状**：`transpile.py` 的 `_discover_jdk_classes_method_level` 用 Python list 实现 BFS 队列：
+
+```python
+queue: list[tuple[str, str, str]] = []
+...
+cls, meth, desc = queue.pop(0)  # O(n)！
+```
+
+**影响**：每次 `pop(0)` 需要将整个列表前移一位，时间复杂度 O(n)。当 JDK 类数量达到数百时（`java.base` 模块有 800+ 类），BFS 的总开销变为 O(n²)。
+
+**改进方向**：
+
+```python
+from collections import deque
+queue: deque[tuple[str, str, str]] = deque()
+...
+cls, meth, desc = queue.popleft()  # O(1)
+```
+
+**预期收益**：类数量达到 500 时，BFS 耗时从 ~25ms 降至 ~0.5ms。
+
+---
+
+### 1.9 缺少并行处理能力
+
+**现状**：整个翻译流水线是串行的：javac → 解析 → BFS 发现 → 代码生成，且类文件解析和代码生成均为单线程。
+
+**影响**：处理大批量类（如 `java.base` 全量 800+ 类）时，耗时随类数量线性增长，无法充分利用多核 CPU。
+
+**改进方向**：
+- 类解析阶段：用 `concurrent.futures.ProcessPoolExecutor` 或 `multiprocessing.Pool.map` 并行解析 .class 文件
+- 代码生成阶段：各类之间无数据依赖，可以 `ThreadPoolExecutor.map(_gen_class_rs, class_infos)` 并行生成
+
+注意：`_scan_native_impls` 的结果需要在并行前完成，作为只读全局结构传入各工作进程。
+
+---
+
+### 1.10 泛型类型精确度不足
 
 **现状**：`sig_parser.py` 中，带泛型参数的类类型（如 `List<E>`、`Map<K,V>`）暂时简化为 `Object`：
 
@@ -210,15 +271,18 @@ if c == '[':
 
 | 优先级 | 改进项 | 收益 | 成本 |
 |---|---|---|---|
+| P0 | **1.6 异常表解析** | 消除 try/catch 语义级 bug | 中（解析 + CFG 建模）|
 | P1 | **1.4 精确 `mut` 标注** | 消除 unused_mut 警告 | 低（扩展现有 `_analyze_mutation`） |
-| P1 | **1.2 instanceof 修复** | 消除语义级 bug | 中（需要类型检查基础设施） |
+| P1 | **1.2 instanceof 修复** | 消除 instanceof 语义级 bug | 中（需要类型检查基础设施） |
+| P1 | **1.8 BFS 队列改用 deque** | 大批量类时性能 O(n²)→O(n) | 极低（一行改动）|
 | P2 | **1.1 if/else 结构恢复** | 大幅扩展覆盖率 | 高（需要 CFG + 支配树） |
 | P2 | **1.5 类层次图** | 解锁多态、instanceof、接口 dispatch | 高（需要全量类解析） |
 | P3 | **1.1 switch 恢复** | 覆盖 switch 密集型代码 | 中（CFG 基础上） |
-| P3 | **1.1 try/catch 恢复** | 覆盖异常处理代码 | 高（异常表解析 + 结构恢复） |
-| P3 | **1.6 类型系统 RsType 化** | 消除字符串比较脆弱性 | 中（渐进替换） |
+| P3 | **1.1 try/catch 结构恢复** | 覆盖异常处理代码（依赖异常表解析）| 高 |
+| P3 | **1.7 类型系统 RsType 化** | 消除字符串比较脆弱性 | 中（渐进替换） |
+| P3 | **1.9 并行处理** | 大批量类生成速度提升 | 中（ProcessPool）|
 | P4 | **1.3 SSA 构建** | 类型精确性根本性提升 | 极高（架构级） |
-| P4 | **1.7 泛型精确化** | 减少 downcast | 高（依赖 SSA） |
+| P4 | **1.10 泛型精确化** | 减少 downcast | 高（依赖 SSA） |
 | P5 | **1.8 消除 RawExpr** | 代码质量 | 低但持续 |
 
 ---
@@ -402,6 +466,37 @@ if rt.startswith('Rc<RefCell<Vec<'):  # 脆弱：格式稍变即失效
 - 核心函数（类型映射、名称 mangle、控制流分析）的每次改动都必须运行全套 e2e 测试
 - 建立"黄金样例"集（至少 10 个典型 Java 程序），每次改动后对比生成代码的 diff，确认无意外变化
 - 大型 codegen 改动拆分为小步，每步单独验证，不一次性合并多个 bug 修复
+
+---
+
+---
+
+### 5.8 Rust 关键字作为 Java 方法/字段名
+
+**陷阱**：Java 允许使用 `type`、`ref`、`match`、`impl`、`self`、`in`、`use` 等词作为变量名、字段名或方法名，这些词在 Rust 中是保留关键字。若代码生成不做处理，生成的 `.rs` 文件会产生大量 `error[E0532]: expected identifier, found keyword` 编译错误。
+
+**风险点**：
+- 方法名：Java 的 `type()` → Rust `fn type()` 报错；需要 `fn r#type()`
+- 字段名：Java 的 `ref` 字段 → Rust `ref: T` 报错；需要 `r#ref: T`
+- 特殊例外：`self` 不能用 `r#self`，必须重命名为 `self_`；`Self` 同理
+
+**规避原则**：
+- 维护完整的 Rust 关键字集合（`RUST_KEYWORDS`），包含稳定关键字和保留关键字（如 `abstract`、`yield`、`try`）
+- `safe_ident` 函数处理所有方法名、参数名、字段名、模块名
+- `self`/`Self` 单独处理为 `self_`/`Self_`，不使用 `r#` 前缀
+
+---
+
+### 5.9 clone 方法与 Rust `Clone` trait 冲突
+
+**陷阱**：Rust 的 `#[derive(Clone)]` 自动实现 `Clone::clone(&self) -> Self` 方法。若 Java 类也声明了 `clone()` 方法，翻译后两者同名，编译器报 `duplicate definitions with name 'clone'`。
+
+**风险点**：几乎所有 Java 集合类（`ArrayList`、`HashMap` 等）都有 `clone()` 方法，且所有生成的类都使用 `#[derive(Clone)]`。
+
+**规避原则**：
+- Java `clone()` 翻译时固定重命名为 `jvm_clone`（或 `clone_java`），不管是否存在重载
+- 在所有调用侧同步使用重命名后的方法名
+- 若 Java 类本身是 `Cloneable` 的，可选择实现 `Clone trait` 将 `clone()` 委托给 `jvm_clone`
 
 ---
 
