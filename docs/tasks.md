@@ -1551,3 +1551,295 @@ T61 (SSA)          ─ 依赖 T56，长期目标
 - 短期：T53（P1，依赖 T52 降至 <2000）、T55（P2，近期前置优化可立即做）
 - 中期：T56（P2，CFG 结构恢复）、T58（P3，类型系统重构）
 - 长期：T57（P3，switch）、T60（P3，括号）、T61（P4，SSA）
+
+---
+
+## 阶段十一：计划文档新增改进项（Phase 11 — Plan v2 追加）
+
+> 本阶段任务来自 `docs/plans/2026-09-14-codegen-improvement-plan.md` 的更新版本（v2）  
+> 新增内容：异常表（P0）、BFS 性能（P1）、Rust 关键字（P1）、并行处理（P3）、泛型精确化（P4）、消除 RawExpr（P5）
+
+---
+
+### T62 · 异常表解析与 try/catch/finally 结构恢复
+**状态**：`[ ]`  
+**文件**：`codegen/classfile.py`、`codegen/cfg.py`、`codegen/instr.py`、`codegen/method.py`  
+**优先级**：P0（语义级 bug，任何含 try/catch 的方法均生成错误代码）
+
+**背景**：`classfile.py` 的 `_parse_code_attribute` 解析 exception table 时完全跳过：
+
+```python
+exc_count = r.u2()
+for _ in range(exc_count):
+    r.skip(8)  # start_pc, end_pc, handler_pc, catch_type ← 全部丢弃
+```
+
+这导致所有含 `try/catch` 的 Java 方法的异常处理逻辑被静默丢弃，程序只走正常路径，运行时行为完全错误。JDK 大量方法（IO、反射、集合）都含 try/catch，影响范围极广。
+
+**实施步骤**：
+
+**Step 1：classfile.py 解析异常表**
+```python
+@dataclass
+class ExceptionTableEntry:
+    start_pc: int
+    end_pc: int
+    handler_pc: int
+    catch_type: str | None  # None = finally（catch_type index == 0）
+
+# ParsedMethod 新增字段
+exception_table: list[ExceptionTableEntry]
+```
+
+修改 `_parse_code_attribute`，将 `r.skip(8)` 改为解析四元组并保存。
+
+**Step 2：CFG 异常边建模**
+
+在 `cfg.py` 的基本块构建阶段：
+- 受保护区间 `[start_pc, end_pc)` 内的每个基本块，添加到 `handler_pc` 的**异常边**
+- `handler_pc` 对应的基本块标记为 `is_handler = True`，记录 `catch_type`
+
+**Step 3：结构恢复生成 try/catch**
+
+识别受保护区间后，生成以下 IR 结构：
+```python
+@dataclass
+class TryCatchStmt:
+    try_body: list[Stmt]
+    handlers: list[tuple[str | None, str, list[Stmt]]]
+    # [(catch_type, var_name, handler_body), ...]
+    # catch_type=None 表示 finally
+```
+
+**Step 4：render.py 渲染**
+
+Java try/catch 在 Rust 侧映射到：
+```rust
+// try/catch → match 风格的错误处理（基于 Result 传播）
+let result = (|| -> Result<()> {
+    /* try body */
+    Ok(())
+})();
+match result {
+    Ok(_) => {}
+    Err(e) if e.is::<IOException>() => { /* catch body */ }
+    Err(e) => return Err(e),  // 未捕获的异常继续传播
+}
+```
+
+**阶段性验收**：
+- Step 1 完成后：`ParsedMethod.exception_table` 非空，日志可打印各方法的异常表
+- Step 2 完成后：CFG 中异常边正确建立，handler_pc 块被标记
+- Step 3 完成后：生成 TryCatchStmt IR，不再丢弃异常逻辑
+- Step 4 完成后：`cargo check` 中涉及 try/catch 的 E0308/E0425 错误减少
+
+---
+
+### T63 · BFS 队列改用 deque（O(n²) → O(n)）
+**状态**：`[ ]`  
+**文件**：`codegen/transpile.py`  
+**优先级**：P1（一行改动，零风险）
+
+**背景**：`transpile.py` 的 `_discover_jdk_classes_method_level` 使用 Python list 作为 BFS 队列，每次 `pop(0)` 是 O(n) 操作，导致整体 BFS 时间复杂度为 O(n²)。当 JDK 类数量达到 500+ 时，时间从约 25ms 退化到数秒。
+
+**当前代码**：
+```python
+queue: list[tuple[str, str, str]] = []
+...
+cls, meth, desc = queue.pop(0)  # O(n)！
+```
+
+**修复**：
+```python
+from collections import deque
+queue: deque[tuple[str, str, str]] = deque()
+...
+cls, meth, desc = queue.popleft()  # O(1)
+```
+
+同时检查 `transpile.py` 中其他使用 `list.pop(0)` 的 BFS/队列模式，统一替换。
+
+**验收**：
+- `python3 scripts/main.py` 输出中，BFS 阶段耗时不随类数量平方增长
+- 生成代码与修复前完全一致（diff 为零）
+
+---
+
+### T64 · Rust 关键字转义（safe_ident 完整覆盖）
+**状态**：`[ ]`  
+**文件**：`codegen/emitter.py`、`codegen/type_map.py`、`codegen/instr.py`  
+**优先级**：P1（可能正在产生 E0532 编译错误）
+
+**背景**：Java 允许使用 Rust 保留关键字作为变量名、字段名、方法名（如 `type`、`ref`、`match`、`impl`、`use`、`in`、`abstract`、`yield`）。若代码生成不处理，生成的 `.rs` 文件出现 `error[E0532]: expected identifier, found keyword`。
+
+特殊情况：`self`/`Self` 不能用 `r#self`，必须重命名为 `self_`。
+
+**实施步骤**：
+
+1. 在 `emitter.py`（或 `type_map.py`）维护完整关键字集合：
+   ```python
+   RUST_KEYWORDS = frozenset({
+       # 严格关键字
+       'as', 'async', 'await', 'break', 'const', 'continue', 'crate',
+       'dyn', 'else', 'enum', 'extern', 'false', 'fn', 'for', 'if',
+       'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'mut',
+       'pub', 'ref', 'return', 'self', 'Self', 'static', 'struct',
+       'super', 'trait', 'true', 'type', 'unsafe', 'use', 'where', 'while',
+       # 保留关键字（不稳定/未来）
+       'abstract', 'become', 'box', 'do', 'final', 'macro', 'override',
+       'priv', 'try', 'typeof', 'unsized', 'virtual', 'yield',
+   })
+   
+   def safe_ident(name: str) -> str:
+       if name in ('self', 'Self'):
+           return name + '_'
+       if name in RUST_KEYWORDS:
+           return 'r#' + name
+       return name
+   ```
+
+2. 将 `safe_ident` 应用到所有生成标识符的位置：
+   - `emitter.py`：方法名生成、字段名生成、参数名生成
+   - `instr.py`：局部变量名（`store_local` slot 命名）
+   - `emitter.py`：模块名（将 Java package 路径转换为 Rust module 路径时）
+
+3. 检查当前 `cargo check` 错误中是否有 E0532（keyword 冲突），优先修复。
+
+**验收**：
+- Java 中名为 `type`、`ref`、`match` 的字段/方法/参数正确生成为 `r#type`、`r#ref`、`r#match`
+- Java 中名为 `self` 的参数正确生成为 `self_`
+- 无新增 E0532 错误
+
+---
+
+### T65 · 并行类解析与代码生成
+**状态**：`[ ]`  
+**文件**：`codegen/transpile.py`、`codegen/emitter.py`  
+**优先级**：P3
+
+**背景**：当前翻译流水线完全串行：javac → 解析 → BFS 发现 → 代码生成。处理 `java.base` 全量 800+ 类时，耗时随类数量线性增长，无法利用多核 CPU。
+
+**实施步骤**：
+
+**阶段一：类解析并行化**
+```python
+from concurrent.futures import ProcessPoolExecutor
+
+with ProcessPoolExecutor() as executor:
+    class_infos = list(executor.map(_parse_class_file, class_paths))
+```
+
+注意：`_parse_class_file` 必须是纯函数（不依赖全局可变状态），且返回可 pickle 的对象。
+
+**阶段二：代码生成并行化**
+```python
+with ThreadPoolExecutor() as executor:
+    # 各类之间无数据依赖（除了 registry 只读）
+    futures = [executor.submit(_gen_class_rs, ci, registry) for ci in class_infos]
+    results = [f.result() for f in futures]
+```
+
+注意：`_scan_native_impls` 必须在并行生成前完成，其结果以只读方式传入。
+
+**前置条件**：T63（BFS deque）先完成；全局可变状态（registry、native_impls_map）需在并行前固化为只读。
+
+**预期收益**：800 类生成时间从 ~60s 降至 ~15s（4 核）。
+
+**验收**：
+- 并行生成的代码与串行生成结果完全一致（diff 为零）
+- 处理 800 类时，墙钟时间降低 50%+
+
+---
+
+### T66 · 泛型类型精确化（LocalVariableTypeTable 驱动）
+**状态**：`[ ]`  
+**文件**：`codegen/sig_parser.py`、`codegen/stack.py`、`codegen/instr.py`  
+**优先级**：P4  
+**依赖**：T61（SSA）为完整方案；阶段一可独立实施
+
+**背景**：`sig_parser.py` 将所有带泛型参数的类型简化为 `Object`：
+
+```python
+if has_type_args:
+    rust_type = 'Object'  # 带泛型参数的类类型暂时简化为 Object
+if c == '[':
+    return 'Object', next_i  # 数组也简化
+```
+
+导致泛型集合操作（`list.get(i)` 应返回具体元素类型）退化为 `Object`，生成大量无必要的 downcast。
+
+**阶段一：LVTT 驱动（独立可实施）**
+
+`classfile.py` 已解析 `LocalVariableTypeTable`，`ParsedMethod.local_types` 中存有各 slot 的完整泛型签名（如 `Ljava/util/List<Ljava/lang/String;>;`）。
+
+修改 `StackSim.store_local`（stack.py）：
+```python
+def store_local(self, idx, expr, ty):
+    if idx in self.method.local_types:
+        # 优先使用 LVTT 中的精确泛型类型
+        precise_ty = parse_generic_sig(self.method.local_types[idx])
+        ty = precise_ty
+    ...
+```
+
+**阶段二：调用站点泛型替换（依赖 T61 SSA）**
+
+记录每个 SSA 变量的声明类型（含泛型参数），调用泛型方法时用接收者的具体类型参数替换被调方法的 TypeVar（如 `List<String>.get(0)` 返回 `String` 而非 `Object`）。
+
+**验收**：
+- 阶段一：`List<String>` 类型的局部变量被正确推断为含泛型，不退化为 `Object`
+- 阶段二：`list.get(0)` 返回类型由 `Object` 精化为 `String`（当 LVTT 信息可用时）
+
+---
+
+### T67 · 消除 RawExpr / RawStmt（IR 结构化）
+**状态**：`[ ]`  
+**文件**：`codegen/rs_ir.py`、`codegen/instr.py`、`codegen/method.py`、`codegen/render.py`  
+**优先级**：P5（持续改进，非阻塞）
+
+**背景**：`rs_ir.py` 定义了完整的 IR ADT，但 `instr.py` 和 `method.py` 大量使用 `RawExpr(f"...")` 和 `RawStmt(f"...")` 逃生舱，导致：
+- `_analyze_mutation` 无法分析 RawStmt 中的赋值（保守处理，可能漏标 `mut`）
+- 无法对表达式做优先级分析、类型推导
+- 重构时容易遗漏 raw 字符串中的内容
+
+**目标**：将每类 `RawExpr` 用途替换为对应的结构化 IR 节点。
+
+**替换映射**（`rs_ir.py` 已有或需新增的节点）：
+
+| RawExpr 用途 | 目标 IR 节点 |
+|---|---|
+| 方法调用 `obj.method(args)` | `MethodCall(recv, name, args)` |
+| 静态调用 `Type::method(args)` | `StaticCall(type, name, args)` |
+| 数组下标 `arr[i]` | `Index(arr, idx)` |
+| 类型转换 `(expr as T)` | `Cast(expr, ty)` |
+| 字段访问 `obj.field` | `FieldAccess(obj, field)` |
+| 条件表达式 `if c { a } else { b }` | `IfExpr(cond, then, else_)` |
+
+**实施策略**：
+1. 每次修改 instr.py 时，优先使用结构化节点而非 `RawExpr`
+2. 建立 `RawExpr` 计数追踪（在 `render.py` 中统计），每个版本目标递减
+3. 对"真正无法结构化"的情况（如属性宏、unsafe 块），允许保留 `RawExpr` 并加注释说明原因
+
+**验收**：
+- `grep -r "RawExpr\|RawStmt" codegen/instr.py | wc -l` 每个 milestone 递减
+- 移除某类 RawExpr 后，`_analyze_mutation` 能正确分析该类语句中的赋值
+- 无功能回归（cargo check 错误不增加）
+
+---
+
+**阶段十一任务依赖**：
+
+```
+T62 (异常表)     ─ 独立 Step 1/2 可立即开始；Step 3/4 依赖 T56（CFG）
+T63 (BFS deque) ─ 独立，立即可做，一行改动
+T64 (Rust 关键字) ─ 独立，立即可做，可能修复现有 E0532 错误
+T65 (并行处理)   ─ 依赖 T63（deque）先做；全局状态固化后再并行
+T66 (泛型精确化) ─ 阶段一独立；阶段二依赖 T61（SSA）
+T67 (消除 Raw)   ─ 持续改进，与其他任务并行
+```
+
+**推荐执行序**：
+- 立即（低成本高收益）：T63（一行）、T64（关键字转义，可能有现存 E0532 错误）
+- 短期：T62 Step 1/2（异常表解析，P0），T62 Step 3/4 依赖 T56
+- 中期：T66 阶段一（LVTT 驱动泛型，独立可做）
+- 长期：T65（并行处理，待代码稳定后）、T66 阶段二（依赖 SSA）、T67（持续）
