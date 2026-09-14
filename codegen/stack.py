@@ -21,13 +21,26 @@ from .constants import safe_ident
 
 def _safe_name(name: str) -> str:
     """局部变量名安全化，在 safe_ident 基础上额外处理：
-    PascalCase 名（如 IOException 用作 catch 变量）首字母小写，
-    避免遮蔽 Rust unit struct（E0530）。"""
+    以大写字母开头的名（如 IOException、Exception 用作 catch 变量）camelCase 化，
+    避免遮蔽 Rust unit struct（E0530）。
+    全大写常量风格名（如 ARG_BASE）原样保留。"""
     s = safe_ident(name)
-    # PascalCase（首字母大写 + 次字母小写）→ 首字母小写（避免 E0530）
-    if s and s[0].isupper() and len(s) > 1 and s[1].islower():
-        s = s[0].lower() + s[1:]
-    return s
+    if not s or not s[0].isupper():
+        return s
+    # 全大写常量（ALL_CAPS）原样返回
+    if s == s.upper() and any(c.isalpha() for c in s):
+        return s
+    # 找到开头的连续大写字母段（如 IOException 中的 IOE）
+    i = 0
+    while i < len(s) and s[i].isupper():
+        i += 1
+    run, rest = s[:i], s[i:]
+    # 多字母大写前缀（缩写词）：除最后一个大写字母外全部小写，最后一个保留作下一词首字母
+    # 例：IOException → io + E + xception = ioException
+    # 单字母大写前缀：直接小写
+    if i > 1 and rest:
+        return run[:-1].lower() + run[-1] + rest
+    return run.lower() + rest
 
 # ── 类型常量（供外部导入使用）────────────────────────────────────────────────
 I32  = _I32
