@@ -50,8 +50,21 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
         class_infos.append(ci)
 
     # 3. 方法级调用链 BFS 发现 JDK 类
-    print(f"[3/4] 扫描 JDK 类引用...")
-    jdk_class_infos, visited_methods = _discover_jdk_classes_method_level(class_infos)
+    print(f"[3/4] 扫描 JDK 类引用...", end=' ', flush=True)
+    jdk_class_infos, visited_methods, field_stubs = _discover_jdk_classes_method_level(class_infos)
+    field_stub_count = sum(1 for ci in jdk_class_infos
+                           if any(ci.name == cls for cls in field_stubs))
+    bfs_count = len(jdk_class_infos) - field_stub_count
+    print(f"完成，{bfs_count} 个调用链类 + {field_stub_count} 个 field stub = {len(jdk_class_infos)} 个")
+
+    # 写 JDK 扫描报告
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    reports_dir = os.path.join(project_root, 'docs', 'reports')
+    os.makedirs(reports_dir, exist_ok=True)
+    stem0 = os.path.splitext(os.path.basename(java_files[0]))[0]
+    report_path = os.path.join(reports_dir, f"jdk-scan-{stem0}.md")
+    _write_jdk_scan_report(report_path, jdk_class_infos, field_stubs)
+    print(f"      JDK 扫描报告 → {report_path}")
 
     # 4. 生成 Rust
     print(f"[4/4] 生成 Rust → {out_dir}/")
@@ -60,6 +73,31 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
     write_cargo_project(out_dir, class_infos, jdk_class_infos, java_files,
                         batch_bin=batch_bin, visited_methods=visited_methods)
     print(f"\n✓ 完成。运行方式：\n  cd {out_dir} && cargo run --release")
+
+
+def _write_jdk_scan_report(path: str, jdk_class_infos: list, field_stubs: set):
+    """将 JDK 扫描结果写成 Markdown 报告。"""
+    from datetime import date
+    field_stub_names = {ci.name for ci in jdk_class_infos if ci.name in field_stubs}
+    callchain_infos = [ci for ci in jdk_class_infos if ci.name not in field_stubs]
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(f"# JDK 扫描报告\n\n生成时间：{date.today()}\n\n")
+        f.write("## 摘要\n\n")
+        f.write(f"| 来源 | 类数 |\n|------|-----:|\n")
+        f.write(f"| 调用链 BFS | {len(callchain_infos)} |\n")
+        f.write(f"| Field-only stub | {len(field_stub_names)} |\n")
+        f.write(f"| 合计 | {len(jdk_class_infos)} |\n\n")
+        f.write("## 调用链 BFS 发现的类\n\n")
+        f.write("| 类名 | 方法数 | native 数 |\n|------|-------:|----------:|\n")
+        for ci in sorted(callchain_infos, key=lambda c: c.name):
+            native = sum(1 for m in ci.methods if m.is_native)
+            f.write(f"| `{ci.name}` | {len(ci.methods)} | {native} |\n")
+        f.write("\n## Field-only Stub 类\n\n")
+        f.write("| 类名 | 方法数 | native 数 |\n|------|-------:|----------:|\n")
+        for ci in sorted((ci for ci in jdk_class_infos if ci.name in field_stubs),
+                         key=lambda c: c.name):
+            native = sum(1 for m in ci.methods if m.is_native)
+            f.write(f"| `{ci.name}` | {len(ci.methods)} | {native} |\n")
 
 
 def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]:
@@ -158,11 +196,8 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                     ci = parse_class_bytes(data, cls)
                     class_cache[cls] = ci
                     if cls not in jdk_infos:
-                        native_count = sum(1 for m in ci.methods if m.is_native)
-                        print(f"      {cls}: {len(ci.methods)} 方法, {native_count} native")
                         jdk_infos[cls] = ci
                 except Exception as e:
-                    print(f"      解析失败 {cls}: {e}")
                     class_cache[cls] = None
                     continue
 
@@ -187,8 +222,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 try:
                     ci = parse_class_bytes(data, cls)
                     jdk_infos[cls] = ci
-                except Exception as e:
-                    print(f"      解析失败(field-stub) {cls}: {e}")
+                except Exception:
+                    pass
 
-    print(f"      共解析 {len(jdk_infos)} 个 JDK 类（BFS，含 {len(field_discover_classes)} 个 field-only stub）")
-    return list(jdk_infos.values()), visited_methods
+    return list(jdk_infos.values()), visited_methods, field_discover_classes
