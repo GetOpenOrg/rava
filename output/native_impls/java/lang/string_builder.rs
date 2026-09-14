@@ -1,69 +1,63 @@
+use java_runtime::prelude::*;
+use super::*;
+
 // StringBuilder 内部字符串内容通过注入字段 _sb 存储（Rc<RefCell<String>> 支持共享可变）。
 /// @field _sb: JField<Rc<RefCell<std::string::String>>>
 
-/// @synthetic
-pub fn new() -> Result<StringBuilder> {
-    Ok(StringBuilder::default())
-}
-
-/// java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
-pub fn append__str(_this: &StringBuilder, s: String) -> Result<StringBuilder> {
-    let content = format!("{}", s);
-    _this._sb.get().borrow_mut().push_str(&content);
-    Ok(_this.clone())
-}
-
-/// java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;
-pub fn append__i(_this: &StringBuilder, v: i32) -> Result<StringBuilder> {
-    _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(_this.clone())
-}
-
-/// java/lang/StringBuilder.append:(J)Ljava/lang/StringBuilder;
-pub fn append__l(_this: &StringBuilder, v: i64) -> Result<StringBuilder> {
-    _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(_this.clone())
-}
-
-/// java/lang/StringBuilder.append:(D)Ljava/lang/StringBuilder;
-pub fn append__d(_this: &StringBuilder, v: f64) -> Result<StringBuilder> {
-    _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(_this.clone())
-}
-
-/// java/lang/StringBuilder.append:(F)Ljava/lang/StringBuilder;
-pub fn append__f(_this: &StringBuilder, v: f32) -> Result<StringBuilder> {
-    _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(_this.clone())
-}
-
-/// java/lang/StringBuilder.append:(Z)Ljava/lang/StringBuilder;
-pub fn append__z(_this: &StringBuilder, v: bool) -> Result<StringBuilder> {
-    _this._sb.get().borrow_mut().push_str(&v.to_string());
-    Ok(_this.clone())
-}
-
-/// java/lang/StringBuilder.append:(C)Ljava/lang/StringBuilder;
-pub fn append__c(_this: &StringBuilder, v: u16) -> Result<StringBuilder> {
-    if let Some(c) = char::from_u32(v as u32) {
-        _this._sb.get().borrow_mut().push(c);
+impl super::StringBuilder {
+    pub fn new() -> Result<StringBuilder> {
+        Ok(StringBuilder::default())
     }
-    Ok(_this.clone())
-}
 
-/// java/lang/StringBuilder.append:(Ljava/lang/Object;)Ljava/lang/StringBuilder;
-pub fn append__obj(_this: &StringBuilder, obj: Object) -> Result<StringBuilder> {
-    _this._sb.get().borrow_mut().push_str("Object");
-    Ok(_this.clone())
-}
+    pub fn append__str(&self, s: String) -> Result<StringBuilder> {
+        let content = format!("{}", s);
+        self._sb.get().borrow_mut().push_str(&content);
+        Ok(self.clone())
+    }
 
-/// java/lang/StringBuilder.toString:()Ljava/lang/String;
-pub fn toString(_this: &StringBuilder) -> Result<String> {
-    let s = _this._sb.get().borrow().clone();
-    Ok(String::from(s.as_str()))
-}
+    pub fn append__i(&self, v: i32) -> Result<StringBuilder> {
+        self._sb.get().borrow_mut().push_str(&v.to_string());
+        Ok(self.clone())
+    }
 
-/// java/lang/StringBuilder.length:()I
-pub fn length(_this: &StringBuilder) -> Result<i32> {
-    Ok(_this._sb.get().borrow().len() as i32)
+    pub fn append__l(&self, v: i64) -> Result<StringBuilder> {
+        self._sb.get().borrow_mut().push_str(&v.to_string());
+        Ok(self.clone())
+    }
+
+    pub fn append__d(&self, v: f64) -> Result<StringBuilder> {
+        self._sb.get().borrow_mut().push_str(&v.to_string());
+        Ok(self.clone())
+    }
+
+    pub fn append__f(&self, v: f32) -> Result<StringBuilder> {
+        self._sb.get().borrow_mut().push_str(&v.to_string());
+        Ok(self.clone())
+    }
+
+    pub fn append__z(&self, v: bool) -> Result<StringBuilder> {
+        self._sb.get().borrow_mut().push_str(&v.to_string());
+        Ok(self.clone())
+    }
+
+    pub fn append__c(&self, v: u16) -> Result<StringBuilder> {
+        if let Some(c) = char::from_u32(v as u32) {
+            self._sb.get().borrow_mut().push(c);
+        }
+        Ok(self.clone())
+    }
+
+    pub fn append__obj(&self, obj: Object) -> Result<StringBuilder> {
+        self._sb.get().borrow_mut().push_str("Object");
+        Ok(self.clone())
+    }
+
+    pub fn toString(&self) -> Result<String> {
+        let s = self._sb.get().borrow().clone();
+        Ok(String::from(s.as_str()))
+    }
+
+    pub fn length(&self) -> Result<i32> {
+        Ok(self._sb.get().borrow().len() as i32)
+    }
 }

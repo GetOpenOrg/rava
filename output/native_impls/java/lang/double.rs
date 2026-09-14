@@ -1,9 +1,12 @@
-/// java/lang/Double.doubleToRawLongBits:(D)J
-pub fn doubleToRawLongBits(value: f64) -> Result<i64> {
-    Ok(value.to_bits() as i64)
-}
+use java_runtime::prelude::*;
+use super::*;
 
-/// java/lang/Double.longBitsToDouble:(J)D
-pub fn longBitsToDouble(bits: i64) -> Result<f64> {
-    Ok(f64::from_bits(bits as u64))
+impl super::Double {
+    pub fn doubleToRawLongBits(value: f64) -> Result<i64> {
+        Ok(value.to_bits() as i64)
+    }
+
+    pub fn longBitsToDouble(bits: i64) -> Result<f64> {
+        Ok(f64::from_bits(bits as u64))
+    }
 }

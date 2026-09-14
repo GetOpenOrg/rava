@@ -13,7 +13,7 @@ _ERGONOMIC_JVM_RENAMES: dict[str, dict[str, str]] = {}
 
 
 def load_ergonomic_renames(workspace_root: str) -> None:
-    """扫描 native_impls 中所有 *_ergonomic.rs，提取 @jvm_class 和 @jvm_rename 指令。"""
+    """扫描 native_impls 中所有 *.rs，提取 @jvm_class 和 @jvm_rename 指令。"""
     native_dir = os.path.join(workspace_root, 'native_impls')
     if not os.path.isdir(native_dir):
         return
@@ -21,7 +21,7 @@ def load_ergonomic_renames(workspace_root: str) -> None:
     _pat_rename = re.compile(r'//\s*@jvm_rename:\s*(.+)')
     for dirpath, _, filenames in os.walk(native_dir):
         for fname in filenames:
-            if not fname.endswith('_ergonomic.rs'):
+            if not fname.endswith('.rs'):
                 continue
             with open(os.path.join(dirpath, fname)) as f:
                 content = f.read()

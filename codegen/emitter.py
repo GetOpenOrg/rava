@@ -270,116 +270,65 @@ def _parse_synthetic_fn(line: str) -> dict | None:
     }
 
 
-def _scan_native_impls(workspace_root: str) -> tuple[dict, dict, dict]:
-    """扫描 native_impls/ 目录，解析 /// java/Class.method:descriptor 注释。
+def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
+    """扫描 native_impls/ 目录，识别新格式文件（impl super::TypeName { pub fn ... }）。
     返回:
-      native_map:   {(class_binary_name, member_name, descriptor): (rust_fn_name, rel_file)}
-      synthetics:   {class_binary_name: [synthetic_info_dict, ...]}
-      extra_fields: {class_binary_name: [(field_name, rust_type), ...]}
-    rel_file 相对于 workspace_root。
-    synthetic 函数用 /// @synthetic 标注（不对应任何 Java 方法）。
+      new_format_map: {class_binary -> {'methods': set[str], 'main': rel_path, 'ergonomic': rel_path|None}}
+      extra_fields:   {class_binary -> [(field_name, rust_type), ...]}
+    rel_path 相对于 workspace_root。
     extra_fields 通过 /// @field name: RustType 注释声明，注入到生成的 struct 中。
     """
+    import re as _re
     impls_dir = os.path.join(workspace_root, 'native_impls')
-    result: dict = {}
-    synthetics: dict = {}
-    extra_fields: dict = {}
     if not os.path.isdir(impls_dir):
-        return result, synthetics
-    for dirpath, _, files in os.walk(impls_dir):
+        return {}, {}
+
+    new_format_map: dict = {}
+    extra_fields: dict = {}
+
+    def _snake_to_class(s: str) -> str:
+        return ''.join(w.capitalize() for w in s.split('_'))
+
+    for root_dir, dirs, files in os.walk(impls_dir):
+        dirs.sort()
         for fname in sorted(files):
             if not fname.endswith('.rs'):
                 continue
-            fpath = os.path.join(dirpath, fname)
+            fpath = os.path.join(root_dir, fname)
             rel = os.path.relpath(fpath, workspace_root).replace('\\', '/')
-            # 从文件路径推断 class binary name（去掉 native_impls/ 前缀和 .rs 后缀）
-            rel_no_ext = rel[:-3] if rel.endswith('.rs') else rel
-            # native_impls/java/lang/string.rs → java/lang/String
-            parts_from_rel = rel_no_ext.replace('\\', '/').split('/')
-            if parts_from_rel and parts_from_rel[0] == 'native_impls':
-                parts_from_rel = parts_from_rel[1:]
-            # snake_to_class: string → String, print_stream → PrintStream
-            def _snake_to_class(s: str) -> str:
-                return ''.join(w.capitalize() for w in s.split('_'))
-            if parts_from_rel:
-                *pkg, cls_snake = parts_from_rel
-                class_binary = '/'.join(pkg + [_snake_to_class(cls_snake)])
-            else:
-                class_binary = ''
+            rel_from_impls = os.path.relpath(fpath, impls_dir).replace('\\', '/')
+            parts = rel_from_impls.replace('.rs', '').split('/')
+            *pkg, cls_snake = parts
+            class_binary = '/'.join(pkg + [_snake_to_class(cls_snake)])
+
             try:
                 content = open(fpath, encoding='utf-8').read()
             except Exception:
                 continue
-            lines = content.splitlines()
-            i = 0
-            while i < len(lines):
-                stripped = lines[i].strip()
-                if stripped.startswith('/// @field ') and ':' in stripped and class_binary:
-                    # /// @field field_name: RustType → 注入额外的 struct 字段
+
+            # 扫描 @field 注解
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith('/// @field ') and ':' in stripped:
                     field_decl = stripped[len('/// @field '):].strip()
                     colon = field_decl.index(':')
-                    fname = field_decl[:colon].strip()
-                    ftype = field_decl[colon + 1:].strip()
-                    extra_fields.setdefault(class_binary, []).append((fname, ftype))
-                    i += 1
-                elif stripped == '/// @synthetic':
-                    # 找下一个 pub fn
-                    j = i + 1
-                    while j < len(lines) and not lines[j].strip().startswith('pub fn'):
-                        j += 1
-                    if j < len(lines) and class_binary:
-                        info = _parse_synthetic_fn(lines[j])
-                        if info:
-                            synthetics.setdefault(class_binary, []).append(info)
-                    i = j + 1
-                elif (stripped.startswith('/// java/')
-                      or stripped.startswith('/// javax/')
-                      or stripped.startswith('/// jdk/')
-                      or stripped.startswith('/// sun/')
-                      or stripped.startswith('/// com/')) and '.' in stripped:
-                    java_ref = stripped[4:].strip()
-                    dot_idx = java_ref.rfind('.')
-                    if dot_idx < 0:
-                        i += 1
-                        continue
-                    class_part = java_ref[:dot_idx]
-                    rest = java_ref[dot_idx + 1:]
-                    colon_idx = rest.find(':')
-                    if colon_idx >= 0:
-                        member_name = rest[:colon_idx]
-                        descriptor = rest[colon_idx + 1:]
-                    else:
-                        member_name = rest
-                        descriptor = ''
-                    # 收集后续 /// 注释行，检查 not-needed 标记
-                    j = i + 1
-                    not_needed = False
-                    while j < len(lines) and lines[j].strip().startswith('///'):
-                        if 'not-needed' in lines[j]:
-                            not_needed = True
-                        j += 1
-                    if not_needed:
-                        i = j
-                        continue
-                    # 找下一个 pub fn
-                    while j < len(lines) and not lines[j].strip().startswith('pub fn'):
-                        j += 1
-                    if j < len(lines):
-                        m2 = re.match(r'\s*pub fn\s+(\w+)', lines[j])
-                        if m2:
-                            rust_fn = m2.group(1)
-                            key = (class_part, member_name, descriptor)
-                            result[key] = (rust_fn, rel)
-                    i = j + 1
-                else:
-                    i += 1
-    return result, synthetics, extra_fields
+                    fn_name = field_decl[:colon].strip()
+                    ft = field_decl[colon + 1:].strip()
+                    extra_fields.setdefault(class_binary, []).append((fn_name, ft))
+
+            # 扫描 pub fn 名字（确定覆盖了哪些方法）
+            method_names = {m.group(1) for m in _re.finditer(r'^\s*pub fn\s+(\w+)', content, _re.MULTILINE)}
+
+            entry = new_format_map.setdefault(class_binary, {'methods': set(), 'main': None})
+            entry['methods'].update(method_names)
+            entry['main'] = rel
+
+    return new_format_map, extra_fields
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None,
-                     native_fn: str | None = None,
                      registry: dict | None = None) -> str:
-    """为 native / abstract / stub 方法生成存根，若有 native_fn 则调用 _native 模块。"""
+    """为 native / abstract / stub 方法生成 panic! 存根。"""
     from .type_map import jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return
     params = parse_descriptor_params(m.descriptor)
     ret    = parse_descriptor_return(m.descriptor)
@@ -422,17 +371,8 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     # Java clone() 与 Rust Clone trait 同名冲突：重命名为 jvm_clone
     if fn_name == 'clone':
         fn_name = 'jvm_clone'
-    if native_fn:
-        # 调用 _native 模块中的手写实现
-        if m.is_static:
-            call_args = ', '.join(arg_names)
-            body = f'_native::{native_fn}({call_args})'
-        else:
-            call_args = ', '.join(['self'] + arg_names)
-            body = f'_native::{native_fn}({call_args})'
-    else:
-        label = 'native' if m.is_native else 'stub'
-        body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
+    label = 'native' if m.is_native else 'stub'
+    body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
 
     return (
         f'pub fn {fn_name}({sig_self}{args_str}) -> {ret_type} {{\n'
@@ -445,10 +385,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   jdk_crate_pkg_paths: list[str] | None = None,
                   stub_bodies: bool = False,
                   call_chain: set | None = None,
-                  native_impls_map: dict | None = None,
+                  new_format_map: dict | None = None,
                   workspace_root: str | None = None,
                   user_crate_prefix: str | None = None,
-                  synthetics: dict | None = None,
                   extra_fields: dict | None = None,
                   conflict_map: dict | None = None,
                   skipped_classes: set | None = None,
@@ -460,7 +399,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     - 方法直接在 impl 块中，无 raw:: 子模块
     - 所有方法返回 Result<T>
     - 每个 struct / field / method 前加 // @java_* 注释供 build.rs 扫描
-    - native_impls_map: 若提供，则为有实现的方法调用 _native::fn()，并插入 mod _native
+    - new_format_map: 若提供，为覆盖的类插入 #[path] mod _impl; 并跳过被覆盖方法
     - user_crate_prefix: 若提供（如 'jdk_classes'），cross_imports 用该 crate 前缀
     """
     from collections import Counter
@@ -739,36 +678,14 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             cur_super = ancestor_ci.super_class if ancestor_ci else None
             access_path += '._super'
 
-    # 若有 native_impls 或 synthetics，插入 mod _native { include!("..."); } 块
-    has_synthetics_here = synthetics and ci.name in synthetics
-    _native_rel_file: str | None = None
-    if native_impls_map:
-        class_native_impls = {k: v for k, v in native_impls_map.items() if k[0] == ci.name}
-        if class_native_impls:
-            _native_rel_file = next(iter(class_native_impls.values()))[1]
-    # 若没有 /// java/ 条目但有 synthetics，也需要找 native_impls 文件路径
-    if _native_rel_file is None and has_synthetics_here and workspace_root:
-        # 推断路径：native_impls/java/pkg/class_snake.rs
-        *pkg_parts_ci, cls_ci = ci.name.split('/')
-        cls_snake = to_snake(cls_ci)
-        candidate = os.path.join('native_impls', *pkg_parts_ci, cls_snake + '.rs')
-        if os.path.isfile(os.path.join(workspace_root, candidate)):
-            _native_rel_file = candidate.replace('\\', '/')
-    if _native_rel_file and workspace_root:
+    # 若有 new_format_map 覆盖，插入 #[path = "..."] mod _impl; 块
+    _nf_entry = (new_format_map or {}).get(ci.name)
+    if _nf_entry and workspace_root:
         pkg_depth = len(ci.name.split('/')) - 1
         ups = '../' * (pkg_depth + 2)
-        include_path = ups + _native_rel_file
-        native_mod_lines = [
-            'mod _native {',
-            '    #![allow(unused_imports, dead_code, unused_variables, non_snake_case, non_camel_case_types)]',
-            '    use java_runtime::prelude::*;',
-            '    use super::*;',
-        ]
-        for imp in cross_imports:
-            native_mod_lines.append(f'    {imp}')
-        native_mod_lines.append(f'    include!("{include_path}");')
-        native_mod_lines.append('}')
-        parts.append('\n'.join(native_mod_lines) + '\n')
+        if _nf_entry.get('main'):
+            main_rel = _nf_entry['main']
+            parts.append(f'#[allow(unused_imports, dead_code, unused_variables, non_snake_case, non_camel_case_types)]\n#[path = "{ups}{main_rel}"]\nmod _impl;\n')
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
@@ -778,20 +695,20 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     method_blocks: list[str] = []
 
     # public static 字段的 getter 方法（用于 getstatic 访问，如 System::out()）
-    # 生成静态字段 getter：有 native_impls 的用真实实现，其余生成 panic stub
+    # 生成静态字段 getter：有 _impl 覆盖的跳过，其余生成 panic stub 或 constant_value
     static_fields = [f for f in ci.fields if f.is_static]
     existing_method_names: set[str] = {m.name for m in visible_methods}
+    _nf_covered_sf = (_nf_entry or {}).get('methods', set())
     for sf in static_fields:
         safe_fname = _safe_field_name(sf.name)
         if safe_fname in existing_method_names:
             # 字段名与方法名冲突：改用 _field 后缀，让 getstatic 仍能访问该字段
             safe_fname = safe_fname + '_field'
+        # 若 _impl 已覆盖此静态字段访问器，跳过
+        if safe_fname in _nf_covered_sf:
+            continue
         rust_ret = jvm_to_rust(sf.descriptor, registry=registry)
-        native_fn_key = (ci.name, sf.name, sf.descriptor)
-        if native_impls_map and native_fn_key in native_impls_map:
-            native_fn = native_impls_map[native_fn_key][0]
-            body = f'_native::{native_fn}()'
-        elif sf.constant_value:
+        if sf.constant_value:
             # ConstantValue attribute：static final 字段有确定字面量，直接返回
             cv = sf.constant_value
             if rust_ret == 'String':
@@ -829,12 +746,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 rust_name = mangle_name('new', m.descriptor)
             else:
                 rust_name = 'new'
-            # 若 @synthetic 已占用 'new'（工厂函数），将 JDK <init> 存根改名为 new_init*
-            # 避免：pub fn new(&self) 与 pub fn new() 同名冲突
-            if rust_name == 'new' and synthetics and ci.name in synthetics:
-                syn_names = {s['fn_name'] for s in synthetics[ci.name]}
-                if 'new' in syn_names:
-                    rust_name = 'new_init'
         # 碰撞去重：若 mangle 后仍重名，追加数字后缀
         if rust_name in used_rust_names:
             used_rust_names[rust_name] += 1
@@ -842,9 +753,17 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         else:
             used_rust_names[rust_name] = 0
 
+        # 若 new_format_map 覆盖了此方法，跳过（_impl 模块已提供实现）
+        _nf_covered = (_nf_entry or {}).get('methods', set())
+        fn_name_check = safe_ident(rust_name or m.name)
+        if fn_name_check == 'clone':
+            fn_name_check = 'jvm_clone'
+        if fn_name_check in _nf_covered:
+            continue
+
         attr_line = _java_method_attr(m, compiled=True)
         # 判断该方法是否需要翻译字节码：
-        #   1. native / abstract → 永远生成 stub（调用 _native 或 panic!）
+        #   1. native / abstract → 永远生成 stub（panic!）
         #   2. call_chain 不为空 且 此方法不在调用链上 → panic!("stub: ...")
         #   3. stub_bodies=True（兜底/fallback）→ stub
         #   4. 其他 → 翻译字节码
@@ -853,22 +772,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             (ci.name, m.name, m.descriptor) in call_chain
         )
         if m.is_native or m.is_abstract:
-            native_fn = None
-            if native_impls_map:
-                nkey = (ci.name, m.name, m.descriptor)
-                if nkey in native_impls_map:
-                    native_fn = native_impls_map[nkey][0]
-            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=native_fn, registry=registry)
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry)
             method_blocks.append(attr_line + '\n' + stub)
         elif not in_call_chain or stub_bodies:
-            # 不在调用链上，或兜底 stub 模式：生成存根
-            # 若 native_impls 有覆盖（即使方法不是 ACC_NATIVE），优先使用手写实现
-            native_fn = None
-            if native_impls_map:
-                nkey = (ci.name, m.name, m.descriptor)
-                if nkey in native_impls_map:
-                    native_fn = native_impls_map[nkey][0]
-            stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=native_fn, registry=registry)
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry)
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
@@ -881,52 +788,14 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:
                 # 翻译失败：退化为 stub，避免生成无效 Rust
-                stub = _gen_native_stub(m, ci, rust_name=rust_name, native_fn=None, registry=registry)
+                stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry)
                 method_blocks.append(attr_line + '\n' + stub)
-
-    # 合成方法 wrapper（来自 native_impls 中 /// @synthetic 标注的函数）
-    if synthetics and ci.name in synthetics:
-        for syn in synthetics[ci.name]:
-            if syn['is_static']:
-                wrapper = (
-                    f"pub fn {syn['fn_name']}({syn['params_decl']}) -> {syn['ret_type']} {{\n"
-                    f"    _native::{syn['fn_name']}({syn['call_args']})\n"
-                    f"}}"
-                )
-            elif syn['is_mut_self']:
-                sep = ', ' if syn['params_decl'] else ''
-                wrapper = (
-                    f"pub fn {syn['fn_name']}(&mut self{sep}{syn['params_decl']}) -> {syn['ret_type']} {{\n"
-                    f"    _native::{syn['fn_name']}(self{', ' if syn['call_args'] else ''}{syn['call_args']})\n"
-                    f"}}"
-                )
-            else:
-                sep = ', ' if syn['params_decl'] else ''
-                wrapper = (
-                    f"pub fn {syn['fn_name']}(&self{sep}{syn['params_decl']}) -> {syn['ret_type']} {{\n"
-                    f"    _native::{syn['fn_name']}(self{', ' if syn['call_args'] else ''}{syn['call_args']})\n"
-                    f"}}"
-                )
-            method_blocks.append(wrapper)
 
     impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
     parts.append(f"{impl_header} {{\n{impl_body}\n}}\n")
 
     # Into<Object> / From<Object> / Debug 由 #[java_rta_macros::java_class] proc-macro 自动生成
     # （Object 类走手写路径 java_runtime/，不经过此函数）
-
-    # 若存在同名 _ergonomic.rs，则直接 include! 到生成文件顶层（不在 mod _native 内）
-    # 用于 ergonomic 泛型方法：impl<E: Into<Object> + From<Object>> Collection<E> { add/get_item/... }
-    if _native_rel_file and workspace_root:
-        ergonomic_rel = _native_rel_file.replace('.rs', '_ergonomic.rs')
-        if os.path.isfile(os.path.join(workspace_root, ergonomic_rel)):
-            pkg_depth = len(ci.name.split('/')) - 1
-            ups = '../' * (pkg_depth + 2)
-            erg_path = ups + ergonomic_rel
-            parts.append(
-                f"// ergonomic API: typed add/get using E directly (T39)\n"
-                f"include!(\"{erg_path}\");\n"
-            )
 
     return '\n'.join(parts)
 
@@ -1020,8 +889,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
 
-    # 扫描 native_impls/ 目录，构建 native 映射和 synthetic 方法映射
-    native_impls_map, synthetics_map, extra_fields_map = _scan_native_impls(out_dir)
+    # 扫描 native_impls/ 目录，构建 new_format_map（#[path] mod 方式）和 extra_fields
+    new_format_map, extra_fields_map = _scan_native_impls(out_dir)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
@@ -1089,9 +958,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
                                             jdk_crate_pkg_paths=jdk_crate_pkg_paths,
                                             call_chain=visited_methods,
-                                            native_impls_map=native_impls_map,
+                                            new_format_map=new_format_map,
                                             workspace_root=out_dir,
-                                            synthetics=synthetics_map,
                                             extra_fields=extra_fields_map,
                                             conflict_map=conflict_map,
                                             skipped_classes=skipped_classes))
@@ -1212,9 +1080,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         _write(file_path, _gen_class_rs(ci, registry=registry,
                                         jdk_crate_pkg_paths=user_pkg_paths,
                                         user_crate_prefix='jdk_classes',
-                                        native_impls_map=native_impls_map,
+                                        new_format_map=new_format_map,
                                         workspace_root=out_dir,
-                                        synthetics=synthetics_map,
                                         extra_fields=extra_fields_map,
                                         conflict_map=conflict_map if jdk_class_infos else None,
                                         skipped_classes=skipped_classes if jdk_class_infos else None,

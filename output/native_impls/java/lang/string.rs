@@ -1,3 +1,6 @@
+use java_runtime::prelude::*;
+use super::*;
+
 fn _to_bytes(s: &std::string::String) -> Vec<i8> {
     s.as_bytes().iter().map(|&b| b as i8).collect()
 }
@@ -7,25 +10,25 @@ fn _from_bytes(bytes: &[i8]) -> std::string::String {
     std::string::String::from_utf8_lossy(&ubytes).into_owned()
 }
 
-/// @synthetic
-pub fn from_owned(s: std::string::String) -> String {
-    let result = String::default();
-    result.value.set(Rc::new(RefCell::new(_to_bytes(&s))));
-    result
+impl super::String {
+    pub fn from_owned(s: std::string::String) -> super::String {
+        let result = super::String::default();
+        result.value.set(Rc::new(RefCell::new(_to_bytes(&s))));
+        result
+    }
+
+    pub fn append(&mut self, s: &super::String) -> Result<()> {
+        let self_rc = self.value.get();
+        let s_rc = s.value.get();
+        let mut self_str = _from_bytes(&self_rc.borrow());
+        let s_str = _from_bytes(&s_rc.borrow());
+        self_str.push_str(&s_str);
+        self.value.set(Rc::new(RefCell::new(_to_bytes(&self_str))));
+        Ok(())
+    }
 }
 
-/// @synthetic
-pub fn append(_this: &mut String, s: &String) -> Result<()> {
-    let self_rc = _this.value.get();
-    let s_rc = s.value.get();
-    let mut self_str = _from_bytes(&self_rc.borrow());
-    let s_str = _from_bytes(&s_rc.borrow());
-    self_str.push_str(&s_str);
-    _this.value.set(Rc::new(RefCell::new(_to_bytes(&self_str))));
-    Ok(())
-}
-
-impl std::fmt::Display for String {
+impl std::fmt::Display for super::String {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let rc = self.value.get();
         let s = _from_bytes(&rc.borrow());
@@ -33,9 +36,8 @@ impl std::fmt::Display for String {
     }
 }
 
-impl From<&str> for String {
+impl From<&str> for super::String {
     fn from(s: &str) -> Self {
-        from_owned(s.to_owned())
+        super::String::from_owned(s.to_owned())
     }
 }
-
