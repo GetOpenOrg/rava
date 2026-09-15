@@ -193,6 +193,29 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         safe = f'r#{name}' if name in _RUST_KEYWORDS else name
         return f'pub use {safe}::*;'
 
+    # batch 模式：从磁盘全量重建 jdk_mod_tree，合并所有历次批量转译积累的 stub 文件。
+    # 原因：每次 write_cargo_project(batch_bin=True) 的 jdk_mod_tree 只包含当前测试
+    # 的 JDK 类；若直接用它写 lib.rs/mod.rs，会抹掉之前测试的 stub 声明（E0432）。
+    # 解决：写完当前测试的 .rs 文件后，扫描磁盘收集全部 .rs，自底向上传播目录，
+    # 只声明有文件的目录（避免 E0583），再写 lib.rs/mod.rs。
+    if batch_bin and os.path.isdir(jdk_src):
+        jdk_mod_tree = {}
+        for root, _dirs, files in os.walk(jdk_src):
+            for fname in files:
+                if fname.endswith('.rs') and fname not in ('lib.rs', 'mod.rs'):
+                    jdk_mod_tree.setdefault(root, set()).add(fname[:-3])
+        _changed = True
+        while _changed:
+            _changed = False
+            for _dp in list(jdk_mod_tree.keys()):
+                if _dp == jdk_src:
+                    continue
+                _par = os.path.dirname(_dp)
+                _dn  = os.path.basename(_dp)
+                if _dn not in jdk_mod_tree.get(_par, set()):
+                    jdk_mod_tree.setdefault(_par, set()).add(_dn)
+                    _changed = True
+
     # jdk_classes/src/lib.rs
     top_jdk = sorted(jdk_mod_tree.get(jdk_src, set()))
     jdk_lib_lines = [

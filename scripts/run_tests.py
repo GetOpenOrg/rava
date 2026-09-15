@@ -148,14 +148,11 @@ def _use_decl(name: str) -> str:
 
 
 def _rebuild_jdk_mod_index() -> None:
-    """批量转译完成后，从磁盘实际文件重建 jdk_classes/src/ 的 lib.rs 和所有 mod.rs。
+    """手动恢复工具：从磁盘全量重建 jdk_classes/src/ 的 lib.rs 和所有 mod.rs。
 
-    原因：每次 write_cargo_project(batch_bin=True) 只用当前测试的 jdk_class_infos
-    重写 lib.rs/mod.rs，会抹掉之前测试积累的 JDK stub 声明，导致早期测试的
-    binary 在 cargo build 时找不到引用的 JDK 类型（E0432）。
-
-    解决方案：所有转译完成后自底向上扫描，只把有实际 .rs 文件的目录加入 mod 树，
-    避免声明空目录（E0583）。
+    正常情况下不需要调用此函数——write_cargo_project(batch_bin=True) 在写完每次
+    测试的 stub 文件后已内置磁盘全量扫描重建逻辑（project_writer.py）。
+    此函数保留用于工作区损坏时的手动修复。
     """
     jdk_src = OUT / "jdk_classes" / "src"
     if not jdk_src.exists():
@@ -340,9 +337,6 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
     if not transpile_ok:
         print("所有转译均失败，退出。")
         return 1
-
-    # 2.5 重建 jdk_classes/src/ mod 索引（合并所有测试积累的 JDK stub 声明）
-    _rebuild_jdk_mod_index()
 
     # 3. 预清理目标 binary（确保构建后只有新编译成功的才存在）
     for java_file in transpile_ok:
