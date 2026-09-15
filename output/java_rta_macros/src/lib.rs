@@ -55,7 +55,10 @@ pub fn java_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let (impl_generics, ty_generics, where_clause) = gen.split_for_impl();
-    let obj = quote! { ::java_runtime::java::lang::Object };
+    // 每个生成文件都已通过 `use crate::java::lang::*` 或
+    // `use java_runtime::java::lang::*` 将 Object 引入作用域，
+    // 无需绝对路径（在 java_runtime 内部绝对路径无法解析）。
+    let obj = quote! { Object };
 
     let into_impl: TokenStream2 = quote! {
         impl #impl_generics Into<#obj> for #name #ty_generics #where_clause {

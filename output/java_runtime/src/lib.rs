@@ -3,6 +3,7 @@ pub mod error;
 pub mod types;
 pub mod java;
 pub mod jdk;
+pub mod sun;
 
 pub use error::{JvmError, Result};
 pub use types::JField;

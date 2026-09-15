@@ -11,11 +11,7 @@ wheels/
 *.class
 
 # Rust 构建产物
-output/target/
-
-# 代码生成产物（由 codegen 脚本生成，不提交）
-output/user/src/
-output/user/Cargo.toml
+target
 
 # macOS
 .DS_Store
