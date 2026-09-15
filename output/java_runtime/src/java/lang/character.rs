@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -57,7 +57,7 @@ impl Character {
 
     #[cfg_attr(any(), java_field(name = "TYPE", descriptor = "Ljava/lang/Class;", access = "public", modifiers = "static final", is_static = true, generic_signature = "Ljava/lang/Class<Ljava/lang/Character;>;"))]
     // static field: TYPE:Ljava/lang/Class;
-    pub fn TYPE() -> Object {
+    pub fn TYPE() -> Class<Character> {
         panic!("stub: java/lang/Character.TYPE:Ljava/lang/Class;")
     }
 

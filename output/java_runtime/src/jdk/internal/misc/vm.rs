@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -109,7 +109,7 @@ impl VM {
 
     #[cfg_attr(any(), java_field(name = "savedProps", descriptor = "Ljava/util/Map;", access = "private", modifiers = "static", is_static = true, generic_signature = "Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;"))]
     // static field: savedProps:Ljava/util/Map;
-    pub fn savedProps() -> Map<Object, Object> {
+    pub fn savedProps() -> Object {
         panic!("stub: jdk/internal/misc/VM.savedProps:Ljava/util/Map;")
     }
 
@@ -242,12 +242,12 @@ impl VM {
     }
 
     #[cfg_attr(any(), java_method(name = "getSavedProperties", descriptor = "()Ljava/util/Map;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;"))]
-    pub fn getSavedProperties() -> Result<Map<Object, Object>> {
+    pub fn getSavedProperties() -> Result<Object> {
         panic!("stub: jdk/internal/misc/VM.getSavedProperties:()Ljava/util/Map;")
     }
 
     #[cfg_attr(any(), java_method(name = "saveProperties", descriptor = "(Ljava/util/Map;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;)V"))]
-    pub fn saveProperties(props: Map<Object, Object>) -> Result<()> {
+    pub fn saveProperties(props: Object) -> Result<()> {
         panic!("stub: jdk/internal/misc/VM.saveProperties:(Ljava/util/Map;)V")
     }
 
