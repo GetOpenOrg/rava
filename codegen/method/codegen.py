@@ -11,7 +11,7 @@
 """
 
 from ..types import ParsedMethod, ClassInfo
-from ..type_map import jvm_to_rust, sig_type, rust_default, mangle_name, short_cls, get_ergonomic_jvm_rename
+from ..type_map import jvm_to_rust, sig_type, rust_default, mangle_name, short_cls
 from ..constants import safe_ident
 from ..stack import StackSim
 from ..cfg import (
@@ -100,10 +100,6 @@ def gen_method_body(
         rust_fn_name = mangle_name(method.name, method.descriptor)
     else:
         rust_fn_name = safe_ident(method.name)
-        # ergonomic @jvm_rename 指令：定义侧同步重命名（与调用侧的 _mangle_if_overloaded 保持一致）
-        erg = get_ergonomic_jvm_rename(method.class_name, method.name)
-        if erg is not None:
-            rust_fn_name = erg
 
     def _param_name(slot: int, fallback: str) -> str:
         return safe_ident(local_names.get(slot, fallback))

@@ -102,7 +102,15 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 if not fname.endswith('.rs'):
                     continue
                 if fname.endswith('_impl.rs') or fname.endswith('_ext.rs'):
-                    continue  # 手写共置文件，保留
+                    # 检测是否为自动生成文件（如 Collectors$CollectorImpl 碰巧生成 *_impl.rs）。
+                    # 自动生成的类文件含有 java_rta_macros::java_class 标注；手写文件则无。
+                    _fpath_check = os.path.join(root, fname)
+                    try:
+                        with open(_fpath_check, encoding='utf-8') as _fc:
+                            if '#[java_rta_macros::java_class(' not in _fc.read():
+                                continue  # 真正手写共置文件，保留
+                    except Exception:
+                        continue  # 读取失败时保守保留
                 fpath = os.path.join(root, fname)
                 if fpath in _PERMANENT:
                     continue

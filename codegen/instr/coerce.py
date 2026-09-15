@@ -7,7 +7,7 @@ import re
 from ..constants import safe_ident as _safe_field
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
-    mangle_name, get_ergonomic_jvm_rename,
+    mangle_name,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
 )
 
@@ -524,10 +524,6 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
                         same += 1
                         _seen_sigs.add((_dm.name, _dm.descriptor))
     if same <= 1:
-        # 非重载方法：检查 T39 ergonomic @jvm_rename 指令
-        erg_rename = get_ergonomic_jvm_rename(target_ci.name, mname)
-        if erg_rename is not None:
-            return erg_rename
         # Java→Rust 名字冲突重命名（如 clone→jvm_clone）
         erg_name = _JAVA_RUST_RENAME.get(mname)
         if erg_name is not None:

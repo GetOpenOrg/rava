@@ -8,7 +8,7 @@ import os
 from collections import deque
 from .classfile import parse_class
 from .emitter import write_cargo_project
-from .type_map import load_ergonomic_renames
+
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
 # 只展开公开 API（java/ javax/）；内部实现包（sun/ jdk/ com.sun/ com.oracle/）截断为 stub
@@ -87,8 +87,6 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
 
     # 4. 生成 Rust
     print(f"[4/4] 生成 Rust → {out_dir}/")
-    # 预加载 ergonomic @jvm_rename 指令（T39：为 ergonomic 层腾出干净方法名）
-    load_ergonomic_renames(os.path.abspath(out_dir))
     write_cargo_project(out_dir, class_infos, jdk_class_infos, java_files,
                         batch_bin=batch_bin, visited_methods=visited_methods)
     print(f"\n✓ 完成。运行方式：\n  cd {out_dir} && cargo run --release")

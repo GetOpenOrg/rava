@@ -6,42 +6,6 @@ import os
 import re
 from .sig_parser import parse_class_type_params
 
-# ── Ergonomic JVM 方法重命名注册表（T39）─────────────────────────────────────
-# 由 load_ergonomic_renames() 在 codegen 启动前填充。
-# 格式：class_binary_name → {java_method_name → rust_method_name}
-_ERGONOMIC_JVM_RENAMES: dict[str, dict[str, str]] = {}
-
-
-def load_ergonomic_renames(workspace_root: str) -> None:
-    """扫描 java_runtime/src/ 中所有 *_impl.rs，提取 @jvm_class 和 @jvm_rename 指令（K-4 共置结构）。"""
-    native_dir = os.path.join(workspace_root, 'java_runtime', 'src')
-    if not os.path.isdir(native_dir):
-        return
-    _pat_class  = re.compile(r'//\s*@jvm_class:\s*(\S+)')
-    _pat_rename = re.compile(r'//\s*@jvm_rename:\s*(.+)')
-    for dirpath, _, filenames in os.walk(native_dir):
-        for fname in filenames:
-            if not fname.endswith('_impl.rs'):
-                continue
-            with open(os.path.join(dirpath, fname)) as f:
-                content = f.read()
-            m_cls = _pat_class.search(content)
-            if not m_cls:
-                continue
-            class_name = m_cls.group(1).strip()
-            renames: dict[str, str] = {}
-            for m_rn in _pat_rename.finditer(content):
-                for pair in m_rn.group(1).split(','):
-                    parts = [p.strip() for p in pair.split('->')]
-                    if len(parts) == 2 and parts[0] and parts[1]:
-                        renames[parts[0]] = parts[1]
-            if renames:
-                _ERGONOMIC_JVM_RENAMES[class_name] = renames
-
-
-def get_ergonomic_jvm_rename(class_binary_name: str, java_method_name: str) -> str | None:
-    """若 @jvm_rename 指令存在，返回重命名后的 Rust 方法名；否则返回 None。"""
-    return _ERGONOMIC_JVM_RENAMES.get(class_binary_name, {}).get(java_method_name)
 
 # ── JVM descriptor → Rust 类型 ──────────────────────────────────
 # 注：String 是 java::lang::String（通过 prelude 引入），
