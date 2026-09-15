@@ -56,14 +56,12 @@ def _parse_synthetic_fn(line: str) -> dict | None:
     }
 
 
-def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
+def _scan_native_impls(workspace_root: str) -> tuple[dict, set]:
     """扫描 jdk_classes/src/ 下的共置手写文件（K-4 迁移后）。
-    识别规则：
-      - *_impl.rs 文件：公开 API 类的 native 方法扩展块（不含 pub struct）
-      - 其他 .rs 文件（若含 pub struct）：内部边界类完整实现（full_impl_classes）
+    只扫描 *_impl.rs 文件，提取已手写的方法名，告知 codegen 跳过这些方法的 stub 生成。
     返回:
       new_format_map:    {class_binary -> {'methods': set[str]}}
-      full_impl_classes: {class_binary, ...} — 含 pub struct，codegen 跳过 struct 生成
+      full_impl_classes: 恒为空集（K-4 后不再有整体替换的手写文件）
     """
     import re as _re
     jdk_src = os.path.join(workspace_root, 'jdk_classes', 'src')
@@ -71,7 +69,6 @@ def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
         return {}, set()
 
     new_format_map: dict = {}
-    full_impl_classes: set = set()
 
     def _snake_to_class(s: str) -> str:
         return ''.join(w.capitalize() for w in s.split('_'))
@@ -79,46 +76,32 @@ def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
     for root_dir, dirs, files in os.walk(jdk_src):
         dirs.sort()
         for fname in sorted(files):
-            if not fname.endswith('.rs'):
-                continue
-            # 跳过 codegen 生成的基础设施文件
-            if fname in ('lib.rs', 'mod.rs'):
+            # K-4: 只处理 *_impl.rs 手写共置文件
+            if not fname.endswith('_impl.rs'):
                 continue
 
             fpath = os.path.join(root_dir, fname)
             rel_from_src = os.path.relpath(fpath, jdk_src).replace('\\', '/')
-            stem = rel_from_src.replace('.rs', '')  # e.g. java/lang/string_impl
+            stem = rel_from_src.replace('.rs', '')  # e.g. java/lang/system_impl
 
-            if stem.endswith('_impl'):
-                # 公开 API 类的手写 native 方法扩展块
-                base_stem = stem[:-5]  # 去掉 _impl 后缀
-                parts = base_stem.split('/')
-                *pkg, cls_snake = parts
-                class_binary = '/'.join(pkg + [_snake_to_class(cls_snake)])
-            else:
-                # 可能是内部边界类完整实现（含 pub struct）
-                parts = stem.split('/')
-                *pkg, cls_snake = parts
-                class_binary = '/'.join(pkg + [_snake_to_class(cls_snake)])
+            # 去掉 _impl 后缀还原为对应类的 binary name
+            base_stem = stem[:-5]
+            parts = base_stem.split('/')
+            *pkg, cls_snake = parts
+            class_binary = '/'.join(pkg + [_snake_to_class(cls_snake)])
 
             try:
                 content = open(fpath, encoding='utf-8').read()
             except Exception:
                 continue
 
-            # 含 pub struct → 手写文件完整定义 struct，codegen 跳过 struct 生成
-            if _re.search(r'^\s*pub struct \w', content, _re.MULTILINE):
-                full_impl_classes.add(class_binary)
-                # 对完整实现文件不需要跟踪到 new_format_map（codegen 会跳过整个类的 struct 生成）
-                continue
-
-            # 扫描 pub fn 名字（确定覆盖了哪些方法）
+            # 扫描 pub fn 名字（确定已手写哪些方法，codegen 跳过对应 stub）
             method_names = {m.group(1) for m in _re.finditer(r'^\s*pub fn\s+(\w+)', content, _re.MULTILINE)}
+            if method_names:
+                entry = new_format_map.setdefault(class_binary, {'methods': set()})
+                entry['methods'].update(method_names)
 
-            entry = new_format_map.setdefault(class_binary, {'methods': set()})
-            entry['methods'].update(method_names)
-
-    return new_format_map, full_impl_classes
+    return new_format_map, set()
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None,

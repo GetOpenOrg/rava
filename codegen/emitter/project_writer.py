@@ -105,7 +105,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '',
         ]))
     # 清理旧版生成文件（batch 模式由调用方在批次开始前统一清理）
-    # K-4: 跳过手写共置文件：*_impl.rs（方法扩展块）以及含 pub struct 的完整实现文件
+    # K-4: 只跳过 *_impl.rs 手写共置文件，其余生成 stub 正常删除重建
     if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):
             for fname in files:
@@ -113,15 +113,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     continue
                 if fname.endswith('_impl.rs'):
                     continue  # 手写共置文件，保留
-                fpath = os.path.join(root, fname)
                 try:
-                    _content = open(fpath, encoding='utf-8').read()
-                    if re.search(r'^\s*pub struct \w', _content, re.MULTILINE):
-                        continue  # 内部边界类完整实现，保留
-                except Exception:
-                    pass
-                try:
-                    os.remove(fpath)
+                    os.remove(os.path.join(root, fname))
                 except FileNotFoundError:
                     pass
 
@@ -131,8 +124,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
 
-    # 扫描 native_impls/ 目录，构建 new_format_map（#[path] mod 方式）和 full_impl_classes
-    new_format_map, full_impl_classes = _scan_native_impls(out_dir)
+    # 扫描 jdk_classes/src/**/*_impl.rs，构建 new_format_map（已手写方法 → codegen 跳过 stub）
+    new_format_map, full_impl_classes = _scan_native_impls(out_dir)  # full_impl_classes 恒为空集
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
@@ -196,18 +189,16 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if mod_name in pkg_dir_names.get(parent_dir, set()):
                 mod_name = mod_name + '_t'
             file_path = os.path.join(parent_dir, mod_name + '.rs')
-            # K-4: 内部边界类（full_impl_classes）的完整手写文件已共置在 jdk_classes/src/ 中，
-            # 跳过 codegen 生成（避免 stub 覆盖手写内容）
-            if jdk_ci.name not in full_impl_classes:
-                # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
-                _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
-                                                jdk_crate_pkg_paths=jdk_crate_pkg_paths,
-                                                call_chain=visited_methods,
-                                                new_format_map=new_format_map,
-                                                workspace_root=out_dir,
-                                                full_impl_classes=full_impl_classes,
-                                                conflict_map=conflict_map,
-                                                skipped_classes=skipped_classes))
+            # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
+            # new_format_map 中已有 _impl.rs 实现的方法，codegen 跳过那些方法的 stub 生成
+            _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
+                                            jdk_crate_pkg_paths=jdk_crate_pkg_paths,
+                                            call_chain=visited_methods,
+                                            new_format_map=new_format_map,
+                                            workspace_root=out_dir,
+                                            full_impl_classes=full_impl_classes,
+                                            conflict_map=conflict_map,
+                                            skipped_classes=skipped_classes))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
