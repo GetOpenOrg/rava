@@ -87,7 +87,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
 
     # 清理旧版生成文件（batch 模式由调用方在批次开始前统一清理）
     # 只清理 java/ jdk/ 等子包目录，保留根目录的手写基础设施文件
-    # 同时保留 *_impl.rs 和 *_ext.rs 手写共置文件
+    # 保留规则：
+    #   1. *_impl.rs / *_ext.rs — 手写共置文件
+    #   2. 同目录内存在配对 *_impl.rs 的 X.rs — 手写 boundary class 定义（如 internal_lock.rs）
+    #   3. java/lang/object.rs — 手写 Object 基础设施
     _PERMANENT = {
         os.path.join(jdk_src, 'java', 'lang', 'object.rs'),
     }
@@ -95,6 +98,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for root, _dirs, files in os.walk(jdk_src):
             if root == jdk_src:
                 continue  # 跳过根目录（lib.rs, error.rs, types.rs 永久保留）
+            file_set = set(files)
             for fname in files:
                 if not fname.endswith('.rs'):
                     continue
@@ -102,6 +106,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     continue  # 手写共置文件，保留
                 fpath = os.path.join(root, fname)
                 if fpath in _PERMANENT:
+                    continue
+                # 若同目录存在配对的 X_impl.rs，则 X.rs 是 boundary class 定义，保留
+                stem = fname[:-3]  # 去掉 .rs
+                if f'{stem}_impl.rs' in file_set:
                     continue
                 try:
                     os.remove(fpath)
@@ -179,6 +187,17 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if mod_name in pkg_dir_names.get(parent_dir, set()):
                 mod_name = mod_name + '_t'
             file_path = os.path.join(parent_dir, mod_name + '.rs')
+            # boundary class 检测：若磁盘上已存在配对的 *_impl.rs，
+            # 说明该类是手写 boundary class（如 InternalLock），跳过 codegen 生成，保留手写文件。
+            _impl_path = os.path.join(parent_dir, mod_name + '_impl.rs')
+            if os.path.exists(_impl_path) and os.path.exists(file_path):
+                # 手写 boundary class，只更新 mod 树，不覆盖文件
+                parent = jdk_src
+                for part in pkg_parts:
+                    jdk_mod_tree.setdefault(parent, set()).add(part)
+                    parent = os.path.join(parent, part)
+                jdk_mod_tree.setdefault(parent, set()).add(mod_name)
+                continue
             # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
             # new_format_map 中已有 _impl.rs 实现的方法，codegen 跳过那些方法的 stub 生成
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
