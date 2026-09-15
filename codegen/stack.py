@@ -187,6 +187,11 @@ class StackSim:
                 hint_base = hint.name if isinstance(hint, RsNamed) else hint.name
                 if hint_base == ty.name or (isinstance(hint, RsGeneric) and hint.name == ty.name):
                     ty = hint
+        # null（aconst_null）赋给非 Object 提示类型时：Object::default() → Default::default()
+        # 让显式类型注解决定具体类型，避免类型不匹配
+        if src_is_object and hint is not None and isinstance(expr, Lit) and expr.value == 'Object::default()':
+            expr = RawExpr('Default::default()')
+            src_is_object = False
         # `this` 在 Rust 方法中是 &Self，赋值给类型标注变量时需 clone()
         _is_this = isinstance(expr, Var) and expr.name == 'this'
         _is_ref_ty = isinstance(ty, RsNamed) and ty.name not in (
@@ -206,7 +211,8 @@ class StackSim:
                 self.locals[slot] = (name, ty, True)
                 self._slot_decl_depth[slot] = self._current_depth
                 value = _maybe_downcast(expr, ty) if src_is_object else expr
-                let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)
+                _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
+                let_ty = ty if _is_default else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
                 self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
             else:
                 self.stmts.append(AssignStmt(Var(name), expr))
@@ -215,8 +221,9 @@ class StackSim:
             self.locals[slot] = (name, ty, True)
             self._slot_decl_depth[slot] = self._current_depth
             value = _maybe_downcast(expr, ty) if src_is_object else expr
-            # downcast 时让 Rust 推断类型；RsGeneric 也让 Rust 推断；否则写显式类型
-            let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)
+            # downcast 时让 Rust 推断类型；Default::default() 需保留类型注解；RsGeneric 也让 Rust 推断
+            _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
+            let_ty = ty if _is_default else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
             self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
 
         # dup 后 astore：同一个 Var("_tN") 可能还留在 stack 上，但 _tN 已被 move。

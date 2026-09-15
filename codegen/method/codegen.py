@@ -494,9 +494,9 @@ def gen_method_body(
                             ty = ety; ty_str = ety_str
                         elif ev in _null_exprs and ty_str not in _prim_types:
                             ev = 'Default::default()'
-                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object':
+                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object' and not _is_generic_type_param(ty_str):
                             ev = f"({ev}).downcast::<{ty_str}>()"
-                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object':
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and not _is_generic_type_param(ety_str):
                             ev = f"Object::from_any(Clone::clone(&{ev}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             ev = f"({ev} as {ty_str})"
@@ -527,9 +527,9 @@ def gen_method_body(
                             ty = ety; ty_str = ety_str
                         elif else_val in _null_exprs and ty_str not in _prim_types:
                             else_val = 'Default::default()'
-                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object':
+                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object' and not _is_generic_type_param(ty_str):
                             else_val = f"({else_val}).downcast::<{ty_str}>()"
-                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object':
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and not _is_generic_type_param(ety_str):
                             else_val = f"Object::from_any(Clone::clone(&{else_val}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             else_val = f"({else_val} as {ty_str})"

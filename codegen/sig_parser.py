@@ -70,14 +70,33 @@ def _skip_field_type_sig(sig: str, i: int) -> int:
     return i + 1  # 未知，前进一步
 
 
+def _parse_type_args(sig: str, i: int, class_type_params: list[str]) -> tuple[list[str], int]:
+    """解析 <TypeArgument*>，i 指向 '<'。返回 (类型字符串列表, '>' 之后的位置)。"""
+    i += 1  # 跳过 '<'
+    args: list[str] = []
+    while i < len(sig) and sig[i] != '>':
+        if sig[i] == '*':
+            args.append('Object')
+            i += 1
+        elif sig[i] in ('+', '-'):
+            t, i = _parse_one_type(sig, i + 1, class_type_params)
+            args.append(t)
+        else:
+            t, i = _parse_one_type(sig, i, class_type_params)
+            args.append(t)
+    if i < len(sig) and sig[i] == '>':
+        i += 1  # 跳过 '>'
+    return args, i
+
+
 def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str, int]:
     """从 sig[i] 起解析一个类型（Generic Signature 格式），返回 (rust_type, next_i)。
 
     - 基本类型 → 对应 Rust 基本类型
     - TypeVariable T<name>; 且 name 在 class_type_params → 类型变量名
     - ClassTypeSig（不带泛型参数）→ 按 _CLASSNAME_MAP 映射；未知则取短类名
-    - ClassTypeSig（带泛型参数）→ 'Object'（暂时简化）
-    - 数组 → 'Object'（暂时简化）
+    - ClassTypeSig（带泛型参数）→ 'ShortName<arg1, arg2, ...>'（正确展开）
+    - 数组 → 'Rc<RefCell<Vec<T>>>'
     - 通配符 +/- → 取内部类型；* → 'Object'
     """
     if i >= len(sig):
@@ -99,9 +118,9 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
         return rust_type, end + 1
 
     if c == '[':
-        # Array — 跳过整个 component，返回 Object
-        _, next_i = _parse_one_type(sig, i + 1, class_type_params)
-        return 'Object', next_i
+        # 数组 → Rc<RefCell<Vec<elem>>>
+        elem_type, next_i = _parse_one_type(sig, i + 1, class_type_params)
+        return f'Rc<RefCell<Vec<{elem_type}>>>', next_i
 
     if c == '+' or c == '-':
         # 上下界通配符 — 取内部类型
@@ -119,18 +138,10 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
             j += 1
         class_name = sig[i + 1:j]
 
+        type_args: list[str] = []
         has_type_args = j < len(sig) and sig[j] == '<'
-
-        # 跳过 TypeArguments（可能嵌套）
         if has_type_args:
-            depth = 1
-            j += 1
-            while j < len(sig) and depth > 0:
-                if sig[j] == '<':
-                    depth += 1
-                elif sig[j] == '>':
-                    depth -= 1
-                j += 1
+            type_args, j = _parse_type_args(sig, j, class_type_params)
 
         # 跳过 ClassTypeSigSuffix（.InnerClass…）
         while j < len(sig) and sig[j] == '.':
@@ -138,27 +149,24 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
             while j < len(sig) and sig[j] not in ('<', ';', '.'):
                 j += 1
             if j < len(sig) and sig[j] == '<':
-                depth = 1
-                j += 1
-                while j < len(sig) and depth > 0:
-                    if sig[j] == '<':
-                        depth += 1
-                    elif sig[j] == '>':
-                        depth -= 1
-                    j += 1
+                _, j = _parse_type_args(sig, j, class_type_params)
 
         # 跳过结尾 ';'
         if j < len(sig) and sig[j] == ';':
             j += 1
 
-        if has_type_args:
-            # 带泛型参数的类类型 → 暂时简化为 Object
-            rust_type = 'Object'
+        # 映射类名到 Rust 类型
+        mapped = _CLASSNAME_MAP.get(class_name)
+        if mapped is not None:
+            # 已知映射（如 java/lang/String → String, java/lang/Object → Object）
+            rust_type = mapped
         else:
-            rust_type = _CLASSNAME_MAP.get(
-                class_name,
-                class_name.rsplit('/', 1)[-1]  # 取短类名
-            )
+            short = class_name.rsplit('/', 1)[-1].replace('$', '_')
+            if has_type_args:
+                rust_type = f"{short}<{', '.join(type_args)}>"
+            else:
+                rust_type = short
+
         return rust_type, j
 
     # 未知 — 前进一步

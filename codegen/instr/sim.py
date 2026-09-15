@@ -10,7 +10,7 @@ from ..rs_ir import (
     NewPendingExpr, StaticFieldRef,
 )
 from ..render import render_expr, render_type
-from ..sig_parser import parse_class_type_params as _parse_class_type_params
+from ..sig_parser import parse_class_type_params as _parse_class_type_params, parse_field_type as _parse_field_type
 from ..type_map import (
     jvm_to_rust, short_cls,
     NEWARRAY_TYPES,
@@ -324,15 +324,19 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment:
             _, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'Object'
-            # JVM 类型擦除后 ftype 可能是 Object，但实际字段可能是泛型类型参数（JField<T>）
-            # 通过 generic_signature 恢复真实类型：TT; → T，TK; → K 等
-            if ftype == 'Object' and registry and sim.class_type_params:
+            # JVM 类型擦除后 ftype 可能是 Object，但实际字段可能含泛型信息
+            # 通过 generic_signature 恢复真实类型（与 struct 字段定义一致）
+            if ftype == 'Object' and registry:
                 _gsig = _get_field_generic_signature(class_name, fname, registry)
                 if _gsig:
-                    import re as _re
-                    _m = _re.match(r'^T([A-Z][A-Za-z0-9]*);$', _gsig)
-                    if _m and _m.group(1) in sim.class_type_params:
-                        ftype = _m.group(1)
+                    _ctparams = list(sim.class_type_params) if sim.class_type_params else []
+                    _parsed = _parse_field_type(_gsig, _ctparams)
+                    if _parsed and _parsed != 'Object':
+                        # 校验基础类名存在（避免引用未生成的类型）
+                        _base = _parsed.split('<')[0]
+                        _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
+                        if _base in _ctparams or _base in _reg_shorts:
+                            ftype = _parsed
             # T76: 基于接收者实际 Rust 类型查找字段的 _super 路径
             recv_base = render_type(obj_ty).split('<')[0].strip()
             cls_short = class_name.rsplit('/', 1)[-1] if '/' in class_name else class_name

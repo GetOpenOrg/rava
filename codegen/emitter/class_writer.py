@@ -256,6 +256,23 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         struct_generic = ''
         impl_header   = f"impl {struct_name}"
 
+    # 构建注册表短名集合，用于校验字段类型中引用的类是否存在
+    _registry_short_names: set[str] = (
+        {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
+        if registry else set()
+    )
+    # 基础内建类型，不需要注册表校验
+    _BUILTIN_TYPES = frozenset({
+        'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
+        'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell',
+    })
+
+    def _validate_field_type(rust_ty: str, type_params: list[str]) -> bool:
+        """检查 rust_ty 的根类名是否可用（内建/类型参数/注册表中存在）。"""
+        base = rust_ty.split('<')[0].strip()
+        return (base in _BUILTIN_TYPES or base in type_params
+                or base in _registry_short_names)
+
     if not _full_impl and (inst_fields or _has_super):
         field_lines = []
         # _super 字段：嵌入直接父类（T76，替代字段展平）
@@ -279,11 +296,14 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             safe_fname = _safe_field_name(f.name)
             field_lines.append("    " + _java_field_attr(f))
             # 优先用字段级 generic_signature（如 TE; → E），回退到裸描述符
-            # 若 generic_signature 解析结果是 Object（简化），用描述符推断更精确的类型
+            # 若 generic_signature 解析结果是 Object，或引用了不存在的类型，用描述符推断
             gen_rust = (parse_field_type(f.generic_signature, class_type_params)
                         if f.generic_signature else '')
             desc_rust = jvm_to_rust(f.descriptor, registry)
-            field_rust = gen_rust if (gen_rust and gen_rust != 'Object') else desc_rust
+            field_rust = (gen_rust
+                          if gen_rust and gen_rust != 'Object'
+                          and _validate_field_type(gen_rust, class_type_params)
+                          else desc_rust)
             field_lines.append(f"    pub {safe_fname}: {field_type_prefix}<{field_rust}>,")
         # 若有泛型参数但字段中未用到，加 PhantomData 防止 E0392
         if class_type_params:
@@ -474,7 +494,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         # 若 _impl 已覆盖此静态字段访问器，跳过
         if safe_fname in _nf_covered_sf:
             continue
-        rust_ret = jvm_to_rust(sf.descriptor, registry=registry)
+        # 优先用 generic_signature 确定返回类型（包含泛型参数信息）
+        if sf.generic_signature:
+            _gs_ret = parse_field_type(sf.generic_signature, class_type_params)
+            # 校验引用的类型存在，否则回退到描述符
+            if _gs_ret and _gs_ret != 'Object' and not _validate_field_type(_gs_ret, class_type_params):
+                _gs_ret = ''
+        else:
+            _gs_ret = ''
+        rust_ret = _gs_ret if _gs_ret else jvm_to_rust(sf.descriptor, registry=registry)
         # ConstantValue attribute 优先；其次尝试从 <clinit> 提取简单常量
         cv = sf.constant_value or _clinit_consts.get(sf.name, '')
         if cv:
