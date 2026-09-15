@@ -188,11 +188,6 @@ impl System {
         Ok(Default::default())
     }
 
-    #[cfg_attr(any(), java_native(name = "arraycopy", descriptor = "(Ljava/lang/Object;ILjava/lang/Object;II)V", access = "public", modifiers = "static native", is_static    = true, is_native    = true, is_abstract  = false, is_synthetic = false))]
-    pub fn arraycopy(arg0: Object, arg1: i32, arg2: Object, arg3: i32, arg4: i32) -> Result<()> {
-        panic!("native: java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V")
-    }
-
     #[cfg_attr(any(), java_native(name = "identityHashCode", descriptor = "(Ljava/lang/Object;)I", access = "public", modifiers = "static native", is_static    = true, is_native    = true, is_abstract  = false, is_synthetic = false))]
     pub fn identityHashCode(arg0: Object) -> Result<i32> {
         panic!("native: java/lang/System.identityHashCode:(Ljava/lang/Object;)I")
