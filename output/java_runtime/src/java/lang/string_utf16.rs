@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -30,13 +31,13 @@ impl StringUTF16 {
     #[cfg_attr(any(), java_field(name = "HI_BYTE_SHIFT", descriptor = "I", access = "private", modifiers = "static final", is_static = true))]
     // static field: HI_BYTE_SHIFT:I
     pub fn HI_BYTE_SHIFT() -> i32 {
-        panic!("stub: java/lang/StringUTF16.HI_BYTE_SHIFT:I")
+        0
     }
 
     #[cfg_attr(any(), java_field(name = "LO_BYTE_SHIFT", descriptor = "I", access = "private", modifiers = "static final", is_static = true))]
     // static field: LO_BYTE_SHIFT:I
     pub fn LO_BYTE_SHIFT() -> i32 {
-        panic!("stub: java/lang/StringUTF16.LO_BYTE_SHIFT:I")
+        8
     }
 
     #[cfg_attr(any(), java_field(name = "MAX_LENGTH", descriptor = "I", access = "package", modifiers = "static final", is_static = true, constant_value = "1073741823"))]
@@ -48,7 +49,7 @@ impl StringUTF16 {
     #[cfg_attr(any(), java_field(name = "$assertionsDisabled", descriptor = "Z", access = "package", modifiers = "static final synthetic", is_static = true))]
     // static field: $assertionsDisabled:Z
     pub fn _assertionsDisabled() -> bool {
-        panic!("stub: java/lang/StringUTF16.$assertionsDisabled:Z")
+        false
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]

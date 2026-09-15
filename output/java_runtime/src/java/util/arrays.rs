@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -42,7 +43,7 @@ impl Arrays {
     #[cfg_attr(any(), java_field(name = "$assertionsDisabled", descriptor = "Z", access = "package", modifiers = "static final synthetic", is_static = true))]
     // static field: $assertionsDisabled:Z
     pub fn _assertionsDisabled() -> bool {
-        panic!("stub: java/util/Arrays.$assertionsDisabled:Z")
+        false
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -636,13 +637,29 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "([Ljava/lang/Object;I)[Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;I)[TT;"))]
-    pub fn copyOf_arr_obj_i(original: Rc<RefCell<Vec<Object>>>, newLength: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/Arrays.copyOf:([Ljava/lang/Object;I)[Ljava/lang/Object;")
+    // java: copyOf([Ljava/lang/Object;I)[Ljava/lang/Object;
+    pub fn copyOf_arr_obj_i(mut original: Rc<RefCell<Vec<Object>>>, mut newLength: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
+        let _t0 = original.getClass()?;
+        let _t1: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i_class(Clone::clone(&original), newLength, Clone::clone(&_t0))?;
+        Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;U:Ljava/lang/Object;>([TU;ILjava/lang/Class<+[TT;>;)[TT;"))]
-    pub fn copyOf_arr_obj_i_class(original: Rc<RefCell<Vec<Object>>>, newLength: i32, newType: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/Arrays.copyOf:([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;")
+    // java: copyOf([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;
+    pub fn copyOf_arr_obj_i_class(mut original: Rc<RefCell<Vec<Object>>>, mut newLength: i32, mut newType: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
+        let mut _merged2: Rc<RefCell<Vec<Object>>>;
+        if newType == Object::default() {
+            let mut _arr0: Rc<RefCell<Vec<Object>>> = Rc::new(RefCell::new(vec![Default::default(); newLength as usize]));
+            _merged2 = _arr0;
+        } else {
+            let _t0 = newType.getComponentType()?;
+            let _t1: Object = Array::newInstance_class_i(Clone::clone(&_t0), newLength)?;
+            _merged2 = (_t1).downcast::<Rc<RefCell<Vec<Object>>>>();
+        }
+        let mut copy: Rc<RefCell<Vec<Object>>> = _merged2;
+        let _t3: i32 = Math::min_i_i((original.borrow().len() as i32), newLength)?;
+        System::arraycopy(Object::from_any(original.clone()), 0i32, Object::from_any(copy.clone()), 0i32, _t3)?;
+        Ok(copy)
     }
 
     #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "([BI)[B", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

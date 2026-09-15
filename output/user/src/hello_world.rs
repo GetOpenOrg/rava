@@ -2,6 +2,7 @@
 use java_runtime::prelude::*;
 use java_runtime::java::io::*;
 use java_runtime::java::lang::*;
+use java_runtime::java::lang::reflect::*;
 use java_runtime::java::security::*;
 use java_runtime::java::util::*;
 use java_runtime::sun::nio::ch::*;

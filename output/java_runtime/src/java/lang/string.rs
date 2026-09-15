@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -46,13 +47,13 @@ impl String {
     #[cfg_attr(any(), java_field(name = "COMPACT_STRINGS", descriptor = "Z", access = "package", modifiers = "static final", is_static = true))]
     // static field: COMPACT_STRINGS:Z
     pub fn COMPACT_STRINGS() -> bool {
-        panic!("stub: java/lang/String.COMPACT_STRINGS:Z")
+        true
     }
 
     #[cfg_attr(any(), java_field(name = "serialPersistentFields", descriptor = "[Ljava/io/ObjectStreamField;", access = "private", modifiers = "static final", is_static = true))]
     // static field: serialPersistentFields:[Ljava/io/ObjectStreamField;
     pub fn serialPersistentFields() -> Rc<RefCell<Vec<Object>>> {
-        panic!("stub: java/lang/String.serialPersistentFields:[Ljava/io/ObjectStreamField;")
+        Rc::new(RefCell::new(Vec::new()))
     }
 
     #[cfg_attr(any(), java_field(name = "REPL", descriptor = "C", access = "private", modifiers = "static final", is_static = true, constant_value = "65533"))]

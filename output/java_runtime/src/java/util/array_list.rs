@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -68,13 +69,13 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_field(name = "EMPTY_ELEMENTDATA", descriptor = "[Ljava/lang/Object;", access = "private", modifiers = "static final", is_static = true))]
     // static field: EMPTY_ELEMENTDATA:[Ljava/lang/Object;
     pub fn EMPTY_ELEMENTDATA() -> Rc<RefCell<Vec<Object>>> {
-        panic!("stub: java/util/ArrayList.EMPTY_ELEMENTDATA:[Ljava/lang/Object;")
+        Rc::new(RefCell::new(Vec::new()))
     }
 
     #[cfg_attr(any(), java_field(name = "DEFAULTCAPACITY_EMPTY_ELEMENTDATA", descriptor = "[Ljava/lang/Object;", access = "private", modifiers = "static final", is_static = true))]
     // static field: DEFAULTCAPACITY_EMPTY_ELEMENTDATA:[Ljava/lang/Object;
     pub fn DEFAULTCAPACITY_EMPTY_ELEMENTDATA() -> Rc<RefCell<Vec<Object>>> {
-        panic!("stub: java/util/ArrayList.DEFAULTCAPACITY_EMPTY_ELEMENTDATA:[Ljava/lang/Object;")
+        Rc::new(RefCell::new(Vec::new()))
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -107,18 +108,35 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "grow", descriptor = "(I)[Ljava/lang/Object;", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn grow_i(&self, minCapacity: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/ArrayList.grow:(I)[Ljava/lang/Object;")
+    // java: grow(I)[Ljava/lang/Object;
+    pub fn grow_i(&self, mut minCapacity: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
+        let this = self;
+        let mut oldCapacity = (this.elementData.get().borrow().len() as i32);
+        if Object::from_any(this.elementData.get().clone()) != Object::from_any(ArrayList::<Object>::DEFAULTCAPACITY_EMPTY_ELEMENTDATA().clone()) {
+            let _t0: i32 = ArraysSupport::newLength(oldCapacity, (minCapacity).wrapping_sub(oldCapacity), (oldCapacity>>((1i32&0x1f))))?;
+            let mut newCapacity: i32 = _t0;
+            let _t1: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i(Clone::clone(&this.elementData.get()), newCapacity)?;
+            this.elementData.set(Clone::clone(&_t1));
+            return Ok(_t1);
+        }
+        let _t0: i32 = Math::max_i_i(10i32, minCapacity)?;
+        let mut _arr1: Rc<RefCell<Vec<Object>>> = Rc::new(RefCell::new(vec![Default::default(); _t0 as usize]));
+        this.elementData.set(Clone::clone(&_arr1));
+        Ok(_arr1)
     }
 
     #[cfg_attr(any(), java_method(name = "grow", descriptor = "()[Ljava/lang/Object;", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    // java: grow()[Ljava/lang/Object;
     pub fn grow(&self) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/ArrayList.grow:()[Ljava/lang/Object;")
+        let this = self;
+        let _t0 = this.grow_i((this.size.get()).wrapping_add(1i32))?;
+        Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "size", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn size(&self) -> Result<i32> {
-        panic!("stub: java/util/ArrayList.size:()I")
+        let this = self;
+        Ok(this.size.get())
     }
 
     #[cfg_attr(any(), java_method(name = "isEmpty", descriptor = "()Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -197,13 +215,25 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;[Ljava/lang/Object;I)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;[Ljava/lang/Object;I)V"))]
-    pub fn add_obj_arr_obj_i(&self, e: Object, elementData: Rc<RefCell<Vec<Object>>>, s: i32) -> Result<()> {
-        panic!("stub: java/util/ArrayList.add:(Ljava/lang/Object;[Ljava/lang/Object;I)V")
+    // java: add(Ljava/lang/Object;[Ljava/lang/Object;I)V
+    pub fn add_obj_arr_obj_i(&self, mut e: E, mut elementData: Rc<RefCell<Vec<Object>>>, mut s: i32) -> Result<()> {
+        let this = self;
+        if s == (elementData.borrow().len() as i32) {
+            let _t0 = this.grow()?;
+            elementData = _t0;
+        }
+        elementData.borrow_mut()[s as usize] = Object::from_any(e.clone());
+        this.size.set((s).wrapping_add(1i32));
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)Z"))]
-    pub fn add_obj(&self, e: Object) -> Result<bool> {
-        panic!("stub: java/util/ArrayList.add:(Ljava/lang/Object;)Z")
+    // java: add(Ljava/lang/Object;)Z
+    pub fn add_obj(&self, mut e: E) -> Result<bool> {
+        let this = self;
+        this._super.modCount.set((this._super.modCount.get()).wrapping_add(1i32));
+        this.add_obj_arr_obj_i(Object::from_any(e.clone()), Clone::clone(&this.elementData.get()), this.size.get())?;
+        Ok((1i32 != 0i32))
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(ILjava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(ITE;)V"))]

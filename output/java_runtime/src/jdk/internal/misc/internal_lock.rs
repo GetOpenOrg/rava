@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -32,7 +33,7 @@ impl InternalLock {
     #[cfg_attr(any(), java_field(name = "CAN_USE_INTERNAL_LOCK", descriptor = "Z", access = "private", modifiers = "static final", is_static = true))]
     // static field: CAN_USE_INTERNAL_LOCK:Z
     pub fn CAN_USE_INTERNAL_LOCK() -> bool {
-        panic!("stub: jdk/internal/misc/InternalLock.CAN_USE_INTERNAL_LOCK:Z")
+        true
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]

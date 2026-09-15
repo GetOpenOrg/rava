@@ -6,9 +6,9 @@
 
 | 来源 | 类数 |
 |------|-----:|
-| 调用链 BFS | 23 |
-| Field-only stub | 24 |
-| 合计 | 47 |
+| 调用链 BFS | 25 |
+| Field-only stub | 25 |
+| 合计 | 50 |
 
 ## 调用链 BFS 发现的类
 
@@ -33,7 +33,9 @@
 | `java/lang/RuntimeException` | 5 | 0 |
 | `java/lang/StringBuilder` | 97 | 0 |
 | `java/lang/StringLatin1` | 51 | 0 |
+| `java/lang/UnsupportedOperationException` | 4 | 0 |
 | `java/lang/VirtualMachineError` | 4 | 0 |
+| `java/lang/reflect/Array` | 24 | 21 |
 | `java/util/AbstractCollection` | 16 | 0 |
 | `java/util/Arrays` | 249 | 0 |
 | `java/util/List` | 49 | 0 |
@@ -46,6 +48,7 @@
 | `java/io/OutputStreamWriter` | 16 | 0 |
 | `java/io/PrintStream` | 71 | 0 |
 | `java/lang/AbstractStringBuilder` | 87 | 0 |
+| `java/lang/Class` | 171 | 35 |
 | `java/lang/Integer` | 65 | 0 |
 | `java/lang/SecurityManager` | 41 | 1 |
 | `java/lang/String` | 168 | 1 |

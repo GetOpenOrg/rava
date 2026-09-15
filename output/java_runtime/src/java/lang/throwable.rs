@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -49,7 +50,7 @@ impl Throwable {
     #[cfg_attr(any(), java_field(name = "UNASSIGNED_STACK", descriptor = "[Ljava/lang/StackTraceElement;", access = "private", modifiers = "static final", is_static = true))]
     // static field: UNASSIGNED_STACK:[Ljava/lang/StackTraceElement;
     pub fn UNASSIGNED_STACK() -> Rc<RefCell<Vec<Object>>> {
-        panic!("stub: java/lang/Throwable.UNASSIGNED_STACK:[Ljava/lang/StackTraceElement;")
+        Rc::new(RefCell::new(Vec::new()))
     }
 
     #[cfg_attr(any(), java_field(name = "SUPPRESSED_SENTINEL", descriptor = "Ljava/util/List;", access = "private", modifiers = "static final", is_static = true, generic_signature = "Ljava/util/List<Ljava/lang/Throwable;>;"))]
@@ -85,13 +86,13 @@ impl Throwable {
     #[cfg_attr(any(), java_field(name = "EMPTY_THROWABLE_ARRAY", descriptor = "[Ljava/lang/Throwable;", access = "private", modifiers = "static final", is_static = true))]
     // static field: EMPTY_THROWABLE_ARRAY:[Ljava/lang/Throwable;
     pub fn EMPTY_THROWABLE_ARRAY() -> Rc<RefCell<Vec<Throwable>>> {
-        panic!("stub: java/lang/Throwable.EMPTY_THROWABLE_ARRAY:[Ljava/lang/Throwable;")
+        Rc::new(RefCell::new(Vec::new()))
     }
 
     #[cfg_attr(any(), java_field(name = "$assertionsDisabled", descriptor = "Z", access = "package", modifiers = "static final synthetic", is_static = true))]
     // static field: $assertionsDisabled:Z
     pub fn _assertionsDisabled() -> bool {
-        panic!("stub: java/lang/Throwable.$assertionsDisabled:Z")
+        false
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]

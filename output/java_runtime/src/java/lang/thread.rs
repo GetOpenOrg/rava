@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -101,7 +102,7 @@ impl Thread {
     #[cfg_attr(any(), java_field(name = "EMPTY_STACK_TRACE", descriptor = "[Ljava/lang/StackTraceElement;", access = "private", modifiers = "static final", is_static = true))]
     // static field: EMPTY_STACK_TRACE:[Ljava/lang/StackTraceElement;
     pub fn EMPTY_STACK_TRACE() -> Rc<RefCell<Vec<Object>>> {
-        panic!("stub: java/lang/Thread.EMPTY_STACK_TRACE:[Ljava/lang/StackTraceElement;")
+        Rc::new(RefCell::new(Vec::new()))
     }
 
     #[cfg_attr(any(), java_field(name = "defaultUncaughtExceptionHandler", descriptor = "Ljava/lang/Thread$UncaughtExceptionHandler;", access = "private", modifiers = "static volatile", is_static = true))]

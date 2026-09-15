@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -38,7 +39,7 @@ impl SecurityManager {
     #[cfg_attr(any(), java_field(name = "packageAccessValid", descriptor = "Z", access = "private", modifiers = "static", is_static = true))]
     // static field: packageAccessValid:Z
     pub fn packageAccessValid() -> bool {
-        panic!("stub: java/lang/SecurityManager.packageAccessValid:Z")
+        false
     }
 
     #[cfg_attr(any(), java_field(name = "packageAccess", descriptor = "[Ljava/lang/String;", access = "private", modifiers = "static", is_static = true))]
@@ -56,7 +57,7 @@ impl SecurityManager {
     #[cfg_attr(any(), java_field(name = "packageDefinitionValid", descriptor = "Z", access = "private", modifiers = "static", is_static = true))]
     // static field: packageDefinitionValid:Z
     pub fn packageDefinitionValid() -> bool {
-        panic!("stub: java/lang/SecurityManager.packageDefinitionValid:Z")
+        false
     }
 
     #[cfg_attr(any(), java_field(name = "packageDefinition", descriptor = "[Ljava/lang/String;", access = "private", modifiers = "static", is_static = true))]

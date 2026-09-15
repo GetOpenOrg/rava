@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
@@ -30,7 +31,7 @@ impl StringLatin1 {
     #[cfg_attr(any(), java_field(name = "$assertionsDisabled", descriptor = "Z", access = "package", modifiers = "static final synthetic", is_static = true))]
     // static field: $assertionsDisabled:Z
     pub fn _assertionsDisabled() -> bool {
-        panic!("stub: java/lang/StringLatin1.$assertionsDisabled:Z")
+        false
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
