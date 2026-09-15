@@ -359,19 +359,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 f"}}\n"
             )
 
-    # 若有 new_format_map 覆盖，插入 #[path = "..."] mod _impl; 块
+    # K-2: 共置 _impl.rs 文件由 project_writer 在生成阶段复制；class_writer 不再生成 #[path] 块。
+    # 占位：保留变量引用以防后续代码使用，实际不生成任何内容。
     _nf_entry = (new_format_map or {}).get(ci.name)
-    if _nf_entry and workspace_root:
-        pkg_depth = len(ci.name.split('/')) - 1
-        ups = '../' * (pkg_depth + 2)
-        if _nf_entry.get('main'):
-            main_rel = _nf_entry['main']
-            _impl_abs = os.path.join(workspace_root, main_rel)
-            if os.path.exists(_impl_abs):
-                parts.append(f'#[allow(unused_imports, dead_code, unused_variables, non_snake_case, non_camel_case_types)]\n#[path = "{ups}{main_rel}"]\nmod _impl;\n')
-                # 全量手写类：re-export struct + impls，让外部代码仍通过同一路径访问类型
-                if _full_impl:
-                    parts.append('pub use self::_impl::*;\n')
+    if False:  # K-2: 已由 project_writer 的共置机制替代
+        pass
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]

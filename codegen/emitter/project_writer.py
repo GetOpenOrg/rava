@@ -105,14 +105,25 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '',
         ]))
     # 清理旧版生成文件（batch 模式由调用方在批次开始前统一清理）
+    # K-4: 跳过手写共置文件：*_impl.rs（方法扩展块）以及含 pub struct 的完整实现文件
     if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):
             for fname in files:
-                if fname.endswith('.rs'):
-                    try:
-                        os.remove(os.path.join(root, fname))
-                    except FileNotFoundError:
-                        pass
+                if not fname.endswith('.rs'):
+                    continue
+                if fname.endswith('_impl.rs'):
+                    continue  # 手写共置文件，保留
+                fpath = os.path.join(root, fname)
+                try:
+                    _content = open(fpath, encoding='utf-8').read()
+                    if re.search(r'^\s*pub struct \w', _content, re.MULTILINE):
+                        continue  # 内部边界类完整实现，保留
+                except Exception:
+                    pass
+                try:
+                    os.remove(fpath)
+                except FileNotFoundError:
+                    pass
 
     # 构建 registry（用户类 + JDK 类）
     registry: dict = {ci.name: ci for ci in class_infos}
@@ -185,15 +196,18 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if mod_name in pkg_dir_names.get(parent_dir, set()):
                 mod_name = mod_name + '_t'
             file_path = os.path.join(parent_dir, mod_name + '.rs')
-            # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
-            _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
-                                            jdk_crate_pkg_paths=jdk_crate_pkg_paths,
-                                            call_chain=visited_methods,
-                                            new_format_map=new_format_map,
-                                            workspace_root=out_dir,
-                                            full_impl_classes=full_impl_classes,
-                                            conflict_map=conflict_map,
-                                            skipped_classes=skipped_classes))
+            # K-4: 内部边界类（full_impl_classes）的完整手写文件已共置在 jdk_classes/src/ 中，
+            # 跳过 codegen 生成（避免 stub 覆盖手写内容）
+            if jdk_ci.name not in full_impl_classes:
+                # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
+                _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
+                                                jdk_crate_pkg_paths=jdk_crate_pkg_paths,
+                                                call_chain=visited_methods,
+                                                new_format_map=new_format_map,
+                                                workspace_root=out_dir,
+                                                full_impl_classes=full_impl_classes,
+                                                conflict_map=conflict_map,
+                                                skipped_classes=skipped_classes))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
@@ -251,6 +265,12 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for c in sorted(children):
             mod_lines.append(_mod_decl(c))
             mod_lines.append(_use_decl(c))
+        # K-2: 扫描目录中的共置 _impl.rs 文件，加入私有 mod 声明（不 pub use，只是 impl 扩展块）
+        if os.path.isdir(dir_path):
+            for _f in sorted(os.listdir(dir_path)):
+                if _f.endswith('_impl.rs'):
+                    _impl_mod = _f[:-3]  # 去掉 .rs 后缀
+                    mod_lines.append(f'mod {_impl_mod};')
         _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
 
     # 4. user crate（用户 Java 翻译）

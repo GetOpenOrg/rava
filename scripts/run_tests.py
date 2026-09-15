@@ -75,7 +75,7 @@ def _init_test_workspace(ws: Path) -> None:
     default = ROOT / "output"
 
     # 符号链接指向共享只读 crate（相对路径，目录可移动）
-    for shared in ("java_runtime", "java_rta_macros", "native_impls"):
+    for shared in ("java_runtime", "java_rta_macros"):
         src = default / shared
         dst = ws / shared
         if src.exists() and not dst.exists():
@@ -489,7 +489,7 @@ def _ensure_workspace(out: Path) -> None:
     default = ROOT / "output"
 
     # 对只读 crate 创建符号链接（不复制，节省磁盘；build 产物隔离在各自 target/）
-    for shared in ("java_runtime", "java_rta_macros", "native_impls"):
+    for shared in ("java_runtime", "java_rta_macros"):
         src = default / shared
         dst = out / shared
         if src.exists() and not dst.exists():

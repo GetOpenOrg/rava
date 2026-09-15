@@ -267,33 +267,62 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
             if parent_k is None:
                 break
             block_k = parent_k
-        # 若 block_k 所在块后有同层 "} else {" 且 else 分支中也引用了该变量，
-        # 则需继续向上提升到 outer if 之前，否则变量在 else 分支中不可见（E0425）
-        # 递归检查：每次上升后，继续检查新 block_k 是否仍在 else 中被引用
+        # 若 block_k 所在块或其任意外层块后有 "} else {" 且 else 分支中引用了该变量，
+        # 则需继续向上提升，否则变量在 else 分支中不可见（E0425）
+        # 策略：从 block_k 向外逐层检查每个外层块的 else；找到需要提升的最近层级后
+        # 将 block_k 提升至该层，然后重新检查（直到没有更多需要提升为止）
         word_pat = word_cache.get(name) or re.compile(r'\b' + re.escape(name) + r'\b')
+        let_decl_pat = re.compile(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b')
         max_hoist = 10  # 防止无限循环
+        # next_start: 下一次外层循环从哪个块开始检查（与 block_k 分开跟踪）
+        next_start = block_k
         while max_hoist > 0:
             max_hoist -= 1
-            blk_nesting = entry_nesting[block_k]
             moved = False
-            for k_else in range(block_k + 1, len(entries)):
-                if entry_nesting[k_else] < blk_nesting:
-                    break
-                if (entry_nesting[k_else] == blk_nesting
-                        and rendered[k_else].lstrip().startswith('} else')):
-                    found_in_else = any(
-                        word_pat.search(rendered[k_ref])
-                        for k_ref in range(k_else + 1, len(entries))
-                        if entry_nesting[k_ref] >= blk_nesting
-                    )
-                    if found_in_else:
-                        for bk in reversed(block_entry_indices):
-                            if bk < block_k and entry_nesting[bk] < blk_nesting:
-                                block_k = bk
-                                moved = True
+            # 从 next_start 向外逐层检查每个块的 else 分支
+            check_k = next_start
+            check_nesting = entry_nesting[check_k]
+            while True:
+                # 检查 check_k 对应块的直接 } else {
+                for k_else in range(check_k + 1, len(entries)):
+                    if entry_nesting[k_else] < check_nesting:
+                        break
+                    if (entry_nesting[k_else] == check_nesting + 1
+                            and rendered[k_else].lstrip().startswith('} else')):
+                        found_in_else = False
+                        for k_ref in range(k_else + 1, len(entries)):
+                            if entry_nesting[k_ref] <= check_nesting:
                                 break
+                            ln = rendered[k_ref]
+                            if word_pat.search(ln):
+                                if let_decl_pat.search(ln):
+                                    break
+                                found_in_else = True
+                                break
+                        if found_in_else:
+                            # 插入点是 check_k（在该 if-else 之前），而非其父块
+                            block_k = check_k
+                            # 下一轮从 check_k 的父块开始，避免重复检查同一 else
+                            next_start = None
+                            for bk in reversed(block_entry_indices):
+                                if bk < check_k and entry_nesting[bk] < check_nesting:
+                                    next_start = bk
+                                    break
+                            moved = True
+                        break  # 只看直接 else，结果无论如何都 break
+                if moved:
                     break
-            if not moved:
+                # 向上找外层块
+                outer_bk = None
+                for bk in reversed(block_entry_indices):
+                    if bk < check_k and entry_nesting[bk] < check_nesting:
+                        outer_bk = bk
+                        break
+                if outer_bk is None:
+                    break
+                check_k = outer_bk
+                check_nesting = entry_nesting[outer_bk]
+            if not moved or next_start is None:
                 break
         block_indent = entries[block_k][0]
         # 获取类型注解节点（来自第一次声明）

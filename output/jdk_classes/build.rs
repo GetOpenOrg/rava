@@ -2,7 +2,7 @@
 ///
 /// 职责：
 ///   1. 扫描 src/ 下所有 .rs 文件，提取 #[java_class] / #[java_native] 属性
-///   2. 扫描 native_impls/ 目录，对照已实现的方法
+///   2. 扫描 src/ 下 *_impl.rs 文件，对照已实现的方法（K-4 共置结构）
 ///   3. 更新 native_status.toml：implemented / needed / stub / not-needed
 ///   4. 打印 "needed" 状态的 native 方法清单（警告，不阻断构建）
 
@@ -12,16 +12,15 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     let src_dir     = Path::new("src");
-    let impls_dir   = Path::new("../native_impls");
     let status_file = Path::new("../native_status.toml");
 
     println!("cargo:rerun-if-changed=src/");
-    println!("cargo:rerun-if-changed=../native_impls/");
     println!("cargo:rerun-if-env-changed=JAVA_RTA_STRICT");
 
     let native_methods = scan_native_methods(src_dir);
     let status: BTreeMap<String, BTreeMap<String, String>> = load_status(status_file);
-    let implemented = scan_impls(impls_dir);
+    // K-4: _impl.rs 文件与生成 stub 共置于 src/，scan_impls 只处理 *_impl.rs
+    let implemented = scan_impls(src_dir);
 
     let mut new_status: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     for nm in &native_methods {
@@ -61,7 +60,7 @@ fn main() {
             println!("cargo:warning=");
             println!("cargo:warning=─── native methods needing implementation ───");
             for line in &needed { println!("cargo:warning={}", line); }
-            println!("cargo:warning=Add implementations to native_impls/<class>.rs");
+            println!("cargo:warning=Add implementations to src/<package>/<class>_impl.rs");
             println!("cargo:warning=");
         }
     }
@@ -121,12 +120,17 @@ fn extract_attr(s: &str, key: &str) -> Option<String> {
     Some(s[start..end].to_owned())
 }
 
-fn scan_impls(impls_dir: &Path) -> HashSet<String> {
+fn scan_impls(src_dir: &Path) -> HashSet<String> {
     let mut result = HashSet::new();
-    if !impls_dir.exists() { return result; }
-    for path in walk_rs_files(impls_dir) {
+    if !src_dir.exists() { return result; }
+    for path in walk_rs_files(src_dir) {
+        // K-4: 只处理 *_impl.rs 文件（共置的手写 impl 文件）
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if !stem.ends_with("_impl") { continue; }
         let content = fs::read_to_string(&path).unwrap_or_default();
-        let class = path_to_class(impls_dir, &path);
+        // 去掉 _impl 后缀还原为对应类的路径
+        let impl_path = path.with_file_name(format!("{}.rs", &stem[..stem.len()-5]));
+        let class = path_to_class(src_dir, &impl_path);
         for line in content.lines() {
             let t = line.trim();
             if t.starts_with("pub fn ") || t.starts_with("pub unsafe fn ") {

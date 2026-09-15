@@ -445,7 +445,8 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         else:
             elem_t = 'Object'
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![{elem_t}::default(); {render_expr(count_expr)} as usize]));"))
+        # 用 Default::default() 而非 ElemType::default()，避免泛型类型（如 Node<K,V>）在 vec![] 中产生语法错误
+        sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![Default::default(); {render_expr(count_expr)} as usize]));"))
         sim.push(Var(v), RsNamed(f'Rc<RefCell<Vec<{elem_t}>>>'))
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
