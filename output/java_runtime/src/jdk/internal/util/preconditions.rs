@@ -95,34 +95,4 @@ impl Preconditions {
     pub fn outOfBoundsMessage(checkKind: String, args: List<Object>) -> Result<String> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsMessage:(Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;")
     }
-
-    #[cfg_attr(any(), java_method(name = "checkIndex", descriptor = "(IILjava/util/function/BiFunction;)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<X:Ljava/lang/RuntimeException;>(IILjava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;TX;>;)I"))]
-    pub fn checkIndex_i_i_bifunc(index: i32, length: i32, oobef: Object) -> Result<i32> {
-        panic!("stub: jdk/internal/util/Preconditions.checkIndex:(IILjava/util/function/BiFunction;)I")
-    }
-
-    #[cfg_attr(any(), java_method(name = "checkFromToIndex", descriptor = "(IIILjava/util/function/BiFunction;)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<X:Ljava/lang/RuntimeException;>(IIILjava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;TX;>;)I"))]
-    pub fn checkFromToIndex_i_i_i_bifunc(fromIndex: i32, toIndex: i32, length: i32, oobef: Object) -> Result<i32> {
-        panic!("stub: jdk/internal/util/Preconditions.checkFromToIndex:(IIILjava/util/function/BiFunction;)I")
-    }
-
-    #[cfg_attr(any(), java_method(name = "checkFromIndexSize", descriptor = "(IIILjava/util/function/BiFunction;)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<X:Ljava/lang/RuntimeException;>(IIILjava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;TX;>;)I"))]
-    pub fn checkFromIndexSize_i_i_i_bifunc(fromIndex: i32, size: i32, length: i32, oobef: Object) -> Result<i32> {
-        panic!("stub: jdk/internal/util/Preconditions.checkFromIndexSize:(IIILjava/util/function/BiFunction;)I")
-    }
-
-    #[cfg_attr(any(), java_method(name = "checkIndex", descriptor = "(JJLjava/util/function/BiFunction;)J", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<X:Ljava/lang/RuntimeException;>(JJLjava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;TX;>;)J"))]
-    pub fn checkIndex_l_l_bifunc(index: i64, arg1: i64, length: Object) -> Result<i64> {
-        panic!("stub: jdk/internal/util/Preconditions.checkIndex:(JJLjava/util/function/BiFunction;)J")
-    }
-
-    #[cfg_attr(any(), java_method(name = "checkFromToIndex", descriptor = "(JJJLjava/util/function/BiFunction;)J", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<X:Ljava/lang/RuntimeException;>(JJJLjava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;TX;>;)J"))]
-    pub fn checkFromToIndex_l_l_l_bifunc(fromIndex: i64, arg1: i64, toIndex: i64, arg3: Object) -> Result<i64> {
-        panic!("stub: jdk/internal/util/Preconditions.checkFromToIndex:(JJJLjava/util/function/BiFunction;)J")
-    }
-
-    #[cfg_attr(any(), java_method(name = "checkFromIndexSize", descriptor = "(JJJLjava/util/function/BiFunction;)J", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<X:Ljava/lang/RuntimeException;>(JJJLjava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;TX;>;)J"))]
-    pub fn checkFromIndexSize_l_l_l_bifunc(fromIndex: i64, arg1: i64, size: i64, arg3: Object) -> Result<i64> {
-        panic!("stub: jdk/internal/util/Preconditions.checkFromIndexSize:(JJJLjava/util/function/BiFunction;)J")
-    }
 }

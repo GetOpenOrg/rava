@@ -100,7 +100,7 @@ impl BufferedWriter {
         let this = self;
         let mut lock = this._super.lock.get();
     let mut local_3 = Default::default();
-        if true {
+        if (lock.0.downcast_ref::<InternalLock>().is_some()) {
             let mut locker = (lock).downcast::<InternalLock>();
             locker.lock()?;
             this.implFlushBuffer()?;

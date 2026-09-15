@@ -324,7 +324,7 @@ impl Thread {
     #[cfg_attr(any(), java_method(name = "isVirtual", descriptor = "()Z", access = "public", modifiers = "final", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn isVirtual(&self) -> Result<bool> {
         let this = self;
-        Ok(true)
+        Ok(false)
     }
 
     #[cfg_attr(any(), java_method(name = "start", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]

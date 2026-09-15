@@ -184,19 +184,9 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
         panic!("stub: java/util/ArrayList.toArray:([Ljava/lang/Object;)[Ljava/lang/Object;")
     }
 
-    #[cfg_attr(any(), java_method(name = "elementData", descriptor = "(I)Ljava/lang/Object;", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(I)TE;"))]
-    pub fn elementData(&self, index: i32) -> Result<Object> {
-        panic!("stub: java/util/ArrayList.elementData:(I)Ljava/lang/Object;")
-    }
-
     #[cfg_attr(any(), java_method(name = "elementAt", descriptor = "([Ljava/lang/Object;I)Ljava/lang/Object;", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<E:Ljava/lang/Object;>([Ljava/lang/Object;I)TE;"))]
     pub fn elementAt(es: Rc<RefCell<Vec<Object>>>, index: i32) -> Result<Object> {
         panic!("stub: java/util/ArrayList.elementAt:([Ljava/lang/Object;I)Ljava/lang/Object;")
-    }
-
-    #[cfg_attr(any(), java_method(name = "get", descriptor = "(I)Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(I)TE;"))]
-    pub fn get(&self, index: i32) -> Result<Object> {
-        panic!("stub: java/util/ArrayList.get:(I)Ljava/lang/Object;")
     }
 
     #[cfg_attr(any(), java_method(name = "getFirst", descriptor = "()Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()TE;"))]
@@ -212,19 +202,6 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_method(name = "set", descriptor = "(ILjava/lang/Object;)Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(ITE;)TE;"))]
     pub fn set(&self, index: i32, element: Object) -> Result<Object> {
         panic!("stub: java/util/ArrayList.set:(ILjava/lang/Object;)Ljava/lang/Object;")
-    }
-
-    #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;[Ljava/lang/Object;I)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;[Ljava/lang/Object;I)V"))]
-    // java: add(Ljava/lang/Object;[Ljava/lang/Object;I)V
-    pub fn add_obj_arr_obj_i(&self, mut e: E, mut elementData: Rc<RefCell<Vec<Object>>>, mut s: i32) -> Result<()> {
-        let this = self;
-        if s == (elementData.borrow().len() as i32) {
-            let _t0 = this.grow()?;
-            elementData = _t0;
-        }
-        elementData.borrow_mut()[s as usize] = Object::from_any(e.clone());
-        this.size.set((s).wrapping_add(1i32));
-        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)Z"))]

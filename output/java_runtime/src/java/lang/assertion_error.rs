@@ -70,7 +70,7 @@ impl AssertionError {
     pub fn new_obj(mut detailMessage: Object) -> Result<Self> {
         let mut this = Self { _super: Default::default(), ..Default::default() };
         this = AssertionError::new_str(Clone::clone(&String::from_owned(format!("{}", detailMessage))))?;
-        if true {
+        if (detailMessage.0.downcast_ref::<Throwable>().is_some()) {
             let _t0 = this._super._super.initCause(Clone::clone(&(detailMessage).downcast::<Throwable>()))?;
         }
         Ok(this)
