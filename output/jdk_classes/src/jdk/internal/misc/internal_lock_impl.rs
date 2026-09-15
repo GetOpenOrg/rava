@@ -2,25 +2,31 @@ use java_runtime::prelude::*;
 use super::*;
 
 use std::cell::RefCell;
+use parking_lot::ReentrantMutex;
+
+// 全局可重入锁：单线程 JVM 模拟环境下所有 InternalLock 实例共享同一把锁
+static GLOBAL: ReentrantMutex<()> = ReentrantMutex::new(());
 
 thread_local! {
-    // 可重入锁深度计数：同线程多次 lock/unlock 配对，与 JDK ReentrantLock 语义一致
-    static DEPTH: RefCell<usize> = RefCell::new(0);
+    // guard 栈支持同线程重入：lock/unlock 可跨方法调用配对
+    static GUARDS: RefCell<Vec<parking_lot::ReentrantMutexGuard<'static, ()>>>
+        = RefCell::new(Vec::new());
 }
 
 impl InternalLock {
     pub fn lock(&self) -> Result<()> {
-        DEPTH.with(|d| *d.borrow_mut() += 1);
+        let guard = unsafe {
+            std::mem::transmute::<
+                parking_lot::ReentrantMutexGuard<'_, ()>,
+                parking_lot::ReentrantMutexGuard<'static, ()>,
+            >(GLOBAL.lock())
+        };
+        GUARDS.with(|g| g.borrow_mut().push(guard));
         Ok(())
     }
 
     pub fn unlock(&self) -> Result<()> {
-        DEPTH.with(|d| {
-            let mut depth = d.borrow_mut();
-            if *depth > 0 {
-                *depth -= 1;
-            }
-        });
+        GUARDS.with(|g| { g.borrow_mut().pop(); });
         Ok(())
     }
 }
