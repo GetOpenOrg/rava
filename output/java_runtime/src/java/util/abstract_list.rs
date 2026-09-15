@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -22,6 +22,7 @@ use crate::sun::security::util::*;
     is_deprecated     = false,
     source            = "AbstractList.java",
     inner_classes     = "java/util/AbstractList$Itr:java/util/AbstractList:Itr:2;java/util/AbstractList$ListItr:java/util/AbstractList:ListItr:2;java/util/AbstractList$RandomAccessSubList:java/util/AbstractList:RandomAccessSubList:10;java/util/AbstractList$SubList:java/util/AbstractList:SubList:10;java/util/AbstractList$RandomAccessSpliterator:java/util/AbstractList:RandomAccessSpliterator:24;java/util/AbstractList$SubList$1:::0",
+    all_supertypes    = "java/lang/Object;java/util/AbstractCollection;java/util/AbstractList;java/util/Collection;java/util/List;java/util/SequencedCollection",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct AbstractList<E: Clone + Default + 'static> {
@@ -54,12 +55,8 @@ impl<E: Clone + Default + 'static> AbstractList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)Z"))]
-    // java: add(Ljava/lang/Object;)Z
-    pub fn add_obj(&self, mut e: E) -> Result<bool> {
-        let this = self;
-        let _t0 = this._super.size()?;
-        this.add_i_obj(_t0, Clone::clone(&e))?;
-        Ok((1i32 != 0i32))
+    pub fn add_obj(&self, e: Object) -> Result<bool> {
+        panic!("stub: java/util/AbstractList.add:(Ljava/lang/Object;)Z")
     }
 
     #[cfg_attr(any(), java_method(name = "get", descriptor = "(I)Ljava/lang/Object;", access = "public", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false, generic_signature = "(I)TE;"))]
@@ -73,11 +70,8 @@ impl<E: Clone + Default + 'static> AbstractList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(ILjava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(ITE;)V"))]
-    // java: add(ILjava/lang/Object;)V
-    pub fn add_i_obj(&self, mut index: i32, mut element: E) -> Result<()> {
-        let this = self;
-        return Err(JvmError::Custom("athrow".to_owned()));
-        Ok(())
+    pub fn add_i_obj(&self, index: i32, element: Object) -> Result<()> {
+        panic!("stub: java/util/AbstractList.add:(ILjava/lang/Object;)V")
     }
 
     #[cfg_attr(any(), java_method(name = "remove", descriptor = "(I)Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(I)TE;"))]

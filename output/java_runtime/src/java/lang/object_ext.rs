@@ -2,10 +2,23 @@ use crate::prelude::*;
 use super::object::raw::Object;
 
 impl Object {
-    /// 将任意 'static 值装入 Object（JVM upcasting）
+    /// 将任意 'static 值装入 Object（JVM upcasting），不携带类型标识
     #[jvm_ext]
     pub fn from_any<T: std::any::Any + 'static>(v: T) -> Self {
-        Object(std::rc::Rc::new(v))
+        Object(std::rc::Rc::new(v), |_| false)
+    }
+
+    /// 将带有类型标识的 Java 类实例装入 Object
+    /// `check`: 该类的 is_instance_of 静态方法，由 java_class 宏生成
+    #[jvm_ext]
+    pub fn with_class<T: std::any::Any + 'static>(v: T, check: fn(&str) -> bool) -> Self {
+        Object(std::rc::Rc::new(v), check)
+    }
+
+    /// instanceof 运行时检查：委托给类型标识函数指针
+    #[jvm_ext]
+    pub fn is_instance_of(&self, type_id: &str) -> bool {
+        (self.1)(type_id)
     }
 
     /// 从 Object 中取出 T（JVM checkcast/downcasting），类型不符则 panic（ClassCastException）
@@ -48,7 +61,7 @@ impl std::fmt::Display for Object {
     }
 }
 
-// Java autoboxing: 基本类型自动装箱为 Object
+// Java autoboxing: 基本类型自动装箱为 Object（不携带类型标识，instanceof 始终 false）
 impl From<i32>  for Object { fn from(v: i32)  -> Self { Object::from_any(v) } }
 impl From<i64>  for Object { fn from(v: i64)  -> Self { Object::from_any(v) } }
 impl From<f32>  for Object { fn from(v: f32)  -> Self { Object::from_any(v) } }

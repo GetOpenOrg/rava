@@ -645,10 +645,11 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             else:
                 target_rust = jvm_to_rust(f'L{comment};', registry)
             obj_ty_str = render_type(val_ty_inst)
+            val_s_inst = render_expr(val_expr_inst)
             if obj_ty_str == 'Object':
-                # 运行时多态：Object 容器存储实际类型，用 downcast_ref 检查
-                val_s_inst = render_expr(val_expr_inst)
-                sim.push(RawExpr(f"({val_s_inst}.0.downcast_ref::<{target_rust}>().is_some())"), BOOL)
+                # 运行时多态：通过 ObjectVTable fn 指针（Arch-2）检查类型继承链
+                # comment 本身就是 JVM 二进制名（如 java/util/List）
+                sim.push(RawExpr(f"({val_s_inst}.is_instance_of(\"{comment}\"))"), BOOL)
             elif obj_ty_str == target_rust:
                 sim.push(Lit('true'), BOOL)
             elif _is_subtype(obj_ty_str.split('<')[0], target_rust.split('<')[0], registry):

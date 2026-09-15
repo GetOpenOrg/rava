@@ -128,9 +128,14 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
         if scope_close is None:
             continue
         # 检查 scope_close 之后是否有该变量名的引用
+        # 若第一个匹配是另一个 let 声明（JVM slot reuse），不算跨作用域引用
         word = re.compile(r'\b' + re.escape(name) + r'\b')
+        let_decl_check = re.compile(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b')
         for k2 in range(scope_close, len(rendered)):
-            if word.search(rendered[k2]):
+            ln = rendered[k2]
+            if word.search(ln):
+                if let_decl_check.search(ln):
+                    break  # 另一个 let 声明，不是跨作用域读取
                 vars_to_hoist.add(name)
                 break
 
@@ -151,11 +156,17 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
                 break
         if loop_k is None:
             continue
-        # 获取 loop 行的 indent 作为插入位置的 indent
-        loop_indent = entries[loop_k][0]
-        insertions.append((loop_k, (loop_indent, LetStmt(name, None, True, RawExpr('unsafe { std::mem::MaybeUninit::uninit().assume_init() }')))))
-        # 将 loop 内的 LetStmt 改为 AssignStmt
+        # 获取 loop 行的 indent：对于 str 条目，indent 嵌入在字符串里，需提取前导空白
+        loop_entry_val = entries[loop_k][1]
+        if isinstance(loop_entry_val, str):
+            loop_indent = loop_entry_val[:len(loop_entry_val) - len(loop_entry_val.lstrip())]
+        else:
+            loop_indent = entries[loop_k][0]
+        # 从声明处取类型注解，生成 Default::default() 带类型注解（避免 E0282 类型推断失败）
         inner_indent, inner_item = entries[decl_k]
+        hoisted_type = inner_item.ty if isinstance(inner_item, LetStmt) else None
+        insertions.append((loop_k, (loop_indent, LetStmt(name, hoisted_type, True, RawExpr('Default::default()')))))
+        # 将 loop 内的 LetStmt 改为 AssignStmt
         if isinstance(inner_item, LetStmt):
             entries[decl_k] = (inner_indent, AssignStmt(Var(inner_item.name), inner_item.value))
 
@@ -178,6 +189,8 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
     nesting = 0
     # name → list of (entry_index, nesting_depth)
     declared_at: dict[str, list[tuple[int, int]]] = {}
+    # 函数体顶层（nesting=0）声明的变量：已有函数级作用域，不应被 hoist 覆盖
+    outer_decls: set[str] = set()
     # index of any block-opening entry (ends with '{' and contains 'if' or has any '{')
     block_entry_indices: list[int] = []
 
@@ -189,7 +202,9 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
             delta = item.count('{') - item.count('}')
             nesting += delta
         elif isinstance(item, LetStmt):
-            if nesting > 0 and item.name not in predeclared:
+            if nesting == 0 and item.name not in predeclared:
+                outer_decls.add(item.name)
+            elif nesting > 0 and item.name not in predeclared:
                 declared_at.setdefault(item.name, []).append((k, nesting))
 
     if not declared_at or not block_entry_indices:
@@ -231,8 +246,14 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
 
             found = False
             # 检查 1：作用域关闭后是否被引用（原有逻辑）
+            # 若第一个匹配是另一个 let 声明（同名变量在另一分支的单独绑定），
+            # 则不算跨作用域引用（JVM slot reuse：不同分支各有自己的 let）
+            let_decl_check = re.compile(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b')
             for k2 in range(scope_close, len(rendered)):
-                if word.search(rendered[k2]):
+                ln = rendered[k2]
+                if word.search(ln):
+                    if let_decl_check.search(ln):
+                        break  # 另一个 let 声明，不是跨作用域读取
                     found = True
                     break
 
@@ -248,7 +269,10 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
                         for k_ref in range(k_else + 1, scope_close):
                             if entry_nesting[k_ref] < decl_nesting:
                                 break
-                            if word.search(rendered[k_ref]):
+                            ln_ref = rendered[k_ref]
+                            if word.search(ln_ref):
+                                if let_decl_check.search(ln_ref):
+                                    break  # 另一个 let 声明，不是读取
                                 found = True
                                 break
                     if found:
@@ -351,6 +375,9 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
                 check_nesting = entry_nesting[outer_bk]
             if not moved or next_start is None:
                 break
+        # 若变量已在函数体顶层声明（outer_decls），不再插入新 let（避免 shadow 类型冲突）
+        if name in outer_decls:
+            continue
         block_indent = entries[block_k][0]
         # 获取类型注解节点（来自第一次声明）
         _, first_let = entries[first_decl_k]

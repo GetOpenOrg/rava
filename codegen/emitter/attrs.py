@@ -97,12 +97,48 @@ def _method_modifiers_str(flags: int) -> str:
     return ' '.join(parts)
 
 
-def _java_class_attr(ci: ClassInfo, compiled: bool = False) -> str:
+def _compute_all_supertypes(ci: ClassInfo, registry: dict | None) -> list[str]:
+    """计算类的所有超类型（自身 + 传递闭合的父类 + 接口），用于 instanceof 检查。
+
+    返回值：JVM 二进制名列表，已排序去重。
+    """
+    supertypes: set[str] = {ci.name}
+    if not registry:
+        # 无 registry，只能加直接父类和直接接口
+        if ci.super_class:
+            supertypes.add(ci.super_class)
+        supertypes.update(ci.interfaces or [])
+        return sorted(supertypes)
+
+    queue: list[str] = []
+    if ci.super_class:
+        queue.append(ci.super_class)
+    queue.extend(ci.interfaces or [])
+
+    visited: set[str] = set()
+    while queue:
+        name = queue.pop(0)
+        if name in visited:
+            continue
+        visited.add(name)
+        supertypes.add(name)
+        if name in registry:
+            parent = registry[name]
+            if parent.super_class:
+                queue.append(parent.super_class)
+            queue.extend(parent.interfaces or [])
+
+    return sorted(supertypes)
+
+
+def _java_class_attr(ci: ClassInfo, compiled: bool = False,
+                     registry: dict | None = None) -> str:
     """生成 #[java_class(...)] 属性块。
 
     compiled=True：生成真实的 #[java_rta_macros::java_class(...)]，proc-macro 会自动派生
                    Into<Object>、From<Object>、Debug（Object 类除外）。
     compiled=False：原生属性格式，用于不参与编译的 JDK 元数据存根文件。
+    registry：传入则计算 all_supertypes 传递闭合（Arch-2 所需）。
     """
     binary_name = ci.name
     super_class = ci.super_class or ""
@@ -131,6 +167,12 @@ def _java_class_attr(ci: ClassInfo, compiled: bool = False) -> str:
             for ic in ci.inner_classes
         )
         inner_lines.append(f'    inner_classes     = "{ic_strs}",')
+    # all_supertypes：传递闭合的所有超类型（Arch-2 instanceof 所需）
+    # 仅在非接口类且 compiled=True 时写入（宏生成 is_instance_of 用）
+    if compiled and not ci.is_interface:
+        supertypes = _compute_all_supertypes(ci, registry)
+        if supertypes:
+            inner_lines.append(f'    all_supertypes    = "{";".join(supertypes)}",')
     inner = '\n'.join(inner_lines)
     if compiled:
         # Object 类自身不使用宏（from_any/downcast 定义在 Object 上，循环依赖）

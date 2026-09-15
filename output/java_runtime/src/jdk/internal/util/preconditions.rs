@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -23,6 +23,7 @@ use crate::jdk::internal::util::*;
     is_deprecated     = false,
     source            = "Preconditions.java",
     inner_classes     = "jdk/internal/util/Preconditions$4:::0;jdk/internal/util/Preconditions$1:::0;jdk/internal/util/Preconditions$2:::0;jdk/internal/util/Preconditions$3:::0",
+    all_supertypes    = "java/lang/Object;jdk/internal/util/Preconditions",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Preconditions;

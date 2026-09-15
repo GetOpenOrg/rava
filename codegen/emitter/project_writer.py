@@ -13,7 +13,23 @@ from .class_writer import _gen_class_rs
 
 
 def _write(path: str, content: str) -> None:
-    """创建目录并写文件。"""
+    """创建目录并写文件。
+    对 java_runtime/src/ 下的 .rs 文件，若已存在且不含自动生成标记，则视为手写文件保留不覆盖。
+    mod.rs / lib.rs / user/ 下文件始终正常写入。
+    """
+    _basename = os.path.basename(path)
+    _is_jrt_rs = (
+        path.endswith('.rs')
+        and 'java_runtime' + os.sep + 'src' in path
+        and _basename not in ('mod.rs', 'lib.rs')
+    )
+    if _is_jrt_rs and os.path.exists(path):
+        try:
+            with open(path, encoding='utf-8') as _f:
+                if '#[java_rta_macros::java_class(' not in _f.read(4096):
+                    return  # 手写文件，不覆盖
+        except Exception:
+            pass
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     with open(path, 'w') as f:
         f.write(content)
@@ -93,6 +109,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     #   其余 *.rs 均为 codegen 生成文件，清理后由本次 codegen 重新生成
     _PERMANENT = {
         os.path.join(jdk_src, 'java', 'lang', 'object.rs'),
+        os.path.join(jdk_src, 'java', 'util', 'iterator.rs'),
     }
     if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):
@@ -126,7 +143,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             registry.setdefault(jci.name, jci)
 
     # 扫描 jdk_classes/src/**/*_impl.rs，构建 new_format_map（已手写方法 → codegen 跳过 stub）
-    new_format_map, full_impl_classes = _scan_impl_files(out_dir)
+    # 传入 registry 使 _scan_impl_files 能通过 registry 解析嵌套类的真实 binary_name（如 HashMap$TreeNode）
+    new_format_map, full_impl_classes = _scan_impl_files(out_dir, registry=registry)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}

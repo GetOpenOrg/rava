@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -22,6 +22,7 @@ use crate::sun::security::util::*;
     is_deprecated     = false,
     source            = "OutputStream.java",
     inner_classes     = "java/io/OutputStream$1:::0",
+    all_supertypes    = "java/io/Closeable;java/io/Flushable;java/io/OutputStream;java/lang/Object",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct OutputStream;

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "hello_world"
+name = "test_stream_collectors"
 path = "src/main.rs"
 
 [dependencies]

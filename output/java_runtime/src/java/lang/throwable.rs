@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -23,6 +23,7 @@ use crate::jdk::internal::misc::InternalLock;
     is_deprecated     = false,
     source            = "Throwable.java",
     inner_classes     = "java/lang/Throwable$WrappedPrintStream:java/lang/Throwable:WrappedPrintStream:10;java/lang/Throwable$PrintStreamOrWriter:java/lang/Throwable:PrintStreamOrWriter:1034;java/lang/Throwable$WrappedPrintWriter:java/lang/Throwable:WrappedPrintWriter:10;java/lang/Throwable$SentinelHolder:java/lang/Throwable:SentinelHolder:10",
+    all_supertypes    = "java/io/Serializable;java/lang/Object;java/lang/Throwable",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Throwable {
@@ -186,7 +187,7 @@ impl Throwable {
     }
 
     #[cfg_attr(any(), java_method(name = "printEnclosedStackTrace", descriptor = "(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set<Ljava/lang/Throwable;>;)V"))]
-    pub fn printEnclosedStackTrace(&self, s: Object, enclosingTrace: Rc<RefCell<Vec<Object>>>, caption: String, prefix: String, dejaVu: Object) -> Result<()> {
+    pub fn printEnclosedStackTrace(&self, s: Object, enclosingTrace: Rc<RefCell<Vec<Object>>>, caption: String, prefix: String, dejaVu: Set<Object>) -> Result<()> {
         panic!("stub: java/lang/Throwable.printEnclosedStackTrace:(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V")
     }
 

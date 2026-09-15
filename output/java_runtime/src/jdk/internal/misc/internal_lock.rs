@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -22,6 +22,7 @@ use crate::jdk::internal::misc::*;
     is_enum           = false,
     is_deprecated     = false,
     source            = "InternalLock.java",
+    all_supertypes    = "java/lang/Object;jdk/internal/misc/InternalLock",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct InternalLock {

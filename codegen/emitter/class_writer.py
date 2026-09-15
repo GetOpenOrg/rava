@@ -226,7 +226,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         "",
     ]
     if not _full_impl:
-        parts.append(_java_class_attr(ci, compiled=True))
+        parts.append(_java_class_attr(ci, compiled=True, registry=registry))
     field_type_prefix = "JField"
 
     inst_fields = [f for f in ci.fields if not f.is_static]

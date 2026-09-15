@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -22,6 +22,7 @@ use crate::sun::security::util::*;
     is_deprecated     = false,
     source            = "Enum.java",
     inner_classes     = "java/lang/Enum$EnumDesc:java/lang/Enum:EnumDesc:25;java/lang/invoke/MethodHandles$Lookup:java/lang/invoke/MethodHandles:Lookup:25",
+    all_supertypes    = "java/io/Serializable;java/lang/Comparable;java/lang/Enum;java/lang/Object;java/lang/constant/Constable",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Enum<E: Clone + Default + 'static> {

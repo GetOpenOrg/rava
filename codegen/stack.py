@@ -219,6 +219,14 @@ class StackSim:
             let_ty = None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty)
             self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
 
+        # dup 后 astore：同一个 Var("_tN") 可能还留在 stack 上，但 _tN 已被 move。
+        # 把 stack 上残留的同名引用替换为目标变量名，防止 E0382 use-after-move。
+        if isinstance(expr, Var) and expr.name != name:
+            self.stack = [
+                (Var(name), sty) if isinstance(se, Var) and se.name == expr.name else (se, sty)
+                for se, sty in self.stack
+            ]
+
     def load_local(self, slot: int) -> tuple[RsExpr, RsType]:
         """从局部变量槽加载，返回 (RsExpr, RsType)。"""
         if slot in self.locals:

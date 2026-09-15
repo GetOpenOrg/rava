@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -23,6 +23,7 @@ use crate::jdk::internal::misc::InternalLock;
     is_deprecated     = false,
     source            = "PrintStream.java",
     inner_classes     = "java/util/Locale$Category:java/util/Locale:Category:16409;java/io/PrintStream$1:::0",
+    all_supertypes    = "java/io/Closeable;java/io/FilterOutputStream;java/io/Flushable;java/io/OutputStream;java/io/PrintStream;java/lang/Appendable;java/lang/Object",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct PrintStream {
@@ -229,12 +230,11 @@ impl PrintStream {
     // java: write(Ljava/lang/String;)V
     pub fn write_str(&self, mut s: String) -> Result<()> {
         let this = self;
-    let mut x = Default::default();
         if !_is_jnull(&this.lock.get()) {
             this.lock.get().lock()?;
             this.implWrite_str(Clone::clone(&s))?;
             this.lock.get().unlock()?;
-            x = (panic!("stack underflow") as i32);
+            let mut x = (panic!("stack underflow") as i32);
             this.lock.get().unlock()?;
             return Err(JvmError::Custom("athrow".to_owned()));
         }
@@ -262,12 +262,11 @@ impl PrintStream {
     // java: writeln(Ljava/lang/String;)V
     pub fn writeln_str(&self, mut s: String) -> Result<()> {
         let this = self;
-    let mut x = Default::default();
         if !_is_jnull(&this.lock.get()) {
             this.lock.get().lock()?;
             this.implWriteln_str(Clone::clone(&s))?;
             this.lock.get().unlock()?;
-            x = (panic!("stack underflow") as i32);
+            let mut x = (panic!("stack underflow") as i32);
             this.lock.get().unlock()?;
             return Err(JvmError::Custom("athrow".to_owned()));
         }
@@ -294,12 +293,11 @@ impl PrintStream {
     #[cfg_attr(any(), java_method(name = "newLine", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn newLine(&self) -> Result<()> {
         let this = self;
-    let mut x = Default::default();
         if !_is_jnull(&this.lock.get()) {
             this.lock.get().lock()?;
             this.implNewLine()?;
             this.lock.get().unlock()?;
-            x = (panic!("stack underflow") as i32);
+            let mut x = (panic!("stack underflow") as i32);
             this.lock.get().unlock()?;
             return Err(JvmError::Custom("athrow".to_owned()));
         }
@@ -340,8 +338,11 @@ impl PrintStream {
     }
 
     #[cfg_attr(any(), java_method(name = "print", descriptor = "(J)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn print_l(&self, l: i64) -> Result<()> {
-        panic!("stub: java/io/PrintStream.print:(J)V")
+    // java: print(J)V
+    pub fn print_l(&self, mut l: i64) -> Result<()> {
+        let this = self;
+        this.write_str(Clone::clone(&String::from_owned(format!("{}", l))))?;
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "print", descriptor = "(F)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -403,8 +404,18 @@ impl PrintStream {
     }
 
     #[cfg_attr(any(), java_method(name = "println", descriptor = "(J)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn println_l(&self, x: i64) -> Result<()> {
-        panic!("stub: java/io/PrintStream.println:(J)V")
+    // java: println(J)V
+    pub fn println_l(&self, mut x: i64) -> Result<()> {
+        let this = self;
+        let _t0 = this.getClass()?;
+        if _t0 == Object::default() {
+            this.writeln_str(Clone::clone(&String::from_owned(format!("{}", x))))?;
+        } else {
+            let mut local_3 = this.clone();
+            this.print_l(x)?;
+            this.newLine()?;
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "println", descriptor = "(F)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -438,8 +449,19 @@ impl PrintStream {
     }
 
     #[cfg_attr(any(), java_method(name = "println", descriptor = "(Ljava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn println_obj(&self, x: Object) -> Result<()> {
-        panic!("stub: java/io/PrintStream.println:(Ljava/lang/Object;)V")
+    // java: println(Ljava/lang/Object;)V
+    pub fn println_obj(&self, mut x: Object) -> Result<()> {
+        let this = self;
+        let mut s: String = String::from_owned(format!("{}", x));
+        let _t0 = this.getClass()?;
+        if _t0 == Object::default() {
+            this.writeln_str(Clone::clone(&String::from_owned(format!("{}", s))))?;
+        } else {
+            let mut local_3 = this.clone();
+            this.print_str(Clone::clone(&s))?;
+            this.newLine()?;
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "printf", descriptor = "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/PrintStream;", access = "public", modifiers = "varargs", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]

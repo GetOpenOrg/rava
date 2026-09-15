@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -23,6 +23,7 @@ use crate::jdk::internal::misc::VM;
     is_deprecated     = false,
     source            = "Thread.java",
     inner_classes     = "jdk/internal/vm/ScopedValueContainer$BindingsSnapshot:jdk/internal/vm/ScopedValueContainer:BindingsSnapshot:25;java/lang/Thread$FieldHolder:java/lang/Thread:FieldHolder:10;java/lang/Thread$ThreadIdentifiers:java/lang/Thread:ThreadIdentifiers:10;java/lang/ThreadLocal$ThreadLocalMap:java/lang/ThreadLocal:ThreadLocalMap:8;java/lang/Thread$Constants:java/lang/Thread:Constants:10;java/lang/ThreadBuilders$PlatformThreadBuilder:java/lang/ThreadBuilders:PlatformThreadBuilder:24;java/lang/ThreadBuilders$VirtualThreadBuilder:java/lang/ThreadBuilders:VirtualThreadBuilder:24;java/lang/Thread$ThreadNumbering:java/lang/Thread:ThreadNumbering:10;java/lang/Thread$UncaughtExceptionHandler:java/lang/Thread:UncaughtExceptionHandler:1545;java/lang/Thread$State:java/lang/Thread:State:16409;java/lang/Thread$Caches:java/lang/Thread:Caches:10;java/lang/Thread$1:::0;java/lang/Thread$Builder:java/lang/Thread:Builder:1545;java/lang/Thread$Builder$OfPlatform:java/lang/Thread$Builder:OfPlatform:1545;java/lang/Thread$Builder$OfVirtual:java/lang/Thread$Builder:OfVirtual:1545;java/lang/Thread$Constants$1:::0;java/lang/Thread$Caches$1:::0",
+    all_supertypes    = "java/lang/Object;java/lang/Runnable;java/lang/Thread",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Thread {
@@ -539,7 +540,7 @@ impl Thread {
     }
 
     #[cfg_attr(any(), java_method(name = "getAllStackTraces", descriptor = "()Ljava/util/Map;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Map<Ljava/lang/Thread;[Ljava/lang/StackTraceElement;>;"))]
-    pub fn getAllStackTraces() -> Result<Object> {
+    pub fn getAllStackTraces() -> Result<Map<Object, Object>> {
         panic!("stub: java/lang/Thread.getAllStackTraces:()Ljava/util/Map;")
     }
 

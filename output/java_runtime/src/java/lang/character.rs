@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -22,6 +22,7 @@ use crate::sun::security::util::*;
     is_deprecated     = false,
     source            = "Character.java",
     inner_classes     = "java/lang/Character$CharacterCache:java/lang/Character:CharacterCache:26;java/lang/Character$UnicodeBlock:java/lang/Character:UnicodeBlock:25;java/lang/Character$UnicodeScript:java/lang/Character:UnicodeScript:16409;java/lang/Character$Subset:java/lang/Character:Subset:9",
+    all_supertypes    = "java/io/Serializable;java/lang/Character;java/lang/Comparable;java/lang/Object;java/lang/constant/Constable",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Character {

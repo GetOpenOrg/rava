@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -23,6 +23,7 @@ use crate::jdk::internal::misc::InternalLock;
     is_deprecated     = false,
     source            = "Writer.java",
     inner_classes     = "java/io/Writer$1:::0",
+    all_supertypes    = "java/io/Closeable;java/io/Flushable;java/io/Writer;java/lang/Appendable;java/lang/Object",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Writer {

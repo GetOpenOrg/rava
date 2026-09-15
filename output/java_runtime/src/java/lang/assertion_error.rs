@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -21,6 +21,7 @@ use crate::sun::security::util::*;
     is_enum           = false,
     is_deprecated     = false,
     source            = "AssertionError.java",
+    all_supertypes    = "java/io/Serializable;java/lang/AssertionError;java/lang/Error;java/lang/Object;java/lang/Throwable",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct AssertionError {
@@ -70,7 +71,7 @@ impl AssertionError {
     pub fn new_obj(mut detailMessage: Object) -> Result<Self> {
         let mut this = Self { _super: Default::default(), ..Default::default() };
         this = AssertionError::new_str(Clone::clone(&String::from_owned(format!("{}", detailMessage))))?;
-        if (detailMessage.0.downcast_ref::<Throwable>().is_some()) {
+        if (detailMessage.is_instance_of("java/lang/Throwable")) {
             let _t0 = this._super._super.initCause(Clone::clone(&(detailMessage).downcast::<Throwable>()))?;
         }
         Ok(this)

@@ -56,7 +56,7 @@ def _parse_synthetic_fn(line: str) -> dict | None:
     }
 
 
-def _scan_impl_files(workspace_root: str) -> tuple[dict, set]:
+def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple[dict, set]:
     """扫描 java_runtime/src/**/*_impl.rs 共置手写文件，提取已实现的方法名。
     codegen 根据返回的 new_format_map 跳过对应方法的 stub 生成。
     返回:
@@ -69,6 +69,25 @@ def _scan_impl_files(workspace_root: str) -> tuple[dict, set]:
         return {}, set()
 
     new_format_map: dict = {}
+
+    # 预先构建：snake_case 路径 → class binary name（用于 $ 嵌套类名，无需依赖已生成的 .rs 文件）
+    # 例：java/util/hash_map_tree_node → java/util/HashMap$TreeNode
+    def _camel_to_snake(name: str) -> str:
+        s = _re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', name)
+        s = _re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', '_', s)
+        return s.lower()
+
+    _snake_to_binary: dict[str, str] = {}
+    if registry:
+        for binary_name in registry:
+            pkg_parts = binary_name.split('/')
+            *pkg, cls = pkg_parts
+            # 嵌套类按 $ 拆分后各段分别转 snake_case，再用 _ 连接
+            # HashMap$TreeNode → hash_map + tree_node → hash_map_tree_node
+            snake_cls = '_'.join(_camel_to_snake(p) for p in cls.split('$'))
+            for sv in {snake_cls, snake_cls.replace('__', '_')}:
+                key = '/'.join(pkg + [sv])
+                _snake_to_binary.setdefault(key, binary_name)
 
     def _snake_to_class(s: str) -> str:
         return ''.join(w.capitalize() for w in s.split('_'))
@@ -87,11 +106,28 @@ def _scan_impl_files(workspace_root: str) -> tuple[dict, set]:
             # 去掉 _impl / _ext 后缀还原为对应类的 binary name
             if fname.endswith('_impl.rs'):
                 base_stem = stem[:-5]   # 去掉 _impl (5 chars)
+                gen_fname = fname[:-8] + '.rs'  # hash_map_impl.rs -> hash_map.rs
             else:
                 base_stem = stem[:-4]   # 去掉 _ext  (4 chars)
+                gen_fname = fname[:-7] + '.rs'  # hash_map_ext.rs -> hash_map.rs
             parts = base_stem.split('/')
             *pkg, cls_snake = parts
             class_binary = '/'.join(pkg + [_snake_to_class(cls_snake)])
+
+            # 优先从 registry 中查找真实 binary_name（处理 $ 嵌套类，不依赖已生成的 .rs 文件）
+            if base_stem in _snake_to_binary:
+                class_binary = _snake_to_binary[base_stem]
+            else:
+                # 其次从同目录生成的 .rs 文件中读取真实 binary_name
+                gen_rs_path = os.path.join(root_dir, gen_fname)
+                if os.path.exists(gen_rs_path):
+                    try:
+                        gen_head = open(gen_rs_path, encoding='utf-8').read(2000)
+                        bm = _re.search(r'binary_name\s*=\s*"([^"]+)"', gen_head)
+                        if bm:
+                            class_binary = bm.group(1)
+                    except Exception:
+                        pass
 
             try:
                 content = open(fpath, encoding='utf-8').read()

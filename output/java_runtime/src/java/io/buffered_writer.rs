@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -23,6 +23,7 @@ use crate::jdk::internal::misc::VM;
     is_enum           = false,
     is_deprecated     = false,
     source            = "BufferedWriter.java",
+    all_supertypes    = "java/io/BufferedWriter;java/io/Closeable;java/io/Flushable;java/io/Writer;java/lang/Appendable;java/lang/Object",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct BufferedWriter {
@@ -99,13 +100,12 @@ impl BufferedWriter {
     pub fn flushBuffer(&self) -> Result<()> {
         let this = self;
         let mut lock = this._super.lock.get();
-    let mut local_3 = Default::default();
-        if (lock.0.downcast_ref::<InternalLock>().is_some()) {
+        if (lock.is_instance_of("jdk/internal/misc/InternalLock")) {
             let mut locker = (lock).downcast::<InternalLock>();
             locker.lock()?;
             this.implFlushBuffer()?;
             locker.unlock()?;
-            local_3 = (panic!("stack underflow") as i32);
+            let mut local_3 = (panic!("stack underflow") as i32);
             locker.unlock()?;
             return Err(JvmError::Custom("athrow".to_owned()));
         }
