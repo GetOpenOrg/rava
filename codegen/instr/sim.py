@@ -23,6 +23,7 @@ from .coerce import (
     _coerce_to_object, _coerce_from_null, _coerce_value,
     _find_field_super_prefix, _find_field_super_prefix_for_type,
     _parse_field_ref, _is_subtype, _is_direct_subtype, _rust_type_to_binary,
+    _get_field_generic_signature,
     _PRIMITIVE_RUST_TYPES,
 )
 from .invoke import (
@@ -323,6 +324,15 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment:
             _, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'Object'
+            # JVM 类型擦除后 ftype 可能是 Object，但实际字段可能是泛型类型参数（JField<T>）
+            # 通过 generic_signature 恢复真实类型：TT; → T，TK; → K 等
+            if ftype == 'Object' and registry and sim.class_type_params:
+                _gsig = _get_field_generic_signature(class_name, fname, registry)
+                if _gsig:
+                    import re as _re
+                    _m = _re.match(r'^T([A-Z][A-Za-z0-9]*);$', _gsig)
+                    if _m and _m.group(1) in sim.class_type_params:
+                        ftype = _m.group(1)
             # T76: 基于接收者实际 Rust 类型查找字段的 _super 路径
             recv_base = render_type(obj_ty).split('<')[0].strip()
             cls_short = class_name.rsplit('/', 1)[-1] if '/' in class_name else class_name

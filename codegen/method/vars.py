@@ -269,23 +269,31 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
             block_k = parent_k
         # 若 block_k 所在块后有同层 "} else {" 且 else 分支中也引用了该变量，
         # 则需继续向上提升到 outer if 之前，否则变量在 else 分支中不可见（E0425）
-        blk_nesting = entry_nesting[block_k]
+        # 递归检查：每次上升后，继续检查新 block_k 是否仍在 else 中被引用
         word_pat = word_cache.get(name) or re.compile(r'\b' + re.escape(name) + r'\b')
-        for k_else in range(block_k + 1, len(entries)):
-            if entry_nesting[k_else] < blk_nesting:
-                break
-            if (entry_nesting[k_else] == blk_nesting
-                    and rendered[k_else].lstrip().startswith('} else')):
-                found_in_else = any(
-                    word_pat.search(rendered[k_ref])
-                    for k_ref in range(k_else + 1, len(entries))
-                    if entry_nesting[k_ref] >= blk_nesting
-                )
-                if found_in_else:
-                    for bk in reversed(block_entry_indices):
-                        if bk < block_k and entry_nesting[bk] < blk_nesting:
-                            block_k = bk
-                            break
+        max_hoist = 10  # 防止无限循环
+        while max_hoist > 0:
+            max_hoist -= 1
+            blk_nesting = entry_nesting[block_k]
+            moved = False
+            for k_else in range(block_k + 1, len(entries)):
+                if entry_nesting[k_else] < blk_nesting:
+                    break
+                if (entry_nesting[k_else] == blk_nesting
+                        and rendered[k_else].lstrip().startswith('} else')):
+                    found_in_else = any(
+                        word_pat.search(rendered[k_ref])
+                        for k_ref in range(k_else + 1, len(entries))
+                        if entry_nesting[k_ref] >= blk_nesting
+                    )
+                    if found_in_else:
+                        for bk in reversed(block_entry_indices):
+                            if bk < block_k and entry_nesting[bk] < blk_nesting:
+                                block_k = bk
+                                moved = True
+                                break
+                    break
+            if not moved:
                 break
         block_indent = entries[block_k][0]
         # 获取类型注解节点（来自第一次声明）

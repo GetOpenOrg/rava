@@ -412,6 +412,23 @@ def _find_field_super_prefix_for_type(recv_rust_type: str, fname: str, registry:
     return ''
 
 
+def _get_field_generic_signature(class_name: str, safe_fname: str, registry: dict | None) -> str:
+    """在类及其继承链中查找字段的 generic_signature。
+    用于 getfield 时从 JVM 类型擦除的 Object 恢复泛型类型参数名（如 TT; → T）。"""
+    if not registry or not class_name:
+        return ''
+    ci = registry.get(class_name)
+    while ci is not None:
+        for f in ci.fields:
+            if not f.is_static and _safe_field(f.name) == safe_fname:
+                return f.generic_signature
+        sc = getattr(ci, 'super_class', None)
+        if not sc or sc == 'java/lang/Object':
+            break
+        ci = registry.get(sc)
+    return ''
+
+
 def _find_method_super_prefix_for_type(recv_rust_type: str, mname: str, registry: dict | None,
                                        descriptor: str = '') -> str:
     """基于接收者 Rust 类型（短名）查找方法 _super 前缀。"""
