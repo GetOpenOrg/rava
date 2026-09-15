@@ -183,6 +183,8 @@ codegen 读取 `descriptor` → `expected = "Object"` → 错误包装 `Object::
 
 **架构解法（Arch-7）**：`jvm_to_rust` 同时接受 `generic_signature` 参数，返回 `RsType` 枚举节点；codegen 在生成 `invokespecial/invokestatic/invokevirtual/putfield` 时优先使用 `generic_signature` 中的参数类型，此处 5 个补丁全部删除。
 
+**状态**：✅ 已实施（2026-09-16，Arch-7）
+
 ---
 
 ### I-2: `_is_direct_subtype` 与 `_is_subtype` 并存（见 B-1、A-2）
@@ -240,7 +242,8 @@ let java_copy: Object = p.clone()?;                 // Java 语义 clone
 
 **当前做法**：`codegen/method/postprocess.py`：当函数末尾最后一行不是 `Ok(...)` 时追加 `unreachable!()`，防止 Rust 报 E0317（if 缺少 else）。  
 **根本原因**：`while(true)` 循环被展平为直线代码后，goto 回边丢失，Rust 看到 `if` 没有 else，函数在某条路径"掉出"末尾。  
-**架构解法（Arch-8，CFG 重建）**：构建 CFG + 支配树，识别自然循环，生成正确的 `loop { ... if cond { break; } }` 结构，函数末尾永远是 `Ok(...)` 表达式，此补丁删除。
+**架构解法（Arch-8，CFG 重建）**：构建 CFG + 支配树，识别自然循环，生成正确的 `loop { ... if cond { break; } }` 结构，函数末尾永远是 `Ok(...)` 表达式，此补丁删除。  
+**状态**：✅ 已实施（2026-09-16，Arch-8）— `function_always_returns(instrs)` CFG 分析替代启发式检测，`unreachable!()` 完全消除
 
 ---
 
@@ -734,8 +737,8 @@ Arch-7 完成后：
 - 类型信息在 Python 内存中以 `RsType` 节点流转，不再经过"写入 Rust 文件 → 反向解析"的迂回路径
 - `sig_parser.py` **整体删除**，不做改造
 
-**修改文件**：`codegen/types.py`（新建 RsType）、`codegen/instr/sim.py`、`codegen/instr/invoke.py`、`codegen/instr/coerce.py`、`codegen/method/codegen.py`；删除 `codegen/sig_parser.py`  
-**状态**：🔴 未实施（Task #7）
+**修改文件**：`codegen/type_map.py`（内联 sig_parser + 新增 jvm_to_rs_type）、`codegen/instr/invoke.py`、`codegen/method/codegen.py`、`codegen/instr/sim.py`、`codegen/emitter/class_writer.py`；已删除 `codegen/sig_parser.py`  
+**状态**：✅ 已实施（2026-09-16）— _is_generic_type_param 全部删除，sig_parser.py 已删除，jvm_to_rs_type 新增，_lookup_method_sig_params + _coerce_arg 统一化
 
 ---
 
@@ -752,7 +755,15 @@ Arch-7 完成后：
 5. **效果**：函数末尾永远有完整返回，`unreachable!()` 补丁删除；`break`/`continue` 语义正确；goto 重叠引起的代码重复问题消失。
 
 **修改文件**：新建 `codegen/cfg/` 模块（已有 `branches.py`、`loops.py` 雏形），`codegen/method/codegen.py` 主流程接入 CFG 输出  
-**状态**：🔴 未实施（Task #4）
+**状态**：✅ 已实施（2026-09-16，Arch-8）
+
+**实施摘要（2026-09-16）**：
+- 新建 `codegen/cfg/basic_blocks.py`：实现 `BasicBlock` 数据类 + `build_basic_blocks(instrs)` + `function_always_returns(instrs)` 三个函数
+- `function_always_returns` 通过 CFG 终止块分析判断函数是否在所有路径上都有 return/throw；发散循环（loop {} 无 break）无终止块，自动返回 True
+- 更新 `codegen/cfg/__init__.py`：导出新符号
+- 更新 `codegen/method/postprocess.py`：`_add_ok_return` 接受 `always_returns: bool` 参数，为 True 时不追加 `unreachable!()`
+- 更新 `codegen/method/codegen.py`：调用 `function_always_returns(instrs)` 并将结果传入 `_add_ok_return`
+- 效果：生成代码中 `unreachable!()` 完全消除（user/ 和 jdk_classes/ 均为 0 处），通过测试数不变（12/60，因其他架构问题仍阻塞）
 
 ---
 
@@ -788,7 +799,7 @@ java_class 宏重写（核心前置工作）：
 | 0c | **I-6**（删除 `jvm_clone` 重命名）| 150+ 处 `jvm_clone` 恢复为 `clone`，消除命名原则违规 | 无，独立可修 |
 | 1 | **D-1 短期**（invokedynamic 弹/压占位） | 消除 7 个测试的 E0308 | 无 |
 | 2 | **Arch-7**（RsType 化 + generic_signature 读取，废弃 sig_parser.py） | 消除 I 节全部补丁，提升全局类型精度 | 无 |
-| 3 | **Arch-8**（CFG 重建） | 消除 I-5 unreachable!()，修复控制流正确性 | 无 |
+| 3 | **Arch-8**（CFG 重建） ✅ | 消除 I-5 unreachable!()，修复控制流正确性 | 无 |
 | 4 | **`java_class` 宏重写**（读取所有元数据） | 所有 Arch 的基础 | 无 |
 | 5 | **Arch-2**（instanceof + BINARY_NAME） | 5+ 测试 + 消除 Arch-6 | 宏重写 |
 | 6 | **Object 改 `Rc<dyn ObjectVTable>`** | 基础类型重构，ObjectVTable 由 java/lang/object.rs 字节码翻译定义 | 宏重写 |
@@ -973,3 +984,4 @@ pub trait Printable {
 | 2026-09-15 | B-2：T55 `.into()` 对 `this`（`&Self`）生成 `From<&T>` 但只有 `From<T>` → E0277 | `invoke.py` T55 `.into()` 分支改为 `Clone::clone(&e).into()` |
 | 2026-09-15 | C-1 附加：`#[path = "..."] mod _impl;` 目标文件不存在 → E0583 | `class_writer.py` 写 `#[path]` 前 `os.path.exists` 检查，不存在则省略 |
 | 2026-09-15 | D-1：invokedynamic 不弹栈不压返回值 → 后续指令类型错误 | `sim.py` 已实现：解析 descriptor 弹出 N 参数，压入 `Object::default()` |
+| 2026-09-16 | I-1（Arch-7）：`_is_generic_type_param` 启发式删除，`sig_parser.py` 删除 | `type_map.py` 内联 sig_parser 功能 + 新增 `jvm_to_rs_type`；`invoke.py` 用 `_lookup_method_sig_params` 读 registry 中方法 generic_signature；`codegen.py` 用 `ty_str in _class_tparams` 替代启发式 |

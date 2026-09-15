@@ -29,8 +29,12 @@ def _fix_bool_returns(lines: list[str]) -> list[str]:
     return result
 
 
-def _add_ok_return(lines: list[str], rust_ret: str) -> list[str]:
-    """在方法末尾添加正确的 Ok(?) 返回表达式。"""
+def _add_ok_return(lines: list[str], rust_ret: str, always_returns: bool = False) -> list[str]:
+    """在方法末尾添加正确的 Ok(?) 返回表达式。
+
+    always_returns: 由 CFG 分析得出，若 True 表示函数所有路径都经过 return/throw，
+    或函数是发散函数（loop {} 无 break）。此时末尾不添加 unreachable!()。
+    """
     result = list(lines)
     if rust_ret == '()':
         # void 方法：末尾加 Ok(())
@@ -53,9 +57,11 @@ def _add_ok_return(lines: list[str], rust_ret: str) -> list[str]:
                     result[i] = f"{m.group(1)}Ok({m.group(2)})"
                 elif not stripped.startswith('Ok('):
                     # 如果最后一行不是 Ok(...) 也不是 return Ok(...)，
-                    # 说明函数在块尾自然结束（如 while(true) 循环被展平为直线代码）。
-                    # Java 语义保证此处不可达，加 unreachable!() 满足 Rust 类型检查。
-                    result.append('    unreachable!()')
+                    # 说明函数在块尾自然结束。
+                    # CFG 分析若确认函数总是 return/throw（含发散 loop {} 无 break），
+                    # 则 Rust 类型检查自动满足，无需 unreachable!()。
+                    if not always_returns:
+                        result.append('    unreachable!()')
                 break
     return result
 

@@ -21,6 +21,7 @@ from ..cfg import (
     find_loops, find_boolean_conditions, find_if_guards, find_if_else,
     find_switches,
     cmp_op, neg_cmp_op, _TWO_OP_BRANCH_OPS,
+    function_always_returns,
 )
 from ..instr import sim_instr
 from ..render import render_stmt, render_expr, render_type
@@ -665,7 +666,8 @@ def gen_method_body(
         if rust_ret == 'bool':
             lines = _fix_bool_returns(lines)
         lines = _remove_trailing_return_ok(lines)
-        lines = _add_ok_return(lines, rust_ret)
+        _always_returns = function_always_returns(instrs)
+        lines = _add_ok_return(lines, rust_ret, _always_returns)
 
     body = '\n'.join(lines)
     # 有重载时在方法前加注释，标注原始 Java 签名
