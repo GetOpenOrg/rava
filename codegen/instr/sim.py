@@ -359,16 +359,16 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                 val_str = f"<_ as Into<{ftype}>>::into({val_str_raw})"
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
-            # 引用类型赋值时加 .clone()，避免 E0382（move after use）
+            # 引用类型赋值时加 Clone::clone()，避免 E0382（move after use）
             _obj_str = render_expr(obj_expr)
             if (val_ty_name not in _PRIMITIVE_RUST_TYPES
                     and not val_str.startswith('Default::')
-                    and '.clone()' not in val_str):
+                    and '.clone()' not in val_str
+                    and 'Clone::clone(' not in val_str):
                 if val_str == 'this' and 'this' in _obj_str:
-                    # this.field.set(this) → 借用与移动冲突，需 .clone()
-                    val_str = 'this.clone()'
+                    val_str = 'Clone::clone(&this)'
                 elif val_str != 'this':
-                    val_str = f'{val_str}.clone()'
+                    val_str = f'Clone::clone(&{val_str})'
             # T76: 基于接收者实际 Rust 类型查找字段的 _super 路径
             recv_base = render_type(obj_ty).split('<')[0].strip()
             cls_short = class_name.rsplit('/', 1)[-1] if '/' in class_name else class_name
@@ -471,7 +471,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif elem_ty != 'Object' and val_ty_str == 'Object':
             val_str = f"Default::default()"
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
-            val_str = f"{val_str}.clone()"
+            val_str = f"Clone::clone(&{val_str})"
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {val_str};"))
     elif op == 'bastore':
         val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
@@ -513,7 +513,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             import re as _re
             _m = _re.match(r'Rc<RefCell<Vec<(.+)>>>$', arr_ty_str)
             elem_ty_str = _m.group(1) if _m else 'Object'
-        sim.push(RawExpr(f"{render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize].clone()"), RsNamed(elem_ty_str))
+        sim.push(RawExpr(f"Clone::clone({render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize])"), RsNamed(elem_ty_str))
     elif op == 'arraylength':
         arr_expr, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(arr_expr)}.borrow().len() as i32)"), I32)
@@ -546,9 +546,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         actual_ty = render_type(e_ty)
         ret_ty = getattr(sim, 'return_type', 'Object')
         _ctparams = getattr(sim, 'class_type_params', frozenset())
-        # 实例方法返回 this 时，this 是 &Self 引用，需要 clone() 才能返回 owned 值
+        # 实例方法返回 this 时，this 是 &Self 引用，需要 Clone::clone 才能返回 owned 值
         if expr_s == 'this' and not sim.is_static:
-            expr_s = 'this.clone()'
+            expr_s = 'Clone::clone(this)'
         elif ret_ty == 'Object' and actual_ty not in ('Object', '()'):
             expr_s = _coerce_to_object(expr_s, actual_ty)
         elif ret_ty != 'Object' and actual_ty == 'Object':

@@ -99,7 +99,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
                 e_str = _coerce_value(e_str, e_ty_node, expected_rust)
             elif actual_rust not in _PRIMITIVE_RUST_TYPES:
-                e_str = f"{e_str}.clone()"
+                e_str = f"Clone::clone(&{e_str})"
             args.insert(0, e_str)
         obj_expr, _ = sim.pop()
         obj_e = render_expr(obj_expr)
@@ -132,13 +132,13 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         elif expected == 'Object' and ty not in ('Object', '()') and e != 'this' and not _is_generic_type_param(ty):
             e = _coerce_to_object(e, ty)
         elif expected == 'Object' and ty not in ('Object', '()') and e == 'this':
-            e = f"Object::from_any(self.clone())"
+            e = f"Object::from_any(Clone::clone(self))"
         elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, e_ty_node, expected)
         elif expected == 'i32' and ty in ('i8', 'i16', 'u16', 'bool'):
             e = f"({e} as i32)"
         elif ty not in _PRIMITIVE_RUST_TYPES:
-            e = f"{e}.clone()"
+            e = f"Clone::clone(&{e})"
         args.insert(0, e)
     obj_expr, obj_ty_node = sim.pop()
 
@@ -254,7 +254,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             # T55：子类型传给父类型参数位置，插入 .into() 类型提升
             e = f"{e}.into()"
         elif ty not in _PRIMITIVE_RUST_TYPES:
-            e = f"{e}.clone()"
+            e = f"Clone::clone(&{e})"
         args.insert(0, e)
 
     needs_q = False  # 是否加 ?（用户类方法返回 Result）
@@ -327,7 +327,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             # T55：子类型传给父类型参数位置，插入 .into() 类型提升
             e_str = f"{e_str}.into()"
         elif actual_rust not in _PRIMITIVE_RUST_TYPES:
-            e_str = f"{e_str}.clone()"
+            e_str = f"Clone::clone(&{e_str})"
         args.insert(0, e_str)
     obj_expr, obj_ty_node = sim.pop()
     obj_e = render_expr(obj_expr)
@@ -394,6 +394,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         v = sim.fresh()
         if obj_is_bare and rust_ret not in ('Object', '()') and rust_ret not in _PRIMITIVE_RUST_TYPES:
             sim.emit(RawStmt(f"let {v}: {rust_ret} = Default::default();"))
+        elif rust_mname == 'clone' and obj_ty not in ('Object', '()'):
+            # invokevirtual Object.clone 调用在具体类型上（如数组）：
+            # Rust 的 clone() 不返回 Result，用 Object::from_any 包装匹配 Java 返回类型
+            sim.emit(RawStmt(f"let {v}: Object = Object::from_any({obj_e}.clone());"))
         else:
             sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
         sim.push(Var(v), RsNamed(rust_ret))
