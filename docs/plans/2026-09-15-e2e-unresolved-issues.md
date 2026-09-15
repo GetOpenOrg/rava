@@ -49,7 +49,7 @@
 - **架构解法（Arch-1）**：`java_class` 宏读取 `interfaces` 和 `super_class`，通过 `JvmObject` 的 trait 方法实现真正的动态协变，从根本上不需要 `.into()` 这种静态转型。届时 `_is_direct_subtype` 和 `_is_subtype` 两套规则均可删除。
 
 **修复位置**：临时无法修复（改 `_is_subtype` 会引入新的 E0277）；根本修复见 Arch-1。  
-**状态**：🔴 架构层面问题，临时方案会引入新错误
+**状态**：🔴 已确认接受当前编译错误，不引入新补丁，等 Arch-1 一并解决
 
 ---
 
@@ -212,8 +212,27 @@ codegen 读取 `descriptor` → `expected = "Object"` → 错误包装 `Object::
 **受影响范围**：搜索生成代码可见 150+ 处 `jvm_clone` 调用，覆盖 `java/lang/Object`、`ArrayList`、`Enum` 等所有类。  
 **问题**：`jvm_clone` 是人造的 `jvm_` 前缀名称，不存在于 Java 命名空间，违反 CLAUDE.md 命名原则2。  
 **引入原因**：Rust 中 `clone()` 是 `Clone` trait 的方法，与 Java `clone()` 共享名字会产生歧义或冲突。  
-**架构解法（Arch-7 范畴）**：在 `RsType` 化后，codegen 通过 `<Self as Clone>::clone()` 完全限定调用来区分，或将 Java `clone()` 翻译为 `clone_object()` 等不带 `jvm_` 前缀的名称。`jvm_clone` 这个重命名入口整体删除。  
-**状态**：🟠 已知违规，Arch-7 完成时一并修复
+
+**确认的最终态方案**：删除 `_JAVA_RUST_RENAME`，保留原名 `clone`。两者可共存：
+
+```rust
+// Java Object.clone() 翻译为 inherent 方法
+impl Point {
+    pub fn clone(&self) -> Result<Object> { ... }   // Java clone()，返回 Result<Object>
+}
+// Rust Clone trait 独立实现
+impl Clone for Point {
+    fn clone(&self) -> Self { ... }                 // Rust Clone::clone()，返回 Self
+}
+// 调用时用完全限定语法消歧：
+let rust_copy: Point = Clone::clone(&p);            // Rust 级别 clone
+let java_copy: Object = p.clone()?;                 // Java 语义 clone
+```
+
+签名不同（`Result<Object>` vs `Self`），Rust 允许 inherent 方法与 trait 方法同名，调用 `p.clone()` 优先解析 inherent 方法（Java clone），Rust-level clone 用 `Clone::clone(&p)`。
+
+**修复位置**：删除 `codegen/emitter/method_gen.py` 和 `codegen/method/codegen.py` 中 `_JAVA_RUST_RENAME` 的 `clone` 项。不依赖任何架构变更，可立即实施。  
+**状态**：🟠 已知违规，方案已确认，独立可修（不依赖 Arch-7）
 
 ---
 
@@ -501,11 +520,25 @@ pub struct Object {
 }
 ```
 
+**接口方法调用的派发机制（已确认）**：
+
+接口变量在运行时就是 `Object`（与 JVM 运行时模型一致），`ObjectVTable` 只含 `java.lang.Object` 的方法（`hashCode`/`equals`/`toString`/`getClass`），接口自身方法（如 `List#get`）通过 downcast 到具体类型调用：
+
+```rust
+// list: Object，codegen 知道其声明类型是 List<String>
+// list.get(0) 在 Java 层调用 List 接口方法，生成：
+list.downcast::<ArrayList<String>>().get(0)?
+// downcast 失败则运行时 panic（ClassCastException 语义）
+```
+
+`ObjectVTable` 不持有接口方法 vtable；接口 Rust trait（`List_Trait`、`Comparable_Trait` 等）仅作为静态约束供 `impl` 使用，不是运行时派发机制。此设计与 JVM 字节码的 `invokevirtual`/`invokeinterface` 分离语义一致。
+
 **codegen 变更**：
-1. `java_rta_macros/src/lib.rs` — `java_class` 宏：读取 `is_interface` / `interfaces` 参数，为接口生成 trait + explicit impls；为实现类生成 `ObjectVTable` impl（替代 blanket no-op），方法名与 Java 方法名一一对应
+1. `java_rta_macros/src/lib.rs` — `java_class` 宏：读取 `is_interface` / `interfaces` 参数，为接口生成 Rust trait；为实现类生成 `ObjectVTable` impl（替代 blanket no-op），方法名与 Java 方法名一一对应
 2. `java_runtime/src/java/lang/object.rs` — `Object(Rc<dyn Any>)` 升级为 `Object(Rc<dyn ObjectVTable>)`；`ObjectVTable` 的方法签名来自 `java.lang.Object` 字节码（`hashCode`、`equals`、`toString`、`getClass`）
 3. `java_runtime/src/lib.rs` — `JvmObjectBase` blanket impl 整体删除（过渡设施，最终态由字节码生成的 `ObjectVTable` 替代）
 4. Python `class_writer.py` T55b 整块删除（宏通过 `interfaces` 字段自动生成正确 From impl）
+5. Python `invoke.py` — 接口方法调用（`invokeinterface`）生成 `obj.downcast::<ConcreteType>().method()` 而非 `.into::<InterfaceType>().method()`
 
 **影响**：修复所有集合类方法调用、修复 G-1 虚方法派发。
 
@@ -692,7 +725,16 @@ impl From<ArrayList<E>> for List<E> {
 
 5. **效果**：I-1（_is_generic_type_param）、I-3（三元 elif 链）、I-4（this.clone 特判）三处补丁完全删除；I-2（_is_direct_subtype）在 Arch-1 完成后删除。
 
-**修改文件**：`codegen/types.py`、`codegen/instr/sim.py`、`codegen/instr/invoke.py`、`codegen/instr/coerce.py`、`codegen/method/codegen.py`  
+**`sig_parser.py` 的归宿（确认废弃，不是改造）**：
+
+`sig_parser.py` 是 codegen 从**已生成的 Rust 文件中反向读取**注解信息的工具，其存在本身就是架构问题的症状——codegen 生成 Rust 文件时本就持有完整类型信息，不应该再从生成物回读。
+
+Arch-7 完成后：
+- `jvm_to_rust()` 直接从 `.class` 字节码阶段的 `generic_signature` 字段获取类型信息，返回 `RsType` 节点
+- 类型信息在 Python 内存中以 `RsType` 节点流转，不再经过"写入 Rust 文件 → 反向解析"的迂回路径
+- `sig_parser.py` **整体删除**，不做改造
+
+**修改文件**：`codegen/types.py`（新建 RsType）、`codegen/instr/sim.py`、`codegen/instr/invoke.py`、`codegen/instr/coerce.py`、`codegen/method/codegen.py`；删除 `codegen/sig_parser.py`  
 **状态**：🔴 未实施（Task #7）
 
 ---
@@ -741,13 +783,16 @@ java_class 宏重写（核心前置工作）：
 
 | 顺序 | 工作项 | 影响 | 前置 |
 |------|--------|------|------|
+| 0a | **V5**（`codegen.py:498,531` 补 `_is_generic_type_param`） | 修复 if/else 分支泛型参数错误包装 | 无，2 行改动 |
+| 0b | **C-1**（创建 `preconditions.rs` 空文件） | 解除若干测试的文件缺失编译阻塞 | 无，新建文件 |
+| 0c | **I-6**（删除 `jvm_clone` 重命名）| 150+ 处 `jvm_clone` 恢复为 `clone`，消除命名原则违规 | 无，独立可修 |
 | 1 | **D-1 短期**（invokedynamic 弹/压占位） | 消除 7 个测试的 E0308 | 无 |
-| 2 | **Arch-7**（RsType 化 + generic_signature 读取） | 消除 I 节全部 5 个补丁，提升全局类型精度 | 无 |
+| 2 | **Arch-7**（RsType 化 + generic_signature 读取，废弃 sig_parser.py） | 消除 I 节全部补丁，提升全局类型精度 | 无 |
 | 3 | **Arch-8**（CFG 重建） | 消除 I-5 unreachable!()，修复控制流正确性 | 无 |
 | 4 | **`java_class` 宏重写**（读取所有元数据） | 所有 Arch 的基础 | 无 |
 | 5 | **Arch-2**（instanceof + BINARY_NAME） | 5+ 测试 + 消除 Arch-6 | 宏重写 |
 | 6 | **Object 改 `Rc<dyn ObjectVTable>`** | 基础类型重构，ObjectVTable 由 java/lang/object.rs 字节码翻译定义 | 宏重写 |
-| 7 | **Arch-1**（接口 → Rust trait + dyn dispatch） | 10+ 测试语义修复 | Object 重构 |
+| 7 | **Arch-1**（接口 → Rust trait + downcast dispatch） | 10+ 测试语义修复，废除 J-1/J-2/J-3 游离 trait | Object 重构 |
 | 8 | **Arch-3 长期**（invokedynamic → 真实闭包） | Lambda 语义 | Arch-1 |
 
 ---
@@ -773,8 +818,8 @@ impl<T> JvmObjectBase for T {}  // blanket no-op impl
 - 原则1：`JvmObjectBase` 不对应任何 Java 标准库类，是人造名称
 - 原则2：方法名 `jvm_clone` 带 `jvm_` 前缀，Java 中方法名是 `clone`
 
-**最终态废除路径**：由 `java/lang/object.rs` 字节码翻译生成 `ObjectVTable` trait（含 `hashCode`、`equals`、`toString`、`getClass`），`java_class` 宏为每个类生成具体 impl，blanket no-op impl 整体删除。  
-**状态**：🔴 过渡设施，Arch-1 完成时废除
+**最终态废除路径**：由 `java/lang/object.rs` 字节码翻译生成 `ObjectVTable` trait（含 `hashCode`、`equals`、`toString`、`getClass`），`java_class` 宏为每个类生成具体 impl，blanket no-op impl 整体删除。其中 `jvm_clone` 方法名直接改回 `clone`（见 I-6），不等 Arch-1。  
+**状态**：🔴 过渡设施，`jvm_clone` 命名部分独立可修（见 I-6），其余 Arch-1 完成时废除
 
 ---
 
