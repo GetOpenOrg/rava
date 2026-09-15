@@ -987,3 +987,4 @@ pub trait Printable {
 | 2026-09-16 | I-1（Arch-7）：`_is_generic_type_param` 启发式删除，`sig_parser.py` 删除 | `type_map.py` 内联 sig_parser 功能 + 新增 `jvm_to_rs_type`；`invoke.py` 用 `_lookup_method_sig_params` 读 registry 中方法 generic_signature；`codegen.py` 用 `ty_str in _class_tparams` 替代启发式 |
 | 2026-09-16 | `_validate_field_type` 只检查基础类型，不检查嵌套泛型参数 → Certificate/Constructor/TypeVariable E0425 | `class_writer.py` 新增 `_extract_type_names` 提取所有类型名（含嵌套），`_validate_field_type` 验证全部；不在注册表中的类型回退到原始描述符 |
 | 2026-09-16 | `load_local` 回退路径使用 `f"local_{slot}"` 而非 `_loc_names`，导致同一槽在跨 StackSim 路径中名称不一致 → 变量未声明 E0425 | `stack.py` `load_local` 回退改为 `_safe_name(_loc_names.get(slot, f"local_{slot}"))` |
+| 2026-09-16 | C-2 `_hoist_if_vars` 两处逻辑错误导致 else 块变量无法正确提升 → pattern.rs group0() `tail` E0425 | `vars.py` 1) `outer_decls` 新增 `outer_decl_first_k` 跟踪顶层声明位置，若声明晚于 ref_idx 则仍需提升并将其转为赋值；2) ref_nesting 停止条件 off-by-one：改为 `>= entry_nesting[block_k]`（不加 +1） |
