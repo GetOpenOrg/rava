@@ -239,6 +239,50 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 if m.name == meth and m.descriptor == desc:
                     enqueue_refs(m.instrs or [])
 
+        # 接口方法 → 具体实现类传播（interface dispatch 解析）
+        # 场景：user 代码调 invokeinterface java/util/List.add，但 runtime 实际调用 ArrayList.add
+        # BFS 只跟踪接口侧，漏掉具体类的方法实现，需要在 BFS 结束后补齐
+        _iface_methods = [
+            (iface, meth, desc)
+            for iface, meth, desc in list(visited_methods)
+            if (class_cache.get(iface) is not None
+                and getattr(class_cache[iface], 'is_interface', False)
+                and meth not in ('<init>', '<clinit>'))
+        ]
+        for iface, meth, desc in _iface_methods:
+            for concrete_name, concrete_ci in list(jdk_infos.items()):
+                if concrete_ci is None or getattr(concrete_ci, 'is_interface', False):
+                    continue
+                if iface in (concrete_ci.interfaces or []):
+                    key = (concrete_name, meth, desc)
+                    if key not in visited_methods:
+                        visited_methods.add(key)
+                        queue.append(key)
+        # 对传播出的新方法再跑一轮 BFS
+        while queue:
+            cls, meth, desc = queue.popleft()
+            if cls not in class_cache:
+                data = resolver.resolve(cls)
+                if data is None:
+                    class_cache[cls] = None
+                    continue
+                try:
+                    ci = parse_class_bytes(data, cls)
+                    class_cache[cls] = ci
+                    if cls not in jdk_infos:
+                        jdk_infos[cls] = ci
+                except Exception:
+                    class_cache[cls] = None
+                    continue
+            ci = class_cache.get(cls)
+            if ci is None:
+                continue
+            if cls not in jdk_infos:
+                jdk_infos[cls] = ci
+            for m in ci.methods:
+                if m.name == meth and m.descriptor == desc:
+                    enqueue_refs(m.instrs or [])
+
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
         _stub_queue: deque[str] = deque(field_discover_classes)
