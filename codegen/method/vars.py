@@ -191,6 +191,8 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
     declared_at: dict[str, list[tuple[int, int]]] = {}
     # 函数体顶层（nesting=0）声明的变量：已有函数级作用域，不应被 hoist 覆盖
     outer_decls: set[str] = set()
+    # 顶层声明的最早出现索引（用于判断是否晚于 ref_idx）
+    outer_decl_first_k: dict[str, int] = {}
     # index of any block-opening entry (ends with '{' and contains 'if' or has any '{')
     block_entry_indices: list[int] = []
 
@@ -204,6 +206,8 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
         elif isinstance(item, LetStmt):
             if nesting == 0 and item.name not in predeclared:
                 outer_decls.add(item.name)
+                if item.name not in outer_decl_first_k:
+                    outer_decl_first_k[item.name] = k
             elif nesting > 0 and item.name not in predeclared:
                 declared_at.setdefault(item.name, []).append((k, nesting))
 
@@ -228,7 +232,8 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
         cur += text.count('{') - text.count('}')
 
     # Pass 3: 找出需要提升的变量 - 在块外或 else 兄弟块中被引用
-    vars_to_hoist: dict[str, tuple[str | None, list[tuple[int, int]]]] = {}  # name → (type_str, [(decl_k, depth)])
+    # name → (type_str, decl_list, ref_idx)  ref_idx：触发 found=True 的外部引用位置（-1 表示来自 else 兄弟块）
+    vars_to_hoist: dict[str, tuple[str | None, list[tuple[int, int]], int]] = {}
     word_cache: dict[str, re.Pattern] = {}
     for name, decl_list in declared_at.items():
         # 对于每次声明，检查变量是否在其作用域关闭后或 else 兄弟块中被引用
@@ -245,6 +250,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
             word = word_cache[name]
 
             found = False
+            ref_idx = -1  # 触发 found=True 的外部引用索引（-1 表示 else 兄弟块引用）
             # 检查 1：作用域关闭后是否被引用（原有逻辑）
             # 若第一个匹配是另一个 let 声明（同名变量在另一分支的单独绑定），
             # 则不算跨作用域引用（JVM slot reuse：不同分支各有自己的 let）
@@ -255,6 +261,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
                     if let_decl_check.search(ln):
                         break  # 另一个 let 声明，不是跨作用域读取
                     found = True
+                    ref_idx = k2
                     break
 
             if not found:
@@ -287,7 +294,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
                         ty_str = render_type(first_item.ty)
                     except Exception:
                         ty_str = None
-                vars_to_hoist[name] = (ty_str, decl_list)
+                vars_to_hoist[name] = (ty_str, decl_list, ref_idx)
                 break
 
     if not vars_to_hoist:
@@ -295,7 +302,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
 
     # Pass 4: 找到合适的插入位置（最内层包含第一次声明的块的开始处）
     insertions: list[tuple[int, tuple]] = []
-    for name, (ty_str, decl_list) in vars_to_hoist.items():
+    for name, (ty_str, decl_list, ref_idx) in vars_to_hoist.items():
         first_decl_k = decl_list[0][0]
         first_decl_nesting = decl_list[0][1]
         # 找到包含第一次声明的最近的块起始索引
@@ -375,9 +382,39 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
                 check_nesting = entry_nesting[outer_bk]
             if not moved or next_start is None:
                 break
-        # 若变量已在函数体顶层声明（outer_decls），不再插入新 let（避免 shadow 类型冲突）
+        # 若变量已在函数体顶层声明（outer_decls），通常不再插入新 let（避免 shadow 类型冲突）。
+        # 例外：若顶层声明出现在 ref_idx 之后（即声明晚于引用），说明顶层声明本身也在错误位置，
+        # 仍需提升，并将该顶层声明一并转为 AssignStmt。
         if name in outer_decls:
-            continue
+            outer_k = outer_decl_first_k.get(name, -1)
+            if ref_idx < 0 or outer_k < 0 or outer_k <= ref_idx:
+                # 顶层声明在 ref 之前或没有外部 ref → 已可见，无需提升
+                continue
+            # 顶层声明在 ref 之后 → 需要提升；同时将该顶层声明也转为 AssignStmt
+            # （否则它会成为第二次声明，遮蔽提升后的 let，引发新的 E0425）
+            for ck in range(outer_k, len(entries)):
+                ck_indent, ck_item = entries[ck]
+                if isinstance(ck_item, LetStmt) and ck_item.name == name:
+                    entries[ck] = (ck_indent, AssignStmt(Var(name), ck_item.value))
+
+        # ref_nesting 校验：声明插在 block_k 之前（与 block_k 同层），需保证引用在该层可见。
+        if ref_idx >= 0:
+            ref_nesting = entry_nesting[ref_idx]
+            while block_k is not None:
+                # 声明插在 block_k 之前（与 block_k 同层），作用域涵盖 block_k 处及之后所有同层/更深位置。
+                # 若引用 nesting >= entry_nesting[block_k]，声明对引用可见，停止上移。
+                if ref_nesting >= entry_nesting[block_k]:
+                    break
+                # 引用在 block_k 开启的块的外部，需向上找外层块
+                parent_k = None
+                for bk in reversed(block_entry_indices):
+                    if bk < block_k and entry_nesting[bk] < entry_nesting[block_k]:
+                        parent_k = bk
+                        break
+                if parent_k is None:
+                    break
+                block_k = parent_k
+
         block_indent = entries[block_k][0]
         # 获取类型注解节点（来自第一次声明）
         _, first_let = entries[first_decl_k]
