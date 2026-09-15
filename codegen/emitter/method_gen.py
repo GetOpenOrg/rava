@@ -160,6 +160,14 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     label = 'native' if m.is_native else 'stub'
     body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
 
+    # main(String[] args) 与 gen_method_body 保持一致：不生成参数
+    if m.is_static and m.name == 'main' and m.descriptor == '([Ljava/lang/String;)V':
+        return (
+            f'pub fn main() -> Result<()> {{\n'
+            f'    {body}\n'
+            f'}}'
+        )
+
     return (
         f'pub fn {fn_name}({sig_self}{args_str}) -> {ret_type} {{\n'
         f'    {body}\n'

@@ -7,7 +7,7 @@
 use java_runtime::prelude::*;
 use super::*;
 
-/// @field _mutex: std::sync::Arc<parking_lot::ReentrantMutex<()>>
+/// @field _mutex: java_runtime::MutexHolder
 
 use std::cell::RefCell;
 
@@ -27,7 +27,7 @@ impl super::InternalLock {
             std::mem::transmute::<
                 parking_lot::ReentrantMutexGuard<'_, ()>,
                 parking_lot::ReentrantMutexGuard<'static, ()>,
-            >(self._mutex.lock())
+            >(self._mutex.0.lock())
         };
         GUARDS.with(|g| g.borrow_mut().push(guard));
         Ok(())

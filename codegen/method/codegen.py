@@ -26,7 +26,7 @@ from ..rs_ir import (
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
 )
 from ..stack import BOOL
-from .vars import _coerce_icmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
+from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
 from .postprocess import _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
 
 
@@ -241,14 +241,19 @@ def gen_method_body(
             s.locals = dict(cur_sim.locals)
             s._slot_decl_depth = dict(cur_sim._slot_decl_depth)
             s.stack = list(cur_sim.stack)
+            s._ctr = cur_sim._ctr  # 从父 sim 继承计数器，防止嵌套块生成与外层同名的临时变量
             return s
 
         def pop_fall_cond(op: str) -> str:
             """弹出操作数，返回 fall-through 条件（跳转条件的否定）。"""
             if op in TWO_OP_CMP:
                 b_e, b_t = cur_sim.pop(); a_e, a_t = cur_sim.pop()
-                a_s = _coerce_icmp_operand(render_expr(a_e), a_t)
-                b_s = _coerce_icmp_operand(render_expr(b_e), b_t)
+                if op in ('if_acmpeq', 'if_acmpne'):
+                    a_s = _coerce_acmp_operand(render_expr(a_e), a_t)
+                    b_s = _coerce_acmp_operand(render_expr(b_e), b_t)
+                else:
+                    a_s = _coerce_icmp_operand(render_expr(a_e), a_t)
+                    b_s = _coerce_icmp_operand(render_expr(b_e), b_t)
                 return neg_cmp_op(op, a_s, b_s)
             else:
                 a_e, a_t = cur_sim.pop()
@@ -275,6 +280,18 @@ def gen_method_body(
 
                 out.append(('', f"{ind}loop {{"))
 
+                if lp.cond_idx is None:
+                    # 无条件循环（for(;;) / while(true)）：直接执行整个循环体，无 break
+                    body_s = make_sub()
+                    body_s.enter_scope()
+                    process_block(lp.start_idx, lp.end_idx, body_s, out, ind + "    ")
+                    body_s.exit_scope()
+                    cur_sim.locals = body_s.locals
+                    cur_sim._slot_decl_depth = body_s._slot_decl_depth
+                    out.append(('', f"{ind}}}"))
+                    i = lp.end_idx + 1
+                    continue
+
                 is_do_while = (lp.cond_idx == lp.end_idx)
 
                 if is_do_while:
@@ -292,8 +309,12 @@ def gen_method_body(
                     cond_s.stack = list(body_s.stack)
                     if ci.opcode in TWO_OP_CMP:
                         b_e, b_t = cond_s.pop(); a_e, a_t = cond_s.pop()
-                        a_c = _coerce_icmp_operand(render_expr(a_e), a_t)
-                        b_c = _coerce_icmp_operand(render_expr(b_e), b_t)
+                        if ci.opcode in ('if_acmpeq', 'if_acmpne'):
+                            a_c = _coerce_acmp_operand(render_expr(a_e), a_t)
+                            b_c = _coerce_acmp_operand(render_expr(b_e), b_t)
+                        else:
+                            a_c = _coerce_icmp_operand(render_expr(a_e), a_t)
+                            b_c = _coerce_icmp_operand(render_expr(b_e), b_t)
                         cond_str = neg_cmp_op(ci.opcode, a_c, b_c)
                     else:
                         a_e, a_t = cond_s.pop()
@@ -323,8 +344,12 @@ def gen_method_body(
                     cond_s.stack = list(pre.stack)
                     if ci.opcode in TWO_OP_CMP:
                         b_e, b_t = cond_s.pop(); a_e, a_t = cond_s.pop()
-                        a_c = _coerce_icmp_operand(render_expr(a_e), a_t)
-                        b_c = _coerce_icmp_operand(render_expr(b_e), b_t)
+                        if ci.opcode in ('if_acmpeq', 'if_acmpne'):
+                            a_c = _coerce_acmp_operand(render_expr(a_e), a_t)
+                            b_c = _coerce_acmp_operand(render_expr(b_e), b_t)
+                        else:
+                            a_c = _coerce_icmp_operand(render_expr(a_e), a_t)
+                            b_c = _coerce_icmp_operand(render_expr(b_e), b_t)
                         cond_str = cmp_op(ci.opcode, a_c, b_c)
                     else:
                         a_e, a_t = cond_s.pop()
@@ -353,8 +378,12 @@ def gen_method_body(
                 is_two_op = op in TWO_OP_CMP
                 if is_two_op:
                     b_expr, b_ty = cur_sim.pop(); a_expr, a_ty = cur_sim.pop()
-                    a_str = _coerce_icmp_operand(render_expr(a_expr), a_ty)
-                    b_str = _coerce_icmp_operand(render_expr(b_expr), b_ty)
+                    if op in ('if_acmpeq', 'if_acmpne'):
+                        a_str = _coerce_acmp_operand(render_expr(a_expr), a_ty)
+                        b_str = _coerce_acmp_operand(render_expr(b_expr), b_ty)
+                    else:
+                        a_str = _coerce_icmp_operand(render_expr(a_expr), a_ty)
+                        b_str = _coerce_icmp_operand(render_expr(b_expr), b_ty)
                 else:
                     a_expr, a_type = cur_sim.pop()
                     a_str = render_expr(a_expr); b_str = ''
@@ -442,6 +471,11 @@ def gen_method_body(
                     # 三元：两个分支各留一个值在栈上，无语句无嵌套输出
                     tv = render_expr(then_s.stack[-1][0])
                     ev = render_expr(else_s.stack[-1][0])
+                    # `this` 是 &Self（let this = self;），不能直接用于值位置，需要 .clone()
+                    if tv == 'this':
+                        tv = 'this.clone()'
+                    if ev == 'this':
+                        ev = 'this.clone()'
                     ty  = then_s.stack[-1][1]
                     ety = else_s.stack[-1][1]
                     ty_str  = render_type(ty)
@@ -449,14 +483,73 @@ def gen_method_body(
                     # 类型不一致时强转 else 侧以匹配 then 侧
                     if ty_str != ety_str:
                         _int_types = {'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64'}
+                        _prim_types = _int_types | {'bool', 'f32', 'f64'}
+                        _null_exprs = {'Object::default()', 'Object::default().clone()'}
                         if ty_str == 'bool' and ety_str in _int_types:
                             ev = f"({ev} != 0)"
                         elif ety_str == 'bool' and ty_str in _int_types:
                             tv = f"({tv} != 0)"
                             ty = ety; ty_str = ety_str
-                        else:
+                        elif ev in _null_exprs and ty_str not in _prim_types:
+                            ev = 'Default::default()'
+                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object':
+                            ev = f"({ev}).downcast::<{ty_str}>()"
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object':
+                            ev = f"Object::from_any({ev}.clone())"
+                        elif ty_str in _prim_types or ety_str in _prim_types:
                             ev = f"({ev} as {ty_str})"
+                        # else: both are non-primitive structs, leave as-is and hope types match
                     cur_sim.push(RawExpr(f"(if {fall_cond} {{ {tv} }} else {{ {ev} }})"), ty)
+                elif ie.has_else and then_extra == 1 and else_extra == 1:
+                    # 两分支均留一个值在栈上且有语句：声明合并变量，分支内赋值后推入栈
+                    ty = then_s.stack[-1][1]
+                    ety = else_s.stack[-1][1]
+                    ty_str = render_type(ty)
+                    ety_str = render_type(ety)
+                    then_val = render_expr(then_s.stack[-1][0])
+                    else_val = render_expr(else_s.stack[-1][0])
+                    # `this` 是 &Self，不能直接用于值位置，需要 .clone()
+                    if then_val == 'this':
+                        then_val = 'this.clone()'
+                    if else_val == 'this':
+                        else_val = 'this.clone()'
+                    # 类型不一致时做强转（与三元表达式分支保持一致）
+                    if ty_str != ety_str:
+                        _int_types = {'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64'}
+                        _prim_types = _int_types | {'bool', 'f32', 'f64'}
+                        _null_exprs = {'Object::default()', 'Object::default().clone()'}
+                        if ty_str == 'bool' and ety_str in _int_types:
+                            else_val = f"({else_val} != 0)"
+                        elif ety_str == 'bool' and ty_str in _int_types:
+                            then_val = f"({then_val} != 0)"
+                            ty = ety; ty_str = ety_str
+                        elif else_val in _null_exprs and ty_str not in _prim_types:
+                            else_val = 'Default::default()'
+                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object':
+                            else_val = f"({else_val}).downcast::<{ty_str}>()"
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object':
+                            else_val = f"Object::from_any({else_val}.clone())"
+                        elif ty_str in _prim_types or ety_str in _prim_types:
+                            else_val = f"({else_val} as {ty_str})"
+                    # 同步子 sim 的计数器，防止合并变量名与嵌套 if/else 的合并变量名碰撞
+                    cur_sim._ctr = max(cur_sim._ctr, then_s._ctr, else_s._ctr)
+                    merge_v = cur_sim.fresh('_merged')
+                    flush_here()
+                    out.append(('', f"{ind}let mut {merge_v}: {ty_str};"))
+                    out.append(('', f"{ind}if {fall_cond} {{"))
+                    out.extend(then_out)
+                    for s in then_s.stmts:
+                        out.append((ind + "    ", s))
+                    out.append((ind + "    ", RawStmt(f"{merge_v} = {then_val};")))
+                    out.append(('', f"{ind}}} else {{"))
+                    out.extend(else_out)
+                    for s in else_s.stmts:
+                        out.append((ind + "    ", s))
+                    out.append((ind + "    ", RawStmt(f"{merge_v} = {else_val};")))
+                    out.append(('', f"{ind}}}"))
+                    cur_sim.push(Var(merge_v), ty)
+                    cur_sim.locals = then_s.locals
+                    cur_sim._slot_decl_depth = then_s._slot_decl_depth
                 else:
                     out.append(('', f"{ind}if {fall_cond} {{"))
                     out.extend(then_out)

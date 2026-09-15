@@ -150,7 +150,7 @@ class StackSim:
         # 栈下溢：常见于 catch 块隐式压栈的异常对象、复杂控制流分析失败
         # 标记下溢，gen_method_body 会把整个方法退化为 panic!("stub: ...")
         self.underflow_occurred = True
-        return (RawExpr('panic!("stack underflow")'), I32)
+        return (RawExpr('(panic!("stack underflow") as i32)'), I32)
 
     # ── 语句输出 ─────────────────────────────────────────────────────────────
 

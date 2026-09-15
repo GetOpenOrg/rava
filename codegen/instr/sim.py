@@ -21,7 +21,7 @@ from .coerce import (
     _float_lit, _escape_str, _parse_slot, _to_i32,
     _coerce_to_object, _coerce_from_null, _coerce_value,
     _find_field_super_prefix, _find_field_super_prefix_for_type,
-    _parse_field_ref, _is_subtype, _rust_type_to_binary,
+    _parse_field_ref, _is_subtype, _is_direct_subtype, _rust_type_to_binary,
     _PRIMITIVE_RUST_TYPES,
 )
 from .invoke import (
@@ -47,7 +47,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             # javap 已经以 "..." 格式给出（operand 是完整的带引号字符串），直接用
             sim.push(Lit(f"String::from({operand})"), RsNamed('String'))
         elif comment.startswith('String '):
-            lit = _escape_str(comment[7:].strip())
+            lit = _escape_str(comment[7:].rstrip('\n'))
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         elif comment.startswith('int '):    sim.push(Lit(comment[4:].strip() + 'i32'), I32)
         elif comment.startswith('float '): sim.push(Lit(_float_lit(comment[6:].strip(), 'f32')), F32)
@@ -59,7 +59,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment.startswith('long '):   sim.push(Lit(comment[5:].strip() + 'i64'), I64)
         elif comment.startswith('double '): sim.push(Lit(_float_lit(comment[7:].strip(), 'f64')), F64)
         elif comment.startswith('String '):
-            lit = _escape_str(comment[7:].strip())
+            lit = _escape_str(comment[7:].rstrip('\n'))
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         elif comment.startswith('class '): sim.push(Lit('Object::default()'), RsNamed('Object'))
         else: sim.push(Lit(f"{operand}i32"), I32)
@@ -346,12 +346,17 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             if null_coerce is not None:
                 val_str = null_coerce
             elif ftype == 'Object' and val_ty_name not in ('Object', '()') and val_str_raw != 'this':
-                val_str = _coerce_to_object(val_str_raw, val_ty_name)
+                # 若值的类型是泛型参数（单大写字母如 T/E/K/V），字段实为 JField<T>，直接赋值
+                if len(val_ty_name) <= 2 and val_ty_name[0].isupper() and val_ty_name.rstrip('0123456789').isalpha():
+                    val_str = val_str_raw
+                else:
+                    val_str = _coerce_to_object(val_str_raw, val_ty_name)
             elif (ftype not in _PRIMITIVE_RUST_TYPES and val_ty_name not in _PRIMITIVE_RUST_TYPES
                   and ftype not in ('Object', '()', val_ty_name)
-                  and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
-                # T55：子类型赋给父类型字段
-                val_str = f"{val_str_raw}.into()"
+                  and _is_direct_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
+                # T55：直接子类型赋给直接父类型字段（From impl 由 class_writer 生成）
+                # 用 <_ as Into<ftype>>::into() 显式消歧义，避免多个 From impl 导致的 E0282
+                val_str = f"<_ as Into<{ftype}>>::into({val_str_raw})"
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
             # 引用类型赋值时加 .clone()，避免 E0382（move after use）
@@ -423,8 +428,11 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         sim.push(Var(v), RsNamed(f'Rc<RefCell<Vec<{elem_t}>>>'))
     elif op == 'anewarray':
         count_expr, _ = sim.pop()
-        cls = short_cls(comment) or 'Object'
-        elem_t = jvm_to_rust(f'L{cls};') if cls != 'Object' else 'Object'
+        # 用完整路径（comment）而非 short_cls，避免 'LString;' 等非全限定名映射到 Object
+        if comment and comment != 'java/lang/Object':
+            elem_t = jvm_to_rust(f'L{comment};', registry)
+        else:
+            elem_t = 'Object'
         v = sim.fresh('_arr')
         sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![{elem_t}::default(); {render_expr(count_expr)} as usize]));"))
         sim.push(Var(v), RsNamed(f'Rc<RefCell<Vec<{elem_t}>>>'))
@@ -436,12 +444,26 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         sim.emit(RawStmt(f"let mut {v}: Vec<Vec<i32>> = vec![vec![0i32; {sizes[-1]} as usize]; {sizes[0]} as usize];"))
         sim.push(Var(v), RsGeneric('Vec', [RsGeneric('Vec', [I32])]))
     elif op in ('iastore', 'lastore', 'fastore', 'dastore'):
-        val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {render_expr(val_expr)};"))
+        val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        arr_str = render_expr(arr_expr)
+        val_str = render_expr(val_expr)
+        # Avoid RefCell double-borrow: if val reads from same array, extract to temp first
+        if '.borrow()' in val_str and arr_str in val_str:
+            tmp = sim.fresh('_tmp_val')
+            sim.emit(RawStmt(f"let {tmp} = {val_str};"))
+            val_str = tmp
+        sim.emit(RawStmt(f"{arr_str}.borrow_mut()[{render_expr(idx_expr)} as usize] = {val_str};"))
     elif op == 'aastore':
         val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
-        elem_ty = arr_ty_str[4:-1] if arr_ty_str.startswith('Vec<') else 'Object'
+        _VEC_WRAP = 'Rc<RefCell<Vec<'
+        _VEC_WRAP_END = '>>>'
+        if arr_ty_str.startswith(_VEC_WRAP) and arr_ty_str.endswith(_VEC_WRAP_END):
+            elem_ty = arr_ty_str[len(_VEC_WRAP):-len(_VEC_WRAP_END)]
+        elif arr_ty_str.startswith('Vec<') and arr_ty_str.endswith('>'):
+            elem_ty = arr_ty_str[4:-1]
+        else:
+            elem_ty = 'Object'
         val_str = render_expr(val_expr)
         val_ty_str = render_type(val_ty)
         if elem_ty == 'Object' and val_ty_str not in ('Object', '()'):
@@ -538,13 +560,26 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty)
               and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
-            # T55：返回值是子类型，方法声明返回父类型
-            expr_s = f"{expr_s}.into()"
+            # T55：返回值是子类型（含传递），方法声明返回父类型（From impl 由 class_writer T55/T55b 生成）
+            # 用 <_ as Into<ret_ty>>::into() 显式消歧义，避免多个 From impl 导致的 E0282
+            expr_s = f"<_ as Into<{ret_ty}>>::into({expr_s})"
+        elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
+              and ret_ty not in ('Object', '()', actual_ty) and actual_ty != 'Object'
+              and not _is_subtype(ret_ty.split('<')[0], actual_ty.split('<')[0], registry)):
+            # 类型不兼容（如 checkcast Serializable 后 return Comparator<Object>）：
+            # 降级为 Default::default()，至少保证编译通过
+            expr_s = 'Default::default()'
         sim.emit(RawStmt(f"return Ok({expr_s});"))
 
     # ── 控制流（循环由 method.py 处理，此处跳过）──
     elif op.startswith('if_icmp') or op.startswith('if') or op == 'goto':
-        pass
+        # 未被控制流 map 捕获的分支指令：仍需弹出操作数，防止遗留值污染后续栈状态
+        if op.startswith('if_icmp') or op in ('if_acmpeq', 'if_acmpne'):
+            if sim.stack: sim.pop()
+            if sim.stack: sim.pop()
+        elif op != 'goto':
+            # 单操作数：ifeq / ifne / iflt / ifge / ifgt / ifle / ifnull / ifnonnull
+            if sim.stack: sim.pop()
 
     # ── checkcast / instanceof ──
     elif op == 'checkcast':

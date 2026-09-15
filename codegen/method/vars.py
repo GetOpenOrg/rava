@@ -17,6 +17,22 @@ def _coerce_icmp_operand(expr_str: str, ty_node) -> str:
         return f"({expr_str} as i32)"
     return expr_str
 
+
+def _coerce_acmp_operand(expr_str: str, ty_node) -> str:
+    """为 if_acmpX 对象引用比较做类型强制转换：非 Object 类型统一装入 Object。
+
+    Java if_acmpeq/if_acmpne 是引用相等比较，Rust 中统一转为 Object 然后用 Object::PartialEq。
+    """
+    ty = render_type(ty_node)
+    if ty == 'Object':
+        return expr_str
+    if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16', 'usize', '()'):
+        return expr_str  # 基本类型不应出现在 acmp，原样保留
+    # 引用类型或 self 引用：去掉 &，clone 后装入 Object
+    clean = expr_str[1:] if expr_str.startswith('&') else expr_str
+    return f"Object::from_any({clean}.clone())"
+
+
 _PRIMITIVE_TYPES = {'i32', 'i64', 'f32', 'f64', 'bool', 'usize', '()'}
 
 def _str_to_rs_type(s: str) -> RsType:
@@ -215,9 +231,9 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
                     # 确定类型：从第一个声明获取
                     ty_str = None
                     _, first_item = entries[decl_list[0][0]]
-                    if isinstance(first_item, LetStmt) and first_item.type_node is not None:
+                    if isinstance(first_item, LetStmt) and first_item.ty is not None:
                         try:
-                            ty_str = render_type(first_item.type_node)
+                            ty_str = render_type(first_item.ty)
                         except Exception:
                             ty_str = None
                     vars_to_hoist[name] = (ty_str, decl_list)
@@ -242,7 +258,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
         block_indent = entries[block_k][0]
         # 获取类型注解节点（来自第一次声明）
         _, first_let = entries[first_decl_k]
-        hoisted_type = first_let.type_node if isinstance(first_let, LetStmt) else None
+        hoisted_type = first_let.ty if isinstance(first_let, LetStmt) else None
         # 统一用 Default::default()，配合类型注解让 Rust 推断
         default_val = RawExpr('Default::default()')
         insertions.append((block_k, (block_indent, LetStmt(name, hoisted_type, True, default_val))))

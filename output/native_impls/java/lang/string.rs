@@ -11,6 +11,9 @@ fn _from_bytes(bytes: &[i8]) -> std::string::String {
 }
 
 impl super::String {
+    /// JDK 9+ 紧凑字符串模式：始终为 true（所有 String 均为单字节 Latin1 或 UTF16 字节数组）
+    pub fn COMPACT_STRINGS() -> bool { true }
+
     pub fn from_owned(s: std::string::String) -> super::String {
         let result = super::String::default();
         result.value.set(Rc::new(RefCell::new(_to_bytes(&s))));

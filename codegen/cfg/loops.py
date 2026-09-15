@@ -49,6 +49,10 @@ def find_loops(instrs: list[Instr]) -> list[LoopInfo]:
 
         if cond_idx is not None:
             loops.append(LoopInfo(start_idx, i, cond_idx, exit_off))
+        else:
+            # 无条件循环（for(;;) / while(true)）：cond_idx=None，exit_off=None
+            # 用 cond_idx=i（goto 自身），exit_off=None 标记为无条件 loop {}
+            loops.append(LoopInfo(start_idx, i, None, None))
 
     # 检测 do-while：back-edge 是条件后向分支（if_icmp* <start>）
     while_starts = {lp.start_idx for lp in loops}

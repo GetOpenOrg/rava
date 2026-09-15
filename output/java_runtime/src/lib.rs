@@ -79,6 +79,16 @@ pub trait JvmObjectBase {
 }
 impl<T> JvmObjectBase for T {}
 
+/// MutexHolder：包装 parking_lot::ReentrantMutex，为 InternalLock 等需要 PartialEq 的结构体使用
+#[derive(Clone)]
+pub struct MutexHolder(pub std::sync::Arc<parking_lot::ReentrantMutex<()>>);
+impl Default for MutexHolder {
+    fn default() -> Self { Self(std::sync::Arc::new(parking_lot::ReentrantMutex::new(()))) }
+}
+impl PartialEq for MutexHolder {
+    fn eq(&self, other: &Self) -> bool { std::sync::Arc::ptr_eq(&self.0, &other.0) }
+}
+
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 pub mod prelude {
     #![allow(unused_imports)]
@@ -93,4 +103,5 @@ pub mod prelude {
     pub use super::java_fmt_f32;
     pub use std::rc::Rc;
     pub use std::cell::RefCell;
+    pub use super::MutexHolder;
 }

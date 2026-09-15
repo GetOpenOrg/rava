@@ -22,3 +22,7 @@ impl<T: Clone> Clone for JField<T> {
 impl<T: Default + Clone> Default for JField<T> {
     fn default() -> Self { JField::new(T::default()) }
 }
+
+impl<T: Clone + PartialEq> PartialEq for JField<T> {
+    fn eq(&self, other: &Self) -> bool { self.get() == other.get() }
+}

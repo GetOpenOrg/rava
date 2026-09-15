@@ -53,8 +53,9 @@ def _add_ok_return(lines: list[str], rust_ret: str) -> list[str]:
                     result[i] = f"{m.group(1)}Ok({m.group(2)})"
                 elif not stripped.startswith('Ok('):
                     # 如果最后一行不是 Ok(...) 也不是 return Ok(...)，
-                    # 可能是个普通的 return e; → 已经被 instr 转换了
-                    pass
+                    # 说明函数在块尾自然结束（如 while(true) 循环被展平为直线代码）。
+                    # Java 语义保证此处不可达，加 unreachable!() 满足 Rust 类型检查。
+                    result.append('    unreachable!()')
                 break
     return result
 

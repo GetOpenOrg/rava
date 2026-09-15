@@ -61,7 +61,8 @@ def find_if_else(
     excluded: set[int] = set()
     if loops:
         for lp in loops:
-            excluded.add(lp.cond_idx)
+            if lp.cond_idx is not None:
+                excluded.add(lp.cond_idx)
             excluded.add(lp.end_idx)
 
     already: set[int] = set()

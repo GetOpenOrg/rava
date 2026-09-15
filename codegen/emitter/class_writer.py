@@ -232,7 +232,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
             field_lines.append(f"    pub _phantom: {phantom_ty},")
         decls = '\n'.join(field_lines)
-        parts.append(f"#[derive(Clone, Default)]\npub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
+        parts.append(f"#[derive(Clone, Default, PartialEq)]\npub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
     else:
         if class_type_params:
             # 无字段但有泛型参数：改用 tuple struct 包含 PhantomData
@@ -240,9 +240,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 phantom_ty = f'std::marker::PhantomData<{class_type_params[0]}>'
             else:
                 phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
-            parts.append(f"#[derive(Clone, Default)]\npub struct {struct_name}{struct_generic}({phantom_ty});\n")
+            parts.append(f"#[derive(Clone, Default, PartialEq)]\npub struct {struct_name}{struct_generic}({phantom_ty});\n")
         else:
-            parts.append(f"#[derive(Clone, Default)]\npub struct {struct_name}{struct_generic};\n")
+            parts.append(f"#[derive(Clone, Default, PartialEq)]\npub struct {struct_name}{struct_generic};\n")
 
     # T76：为有父类的类生成显式 upcast 方法（as_xxx / into_xxx）
     # 不使用 Deref（Rust 反模式），改用显式方法，语义清晰
@@ -309,6 +309,52 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             cur_super = ancestor_ci.super_class if ancestor_ci else None
             access_path += '._super'
 
+    # T55b：为实现的接口生成 From<Self> for Interface
+    # 接口无实例字段，用 Default::default() 创建空接口实例（允许 .into() 类型转换编译通过）
+    # 包括所有祖先类实现的接口（传递接口）
+    if registry and not ci.is_interface:
+        child_full = struct_name
+        if class_type_params:
+            child_full += '<' + ', '.join(class_type_params) + '>'
+        impl_generics_for_from = f"<{bounds_str}>" if class_type_params else ''
+        # 收集直接接口 + 所有祖先类的接口
+        iface_q: list[str] = list(ci.interfaces or [])
+        _anc = ci.super_class
+        while _anc and _anc != 'java/lang/Object':
+            _anc_ci = registry.get(_anc)
+            if _anc_ci is None:
+                break
+            iface_q.extend(_anc_ci.interfaces or [])
+            _anc = _anc_ci.super_class
+        visited_ifaces_from: set[str] = set()
+        while iface_q:
+            iface_bin = iface_q.pop(0)
+            if iface_bin in visited_ifaces_from:
+                continue
+            visited_ifaces_from.add(iface_bin)
+            iface_ci = registry.get(iface_bin)
+            if iface_ci is None:
+                continue
+            if iface_ci.interfaces:
+                iface_q.extend(iface_ci.interfaces)
+            iface_rust_name = short_cls(iface_bin)
+            iface_params = parse_class_type_params(iface_ci.generic_signature) if iface_ci.generic_signature else []
+            if iface_params:
+                if class_type_params:
+                    args = class_type_params[:len(iface_params)]
+                    while len(args) < len(iface_params):
+                        args.append('Object')
+                else:
+                    args = ['Object'] * len(iface_params)
+                iface_full_type = f"{iface_rust_name}<{', '.join(args)}>"
+            else:
+                iface_full_type = iface_rust_name
+            parts.append(
+                f"impl{impl_generics_for_from} From<{child_full}> for {iface_full_type} {{\n"
+                f"    fn from(v: {child_full}) -> {iface_full_type} {{ Default::default() }}\n"
+                f"}}\n"
+            )
+
     # 若有 new_format_map 覆盖，插入 #[path = "..."] mod _impl; 块
     _nf_entry = (new_format_map or {}).get(ci.name)
     if _nf_entry and workspace_root:
@@ -320,7 +366,27 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
-    name_counts = Counter(m.name for m in visible_methods if m.name != '<clinit>')
+    # 预扫描接口 default 方法，合并到名字计数中，确保定义与调用侧 mangle 一致
+    _pre_default_names: list[str] = []
+    if ci.interfaces and registry and not ci.is_interface:
+        _pre_sigs = {(m.name, m.descriptor) for m in visible_methods}
+        _pre_q = list(ci.interfaces)
+        _pre_vis: set[str] = set()
+        while _pre_q:
+            _pn = _pre_q.pop(0)
+            if _pn in _pre_vis:
+                continue
+            _pre_vis.add(_pn)
+            _pi = registry.get(_pn)
+            if _pi:
+                _pre_q.extend(_pi.interfaces or [])
+                for _dm in _pi.methods:
+                    if (not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic
+                            and _dm.name not in ('<init>', '<clinit>')
+                            and (_dm.name, _dm.descriptor) not in _pre_sigs):
+                        _pre_default_names.append(_dm.name)
+                        _pre_sigs.add((_dm.name, _dm.descriptor))
+    name_counts = Counter(m.name for m in visible_methods if m.name != '<clinit>') + Counter(_pre_default_names)
     overloaded_names: set[str] = {name for name, count in name_counts.items() if count > 1}
 
     method_blocks: list[str] = []
@@ -498,6 +564,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:
                 # 翻译失败：退化为 stub，避免生成无效 Rust
+                import os as _os
+                if _os.environ.get('JAVA_RTA_DEBUG'):
+                    import traceback as _tb
+                    print(f"[DEBUG] stub fallback for {ci.name}.{m.name}{m.descriptor}: {e}", file=__import__('sys').stderr)
+                    _tb.print_exc()
                 stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry)
                 method_blocks.append(attr_line + '\n' + stub)
 
@@ -505,6 +576,35 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     if ci.interfaces and registry and not ci.is_interface:
         import copy as _copy
         existing_sigs: set[tuple] = {(m.name, m.descriptor) for m in visible_methods}
+        # 参数签名集合（忽略返回类型），用于检测协变返回覆盖（如 LinkedList.reversed() 覆盖 Deque.reversed()）
+        def _param_part(desc: str) -> str:
+            idx = desc.find(')')
+            return desc[:idx + 1] if idx >= 0 else desc
+        existing_param_sigs: set[tuple] = {(m.name, _param_part(m.descriptor)) for m in visible_methods}
+        # 已用的 Rust 方法名（用于检测 default 方法与类自身方法重名）
+        used_rust_names: set[str] = {
+            (mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name)
+            for m in visible_methods if m.name not in ('<init>', '<clinit>')
+        }
+        # 预扫描：统计所有待继承 default 方法的名字（用于 default 方法之间互相冲突判断）
+        default_name_counts: dict[str, int] = {}
+        _pre_iface_queue = list(ci.interfaces)
+        _pre_visited: set[str] = set()
+        while _pre_iface_queue:
+            _iname = _pre_iface_queue.pop(0)
+            if _iname in _pre_visited:
+                continue
+            _pre_visited.add(_iname)
+            _ici = registry.get(_iname)
+            if _ici is None:
+                continue
+            if _ici.interfaces:
+                _pre_iface_queue.extend(_ici.interfaces)
+            for _dm in _ici.methods:
+                if not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic and _dm.name not in ('<init>', '<clinit>'):
+                    _dm_pp = _param_part(_dm.descriptor)
+                    if (_dm.name, _dm.descriptor) not in existing_sigs and (_dm.name, _dm_pp) not in existing_param_sigs:
+                        default_name_counts[_dm.name] = default_name_counts.get(_dm.name, 0) + 1
         iface_queue: list[str] = list(ci.interfaces)
         visited_ifaces: set[str] = set()
         while iface_queue:
@@ -522,8 +622,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     continue
                 if (dm.name, dm.descriptor) in existing_sigs:
                     continue
+                # 协变返回覆盖：如果类已有同名同参方法（返回类型不同），也跳过注入
+                _dm_pp = _param_part(dm.descriptor)
+                if (dm.name, _dm_pp) in existing_param_sigs:
+                    continue
                 existing_sigs.add((dm.name, dm.descriptor))
-                dm_rust = mangle_name(dm.name, dm.descriptor) if dm.name in overloaded_names else dm.name
+                existing_param_sigs.add((dm.name, _dm_pp))
+                # 若名字与类自身方法冲突，或 default 方法之间有重名，则 mangle
+                needs_mangle = (dm.name in overloaded_names or
+                                dm.name in used_rust_names or
+                                default_name_counts.get(dm.name, 0) > 1)
+                dm_rust = mangle_name(dm.name, dm.descriptor) if needs_mangle else dm.name
+                used_rust_names.add(dm_rust)
                 dm_attr = _java_method_attr(dm, compiled=True)
                 # 将 class_name 替换为实现类，使 gen_method_body 生成正确的 this 类型
                 dm_adapted = _copy.copy(dm)
@@ -549,6 +659,53 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 else:
                     dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry)
                     method_blocks.append(dm_attr + '\n' + dm_stub)
+
+    # Record 类（super_class == java/lang/Record）：覆盖 invokedynamic 无法翻译的方法
+    if ci.super_class == 'java/lang/Record' and not ci.is_interface:
+        record_fields = [f for f in ci.fields if not f.is_static]
+        simple_name = ci.name.split('$')[-1].split('/')[-1]
+        fmt_parts = [f'{f.name}={{}}' for f in record_fields]
+        fmt_str = f'{simple_name}[{", ".join(fmt_parts)}]'
+        fmt_args = ', '.join(f'self.{safe_ident(f.name)}.get()' for f in record_fields)
+        new_blocks = []
+        for block in method_blocks:
+            if '/* TODO: invokedynamic' in block and any(f'pub fn {n}(' in block for n in ('toString', 'hashCode', 'equals')):
+                if 'pub fn toString(' in block:
+                    attr = block[:block.index('pub fn toString(')]
+                    fmtcall = (f'String::from(format!("{fmt_str}", {fmt_args}).as_str())' if fmt_args
+                               else f'String::from("{fmt_str}")')
+                    new_blocks.append(attr +
+                        f'pub fn toString(&self) -> Result<String> {{\n        Ok({fmtcall})\n    }}')
+                elif 'pub fn hashCode(' in block:
+                    attr = block[:block.index('pub fn hashCode(')]
+                    new_blocks.append(attr +
+                        f'pub fn hashCode(&self) -> Result<i32> {{\n        Ok(0)\n    }}')
+                elif 'pub fn equals(' in block:
+                    attr = block[:block.index('pub fn equals(')]
+                    field_cmps = []
+                    for f in record_fields:
+                        fname = safe_ident(f.name)
+                        rust_fty = jvm_to_rust(f.descriptor, registry)
+                        if rust_fty == 'String':
+                            field_cmps.append(
+                                f'self.{fname}.get().to_string() == other.{fname}.get().to_string()'
+                            )
+                        else:
+                            field_cmps.append(f'self.{fname}.get() == other.{fname}.get()')
+                    cmp_expr = ' && '.join(field_cmps) if field_cmps else 'true'
+                    new_blocks.append(attr +
+                        f'pub fn equals(&self, mut o: Object) -> Result<bool> {{\n'
+                        f'        if let Some(other) = o.0.downcast_ref::<Self>() {{\n'
+                        f'            Ok({cmp_expr})\n'
+                        f'        }} else {{\n'
+                        f'            Ok(false)\n'
+                        f'        }}\n'
+                        f'    }}')
+                else:
+                    new_blocks.append(block)
+            else:
+                new_blocks.append(block)
+        method_blocks = new_blocks
 
     # 插入模块级 static 声明（OnceLock 等），放在 impl 块之前
     if module_statics:

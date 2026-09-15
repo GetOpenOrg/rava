@@ -21,6 +21,11 @@ from .coerce import (
 )
 
 
+def _is_generic_type_param(ty: str) -> bool:
+    """检测 ty 是否是泛型类型参数（单个大写字母，如 T/E/K/V）——这种情况下不能用 Object::from_any 包装。"""
+    return bool(ty) and len(ty) <= 2 and ty[0].isupper() and ty.rstrip('0123456789').isalpha()
+
+
 def _gen_string_concat(sim: StackSim, comment: str):
     """处理 invokedynamic makeConcatWithConstants 字符串拼接。
     结果为 java.lang.String（通过 String::from(format!(...)) 转换）。
@@ -38,6 +43,9 @@ def _gen_string_concat(sim: StackSim, comment: str):
             raw = f'java_fmt_f64({raw})'
         elif p in ('F',):
             raw = f'java_fmt_f32({raw})'
+        elif p in ('C',):
+            # Java char (u16) 必须转为 Rust char 才能以字符形式格式化
+            raw = f"char::from_u32({raw} as u32).unwrap_or('?')"
         args.insert(0, raw)
 
     tmpl_m = re.search(r' template:(.+)$', comment)
@@ -86,7 +94,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 e_str = null_coerce
             elif _coerce_to_interface(actual_rust, expected_rust):
                 e_str = 'Default::default()'
-            elif expected_rust == 'Object' and actual_rust not in ('Object', '()'):
+            elif expected_rust == 'Object' and actual_rust not in ('Object', '()') and not _is_generic_type_param(actual_rust):
                 e_str = _coerce_to_object(e_str, actual_rust)
             elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
                 e_str = _coerce_value(e_str, e_ty_node, expected_rust)
@@ -121,7 +129,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             e = null_coerce
         elif _coerce_to_interface(ty, expected):
             e = 'Default::default()'
-        elif expected == 'Object' and ty not in ('Object', '()') and e != 'this':
+        elif expected == 'Object' and ty not in ('Object', '()') and e != 'this' and not _is_generic_type_param(ty):
             e = _coerce_to_object(e, ty)
         elif expected == 'Object' and ty not in ('Object', '()') and e == 'this':
             e = f"Object::from_any(self.clone())"
@@ -142,20 +150,32 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         if '/' in full_cls:
             # JDK class（含包路径）→ 用 new() 工厂（@synthetic）
             rust_ty_str = jvm_to_rust(f'L{full_cls};', registry)
-            if rust_ty_str != 'Object' and '<' in rust_ty_str:
+            # 自动装箱优化：原始包装类型（Integer→i32等）直接用值，跳过构造器调用
+            _PRIM_TYPES = frozenset({'i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'})
+            if rust_ty_str in _PRIM_TYPES:
+                init_expr = args[0] if args else '0'
+                rust_ty = rust_ty_str
+                rust_ty_node = RsNamed(rust_ty_str)
+            elif rust_ty_str != 'Object' and '<' in rust_ty_str:
                 type_params_str = rust_ty_str[len(raw_cls):]   # '<Object>' / '<Object, Object>'
+                rust_ty = raw_cls + type_params_str
+                rust_ty_node = RsNamed(rust_ty)
+                # 重载构造器：用 '<init>' 查重载再替换为 'new'，以匹配 method.py 生成的定义
+                _init_mangled = _mangle_if_overloaded(full_cls, '<init>', comment, registry)
+                ctor_name = _safe_field(_init_mangled.replace('<init>', 'new'))
+                turbofish = '::' + type_params_str
+                init_expr = f"{raw_cls}{turbofish}::{ctor_name}({', '.join(args)})?"
             else:
                 type_params_str = ''
-            rust_ty = raw_cls + type_params_str
-            rust_ty_node = RsNamed(rust_ty)
-            # 重载构造器：用 '<init>' 查重载再替换为 'new'，以匹配 method.py 生成的定义
-            _init_mangled = _mangle_if_overloaded(full_cls, '<init>', comment, registry)
-            ctor_name = _safe_field(_init_mangled.replace('<init>', 'new'))
-            if args:
-                init_expr = f"{raw_cls}::{ctor_name}({', '.join(args)})?"
-            else:
-                turbofish = '::' + type_params_str if type_params_str else ''
-                init_expr = f"{raw_cls}{turbofish}::{ctor_name}()?"
+                rust_ty = raw_cls
+                rust_ty_node = RsNamed(rust_ty)
+                # 重载构造器：用 '<init>' 查重载再替换为 'new'，以匹配 method.py 生成的定义
+                _init_mangled = _mangle_if_overloaded(full_cls, '<init>', comment, registry)
+                ctor_name = _safe_field(_init_mangled.replace('<init>', 'new'))
+                if args:
+                    init_expr = f"{raw_cls}::{ctor_name}({', '.join(args)})?"
+                else:
+                    init_expr = f"{raw_cls}::{ctor_name}()?"
         elif raw_cls and '/' not in raw_cls:
             # 用户类：new()? 返回 Result<Self>，同样 mangle 重载构造器
             _init_mangled2 = _mangle_if_overloaded(raw_cls, '<init>', comment, registry)
@@ -222,7 +242,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             e = null_coerce
         elif _coerce_to_interface(ty, expected):
             e = 'Default::default()'
-        elif expected == 'Object' and ty not in ('Object', '()'):
+        elif expected == 'Object' and ty not in ('Object', '()') and not _is_generic_type_param(ty):
             e = _coerce_to_object(e, ty)
         elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, ty_node, expected)
@@ -295,7 +315,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             e_str = null_coerce
         elif _coerce_to_interface(actual_rust, expected_rust):
             e_str = 'Default::default()'
-        elif expected_rust == 'Object' and actual_rust not in ('Object', '()'):
+        elif expected_rust == 'Object' and actual_rust not in ('Object', '()') and not _is_generic_type_param(actual_rust):
             e_str = _coerce_to_object(e_str, actual_rust)
         elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
             e_str = _coerce_value(e_str, e_ty_node, expected_rust)
@@ -313,9 +333,21 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     obj_e = render_expr(obj_expr)
     obj_ty = render_type(obj_ty_node)
 
-    # 拆箱：identity
+    # 拆箱：若接收者已是目标基本类型（autoboxing 被跳过），恒等；否则生成实际方法调用
     if mname in UNBOX_VIRTUAL:
-        sim.push(obj_expr, obj_ty_node)
+        _UNBOX_TARGET = {
+            'intValue': 'i32', 'longValue': 'i64', 'doubleValue': 'f64',
+            'floatValue': 'f32', 'booleanValue': 'bool', 'byteValue': 'i8', 'shortValue': 'i16',
+            'charValue': 'u16',
+        }
+        target_ty = _UNBOX_TARGET.get(mname)
+        if target_ty is None or obj_ty == target_ty:
+            sim.push(obj_expr, obj_ty_node)
+            return
+        # 接收者是装箱对象（Integer/Double/Number 等），生成实际方法调用完成解箱
+        v = sim.fresh()
+        sim.emit(RawStmt(f"let {v}: {target_ty} = {obj_e}.{mname}()?;"))
+        sim.push(Var(v), RsNamed(target_ty))
         return
 
     # T38：PrintStream.println 有参版本 → 统一生成 println_v(x)（Printable trait 派发）

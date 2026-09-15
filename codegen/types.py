@@ -106,5 +106,5 @@ class ClassInfo:
 class LoopInfo:
     start_idx:   int
     end_idx:     int
-    cond_idx:    int
-    exit_offset: int
+    cond_idx:    int | None   # None 表示无条件循环（for(;;) / while(true)）
+    exit_offset: int | None   # None 表示无退出条件

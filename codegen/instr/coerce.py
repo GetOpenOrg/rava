@@ -341,24 +341,66 @@ def _rust_type_to_binary(rust_short: str, registry: dict | None) -> str:
 
 
 def _is_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> bool:
-    """判断 child_rust 是否是 parent_rust 的子类型（通过 registry 继承链查找）。
+    """判断 child_rust 是否是 parent_rust 的子类型（通过 registry 继承链+接口链查找）。
     两个参数都是 Rust 短类名（如 IOException, Throwable）。"""
     if not registry or child_rust == parent_rust:
         return False
     child_bin = _rust_type_to_binary(child_rust, registry)
     if not child_bin:
         return False
+
+    def _short(binary: str) -> str:
+        return binary.rsplit('/', 1)[-1].replace('$', '_') if '/' in binary else binary
+
+    visited: set[str] = set()
+    queue: list[str] = [child_bin]
+    while queue:
+        cur_bin = queue.pop(0)
+        if cur_bin in visited:
+            continue
+        visited.add(cur_bin)
+        ci = registry.get(cur_bin)
+        if not ci:
+            continue
+        # 检查超类
+        if ci.super_class and ci.super_class != 'java/lang/Object':
+            sc = ci.super_class
+            sc_short = _short(sc)
+            if sc_short == parent_rust:
+                return True
+            if sc not in visited:
+                queue.append(sc)
+        # 检查接口列表
+        for iface in (ci.interfaces or []):
+            iface_short = _short(iface)
+            if iface_short == parent_rust:
+                return True
+            if iface not in visited:
+                queue.append(iface)
+    return False
+
+
+def _is_direct_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> bool:
+    """判断 child_rust 是否是 parent_rust 的直接子类型（直接超类或直接接口）。
+    只检查一步，与 From<X> for Y 的生成规则一致（class_writer.py 的 T76 段只生成直接上转换）。"""
+    if not registry or child_rust == parent_rust:
+        return False
+    child_bin = _rust_type_to_binary(child_rust, registry)
+    if not child_bin:
+        return False
     ci = registry.get(child_bin)
-    visited: set[str] = {child_bin}
-    while ci and ci.super_class and ci.super_class != 'java/lang/Object':
-        sc = ci.super_class
-        if sc in visited:
-            break
-        visited.add(sc)
-        sc_short = sc.rsplit('/', 1)[-1].replace('$', '_') if '/' in sc else sc
-        if sc_short == parent_rust:
+    if not ci:
+        return False
+    def _short(b: str) -> str:
+        return b.rsplit('/', 1)[-1].replace('$', '_') if '/' in b else b
+    # 直接超类
+    if ci.super_class and ci.super_class != 'java/lang/Object':
+        if _short(ci.super_class) == parent_rust:
             return True
-        ci = registry.get(sc)
+    # 直接接口列表
+    for iface in (ci.interfaces or []):
+        if _short(iface) == parent_rust:
+            return True
     return False
 
 
@@ -445,6 +487,25 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
         return mname
     visible = [m for m in target_ci.methods if not m.is_synthetic]
     same = sum(1 for m in visible if m.name == mname)
+    # 计入接口 default 方法（未覆盖时由 class_writer 注入到 impl 块）
+    if target_ci.interfaces and not target_ci.is_interface:
+        _iq = list(target_ci.interfaces)
+        _iv: set[str] = set()
+        _seen_sigs: set[tuple] = {(m.name, m.descriptor) for m in visible}
+        while _iq:
+            _in = _iq.pop(0)
+            if _in in _iv:
+                continue
+            _iv.add(_in)
+            _ici = registry.get(_in)
+            if _ici:
+                _iq.extend(_ici.interfaces or [])
+                for _dm in _ici.methods:
+                    if (not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic
+                            and _dm.name == mname
+                            and (_dm.name, _dm.descriptor) not in _seen_sigs):
+                        same += 1
+                        _seen_sigs.add((_dm.name, _dm.descriptor))
     if same <= 1:
         # 非重载方法：检查 T39 ergonomic @jvm_rename 指令
         erg_rename = get_ergonomic_jvm_rename(target_ci.name, mname)
