@@ -393,7 +393,9 @@ pub struct Object(pub Rc<dyn std::any::Any>);
 // from_any: Rc::new(v)，downcast: downcast_ref::<T>()
 ```
 
-目标态升级路径：`Rc<dyn Any>` → `Rc<dyn JvmObject>`（其中 `JvmObject: Any`），保留 `as_any()` 以兼容 `downcast_ref`。**不是从零重写，只是把 trait object 的接口扩展。**
+目标态升级路径：`Rc<dyn Any>` → `Rc<dyn ObjectVTable>`（内部派发 trait），保留 `as_any()` 以兼容 `downcast_ref`。
+
+**关于 `ObjectVTable` 的命名说明**：这个 trait 是 `Object` 类型内部的实现细节，**不是**额外引入的 `JvmObject` 这类游离在 Java 命名空间之外的新名称。它的方法签名来源于 `java/lang/Object.class` 字节码中的 `hashCode`、`equals`、`toString`、`getClass` 等方法。在单 crate 最终态中，该 trait 由字节码翻译 `java/lang/object.rs` 时生成，不需要在 `java_runtime` 中单独定义。
 
 **2. `JvmObjectBase` 已存在，但是 blanket no-op impl（`java_runtime/src/lib.rs:70`）**
 
@@ -406,7 +408,7 @@ pub trait JvmObjectBase {
 impl<T> JvmObjectBase for T {}  // 全部类型默认实现 = no-op
 ```
 
-目标态：将 `JvmObjectBase` 扩展为 `JvmObject`（加入 `jvm_type_id`、`jvm_is_instance_of`、`as_any`），由 `java_class` 宏为每个类生成具体 impl，删除 blanket impl。
+`JvmObjectBase` 是当前多 crate 架构下的过渡设施。目标态：**整体废弃，由字节码翻译 `java/lang/Object.class` 生成的 `ObjectVTable` 替代**，`java_class` 宏为每个类生成具体 impl，删除 blanket impl。
 
 **3. 宏已生成 `Into<Object>` / `From<Object>`**
 
@@ -420,7 +422,7 @@ impl From<Object> for ArrayList<E> {
 }
 ```
 
-升级后这两个 impl 继续有效（`from_any` 改为 `Object(Rc::new(val) as Rc<dyn JvmObject>)`），宏扩展时只需要在已有代码基础上添加 `JvmObject` impl 生成，不需要改变 `Into`/`From` 逻辑。
+升级后这两个 impl 继续有效（`from_any` 改为 `Object(Rc::new(val) as Rc<dyn ObjectVTable>)`），宏扩展时只需在已有代码基础上添加 `ObjectVTable` impl 生成，不需要改变 `Into`/`From` 逻辑。
 
 **4. `java_method` 属性改为真正的 proc macro attribute（Arch-3 前置）**
 
@@ -439,7 +441,7 @@ impl From<Object> for ArrayList<E> {
 
 **问题**：`List<E>` 等接口生成为 `struct List<E>(PhantomData<E>)`，不携带任何具体实现类的数据。
 
-**目标态方案：`Object` 改为 `Rc<dyn JvmObject>` + 接口改为 Rust trait**
+**目标态方案：`Object` 改为 `Rc<dyn ObjectVTable>` + 接口改为 Rust trait**
 
 `java_class` 宏读取 `is_interface = true` 后，为接口生成 Rust trait，而非 PhantomData struct：
 
@@ -453,7 +455,7 @@ pub trait List_Trait {
 }
 
 // 接口引用类型（供变量声明使用）
-pub type List = Object;  // 运行时统一为 Object，通过 JvmObject 动态派发
+pub type List = Object;  // 运行时统一为 Object，通过 ObjectVTable 动态派发
 ```
 
 实现类通过宏自动实现 trait：
@@ -466,17 +468,27 @@ impl List_Trait for ArrayList<Object> {
 }
 ```
 
-`java_runtime` 中 `Object` 改为：
+`Object` 类型内部结构（在单 crate 最终态中，由 `java/lang/object.rs` 字节码翻译定义）：
 ```rust
+// 内部派发 trait：方法签名来源于 java.lang.Object 的字节码方法
+// （不对外暴露为 JvmObject 或其他非 Java 命名空间的名称）
+pub(crate) trait ObjectVTable: 'static {
+    fn hashCode(&self)                  -> Result<i32>;
+    fn equals(&self, obj: Object)       -> Result<bool>;
+    fn toString(&self)                  -> Result<String>;
+    fn getClass(&self)                  -> Result<Class<Object>>;
+    fn as_any(&self)                    -> &dyn std::any::Any;
+}
+
 pub struct Object {
-    inner: Rc<dyn JvmObject>,  // 真正的 dyn dispatch
+    inner: Rc<dyn ObjectVTable>,  // 真正的 dyn dispatch
 }
 ```
 
 **codegen 变更**：
-1. `java_rta_macros/src/lib.rs` — `java_class` 宏：读取 `is_interface` / `interfaces` 参数，为接口生成 trait + explicit impls；为实现类生成 `JvmObject` impl（替代 blanket no-op）
-2. `java_runtime/src/java/lang/object.rs` — `Object(Rc<dyn Any>)` 升级为 `Object(Rc<dyn JvmObject>)`，`JvmObject` 加入 `fn as_any(&self) -> &dyn Any` 以保留 `downcast` 能力
-3. `java_runtime/src/lib.rs` — `JvmObjectBase` blanket impl 删除，改为 `JvmObject` trait（含 `jvm_type_id`、`jvm_is_instance_of`、`jvm_to_string`）
+1. `java_rta_macros/src/lib.rs` — `java_class` 宏：读取 `is_interface` / `interfaces` 参数，为接口生成 trait + explicit impls；为实现类生成 `ObjectVTable` impl（替代 blanket no-op），方法名与 Java 方法名一一对应
+2. `java_runtime/src/java/lang/object.rs` — `Object(Rc<dyn Any>)` 升级为 `Object(Rc<dyn ObjectVTable>)`；`ObjectVTable` 的方法签名来自 `java.lang.Object` 字节码（`hashCode`、`equals`、`toString`、`getClass`）
+3. `java_runtime/src/lib.rs` — `JvmObjectBase` blanket impl 整体删除（过渡设施，最终态由字节码生成的 `ObjectVTable` 替代）
 4. Python `class_writer.py` T55b 整块删除（宏通过 `interfaces` 字段自动生成正确 From impl）
 
 **影响**：修复所有集合类方法调用、修复 G-1 虚方法派发。
@@ -487,17 +499,28 @@ pub struct Object {
 
 **问题**：`instanceof` 生成为字面量 `true`，类型判断失效。
 
-**目标态方案：宏从 `binary_name` + 继承链自动派生 `is_instance_of`**
+**目标态方案：宏从 `binary_name` + 继承链自动派生 `instanceof` 实现**
 
-`java_class` 宏读取 `binary_name`、`super_class`、`interfaces`，自动为每个类生成：
+`java_class` 宏读取 `binary_name`、`super_class`、`interfaces`，自动为每个类生成 `ObjectVTable` impl，其中包含 `instanceof` 的静态判断：
 
 ```rust
 // java_class 宏自动生成（无需 Python 侧任何改动）
-impl JvmObject for ArrayList<Object> {
-    fn jvm_type_id(&self) -> &'static str { "java/util/ArrayList" }
+// ObjectVTable 方法名与 java.lang.Object 的字节码方法一一对应
+impl ObjectVTable for ArrayList<Object> {
+    fn hashCode(&self) -> Result<i32>  { /* 翻译自字节码或默认实现 */ }
+    fn equals(&self, obj: Object) -> Result<bool> { /* 翻译自字节码 */ }
+    fn toString(&self) -> Result<String> { /* 翻译自字节码 */ }
+    fn getClass(&self) -> Result<Class<Object>> {
+        // 宏从 binary_name 静态生成，返回对应 Class 对象
+        Ok(Class::for_name("java/util/ArrayList"))
+    }
+    fn as_any(&self) -> &dyn std::any::Any { self }
+}
 
-    fn jvm_is_instance_of(&self, type_id: &str) -> bool {
-        // 宏从 binary_name + super_class chain + interfaces 静态展开
+// instanceof / checkcast 使用独立的辅助方法（不放进 ObjectVTable）：
+// 宏从 binary_name + super_class chain + interfaces 静态展开
+impl ArrayList<Object> {
+    pub fn is_instance_of(type_id: &str) -> bool {
         matches!(type_id,
             "java/util/ArrayList"
             | "java/util/AbstractList"
@@ -508,21 +531,18 @@ impl JvmObject for ArrayList<Object> {
             | "java/io/Serializable"
         )
     }
-    // ...
 }
 ```
 
-`instanceof` 指令生成：`obj.inner.jvm_is_instance_of("java/lang/String")`  
-`checkcast` 指令生成：断言类型后 downcast，失败则 `ClassCastException`
+`instanceof` 指令生成：读取 `obj` 运行时类型后调用对应类的 `is_instance_of("java/lang/String")`，通过 `as_any().downcast_ref` 判断。  
+`checkcast` 指令生成：断言类型后 downcast，失败则 `ClassCastException`。
 
-**注意**：继承链需要传递闭合。宏只能看到当前类的直接父类/接口，`super_class` 的父类需要递归展开。方案：
-- 宏生成时只展开直接层次，传递闭合在运行时通过调用 `super.jvm_is_instance_of()` 完成
-- 或：Python codegen 在 `java_class` 属性中写入完整传递闭合后的 `all_supertypes` 字段，宏直接展开
+**注意**：继承链需要传递闭合。方案：Python codegen 在 `java_class` 属性中写入完整传递闭合后的 `all_supertypes` 字段，宏直接展开为 `matches!` 模式，无需运行时递归调用 super。
 
 **codegen 变更**：
-1. `java_rta_macros` — 读取 `binary_name`、`interfaces`，生成 `JvmObject` impl
-2. `java_runtime/src/types.rs` — `Object` 改为 `Rc<dyn JvmObject>`，`isinstance` 方法委托给 `inner`
-3. Python `sim.py` — `isinstance` 生成 `obj.inner.jvm_is_instance_of("java/lang/String")`
+1. `java_rta_macros` — 读取 `binary_name`、`interfaces`，生成 `ObjectVTable` impl + `is_instance_of` 关联函数
+2. `java_runtime/src/java/lang/object.rs` — `Object` 改为 `Rc<dyn ObjectVTable>`，`instanceof` 检查通过 `as_any().downcast_ref` + `is_instance_of` 实现
+3. Python `sim.py` — `instanceof` 生成对应类的 `is_instance_of("java/lang/String")` 调用
 4. Python `class_writer.py` — `java_class` 属性中增加 `all_supertypes` 字段，记录传递闭合超类列表
 
 **影响**：修复 TestCasting、TestPatternMatch 等。
@@ -543,7 +563,7 @@ impl JvmObject for ArrayList<Object> {
 pub type Comparator_Fn = Arc<dyn Fn(Object, Object) -> Result<i32>>;
 
 // invokedynamic 目标类型变为 Object，存储 Arc<dyn Fn>
-impl JvmObject for Comparator_Fn { ... }
+impl ObjectVTable for Comparator_Fn { ... }
 ```
 
 **短期方案（解除编译阻塞）**：
@@ -566,31 +586,26 @@ impl JvmObject for Comparator_Fn { ... }
 
 **问题**：将具体类型转为 `Object` 后调用 `toString()`，不会派发到具体类型。
 
-**目标态方案：`Object = Rc<dyn JvmObject>` 天然支持动态派发**
+**目标态方案：`Object = Rc<dyn ObjectVTable>` 天然支持动态派发**
 
-`Arch-1` 完成后（`Object` 改为 `Rc<dyn JvmObject>`），此问题自动解决：
+`Arch-1` 完成后（`Object` 改为 `Rc<dyn ObjectVTable>`），此问题自动解决。`ObjectVTable` 的方法名直接来自 `java.lang.Object` 的字节码方法：
 
 ```rust
-pub trait JvmObject: 'static {
-    fn jvm_type_id(&self) -> &'static str;
-    fn jvm_to_string(&self) -> String;      // 派发到具体类型的 toString()
-    fn jvm_hash_code(&self) -> i32;
-    fn jvm_equals(&self, other: &Object) -> bool;
-    fn jvm_is_instance_of(&self, type_id: &str) -> bool;
-    fn jvm_clone(&self) -> Object;
-}
-
-// java_class 宏自动生成：
-impl JvmObject for Point {
-    fn jvm_to_string(&self) -> String {
-        // 转发到翻译生成的 toString() 方法（若存在）
-        self.toString().unwrap_or_else(|_| format!("{}@...", Self::BINARY_NAME))
+// ObjectVTable 由 java/lang/object.rs 字节码翻译定义，方法名与 Java 一致
+// java_class 宏自动为每个类生成 impl：
+impl ObjectVTable for Point {
+    fn toString(&self) -> Result<String> {
+        // 转发到翻译生成的 toString() 方法（若存在），命名空间与 Java 一致
+        Point::toString(self)
     }
-    // ...
+    fn hashCode(&self) -> Result<i32> { Point::hashCode(self) }
+    fn equals(&self, obj: Object) -> Result<bool> { Point::equals(self, obj) }
+    fn getClass(&self) -> Result<Class<Object>> { Ok(Class::for_name("user/Point")) }
+    fn as_any(&self) -> &dyn std::any::Any { self }
 }
 ```
 
-`Object::to_print_string()` 调用 `self.inner.jvm_to_string()`，自动 dispatch 到 `Point::toString()`。
+`Object::to_print_string()` 调用 `self.inner.toString()`，自动 dispatch 到 `Point::toString()`。命名无需前缀 `jvm_`，直接用 Java 方法名。
 
 **codegen 变更**：Arch-1 的副产品，不需要额外修改。
 
@@ -690,16 +705,18 @@ D-1 短期（invokedynamic 弹出+占位）   → 立即解锁 7 个 lambda 测�
      │
      ▼
 java_class 宏重写（核心前置工作）：
-  ├── 读取 binary_name → 生成 BINARY_NAME const
-  ├── 读取 interfaces  → 自动生成 From impl（替代 T55b）
+  ├── 读取 binary_name  → 生成 BINARY_NAME const
+  ├── 读取 interfaces   → 自动生成 From impl（替代 T55b）
   ├── 读取 is_interface → 不同代码路径
-  └── 派生 JvmObject trait（含 jvm_type_id、is_instance_of）
+  └── 生成 ObjectVTable impl（方法名与 java.lang.Object 字节码方法一致）
      │
      ├─→ Arch-2（instanceof 正确实现）    → 5+ 测试
      │
      ├─→ Arch-6（_rust_type_to_binary 消除）→ 稳定性
      │
-     └─→ Object 改为 Rc<dyn JvmObject>（核心类型重构）
+     └─→ Object 改为 Rc<dyn ObjectVTable>（核心类型重构）
+              │  ObjectVTable 由 java/lang/object.rs 字节码翻译定义
+              │  命名空间与 Java 一致，不引入 JvmObject 等额外名称
               │
               ├─→ Arch-1（接口 trait + dyn dispatch）→ 10+ 测试
               ├─→ Arch-4（虚方法派发，Arch-1 副产品）→ 5+ 测试
@@ -713,7 +730,7 @@ java_class 宏重写（核心前置工作）：
 | 3 | **Arch-8**（CFG 重建） | 消除 I-5 unreachable!()，修复控制流正确性 | 无 |
 | 4 | **`java_class` 宏重写**（读取所有元数据） | 所有 Arch 的基础 | 无 |
 | 5 | **Arch-2**（instanceof + BINARY_NAME） | 5+ 测试 + 消除 Arch-6 | 宏重写 |
-| 6 | **Object 改 `Rc<dyn JvmObject>`** | 基础类型重构 | 宏重写 |
+| 6 | **Object 改 `Rc<dyn ObjectVTable>`** | 基础类型重构，ObjectVTable 由 java/lang/object.rs 字节码翻译定义 | 宏重写 |
 | 7 | **Arch-1**（接口 → Rust trait + dyn dispatch） | 10+ 测试语义修复 | Object 重构 |
 | 8 | **Arch-3 长期**（invokedynamic → 真实闭包） | Lambda 语义 | Arch-1 |
 
