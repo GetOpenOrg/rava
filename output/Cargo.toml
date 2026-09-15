@@ -1,5 +1,5 @@
 [workspace]
-members = ["java_runtime", "java_rta_macros", "jdk_classes", "user"]
+members = ["java_runtime", "java_rta_macros", "user"]
 resolver = "2"
 
 [profile.release]

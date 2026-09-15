@@ -163,7 +163,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs)]",
-        "use java_runtime::prelude::*;",
+        f"use {user_crate_prefix or 'crate'}::prelude::*;",
         *cross_imports,
         "",
     ]

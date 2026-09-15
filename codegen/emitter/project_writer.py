@@ -72,49 +72,39 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                          batch_bin: bool = False,
                          visited_methods: set | None = None):
     """
-    生成 Cargo workspace，包含三个子 crate：
-      java_runtime/  — 手写 VM 基础设施（git 管理，不由转译器写入）
-      jdk_classes/   — JDK 字节码翻译
+    生成 Cargo workspace，包含两个子 crate：
+      java_runtime/  — VM 基础设施 + JDK 字节码翻译（合并，git 管理基础设施部分）
       user/          — 用户 Java 代码翻译
     """
     import shutil
 
     rt_dir   = os.path.join(out_dir, 'java_runtime')
-    jdk_dir  = os.path.join(out_dir, 'jdk_classes')
+    jdk_dir  = os.path.join(out_dir, 'java_runtime')  # JDK 翻译直接写入 java_runtime/
     user_dir = os.path.join(out_dir, 'user')
 
-    # 3. jdk_classes crate（JDK 字节码翻译）
+    # JDK 字节码翻译输出到 java_runtime/src/
     jdk_src = os.path.join(jdk_dir, 'src')
-    # 若 jdk_classes/Cargo.toml 不存在（新工作区），生成它
-    jdk_cargo = os.path.join(jdk_dir, 'Cargo.toml')
-    if not os.path.exists(jdk_cargo):
-        _write(jdk_cargo, '\n'.join([
-            '[package]',
-            'name = "jdk_classes"',
-            'version = "0.1.0"',
-            'edition = "2021"',
-            '',
-            '[lib]',
-            'name = "jdk_classes"',
-            'path = "src/lib.rs"',
-            '',
-            '[dependencies]',
-            'java_runtime    = { path = "../java_runtime" }',
-            'java_rta_macros = { path = "../java_rta_macros" }',
-            'parking_lot     = "0.12"',
-            '',
-        ]))
+
     # 清理旧版生成文件（batch 模式由调用方在批次开始前统一清理）
-    # K-4: 只跳过 *_impl.rs 手写共置文件，其余生成 stub 正常删除重建
+    # 只清理 java/ jdk/ 等子包目录，保留根目录的手写基础设施文件
+    # 同时保留 *_impl.rs 和 *_ext.rs 手写共置文件
+    _PERMANENT = {
+        os.path.join(jdk_src, 'java', 'lang', 'object.rs'),
+    }
     if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):
+            if root == jdk_src:
+                continue  # 跳过根目录（lib.rs, error.rs, types.rs 永久保留）
             for fname in files:
                 if not fname.endswith('.rs'):
                     continue
-                if fname.endswith('_impl.rs'):
+                if fname.endswith('_impl.rs') or fname.endswith('_ext.rs'):
                     continue  # 手写共置文件，保留
+                fpath = os.path.join(root, fname)
+                if fpath in _PERMANENT:
+                    continue
                 try:
-                    os.remove(os.path.join(root, fname))
+                    os.remove(fpath)
                 except FileNotFoundError:
                     pass
 
@@ -239,14 +229,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     jdk_mod_tree.setdefault(_par, set()).add(_dn)
                     _changed = True
 
-    # jdk_classes/src/lib.rs
-    top_jdk = sorted(jdk_mod_tree.get(jdk_src, set()))
-    jdk_lib_lines = [
-        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
-        *[_mod_decl(m) for m in top_jdk],
-        '',
-    ]
-    _write(os.path.join(jdk_src, 'lib.rs'), '\n'.join(jdk_lib_lines))
+    # java_runtime/src/lib.rs 是手写文件，不覆写。
+    # 顶层 pub mod 声明（java/、jdk/ 等）已在 lib.rs 中手动维护。
 
     # 中间 mod.rs（jdk 子包）：pub mod + pub use *（使 glob import 能拿到类型）
     for dir_path, children in jdk_mod_tree.items():
@@ -347,7 +331,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         file_path, _, _ = layout[ci.name]
         _write(file_path, _gen_class_rs(ci, registry=registry,
                                         jdk_crate_pkg_paths=user_pkg_paths,
-                                        user_crate_prefix='jdk_classes',
+                                        user_crate_prefix='java_runtime',
                                         new_format_map=new_format_map,
                                         workspace_root=out_dir,
                                         full_impl_classes=full_impl_classes,
@@ -415,7 +399,6 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '[dependencies]',
             'java_runtime    = { path = "../java_runtime" }',
             'java_rta_macros = { path = "../java_rta_macros" }',
-            'jdk_classes     = { path = "../jdk_classes" }',
             '',
         ]
         _write(os.path.join(user_dir, 'Cargo.toml'), '\n'.join(cargo_toml_lines))

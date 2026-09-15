@@ -1,4 +1,4 @@
-use java_runtime::prelude::*;
+use crate::prelude::*;
 use super::*;
 use crate::java::io::print_stream::PrintStream;
 

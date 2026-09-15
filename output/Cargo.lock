@@ -27,15 +27,7 @@ dependencies = [
 name = "java_runtime"
 version = "0.1.0"
 dependencies = [
- "parking_lot",
-]
-
-[[package]]
-name = "jdk_classes"
-version = "0.1.0"
-dependencies = [
  "java_rta_macros",
- "java_runtime",
  "parking_lot",
 ]
 
@@ -139,7 +131,6 @@ version = "0.1.0"
 dependencies = [
  "java_rta_macros",
  "java_runtime",
- "jdk_classes",
 ]
 
 [[package]]

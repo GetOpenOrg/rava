@@ -62,44 +62,9 @@ def _to_bin_name(class_name: str) -> str:
     return s.lower()
 
 
-def _test_workspace(bin_name: str) -> Path:
-    """返回该测试的专属工作区：output/runs/<bin_name>/。"""
-    return OUT / "runs" / bin_name
-
-
-def _init_test_workspace(ws: Path) -> None:
-    """首次调用时初始化独立测试工作区（符号链接共享只读 crate，共享 target/）。"""
-    if (ws / "Cargo.toml").exists():
-        return
-    ws.mkdir(parents=True, exist_ok=True)
-    default = ROOT / "output"
-
-    # 符号链接指向共享只读 crate（相对路径，目录可移动）
-    for shared in ("java_runtime", "java_rta_macros"):
-        src = default / shared
-        dst = ws / shared
-        if src.exists() and not dst.exists():
-            dst.symlink_to(os.path.relpath(src, ws))
-
-    # 复制 workspace Cargo.toml
-    src_toml = default / "Cargo.toml"
-    if src_toml.exists():
-        (ws / "Cargo.toml").write_text(src_toml.read_text())
-
-    # jdk_classes/ 和 user/ 骨架目录 + Cargo.toml
-    for crate in ("jdk_classes", "user"):
-        crate_dir = ws / crate
-        (crate_dir / "src").mkdir(parents=True, exist_ok=True)
-        cargo_src = default / crate / "Cargo.toml"
-        if cargo_src.exists():
-            (crate_dir / "Cargo.toml").write_text(cargo_src.read_text())
-
-    # 共享 target/ 目录（避免每个测试重新编译 java_runtime / java_rta_macros）
-    shared_target = os.path.relpath(default / "target", ws)
-    (ws / ".cargo").mkdir(exist_ok=True)
-    (ws / ".cargo" / "config.toml").write_text(
-        f'[build]\ntarget-dir = "{shared_target}"\n'
-    )
+def _test_workspace(_bin_name: str) -> Path:
+    """返回测试工作区：直接使用 output/（合并后无独立 runs/ 目录）。"""
+    return OUT
 
 
 def _transpile(java_file: Path, batch: bool = False,
@@ -257,11 +222,17 @@ def _reset_batch_workspace() -> None:
     for rs_file in user_src.glob("*.rs"):
         rs_file.unlink(missing_ok=True)
 
-    # 清空 jdk_classes/src/ 下所有 .rs 文件（lib.rs 由转译器重建）
-    jdk_src = OUT / "jdk_classes" / "src"
-    if jdk_src.exists():
-        for rs_file in jdk_src.rglob("*.rs"):
-            rs_file.unlink()
+    # 清空 java_runtime/src/java/ 和 src/jdk/ 下生成的 .rs 文件（保留手写 _impl.rs）
+    rt_src = OUT / "java_runtime" / "src"
+    for pkg in ("java", "jdk", "sun", "javax", "com"):
+        pkg_dir = rt_src / pkg
+        if pkg_dir.exists():
+            for rs_file in pkg_dir.rglob("*.rs"):
+                if rs_file.name.endswith("_impl.rs") or rs_file.name.endswith("_ext.rs"):
+                    continue
+                if rs_file == rt_src / "java" / "lang" / "object.rs":
+                    continue
+                rs_file.unlink(missing_ok=True)
 
     # 重置 user/Cargo.toml（无 [[bin]] 条目，由批量转译追加）
     cargo_content = "\n".join([
@@ -273,7 +244,6 @@ def _reset_batch_workspace() -> None:
         "[dependencies]",
         'java_runtime    = { path = "../java_runtime" }',
         'java_rta_macros = { path = "../java_rta_macros" }',
-        'jdk_classes     = { path = "../jdk_classes" }',
         "",
     ])
     (user_dir / "Cargo.toml").write_text(cargo_content)
@@ -300,10 +270,7 @@ def _run_sequential(filter_str: str | None, no_run: bool) -> int:
             skipped += 1
             continue
 
-        # 每个测试用独立工作区，避免多进程/多次运行互相覆盖
         ws = _test_workspace(bin_name)
-        _init_test_workspace(ws)
-
         ok, log = _transpile(java_file, out_dir=ws)
         if not ok:
             print(f"[ FAIL ] {rel}  — transpile error")
