@@ -169,9 +169,19 @@ arr.borrow_mut()[j] = _tmp;
 ### H-1: TestBoundedGenerics 输出 0.0 而非正确值
 
 **错误**：期望 `15.0`，实际输出 `0.0`  
-**根因**：待确认。疑似泛型类型参数 `T` 在运行时被擦除为 `Object::default()`（零值），方法调用返回默认值而非真实计算结果。  
-**影响测试**：TestBoundedGenerics  
-**状态**：🔴 未确认根因
+**根因**（已确认）：`main()` 调用 `sum(ints)` 时，`ints` 是 `Rc<RefCell<Vec<i32>>>` (primitive int array)，而 `sum` 声明参数为 `Rc<RefCell<Vec<Number>>>` (object array)。codegen 无法将 `Vec<i32>` 强制转换为 `Vec<Number>`，退化为 `Default::default()`（空 Vec），导致 `sum` 计算空数组，返回初始值 `0.0`。
+
+生成代码（`test_bounded_generics.rs:73`）：
+```rust
+let _t1: f64 = Self::sum(Default::default())?;  // 实际 ints 完全没传入
+```
+
+根本原因是 **泛型数组的装箱语义缺失**：Java `int[]` 传给 `T[] where T extends Number` 需要先 autobox 成 `Integer[]`，再从 `Integer[]` 到 `Number[]`（协变）。codegen 当前没有处理 primitive 数组 → boxed object 数组的转换。  
+**影响测试**：TestBoundedGenerics、TestGenericMethod 等所有泛型方法接受数组参数的测试  
+**修复位置**：  
+  - `codegen/instr/invoke.py` — invokestatic 参数传递时检测 primitive array → boxed array 的升级，插入 `.iter().map(|x| Integer::valueOf_i(*x).unwrap()).collect()` 等转换  
+  - `codegen/types.py` — 泛型数组类型 `[TT;` descriptor 解析时，识别 bound 并生成正确的 Rust 类型  
+**状态**：🔴 根因已确认，未修复
 
 ---
 
@@ -185,14 +195,176 @@ arr.borrow_mut()[j] = _tmp;
 
 ## 架构层面的根本性问题
 
-以下问题超出局部 bug fix 范畴，需要设计层面解决：
+以下问题超出局部 bug fix 范畴，需要设计层面解决。每个问题均给出最终目标态的具体实现方案。
 
-| 问题 | 说明 | 目标态方案 |
-|------|------|-----------|
-| **接口无法携带数据** | `List<E>` 等接口是 `PhantomData` struct，调用其方法永远 panic | 枚举 dispatch 或 `dyn Trait` |
-| **instanceof 始终 true** | `instanceof` 生成为常量 `true`，影响类型判断逻辑 | 在 `Object` 中存储类型 tag |
-| **invokedynamic / lambda** | 函数式接口无法表达 | 闭包包装进 `Object` |
-| **虚方法派发** | `Object` 调用方法不 dispatch 到具体类型 | vtable 或类型 tag dispatch |
+---
+
+### Arch-1: 接口无法携带数据
+
+**问题**：`List<E>`、`Comparable<T>` 等接口在 Rust 中生成为 `struct List<E>(PhantomData<E>)`，不携带任何具体实现类的数据。调用 `list.size()` 等方法时永远 panic（stub）。
+
+**目标态方案：以 `enum` 承载多态 + `impl Trait` 统一接口**
+
+每个接口对应一个同名 `enum`，所有已知实现类作为 enum variant：
+
+```rust
+// 由 codegen 根据全量 BFS 实现类列表自动生成
+pub enum List<E> {
+    ArrayList(ArrayList<E>),
+    LinkedList(LinkedList<E>),
+    ArraysArrayList(Arrays_ArrayList<E>),
+    // ...每个实现类一个 variant
+}
+
+impl<E: Clone + Default + PartialEq> List<E> {
+    pub fn size(&self) -> Result<i32> {
+        match self {
+            List::ArrayList(inner) => inner.size(),
+            List::LinkedList(inner) => inner.size(),
+            List::ArraysArrayList(inner) => inner.size(),
+        }
+    }
+    // 所有接口方法均做 match dispatch
+}
+
+// From impl 改为指向 enum variant
+impl<E> From<ArrayList<E>> for List<E> {
+    fn from(v: ArrayList<E>) -> Self { List::ArrayList(v) }
+}
+```
+
+**codegen 变更**：
+1. `class_writer.py`：发现接口定义时，生成 `enum` 而非 `struct PhantomData`
+2. 分析阶段收集"接口 → 所有实现类"映射（BFS 已有 registry），写进 `InterfaceInfo.implementations`
+3. 为 enum 的每个 variant 生成 match arm，转发到 inner 类型的方法
+4. `From` impl 改为 `List::ArrayList(v)` 而非空转换
+
+**影响**：彻底修复 G-1（虚方法派发）和所有集合类接口方法调用错误。
+
+---
+
+### Arch-2: `instanceof` 始终返回 `true`
+
+**问题**：`instanceof` 指令当前生成为字面量 `true`，导致类型判断逻辑失效（如 `if (obj instanceof String)` 永远走 true 分支）。
+
+**目标态方案：`Object` 携带类型 discriminant**
+
+在 `Object` 结构体中加入类型标识，`instanceof` 检查时对比：
+
+```rust
+// java_runtime/src/types.rs
+pub struct Object {
+    pub _type_id: &'static str,           // 二进制类名，如 "java/lang/String"
+    pub _fields: Rc<RefCell<std::collections::HashMap<String, Box<dyn std::any::Any>>>>,
+}
+
+// Object::from_any 在转换时捕获具体类型
+impl Object {
+    pub fn from_any<T: 'static>(val: T, type_id: &'static str) -> Self {
+        Object { _type_id: type_id, _fields: ... }
+    }
+}
+```
+
+**codegen 变更**：
+1. `sim.py` — `instanceof` 分支：生成 `(obj._type_id == "java/lang/String")` 而非 `true`
+2. `sim.py` — `checkcast` 分支：生成 `if obj._type_id != "..." { return Err(ClassCastException) }`
+3. `sim.py` — 所有转为 `Object` 的地方（`Object::from_any` 调用）：传入第二参数为当前类的 `BINARY_NAME` 常量（由 `class_writer` 在 struct 上方生成 `const BINARY_NAME: &str = "java/lang/String";`）
+4. `class_writer.py` — 每个生成类顶部加 `const BINARY_NAME: &str = "...";`
+
+**影响**：修复 TestCasting、TestPatternMatch 等所有依赖类型判断的测试。
+
+---
+
+### Arch-3: `invokedynamic` / Lambda 无法表达
+
+**问题**：Java lambda 编译为 `invokedynamic`，当前 codegen 生成 `todo!("invokedynamic: ...")`，导致类型推断失败（`!` 类型无法统一）。
+
+**目标态方案：闭包包装进 `Object`，函数式接口用 `Arc<dyn Fn>` 表达**
+
+```rust
+// java_runtime/src/types.rs
+// 函数式接口载体（替代 PhantomData struct）
+pub struct FunctionalObject {
+    pub _fn: Arc<dyn Fn(Vec<Object>) -> Result<Object> + 'static>,
+}
+
+impl Object {
+    pub fn from_fn(f: impl Fn(Vec<Object>) -> Result<Object> + 'static) -> Self {
+        // 用 FunctionalObject 包装并存入 Object
+    }
+}
+```
+
+**codegen 变更**：
+1. `sim.py` — `invokedynamic` 分支：解析 bootstrap 方法的 `MethodHandle` 引用，识别 lambda body 对应的合成方法（`lambda$main$0` 等），生成捕获变量 + `Arc::new(move |args| ...)` 闭包
+2. 函数式接口的方法调用（如 `Comparator.compare(a, b)`）：生成 `match obj { FunctionalObject(f) => f(vec![a, b]) }`
+3. 短期过渡：`invokedynamic` 生成 `Object::from_fn(|_| Ok(Object::default()))` 而非 `todo!()`，至少保证编译
+
+**影响**：修复 TestLambda、TestMethodRef、TestFunctionalInterface、TestComparator、TestStreamBasic 等 7 个测试的编译错误。
+
+---
+
+### Arch-4: 虚方法派发（`Object.toString()` 不调用具体类型）
+
+**问题**：将具体类型（如 `Point`）转为 `Object` 后调用 `toString()`/`to_print_string()`，不会 dispatch 到 `Point::toString()`，而是返回 `"Object"`。
+
+**目标态方案：`Object` 内嵌 vtable 函数指针**
+
+在 `Object` 中存储关键虚方法的函数指针，在 `from_any` 时绑定具体类型实现：
+
+```rust
+// java_runtime/src/types.rs
+pub struct Object {
+    pub _type_id: &'static str,
+    pub _to_string: Arc<dyn Fn() -> Result<String> + 'static>,   // String 指 java::lang::String
+    pub _hash_code: Arc<dyn Fn() -> Result<i32> + 'static>,
+    pub _equals: Arc<dyn Fn(&Object) -> Result<bool> + 'static>,
+    pub _fields: Rc<RefCell<std::collections::HashMap<String, Box<dyn std::any::Any>>>>,
+}
+
+// 每个生成类实现 JvmObjectBase trait
+pub trait JvmObjectBase {
+    fn to_java_string(&self) -> Result<super::java::lang::String>;
+    fn java_hash_code(&self) -> Result<i32>;
+    fn java_equals(&self, other: &Object) -> Result<bool>;
+}
+
+impl Object {
+    pub fn from_any_with_vtable<T: JvmObjectBase + Clone + 'static>(val: T, type_id: &'static str) -> Self {
+        let val = Arc::new(val);
+        Object {
+            _type_id: type_id,
+            _to_string: Arc::new({
+                let v = val.clone();
+                move || v.to_java_string()
+            }),
+            _hash_code: Arc::new({ let v = val.clone(); move || v.java_hash_code() }),
+            _equals: Arc::new({ let v = val.clone(); move |o| v.java_equals(o) }),
+            _fields: Rc::new(RefCell::new(Default::default())),
+        }
+    }
+    pub fn to_print_string(&self) -> Result<String> { (self._to_string)() }
+}
+```
+
+**codegen 变更**：
+1. `class_writer.py`：每个生成类 `impl JvmObjectBase for MyClass`，转发到已生成的 `toString()`、`hashCode()`、`equals()` 方法
+2. `sim.py` — `Object::from_any` 调用点：改为 `Object::from_any_with_vtable(val, MyClass::BINARY_NAME)`
+3. `Object::to_print_string()`：调用 `(self._to_string)()`，触发具体类型的 `toString()`
+
+**影响**：修复 G-1（TestRecord、TestObjects 等所有涉及 `println(Object)` 的测试）。
+
+---
+
+### 架构变更优先级
+
+| 优先级 | 架构项 | 解锁测试数 | 前置依赖 |
+|--------|--------|-----------|---------|
+| 1 | **Arch-2（instanceof type tag）** | 5+ | 无 |
+| 2 | **Arch-3（invokedynamic 短期过渡）** | 7 | 无 |
+| 3 | **Arch-1（接口 enum dispatch）** | 10+ | Arch-2（需要 type_id） |
+| 4 | **Arch-4（Object vtable）** | 5+ | Arch-1、Arch-2 |
 
 ---
 
