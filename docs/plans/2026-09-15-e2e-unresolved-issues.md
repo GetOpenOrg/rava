@@ -18,7 +18,8 @@
 | [F. 运行时错误 — RefCell 双重借用](#f-运行时错误--refcell-双重借用) | 1 | 中 | TestSorting |
 | [G. 运行时错误 — 多态/虚方法派发](#g-运行时错误--多态虚方法派发) | 1 | 低 | TestRecord 等 |
 | [H. 运行时错误 — 输出值错误](#h-运行时错误--输出值错误) | 2 | 低 | TestBoundedGenerics 等 |
-| [I. 编译层补丁 — 待架构升级后删除](#i-编译层补丁--待架构升级后删除) | 5 | 中 | 全局质量 |
+| [I. 编译层补丁 — 待架构升级后删除](#i-编译层补丁--待架构升级后删除) | 6 | 中 | 全局质量 |
+| [J. 命名原则违规 — `java_runtime` 游离 trait](#j-命名原则违规--java_runtime-游离-trait) | 3 | 中 | 命名一致性 |
 
 ---
 
@@ -156,13 +157,16 @@ mod _impl;
 
 ---
 
-## I. 编译层补丁 — 待架构升级后删除
+## I. 编译层补丁 — 待架构升级后删除（共 6 项）
 
 以下修复已使代码可编译，但属于局部补丁，根本原因是架构问题。记录于此以便追踪清理。
 
-### I-1: `_is_generic_type_param()` 字符串启发式判断（5处）
+### I-1: `_is_generic_type_param()` 字符串启发式判断（5+2处）
 
-**当前做法**：在 `invoke.py`（4处）和 `sim.py`（1处）中，当 expected 类型是 `Object`、实际类型名长度 ≤ 2 且首字母大写时，跳过 `Object::from_any()` 包装。  
+**当前做法**：在 `invoke.py`（4处）和 `sim.py`（1处）中，当 expected 类型是 `Object`、实际类型名长度 ≤ 2 且首字母大写时，跳过 `Object::from_any()` 包装。
+
+**已知遗漏（V5）**：`codegen/method/codegen.py:498` 和 `:531` 的 if/else 分支类型合并处同样调用 `Object::from_any()`，但未引入 `_is_generic_type_param` 保护。当 `ty_str == 'Object'` 而实际值是泛型参数 `T` 时会错误包装，与 `invoke.py` 的处理不一致。  
+**临时修复**：在这两处加入 `and not _is_generic_type_param(ety_str)` / `and not _is_generic_type_param(ty_str)` 判断，与 `invoke.py` 保持一致。  
 **问题**：靠字符串形状猜测泛型参数，脆弱且不准确（`Rc` 首字母大写也会被误判，须同时校验 `.isalpha()`）。  
 
 **根本原因**：`jvm_to_rust()` 只读方法描述符（`descriptor`），丢弃 `generic_signature`。以 `Reference.<init>` 为例：
@@ -198,6 +202,17 @@ codegen 读取 `descriptor` → `expected = "Object"` → 错误包装 `Object::
 
 **当前做法**：`codegen/method/codegen.py` 三元和 merge 变量处，`if tv == 'this': tv = 'this.clone()'`，靠字符串比较补偿 `let this = self;` 产生 `&Self` 引用与值位置不兼容问题。  
 **架构解法（Arch-7）**：Stack 类型节点区分 `RsRef(&Self)` 和 `RsOwned(Self)`，任何值位置使用引用节点时统一生成 `.clone()`，无需字符串匹配。
+
+---
+
+### I-6: `clone` → `jvm_clone` 强制重命名（违反命名原则2）
+
+**当前做法**：`codegen/emitter/method_gen.py:157-159` 和 `codegen/method/codegen.py:102-104` 中定义 `_JAVA_RUST_RENAME = {'clone': 'jvm_clone'}`，全部生成代码中 Java `clone()` 方法被重命名为 `jvm_clone`。  
+**受影响范围**：搜索生成代码可见 150+ 处 `jvm_clone` 调用，覆盖 `java/lang/Object`、`ArrayList`、`Enum` 等所有类。  
+**问题**：`jvm_clone` 是人造的 `jvm_` 前缀名称，不存在于 Java 命名空间，违反 CLAUDE.md 命名原则2。  
+**引入原因**：Rust 中 `clone()` 是 `Clone` trait 的方法，与 Java `clone()` 共享名字会产生歧义或冲突。  
+**架构解法（Arch-7 范畴）**：在 `RsType` 化后，codegen 通过 `<Self as Clone>::clone()` 完全限定调用来区分，或将 Java `clone()` 翻译为 `clone_object()` 等不带 `jvm_` 前缀的名称。`jvm_clone` 这个重命名入口整体删除。  
+**状态**：🟠 已知违规，Arch-7 完成时一并修复
 
 ---
 
@@ -733,6 +748,64 @@ java_class 宏重写（核心前置工作）：
 | 6 | **Object 改 `Rc<dyn ObjectVTable>`** | 基础类型重构，ObjectVTable 由 java/lang/object.rs 字节码翻译定义 | 宏重写 |
 | 7 | **Arch-1**（接口 → Rust trait + dyn dispatch） | 10+ 测试语义修复 | Object 重构 |
 | 8 | **Arch-3 长期**（invokedynamic → 真实闭包） | Lambda 语义 | Arch-1 |
+
+---
+
+## J. 命名原则违规 — `java_runtime` 游离 trait
+
+以下 trait 存在于 `output/java_runtime/src/lib.rs`，违反 CLAUDE.md「生成的 Rust 代码应与 Java 命名空间自然一致」原则。它们都是过渡态设施，最终态全部废除。
+
+### J-1: `JvmObjectBase` — 无对应 Java 类的基础 trait（违反原则1 + 原则2）
+
+**位置**：`output/java_runtime/src/lib.rs:70`  
+**当前代码**：
+```rust
+pub trait JvmObjectBase {
+    fn getClass(&self) -> Result<java::lang::Object> { ... }
+    fn hashCode(&self) -> Result<i32> { Ok(0) }
+    fn equals(&self, _other: java::lang::Object) -> Result<bool> { Ok(false) }
+    fn jvm_clone(&self) -> Result<java::lang::Object> { panic!("stub") }  // ← jvm_ 前缀违反原则2
+}
+impl<T> JvmObjectBase for T {}  // blanket no-op impl
+```
+**违规**：
+- 原则1：`JvmObjectBase` 不对应任何 Java 标准库类，是人造名称
+- 原则2：方法名 `jvm_clone` 带 `jvm_` 前缀，Java 中方法名是 `clone`
+
+**最终态废除路径**：由 `java/lang/object.rs` 字节码翻译生成 `ObjectVTable` trait（含 `hashCode`、`equals`、`toString`、`getClass`），`java_class` 宏为每个类生成具体 impl，blanket no-op impl 整体删除。  
+**状态**：🔴 过渡设施，Arch-1 完成时废除
+
+---
+
+### J-2: `JvmEnum` — `java.lang.Enum` 的错误 trait 化（违反原则1）
+
+**位置**：`output/java_runtime/src/lib.rs:60`  
+**当前代码**：
+```rust
+pub trait JvmEnum {
+    fn ordinal(&self) -> Result<i32> { Ok(0) }
+}
+impl<T> JvmEnum for T {}  // blanket no-op impl
+```
+**违规**：原则1 — `JvmEnum` 不对应 Java 命名空间中的任何类型。`java.lang.Enum` 是具体类（class），不是接口（interface），不应在 `java_runtime` 中以 Rust trait 形式重新实现。  
+**最终态废除路径**：`ordinal()` 方法由 `java/lang/enum_.rs` 字节码翻译生成为 inherent 方法（`impl Enum { fn ordinal() ... }`），blanket impl 删除。  
+**状态**：🔴 过渡设施，Arch-1 完成时废除
+
+---
+
+### J-3: `Printable` — Java 中不存在的接口（违反原则1）
+
+**位置**：`output/java_runtime/src/lib.rs:36`  
+**当前代码**：
+```rust
+pub trait Printable {
+    fn to_print_string(&self) -> String;
+}
+```
+**用途**：用于 `println_v` 函数的 Rust-only 类型派发（调用 `obj.to_print_string()` 而非 `obj.toString()`）。  
+**违规**：原则1 — Java 标准库中不存在 `Printable` 接口，这是纯 Rust 基础设施。  
+**最终态废除路径**：Arch-1（`Object = Rc<dyn ObjectVTable>`）完成后，`println_v(Object)` 直接调用 `self.inner.toString()`，通过 `ObjectVTable` 动态派发到具体类型的 `toString()`，`Printable` trait 整体删除。  
+**状态**：🔴 过渡设施，Arch-4（Arch-1 副产品）完成时废除
 
 ---
 
