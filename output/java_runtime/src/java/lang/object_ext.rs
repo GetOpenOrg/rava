@@ -68,7 +68,7 @@ impl From<Object> for i8    { fn from(o: Object) -> i8    { o.downcast::<i8>()  
 impl From<Object> for i16   { fn from(o: Object) -> i16   { o.downcast::<i16>()   } }
 impl From<Object> for u16   { fn from(o: Object) -> u16   { o.downcast::<u16>()   } }
 
-// Object equality: 比较原始类型值，其他类型回退到指针相等
+// Object equality: null == null，原始类型值比较，其他类型回退到指针相等
 impl PartialEq for Object {
     fn eq(&self, other: &Self) -> bool {
         macro_rules! try_eq {
@@ -78,6 +78,7 @@ impl PartialEq for Object {
                 }
             };
         }
+        try_eq!(());  // null == null: Object::default() 存储 ()，两个 null 永远相等
         try_eq!(i32); try_eq!(i64); try_eq!(bool);
         try_eq!(f32); try_eq!(f64); try_eq!(i8);
         try_eq!(i16); try_eq!(u16);

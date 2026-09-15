@@ -144,6 +144,11 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             e = _coerce_value(e, e_ty_node, expected)
         elif expected == 'i32' and ty in ('i8', 'i16', 'u16', 'bool'):
             e = f"({e} as i32)"
+        elif (expected not in _PRIMITIVE_RUST_TYPES and ty not in _PRIMITIVE_RUST_TYPES
+              and expected not in ('Object', '()', ty)
+              and _is_subtype(ty.split('<')[0], expected.split('<')[0], registry)):
+            # T55：子类传给父类参数位置，通过 From impl 类型提升（如 StringBuilder → AbstractStringBuilder）
+            e = f"Clone::clone(&{e}).into()"
         elif ty not in _PRIMITIVE_RUST_TYPES:
             e = f"Clone::clone(&{e})"
         args.insert(0, e)
@@ -221,7 +226,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                     field_path = super_pfx.rstrip('.')
                     sim.emit(RawStmt(f"this.{field_path} = {ctor_call}?;"))
                 else:
-                    sim.emit(RawStmt(f"/* invokespecial {comment} (same class) */"))
+                    # 同类构造器委托 this(args)：直接替换 this（初始占位值丢弃）
+                    sim.emit(RawStmt(f"this = {ctor_call}?;"))
         else:
             sim.emit(RawStmt(f"/* invokespecial {comment} */"))
 
@@ -364,6 +370,15 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         v = sim.fresh()
         sim.emit(RawStmt(f"let {v}: {target_ty} = {obj_e}.{mname}()?;"))
         sim.push(Var(v), RsNamed(target_ty))
+        return
+
+    # JVM 数组.getClass() → Object::default()（代表 Class<T[]>）
+    # Rust 侧 Vec/数组类型没有 getClass()，但调用方（如 Arrays.copyOf）只用
+    # 其结果判断是否为 Object[] 类型；Object::default() 使判断走 Object[] 分支
+    if mname == 'getClass' and obj_ty.startswith('Rc<RefCell<Vec<'):
+        v = sim.fresh()
+        sim.emit(RawStmt(f"let {v}: Object = Object::default();"))
+        sim.push(Var(v), RsNamed('Object'))
         return
 
     # T38：PrintStream.println 有参版本 → 统一生成 println_v(x)（Printable trait 派发）
