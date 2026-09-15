@@ -18,6 +18,7 @@
 | [F. 运行时错误 — RefCell 双重借用](#f-运行时错误--refcell-双重借用) | 1 | 中 | TestSorting |
 | [G. 运行时错误 — 多态/虚方法派发](#g-运行时错误--多态虚方法派发) | 1 | 低 | TestRecord 等 |
 | [H. 运行时错误 — 输出值错误](#h-运行时错误--输出值错误) | 2 | 低 | TestBoundedGenerics 等 |
+| [I. 编译层补丁 — 待架构升级后删除](#i-编译层补丁--待架构升级后删除) | 5 | 中 | 全局质量 |
 
 ---
 
@@ -40,8 +41,13 @@
 **位置**：`jdk_classes/src/java/lang/character_name.rs:72`  
 **根因**：`invoke.py` 在生成方法调用参数时，只用 `_is_direct_subtype` 检查是否需要 `.into()`，不检查传递子类关系。`InflaterInputStream` 是 `InputStream` 的间接子类，需要 `.into()` 转换。  
 **影响测试**：TestStreamAdvanced、TestStringAdvanced 等  
-**修复位置**：`codegen/instr/invoke.py` — 参数强制转换逻辑，改用 `_is_subtype`（已在 `areturn` 完成，invoke 侧未同步）  
-**状态**：🔴 未修复
+
+**重要约束**：不能简单改为 `_is_subtype`（传递性）。`.into()` 必须有对应的 `From` impl 才合法；当前 `class_writer.py` 只为直接父类/接口生成 `From` impl（T55b），对间接子类用 `.into()` 会产生 E0277。两个规则必须保持一致：
+- 当前正确做法：`.into()` 仅在有 `From` impl 时生成 → 用 `_is_direct_subtype`（一步）
+- **架构解法（Arch-1）**：`java_class` 宏读取 `interfaces` 和 `super_class`，通过 `JvmObject` 的 trait 方法实现真正的动态协变，从根本上不需要 `.into()` 这种静态转型。届时 `_is_direct_subtype` 和 `_is_subtype` 两套规则均可删除。
+
+**修复位置**：临时无法修复（改 `_is_subtype` 会引入新的 E0277）；根本修复见 Arch-1。  
+**状态**：🔴 架构层面问题，临时方案会引入新错误
 
 ---
 
@@ -99,6 +105,14 @@
 **根因**：codegen 把 JDK 类的全部依赖包都写进 `use crate::...::*;`，但这些包（如 `java::lang::r#ref`、`java::lang::reflect`、`sun::security::util`）在当前测试的 call chain 中没有类，因此没有生成对应模块。  
 **影响测试**：所有包含 jdk 内部类（如 `PrintStream`、`Class`）的测试  
 **修复位置**：`codegen/emitter/project_writer.py` — 写出 `use` 前检查包路径是否在已生成的模块列表中，不存在则跳过  
+
+**附加问题 — `preconditions.rs` 文件缺失**：部分测试（TestBoundedGenerics 等）生成的 `jdk_classes/src/jdk/internal/util/preconditions.rs` 包含：
+```rust
+#[path = "../../../../../native_impls/jdk/internal/util/preconditions.rs"]
+mod _impl;
+```
+但 `output/native_impls/jdk/internal/util/preconditions.rs` 不存在，导致 `couldn't read ... preconditions.rs: No such file or directory`。  
+临时修复：创建空占位文件。根本修复：同 C-1，`project_writer` 在写 `#[path = ...]` 前检查 native_impl 文件是否存在，不存在则省略该行。  
 **状态**：🔴 未修复（高优先级，影响面最广）
 
 ---
@@ -139,6 +153,59 @@
 **剩余风险**：若后续字节码翻译了其他 native_impl 中手写的方法，仍会出现 E0592。  
 **根本修复**：`_scan_native_impls` 扫描出 native_impl 已定义的方法名，`class_writer` 生成时跳过该方法的字节码翻译。  
 **状态**：⚠️ 临时修复，根本方案未实施
+
+---
+
+## I. 编译层补丁 — 待架构升级后删除
+
+以下修复已使代码可编译，但属于局部补丁，根本原因是架构问题。记录于此以便追踪清理。
+
+### I-1: `_is_generic_type_param()` 字符串启发式判断（5处）
+
+**当前做法**：在 `invoke.py`（4处）和 `sim.py`（1处）中，当 expected 类型是 `Object`、实际类型名长度 ≤ 2 且首字母大写时，跳过 `Object::from_any()` 包装。  
+**问题**：靠字符串形状猜测泛型参数，脆弱且不准确（`Rc` 首字母大写也会被误判，须同时校验 `.isalpha()`）。  
+
+**根本原因**：`jvm_to_rust()` 只读方法描述符（`descriptor`），丢弃 `generic_signature`。以 `Reference.<init>` 为例：
+
+```rust
+// java_method 注解中同时存在两个字段：
+descriptor        = "(Ljava/lang/Object;)V"   // 擦除后：Object
+generic_signature = "(TT;)V"                  // 真实类型：泛型参数 T
+```
+
+codegen 读取 `descriptor` → `expected = "Object"` → 错误包装 `Object::from_any(referent)`；  
+若改为读取 `generic_signature` → `expected = RsGenericParam("T")` → 直接传入 `referent`，无需启发式。
+
+**架构解法（Arch-7）**：`jvm_to_rust` 同时接受 `generic_signature` 参数，返回 `RsType` 枚举节点；codegen 在生成 `invokespecial/invokestatic/invokevirtual/putfield` 时优先使用 `generic_signature` 中的参数类型，此处 5 个补丁全部删除。
+
+---
+
+### I-2: `_is_direct_subtype` 与 `_is_subtype` 并存（见 B-1、A-2）
+
+**当前做法**：T55（子类型 `.into()` 提升）使用 `_is_direct_subtype`（只走一步），而其他子类型检查用 `_is_subtype`（传递性）。两套规则并存，约定隐式。  
+**架构解法（Arch-1）**：`java_class` 宏通过 `interfaces` 字段自动生成正确的 trait impl，运行时靠 `dyn JvmObject` 动态协变，不再需要静态 `.into()` 链，两套规则均删除。
+
+---
+
+### I-3: 三元表达式类型统一 7 个 `elif`（重复两处）
+
+**当前做法**：`codegen/method/codegen.py` 中三元表达式和 merge 变量处，各有一段 7 个 `elif` 链（内容相同，重复维护），处理 bool/int 转换、null 表达式、Object↔具体类型等情形。  
+**架构解法（Arch-7）**：引入 `coerce(from: RsType, to: RsType, expr: str) -> str` 统一函数，`_null_exprs` 字符串集合替换为 `RsType::is_null_literal()` 方法，两处重复 elif 链合并为一次调用。
+
+---
+
+### I-4: `this.clone()` 字符串比较特判
+
+**当前做法**：`codegen/method/codegen.py` 三元和 merge 变量处，`if tv == 'this': tv = 'this.clone()'`，靠字符串比较补偿 `let this = self;` 产生 `&Self` 引用与值位置不兼容问题。  
+**架构解法（Arch-7）**：Stack 类型节点区分 `RsRef(&Self)` 和 `RsOwned(Self)`，任何值位置使用引用节点时统一生成 `.clone()`，无需字符串匹配。
+
+---
+
+### I-5: `unreachable!()` 末尾补全
+
+**当前做法**：`codegen/method/postprocess.py`：当函数末尾最后一行不是 `Ok(...)` 时追加 `unreachable!()`，防止 Rust 报 E0317（if 缺少 else）。  
+**根本原因**：`while(true)` 循环被展平为直线代码后，goto 回边丢失，Rust 看到 `if` 没有 else，函数在某条路径"掉出"末尾。  
+**架构解法（Arch-8，CFG 重建）**：构建 CFG + 支配树，识别自然循环，生成正确的 `loop { ... if cond { break; } }` 结构，函数末尾永远是 `Ok(...)` 表达式，此补丁删除。
 
 ---
 
@@ -210,9 +277,11 @@ let _t1: f64 = Self::sum(Default::default())?;  // 实际 ints 完全没传入
 
 以下问题超出局部 bug fix 范畴，需要设计层面解决。
 
-### 核心发现：`java_class` 宏完全忽略了已有元数据
+### 核心发现：生成的 Rust 文件中已有完整字节码元数据，但均被忽略
 
-**每个生成的 struct 上都挂有完整的 Java 字节码元数据**：
+**关键点 1 — `java_class` 宏完全忽略了类级元数据**
+
+每个生成的 struct 上挂有完整的 Java 字节码元数据：
 
 ```rust
 #[java_rta_macros::java_class(
@@ -225,29 +294,91 @@ let _t1: f64 = Self::sum(Default::default())?;  // 实际 ints 完全没传入
 pub struct ArrayList<E: Clone + Default + 'static> { ... }
 ```
 
-**每个生成方法上也挂有完整的方法字节码元数据**（但通过 `cfg_attr(any(), ...)` 永远不激活）：
-
-```rust
-#[cfg_attr(any(), java_method(
-    name = "sum",
-    descriptor = "([Ljava/lang/Number;)D",
-    is_abstract = false,
-    is_native = false,
-    generic_signature = "<T:Ljava/lang/Number;>([TT;)D"
-))]
-pub fn sum(mut arr: ...) -> Result<f64> { ... }
-```
-
-**当前 `java_class` 宏的实现**（`java_rta_macros/src/lib.rs:15`）：
-
+当前宏实现（`java_rta_macros/src/lib.rs:15`）：
 ```rust
 pub fn java_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
-//                ^^^^^ 下划线前缀 = 完全丢弃，不读取任何属性参数
+//                ^^^^^ 完全丢弃，不读取任何属性参数
 ```
-
 `binary_name`、`interfaces`、`super_class`、`is_interface`、`generic_signature` 全部被忽略。宏只生成通用的 `Into<Object>`、`From<Object>`、`Debug` 三个 impl，与类的实际 Java 类型信息完全脱节。
 
-**这是所有 Arch 问题的根源**：本可以在 Rust 编译期由宏自动派生的行为，全都降级为 Python 侧脆弱的字符串分析和运行时补丁。
+---
+
+**关键点 2 — `java_method` / `java_field` 注解含完整字节码元数据，但 codegen 生成时不读取 `generic_signature`**
+
+每个字段/方法注解携带完整的 Java 字节码元数据。以 `Reference<T>` 为例：
+
+```rust
+// 字段示例（Reference.referent）：
+#[cfg_attr(any(), java_field(
+    name              = "referent",
+    descriptor        = "Ljava/lang/Object;",   // ← 类型擦除后：Object
+    access            = "private",
+    modifiers         = "",
+    is_static         = false,
+    generic_signature = "TT;",                  // ← 真实类型：泛型参数 T（不要删这行！）
+))]
+pub referent: JField<T>,
+
+// 方法示例（Reference.<init>）：
+#[cfg_attr(any(), java_method(
+    name              = "<init>",
+    descriptor        = "(Ljava/lang/Object;)V", // ← 参数类型擦除为 Object
+    access            = "package",
+    modifiers         = "",
+    is_static         = false,
+    is_native         = false,
+    is_abstract       = false,
+    is_synthetic      = false,
+    generic_signature = "(TT;)V",               // ← 参数真实类型：泛型参数 T（不要删这行！）
+))]
+pub fn new_obj(mut referent: T) -> Result<Self> { ... }
+```
+
+这些字段均不应删除——它们是对应 Java `.class` 文件中 `MethodInfo`/`FieldInfo` + `Signature` 属性的完整镜像，是架构升级的信息来源。
+
+**codegen 当前只读 `descriptor`，丢弃 `generic_signature`**。以 `SoftReference::new_obj` 调用 `Reference::new_obj(referent)` 为例：
+- 读 `descriptor` → `expected = "Object"` → 错误插入 `Object::from_any(referent.clone())` → 生成 `Reference<Object>` → E0308
+- 若读 `generic_signature` → `expected = RsGenericParam("T")` → 直接传入 `referent.clone()` → 正确
+
+当前用 `_is_generic_type_param()` 字符串启发式猜回已丢弃的泛型信息（I-1）。根本解法是 codegen 在处理每条指令时优先使用 `generic_signature` 中的真实类型。
+
+---
+
+**这是所有 Arch 问题和 I 节补丁的共同根源**：本可以在宏层面（编译期）和 codegen 层面（读取 generic_signature）自动处理的行为，全都降级为 Python 侧脆弱的字符串启发式分析和补丁。
+
+---
+
+### 设计原则：Object 只在真正的多态边界出现，上层代码保持具体类型
+
+Java 泛型类型擦除（type erasure）是编译器层面的实现细节，不代表运行时语义。在生成的 Rust 代码中，`Object` 不应该被滥用为"任意类型"的替代，应遵守以下分层规则：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              类型使用的三个层次                              │
+├──────────────────┬──────────────────────────────────────────┤
+│ 具体类型层        │ T、String、ArrayList<E>                   │
+│                  │ → Rust 泛型参数 / 具体 struct              │
+│                  │ 方法体内、字段访问、泛型方法参数            │
+├──────────────────┼──────────────────────────────────────────┤
+│ 多态边界层        │ 参数本身就是 Object（非泛型擦除产物）       │
+│                  │ → Object = Rc<dyn JvmObject>              │
+│                  │ println(Object)、equals(Object) 等         │
+├──────────────────┼──────────────────────────────────────────┤
+│ 异构容器层        │ List<Object>、Object[]                    │
+│                  │ → Vec<Object>，存储不同运行时类型           │
+└──────────────────┴──────────────────────────────────────────┘
+```
+
+**判断一个类型应该是 `T`（具体）还是 `Object`（多态）的规则**：
+
+| 情况 | 正确 Rust 类型 | 依据 |
+|------|---------------|------|
+| `generic_signature` 中是 `TT;`、`TE;` 等 | 泛型参数 `T`、`E` | 擦除产物，上层保持具体 |
+| `generic_signature` 中是 `Ljava/lang/Object;` | `Object` | 声明就是 Object，真正的多态引用 |
+| `generic_signature` 不存在，`descriptor` 是 `Ljava/lang/Object;` | `Object` | 无泛型信息，确实是 Object |
+| `generic_signature` 中是 `Ljava/util/List<TE;>;` | `List<E>` | 参数化类型，保持 |
+
+**结论**：codegen 处理每条指令时，应**优先读取 `generic_signature`**，只有在无泛型签名、或签名确认是 `Object` 时，才生成 `Object` 类型。这是 Arch-7（RsType 化）的核心设计约束。
 
 ---
 
@@ -500,6 +631,58 @@ impl From<ArrayList<E>> for List<E> {
 
 ---
 
+### Arch-7: 类型系统 RsType 化（消除 I 节所有补丁）
+
+**问题**：`jvm_to_rust()` 返回 `str`，类型信息以字符串形式在整个 codegen 中流转。泛型变量（`T`、`E`、`K`、`V`）、具体类型（`Object`、`String`）、参数化类型（`List<Object>`）无法区分，只能靠字符串启发式猜测（I-1）；null 表达式靠字符串内容集合判断（`_null_exprs`），极为脆弱。
+
+**根本原因**：codegen 处理每条指令时，只读方法描述符（`descriptor` 字段，类型已擦除），不读 `generic_signature` 字段（含原始泛型信息）。
+
+**目标态方案**：
+
+1. **新增 `RsType` 枚举**（`codegen/types.py`）：
+   ```python
+   @dataclass
+   class RsGenericParam:   name: str          # T、E、K、V
+   @dataclass
+   class RsConcrete:       name: str          # Object、String
+   @dataclass
+   class RsParameterized:  base: str; params: list[RsType]  # List<Object>
+   @dataclass
+   class RsArray:          elem: RsType       # Vec<T>
+   @dataclass
+   class RsNull:           pass               # null literal
+   ```
+
+2. **`jvm_to_rust` 改为接受可选 `generic_sig` 参数**，返回 `RsType`；优先解析 `generic_signature`（若存在），降级到 `descriptor`。
+
+3. **Stack 传播 `RsType` 节点**：`StackSim.push()` 接受 `RsType` 而非字符串。
+
+4. **统一 `coerce(from: RsType, to: RsType, expr: str) → str`** 替代所有分散的 elif 链。
+
+5. **效果**：I-1（_is_generic_type_param）、I-3（三元 elif 链）、I-4（this.clone 特判）三处补丁完全删除；I-2（_is_direct_subtype）在 Arch-1 完成后删除。
+
+**修改文件**：`codegen/types.py`、`codegen/instr/sim.py`、`codegen/instr/invoke.py`、`codegen/instr/coerce.py`、`codegen/method/codegen.py`  
+**状态**：🔴 未实施（Task #7）
+
+---
+
+### Arch-8: CFG 重建（消除 I-5，修复控制流正确性）
+
+**问题**：字节码是扁平指令流 + `goto` 跳转。转译器将 `goto` 展平为直线代码，`while(true)` 的回边丢失，`break`/`continue` 无从表达，只能在函数末尾贴 `unreachable!()`（I-5）。更严重的是，`while(true)` 的循环体代码有时会被错误重复（goto 目标被内联多次），或完全消失（goto 超出翻译范围）。
+
+**目标态方案**：
+
+1. **构建 CFG**：每个方法字节码 → 基本块图，识别所有跳转边（条件跳转、goto、tableswitch）。
+2. **支配树分析**：找到每个基本块的支配节点，识别自然循环（back edge = 从后继跳到支配祖先）。
+3. **循环恢复**：每个自然循环生成 `loop { ... }` 结构，循环出口生成 `break`/`continue`。
+4. **条件分支恢复**：每个支配路径对生成 `if { ... } else { ... }` 结构。
+5. **效果**：函数末尾永远有完整返回，`unreachable!()` 补丁删除；`break`/`continue` 语义正确；goto 重叠引起的代码重复问题消失。
+
+**修改文件**：新建 `codegen/cfg/` 模块（已有 `branches.py`、`loops.py` 雏形），`codegen/method/codegen.py` 主流程接入 CFG 输出  
+**状态**：🔴 未实施（Task #4）
+
+---
+
 ### 架构变更优先级与依赖关系
 
 ```
@@ -526,11 +709,13 @@ java_class 宏重写（核心前置工作）：
 | 顺序 | 工作项 | 影响 | 前置 |
 |------|--------|------|------|
 | 1 | **D-1 短期**（invokedynamic 弹/压占位） | 消除 7 个测试的 E0308 | 无 |
-| 2 | **`java_class` 宏重写**（读取所有元数据） | 所有 Arch 的基础 | 无 |
-| 3 | **Arch-2**（instanceof + BINARY_NAME） | 5+ 测试 + 消除 Arch-6 | 宏重写 |
-| 4 | **Object 改 `Rc<dyn JvmObject>`** | 基础类型重构 | 宏重写 |
-| 5 | **Arch-1**（接口 → Rust trait + dyn dispatch） | 10+ 测试语义修复 | Object 重构 |
-| 6 | **Arch-3 长期**（invokedynamic → 真实闭包） | Lambda 语义 | Arch-1 |
+| 2 | **Arch-7**（RsType 化 + generic_signature 读取） | 消除 I 节全部 5 个补丁，提升全局类型精度 | 无 |
+| 3 | **Arch-8**（CFG 重建） | 消除 I-5 unreachable!()，修复控制流正确性 | 无 |
+| 4 | **`java_class` 宏重写**（读取所有元数据） | 所有 Arch 的基础 | 无 |
+| 5 | **Arch-2**（instanceof + BINARY_NAME） | 5+ 测试 + 消除 Arch-6 | 宏重写 |
+| 6 | **Object 改 `Rc<dyn JvmObject>`** | 基础类型重构 | 宏重写 |
+| 7 | **Arch-1**（接口 → Rust trait + dyn dispatch） | 10+ 测试语义修复 | Object 重构 |
+| 8 | **Arch-3 长期**（invokedynamic → 真实闭包） | Lambda 语义 | Arch-1 |
 
 ---
 
@@ -547,3 +732,10 @@ java_class 宏重写（核心前置工作）：
 | 2026-09-15 | `areturn` 只检查直接子类，传递子类不生成 `.into()` | `sim.py` areturn 改用 `_is_subtype`（仅对非 invokedynamic 场景有效，见 D-1） |
 | 2026-09-15 | `native_impl string.rs` 与字节码翻译重复定义（E0592） | 删除 native_impl 中的重复方法 |
 | 2026-09-15 | `array_list.rs iterator()` 返回 `Iterator<Object>` 找不到类型 | 改回 `Result<Object>` |
+| 2026-09-15 | 生成结构体缺少 `PartialEq`，`JField<T>` 缺少 `PartialEq` impl → E0369 | `class_writer.py` 所有 derive 加 PartialEq；`types.rs` 为 JField<T> 实现 PartialEq |
+| 2026-09-15 | `while(true)` 展平后函数末尾 E0317 | `postprocess.py` 尾部加 `unreachable!()`（临时补丁 I-5） |
+| 2026-09-15 | 三元/merge 表达式 `Object as Struct` 非法 as 转换 → E0605 | `codegen.py` 改为 `Default::default()` / `.downcast::<T>()` / `Object::from_any(x)` |
+| 2026-09-15 | `this` 在三元/merge 值位置报 `mismatched types &Self vs Self` | `codegen.py` 三元和 merge 变量处替换 `this` → `this.clone()`（临时补丁 I-4） |
+| 2026-09-15 | `putfield` 泛型类字段赋值时，泛型参数 `T` 被包装为 `Object::from_any(T)` → E0308 | `sim.py` putfield 加 `_is_generic_type_param` 跳过包装（临时补丁 I-1） |
+| 2026-09-15 | T55 传递子类型生成 `.into()` 但无对应 From impl → E0277 | `coerce.py` 新增 `_is_direct_subtype`，sim.py/invoke.py 换用（临时补丁 I-2） |
+| 2026-09-15 | `invokespecial/invokestatic/invokevirtual` 泛型参数被 `Object::from_any` 包装 → E0308 | `invoke.py` 三处调用加 `_is_generic_type_param` 跳过包装（临时补丁 I-1） |
