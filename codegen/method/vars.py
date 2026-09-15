@@ -240,12 +240,12 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
         if block_k is None:
             continue
         block_indent = entries[block_k][0]
-        # 确定默认值：有类型则用 Default::default()，否则 MaybeUninit
-        if ty_str and ty_str not in ('()', ''):
-            default_val = RawExpr(f'{ty_str}::default()')
-        else:
-            default_val = RawExpr('Default::default()')
-        insertions.append((block_k, (block_indent, LetStmt(name, None, True, default_val))))
+        # 获取类型注解节点（来自第一次声明）
+        _, first_let = entries[first_decl_k]
+        hoisted_type = first_let.type_node if isinstance(first_let, LetStmt) else None
+        # 统一用 Default::default()，配合类型注解让 Rust 推断
+        default_val = RawExpr('Default::default()')
+        insertions.append((block_k, (block_indent, LetStmt(name, hoisted_type, True, default_val))))
         # 将块内所有同名 LetStmt 改为 AssignStmt
         for decl_k, _ in decl_list:
             inner_indent, inner_item = entries[decl_k]

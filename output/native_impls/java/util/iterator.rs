@@ -5,7 +5,7 @@ use super::*;
 /// @field _data: JField<Rc<RefCell<Vec<Object>>>>
 /// @field _pos:  JField<i32>
 
-impl<E: Clone + 'static> super::Iterator<E> {
+impl<E: Clone + Default + 'static> super::Iterator<E> {
     pub fn hasNext(&self) -> Result<bool> {
         Ok(self._pos.get() < self._data.get().borrow().len() as i32)
     }

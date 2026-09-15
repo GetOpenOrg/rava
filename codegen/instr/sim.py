@@ -15,6 +15,7 @@ from ..type_map import (
     jvm_to_rust, short_cls,
     NEWARRAY_TYPES,
 )
+from ..constants import safe_ident as _safe_ident
 from ..types import Instr
 from .coerce import (
     _float_lit, _escape_str, _parse_slot, _to_i32,
@@ -406,8 +407,12 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'putstatic':
         val_expr, _ = sim.pop()
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
-        # putstatic: 静态字段写入用注释占位，stub getter 已生成 panic!() 实现
-        sim.emit(RawStmt(f"/* putstatic {cls}.{field_name} = {render_expr(val_expr)} */"))
+        if cls and field_name:
+            raw_cls = cls.rsplit('/', 1)[-1].replace('$', '_')
+            rust_fname = _safe_ident(field_name)
+            sim.emit(RawStmt(f"{raw_cls}::set_{rust_fname}({render_expr(val_expr)});"))
+        else:
+            sim.emit(RawStmt(f"/* putstatic {cls}.{field_name} = {render_expr(val_expr)} */"))
 
     # ── 数组 ──
     elif op == 'newarray':

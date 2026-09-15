@@ -23,3 +23,4 @@ output/user/Cargo.toml
 .DS_Store
 docs/reports/jdk-scan-*
 /.claude/worktrees
+/output/runs

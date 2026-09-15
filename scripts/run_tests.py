@@ -38,7 +38,7 @@ ROOT   = Path(__file__).parent.parent
 TESTS  = ROOT / "tests"
 E2E    = TESTS / "e2e"
 EXPECT = TESTS / "expected"
-OUT    = ROOT / "output"
+OUT    = ROOT / "output"   # 可被 main() 通过 --out-dir 覆盖
 
 
 def _run(cmd: list[str], cwd: Path, capture: bool = True) -> subprocess.CompletedProcess:
@@ -62,21 +62,64 @@ def _to_bin_name(class_name: str) -> str:
     return s.lower()
 
 
-def _transpile(java_file: Path, batch: bool = False) -> tuple[bool, str]:
+def _test_workspace(bin_name: str) -> Path:
+    """返回该测试的专属工作区：output/runs/<bin_name>/。"""
+    return OUT / "runs" / bin_name
+
+
+def _init_test_workspace(ws: Path) -> None:
+    """首次调用时初始化独立测试工作区（符号链接共享只读 crate，共享 target/）。"""
+    if (ws / "Cargo.toml").exists():
+        return
+    ws.mkdir(parents=True, exist_ok=True)
+    default = ROOT / "output"
+
+    # 符号链接指向共享只读 crate（相对路径，目录可移动）
+    for shared in ("java_runtime", "java_rta_macros", "native_impls"):
+        src = default / shared
+        dst = ws / shared
+        if src.exists() and not dst.exists():
+            dst.symlink_to(os.path.relpath(src, ws))
+
+    # 复制 workspace Cargo.toml
+    src_toml = default / "Cargo.toml"
+    if src_toml.exists():
+        (ws / "Cargo.toml").write_text(src_toml.read_text())
+
+    # jdk_classes/ 和 user/ 骨架目录 + Cargo.toml
+    for crate in ("jdk_classes", "user"):
+        crate_dir = ws / crate
+        (crate_dir / "src").mkdir(parents=True, exist_ok=True)
+        cargo_src = default / crate / "Cargo.toml"
+        if cargo_src.exists():
+            (crate_dir / "Cargo.toml").write_text(cargo_src.read_text())
+
+    # 共享 target/ 目录（避免每个测试重新编译 java_runtime / java_rta_macros）
+    shared_target = os.path.relpath(default / "target", ws)
+    (ws / ".cargo").mkdir(exist_ok=True)
+    (ws / ".cargo" / "config.toml").write_text(
+        f'[build]\ntarget-dir = "{shared_target}"\n'
+    )
+
+
+def _transpile(java_file: Path, batch: bool = False,
+               out_dir: Path | None = None) -> tuple[bool, str]:
     """运行转译器生成 Rust 代码。batch=True 时写 src/bin/<class>.rs。"""
-    args = [sys.executable, str(ROOT / "scripts" / "main.py"), str(java_file), "--no-run"]
+    out = out_dir or OUT
+    args = [sys.executable, str(ROOT / "scripts" / "main.py"), str(java_file),
+            "--no-run", "--out", str(out)]
     if batch:
         args.append("--batch")
     r = _run(args, cwd=ROOT)
     return r.returncode == 0, (r.stdout + r.stderr)
 
 
-def _cargo_run(class_name: str) -> tuple[bool, str]:
+def _cargo_run(class_name: str, out_dir: Path | None = None) -> tuple[bool, str]:
     """顺序模式：cargo run --bin <class>。"""
+    out = out_dir or OUT
     bin_name = _to_bin_name(class_name)
-    r = _run(["cargo", "run", "--bin", bin_name], cwd=OUT)
+    r = _run(["cargo", "run", "--bin", bin_name], cwd=out)
     if r.returncode != 0:
-        # 打印首条 error 行帮助诊断
         for line in r.stderr.splitlines():
             if line.startswith('error'):
                 print(f"  stderr: {line[:120]}", flush=True)
@@ -248,15 +291,20 @@ def _run_sequential(filter_str: str | None, no_run: bool) -> int:
 
     for java_file in files:
         class_name = _class_name(java_file)
-        rel = java_file.relative_to(ROOT)
-        expected = _read_expected(class_name)
+        bin_name   = _to_bin_name(class_name)
+        rel        = java_file.relative_to(ROOT)
+        expected   = _read_expected(class_name)
 
         if expected is None:
             print(f"[ SKIP ] {rel}  (no expected/{class_name}.txt)")
             skipped += 1
             continue
 
-        ok, log = _transpile(java_file)
+        # 每个测试用独立工作区，避免多进程/多次运行互相覆盖
+        ws = _test_workspace(bin_name)
+        _init_test_workspace(ws)
+
+        ok, log = _transpile(java_file, out_dir=ws)
         if not ok:
             print(f"[ FAIL ] {rel}  — transpile error")
             print(log[-500:])
@@ -268,7 +316,7 @@ def _run_sequential(filter_str: str | None, no_run: bool) -> int:
             skipped += 1
             continue
 
-        ok, actual = _cargo_run(class_name)
+        ok, actual = _cargo_run(class_name, out_dir=ws)
         if not ok:
             print(f"[ FAIL ] {rel}  — cargo run error")
             failed += 1
@@ -427,14 +475,60 @@ def run_tests(filter_str: str | None, no_run: bool, update_expected: bool, jobs:
     return _run_sequential(filter_str, no_run)
 
 
+def _ensure_workspace(out: Path) -> None:
+    """确保 out_dir 是可用的 Cargo workspace。
+    若目录不存在，用符号链接指向 output/ 下的共享只读 crate，新建 jdk_classes/ 和 user/。
+    若目录已存在且有 Cargo.toml，直接使用。
+    """
+    if out == ROOT / "output":
+        return  # 默认目录，已完整初始化
+    if (out / "Cargo.toml").exists():
+        return  # 用户自行准备的目录
+
+    out.mkdir(parents=True, exist_ok=True)
+    default = ROOT / "output"
+
+    # 对只读 crate 创建符号链接（不复制，节省磁盘；build 产物隔离在各自 target/）
+    for shared in ("java_runtime", "java_rta_macros", "native_impls"):
+        src = default / shared
+        dst = out / shared
+        if src.exists() and not dst.exists():
+            dst.symlink_to(src.resolve())
+
+    # 复制 workspace Cargo.toml（内含成员列表，无法跨路径共享）
+    src_toml = default / "Cargo.toml"
+    if src_toml.exists():
+        (out / "Cargo.toml").write_text(src_toml.read_text())
+
+    # 创建 jdk_classes/ 和 user/ 框架（Cargo.toml 内容由转译器填充）
+    for crate, cargo_src in (("jdk_classes", default / "jdk_classes" / "Cargo.toml"),
+                              ("user",        default / "user"        / "Cargo.toml")):
+        crate_dir = out / crate
+        (crate_dir / "src").mkdir(parents=True, exist_ok=True)
+        dst_toml = crate_dir / "Cargo.toml"
+        if not dst_toml.exists() and cargo_src.exists():
+            dst_toml.write_text(cargo_src.read_text())
+
+    print(f"[workspace] 初始化新工作区 {out}")
+
+
 def main():
+    global OUT
     ap = argparse.ArgumentParser(description="java_rta 端到端测试框架")
     ap.add_argument("--filter",          metavar="STR", help="只测试路径中包含此字符串的文件")
     ap.add_argument("--no-run",          action="store_true", help="只生成 Rust，不执行对比（仅顺序模式）")
     ap.add_argument("--update-expected", action="store_true", help="重新生成 expected/*.txt（用 java 运行）")
+    ap.add_argument("--out-dir",         metavar="DIR", default=None,
+                    help="Cargo workspace 目录（默认 output/；多进程并行时指定不同目录避免冲突）")
     ap.add_argument("--jobs", "-j",      type=int, default=1, metavar="N",
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     args = ap.parse_args()
+
+    if args.out_dir is not None:
+        OUT = Path(args.out_dir)
+        if not OUT.is_absolute():
+            OUT = ROOT / OUT
+        _ensure_workspace(OUT)
 
     jobs = args.jobs
     if jobs == 0:
