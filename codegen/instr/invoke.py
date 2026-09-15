@@ -94,7 +94,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 e_str = null_coerce
             elif _coerce_to_interface(actual_rust, expected_rust):
                 e_str = 'Default::default()'
-            elif expected_rust == 'Object' and actual_rust not in ('Object', '()') and not _is_generic_type_param(actual_rust):
+            elif expected_rust == 'Object' and actual_rust not in ('Object', '()'):
                 e_str = _coerce_to_object(e_str, actual_rust)
             elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
                 e_str = _coerce_value(e_str, e_ty_node, expected_rust)
@@ -129,7 +129,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             e = null_coerce
         elif _coerce_to_interface(ty, expected):
             e = 'Default::default()'
-        elif expected == 'Object' and ty not in ('Object', '()') and e != 'this' and not _is_generic_type_param(ty):
+        elif expected == 'Object' and ty not in ('Object', '()') and e != 'this':
             e = _coerce_to_object(e, ty)
         elif expected == 'Object' and ty not in ('Object', '()') and e == 'this':
             e = f"Object::from_any(Clone::clone(self))"
@@ -242,7 +242,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             e = null_coerce
         elif _coerce_to_interface(ty, expected):
             e = 'Default::default()'
-        elif expected == 'Object' and ty not in ('Object', '()') and not _is_generic_type_param(ty):
+        elif expected == 'Object' and ty not in ('Object', '()'):
             e = _coerce_to_object(e, ty)
         elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
             e = _coerce_value(e, ty_node, expected)
@@ -252,7 +252,8 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
               and expected not in ('Object', '()', ty)
               and _is_subtype(ty.split('<')[0], expected.split('<')[0], registry)):
             # T55：子类型传给父类型参数位置，插入 .into() 类型提升
-            e = f"{e}.into()"
+            # Clone::clone 确保得到 owned 值（this 是 &Self，直接 .into() 会要求 From<&T>）
+            e = f"Clone::clone(&{e}).into()"
         elif ty not in _PRIMITIVE_RUST_TYPES:
             e = f"Clone::clone(&{e})"
         args.insert(0, e)
@@ -315,7 +316,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             e_str = null_coerce
         elif _coerce_to_interface(actual_rust, expected_rust):
             e_str = 'Default::default()'
-        elif expected_rust == 'Object' and actual_rust not in ('Object', '()') and not _is_generic_type_param(actual_rust):
+        elif expected_rust == 'Object' and actual_rust not in ('Object', '()'):
             e_str = _coerce_to_object(e_str, actual_rust)
         elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
             e_str = _coerce_value(e_str, e_ty_node, expected_rust)
@@ -325,7 +326,8 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
               and expected_rust not in ('Object', '()', actual_rust)
               and _is_subtype(actual_rust.split('<')[0], expected_rust.split('<')[0], registry)):
             # T55：子类型传给父类型参数位置，插入 .into() 类型提升
-            e_str = f"{e_str}.into()"
+            # Clone::clone 确保得到 owned 值（this 是 &Self，直接 .into() 会要求 From<&T>）
+            e_str = f"Clone::clone(&{e_str}).into()"
         elif actual_rust not in _PRIMITIVE_RUST_TYPES:
             e_str = f"Clone::clone(&{e_str})"
         args.insert(0, e_str)

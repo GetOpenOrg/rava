@@ -435,6 +435,14 @@ def gen_method_body(
                 for s in inner.stmts:
                     out.append((ind + "    ", s))
                 out.append(('', f"{ind}}}"))
+                # F-2 fix: 若 guard 的 continue 超过当前块末且超过最内层循环末，
+                # else 分支（跳转目标）是循环出口 → 需要 break;
+                # 例：while (j>=0 && arr[j]>key) 的第二条件，if-guard 结束后缺 break
+                if guard.continue_idx > end:
+                    for _glp in _loops:
+                        if _glp.start_idx <= i <= _glp.end_idx and guard.continue_idx > _glp.end_idx:
+                            out.append(('', f"{ind}break;"))
+                            break
                 i = guard.continue_idx
                 continue
 
@@ -492,7 +500,7 @@ def gen_method_body(
                             ev = 'Default::default()'
                         elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object':
                             ev = f"({ev}).downcast::<{ty_str}>()"
-                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and not _is_generic_type_param(ety_str):
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object':
                             ev = f"Object::from_any(Clone::clone(&{ev}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             ev = f"({ev} as {ty_str})"
@@ -525,7 +533,7 @@ def gen_method_body(
                             else_val = 'Default::default()'
                         elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object':
                             else_val = f"({else_val}).downcast::<{ty_str}>()"
-                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and not _is_generic_type_param(ety_str):
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object':
                             else_val = f"Object::from_any(Clone::clone(&{else_val}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             else_val = f"({else_val} as {ty_str})"

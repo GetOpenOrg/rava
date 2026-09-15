@@ -2,6 +2,7 @@
 单个 Java 类 → Rust 文件内容生成：_gen_class_rs 主函数。
 """
 
+import os
 from collections import Counter
 from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, get_ergonomic_jvm_rename, rust_default
@@ -365,10 +366,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         ups = '../' * (pkg_depth + 2)
         if _nf_entry.get('main'):
             main_rel = _nf_entry['main']
-            parts.append(f'#[allow(unused_imports, dead_code, unused_variables, non_snake_case, non_camel_case_types)]\n#[path = "{ups}{main_rel}"]\nmod _impl;\n')
-            # 全量手写类：re-export struct + impls，让外部代码仍通过同一路径访问类型
-            if _full_impl:
-                parts.append('pub use self::_impl::*;\n')
+            _impl_abs = os.path.join(workspace_root, main_rel)
+            if os.path.exists(_impl_abs):
+                parts.append(f'#[allow(unused_imports, dead_code, unused_variables, non_snake_case, non_camel_case_types)]\n#[path = "{ups}{main_rel}"]\nmod _impl;\n')
+                # 全量手写类：re-export struct + impls，让外部代码仍通过同一路径访问类型
+                if _full_impl:
+                    parts.append('pub use self::_impl::*;\n')
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]

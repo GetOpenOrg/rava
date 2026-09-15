@@ -94,7 +94,7 @@
 **根因**：`From` impl 是为 owned 值生成的，但代码里传入的是 `&AbstractStringBuilder` 引用。T55b 生成的 `From<AbstractStringBuilder> for Appendable` 无法满足 `From<&AbstractStringBuilder>` 约束。  
 **影响测试**：TestStringBuilder、TestStringOps  
 **修复思路**：调用点改为 `.clone().into()` 而不是 `(&this).into()`，或者 invoke.py 对引用类型加 clone  
-**状态**：🔴 未修复
+**状态**：✅ 已修复（2026-09-15）— invoke.py T55 `.into()` 分支改为 `Clone::clone(&e).into()`，确保传递 owned 值
 
 ---
 
@@ -114,8 +114,8 @@
 mod _impl;
 ```
 但 `output/native_impls/jdk/internal/util/preconditions.rs` 不存在，导致 `couldn't read ... preconditions.rs: No such file or directory`。  
-临时修复：创建空占位文件。根本修复：同 C-1，`project_writer` 在写 `#[path = ...]` 前检查 native_impl 文件是否存在，不存在则省略该行。  
-**状态**：🔴 未修复（高优先级，影响面最广）
+临时修复：创建空占位文件。根本修复：`class_writer.py` 在写 `#[path = ...]` 前调用 `os.path.exists(_impl_abs)`，不存在则省略该行（已实现，2026-09-15）。  
+**状态**：⚠️ 主问题（use 引用不存在包）未修复；附加问题（#[path] preconditions）已修复
 
 ---
 
@@ -133,7 +133,7 @@ mod _impl;
   - **短期（修复编译）**：解析 invokedynamic 方法描述符确定参数数量，从栈弹出对应操作数；压入 `Object::default()` 占位返回值。这样后续 `checkcast`/`areturn` 拿到正确的 `Object` 类型，不再产生 E0308。  
   - **长期（修复语义，见 Arch-3）**：识别 bootstrap 方法，生成 Rust 闭包 `Arc<dyn Fn>` 并包装入 `Object`  
 **修复位置**：`codegen/instr/sim.py` — `invokedynamic` 分支  
-**状态**：🔴 未修复
+**状态**：✅ 短期方案已实现（2026-09-15）— sim.py 已解析 descriptor 弹出 N 个参数并压入 Object::default() 占位符；long-term 语义修复见 Arch-3
 
 ---
 
@@ -968,3 +968,8 @@ pub trait Printable {
 | 2026-09-15 | 构造器内 `Clone::clone(this)` 中 `this` 是 owned，需要 `&this` | `sim.py` putfield 区分 `val_str == 'this'` 时发射 `Clone::clone(&this)` |
 | 2026-09-15 | A-1：`u16`/`i8`/`i16` 作为 `ireturn` 值时缺少 `as i32` 转换 | `coerce.py _coerce_value`：`target == 'i32'` 分支补充 `u16/i8/i16` → `as i32` |
 | 2026-09-15 | `aaload` primitive 数组元素用 `Clone::clone` 但 `Vec<i32>[idx]` 是 `i32` 非引用 → E0308 | `sim.py` aaload：primitive 类型直接取值；非 primitive 改为 `Clone::clone(&arr.borrow()[idx])` |
+| 2026-09-15 | F-1：`aastore` 同一 RefCell 同时 `borrow_mut` 和 `borrow` → 运行时 panic | `sim.py` aastore：非 primitive val 含 `.borrow()` 时先提取 tmp，再 borrow_mut 赋值 |
+| 2026-09-15 | F-2：`while (cond1 && cond2)` 循环第二条件 if-guard 缺少 `break;` → 死循环 | `codegen.py` if-guard 块后，若 continue_idx 超过最内层循环末，补充 `break;` |
+| 2026-09-15 | B-2：T55 `.into()` 对 `this`（`&Self`）生成 `From<&T>` 但只有 `From<T>` → E0277 | `invoke.py` T55 `.into()` 分支改为 `Clone::clone(&e).into()` |
+| 2026-09-15 | C-1 附加：`#[path = "..."] mod _impl;` 目标文件不存在 → E0583 | `class_writer.py` 写 `#[path]` 前 `os.path.exists` 检查，不存在则省略 |
+| 2026-09-15 | D-1：invokedynamic 不弹栈不压返回值 → 后续指令类型错误 | `sim.py` 已实现：解析 descriptor 弹出 N 参数，压入 `Object::default()` |

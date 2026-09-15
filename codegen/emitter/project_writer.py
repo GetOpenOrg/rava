@@ -84,8 +84,26 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     user_dir = os.path.join(out_dir, 'user')
 
     # 3. jdk_classes crate（JDK 字节码翻译）
-    # Cargo.toml / build.rs 由 git 直接管理，emitter 不再写出
     jdk_src = os.path.join(jdk_dir, 'src')
+    # 若 jdk_classes/Cargo.toml 不存在（新工作区），生成它
+    jdk_cargo = os.path.join(jdk_dir, 'Cargo.toml')
+    if not os.path.exists(jdk_cargo):
+        _write(jdk_cargo, '\n'.join([
+            '[package]',
+            'name = "jdk_classes"',
+            'version = "0.1.0"',
+            'edition = "2021"',
+            '',
+            '[lib]',
+            'name = "jdk_classes"',
+            'path = "src/lib.rs"',
+            '',
+            '[dependencies]',
+            'java_runtime    = { path = "../java_runtime" }',
+            'java_rta_macros = { path = "../java_rta_macros" }',
+            'parking_lot     = "0.12"',
+            '',
+        ]))
     # 清理旧版生成文件（batch 模式由调用方在批次开始前统一清理）
     if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):

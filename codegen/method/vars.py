@@ -255,6 +255,18 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
                 break
         if block_k is None:
             continue
+        # 若 block_k 落在 match arm（含 =>）内，向上找到 match 语句本身，
+        # 否则插入位置落在两个 arm 之间，产生"expected pattern, found 'let'"错误
+        while '=>' in rendered[block_k]:
+            arm_nesting = entry_nesting[block_k]
+            parent_k = None
+            for bk in reversed(block_entry_indices):
+                if bk < block_k and entry_nesting[bk] < arm_nesting:
+                    parent_k = bk
+                    break
+            if parent_k is None:
+                break
+            block_k = parent_k
         block_indent = entries[block_k][0]
         # 获取类型注解节点（来自第一次声明）
         _, first_let = entries[first_decl_k]
