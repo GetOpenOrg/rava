@@ -1,5 +1,5 @@
 """
-方法生成相关：_parse_synthetic_fn、_scan_native_impls、_gen_native_stub。
+方法生成相关：_parse_synthetic_fn、_scan_impl_files、_gen_native_stub。
 """
 
 import os
@@ -56,12 +56,12 @@ def _parse_synthetic_fn(line: str) -> dict | None:
     }
 
 
-def _scan_native_impls(workspace_root: str) -> tuple[dict, set]:
-    """扫描 jdk_classes/src/ 下的共置手写文件（K-4 迁移后）。
-    只扫描 *_impl.rs 文件，提取已手写的方法名，告知 codegen 跳过这些方法的 stub 生成。
+def _scan_impl_files(workspace_root: str) -> tuple[dict, set]:
+    """扫描 jdk_classes/src/**/*_impl.rs 共置手写文件，提取已实现的方法名。
+    codegen 根据返回的 new_format_map 跳过对应方法的 stub 生成。
     返回:
-      new_format_map:    {class_binary -> {'methods': set[str]}}
-      full_impl_classes: 恒为空集（K-4 后不再有整体替换的手写文件）
+      new_format_map: {class_binary -> {'methods': set[str]}}
+      (空集占位，保持调用签名兼容)
     """
     import re as _re
     jdk_src = os.path.join(workspace_root, 'jdk_classes', 'src')

@@ -8,7 +8,7 @@ from ..types import ClassInfo
 from ..type_map import short_cls
 from ..constants import RUST_KEYWORDS as _RUST_KEYWORDS
 from .attrs import to_snake, pkg_from_java
-from .method_gen import _scan_native_impls
+from .method_gen import _scan_impl_files
 from .class_writer import _gen_class_rs
 
 
@@ -125,7 +125,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             registry.setdefault(jci.name, jci)
 
     # 扫描 jdk_classes/src/**/*_impl.rs，构建 new_format_map（已手写方法 → codegen 跳过 stub）
-    new_format_map, full_impl_classes = _scan_native_impls(out_dir)  # full_impl_classes 恒为空集
+    new_format_map, full_impl_classes = _scan_impl_files(out_dir)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}

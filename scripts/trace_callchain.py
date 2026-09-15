@@ -1289,7 +1289,7 @@ def main():
         # 边界方法：公开API → 内部实现
         f.write('## 边界方法（公开API直接调用内部类，需手写native实现）\n\n')
         f.write('> 这些方法属于 `java/`/`javax/` 公开API，但方法体内调用了 `sun/`/`jdk/` 内部类。\n')
-        f.write('> 采用内部包边界截断策略时，**这些方法需要在 `native_impls/` 中手写实现**。\n\n')
+        f.write('> 采用内部包边界截断策略时，**这些方法需要在 `jdk_classes/src/**/*_impl.rs` 中手写实现**。\n\n')
         prev_cls = None
         for r in boundary_methods:
             if r['cls'] != prev_cls:

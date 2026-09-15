@@ -208,7 +208,7 @@ def gen_method_body(
             if class_tparams:
                 parts_init.append("_phantom: std::marker::PhantomData")
             if parts_init:
-                # 用 ..Default::default() 兜底额外字段（如 native_impls @field 注入的字段）
+                # 用 ..Default::default() 兜底额外字段
                 struct_init = f"Self {{ {', '.join(parts_init)}, ..Default::default() }}"
             else:
                 struct_init = "Self::default()"
