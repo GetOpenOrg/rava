@@ -232,7 +232,7 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     pub fn add_obj(&self, mut e: E) -> Result<bool> {
         let this = self;
         this._super.modCount.set((this._super.modCount.get()).wrapping_add(1i32));
-        this.add_obj_arr_obj_i(Object::from_any(e.clone()), Clone::clone(&this.elementData.get()), this.size.get())?;
+        this.add_obj_arr_obj_i(Clone::clone(&e), Clone::clone(&this.elementData.get()), this.size.get())?;
         Ok((1i32 != 0i32))
     }
 

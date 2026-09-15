@@ -283,11 +283,6 @@ impl ArraysSupport {
         panic!("stub: jdk/internal/util/ArraysSupport.mismatch:([DI[DII)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "newLength", descriptor = "(III)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn newLength(oldLength: i32, minGrowth: i32, prefGrowth: i32) -> Result<i32> {
-        panic!("stub: jdk/internal/util/ArraysSupport.newLength:(III)I")
-    }
-
     #[cfg_attr(any(), java_method(name = "hugeLength", descriptor = "(II)I", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn hugeLength(oldLength: i32, minGrowth: i32) -> Result<i32> {
         panic!("stub: jdk/internal/util/ArraysSupport.hugeLength:(II)I")

@@ -58,7 +58,7 @@ impl<E: Clone + Default + 'static> AbstractList<E> {
     pub fn add_obj(&self, mut e: E) -> Result<bool> {
         let this = self;
         let _t0 = this._super.size()?;
-        this.add_i_obj(_t0, Object::from_any(e.clone()))?;
+        this.add_i_obj(_t0, Clone::clone(&e))?;
         Ok((1i32 != 0i32))
     }
 

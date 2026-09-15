@@ -636,14 +636,6 @@ impl Arrays {
         panic!("stub: java/util/Arrays.fill:([Ljava/lang/Object;IILjava/lang/Object;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "([Ljava/lang/Object;I)[Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;I)[TT;"))]
-    // java: copyOf([Ljava/lang/Object;I)[Ljava/lang/Object;
-    pub fn copyOf_arr_obj_i(mut original: Rc<RefCell<Vec<Object>>>, mut newLength: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
-        let _t0 = original.getClass()?;
-        let _t1: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i_class(Clone::clone(&original), newLength, Clone::clone(&_t0))?;
-        Ok(_t1)
-    }
-
     #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;U:Ljava/lang/Object;>([TU;ILjava/lang/Class<+[TT;>;)[TT;"))]
     // java: copyOf([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;
     pub fn copyOf_arr_obj_i_class(mut original: Rc<RefCell<Vec<Object>>>, mut newLength: i32, mut newType: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
