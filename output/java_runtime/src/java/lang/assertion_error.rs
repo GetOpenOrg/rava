@@ -69,7 +69,7 @@ impl AssertionError {
     // java: <init>(Ljava/lang/Object;)V
     pub fn new_obj(mut detailMessage: Object) -> Result<Self> {
         let mut this = Self { _super: Default::default(), ..Default::default() };
-        /* invokespecial Method java/lang/AssertionError.<init>:(Ljava/lang/String;)V (same class) */
+        this = AssertionError::new_str(Clone::clone(&String::from_owned(format!("{}", detailMessage))))?;
         if true {
             let _t0 = this._super._super.initCause(Clone::clone(&(detailMessage).downcast::<Throwable>()))?;
         }

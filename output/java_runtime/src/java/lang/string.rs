@@ -345,6 +345,14 @@ impl String {
         panic!("stub: java/lang/String.<init>:(Ljava/lang/StringBuffer;)V")
     }
 
+    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/StringBuilder;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    // java: <init>(Ljava/lang/StringBuilder;)V
+    pub fn new_sb(mut builder: StringBuilder) -> Result<Self> {
+        let mut this = Self { value: JField::new(Default::default()), coder: JField::new(Default::default()), hash: JField::new(0), hashIsZero: JField::new(false), ..Default::default() };
+        this = String::new_abstra_void(Clone::clone(&builder).into(), Clone::clone(&Object::default()))?;
+        Ok(this)
+    }
+
     #[cfg_attr(any(), java_method(name = "length", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn length(&self) -> Result<i32> {
         let this = self;
