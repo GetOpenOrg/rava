@@ -5,6 +5,28 @@
 from ..types import Instr
 
 
+def _paren_if_cmp(expr: str) -> str:
+    """若表达式顶层含比较运算符，用括号包裹，防止 Rust 链式比较错误（E0308）。"""
+    if expr.startswith('(') and expr.endswith(')'):
+        return expr
+    depth = 0
+    i = 0
+    while i < len(expr):
+        c = expr[i]
+        if c in '([':
+            depth += 1
+        elif c in ')]':
+            depth -= 1
+        elif depth == 0:
+            for sym in ('!=', '==', '<=', '>='):
+                if expr[i:i + len(sym)] == sym:
+                    return f"({expr})"
+            if c in '<>' and expr[i:i + 2] not in ('->', '=>'):
+                return f"({expr})"
+        i += 1
+    return expr
+
+
 def cmp_op(opcode: str, a: str, b: str) -> str:
     """将 JVM 比较指令翻译为 Rust 条件表达式字符串。"""
     two_ops = {
@@ -14,6 +36,8 @@ def cmp_op(opcode: str, a: str, b: str) -> str:
         'if_acmpeq': '==', 'if_acmpne': '!=',
     }
     if opcode in two_ops:
+        a = _paren_if_cmp(a)
+        b = _paren_if_cmp(b)
         return f"{a} {two_ops[opcode]} {b}"
 
     one_ops = {

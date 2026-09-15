@@ -641,7 +641,10 @@ def gen_method_body(
     ir_stmts = [item for _, item in entries if not isinstance(item, str)]
     _analyze_mutation(ir_stmts)
     _hoist_loop_vars(entries, predeclared)
-    _hoist_if_vars(entries, predeclared)
+    # _hoist_if_vars 每次只提升一层，循环直到收敛（处理多层嵌套 if-else）
+    for _ in range(8):
+        if not _hoist_if_vars(entries, predeclared):
+            break
     _promote_undeclared_assigns(entries, predeclared)
 
     # ── 渲染 entries → lines ─────────────────────────────────────────

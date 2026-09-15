@@ -164,13 +164,15 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
         entries.insert(ins_k, ins_entry)
 
 
-def _hoist_if_vars(entries: list, predeclared: set[str]):
+def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
     """将在 if/else 块内 let-声明但在块外被读取的变量提升到块前。
 
     JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 if/else 内首次 let-声明，
     但在 if-else 结束后被读取，Rust 报 E0425。
     修复：在 if 前插入 let mut NAME: TYPE = Default::default();，
     块内所有同名 LetStmt 改为 AssignStmt。
+
+    返回 True 表示本次有提升，调用方可循环直到返回 False。
     """
     # Pass 1: 收集所有在嵌套块中声明的变量及其位置、类型
     nesting = 0
@@ -210,11 +212,11 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
         entry_nesting.append(cur)
         cur += text.count('{') - text.count('}')
 
-    # Pass 3: 找出需要提升的变量 - 在块外被引用
+    # Pass 3: 找出需要提升的变量 - 在块外或 else 兄弟块中被引用
     vars_to_hoist: dict[str, tuple[str | None, list[tuple[int, int]]]] = {}  # name → (type_str, [(decl_k, depth)])
     word_cache: dict[str, re.Pattern] = {}
     for name, decl_list in declared_at.items():
-        # 对于每次声明，检查变量是否在其作用域关闭后被引用
+        # 对于每次声明，检查变量是否在其作用域关闭后或 else 兄弟块中被引用
         for decl_k, decl_nesting in decl_list:
             scope_close = None
             for k2 in range(decl_k + 1, len(entries)):
@@ -226,21 +228,46 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
             if name not in word_cache:
                 word_cache[name] = re.compile(r'\b' + re.escape(name) + r'\b')
             word = word_cache[name]
+
+            found = False
+            # 检查 1：作用域关闭后是否被引用（原有逻辑）
             for k2 in range(scope_close, len(rendered)):
                 if word.search(rendered[k2]):
-                    # 确定类型：从第一个声明获取
-                    ty_str = None
-                    _, first_item = entries[decl_list[0][0]]
-                    if isinstance(first_item, LetStmt) and first_item.ty is not None:
-                        try:
-                            ty_str = render_type(first_item.ty)
-                        except Exception:
-                            ty_str = None
-                    vars_to_hoist[name] = (ty_str, decl_list)
+                    found = True
                     break
 
+            if not found:
+                # 检查 2：else 兄弟块中是否被引用
+                # 当变量声明在 if-then 块内（nesting=N），而 "} else {" 也在 entry_nesting=N，
+                # 则 else 块是同一层 if-else 的兄弟块，该变量在 else 块中不可见（Rust 块作用域）
+                for k_else in range(decl_k + 1, scope_close):
+                    else_text = rendered[k_else].lstrip()
+                    if (entry_nesting[k_else] == decl_nesting
+                            and else_text.startswith('} else')):
+                        # 在 else 块内搜索引用（直到 nesting < decl_nesting）
+                        for k_ref in range(k_else + 1, scope_close):
+                            if entry_nesting[k_ref] < decl_nesting:
+                                break
+                            if word.search(rendered[k_ref]):
+                                found = True
+                                break
+                    if found:
+                        break
+
+            if found:
+                # 确定类型：从第一个声明获取
+                ty_str = None
+                _, first_item = entries[decl_list[0][0]]
+                if isinstance(first_item, LetStmt) and first_item.ty is not None:
+                    try:
+                        ty_str = render_type(first_item.ty)
+                    except Exception:
+                        ty_str = None
+                vars_to_hoist[name] = (ty_str, decl_list)
+                break
+
     if not vars_to_hoist:
-        return
+        return False
 
     # Pass 4: 找到合适的插入位置（最内层包含第一次声明的块的开始处）
     insertions: list[tuple[int, tuple]] = []
@@ -339,6 +366,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]):
 
     for ins_k, ins_entry in sorted(insertions, key=lambda x: -x[0]):
         entries.insert(ins_k, ins_entry)
+    return True
 
 
 def _promote_undeclared_assigns(entries: list, predeclared: set[str]):
