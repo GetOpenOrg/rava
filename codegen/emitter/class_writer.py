@@ -14,6 +14,61 @@ from .method_gen import _gen_native_stub
 
 _safe_field_name = safe_ident
 
+# 简单 const_push 指令 → Python 字面量值映射（用于扫描 <clinit>）
+_CONST_PUSH_OPCODES: dict[str, object] = {
+    'iconst_m1': -1, 'iconst_0': 0, 'iconst_1': 1, 'iconst_2': 2,
+    'iconst_3': 3,   'iconst_4': 4, 'iconst_5': 5,
+    'lconst_0': 0,   'lconst_1': 1,
+    'fconst_0': 0.0, 'fconst_1': 1.0, 'fconst_2': 2.0,
+    'dconst_0': 0.0, 'dconst_1': 1.0,
+}
+
+
+def _extract_clinit_consts(ci: ClassInfo) -> dict[str, str]:
+    """扫描 <clinit> 中 const_push → putstatic 的简单模式，
+    返回 {field_name: constant_value_str}（格式与 ConstantValue attribute 一致）。
+    只识别相邻两条指令构成的最简赋值，复杂初始化不处理。
+    """
+    clinit = next((m for m in ci.methods if m.name == '<clinit>'), None)
+    if not clinit or not clinit.instrs:
+        return {}
+
+    result: dict[str, str] = {}
+    instrs = clinit.instrs
+    for i, instr in enumerate(instrs):
+        if instr.opcode != 'putstatic':
+            continue
+        # comment 格式: "Field java/lang/String.COMPACT_STRINGS:Z"
+        comment = instr.comment or ''
+        if not comment.startswith('Field ') or '.' not in comment:
+            continue
+        rest = comment[len('Field '):]          # "java/lang/String.COMPACT_STRINGS:Z"
+        if '.' not in rest:
+            continue
+        cls_part, field_desc = rest.split('.', 1)   # "java/lang/String", "COMPACT_STRINGS:Z"
+        if cls_part != ci.name or ':' not in field_desc:
+            continue
+        fname = field_desc.split(':')[0]
+
+        # 前一条指令
+        if i == 0:
+            continue
+        prev = instrs[i - 1]
+        if prev.opcode in _CONST_PUSH_OPCODES:
+            val = _CONST_PUSH_OPCODES[prev.opcode]
+            result[fname] = str(int(val)) if isinstance(val, float) and val == int(val) else str(val)
+        elif prev.opcode in ('bipush', 'sipush') and prev.operand is not None:
+            result[fname] = str(prev.operand)
+        elif prev.opcode == 'ldc' and prev.comment:
+            # ldc comment 可能是 "String ...", "int 42", "float 1.0" 等
+            ldc = prev.comment.strip()
+            for prefix in ('String ', 'int ', 'long ', 'float ', 'double '):
+                if ldc.startswith(prefix):
+                    result[fname] = ldc[len(prefix):]
+                    break
+
+    return result
+
 
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   jdk_crate_pkg_paths: list[str] | None = None,
@@ -403,6 +458,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     static_fields = [f for f in ci.fields if f.is_static]
     existing_method_names: set[str] = {m.name for m in visible_methods}
     _nf_covered_sf = (_nf_entry or {}).get('methods', set())
+    # 从 <clinit> 提取简单常量赋值（补充 ConstantValue attribute 未覆盖的情况）
+    _clinit_consts = _extract_clinit_consts(ci)
     # JVM 原始类型描述符集合，可安全包装在 OnceLock<Mutex<T>> 中（均实现 Send + Copy）
     # String（Java 自定义类型）不在此集合，因其含 Rc 字段，不实现 Send
     _MUTABLE_STATIC_DESCS = frozenset({'I', 'J', 'F', 'D', 'Z', 'B', 'C', 'S'})
@@ -415,9 +472,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if safe_fname in _nf_covered_sf:
             continue
         rust_ret = jvm_to_rust(sf.descriptor, registry=registry)
-        if sf.constant_value:
-            # ConstantValue attribute：static final 字段有确定字面量，直接返回
-            cv = sf.constant_value
+        # ConstantValue attribute 优先；其次尝试从 <clinit> 提取简单常量
+        cv = sf.constant_value or _clinit_consts.get(sf.name, '')
+        if cv:
             if rust_ret == 'String':
                 body = f'String::from("{cv}")'
             elif rust_ret == 'f32':
