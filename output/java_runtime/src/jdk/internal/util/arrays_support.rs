@@ -2,13 +2,18 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::util::*;
+use crate::jdk::internal::misc::Unsafe;
 
 #[java_rta_macros::java_class(
     binary_name       = "jdk/internal/util/ArraysSupport",
@@ -30,7 +35,7 @@ pub struct ArraysSupport;
 impl ArraysSupport {
     #[cfg_attr(any(), java_field(name = "U", descriptor = "Ljdk/internal/misc/Unsafe;", access = "package", modifiers = "static final", is_static = true))]
     // static field: U:Ljdk/internal/misc/Unsafe;
-    pub fn U() -> Object {
+    pub fn U() -> Unsafe {
         panic!("stub: jdk/internal/util/ArraysSupport.U:Ljdk/internal/misc/Unsafe;")
     }
 

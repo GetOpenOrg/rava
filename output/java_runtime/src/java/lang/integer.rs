@@ -2,11 +2,15 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 
 #[java_rta_macros::java_class(
@@ -38,6 +42,10 @@ impl Integer {
 
 impl From<Integer> for Number {
     fn from(v: Integer) -> Number { v._super }
+}
+
+impl From<Integer> for Comparable<Object> {
+    fn from(v: Integer) -> Comparable<Object> { Default::default() }
 }
 
 impl Integer {
@@ -253,13 +261,21 @@ impl Integer {
     }
 
     #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn valueOf_i(i: i32) -> Result<i32> {
-        panic!("stub: java/lang/Integer.valueOf:(I)Ljava/lang/Integer;")
+    // java: valueOf(I)Ljava/lang/Integer;
+    pub fn valueOf_i(mut i: i32) -> Result<i32> {
+        if i <= Integer_IntegerCache::high() {
+            return Ok(Integer_IntegerCache::cache().borrow()[(i).wrapping_add(128i32) as usize]);
+        }
+        Ok(i)
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, is_deprecated = true))]
-    pub fn new_i(value: i32) -> Result<Self> {
-        panic!("stub: java/lang/Integer.<init>:(I)V")
+    // java: <init>(I)V
+    pub fn new_i(mut value: i32) -> Result<Self> {
+        let mut this = Self { _super: Default::default(), value: JField::new(0), ..Default::default() };
+        this._super = Number::new()?;
+        this.value.set(value);
+        Ok(this)
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException", is_deprecated = true))]
@@ -338,13 +354,15 @@ impl Integer {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/Integer;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo(&self, anotherInteger: i32) -> Result<i32> {
-        panic!("stub: java/lang/Integer.compareTo:(Ljava/lang/Integer;)I")
+    pub fn compareTo(&self, mut anotherInteger: i32) -> Result<i32> {
+        let this = self;
+        let _t0: i32 = Integer::compare(this.value.get(), anotherInteger.value.get())?;
+        Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "compare", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compare(x: i32, y: i32) -> Result<i32> {
-        panic!("stub: java/lang/Integer.compare:(II)I")
+    pub fn compare(mut x: i32, mut y: i32) -> Result<i32> {
+        Ok(((if x < y { (-1i32 != 0) } else { x != y })) as i32)
     }
 
     #[cfg_attr(any(), java_method(name = "compareUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

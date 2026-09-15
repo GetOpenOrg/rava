@@ -2,11 +2,15 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 
 #[java_rta_macros::java_class(
@@ -28,6 +32,10 @@ use crate::sun::security::util::*;
 pub struct Character {
     #[cfg_attr(any(), java_field(name = "value", descriptor = "C", access = "private", modifiers = "final", is_static = false))]
     pub value: JField<u16>,
+}
+
+impl From<Character> for Comparable<Object> {
+    fn from(v: Character) -> Comparable<Object> { Default::default() }
 }
 
 impl Character {
@@ -951,13 +959,15 @@ impl Character {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/Character;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo(&self, anotherCharacter: Character) -> Result<i32> {
-        panic!("stub: java/lang/Character.compareTo:(Ljava/lang/Character;)I")
+    pub fn compareTo(&self, mut anotherCharacter: Character) -> Result<i32> {
+        let this = self;
+        let _t0: i32 = Character::compare(this.value.get(), anotherCharacter.value.get())?;
+        Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "compare", descriptor = "(CC)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compare(x: u16, y: u16) -> Result<i32> {
-        panic!("stub: java/lang/Character.compare:(CC)I")
+    pub fn compare(mut x: u16, mut y: u16) -> Result<i32> {
+        Ok(((x as i32)).wrapping_sub((y as i32)))
     }
 
     #[cfg_attr(any(), java_method(name = "toUpperCaseEx", descriptor = "(I)I", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

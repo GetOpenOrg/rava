@@ -2,11 +2,15 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::misc::InternalLock;
 
@@ -320,8 +324,11 @@ impl PrintStream {
     }
 
     #[cfg_attr(any(), java_method(name = "print", descriptor = "(Z)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn print_z(&self, b: bool) -> Result<()> {
-        panic!("stub: java/io/PrintStream.print:(Z)V")
+    // java: print(Z)V
+    pub fn print_z(&self, mut b: bool) -> Result<()> {
+        let this = self;
+        this.write_str(Clone::clone(&String::from_owned(format!("{}", b))))?;
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "print", descriptor = "(C)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -376,8 +383,18 @@ impl PrintStream {
     }
 
     #[cfg_attr(any(), java_method(name = "println", descriptor = "(Z)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn println_z(&self, x: bool) -> Result<()> {
-        panic!("stub: java/io/PrintStream.println:(Z)V")
+    // java: println(Z)V
+    pub fn println_z(&self, mut x: bool) -> Result<()> {
+        let this = self;
+        let _t0 = this.getClass()?;
+        if _t0 == Object::default() {
+            this.writeln_str(Clone::clone(&String::from_owned(format!("{}", x))))?;
+        } else {
+            let mut local_2 = this.clone();
+            this.print_z(x)?;
+            this.newLine()?;
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "println", descriptor = "(C)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -421,23 +438,24 @@ impl PrintStream {
     }
 
     #[cfg_attr(any(), java_method(name = "println", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: println(Ljava/lang/String;)V
-    pub fn println_str(&self, mut x: String) -> Result<()> {
-        let this = self;
-        let _t0 = this.getClass()?;
-        if _t0 == Object::default() {
-            this.writeln_str(Clone::clone(&String::from_owned(format!("{}", x))))?;
-        } else {
-            let mut local_2 = this.clone();
-            this.print_str(Clone::clone(&x))?;
-            this.newLine()?;
-        }
-        Ok(())
+    pub fn println_str(&self, x: String) -> Result<()> {
+        panic!("stub: java/io/PrintStream.println:(Ljava/lang/String;)V")
     }
 
     #[cfg_attr(any(), java_method(name = "println", descriptor = "(Ljava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn println_obj(&self, x: Object) -> Result<()> {
-        panic!("stub: java/io/PrintStream.println:(Ljava/lang/Object;)V")
+    // java: println(Ljava/lang/Object;)V
+    pub fn println_obj(&self, mut x: Object) -> Result<()> {
+        let this = self;
+        let mut s: String = String::from_owned(format!("{}", x));
+        let _t0 = this.getClass()?;
+        if _t0 == Object::default() {
+            this.writeln_str(Clone::clone(&String::from_owned(format!("{}", s))))?;
+        } else {
+            let mut local_3 = this.clone();
+            this.print_str(Clone::clone(&s))?;
+            this.newLine()?;
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "printf", descriptor = "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/PrintStream;", access = "public", modifiers = "varargs", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]

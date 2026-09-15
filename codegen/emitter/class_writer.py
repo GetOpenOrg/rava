@@ -265,13 +265,38 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     _BUILTIN_TYPES = frozenset({
         'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
         'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell',
+        'usize', 'u8',
     })
+    # Rust 结构符号，不是类型名，跳过校验
+    _RUST_TOKENS = frozenset({'', 'mut', 'dyn', 'static', 'impl'})
+
+    def _extract_type_names(rust_ty: str) -> list[str]:
+        """从 Rust 类型字符串中提取所有类型名（包含嵌套泛型参数中的类型）。"""
+        names: list[str] = []
+        current: list[str] = []
+        for ch in rust_ty:
+            if ch in ('<', '>', ',', ' ', '&', "'", '[', ']', ':'):
+                word = ''.join(current).strip()
+                if word:
+                    names.append(word)
+                current = []
+            else:
+                current.append(ch)
+        word = ''.join(current).strip()
+        if word:
+            names.append(word)
+        return names
 
     def _validate_field_type(rust_ty: str, type_params: list[str]) -> bool:
-        """检查 rust_ty 的根类名是否可用（内建/类型参数/注册表中存在）。"""
-        base = rust_ty.split('<')[0].strip()
-        return (base in _BUILTIN_TYPES or base in type_params
-                or base in _registry_short_names)
+        """递归检查 rust_ty 中所有类型名是否可用（内建/类型参数/注册表中存在）。
+        若任何嵌套类型名未知，返回 False，调用方将回退到裸描述符类型。"""
+        for name in _extract_type_names(rust_ty):
+            if name in _RUST_TOKENS:
+                continue
+            if name in _BUILTIN_TYPES or name in type_params or name in _registry_short_names:
+                continue
+            return False  # 有未知类型名，校验失败
+        return True
 
     if not _full_impl and (inst_fields or _has_super):
         field_lines = []

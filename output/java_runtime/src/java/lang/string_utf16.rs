@@ -2,11 +2,15 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::util::ArraysSupport;
 
@@ -59,26 +63,13 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "newBytesFor", descriptor = "(I)[B", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn newBytesFor(mut len: i32) -> Result<Rc<RefCell<Vec<i8>>>> {
-        let _t0: i32 = StringUTF16::newBytesLength(len)?;
-        let mut _arr1: Rc<RefCell<Vec<i8>>> = Rc::new(RefCell::new(vec![0i8; _t0 as usize]));
-        Ok(_arr1)
+    pub fn newBytesFor(len: i32) -> Result<Rc<RefCell<Vec<i8>>>> {
+        panic!("stub: java/lang/StringUTF16.newBytesFor:(I)[B")
     }
 
     #[cfg_attr(any(), java_method(name = "newBytesLength", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn newBytesLength(mut len: i32) -> Result<i32> {
-        if (len<0) {
-            return Err(JvmError::Custom("athrow".to_owned()));
-        }
-        if len >= 1073741823i32 {
-            let _t0 = StringBuilder::new()?.append_str(Clone::clone(&String::from("UTF16 String size is ")))?;
-            let _t1 = _t0.append_i(len)?;
-            let _t2 = _t1.append_str(Clone::clone(&String::from(", should be less than ")))?;
-            let _t3 = _t2.append_i(1073741823i32)?;
-            let _t4 = _t3.toString()?;
-            return Err(JvmError::Custom("athrow".to_owned()));
-        }
-        Ok((len<<(1i32&0x1f)))
+    pub fn newBytesLength(len: i32) -> Result<i32> {
+        panic!("stub: java/lang/StringUTF16.newBytesLength:(I)I")
     }
 
     #[cfg_attr(any(), java_method(name = "putChar", descriptor = "([BII)V", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -151,8 +142,8 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "coderFromArrayLen", descriptor = "([BI)B", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn coderFromArrayLen(mut value: Rc<RefCell<Vec<i8>>>, mut len: i32) -> Result<i8> {
-        Ok((((((((len).wrapping_sub((value.borrow().len() as i32)) as u32>>(31i32&0x1f)) as i32)) as i8 as i32)) as i8))
+    pub fn coderFromArrayLen(value: Rc<RefCell<Vec<i8>>>, len: i32) -> Result<i8> {
+        panic!("stub: java/lang/StringUTF16.coderFromArrayLen:([BI)B")
     }
 
     #[cfg_attr(any(), java_method(name = "compress", descriptor = "([CII)[B", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -161,21 +152,8 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "compress", descriptor = "([BII)[B", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: compress([BII)[B
-    pub fn compress_arr_b_i_i(mut val: Rc<RefCell<Vec<i8>>>, mut off: i32, mut count: i32) -> Result<Rc<RefCell<Vec<i8>>>> {
-        let mut _arr0: Rc<RefCell<Vec<i8>>> = Rc::new(RefCell::new(vec![0i8; count as usize]));
-        let mut latin1: Rc<RefCell<Vec<i8>>> = _arr0;
-        let _t1: i32 = StringUTF16::compress_arr_b_i_arr_b_i_i(Clone::clone(&val), off, Clone::clone(&latin1), 0i32, count)?;
-        let mut ndx: i32 = _t1;
-        let _t2: i32 = StringUTF16::newBytesLength((off).wrapping_add(count))?;
-        let _t3: Rc<RefCell<Vec<i8>>> = Arrays::copyOfRange_arr_b_i_i(Clone::clone(&val), (off<<(1i32&0x1f)), _t2)?;
-        let mut utf16: Rc<RefCell<Vec<i8>>> = _t3;
-        let _t4: u16 = StringUTF16::getChar(Clone::clone(&utf16), ndx)?;
-        let _t5: i32 = StringUTF16::compress_arr_b_i_arr_b_i_i(Clone::clone(&utf16), 0i32, Clone::clone(&latin1), 0i32, count)?;
-        if _t5 != count {
-            return Ok(utf16);
-        }
-        Ok(latin1)
+    pub fn compress_arr_b_i_i(val: Rc<RefCell<Vec<i8>>>, off: i32, count: i32) -> Result<Rc<RefCell<Vec<i8>>>> {
+        panic!("stub: java/lang/StringUTF16.compress:([BII)[B")
     }
 
     #[cfg_attr(any(), java_method(name = "compress", descriptor = "([III)[B", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -199,23 +177,8 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "compress", descriptor = "([BI[BII)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: compress([BI[BII)I
-    pub fn compress_arr_b_i_arr_b_i_i(mut src: Rc<RefCell<Vec<i8>>>, mut srcOff: i32, mut dst: Rc<RefCell<Vec<i8>>>, mut dstOff: i32, mut len: i32) -> Result<i32> {
-        StringUTF16::checkBoundsOffCount(srcOff, len, Clone::clone(&src))?;
-        let mut i: i32 = 0i32;
-        loop {
-            if i >= len { break; }
-            let _t0: u16 = StringUTF16::getChar(Clone::clone(&src), srcOff)?;
-            let mut c: u16 = _t0;
-            if (c as i32) > 255i32 {
-                return Ok(i);
-            }
-            dst.borrow_mut()[dstOff as usize] = (((c) as i8 as i32)) as i8;
-            srcOff = srcOff.wrapping_add(1i32);
-            dstOff = dstOff.wrapping_add(1i32);
-            i = i.wrapping_add(1i32);
-        }
-        Ok(len)
+    pub fn compress_arr_b_i_arr_b_i_i(src: Rc<RefCell<Vec<i8>>>, srcOff: i32, dst: Rc<RefCell<Vec<i8>>>, dstOff: i32, len: i32) -> Result<i32> {
+        panic!("stub: java/lang/StringUTF16.compress:([BI[BII)I")
     }
 
     #[cfg_attr(any(), java_method(name = "toBytes", descriptor = "([III)[B", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -249,8 +212,14 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "([B[B)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo_arr_b_arr_b(value: Rc<RefCell<Vec<i8>>>, other: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
-        panic!("stub: java/lang/StringUTF16.compareTo:([B[B)I")
+    // java: compareTo([B[B)I
+    pub fn compareTo_arr_b_arr_b(mut value: Rc<RefCell<Vec<i8>>>, mut other: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
+        let _t0: i32 = StringUTF16::length(Clone::clone(&value))?;
+        let mut len1: i32 = _t0;
+        let _t1: i32 = StringUTF16::length(Clone::clone(&other))?;
+        let mut len2: i32 = _t1;
+        let _t2: i32 = StringUTF16::compareValues(Clone::clone(&value), Clone::clone(&other), len1, len2)?;
+        Ok(_t2)
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "([B[BII)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -259,13 +228,29 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "compareValues", descriptor = "([B[BII)I", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareValues(value: Rc<RefCell<Vec<i8>>>, other: Rc<RefCell<Vec<i8>>>, len1: i32, len2: i32) -> Result<i32> {
-        panic!("stub: java/lang/StringUTF16.compareValues:([B[BII)I")
+    pub fn compareValues(mut value: Rc<RefCell<Vec<i8>>>, mut other: Rc<RefCell<Vec<i8>>>, mut len1: i32, mut len2: i32) -> Result<i32> {
+        let _t0: i32 = Math::min_i_i(len1, len2)?;
+        let mut lim: i32 = _t0;
+        let mut k: i32 = 0i32;
+        loop {
+            if k >= lim { break; }
+            let _t1: u16 = StringUTF16::getChar(Clone::clone(&value), k)?;
+            let mut c1: u16 = _t1;
+            let _t2: u16 = StringUTF16::getChar(Clone::clone(&other), k)?;
+            let mut c2: u16 = _t2;
+            if (c1 as i32) != (c2 as i32) {
+                return Ok(((c1 as i32)).wrapping_sub((c2 as i32)));
+            }
+            k = k.wrapping_add(1i32);
+        }
+        Ok((len1).wrapping_sub(len2))
     }
 
     #[cfg_attr(any(), java_method(name = "compareToLatin1", descriptor = "([B[B)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareToLatin1_arr_b_arr_b(value: Rc<RefCell<Vec<i8>>>, other: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
-        panic!("stub: java/lang/StringUTF16.compareToLatin1:([B[B)I")
+    // java: compareToLatin1([B[B)I
+    pub fn compareToLatin1_arr_b_arr_b(mut value: Rc<RefCell<Vec<i8>>>, mut other: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
+        let _t0: i32 = StringLatin1::compareToUTF16_arr_b_arr_b(Clone::clone(&other), Clone::clone(&value))?;
+        Ok((_t0).wrapping_neg())
     }
 
     #[cfg_attr(any(), java_method(name = "compareToLatin1", descriptor = "([B[BII)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -529,15 +514,8 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "getChars", descriptor = "(III[B)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: getChars(III[B)I
-    pub fn getChars_i_i_i_arr_b(mut i: i32, mut begin: i32, mut end: i32, mut value: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
-        StringUTF16::checkBoundsBeginEnd(begin, end, Clone::clone(&value))?;
-        let _t0: i32 = StringUTF16::getChars_i_i_arr_b(i, end, Clone::clone(&value))?;
-        let mut pos: i32 = _t0;
-        if begin != pos {
-            return Err(JvmError::Custom("athrow".to_owned()));
-        }
-        Ok(pos)
+    pub fn getChars_i_i_i_arr_b(i: i32, begin: i32, end: i32, value: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
+        panic!("stub: java/lang/StringUTF16.getChars:(III[B)I")
     }
 
     #[cfg_attr(any(), java_method(name = "getChars", descriptor = "(JII[B)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -556,22 +534,8 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "putCharsAt", descriptor = "([BICCCC)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: putCharsAt([BICCCC)I
-    pub fn putCharsAt_arr_b_i_c_c_c_c(mut value: Rc<RefCell<Vec<i8>>>, mut i: i32, mut c1: u16, mut c2: u16, mut c3: u16, mut c4: u16) -> Result<i32> {
-        let mut end = (i).wrapping_add(4i32);
-        StringUTF16::checkBoundsBeginEnd(i, end, Clone::clone(&value))?;
-        i = i.wrapping_add(1i32);
-        StringUTF16::putChar(Clone::clone(&value), i, (c1 as i32))?;
-        i = i.wrapping_add(1i32);
-        StringUTF16::putChar(Clone::clone(&value), i, (c2 as i32))?;
-        i = i.wrapping_add(1i32);
-        StringUTF16::putChar(Clone::clone(&value), i, (c3 as i32))?;
-        i = i.wrapping_add(1i32);
-        StringUTF16::putChar(Clone::clone(&value), i, (c4 as i32))?;
-        if i != end {
-            return Err(JvmError::Custom("athrow".to_owned()));
-        }
-        Ok(end)
+    pub fn putCharsAt_arr_b_i_c_c_c_c(value: Rc<RefCell<Vec<i8>>>, i: i32, c1: u16, c2: u16, c3: u16, c4: u16) -> Result<i32> {
+        panic!("stub: java/lang/StringUTF16.putCharsAt:([BICCCC)I")
     }
 
     #[cfg_attr(any(), java_method(name = "putCharsAt", descriptor = "([BICCCCC)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -595,17 +559,8 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "inflate", descriptor = "([BI[BII)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn inflate(mut src: Rc<RefCell<Vec<i8>>>, mut srcOff: i32, mut dst: Rc<RefCell<Vec<i8>>>, mut dstOff: i32, mut len: i32) -> Result<()> {
-        StringUTF16::checkBoundsOffCount(dstOff, len, Clone::clone(&dst))?;
-        let mut i: i32 = 0i32;
-        loop {
-            if i >= len { break; }
-            dstOff = dstOff.wrapping_add(1i32);
-            srcOff = srcOff.wrapping_add(1i32);
-            StringUTF16::putChar(Clone::clone(&dst), dstOff, ((src.borrow()[srcOff as usize] as i32)&255i32))?;
-            i = i.wrapping_add(1i32);
-        }
-        Ok(())
+    pub fn inflate(src: Rc<RefCell<Vec<i8>>>, srcOff: i32, dst: Rc<RefCell<Vec<i8>>>, dstOff: i32, len: i32) -> Result<()> {
+        panic!("stub: java/lang/StringUTF16.inflate:([BI[BII)V")
     }
 
     #[cfg_attr(any(), java_method(name = "lastIndexOfLatin1", descriptor = "([BI[BII)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -672,9 +627,7 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "checkBoundsOffCount", descriptor = "(II[B)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn checkBoundsOffCount(mut offset: i32, mut count: i32, mut val: Rc<RefCell<Vec<i8>>>) -> Result<()> {
-        let _t0: i32 = StringUTF16::length(Clone::clone(&val))?;
-        let _t1: i32 = String::checkBoundsOffCount(offset, count, _t0)?;
-        Ok(())
+    pub fn checkBoundsOffCount(offset: i32, count: i32, val: Rc<RefCell<Vec<i8>>>) -> Result<()> {
+        panic!("stub: java/lang/StringUTF16.checkBoundsOffCount:(II[B)V")
     }
 }

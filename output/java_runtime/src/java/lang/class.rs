@@ -2,12 +2,17 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
+use crate::jdk::internal::misc::Unsafe;
 
 #[java_rta_macros::java_class(
     binary_name       = "java/lang/Class",
@@ -41,11 +46,11 @@ pub struct Class<T: Clone + Default + 'static> {
     #[cfg_attr(any(), java_field(name = "componentType", descriptor = "Ljava/lang/Class;", access = "private", modifiers = "final", is_static = false, generic_signature = "Ljava/lang/Class<*>;"))]
     pub componentType: JField<Class<Object>>,
     #[cfg_attr(any(), java_field(name = "reflectionData", descriptor = "Ljava/lang/ref/SoftReference;", access = "private", modifiers = "volatile transient", is_static = false, generic_signature = "Ljava/lang/ref/SoftReference<Ljava/lang/Class$ReflectionData<TT;>;>;"))]
-    pub reflectionData: JField<Object>,
+    pub reflectionData: JField<SoftReference<Class_ReflectionData<T>>>,
     #[cfg_attr(any(), java_field(name = "classRedefinedCount", descriptor = "I", access = "private", modifiers = "volatile transient", is_static = false))]
     pub classRedefinedCount: JField<i32>,
     #[cfg_attr(any(), java_field(name = "genericInfo", descriptor = "Lsun/reflect/generics/repository/ClassRepository;", access = "private", modifiers = "volatile transient", is_static = false))]
-    pub genericInfo: JField<Object>,
+    pub genericInfo: JField<ClassRepository>,
     #[cfg_attr(any(), java_field(name = "enumConstants", descriptor = "[Ljava/lang/Object;", access = "private", modifiers = "volatile transient", is_static = false, generic_signature = "[TT;"))]
     pub enumConstants: JField<Rc<RefCell<Vec<T>>>>,
     #[cfg_attr(any(), java_field(name = "enumConstantDirectory", descriptor = "Ljava/util/Map;", access = "private", modifiers = "volatile transient", is_static = false, generic_signature = "Ljava/util/Map<Ljava/lang/String;TT;>;"))]
@@ -204,7 +209,16 @@ impl<T: Clone + Default + 'static> Class<T> {
 
     #[cfg_attr(any(), java_method(name = "getName", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn getName(&self) -> Result<String> {
-        panic!("stub: java/lang/Class.getName:()Ljava/lang/String;")
+        let this = self;
+        let mut name = this.name.get();
+        let mut _merged1: String;
+        if !_is_jnull(&name) {
+            _merged1 = name;
+        } else {
+            let _t0 = this.initClassName()?;
+            _merged1 = _t0;
+        }
+        Ok(_merged1)
     }
 
     #[cfg_attr(any(), java_native(name = "initClassName", descriptor = "()Ljava/lang/String;", access = "private", modifiers = "native", is_static    = false, is_native    = true, is_abstract  = false, is_synthetic = false))]
@@ -258,13 +272,37 @@ impl<T: Clone + Default + 'static> Class<T> {
     }
 
     #[cfg_attr(any(), java_method(name = "getInterfaces", descriptor = "()[Ljava/lang/Class;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()[Ljava/lang/Class<*>;"))]
+    // java: getInterfaces()[Ljava/lang/Class;
     pub fn getInterfaces(&self) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/lang/Class.getInterfaces:()[Ljava/lang/Class;")
+        let this = self;
+        let _t0 = this.getInterfaces_z((1i32 != 0i32))?;
+        Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "getInterfaces", descriptor = "(Z)[Ljava/lang/Class;", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Z)[Ljava/lang/Class<*>;"))]
-    pub fn getInterfaces_z(&self, cloneArray: bool) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/lang/Class.getInterfaces:(Z)[Ljava/lang/Class;")
+    // java: getInterfaces(Z)[Ljava/lang/Class;
+    pub fn getInterfaces_z(&self, mut cloneArray: bool) -> Result<Rc<RefCell<Vec<Object>>>> {
+        let this = self;
+        let _t0 = this.reflectionData()?;
+        let mut rd: Class_ReflectionData<Object> = _t0;
+        if _is_jnull(&rd) {
+            let _t1 = this.getInterfaces0()?;
+            return Ok(_t1);
+        }
+        let mut interfaces = rd.interfaces.get();
+        if _is_jnull(&interfaces) {
+            let _t1 = this.getInterfaces0()?;
+            interfaces = _t1;
+            rd.interfaces.set(Clone::clone(&interfaces));
+        }
+        let mut _merged2: Rc<RefCell<Vec<Object>>>;
+        if cloneArray {
+            let _t1: Object = Object::from_any(interfaces.clone());
+            _merged2 = (_t1).downcast::<Rc<RefCell<Vec<Object>>>>();
+        } else {
+            _merged2 = interfaces;
+        }
+        Ok(_merged2)
     }
 
     #[cfg_attr(any(), java_native(name = "getInterfaces0", descriptor = "()[Ljava/lang/Class;", access = "private", modifiers = "native", is_static    = false, is_native    = true, is_abstract  = false, is_synthetic = false, generic_signature = "()[Ljava/lang/Class<*>;"))]
@@ -274,7 +312,18 @@ impl<T: Clone + Default + 'static> Class<T> {
 
     #[cfg_attr(any(), java_method(name = "getGenericInterfaces", descriptor = "()[Ljava/lang/reflect/Type;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn getGenericInterfaces(&self) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/lang/Class.getGenericInterfaces:()[Ljava/lang/reflect/Type;")
+        let this = self;
+        let _t0 = this.getGenericInfo()?;
+        let mut info: ClassRepository = _t0;
+        let mut _merged2: Rc<RefCell<Vec<Object>>>;
+        if _is_jnull(&info) {
+            let _t1 = this.getInterfaces()?;
+            _merged2 = _t1;
+        } else {
+            let _t1 = info.getSuperInterfaces()?;
+            _merged2 = _t1;
+        }
+        Ok(_merged2)
     }
 
     #[cfg_attr(any(), java_method(name = "getComponentType", descriptor = "()Ljava/lang/Class;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/lang/Class<*>;"))]
@@ -493,7 +542,7 @@ impl<T: Clone + Default + 'static> Class<T> {
     }
 
     #[cfg_attr(any(), java_method(name = "getDeclaredPublicMethods", descriptor = "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/util/List;", access = "package", modifiers = "varargs", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/String;[Ljava/lang/Class<*>;)Ljava/util/List<Ljava/lang/reflect/Method;>;"))]
-    pub fn getDeclaredPublicMethods(&self, name: String, parameterTypes: Rc<RefCell<Vec<Object>>>) -> Result<List<Object>> {
+    pub fn getDeclaredPublicMethods(&self, name: String, parameterTypes: Rc<RefCell<Vec<Object>>>) -> Result<Object> {
         panic!("stub: java/lang/Class.getDeclaredPublicMethods:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/util/List;")
     }
 
@@ -558,13 +607,36 @@ impl<T: Clone + Default + 'static> Class<T> {
     }
 
     #[cfg_attr(any(), java_method(name = "reflectionData", descriptor = "()Ljava/lang/Class$ReflectionData;", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/lang/Class$ReflectionData<TT;>;"))]
-    pub fn reflectionData(&self) -> Result<Object> {
-        panic!("stub: java/lang/Class.reflectionData:()Ljava/lang/Class$ReflectionData;")
+    pub fn reflectionData(&self) -> Result<Class_ReflectionData<Object>> {
+        let this = self;
+        let mut reflectionData = this.reflectionData.get();
+        let mut classRedefinedCount = this.classRedefinedCount.get();
+        let _t0 = reflectionData.get()?;
+        let mut rd = (_t0).downcast::<Class_ReflectionData<Object>>();
+        if rd.redefinedCount.get() == classRedefinedCount {
+            return Ok(rd);
+        }
+        let _t1 = this.newReflectionData(Clone::clone(&reflectionData), classRedefinedCount)?;
+        Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "newReflectionData", descriptor = "(Ljava/lang/ref/SoftReference;I)Ljava/lang/Class$ReflectionData;", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/ref/SoftReference<Ljava/lang/Class$ReflectionData<TT;>;>;I)Ljava/lang/Class$ReflectionData<TT;>;"))]
-    pub fn newReflectionData(&self, oldReflectionData: Object, classRedefinedCount: i32) -> Result<Object> {
-        panic!("stub: java/lang/Class.newReflectionData:(Ljava/lang/ref/SoftReference;I)Ljava/lang/Class$ReflectionData;")
+    pub fn newReflectionData(&self, mut oldReflectionData: SoftReference<Object>, mut classRedefinedCount: i32) -> Result<Class_ReflectionData<Object>> {
+        let this = self;
+        loop {
+            let mut rd = Class_ReflectionData::<Object>::new(classRedefinedCount)?;
+            let _t0: bool = Class_Atomic::casReflectionData(Clone::clone(&this), Clone::clone(&oldReflectionData), Clone::clone(&SoftReference::<Object>::new_obj(Clone::clone(&rd))?))?;
+            if _t0 {
+                return Ok(rd);
+            }
+            oldReflectionData = this.reflectionData.get();
+            classRedefinedCount = this.classRedefinedCount.get();
+            let _t1 = oldReflectionData.get()?;
+            rd = (_t1).downcast::<Class_ReflectionData<Object>>();
+            if rd.redefinedCount.get() == classRedefinedCount {
+                return Ok(rd);
+            }
+        }
     }
 
     #[cfg_attr(any(), java_native(name = "getGenericSignature0", descriptor = "()Ljava/lang/String;", access = "private", modifiers = "native", is_static    = false, is_native    = true, is_abstract  = false, is_synthetic = false))]
@@ -574,12 +646,27 @@ impl<T: Clone + Default + 'static> Class<T> {
 
     #[cfg_attr(any(), java_method(name = "getFactory", descriptor = "()Lsun/reflect/generics/factory/GenericsFactory;", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn getFactory(&self) -> Result<Object> {
-        panic!("stub: java/lang/Class.getFactory:()Lsun/reflect/generics/factory/GenericsFactory;")
+        let this = self;
+        let _t0: ClassScope = ClassScope::make(Clone::clone(&this))?;
+        let _t1: CoreReflectionFactory = CoreReflectionFactory::make(Object::from_any(Clone::clone(self)), Object::from_any(_t0.clone()))?;
+        Ok(Object::from_any(_t1.clone()))
     }
 
     #[cfg_attr(any(), java_method(name = "getGenericInfo", descriptor = "()Lsun/reflect/generics/repository/ClassRepository;", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn getGenericInfo(&self) -> Result<Object> {
-        panic!("stub: java/lang/Class.getGenericInfo:()Lsun/reflect/generics/repository/ClassRepository;")
+    pub fn getGenericInfo(&self) -> Result<ClassRepository> {
+        let this = self;
+        let mut genericInfo = this.genericInfo.get();
+        let _t0 = this.getGenericSignature0()?;
+        let mut signature: String = _t0;
+        if _is_jnull(&signature) {
+            genericInfo = ClassRepository::NONE();
+        } else {
+            let _t1 = this.getFactory()?;
+            let _t2: ClassRepository = ClassRepository::make(Clone::clone(&signature), Clone::clone(&_t1))?;
+            genericInfo = _t2;
+        }
+        this.genericInfo.set(Clone::clone(&genericInfo));
+        Ok((if Object::from_any(genericInfo.clone()) != Object::from_any(ClassRepository::NONE().clone()) { genericInfo } else { Default::default() }))
     }
 
     #[cfg_attr(any(), java_native(name = "getRawAnnotations", descriptor = "()[B", access = "package", modifiers = "native", is_static    = false, is_native    = true, is_abstract  = false, is_synthetic = false))]

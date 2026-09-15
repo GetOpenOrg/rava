@@ -239,7 +239,10 @@ class StackSim:
         if slot in self.locals:
             name, ty, _ = self.locals[slot]
             return (Var(name), ty)
-        return (Var(f"local_{slot}"), I32)
+        # 槽不在 locals 中（跨 StackSim 路径），仍用 LocalVariableTable 中的名字，
+        # 以便 _hoist_if_vars 能将其与同名的 LetStmt 声明关联并正确提升。
+        name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
+        return (Var(name), I32)
 
     # ── 辅助：生成 let + 临时变量（供 instr.py 中的"计算并绑定"模式）──────
 

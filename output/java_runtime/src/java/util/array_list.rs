@@ -2,11 +2,15 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::util::ArraysSupport;
 
@@ -23,7 +27,7 @@ use crate::jdk::internal::util::ArraysSupport;
     is_deprecated     = false,
     source            = "ArrayList.java",
     inner_classes     = "java/util/ArrayList$ListItr:java/util/ArrayList:ListItr:2;java/util/ArrayList$Itr:java/util/ArrayList:Itr:2;java/util/ArrayList$SubList:java/util/ArrayList:SubList:10;java/util/ArrayList$ArrayListSpliterator:java/util/ArrayList:ArrayListSpliterator:16;java/util/ArrayList$SubList$2:::0;java/util/ArrayList$SubList$1:::0",
-    all_supertypes    = "java/io/Serializable;java/lang/Cloneable;java/lang/Object;java/util/AbstractCollection;java/util/AbstractList;java/util/ArrayList;java/util/Collection;java/util/List;java/util/RandomAccess;java/util/SequencedCollection",
+    all_supertypes    = "java/io/Serializable;java/lang/Cloneable;java/lang/Object;java/util/AbstractCollection;java/util/AbstractList;java/util/ArrayList;java/util/Collection;java/util/List;java/util/RandomAccess",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct ArrayList<E: Clone + Default + 'static> {
@@ -48,10 +52,6 @@ impl<E: Clone + Default + 'static> From<ArrayList<E>> for AbstractList<E> {
 
 impl<E: Clone + Default + 'static> From<ArrayList<E>> for AbstractCollection<E> {
     fn from(v: ArrayList<E>) -> AbstractCollection<E> { v._super._super }
-}
-
-impl<E: Clone + Default + 'static> From<ArrayList<E>> for List<E> {
-    fn from(v: ArrayList<E>) -> List<E> { Default::default() }
 }
 
 impl<E: Clone + Default + 'static> ArrayList<E> {
@@ -250,7 +250,7 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "equalsRange", descriptor = "(Ljava/util/List;II)Z", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/List<*>;II)Z"))]
-    pub fn equalsRange(&self, other: List<Object>, from: i32, to: i32) -> Result<bool> {
+    pub fn equalsRange(&self, other: Object, from: i32, to: i32) -> Result<bool> {
         panic!("stub: java/util/ArrayList.equalsRange:(Ljava/util/List;II)Z")
     }
 
@@ -365,7 +365,7 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "subList", descriptor = "(II)Ljava/util/List;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(II)Ljava/util/List<TE;>;"))]
-    pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<List<Object>> {
+    pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
         panic!("stub: java/util/ArrayList.subList:(II)Ljava/util/List;")
     }
 
@@ -422,10 +422,5 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_method(name = "checkInvariants", descriptor = "()V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn checkInvariants(&self) -> Result<()> {
         panic!("stub: java/util/ArrayList.checkInvariants:()V")
-    }
-
-    #[cfg_attr(any(), java_method(name = "reversed", descriptor = "()Ljava/util/List;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/List<TE;>;"))]
-    pub fn reversed(&self) -> Result<List<Object>> {
-        panic!("stub: java/util/ArrayList.reversed:()Ljava/util/List;")
     }
 }

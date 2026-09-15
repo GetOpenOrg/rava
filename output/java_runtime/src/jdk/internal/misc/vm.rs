@@ -2,11 +2,15 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::misc::*;
 
@@ -327,7 +331,7 @@ impl VM {
     }
 
     #[cfg_attr(any(), java_method(name = "getBufferPools", descriptor = "()Ljava/util/List;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/List<Ljdk/internal/misc/VM$BufferPool;>;"))]
-    pub fn getBufferPools() -> Result<List<Object>> {
+    pub fn getBufferPools() -> Result<Object> {
         panic!("stub: jdk/internal/misc/VM.getBufferPools:()Ljava/util/List;")
     }
 }

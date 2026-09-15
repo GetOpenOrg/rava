@@ -2,11 +2,15 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::util::ArraysSupport;
 use crate::jdk::internal::util::Preconditions;
@@ -36,6 +40,10 @@ pub struct String {
     pub hash: JField<i32>,
     #[cfg_attr(any(), java_field(name = "hashIsZero", descriptor = "Z", access = "private", modifiers = "", is_static = false))]
     pub hashIsZero: JField<bool>,
+}
+
+impl From<String> for Comparable<Object> {
+    fn from(v: String) -> Comparable<Object> { Default::default() }
 }
 
 impl String {
@@ -347,11 +355,8 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/StringBuilder;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: <init>(Ljava/lang/StringBuilder;)V
-    pub fn new_sb(mut builder: StringBuilder) -> Result<Self> {
-        let mut this = Self { value: JField::new(Default::default()), coder: JField::new(Default::default()), hash: JField::new(0), hashIsZero: JField::new(false), ..Default::default() };
-        this = String::new_abstra_void(Clone::clone(&builder).into(), Clone::clone(&Object::default()))?;
-        Ok(this)
+    pub fn new_sb(builder: Object) -> Result<Self> {
+        panic!("stub: java/lang/String.<init>:(Ljava/lang/StringBuilder;)V")
     }
 
     #[cfg_attr(any(), java_method(name = "length", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -427,7 +432,7 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "nonSyncContentEquals", descriptor = "(Ljava/lang/AbstractStringBuilder;)Z", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn nonSyncContentEquals(&self, sb: AbstractStringBuilder) -> Result<bool> {
+    pub fn nonSyncContentEquals(&self, sb: Object) -> Result<bool> {
         panic!("stub: java/lang/String.nonSyncContentEquals:(Ljava/lang/AbstractStringBuilder;)Z")
     }
 
@@ -442,8 +447,31 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/String;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo(&self, anotherString: String) -> Result<i32> {
-        panic!("stub: java/lang/String.compareTo:(Ljava/lang/String;)I")
+    pub fn compareTo(&self, mut anotherString: String) -> Result<i32> {
+        let this = self;
+        let mut v1 = this.value.get();
+        let mut v2 = anotherString.value.get();
+        let _t0 = this.coder()?;
+        let mut coder: i8 = _t0;
+        let _t1 = anotherString.coder()?;
+        let mut _merged3: i32;
+        if (coder==0) {
+            let _t2: i32 = StringLatin1::compareTo_arr_b_arr_b(Clone::clone(&v1), Clone::clone(&v2))?;
+            _merged3 = _t2;
+        } else {
+            let _t2: i32 = StringUTF16::compareTo_arr_b_arr_b(Clone::clone(&v1), Clone::clone(&v2))?;
+            _merged3 = _t2;
+        }
+        return Ok(_merged3);
+        let mut _merged5: i32;
+        if (coder==0) {
+            let _t4: i32 = StringLatin1::compareToUTF16_arr_b_arr_b(Clone::clone(&v1), Clone::clone(&v2))?;
+            _merged5 = _t4;
+        } else {
+            let _t4: i32 = StringUTF16::compareToLatin1_arr_b_arr_b(Clone::clone(&v1), Clone::clone(&v2))?;
+            _merged5 = _t4;
+        }
+        Ok(_merged5)
     }
 
     #[cfg_attr(any(), java_method(name = "compareToIgnoreCase", descriptor = "(Ljava/lang/String;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -718,7 +746,7 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "outdent", descriptor = "(Ljava/util/List;)I", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/List<Ljava/lang/String;>;)I"))]
-    pub fn outdent(lines: List<Object>) -> Result<i32> {
+    pub fn outdent(lines: Object) -> Result<i32> {
         panic!("stub: java/lang/String.outdent:(Ljava/util/List;)I")
     }
 
@@ -801,8 +829,9 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(Z)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn valueOf_z(b: bool) -> Result<String> {
-        panic!("stub: java/lang/String.valueOf:(Z)Ljava/lang/String;")
+    // java: valueOf(Z)Ljava/lang/String;
+    pub fn valueOf_z(mut b: bool) -> Result<String> {
+        Ok((if b { String::from("true") } else { String::from("false") }))
     }
 
     #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(C)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -848,16 +877,8 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "getBytes", descriptor = "([BIB)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: getBytes([BIB)V
-    pub fn getBytes_arr_b_i_b(&self, mut dst: Rc<RefCell<Vec<i8>>>, mut dstBegin: i32, mut coder: i8) -> Result<()> {
-        let this = self;
-        let _t0 = this.coder()?;
-        if (_t0 as i32) == (coder as i32) {
-            System::arraycopy(Object::from_any(this.value.get().clone()), 0i32, Object::from_any(dst.clone()), (dstBegin<<((coder as i32)&0x1f)), (this.value.get().borrow().len() as i32))?;
-        } else {
-            StringLatin1::inflate_arr_b_i_arr_b_i_i(Clone::clone(&this.value.get()), 0i32, Clone::clone(&dst), dstBegin, (this.value.get().borrow().len() as i32))?;
-        }
-        Ok(())
+    pub fn getBytes_arr_b_i_b(&self, dst: Rc<RefCell<Vec<i8>>>, dstBegin: i32, coder: i8) -> Result<()> {
+        panic!("stub: java/lang/String.getBytes:([BIB)V")
     }
 
     #[cfg_attr(any(), java_method(name = "getBytes", descriptor = "([BIIBI)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -871,32 +892,8 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/AbstractStringBuilder;Ljava/lang/Void;)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: <init>(Ljava/lang/AbstractStringBuilder;Ljava/lang/Void;)V
-    pub fn new_abstra_void(mut asb: AbstractStringBuilder, mut sig: Object) -> Result<Self> {
-        let mut this = Self { value: JField::new(Default::default()), coder: JField::new(Default::default()), hash: JField::new(0), hashIsZero: JField::new(false), ..Default::default() };
-        /* invokespecial Method java/lang/Object.<init>:()V (Object no-op) */
-        let _t0 = asb.getValue()?;
-        let mut val: Rc<RefCell<Vec<i8>>> = _t0;
-        let _t1 = asb.length()?;
-        let mut length: i32 = _t1;
-        let _t2 = asb.isLatin1()?;
-        if _t2 {
-            this.coder.set(((0i32) as i8));
-            let _t3: Rc<RefCell<Vec<i8>>> = Arrays::copyOfRange_arr_b_i_i(Clone::clone(&val), 0i32, length)?;
-            this.value.set(Clone::clone(&_t3));
-        } else {
-            if asb.maybeLatin1.get() {
-                let _t3: Rc<RefCell<Vec<i8>>> = StringUTF16::compress_arr_b_i_i(Clone::clone(&val), 0i32, length)?;
-                this.value.set(Clone::clone(&_t3));
-                let _t4: i8 = StringUTF16::coderFromArrayLen(Clone::clone(&this.value.get()), length)?;
-                this.coder.set(_t4);
-                return Ok(this);
-            }
-            this.coder.set(((1i32) as i8));
-            let _t3: Rc<RefCell<Vec<i8>>> = Arrays::copyOfRange_arr_b_i_i(Clone::clone(&val), 0i32, (length<<(1i32&0x1f)))?;
-            this.value.set(Clone::clone(&_t3));
-        }
-        Ok(this)
+    pub fn new_abstra_void(asb: Object, sig: Object) -> Result<Self> {
+        panic!("stub: java/lang/String.<init>:(Ljava/lang/AbstractStringBuilder;Ljava/lang/Void;)V")
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "([BB)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -937,9 +934,8 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "checkBoundsOffCount", descriptor = "(III)I", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn checkBoundsOffCount(mut offset: i32, mut count: i32, mut length: i32) -> Result<i32> {
-        let _t0: i32 = Preconditions::checkFromIndexSize_i_i_i_bifunc(offset, count, length, Clone::clone(&Preconditions::SIOOBE_FORMATTER()))?;
-        Ok(_t0)
+    pub fn checkBoundsOffCount(offset: i32, count: i32, length: i32) -> Result<i32> {
+        panic!("stub: java/lang/String.checkBoundsOffCount:(III)I")
     }
 
     #[cfg_attr(any(), java_method(name = "checkBoundsBeginEnd", descriptor = "(III)V", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
