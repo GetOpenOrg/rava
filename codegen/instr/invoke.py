@@ -16,6 +16,7 @@ from .coerce import (
     _coerce_to_interface, _coerce_value, _find_super_chain_to_class,
     _find_method_super_prefix, _find_method_super_prefix_for_type,
     _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,
+    _get_all_subtypes_ordered,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
 )
@@ -416,8 +417,35 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     arg_str = ', '.join(args)
     rust_ret = jvm_to_rust(ret, registry)
     # E0599 防护：接收者是 Object 类型时，Object 结构体不定义具体子类方法，
-    # 直接调用会产生 E0599。对 void 返回跳过调用，对非 void 用 Default::default()。
+    # 直接调用会产生 E0599。若目标类已知且有子类，生成 downcast dispatch 链（多态虚分发）。
     obj_is_bare = (obj_ty == 'Object')
+    if obj_is_bare and cls and registry:
+        # 多态 dispatch：按继承链（叶→根）依次 downcast，找到实际类型后调用方法
+        # cls 是 Rust 短类名（$ 已替换为 _），需转回 binary name 查继承链
+        cls_binary = _rust_type_to_binary(cls, registry) or cls
+        subtypes = _get_all_subtypes_ordered(cls_binary, registry)
+        cls_rust = jvm_to_rust(f'L{cls_binary};', registry)
+        # 只有当目标类有已知子类时，才生成 dispatch 链（否则退化为简单 downcast）
+        if subtypes:
+            all_types = subtypes + [cls_binary]  # 叶→根
+            v = sim.fresh('_vdispatch')
+            branches = []
+            for sub_bin in all_types:
+                sub_rust = jvm_to_rust(f'L{sub_bin};', registry)
+                sub_mname_r = _mangle_if_overloaded(sub_rust, mname, comment, registry)
+                sub_mname_r = _safe_field(sub_mname_r)
+                if rust_ret == '()':
+                    branches.append(f"if let Some(_d) = {obj_e}.0.downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})?; }}")
+                else:
+                    branches.append(f"if let Some(_d) = {obj_e}.0.downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})? }}")
+            if rust_ret == '()':
+                dispatch_code = ' else '.join(branches)
+                sim.emit(RawStmt(f"{dispatch_code}"))
+            else:
+                dispatch_expr = ' else '.join(branches) + f" else {{ Default::default() }}"
+                sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
+                sim.push(Var(v), RsNamed(rust_ret))
+            return
     if rust_ret == '()':
         if not obj_is_bare:
             sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))

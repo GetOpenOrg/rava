@@ -350,7 +350,7 @@ def _is_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> boo
         return False
 
     def _short(binary: str) -> str:
-        return binary.rsplit('/', 1)[-1].replace('$', '_') if '/' in binary else binary
+        return binary.rsplit('/', 1)[-1].replace('$', '_')
 
     visited: set[str] = set()
     queue: list[str] = [child_bin]
@@ -380,6 +380,42 @@ def _is_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> boo
     return False
 
 
+def _has_subtypes(class_binary: str, registry: dict | None) -> bool:
+    """判断 class_binary 在 registry 中是否有任何（直接）子类。用于决定是否需要多态容器。"""
+    if not registry:
+        return False
+    for binary, ci in registry.items():
+        if ci is None or binary == class_binary:
+            continue
+        if ci.super_class == class_binary:
+            return True
+        if ci.interfaces and class_binary in ci.interfaces:
+            return True
+    return False
+
+
+def _get_all_subtypes_ordered(class_binary: str, registry: dict | None) -> list[str]:
+    """返回 class_binary 所有具体子类的 binary name 列表，叶节点优先（最具体子类排在前面）。
+    用于生成 downcast dispatch 链：更具体的类型先试，避免父类匹配遮盖子类。"""
+    if not registry:
+        return []
+    # BFS 收集所有子类（含传递子类）
+    all_subs: list[str] = []
+    queue: list[str] = [class_binary]
+    visited: set[str] = {class_binary}
+    while queue:
+        cur = queue.pop(0)
+        for binary, ci in registry.items():
+            if ci is None or binary in visited:
+                continue
+            if ci.super_class == cur or (ci.interfaces and cur in ci.interfaces):
+                visited.add(binary)
+                all_subs.append(binary)
+                queue.append(binary)
+    # 逆序 → 叶节点（最深子类）优先
+    return list(reversed(all_subs))
+
+
 def _is_direct_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> bool:
     """判断 child_rust 是否是 parent_rust 的直接子类型（直接超类或直接接口）。
     只检查一步，与 From<X> for Y 的生成规则一致（class_writer.py 的 T76 段只生成直接上转换）。"""
@@ -392,7 +428,7 @@ def _is_direct_subtype(child_rust: str, parent_rust: str, registry: dict | None)
     if not ci:
         return False
     def _short(b: str) -> str:
-        return b.rsplit('/', 1)[-1].replace('$', '_') if '/' in b else b
+        return b.rsplit('/', 1)[-1].replace('$', '_')
     # 直接超类
     if ci.super_class and ci.super_class != 'java/lang/Object':
         if _short(ci.super_class) == parent_rust:

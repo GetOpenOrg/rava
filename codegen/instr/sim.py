@@ -23,7 +23,7 @@ from .coerce import (
     _coerce_to_object, _coerce_from_null, _coerce_value,
     _find_field_super_prefix, _find_field_super_prefix_for_type,
     _parse_field_ref, _is_subtype, _is_direct_subtype, _rust_type_to_binary,
-    _get_field_generic_signature,
+    _get_field_generic_signature, _has_subtypes, _get_all_subtypes_ordered,
     _PRIMITIVE_RUST_TYPES,
 )
 from .invoke import (
@@ -444,6 +444,10 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             elem_t = jvm_to_rust(f'L{comment};', registry)
         else:
             elem_t = 'Object'
+        # 多态数组：若元素类有子类（存在继承），改用 Vec<Object> 以保留运行时类型信息
+        # 这反映了 Java 数组实际上存储对象引用（而非值拷贝）的语义
+        if elem_t != 'Object' and comment and _has_subtypes(comment, registry):
+            elem_t = 'Object'
         v = sim.fresh('_arr')
         # 用 Default::default() 而非 ElemType::default()，避免泛型类型（如 Node<K,V>）在 vec![] 中产生语法错误
         sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![Default::default(); {render_expr(count_expr)} as usize]));"))
@@ -479,10 +483,12 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         val_str = render_expr(val_expr)
         val_ty_str = render_type(val_ty)
         if elem_ty == 'Object' and val_ty_str not in ('Object', '()'):
+            # Object 数组（含多态容器）：clone 后装箱以保留实际运行时类型
             val_str = _coerce_to_object(val_str, val_ty_str)
         elif elem_ty != 'Object' and val_ty_str == 'Object':
             val_str = f"Default::default()"
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
+            # T55: 子类赋给同类型数组（类型已相同），只需 Clone
             val_str = f"Clone::clone(&{val_str})"
         # F-1 fix: 非基本类型 val_str 可能包含 .borrow() 调用（如 aaload 的结果），
         # 若直接写 arr.borrow_mut()[i] = Clone::clone(&arr.borrow()[j]) 会导致
@@ -627,10 +633,30 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             sim.push(expr, RsNamed(cast_rust))
     elif op == 'instanceof':
         # JVM 语义: pop objectref, push int(0/1)
-        # 暂用 true 作为 stub，但必须消耗栈上的对象引用
-        if sim.stack:
-            sim.pop()
-        sim.push(Lit('true'), BOOL)
+        # 通过 registry 继承链做静态类型分析：
+        #   obj 静态类型 IS-A target  → true（子类一定是父类）
+        #   obj 静态类型 == target    → true
+        #   否则（obj 是 target 超类，或无继承关系）→ false
+        #   值语义下 Dog.into()→Animal 后类型信息已丢失，超类变量对子类 instanceof 为 false
+        val_expr_inst, val_ty_inst = sim.pop() if sim.stack else (None, None)
+        if comment and val_ty_inst is not None:
+            if comment.startswith('['):
+                target_rust = jvm_to_rust(comment, registry)
+            else:
+                target_rust = jvm_to_rust(f'L{comment};', registry)
+            obj_ty_str = render_type(val_ty_inst)
+            if obj_ty_str == 'Object':
+                # 运行时多态：Object 容器存储实际类型，用 downcast_ref 检查
+                val_s_inst = render_expr(val_expr_inst)
+                sim.push(RawExpr(f"({val_s_inst}.0.downcast_ref::<{target_rust}>().is_some())"), BOOL)
+            elif obj_ty_str == target_rust:
+                sim.push(Lit('true'), BOOL)
+            elif _is_subtype(obj_ty_str.split('<')[0], target_rust.split('<')[0], registry):
+                sim.push(Lit('true'), BOOL)
+            else:
+                sim.push(Lit('false'), BOOL)
+        else:
+            sim.push(Lit('false'), BOOL)
 
     # ── invokedynamic ──
     elif op == 'invokedynamic':
