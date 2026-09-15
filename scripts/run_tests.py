@@ -127,6 +127,81 @@ def _update_expected(java_file: Path) -> bool:
     return True
 
 
+_RUST_KEYWORDS = {
+    'as','break','const','continue','crate','else','enum','extern','false',
+    'fn','for','if','impl','in','let','loop','match','mod','move','mut',
+    'pub','ref','return','self','Self','static','struct','super','trait',
+    'true','type','unsafe','use','where','while','async','await','dyn',
+    'abstract','become','box','do','final','macro','override','priv',
+    'typeof','unsized','virtual','yield',
+}
+
+
+def _mod_decl(name: str) -> str:
+    safe = f'r#{name}' if name in _RUST_KEYWORDS else name
+    return f'pub mod {safe};'
+
+
+def _use_decl(name: str) -> str:
+    safe = f'r#{name}' if name in _RUST_KEYWORDS else name
+    return f'pub use {safe}::*;'
+
+
+def _rebuild_jdk_mod_index() -> None:
+    """批量转译完成后，从磁盘实际文件重建 jdk_classes/src/ 的 lib.rs 和所有 mod.rs。
+
+    原因：每次 write_cargo_project(batch_bin=True) 只用当前测试的 jdk_class_infos
+    重写 lib.rs/mod.rs，会抹掉之前测试积累的 JDK stub 声明，导致早期测试的
+    binary 在 cargo build 时找不到引用的 JDK 类型（E0432）。
+
+    解决方案：所有转译完成后自底向上扫描，只把有实际 .rs 文件的目录加入 mod 树，
+    避免声明空目录（E0583）。
+    """
+    jdk_src = OUT / "jdk_classes" / "src"
+    if not jdk_src.exists():
+        return
+
+    # 第一步：收集所有 class .rs 文件（非 lib.rs/mod.rs）
+    mod_tree: dict[Path, set[str]] = {}
+    for p in sorted(jdk_src.rglob('*.rs')):
+        if p.name not in ('lib.rs', 'mod.rs'):
+            mod_tree.setdefault(p.parent, set()).add(p.stem)
+
+    # 第二步：自底向上传播目录（只声明非空目录，避免 E0583）
+    changed = True
+    while changed:
+        changed = False
+        for dir_path in list(mod_tree.keys()):
+            if dir_path == jdk_src:
+                continue
+            parent = dir_path.parent
+            if dir_path.name not in mod_tree.get(parent, set()):
+                mod_tree.setdefault(parent, set()).add(dir_path.name)
+                changed = True
+
+    # 重建 lib.rs
+    top_mods = sorted(mod_tree.get(jdk_src, set()))
+    lib_lines = [
+        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
+        *(_mod_decl(m) for m in top_mods),
+        '',
+    ]
+    (jdk_src / 'lib.rs').write_text('\n'.join(lib_lines))
+
+    # 重建各子包 mod.rs（仅限 jdk_src 子目录，顶层用 lib.rs）
+    for dir_path, children in mod_tree.items():
+        if dir_path == jdk_src:
+            continue
+        mod_lines = ['#![allow(ambiguous_glob_reexports)]']
+        for c in sorted(children):
+            mod_lines.append(_mod_decl(c))
+            mod_lines.append(_use_decl(c))
+        (dir_path / 'mod.rs').write_text('\n'.join(mod_lines) + '\n')
+
+    total = sum(len(v) for v in mod_tree.values())
+    print(f"[batch] 重建 jdk_classes mod 索引：{total} 个模块条目")
+
+
 def _reset_batch_workspace() -> None:
     """批量模式开始前：清空 user/src/bin/、user/src/*.rs、jdk_classes/src/，重置 Cargo.toml。"""
     user_dir = OUT / "user"
@@ -265,6 +340,9 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
     if not transpile_ok:
         print("所有转译均失败，退出。")
         return 1
+
+    # 2.5 重建 jdk_classes/src/ mod 索引（合并所有测试积累的 JDK stub 声明）
+    _rebuild_jdk_mod_index()
 
     # 3. 预清理目标 binary（确保构建后只有新编译成功的才存在）
     for java_file in transpile_ok:
