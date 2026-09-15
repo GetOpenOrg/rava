@@ -20,6 +20,7 @@
 | [H. 运行时错误 — 输出值错误](#h-运行时错误--输出值错误) | 2 | 低 | TestBoundedGenerics 等 |
 | [I. 编译层补丁 — 待架构升级后删除](#i-编译层补丁--待架构升级后删除) | 6 | 中 | 全局质量 |
 | [J. 命名原则违规 — `java_runtime` 游离 trait](#j-命名原则违规--java_runtime-游离-trait) | 3 | 中 | 命名一致性 |
+| [K. 代码布局重构 — native_impls 共置与内部包边界截断](#k-代码布局重构--native_impls-共置与内部包边界截断) | 4 | 高 | 全局基础设施 |
 
 ---
 
@@ -806,6 +807,94 @@ pub trait Printable {
 **违规**：原则1 — Java 标准库中不存在 `Printable` 接口，这是纯 Rust 基础设施。  
 **最终态废除路径**：Arch-1（`Object = Rc<dyn ObjectVTable>`）完成后，`println_v(Object)` 直接调用 `self.inner.toString()`，通过 `ObjectVTable` 动态派发到具体类型的 `toString()`，`Printable` trait 整体删除。  
 **状态**：🔴 过渡设施，Arch-4（Arch-1 副产品）完成时废除
+
+---
+
+## K. 代码布局重构 — native_impls 共置与内部包边界截断
+
+以下任务源自 CLAUDE.md 规则 3 的更新（2026-09-15）：手写代码与生成代码共置，内部包边界截断 BFS。这些任务是基础设施层面的重构，与具体测试失败无直接关联，但完成后将消除 E-1（重复定义）、`@field` 注入等一整类问题的根因。
+
+---
+
+### K-1: 消除 `@field` 注释注入机制
+
+**当前做法**：`native_impls/` 中的文件用 `/// @field name: RustType` 注释向生成的 struct 注入字段；`_scan_native_impls()`（`method_gen.py:95-103`）解析这些注释，`class_writer.py:226` 将字段插入 struct。
+
+**问题**：字段声明隐藏在注释里，Rust 编译器无法验证；Python 解析注释是脆弱的文本处理；struct 定义分裂在两处（codegen 生成 + 注释注入），不自然。
+
+**目标态**：内部边界类（`jdk/internal/`、`sun/`）由手写文件完整定义 struct（含所有字段），codegen 不生成 struct，无需注入。
+
+**修复位置**：
+- `codegen/emitter/method_gen.py` — 删除 `@field` 解析逻辑（lines 95-103）及 `extra_fields` 返回值
+- `codegen/emitter/class_writer.py` — 删除 `extra_fields` 参数及注入逻辑（lines 196-226）
+- `codegen/emitter/project_writer.py` — 删除 `extra_fields_map` 传递
+- `output/native_impls/jdk/internal/misc/internal_lock.rs` — 将 `/// @field _mutex: MutexHolder` 改为 struct 声明中的真实字段（配合 K-3 一并完成）
+
+**状态**：🔴 未修复（依赖 K-3 先完成）
+
+---
+
+### K-2: 消除 `#[path = "..."] mod _impl;` 远程引用方式，改为共置文件
+
+**当前做法**：codegen 生成的每个类文件末尾追加 `#[path = "../../../../../native_impls/..."] mod _impl;`，将 native_impl 以子模块方式远程引入。
+
+**问题**：
+- 路径字符串跨越 5 层 `../`，脆弱且难以维护
+- native_impl 位于子模块 `_impl` 中，`impl super::Xxx` 访问父级 struct 需要额外路径
+- 与 `@field` 机制的远程注入一起构成了隐式双向耦合
+
+**目标态**：手写文件（`<classname>_impl.rs`）与生成文件（`<classname>.rs`）并列存放，由 `mod.rs` 用 `mod <classname>_impl;` 自然包含，`impl Xxx { ... }` 直接写，无需 `super::` 前缀。
+
+**修复位置**：
+- `codegen/emitter/class_writer.py` — 删除生成 `#[path = ...] mod _impl;` 的逻辑
+- `codegen/emitter/project_writer.py` — 生成 `mod.rs` 时，若对应 `<classname>_impl.rs` 存在则加入 `mod <classname>_impl;`
+- `output/native_impls/` 目录下所有文件 — 迁移到 `output/src/` 对应路径下（见 K-4）
+
+**状态**：🔴 未修复（依赖 K-4 文件迁移）
+
+---
+
+### K-3: 内部边界类 BFS 截断规则实现
+
+**当前做法**：BFS 调用链分析（`codegen/emitter/project_writer.py`）对所有包均递归展开，`jdk/internal/`、`sun/` 包内的类被当作普通类翻译字节码，导致级联引入大量内部类依赖（635 类 vs 截断后 111 类）。
+
+**目标态**：BFS 在遇到 `jdk/internal/` 或 `sun/` 包时停止展开。该类标记为「内部边界类」：
+- codegen 不生成 struct，只生成模块声明（`mod internal_lock;`），由手写文件提供完整实现
+- 手写文件须已存在于 `output/src/<pkg>/` 对应路径，否则报错提示需要手写
+
+**修复位置**：
+- `codegen/emitter/project_writer.py` — BFS 入队时检查包前缀，`jdk/internal/` 和 `sun/` 开头的类不入队，改为标记为边界类并加入 `boundary_classes` 集合
+- `codegen/emitter/class_writer.py` — 对 `boundary_classes` 中的类跳过 struct 生成，只输出 `pub mod <classname>;`（由手写文件提供实现）
+- 手写文件初始版本（各类按调用链按需补全）：
+  - `output/src/jdk/internal/misc/internal_lock.rs` — 已有 native_impl，迁移后补全 struct 定义（K-4）
+  - `output/src/jdk/internal/util/preconditions.rs` — 新建（537 次引用，0 个 native，15 个可翻译方法）
+
+**优先级说明**：先实现叶子层（无内部依赖）边界类，再实现有依赖层。按 `impl-strategy.md` 阶段规划推进。
+
+**状态**：🔴 未修复（高优先级，影响翻译规模和稳定性）
+
+---
+
+### K-4: `native_impls/` 目录迁移至 `output/src/` 共置
+
+**当前做法**：手写文件在 `output/native_impls/` 独立目录，按 Java 包层次组织但与生成代码分离。
+
+**目标态**：手写文件迁移到 `output/src/` 下对应位置，与生成文件并列：
+
+| 当前路径 | 目标路径 | 类型 |
+|---------|---------|------|
+| `output/native_impls/java/lang/string.rs` | `output/src/java/lang/string_impl.rs` | public API native |
+| `output/native_impls/java/lang/system.rs` | `output/src/java/lang/system_impl.rs` | public API native |
+| `output/native_impls/java/util/array_list.rs` | `output/src/java/util/array_list_impl.rs` | public API native |
+| `output/native_impls/jdk/internal/misc/internal_lock.rs` | `output/src/jdk/internal/misc/internal_lock.rs` | 内部边界类（完整文件） |
+
+迁移步骤：
+1. 新建目标路径文件，将 `impl super::Xxx` 改为 `impl Xxx`（无需 `super::`，在同一模块内）
+2. `mod.rs` 加入 `mod <classname>_impl;`（public API 类）或 `pub mod internal_lock;`（边界类）
+3. 删除原 `native_impls/` 目录（配合 K-2 一并完成）
+4. 内部边界类文件补全 struct 定义（消除 K-1 中 `@field` 的需求）
+
+**状态**：🔴 未修复（是 K-1、K-2、K-3 的执行层，最后统一完成）
 
 ---
 
