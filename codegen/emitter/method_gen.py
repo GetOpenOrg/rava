@@ -76,16 +76,19 @@ def _scan_impl_files(workspace_root: str) -> tuple[dict, set]:
     for root_dir, dirs, files in os.walk(jdk_src):
         dirs.sort()
         for fname in sorted(files):
-            # K-4: 只处理 *_impl.rs 手写共置文件
-            if not fname.endswith('_impl.rs'):
+            # K-4: 处理 *_impl.rs 和 *_ext.rs 手写共置文件
+            if not (fname.endswith('_impl.rs') or fname.endswith('_ext.rs')):
                 continue
 
             fpath = os.path.join(root_dir, fname)
             rel_from_src = os.path.relpath(fpath, jdk_src).replace('\\', '/')
             stem = rel_from_src.replace('.rs', '')  # e.g. java/lang/system_impl
 
-            # 去掉 _impl 后缀还原为对应类的 binary name
-            base_stem = stem[:-5]
+            # 去掉 _impl / _ext 后缀还原为对应类的 binary name
+            if fname.endswith('_impl.rs'):
+                base_stem = stem[:-5]   # 去掉 _impl (5 chars)
+            else:
+                base_stem = stem[:-4]   # 去掉 _ext  (4 chars)
             parts = base_stem.split('/')
             *pkg, cls_snake = parts
             class_binary = '/'.join(pkg + [_snake_to_class(cls_snake)])
