@@ -30,9 +30,15 @@ def _gen_string_concat(sim: StackSim, comment: str):
     params = parse_descriptor_params(desc)
 
     args = []
-    for _ in range(len(params)):
+    for p in reversed(params):
         e_expr, _ = sim.pop()
-        args.insert(0, render_expr(e_expr))
+        raw = render_expr(e_expr)
+        # Java 浮点数格式化：整数值需显示 .0（如 5.0 而非 5）
+        if p in ('D',):
+            raw = f'java_fmt_f64({raw})'
+        elif p in ('F',):
+            raw = f'java_fmt_f32({raw})'
+        args.insert(0, raw)
 
     tmpl_m = re.search(r' template:(.+)$', comment)
     if tmpl_m:

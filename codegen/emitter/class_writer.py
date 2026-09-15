@@ -4,7 +4,7 @@
 
 from collections import Counter
 from ..types import ClassInfo, FieldInfo, ParsedMethod
-from ..type_map import jvm_to_rust, mangle_name, short_cls, get_ergonomic_jvm_rename
+from ..type_map import jvm_to_rust, mangle_name, short_cls, get_ergonomic_jvm_rename, rust_default
 from ..method import gen_method_body, _indent
 from ..sig_parser import parse_class_type_params, parse_field_type
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
@@ -158,7 +158,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         cross_imports.extend(user_sibling_imports)
 
     parts: list[str] = [
-        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]",
+        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs)]",
         "use java_runtime::prelude::*;",
         *cross_imports,
         "",
@@ -324,12 +324,21 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     overloaded_names: set[str] = {name for name, count in name_counts.items() if count > 1}
 
     method_blocks: list[str] = []
+    module_statics: list[str] = []  # 模块级 static 声明（OnceLock 等），插在 impl 块前
+
+    # 是否是用户类（call_chain is None 表示用户类，所有方法都翻译）
+    _is_user_class = call_chain is None
+    # 用户类中有 <clinit> 静态初始化器时，main() 需调用 class_init()
+    _has_clinit = any(m.name == '<clinit>' for m in ci.methods)
 
     # public static 字段的 getter 方法（用于 getstatic 访问，如 System::out()）
     # 生成静态字段 getter：有 _impl 覆盖的跳过，其余生成 panic stub 或 constant_value
     static_fields = [f for f in ci.fields if f.is_static]
     existing_method_names: set[str] = {m.name for m in visible_methods}
     _nf_covered_sf = (_nf_entry or {}).get('methods', set())
+    # JVM 原始类型描述符集合，可安全包装在 OnceLock<Mutex<T>> 中（均实现 Send + Copy）
+    # String（Java 自定义类型）不在此集合，因其含 Rc 字段，不实现 Send
+    _MUTABLE_STATIC_DESCS = frozenset({'I', 'J', 'F', 'D', 'Z', 'B', 'C', 'S'})
     for sf in static_fields:
         safe_fname = _safe_field_name(sf.name)
         if safe_fname in existing_method_names:
@@ -360,15 +369,70 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 body = 'true' if cv == '1' else 'false'
             else:
                 body = cv
+            field_meta = _java_field_attr(sf)
+            method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
+        elif _is_user_class and sf.descriptor in _MUTABLE_STATIC_DESCS:
+            # 用户类可变静态字段（JVM 原始类型，Send + Copy）：OnceLock<Mutex<T>>
+            _static_var = f"_{struct_name}_{safe_fname}_STATIC"
+            _default = rust_default(rust_ret)
+            module_statics.append(
+                f"static {_static_var}: std::sync::OnceLock<std::sync::Mutex<{rust_ret}>> = std::sync::OnceLock::new();"
+            )
+            field_meta = _java_field_attr(sf)
+            method_blocks.append(
+                f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
+                f'pub fn {safe_fname}() -> {rust_ret} {{\n'
+                f'    *{_static_var}.get_or_init(|| std::sync::Mutex::new({_default})).lock().unwrap()\n'
+                f'}}'
+            )
+            method_blocks.append(
+                f'// static field setter: {sf.name}\n'
+                f'pub fn set_{safe_fname}(v: {rust_ret}) {{\n'
+                f'    *{_static_var}.get_or_init(|| std::sync::Mutex::new({_default})).lock().unwrap() = v;\n'
+                f'}}'
+            )
+        elif _is_user_class:
+            # 用户类可变静态字段（非原始类型，不实现 Send）：unsafe static mut Option<T>
+            _static_var = f"_{struct_name}_{safe_fname}_STATIC"
+            _default = rust_default(rust_ret)
+            module_statics.append(
+                f"static mut {_static_var}: Option<{rust_ret}> = None;"
+            )
+            field_meta = _java_field_attr(sf)
+            method_blocks.append(
+                f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
+                f'pub fn {safe_fname}() -> {rust_ret} {{\n'
+                f'    unsafe {{ {_static_var}.clone().unwrap_or_default() }}\n'
+                f'}}'
+            )
+            method_blocks.append(
+                f'// static field setter: {sf.name}\n'
+                f'pub fn set_{safe_fname}(v: {rust_ret}) {{\n'
+                f'    unsafe {{ {_static_var} = Some(v); }}\n'
+                f'}}'
+            )
         else:
             # 生成 panic stub，确保 getstatic 对应的 ClassName::fieldName() 能编译
             body = f'panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")'
-        field_meta = _java_field_attr(sf)
-        method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
+            field_meta = _java_field_attr(sf)
+            method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
 
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
     for m in visible_methods:
         if m.name == '<clinit>':
+            # 用户类：翻译 <clinit> 为 class_init() 函数
+            if _is_user_class:
+                attr_line = _java_method_attr(m, compiled=True)
+                try:
+                    clinit_body = gen_method_body(
+                        m, ci, registry=registry,
+                        class_type_params=class_type_params,
+                        overloaded_names=overloaded_names,
+                        rust_name='class_init',
+                    )
+                    method_blocks.append(attr_line + '\n' + clinit_body)
+                except Exception:
+                    pass  # 翻译失败则跳过，class_init 不存在也不影响编译
             continue
         # 确定最终 Rust 方法名（有重载则加描述符后缀）
         rust_name = mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name
@@ -422,11 +486,73 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     overloaded_names=overloaded_names,
                     rust_name=rust_name,
                 )
+                # 用户类 main()：若有 <clinit>，在方法体开头插入 class_init() 调用
+                if (_is_user_class and _has_clinit
+                        and m.name == 'main'
+                        and m.descriptor == '([Ljava/lang/String;)V'):
+                    body = body.replace(
+                        'pub fn main() -> Result<()> {\n',
+                        'pub fn main() -> Result<()> {\n    Self::class_init()?;\n',
+                        1,
+                    )
                 method_blocks.append(attr_line + '\n' + body)
             except Exception as e:
                 # 翻译失败：退化为 stub，避免生成无效 Rust
                 stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry)
                 method_blocks.append(attr_line + '\n' + stub)
+
+    # 接口 default 方法继承：当类实现接口但未覆盖其 default 方法时，自动生成继承实现
+    if ci.interfaces and registry and not ci.is_interface:
+        import copy as _copy
+        existing_sigs: set[tuple] = {(m.name, m.descriptor) for m in visible_methods}
+        iface_queue: list[str] = list(ci.interfaces)
+        visited_ifaces: set[str] = set()
+        while iface_queue:
+            iface_name = iface_queue.pop(0)
+            if iface_name in visited_ifaces:
+                continue
+            visited_ifaces.add(iface_name)
+            iface_ci = registry.get(iface_name)
+            if iface_ci is None:
+                continue
+            if iface_ci.interfaces:
+                iface_queue.extend(iface_ci.interfaces)
+            for dm in iface_ci.methods:
+                if dm.is_abstract or dm.is_static or dm.is_synthetic or dm.name in ('<init>', '<clinit>'):
+                    continue
+                if (dm.name, dm.descriptor) in existing_sigs:
+                    continue
+                existing_sigs.add((dm.name, dm.descriptor))
+                dm_rust = mangle_name(dm.name, dm.descriptor) if dm.name in overloaded_names else dm.name
+                dm_attr = _java_method_attr(dm, compiled=True)
+                # 将 class_name 替换为实现类，使 gen_method_body 生成正确的 this 类型
+                dm_adapted = _copy.copy(dm)
+                dm_adapted.class_name = ci.name
+                # 仅在调用链上时翻译字节码，否则生成 stub（避免复杂 JDK default 方法引入编译错误）
+                dm_in_cc = (
+                    call_chain is None or
+                    (ci.name, dm.name, dm.descriptor) in call_chain or
+                    (iface_name, dm.name, dm.descriptor) in call_chain
+                )
+                if dm_in_cc and not stub_bodies:
+                    try:
+                        dm_body = gen_method_body(
+                            dm_adapted, ci, registry=registry,
+                            class_type_params=class_type_params,
+                            overloaded_names=overloaded_names,
+                            rust_name=dm_rust,
+                        )
+                        method_blocks.append(dm_attr + '\n' + dm_body)
+                    except Exception:
+                        dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry)
+                        method_blocks.append(dm_attr + '\n' + dm_stub)
+                else:
+                    dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry)
+                    method_blocks.append(dm_attr + '\n' + dm_stub)
+
+    # 插入模块级 static 声明（OnceLock 等），放在 impl 块之前
+    if module_statics:
+        parts.append('\n'.join(module_statics))
 
     impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
     parts.append(f"{impl_header} {{\n{impl_body}\n}}\n")

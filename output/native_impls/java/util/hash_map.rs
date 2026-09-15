@@ -12,8 +12,8 @@ fn _get_store<K: Clone + Default + 'static, V: Clone + Default + 'static>(
 // 支持 String key 内容比较
 fn _obj_eq(a: &Object, b: &Object) -> bool {
     if a == b { return true; }
-    if let (Some(sa), Some(sb)) = (a.0.downcast_ref::<super::super::string::String>(),
-                                    b.0.downcast_ref::<super::super::string::String>()) {
+    if let (Some(sa), Some(sb)) = (a.0.downcast_ref::<super::super::super::lang::string::String>(),
+                                    b.0.downcast_ref::<super::super::super::lang::string::String>()) {
         return sa.to_string() == sb.to_string();
     }
     false

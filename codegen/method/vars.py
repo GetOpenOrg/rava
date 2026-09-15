@@ -148,6 +148,114 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
         entries.insert(ins_k, ins_entry)
 
 
+def _hoist_if_vars(entries: list, predeclared: set[str]):
+    """将在 if/else 块内 let-声明但在块外被读取的变量提升到块前。
+
+    JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 if/else 内首次 let-声明，
+    但在 if-else 结束后被读取，Rust 报 E0425。
+    修复：在 if 前插入 let mut NAME: TYPE = Default::default();，
+    块内所有同名 LetStmt 改为 AssignStmt。
+    """
+    # Pass 1: 收集所有在嵌套块中声明的变量及其位置、类型
+    nesting = 0
+    # name → list of (entry_index, nesting_depth)
+    declared_at: dict[str, list[tuple[int, int]]] = {}
+    # index of any block-opening entry (ends with '{' and contains 'if' or has any '{')
+    block_entry_indices: list[int] = []
+
+    for k, (indent, item) in enumerate(entries):
+        if isinstance(item, str):
+            stripped = item.rstrip()
+            if stripped.endswith('{') and not stripped.startswith('}'):
+                block_entry_indices.append(k)
+            delta = item.count('{') - item.count('}')
+            nesting += delta
+        elif isinstance(item, LetStmt):
+            if nesting > 0 and item.name not in predeclared:
+                declared_at.setdefault(item.name, []).append((k, nesting))
+
+    if not declared_at or not block_entry_indices:
+        return
+
+    # Pass 2: 渲染所有条目为字符串，追踪嵌套深度
+    rendered: list[str] = []
+    for _, item in entries:
+        if isinstance(item, str):
+            rendered.append(item)
+        else:
+            try:
+                rendered.append(render_stmt(item))
+            except Exception:
+                rendered.append('')
+
+    entry_nesting: list[int] = []
+    cur = 0
+    for text in rendered:
+        entry_nesting.append(cur)
+        cur += text.count('{') - text.count('}')
+
+    # Pass 3: 找出需要提升的变量 - 在块外被引用
+    vars_to_hoist: dict[str, tuple[str | None, list[tuple[int, int]]]] = {}  # name → (type_str, [(decl_k, depth)])
+    word_cache: dict[str, re.Pattern] = {}
+    for name, decl_list in declared_at.items():
+        # 对于每次声明，检查变量是否在其作用域关闭后被引用
+        for decl_k, decl_nesting in decl_list:
+            scope_close = None
+            for k2 in range(decl_k + 1, len(entries)):
+                if entry_nesting[k2] < decl_nesting:
+                    scope_close = k2
+                    break
+            if scope_close is None:
+                continue
+            if name not in word_cache:
+                word_cache[name] = re.compile(r'\b' + re.escape(name) + r'\b')
+            word = word_cache[name]
+            for k2 in range(scope_close, len(rendered)):
+                if word.search(rendered[k2]):
+                    # 确定类型：从第一个声明获取
+                    ty_str = None
+                    _, first_item = entries[decl_list[0][0]]
+                    if isinstance(first_item, LetStmt) and first_item.type_node is not None:
+                        try:
+                            ty_str = render_type(first_item.type_node)
+                        except Exception:
+                            ty_str = None
+                    vars_to_hoist[name] = (ty_str, decl_list)
+                    break
+
+    if not vars_to_hoist:
+        return
+
+    # Pass 4: 找到合适的插入位置（最内层包含第一次声明的块的开始处）
+    insertions: list[tuple[int, tuple]] = []
+    for name, (ty_str, decl_list) in vars_to_hoist.items():
+        first_decl_k = decl_list[0][0]
+        first_decl_nesting = decl_list[0][1]
+        # 找到包含第一次声明的最近的块起始索引
+        block_k = None
+        for bk in reversed(block_entry_indices):
+            if bk < first_decl_k and entry_nesting[bk] < first_decl_nesting:
+                block_k = bk
+                break
+        if block_k is None:
+            continue
+        block_indent = entries[block_k][0]
+        # 确定默认值：有类型则用 Default::default()，否则 MaybeUninit
+        if ty_str and ty_str not in ('()', ''):
+            default_val = RawExpr(f'{ty_str}::default()')
+        else:
+            default_val = RawExpr('Default::default()')
+        insertions.append((block_k, (block_indent, LetStmt(name, None, True, default_val))))
+        # 将块内所有同名 LetStmt 改为 AssignStmt
+        for decl_k, _ in decl_list:
+            inner_indent, inner_item = entries[decl_k]
+            if isinstance(inner_item, LetStmt) and inner_item.name == name:
+                entries[decl_k] = (inner_indent, AssignStmt(Var(inner_item.name), inner_item.value))
+
+    for ins_k, ins_entry in sorted(insertions, key=lambda x: -x[0]):
+        entries.insert(ins_k, ins_entry)
+
+
 def _promote_undeclared_assigns(entries: list, predeclared: set[str]):
     """将在当前词法作用域中无对应 LetStmt 的 AssignStmt 提升为 LetStmt(mutable=True)。
 

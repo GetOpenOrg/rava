@@ -51,7 +51,6 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
 
         print(f"[2/4] 解析 {class_name}.class")
         ci = parse_class(class_file)
-        ci.methods = [m for m in ci.methods if m.name != '<clinit>']
         print(f"      字段: {[f.name for f in ci.fields]}")
         print(f"      方法: {[m.name for m in ci.methods]}")
         class_infos.append(ci)

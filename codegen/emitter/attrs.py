@@ -154,8 +154,8 @@ def _java_field_attr(f: FieldInfo) -> str:
         sig = f.generic_signature.replace('"', '\\"')
         parts.append(f'generic_signature = "{sig}"')
     if f.constant_value:
-        cv = f.constant_value.replace('"', '\\"')
-        parts.append(f'constant_value = "{cv}"')
+        # constant_value already escaped by _constant_value_str (in classfile.py)
+        parts.append(f'constant_value = "{f.constant_value}"')
     if f.is_deprecated:
         parts.append('is_deprecated = true')
     return '#[cfg_attr(any(), java_field(' + ', '.join(parts) + '))]'

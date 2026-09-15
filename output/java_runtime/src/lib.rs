@@ -7,6 +7,30 @@ pub use error::{JvmError, Result};
 pub use types::JField;
 pub use java::lang::Object;
 
+/// Java 风格浮点数格式化：整数值显示 .0，其他同 Rust 默认格式
+pub fn java_fmt_f64(v: f64) -> String {
+    if v.is_infinite() {
+        if v > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+    } else if v.is_nan() {
+        "NaN".to_string()
+    } else if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{:.1}", v)
+    } else {
+        format!("{}", v)
+    }
+}
+pub fn java_fmt_f32(v: f32) -> String {
+    if v.is_infinite() {
+        if v > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+    } else if v.is_nan() {
+        "NaN".to_string()
+    } else if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{:.1}", v)
+    } else {
+        format!("{}", v)
+    }
+}
+
 /// Printable trait：统一 println 派发（T38）
 /// 实现此 trait 的类型可直接传给 PrintStream::println
 pub trait Printable {
@@ -14,8 +38,8 @@ pub trait Printable {
 }
 impl Printable for i32   { fn to_print_string(&self) -> String { format!("{}", self) } }
 impl Printable for i64   { fn to_print_string(&self) -> String { format!("{}", self) } }
-impl Printable for f32   { fn to_print_string(&self) -> String { format!("{}", self) } }
-impl Printable for f64   { fn to_print_string(&self) -> String { format!("{}", self) } }
+impl Printable for f32   { fn to_print_string(&self) -> String { java_fmt_f32(*self) } }
+impl Printable for f64   { fn to_print_string(&self) -> String { java_fmt_f64(*self) } }
 impl Printable for bool  { fn to_print_string(&self) -> String { format!("{}", self) } }
 impl Printable for i8    { fn to_print_string(&self) -> String { format!("{}", self) } }
 impl Printable for i16   { fn to_print_string(&self) -> String { format!("{}", self) } }
@@ -65,6 +89,8 @@ pub mod prelude {
     pub use super::_is_jnull;
     pub use super::JvmEnum;
     pub use super::JvmObjectBase;
+    pub use super::java_fmt_f64;
+    pub use super::java_fmt_f32;
     pub use std::rc::Rc;
     pub use std::cell::RefCell;
 }

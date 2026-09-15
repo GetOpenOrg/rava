@@ -26,7 +26,7 @@ from ..rs_ir import (
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
 )
 from ..stack import BOOL
-from .vars import _coerce_icmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _promote_undeclared_assigns
+from .vars import _coerce_icmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
 from .postprocess import _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
 
 
@@ -542,6 +542,8 @@ def gen_method_body(
     ir_stmts = [item for _, item in entries if not isinstance(item, str)]
     _analyze_mutation(ir_stmts)
     _hoist_loop_vars(entries, predeclared)
+    # _hoist_if_vars disabled: causes type inference failures in generic methods (Optional<T>)
+    # _hoist_if_vars(entries, predeclared)
     _promote_undeclared_assigns(entries, predeclared)
 
     # ── 渲染 entries → lines ─────────────────────────────────────────
