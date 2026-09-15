@@ -11,7 +11,10 @@
 """
 
 from ..types import ParsedMethod, ClassInfo
-from ..type_map import jvm_to_rust, sig_type, rust_default, mangle_name, short_cls
+from ..type_map import (
+    jvm_to_rust, sig_type, rust_default, mangle_name, short_cls,
+    parse_method_param_types, parse_field_type, parse_class_type_params,
+)
 from ..constants import safe_ident
 from ..stack import StackSim
 from ..cfg import (
@@ -20,7 +23,6 @@ from ..cfg import (
     cmp_op, neg_cmp_op, _TWO_OP_BRANCH_OPS,
 )
 from ..instr import sim_instr
-from ..instr.invoke import _is_generic_type_param
 from ..render import render_stmt, render_expr, render_type
 from ..rs_ir import (
     RsNamed, RsPrimitive, RsType,
@@ -46,7 +48,6 @@ def gen_method_body(
     overloaded_names: set[str] | None = None,
     rust_name: str | None = None,
 ) -> str:
-    from ..sig_parser import parse_method_param_types
     _class_tparams = class_type_params or []
 
     # 如果方法有泛型签名且类有类型参数，用签名推断参数/返回类型
@@ -151,7 +152,6 @@ def gen_method_body(
     # 仅对引用类型（Object 类型擦除后变成 Object 的槽）有意义
     slot_hint_types: dict[int, RsNamed] = {}
     if method.local_types:
-        from ..sig_parser import parse_field_type
         for _hint_slot, _hint_sig in method.local_types.items():
             rust_ty_name = parse_field_type(_hint_sig, _class_tparams)
             if rust_ty_name and rust_ty_name != 'Object':
@@ -170,7 +170,6 @@ def gen_method_body(
 
     # ── 构造器：创建 this ───────────────────────────────────────────
     if is_ctor:
-        from ..sig_parser import parse_class_type_params
         # T76: struct 使用 _super 嵌套，不再展平继承字段
         # 只初始化本类直接字段，父类通过 _super: Default::default() 初始化
         inst_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
@@ -180,7 +179,7 @@ def gen_method_body(
         )
         class_tparams = parse_class_type_params(class_info.generic_signature) if (class_info and class_info.generic_signature) else []
         _safe_fname = safe_ident
-        from ..sig_parser import parse_field_type as _pft
+        _pft = parse_field_type
         _class_tparams_set = set(class_tparams)
 
         def _field_init(f) -> str:
@@ -494,9 +493,9 @@ def gen_method_body(
                             ty = ety; ty_str = ety_str
                         elif ev in _null_exprs and ty_str not in _prim_types:
                             ev = 'Default::default()'
-                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object' and not _is_generic_type_param(ty_str):
+                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object' and ty_str not in _class_tparams:
                             ev = f"({ev}).downcast::<{ty_str}>()"
-                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and not _is_generic_type_param(ety_str):
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and ety_str not in _class_tparams:
                             ev = f"Object::from_any(Clone::clone(&{ev}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             ev = f"({ev} as {ty_str})"
@@ -527,9 +526,9 @@ def gen_method_body(
                             ty = ety; ty_str = ety_str
                         elif else_val in _null_exprs and ty_str not in _prim_types:
                             else_val = 'Default::default()'
-                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object' and not _is_generic_type_param(ty_str):
+                        elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object' and ty_str not in _class_tparams:
                             else_val = f"({else_val}).downcast::<{ty_str}>()"
-                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and not _is_generic_type_param(ety_str):
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and ety_str not in _class_tparams:
                             else_val = f"Object::from_any(Clone::clone(&{else_val}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             else_val = f"({else_val} as {ty_str})"

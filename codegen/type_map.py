@@ -1,10 +1,14 @@
 """
 JVM 类型描述符 → Rust 类型的映射与解析工具。
+
+包含：
+  - JVM descriptor → Rust 类型字符串（jvm_to_rust）
+  - JVM descriptor / Generic Signature → RsType 节点（jvm_to_rs_type）
+  - Generic Signature 解析器（原 sig_parser.py，已内联）
 """
 
-import os
+from __future__ import annotations
 import re
-from .sig_parser import parse_class_type_params
 
 
 # ── JVM descriptor → Rust 类型 ──────────────────────────────────
@@ -211,3 +215,329 @@ def _parse_type_list(s: str) -> list[str]:
         else:
             i += 1
     return types
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Generic Signature 解析器（原 sig_parser.py，已内联）
+# 实现 JVMS §4.7.9 Generic Signature 解析
+# ══════════════════════════════════════════════════════════════════════════════
+
+# 已知类名 → Rust 类型映射
+_CLASSNAME_MAP: dict[str, str] = {
+    'java/lang/String':        'String',
+    'java/lang/Object':        'Object',
+    'java/lang/CharSequence':  'Object',
+    'java/lang/Integer':       'i32',
+    'java/lang/Long':          'i64',
+    'java/lang/Double':        'f64',
+    'java/lang/Float':         'f32',
+    'java/lang/Boolean':       'bool',
+    'java/lang/StringBuilder': 'String',
+    'java/lang/StringBuffer':  'String',
+}
+
+# 基本类型映射
+_PRIMITIVE_MAP: dict[str, str] = {
+    'V': '()', 'I': 'i32', 'J': 'i64', 'F': 'f32', 'D': 'f64',
+    'Z': 'bool', 'B': 'i8', 'C': 'u16', 'S': 'i16',
+}
+
+
+def _skip_field_type_sig(sig: str, i: int) -> int:
+    """跳过一个 FieldTypeSig，返回跳过后的位置。"""
+    if i >= len(sig):
+        return i
+    c = sig[i]
+    if c in _PRIMITIVE_MAP:
+        return i + 1
+    if c == 'T':
+        try:
+            end = sig.index(';', i + 1)
+            return end + 1
+        except ValueError:
+            return len(sig)
+    if c == 'L':
+        j = i + 1
+        depth = 0
+        while j < len(sig):
+            ch = sig[j]
+            if ch == '<':
+                depth += 1
+            elif ch == '>':
+                depth -= 1
+            elif ch == ';' and depth == 0:
+                return j + 1
+            j += 1
+        return j
+    if c == '[':
+        return _skip_field_type_sig(sig, i + 1)
+    if c in ('+', '-'):
+        return _skip_field_type_sig(sig, i + 1)
+    if c == '*':
+        return i + 1
+    return i + 1
+
+
+def _parse_type_args(sig: str, i: int, class_type_params: list[str]) -> tuple[list[str], int]:
+    """解析 <TypeArgument*>，i 指向 '<'。返回 (类型字符串列表, '>' 之后的位置)。"""
+    i += 1  # 跳过 '<'
+    args: list[str] = []
+    while i < len(sig) and sig[i] != '>':
+        if sig[i] == '*':
+            args.append('Object')
+            i += 1
+        elif sig[i] in ('+', '-'):
+            t, i = _parse_one_type(sig, i + 1, class_type_params)
+            args.append(t)
+        else:
+            t, i = _parse_one_type(sig, i, class_type_params)
+            args.append(t)
+    if i < len(sig) and sig[i] == '>':
+        i += 1  # 跳过 '>'
+    return args, i
+
+
+def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str, int]:
+    """从 sig[i] 起解析一个类型（Generic Signature 格式），返回 (rust_type, next_i)。"""
+    if i >= len(sig):
+        return 'Object', i
+
+    c = sig[i]
+
+    if c in _PRIMITIVE_MAP:
+        return _PRIMITIVE_MAP[c], i + 1
+
+    if c == 'T':
+        # TypeVariable
+        try:
+            end = sig.index(';', i + 1)
+        except ValueError:
+            return 'Object', len(sig)
+        name = sig[i + 1:end]
+        rust_type = name if name in class_type_params else 'Object'
+        return rust_type, end + 1
+
+    if c == '[':
+        # 数组 → Rc<RefCell<Vec<elem>>>
+        elem_type, next_i = _parse_one_type(sig, i + 1, class_type_params)
+        return f'Rc<RefCell<Vec<{elem_type}>>>', next_i
+
+    if c == '+' or c == '-':
+        # 上下界通配符 — 取内部类型
+        return _parse_one_type(sig, i + 1, class_type_params)
+
+    if c == '*':
+        # 无界通配符
+        return 'Object', i + 1
+
+    if c == 'L':
+        # ClassTypeSig: L<classname>(<TypeArgs>)?;
+        j = i + 1
+        while j < len(sig) and sig[j] not in ('<', ';', '.'):
+            j += 1
+        class_name = sig[i + 1:j]
+
+        type_args: list[str] = []
+        has_type_args = j < len(sig) and sig[j] == '<'
+        if has_type_args:
+            type_args, j = _parse_type_args(sig, j, class_type_params)
+
+        # 跳过 ClassTypeSigSuffix（.InnerClass…）
+        while j < len(sig) and sig[j] == '.':
+            j += 1
+            while j < len(sig) and sig[j] not in ('<', ';', '.'):
+                j += 1
+            if j < len(sig) and sig[j] == '<':
+                _, j = _parse_type_args(sig, j, class_type_params)
+
+        # 跳过结尾 ';'
+        if j < len(sig) and sig[j] == ';':
+            j += 1
+
+        # 映射类名到 Rust 类型
+        mapped = _CLASSNAME_MAP.get(class_name)
+        if mapped is not None:
+            rust_type = mapped
+        else:
+            short = class_name.rsplit('/', 1)[-1].replace('$', '_')
+            if has_type_args:
+                rust_type = f"{short}<{', '.join(type_args)}>"
+            else:
+                rust_type = short
+
+        return rust_type, j
+
+    # 未知 — 前进一步
+    return 'Object', i + 1
+
+
+# ── Generic Signature 公开 API ──────────────────────────────────
+
+def parse_field_type(sig: str, class_type_params: list[str]) -> str:
+    """从字段级 Signature 解析 Rust 类型字符串。"""
+    if not sig:
+        return ''
+    try:
+        rust_type, _ = _parse_one_type(sig, 0, class_type_params)
+        return rust_type
+    except Exception:
+        return ''
+
+
+def parse_class_type_params(sig: str) -> list[str]:
+    """从类级 Signature 中提取类型参数名列表。
+
+    示例：
+      '<E:Ljava/lang/Object;>...'     → ['E']
+      '<K:Ljava/lang/Object;V:...>'   → ['K', 'V']
+      'Ljava/lang/Object;'            → []
+      ''                              → []
+    """
+    if not sig or sig[0] != '<':
+        return []
+
+    params: list[str] = []
+    i = 1  # 跳过开头的 '<'
+
+    try:
+        while i < len(sig) and sig[i] != '>':
+            j = i
+            while j < len(sig) and sig[j] != ':' and sig[j] != '>':
+                j += 1
+            if j >= len(sig) or sig[j] == '>':
+                break
+            name = sig[i:j]
+            if name:
+                params.append(name)
+            i = j + 1  # 跳过 ':'
+
+            # 跳过 ClassBound（可为空）
+            if i < len(sig) and sig[i] not in (':', '>'):
+                i = _skip_field_type_sig(sig, i)
+
+            # 跳过所有 InterfaceBound（每个以 ':' 开头）
+            while i < len(sig) and sig[i] == ':':
+                i += 1  # 跳过 ':'
+                if i < len(sig) and sig[i] not in (':', '>'):
+                    i = _skip_field_type_sig(sig, i)
+    except Exception:
+        pass  # 解析失败时返回已收集的部分
+
+    return params
+
+
+def parse_method_param_types(
+    sig: str,
+    class_type_params: list[str],
+) -> tuple[list[str], str]:
+    """从方法 Signature 中解析参数类型和返回类型（Rust 类型字符串）。
+
+    class_type_params：类级类型参数名（如 ['E'] 或 ['K', 'V']）
+
+    示例（class_type_params=['E']）：
+      '(TE;)Z'    → (['E'], 'bool')
+      '(I)TE;'    → (['i32'], 'E')
+      '(TE;I)V'   → (['E', 'i32'], '()')
+
+    遇到解析错误时返回 ([], '')。
+    """
+    if not sig:
+        return [], ''
+
+    try:
+        i = 0
+
+        # 跳过方法级类型参数 <T:...> —— 不处理方法级泛型
+        if i < len(sig) and sig[i] == '<':
+            depth = 1
+            i += 1
+            while i < len(sig) and depth > 0:
+                if sig[i] == '<':
+                    depth += 1
+                elif sig[i] == '>':
+                    depth -= 1
+                i += 1
+
+        # 期望 '('
+        if i >= len(sig) or sig[i] != '(':
+            return [], ''
+        i += 1  # 跳过 '('
+
+        # 解析参数类型
+        param_types: list[str] = []
+        while i < len(sig) and sig[i] != ')':
+            rust_type, i = _parse_one_type(sig, i, class_type_params)
+            param_types.append(rust_type)
+
+        if i < len(sig) and sig[i] == ')':
+            i += 1  # 跳过 ')'
+
+        # 解析返回类型（忽略 ThrowsSignature ^...）
+        if i < len(sig) and sig[i] != '^':
+            ret_type, _ = _parse_one_type(sig, i, class_type_params)
+        else:
+            ret_type = '()'
+
+        return param_types, ret_type
+
+    except Exception:
+        return [], ''
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RsType 化：jvm_to_rs_type（Arch-7）
+# ══════════════════════════════════════════════════════════════════════════════
+
+_PRIMITIVE_RUST: frozenset[str] = frozenset({
+    'i32', 'i64', 'f32', 'f64', 'bool', '()', 'i8', 'i16', 'u16', 'usize',
+})
+
+
+def _rust_str_to_rs_type(rust_str: str) -> 'RsType':
+    """将 Rust 类型字符串转换为 RsType 节点。"""
+    from .rs_ir import RsPrimitive, RsNamed, RsGeneric
+    if rust_str in _PRIMITIVE_RUST:
+        return RsPrimitive(rust_str)
+    if '<' not in rust_str:
+        return RsNamed(rust_str)
+    # 解析泛型类型：找最外层 '<' 的位置
+    outer_end = rust_str.index('<')
+    outer = rust_str[:outer_end]
+    inner = rust_str[outer_end + 1: rust_str.rindex('>')]
+    # 在深度 0 处按 ',' 分割参数
+    params_strs: list[str] = []
+    depth = 0
+    start = 0
+    for idx, ch in enumerate(inner):
+        if ch == '<':
+            depth += 1
+        elif ch == '>':
+            depth -= 1
+        elif ch == ',' and depth == 0:
+            params_strs.append(inner[start:idx].strip())
+            start = idx + 1
+    params_strs.append(inner[start:].strip())
+    params = [_rust_str_to_rs_type(p) for p in params_strs if p]
+    return RsGeneric(outer, params)
+
+
+def jvm_to_rs_type(
+    desc: str,
+    generic_sig: str = '',
+    class_type_params: list[str] | None = None,
+    registry: dict | None = None,
+) -> 'RsType':
+    """JVM 类型描述符或泛型签名 → RsType 节点。
+
+    优先使用 generic_sig（若非空），降级到 desc。
+    generic_sig 是方法/字段级别的 Signature（单个类型，非 '(...) 格式'）。
+    """
+    _tparams = class_type_params or []
+    if generic_sig:
+        try:
+            rust_str, _ = _parse_one_type(generic_sig, 0, _tparams)
+        except Exception:
+            rust_str = jvm_to_rust(desc, registry)
+    else:
+        rust_str = jvm_to_rust(desc, registry)
+    return _rust_str_to_rs_type(rust_str)

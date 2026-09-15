@@ -10,11 +10,12 @@ from ..rs_ir import (
     NewPendingExpr, StaticFieldRef,
 )
 from ..render import render_expr, render_type
-from ..sig_parser import parse_class_type_params as _parse_class_type_params, parse_field_type as _parse_field_type
 from ..type_map import (
     jvm_to_rust, short_cls,
     NEWARRAY_TYPES,
     parse_descriptor_params, parse_descriptor_return,
+    parse_class_type_params as _parse_class_type_params,
+    parse_field_type as _parse_field_type,
 )
 from ..constants import safe_ident as _safe_ident
 from ..types import Instr

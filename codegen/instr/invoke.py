@@ -8,8 +8,11 @@ from ..rs_ir import (
     Lit, Var, RawExpr, RawStmt, NewPendingExpr, RsNamed,
 )
 from ..render import render_expr, render_type
-from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params
-from ..sig_parser import parse_class_type_params as _parse_class_type_params
+from ..type_map import (
+    jvm_to_rust, short_cls, parse_descriptor_params,
+    parse_class_type_params as _parse_class_type_params,
+    parse_method_param_types as _parse_method_param_types,
+)
 from ..constants import safe_ident as _safe_field
 from .coerce import (
     parse_method_ref, _coerce_from_null, _coerce_to_object,
@@ -22,9 +25,94 @@ from .coerce import (
 )
 
 
-def _is_generic_type_param(ty: str) -> bool:
-    """检测 ty 是否是泛型类型参数（单个大写字母，如 T/E/K/V）——这种情况下不能用 Object::from_any 包装。"""
-    return bool(ty) and len(ty) <= 2 and ty[0].isupper() and ty.rstrip('0123456789').isalpha()
+def _lookup_method_sig_params(
+    cls_short: str | None,
+    mname: str,
+    descriptor_params: list[str],
+    descriptor_ret: str,
+    registry: dict | None,
+    caller_class_type_params: frozenset[str],
+) -> list[str | None] | None:
+    """查找被调用方法的 generic_signature，返回真实参数类型列表。
+
+    返回值中 None 表示该位置降级到 jvm_to_rust(descriptor)。
+    只有当 callee 的类型参数在 caller 的类型参数集合中可见时，才保留泛型参数名；
+    否则（调用方用 raw/擦除类型），该位置设为 None，让调用方降级到 descriptor 推导类型。
+    """
+    if not cls_short or not registry:
+        return None
+    cls_bin = _rust_type_to_binary(cls_short, registry)
+    if not cls_bin:
+        return None
+    ci = registry.get(cls_bin)
+    if not ci:
+        return None
+    full_desc = '(' + ''.join(descriptor_params) + ')' + descriptor_ret
+    for m in ci.methods:
+        if m.name == mname and m.descriptor == full_desc:
+            if not m.generic_signature:
+                return None
+            # 用被调用类的类型参数解析 generic_signature
+            callee_tparams_list = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+            callee_tparams = frozenset(callee_tparams_list)
+            types, _ = _parse_method_param_types(m.generic_signature, callee_tparams_list)
+            if not types:
+                return None
+            # 将 callee 类型参数映射到 caller 上下文：
+            # 若某参数是 callee 的类型参数但不在 caller 的类型参数集合中，
+            # 说明 caller 用的是擦除类型（如 raw ArrayList），该位置设 None（降级到 descriptor）
+            resolved: list[str | None] = []
+            for t in types:
+                if t in callee_tparams and t not in caller_class_type_params:
+                    resolved.append(None)   # 擦除，使用 jvm_to_rust(descriptor) 降级
+                else:
+                    resolved.append(t)
+            return resolved
+    return None
+
+
+def _coerce_arg(
+    e: str,
+    e_ty_node: object,
+    expected: str,
+    actual: str,
+    sim: 'StackSim',
+    registry: dict | None,
+) -> str:
+    """统一参数强制转换逻辑（替代各 _gen_invoke* 中的重复 elif 链）。
+
+    expected: 期望类型（来自 generic_signature 或 descriptor）
+    actual:   实际栈顶类型字符串
+    """
+    from ..render import render_type as _rt
+    from .coerce import (
+        _coerce_from_null, _coerce_to_object, _coerce_to_interface,
+        _coerce_value, _is_subtype, _PRIMITIVE_RUST_TYPES,
+    )
+    null_coerce = _coerce_from_null(e, expected)
+    if null_coerce is not None:
+        return null_coerce
+    if _coerce_to_interface(actual, expected):
+        return 'Default::default()'
+    if expected == 'Object' and actual not in ('Object', '()'):
+        # 实际值是调用方的泛型参数（如 T/E/K/V）→ callee 签名中对应位置也是泛型参数，直接 clone
+        if actual in sim.class_type_params:
+            return f"Clone::clone(&{e})"
+        if e == 'this':
+            return f"Object::from_any(Clone::clone(self))"
+        return _coerce_to_object(e, actual)
+    if expected in ('bool', 'i8', 'i16', 'u16') and actual != expected:
+        return _coerce_value(e, e_ty_node, expected)
+    if expected == 'i32' and actual in ('i8', 'i16', 'u16', 'bool'):
+        return f"({e} as i32)"
+    if (expected not in _PRIMITIVE_RUST_TYPES and actual not in _PRIMITIVE_RUST_TYPES
+            and expected not in ('Object', '()', actual)
+            and _is_subtype(actual.split('<')[0], expected.split('<')[0], registry)):
+        # T55：子类传给父类参数，通过 From impl 类型提升
+        return f"Clone::clone(&{e}).into()"
+    if actual not in _PRIMITIVE_RUST_TYPES:
+        return f"Clone::clone(&{e})"
+    return e
 
 
 def _gen_string_concat(sim: StackSim, comment: str):
@@ -84,27 +172,19 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         # 不能用 invokevirtual 语义——否则 this.method() 会对被覆盖方法产生无限递归。
         # 必须精确路由到目标父类的 ._super 链，直接调用父类实现，跳过虚拟派发。
         cls_short, mname, params, ret = parse_method_ref(comment)
+        sig_params = _lookup_method_sig_params(
+            cls_short, mname, params, ret, registry, sim.class_type_params
+        )
         args: list[str] = []
-        for param_jvm in reversed(params):
+        for _idx, param_jvm in enumerate(reversed(params)):
             e_expr, e_ty_node = sim.pop()
             e_str = render_expr(e_expr)
-            expected_rust = jvm_to_rust(param_jvm, registry)
+            # 若有 generic_signature 参数类型（非 None），优先使用；否则降级到 descriptor
+            _pi = len(params) - 1 - _idx
+            _sig_t = sig_params[_pi] if sig_params and _pi < len(sig_params) else None
+            expected_rust = _sig_t if _sig_t is not None else jvm_to_rust(param_jvm, registry)
             actual_rust = render_type(e_ty_node)
-            null_coerce = _coerce_from_null(e_str, expected_rust)
-            if null_coerce is not None:
-                e_str = null_coerce
-            elif _coerce_to_interface(actual_rust, expected_rust):
-                e_str = 'Default::default()'
-            elif expected_rust == 'Object' and actual_rust not in ('Object', '()'):
-                if _is_generic_type_param(actual_rust):
-                    # 泛型类型参数 E：callee Rust 签名中该位置也是 E，直接 clone 传递
-                    e_str = f"Clone::clone(&{e_str})"
-                else:
-                    e_str = _coerce_to_object(e_str, actual_rust)
-            elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
-                e_str = _coerce_value(e_str, e_ty_node, expected_rust)
-            elif actual_rust not in _PRIMITIVE_RUST_TYPES:
-                e_str = f"Clone::clone(&{e_str})"
+            e_str = _coerce_arg(e_str, e_ty_node, expected_rust, actual_rust, sim, registry)
             args.insert(0, e_str)
         obj_expr, _ = sim.pop()
         obj_e = render_expr(obj_expr)
@@ -122,36 +202,19 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             sim.push(Var(v), RsNamed(rust_ret))
         return
 
-    cls, _, params, _ = parse_method_ref(comment)
+    cls, _mname_ctor, params, _ret_ctor = parse_method_ref(comment)
+    sig_params_ctor = _lookup_method_sig_params(
+        cls, '<init>', params, 'V', registry, sim.class_type_params
+    )
     args = []
-    for param_jvm in reversed(params):
+    for _idx_c, param_jvm in enumerate(reversed(params)):
         e_expr, e_ty_node = sim.pop()
         e = render_expr(e_expr)
-        expected = jvm_to_rust(param_jvm, registry)
+        _pi_c = len(params) - 1 - _idx_c
+        _sig_t_c = sig_params_ctor[_pi_c] if sig_params_ctor and _pi_c < len(sig_params_ctor) else None
+        expected = _sig_t_c if _sig_t_c is not None else jvm_to_rust(param_jvm, registry)
         ty = render_type(e_ty_node)
-        null_coerce = _coerce_from_null(e, expected)
-        if null_coerce is not None:
-            e = null_coerce
-        elif _coerce_to_interface(ty, expected):
-            e = 'Default::default()'
-        elif expected == 'Object' and ty not in ('Object', '()') and e != 'this':
-            if _is_generic_type_param(ty):
-                e = f"Clone::clone(&{e})"
-            else:
-                e = _coerce_to_object(e, ty)
-        elif expected == 'Object' and ty not in ('Object', '()') and e == 'this':
-            e = f"Object::from_any(Clone::clone(self))"
-        elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
-            e = _coerce_value(e, e_ty_node, expected)
-        elif expected == 'i32' and ty in ('i8', 'i16', 'u16', 'bool'):
-            e = f"({e} as i32)"
-        elif (expected not in _PRIMITIVE_RUST_TYPES and ty not in _PRIMITIVE_RUST_TYPES
-              and expected not in ('Object', '()', ty)
-              and _is_subtype(ty.split('<')[0], expected.split('<')[0], registry)):
-            # T55：子类传给父类参数位置，通过 From impl 类型提升（如 StringBuilder → AbstractStringBuilder）
-            e = f"Clone::clone(&{e}).into()"
-        elif ty not in _PRIMITIVE_RUST_TYPES:
-            e = f"Clone::clone(&{e})"
+        e = _coerce_arg(e, e_ty_node, expected, ty, sim, registry)
         args.insert(0, e)
     obj_expr, obj_ty_node = sim.pop()
 
@@ -245,34 +308,18 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         return
 
     cls, mname, params, ret = parse_method_ref(comment)
+    sig_params_s = _lookup_method_sig_params(
+        cls, mname, params, ret, registry, sim.class_type_params
+    )
     args = []
-    for param_jvm in reversed(params):
+    for _idx_s, param_jvm in enumerate(reversed(params)):
         e_expr, ty_node = sim.pop()
         e = render_expr(e_expr)
         ty = render_type(ty_node)
-        expected = jvm_to_rust(param_jvm, registry)
-        null_coerce = _coerce_from_null(e, expected)
-        if null_coerce is not None:
-            e = null_coerce
-        elif _coerce_to_interface(ty, expected):
-            e = 'Default::default()'
-        elif expected == 'Object' and ty not in ('Object', '()'):
-            if _is_generic_type_param(ty):
-                e = f"Clone::clone(&{e})"
-            else:
-                e = _coerce_to_object(e, ty)
-        elif expected in ('bool', 'i8', 'i16', 'u16') and ty != expected:
-            e = _coerce_value(e, ty_node, expected)
-        elif expected == 'i32' and ty in ('i8', 'i16', 'u16', 'bool'):
-            e = f"({e} as i32)"
-        elif (expected not in _PRIMITIVE_RUST_TYPES and ty not in _PRIMITIVE_RUST_TYPES
-              and expected not in ('Object', '()', ty)
-              and _is_subtype(ty.split('<')[0], expected.split('<')[0], registry)):
-            # T55：子类型传给父类型参数位置，插入 .into() 类型提升
-            # Clone::clone 确保得到 owned 值（this 是 &Self，直接 .into() 会要求 From<&T>）
-            e = f"Clone::clone(&{e}).into()"
-        elif ty not in _PRIMITIVE_RUST_TYPES:
-            e = f"Clone::clone(&{e})"
+        _pi_s = len(params) - 1 - _idx_s
+        _sig_t_s = sig_params_s[_pi_s] if sig_params_s and _pi_s < len(sig_params_s) else None
+        expected = _sig_t_s if _sig_t_s is not None else jvm_to_rust(param_jvm, registry)
+        e = _coerce_arg(e, ty_node, expected, ty, sim, registry)
         args.insert(0, e)
 
     needs_q = False  # 是否加 ?（用户类方法返回 Result）
@@ -322,35 +369,18 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
 
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
+    sig_params_v = _lookup_method_sig_params(
+        cls, mname, params, ret, registry, sim.class_type_params
+    )
     args = []
-    for param_jvm in reversed(params):
+    for _idx_v, param_jvm in enumerate(reversed(params)):
         e_expr, e_ty_node = sim.pop()
         e_str = render_expr(e_expr)
-        expected_rust = jvm_to_rust(param_jvm, registry)
+        _pi_v = len(params) - 1 - _idx_v
+        _sig_t_v = sig_params_v[_pi_v] if sig_params_v and _pi_v < len(sig_params_v) else None
+        expected_rust = _sig_t_v if _sig_t_v is not None else jvm_to_rust(param_jvm, registry)
         actual_rust = render_type(e_ty_node)
-        null_coerce = _coerce_from_null(e_str, expected_rust)
-        if null_coerce is not None:
-            e_str = null_coerce
-        elif _coerce_to_interface(actual_rust, expected_rust):
-            e_str = 'Default::default()'
-        elif expected_rust == 'Object' and actual_rust not in ('Object', '()'):
-            if _is_generic_type_param(actual_rust):
-                # 泛型类型参数 E：callee Rust 签名中该位置也是 E，直接 clone 传递
-                e_str = f"Clone::clone(&{e_str})"
-            else:
-                e_str = _coerce_to_object(e_str, actual_rust)
-        elif expected_rust in ('bool', 'i8', 'i16', 'u16') and actual_rust != expected_rust:
-            e_str = _coerce_value(e_str, e_ty_node, expected_rust)
-        elif expected_rust == 'i32' and actual_rust in ('i8', 'i16', 'u16'):
-            e_str = f"({e_str} as i32)"
-        elif (expected_rust not in _PRIMITIVE_RUST_TYPES and actual_rust not in _PRIMITIVE_RUST_TYPES
-              and expected_rust not in ('Object', '()', actual_rust)
-              and _is_subtype(actual_rust.split('<')[0], expected_rust.split('<')[0], registry)):
-            # T55：子类型传给父类型参数位置，插入 .into() 类型提升
-            # Clone::clone 确保得到 owned 值（this 是 &Self，直接 .into() 会要求 From<&T>）
-            e_str = f"Clone::clone(&{e_str}).into()"
-        elif actual_rust not in _PRIMITIVE_RUST_TYPES:
-            e_str = f"Clone::clone(&{e_str})"
+        e_str = _coerce_arg(e_str, e_ty_node, expected_rust, actual_rust, sim, registry)
         args.insert(0, e_str)
     obj_expr, obj_ty_node = sim.pop()
     obj_e = render_expr(obj_expr)
