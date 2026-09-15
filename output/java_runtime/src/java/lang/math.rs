@@ -91,9 +91,6 @@ impl Math {
         panic!("stub: java/lang/Math.<init>:()V")
     }
 
-    // sin/cos/tan/asin/acos/atan/toRadians/toDegrees/exp/log/log10/sqrt/cbrt/
-    // IEEEremainder/ceil/floor/rint/atan2/pow 均由 math_impl.rs 提供 native 实现，此处不重复定义。
-
     #[cfg_attr(any(), java_method(name = "round", descriptor = "(F)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn round_f(a: f32) -> Result<i32> {
         panic!("stub: java/lang/Math.round:(F)I")
@@ -103,8 +100,6 @@ impl Math {
     pub fn round_d(a: f64) -> Result<i64> {
         panic!("stub: java/lang/Math.round:(D)J")
     }
-
-    // random 由 math_impl.rs 提供 native 实现。
 
     #[cfg_attr(any(), java_method(name = "addExact", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn addExact_i_i(x: i32, y: i32) -> Result<i32> {
@@ -402,8 +397,6 @@ impl Math {
     pub fn signum_f(f: f32) -> Result<f32> {
         panic!("stub: java/lang/Math.signum:(F)F")
     }
-
-    // sinh/cosh/tanh/hypot/expm1/log1p 均由 math_impl.rs 提供 native 实现。
 
     #[cfg_attr(any(), java_method(name = "copySign", descriptor = "(DD)D", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn copySign_d_d(magnitude: f64, arg1: f64) -> Result<f64> {

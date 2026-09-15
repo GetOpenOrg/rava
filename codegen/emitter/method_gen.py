@@ -96,7 +96,8 @@ def _scan_impl_files(workspace_root: str) -> tuple[dict, set]:
                 continue
 
             # 扫描 pub fn 名字（确定已手写哪些方法，codegen 跳过对应 stub）
-            method_names = {m.group(1) for m in _re.finditer(r'^\s*pub fn\s+(\w+)', content, _re.MULTILINE)}
+            # 兼容 #[attr] pub fn name(...) 同行写法
+            method_names = {m.group(1) for m in _re.finditer(r'\bpub fn\s+(\w+)\s*[(<]', content)}
             if method_names:
                 entry = new_format_map.setdefault(class_binary, {'methods': set()})
                 entry['methods'].update(method_names)

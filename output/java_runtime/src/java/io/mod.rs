@@ -13,3 +13,4 @@ pub mod print_stream;
 pub use print_stream::*;
 pub mod writer;
 pub use writer::*;
+mod print_stream_impl;

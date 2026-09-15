@@ -252,12 +252,31 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for c in sorted(children):
             mod_lines.append(_mod_decl(c))
             mod_lines.append(_use_decl(c))
-        # K-2: 扫描目录中的共置 _impl.rs 文件，加入私有 mod 声明（不 pub use，只是 impl 扩展块）
+        # K-2: 扫描目录中的 _impl.rs / _ext.rs 共置文件，加入私有 mod 声明。
+        # 规则：只有当 X.rs 存在（即 X 在调用链中已生成，或是 _PERMANENT 手写文件）时，
+        # 才声明 mod X_impl; / mod X_ext;。否则 _impl.rs 静默等待，避免 E0583 / 未定义类型。
+        # 若 X.rs 存在但不在 children（_PERMANENT 手写文件），还需补充 pub mod X; 声明。
         if os.path.isdir(dir_path):
+            extra_pub: list[str] = []
+            companion_mods: list[str] = []
             for _f in sorted(os.listdir(dir_path)):
                 if _f.endswith('_impl.rs'):
-                    _impl_mod = _f[:-3]  # 去掉 .rs 后缀
-                    mod_lines.append(f'mod {_impl_mod};')
+                    base = _f[:-len('_impl.rs')]
+                elif _f.endswith('_ext.rs'):
+                    base = _f[:-len('_ext.rs')]
+                else:
+                    continue
+                # X.rs 不存在时跳过：_impl.rs 静默，不产生无法解析的 mod 声明
+                if not os.path.exists(os.path.join(dir_path, base + '.rs')):
+                    continue
+                companion_mods.append(f'mod {_f[:-3]};')
+                # X.rs 在磁盘但不在 children（如 _PERMANENT object.rs）→ 补充 pub mod 声明
+                if base not in children:
+                    extra_pub.append(base)
+            for base in sorted(set(extra_pub)):
+                mod_lines.append(_mod_decl(base))
+                mod_lines.append(_use_decl(base))
+            mod_lines.extend(companion_mods)
         _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
 
     # 4. user crate（用户 Java 翻译）

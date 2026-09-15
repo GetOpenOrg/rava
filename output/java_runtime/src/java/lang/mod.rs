@@ -1,7 +1,4 @@
 #![allow(ambiguous_glob_reexports)]
-pub mod object;
-pub use object::Object;
-mod object_ext;
 pub mod abstract_string_builder;
 pub use abstract_string_builder::*;
 pub mod assertion_error;
@@ -56,11 +53,13 @@ pub mod throwable;
 pub use throwable::*;
 pub mod virtual_machine_error;
 pub use virtual_machine_error::*;
-mod double_impl;
-mod float_impl;
+pub mod object;
+pub use object::*;
 mod math_impl;
 mod null_pointer_exception_impl;
+mod object_ext;
 mod object_impl;
+mod string_ext;
 mod system_impl;
 mod thread_impl;
 mod throwable_impl;
