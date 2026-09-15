@@ -1,35 +1,10 @@
 use java_runtime::prelude::*;
 use super::*;
 
-#[java_rta_macros::java_class(
-    binary_name       = "java/lang/StringBuilder",
-    super_class       = "java/lang/AbstractStringBuilder",
-    interfaces        = "java/lang/Appendable,java/io/Serializable,java/lang/Comparable,java/lang/CharSequence",
-    access            = "public",
-    modifiers         = "final",
-    generic_signature = "Ljava/lang/AbstractStringBuilder;Ljava/lang/Appendable;Ljava/io/Serializable;Ljava/lang/Comparable<Ljava/lang/StringBuilder;>;Ljava/lang/CharSequence;",
-    is_interface      = false,
-    is_abstract       = false,
-    is_enum           = false,
-    is_deprecated     = false,
-    source            = "StringBuilder.java",
-)]
-#[derive(Clone, Default, PartialEq)]
-pub struct StringBuilder {
-    pub _super: AbstractStringBuilder,
-    pub _sb: JField<Rc<RefCell<std::string::String>>>,
-}
+// StringBuilder 的字符内容通过父类 AbstractStringBuilder 的 value (Vec<i8>) 和 count (i32) 字段存储。
+// Latin-1 编码：每个字节直接对应一个字符（ASCII 范围内完全兼容）。
 
-impl StringBuilder {
-    pub fn as_abstract_string_builder(&self) -> &AbstractStringBuilder { &self._super }
-    pub fn into_abstract_string_builder(self) -> AbstractStringBuilder { self._super }
-}
-
-impl From<StringBuilder> for AbstractStringBuilder {
-    fn from(v: StringBuilder) -> AbstractStringBuilder { v._super }
-}
-
-impl StringBuilder {
+impl super::StringBuilder {
     pub fn new() -> Result<StringBuilder> {
         Ok(StringBuilder::default())
     }
@@ -40,60 +15,80 @@ impl StringBuilder {
 
     pub fn new_str(str: String) -> Result<Self> {
         let sb = Self::default();
-        sb._sb.get().borrow_mut().push_str(&format!("{}", str));
+        _sb_append(&sb, format!("{}", str).as_str());
         Ok(sb)
     }
 
     // ── append 重载 ──────────────────────────────────────────────────────────
 
     pub fn append_str(&self, s: String) -> Result<StringBuilder> {
-        self._sb.get().borrow_mut().push_str(&format!("{}", s));
-        Ok(self.clone())
+        _sb_append(self, format!("{}", s).as_str());
+        Ok(Clone::clone(self))
     }
 
     pub fn append_i(&self, v: i32) -> Result<StringBuilder> {
-        self._sb.get().borrow_mut().push_str(&v.to_string());
-        Ok(self.clone())
+        _sb_append(self, &v.to_string());
+        Ok(Clone::clone(self))
     }
 
     pub fn append_l(&self, v: i64) -> Result<StringBuilder> {
-        self._sb.get().borrow_mut().push_str(&v.to_string());
-        Ok(self.clone())
+        _sb_append(self, &v.to_string());
+        Ok(Clone::clone(self))
     }
 
     pub fn append_d(&self, v: f64) -> Result<StringBuilder> {
-        self._sb.get().borrow_mut().push_str(&v.to_string());
-        Ok(self.clone())
+        _sb_append(self, &v.to_string());
+        Ok(Clone::clone(self))
     }
 
     pub fn append_f(&self, v: f32) -> Result<StringBuilder> {
-        self._sb.get().borrow_mut().push_str(&v.to_string());
-        Ok(self.clone())
+        _sb_append(self, &v.to_string());
+        Ok(Clone::clone(self))
     }
 
     pub fn append_z(&self, v: bool) -> Result<StringBuilder> {
-        self._sb.get().borrow_mut().push_str(&v.to_string());
-        Ok(self.clone())
+        _sb_append(self, &v.to_string());
+        Ok(Clone::clone(self))
     }
 
     pub fn append_c(&self, v: u16) -> Result<StringBuilder> {
         if let Some(c) = char::from_u32(v as u32) {
-            self._sb.get().borrow_mut().push(c);
+            let mut buf = [0u8; 4];
+            _sb_append(self, c.encode_utf8(&mut buf));
         }
-        Ok(self.clone())
+        Ok(Clone::clone(self))
     }
 
     pub fn append_obj(&self, obj: Object) -> Result<StringBuilder> {
-        self._sb.get().borrow_mut().push_str("Object");
-        Ok(self.clone())
+        _sb_append(self, "Object");
+        Ok(Clone::clone(self))
     }
 
     pub fn toString(&self) -> Result<String> {
-        let s = self._sb.get().borrow().clone();
+        let value = self._super.value.get();
+        let count = self._super.count.get() as usize;
+        let borrowed = value.borrow();
+        let slice = &borrowed[..count.min(borrowed.len())];
+        let s = std::string::String::from_utf8_lossy(
+            &slice.iter().map(|&b| b as u8).collect::<Vec<_>>()
+        ).into_owned();
         Ok(String::from(s.as_str()))
     }
 
     pub fn length(&self) -> Result<i32> {
-        Ok(self._sb.get().borrow().len() as i32)
+        Ok(self._super.count.get())
     }
+}
+
+fn _sb_append(sb: &super::StringBuilder, s: &str) {
+    let bytes: Vec<i8> = s.bytes().map(|b| b as i8).collect();
+    let value = sb._super.value.get();
+    let count = sb._super.count.get() as usize;
+    let needed = count + bytes.len();
+    let mut v = value.borrow_mut();
+    if v.len() < needed {
+        v.resize(needed, 0i8);
+    }
+    v[count..needed].copy_from_slice(&bytes);
+    sb._super.count.set(needed as i32);
 }
