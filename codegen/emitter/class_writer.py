@@ -50,11 +50,14 @@ def _extract_clinit_consts(ci: ClassInfo) -> dict[str, str]:
             continue
         fname = field_desc.split(':')[0]
 
-        # 前一条指令
+        # 前一条指令（或前两条：iconst_0 → anewarray → putstatic）
         if i == 0:
             continue
         prev = instrs[i - 1]
-        if prev.opcode in _CONST_PUSH_OPCODES:
+        # 模式：iconst_0 → anewarray → putstatic（static final Object[] = new T[0]）
+        if prev.opcode == 'anewarray' and i >= 2 and instrs[i - 2].opcode == 'iconst_0':
+            result[fname] = '__EMPTY_ARRAY__'
+        elif prev.opcode in _CONST_PUSH_OPCODES:
             val = _CONST_PUSH_OPCODES[prev.opcode]
             result[fname] = str(int(val)) if isinstance(val, float) and val == int(val) else str(val)
         elif prev.opcode in ('bipush', 'sipush') and prev.operand is not None:
@@ -475,7 +478,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         # ConstantValue attribute 优先；其次尝试从 <clinit> 提取简单常量
         cv = sf.constant_value or _clinit_consts.get(sf.name, '')
         if cv:
-            if rust_ret == 'String':
+            if cv == '__EMPTY_ARRAY__':
+                # iconst_0 → anewarray → putstatic：static final T[] = new T[0]
+                body = 'Rc::new(RefCell::new(Vec::new()))'
+            elif rust_ret == 'String':
                 body = f'String::from("{cv}")'
             elif rust_ret == 'f32':
                 if cv == 'inf':      body = 'f32::INFINITY'
