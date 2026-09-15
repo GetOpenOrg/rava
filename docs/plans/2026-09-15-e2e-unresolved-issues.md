@@ -225,16 +225,78 @@ let _t1: f64 = Self::sum(Default::default())?;  // 实际 ints 完全没传入
 pub struct ArrayList<E: Clone + Default + 'static> { ... }
 ```
 
-但当前 `java_class` 宏的实现是：
+**每个生成方法上也挂有完整的方法字节码元数据**（但通过 `cfg_attr(any(), ...)` 永远不激活）：
+
+```rust
+#[cfg_attr(any(), java_method(
+    name = "sum",
+    descriptor = "([Ljava/lang/Number;)D",
+    is_abstract = false,
+    is_native = false,
+    generic_signature = "<T:Ljava/lang/Number;>([TT;)D"
+))]
+pub fn sum(mut arr: ...) -> Result<f64> { ... }
+```
+
+**当前 `java_class` 宏的实现**（`java_rta_macros/src/lib.rs:15`）：
 
 ```rust
 pub fn java_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
 //                ^^^^^ 下划线前缀 = 完全丢弃，不读取任何属性参数
 ```
 
-`binary_name`、`interfaces`、`super_class`、`is_interface`、`generic_signature` 全部被忽略。方法属性 `#[cfg_attr(any(), java_method(...))]` 使用 `cfg_attr(any(), ...)` 包裹，在编译期永远不激活，只是嵌入文档。
+`binary_name`、`interfaces`、`super_class`、`is_interface`、`generic_signature` 全部被忽略。宏只生成通用的 `Into<Object>`、`From<Object>`、`Debug` 三个 impl，与类的实际 Java 类型信息完全脱节。
 
 **这是所有 Arch 问题的根源**：本可以在 Rust 编译期由宏自动派生的行为，全都降级为 Python 侧脆弱的字符串分析和运行时补丁。
+
+---
+
+### 当前已有的基础设施（升级起点）
+
+以下已有实现是架构升级的出发点，**不需要从零构建**：
+
+**1. `Object` 已是 `Rc<dyn Any>`（`java_runtime/src/java/lang/object.rs:8`）**
+
+```rust
+pub struct Object(pub Rc<dyn std::any::Any>);
+// from_any: Rc::new(v)，downcast: downcast_ref::<T>()
+```
+
+目标态升级路径：`Rc<dyn Any>` → `Rc<dyn JvmObject>`（其中 `JvmObject: Any`），保留 `as_any()` 以兼容 `downcast_ref`。**不是从零重写，只是把 trait object 的接口扩展。**
+
+**2. `JvmObjectBase` 已存在，但是 blanket no-op impl（`java_runtime/src/lib.rs:70`）**
+
+```rust
+pub trait JvmObjectBase {
+    fn hashCode(&self) -> Result<i32> { Ok(0) }
+    fn equals(&self, _other: Object) -> Result<bool> { Ok(false) }
+    fn jvm_clone(&self) -> Result<Object> { panic!("stub") }
+}
+impl<T> JvmObjectBase for T {}  // 全部类型默认实现 = no-op
+```
+
+目标态：将 `JvmObjectBase` 扩展为 `JvmObject`（加入 `jvm_type_id`、`jvm_is_instance_of`、`as_any`），由 `java_class` 宏为每个类生成具体 impl，删除 blanket impl。
+
+**3. 宏已生成 `Into<Object>` / `From<Object>`**
+
+```rust
+// 宏当前生成（java_rta_macros/src/lib.rs:46-53）：
+impl Into<Object> for ArrayList<E> {
+    fn into(self) -> Object { Object::from_any(self) }
+}
+impl From<Object> for ArrayList<E> {
+    fn from(obj: Object) -> Self { obj.downcast::<Self>() }
+}
+```
+
+升级后这两个 impl 继续有效（`from_any` 改为 `Object(Rc::new(val) as Rc<dyn JvmObject>)`），宏扩展时只需要在已有代码基础上添加 `JvmObject` impl 生成，不需要改变 `Into`/`From` 逻辑。
+
+**4. `java_method` 属性改为真正的 proc macro attribute（Arch-3 前置）**
+
+当前 `cfg_attr(any(), java_method(...))` 在编译期永远不触发。要让宏读取方法级别元数据（如 `is_abstract` 计数判断函数式接口），需要：
+1. 在 `java_rta_macros` 中注册 `#[proc_macro_attribute] pub fn java_method(...)`
+2. Python codegen 将 `cfg_attr(any(), java_method(...))` 改为 `#[java_rta_macros::java_method(...)]`
+3. 宏读取 `is_abstract`、`descriptor`、`generic_signature` 生成 trait 方法 shim
 
 ---
 
@@ -281,9 +343,10 @@ pub struct Object {
 ```
 
 **codegen 变更**：
-1. `java_rta_macros/src/lib.rs` — `java_class` 宏：读取 `is_interface` / `interfaces` 参数，为接口生成 trait + blanket impls
-2. Python `class_writer.py` T55b 整块可删除（宏接管 From impl 生成）
-3. `java_runtime/src/types.rs` — `Object` 改为 `Rc<dyn JvmObject>`
+1. `java_rta_macros/src/lib.rs` — `java_class` 宏：读取 `is_interface` / `interfaces` 参数，为接口生成 trait + explicit impls；为实现类生成 `JvmObject` impl（替代 blanket no-op）
+2. `java_runtime/src/java/lang/object.rs` — `Object(Rc<dyn Any>)` 升级为 `Object(Rc<dyn JvmObject>)`，`JvmObject` 加入 `fn as_any(&self) -> &dyn Any` 以保留 `downcast` 能力
+3. `java_runtime/src/lib.rs` — `JvmObjectBase` blanket impl 删除，改为 `JvmObject` trait（含 `jvm_type_id`、`jvm_is_instance_of`、`jvm_to_string`）
+4. Python `class_writer.py` T55b 整块删除（宏通过 `interfaces` 字段自动生成正确 From impl）
 
 **影响**：修复所有集合类方法调用、修复 G-1 虚方法派发。
 
