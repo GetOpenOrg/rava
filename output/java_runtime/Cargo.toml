@@ -9,3 +9,4 @@ path = "src/lib.rs"
 
 [dependencies]
 parking_lot = "0.12"
+java_rta_macros = { path = "../java_rta_macros" }

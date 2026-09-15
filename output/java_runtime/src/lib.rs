@@ -104,4 +104,5 @@ pub mod prelude {
     pub use std::rc::Rc;
     pub use std::cell::RefCell;
     pub use super::MutexHolder;
+    pub use java_rta_macros::{jvm_native, jvm_boundary, jvm_ext};
 }

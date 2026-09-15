@@ -14,6 +14,7 @@ thread_local! {
 }
 
 impl InternalLock {
+    #[jvm_boundary]
     pub fn lock(&self) -> Result<()> {
         let guard = unsafe {
             std::mem::transmute::<
@@ -25,6 +26,7 @@ impl InternalLock {
         Ok(())
     }
 
+    #[jvm_boundary]
     pub fn unlock(&self) -> Result<()> {
         GUARDS.with(|g| { g.borrow_mut().pop(); });
         Ok(())

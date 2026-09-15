@@ -3,6 +3,21 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, GenericParam};
 
+/// 标记该方法实现了 Java 字节码中的 `ACC_NATIVE` 方法。
+/// 分析工具可通过此属性统计 native 方法覆盖情况。
+#[proc_macro_attribute]
+pub fn jvm_native(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
+
+/// 标记该方法属于内部边界类（`jdk/internal/`、`sun/`），BFS 截断后整体手写。
+/// 分析工具可通过此属性统计内部边界覆盖情况。
+#[proc_macro_attribute]
+pub fn jvm_boundary(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
+
+/// 标记该方法是 Rust 侧人机工程学扩展，Java 规范中不存在。
+/// 分析工具可通过此属性区分 JVM 规范方法与纯 Rust 便利 API。
+#[proc_macro_attribute]
+pub fn jvm_ext(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
+
 /// `#[java_rta_macros::java_class(binary_name = "...", ...)]`
 ///
 /// 为 Java 翻译类自动生成：
