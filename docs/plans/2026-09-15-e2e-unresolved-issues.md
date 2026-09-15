@@ -985,3 +985,5 @@ pub trait Printable {
 | 2026-09-15 | C-1 附加：`#[path = "..."] mod _impl;` 目标文件不存在 → E0583 | `class_writer.py` 写 `#[path]` 前 `os.path.exists` 检查，不存在则省略 |
 | 2026-09-15 | D-1：invokedynamic 不弹栈不压返回值 → 后续指令类型错误 | `sim.py` 已实现：解析 descriptor 弹出 N 参数，压入 `Object::default()` |
 | 2026-09-16 | I-1（Arch-7）：`_is_generic_type_param` 启发式删除，`sig_parser.py` 删除 | `type_map.py` 内联 sig_parser 功能 + 新增 `jvm_to_rs_type`；`invoke.py` 用 `_lookup_method_sig_params` 读 registry 中方法 generic_signature；`codegen.py` 用 `ty_str in _class_tparams` 替代启发式 |
+| 2026-09-16 | `_validate_field_type` 只检查基础类型，不检查嵌套泛型参数 → Certificate/Constructor/TypeVariable E0425 | `class_writer.py` 新增 `_extract_type_names` 提取所有类型名（含嵌套），`_validate_field_type` 验证全部；不在注册表中的类型回退到原始描述符 |
+| 2026-09-16 | `load_local` 回退路径使用 `f"local_{slot}"` 而非 `_loc_names`，导致同一槽在跨 StackSim 路径中名称不一致 → 变量未声明 E0425 | `stack.py` `load_local` 回退改为 `_safe_name(_loc_names.get(slot, f"local_{slot}"))` |
