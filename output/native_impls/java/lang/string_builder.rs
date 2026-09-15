@@ -1,10 +1,35 @@
 use java_runtime::prelude::*;
 use super::*;
 
-// StringBuilder 内部字符串内容通过注入字段 _sb 存储（Rc<RefCell<String>> 支持共享可变）。
-/// @field _sb: JField<Rc<RefCell<std::string::String>>>
+#[java_rta_macros::java_class(
+    binary_name       = "java/lang/StringBuilder",
+    super_class       = "java/lang/AbstractStringBuilder",
+    interfaces        = "java/lang/Appendable,java/io/Serializable,java/lang/Comparable,java/lang/CharSequence",
+    access            = "public",
+    modifiers         = "final",
+    generic_signature = "Ljava/lang/AbstractStringBuilder;Ljava/lang/Appendable;Ljava/io/Serializable;Ljava/lang/Comparable<Ljava/lang/StringBuilder;>;Ljava/lang/CharSequence;",
+    is_interface      = false,
+    is_abstract       = false,
+    is_enum           = false,
+    is_deprecated     = false,
+    source            = "StringBuilder.java",
+)]
+#[derive(Clone, Default, PartialEq)]
+pub struct StringBuilder {
+    pub _super: AbstractStringBuilder,
+    pub _sb: JField<Rc<RefCell<std::string::String>>>,
+}
 
-impl super::StringBuilder {
+impl StringBuilder {
+    pub fn as_abstract_string_builder(&self) -> &AbstractStringBuilder { &self._super }
+    pub fn into_abstract_string_builder(self) -> AbstractStringBuilder { self._super }
+}
+
+impl From<StringBuilder> for AbstractStringBuilder {
+    fn from(v: StringBuilder) -> AbstractStringBuilder { v._super }
+}
+
+impl StringBuilder {
     pub fn new() -> Result<StringBuilder> {
         Ok(StringBuilder::default())
     }

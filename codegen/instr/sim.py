@@ -14,6 +14,7 @@ from ..sig_parser import parse_class_type_params as _parse_class_type_params
 from ..type_map import (
     jvm_to_rust, short_cls,
     NEWARRAY_TYPES,
+    parse_descriptor_params, parse_descriptor_return,
 )
 from ..constants import safe_ident as _safe_ident
 from ..types import Instr
@@ -472,7 +473,15 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             val_str = f"Default::default()"
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
             val_str = f"Clone::clone(&{val_str})"
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {val_str};"))
+        # F-1 fix: 非基本类型 val_str 可能包含 .borrow() 调用（如 aaload 的结果），
+        # 若直接写 arr.borrow_mut()[i] = Clone::clone(&arr.borrow()[j]) 会导致
+        # RefCell 同时持有 borrow 和 borrow_mut 而 panic。先提取到 tmp 释放 borrow。
+        arr_str = render_expr(arr_expr)
+        if val_ty_str not in _PRIMITIVE_RUST_TYPES and '.borrow()' in val_str:
+            tmp = sim.fresh('_aastore_tmp')
+            sim.emit(RawStmt(f"let {tmp} = {val_str};"))
+            val_str = tmp
+        sim.emit(RawStmt(f"{arr_str}.borrow_mut()[{render_expr(idx_expr)} as usize] = {val_str};"))
     elif op == 'bastore':
         val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
@@ -513,7 +522,15 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             import re as _re
             _m = _re.match(r'Rc<RefCell<Vec<(.+)>>>$', arr_ty_str)
             elem_ty_str = _m.group(1) if _m else 'Object'
-        sim.push(RawExpr(f"Clone::clone({render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize])"), RsNamed(elem_ty_str))
+        _idx_s = f"{render_expr(idx_expr)} as usize"
+        _arr_s = render_expr(arr_expr)
+        if elem_ty_str in _PRIMITIVE_RUST_TYPES:
+            # 基本类型实现 Copy，borrow()[idx] 自动解引用为 owned 值，直接使用
+            _load_expr = f"{_arr_s}.borrow()[{_idx_s}]"
+        else:
+            # 引用类型：vec[idx] 解引用为 T（move），&vec[idx] 取引用为 &T，Clone::clone(&T) → T
+            _load_expr = f"Clone::clone(&{_arr_s}.borrow()[{_idx_s}])"
+        sim.push(RawExpr(_load_expr), RsNamed(elem_ty_str))
     elif op == 'arraylength':
         arr_expr, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(arr_expr)}.borrow().len() as i32)"), I32)
@@ -564,10 +581,10 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             # 用 <_ as Into<ret_ty>>::into() 显式消歧义，避免多个 From impl 导致的 E0282
             expr_s = f"<_ as Into<{ret_ty}>>::into({expr_s})"
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
-              and ret_ty not in ('Object', '()', actual_ty) and actual_ty != 'Object'
-              and not _is_subtype(ret_ty.split('<')[0], actual_ty.split('<')[0], registry)):
-            # 类型不兼容（如 checkcast Serializable 后 return Comparator<Object>）：
-            # 降级为 Default::default()，至少保证编译通过
+              and ret_ty not in ('Object', '()', actual_ty) and actual_ty != 'Object'):
+            # 类型不兼容（actual 不是 ret 的子类型时，如 checkcast Serializable → return Comparator<Object>）：
+            # 条件 4 已处理 actual→ret 子类型，到这里说明 _is_subtype 未匹配，
+            # 降级为 Default::default() 保证编译通过
             expr_s = 'Default::default()'
         sim.emit(RawStmt(f"return Ok({expr_s});"))
 
@@ -593,6 +610,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             src_name = getattr(src_ty, 'name', str(src_ty))
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
                 expr = RawExpr(f"({render_expr(expr)}).downcast::<{cast_rust}>()")
+            elif src_name != 'Object' and cast_rust not in ('Object', '()', src_name):
+                # 二次 checkcast（非 Object 源类型）：两种具体类型不兼容，用 Default::default() 占位
+                expr = RawExpr('Default::default()')
             sim.push(expr, RsNamed(cast_rust))
     elif op == 'instanceof':
         # JVM 语义: pop objectref, push int(0/1)
@@ -606,7 +626,23 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment and 'makeConcatWithConstants' in comment:
             _gen_string_concat(sim, comment)
         else:
+            # 从注释中解析方法描述符："InvokeDynamic mname:mdesc"
+            _dyn_desc = ''
+            if comment:
+                _colon = comment.rfind(':')
+                if _colon >= 0:
+                    _dyn_desc = comment[_colon + 1:]
+            # 弹出参数（对应被捕获的局部变量槽），修正 invokedynamic 不弹栈导致的栈污染
+            if _dyn_desc.startswith('('):
+                _params = parse_descriptor_params(_dyn_desc)
+                for _ in _params:
+                    if sim.stack:
+                        sim.pop()
             sim.emit(RawStmt(f"/* TODO: {op} {operand} */"))
+            # 推入返回值占位符，保证后续 checkcast / areturn 能获得正确栈深度
+            _ret_desc = parse_descriptor_return(_dyn_desc) if _dyn_desc else 'V'
+            if _ret_desc != 'V':
+                sim.push(RawExpr('Object::default()'), RsNamed('Object'))
 
     # ── 同步（忽略，不支持多线程语义）──
     elif op == 'monitorenter':

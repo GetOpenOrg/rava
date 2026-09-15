@@ -200,7 +200,7 @@ def _coerce_value(val_str: str, val_ty: 'RsType', target: str) -> str:
     if target == src:
         return val_str
     if target == 'i32':
-        if src == 'bool':
+        if src in ('bool', 'u16', 'i8', 'i16'):
             return f"({val_str}) as i32"
         return val_str
     if target == 'bool':

@@ -21,7 +21,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   new_format_map: dict | None = None,
                   workspace_root: str | None = None,
                   user_crate_prefix: str | None = None,
-                  extra_fields: dict | None = None,
+                  full_impl_classes: set | None = None,
                   conflict_map: dict | None = None,
                   skipped_classes: set | None = None,
                   user_sibling_imports: list[str] | None = None) -> str:
@@ -157,13 +157,17 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     if user_sibling_imports:
         cross_imports.extend(user_sibling_imports)
 
+    # 全量手写类（native_impl 文件含 pub struct）：codegen 跳过 struct 生成，改输出 pub use _impl::*
+    _full_impl = ci.name in (full_impl_classes or set())
+
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs)]",
         "use java_runtime::prelude::*;",
         *cross_imports,
         "",
-        _java_class_attr(ci, compiled=True),
     ]
+    if not _full_impl:
+        parts.append(_java_class_attr(ci, compiled=True))
     field_type_prefix = "JField"
 
     inst_fields = [f for f in ci.fields if not f.is_static]
@@ -193,8 +197,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         struct_generic = ''
         impl_header   = f"impl {struct_name}"
 
-    cls_extra_fields = (extra_fields or {}).get(ci.name, [])
-    if inst_fields or cls_extra_fields or _has_super:
+    if not _full_impl and (inst_fields or _has_super):
         field_lines = []
         # _super 字段：嵌入直接父类（T76，替代字段展平）
         if _has_super:
@@ -223,8 +226,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             desc_rust = jvm_to_rust(f.descriptor, registry)
             field_rust = gen_rust if (gen_rust and gen_rust != 'Object') else desc_rust
             field_lines.append(f"    pub {safe_fname}: {field_type_prefix}<{field_rust}>,")
-        for ef_name, ef_type in cls_extra_fields:
-            field_lines.append(f"    pub {ef_name}: {ef_type},")
         # 若有泛型参数但字段中未用到，加 PhantomData 防止 E0392
         if class_type_params:
             phantom_ty = ', '.join(f'std::marker::PhantomData<{p}>' for p in class_type_params)
@@ -233,7 +234,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             field_lines.append(f"    pub _phantom: {phantom_ty},")
         decls = '\n'.join(field_lines)
         parts.append(f"#[derive(Clone, Default, PartialEq)]\npub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
-    else:
+    elif not _full_impl:
         if class_type_params:
             # 无字段但有泛型参数：改用 tuple struct 包含 PhantomData
             if len(class_type_params) == 1:
@@ -246,7 +247,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # T76：为有父类的类生成显式 upcast 方法（as_xxx / into_xxx）
     # 不使用 Deref（Rust 反模式），改用显式方法，语义清晰
-    if _has_super and registry:
+    # 全量手写类的 upcast 由手写文件自行提供，codegen 跳过
+    if _has_super and registry and not _full_impl:
         upcast_lines = [f'{impl_header} {{']
         access_path = '_super'
         cur_super = ci.super_class
@@ -278,7 +280,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # T55：为每个祖先生成 From<Self> for Ancestor（含直接父类 + 所有祖先链）
     # 这让 child.into() 在期望父类类型的位置自动工作，避免 E0308
-    if _has_super and registry:
+    # 全量手写类的 From impl 由手写文件自行提供，codegen 跳过
+    if _has_super and registry and not _full_impl:
         child_full = struct_name
         if class_type_params:
             child_full += '<' + ', '.join(class_type_params) + '>'
@@ -363,6 +366,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if _nf_entry.get('main'):
             main_rel = _nf_entry['main']
             parts.append(f'#[allow(unused_imports, dead_code, unused_variables, non_snake_case, non_camel_case_types)]\n#[path = "{ups}{main_rel}"]\nmod _impl;\n')
+            # 全量手写类：re-export struct + impls，让外部代码仍通过同一路径访问类型
+            if _full_impl:
+                parts.append('pub use self::_impl::*;\n')
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]

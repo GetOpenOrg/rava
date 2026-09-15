@@ -32,8 +32,8 @@
 **位置**：`jdk_classes/src/java/lang/character.rs:605`  
 **根因**：JVM `ireturn` 指令处理时，对于返回 `u16`（char 类型）的方法没有插入 `as i32` 转换。`sim.py` 的 `ireturn` 分支只处理 `bool` → `i32`，未处理 `u16` → `i32`。  
 **影响测试**：TestStreamAdvanced、TestStringOps 及所有包含 `character.rs` 的测试  
-**修复位置**：`codegen/instr/sim.py` — `ireturn` 分支，参考 `_coerce_value` 补充 `u16` case  
-**状态**：🔴 未修复
+**修复位置**：`codegen/instr/coerce.py` — `_coerce_value` 中 `target == 'i32'` 分支补充 `u16/i8/i16`  
+**状态**：✅ 已修复（2026-09-15）
 
 ---
 
@@ -262,7 +262,7 @@ let _tmp = arr.borrow()[j+1].clone();
 arr.borrow_mut()[j] = _tmp;
 ```
 **修复位置**：`codegen/instr/sim.py` — `aastore` 分支，检测 rhs 是否来自同一数组引用  
-**状态**：🔴 未修复
+**状态**：✅ 已修复（2026-09-15）— 对非基本类型 val_str 含 `.borrow()` 时先提取 tmp 变量再赋值
 
 ---
 
@@ -963,3 +963,8 @@ pub trait Printable {
 | 2026-09-15 | `putfield` 泛型类字段赋值时，泛型参数 `T` 被包装为 `Object::from_any(T)` → E0308 | `sim.py` putfield 加 `_is_generic_type_param` 跳过包装（临时补丁 I-1） |
 | 2026-09-15 | T55 传递子类型生成 `.into()` 但无对应 From impl → E0277 | `coerce.py` 新增 `_is_direct_subtype`，sim.py/invoke.py 换用（临时补丁 I-2） |
 | 2026-09-15 | `invokespecial/invokestatic/invokevirtual` 泛型参数被 `Object::from_any` 包装 → E0308 | `invoke.py` 三处调用加 `_is_generic_type_param` 跳过包装（临时补丁 I-1） |
+| 2026-09-15 | I-6 `jvm_clone` 命名原则违规：`clone` → `jvm_clone` 重命名 | 删除 4 处 rename 逻辑，所有 Rust-level clone 改用 `Clone::clone(...)` 完全限定语法 |
+| 2026-09-15 | `invokevirtual Object.clone` 在非 Object 接收者（如 byte[]）上加 `?` → E0277 | `invoke.py:397` 特判 `clone` + 非 Object 类型，发射 `Object::from_any(obj.clone())` |
+| 2026-09-15 | 构造器内 `Clone::clone(this)` 中 `this` 是 owned，需要 `&this` | `sim.py` putfield 区分 `val_str == 'this'` 时发射 `Clone::clone(&this)` |
+| 2026-09-15 | A-1：`u16`/`i8`/`i16` 作为 `ireturn` 值时缺少 `as i32` 转换 | `coerce.py _coerce_value`：`target == 'i32'` 分支补充 `u16/i8/i16` → `as i32` |
+| 2026-09-15 | `aaload` primitive 数组元素用 `Clone::clone` 但 `Vec<i32>[idx]` 是 `i32` 非引用 → E0308 | `sim.py` aaload：primitive 类型直接取值；非 primitive 改为 `Clone::clone(&arr.borrow()[idx])` |

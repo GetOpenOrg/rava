@@ -59,18 +59,17 @@ def _parse_synthetic_fn(line: str) -> dict | None:
 def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
     """扫描 native_impls/ 目录，识别新格式文件（impl super::TypeName { pub fn ... }）。
     返回:
-      new_format_map: {class_binary -> {'methods': set[str], 'main': rel_path, 'ergonomic': rel_path|None}}
-      extra_fields:   {class_binary -> [(field_name, rust_type), ...]}
+      new_format_map:    {class_binary -> {'methods': set[str], 'main': rel_path}}
+      full_impl_classes: {class_binary, ...} — 文件中含 pub struct，由手写文件完整定义 struct
     rel_path 相对于 workspace_root。
-    extra_fields 通过 /// @field name: RustType 注释声明，注入到生成的 struct 中。
     """
     import re as _re
     impls_dir = os.path.join(workspace_root, 'native_impls')
     if not os.path.isdir(impls_dir):
-        return {}, {}
+        return {}, set()
 
     new_format_map: dict = {}
-    extra_fields: dict = {}
+    full_impl_classes: set = set()
 
     def _snake_to_class(s: str) -> str:
         return ''.join(w.capitalize() for w in s.split('_'))
@@ -92,15 +91,9 @@ def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
             except Exception:
                 continue
 
-            # 扫描 @field 注解
-            for line in content.splitlines():
-                stripped = line.strip()
-                if stripped.startswith('/// @field ') and ':' in stripped:
-                    field_decl = stripped[len('/// @field '):].strip()
-                    colon = field_decl.index(':')
-                    fn_name = field_decl[:colon].strip()
-                    ft = field_decl[colon + 1:].strip()
-                    extra_fields.setdefault(class_binary, []).append((fn_name, ft))
+            # 含 pub struct → 手写文件完整定义 struct，codegen 跳过 struct 生成
+            if _re.search(r'^\s*pub struct \w', content, _re.MULTILINE):
+                full_impl_classes.add(class_binary)
 
             # 扫描 pub fn 名字（确定覆盖了哪些方法）
             method_names = {m.group(1) for m in _re.finditer(r'^\s*pub fn\s+(\w+)', content, _re.MULTILINE)}
@@ -109,7 +102,7 @@ def _scan_native_impls(workspace_root: str) -> tuple[dict, dict]:
             entry['methods'].update(method_names)
             entry['main'] = rel
 
-    return new_format_map, extra_fields
+    return new_format_map, full_impl_classes
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None,

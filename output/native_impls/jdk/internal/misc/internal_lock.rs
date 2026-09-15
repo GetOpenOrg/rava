@@ -1,4 +1,4 @@
-// jdk/internal/misc/InternalLock — Rust 实现
+// jdk/internal/misc/InternalLock — 内部边界类（完整手写）
 //
 // JDK 21 的 InternalLock 是对 java.util.concurrent.locks.ReentrantLock 的薄封装，
 // 用于 PrintStream / BufferedWriter 等 I/O 类的同步。
@@ -7,9 +7,27 @@
 use java_runtime::prelude::*;
 use super::*;
 
-/// @field _mutex: java_runtime::MutexHolder
-
 use std::cell::RefCell;
+
+#[java_rta_macros::java_class(
+    binary_name       = "jdk/internal/misc/InternalLock",
+    super_class       = "java/lang/Object",
+    interfaces        = "",
+    access            = "public",
+    modifiers         = "",
+    generic_signature = "",
+    is_interface      = false,
+    is_abstract       = false,
+    is_enum           = false,
+    is_deprecated     = false,
+    source            = "InternalLock.java",
+)]
+#[derive(Clone, Default, PartialEq)]
+pub struct InternalLock {
+    #[cfg_attr(any(), java_field(name = "lock", descriptor = "Ljava/util/concurrent/locks/ReentrantLock;", access = "private", modifiers = "final", is_static = false))]
+    pub lock: JField<Object>,
+    pub _mutex: java_runtime::MutexHolder,
+}
 
 thread_local! {
     // 每线程 guard 栈：支持同线程重入、lock/unlock 跨越方法调用边界。

@@ -102,8 +102,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
 
-    # 扫描 native_impls/ 目录，构建 new_format_map（#[path] mod 方式）和 extra_fields
-    new_format_map, extra_fields_map = _scan_native_impls(out_dir)
+    # 扫描 native_impls/ 目录，构建 new_format_map（#[path] mod 方式）和 full_impl_classes
+    new_format_map, full_impl_classes = _scan_native_impls(out_dir)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
@@ -173,7 +173,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                             call_chain=visited_methods,
                                             new_format_map=new_format_map,
                                             workspace_root=out_dir,
-                                            extra_fields=extra_fields_map,
+                                            full_impl_classes=full_impl_classes,
                                             conflict_map=conflict_map,
                                             skipped_classes=skipped_classes))
             # 更新 mod 树
@@ -321,7 +321,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                         user_crate_prefix='jdk_classes',
                                         new_format_map=new_format_map,
                                         workspace_root=out_dir,
-                                        extra_fields=extra_fields_map,
+                                        full_impl_classes=full_impl_classes,
                                         conflict_map=conflict_map if jdk_class_infos else None,
                                         skipped_classes=skipped_classes if jdk_class_infos else None,
                                         user_sibling_imports=_sibling_imports.get(ci.name)))
