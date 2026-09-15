@@ -1,7 +1,22 @@
 use crate::prelude::*;
 use super::string::String;
+use super::string_builder::StringBuilder;
 
 impl String {
+    #[jvm_native]
+    pub fn new_sb(builder: StringBuilder) -> Result<Self> {
+        let coder = builder._super.coder.get();
+        let count = builder._super.count.get() as usize;
+        let raw = builder._super.value.get();
+        let raw_bytes = raw.borrow();
+        let byte_len = if coder == 0 { count } else { count * 2 };
+        let trimmed: Vec<i8> = raw_bytes[..byte_len.min(raw_bytes.len())].to_vec();
+        let mut this = Self::default();
+        this.value.set(Rc::new(RefCell::new(trimmed)));
+        this.coder.set(coder);
+        Ok(this)
+    }
+
     #[jvm_ext]
     pub fn from_owned(s: std::string::String) -> Self {
         let bytes: Vec<i8> = s.into_bytes().into_iter().map(|b| b as i8).collect();
