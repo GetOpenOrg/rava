@@ -14,15 +14,6 @@ wheels/
 output/target/
 
 # 代码生成产物（由 codegen 脚本生成，不提交）
-# java_runtime/src/java/ 和 java_runtime/src/jdk/ 下是生成的 JDK 翻译 stub
-# 手写基础设施（lib.rs, error.rs, types.rs, object.rs, *_impl.rs）通过例外规则保留
-output/java_runtime/src/java/**/*.rs
-output/java_runtime/src/jdk/**/*.rs
-!output/java_runtime/src/java/**/*_impl.rs
-!output/java_runtime/src/java/**/*_ext.rs
-!output/java_runtime/src/jdk/**/*_impl.rs
-!output/java_runtime/src/jdk/**/*_ext.rs
-!output/java_runtime/src/java/lang/object.rs
 output/user/src/
 output/user/Cargo.toml
 
