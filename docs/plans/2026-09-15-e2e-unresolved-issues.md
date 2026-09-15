@@ -70,11 +70,12 @@
 
 ## B. 编译错误 — 缺失 From impl
 
-### B-1: ~~Arrays_ArrayList → List 缺少 From impl~~ ✅ 已修复（2026-09-15）
+### B-1: ~~Arrays_ArrayList → List 缺少 From impl~~ ⚠️ 编译层修复（语义仍有问题）
 
 **修复方案**：`class_writer.py` T55b 扩展为同时收集祖先类的接口，生成传递 `From` impl。  
 **影响测试**：TestLinkedList、TestComparator、TestStreamAdvanced、TestStreamBasic  
-**状态**：✅ 已修复
+**遗留问题**：当前生成的 `From` impl 实现为 `Default::default()`，丢弃了被转换的具体值（见 Arch-5）。编译可以通过，但运行时接口对象是空的，方法调用会 panic。  
+**状态**：⚠️ 编译错误已消除，运行时语义待修复（依赖 Arch-1）
 
 ---
 
@@ -104,17 +105,29 @@
 
 ## D. 编译错误 — invokedynamic 无法翻译
 
-### D-1: Lambda/方法引用 invokedynamic 生成 `todo!()`
+### D-1: Lambda/方法引用 invokedynamic 未实现
 
-**错误**：`E0308: mismatched types`、`error: internal compiler error`（因 todo! 类型不确定）  
-**位置**：生成代码中所有含 `invokedynamic` 的方法  
-**根因**：`sim.py` 对 `invokedynamic` 生成 `todo!("invokedynamic: ...")` 占位，该表达式类型为 `!`（never），在具体类型上下文中可能引发推断失败。  
+**错误**：后续指令操作错误的栈顶值，生成语义错误的代码（如 `downcast::<Serializable>()`），导致 E0308  
+**位置**：生成代码中所有含 `invokedynamic` 的方法（如 `Comparator.comparingInt`）  
+**实际生成代码**：`/* TODO: invokedynamic 63 */`（注释，不是 `todo!()`）  
+**根因（关键）**：`sim.py` 对 `invokedynamic` 只输出注释，**既不弹出捕获变量，也不压入返回值**。JVM 语义是：消耗 N 个操作数（lambda 捕获的变量），向栈压入 1 个函数式接口实例。  
+当前结果：`invokedynamic` 后栈上仍残留原捕获变量（如 `keyExtractor: Object`），后续 `checkcast Serializable` 将其强转为 `Serializable`，再 `areturn` 时类型与声明 `Comparator<Object>` 不符 → E0308。  
 **影响测试**：TestLambda、TestMethodRef、TestFunctionalInterface、TestComparator、TestStreamBasic、TestStreamAdvanced、TestStreamCollectors（7 个测试）  
-**修复思路**：  
-  - 短期：改为 `Default::default()` 或 `Object::default()`，至少编译通过  
-  - 长期：识别 bootstrap 方法，生成对应的 Rust 闭包包装在 `Object` 中  
+**修复方案**：  
+  - **短期（修复编译）**：解析 invokedynamic 方法描述符确定参数数量，从栈弹出对应操作数；压入 `Object::default()` 占位返回值。这样后续 `checkcast`/`areturn` 拿到正确的 `Object` 类型，不再产生 E0308。  
+  - **长期（修复语义，见 Arch-3）**：识别 bootstrap 方法，生成 Rust 闭包 `Arc<dyn Fn>` 并包装入 `Object`  
 **修复位置**：`codegen/instr/sim.py` — `invokedynamic` 分支  
 **状态**：🔴 未修复
+
+---
+
+### D-2: `areturn` 类型不兼容的 `Default::default()` 兜底（补丁）
+
+**错误**：编译可通过，但运行时语义错误（返回空默认值而非真实值）  
+**位置**：`codegen/instr/sim.py` areturn 分支（lines 566-571）  
+**根因**：当 `actual_ty`（栈顶类型）与 `ret_ty`（声明返回类型）不兼容时，sim.py 降级为 `Default::default()`。这是一个**临时补丁**，真正的类型不兼容来源是 D-1（invokedynamic 栈状态错误）。  
+修复 D-1 后（invokedynamic 短期方案：弹出操作数 + 压入 Object::default()），`checkcast` 的源类型变为 `Object`，`areturn` 可正常处理，此补丁可以删除。  
+**状态**：⚠️ 临时补丁，根本原因是 D-1
 
 ---
 
@@ -195,176 +208,266 @@ let _t1: f64 = Self::sum(Default::default())?;  // 实际 ints 完全没传入
 
 ## 架构层面的根本性问题
 
-以下问题超出局部 bug fix 范畴，需要设计层面解决。每个问题均给出最终目标态的具体实现方案。
+以下问题超出局部 bug fix 范畴，需要设计层面解决。
+
+### 核心发现：`java_class` 宏完全忽略了已有元数据
+
+**每个生成的 struct 上都挂有完整的 Java 字节码元数据**：
+
+```rust
+#[java_rta_macros::java_class(
+    binary_name       = "java/util/ArrayList",
+    super_class       = "java/util/AbstractList",
+    interfaces        = "java/util/List;java/util/RandomAccess;java/lang/Cloneable;java/io/Serializable",
+    is_interface      = false,
+    generic_signature = "<E:Ljava/lang/Object;>Ljava/util/AbstractList<TE;>;...",
+)]
+pub struct ArrayList<E: Clone + Default + 'static> { ... }
+```
+
+但当前 `java_class` 宏的实现是：
+
+```rust
+pub fn java_class(_attr: TokenStream, item: TokenStream) -> TokenStream {
+//                ^^^^^ 下划线前缀 = 完全丢弃，不读取任何属性参数
+```
+
+`binary_name`、`interfaces`、`super_class`、`is_interface`、`generic_signature` 全部被忽略。方法属性 `#[cfg_attr(any(), java_method(...))]` 使用 `cfg_attr(any(), ...)` 包裹，在编译期永远不激活，只是嵌入文档。
+
+**这是所有 Arch 问题的根源**：本可以在 Rust 编译期由宏自动派生的行为，全都降级为 Python 侧脆弱的字符串分析和运行时补丁。
+
+---
+
+### 各 Arch 问题的正确解法：以宏为核心
 
 ---
 
 ### Arch-1: 接口无法携带数据
 
-**问题**：`List<E>`、`Comparable<T>` 等接口在 Rust 中生成为 `struct List<E>(PhantomData<E>)`，不携带任何具体实现类的数据。调用 `list.size()` 等方法时永远 panic（stub）。
+**问题**：`List<E>` 等接口生成为 `struct List<E>(PhantomData<E>)`，不携带任何具体实现类的数据。
 
-**目标态方案：以 `enum` 承载多态 + `impl Trait` 统一接口**
+**目标态方案：`Object` 改为 `Rc<dyn JvmObject>` + 接口改为 Rust trait**
 
-每个接口对应一个同名 `enum`，所有已知实现类作为 enum variant：
+`java_class` 宏读取 `is_interface = true` 后，为接口生成 Rust trait，而非 PhantomData struct：
 
 ```rust
-// 由 codegen 根据全量 BFS 实现类列表自动生成
-pub enum List<E> {
-    ArrayList(ArrayList<E>),
-    LinkedList(LinkedList<E>),
-    ArraysArrayList(Arrays_ArrayList<E>),
-    // ...每个实现类一个 variant
+// java_class 宏看到 is_interface = true，生成：
+pub trait List_Trait {
+    fn size(&self) -> Result<i32>;
+    fn get(&self, index: i32) -> Result<Object>;
+    fn add_obj(&self, e: Object) -> Result<bool>;
+    // ...所有抽象方法由宏从 java_method 属性列表生成
 }
 
-impl<E: Clone + Default + PartialEq> List<E> {
-    pub fn size(&self) -> Result<i32> {
-        match self {
-            List::ArrayList(inner) => inner.size(),
-            List::LinkedList(inner) => inner.size(),
-            List::ArraysArrayList(inner) => inner.size(),
-        }
-    }
-    // 所有接口方法均做 match dispatch
-}
+// 接口引用类型（供变量声明使用）
+pub type List = Object;  // 运行时统一为 Object，通过 JvmObject 动态派发
+```
 
-// From impl 改为指向 enum variant
-impl<E> From<ArrayList<E>> for List<E> {
-    fn from(v: ArrayList<E>) -> Self { List::ArrayList(v) }
+实现类通过宏自动实现 trait：
+```rust
+// java_class 宏看到 interfaces = "java/util/List;..." 后，为 ArrayList 生成：
+impl List_Trait for ArrayList<Object> {
+    fn size(&self) -> Result<i32> { ArrayList::size(self) }
+    fn get(&self, index: i32) -> Result<Object> { ArrayList::get_obj(self, index) }
+    // ...转发到已有方法
+}
+```
+
+`java_runtime` 中 `Object` 改为：
+```rust
+pub struct Object {
+    inner: Rc<dyn JvmObject>,  // 真正的 dyn dispatch
 }
 ```
 
 **codegen 变更**：
-1. `class_writer.py`：发现接口定义时，生成 `enum` 而非 `struct PhantomData`
-2. 分析阶段收集"接口 → 所有实现类"映射（BFS 已有 registry），写进 `InterfaceInfo.implementations`
-3. 为 enum 的每个 variant 生成 match arm，转发到 inner 类型的方法
-4. `From` impl 改为 `List::ArrayList(v)` 而非空转换
+1. `java_rta_macros/src/lib.rs` — `java_class` 宏：读取 `is_interface` / `interfaces` 参数，为接口生成 trait + blanket impls
+2. Python `class_writer.py` T55b 整块可删除（宏接管 From impl 生成）
+3. `java_runtime/src/types.rs` — `Object` 改为 `Rc<dyn JvmObject>`
 
-**影响**：彻底修复 G-1（虚方法派发）和所有集合类接口方法调用错误。
+**影响**：修复所有集合类方法调用、修复 G-1 虚方法派发。
 
 ---
 
 ### Arch-2: `instanceof` 始终返回 `true`
 
-**问题**：`instanceof` 指令当前生成为字面量 `true`，导致类型判断逻辑失效（如 `if (obj instanceof String)` 永远走 true 分支）。
+**问题**：`instanceof` 生成为字面量 `true`，类型判断失效。
 
-**目标态方案：`Object` 携带类型 discriminant**
+**目标态方案：宏从 `binary_name` + 继承链自动派生 `is_instance_of`**
 
-在 `Object` 结构体中加入类型标识，`instanceof` 检查时对比：
+`java_class` 宏读取 `binary_name`、`super_class`、`interfaces`，自动为每个类生成：
 
 ```rust
-// java_runtime/src/types.rs
-pub struct Object {
-    pub _type_id: &'static str,           // 二进制类名，如 "java/lang/String"
-    pub _fields: Rc<RefCell<std::collections::HashMap<String, Box<dyn std::any::Any>>>>,
-}
+// java_class 宏自动生成（无需 Python 侧任何改动）
+impl JvmObject for ArrayList<Object> {
+    fn jvm_type_id(&self) -> &'static str { "java/util/ArrayList" }
 
-// Object::from_any 在转换时捕获具体类型
-impl Object {
-    pub fn from_any<T: 'static>(val: T, type_id: &'static str) -> Self {
-        Object { _type_id: type_id, _fields: ... }
+    fn jvm_is_instance_of(&self, type_id: &str) -> bool {
+        // 宏从 binary_name + super_class chain + interfaces 静态展开
+        matches!(type_id,
+            "java/util/ArrayList"
+            | "java/util/AbstractList"
+            | "java/util/AbstractCollection"
+            | "java/lang/Object"
+            | "java/util/List"        // 来自 interfaces = "..."
+            | "java/util/RandomAccess"
+            | "java/io/Serializable"
+        )
     }
+    // ...
 }
 ```
 
-**codegen 变更**：
-1. `sim.py` — `instanceof` 分支：生成 `(obj._type_id == "java/lang/String")` 而非 `true`
-2. `sim.py` — `checkcast` 分支：生成 `if obj._type_id != "..." { return Err(ClassCastException) }`
-3. `sim.py` — 所有转为 `Object` 的地方（`Object::from_any` 调用）：传入第二参数为当前类的 `BINARY_NAME` 常量（由 `class_writer` 在 struct 上方生成 `const BINARY_NAME: &str = "java/lang/String";`）
-4. `class_writer.py` — 每个生成类顶部加 `const BINARY_NAME: &str = "...";`
+`instanceof` 指令生成：`obj.inner.jvm_is_instance_of("java/lang/String")`  
+`checkcast` 指令生成：断言类型后 downcast，失败则 `ClassCastException`
 
-**影响**：修复 TestCasting、TestPatternMatch 等所有依赖类型判断的测试。
+**注意**：继承链需要传递闭合。宏只能看到当前类的直接父类/接口，`super_class` 的父类需要递归展开。方案：
+- 宏生成时只展开直接层次，传递闭合在运行时通过调用 `super.jvm_is_instance_of()` 完成
+- 或：Python codegen 在 `java_class` 属性中写入完整传递闭合后的 `all_supertypes` 字段，宏直接展开
+
+**codegen 变更**：
+1. `java_rta_macros` — 读取 `binary_name`、`interfaces`，生成 `JvmObject` impl
+2. `java_runtime/src/types.rs` — `Object` 改为 `Rc<dyn JvmObject>`，`isinstance` 方法委托给 `inner`
+3. Python `sim.py` — `isinstance` 生成 `obj.inner.jvm_is_instance_of("java/lang/String")`
+4. Python `class_writer.py` — `java_class` 属性中增加 `all_supertypes` 字段，记录传递闭合超类列表
+
+**影响**：修复 TestCasting、TestPatternMatch 等。
 
 ---
 
 ### Arch-3: `invokedynamic` / Lambda 无法表达
 
-**问题**：Java lambda 编译为 `invokedynamic`，当前 codegen 生成 `todo!("invokedynamic: ...")`，导致类型推断失败（`!` 类型无法统一）。
+**问题**：`invokedynamic` 不维护栈状态（见 D-1），lambda 语义完全丢失。
 
-**目标态方案：闭包包装进 `Object`，函数式接口用 `Arc<dyn Fn>` 表达**
+**目标态方案：函数式接口对应 `dyn Fn` trait，宏自动生成调用 shim**
+
+`java_method` 属性中已有 `generic_signature` 包含函数式接口的完整类型。当接口满足 `@FunctionalInterface` 条件（恰好一个抽象方法），宏生成对应的 `Fn` trait 别名：
 
 ```rust
-// java_runtime/src/types.rs
-// 函数式接口载体（替代 PhantomData struct）
-pub struct FunctionalObject {
-    pub _fn: Arc<dyn Fn(Vec<Object>) -> Result<Object> + 'static>,
-}
+// java_class 宏看到 is_interface = true + 只有一个 is_abstract = true 的方法时：
+// 为 Comparator 生成：
+pub type Comparator_Fn = Arc<dyn Fn(Object, Object) -> Result<i32>>;
 
-impl Object {
-    pub fn from_fn(f: impl Fn(Vec<Object>) -> Result<Object> + 'static) -> Self {
-        // 用 FunctionalObject 包装并存入 Object
-    }
-}
+// invokedynamic 目标类型变为 Object，存储 Arc<dyn Fn>
+impl JvmObject for Comparator_Fn { ... }
 ```
 
-**codegen 变更**：
-1. `sim.py` — `invokedynamic` 分支：解析 bootstrap 方法的 `MethodHandle` 引用，识别 lambda body 对应的合成方法（`lambda$main$0` 等），生成捕获变量 + `Arc::new(move |args| ...)` 闭包
-2. 函数式接口的方法调用（如 `Comparator.compare(a, b)`）：生成 `match obj { FunctionalObject(f) => f(vec![a, b]) }`
-3. 短期过渡：`invokedynamic` 生成 `Object::from_fn(|_| Ok(Object::default()))` 而非 `todo!()`，至少保证编译
+**短期方案（解除编译阻塞）**：
+`sim.py` 的 `invokedynamic` 分支：
+1. 从方法描述符解析参数数量 N
+2. 从栈弹出 N 个操作数
+3. 压入 `Object::default()` 占位值
 
-**影响**：修复 TestLambda、TestMethodRef、TestFunctionalInterface、TestComparator、TestStreamBasic 等 7 个测试的编译错误。
+这样后续 `checkcast`/`areturn` 拿到 `Object` 类型，不再产生 E0308。
+
+**长期方案**：识别 `lambda$main$N` 合成方法，生成 `Arc::new(move |args| ...)` 闭包。
+
+**codegen 变更**：
+1. `sim.py` — `invokedynamic` 分支：解析操作数数量，弹出后压入占位值（短期）
+2. `java_rta_macros` — 识别函数式接口，生成 `Fn` 类型别名（长期）
 
 ---
 
 ### Arch-4: 虚方法派发（`Object.toString()` 不调用具体类型）
 
-**问题**：将具体类型（如 `Point`）转为 `Object` 后调用 `toString()`/`to_print_string()`，不会 dispatch 到 `Point::toString()`，而是返回 `"Object"`。
+**问题**：将具体类型转为 `Object` 后调用 `toString()`，不会派发到具体类型。
 
-**目标态方案：`Object` 内嵌 vtable 函数指针**
+**目标态方案：`Object = Rc<dyn JvmObject>` 天然支持动态派发**
 
-在 `Object` 中存储关键虚方法的函数指针，在 `from_any` 时绑定具体类型实现：
+`Arch-1` 完成后（`Object` 改为 `Rc<dyn JvmObject>`），此问题自动解决：
 
 ```rust
-// java_runtime/src/types.rs
-pub struct Object {
-    pub _type_id: &'static str,
-    pub _to_string: Arc<dyn Fn() -> Result<String> + 'static>,   // String 指 java::lang::String
-    pub _hash_code: Arc<dyn Fn() -> Result<i32> + 'static>,
-    pub _equals: Arc<dyn Fn(&Object) -> Result<bool> + 'static>,
-    pub _fields: Rc<RefCell<std::collections::HashMap<String, Box<dyn std::any::Any>>>>,
+pub trait JvmObject: 'static {
+    fn jvm_type_id(&self) -> &'static str;
+    fn jvm_to_string(&self) -> String;      // 派发到具体类型的 toString()
+    fn jvm_hash_code(&self) -> i32;
+    fn jvm_equals(&self, other: &Object) -> bool;
+    fn jvm_is_instance_of(&self, type_id: &str) -> bool;
+    fn jvm_clone(&self) -> Object;
 }
 
-// 每个生成类实现 JvmObjectBase trait
-pub trait JvmObjectBase {
-    fn to_java_string(&self) -> Result<super::java::lang::String>;
-    fn java_hash_code(&self) -> Result<i32>;
-    fn java_equals(&self, other: &Object) -> Result<bool>;
-}
-
-impl Object {
-    pub fn from_any_with_vtable<T: JvmObjectBase + Clone + 'static>(val: T, type_id: &'static str) -> Self {
-        let val = Arc::new(val);
-        Object {
-            _type_id: type_id,
-            _to_string: Arc::new({
-                let v = val.clone();
-                move || v.to_java_string()
-            }),
-            _hash_code: Arc::new({ let v = val.clone(); move || v.java_hash_code() }),
-            _equals: Arc::new({ let v = val.clone(); move |o| v.java_equals(o) }),
-            _fields: Rc::new(RefCell::new(Default::default())),
-        }
+// java_class 宏自动生成：
+impl JvmObject for Point {
+    fn jvm_to_string(&self) -> String {
+        // 转发到翻译生成的 toString() 方法（若存在）
+        self.toString().unwrap_or_else(|_| format!("{}@...", Self::BINARY_NAME))
     }
-    pub fn to_print_string(&self) -> Result<String> { (self._to_string)() }
+    // ...
 }
 ```
 
-**codegen 变更**：
-1. `class_writer.py`：每个生成类 `impl JvmObjectBase for MyClass`，转发到已生成的 `toString()`、`hashCode()`、`equals()` 方法
-2. `sim.py` — `Object::from_any` 调用点：改为 `Object::from_any_with_vtable(val, MyClass::BINARY_NAME)`
-3. `Object::to_print_string()`：调用 `(self._to_string)()`，触发具体类型的 `toString()`
+`Object::to_print_string()` 调用 `self.inner.jvm_to_string()`，自动 dispatch 到 `Point::toString()`。
 
-**影响**：修复 G-1（TestRecord、TestObjects 等所有涉及 `println(Object)` 的测试）。
+**codegen 变更**：Arch-1 的副产品，不需要额外修改。
 
 ---
 
-### 架构变更优先级
+---
 
-| 优先级 | 架构项 | 解锁测试数 | 前置依赖 |
-|--------|--------|-----------|---------|
-| 1 | **Arch-2（instanceof type tag）** | 5+ | 无 |
-| 2 | **Arch-3（invokedynamic 短期过渡）** | 7 | 无 |
-| 3 | **Arch-1（接口 enum dispatch）** | 10+ | Arch-2（需要 type_id） |
-| 4 | **Arch-4（Object vtable）** | 5+ | Arch-1、Arch-2 |
+### Arch-5: T55b 生成的 `From` impl 丢弃具体类型数据
+
+**问题**：`class_writer.py` T55b 为每个接口生成：
+
+```rust
+impl From<ArrayList<E>> for List<E> {
+    fn from(v: ArrayList<E>) -> List<E> { Default::default() }  // v 被丢弃！
+}
+```
+
+**根因**：Python 侧 T55b 是应该由 `java_class` 宏完成的工作。宏已经有 `interfaces = "java/util/List;..."` 信息，完全可以自动生成正确的转型。  
+当前 `Default::default()` 是因为不知道 `List<E>` 的内部结构（PhantomData struct），宏升级后（Arch-1 接口改为可携带数据的 trait/enum），From impl 自然正确。
+
+**正确方案**：Arch-1 完成后，`java_class` 宏读取 `interfaces` 字段自动生成 From impl，Python T55b 整块删除。  
+**状态**：🔴 运行时语义错误，Arch-1 完成后自动修复
+
+---
+
+### Arch-6: `_rust_type_to_binary` 短名逆查可用 `BINARY_NAME` 常量替代
+
+**问题**：`_is_subtype`、`_find_field_super_prefix` 等函数通过 Rust 短类名（`"Comparator"`）逆查 JVM 二进制名（`"java/util/Comparator"`），反查可能匹配错误（同短名的不同包类）。
+
+**根因**：`binary_name` 已经在 `java_class` 属性里，宏却忽略了它。若宏自动为每个类生成 `const BINARY_NAME: &'static str = "java/util/Comparator"`，则 Python 侧根本不需要做逆查，直接用这个常量即可。
+
+**正确方案**：
+1. `java_class` 宏读取 `binary_name` 参数，生成 `pub const BINARY_NAME: &'static str = "...";`
+2. Python `codegen/instr/coerce.py` 的 `_rust_type_to_binary` 被 `codegen` 侧的 registry 直接查找（已有 `ci.name` 是 binary name）取代，不再做字符串模糊反查
+3. `_is_subtype` 参数改为传 JVM 二进制名，不再依赖 Rust 短名转换
+
+**状态**：🔴 潜在错误，Arch-2 重构时一并修复
+
+---
+
+### 架构变更优先级与依赖关系
+
+```
+D-1 短期（invokedynamic 弹出+占位）   → 立即解锁 7 个 lambda 测试编译
+     │
+     ▼
+java_class 宏重写（核心前置工作）：
+  ├── 读取 binary_name → 生成 BINARY_NAME const
+  ├── 读取 interfaces  → 自动生成 From impl（替代 T55b）
+  ├── 读取 is_interface → 不同代码路径
+  └── 派生 JvmObject trait（含 jvm_type_id、is_instance_of）
+     │
+     ├─→ Arch-2（instanceof 正确实现）    → 5+ 测试
+     │
+     ├─→ Arch-6（_rust_type_to_binary 消除）→ 稳定性
+     │
+     └─→ Object 改为 Rc<dyn JvmObject>（核心类型重构）
+              │
+              ├─→ Arch-1（接口 trait + dyn dispatch）→ 10+ 测试
+              ├─→ Arch-4（虚方法派发，Arch-1 副产品）→ 5+ 测试
+              └─→ Arch-5（From impl 正确，Arch-1 副产品）→ 自动修复
+```
+
+| 顺序 | 工作项 | 影响 | 前置 |
+|------|--------|------|------|
+| 1 | **D-1 短期**（invokedynamic 弹/压占位） | 消除 7 个测试的 E0308 | 无 |
+| 2 | **`java_class` 宏重写**（读取所有元数据） | 所有 Arch 的基础 | 无 |
+| 3 | **Arch-2**（instanceof + BINARY_NAME） | 5+ 测试 + 消除 Arch-6 | 宏重写 |
+| 4 | **Object 改 `Rc<dyn JvmObject>`** | 基础类型重构 | 宏重写 |
+| 5 | **Arch-1**（接口 → Rust trait + dyn dispatch） | 10+ 测试语义修复 | Object 重构 |
+| 6 | **Arch-3 长期**（invokedynamic → 真实闭包） | Lambda 语义 | Arch-1 |
 
 ---
 
@@ -378,6 +481,6 @@ impl Object {
 | 2026-09-15 | `InternalLock` PartialEq 推导失败 | 引入 `MutexHolder` 包装类型 |
 | 2026-09-15 | default 方法命名冲突（E0592 reversed） | `class_writer` 预扫描 `used_rust_names` |
 | 2026-09-15 | `Arrays_ArrayList → List` From impl 缺失 | `class_writer` T55b 扩展祖先类接口收集 |
-| 2026-09-15 | `areturn` 只检查直接子类，传递子类不生成 `.into()` | `sim.py` areturn 改用 `_is_subtype` |
+| 2026-09-15 | `areturn` 只检查直接子类，传递子类不生成 `.into()` | `sim.py` areturn 改用 `_is_subtype`（仅对非 invokedynamic 场景有效，见 D-1） |
 | 2026-09-15 | `native_impl string.rs` 与字节码翻译重复定义（E0592） | 删除 native_impl 中的重复方法 |
 | 2026-09-15 | `array_list.rs iterator()` 返回 `Iterator<Object>` 找不到类型 | 改回 `Result<Object>` |
