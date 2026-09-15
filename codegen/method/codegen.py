@@ -538,6 +538,10 @@ def gen_method_body(
 
     process_block(0, len(instrs), sim, entries, "    ")
 
+    # 栈下溢：控制流分析失败，整个方法退化为 panic!("stub: ...") 避免生成无法编译的残缺代码
+    if sim.underflow_occurred:
+        raise RuntimeError(f"stack underflow in {method.class_name}.{method.name}")
+
     # ── IR mutation 分析（渲染前）────────────────────────────────────
     ir_stmts = [item for _, item in entries if not isinstance(item, str)]
     _analyze_mutation(ir_stmts)

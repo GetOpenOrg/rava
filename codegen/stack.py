@@ -89,6 +89,7 @@ class StackSim:
         self._hint_types = slot_hint_types or {}  # slot → precise RsType from LocalVariableTypeTable
         self._current_depth: int                     = 0
         self._slot_decl_depth: dict[int, int]        = {}  # slot → 首次声明时的嵌套深度
+        self.underflow_occurred: bool                = False  # 记录是否发生过栈下溢
 
         def _is_wide(rt: RsType) -> bool:
             """long (i64) 和 double (f64) 在 JVM 中各占 2 个局部变量槽。"""
@@ -147,7 +148,9 @@ class StackSim:
         if self.stack:
             return self.stack.pop()
         # 栈下溢：常见于 catch 块隐式压栈的异常对象、复杂控制流分析失败
-        return (RawExpr('todo!("stack underflow")'), I32)
+        # 标记下溢，gen_method_body 会把整个方法退化为 panic!("stub: ...")
+        self.underflow_occurred = True
+        return (RawExpr('panic!("stack underflow")'), I32)
 
     # ── 语句输出 ─────────────────────────────────────────────────────────────
 
