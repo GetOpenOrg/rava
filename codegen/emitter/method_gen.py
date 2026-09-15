@@ -154,9 +154,6 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     else:
         ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
     fn_name = safe_ident(rust_name or m.name)
-    # Java clone() 与 Rust Clone trait 同名冲突：重命名为 jvm_clone
-    if fn_name == 'clone':
-        fn_name = 'jvm_clone'
     label = 'native' if m.is_native else 'stub'
     body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
 

@@ -20,6 +20,7 @@ from ..cfg import (
     cmp_op, neg_cmp_op, _TWO_OP_BRANCH_OPS,
 )
 from ..instr import sim_instr
+from ..instr.invoke import _is_generic_type_param
 from ..render import render_stmt, render_expr, render_type
 from ..rs_ir import (
     RsNamed, RsPrimitive, RsType,
@@ -99,9 +100,6 @@ def gen_method_body(
         rust_fn_name = mangle_name(method.name, method.descriptor)
     else:
         rust_fn_name = safe_ident(method.name)
-        # Java clone() 与 Rust Clone::clone() 同名冲突：重命名为 jvm_clone
-        if rust_fn_name == 'clone':
-            rust_fn_name = 'jvm_clone'
         # ergonomic @jvm_rename 指令：定义侧同步重命名（与调用侧的 _mangle_if_overloaded 保持一致）
         erg = get_ergonomic_jvm_rename(method.class_name, method.name)
         if erg is not None:
@@ -471,11 +469,11 @@ def gen_method_body(
                     # 三元：两个分支各留一个值在栈上，无语句无嵌套输出
                     tv = render_expr(then_s.stack[-1][0])
                     ev = render_expr(else_s.stack[-1][0])
-                    # `this` 是 &Self（let this = self;），不能直接用于值位置，需要 .clone()
+                    # `this` 是 &Self（let this = self;），不能直接用于值位置，需要 Clone::clone
                     if tv == 'this':
-                        tv = 'this.clone()'
+                        tv = 'Clone::clone(this)'
                     if ev == 'this':
-                        ev = 'this.clone()'
+                        ev = 'Clone::clone(this)'
                     ty  = then_s.stack[-1][1]
                     ety = else_s.stack[-1][1]
                     ty_str  = render_type(ty)
@@ -484,7 +482,7 @@ def gen_method_body(
                     if ty_str != ety_str:
                         _int_types = {'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64'}
                         _prim_types = _int_types | {'bool', 'f32', 'f64'}
-                        _null_exprs = {'Object::default()', 'Object::default().clone()'}
+                        _null_exprs = {'Object::default()', 'Clone::clone(&Object::default())'}
                         if ty_str == 'bool' and ety_str in _int_types:
                             ev = f"({ev} != 0)"
                         elif ety_str == 'bool' and ty_str in _int_types:
@@ -494,8 +492,8 @@ def gen_method_body(
                             ev = 'Default::default()'
                         elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object':
                             ev = f"({ev}).downcast::<{ty_str}>()"
-                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object':
-                            ev = f"Object::from_any({ev}.clone())"
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and not _is_generic_type_param(ety_str):
+                            ev = f"Object::from_any(Clone::clone(&{ev}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             ev = f"({ev} as {ty_str})"
                         # else: both are non-primitive structs, leave as-is and hope types match
@@ -508,16 +506,16 @@ def gen_method_body(
                     ety_str = render_type(ety)
                     then_val = render_expr(then_s.stack[-1][0])
                     else_val = render_expr(else_s.stack[-1][0])
-                    # `this` 是 &Self，不能直接用于值位置，需要 .clone()
+                    # `this` 是 &Self，不能直接用于值位置，需要 Clone::clone
                     if then_val == 'this':
-                        then_val = 'this.clone()'
+                        then_val = 'Clone::clone(this)'
                     if else_val == 'this':
-                        else_val = 'this.clone()'
+                        else_val = 'Clone::clone(this)'
                     # 类型不一致时做强转（与三元表达式分支保持一致）
                     if ty_str != ety_str:
                         _int_types = {'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64'}
                         _prim_types = _int_types | {'bool', 'f32', 'f64'}
-                        _null_exprs = {'Object::default()', 'Object::default().clone()'}
+                        _null_exprs = {'Object::default()', 'Clone::clone(&Object::default())'}
                         if ty_str == 'bool' and ety_str in _int_types:
                             else_val = f"({else_val} != 0)"
                         elif ety_str == 'bool' and ty_str in _int_types:
@@ -527,8 +525,8 @@ def gen_method_body(
                             else_val = 'Default::default()'
                         elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object':
                             else_val = f"({else_val}).downcast::<{ty_str}>()"
-                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object':
-                            else_val = f"Object::from_any({else_val}.clone())"
+                        elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and not _is_generic_type_param(ety_str):
+                            else_val = f"Object::from_any(Clone::clone(&{else_val}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             else_val = f"({else_val} as {ty_str})"
                     # 同步子 sim 的计数器，防止合并变量名与嵌套 if/else 的合并变量名碰撞

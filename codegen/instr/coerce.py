@@ -457,8 +457,8 @@ def _class_known(cls_short: str, registry: dict | None) -> bool:
     return False
 
 
-_JAVA_RUST_NAME_CONFLICTS = frozenset({'clone'})
-_JAVA_RUST_RENAME = {'clone': 'jvm_clone'}
+_JAVA_RUST_NAME_CONFLICTS = frozenset()
+_JAVA_RUST_RENAME: dict[str, str] = {}
 
 
 def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dict | None) -> str:

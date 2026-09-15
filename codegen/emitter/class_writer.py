@@ -523,8 +523,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         # 若 new_format_map 覆盖了此方法，跳过（_impl 模块已提供实现）
         _nf_covered = (_nf_entry or {}).get('methods', set())
         fn_name_check = safe_ident(rust_name or m.name)
-        if fn_name_check == 'clone':
-            fn_name_check = 'jvm_clone'
         if fn_name_check in _nf_covered:
             continue
 
