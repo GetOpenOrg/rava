@@ -347,12 +347,21 @@ def _decode_bytecode(code: bytes, pool: list, bootstrap_methods: list[dict] | No
                 mname_dyn = _utf8(pool, nat[1])
                 mdesc_dyn = _utf8(pool, nat[2])
                 comment = f'InvokeDynamic {mname_dyn}:{mdesc_dyn}'
-                # 嵌入 makeConcatWithConstants 模板
+                # 嵌入 makeConcatWithConstants 模板 或 Arch-3 lambda 信息
                 bsm_list = bootstrap_methods or []
                 if bsm_list and bsm_idx < len(bsm_list):
-                    tmpl = bsm_list[bsm_idx].get('template')
+                    bsm = bsm_list[bsm_idx]
+                    tmpl = bsm.get('template')
                     if tmpl is not None:
                         comment += f' template:{tmpl}'
+                    else:
+                        # Arch-3: lambda — 嵌入实现方法引用 + SAM 类型描述符
+                        impl = bsm.get('impl_method')
+                        sam  = bsm.get('sam_type')
+                        if impl:
+                            comment += f' impl:{impl}'
+                        if sam:
+                            comment += f' samtype:{sam}'
         elif op == 0xbc:   # newarray
             atype = code[pos]; pos += 1
             operand = _NEWARRAY_TYPES.get(atype, str(atype))
@@ -459,7 +468,28 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
             cp_entry = pool[arg_indices[0]] if arg_indices[0] < len(pool) else None
             if cp_entry and cp_entry[0] == 'String':
                 template = _utf8(pool, cp_entry[1])
-        result.append({'method_ref': method_ref, 'arg_indices': arg_indices, 'template': template})
+        # Arch-3: 对 LambdaMetafactory 提取 SAM 类型 + 实现方法信息
+        sam_type = None    # args[0]: SAM 方法类型描述符
+        impl_method = None  # args[1]: 实现方法 ClassName.name:desc
+        bsm_entry = pool[method_ref] if method_ref < len(pool) else None
+        if bsm_entry and bsm_entry[0] == 'MethodHandle':
+            bsm_ref_str = _ref_to_str(pool, bsm_entry[2])
+            if 'LambdaMetafactory' in bsm_ref_str and len(arg_indices) >= 2:
+                # arg[0] = samMethodType（MethodType）
+                arg0 = pool[arg_indices[0]] if arg_indices[0] < len(pool) else None
+                if arg0 and arg0[0] == 'MethodType':
+                    sam_type = _utf8(pool, arg0[1])
+                # arg[1] = implMethod（MethodHandle → Methodref）
+                arg1 = pool[arg_indices[1]] if arg_indices[1] < len(pool) else None
+                if arg1 and arg1[0] == 'MethodHandle':
+                    impl_method = _ref_to_str(pool, arg1[2])
+        result.append({
+            'method_ref': method_ref,
+            'arg_indices': arg_indices,
+            'template': template,
+            'sam_type': sam_type,
+            'impl_method': impl_method,
+        })
     return result
 
 

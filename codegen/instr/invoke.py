@@ -470,6 +470,18 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         cls_binary = _rust_type_to_binary(cls, registry) or cls
         subtypes = _get_all_subtypes_ordered(cls_binary, registry)
         cls_rust = jvm_to_rust(f'L{cls_binary};', registry)
+        # Arch-3: 闭包回退 —— Rc<dyn Fn(...)> downcast（lambda / 方法引用）
+        # SAM 参数列表对应 invokevirtual/invokeinterface 的实际参数类型
+        _sam_ptypes = [jvm_to_rust(p, registry) for p in params]
+        _fn_type = (f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)})'
+                    f' -> crate::error::Result<{rust_ret}>>')
+        if rust_ret == '()':
+            _closure_branch = (f'if let Some(__f) = {obj_e}.0.as_any()'
+                               f'.downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})?; }}')
+        else:
+            _closure_branch = (f'if let Some(__f) = {obj_e}.0.as_any()'
+                               f'.downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }}')
+
         # 只有当目标类有已知子类时，才生成 dispatch 链（否则退化为简单 downcast）
         if subtypes:
             all_types = subtypes + [cls_binary]  # 叶→根
@@ -483,6 +495,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})?; }}")
                 else:
                     branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})? }}")
+            branches.append(_closure_branch)
             if rust_ret == '()':
                 dispatch_code = ' else '.join(branches)
                 sim.emit(RawStmt(f"{dispatch_code}"))
@@ -491,6 +504,15 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
                 sim.push(Var(v), RsNamed(rust_ret))
             return
+        # 无 subtypes 时（接口无已知实现类），单独生成闭包 dispatch + 占位
+        v = sim.fresh('_vdispatch')
+        if rust_ret == '()':
+            sim.emit(RawStmt(_closure_branch))
+        else:
+            dispatch_expr = _closure_branch + f" else {{ Default::default() }}"
+            sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
+            sim.push(Var(v), RsNamed(rust_ret))
+        return
     if rust_ret == '()':
         if not obj_is_bare:
             sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))
