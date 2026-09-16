@@ -9,7 +9,7 @@ from ..rs_ir import (
 )
 from ..render import render_expr, render_type
 from ..type_map import (
-    jvm_to_rust, short_cls, parse_descriptor_params,
+    jvm_to_rust, short_cls, parse_descriptor_params, is_jdk,
     parse_class_type_params as _parse_class_type_params,
     parse_method_param_types as _parse_method_param_types,
 )
@@ -473,6 +473,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         # cls 是 Rust 短类名（$ 已替换为 _），需转回 binary name 查继承链
         cls_binary = _rust_type_to_binary(cls, registry) or cls
         subtypes = _get_all_subtypes_ordered(cls_binary, registry)
+        # 跨 crate 防泄漏：JDK 类文件落在 java_runtime crate，不能引用 user crate
+        # 的类型。batch 并集 registry 会把用户测试类也列为 Comparable 等接口的
+        # 子类，烘焙进 java_runtime 后产生 E0425（类型不在本 crate 作用域）。
+        # 因此 JDK 类的分派链只枚举 JDK 子类；user 类文件可引用两者（依赖方向合法）。
+        if is_jdk(cls_binary):
+            subtypes = [s for s in subtypes if is_jdk(s)]
         cls_rust = jvm_to_rust(f'L{cls_binary};', registry)
         # Arch-3: 闭包回退 —— Rc<dyn Fn(...)> downcast（lambda / 方法引用）
         # SAM 参数列表对应 invokevirtual/invokeinterface 的实际参数类型

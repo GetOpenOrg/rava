@@ -117,15 +117,17 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         os.path.join(jdk_src, 'java', 'util', 'function', 'supplier.rs'),
         os.path.join(jdk_src, 'java', 'util', 'function', 'function.rs'),
     }
-    # 将 git 追踪的「手写」.rs 文件加入 PERMANENT：这类文件由人手维护，
-    # codegen 既不删除也不覆盖。
-    #
-    # 判别方式与 _write / _impl 扫描一致 —— 看文件里有没有自动生成标记
+    # 将 git 追踪的 .rs 文件纳入 _PERMANENT：仅「无生成标记」的文件视为手写，
+    # codegen 不覆盖。判别方式与 _impl 扫描一致 —— 看文件里有没有自动生成标记
     # `java_rta_macros::java_class`（属性宏形态与块宏形态都含该子串）：
-    #   含标记 → codegen 生成物，可被删除/覆盖（历史提交里混入了生成文件）
-    #   不含标记 → 真正手写（object.rs、*_impl.rs、*_ext.rs 等），永久保护
-    # 早期版本把「git 追踪」直接等同于「手写」，导致已提交的生成文件被永久冻结：
-    # 文件内容停留在旧宏格式，且被删后 codegen 只声明模块不写文件（E0583）。
+    #   含标记 → codegen 生成物，允许覆盖（历史提交里混入了生成文件）
+    #   不含标记 → 真正手写（object.rs、*_impl.rs、*_ext.rs 等），禁止覆盖
+    # 早期版本把「git 追踪」直接等同于「手写」并塞进 _PERMANENT，导致已提交的
+    # 生成文件被永久冻结：内容停留在旧宏格式，无法随 java_class! 块宏迁移。
+    #
+    # 注意：git 追踪的生成文件**不**因此获得删除保护——非 batch 清理仍然会删除
+    # 作用域外的生成文件（单测试 = 窄作用域语料，这是 dev loop 的既有语义）；
+    # 被删文件可随时通过 batch 重生成或 git checkout 恢复。
     try:
         import subprocess as _subprocess
         _git_root = os.path.dirname(out_dir)
@@ -313,12 +315,14 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         safe = f'r#{name}' if name in _RUST_KEYWORDS else name
         return f'pub use {safe}::*;'
 
-    # batch 模式：从磁盘全量重建 jdk_mod_tree，合并所有历次批量转译积累的 stub 文件。
-    # 原因：每次 write_cargo_project(batch_bin=True) 的 jdk_mod_tree 只包含当前测试
-    # 的 JDK 类；若直接用它写 lib.rs/mod.rs，会抹掉之前测试的 stub 声明（E0432）。
+    # 从磁盘全量重建 jdk_mod_tree，合并所有历次转译积累的生成文件。
+    # 原因：每次 write_cargo_project() 的 jdk_mod_tree 只包含当前测试的 JDK 类；
+    # 若直接用它写 lib.rs/mod.rs，会抹掉其他已存在文件的模块声明（E0432/E0433）。
     # 解决：写完当前测试的 .rs 文件后，扫描磁盘收集全部 .rs，自底向上传播目录，
     # 只声明有文件的目录（避免 E0583），再写 lib.rs/mod.rs。
-    if batch_bin and os.path.isdir(jdk_src):
+    # batch 与非 batch 均启用：清理后磁盘上仍可能有 _PERMANENT 手写文件与本次
+    # 作用域外的幸存文件，mod.rs 必须如实声明磁盘上的全部模块。
+    if os.path.isdir(jdk_src):
         jdk_mod_tree = {}
         for root, _dirs, files in os.walk(jdk_src):
             for fname in files:
@@ -328,8 +332,17 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 # `mod X_impl;` 声明。若此处也计入 children，会再生成一条
                 # `pub mod X_impl; pub use X_impl::*;`，导致 E0428（重复定义）
                 # 与 E0592/E0034（glob 重导出歧义）。
+                # 例外：含生成标记的 *_impl.rs 是碰巧命名的生成类（如
+                # Collectors$CollectorImpl → collectors_collector_impl.rs），
+                # 必须计入 children 才有 pub mod 声明（否则 E0425）。
                 if fname.endswith('_impl.rs') or fname.endswith('_ext.rs'):
-                    continue
+                    _fpath_scan = os.path.join(root, fname)
+                    try:
+                        with open(_fpath_scan, encoding='utf-8') as _fs:
+                            if 'java_rta_macros::java_class' not in _fs.read():
+                                continue  # 真正手写共置文件，由 companion_mods 声明
+                    except Exception:
+                        continue  # 读取失败时保守视为手写
                 jdk_mod_tree.setdefault(root, set()).add(fname[:-3])
         _changed = True
         while _changed:
