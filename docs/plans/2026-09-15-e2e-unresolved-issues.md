@@ -988,3 +988,8 @@ pub trait Printable {
 | 2026-09-16 | `_validate_field_type` 只检查基础类型，不检查嵌套泛型参数 → Certificate/Constructor/TypeVariable E0425 | `class_writer.py` 新增 `_extract_type_names` 提取所有类型名（含嵌套），`_validate_field_type` 验证全部；不在注册表中的类型回退到原始描述符 |
 | 2026-09-16 | `load_local` 回退路径使用 `f"local_{slot}"` 而非 `_loc_names`，导致同一槽在跨 StackSim 路径中名称不一致 → 变量未声明 E0425 | `stack.py` `load_local` 回退改为 `_safe_name(_loc_names.get(slot, f"local_{slot}"))` |
 | 2026-09-16 | C-2 `_hoist_if_vars` 两处逻辑错误导致 else 块变量无法正确提升 → pattern.rs group0() `tail` E0425 | `vars.py` 1) `outer_decls` 新增 `outer_decl_first_k` 跟踪顶层声明位置，若声明晚于 ref_idx 则仍需提升并将其转为赋值；2) ref_nesting 停止条件 off-by-one：改为 `>= entry_nesting[block_k]`（不加 +1） |
+| 2026-09-16 | C-3a：`_sig_param_valid` 大写启发式过宽 → Collection/Comparator 等 E0425 | `codegen.py`/`method_gen.py` 改用 `_permanent_shorts` frozenset 替代首字母大写判断 |
+| 2026-09-16 | C-3b：PERMANENT functional interface 参数（Supplier/BinaryOperator 等）传 Object → E0308 | `codegen.py`/`method_gen.py` 新增 `_is_perm_iface_param` 函数，强制参数位置使用 Object |
+| 2026-09-16 | C-3c：`_lookup_method_sig_params` 返回 Supplier<A>/BinaryOperator<A> → 调用方生成 Clone::clone 而非 Object::from_any → E0308 | `invoke.py` 在 resolved 列表后过滤 PERMANENT functional interface 类型设为 None |
+| 2026-09-16 | C-3d：putfield Vec<Object>（checkcast 擦除）赋给 Vec<E>（泛型字段）→ E0308 | `sim.py` putfield 通过 registry 查泛型字段类型并替换 downcast 目标字符串 |
+| 2026-09-16 | C-3e：`List<E>` 缺少 `stream()` 方法 → E0599 | 新增 `java/util/list_impl.rs`，为 `List<E>` 补充 `stream() -> Result<Stream<Object>>` 存根 |
