@@ -67,7 +67,19 @@ def _lookup_method_sig_params(
                     resolved.append(None)   # 擦除，使用 jvm_to_rust(descriptor) 降级
                 else:
                     resolved.append(t)
-            return resolved
+            # PERMANENT functional interface 参数（Supplier<A>、BinaryOperator<A> 等）
+            # 在生成的 stub 中统一用 Object，调用方也必须降级，否则类型不匹配
+            import re as _re_iface
+            _perm_iface_names = frozenset({'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator'})
+            final_resolved: list[str | None] = []
+            for t in resolved:
+                if t is not None:
+                    _m = _re_iface.match(r'^(\w+)(?:<|$)', t)
+                    if _m and _m.group(1) in _perm_iface_names:
+                        final_resolved.append(None)
+                        continue
+                final_resolved.append(t)
+            return final_resolved
     return None
 
 

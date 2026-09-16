@@ -2,15 +2,11 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 
 #[java_rta_macros::java_class(
@@ -40,10 +36,6 @@ impl Thread_State {
 
 impl From<Thread_State> for Enum<Object> {
     fn from(v: Thread_State) -> Enum<Object> { v._super }
-}
-
-impl From<Thread_State> for Comparable<Object> {
-    fn from(v: Thread_State) -> Comparable<Object> { Default::default() }
 }
 
 impl Thread_State {

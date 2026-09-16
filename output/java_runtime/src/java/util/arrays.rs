@@ -2,17 +2,12 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
-use crate::jdk::internal::util::ArraysSupport;
 
 #[java_rta_macros::java_class(
     binary_name       = "java/util/Arrays",
@@ -202,12 +197,12 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "parallelSort", descriptor = "([Ljava/lang/Comparable;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T::Ljava/lang/Comparable<-TT;>;>([TT;)V"))]
-    pub fn parallelSort_arr_cmp(a: Rc<RefCell<Vec<Comparable<Object>>>>) -> Result<()> {
+    pub fn parallelSort_arr_cmp(a: Rc<RefCell<Vec<Object>>>) -> Result<()> {
         panic!("stub: java/util/Arrays.parallelSort:([Ljava/lang/Comparable;)V")
     }
 
     #[cfg_attr(any(), java_method(name = "parallelSort", descriptor = "([Ljava/lang/Comparable;II)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T::Ljava/lang/Comparable<-TT;>;>([TT;II)V"))]
-    pub fn parallelSort_arr_cmp_i_i(a: Rc<RefCell<Vec<Comparable<Object>>>>, fromIndex: i32, toIndex: i32) -> Result<()> {
+    pub fn parallelSort_arr_cmp_i_i(a: Rc<RefCell<Vec<Object>>>, fromIndex: i32, toIndex: i32) -> Result<()> {
         panic!("stub: java/util/Arrays.parallelSort:([Ljava/lang/Comparable;II)V")
     }
 
@@ -642,29 +637,13 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "([Ljava/lang/Object;I)[Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;I)[TT;"))]
-    // java: copyOf([Ljava/lang/Object;I)[Ljava/lang/Object;
-    pub fn copyOf_arr_obj_i(mut original: Rc<RefCell<Vec<Object>>>, mut newLength: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
-        let _t0: Object = Object::default();
-        let _t1: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i_class(Clone::clone(&original), newLength, Clone::clone(&_t0))?;
-        Ok(_t1)
+    pub fn copyOf_arr_obj_i(original: Rc<RefCell<Vec<Object>>>, newLength: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
+        panic!("stub: java/util/Arrays.copyOf:([Ljava/lang/Object;I)[Ljava/lang/Object;")
     }
 
     #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;U:Ljava/lang/Object;>([TU;ILjava/lang/Class<+[TT;>;)[TT;"))]
-    // java: copyOf([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;
-    pub fn copyOf_arr_obj_i_class(mut original: Rc<RefCell<Vec<Object>>>, mut newLength: i32, mut newType: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
-        let mut _merged2: Rc<RefCell<Vec<Object>>>;
-        if newType == Object::default() {
-            let mut _arr0: Rc<RefCell<Vec<Object>>> = Rc::new(RefCell::new(vec![Default::default(); newLength as usize]));
-            _merged2 = _arr0;
-        } else {
-            let _t0 = newType.getComponentType()?;
-            let _t1: Object = Array::newInstance_class_i(Clone::clone(&_t0), newLength)?;
-            _merged2 = (_t1).downcast::<Rc<RefCell<Vec<Object>>>>();
-        }
-        let mut copy: Rc<RefCell<Vec<Object>>> = _merged2;
-        let _t3: i32 = Math::min_i_i((original.borrow().len() as i32), newLength)?;
-        System::arraycopy(Object::from_any(original.clone()), 0i32, Object::from_any(copy.clone()), 0i32, _t3)?;
-        Ok(copy)
+    pub fn copyOf_arr_obj_i_class(original: Rc<RefCell<Vec<Object>>>, newLength: i32, newType: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
+        panic!("stub: java/util/Arrays.copyOf:([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;")
     }
 
     #[cfg_attr(any(), java_method(name = "copyOf", descriptor = "([BI)[B", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -803,8 +782,8 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "asList", descriptor = "([Ljava/lang/Object;)Ljava/util/List;", access = "public", modifiers = "static varargs", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;)Ljava/util/List<TT;>;"))]
-    pub fn asList(a: Rc<RefCell<Vec<Object>>>) -> Result<Object> {
-        panic!("stub: java/util/Arrays.asList:([Ljava/lang/Object;)Ljava/util/List;")
+    pub fn asList(mut a: Rc<RefCell<Vec<Object>>>) -> Result<List<Object>> {
+        Ok(<_ as Into<List<Object>>>::into(Arrays_ArrayList::<Object>::new(Default::default())?))
     }
 
     #[cfg_attr(any(), java_method(name = "hashCode", descriptor = "([J)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -923,7 +902,7 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "deepToString", descriptor = "([Ljava/lang/Object;Ljava/lang/StringBuilder;Ljava/util/Set;)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "([Ljava/lang/Object;Ljava/lang/StringBuilder;Ljava/util/Set<[Ljava/lang/Object;>;)V"))]
-    pub fn deepToString_arr_obj_sb_set(a: Rc<RefCell<Vec<Object>>>, buf: Object, dejaVu: Object) -> Result<()> {
+    pub fn deepToString_arr_obj_sb_set(a: Rc<RefCell<Vec<Object>>>, buf: Object, dejaVu: Set<Object>) -> Result<()> {
         panic!("stub: java/util/Arrays.deepToString:([Ljava/lang/Object;Ljava/lang/StringBuilder;Ljava/util/Set;)V")
     }
 
@@ -1008,12 +987,12 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "stream", descriptor = "([Ljava/lang/Object;)Ljava/util/stream/Stream;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;)Ljava/util/stream/Stream<TT;>;"))]
-    pub fn stream_arr_obj(array: Rc<RefCell<Vec<Object>>>) -> Result<Object> {
+    pub fn stream_arr_obj(array: Rc<RefCell<Vec<Object>>>) -> Result<Stream<Object>> {
         panic!("stub: java/util/Arrays.stream:([Ljava/lang/Object;)Ljava/util/stream/Stream;")
     }
 
     #[cfg_attr(any(), java_method(name = "stream", descriptor = "([Ljava/lang/Object;II)Ljava/util/stream/Stream;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;II)Ljava/util/stream/Stream<TT;>;"))]
-    pub fn stream_arr_obj_i_i(array: Rc<RefCell<Vec<Object>>>, startInclusive: i32, endExclusive: i32) -> Result<Object> {
+    pub fn stream_arr_obj_i_i(array: Rc<RefCell<Vec<Object>>>, startInclusive: i32, endExclusive: i32) -> Result<Stream<Object>> {
         panic!("stub: java/util/Arrays.stream:([Ljava/lang/Object;II)Ljava/util/stream/Stream;")
     }
 
@@ -1168,12 +1147,12 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "compare", descriptor = "([Ljava/lang/Comparable;[Ljava/lang/Comparable;)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T::Ljava/lang/Comparable<-TT;>;>([TT;[TT;)I"))]
-    pub fn compare_arr_cmp_arr_cmp(a: Rc<RefCell<Vec<Comparable<Object>>>>, b: Rc<RefCell<Vec<Comparable<Object>>>>) -> Result<i32> {
+    pub fn compare_arr_cmp_arr_cmp(a: Rc<RefCell<Vec<Object>>>, b: Rc<RefCell<Vec<Object>>>) -> Result<i32> {
         panic!("stub: java/util/Arrays.compare:([Ljava/lang/Comparable;[Ljava/lang/Comparable;)I")
     }
 
     #[cfg_attr(any(), java_method(name = "compare", descriptor = "([Ljava/lang/Comparable;II[Ljava/lang/Comparable;II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T::Ljava/lang/Comparable<-TT;>;>([TT;II[TT;II)I"))]
-    pub fn compare_arr_cmp_i_i_arr_cmp_i_i(a: Rc<RefCell<Vec<Comparable<Object>>>>, aFromIndex: i32, aToIndex: i32, b: Rc<RefCell<Vec<Comparable<Object>>>>, bFromIndex: i32, bToIndex: i32) -> Result<i32> {
+    pub fn compare_arr_cmp_i_i_arr_cmp_i_i(a: Rc<RefCell<Vec<Object>>>, aFromIndex: i32, aToIndex: i32, b: Rc<RefCell<Vec<Object>>>, bFromIndex: i32, bToIndex: i32) -> Result<i32> {
         panic!("stub: java/util/Arrays.compare:([Ljava/lang/Comparable;II[Ljava/lang/Comparable;II)I")
     }
 

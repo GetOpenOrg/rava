@@ -649,10 +649,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             (ci.name, m.name, m.descriptor) in call_chain
         )
         if m.is_native or m.is_abstract:
-            stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry)
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry, class_type_params=class_type_params)
             method_blocks.append(attr_line + '\n' + stub)
         elif not in_call_chain or stub_bodies:
-            stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry)
+            stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry, class_type_params=class_type_params)
             method_blocks.append(attr_line + '\n' + stub)
         else:
             try:
@@ -679,7 +679,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     import traceback as _tb
                     print(f"[DEBUG] stub fallback for {ci.name}.{m.name}{m.descriptor}: {e}", file=__import__('sys').stderr)
                     _tb.print_exc()
-                stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry)
+                stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry, class_type_params=class_type_params)
                 method_blocks.append(attr_line + '\n' + stub)
 
     # 接口 default 方法继承：当类实现接口但未覆盖其 default 方法时，自动生成继承实现
@@ -764,10 +764,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         )
                         method_blocks.append(dm_attr + '\n' + dm_body)
                     except Exception:
-                        dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry)
+                        dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry, class_type_params=class_type_params)
                         method_blocks.append(dm_attr + '\n' + dm_stub)
                 else:
-                    dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry)
+                    dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry, class_type_params=class_type_params)
                     method_blocks.append(dm_attr + '\n' + dm_stub)
 
     # Record 类（super_class == java/lang/Record）：覆盖 invokedynamic 无法翻译的方法

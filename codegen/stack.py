@@ -187,6 +187,16 @@ class StackSim:
                 hint_base = hint.name if isinstance(hint, RsNamed) else hint.name
                 if hint_base == ty.name or (isinstance(hint, RsGeneric) and hint.name == ty.name):
                     ty = hint
+                elif (isinstance(hint, RsNamed)
+                      and 'Vec<' in hint.name and 'Vec<' in ty.name
+                      and hint.name != ty.name
+                      and isinstance(expr, RawExpr) and '.downcast::<' in expr.code):
+                    # Vec<Object> (checkcast 擦除) ↔ Vec<E> (LVT 类型参数)：
+                    # 替换 downcast 目标为 hint 类型，使字段赋值类型一致
+                    dc_pos = expr.code.index('.downcast::<')
+                    inner = expr.code[:dc_pos]
+                    expr = RawExpr(f"{inner}.downcast::<{hint.name}>()")
+                    ty = hint
         # null（aconst_null）赋给非 Object 提示类型时：Object::default() → Default::default()
         # 让显式类型注解决定具体类型，避免类型不匹配
         if src_is_object and hint is not None and isinstance(expr, Lit) and expr.value == 'Object::default()':

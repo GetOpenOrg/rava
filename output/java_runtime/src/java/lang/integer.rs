@@ -2,15 +2,11 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 
 #[java_rta_macros::java_class(
@@ -44,10 +40,6 @@ impl From<Integer> for Number {
     fn from(v: Integer) -> Number { v._super }
 }
 
-impl From<Integer> for Comparable<Object> {
-    fn from(v: Integer) -> Comparable<Object> { Default::default() }
-}
-
 impl Integer {
     #[cfg_attr(any(), java_field(name = "MIN_VALUE", descriptor = "I", access = "public", modifiers = "static final", is_static = true, constant_value = "-2147483648"))]
     // static field: MIN_VALUE:I
@@ -63,7 +55,7 @@ impl Integer {
 
     #[cfg_attr(any(), java_field(name = "TYPE", descriptor = "Ljava/lang/Class;", access = "public", modifiers = "static final", is_static = true, generic_signature = "Ljava/lang/Class<Ljava/lang/Integer;>;"))]
     // static field: TYPE:Ljava/lang/Class;
-    pub fn TYPE() -> Class<i32> {
+    pub fn TYPE() -> Object {
         panic!("stub: java/lang/Integer.TYPE:Ljava/lang/Class;")
     }
 
@@ -295,7 +287,8 @@ impl Integer {
 
     #[cfg_attr(any(), java_method(name = "intValue", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn intValue(&self) -> Result<i32> {
-        panic!("stub: java/lang/Integer.intValue:()I")
+        let this = self;
+        Ok(this.value.get())
     }
 
     #[cfg_attr(any(), java_method(name = "longValue", descriptor = "()J", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -354,15 +347,13 @@ impl Integer {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/Integer;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo(&self, mut anotherInteger: i32) -> Result<i32> {
-        let this = self;
-        let _t0: i32 = Integer::compare(this.value.get(), anotherInteger.value.get())?;
-        Ok(_t0)
+    pub fn compareTo(&self, anotherInteger: i32) -> Result<i32> {
+        panic!("stub: java/lang/Integer.compareTo:(Ljava/lang/Integer;)I")
     }
 
     #[cfg_attr(any(), java_method(name = "compare", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compare(mut x: i32, mut y: i32) -> Result<i32> {
-        Ok(((if x < y { (-1i32 != 0) } else { x != y })) as i32)
+    pub fn compare(x: i32, y: i32) -> Result<i32> {
+        panic!("stub: java/lang/Integer.compare:(II)I")
     }
 
     #[cfg_attr(any(), java_method(name = "compareUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

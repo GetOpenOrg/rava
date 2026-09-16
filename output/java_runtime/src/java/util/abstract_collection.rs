@@ -2,17 +2,12 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
-use crate::jdk::internal::util::ArraysSupport;
 
 #[java_rta_macros::java_class(
     binary_name       = "java/util/AbstractCollection",
@@ -75,7 +70,7 @@ impl<E: Clone + Default + 'static> AbstractCollection<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)Z"))]
-    pub fn add(&self, e: Object) -> Result<bool> {
+    pub fn add(&self, e: E) -> Result<bool> {
         panic!("stub: java/util/AbstractCollection.add:(Ljava/lang/Object;)Z")
     }
 

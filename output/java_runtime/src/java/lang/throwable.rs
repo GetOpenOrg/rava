@@ -2,15 +2,11 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::misc::InternalLock;
 
@@ -42,7 +38,7 @@ pub struct Throwable {
     #[cfg_attr(any(), java_field(name = "depth", descriptor = "I", access = "private", modifiers = "transient", is_static = false))]
     pub depth: JField<i32>,
     #[cfg_attr(any(), java_field(name = "suppressedExceptions", descriptor = "Ljava/util/List;", access = "private", modifiers = "", is_static = false, generic_signature = "Ljava/util/List<Ljava/lang/Throwable;>;"))]
-    pub suppressedExceptions: JField<Object>,
+    pub suppressedExceptions: JField<List<Throwable>>,
 }
 
 impl Throwable {
@@ -60,7 +56,7 @@ impl Throwable {
 
     #[cfg_attr(any(), java_field(name = "SUPPRESSED_SENTINEL", descriptor = "Ljava/util/List;", access = "private", modifiers = "static final", is_static = true, generic_signature = "Ljava/util/List<Ljava/lang/Throwable;>;"))]
     // static field: SUPPRESSED_SENTINEL:Ljava/util/List;
-    pub fn SUPPRESSED_SENTINEL() -> Object {
+    pub fn SUPPRESSED_SENTINEL() -> List<Throwable> {
         panic!("stub: java/lang/Throwable.SUPPRESSED_SENTINEL:Ljava/util/List;")
     }
 
@@ -191,7 +187,7 @@ impl Throwable {
     }
 
     #[cfg_attr(any(), java_method(name = "printEnclosedStackTrace", descriptor = "(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set<Ljava/lang/Throwable;>;)V"))]
-    pub fn printEnclosedStackTrace(&self, s: Object, enclosingTrace: Rc<RefCell<Vec<Object>>>, caption: String, prefix: String, dejaVu: Object) -> Result<()> {
+    pub fn printEnclosedStackTrace(&self, s: Object, enclosingTrace: Rc<RefCell<Vec<Object>>>, caption: String, prefix: String, dejaVu: Set<Object>) -> Result<()> {
         panic!("stub: java/lang/Throwable.printEnclosedStackTrace:(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V")
     }
 
@@ -226,7 +222,7 @@ impl Throwable {
     }
 
     #[cfg_attr(any(), java_method(name = "validateSuppressedExceptionsList", descriptor = "(Ljava/util/List;)I", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException", generic_signature = "(Ljava/util/List<Ljava/lang/Throwable;>;)I"))]
-    pub fn validateSuppressedExceptionsList(&self, deserSuppressedExceptions: Object) -> Result<i32> {
+    pub fn validateSuppressedExceptionsList(&self, deserSuppressedExceptions: List<Object>) -> Result<i32> {
         panic!("stub: java/lang/Throwable.validateSuppressedExceptionsList:(Ljava/util/List;)I")
     }
 

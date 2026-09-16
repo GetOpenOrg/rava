@@ -2,15 +2,11 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::util::Preconditions;
 
@@ -78,8 +74,12 @@ impl Objects {
     }
 
     #[cfg_attr(any(), java_method(name = "requireNonNull", descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>(TT;)TT;"))]
-    pub fn requireNonNull_obj(obj: Object) -> Result<Object> {
-        panic!("stub: java/util/Objects.requireNonNull:(Ljava/lang/Object;)Ljava/lang/Object;")
+    // java: requireNonNull(Ljava/lang/Object;)Ljava/lang/Object;
+    pub fn requireNonNull_obj(mut obj: Object) -> Result<Object> {
+        if _is_jnull(&obj) {
+            return Err(JvmError::Custom("athrow".to_owned()));
+        }
+        Ok(obj)
     }
 
     #[cfg_attr(any(), java_method(name = "requireNonNull", descriptor = "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>(TT;Ljava/lang/String;)TT;"))]
@@ -113,10 +113,8 @@ impl Objects {
     }
 
     #[cfg_attr(any(), java_method(name = "checkIndex", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: checkIndex(II)I
-    pub fn checkIndex_i_i(mut index: i32, mut length: i32) -> Result<i32> {
-        let _t0: i32 = Preconditions::checkIndex_i_i_bifunc(index, length, Default::default())?;
-        Ok(_t0)
+    pub fn checkIndex_i_i(index: i32, length: i32) -> Result<i32> {
+        panic!("stub: java/util/Objects.checkIndex:(II)I")
     }
 
     #[cfg_attr(any(), java_method(name = "checkFromToIndex", descriptor = "(III)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

@@ -110,6 +110,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     _PERMANENT = {
         os.path.join(jdk_src, 'java', 'lang', 'object.rs'),
         os.path.join(jdk_src, 'java', 'util', 'iterator.rs'),
+        os.path.join(jdk_src, 'java', 'util', 'function', 'bi_consumer.rs'),
+        os.path.join(jdk_src, 'java', 'util', 'function', 'binary_operator.rs'),
+        os.path.join(jdk_src, 'java', 'util', 'function', 'supplier.rs'),
+        os.path.join(jdk_src, 'java', 'util', 'function', 'function.rs'),
     }
     if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):
@@ -233,6 +237,27 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 jdk_mod_tree.setdefault(parent, set()).add(part)
                 parent = os.path.join(parent, part)
             jdk_mod_tree.setdefault(parent, set()).add(mod_name)
+
+    # 非 batch 模式：_PERMANENT 手写文件不在调用链中，不会被 jdk_class_infos 覆盖，
+    # 但它们存在于磁盘，需要手动添加到 mod_tree，否则 mod.rs 不会声明对应模块。
+    if not batch_bin:
+        for _perm_path in _PERMANENT:
+            if not os.path.exists(_perm_path):
+                continue
+            # 计算相对于 jdk_src 的路径
+            try:
+                _rel = os.path.relpath(_perm_path, jdk_src)
+            except ValueError:
+                continue
+            _parts = _rel.replace('\\', '/').split('/')
+            if not _parts or not _parts[-1].endswith('.rs'):
+                continue
+            _mod_name = _parts[-1][:-3]  # 去掉 .rs 后缀
+            _parent = jdk_src
+            for _part in _parts[:-1]:
+                jdk_mod_tree.setdefault(_parent, set()).add(_part)
+                _parent = os.path.join(_parent, _part)
+            jdk_mod_tree.setdefault(_parent, set()).add(_mod_name)
 
     def _mod_decl(name: str) -> str:
         """生成 pub mod 声明，对 Rust 关键字用 r# 转义。"""

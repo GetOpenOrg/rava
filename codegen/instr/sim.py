@@ -353,10 +353,33 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         val_expr, val_ty = sim.pop()
         obj_expr, obj_ty = sim.pop()
         if comment:
-            _, fname, fdesc = _parse_field_ref(comment)
+            cls_owner, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'i32'
+            # 当字段类型是擦除数组（Vec<Object>）时，尝试从 registry 取泛型字段类型
+            # 以便使用类型参数版本（如 Vec<E>）避免 E0308
+            if ftype.startswith('Rc<RefCell<Vec<Object') and registry and cls_owner:
+                _ci = registry.get(cls_owner)
+                if _ci:
+                    _ctparams = _parse_class_type_params(_ci.generic_signature) if _ci.generic_signature else []
+                    for _fi in (_ci.fields or []):
+                        if _fi.name == fname and getattr(_fi, 'generic_signature', None):
+                            _gen = _parse_field_type(_fi.generic_signature, _ctparams)
+                            if _gen and _gen != ftype:
+                                ftype = _gen
+                                break
             val_str_raw = render_expr(val_expr)
             val_ty_name = render_type(val_ty)
+            # Vec<Object>(擦除) ↔ Vec<E>(泛型)：当 ftype 是参数化 Vec 而 val 是擦除 Vec 时，
+            # 将 val 的 downcast 目标类型替换为泛型版本，使字段赋值类型一致
+            if (ftype != val_ty_name
+                    and 'Vec<' in ftype and 'Vec<Object>' in val_ty_name
+                    and isinstance(val_expr, RawExpr)
+                    and 'downcast::<Rc<RefCell<Vec<Object>>>>' in val_str_raw):
+                val_str_raw = val_str_raw.replace(
+                    'downcast::<Rc<RefCell<Vec<Object>>>>',
+                    f'downcast::<{ftype}>'
+                )
+                val_ty_name = ftype
             # null 值（aconst_null → Object::default()）赋给具体类型字段时用 Default::default()
             null_coerce = _coerce_from_null(val_str_raw, ftype)
             if null_coerce is not None:

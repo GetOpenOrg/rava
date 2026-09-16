@@ -2,15 +2,11 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 use crate::jdk::internal::misc::VM;
 
@@ -544,7 +540,7 @@ impl Thread {
     }
 
     #[cfg_attr(any(), java_method(name = "getAllStackTraces", descriptor = "()Ljava/util/Map;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Map<Ljava/lang/Thread;[Ljava/lang/StackTraceElement;>;"))]
-    pub fn getAllStackTraces() -> Result<Object> {
+    pub fn getAllStackTraces() -> Result<Map<Object, Object>> {
         panic!("stub: java/lang/Thread.getAllStackTraces:()Ljava/util/Map;")
     }
 

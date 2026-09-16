@@ -72,17 +72,55 @@ def gen_method_body(
     switch_map       = find_switches(instrs)
     param_types      = method.param_types
 
-    # 参数类型：如果泛型签名提供了类型变量，优先使用
+    # 参数类型：如果泛型签名提供了类型变量或更具体的参数化类型，优先使用
+    def _sig_param_valid(sp: str) -> bool:
+        """检查 generic_signature 派生的参数类型是否可用。
+        满足以下任一条件则有效：
+          1. sp 是类级类型参数（T/E/K/V 等）
+          2. sp 中所有标识符均为已知类型（内建/类级参数/注册表中存在/大写开头的 Java 类名）
+        大写开头名称视为合法 Java 短类名（可能由 glob import 引入），只拒绝
+        全小写且不在内建集合的标识符（如未知 Rust 语法符）。
+        """
+        if sp in _class_tparams:
+            return True
+        _builtin = frozenset({
+            'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
+            'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
+        })
+        _reg_shorts = (
+            {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
+            if registry else set()
+        )
+        # PERMANENT 手写 stub 的短名（glob import 引入，不在 registry 中）
+        _permanent_shorts = frozenset({
+            'Iterator', 'BiConsumer', 'BinaryOperator', 'Supplier', 'Function',
+        })
+        import re as _re
+        for name in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', sp):
+            if name in _builtin or name in _class_tparams or name in _reg_shorts or name in _permanent_shorts:
+                continue
+            return False
+        return True
+
+    # PERMANENT functional interface 类型在参数位置用擦除 Object（Java 类型擦除语义：
+    # Supplier<Map<K,V>> 和 Supplier<A> 在 JVM 运行时是同一类型，Rust 无法隐式转换）
+    _perm_iface_names = frozenset({'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator'})
+    import re as _re2
+    def _is_perm_iface_param(sp: str) -> bool:
+        m = _re2.match(r'^(\w+)(?:<|$)', sp)
+        return bool(m and m.group(1) in _perm_iface_names)
+
     if sig_param_types and len(sig_param_types) == len(param_types):
+        jps = [jvm_to_rust(t, registry) for t in param_types]
         rust_param_types = [
-            sp if sp in _class_tparams else jp
-            for sp, jp in zip(sig_param_types, [jvm_to_rust(t, registry) for t in param_types])
+            sp if (_sig_param_valid(sp) and not _is_perm_iface_param(sp)) else jp
+            for sp, jp in zip(sig_param_types, jps)
         ]
     else:
         rust_param_types = [jvm_to_rust(t, registry) for t in param_types]
 
-    # 返回类型：如果泛型签名返回值是类型变量，优先使用
-    if sig_ret_type and sig_ret_type in _class_tparams:
+    # 返回类型：如果泛型签名返回值是有效类型（类型变量或更具体的参数化类型），优先使用
+    if sig_ret_type and _sig_param_valid(sig_ret_type):
         rust_ret = sig_ret_type
     else:
         rust_ret = jvm_to_rust(method.return_type, registry)

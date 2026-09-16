@@ -150,12 +150,63 @@ def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple
 
 
 def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = None,
-                     registry: dict | None = None) -> str:
+                     registry: dict | None = None,
+                     class_type_params: list | None = None) -> str:
     """为 native / abstract / stub 方法生成 panic! 存根。"""
-    from ..type_map import jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return
+    from ..type_map import (
+        jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return,
+        parse_class_type_params, parse_method_param_types,
+    )
     params = parse_descriptor_params(m.descriptor)
     ret    = parse_descriptor_return(m.descriptor)
     rust_ret = jvm_to_rust(ret, registry)
+
+    _ctparams: list[str] = class_type_params or (
+        parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+    )
+
+    # 从 generic_signature 提取更具体的参数类型（与 gen_method_body 对齐）
+    sig_param_types: list[str] = []
+    if m.generic_signature and _ctparams:
+        sig_param_types, _ = parse_method_param_types(m.generic_signature, _ctparams)
+        if len(sig_param_types) != len(params):
+            sig_param_types = []
+
+    def _sig_param_valid(sp: str) -> bool:
+        if sp in _ctparams:
+            return True
+        _builtin = frozenset({
+            'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
+            'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
+        })
+        _reg_shorts = (
+            {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
+            if registry else set()
+        )
+        # PERMANENT 手写 stub 的短名（glob import 引入，不在 registry 中）
+        _permanent_shorts = frozenset({
+            'Iterator', 'BiConsumer', 'BinaryOperator', 'Supplier', 'Function',
+        })
+        import re as _re
+        for name in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', sp):
+            if name in _builtin or name in _ctparams or name in _reg_shorts or name in _permanent_shorts:
+                continue
+            return False
+        return True
+
+    # PERMANENT functional interface 类型在参数位置强制使用 Object（Java 类型擦除语义）
+    _perm_iface_names = frozenset({'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator'})
+    import re as _re2
+    def _is_perm_iface_param(sp: str) -> bool:
+        m = _re2.match(r'^(\w+)(?:<|$)', sp)
+        return bool(m and m.group(1) in _perm_iface_names)
+
+    def _param_rust_type(i: int, desc_p: str) -> str:
+        if sig_param_types and i < len(sig_param_types):
+            sp = sig_param_types[i]
+            if _sig_param_valid(sp) and not _is_perm_iface_param(sp):
+                return sp
+        return jvm_to_rust(desc_p, registry)
 
     # 构建参数列表（参数名需转义 $ 和 Rust 关键字）
     raw_names = [m.local_names.get(i + (0 if m.is_static else 1), f'arg{i}')
@@ -173,9 +224,12 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             deduped.append(n)
     arg_names = deduped
     # 静态方法用 sig_type（Vec<T> → &[T]），与 gen_method_body 保持一致
-    param_type_fn = (lambda p: sig_type(jvm_to_rust(p, registry))) if m.is_static else (lambda p: jvm_to_rust(p, registry))
+    def param_type_fn(i: int, p: str) -> str:
+        pt = _param_rust_type(i, p)
+        return sig_type(pt) if m.is_static else pt
+
     args_str = ', '.join(
-        f'{name}: {param_type_fn(p)}' for name, p in zip(arg_names, params)
+        f'{name}: {param_type_fn(i, p)}' for i, (name, p) in enumerate(zip(arg_names, params))
     )
 
     if m.is_static or m.is_constructor:

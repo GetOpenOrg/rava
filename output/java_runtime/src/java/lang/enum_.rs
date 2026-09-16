@@ -2,15 +2,11 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 
 #[java_rta_macros::java_class(
@@ -37,10 +33,6 @@ pub struct Enum<E: Clone + Default + 'static> {
     #[cfg_attr(any(), java_field(name = "hash", descriptor = "I", access = "private", modifiers = "", is_static = false))]
     pub hash: JField<i32>,
     pub _phantom: std::marker::PhantomData<E>,
-}
-
-impl<E: Clone + Default + 'static> From<Enum<E>> for Comparable<E> {
-    fn from(v: Enum<E>) -> Comparable<E> { Default::default() }
 }
 
 impl<E: Clone + Default + 'static> Enum<E> {
@@ -80,7 +72,7 @@ impl<E: Clone + Default + 'static> Enum<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/Enum;)I", access = "public", modifiers = "final", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)I"))]
-    pub fn compareTo(&self, o: Enum<Object>) -> Result<i32> {
+    pub fn compareTo(&self, o: E) -> Result<i32> {
         panic!("stub: java/lang/Enum.compareTo:(Ljava/lang/Enum;)I")
     }
 

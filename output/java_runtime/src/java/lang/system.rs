@@ -2,17 +2,12 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
-use crate::jdk::internal::misc::Unsafe;
 use crate::jdk::internal::misc::VM;
 
 #[java_rta_macros::java_class(
@@ -246,7 +241,7 @@ impl System {
     }
 
     #[cfg_attr(any(), java_method(name = "getenv", descriptor = "()Ljava/util/Map;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;"))]
-    pub fn getenv() -> Result<Object> {
+    pub fn getenv() -> Result<Map<Object, Object>> {
         panic!("stub: java/lang/System.getenv:()Ljava/util/Map;")
     }
 
@@ -301,7 +296,7 @@ impl System {
     }
 
     #[cfg_attr(any(), java_method(name = "createProperties", descriptor = "(Ljava/util/Map;)Ljava/util/Properties;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;)Ljava/util/Properties;"))]
-    pub fn createProperties(initialProps: Object) -> Result<Object> {
+    pub fn createProperties(initialProps: Map<Object, Object>) -> Result<Object> {
         panic!("stub: java/lang/System.createProperties:(Ljava/util/Map;)Ljava/util/Properties;")
     }
 

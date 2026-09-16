@@ -2,15 +2,11 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
-use crate::java::lang::r#ref::*;
-use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
-use crate::sun::reflect::generics::factory::*;
-use crate::sun::reflect::generics::repository::*;
-use crate::sun::reflect::generics::scope::*;
 use crate::sun::security::util::*;
 
 #[java_rta_macros::java_class(
@@ -26,7 +22,7 @@ use crate::sun::security::util::*;
     is_deprecated     = false,
     source            = "AbstractList.java",
     inner_classes     = "java/util/AbstractList$Itr:java/util/AbstractList:Itr:2;java/util/AbstractList$ListItr:java/util/AbstractList:ListItr:2;java/util/AbstractList$RandomAccessSubList:java/util/AbstractList:RandomAccessSubList:10;java/util/AbstractList$SubList:java/util/AbstractList:SubList:10;java/util/AbstractList$RandomAccessSpliterator:java/util/AbstractList:RandomAccessSpliterator:24;java/util/AbstractList$SubList$1:::0",
-    all_supertypes    = "java/lang/Object;java/util/AbstractCollection;java/util/AbstractList;java/util/Collection;java/util/List",
+    all_supertypes    = "java/lang/Object;java/util/AbstractCollection;java/util/AbstractList;java/util/Collection;java/util/List;java/util/SequencedCollection",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct AbstractList<E: Clone + Default + 'static> {
@@ -45,6 +41,10 @@ impl<E: Clone + Default + 'static> From<AbstractList<E>> for AbstractCollection<
     fn from(v: AbstractList<E>) -> AbstractCollection<E> { v._super }
 }
 
+impl<E: Clone + Default + 'static> From<AbstractList<E>> for List<E> {
+    fn from(v: AbstractList<E>) -> List<E> { Default::default() }
+}
+
 impl<E: Clone + Default + 'static> AbstractList<E> {
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "protected", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn new() -> Result<Self> {
@@ -55,7 +55,7 @@ impl<E: Clone + Default + 'static> AbstractList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)Z"))]
-    pub fn add_obj(&self, e: Object) -> Result<bool> {
+    pub fn add_obj(&self, e: E) -> Result<bool> {
         panic!("stub: java/util/AbstractList.add:(Ljava/lang/Object;)Z")
     }
 
@@ -65,12 +65,12 @@ impl<E: Clone + Default + 'static> AbstractList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "set", descriptor = "(ILjava/lang/Object;)Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(ITE;)TE;"))]
-    pub fn set(&self, index: i32, element: Object) -> Result<Object> {
+    pub fn set(&self, index: i32, element: E) -> Result<Object> {
         panic!("stub: java/util/AbstractList.set:(ILjava/lang/Object;)Ljava/lang/Object;")
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(ILjava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(ITE;)V"))]
-    pub fn add_i_obj(&self, index: i32, element: Object) -> Result<()> {
+    pub fn add_i_obj(&self, index: i32, element: E) -> Result<()> {
         panic!("stub: java/util/AbstractList.add:(ILjava/lang/Object;)V")
     }
 
@@ -115,7 +115,7 @@ impl<E: Clone + Default + 'static> AbstractList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "subList", descriptor = "(II)Ljava/util/List;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(II)Ljava/util/List<TE;>;"))]
-    pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<Object> {
+    pub fn subList(&self, fromIndex: i32, toIndex: i32) -> Result<List<Object>> {
         panic!("stub: java/util/AbstractList.subList:(II)Ljava/util/List;")
     }
 
@@ -147,5 +147,55 @@ impl<E: Clone + Default + 'static> AbstractList<E> {
     #[cfg_attr(any(), java_method(name = "outOfBoundsMsg", descriptor = "(I)Ljava/lang/String;", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn outOfBoundsMsg(&self, index: i32) -> Result<String> {
         panic!("stub: java/util/AbstractList.outOfBoundsMsg:(I)Ljava/lang/String;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "replaceAll", descriptor = "(Ljava/util/function/UnaryOperator;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/UnaryOperator<TE;>;)V"))]
+    pub fn replaceAll(&self, operator: Object) -> Result<()> {
+        panic!("stub: java/util/AbstractList.replaceAll:(Ljava/util/function/UnaryOperator;)V")
+    }
+
+    #[cfg_attr(any(), java_method(name = "sort", descriptor = "(Ljava/util/Comparator;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Comparator<-TE;>;)V"))]
+    pub fn sort(&self, c: Object) -> Result<()> {
+        panic!("stub: java/util/AbstractList.sort:(Ljava/util/Comparator;)V")
+    }
+
+    #[cfg_attr(any(), java_method(name = "spliterator", descriptor = "()Ljava/util/Spliterator;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Spliterator<TE;>;"))]
+    pub fn spliterator(&self) -> Result<Object> {
+        panic!("stub: java/util/AbstractList.spliterator:()Ljava/util/Spliterator;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "addFirst", descriptor = "(Ljava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)V"))]
+    pub fn addFirst(&self, e: E) -> Result<()> {
+        panic!("stub: java/util/AbstractList.addFirst:(Ljava/lang/Object;)V")
+    }
+
+    #[cfg_attr(any(), java_method(name = "addLast", descriptor = "(Ljava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)V"))]
+    pub fn addLast(&self, e: E) -> Result<()> {
+        panic!("stub: java/util/AbstractList.addLast:(Ljava/lang/Object;)V")
+    }
+
+    #[cfg_attr(any(), java_method(name = "getFirst", descriptor = "()Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()TE;"))]
+    pub fn getFirst(&self) -> Result<Object> {
+        panic!("stub: java/util/AbstractList.getFirst:()Ljava/lang/Object;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "getLast", descriptor = "()Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()TE;"))]
+    pub fn getLast(&self) -> Result<Object> {
+        panic!("stub: java/util/AbstractList.getLast:()Ljava/lang/Object;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "removeFirst", descriptor = "()Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()TE;"))]
+    pub fn removeFirst(&self) -> Result<Object> {
+        panic!("stub: java/util/AbstractList.removeFirst:()Ljava/lang/Object;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "removeLast", descriptor = "()Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()TE;"))]
+    pub fn removeLast(&self) -> Result<Object> {
+        panic!("stub: java/util/AbstractList.removeLast:()Ljava/lang/Object;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "reversed", descriptor = "()Ljava/util/List;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/List<TE;>;"))]
+    pub fn reversed(&self) -> Result<List<Object>> {
+        panic!("stub: java/util/AbstractList.reversed:()Ljava/util/List;")
     }
 }
