@@ -379,12 +379,12 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
 
 # ── Generic Signature 公开 API ──────────────────────────────────
 
-def parse_field_type(sig: str, class_type_params: list[str]) -> str:
+def parse_field_type(sig: str, class_type_params: list[str], registry=None) -> str:
     """从字段级 Signature 解析 Rust 类型字符串。"""
     if not sig:
         return ''
     try:
-        rust_type, _ = _parse_one_type(sig, 0, class_type_params)
+        rust_type, _ = _parse_one_type(sig, 0, class_type_params, registry)
         return rust_type
     except Exception:
         return ''

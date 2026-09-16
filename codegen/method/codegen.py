@@ -192,7 +192,7 @@ def gen_method_body(
     slot_hint_types: dict[int, RsNamed] = {}
     if method.local_types:
         for _hint_slot, _hint_sig in method.local_types.items():
-            rust_ty_name = parse_field_type(_hint_sig, _class_tparams)
+            rust_ty_name = parse_field_type(_hint_sig, _class_tparams, registry)
             if rust_ty_name and rust_ty_name != 'Object':
                 slot_hint_types[_hint_slot] = RsNamed(rust_ty_name)
 
