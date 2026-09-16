@@ -172,7 +172,7 @@
 
 **技术约束**：不能手写 `Sum` 相关代码——`TestBoundedGenerics` 的翻译必须完全来自字节码。
 
-**状态**（2026-09-16 第三次实测）：🔴 编译被 `E0599: __get_value on i32` 阻塞（与根因同族——拆箱/autobox 翻译缺口），运行时症状（0.0）暂不可达。已列入优先级队列 P0 的 `__get_value` 家族一并处理。
+**状态**（2026-09-16 第四次实测）：🟡 `__get_value` 家族已清偿（getfield 接收者为基本类型时恒等返回），编译推进至 `E0599: compareTo on &Thread_State`（enum 的 Comparable 分派缺失，见普查表）。autobox 运行时症状（0.0）仍不可达，待 enum 分派修复后验证。
 
 ---
 
@@ -473,43 +473,46 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 
 ---
 
-## 全量失败普查（2026-09-16 第三次实测）
+## 全量失败普查（2026-09-16 第四次实测，P0 前两项修复后）
 
-60 个测试：**10 通过 / 50 失败**（47 编译失败 + 3 输出 diff）。通过清单：01_basics 全部 4 个、TestObjects、TestGenerics、TestBitwise、TestDouble、TestLong、TestAnonymousClass。
+60 个测试：**12 通过 / 48 失败**（45 编译失败 + 3 运行时/diff）。通过清单：01_basics 全部 4 个、TestObjects、TestGenerics、TestBitwise、TestDouble、TestLong、TestAnonymousClass、**TestInheritance、TestVarargs**（本次新增）。
 
-47 个编译失败按首错误归类（41 个已捕获归类，6 个并行输出交错未取到首行）：
+**本次清偿**（2026-09-16 第四次）：
+- **E0433 `crate::error` 家族清零**：lambda/分派链闭包类型 `crate::error::Result` 在 user crate 非法，改为裸 `Result`（两 crate 均经 prelude 引入；invoke.py 分派链 + sim.py lambda 生成共三处）
+- **E0599 `__get_value` on primitive 家族清零**：装箱类（Integer/Long/Double/Boolean）签名类型擦除为基本类型后，getfield 接收者为基本类型时字段访问即值本身，恒等返回（sim.py getfield 分支）
+- **附带**：`println(D/F)` 浮点参数经 `java_fmt_f64/f32` 格式化（Java 语义：`3.0` 不打成 `3`）——TestVarargs 由 diff 转 PASS
+
+45 个编译失败按首错误归类：
 
 | 错误家族 | 数量 | 典型信息 | 初步判断 |
 |---------|------|---------|---------|
-| E0308 类型不匹配 | 10 | `mismatched types` | 泛型系，家族分散，需逐个分析 |
+| E0308 类型不匹配 | 12 | `mismatched types` | 泛型系，家族分散，需逐个分析（较上次 +2：原被 E0433/__get_value 遮蔽的浮出） |
 | E0424 `self` 模块冲突 | 8 | `expected value, found module self` | 内部类/companion 命名与 `self` 冲突 |
-| E0433 `crate::error` 缺失 | 5 | `cannot find error in crate` | user crate 模块引用缺失，疑似单点修复可解 5 个测试 |
-| E0599 `__get_value` on primitive | 6 | i32 ×3、f64 ×3 | 拆箱翻译缺口：对 primitive 误发访问器调用（H-1 同根因） |
-| E0425 `init` 类型不存在 | 3 | `cannot find type init` | `ArrayList::<init>()` 构造器方法引用（Arch-3 范畴） |
+| E0425 `init` 类型不存在 | 4 | `cannot find type init` | `ArrayList::<init>()` 构造器方法引用（Arch-3 范畴） |
+| E0599 `compareTo` 缺失 | 4 | Thread_State 等 enum / 接口分派 | enum 的 Comparable 分派未生成 |
 | E0592 重复 `__get_this_0` | 2 | `duplicate definitions` | 内部类 this$0 生成重复 |
 | E0599 静态 setter 缺失 | 2 | `set_value` / `set_counter` | static 字段访问翻译 |
-| E0599 其他方法缺失 | 4 | `hasNext` / `borrow` / `booleanValue` / `add` | Object downcast 后未走 vtable 派发等 |
+| E0599 其他方法缺失 | 5 | `hasNext` / `borrow` / `booleanValue` / `add` / `draw` | Object downcast 后未走 vtable 派发等 |
 | E0615 record 访问器 | 1 | `attempted to take value of method name` | record 字段/访问器同名冲突（H-2） |
 
-3 个输出 diff：TestTextBlock（输出截断）、TestVarargs（`3` vs `3.0`——整数值除法结果应保持浮点格式）、TestEqualsHashCode（equals 语义错误 + 输出顺序漂移）。
+3 个运行时/diff：TestStaticNested（栈溢出，疑似分派死循环）、TestSorting（`Writer.write` stub panic）、TestTextBlock（输出截断 diff）。
 
 ---
 
-## 优先级队列（下一步行动，2026-09-16 第三次重排）
+## 优先级队列（下一步行动，2026-09-16 第四次重排）
 
 | 优先级 | 任务 | 预期收益 | 方式 |
 |--------|------|---------|------|
-| P0 | **E0433** `crate::error` 缺失（5 测试） | 疑似单点修复解锁 5 个测试 | codegen 排查 user crate 模块生成 |
-| P0 | **E0599 `__get_value`** 拆箱翻译（6 测试，含 H-1 的 TestBoundedGenerics） | 解锁 6 个测试 + H-1 运行时验证 | codegen（invoke/sim 拆箱路径） |
-| P1 | **E0424** `self` 模块冲突（8 测试） | 解锁 8 个测试 | codegen（内部类/companion 命名） |
+| P0 | **E0424** `self` 模块冲突（8 测试） | 解锁 8 个测试 | codegen（内部类/companion 命名） |
 | P1 | **I-3 + I-4** 三元/merge elif 链统一为 `coerce()` + `this` 特判消除 | E0308 家族攻坚前的地基，消除两处重复维护 | codegen 重构 |
-| P2 | **E0308** 类型不匹配家族（10 测试） | 解锁 10 个测试 | codegen（在 I-3 重构后逐个分析） |
+| P1 | **E0599 `compareTo`** enum/接口分派（4 测试，含 H-1 的 TestBoundedGenerics） | 解锁 4 个测试 + H-1 运行时验证 | codegen（enum Comparable 分派） |
+| P2 | **E0308** 类型不匹配家族（12 测试） | 解锁 12 个测试 | codegen（在 I-3 重构后逐个分析） |
 | P2 | **E0592** `__get_this_0` 重复（2 测试）+ **E0615** record 访问器（1 测试） | 解锁 3 个测试 | codegen |
-| P3 | **Arch-3** method reference（含 E0425 `init` ×3） | lambda/方法引用覆盖率 | codegen |
-| P3 | **H-1** primitive 数组 autobox | 随 `__get_value` 修复一并验证 | codegen |
+| P2 | **运行时三例**：Writer.write stub / TestStaticNested 栈溢出 / TestTextBlock | 补齐 native + 查分派死循环 | runtime + codegen |
+| P3 | **Arch-3** method reference（含 E0425 `init` ×4） | lambda/方法引用覆盖率 | codegen |
 | P4 | **E-1** 生成前扫描 `_impl.rs` 跳过重名方法 | 架构防御 | codegen |
 | P4 | **D-2** `Default::default()` 兜底补丁删除 | 随 Arch-3 完成 | codegen |
 | P5 | **Arch-6** Python 侧 `_rust_type_to_binary` 逆查改 binary key | 消除字符串模糊匹配 | codegen（低风险） |
 | P5 | **A-2** 间接子类传参 | 等真实测试触发 | codegen |
 
-**说明**：原 P0（N-1）、P1（J-3）、P4（N-2）已完成关闭；C-1 已修复关闭。3 个 diff 失败（TestTextBlock / TestVarargs / TestEqualsHashCode）待对应编译族修复后视运行结果归类。
+**说明**：原 P0（N-1）、P1（J-3）、P4（N-2）已完成关闭；C-1 已修复关闭。E0433 与 `__get_value` 两族已于 2026-09-16 第四次清偿。TestVarargs 已转 PASS；TestEqualsHashCode 待运行归类。

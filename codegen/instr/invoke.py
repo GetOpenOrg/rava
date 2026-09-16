@@ -431,10 +431,16 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         sim.push(Var(v), RsNamed('Object'))
         return
 
-    # T38：PrintStream.println 有参版本 → 统一生成 println_v(x)（Printable trait 派发）
-    # 注：无参 println() 保持原名；println_v<T: Printable> 处理所有有参版本
+    # T38：PrintStream.println 有参版本 → 统一生成 println_v(x)（Display 派发）
+    # 注：无参 println() 保持原名；println_v<T: Display> 处理所有有参版本
+    # 浮点参数先经 java_fmt_*（Java 语义：3.0 不打成 3；NaN/Infinity 拼写一致）
     if mname == 'println' and cls and cls.endswith('PrintStream') and len(args) == 1:
-        sim.emit(RawStmt(f"{obj_e}.println_v({args[0]})?;"))
+        if params == ['D']:
+            sim.emit(RawStmt(f"{obj_e}.println_v(java_fmt_f64({args[0]}))?;"))
+        elif params == ['F']:
+            sim.emit(RawStmt(f"{obj_e}.println_v(java_fmt_f32({args[0]}))?;"))
+        else:
+            sim.emit(RawStmt(f"{obj_e}.println_v({args[0]})?;"))
         return
 
     # 若接收方 Rust 类型是 java_runtime 手写类，不做 mangle
@@ -482,9 +488,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         cls_rust = jvm_to_rust(f'L{cls_binary};', registry)
         # Arch-3: 闭包回退 —— Rc<dyn Fn(...)> downcast（lambda / 方法引用）
         # SAM 参数列表对应 invokevirtual/invokeinterface 的实际参数类型
+        # Result 用裸名：两个 crate 的生成文件均经 prelude 引入
+        # （java_runtime: crate::prelude / user: java_runtime::prelude），
+        # 写 crate::error::Result 在 user crate 里是 E0433。
         _sam_ptypes = [jvm_to_rust(p, registry) for p in params]
         _fn_type = (f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)})'
-                    f' -> crate::error::Result<{rust_ret}>>')
+                    f' -> Result<{rust_ret}>>')
         if rust_ret == '()':
             _closure_branch = (f'if let Some(__f) = {obj_e}.0.as_any()'
                                f'.downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})?; }}')

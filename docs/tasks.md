@@ -9,18 +9,24 @@
 - `docs/plans/2026-09-15-cfg-ifelse-unresolved.md` — CFG 翻译质量
 - `docs/jvm-attributes-checklist.md` — JVM 属性解析覆盖
 
-**基线（2026-09-16 全量实测）**：60 e2e，10 通过 / 50 失败（47 编译 + 3 diff）。
+**基线（2026-09-16 全量实测，P0 前两项修复后）**：60 e2e，12 通过 / 48 失败（45 编译 + 3 diff/运行时）。
 
 ---
 
 ## P0 · 错误家族攻坚（性价比最高）
 
+> 已清偿：E0433 `crate::error`（闭包分支路径改裸 `Result`，invoke.py/sim.py 三处）✅ 2026-09-16  
+> 已清偿：E0599 `__get_value` on 基本类型（getfield 接收者为基本类型时恒等返回，sim.py）✅ 2026-09-16  
+> 附带修复：`println(D/F)` 浮点参数经 `java_fmt_*` 格式化（Java 语义 `3.0`）✅ 2026-09-16
+
 | 任务 | 影响 | 说明 |
 |------|------|------|
-| E0433 `crate::error` 缺失 | ×5 测试 | 疑似单点修复，先攻 |
-| E0599 `__get_value` on i32 | ×6 测试 | 拆箱（unboxing）翻译缺口，含 H-1 |
-| E0308 类型不匹配 | ×10 测试 | 见 e2e 文档普查表 |
-| E0424 非关联项 | ×8 测试 | 见 e2e 文档普查表 |
+| E0308 类型不匹配 | ×12 测试 | 见 e2e 文档普查表 |
+| E0424 expected value, found module `self` | ×8 测试 | `this` 被解析为模块 |
+| E0425 cannot find type `init` | ×4 测试 | 构造器方法引用（Arch-3 已知债务） |
+| E0599 `compareTo` 缺失 | ×4 测试 | enum（Thread_State 等）/接口分派 |
+| E0592 duplicate `__get_this_0` | ×2 测试 | 访问器重复生成 |
+| 运行时失败 | ×3 测试 | Writer.write stub panic / 栈溢出 / TextBlock diff |
 
 ## P1 · 功能缺口
 
@@ -36,7 +42,7 @@
 |------|------|------|
 | 短路逻辑 `\|\|`/`&&` | cfg-ifelse #7 | 未做 |
 | ternary 方法调用物化 | cfg-ifelse #2/#4 | 分支含语句时退化为顺序代码 |
-| H-1 primitive 数组 autobox | e2e H-1 | 被 `__get_value` 编译错误阻塞，随 P0 解锁 |
+| H-1 primitive 数组 autobox | e2e H-1 | `__get_value` 已修，现阻塞于 enum compareTo（Thread_State）|
 | H-2 TestRecord 输出格式 | e2e H-2 | 被 E0615 阻塞，随 Record 解锁 |
 | E-1 `_impl.rs` 方法级去重 | e2e E-1 | 生成前扫描手写 companion 跳过重名方法（架构防御） |
 | D-2 `areturn` Default 兜底 | e2e D-2 | 等 Arch-3 完成后删除 |

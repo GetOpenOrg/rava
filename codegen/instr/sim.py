@@ -324,6 +324,15 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment:
             _, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'Object'
+            # 装箱类擦除特例：Integer/Long/Double/Boolean 的签名类型被 type_map
+            # 擦除为基本类型（i32/i64/f64/bool）。当 getfield 的接收者已经是
+            # 基本类型时（如 compareTo 的 anotherInteger: i32），字段访问就是
+            # 值本身 —— 不能生成 __get_value()（基本类型上无此方法，E0599）。
+            # 接收者是装箱 struct（如 this: &Integer）时仍走正常访问器。
+            _recv_ty = render_type(obj_ty)
+            if _recv_ty in _PRIMITIVE_RUST_TYPES:
+                sim.push(obj_expr, RsNamed(_recv_ty))
+                return
             # JVM 类型擦除后 ftype 可能是 Object，但实际字段可能含泛型信息
             # 通过 generic_signature 恢复真实类型（与 struct 字段定义一致）
             if ftype == 'Object' and registry:
@@ -740,9 +749,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                         _cap_var_names.append(_cv_name)
                     # SAM 参数名
                     _sam_anames = [f'_la{i}' for i in range(len(_sam_ptypes))]
-                    # Fn 类型签名
+                    # Fn 类型签名（Result 用裸名：user crate 里 crate::error 是 E0433，两边均经 prelude 引入）
                     _fn_params_sig = ', '.join(f'{_a}: {_t}' for _a, _t in zip(_sam_anames, _sam_ptypes))
-                    _fn_type = f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)}) -> crate::error::Result<{_sam_rtype}>>'
+                    _fn_type = f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)}) -> Result<{_sam_rtype}>>'
                     # 调用实现方法的参数列表（捕获变量 + SAM 参数）
                     _call_cap_args  = ', '.join(f'{v}.clone()' for v in _cap_var_names)
                     _call_sam_args  = ', '.join(_sam_anames)
@@ -755,7 +764,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                     _lam_varname = f'__lam_{_lam_idx}'
                     sim.emit(RawStmt(
                         f'let {_lam_varname}: {_fn_type} = std::rc::Rc::new('
-                        f'move |{_fn_params_sig}| -> crate::error::Result<{_sam_rtype}> '
+                        f'move |{_fn_params_sig}| -> Result<{_sam_rtype}> '
                         f'{{ {_closure_body} }});'
                     ))
                     sim.push(RawExpr(f'Object::from_any({_lam_varname})'), RsNamed('Object'))
