@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-端到端测试框架（T51）。
+端到端测试框架（T51）— per-test scratch workspace 版。
 
 用法：
     python3 scripts/run_tests.py                         # 全量运行（顺序）
@@ -11,24 +11,22 @@
     python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt
     python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比
 
-顺序模式流程（-j 1，默认）：
-  对每个 tests/e2e/**/*.java：
-  1. 转译 → 生成 output/user/src/*.rs
-  2. cargo run --bin <class> 捕获 stdout
-  3. 与 tests/expected/<Class>.txt diff
+工作区模型（见 docs/plans/2026-09-16-per-test-scratch-workspace.md）：
+    build/<test>/   每测试独立 scratch（手写 overlay + 该测试的生成代码）
+    build/target/   共享编译缓存（CARGO_TARGET_DIR：syn/quote/宏 crate 指纹稳定，
+                    跨测试复用；java_runtime 因生成内容不同各自编译）
 
-并行模式流程（-j N，N>1）：
-  1. 重置批量工作区（清空 user/src/bin/ 和 jdk_classes/src/）
-  2. 顺序转译所有测试（--batch，共享工作区，积累 src/bin/<class>.rs）
-  3. cargo build --bins（一次性编译所有 binary）
-  4. ThreadPoolExecutor(max_workers=N) 并行运行 target/debug/<bin>
+流程：
+  对每个 tests/e2e/**/*.java：
+  1. main.py 转译 → overlay 手写 + 生成 build/<test>/{java_runtime,user}
+  2. cargo run --bin <class>（共享 target 缓存）捕获 stdout
+  3. 与 tests/expected/<Class>.txt diff
 """
 
 import argparse
 import difflib
 import os
 import re
-import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -38,11 +36,18 @@ ROOT   = Path(__file__).parent.parent
 TESTS  = ROOT / "tests"
 E2E    = TESTS / "e2e"
 EXPECT = TESTS / "expected"
-OUT    = ROOT / "output"   # 可被 main() 通过 --out-dir 覆盖
+OUT    = ROOT / "build"     # scratch 根（可被 --out-dir 覆盖）
+SHARED_TARGET = OUT / "target"
 
 
-def _run(cmd: list[str], cwd: Path, capture: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True)
+def _cargo_env() -> dict:
+    """共享编译缓存环境变量。"""
+    return dict(os.environ, CARGO_TARGET_DIR=str(SHARED_TARGET))
+
+
+def _run(cmd: list[str], cwd: Path, capture: bool = True,
+         env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True, env=env)
 
 
 def _discover(filter_str: str | None) -> list[Path]:
@@ -62,28 +67,23 @@ def _to_bin_name(class_name: str) -> str:
     return s.lower()
 
 
-def _test_workspace(_bin_name: str) -> Path:
-    """返回测试工作区：直接使用 output/（合并后无独立 runs/ 目录）。"""
-    return OUT
+def _test_workspace(bin_name: str) -> Path:
+    """每测试独立 scratch 工作区。"""
+    return OUT / bin_name
 
 
-def _transpile(java_file: Path, batch: bool = False,
-               out_dir: Path | None = None) -> tuple[bool, str]:
-    """运行转译器生成 Rust 代码。batch=True 时写 src/bin/<class>.rs。"""
-    out = out_dir or OUT
+def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
+    """运行转译器：overlay 手写代码 + 生成该测试的 Rust 代码。"""
     args = [sys.executable, str(ROOT / "scripts" / "main.py"), str(java_file),
-            "--no-run", "--out", str(out)]
-    if batch:
-        args.append("--batch")
+            "--no-run", "--out", str(out_dir)]
     r = _run(args, cwd=ROOT)
     return r.returncode == 0, (r.stdout + r.stderr)
 
 
-def _cargo_run(class_name: str, out_dir: Path | None = None) -> tuple[bool, str]:
-    """顺序模式：cargo run --bin <class>。"""
-    out = out_dir or OUT
+def _cargo_run(class_name: str, out_dir: Path) -> tuple[bool, str]:
+    """cargo run --bin <class>（共享 target 缓存）。"""
     bin_name = _to_bin_name(class_name)
-    r = _run(["cargo", "run", "--bin", bin_name], cwd=out)
+    r = _run(["cargo", "run", "--bin", bin_name], cwd=out_dir, env=_cargo_env())
     if r.returncode != 0:
         for line in r.stderr.splitlines():
             if line.startswith('error'):
@@ -93,9 +93,9 @@ def _cargo_run(class_name: str, out_dir: Path | None = None) -> tuple[bool, str]
 
 
 def _run_binary(class_name: str) -> tuple[bool, str]:
-    """并行模式：直接执行已编译的 binary（不经过 cargo，避免文件锁竞争）。"""
+    """直接执行已编译的 binary（共享 target 目录下，不经 cargo 避免锁竞争）。"""
     bin_name = _to_bin_name(class_name)
-    bin_path = OUT / "target" / "debug" / bin_name
+    bin_path = SHARED_TARGET / "debug" / bin_name
     r = subprocess.run([str(bin_path)], capture_output=True, text=True)
     return r.returncode == 0, r.stdout
 
@@ -133,120 +133,6 @@ def _update_expected(java_file: Path) -> bool:
     _expected_path(class_name).write_text(r.stdout)
     print(f"  updated expected/{class_name}.txt ({r.stdout.count(chr(10))} lines)")
     return True
-
-
-_RUST_KEYWORDS = {
-    'as','break','const','continue','crate','else','enum','extern','false',
-    'fn','for','if','impl','in','let','loop','match','mod','move','mut',
-    'pub','ref','return','self','Self','static','struct','super','trait',
-    'true','type','unsafe','use','where','while','async','await','dyn',
-    'abstract','become','box','do','final','macro','override','priv',
-    'typeof','unsized','virtual','yield',
-}
-
-
-def _mod_decl(name: str) -> str:
-    safe = f'r#{name}' if name in _RUST_KEYWORDS else name
-    return f'pub mod {safe};'
-
-
-def _use_decl(name: str) -> str:
-    safe = f'r#{name}' if name in _RUST_KEYWORDS else name
-    return f'pub use {safe}::*;'
-
-
-def _rebuild_jdk_mod_index() -> None:
-    """手动恢复工具：从磁盘全量重建 jdk_classes/src/ 的 lib.rs 和所有 mod.rs。
-
-    正常情况下不需要调用此函数——write_cargo_project(batch_bin=True) 在写完每次
-    测试的 stub 文件后已内置磁盘全量扫描重建逻辑（project_writer.py）。
-    此函数保留用于工作区损坏时的手动修复。
-    """
-    jdk_src = OUT / "jdk_classes" / "src"
-    if not jdk_src.exists():
-        return
-
-    # 第一步：收集所有 class .rs 文件（非 lib.rs/mod.rs）
-    mod_tree: dict[Path, set[str]] = {}
-    for p in sorted(jdk_src.rglob('*.rs')):
-        if p.name not in ('lib.rs', 'mod.rs'):
-            mod_tree.setdefault(p.parent, set()).add(p.stem)
-
-    # 第二步：自底向上传播目录（只声明非空目录，避免 E0583）
-    changed = True
-    while changed:
-        changed = False
-        for dir_path in list(mod_tree.keys()):
-            if dir_path == jdk_src:
-                continue
-            parent = dir_path.parent
-            if dir_path.name not in mod_tree.get(parent, set()):
-                mod_tree.setdefault(parent, set()).add(dir_path.name)
-                changed = True
-
-    # 重建 lib.rs
-    top_mods = sorted(mod_tree.get(jdk_src, set()))
-    lib_lines = [
-        '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
-        *(_mod_decl(m) for m in top_mods),
-        '',
-    ]
-    (jdk_src / 'lib.rs').write_text('\n'.join(lib_lines))
-
-    # 重建各子包 mod.rs（仅限 jdk_src 子目录，顶层用 lib.rs）
-    for dir_path, children in mod_tree.items():
-        if dir_path == jdk_src:
-            continue
-        mod_lines = ['#![allow(ambiguous_glob_reexports)]']
-        for c in sorted(children):
-            mod_lines.append(_mod_decl(c))
-            mod_lines.append(_use_decl(c))
-        (dir_path / 'mod.rs').write_text('\n'.join(mod_lines) + '\n')
-
-    total = sum(len(v) for v in mod_tree.values())
-    print(f"[batch] 重建 jdk_classes mod 索引：{total} 个模块条目")
-
-
-def _reset_batch_workspace() -> None:
-    """批量模式开始前：清空 user/src/bin/、user/src/*.rs、jdk_classes/src/，重置 Cargo.toml。"""
-    user_dir = OUT / "user"
-    user_src = user_dir / "src"
-
-    # 清空 user/src/bin/
-    bin_dir = user_src / "bin"
-    if bin_dir.exists():
-        shutil.rmtree(bin_dir)
-    bin_dir.mkdir(parents=True, exist_ok=True)
-
-    # 删除 user/src/ 顶层所有 .rs 文件（main.rs, 用户类文件等）
-    for rs_file in user_src.glob("*.rs"):
-        rs_file.unlink(missing_ok=True)
-
-    # 清空 java_runtime/src/java/ 和 src/jdk/ 下生成的 .rs 文件（保留手写 _impl.rs）
-    rt_src = OUT / "java_runtime" / "src"
-    for pkg in ("java", "jdk", "sun", "javax", "com"):
-        pkg_dir = rt_src / pkg
-        if pkg_dir.exists():
-            for rs_file in pkg_dir.rglob("*.rs"):
-                if rs_file.name.endswith("_impl.rs") or rs_file.name.endswith("_ext.rs"):
-                    continue
-                if rs_file == rt_src / "java" / "lang" / "object.rs":
-                    continue
-                rs_file.unlink(missing_ok=True)
-
-    # 重置 user/Cargo.toml（无 [[bin]] 条目，由批量转译追加）
-    cargo_content = "\n".join([
-        "[package]",
-        'name = "user"',
-        'version = "0.1.0"',
-        'edition = "2021"',
-        "",
-        "[dependencies]",
-        'java_runtime    = { path = "../java_runtime" }',
-        'java_rta_macros = { path = "../java_rta_macros" }',
-        "",
-    ])
-    (user_dir / "Cargo.toml").write_text(cargo_content)
 
 
 # ── 顺序模式 ─────────────────────────────────────────────────────────
@@ -329,57 +215,58 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
         print(f"Results: 0 passed, 0 failed, {skipped} skipped / {skipped} total")
         return 0
 
-    # 1. 重置批量工作区
-    print(f"\n[batch] 重置工作区…")
-    _reset_batch_workspace()
+    # 1. 并行转译（每测试独立 scratch，无共享状态，可安全并发）
+    print(f"\n[batch] 并行转译 {len(pending)} 个测试（max_workers={jobs}）…")
 
-    # 2. 顺序转译（共享工作区，每个测试积累到 src/bin/<class>.rs）
-    print(f"[batch] 顺序转译 {len(pending)} 个测试…")
+    def _transpile_one(java_file: Path) -> tuple[Path, bool, str]:
+        ws = _test_workspace(_to_bin_name(_class_name(java_file)))
+        return java_file, *_transpile(java_file, out_dir=ws)
+
     transpile_ok: list[Path] = []
     transpile_fail: list[Path] = []
-    for java_file in pending:
-        rel = java_file.relative_to(ROOT)
-        print(f"  [transpile] {rel}…", end=" ", flush=True)
-        ok, log = _transpile(java_file, batch=True)
-        if ok:
-            print("OK")
-            transpile_ok.append(java_file)
-        else:
-            print("FAIL")
-            print(log[-300:])
-            transpile_fail.append(java_file)
+    with ThreadPoolExecutor(max_workers=jobs) as executor:
+        futures = {executor.submit(_transpile_one, f): f for f in pending}
+        for fut in as_completed(futures):
+            java_file, ok, log = fut.result()
+            rel = java_file.relative_to(ROOT)
+            if ok:
+                print(f"  [transpile] {rel} OK", flush=True)
+                transpile_ok.append(java_file)
+            else:
+                print(f"  [transpile] {rel} FAIL", flush=True)
+                print(log[-300:])
+                transpile_fail.append(java_file)
 
     if not transpile_ok:
         print("所有转译均失败，退出。")
         return 1
 
-    # 3. 预清理目标 binary（确保构建后只有新编译成功的才存在）
-    for java_file in transpile_ok:
-        bin_path = OUT / "target" / "debug" / _to_bin_name(_class_name(java_file))
-        if bin_path.exists():
-            bin_path.unlink()
-
-    # 4. 一次性 cargo build --bins --keep-going（遇到单个 binary 错误仍继续其余）
-    print(f"\n[batch] cargo build --bins --keep-going (cargo -j {jobs})…")
-    r = _run(["cargo", "build", f"--jobs={jobs}", "--bins", "--keep-going"], cwd=OUT)
-    if r.returncode != 0:
-        # 有编译失败，但部分 binary 可能已成功——继续后续步骤
-        failed_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("error")]
-        print(f"[batch] build 部分失败（{len(failed_lines)} 个 error），继续运行已成功的 binary…")
-    else:
-        print("[batch] build OK")
-
-    # 4. 并行运行所有 binary（直接执行 target/debug/<bin>，不经 cargo）
-    print(f"\n[batch] 并行运行 {len(transpile_ok)} 个 binary (max_workers={jobs})…\n")
-
-    passed = failed = 0
-
-    # 按 binary 是否存在区分编译成功/失败
+    # 2. 逐测试 cargo build --bin <name>
+    #    共享 CARGO_TARGET_DIR 下 cargo 以文件锁串行化构建——并发调用只会互相
+    #    等待，因此这里顺序构建；syn/quote/宏依赖缓存命中后每个测试只编译自己的
+    #    窄语料 java_runtime + user bin。
+    print(f"\n[batch] 顺序构建 {len(transpile_ok)} 个测试的 binary（共享 target 缓存）…")
     build_ok: list[Path] = []
     build_fail: list[Path] = []
     for java_file in transpile_ok:
-        bin_path = OUT / "target" / "debug" / _to_bin_name(_class_name(java_file))
-        (build_ok if bin_path.exists() else build_fail).append(java_file)
+        class_name = _class_name(java_file)
+        bin_name = _to_bin_name(class_name)
+        ws = _test_workspace(bin_name)
+        print(f"  [build] {bin_name}…", end=" ", flush=True)
+        r = _run(["cargo", "build", "--bin", bin_name], cwd=ws, env=_cargo_env())
+        if r.returncode == 0:
+            print("OK", flush=True)
+            build_ok.append(java_file)
+        else:
+            err = next((ln for ln in r.stderr.splitlines() if ln.startswith("error")),
+                       "unknown error")
+            print(f"FAIL  {err[:100]}", flush=True)
+            build_fail.append(java_file)
+
+    # 3. 并行运行所有 binary（直接执行 target/debug/<bin>，不经 cargo）
+    print(f"\n[batch] 并行运行 {len(build_ok)} 个 binary (max_workers={jobs})…\n")
+
+    passed = failed = 0
 
     for java_file in build_fail:
         print(f"[ FAIL ] {java_file.relative_to(ROOT)}  — compile error")
@@ -442,51 +329,14 @@ def run_tests(filter_str: str | None, no_run: bool, update_expected: bool, jobs:
     return _run_sequential(filter_str, no_run)
 
 
-def _ensure_workspace(out: Path) -> None:
-    """确保 out_dir 是可用的 Cargo workspace。
-    若目录不存在，用符号链接指向 output/ 下的共享只读 crate，新建 jdk_classes/ 和 user/。
-    若目录已存在且有 Cargo.toml，直接使用。
-    """
-    if out == ROOT / "output":
-        return  # 默认目录，已完整初始化
-    if (out / "Cargo.toml").exists():
-        return  # 用户自行准备的目录
-
-    out.mkdir(parents=True, exist_ok=True)
-    default = ROOT / "output"
-
-    # 对只读 crate 创建符号链接（不复制，节省磁盘；build 产物隔离在各自 target/）
-    for shared in ("java_runtime", "java_rta_macros"):
-        src = default / shared
-        dst = out / shared
-        if src.exists() and not dst.exists():
-            dst.symlink_to(src.resolve())
-
-    # 复制 workspace Cargo.toml（内含成员列表，无法跨路径共享）
-    src_toml = default / "Cargo.toml"
-    if src_toml.exists():
-        (out / "Cargo.toml").write_text(src_toml.read_text())
-
-    # 创建 jdk_classes/ 和 user/ 框架（Cargo.toml 内容由转译器填充）
-    for crate, cargo_src in (("jdk_classes", default / "jdk_classes" / "Cargo.toml"),
-                              ("user",        default / "user"        / "Cargo.toml")):
-        crate_dir = out / crate
-        (crate_dir / "src").mkdir(parents=True, exist_ok=True)
-        dst_toml = crate_dir / "Cargo.toml"
-        if not dst_toml.exists() and cargo_src.exists():
-            dst_toml.write_text(cargo_src.read_text())
-
-    print(f"[workspace] 初始化新工作区 {out}")
-
-
 def main():
-    global OUT
+    global OUT, SHARED_TARGET
     ap = argparse.ArgumentParser(description="java_rta 端到端测试框架")
     ap.add_argument("--filter",          metavar="STR", help="只测试路径中包含此字符串的文件")
     ap.add_argument("--no-run",          action="store_true", help="只生成 Rust，不执行对比（仅顺序模式）")
     ap.add_argument("--update-expected", action="store_true", help="重新生成 expected/*.txt（用 java 运行）")
     ap.add_argument("--out-dir",         metavar="DIR", default=None,
-                    help="Cargo workspace 目录（默认 output/；多进程并行时指定不同目录避免冲突）")
+                    help="scratch 根目录（默认 build/；每测试在其下建独立子目录）")
     ap.add_argument("--jobs", "-j",      type=int, default=1, metavar="N",
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     args = ap.parse_args()
@@ -495,7 +345,7 @@ def main():
         OUT = Path(args.out_dir)
         if not OUT.is_absolute():
             OUT = ROOT / OUT
-        _ensure_workspace(OUT)
+        SHARED_TARGET = OUT / "target"
 
     jobs = args.jobs
     if jobs == 0:

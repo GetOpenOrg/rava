@@ -43,20 +43,23 @@ native binary
 **环境要求**：Python 3.12+、JDK 17+、Rust 工具链（stable）
 
 ```bash
-# 转译单个文件
-python3 scripts/main.py tests/HelloWorld.java
+# 转译单个文件（scratch 自动建在 build/<测试名>/，含手写代码 overlay）
+python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java
 
-# 指定输出目录
-python3 scripts/main.py tests/HelloWorld.java --out output
+# 只生成不运行
+python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java --no-run
 
-# 编译并运行生成的 Rust 项目
-cd output && cargo run
+# 清空 scratch 重建
+python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java --clean
+
+# 运行全量 e2e 测试
+python3 scripts/run_tests.py
 ```
 
 **示例**：`tests/HelloWorld.java` 经转译后生成：
 
 ```rust
-// output/src/hello_world.rs
+// build/hello_world/user/src/hello_world.rs
 use crate::java_runtime::prelude::*;
 
 pub struct HelloWorld { ... }
@@ -111,12 +114,13 @@ java-rta/
 │       ├── type_map.py          # Java → Rust 类型映射
 │       └── runtime.py           # 运行时类型定义（java_runtime/）
 ├── tests/                       # 测试用 Java 源文件
+├── runtime/                     # 手写代码唯一真源（java_runtime + java_rta_macros，提交 git）
 ├── docs/
 │   ├── tasks.md                 # 任务列表
 │   └── plans/                   # 设计文档
 │       ├── 2026-09-12-java-to-rust-transpiler.md
 │       └── 2026-09-12-codegen-java-api-rules.md
-└── output/                      # 生成的 Cargo 项目（.gitignore）
+└── build/                       # 每测试一次性 scratch（.gitignore，生成代码不提交）
 ```
 
 ## 代码生成规范

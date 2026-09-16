@@ -16,7 +16,7 @@ Java → Rust 转译器。将 Java `.class` 字节码翻译为等价的 Rust 源
 - 遇到编译错误，优先修复生成器逻辑或宏实现，而非给生成文件打补丁
 - 生成器 + 宏建好后，编译错误自然消解；先打补丁会造成技术债务积累
 
-**检验方式**：若某个问题的解决方案会修改 `output/` 目录下的生成文件（而非 `_impl.rs`），则该方案违反本原则，需改用生成器或宏方案。
+**检验方式**：若某个问题的解决方案会修改 `build/` 下 scratch 里的生成文件（而非 `runtime/` 手写文件），则该方案违反本原则，需改用生成器或宏方案。
 
 ---
 
@@ -117,76 +117,51 @@ BFS 调用链分析规则：
 
 ---
 
-## 输出结构
+## 工作区结构（per-test scratch workspace）
 
-### 当前过渡态（workspace 多 crate）
+> 2026-09-16 起实施，方案与动机见 `docs/plans/2026-09-16-per-test-scratch-workspace.md`
 
 ```
-output/
-├── Cargo.toml                  # workspace（成员：java_runtime, jdk_classes, user）
-├── java_runtime/               ← 提交到 git（手写，VM 基础设施层）
+runtime/                            # 提交到 git：手写代码唯一真源
+├── java_runtime/
+│   ├── Cargo.toml                  # 宏依赖为 path = "<repo>/runtime/java_rta_macros"
+│   ├── build.rs                    # 维护 native_status.toml
 │   └── src/
-│       ├── error.rs            ← JvmError / Result<T>（永久保留）
-│       ├── types.rs            ← Field<T>（永久保留）
-│       └── java/               ← 临时：手写 Java 类实现，待替换为字节码翻译
-├── jdk_classes/                ← gitignore（由 codegen 生成，不提交）
-│   └── src/java/...            ← JDK 字节码 → Rust 存根
-├── user/                       ← gitignore（由 codegen 生成，不提交）
-│   └── src/                    ← 用户 Java 翻译
-└── native_impls/               ← 提交到 git（手写：仅 native 方法实现）
-    └── java/lang/system.rs     ← System.arraycopy 等
+│       ├── lib.rs / error.rs       # VM 基础设施（java/jdk/sun 顶层 mod 声明）
+│       ├── java/lang/
+│       │   ├── object.rs           # 手写（ObjectVTable，Arch-4）
+│       │   ├── object_impl.rs      # 手写 native impl（co-located）
+│       │   ├── string_ext.rs       # 手写扩展
+│       │   └── ...
+│       ├── java/util/function/     # Arch-1 接口存根（4 个）
+│       └── jdk/internal/...        # 内部边界类（完整手写）
+└── java_rta_macros/                # proc-macro crate（java_class! 块级宏）
+
+build/                              # gitignore：每测试一次性 scratch
+├── target/                         # 共享编译缓存（CARGO_TARGET_DIR）
+└── <test_name>/                    # 每测试独立工作区
+    ├── Cargo.toml                  # workspace 根（emitter 生成）
+    ├── java_runtime/src/           # runtime/ 手写 overlay + 该测试生成的 JDK 类
+    └── user/src/                   # 该测试的用户类翻译
 ```
 
-### 最终目标态（单 crate，手写与生成共置）
+**规则**：
+- 生成代码**永不提交**；仓库里只有 `runtime/` 手写真源
+- 每次转译（`scripts/main.py`）流程：清空或复用 scratch → overlay `runtime/` → codegen → cargo
+- 手写文件靠「无 `java_rta_macros::java_class` 生成标记」识别，codegen 不会覆盖它们
+- `java_rta_macros` 不复制进 scratch，以绝对 path 依赖参与编译（共享 target 下缓存命中）
 
+## 常用命令
+
+```bash
+python3 scripts/main.py <Test.java>            # 转译 + 运行（scratch = build/<test>）
+python3 scripts/main.py <Test.java> --no-run    # 只生成
+python3 scripts/main.py <Test.java> --clean     # 清空 scratch 重建
+python3 scripts/run_tests.py                    # 全量 e2e（顺序）
+python3 scripts/run_tests.py -j 4               # 并行
+python3 scripts/run_tests.py --filter TestXxx   # 单测试
+# 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
 ```
-output/
-├── Cargo.toml
-└── src/
-    ├── main.rs
-    ├── hello_world.rs                 ← 用户 Java 翻译（字节码 → Rust）
-    ├── java/
-    │   └── lang/
-    │       ├── mod.rs                 ← codegen 生成
-    │       ├── string.rs              ← codegen 生成（struct + 字节码方法）
-    │       ├── string_impl.rs         ← 手写（native 方法，co-located）
-    │       ├── system.rs              ← codegen 生成
-    │       ├── system_impl.rs         ← 手写（arraycopy 等，co-located）
-    │       └── ...
-    └── jdk/
-        └── internal/
-            └── misc/
-                ├── mod.rs             ← 手写或 codegen
-                ├── internal_lock.rs   ← 手写（内部边界类，完整 struct）
-                └── unsafe.rs         ← 手写（内部边界类，ACC_NATIVE 实现）
-```
-
-**无 `native_impls/` 独立目录**：手写代码与生成代码在同一目录树中，按 Java 包名层次自然组织。  
-**无 `@field` 注入机制**：内部边界类手写完整 struct，字段直接声明；公开 API 类的 native 方法只写 `impl` 块，无需向 struct 注入字段。  
-**无 `#[path = "..."] mod _impl`**：共置文件通过 `mod.rs` 自然包含，由 Rust 模块系统管理。
-
-`jdk_classes` crate 和 `user` crate 是过渡期产物，目标态合并为单 crate。  
-`java_runtime` crate 的 **`error.rs` / `types.rs` 是 VM 基础设施层，永久保留**；`java/` 子目录是临时手写实现，目标态由字节码翻译替换后删除。
-
----
-
-## 当前状态（2026-09-13）
-
-- `java_runtime/src/error.rs`、`types.rs`：VM 基础设施，**永久保留**
-- `java_runtime/src/java/`：手写 String/ArrayList/System 等，**临时，待字节码翻译后删除**
-- `runtime.py`：向 `java_runtime/src/java/` 写入手写内容，**临时使用**
-- `jdk_classes` crate：BFS 生成的 `panic!("stub: ...")` 存根，**gitignored，过渡方案**
-
-完整目标架构见：`docs/plans/2026-09-13-target-architecture.md`  
-实现路径见：`docs/plans/2026-09-12-architecture-redesign.md`
-
----
-
-## 代码规范
-
-- 标识符、函数名、变量名用英文；注释、提交信息、文档用中文
-- 修改后运行 `cd output && cargo check` 确保零错误再提交
-- 计划文档保存在 `docs/plans/YYYY-MM-DD-description.md`
 
 ---
 
@@ -210,3 +185,11 @@ output/
    区分依据：读取 `generic_signature` 属性（注解中始终存在），而非 `descriptor`。
 
 **检验方式**：在 Rust 生成代码中搜索任何 `jvm_` 前缀的方法名或不在 `java.*` 命名空间下的 trait，若存在即违反本原则。
+
+---
+
+## 代码规范
+
+- 标识符、函数名、变量名用英文；注释、提交信息、文档用中文
+- 计划文档保存在 `docs/plans/YYYY-MM-DD-description.md`
+- 手写层（runtime/）改动后重跑相关 e2e 验证（scratch 每次重新 overlay，无需手动同步）

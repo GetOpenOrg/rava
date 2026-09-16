@@ -1,7 +1,7 @@
 # Per-test Scratch Workspace 方案（手写/生成彻底分离）
 
 > 创建日期：2026-09-16  
-> 状态：规划，待确认  
+> 状态：**已实施并验证**（Phase 1-4 全量落地；60 个 e2e 逐测试结果与旧架构完全一致，零回归）  
 > 关联：`2026-09-16-java-class-macro-unified.md`（宏方案）、`2026-09-15-e2e-unresolved-issues.md`（既有债务）
 
 ---
@@ -163,3 +163,36 @@ Phase 4  验证
 Phase 1-2 半天内可完成；建议在动 Phase 1 之前先把当前工作区里
 `codegen/instr/invoke.py`（JDK 子类过滤）与 `project_writer.py`（mod.rs 磁盘扫描）
 两个真实 bug 修复提交掉——它们与工作区布局无关，新方案下同样需要。
+
+---
+
+## 10 实施记录（2026-09-16 晚）
+
+### 落地内容
+
+- Phase 1（commit ff5937b）：runtime/ 建立（22 个手写 .rs + build.rs + 宏 crate 整体 git mv），output/ 出库 667 文件，.gitignore /output
+- Phase 2：project_writer.py 删除全部保护/清理逻辑（_PERMANENT 硬编码、git ls-files 探测、非 batch 清理、user 清理），保留 _write 标记检查作为 overlay 冲突消解
+- Phase 3：main.py 新增 prepare_scratch（overlay + 占位 mod.rs + Cargo.toml 路径重写 + --clean）；run_tests.py per-test scratch + 共享 CARGO_TARGET_DIR；CLAUDE.md/README 同步更新
+- Phase 4：验证见下
+
+### 实施中发现的新问题：共享 target 元数据哈希碰撞
+
+多 scratch 共享 CARGO_TARGET_DIR 时，cargo 以「包名+版本+依赖」计算 artifact 元数据哈希。
+不同 scratch 的同名同版本路径包（java_runtime / user）哈希相同 → **跨工作区复用陈旧
+artifact**（表现为幻影编译成功/幻影模块缺失，极具迷惑性）。
+
+修复：`codegen/constants.py` 新增 `scratch_pkg_version(out_dir)` —— 版本号带 out_dir 的
+CRC32。同一 scratch 复跑版本不变（增量缓存有效），不同 scratch 互不碰撞；syn/quote 与
+绝对路径的宏 crate 仍全局共享缓存（编译一次）。
+
+### 验证结论（Phase 4）
+
+| 验证项 | 结果 |
+|---|---|
+| HelloWorld 端到端 | ✅ PASS（对齐旧窄语料 0 错误基线） |
+| TestArrayList 逐错误对比（新 vs 旧架构同 codegen） | ✅ 122 = 122，逐错误码一致（E0308×97 / E0599×17 / E0107×6 / E0597×1），全部为 N-1 既有债务 |
+| 全量 60 e2e（-j 4，7m15s） | 10 passed / 50 failed，**与旧架构基线逐测试完全一致（60/60），零回归** |
+| 宏改动冒烟 | ✅ runtime/ 宏改动被 scratch 感知并重编 |
+
+50 个失败全部为既有债务（41 编译 + 6 运行时 + 3 输出差异），与旧架构基线集合一致，
+追踪见 `2026-09-15-e2e-unresolved-issues.md`。

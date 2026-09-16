@@ -7,6 +7,8 @@ import re
 from ..types import ClassInfo
 from ..type_map import short_cls
 from ..constants import RUST_KEYWORDS as _RUST_KEYWORDS
+from ..constants import RUNTIME_MACROS_CRATE as _MACROS_CRATE
+from ..constants import scratch_pkg_version as _scratch_pkg_version
 from .attrs import to_snake, pkg_from_java
 from .method_gen import _scan_impl_files
 from .class_writer import _gen_class_rs
@@ -58,11 +60,12 @@ def _append_cargo_bin(user_dir: str, bin_name: str, bin_src: str) -> None:
     """向 user/Cargo.toml 追加一个 [[bin]] 条目（已存在则跳过）。"""
     cargo_path = os.path.join(user_dir, 'Cargo.toml')
     base = '\n'.join([
-        '[package]', 'name = "user"', 'version = "0.1.0"', 'edition = "2021"', '',
+        '[package]', 'name = "user"',
+        f'version = "{_scratch_pkg_version(user_dir)}"', 'edition = "2021"', '',
         '[dependencies]',
         'java_runtime    = { path = "../java_runtime" }',
-        'java_rta_macros = { path = "../java_rta_macros" }',
-        'jdk_classes     = { path = "../jdk_classes" }', '',
+        f'java_rta_macros = {{ path = "{_MACROS_CRATE}" }}',
+        '',
     ])
     new_bin = f'\n[[bin]]\nname = "{bin_name}"\npath = "{bin_src}"\n'
     if not os.path.exists(cargo_path):
@@ -101,79 +104,14 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # JDK 字节码翻译输出到 java_runtime/src/
     jdk_src = os.path.join(jdk_dir, 'src')
 
-    # 清理旧版生成文件（batch 模式由调用方在批次开始前统一清理）
-    # 只清理 java/ jdk/ 等子包目录，保留根目录的手写基础设施文件
-    # 保留规则：
-    #   1. *_impl.rs / *_ext.rs — 手写共置文件（永不删除）
-    #   2. _PERMANENT 集合中的文件 — 永久手写文件（如 object.rs）
-    #   其余 *.rs 均为 codegen 生成文件，清理后由本次 codegen 重新生成
-    _PERMANENT = {
-        os.path.join(jdk_src, 'java', 'lang', 'object.rs'),
-        # 注：java/util/iterator.rs 虽在旧名单中，但其内容含 java_class 生成标记，
-        # 实为 codegen 产物（Arch-1 接口存根）。留在名单里会导致它永远停留在旧宏
-        # 格式、无法随 java_class! 块宏迁移，故移出，交由 codegen 重新生成。
-        os.path.join(jdk_src, 'java', 'util', 'function', 'bi_consumer.rs'),
-        os.path.join(jdk_src, 'java', 'util', 'function', 'binary_operator.rs'),
-        os.path.join(jdk_src, 'java', 'util', 'function', 'supplier.rs'),
-        os.path.join(jdk_src, 'java', 'util', 'function', 'function.rs'),
-    }
-    # 将 git 追踪的 .rs 文件纳入 _PERMANENT：仅「无生成标记」的文件视为手写，
-    # codegen 不覆盖。判别方式与 _impl 扫描一致 —— 看文件里有没有自动生成标记
-    # `java_rta_macros::java_class`（属性宏形态与块宏形态都含该子串）：
-    #   含标记 → codegen 生成物，允许覆盖（历史提交里混入了生成文件）
-    #   不含标记 → 真正手写（object.rs、*_impl.rs、*_ext.rs 等），禁止覆盖
-    # 早期版本把「git 追踪」直接等同于「手写」并塞进 _PERMANENT，导致已提交的
-    # 生成文件被永久冻结：内容停留在旧宏格式，无法随 java_class! 块宏迁移。
-    #
-    # 注意：git 追踪的生成文件**不**因此获得删除保护——非 batch 清理仍然会删除
-    # 作用域外的生成文件（单测试 = 窄作用域语料，这是 dev loop 的既有语义）；
-    # 被删文件可随时通过 batch 重生成或 git checkout 恢复。
-    try:
-        import subprocess as _subprocess
-        _git_root = os.path.dirname(out_dir)
-        _git_files = _subprocess.check_output(
-            ['git', 'ls-files', '--', jdk_src],
-            cwd=_git_root,
-            stderr=_subprocess.DEVNULL,
-            text=True,
-        ).splitlines()
-        for _gf in _git_files:
-            if not _gf.endswith('.rs'):
-                continue
-            _abs = os.path.normpath(os.path.join(_git_root, _gf))
-            try:
-                with open(_abs, encoding='utf-8') as _fh:
-                    _is_generated = 'java_rta_macros::java_class' in _fh.read(4096)
-            except Exception:
-                _is_generated = False  # 读不到时保守视为手写
-            if not _is_generated:
-                _PERMANENT.add(_abs)
-    except Exception:
-        pass
-    if not batch_bin and os.path.isdir(jdk_src):
-        for root, _dirs, files in os.walk(jdk_src):
-            if root == jdk_src:
-                continue  # 跳过根目录（lib.rs, error.rs 永久保留）
-            for fname in files:
-                if not fname.endswith('.rs'):
-                    continue
-                if fname.endswith('_impl.rs') or fname.endswith('_ext.rs'):
-                    # 检测是否为自动生成文件（如 Collectors$CollectorImpl 碰巧生成 *_impl.rs）。
-                    # 自动生成的类文件含有 java_rta_macros::java_class 标注；手写文件则无。
-                    _fpath_check = os.path.join(root, fname)
-                    try:
-                        with open(_fpath_check, encoding='utf-8') as _fc:
-                            if 'java_rta_macros::java_class' not in _fc.read():
-                                continue  # 真正手写共置文件，保留
-                    except Exception:
-                        continue  # 读取失败时保守保留
-                fpath = os.path.join(root, fname)
-                if fpath in _PERMANENT:
-                    continue
-                try:
-                    os.remove(fpath)
-                except FileNotFoundError:
-                    pass
+    # scratch 语义（per-test scratch workspace）：out_dir 是一次性工作区，
+    # 手写文件已由脚本层（main.py）从 runtime/ overlay 进来，生成文件全部
+    # 可再生。因此这里**不做任何清理与保护**：
+    #   - 旧的 _PERMANENT 硬编码集合、git ls-files 探测、生成标记判别、
+    #     非 batch 清理分支已全部删除
+    #   - 手写文件不被生成内容覆盖的保证由 _write() 的标记检查提供
+    #     （scratch 里手写文件无 java_rta_macros::java_class 标记 → 跳过写入）
+    #   - scratch 的清空/复用策略由脚本层决定（main.py --clean）
 
     # 构建 registry（用户类 + JDK 类）
     registry: dict = {ci.name: ci for ci in class_infos}
@@ -247,16 +185,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if mod_name in pkg_dir_names.get(parent_dir, set()):
                 mod_name = mod_name + '_t'
             file_path = os.path.join(parent_dir, mod_name + '.rs')
-            # _PERMANENT 中的文件（如 object.rs）由手写提供，跳过 codegen 覆盖
-            if file_path in _PERMANENT:
-                parent = jdk_src
-                for part in pkg_parts:
-                    jdk_mod_tree.setdefault(parent, set()).add(part)
-                    parent = os.path.join(parent, part)
-                jdk_mod_tree.setdefault(parent, set()).add(mod_name)
-                continue
+            # 手写文件（如 object.rs，由脚本层从 runtime/ overlay 进 scratch）不含
+            # 生成标记，_write 会跳过写入；mod 树照常登记，保证 mod.rs 声明该模块
             # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
-            # new_format_map 中已有 _impl.rs 实现的方法，codegen 跳过那些方法的 stub 生成
             # new_format_map 中已有 _impl.rs 实现的方法，codegen 跳过那些方法的 stub 生成
             _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
                                             jdk_crate_pkg_paths=jdk_crate_pkg_paths,
@@ -271,39 +202,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             for part in pkg_parts:
                 jdk_mod_tree.setdefault(parent, set()).add(part)
                 parent = os.path.join(parent, part)
-            jdk_mod_tree.setdefault(parent, set()).add(mod_name)
-
-    # 非 batch 模式：_PERMANENT 手写文件不在调用链中，不会被 jdk_class_infos 覆盖，
-    # 但它们存在于磁盘，需要手动添加到 mod_tree，否则 mod.rs 不会声明对应模块。
-    if not batch_bin:
-        for _perm_path in _PERMANENT:
-            if not os.path.exists(_perm_path):
-                continue
-            # 计算相对于 jdk_src 的路径
-            try:
-                _rel = os.path.relpath(_perm_path, jdk_src)
-            except ValueError:
-                continue
-            _parts = _rel.replace('\\', '/').split('/')
-            if not _parts or not _parts[-1].endswith('.rs'):
-                continue
-            _mod_name = _parts[-1][:-3]  # 去掉 .rs 后缀
-            # mod.rs / lib.rs 自身不作为模块名声明
-            if _mod_name in ('mod', 'lib'):
-                continue
-            # 手写共置 _impl.rs / _ext.rs（不含 java_class 注解）不作为 pub mod 声明
-            if _parts[-1].endswith('_impl.rs') or _parts[-1].endswith('_ext.rs'):
-                try:
-                    with open(_perm_path, encoding='utf-8') as _fc:
-                        if 'java_rta_macros::java_class' not in _fc.read(4096):
-                            continue  # 手写共置文件，跳过
-                except Exception:
-                    continue
-            _parent = jdk_src
-            for _part in _parts[:-1]:
-                jdk_mod_tree.setdefault(_parent, set()).add(_part)
-                _parent = os.path.join(_parent, _part)
-            jdk_mod_tree.setdefault(_parent, set()).add(_mod_name)
+                jdk_mod_tree.setdefault(parent, set()).add(mod_name)
 
     def _mod_decl(name: str) -> str:
         """生成 pub mod 声明，对 Rust 关键字用 r# 转义。"""
@@ -315,13 +214,11 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         safe = f'r#{name}' if name in _RUST_KEYWORDS else name
         return f'pub use {safe}::*;'
 
-    # 从磁盘全量重建 jdk_mod_tree，合并所有历次转译积累的生成文件。
-    # 原因：每次 write_cargo_project() 的 jdk_mod_tree 只包含当前测试的 JDK 类；
-    # 若直接用它写 lib.rs/mod.rs，会抹掉其他已存在文件的模块声明（E0432/E0433）。
-    # 解决：写完当前测试的 .rs 文件后，扫描磁盘收集全部 .rs，自底向上传播目录，
-    # 只声明有文件的目录（避免 E0583），再写 lib.rs/mod.rs。
-    # batch 与非 batch 均启用：清理后磁盘上仍可能有 _PERMANENT 手写文件与本次
-    # 作用域外的幸存文件，mod.rs 必须如实声明磁盘上的全部模块。
+    # 从磁盘全量重建 jdk_mod_tree：mod.rs 如实声明磁盘上的全部模块。
+    # 磁盘内容 = 手写 overlay（runtime/ 复制进来的 object.rs、function 存根、
+    # companion）+ 本次生成的类文件 + 同 scratch 上次运行的幸存文件。
+    # 用作用域内的 jdk_mod_tree 直接写 mod.rs 会抹掉其余文件的声明（E0432/E0433）。
+    # 扫描收集全部 .rs，自底向上传播目录，只声明有文件的目录（避免 E0583）。
     if os.path.isdir(jdk_src):
         jdk_mod_tree = {}
         for root, _dirs, files in os.walk(jdk_src):
@@ -368,9 +265,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             mod_lines.append(_mod_decl(c))
             mod_lines.append(_use_decl(c))
         # K-2: 扫描目录中的 _impl.rs / _ext.rs 共置文件，加入私有 mod 声明。
-        # 规则：只有当 X.rs 存在（即 X 在调用链中已生成，或是 _PERMANENT 手写文件）时，
+        # 规则：只有当 X.rs 存在（调用链生成，或手写 overlay 提供）时，
         # 才声明 mod X_impl; / mod X_ext;。否则 _impl.rs 静默等待，避免 E0583 / 未定义类型。
-        # 若 X.rs 存在但不在 children（_PERMANENT 手写文件），还需补充 pub mod X; 声明。
+        # 若 X.rs 存在但不在 children（手写 overlay 文件），还需补充 pub mod X; 声明。
         if os.path.isdir(dir_path):
             extra_pub: list[str] = []
             companion_mods: list[str] = []
@@ -385,7 +282,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 if not os.path.exists(os.path.join(dir_path, base + '.rs')):
                     continue
                 companion_mods.append(f'mod {_f[:-3]};')
-                # X.rs 在磁盘但不在 children（如 _PERMANENT object.rs）→ 补充 pub mod 声明
+                # X.rs 在磁盘但不在 children（如手写 object.rs）→ 补充 pub mod 声明
                 if base not in children:
                     extra_pub.append(base)
             for base in sorted(set(extra_pub)):
@@ -395,17 +292,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
 
     # 4. user crate（用户 Java 翻译）
-    # Cargo.toml 由 git 直接管理，emitter 不再写出
     user_src = os.path.join(user_dir, 'src')
-    # 清理旧版生成文件（保证当前运行不被历史文件污染）
-    if not batch_bin and os.path.isdir(user_src):
-        for root, _dirs, files in os.walk(user_src):
-            for fname in files:
-                if fname.endswith('.rs'):
-                    try:
-                        os.remove(os.path.join(root, fname))
-                    except FileNotFoundError:
-                        pass
+    # scratch 语义：不做清理。同 scratch 复跑 = 同测试作用域，文件全部被覆写；
+    # 换测试 = 换 scratch 目录（脚本层保证）。残留文件不被 lib.rs 声明，无害。
 
     # 提取包名
     packages: dict[str, str] = {}
@@ -535,7 +424,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         cargo_toml_lines = [
             '[package]',
             'name = "user"',
-            'version = "0.1.0"',
+            f'version = "{_scratch_pkg_version(user_dir)}"',
             'edition = "2021"',
             '',
             '[[bin]]',
@@ -544,10 +433,26 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '',
             '[dependencies]',
             'java_runtime    = { path = "../java_runtime" }',
-            'java_rta_macros = { path = "../java_rta_macros" }',
+            f'java_rta_macros = {{ path = "{_MACROS_CRATE}" }}',
             '',
         ]
         _write(os.path.join(user_dir, 'Cargo.toml'), '\n'.join(cargo_toml_lines))
+
+    # 5. scratch workspace 根 Cargo.toml（幂等，每次覆写相同内容）
+    #    java_rta_macros 不复制进 scratch，作为 runtime/ 的 path 依赖参与编译
+    #    （绝对路径稳定 → 共享 CARGO_TARGET_DIR 下指纹不变，宏与 syn/quote 缓存命中）
+    _write(os.path.join(out_dir, 'Cargo.toml'), '\n'.join([
+        '[workspace]',
+        'members = ["java_runtime", "user"]',
+        'resolver = "2"',
+        '',
+        '[profile.release]',
+        'opt-level = 3',
+        'lto       = true',
+        'codegen-units = 1',
+        'strip     = "symbols"',
+        '',
+    ]))
 
     if jdk_class_infos:
         print(f'[codegen] JDK 翻译 → {len(jdk_class_infos)} 个类')

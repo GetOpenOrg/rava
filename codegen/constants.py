@@ -26,3 +26,31 @@ def safe_ident(name: str) -> str:
     if name in RUST_KEYWORDS:
         name = name + '_'
     return name
+
+
+# ── 仓库布局（per-test scratch workspace，见 docs/plans/2026-09-16-per-test-scratch-workspace.md）──
+# runtime/：手写代码唯一真源（git 管理）
+# build/<test>/：每测试一次性 scratch（gitignore，生成代码 + 手写 overlay 副本）
+
+import os as _os
+
+REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+RUNTIME_DIR = _os.path.join(REPO_ROOT, 'runtime')
+RUNTIME_JAVA_RUNTIME = _os.path.join(RUNTIME_DIR, 'java_runtime')
+RUNTIME_MACROS_CRATE = _os.path.join(RUNTIME_DIR, 'java_rta_macros')
+
+
+def scratch_pkg_version(out_dir: str) -> str:
+    """为 scratch 工作区内的包生成唯一版本号。
+
+    背景：多个 scratch 共享 CARGO_TARGET_DIR 时，cargo 以「包名+版本+依赖」
+    计算元数据哈希命名 artifact。同名同版本的路径包（java_runtime / user）
+    哈希相同，会发生跨工作区的陈旧 artifact 复用（编译结果张冠李戴）。
+
+    方案：版本号带 out_dir 的 CRC —— 同一 scratch 复跑版本不变（增量缓存
+    有效），不同 scratch 互不碰撞。注册表依赖（syn/quote）与绝对路径的宏
+    crate 不受影响，仍全局共享缓存。
+    """
+    import zlib as _zlib
+    _crc = _zlib.crc32(_os.path.abspath(out_dir).encode()) & 0xffffffff
+    return f"0.0.{_crc}"
