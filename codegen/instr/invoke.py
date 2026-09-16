@@ -123,6 +123,9 @@ def _coerce_arg(
         # T55：子类传给父类参数，通过 From impl 类型提升
         return f"Clone::clone(&{e}).into()"
     if actual not in _PRIMITIVE_RUST_TYPES:
+        # `this` 在 Rust 中是 &Self 引用，Clone::clone(this) 得到 Self，无需多余 &
+        if e == 'this':
+            return f"Clone::clone({e})"
         return f"Clone::clone(&{e})"
     return e
 
@@ -477,9 +480,9 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 sub_mname_r = _mangle_if_overloaded(sub_rust, mname, comment, registry)
                 sub_mname_r = _safe_field(sub_mname_r)
                 if rust_ret == '()':
-                    branches.append(f"if let Some(_d) = {obj_e}.0.downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})?; }}")
+                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})?; }}")
                 else:
-                    branches.append(f"if let Some(_d) = {obj_e}.0.downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})? }}")
+                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})? }}")
             if rust_ret == '()':
                 dispatch_code = ' else '.join(branches)
                 sim.emit(RawStmt(f"{dispatch_code}"))

@@ -115,6 +115,22 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         os.path.join(jdk_src, 'java', 'util', 'function', 'supplier.rs'),
         os.path.join(jdk_src, 'java', 'util', 'function', 'function.rs'),
     }
+    # 将所有 git 追踪的 .rs 文件加入 PERMANENT，防止 codegen 删除已提交的文件
+    try:
+        import subprocess as _subprocess
+        _git_root = os.path.dirname(out_dir)
+        _git_files = _subprocess.check_output(
+            ['git', 'ls-files', '--', jdk_src],
+            cwd=_git_root,
+            stderr=_subprocess.DEVNULL,
+            text=True,
+        ).splitlines()
+        for _gf in _git_files:
+            if _gf.endswith('.rs'):
+                _abs = os.path.normpath(os.path.join(_git_root, _gf))
+                _PERMANENT.add(_abs)
+    except Exception:
+        pass
     if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):
             if root == jdk_src:
@@ -253,6 +269,17 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if not _parts or not _parts[-1].endswith('.rs'):
                 continue
             _mod_name = _parts[-1][:-3]  # 去掉 .rs 后缀
+            # mod.rs / lib.rs 自身不作为模块名声明
+            if _mod_name in ('mod', 'lib'):
+                continue
+            # 手写共置 _impl.rs / _ext.rs（不含 java_class 注解）不作为 pub mod 声明
+            if _parts[-1].endswith('_impl.rs') or _parts[-1].endswith('_ext.rs'):
+                try:
+                    with open(_perm_path, encoding='utf-8') as _fc:
+                        if '#[java_rta_macros::java_class(' not in _fc.read(4096):
+                            continue  # 手写共置文件，跳过
+                except Exception:
+                    continue
             _parent = jdk_src
             for _part in _parts[:-1]:
                 jdk_mod_tree.setdefault(_parent, set()).add(_part)
