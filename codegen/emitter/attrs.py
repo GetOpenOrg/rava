@@ -212,19 +212,16 @@ def _java_field_attr(f: FieldInfo) -> str:
     return '#[cfg_attr(any(), java_field(' + ', '.join(parts) + '))]'
 
 
-def _java_method_attr(m: ParsedMethod, compiled: bool = False,
-                      in_block: bool = False) -> str:
-    """生成方法元数据标注行。
+def _java_method_attr(m: ParsedMethod) -> str:
+    """生成方法元数据标注行（`java_class! { impl ... }` 块内路径）。
 
-    compiled=True（JDK 类生成）：
-      - native 方法：#[cfg_attr(any(), java_native(...))]，供 build.rs 扫描
-      - 其他方法：#[cfg_attr(any(), java_method(...))]，含完整元数据
-    compiled=False（元数据存根）：原生属性格式 #[java_method(...)] / #[java_native(...)]。
+    方法一律写在 `java_class! { impl ... }` 块内，必须用单段路径
+    `#[java_method(...)]` / `#[java_native(...)]`——块级宏按 ident 匹配并剥离这些
+    元数据属性，不会把它们透传给方法（两段路径 `java_rta_macros::java_method`
+    匹配不上，会被当作真实属性宏重新施加在方法上，而同名 proc-macro 已删除）。
 
-    in_block=True：方法写在 `java_class! { impl ... }` 内。
-      此时必须用单段路径 `#[java_method(...)]`——块级宏按 ident 匹配并剥离这些元数据属性，
-      不会把它们透传给方法（两段路径 `java_rta_macros::java_method` 匹配不上，会被当作
-      真实属性宏重新施加在方法上）。
+    注意：这两个标签是纯文本，同名 proc-macro 不存在；build.rs 按文本前缀
+    `#[java_native(` 扫描维护 native_status.toml，依赖的是这里的文本输出。
     """
     tag = 'java_native' if m.is_native else 'java_method'
     desc = m.descriptor.replace('"', '\\"')
@@ -250,17 +247,8 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False,
     if m.method_parameters:
         mp_str = ';'.join(f'{n}:{a}' for n, a in m.method_parameters).replace('"', '\\"')
         parts.append(f'method_parameters = "{mp_str}"')
-    if in_block:
-        # 块级宏内：单段路径，宏会剥离；native 需要显式标记（宏靠「无方法体」也认，
-        # 但显式标记让文件读者一眼看出这是 native 声明）
-        if m.is_native:
-            return f'#[native]\n#[{tag}(' + ', '.join(parts) + ')]'
-        return f'#[{tag}(' + ', '.join(parts) + ')]'
-    if compiled:
-        if m.is_native:
-            # native 方法：cfg_attr 包裹保留元数据，由 _impl.rs 手写实现
-            return f'#[cfg_attr(any(), {tag}(' + ', '.join(parts) + '))]'
-        # 非 native 方法：使用真实 proc-macro 属性，支持宏元数据读取
-        return f'#[java_rta_macros::{tag}(' + ', '.join(parts) + ')]'
-    else:
-        return f'#[{tag}(' + ', '.join(parts) + ')]'
+    # native 需要显式标记（宏靠「无方法体」也认，但显式标记让文件读者一眼看出
+    # 这是 native 声明）
+    if m.is_native:
+        return f'#[native]\n#[{tag}(' + ', '.join(parts) + ')]'
+    return f'#[{tag}(' + ', '.join(parts) + ')]'

@@ -26,15 +26,7 @@ pub fn jvm_boundary(_attr: TokenStream, item: TokenStream) -> TokenStream { item
 #[proc_macro_attribute]
 pub fn jvm_ext(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
 
-/// `#[java_rta_macros::java_method(name = "...", descriptor = "...", ...)]`
-///
-/// 携带 Java 字节码方法元数据（名称、描述符、访问标志等），供宏和工具链读取。
-/// 当前行为：透传（identity passthrough），未来扩展 SAM 检测、泛型签名校验等。
-#[proc_macro_attribute]
-pub fn java_method(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
-
-/// `#[java_rta_macros::java_native(name = "...", descriptor = "...", ...)]`
-///
-/// 携带 `ACC_NATIVE` 方法的 Java 字节码元数据。当前行为：透传。
-#[proc_macro_attribute]
-pub fn java_native(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
+// 注：`java_method` / `java_native` 属性宏已删除。
+// 块内 `#[java_method(...)]` / `#[java_native(...)]` 只是文本标签：
+// block.rs 在展开时将其剥离，build.rs 按文本前缀扫描维护 native_status.toml，
+// 二者均不依赖同名 proc-macro 的存在。

@@ -553,7 +553,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if m.name == '<clinit>':
             # 用户类：翻译 <clinit> 为 class_init() 函数
             if _is_user_class:
-                attr_line = _java_method_attr(m, compiled=True, in_block=True)
+                attr_line = _java_method_attr(m)
                 try:
                     clinit_body = gen_method_body(
                         m, ci, registry=registry,
@@ -586,7 +586,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if fn_name_check in _nf_covered:
             continue
 
-        attr_line = _java_method_attr(m, compiled=True, in_block=True)
+        attr_line = _java_method_attr(m)
         # 判断该方法是否需要翻译字节码：
         #   1. native / abstract → 永远生成 stub（panic!）
         #   2. call_chain 不为空 且 此方法不在调用链上 → panic!("stub: ...")
@@ -692,7 +692,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                                 default_name_counts.get(dm.name, 0) > 1)
                 dm_rust = mangle_name(dm.name, dm.descriptor) if needs_mangle else dm.name
                 used_rust_names.add(dm_rust)
-                dm_attr = _java_method_attr(dm, compiled=True, in_block=True)
+                dm_attr = _java_method_attr(dm)
                 # 将 class_name 替换为实现类，使 gen_method_body 生成正确的 this 类型
                 dm_adapted = _copy.copy(dm)
                 dm_adapted.class_name = ci.name
