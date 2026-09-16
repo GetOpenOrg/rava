@@ -165,6 +165,20 @@ java_class! {
 | `generic_signature`（方法级别） | 方法 | 字节码方法 Signature 属性 | 方法的原始泛型签名，用于签名重写 |
 | `native` | 方法 | ACC_NATIVE flag | 标记 native 方法，宏生成 unimplemented! 存根 |
 
+### 输出约定：缺省即默认（2026-09-16 实施后补充）
+
+生成物看重可读性，元数据属性与 Java 源码习惯一致——**默认值整行不写**：
+
+- 类头两段属性：空串（如 `Object` 的 `super_class`）、`false` 布尔
+  （`is_abstract` / `is_enum` / `is_deprecated` / `is_interface`）、
+  `package` 可见性、空 `modifiers` 一律省略；
+- 方法 / 字段元数据：`is_static` / `is_native` / `is_abstract` /
+  `is_synthetic` 为 `false` 时省略，`access = "package"` 省略；
+- 身份键无条件输出：类头 `binary_name`，方法 / 字段的 `name` + `descriptor`
+  （build.rs 文本扫描依赖 native 方法的这两个键）；
+- 宏侧零改动：`Meta` 走 `Default`，缺键即默认值；block.rs 方法侧只读
+  `descriptor`。
+
 ---
 
 ## 5 字段类型重写规则

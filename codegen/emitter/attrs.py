@@ -136,6 +136,10 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
                            superclass_fields: list[tuple[str, str]] | None = None) -> list[str]:
     """生成 `java_class! { ... }` 块内的类级别属性行（方案 §4）。
 
+    输出约定（与 Java 源码「缺省即默认」一致，看重生成物可读性）：
+    空串 / false / package 可见性（Java 默认）的键整行不写；
+    `binary_name` 是身份键，无条件输出。
+
     分两段，用注释分隔，让读者一眼区分「字节码元数据」与「宏展开输入」：
 
       - 字节码元数据：binary_name / super_class / interfaces / access / …，
@@ -150,21 +154,33 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
     lines: list[str] = []
     looks = '// '
 
-    # ── 段 1：字节码元数据 ────────────────────────────────────────────────
+    # ── 段 1：字节码元数据（缺省即默认）──────────────────────────────────
     lines.append(f'{looks}── 字节码元数据 ' + '─' * 46)
     def _q(s: str) -> str:
         return s.replace('\\', '\\\\').replace('"', '\\"')
 
     lines.append(f'#[binary_name       = "{_q(ci.name)}"]')
-    lines.append(f'#[super_class       = "{_q(ci.super_class or "")}"]')
-    lines.append(f'#[interfaces        = "{_q(",".join(ci.interfaces or []))}"]')
-    lines.append(f'#[access            = "{_access_str(ci.access_flags) if ci.access_flags else ""}"]')
-    lines.append(f'#[modifiers         = "{_class_modifiers_str(ci.access_flags) if ci.access_flags else ""}"]')
-    lines.append(f'#[generic_signature = "{_q(ci.generic_signature or "")}"]')
-    lines.append(f'#[is_abstract       = {str(bool(ci.is_abstract)).lower()}]')
-    lines.append(f'#[is_enum           = {str(bool(ci.is_enum)).lower()}]')
-    lines.append(f'#[is_deprecated     = {str(bool(ci.is_deprecated)).lower()}]')
-    lines.append(f'#[source            = "{_q(ci.source_file or "")}"]')
+    if ci.super_class:
+        lines.append(f'#[super_class       = "{_q(ci.super_class)}"]')
+    if ci.interfaces:
+        lines.append(f'#[interfaces        = "{_q(",".join(ci.interfaces))}"]')
+    if ci.access_flags:
+        _access = _access_str(ci.access_flags)
+        if _access != 'package':
+            lines.append(f'#[access            = "{_access}"]')
+        _mods = _class_modifiers_str(ci.access_flags)
+        if _mods:
+            lines.append(f'#[modifiers         = "{_mods}"]')
+    if ci.generic_signature:
+        lines.append(f'#[generic_signature = "{_q(ci.generic_signature)}"]')
+    if ci.is_abstract:
+        lines.append('#[is_abstract       = true]')
+    if ci.is_enum:
+        lines.append('#[is_enum           = true]')
+    if ci.is_deprecated:
+        lines.append('#[is_deprecated     = true]')
+    if ci.source_file:
+        lines.append(f'#[source            = "{_q(ci.source_file)}"]')
     if ci.inner_classes:
         ic_strs = ';'.join(
             f'{ic.inner_class}:{ic.outer_class}:{ic.inner_name}:{ic.access_flags}'
@@ -172,10 +188,11 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         )
         lines.append(f'#[inner_classes     = "{_q(ic_strs)}"]')
 
-    # ── 段 2：宏展开输入 ──────────────────────────────────────────────────
+    # ── 段 2：宏展开输入（缺省即 Default）─────────────────────────────────
     lines.append('')
     lines.append(f'{looks}── 宏展开输入 ' + '─' * 46)
-    lines.append(f'#[is_interface      = {str(bool(ci.is_interface)).lower()}]')
+    if ci.is_interface:
+        lines.append('#[is_interface      = true]')
     if superclass_rust:
         lines.append(f'#[superclass        = "{superclass_rust}"]')
     if superclass_fields:
@@ -194,13 +211,21 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
 
 
 def _java_field_attr(f: FieldInfo) -> str:
-    """生成 #[cfg_attr(any(), java_field(...))] 属性行（编译安全）。"""
+    """生成 #[cfg_attr(any(), java_field(...))] 属性行（编译安全）。
+
+    缺省即默认：is_static = false、package 可见性、空 modifiers 不输出；
+    name / descriptor 是身份键，无条件输出。
+    """
     parts = [f'name = "{f.name}"', f'descriptor = "{f.descriptor}"']
     if f.access_flags:
-        parts.append(f'access = "{_access_str(f.access_flags)}"')
-        mods = _field_modifiers_str(f.access_flags)
-        parts.append(f'modifiers = "{mods}"')
-    parts.append(f'is_static = {str(f.is_static).lower()}')
+        _access = _access_str(f.access_flags)
+        if _access != 'package':
+            parts.append(f'access = "{_access}"')
+        _mods = _field_modifiers_str(f.access_flags)
+        if _mods:
+            parts.append(f'modifiers = "{_mods}"')
+    if f.is_static:
+        parts.append('is_static = true')
     if f.generic_signature:
         sig = f.generic_signature.replace('"', '\\"')
         parts.append(f'generic_signature = "{sig}"')
@@ -222,20 +247,30 @@ def _java_method_attr(m: ParsedMethod) -> str:
 
     注意：这两个标签是纯文本，同名 proc-macro 不存在；build.rs 按文本前缀
     `#[java_native(` 扫描维护 native_status.toml，依赖的是这里的文本输出。
+
+    缺省即默认：is_static / is_native / is_abstract / is_synthetic 为 false、
+    package 可见性、空 modifiers 时不输出；name / descriptor 是身份键
+    （build.rs 依赖），无条件输出。block.rs 只从中读 descriptor。
     """
     tag = 'java_native' if m.is_native else 'java_method'
     desc = m.descriptor.replace('"', '\\"')
     name = m.name.replace('"', '\\"')
     parts = [f'name = "{name}"', f'descriptor = "{desc}"']
     if m.access_flags:
-        parts.append(f'access = "{_access_str(m.access_flags)}"')
-        mods = _method_modifiers_str(m.access_flags)
-        parts.append(f'modifiers = "{mods}"')
-    # 补全全部元数据字段
-    parts.append(f'is_static    = {str(m.is_static).lower()}')
-    parts.append(f'is_native    = {str(m.is_native).lower()}')
-    parts.append(f'is_abstract  = {str(m.is_abstract).lower()}')
-    parts.append(f'is_synthetic = {str(m.is_synthetic).lower()}')
+        _access = _access_str(m.access_flags)
+        if _access != 'package':
+            parts.append(f'access = "{_access}"')
+        _mods = _method_modifiers_str(m.access_flags)
+        if _mods:
+            parts.append(f'modifiers = "{_mods}"')
+    if m.is_static:
+        parts.append('is_static    = true')
+    if m.is_native:
+        parts.append('is_native    = true')
+    if m.is_abstract:
+        parts.append('is_abstract  = true')
+    if m.is_synthetic:
+        parts.append('is_synthetic = true')
     if m.exceptions:
         excs = ','.join(m.exceptions).replace('"', '\\"')
         parts.append(f'exceptions = "{excs}"')
