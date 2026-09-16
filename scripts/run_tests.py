@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -38,6 +39,14 @@ E2E    = TESTS / "e2e"
 EXPECT = TESTS / "expected"
 OUT    = ROOT / "build"     # scratch 根（可被 --out-dir 覆盖）
 SHARED_TARGET = OUT / "target"
+
+
+def fmt_dur(sec: float) -> str:
+    """格式化耗时：<60s 用秒（两位小数），≥60s 用 m 分 s 秒。"""
+    if sec < 60:
+        return f"{sec:.2f}s"
+    m, s = divmod(sec, 60)
+    return f"{int(m)}m{s:04.1f}s"
 
 
 def _cargo_env() -> dict:
@@ -144,6 +153,8 @@ def _run_sequential(filter_str: str | None, no_run: bool) -> int:
         return 1
 
     passed = failed = skipped = 0
+    t_all = time.perf_counter()
+    t_transpile_total = t_run_total = 0.0
 
     for java_file in files:
         class_name = _class_name(java_file)
@@ -157,38 +168,47 @@ def _run_sequential(filter_str: str | None, no_run: bool) -> int:
             continue
 
         ws = _test_workspace(bin_name)
+        t0 = time.perf_counter()
         ok, log = _transpile(java_file, out_dir=ws)
+        t_transpile = time.perf_counter() - t0
+        t_transpile_total += t_transpile
         if not ok:
-            print(f"[ FAIL ] {rel}  — transpile error")
+            print(f"[ FAIL ] {rel}  — transpile error ({fmt_dur(t_transpile)})")
             print(log[-500:])
             failed += 1
             continue
 
         if no_run:
-            print(f"[NORUN ] {rel}  — transpile OK, skipping run")
+            print(f"[NORUN ] {rel}  — transpile OK, skipping run ({fmt_dur(t_transpile)})")
             skipped += 1
             continue
 
+        t0 = time.perf_counter()
         ok, actual = _cargo_run(class_name, out_dir=ws)
+        t_run = time.perf_counter() - t0
+        t_run_total += t_run
         if not ok:
-            print(f"[ FAIL ] {rel}  — cargo run error")
+            print(f"[ FAIL ] {rel}  — cargo run error (transpile {fmt_dur(t_transpile)}, run {fmt_dur(t_run)})")
             failed += 1
             continue
 
         diff = _diff(expected, actual, class_name)
         if diff:
-            print(f"[ FAIL ] {rel}")
+            print(f"[ FAIL ] {rel}  (transpile {fmt_dur(t_transpile)}, run {fmt_dur(t_run)})")
             print("".join(diff[:40]))
             if len(diff) > 40:
                 print(f"  … ({len(diff) - 40} more lines)")
             failed += 1
         else:
-            print(f"[ PASS ] {rel}")
+            print(f"[ PASS ] {rel}  (transpile {fmt_dur(t_transpile)}, run {fmt_dur(t_run)})")
             passed += 1
 
     total = passed + failed + skipped
+    elapsed = time.perf_counter() - t_all
     print(f"\n{'='*50}")
     print(f"Results: {passed} passed, {failed} failed, {skipped} skipped / {total} total")
+    print(f"Elapsed: {fmt_dur(elapsed)}"
+          f"  (transpile {fmt_dur(t_transpile_total)}, run {fmt_dur(t_run_total)})")
     return 0 if failed == 0 else 1
 
 
@@ -217,6 +237,7 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
 
     # 1. 并行转译（每测试独立 scratch，无共享状态，可安全并发）
     print(f"\n[batch] 并行转译 {len(pending)} 个测试（max_workers={jobs}）…")
+    t_all = time.perf_counter()
 
     def _transpile_one(java_file: Path) -> tuple[Path, bool, str]:
         ws = _test_workspace(_to_bin_name(_class_name(java_file)))
@@ -241,30 +262,44 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
         print("所有转译均失败，退出。")
         return 1
 
+    t_transpile = time.perf_counter() - t_all
+    print(f"[time] 转译阶段 {fmt_dur(t_transpile)}（OK {len(transpile_ok)} / FAIL {len(transpile_fail)}）")
+
     # 2. 逐测试 cargo build --bin <name>
     #    共享 CARGO_TARGET_DIR 下 cargo 以文件锁串行化构建——并发调用只会互相
     #    等待，因此这里顺序构建；syn/quote/宏依赖缓存命中后每个测试只编译自己的
     #    窄语料 java_runtime + user bin。
     print(f"\n[batch] 顺序构建 {len(transpile_ok)} 个测试的 binary（共享 target 缓存）…")
+    t_build_start = time.perf_counter()
     build_ok: list[Path] = []
     build_fail: list[Path] = []
+    build_durations: dict[str, float] = {}
     for java_file in transpile_ok:
         class_name = _class_name(java_file)
         bin_name = _to_bin_name(class_name)
         ws = _test_workspace(bin_name)
         print(f"  [build] {bin_name}…", end=" ", flush=True)
+        t0 = time.perf_counter()
         r = _run(["cargo", "build", "--bin", bin_name], cwd=ws, env=_cargo_env())
+        dur = time.perf_counter() - t0
+        build_durations[bin_name] = dur
         if r.returncode == 0:
-            print("OK", flush=True)
+            print(f"OK ({fmt_dur(dur)})", flush=True)
             build_ok.append(java_file)
         else:
             err = next((ln for ln in r.stderr.splitlines() if ln.startswith("error")),
                        "unknown error")
-            print(f"FAIL  {err[:100]}", flush=True)
+            print(f"FAIL ({fmt_dur(dur)})  {err[:100]}", flush=True)
             build_fail.append(java_file)
+
+    t_build = time.perf_counter() - t_build_start
+    slowest = max(build_durations.items(), key=lambda kv: kv[1], default=("", 0.0))
+    print(f"[time] 构建阶段 {fmt_dur(t_build)}（OK {len(build_ok)} / FAIL {len(build_fail)}"
+          f"，最慢 {slowest[0]} {fmt_dur(slowest[1])}）")
 
     # 3. 并行运行所有 binary（直接执行 target/debug/<bin>，不经 cargo）
     print(f"\n[batch] 并行运行 {len(build_ok)} 个 binary (max_workers={jobs})…\n")
+    t_run_start = time.perf_counter()
 
     passed = failed = 0
 
@@ -304,8 +339,12 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
         failed += 1
 
     total = passed + failed + skipped
+    elapsed = time.perf_counter() - t_all
     print(f"\n{'='*50}")
     print(f"Results: {passed} passed, {failed} failed, {skipped} skipped / {total} total")
+    print(f"Elapsed: {fmt_dur(elapsed)}"
+          f"  (transpile {fmt_dur(t_transpile)}, build {fmt_dur(t_build)},"
+          f" run {fmt_dur(time.perf_counter() - t_run_start)})")
     return 0 if failed == 0 else 1
 
 

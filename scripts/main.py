@@ -18,6 +18,7 @@ import subprocess
 import sys
 import os
 import shutil
+import time
 
 # 将项目根目录加入 path，使 `import codegen` 可以找到根目录下的 codegen/ 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +32,14 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEFAULT_JAVA = os.path.join(_REPO_ROOT, 'tests', 'e2e', '01_basics', 'HelloWorld.java')
 _BUILD_ROOT = os.path.join(_REPO_ROOT, 'build')
 _SHARED_TARGET = os.path.join(_BUILD_ROOT, 'target')
+
+
+def fmt_dur(sec: float) -> str:
+    """格式化耗时：<60s 用秒（两位小数），≥60s 用 m 分 s 秒。"""
+    if sec < 60:
+        return f"{sec:.2f}s"
+    m, s = divmod(sec, 60)
+    return f"{int(m)}m{s:04.1f}s"
 
 
 def prepare_scratch(out_dir: str, clean: bool = False) -> None:
@@ -99,19 +108,36 @@ def main():
     stem = os.path.splitext(os.path.basename(java_files[0]))[0]
     out_dir = args.out or os.path.join(_BUILD_ROOT, to_snake(stem))
 
+    t_total = time.perf_counter()
+
     # 1. overlay 手写代码（必须在 codegen 之前）
+    t0 = time.perf_counter()
     prepare_scratch(out_dir, clean=args.clean)
+    t_overlay = time.perf_counter() - t0
+    print(f"[time] overlay     {fmt_dur(t_overlay)}")
 
     # 2. codegen
+    t0 = time.perf_counter()
     transpile(java_files, out_dir, batch_bin=args.batch)
+    t_codegen = time.perf_counter() - t0
+    print(f"[time] transpile   {fmt_dur(t_codegen)}")
 
     if not args.no_run:
         bin_name = to_snake(stem)
         print(f"\n[run] cargo run --bin {bin_name}")
         env = dict(os.environ, CARGO_TARGET_DIR=_SHARED_TARGET)
+        t0 = time.perf_counter()
         r = subprocess.run(['cargo', 'run', '--bin', bin_name],
                            cwd=out_dir, env=env)
+        t_run = time.perf_counter() - t0
+        print(f"[time] cargo run   {fmt_dur(t_run)}")
+        print(f"[time] total       {fmt_dur(time.perf_counter() - t_total)}"
+              f"  (overlay {fmt_dur(t_overlay)} + transpile {fmt_dur(t_codegen)}"
+              f" + run {fmt_dur(t_run)})")
         sys.exit(r.returncode)
+
+    print(f"[time] total       {fmt_dur(time.perf_counter() - t_total)}"
+          f"  (overlay {fmt_dur(t_overlay)} + transpile {fmt_dur(t_codegen)})")
 
 
 if __name__ == '__main__':
