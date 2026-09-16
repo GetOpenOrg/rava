@@ -1,7 +1,7 @@
 # E2E 测试未解决问题追踪
 
 > 创建日期：2026-09-15  
-> 最后更新：2026-09-16  
+> 最后更新：2026-09-16（第二次）  
 > 基于测试套件：`tests/e2e/`（60 个测试）  
 > 更新方式：每次架构变更或 E2E 运行后手动补充/关闭条目
 
@@ -24,7 +24,7 @@
 | [I. 编译层补丁 — 技术债务](#i-编译层补丁--技术债务) | 1 开放 / 5 已关闭 | 中 | 全局质量 |
 | [J. 命名原则违规](#j-命名原则违规--java_runtime-游离-trait) | 1 开放 / 2 已关闭 | 中 | 命名一致性 |
 | [K. 代码布局重构](#k-代码布局重构--native_impls-共置与内部包边界截断) | 2 已关闭 / 2 开放 | 中 | 全局基础设施 |
-| [N. 新架构债务 — 需 codegen 解决](#n-新架构债务--需-codegen-解决) | 2 开放 | 高 | java_runtime 稳定性 |
+| [N. 新架构债务 — 需 codegen 解决](#n-新架构债务--需-codegen-解决) | 1 开放 / 1 已关闭 | 中 | java_runtime 稳定性 |
 | [Arch. 架构任务](#arch-架构任务) | 6 已关闭 / 2 进行中 | — | — |
 
 ---
@@ -291,44 +291,54 @@
 
 ## N. 新架构债务 — 需 codegen 解决
 
-### N-1: `java_runtime` 手写代码中 143 处 E0107（接口泛型参数） 🔴
+### N-1: `java_runtime` 手写代码中 E0107（接口泛型参数） 🟡
 
 **错误示例**：
 ```rust
 // java_runtime 手写代码（不应修改生成文件，但这些是手写文件）：
 pub suppressedExceptions: JField<List<Throwable>>,  // E0107: List 取 0 个泛型参数
-pub c: JField<Comparator<T>>,                       // E0107
-fn containsAll(&self, c: Collection<Object>) -> ..  // E0107
+impl<E: Clone + Default + 'static> List<E> { ... }  // E0107
+fn equalsRange(&self, other: List<Object>, ..)       // E0107
 ```
 
-**根因**：Arch-1（2026-09-16）将接口改为 `pub type List = Object`（无泛型参数），但 `java_runtime` 中大量手写代码仍使用旧的 `List<T>`、`Comparator<T>` 写法，导致 143 处 E0107。
+**根因**：Arch-1（2026-09-16）将接口改为 `pub type List = Object`（无泛型参数），但 `java_runtime` 中少量手写代码仍使用旧的 `List<T>` 写法。
 
-**正确解法**：
-- **最终态**：`java_runtime/src/java/` 下的类（String、ArrayList、System 等）应由字节码翻译生成，而非手写。CLAUDE.md 明确了这些是"临时绕行方案"。
-- **过渡态**：将 `java_runtime` 手写代码中的接口泛型参数改为 `Object`（例如 `JField<List<Throwable>>` → `JField<Object>`，`fn containsAll(&self, c: Collection<Object>)` → `fn containsAll(&self, c: Object)`）。这是在 CLAUDE.md 允许的手写层（java_runtime）内修改，而非修改生成文件。
+**当前状态（2026-09-16 第二次）**：随着 N-2 宏升级 + codegen 重新生成，大量原本手写的 `java_runtime` 文件已重新由 codegen 生成，E0107 从原来的约 143 处降至 **4 处**（集中在 `throwable.rs`、`list.rs`、`array_list.rs`）。
+
+**4 处剩余位置**：
+- `java/lang/throwable.rs:42` — `JField<List<Throwable>>`
+- `java/lang/throwable.rs:60` — `List<Throwable>` 返回类型
+- `java/util/list.rs:29` — `impl<E> List<E>`
+- `java/util/array_list.rs:250` — `List<Object>` 参数
+
+**正确解法**：将这 4 处泛型参数改为 `Object`（允许在手写 java_runtime 文件内修改）。
 
 **禁止**：在生成的 `jdk_classes/` 文件里做任何手写修复。
 
-**影响**：237 个编译错误中的大部分 E0107 来自此处，修复后预计错误数大幅下降。
-
-**状态**：🔴 高优先级，阻塞 java_runtime 编译；可批量修复
+**状态**：🟡 剩余 4 处，可 5 分钟内完成；不阻塞架构演进
 
 ---
 
-### N-2: `java_method`/`java_field` 激活为真正的 proc-macro attribute 🟡
+### N-2: `java_method`/`java_field` 激活为真正的 proc-macro attribute ✅
 
-**当前状态**：所有方法/字段注解使用 `cfg_attr(any(), java_method(...))` 形式，`cfg_attr(any(), ...)` 在任何构建配置下均不触发，宏永远读不到这些元数据。它们目前只是文档。
+**完成**（2026-09-16 第二次）：
 
-**能解锁的能力**：
-1. 宏统计每个接口的 `is_abstract = true` 方法数 → 自动识别函数式接口（SAM 类型）→ Arch-3 的 `Fn` type alias 自动生成
-2. 宏读取方法 `generic_signature` → 在编译期验证调用方类型 → 消除 Arch-7 剩余的类型推断不确定性
-3. 宏读取字段 `generic_signature` → 自动为泛型字段生成正确类型（消除 N-1 的根因）
+**实现内容**：
+1. `java_rta_macros/src/lib.rs`：注册 `java_method`、`java_native` 为真实 `#[proc_macro_attribute]`（identity passthrough）
+2. `codegen/emitter/attrs.py`：非 native 方法改用 `#[java_rta_macros::java_method(...)]`；native 方法保留 `cfg_attr(any(), java_native(...))`（由 `_impl.rs` 手写处理）
+3. `java_class` 宏新增 `has_to_string_method`/`has_hash_code_method` 参数，有条件地生成 `ObjectVTable::toString`/`hashCode` 转发
+4. `codegen/emitter/method_gen.py`：非 native `toString`/`hashCode` 存根改为返回 `Ok(String::from(Self::BINARY_NAME))`/`Ok(0)` 智能默认值（不再 panic）
+5. `codegen/emitter/attrs.py`：检测类自身是否声明 `toString`/`hashCode`，动态设置转发标志（避免 `Self::toString` 解析到 vtable 自身造成无限递归）
 
-**改动量**：
-1. `java_rta_macros/src/lib.rs`：注册 `pub fn java_method(...)` 和 `pub fn java_field(...)` proc-macro attribute
-2. `codegen/emitter/class_writer.py`：将 `#[cfg_attr(any(), java_method(...))]` 改为 `#[java_rta_macros::java_method(...)]`
+**效果**：编译错误从 247+ 降至 4（仅剩 N-1 的 4 处手写 `java_runtime` 遗留）
 
-**状态**：🟡 中期投资，不是当前阻塞点；N-1 过渡修复后再做
+**待解锁能力**（未来）：
+1. `java_method` 宏统计 `is_abstract = true` 方法数 → SAM 识别（Arch-3 method reference 支持）
+2. 读取 `generic_signature` → 编译期类型校验
+
+**`java_field` 说明**：struct 字段不能附加 `proc_macro_attribute`，保留 `cfg_attr(any(), java_field(...))`；`java_class` 宏通过解析 item token stream 读取字段属性（未来改进）。
+
+**状态**：✅ 完成（2026-09-16）
 
 ---
 
@@ -377,8 +387,13 @@ fn containsAll(&self, c: Collection<Object>) -> ..  // E0107
 
 ### Arch-4: `Object = Rc<dyn ObjectVTable>` vtable 重构 ✅
 
-**实现**（2026-09-16）：`Object(Rc<dyn ObjectVTable>)` 完成，`java_class` 宏为每个具体类生成 `ObjectVTable impl`（含 `is_instance_of`、`as_any`、`toString`、`hashCode`）。  
-**关键修复**：`invoke.py` downcast 路径从 `obj.0.downcast_ref::<T>()` 改为 `obj.0.as_any().downcast_ref::<T>()`。  
+**实现**（2026-09-16）：`Object(Rc<dyn ObjectVTable>)` 完成，`java_class` 宏为每个具体类生成 `ObjectVTable impl`（含 `is_instance_of`、`as_any`）。  
+**关键修复**：`invoke.py` downcast 路径从 `obj.0.downcast_ref::<T>()` 改为 `obj.0.as_any().downcast_ref::<T>()`。
+
+**N-2 补充**（2026-09-16 第二次）：`java_class` 宏增加 `has_to_string_method`/`has_hash_code_method` 条件转发：
+- 当类自身声明了 `toString()`/`hashCode()` 时，vtable impl 调用 `Self::toString(self).map(|s| format!("{}", s)).unwrap_or_else(...)` 转发
+- `toString` 转发正确处理 Java String（`lang::string::String`）→ Rust String（`std::string::String`）的类型差异（通过 Display impl）
+
 **状态**：✅ 完成
 
 ---
@@ -451,6 +466,11 @@ fn containsAll(&self, c: Collection<Object>) -> ..  // E0107
 | 2026-09-16 | Arch-3 dispatch 缺失修复（interface hint） | `type_map.py parse_field_type(registry)` | codegen |
 | 2026-09-16 | A-3/A-4 接口参数类型不匹配 | 架构消解（Arch-1 副产品） | arch |
 | 2026-09-16 | B-1 From impl 丢弃数据 | 架构消解（Arch-5 副产品） | arch |
+| 2026-09-16（第二次） | N-2 java_method/java_native proc-macro 激活 | `java_rta_macros` 注册 passthrough attribute | arch(宏) |
+| 2026-09-16（第二次） | N-2 toString/hashCode vtable 条件转发 | `java_class` 宏 + `has_to_string_method` 标志 | arch(宏) |
+| 2026-09-16（第二次） | N-2 toString/hashCode 存根智能默认值 | `method_gen.py` 非 panic 默认实现 | codegen |
+| 2026-09-16（第二次） | N-1 143→4 E0107（大量手写类被 codegen 接管） | codegen 重新生成 java_runtime | codegen |
+| 2026-09-16（第二次） | CLAUDE.md 原则 0：代码生成优先 | 文档补充 | docs |
 | 2026-09-16 | G-1 Object.toString 不派发具体类型 | 架构修复（Arch-4 副产品，ObjectVTable.toString） | arch |
 
 ---
