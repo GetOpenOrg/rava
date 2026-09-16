@@ -18,6 +18,7 @@ from .coerce import (
     parse_method_ref, _coerce_from_null, _coerce_to_object,
     _coerce_to_interface, _coerce_value, _find_super_chain_to_class,
     _find_method_super_prefix, _find_method_super_prefix_for_type,
+    _super_prefix_to_expr,
     _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,
     _get_all_subtypes_ordered,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
@@ -55,7 +56,7 @@ def _lookup_method_sig_params(
             # 用被调用类的类型参数解析 generic_signature
             callee_tparams_list = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
             callee_tparams = frozenset(callee_tparams_list)
-            types, _ = _parse_method_param_types(m.generic_signature, callee_tparams_list)
+            types, _ = _parse_method_param_types(m.generic_signature, callee_tparams_list, registry)
             if not types:
                 return None
             # 将 callee 类型参数映射到 caller 上下文：
@@ -203,9 +204,10 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             args.insert(0, e_str)
         obj_expr, _ = sim.pop()
         obj_e = render_expr(obj_expr)
-        # 找到 ._super 链：class_name（当前类 binary）→ cls_short（目标父类 Rust 短名）
+        # 找到 super 链：class_name（当前类 binary）→ cls_short（目标父类 Rust 短名）
+        # 前缀 `_super.` / `_super._super.` 统一翻译成 `__super()` 调用链（方案 §16）
         super_pfx = _find_super_chain_to_class(class_name, cls_short or '', registry) if registry else '_super.'
-        recv_e = f"{obj_e}.{super_pfx.rstrip('.')}" if super_pfx else obj_e
+        recv_e = _super_prefix_to_expr(obj_e, super_pfx) if super_pfx else obj_e
         rust_mname = _safe_field(_mangle_if_overloaded(cls_short or '', mname, comment, registry))
         arg_str = ', '.join(args)
         rust_ret = jvm_to_rust(ret, registry)
@@ -302,8 +304,10 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 ctor_call = f"{raw_cls_rust}::{ctor_name}({arg_str})"
                 super_pfx = _find_super_chain_to_class(class_name, raw_cls_rust, registry) if registry else '_super.'
                 if super_pfx:
-                    field_path = super_pfx.rstrip('.')
-                    sim.emit(RawStmt(f"this.{field_path} = {ctor_call}?;"))
+                    # super(...)：以已构造好的父类值重建 this（宏的 __new_with_super）。
+                    # JVM 校验器保证 <init> 的 invokespecial 只指向直接父类或同类，
+                    # 所以这里恒为 1 层，不需要按层数拼 _super 路径。
+                    sim.emit(RawStmt(f"this = Self::__new_with_super({ctor_call}?);"))
                 else:
                     # 同类构造器委托 this(args)：直接替换 this（初始占位值丢弃）
                     sim.emit(RawStmt(f"this = {ctor_call}?;"))
@@ -456,7 +460,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         elif recv_base and recv_base not in ('Object', '()'):
             super_method_pfx = _find_method_super_prefix_for_type(recv_base, mname, registry, descriptor=jvm_desc)
     if super_method_pfx:
-        obj_e = f"{obj_e}.{super_method_pfx.rstrip('.')}"
+        obj_e = _super_prefix_to_expr(obj_e, super_method_pfx)
 
     # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
     arg_str = ', '.join(args)

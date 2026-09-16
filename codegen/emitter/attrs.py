@@ -185,10 +185,72 @@ def _java_class_attr(ci: ClassInfo, compiled: bool = False,
         # Object 类自身不使用宏（from_any/downcast 定义在 Object 上，循环依赖）
         struct_name = ci.name.split('/')[-1]
         if struct_name == 'Object':
-            return f'#[cfg_attr(any(), java_class(\n{inner}\n))]'
-        return f'#[java_rta_macros::java_class(\n{inner}\n)]'
+            return f'#[cfg_attr(any(), java_class_attr(\n{inner}\n))]'
+        return f'#[java_rta_macros::java_class_attr(\n{inner}\n)]'
     else:
         return f'#[java_class(\n{inner}\n)]'
+
+
+def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
+                           superclass_rust: str = "",
+                           superclass_fields: list[tuple[str, str]] | None = None) -> list[str]:
+    """生成 `java_class! { ... }` 块内的类级别属性行（方案 §4）。
+
+    分两段，用注释分隔，让读者一眼区分「字节码元数据」与「宏展开输入」：
+
+      - 字节码元数据：binary_name / super_class / interfaces / access / …，
+        纯记录用途，宏只读其中少数几个键；
+      - 宏展开输入：superclass（Rust 类型文本）/ superclass_fields（codegen 展平）/
+        all_supertypes（instanceof 静态展开）/ is_interface /
+        has_to_string_method / has_hash_code_method。
+
+    superclass_fields 的键值对由调用方（class_writer）从 registry 展平整条继承链得到，
+    顺序必须是父类字段在前（JVM 内存布局，方案 §6）。
+    """
+    lines: list[str] = []
+    looks = '// '
+
+    # ── 段 1：字节码元数据 ────────────────────────────────────────────────
+    lines.append(f'{looks}── 字节码元数据 ' + '─' * 46)
+    def _q(s: str) -> str:
+        return s.replace('\\', '\\\\').replace('"', '\\"')
+
+    lines.append(f'#[binary_name       = "{_q(ci.name)}"]')
+    lines.append(f'#[super_class       = "{_q(ci.super_class or "")}"]')
+    lines.append(f'#[interfaces        = "{_q(",".join(ci.interfaces or []))}"]')
+    lines.append(f'#[access            = "{_access_str(ci.access_flags) if ci.access_flags else ""}"]')
+    lines.append(f'#[modifiers         = "{_class_modifiers_str(ci.access_flags) if ci.access_flags else ""}"]')
+    lines.append(f'#[generic_signature = "{_q(ci.generic_signature or "")}"]')
+    lines.append(f'#[is_abstract       = {str(bool(ci.is_abstract)).lower()}]')
+    lines.append(f'#[is_enum           = {str(bool(ci.is_enum)).lower()}]')
+    lines.append(f'#[is_deprecated     = {str(bool(ci.is_deprecated)).lower()}]')
+    lines.append(f'#[source            = "{_q(ci.source_file or "")}"]')
+    if ci.inner_classes:
+        ic_strs = ';'.join(
+            f'{ic.inner_class}:{ic.outer_class}:{ic.inner_name}:{ic.access_flags}'
+            for ic in ci.inner_classes
+        )
+        lines.append(f'#[inner_classes     = "{_q(ic_strs)}"]')
+
+    # ── 段 2：宏展开输入 ──────────────────────────────────────────────────
+    lines.append('')
+    lines.append(f'{looks}── 宏展开输入 ' + '─' * 46)
+    lines.append(f'#[is_interface      = {str(bool(ci.is_interface)).lower()}]')
+    if superclass_rust:
+        lines.append(f'#[superclass        = "{superclass_rust}"]')
+    if superclass_fields:
+        items = ', '.join(f'{n}: {t}' for n, t in superclass_fields)
+        lines.append(f'#[superclass_fields({items})]')
+    if not ci.is_interface:
+        supertypes = _compute_all_supertypes(ci, registry)
+        if supertypes:
+            lines.append(f'#[all_supertypes    = "{";".join(supertypes)}"]')
+        _method_sigs = {(m.name, m.descriptor) for m in (ci.methods or [])}
+        if ('toString', '()Ljava/lang/String;') in _method_sigs:
+            lines.append('#[has_to_string_method = true]')
+        if ('hashCode', '()I') in _method_sigs:
+            lines.append('#[has_hash_code_method = true]')
+    return lines
 
 
 def _java_field_attr(f: FieldInfo) -> str:
@@ -210,13 +272,19 @@ def _java_field_attr(f: FieldInfo) -> str:
     return '#[cfg_attr(any(), java_field(' + ', '.join(parts) + '))]'
 
 
-def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
+def _java_method_attr(m: ParsedMethod, compiled: bool = False,
+                      in_block: bool = False) -> str:
     """生成方法元数据标注行。
 
     compiled=True（JDK 类生成）：
       - native 方法：#[cfg_attr(any(), java_native(...))]，供 build.rs 扫描
       - 其他方法：#[cfg_attr(any(), java_method(...))]，含完整元数据
     compiled=False（元数据存根）：原生属性格式 #[java_method(...)] / #[java_native(...)]。
+
+    in_block=True：方法写在 `java_class! { impl ... }` 内。
+      此时必须用单段路径 `#[java_method(...)]`——块级宏按 ident 匹配并剥离这些元数据属性，
+      不会把它们透传给方法（两段路径 `java_rta_macros::java_method` 匹配不上，会被当作
+      真实属性宏重新施加在方法上）。
     """
     tag = 'java_native' if m.is_native else 'java_method'
     desc = m.descriptor.replace('"', '\\"')
@@ -242,6 +310,12 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
     if m.method_parameters:
         mp_str = ';'.join(f'{n}:{a}' for n, a in m.method_parameters).replace('"', '\\"')
         parts.append(f'method_parameters = "{mp_str}"')
+    if in_block:
+        # 块级宏内：单段路径，宏会剥离；native 需要显式标记（宏靠「无方法体」也认，
+        # 但显式标记让文件读者一眼看出这是 native 声明）
+        if m.is_native:
+            return f'#[native]\n#[{tag}(' + ', '.join(parts) + ')]'
+        return f'#[{tag}(' + ', '.join(parts) + ')]'
     if compiled:
         if m.is_native:
             # native 方法：cfg_attr 包裹保留元数据，由 _impl.rs 手写实现

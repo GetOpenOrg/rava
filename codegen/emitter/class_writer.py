@@ -9,7 +9,8 @@ from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default
 from ..method import gen_method_body, _indent
 from ..type_map import parse_class_type_params, parse_field_type
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
-from .attrs import (to_snake, _java_class_attr, _java_field_attr, _java_method_attr)
+from .attrs import (to_snake, _java_class_attr, _java_class_block_head,
+                    _java_field_attr, _java_method_attr)
 from .method_gen import _gen_native_stub
 
 _safe_field_name = safe_ident
@@ -219,22 +220,22 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 全量手写类（native_impl 文件含 pub struct）：codegen 跳过 struct 生成，改输出 pub use _impl::*
     _full_impl = ci.name in (full_impl_classes or set())
 
+    # Arch-1：接口在 Rust 层是 `pub type Name = Object;` 类型别名（由 java_class 宏生成），
+    # 不存在可承载实例/静态方法的 Rust 类型，因此不生成任何 impl 块。
+    # 注：接口静态方法（如 List.of）在当前架构下无归宿，属已知缺口。
+    _is_iface = bool(ci.is_interface)
+
     parts: list[str] = [
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs)]",
         f"use {user_crate_prefix or 'crate'}::prelude::*;",
         *cross_imports,
         "",
     ]
-    if not _full_impl:
-        parts.append(_java_class_attr(ci, compiled=True, registry=registry))
-    field_type_prefix = "JField"
-
     inst_fields = [f for f in ci.fields if not f.is_static]
 
-    # T76：_super 嵌套字段替代字段展平
-    # 若有父类（且不是 Object），在实例字段前插入 _super: ParentType
-    # proc-macro 读 super_class 注解，自动生成 From<Self> for Parent
-    # emitter 在 struct 定义后额外生成显式 upcast 方法（as_xxx / into_xxx）
+    # Option C（方案 §16「_super 语义边界」）：`_super` 是父类状态的**唯一所有者**，
+    # 子类通过宏生成的转发访问器获得「展平字段视图」。
+    # 不把父类字段复制进子类 Inner——那会让同一字段存在两份状态并立即分叉。
     _has_super = bool(
         ci.super_class and ci.super_class != 'java/lang/Object'
     )
@@ -248,12 +249,19 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 构建泛型参数字符串（用于 struct 和 impl 头）
     if class_type_params:
         type_params_str = ', '.join(class_type_params)
-        # 泛型参数需要 Clone + Default + 'static；Default 是必须的，因为 _super: Default::default() 要求父链所有类型参数实现 Default
+        # 泛型参数需要 Clone + Default + 'static。
+        # 这组 bound 是纯粹的 Rust 能力声明——故意不引入 `JavaType` 这类
+        # 游离于 Java 命名空间之外的 trait 名（CLAUDE.md 命名原则，方案 §4）。
+        # Default 是必须的：`_super: Default::default()` 与字段默认值都要求它。
         bounds_str = ', '.join(f"{p}: Clone + Default + 'static" for p in class_type_params)
         struct_generic = f"<{bounds_str}>"
-        impl_header   = f"impl<{bounds_str}> {struct_name}<{type_params_str}>"
+        ty_params_only = f"<{type_params_str}>"
+        # impl 头只写裸参数：块级宏用 struct 上的 generics（含补齐的 bound 与 where 子句）
+        # 重新生成 impl 头，这里的 impl generics 仅作读者提示。
+        impl_header   = f"impl<{type_params_str}> {struct_name}<{type_params_str}>"
     else:
         struct_generic = ''
+        ty_params_only = ''
         impl_header   = f"impl {struct_name}"
 
     # 构建注册表短名集合，用于校验字段类型中引用的类是否存在
@@ -298,100 +306,84 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             return False  # 有未知类型名，校验失败
         return True
 
-    if not _full_impl and (inst_fields or _has_super):
-        field_lines = []
-        # _super 字段：嵌入直接父类（T76，替代字段展平）
-        if _has_super:
-            parent_rust = short_cls(ci.super_class)
-            if registry and ci.super_class in registry:
-                parent_ci = registry[ci.super_class]
-                parent_params = parse_class_type_params(parent_ci.generic_signature) if parent_ci.generic_signature else []
-                if parent_params:
-                    if class_type_params:
-                        # 子类有泛型参数：传播给父类，不足的用 Object 填充
-                        args = class_type_params[:len(parent_params)]
-                        while len(args) < len(parent_params):
-                            args.append('Object')
-                        parent_rust += '<' + ', '.join(args) + '>'
-                    else:
-                        # 子类无泛型参数但父类需要（如 CharacterUnicodeScript extends Enum<E>）：用 Object 后备
-                        parent_rust += '<' + ', '.join('Object' for _ in parent_params) + '>'
-            field_lines.append(f"    pub _super: {parent_rust},")
+    # ── 父类 Rust 类型（含泛型实参）─────────────────────────────────────
+    parent_rust = ''
+    if _has_super:
+        parent_rust = short_cls(ci.super_class)
+        if registry and ci.super_class in registry:
+            parent_ci = registry[ci.super_class]
+            parent_params = parse_class_type_params(parent_ci.generic_signature) if parent_ci.generic_signature else []
+            if parent_params:
+                if class_type_params:
+                    # 子类有泛型参数：传播给父类，不足的用 Object 填充
+                    args = class_type_params[:len(parent_params)]
+                    while len(args) < len(parent_params):
+                        args.append('Object')
+                    parent_rust += '<' + ', '.join(args) + '>'
+                else:
+                    # 子类无泛型参数但父类需要（如 CharacterUnicodeScript extends Enum<E>）：用 Object 后备
+                    parent_rust += '<' + ', '.join('Object' for _ in parent_params) + '>'
+
+    def _resolve_field_rust(f) -> str:
+        """字段的 Rust 类型：优先字段级 generic_signature（TE; → E），回退裸描述符。
+        generic_signature 解析为 Object，或引用了不存在的类型时，用描述符推断。"""
+        gen_rust = (parse_field_type(f.generic_signature, class_type_params, registry)
+                    if f.generic_signature else '')
+        desc_rust = jvm_to_rust(f.descriptor, registry)
+        return (gen_rust
+                if gen_rust and gen_rust != 'Object'
+                and _validate_field_type(gen_rust, class_type_params)
+                else desc_rust)
+
+    # ── 继承链字段展平（方案 §6）────────────────────────────────────────
+    # codegen 侧展平整条继承链，父类字段在前；宏侧零 registry 依赖。
+    # 注意：展平结果只用于生成「转发访问器」，父类字段的实际存储在 `_super` 里
+    # （见 §16：复制字段会造成同一字段两份状态）。
+    superclass_fields: list[tuple[str, str]] = []
+    if _has_super and registry and not _full_impl:
+        _chain: list = []
+        _seen_chain: set[str] = set()
+        _cursor = ci.super_class
+        while (_cursor and _cursor != 'java/lang/Object'
+               and _cursor in registry and _cursor not in _seen_chain):
+            _seen_chain.add(_cursor)
+            _p_ci = registry[_cursor]
+            _chain.append(_p_ci)
+            _cursor = _p_ci.super_class
+        _declared: set[str] = set()
+        for _ancestor in reversed(_chain):
+            for _f in _ancestor.fields:
+                if _f.is_static:
+                    continue
+                _sf_name = _safe_field_name(_f.name)
+                if _sf_name in _declared:
+                    continue
+                _declared.add(_sf_name)
+                superclass_fields.append((_sf_name, _resolve_field_rust(_f)))
+
+    # ── struct 声明（裸类型，封装细节由宏收拢）──────────────────────────
+    struct_lines: list[str] = []
+    if not _full_impl:
         for f in inst_fields:
             safe_fname = _safe_field_name(f.name)
-            field_lines.append("    " + _java_field_attr(f))
-            # 优先用字段级 generic_signature（如 TE; → E），回退到裸描述符
-            # 若 generic_signature 解析结果是 Object，或引用了不存在的类型，用描述符推断
-            gen_rust = (parse_field_type(f.generic_signature, class_type_params)
-                        if f.generic_signature else '')
-            desc_rust = jvm_to_rust(f.descriptor, registry)
-            field_rust = (gen_rust
-                          if gen_rust and gen_rust != 'Object'
-                          and _validate_field_type(gen_rust, class_type_params)
-                          else desc_rust)
-            field_lines.append(f"    pub {safe_fname}: {field_type_prefix}<{field_rust}>,")
-        # 若有泛型参数但字段中未用到，加 PhantomData 防止 E0392
-        if class_type_params:
-            phantom_ty = ', '.join(f'std::marker::PhantomData<{p}>' for p in class_type_params)
-            if len(class_type_params) > 1:
-                phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
-            field_lines.append(f"    pub _phantom: {phantom_ty},")
-        decls = '\n'.join(field_lines)
-        parts.append(f"#[derive(Clone, Default, PartialEq)]\npub struct {struct_name}{struct_generic} {{\n{decls}\n}}\n")
-    elif not _full_impl:
-        if class_type_params:
-            # 无字段但有泛型参数：改用 tuple struct 包含 PhantomData
-            if len(class_type_params) == 1:
-                phantom_ty = f'std::marker::PhantomData<{class_type_params[0]}>'
-            else:
-                phantom_ty = f'std::marker::PhantomData<({", ".join(class_type_params)},)>'
-            parts.append(f"#[derive(Clone, Default, PartialEq)]\npub struct {struct_name}{struct_generic}({phantom_ty});\n")
-        else:
-            parts.append(f"#[derive(Clone, Default, PartialEq)]\npub struct {struct_name}{struct_generic};\n")
+            struct_lines.append("    " + _java_field_attr(f))
+            struct_lines.append(f"    pub {safe_fname}: {_resolve_field_rust(f)},")
+        # 未被字段引用的类型参数由宏补 PhantomData（block.rs），codegen 不再输出 _phantom
 
-    # T76：为有父类的类生成显式 upcast 方法（as_xxx / into_xxx）
-    # 不使用 Deref（Rust 反模式），改用显式方法，语义清晰
-    # 全量手写类的 upcast 由手写文件自行提供，codegen 跳过
-    if _has_super and registry and not _full_impl:
-        upcast_lines = [f'{impl_header} {{']
-        access_path = '_super'
-        cur_super = ci.super_class
-        # upcast 方法只使用子类自身的类型参数（child_tparams 在 impl block 中始终可用）
-        # 不传播祖先的参数名（祖先参数名在子类 impl block 中不可见）
-        child_tparams: list[str] = list(class_type_params)
-        while cur_super and cur_super != 'java/lang/Object':
-            parent_rust_name = short_cls(cur_super)
-            snake = to_snake(parent_rust_name.replace('$', '_'))
-            # 计算该祖先级的完整类型表达式（含泛型参数），只用子类自身参数名
-            parent_full_type = parent_rust_name
-            ancestor_ci = registry.get(cur_super)
-            if ancestor_ci:
-                ancestor_params = parse_class_type_params(ancestor_ci.generic_signature) if ancestor_ci.generic_signature else []
-                if ancestor_params:
-                    if child_tparams:
-                        args = child_tparams[:len(ancestor_params)]
-                        while len(args) < len(ancestor_params):
-                            args.append('Object')
-                    else:
-                        args = ['Object'] * len(ancestor_params)
-                    parent_full_type += '<' + ', '.join(args) + '>'
-            upcast_lines.append(f'    pub fn as_{snake}(&self) -> &{parent_full_type} {{ &self.{access_path} }}')
-            upcast_lines.append(f'    pub fn into_{snake}(self) -> {parent_full_type} {{ self.{access_path} }}')
-            cur_super = ancestor_ci.super_class if ancestor_ci else None
-            access_path += '._super'
-        upcast_lines.append('}')
-        parts.append('\n'.join(upcast_lines) + '\n')
 
-    # T55：为每个祖先生成 From<Self> for Ancestor（含直接父类 + 所有祖先链）
-    # 这让 child.into() 在期望父类类型的位置自动工作，避免 E0308
-    # 全量手写类的 From impl 由手写文件自行提供，codegen 跳过
+    # T76 的 as_xxx / into_xxx upcast 方法已由 java_class! 宏统一承接
+    # （宏生成 `__super()` / `__into_super()`，upcast 与字段存储解耦，见方案 §16）。
+
+    # T55：为每个祖先生成 From<Self> for Ancestor（直接父类 + 整条祖先链）。
+    # coerce.py 的 upcast 路径依赖它（`child.into()` 出现在期望父类类型的位置），
+    # 所以不能删除。访问路径改走宏生成的 `__into_super()`，祖先级数用链式调用表达：
+    #   v.__into_super()                      → 直接父类
+    #   v.__into_super().__into_super()       → 祖父
+    # 全量手写类的 From impl 由手写文件自行提供，codegen 跳过。
     if _has_super and registry and not _full_impl:
-        child_full = struct_name
-        if class_type_params:
-            child_full += '<' + ', '.join(class_type_params) + '>'
+        child_full = struct_name + ty_params_only
         impl_generics_for_from = f"<{bounds_str}>" if class_type_params else ''
-
-        access_path = '_super'
+        access_expr = 'v'
         cur_super = ci.super_class
         child_tparams_t55: list[str] = list(class_type_params)
         while cur_super and cur_super != 'java/lang/Object':
@@ -408,13 +400,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     else:
                         args = ['Object'] * len(ancestor_params)
                     parent_full_type += '<' + ', '.join(args) + '>'
+            access_expr = f'{access_expr}.__into_super()'
             parts.append(
                 f"impl{impl_generics_for_from} From<{child_full}> for {parent_full_type} {{\n"
-                f"    fn from(v: {child_full}) -> {parent_full_type} {{ v.{access_path} }}\n"
+                f"    fn from(v: {child_full}) -> {parent_full_type} {{ {access_expr} }}\n"
                 f"}}\n"
             )
             cur_super = ancestor_ci.super_class if ancestor_ci else None
-            access_path += '._super'
 
     # T55b 已删除（Arch-5）：
     # Arch-1 后接口 = Object 类型别名，From<ConcreteClass> for Interface 语义上等于
@@ -422,10 +414,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 会用 Default::default() 丢弃具体数据。
     # 正确路径：ConcreteClass.into() → Object，通过 java_class 宏生成的 Into<Object> 完成。
     # K-2: 共置 _impl.rs 文件由 project_writer 在生成阶段复制；class_writer 不再生成 #[path] 块。
-    # 占位：保留变量引用以防后续代码使用，实际不生成任何内容。
     _nf_entry = (new_format_map or {}).get(ci.name)
-    if False:  # K-2: 已由 project_writer 的共置机制替代
-        pass
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
@@ -470,7 +459,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # JVM 原始类型描述符集合，可安全包装在 OnceLock<Mutex<T>> 中（均实现 Send + Copy）
     # String（Java 自定义类型）不在此集合，因其含 Rc 字段，不实现 Send
     _MUTABLE_STATIC_DESCS = frozenset({'I', 'J', 'F', 'D', 'Z', 'B', 'C', 'S'})
-    for sf in static_fields:
+    for sf in ([] if _is_iface else static_fields):
         safe_fname = _safe_field_name(sf.name)
         if safe_fname in existing_method_names:
             # 字段名与方法名冲突：改用 _field 后缀，让 getstatic 仍能访问该字段
@@ -480,7 +469,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             continue
         # 优先用 generic_signature 确定返回类型（包含泛型参数信息）
         if sf.generic_signature:
-            _gs_ret = parse_field_type(sf.generic_signature, class_type_params)
+            _gs_ret = parse_field_type(sf.generic_signature, class_type_params, registry)
             # 校验引用的类型存在，否则回退到描述符
             if _gs_ret and _gs_ret != 'Object' and not _validate_field_type(_gs_ret, class_type_params):
                 _gs_ret = ''
@@ -560,11 +549,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
 
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
-    for m in visible_methods:
+    for m in ([] if _is_iface else visible_methods):
         if m.name == '<clinit>':
             # 用户类：翻译 <clinit> 为 class_init() 函数
             if _is_user_class:
-                attr_line = _java_method_attr(m, compiled=True)
+                attr_line = _java_method_attr(m, compiled=True, in_block=True)
                 try:
                     clinit_body = gen_method_body(
                         m, ci, registry=registry,
@@ -597,7 +586,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if fn_name_check in _nf_covered:
             continue
 
-        attr_line = _java_method_attr(m, compiled=True)
+        attr_line = _java_method_attr(m, compiled=True, in_block=True)
         # 判断该方法是否需要翻译字节码：
         #   1. native / abstract → 永远生成 stub（panic!）
         #   2. call_chain 不为空 且 此方法不在调用链上 → panic!("stub: ...")
@@ -703,7 +692,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                                 default_name_counts.get(dm.name, 0) > 1)
                 dm_rust = mangle_name(dm.name, dm.descriptor) if needs_mangle else dm.name
                 used_rust_names.add(dm_rust)
-                dm_attr = _java_method_attr(dm, compiled=True)
+                dm_attr = _java_method_attr(dm, compiled=True, in_block=True)
                 # 将 class_name 替换为实现类，使 gen_method_body 生成正确的 this 类型
                 dm_adapted = _copy.copy(dm)
                 dm_adapted.class_name = ci.name
@@ -757,10 +746,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         rust_fty = jvm_to_rust(f.descriptor, registry)
                         if rust_fty == 'String':
                             field_cmps.append(
-                                f'self.{fname}.get().to_string() == other.{fname}.get().to_string()'
+                                f'self.__get_{fname}().to_string() == other.__get_{fname}().to_string()'
                             )
                         else:
-                            field_cmps.append(f'self.{fname}.get() == other.{fname}.get()')
+                            field_cmps.append(f'self.__get_{fname}() == other.__get_{fname}()')
                     cmp_expr = ' && '.join(field_cmps) if field_cmps else 'true'
                     new_blocks.append(attr +
                         f'pub fn equals(&self, mut o: Object) -> Result<bool> {{\n'
@@ -776,14 +765,43 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 new_blocks.append(block)
         method_blocks = new_blocks
 
-    # 插入模块级 static 声明（OnceLock 等），放在 impl 块之前
-    if module_statics:
+    # ── 组装 java_class! { ... } 块（方案 §3 核心设计）────────────────────
+    # 模块级 static 声明必须留在宏外（宏不接受 struct/impl 之外的项目）。
+    if module_statics and not _is_iface:
         parts.append('\n'.join(module_statics))
 
-    impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
-    parts.append(f"{impl_header} {{\n{impl_body}\n}}\n")
+    if not _full_impl:
+        block: list[str] = []
+        block.extend(_java_class_block_head(
+            ci, registry=registry,
+            superclass_rust=parent_rust,
+            superclass_fields=superclass_fields,
+        ))
+        block.append('')
+        # struct 声明：裸类型（封装细节收拢进宏），无 derive / 无 _super / 无 _phantom
+        if struct_lines:
+            block.append(f"pub struct {struct_name}{struct_generic} {{")
+            block.extend(struct_lines)
+            block.append("}")
+        else:
+            block.append(f"pub struct {struct_name}{struct_generic};")
 
-    # Into<Object> / From<Object> / Debug 由 #[java_rta_macros::java_class] proc-macro 自动生成
+        # 接口：宏把 struct 展开为 `pub type Name = Object;`（Arch-1），无 impl 块
+        if not _is_iface:
+            block.append('')
+            impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
+            block.append(f"{impl_header} {{")
+            block.append(impl_body)
+            block.append("}")
+
+        parts.append("java_rta_macros::java_class! {")
+        for line in block:
+            parts.append(_indent(line) if line else '')
+        parts.append("}")
+        parts.append('')
+
+    # BINARY_NAME / ObjectVTable / Into<Object> / From<Object> / Debug 全部由
+    # java_class! 宏在编译期展开（方案 §11 职责边界总表）。
     # （Object 类走手写路径 java_runtime/，不经过此函数）
 
     return '\n'.join(parts)

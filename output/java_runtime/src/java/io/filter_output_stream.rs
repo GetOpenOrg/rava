@@ -2,75 +2,103 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
+use crate::java::math::*;
+use crate::java::nio::*;
+use crate::java::nio::charset::*;
 use crate::java::security::*;
+use crate::java::text::*;
+use crate::java::text::spi::*;
+use crate::java::time::*;
+use crate::java::time::chrono::*;
+use crate::java::time::temporal::*;
+use crate::java::time::zone::*;
 use crate::java::util::*;
+use crate::java::util::concurrent::*;
+use crate::java::util::concurrent::atomic::*;
+use crate::java::util::concurrent::locks::*;
+use crate::java::util::function::*;
+use crate::java::util::regex::*;
+use crate::java::util::spi::*;
+use crate::java::util::stream::*;
+use crate::java::util::zip::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
+use crate::sun::reflect::misc::*;
+use crate::sun::security::action::*;
 use crate::sun::security::util::*;
-
-#[java_rta_macros::java_class(
-    binary_name       = "java/io/FilterOutputStream",
-    super_class       = "java/io/OutputStream",
-    interfaces        = "",
-    access            = "public",
-    modifiers         = "",
-    generic_signature = "",
-    is_interface      = false,
-    is_abstract       = false,
-    is_enum           = false,
-    is_deprecated     = false,
-    source            = "FilterOutputStream.java",
-    all_supertypes    = "java/io/Closeable;java/io/FilterOutputStream;java/io/Flushable;java/io/OutputStream;java/lang/Object",
-)]
-#[derive(Clone, Default, PartialEq)]
-pub struct FilterOutputStream {
-    pub _super: OutputStream,
-    #[cfg_attr(any(), java_field(name = "out", descriptor = "Ljava/io/OutputStream;", access = "protected", modifiers = "", is_static = false))]
-    pub out: JField<OutputStream>,
-    #[cfg_attr(any(), java_field(name = "closed", descriptor = "Z", access = "private", modifiers = "volatile", is_static = false))]
-    pub closed: JField<bool>,
-    #[cfg_attr(any(), java_field(name = "closeLock", descriptor = "Ljava/lang/Object;", access = "private", modifiers = "final", is_static = false))]
-    pub closeLock: JField<Object>,
-}
-
-impl FilterOutputStream {
-    pub fn as_output_stream(&self) -> &OutputStream { &self._super }
-    pub fn into_output_stream(self) -> OutputStream { self._super }
-}
+use crate::sun::text::*;
+use crate::sun::util::*;
+use crate::sun::util::calendar::*;
+use crate::sun::util::locale::*;
+use crate::sun::util::locale::provider::*;
+use crate::sun::util::spi::*;
+use crate::java::text::Normalizer;
 
 impl From<FilterOutputStream> for OutputStream {
-    fn from(v: FilterOutputStream) -> OutputStream { v._super }
+    fn from(v: FilterOutputStream) -> OutputStream { v.__into_super() }
 }
 
-impl FilterOutputStream {
-    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/io/OutputStream;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
-    pub fn new(out: OutputStream) -> Result<Self> {
-        panic!("stub: java/io/FilterOutputStream.<init>:(Ljava/io/OutputStream;)V")
+java_rta_macros::java_class! {
+    // ── 字节码元数据 ──────────────────────────────────────────────
+    #[binary_name       = "java/io/FilterOutputStream"]
+    #[super_class       = "java/io/OutputStream"]
+    #[interfaces        = ""]
+    #[access            = "public"]
+    #[modifiers         = ""]
+    #[generic_signature = ""]
+    #[is_abstract       = false]
+    #[is_enum           = false]
+    #[is_deprecated     = false]
+    #[source            = "FilterOutputStream.java"]
+
+    // ── 宏展开输入 ──────────────────────────────────────────────
+    #[is_interface      = false]
+    #[superclass        = "OutputStream"]
+    #[all_supertypes    = "java/io/Closeable;java/io/FilterOutputStream;java/io/Flushable;java/io/OutputStream;java/lang/Object"]
+
+    pub struct FilterOutputStream {
+        #[cfg_attr(any(), java_field(name = "out", descriptor = "Ljava/io/OutputStream;", access = "protected", modifiers = "", is_static = false))]
+        pub out: OutputStream,
+        #[cfg_attr(any(), java_field(name = "closed", descriptor = "Z", access = "private", modifiers = "volatile", is_static = false))]
+        pub closed: bool,
+        #[cfg_attr(any(), java_field(name = "closeLock", descriptor = "Ljava/lang/Object;", access = "private", modifiers = "final", is_static = false))]
+        pub closeLock: Object,
     }
 
-    #[java_rta_macros::java_method(name = "write", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
-    pub fn write_i(&self, b: i32) -> Result<()> {
-        panic!("stub: java/io/FilterOutputStream.write:(I)V")
-    }
+    impl FilterOutputStream {
+        #[java_method(name = "<init>", descriptor = "(Ljava/io/OutputStream;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
+        pub fn new(out: OutputStream) -> Result<Self> {
+            panic!("stub: java/io/FilterOutputStream.<init>:(Ljava/io/OutputStream;)V")
+        }
 
-    #[java_rta_macros::java_method(name = "write", descriptor = "([B)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
-    pub fn write_arr_b(&self, b: Rc<RefCell<Vec<i8>>>) -> Result<()> {
-        panic!("stub: java/io/FilterOutputStream.write:([B)V")
-    }
+        #[java_method(name = "write", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
+        pub fn write_i(&self, b: i32) -> Result<()> {
+            panic!("stub: java/io/FilterOutputStream.write:(I)V")
+        }
 
-    #[java_rta_macros::java_method(name = "write", descriptor = "([BII)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
-    pub fn write_arr_b_i_i(&self, b: Rc<RefCell<Vec<i8>>>, off: i32, len: i32) -> Result<()> {
-        panic!("stub: java/io/FilterOutputStream.write:([BII)V")
-    }
+        #[java_method(name = "write", descriptor = "([B)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
+        pub fn write_arr_b(&self, b: Rc<RefCell<Vec<i8>>>) -> Result<()> {
+            panic!("stub: java/io/FilterOutputStream.write:([B)V")
+        }
 
-    #[java_rta_macros::java_method(name = "flush", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
-    pub fn flush(&self) -> Result<()> {
-        panic!("stub: java/io/FilterOutputStream.flush:()V")
-    }
+        #[java_method(name = "write", descriptor = "([BII)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
+        pub fn write_arr_b_i_i(&self, b: Rc<RefCell<Vec<i8>>>, off: i32, len: i32) -> Result<()> {
+            panic!("stub: java/io/FilterOutputStream.write:([BII)V")
+        }
 
-    #[java_rta_macros::java_method(name = "close", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
-    pub fn close(&self) -> Result<()> {
-        panic!("stub: java/io/FilterOutputStream.close:()V")
+        #[java_method(name = "flush", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
+        pub fn flush(&self) -> Result<()> {
+            panic!("stub: java/io/FilterOutputStream.flush:()V")
+        }
+
+        #[java_method(name = "close", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
+        pub fn close(&self) -> Result<()> {
+            panic!("stub: java/io/FilterOutputStream.close:()V")
+        }
     }
 }

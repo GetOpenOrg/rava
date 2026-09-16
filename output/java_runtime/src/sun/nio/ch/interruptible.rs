@@ -2,32 +2,58 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
+use crate::java::math::*;
+use crate::java::nio::*;
+use crate::java::nio::charset::*;
 use crate::java::security::*;
+use crate::java::text::*;
+use crate::java::text::spi::*;
+use crate::java::time::*;
+use crate::java::time::chrono::*;
+use crate::java::time::temporal::*;
+use crate::java::time::zone::*;
 use crate::java::util::*;
+use crate::java::util::concurrent::*;
+use crate::java::util::concurrent::atomic::*;
+use crate::java::util::concurrent::locks::*;
+use crate::java::util::function::*;
+use crate::java::util::regex::*;
+use crate::java::util::spi::*;
+use crate::java::util::stream::*;
+use crate::java::util::zip::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
+use crate::sun::reflect::misc::*;
+use crate::sun::security::action::*;
 use crate::sun::security::util::*;
+use crate::sun::text::*;
+use crate::sun::util::*;
+use crate::sun::util::calendar::*;
+use crate::sun::util::locale::*;
+use crate::sun::util::locale::provider::*;
+use crate::sun::util::spi::*;
+use crate::java::text::Normalizer;
 
-#[java_rta_macros::java_class(
-    binary_name       = "sun/nio/ch/Interruptible",
-    super_class       = "java/lang/Object",
-    interfaces        = "",
-    access            = "public",
-    modifiers         = "abstract interface",
-    generic_signature = "",
-    is_interface      = true,
-    is_abstract       = true,
-    is_enum           = false,
-    is_deprecated     = false,
-    source            = "Interruptible.java",
-)]
-#[derive(Clone, Default, PartialEq)]
-pub struct Interruptible;
+java_rta_macros::java_class! {
+    // ── 字节码元数据 ──────────────────────────────────────────────
+    #[binary_name       = "sun/nio/ch/Interruptible"]
+    #[super_class       = "java/lang/Object"]
+    #[interfaces        = ""]
+    #[access            = "public"]
+    #[modifiers         = "abstract interface"]
+    #[generic_signature = ""]
+    #[is_abstract       = true]
+    #[is_enum           = false]
+    #[is_deprecated     = false]
+    #[source            = "Interruptible.java"]
 
-impl Interruptible {
-    #[java_rta_macros::java_method(name = "interrupt", descriptor = "(Ljava/lang/Thread;)V", access = "public", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
-    pub fn interrupt(&self, arg0: Thread) -> Result<()> {
-        panic!("stub: sun/nio/ch/Interruptible.interrupt:(Ljava/lang/Thread;)V")
-    }
+    // ── 宏展开输入 ──────────────────────────────────────────────
+    #[is_interface      = true]
+
+    pub struct Interruptible;
 }

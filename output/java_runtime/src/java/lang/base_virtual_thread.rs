@@ -2,60 +2,89 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::r#ref::*;
 use crate::java::lang::reflect::*;
+use crate::java::math::*;
+use crate::java::nio::*;
+use crate::java::nio::charset::*;
 use crate::java::security::*;
+use crate::java::text::*;
+use crate::java::text::spi::*;
+use crate::java::time::*;
+use crate::java::time::chrono::*;
+use crate::java::time::temporal::*;
+use crate::java::time::zone::*;
 use crate::java::util::*;
+use crate::java::util::concurrent::*;
+use crate::java::util::concurrent::atomic::*;
+use crate::java::util::concurrent::locks::*;
+use crate::java::util::function::*;
+use crate::java::util::regex::*;
+use crate::java::util::spi::*;
+use crate::java::util::stream::*;
+use crate::java::util::zip::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
+use crate::sun::reflect::generics::factory::*;
+use crate::sun::reflect::generics::repository::*;
+use crate::sun::reflect::generics::scope::*;
+use crate::sun::reflect::misc::*;
+use crate::sun::security::action::*;
 use crate::sun::security::util::*;
-
-#[java_rta_macros::java_class(
-    binary_name       = "java/lang/BaseVirtualThread",
-    super_class       = "java/lang/Thread",
-    interfaces        = "",
-    access            = "package",
-    modifiers         = "abstract",
-    generic_signature = "",
-    is_interface      = false,
-    is_abstract       = true,
-    is_enum           = false,
-    is_deprecated     = false,
-    source            = "BaseVirtualThread.java",
-    inner_classes     = "java/lang/ThreadBuilders$BoundVirtualThread:java/lang/ThreadBuilders:BoundVirtualThread:24",
-    all_supertypes    = "java/lang/BaseVirtualThread;java/lang/Object;java/lang/Runnable;java/lang/Thread",
-)]
-#[derive(Clone, Default, PartialEq)]
-pub struct BaseVirtualThread {
-    pub _super: Thread,
-}
-
-impl BaseVirtualThread {
-    pub fn as_thread(&self) -> &Thread { &self._super }
-    pub fn into_thread(self) -> Thread { self._super }
-}
+use crate::sun::text::*;
+use crate::sun::util::*;
+use crate::sun::util::calendar::*;
+use crate::sun::util::locale::*;
+use crate::sun::util::locale::provider::*;
+use crate::sun::util::spi::*;
+use crate::java::text::Normalizer;
+use crate::jdk::internal::vm::Continuation;
 
 impl From<BaseVirtualThread> for Thread {
-    fn from(v: BaseVirtualThread) -> Thread { v._super }
+    fn from(v: BaseVirtualThread) -> Thread { v.__into_super() }
 }
 
-impl BaseVirtualThread {
-    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;IZ)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
-    pub fn new(name: String, characteristics: i32, bound: bool) -> Result<Self> {
-        panic!("stub: java/lang/BaseVirtualThread.<init>:(Ljava/lang/String;IZ)V")
-    }
+java_rta_macros::java_class! {
+    // ── 字节码元数据 ──────────────────────────────────────────────
+    #[binary_name       = "java/lang/BaseVirtualThread"]
+    #[super_class       = "java/lang/Thread"]
+    #[interfaces        = ""]
+    #[access            = "package"]
+    #[modifiers         = "abstract"]
+    #[generic_signature = ""]
+    #[is_abstract       = true]
+    #[is_enum           = false]
+    #[is_deprecated     = false]
+    #[source            = "BaseVirtualThread.java"]
+    #[inner_classes     = "java/lang/ThreadBuilders$BoundVirtualThread:java/lang/ThreadBuilders:BoundVirtualThread:24"]
 
-    #[java_rta_macros::java_method(name = "park", descriptor = "()V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
-    pub fn park(&self) -> Result<()> {
-        panic!("stub: java/lang/BaseVirtualThread.park:()V")
-    }
+    // ── 宏展开输入 ──────────────────────────────────────────────
+    #[is_interface      = false]
+    #[superclass        = "Thread"]
+    #[superclass_fields(eetop: i64, tid: i64, name: String, interrupted: bool, contextClassLoader: ClassLoader, inheritedAccessControlContext: Object, holder: Thread_FieldHolder, threadLocals: Object, inheritableThreadLocals: Object, scopedValueBindings: Object, interruptLock: Object, parkBlocker: Object, nioBlocker: Object, cont: Continuation, uncaughtExceptionHandler: Object, threadLocalRandomSeed: i64, threadLocalRandomProbe: i32, threadLocalRandomSecondarySeed: i32, container: Object, headStackableScopes: Object)]
+    #[all_supertypes    = "java/lang/BaseVirtualThread;java/lang/Object;java/lang/Runnable;java/lang/Thread"]
 
-    #[java_rta_macros::java_method(name = "parkNanos", descriptor = "(J)V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
-    pub fn parkNanos(&self, arg0: i64) -> Result<()> {
-        panic!("stub: java/lang/BaseVirtualThread.parkNanos:(J)V")
-    }
+    pub struct BaseVirtualThread;
 
-    #[java_rta_macros::java_method(name = "unpark", descriptor = "()V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
-    pub fn unpark(&self) -> Result<()> {
-        panic!("stub: java/lang/BaseVirtualThread.unpark:()V")
+    impl BaseVirtualThread {
+        #[java_method(name = "<init>", descriptor = "(Ljava/lang/String;IZ)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
+        pub fn new(name: String, characteristics: i32, bound: bool) -> Result<Self> {
+            panic!("stub: java/lang/BaseVirtualThread.<init>:(Ljava/lang/String;IZ)V")
+        }
+
+        #[java_method(name = "park", descriptor = "()V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
+        pub fn park(&self) -> Result<()> {
+            panic!("stub: java/lang/BaseVirtualThread.park:()V")
+        }
+
+        #[java_method(name = "parkNanos", descriptor = "(J)V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
+        pub fn parkNanos(&self, arg0: i64) -> Result<()> {
+            panic!("stub: java/lang/BaseVirtualThread.parkNanos:(J)V")
+        }
+
+        #[java_method(name = "unpark", descriptor = "()V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
+        pub fn unpark(&self) -> Result<()> {
+            panic!("stub: java/lang/BaseVirtualThread.unpark:()V")
+        }
     }
 }

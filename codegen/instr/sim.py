@@ -22,7 +22,6 @@ from ..types import Instr
 from .coerce import (
     _float_lit, _escape_str, _parse_slot, _to_i32,
     _coerce_to_object, _coerce_from_null, _coerce_value,
-    _find_field_super_prefix, _find_field_super_prefix_for_type,
     _parse_field_ref, _is_subtype, _rust_type_to_binary,
     _get_field_generic_signature, _has_subtypes, _get_all_subtypes_ordered,
     _PRIMITIVE_RUST_TYPES,
@@ -331,21 +330,18 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                 _gsig = _get_field_generic_signature(class_name, fname, registry)
                 if _gsig:
                     _ctparams = list(sim.class_type_params) if sim.class_type_params else []
-                    _parsed = _parse_field_type(_gsig, _ctparams)
+                    _parsed = _parse_field_type(_gsig, _ctparams, registry)
                     if _parsed and _parsed != 'Object':
                         # 校验基础类名存在（避免引用未生成的类型）
                         _base = _parsed.split('<')[0]
                         _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
                         if _base in _ctparams or _base in _reg_shorts:
                             ftype = _parsed
-            # T76: 基于接收者实际 Rust 类型查找字段的 _super 路径
-            recv_base = render_type(obj_ty).split('<')[0].strip()
-            cls_short = class_name.rsplit('/', 1)[-1] if '/' in class_name else class_name
-            if recv_base == cls_short:
-                super_pfx = _find_field_super_prefix(class_name, fname, registry)
-            else:
-                super_pfx = _find_field_super_prefix_for_type(recv_base, fname, registry)
-            sim.push(RawExpr(f"{render_expr(obj_expr)}.{super_pfx}{fname}.get()"), RsNamed(ftype))
+            # 字段读取 → 宏生成的访问器（方案 §7）。
+            # 继承字段由子类的转发访问器统一暴露（父类字段在前展平，§6），
+            # 所以不再需要按接收者静态类型拼 `_super._super.` 路径——
+            # 那层复杂度已收拢进宏（见方案 §16：_super 语义边界）。
+            sim.push(RawExpr(f"{render_expr(obj_expr)}.__get_{fname}()"), RsNamed(ftype))
         else:
             sim.push(RawExpr(f"{render_expr(obj_expr)}.field"), I32)
 
@@ -363,7 +359,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                     _ctparams = _parse_class_type_params(_ci.generic_signature) if _ci.generic_signature else []
                     for _fi in (_ci.fields or []):
                         if _fi.name == fname and getattr(_fi, 'generic_signature', None):
-                            _gen = _parse_field_type(_fi.generic_signature, _ctparams)
+                            _gen = _parse_field_type(_fi.generic_signature, _ctparams, registry)
                             if _gen and _gen != ftype:
                                 ftype = _gen
                                 break
@@ -385,7 +381,8 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             if null_coerce is not None:
                 val_str = null_coerce
             elif ftype == 'Object' and val_ty_name not in ('Object', '()') and val_str_raw != 'this':
-                # 若值的类型是泛型参数（单大写字母如 T/E/K/V），字段实为 JField<T>，直接赋值
+                # 若值的类型是泛型参数（单大写字母如 T/E/K/V），字段槽位类型就是该参数本身，
+                # 直接赋值（不再有 JField<T> 包装）
                 if len(val_ty_name) <= 2 and val_ty_name[0].isupper() and val_ty_name.rstrip('0123456789').isalpha():
                     val_str = val_str_raw
                 else:
@@ -408,14 +405,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                     val_str = 'Clone::clone(&this)'
                 elif val_str != 'this':
                     val_str = f'Clone::clone(&{val_str})'
-            # T76: 基于接收者实际 Rust 类型查找字段的 _super 路径
-            recv_base = render_type(obj_ty).split('<')[0].strip()
-            cls_short = class_name.rsplit('/', 1)[-1] if '/' in class_name else class_name
-            if recv_base == cls_short:
-                super_pfx = _find_field_super_prefix(class_name, fname, registry)
-            else:
-                super_pfx = _find_field_super_prefix_for_type(recv_base, fname, registry)
-            sim.emit(RawStmt(f"{render_expr(obj_expr)}.{super_pfx}{fname}.set({val_str});"))
+            # 字段写入 → 宏生成的 `__set_xxx` 访问器（方案 §7）。
+            # 继承字段同样由转发访问器承接，无需 `_super` 前缀路径（§16）。
+            sim.emit(RawStmt(f"{render_expr(obj_expr)}.__set_{fname}({val_str});"))
         else:
             sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))
 

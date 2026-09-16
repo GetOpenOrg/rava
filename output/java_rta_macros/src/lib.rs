@@ -3,6 +3,20 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, GenericParam, LitStr, LitBool};
 
+mod block;
+
+/// `java_class! { ... }` — 块级宏（方案 2026-09-16 的 `java_class!` 块级宏统一方案）。
+///
+/// 同时持有 struct 字段定义与 impl 块方法体，在一个宏调用里完成全部展开：
+///   - Inner struct（flat layout）+ newtype 包装
+///   - 字段访问器（基本类型 Cell / 引用类型 RefCell，borrow 窗口最小化）
+///   - 方法体 token 重写（self.field → 访问器调用）
+///   - JavaObject / ObjectVTable / Upcast / native 存根生成
+#[proc_macro]
+pub fn java_class(input: TokenStream) -> TokenStream {
+    block::expand(input.into()).into()
+}
+
 /// 标记该方法实现了 Java 字节码中的 `ACC_NATIVE` 方法。
 #[proc_macro_attribute]
 pub fn jvm_native(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
@@ -28,8 +42,9 @@ pub fn java_method(_attr: TokenStream, item: TokenStream) -> TokenStream { item 
 #[proc_macro_attribute]
 pub fn java_native(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
 
-/// `#[java_rta_macros::java_class(binary_name = "...", all_supertypes = "...", ...)]`
+/// `#[java_rta_macros::java_class_attr(binary_name = "...", all_supertypes = "...", ...)]`
 ///
+/// 迁移期保留的旧属性宏（方案 §13）。块级宏 `java_class!` 稳定后废弃。
 /// 为 Java 翻译类自动生成：
 ///   - `pub const BINARY_NAME: &'static str`    — 类的 JVM 二进制名（Arch-6）
 ///   - `pub fn __is_instance_of_fn`             — instanceof 辅助函数（Arch-2）
@@ -37,7 +52,7 @@ pub fn java_native(_attr: TokenStream, item: TokenStream) -> TokenStream { item 
 ///   - `impl From<Object>`                      — 从 Object 中取出（checkcast）
 ///   - `impl Debug`                             — 基础调试输出
 #[proc_macro_attribute]
-pub fn java_class(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn java_class_attr(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     let name = &input.ident;
 

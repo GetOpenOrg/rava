@@ -23,6 +23,7 @@
 13. [迁移期兼容策略](#13-迁移期兼容策略)
 14. [已知风险](#14-已知风险)
 15. [设计原则记录](#15-设计原则记录)
+16. [`_super` 语义边界（实施期决策记录）](#16-_super-语义边界实施期决策记录)
 
 ---
 
@@ -124,7 +125,9 @@ java_class! {
     }
 
     // ── impl 块 ──────────────────────────────────────────
-    impl<E: JavaType> ArrayList<E> {
+    // 泛型参数的 bound 是纯粹的 Rust 能力声明，故意不引入 `JavaType` 这类游离于
+    // Java 命名空间之外的 trait 名（CLAUDE.md 命名原则）
+    impl<E: Clone + Default + 'static> ArrayList<E> {
 
         #[descriptor        = "(Ljava/lang/Object;)Z"]
         #[generic_signature = "(TE;)Z"]
@@ -202,6 +205,10 @@ java_class! {
 
 ## 6 继承字段展平
 
+> **实施期修订（见 §16）**：本节描述「展平」的**责任分工与顺序约定**，这两点成立且已实现。
+> 但展平产物是**转发访问器**，不是子类 Inner 里的副本字段——父类字段的实际存储唯一地留在
+> `_super` 里。原因见 §16.2：复制字段会立刻产生两份分叉的状态。
+
 ### 责任分工
 
 **codegen Python 负责展平**，宏侧零 registry 依赖。原因：
@@ -252,7 +259,7 @@ codegen 在生成 `#[superclass_fields(...)]` 时必须保证此顺序。
 
 宏为每个字段（含继承字段）生成访问器，可见性为 `pub(crate)`，供 `_impl.rs` 手写层使用。
 
-公开 struct 是 newtype：`pub struct ArrayList<E: JavaType>(RefCell<ArrayList__inner<E>>)`，内部用 `self.0` 访问 `RefCell`。
+公开 struct 是 newtype：`pub struct ArrayList<E: Clone + Default + 'static>(ArrayList__inner<E>)`，内部用 `self.0` 访问。
 
 ### 基本类型（`Copy` 类型：`i32`、`i64`、`bool`、`f64` 等）
 
@@ -448,7 +455,7 @@ java/util/
 
 ```rust
 // array_list_impl.rs — 手写层，用访问器写，不伪装 Java 风格
-impl<E: JavaType> ArrayList<E> {
+impl<E: Clone + Default + 'static> ArrayList<E> {
     pub fn sort(&self, c: Object) -> Result<()> {
         // 用访问器访问字段——手写者知道自己在写 Rust，这是合理要求
         let mut data = self.__borrow_mut_elementData();
@@ -566,3 +573,91 @@ Step 7  删除 JField<T>
 **根本原因**：codegen Python 侧已经拥有所有需要的信息（字段类型、泛型签名、继承关系），但这些信息没有有效传递给 Rust 的类型系统。块级宏是这个"信息传递桥梁"——codegen 把 Python 侧知道的一切写进宏参数，宏在 Rust 编译期展开，两侧信息完全对齐。
 
 **推论**：遇到生成代码"看起来不像 Java"的地方，首先问"Python 侧是否已有这个信息"，如果有，解法是把它传给宏，而不是在生成代码里用替代方案。
+
+---
+
+## 16 `_super` 语义边界（实施期决策记录）
+
+> 实施日期：2026-09-16
+> 状态：已实现并验证（`java_class!` 宏 + codegen 全链路切换完成）
+
+### 16.1 决策来源
+
+继承模型选 **Option C：展平字段 + 保留 `_super` 仅供分派**。理由是字段访问（读写、token 重写）走统一路径，Upcast / `instanceof` 与字段布局解耦。
+
+### 16.2 实施时发现的硬约束
+
+字面形态的 Option C 不可实现。两条候选路径都走不通：
+
+**（a）「展平字段 + `_super` 降级为 PhantomData」→ 同一字段两份状态。**
+
+`_super: Parent` 内部的父类字段，和子类 Inner 里展平出来的父类字段，是两块独立存储。于是
+
+```rust
+obj.__super().__get_modCount()   // 读的是 _super 里那份
+obj.__get_modCount()             // 读的是展平出来那份
+```
+
+第一次写入就分叉，之后永远不一致。这是静默错误，比编译错误危险得多。
+
+**（b）「展平字段 + unsafe 前缀转换做 upcast」→ 内存布局不成立。**
+
+`Parent` 是 newtype `Parent(Parent__inner)`，其首字段是 `RefCell<...>`；子类 Inner 展平后首字段是父类第一个字段。两者前缀类型根本不同，`&*(self as *const _ as *const Parent)` 既不安全也不正确。`RefCell` 没有 `repr(transparent)`，加 `#[repr(C)]` 也救不回来。
+
+### 16.3 实际落地的语义
+
+**`_super` 是父类状态的唯一所有者，是 Inner struct 里的真实字段。「展平字段」是视图，不是存储。**
+
+子类不再复制父类字段，而是由宏为每个祖先字段生成一个转发访问器：
+
+```rust
+pub struct ArrayList__inner<E> {
+    // 父类状态的唯一所有者；ArrayList__inner 里没有 modCount
+    pub(crate) _super: AbstractList<E>,
+    pub(crate) elementData: Box<RefCell<Rc<RefCell<Vec<Object>>>>>,
+    pub(crate) size: Cell<i32>,
+}
+
+// 转发访问器（内部字段 vs 继承字段，对外签名完全一致）
+pub fn __get_modCount(&self) -> i32          { self.0._super.__get_modCount() }
+pub fn __set_modCount(&self, v: i32)         { self.0._super.__set_modCount(v); }
+pub fn __get_size(&self) -> i32              { self.0.size.get() }
+pub fn __set_size(&self, v: i32)             { self.0.size.set(v); }
+```
+
+转发访问器把「深度差异」抹平成「签名差异为零」，这就是 Option C 想要的统一视图——只是统一发生在**访问器层**，而不是内存布局层。
+
+### 16.4 边界规则（三条，均为强制）
+
+| # | 位置 | 允许的写法 | 禁止的写法 |
+|---|------|-----------|-----------|
+| 1 | `java_class! { impl ... }` 内的生成方法体 | `self.field`（读写、下标、方法调用） | 任何形式的 `self._super` |
+| 2 | 超类方法派发 | `self.__super().method(args)` | `self._super.method(args)` |
+| 3 | 宏外代码（`_impl.rs` / `_ext.rs`） | `__get_xxx()` / `__set_xxx()` / `__borrow_xxx()` / `__borrow_mut_xxx()` | `self.0.<field>` / `self._super` |
+
+规则 1 是「展平视图」的全部意义：方法体里 `self.modCount`（继承字段）与 `self.size`（自有字段）写法完全一致，宏在重写阶段决定该调哪个访问器，写代码的人不需要知道字段定义在哪一级。
+
+宏对外只暴露三个合法入口：`__super()` / `__into_super()` / `__new_with_super()`。
+
+### 16.5 codegen 侧的连带简化
+
+转发访问器抹平了深度差异之后，codegen 不再需要按接收者静态类型拼 `_super._super.` 路径：
+
+- 删除 `_find_field_super_prefix` / `_find_field_super_prefix_for_type`
+- `getfield` → `{recv}.__get_{name}()`，`putfield` → `{recv}.__set_{name}(v)`
+- invoke 侧的前缀翻译收敛到一处：`_super_prefix_to_expr(recv, "_super._super.")` → `recv.__super().__super()`
+
+「按接收者静态类型拼路径」是 T76 方案里最脆弱的一环（正确性依赖类型推断），现在整体消失。
+
+### 16.6 与文档前面章节的两处偏差
+
+| 章节 | 文档写法 | 实际实现 | 原因 |
+|------|---------|---------|------|
+| §7 | `self.0.borrow().size`（单一 `RefCell<Inner>`） | 每字段独立 `Cell`/`RefCell` | 单一 `RefCell<Inner>` 下，同一条语句里访问两个字段必然 panic（`{ self.0.borrow_mut().a.push(x) } + self.b.size` 第二个借用失败）。§9 想用 block 缩小窗口，但窗口无法缩到「同一表达式的两个子表达式之间」 |
+| §7 | 引用类型字段 `RefCell<T>` | `Box<RefCell<T>>` | `Throwable.cause`、`Class.classData` 这类自引用/互引用字段在无间接层时触发 `E0072: recursive type has infinite size`。`Box` 提供间接层，同时保持「字段槽可变 + 对象在堆上」的 Java 语义（与旧 `JField<T> = Box<RefCell<T>>` 一致） |
+
+### 16.7 `#[repr(C)]` 的决定
+
+**不加。** JVM 内存布局一致性只在「按偏移量访问字段」时才有意义，当前架构没有 JNI 字段偏移的读取方；引入 `Cell`/`RefCell`/`Box` 包装后，`#[repr(C)]` 也无法复现 HotSpot 布局。
+
+字段顺序仍按 JVM 顺序排列（§6），一旦出现真实的 JNI 偏移需求，正确的做法是生成一张偏移表（`field_name → offset`），而不是依赖 `#[repr(C)]`。

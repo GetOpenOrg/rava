@@ -233,31 +233,10 @@ def _super_path_to_class(from_cls: str, to_cls: str, registry: dict | None) -> s
     return ''
 
 
-def _find_field_super_prefix(class_name: str, safe_fname: str, registry: dict | None) -> str:
-    """T76: 找到字段 safe_fname 在继承链中的位置，返回 _super 访问前缀。
-    bytecode getfield/putfield 的 comment 里的 cls 是接收者静态类型（不是声明类），
-    所以需要通过字段名在注册表中查找来计算 _super 路径。
-    返回 '' 表示字段在当前类直接字段中，返回 '_super.' 或 '_super._super.' 等。"""
-    if not registry or not class_name:
-        return ''
-    ci = registry.get(class_name)
-    if ci is None:
-        return ''
-    # 当前类直接字段中是否有该字段
-    direct_names = {_safe_field(f.name) for f in ci.fields if not f.is_static}
-    if safe_fname in direct_names:
-        return ''
-    # 向上遍历继承链查找
-    path_parts: list[str] = []
-    sc = ci.super_class
-    while sc and sc != 'java/lang/Object' and sc in registry:
-        path_parts.append('_super')
-        parent_ci = registry[sc]
-        parent_names = {_safe_field(f.name) for f in parent_ci.fields if not f.is_static}
-        if safe_fname in parent_names:
-            return '.'.join(path_parts) + '.'
-        sc = parent_ci.super_class
-    return ''
+# T76 的 `_find_field_super_prefix` / `_find_field_super_prefix_for_type` 已删除。
+# 它们为「按接收者静态类型拼 `_super._super.` 字段路径」而存在；现在继承字段由
+# java_class! 宏生成的转发访问器统一暴露（方案 §6 展平 + §16 _super 语义边界），
+# getfield/putfield 直接发 `__get_xxx()` / `__set_xxx(v)`，路径计算不再需要。
 
 
 def _find_super_chain_to_class(current_binary: str, target_cls_short: str, registry: dict | None) -> str:
@@ -288,6 +267,20 @@ def _find_super_chain_to_class(current_binary: str, target_cls_short: str, regis
             break
         sc = sc_ci.super_class
     return '_super.'  # fallback: 至少一级 _super（目标类在继承链上但未在 registry 中）
+
+
+def _super_prefix_to_expr(recv: str, pfx: str) -> str:
+    """把 `_super.` / `_super._super.` 前缀转成 `__super()` 调用链。
+
+    java_class! 宏把 `_super` 收成实现细节（方案 §16）：宏外只能通过 `__super()`
+    取父类引用，不允许拼字段路径。于是
+
+        this._super.m()           → this.__super().m()
+        this._super._super.m()    → this.__super().__super().m()
+
+    层数由前缀里 `_super` 出现的次数决定，与旧实现一一对应。
+    """
+    return recv + '.__super()' * pfx.count('_super')
 
 
 def _find_method_super_prefix(class_name: str, mname: str, registry: dict | None,
@@ -440,12 +433,6 @@ def _is_direct_subtype(child_rust: str, parent_rust: str, registry: dict | None)
     return False
 
 
-def _find_field_super_prefix_for_type(recv_rust_type: str, fname: str, registry: dict | None) -> str:
-    """基于接收者 Rust 类型（短名）查找字段 _super 前缀。"""
-    binary = _rust_type_to_binary(recv_rust_type, registry)
-    if binary:
-        return _find_field_super_prefix(binary, fname, registry)
-    return ''
 
 
 def _get_field_generic_signature(class_name: str, safe_fname: str, registry: dict | None) -> str:

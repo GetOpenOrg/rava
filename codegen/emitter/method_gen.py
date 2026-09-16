@@ -136,7 +136,7 @@ def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple
 
             # 自动生成的类文件碰巧以 _impl.rs 结尾时（如 Collectors$CollectorImpl），跳过。
             # 真正的手写共置文件不包含 java_rta_macros::java_class 宏标注。
-            if '#[java_rta_macros::java_class(' in content:
+            if 'java_rta_macros::java_class' in content:
                 continue
 
             # 扫描 pub fn 名字（确定已手写哪些方法，codegen 跳过对应 stub）
@@ -168,7 +168,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     # 从 generic_signature 提取更具体的参数类型（与 gen_method_body 对齐）
     sig_param_types: list[str] = []
     if m.generic_signature and _ctparams:
-        sig_param_types, _ = parse_method_param_types(m.generic_signature, _ctparams)
+        sig_param_types, _ = parse_method_param_types(m.generic_signature, _ctparams, registry)
         if len(sig_param_types) != len(params):
             sig_param_types = []
 

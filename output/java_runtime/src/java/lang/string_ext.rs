@@ -6,17 +6,17 @@ impl String {
     pub fn from_owned(s: std::string::String) -> Self {
         let bytes: Vec<i8> = s.into_bytes().into_iter().map(|b| b as i8).collect();
         let mut inst = String::default();
-        inst.value.set(Rc::new(RefCell::new(bytes)));
-        inst.coder.set(0i8);
+        inst.__set_value(Rc::new(RefCell::new(bytes)));
+        inst.__set_coder(0i8);
         inst
     }
 }
 
 impl std::fmt::Display for String {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let rc = self.value.get();
+        let rc = self.__get_value();
         let bytes = rc.borrow();
-        if self.coder.get() == 0 {
+        if self.__get_coder() == 0 {
             let s: std::string::String = bytes.iter().map(|&b| b as u8 as char).collect();
             write!(f, "{}", s)
         } else {

@@ -9,7 +9,7 @@ impl Thread {
 
     #[jvm_native]
     pub fn interrupt(&self) -> Result<()> {
-        self.interrupted.set(true);
+        self.__set_interrupted(true);
         Ok(())
     }
 

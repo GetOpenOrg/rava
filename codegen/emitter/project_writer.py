@@ -26,7 +26,7 @@ def _write(path: str, content: str) -> None:
     if _is_jrt_rs and os.path.exists(path):
         try:
             with open(path, encoding='utf-8') as _f:
-                if '#[java_rta_macros::java_class(' not in _f.read(4096):
+                if 'java_rta_macros::java_class' not in _f.read(4096):
                     return  # 手写文件，不覆盖
         except Exception:
             pass
@@ -109,13 +109,23 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     #   其余 *.rs 均为 codegen 生成文件，清理后由本次 codegen 重新生成
     _PERMANENT = {
         os.path.join(jdk_src, 'java', 'lang', 'object.rs'),
-        os.path.join(jdk_src, 'java', 'util', 'iterator.rs'),
+        # 注：java/util/iterator.rs 虽在旧名单中，但其内容含 java_class 生成标记，
+        # 实为 codegen 产物（Arch-1 接口存根）。留在名单里会导致它永远停留在旧宏
+        # 格式、无法随 java_class! 块宏迁移，故移出，交由 codegen 重新生成。
         os.path.join(jdk_src, 'java', 'util', 'function', 'bi_consumer.rs'),
         os.path.join(jdk_src, 'java', 'util', 'function', 'binary_operator.rs'),
         os.path.join(jdk_src, 'java', 'util', 'function', 'supplier.rs'),
         os.path.join(jdk_src, 'java', 'util', 'function', 'function.rs'),
     }
-    # 将所有 git 追踪的 .rs 文件加入 PERMANENT，防止 codegen 删除已提交的文件
+    # 将 git 追踪的「手写」.rs 文件加入 PERMANENT：这类文件由人手维护，
+    # codegen 既不删除也不覆盖。
+    #
+    # 判别方式与 _write / _impl 扫描一致 —— 看文件里有没有自动生成标记
+    # `java_rta_macros::java_class`（属性宏形态与块宏形态都含该子串）：
+    #   含标记 → codegen 生成物，可被删除/覆盖（历史提交里混入了生成文件）
+    #   不含标记 → 真正手写（object.rs、*_impl.rs、*_ext.rs 等），永久保护
+    # 早期版本把「git 追踪」直接等同于「手写」，导致已提交的生成文件被永久冻结：
+    # 文件内容停留在旧宏格式，且被删后 codegen 只声明模块不写文件（E0583）。
     try:
         import subprocess as _subprocess
         _git_root = os.path.dirname(out_dir)
@@ -126,15 +136,22 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             text=True,
         ).splitlines()
         for _gf in _git_files:
-            if _gf.endswith('.rs'):
-                _abs = os.path.normpath(os.path.join(_git_root, _gf))
+            if not _gf.endswith('.rs'):
+                continue
+            _abs = os.path.normpath(os.path.join(_git_root, _gf))
+            try:
+                with open(_abs, encoding='utf-8') as _fh:
+                    _is_generated = 'java_rta_macros::java_class' in _fh.read(4096)
+            except Exception:
+                _is_generated = False  # 读不到时保守视为手写
+            if not _is_generated:
                 _PERMANENT.add(_abs)
     except Exception:
         pass
     if not batch_bin and os.path.isdir(jdk_src):
         for root, _dirs, files in os.walk(jdk_src):
             if root == jdk_src:
-                continue  # 跳过根目录（lib.rs, error.rs, types.rs 永久保留）
+                continue  # 跳过根目录（lib.rs, error.rs 永久保留）
             for fname in files:
                 if not fname.endswith('.rs'):
                     continue
@@ -144,7 +161,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     _fpath_check = os.path.join(root, fname)
                     try:
                         with open(_fpath_check, encoding='utf-8') as _fc:
-                            if '#[java_rta_macros::java_class(' not in _fc.read():
+                            if 'java_rta_macros::java_class' not in _fc.read():
                                 continue  # 真正手写共置文件，保留
                     except Exception:
                         continue  # 读取失败时保守保留
@@ -276,7 +293,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if _parts[-1].endswith('_impl.rs') or _parts[-1].endswith('_ext.rs'):
                 try:
                     with open(_perm_path, encoding='utf-8') as _fc:
-                        if '#[java_rta_macros::java_class(' not in _fc.read(4096):
+                        if 'java_rta_macros::java_class' not in _fc.read(4096):
                             continue  # 手写共置文件，跳过
                 except Exception:
                     continue
@@ -305,8 +322,15 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         jdk_mod_tree = {}
         for root, _dirs, files in os.walk(jdk_src):
             for fname in files:
-                if fname.endswith('.rs') and fname not in ('lib.rs', 'mod.rs'):
-                    jdk_mod_tree.setdefault(root, set()).add(fname[:-3])
+                if not fname.endswith('.rs') or fname in ('lib.rs', 'mod.rs'):
+                    continue
+                # _impl.rs / _ext.rs 是共置手写文件，由下方 companion_mods 以私有
+                # `mod X_impl;` 声明。若此处也计入 children，会再生成一条
+                # `pub mod X_impl; pub use X_impl::*;`，导致 E0428（重复定义）
+                # 与 E0592/E0034（glob 重导出歧义）。
+                if fname.endswith('_impl.rs') or fname.endswith('_ext.rs'):
+                    continue
+                jdk_mod_tree.setdefault(root, set()).add(fname[:-3])
         _changed = True
         while _changed:
             _changed = False

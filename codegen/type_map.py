@@ -435,10 +435,12 @@ def parse_class_type_params(sig: str) -> list[str]:
 def parse_method_param_types(
     sig: str,
     class_type_params: list[str],
+    registry=None,
 ) -> tuple[list[str], str]:
     """从方法 Signature 中解析参数类型和返回类型（Rust 类型字符串）。
 
     class_type_params：类级类型参数名（如 ['E'] 或 ['K', 'V']）
+    registry：类注册表，用于 Arch-1 接口擦除（接口类型参数 → Object）
 
     示例（class_type_params=['E']）：
       '(TE;)Z'    → (['E'], 'bool')
@@ -472,7 +474,7 @@ def parse_method_param_types(
         # 解析参数类型
         param_types: list[str] = []
         while i < len(sig) and sig[i] != ')':
-            rust_type, i = _parse_one_type(sig, i, class_type_params)
+            rust_type, i = _parse_one_type(sig, i, class_type_params, registry)
             param_types.append(rust_type)
 
         if i < len(sig) and sig[i] == ')':
@@ -480,7 +482,7 @@ def parse_method_param_types(
 
         # 解析返回类型（忽略 ThrowsSignature ^...）
         if i < len(sig) and sig[i] != '^':
-            ret_type, _ = _parse_one_type(sig, i, class_type_params)
+            ret_type, _ = _parse_one_type(sig, i, class_type_params, registry)
         else:
             ret_type = '()'
 

@@ -25,20 +25,20 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
             elementData.borrow_mut().resize(needed, Object::default());
         }
         elementData.borrow_mut()[s as usize] = e_to_object(e);
-        this.size.set(s.wrapping_add(1i32));
+        this.__set_size(s.wrapping_add(1i32));
         Ok(())
     }
 
     #[jvm_native]
     pub fn elementData(&self, index: i32) -> Result<Object> {
-        let data = self.elementData.get();
+        let data = self.__get_elementData();
         let data = data.borrow();
         Ok(data.get(index as usize).cloned().unwrap_or_default())
     }
 
     #[jvm_native]
     pub fn get(&self, index: i32) -> Result<Object> {
-        let size = self.size.get();
+        let size = self.__get_size();
         if index < 0 || index >= size {
             return Err(JvmError::Custom(format!(
                 "Index: {}, Size: {}", index, size

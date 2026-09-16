@@ -1,12 +1,10 @@
 #![allow(unused_imports)]
 pub mod error;
-pub mod types;
 pub mod java;
 pub mod jdk;
 pub mod sun;
 
 pub use error::{JvmError, Result};
-pub use types::JField;
 pub use java::lang::Object;
 
 /// Java 风格浮点数格式化：整数值显示 .0，其他同 Rust 默认格式
@@ -73,7 +71,6 @@ impl PartialEq for MutexHolder {
 pub mod prelude {
     #![allow(unused_imports)]
     pub use super::error::{JvmError, Result};
-    pub use super::types::JField;
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;
     pub use super::Printable;

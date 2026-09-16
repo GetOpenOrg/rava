@@ -54,7 +54,7 @@ def gen_method_body(
     # 如果方法有泛型签名且类有类型参数，用签名推断参数/返回类型
     if method.generic_signature and _class_tparams:
         sig_param_types, sig_ret_type = parse_method_param_types(
-            method.generic_signature, _class_tparams
+            method.generic_signature, _class_tparams, registry
         )
     else:
         sig_param_types, sig_ret_type = [], ''
@@ -209,43 +209,11 @@ def gen_method_body(
 
     # ── 构造器：创建 this ───────────────────────────────────────────
     if is_ctor:
-        # T76: struct 使用 _super 嵌套，不再展平继承字段
-        # 只初始化本类直接字段，父类通过 _super: Default::default() 初始化
-        inst_fields = [f for f in (class_info.fields if class_info else []) if not f.is_static]
-        _ctor_has_super = bool(
-            class_info and class_info.super_class
-            and class_info.super_class != 'java/lang/Object'
-        )
-        class_tparams = parse_class_type_params(class_info.generic_signature) if (class_info and class_info.generic_signature) else []
-        _safe_fname = safe_ident
-        _pft = parse_field_type
-        _class_tparams_set = set(class_tparams)
-
-        def _field_init(f) -> str:
-            # 若字段的泛型签名解析到类型参数（如 T、K、V），不能用 Default::default()
-            # 因为类型参数 T 不一定实现 Default；用 JField::new_uninit() 代替
-            gen_ty = _pft(f.generic_signature, class_tparams) if (f.generic_signature and class_tparams) else ''
-            if gen_ty and gen_ty in _class_tparams_set:
-                return f"{_safe_fname(f.name)}: JField::new_uninit()"
-            return f"{_safe_fname(f.name)}: JField::new({rust_default(jvm_to_rust(f.descriptor))})"
-
-        # 按照 emitter.py 的 struct 字段顺序：_super → 本类字段 → _phantom
-        # 特例：无 _super、无字段、有泛型参数 → tuple struct，用 Self(PhantomData) 而非具名字段
-        _is_tuple_struct = (not _ctor_has_super and not inst_fields and bool(class_tparams))
-        if _is_tuple_struct:
-            struct_init = "Self(std::marker::PhantomData)"
-        else:
-            parts_init = []
-            if _ctor_has_super:
-                parts_init.append("_super: Default::default()")
-            parts_init.extend(_field_init(f) for f in inst_fields)
-            if class_tparams:
-                parts_init.append("_phantom: std::marker::PhantomData")
-            if parts_init:
-                # 用 ..Default::default() 兜底额外字段
-                struct_init = f"Self {{ {', '.join(parts_init)}, ..Default::default() }}"
-            else:
-                struct_init = "Self::default()"
+        # struct 是 java_class! 宏生成的 newtype（`Name(RefCell/Name__inner)`），
+        # 无法用结构体字面量构造。宏为 Inner 派生 Default（各字段取类型默认值，
+        # 与 JVM 的零初始化语义一致），因此统一用 `Self::default()` 起手，
+        # 后续 putfield 走 `__set_xxx` 访问器逐字段赋值。
+        struct_init = "Self::default()"
         entries.append(('', f"    let mut this = {struct_init};"))
         sim.locals[0] = ('this', RsNamed(short_cls(method.class_name)), False)
 
