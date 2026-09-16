@@ -1,3 +1,0 @@
-# native_status.toml — 由 build.rs 自动维护
-# status: "implemented" | "needed" | "stub" | "not-needed"
-

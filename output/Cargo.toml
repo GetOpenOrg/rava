@@ -1,9 +1,0 @@
-[workspace]
-members = ["java_runtime", "java_rta_macros", "user"]
-resolver = "2"
-
-[profile.release]
-opt-level = 3
-lto       = true
-codegen-units = 1
-strip     = "symbols"
