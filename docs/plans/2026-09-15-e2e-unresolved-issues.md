@@ -1,7 +1,7 @@
 # E2E 测试未解决问题追踪
 
 > 创建日期：2026-09-15  
-> 最后更新：2026-09-16（第二次）  
+> 最后更新：2026-09-16（第三次：块级宏统一 + scratch 工作区后的全量状态修正）  
 > 基于测试套件：`tests/e2e/`（60 个测试）  
 > 更新方式：每次架构变更或 E2E 运行后手动补充/关闭条目
 
@@ -13,18 +13,18 @@
 
 | 类别 | 状态 | 优先级 | 影响范围 |
 |------|------|--------|---------|
-| [A. 编译错误 — 类型转换](#a-编译错误--类型转换) | 1 开放 / 3 已关闭 | 高 | 具体子类继承场景 |
+| [A. 编译错误 — 类型转换](#a-编译错误--类型转换) | 1 潜在 / 3 已关闭 | 低（未触发） | 具体子类继承场景 |
 | [B. 编译错误 — 缺失 From impl](#b-编译错误--缺失-from-impl) | 2 已关闭 | — | — |
-| [C. 编译错误 — 缺失模块/import](#c-编译错误--缺失模块import) | 1 开放 | 高 | 多个 jdk_classes |
+| [C. 编译错误 — 缺失模块/import](#c-编译错误--缺失模块import) | 1 已关闭 | — | — |
 | [D. 编译错误 — invokedynamic](#d-编译错误--invokedynamic-无法翻译) | 1 已关闭 / 1 补丁 | — | — |
-| [E. 编译错误 — 重复定义](#e-编译错误--重复定义) | 1 开放（降低优先级）| 低 | native_impl 冲突 |
+| [E. 编译错误 — 重复定义](#e-编译错误--重复定义) | 1 开放（架构防御缺失）| 低 | native_impl 冲突 |
 | [F. 运行时错误 — RefCell 双重借用](#f-运行时错误--refcell-双重借用) | 1 已关闭 | — | — |
 | [G. 运行时错误 — 多态/虚方法派发](#g-运行时错误--多态虚方法派发) | 1 已关闭 | — | — |
 | [H. 运行时错误 — 输出值错误](#h-运行时错误--输出值错误) | 1 开放 / 1 待验证 | 低 | TestBoundedGenerics |
-| [I. 编译层补丁 — 技术债务](#i-编译层补丁--技术债务) | 1 开放 / 5 已关闭 | 中 | 全局质量 |
-| [J. 命名原则违规](#j-命名原则违规--java_runtime-游离-trait) | 1 开放 / 2 已关闭 | 中 | 命名一致性 |
-| [K. 代码布局重构](#k-代码布局重构--native_impls-共置与内部包边界截断) | 2 已关闭 / 2 开放 | 中 | 全局基础设施 |
-| [N. 新架构债务 — 需 codegen 解决](#n-新架构债务--需-codegen-解决) | 1 开放 / 1 已关闭 | 中 | java_runtime 稳定性 |
+| [I. 编译层补丁 — 技术债务](#i-编译层补丁--技术债务) | 2 开放 / 4 已关闭 | 中 | 全局质量 |
+| [J. 命名原则违规](#j-命名原则违规--java_runtime-游离-trait) | 3 已关闭 | — | — |
+| [K. 代码布局重构](#k-代码布局重构--native_impls-共置与内部包边界截断) | 4 已关闭 | — | — |
+| [N. 新架构债务 — 需 codegen 解决](#n-新架构债务--需-codegen-解决) | 2 已关闭 | — | — |
 | [Arch. 架构任务](#arch-架构任务) | 6 已关闭 / 2 进行中 | — | — |
 
 ---
@@ -51,7 +51,7 @@
 
 **禁止**：手写 `From<InflaterInputStream> for InputStream`——这是生成器的工作（class_writer.py 应从继承链生成完整 From impl 链）。
 
-**状态**：🟡 潜在问题，当前调用链未触发；架构解法已明确，等触发时实施
+**状态**（2026-09-16 第三次更新）：🟡 潜在问题，当前调用链未触发。两项解法均已成事实——I-2 已统一为 `_is_subtype`；继承链 `From` impl 已由 codegen 自动生成（如 `ArrayList → AbstractList → AbstractCollection` 两级 `__into_super()` 链，见生成文件 `array_list.rs` 头部）。实际风险进一步降低，等真实测试触发时再验证。
 
 ---
 
@@ -90,21 +90,20 @@
 
 ## C. 编译错误 — 缺失模块/import
 
-### C-1: use 语句引用不存在的 jdk 包 🔴
+### C-1: use 语句引用不存在的 jdk 包 ✅
 
 **错误**：`E0432: unresolved import crate::java::lang::r#ref`、`crate::java::lang::reflect`、`crate::sun::security::util` 等  
 **根因**：codegen 把 JDK 类的全部依赖包写进 `use crate::...::*;`，但这些包（如 `java::lang::r#ref`、`java::lang::reflect`、`sun::security::util`）在当前测试调用链中没有类，因此没有生成对应模块，产生编译错误。
 
-**架构解法（codegen 侧）**：  
-`codegen/emitter/class_writer.py` 生成 `use` 语句时，检查每个包路径是否存在于当前轮次生成的模块列表（`generated_modules: set`）中。不存在则跳过该 `use` 行。  
-**禁止**：创建空模块文件作为占位——这是用手写掩盖生成器的问题。
+**修复**（2026-09-16，块级宏统一期间实现）：
+- `project_writer.py` 的 `jdk_pkg_set` 只从本轮实际生成的 `jdk_class_infos` 收集包路径（`jdk/` 前缀类跳过全局 glob 导入），每个 use 路径必然存在对应生成模块；
+- `skipped_classes`（jdk/ 内部类的显式导入）只包含确实生成了 stub 文件的类，带存在性保证；
+- `class_writer.py` 对自身包不在全局导入集时补充 `use crate::<own_pkg>::*;`，同样基于实际生成集合。
 
-**附加问题 — preconditions.rs 文件缺失**：  
-部分测试（TestBoundedGenerics 等）生成 `#[path = "..."] mod _impl;` 指向不存在文件。  
-已临时修复（2026-09-15）：`class_writer.py` 写 `#[path]` 前 `os.path.exists` 检查，不存在则省略。  
-根本修复：见 K-2（消除 `#[path]` 远程引用机制）。
+**附加问题 — preconditions.rs 文件缺失** ✅：  
+`class_writer.py` 写 `#[path]` 前 `os.path.exists` 检查（2026-09-15 临时修复）；K-2 已消除 `#[path]` 远程引用机制本身。
 
-**状态**：🔴 主问题未修复；架构解法已明确（class_writer.py 过滤不存在的包路径）
+**状态**：✅ 已修复
 
 ---
 
@@ -173,17 +172,18 @@
 
 **技术约束**：不能手写 `Sum` 相关代码——`TestBoundedGenerics` 的翻译必须完全来自字节码。
 
-**状态**：🔴 根因确认；架构解法已明确，依赖 `Integer::valueOf` 字节码翻译就绪
+**状态**（2026-09-16 第三次实测）：🔴 编译被 `E0599: __get_value on i32` 阻塞（与根因同族——拆箱/autobox 翻译缺口），运行时症状（0.0）暂不可达。已列入优先级队列 P0 的 `__get_value` 家族一并处理。
 
 ---
 
-### H-2: TestRecord 输出格式错误 🟡
+### H-2: TestRecord 输出格式错误 🟡（症状被新问题取代）
 
 **原描述**：期望 `Point[x=3, y=4]`，实际输出 `Object`。  
-**当前状态**：G-1 已修复（ObjectVTable.toString dispatch），此问题理论上已解决。需要实际运行验证。  
-若 `Point` 类的 `toString()` 字节码翻译正确，则 `println_v(Object::from_any(p))` 应输出正确格式。
+**当前状态**（2026-09-16 第三次实测）：TestRecord 编译失败于 **E0615**（`attempted to take value of method name on type &TestRecord_Person`）——record 访问器与字段名冲突，编译不过导致原“toString 输出 Object”症状不可达。G-1 的 ObjectVTable.toString 派发是否正确需等 E0615 修复后才能验证。
 
-**状态**：🟡 待验证（G-1 修复后，预期已解决）
+**新问题**：record 类的访问器生成与字段名冲突（`name` 既是字段又是方法名），属 codegen 命名/访问器生成问题，建议并入方法访问器生成逻辑一起修。
+
+**状态**：🟡 原 H-2 症状待验证（被 E0615 阻塞）；E0615 为新记录问题
 
 ---
 
@@ -246,15 +246,14 @@
 
 ---
 
-### J-3: `Printable` — Java 中不存在的接口 🟠
+### J-3: `Printable` — Java 中不存在的接口 ✅
 
-**位置**：`output/java_runtime/src/lib.rs:39`  
-**当前状态**：`println_v` 已改为 `<T: std::fmt::Display>` 而非 `T: Printable`；`Object` 通过 `ObjectVTable::toString()` 实现 `Display`。`Printable` trait 目前是死代码——定义存在但没有调用者使用它作为 trait bound。
+**位置**：`runtime/java_runtime/src/lib.rs`（原 `output/java_runtime/src/lib.rs`，scratch 工作区迁移后位于 runtime/）  
+**当前状态**：`println_v` 已改为 `<T: std::fmt::Display>` 而非 `T: Printable`；`Object` 通过 `ObjectVTable::toString()` 实现 `Display`。
 
-**正确解法**：直接删除 `lib.rs` 中的 `Printable` 定义及其所有 impl，这是一行删除操作。  
-**禁止**：保留 `Printable` 作为备用——死代码会造成混淆。
+**处置**（2026-09-16 第三次）：已删除 `Printable` trait 及其全部 impl（i32/i64/f32/f64/bool/i8/i16/u16/Object 共 9 个）与 prelude 导出。全仓 grep 确认零调用者。
 
-**状态**：🟠 死代码，可立即删除，独立不依赖任何其他变更
+**状态**：✅ 已删除（2026-09-16）
 
 ---
 
@@ -291,7 +290,7 @@
 
 ## N. 新架构债务 — 需 codegen 解决
 
-### N-1: `java_runtime` 手写代码中 E0107（接口泛型参数） 🟡
+### N-1: `java_runtime` 手写代码中 E0107（接口泛型参数） ✅
 
 **错误示例**：
 ```rust
@@ -303,23 +302,13 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 
 **根因**：Arch-1（2026-09-16）将接口改为 `pub type List = Object`（无泛型参数），但 `java_runtime` 中少量手写代码仍使用旧的 `List<T>` 写法。
 
-**当前状态（2026-09-16 第二次）**：随着 N-2 宏升级 + codegen 重新生成，大量原本手写的 `java_runtime` 文件已重新由 codegen 生成，E0107 从原来的约 143 处降至 **4 处**（集中在 `throwable.rs`、`list.rs`、`array_list.rs`）。
+**处置**（2026-09-16 第三次核实）：剩余 4 处（`throwable.rs` ×2、`list.rs`、`array_list.rs`）已在块级宏统一迁移期间随 codegen 重新生成一并消除——当前 `runtime/java_runtime/src` 中 grep `List<Throwable>` / `impl<E> List<E>` / `List<Object>` 零匹配。
 
-**4 处剩余位置**：
-- `java/lang/throwable.rs:42` — `JField<List<Throwable>>`
-- `java/lang/throwable.rs:60` — `List<Throwable>` 返回类型
-- `java/util/list.rs:29` — `impl<E> List<E>`
-- `java/util/array_list.rs:250` — `List<Object>` 参数
-
-**正确解法**：将这 4 处泛型参数改为 `Object`（允许在手写 java_runtime 文件内修改）。
-
-**禁止**：在生成的 `jdk_classes/` 文件里做任何手写修复。
-
-**状态**：🟡 剩余 4 处，可 5 分钟内完成；不阻塞架构演进
+**状态**：✅ 已关闭（2026-09-16）
 
 ---
 
-### N-2: `java_method`/`java_field` 激活为真正的 proc-macro attribute ✅
+### N-2: `java_method`/`java_field` 激活为真正的 proc-macro attribute ✅（含后续演变）
 
 **完成**（2026-09-16 第二次）：
 
@@ -332,13 +321,16 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 
 **效果**：编译错误从 247+ 降至 4（仅剩 N-1 的 4 处手写 `java_runtime` 遗留）
 
-**待解锁能力**（未来）：
-1. `java_method` 宏统计 `is_abstract = true` 方法数 → SAM 识别（Arch-3 method reference 支持）
-2. 读取 `generic_signature` → 编译期类型校验
+**后续演变**（2026-09-16 第三次，commit `c44ea10`）——proc-macro 再次删除：
+块级宏统一（`java_class!` 方案）后，所有方法都写在 `java_class! { impl ... }` 块内，必须用单段路径 `#[java_method(...)]`（块级宏按 ident 匹配并剥离），两段路径 `java_rta_macros::java_method` 成为死分支。因此：
+- `java_method` / `java_native` 两个零调用 proc-macro 已从 lib.rs 删除（`jvm_native`/`jvm_boundary`/`jvm_ext` 保留，有真实调用）；
+- `attrs.py` 的 `_java_method_attr` 收敛为仅 in_block 路径；
+- 块内 `#[java_native(...)]` 保留为纯文本标签：block.rs 剥离 + build.rs 按文本前缀扫描维护 native_status.toml，不依赖 proc-macro 存在。
+上述第 1、2 项描述的是中间历史状态，已被最终态取代。
 
 **`java_field` 说明**：struct 字段不能附加 `proc_macro_attribute`，保留 `cfg_attr(any(), java_field(...))`；`java_class` 宏通过解析 item token stream 读取字段属性（未来改进）。
 
-**状态**：✅ 完成（2026-09-16）
+**状态**：✅ 完成（最终态：块内文本标签，无 proc-macro）
 
 ---
 
@@ -378,8 +370,9 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 1. **method reference**（如 `System.out::println`）：生成 TODO 注释，不生成闭包。识别 `Methodref` 类型的 bootstrap 方法参数，生成对应闭包。
 2. **`Consumer.forEach` 内部的 `accept` 调用**：当 `forEach` 接收 `Object`（其中存储 `Rc<dyn Fn(Object) -> Result<()>>`），内部调用 `Consumer.accept(elem)` 时，需要正确 downcast 并调用闭包。理论上已通过 dispatch 修复覆盖，待验证。
 3. **`Comparator.compare` via `Collections.sort`**：`sort` 内部的 `compare` 调用走相同 dispatch 路径，待验证。
+4. **构造器方法引用 `ArrayList::<init>()`**（2026-09-16 第三次新增）：翻译为不存在的 `init` 类型，2 处 E0425（见全量普查 E0425 家族，共 3 测试）。
 
-**架构后续**（N-2 就绪后）：激活 `java_method` proc-macro → 宏自动统计 abstract 方法数 → 识别 SAM 类型 → 自动生成 `Fn` type alias，替代 Python 侧解析 bootstrap 方法的逻辑。
+**架构后续**：SAM 识别逻辑保留在 Python 侧解析 bootstrap 方法（原计划的「激活 java_method proc-macro 统计 abstract 方法数」路径已随 proc-macro 删除（N-2 最终态）而放弃，块级宏统一后元数据属性是纯文本标签，宏侧不做统计）。
 
 **状态**：⚠️ 创建侧和主要 dispatch 侧完成；method reference + 复杂 HOF 场景待验证
 
@@ -472,18 +465,51 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 | 2026-09-16（第二次） | N-1 143→4 E0107（大量手写类被 codegen 接管） | codegen 重新生成 java_runtime | codegen |
 | 2026-09-16（第二次） | CLAUDE.md 原则 0：代码生成优先 | 文档补充 | docs |
 | 2026-09-16 | G-1 Object.toString 不派发具体类型 | 架构修复（Arch-4 副产品，ObjectVTable.toString） | arch |
+| 2026-09-16（第三次） | N-1 剩余 4 处 E0107 消除 | 块级宏统一迁移期间随 codegen 重新生成 | codegen |
+| 2026-09-16（第三次） | C-1 use 路径过滤 | `project_writer.py` jdk_pkg_set 只含实际生成包；skipped_classes 存在性保证 | codegen |
+| 2026-09-16（第三次） | J-3 Printable 死代码删除 | `lib.rs` 删 trait + 9 impl + prelude 导出 | 手写清理 |
+| 2026-09-16（第三次） | N-2 java_method/java_native proc-macro 删除 | 块级宏统一后为死代码（c44ea10），块内保留文本标签 | arch(宏) |
+| 2026-09-16（第三次） | 生成物元数据缺省即默认 | attrs.py 空串/false/package 可见性不输出（206a7b1） | codegen |
 
 ---
 
-## 优先级队列（下一步行动）
+## 全量失败普查（2026-09-16 第三次实测）
+
+60 个测试：**10 通过 / 50 失败**（47 编译失败 + 3 输出 diff）。通过清单：01_basics 全部 4 个、TestObjects、TestGenerics、TestBitwise、TestDouble、TestLong、TestAnonymousClass。
+
+47 个编译失败按首错误归类（41 个已捕获归类，6 个并行输出交错未取到首行）：
+
+| 错误家族 | 数量 | 典型信息 | 初步判断 |
+|---------|------|---------|---------|
+| E0308 类型不匹配 | 10 | `mismatched types` | 泛型系，家族分散，需逐个分析 |
+| E0424 `self` 模块冲突 | 8 | `expected value, found module self` | 内部类/companion 命名与 `self` 冲突 |
+| E0433 `crate::error` 缺失 | 5 | `cannot find error in crate` | user crate 模块引用缺失，疑似单点修复可解 5 个测试 |
+| E0599 `__get_value` on primitive | 6 | i32 ×3、f64 ×3 | 拆箱翻译缺口：对 primitive 误发访问器调用（H-1 同根因） |
+| E0425 `init` 类型不存在 | 3 | `cannot find type init` | `ArrayList::<init>()` 构造器方法引用（Arch-3 范畴） |
+| E0592 重复 `__get_this_0` | 2 | `duplicate definitions` | 内部类 this$0 生成重复 |
+| E0599 静态 setter 缺失 | 2 | `set_value` / `set_counter` | static 字段访问翻译 |
+| E0599 其他方法缺失 | 4 | `hasNext` / `borrow` / `booleanValue` / `add` | Object downcast 后未走 vtable 派发等 |
+| E0615 record 访问器 | 1 | `attempted to take value of method name` | record 字段/访问器同名冲突（H-2） |
+
+3 个输出 diff：TestTextBlock（输出截断）、TestVarargs（`3` vs `3.0`——整数值除法结果应保持浮点格式）、TestEqualsHashCode（equals 语义错误 + 输出顺序漂移）。
+
+---
+
+## 优先级队列（下一步行动，2026-09-16 第三次重排）
 
 | 优先级 | 任务 | 预期收益 | 方式 |
 |--------|------|---------|------|
-| P0 | **N-1** java_runtime 手写代码 E0107（143处） | 消除 237 错误中的大部分 | 手写层修改（合法） |
-| P1 | **J-3** 删除 `Printable` 死代码 | 清理命名原则违规 | 1 行删除 |
-| P1 | **C-1** class_writer.py 过滤不存在的 use 包路径 | 消除 E0432 批量错误 | codegen |
-| P2 | **I-3** 三元 elif 链统一为 `coerce()` 函数 | 消除重复维护风险 | codegen 重构 |
-| P2 | **E-1** class_writer.py 扫描 `_impl.rs` 跳过重复方法 | 架构防御 | codegen |
-| P3 | **Arch-3** method reference 支持 | lambda 覆盖率 | codegen |
-| P3 | **H-1** primitive 数组 autobox 升级 | TestBoundedGenerics | codegen |
-| P4 | **N-2** `java_method` 激活为 proc-macro attribute | 解锁宏级别类型验证 | arch(宏) |
+| P0 | **E0433** `crate::error` 缺失（5 测试） | 疑似单点修复解锁 5 个测试 | codegen 排查 user crate 模块生成 |
+| P0 | **E0599 `__get_value`** 拆箱翻译（6 测试，含 H-1 的 TestBoundedGenerics） | 解锁 6 个测试 + H-1 运行时验证 | codegen（invoke/sim 拆箱路径） |
+| P1 | **E0424** `self` 模块冲突（8 测试） | 解锁 8 个测试 | codegen（内部类/companion 命名） |
+| P1 | **I-3 + I-4** 三元/merge elif 链统一为 `coerce()` + `this` 特判消除 | E0308 家族攻坚前的地基，消除两处重复维护 | codegen 重构 |
+| P2 | **E0308** 类型不匹配家族（10 测试） | 解锁 10 个测试 | codegen（在 I-3 重构后逐个分析） |
+| P2 | **E0592** `__get_this_0` 重复（2 测试）+ **E0615** record 访问器（1 测试） | 解锁 3 个测试 | codegen |
+| P3 | **Arch-3** method reference（含 E0425 `init` ×3） | lambda/方法引用覆盖率 | codegen |
+| P3 | **H-1** primitive 数组 autobox | 随 `__get_value` 修复一并验证 | codegen |
+| P4 | **E-1** 生成前扫描 `_impl.rs` 跳过重名方法 | 架构防御 | codegen |
+| P4 | **D-2** `Default::default()` 兜底补丁删除 | 随 Arch-3 完成 | codegen |
+| P5 | **Arch-6** Python 侧 `_rust_type_to_binary` 逆查改 binary key | 消除字符串模糊匹配 | codegen（低风险） |
+| P5 | **A-2** 间接子类传参 | 等真实测试触发 | codegen |
+
+**说明**：原 P0（N-1）、P1（J-3）、P4（N-2）已完成关闭；C-1 已修复关闭。3 个 diff 失败（TestTextBlock / TestVarargs / TestEqualsHashCode）待对应编译族修复后视运行结果归类。
