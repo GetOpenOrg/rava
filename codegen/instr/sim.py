@@ -23,7 +23,7 @@ from .coerce import (
     _float_lit, _escape_str, _parse_slot, _to_i32,
     _coerce_to_object, _coerce_from_null, _coerce_value,
     _find_field_super_prefix, _find_field_super_prefix_for_type,
-    _parse_field_ref, _is_subtype, _is_direct_subtype, _rust_type_to_binary,
+    _parse_field_ref, _is_subtype, _rust_type_to_binary,
     _get_field_generic_signature, _has_subtypes, _get_all_subtypes_ordered,
     _PRIMITIVE_RUST_TYPES,
 )
@@ -392,8 +392,8 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                     val_str = _coerce_to_object(val_str_raw, val_ty_name)
             elif (ftype not in _PRIMITIVE_RUST_TYPES and val_ty_name not in _PRIMITIVE_RUST_TYPES
                   and ftype not in ('Object', '()', val_ty_name)
-                  and _is_direct_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
-                # T55：直接子类型赋给直接父类型字段（From impl 由 class_writer 生成）
+                  and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
+                # T55（I-2 修复）：子类型赋给祖先类型字段（T55 生成传递性 From impl，_is_subtype 安全）
                 # 用 <_ as Into<ftype>>::into() 显式消歧义，避免多个 From impl 导致的 E0282
                 val_str = f"<_ as Into<{ftype}>>::into({val_str_raw})"
             else:

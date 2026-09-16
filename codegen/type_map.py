@@ -74,6 +74,9 @@ def jvm_to_rust(t: str, registry: dict | None = None) -> str:
             if not name:
                 return 'Object'
             ci = registry[inner]
+            # Arch-1：接口 = Object 类型别名，不生成 "Interface<Object>" 泛型形式
+            if ci.is_interface:
+                return 'Object'
             if ci.generic_signature:
                 tparams = parse_class_type_params(ci.generic_signature)
                 if tparams:
@@ -278,7 +281,7 @@ def _skip_field_type_sig(sig: str, i: int) -> int:
     return i + 1
 
 
-def _parse_type_args(sig: str, i: int, class_type_params: list[str]) -> tuple[list[str], int]:
+def _parse_type_args(sig: str, i: int, class_type_params: list[str], registry=None) -> tuple[list[str], int]:
     """解析 <TypeArgument*>，i 指向 '<'。返回 (类型字符串列表, '>' 之后的位置)。"""
     i += 1  # 跳过 '<'
     args: list[str] = []
@@ -287,17 +290,17 @@ def _parse_type_args(sig: str, i: int, class_type_params: list[str]) -> tuple[li
             args.append('Object')
             i += 1
         elif sig[i] in ('+', '-'):
-            t, i = _parse_one_type(sig, i + 1, class_type_params)
+            t, i = _parse_one_type(sig, i + 1, class_type_params, registry)
             args.append(t)
         else:
-            t, i = _parse_one_type(sig, i, class_type_params)
+            t, i = _parse_one_type(sig, i, class_type_params, registry)
             args.append(t)
     if i < len(sig) and sig[i] == '>':
         i += 1  # 跳过 '>'
     return args, i
 
 
-def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str, int]:
+def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=None) -> tuple[str, int]:
     """从 sig[i] 起解析一个类型（Generic Signature 格式），返回 (rust_type, next_i)。"""
     if i >= len(sig):
         return 'Object', i
@@ -319,12 +322,12 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
 
     if c == '[':
         # 数组 → Rc<RefCell<Vec<elem>>>
-        elem_type, next_i = _parse_one_type(sig, i + 1, class_type_params)
+        elem_type, next_i = _parse_one_type(sig, i + 1, class_type_params, registry)
         return f'Rc<RefCell<Vec<{elem_type}>>>', next_i
 
     if c == '+' or c == '-':
         # 上下界通配符 — 取内部类型
-        return _parse_one_type(sig, i + 1, class_type_params)
+        return _parse_one_type(sig, i + 1, class_type_params, registry)
 
     if c == '*':
         # 无界通配符
@@ -340,7 +343,7 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
         type_args: list[str] = []
         has_type_args = j < len(sig) and sig[j] == '<'
         if has_type_args:
-            type_args, j = _parse_type_args(sig, j, class_type_params)
+            type_args, j = _parse_type_args(sig, j, class_type_params, registry)
 
         # 跳过 ClassTypeSigSuffix（.InnerClass…）
         while j < len(sig) and sig[j] == '.':
@@ -360,7 +363,10 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str]) -> tuple[str
             rust_type = mapped
         else:
             short = class_name.rsplit('/', 1)[-1].replace('$', '_')
-            if has_type_args:
+            # Arch-1：接口 = Object 类型别名，不生成 "Interface<args>" 形式
+            if registry and class_name in registry and registry[class_name].is_interface:
+                rust_type = 'Object'
+            elif has_type_args:
                 rust_type = f"{short}<{', '.join(type_args)}>"
             else:
                 rust_type = short
@@ -535,7 +541,7 @@ def jvm_to_rs_type(
     _tparams = class_type_params or []
     if generic_sig:
         try:
-            rust_str, _ = _parse_one_type(generic_sig, 0, _tparams)
+            rust_str, _ = _parse_one_type(generic_sig, 0, _tparams, registry)
         except Exception:
             rust_str = jvm_to_rust(desc, registry)
     else:
