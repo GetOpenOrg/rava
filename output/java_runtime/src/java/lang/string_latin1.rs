@@ -2,12 +2,13 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
+use crate::jdk::internal::util::ArraysSupport;
 
 #[java_rta_macros::java_class(
     binary_name       = "java/lang/StringLatin1",
@@ -263,7 +264,7 @@ impl StringLatin1 {
     }
 
     #[cfg_attr(any(), java_method(name = "lines", descriptor = "([B)Ljava/util/stream/Stream;", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "([B)Ljava/util/stream/Stream<Ljava/lang/String;>;"))]
-    pub fn lines(value: Rc<RefCell<Vec<i8>>>) -> Result<Stream<Object>> {
+    pub fn lines(value: Rc<RefCell<Vec<i8>>>) -> Result<Object> {
         panic!("stub: java/lang/StringLatin1.lines:([B)Ljava/util/stream/Stream;")
     }
 
@@ -303,7 +304,9 @@ impl StringLatin1 {
     }
 
     #[cfg_attr(any(), java_method(name = "inflate", descriptor = "([BI[BII)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn inflate_arr_b_i_arr_b_i_i(src: Rc<RefCell<Vec<i8>>>, srcOff: i32, dst: Rc<RefCell<Vec<i8>>>, dstOff: i32, len: i32) -> Result<()> {
-        panic!("stub: java/lang/StringLatin1.inflate:([BI[BII)V")
+    // java: inflate([BI[BII)V
+    pub fn inflate_arr_b_i_arr_b_i_i(mut src: Rc<RefCell<Vec<i8>>>, mut srcOff: i32, mut dst: Rc<RefCell<Vec<i8>>>, mut dstOff: i32, mut len: i32) -> Result<()> {
+        StringUTF16::inflate(Clone::clone(&src), srcOff, Clone::clone(&dst), dstOff, len)?;
+        Ok(())
     }
 }

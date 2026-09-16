@@ -58,30 +58,6 @@ impl Printable for java::lang::Object {
 #[inline(always)]
 pub fn _is_jnull<T>(_val: &T) -> bool { false }
 
-/// JVM Enum 基类方法：为所有类型提供默认 ordinal/name stub，
-/// 避免 E0599 "no method named `ordinal`"。
-/// 具体 enum 类的 inherent 方法会优先于此 trait 方法。
-pub trait JvmEnum {
-    fn ordinal(&self) -> Result<i32> {
-        panic!("stub: Enum.ordinal() - enum field not initialized")
-    }
-}
-impl<T> JvmEnum for T {}
-
-/// JVM Object 基类方法：为所有类型提供默认 stub，
-/// 避免 E0599 "no method named `getClass`/`hashCode`"。
-/// 具体类的 inherent 方法会优先于此 trait 方法。
-pub trait JvmObjectBase {
-    fn getClass(&self) -> Result<java::lang::Object> {
-        panic!("stub: Object.getClass()")
-    }
-    fn hashCode(&self) -> Result<i32> { Ok(0) }
-    fn equals(&self, _other: java::lang::Object) -> Result<bool> { Ok(false) }
-    fn jvm_clone(&self) -> Result<java::lang::Object> {
-        panic!("stub: Object.clone()")
-    }
-}
-impl<T> JvmObjectBase for T {}
 
 /// MutexHolder：包装 parking_lot::ReentrantMutex，为 InternalLock 等需要 PartialEq 的结构体使用
 #[derive(Clone)]
@@ -102,8 +78,7 @@ pub mod prelude {
     pub use super::java::lang::ObjectVTable;
     pub use super::Printable;
     pub use super::_is_jnull;
-    pub use super::JvmEnum;
-    pub use super::JvmObjectBase;
+
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;
     pub use std::rc::Rc;

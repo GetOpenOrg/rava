@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -93,7 +93,7 @@ impl Preconditions {
     }
 
     #[cfg_attr(any(), java_method(name = "outOfBoundsMessage", descriptor = "(Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/String;Ljava/util/List<+Ljava/lang/Number;>;)Ljava/lang/String;"))]
-    pub fn outOfBoundsMessage(checkKind: String, args: List<Object>) -> Result<String> {
+    pub fn outOfBoundsMessage(checkKind: String, args: Object) -> Result<String> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsMessage:(Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;")
     }
 }

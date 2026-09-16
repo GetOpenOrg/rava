@@ -2,12 +2,13 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
+use crate::jdk::internal::util::ArraysSupport;
 
 #[java_rta_macros::java_class(
     binary_name       = "java/util/AbstractCollection",

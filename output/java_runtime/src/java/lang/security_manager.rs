@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -75,7 +75,7 @@ impl SecurityManager {
 
     #[cfg_attr(any(), java_field(name = "nonExportedPkgs", descriptor = "Ljava/util/Map;", access = "private", modifiers = "static final", is_static = true, generic_signature = "Ljava/util/Map<Ljava/lang/String;Ljava/lang/Boolean;>;"))]
     // static field: nonExportedPkgs:Ljava/util/Map;
-    pub fn nonExportedPkgs_field() -> Map<String, bool> {
+    pub fn nonExportedPkgs_field() -> Object {
         panic!("stub: java/lang/SecurityManager.nonExportedPkgs:Ljava/util/Map;")
     }
 
@@ -242,7 +242,7 @@ impl SecurityManager {
     }
 
     #[cfg_attr(any(), java_method(name = "nonExportedPkgs", descriptor = "(Ljava/lang/module/ModuleDescriptor;)Ljava/util/Set;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/module/ModuleDescriptor;)Ljava/util/Set<Ljava/lang/String;>;"))]
-    pub fn nonExportedPkgs(md: Object) -> Result<Set<Object>> {
+    pub fn nonExportedPkgs(md: Object) -> Result<Object> {
         panic!("stub: java/lang/SecurityManager.nonExportedPkgs:(Ljava/lang/module/ModuleDescriptor;)Ljava/util/Set;")
     }
 

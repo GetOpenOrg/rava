@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -499,7 +499,7 @@ impl Thread {
         let _t0: SecurityManager = System::getSecurityManager()?;
         let mut security: SecurityManager = _t0;
         if !_is_jnull(&security) {
-            security.checkAccess_thread(Clone::clone(&this))?;
+            security.checkAccess_thread(Clone::clone(this))?;
         }
         Ok(())
     }
@@ -540,7 +540,7 @@ impl Thread {
     }
 
     #[cfg_attr(any(), java_method(name = "getAllStackTraces", descriptor = "()Ljava/util/Map;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Map<Ljava/lang/Thread;[Ljava/lang/StackTraceElement;>;"))]
-    pub fn getAllStackTraces() -> Result<Map<Object, Object>> {
+    pub fn getAllStackTraces() -> Result<Object> {
         panic!("stub: java/lang/Thread.getAllStackTraces:()Ljava/util/Map;")
     }
 

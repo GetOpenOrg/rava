@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -55,7 +55,7 @@ impl Integer {
 
     #[cfg_attr(any(), java_field(name = "TYPE", descriptor = "Ljava/lang/Class;", access = "public", modifiers = "static final", is_static = true, generic_signature = "Ljava/lang/Class<Ljava/lang/Integer;>;"))]
     // static field: TYPE:Ljava/lang/Class;
-    pub fn TYPE() -> Object {
+    pub fn TYPE() -> Class<i32> {
         panic!("stub: java/lang/Integer.TYPE:Ljava/lang/Class;")
     }
 
@@ -253,21 +253,13 @@ impl Integer {
     }
 
     #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: valueOf(I)Ljava/lang/Integer;
-    pub fn valueOf_i(mut i: i32) -> Result<i32> {
-        if i <= Integer_IntegerCache::high() {
-            return Ok(Integer_IntegerCache::cache().borrow()[(i).wrapping_add(128i32) as usize]);
-        }
-        Ok(i)
+    pub fn valueOf_i(i: i32) -> Result<i32> {
+        panic!("stub: java/lang/Integer.valueOf:(I)Ljava/lang/Integer;")
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, is_deprecated = true))]
-    // java: <init>(I)V
-    pub fn new_i(mut value: i32) -> Result<Self> {
-        let mut this = Self { _super: Default::default(), value: JField::new(0), ..Default::default() };
-        this._super = Number::new()?;
-        this.value.set(value);
-        Ok(this)
+    pub fn new_i(value: i32) -> Result<Self> {
+        panic!("stub: java/lang/Integer.<init>:(I)V")
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException", is_deprecated = true))]
@@ -287,8 +279,7 @@ impl Integer {
 
     #[cfg_attr(any(), java_method(name = "intValue", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn intValue(&self) -> Result<i32> {
-        let this = self;
-        Ok(this.value.get())
+        panic!("stub: java/lang/Integer.intValue:()I")
     }
 
     #[cfg_attr(any(), java_method(name = "longValue", descriptor = "()J", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]

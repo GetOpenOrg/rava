@@ -2,6 +2,7 @@
 use crate::prelude::*;
 use crate::java::lang::*;
 
+// Arch-1: java_class 宏看到 is_interface = true，将此 struct 替换为 pub type Iterator = Object;
 #[java_rta_macros::java_class(
     binary_name       = "java/util/Iterator",
     super_class       = "java/lang/Object",
@@ -17,17 +18,3 @@ use crate::java::lang::*;
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Iterator<E: Clone + Default + 'static>(pub std::marker::PhantomData<E>);
-
-impl<E: Clone + Default + 'static> Iterator<E> {
-    pub fn hasNext(&self) -> Result<bool> {
-        panic!("stub: java/util/Iterator.hasNext:()Z")
-    }
-
-    pub fn next(&self) -> Result<E> {
-        panic!("stub: java/util/Iterator.next:()Ljava/lang/Object;")
-    }
-
-    pub fn remove(&self) -> Result<()> {
-        panic!("stub: java/util/Iterator.remove:()V")
-    }
-}

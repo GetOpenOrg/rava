@@ -57,6 +57,15 @@ pub fn java_class(attr: TokenStream, item: TokenStream) -> TokenStream {
     });
     parse_macro_input!(attr with parser);
 
+    // ── 接口：生成 type alias `pub type <Name> = Object;`，不生成 struct ───────
+    // Arch-1：接口变量在运行时就是 Object，方法调用通过 downcast 到具体类型派发。
+    if is_interface {
+        let expanded = quote! {
+            pub type #name = Object;
+        };
+        return expanded.into();
+    }
+
     // ── 泛型参数：补充 Clone + 'static bound ──────────────────────────────────
     let mut gen = input.generics.clone();
     for param in &mut gen.params {

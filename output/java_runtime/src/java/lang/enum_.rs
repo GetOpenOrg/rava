@@ -2,9 +2,9 @@
 use crate::prelude::*;
 use crate::java::io::*;
 use crate::java::lang::*;
+use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::stream::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -87,7 +87,7 @@ impl<E: Clone + Default + 'static> Enum<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Enum<TT;>;>(Ljava/lang/Class<TT;>;Ljava/lang/String;)TT;"))]
-    pub fn valueOf(enumClass: Object, name: String) -> Result<Enum<Object>> {
+    pub fn valueOf(enumClass: Class<Object>, name: String) -> Result<Enum<Object>> {
         panic!("stub: java/lang/Enum.valueOf:(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;")
     }
 
