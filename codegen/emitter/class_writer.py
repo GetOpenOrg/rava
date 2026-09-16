@@ -416,52 +416,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             cur_super = ancestor_ci.super_class if ancestor_ci else None
             access_path += '._super'
 
-    # T55b：为实现的接口生成 From<Self> for Interface
-    # 接口无实例字段，用 Default::default() 创建空接口实例（允许 .into() 类型转换编译通过）
-    # 包括所有祖先类实现的接口（传递接口）
-    if registry and not ci.is_interface:
-        child_full = struct_name
-        if class_type_params:
-            child_full += '<' + ', '.join(class_type_params) + '>'
-        impl_generics_for_from = f"<{bounds_str}>" if class_type_params else ''
-        # 收集直接接口 + 所有祖先类的接口
-        iface_q: list[str] = list(ci.interfaces or [])
-        _anc = ci.super_class
-        while _anc and _anc != 'java/lang/Object':
-            _anc_ci = registry.get(_anc)
-            if _anc_ci is None:
-                break
-            iface_q.extend(_anc_ci.interfaces or [])
-            _anc = _anc_ci.super_class
-        visited_ifaces_from: set[str] = set()
-        while iface_q:
-            iface_bin = iface_q.pop(0)
-            if iface_bin in visited_ifaces_from:
-                continue
-            visited_ifaces_from.add(iface_bin)
-            iface_ci = registry.get(iface_bin)
-            if iface_ci is None:
-                continue
-            if iface_ci.interfaces:
-                iface_q.extend(iface_ci.interfaces)
-            iface_rust_name = short_cls(iface_bin)
-            iface_params = parse_class_type_params(iface_ci.generic_signature) if iface_ci.generic_signature else []
-            if iface_params:
-                if class_type_params:
-                    args = class_type_params[:len(iface_params)]
-                    while len(args) < len(iface_params):
-                        args.append('Object')
-                else:
-                    args = ['Object'] * len(iface_params)
-                iface_full_type = f"{iface_rust_name}<{', '.join(args)}>"
-            else:
-                iface_full_type = iface_rust_name
-            parts.append(
-                f"impl{impl_generics_for_from} From<{child_full}> for {iface_full_type} {{\n"
-                f"    fn from(v: {child_full}) -> {iface_full_type} {{ Default::default() }}\n"
-                f"}}\n"
-            )
-
+    # T55b 已删除（Arch-5）：
+    # Arch-1 后接口 = Object 类型别名，From<ConcreteClass> for Interface 语义上等于
+    # From<ConcreteClass> for Object，与 java_class 宏生成的 Into<Object> 冲突且
+    # 会用 Default::default() 丢弃具体数据。
+    # 正确路径：ConcreteClass.into() → Object，通过 java_class 宏生成的 Into<Object> 完成。
     # K-2: 共置 _impl.rs 文件由 project_writer 在生成阶段复制；class_writer 不再生成 #[path] 块。
     # 占位：保留变量引用以防后续代码使用，实际不生成任何内容。
     _nf_entry = (new_format_map or {}).get(ci.name)
