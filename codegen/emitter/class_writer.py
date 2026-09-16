@@ -9,7 +9,7 @@ from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default
 from ..method import gen_method_body, _indent
 from ..type_map import parse_class_type_params, parse_field_type
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
-from .attrs import (to_snake, _java_class_attr, _java_class_block_head,
+from .attrs import (to_snake, _java_class_block_head,
                     _java_field_attr, _java_method_attr)
 from .method_gen import _gen_native_stub
 

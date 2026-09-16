@@ -424,7 +424,7 @@ let y = self.__get_size();                           // 新借，无冲突
 
 在单线程 `RefCell` 场景下，只读方法调用获取可变借用没有副作用。
 
-### `#[readonly]` 精确优化（可选）
+### `#[readonly]` 精确优化（可选，实施期决定：暂不实施）
 
 如果需要精确区分（性能敏感路径），可在字段访问处添加显式 hint：
 
@@ -435,6 +435,16 @@ let y = self.__get_size();                           // 新借，无冲突
 ```
 
 默认不加 `#[readonly]`，一律走 `borrow_mut()`；需要时由 codegen 按访问语义显式标注。
+
+> **实施决策（2026-09-16）**：暂不实施，理由与再评估触发条件：
+> - 单线程 `RefCell` 场景下，只读方法调用获取可变借用无副作用，仅影响
+>   borrow 活跃窗口的宽度（`borrow_mut` 会阻止同窗口的其他借用）；
+> - block-scoped 展开已把窗口压到单条子表达式，实际冲突面很小；
+> - 引入 `#[readonly]` 需 codegen 对每个调用点做只读性判定（等同让 Python 侧
+>   做一遍借用检查），复杂度与收益不成比例。
+>
+> **再评估触发条件**：e2e 出现 borrow 冲突 panic，或性能分析显示 RefCell
+> 借用冲突是热点时，再按本节设计补做。
 
 ---
 
@@ -542,15 +552,19 @@ Step 7  删除 JField<T>
 
 ---
 
-## 13 迁移期兼容策略
+## 13 迁移期兼容策略（已执行完毕）
 
-`java_class!` 块级宏和现有 `#[java_class]` 属性宏可以共存：
+`java_class!` 块级宏和旧 `#[java_class]` 属性宏曾按以下顺序共存迁移：
 
 - Step 1-5 期间：新宏在独立测试 crate 验证，不影响现有生成代码
 - Step 6 期间：codegen 切换输出格式，`#[java_class]` 属性宏暂时保留
 - Step 7 之后：属性宏废弃，仅保留块级宏
 
-两个宏在同一个 `java_rta_macros` crate 里维护，不需要额外依赖。
+**现状（2026-09-16 晚）**：`java_class_attr` 属性宏已从
+`runtime/java_rta_macros/src/lib.rs` 删除（Step 7 后全量重生成确认零调用者，
+属死代码约 170 行；删除后 HelloWorld 冒烟通过）。crate 现存导出：
+`java_class!`（块级宏）+ 五个透传属性宏（`jvm_native` / `jvm_boundary` /
+`jvm_ext` / `java_method` / `java_native`，均无展开逻辑，仅元数据标记）。
 
 ---
 
@@ -560,9 +574,20 @@ Step 7  删除 JField<T>
 |------|------|------|---------|
 | Step 4 token 重写的边缘情况 | 高 | Rust 表达式树复杂，`if let`、`match`、`&mut self.field` 引用传递等场景需逐一处理 | Step 4 独立实施，先覆盖 7 种核心模式，边缘情况允许 fallback 到手写访问器调用 |
 | 接口/具体类判断准确性 | 中 | 字段类型是接口时泛型参数需要擦除，判断错误会导致类型不匹配 | codegen 传入 `#[is_interface]` 显式标记，宏不依赖推断 |
-| borrow 窗口遗漏 | 中 | token 重写生成的 block 边界不正确时，可能产生运行时 borrow panic（不是编译错误） | 建立 borrow panic 测试集，覆盖同对象多字段同时访问的场景 |
-| JVM 字段顺序与 codegen 不一致 | 低 | superclass_fields 展平顺序错误会导致 JNI 互操作字段偏移量错误 | codegen 展平后写入测试，与 `javap -verbose` 输出对比验证 |
+| borrow 窗口遗漏 | 中 | token 重写生成的 block 边界不正确时，可能产生运行时 borrow panic（不是编译错误） | 建立 borrow panic 测试集，覆盖同对象多字段同时访问的场景 || JVM 字段顺序与 codegen 不一致 | 低 | superclass_fields 展平顺序错误会导致 JNI 互操作字段偏移量错误 | codegen 展平后写入测试，与 `javap -verbose` 输出对比验证 |
 | 宏编译时间增加 | 低 | 块级宏展开复杂，可能增加 `cargo build` 耗时 | 基准测试，必要时拆分为多个独立宏减少单次展开规模 |
+
+### 实施期验证状态（2026-09-16）
+
+- **borrow 窗口遗漏（第 3 行风险）**：未单独建立专项测试集，改由全量 e2e
+  实际运行覆盖——60 个测试中**零运行时 BorrowError panic**（50 个失败里
+  无一是 borrow 冲突，唯一含 "borrow" 字样的是编译期 E0599）。存储形态已
+  按 §16.6 改为每字段独立 `Cell`/`RefCell`，同对象多字段同时访问的冲突面
+  本身已大幅缩小。专项测试集推迟到清偿 6 个运行时失败的既有债务时一并建。
+- **JVM 字段顺序一致性（第 4 行风险）**：展平顺序按 §6 算法生成（父类在前），
+  未做 `javap -verbose` 对比验证——§16.7 已决定不加 `#[repr(C)]` 且当前无
+  JNI 字段偏移读取方，偏移正确性暂无消费场景。出现真实 JNI 需求时再补。
+
 
 ---
 
