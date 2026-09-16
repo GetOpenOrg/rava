@@ -76,7 +76,7 @@
 
 ### 5. ~~switch/tableswitch/lookupswitch 未实现~~ ✅ 已修复（2026-09-16 核实）
 
-sim.py 已实现 tableswitch/lookupswitch → Rust match 翻译（与 tasks.md T57 一致）。
+sim.py 已实现 tableswitch/lookupswitch → Rust match 翻译（与 tasks-history.md T57 一致）。
 
 ---
 

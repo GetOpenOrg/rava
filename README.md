@@ -116,7 +116,8 @@ java-rta/
 ├── tests/                       # 测试用 Java 源文件
 ├── runtime/                     # 手写代码唯一真源（java_runtime + java_rta_macros，提交 git）
 ├── docs/
-│   ├── tasks.md                 # 任务列表
+│   ├── tasks.md                 # 任务管理（当前活跃，只含开放项）
+│   ├── tasks-history.md         # 任务历史文档（T01-T81，已归档）
 │   └── plans/                   # 设计文档
 │       ├── 2026-09-12-java-to-rust-transpiler.md
 │       └── 2026-09-12-codegen-java-api-rules.md
