@@ -3,6 +3,16 @@
 **日期**：2026-09-12  
 **目标**：建立完整的 Java → Rust 转译流水线，支持 Java 25 字节码，生成结构化 Rust IR（非字符串拼接），通过四层漏斗裁剪 JDK 依赖。
 
+> **2026-09-16 状态清洗**：本文档创建于架构早期，多数任务状态停留在旧架构时代（单 crate / output/ 工作区 / 前宏时代）。
+> 本次逐项对照代码库核实后：
+> - **已完成关闭 26 项**：T43/T44/T46-T48/T51/T53/T55-T57/T59/T63/T64/T69/T71/T73/T74/T79-T81（实现核实），T33/T52/T75-T78（架构决策取代）
+> - **真实开放项收敛为 10 条线**：异常处理（T45/T62，codegen 零实现）、method reference（T49 剩余，= e2e 文档 Arch-3）、
+>   IR 结构化（T05/T06/T07/T50/T58/T61/T67 合并追踪）、mut 标注（T54）、括号优化（T60）、
+>   并行类解析（T65，注意测试级并行已在 run_tests.py 实现）、泛型精确化（T66）、slot 复用（T68）、
+>   布尔压缩（T70）、语义桩计数（T72 部分）
+> - **当前活跃追踪以 `docs/plans/2026-09-15-e2e-unresolved-issues.md` 为准**（60 e2e 失败普查 + 优先级队列）；
+>   e2e 失败清偿是主线，本文档开放项多数是其子集或长期优化。
+
 **本地 JDK 环境**：
 | JDK 版本 | class file version | 路径 |
 |----------|-------------------|------|
@@ -145,7 +155,7 @@ sim.emit(Let(v, None, False, BinOp("+", a, b)))
 ---
 
 ### T05 · instr.py 生成 IR 节点
-**状态**：`[~]`（过渡：已接入 IR 基础设施，各指令仍通过 RawExpr/RawStmt 包装字符串；逐条迁移为真正 IR 节点是后续优化）  
+**状态**：`[~]`（与 T67 合并追踪：RawExpr/RawStmt 仍未消除，收敛口径见 T67）  
 **文件**：`scripts/codegen/instr.py`（修改）  
 **依赖**：T04
 
@@ -163,7 +173,7 @@ sim.emit(Let(v, None, False, BinOp("+", a, b)))
 ---
 
 ### T06 · method.py 生成 Fn/Impl IR
-**状态**：`[~]`（过渡：已接入 render_stmt；方法体用 str 列表，后续迁移为 RsFn/RsImpl 节点）  
+**状态**：`[~]`（与 T67 合并追踪：方法体仍为文本列表，收敛口径见 T67）  
 **文件**：`scripts/codegen/method.py`（修改）  
 **依赖**：T05
 
@@ -174,7 +184,7 @@ sim.emit(Let(v, None, False, BinOp("+", a, b)))
 ---
 
 ### T07 · emitter.py 使用 render 输出
-**状态**：`[ ]`（暂缓：method.py 当前仍输出字符串，emitter.py 无需改动；待 T06 完全迁移后再推进）  
+**状态**：`[ ]`（与 T67 合并追踪：emitter 最终输出仍为文本拼接，IR 结构化完成后自然收敛）  
 **文件**：`scripts/codegen/emitter.py`（修改）  
 **依赖**：T06、T03
 
@@ -725,7 +735,7 @@ T29 (构建阻断)        ─ 依赖 T27
 ---
 
 ### T33 · 单 crate 架构迁移
-**状态**：`[ ]` 推迟（前置条件未满足）
+**状态**：`[x]` 关闭（架构决策取代：多 crate workspace + per-test scratch 已定型，单 crate 无收益）  
 **文件**：`output/Cargo.toml`、`scripts/codegen/emitter.py`
 
 **背景**：当前 workspace 有 `java_runtime`、`java_rta_macros`、`jdk_classes`、`user` 四个 crate，目标态是合并为单 crate（只保留 `user`）。
@@ -949,7 +959,7 @@ ages = HashMap::<Object, Object>::new_default()?;  // ← 赋值类型不符
 ---
 
 ### T43 · StringBuilder 字节码翻译
-**状态**：`[ ]`
+**状态**：`[x]` 已完成（string_builder.rs 已由字节码翻译生成；2026-09-16 核实）  
 **文件**：`output/native_impls/java/lang/string_builder.rs`、`scripts/codegen/transpile.py`
 
 **背景**：Java `"Hello" + name` 在字节码层面编译为：
@@ -971,7 +981,7 @@ new StringBuilder()
 ---
 
 ### T44 · 虚方法派发（invokevirtual 多态）
-**状态**：`[ ]`
+**状态**：`[x]` 已完成（ObjectVTable 动态派发 + invoke.py 分派链，G-1/Arch-4）  
 **文件**：`scripts/codegen/instr.py`、`scripts/codegen/emitter.py`
 
 **背景**：当前 `invokevirtual` 生成的是静态直接调用（`obj.method()`），没有多态分派。若 `obj` 的运行时类型是子类，调用的仍是父类方法，行为错误。
@@ -1001,7 +1011,7 @@ new StringBuilder()
 ---
 
 ### T46 · java/lang/String 字节码翻译
-**状态**：`[ ]`
+**状态**：`[x]` 已完成（string.rs / string_latin1.rs / string_utf16.rs 均由字节码翻译）  
 **文件**：`output/native_impls/java/lang/string.rs`（新建）、`scripts/codegen/transpile.py`
 
 **背景**：`java/lang/String` 目前由 `java_runtime/src/java/lang/string.rs` 手写实现。目标是将其替换为从 `String.class` 字节码翻译出的版本，只保留真正的 native 方法（`charAt`、`length` 等）在 `native_impls/` 中手写。
@@ -1018,7 +1028,7 @@ new StringBuilder()
 ---
 
 ### T47 · java/lang/System + PrintStream 字节码翻译
-**状态**：`[ ]`
+**状态**：`[x]` 已完成（system.rs / print_stream.rs 均由字节码翻译）  
 **文件**：`output/native_impls/java/lang/system.rs`、`output/native_impls/java/io/print_stream.rs`
 
 **背景**：`System.out.println` 是最常用的调用链起点，当前由手写实现驱动。目标是将 `java/lang/System` 和 `java/io/PrintStream` 加入字节码翻译路径，只保留真正的 native 底层（write syscall 等）在 `native_impls/` 中。
@@ -1030,7 +1040,7 @@ new StringBuilder()
 ---
 
 ### T48 · 类继承与接口实现场景测试
-**状态**：`[ ]`
+**状态**：`[x]` 已完成（e2e：19_abstract、26_interface_advanced 等场景测试）  
 **文件**：`tests/TestInheritance.java`（新建）
 
 **背景**：目前所有测试都是单类场景。需要验证：子类继承父类字段/方法、接口实现、`instanceof` 检查、`super` 调用等是否能正确翻译。
@@ -1045,7 +1055,7 @@ new StringBuilder()
 ---
 
 ### T49 · Lambda 与匿名类翻译
-**状态**：`[ ]`
+**状态**：`[ ]`（部分完成：invokedynamic/lambda 已翻译（D 系列）；method reference 待做，见 e2e 文档 Arch-3）  
 **文件**：`scripts/codegen/instr.py`（invokedynamic 处理）
 
 **背景**：Java lambda（`() -> ...`、`x -> x.toString()`）在字节码层面通过 `invokedynamic` + `bootstrap method` 实现。当前 `invokedynamic` 未实现，遇到 lambda 代码直接 panic 或生成错误代码。
@@ -1060,7 +1070,7 @@ new StringBuilder()
 ---
 
 ### T50 · IR 对象化完成（T05/T06/T07 收尾）
-**状态**：`[ ]`
+**状态**：`[ ]`（与 T67 合并追踪：T05/T06/T07 的收尾即 T67 本身）  
 **文件**：`scripts/codegen/instr.py`、`scripts/codegen/method.py`、`scripts/codegen/emitter.py`
 
 **背景**：T05/T06 是 `[~]` 过渡状态——IR 基础设施已建立，但 `instr.py` 仍用 `RawExpr/RawStmt` 包字符串，`method.py` 仍输出字符串列表。这让代码生成逻辑难以分析和变换。
@@ -1098,7 +1108,7 @@ T33 (单 crate 迁移)       ─ 依赖 T46、T47（手写层消灭后再做）
 ---
 
 ### T51 · 端到端测试自动化框架
-**状态**：`[ ]`
+**状态**：`[x]` 已完成（scripts/run_tests.py，60 e2e 全量框架 + 计时输出）  
 **文件**：`scripts/run_tests.py`（新建）
 
 **背景**：测试文件已按特性分类存放于 `tests/e2e/`，期望输出存于 `tests/expected/`。
@@ -1147,7 +1157,7 @@ python3 scripts/run_tests.py                       # 全量运行，输出每项
 ---
 
 ### T52 · 降低编译错误至 0（持续任务）
-**状态**：`[~]` 进行中（2026-09-14 当前：6224 errors）  
+**状态**：`[x]` 关闭（基线 output/ 工作区已删除；错误清偿改由 e2e 追踪文档管理）  
 **文件**：`codegen/instr.py`、`codegen/method.py`、`codegen/emitter.py`
 
 **背景**：JDK 字节码翻译生成的 `jdk_classes` crate 存在大量编译错误，阻止整体流水线验证。目标是将 `cargo check` 错误降至 0。
@@ -1184,7 +1194,7 @@ python3 scripts/run_tests.py                       # 全量运行，输出每项
 ---
 
 ### T53 · 修复 instanceof 语义错误
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（Arch-2：block.rs is_instance_of + all_supertypes 静态展开）  
 **文件**：`codegen/instr.py`、`output/java_runtime/src/lib.rs`  
 **优先级**：P1  
 **依赖**：T52 编译错误降至合理水平（<2000）后更容易验证效果
@@ -1271,7 +1281,7 @@ elif op == 'instanceof':
 ---
 
 ### T55 · 注解驱动的继承图：build.rs 扫描生成跨层 From impl
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（class_writer.py 为祖先链生成 From<Self>，见代码内 T55 注释）  
 **文件**：`output/jdk_classes/build.rs`（扩展）  
 **优先级**：**P0（与 T78/T76 并列，依赖 T78 注解完整化先完成）**  
 **方案文档**：`docs/plans/2026-09-14-annotation-driven-java-metadata.md`
@@ -1323,7 +1333,7 @@ FileNotFoundException（super_class=IOException）
 ---
 
 ### T56 · 实现 if/else 控制流结构恢复（CFG + 支配树）
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（cfg/branches.py + cfg/guards.py；后续问题见 cfg-ifelse 文档）  
 **文件**：`codegen/cfg.py`（扩展）、`codegen/method.py`（扩展）  
 **优先级**：P2  
 **依赖**：T52 编译错误降至 2000 以下后再实施，避免回归难以判断
@@ -1371,7 +1381,7 @@ def recover_structure(bbs, idom) -> list[StructNode]:
 ---
 
 ### T57 · 实现 switch/tableswitch/lookupswitch 指令
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（sim.py tableswitch/lookupswitch 翻译）  
 **文件**：`codegen/instr.py`、`codegen/method.py`（新 MatchStmt IR 节点）  
 **优先级**：P3  
 **依赖**：T56（最好在 CFG 基础上实现，正确处理 fallthrough）
@@ -1450,7 +1460,7 @@ if isinstance(ty, RsGeneric) and ty.outer == 'Rc':
 ---
 
 ### T59 · 方法级 native 实现注入（细粒度覆盖机制）
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（companion _impl.rs/_ext.rs + new_format_map 方法级去重，K-4）  
 **文件**：`codegen/emitter.py`、`output/native_impls/`（目录约定）  
 **优先级**：P3  
 **来源**：参考 ruva 项目 `docs/plans/2026-09-14-codegen-improvement-plan.md` §1.3
@@ -1645,7 +1655,7 @@ match result {
 ---
 
 ### T63 · BFS 队列改用 deque（O(n²) → O(n)）
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（transpile.py BFS 队列已用 deque）  
 **文件**：`codegen/transpile.py`  
 **优先级**：P1（一行改动，零风险）
 
@@ -1675,7 +1685,7 @@ cls, meth, desc = queue.popleft()  # O(1)
 ---
 
 ### T64 · Rust 关键字转义（safe_ident 完整覆盖）
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（RUST_KEYWORDS r# 转义：project_writer mod/use 声明层）  
 **文件**：`codegen/emitter.py`、`codegen/type_map.py`、`codegen/instr.py`  
 **优先级**：P1（可能正在产生 E0532 编译错误）
 
@@ -1937,7 +1947,7 @@ sim.exit_scope()    # depth -= 1，清理该深度的 _slot_decl_depth 记录
 ---
 
 ### T69 · 虚方法 BFS 完整性（invokevirtual 展开子类实现）
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（invoke.py 子类型枚举分派链 + JDK-only 过滤）  
 **文件**：`codegen/transpile.py`、`codegen/hierarchy.py`（T55 依赖）  
 **优先级**：P2  
 **依赖**：T55（ClassHierarchy）完成后才能枚举已知实现类
@@ -2082,7 +2092,7 @@ def detect_bool_pattern(instrs, idx) -> tuple[str, int] | None:
 ---
 
 ### T71 · 内部类名注册表键规范化（防止静默查找失败）
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（_snake_to_binary 注册表，method_gen.py 嵌套类名解析）  
 **文件**：`codegen/type_map.py`、`codegen/emitter.py`、`codegen/transpile.py`  
 **优先级**：P1（静默失败，极难排查）  
 **来源**：ruva 计划 §5.1
@@ -2162,7 +2172,7 @@ def registry_get(registry, key):
 ---
 
 ### T72 · 语义桩显式追踪（未实现指令统一标记与计数）
-**状态**：`[ ]`  
+**状态**：`[ ]`（部分完成：field stub 已计数（transpile.py）；指令级语义桩统一标记与计数未做）  
 **文件**：`codegen/instr.py`、`codegen/emitter.py`、`scripts/main.py`  
 **优先级**：P2  
 **来源**：ruva 计划 §5.4 + java_rta 改进计划 §5.1
@@ -2278,7 +2288,7 @@ T72 (语义桩追踪)   ─ 独立，可立即开始；Step 1-3 不改变生成�
 
 ### T73 · 整数算术溢出语义修复（`wrapping_add/sub/mul`）
 
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（sim.py wrapping_add/sub/mul 算术语义）  
 **文件**：`codegen/instr.py`  
 **优先级**：P1（正确性 bug，Java 与 Rust 行为不同，release 编译才会出现差异）  
 **来源**：ruva `SEM-1`（task-history.md）、ruva `PH1-11`（task.md）
@@ -2361,7 +2371,7 @@ let _v3 = ((_v1 as u32).wrapping_shr((_v2 & 0x1f) as u32)) as i32;
 
 ### T74 · `$assertionsDisabled` 合成字段识别
 
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（sim.py $assertionsDisabled 合成字段识别）  
 **文件**：`codegen/instr.py`（`getstatic` 处理）、`codegen/emitter.py`（字段生成）  
 **优先级**：P2（正确性 bug，JDK 断言机制产生静默错误行为）  
 **来源**：ruva `SEM-4`（task-history.md）
@@ -2422,7 +2432,7 @@ for field in cls.fields:
 
 ### T75 · 无 checked exception 方法裁剪返回类型（`T` 而非 `Result<T, E>`）
 
-**状态**：`[ ]`  
+**状态**：`[x]` 关闭（已决策：全部方法统一 Result<T> 返回，不做无异常裁剪）  
 **文件**：`codegen/emitter.py`（方法签名生成）、`codegen/method.py`（`?` 运算符使用）  
 **优先级**：P3（代码质量优化，减少冗余 Ok/Err 包装，不影响正确性）  
 **来源**：ruva task.md `13.4-T3`（无异常 Result 裁剪）
@@ -2557,7 +2567,7 @@ CFG 陷阱清单           ─ 作为 T56/T62 实施时的检查清单使用，�
 
 ### T78 · 注解完整化：补全 java_class/java_field/java_method 的 modifiers 字段
 
-**状态**：`[ ]`  
+**状态**：`[x]` 关闭（被块级宏统一取代：元数据属性已完整；2026-09-16 并实施缺省省略输出）  
 **文件**：`codegen/emitter.py`（`_java_class_attr`、`_java_field_attr`、`_java_method_attr`）  
 **优先级**：**P0（T76/T55 的前置条件，改动量小，应最先完成）**  
 **方案文档**：`docs/plans/2026-09-14-annotation-driven-java-metadata.md`
@@ -2635,7 +2645,7 @@ def _method_modifiers_str(flags: int) -> str:
 
 ### T76 · 继承基础：`_super` 字段 + proc-macro Deref/From
 
-**状态**：`[ ]`  
+**状态**：`[x]` 关闭（被块级宏方案取代：superclass/superclass_fields + __into_super，方案 §16）  
 **文件**：`codegen/emitter.py`（struct 生成段 + upcast 方法生成）、`java_rta_macros/src/lib.rs`（直接父类 From impl）  
 **优先级**：**P0（架构级，高于所有其他任务）**  
 **依赖**：T78（注解完整化先完成）  
@@ -2761,7 +2771,7 @@ let e: IOException = fnfe.into();
 
 ### T77 · 类型擦除一致性（方法边界 Object 化）
 
-**状态**：`[ ]`  
+**状态**：`[x]` 已完成（Arch-1：接口类型 Object 化，方法边界类型擦除一致）  
 **文件**：`codegen/emitter.py`（方法签名生成）、`codegen/instr.py`（调用侧参数传递）  
 **优先级**：P1  
 **依赖**：T76 完成后实施（T76 消除了继承类型的不匹配，T77 处理剩余的擦除不一致问题）
@@ -2829,6 +2839,8 @@ T78（注解完整化）
 ---
 
 ### T79：实现 `InternalLock` native 方法
+**状态**：`[x]` 已完成（runtime/.../jdk/internal/misc/internal_lock_impl.rs）  
+
 
 **类型**：native 实现  
 **文件**：`output/native_impls/jdk/internal/misc/internal_lock.rs`
@@ -2882,6 +2894,8 @@ Cargo 依赖：`parking_lot = { version = "0.12", features = ["arc_lock"] }`
 ---
 
 ### T80：翻译 `monitorenter` / `monitorexit` 字节码
+**状态**：`[x]` 已完成（单线程 no-op 策略：sim.py pop 引用忽略 monitor）  
+
 
 **类型**：codegen（`codegen/instr.py`）+ runtime  
 **文件**：`codegen/instr.py`、`output/java_runtime/src/monitor.rs`（新建）
@@ -2917,6 +2931,8 @@ Cargo 依赖：`dashmap = "6"`、`parking_lot = "0.12"`
 ---
 
 ### T81：PrintStream 等 I/O 方法改为字节码翻译
+**状态**：`[x]` 已完成（print_stream.rs 字节码翻译；companion 仅剩 println_v/getClass 两个 Rust 侧扩展）  
+
 
 **类型**：字节码翻译（依赖 T79）  
 **文件**：删除 `output/native_impls/java/io/print_stream.rs` 中的手写 write/print/println 方法

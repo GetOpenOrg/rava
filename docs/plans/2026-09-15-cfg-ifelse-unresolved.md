@@ -1,7 +1,7 @@
 # CFG if/else 实现 — 未解决问题记录
 
 > 创建日期：2026-09-15  
-> 状态：进行中
+> 状态：进行中（2026-09-16 核实修正：#3/#5 已实现未更新；真实开放项 = #2/#4（ternary 物化）、#6（try/catch）、#7（短路逻辑））
 
 ---
 
@@ -58,13 +58,9 @@
 
 ---
 
-### 3. do-while 循环未检测
+### 3. ~~do-while 循环未检测~~ ✅ 已修复（2026-09-16 核实）
 
-**现象**：`find_loops` 只检测 back-edge 是无条件 goto 的情况。do-while 的 back-edge 是条件跳转（`if_icmplt <loop_start>`），不被识别为循环，生成顺序执行代码。
-
-**修复方向**：
-- 扩展 `find_loops`：检测条件跳转后向 jump（`opcode in _BRANCH_OPS and target_offset < ins.offset`）
-- 将 do-while 生成为：`loop { body; if !cond { break; } }`
+`find_loops`（cfg/loops.py:57-71）已实现条件后向分支检测：`_BRANCH_OPS` 且 `target_offset < ins.offset`，do-while 生成为 `loop { body; if !cond { break; } }`。
 
 ---
 
@@ -78,11 +74,9 @@
 
 ## P2 未解决问题
 
-### 5. switch/tableswitch/lookupswitch 未实现
+### 5. ~~switch/tableswitch/lookupswitch 未实现~~ ✅ 已修复（2026-09-16 核实）
 
-**现象**：遇到 switch 字节码时生成顺序执行，语义错误。
-
-**修复方向**：在 `cfg.py` 增加 `find_switches`，生成 `match` 表达式。
+sim.py 已实现 tableswitch/lookupswitch → Rust match 翻译（与 tasks.md T57 一致）。
 
 ---
 

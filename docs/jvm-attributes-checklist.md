@@ -34,29 +34,29 @@
 |--------|--------|----------|----------|------|--------|
 | `Signature` | Class | ✅ 已解析 | 🟢 已用 | `ClassInfo.generic_signature` → `parse_class_type_params()` → 生成 `struct ArrayList<E>` 等泛型结构 | — |
 | `Signature` | Method | ✅ 已解析 | 🟢 已用 | `ParsedMethod.generic_signature` → method.py 推断泛型参数/返回类型 | — |
-| `Signature` | Field | ✅ 已解析 | 🟡 已存储未使用 | `FieldInfo.generic_signature` 存有字段泛型类型（如 `E`），但 emitter 生成字段时仍用裸描述符，`elementData` 生成为 `JField<Object>` 而非 `JField<E>` | **中** |
+| `Signature` | Field | ✅ 已解析 | 🟢 已用 | `FieldInfo.generic_signature` → class_writer `_resolve_field_rust()` 优先字段级签名解析类型（`TE;` → `E`），回退裸描述符 | — |
 
 ### 3. 常量与初始化
 
 | 属性名 | 作用域 | 解析状态 | 使用状态 | 说明 | 优先级 |
 |--------|--------|----------|----------|------|--------|
-| `ConstantValue` | Field | ❌ 未解析 | 🟡 待用 | `static final` 字段的编译期常量值（int/long/float/double/String） | **中** |
+| `ConstantValue` | Field | ✅ 已解析 | 🟢 已用 | `static final` 字段的编译期常量值：class_writer 静态字段 getter 直接返回常量（`sf.constant_value`），attrs.py 元数据输出 | — |
 
-> **影响**：`static final` 字段目前生成 `Default::default()`，有了此属性可生成正确的常量初始值。
+> ~~**影响**：`static final` 字段目前生成 `Default::default()`~~（2026-09-16 核实：已实现常量初始值返回）
 
 ### 4. 异常声明
 
 | 属性名 | 作用域 | 解析状态 | 使用状态 | 说明 | 优先级 |
 |--------|--------|----------|----------|------|--------|
-| `Exceptions` | Method | ✅ 已解析 | 🟡 已存储未使用 | 方法 `throws` 声明的受检异常列表，存入 `ParsedMethod.exceptions` | 低 |
+| `Exceptions` | Method | ✅ 已解析 | 🟢 已用 | 方法 `throws` 声明的受检异常列表：attrs.py 方法元数据输出 `exceptions = "..."` | — |
 
-> **影响**：Rust 的 `Result<T, E>` 中 E 类型目前固定，有了此属性可生成更具体的错误类型。
+> ~~**影响**：Rust 的 `Result<T, E>` 中 E 类型目前固定~~（2026-09-16 决策：错误类型统一，不做 per-method 特化，见 tasks.md T75）
 
 ### 5. 内部类与嵌套类型
 
 | 属性名 | 作用域 | 解析状态 | 使用状态 | 说明 | 优先级 |
 |--------|--------|----------|----------|------|--------|
-| `InnerClasses` | Class | ❌ 未解析 | 🟡 待用 | 内部类/外部类关系映射，生成嵌套 mod 结构需要 | **中** |
+| `InnerClasses` | Class | ✅ 已解析 | 🟢 已用 | 内部类/外部类关系映射：attrs.py 类头元数据输出 `inner_classes = "..."`（嵌套 mod 结构按 snake_case 目录平铺，不依赖此属性） | — |
 | `EnclosingMethod` | Class | ❌ 未解析 | ⚪ 不适用 | 匿名类/局部类所在方法，转译时通常不需要 | 低 |
 | `NestHost` | Class | ❌ 未解析 | ⚪ 不适用 | Java 11+ 嵌套访问控制 | 低 |
 | `NestMembers` | Class | ❌ 未解析 | ⚪ 不适用 | Java 11+ 嵌套成员列表 | 低 |
@@ -77,10 +77,10 @@
 
 | 属性名 | 作用域 | 解析状态 | 使用状态 | 说明 | 优先级 |
 |--------|--------|----------|----------|------|--------|
-| `MethodParameters` | Method | ❌ 未解析 | 🟡 待用 | 方法参数名（需编译器 `-parameters` 选项），可补全 LocalVariableTable 缺少参数名的情况 | **中** |
-| `SourceFile` | Class | ✅ 已解析 | 🟡 已存储未使用 | 原始 .java 文件名，存入 `ClassInfo.source_file` | 低 |
+| `MethodParameters` | Method | ✅ 已解析 | 🟢 已用 | 方法参数名：attrs.py 方法元数据输出 `method_parameters = "..."` | — |
+| `SourceFile` | Class | ✅ 已解析 | 🟢 已用 | 原始 .java 文件名：attrs.py 类头元数据输出 `source = "..."`（缺省即默认约定下非空才输出） | — |
 | `SourceDebugExtension` | Class | ❌ 未解析 | ⚪ 不适用 | JSR 45 调试扩展（JSP 等） | 低 |
-| `Deprecated` | Class/Field/Method | ❌ 未解析 | 🟡 待用 | `@Deprecated` 标记，可生成 `#[deprecated]` 属性 | 低 |
+| `Deprecated` | Class/Field/Method | ✅ 已解析 | 🟢 已用 | `@Deprecated` 标记：classfile 解析为 `is_deprecated`，attrs.py 方法/类元数据输出 | — |
 | `Synthetic` | Class/Field/Method | ✅ 已解析 | 🟢 已用 | 编译器合成成员；与 `ACC_SYNTHETIC`（0x1000）访问标志等价，两者均设置 `is_synthetic=True`，emitter 用 `m.is_synthetic` 过滤合成方法 | — |
 
 ### 8. 动态调用与 lambda
@@ -113,13 +113,17 @@
 
 ## 二、汇总统计
 
+> 2026-09-16 核实更新：`ConstantValue`、`Deprecated`、`MethodParameters`、`InnerClasses` 实际均已解析（classfile.py），
+> 且多数已通过 attrs.py 元数据输出消费。当前唯一真实待办的解析项是 `Record`。
+
 | 类别 | 数量 |
 |------|------|
 | 总属性数（JVMS Java 21） | 30 |
-| ✅ 已解析 | 7（`Code`、`LocalVariableTable`、`Signature`×3、`Exceptions`、`BootstrapMethods`、`SourceFile`、`Synthetic`） |
-| 🟢 已用于 codegen | 5（`Code`、`LocalVariableTable`、`BootstrapMethods`、`Signature`[Class+Method]、`Synthetic`） |
-| 🟡 已存储未使用 | 3（`Signature`[Field]、`Exceptions`、`SourceFile`） |
-| ❌ 未解析 | 23 |
+| ✅ 已解析 | 12（`Code`、`LocalVariableTable`、`Signature`×3、`Exceptions`、`BootstrapMethods`、`SourceFile`、`Synthetic`、`ConstantValue`、`Deprecated`、`MethodParameters`、`InnerClasses`） |
+| 🟢 已用于 codegen | 11（上述除 `Deprecated` 仅元数据输出外的全部已解析项） |
+| 🟡 已存储未使用 | 0 |
+| ❌ 未解析（有实际用途） | 1（`Record`——TestRecord 的 E0615 与此相关） |
+| ❌ 未解析（⚪ 不适用/低价值） | 17（注解系、模块系、Nest 系、调试扩展等） |
 
 ---
 
@@ -131,26 +135,20 @@
 
 ### 中优先级（改善代码生成质量）
 
-1. **`Signature`（Field 级，使用）** — 生成字段的精确泛型类型
-   - 影响：`elementData: JField<Object>` → `JField<E>`，struct 内部类型更准确
-   - 改动：emitter 在生成字段时优先用 `FieldInfo.generic_signature`，回退到 `descriptor`
+> 2026-09-16 核实：以下 1/2/4/5 已全部完成，仅保留 `Record` 一项。
 
-2. **`ConstantValue`（解析+使用）** — `static final` 字段正确初始化
-   - 影响：`public static final int MAX = 100` 等常量
-
-4. **`MethodParameters`（解析+使用）** — 补全方法参数名
-   - 影响：LocalVariableTable 有时不含参数名（如编译时未带 `-g`）
-
-5. **`InnerClasses`（解析+使用）** — 生成正确的嵌套 mod 结构
-   - 影响：匿名类、内部类的翻译
+1. ~~**`Signature`（Field 级，使用）**~~ — ✅ **已完成**：class_writer `_resolve_field_rust()` 优先字段级签名
+2. ~~**`ConstantValue`（解析+使用）**~~ — ✅ **已完成**：静态字段 getter 返回常量值
+4. ~~**`MethodParameters`（解析+使用）**~~ — ✅ **已完成**：方法元数据输出参数名
+5. ~~**`InnerClasses`（解析+使用）**~~ — ✅ **已完成**：类头元数据输出（嵌套 mod 结构走 snake 平铺，无需此属性）
 
 6. ~~**`LocalVariableTypeTable`**~~ — ✅ **已完成（T34）**：slot→Signature 映射，覆盖 Object 为精确类型（TE; → E，Ljava/lang/String; → String）
 
 ### 低优先级（调试信息、历史遗留）
 
-7. `Exceptions`（使用）— 生成更精确的 `Result<T, E>` 错误类型
-8. `Deprecated`（解析+使用）— 生成 `#[deprecated]` 属性
-9. `Record`（解析+使用）— Java record 类映射为 Rust struct
+7. ~~`Exceptions`（使用）~~ — ✅ 已完成（元数据输出）；错误类型特化已决策不做（T75）
+8. ~~`Deprecated`（解析+使用）~~ — ✅ 已完成（is_deprecated 元数据输出；不生成 `#[deprecated]`，避免警告噪音）
+9. `Record`（解析+使用）— Java record 类映射为 Rust struct；**当前唯一真实待办**，TestRecord 的 E0615（访问器与字段名冲突）与 record 语义未识别直接相关
 10. 注解相关属性 — 大多数对代码生成无实际影响
 
 ---
