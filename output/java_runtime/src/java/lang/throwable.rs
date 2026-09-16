@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -38,7 +39,7 @@ pub struct Throwable {
     #[cfg_attr(any(), java_field(name = "depth", descriptor = "I", access = "private", modifiers = "transient", is_static = false))]
     pub depth: JField<i32>,
     #[cfg_attr(any(), java_field(name = "suppressedExceptions", descriptor = "Ljava/util/List;", access = "private", modifiers = "", is_static = false, generic_signature = "Ljava/util/List<Ljava/lang/Throwable;>;"))]
-    pub suppressedExceptions: JField<Object>,
+    pub suppressedExceptions: JField<List<Throwable>>,
 }
 
 impl Throwable {
@@ -56,7 +57,7 @@ impl Throwable {
 
     #[cfg_attr(any(), java_field(name = "SUPPRESSED_SENTINEL", descriptor = "Ljava/util/List;", access = "private", modifiers = "static final", is_static = true, generic_signature = "Ljava/util/List<Ljava/lang/Throwable;>;"))]
     // static field: SUPPRESSED_SENTINEL:Ljava/util/List;
-    pub fn SUPPRESSED_SENTINEL() -> Object {
+    pub fn SUPPRESSED_SENTINEL() -> List<Throwable> {
         panic!("stub: java/lang/Throwable.SUPPRESSED_SENTINEL:Ljava/util/List;")
     }
 

@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -249,8 +250,14 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "([B[B)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo_arr_b_arr_b(value: Rc<RefCell<Vec<i8>>>, other: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
-        panic!("stub: java/lang/StringUTF16.compareTo:([B[B)I")
+    // java: compareTo([B[B)I
+    pub fn compareTo_arr_b_arr_b(mut value: Rc<RefCell<Vec<i8>>>, mut other: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
+        let _t0: i32 = StringUTF16::length(Clone::clone(&value))?;
+        let mut len1: i32 = _t0;
+        let _t1: i32 = StringUTF16::length(Clone::clone(&other))?;
+        let mut len2: i32 = _t1;
+        let _t2: i32 = StringUTF16::compareValues(Clone::clone(&value), Clone::clone(&other), len1, len2)?;
+        Ok(_t2)
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "([B[BII)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -259,13 +266,29 @@ impl StringUTF16 {
     }
 
     #[cfg_attr(any(), java_method(name = "compareValues", descriptor = "([B[BII)I", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareValues(value: Rc<RefCell<Vec<i8>>>, other: Rc<RefCell<Vec<i8>>>, len1: i32, len2: i32) -> Result<i32> {
-        panic!("stub: java/lang/StringUTF16.compareValues:([B[BII)I")
+    pub fn compareValues(mut value: Rc<RefCell<Vec<i8>>>, mut other: Rc<RefCell<Vec<i8>>>, mut len1: i32, mut len2: i32) -> Result<i32> {
+        let _t0: i32 = Math::min_i_i(len1, len2)?;
+        let mut lim: i32 = _t0;
+        let mut k: i32 = 0i32;
+        loop {
+            if k >= lim { break; }
+            let _t1: u16 = StringUTF16::getChar(Clone::clone(&value), k)?;
+            let mut c1: u16 = _t1;
+            let _t2: u16 = StringUTF16::getChar(Clone::clone(&other), k)?;
+            let mut c2: u16 = _t2;
+            if (c1 as i32) != (c2 as i32) {
+                return Ok(((c1 as i32)).wrapping_sub((c2 as i32)));
+            }
+            k = k.wrapping_add(1i32);
+        }
+        Ok((len1).wrapping_sub(len2))
     }
 
     #[cfg_attr(any(), java_method(name = "compareToLatin1", descriptor = "([B[B)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareToLatin1_arr_b_arr_b(value: Rc<RefCell<Vec<i8>>>, other: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
-        panic!("stub: java/lang/StringUTF16.compareToLatin1:([B[B)I")
+    // java: compareToLatin1([B[B)I
+    pub fn compareToLatin1_arr_b_arr_b(mut value: Rc<RefCell<Vec<i8>>>, mut other: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
+        let _t0: i32 = StringLatin1::compareToUTF16_arr_b_arr_b(Clone::clone(&other), Clone::clone(&value))?;
+        Ok((_t0).wrapping_neg())
     }
 
     #[cfg_attr(any(), java_method(name = "compareToLatin1", descriptor = "([B[BII)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

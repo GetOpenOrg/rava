@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -253,13 +254,21 @@ impl Integer {
     }
 
     #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn valueOf_i(i: i32) -> Result<i32> {
-        panic!("stub: java/lang/Integer.valueOf:(I)Ljava/lang/Integer;")
+    // java: valueOf(I)Ljava/lang/Integer;
+    pub fn valueOf_i(mut i: i32) -> Result<i32> {
+        if i <= Integer_IntegerCache::high() {
+            return Ok(Integer_IntegerCache::cache().borrow()[(i).wrapping_add(128i32) as usize]);
+        }
+        Ok(i)
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, is_deprecated = true))]
-    pub fn new_i(value: i32) -> Result<Self> {
-        panic!("stub: java/lang/Integer.<init>:(I)V")
+    // java: <init>(I)V
+    pub fn new_i(mut value: i32) -> Result<Self> {
+        let mut this = Self { _super: Default::default(), value: JField::new(0), ..Default::default() };
+        this._super = Number::new()?;
+        this.value.set(value);
+        Ok(this)
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException", is_deprecated = true))]
@@ -279,7 +288,8 @@ impl Integer {
 
     #[cfg_attr(any(), java_method(name = "intValue", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn intValue(&self) -> Result<i32> {
-        panic!("stub: java/lang/Integer.intValue:()I")
+        let this = self;
+        Ok(this.value.get())
     }
 
     #[cfg_attr(any(), java_method(name = "longValue", descriptor = "()J", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -338,13 +348,15 @@ impl Integer {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/Integer;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo(&self, anotherInteger: i32) -> Result<i32> {
-        panic!("stub: java/lang/Integer.compareTo:(Ljava/lang/Integer;)I")
+    pub fn compareTo(&self, mut anotherInteger: i32) -> Result<i32> {
+        let this = self;
+        let _t0: i32 = Integer::compare(this.value.get(), anotherInteger.value.get())?;
+        Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "compare", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compare(x: i32, y: i32) -> Result<i32> {
-        panic!("stub: java/lang/Integer.compare:(II)I")
+    pub fn compare(mut x: i32, mut y: i32) -> Result<i32> {
+        Ok(((if x < y { (-1i32 != 0) } else { x != y })) as i32)
     }
 
     #[cfg_attr(any(), java_method(name = "compareUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -378,8 +390,26 @@ impl Integer {
     }
 
     #[cfg_attr(any(), java_method(name = "numberOfLeadingZeros", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn numberOfLeadingZeros(i: i32) -> Result<i32> {
-        panic!("stub: java/lang/Integer.numberOfLeadingZeros:(I)I")
+    pub fn numberOfLeadingZeros(mut i: i32) -> Result<i32> {
+        return Ok((if (i==0) { 32i32 } else { 0i32 }));
+        let mut n: i32 = 31i32;
+        if i >= 264i32 {
+            n = n.wrapping_sub(16i32);
+            i = ((i as u32>>(16i32&0x1f)) as i32);
+        }
+        if i >= 256i32 {
+            n = n.wrapping_sub(8i32);
+            i = ((i as u32>>(8i32&0x1f)) as i32);
+        }
+        if i >= 16i32 {
+            n = n.wrapping_sub(4i32);
+            i = ((i as u32>>(4i32&0x1f)) as i32);
+        }
+        if i >= 4i32 {
+            n = n.wrapping_sub(2i32);
+            i = ((i as u32>>(2i32&0x1f)) as i32);
+        }
+        Ok((n).wrapping_sub(((i as u32>>(1i32&0x1f)) as i32)))
     }
 
     #[cfg_attr(any(), java_method(name = "numberOfTrailingZeros", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

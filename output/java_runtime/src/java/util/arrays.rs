@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -193,8 +194,23 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "rangeCheck", descriptor = "(III)V", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn rangeCheck(arrayLength: i32, fromIndex: i32, toIndex: i32) -> Result<()> {
-        panic!("stub: java/util/Arrays.rangeCheck:(III)V")
+    pub fn rangeCheck(mut arrayLength: i32, mut fromIndex: i32, mut toIndex: i32) -> Result<()> {
+        if fromIndex > toIndex {
+            let _t0 = StringBuilder::new()?.append_str(Clone::clone(&String::from("fromIndex(")))?;
+            let _t1 = _t0.append_i(fromIndex)?;
+            let _t2 = _t1.append_str(Clone::clone(&String::from(") > toIndex(")))?;
+            let _t3 = _t2.append_i(toIndex)?;
+            let _t4 = _t3.append_str(Clone::clone(&String::from(")")))?;
+            let _t5 = _t4.toString()?;
+            return Err(JvmError::Custom("athrow".to_owned()));
+        }
+        if (fromIndex<0) {
+            return Err(JvmError::Custom("athrow".to_owned()));
+        }
+        if toIndex > arrayLength {
+            return Err(JvmError::Custom("athrow".to_owned()));
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "parallelSort", descriptor = "([Ljava/lang/Comparable;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T::Ljava/lang/Comparable<-TT;>;>([TT;)V"))]
@@ -218,58 +234,228 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "sort", descriptor = "([Ljava/lang/Object;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn sort_arr_obj(a: Rc<RefCell<Vec<Object>>>) -> Result<()> {
-        panic!("stub: java/util/Arrays.sort:([Ljava/lang/Object;)V")
+    // java: sort([Ljava/lang/Object;)V
+    pub fn sort_arr_obj(mut a: Rc<RefCell<Vec<Object>>>) -> Result<()> {
+        if Arrays_LegacyMergeSort::userRequested() {
+            Arrays::legacyMergeSort_arr_obj(Clone::clone(&a))?;
+        } else {
+            ComparableTimSort::sort(Clone::clone(&a), 0i32, (a.borrow().len() as i32), Default::default(), 0i32, 0i32)?;
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "legacyMergeSort", descriptor = "([Ljava/lang/Object;)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn legacyMergeSort_arr_obj(a: Rc<RefCell<Vec<Object>>>) -> Result<()> {
-        panic!("stub: java/util/Arrays.legacyMergeSort:([Ljava/lang/Object;)V")
+    // java: legacyMergeSort([Ljava/lang/Object;)V
+    pub fn legacyMergeSort_arr_obj(mut a: Rc<RefCell<Vec<Object>>>) -> Result<()> {
+        let _t0: Object = Object::from_any(a.clone());
+        let mut aux = (_t0).downcast::<Rc<RefCell<Vec<Object>>>>();
+        Arrays::mergeSort_arr_obj_arr_obj_i_i_i(Clone::clone(&aux), Clone::clone(&a), 0i32, (a.borrow().len() as i32), 0i32)?;
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "sort", descriptor = "([Ljava/lang/Object;II)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn sort_arr_obj_i_i(a: Rc<RefCell<Vec<Object>>>, fromIndex: i32, toIndex: i32) -> Result<()> {
-        panic!("stub: java/util/Arrays.sort:([Ljava/lang/Object;II)V")
+    // java: sort([Ljava/lang/Object;II)V
+    pub fn sort_arr_obj_i_i(mut a: Rc<RefCell<Vec<Object>>>, mut fromIndex: i32, mut toIndex: i32) -> Result<()> {
+        Arrays::rangeCheck((a.borrow().len() as i32), fromIndex, toIndex)?;
+        if Arrays_LegacyMergeSort::userRequested() {
+            Arrays::legacyMergeSort_arr_obj_i_i(Clone::clone(&a), fromIndex, toIndex)?;
+        } else {
+            ComparableTimSort::sort(Clone::clone(&a), fromIndex, toIndex, Default::default(), 0i32, 0i32)?;
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "legacyMergeSort", descriptor = "([Ljava/lang/Object;II)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn legacyMergeSort_arr_obj_i_i(a: Rc<RefCell<Vec<Object>>>, fromIndex: i32, toIndex: i32) -> Result<()> {
-        panic!("stub: java/util/Arrays.legacyMergeSort:([Ljava/lang/Object;II)V")
+    // java: legacyMergeSort([Ljava/lang/Object;II)V
+    pub fn legacyMergeSort_arr_obj_i_i(mut a: Rc<RefCell<Vec<Object>>>, mut fromIndex: i32, mut toIndex: i32) -> Result<()> {
+        let _t0: Rc<RefCell<Vec<Object>>> = Arrays::copyOfRange_arr_obj_i_i(Clone::clone(&a), fromIndex, toIndex)?;
+        let mut aux: Rc<RefCell<Vec<Object>>> = _t0;
+        Arrays::mergeSort_arr_obj_arr_obj_i_i_i(Clone::clone(&aux), Clone::clone(&a), fromIndex, toIndex, (fromIndex).wrapping_neg())?;
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "mergeSort", descriptor = "([Ljava/lang/Object;[Ljava/lang/Object;III)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn mergeSort_arr_obj_arr_obj_i_i_i(src: Rc<RefCell<Vec<Object>>>, dest: Rc<RefCell<Vec<Object>>>, low: i32, high: i32, off: i32) -> Result<()> {
-        panic!("stub: java/util/Arrays.mergeSort:([Ljava/lang/Object;[Ljava/lang/Object;III)V")
+    // java: mergeSort([Ljava/lang/Object;[Ljava/lang/Object;III)V
+    pub fn mergeSort_arr_obj_arr_obj_i_i_i(mut src: Rc<RefCell<Vec<Object>>>, mut dest: Rc<RefCell<Vec<Object>>>, mut low: i32, mut high: i32, mut off: i32) -> Result<()> {
+        let mut length = (high).wrapping_sub(low);
+        let mut i: i32 = low;
+        loop {
+            if i >= high { break; }
+            let mut j: i32 = i;
+            loop {
+                if j <= low { break; }
+                let _vdispatch0: i32 = if let Some(_d) = Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<Thread_State>() { _d.compareTo(Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else if let Some(_d) = Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<Enum<Object>>() { _d.compareTo(Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else if let Some(_d) = Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<StringBuilder>() { _d.compareTo(Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else if let Some(_d) = Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<Character>() { _d.compareTo(Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else if let Some(_d) = Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<String>() { _d.compareTo(Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else if let Some(_d) = Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<i32>() { _d.compareTo(Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else if let Some(_d) = Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<Object>() { _d.compareTo(Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else if let Some(__f) = Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<std::rc::Rc<dyn Fn(Object) -> crate::error::Result<i32>>>() { (__f)(Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else { Default::default() };
+                if (_vdispatch0>0) {
+                    Arrays::swap(Clone::clone(&dest), j, (j).wrapping_sub(1i32))?;
+                    j = j.wrapping_sub(1i32);
+                    continue;
+                }
+                break;
+            }
+            i = i.wrapping_add(1i32);
+        }
+        return Ok(());
+        i = low;
+        let mut j: i32 = high;
+        low = (low).wrapping_add(off);
+        high = (high).wrapping_add(off);
+        let mut mid = (((low).wrapping_add(high) as u32>>(1i32&0x1f)) as i32);
+        Arrays::mergeSort_arr_obj_arr_obj_i_i_i(Clone::clone(&dest), Clone::clone(&src), low, mid, (off).wrapping_neg())?;
+        Arrays::mergeSort_arr_obj_arr_obj_i_i_i(Clone::clone(&dest), Clone::clone(&src), mid, high, (off).wrapping_neg())?;
+        let _vdispatch0: i32 = if let Some(_d) = Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<Thread_State>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<Enum<Object>>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<StringBuilder>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<Character>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<String>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<i32>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<Object>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else if let Some(__f) = Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize]).0.as_any().downcast_ref::<std::rc::Rc<dyn Fn(Object) -> crate::error::Result<i32>>>() { (__f)(Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else { Default::default() };
+        if (_vdispatch0<=0) {
+            System::arraycopy(Object::from_any(src.clone()), low, Object::from_any(dest.clone()), i, length)?;
+            return Ok(());
+        }
+        let mut i: i32 = i;
+        let mut p: i32 = low;
+        let mut q: i32 = mid;
+        loop {
+            if i >= j { break; }
+            if p < mid {
+                let _vdispatch1: i32 = if let Some(_d) = Clone::clone(&src.borrow()[p as usize]).0.as_any().downcast_ref::<Thread_State>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[p as usize]).0.as_any().downcast_ref::<Enum<Object>>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[p as usize]).0.as_any().downcast_ref::<StringBuilder>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[p as usize]).0.as_any().downcast_ref::<Character>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[p as usize]).0.as_any().downcast_ref::<String>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[p as usize]).0.as_any().downcast_ref::<i32>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else if let Some(_d) = Clone::clone(&src.borrow()[p as usize]).0.as_any().downcast_ref::<Object>() { _d.compareTo(Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else if let Some(__f) = Clone::clone(&src.borrow()[p as usize]).0.as_any().downcast_ref::<std::rc::Rc<dyn Fn(Object) -> crate::error::Result<i32>>>() { (__f)(Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else { Default::default() };
+                if (_vdispatch1<=0) {
+                    p = p.wrapping_add(1i32);
+                    let _aastore_tmp2 = Clone::clone(&Clone::clone(&src.borrow()[p as usize]));
+                    dest.borrow_mut()[i as usize] = _aastore_tmp2;
+                } else {
+                    q = q.wrapping_add(1i32);
+                    let _aastore_tmp2 = Clone::clone(&Clone::clone(&src.borrow()[q as usize]));
+                    dest.borrow_mut()[i as usize] = _aastore_tmp2;
+                }
+            } else {
+                q = q.wrapping_add(1i32);
+                let _aastore_tmp1 = Clone::clone(&Clone::clone(&src.borrow()[q as usize]));
+                dest.borrow_mut()[i as usize] = _aastore_tmp1;
+            }
+            i = i.wrapping_add(1i32);
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "swap", descriptor = "([Ljava/lang/Object;II)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn swap(x: Rc<RefCell<Vec<Object>>>, a: i32, b: i32) -> Result<()> {
-        panic!("stub: java/util/Arrays.swap:([Ljava/lang/Object;II)V")
+    pub fn swap(mut x: Rc<RefCell<Vec<Object>>>, mut a: i32, mut b: i32) -> Result<()> {
+        let mut t = Clone::clone(&x.borrow()[a as usize]);
+        let _aastore_tmp0 = Clone::clone(&Clone::clone(&x.borrow()[b as usize]));
+        x.borrow_mut()[a as usize] = _aastore_tmp0;
+        x.borrow_mut()[b as usize] = Clone::clone(&t);
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "sort", descriptor = "([Ljava/lang/Object;Ljava/util/Comparator;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;Ljava/util/Comparator<-TT;>;)V"))]
-    pub fn sort_arr_obj_compar(a: Rc<RefCell<Vec<Object>>>, c: Object) -> Result<()> {
-        panic!("stub: java/util/Arrays.sort:([Ljava/lang/Object;Ljava/util/Comparator;)V")
+    // java: sort([Ljava/lang/Object;Ljava/util/Comparator;)V
+    pub fn sort_arr_obj_compar(mut a: Rc<RefCell<Vec<Object>>>, mut c: Object) -> Result<()> {
+        if _is_jnull(&c) {
+            Arrays::sort_arr_obj(Clone::clone(&a))?;
+        } else {
+            if Arrays_LegacyMergeSort::userRequested() {
+                Arrays::legacyMergeSort_arr_obj_compar(Clone::clone(&a), Clone::clone(&c))?;
+            } else {
+                TimSort::<Object>::sort(Default::default(), 0i32, (a.borrow().len() as i32), Clone::clone(&c), Default::default(), 0i32, 0i32)?;
+            }
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "legacyMergeSort", descriptor = "([Ljava/lang/Object;Ljava/util/Comparator;)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;Ljava/util/Comparator<-TT;>;)V"))]
-    pub fn legacyMergeSort_arr_obj_compar(a: Rc<RefCell<Vec<Object>>>, c: Object) -> Result<()> {
-        panic!("stub: java/util/Arrays.legacyMergeSort:([Ljava/lang/Object;Ljava/util/Comparator;)V")
+    // java: legacyMergeSort([Ljava/lang/Object;Ljava/util/Comparator;)V
+    pub fn legacyMergeSort_arr_obj_compar(mut a: Rc<RefCell<Vec<Object>>>, mut c: Object) -> Result<()> {
+        let _t0: Object = Object::from_any(a.clone());
+        let mut aux = (_t0).downcast::<Rc<RefCell<Vec<Object>>>>();
+        if _is_jnull(&c) {
+            Arrays::mergeSort_arr_obj_arr_obj_i_i_i(Clone::clone(&aux), Clone::clone(&a), 0i32, (a.borrow().len() as i32), 0i32)?;
+        } else {
+            Arrays::mergeSort_arr_obj_arr_obj_i_i_i_compar(Clone::clone(&aux), Clone::clone(&a), 0i32, (a.borrow().len() as i32), 0i32, Clone::clone(&c))?;
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "sort", descriptor = "([Ljava/lang/Object;IILjava/util/Comparator;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;IILjava/util/Comparator<-TT;>;)V"))]
-    pub fn sort_arr_obj_i_i_compar(a: Rc<RefCell<Vec<Object>>>, fromIndex: i32, toIndex: i32, c: Object) -> Result<()> {
-        panic!("stub: java/util/Arrays.sort:([Ljava/lang/Object;IILjava/util/Comparator;)V")
+    // java: sort([Ljava/lang/Object;IILjava/util/Comparator;)V
+    pub fn sort_arr_obj_i_i_compar(mut a: Rc<RefCell<Vec<Object>>>, mut fromIndex: i32, mut toIndex: i32, mut c: Object) -> Result<()> {
+        if _is_jnull(&c) {
+            Arrays::sort_arr_obj_i_i(Clone::clone(&a), fromIndex, toIndex)?;
+        } else {
+            Arrays::rangeCheck((a.borrow().len() as i32), fromIndex, toIndex)?;
+            if Arrays_LegacyMergeSort::userRequested() {
+                Arrays::legacyMergeSort_arr_obj_i_i_compar(Clone::clone(&a), fromIndex, toIndex, Clone::clone(&c))?;
+            } else {
+                TimSort::<Object>::sort(Default::default(), fromIndex, toIndex, Clone::clone(&c), Default::default(), 0i32, 0i32)?;
+            }
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "legacyMergeSort", descriptor = "([Ljava/lang/Object;IILjava/util/Comparator;)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;IILjava/util/Comparator<-TT;>;)V"))]
-    pub fn legacyMergeSort_arr_obj_i_i_compar(a: Rc<RefCell<Vec<Object>>>, fromIndex: i32, toIndex: i32, c: Object) -> Result<()> {
-        panic!("stub: java/util/Arrays.legacyMergeSort:([Ljava/lang/Object;IILjava/util/Comparator;)V")
+    // java: legacyMergeSort([Ljava/lang/Object;IILjava/util/Comparator;)V
+    pub fn legacyMergeSort_arr_obj_i_i_compar(mut a: Rc<RefCell<Vec<Object>>>, mut fromIndex: i32, mut toIndex: i32, mut c: Object) -> Result<()> {
+        let _t0: Rc<RefCell<Vec<Object>>> = Arrays::copyOfRange_arr_obj_i_i(Clone::clone(&a), fromIndex, toIndex)?;
+        let mut aux: Rc<RefCell<Vec<Object>>> = _t0;
+        if _is_jnull(&c) {
+            Arrays::mergeSort_arr_obj_arr_obj_i_i_i(Clone::clone(&aux), Clone::clone(&a), fromIndex, toIndex, (fromIndex).wrapping_neg())?;
+        } else {
+            Arrays::mergeSort_arr_obj_arr_obj_i_i_i_compar(Clone::clone(&aux), Clone::clone(&a), fromIndex, toIndex, (fromIndex).wrapping_neg(), Clone::clone(&c))?;
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "mergeSort", descriptor = "([Ljava/lang/Object;[Ljava/lang/Object;IIILjava/util/Comparator;)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn mergeSort_arr_obj_arr_obj_i_i_i_compar(src: Rc<RefCell<Vec<Object>>>, dest: Rc<RefCell<Vec<Object>>>, low: i32, high: i32, off: i32, c: Object) -> Result<()> {
-        panic!("stub: java/util/Arrays.mergeSort:([Ljava/lang/Object;[Ljava/lang/Object;IIILjava/util/Comparator;)V")
+    // java: mergeSort([Ljava/lang/Object;[Ljava/lang/Object;IIILjava/util/Comparator;)V
+    pub fn mergeSort_arr_obj_arr_obj_i_i_i_compar(mut src: Rc<RefCell<Vec<Object>>>, mut dest: Rc<RefCell<Vec<Object>>>, mut low: i32, mut high: i32, mut off: i32, mut c: Object) -> Result<()> {
+        let mut length = (high).wrapping_sub(low);
+        let mut i: i32 = low;
+        loop {
+            if i >= high { break; }
+            let mut j: i32 = i;
+            loop {
+                if j <= low { break; }
+                let _vdispatch0: i32 = if let Some(__f) = c.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn(Object, Object) -> crate::error::Result<i32>>>() { (__f)(Clone::clone(&Clone::clone(&dest.borrow()[(j).wrapping_sub(1i32) as usize])), Clone::clone(&Clone::clone(&dest.borrow()[j as usize])))? } else { Default::default() };
+                if (_vdispatch0>0) {
+                    Arrays::swap(Clone::clone(&dest), j, (j).wrapping_sub(1i32))?;
+                    j = j.wrapping_sub(1i32);
+                    continue;
+                }
+                break;
+            }
+            i = i.wrapping_add(1i32);
+        }
+        return Ok(());
+        i = low;
+        let mut j: i32 = high;
+        low = (low).wrapping_add(off);
+        high = (high).wrapping_add(off);
+        let mut mid = (((low).wrapping_add(high) as u32>>(1i32&0x1f)) as i32);
+        Arrays::mergeSort_arr_obj_arr_obj_i_i_i_compar(Clone::clone(&dest), Clone::clone(&src), low, mid, (off).wrapping_neg(), Clone::clone(&c))?;
+        Arrays::mergeSort_arr_obj_arr_obj_i_i_i_compar(Clone::clone(&dest), Clone::clone(&src), mid, high, (off).wrapping_neg(), Clone::clone(&c))?;
+        let _vdispatch0: i32 = if let Some(__f) = c.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn(Object, Object) -> crate::error::Result<i32>>>() { (__f)(Clone::clone(&Clone::clone(&src.borrow()[(mid).wrapping_sub(1i32) as usize])), Clone::clone(&Clone::clone(&src.borrow()[mid as usize])))? } else { Default::default() };
+        if (_vdispatch0<=0) {
+            System::arraycopy(Object::from_any(src.clone()), low, Object::from_any(dest.clone()), i, length)?;
+            return Ok(());
+        }
+        let mut i: i32 = i;
+        let mut p: i32 = low;
+        let mut q: i32 = mid;
+        loop {
+            if i >= j { break; }
+            if p < mid {
+                let _vdispatch1: i32 = if let Some(__f) = c.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn(Object, Object) -> crate::error::Result<i32>>>() { (__f)(Clone::clone(&Clone::clone(&src.borrow()[p as usize])), Clone::clone(&Clone::clone(&src.borrow()[q as usize])))? } else { Default::default() };
+                if (_vdispatch1<=0) {
+                    p = p.wrapping_add(1i32);
+                    let _aastore_tmp2 = Clone::clone(&Clone::clone(&src.borrow()[p as usize]));
+                    dest.borrow_mut()[i as usize] = _aastore_tmp2;
+                } else {
+                    q = q.wrapping_add(1i32);
+                    let _aastore_tmp2 = Clone::clone(&Clone::clone(&src.borrow()[q as usize]));
+                    dest.borrow_mut()[i as usize] = _aastore_tmp2;
+                }
+            } else {
+                q = q.wrapping_add(1i32);
+                let _aastore_tmp1 = Clone::clone(&Clone::clone(&src.borrow()[q as usize]));
+                dest.borrow_mut()[i as usize] = _aastore_tmp1;
+            }
+            i = i.wrapping_add(1i32);
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "parallelPrefix", descriptor = "([Ljava/lang/Object;Ljava/util/function/BinaryOperator;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;Ljava/util/function/BinaryOperator<TT;>;)V"))]
@@ -653,8 +839,8 @@ impl Arrays {
             let mut _arr0: Rc<RefCell<Vec<Object>>> = Rc::new(RefCell::new(vec![Default::default(); newLength as usize]));
             _merged2 = _arr0;
         } else {
-            let _t0 = newType.getComponentType()?;
-            let _t1: Object = Array::newInstance_class_i(Clone::clone(&_t0), newLength)?;
+            let _vdispatch0: Object = if let Some(__f) = newType.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn() -> crate::error::Result<Object>>>() { (__f)()? } else { Default::default() };
+            let _t1: Object = Array::newInstance_class_i(Clone::clone(&_vdispatch0), newLength)?;
             _merged2 = (_t1).downcast::<Rc<RefCell<Vec<Object>>>>();
         }
         let mut copy: Rc<RefCell<Vec<Object>>> = _merged2;
@@ -713,13 +899,37 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "copyOfRange", descriptor = "([Ljava/lang/Object;II)[Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;II)[TT;"))]
-    pub fn copyOfRange_arr_obj_i_i(original: Rc<RefCell<Vec<Object>>>, from: i32, to: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/Arrays.copyOfRange:([Ljava/lang/Object;II)[Ljava/lang/Object;")
+    // java: copyOfRange([Ljava/lang/Object;II)[Ljava/lang/Object;
+    pub fn copyOfRange_arr_obj_i_i(mut original: Rc<RefCell<Vec<Object>>>, mut from: i32, mut to: i32) -> Result<Rc<RefCell<Vec<Object>>>> {
+        let _t0: Object = Object::default();
+        let _t1: Rc<RefCell<Vec<Object>>> = Arrays::copyOfRange_arr_obj_i_i_class(Clone::clone(&original), from, to, Clone::clone(&_t0))?;
+        Ok(_t1)
     }
 
     #[cfg_attr(any(), java_method(name = "copyOfRange", descriptor = "([Ljava/lang/Object;IILjava/lang/Class;)[Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;U:Ljava/lang/Object;>([TU;IILjava/lang/Class<+[TT;>;)[TT;"))]
-    pub fn copyOfRange_arr_obj_i_i_class(original: Rc<RefCell<Vec<Object>>>, from: i32, to: i32, newType: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/Arrays.copyOfRange:([Ljava/lang/Object;IILjava/lang/Class;)[Ljava/lang/Object;")
+    // java: copyOfRange([Ljava/lang/Object;IILjava/lang/Class;)[Ljava/lang/Object;
+    pub fn copyOfRange_arr_obj_i_i_class(mut original: Rc<RefCell<Vec<Object>>>, mut from: i32, mut to: i32, mut newType: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
+        let mut newLength = (to).wrapping_sub(from);
+        if (newLength<0) {
+            let _t0 = StringBuilder::new()?.append_i(from)?;
+            let _t1 = _t0.append_str(Clone::clone(&String::from(" > ")))?;
+            let _t2 = _t1.append_i(to)?;
+            let _t3 = _t2.toString()?;
+            return Err(JvmError::Custom("athrow".to_owned()));
+        }
+        let mut _merged2: Rc<RefCell<Vec<Object>>>;
+        if newType == Object::default() {
+            let mut _arr0: Rc<RefCell<Vec<Object>>> = Rc::new(RefCell::new(vec![Default::default(); newLength as usize]));
+            _merged2 = _arr0;
+        } else {
+            let _vdispatch0: Object = if let Some(__f) = newType.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn() -> crate::error::Result<Object>>>() { (__f)()? } else { Default::default() };
+            let _t1: Object = Array::newInstance_class_i(Clone::clone(&_vdispatch0), newLength)?;
+            _merged2 = (_t1).downcast::<Rc<RefCell<Vec<Object>>>>();
+        }
+        let mut copy: Rc<RefCell<Vec<Object>>> = _merged2;
+        let _t3: i32 = Math::min_i_i(((original.borrow().len() as i32)).wrapping_sub(from), newLength)?;
+        System::arraycopy(Object::from_any(original.clone()), from, Object::from_any(copy.clone()), 0i32, _t3)?;
+        Ok(copy)
     }
 
     #[cfg_attr(any(), java_method(name = "checkLength", descriptor = "(II)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -827,8 +1037,8 @@ impl Arrays {
     }
 
     #[cfg_attr(any(), java_method(name = "asList", descriptor = "([Ljava/lang/Object;)Ljava/util/List;", access = "public", modifiers = "static varargs", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;)Ljava/util/List<TT;>;"))]
-    pub fn asList(a: Rc<RefCell<Vec<Object>>>) -> Result<Object> {
-        panic!("stub: java/util/Arrays.asList:([Ljava/lang/Object;)Ljava/util/List;")
+    pub fn asList(mut a: Rc<RefCell<Vec<Object>>>) -> Result<Object> {
+        Ok(Object::from_any(Arrays_ArrayList::<Object>::new(Default::default())?.clone()))
     }
 
     #[cfg_attr(any(), java_method(name = "hashCode", descriptor = "([J)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

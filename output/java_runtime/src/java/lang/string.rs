@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -65,7 +66,7 @@ impl String {
 
     #[cfg_attr(any(), java_field(name = "CASE_INSENSITIVE_ORDER", descriptor = "Ljava/util/Comparator;", access = "public", modifiers = "static final", is_static = true, generic_signature = "Ljava/util/Comparator<Ljava/lang/String;>;"))]
     // static field: CASE_INSENSITIVE_ORDER:Ljava/util/Comparator;
-    pub fn CASE_INSENSITIVE_ORDER() -> Object {
+    pub fn CASE_INSENSITIVE_ORDER() -> Comparator<String> {
         panic!("stub: java/lang/String.CASE_INSENSITIVE_ORDER:Ljava/util/Comparator;")
     }
 
@@ -442,8 +443,31 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/String;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo(&self, anotherString: String) -> Result<i32> {
-        panic!("stub: java/lang/String.compareTo:(Ljava/lang/String;)I")
+    pub fn compareTo(&self, mut anotherString: String) -> Result<i32> {
+        let this = self;
+        let mut v1 = this.value.get();
+        let mut v2 = anotherString.value.get();
+        let _t0 = this.coder()?;
+        let mut coder: i8 = _t0;
+        let _t1 = anotherString.coder()?;
+        let mut _merged3: i32;
+        if (coder==0) {
+            let _t2: i32 = StringLatin1::compareTo_arr_b_arr_b(Clone::clone(&v1), Clone::clone(&v2))?;
+            _merged3 = _t2;
+        } else {
+            let _t2: i32 = StringUTF16::compareTo_arr_b_arr_b(Clone::clone(&v1), Clone::clone(&v2))?;
+            _merged3 = _t2;
+        }
+        return Ok(_merged3);
+        let mut _merged5: i32;
+        if (coder==0) {
+            let _t4: i32 = StringLatin1::compareToUTF16_arr_b_arr_b(Clone::clone(&v1), Clone::clone(&v2))?;
+            _merged5 = _t4;
+        } else {
+            let _t4: i32 = StringUTF16::compareToLatin1_arr_b_arr_b(Clone::clone(&v1), Clone::clone(&v2))?;
+            _merged5 = _t4;
+        }
+        Ok(_merged5)
     }
 
     #[cfg_attr(any(), java_method(name = "compareToIgnoreCase", descriptor = "(Ljava/lang/String;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -774,8 +798,8 @@ impl String {
         if _is_jnull(&obj) {
             _merged1 = String::from("null");
         } else {
-            let _t0: String = Default::default();
-            _merged1 = _t0;
+            let _vdispatch0: String = if let Some(__f) = obj.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn() -> crate::error::Result<String>>>() { (__f)()? } else { Default::default() };
+            _merged1 = _vdispatch0;
         }
         Ok(_merged1)
     }
@@ -801,8 +825,9 @@ impl String {
     }
 
     #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(Z)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn valueOf_z(b: bool) -> Result<String> {
-        panic!("stub: java/lang/String.valueOf:(Z)Ljava/lang/String;")
+    // java: valueOf(Z)Ljava/lang/String;
+    pub fn valueOf_z(mut b: bool) -> Result<String> {
+        Ok((if b { String::from("true") } else { String::from("false") }))
     }
 
     #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(C)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]

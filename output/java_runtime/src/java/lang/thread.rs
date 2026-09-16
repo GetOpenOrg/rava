@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -52,7 +53,7 @@ pub struct Thread {
     #[cfg_attr(any(), java_field(name = "parkBlocker", descriptor = "Ljava/lang/Object;", access = "private", modifiers = "volatile", is_static = false))]
     pub parkBlocker: JField<Object>,
     #[cfg_attr(any(), java_field(name = "nioBlocker", descriptor = "Lsun/nio/ch/Interruptible;", access = "package", modifiers = "volatile", is_static = false))]
-    pub nioBlocker: JField<Interruptible>,
+    pub nioBlocker: JField<Object>,
     #[cfg_attr(any(), java_field(name = "cont", descriptor = "Ljdk/internal/vm/Continuation;", access = "private", modifiers = "", is_static = false))]
     pub cont: JField<Object>,
     #[cfg_attr(any(), java_field(name = "uncaughtExceptionHandler", descriptor = "Ljava/lang/Thread$UncaughtExceptionHandler;", access = "private", modifiers = "volatile", is_static = false))]
@@ -138,7 +139,7 @@ impl Thread {
     }
 
     #[cfg_attr(any(), java_method(name = "blockedOn", descriptor = "(Lsun/nio/ch/Interruptible;)V", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn blockedOn(b: Interruptible) -> Result<()> {
+    pub fn blockedOn(b: Object) -> Result<()> {
         panic!("stub: java/lang/Thread.blockedOn:(Lsun/nio/ch/Interruptible;)V")
     }
 

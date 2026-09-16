@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -23,7 +24,7 @@ use crate::jdk::internal::util::ArraysSupport;
     is_deprecated     = false,
     source            = "ArrayList.java",
     inner_classes     = "java/util/ArrayList$ListItr:java/util/ArrayList:ListItr:2;java/util/ArrayList$Itr:java/util/ArrayList:Itr:2;java/util/ArrayList$SubList:java/util/ArrayList:SubList:10;java/util/ArrayList$ArrayListSpliterator:java/util/ArrayList:ArrayListSpliterator:16;java/util/ArrayList$SubList$2:::0;java/util/ArrayList$SubList$1:::0",
-    all_supertypes    = "java/io/Serializable;java/lang/Cloneable;java/lang/Object;java/util/AbstractCollection;java/util/AbstractList;java/util/ArrayList;java/util/Collection;java/util/List;java/util/RandomAccess;java/util/SequencedCollection",
+    all_supertypes    = "java/io/Serializable;java/lang/Cloneable;java/lang/Iterable;java/lang/Object;java/util/AbstractCollection;java/util/AbstractList;java/util/ArrayList;java/util/Collection;java/util/List;java/util/RandomAccess;java/util/SequencedCollection",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct ArrayList<E: Clone + Default + 'static> {
@@ -49,7 +50,6 @@ impl<E: Clone + Default + 'static> From<ArrayList<E>> for AbstractList<E> {
 impl<E: Clone + Default + 'static> From<ArrayList<E>> for AbstractCollection<E> {
     fn from(v: ArrayList<E>) -> AbstractCollection<E> { v._super._super }
 }
-
 
 impl<E: Clone + Default + 'static> ArrayList<E> {
     #[cfg_attr(any(), java_field(name = "serialVersionUID", descriptor = "J", access = "private", modifiers = "static final", is_static = true, constant_value = "8683452581122892189"))]
@@ -91,8 +91,25 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/util/Collection;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<+TE;>;)V"))]
-    pub fn new_coll(c: Object) -> Result<Self> {
-        panic!("stub: java/util/ArrayList.<init>:(Ljava/util/Collection;)V")
+    // java: <init>(Ljava/util/Collection;)V
+    pub fn new_coll(mut c: Collection<E>) -> Result<Self> {
+        let mut this = Self { _super: Default::default(), elementData: JField::new(Default::default()), size: JField::new(0), _phantom: std::marker::PhantomData, ..Default::default() };
+        this._super = AbstractList::new()?;
+        let _t0 = c.toArray()?;
+        let mut a: Rc<RefCell<Vec<Object>>> = _t0;
+        this.size.set((a.borrow().len() as i32));
+        if ((a.borrow().len() as i32)!=0) {
+            let _t1 = c.getClass()?;
+            if _t1 == Object::default() {
+                this.elementData.set(Clone::clone(&a));
+            } else {
+                let _t2: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i_class(Clone::clone(&a), this.size.get(), Default::default())?;
+                this.elementData.set(Clone::clone(&_t2));
+            }
+        } else {
+            this.elementData.set(Clone::clone(&ArrayList::<Object>::EMPTY_ELEMENTDATA()));
+        }
+        Ok(this)
     }
 
     #[cfg_attr(any(), java_method(name = "trimToSize", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
@@ -173,8 +190,11 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "toArray", descriptor = "()[Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/ArrayList.toArray:()[Ljava/lang/Object;")
+        let this = self;
+        let _t0: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i(Clone::clone(&this.elementData.get()), this.size.get())?;
+        Ok(_t0)
     }
 
     #[cfg_attr(any(), java_method(name = "toArray", descriptor = "([Ljava/lang/Object;)[Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;)[TT;"))]
@@ -183,8 +203,8 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "elementAt", descriptor = "([Ljava/lang/Object;I)Ljava/lang/Object;", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<E:Ljava/lang/Object;>([Ljava/lang/Object;I)TE;"))]
-    pub fn elementAt(es: Rc<RefCell<Vec<Object>>>, index: i32) -> Result<Object> {
-        panic!("stub: java/util/ArrayList.elementAt:([Ljava/lang/Object;I)Ljava/lang/Object;")
+    pub fn elementAt(mut es: Rc<RefCell<Vec<Object>>>, mut index: i32) -> Result<E> {
+        Ok(panic!("null"))
     }
 
     #[cfg_attr(any(), java_method(name = "getFirst", descriptor = "()Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()TE;"))]
@@ -247,7 +267,7 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "equalsRange", descriptor = "(Ljava/util/List;II)Z", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/List<*>;II)Z"))]
-    pub fn equalsRange(&self, other: Object, from: i32, to: i32) -> Result<bool> {
+    pub fn equalsRange(&self, other: List<Object>, from: i32, to: i32) -> Result<bool> {
         panic!("stub: java/util/ArrayList.equalsRange:(Ljava/util/List;II)Z")
     }
 
@@ -287,12 +307,12 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "addAll", descriptor = "(Ljava/util/Collection;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<+TE;>;)Z"))]
-    pub fn addAll_coll(&self, c: Object) -> Result<bool> {
+    pub fn addAll_coll(&self, c: Collection<E>) -> Result<bool> {
         panic!("stub: java/util/ArrayList.addAll:(Ljava/util/Collection;)Z")
     }
 
     #[cfg_attr(any(), java_method(name = "addAll", descriptor = "(ILjava/util/Collection;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(ILjava/util/Collection<+TE;>;)Z"))]
-    pub fn addAll_i_coll(&self, index: i32, c: Object) -> Result<bool> {
+    pub fn addAll_i_coll(&self, index: i32, c: Collection<E>) -> Result<bool> {
         panic!("stub: java/util/ArrayList.addAll:(ILjava/util/Collection;)Z")
     }
 
@@ -322,17 +342,17 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "removeAll", descriptor = "(Ljava/util/Collection;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<*>;)Z"))]
-    pub fn removeAll(&self, c: Object) -> Result<bool> {
+    pub fn removeAll(&self, c: Collection<Object>) -> Result<bool> {
         panic!("stub: java/util/ArrayList.removeAll:(Ljava/util/Collection;)Z")
     }
 
     #[cfg_attr(any(), java_method(name = "retainAll", descriptor = "(Ljava/util/Collection;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<*>;)Z"))]
-    pub fn retainAll(&self, c: Object) -> Result<bool> {
+    pub fn retainAll(&self, c: Collection<Object>) -> Result<bool> {
         panic!("stub: java/util/ArrayList.retainAll:(Ljava/util/Collection;)Z")
     }
 
     #[cfg_attr(any(), java_method(name = "batchRemove", descriptor = "(Ljava/util/Collection;ZII)Z", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<*>;ZII)Z"))]
-    pub fn batchRemove(&self, c: Object, complement: bool, from: i32, end: i32) -> Result<bool> {
+    pub fn batchRemove(&self, c: Collection<Object>, complement: bool, from: i32, end: i32) -> Result<bool> {
         panic!("stub: java/util/ArrayList.batchRemove:(Ljava/util/Collection;ZII)Z")
     }
 
@@ -352,8 +372,10 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "listIterator", descriptor = "()Ljava/util/ListIterator;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/ListIterator<TE;>;"))]
-    pub fn listIterator(&self) -> Result<Object> {
-        panic!("stub: java/util/ArrayList.listIterator:()Ljava/util/ListIterator;")
+    // java: listIterator()Ljava/util/ListIterator;
+    pub fn listIterator(&self) -> Result<ListIterator<E>> {
+        let this = self;
+        Ok(<_ as Into<ListIterator<E>>>::into(ArrayList_ListItr::new(Clone::clone(this), 0i32)?))
     }
 
     #[cfg_attr(any(), java_method(name = "iterator", descriptor = "()Ljava/util/Iterator;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Iterator<TE;>;"))]
@@ -367,8 +389,27 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "forEach", descriptor = "(Ljava/util/function/Consumer;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/Consumer<-TE;>;)V"))]
-    pub fn forEach(&self, action: Object) -> Result<()> {
-        panic!("stub: java/util/ArrayList.forEach:(Ljava/util/function/Consumer;)V")
+    pub fn forEach(&self, mut action: Consumer<E>) -> Result<()> {
+        let this = self;
+        let _t0: Object = Objects::requireNonNull_obj(Object::from_any(action.clone()))?;
+        let mut expectedModCount = this._super.modCount.get();
+        let mut es = this.elementData.get();
+        let mut size = this.size.get();
+        let mut i: i32 = 0i32;
+        loop {
+            if this._super.modCount.get() != expectedModCount { break; }
+            if i < size {
+                let _t1: Object = ArrayList::<Object>::elementAt(Clone::clone(&es), i)?;
+                action.accept(Clone::clone(&_t1))?;
+                i = i.wrapping_add(1i32);
+                continue;
+            }
+            break;
+        }
+        if this._super.modCount.get() != expectedModCount {
+            return Err(JvmError::Custom("athrow".to_owned()));
+        }
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "spliterator", descriptor = "()Ljava/util/Spliterator;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Spliterator<TE;>;"))]
@@ -392,12 +433,12 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "removeIf", descriptor = "(Ljava/util/function/Predicate;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/Predicate<-TE;>;)Z"))]
-    pub fn removeIf_predic(&self, filter: Object) -> Result<bool> {
+    pub fn removeIf_predic(&self, filter: Predicate<E>) -> Result<bool> {
         panic!("stub: java/util/ArrayList.removeIf:(Ljava/util/function/Predicate;)Z")
     }
 
     #[cfg_attr(any(), java_method(name = "removeIf", descriptor = "(Ljava/util/function/Predicate;II)Z", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/Predicate<-TE;>;II)Z"))]
-    pub fn removeIf_predic_i_i(&self, filter: Object, i: i32, end: i32) -> Result<bool> {
+    pub fn removeIf_predic_i_i(&self, filter: Predicate<E>, i: i32, end: i32) -> Result<bool> {
         panic!("stub: java/util/ArrayList.removeIf:(Ljava/util/function/Predicate;II)Z")
     }
 
@@ -412,8 +453,15 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "sort", descriptor = "(Ljava/util/Comparator;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Comparator<-TE;>;)V"))]
-    pub fn sort(&self, c: Object) -> Result<()> {
-        panic!("stub: java/util/ArrayList.sort:(Ljava/util/Comparator;)V")
+    pub fn sort(&self, mut c: Comparator<E>) -> Result<()> {
+        let this = self;
+        let mut expectedModCount = this._super.modCount.get();
+        Arrays::sort_arr_obj_i_i_compar(Clone::clone(&this.elementData.get()), 0i32, this.size.get(), Clone::clone(&c))?;
+        if this._super.modCount.get() != expectedModCount {
+            return Err(JvmError::Custom("athrow".to_owned()));
+        }
+        this._super.modCount.set((this._super.modCount.get()).wrapping_add(1i32));
+        Ok(())
     }
 
     #[cfg_attr(any(), java_method(name = "checkInvariants", descriptor = "()V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]

@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -22,7 +23,7 @@ use crate::jdk::internal::util::ArraysSupport;
     is_enum           = false,
     is_deprecated     = false,
     source            = "AbstractCollection.java",
-    all_supertypes    = "java/lang/Object;java/util/AbstractCollection;java/util/Collection",
+    all_supertypes    = "java/lang/Iterable;java/lang/Object;java/util/AbstractCollection;java/util/Collection",
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct AbstractCollection<E: Clone + Default + 'static>(std::marker::PhantomData<E>);
@@ -56,8 +57,35 @@ impl<E: Clone + Default + 'static> AbstractCollection<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "toArray", descriptor = "()[Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    // java: toArray()[Ljava/lang/Object;
     pub fn toArray(&self) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/AbstractCollection.toArray:()[Ljava/lang/Object;")
+        let this = self;
+        let _t0 = this.size()?;
+        let mut _arr1: Rc<RefCell<Vec<Object>>> = Rc::new(RefCell::new(vec![Default::default(); _t0 as usize]));
+        let mut r: Rc<RefCell<Vec<Object>>> = _arr1;
+        let _t2 = this.iterator()?;
+        let mut it: Object = _t2;
+        let mut i: i32 = 0i32;
+        loop {
+            if i >= (r.borrow().len() as i32) { break; }
+            let _vdispatch3: bool = if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_ListItr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_ListItr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_Itr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_Itr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.hasNext()? } else if let Some(__f) = it.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn() -> crate::error::Result<bool>>>() { (__f)()? } else { Default::default() };
+            if !(_vdispatch3) {
+                let _t4: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i(Clone::clone(&r), i)?;
+                return Ok(_t4);
+            }
+            let _vdispatch4: Object = if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_ListItr>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_ListItr>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_Itr>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_Itr>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.next()? } else if let Some(__f) = it.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn() -> crate::error::Result<Object>>>() { (__f)()? } else { Default::default() };
+            r.borrow_mut()[i as usize] = Clone::clone(&_vdispatch4);
+            i = i.wrapping_add(1i32);
+        }
+        let _vdispatch3: bool = if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_ListItr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_ListItr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_Itr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_Itr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.hasNext()? } else if let Some(__f) = it.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn() -> crate::error::Result<bool>>>() { (__f)()? } else { Default::default() };
+        let mut _merged5: Rc<RefCell<Vec<Object>>>;
+        if _vdispatch3 {
+            let _t4: Rc<RefCell<Vec<Object>>> = AbstractCollection::<Object>::finishToArray(Clone::clone(&r), Clone::clone(&it))?;
+            _merged5 = _t4;
+        } else {
+            _merged5 = r;
+        }
+        Ok(_merged5)
     }
 
     #[cfg_attr(any(), java_method(name = "toArray", descriptor = "([Ljava/lang/Object;)[Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;)[TT;"))]
@@ -66,8 +94,30 @@ impl<E: Clone + Default + 'static> AbstractCollection<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "finishToArray", descriptor = "([Ljava/lang/Object;Ljava/util/Iterator;)[Ljava/lang/Object;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>([TT;Ljava/util/Iterator<*>;)[TT;"))]
-    pub fn finishToArray(r: Rc<RefCell<Vec<Object>>>, it: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
-        panic!("stub: java/util/AbstractCollection.finishToArray:([Ljava/lang/Object;Ljava/util/Iterator;)[Ljava/lang/Object;")
+    pub fn finishToArray(mut r: Rc<RefCell<Vec<Object>>>, mut it: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
+        let mut len = (r.borrow().len() as i32);
+        let mut i: i32 = len;
+        loop {
+            let _vdispatch0: bool = if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_ListItr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_ListItr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_Itr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_Itr>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.hasNext()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.hasNext()? } else if let Some(__f) = it.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn() -> crate::error::Result<bool>>>() { (__f)()? } else { Default::default() };
+            if !(_vdispatch0) { break; }
+            if i == len {
+                let _t0: i32 = ArraysSupport::newLength(len, 1i32, ((len>>((1i32&0x1f)))).wrapping_add(1i32))?;
+                len = _t0;
+                let _t1: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i(Clone::clone(&r), len)?;
+                r = _t1;
+            }
+            i = i.wrapping_add(1i32);
+            let _vdispatch0: Object = if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_ListItr>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_ListItr>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<AbstractList_Itr>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<ArrayList_Itr>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.next()? } else if let Some(_d) = it.0.as_any().downcast_ref::<Object>() { _d.next()? } else if let Some(__f) = it.0.as_any().downcast_ref::<std::rc::Rc<dyn Fn() -> crate::error::Result<Object>>>() { (__f)()? } else { Default::default() };
+            r.borrow_mut()[i as usize] = Clone::clone(&_vdispatch0);
+        }
+        let mut _merged1: Rc<RefCell<Vec<Object>>>;
+        if i == len {
+            _merged1 = r;
+        } else {
+            let _t0: Rc<RefCell<Vec<Object>>> = Arrays::copyOf_arr_obj_i(Clone::clone(&r), i)?;
+            _merged1 = _t0;
+        }
+        Ok(_merged1)
     }
 
     #[cfg_attr(any(), java_method(name = "add", descriptor = "(Ljava/lang/Object;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(TE;)Z"))]
@@ -81,22 +131,22 @@ impl<E: Clone + Default + 'static> AbstractCollection<E> {
     }
 
     #[cfg_attr(any(), java_method(name = "containsAll", descriptor = "(Ljava/util/Collection;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<*>;)Z"))]
-    pub fn containsAll(&self, c: Object) -> Result<bool> {
+    pub fn containsAll(&self, c: Collection<Object>) -> Result<bool> {
         panic!("stub: java/util/AbstractCollection.containsAll:(Ljava/util/Collection;)Z")
     }
 
     #[cfg_attr(any(), java_method(name = "addAll", descriptor = "(Ljava/util/Collection;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<+TE;>;)Z"))]
-    pub fn addAll(&self, c: Object) -> Result<bool> {
+    pub fn addAll(&self, c: Collection<E>) -> Result<bool> {
         panic!("stub: java/util/AbstractCollection.addAll:(Ljava/util/Collection;)Z")
     }
 
     #[cfg_attr(any(), java_method(name = "removeAll", descriptor = "(Ljava/util/Collection;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<*>;)Z"))]
-    pub fn removeAll(&self, c: Object) -> Result<bool> {
+    pub fn removeAll(&self, c: Collection<Object>) -> Result<bool> {
         panic!("stub: java/util/AbstractCollection.removeAll:(Ljava/util/Collection;)Z")
     }
 
     #[cfg_attr(any(), java_method(name = "retainAll", descriptor = "(Ljava/util/Collection;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Collection<*>;)Z"))]
-    pub fn retainAll(&self, c: Object) -> Result<bool> {
+    pub fn retainAll(&self, c: Collection<Object>) -> Result<bool> {
         panic!("stub: java/util/AbstractCollection.retainAll:(Ljava/util/Collection;)Z")
     }
 
@@ -108,5 +158,30 @@ impl<E: Clone + Default + 'static> AbstractCollection<E> {
     #[cfg_attr(any(), java_method(name = "toString", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn toString(&self) -> Result<String> {
         panic!("stub: java/util/AbstractCollection.toString:()Ljava/lang/String;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "toArray", descriptor = "(Ljava/util/function/IntFunction;)[Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<T:Ljava/lang/Object;>(Ljava/util/function/IntFunction<[TT;>;)[TT;"))]
+    pub fn toArray_intfun(&self, generator: Object) -> Result<Rc<RefCell<Vec<Object>>>> {
+        panic!("stub: java/util/AbstractCollection.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "removeIf", descriptor = "(Ljava/util/function/Predicate;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/Predicate<-TE;>;)Z"))]
+    pub fn removeIf(&self, filter: Predicate<E>) -> Result<bool> {
+        panic!("stub: java/util/AbstractCollection.removeIf:(Ljava/util/function/Predicate;)Z")
+    }
+
+    #[cfg_attr(any(), java_method(name = "spliterator", descriptor = "()Ljava/util/Spliterator;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Spliterator<TE;>;"))]
+    pub fn spliterator(&self) -> Result<Object> {
+        panic!("stub: java/util/AbstractCollection.spliterator:()Ljava/util/Spliterator;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "stream", descriptor = "()Ljava/util/stream/Stream;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/stream/Stream<TE;>;"))]
+    pub fn stream(&self) -> Result<Object> {
+        panic!("stub: java/util/AbstractCollection.stream:()Ljava/util/stream/Stream;")
+    }
+
+    #[cfg_attr(any(), java_method(name = "parallelStream", descriptor = "()Ljava/util/stream/Stream;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/stream/Stream<TE;>;"))]
+    pub fn parallelStream(&self) -> Result<Object> {
+        panic!("stub: java/util/AbstractCollection.parallelStream:()Ljava/util/stream/Stream;")
     }
 }

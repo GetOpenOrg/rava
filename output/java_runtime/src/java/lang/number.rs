@@ -5,6 +5,7 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
+use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -35,7 +36,9 @@ impl Number {
 
     #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
     pub fn new() -> Result<Self> {
-        panic!("stub: java/lang/Number.<init>:()V")
+        let mut this = Self::default();
+        /* invokespecial Method java/lang/Object.<init>:()V (Object no-op) */
+        Ok(this)
     }
 
     #[cfg_attr(any(), java_method(name = "intValue", descriptor = "()I", access = "public", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false))]
