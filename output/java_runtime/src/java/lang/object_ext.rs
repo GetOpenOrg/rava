@@ -1,30 +1,34 @@
 use crate::prelude::*;
-use super::object::raw::Object;
+use super::object::{Object, ObjectVTable, JvmRef};
 
 impl Object {
-    /// 将任意 'static 值装入 Object（JVM upcasting），不携带类型标识
+    /// 将任意 `'static` 值包装进 Object。
+    ///
+    /// 对于有 `ObjectVTable` impl 的类型（具体类、基本类型），通过 `JvmRef<T>` 包装；
+    /// `Into<Object>` 生成代码中的具体类路径使用 `Object(Rc::new(self))` 直接存储，
+    /// 不需要 `from_any`。
+    /// `from_any` 主要用于：泛型参数 E、接口存根、工具方法中的类型擦除场景。
     #[jvm_ext]
-    pub fn from_any<T: std::any::Any + 'static>(v: T) -> Self {
-        Object(std::rc::Rc::new(v), |_| false)
+    pub fn from_any<T: 'static>(v: T) -> Self {
+        Object(std::rc::Rc::new(JvmRef(v)))
     }
 
-    /// 将带有类型标识的 Java 类实例装入 Object
-    /// `check`: 该类的 is_instance_of 静态方法，由 java_class 宏生成
-    #[jvm_ext]
-    pub fn with_class<T: std::any::Any + 'static>(v: T, check: fn(&str) -> bool) -> Self {
-        Object(std::rc::Rc::new(v), check)
-    }
-
-    /// instanceof 运行时检查：委托给类型标识函数指针
+    /// instanceof 运行时检查：委托给 ObjectVTable::is_instance_of（Arch-2）
     #[jvm_ext]
     pub fn is_instance_of(&self, type_id: &str) -> bool {
-        (self.1)(type_id)
+        self.0.is_instance_of(type_id)
     }
 
     /// 从 Object 中取出 T（JVM checkcast/downcasting），类型不符则 panic（ClassCastException）
+    ///
+    /// 双路径检查：
+    ///   1. 直接路径：T 实现 ObjectVTable，通过 as_any() 直接取出
+    ///   2. JvmRef 路径：T 通过 from_any 包装，as_any() 返回 &T
+    ///      (JvmRef<T>::as_any → &self.0: &dyn Any，downcast_ref::<T>() 成功)
     #[jvm_ext]
     pub fn downcast<T: std::any::Any + Clone + 'static>(&self) -> T {
-        self.0.downcast_ref::<T>()
+        self.0.as_any()
+            .downcast_ref::<T>()
             .expect("ClassCastException")
             .clone()
     }
@@ -37,12 +41,12 @@ impl Object {
     #[jvm_ext]
     pub fn get(&self) -> Result<Object> { Ok(self.clone()) }
 
-    /// 格式化原始类型的 Object，供 Display impl 使用
+    /// 格式化原始类型的 Object，供 Display impl 使用（fallback 路径）
     #[jvm_ext]
     pub fn fmt_primitive(&self, f: &mut std::fmt::Formatter<'_>) -> Option<std::fmt::Result> {
         macro_rules! try_fmt {
             ($t:ty) => {
-                if let Some(v) = self.0.downcast_ref::<$t>() {
+                if let Some(v) = self.0.as_any().downcast_ref::<$t>() {
                     return Some(write!(f, "{}", v));
                 }
             };
@@ -56,20 +60,20 @@ impl Object {
 
 impl std::fmt::Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(r) = self.fmt_primitive(f) { return r; }
-        write!(f, "Object")
+        // 通过 ObjectVTable::toString 动态派发到具体类型（Arch-4）
+        write!(f, "{}", self.0.toString())
     }
 }
 
-// Java autoboxing: 基本类型自动装箱为 Object（不携带类型标识，instanceof 始终 false）
-impl From<i32>  for Object { fn from(v: i32)  -> Self { Object::from_any(v) } }
-impl From<i64>  for Object { fn from(v: i64)  -> Self { Object::from_any(v) } }
-impl From<f32>  for Object { fn from(v: f32)  -> Self { Object::from_any(v) } }
-impl From<f64>  for Object { fn from(v: f64)  -> Self { Object::from_any(v) } }
-impl From<bool> for Object { fn from(v: bool) -> Self { Object::from_any(v) } }
-impl From<i8>   for Object { fn from(v: i8)   -> Self { Object::from_any(v) } }
-impl From<i16>  for Object { fn from(v: i16)  -> Self { Object::from_any(v) } }
-impl From<u16>  for Object { fn from(v: u16)  -> Self { Object::from_any(v) } }
+// Java autoboxing: 基本类型自动装箱为 Object（直接存储，不经过 JvmRef）
+impl From<i32>  for Object { fn from(v: i32)  -> Self { Object(std::rc::Rc::new(v)) } }
+impl From<i64>  for Object { fn from(v: i64)  -> Self { Object(std::rc::Rc::new(v)) } }
+impl From<f32>  for Object { fn from(v: f32)  -> Self { Object(std::rc::Rc::new(v)) } }
+impl From<f64>  for Object { fn from(v: f64)  -> Self { Object(std::rc::Rc::new(v)) } }
+impl From<bool> for Object { fn from(v: bool) -> Self { Object(std::rc::Rc::new(v)) } }
+impl From<i8>   for Object { fn from(v: i8)   -> Self { Object(std::rc::Rc::new(v)) } }
+impl From<i16>  for Object { fn from(v: i16)  -> Self { Object(std::rc::Rc::new(v)) } }
+impl From<u16>  for Object { fn from(v: u16)  -> Self { Object(std::rc::Rc::new(v)) } }
 
 // Java unboxing: Object 反向解包为基本类型
 impl From<Object> for i32   { fn from(o: Object) -> i32   { o.downcast::<i32>()   } }
@@ -81,17 +85,20 @@ impl From<Object> for i8    { fn from(o: Object) -> i8    { o.downcast::<i8>()  
 impl From<Object> for i16   { fn from(o: Object) -> i16   { o.downcast::<i16>()   } }
 impl From<Object> for u16   { fn from(o: Object) -> u16   { o.downcast::<u16>()   } }
 
-// Object equality: null == null，原始类型值比较，其他类型回退到指针相等
+// Object equality: null == null，基本类型值相等，其他类型 Rc 指针相等
 impl PartialEq for Object {
     fn eq(&self, other: &Self) -> bool {
         macro_rules! try_eq {
             ($t:ty) => {
-                if let (Some(a), Some(b)) = (self.0.downcast_ref::<$t>(), other.0.downcast_ref::<$t>()) {
+                if let (Some(a), Some(b)) = (
+                    self.0.as_any().downcast_ref::<$t>(),
+                    other.0.as_any().downcast_ref::<$t>()
+                ) {
                     return a == b;
                 }
             };
         }
-        try_eq!(());  // null == null: Object::default() 存储 ()，两个 null 永远相等
+        try_eq!(());  // null == null
         try_eq!(i32); try_eq!(i64); try_eq!(bool);
         try_eq!(f32); try_eq!(f64); try_eq!(i8);
         try_eq!(i16); try_eq!(u16);

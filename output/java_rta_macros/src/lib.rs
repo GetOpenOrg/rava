@@ -91,9 +91,8 @@ pub fn java_class(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
 
-    // ── Into<Object> ──────────────────────────────────────────────────────────
-    // 非接口类：携带类型标识（with_class）；接口或无 binary_name：不携带（from_any）
-    let into_impl: TokenStream2 = if !is_interface && !binary_name.is_empty() {
+    // ── ObjectVTable impl（Arch-4：虚方法派发；Arch-2：instanceof）───────────────
+    let vtable_impl: TokenStream2 = if !is_interface && !binary_name.is_empty() {
         let check_types: Vec<&str> = if !all_supertypes.is_empty() {
             all_supertypes.iter().map(|s| s.as_str()).collect()
         } else {
@@ -101,13 +100,24 @@ pub fn java_class(attr: TokenStream, item: TokenStream) -> TokenStream {
         };
         let patterns = check_types.iter().map(|s| quote! { #s });
         quote! {
-            impl #impl_generics Into<#obj> for #name #ty_generics #where_clause {
-                fn into(self) -> #obj {
-                    fn __check(type_id: &str) -> bool {
-                        matches!(type_id, #(#patterns)|*)
-                    }
-                    #obj::with_class(self, __check)
+            impl #impl_generics ObjectVTable for #name #ty_generics #where_clause {
+                fn is_instance_of(&self, type_id: &str) -> bool {
+                    matches!(type_id, #(#patterns)|*)
                 }
+                fn as_any(&self) -> &dyn ::std::any::Any { self }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // ── Into<Object> ──────────────────────────────────────────────────────────
+    // 具体类（已有 ObjectVTable impl）：直接通过 Rc::new(self) 存储，支持 instanceof/toString 派发
+    // 接口或无 binary_name：fallback 到 from_any（JvmRef 包装）
+    let into_impl: TokenStream2 = if !is_interface && !binary_name.is_empty() {
+        quote! {
+            impl #impl_generics Into<#obj> for #name #ty_generics #where_clause {
+                fn into(self) -> #obj { #obj(::std::rc::Rc::new(self)) }
             }
         }
     } else {
@@ -135,6 +145,7 @@ pub fn java_class(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
         #input
         #binary_name_impl
+        #vtable_impl
         #into_impl
         #from_impl
         #debug_impl

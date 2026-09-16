@@ -35,19 +35,21 @@ pub fn java_fmt_f32(v: f32) -> String {
 
 /// Printable trait：统一 println 派发（T38）
 /// 实现此 trait 的类型可直接传给 PrintStream::println
+/// 注：J-3 废弃计划 — Arch-1 完成后由 ObjectVTable::toString 替代，届时删除本 trait
 pub trait Printable {
-    fn to_print_string(&self) -> String;
+    fn to_print_string(&self) -> std::string::String;
 }
-impl Printable for i32   { fn to_print_string(&self) -> String { format!("{}", self) } }
-impl Printable for i64   { fn to_print_string(&self) -> String { format!("{}", self) } }
-impl Printable for f32   { fn to_print_string(&self) -> String { java_fmt_f32(*self) } }
-impl Printable for f64   { fn to_print_string(&self) -> String { java_fmt_f64(*self) } }
-impl Printable for bool  { fn to_print_string(&self) -> String { format!("{}", self) } }
-impl Printable for i8    { fn to_print_string(&self) -> String { format!("{}", self) } }
-impl Printable for i16   { fn to_print_string(&self) -> String { format!("{}", self) } }
-impl Printable for u16   { fn to_print_string(&self) -> String { format!("{}", self) } }
+impl Printable for i32   { fn to_print_string(&self) -> std::string::String { format!("{}", self) } }
+impl Printable for i64   { fn to_print_string(&self) -> std::string::String { format!("{}", self) } }
+impl Printable for f32   { fn to_print_string(&self) -> std::string::String { java_fmt_f32(*self) } }
+impl Printable for f64   { fn to_print_string(&self) -> std::string::String { java_fmt_f64(*self) } }
+impl Printable for bool  { fn to_print_string(&self) -> std::string::String { format!("{}", self) } }
+impl Printable for i8    { fn to_print_string(&self) -> std::string::String { format!("{}", self) } }
+impl Printable for i16   { fn to_print_string(&self) -> std::string::String { format!("{}", self) } }
+impl Printable for u16   { fn to_print_string(&self) -> std::string::String { format!("{}", self) } }
 impl Printable for java::lang::Object {
-    fn to_print_string(&self) -> String { format!("{}", self) }
+    // 通过 ObjectVTable::toString() 动态派发到具体类型（Arch-4）
+    fn to_print_string(&self) -> std::string::String { self.0.toString() }
 }
 
 /// JVM null 检查：ifnull/ifnonnull 字节码翻译辅助。
@@ -97,6 +99,7 @@ pub mod prelude {
     pub use super::error::{JvmError, Result};
     pub use super::types::JField;
     pub use super::java::lang::Object;
+    pub use super::java::lang::ObjectVTable;
     pub use super::Printable;
     pub use super::_is_jnull;
     pub use super::JvmEnum;

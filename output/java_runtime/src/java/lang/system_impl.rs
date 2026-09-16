@@ -10,7 +10,7 @@ impl System {
         let len = length as usize;
         macro_rules! try_copy {
             ($t:ty) => {
-                if let Some(s) = src.0.downcast_ref::<Rc<RefCell<Vec<$t>>>>() {
+                if let Some(s) = src.0.as_any().downcast_ref::<Rc<RefCell<Vec<$t>>>>() {
                     let d = dest.downcast::<Rc<RefCell<Vec<$t>>>>();
                     let copied: Vec<$t> = s.borrow()[sp..sp + len].to_vec();
                     d.borrow_mut()[dp..dp + len].clone_from_slice(&copied);
