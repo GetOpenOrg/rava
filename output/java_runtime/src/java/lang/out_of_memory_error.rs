@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -57,7 +56,7 @@ impl OutOfMemoryError {
         8228564086184010517i64
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: <init>()V
     pub fn new() -> Result<Self> {
         let mut this = Self { _super: Default::default(), ..Default::default() };
@@ -65,7 +64,7 @@ impl OutOfMemoryError {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: <init>(Ljava/lang/String;)V
     pub fn new_str(mut s: String) -> Result<Self> {
         let mut this = Self { _super: Default::default(), ..Default::default() };

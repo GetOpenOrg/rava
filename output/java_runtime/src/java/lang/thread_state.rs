@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -82,17 +81,17 @@ impl Thread_State {
         panic!("stub: java/lang/Thread$State.$VALUES:[Ljava/lang/Thread$State;")
     }
 
-    #[cfg_attr(any(), java_method(name = "values", descriptor = "()[Ljava/lang/Thread$State;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "values", descriptor = "()[Ljava/lang/Thread$State;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn values() -> Result<Rc<RefCell<Vec<Thread_State>>>> {
         panic!("stub: java/lang/Thread$State.values:()[Ljava/lang/Thread$State;")
     }
 
-    #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(Ljava/lang/String;)Ljava/lang/Thread$State;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, method_parameters = ":32768"))]
+    #[java_rta_macros::java_method(name = "valueOf", descriptor = "(Ljava/lang/String;)Ljava/lang/Thread$State;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, method_parameters = ":32768")]
     pub fn valueOf(name: String) -> Result<Thread_State> {
         panic!("stub: java/lang/Thread$State.valueOf:(Ljava/lang/String;)Ljava/lang/Thread$State;")
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;I)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()V", method_parameters = ":4096;:4096"))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;I)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()V", method_parameters = ":4096;:4096")]
     pub fn new(arg0: String, arg1: i32) -> Result<Self> {
         panic!("stub: java/lang/Thread$State.<init>:(Ljava/lang/String;I)V")
     }

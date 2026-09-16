@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -24,6 +23,8 @@ use crate::sun::security::util::*;
     source            = "Integer.java",
     inner_classes     = "java/lang/Integer$IntegerCache:java/lang/Integer:IntegerCache:26;java/lang/invoke/MethodHandles$Lookup:java/lang/invoke/MethodHandles:Lookup:25",
     all_supertypes    = "java/io/Serializable;java/lang/Comparable;java/lang/Integer;java/lang/Number;java/lang/Object;java/lang/constant/Constable;java/lang/constant/ConstantDesc",
+    has_to_string_method = true,
+    has_hash_code_method = true,
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Integer {
@@ -96,52 +97,52 @@ impl Integer {
         1360826667806852920i64
     }
 
-    #[cfg_attr(any(), java_method(name = "toString", descriptor = "(II)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toString", descriptor = "(II)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toString_i_i(i: i32, radix: i32) -> Result<String> {
         panic!("stub: java/lang/Integer.toString:(II)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "toStringUTF16", descriptor = "(II)Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toStringUTF16", descriptor = "(II)Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toStringUTF16(i: i32, radix: i32) -> Result<String> {
         panic!("stub: java/lang/Integer.toStringUTF16:(II)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "toUnsignedString", descriptor = "(II)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toUnsignedString", descriptor = "(II)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toUnsignedString_i_i(i: i32, radix: i32) -> Result<String> {
         panic!("stub: java/lang/Integer.toUnsignedString:(II)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "toHexString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toHexString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toHexString(i: i32) -> Result<String> {
         panic!("stub: java/lang/Integer.toHexString:(I)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "toOctalString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toOctalString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toOctalString(i: i32) -> Result<String> {
         panic!("stub: java/lang/Integer.toOctalString:(I)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "toBinaryString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toBinaryString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toBinaryString(i: i32) -> Result<String> {
         panic!("stub: java/lang/Integer.toBinaryString:(I)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "toUnsignedString0", descriptor = "(II)Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toUnsignedString0", descriptor = "(II)Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toUnsignedString0(val: i32, shift: i32) -> Result<String> {
         panic!("stub: java/lang/Integer.toUnsignedString0:(II)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "formatUnsignedInt", descriptor = "(II[BI)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "formatUnsignedInt", descriptor = "(II[BI)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn formatUnsignedInt(val: i32, shift: i32, buf: Rc<RefCell<Vec<i8>>>, len: i32) -> Result<()> {
         panic!("stub: java/lang/Integer.formatUnsignedInt:(II[BI)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "formatUnsignedIntUTF16", descriptor = "(II[BI)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "formatUnsignedIntUTF16", descriptor = "(II[BI)V", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn formatUnsignedIntUTF16(val: i32, shift: i32, buf: Rc<RefCell<Vec<i8>>>, len: i32) -> Result<()> {
         panic!("stub: java/lang/Integer.formatUnsignedIntUTF16:(II[BI)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "toString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: toString(I)Ljava/lang/String;
     pub fn toString_i(mut i: i32) -> Result<String> {
         let _t0: i32 = Integer::stringSize(i)?;
@@ -158,12 +159,12 @@ impl Integer {
         Ok(String::new_arr_b_b(Clone::clone(&buf), ((1i32) as i8))?)
     }
 
-    #[cfg_attr(any(), java_method(name = "toUnsignedString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toUnsignedString", descriptor = "(I)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toUnsignedString_i(i: i32) -> Result<String> {
         panic!("stub: java/lang/Integer.toUnsignedString:(I)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getChars", descriptor = "(II[B)I", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getChars", descriptor = "(II[B)I", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getChars(mut i: i32, mut index: i32, mut buf: Rc<RefCell<Vec<i8>>>) -> Result<i32> {
         let mut charPos: i32 = index;
         let mut negative = ((i<0)) as i32;
@@ -193,7 +194,7 @@ impl Integer {
         Ok(charPos)
     }
 
-    #[cfg_attr(any(), java_method(name = "stringSize", descriptor = "(I)I", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "stringSize", descriptor = "(I)I", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn stringSize(mut x: i32) -> Result<i32> {
         let mut d: i32 = 1i32;
         if (x>=0) {
@@ -213,276 +214,247 @@ impl Integer {
         Ok((10i32).wrapping_add(d))
     }
 
-    #[cfg_attr(any(), java_method(name = "parseInt", descriptor = "(Ljava/lang/String;I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "parseInt", descriptor = "(Ljava/lang/String;I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn parseInt_str_i(s: String, radix: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.parseInt:(Ljava/lang/String;I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "parseInt", descriptor = "(Ljava/lang/CharSequence;III)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "parseInt", descriptor = "(Ljava/lang/CharSequence;III)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn parseInt_seq_i_i_i(s: Object, beginIndex: i32, endIndex: i32, radix: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.parseInt:(Ljava/lang/CharSequence;III)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "parseInt", descriptor = "(Ljava/lang/String;)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "parseInt", descriptor = "(Ljava/lang/String;)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn parseInt_str(s: String) -> Result<i32> {
         panic!("stub: java/lang/Integer.parseInt:(Ljava/lang/String;)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "parseUnsignedInt", descriptor = "(Ljava/lang/String;I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "parseUnsignedInt", descriptor = "(Ljava/lang/String;I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn parseUnsignedInt_str_i(s: String, radix: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.parseUnsignedInt:(Ljava/lang/String;I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "parseUnsignedInt", descriptor = "(Ljava/lang/CharSequence;III)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "parseUnsignedInt", descriptor = "(Ljava/lang/CharSequence;III)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn parseUnsignedInt_seq_i_i_i(s: Object, beginIndex: i32, endIndex: i32, radix: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.parseUnsignedInt:(Ljava/lang/CharSequence;III)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "parseUnsignedInt", descriptor = "(Ljava/lang/String;)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "parseUnsignedInt", descriptor = "(Ljava/lang/String;)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn parseUnsignedInt_str(s: String) -> Result<i32> {
         panic!("stub: java/lang/Integer.parseUnsignedInt:(Ljava/lang/String;)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(Ljava/lang/String;I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "valueOf", descriptor = "(Ljava/lang/String;I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn valueOf_str_i(s: String, radix: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.valueOf:(Ljava/lang/String;I)Ljava/lang/Integer;")
     }
 
-    #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(Ljava/lang/String;)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "valueOf", descriptor = "(Ljava/lang/String;)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn valueOf_str(s: String) -> Result<i32> {
         panic!("stub: java/lang/Integer.valueOf:(Ljava/lang/String;)Ljava/lang/Integer;")
     }
 
-    #[cfg_attr(any(), java_method(name = "valueOf", descriptor = "(I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    // java: valueOf(I)Ljava/lang/Integer;
-    pub fn valueOf_i(mut i: i32) -> Result<i32> {
-        if i <= Integer_IntegerCache::high() {
-            return Ok(Integer_IntegerCache::cache().borrow()[(i).wrapping_add(128i32) as usize]);
-        }
-        Ok(i)
+    #[java_rta_macros::java_method(name = "valueOf", descriptor = "(I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
+    pub fn valueOf_i(i: i32) -> Result<i32> {
+        panic!("stub: java/lang/Integer.valueOf:(I)Ljava/lang/Integer;")
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, is_deprecated = true))]
-    // java: <init>(I)V
-    pub fn new_i(mut value: i32) -> Result<Self> {
-        let mut this = Self { _super: Default::default(), value: JField::new(0), ..Default::default() };
-        this._super = Number::new()?;
-        this.value.set(value);
-        Ok(this)
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, is_deprecated = true)]
+    pub fn new_i(value: i32) -> Result<Self> {
+        panic!("stub: java/lang/Integer.<init>:(I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException", is_deprecated = true))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException", is_deprecated = true)]
     pub fn new_str(s: String) -> Result<Self> {
         panic!("stub: java/lang/Integer.<init>:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "byteValue", descriptor = "()B", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "byteValue", descriptor = "()B", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn byteValue(&self) -> Result<i8> {
         panic!("stub: java/lang/Integer.byteValue:()B")
     }
 
-    #[cfg_attr(any(), java_method(name = "shortValue", descriptor = "()S", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "shortValue", descriptor = "()S", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn shortValue(&self) -> Result<i16> {
         panic!("stub: java/lang/Integer.shortValue:()S")
     }
 
-    #[cfg_attr(any(), java_method(name = "intValue", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "intValue", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn intValue(&self) -> Result<i32> {
-        let this = self;
-        Ok(this.value.get())
+        panic!("stub: java/lang/Integer.intValue:()I")
     }
 
-    #[cfg_attr(any(), java_method(name = "longValue", descriptor = "()J", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "longValue", descriptor = "()J", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn longValue(&self) -> Result<i64> {
         panic!("stub: java/lang/Integer.longValue:()J")
     }
 
-    #[cfg_attr(any(), java_method(name = "floatValue", descriptor = "()F", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "floatValue", descriptor = "()F", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn floatValue(&self) -> Result<f32> {
         panic!("stub: java/lang/Integer.floatValue:()F")
     }
 
-    #[cfg_attr(any(), java_method(name = "doubleValue", descriptor = "()D", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "doubleValue", descriptor = "()D", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn doubleValue(&self) -> Result<f64> {
         panic!("stub: java/lang/Integer.doubleValue:()D")
     }
 
-    #[cfg_attr(any(), java_method(name = "toString", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toString", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toString(&self) -> Result<String> {
-        panic!("stub: java/lang/Integer.toString:()Ljava/lang/String;")
+        Ok(String::from(Self::BINARY_NAME))
     }
 
-    #[cfg_attr(any(), java_method(name = "hashCode", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "hashCode", descriptor = "()I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn hashCode(&self) -> Result<i32> {
-        panic!("stub: java/lang/Integer.hashCode:()I")
+        Ok(0)
     }
 
-    #[cfg_attr(any(), java_method(name = "hashCode", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "hashCode", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn hashCode_i(value: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.hashCode:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "equals", descriptor = "(Ljava/lang/Object;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "equals", descriptor = "(Ljava/lang/Object;)Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn equals(&self, obj: Object) -> Result<bool> {
         panic!("stub: java/lang/Integer.equals:(Ljava/lang/Object;)Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "getInteger", descriptor = "(Ljava/lang/String;)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getInteger", descriptor = "(Ljava/lang/String;)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getInteger_str(nm: String) -> Result<i32> {
         panic!("stub: java/lang/Integer.getInteger:(Ljava/lang/String;)Ljava/lang/Integer;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getInteger", descriptor = "(Ljava/lang/String;I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getInteger", descriptor = "(Ljava/lang/String;I)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getInteger_str_i(nm: String, val: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.getInteger:(Ljava/lang/String;I)Ljava/lang/Integer;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getInteger", descriptor = "(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getInteger", descriptor = "(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getInteger_str_int(nm: String, val: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.getInteger:(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;")
     }
 
-    #[cfg_attr(any(), java_method(name = "decode", descriptor = "(Ljava/lang/String;)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException"))]
+    #[java_rta_macros::java_method(name = "decode", descriptor = "(Ljava/lang/String;)Ljava/lang/Integer;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NumberFormatException")]
     pub fn decode(nm: String) -> Result<i32> {
         panic!("stub: java/lang/Integer.decode:(Ljava/lang/String;)Ljava/lang/Integer;")
     }
 
-    #[cfg_attr(any(), java_method(name = "compareTo", descriptor = "(Ljava/lang/Integer;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compareTo(&self, mut anotherInteger: i32) -> Result<i32> {
-        let this = self;
-        let _t0: i32 = Integer::compare(this.value.get(), anotherInteger.value.get())?;
-        Ok(_t0)
+    #[java_rta_macros::java_method(name = "compareTo", descriptor = "(Ljava/lang/Integer;)I", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
+    pub fn compareTo(&self, anotherInteger: i32) -> Result<i32> {
+        panic!("stub: java/lang/Integer.compareTo:(Ljava/lang/Integer;)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "compare", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn compare(mut x: i32, mut y: i32) -> Result<i32> {
-        Ok(((if x < y { (-1i32 != 0) } else { x != y })) as i32)
+    #[java_rta_macros::java_method(name = "compare", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
+    pub fn compare(x: i32, y: i32) -> Result<i32> {
+        panic!("stub: java/lang/Integer.compare:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "compareUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "compareUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn compareUnsigned(x: i32, y: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.compareUnsigned:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "toUnsignedLong", descriptor = "(I)J", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toUnsignedLong", descriptor = "(I)J", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toUnsignedLong(x: i32) -> Result<i64> {
         panic!("stub: java/lang/Integer.toUnsignedLong:(I)J")
     }
 
-    #[cfg_attr(any(), java_method(name = "divideUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "divideUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn divideUnsigned(dividend: i32, divisor: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.divideUnsigned:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "remainderUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "remainderUnsigned", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn remainderUnsigned(dividend: i32, divisor: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.remainderUnsigned:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "highestOneBit", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "highestOneBit", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn highestOneBit(i: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.highestOneBit:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "lowestOneBit", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "lowestOneBit", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn lowestOneBit(i: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.lowestOneBit:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "numberOfLeadingZeros", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
-    pub fn numberOfLeadingZeros(mut i: i32) -> Result<i32> {
-        return Ok((if (i==0) { 32i32 } else { 0i32 }));
-        let mut n: i32 = 31i32;
-        if i >= 264i32 {
-            n = n.wrapping_sub(16i32);
-            i = ((i as u32>>(16i32&0x1f)) as i32);
-        }
-        if i >= 256i32 {
-            n = n.wrapping_sub(8i32);
-            i = ((i as u32>>(8i32&0x1f)) as i32);
-        }
-        if i >= 16i32 {
-            n = n.wrapping_sub(4i32);
-            i = ((i as u32>>(4i32&0x1f)) as i32);
-        }
-        if i >= 4i32 {
-            n = n.wrapping_sub(2i32);
-            i = ((i as u32>>(2i32&0x1f)) as i32);
-        }
-        Ok((n).wrapping_sub(((i as u32>>(1i32&0x1f)) as i32)))
+    #[java_rta_macros::java_method(name = "numberOfLeadingZeros", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
+    pub fn numberOfLeadingZeros(i: i32) -> Result<i32> {
+        panic!("stub: java/lang/Integer.numberOfLeadingZeros:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "numberOfTrailingZeros", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "numberOfTrailingZeros", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn numberOfTrailingZeros(i: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.numberOfTrailingZeros:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "bitCount", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "bitCount", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn bitCount(i: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.bitCount:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "rotateLeft", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "rotateLeft", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn rotateLeft(i: i32, distance: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.rotateLeft:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "rotateRight", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "rotateRight", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn rotateRight(i: i32, distance: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.rotateRight:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "reverse", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "reverse", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn reverse(i: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.reverse:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "compress", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "compress", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn compress(i: i32, mask: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.compress:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "expand", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "expand", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn expand(i: i32, mask: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.expand:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "parallelSuffix", descriptor = "(I)I", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "parallelSuffix", descriptor = "(I)I", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn parallelSuffix(maskCount: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.parallelSuffix:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "signum", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "signum", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn signum(i: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.signum:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "reverseBytes", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "reverseBytes", descriptor = "(I)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn reverseBytes(i: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.reverseBytes:(I)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "sum", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "sum", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn sum(a: i32, b: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.sum:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "max", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "max", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn max(a: i32, b: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.max:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "min", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "min", descriptor = "(II)I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn min(a: i32, b: i32) -> Result<i32> {
         panic!("stub: java/lang/Integer.min:(II)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "describeConstable", descriptor = "()Ljava/util/Optional;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Optional<Ljava/lang/Integer;>;"))]
+    #[java_rta_macros::java_method(name = "describeConstable", descriptor = "()Ljava/util/Optional;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Optional<Ljava/lang/Integer;>;")]
     pub fn describeConstable(&self) -> Result<Object> {
         panic!("stub: java/lang/Integer.describeConstable:()Ljava/util/Optional;")
     }
 
-    #[cfg_attr(any(), java_method(name = "resolveConstantDesc", descriptor = "(Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/Integer;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "resolveConstantDesc", descriptor = "(Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/Integer;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn resolveConstantDesc(&self, lookup: Object) -> Result<i32> {
         panic!("stub: java/lang/Integer.resolveConstantDesc:(Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/Integer;")
     }

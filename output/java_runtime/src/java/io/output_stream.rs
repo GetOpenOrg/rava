@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -29,38 +28,38 @@ use crate::sun::security::util::*;
 pub struct OutputStream;
 
 impl OutputStream {
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new() -> Result<Self> {
         panic!("stub: java/io/OutputStream.<init>:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "nullOutputStream", descriptor = "()Ljava/io/OutputStream;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "nullOutputStream", descriptor = "()Ljava/io/OutputStream;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn nullOutputStream() -> Result<OutputStream> {
         panic!("stub: java/io/OutputStream.nullOutputStream:()Ljava/io/OutputStream;")
     }
 
-    #[cfg_attr(any(), java_method(name = "write", descriptor = "(I)V", access = "public", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false, exceptions = "java/io/IOException"))]
+    #[java_rta_macros::java_method(name = "write", descriptor = "(I)V", access = "public", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false, exceptions = "java/io/IOException")]
     pub fn write_i(&self, arg0: i32) -> Result<()> {
         panic!("stub: java/io/OutputStream.write:(I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "write", descriptor = "([B)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException"))]
+    #[java_rta_macros::java_method(name = "write", descriptor = "([B)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
     pub fn write_arr_b(&self, b: Rc<RefCell<Vec<i8>>>) -> Result<()> {
         panic!("stub: java/io/OutputStream.write:([B)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "write", descriptor = "([BII)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException"))]
+    #[java_rta_macros::java_method(name = "write", descriptor = "([BII)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
     pub fn write_arr_b_i_i(&self, b: Rc<RefCell<Vec<i8>>>, off: i32, len: i32) -> Result<()> {
         panic!("stub: java/io/OutputStream.write:([BII)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "flush", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException"))]
+    #[java_rta_macros::java_method(name = "flush", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
     pub fn flush(&self) -> Result<()> {
         let this = self;
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "close", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException"))]
+    #[java_rta_macros::java_method(name = "close", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
     pub fn close(&self) -> Result<()> {
         panic!("stub: java/io/OutputStream.close:()V")
     }

@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -27,7 +26,7 @@ use crate::sun::security::util::*;
 pub struct Interruptible;
 
 impl Interruptible {
-    #[cfg_attr(any(), java_method(name = "interrupt", descriptor = "(Ljava/lang/Thread;)V", access = "public", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "interrupt", descriptor = "(Ljava/lang/Thread;)V", access = "public", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
     pub fn interrupt(&self, arg0: Thread) -> Result<()> {
         panic!("stub: sun/nio/ch/Interruptible.interrupt:(Ljava/lang/Thread;)V")
     }

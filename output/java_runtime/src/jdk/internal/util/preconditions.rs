@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -48,52 +47,52 @@ impl Preconditions {
         panic!("stub: jdk/internal/util/Preconditions.IOOBE_FORMATTER:Ljava/util/function/BiFunction;")
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new() -> Result<Self> {
         panic!("stub: jdk/internal/util/Preconditions.<init>:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBounds", descriptor = "(Ljava/util/function/BiFunction;Ljava/lang/String;[Ljava/lang/Number;)Ljava/lang/RuntimeException;", access = "private", modifiers = "static varargs", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;Ljava/lang/String;[Ljava/lang/Number;)Ljava/lang/RuntimeException;"))]
+    #[java_rta_macros::java_method(name = "outOfBounds", descriptor = "(Ljava/util/function/BiFunction;Ljava/lang/String;[Ljava/lang/Number;)Ljava/lang/RuntimeException;", access = "private", modifiers = "static varargs", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;Ljava/lang/String;[Ljava/lang/Number;)Ljava/lang/RuntimeException;")]
     pub fn outOfBounds(oobef: Object, checkKind: String, args: Rc<RefCell<Vec<Number>>>) -> Result<RuntimeException> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBounds:(Ljava/util/function/BiFunction;Ljava/lang/String;[Ljava/lang/Number;)Ljava/lang/RuntimeException;")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsCheckIndex", descriptor = "(Ljava/util/function/BiFunction;II)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;II)Ljava/lang/RuntimeException;"))]
+    #[java_rta_macros::java_method(name = "outOfBoundsCheckIndex", descriptor = "(Ljava/util/function/BiFunction;II)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;II)Ljava/lang/RuntimeException;")]
     pub fn outOfBoundsCheckIndex_bifunc_i_i(oobe: Object, index: i32, length: i32) -> Result<RuntimeException> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsCheckIndex:(Ljava/util/function/BiFunction;II)Ljava/lang/RuntimeException;")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsCheckFromToIndex", descriptor = "(Ljava/util/function/BiFunction;III)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;III)Ljava/lang/RuntimeException;"))]
+    #[java_rta_macros::java_method(name = "outOfBoundsCheckFromToIndex", descriptor = "(Ljava/util/function/BiFunction;III)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;III)Ljava/lang/RuntimeException;")]
     pub fn outOfBoundsCheckFromToIndex_bifunc_i_i_i(oobe: Object, fromIndex: i32, toIndex: i32, length: i32) -> Result<RuntimeException> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsCheckFromToIndex:(Ljava/util/function/BiFunction;III)Ljava/lang/RuntimeException;")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsCheckFromIndexSize", descriptor = "(Ljava/util/function/BiFunction;III)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;III)Ljava/lang/RuntimeException;"))]
+    #[java_rta_macros::java_method(name = "outOfBoundsCheckFromIndexSize", descriptor = "(Ljava/util/function/BiFunction;III)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;III)Ljava/lang/RuntimeException;")]
     pub fn outOfBoundsCheckFromIndexSize_bifunc_i_i_i(oobe: Object, fromIndex: i32, size: i32, length: i32) -> Result<RuntimeException> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsCheckFromIndexSize:(Ljava/util/function/BiFunction;III)Ljava/lang/RuntimeException;")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsCheckIndex", descriptor = "(Ljava/util/function/BiFunction;JJ)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;JJ)Ljava/lang/RuntimeException;"))]
+    #[java_rta_macros::java_method(name = "outOfBoundsCheckIndex", descriptor = "(Ljava/util/function/BiFunction;JJ)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;JJ)Ljava/lang/RuntimeException;")]
     pub fn outOfBoundsCheckIndex_bifunc_l_l(oobe: Object, index: i64, arg2: i64) -> Result<RuntimeException> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsCheckIndex:(Ljava/util/function/BiFunction;JJ)Ljava/lang/RuntimeException;")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsCheckFromToIndex", descriptor = "(Ljava/util/function/BiFunction;JJJ)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;JJJ)Ljava/lang/RuntimeException;"))]
+    #[java_rta_macros::java_method(name = "outOfBoundsCheckFromToIndex", descriptor = "(Ljava/util/function/BiFunction;JJJ)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;JJJ)Ljava/lang/RuntimeException;")]
     pub fn outOfBoundsCheckFromToIndex_bifunc_l_l_l(oobe: Object, fromIndex: i64, arg2: i64, toIndex: i64) -> Result<RuntimeException> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsCheckFromToIndex:(Ljava/util/function/BiFunction;JJJ)Ljava/lang/RuntimeException;")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsCheckFromIndexSize", descriptor = "(Ljava/util/function/BiFunction;JJJ)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;JJJ)Ljava/lang/RuntimeException;"))]
+    #[java_rta_macros::java_method(name = "outOfBoundsCheckFromIndexSize", descriptor = "(Ljava/util/function/BiFunction;JJJ)Ljava/lang/RuntimeException;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;+Ljava/lang/RuntimeException;>;JJJ)Ljava/lang/RuntimeException;")]
     pub fn outOfBoundsCheckFromIndexSize_bifunc_l_l_l(oobe: Object, fromIndex: i64, arg2: i64, size: i64) -> Result<RuntimeException> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsCheckFromIndexSize:(Ljava/util/function/BiFunction;JJJ)Ljava/lang/RuntimeException;")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsExceptionFormatter", descriptor = "(Ljava/util/function/Function;)Ljava/util/function/BiFunction;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<X:Ljava/lang/RuntimeException;>(Ljava/util/function/Function<Ljava/lang/String;TX;>;)Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;TX;>;"))]
+    #[java_rta_macros::java_method(name = "outOfBoundsExceptionFormatter", descriptor = "(Ljava/util/function/Function;)Ljava/util/function/BiFunction;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "<X:Ljava/lang/RuntimeException;>(Ljava/util/function/Function<Ljava/lang/String;TX;>;)Ljava/util/function/BiFunction<Ljava/lang/String;Ljava/util/List<Ljava/lang/Number;>;TX;>;")]
     pub fn outOfBoundsExceptionFormatter(f: Object) -> Result<Object> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsExceptionFormatter:(Ljava/util/function/Function;)Ljava/util/function/BiFunction;")
     }
 
-    #[cfg_attr(any(), java_method(name = "outOfBoundsMessage", descriptor = "(Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/String;Ljava/util/List<+Ljava/lang/Number;>;)Ljava/lang/String;"))]
+    #[java_rta_macros::java_method(name = "outOfBoundsMessage", descriptor = "(Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/String;Ljava/util/List<+Ljava/lang/Number;>;)Ljava/lang/String;")]
     pub fn outOfBoundsMessage(checkKind: String, args: Object) -> Result<String> {
         panic!("stub: jdk/internal/util/Preconditions.outOfBoundsMessage:(Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;")
     }

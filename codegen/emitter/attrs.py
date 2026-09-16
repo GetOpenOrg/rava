@@ -173,6 +173,13 @@ def _java_class_attr(ci: ClassInfo, compiled: bool = False,
         supertypes = _compute_all_supertypes(ci, registry)
         if supertypes:
             inner_lines.append(f'    all_supertypes    = "{";".join(supertypes)}",')
+        # 仅当类自身声明了 toString/hashCode 时设置标志（继承自 Object 的不算）
+        # 原因：对没有 inherent toString 的类，Self::toString 会解析到 vtable 方法本身
+        _method_sigs = {(m.name, m.descriptor) for m in (ci.methods or [])}
+        if ('toString', '()Ljava/lang/String;') in _method_sigs:
+            inner_lines.append(f'    has_to_string_method = true,')
+        if ('hashCode', '()I') in _method_sigs:
+            inner_lines.append(f'    has_hash_code_method = true,')
     inner = '\n'.join(inner_lines)
     if compiled:
         # Object 类自身不使用宏（from_any/downcast 定义在 Object 上，循环依赖）
@@ -236,7 +243,10 @@ def _java_method_attr(m: ParsedMethod, compiled: bool = False) -> str:
         mp_str = ';'.join(f'{n}:{a}' for n, a in m.method_parameters).replace('"', '\\"')
         parts.append(f'method_parameters = "{mp_str}"')
     if compiled:
-        # 所有方法统一用 cfg_attr 包裹（编译安全，同时保留机器可读元数据）
-        return f'#[cfg_attr(any(), {tag}(' + ', '.join(parts) + '))]'
+        if m.is_native:
+            # native 方法：cfg_attr 包裹保留元数据，由 _impl.rs 手写实现
+            return f'#[cfg_attr(any(), {tag}(' + ', '.join(parts) + '))]'
+        # 非 native 方法：使用真实 proc-macro 属性，支持宏元数据读取
+        return f'#[java_rta_macros::{tag}(' + ', '.join(parts) + ')]'
     else:
         return f'#[{tag}(' + ', '.join(parts) + ')]'

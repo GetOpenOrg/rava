@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -42,7 +41,7 @@ pub struct Thread_FieldHolder {
 }
 
 impl Thread_FieldHolder {
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;JIZ)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;JIZ)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new(group: Object, task: Object, stackSize: i64, arg3: i32, priority: bool) -> Result<Self> {
         panic!("stub: java/lang/Thread$FieldHolder.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;JIZ)V")
     }

@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -41,7 +40,7 @@ impl Thread_Constants {
         panic!("stub: java/lang/Thread$Constants.NO_PERMISSIONS_ACC:Ljava/security/AccessControlContext;")
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new() -> Result<Self> {
         panic!("stub: java/lang/Thread$Constants.<init>:()V")
     }

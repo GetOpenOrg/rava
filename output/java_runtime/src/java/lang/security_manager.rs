@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -80,7 +79,7 @@ impl SecurityManager {
         panic!("stub: java/lang/SecurityManager.nonExportedPkgs:Ljava/util/Map;")
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new() -> Result<Self> {
         panic!("stub: java/lang/SecurityManager.<init>:()V")
     }
@@ -90,12 +89,12 @@ impl SecurityManager {
         panic!("native: java/lang/SecurityManager.getClassContext:()[Ljava/lang/Class;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getSecurityContext", descriptor = "()Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getSecurityContext", descriptor = "()Ljava/lang/Object;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getSecurityContext(&self) -> Result<Object> {
         panic!("stub: java/lang/SecurityManager.getSecurityContext:()Ljava/lang/Object;")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkPermission", descriptor = "(Ljava/security/Permission;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkPermission", descriptor = "(Ljava/security/Permission;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: checkPermission(Ljava/security/Permission;)V
     pub fn checkPermission_permis(&self, mut perm: Object) -> Result<()> {
         let this = self;
@@ -103,22 +102,22 @@ impl SecurityManager {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "checkPermission", descriptor = "(Ljava/security/Permission;Ljava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkPermission", descriptor = "(Ljava/security/Permission;Ljava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkPermission_permis_obj(&self, perm: Object, context: Object) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkPermission:(Ljava/security/Permission;Ljava/lang/Object;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkCreateClassLoader", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkCreateClassLoader", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkCreateClassLoader(&self) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkCreateClassLoader:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "getRootGroup", descriptor = "()Ljava/lang/ThreadGroup;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getRootGroup", descriptor = "()Ljava/lang/ThreadGroup;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getRootGroup() -> Result<Object> {
         panic!("stub: java/lang/SecurityManager.getRootGroup:()Ljava/lang/ThreadGroup;")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkAccess", descriptor = "(Ljava/lang/Thread;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkAccess", descriptor = "(Ljava/lang/Thread;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: checkAccess(Ljava/lang/Thread;)V
     pub fn checkAccess_thread(&self, mut t: Thread) -> Result<()> {
         let this = self;
@@ -132,142 +131,142 @@ impl SecurityManager {
         Ok(())
     }
 
-    #[cfg_attr(any(), java_method(name = "checkAccess", descriptor = "(Ljava/lang/ThreadGroup;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkAccess", descriptor = "(Ljava/lang/ThreadGroup;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkAccess_thread_1(&self, g: Object) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkAccess:(Ljava/lang/ThreadGroup;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkExit", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkExit", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkExit(&self, status: i32) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkExit:(I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkExec", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkExec", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkExec(&self, cmd: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkExec:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkLink", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkLink", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkLink(&self, lib: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkLink:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkRead", descriptor = "(Ljava/io/FileDescriptor;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkRead", descriptor = "(Ljava/io/FileDescriptor;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkRead_filede(&self, fd: Object) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkRead:(Ljava/io/FileDescriptor;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkRead", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkRead", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkRead_str(&self, file: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkRead:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkRead", descriptor = "(Ljava/lang/String;Ljava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkRead", descriptor = "(Ljava/lang/String;Ljava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkRead_str_obj(&self, file: String, context: Object) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkRead:(Ljava/lang/String;Ljava/lang/Object;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkWrite", descriptor = "(Ljava/io/FileDescriptor;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkWrite", descriptor = "(Ljava/io/FileDescriptor;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkWrite_filede(&self, fd: Object) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkWrite:(Ljava/io/FileDescriptor;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkWrite", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkWrite", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkWrite_str(&self, file: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkWrite:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkDelete", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkDelete", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkDelete(&self, file: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkDelete:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkConnect", descriptor = "(Ljava/lang/String;I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkConnect", descriptor = "(Ljava/lang/String;I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkConnect_str_i(&self, host: String, port: i32) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkConnect:(Ljava/lang/String;I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkConnect", descriptor = "(Ljava/lang/String;ILjava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkConnect", descriptor = "(Ljava/lang/String;ILjava/lang/Object;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkConnect_str_i_obj(&self, host: String, port: i32, context: Object) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkConnect:(Ljava/lang/String;ILjava/lang/Object;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkListen", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkListen", descriptor = "(I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkListen(&self, port: i32) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkListen:(I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkAccept", descriptor = "(Ljava/lang/String;I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkAccept", descriptor = "(Ljava/lang/String;I)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkAccept(&self, host: String, port: i32) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkAccept:(Ljava/lang/String;I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkMulticast", descriptor = "(Ljava/net/InetAddress;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkMulticast", descriptor = "(Ljava/net/InetAddress;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkMulticast_inetad(&self, maddr: Object) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkMulticast:(Ljava/net/InetAddress;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkMulticast", descriptor = "(Ljava/net/InetAddress;B)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, is_deprecated = true))]
+    #[java_rta_macros::java_method(name = "checkMulticast", descriptor = "(Ljava/net/InetAddress;B)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, is_deprecated = true)]
     pub fn checkMulticast_inetad_b(&self, maddr: Object, ttl: i8) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkMulticast:(Ljava/net/InetAddress;B)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkPropertiesAccess", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkPropertiesAccess", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkPropertiesAccess(&self) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkPropertiesAccess:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkPropertyAccess", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkPropertyAccess", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkPropertyAccess(&self, key: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkPropertyAccess:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkPrintJobAccess", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkPrintJobAccess", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkPrintJobAccess(&self) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkPrintJobAccess:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "getPackages", descriptor = "(Ljava/lang/String;)[Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getPackages", descriptor = "(Ljava/lang/String;)[Ljava/lang/String;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getPackages(p: String) -> Result<Rc<RefCell<Vec<String>>>> {
         panic!("stub: java/lang/SecurityManager.getPackages:(Ljava/lang/String;)[Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "addNonExportedPackages", descriptor = "(Ljava/lang/ModuleLayer;)V", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "addNonExportedPackages", descriptor = "(Ljava/lang/ModuleLayer;)V", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn addNonExportedPackages(layer: Object) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.addNonExportedPackages:(Ljava/lang/ModuleLayer;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "invalidatePackageAccessCache", descriptor = "()V", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "invalidatePackageAccessCache", descriptor = "()V", access = "package", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn invalidatePackageAccessCache() -> Result<()> {
         panic!("stub: java/lang/SecurityManager.invalidatePackageAccessCache:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "nonExportedPkgs", descriptor = "(Ljava/lang/module/ModuleDescriptor;)Ljava/util/Set;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/module/ModuleDescriptor;)Ljava/util/Set<Ljava/lang/String;>;"))]
+    #[java_rta_macros::java_method(name = "nonExportedPkgs", descriptor = "(Ljava/lang/module/ModuleDescriptor;)Ljava/util/Set;", access = "private", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/module/ModuleDescriptor;)Ljava/util/Set<Ljava/lang/String;>;")]
     pub fn nonExportedPkgs(md: Object) -> Result<Object> {
         panic!("stub: java/lang/SecurityManager.nonExportedPkgs:(Ljava/lang/module/ModuleDescriptor;)Ljava/util/Set;")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkPackageAccess", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkPackageAccess", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkPackageAccess(&self, pkg: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkPackageAccess:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkPackageDefinition", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkPackageDefinition", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkPackageDefinition(&self, pkg: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkPackageDefinition:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkSetFactory", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkSetFactory", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkSetFactory(&self) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkSetFactory:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "checkSecurityAccess", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "checkSecurityAccess", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn checkSecurityAccess(&self, target: String) -> Result<()> {
         panic!("stub: java/lang/SecurityManager.checkSecurityAccess:(Ljava/lang/String;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "getThreadGroup", descriptor = "()Ljava/lang/ThreadGroup;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getThreadGroup", descriptor = "()Ljava/lang/ThreadGroup;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getThreadGroup(&self) -> Result<Object> {
         panic!("stub: java/lang/SecurityManager.getThreadGroup:()Ljava/lang/ThreadGroup;")
     }

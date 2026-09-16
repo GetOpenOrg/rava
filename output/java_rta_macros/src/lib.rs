@@ -15,6 +15,19 @@ pub fn jvm_boundary(_attr: TokenStream, item: TokenStream) -> TokenStream { item
 #[proc_macro_attribute]
 pub fn jvm_ext(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
 
+/// `#[java_rta_macros::java_method(name = "...", descriptor = "...", ...)]`
+///
+/// 携带 Java 字节码方法元数据（名称、描述符、访问标志等），供宏和工具链读取。
+/// 当前行为：透传（identity passthrough），未来扩展 SAM 检测、泛型签名校验等。
+#[proc_macro_attribute]
+pub fn java_method(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
+
+/// `#[java_rta_macros::java_native(name = "...", descriptor = "...", ...)]`
+///
+/// 携带 `ACC_NATIVE` 方法的 Java 字节码元数据。当前行为：透传。
+#[proc_macro_attribute]
+pub fn java_native(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
+
 /// `#[java_rta_macros::java_class(binary_name = "...", all_supertypes = "...", ...)]`
 ///
 /// 为 Java 翻译类自动生成：
@@ -32,6 +45,9 @@ pub fn java_class(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut binary_name = String::new();
     let mut all_supertypes: Vec<String> = Vec::new();
     let mut is_interface = false;
+    // codegen 为生成类设置；handwritten java_runtime 类缺省 false（不转发）
+    let mut has_to_string_method = false;
+    let mut has_hash_code_method = false;
 
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("binary_name") {
@@ -46,6 +62,10 @@ pub fn java_class(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         } else if meta.path.is_ident("is_interface") {
             is_interface = meta.value()?.parse::<LitBool>()?.value();
+        } else if meta.path.is_ident("has_to_string_method") {
+            has_to_string_method = meta.value()?.parse::<LitBool>()?.value();
+        } else if meta.path.is_ident("has_hash_code_method") {
+            has_hash_code_method = meta.value()?.parse::<LitBool>()?.value();
         } else {
             // 跳过其他已知键（super_class, interfaces, access, modifiers 等）
             if meta.input.peek(syn::Token![=]) {
@@ -108,12 +128,31 @@ pub fn java_class(attr: TokenStream, item: TokenStream) -> TokenStream {
             vec![binary_name.as_str()]
         };
         let patterns = check_types.iter().map(|s| quote! { #s });
+        let to_string_fwd: TokenStream2 = if has_to_string_method {
+            quote! {
+                // Java toString() 返回 Result<lang::String>，需通过 Display 转为 std::string::String
+                fn toString(&self) -> ::std::string::String {
+                    Self::toString(self)
+                        .map(|s| ::std::format!("{}", s))
+                        .unwrap_or_else(|_| ::std::any::type_name::<Self>().to_owned())
+                }
+            }
+        } else { quote! {} };
+        let hash_code_fwd: TokenStream2 = if has_hash_code_method {
+            quote! {
+                fn hashCode(&self) -> i32 {
+                    Self::hashCode(self).unwrap_or(0)
+                }
+            }
+        } else { quote! {} };
         quote! {
             impl #impl_generics ObjectVTable for #name #ty_generics #where_clause {
                 fn is_instance_of(&self, type_id: &str) -> bool {
                     matches!(type_id, #(#patterns)|*)
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
+                #to_string_fwd
+                #hash_code_fwd
             }
         }
     } else {

@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -162,122 +161,122 @@ impl VM {
         32
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new() -> Result<Self> {
         panic!("stub: jdk/internal/misc/VM.<init>:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "initLevel", descriptor = "(I)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "initLevel", descriptor = "(I)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn initLevel_i(value: i32) -> Result<()> {
         panic!("stub: jdk/internal/misc/VM.initLevel:(I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "initLevel", descriptor = "()I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "initLevel", descriptor = "()I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn initLevel() -> Result<i32> {
         panic!("stub: jdk/internal/misc/VM.initLevel:()I")
     }
 
-    #[cfg_attr(any(), java_method(name = "awaitInitLevel", descriptor = "(I)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/InterruptedException"))]
+    #[java_rta_macros::java_method(name = "awaitInitLevel", descriptor = "(I)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/InterruptedException")]
     pub fn awaitInitLevel(value: i32) -> Result<()> {
         panic!("stub: jdk/internal/misc/VM.awaitInitLevel:(I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "isModuleSystemInited", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isModuleSystemInited", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isModuleSystemInited() -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isModuleSystemInited:()Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "setJavaLangInvokeInited", descriptor = "()V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "setJavaLangInvokeInited", descriptor = "()V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn setJavaLangInvokeInited() -> Result<()> {
         panic!("stub: jdk/internal/misc/VM.setJavaLangInvokeInited:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "isJavaLangInvokeInited", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isJavaLangInvokeInited", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isJavaLangInvokeInited() -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isJavaLangInvokeInited:()Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "isBooted", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isBooted", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isBooted() -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isBooted:()Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "shutdown", descriptor = "()V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "shutdown", descriptor = "()V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn shutdown() -> Result<()> {
         panic!("stub: jdk/internal/misc/VM.shutdown:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "isShutdown", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isShutdown", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isShutdown() -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isShutdown:()Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "maxDirectMemory", descriptor = "()J", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "maxDirectMemory", descriptor = "()J", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn maxDirectMemory() -> Result<i64> {
         panic!("stub: jdk/internal/misc/VM.maxDirectMemory:()J")
     }
 
-    #[cfg_attr(any(), java_method(name = "isDirectMemoryPageAligned", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isDirectMemoryPageAligned", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isDirectMemoryPageAligned() -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isDirectMemoryPageAligned:()Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "isSupportedClassFileVersion", descriptor = "(II)Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isSupportedClassFileVersion", descriptor = "(II)Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isSupportedClassFileVersion(major: i32, minor: i32) -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isSupportedClassFileVersion:(II)Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "isSupportedModuleDescriptorVersion", descriptor = "(II)Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isSupportedModuleDescriptorVersion", descriptor = "(II)Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isSupportedModuleDescriptorVersion(major: i32, minor: i32) -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isSupportedModuleDescriptorVersion:(II)Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "isSystemDomainLoader", descriptor = "(Ljava/lang/ClassLoader;)Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isSystemDomainLoader", descriptor = "(Ljava/lang/ClassLoader;)Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isSystemDomainLoader(loader: Object) -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isSystemDomainLoader:(Ljava/lang/ClassLoader;)Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "getSavedProperty", descriptor = "(Ljava/lang/String;)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getSavedProperty", descriptor = "(Ljava/lang/String;)Ljava/lang/String;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getSavedProperty(key: String) -> Result<String> {
         panic!("stub: jdk/internal/misc/VM.getSavedProperty:(Ljava/lang/String;)Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getSavedProperties", descriptor = "()Ljava/util/Map;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;"))]
+    #[java_rta_macros::java_method(name = "getSavedProperties", descriptor = "()Ljava/util/Map;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;")]
     pub fn getSavedProperties() -> Result<Object> {
         panic!("stub: jdk/internal/misc/VM.getSavedProperties:()Ljava/util/Map;")
     }
 
-    #[cfg_attr(any(), java_method(name = "saveProperties", descriptor = "(Ljava/util/Map;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;)V"))]
+    #[java_rta_macros::java_method(name = "saveProperties", descriptor = "(Ljava/util/Map;)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/util/Map<Ljava/lang/String;Ljava/lang/String;>;)V")]
     pub fn saveProperties(props: Object) -> Result<()> {
         panic!("stub: jdk/internal/misc/VM.saveProperties:(Ljava/util/Map;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "initializeOSEnvironment", descriptor = "()V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "initializeOSEnvironment", descriptor = "()V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn initializeOSEnvironment() -> Result<()> {
         panic!("stub: jdk/internal/misc/VM.initializeOSEnvironment:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "getFinalRefCount", descriptor = "()I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getFinalRefCount", descriptor = "()I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getFinalRefCount() -> Result<i32> {
         panic!("stub: jdk/internal/misc/VM.getFinalRefCount:()I")
     }
 
-    #[cfg_attr(any(), java_method(name = "getPeakFinalRefCount", descriptor = "()I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getPeakFinalRefCount", descriptor = "()I", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getPeakFinalRefCount() -> Result<i32> {
         panic!("stub: jdk/internal/misc/VM.getPeakFinalRefCount:()I")
     }
 
-    #[cfg_attr(any(), java_method(name = "addFinalRefCount", descriptor = "(I)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "addFinalRefCount", descriptor = "(I)V", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn addFinalRefCount(n: i32) -> Result<()> {
         panic!("stub: jdk/internal/misc/VM.addFinalRefCount:(I)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "toThreadState", descriptor = "(I)Ljava/lang/Thread$State;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toThreadState", descriptor = "(I)Ljava/lang/Thread$State;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toThreadState(threadStatus: i32) -> Result<Thread_State> {
         panic!("stub: jdk/internal/misc/VM.toThreadState:(I)Ljava/lang/Thread$State;")
     }
 
-    #[cfg_attr(any(), java_method(name = "latestUserDefinedLoader", descriptor = "()Ljava/lang/ClassLoader;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "latestUserDefinedLoader", descriptor = "()Ljava/lang/ClassLoader;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn latestUserDefinedLoader() -> Result<Object> {
         panic!("stub: jdk/internal/misc/VM.latestUserDefinedLoader:()Ljava/lang/ClassLoader;")
     }
@@ -287,7 +286,7 @@ impl VM {
         panic!("native: jdk/internal/misc/VM.latestUserDefinedLoader0:()Ljava/lang/ClassLoader;")
     }
 
-    #[cfg_attr(any(), java_method(name = "isSetUID", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isSetUID", descriptor = "()Z", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isSetUID() -> Result<bool> {
         panic!("stub: jdk/internal/misc/VM.isSetUID:()Z")
     }
@@ -327,7 +326,7 @@ impl VM {
         panic!("native: jdk/internal/misc/VM.initialize:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "getBufferPools", descriptor = "()Ljava/util/List;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/List<Ljdk/internal/misc/VM$BufferPool;>;"))]
+    #[java_rta_macros::java_method(name = "getBufferPools", descriptor = "()Ljava/util/List;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "()Ljava/util/List<Ljdk/internal/misc/VM$BufferPool;>;")]
     pub fn getBufferPools() -> Result<Object> {
         panic!("stub: jdk/internal/misc/VM.getBufferPools:()Ljava/util/List;")
     }

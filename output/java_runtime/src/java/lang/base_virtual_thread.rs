@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -40,22 +39,22 @@ impl From<BaseVirtualThread> for Thread {
 }
 
 impl BaseVirtualThread {
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;IZ)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;IZ)V", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new(name: String, characteristics: i32, bound: bool) -> Result<Self> {
         panic!("stub: java/lang/BaseVirtualThread.<init>:(Ljava/lang/String;IZ)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "park", descriptor = "()V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "park", descriptor = "()V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
     pub fn park(&self) -> Result<()> {
         panic!("stub: java/lang/BaseVirtualThread.park:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "parkNanos", descriptor = "(J)V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "parkNanos", descriptor = "(J)V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
     pub fn parkNanos(&self, arg0: i64) -> Result<()> {
         panic!("stub: java/lang/BaseVirtualThread.parkNanos:(J)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "unpark", descriptor = "()V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "unpark", descriptor = "()V", access = "package", modifiers = "abstract", is_static    = false, is_native    = false, is_abstract  = true, is_synthetic = false)]
     pub fn unpark(&self) -> Result<()> {
         panic!("stub: java/lang/BaseVirtualThread.unpark:()V")
     }

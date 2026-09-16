@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -38,27 +37,27 @@ impl InternalLock {
         true
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new() -> Result<Self> {
         panic!("stub: jdk/internal/misc/InternalLock.<init>:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "newLockOrNull", descriptor = "()Ljdk/internal/misc/InternalLock;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "newLockOrNull", descriptor = "()Ljdk/internal/misc/InternalLock;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn newLockOrNull() -> Result<InternalLock> {
         panic!("stub: jdk/internal/misc/InternalLock.newLockOrNull:()Ljdk/internal/misc/InternalLock;")
     }
 
-    #[cfg_attr(any(), java_method(name = "newLockOr", descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "newLockOr", descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn newLockOr(obj: Object) -> Result<Object> {
         panic!("stub: jdk/internal/misc/InternalLock.newLockOr:(Ljava/lang/Object;)Ljava/lang/Object;")
     }
 
-    #[cfg_attr(any(), java_method(name = "tryLock", descriptor = "()Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "tryLock", descriptor = "()Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn tryLock(&self) -> Result<bool> {
         panic!("stub: jdk/internal/misc/InternalLock.tryLock:()Z")
     }
 
-    #[cfg_attr(any(), java_method(name = "isHeldByCurrentThread", descriptor = "()Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "isHeldByCurrentThread", descriptor = "()Z", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn isHeldByCurrentThread(&self) -> Result<bool> {
         panic!("stub: jdk/internal/misc/InternalLock.isHeldByCurrentThread:()Z")
     }

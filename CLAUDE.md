@@ -8,6 +8,18 @@ Java → Rust 转译器。将 Java `.class` 字节码翻译为等价的 Rust 源
 
 ## 核心架构原则（实现时必须遵守）
 
+### 0. 代码生成优先：能生成的都走生成器
+
+**能通过字节码翻译、codegen、或 proc-macro 宏实现的功能，禁止通过手写覆盖生成 Rust 文件解决。**
+
+- 手写代码仅限两类：① native 方法（`*_impl.rs`）；② 内部边界类（`jdk/internal/`、`sun/`）整体手写
+- 遇到编译错误，优先修复生成器逻辑或宏实现，而非给生成文件打补丁
+- 生成器 + 宏建好后，编译错误自然消解；先打补丁会造成技术债务积累
+
+**检验方式**：若某个问题的解决方案会修改 `output/` 目录下的生成文件（而非 `_impl.rs`），则该方案违反本原则，需改用生成器或宏方案。
+
+---
+
 ### 1. HelloWorld 必须运行在 JDK 字节码翻译出的 Rust 代码上
 
 `System.out.println`、`String`、`ArrayList` 等的 Rust 实现必须来自对 JDK `.class` 文件的字节码翻译，**不得**来自手写 Rust 字符串（如 `runtime.py` / `java_runtime` crate 中的硬编码实现）。

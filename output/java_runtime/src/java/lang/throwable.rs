@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -25,6 +24,7 @@ use crate::jdk::internal::misc::InternalLock;
     source            = "Throwable.java",
     inner_classes     = "java/lang/Throwable$WrappedPrintStream:java/lang/Throwable:WrappedPrintStream:10;java/lang/Throwable$PrintStreamOrWriter:java/lang/Throwable:PrintStreamOrWriter:1034;java/lang/Throwable$WrappedPrintWriter:java/lang/Throwable:WrappedPrintWriter:10;java/lang/Throwable$SentinelHolder:java/lang/Throwable:SentinelHolder:10",
     all_supertypes    = "java/io/Serializable;java/lang/Object;java/lang/Throwable",
+    has_to_string_method = true,
 )]
 #[derive(Clone, Default, PartialEq)]
 pub struct Throwable {
@@ -97,7 +97,7 @@ impl Throwable {
         false
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: <init>()V
     pub fn new() -> Result<Self> {
         let mut this = Self { backtrace: JField::new(Default::default()), detailMessage: JField::new(String::default()), cause: JField::new(Default::default()), stackTrace: JField::new(Default::default()), depth: JField::new(0), suppressedExceptions: JField::new(Default::default()), ..Default::default() };
@@ -109,7 +109,7 @@ impl Throwable {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: <init>(Ljava/lang/String;)V
     pub fn new_str(mut message: String) -> Result<Self> {
         let mut this = Self { backtrace: JField::new(Default::default()), detailMessage: JField::new(String::default()), cause: JField::new(Default::default()), stackTrace: JField::new(Default::default()), depth: JField::new(0), suppressedExceptions: JField::new(Default::default()), ..Default::default() };
@@ -122,77 +122,77 @@ impl Throwable {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;Ljava/lang/Throwable;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;Ljava/lang/Throwable;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new_str_throwa(message: String, cause: Throwable) -> Result<Self> {
         panic!("stub: java/lang/Throwable.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/Throwable;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/Throwable;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new_throwa(cause: Throwable) -> Result<Self> {
         panic!("stub: java/lang/Throwable.<init>:(Ljava/lang/Throwable;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V", access = "protected", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V", access = "protected", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new_str_throwa_z_z(message: String, cause: Throwable, enableSuppression: bool, writableStackTrace: bool) -> Result<Self> {
         panic!("stub: java/lang/Throwable.<init>:(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "getMessage", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getMessage", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getMessage(&self) -> Result<String> {
         panic!("stub: java/lang/Throwable.getMessage:()Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getLocalizedMessage", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getLocalizedMessage", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getLocalizedMessage(&self) -> Result<String> {
         panic!("stub: java/lang/Throwable.getLocalizedMessage:()Ljava/lang/String;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getCause", descriptor = "()Ljava/lang/Throwable;", access = "public", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getCause", descriptor = "()Ljava/lang/Throwable;", access = "public", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getCause(&self) -> Result<Throwable> {
         panic!("stub: java/lang/Throwable.getCause:()Ljava/lang/Throwable;")
     }
 
-    #[cfg_attr(any(), java_method(name = "initCause", descriptor = "(Ljava/lang/Throwable;)Ljava/lang/Throwable;", access = "public", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "initCause", descriptor = "(Ljava/lang/Throwable;)Ljava/lang/Throwable;", access = "public", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn initCause(&self, cause: Throwable) -> Result<Throwable> {
         panic!("stub: java/lang/Throwable.initCause:(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
     }
 
-    #[cfg_attr(any(), java_method(name = "setCause", descriptor = "(Ljava/lang/Throwable;)V", access = "package", modifiers = "final", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "setCause", descriptor = "(Ljava/lang/Throwable;)V", access = "package", modifiers = "final", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn setCause(&self, t: Throwable) -> Result<()> {
         panic!("stub: java/lang/Throwable.setCause:(Ljava/lang/Throwable;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "toString", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "toString", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn toString(&self) -> Result<String> {
-        panic!("stub: java/lang/Throwable.toString:()Ljava/lang/String;")
+        Ok(String::from(Self::BINARY_NAME))
     }
 
-    #[cfg_attr(any(), java_method(name = "printStackTrace", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "printStackTrace", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn printStackTrace(&self) -> Result<()> {
         panic!("stub: java/lang/Throwable.printStackTrace:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "printStackTrace", descriptor = "(Ljava/io/PrintStream;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "printStackTrace", descriptor = "(Ljava/io/PrintStream;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn printStackTrace_prints(&self, s: PrintStream) -> Result<()> {
         panic!("stub: java/lang/Throwable.printStackTrace:(Ljava/io/PrintStream;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "printStackTrace", descriptor = "(Ljava/lang/Throwable$PrintStreamOrWriter;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "printStackTrace", descriptor = "(Ljava/lang/Throwable$PrintStreamOrWriter;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn printStackTrace_throwa(&self, s: Object) -> Result<()> {
         panic!("stub: java/lang/Throwable.printStackTrace:(Ljava/lang/Throwable$PrintStreamOrWriter;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "lockedPrintStackTrace", descriptor = "(Ljava/lang/Throwable$PrintStreamOrWriter;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "lockedPrintStackTrace", descriptor = "(Ljava/lang/Throwable$PrintStreamOrWriter;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn lockedPrintStackTrace(&self, s: Object) -> Result<()> {
         panic!("stub: java/lang/Throwable.lockedPrintStackTrace:(Ljava/lang/Throwable$PrintStreamOrWriter;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "printEnclosedStackTrace", descriptor = "(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set<Ljava/lang/Throwable;>;)V"))]
+    #[java_rta_macros::java_method(name = "printEnclosedStackTrace", descriptor = "(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, generic_signature = "(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set<Ljava/lang/Throwable;>;)V")]
     pub fn printEnclosedStackTrace(&self, s: Object, enclosingTrace: Rc<RefCell<Vec<Object>>>, caption: String, prefix: String, dejaVu: Object) -> Result<()> {
         panic!("stub: java/lang/Throwable.printEnclosedStackTrace:(Ljava/lang/Throwable$PrintStreamOrWriter;[Ljava/lang/StackTraceElement;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "printStackTrace", descriptor = "(Ljava/io/PrintWriter;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "printStackTrace", descriptor = "(Ljava/io/PrintWriter;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn printStackTrace_printw(&self, s: Object) -> Result<()> {
         panic!("stub: java/lang/Throwable.printStackTrace:(Ljava/io/PrintWriter;)V")
     }
@@ -202,42 +202,42 @@ impl Throwable {
         panic!("native: java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getStackTrace", descriptor = "()[Ljava/lang/StackTraceElement;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getStackTrace", descriptor = "()[Ljava/lang/StackTraceElement;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getStackTrace(&self) -> Result<Rc<RefCell<Vec<Object>>>> {
         panic!("stub: java/lang/Throwable.getStackTrace:()[Ljava/lang/StackTraceElement;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getOurStackTrace", descriptor = "()[Ljava/lang/StackTraceElement;", access = "private", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getOurStackTrace", descriptor = "()[Ljava/lang/StackTraceElement;", access = "private", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getOurStackTrace(&self) -> Result<Rc<RefCell<Vec<Object>>>> {
         panic!("stub: java/lang/Throwable.getOurStackTrace:()[Ljava/lang/StackTraceElement;")
     }
 
-    #[cfg_attr(any(), java_method(name = "setStackTrace", descriptor = "([Ljava/lang/StackTraceElement;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "setStackTrace", descriptor = "([Ljava/lang/StackTraceElement;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn setStackTrace(&self, stackTrace: Rc<RefCell<Vec<Object>>>) -> Result<()> {
         panic!("stub: java/lang/Throwable.setStackTrace:([Ljava/lang/StackTraceElement;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "readObject", descriptor = "(Ljava/io/ObjectInputStream;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException,java/lang/ClassNotFoundException"))]
+    #[java_rta_macros::java_method(name = "readObject", descriptor = "(Ljava/io/ObjectInputStream;)V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException,java/lang/ClassNotFoundException")]
     pub fn readObject(&self, s: Object) -> Result<()> {
         panic!("stub: java/lang/Throwable.readObject:(Ljava/io/ObjectInputStream;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "validateSuppressedExceptionsList", descriptor = "(Ljava/util/List;)I", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException", generic_signature = "(Ljava/util/List<Ljava/lang/Throwable;>;)I"))]
+    #[java_rta_macros::java_method(name = "validateSuppressedExceptionsList", descriptor = "(Ljava/util/List;)I", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException", generic_signature = "(Ljava/util/List<Ljava/lang/Throwable;>;)I")]
     pub fn validateSuppressedExceptionsList(&self, deserSuppressedExceptions: Object) -> Result<i32> {
         panic!("stub: java/lang/Throwable.validateSuppressedExceptionsList:(Ljava/util/List;)I")
     }
 
-    #[cfg_attr(any(), java_method(name = "writeObject", descriptor = "(Ljava/io/ObjectOutputStream;)V", access = "private", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException"))]
+    #[java_rta_macros::java_method(name = "writeObject", descriptor = "(Ljava/io/ObjectOutputStream;)V", access = "private", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/io/IOException")]
     pub fn writeObject(&self, s: Object) -> Result<()> {
         panic!("stub: java/lang/Throwable.writeObject:(Ljava/io/ObjectOutputStream;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "addSuppressed", descriptor = "(Ljava/lang/Throwable;)V", access = "public", modifiers = "final synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "addSuppressed", descriptor = "(Ljava/lang/Throwable;)V", access = "public", modifiers = "final synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn addSuppressed(&self, exception: Throwable) -> Result<()> {
         panic!("stub: java/lang/Throwable.addSuppressed:(Ljava/lang/Throwable;)V")
     }
 
-    #[cfg_attr(any(), java_method(name = "getSuppressed", descriptor = "()[Ljava/lang/Throwable;", access = "public", modifiers = "final synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getSuppressed", descriptor = "()[Ljava/lang/Throwable;", access = "public", modifiers = "final synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getSuppressed(&self) -> Result<Rc<RefCell<Vec<Throwable>>>> {
         panic!("stub: java/lang/Throwable.getSuppressed:()[Ljava/lang/Throwable;")
     }

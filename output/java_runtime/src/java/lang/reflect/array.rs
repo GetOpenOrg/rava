@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -28,19 +27,19 @@ use crate::sun::security::util::*;
 pub struct Array;
 
 impl Array {
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "private", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn new() -> Result<Self> {
         panic!("stub: java/lang/reflect/Array.<init>:()V")
     }
 
-    #[cfg_attr(any(), java_method(name = "newInstance", descriptor = "(Ljava/lang/Class;I)Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NegativeArraySizeException", generic_signature = "(Ljava/lang/Class<*>;I)Ljava/lang/Object;"))]
+    #[java_rta_macros::java_method(name = "newInstance", descriptor = "(Ljava/lang/Class;I)Ljava/lang/Object;", access = "public", modifiers = "static", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/NegativeArraySizeException", generic_signature = "(Ljava/lang/Class<*>;I)Ljava/lang/Object;")]
     // java: newInstance(Ljava/lang/Class;I)Ljava/lang/Object;
     pub fn newInstance_class_i(mut componentType: Object, mut length: i32) -> Result<Object> {
         let _t0: Object = Array::newArray(Clone::clone(&componentType), length)?;
         Ok(_t0)
     }
 
-    #[cfg_attr(any(), java_method(name = "newInstance", descriptor = "(Ljava/lang/Class;[I)Ljava/lang/Object;", access = "public", modifiers = "static varargs", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/IllegalArgumentException,java/lang/NegativeArraySizeException", generic_signature = "(Ljava/lang/Class<*>;[I)Ljava/lang/Object;"))]
+    #[java_rta_macros::java_method(name = "newInstance", descriptor = "(Ljava/lang/Class;[I)Ljava/lang/Object;", access = "public", modifiers = "static varargs", is_static    = true, is_native    = false, is_abstract  = false, is_synthetic = false, exceptions = "java/lang/IllegalArgumentException,java/lang/NegativeArraySizeException", generic_signature = "(Ljava/lang/Class<*>;[I)Ljava/lang/Object;")]
     pub fn newInstance_class_arr_i(componentType: Object, dimensions: Rc<RefCell<Vec<i32>>>) -> Result<Object> {
         panic!("stub: java/lang/reflect/Array.newInstance:(Ljava/lang/Class;[I)Ljava/lang/Object;")
     }

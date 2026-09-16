@@ -245,8 +245,19 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     else:
         ret_type = f'Result<{rust_ret}>' if rust_ret != '()' else 'Result<()>'
     fn_name = safe_ident(rust_name or m.name)
-    label = 'native' if m.is_native else 'stub'
-    body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
+    # toString/hashCode 非 native 存根：生成 ObjectVTable 可安全调用的默认值
+    # （java_class 宏会在 vtable_impl 中调用 Self::toString / Self::hashCode，
+    #  不能 panic，否则打印任何该类对象时都会崩溃）
+    if not m.is_native and not m.is_abstract:
+        if m.name == 'toString' and m.descriptor == '()Ljava/lang/String;':
+            body = 'Ok(String::from(Self::BINARY_NAME))'
+        elif m.name == 'hashCode' and m.descriptor == '()I':
+            body = 'Ok(0)'
+        else:
+            body = f'panic!("stub: {ci.name}.{m.name}:{m.descriptor}")'
+    else:
+        label = 'native' if m.is_native else 'stub'
+        body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
 
     # main(String[] args) 与 gen_method_body 保持一致：不生成参数
     if m.is_static and m.name == 'main' and m.descriptor == '([Ljava/lang/String;)V':

@@ -5,7 +5,6 @@ use crate::java::lang::*;
 use crate::java::lang::reflect::*;
 use crate::java::security::*;
 use crate::java::util::*;
-use crate::java::util::function::*;
 use crate::sun::nio::ch::*;
 use crate::sun::nio::cs::*;
 use crate::sun::security::util::*;
@@ -61,7 +60,7 @@ impl NullPointerException {
         5162710183389028792i64
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "()V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: <init>()V
     pub fn new() -> Result<Self> {
         let mut this = Self { _super: Default::default(), extendedMessageState: JField::new(0), extendedMessage: JField::new(String::default()), ..Default::default() };
@@ -69,7 +68,7 @@ impl NullPointerException {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "<init>", descriptor = "(Ljava/lang/String;)V", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     // java: <init>(Ljava/lang/String;)V
     pub fn new_str(mut s: String) -> Result<Self> {
         let mut this = Self { _super: Default::default(), extendedMessageState: JField::new(0), extendedMessage: JField::new(String::default()), ..Default::default() };
@@ -77,12 +76,12 @@ impl NullPointerException {
         Ok(this)
     }
 
-    #[cfg_attr(any(), java_method(name = "fillInStackTrace", descriptor = "()Ljava/lang/Throwable;", access = "public", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "fillInStackTrace", descriptor = "()Ljava/lang/Throwable;", access = "public", modifiers = "synchronized", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn fillInStackTrace(&self) -> Result<Throwable> {
         panic!("stub: java/lang/NullPointerException.fillInStackTrace:()Ljava/lang/Throwable;")
     }
 
-    #[cfg_attr(any(), java_method(name = "getMessage", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false))]
+    #[java_rta_macros::java_method(name = "getMessage", descriptor = "()Ljava/lang/String;", access = "public", modifiers = "", is_static    = false, is_native    = false, is_abstract  = false, is_synthetic = false)]
     pub fn getMessage(&self) -> Result<String> {
         panic!("stub: java/lang/NullPointerException.getMessage:()Ljava/lang/String;")
     }
