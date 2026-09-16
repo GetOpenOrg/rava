@@ -6,21 +6,43 @@
 
 ---
 
-## 背景：三个独立讨论收敛到同一根源
+## 目录
 
-以下三个独立问题看起来各不相关，但最终方案统一在同一机制里：
-
-| 讨论主题 | 具体问题 | 层次 |
-|---------|---------|------|
-| 泛型保留 | 方法参数/返回值/字段类型被擦除为 `Object`，无法与 Java 源码 1:1 对应 | 签名层 |
-| JField 消除 | 字段类型 `JField<Rc<RefCell<Vec<E>>>>` 污染 struct 定义，与 Java 完全不同 | 存储层 |
-| 封装透明化 | `Rc<RefCell<>>` 包装细节暴露在生成代码里，读者需要了解 Rust 内存模型才能理解 | 表达层 |
-
-三个问题的共同根源：**codegen Python 侧拥有全量信息（字段类型、泛型签名、继承关系），但没有有效机制把这些信息传递给 Rust 的类型系统，导致在生成代码里用粗糙的替代方案（JField、Object 擦除、显式 RefCell）填补这个信息缺口。**
+1. [背景：三个问题，同一根源](#1-背景三个问题同一根源)
+2. [Java ↔ Rust 对象模型的三个根本冲突](#2-java--rust-对象模型的三个根本冲突)
+3. [核心设计：块级宏](#3-核心设计块级宏)
+4. [输入语法](#4-输入语法)
+5. [字段类型重写规则（generic_signature 驱动）](#5-字段类型重写规则)
+6. [继承字段展平（superclass_fields）](#6-继承字段展平)
+7. [字段访问器生成](#7-字段访问器生成)
+8. [方法体 token 重写](#8-方法体-token-重写)
+9. [borrow 窗口规则](#9-borrow-窗口规则)
+10. [_impl.rs 手写层的兼容性](#10-_implrs-手写层的兼容性)
+11. [职责边界总表](#11-职责边界总表)
+12. [实施步骤](#12-实施步骤)
+13. [迁移期兼容策略](#13-迁移期兼容策略)
+14. [已知风险](#14-已知风险)
+15. [设计原则记录](#15-设计原则记录)
 
 ---
 
-## Java ↔ Rust 对象模型的三个根本冲突
+## 1 背景：三个问题，同一根源
+
+字节码转译为 Rust 过程中，有三个表面独立的问题：
+
+| 问题 | 现状 | 目标 |
+|------|------|------|
+| **泛型擦除** | 字段/方法签名走 `descriptor`，`E` 被擦除为 `Object` | 走 `generic_signature`，保留 `E`、`K`、`V` 等类型变量 |
+| **JField 污染** | 字段类型是 `JField<RefCell<Vec<E>>>`，与 Java 源码完全不同 | 字段声明写 `Vec<E>`，封装细节不可见 |
+| **内部可变性暴露** | 方法体里充斥 `.borrow_mut()`、`.get()`、`.set()` | 方法体写 `self.size = v`，与 Java 源码 1:1 对应 |
+
+三个问题的**同一根源**：codegen Python 侧持有全量信息（字段类型、继承关系、泛型签名），但没有把这些信息有效传递给 Rust 的类型系统和宏系统，导致封装细节被迫散落在生成代码的各处。
+
+**统一解法**：`java_class!` 块级宏作为信息传递的桥梁。codegen 把 Python 侧知道的一切写进宏参数，宏在 Rust 编译期展开，两侧信息完全对齐，封装细节集中在宏内部，对读者不可见。
+
+---
+
+## 2 Java ↔ Rust 对象模型的三个根本冲突
 
 当前所有"不优雅"都来自以下三个本质冲突：
 
@@ -42,265 +64,478 @@
 
 ---
 
-## 核心方案：`java_class!` 块级宏
+## 3 核心设计：块级宏
 
-### 设计思路
+### 为什么用块级宏而非属性宏
 
-将 `#[java_class]` 属性宏升级为 `java_class! { ... }` 函数式宏（接受 token 树），把 struct 定义和 impl 块一起传入。宏同时拥有字段信息和方法体，从根本上绕开 proc-macro 跨 item 的上下文限制。
+属性宏（`#[java_class]`）有一个根本限制：**proc-macro 无法跨 item 边界访问信息**。`#[java_method]` 在某个函数上无法看到同一个 struct 的字段定义，因此无法判断 `self.size` 里的 `size` 是字段还是局部变量，无法做方法体内的字段访问重写。
 
-**信息流向**：
+块级宏（`java_class! { struct ... impl ... }`）同时持有 struct 字段定义和 impl 块中所有方法体，从而在同一个宏调用里完成全部展开，绕开跨 item 限制。
+
+### 信息流向
+
 ```
 Python codegen（全量信息）
-    → 宏参数（superclass_fields、generic_signature、binary_name 等）
-        → Rust 编译期展开（生成真实内存布局、访问器、impl）
+  │
+  │  写入宏参数：
+  │  - binary_name
+  │  - generic_signature（类级别）
+  │  - superclass_fields（展平后的祖先字段列表）
+  │  - 字段声明（裸类型，由 generic_sig 驱动）+ 每字段 field_sig
+  │  - 方法体（字节码翻译结果，Java 风格）
+  │
+  ▼
+java_class! { ... }         ← Rust 编译期展开
+  │
+  ├── Inner struct 生成（flat layout）
+  ├── RefCell<Inner> newtype 包装
+  ├── 字段访问器生成（borrow 窗口最小化）
+  ├── 字段类型重写（field_sig / generic_sig → 裸 Rust 类型）
+  ├── 方法签名泛型重写（Object → E）
+  ├── 方法体 token 重写（self.field → 访问器调用）
+  ├── native 方法空存根生成
+  └── JavaObject / vtable / Upcast impl 生成
 ```
 
-### 用户/codegen 书写层（`.rs` 文件内容）
+---
+
+## 4 输入语法
+
+codegen 生成的 `.rs` 文件，读者看到的形式：
 
 ```rust
 java_class! {
+    // ── 类级别属性 ──────────────────────────────────────
     #[binary_name = "java/util/ArrayList"]
     #[generic_signature = "<E:Ljava/lang/Object;>Ljava/util/AbstractList<TE;>;"]
-    #[superclass_fields(modCount: i32)]   // codegen 展平的祖先字段，父类字段在前
+    #[superclass = "AbstractList<E>"]
+
+    // ── 继承字段展平（由 codegen Python 展平整条继承链）──
+    // 格式：父类字段在前，按 JVM 内存布局顺序
+    #[superclass_fields(modCount: i32)]
+
+    // ── struct 声明（字段用 generic_sig 驱动的裸类型）──
     pub struct ArrayList<E> {
-        elementData: Vec<E>,   // generic_sig: [TE; → Vec<E>，不是 Object[]
+        #[field_sig = "[TE;"]          // 字段级 generic_signature
+        elementData: Vec<E>,
+
+        #[field_sig = "I"]
         size: i32,
     }
 
+    // ── impl 块 ──────────────────────────────────────────
     impl<E: JavaType> ArrayList<E> {
-        #[descriptor = "(Ljava/lang/Object;)Z"]
+
+        #[descriptor        = "(Ljava/lang/Object;)Z"]
         #[generic_signature = "(TE;)Z"]
         pub fn add(&self, e: E) -> Result<bool> {
-            // Java 风格：直接字段操作
+            // 写 Java 风格，宏负责重写
             self.elementData.push(e);
             self.size = self.size + 1;
             Ok(true)
         }
 
-        #[descriptor = "(I)Ljava/lang/Object;"]
+        #[descriptor        = "(I)Ljava/lang/Object;"]
         #[generic_signature = "(I)TE;"]
         pub fn get(&self, index: i32) -> Result<E> {
             Ok(self.elementData[index as usize].clone())
         }
+
+        // native 存根（宏生成 unimplemented! 占位，_impl.rs 提供真实实现）
+        #[descriptor        = "([Ljava/lang/Object;Ljava/util/Comparator;)V"]
+        #[native]
+        pub fn sort(&self, c: Object) -> Result<()>;
     }
 }
 ```
 
-### 宏展开产物（`cargo expand` 可见，正常阅读不可见）
+### 属性语义说明
 
-**产物 1：真实内存布局**
+| 属性 | 位置 | 来源 | 含义 |
+|------|------|------|------|
+| `binary_name` | 类 | codegen | JVM 二进制类名，用于 vtable 注册 |
+| `generic_signature`（类级别） | 类 | 字节码 Signature 属性 | 类型参数声明，用于提取类型变量映射 |
+| `superclass` | 类 | codegen | 直接父类名，用于 Upcast impl 生成 |
+| `superclass_fields` | 类 | codegen 展平 | 祖先字段列表，已按 JVM 顺序排列 |
+| `field_sig` | 字段 | 字节码字段 Signature 属性 | 字段的原始泛型签名，覆盖 descriptor |
+| `descriptor` | 方法 | 字节码方法 descriptor | 擦除后的方法签名 |
+| `generic_signature`（方法级别） | 方法 | 字节码方法 Signature 属性 | 方法的原始泛型签名，用于签名重写 |
+| `native` | 方法 | ACC_NATIVE flag | 标记 native 方法，宏生成 unimplemented! 存根 |
 
-```rust
-// 继承字段 flat layout：父类字段在前，与 JVM 内存布局一致（JNI 互操作依赖）
-struct ArrayList__inner<E: JavaType> {
-    modCount: i32,        // ← 来自 superclass_fields（AbstractList）
-    elementData: Vec<E>,  // ← ArrayList 自有字段
-    size: i32,
-}
+---
 
-pub struct ArrayList<E: JavaType>(::std::cell::RefCell<ArrayList__inner<E>>);
+## 5 字段类型重写规则
+
+宏解析每个字段上的 `field_sig` 属性（优先），类型变量从类级别 `generic_signature` 中提取。
+
+### 解析规则表
+
+| JVM generic signature | 解析结果 | 说明 |
+|-----------------------|---------|------|
+| `TE;` | `E` | 类型变量，直接保留 |
+| `TK;` | `K` | 类型变量，直接保留 |
+| `I` | `i32` | 基本类型 |
+| `J` | `i64` | 基本类型 |
+| `Z` | `bool` | 基本类型 |
+| `D` | `f64` | 基本类型 |
+| `F` | `f32` | 基本类型 |
+| `[TE;` | `Vec<E>` | 数组 + 类型变量 |
+| `[I` | `Vec<i32>` | 基本类型数组 |
+| `Ljava/lang/String;` | `String` | 具体类（直接对应） |
+| `Ljava/util/ArrayList<TE;>;` | `ArrayList<E>` | 具体类，保留泛型参数 |
+| `Ljava/util/List<TE;>;` | `Object` | **接口**：泛型参数擦除（Arch-1 语义） |
+| `Ljava/util/Comparator<TE;>;` | `Object` | 接口，擦除 |
+
+### 接口擦除规则
+
+接口的泛型参数在 Rust 层擦除为 `Object`（通过 vtable 分派），这是 Arch-1 的正确语义：接口引用在运行时只保证 vtable 派发，不保证具体类型。具体类（class）的泛型参数保留。
+
+区分具体类和接口：codegen 传入 `#[is_interface]` 显式标记，宏不依赖推断。
+
+### 优先级
+
+```
+信息来源优先级：field_sig / generic_signature > descriptor > 默认推断
 ```
 
-**产物 2：字段访问器（borrow 窗口最小化）**
+---
+
+## 6 继承字段展平
+
+### 责任分工
+
+**codegen Python 负责展平**，宏侧零 registry 依赖。原因：
+
+- Python 侧已有完整 `ClassInfo` registry，继承链在生成子类时完全可见
+- Rust 宏无法跨 crate 读取其他类型的字段定义
+- 展平逻辑在 Python 里实现比在宏里实现简单一个数量级
+
+### 展平算法（Python 伪代码）
+
+```python
+def collect_superclass_fields(class_info: ClassInfo,
+                               registry: ClassRegistry) -> list[FieldInfo]:
+    """
+    按 JVM 内存布局顺序收集整条继承链的实例字段。
+    父类字段在前，子类字段在后。Object 本身无用户字段，跳过。
+    """
+    chain = []
+    cursor = class_info.superclass
+    while cursor and cursor != "java/lang/Object":
+        parent = registry.get(cursor)
+        if parent:
+            chain.append(parent)
+            cursor = parent.superclass
+        else:
+            break
+
+    # 从顶向下：最远祖先的字段最先
+    result = []
+    for ancestor in reversed(chain):
+        result.extend(ancestor.instance_fields)  # 仅实例字段，不含 static
+
+    return result
+```
+
+### JVM 内存布局一致性
+
+父字段在前的顺序与 HotSpot 的对象内存布局一致。对两个场景有实际意义：
+
+- **JNI 互操作**：通过字段偏移量访问字段时，偏移量必须与 JVM 一致
+- **序列化/反序列化**：对象的二进制表示依赖字段顺序
+
+codegen 在生成 `#[superclass_fields(...)]` 时必须保证此顺序。
+
+---
+
+## 7 字段访问器生成
+
+宏为每个字段（含继承字段）生成访问器，可见性为 `pub(crate)`，供 `_impl.rs` 手写层使用。
+
+公开 struct 是 newtype：`pub struct ArrayList<E: JavaType>(RefCell<ArrayList__inner<E>>)`，内部用 `self.0` 访问 `RefCell`。
+
+### 基本类型（`Copy` 类型：`i32`、`i64`、`bool`、`f64` 等）
 
 ```rust
+// 字段：size: i32
+#[inline]
+pub(crate) fn __get_size(&self) -> i32 {
+    self.0.borrow().size
+    // Ref 在表达式求值后立即 drop，borrow 窗口最小
+}
+
+#[inline]
+pub(crate) fn __set_size(&self, v: i32) {
+    self.0.borrow_mut().size = v;
+    // RefMut 在语句结束后立即 drop
+}
+```
+
+### 引用类型（`Vec<E>`、`Object`、`String` 等）
+
+```rust
+// 字段：elementData: Vec<E>
+
+// 只读借用
+#[inline]
+pub(crate) fn __borrow_elementData(&self) -> ::std::cell::Ref<Vec<E>> {
+    ::std::cell::Ref::map(self.0.borrow(), |i| &i.elementData)
+}
+
+// 可变借用（大多数情况下使用此版本）
+#[inline]
+pub(crate) fn __borrow_mut_elementData(&self) -> ::std::cell::RefMut<Vec<E>> {
+    ::std::cell::RefMut::map(self.0.borrow_mut(), |i| &mut i.elementData)
+}
+
+// 整体替换（对应 PUTFIELD 写整个字段）
+#[inline]
+pub(crate) fn __set_elementData(&self, v: Vec<E>) {
+    self.0.borrow_mut().elementData = v;
+}
+```
+
+继承字段（如 `modCount`）也生成同样的访问器，命名规则一致。
+
+---
+
+## 8 方法体 token 重写
+
+宏在已知字段集合的前提下，对 impl 块内所有方法体做 token 树遍历，识别字段访问模式并重写。
+
+### 字段集合的建立
+
+宏在处理 struct 声明时，收集所有字段名（含 `superclass_fields` 里的继承字段）并按类型分类：
+
+```
+field_set = {
+    "modCount":    BasicType(i32),      // 继承字段
+    "elementData": RefType(Vec<E>),     // 自有字段
+    "size":        BasicType(i32),      // 自有字段
+}
+```
+
+宏在方法体重写时以此集合为依据，只重写集合内的字段访问，不触碰局部变量。
+
+### 重写规则（7 种模式）
+
+**模式 1：引用类型方法调用（最常见）**
+
+```rust
+// 原始（Java 风格）：
+self.elementData.push(e)
+
+// 重写为（block-scoped borrow，见第 9 节）：
+{ self.0.borrow_mut().elementData.push(e) }
+```
+
+**模式 2：基本类型读取**
+
+```rust
+// 原始：
+self.size
+
+// 重写为：
+self.__get_size()
+```
+
+**模式 3：基本类型赋值**
+
+```rust
+// 原始：
+self.size = self.size + 1
+
+// 重写为（先求值右侧，再赋值，避免 borrow 冲突）：
+self.__set_size(self.__get_size() + 1)
+```
+
+**模式 4：基本类型复合赋值**
+
+```rust
+// 原始：
+self.size += 1
+
+// 重写为：
+self.__set_size(self.__get_size() + 1)
+```
+
+**模式 5：引用类型整体赋值（较少见）**
+
+```rust
+// 原始：
+self.elementData = new_vec
+
+// 重写为：
+self.__set_elementData(new_vec)
+```
+
+**模式 6：引用类型下标访问（只读）**
+
+```rust
+// 原始：
+self.elementData[i]
+
+// 重写为：
+{ self.0.borrow().elementData[i] }
+```
+
+**模式 7：引用类型下标赋值**
+
+```rust
+// 原始：
+self.elementData[i] = val
+
+// 重写为：
+{ self.0.borrow_mut().elementData[i] = val }
+```
+
+---
+
+## 9 borrow 窗口规则
+
+### 核心原则
+
+**每个字段访问的 borrow 窗口必须是最小的**，即 `Ref`/`RefMut` 在产生后尽快 drop，不跨越其他字段的 borrow 操作。违反此原则会导致运行时 `BorrowError`。
+
+### 实现方式
+
+宏对所有引用类型字段访问，展开为 block-scoped 形式（`{ ... }`），使 `Ref`/`RefMut` 的生命周期局限在 block 内：
+
+```rust
+// ❌ 错误展开（两个 borrow 重叠）：
+let x = self.0.borrow_mut().elementData.len();  // RefMut 持续到语句结束
+let y = self.__get_size();                      // 再借 borrow → panic
+
+// ✅ 正确展开（block-scoped）：
+let x = { self.0.borrow_mut().elementData.len() };  // RefMut 在 } 处 drop
+let y = self.__get_size();                           // 新借，无冲突
+```
+
+### 为什么一律走 `borrow_mut()`
+
+宏在 token 树遍历阶段无法做类型推断，不知道 `Vec::push` 需要 `&mut self` 而 `Vec::len` 只需要 `&self`。因此对引用类型的方法调用一律走 `borrow_mut()`。
+
+在单线程 `RefCell` 场景下，只读方法调用获取可变借用没有副作用。
+
+### `#[readonly]` 精确优化（可选）
+
+如果需要精确区分（性能敏感路径），可在字段访问处添加显式 hint：
+
+```rust
+// codegen 确认某处只读时，可显式标记：
+#[readonly] self.elementData.len()
+// 宏看到 #[readonly] 则走 __borrow_elementData() 而非 __borrow_mut_elementData()
+```
+
+默认不加 `#[readonly]`，一律走 `borrow_mut()`；需要时由 codegen 按访问语义显式标注。
+
+---
+
+## 10 `_impl.rs` 手写层的兼容性
+
+### 结构关系
+
+```
+java/util/
+  array_list.rs        ← java_class! 宏生成（codegen 输出）
+  array_list_impl.rs   ← 手写 native 实现
+  mod.rs               ← pub mod array_list; mod array_list_impl;
+```
+
+### 手写层使用访问器
+
+`java_class!` 宏生成的代码在同一 crate 内，访问器可见性为 `pub(crate)`。`_impl.rs` 里的 impl 块在宏外部，无法享受 token 重写，但可以直接调用访问器：
+
+```rust
+// array_list_impl.rs — 手写层，用访问器写，不伪装 Java 风格
 impl<E: JavaType> ArrayList<E> {
-    // 引用类型（Vec、Object 等）：返回 Ref / RefMut
-    #[inline]
-    fn __field_elementData(&self) -> ::std::cell::Ref<Vec<E>> {
-        ::std::cell::Ref::map(self.0.borrow(), |i| &i.elementData)
+    pub fn sort(&self, c: Object) -> Result<()> {
+        // 用访问器访问字段——手写者知道自己在写 Rust，这是合理要求
+        let mut data = self.__borrow_mut_elementData();
+        // ... 排序实现 ...
+        Ok(())
     }
-    #[inline]
-    fn __field_elementData_mut(&self) -> ::std::cell::RefMut<Vec<E>> {
-        ::std::cell::RefMut::map(self.0.borrow_mut(), |i| &mut i.elementData)
-    }
-
-    // 基本类型（i32/i64/bool 等 Copy 类型）：直接取值，borrow 立即释放
-    #[inline] fn __get_size(&self) -> i32       { self.0.borrow().size }
-    #[inline] fn __set_size(&self, v: i32)      { self.0.borrow_mut().size = v; }
-    #[inline] fn __get_modCount(&self) -> i32   { self.0.borrow().modCount }
-    #[inline] fn __set_modCount(&self, v: i32)  { self.0.borrow_mut().modCount = v; }
 }
 ```
 
-**产物 3：方法体 token 重写结果**
+### 边界原则
 
-宏对已知字段集合 `{elementData: Vec<E>, size: i32, modCount: i32}` 做 token 遍历，重写三种访问模式：
+- **生成代码（`array_list.rs`）**：在 `java_class!` 宏内，宏保证 Java 风格，可直接与 Java 源码对照
+- **手写代码（`array_list_impl.rs`）**：在宏外，使用访问器，Rust 风格，对手写开发者是合理要求
 
-| 源码写法（Java 风格）| 重写为（Rust 正确语义）| 说明 |
-|--------------------|-----------------------|------|
-| `self.field.method(args)` | `{ let mut r = self.__field_xxx_mut(); r.method(args) }` | 引用类型方法调用，borrow 窗口 block-scoped |
-| `self.field = expr` | `self.__set_xxx(expr)` | 基本类型赋值 |
-| `self.field op= expr` | `self.__set_xxx(self.__get_xxx() op expr)` | 基本类型复合赋值 |
-| `self.field`（只读） | `self.__get_xxx()` | 基本类型读取，copy |
-
-重写后 `add` 方法实际展开为：
-```rust
-pub fn add(&self, e: E) -> Result<bool> {
-    { let mut r = self.__field_elementData_mut(); r.push(e); }
-    self.__set_size(self.__get_size() + 1);
-    Ok(true)
-}
-```
-
-**产物 4：JavaObject / vtable / Upcast impl**（与现有 `#[java_class]` 逻辑一致，迁移进来）
-
-```rust
-impl<E: JavaType> ObjectVTable for ArrayList<E> { ... }
-impl<E: JavaType> Into<Object> for ArrayList<E> { ... }
-impl<E: JavaType> From<Object> for ArrayList<E> { ... }
-impl<E: JavaType> Debug for ArrayList<E> { ... }
-```
+这个边界是清晰且稳定的。
 
 ---
 
-## 关键设计决策
+## 11 职责边界总表
 
-### borrow 窗口规则
-
-**所有字段访问均使用最小 borrow 窗口**。规则：
-
-- 基本类型（`i32`/`i64`/`bool`/`f32`/`f64`/`u16`/`i8`）：直接 copy，`borrow()` 在表达式结束后立即释放
-- 引用类型：用 block 包裹，`RefMut` 在 block 结束时 drop
-
-此规则保证同一方法体内对同一对象的多个字段访问不会 double borrow panic：
-
-```rust
-// 安全：每次 borrow 独立，不交叠
-let size = { self.0.borrow().size };         // borrow 释放
-let val  = { self.0.borrow().elementData[i as usize].clone() }; // borrow 释放
-{ self.0.borrow_mut().elementData.push(val) };  // borrow 释放
-```
-
-### superclass_fields 展平规则
-
-codegen Python 侧在生成子类时，沿继承链从顶层祖先到直接父类顺序收集所有字段，展平为单层列表传入宏：
-
-```
-Object（无字段）
-  └── AbstractCollection（无字段）
-        └── AbstractList（modCount: i32）
-              └── ArrayList（elementData: Vec<E>, size: i32）
-
-superclass_fields = (modCount: i32)   ← 所有祖先字段，按继承顺序
-```
-
-宏展开 `__inner` 时父类字段在前，与 JVM 堆布局一致，支持未来 JNI unsafe 内存访问。
-
-### generic_signature 优先级
-
-```
-信息来源优先级：generic_signature > descriptor > 默认推断
-
-字段类型解析：
-  [TE;              → Vec<E>
-  TE;               → E
-  Ljava/lang/String; 且 generic_sig 缺失 → Object（擦除语义）
-
-方法签名解析：
-  (TE;)Z            → fn(e: E) -> Result<bool>
-  (Ljava/lang/Object;)Z 且 generic_sig 缺失 → fn(e: Object) -> Result<bool>
-
-类型变量映射：
-  TE; / TK; / TV;   → 当前类的类型参数 E/K/V（直接使用）
-  接口泛型（Arch-1）→ Object（擦除，不保留）
-  具体类泛型        → 保留，ArrayList<E>、HashMap<K,V> 等
-```
-
----
-
-## 职责边界（最终版）
-
-| 职责 | 承担者 | 原因 |
+| 职责 | 承担者 | 依据 |
 |------|--------|------|
-| 父类字段展平（superclass_fields） | codegen Python | 已维护完整 ClassInfo registry，展平逻辑在 Python 更简单 |
-| generic_signature 解析 → 裸 Rust 类型 | `java_class!` 宏 | 宏看得到字段声明和属性，解析发生在编译期 |
+| 继承链字段展平（superclass_fields） | codegen Python | 已有完整 ClassInfo registry，宏无法跨 crate 读取 |
+| 字段类型重写（field_sig / generic_sig → 裸 Rust 类型） | `java_class!` 宏 | 宏看得到字段声明和 field_sig 属性 |
 | Inner struct + RefCell 包装生成 | `java_class!` 宏 | 宏看得到完整 struct 定义 |
-| 字段访问器生成（borrow 窗口最小化） | `java_class!` 宏 | 宏已知字段集合和类型，分类生成 Copy/非Copy 访问器 |
-| 方法签名泛型重写（Object → E） | `java_class!` 宏 | 块级宏同时看到字段类型参数和方法签名 |
-| 方法体字段访问 token 重写 | `java_class!` 宏 | 块级宏同时拥有字段集合和方法体，唯一能做 token 重写的位置 |
-| JavaObject / vtable / Upcast impl | `java_class!` 宏 | 已有逻辑从 `#[java_class]` 迁移进来 |
-| 字节码翻译逻辑（方法体指令） | codegen Python | 不变，继续走 ILOAD/ALOAD/INVOKEVIRTUAL 等翻译流程 |
+| 字段访问器生成（borrow 窗口最小化） | `java_class!` 宏 | 宏已知字段集合和类型分类，生成 get/set/borrow/borrow_mut 四类 |
+| 方法签名泛型重写（Object → E） | `java_class!` 宏 | 宏同时看到字段和 impl 块 |
+| 方法体字段访问 token 重写（7 种模式） | `java_class!` 宏 | 块级宏同时拥有字段集合和所有方法体 |
+| native 方法 unimplemented! 存根生成 | `java_class!` 宏 | 识别 `#[native]` 属性，生成空实现占位 |
+| JavaObject / vtable / Upcast impl 生成 | `java_class!` 宏 | 已有逻辑，从 `#[java_class]` 迁移进来 |
+| native 真实实现 | `_impl.rs` 手写 | 使用 `pub(crate)` 访问器访问字段 |
+| 字节码翻译逻辑（方法体指令翻译） | codegen Python | 不变，继续走 ILOAD/ALOAD/INVOKEVIRTUAL 等翻译流程 |
 
 ---
 
-## `_impl.rs` 兼容性
-
-native 方法的手写实现在 `java_class!` 宏外部（`_impl.rs` 通过 `mod.rs` 包含）。这些文件写的是展开后的类型，需使用宏生成的访问器：
-
-```rust
-// string_impl.rs（手写 native 方法）
-impl String {
-    pub fn intern(&self) -> Result<Object> {
-        // 宏已展开，此处 String 是 newtype 包装
-        // 用 pub(crate) 访问器，不用裸字段
-        let value = self.get_value();  // 访问器，pub(crate)
-        // ...
-    }
-}
-```
-
-**规则**：宏生成的字段访问器设为 `pub(crate)`，`_impl.rs` 通过访问器访问字段。手写代码的作者知道自己在写 Rust，使用访问器是合理要求，不需要伪装成 Java 风格。
-
----
-
-## 实施步骤
+## 12 实施步骤
 
 ```
-Step 1  设计 java_class! 输入语法并手写 ArrayList 验证
-        ├── 确定宏 token 树的解析结构（struct 部分 + impl 部分）
-        ├── 确定 superclass_fields 参数格式
-        ├── 确定 generic_signature 字符串格式（复用现有 codegen 生成的格式）
-        └── 手写展开目标，确认 cargo check 通过
-            输出：verified ArrayList expand target
+Step 1  定义输入语法，手写 ArrayList 验证
+        ├── 确定所有属性格式（binary_name / generic_signature /
+        │   superclass_fields / field_sig / descriptor / native）
+        ├── 手写展开结果（不写宏，直接写目标 Rust 代码）
+        └── cargo check 通过 → 确认目标形态可编译
 
-Step 2  实现 java_class! struct 层展开
-        ├── 解析 struct 字段（名称、类型）
-        ├── 解析 superclass_fields 参数
-        ├── 生成 __inner struct（祖先字段在前 + 自有字段）
-        ├── 生成 RefCell<Inner> newtype 包装
-        ├── generic_sig 字段类型重写（TE; → E，[TE; → Vec<E>）
-        └── 生成字段访问器（Copy → 值语义，非Copy → Ref/RefMut，窗口最小化）
-            输出：struct 层单元测试通过
+Step 2  实现 struct 层展开
+        ├── 解析 superclass_fields，生成 Inner struct（父字段在前）
+        ├── 生成 RefCell<Inner> newtype 包装（self.0 语义）
+        ├── 解析 field_sig，重写字段类型（TE; → E，[TE; → Vec<E>）
+        └── 生成字段访问器：
+              基本类型 → __get_xxx / __set_xxx
+              引用类型 → __borrow_xxx / __borrow_mut_xxx / __set_xxx
 
-Step 3  实现 java_class! vtable / Into / From / Debug 迁移
-        ├── 从 #[java_class] 属性宏迁移现有逻辑（all_supertypes、is_instance_of）
+Step 3  实现方法签名重写
+        ├── 解析方法 generic_signature 属性
+        ├── 识别类型变量（TE; → E，TK; → K）
+        ├── 应用接口擦除规则（接口泛型参数 → Object）
+        └── 重写方法参数类型和返回类型
+
+        ── ArrayList 单测（struct 层 + 签名层）通过后继续 ──
+
+Step 4  实现方法体 token 重写
+        ├── 建立字段集合（含继承字段，按名称和类型分类）
+        ├── token 树遍历，识别 self.field 访问模式（7 种模式）
+        ├── 按规则展开为访问器调用（borrow 窗口 block-scoped 最小化）
+        └── 边缘情况处理（if let、match arm、嵌套表达式）
+
+Step 5  实现 JavaObject / vtable / Upcast / native 存根生成
+        ├── 迁移现有 #[java_class] 逻辑（all_supertypes、is_instance_of）
         ├── toString / hashCode 条件转发迁移
-        └── has_to_string_method / has_hash_code_method 标志迁移
-            输出：与现有 #[java_class] 行为等价
-
-        ── 在 ArrayList 单测通过（Step 1-3）后再继续 ──
-
-Step 4  实现 java_class! 方法签名泛型重写
-        ├── 解析方法上的 generic_signature 属性
-        ├── 类型变量替换（TE; → E，接口泛型 → Object）
-        └── 参数类型 + 返回值类型重写
-            输出：方法签名与 Java 源码 1:1 对应
-
-Step 5  实现 java_class! 方法体 token 重写
-        ├── 基于字段集合识别 self.field 访问模式
-        ├── 展开三种模式：方法调用 / 赋值 / 复合赋值
-        ├── borrow 窗口 block-scoped 展开
-        └── 边缘情况处理：self.field[i]、let x = &self.field、match self.field
-            输出：add/get/remove 等方法体 token 重写正确
+        └── #[native] 方法生成 unimplemented!("native: ...") 存根
 
         ── Step 4-5 可在 Step 2-3 稳定后并行开发 ──
 
 Step 6  修改 codegen Python
         ├── 输出 java_class! { ... } 块而非 #[java_class] struct
-        ├── 字段直接输出 generic_sig 驱动的裸类型（不再包 JField）
-        ├── superclass_fields 由 Python 沿继承链展平后传入
-        └── 方法体继续走字节码翻译，不生成访问器调用（宏做 token 重写）
-            输出：jdk_classes 全量重新生成，cargo check 通过
+        ├── 字段加 field_sig 属性，类型直接输出 generic_sig 驱动的裸类型
+        ├── superclass_fields 由 Python 展平整条继承链后传入
+        ├── native 方法生成 #[native] 属性的空签名（无方法体）
+        └── 方法体继续走字节码翻译逻辑（Java 风格输出，宏做 token 重写）
 
 Step 7  删除 JField<T>
-        └── e2e 测试全绿后，从 java_runtime/src/types.rs 删除 JField
-            输出：无 JField 引用，cargo check 通过
+        └── e2e 测试全绿后执行，作为独立 commit
 ```
 
 ---
 
-## 迁移期兼容策略
+## 13 迁移期兼容策略
 
 `java_class!` 块级宏和现有 `#[java_class]` 属性宏可以共存：
 
@@ -312,9 +547,21 @@ Step 7  删除 JField<T>
 
 ---
 
-## 设计原则记录
+## 14 已知风险
 
-这次讨论的演进路径本身是值得记录的：从"如何去掉 JField"到"泛型如何保留"到"如何让宏做封装"，三个问题最终收敛到同一个机制（`java_class!` 块级宏）。
+| 风险 | 等级 | 说明 | 缓解策略 |
+|------|------|------|---------|
+| Step 4 token 重写的边缘情况 | 高 | Rust 表达式树复杂，`if let`、`match`、`&mut self.field` 引用传递等场景需逐一处理 | Step 4 独立实施，先覆盖 7 种核心模式，边缘情况允许 fallback 到手写访问器调用 |
+| 接口/具体类判断准确性 | 中 | 字段类型是接口时泛型参数需要擦除，判断错误会导致类型不匹配 | codegen 传入 `#[is_interface]` 显式标记，宏不依赖推断 |
+| borrow 窗口遗漏 | 中 | token 重写生成的 block 边界不正确时，可能产生运行时 borrow panic（不是编译错误） | 建立 borrow panic 测试集，覆盖同对象多字段同时访问的场景 |
+| JVM 字段顺序与 codegen 不一致 | 低 | superclass_fields 展平顺序错误会导致 JNI 互操作字段偏移量错误 | codegen 展平后写入测试，与 `javap -verbose` 输出对比验证 |
+| 宏编译时间增加 | 低 | 块级宏展开复杂，可能增加 `cargo build` 耗时 | 基准测试，必要时拆分为多个独立宏减少单次展开规模 |
+
+---
+
+## 15 设计原则记录
+
+这次讨论的演进路径本身值得记录：从"如何去掉 JField"到"泛型如何保留"到"如何让宏做封装"，三个问题最终收敛到同一个机制（`java_class!` 块级宏），而非分别解决。
 
 **根本原因**：codegen Python 侧已经拥有所有需要的信息（字段类型、泛型签名、继承关系），但这些信息没有有效传递给 Rust 的类型系统。块级宏是这个"信息传递桥梁"——codegen 把 Python 侧知道的一切写进宏参数，宏在 Rust 编译期展开，两侧信息完全对齐。
 
