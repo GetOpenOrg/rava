@@ -416,28 +416,12 @@ def gen_method_body(
                 out.append(('', f"{ind}if {fall_cond} {{"))
                 inner = make_sub()
                 inner.enter_scope()
-                for k in range(guard.body_start_idx, guard.continue_idx):
-                    ki = instrs[k]
-                    # goto → 循环出口（break）或循环起始（continue）
-                    if ki.opcode == 'goto' and ki.operand:
-                        goto_tgt = int(ki.operand)
-                        enclosing = [lp for lp in _loops if lp.start_idx <= k <= lp.end_idx]
-                        is_brk = any(
-                            lp.exit_offset is not None and goto_tgt >= lp.exit_offset
-                            for lp in enclosing
-                        )
-                        if is_brk:
-                            inner.emit(RawStmt('break;'))
-                            continue
-                        is_cont = any(
-                            instrs[lp.start_idx].offset == goto_tgt
-                            for lp in enclosing
-                        )
-                        if is_cont:
-                            inner.emit(RawStmt('continue;'))
-                            continue
-                    sim_instr(ki, inner, method.class_name, registry=registry)
+                inner_out: list = []
+                # 用递归 process_block 处理 guard body，支持非线性 body（含嵌套条件分支）
+                process_block(guard.body_start_idx, guard.continue_idx, inner, inner_out, ind + "    ")
                 inner.exit_scope()
+                cur_sim._ctr = max(cur_sim._ctr, inner._ctr)
+                out.extend(inner_out)
                 for s in inner.stmts:
                     out.append((ind + "    ", s))
                 out.append(('', f"{ind}}}"))

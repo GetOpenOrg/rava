@@ -67,28 +67,30 @@ def find_if_guards(instrs: list[Instr], loops: list[LoopInfo] | None = None) -> 
 
         body_instrs = instrs[body_start_idx:target_idx]
 
-        # body 内不能有条件分支（保持线性，复杂嵌套暂不处理）
-        if any(bi.opcode in _BRANCH_OPS for bi in body_instrs):
-            continue
+        body_has_branches = any(bi.opcode in _BRANCH_OPS for bi in body_instrs)
 
-        # body 必须必定退出：*return / athrow，或 goto 到循环出口之外（break）
-        exits = any(bi.opcode in _EXIT_OPS for bi in body_instrs)
+        # body 末尾是 exit 指令（*return / athrow）时，即使 body 内含条件分支，
+        # 所有路径都从该 exit 退出，guard 仍然成立。
+        last_body_op = body_instrs[-1].opcode if body_instrs else ''
+        exits = last_body_op in _EXIT_OPS
 
-        if not exits and loops:
-            # 检查 body 中是否有 goto → 循环出口（break）或循环起始（continue）
-            for bi in body_instrs:
-                if bi.opcode == 'goto' and bi.operand:
-                    goto_tgt = int(bi.operand)
-                    for lp in loops:
-                        if lp.start_idx <= i <= lp.end_idx:
-                            if (lp.exit_offset is not None and goto_tgt >= lp.exit_offset):
-                                exits = True
-                                break
-                            if instrs[lp.start_idx].offset == goto_tgt:
-                                exits = True  # continue
-                                break
-                if exits:
-                    break
+        # 线性 body（无条件分支）还可通过 any-exit 或 goto→循环出口退出
+        if not exits and not body_has_branches:
+            exits = any(bi.opcode in _EXIT_OPS for bi in body_instrs)
+            if not exits and loops:
+                for bi in body_instrs:
+                    if bi.opcode == 'goto' and bi.operand:
+                        goto_tgt = int(bi.operand)
+                        for lp in loops:
+                            if lp.start_idx <= i <= lp.end_idx:
+                                if (lp.exit_offset is not None and goto_tgt >= lp.exit_offset):
+                                    exits = True
+                                    break
+                                if instrs[lp.start_idx].offset == goto_tgt:
+                                    exits = True  # continue
+                                    break
+                    if exits:
+                        break
 
         if exits:
             result[i] = IfGuardInfo(

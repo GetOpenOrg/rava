@@ -616,11 +616,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         let cell_ty = if is_basic(ty) {
             quote! { ::std::cell::Cell<#ty> }
         } else {
-            // 引用类型字段用 `Box<RefCell<T>>`：Box 提供间接层，让自引用/互引用字段
-            // （Throwable.cause、Class.classData 等）有确定大小（E0072）。
-            // 语义上等价于 Java：字段槽可变 + 对象在堆上。访问器写法不受影响
-            // （`Box<RefCell<T>>.borrow()` 自动解引用）。
-            quote! { ::std::boxed::Box<::std::cell::RefCell<#ty>> }
+            // 引用类型字段用 `RefCell<Option<Box<T>>>`：
+            //   - Box   提供间接层，让自引用字段（Throwable.cause 等）有确定大小（E0072）
+            //   - Option 让 Default 实现返回 None，打破自引用类型的无限递归
+            //     （`Box<RefCell<T>>::default()` 会递归调用 T::default() 导致栈溢出）
+            //   - RefCell 提供内部可变性（__set_field 用 &self）
+            quote! { ::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>> }
         };
         inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
     }
@@ -697,13 +698,25 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             let borm = format_ident!("__borrow_mut_{}", name);
             accessors.push(quote! {
                 #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { Clone::clone(&*self.0.#name.borrow()) }
+                pub fn #get(&self) -> #ty {
+                    self.0.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
+                }
                 #[doc(hidden)] #[inline]
-                pub fn #bor(&self) -> ::std::cell::Ref<'_, #ty> { self.0.#name.borrow() }
+                pub fn #bor(&self) -> ::std::cell::Ref<'_, #ty> {
+                    ::std::cell::Ref::map(self.0.#name.borrow(), |opt| {
+                        opt.as_deref().expect("field not initialized")
+                    })
+                }
                 #[doc(hidden)] #[inline]
-                pub fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> { self.0.#name.borrow_mut() }
+                pub fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> {
+                    ::std::cell::RefMut::map(self.0.#name.borrow_mut(), |opt| {
+                        opt.as_deref_mut().expect("field not initialized")
+                    })
+                }
                 #[doc(hidden)] #[inline]
-                pub fn #set(&self, v: #ty) { *self.0.#name.borrow_mut() = v; }
+                pub fn #set(&self, v: #ty) {
+                    *self.0.#name.borrow_mut() = Some(::std::boxed::Box::new(v));
+                }
             });
         }
     }

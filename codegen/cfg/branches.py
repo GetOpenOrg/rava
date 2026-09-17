@@ -115,9 +115,26 @@ def find_if_else(
                         continue
 
         # ── 尝试 simple if-then（fall-through）──
+        # body 允许含条件分支（嵌套 if-else），但不允许任何跳转越过 target：
+        #   - goto 向后跳（内部循环）或前跳超过 target → 拒绝
+        #   - 条件分支前跳超过 target → 拒绝（防止 iflt T; if_icmpge M(>T) 误匹配）
         then_body = instrs[body_start:target_idx]
-        # body 中不能有条件分支（线性）
-        if any(b.opcode in _BRANCH_OPS for b in then_body):
+        body_start_offset = instrs[body_start].offset if body_start < len(instrs) else float('inf')
+        has_escape = False
+        for b in then_body:
+            if not b.operand:
+                continue
+            if b.opcode == 'goto':
+                g = int(b.operand)
+                if g < body_start_offset or g > target_offset:
+                    has_escape = True
+                    break
+            elif b.opcode in _BRANCH_OPS:
+                g = int(b.operand)
+                if g > target_offset:
+                    has_escape = True
+                    break
+        if has_escape:
             continue
 
         result[i] = IfElseInfo(

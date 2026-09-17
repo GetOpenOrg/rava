@@ -3,6 +3,21 @@ use super::preconditions::Preconditions;
 
 impl Preconditions {
     #[jvm_native]
+    pub fn SIOOBE_FORMATTER() -> Object {
+        Object::default()
+    }
+
+    #[jvm_native]
+    pub fn AIOOBE_FORMATTER() -> Object {
+        Object::default()
+    }
+
+    #[jvm_native]
+    pub fn IOOBE_FORMATTER() -> Object {
+        Object::default()
+    }
+
+    #[jvm_native]
     pub fn checkIndex_i_i_bifunc(index: i32, length: i32, _oobef: Object) -> Result<i32> {
         if index < 0 || index >= length {
             return Err(JvmError::Custom(format!(
