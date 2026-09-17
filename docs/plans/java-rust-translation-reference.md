@@ -23,6 +23,7 @@
 13. [接口类型](#13-接口类型)
 14. [静态字段与 `<clinit>`](#14-静态字段与-clinit)
 15. [方法调用约定](#15-方法调用约定)
+16. [禁止出现在可读层的调用列表](#16-禁止出现在可读层的调用列表)
 
 ---
 
@@ -642,6 +643,103 @@ self._super.speak()?
 
 ---
 
+## 16 禁止出现在可读层的调用列表
+
+**凡下表中「禁止出现」的调用，一旦出现在 `java_class!` 块内（读者可见层），即视为封装缺失，需修复生成器或宏，而非接受为"正常写法"。**
+
+### 16.1 完整禁止列表
+
+| 禁止出现的调用 | 对应 Java 语义 | 目标替换形式 | 由谁隐藏 |
+|--------------|--------------|------------|---------|
+| `.borrow()` | 字段读 / 数组读 | 透明（宏重写字段访问；`Array::get` 隐藏数组读） | `java_class!` 宏 + `Array<T>` |
+| `.borrow_mut()` | 字段写 / 数组写 | 透明（宏重写；`Array::set` 隐藏数组写） | `java_class!` 宏 + `Array<T>` |
+| `.downcast::<T>()` | `(T) obj` 强制转型 | `T::from(obj)` 或类型推导 `obj.into()` | `java_class!` 宏生成 `impl From<Object> for T` |
+| `Object::from_any(v)` | 隐式向上转型（赋给 Object 引用） | `v.into()` | blanket `From<T> for Object`（R-1 已完成） |
+| `Rc::new(RefCell::new(...))` | 数组/对象创建 | `Array::new(n)` / 构造器 | `Array<T>` + `java_class!` 构造器展开 |
+| `Rc<RefCell<Vec<T>>>` 类型标注 | `T[]` 数组类型 | `Array<T>` | `Array<T>` newtype（§7） |
+| `__get_xxx()` / `__set_xxx()` 直接调用 | 字段读写 | `self.xxx` / `self.xxx = v`（宏重写） | `java_class!` 宏 token 重写 |
+
+### 16.2 各调用的隐藏机制
+
+#### `borrow()` / `borrow_mut()`
+
+两个来源，两套隐藏机制：
+
+```rust
+// 来源 1：类字段访问（java_class! 宏已处理）
+// 宏展开前（java_class! 块内，读者可见，1:1 Java）：
+self.size += 1;
+// 宏展开后（不可见）：
+self.__set_size(self.__get_size().wrapping_add(1i32));
+// __set_size 内部有 borrow_mut()，但在宏展开产物里，不在读者可见层
+```
+
+```rust
+// 来源 2：数组元素访问（Array<T> 处理，待实现）
+// 目标（java_class! 块内）：
+arr[5i32] = 42i32;        // 宏重写 → arr.set(5i32, 42i32)
+let x = arr[5i32];        // 宏重写 → arr.get(5i32)
+// Array::set/get 内部有 borrow_mut()/borrow()，但不可见
+```
+
+#### `downcast::<T>()`
+
+Java 强制转型 `(T) obj` 目前生成 `.downcast::<T>()`，应由 `java_class!` 宏生成 `From<Object>` impl 隐藏：
+
+```java
+// Java
+Animal a = (Animal) obj;
+```
+```rust
+// 当前（禁止）
+let a: Animal = obj.downcast::<Animal>();
+
+// 目标：downcast 隐藏在 From<Object> 实现里
+let a: Animal = obj.into();  // 或 Animal::from(obj)
+```
+
+`java_class!` 宏为每个类自动生成：
+```rust
+// 宏展开产物（不可见）
+impl From<Object> for Animal {
+    fn from(o: Object) -> Self {
+        o.downcast::<Animal>()   // downcast 在这里，读者看不到
+    }
+}
+```
+
+codegen 侧：`checkcast Animal` 指令 → 生成 `obj.into()` 或 `Animal::from(obj)`，而非 `obj.downcast::<Animal>()`。
+
+#### `Object::from_any(v)`
+
+隐式向上转型（子类 → Object），由 blanket `From<T> for Object`（R-1，已完成）处理：
+
+```java
+// Java（隐式）
+Object o = dog;
+```
+```rust
+// 当前（禁止）
+let o: Object = Object::from_any(dog.clone());
+
+// 目标
+let o: Object = dog.into();   // blanket From<T> for Object，已可用
+```
+
+codegen 侧：`aastore` / `astore` 赋值给 Object 类型变量时，生成 `.into()` 而非 `Object::from_any(...)`。
+
+### 16.3 当前状态
+
+| 调用 | 状态 |
+|------|------|
+| `borrow()` / `borrow_mut()`（字段） | ✅ 已隐藏（`java_class!` 宏字段重写） |
+| `borrow()` / `borrow_mut()`（数组） | ⚠️ 待修复（`Array<T>` Step 2/3，见 §7） |
+| `downcast::<T>()` | ⚠️ 待修复（需 codegen 改 `checkcast` 生成 + 宏生成 `From<Object>`） |
+| `Object::from_any(v)` | ⚠️ 待修复（codegen 需改用 `.into()`，blanket impl 已就绪） |
+| `Rc<RefCell<Vec<T>>>` 类型标注 | ⚠️ 待修复（`Array<T>` Step 1，见 §7） |
+
+---
+
 ## 附：实现细节索引
 
 | 机制 | 实现位置 |
@@ -651,6 +749,8 @@ self._super.speak()?
 | per-class vtable trait 生成（规划中） | `block.rs` + `codegen/method/codegen.py` |
 | Deref 继承链 | `block.rs` + R-2 |
 | blanket `Into<Object>` | `runtime/java_runtime/src/lib.rs` |
+| `impl From<Object> for T`（规划中） | `block.rs` 宏生成 |
+| `Array<T>` newtype（规划中） | `runtime/java_runtime/src/java/lang/array.rs` |
 | 字节码指令 → Rust 语句 | `codegen/instr/sim.py` |
 | 虚方法调用生成 | `codegen/instr/invoke.py` |
 | 类型映射 JVM → Rust | `codegen/type_map.py` |
