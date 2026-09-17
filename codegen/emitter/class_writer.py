@@ -298,7 +298,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     def _validate_field_type(rust_ty: str, type_params: list[str]) -> bool:
         """递归检查 rust_ty 中所有类型名是否可用（内建/类型参数/注册表中存在）。
         若任何嵌套类型名未知，返回 False，调用方将回退到裸描述符类型。"""
-        for name in _extract_type_names(rust_ty):
+        # crate:: 全路径（_iface_full_path 生成，如 crate::java::util::Iterator）：
+        # 路径段 java/util/lang 不在内建集合里，但整体是有效引用，直接通过
+        import re as _re_fp
+        cleaned = _re_fp.sub(r'\bcrate(?:::\w+)+\b', 'Object', rust_ty)
+        for name in _extract_type_names(cleaned):
             if name in _RUST_TOKENS:
                 continue
             if name in _BUILTIN_TYPES or name in type_params or name in _registry_short_names:

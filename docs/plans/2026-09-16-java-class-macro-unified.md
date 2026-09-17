@@ -200,14 +200,18 @@ java_class! {
 | `[I` | `Vec<i32>` | 基本类型数组 |
 | `Ljava/lang/String;` | `String` | 具体类（直接对应） |
 | `Ljava/util/ArrayList<TE;>;` | `ArrayList<E>` | 具体类，保留泛型参数 |
-| `Ljava/util/List<TE;>;` | `Object` | **接口**：泛型参数擦除（Arch-1 语义） |
-| `Ljava/util/Comparator<TE;>;` | `Object` | 接口，擦除 |
+| `Ljava/util/List<TE;>;` | `crate::java::util::List` | **接口**：全路径类型别名（展开即 `Object`） |
+| `Ljava/util/Comparator<TE;>;` | `crate::java::util::Comparator` | 接口，全路径类型别名 |
 
-### 接口擦除规则
+### 接口全路径规则（2026-09-17 更新）
 
-接口的泛型参数在 Rust 层擦除为 `Object`（通过 vtable 分派），这是 Arch-1 的正确语义：接口引用在运行时只保证 vtable 派发，不保证具体类型。具体类（class）的泛型参数保留。
+接口类型不再直接写为 `Object`，而是输出全限定 Rust 路径（`crate::java::util::Iterator` 等）。  
+由 `type_map._iface_full_path()` 生成，类型解析在 codegen Python 侧完成（宏侧 `field_sig` 仅作元数据保留，见 `block.rs:55` 注释）。
 
-区分具体类和接口：codegen 传入 `#[is_interface]` 显式标记，宏不依赖推断。
+**原因**：`Iterator`、`Supplier` 等短名与 Rust prelude 冲突（E0782）；全路径唯一，编译器无歧义。  
+**语义不变**：接口生成 `pub type Iterator = Object;`，因此 `crate::java::util::Iterator` 在 Rust 类型层等价于 `Object`，vtable 分派语义保持。
+
+区分具体类和接口：`jvm_to_rust()` 通过 `registry[name].is_interface` 判断，不依赖 `#[is_interface]` 宏属性。
 
 ### 优先级
 
