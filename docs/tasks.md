@@ -9,7 +9,8 @@
 - `docs/plans/2026-09-15-cfg-ifelse-unresolved.md` — CFG 翻译质量
 - `docs/jvm-attributes-checklist.md` — JVM 属性解析覆盖
 
-**基线（2026-09-16 全量实测，P0 前两项修复后）**：60 e2e，12 通过 / 48 失败（45 编译 + 3 diff/运行时）。
+**基线（2026-09-17 全量实测，04ed5a0）**：60 e2e，8 通过 / 52 失败（44 编译 + 8 运行阶段）。
+**对照基线（c259180，同一套 CSR 前的 anchor）**：12 通过 / 48 失败（38 编译 + 10 运行阶段）。
 
 ---
 
@@ -19,14 +20,27 @@
 > 已清偿：E0599 `__get_value` on 基本类型（getfield 接收者为基本类型时恒等返回，sim.py）✅ 2026-09-16  
 > 附带修复：`println(D/F)` 浮点参数经 `java_fmt_*` 格式化（Java 语义 `3.0`）✅ 2026-09-16
 
+**🔴 回归待修（最高优先级）**：**E0782 接口返回类型泄漏 ×8** — `method_gen.py` 新增「返回类型优先 generic_signature」
+时未套用 Arch-1 的接口→Object 降级，生成 `Result<Iterator<E>>`（`Iterator` 是 Object 别名且未导入，
+被解析成 `std::iter::Iterator` trait）。影响：HelloWorld / TestGenerics / TestCollections / TestComparator /
+TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c259180 全部 PASS 或可编译**，属本次自伤。
+
 | 任务 | 影响 | 说明 |
 |------|------|------|
-| E0308 类型不匹配 | ×12 测试 | 见 e2e 文档普查表 |
-| E0424 expected value, found module `self` | ×8 测试 | `this` 被解析为模块 |
-| E0425 cannot find type `init` | ×4 测试 | 构造器方法引用（Arch-3 已知债务） |
-| E0599 `compareTo` 缺失 | ×4 测试 | enum（Thread_State 等）/接口分派 |
-| E0592 duplicate `__get_this_0` | ×2 测试 | 访问器重复生成 |
-| 运行时失败 | ×3 测试 | Writer.write stub panic / 栈溢出 / TextBlock diff |
+| E0782 接口返回类型泄漏 | ×8 测试 | 见上方回归条目，修法：返回值复用参数的接口降级规则 |
+| E0308 类型不匹配 | ×14 测试 | 见 e2e 文档普查表；含 arrays.rs 栈下溢占位（i32 vs `Vec<i8>`）阻塞用例 |
+| E0592 duplicate 定义 | ×9 测试 | `__get_this_0` 等访问器重复生成（较 doc 的 ×2 已扩散） |
+| E0599 方法/关联函数缺失 | ×7 测试 | compareTo / evaluate / set_xxx stub 等；见 e2e 文档 |
+| E0425 cannot find type `init` | ×3 测试 | 构造器方法引用（Arch-3 已知债务），集中于 streams |
+| E0521 borrowed data escapes | ×2 测试 | TestEqualsHashCode / TestSwitchString |
+| E0615 Record 属性 | ×1 测试 | 直接关联 TestRecord |
+| 运行阶段失败 | ×8 测试 | 编译已过但跑挂/输出不符，见下方清单 |
+
+**运行阶段失败清单（编译通过 ×16 中的 8 个）**：
+- 存根 panic `java/io/Writer.write` — TestSorting、TestRecursion（`println` 全链路未实现）
+- `user/src/` panic — TestExceptions、TestSwitchExpression、TestAbstractClass
+- 栈溢出 — TestStaticNested
+- 输出 diff — TestInheritance、TestCasting（多态/接口分派语义差异）
 
 ## P1 · 功能缺口
 
