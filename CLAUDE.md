@@ -9,9 +9,23 @@ Java → Rust 转译器。将 Java `.class` 字节码翻译为等价的 Rust 源
 ## 转译等价性原则
 
 > 详细的 Java → Rust 对照规则见 **[`docs/plans/java-rust-translation-reference.md`](docs/plans/java-rust-translation-reference.md)**。  
-> 该文档是权威参考，覆盖：类型映射、字段访问封装、继承/Deref 链、虚方法 vtable、数组、异常、null 语义、String、包装类、接口等所有构造的等价形式。
+> 产品定位与市场策略见 **[`docs/plans/2026-09-18-product-vision.md`](docs/plans/2026-09-18-product-vision.md)**。
 
-**核心目标**：生成的 Rust 代码与 Java 源码 1:1 对应。Java 开发者可直接读懂 `java_class!` 块内的代码逻辑；所有 Rust 实现复杂度（`RefCell`/`Rc`/vtable trait/borrow 窗口）由 `java_class!` 宏和 codegen 管线封装，对读者不可见。
+**核心目标**：java_rta 是 Java 语言的新编译后端，不是迁移工具。开发者继续写 Java，构建流程自动生成原生二进制。生成的 Rust 是可读的中间层——Java 开发者能直接对应原始逻辑，无需学习 Rust 的所有权/生命周期/trait dispatch。
+
+```java
+// Java（开发者写的）
+Animal animal = new Dog();
+animal.speak();
+```
+```rust
+// 生成的 Rust（开发者能读懂，不需要自己写）
+let animal: Animal = Dog::new();
+animal.speak();
+// vtable dispatch、Rc<dyn Trait>、borrow 全部由生成器封装，不出现在这里
+```
+
+**判定标准**：方法体中若出现 `borrow()`、`downcast::<T>()`、`Rc::new`、`Object::from_any` 等 Rust 底层调用，即封装不足，需修复生成器。禁止列表见 [`java-rust-translation-reference.md §16`](docs/plans/java-rust-translation-reference.md#16-禁止出现在可读层的调用列表)。
 
 ---
 

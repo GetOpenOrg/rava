@@ -29,16 +29,41 @@
 
 ## 1 基本原则
 
-**所有封装细节由 `java_class!` 宏和 codegen 管线统一吸收，对读代码的人不可见。**
+### 1.1 核心目标：Java 开发者只读业务逻辑，不感知 Rust 底层
 
-生成的 Rust 代码有两个阅读层次：
+这个转译器的本质是 **Java 语言的新编译后端**，不是迁移工具。  
+开发者继续写 Java，构建流程自动生成原生二进制。生成的 Rust 代码是 **可读的中间层**——Java 开发者能直接对应原始 Java 逻辑，无需学习 Rust 的所有权、生命周期、trait dispatch。
+
+```java
+// Java 原代码
+Animal animal = new Dog();
+animal.speak();
+```
+```rust
+// 生成的 Rust——开发者能直接对应读懂
+let animal: Animal = Dog::new();
+animal.speak();
+// vtable dispatch、Rc<dyn Trait>、borrow 等全部由生成器封装，开发者不感知
+```
+
+**这是本质上的区别**：读者看到的是业务逻辑，不是 Rust 实现机制。
+
+### 1.2 两个阅读层次
 
 | 层次 | 读者 | 看到的内容 |
 |------|------|-----------|
-| `java_class! { ... }` 块内 | Java 开发者 | Java 风格的字段名、方法签名、方法体 |
-| 宏展开产物 | Rust 工具链 / 调试 | `RefCell`、`Rc`、`borrow_mut`、vtable trait |
+| **方法体（读者可见层）** | Java 开发者 | 与 Java 1:1 对应的字段名、方法调用、控制流 |
+| 宏展开产物 | Rust 工具链 / 性能调试 | `RefCell`、`Rc`、`borrow_mut`、vtable trait impl |
 
-**规则**：当某个构造在 `java_class!` 块内可读且变换纯机械，则由宏负责展开；当某个构造需要字节码级分析，则由 codegen Python 侧负责，输出已解析好的注解给宏消费。
+**判定标准**：生成的方法体中，若出现任何 Rust 专属的底层调用（`borrow()`、`downcast::<T>()`、`Rc::new`、`Object::from_any` 等），即视为封装不足，需修复生成器。完整的禁止列表见 §16。
+
+### 1.3 封装责任分工
+
+| 构造特征 | 处理方 |
+|---------|-------|
+| 变换纯机械、信息在 `java_class!` 块内可见 | `java_class!` 宏（token 重写） |
+| 需要字节码级分析、类层次信息 | codegen Python 侧（生成注解传给宏） |
+| 跨所有生成类通用的 Rust trait/impl | `java_runtime` blanket impl |
 
 ---
 
