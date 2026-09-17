@@ -14,7 +14,7 @@
 4. [字段访问封装](#4-字段访问封装)
 5. [继承与 Deref 链](#5-继承与-deref-链)
 6. [虚方法分发（多态）](#6-虚方法分发多态)
-7. [数组](#7-数组)
+7. [数组](#7-数组)（`Array<T>` 封装 `Rc<RefCell<Vec<T>>>`）
 8. [异常处理](#8-异常处理)
 9. [null 与 Optional 语义](#9-null-与-optional-语义)
 10. [instanceof 与类型检查](#10-instanceof-与类型检查)
@@ -154,6 +154,8 @@ self.cause = RuntimeException::new_str("msg")?;
 - `RefCell`：运行时借用检查，建模 Java 字段的可变性
 - `Option`：`Default::default()` 返回 `None`，解决自引用类型（如 `Throwable.cause: Throwable`）的初始化问题
 - `Box`：打破递归类型的大小无限问题
+
+**同等封装原则适用于数组**：`Rc<RefCell<Vec<T>>>` 是数组的内部存储，也必须完全隐藏，由 `Array<T>` newtype 封装（见 §7）。
 
 ---
 
@@ -295,43 +297,90 @@ codegen Python 侧根据字节码 access flags 标注，`java_class!` 宏据此�
 
 ## 7 数组
 
-### 7.1 原生类型数组
+**封装要求**：`Rc<RefCell<Vec<T>>>` 是数组的 Rust 存储实现细节，**禁止出现在生成代码的任何可读层次**——类型注解、方法体读写、多维嵌套全部由 `Array<T>` newtype 和 codegen 封装吸收。Java 开发者看到的数组操作应与 Java 源码 1:1 对应。
+
+### 7.1 Array<T> newtype（java_runtime 提供）
+
+```rust
+// java_runtime/src/java/lang/array.rs（永久基础设施）
+#[derive(Clone, Default)]
+pub struct Array<T>(Rc<RefCell<Vec<T>>>);   // 内部细节，对外不可见
+
+impl<T: Clone + Default> Array<T> {
+    pub fn new(len: i32) -> Self { ... }
+    pub fn get(&self, i: i32) -> T { ... }
+    pub fn set(&self, i: i32, v: T) { ... }
+    pub fn len(&self) -> i32 { ... }
+}
+```
+
+### 7.2 原生类型数组
 
 ```java
+// Java
 int[] arr = new int[10];
 arr[2] = 42;
+int x = arr[2];
+int len = arr.length;
 ```
 ```rust
-// 生成
-let mut arr: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(vec![0i32; 10usize]));
-arr.borrow_mut()[2usize] = 42i32;
+// 目标：生成的 Rust（java_class! 块内，1:1）
+let mut arr: Array<i32> = Array::new(10i32);
+arr[2i32] = 42i32;          // java_class! 宏重写 → arr.set(2i32, 42i32)
+let x: i32 = arr[2i32];     // 宏重写 → arr.get(2i32)
+let len: i32 = arr.len();
 ```
 
-### 7.2 引用类型数组
+### 7.3 引用类型数组
 
 ```java
+// Java
 Animal[] animals = new Animal[4];
 animals[0] = dog;
+Animal a = animals[1];
 ```
 ```rust
-// 生成（vtable 完成后；当前用 Vec<Animal>）
-let mut animals: Rc<RefCell<Vec<Animal>>> = Rc::new(RefCell::new(vec![Animal::default(); 4usize]));
-// Dog 转为 Animal 时通过 vtable 保留动态类型（见 §6）
-animals.borrow_mut()[0] = Animal::from(dog.clone());
+// 目标：生成的 Rust（1:1）
+let mut animals: Array<Animal> = Array::new(4i32);
+animals[0i32] = dog.clone();    // 宏重写 → animals.set(0i32, dog.clone())
+let a: Animal = animals[1i32];  // 宏重写 → animals.get(1i32)
 ```
 
-### 7.3 多维数组
-
-嵌套 `Rc<RefCell<Vec<Rc<RefCell<Vec<T>>>>>>` 由 codegen 生成，方法体内写法保持简洁：
+### 7.4 多维数组
 
 ```java
+// Java
 int[][] matrix = new int[3][4];
 matrix[1][2] = 99;
 ```
 ```rust
-// 方法体内（1:1 Java 风格，宏处理 borrow）
-matrix.borrow()[1usize].borrow_mut()[2usize] = 99i32;
+// 目标：生成的 Rust（1:1，嵌套 Array<Array<i32>> 内部细节不可见）
+let mut matrix: Array<Array<i32>> = Array::new(3i32);
+// 内层初始化由 codegen/宏处理（对读者不可见）
+matrix[1i32][2i32] = 99i32;    // 宏两次重写：get(1)+set(2)
 ```
+
+### 7.5 完整对比
+
+| | Java | 目标 Rust（可见层） | 当前实现（待修复） |
+|---|------|-------------------|-----------------|
+| 类型注解 | `int[]` | `Array<i32>` | `Rc<RefCell<Vec<i32>>>` |
+| 数组创建 | `new int[10]` | `Array::new(10i32)` | `Rc::new(RefCell::new(vec![...]))` |
+| 元素写入 | `arr[i] = v` | `arr[i] = v`（宏重写） | `arr.borrow_mut()[i as usize] = v` |
+| 元素读取 | `arr[i]` | `arr[i]`（宏重写） | `arr.borrow()[i as usize]` |
+| 数组长度 | `arr.length` | `arr.len()` | `arr.borrow().len() as i32` |
+
+### 7.6 实现路径
+
+三步递进，每步独立可验证：
+
+| 步骤 | 改动位置 | 消除的噪声 |
+|------|---------|-----------|
+| **Step 1** 定义 `Array<T>` | `java_runtime/src/java/lang/array.rs` | 类型注解从 `Rc<RefCell<Vec<T>>>` → `Array<T>` |
+| **Step 2** codegen 改用 `Array` API | `codegen/instr/sim.py`（数组指令分支） | `borrow()`/`borrow_mut()` 从方法体消失 |
+| **Step 3** `java_class!` 支持 `arr[i]` 重写 | `java_rta_macros/src/block.rs`（`VisitMut` 扩展） | 方法体内 `arr[i]` 语法与 Java 完全 1:1 |
+
+> ⚠️ **当前状态**：Step 1–3 均未实现，生成代码中 `Rc<RefCell<Vec<T>>>` 和 `borrow()` 调用对读者可见，待修复。
 
 ---
 
