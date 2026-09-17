@@ -61,20 +61,23 @@ impl Object {
 
 impl std::fmt::Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // 通过 ObjectVTable::toString 动态派发到具体类型（Arch-4）
         write!(f, "{}", self.0.toString())
     }
 }
 
-// Java autoboxing: 基本类型自动装箱为 Object（直接存储，不经过 JvmRef）
-impl From<i32>  for Object { fn from(v: i32)  -> Self { Object(std::rc::Rc::new(v)) } }
-impl From<i64>  for Object { fn from(v: i64)  -> Self { Object(std::rc::Rc::new(v)) } }
-impl From<f32>  for Object { fn from(v: f32)  -> Self { Object(std::rc::Rc::new(v)) } }
-impl From<f64>  for Object { fn from(v: f64)  -> Self { Object(std::rc::Rc::new(v)) } }
-impl From<bool> for Object { fn from(v: bool) -> Self { Object(std::rc::Rc::new(v)) } }
-impl From<i8>   for Object { fn from(v: i8)   -> Self { Object(std::rc::Rc::new(v)) } }
-impl From<i16>  for Object { fn from(v: i16)  -> Self { Object(std::rc::Rc::new(v)) } }
-impl From<u16>  for Object { fn from(v: u16)  -> Self { Object(std::rc::Rc::new(v)) } }
+impl std::fmt::Debug for Object {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Object({})", self.0.toString())
+    }
+}
+
+// R-1: blanket impl — 所有 ObjectVTable 实现类型（含基本类型、生成类）均可转为 Object。
+// 替代原先为每个基本类型和每个生成类手写/宏生成的 Into<Object>。
+// Object = Rc<dyn ObjectVTable>；Rc<dyn ObjectVTable> 本身不实现 ObjectVTable，
+// 故与 std 的 From<T> for T 无冲突。
+impl<T: ObjectVTable + 'static> From<T> for Object {
+    fn from(val: T) -> Self { Object(std::rc::Rc::new(val)) }
+}
 
 // Java unboxing: Object 反向解包为基本类型
 impl From<Object> for i32   { fn from(o: Object) -> i32   { o.downcast::<i32>()   } }

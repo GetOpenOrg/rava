@@ -666,14 +666,14 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
     let inner_struct = quote! {
         #[doc(hidden)]
-        #[derive(Clone, Default, PartialEq)]
+        #[derive(Clone, Default, PartialEq, Debug)]
         pub struct #inner_ident #impl_g {
             #(#inner_field_tokens,)*
         }
     };
 
     let newtype = quote! {
-        #[derive(Clone, Default, PartialEq)]
+        #[derive(Clone, Default, PartialEq, Debug)]
         pub struct #struct_ident #impl_g (#inner_ident #ty_g);
     };
 
@@ -851,6 +851,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     };
 
     let obj = quote! { Object };
+    // R-1: binary_name 非空的类由 java_runtime 的 blanket `From<T: ObjectVTable> for Object` 覆盖，
+    // 不再为每类生成 Into<Object>。
+    // binary_name 为空的类没有 ObjectVTable impl，仍需 from_any 包装。
     let into_impl: TokenStream2 = if binary_name.is_empty() {
         quote! {
             impl #impl_g Into<#obj> for #struct_ident #ty_g #where_c {
@@ -858,24 +861,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             }
         }
     } else {
-        quote! {
-            impl #impl_g Into<#obj> for #struct_ident #ty_g #where_c {
-                fn into(self) -> #obj { #obj(::std::rc::Rc::new(self)) }
-            }
-        }
+        quote! {}
     };
 
     let from_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
             fn from(obj: #obj) -> Self { obj.downcast::<Self>() }
-        }
-    };
-
-    let debug_impl = quote! {
-        impl #impl_g ::std::fmt::Debug for #struct_ident #ty_g #where_c {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                write!(f, "{}", ::std::any::type_name::<Self>())
-            }
         }
     };
 
@@ -887,6 +878,5 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         #vtable_impl
         #into_impl
         #from_impl
-        #debug_impl
     }
 }
