@@ -3,6 +3,47 @@
 // For a full list of overridable settings, and general information on folder-specific settings,
 // see the documentation: https://zed.dev/docs/configuring-zed#settings-files
 {
+  "diff_view_style": "split",
+  "auto_update": false,
+  "enable_language_server": false,
+  "cli_default_open_behavior": "new_window",
+  "project_panel": {
+    "git_status": true,
+    "git_status_indicator": true,
+    "hide_gitignore": false,
+    "dock": "left",
+  },
+  "outline_panel": {
+    "git_status": true,
+    "dock": "left",
+  },
+  "collaboration_panel": {
+    "dock": "left",
+  },
+  "agent": {
+    "sidebar_side": "right",
+    "dock": "right",
+    "favorite_models": [],
+    "model_parameters": [],
+  },
+  "git_panel": {
+    "show_count_badge": false,
+    "diff_stats": true,
+    "folder_icons": true,
+    "file_icons": true,
+    "collapse_untracked_diff": false,
+    "sort_by_path": false,
+    "button": true,
+    "tree_view": true,
+    "dock": "left",
+  },
+  "ui_font_size": 14,
+  "buffer_font_size": 13,
+  "theme": {
+    "mode": "system",
+    "light": "One Light",
+    "dark": "One Dark",
+  },
   "file_scan_exclusions": [
     "**/.DS_Store",
     "**/Thumbs.db",
