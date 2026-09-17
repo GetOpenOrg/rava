@@ -153,6 +153,8 @@ java_class! {
 
 **目标**：codegen 生成的 `java_class!` 块内 `impl ArrayList<E>` 中不出现 Rust trait bounds，由宏在展开时自动注入。
 
+> **状态：✅ 已完成** — commit `94b9d39`（2026-09-17）
+
 #### 现状
 
 ```rust
@@ -213,6 +215,9 @@ python3 scripts/main.py HelloWorld.java
 ### T-2 接口泛型透明
 
 **目标**：`java_class!` 输入中的接口类型可以携带泛型参数（如 `List<E>`、`Iterator<E>`），宏在展开时将其擦除为 `Object`（Arch-1 语义），读代码的人看到的是 Java 风格的完整类型。
+
+> **状态：✅ 已完成** — commit `30f67b5`（2026-09-18）  
+> **实现说明**：接口擦除留在 codegen（宏无 registry 访问，§6 设计约束），改用 `_registry_iface_shorts` 动态检测，消除了 Principle 4 中的硬编码 JDK 名；`_iface_full_path()` 直接返回 `Object`。
 
 #### 现状
 
@@ -288,6 +293,13 @@ grep "Iterator<E>" build/*/java_runtime/src/java/util/array_list.rs
 ### T-3 String 走生成
 
 **目标**：`java.lang.String` 的 Rust 实现从 `java/lang/String.class` 字节码翻译，替换掉 `JVM_RUST` 中 `'Ljava/lang/String;' → 'String'` 的硬编码映射。生成 `String` 类型后，方法体里的 `String` 就是 `java::lang::String`，与 Java 语义一致。
+
+> **状态：✅ 已完成** — commits `891e92b`/`8ae93b6`（2026-09-18）  
+> - T-3a：BFS 已覆盖 String（168 个方法，含 1 native）  
+> - T-3b：`string_impl.rs` 实现 `intern()` native 方法  
+> - T-3c：删除 `JVM_RUST['Ljava/lang/String;']`，走 registry 短名路径  
+> - T-3d：`print_stream_impl.rs` 已用 `T: Display` 泛型方案，与 Java String 的 `Display` impl 对接  
+> - T-3e：HelloWorld e2e 通过，无回归
 
 #### 现状
 
@@ -366,6 +378,8 @@ grep "'String'" codegen/type_map.py  # 应无输出
 
 **目标**：`Integer`、`Long`、`Boolean` 等包装类从 `java/lang/Integer.class` 等字节码生成，移除 `JVM_RUST` 中的透明映射。
 
+> **状态：📋 延后** — 当前 `Integer → i32` 透明映射在 HelloWorld 路径无语义漏洞；autoboxing bytecode pattern 识别和包装类 native 实现工作量较大，待后续推进。
+
 #### 延后原因
 
 - 当前透明映射（`Integer → i32`）在 HelloWorld 路径上无语义漏洞
@@ -438,6 +452,8 @@ T-3 与 T-1/T-2 完全独立，可并行推进。
 
 **目标**：在 `java_runtime` 写一次 blanket impl，覆盖所有生成类的 `Into<Object>` 转换，宏内删除 per-class 生成代码。
 
+> **状态：✅ 已完成** — commit `770fec3`（2026-09-17）
+
 #### 现状
 
 宏为每个类展开约 8 行：
@@ -487,6 +503,9 @@ where
 ### R-2 `Deref<Target=Parent>` 替换 From 继承链
 
 **目标**：宏为每个有直接父类的生成类生成一个 `Deref` impl，通过 Rust deref coercion 自动处理多层继承链；删除 codegen 中 T55 `From<Child> for Parent` 生成循环。
+
+> **状态：✅ 已完成** — commit `b40b8c3`（2026-09-17）  
+> `Deref<Target=Parent>` 和 `DerefMut` 由宏生成；T55 codegen 循环删除；invoke.py/sim.py 中显式转型改用 `__into_super()` 链。
 
 #### 现状
 
@@ -538,6 +557,8 @@ codegen `class_writer.py` T55 循环（~40 行）整体删除。
 
 **目标**：生成的 struct 加 `#[derive(Debug)]`，`block.rs` 删除手工展开的 `fmt::Debug` 实现（约 12 行）。
 
+> **状态：✅ 已完成** — commit `770fec3`（2026-09-17）
+
 #### 实现
 
 codegen 在 `java_class!` struct 前加 `#[derive(Debug)]`（同时加 `#[derive(Clone)]` 对齐已有行为），宏不再显式生成 Debug。
@@ -560,6 +581,8 @@ codegen 在 `java_class!` struct 前加 `#[derive(Debug)]`（同时加 `#[derive
 
 **目标**：若不做 Deref 方案，退而求其次：宏从 `#[superclass = "..."]` 属性读取直接父类名，生成 `From<Self> for DirectParent` 一跳 impl，多级链不生成。
 
+> **状态：⏭️ 已跳过** — R-2 Deref 方案已成功落地，M-1 作为备选不再需要。
+
 - codegen 只写直接父类 `#[superclass = "AbstractList"]`，不再生成祖先 From 链
 - 宏生成一条 `impl From<ArrayList<E>> for AbstractList<E>`
 - 跨多级转型场景由调用方显式写（`let a: AbstractCollection = al.into(); let b: Object = a.into()`）
@@ -573,6 +596,8 @@ R-2（Deref）更优雅，且能支持方法调用的自动 deref；M-1 是保�
 ### M-3 方法签名类型决策进宏（长期）
 
 **目标**：宏从 `#[descriptor("(I)Ljava/lang/Object;")]` 和 `#[generic_signature("<T:...>(I)TT;")]` 属性中自行做 JVM→Rust 类型选择，Python 只传原始签名字符串，不做类型判断。
+
+> **状态：📋 长期** — 依赖 IR 结构化完成（Rust 宏需要结构化方法 AST，而非 RawExpr 字符串），当前前置条件未就绪，暂不推进。
 
 #### 现状
 
@@ -607,13 +632,18 @@ M-3（签名类型决策进宏）← 最后做，依赖 IR 结构化
 
 ---
 
-## 附：本 session 已完成的相关工作
+## 附：已完成变更记录
 
-| 变更 | commit | 说明 |
-|------|--------|------|
-| `trace_callchain.py` 补全字段类型 BFS 依赖 | `c529835` | 字段类型描述符现在被提取入分析集 |
-| 去掉 Python 生成器中 JDK 类名硬编码 | `c529835` | `invoke.py`、`method_gen.py` 改为动态接口集合 |
-| 接口类型改用全路径（`crate::java::util::Iterator`） | `e7f6a91` | 避免与 Rust prelude 冲突，`_iface_full_path()` |
-| 删除手写 function 存根（4 个） | `e7f6a91` | Principle 0 违规清理，待 codegen 生成替代 |
-| `_validate_field_type` 修复误判 | `e6e30d5` | 全路径类型通过字段类型校验 |
-| 文档 §5 接口全路径描述更新 | `e6e30d5` | `java-class-macro-unified.md` 同步 |
+| 变更 | commit | 日期 | 说明 |
+|------|--------|------|------|
+| `trace_callchain.py` 补全字段类型 BFS 依赖 | `c529835` | 2026-09-16 | 字段类型描述符现在被提取入分析集 |
+| 去掉 Python 生成器中 JDK 类名硬编码 | `c529835` | 2026-09-16 | `invoke.py`、`method_gen.py` 改为动态接口集合 |
+| 接口类型改用全路径 | `e7f6a91` | 2026-09-16 | 避免与 Rust prelude 冲突，`_iface_full_path()` |
+| `_validate_field_type` 修复误判 | `e6e30d5` | 2026-09-16 | 全路径类型通过字段类型校验 |
+| **T-1** bounds 进宏 | `94b9d39` | 2026-09-17 | struct/impl 声明无 bounds，宏展开时注入 |
+| docs: R/M 系列任务补充 | `f16be3d` | 2026-09-17 | `tasks.md` 和本文档新增 §7 |
+| **R-1+R-3**: blanket Into\<Object\> + derive Debug | `770fec3` | 2026-09-17 | per-class Into 删除，手工 Debug 删除 |
+| **R-2**: Deref\<Target=Parent\> 替换 T55 From 继承链 | `b40b8c3` | 2026-09-17 | T55 codegen 循环删除，invoke.py/sim.py 改 `__into_super_chain()` |
+| **T-2**: 接口类型擦除用 registry 动态检测 | `30f67b5` | 2026-09-18 | 消除 Principle 4 硬编码，`_iface_full_path()` → Object |
+| **T-3c**: 删除 JVM_RUST 中 String 硬编码 | `891e92b` | 2026-09-18 | 走 registry 短名路径，语义等价 |
+| **T-3b**: String.intern() native 实现 | `8ae93b6` | 2026-09-18 | `string_impl.rs` 添加 intern() |
