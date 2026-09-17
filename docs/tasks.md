@@ -50,6 +50,19 @@ TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c2
 | 异常处理 try/catch/finally | T45/T62 / cfg-ifelse #6 | codegen 零实现，异常表未解析 |
 | `Record` 属性解析 | checklist 唯一待办 | 直接关联 TestRecord E0615 |
 
+## P1 · 多态与类型封装（1:1 等价系列）
+
+> 目标：生成代码的可读层（`java_class!` 块内）不得出现 `borrow()`/`borrow_mut()`/`downcast`/`__into_super()`。  
+> 详细设计见 `docs/plans/2026-09-18-macro-family-design.md`。
+
+| 任务 | 优先级 | 依赖 | 预计修复 |
+|------|--------|------|---------|
+| **虚方法 vtable trait**：`java_class!` 生成 `ClassName__VTable: ObjectVTable`，类型包装为 `Rc<dyn ClassName__VTable>`，子类实现父类 vtable | P1 | 无 | TestInheritance、TestCasting 运行阶段失败 |
+| **`#[java_virtual]` + `#[java_override]`**：方法属性宏，与 vtable trait 配套；`#[java_virtual]` 注册到 vtable，`#[java_override]` 覆盖父类实现 | P1 | vtable trait | 同上 |
+| **`Array<T>` newtype**：`java_runtime/src/java/lang/array.rs` 定义封装 `Rc<RefCell<Vec<T>>>`，提供 `get(i32)`/`set(i32,T)`/`len()`，codegen 改 `newarray`/`anewarray` 指令 | P1 | 无 | 清除可读层 borrow 调用 |
+| **`impl From<Object> for T`**：`java_class!` 为每个类生成，隐藏 `downcast`；codegen 将 `checkcast T` 改写为 `obj.into()` | P1 | 无 | 清除可读层 downcast 调用 |
+| **`Object::from_any` → `.into()`**：codegen 将 `Object::from_any(v.clone())` 改写为 `v.into()`（依赖 R-1 blanket impl，已实现） | P2 | R-1 ✅ | 清除可读层 from_any 调用 |
+
 ## P2 · 翻译质量
 
 | 任务 | 来源 | 说明 |
@@ -61,6 +74,18 @@ TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c2
 | E-1 `_impl.rs` 方法级去重 | e2e E-1 | 生成前扫描手写 companion 跳过重名方法（架构防御） |
 | D-2 `areturn` Default 兜底 | e2e D-2 | 等 Arch-3 完成后删除 |
 | **T-3 String 走生成** | 2026-09-17 类型 1:1 方案 | `java/lang/String.class` 字节码生成替换 `JVM_RUST` 硬编码；最高语义价值；启动条件：BFS 完整收录 String 依赖后启动；详见 `2026-09-17-java-rust-type-1to1.md` |
+
+## P2 · 宏家族完善（`java-rust-translation-reference.md` §16 清零）
+
+> 目标：可读层零 Rust 专属调用。完整设计见 `docs/plans/2026-09-18-macro-family-design.md`。
+
+| 任务 | 依赖 | 说明 |
+|------|------|------|
+| **`java_interface!` 宏**：封装 Java `interface`，生成 `InterfaceName__Trait: ObjectVTable` trait，`default` 方法生成 trait 默认实现 | vtable trait | 替代当前手写 trait |
+| **`java_enum!` 宏**：封装带方法/字段的 Java `enum`，自动实现 `ObjectVTable`、`ordinal()`/`name()` | 无 | 解锁 enum 相关测试 |
+| **`java_try!` 宏**：封装 `try-catch-finally` 语义，异常路由 + finally 保证 | 异常表解析 | 解锁 TestExceptions、TestTryResources |
+| **`java_switch!` 宏**：封装 `tableswitch`/`lookupswitch`/String switch 语义 | 无 | 解锁 TestSwitchString、TestSwitchExpression |
+| **`#[java_synchronized]` 属性**：封装 `synchronized` 方法，自动 lock/unlock | 无 | 线程安全语义 |
 
 ## P3 · 长期重构（不阻塞主线）
 
