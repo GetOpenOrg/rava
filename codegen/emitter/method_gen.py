@@ -194,29 +194,23 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             return False
         return True
 
-    # registry 中所有接口类型在参数 / 返回位置强制降级为 Object
-    # （Arch-1 接口 = Object 类型别名，泛型形态 X<...> 不是合法 Rust 类型）
+    # T-2：接口类型在方法签名中擦除为 Object；用 registry 动态检测（无硬编码 JDK 名，Principle 4）。
     from ..instr.invoke import _registry_iface_shorts as _reg_iface_shorts_fn
     _iface_shorts = _reg_iface_shorts_fn(registry)
-    import re as _re2
-    def _is_perm_iface_param(sp: str) -> bool:
-        m = _re2.match(r'^(\w+)(?:<|$)', sp)
+    import re as _re_iface
+    def _is_iface_type(sp: str) -> bool:
+        m = _re_iface.match(r'^(\w+)(?:<|$)', sp)
         return bool(m and m.group(1) in _iface_shorts)
 
     def _param_rust_type(i: int, desc_p: str) -> str:
         if sig_param_types and i < len(sig_param_types):
             sp = sig_param_types[i]
-            if _sig_param_valid(sp) and not _is_perm_iface_param(sp):
+            if _sig_param_valid(sp) and not _is_iface_type(sp):
                 return sp
         return jvm_to_rust(desc_p, registry)
 
-    # 返回类型：generic_signature 提供更具体类型时优先（与 gen_method_body 对齐）。
-    # 调用点（invoke.py）按 generic_signature 记录返回类型，若存根声明仍用
-    # 擦除描述符类型（如 getInterfaces0 的 [Class; → Vec<Object> 而真实是
-    # Vec<Class<Object>>），调用结果与记录 E0308。
-    # 接口类型在返回位置与参数位置同规则降级——接口是 Object 别名
-    # （宏 is_interface → type X = Object，不带泛型参数，泛型形态不是合法 Rust 类型）
-    if sig_ret_type and _sig_param_valid(sig_ret_type) and not _is_perm_iface_param(sig_ret_type):
+    # 返回类型：generic_signature 提供更具体类型时优先；接口类型回退到描述符（Object）。
+    if sig_ret_type and _sig_param_valid(sig_ret_type) and not _is_iface_type(sig_ret_type):
         rust_ret = sig_ret_type
 
     # 构建参数列表（参数名需转义 $ 和 Rust 关键字）

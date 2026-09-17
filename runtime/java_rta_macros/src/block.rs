@@ -50,9 +50,10 @@
 //!    对读者而言字段仍是展平的（`self.modCount = x`），封装未泄漏。
 //!
 //! 3. **字段/方法类型解析（含接口擦除）留在 codegen**，宏只消费已解析好的裸 Rust 类型。
-//!    §5 的「接口泛型参数擦除」需要跨类 registry（判断某类型是不是接口），而 §6 明确
-//!    要求宏侧零 registry 依赖，二者不可兼得；registry 只存在于 codegen Python 侧，
-//!    因此类型解析统一在 codegen 完成，宏侧 `field_sig` / `generic_signature` 作为元数据保留。
+//!    接口类型擦除（任意接口 → `Object`）在 Python codegen 侧完成：
+//!    `method_gen.py` / `codegen.py` 用 `_registry_iface_shorts` 动态检测接口，
+//!    无任何硬编码 JDK 类名（Principle 4 合规）。`_iface_full_path()` 直接返回 `Object`。
+//!    宏侧不需要也不应该感知接口类型集合（零 registry 依赖，§6 设计约束）。
 
 use std::collections::HashSet;
 

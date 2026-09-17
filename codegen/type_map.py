@@ -117,15 +117,11 @@ def short_cls(cls: str) -> str:
     return name.replace('$', '_')
 
 
-def _iface_full_path(jvm_name: str) -> str:
-    """将 JVM 接口二进制名转为全限定 Rust 路径，避免与 Rust prelude 冲突。
-    例：java/util/Iterator → crate::java::util::Iterator
-        java/util/function/Supplier → crate::java::util::function::Supplier
+def _iface_full_path(jvm_name: str) -> str:  # noqa: ARG001
+    """接口类型 = Object（Arch-1：接口 = Object 类型别名，T-2 合规版本不含硬编码 JDK 名）。
+    方法签名中接口类型的擦除由 method_gen.py / codegen.py 用 _registry_iface_shorts 完成。
     """
-    parts = jvm_name.split('/')
-    *pkg, cls = parts
-    rust_cls = cls.replace('$', '_')
-    return 'crate::' + '::'.join(pkg + [rust_cls])
+    return 'Object'
 
 
 def parse_descriptor_params(desc: str) -> list[str]:

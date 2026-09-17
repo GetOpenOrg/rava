@@ -95,41 +95,32 @@ def gen_method_body(
             {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
             if registry else set()
         )
-        # PERMANENT 手写 stub 的短名（glob import 引入，不在 registry 中）
-        _permanent_shorts = frozenset({
-            'Iterator', 'BiConsumer', 'BinaryOperator', 'Supplier', 'Function',
-        })
         import re as _re
         for name in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', sp):
-            if name in _builtin or name in _class_tparams or name in _reg_shorts or name in _permanent_shorts:
+            if name in _builtin or name in _class_tparams or name in _reg_shorts:
                 continue
             return False
         return True
 
-    # PERMANENT functional interface / registry 接口类型在参数位置用擦除 Object
-    # （Java 类型擦除语义：接口 = Object 类型别名，泛型形态 X<...> 不是合法
-    # Rust 类型；与 invoke.py 的 _lookup_method_sig_params 降级规则保持一致）
-    _perm_iface_names = frozenset({
-        'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator',
-    })
+    # T-2：接口类型在方法签名中擦除为 Object；用 registry 动态检测（无硬编码 JDK 名，Principle 4）。
     from ..instr.invoke import _registry_iface_shorts as _reg_iface_shorts_fn
-    _perm_iface_names = _perm_iface_names | _reg_iface_shorts_fn(registry)
-    import re as _re2
-    def _is_perm_iface_param(sp: str) -> bool:
-        m = _re2.match(r'^(\w+)(?:<|$)', sp)
-        return bool(m and m.group(1) in _perm_iface_names)
+    _iface_shorts = _reg_iface_shorts_fn(registry)
+    import re as _re_iface
+    def _is_iface_type(sp: str) -> bool:
+        m = _re_iface.match(r'^(\w+)(?:<|$)', sp)
+        return bool(m and m.group(1) in _iface_shorts)
 
     if sig_param_types and len(sig_param_types) == len(param_types):
         jps = [jvm_to_rust(t, registry) for t in param_types]
         rust_param_types = [
-            sp if (_sig_param_valid(sp) and not _is_perm_iface_param(sp)) else jp
+            sp if (_sig_param_valid(sp) and not _is_iface_type(sp)) else jp
             for sp, jp in zip(sig_param_types, jps)
         ]
     else:
         rust_param_types = [jvm_to_rust(t, registry) for t in param_types]
 
-    # 返回类型：如果泛型签名返回值是有效类型（类型变量或更具体的参数化类型），优先使用
-    if sig_ret_type and _sig_param_valid(sig_ret_type):
+    # 返回类型：如果泛型签名返回值是有效类型且非接口，优先使用；接口类型回退到描述符（Object）。
+    if sig_ret_type and _sig_param_valid(sig_ret_type) and not _is_iface_type(sig_ret_type):
         rust_ret = sig_ret_type
     else:
         rust_ret = jvm_to_rust(method.return_type, registry)
