@@ -77,9 +77,9 @@ def jvm_to_rust(t: str, registry: dict | None = None) -> str:
             if not name:
                 return 'Object'
             ci = registry[inner]
-            # Arch-1：接口 = Object 类型别名，不生成 "Interface<Object>" 泛型形式
+            # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突
             if ci.is_interface:
-                return 'Object'
+                return _iface_full_path(inner)
             if ci.generic_signature:
                 tparams = parse_class_type_params(ci.generic_signature)
                 if tparams:
@@ -115,6 +115,17 @@ def is_jdk(cls: str) -> bool:
 def short_cls(cls: str) -> str:
     name = cls.split('/')[-1].split('.')[-1] if cls else ''
     return name.replace('$', '_')
+
+
+def _iface_full_path(jvm_name: str) -> str:
+    """将 JVM 接口二进制名转为全限定 Rust 路径，避免与 Rust prelude 冲突。
+    例：java/util/Iterator → crate::java::util::Iterator
+        java/util/function/Supplier → crate::java::util::function::Supplier
+    """
+    parts = jvm_name.split('/')
+    *pkg, cls = parts
+    rust_cls = cls.replace('$', '_')
+    return 'crate::' + '::'.join(pkg + [rust_cls])
 
 
 def parse_descriptor_params(desc: str) -> list[str]:
@@ -370,9 +381,9 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
             rust_type = mapped
         else:
             short = class_name.rsplit('/', 1)[-1].replace('$', '_')
-            # Arch-1：接口 = Object 类型别名，不生成 "Interface<args>" 形式
+            # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突
             if registry and class_name in registry and registry[class_name].is_interface:
-                rust_type = 'Object'
+                rust_type = _iface_full_path(class_name)
             elif has_type_args:
                 rust_type = f"{short}<{', '.join(type_args)}>"
             else:
