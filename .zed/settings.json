@@ -27,9 +27,9 @@
     "model_parameters": [],
   },
   "git_panel": {
+    "folder_indicator": "icon",
     "show_count_badge": false,
     "diff_stats": true,
-    "folder_icons": true,
     "file_icons": true,
     "collapse_untracked_diff": false,
     "sort_by_path": false,
