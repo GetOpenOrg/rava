@@ -254,7 +254,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         # 游离于 Java 命名空间之外的 trait 名（CLAUDE.md 命名原则，方案 §4）。
         # Default 是必须的：`_super: Default::default()` 与字段默认值都要求它。
         bounds_str = ', '.join(f"{p}: Clone + Default + 'static" for p in class_type_params)
-        struct_generic = f"<{bounds_str}>"
+        struct_generic = f"<{type_params_str}>"   # bounds 由 java_class! 宏展开时注入，不出现在生成代码
         ty_params_only = f"<{type_params_str}>"
         # impl 头只写裸参数：块级宏用 struct 上的 generics（含补齐的 bound 与 where 子句）
         # 重新生成 impl 头，这里的 impl generics 仅作读者提示。
