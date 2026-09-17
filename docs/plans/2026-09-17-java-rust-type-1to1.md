@@ -18,6 +18,12 @@
    - [T-4 包装类走生成（延后）](#t-4-包装类走生成延后)
 5. [任务依赖关系](#5-任务依赖关系)
 6. [不变项](#6-不变项)
+7. [生成器→Rust 原生机制迁移（R/M 系列）](#7-生成器rust-原生机制迁移rm-系列)
+   - [R-1 blanket Into&lt;Object&gt;](#r-1-blanket-intoobject)
+   - [R-2 Deref&lt;Target=Parent&gt; 替换 From 继承链](#r-2-dereftargetparent-替换-from-继承链)
+   - [R-3 derive(Debug)](#r-3-derivedebug-替换宏生成-debug)
+   - [M-1 From&lt;Child&gt; for Parent 进宏](#m-1-fromchild-for-parent-进宏r-2-备选方案)
+   - [M-3 方法签名类型决策进宏](#m-3-方法签名类型决策进宏长期)
 
 ---
 
@@ -409,6 +415,195 @@ T-3 与 T-1/T-2 完全独立，可并行推进。
 | `Object` | `Rc<dyn ObjectVTable>` | 动态派发机制，从 Object.class 字节码翻译得到 |
 
 多层嵌套（`Box<RefCell<T>>`、`Rc<RefCell<Vec<E>>>`）已通过 `java_class!` 宏的字段访问器模式屏蔽，是实现细节，不是 API 面。在 `java_class!` 块内的代码里，这些细节对读者不可见。
+
+---
+
+---
+
+## 7 生成器→Rust 原生机制迁移（R/M 系列）
+
+> 与 T 系列目标互补：T 系列减少 **可见类型标注** 的噪声，R/M 系列减少 **生成代码量** 本身，让 codegen 和宏只做 Java→Rust 信息传递，机械变换交给 Rust 类型系统自动完成。
+
+### 边界原则
+
+| 场景 | 应该怎么做 |
+|------|----------|
+| 信息已在 `java_class!` 块内可读、变换纯机械 | 进宏（M 系列） |
+| 对所有生成类通用、只需满足一个 trait bound | 写 `java_runtime` blanket impl（R 系列） |
+| 需要字节码解析、class 级上下文 | 留 codegen |
+
+---
+
+### R-1 blanket `Into<Object>`
+
+**目标**：在 `java_runtime` 写一次 blanket impl，覆盖所有生成类的 `Into<Object>` 转换，宏内删除 per-class 生成代码。
+
+#### 现状
+
+宏为每个类展开约 8 行：
+
+```rust
+impl<E: Clone + Default + 'static> Into<Object> for ArrayList<E> {
+    fn into(self) -> Object { Rc::new(self) }
+}
+```
+
+n 个类 = n × 8 行重复代码，全部内容相同。
+
+#### 目标
+
+`java_runtime/src/lib.rs`（永久基础设施）：
+
+```rust
+impl<T> From<T> for Object
+where
+    T: ObjectVTable + Clone + Default + 'static,
+{
+    fn from(val: T) -> Object {
+        Rc::new(val) as Rc<dyn ObjectVTable>
+    }
+}
+```
+
+宏内 `Into<Object>` 生成块全部删除。
+
+#### 冲突分析
+
+- `Object = Rc<dyn ObjectVTable>`，`Rc` 不实现 `ObjectVTable`（`ObjectVTable` 只由具体生成 struct 实现）
+- std 的 `From<T> for T` blanket 不产生冲突：`Object` 不实现 `ObjectVTable`
+- 结论：**无孤儿规则违反，无重叠 impl**
+
+#### 删除量
+
+宏中约 8 行/类 × 当前 ~100 类 = ~800 行展开代码消失；宏 `block.rs` 删除对应生成块。
+
+#### 启动条件
+
+- 无依赖，可立即启动
+- 需确认 `ObjectVTable` 的定义位置（`java/lang/object.rs`），blanket impl 与其在同一 crate
+
+---
+
+### R-2 `Deref<Target=Parent>` 替换 From 继承链
+
+**目标**：宏为每个有直接父类的生成类生成一个 `Deref` impl，通过 Rust deref coercion 自动处理多层继承链；删除 codegen 中 T55 `From<Child> for Parent` 生成循环。
+
+#### 现状
+
+codegen（`class_writer.py`）为每个类沿继承链生成一整条 `From` impl：
+
+```rust
+impl From<ArrayList<E>> for AbstractList<E> { ... }
+impl From<ArrayList<E>> for AbstractCollection<E> { ... }
+impl From<ArrayList<E>> for Iterable<E> { ... }
+impl From<ArrayList<E>> for Object { ... }  // R-1 完成后此条消失
+```
+
+层数深（ArrayList 继承链 5 层）× 类数多 = 数千行纯样板代码。
+
+#### 目标
+
+宏根据 `#[superclass = "AbstractList"]` 属性（T-1/T-2 阶段 codegen 已写入），只生成一个 `Deref`：
+
+```rust
+impl<E: Clone + Default + 'static> Deref for ArrayList<E> {
+    type Target = AbstractList<E>;
+    fn deref(&self) -> &AbstractList<E> {
+        // 访问 inner 中的 _super 字段
+        &*self.0.borrow()._super
+    }
+}
+```
+
+Rust deref coercion 自动处理：
+- `array_list.modCount()` → 找不到 → deref → `AbstractList.modCount()` → 找不到 → deref → ...
+- 跨层方法调用无需生成逐层 From
+
+codegen `class_writer.py` T55 循环（~40 行）整体删除。
+
+#### 注意事项
+
+- `Deref` 用于 immutable 路径；`DerefMut` 需要另外考虑（或走 `__set_xxx` 路径）
+- 父类本身也是 `java_class!` 生成的 struct，不是 `Rc<dyn Trait>`，Deref 可直接持有值
+- `_super` 字段已由 codegen 生成（继承展平方案中存在）
+
+#### 启动条件
+
+- **R-1 必须先完成**：`Into<Object>` 由 blanket impl 覆盖后，R-2 才能安全删掉 `From` 链中的 `→ Object` 那条
+- 宏已能读取 `#[superclass = "..."]` 属性
+
+---
+
+### R-3 `#[derive(Debug)]` 替换宏生成 Debug
+
+**目标**：生成的 struct 加 `#[derive(Debug)]`，`block.rs` 删除手工展开的 `fmt::Debug` 实现（约 12 行）。
+
+#### 实现
+
+codegen 在 `java_class!` struct 前加 `#[derive(Debug)]`（同时加 `#[derive(Clone)]` 对齐已有行为），宏不再显式生成 Debug。
+
+#### 前提
+
+所有 struct 字段的类型必须实现 `Debug`：
+- `RefCell<T>` 中 `T: Debug` ← `T` 是生成类型，也加 `#[derive(Debug)]`，满足
+- `Box<RefCell<T>>`、`Vec<T>` 均在 `T: Debug` 时满足
+- `Object = Rc<dyn ObjectVTable>` — `ObjectVTable` 需要 `fn fmt_debug(...)`，或者 `Object` 实现 `Debug`（当前已有）
+
+#### 启动条件
+
+- 无强依赖，可独立启动
+- 建议与 R-1 同批提交
+
+---
+
+### M-1 `From<Child> for Parent` 进宏（R-2 备选方案）
+
+**目标**：若不做 Deref 方案，退而求其次：宏从 `#[superclass = "..."]` 属性读取直接父类名，生成 `From<Self> for DirectParent` 一跳 impl，多级链不生成。
+
+- codegen 只写直接父类 `#[superclass = "AbstractList"]`，不再生成祖先 From 链
+- 宏生成一条 `impl From<ArrayList<E>> for AbstractList<E>`
+- 跨多级转型场景由调用方显式写（`let a: AbstractCollection = al.into(); let b: Object = a.into()`）
+
+#### 与 R-2 的关系
+
+R-2（Deref）更优雅，且能支持方法调用的自动 deref；M-1 是保守备选。优先做 R-2；若 R-2 遇到无法解决的所有权问题，回退到 M-1。
+
+---
+
+### M-3 方法签名类型决策进宏（长期）
+
+**目标**：宏从 `#[descriptor("(I)Ljava/lang/Object;")]` 和 `#[generic_signature("<T:...>(I)TT;")]` 属性中自行做 JVM→Rust 类型选择，Python 只传原始签名字符串，不做类型判断。
+
+#### 现状
+
+`method_gen.py` 中 `_sig_param_valid` / `_param_rust_type` / `_is_perm_iface_param` 共 ~60 行：Python 侧做 JVM 泛型签名解析、接口降级决策、registry 合法性校验。
+
+#### 目标
+
+宏侧实现 JVM 签名解析器（`syn` 做词法分析），Python 只传 descriptor 和 generic_signature 字符串，宏自行解析并生成 Rust 类型注解。
+
+#### 工作量评估
+
+- 需要在 `block.rs` 中实现 JVM 泛型签名语法解析（`(TT;I)Ljava/util/List<TE;>;` 格式）
+- 这是 M 系列中工作量最大的，但能彻底消除 Python 侧的类型系统知识
+- **依赖 IR 结构化完成**（Rust 宏需要结构化的方法 AST，而非 RawExpr 字符串）
+
+---
+
+### R/M 系列依赖图
+
+```
+R-1（blanket Into<Object>）← 独立，最高收益
+  │
+  └──→ R-2（Deref 继承链）← 工程量最大，删代码最多
+            │
+            └──→ [From 链 codegen 全删]
+
+R-3（derive Debug）← 独立，最低成本
+
+M-1（直接父类 From 进宏）← R-2 备选，R-2 若推进则跳过
+M-3（签名类型决策进宏）← 最后做，依赖 IR 结构化
+```
 
 ---
 

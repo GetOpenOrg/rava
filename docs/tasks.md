@@ -72,6 +72,20 @@ TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c2
 | **T-2 接口泛型透明** | T-1 完成后 | `java_class!` 输入中接口类型可携带泛型参数（`List<E>`、`Iterator<E>`），宏识别接口类型后在展开时擦除为 `Object`（Arch-1）；需宏新增 `#[interfaces(...)]` 属性支持 |
 | **T-4 包装类走生成** | T-3 完成后 | `Integer`/`Long`/`Boolean` 等从字节码生成，移除 `JVM_RUST` 透明映射；autoboxing 指令序列 codegen 特判 |
 
+### 生成器→Rust 原生机制迁移系列（详见 `2026-09-17-java-rust-type-1to1.md`）
+
+> 核心原则：**信息已在 `java_class!` 块内可读、变换纯机械** → 进宏；**对所有生成类通用、无需上下文** → 写 `java_runtime` blanket impl；两者都不是 → 留 codegen。
+
+| 任务 | 启动条件 | 删除的 codegen/宏代码 | 说明 |
+|------|---------|----------------------|------|
+| **R-1 blanket `Into<Object>`** | 无依赖，可立即启动 | 宏内 per-class `Into<Object>` 生成（约 8 行×类数） | 在 `java_runtime/src/` 写一次 `impl<T: ObjectVTable + Clone + Default + 'static> From<T> for Object`，覆盖所有生成类。`Object = Rc<dyn ObjectVTable>`，`Rc` 不实现 `ObjectVTable`，与 std `From<T> for T` 无冲突 |
+| **R-2 `Deref<Target=Parent>` 替换 From 继承链** | R-1 完成后 | `class_writer.py` T55 循环（`From<Child> for Parent` 链，40+行×类数） | 宏为有父类的类生成 `impl Deref for Child { type Target = Parent }` 一条；Rust deref coercion 自动处理多层向上引用，不再需要逐祖先生成 From。`Into<Object>` 由 R-1 的 blanket impl 兜底 |
+| **R-3 `#[derive(Debug)]` 替换宏生成 Debug** | 无依赖，可立即启动（可与 R-1 并行） | `block.rs` Debug impl 生成块（约 12 行） | 生成的 struct 声明加 `#[derive(Debug)]`，`block.rs` 删除手工 `fmt::Debug` 展开。前提：`RefCell<T>` 中 `T: Debug`，生成类的字段类型均满足 |
+| **M-1 `From<Child> for Parent` 进宏** | R-2 完成后删除，若 R-2 未启动可先做 | `class_writer.py` T55 全循环 | 如果不做 Deref 方案，退而求其次：宏从 `#[superclass(...)]` 属性读取直接父类，生成 `From<Self> for Parent`（仅一跳），跨多级 From 链 codegen 全删。依赖父类名出现在宏属性里 |
+| **M-3 方法签名类型决策进宏** | IR 结构化完成后（长期） | `method_gen.py` `_sig_param_valid` / `_param_rust_type` / `_is_perm_iface_param`（60+ 行） | 宏从方法的 `#[descriptor("...")]` 和 `#[generic_signature("...")]` 属性中自行做 JVM→Rust 类型选择，Python 只传原始签名字符串，不做类型判断 |
+
+**执行建议**：R-1 → R-3 可独立启动（不依赖 P0 修复），性价比高；R-2 删除代码量最大，但需 R-1 先落地；M-3 工程量最大、价值最高，放最后。
+
 ### 其他长期重构
 
 | 任务 | 来源 | 说明 |
