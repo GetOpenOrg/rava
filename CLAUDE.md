@@ -6,6 +6,17 @@ Java → Rust 转译器。将 Java `.class` 字节码翻译为等价的 Rust 源
 
 ---
 
+## 优先级原则
+
+> **架构问题优先于 Bug 修复。架构问题解决后，测试错误自然消解。**
+
+- 任务执行顺序：架构设计与实现 → 编译错误归零 → 测试修复
+- **禁止在架构改造完成之前运行测试**（运行结果无意义，且分散注意力）
+- Bug 修复不是最高优先级；深远的架构缺陷（如多态分派缺失）是最高优先级
+- 评估任务价值时，优先选择覆盖面最广、影响最深远的改造
+
+---
+
 ## 转译等价性原则
 
 > 详细的 Java → Rust 对照规则见 **[`docs/plans/java-rust-translation-reference.md`](docs/plans/java-rust-translation-reference.md)**。  
