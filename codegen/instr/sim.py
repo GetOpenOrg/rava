@@ -449,7 +449,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             elif (ftype not in _PRIMITIVE_RUST_TYPES and val_ty_name not in _PRIMITIVE_RUST_TYPES
                   and ftype not in ('Object', '()', val_ty_name)
                   and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
-                # R-2：子类型赋给祖先类型字段，用显式 __into_super() 链（替代已删除的 T55 From impl）
+                # vtable 架构：子类型赋给祖先类型字段，用 From trait（.into()）
                 chain = _into_super_chain(val_ty_name.split('<')[0], ftype.split('<')[0], registry)
                 val_str = f"{val_str_raw}{chain}"
             else:
@@ -569,7 +569,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
             if (elem_ty != val_ty_str
                     and _is_subtype(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)):
-                # R-2: 子类元素存入父类数组，用 __into_super() 链（替代已删除的 T55 From impl）
+                # vtable 架构：子类元素存入父类数组，用 From trait（.into()）
                 chain = _into_super_chain(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)
                 val_str = f"Clone::clone(&{val_str}){chain}"
             else:
@@ -679,7 +679,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty)
               and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
-            # R-2：返回值是子类型，用显式 __into_super() 链（替代已删除的 T55 From impl）
+            # vtable 架构：返回值是子类型，用 From trait（.into()）
             chain = _into_super_chain(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)
             expr_s = f"{expr_s}{chain}"
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES

@@ -279,6 +279,9 @@ def _java_method_attr(m: ParsedMethod) -> str:
         parts.append(f'generic_signature = "{sig}"')
     if m.is_deprecated:
         parts.append('is_deprecated = true')
+    if getattr(m, 'virtual_in', ''):
+        vin = m.virtual_in.replace('"', '\\"')
+        parts.append(f'virtual_in = "{vin}"')
     if m.method_parameters:
         mp_str = ';'.join(f'{n}:{a}' for n, a in m.method_parameters).replace('"', '\\"')
         parts.append(f'method_parameters = "{mp_str}"')

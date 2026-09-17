@@ -435,27 +435,10 @@ def _is_direct_subtype(child_rust: str, parent_rust: str, registry: dict | None)
 
 
 def _into_super_chain(actual_short: str, expected_short: str, registry: dict | None) -> str:
-    """构建从 actual_short 到 expected_short 的 __into_super() 调用链。
-    R-2：替代 T55 From<Child> for Parent——codegen 直接生成显式链而非依赖 From impl。
-    返回如 '.__into_super().__into_super()' 的字符串（不含前缀变量名）。
-    若找不到路径则 fallback 到单层 '.__into_super()'。"""
-    if not registry:
-        return '.__into_super()'
-    child_bin = _rust_type_to_binary(actual_short, registry)
-    if not child_bin:
-        return '.__into_super()'
-    chain: list[str] = []
-    current = child_bin
-    for _ in range(32):  # 防止环（理论上不会有）
-        ci = registry.get(current)
-        if not ci or not ci.super_class:
-            break
-        current = ci.super_class
-        chain.append('.__into_super()')
-        parent_short = current.rsplit('/', 1)[-1].replace('$', '_')
-        if parent_short == expected_short:
-            return ''.join(chain)
-    return '.__into_super()'  # fallback
+    """vtable 架构：子类型向父类型转换统一用 From trait（.into()），
+    宏生成 From<Child> for Parent 利用 vtable trait upcasting 保留运行时类型。
+    """
+    return '.into()'
 
 
 def _get_field_generic_signature(class_name: str, safe_fname: str, registry: dict | None) -> str:

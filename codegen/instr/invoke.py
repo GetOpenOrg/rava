@@ -432,18 +432,18 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             args.insert(0, e_str)
         obj_expr, _ = sim.pop()
         obj_e = render_expr(obj_expr)
-        # 找到 super 链：class_name（当前类 binary）→ cls_short（目标父类 Rust 短名）
-        # 前缀 `_super.` / `_super._super.` 统一翻译成 `__super()` 调用链（方案 §16）
-        super_pfx = _find_super_chain_to_class(class_name, cls_short or '', registry) if registry else '_super.'
-        recv_e = _super_prefix_to_expr(obj_e, super_pfx) if super_pfx else obj_e
+        # vtable 架构：invokespecial 非构造器 = super.method() 调用
+        # 宏为每个虚方法生成自由函数 ClassName__method_base(this, args)，绕过虚拟派发
         rust_mname = _safe_field(_mangle_if_overloaded(cls_short or '', mname, comment, registry))
-        arg_str = ', '.join(args)
+        base_fn = f"{cls_short}__{rust_mname}_base"
+        all_args = [obj_e] + args
+        arg_str = ', '.join(all_args)
         rust_ret = jvm_to_rust(ret, registry)
         if rust_ret == '()':
-            sim.emit(RawStmt(f"{recv_e}.{rust_mname}({arg_str})?;"))
+            sim.emit(RawStmt(f"{base_fn}({arg_str})?;"))
         else:
             v = sim.fresh()
-            sim.emit(RawStmt(f"let {v} = {recv_e}.{rust_mname}({arg_str})?;"))
+            sim.emit(RawStmt(f"let {v} = {base_fn}({arg_str})?;"))
             sim.push(Var(v), RsNamed(rust_ret))
         return
 

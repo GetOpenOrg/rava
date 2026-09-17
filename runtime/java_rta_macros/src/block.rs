@@ -1,61 +1,24 @@
-//! `java_class!` 块级宏实现（方案 Step 2–5）。
-//!
-//! 输入语法（见 docs/plans/2026-09-16-java-class-macro-unified.md §4）：
-//!
-//! ```ignore
-//! java_class! {
-//!     #[binary_name = "java/util/ArrayList"]
-//!     #[generic_signature = "<E:...>..."]
-//!     #[superclass = "AbstractList<E>"]
-//!     #[superclass_fields(modCount: i32)]
-//!
-//!     pub struct ArrayList<E> {
-//!         #[field_sig = "[TE;"]
-//!         elementData: Vec<E>,
-//!         #[field_sig = "I"]
-//!         size: i32,
-//!     }
-//!
-//!     impl<E> ArrayList<E> {
-//!         #[descriptor = "(Ljava/lang/Object;)Z"]
-//!         pub fn add(&self, e: E) -> Result<bool> { ... }
-//!
-//!         #[descriptor = "..."]
-//!         #[native]
-//!         pub fn sort(&self, c: Object) -> Result<()>;
-//!     }
-//! }
-//! ```
+//! `java_class!` 块级宏实现 — vtable 两指针架构。
 //!
 //! 展开产物：
-//!   - `<Name>__inner` 存储 struct（字段各自 Cell/RefCell 包裹，封装细节不出现在读者视野）
-//!   - `<Name>` newtype 包装
-//!   - 字段访问器：基本类型 `__get_/__set_`，引用类型 `__get_/__borrow_/__borrow_mut_/__set_`
-//!   - 继承字段（`superclass_fields`）的转发访问器，内部走 `_super`
-//!   - 方法体 token 重写：`self.field` / `self.field.m()` → 访问器调用
-//!   - `BINARY_NAME` / `ObjectVTable` / `Into<Object>` / `From<Object>` / `Debug`
+//!   - `ClassName__VTable` trait（虚方法分派接口，含 default impl）
+//!   - `ClassName__inner` 存储 struct（平铺字段，无 `_super` 嵌套）
+//!   - `impl AncestorVTable for ClassName__inner`（字段访问器 + 覆盖方法）
+//!   - `pub struct ClassName { vtable: Rc<dyn ClassName__VTable>, any: Rc<dyn Any> }`
+//!   - `impl ObjectVTable for ClassName`（委托到 vtable，R-1 blanket 需要）
+//!   - 字段访问器委托 + 虚方法委托 + 构造器（on wrapper）
+//!   - `ClassName__methodName_base` 自由函数（super() 调用路由）
+//!   - `From<ClassName> for DirectParent`（vtable trait upcasting）
+//!   - `From<Object> for ClassName`（downcast 路径）
 //!
-//! ## 与设计文档的三处偏离（均已记录原因）
+//! ## virtual_in 属性
 //!
-//! 1. **存储用「每字段独立 Cell/RefCell」，而非单一 `RefCell<Inner>`**。
-//!    单一 `RefCell<Inner>` 下，`self.elementData.push(self.size)` 这类同语句跨字段访问
-//!    会在参数求值时触发第二次 borrow，运行时 panic（§9 的 block-scoped 只能隔开语句，
-//!    隔不开同一语句内的参数求值）。按字段独立加锁后，跨字段访问互不冲突。
-//!
-//! 2. **`_super` 是真实字段（父类值），不是 PhantomData**。
-//!    方案 §6/§11 讨论过的 `unsafe { &*(self as *const _ as *const Parent) }` 前缀转换
-//!    在此不成立：`Parent` 是 `Parent(RefCell<Parent__inner>)` 风格的 newtype，首字段是
-//!    RefCell/父类值，而子类展平后首字段是 `modCount`，两者前缀类型不同，`repr(C)` 无法救。
-//!    保留嵌套父类值后，Upcast 就是 `&self._super`，无需 unsafe。
-//!    对读者而言字段仍是展平的（`self.modCount = x`），封装未泄漏。
-//!
-//! 3. **字段/方法类型解析（含接口擦除）留在 codegen**，宏只消费已解析好的裸 Rust 类型。
-//!    接口类型擦除（任意接口 → `Object`）在 Python codegen 侧完成：
-//!    `method_gen.py` / `codegen.py` 用 `_registry_iface_shorts` 动态检测接口，
-//!    无任何硬编码 JDK 类名（Principle 4 合规）。`_iface_full_path()` 直接返回 `Object`。
-//!    宏侧不需要也不应该感知接口类型集合（零 registry 依赖，§6 设计约束）。
+//! codegen 在 `#[java_method(virtual_in = "RustClassName")]` 中携带：
+//!   - 等于当前类名 → VirtualDefine（新虚方法，进 trait default impl）
+//!   - 不等于当前类名 → VirtualOverride（覆盖祖先，进 `impl AncestorVTable for __inner`）
+//!   - 缺失 → Constructor（`new`/`new_*` 前缀）或 NonVirtual
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -69,7 +32,6 @@ use syn::{
 // 输入解析
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// impl 块中的一个方法条目。`block == None` 表示 native 声明（以 `;` 结尾）。
 struct FnItem {
     attrs: Vec<Attribute>,
     vis: Visibility,
@@ -77,7 +39,6 @@ struct FnItem {
     block: Option<Block>,
 }
 
-/// 单个 Java 类的完整输入：类级属性 + struct 定义 + impl 块。
 struct ClassInput {
     attrs: Vec<Attribute>,
     struct_ident: Ident,
@@ -90,7 +51,6 @@ impl Parse for ClassInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = input.call(Attribute::parse_outer)?;
 
-        // ── struct 定义 ────────────────────────────────────────────────────
         let _struct_vis: Visibility = input.parse()?;
         let _: Token![struct] = input.parse()?;
         let struct_ident: Ident = input.parse()?;
@@ -100,7 +60,6 @@ impl Parse for ClassInput {
         }
 
         let mut fields: Vec<(Ident, Type)> = Vec::new();
-        // `pub struct Name;`（无字段）也是合法输入——接口走这条路（Arch-1：接口 = Object 别名）
         if input.peek(syn::token::Brace) {
             let content;
             syn::braced!(content in input);
@@ -116,11 +75,9 @@ impl Parse for ClassInput {
                 }
             }
         } else {
-            // `pub struct Name;` —— 无字段（无实例字段的类，以及接口）
             let _: Token![;] = input.parse()?;
         }
 
-        // ── impl 块 ────────────────────────────────────────────────────────
         let fns = if input.is_empty() {
             Vec::new()
         } else {
@@ -165,7 +122,6 @@ fn parse_impl_fns(input: ParseStream) -> syn::Result<Vec<FnItem>> {
 struct ClassMeta {
     binary_name: String,
     superclass: Option<Type>,
-    /// 展平后的祖先实例字段（父类在前），由 codegen Python 传入（方案 §6）
     superclass_fields: Vec<(Ident, Type)>,
     all_supertypes: Vec<String>,
     is_interface: bool,
@@ -201,7 +157,7 @@ impl ClassMeta {
                     let ident = meta
                         .path
                         .get_ident()
-                        .ok_or_else(|| meta.error("superclass_fields 的键必须是字段名"))?
+                        .ok_or_else(|| meta.error("superclass_fields 键必须是字段名"))?
                         .clone();
                     let _: Token![:] = meta.input.parse()?;
                     let ty: Type = meta.input.parse()?;
@@ -210,7 +166,6 @@ impl ClassMeta {
                 })?;
                 m.superclass_fields = items;
             }
-            // 其余已知键（descriptor / generic_signature / source 等）忽略
         }
         Ok(m)
     }
@@ -242,7 +197,6 @@ fn lit_bool(attr: &Attribute) -> syn::Result<bool> {
 // 类型分类与属性工具
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Java 基本类型对应的 Rust Copy 类型 → 用 `Cell` 承载，访问器只有 get/set 两态。
 const BASIC_TYPES: &[&str] = &[
     "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
     "f32", "f64", "bool", "char",
@@ -260,7 +214,6 @@ fn is_basic(ty: &Type) -> bool {
     false
 }
 
-/// 宏内部消费的元数据属性，展开时必须剔除（否则变成未知属性）。
 const META_ATTRS: &[&str] = &[
     "descriptor",
     "generic_signature",
@@ -282,11 +235,6 @@ fn strip_meta_attrs(attrs: &[Attribute]) -> Vec<&Attribute> {
         .collect()
 }
 
-/// 读取元数据值。两种来源：
-///   1. 直接形式 `#[descriptor = "..."]`
-///   2. 嵌套形式 `#[java_method(descriptor = "...", ...)]` 的键
-/// 之所以支持嵌套形式：codegen 用 `#[java_method(...)]` 携带完整字节码元数据
-/// （name/descriptor/access/modifiers/...），宏只需从中取 descriptor 生成存根消息。
 fn attr_str(attrs: &[Attribute], name: &str) -> Option<String> {
     for a in attrs {
         if a.path().is_ident(name) {
@@ -315,15 +263,45 @@ fn attr_str(attrs: &[Attribute], name: &str) -> Option<String> {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 方法体 token 重写（方案 §8 的 7 种模式）
+// 方法分类
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone)]
+enum MethodKind {
+    /// 新定义的虚方法：进 trait default impl + 生成 base 自由函数
+    VirtualDefine,
+    /// 覆盖祖先虚方法：进 `impl AncestorVTable for __inner` + 生成 base 自由函数
+    /// vtable_class = 祖先 Rust 类名（不带 __VTable 后缀）
+    VirtualOverride { vtable_class: String },
+    /// 构造器或静态方法：留在 wrapper impl block
+    Constructor,
+    /// 非虚实例方法：留在 wrapper impl block
+    NonVirtual,
+}
+
+fn classify_method(attrs: &[Attribute], sig: &Signature, self_name: &str) -> MethodKind {
+    let mname = sig.ident.to_string();
+    if let Some(virtual_in) = attr_str(attrs, "virtual_in") {
+        if virtual_in == self_name {
+            MethodKind::VirtualDefine
+        } else {
+            MethodKind::VirtualOverride { vtable_class: virtual_in }
+        }
+    } else if mname == "new" || mname.starts_with("new_") || mname == "main" {
+        // main 也在 wrapper impl block 中（静态入口）
+        MethodKind::Constructor
+    } else {
+        MethodKind::NonVirtual
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 方法体 token 重写（§8 的 7 种模式）
 // ══════════════════════════════════════════════════════════════════════════════
 
 struct Rewriter {
-    /// 基本类型字段名（Cell 承载）
     basic: HashSet<String>,
-    /// 引用类型字段名（RefCell 承载）
     reference: HashSet<String>,
-    /// 指向 self 的接收者别名：self / this / `let x = self;` 引入的 x
     aliases: HashSet<String>,
 }
 
@@ -336,7 +314,6 @@ impl Rewriter {
         }
     }
 
-    /// 判断 `base.member` 是否是「已知接收者别名 + 已知字段」，返回 `Some(is_basic)`。
     fn as_field(&self, base: &Expr, member: &Ident) -> Option<bool> {
         let Expr::Path(p) = base else { return None };
         if p.qself.is_some() {
@@ -356,8 +333,6 @@ impl Rewriter {
         }
     }
 
-    /// 重写「链式位置」（方法接收者 / 下标基址 / 字段基址）上的表达式：
-    /// 找到链上最内层的 `self.<field>` 并替换为访问器调用，其余部分保持结构不变。
     fn rewrite_chain(&mut self, e: &mut Expr) {
         match e {
             Expr::Paren(p) => self.rewrite_chain(&mut p.expr),
@@ -371,8 +346,6 @@ impl Rewriter {
                     if let Some(is_basic) = self.as_field(&fe.base, &id) {
                         let base = (*fe.base).clone();
                         let name = id.to_string();
-                        // §9：token 树阶段无法做类型推断，引用类型一律走 borrow_mut。
-                        // 单线程 RefCell 下只读方法取可变借用无副作用。
                         let call = if is_basic {
                             format_ident!("__get_{}", name)
                         } else {
@@ -403,7 +376,6 @@ impl Rewriter {
     }
 }
 
-/// 去掉透明包裹，取出 `base.member`（仅命名成员）。
 fn direct_field(e: &Expr) -> Option<(&Expr, &Ident)> {
     match e {
         Expr::Field(fe) => match &fe.member {
@@ -416,8 +388,6 @@ fn direct_field(e: &Expr) -> Option<(&Expr, &Ident)> {
     }
 }
 
-/// 复合赋值运算符 → 对应的算术运算符（`+=` → `+`）。非复合赋值返回 None。
-/// syn 2 把复合赋值并入了 `Expr::Binary`，需要用 BinOp 判别。
 fn assign_op_to_binop(op: &syn::BinOp) -> Option<TokenStream2> {
     use syn::BinOp::*;
     Some(match op {
@@ -437,7 +407,6 @@ fn assign_op_to_binop(op: &syn::BinOp) -> Option<TokenStream2> {
 
 impl VisitMut for Rewriter {
     fn visit_local_mut(&mut self, local: &mut syn::Local) {
-        // 收集 `let x = self;` / `let x = this;` 形式的接收者别名
         if let (syn::Pat::Ident(pi), Some(init)) = (&local.pat, &local.init) {
             if let Expr::Path(p) = &*init.expr {
                 if p.qself.is_none() {
@@ -454,7 +423,6 @@ impl VisitMut for Rewriter {
 
     fn visit_expr_mut(&mut self, e: &mut Expr) {
         match e {
-            // ── 模式 3 / 5：字段整体赋值（基本类型与引用类型同形）────────────
             Expr::Assign(a) => {
                 if let Some((base, member)) = direct_field(&a.left) {
                     if self.as_field(base, member).is_some() {
@@ -472,7 +440,6 @@ impl VisitMut for Rewriter {
                 self.visit_expr_mut(right);
             }
 
-            // ── 模式 4：基本类型复合赋值 ────────────────────────────────────
             Expr::Binary(b) => {
                 if let Some(binop) = assign_op_to_binop(&b.op) {
                     if let Some((base, member)) = direct_field(&b.left) {
@@ -495,12 +462,10 @@ impl VisitMut for Rewriter {
                 visit_mut::visit_expr_mut(self, e);
             }
 
-            // ── 模式 1 / 6 / 7：链式访问 ────────────────────────────────────
             Expr::MethodCall(_) | Expr::Index(_) => {
                 self.rewrite_chain(e);
             }
 
-            // ── 模式 2：基本类型读取 / 引用类型整体读取（clone 语义）────────
             Expr::Field(_) => {
                 if let Some((base, member)) = direct_field(e) {
                     if self.as_field(base, member).is_some() {
@@ -518,7 +483,6 @@ impl VisitMut for Rewriter {
     }
 }
 
-/// 对单个方法体做字段访问重写（两遍：先收集接收者别名，再重写）。
 fn rewrite_block(block: &mut Block, basic: &HashSet<String>, reference: &HashSet<String>) {
     let mut prober = Rewriter::new(basic, reference);
     prober.visit_block_mut(block);
@@ -530,7 +494,37 @@ fn rewrite_block(block: &mut Block, basic: &HashSet<String>, reference: &HashSet
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 展开
+// all_supertypes 工具
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// 将 JVM binary name（如 `TestInheritance$Animal` 或 `java/lang/Object`）
+/// 转为 Rust 短名（取最后一段，替换 `$` → `_`）。
+fn binary_to_rust_short(name: &str) -> String {
+    let last = name.rsplit('/').next().unwrap_or(name);
+    last.replace('$', "_")
+}
+
+/// 提取祖先列表（排除 Object 和自身），保持 all_supertypes 原始顺序。
+/// 返回 Rust 短名列表。
+fn ancestor_rust_names_ordered(all_supertypes: &[String], self_name: &str) -> Vec<String> {
+    all_supertypes
+        .iter()
+        .filter_map(|s| {
+            let short = binary_to_rust_short(s);
+            if short == "Object" || short == self_name {
+                return None;
+            }
+            // 跳过含 '/' 的 JDK 包路径（非用户类祖先）
+            if s.contains('/') {
+                return None;
+            }
+            Some(short)
+        })
+        .collect()
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 展开入口
 // ══════════════════════════════════════════════════════════════════════════════
 
 pub fn expand(input: TokenStream2) -> TokenStream2 {
@@ -548,14 +542,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         Err(e) => return e.to_compile_error(),
     };
 
-    // ── 接口：Arch-1 语义，接口 = Object 类型别名 ────────────────────────────
+    // ── 接口：Arch-1 语义 ────────────────────────────────────────────────────
     if meta.is_interface {
         return quote! { pub type #struct_ident = Object; };
     }
 
-    // ── 泛型参数补齐 Clone + Default + 'static ─────────────────────────────
-    // bound 组合是纯粹的 Rust 能力声明，故意不引入 `JavaType` 这类游离于
-    // Java 命名空间之外的 trait 名（CLAUDE.md 命名原则，方案 §4）。
+    // ── 泛型参数补齐 Clone + Default + 'static ──────────────────────────────
     let mut gen = generics.clone();
     for param in &mut gen.params {
         if let GenericParam::Type(tp) = param {
@@ -594,9 +586,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     }
     let (impl_g, ty_g, where_c) = gen.split_for_impl();
 
+    let self_name = struct_ident.to_string();
     let inner_ident = format_ident!("{}__inner", struct_ident);
+    let vtable_trait_ident = format_ident!("{}__VTable", struct_ident);
 
-    // ── 字段集合（自有 + 继承）────────────────────────────────────────────
+    // ── 字段集合 ─────────────────────────────────────────────────────────────
     let mut basic_names: HashSet<String> = HashSet::new();
     let mut ref_names: HashSet<String> = HashSet::new();
     for (name, ty) in fields.iter().chain(meta.superclass_fields.iter()) {
@@ -607,28 +601,25 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
 
-    // ── Inner struct + newtype ─────────────────────────────────────────────
-    let mut inner_field_tokens: Vec<TokenStream2> = Vec::new();
-    if let Some(sup_ty) = &meta.superclass {
-        inner_field_tokens.push(quote! { pub(crate) _super: #sup_ty });
-    }
-    for (name, ty) in &fields {
-        let cell_ty = if is_basic(ty) {
-            quote! { ::std::cell::Cell<#ty> }
-        } else {
-            // 引用类型字段用 `RefCell<Option<Box<T>>>`：
-            //   - Box   提供间接层，让自引用字段（Throwable.cause 等）有确定大小（E0072）
-            //   - Option 让 Default 实现返回 None，打破自引用类型的无限递归
-            //     （`Box<RefCell<T>>::default()` 会递归调用 T::default() 导致栈溢出）
-            //   - RefCell 提供内部可变性（__set_field 用 &self）
-            quote! { ::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>> }
-        };
-        inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
+    // ── 方法分类 ─────────────────────────────────────────────────────────────
+    // vtable_defines:  VirtualDefine 方法
+    // vtable_overrides: vtable_class → Vec<method>
+    // non_virtual:     Constructor / NonVirtual 方法
+    let mut vtable_defines: Vec<&FnItem> = Vec::new();
+    let mut vtable_overrides: HashMap<String, Vec<&FnItem>> = HashMap::new();
+    let mut non_virtual: Vec<&FnItem> = Vec::new();
+
+    for f in &fns {
+        match classify_method(&f.attrs, &f.sig, &self_name) {
+            MethodKind::VirtualDefine => vtable_defines.push(f),
+            MethodKind::VirtualOverride { vtable_class } => {
+                vtable_overrides.entry(vtable_class).or_default().push(f);
+            }
+            MethodKind::Constructor | MethodKind::NonVirtual => non_virtual.push(f),
+        }
     }
 
-    // 未被任何字段 / 父类类型引用的类型参数需要 PhantomData 兜底，否则报 E0392。
-    // 判定方式是「标识符精确匹配」：把字段与父类的类型文本切成词，
-    // 逐词比对参数名，`E` 不会被 `ElementData` 这样的词误命中。
+    // ── PhantomData 检测 ─────────────────────────────────────────────────────
     let mut used_words: HashSet<String> = HashSet::new();
     let mut type_texts: Vec<String> = Vec::new();
     for (_, ty) in fields.iter().chain(meta.superclass_fields.iter()) {
@@ -655,11 +646,103 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         if let GenericParam::Type(tp) = param {
             if !used_words.contains(&tp.ident.to_string()) {
                 let p = &tp.ident;
-                // `fn() -> T` 形式保持协变且不暗示所有权，避免 dropck 上的意外约束。
                 phantom_fields.push(quote! { #p });
             }
         }
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 1. VTable trait
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // supertrait：有父类 → 父类 __VTable；无父类 → ObjectVTable
+    let vtable_supertrait: TokenStream2 = if let Some(sup_ty) = &meta.superclass {
+        let sup_vtable = format_ident!("{}__VTable", quote!(#sup_ty).to_string().replace(' ', ""));
+        quote! { #sup_vtable }
+    } else {
+        quote! { ObjectVTable }
+    };
+
+    // 字段 accessor 抽象方法（只有 own fields，不含继承字段）
+    let mut vtable_abstract_methods: Vec<TokenStream2> = Vec::new();
+    for (name, ty) in &fields {
+        let get = format_ident!("__get_{}", name);
+        let set = format_ident!("__set_{}", name);
+        if is_basic(ty) {
+            vtable_abstract_methods.push(quote! {
+                fn #get(&self) -> #ty;
+                fn #set(&self, v: #ty);
+            });
+        } else {
+            let borm = format_ident!("__borrow_mut_{}", name);
+            vtable_abstract_methods.push(quote! {
+                fn #get(&self) -> #ty;
+                fn #set(&self, v: #ty);
+                fn #borm(&self) -> ::std::cell::RefMut<'_, #ty>;
+            });
+        }
+    }
+
+    // VirtualDefine 的 default impl（方法体经 Rewriter）
+    let mut vtable_default_methods: Vec<TokenStream2> = Vec::new();
+    for f in &vtable_defines {
+        let sig = &f.sig;
+        let keep_attrs = strip_meta_attrs(&f.attrs);
+        match &f.block {
+            Some(block) => {
+                let mut b = block.clone();
+                rewrite_block(&mut b, &basic_names, &ref_names);
+                vtable_default_methods.push(quote! {
+                    #(#keep_attrs)*
+                    #sig #b
+                });
+            }
+            None => {
+                let mname = sig.ident.to_string();
+                let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+                let binary = &meta.binary_name;
+                let msg = format!("stub: {}.{}:{}", binary, mname, desc);
+                vtable_default_methods.push(quote! {
+                    #sig { panic!(#msg) }
+                });
+            }
+        }
+    }
+
+    let vtable_trait = quote! {
+        #[allow(non_camel_case_types)]
+        pub trait #vtable_trait_ident #impl_g #where_c: #vtable_supertrait {
+            #(#vtable_abstract_methods)*
+            #(#vtable_default_methods)*
+        }
+    };
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 2. Inner struct（平铺字段：superclass_fields + own fields）
+    // ══════════════════════════════════════════════════════════════════════════
+
+    let mut inner_field_tokens: Vec<TokenStream2> = Vec::new();
+
+    // 继承字段（平铺，不再有 _super）
+    for (name, ty) in &meta.superclass_fields {
+        let cell_ty = if is_basic(ty) {
+            quote! { ::std::cell::Cell<#ty> }
+        } else {
+            quote! { ::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>> }
+        };
+        inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
+    }
+
+    // 自有字段
+    for (name, ty) in &fields {
+        let cell_ty = if is_basic(ty) {
+            quote! { ::std::cell::Cell<#ty> }
+        } else {
+            quote! { ::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>> }
+        };
+        inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
+    }
+
     if !phantom_fields.is_empty() {
         inner_field_tokens.push(quote! {
             pub(crate) __phantom: ( #( ::std::marker::PhantomData<fn() -> #phantom_fields>, )* )
@@ -669,177 +752,287 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let inner_struct = quote! {
         #[doc(hidden)]
         #[derive(Clone, Default, PartialEq, Debug)]
-        pub struct #inner_ident #impl_g {
+        pub(crate) struct #inner_ident #impl_g #where_c {
             #(#inner_field_tokens,)*
         }
     };
 
-    let newtype = quote! {
-        #[derive(Clone, Default, PartialEq, Debug)]
-        pub struct #struct_ident #impl_g (#inner_ident #ty_g);
-    };
+    // ══════════════════════════════════════════════════════════════════════════
+    // 3. impl ObjectVTable for __inner
+    // ══════════════════════════════════════════════════════════════════════════
 
-    // ── 字段访问器（方案 §7）──────────────────────────────────────────────
-    let mut accessors: Vec<TokenStream2> = Vec::new();
-
-    // 自有字段：直接落到 Cell / RefCell
-    for (name, ty) in &fields {
-        let get = format_ident!("__get_{}", name);
-        let set = format_ident!("__set_{}", name);
-        if is_basic(ty) {
-            accessors.push(quote! {
-                #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { self.0.#name.get() }
-                #[doc(hidden)] #[inline]
-                pub fn #set(&self, v: #ty) { self.0.#name.set(v); }
-            });
-        } else {
-            let bor = format_ident!("__borrow_{}", name);
-            let borm = format_ident!("__borrow_mut_{}", name);
-            accessors.push(quote! {
-                #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty {
-                    self.0.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
-                }
-                #[doc(hidden)] #[inline]
-                pub fn #bor(&self) -> ::std::cell::Ref<'_, #ty> {
-                    ::std::cell::Ref::map(self.0.#name.borrow(), |opt| {
-                        opt.as_deref().expect("field not initialized")
-                    })
-                }
-                #[doc(hidden)] #[inline]
-                pub fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> {
-                    ::std::cell::RefMut::map(self.0.#name.borrow_mut(), |opt| {
-                        opt.as_deref_mut().expect("field not initialized")
-                    })
-                }
-                #[doc(hidden)] #[inline]
-                pub fn #set(&self, v: #ty) {
-                    *self.0.#name.borrow_mut() = Some(::std::boxed::Box::new(v));
-                }
-            });
-        }
-    }
-
-    // 继承字段：转发到 _super（展平视图）。要求父类暴露同名访问器。
-    for (name, ty) in &meta.superclass_fields {
-        let get = format_ident!("__get_{}", name);
-        let set = format_ident!("__set_{}", name);
-        if is_basic(ty) {
-            accessors.push(quote! {
-                #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { self.0._super.#get() }
-                #[doc(hidden)] #[inline]
-                pub fn #set(&self, v: #ty) { self.0._super.#set(v); }
-            });
-        } else {
-            let bor = format_ident!("__borrow_{}", name);
-            let borm = format_ident!("__borrow_mut_{}", name);
-            accessors.push(quote! {
-                #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { self.0._super.#get() }
-                #[doc(hidden)] #[inline]
-                pub fn #bor(&self) -> ::std::cell::Ref<'_, #ty> { self.0._super.#bor() }
-                #[doc(hidden)] #[inline]
-                pub fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> { self.0._super.#borm() }
-                #[doc(hidden)] #[inline]
-                pub fn #set(&self, v: #ty) { self.0._super.#set(v); }
-            });
-        }
-    }
-
-    // ── 父类访问器（Upcast / 构造期用）────────────────────────────────────
-    let super_helpers: TokenStream2 = if let Some(sup_ty) = &meta.superclass {
-        quote! {
-            /// 父类状态的所有者（唯一）。**禁止**在宏外直接访问该字段。
-            /// 子类只通过访问器看到展平视图，超类方法派发走 `__super()`。
-            /// 构造期由 `Self::__new_with_super(...)` 整体写入，不提供单独的 setter。
-            #[doc(hidden)] #[inline]
-            pub fn __super(&self) -> &#sup_ty { &self.0._super }
-            #[doc(hidden)] #[inline]
-            pub fn __into_super(self) -> #sup_ty { self.0._super }
-            /// 构造期用：`super(...)` 字节码的落点。
-            /// 语义上等价于「以已构造好的父类值重建 this」——JVM 校验器保证
-            /// `invokespecial <init>` 只可能指向直接父类或同类，因此这里只需要一层。
-            #[doc(hidden)]
-            pub fn __new_with_super(__super: #sup_ty) -> Self {
-                Self(#inner_ident { _super: __super, ..Default::default() })
-            }
-        }
-    } else {
-        quote! {}
-    };
-
-    // ── 方法展开 ──────────────────────────────────────────────────────────
-    let mut method_tokens: Vec<TokenStream2> = Vec::new();
-    for f in &fns {
-        let keep_attrs = strip_meta_attrs(&f.attrs);
-        let vis = &f.vis;
-        let sig = &f.sig;
-
-        match &f.block {
-            Some(block) => {
-                let mut block = block.clone();
-                rewrite_block(&mut block, &basic_names, &ref_names);
-                method_tokens.push(quote! {
-                    #(#keep_attrs)*
-                    #vis #sig #block
-                });
-            }
-            None => {
-                // native / 声明式方法 → panic 存根，消息格式与现有 codegen 一致
-                // （CLAUDE.md 规则 2：命中存根时能精确定位类名+方法名+描述符）
-                let mname = sig.ident.to_string();
-                let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
-                let binary = &meta.binary_name;
-                let msg = if desc.is_empty() {
-                    format!("stub: {}.{}", binary, mname)
-                } else {
-                    format!("stub: {}.{}:{}", binary, mname, desc)
-                };
-                method_tokens.push(quote! {
-                    #(#keep_attrs)*
-                    #vis #sig { panic!(#msg) }
-                });
-            }
-        }
-    }
-
-    let impl_block = quote! {
-        impl #impl_g #struct_ident #ty_g #where_c {
-            #(#accessors)*
-            #super_helpers
-            #(#method_tokens)*
-        }
-    };
-
-    // ── BINARY_NAME / ObjectVTable / Into / From / Debug ──────────────────
     let binary_name = &meta.binary_name;
-    let binary_name_impl: TokenStream2 = if binary_name.is_empty() {
-        quote! {}
+    let check_types: Vec<String> = if meta.all_supertypes.is_empty() {
+        vec![binary_name.clone()]
     } else {
+        meta.all_supertypes.clone()
+    };
+    let patterns = check_types.iter().map(|s| quote! { #s });
+
+    let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
-            impl #impl_g #struct_ident #ty_g #where_c {
-                pub const BINARY_NAME: &'static str = #binary_name;
+            impl #impl_g ObjectVTable for #inner_ident #ty_g #where_c {
+                fn is_instance_of(&self, type_id: &str) -> bool {
+                    matches!(type_id, #(#patterns)|*)
+                }
+                fn as_any(&self) -> &dyn ::std::any::Any { self }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 4. impl vtable traits for __inner
+    // ══════════════════════════════════════════════════════════════════════════
+    //
+    // 策略：
+    // a) 无父类：impl Self__VTable for __inner（own field accessors）
+    // b) 有父类：
+    //    - 找出"顶层祖先" vtable（all_supertypes 中第一个非 Object 非 self 用户类）
+    //      → 放 superclass_fields 的所有 accessor + VirtualOverride 方法
+    //    - 其余祖先 vtable：空 impl（满足 trait 层次要求）
+    //    - Self__VTable：impl（own field accessors）
+    //
+    // 注意：对无父类类，own_fields accessor 放 Self__VTable impl；
+    //       对有父类类，顶层祖先的 vtable impl 接管 ALL 继承字段 accessor。
+
+    let mut vtable_impls: Vec<TokenStream2> = Vec::new();
+
+    if meta.superclass.is_none() {
+        // ── 无父类：impl Self__VTable for __inner ────────────────────────────
+        let mut own_accessor_impls: Vec<TokenStream2> = Vec::new();
+        for (name, ty) in &fields {
+            let get = format_ident!("__get_{}", name);
+            let set = format_ident!("__set_{}", name);
+            if is_basic(ty) {
+                own_accessor_impls.push(quote! {
+                    fn #get(&self) -> #ty { self.#name.get() }
+                    fn #set(&self, v: #ty) { self.#name.set(v); }
+                });
+            } else {
+                let borm = format_ident!("__borrow_mut_{}", name);
+                own_accessor_impls.push(quote! {
+                    fn #get(&self) -> #ty {
+                        self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
+                    }
+                    fn #set(&self, v: #ty) {
+                        *self.#name.borrow_mut() = Some(::std::boxed::Box::new(v));
+                    }
+                    fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> {
+                        ::std::cell::RefMut::map(self.#name.borrow_mut(), |opt| {
+                            opt.as_deref_mut().expect("field not initialized")
+                        })
+                    }
+                });
+            }
+        }
+        vtable_impls.push(quote! {
+            impl #impl_g #vtable_trait_ident #ty_g for #inner_ident #ty_g #where_c {
+                #(#own_accessor_impls)*
+            }
+        });
+    } else {
+        // ── 有父类：顶层祖先 vtable impl + 其余空 impl + Self__VTable impl ──
+
+        // 计算有序祖先列表（排除 Object 和 self，保持 all_supertypes 原始顺序）
+        let ancestors = ancestor_rust_names_ordered(&meta.all_supertypes, &self_name);
+
+        // 顶层祖先（第一个，如 "TestInheritance_Animal"）负责所有继承字段 + overrides
+        let _top_ancestor = ancestors.first().cloned();
+
+        for (idx, anc_name) in ancestors.iter().enumerate() {
+            let anc_vtable_ident = format_ident!("{}__VTable", anc_name);
+
+            let mut items: Vec<TokenStream2> = Vec::new();
+
+            if idx == 0 {
+                // 顶层：superclass_fields 的所有 accessor
+                for (name, ty) in &meta.superclass_fields {
+                    let get = format_ident!("__get_{}", name);
+                    let set = format_ident!("__set_{}", name);
+                    if is_basic(ty) {
+                        items.push(quote! {
+                            fn #get(&self) -> #ty { self.#name.get() }
+                            fn #set(&self, v: #ty) { self.#name.set(v); }
+                        });
+                    } else {
+                        let borm = format_ident!("__borrow_mut_{}", name);
+                        items.push(quote! {
+                            fn #get(&self) -> #ty {
+                                self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
+                            }
+                            fn #set(&self, v: #ty) {
+                                *self.#name.borrow_mut() = Some(::std::boxed::Box::new(v));
+                            }
+                            fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> {
+                                ::std::cell::RefMut::map(self.#name.borrow_mut(), |opt| {
+                                    opt.as_deref_mut().expect("field not initialized")
+                                })
+                            }
+                        });
+                    }
+                }
+            }
+
+            // VirtualOverride 方法：virtual_in == anc_name
+            if let Some(override_fns) = vtable_overrides.get(anc_name) {
+                for f in override_fns {
+                    let sig = &f.sig;
+                    let keep_attrs = strip_meta_attrs(&f.attrs);
+                    match &f.block {
+                        Some(block) => {
+                            let mut b = block.clone();
+                            rewrite_block(&mut b, &basic_names, &ref_names);
+                            items.push(quote! {
+                                #(#keep_attrs)*
+                                #sig #b
+                            });
+                        }
+                        None => {
+                            let mname = sig.ident.to_string();
+                            let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+                            let bin = &meta.binary_name;
+                            let msg = format!("stub: {}.{}:{}", bin, mname, desc);
+                            items.push(quote! {
+                                #sig { panic!(#msg) }
+                            });
+                        }
+                    }
+                }
+            }
+
+            vtable_impls.push(quote! {
+                impl #impl_g #anc_vtable_ident #ty_g for #inner_ident #ty_g #where_c {
+                    #(#items)*
+                }
+            });
+        }
+
+        // Self__VTable impl（own fields 的 accessor）
+        let mut own_accessor_impls: Vec<TokenStream2> = Vec::new();
+        for (name, ty) in &fields {
+            let get = format_ident!("__get_{}", name);
+            let set = format_ident!("__set_{}", name);
+            if is_basic(ty) {
+                own_accessor_impls.push(quote! {
+                    fn #get(&self) -> #ty { self.#name.get() }
+                    fn #set(&self, v: #ty) { self.#name.set(v); }
+                });
+            } else {
+                let borm = format_ident!("__borrow_mut_{}", name);
+                own_accessor_impls.push(quote! {
+                    fn #get(&self) -> #ty {
+                        self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
+                    }
+                    fn #set(&self, v: #ty) {
+                        *self.#name.borrow_mut() = Some(::std::boxed::Box::new(v));
+                    }
+                    fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> {
+                        ::std::cell::RefMut::map(self.#name.borrow_mut(), |opt| {
+                            opt.as_deref_mut().expect("field not initialized")
+                        })
+                    }
+                });
+            }
+        }
+        vtable_impls.push(quote! {
+            impl #impl_g #vtable_trait_ident #ty_g for #inner_ident #ty_g #where_c {
+                #(#own_accessor_impls)*
+            }
+        });
+
+        // 处理未被 ancestors 列表覆盖的 VirtualOverride（vtable_class 不在祖先中）
+        // 这种情况理论上不应出现，但做兜底生成
+        for (vtable_class, override_fns) in &vtable_overrides {
+            if !ancestors.contains(vtable_class) {
+                let anc_vtable_ident = format_ident!("{}__VTable", vtable_class);
+                let mut items: Vec<TokenStream2> = Vec::new();
+                for f in override_fns {
+                    let sig = &f.sig;
+                    let keep_attrs = strip_meta_attrs(&f.attrs);
+                    match &f.block {
+                        Some(block) => {
+                            let mut b = block.clone();
+                            rewrite_block(&mut b, &basic_names, &ref_names);
+                            items.push(quote! { #(#keep_attrs)* #sig #b });
+                        }
+                        None => {
+                            let mname = sig.ident.to_string();
+                            let msg = format!("stub: {}.{}", meta.binary_name, mname);
+                            items.push(quote! { #sig { panic!(#msg) } });
+                        }
+                    }
+                }
+                vtable_impls.push(quote! {
+                    impl #impl_g #anc_vtable_ident #ty_g for #inner_ident #ty_g #where_c {
+                        #(#items)*
+                    }
+                });
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 5. Wrapper struct + Default + Clone
+    // ══════════════════════════════════════════════════════════════════════════
+
+    let wrapper_struct = quote! {
+        #[allow(non_camel_case_types)]
+        pub struct #struct_ident #impl_g #where_c {
+            pub(crate) vtable: ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+            pub(crate) any: ::std::rc::Rc<dyn ::std::any::Any>,
+        }
+    };
+
+    let wrapper_default = quote! {
+        impl #impl_g ::std::default::Default for #struct_ident #ty_g #where_c {
+            fn default() -> Self {
+                let rc = ::std::rc::Rc::new(<#inner_ident #ty_g as ::std::default::Default>::default());
+                #struct_ident {
+                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                }
             }
         }
     };
 
-    let vtable_impl: TokenStream2 = if binary_name.is_empty() {
-        quote! {}
-    } else {
-        let check_types: Vec<String> = if meta.all_supertypes.is_empty() {
-            vec![binary_name.clone()]
-        } else {
-            meta.all_supertypes.clone()
-        };
-        let patterns = check_types.iter().map(|s| quote! { #s });
+    let wrapper_clone = quote! {
+        impl #impl_g ::std::clone::Clone for #struct_ident #ty_g #where_c {
+            fn clone(&self) -> Self {
+                #struct_ident {
+                    vtable: ::std::rc::Rc::clone(&self.vtable),
+                    any: ::std::rc::Rc::clone(&self.any),
+                }
+            }
+        }
+    };
+
+    let wrapper_partialeq = quote! {
+        impl #impl_g ::std::cmp::PartialEq for #struct_ident #ty_g #where_c {
+            fn eq(&self, other: &Self) -> bool {
+                ::std::rc::Rc::ptr_eq(&self.vtable, &other.vtable)
+            }
+        }
+    };
+
+    let wrapper_debug = quote! {
+        impl #impl_g ::std::fmt::Debug for #struct_ident #ty_g #where_c {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                write!(f, "{}({})", stringify!(#struct_ident), self.vtable.toString())
+            }
+        }
+    };
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 6. impl ObjectVTable for Wrapper（R-1 blanket From<T> 需要）
+    // ══════════════════════════════════════════════════════════════════════════
+
+    let obj_vtable_for_wrapper = if !binary_name.is_empty() {
         let to_string_fwd: TokenStream2 = if meta.has_to_string_method {
             quote! {
                 fn toString(&self) -> ::std::string::String {
-                    Self::toString(self)
-                        .map(|s| ::std::format!("{}", s))
-                        .unwrap_or_else(|_| ::std::any::type_name::<Self>().to_owned())
+                    self.vtable.toString()
                 }
             }
         } else {
@@ -847,7 +1040,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         };
         let hash_code_fwd: TokenStream2 = if meta.has_hash_code_method {
             quote! {
-                fn hashCode(&self) -> i32 { Self::hashCode(self).unwrap_or(0) }
+                fn hashCode(&self) -> i32 { self.vtable.hashCode() }
             }
         } else {
             quote! {}
@@ -855,20 +1048,232 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         quote! {
             impl #impl_g ObjectVTable for #struct_ident #ty_g #where_c {
                 fn is_instance_of(&self, type_id: &str) -> bool {
-                    matches!(type_id, #(#patterns)|*)
+                    self.vtable.is_instance_of(type_id)
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 #to_string_fwd
                 #hash_code_fwd
             }
         }
+    } else {
+        quote! {}
     };
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // 7. Impl block on wrapper（字段访问器委托 + 虚方法委托 + 构造器 + __new_with_super）
+    // ══════════════════════════════════════════════════════════════════════════
+
+    let mut wrapper_methods: Vec<TokenStream2> = Vec::new();
+
+    // 字段访问器委托（own fields）
+    for (name, ty) in &fields {
+        let get = format_ident!("__get_{}", name);
+        let set = format_ident!("__set_{}", name);
+        if is_basic(ty) {
+            wrapper_methods.push(quote! {
+                #[doc(hidden)] #[inline]
+                pub fn #get(&self) -> #ty { self.vtable.#get() }
+                #[doc(hidden)] #[inline]
+                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
+            });
+        } else {
+            let bor = format_ident!("__borrow_{}", name);
+            let borm = format_ident!("__borrow_mut_{}", name);
+            wrapper_methods.push(quote! {
+                #[doc(hidden)] #[inline]
+                pub fn #get(&self) -> #ty { self.vtable.#get() }
+                #[doc(hidden)] #[inline]
+                pub fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> { self.vtable.#borm() }
+                #[doc(hidden)] #[inline]
+                pub fn #bor(&self) -> ::std::cell::RefMut<'_, #ty> { self.vtable.#borm() }
+                #[doc(hidden)] #[inline]
+                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
+            });
+        }
+    }
+
+    // 字段访问器委托（superclass_fields，继承字段）
+    for (name, ty) in &meta.superclass_fields {
+        let get = format_ident!("__get_{}", name);
+        let set = format_ident!("__set_{}", name);
+        if is_basic(ty) {
+            wrapper_methods.push(quote! {
+                #[doc(hidden)] #[inline]
+                pub fn #get(&self) -> #ty { self.vtable.#get() }
+                #[doc(hidden)] #[inline]
+                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
+            });
+        } else {
+            let bor = format_ident!("__borrow_{}", name);
+            let borm = format_ident!("__borrow_mut_{}", name);
+            wrapper_methods.push(quote! {
+                #[doc(hidden)] #[inline]
+                pub fn #get(&self) -> #ty { self.vtable.#get() }
+                #[doc(hidden)] #[inline]
+                pub fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> { self.vtable.#borm() }
+                #[doc(hidden)] #[inline]
+                pub fn #bor(&self) -> ::std::cell::RefMut<'_, #ty> { self.vtable.#borm() }
+                #[doc(hidden)] #[inline]
+                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
+            });
+        }
+    }
+
+    // VirtualDefine 委托
+    for f in &vtable_defines {
+        let sig = &f.sig;
+        let mname = &sig.ident;
+        // 提取参数名用于转发
+        let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
+            if let syn::FnArg::Typed(pt) = arg {
+                if let syn::Pat::Ident(pi) = &*pt.pat {
+                    return Some(pi.ident.clone());
+                }
+            }
+            None
+        }).collect();
+        let keep_attrs = strip_meta_attrs(&f.attrs);
+        let vis = &f.vis;
+        wrapper_methods.push(quote! {
+            #(#keep_attrs)*
+            #[inline]
+            #vis #sig { self.vtable.#mname(#(#param_names),*) }
+        });
+    }
+
+    // VirtualOverride 委托（wrapper 也需要暴露同名方法，转发到 vtable）
+    let mut seen_delegators: HashSet<String> = vtable_defines
+        .iter()
+        .map(|f| f.sig.ident.to_string())
+        .collect();
+    for (_vtable_class, override_fns) in &vtable_overrides {
+        for f in override_fns {
+            let mname_str = f.sig.ident.to_string();
+            if seen_delegators.contains(&mname_str) {
+                continue;
+            }
+            seen_delegators.insert(mname_str);
+            let sig = &f.sig;
+            let mname = &sig.ident;
+            let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
+                if let syn::FnArg::Typed(pt) = arg {
+                    if let syn::Pat::Ident(pi) = &*pt.pat {
+                        return Some(pi.ident.clone());
+                    }
+                }
+                None
+            }).collect();
+            let keep_attrs = strip_meta_attrs(&f.attrs);
+            let vis = &f.vis;
+            wrapper_methods.push(quote! {
+                #(#keep_attrs)*
+                #[inline]
+                #vis #sig { self.vtable.#mname(#(#param_names),*) }
+            });
+        }
+    }
+
+    // Constructor / NonVirtual 方法（保持原 body，走 Rewriter）
+    for f in &non_virtual {
+        let keep_attrs = strip_meta_attrs(&f.attrs);
+        let vis = &f.vis;
+        let sig = &f.sig;
+        match &f.block {
+            Some(block) => {
+                let mut b = block.clone();
+                rewrite_block(&mut b, &basic_names, &ref_names);
+                wrapper_methods.push(quote! {
+                    #(#keep_attrs)*
+                    #vis #sig #b
+                });
+            }
+            None => {
+                let mname = sig.ident.to_string();
+                let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+                let bin = &meta.binary_name;
+                let msg = if desc.is_empty() {
+                    format!("stub: {}.{}", bin, mname)
+                } else {
+                    format!("stub: {}.{}:{}", bin, mname, desc)
+                };
+                wrapper_methods.push(quote! {
+                    #(#keep_attrs)*
+                    #vis #sig { panic!(#msg) }
+                });
+            }
+        }
+    }
+
+    // __new_with_super（有父类时生成）
+    let new_with_super: TokenStream2 = if let Some(sup_ty) = &meta.superclass {
+        // 从 parent 的字段访问器拉取 superclass_fields 的值，初始化 __inner
+        let mut field_inits: Vec<TokenStream2> = Vec::new();
+        for (name, ty) in &meta.superclass_fields {
+            let get = format_ident!("__get_{}", name);
+            if is_basic(ty) {
+                field_inits.push(quote! {
+                    #name: ::std::cell::Cell::new(parent.#get()),
+                });
+            } else {
+                field_inits.push(quote! {
+                    #name: ::std::cell::RefCell::new(
+                        ::std::option::Option::Some(::std::boxed::Box::new(parent.#get()))
+                    ),
+                });
+            }
+        }
+        quote! {
+            #[doc(hidden)]
+            pub fn __new_with_super(parent: #sup_ty) -> Self {
+                let inner = #inner_ident {
+                    #(#field_inits)*
+                    ..::std::default::Default::default()
+                };
+                let rc = ::std::rc::Rc::new(inner);
+                #struct_ident {
+                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let wrapper_impl = quote! {
+        impl #impl_g #struct_ident #ty_g #where_c {
+            #(#wrapper_methods)*
+            #new_with_super
+        }
+    };
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 8. BINARY_NAME 常量
+    // ══════════════════════════════════════════════════════════════════════════
+
+    let binary_name_impl: TokenStream2 = if !binary_name.is_empty() {
+        quote! {
+            impl #impl_g #struct_ident #ty_g #where_c {
+                pub const BINARY_NAME: &'static str = #binary_name;
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 9. From<Object> for ClassName
+    // ══════════════════════════════════════════════════════════════════════════
+
     let obj = quote! { Object };
-    // R-1: binary_name 非空的类由 java_runtime 的 blanket `From<T: ObjectVTable> for Object` 覆盖，
-    // 不再为每类生成 Into<Object>。
-    // binary_name 为空的类没有 ObjectVTable impl，仍需 from_any 包装。
-    let into_impl: TokenStream2 = if binary_name.is_empty() {
+    let from_object_impl = quote! {
+        impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
+            fn from(obj: #obj) -> Self { obj.downcast::<Self>() }
+        }
+    };
+
+    // R-1: binary_name 为空的类需要手动 Into<Object>
+    let into_object_impl: TokenStream2 = if binary_name.is_empty() {
         quote! {
             impl #impl_g Into<#obj> for #struct_ident #ty_g #where_c {
                 fn into(self) -> #obj { #obj::from_any(self) }
@@ -878,39 +1283,116 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         quote! {}
     };
 
-    let from_impl = quote! {
-        impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
-            fn from(obj: #obj) -> Self { obj.downcast::<Self>() }
-        }
-    };
+    // ══════════════════════════════════════════════════════════════════════════
+    // 10. From<ClassName> for each ancestor（vtable trait upcasting，含多级跳跃）
+    // ══════════════════════════════════════════════════════════════════════════
 
-    // R-2: Deref<Target=Parent> — 为有直接父类的类生成 Deref/DerefMut，
-    // 使 deref coercion 自动处理多层继承链上的方法调用与引用转换。
-    // 替代 codegen T55 For<Child> for Parent 链（class_writer.py 已删除该循环）。
-    let deref_impl: TokenStream2 = if let Some(sup_ty) = &meta.superclass {
-        quote! {
-            impl #impl_g ::std::ops::Deref for #struct_ident #ty_g #where_c {
-                type Target = #sup_ty;
-                #[inline]
-                fn deref(&self) -> &#sup_ty { &self.0._super }
+    let from_child_for_parent: TokenStream2 = if meta.superclass.is_some() {
+        // 为每个祖先（排除 Object 和自身）生成 From<Self> for Ancestor
+        // 使用 all_supertypes 列表：ancestor_rust_names_ordered 已排除 Object 和 self
+        let ancestors = ancestor_rust_names_ordered(&meta.all_supertypes, &self_name);
+        let impls: Vec<TokenStream2> = ancestors.iter().map(|anc_name| {
+            let anc_ident = format_ident!("{}", anc_name);
+            let anc_vtable = format_ident!("{}__VTable", anc_name);
+            quote! {
+                impl #impl_g From<#struct_ident #ty_g> for #anc_ident #ty_g #where_c {
+                    fn from(child: #struct_ident #ty_g) -> #anc_ident #ty_g {
+                        #anc_ident #ty_g {
+                            vtable: child.vtable as ::std::rc::Rc<dyn #anc_vtable #ty_g>,
+                            any: child.any,
+                        }
+                    }
+                }
             }
-            impl #impl_g ::std::ops::DerefMut for #struct_ident #ty_g #where_c {
-                #[inline]
-                fn deref_mut(&mut self) -> &mut #sup_ty { &mut self.0._super }
-            }
-        }
+        }).collect();
+        quote! { #(#impls)* }
     } else {
         quote! {}
     };
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // 11. 自由函数 ClassName__methodName_base（供 invokespecial super() 调用）
+    // ══════════════════════════════════════════════════════════════════════════
+
+    let mut base_fns: Vec<TokenStream2> = Vec::new();
+
+    // VirtualDefine 方法生成 base 函数（VTable 约束为 Self__VTable）
+    for f in &vtable_defines {
+        if let Some(block) = &f.block {
+            let sig = &f.sig;
+            let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
+            let mut base_sig = sig.clone();
+            // 替换 &self 接收者为 this: &T
+            base_sig.inputs = syn::punctuated::Punctuated::new();
+            base_sig.inputs.push(syn::parse_quote! { this: &impl #vtable_trait_ident #ty_g });
+            // 追加其余参数
+            for arg in sig.inputs.iter() {
+                if let syn::FnArg::Typed(_) = arg {
+                    base_sig.inputs.push(arg.clone());
+                }
+            }
+            let mut b = block.clone();
+            rewrite_block(&mut b, &basic_names, &ref_names);
+            base_fns.push(quote! {
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub fn #fn_name #impl_g #b
+            });
+            // 修正：不生成带签名的函数，改用简洁方式
+            // 实际上我们需要完整的函数签名，上面的写法有问题，重新写
+            base_fns.pop();
+
+            // 提取参数（不含 self）
+            let non_self_params: Vec<_> = sig.inputs.iter().filter(|a| matches!(a, syn::FnArg::Typed(_))).collect();
+            let ret = &sig.output;
+            base_fns.push(quote! {
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub fn #fn_name #impl_g (this: &impl #vtable_trait_ident #ty_g #(, #non_self_params)*) #ret #b
+            });
+        }
+    }
+
+    // VirtualOverride 方法生成 base 函数（VTable 约束为 virtual_in__VTable）
+    for (vtable_class, override_fns) in &vtable_overrides {
+        let vtable_class_ident = format_ident!("{}__VTable", vtable_class);
+        for f in override_fns {
+            if let Some(block) = &f.block {
+                let sig = &f.sig;
+                let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
+                let non_self_params: Vec<_> = sig.inputs.iter().filter(|a| matches!(a, syn::FnArg::Typed(_))).collect();
+                let ret = &sig.output;
+                let mut b = block.clone();
+                rewrite_block(&mut b, &basic_names, &ref_names);
+                base_fns.push(quote! {
+                    #[doc(hidden)]
+                    #[allow(non_snake_case)]
+                    pub fn #fn_name #impl_g (this: &impl #vtable_class_ident #ty_g #(, #non_self_params)*) #ret #b
+                });
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // 最终组合
+    // ══════════════════════════════════════════════════════════════════════════
+
     quote! {
+        #vtable_trait
         #inner_struct
-        #newtype
-        #impl_block
+        #obj_vtable_for_inner
+        #(#vtable_impls)*
+        #wrapper_struct
+        #wrapper_default
+        #wrapper_clone
+        #wrapper_partialeq
+        #wrapper_debug
+        #obj_vtable_for_wrapper
+        #wrapper_impl
         #binary_name_impl
-        #vtable_impl
-        #into_impl
-        #from_impl
-        #deref_impl
+        #from_object_impl
+        #into_object_impl
+        #from_child_for_parent
+        #(#base_fns)*
     }
 }

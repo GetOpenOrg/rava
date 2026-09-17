@@ -53,6 +53,8 @@ class ParsedMethod:
     generic_signature:  str  = ''
     is_deprecated:      bool = False
     method_parameters:  list = None   # list of (name: str, access_flags: int)
+    # vtable 归属：空串=非虚方法; 等于 class_rust_name=新虚方法定义; 其他=覆盖哪个祖先类的 vtable
+    virtual_in:         str  = ''
 
     def __post_init__(self):
         if self.local_names is None:

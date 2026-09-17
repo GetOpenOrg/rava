@@ -25,6 +25,44 @@ _CONST_PUSH_OPCODES: dict[str, object] = {
 }
 
 
+_ACC_PRIVATE = 0x0002
+_ACC_FINAL   = 0x0010
+_ACC_STATIC  = 0x0008
+
+
+def _bin_to_rust(binary_name: str) -> str:
+    """将 JVM binary 名（含 / 和 $）转为 Rust 类型名。"""
+    return binary_name.rsplit('/', 1)[-1].replace('$', '_')
+
+
+def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
+                     registry: 'dict | None') -> str:
+    """确定虚方法归属的 vtable 类 Rust 名。
+    返回空串表示非虚方法；返回当前类 Rust 名表示新定义；返回祖先类 Rust 名表示覆盖。"""
+    # 构造器、静态方法、私有方法、final 方法不参与 vtable
+    if (m.is_constructor or m.is_static or m.is_native
+            or (m.access_flags & _ACC_PRIVATE)
+            or (m.access_flags & _ACC_FINAL)):
+        return ''
+    # 接口 default 方法：视为新定义（放在接口自己的 vtable）
+    if ci.is_interface:
+        return _bin_to_rust(ci.name)
+
+    # 在祖先链上查找首个定义该 name+descriptor 的类
+    if registry:
+        cur = ci.super_class
+        while cur and cur in registry:
+            anc = registry[cur]
+            for am in anc.methods:
+                if am.name == m.name and am.descriptor == m.descriptor:
+                    if not (am.access_flags & _ACC_PRIVATE):
+                        return _bin_to_rust(cur)
+            cur = anc.super_class
+
+    # 未在祖先中找到 → 当前类新定义
+    return _bin_to_rust(ci.name)
+
+
 def _extract_clinit_consts(ci: ClassInfo) -> dict[str, str]:
     """扫描 <clinit> 中 const_push → putstatic 的简单模式，
     返回 {field_name: constant_value_str}（格式与 ConstantValue attribute 一致）。
@@ -670,6 +708,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         fn_name_check = safe_ident(rust_name or m.name)
         if fn_name_check in _nf_covered:
             continue
+
+        # 计算虚方法归属（vtable 架构）
+        m.virtual_in = _find_virtual_in(m, ci, registry)
 
         attr_line = _java_method_attr(m)
         # 判断该方法是否需要翻译字节码：
