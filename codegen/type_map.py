@@ -19,7 +19,10 @@ JVM_RUST: dict[str, str] = {
     'B': 'i8',  'S': 'i16', 'C': 'u16', 'V': '()',
     'Ljava/lang/String;':  'String',     # java.lang.String（不是 std::string::String）
     'Ljava/lang/Object;':  'Object',
-    'Ljava/lang/Class;':   'Object',     # Class<T> 反射对象映射为 Object（转译中不使用反射）
+    # 注：Ljava/lang/Class; 不做硬编码 —— 走 registry 泛型推导得到
+    # Class<Object>（jvm_to_rust 的 registry 分支），与 generic_signature
+    # 解析（_parse_one_type → Class<Object>）保持一致；registry 缺 Class
+    # 时 fallback 到 Object（与反射擦除语义等价）。
     'Ljava/lang/Integer;': 'i32',
     'Ljava/lang/Long;':    'i64',
     'Ljava/lang/Double;':  'f64',
@@ -230,6 +233,10 @@ _CLASSNAME_MAP: dict[str, str] = {
     'java/lang/String':        'String',
     'java/lang/Object':        'Object',
     'java/lang/CharSequence':  'Object',
+    # 特判：Class 非泛化（类型参数纯 phantom，类级签名已在 classfile.py
+    # 置空）。mapped 分支忽略 type_args，使 Ljava/lang/Class<*>; → Class，
+    # 与 jvm_to_rust 的 registry 分支（裸 Class）保持一致。
+    'java/lang/Class':         'Class',
     'java/lang/Integer':       'i32',
     'java/lang/Long':          'i64',
     'java/lang/Double':        'f64',

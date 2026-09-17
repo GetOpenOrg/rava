@@ -127,10 +127,11 @@ def _to_i32(expr_str: str, ty: 'RsType') -> str:
 def _coerce_to_object(val_str: str, ty: str) -> str:
     """将任意类型的值强制转换为 Object。
     基本类型用 .into()（有 From<T> for Object 实现）；
-    其他类型用 Object::from_any(.clone())（通用装箱）。"""
+    其他类型用 Object::from_any(Clone::clone(&..))（通用装箱）。
+    注意 Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）。"""
     if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
         return f"{val_str}.into()"
-    return f"Object::from_any({val_str}.clone())"
+    return f"Object::from_any(Clone::clone(&{val_str}))"
 
 
 _NULL_OBJECT_EXPRS = frozenset({'Object::default()', 'Object::default().clone()'})
@@ -459,6 +460,39 @@ def _find_method_super_prefix_for_type(recv_rust_type: str, mname: str, registry
     if binary:
         return _find_method_super_prefix(binary, mname, registry, descriptor=descriptor)
     return ''
+
+
+def _resolve_method_owner(class_binary: str, mname: str, registry: dict | None,
+                          descriptor: str = '') -> tuple[str, int]:
+    """沿继承链解析 mname 所在的声明类（描述符精确匹配，排除 synthetic/bridge）。
+
+    返回 (owner_binary, super_levels)：
+    - 在 class_binary 自身找到 → (class_binary, 0)
+    - 在第 N 层父类找到 → (父类 binary, N)
+    - 整条链都没有 → ('', -1)
+
+    用于：
+    1. 重载 mangle 必须按「声明类」查（子类继承的重载方法在子类上查不到）
+    2. 分派链分支的可编译性判断（方法不可解析时丢弃分支）
+    """
+    if not registry or not class_binary:
+        return ('', -1)
+    ci = registry.get(class_binary)
+    lvl = 0
+    while ci is not None:
+        real = [m for m in ci.methods if not m.is_synthetic]
+        if descriptor:
+            found = any(m.name == mname and m.descriptor == descriptor for m in real)
+        else:
+            found = any(m.name == mname for m in real)
+        if found:
+            return (ci.name, lvl)
+        sc = getattr(ci, 'super_class', None)
+        if not sc or sc == 'java/lang/Object':
+            break
+        ci = registry.get(sc)
+        lvl += 1
+    return ('', -1)
 
 
 def _parse_field_ref(comment: str) -> tuple[str, str, str]:

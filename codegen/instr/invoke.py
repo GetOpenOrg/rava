@@ -18,7 +18,7 @@ from .coerce import (
     parse_method_ref, _coerce_from_null, _coerce_to_object,
     _coerce_to_interface, _coerce_value, _find_super_chain_to_class,
     _find_method_super_prefix, _find_method_super_prefix_for_type,
-    _super_prefix_to_expr,
+    _super_prefix_to_expr, _resolve_method_owner,
     _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,
     _get_all_subtypes_ordered,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
@@ -68,19 +68,156 @@ def _lookup_method_sig_params(
                     resolved.append(None)   # 擦除，使用 jvm_to_rust(descriptor) 降级
                 else:
                     resolved.append(t)
-            # PERMANENT functional interface 参数（Supplier<A>、BinaryOperator<A> 等）
-            # 在生成的 stub 中统一用 Object，调用方也必须降级，否则类型不匹配
+            # PERMANENT functional interface / registry 接口参数（Supplier<A>、
+            # BiFunction<...>、Consumer<T> 等）在生成的代码中统一用 Object
+            # （Arch-1 接口 = Object 类型别名，泛型形态 X<...> 不是合法 Rust
+            # 类型），调用方也必须降级，否则类型不匹配
             import re as _re_iface
             _perm_iface_names = frozenset({'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator'})
+            _reg_iface_shorts = _perm_iface_names | _registry_iface_shorts(registry)
             final_resolved: list[str | None] = []
             for t in resolved:
                 if t is not None:
                     _m = _re_iface.match(r'^(\w+)(?:<|$)', t)
-                    if _m and _m.group(1) in _perm_iface_names:
+                    if _m and _m.group(1) in _reg_iface_shorts:
                         final_resolved.append(None)
                         continue
                 final_resolved.append(t)
             return final_resolved
+    return None
+
+
+_iface_shorts_cache: dict[int, frozenset[str]] = {}
+
+
+def _registry_iface_shorts(registry: dict | None) -> frozenset[str]:
+    """registry 中所有接口的 Rust 短名（含 $→_ 替换），按 id(registry) 缓存。"""
+    if not registry:
+        return frozenset()
+    _key = id(registry)
+    _cached = _iface_shorts_cache.get(_key)
+    if _cached is not None:
+        return _cached
+    _shorts = frozenset(
+        _bin.rsplit('/', 1)[-1].replace('$', '_')
+        for _bin, _ci in registry.items()
+        if getattr(_ci, 'is_interface', False)
+    )
+    _iface_shorts_cache[_key] = _shorts
+    return _shorts
+
+
+_concrete_shorts_cache: dict[int, frozenset[str]] = {}
+
+
+def _concrete_class_shorts(registry: dict | None) -> frozenset[str]:
+    """registry 中所有非接口类 + java_runtime 手写类的 Rust 短名，按 id(registry) 缓存。"""
+    if not registry:
+        return frozenset(_JAVA_RUNTIME_SHORT_NAMES)
+    _key = id(registry)
+    _cached = _concrete_shorts_cache.get(_key)
+    if _cached is not None:
+        return _cached
+    _shorts = frozenset(
+        _bin.rsplit('/', 1)[-1].replace('$', '_')
+        for _bin, _ci in registry.items()
+        if not getattr(_ci, 'is_interface', False)
+    ) | frozenset(_JAVA_RUNTIME_SHORT_NAMES)
+    _concrete_shorts_cache[_key] = _shorts
+    return _shorts
+
+
+def _downcast_target_valid(expected: str, sim: 'StackSim', registry: dict | None) -> bool:
+    """downcast 目标类型合法性：类型串中所有标识符须为具体类（非接口）、
+    类级类型参数或内建容器名。接口名（List/Consumer）的泛型形态与
+    方法级类型变量（caller 不可见的 T）不能作为 downcast::<T>() 目标。"""
+    import re as _re_t
+    _names = _re_t.findall(r'[A-Za-z_][A-Za-z0-9_]*', expected)
+    if not _names:
+        return False
+    _ok = set(sim.class_type_params or ()) | set(_concrete_class_shorts(registry))
+    _ok |= {'Object', 'String', 'Class', 'Rc', 'Vec', 'RefCell', 'Option'}
+    return all(_n in _ok for _n in _names)
+
+
+def _lookup_method_sig_ret(
+    cls: str | None,
+    mname: str,
+    descriptor_params: list[str],
+    descriptor_ret: str,
+    registry: dict | None,
+    caller_class: str | None = None,
+    caller_tparams=None,
+    receiver_type: str | None = None,
+) -> str | None:
+    """查找被调用方法 generic_signature 解析出的「真实」Rust 返回类型。
+
+    方法签名生成（gen_method_body）在返回类型上优先使用 generic_signature
+    （如 Class.elementType 的 ()Ljava/lang/Class<*>; → Class<Object>），
+    而调用点此前用 jvm_to_rust(descriptor)（Ljava/lang/Class; → Object），
+    两侧不一致导致 let 无标注时 Rust 推断出具体类型、sim 却记录 Object。
+
+    返回规则：
+    - sig_ret 无类型变量（如 Class<Object>、Vec<Class<Object>>）→ 直接返回
+      （任何接收者实例化下表达式类型一致）
+    - sig_ret 含 callee 类型变量（如 Class_ReflectionData<T>）：
+      - callee 类 == 调用方当前类且变量可见 → 返回（impl 内同名参数）
+      - 接收者是 callee 的参数化形态（SoftReference<X>.get() → T）→
+        按接收者实参替换类型变量（Rust 泛型单态化的静态镜像）
+    - 其余（跨类 + 含类型变量 + 接收者擦除）→ None，调用方降级到擦除类型
+    """
+    if not cls or not registry:
+        return None
+    cls_bin = cls if '/' in cls else (_rust_type_to_binary(cls, registry) or cls)
+    ci = registry.get(cls_bin)
+    if not ci:
+        return None
+    full_desc = '(' + ''.join(descriptor_params) + ')' + descriptor_ret
+    for m in ci.methods:
+        if m.name == mname and m.descriptor == full_desc:
+            if not m.generic_signature:
+                return None
+            callee_tparams = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+            if not callee_tparams:
+                return None
+            _, sig_ret = _parse_method_param_types(m.generic_signature, callee_tparams, registry)
+            if not sig_ret:
+                return None
+            # 有效性：所有标识符须为已知类型（与 gen_method_body 的 _sig_param_valid 同规则）
+            import re as _re_v
+            _builtin = frozenset({
+                'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
+                'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
+            })
+            _reg_shorts = {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
+            for name in _re_v.findall(r'[A-Za-z_][A-Za-z0-9_]*', sig_ret):
+                if name in _builtin or name in callee_tparams or name in _reg_shorts:
+                    continue
+                return None
+            # 类型变量可见性：sig_ret 引用了 callee 的类型参数时，
+            # 仅当 callee == 调用方当前类且变量名一致（同类泛型参数）才安全
+            _used_vars = set(_re_v.findall(r'[A-Za-z_][A-Za-z0-9_]*', sig_ret)) & set(callee_tparams)
+            if _used_vars:
+                if (caller_class and caller_tparams
+                        and cls_bin == caller_class
+                        and _used_vars <= set(caller_tparams)):
+                    return sig_ret
+                # 跨类：接收者是 callee 的参数化形态 → 按接收者实参替换
+                if receiver_type:
+                    _recv_base = receiver_type.split('<')[0].strip()
+                    _callee_short = short_cls(cls_bin)
+                    if (_recv_base == _callee_short and '<' in receiver_type
+                            and receiver_type.endswith('>')):
+                        _inner = receiver_type[len(_recv_base) + 1:receiver_type.rfind('>')]
+                        _rargs = _split_type_args(_inner)
+                        if len(_rargs) == len(callee_tparams):
+                            _sub = _substitute_tvars(sig_ret, callee_tparams, _rargs)
+                            _caller_set = set(caller_tparams) if caller_tparams else set()
+                            if all(_n in _builtin or _n in _reg_shorts or _n in _caller_set
+                                   for _n in _re_v.findall(r'[A-Za-z_][A-Za-z0-9_]*', _sub)):
+                                return _sub
+                return None
+            return sig_ret
     return None
 
 
@@ -108,11 +245,15 @@ def _coerce_arg(
     if _coerce_to_interface(actual, expected):
         return 'Default::default()'
     if expected == 'Object' and actual not in ('Object', '()'):
-        # 实际值是调用方的泛型参数（如 T/E/K/V）→ callee 签名中对应位置也是泛型参数，直接 clone
+        # 泛型参数值（如 K: Clone + Default + 'static）传给 Object 参数：
+        # Rust 无隐式子类型化，K 类型的值不能直接当 Object 用 → 装箱为
+        # Object(Rc<JvmRef<K>>)，callee 内 downcast::<K>() 可还原。
         if actual in sim.class_type_params:
-            return f"Clone::clone(&{e})"
+            return f"Object::from_any(Clone::clone(&{e}))"
         if e == 'this':
-            return f"Object::from_any(Clone::clone(self))"
+            # 构造器（fn new）里没有 self 关键字，统一用局部变量 this
+            # （实例方法里 let this = self;，两者均可见）
+            return f"Object::from_any(Clone::clone(this))"
         return _coerce_to_object(e, actual)
     if expected in ('bool', 'i8', 'i16', 'u16') and actual != expected:
         return _coerce_value(e, e_ty_node, expected)
@@ -123,6 +264,17 @@ def _coerce_arg(
             and _is_subtype(actual.split('<')[0], expected.split('<')[0], registry)):
         # T55：子类传给父类参数，通过 From impl 类型提升
         return f"Clone::clone(&{e}).into()"
+    # Fix 18：actual 是 Object（运行时多态值）而 expected 是具体引用类型 ——
+    # Java 调用点隐式 checkcast 语义 → downcast（运行时校验，不符则 panic）。
+    # 覆盖「callee 签名参数是精确泛型形态而调用方局部变量被擦除为 Object」
+    # 的场景（如 rotateLeft(root: TreeNode<K,V>) 传入 Object 局部变量）。
+    # 目标类型须为具体类（非接口别名）/ 类级类型参数 / 内建容器，接口名
+    # （List<..>、Consumer<T>）与方法级类型变量不是合法 downcast 目标。
+    if (expected not in _PRIMITIVE_RUST_TYPES and actual == 'Object'
+            and expected not in ('Object', '()')
+            and expected not in (sim.class_type_params or ())
+            and _downcast_target_valid(expected, sim, registry)):
+        return f"({e}).downcast::<{expected}>()"
     if actual not in _PRIMITIVE_RUST_TYPES:
         # `this` 在 Rust 中是 &Self 引用，Clone::clone(this) 得到 Self，无需多余 &
         if e == 'this':
@@ -182,6 +334,84 @@ def _gen_string_concat(sim: StackSim, comment: str):
         sim.push(Lit(f'String::from_owned(format!("{fmt}", {fmt_args}))'), RsNamed('String'))
 
 
+def _split_type_args(s: str) -> list[str]:
+    """按顶层逗号切分泛型实参串（处理嵌套尖括号）。
+    'K, HashMap_Node<K, V>' → ['K', 'HashMap_Node<K, V>']"""
+    parts, depth, cur = [], 0, ''
+    for ch in s:
+        if ch == '<':
+            depth += 1
+        elif ch == '>':
+            depth -= 1
+        if ch == ',' and depth == 0:
+            parts.append(cur.strip())
+            cur = ''
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur.strip())
+    return parts
+
+
+def _substitute_tvars(ty: str, tparams: list[str], targs: list[str]) -> str:
+    """把 ty 中的类型变量标识符替换为对应实参（逐词替换，不动类名）。"""
+    import re as _re_s
+    mapping = dict(zip(tparams, targs))
+    return _re_s.sub(
+        r'[A-Za-z_][A-Za-z0-9_]*',
+        lambda m: mapping.get(m.group(0), m.group(0)),
+        ty,
+    )
+
+
+def _resolve_ctor_turbofish_args(
+    full_cls: str,
+    ctor_params: list[str],
+    arg_tys: list[str],
+    caller_class: str | None,
+    sim: 'StackSim',
+    registry: dict | None,
+) -> list[str] | None:
+    """推导泛型类构造器的 turbofish 实参（见 _gen_invokespecial 调用处注释）。
+
+    返回实参列表（如 ['K', 'V'] / ['Class_ReflectionData<T>'] / ['Object']），
+    类非泛型返回 None。"""
+    if not registry:
+        return None
+    ci = registry.get(full_cls)
+    if not ci:
+        return None
+    cls_tparams = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+    if not cls_tparams:
+        return None
+    # 规则 1：构造器 generic_signature 的参数位置引用类型变量 → 用实参类型替换
+    full_desc = '(' + ''.join(ctor_params) + ')V'
+    ctor_sig_params = None
+    for m in ci.methods:
+        if m.name == '<init>' and m.descriptor == full_desc:
+            if m.generic_signature:
+                sp, _ = _parse_method_param_types(m.generic_signature, cls_tparams, registry)
+                if sp and len(sp) == len(ctor_params):
+                    ctor_sig_params = sp
+            break
+    if ctor_sig_params and arg_tys:
+        subst: dict[str, str] = {}
+        for si, sp_t in enumerate(ctor_sig_params):
+            if (sp_t in cls_tparams and si < len(arg_tys)
+                    and arg_tys[si] not in _PRIMITIVE_RUST_TYPES
+                    and arg_tys[si] not in ('Object', '()')):
+                subst[sp_t] = arg_tys[si]
+        if len(subst) == len(cls_tparams):
+            return [subst[t] for t in cls_tparams]
+    # 规则 2：构造类是当前类 / 当前类的内部类，且类型参数名一致
+    if caller_class and sim.class_type_params:
+        if (full_cls == caller_class or full_cls.startswith(caller_class + '$')) \
+                and set(cls_tparams) == set(sim.class_type_params):
+            return list(cls_tparams)
+    # 规则 3：兜底擦除
+    return ['Object'] * len(cls_tparams)
+
+
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     if '<init>' not in comment and '"<init>"' not in comment:
         # super.method() 调用（invokespecial 非构造器）：
@@ -224,6 +454,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         cls, '<init>', params, 'V', registry, sim.class_type_params
     )
     args = []
+    arg_tys = []
     for _idx_c, param_jvm in enumerate(reversed(params)):
         e_expr, e_ty_node = sim.pop()
         e = render_expr(e_expr)
@@ -233,6 +464,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         ty = render_type(e_ty_node)
         e = _coerce_arg(e, e_ty_node, expected, ty, sim, registry)
         args.insert(0, e)
+        arg_tys.insert(0, ty)
     obj_expr, obj_ty_node = sim.pop()
 
     if isinstance(obj_expr, NewPendingExpr):
@@ -250,7 +482,17 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 rust_ty = rust_ty_str
                 rust_ty_node = RsNamed(rust_ty_str)
             elif rust_ty_str != 'Object' and '<' in rust_ty_str:
-                type_params_str = rust_ty_str[len(raw_cls):]   # '<Object>' / '<Object, Object>'
+                # 泛型类构造：turbofish 实参的推导优先级
+                #   1. 构造器 generic_signature 参数引用类型变量（如
+                #      SoftReference(T)）→ 用对应实参的 sim 类型替换
+                #      （Java 钻石推断的静态近似）
+                #   2. 构造类是当前类/当前类的内部类，且类型参数名一致
+                #      （如 Class<T> 内构造 Class$ReflectionData<T>）→ 用当前
+                #      impl 的类型参数
+                #   3. 兜底：Object（擦除）
+                _ctor_tparams = _resolve_ctor_turbofish_args(
+                    full_cls, params, arg_tys, class_name, sim, registry)
+                type_params_str = ('<' + ', '.join(_ctor_tparams) + '>') if _ctor_tparams else ''
                 rust_ty = raw_cls + type_params_str
                 rust_ty_node = RsNamed(rust_ty)
                 # 重载构造器：用 '<init>' 查重载再替换为 'new'，以匹配 method.py 生成的定义
@@ -372,7 +614,15 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
                 if _cls_ci and _cls_ci.generic_signature:
                     _tparams = _parse_class_type_params(_cls_ci.generic_signature)
                     if _tparams:
-                        turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
+                        if _cls_bin == class_name and sim.class_type_params:
+                            # 同类静态调用（如 impl<K,V> TreeNode 内调用
+                            # TreeNode::checkInvariants）：实参是精确泛型形态
+                            # （HashMap_TreeNode<K,V>），turbofish 用当前 impl 的
+                            # 类型参数；填 Object 会 E0308（expected X<K,V>,
+                            # found X<Object,Object>）。
+                            turbofish = '::<' + ', '.join(_tparams) + '>'
+                        else:
+                            turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
         call = f"{cls}{turbofish}::{rust_mname}({', '.join(args)})"
         needs_q = True
 
@@ -382,8 +632,29 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         sim.emit(RawStmt(f"{call}{q};"))
     else:
         v = sim.fresh()
-        sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
-        sim.push(Var(v), RsNamed(rust_ret))
+        # 签名真实返回（generic_signature）与擦除映射不一致时的对齐：
+        # - 擦除映射是 Object（Class→Object 等）：包 from_any 保持 Object 记录
+        #   （局部 hint/downcast 负责恢复具体类型）
+        # - 擦除映射是擦除实例化（X<Object,Object>）：被调方法声明按
+        #   generic_signature 生成（X<K,V> / X<Class<Object>>），调用点记录
+        #   必须一致，否则局部标注擦除形态而表达式是精确形态，E0308
+        _sig_ret_s = _lookup_method_sig_ret(
+            cls, mname, params, ret, registry,
+            caller_class=class_name, caller_tparams=sim.class_type_params,
+        )
+        if rust_ret == 'Object':
+            if _sig_ret_s is not None and _sig_ret_s != 'Object':
+                sim.emit(RawStmt(f"let {v} = Object::from_any({call}{q});"))
+            else:
+                sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
+            sim.push(Var(v), RsNamed(rust_ret))
+        elif (_sig_ret_s is not None and _sig_ret_s != rust_ret
+                and rust_ret not in _PRIMITIVE_RUST_TYPES):
+            sim.emit(RawStmt(f"let {v} = {call}{q};"))
+            sim.push(Var(v), RsNamed(_sig_ret_s))
+        else:
+            sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
+            sim.push(Var(v), RsNamed(rust_ret))
 
 
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
@@ -405,7 +676,25 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     obj_e = render_expr(obj_expr)
     obj_ty = render_type(obj_ty_node)
 
-    # 拆箱：若接收者已是目标基本类型（autoboxing 被跳过），恒等；否则生成实际方法调用
+    # Fix 16：泛型参数接收者（如 k.equals(pk) 中 k: K）——inherent 方法不在
+    # 类型参数上可见（E0599）。装箱为 Object 后：Object 自身的方法
+    # （equals/hashCode/toString）直接调用 java_runtime 手写实现，避免
+    # dispatch 链枚举 Object 的全部子类；其余方法走 obj_is_bare 的多态
+    # dispatch。参数已在上方 pop 循环中完成 Object::from_any 装箱。
+    if obj_ty in (sim.class_type_params or ()):
+        obj_e = f"Object::from_any(Clone::clone(&{obj_e}))"
+        obj_ty_node = RsNamed('Object')
+        obj_ty = 'Object'
+        if mname in ('equals', 'hashCode', 'toString'):
+            _rust_ret_eq = jvm_to_rust(ret, registry)
+            _arg_str_eq = ', '.join(args)
+            if _rust_ret_eq == '()':
+                sim.emit(RawStmt(f"{obj_e}.{mname}({_arg_str_eq})?;"))
+            else:
+                _v_eq = sim.fresh()
+                sim.emit(RawStmt(f"let {_v_eq}: {_rust_ret_eq} = {obj_e}.{mname}({_arg_str_eq})?;"))
+                sim.push(Var(_v_eq), RsNamed(_rust_ret_eq))
+            return
     if mname in UNBOX_VIRTUAL:
         _UNBOX_TARGET = {
             'intValue': 'i32', 'longValue': 'i64', 'doubleValue': 'f64',
@@ -508,12 +797,80 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             branches = []
             for sub_bin in all_types:
                 sub_rust = jvm_to_rust(f'L{sub_bin};', registry)
-                sub_mname_r = _mangle_if_overloaded(sub_rust, mname, comment, registry)
+                if sub_rust == 'Object':
+                    # 目标类是接口（jvm_to_rust 对接口返回 Object）：
+                    # downcast_ref::<Object>() 恒为 Some，会遮蔽闭包回退分支，
+                    # 且 Object 上没有业务方法（E0599），直接丢弃该分支
+                    continue
+                # Fix 12a：包装类在 JVM_RUST 中映射为基本类型（Boolean→bool、
+                # Double→f64 等），downcast_ref::<bool>() 不满足 Any 约束是硬
+                # 错误，该分支不可编译 → 丢弃
+                if sub_rust in _PRIMITIVE_RUST_TYPES:
+                    continue
+                # Fix 12b：重载 mangle 按声明类（owner）查 —— 子类继承的重载
+                # 方法在子类方法表中查不到同名重载，按子类表 mangle 会得到
+                # 错误的方法名（如 collect 声明处 mangle 为 collect_collec，
+                # 子类分支按子类表查成 collect）。owner 沿父类链解析不到时
+                # （接口 default 方法由 class_writer 注入实现类 impl 块，
+                # 父类链上查不到）保留子类名。
+                _owner_bin, _ = _resolve_method_owner(
+                    sub_bin, mname, registry, descriptor=jvm_desc)
+                _mangle_cls = _owner_bin or sub_rust
+                sub_mname_r = _mangle_if_overloaded(_mangle_cls, mname, comment, registry)
                 sub_mname_r = _safe_field(sub_mname_r)
+                # Fix 17：bridge 分派的参数 downcast —— dispatch 的共享 args 按
+                # 擦除描述符 coercion（如 Comparable.compareTo(Object) 的参数为
+                # Object），但子类分支的真实方法（bridge 的目标，如
+                # Byte.compareTo(Byte)）参数是具体类型 → per-branch 包装
+                # .downcast::<T>()（等价 bridge 方法内的 checkcast）。
+                _barg_str = arg_str
+                if registry:
+                    _own_ci17 = registry.get(_owner_bin or sub_bin)
+                    if _own_ci17 is not None:
+                        _bm17 = None
+                        for _m in _own_ci17.methods:
+                            if (_m.name == mname and not _m.is_synthetic
+                                    and _m.descriptor == jvm_desc):
+                                _bm17 = _m
+                                break
+                        if _bm17 is None:
+                            # 精确 descriptor 失败（bridge 擦除场景）：
+                            # 按名字 + 参数个数唯一匹配真实方法
+                            _cands17 = [
+                                _m for _m in _own_ci17.methods
+                                if _m.name == mname and not _m.is_synthetic
+                                and len(parse_descriptor_params(_m.descriptor)) == len(params)
+                            ]
+                            if len(_cands17) == 1:
+                                _bm17 = _cands17[0]
+                        if _bm17 is not None:
+                            _bp17 = parse_descriptor_params(_bm17.descriptor)
+                            if len(_bp17) == len(args) and _bp17 != list(params):
+                                _bparts17 = []
+                                for _i17, _bd17 in enumerate(_bp17):
+                                    _bt17 = jvm_to_rust(_bd17, registry)
+                                    _shared17 = jvm_to_rust(params[_i17], registry)
+                                    if (_bt17 not in ('Object', '()')
+                                            and _shared17 == 'Object'):
+                                        _bparts17.append(
+                                            f"({args[_i17]}).downcast::<{_bt17}>()")
+                                    else:
+                                        _bparts17.append(args[_i17])
+                                _barg_str = ', '.join(_bparts17)
+                # T76：方法定义在父类（如 getKey 定义在 HashMap_Node，TreeNode
+                # 经继承获得）时，dispatch 分支同样需要 _super 链路由，
+                # 否则 _d.getKey() E0599（no method in &HashMap_TreeNode）
+                _d_recv = '_d'
+                _sub_pfx = _find_method_super_prefix_for_type(
+                    sub_rust.split('<')[0], mname, registry,
+                    descriptor=f"({''.join(params)}){ret}",
+                )
+                if _sub_pfx:
+                    _d_recv = _super_prefix_to_expr('_d', _sub_pfx)
                 if rust_ret == '()':
-                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})?; }}")
+                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_d_recv}.{sub_mname_r}({_barg_str})?; }}")
                 else:
-                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ _d.{sub_mname_r}({arg_str})? }}")
+                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_d_recv}.{sub_mname_r}({_barg_str})? }}")
             branches.append(_closure_branch)
             if rust_ret == '()':
                 dispatch_code = ' else '.join(branches)
@@ -523,7 +880,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
                 sim.push(Var(v), RsNamed(rust_ret))
             return
-        # 无 subtypes 时（接口无已知实现类），单独生成闭包 dispatch + 占位
+        # 无 subtypes 时（接口无已知实现类）：单独生成闭包 dispatch + 占位
         v = sim.fresh('_vdispatch')
         if rust_ret == '()':
             sim.emit(RawStmt(_closure_branch))
@@ -542,7 +899,26 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         elif rust_mname == 'clone' and obj_ty not in ('Object', '()'):
             # invokevirtual Object.clone 调用在具体类型上（如数组）：
             # Rust 的 clone() 不返回 Result，用 Object::from_any 包装匹配 Java 返回类型
-            sim.emit(RawStmt(f"let {v}: Object = Object::from_any({obj_e}.clone());"))
+            # Clone::clone 而非 .clone()：接收者可能是带 Java clone() 的类
+            sim.emit(RawStmt(f"let {v}: Object = Object::from_any(Clone::clone(&{obj_e}));"))
         else:
-            sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
-        sim.push(Var(v), RsNamed(rust_ret))
+            # 签名真实返回类型与擦除类型不一致时的对齐（与 invokestatic 同规则）：
+            # - 擦除映射 Object：包 from_any 保持 Object 记录
+            # - 擦除实例化 X<Object,Object> → 精确形态 X<K,V>：记录精确类型，
+            #   与被调方法声明（gen_method_body 按 generic_signature 生成）一致
+            _sig_ret_v = _lookup_method_sig_ret(
+                cls, mname, params, ret, registry,
+                caller_class=class_name, caller_tparams=sim.class_type_params,
+                receiver_type=obj_ty,
+            )
+            if (rust_ret == 'Object' and _sig_ret_v is not None
+                    and _sig_ret_v != 'Object'):
+                sim.emit(RawStmt(f"let {v} = Object::from_any({obj_e}.{rust_mname}({arg_str})?);"))
+                sim.push(Var(v), RsNamed(rust_ret))
+            elif (_sig_ret_v is not None and _sig_ret_v != rust_ret
+                    and rust_ret not in _PRIMITIVE_RUST_TYPES):
+                sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
+                sim.push(Var(v), RsNamed(_sig_ret_v))
+            else:
+                sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
+                sim.push(Var(v), RsNamed(rust_ret))

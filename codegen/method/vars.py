@@ -30,7 +30,9 @@ def _coerce_acmp_operand(expr_str: str, ty_node) -> str:
         return expr_str  # 基本类型不应出现在 acmp，原样保留
     # 引用类型或 self 引用：去掉 &，clone 后装入 Object
     clean = expr_str[1:] if expr_str.startswith('&') else expr_str
-    return f"Object::from_any({clean}.clone())"
+    # Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等），
+    # 方法语法会被遮蔽返回 Result<Object>
+    return f"Object::from_any(Clone::clone(&{clean}))"
 
 
 _PRIMITIVE_TYPES = {'i32', 'i64', 'f32', 'f64', 'bool', 'usize', '()'}

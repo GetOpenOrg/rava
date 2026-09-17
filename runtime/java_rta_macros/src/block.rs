@@ -696,7 +696,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             let borm = format_ident!("__borrow_mut_{}", name);
             accessors.push(quote! {
                 #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { self.0.#name.borrow().clone() }
+                pub fn #get(&self) -> #ty { Clone::clone(&*self.0.#name.borrow()) }
                 #[doc(hidden)] #[inline]
                 pub fn #bor(&self) -> ::std::cell::Ref<'_, #ty> { self.0.#name.borrow() }
                 #[doc(hidden)] #[inline]

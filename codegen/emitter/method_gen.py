@@ -165,10 +165,13 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
         parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
     )
 
-    # 从 generic_signature 提取更具体的参数类型（与 gen_method_body 对齐）
+    # 从 generic_signature 提取更具体的参数类型（与 gen_method_body 对齐）。
+    # 门控不要求类有类型参数：非泛型类的签名返回类型（getInterfaces0 →
+    # Vec<Class<Object>>）同样采用，否则存根声明与调用点记录 E0308。
     sig_param_types: list[str] = []
-    if m.generic_signature and _ctparams:
-        sig_param_types, _ = parse_method_param_types(m.generic_signature, _ctparams, registry)
+    sig_ret_type: str = ''
+    if m.generic_signature:
+        sig_param_types, sig_ret_type = parse_method_param_types(m.generic_signature, _ctparams, registry)
         if len(sig_param_types) != len(params):
             sig_param_types = []
 
@@ -194,8 +197,12 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             return False
         return True
 
-    # PERMANENT functional interface 类型在参数位置强制使用 Object（Java 类型擦除语义）
+    # PERMANENT functional interface / registry 接口类型在参数位置强制使用 Object
+    # （Java 类型擦除语义；接口 = Object 别名，泛型形态不是合法 Rust 类型，
+    # 与 invoke.py / codegen.py 的降级规则保持一致）
     _perm_iface_names = frozenset({'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator'})
+    from ..instr.invoke import _registry_iface_shorts as _reg_iface_shorts_fn
+    _perm_iface_names = _perm_iface_names | _reg_iface_shorts_fn(registry)
     import re as _re2
     def _is_perm_iface_param(sp: str) -> bool:
         m = _re2.match(r'^(\w+)(?:<|$)', sp)
@@ -207,6 +214,13 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             if _sig_param_valid(sp) and not _is_perm_iface_param(sp):
                 return sp
         return jvm_to_rust(desc_p, registry)
+
+    # 返回类型：generic_signature 提供更具体类型时优先（与 gen_method_body 对齐）。
+    # 调用点（invoke.py）按 generic_signature 记录返回类型，若存根声明仍用
+    # 擦除描述符类型（如 getInterfaces0 的 [Class; → Vec<Object> 而真实是
+    # Vec<Class<Object>>），调用结果与记录 E0308。
+    if sig_ret_type and _sig_param_valid(sig_ret_type):
+        rust_ret = sig_ret_type
 
     # 构建参数列表（参数名需转义 $ 和 Rust 关键字）
     raw_names = [m.local_names.get(i + (0 if m.is_static else 1), f'arg{i}')

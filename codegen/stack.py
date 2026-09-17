@@ -11,7 +11,7 @@ from .rs_ir import (
     RsExpr, RsStmt, RsType,
     Var, Lit, RawExpr,
     LetStmt, AssignStmt,
-    RsGeneric, RsPrimitive, RsNamed,
+    RsGeneric, RsPrimitive, RsNamed, RsRef, RsSlice, RsInfer,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
 )
 from .render import render_type, render_expr
@@ -67,6 +67,27 @@ def _maybe_downcast(expr: RsExpr, ty: RsType) -> RsExpr:
     return expr
 
 
+def _clone_moved_var(expr: RsExpr, ty: RsType) -> RsExpr:
+    """局部变量值出现在 let/assign 右值位置时是 Rust move；
+    Java 引用赋值（aload src; astore dst）无 move 语义，源变量后续仍会被使用，
+    需包 Clone::clone 保活源值（否则 E0382 use-after-move）。
+    - 标量（RsPrimitive/数字类名）与引用（RsRef/RsSlice）是 Copy，无需处理
+    - Object 智能指针 Clone 即 Java 别名语义
+    - RsInfer 未知类型（可能是迭代器等非 Clone 值）不处理
+    注意：用 Clone::clone(&x) 而非 x.clone()，避免被类的 Java clone() 方法遮蔽。
+    """
+    if not isinstance(expr, Var):
+        return expr
+    if isinstance(ty, (RsPrimitive, RsRef, RsSlice, RsInfer)):
+        return expr
+    if isinstance(ty, RsNamed) and ty.name in (
+        'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64',
+        'f32', 'f64', 'bool', 'char', '()', 'usize',
+    ):
+        return expr
+    return RawExpr(f"Clone::clone(&{expr.name})")
+
+
 
 
 class StackSim:
@@ -103,8 +124,14 @@ class StackSim:
                 self._slot_decl_depth[slot] = 0
                 slot += 2 if _is_wide(rt) else 1
         else:
-            # this 是当前类的句柄，用 short_cls 转换 JVM 二进制名到 Rust 短名
+            # this 是当前类的句柄，用 short_cls 转换 JVM 二进制名到 Rust 短名。
+            # 泛型类（impl<K,V> HashMap_TreeNode<K,V>）的 this 必须带上类型参数：
+            # 裸名会让 `x = this` 之类的赋值以裸类型记录，与 LVTT 精确形态
+            # （HashMap_TreeNode<K, V>）不一致，触发 T42 重声明 + 循环提升后
+            # 产生 E0107（缺泛型实参）/E0308。
             rust_cls = _short_cls(class_name) if class_name else 'Object'
+            if rust_cls and class_type_params:
+                rust_cls = f"{rust_cls}<{', '.join(class_type_params)}>"
             this_ty = RsNamed(rust_cls) if rust_cls else RsNamed("Object")
             self.locals[0] = ("this", this_ty, False)
             self._slot_decl_depth[0] = 0
@@ -182,10 +209,13 @@ class StackSim:
             if src_is_object:
                 ty = hint
             elif (isinstance(ty, RsNamed) and isinstance(hint, (RsNamed, RsGeneric))):
-                # 裸类名（如 HashMap_TreeNode）→ hint 带泛型（HashMap_TreeNode<K,V>）
-                # 条件：hint 的 base 名和当前 ty 名相同，或 hint 是更精确的泛型形式
-                hint_base = hint.name if isinstance(hint, RsNamed) else hint.name
-                if hint_base == ty.name or (isinstance(hint, RsGeneric) and hint.name == ty.name):
+                # 裸类名（HashMap_TreeNode）或擦除实例化（HashMap_TreeNode<Object, Object>）
+                # → hint 带泛型（HashMap_TreeNode<K, V>）。
+                # LVTT hint 的泛型实参嵌在 name 字符串里（如 'HashMap_TreeNode<K, V>'），
+                # 比较必须按 base 名（split('<')[0]）进行，否则三种形态永远不相等。
+                def _base_of(t: RsType) -> str:
+                    return getattr(t, 'name', str(t)).split('<')[0].strip()
+                if _base_of(hint) == _base_of(ty):
                     ty = hint
                 elif (isinstance(hint, RsNamed)
                       and 'Vec<' in hint.name and 'Vec<' in ty.name
@@ -209,7 +239,8 @@ class StackSim:
             'f32', 'f64', 'bool', 'char', '()', 'Object',
         )
         if _is_this and _is_ref_ty:
-            expr = RawExpr("this.clone()")
+            # Clone::clone 而非 this.clone()：类的 Java clone() 方法会遮蔽 std Clone
+            expr = RawExpr("Clone::clone(this)")
 
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
@@ -223,9 +254,20 @@ class StackSim:
                 value = _maybe_downcast(expr, ty) if src_is_object else expr
                 _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
                 let_ty = ty if _is_default else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
+                # Java 局部变量间赋值在 Rust 中是 move，包 Clone 保活源变量（E0382）
+                value = _clone_moved_var(value, ty)
                 self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
             else:
-                self.stmts.append(AssignStmt(Var(name), expr))
+                # hint 升级后（栈类型 Object → 局部精确类型）赋给已声明局部：
+                # 值本身仍是 Object（如 from_any 包装的调用结果），
+                # 需要 downcast 对齐局部精确类型（与首次声明路径的 _maybe_downcast 一致），
+                # 否则 `kc = _t0`（kc: Class<Object>，_t0: Object）E0308。
+                # 仅处理 Var：RawExpr 可能已含 downcast 或本就不是 Object 值。
+                if (src_is_object and isinstance(expr, Var) and isinstance(ty, RsNamed)
+                        and '<' in ty.name):
+                    expr = RawExpr(f"({render_expr(expr)}).downcast::<{ty.name}>()")
+                # Java 引用赋值无 move 语义，包 Clone 保活源变量（E0382）
+                self.stmts.append(AssignStmt(Var(name), _clone_moved_var(expr, ty)))
         else:
             name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
             self.locals[slot] = (name, ty, True)
@@ -234,6 +276,9 @@ class StackSim:
             # downcast 时让 Rust 推断类型；Default::default() 需保留类型注解；RsGeneric 也让 Rust 推断
             _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
             let_ty = ty if _is_default else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
+            # Java 局部变量间赋值（aload src; astore dst）在 Rust 中是 move，
+            # 源变量后续仍会被使用，包 Clone::clone 保活（E0382 use-after-move）
+            value = _clone_moved_var(value, ty)
             self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
 
         # dup 后 astore：同一个 Var("_tN") 可能还留在 stack 上，但 _tN 已被 move。

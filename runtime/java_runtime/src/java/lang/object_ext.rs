@@ -27,10 +27,11 @@ impl Object {
     ///      (JvmRef<T>::as_any → &self.0: &dyn Any，downcast_ref::<T>() 成功)
     #[jvm_ext]
     pub fn downcast<T: std::any::Any + Clone + 'static>(&self) -> T {
-        self.0.as_any()
+        // Clone::clone 而非 .clone()：T 可能是带 Java clone() 方法的类
+        // （Reference/HashMap 等），方法语法会被遮蔽返回 Result<Object>
+        Clone::clone(self.0.as_any()
             .downcast_ref::<T>()
-            .expect("ClassCastException")
-            .clone()
+            .expect("ClassCastException"))
     }
 
     /// null 检查：转译模型中 Object 永远非 null，始终返回 false

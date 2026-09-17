@@ -31,6 +31,42 @@ from .invoke import (
 )
 
 
+def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
+                                 class_name: str, registry: dict | None,
+                                 sim: 'StackSim') -> str:
+    """按字段 generic_signature 恢复声明类型（getfield / putfield 共用）。
+
+    ftype 是 jvm_to_rust(fdesc) 的擦除形态；沿继承链查字段声明，用声明类
+    tparams 上下文解析为精确泛型形态（HashMap_Node<Object,Object> →
+    HashMap_Node<K,V>、Rc<RefCell<Vec<Object>>> → Rc<RefCell<Vec<E>>>）。
+    解析结果中的类型名在调用方不可见（跨类参数名不同）时保持擦除形态。
+    """
+    if not registry:
+        return ftype
+    _g_owner = f_owner if f_owner else class_name
+    if not _g_owner:
+        return ftype
+    _g_ci = registry.get(_g_owner)
+    _gsig = _get_field_generic_signature(_g_owner, fname, registry)
+    if not (_gsig and _g_ci is not None):
+        return ftype
+    _decl_tparams = (_parse_class_type_params(_g_ci.generic_signature)
+                     if _g_ci.generic_signature else [])
+    _parsed = _parse_field_type(_gsig, _decl_tparams, registry)
+    if _parsed and _parsed != 'Object' and _parsed != ftype:
+        # 校验：解析结果中的类型名须在调用方可见
+        # （当前 impl 类型参数 / registry 短名 / 内建容器），
+        # 跨类不可见（声明类参数名与调用方不同）时降级回擦除形态
+        import re as _re_g
+        _caller_tparams = set(sim.class_type_params) if sim.class_type_params else set()
+        _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
+        _builtin_g = {'Object', 'String', 'Rc', 'Vec', 'RefCell'}
+        if all(_n in _caller_tparams or _n in _reg_shorts or _n in _builtin_g
+               for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _parsed)):
+            return _parsed
+    return ftype
+
+
 def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None = None):
     op      = ins.opcode
     operand = ins.operand or ''
@@ -322,7 +358,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     elif op == 'getfield':
         obj_expr, obj_ty = sim.pop()
         if comment:
-            _, fname, fdesc = _parse_field_ref(comment)
+            f_owner, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'Object'
             # 装箱类擦除特例：Integer/Long/Double/Boolean 的签名类型被 type_map
             # 擦除为基本类型（i32/i64/f64/bool）。当 getfield 的接收者已经是
@@ -333,18 +369,31 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             if _recv_ty in _PRIMITIVE_RUST_TYPES:
                 sim.push(obj_expr, RsNamed(_recv_ty))
                 return
-            # JVM 类型擦除后 ftype 可能是 Object，但实际字段可能含泛型信息
-            # 通过 generic_signature 恢复真实类型（与 struct 字段定义一致）
-            if ftype == 'Object' and registry:
-                _gsig = _get_field_generic_signature(class_name, fname, registry)
-                if _gsig:
-                    _ctparams = list(sim.class_type_params) if sim.class_type_params else []
-                    _parsed = _parse_field_type(_gsig, _ctparams, registry)
-                    if _parsed and _parsed != 'Object':
-                        # 校验基础类名存在（避免引用未生成的类型）
-                        _base = _parsed.split('<')[0]
+            # 字段声明类型恢复：struct 字段生成（class_writer._resolve_field_rust）
+            # 优先字段级 generic_signature（如 interfaces: Vec<Class<Object>>、
+            # parent: HashMap_TreeNode<K, V>），宏访问器 __get_xxx() 按声明类型返回。
+            # 读取侧必须记录同一类型：否则 sim 记录擦除形态（Object /
+            # X<Object,Object> / Rc<RefCell<Vec<Object>>>）而表达式实际是
+            # 精确泛型形态，局部变量标注 E0308（expected 擦除, found 精确）。
+            if registry:
+                _g_owner = f_owner if f_owner else class_name
+                _g_ci = registry.get(_g_owner) if _g_owner else None
+                _gsig = _get_field_generic_signature(_g_owner, fname, registry) if _g_owner else None
+                if _gsig and _g_ci is not None:
+                    # 用声明类的类型参数解析（签名中的类型变量属于声明类上下文）
+                    _decl_tparams = (_parse_class_type_params(_g_ci.generic_signature)
+                                     if _g_ci.generic_signature else [])
+                    _parsed = _parse_field_type(_gsig, _decl_tparams, registry)
+                    if _parsed and _parsed != 'Object' and _parsed != ftype:
+                        # 校验：解析结果中的类型名须在调用方可见
+                        # （当前 impl 类型参数 / registry 短名 / 内建容器），
+                        # 跨类不可见（声明类参数名与调用方不同）时降级回擦除形态
+                        import re as _re_g
+                        _caller_tparams = set(sim.class_type_params) if sim.class_type_params else set()
                         _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
-                        if _base in _ctparams or _base in _reg_shorts:
+                        _builtin_g = {'Object', 'String', 'Rc', 'Vec', 'RefCell'}
+                        if all(_n in _caller_tparams or _n in _reg_shorts or _n in _builtin_g
+                               for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _parsed)):
                             ftype = _parsed
             # 字段读取 → 宏生成的访问器（方案 §7）。
             # 继承字段由子类的转发访问器统一暴露（父类字段在前展平，§6），
@@ -360,18 +409,12 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         if comment:
             cls_owner, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'i32'
-            # 当字段类型是擦除数组（Vec<Object>）时，尝试从 registry 取泛型字段类型
-            # 以便使用类型参数版本（如 Vec<E>）避免 E0308
-            if ftype.startswith('Rc<RefCell<Vec<Object') and registry and cls_owner:
-                _ci = registry.get(cls_owner)
-                if _ci:
-                    _ctparams = _parse_class_type_params(_ci.generic_signature) if _ci.generic_signature else []
-                    for _fi in (_ci.fields or []):
-                        if _fi.name == fname and getattr(_fi, 'generic_signature', None):
-                            _gen = _parse_field_type(_fi.generic_signature, _ctparams, registry)
-                            if _gen and _gen != ftype:
-                                ftype = _gen
-                                break
+            # Fix 15：字段声明类型恢复（与 getfield 对齐，原数组特例泛化）——
+            # 擦除形态（HashMap_Node<Object,Object> / Vec<Object>）恢复为声明
+            # 类 tparams 上下文的精确泛型形态（HashMap_Node<K,V> / Vec<E>），
+            # 与宏访问器 __set_xxx 的参数类型（class_writer 按字段 generic_signature
+            # 生成）一致，否则 E0308/E0277（Into 目标是擦除形态、From 不存在）。
+            ftype = _restore_field_declared_type(cls_owner, fname, ftype, class_name, registry, sim)
             val_str_raw = render_expr(val_expr)
             val_ty_name = render_type(val_ty)
             # Vec<Object>(擦除) ↔ Vec<E>(泛型)：当 ftype 是参数化 Vec 而 val 是擦除 Vec 时，
@@ -473,10 +516,10 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             elem_t = jvm_to_rust(f'L{comment};', registry)
         else:
             elem_t = 'Object'
-        # 多态数组：若元素类有子类（存在继承），改用 Vec<Object> 以保留运行时类型信息
-        # 这反映了 Java 数组实际上存储对象引用（而非值拷贝）的语义
-        if elem_t != 'Object' and comment and _has_subtypes(comment, registry):
-            elem_t = 'Object'
+        # 多态数组：不再因「元素类有子类」降级为 Vec<Object>。
+        # 6b2ee14 的降级与 LVTT/字段声明的精确类型（如 HashMap.table:
+        # Vec<HashMap_Node<K,V>>）冲突导致 E0308；
+        # 多态存储由 aastore 的子类型 upcast（.into()）处理
         v = sim.fresh('_arr')
         # 用 Default::default() 而非 ElemType::default()，避免泛型类型（如 Node<K,V>）在 vec![] 中产生语法错误
         sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![Default::default(); {render_expr(count_expr)} as usize]));"))
@@ -517,8 +560,13 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif elem_ty != 'Object' and val_ty_str == 'Object':
             val_str = f"Default::default()"
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
-            # T55: 子类赋给同类型数组（类型已相同），只需 Clone
-            val_str = f"Clone::clone(&{val_str})"
+            if (elem_ty != val_ty_str
+                    and _is_subtype(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)):
+                # T55: 子类元素存入父类数组（如 TreeNode → Vec<Node>），From impl upcast
+                val_str = f"Clone::clone(&{val_str}).into()"
+            else:
+                # 同类型数组：只需 Clone
+                val_str = f"Clone::clone(&{val_str})"
         # F-1 fix: 非基本类型 val_str 可能包含 .borrow() 调用（如 aaload 的结果），
         # 若直接写 arr.borrow_mut()[i] = Clone::clone(&arr.borrow()[j]) 会导致
         # RefCell 同时持有 borrow 和 borrow_mut 而 panic。先提取到 tmp 释放 borrow。
@@ -657,8 +705,14 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
                 expr = RawExpr(f"({render_expr(expr)}).downcast::<{cast_rust}>()")
             elif src_name != 'Object' and cast_rust not in ('Object', '()', src_name):
-                # 二次 checkcast（非 Object 源类型）：两种具体类型不兼容，用 Default::default() 占位
-                expr = RawExpr('Default::default()')
+                if _is_subtype(cast_rust.split('<')[0], src_name.split('<')[0], registry):
+                    # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode，E0282）：
+                    # 经 Object::from_any 保留运行时值再 downcast 恢复子类型，
+                    # 不能用 Default::default() 占位（会丢失接收者类型导致无法推断）
+                    expr = RawExpr(f"Object::from_any({render_expr(expr)}).downcast::<{cast_rust}>()")
+                else:
+                    # 二次 checkcast（非 Object 源类型）：两种具体类型不兼容，用 Default::default() 占位
+                    expr = RawExpr('Default::default()')
             sim.push(expr, RsNamed(cast_rust))
     elif op == 'instanceof':
         # JVM 语义: pop objectref, push int(0/1)
@@ -753,13 +807,14 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                     _fn_params_sig = ', '.join(f'{_a}: {_t}' for _a, _t in zip(_sam_anames, _sam_ptypes))
                     _fn_type = f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)}) -> Result<{_sam_rtype}>>'
                     # 调用实现方法的参数列表（捕获变量 + SAM 参数）
-                    _call_cap_args  = ', '.join(f'{v}.clone()' for v in _cap_var_names)
+                    # Clone::clone 而非 .clone()：捕获值可能是带 Java clone() 的类
+                    _call_cap_args  = ', '.join(f'Clone::clone(&{v})' for v in _cap_var_names)
                     _call_sam_args  = ', '.join(_sam_anames)
                     _all_call_args  = ', '.join(filter(None, [_call_cap_args, _call_sam_args]))
                     # 生成闭包
                     for _s in _cap_var_stmts:
                         sim.emit(RawStmt(_s))
-                    _cap_move = ' '.join(f'{v}.clone(),' for v in _cap_var_names)
+                    _cap_move = ' '.join(f'Clone::clone(&{v}),' for v in _cap_var_names)
                     _closure_body = f'{_impl_cls_rust}::{_impl_mname_r}({_all_call_args})'
                     _lam_varname = f'__lam_{_lam_idx}'
                     sim.emit(RawStmt(

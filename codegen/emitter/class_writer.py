@@ -335,6 +335,24 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 and _validate_field_type(gen_rust, class_type_params)
                 else desc_rust)
 
+    def _resolve_anc_field_rust(f, anc_params: list, anc_map: dict) -> str:
+        """祖先字段的 Rust 类型：用祖先自己的 tparams 解析签名，再按位置映射
+        （与 T55 From 链 / parent_rust 的 args 构造一致）替换为子类可见参数。
+        否则父类字段变量（如 AbstractRepository<T> 的 tree: T）被子类 tparams
+        （['S']）解析成 Object，转发访问器 __set_tree(v: Object) 与父类
+        AbstractRepository<S> 的 __set_tree(v: S) E0308。"""
+        gen_rust = (parse_field_type(f.generic_signature, anc_params, registry)
+                    if f.generic_signature else '')
+        if gen_rust and gen_rust != 'Object' and _validate_field_type(gen_rust, anc_params):
+            if anc_map:
+                import re as _re_am
+                gen_rust = _re_am.sub(
+                    r'\b[A-Za-z_]\w*\b',
+                    lambda m: anc_map.get(m.group(0), m.group(0)),
+                    gen_rust)
+            return gen_rust
+        return jvm_to_rust(f.descriptor, registry)
+
     # ── 继承链字段展平（方案 §6）────────────────────────────────────────
     # codegen 侧展平整条继承链，父类字段在前；宏侧零 registry 依赖。
     # 注意：展平结果只用于生成「转发访问器」，父类字段的实际存储在 `_super` 里
@@ -352,6 +370,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _cursor = _p_ci.super_class
         _declared: set[str] = set()
         for _ancestor in reversed(_chain):
+            # 祖先参数 → 子类参数的位置映射（T55 一致）：不足补 Object
+            _anc_params = (parse_class_type_params(_ancestor.generic_signature)
+                           if _ancestor.generic_signature else [])
+            _sub_args = list(class_type_params[:len(_anc_params)])
+            while len(_sub_args) < len(_anc_params):
+                _sub_args.append('Object')
+            _anc_map = dict(zip(_anc_params, _sub_args))
             for _f in _ancestor.fields:
                 if _f.is_static:
                     continue
@@ -359,7 +384,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 if _sf_name in _declared:
                     continue
                 _declared.add(_sf_name)
-                superclass_fields.append((_sf_name, _resolve_field_rust(_f)))
+                superclass_fields.append(
+                    (_sf_name, _resolve_anc_field_rust(_f, _anc_params, _anc_map)))
 
     # ── struct 声明（裸类型，封装细节由宏收拢）──────────────────────────
     struct_lines: list[str] = []

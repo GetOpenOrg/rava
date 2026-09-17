@@ -512,6 +512,11 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     sub_attr_count = r.u2()
     local_names: dict[int, str] = {}
     local_types: dict[int, str] = {}  # slot → generic Signature string
+    # 先收集两表原始条目再统一处理：LVT 与 LVTT 的 sub-attribute 顺序不保证
+    # （LVTT 可能先于 LVT 出现），且同一 slot 可被多个不同作用域的变量复用
+    # （如 resize 的 float ft 与 Node<K,V>[] newTab 共用 slot 6）。
+    _lvt_entries: list[tuple[int, int, str, int]] = []    # (start_pc, length, name, slot)
+    _lvtt_entries: list[tuple[int, str, int]] = []        # (name, sig, slot)
     for _ in range(sub_attr_count):
         sub_name_idx = r.u2()
         sub_len      = r.u4()
@@ -526,9 +531,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
                 name_idx  = lvt_r.u2()
                 _desc_idx = lvt_r.u2()
                 slot      = lvt_r.u2()
-                name      = _utf8(pool, name_idx)
-                if slot not in local_names:  # 取第一个（作用域最广的）
-                    local_names[slot] = name
+                _lvt_entries.append((_start_pc, _length, _utf8(pool, name_idx), slot))
         elif sub_name == 'LocalVariableTypeTable':
             # 格式与 LocalVariableTable 相同，但 descriptor 换成 Signature
             sub_data = r.read(sub_len)
@@ -540,14 +543,27 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
                 name_idx  = lvtt_r.u2()
                 sig_idx   = lvtt_r.u2()
                 slot      = lvtt_r.u2()
-                sig       = _utf8(pool, sig_idx)
-                lvtt_name = _utf8(pool, name_idx)
-                # 只有当 LVTT 变量名与 LVT 同 slot 名字一致时才采用精确类型，
-                # 避免合成迭代器（无 LVT entry）的 LVTT 污染后续复用该 slot 的变量
-                if slot not in local_types and local_names.get(slot) == lvtt_name:
-                    local_types[slot] = sig
+                _lvtt_entries.append((_utf8(pool, name_idx), _utf8(pool, sig_idx), slot))
         else:
             r.skip(sub_len)
+
+    # LVT：slot 代表名取作用域最长（length 最大）的条目 —— slot 复用时
+    # 长作用域变量更可能是该槽的主要用途；同时记录全部名字供 LVTT 匹配
+    _slot_all_names: dict[int, set[str]] = {}
+    _slot_best: dict[int, tuple[int, str]] = {}
+    for _start, _len, _name, _slot in _lvt_entries:
+        _slot_all_names.setdefault(_slot, set()).add(_name)
+        if _slot not in _slot_best or _len > _slot_best[_slot][0]:
+            _slot_best[_slot] = (_len, _name)
+    for _slot, (_len, _name) in _slot_best.items():
+        local_names[_slot] = _name
+
+    # LVTT：只要 LVTT 变量名与该 slot 的任一 LVT 名字一致即采用精确类型
+    # （原逻辑仅比对唯一代表名，slot 复用时短作用域泛型变量的 hint 被误杀，
+    # 如 newTab 的 [Ljava/util/HashMap$Node<TK;TV;>; → Vec<HashMap_Node<K,V>>）
+    for _lvtt_name, _sig, _slot in _lvtt_entries:
+        if _slot not in local_types and _lvtt_name in _slot_all_names.get(_slot, ()):
+            local_types[_slot] = _sig
 
     instrs = _decode_bytecode(code_bytes, pool, bootstrap_methods or [])
 
@@ -787,6 +803,14 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 parsed.method_parameters  = m_parameters
                 methods.append(parsed)
 
+    # 泛型擦除特判：java/lang/Class 的类型参数 <T> 是纯 phantom（反射类型
+    # 指针，转译中所有存储均为 Object）。保留 <T> 会在 Class<T>（泛型上下
+    # 文，如 Class 自身方法体内 this）与 Class<Object>（通配符 Class<?> 擦
+    # 除形态）之间产生大量不可转换的 E0308 —— Java 语义中 Class<?> 接受任
+    # 何 Class<T>，Rust 泛型则要求精确匹配。置空类级签名后，所有下游
+    # （jvm_to_rust / parse_class_type_params / 宏展开）统一为裸 Class。
+    _cls_sig = '' if class_name == 'java/lang/Class' else cls_generic_sig
+
     return ClassInfo(
         name=class_name,
         fields=fields,
@@ -797,7 +821,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         is_interface=bool(access_flags & ACC_INTERFACE),
         is_abstract=bool(access_flags & ACC_ABSTRACT),
         is_enum=bool(access_flags & ACC_ENUM),
-        generic_signature=cls_generic_sig,
+        generic_signature=_cls_sig,
         source_file=cls_source_file,
         inner_classes=cls_inner_classes,
         is_deprecated=cls_deprecated,

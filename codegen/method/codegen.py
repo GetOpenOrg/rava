@@ -51,8 +51,12 @@ def gen_method_body(
 ) -> str:
     _class_tparams = class_type_params or []
 
-    # 如果方法有泛型签名且类有类型参数，用签名推断参数/返回类型
-    if method.generic_signature and _class_tparams:
+    # 如果方法有泛型签名，用签名推断参数/返回类型。
+    # 注：非泛型类的 generic_signature（如 ClassLoader.getInterfaces0 →
+    # Vec<Class<Object>>）同样需要采用 —— 门控不要求类有类型参数；
+    # 方法级类型变量（<T> m(T)）在空 class_tparams 下解析为 Object，
+    # 与 descriptor 擦除一致，由 _sig_param_valid 兜底。
+    if method.generic_signature:
         sig_param_types, sig_ret_type = parse_method_param_types(
             method.generic_signature, _class_tparams, registry
         )
@@ -102,9 +106,14 @@ def gen_method_body(
             return False
         return True
 
-    # PERMANENT functional interface 类型在参数位置用擦除 Object（Java 类型擦除语义：
-    # Supplier<Map<K,V>> 和 Supplier<A> 在 JVM 运行时是同一类型，Rust 无法隐式转换）
-    _perm_iface_names = frozenset({'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator'})
+    # PERMANENT functional interface / registry 接口类型在参数位置用擦除 Object
+    # （Java 类型擦除语义：接口 = Object 类型别名，泛型形态 X<...> 不是合法
+    # Rust 类型；与 invoke.py 的 _lookup_method_sig_params 降级规则保持一致）
+    _perm_iface_names = frozenset({
+        'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator',
+    })
+    from ..instr.invoke import _registry_iface_shorts as _reg_iface_shorts_fn
+    _perm_iface_names = _perm_iface_names | _reg_iface_shorts_fn(registry)
     import re as _re2
     def _is_perm_iface_param(sp: str) -> bool:
         m = _re2.match(r'^(\w+)(?:<|$)', sp)
@@ -215,7 +224,11 @@ def gen_method_body(
         # 后续 putfield 走 `__set_xxx` 访问器逐字段赋值。
         struct_init = "Self::default()"
         entries.append(('', f"    let mut this = {struct_init};"))
-        sim.locals[0] = ('this', RsNamed(short_cls(method.class_name)), False)
+        # 泛型类的 this 带类型参数（与 StackSim 实例方法路径一致，避免裸名 E0107/E0308）
+        _this_rust = short_cls(method.class_name)
+        if _this_rust and _class_tparams:
+            _this_rust = f"{_this_rust}<{', '.join(_class_tparams)}>"
+        sim.locals[0] = ('this', RsNamed(_this_rust), False)
 
     elif not is_static:
         # 实例方法：绑定 this = self，供字节码（aload_0 + getfield/putfield）使用
@@ -500,6 +513,10 @@ def gen_method_body(
                             ty = ety; ty_str = ety_str
                         elif ev in _null_exprs and ty_str not in _prim_types:
                             ev = 'Default::default()'
+                        elif tv in _null_exprs and ety_str not in _prim_types:
+                            # then 臂是 null：null 转 Default::default()，结果类型取 else 臂的具体类型
+                            tv = 'Default::default()'
+                            ty = ety; ty_str = ety_str
                         elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object' and ty_str not in _class_tparams:
                             ev = f"({ev}).downcast::<{ty_str}>()"
                         elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and ety_str not in _class_tparams:
@@ -533,6 +550,11 @@ def gen_method_body(
                             ty = ety; ty_str = ety_str
                         elif else_val in _null_exprs and ty_str not in _prim_types:
                             else_val = 'Default::default()'
+                        elif then_val in _null_exprs and ety_str not in _prim_types:
+                            # then 臂是 null：null 转 Default::default()，合并变量
+                            # 类型取 else 臂的具体类型（与三元分支对称）
+                            then_val = 'Default::default()'
+                            ty = ety; ty_str = ety_str
                         elif ety_str == 'Object' and ty_str not in _prim_types and ty_str != 'Object' and ty_str not in _class_tparams:
                             else_val = f"({else_val}).downcast::<{ty_str}>()"
                         elif ty_str == 'Object' and ety_str not in _prim_types and ety_str != 'Object' and ety_str not in _class_tparams:
