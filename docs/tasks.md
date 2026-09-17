@@ -60,8 +60,19 @@ TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c2
 | H-2 TestRecord 输出格式 | e2e H-2 | 被 E0615 阻塞，随 Record 解锁 |
 | E-1 `_impl.rs` 方法级去重 | e2e E-1 | 生成前扫描手写 companion 跳过重名方法（架构防御） |
 | D-2 `areturn` Default 兜底 | e2e D-2 | 等 Arch-3 完成后删除 |
+| **T-3 String 走生成** | 2026-09-17 类型 1:1 方案 | `java/lang/String.class` 字节码生成替换 `JVM_RUST` 硬编码；最高语义价值；启动条件：BFS 完整收录 String 依赖后启动；详见 `2026-09-17-java-rust-type-1to1.md` |
 
 ## P3 · 长期重构（不阻塞主线）
+
+### 类型 1:1 对应系列（详见 `2026-09-17-java-rust-type-1to1.md`）
+
+| 任务 | 启动条件 | 说明 |
+|------|---------|------|
+| **T-1 bounds 进宏** | 无依赖，可立即启动 | `impl ArrayList<E>` 不写 Rust bounds，由 `java_class!` 宏展开时注入。codegen 只写裸参数名，宏从 `generic_signature` 补全 `Clone + Default + 'static` |
+| **T-2 接口泛型透明** | T-1 完成后 | `java_class!` 输入中接口类型可携带泛型参数（`List<E>`、`Iterator<E>`），宏识别接口类型后在展开时擦除为 `Object`（Arch-1）；需宏新增 `#[interfaces(...)]` 属性支持 |
+| **T-4 包装类走生成** | T-3 完成后 | `Integer`/`Long`/`Boolean` 等从字节码生成，移除 `JVM_RUST` 透明映射；autoboxing 指令序列 codegen 特判 |
+
+### 其他长期重构
 
 | 任务 | 来源 | 说明 |
 |------|------|------|
