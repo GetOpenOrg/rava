@@ -901,6 +901,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             # Rust 的 clone() 不返回 Result，用 Object::from_any 包装匹配 Java 返回类型
             # Clone::clone 而非 .clone()：接收者可能是带 Java clone() 的类
             sim.emit(RawStmt(f"let {v}: Object = Object::from_any(Clone::clone(&{obj_e}));"))
+            sim.push(Var(v), RsNamed('Object'))
         else:
             # 签名真实返回类型与擦除类型不一致时的对齐（与 invokestatic 同规则）：
             # - 擦除映射 Object：包 from_any 保持 Object 记录

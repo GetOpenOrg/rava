@@ -5,6 +5,7 @@
 import subprocess
 import sys
 import os
+import re
 from collections import deque
 from .classfile import parse_class
 from .emitter import write_cargo_project
@@ -117,6 +118,11 @@ def _write_jdk_scan_report(path: str, jdk_class_infos: list, field_stubs: set):
             f.write(f"| `{ci.name}` | {len(ci.methods)} | {native} |\n")
 
 
+def _desc_class_refs(desc: str) -> list[str]:
+    """从方法/字段 descriptor 提取类引用（Lxxx/yyy; 形式，含数组元素类型）。"""
+    return re.findall(r'L([^;]+);', desc or '')
+
+
 def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]:
     """从指令注释中提取方法引用和字段所属类引用（仅 JDK 类）。
 
@@ -125,6 +131,21 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
           method_refs   - (cls, method, descriptor) 三元组，用于 BFS 展开
           field_classes - 通过 getstatic/Field 指令发现的类名，只生成存根不展开方法体
     """
+
+    def _add_type_refs(desc: str) -> None:
+        """T88：签名类型引用进闭包（type-only）。
+
+        被调方法的参数/返回类型、字段声明类型里的接口（如
+        AbstractCollection.iterator() 的 Ljava/util/Iterator;）若不进闭包，
+        签名引用的接口类型不会生成 → 名字落到 prelude trait 报 E0782。
+        走 field_classes 通道：只生成类型存根，不展开方法体。
+        """
+        for tcls in _desc_class_refs(desc):
+            if tcls.startswith(_JDK_STUB_ONLY_PREFIXES):
+                field_classes.append(tcls)
+            elif tcls.startswith(_JDK_PREFIXES):
+                field_classes.append(tcls)
+
     method_refs = []
     field_classes = []
     for instr in (instrs or []):
@@ -145,6 +166,7 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                     field_classes.append(cls)
                 elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
                     method_refs.append((cls, meth, desc))
+                _add_type_refs(desc)
         elif c.startswith('Field '):
             # "Field java/nio/charset/CodingErrorAction.REPLACE:Ljava/nio/charset/CodingErrorAction;"
             # getstatic/putstatic/getfield/putfield - 只发现声明类，不展开其方法体
@@ -154,6 +176,9 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                 cls = rest[:dot]
                 if (cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES)) and '[' not in cls:
                     field_classes.append(cls)
+                colon = rest.find(':', dot)
+                if colon > dot:
+                    _add_type_refs(rest[colon+1:])
         elif c.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in c:
             # stub-only 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
             cls = c.split()[0]
@@ -175,6 +200,21 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
     # 通过 getstatic/Field 指令发现的类：只生成存根，不展开方法体
     field_discover_classes: set[str] = set()
 
+    def _enqueue_desc_types(desc: str) -> None:
+        """T88：方法描述符的参数/返回类型也是类型依赖（type-only）。
+
+        abstract 方法无方法体（instrs 为空），其签名引用的接口类型
+        （如 AbstractCollection.iterator() 的 Ljava/util/Iterator;）若不收集
+        则不会进闭包 → 签名引用的名字落到 prelude trait 报 E0782。
+        走 field_discover_classes 通道：只生成类型存根，不展开方法体。
+        与 trace_callchain.py 的 _extract_desc_classes 思路对齐。
+        """
+        for tcls in _desc_class_refs(desc):
+            if (tcls not in _JAVA_RUNTIME_CLASSES
+                    and (tcls.startswith(_JDK_PREFIXES)
+                         or tcls.startswith(_JDK_STUB_ONLY_PREFIXES))):
+                field_discover_classes.add(tcls)
+
     def enqueue_refs(instrs):
         method_refs, f_classes = _collect_method_refs(instrs)
         for cls in f_classes:
@@ -192,6 +232,9 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
     for ci in class_infos:
         for m in ci.methods:
             enqueue_refs(m.instrs or [])
+            # T88：用户方法自身描述符里的参数/返回类型也是类型依赖
+            # （abstract 方法无 instrs，但其签名引用的接口类型要进闭包）
+            _enqueue_desc_types(m.descriptor)
 
     if not queue:
         print("      无 JDK 类引用")
@@ -236,6 +279,10 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
             for m in ci.methods:
                 if m.name == meth and m.descriptor == desc:
                     enqueue_refs(m.instrs or [])
+                    # T88：被调方法的描述符参数/返回类型也是类型依赖
+                    # （abstract/native 方法无 instrs，签名引用的接口类型
+                    # 如 iterator()Ljava/util/Iterator; 仍需进闭包生成）
+                    _enqueue_desc_types(m.descriptor)
 
         # 接口方法 → 具体实现类传播（interface dispatch 解析）
         # 场景：user 代码调 invokeinterface java/util/List.add，但 runtime 实际调用 ArrayList.add

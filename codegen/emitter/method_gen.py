@@ -219,7 +219,10 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     # 调用点（invoke.py）按 generic_signature 记录返回类型，若存根声明仍用
     # 擦除描述符类型（如 getInterfaces0 的 [Class; → Vec<Object> 而真实是
     # Vec<Class<Object>>），调用结果与记录 E0308。
-    if sig_ret_type and _sig_param_valid(sig_ret_type):
+    # T88：接口类型在返回位置与参数位置同规则降级——接口是 Object 别名
+    # （宏 is_interface → type X = Object，不带泛型参数），"Iterator<E>" 不是
+    # 合法类型，且 Iterator 名字会撞 prelude trait 报 E0782。
+    if sig_ret_type and _sig_param_valid(sig_ret_type) and not _is_perm_iface_param(sig_ret_type):
         rust_ret = sig_ret_type
 
     # 构建参数列表（参数名需转义 $ 和 Rust 关键字）
