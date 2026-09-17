@@ -223,6 +223,38 @@ def _count_args(desc: str) -> int:
     return count
 
 
+def _extract_desc_classes(desc: str) -> list[str]:
+    """
+    从方法描述符中提取所有引用类型的类名（参数 + 返回值）。
+    例如 (Ljava/util/List;I)Ljava/lang/String; → ['java/util/List', 'java/lang/String']
+    数组类型会剥掉 [ 前缀后再提取，基本类型和 void 忽略。
+    """
+    result: list[str] = []
+    i = 0
+    n = len(desc)
+    # 跳过开头的 '('，统一扫描参数段和返回段
+    while i < n:
+        c = desc[i]
+        if c in '()':
+            i += 1
+            continue
+        if c == '[':                  # 数组：跳过所有 [ 前缀
+            while i < n and desc[i] == '[':
+                i += 1
+            if i >= n:
+                break
+            c = desc[i]
+        if c == 'L':                  # 对象类型 Lxxx/yyy;
+            j = desc.index(';', i)
+            cls = desc[i+1:j]
+            if cls:
+                result.append(cls)
+            i = j + 1
+        else:                         # 基本类型 / V：单字符跳过
+            i += 1
+    return result
+
+
 def _vta_analyze(bytecode: bytes, pool, return_summaries: dict | None = None) -> dict:
     """
     线性操作数栈模拟（VTA），返回 {invokevirtual指令偏移量: 接收者具体类名或None}。
@@ -420,11 +452,17 @@ def _scan(bytecode: bytes, pool, vta_override: dict | None = None):
                 if op == 0xB6 and vta_override and i in vta_override and vta_override[i]:
                     cls = vta_override[i]
                 vcalls.append((cls, nm, desc))
+                # 收集描述符中参数/返回值涉及的类型
+                other_refs.extend(_extract_desc_classes(desc))
             i += 3 if op == 0xB6 else 5
 
         elif op in (0xB7, 0xB8):                   # invokespecial, invokestatic
             ref = _mref(pool, struct.unpack_from('>H', bytecode, i + 1)[0])
-            if ref: dcalls.append(ref)
+            if ref:
+                dcalls.append(ref)
+                # 收集描述符中参数/返回值涉及的类型
+                _, _, desc = ref
+                other_refs.extend(_extract_desc_classes(desc))
             i += 3
 
         elif op == 0xBA:                            # invokedynamic（跳过）
@@ -868,6 +906,10 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
         with open(path, 'rb') as f: data = f.read()
         ucls, pool, methods, _, _ = _parse_class(data)
         for mname, mdesc, bc, _ in methods:
+            # 用户方法自身描述符里的参数/返回类型也是类型依赖
+            for dcls in _extract_desc_classes(mdesc):
+                if _in_scope(dcls):
+                    refs.add(dcls)
             if bc:
                 if call_graph is not None:
                     _cur[0] = (ucls, mname, mdesc)
@@ -882,6 +924,10 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
         _, pool, methods, _, _ = parsed
         for mname, mdesc, bc, is_native in methods:
             if mname == name and mdesc == desc:
+                # 无论方法体是否存在，描述符里的参数/返回类型都是类型依赖
+                for dcls in _extract_desc_classes(mdesc):
+                    if _in_scope(dcls):
+                        refs.add(dcls)
                 if is_native:
                     native_stubs.add((cls, name, desc))
                 elif bc:
