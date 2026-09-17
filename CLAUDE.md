@@ -6,6 +6,15 @@ Java → Rust 转译器。将 Java `.class` 字节码翻译为等价的 Rust 源
 
 ---
 
+## 转译等价性原则
+
+> 详细的 Java → Rust 对照规则见 **[`docs/plans/java-rust-translation-reference.md`](docs/plans/java-rust-translation-reference.md)**。  
+> 该文档是权威参考，覆盖：类型映射、字段访问封装、继承/Deref 链、虚方法 vtable、数组、异常、null 语义、String、包装类、接口等所有构造的等价形式。
+
+**核心目标**：生成的 Rust 代码与 Java 源码 1:1 对应。Java 开发者可直接读懂 `java_class!` 块内的代码逻辑；所有 Rust 实现复杂度（`RefCell`/`Rc`/vtable trait/borrow 窗口）由 `java_class!` 宏和 codegen 管线封装，对读者不可见。
+
+---
+
 ## 核心架构原则（实现时必须遵守）
 
 ### 0. 代码生成优先：能生成的都走生成器
@@ -185,6 +194,8 @@ python3 scripts/run_tests.py --filter TestXxx   # 单测试
    区分依据：读取 `generic_signature` 属性（注解中始终存在），而非 `descriptor`。
 
 **检验方式**：在 Rust 生成代码中搜索任何 `jvm_` 前缀的方法名或不在 `java.*` 命名空间下的 trait，若存在即违反本原则。
+
+> 命名原则和所有 Java → Rust 等价形式的完整对照表见 **[`docs/plans/java-rust-translation-reference.md`](docs/plans/java-rust-translation-reference.md)**。
 
 ---
 
