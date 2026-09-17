@@ -378,7 +378,17 @@ grep "'String'" codegen/type_map.py  # 应无输出
 
 **目标**：`Integer`、`Long`、`Boolean` 等包装类从 `java/lang/Integer.class` 等字节码生成，移除 `JVM_RUST` 中的透明映射。
 
-> **状态：📋 延后** — 当前 `Integer → i32` 透明映射在 HelloWorld 路径无语义漏洞；autoboxing bytecode pattern 识别和包装类 native 实现工作量较大，待后续推进。
+> **状态：✅ 部分完成（透明映射修复）** — commit fa8355e (2026-09-18)
+> 透明映射路径下的四类 autoboxing 运行时问题已修复：
+> 1. UNBOX_VIRTUAL：`booleanValue`/`charValue` 在 `i32` 上生成类型转换（原 panic）
+> 2. `equals` 在基本类型上生成 `==`（原 E0599）
+> 3. `println_v` 去掉多余 `.into()` 避免 E0283 类型歧义
+> 4. `_is_jnull` 正确识别 `Object::default()` 为 null
+> 5. `_extract_clinit_arrays`：从 `<clinit>` 提取常量数组（Integer.DigitOnes/DigitTens/digits）
+>
+> 剩余未解决（等待 CFG/IR 完善后推进）：
+> - `toBinaryString`/`toHexString` 前导零问题（`numberOfLeadingZeros` CFG 早返回 bug）
+> - `parseInt` 依赖 `Preconditions` 内部类 stub
 
 #### 延后原因
 
