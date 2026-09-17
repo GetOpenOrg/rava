@@ -198,6 +198,14 @@ def _fref_cls(pool, ref_idx):
     if not e or e[0] != _FIELDREF: return None
     return _cls_name(pool, e[1])
 
+def _fref_type_desc(pool, ref_idx):
+    """提取字段引用的类型描述符字符串（如 "Ljava/util/Iterator;"）。"""
+    e = pool[ref_idx]
+    if not e or e[0] != _FIELDREF: return None
+    nat = pool[e[2]]
+    if not nat or nat[0] != _NAME_TYPE: return None
+    return _utf8(pool, nat[2])
+
 
 def _count_args(desc: str) -> int:
     """从方法描述符计算参数个数（不含 this）"""
@@ -474,8 +482,13 @@ def _scan(bytecode: bytes, pool, vta_override: dict | None = None):
             i += 3
 
         elif op in (0xB2, 0xB3, 0xB4, 0xB5):      # getstatic/putstatic/getfield/putfield
-            cls = _fref_cls(pool, struct.unpack_from('>H', bytecode, i + 1)[0])
+            ref_idx = struct.unpack_from('>H', bytecode, i + 1)[0]
+            cls = _fref_cls(pool, ref_idx)
             if cls: other_refs.append(cls)
+            # 字段类型描述符中的类型引用（如 Ljava/util/Iterator; 中的 Iterator）
+            fdesc = _fref_type_desc(pool, ref_idx)
+            if fdesc:
+                other_refs.extend(_extract_desc_classes(fdesc))
             i += 3
 
         elif op in (0xBD, 0xC0, 0xC1):             # anewarray / checkcast / instanceof

@@ -186,27 +186,21 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
             if registry else set()
         )
-        # PERMANENT 手写 stub 的短名（glob import 引入，不在 registry 中）
-        _permanent_shorts = frozenset({
-            'Iterator', 'BiConsumer', 'BinaryOperator', 'Supplier', 'Function',
-        })
         import re as _re
         for name in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', sp):
-            if name in _builtin or name in _ctparams or name in _reg_shorts or name in _permanent_shorts:
+            if name in _builtin or name in _ctparams or name in _reg_shorts:
                 continue
             return False
         return True
 
-    # PERMANENT functional interface / registry 接口类型在参数位置强制使用 Object
-    # （Java 类型擦除语义；接口 = Object 别名，泛型形态不是合法 Rust 类型，
-    # 与 invoke.py / codegen.py 的降级规则保持一致）
-    _perm_iface_names = frozenset({'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator'})
+    # registry 中所有接口类型在参数 / 返回位置强制降级为 Object
+    # （Arch-1 接口 = Object 类型别名，泛型形态 X<...> 不是合法 Rust 类型）
     from ..instr.invoke import _registry_iface_shorts as _reg_iface_shorts_fn
-    _perm_iface_names = _perm_iface_names | _reg_iface_shorts_fn(registry)
+    _iface_shorts = _reg_iface_shorts_fn(registry)
     import re as _re2
     def _is_perm_iface_param(sp: str) -> bool:
         m = _re2.match(r'^(\w+)(?:<|$)', sp)
-        return bool(m and m.group(1) in _perm_iface_names)
+        return bool(m and m.group(1) in _iface_shorts)
 
     def _param_rust_type(i: int, desc_p: str) -> str:
         if sig_param_types and i < len(sig_param_types):
@@ -219,9 +213,8 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     # 调用点（invoke.py）按 generic_signature 记录返回类型，若存根声明仍用
     # 擦除描述符类型（如 getInterfaces0 的 [Class; → Vec<Object> 而真实是
     # Vec<Class<Object>>），调用结果与记录 E0308。
-    # T88：接口类型在返回位置与参数位置同规则降级——接口是 Object 别名
-    # （宏 is_interface → type X = Object，不带泛型参数），"Iterator<E>" 不是
-    # 合法类型，且 Iterator 名字会撞 prelude trait 报 E0782。
+    # 接口类型在返回位置与参数位置同规则降级——接口是 Object 别名
+    # （宏 is_interface → type X = Object，不带泛型参数，泛型形态不是合法 Rust 类型）
     if sig_ret_type and _sig_param_valid(sig_ret_type) and not _is_perm_iface_param(sig_ret_type):
         rust_ret = sig_ret_type
 

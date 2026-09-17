@@ -68,13 +68,10 @@ def _lookup_method_sig_params(
                     resolved.append(None)   # 擦除，使用 jvm_to_rust(descriptor) 降级
                 else:
                     resolved.append(t)
-            # PERMANENT functional interface / registry 接口参数（Supplier<A>、
-            # BiFunction<...>、Consumer<T> 等）在生成的代码中统一用 Object
-            # （Arch-1 接口 = Object 类型别名，泛型形态 X<...> 不是合法 Rust
-            # 类型），调用方也必须降级，否则类型不匹配
+            # registry 中所有接口的短名在调用点降级为 Object（Arch-1 接口 = Object
+            # 类型别名，泛型形态 X<...> 不是合法 Rust 类型）
             import re as _re_iface
-            _perm_iface_names = frozenset({'Supplier', 'BiConsumer', 'BinaryOperator', 'Function', 'Iterator'})
-            _reg_iface_shorts = _perm_iface_names | _registry_iface_shorts(registry)
+            _reg_iface_shorts = _registry_iface_shorts(registry)
             final_resolved: list[str | None] = []
             for t in resolved:
                 if t is not None:
