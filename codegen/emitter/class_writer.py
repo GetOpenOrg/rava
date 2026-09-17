@@ -404,39 +404,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # T76 的 as_xxx / into_xxx upcast 方法已由 java_class! 宏统一承接
     # （宏生成 `__super()` / `__into_super()`，upcast 与字段存储解耦，见方案 §16）。
 
-    # T55：为每个祖先生成 From<Self> for Ancestor（直接父类 + 整条祖先链）。
-    # coerce.py 的 upcast 路径依赖它（`child.into()` 出现在期望父类类型的位置），
-    # 所以不能删除。访问路径改走宏生成的 `__into_super()`，祖先级数用链式调用表达：
-    #   v.__into_super()                      → 直接父类
-    #   v.__into_super().__into_super()       → 祖父
-    # 全量手写类的 From impl 由手写文件自行提供，codegen 跳过。
-    if _has_super and registry and not _full_impl:
-        child_full = struct_name + ty_params_only
-        impl_generics_for_from = f"<{bounds_str}>" if class_type_params else ''
-        access_expr = 'v'
-        cur_super = ci.super_class
-        child_tparams_t55: list[str] = list(class_type_params)
-        while cur_super and cur_super != 'java/lang/Object':
-            parent_rust_name = short_cls(cur_super)
-            parent_full_type = parent_rust_name
-            ancestor_ci = registry.get(cur_super)
-            if ancestor_ci:
-                ancestor_params = parse_class_type_params(ancestor_ci.generic_signature) if ancestor_ci.generic_signature else []
-                if ancestor_params:
-                    if child_tparams_t55:
-                        args = child_tparams_t55[:len(ancestor_params)]
-                        while len(args) < len(ancestor_params):
-                            args.append('Object')
-                    else:
-                        args = ['Object'] * len(ancestor_params)
-                    parent_full_type += '<' + ', '.join(args) + '>'
-            access_expr = f'{access_expr}.__into_super()'
-            parts.append(
-                f"impl{impl_generics_for_from} From<{child_full}> for {parent_full_type} {{\n"
-                f"    fn from(v: {child_full}) -> {parent_full_type} {{ {access_expr} }}\n"
-                f"}}\n"
-            )
-            cur_super = ancestor_ci.super_class if ancestor_ci else None
+    # T55 已删除（R-2）：
+    # From<Child> for Parent 链由 invoke.py / sim.py 的显式 __into_super() 链替代，
+    # 宏为有父类的类生成 Deref<Target=Parent> 覆盖引用层面的向上转型。
+    # upcast 调用点：Clone::clone(&child).__into_super().__into_super()...（见 coerce._into_super_chain）
 
     # T55b 已删除（Arch-5）：
     # Arch-1 后接口 = Object 类型别名，From<ConcreteClass> for Interface 语义上等于

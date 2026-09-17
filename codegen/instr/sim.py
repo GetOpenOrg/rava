@@ -24,7 +24,7 @@ from .coerce import (
     _coerce_to_object, _coerce_from_null, _coerce_value,
     _parse_field_ref, _is_subtype, _rust_type_to_binary,
     _get_field_generic_signature, _has_subtypes, _get_all_subtypes_ordered,
-    _PRIMITIVE_RUST_TYPES,
+    _PRIMITIVE_RUST_TYPES, _into_super_chain,
 )
 from .invoke import (
     _gen_invokespecial, _gen_invokestatic, _gen_invokevirtual, _gen_string_concat,
@@ -442,9 +442,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             elif (ftype not in _PRIMITIVE_RUST_TYPES and val_ty_name not in _PRIMITIVE_RUST_TYPES
                   and ftype not in ('Object', '()', val_ty_name)
                   and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
-                # T55（I-2 修复）：子类型赋给祖先类型字段（T55 生成传递性 From impl，_is_subtype 安全）
-                # 用 <_ as Into<ftype>>::into() 显式消歧义，避免多个 From impl 导致的 E0282
-                val_str = f"<_ as Into<{ftype}>>::into({val_str_raw})"
+                # R-2：子类型赋给祖先类型字段，用显式 __into_super() 链（替代已删除的 T55 From impl）
+                chain = _into_super_chain(val_ty_name.split('<')[0], ftype.split('<')[0], registry)
+                val_str = f"{val_str_raw}{chain}"
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
             # 引用类型赋值时加 Clone::clone()，避免 E0382（move after use）
@@ -562,8 +562,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
             if (elem_ty != val_ty_str
                     and _is_subtype(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)):
-                # T55: 子类元素存入父类数组（如 TreeNode → Vec<Node>），From impl upcast
-                val_str = f"Clone::clone(&{val_str}).into()"
+                # R-2: 子类元素存入父类数组，用 __into_super() 链（替代已删除的 T55 From impl）
+                chain = _into_super_chain(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)
+                val_str = f"Clone::clone(&{val_str}){chain}"
             else:
                 # 同类型数组：只需 Clone
                 val_str = f"Clone::clone(&{val_str})"
@@ -671,9 +672,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty)
               and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
-            # T55：返回值是子类型（含传递），方法声明返回父类型（From impl 由 class_writer T55/T55b 生成）
-            # 用 <_ as Into<ret_ty>>::into() 显式消歧义，避免多个 From impl 导致的 E0282
-            expr_s = f"<_ as Into<{ret_ty}>>::into({expr_s})"
+            # R-2：返回值是子类型，用显式 __into_super() 链（替代已删除的 T55 From impl）
+            chain = _into_super_chain(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)
+            expr_s = f"{expr_s}{chain}"
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty) and actual_ty != 'Object'):
             # 类型不兼容（actual 不是 ret 的子类型时，如 checkcast Serializable → return Comparator<Object>）：

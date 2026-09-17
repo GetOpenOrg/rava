@@ -870,6 +870,25 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     };
 
+    // R-2: Deref<Target=Parent> — 为有直接父类的类生成 Deref/DerefMut，
+    // 使 deref coercion 自动处理多层继承链上的方法调用与引用转换。
+    // 替代 codegen T55 For<Child> for Parent 链（class_writer.py 已删除该循环）。
+    let deref_impl: TokenStream2 = if let Some(sup_ty) = &meta.superclass {
+        quote! {
+            impl #impl_g ::std::ops::Deref for #struct_ident #ty_g #where_c {
+                type Target = #sup_ty;
+                #[inline]
+                fn deref(&self) -> &#sup_ty { &self.0._super }
+            }
+            impl #impl_g ::std::ops::DerefMut for #struct_ident #ty_g #where_c {
+                #[inline]
+                fn deref_mut(&mut self) -> &mut #sup_ty { &mut self.0._super }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #inner_struct
         #newtype
@@ -878,5 +897,6 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         #vtable_impl
         #into_impl
         #from_impl
+        #deref_impl
     }
 }

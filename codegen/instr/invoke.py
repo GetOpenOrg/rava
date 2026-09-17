@@ -234,7 +234,7 @@ def _coerce_arg(
     from ..render import render_type as _rt
     from .coerce import (
         _coerce_from_null, _coerce_to_object, _coerce_to_interface,
-        _coerce_value, _is_subtype, _PRIMITIVE_RUST_TYPES,
+        _coerce_value, _is_subtype, _PRIMITIVE_RUST_TYPES, _into_super_chain,
     )
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
@@ -259,8 +259,9 @@ def _coerce_arg(
     if (expected not in _PRIMITIVE_RUST_TYPES and actual not in _PRIMITIVE_RUST_TYPES
             and expected not in ('Object', '()', actual)
             and _is_subtype(actual.split('<')[0], expected.split('<')[0], registry)):
-        # T55：子类传给父类参数，通过 From impl 类型提升
-        return f"Clone::clone(&{e}).into()"
+        # R-2：子类传给父类参数，通过显式 __into_super() 链（替代已删除的 T55 From impl）
+        chain = _into_super_chain(actual.split('<')[0], expected.split('<')[0], registry)
+        return f"Clone::clone(&{e}){chain}"
     # Fix 18：actual 是 Object（运行时多态值）而 expected 是具体引用类型 ——
     # Java 调用点隐式 checkcast 语义 → downcast（运行时校验，不符则 panic）。
     # 覆盖「callee 签名参数是精确泛型形态而调用方局部变量被擦除为 Object」
