@@ -17,7 +17,6 @@ import re
 JVM_RUST: dict[str, str] = {
     'I': 'i32', 'J': 'i64', 'F': 'f32', 'D': 'f64', 'Z': 'bool',
     'B': 'i8',  'S': 'i16', 'C': 'u16', 'V': '()',
-    'Ljava/lang/String;':  'String',     # java.lang.String（不是 std::string::String）
     'Ljava/lang/Object;':  'Object',
     # 注：Ljava/lang/Class; 不做硬编码 —— 走 registry 泛型推导得到
     # Class<Object>（jvm_to_rust 的 registry 分支），与 generic_signature
