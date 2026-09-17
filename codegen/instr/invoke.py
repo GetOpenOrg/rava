@@ -703,10 +703,28 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         if target_ty is None or obj_ty == target_ty:
             sim.push(obj_expr, obj_ty_node)
             return
+        # 接收者已是基本类型但与目标不同（Boolean.valueOf 被 BOXING_SKIP_STATIC 跳过
+        # 后栈上留 i32，再调 booleanValue 期望 bool）：生成类型转换而非方法调用
+        if obj_ty in _PRIMITIVE_RUST_TYPES:
+            v = sim.fresh()
+            if target_ty == 'bool':
+                sim.emit(RawStmt(f"let {v}: bool = ({obj_e} != 0);"))
+            else:
+                sim.emit(RawStmt(f"let {v}: {target_ty} = {obj_e} as {target_ty};"))
+            sim.push(Var(v), RsNamed(target_ty))
+            return
         # 接收者是装箱对象（Integer/Double/Number 等），生成实际方法调用完成解箱
         v = sim.fresh()
         sim.emit(RawStmt(f"let {v}: {target_ty} = {obj_e}.{mname}()?;"))
         sim.push(Var(v), RsNamed(target_ty))
+        return
+
+    # 基本类型 .equals(x) → 生成 == 比较（基本类型无 equals 方法）
+    if mname == 'equals' and len(args) == 1 and obj_ty in _PRIMITIVE_RUST_TYPES:
+        raw_arg = args[0].removesuffix('.into()')
+        v = sim.fresh()
+        sim.emit(RawStmt(f"let {v}: bool = ({obj_e} == {raw_arg});"))
+        sim.push(Var(v), RsNamed('bool'))
         return
 
     # JVM 数组.getClass() → Object::default()（代表 Class<T[]>）
@@ -727,7 +745,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         elif params == ['F']:
             sim.emit(RawStmt(f"{obj_e}.println_v(java_fmt_f32({args[0]}))?;"))
         else:
-            sim.emit(RawStmt(f"{obj_e}.println_v({args[0]})?;"))
+            # 基本类型传给 println(Object) 时 .into() 产生类型推断歧义：
+            # println_v<T: Display> 直接接受 i32/bool 等，无需装箱
+            arg = args[0].removesuffix('.into()')
+            sim.emit(RawStmt(f"{obj_e}.println_v({arg})?;"))
         return
 
     # 若接收方 Rust 类型是 java_runtime 手写类，不做 mangle

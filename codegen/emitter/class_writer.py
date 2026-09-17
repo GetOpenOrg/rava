@@ -74,6 +74,79 @@ def _extract_clinit_consts(ci: ClassInfo) -> dict[str, str]:
     return result
 
 
+def _push_int_value(instr) -> 'int | None':
+    """从 push 指令中提取整数值（iconst_* / bipush / sipush）。"""
+    if instr.opcode in _CONST_PUSH_OPCODES:
+        return int(_CONST_PUSH_OPCODES[instr.opcode])
+    if instr.opcode in ('bipush', 'sipush') and instr.operand is not None:
+        return int(instr.operand)
+    return None
+
+
+def _extract_clinit_arrays(ci: ClassInfo) -> 'dict[str, list[int]]':
+    """扫描 <clinit> 中 newarray + dup + index + value + xastore 模式，
+    提取静态 final 数组（[B/[C/[S/[I）的全部常量元素值。
+    返回 {field_name: [val0, val1, ...]}。
+    """
+    clinit = next((m for m in ci.methods if m.name == '<clinit>'), None)
+    if not clinit or not clinit.instrs:
+        return {}
+
+    instrs = clinit.instrs
+    result: dict[str, list[int]] = {}
+    _XASTORE = frozenset({'bastore', 'castore', 'sastore', 'iastore'})
+
+    for put_i, ins in enumerate(instrs):
+        if ins.opcode != 'putstatic':
+            continue
+        comment = ins.comment or ''
+        if not comment.startswith('Field ') or '.' not in comment:
+            continue
+        rest = comment[len('Field '):]
+        if '.' not in rest:
+            continue
+        cls_part, field_desc = rest.split('.', 1)
+        if cls_part != ci.name or ':' not in field_desc:
+            continue
+        fname = field_desc.split(':')[0]
+        desc = field_desc.split(':', 1)[1]
+        if desc not in ('[B', '[C', '[S', '[I'):
+            continue
+
+        # 向前查找对应的 newarray 指令
+        na_i = put_i - 1
+        while na_i >= 0 and instrs[na_i].opcode != 'newarray':
+            na_i -= 1
+        if na_i < 0:
+            continue
+
+        # newarray 与 putstatic 之间的指令组 = dup + index_push + value_push + xastore
+        elem_instrs = instrs[na_i + 1:put_i]
+        if not elem_instrs or len(elem_instrs) % 4 != 0:
+            continue
+
+        values: dict[int, int] = {}
+        valid = True
+        for k in range(0, len(elem_instrs), 4):
+            grp = elem_instrs[k:k + 4]
+            if grp[0].opcode != 'dup' or grp[3].opcode not in _XASTORE:
+                valid = False
+                break
+            idx = _push_int_value(grp[1])
+            val = _push_int_value(grp[2])
+            if idx is None or val is None:
+                valid = False
+                break
+            values[idx] = val
+
+        if not valid or not values:
+            continue
+        max_idx = max(values.keys())
+        result[fname] = [values.get(i, 0) for i in range(max_idx + 1)]
+
+    return result
+
+
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   jdk_crate_pkg_paths: list[str] | None = None,
                   stub_bodies: bool = False,
@@ -457,6 +530,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     _nf_covered_sf = (_nf_entry or {}).get('methods', set())
     # 从 <clinit> 提取简单常量赋值（补充 ConstantValue attribute 未覆盖的情况）
     _clinit_consts = _extract_clinit_consts(ci)
+    # 从 <clinit> 提取常量数组初始化（newarray + dup/index/value/xastore 模式）
+    _clinit_arrays = _extract_clinit_arrays(ci)
     # JVM 原始类型描述符集合，可安全包装在 OnceLock<Mutex<T>> 中（均实现 Send + Copy）
     # String（Java 自定义类型）不在此集合，因其含 Rc 字段，不实现 Send
     _MUTABLE_STATIC_DESCS = frozenset({'I', 'J', 'F', 'D', 'Z', 'B', 'C', 'S'})
@@ -543,6 +618,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 f'    unsafe {{ {_static_var} = Some(v); }}\n'
                 f'}}'
             )
+        elif sf.name in _clinit_arrays:
+            # <clinit> 中识别到 newarray + dup/index/value/xastore 模式：生成常量数组
+            _arr_vals = _clinit_arrays[sf.name]
+            _desc_inner = sf.descriptor[1:]   # [B→B, [C→C, [S→S, [I→I
+            _elem_rust = {'B': 'i8', 'C': 'u16', 'S': 'i16', 'I': 'i32'}.get(_desc_inner, 'i8')
+            _items = ', '.join(f'{v} as {_elem_rust}' for v in _arr_vals)
+            body = f'Rc::new(RefCell::new(vec![{_items}]))'
+            field_meta = _java_field_attr(sf)
+            method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
         else:
             # 生成 panic stub，确保 getstatic 对应的 ClassName::fieldName() 能编译
             body = f'panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")'

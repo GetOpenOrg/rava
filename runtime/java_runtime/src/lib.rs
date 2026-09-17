@@ -32,10 +32,15 @@ pub fn java_fmt_f32(v: f32) -> String {
 }
 
 /// JVM null 检查：ifnull/ifnonnull 字节码翻译辅助。
-/// Rust 类型不可为 null，此函数始终返回 false。
-/// Option<T> 类型单独通过 Option::is_none() 处理。
+/// Object::default()（内部 vtable = ()）表示 Java null；其他类型始终返回 false。
 #[inline(always)]
-pub fn _is_jnull<T>(_val: &T) -> bool { false }
+pub fn _is_jnull<T: 'static>(val: &T) -> bool {
+    if let Some(obj) = (val as &dyn std::any::Any).downcast_ref::<Object>() {
+        obj.0.as_any().downcast_ref::<()>().is_some()
+    } else {
+        false
+    }
+}
 
 
 /// MutexHolder：包装 parking_lot::ReentrantMutex，为 InternalLock 等需要 PartialEq 的结构体使用
