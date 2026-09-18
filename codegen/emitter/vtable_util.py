@@ -1,5 +1,6 @@
 # 从 codegen/emitter/class_writer.py 中拆出
 
+from ..type_map import short_cls as _short_cls_g
 from ..constants import safe_ident, OBJECT_CLASS as _OBJECT_CLASS
 from ..type_map import mangle_name
 
@@ -8,7 +9,7 @@ _ACC_PRIVATE = 0x0002
 
 def _bin_to_rust(binary_name: str) -> str:
     """将 JVM binary 名（含 / 和 $）转为 Rust 类型名。"""
-    return binary_name.rsplit('/', 1)[-1].replace('$', '_')
+    return _short_cls_g(binary_name)
 
 
 def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',

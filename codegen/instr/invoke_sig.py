@@ -1,5 +1,6 @@
 # 从 codegen/instr/invoke.py 中拆出
 
+from ..type_map import short_cls as _short_cls_g
 from ..type_map import (
     short_cls,
     parse_class_type_params as _parse_class_type_params,
@@ -173,7 +174,7 @@ def _registry_iface_shorts(registry: dict | None) -> frozenset[str]:
     if _cached is not None:
         return _cached
     _shorts = frozenset(
-        _bin.rsplit('/', 1)[-1].replace('$', '_')
+        _short_cls_g(_bin)
         for _bin, _ci in registry.items()
         if getattr(_ci, 'is_interface', False)
     )
@@ -193,7 +194,7 @@ def _concrete_class_shorts(registry: dict | None) -> frozenset[str]:
     if _cached is not None:
         return _cached
     _shorts = frozenset(
-        _bin.rsplit('/', 1)[-1].replace('$', '_')
+        _short_cls_g(_bin)
         for _bin, _ci in registry.items()
         if not getattr(_ci, 'is_interface', False)
     ) | frozenset(_JAVA_RUNTIME_SHORT_NAMES)
@@ -232,7 +233,7 @@ def _generated_concrete_shorts(registry: dict) -> frozenset[str]:
     _cached = _generated_shorts_cache.get(_key)
     if _cached is None:
         _cached = frozenset(
-            _bin.rsplit('/', 1)[-1].replace('$', '_')
+            _short_cls_g(_bin)
             for _bin, _ci in registry.items()
             if not getattr(_ci, 'is_interface', False)
         )
@@ -288,7 +289,7 @@ def _lookup_method_sig_ret(
                 'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
                 'JArray',  # Rust 端数组包装，不对应 Java 类
             })
-            _reg_shorts = {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
+            _reg_shorts = {_short_cls_g(k) for k in registry}
             for name in _re_v.findall(r'[A-Za-z_][A-Za-z0-9_]*', sig_ret):
                 if name in _builtin or name in callee_tparams or name in _reg_shorts:
                     continue

@@ -1,5 +1,6 @@
 # 从 codegen/instr/sim.py 中拆出
 
+from ...type_map import short_cls as _short_cls_g
 from ...stack import BOOL
 from ...rs_ir import Lit, RawExpr, RsNamed
 from ...render import render_expr, render_type
@@ -79,7 +80,7 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 # 例外：源是具体类且静态上并未实现目标接口（交叉转型，运行时子类才实现，
                 # `(DirectBuffer) byteBuffer`）——接口视图只能经对象身份取得 → 装箱为 Object
                 _src_base = src_name.split('<')[0]
-                _tgt_short = comment.rsplit('/', 1)[-1].replace('$', '_')
+                _tgt_short = _short_cls_g(comment)
                 if (comment != _OBJECT_CLASS and not comment.startswith('[')
                         and _rust_type_to_binary(_src_base, registry)
                         and _src_base != _tgt_short
@@ -108,8 +109,7 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             # jvm_to_rust 对接口返回 'Object'；instanceof 子类型判断需要接口的实际 Rust 短名
             # 用二进制名末段（去路径后 $ → _）还原接口 Rust 短名，供 _is_subtype 正确匹配
             if target_rust == 'Object' and not comment.startswith('[') and comment != _OBJECT_CLASS:
-                _last = comment.rsplit('/', 1)[-1]
-                target_for_subtype = _last.replace('$', '_')
+                target_for_subtype = _short_cls_g(comment)
             else:
                 target_for_subtype = target_rust
             obj_ty_str = render_type(val_ty_inst)

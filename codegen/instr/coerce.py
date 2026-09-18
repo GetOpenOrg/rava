@@ -3,6 +3,7 @@
 无 StackSim 状态，可被 invoke.py 和 sim.py 安全导入。
 """
 
+from ..type_map import short_cls as _short_cls_g
 import re
 from ..constants import safe_ident as _safe_field, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, OBJECT_CLASS as _OBJECT_CLASS
 from ..type_map import (
@@ -99,7 +100,7 @@ def parse_method_ref(comment: str) -> tuple[str | None, str, list, str]:
     desc    = m.group(3)
 
     if raw_cls:
-        raw_cls = raw_cls.split('/')[-1].split('.')[-1].replace('$', '_')
+        raw_cls = _short_cls_g(raw_cls)
 
     return (raw_cls, mname, parse_descriptor_params(desc), parse_descriptor_return(desc))
 
@@ -282,7 +283,7 @@ def _find_super_chain_to_class(current_binary: str, target_cls_short: str, regis
     if not registry or not current_binary or not target_cls_short:
         return '_super.'
     # 当前类短名（私有方法 invokespecial 时 target == current）
-    cur_short = current_binary.rsplit('/', 1)[-1].replace('$', '_') if '/' in current_binary else current_binary.replace('$', '_')
+    cur_short = _short_cls_g(current_binary) if '/' in current_binary else current_binary.replace('$', '_')
     if target_cls_short == cur_short or target_cls_short == current_binary:
         return ''  # 同类调用（私有方法）：不需要 _super 路由
     ci = registry.get(current_binary)
@@ -292,7 +293,7 @@ def _find_super_chain_to_class(current_binary: str, target_cls_short: str, regis
     sc = ci.super_class
     while sc and sc != _OBJECT_CLASS:
         path_parts.append('_super')
-        sc_short = sc.rsplit('/', 1)[-1].replace('$', '_') if '/' in sc else sc.replace('$', '_')
+        sc_short = _short_cls_g(sc) if '/' in sc else sc.replace('$', '_')
         if sc_short == target_cls_short or sc == target_cls_short:
             return '.'.join(path_parts) + '.'
         sc_ci = registry.get(sc)
@@ -361,12 +362,9 @@ def _rust_type_to_binary(rust_short: str, registry: dict | None) -> str:
     注意：Java 内部类 $ 在 Rust 中转为 _，比较时需转换。"""
     if not registry:
         return ''
-    for binary in registry:
-        last = binary.rsplit('/', 1)[-1] if '/' in binary else binary
-        # Java 内部类 $ → Rust _
-        if last.replace('$', '_') == rust_short:
-            return binary
-    return ''
+    from ..type_map import _registry_short_index
+    _ci = _registry_short_index(registry).get(rust_short)
+    return _ci.name if _ci is not None else ''
 
 
 def _is_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> bool:
@@ -379,7 +377,7 @@ def _is_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> boo
         return False
 
     def _short(binary: str) -> str:
-        return binary.rsplit('/', 1)[-1].replace('$', '_')
+        return _short_cls_g(binary)
 
     visited: set[str] = set()
     queue: list[str] = [child_bin]
@@ -457,7 +455,7 @@ def _is_direct_subtype(child_rust: str, parent_rust: str, registry: dict | None)
     if not ci:
         return False
     def _short(b: str) -> str:
-        return b.rsplit('/', 1)[-1].replace('$', '_')
+        return _short_cls_g(b)
     # 直接超类
     if ci.super_class and ci.super_class != _OBJECT_CLASS:
         if _short(ci.super_class) == parent_rust:
@@ -487,7 +485,7 @@ def _common_ref_type(a_rust: str, b_rust: str, registry: dict | None) -> str | N
         if not ci or not ci.super_class or ci.super_class == _OBJECT_CLASS:
             return None
         cur = ci.super_class
-        sc_short = cur.rsplit('/', 1)[-1].replace('$', '_')
+        sc_short = _short_cls_g(cur)
         if _is_subtype(b_rust, sc_short, registry):
             return sc_short
     return None
@@ -679,7 +677,7 @@ def interface_special_member_name(owner_binary: str, mname: str, descriptor: str
     """`Iface.super.m(...)` 在实现类中的落点成员名：`Iface_super_m`（m 在接口内重载时带描述符后缀）。
     接口 default 方法体按「展开到实现类」建模，被覆盖的 default 方法体以该名字的
     非虚成员形式展开到调用者所在的类。定义侧（class_writer）与调用侧（invokespecial）共用。"""
-    owner_short = owner_binary.rsplit('/', 1)[-1].replace('$', '_')
+    owner_short = _short_cls_g(owner_binary)
     owner_ci = registry.get(owner_binary) if registry else None
     rust_m = mname
     if owner_ci is not None and mname in hierarchy_overloaded_names(owner_ci, registry):
@@ -795,7 +793,7 @@ def _class_known(cls_short: str, registry: dict | None) -> bool:
         return True
     norm = cls_short.replace('$', '_')
     for key in registry:
-        if key.rsplit('/', 1)[-1].replace('$', '_') == norm:
+        if _short_cls_g(key) == norm:
             return True
     return False
 
@@ -884,7 +882,7 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     if target_ci is None and '/' not in cls_name:
         norm = cls_name.replace('$', '_')
         for key, ci in registry.items():
-            if key.rsplit('/', 1)[-1].replace('$', '_') == norm:
+            if _short_cls_g(key) == norm:
                 target_ci = ci
                 break
     if target_ci is None:

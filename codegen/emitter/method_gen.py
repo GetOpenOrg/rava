@@ -2,6 +2,7 @@
 方法生成相关：_parse_synthetic_fn、_scan_impl_files、_gen_native_stub。
 """
 
+from ..type_map import short_cls as _short_cls_g
 import os
 import re
 from ..types import ClassInfo, ParsedMethod
@@ -184,7 +185,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             'JArray',  # Rust 端数组包装，不对应 Java 类
         })
         _reg_shorts = (
-            {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
+            {_short_cls_g(k) for k in registry}
             if registry else set()
         )
         import re as _re

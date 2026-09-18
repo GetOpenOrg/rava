@@ -1,5 +1,6 @@
 # 从 codegen/instr/invoke.py 中拆出
 
+from ..type_map import short_cls as _short_cls_g
 from ..stack import StackSim
 from .. import inherited_calls as _inherited_calls
 from ..rs_ir import Lit, Var, RawExpr, RawStmt, RsNamed
@@ -579,7 +580,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 _owner_bin_v, _ = _resolve_method_owner(_obj_jvm, mname, registry, descriptor=_jvm_desc_v)
                 if _owner_bin_v and _owner_bin_v != _obj_jvm:
                     # 返回类型按 owner 在接收者静态类型下的实参化形态解析
-                    _owner_short_v = _owner_bin_v.rsplit('/', 1)[-1].replace('$', '_')
+                    _owner_short_v = _short_cls_g(_owner_bin_v)
                     _owner_args_v = _ancestor_vtable_args_by_short(
                         _ci_recv, obj_ty, registry).get(_owner_short_v, '')
                     _sig_owner, _sig_recv_ty = _owner_bin_v, _owner_short_v + _owner_args_v
@@ -601,7 +602,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                             _, _, params, ret = parse_method_ref(f"{mname}:{_bridged_v[1]}")
                             rust_ret = jvm_to_rust(ret, registry)
                             _sig_owner = _bridged_v[0].name
-                        _bridge_owner_short = _bridged_v[0].name.rsplit('/', 1)[-1].replace('$', '_')
+                        _bridge_owner_short = _short_cls_g(_bridged_v[0].name)
                         if _bridged_v[0].name != _obj_jvm and not _bridged_v[0].is_interface:
                             _owner_args_v = _ancestor_vtable_args_by_short(
                                 _ci_recv, obj_ty, registry).get(_bridge_owner_short, '')

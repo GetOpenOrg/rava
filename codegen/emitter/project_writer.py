@@ -2,6 +2,7 @@
 Cargo workspace 写出：_write、_update_user_lib_rs、_append_cargo_bin、write_cargo_project。
 """
 
+from ..type_map import short_cls as _short_cls_g, configure_short_names as _configure_short_names
 import os
 import re
 from ..types import ClassInfo
@@ -141,6 +142,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     if jdk_class_infos:
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
+    _configure_short_names(registry)
 
     # 扫描 jdk_classes/src/**/*_impl.rs，构建 new_format_map（已手写方法 → codegen 跳过 stub）
     # 传入 registry 使 _scan_impl_files 能通过 registry 解析嵌套类的真实 binary_name（如 HashMap$TreeNode）
@@ -188,7 +190,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 if jdk_ci.name.startswith(_SKIP_GLOBAL_IMPORT_PREFIXES):
                     _rust_pkg = '::'.join(_safe_pkg_part(x) for x in _parts[:-1])
                     # Java 内部类 $ → Rust struct 名用 _
-                    _simple_cls = _parts[-1].replace('$', '_')
+                    _simple_cls = _short_cls_g(jdk_ci.name)
                     skipped_classes.add(f"{_rust_pkg}::{_simple_cls}")
         _jdk_pkg_path_set = set(jdk_crate_pkg_paths)
         conflict_map: dict[str, list[str]] = {}

@@ -2,6 +2,7 @@
 invoke 指令生成器：invokespecial / invokestatic / invokevirtual / invokedynamic(string concat)。
 """
 
+from ..type_map import short_cls as _short_cls_g
 import re
 from ..stack import StackSim
 from ..rs_ir import (
@@ -246,7 +247,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             return
         _sp_owner = _resolve_special_method_owner(
             _method_ref_binary_class(comment), mname, _method_ref_descriptor(comment), registry)
-        _owner_short = (_sp_owner.rsplit('/', 1)[-1].replace('$', '_')
+        _owner_short = (_short_cls_g(_sp_owner)
                         if _sp_owner else cls_short) or cls_short
         rust_mname = _safe_field(_mangle_if_overloaded(_owner_short or '', mname, comment, registry))
         base_fn = f"{_owner_short}__{rust_mname}_base"
@@ -333,8 +334,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
 
     if isinstance(obj_expr, NewPendingExpr):
         full_cls = obj_expr.class_name          # e.g. 'java/util/ArrayList'
-        raw_cls = full_cls.rsplit('/', 1)[-1]
-        raw_cls = short_cls(raw_cls) or raw_cls
+        raw_cls = short_cls(full_cls) or full_cls.rsplit('/', 1)[-1]
 
         if '/' in full_cls:
             # JDK class（含包路径）→ 用 new() 工厂（@synthetic）
@@ -438,8 +438,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         if obj_e in ('this', 'self') and cls:
             # super(args) 调用：在子类构造器中初始化 _super 字段
             # java/lang/Object 的 super() 是 no-op（Rust 不需要 Object 初始化）
-            raw_cls = cls.rsplit('/', 1)[-1]
-            raw_cls_rust = short_cls(raw_cls.replace('$', '_')) or raw_cls.replace('$', '_')
+            raw_cls_rust = short_cls(cls)
             if raw_cls_rust in ('Object',) or cls in (_OBJECT_CLASS,):
                 sim.emit(RawStmt(f"/* invokespecial {comment} (Object no-op) */"))
             else:

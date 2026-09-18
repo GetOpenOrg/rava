@@ -1,5 +1,6 @@
 # 从 codegen/instr/sim.py 中拆出
 
+from ...type_map import short_cls as _short_cls_g
 import re as _re_g
 
 from ...stack import BOOL, _clone_moved_var
@@ -102,7 +103,7 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
         # （当前 impl 类型参数 / registry 短名 / 内建容器），
         # 跨类不可见（声明类参数名与调用方不同）时降级回擦除形态
         _caller_tparams = set(sim.class_type_params) if sim.class_type_params else set()
-        _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
+        _reg_shorts = {_short_cls_g(_k) for _k in registry}
         if all(_n in _caller_tparams or _n in _reg_shorts or _n in _BUILTIN_G
                for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _parsed)):
             return _parsed
@@ -120,7 +121,7 @@ def _resolve_static_field(cls: str, field_name: str, descriptor: str, comment: s
     _getstatic_turbofish = ''
     _getstatic_cls_ci = None
     if registry and cls:
-        _cls_bin = cls if cls in registry else _rust_type_to_binary(cls.rsplit('/', 1)[-1].replace('$', '_'), registry) if '/' in cls else _rust_type_to_binary(cls.replace('$', '_'), registry)
+        _cls_bin = cls if cls in registry else _rust_type_to_binary(_short_cls_g(cls), registry) if '/' in cls else _rust_type_to_binary(cls.replace('$', '_'), registry)
         if not _cls_bin and cls in registry:
             _cls_bin = cls
         if _cls_bin:
@@ -142,7 +143,7 @@ def _resolve_static_field(cls: str, field_name: str, descriptor: str, comment: s
                           if _getstatic_cls_ci.generic_signature else [])
             _s_parsed = _parse_field_type(_sgsig, _s_tparams, registry)
             if _s_parsed and _s_parsed != 'Object' and _s_parsed != ty_str:
-                _s_reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
+                _s_reg_shorts = {_short_cls_g(_k) for _k in registry}
                 if all(_n in _s_reg_shorts or _n in _BUILTIN_G
                        for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _s_parsed)):
                     ty_str = _s_parsed
@@ -226,7 +227,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
     if op == 'new':
         raw = (comment or operand).strip()
         if raw.startswith('class '): raw = raw[6:]
-        sim.push(NewPendingExpr(raw), RsNamed(raw.split('/')[-1]))
+        sim.push(NewPendingExpr(raw), RsNamed(_short_cls_g(raw)))
 
     # ── invokespecial（含构造器）──
     elif op == 'invokespecial':
@@ -318,7 +319,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
         if cls and field_name:
             cls, rust_fname, _sf_ty, _turbofish = _resolve_static_field(
                 cls, field_name, descriptor, comment, registry)
-            raw_cls = cls.rsplit('/', 1)[-1].replace('$', '_')
+            raw_cls = _short_cls_g(cls)
             if _sf_ty in _PRIMITIVE_RUST_TYPES:
                 # JVM 操作数栈上 boolean/byte/char/short 都是 int，写入字段时按字段描述符还原
                 val_str = _coerce_value(render_expr(val_expr), val_ty, _sf_ty)

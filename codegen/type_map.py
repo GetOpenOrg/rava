@@ -112,7 +112,36 @@ def is_jdk(cls: str) -> bool:
     return '/' in cls
 
 
+# 跨包同简单名的类：binary name → 带包限定的 Rust 类型名（由 configure_short_names 从 registry 算出）
+_QUALIFIED_SHORT_NAMES: dict[str, str] = {}
+
+
+def configure_short_names(registry: dict | None) -> None:
+    """按 registry 计算 Rust 类型名的消歧表。
+
+    Rust 类型名 = 类的简单名（`$` → `_`）。不同包的类简单名相同时（Java 靠包名区分，
+    Rust 侧类型名字符串是类型身份的唯一载体，跨文件流动），同名组内按 binary name
+    字典序最小者保留简单名，其余以完整 binary name（`/`、`$` → `_`）为 Rust 类型名——
+    结构体、vtable、`use` 导入、类型串 ↔ binary 反查全部经 short_cls 取同一名字。
+    """
+    _QUALIFIED_SHORT_NAMES.clear()
+    _SHORT_INDEX_CACHE.clear()
+    groups: dict[str, list[str]] = {}
+    for binary in (registry or {}):
+        if '/' not in binary:
+            continue
+        groups.setdefault(binary.rsplit('/', 1)[-1].replace('$', '_'), []).append(binary)
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        for binary in sorted(members)[1:]:
+            _QUALIFIED_SHORT_NAMES[binary] = binary.replace('/', '_').replace('$', '_')
+
+
 def short_cls(cls: str) -> str:
+    qualified = _QUALIFIED_SHORT_NAMES.get(cls)
+    if qualified is not None:
+        return qualified
     name = cls.split('/')[-1].split('.')[-1] if cls else ''
     return name.replace('$', '_')
 
@@ -630,7 +659,7 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
         if mapped is not None:
             rust_type = mapped
         else:
-            short = class_name.rsplit('/', 1)[-1].replace('$', '_')
+            short = short_cls(class_name)
             # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突
             if registry and class_name in registry and registry[class_name].is_interface:
                 rust_type = _iface_full_path(class_name)

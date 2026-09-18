@@ -10,6 +10,7 @@
 - return e; → return Ok(e);
 """
 
+from ..type_map import short_cls as _short_cls_g
 from ..types import ParsedMethod, ClassInfo
 from ..type_map import (
     jvm_to_rust, sig_type, rust_default, mangle_name, short_cls,
@@ -127,7 +128,7 @@ def gen_method_body(
             'JArray',  # Rust 端数组包装，不对应 Java 类
         })
         _reg_shorts = (
-            {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
+            {_short_cls_g(k) for k in registry}
             if registry else set()
         )
         import re as _re

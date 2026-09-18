@@ -2,6 +2,7 @@
 单个 Java 类 → Rust 文件内容生成：_gen_class_rs 主函数。
 """
 
+from ..type_map import short_cls as _short_cls_g
 import os
 import re as _re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
@@ -259,7 +260,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # ── Step 2: 精确 cross_imports（按需逐类型导入，不使用包级 glob）───────────
     cross_imports: list[str] = []
     _prefix = user_crate_prefix or 'crate'
-    _self_simple = (ci.name.split('/')[-1] if '/' in ci.name else ci.name).replace('$', '_')
+    _self_simple = _short_cls_g(ci.name)
     _seen_imports: set[str] = set()  # 去重键："{rust_pkg}::{simple}"
 
     # prelude 里已有的泛型/newtype 名称，若 Java 类名与其重名，跳过 use 导入
@@ -275,7 +276,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if len(_parts) < 2:
             return
         _rust_pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _parts[:-1])
-        _simple = _parts[-1].replace('$', '_')
+        _simple = _short_cls_g(full_cls)
         if _simple == _self_simple:
             return
         _key = f"{_rust_pkg}::{_simple}"
@@ -318,39 +319,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # 消歧：同一简名存在于多个包时，精确 use 覆盖（conflict_map 仍需处理）
     if conflict_map:
-        _own_pkg_cm = '/'.join(ci.name.split('/')[:-1]) if '/' in ci.name else ''
-
-        def _pkg_to_use(pkg_slash: str) -> str:
-            return _prefix + '::' + '::'.join(
-                f'r#{p}' if p in _RUST_KEYWORDS else p
-                for p in pkg_slash.split('/')
-            )
-
+        # 同简单名的类各有唯一的 Rust 类型名（short_cls 的包限定消歧），被引用者逐个导入
         for _sn, _pkgs in conflict_map.items():
-            if _sn.replace('$', '_') == _self_simple:
-                continue
-            _matches = [p for p in _pkgs if f'{p}/{_sn}' in _referenced]
-            # 文件未引用此简名的任何变体，跳过（不生成无用 use）
-            if not _matches:
-                continue
-            if len(_matches) == 1:
-                _chosen = _matches[0]
-            elif _own_pkg_cm in _pkgs:
-                _chosen = _own_pkg_cm
-            elif _matches:
-                _chosen = _matches[0]
-            else:
-                _java = [p for p in _pkgs if p.startswith('java/')]
-                _chosen = _java[0] if _java else _pkgs[0]
-            # 检查 _seen_imports 去重，以及简名冲突（_seen_simples）
-            _cm_rust_pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _chosen.split('/'))
-            _cm_sn = _sn.replace('$', '_')
-            _cm_key = f"{_cm_rust_pkg}::{_cm_sn}"
-            if _cm_key not in _seen_imports and (
-                    _cm_sn not in _seen_simples or _seen_simples[_cm_sn] == _cm_key):
-                _seen_imports.add(_cm_key)
-                _seen_simples[_cm_sn] = _cm_key
-                cross_imports.append(f"use {_pkg_to_use(_chosen)}::{_cm_sn};")
+            for _p in sorted(_pkgs):
+                if f'{_p}/{_sn}' in _referenced:
+                    _add_precise_import(f'{_p}/{_sn}')
 
     # 被跳过包（如 jdk/）中的类型：按需精确导入
     if skipped_classes and _referenced:
@@ -361,7 +334,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _rust_pkg = '::'.join(
                 f'r#{p}' if p in _RUST_KEYWORDS else p for p in _cls_parts[:-1]
             )
-            _simple = _cls_parts[-1].replace('$', '_')
+            _simple = _short_cls_g(_full_cls)
             _sk_key = f"{_rust_pkg}::{_simple}"
             if (f"{_rust_pkg}::{_simple}" in skipped_classes
                     and _simple != _self_simple
@@ -381,7 +354,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 _vp = _vtable_cur.split('/')
                 if len(_vp) >= 2:
                     _vpkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _vp[:-1])
-                    _vsimple = _vp[-1].replace('$', '_')
+                    _vsimple = _short_cls_g(_vtable_cur)
                     _vkey = f"{_vpkg}::{_vsimple}__VTable"
                     if _vkey not in _seen_imports:
                         _seen_imports.add(_vkey)
@@ -430,7 +403,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 from ..instr.coerce import (
                     _resolve_special_method_owner as _rsmo, _method_ref_descriptor as _mrd)
                 _orig_cls = _rsmo(_orig_cls, _mname_s, _mrd(_c), registry)
-                _cls_s = _orig_cls.rsplit('/', 1)[-1].replace('$', '_')
+                _cls_s = _short_cls_g(_orig_cls)
                 _is_jdk = '/' in _orig_cls
                 if _is_jdk:
                     # JDK 类：仅在父类已生成（在 generated_classes 中）时才导入 __base 函数
@@ -451,7 +424,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     # 从 binary name（java/lang/AbstractStringBuilder）构建完整模块路径
                     _binary_parts = _orig_cls.split('/')
                     *_pkg, _simple_cls = _binary_parts
-                    _base_cls_simple = _simple_cls.replace('$', '_')
+                    _base_cls_simple = _short_cls_g(_orig_cls)
                     _snake_cls = to_snake(_simple_cls)
                     _base_mod = '::'.join(
                         f'r#{p}' if p in _RUST_KEYWORDS else p
@@ -528,7 +501,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # 构建注册表短名集合，用于校验字段类型中引用的类是否存在
     _registry_short_names: set[str] = (
-        {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
+        {_short_cls_g(_k) for _k in registry}
         if registry else set()
     )
     # 基础内建类型，不需要注册表校验
@@ -1253,7 +1226,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 _norm = _base_name.replace('_', '$')
                 for _rk in registry:
                     _rshort = _rk.rsplit('/', 1)[-1]
-                    if _rshort.replace('$', '_') == _base_name or _rshort == _norm:
+                    if _short_cls_g(_rk) == _base_name or _rshort == _norm:
                         _rparts = _rk.split('/')
                         if len(_rparts) >= 2:
                             _rpkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _rparts[:-1])

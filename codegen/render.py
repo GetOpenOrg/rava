@@ -6,6 +6,7 @@ render_item / render_stmt / render_expr / render_type 递归将 IR 树转为字�
 """
 
 from __future__ import annotations
+from .type_map import short_cls as _short_cls_g
 from .rs_ir import (
     # 类型
     RsPrimitive, RsNamed, RsRef, RsSlice, RsGeneric, RsTuple, RsInfer,
@@ -122,10 +123,10 @@ def render_expr(expr) -> str:
             return f'{expr.name}!({args})'
         return f'{expr.name}!()'
     if isinstance(expr, NewPendingExpr):
-        simple_name = expr.class_name.rsplit('/', 1)[-1].replace('$', '_')
+        simple_name = _short_cls_g(expr.class_name)
         return f'{simple_name}::new()'
     if isinstance(expr, StaticFieldRef):
-        simple_name = expr.class_name.rsplit('/', 1)[-1].replace('$', '_')
+        simple_name = _short_cls_g(expr.class_name)
         return f'{simple_name}{expr.turbofish}::{expr.field_name}()?'
     if isinstance(expr, RawExpr):
         return expr.code

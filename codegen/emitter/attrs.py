@@ -3,6 +3,7 @@ Java 元数据注释生成：to_snake、pkg_from_java、访问标志字符串、
 #[java_class] / #[java_field] / #[java_method] 属性块。
 """
 
+from ..type_map import short_cls as _short_cls_g
 import re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import ancestor_type_args, rust_type_with_args, instance_field_rust_name
@@ -100,7 +101,7 @@ def _method_modifiers_str(flags: int) -> str:
 
 def _bin_to_rust_short(binary_name: str) -> str:
     """JVM binary 名 → Rust 类型名（末段，$ → _）。"""
-    return binary_name.rsplit('/', 1)[-1].replace('$', '_')
+    return _short_cls_g(binary_name)
 
 
 def _compute_all_superclasses(ci: ClassInfo, registry: dict | None) -> list[str]:
@@ -315,7 +316,7 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         _hm = next((m for m in (ci.methods or [])
                     if m.name == 'hashCode' and m.descriptor == '()I'), None)
         if _hm:
-            _class_rust = ci.name.rsplit('/', 1)[-1].replace('$', '_')
+            _class_rust = _short_cls_g(ci.name)
             _vin = getattr(_hm, 'virtual_in', None)
             if _vin == _class_rust:
                 lines.append('#[has_hash_code_method = true]')
