@@ -552,13 +552,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
             }
 
-            // 祖先 vtable 的类型参数：若当前类有泛型用自己的 ty_g，否则用 superclass 的类型参数
-            // 例：Thread_State（无泛型）实现 Enum__VTable<Object>，Object 来自 superclass="Enum<Object>"
-            let anc_vtable_args: TokenStream2 = if gen.params.is_empty() {
-                superclass_vtable_args.clone()
-            } else {
-                quote! { #ty_g }
-            };
+            // 祖先 vtable 的类型实参：逐个祖先取 all_superclasses 中携带的实参
+            // 例：ReferencePipeline<P_IN, P_OUT> 实现 AbstractPipeline__VTable<P_IN, P_OUT, Object>
+            //     与 PipelineHelper__VTable<P_OUT>（元数、顺序各不相同）
+            let anc_vtable_args: TokenStream2 =
+                meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
 
             vtable_impls.push(quote! {
                 impl #impl_g #anc_vtable_ident #anc_vtable_args for #inner_ident #ty_g #where_c {
@@ -1037,16 +1035,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         // 为每个祖先（排除 Object 和自身）生成 From<Self> for Ancestor
         // 使用 all_superclasses（深度优先，最深祖先在前），已是 Rust short names
         let ancestors = meta.all_superclasses.clone();
-        // 祖先类型参数：若当前类有泛型用 ty_g，否则用 superclass 的类型参数
-        let anc_type_args: TokenStream2 = if gen.params.is_empty() {
-            superclass_vtable_args.clone()
-        } else {
-            quote! { #ty_g }
-        };
         let impls: Vec<TokenStream2> = ancestors.iter().map(|anc_name| {
             let anc_ident = format_ident!("{}", anc_name);
             let anc_vtable = format_ident!("{}__VTable", anc_name);
-            let atag = anc_type_args.clone();
+            let atag = meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
             quote! {
                 impl #impl_g From<#struct_ident #ty_g> for #anc_ident #atag #where_c {
                     fn from(child: #struct_ident #ty_g) -> #anc_ident #atag {
@@ -1264,14 +1256,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                         }
                     });
                 } else {
-                    // VirtualOverride 的祖先 VTable 类型参数：
-                    // 若当前类有自己的泛型用 ty_g，否则用 superclass 的类型参数
-                    // （ClassScope 无泛型，实现 AbstractScope__VTable<Object>）
-                    let anc_override_args: proc_macro2::TokenStream = if gen.params.is_empty() {
-                        superclass_vtable_args.clone()
-                    } else {
-                        quote! { #ty_g }
-                    };
+                    // VirtualOverride 的祖先 VTable 类型实参：取该祖先在 all_superclasses 中的实参
+                    let anc_override_args: proc_macro2::TokenStream =
+                        meta.ancestor_type_args.get(vtable_class).cloned().unwrap_or_default();
                     let mut body_gen = gen.clone();
                     body_gen.params.push(syn::parse_quote!(__BT));
                     body_gen.make_where_clause().predicates.push(

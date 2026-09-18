@@ -97,6 +97,20 @@ pub(crate) fn parse_impl_fns(input: ParseStream) -> syn::Result<Vec<FnItem>> {
 // 类级属性
 // ══════════════════════════════════════════════════════════════════════════════
 
+/// `Name<A, B>` → ("Name", `<A, B>`)；无实参时第二项为空 token 流。
+pub(crate) fn split_type_name_args(ty: &Type) -> (String, proc_macro2::TokenStream) {
+    if let Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            let args = match &seg.arguments {
+                syn::PathArguments::AngleBracketed(ab) if !ab.args.is_empty() => quote::quote! { #ab },
+                _ => proc_macro2::TokenStream::new(),
+            };
+            return (seg.ident.to_string(), args);
+        }
+    }
+    (quote::quote!(#ty).to_string(), proc_macro2::TokenStream::new())
+}
+
 #[derive(Default)]
 pub(crate) struct ClassMeta {
     pub binary_name: String,
@@ -104,6 +118,9 @@ pub(crate) struct ClassMeta {
     pub superclass_fields: Vec<(Ident, Type)>,
     /// 线性超类链（从最深祖先到直接父类），Rust short names，不含 Object 和 self。
     pub all_superclasses: Vec<String>,
+    /// 每个祖先在本类视角下的类型实参（含尖括号，如 `<P_IN, P_OUT, Object>`）；非泛型祖先为空。
+    /// 各祖先元数不同（`AbstractPipeline<A, B, S>` : `PipelineHelper<B>`），必须逐个祖先给出。
+    pub ancestor_type_args: HashMap<String, proc_macro2::TokenStream>,
     /// 每个祖先自己声明的字段列表：{ancestor_rust_name → [field_names]}。
     pub ancestor_fields_layout: HashMap<String, Vec<String>>,
     pub all_supertypes: Vec<String>,
@@ -126,8 +143,14 @@ impl ClassMeta {
                 }
             } else if path.is_ident("all_superclasses") {
                 let s = lit_str(attr)?;
-                m.all_superclasses =
-                    s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
+                // 格式：Anc1<Args>;Anc2;...（每项是一个 Rust 类型，实参由 codegen 沿
+                // SuperclassSignature 逐级代入解析）
+                for seg in s.split(';').filter(|x| !x.is_empty()) {
+                    let ty = syn::parse_str::<Type>(seg)?;
+                    let (name, args) = split_type_name_args(&ty);
+                    m.ancestor_type_args.insert(name.clone(), args);
+                    m.all_superclasses.push(name);
+                }
             } else if path.is_ident("ancestor_fields_layout") {
                 let s = lit_str(attr)?;
                 // 格式：AncName:field1,field2;AncName2:field3

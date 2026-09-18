@@ -422,7 +422,8 @@ class StackSim:
         # 以便 _hoist_if_vars 能将其与同名的 LetStmt 声明关联并正确提升。
         decl = self._decl_at(slot, for_store=False)
         if decl is not None:
-            return (Var(_safe_name(decl[0])), decl[1] if decl[1] is not None else I32)
+            # 声明表中类型为 None 的条目是 Object/接口声明的引用变量（基本类型总有具体类型）
+            return (Var(_safe_name(decl[0])), decl[1] if decl[1] is not None else RsNamed('Object'))
         name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
         return (Var(name), I32)
 

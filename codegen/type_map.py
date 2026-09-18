@@ -488,13 +488,30 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
         if has_type_args:
             type_args, j = _parse_type_args(sig, j, class_type_params, registry, method_bounds)
 
-        # 跳过 ClassTypeSigSuffix（.InnerClass…）
-        while j < len(sig) and sig[j] == '.':
-            j += 1
-            while j < len(sig) and sig[j] not in ('<', ';', '.'):
-                j += 1
-            if j < len(sig) and sig[j] == '<':
-                _, j = _parse_type_args(sig, j, class_type_params, registry, method_bounds)
+        # ClassTypeSigSuffix（`Outer<TE;>.Inner<TX;>`）：类型是内部类 Outer$Inner，
+        # 不是外部类。实参按内部类的有效形参选取：自带形参 → 本段实参；
+        # 形参继承自外部类（非静态内部类）→ 外层段实参。
+        if j < len(sig) and sig[j] == '.':
+            outer_args = type_args
+            while j < len(sig) and sig[j] == '.':
+                k = j + 1
+                while k < len(sig) and sig[k] not in ('<', ';', '.'):
+                    k += 1
+                class_name = class_name + '$' + sig[j + 1:k]
+                j = k
+                type_args = []
+                if j < len(sig) and sig[j] == '<':
+                    type_args, j = _parse_type_args(sig, j, class_type_params, registry, method_bounds)
+            inner_ci = registry.get(class_name) if registry else None
+            if inner_ci is not None:
+                inner_own = (parse_class_type_params(inner_ci.generic_signature)
+                             if inner_ci.generic_signature else [])
+                inner_eff = effective_class_type_params(inner_ci, registry)
+                if not inner_own:
+                    type_args = outer_args
+                if len(type_args) != len(inner_eff):
+                    type_args = ['Object'] * len(inner_eff)
+            has_type_args = bool(type_args)
 
         # 跳过结尾 ';'
         if j < len(sig) and sig[j] == ';':
@@ -573,6 +590,198 @@ def parse_class_type_params(sig: str) -> list[str]:
         pass  # 解析失败时返回已收集的部分
 
     return params
+
+
+def effective_class_type_params(ci, registry=None) -> list[str]:
+    """类在 Rust 侧的有效类型参数表。
+
+    - 类自身 Signature 声明了形参 → 用自身形参
+    - 否则若是内部类（持有 this$N 字段）→ 继承外部类的形参
+      （Java 内部类隐式可见外部类类型变量，Rust struct 必须显式声明）
+    """
+    own = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+    if own or not registry:
+        return own
+    for f in ci.fields:
+        if f.is_static or not re.match(r'^this\$\d+$', f.name):
+            continue
+        m = re.match(r'L([^;]+);', f.descriptor)
+        if m:
+            outer_ci = registry.get(m.group(1))
+            if outer_ci is not None and outer_ci.generic_signature:
+                return list(parse_class_type_params(outer_ci.generic_signature))
+        break
+    return []
+
+
+def _superclass_sig_segments(sig: str, class_type_params: list[str], registry=None) -> list[list[str]]:
+    """解析类级 Signature 中 SuperclassSignature 的各段类型实参。
+
+    `<...>Lpkg/Outer<TE;>.Inner<TX;>;...` → [['E'], ['X']]；无实参的段为 []。
+    """
+    i = 0
+    if sig.startswith('<'):
+        depth = 0
+        while i < len(sig):
+            if sig[i] == '<':
+                depth += 1
+            elif sig[i] == '>':
+                depth -= 1
+                if depth == 0:
+                    i += 1
+                    break
+            i += 1
+    if i >= len(sig) or sig[i] != 'L':
+        return []
+    segments: list[list[str]] = []
+    j = i + 1
+    while j < len(sig):
+        while j < len(sig) and sig[j] not in ('<', ';', '.'):
+            j += 1
+        if j < len(sig) and sig[j] == '<':
+            args, j = _parse_type_args(sig, j, class_type_params, registry)
+            segments.append(args)
+        else:
+            segments.append([])
+        if j < len(sig) and sig[j] == '.':
+            j += 1
+            continue
+        break
+    return segments
+
+
+def _type_arg_is_resolvable(rust_ty: str, class_type_params: list[str], registry) -> bool:
+    """类型实参中出现的每个类型名都必须可解析（类型参数 / 内建 / registry 中的类且元数正确）。"""
+    short_names = _registry_short_index(registry)
+    mapped = set(_CLASSNAME_MAP.values()) | set(_PRIMITIVE_MAP.values()) | {'JArray'}
+    for m in re.finditer(r'([A-Za-z_]\w*)\s*(<)?', rust_ty):
+        name, has_args = m.group(1), bool(m.group(2))
+        if name in class_type_params or name in mapped:
+            continue
+        ref_ci = short_names.get(name)
+        if ref_ci is None:
+            return False
+        # 裸用泛型类（raw type）在 Rust 中缺实参 → 不可用
+        if bool(effective_class_type_params(ref_ci, registry)) != has_args:
+            return False
+    return True
+
+
+_SHORT_INDEX_CACHE: dict[int, tuple[int, dict]] = {}
+
+
+def _registry_short_index(registry) -> dict:
+    """registry 的 Rust 短名 → ClassInfo 索引（按 registry 身份 + 大小缓存）。"""
+    if not registry:
+        return {}
+    cached = _SHORT_INDEX_CACHE.get(id(registry))
+    if cached is not None and cached[0] == len(registry):
+        return cached[1]
+    index = {short_cls(k): v for k, v in registry.items()}
+    _SHORT_INDEX_CACHE[id(registry)] = (len(registry), index)
+    return index
+
+
+def superclass_type_args(ci, registry) -> list[str]:
+    """直接父类的 Rust 类型实参，以 ci 的有效类型参数表达。
+
+    实参取自 ci 类级 Signature 的 SuperclassSignature（而非按位置把子类形参套给父类）：
+      `<P_IN,P_OUT> extends AbstractPipeline<P_IN,P_OUT,Stream<P_OUT>>` → ['P_IN','P_OUT','Object']
+      `extends RecursiveTask<BigInteger>`                               → ['BigInteger']
+      `extends AbstractList<E>.Itr`（父类形参继承自其外部类）           → ['E']
+    无法解析的实参（raw type、通配符、未翻译的类）取 Object（类型擦除的真实多态边界）。
+    """
+    if not registry or not ci.super_class or ci.super_class not in registry:
+        return []
+    parent_ci = registry[ci.super_class]
+    parent_params = effective_class_type_params(parent_ci, registry)
+    if not parent_params:
+        return []
+    own_params = effective_class_type_params(ci, registry)
+    args: list[str] = []
+    if ci.generic_signature:
+        segments = _superclass_sig_segments(ci.generic_signature, own_params, registry)
+        parent_has_own = bool(parse_class_type_params(parent_ci.generic_signature)
+                              if parent_ci.generic_signature else [])
+        non_empty = [s for s in segments if s]
+        if non_empty:
+            # 父类自带形参 → 末段实参；父类形参继承自外部类 → 外层段实参
+            args = non_empty[-1] if parent_has_own else non_empty[0]
+    if len(args) != len(parent_params):
+        args = ['Object'] * len(parent_params)
+    return [a if _type_arg_is_resolvable(a, own_params, registry) else 'Object' for a in args]
+
+
+def rust_type_with_args(short_name: str, args: list[str]) -> str:
+    """`Name` + 实参表 → `Name<A, B>`；无实参时为裸名。"""
+    return f"{short_name}<{', '.join(args)}>" if args else short_name
+
+
+def substitute_type_params(rust_ty: str, mapping: dict) -> str:
+    """把 Rust 类型字符串中的类型参数名按 mapping 同步替换。"""
+    if not mapping:
+        return rust_ty
+    return re.sub(r'\b[A-Za-z_]\w*\b', lambda m: mapping.get(m.group(0), m.group(0)), rust_ty)
+
+
+def ancestor_type_args(ci, registry, self_args: 'list[str] | None' = None) -> 'list[tuple[str, list[str]]]':
+    """沿超类链解析每个祖先的 Rust 类型实参：[(ancestor_binary, [args]), ...]，直接父类在前。
+
+    self_args 给出 ci 自身形参的实参（调用点静态类型，如 `X<Object>` → ['Object']）；
+    缺省时以 ci 的形参自身表达（类定义内部视角）。不含 java.lang.Object，链在 registry 之外截断。
+    """
+    chain: list[tuple[str, list[str]]] = []
+    if not registry:
+        return chain
+    own_params = effective_class_type_params(ci, registry)
+    mapping: dict = {}
+    if self_args is not None and len(self_args) == len(own_params):
+        mapping = dict(zip(own_params, self_args))
+    elif self_args is not None:
+        mapping = {p: 'Object' for p in own_params}
+    cur = ci
+    seen: set[str] = set()
+    while (cur.super_class and cur.super_class != _OBJECT_CLASS
+           and cur.super_class in registry and cur.super_class not in seen):
+        seen.add(cur.super_class)
+        args = [substitute_type_params(a, mapping) for a in superclass_type_args(cur, registry)]
+        parent_ci = registry[cur.super_class]
+        chain.append((cur.super_class, args))
+        mapping = dict(zip(effective_class_type_params(parent_ci, registry), args))
+        cur = parent_ci
+    return chain
+
+
+def split_rust_type_args(rust_ty: str) -> list[str]:
+    """`Name<A, B<C, D>>` → ['A', 'B<C, D>']（仅拆顶层逗号）；无实参 → []。"""
+    lt = rust_ty.find('<')
+    if lt < 0 or not rust_ty.rstrip().endswith('>'):
+        return []
+    inner = rust_ty[lt + 1:rust_ty.rstrip().rfind('>')]
+    parts: list[str] = []
+    depth = 0
+    cur: list[str] = []
+    for ch in inner:
+        if ch == '<':
+            depth += 1
+        elif ch == '>':
+            depth -= 1
+        if ch == ',' and depth == 0:
+            parts.append(''.join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    tail = ''.join(cur).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def ancestor_vtable_args_by_short(ci, rust_ty: str, registry) -> 'dict[str, str]':
+    """静态类型为 rust_ty（ci 的实例化，如 `X<Object>`）的接收者，其各祖先 VTable 的
+    类型实参串：{祖先 Rust 短名 → '<A, B>' 或 ''}。供 UFCS `<dyn Anc__VTable<..>>::m(..)` 使用。"""
+    return {short_cls(anc_bin): (f"<{', '.join(args)}>" if args else '')
+            for anc_bin, args in ancestor_type_args(ci, registry, split_rust_type_args(rust_ty))}
 
 
 def parse_method_param_types(
