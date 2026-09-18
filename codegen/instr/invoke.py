@@ -25,6 +25,7 @@ from .coerce import (
     _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,
     _method_ref_binary_class, _resolve_static_method_owner,
     _method_ref_descriptor, _resolve_special_method_owner,
+    _resolve_interface_special_target, interface_special_member_name,
     _get_all_subtypes_ordered,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
@@ -184,6 +185,26 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         # vtable 架构：invokespecial 非构造器 = super.method() 调用
         # 宏为每个虚方法生成自由函数 ClassName__method_base(this, args)，绕过虚拟派发
         # JVM 方法解析：常量池类（直接父类）未声明该方法时，实际目标是最近的祖先声明者
+        # `Iface.super.m()` / 接口私有方法（invokespecial InterfaceMethod）：接口方法体展开在
+        # 调用者所在的类上（成员 `Iface_super_m`，由 class_writer 按字节码扫描声明）→ 成员调用
+        # （常量池类是接口即属此类，由 registry 判定）
+        _iface_owner = _resolve_interface_special_target(
+            _method_ref_binary_class(comment), mname, _method_ref_descriptor(comment), registry)
+        if _iface_owner:
+            _member = _safe_field(interface_special_member_name(
+                _iface_owner, mname, _method_ref_descriptor(comment), registry))
+            _call = f"{obj_e}.{_member}({', '.join(args)})?"
+            rust_ret = jvm_to_rust(ret, registry)
+            if rust_ret == '()':
+                sim.emit(RawStmt(f"{_call};"))
+            else:
+                v = sim.fresh()
+                if rust_ret == 'Object' and _erased_ret_is_type_var(cls_short, mname, params, ret, registry):
+                    sim.emit(RawStmt(f"let {v} = Object::from_any({_call});"))
+                else:
+                    sim.emit(RawStmt(f"let {v} = {_call};"))
+                sim.push(Var(v), RsNamed(rust_ret))
+            return
         _sp_owner = _resolve_special_method_owner(
             _method_ref_binary_class(comment), mname, _method_ref_descriptor(comment), registry)
         _owner_short = (_sp_owner.rsplit('/', 1)[-1].replace('$', '_')

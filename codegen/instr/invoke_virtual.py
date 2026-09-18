@@ -304,7 +304,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                             sub_rust = sub_rust + '<' + ', '.join(['Object'] * len(_tp_g)) + '>'
                 # Fix 12b：重载 mangle 按声明类（owner）查 —— 子类继承的重载
                 # 方法在子类方法表中查不到同名重载，按子类表 mangle 会得到
-                # 错误的方法名（如 collect 声明处 mangle 为 collect_collec，
+                # 错误的方法名（如 collect 声明处 mangle 为 collect_collector，
                 # 子类分支按子类表查成 collect）。owner 沿父类链解析不到时
                 # （接口 default 方法由 class_writer 注入实现类 impl 块，
                 # 父类链上查不到）保留子类名。
@@ -520,7 +520,22 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 方法继承自祖先时登记继承成员需求，由接收者类的 java_class! 块声明该成员、
     # 宏展开为 wrapper 转发方法，vtable 分派不出现在方法体里。
     _recv = obj_e
-    if not (sim.in_vtable_body and obj_base == _cur_class_short and obj_e in ('this', 'self')):
+    _recv_is_this = bool(sim.in_vtable_body and obj_base == _cur_class_short and obj_e in ('this', 'self'))
+    if _recv_is_this:
+        # this 接收者调用祖先声明的方法：同样登记继承成员，由本类 java_class! 块声明转发成员。
+        # 祖先链上多个 vtable 含同名槽位（协变返回的覆盖在子类另立槽位）时，
+        # 转发成员按描述符解析出的声明类做完全限定分派，调用点保持 `this.m(args)`。
+        _obj_jvm = class_name if registry and class_name in registry else None
+        _ci_recv = registry.get(_obj_jvm) if _obj_jvm else None
+        if _ci_recv is not None:
+            _param_desc = '(' + ''.join(params) + ')'
+            if not any(not m.is_synthetic and m.name == mname and m.descriptor.startswith(_param_desc)
+                       for m in _ci_recv.methods):
+                _owner_bin_v, _ = _resolve_method_owner(
+                    _obj_jvm, mname, registry, descriptor=_param_desc + ret)
+                if _owner_bin_v and _owner_bin_v != _obj_jvm:
+                    _inherited_calls.request(_obj_jvm, mname, _param_desc)
+    else:
         _obj_jvm = _rust_type_to_binary(obj_base, registry) if registry else None
         _ci_recv = registry.get(_obj_jvm) if _obj_jvm else None
         if _ci_recv is not None:

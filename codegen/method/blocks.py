@@ -578,7 +578,9 @@ class BlockSimulator:
             name = self.sim.fresh('_merged')
             for p, v in zip(preds, values):
                 p.stmts.append(RawStmt(f"{name} = {v};"))
-            node.decls.append(f"let mut {name}: {render_type(ty)};")
+            # 前置声明以 LetStmt 进入 entries：合并值在其声明所在块之外被消费时
+            # （如 try 体内汇合、try 之后 return），由变量提升 pass 移到外层
+            node.decls.append(LetStmt(name, ty, True, None))
             stack.append((Var(name), ty))
         node.entry_stack = stack
 

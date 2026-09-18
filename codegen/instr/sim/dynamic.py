@@ -1,6 +1,6 @@
 # 从 codegen/instr/sim.py 中拆出
 
-from ...rs_ir import RawExpr, RawStmt, RsNamed
+from ...rs_ir import LetStmt, RawExpr, RawStmt, RsNamed, Var
 from ...render import render_expr
 from ...type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return, short_cls
 from ...constants import safe_ident as _safe_ident
@@ -155,12 +155,14 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                             not _is_erased_ref(_impl_ret) or _impl_has_generic_sig):
                         _closure_body = f'Ok(Object::from_any({_closure_body}?))'
                     _lam_varname = f'__lam_{_lam_idx}'
-                    sim.emit(RawStmt(
-                        f'let {_lam_varname}: {_fn_type} = std::rc::Rc::new('
+                    # 函数对象以 Object（函数式接口的擦除形态）绑定为 LetStmt：
+                    # 在 try / 分支体内创建、体外消费时由变量提升 pass 管理作用域
+                    sim.emit(LetStmt(_lam_varname, RsNamed('Object'), False, RawExpr(
+                        f'Object::from_any(std::rc::Rc::new('
                         f'move |{_fn_params_sig}| -> Result<{_sam_rtype}> '
-                        f'{{ {_closure_body} }});'
-                    ))
-                    sim.push(RawExpr(f'Object::from_any({_lam_varname})'), RsNamed('Object'))
+                        f'{{ {_closure_body} }}) as {_fn_type})'
+                    )))
+                    sim.push(Var(_lam_varname), RsNamed('Object'))
                 else:
                     sim.emit(RawStmt(f"/* TODO: {op} {operand} (impl parse failed) */"))
                     if _sam_type_desc:

@@ -30,7 +30,7 @@ import sys
 from ..type_map import (effective_class_type_params, short_cls, substitute_type_params,
                         superinterface_type_args)
 from .inherited_gen import (ClassEmission, EmittedMethod, IMPORTS_SLOT, MEMBERS_SLOT,
-                            _imports_for, _USE_RE)
+                            _imports_for, _USE_RE, type_arg_uses)
 
 # 类文本中的插入位（整行，位于 java_class! 块内、impl 块之后）
 IMPLS_SLOT = '//@@java_rta:interface-impls@@'
@@ -269,6 +269,7 @@ def resolve_interface_inherited_members(emissions: 'dict[str, ClassEmission]', r
             if um:
                 imported.add(um.group(2))
         views = _superinterface_views(recv_ci, registry)
+        arg_uses = type_arg_uses(recv_ci, registry, emissions, recv.crate_prefix)
         decls: list[str] = []
         uses: list[str] = []
         for name, param_desc in sorted(wanted):
@@ -296,7 +297,7 @@ def resolve_interface_inherited_members(emissions: 'dict[str, ClassEmission]', r
                     attr.append(f'access = "{method.access}"')
                 attr.append(f'inherited_from = "{owner_ty}"')
                 decls.append(f"#[java_method({', '.join(attr)})]\n{signature};")
-                uses.extend(_imports_for(signature + ' ' + owner_ty, owner, recv, imported))
+                uses.extend(_imports_for(signature + ' ' + owner_ty, owner, recv, imported, arg_uses))
                 owner_short = short_cls(owner_bin)
                 if owner_short not in imported:
                     imported.add(owner_short)
