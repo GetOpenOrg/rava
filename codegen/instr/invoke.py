@@ -15,6 +15,7 @@ from ..type_map import (
     effective_class_type_params as _effective_class_type_params,
     enclosing_scope_type_args as _enclosing_scope_type_args,
     superclass_type_args as _superclass_type_args,
+    method_sig_types as _method_sig_types,
 )
 from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 from .coerce import (
@@ -32,7 +33,7 @@ from .coerce import (
 from .invoke_sig import (
     _registry_iface_shorts, _concrete_class_shorts, _downcast_target_valid,
     _lookup_method_sig_params, _lookup_method_sig_ret, _split_type_args, _erased_ret_is_type_var,
-    _substitute_tvars, _coerce_arg,
+    _substitute_tvars, _coerce_arg, receiver_type_arg_map,
 )
 from .invoke_virtual import _gen_invokevirtual
 
@@ -90,6 +91,38 @@ def _gen_string_concat(sim: StackSim, comment: str):
         sim.push(Lit(f'String::from_owned(format!("{fmt}", {fmt_args}))'), RsNamed('String'))
 
 
+def _bind_type_args(sig_types: list, arg_tys: list[str], tparams) -> dict[str, str]:
+    """形参签名类型与实参静态类型结构化合一，得到类型变量 → 实参的绑定
+    （Java 钻石 / 泛型方法推断的静态近似）。
+
+    裸类型变量直接绑定实参类型；同一泛型类的实例化（G<T> ← G<X>）逐类型实参递归。
+    基本类型 / Object / 未知类型不产生绑定；同一变量得到互相矛盾的绑定时取 Object。"""
+    bound: dict[str, str] = {}
+
+    def _unify(sig_t: str, arg_t: str, nested: bool = False) -> None:
+        if sig_t in tparams:
+            if arg_t in _PRIMITIVE_RUST_TYPES or arg_t in ('()', '_') or '_' == arg_t.strip():
+                return
+            if arg_t == 'Object' and not nested:
+                # 顶层 Object 实参可经 From<Object> 进入任意类型变量，不构成约束；
+                # 类型实参位置（JArray<E> ← JArray<Object>）不变，E 只能是 Object
+                return
+            if bound.setdefault(sig_t, arg_t) != arg_t:
+                bound[sig_t] = 'Object'
+            return
+        if '<' in sig_t and '<' in arg_t and sig_t.split('<', 1)[0] == arg_t.split('<', 1)[0]:
+            s_args = _split_type_args(sig_t[sig_t.index('<') + 1:sig_t.rfind('>')])
+            a_args = _split_type_args(arg_t[arg_t.index('<') + 1:arg_t.rfind('>')])
+            if len(s_args) == len(a_args):
+                for _s, _a in zip(s_args, a_args):
+                    _unify(_s, _a, True)
+
+    for _i, _sig_t in enumerate(sig_types):
+        if _sig_t and _i < len(arg_tys):
+            _unify(_sig_t, arg_tys[_i])
+    return bound
+
+
 def _resolve_ctor_turbofish_args(
     full_cls: str,
     ctor_params: list[str],
@@ -115,18 +148,14 @@ def _resolve_ctor_turbofish_args(
     ctor_sig_params = None
     for m in ci.methods:
         if m.name == '<init>' and m.descriptor == full_desc:
-            if m.generic_signature:
-                sp, _ = _parse_method_param_types(m.generic_signature, cls_tparams, registry, is_static=False)
-                if sp and len(sp) == len(ctor_params):
-                    ctor_sig_params = sp
+            # 与定义侧同一张形参类型表（含编译器注入的外部实例形参 Outer<E>）
+            sp, _ = _method_sig_types(ci, m, cls_tparams, registry)
+            if sp and len(sp) == len(ctor_params):
+                ctor_sig_params = sp
             break
+    subst: dict[str, str] = {}
     if ctor_sig_params and arg_tys:
-        subst: dict[str, str] = {}
-        for si, sp_t in enumerate(ctor_sig_params):
-            if (sp_t in cls_tparams and si < len(arg_tys)
-                    and arg_tys[si] not in _PRIMITIVE_RUST_TYPES
-                    and arg_tys[si] not in ('Object', '()')):
-                subst[sp_t] = arg_tys[si]
+        subst = _bind_type_args(ctor_sig_params, arg_tys, cls_tparams)
         if len(subst) == len(cls_tparams):
             return [subst[t] for t in cls_tparams]
     # 规则 2：构造类是当前类 / 当前类的内部类，且类型参数名一致
@@ -136,8 +165,8 @@ def _resolve_ctor_turbofish_args(
         if (full_cls == caller_class or full_cls.startswith(caller_class + '$') or _same_outer) \
                 and set(cls_tparams) == set(sim.class_type_params):
             return list(cls_tparams)
-    # 规则 3：兜底用 _ 让 Rust 从上下文推断（比 Object 更安全，避免 E0308）
-    return ['_'] * len(cls_tparams)
+    # 规则 3：实参已确定的类型变量取其绑定，其余用 _ 让 Rust 从上下文推断
+    return [subst.get(t, '_') for t in cls_tparams]
 
 
 def _ctor_outer_ref_base(cls_short: str | None, params: list[str], registry: dict | None) -> str:
@@ -164,9 +193,19 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         # 不能用 invokevirtual 语义——否则 this.method() 会对被覆盖方法产生无限递归。
         # 必须精确路由到目标父类的 ._super 链，直接调用父类实现，跳过虚拟派发。
         cls_short, mname, params, ret = parse_method_ref(comment)
+        # super.method()：声明类的类型形参按本类 SuperclassSignature 链代入
+        # （OfDouble extends OfPrimitive<Double, double[], DoubleConsumer> → T_ARR = JArray<f64>），
+        # 与宏生成的 `Owner__m_base(this, ..)` 形参类型一致
+        _self_ci = registry.get(class_name) if registry else None
+        _self_ty = ''
+        if _self_ci is not None:
+            _self_tps = _effective_class_type_params(_self_ci, registry)
+            _self_ty = short_cls(class_name) + (f"<{', '.join(_self_tps)}>" if _self_tps else '')
         sig_params = _lookup_method_sig_params(
             cls_short, mname, params, ret, registry, sim.class_type_params,
+            receiver_targ_map=receiver_type_arg_map(_self_ty, cls_short, registry) if _self_ty else None,
             receiver_is_this=True,
+            receiver_type=_self_ty or None,
         )
         args: list[str] = []
         for _idx, param_jvm in enumerate(reversed(params)):
@@ -190,6 +229,13 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                         if _sp_owner else cls_short) or cls_short
         rust_mname = _safe_field(_mangle_if_overloaded(_owner_short or '', mname, comment, registry))
         base_fn = f"{_owner_short}__{rust_mname}_base"
+        # base 函数的泛型形参 = 声明类的类型形参 + 接收者类型；实参不提及声明类类型形参时
+        # （onCompletion(CountedCompleter<?>)）无处可推断（E0283）→ 按本类视角的祖先实参显式给出
+        if _self_ci is not None and _owner_short != short_cls(class_name):
+            from ..type_map import ancestor_vtable_args_by_short as _anc_args_by_short
+            _owner_targs = _anc_args_by_short(_self_ci, _self_ty, registry).get(_owner_short, '')
+            if _owner_targs:
+                base_fn += f"::{_owner_targs[:-1]}, _>"
         all_args = [obj_e] + args
         arg_str = ', '.join(all_args)
         rust_ret = jvm_to_rust(ret, registry)
@@ -224,6 +270,19 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             _super_targs = _superclass_type_args(_caller_ci, registry)
             if len(_super_targs) == len(_ctor_eff):
                 _ctor_targ_map = dict(zip(_ctor_eff, _super_targs))
+    _resolved_targs: list[str] | None = None
+    if (_ctor_targ_map is None and _ctor_ci is not None and params
+            and len(sim.stack) > len(params)
+            and isinstance(sim.stack[-len(params) - 1][0], NewPendingExpr)):
+        # 实例化先于实参转换确定：由栈上实参的静态类型合一出构造类的类型实参，
+        # 形参期望类型与 turbofish 使用同一份实例化（否则二者各自推断会互相矛盾）
+        _peek_tys = [render_type(t) for _, t in sim.stack[-len(params):]]
+        _resolved_targs = _resolve_ctor_turbofish_args(
+            _ctor_bin, params, _peek_tys, class_name, sim, registry)
+        _ctor_eff_p = _effective_class_type_params(_ctor_ci, registry)
+        if (_resolved_targs and len(_resolved_targs) == len(_ctor_eff_p)
+                and any(t != '_' for t in _resolved_targs)):
+            _ctor_targ_map = {p: t for p, t in zip(_ctor_eff_p, _resolved_targs) if t != '_'}
     sig_params_ctor = _lookup_method_sig_params(
         cls, '<init>', params, 'V', registry,
         frozenset() if _ctor_targ_map else sim.class_type_params,
@@ -232,6 +291,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
     args = []
     arg_tys = []
     _outer_ref_base = _ctor_outer_ref_base(cls, params, registry)
+    _ctor_eff_all = _effective_class_type_params(_ctor_ci, registry) if _ctor_ci is not None else []
     for _idx_c, param_jvm in enumerate(reversed(params)):
         e_expr, e_ty_node = sim.pop()
         e = render_expr(e_expr)
@@ -239,7 +299,11 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         _sig_t_c = sig_params_ctor[_pi_c] if sig_params_ctor and _pi_c < len(sig_params_ctor) else None
         expected = _sig_t_c if _sig_t_c is not None else jvm_to_rust(param_jvm, registry)
         ty = render_type(e_ty_node)
-        if _pi_c == 0 and _outer_ref_base and ty.split('<', 1)[0] == _outer_ref_base:
+        if (_pi_c == 0 and _outer_ref_base and ty.split('<', 1)[0] == _outer_ref_base
+                and any(_tp not in (_ctor_targ_map or {})
+                        for _tp in re.findall(r'[A-Za-z_]\w*', expected) if _tp in _ctor_eff_all)):
+            # 外部实例形参里还有未确定的内部类类型变量：其实例化由实参决定（Rust 从实参推断）。
+            # 形参不含类型变量（内部类自带形参、不继承外层变量 → Outer<Object, ..>）时按常规转换
             expected = ty
         e = _coerce_arg(e, e_ty_node, expected, ty, sim, registry)
         args.insert(0, e)
@@ -270,6 +334,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 #      impl 的类型参数
                 #   3. 兜底：Object（擦除）
                 _ctor_tparams = (list(_scope_targs) if _scope_targs and full_cls == _ctor_bin
+                                 else list(_resolved_targs) if _resolved_targs and full_cls == _ctor_bin
                                  else _resolve_ctor_turbofish_args(
                                      full_cls, params, arg_tys, class_name, sim, registry))
                 # 后处理：caller 的 class_type_params 为空（如 java/lang/Class 故意抹去
@@ -430,13 +495,43 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             _cls_path = _crate + '::' + '::'.join(
                 (f'r#{_p}' if _p in _RUST_KEYWORDS else _p)
                 for _p in _cp_cls_bin.split('/')[:-1]) + '::'
+    # 跨类静态调用的实例化先于实参转换确定：类级类型变量由实参静态类型合一得到
+    # （`EnumSet.of(e)` → `EnumSet::<Characteristics>::of(e)`），未绑定的取 Object；
+    # 形参期望类型、turbofish、返回类型三者共用这一份实例化
+    _static_inst: list[str] | None = None
+    _static_ci = registry.get(_cp_cls_bin) if registry and _cp_cls_bin else None
+    if (_static_ci is not None and _cp_cls_bin != class_name and _static_ci.generic_signature
+            and len(sim.stack) >= len(params)):
+        _static_tps = _parse_class_type_params(_static_ci.generic_signature)
+        _static_m = next((m for m in _static_ci.methods
+                          if m.name == mname and m.descriptor == f"({''.join(params)}){ret}"), None)
+        if _static_tps and _static_m is not None:
+            _raw_sig, _ = _method_sig_types(_static_ci, _static_m, _static_tps, registry)
+            _peek_s = [render_type(t) for _, t in sim.stack[len(sim.stack) - len(params):]]
+            _bound_s = _bind_type_args(_raw_sig or [], _peek_s, _static_tps)
+            _static_inst = [_bound_s.get(t, 'Object') for t in _static_tps]
+    _static_targ_map = (dict(zip(_parse_class_type_params(_static_ci.generic_signature), _static_inst))
+                        if _static_inst else None)
     sig_params_s = _lookup_method_sig_params(
-        cls, mname, params, ret, registry, sim.class_type_params
+        cls, mname, params, ret, registry,
+        frozenset() if _static_targ_map else sim.class_type_params,
+        receiver_targ_map=_static_targ_map,
     )
     args = []
     # static 泛型方法的类型变量是方法级的（由 impl 块同名形参承载）：形参是裸类型变量而
     # 实参静态类型不同（Optional<T>.map 内 ofNullable(Object)）→ 该变量按实参绑定
     _static_tbind: dict[str, str] = {}
+    if (_static_ci is not None and _cp_cls_bin == class_name and _static_ci.generic_signature
+            and sim.class_type_params and len(sim.stack) >= len(params)):
+        # 同类静态调用：参数化形参（`Version<T>` ← `Version<T>`）的结构合一先于裸类型变量的
+        # 实参绑定——否则擦除的 Object 实参会把 T 绑成 Object，与其余实参的实例化冲突
+        _same_tps = _parse_class_type_params(_static_ci.generic_signature)
+        _same_m = next((m for m in _static_ci.methods
+                        if m.name == mname and m.descriptor == f"({''.join(params)}){ret}"), None)
+        if _same_tps and _same_m is not None:
+            _same_sig, _ = _method_sig_types(_static_ci, _same_m, _same_tps, registry)
+            _peek_same = [render_type(t) for _, t in sim.stack[len(sim.stack) - len(params):]]
+            _static_tbind.update(_bind_type_args(_same_sig or [], _peek_same, _same_tps))
     for _idx_s, param_jvm in enumerate(reversed(params)):
         e_expr, ty_node = sim.pop()
         e = render_expr(e_expr)
@@ -473,7 +568,8 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
         rust_mname = _safe_field(_mangle_if_overloaded(cls, mname, comment, registry))
-        turbofish = _static_call_turbofish(cls, class_name, sim, registry, _static_tbind)
+        turbofish = ('::<' + ', '.join(_static_inst) + '>' if _static_inst
+                     else _static_call_turbofish(cls, class_name, sim, registry, _static_tbind))
         # 同类静态调用的 turbofish 采用了实参绑定 → 返回类型同步替换
         turbofish_bound = bool(turbofish) and _rust_type_to_binary(cls, registry) == class_name and bool(sim.class_type_params)
         call = f"{_cls_path}{cls}{turbofish}::{rust_mname}({', '.join(args)})"
@@ -494,6 +590,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         _sig_ret_s = _lookup_method_sig_ret(
             cls, mname, params, ret, registry,
             caller_class=class_name, caller_tparams=sim.class_type_params,
+            receiver_type=(f"{short_cls(_cp_cls_bin)}<{', '.join(_static_inst)}>" if _static_inst else None),
         )
         if _sig_ret_s is not None and _static_tbind and turbofish_bound:
             from ..type_map import substitute_type_params as _subst_tp

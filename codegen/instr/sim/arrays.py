@@ -45,12 +45,31 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         dims_str = operand.split()[-1] if operand else '2'
         dims = int(dims_str) if dims_str.isdigit() else 2
         sizes = [render_expr(sim.pop()[0]) for _ in range(dims)][::-1]
+        # 常量池项是数组类描述符（`[[I` / `[[Lpkg/Name;`）：数组类型按描述符映射；
+        # 给出长度的各维逐层构造（每行是独立数组对象），未给长度的内层维保持 null
+        _arr_desc = comment.strip().strip('"') if comment else ''
+        arr_t = jvm_to_rust(_arr_desc, registry) if _arr_desc.startswith('[') else 'JArray<JArray<i32>>'
+        _levels = []
+        _cur_t = arr_t
+        for _ in range(dims):
+            _levels.append(_cur_t)
+            _m_lv = _re.match(r'JArray<(.+)>$', _cur_t)
+            _cur_t = _m_lv.group(1) if _m_lv else 'Object'
+        init = f"{_levels[-1].replace('JArray<', 'JArray::<', 1)}::new({sizes[-1]})"
+        for _lv in range(dims - 2, -1, -1):
+            init = f"{_levels[_lv].replace('JArray<', 'JArray::<', 1)}::new_with({sizes[_lv]}, || {init})"
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: Vec<Vec<i32>> = vec![vec![0i32; {sizes[-1]} as usize]; {sizes[0]} as usize];"))
-        sim.push(Var(v), RsGeneric('Vec', [RsGeneric('Vec', [I32])]))
+        sim.emit(RawStmt(f"let mut {v}: {arr_t} = {init};"))
+        sim.push(Var(v), RsNamed(arr_t))
     elif op in ('iastore', 'lastore', 'fastore', 'dastore'):
         val_expr, _val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {render_expr(val_expr)})?;"))
+        val_s = render_expr(val_expr)
+        # JVM 操作数栈上 byte/short/char/boolean 都是 int：窄类型局部变量存入宽数组时显式加宽
+        _elem_prim = {'iastore': 'i32', 'lastore': 'i64', 'fastore': 'f32', 'dastore': 'f64'}[op]
+        _val_prim = render_type(_val_ty)
+        if _val_prim in _PRIMITIVE_RUST_TYPES and _val_prim != _elem_prim:
+            val_s = f"(({val_s}) as {_elem_prim})"
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {val_s})?;"))
     elif op == 'aastore':
         val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
@@ -63,10 +82,25 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
             elem_ty = 'Object'
         val_str = render_expr(val_expr)
         val_ty_str = render_type(val_ty)
+        if (val_ty_str == 'JArray<Object>' and elem_ty.startswith('JArray<') and elem_ty != val_ty_str):
+            # `spine[i] = (E[]) new Object[n]`：javac 擦除了 unchecked cast，新建数组的元素类型
+            # 由它存入的槽位决定 → 数组在创建处即按槽位元素类型实例化（JArray<E>），
+            # 而不是先建 JArray<Object> 再转换（两者是不同的运行时类型）
+            _fresh_decl = f"let mut {val_str}: JArray<Object> = JArray::<Object>::new("
+            for _si in range(len(sim.stmts) - 1, -1, -1):
+                _st = sim.stmts[_si]
+                if isinstance(_st, RawStmt) and _st.code.startswith(_fresh_decl):
+                    _inner_t = elem_ty[len('JArray<'):-1]
+                    sim.stmts[_si] = RawStmt(
+                        f"let mut {val_str}: {elem_ty} = JArray::<{_inner_t}>::new("
+                        + _st.code[len(_fresh_decl):])
+                    val_ty_str = elem_ty
+                    break
         if elem_ty == 'Object' and val_ty_str not in ('Object', '()'):
             val_str = _coerce_to_object(val_str, val_ty_str, registry, sim.class_type_params)
         elif elem_ty != 'Object' and val_ty_str == 'Object':
-            val_str = "Default::default()"
+            # 元素静态类型比值更具体（checkcast 被验证器省略的位置）：按对象标识还原
+            val_str = f"From::from(Clone::clone(&{val_str}))"
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
             if (elem_ty != val_ty_str
                     and _is_subtype(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)):

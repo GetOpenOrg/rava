@@ -3,9 +3,18 @@
 from ...stack import BOOL
 from ...rs_ir import Lit, RawExpr, RsNamed
 from ...render import render_expr, render_type
-from ...type_map import jvm_to_rust
-from ..coerce import _is_subtype
+from ...type_map import jvm_to_rust, short_cls, effective_class_type_params as _effective_class_type_params
+from ..coerce import _is_subtype, _coerce_to_object
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
+
+
+def _is_class_instance_type(rust_ty: str, registry) -> bool:
+    """Rust 类型是否是 registry 中某个（非接口）类的 wrapper。"""
+    if not registry:
+        return False
+    from ...type_map import _registry_short_index
+    _ci = _registry_short_index(registry).get(rust_ty.split('<')[0].strip())
+    return _ci is not None and not _ci.is_interface
 
 
 def sim_control(ins, sim, class_name, registry) -> bool:
@@ -24,19 +33,29 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 cast_rust = jvm_to_rust(comment, registry)
             else:
                 cast_rust = jvm_to_rust(f'L{comment};', registry)
-            # 若 cast_rust 含 Object 类型参数（类型擦除产物），且当前类有相同数量的类型参数，
-            # 用当前类的类型参数替换（如 HashMap<K,V> 上下文里 HashMap_TreeNode<Object,Object> → <K,V>）
-            # 这比 _ 更精确：_ 在无类型标注的变量赋值中会引发 E0283，显式类型参数不会
-            if '<' in cast_rust and sim.class_type_params:
-                _obj_count = len(_re_cast.findall(r'\bObject\b', cast_rust))
-                _cur_params = sorted(sim.class_type_params)  # 按字母排序取稳定顺序
-                if _obj_count == len(_cur_params):
-                    _repl_iter = iter(_cur_params)
-                    cast_rust = _re_cast.sub(r'\bObject\b', lambda _m: next(_repl_iter), cast_rust)
+            # 目标类与当前类共享类型变量作用域（内部类沿用外层类的类型变量，其有效类型形参
+            # 全部是当前类的类型形参）→ 擦除实例化按目标类自身的形参顺序还原为 <K, V>；
+            # 显式类型参数不会像 _ 那样在无标注赋值处引发 E0283
+            if '<' in cast_rust and sim.class_type_params and registry:
+                _cast_elem = comment.lstrip('[')
+                if _cast_elem != comment:
+                    _cast_elem = _cast_elem[1:-1] if _cast_elem.startswith('L') else ''
+                _cast_ci = registry.get(_cast_elem)
+                _cast_tps = _effective_class_type_params(_cast_ci, registry) if _cast_ci else []
+                if _cast_tps and all(_tp in sim.class_type_params for _tp in _cast_tps):
+                    _erased = f"{short_cls(_cast_elem)}<{', '.join(['Object'] * len(_cast_tps))}>"
+                    cast_rust = cast_rust.replace(_erased, f"{short_cls(_cast_elem)}<{', '.join(_cast_tps)}>")
             expr, src_ty = sim.pop()
             src_name = getattr(src_ty, 'name', str(src_ty))
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
                 expr = RawExpr(f"({render_expr(expr)}).downcast::<{cast_rust}>()")
+            elif (cast_rust == 'Object' and src_name not in ('Object', '()')
+                  and (src_name in (sim.class_type_params or ())
+                       or _is_class_instance_type(src_name, registry))):
+                # 转为接口 / Object（`(Comparable) key`，key: K）：Java 的上转，值按对象标识进入
+                # Object 边界，与记录的类型一致
+                expr = RawExpr(_coerce_to_object(render_expr(expr), src_name, registry,
+                                                 sim.class_type_params))
             elif src_name != 'Object' and cast_rust not in ('Object', '()', src_name):
                 if _is_subtype(cast_rust.split('<')[0], src_name.split('<')[0], registry):
                     # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode，E0282）：

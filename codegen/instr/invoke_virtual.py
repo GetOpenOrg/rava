@@ -9,7 +9,7 @@ from ..constants import safe_ident as _safe_field
 from .coerce import (
     parse_method_ref,
     _mangle_if_overloaded, _resolve_bridge_target,
-    UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
+    UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES, _coerce_to_object,
     _JAVA_RUNTIME_SHORT_NAMES,
     _rust_type_to_binary, _get_all_subtypes_ordered,
     _find_method_super_prefix_for_type, _super_prefix_to_expr,
@@ -20,7 +20,7 @@ from ..type_map import ancestor_vtable_args_by_short as _ancestor_vtable_args_by
 from ..type_map import (ancestor_type_args as _ancestor_type_args,
                         effective_class_type_params as _effective_class_type_params,
                         split_rust_type_args as _split_rust_type_args)
-from .invoke_sig import (_lookup_method_sig_params, _lookup_method_sig_ret, _erased_ret_is_type_var,
+from .invoke_sig import (receiver_type_arg_map, type_var_receiver_bound_view, _lookup_method_sig_params, _lookup_method_sig_ret, _erased_ret_is_type_var,
                          _coerce_arg, _split_type_args)
 
 
@@ -44,33 +44,83 @@ def _declaring_interface(iface_ci, mname: str, descriptor: str, registry: dict) 
     return ''
 
 
+def _abstract_interface_member(recv_ci, mname: str, descriptor: str, registry: dict) -> str:
+    """抽象类接收者调用的方法在其类链上没有任何声明、且其实现的接口闭包里只有抽象声明
+    （`this.tryAdvance(Consumer)`：方法由具体子类各自实现）→ 返回类直接实现链上、
+    能到达该声明的接口 binary name；接口闭包里存在 default 实现或类链上有声明 → ''。"""
+    if recv_ci is None or recv_ci.is_interface or not recv_ci.is_abstract:
+        return ''
+    if _resolve_method_owner(recv_ci.name, mname, registry, descriptor=descriptor)[0]:
+        return ''
+    if _resolve_bridge_target(recv_ci, mname, descriptor, registry) is not None:
+        return ''
+    direct: list[str] = []
+    cur, seen_cls = recv_ci, set()
+    while cur is not None and cur.name not in seen_cls:
+        seen_cls.add(cur.name)
+        direct.extend(i for i in (cur.interfaces or []) if i in registry)
+        cur = registry.get(cur.super_class) if cur.super_class else None
+    via = ''
+    queue, seen = [(i, i) for i in direct], set()
+    while queue:
+        iface, root = queue.pop(0)
+        if iface in seen:
+            continue
+        seen.add(iface)
+        for m in registry[iface].methods:
+            if (m.name == mname and m.descriptor == descriptor and not m.is_static
+                    and not m.is_synthetic):
+                if not m.is_abstract:
+                    return ''
+                via = via or root
+        queue.extend((i, root) for i in (registry[iface].interfaces or []) if i in registry)
+    return via
+
+
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
     # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
     # 解析泛型实参以建立 callee 类型参数 → 接收者实参的映射（如 HashMap<E,Object> → K=E）
     _recv_targ_map: dict | None = None
     _recv_is_this = False
+    _recv_ty = ''
     _recv_stack_idx = len(params)
     if len(sim.stack) > _recv_stack_idx:
         import re as _re_recv
         # 接收者是 this（继承到类里的接口 default 方法体）：接口类型形参即本类类型形参
         _recv_is_this = render_expr(sim.stack[-(_recv_stack_idx + 1)][0]) == 'this'
+        # 类型变量接收者（task.makeChild(..)，task: K，K extends B<..,K>）：方法定义在
+        # 上界类的 wrapper 上 → 接收者换成上界类型视图（与 getfield/putfield 同规则），
+        # 之后的签名查找、实参映射、分派均按上界类型进行。无类上界时保持原样。
+        _rv_e, _rv_t = sim.stack[-(_recv_stack_idx + 1)]
+        _bv_e, _bv_t = type_var_receiver_bound_view(sim, _rv_e, _rv_t, class_name, registry)
+        if _bv_t is not _rv_t:
+            sim.stack[-(_recv_stack_idx + 1)] = (_bv_e, _bv_t)
         _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
-        _rm = _re_recv.match(r'^(\w+)<(.+)>$', _recv_ty)
-        if _rm and registry:
-            _r_cls_short = _rm.group(1)
-            _r_args = _split_type_args(_rm.group(2))
-            _r_bin = _rust_type_to_binary(_r_cls_short, registry)
-            if _r_bin:
-                _r_ci = registry.get(_r_bin)
-                if _r_ci and getattr(_r_ci, 'generic_signature', None):
-                    _r_tparams = _parse_class_type_params(_r_ci.generic_signature)
-                    if len(_r_tparams) == len(_r_args):
-                        _recv_targ_map = dict(zip(_r_tparams, _r_args))
+        # 抽象类接收者上只由接口抽象声明的方法（类的 vtable 里没有该成员，实现位于具体子类）
+        # → 与 invokeinterface 同路径：签名按声明接口解析，接收者按对象标识上转后经接口载体分派
+        _recv_base_ai = _recv_ty.split('<')[0].strip()
+        if (registry and _recv_base_ai not in ('Object', '()')
+                and _recv_base_ai not in _JAVA_RUNTIME_SHORT_NAMES):
+            _recv_bin_ai = _rust_type_to_binary(_recv_base_ai, registry)
+            _via_iface = _abstract_interface_member(
+                registry.get(_recv_bin_ai) if _recv_bin_ai else None,
+                mname, f"({''.join(params)}){ret}", registry)
+            if _via_iface:
+                _rv_e2, _rv_t2 = sim.stack[-(_recv_stack_idx + 1)]
+                _rv_s2 = render_expr(_rv_e2)
+                _rv_boxed = (_coerce_to_object('Clone::clone(this)', _recv_ty, registry,
+                                               sim.class_type_params, clone=False)
+                             if _rv_s2 == 'this' else
+                             _coerce_to_object(_rv_s2, _recv_ty, registry, sim.class_type_params))
+                sim.stack[-(_recv_stack_idx + 1)] = (RawExpr(_rv_boxed), RsNamed('Object'))
+                cls, _recv_ty, _recv_is_this = short_cls(_via_iface), 'Object', False
+        _recv_targ_map = receiver_type_arg_map(_recv_ty, cls, registry)
     sig_params_v = _lookup_method_sig_params(
         cls, mname, params, ret, registry, sim.class_type_params,
         receiver_targ_map=_recv_targ_map,
         receiver_is_this=_recv_is_this,
+        receiver_type=_recv_ty,
     )
     args = []
     for _idx_v, param_jvm in enumerate(reversed(params)):

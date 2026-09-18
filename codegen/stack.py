@@ -266,6 +266,15 @@ class StackSim:
                     return (name, rty, from_sig)
         return None
 
+    def _undeclared_slot_name(self, slot: int) -> str:
+        """当前偏移没有声明条目覆盖的 slot 的变量名。
+        slot 在别的偏移区间有声明（被 Java 变量复用）→ 此处是编译器合成的临时变量
+        （for-each 迭代器、synchronized 锁对象），用 slot 编号命名；借用复用者的 Java 名字
+        会让两个不同类型的变量在分支提升时合并成同一个声明。"""
+        if self._slot_decls.get(slot):
+            return f"local_{slot}"
+        return _safe_name(self._loc_names.get(slot, f"local_{slot}"))
+
     def pop_for_store(self) -> tuple[RsExpr, RsType]:
         """供 xstore 使用的弹栈：不物化 dup 副本——store_local 会把局部变量本身作为物化结果，
         栈上剩余副本改为引用该局部变量（`dup; astore` → `let x = X::new(..)?;` 后栈上是 x）。"""
@@ -350,7 +359,26 @@ class StackSim:
         src_is_object = isinstance(ty, RsNamed) and ty.name == 'Object'
         if hint is not None:
             if src_is_object:
+                if (getattr(hint, 'name', '') in self.class_type_params
+                        and isinstance(expr, RawExpr) and expr.code != 'Default::default()'):
+                    # `E v = (E) es[i]`：擦除后无 checkcast，Object 值直接存入声明为类型变量的
+                    # 局部 → 经宏补的 From<Object> bound 按对象标识取回类型变量视图
+                    expr = RawExpr(f"From::from({expr.code})")
+                    force_let_ty = True
                 ty = hint
+            elif (isinstance(ty, RsNamed) and getattr(hint, 'name', '') in self.class_type_params
+                  and ty.name != hint.name and ty.name not in _SCALAR_TYPE_NAMES):
+                # 声明类型是类型变量（`S s = (S) x`，checkcast 落在 S 的上界类）：
+                # 值经 Object 边界按对象标识取回类型变量视图
+                _code = render_expr(expr)
+                _dc_tail = f".downcast::<{ty.name}>()"
+                if _code.endswith(_dc_tail):
+                    _boxed = _code[:-len(_dc_tail)]
+                else:
+                    _boxed = self._box_object(render_expr(_clone_moved_var(expr, ty)), ty.name)
+                expr = RawExpr(f"From::from({_boxed})")
+                ty = hint
+                force_let_ty = True
             elif (isinstance(ty, RsNamed) and isinstance(hint, (RsNamed, RsGeneric))):
                 # 裸类名（HashMap_TreeNode）或擦除实例化（HashMap_TreeNode<Object, Object>）
                 # → hint 带泛型（HashMap_TreeNode<K, V>）。
@@ -364,7 +392,17 @@ class StackSim:
                     from .instr.coerce import _reinstantiate_generic
                     _src_name = getattr(ty, 'name', '')
                     _hint_name = getattr(hint, 'name', '')
-                    if not (isinstance(expr, Lit) and expr.value == 'Object::default()'):
+                    _src_args = _src_name[len(_base_of(ty)):]
+                    _hint_args = _hint_name[len(_base_of(hint)):]
+                    _new_prefix = f"{_base_of(ty)}::{_src_args}::"
+                    if ('_' in [a.strip() for a in _src_args.strip('<>').split(',')]
+                            and _hint_args and isinstance(expr, RawExpr)
+                            and expr.code.startswith(_new_prefix)):
+                        # `new C<>()` 的类型实参在构造点无从绑定（turbofish 留 `_`）：
+                        # 声明类型（LVTT）即 javac 推断出的实例化 → 直接按声明实参构造
+                        expr = RawExpr(f"{_base_of(ty)}::{_hint_args}::{expr.code[len(_new_prefix):]}")
+                        force_let_ty = True
+                    elif not (isinstance(expr, Lit) and expr.value == 'Object::default()'):
                         _src_code = render_expr(expr)
                         _dc_tail = f".downcast::<{_src_name}>()"
                         _conv = _reinstantiate_generic(_src_code, _src_name, _hint_name)
@@ -425,6 +463,10 @@ class StackSim:
         if slot in self.locals and decl_name is not None and self.locals[slot][0] != decl_name:
             # slot 被另一个 Java 变量复用：按新变量的声明名重新 let 声明
             del self.locals[slot]
+        elif (slot in self.locals and decl is None and slot not in self._param_slots
+                and self.locals[slot][0] != self._undeclared_slot_name(slot)):
+            # slot 被编译器合成的临时变量复用：与此前的 Java 变量是两个变量
+            del self.locals[slot]
         if (slot in self._param_slots and slot in self.locals
                 and isinstance(expr, Lit) and expr.value == 'Object::default()'
                 and isinstance(self.locals[slot][1], RsNamed)
@@ -469,7 +511,7 @@ class StackSim:
                 # Java 引用赋值无 move 语义，包 Clone 保活源变量（E0382）
                 self.stmts.append(AssignStmt(Var(name), _clone_moved_var(expr, ty)))
         else:
-            name = decl_name or _safe_name(self._loc_names.get(slot, f"local_{slot}"))
+            name = decl_name or self._undeclared_slot_name(slot)
             self.locals[slot] = (name, ty, True)
             self._slot_decl_depth[slot] = self._current_depth
             value = _maybe_downcast(expr, ty) if src_is_object else expr
@@ -500,8 +542,7 @@ class StackSim:
         if decl is not None:
             # 声明表中类型为 None 的条目是 Object/接口声明的引用变量（基本类型总有具体类型）
             return (Var(_safe_name(decl[0])), decl[1] if decl[1] is not None else RsNamed('Object'))
-        name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
-        return (Var(name), I32)
+        return (Var(self._undeclared_slot_name(slot)), I32)
 
     # ── 辅助：生成 let + 临时变量（供 instr.py 中的"计算并绑定"模式）──────
 

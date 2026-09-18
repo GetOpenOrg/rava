@@ -8,10 +8,35 @@ from ..type_map import (
     effective_class_type_params as _effective_class_type_params,
     substitute_type_params as _substitute_type_params,
 )
+from ..type_map import class_type_param_bounds as _class_type_param_bounds
+from ..stack import _clone_moved_var
+from ..rs_ir import RawExpr, RsNamed
+from ..render import render_expr, render_type
 from .coerce import (
     _rust_type_to_binary,
     _JAVA_RUNTIME_SHORT_NAMES,
 )
+
+def type_var_receiver_bound_view(sim, obj_expr, obj_ty, class_name, registry):
+    """类型变量接收者（o: E，E extends B<E>）→ 上界类型视图 (expr, type)。
+
+    成员（字段访问器 / 方法）定义在上界类的 wrapper 上，类型变量本身没有成员（E0599）。
+    Java 侧该访问经上界类型静态解析 → Rust 侧把值转换为上界类型（宏生成的
+    From<Child> for Ancestor，vtable upcast 保留运行时类型）；所需约束
+    `E: Into<B<E>>` 记入 sim，由方法签名声明为 where 子句。
+    无类上界（接口上界 / 无界）时原样返回。
+    """
+    _recv_ty = render_type(obj_ty)
+    if not registry or _recv_ty not in (sim.class_type_params or ()):
+        return obj_expr, obj_ty
+    _cur_ci = registry.get(class_name) if class_name else None
+    _tv_bound = (_class_type_param_bounds(_cur_ci, registry).get(_recv_ty)
+                 if _cur_ci is not None else None)
+    if _tv_bound is None:
+        return obj_expr, obj_ty
+    _src = _clone_moved_var(obj_expr, obj_ty)
+    sim.type_var_bound_uses[_recv_ty] = _tv_bound[0]
+    return RawExpr(f"Into::<{_tv_bound[0]}>::into({render_expr(_src)})"), RsNamed(_tv_bound[0])
 
 
 def _lookup_method_sig_params(
@@ -23,6 +48,7 @@ def _lookup_method_sig_params(
     caller_class_type_params: frozenset[str],
     receiver_targ_map: dict | None = None,
     receiver_is_this: bool = False,
+    receiver_type: str | None = None,
 ) -> list[str | None] | None:
     """查找被调用方法的 generic_signature，返回真实参数类型列表。
 
@@ -40,6 +66,19 @@ def _lookup_method_sig_params(
     if not ci:
         return None
     full_desc = '(' + ''.join(descriptor_params) + ')' + descriptor_ret
+    # JVM 方法解析：常量池类未声明该方法时，目标是超类链上最近的声明者；
+    # 形参类型变量属于声明者，按接收者静态类型视角代入
+    if mname != '<init>' and not any(m.name == mname and m.descriptor == full_desc for m in ci.methods):
+        _seen_owner: set[str] = {ci.name}
+        _cur = registry.get(ci.super_class) if ci.super_class else None
+        while _cur is not None and _cur.name not in _seen_owner:
+            _seen_owner.add(_cur.name)
+            if any(m.name == mname and m.descriptor == full_desc for m in _cur.methods):
+                ci = _cur
+                if receiver_type:
+                    receiver_targ_map = receiver_type_arg_map(receiver_type, short_cls(ci.name), registry)
+                break
+            _cur = registry.get(_cur.super_class) if _cur.super_class else None
     for m in ci.methods:
         if m.name == mname and m.descriptor == full_desc:
             # 用被调用类的类型参数解析签名（覆盖方法取最远祖先声明，与定义侧同规则）
@@ -52,6 +91,12 @@ def _lookup_method_sig_params(
                 # 参数化形参（X<E_IN, Object>）中的 callee 类型变量按接收者实参替换；
                 # 裸类型变量位置由下方逐项解析
                 types = [t if t in callee_tparams else _substitute_type_params(t, receiver_targ_map)
+                         for t in types]
+            elif ci.is_interface and not receiver_is_this and callee_tparams:
+                # 接口调用经擦除载体 `I<Object, ..>` 分派：参数化形参里的接口类型变量
+                # 即 Object（与调用方同名的类型变量只是命名巧合）
+                _erased_map = {t: 'Object' for t in callee_tparams}
+                types = [t if t in callee_tparams else _substitute_type_params(t, _erased_map)
                          for t in types]
             # 将 callee 类型参数映射到 caller 上下文：
             # 优先级：receiver_targ_map（接收者泛型实参）> caller_class_type_params（同名类型参数）
@@ -68,10 +113,10 @@ def _lookup_method_sig_params(
                         # 接收者静态类型是具体泛型类（Set<String> s = new LinkedHashSet<>()）时
                         # 按接收者实参解析
                         resolved.append(None)
-                    elif t in caller_class_type_params:
-                        resolved.append(t)
                     elif receiver_targ_map and t in receiver_targ_map:
                         resolved.append(receiver_targ_map[t])
+                    elif t in caller_class_type_params:
+                        resolved.append(t)
                     else:
                         resolved.append(None)   # 擦除，使用 jvm_to_rust(descriptor) 降级
                 else:
@@ -93,6 +138,35 @@ def _lookup_method_sig_params(
 
 
 _iface_shorts_cache: dict[int, frozenset[str]] = {}
+
+
+def receiver_type_arg_map(recv_ty: str, owner_short: str | None, registry: dict | None) -> dict | None:
+    """接收者静态类型 recv_ty 视角下，方法声明类 owner 的类型形参 → 实参映射。
+
+    - recv_ty 即 owner 的实例化（`HashMap<E, Object>`）→ {K: E, V: Object}
+    - recv_ty 是 owner 的后代（`Child` extends `Parent<Child>`）→ 沿超类链代入（{E: Child}）
+    无法确定（接收者是 Object / 类型变量 / 接口视角）→ None。"""
+    if not registry or not owner_short or not recv_ty:
+        return None
+    from ..type_map import ancestor_type_args, split_rust_type_args
+    recv_base = recv_ty.split('<', 1)[0].strip()
+    recv_ci = registry.get(_rust_type_to_binary(recv_base, registry) or '')
+    owner_ci = registry.get(_rust_type_to_binary(owner_short, registry) or '')
+    if recv_ci is None or owner_ci is None:
+        return None
+    owner_params = _effective_class_type_params(owner_ci, registry)
+    if not owner_params:
+        return None
+    recv_args = split_rust_type_args(recv_ty)
+    if recv_ci.name == owner_ci.name:
+        return dict(zip(owner_params, recv_args)) if len(recv_args) == len(owner_params) else None
+    recv_params = _effective_class_type_params(recv_ci, registry)
+    if len(recv_args) != len(recv_params):
+        return None
+    for anc_bin, args in ancestor_type_args(recv_ci, registry, recv_args):
+        if anc_bin == owner_ci.name:
+            return dict(zip(owner_params, args)) if len(args) == len(owner_params) else None
+    return None
 
 
 def _registry_iface_shorts(registry: dict | None) -> frozenset[str]:
@@ -393,6 +467,18 @@ def _coerce_arg(
             and expected not in (sim.class_type_params or ())
             and _downcast_target_valid(expected, sim, registry)):
         return f"({e}).downcast::<{expected}>()"
+    if actual == 'Object' and expected in (sim.class_type_params or ()):
+        # 形参是类型变量而实参经擦除边界（方法级类型变量、Object 局部变量）退化为 Object：
+        # javac 的 unchecked cast → 经宏为类型形参补的 From<Object> 取回（与 areturn 同规则）
+        src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
+        return f"From::from({src})"
+    if (actual in (sim.class_type_params or ()) and expected != actual
+            and expected not in _PRIMITIVE_RUST_TYPES and expected not in ('Object', '()')
+            and expected not in (sim.class_type_params or ())
+            and _downcast_target_valid(expected, sim, registry)):
+        # 实参静态类型是类型变量（`S extends SpeciesData`），形参是其上界类：Java 的隐式
+        # 子类型转换 → 经 Object 边界按对象标识取回上界类视图
+        return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
     if actual not in _PRIMITIVE_RUST_TYPES:
         # `this` 在 Rust 中是 &Self 引用，Clone::clone(this) 得到 Self，无需多余 &
         if e == 'this':

@@ -7,7 +7,7 @@ import re
 from ..constants import safe_ident as _safe_field, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, OBJECT_CLASS as _OBJECT_CLASS
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
-    mangle_name, hierarchy_overloaded_names,
+    mangle_name, hierarchy_overloaded_names, class_method_rust_names,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
 )
 
@@ -807,7 +807,12 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
         return mname
     desc_m = re.search(r':(\([^)]*\)\S+)', comment)
     raw_desc = desc_m.group(1) if desc_m else ''
-    result = mangle_name(mname, raw_desc) if raw_desc else mname
+    # 名字取自声明类的方法名字表（与定义侧同源：截断后缀碰撞的重载组用完整类名后缀）
+    result = class_method_rust_names(target_ci, registry).get((mname, raw_desc))
+    if result is None:
+        result = mangle_name(mname, raw_desc) if raw_desc else mname
+    elif mname == '<init>':
+        result = '<init>' + result[len('new'):]
     # 重载后的名字若与 Rust 原生名字冲突也需重命名
     return _JAVA_RUST_RENAME.get(result, result)
 

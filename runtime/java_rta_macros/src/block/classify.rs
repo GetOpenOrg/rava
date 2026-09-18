@@ -16,30 +16,21 @@ pub(crate) enum VTableBodyKind {
 }
 
 pub(crate) fn classify_vtable_body(block: &Block) -> VTableBodyKind {
-    let s = quote!(#block).to_string();
-    if s.contains("Self ::") || s.contains("Self::") {
+    // token 流的字符串形态不稳定（token 间空格、长方法体的换行位置均由编译器的打印器决定）：
+    // 去掉全部空白后再匹配，分类结果只取决于 token 序列本身
+    let s: String = quote!(#block).to_string().chars().filter(|c| !c.is_whitespace()).collect();
+    if s.contains("Self::") {
         return VTableBodyKind::Skip;
     }
-    let clone_bare_this = s.contains("Clone :: clone (this)")
-        || s.contains("Clone :: clone(this)")
-        || s.contains("Clone::clone (this)")
-        || s.contains("Clone::clone(this)");
-    if clone_bare_this {
+    if s.contains("Clone::clone(this)") {
         return VTableBodyKind::NeedsWrapper;
     }
     // this.method() 调用 non-__ 方法：可能是 native 方法（仅在 wrapper 上有实现）
-    let mut parts: Vec<&str> = Vec::new();
-    parts.extend(s.split("this .").skip(1));
-    parts.extend(s.split("this.").skip(1));
-    for part in parts {
-        let trimmed = part.trim_start();
+    for part in s.split("this.").skip(1) {
         let mname: String =
-            trimmed.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-        if !mname.is_empty() && !mname.starts_with("__") {
-            let rest = &trimmed[mname.len()..];
-            if rest.trim_start().starts_with('(') {
-                return VTableBodyKind::NeedsWrapper;
-            }
+            part.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !mname.is_empty() && !mname.starts_with("__") && part[mname.len()..].starts_with('(') {
+            return VTableBodyKind::NeedsWrapper;
         }
     }
     VTableBodyKind::Safe

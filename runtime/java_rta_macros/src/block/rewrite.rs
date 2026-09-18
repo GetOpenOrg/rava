@@ -216,10 +216,11 @@ pub(crate) fn rewrite_base_calls_for_wrapper(block: &mut Block) {
             visit_mut::visit_expr_mut(self, expr);
             if let Expr::Call(call) = expr {
                 let is_base_fn = if let Expr::Path(p) = &*call.func {
-                    p.path.get_ident().map_or(false, |id| {
-                        let s = id.to_string();
+                    // 单段路径，可带 turbofish（`Owner__m_base::<A, _>(this, ..)`）
+                    p.qself.is_none() && p.path.segments.len() == 1 && {
+                        let s = p.path.segments[0].ident.to_string();
                         s.contains("__") && s.ends_with("_base")
-                    })
+                    }
                 } else {
                     false
                 };

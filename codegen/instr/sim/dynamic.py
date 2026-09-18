@@ -1,11 +1,12 @@
 # 从 codegen/instr/sim.py 中拆出
 
 from ...rs_ir import RawExpr, RawStmt, RsNamed
-from ...render import render_expr
-from ...type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return, short_cls
+from ...render import render_expr, render_type
+from ...type_map import (jvm_to_rust, parse_descriptor_params, parse_descriptor_return, short_cls,
+                         effective_class_type_params, method_sig_types)
 from ...constants import safe_ident as _safe_ident
 from ..invoke import _gen_string_concat, _static_call_turbofish
-from ..coerce import _mangle_if_overloaded
+from ..coerce import _mangle_if_overloaded, _coerce_to_object, _reinstantiate_generic, _PRIMITIVE_RUST_TYPES
 
 
 def sim_dynamic(ins, sim, class_name, registry) -> bool:
@@ -91,12 +92,17 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _impl_is_ctor = _impl_mname == '<init>'
                     _impl_is_instance = False
                     _impl_has_generic_sig = False
+                    _impl_tparams: list[str] = []
+                    _impl_sig_types: list = []
                     _impl_ci = registry.get(_impl_cls_bin) if registry else None
                     if _impl_ci is not None:
                         for _im in _impl_ci.methods:
                             if _im.name == _impl_mname and _im.descriptor == _impl_desc:
                                 _impl_is_instance = not _im.is_static and not _impl_is_ctor
                                 _impl_has_generic_sig = bool(_im.generic_signature)
+                                _impl_tparams = effective_class_type_params(_impl_ci, registry)
+                                _impl_sig_types = (method_sig_types(_impl_ci, _im, _impl_tparams, registry)[0]
+                                                   or [])
                                 break
 
                     def _is_erased_ref(_d: str) -> bool:
@@ -122,6 +128,38 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                             _pd = _impl_params[_pi]
                             if _pd != _sd and _is_erased_ref(_sd) and not _is_erased_ref(_pd):
                                 _call_sam_list[_si] = f'{_sam_anames[_si]}.downcast()'
+                            elif (_is_erased_ref(_sd) and not _impl_ci.is_interface
+                                  and len(_impl_sig_types) == len(_impl_params)
+                                  and _impl_sig_types[_pi] in _impl_tparams):
+                                # 实现方法形参是声明类的类型变量（`this::addLast`，addLast(E)）：
+                                # SAM 的擦除实参经宏补的 From<Object> bound 取回类型变量视图
+                                _call_sam_list[_si] = f'From::from({_sam_anames[_si]})'
+                            elif len(_sd) == 1 and jvm_to_rust(_pd, registry) == 'Object':
+                                # SAM 实参是基本类型、实现方法形参是引用（metafactory 的装箱适配）
+                                _call_sam_list[_si] = f'{_sam_anames[_si]}.into()'
+                    # 捕获值 → 实现方法形参：形参是擦除引用（接口 / Object）而捕获值是具体类实例
+                    # （List<X> 形参捕获 ArrayList 局部）→ Java 的隐式上转，保持对象标识
+                    _cap_recv = 1 if (_impl_is_instance and _call_cap_list) else 0
+                    for _ci_idx in range(_cap_recv, len(_call_cap_list)):
+                        _cp_idx = _ci_idx - _cap_recv
+                        _cap_ty = render_type(_cap_exprs[_ci_idx][1])
+                        if (_cp_idx < len(_impl_params) and _is_erased_ref(_impl_params[_cp_idx])
+                                and _cap_ty not in ('Object', '()', '_')
+                                and _cap_ty not in _PRIMITIVE_RUST_TYPES
+                                and not _cap_ty.startswith(('JArray<', 'Vec<', '&'))):
+                            _call_cap_list[_ci_idx] = _coerce_to_object(
+                                _cap_var_names[_ci_idx], _cap_ty, registry, sim.class_type_params)
+                        elif _cp_idx < len(_impl_params):
+                            # 合成 lambda 方法的形参是擦除实例化（X<Object, Object>），捕获值是精确
+                            # 实例化（X<T, bool>）：经 Object 边界重新实例化。
+                            # 形参类型与方法定义侧同源：有泛型签名取签名，否则取描述符擦除形态
+                            _cap_expected = (_impl_sig_types[_cp_idx]
+                                             if len(_impl_sig_types) == len(_impl_params)
+                                             else jvm_to_rust(_impl_params[_cp_idx], registry))
+                            _re_inst = _reinstantiate_generic(
+                                _cap_var_names[_ci_idx], _cap_ty, _cap_expected or '')
+                            if _re_inst is not None:
+                                _call_cap_list[_ci_idx] = _re_inst
                     if _impl_is_instance and _call_cap_list:
                         # 捕获 this 的 lambda / 绑定接收者的方法引用：第一个捕获值是接收者
                         _call_cap_list[0] = f'&{_cap_var_names[0]}'
@@ -145,6 +183,15 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _impl_turbofish = ('' if _impl_is_instance else
                                        _static_call_turbofish(_impl_cls_bin, class_name, sim, registry))
                     _closure_body = f'{_impl_cls_rust}{_impl_turbofish}::{_impl_mname_r}({_all_call_args})'
+                    if _impl_is_instance and _impl_ci is not None and _impl_ci.is_interface:
+                        # 实现方法是接口实例方法（`action::accept`）：接收者是擦除的接口引用，
+                        # 经与接口同名的载体分派（与 invokeinterface 同形态）
+                        _all_args = _call_cap_list + _call_sam_list
+                        _iface_tps = effective_class_type_params(_impl_ci, registry)
+                        _iface_targs = f"<{', '.join(['Object'] * len(_iface_tps))}>" if _iface_tps else ''
+                        _iface_recv = _all_args[0].lstrip('&')
+                        _closure_body = (f"Into::<{_impl_cls_rust}{_iface_targs}>::into(Clone::clone(&{_iface_recv}))"
+                                         f".{_impl_mname_r}({', '.join(_all_args[1:])})")
                                         # 返回值适配：SAM 返回 void → 丢弃实现方法返回值；
                     # SAM 返回擦除的 Object 而实现方法返回具体类型 → 装箱
                     _impl_ret = f'L{_impl_cls_bin};' if _impl_is_ctor else parse_descriptor_return(_impl_desc)

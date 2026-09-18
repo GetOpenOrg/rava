@@ -26,6 +26,12 @@ impl<T: Clone + Default + 'static> JArray<T> {
         JArray(Rc::new(RefCell::new(vec![T::default(); len as usize])))
     }
 
+    /// 创建长度为 len 的数组，每个元素由 init 独立构造（对应 Java multianewarray：
+    /// 每一行是独立的数组对象，不能共享同一个默认值的引用）
+    pub fn new_with(len: i32, init: impl Fn() -> T) -> Self {
+        JArray(Rc::new(RefCell::new((0..len.max(0)).map(|_| init()).collect())))
+    }
+
     /// 读取下标 i 的元素（对应 Java iaload/aaload 等）。
     /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *aload）。
     pub fn get(&self, i: i32) -> crate::error::Result<T> {

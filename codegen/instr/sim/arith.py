@@ -139,7 +139,7 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
         a_s = render_expr(a); b_s = render_expr(b)
         if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
         if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
-        sim.push(RawExpr(f"({a_s})^({b_s})"), I64)
+        sim.push(RawExpr(f"(({a_s})^({b_s}))"), I64)
     elif op == 'lshl':
         b, _ = sim.pop(); a, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(a)}).wrapping_shl(({render_expr(b)}&0x3f) as u32)"), I64)

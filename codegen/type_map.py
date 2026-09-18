@@ -9,7 +9,7 @@ JVM 类型描述符 → Rust 类型的映射与解析工具。
 
 from __future__ import annotations
 import re
-from .constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST, OBJECT_CLASS as _OBJECT_CLASS
+from .constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST, OBJECT_CLASS as _OBJECT_CLASS, safe_ident as _safe_ident
 
 
 # ── JVM descriptor → Rust 类型 ──────────────────────────────────
@@ -284,6 +284,124 @@ def hierarchy_overloaded_names(ci, registry: dict | None) -> frozenset:
     return frozen
 
 
+def instance_field_rust_name(owner_bin: str, safe_name: str, registry: dict | None) -> str:
+    """实例字段的 Rust 名（struct 字段 / `__get_` / `__set_` 访问器共用的单一来源）。
+
+    Java 字段按 (声明类, 名字) 静态解析，子类可以声明与祖先同名的字段（隐藏），两者是
+    不同的存储槽。继承链字段在 Rust 侧展平进同一个 `__inner`，因此隐藏祖先字段的声明
+    取 `<name>_<DeclaringClass>`，祖先字段保持原名。owner_bin 是字段引用的常量池类
+    （可以是声明类的子类），沿父类链解析到首个声明该字段的类。"""
+    if not registry or not owner_bin:
+        return safe_name
+
+    def _declares(ci) -> bool:
+        return any(not f.is_static and _safe_ident(f.name) == safe_name for f in ci.fields)
+
+    ci = registry.get(owner_bin)
+    seen: set[str] = set()
+    while ci is not None and ci.name not in seen and not _declares(ci):
+        seen.add(ci.name)
+        ci = registry.get(ci.super_class) if ci.super_class else None
+    if ci is None or not _declares(ci):
+        return safe_name
+    decl = ci
+    anc = registry.get(decl.super_class) if decl.super_class else None
+    seen = {decl.name}
+    while anc is not None and anc.name not in seen:
+        if _declares(anc):
+            return f"{safe_name}_{decl.name.rsplit('/', 1)[-1].replace('$', '_')}"
+        seen.add(anc.name)
+        anc = registry.get(anc.super_class) if anc.super_class else None
+    return safe_name
+
+
+def _full_descriptor_suffix(descriptor: str) -> str:
+    """描述符参数部分 → 不截断类名的后缀（`methodhandle_arr_obj`）。
+    仅用于截断后缀发生碰撞的重载组：是 descriptor 的纯函数，祖先与后代得到同一个名字。"""
+    parts: list[str] = []
+    for p in parse_descriptor_params(descriptor):
+        dims = len(p) - len(p.lstrip('['))
+        elem = p[dims:]
+        if elem.startswith('L') or elem.startswith('T'):
+            tok = elem[1:-1].split('/')[-1].lower().replace('$', '_')
+            tok = _CLS_ABBREV.get(tok, tok)
+        else:
+            tok = _PRIM_SUFFIX.get(elem, 'x')
+        parts.append('arr_' * dims + tok)
+    return '_'.join(parts)
+
+
+def full_mangle_name(name: str, descriptor: str) -> str:
+    """方法名 + 不截断的完整描述符后缀（截断后缀碰撞组的统一命名）。"""
+    suffix = _full_descriptor_suffix(descriptor)
+    return f'{name}_{suffix}' if suffix else name
+
+
+_METHOD_NAME_TABLE_CACHE: dict[tuple, dict] = {}
+
+
+def class_method_rust_names(ci, registry: dict | None) -> dict[tuple[str, str], str]:
+    """类 ci 每个方法 (name, descriptor) → Rust 方法名 —— 定义侧与调用侧共用的唯一名字表。
+
+    1. 基础名：名字需要 mangle（hierarchy_overloaded_names）→ `name_后缀`，否则原名；
+       构造器为 `new` / `new_后缀`
+    2. 截断后缀碰撞（MethodHandle / MethodType 都缩成 `method`）→ 该碰撞组全部改用不截断的
+       完整类名后缀；完整后缀是描述符的纯函数，覆盖方法在后代类中得到与祖先相同的名字
+    3. 后代类覆盖祖先方法时，即使本类内不碰撞，也沿用祖先名字表中的名字（vtable 名字一致）
+    4. 仍然重名（不同包的同名类）→ 按类文件方法顺序追加序号
+    """
+    key = (id(registry), len(registry) if registry else 0, ci.name)
+    cached = _METHOD_NAME_TABLE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    overloaded = hierarchy_overloaded_names(ci, registry)
+
+    def _base(m) -> str:
+        if m.is_constructor:
+            return mangle_name('new', m.descriptor) if '<init>' in overloaded else 'new'
+        return mangle_name(m.name, m.descriptor) if m.name in overloaded else m.name
+
+    def _full(m) -> str:
+        return full_mangle_name('new' if m.is_constructor else m.name, m.descriptor)
+
+    parent = registry.get(ci.super_class) if (registry and ci.super_class and not ci.is_interface) else None
+    parent_table = class_method_rust_names(parent, registry) if (parent is not None and parent.name != ci.name) else {}
+    parent_by_params: dict[tuple[str, str], str] = {}
+    for (pname, pdesc), prust in parent_table.items():
+        parent_by_params.setdefault((pname, pdesc.split(')')[0]), prust)
+
+    methods = [m for m in ci.methods if m.name != '<clinit>']
+    # 真实方法先占名，synthetic（桥接 / lambda 体）后占
+    methods.sort(key=lambda m: 1 if m.is_synthetic else 0)
+    base_groups: dict[str, set[str]] = {}
+    for m in methods:
+        if not m.is_synthetic:
+            base_groups.setdefault(_base(m), set()).add(m.descriptor.split(')')[0])
+    table: dict[tuple[str, str], str] = {}
+    used: dict[str, int] = {}
+    for m in methods:
+        base = _base(m)
+        name = base
+        if not m.is_synthetic and len(base_groups.get(base, ())) > 1:
+            name = _full(m)
+        elif not m.is_constructor and not m.is_static and not m.is_synthetic:
+            inherited = parent_by_params.get((m.name, m.descriptor.split(')')[0]))
+            if inherited is not None and inherited == _full(m) and m.name in overloaded:
+                name = inherited
+        if name in used:
+            used[name] += 1
+            name = f'{name}_{used[name]}'
+        else:
+            used[name] = 0
+        table[(m.name, m.descriptor)] = name
+    # 继承而未重新声明的方法：名字表向下传递，调用点按接收者类查表即可命中
+    for k, v in parent_table.items():
+        if k[0] != '<init>':
+            table.setdefault(k, v)
+    _METHOD_NAME_TABLE_CACHE[key] = table
+    return table
+
+
 def _parse_type_list(s: str) -> list[str]:
     types, i = [], 0
     while i < len(s):
@@ -521,6 +639,19 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
                 if len(type_args) != len(inner_eff):
                     type_args = ['Object'] * len(inner_eff)
             has_type_args = bool(type_args)
+        elif not has_type_args and registry and class_name in registry:
+            # 签名里不带实参的泛型类：局部 / 匿名类的形参全部继承自外围作用域
+            # （javac 以裸 binary name 书写）→ 按当前作用域的同名形参实例化；
+            # 其余是 raw type → 擦除实例化
+            _bare_ci = registry[class_name]
+            if not _bare_ci.is_interface and class_name not in _CLASSNAME_MAP:
+                _bare_eff = effective_class_type_params(_bare_ci, registry)
+                if _bare_eff:
+                    _inherits = not (_bare_ci.generic_signature
+                                     and parse_class_type_params(_bare_ci.generic_signature))
+                    type_args = [p if (_inherits and p in class_type_params) else 'Object'
+                                 for p in _bare_eff]
+                    has_type_args = True
 
         # 跳过结尾 ';'
         if j < len(sig) and sig[j] == ';':

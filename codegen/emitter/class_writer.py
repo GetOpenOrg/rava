@@ -8,7 +8,7 @@ from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
 from ..cfg import CfgAuditError, STATS as _CFG_STATS
-from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names
+from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names, class_method_rust_names, instance_field_rust_name, full_mangle_name
 from ..type_map import (effective_class_type_params, ancestor_type_args, outer_ref_field_type,
                         class_type_param_bounds,
                         rust_type_with_args as _rust_type_with_args)
@@ -601,7 +601,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             for _f in _ancestor.fields:
                 if _f.is_static:
                     continue
-                _sf_name = _safe_field_name(_f.name)
+                # 隐藏更上层祖先同名字段的声明取独立槽位名（Java 字段按声明类静态解析）
+                _sf_name = instance_field_rust_name(
+                    _ancestor.name, _safe_field_name(_f.name), registry)
                 if _sf_name in _declared:
                     continue
                 _declared.add(_sf_name)
@@ -614,7 +616,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         # 父类已有的字段名（继承展平），避免子类重复声明（如内部类 this$0 与父类同名）
         _super_field_names: set[str] = {name for name, _ in superclass_fields}
         for f in inst_fields:
-            safe_fname = _safe_field_name(f.name)
+            safe_fname = instance_field_rust_name(ci.name, _safe_field_name(f.name), registry)
             if safe_fname in _super_field_names:
                 continue  # 父类已展平，不重复声明
             struct_lines.append("    " + _java_field_attr(f))
@@ -715,7 +717,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
                 f'pub static {safe_fname}: {rust_ret};')
 
-    used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
+    _method_rust_names = class_method_rust_names(ci, registry)
     # 非桥接的 synthetic 方法（lambda$xxx$N、access$NNN 等）是 invokedynamic 闭包 /
     # 内部类访问器的真实调用目标，必须生成定义；桥接方法（ACC_BRIDGE）与真实方法同名，继续过滤。
     # 注意：它们不参与 name_counts / overloaded_names 统计（编译器保证其名字唯一）。
@@ -762,20 +764,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if _is_iface and not m.is_static and (
                 m.is_synthetic or (m.access_flags & 0x0002) or (m.name, m.descriptor[:m.descriptor.index(')') + 1]) in _root_method_keys):
             continue  # 私有 / 合成实例方法不是接口契约的一部分
-        # 确定最终 Rust 方法名（有重载则加描述符后缀）
-        rust_name = mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name
-        # 构造器统一用 new / new_suffix
-        if m.is_constructor:
-            if '<init>' in overloaded_names:
-                rust_name = mangle_name('new', m.descriptor)
-            else:
-                rust_name = 'new'
-        # 碰撞去重：若 mangle 后仍重名，追加数字后缀
-        if rust_name in used_rust_names:
-            used_rust_names[rust_name] += 1
-            rust_name = f'{rust_name}_{used_rust_names[rust_name]}'
-        else:
-            used_rust_names[rust_name] = 0
+        # 最终 Rust 方法名：取自类的方法名字表（定义侧与调用侧同源，见 class_method_rust_names）
+        rust_name = _method_rust_names[(m.name, m.descriptor)]
 
         # 若 new_format_map 覆盖了此方法，跳过（_impl 模块已提供实现）
         _nf_covered = (_nf_entry or {}).get('methods', set())
@@ -846,7 +836,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         existing_param_sigs: set[tuple] = {(m.name, _param_part(m.descriptor)) for m in visible_methods}
         # 已用的 Rust 方法名（用于检测 default 方法与类自身方法重名）
         used_rust_names: set[str] = {
-            (mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name)
+            _method_rust_names[(m.name, m.descriptor)]
             for m in visible_methods if m.name not in ('<init>', '<clinit>')
         }
         # 祖先类已实现的接口：其 default 方法已注入到该祖先（VirtualDefine），
@@ -920,6 +910,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                                 dm.name in used_rust_names or
                                 default_name_counts.get(dm.name, 0) > 1)
                 dm_rust = mangle_name(dm.name, dm.descriptor) if needs_mangle else dm.name
+                if dm_rust in used_rust_names:
+                    # 截断后缀碰撞（同一外层类的多个嵌套类形参缩成同一记号）→ 不截断的完整后缀，
+                    # 与 class_method_rust_names 对碰撞组的规则一致
+                    dm_rust = full_mangle_name(dm.name, dm.descriptor)
                 used_rust_names.add(dm_rust)
                 # 将 class_name 替换为实现类，使 gen_method_body 生成正确的 this 类型
                 dm_adapted = _copy.copy(dm)

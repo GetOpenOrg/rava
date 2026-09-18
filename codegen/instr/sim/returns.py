@@ -32,8 +32,17 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         ret_ty = getattr(sim, 'return_type', 'Object')
         _ctparams = getattr(sim, 'class_type_params', frozenset())
         # 实例方法返回 this 时，this 是 &Self 引用，需要 Clone::clone 才能返回 owned 值
-        if expr_s == 'this' and not sim.is_static:
+        _returns_this = expr_s == 'this' and not sim.is_static
+        if _returns_this:
             expr_s = 'Clone::clone(this)'
+        if _returns_this and ret_ty == 'Object' and actual_ty not in ('Object', '()'):
+            # 声明返回 Object / 接口（`return this` 于返回接口类型的方法）：身份保持的向上转型
+            expr_s = _coerce_to_object(expr_s, actual_ty, registry, _ctparams, clone=False)
+        elif _returns_this and (ret_ty.split('<')[0] == actual_ty.split('<')[0]
+                                or not _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
+            # 返回类型就是本类：this 的克隆即返回值。
+            # 返回类型是祖先类（`return this` 于声明返回父类的方法）→ 落到下方子类型上转分支
+            pass
         elif ret_ty == 'Object' and actual_ty not in ('Object', '()'):
             expr_s = _coerce_to_object(expr_s, actual_ty, registry, _ctparams)
         elif ret_ty != 'Object' and actual_ty == 'Object':

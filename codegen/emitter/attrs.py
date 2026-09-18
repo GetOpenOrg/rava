@@ -5,7 +5,7 @@ Java 元数据注释生成：to_snake、pkg_from_java、访问标志字符串、
 
 import re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
-from ..type_map import ancestor_type_args, rust_type_with_args
+from ..type_map import ancestor_type_args, rust_type_with_args, instance_field_rust_name
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
 # Access flags
@@ -148,8 +148,8 @@ def _compute_ancestor_fields_layout(ci: ClassInfo, registry: dict | None) -> lis
             if f.is_static:
                 continue
             # 与 superclass_fields 使用同一命名函数（关键字字段 in → in_），宏按名字精确匹配
-            safe_name = safe_ident(f.name)
-            # 同名字段只声明一次（子类可能 shadow，取第一次出现）
+            safe_name = instance_field_rust_name(anc.name, safe_ident(f.name), registry)
+            # 隐藏祖先字段的声明已取独立名；去重仅防御重复输入
             if safe_name not in declared:
                 declared.add(safe_name)
                 own_fields.append(safe_name)
