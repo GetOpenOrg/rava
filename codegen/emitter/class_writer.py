@@ -12,7 +12,8 @@ from ..type_map import parse_class_type_params, parse_field_type, hierarchy_over
 from ..type_map import (effective_class_type_params, ancestor_type_args, outer_ref_field_type,
                         class_type_param_bounds,
                         rust_type_with_args as _rust_type_with_args)
-from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
+from ..constants import (safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS,
+                         PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, STRING_CLASS)
 
 # 模块级 regex，避免在每次调用时重复编译
 _CLS_RE_NARROW = _re.compile(r'L([^;]+);')          # 平铺 descriptor（如 (LFoo;)V）
@@ -580,6 +581,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 注意：展平结果只用于生成「转发访问器」，父类字段的实际存储在 `_super` 里
     # （见 §16：复制字段会造成同一字段两份状态）。
     superclass_fields: list[tuple[str, str]] = []
+    superclass_reference_fields: list[str] = []
     if _has_super and registry and not _full_impl:
         _chain: list = []
         _seen_chain: set[str] = set()
@@ -605,8 +607,14 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 if _sf_name in _declared:
                     continue
                 _declared.add(_sf_name)
-                superclass_fields.append(
-                    (_sf_name, _resolve_anc_field_rust(_f, _anc_params, _anc_map)))
+                _sf_view_ty = _resolve_anc_field_rust(_f, _anc_params, _anc_map)
+                superclass_fields.append((_sf_name, _sf_view_ty))
+                # 祖先按类型变量声明（引用存储 + __borrow_mut 访问器）而本类视角代入成基本类型
+                # （Box<U>.state 在 `extends Box<Long>` 下是 i64）：存储形态由声明方决定，
+                # 宏须按引用字段实现祖先 VTable 的访问器
+                if (_sf_view_ty in _PRIMITIVE_RUST_TYPES and _resolve_anc_field_rust(
+                        _f, _anc_params, {_p: _p for _p in _anc_params}) not in _PRIMITIVE_RUST_TYPES):
+                    superclass_reference_fields.append(_sf_name)
 
     # ── struct 声明（裸类型，封装细节由宏收拢）──────────────────────────
     struct_lines: list[str] = []
@@ -1009,7 +1017,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         simple_name = ci.name.split('$')[-1].split('/')[-1]
         fmt_parts = [f'{f.name}={{}}' for f in record_fields]
         fmt_str = f'{simple_name}[{", ".join(fmt_parts)}]'
-        fmt_args = ', '.join(f'self.{safe_ident(f.name)}.get()' for f in record_fields)
+        # 字段一律经宏生成的访问器读取（struct 字段的存储形态是宏的实现细节）
+        # 基本类型 / 字符串分量直接格式化；其余引用分量按 Java 语义经 Object.toString() 取文本
+        def _record_component_text(_rf) -> str:
+            _rf_ty = jvm_to_rust(_rf.descriptor, registry)
+            _rf_get = f'this.__get_{safe_ident(_rf.name)}()'
+            if _rf_ty in _PRIMITIVE_RUST_TYPES or _rf_ty == jvm_to_rust(f'L{STRING_CLASS};', registry):
+                return _rf_get
+            return f'Into::<Object>::into({_rf_get}).toString()?'
+        fmt_args = ', '.join(_record_component_text(f) for f in record_fields)
         new_blocks = []
         for block in method_blocks:
             if '/* TODO: invokedynamic' in block and any(f'pub fn {n}(' in block for n in ('toString', 'hashCode', 'equals')):
@@ -1018,7 +1034,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     fmtcall = (f'String::from(format!("{fmt_str}", {fmt_args}).as_str())' if fmt_args
                                else f'String::from("{fmt_str}")')
                     new_blocks.append(attr +
-                        f'pub fn toString(&self) -> Result<String> {{\n        Ok({fmtcall})\n    }}')
+                        f'pub fn toString(&self) -> Result<String> {{\n        let this = self;\n        Ok({fmtcall})\n    }}')
                 elif 'pub fn hashCode(' in block:
                     attr = block[:block.index('pub fn hashCode(')]
                     new_blocks.append(attr +
@@ -1031,18 +1047,19 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         rust_fty = jvm_to_rust(f.descriptor, registry)
                         if rust_fty == 'String':
                             field_cmps.append(
-                                f'self.__get_{fname}().to_string() == other.__get_{fname}().to_string()'
+                                f'this.__get_{fname}().to_string() == other.__get_{fname}().to_string()'
                             )
                         else:
-                            field_cmps.append(f'self.__get_{fname}() == other.__get_{fname}()')
+                            field_cmps.append(f'this.__get_{fname}() == other.__get_{fname}()')
                     cmp_expr = ' && '.join(field_cmps) if field_cmps else 'true'
                     new_blocks.append(attr +
                         f'pub fn equals(&self, mut o: Object) -> Result<bool> {{\n'
-                        f'        if let Some(other) = o.0.downcast_ref::<Self>() {{\n'
-                        f'            Ok({cmp_expr})\n'
-                        f'        }} else {{\n'
-                        f'            Ok(false)\n'
+                        f'        let this = self;\n'
+                        f'        if !o.is_instance_of("{ci.name}") {{\n'
+                        f'            return Ok(false);\n'
                         f'        }}\n'
+                        f'        let other = <{struct_name}{struct_generic} as From<Object>>::from(o);\n'
+                        f'        Ok({cmp_expr})\n'
                         f'    }}')
                 else:
                     new_blocks.append(block)
@@ -1057,6 +1074,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             ci, registry=registry,
             superclass_rust=parent_rust,
             superclass_fields=superclass_fields,
+            superclass_reference_fields=superclass_reference_fields,
             impl_methods=set((_nf_entry or {}).get('methods', set())),
             handwritten_methods=new_format_map,
         ))

@@ -108,9 +108,10 @@ class SimResult:
 # 条件构造
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _uses_jvm_null_method(ty: str) -> bool:
-    """类型是否用 .is_jvm_null() 检测 null（java_class! 生成类）；其余走 _is_jnull()。"""
-    if ty in ('Object', '()', '') or ty in _PRIM_TYPES:
+def _uses_jvm_null_method(ty: str, type_params=()) -> bool:
+    """类型是否用 .is_jvm_null() 检测 null（java_class! 生成类）；其余走 _is_jnull()。
+    type_params：当前类的类型变量（`T_BUFFER` 等任意命名），类型变量上没有 wrapper 方法。"""
+    if ty in ('Object', '()', '') or ty in _PRIM_TYPES or ty in type_params:
         return False
     if ty.startswith(('JArray<', 'Rc<', 'Vec<', 'Box<', 'std::')):
         return False
@@ -138,7 +139,7 @@ def jump_condition(op: str, sim: StackSim) -> Cond:
         return base if op == 'ifne' else negate(base)
     a_s = render_expr(a_e)
     if op in ('ifnull', 'ifnonnull'):
-        if _uses_jvm_null_method(render_type(a_t)):
+        if _uses_jvm_null_method(render_type(a_t), sim.class_type_params or ()):
             is_null = atom(f'{a_s}.is_jvm_null()', f'!{a_s}.is_jvm_null()')
         else:
             is_null = atom(f'_is_jnull(&{a_s})', f'!_is_jnull(&{a_s})')

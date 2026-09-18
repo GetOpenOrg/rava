@@ -390,9 +390,10 @@ def _static_call_turbofish(cls: str, class_name: str, sim: StackSim,
         return ''
     _cls_ci = registry.get(_cls_bin)
     # 接口的静态成员载体与类同构（携带类级类型参数），turbofish 规则一致
-    if not (_cls_ci and _cls_ci.generic_signature):
+    if not _cls_ci:
         return ''
-    _tparams = _parse_class_type_params(_cls_ci.generic_signature)
+    # 有效形参：含内部 / 局部类从外围作用域继承的类型变量（struct 的泛型形参同源）
+    _tparams = _effective_class_type_params(_cls_ci, registry)
     if not _tparams:
         return ''
     if _cls_bin == class_name and sim.class_type_params:
@@ -472,7 +473,9 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
     elif cls and '/' in cls:
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
-        rust_mname = _safe_field(_mangle_if_overloaded(cls, mname, comment, registry))
+        # 短名跨包重名时按常量池里的 binary name 定位声明类（短名反查会命中同名的另一个类）
+        rust_mname = _safe_field(_mangle_if_overloaded(
+            _cp_cls_bin if _cls_path else cls, mname, comment, registry))
         turbofish = _static_call_turbofish(cls, class_name, sim, registry, _static_tbind)
         # 同类静态调用的 turbofish 采用了实参绑定 → 返回类型同步替换
         turbofish_bound = bool(turbofish) and _rust_type_to_binary(cls, registry) == class_name and bool(sim.class_type_params)

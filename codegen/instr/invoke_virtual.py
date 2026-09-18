@@ -8,7 +8,7 @@ from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
 from ..constants import safe_ident as _safe_field
 from .coerce import (
     parse_method_ref,
-    _mangle_if_overloaded, _resolve_bridge_target,
+    _mangle_if_overloaded, _resolve_bridge_target, _signature_polymorphic_descriptor,
     UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
     _rust_type_to_binary, _get_all_subtypes_ordered,
@@ -44,7 +44,41 @@ def _declaring_interface(iface_ci, mname: str, descriptor: str, registry: dict) 
     return ''
 
 
+def _gen_signature_polymorphic(sim: StackSim, comment: str, decl_desc: str, class_name: str,
+                               registry: dict | None) -> None:
+    """签名多态调用（`mh.invokeExact(a, b)` / `VALUE.compareAndSet(this, e, n)`）：
+    调用点实参按 Java varargs 语义装入 Object[]，再按声明描述符走常规虚调用；
+    声明返回根类而调用点要求具体类型时，结果按调用点返回类型转换。"""
+    _cls, _mname, call_params, call_ret = parse_method_ref(comment)
+    boxed: list[str] = []
+    for _ in call_params:
+        a_expr, a_ty = sim.pop()
+        boxed.insert(0, _coerce_arg(render_expr(a_expr), a_ty, 'Object', render_type(a_ty), sim, registry))
+    arr = sim.fresh()
+    sim.emit(RawStmt(f"let mut {arr}: JArray<Object> = JArray::<Object>::new({len(boxed)}i32);"))
+    for i, b in enumerate(boxed):
+        sim.emit(RawStmt(f"{arr}.set({i}i32, {b})?;"))
+    sim.push(Var(arr), RsNamed('JArray<Object>'))
+    decl_comment = comment[:comment.index(':(') + 1] + decl_desc
+    _gen_invokevirtual(sim, decl_comment, class_name, registry)
+    decl_ret = decl_desc[decl_desc.index(')') + 1:]
+    if call_ret == 'V' and decl_ret != 'V' and sim.stack:
+        sim.pop()  # 调用点丢弃结果（调用语句已落地为 let 绑定）
+    elif call_ret != decl_ret and sim.stack:
+        r_expr, r_ty = sim.pop()
+        want = jvm_to_rust(call_ret, registry)
+        have = render_type(r_ty)
+        if want != have:
+            r_expr = RawExpr(_coerce_arg(render_expr(r_expr), r_ty, want, have, sim, registry))
+            r_ty = RsNamed(want)
+        sim.push(r_expr, r_ty)
+
+
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
+    _poly_desc = _signature_polymorphic_descriptor(comment, registry)
+    if _poly_desc is not None:
+        _gen_signature_polymorphic(sim, comment, _poly_desc, class_name, registry)
+        return
     cls, mname, params, ret = parse_method_ref(comment)
     # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
     # 解析泛型实参以建立 callee 类型参数 → 接收者实参的映射（如 HashMap<E,Object> → K=E）
@@ -85,6 +119,29 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     obj_expr, obj_ty_node = sim.pop()
     obj_e = render_expr(obj_expr)
     obj_ty = render_type(obj_ty_node)
+
+    # `new Foo<>(..).m()`：构造结果直接作接收者。接收者位置不提供任何类型推断上下文，
+    # 构造器 turbofish 里待推断的 `_` 永远无解（E0283）→ 按擦除语义落为 Object。
+    # 已绑定到局部变量的构造结果不在此列（后续赋值 / 传参仍可提供推断）。
+    import re as _re_infer
+    _infer_m = _re_infer.match(r'^(\w+)<(_(?:, _)*)>$', obj_ty)
+    if _infer_m and obj_e.startswith(f"{_infer_m.group(1)}::<{_infer_m.group(2)}>::"):
+        _erased_args = ', '.join('Object' for _ in _infer_m.group(2).split(', '))
+        obj_e = (f"{_infer_m.group(1)}::<{_erased_args}>::"
+                 + obj_e[len(f"{_infer_m.group(1)}::<{_infer_m.group(2)}>::"):])
+        obj_ty = f"{_infer_m.group(1)}<{_erased_args}>"
+        obj_expr = RawExpr(obj_e)
+        obj_ty_node = RsNamed(obj_ty)
+
+    # 有类上界的类型变量接收者（`parent.setPendingCount(1)`，parent: K，K extends Task<.., K>）：
+    # Java 侧该调用经上界类型静态解析 → 转换为上界类型后调用（与 getfield 同规则）
+    _tv_bound_v = sim.type_var_bounds.get(obj_ty)
+    if _tv_bound_v is not None:
+        sim.type_var_bound_uses[obj_ty] = _tv_bound_v
+        obj_e = f"Into::<{_tv_bound_v}>::into(Clone::clone(&{obj_e}))"
+        obj_expr = RawExpr(obj_e)
+        obj_ty_node = RsNamed(_tv_bound_v)
+        obj_ty = _tv_bound_v
 
     # Fix 16：泛型参数接收者（如 k.equals(pk) 中 k: K）——inherent 方法不在
     # 类型参数上可见（E0599）。装箱为 Object 后：Object 自身的方法
@@ -316,7 +373,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 _bridge_desc = ''
                 if not _owner_bin and registry and registry.get(sub_bin) is not None:
                     _bridged = _resolve_bridge_target(registry[sub_bin], mname, jvm_desc, registry)
-                    if _bridged is not None:
+                    if _bridged is not None and not _bridged[0].is_interface:
                         _owner_bin, _bridge_desc = _bridged[0].name, _bridged[1]
                 if _root_declared and not _owner_bin:
                     continue
@@ -520,7 +577,9 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 方法继承自祖先时登记继承成员需求，由接收者类的 java_class! 块声明该成员、
     # 宏展开为 wrapper 转发方法，vtable 分派不出现在方法体里。
     _recv = obj_e
-    if not (sim.in_vtable_body and obj_base == _cur_class_short and obj_e in ('this', 'self')):
+    # this 接收者同样登记：抽象类调用自身未声明的接口抽象方法（`this.getLong(f)`）时，
+    # 成员声明来自接口，由宏展开为经接口载体分派的转发方法。
+    if True:
         _obj_jvm = _rust_type_to_binary(obj_base, registry) if registry else None
         _ci_recv = registry.get(_obj_jvm) if _obj_jvm else None
         if _ci_recv is not None:
@@ -545,8 +604,20 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     _recv = f"Object::from_any(Clone::clone(&{obj_e}))"
                     _root_routed = True
                 else:
-                    # 超类链上无字节码声明：接口 default 方法（注入到实现它的类）
-                    _inherited_calls.request(_obj_jvm, mname, _param_desc)
+                    # 超类链上无字节码声明：
+                    #   · 调用描述符只命中 synthetic bridge → 按被桥接真实方法的参数登记；
+                    #   · 否则为接口方法（default 注入到实现类 / 抽象方法由接口载体分派）。
+                    _bridged_v = _resolve_bridge_target(_ci_recv, mname, _jvm_desc_v, registry)
+                    if _bridged_v is not None:
+                        _param_desc = _bridged_v[1].split(')')[0] + ')'
+                        _bridge_owner_short = _bridged_v[0].name.rsplit('/', 1)[-1].replace('$', '_')
+                        if _bridged_v[0].name != _obj_jvm and not _bridged_v[0].is_interface:
+                            _owner_args_v = _ancestor_vtable_args_by_short(
+                                _ci_recv, obj_ty, registry).get(_bridge_owner_short, '')
+                            _sig_owner = _bridged_v[0].name
+                            _sig_recv_ty = _bridge_owner_short + _owner_args_v
+                    if _bridged_v is None or _bridged_v[0].name != _obj_jvm:
+                        _inherited_calls.request(_obj_jvm, mname, _param_desc)
 
     def _build_call(mname_r, recv, args):
         return f"{recv}.{mname_r}({args})"

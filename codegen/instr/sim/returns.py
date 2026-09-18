@@ -4,6 +4,9 @@ from ...rs_ir import RawStmt
 from ...render import render_expr, render_type
 from ..coerce import _coerce_to_object, _coerce_value, _is_subtype, _into_super_chain, _PRIMITIVE_RUST_TYPES
 
+import re as _re_ret
+from .control import _erased_shape
+
 
 def sim_returns(ins, sim, class_name, registry) -> bool:
     op      = ins.opcode
@@ -47,6 +50,11 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
                 expr_s = f"From::from({expr_s})"
             else:
                 expr_s = 'Default::default()'
+        elif ('_' in _re_ret.findall(r'\w+', actual_ty)
+              and _erased_shape(actual_ty) == _erased_shape(ret_ty)):
+            # 同一擦除类型、类型实参待推断（`return new Entry<?,?>[n]`，声明返回 Entry<K,V>[]）：
+            # 值原样返回，`_` 由返回类型推断
+            pass
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty)
               and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):

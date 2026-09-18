@@ -16,7 +16,8 @@ pub(crate) enum VTableBodyKind {
 }
 
 pub(crate) fn classify_vtable_body(block: &Block) -> VTableBodyKind {
-    let s = quote!(#block).to_string();
+    // 折叠空白：proc-macro 上下文的 to_string 保留源码换行 / 缩进，子串匹配须在规范化文本上做
+    let s: String = quote!(#block).to_string().split_whitespace().collect::<Vec<_>>().join(" ");
     if s.contains("Self ::") || s.contains("Self::") {
         return VTableBodyKind::Skip;
     }

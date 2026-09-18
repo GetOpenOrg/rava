@@ -259,6 +259,10 @@ def gen_method_body(
                    slot_decls=slot_decls, is_subtype=_sim_is_subtype,
                    return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                    in_vtable_body=in_vtable_body, box_object=_sim_box_object)
+    _bounds_ci = registry.get(method.class_name) if registry else None
+    if _bounds_ci is not None and _class_tparams:
+        from ..type_map import class_type_param_bounds
+        sim.type_var_bounds = {tv: b[0] for tv, b in class_type_param_bounds(_bounds_ci, registry).items()}
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
 

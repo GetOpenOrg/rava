@@ -12,6 +12,9 @@ from ...type_map import (
     effective_class_type_params as _effective_class_type_params,
     outer_ref_field_type as _outer_ref_field_type,
     class_type_param_bounds as _class_type_param_bounds,
+    ancestor_type_args as _ancestor_type_args,
+    split_rust_type_args as _split_rust_type_args,
+    substitute_type_params as _substitute_type_params,
 )
 from ...constants import safe_ident as _safe_ident, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import (
@@ -39,7 +42,7 @@ def _static_field_decl_class(cls: str, comment: str, registry: dict | None) -> s
 
 def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
                                  class_name: str, registry: dict | None,
-                                 sim) -> str:
+                                 sim, recv_ty: str = '') -> str:
     """按字段 generic_signature 恢复声明类型（getfield / putfield 共用）。
 
     ftype 是 jvm_to_rust(fdesc) 的擦除形态；沿继承链查字段声明，用声明类
@@ -52,7 +55,15 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
     _g_owner = f_owner if f_owner else class_name
     if not _g_owner:
         return ftype
-    _g_ci = registry.get(_g_owner)
+    _ref_ci = registry.get(_g_owner)
+    # 字段解析（JVMS §5.4.3.2）：字段引用的限定类是接收者静态类型，声明类可能是其祖先；
+    # generic_signature 里的类型变量属于声明类，须在声明类的形参上下文中解析
+    _g_ci = _ref_ci
+    while _g_ci is not None and not any(
+            not _of.is_static and _safe_ident(_of.name) == fname for _of in _g_ci.fields):
+        _g_ci = registry.get(_g_ci.super_class) if _g_ci.super_class else None
+    if _g_ci is None:
+        _g_ci = _ref_ci
     # 内部类外部引用字段（this$N，无 generic_signature）：与 struct 字段定义同规则
     _parsed = ''
     if _g_ci is not None:
@@ -68,6 +79,22 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
         # 内部类自身无 generic_signature 时，类型参数继承自外部类（与 struct 定义同规则）
         _decl_tparams = list(_effective_class_type_params(_g_ci, registry) or [])
         _parsed = _parse_field_type(_gsig, _decl_tparams, registry)
+    if _parsed and _g_ci is not None and recv_ty:
+        # 字段声明在接收者静态类型的祖先上（`this.curChunk`，声明为祖先的 T_ARR）：
+        # 祖先类型变量按接收者视角的超类实参代入——与接收者类的转发访问器
+        # （superclass_fields 展平）同一规则，读取侧记录的类型与访问器返回类型一致
+        _recv_bin = _rust_type_to_binary(recv_ty.split('<')[0].strip(), registry)
+        _recv_ci = registry.get(_recv_bin) if _recv_bin else None
+        if _recv_ci is None and _ref_ci is not None and _ref_ci.name != _g_ci.name:
+            _recv_ci = _ref_ci
+        if _recv_ci is not None and _recv_ci.name != _g_ci.name:
+            _anc_view = dict(_ancestor_type_args(_recv_ci, registry, _split_rust_type_args(recv_ty) or None))
+            if _g_ci.name in _anc_view:
+                _owner_params = list(_effective_class_type_params(_g_ci, registry) or [])
+                _owner_args = list(_anc_view[_g_ci.name])
+                _parsed = _substitute_type_params(_parsed, {
+                    _p: (_owner_args[_i] if _i < len(_owner_args) else 'Object')
+                    for _i, _p in enumerate(_owner_params)})
     if _parsed and _parsed != 'Object' and _parsed != ftype:
         # 校验：解析结果中的类型名须在调用方可见
         # （当前 impl 类型参数 / registry 短名 / 内建容器），
@@ -96,8 +123,9 @@ def _resolve_static_field(cls: str, field_name: str, descriptor: str, comment: s
             _cls_bin = cls
         if _cls_bin:
             _getstatic_cls_ci = registry.get(_cls_bin)
-            if _getstatic_cls_ci and _getstatic_cls_ci.generic_signature:
-                _tparams = _parse_class_type_params(_getstatic_cls_ci.generic_signature)
+            if _getstatic_cls_ci:
+                # 有效形参：含内部 / 局部类从外围作用域继承的类型变量（struct 的泛型形参同源）
+                _tparams = _effective_class_type_params(_getstatic_cls_ci, registry)
                 if _tparams:
                     _getstatic_turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
     # 静态字段声明类型恢复（与 getfield 同规则）：getter 按字段级 generic_signature
@@ -234,7 +262,8 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             # X<Object,Object> / Rc<RefCell<Vec<Object>>>）而表达式实际是
             # 精确泛型形态，局部变量标注 E0308（expected 擦除, found 精确）。
             # 与 putfield 共用同一恢复规则（含内部类外部引用字段 this$N）。
-            ftype = _restore_field_declared_type(f_owner, fname, ftype, class_name, registry, sim)
+            ftype = _restore_field_declared_type(f_owner, fname, ftype, class_name, registry, sim,
+                                                 recv_ty=render_type(obj_ty))
             # 字段读取 → 宏生成的访问器（方案 §7）。
             # 继承字段由子类的转发访问器统一暴露（父类字段在前展平，§6），
             # 所以不再需要按接收者静态类型拼 `_super._super.` 路径——
@@ -254,7 +283,8 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             # 类 tparams 上下文的精确泛型形态（HashMap_Node<K,V> / Vec<E>），
             # 与宏访问器 __set_xxx 的参数类型（class_writer 按字段 generic_signature
             # 生成）一致，否则 E0308/E0277（Into 目标是擦除形态、From 不存在）。
-            ftype = _restore_field_declared_type(cls_owner, fname, ftype, class_name, registry, sim)
+            ftype = _restore_field_declared_type(cls_owner, fname, ftype, class_name, registry, sim,
+                                                 recv_ty=render_type(obj_ty))
             _slot_gsig = _get_field_generic_signature(cls_owner or class_name, fname, registry) if registry else ''
             val_str = _coerce_stored_value(val_expr, val_ty, ftype, registry, render_expr(obj_expr),
                                            slot_is_type_var=bool(_slot_gsig) and _slot_gsig.startswith('T'),

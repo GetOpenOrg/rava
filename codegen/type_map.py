@@ -284,6 +284,28 @@ def hierarchy_overloaded_names(ci, registry: dict | None) -> frozenset:
     return frozen
 
 
+def interface_member_local_name(ci, mname: str, descriptor: str, registry: dict | None) -> str:
+    """类 ci 视角下「只声明在接口上的成员」（类链未声明该 name+descriptor）的 Rust 方法名 ——
+    继承成员声明侧与调用侧的唯一判定来源。
+
+    类链上已有同名实例方法（参数列表必然不同：`date(Era,int,int,int)` 对接口的
+    `date(TemporalAccessor)`）时，接口成员与之构成重载 → 按描述符 mangle，不与类方法撞名；
+    类方法自身的名字不受影响（其名字只由类链决定，见 hierarchy_overloaded_names）。"""
+    if mname in hierarchy_overloaded_names(ci, registry):
+        return mangle_name(mname, descriptor)
+    params = descriptor.split(')')[0]
+    seen: set[str] = set()
+    cur = ci
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        declared = _class_method_param_sets(cur, registry)[1].get(mname)
+        if declared is not None:
+            # 同参数列表 = 该成员其实就在类的方法表里（注入的接口 default）→ 名字由类链决定
+            return mname if params in declared else mangle_name(mname, descriptor)
+        cur = registry.get(cur.super_class) if (registry and cur.super_class) else None
+    return mname
+
+
 def _parse_type_list(s: str) -> list[str]:
     types, i = [], 0
     while i < len(s):
@@ -521,6 +543,23 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
                 if len(type_args) != len(inner_eff):
                     type_args = ['Object'] * len(inner_eff)
             has_type_args = bool(type_args)
+
+        # 签名里不带实参的泛型类：
+        #   - 形参全部继承自外围作用域的内部 / 局部类（javac 对局部类只写 `LOuter$1Var;`），
+        #     且当前上下文正处于同一外围作用域（这些类型变量可见）→ 实参就是这些类型变量
+        #   - 其余为 raw type → 按擦除语义全部取 Object
+        if not has_type_args and registry and class_name in registry \
+                and not registry[class_name].is_interface and class_name not in _CLASSNAME_MAP:
+            raw_ci = registry[class_name]
+            raw_eff = list(effective_class_type_params(raw_ci, registry) or [])
+            if raw_eff:
+                raw_own = (parse_class_type_params(raw_ci.generic_signature)
+                           if raw_ci.generic_signature else [])
+                if not raw_own and all(p in (class_type_params or []) for p in raw_eff):
+                    type_args = raw_eff
+                else:
+                    type_args = ['Object'] * len(raw_eff)
+                has_type_args = True
 
         # 跳过结尾 ';'
         if j < len(sig) and sig[j] == ';':

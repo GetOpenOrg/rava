@@ -155,6 +155,8 @@ class StackSim:
         # 方法体用到的类型变量上界转换：类型变量 → 上界 Rust 类型。
         # 方法签名据此声明 `where E: Into<Bound>`；子 sim 与根 sim 共享同一 dict。
         self.type_var_bound_uses: dict[str, str]     = {}
+        # 类级类型变量 → 上界 Rust 类型（`K extends Task<.., K>`），由方法生成入口填入
+        self.type_var_bounds: dict[str, str]         = {}
 
         def _is_wide(rt: RsType) -> bool:
             """long (i64) 和 double (f64) 在 JVM 中各占 2 个局部变量槽。"""
@@ -346,6 +348,16 @@ class StackSim:
                     expr = RawExpr(f"({render_expr(expr)}).into()")
                 ty = decl_ty
                 force_let_ty = True
+        # 类型变量值赋给声明为其上界类型的局部（`Task<.., K> task = this; task = task.makeChild(..)`，
+        # makeChild 返回 K）：Java 隐式上转 → 转换为上界类型（约束 `K: Into<Bound>` 由方法签名声明）
+        _tv_bound = self.type_var_bounds.get(ty.name) if isinstance(ty, RsNamed) else None
+        _tv_target = hint if hint is not None else decl_ty
+        if (_tv_bound is not None and isinstance(_tv_target, (RsNamed, RsGeneric))
+                and getattr(_tv_target, 'name', '').split('<')[0].strip() == _tv_bound.split('<')[0].strip()):
+            self.type_var_bound_uses[ty.name] = _tv_bound
+            expr = RawExpr(f"Into::<{_tv_bound}>::into({render_expr(_clone_moved_var(expr, ty))})")
+            ty = RsNamed(_tv_bound)
+            hint = None
         # 记录原始栈类型：只有在栈类型为 Object 时才需要 downcast
         src_is_object = isinstance(ty, RsNamed) and ty.name == 'Object'
         if hint is not None:
