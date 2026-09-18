@@ -22,6 +22,8 @@ from .attrs import (to_snake, _java_class_block_head,
                     _java_field_attr, _java_method_attr)
 from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, _find_virtual_in
+from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
+                            MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
 from ..instr.coerce import _parse_field_ref
 from .clinit_extract import _push_int_value, _extract_clinit_consts, _extract_clinit_arrays
 
@@ -43,7 +45,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   conflict_map: dict | None = None,
                   skipped_classes: set | None = None,
                   user_sibling_imports: list[str] | None = None,
-                  generated_classes: set | None = None) -> str:
+                  generated_classes: set | None = None,
+                  emission: 'ClassEmission | None' = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -53,6 +56,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     - 每个 struct / field / method 前加 // @java_* 注释供 build.rs 扫描
     - new_format_map: 若提供，为覆盖的类插入 #[path] mod _impl; 并跳过被覆盖方法
     - user_crate_prefix: 若提供（如 'jdk_classes'），cross_imports 用该 crate 前缀
+    - emission: 若提供，记录本类实际生成的方法声明，并在文本中留出继承成员声明的
+      两个插入位（use 区 / impl 块尾），由 inherited_gen.resolve_inherited_members 统一填充
     """
 
     # ── Step 1: 始终计算引用集合（精确 use 生成的基础）─────────────────────────
@@ -421,6 +426,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs)]",
         f"use {user_crate_prefix or 'crate'}::prelude::*;",
         *cross_imports,
+        *([_INHERITED_IMPORTS_SLOT] if emission is not None else []),
         "",
     ]
     inst_fields = [f for f in ci.fields if not f.is_static]
@@ -1088,8 +1094,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
             block.append(f"{impl_header} {{")
             block.append(impl_body)
+            if emission is not None and not _is_iface:
+                block.append(_INHERITED_MEMBERS_SLOT)
             block.append("}")
 
+        if emission is not None:
+            emission.record_methods(method_blocks)
         parts.append("java_rta_macros::java_class! {")
         for line in block:
             parts.append(_indent(line) if line else '')

@@ -1,6 +1,7 @@
 # 从 codegen/instr/invoke.py 中拆出
 
 from ..stack import StackSim
+from .. import inherited_calls as _inherited_calls
 from ..rs_ir import Lit, Var, RawExpr, RawStmt, RsNamed
 from ..render import render_expr, render_type
 from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
@@ -385,56 +386,17 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                                     else:
                                         _bparts17.append(args[_i17])
                                 _barg_str = ', '.join(_bparts17)
-                # T76：方法定义在父类（如 getKey 定义在 HashMap_Node，TreeNode
-                # 经继承获得）时，dispatch 分支需路由到父类方法。
-                # 新架构（java_class! 宏）wrapper 不生成 __super() 方法，
-                # 改为通过 vtable supertrait UFCS 调用：OwnerVTable::method(&*_d.vtable, args)
+                # 方法由祖先 _owner_bin 声明、sub 自身未覆盖：分支内同样写 `_d.method(args)`，
+                # 并登记 sub 需要该继承成员 —— 由 sub 的 java_class! 块声明、宏展开为
+                # wrapper 转发方法（内部经声明该方法的祖先 VTable 分派，消除 E0034 歧义）。
                 _sub_pfx = _find_method_super_prefix_for_type(
                     sub_rust.split('<')[0], mname, registry,
                     descriptor=_bridge_desc or f"({''.join(params)}){ret}",
                 )
                 if _sub_pfx and _owner_bin:
-                    # 方法在祖先类 _owner_bin 中声明，使用 <dyn OwnerVTable>::method(&*_d.vtable, args)
-                    # 形式消歧义（避免 E0034）且满足 Rust 2021 trait object UFCS 语法。
-                    # 不含 `dyn` 的裸 UFCS（TypeName__VTable::method(...)）是 E0782。
-                    _owner_short_v = _owner_bin.rsplit('/', 1)[-1].replace('$', '_')
-                    _sep_v = ', ' if _barg_str else ''
-                    # 提取 sub_rust 的类型实参（如 LinkedHashMap<Object, Object> → 'Object, Object'）
-                    import re as _re_ta
-                    _ta_m = _re_ta.search(r'<(.+)>$', sub_rust)
-                    _sub_type_args = _ta_m.group(1) if _ta_m else ''
-                    if '_' in _sub_type_args:
-                        # 含通配符 _ 时无法用于 dyn Trait 位置，直接调用 vtable
-                        _call_expr = f"_d.vtable.{sub_mname_r}({_barg_str})"
-                    else:
-                        # 完全限定 UFCS：<dyn SubVTable<STA> as VtableOwnerVTable<OTA>>::method(...)
-                        # VtableOwner 是方法的真实 VTable 声明类（virtual_in 值），
-                        # 可能与 Java owner 不同（如 containsKey virtual_in=AbstractMap 但 Java owner=HashMap）。
-                        # 使用 "as VtableOwner" 消除多 supertrait 路径的 E0034 歧义。
-                        _vtable_owner_v = _owner_short_v  # 默认与 Java owner 相同
-                        if registry:
-                            from codegen.emitter.vtable_util import _find_virtual_in as _fvi
-                            _owner_ci_vt = registry.get(_owner_bin)
-                            if _owner_ci_vt:
-                                _param_part_vt = jvm_desc.split(')')[0] + ')' if jvm_desc else ''
-                                for _m_vt in _owner_ci_vt.methods:
-                                    if (_m_vt.name == mname and not _m_vt.is_synthetic
-                                            and (_m_vt.descriptor.startswith(_param_part_vt) if _param_part_vt else True)):
-                                        _vi = _fvi(_m_vt, _owner_ci_vt, registry)
-                                        if _vi:
-                                            _vtable_owner_v = _vi
-                                        break
-                        # VtableOwner 的类型实参：沿 sub 的 SuperclassSignature 链逐级代入解析
-                        # （各祖先元数不同，不能取 sub 实参的前 N 个）
-                        _owner_type_args_str = ''
-                        _sub_ci_gs = registry.get(sub_bin) if registry else None
-                        if _sub_ci_gs is not None:
-                            _owner_type_args_str = _ancestor_vtable_args_by_short(
-                                _sub_ci_gs, sub_rust, registry).get(_vtable_owner_v, '')
-                        _sub_vtable_short = sub_rust.split('<')[0] + '__VTable'
-                        _sub_vtable_ta = ('<' + _sub_type_args + '>') if _sub_type_args else ''
-                        _call_expr = (f"<dyn {_sub_vtable_short}{_sub_vtable_ta} as {_vtable_owner_v}__VTable{_owner_type_args_str}>::{sub_mname_r}"
-                                      f"(&*_d.vtable{_sep_v}{_barg_str})")
+                    _inherited_calls.request(
+                        sub_bin, mname, (_bridge_desc or jvm_desc).split(')')[0] + ')')
+                    _call_expr = f"_d.{sub_mname_r}({_barg_str})"
                 elif _sub_pfx:
                     # fallback（owner 未知）：保留旧的 __super() 路由
                     _d_recv = _super_prefix_to_expr('_d', _sub_pfx)
@@ -493,48 +455,40 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 使祖先的类型变量（ForkJoinTask<V>.join → V）按接收者的超类实参代入
     _sig_owner, _sig_recv_ty = cls, obj_ty
     _root_routed = False  # True：调用路由到根 vtable（根类方法返回类型由调用点标注决定）
-    _ufcs_vtable_prefix = None  # 若非 None，改写为 UFCS：<dyn _ufcs_vtable_prefix>::rust_mname(&*obj.vtable, args)
     # 仅当接收者就是 this 本身时才直接调用；同类的其他实例（如 compareTo(that) 的 that）
-    # 是 wrapper，继承方法必须走常规 vtable / UFCS 分派
-    if sim.in_vtable_body and obj_base == _cur_class_short and obj_e in ('this', 'self'):
-        _recv = obj_e
-    else:
+    # 是 wrapper。wrapper 接收者一律生成 `obj.method(args)`（与 Java 一致）：
+    # 方法继承自祖先时登记继承成员需求，由接收者类的 java_class! 块声明该成员、
+    # 宏展开为 wrapper 转发方法，vtable 分派不出现在方法体里。
+    _recv = obj_e
+    if not (sim.in_vtable_body and obj_base == _cur_class_short and obj_e in ('this', 'self')):
         _obj_jvm = _rust_type_to_binary(obj_base, registry) if registry else None
         _ci_recv = registry.get(_obj_jvm) if _obj_jvm else None
         if _ci_recv is not None:
-            _param_desc = '(' + ''.join(params) + ')' if params is not None else None
+            _param_desc = '(' + ''.join(params) + ')'
             _declared_here = any(
-                not m.is_synthetic and m.name == mname and (_param_desc is None or m.descriptor.startswith(_param_desc))
+                not m.is_synthetic and m.name == mname and m.descriptor.startswith(_param_desc)
                 for m in _ci_recv.methods
             )
-            if _declared_here:
-                _recv = obj_e
-            else:
-                # 方法继承自父类：解析 owner 以生成 UFCS，消除同名方法多 VTable 来源的 E0034
-                _jvm_desc_v = '(' + ''.join(params) + ')' + ret
+            if not _declared_here:
+                _jvm_desc_v = _param_desc + ret
                 _owner_bin_v, _ = _resolve_method_owner(_obj_jvm, mname, registry, descriptor=_jvm_desc_v)
                 if _owner_bin_v and _owner_bin_v != _obj_jvm:
+                    # 返回类型按 owner 在接收者静态类型下的实参化形态解析
                     _owner_short_v = _owner_bin_v.rsplit('/', 1)[-1].replace('$', '_')
-                    # owner VTable 的类型实参由接收者静态类型沿超类链代入得到
                     _owner_args_v = _ancestor_vtable_args_by_short(
                         _ci_recv, obj_ty, registry).get(_owner_short_v, '')
-                    _ufcs_vtable_prefix = f"<dyn {_owner_short_v}__VTable{_owner_args_v}>"
                     _sig_owner, _sig_recv_ty = _owner_bin_v, _owner_short_v + _owner_args_v
-                    _recv = f"&*{obj_e}.vtable"
+                    _inherited_calls.request(_obj_jvm, mname, _param_desc)
                 elif (not _owner_bin_v
                         and (mname, _param_desc) in _root_virtual_methods()):
                     # 整条祖先链未声明、由根类声明 → 装箱后走根 vtable
                     _recv = f"Object::from_any(Clone::clone(&{obj_e}))"
                     _root_routed = True
                 else:
-                    _recv = f"{obj_e}.vtable"
-        else:
-            _recv = obj_e  # 手写类 / 不在 registry → 直接调用
-    # 生成方法调用表达式（普通形式 or UFCS 形式）
+                    # 超类链上无字节码声明：接口 default 方法（注入到实现它的类）
+                    _inherited_calls.request(_obj_jvm, mname, _param_desc)
+
     def _build_call(mname_r, recv, args):
-        if _ufcs_vtable_prefix:
-            sep = ', ' if args else ''
-            return f"{_ufcs_vtable_prefix}::{mname_r}({recv}{sep}{args})"
         return f"{recv}.{mname_r}({args})"
 
     if rust_ret == '()':

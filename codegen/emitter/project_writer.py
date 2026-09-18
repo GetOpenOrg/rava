@@ -12,13 +12,12 @@ from ..constants import scratch_pkg_version as _scratch_pkg_version
 from .attrs import to_snake, pkg_from_java
 from .method_gen import _scan_impl_files
 from .class_writer import _gen_class_rs
+from .inherited_gen import ClassEmission, resolve_inherited_members
+from .. import inherited_calls as _inherited_calls
 
 
-def _write(path: str, content: str) -> None:
-    """创建目录并写文件。
-    对 java_runtime/src/ 下的 .rs 文件，若已存在且不含自动生成标记，则视为手写文件保留不覆盖。
-    mod.rs / lib.rs / user/ 下文件始终正常写入。
-    """
+def _is_handwritten(path: str) -> bool:
+    """java_runtime/src/ 下已存在且不含自动生成标记的 .rs 文件 = 手写文件。"""
     _basename = os.path.basename(path)
     _is_jrt_rs = (
         path.endswith('.rs')
@@ -30,10 +29,19 @@ def _write(path: str, content: str) -> None:
             with open(path, encoding='utf-8') as _f:
                 # 全文查找生成标记：import 头很长的类（Pattern/HashMap 等）标记位于 4096 字符之后，
                 # 截断读取会把生成文件误判为手写文件，导致复用 scratch 时永不刷新
-                if 'java_rta_macros::java_class' not in _f.read():
-                    return  # 手写文件，不覆盖
+                return 'java_rta_macros::java_class' not in _f.read()
         except Exception:
-            pass
+            return False
+    return False
+
+
+def _write(path: str, content: str) -> None:
+    """创建目录并写文件。
+    对 java_runtime/src/ 下的 .rs 文件，若已存在且不含自动生成标记，则视为手写文件保留不覆盖。
+    mod.rs / lib.rs / user/ 下文件始终正常写入。
+    """
+    if _is_handwritten(path):
+        return  # 手写文件，不覆盖
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     if os.path.exists(path):
         try:
@@ -122,6 +130,11 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     #     （scratch 里手写文件无 java_rta_macros::java_class 标记 → 跳过写入）
     #   - scratch 的清空/复用策略由脚本层决定（main.py --clean）
 
+    # 两阶段生成：先生成全部类文本（期间调用点登记继承成员需求），
+    # 再统一补上继承成员声明后落盘（见 inherited_gen.py）
+    _inherited_calls.reset()
+    emissions: dict[str, ClassEmission] = {}
+
     # 构建 registry（用户类 + JDK 类）
     registry: dict = {ci.name: ci for ci in class_infos}
     if jdk_class_infos:
@@ -201,15 +214,19 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             # 生成标记，_write 会跳过写入；mod 树照常登记，保证 mod.rs 声明该模块
             # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
             # new_format_map 中已有 _impl.rs 实现的方法，codegen 跳过那些方法的 stub 生成
-            _write(file_path, _gen_class_rs(jdk_ci, registry=registry,
-                                            jdk_crate_pkg_paths=jdk_crate_pkg_paths,
-                                            call_chain=visited_methods,
-                                            new_format_map=new_format_map,
-                                            workspace_root=out_dir,
-                                            full_impl_classes=full_impl_classes,
-                                            conflict_map=conflict_map,
-                                            skipped_classes=skipped_classes,
-                                            generated_classes=_generated_jdk_names))
+            _em = ClassEmission(binary_name=jdk_ci.name, crate_prefix='crate', path=file_path,
+                                handwritten=_is_handwritten(file_path))
+            _em.text = _gen_class_rs(jdk_ci, registry=registry,
+                                     jdk_crate_pkg_paths=jdk_crate_pkg_paths,
+                                     call_chain=visited_methods,
+                                     new_format_map=new_format_map,
+                                     workspace_root=out_dir,
+                                     full_impl_classes=full_impl_classes,
+                                     conflict_map=conflict_map,
+                                     skipped_classes=skipped_classes,
+                                     generated_classes=_generated_jdk_names,
+                                     emission=_em)
+            emissions[jdk_ci.name] = _em
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
@@ -227,82 +244,84 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         safe = f'r#{name}' if name in _RUST_KEYWORDS else name
         return f'pub use {safe}::*;'
 
-    # 从磁盘全量重建 jdk_mod_tree：mod.rs 如实声明磁盘上的全部模块。
-    # 磁盘内容 = 手写 overlay（runtime/ 复制进来的 object.rs、function 存根、
-    # companion）+ 本次生成的类文件 + 同 scratch 上次运行的幸存文件。
-    # 用作用域内的 jdk_mod_tree 直接写 mod.rs 会抹掉其余文件的声明（E0432/E0433）。
-    # 扫描收集全部 .rs，自底向上传播目录，只声明有文件的目录（避免 E0583）。
-    if os.path.isdir(jdk_src):
-        jdk_mod_tree = {}
-        for root, _dirs, files in os.walk(jdk_src):
-            for fname in files:
-                if not fname.endswith('.rs') or fname in ('lib.rs', 'mod.rs'):
-                    continue
-                # _impl.rs / _ext.rs 是共置手写文件，由下方 companion_mods 以私有
-                # `mod X_impl;` 声明。若此处也计入 children，会再生成一条
-                # `pub mod X_impl; pub use X_impl::*;`，导致 E0428（重复定义）
-                # 与 E0592/E0034（glob 重导出歧义）。
-                # 例外：含生成标记的 *_impl.rs 是碰巧命名的生成类（如
-                # Collectors$CollectorImpl → collectors_collector_impl.rs），
-                # 必须计入 children 才有 pub mod 声明（否则 E0425）。
-                if fname.endswith('_impl.rs') or fname.endswith('_ext.rs'):
-                    _fpath_scan = os.path.join(root, fname)
-                    try:
-                        with open(_fpath_scan, encoding='utf-8') as _fs:
-                            if 'java_rta_macros::java_class' not in _fs.read():
-                                continue  # 真正手写共置文件，由 companion_mods 声明
-                    except Exception:
-                        continue  # 读取失败时保守视为手写
-                jdk_mod_tree.setdefault(root, set()).add(fname[:-3])
-        _changed = True
-        while _changed:
-            _changed = False
-            for _dp in list(jdk_mod_tree.keys()):
-                if _dp == jdk_src:
-                    continue
-                _par = os.path.dirname(_dp)
-                _dn  = os.path.basename(_dp)
-                if _dn not in jdk_mod_tree.get(_par, set()):
-                    jdk_mod_tree.setdefault(_par, set()).add(_dn)
-                    _changed = True
+    def _write_jdk_mod_tree() -> None:
+        """JDK 类文件全部落盘后调用：mod.rs 如实声明磁盘上的全部模块。"""
+        # 从磁盘全量重建 jdk_mod_tree：mod.rs 如实声明磁盘上的全部模块。
+        # 磁盘内容 = 手写 overlay（runtime/ 复制进来的 object.rs、function 存根、
+        # companion）+ 本次生成的类文件 + 同 scratch 上次运行的幸存文件。
+        # 用作用域内的 jdk_mod_tree 直接写 mod.rs 会抹掉其余文件的声明（E0432/E0433）。
+        # 扫描收集全部 .rs，自底向上传播目录，只声明有文件的目录（避免 E0583）。
+        jdk_mod_tree: dict[str, set[str]] = {}
+        if os.path.isdir(jdk_src):
+            for root, _dirs, files in os.walk(jdk_src):
+                for fname in files:
+                    if not fname.endswith('.rs') or fname in ('lib.rs', 'mod.rs'):
+                        continue
+                    # _impl.rs / _ext.rs 是共置手写文件，由下方 companion_mods 以私有
+                    # `mod X_impl;` 声明。若此处也计入 children，会再生成一条
+                    # `pub mod X_impl; pub use X_impl::*;`，导致 E0428（重复定义）
+                    # 与 E0592/E0034（glob 重导出歧义）。
+                    # 例外：含生成标记的 *_impl.rs 是碰巧命名的生成类（如
+                    # Collectors$CollectorImpl → collectors_collector_impl.rs），
+                    # 必须计入 children 才有 pub mod 声明（否则 E0425）。
+                    if fname.endswith('_impl.rs') or fname.endswith('_ext.rs'):
+                        _fpath_scan = os.path.join(root, fname)
+                        try:
+                            with open(_fpath_scan, encoding='utf-8') as _fs:
+                                if 'java_rta_macros::java_class' not in _fs.read():
+                                    continue  # 真正手写共置文件，由 companion_mods 声明
+                        except Exception:
+                            continue  # 读取失败时保守视为手写
+                    jdk_mod_tree.setdefault(root, set()).add(fname[:-3])
+            _changed = True
+            while _changed:
+                _changed = False
+                for _dp in list(jdk_mod_tree.keys()):
+                    if _dp == jdk_src:
+                        continue
+                    _par = os.path.dirname(_dp)
+                    _dn  = os.path.basename(_dp)
+                    if _dn not in jdk_mod_tree.get(_par, set()):
+                        jdk_mod_tree.setdefault(_par, set()).add(_dn)
+                        _changed = True
 
-    # java_runtime/src/lib.rs 是手写文件，不覆写。
-    # 顶层 pub mod 声明（java/、jdk/ 等）已在 lib.rs 中手动维护。
+        # java_runtime/src/lib.rs 是手写文件，不覆写。
+        # 顶层 pub mod 声明（java/、jdk/ 等）已在 lib.rs 中手动维护。
 
-    # 中间 mod.rs（jdk 子包）：pub mod + pub use *（使 glob import 能拿到类型）
-    for dir_path, children in jdk_mod_tree.items():
-        if dir_path == jdk_src:
-            continue
-        mod_lines = ['#![allow(ambiguous_glob_reexports)]']
-        for c in sorted(children):
-            mod_lines.append(_mod_decl(c))
-            mod_lines.append(_use_decl(c))
-        # K-2: 扫描目录中的 _impl.rs / _ext.rs 共置文件，加入私有 mod 声明。
-        # 规则：只有当 X.rs 存在（调用链生成，或手写 overlay 提供）时，
-        # 才声明 mod X_impl; / mod X_ext;。否则 _impl.rs 静默等待，避免 E0583 / 未定义类型。
-        # 若 X.rs 存在但不在 children（手写 overlay 文件），还需补充 pub mod X; 声明。
-        if os.path.isdir(dir_path):
-            extra_pub: list[str] = []
-            companion_mods: list[str] = []
-            for _f in sorted(os.listdir(dir_path)):
-                if _f.endswith('_impl.rs'):
-                    base = _f[:-len('_impl.rs')]
-                elif _f.endswith('_ext.rs'):
-                    base = _f[:-len('_ext.rs')]
-                else:
-                    continue
-                # X.rs 不存在时跳过：_impl.rs 静默，不产生无法解析的 mod 声明
-                if not os.path.exists(os.path.join(dir_path, base + '.rs')):
-                    continue
-                companion_mods.append(f'mod {_f[:-3]};')
-                # X.rs 在磁盘但不在 children（如手写 object.rs）→ 补充 pub mod 声明
-                if base not in children:
-                    extra_pub.append(base)
-            for base in sorted(set(extra_pub)):
-                mod_lines.append(_mod_decl(base))
-                mod_lines.append(_use_decl(base))
-            mod_lines.extend(companion_mods)
-        _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
+        # 中间 mod.rs（jdk 子包）：pub mod + pub use *（使 glob import 能拿到类型）
+        for dir_path, children in jdk_mod_tree.items():
+            if dir_path == jdk_src:
+                continue
+            mod_lines = ['#![allow(ambiguous_glob_reexports)]']
+            for c in sorted(children):
+                mod_lines.append(_mod_decl(c))
+                mod_lines.append(_use_decl(c))
+            # K-2: 扫描目录中的 _impl.rs / _ext.rs 共置文件，加入私有 mod 声明。
+            # 规则：只有当 X.rs 存在（调用链生成，或手写 overlay 提供）时，
+            # 才声明 mod X_impl; / mod X_ext;。否则 _impl.rs 静默等待，避免 E0583 / 未定义类型。
+            # 若 X.rs 存在但不在 children（手写 overlay 文件），还需补充 pub mod X; 声明。
+            if os.path.isdir(dir_path):
+                extra_pub: list[str] = []
+                companion_mods: list[str] = []
+                for _f in sorted(os.listdir(dir_path)):
+                    if _f.endswith('_impl.rs'):
+                        base = _f[:-len('_impl.rs')]
+                    elif _f.endswith('_ext.rs'):
+                        base = _f[:-len('_ext.rs')]
+                    else:
+                        continue
+                    # X.rs 不存在时跳过：_impl.rs 静默，不产生无法解析的 mod 声明
+                    if not os.path.exists(os.path.join(dir_path, base + '.rs')):
+                        continue
+                    companion_mods.append(f'mod {_f[:-3]};')
+                    # X.rs 在磁盘但不在 children（如手写 object.rs）→ 补充 pub mod 声明
+                    if base not in children:
+                        extra_pub.append(base)
+                for base in sorted(set(extra_pub)):
+                    mod_lines.append(_mod_decl(base))
+                    mod_lines.append(_use_decl(base))
+                mod_lines.extend(companion_mods)
+            _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
 
     # 4. user crate（用户 Java 翻译）
     user_src = os.path.join(user_dir, 'src')
@@ -378,16 +397,25 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     _user_gen_jdk = {ci.name for ci in jdk_class_infos} if jdk_class_infos else None
     for ci in class_infos:
         file_path, _, _ = layout[ci.name]
-        _write(file_path, _gen_class_rs(ci, registry=registry,
-                                        jdk_crate_pkg_paths=user_pkg_paths,
-                                        user_crate_prefix='java_runtime',
-                                        new_format_map=new_format_map,
-                                        workspace_root=out_dir,
-                                        full_impl_classes=full_impl_classes,
-                                        conflict_map=conflict_map if jdk_class_infos else None,
-                                        skipped_classes=skipped_classes if jdk_class_infos else None,
-                                        user_sibling_imports=_sibling_imports.get(ci.name),
-                                        generated_classes=_user_gen_jdk))
+        _em = ClassEmission(binary_name=ci.name, crate_prefix='java_runtime', path=file_path)
+        _em.text = _gen_class_rs(ci, registry=registry,
+                                 jdk_crate_pkg_paths=user_pkg_paths,
+                                 user_crate_prefix='java_runtime',
+                                 new_format_map=new_format_map,
+                                 workspace_root=out_dir,
+                                 full_impl_classes=full_impl_classes,
+                                 conflict_map=conflict_map if jdk_class_infos else None,
+                                 skipped_classes=skipped_classes if jdk_class_infos else None,
+                                 user_sibling_imports=_sibling_imports.get(ci.name),
+                                 generated_classes=_user_gen_jdk,
+                                 emission=_em)
+        emissions[ci.name] = _em
+
+    # 全部方法体已生成 → 继承成员需求已齐：补声明后统一落盘
+    resolve_inherited_members(emissions, registry)
+    for _em in emissions.values():
+        _write(_em.path, _em.text)
+    _write_jdk_mod_tree()
 
     # 中间 mod.rs（用户子包）
     for dir_path, children in user_mod_tree.items():

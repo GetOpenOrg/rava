@@ -88,10 +88,19 @@ pub(crate) enum MethodKind {
     Constructor,
     /// 非虚实例方法：留在 wrapper impl block
     NonVirtual,
+    /// 继承成员声明（无方法体）：方法由祖先 `owner` 声明、本类未覆盖。
+    /// 宏在 wrapper 上生成同名 inherent 方法，使调用点与 Java 一致（`obj.method(args)`）：
+    ///   - `vtable_owner = Some(T)`：虚方法，经 `T__VTable` supertrait 分派（保持多态）
+    ///   - `vtable_owner = None`：祖先的非虚方法（native 等），向上转型后调用
+    /// owner / vtable_owner 均为本类视角下的 Rust 类型（含类型实参，如 `AbstractList<E>`）。
+    Inherited { owner: String, vtable_owner: Option<String> },
 }
 
 pub(crate) fn classify_method(attrs: &[Attribute], sig: &Signature, self_name: &str) -> MethodKind {
     let mname = sig.ident.to_string();
+    if let Some(owner) = attr_str(attrs, "inherited_from") {
+        return MethodKind::Inherited { owner, vtable_owner: attr_str(attrs, "vtable_owner") };
+    }
     if let Some(virtual_in) = attr_str(attrs, "virtual_in") {
         if virtual_in == self_name {
             MethodKind::VirtualDefine

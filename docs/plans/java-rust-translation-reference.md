@@ -303,6 +303,32 @@ animals.borrow_mut()[1] = Animal::from(dog.clone());  // Dog 信息保留在 vta
 let _t = animals.borrow()[1].speak()?;  // vtable 分发，透明
 ```
 
+#### 继承成员：子类接收者调用祖先方法
+
+Java 子类天然拥有祖先的实例方法；Rust wrapper 之间没有继承。调用点一律与 Java 一致：
+
+```java
+Dog dog = new Dog();
+dog.speak();          // speak 声明在 Animal，Dog 未覆盖
+```
+```rust
+let _t = dog.speak()?;   // 方法体中不出现 `.vtable`、`<dyn X__VTable>::` UFCS
+```
+
+机制（全部在生成器 + 宏内）：
+
+1. 调用点生成 `obj.m(args)`，并向 `codegen/inherited_calls.py` 登记「接收者类需要继承成员 m」（按需，不全量）
+2. 全部类文本生成后，`codegen/emitter/inherited_gen.py` 沿接收者超类链找到最近声明者，
+   取其**实际输出的签名**（重载改名、泛型签名逐字同源），把祖先类型变量代入接收者视角实参，
+   在接收者的 `java_class!` 块里补一条无方法体的声明：
+   ```rust
+   #[java_method(name = "speak", descriptor = "()V", access = "public",
+                 inherited_from = "Animal", vtable_owner = "Animal")]
+   pub fn speak(&self) -> Result<()>;
+   ```
+3. 宏将其展开为 wrapper 上的同名转发方法：虚方法经 `vtable_owner` 的 VTable supertrait 精确分派
+   （保持多态，且无多 VTable 同名歧义）；非虚方法（无 `vtable_owner`）向上转型为 `inherited_from` 后调用
+
 ### 6.4 虚方法判定规则
 
 codegen Python 侧根据字节码 access flags 标注，`java_class!` 宏据此生成 vtable：

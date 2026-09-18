@@ -32,7 +32,7 @@ use syn::{GenericParam, Ident, Type};
 
 use classify::{classify_vtable_body, is_vtable_safe_body, VTableBodyKind};
 use generic_sig::rebuild_sig_with_generics;
-use parse::{ClassInput, ClassMeta, FnItem};
+use parse::{split_type_name_args, ClassInput, ClassMeta, FnItem};
 use rewrite::{
     replace_clone_this_in_ok, rewrite_base_calls_for_wrapper, rewrite_block,
     rewrite_virtual_calls_for_wrapper, rewrite_vtable_calls_ufcs_for_base,
@@ -233,9 +233,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let mut vtable_defines: Vec<&FnItem> = Vec::new();
     let mut vtable_overrides: HashMap<String, Vec<&FnItem>> = HashMap::new();
     let mut non_virtual: Vec<&FnItem> = Vec::new();
+    // inherited:       继承成员声明（祖先声明、本类未覆盖）→ wrapper 上的转发方法
+    let mut inherited: Vec<(&FnItem, String, Option<String>)> = Vec::new();
 
     for f in &fns {
         match classify_method(&f.attrs, &f.sig, &self_name) {
+            MethodKind::Inherited { owner, vtable_owner } => inherited.push((f, owner, vtable_owner)),
             MethodKind::VirtualDefine => vtable_defines.push(f),
             MethodKind::VirtualOverride { vtable_class } => {
                 vtable_overrides.entry(vtable_class).or_default().push(f);
@@ -1006,6 +1009,52 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 #vis #sig { #anc_vtable::#mname(&*self.vtable, #(#param_names),*) }
             });
         }
+    }
+
+    // 继承成员：wrapper 上的同名转发方法（调用点写 `obj.method(args)`，与 Java 一致）。
+    // 虚方法经「本类 VTable → 声明该方法的祖先 VTable」的完全限定 UFCS 分派：
+    // 既保持多态，又消除同名方法多 supertrait 来源的歧义（E0034）。
+    for (f, owner, vtable_owner) in &inherited {
+        let sig = &f.sig;
+        let mname = &sig.ident;
+        let vis = &f.vis;
+        let keep_attrs = strip_meta_attrs(&f.attrs);
+        let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
+            if let syn::FnArg::Typed(pt) = arg {
+                if let syn::Pat::Ident(pi) = &*pt.pat {
+                    return Some(pi.ident.clone());
+                }
+            }
+            None
+        }).collect();
+        let body: TokenStream2 = match vtable_owner {
+            Some(vo) => {
+                let vo_ty = match syn::parse_str::<Type>(vo) {
+                    Ok(t) => t,
+                    Err(e) => return e.to_compile_error(),
+                };
+                let (vo_name, vo_args) = split_type_name_args(&vo_ty);
+                let vo_trait = format_ident!("{}__VTable", vo_name);
+                quote! {
+                    <dyn #vtable_trait_ident #ty_g as #vo_trait #vo_args>::#mname(&*self.vtable, #(#param_names),*)
+                }
+            }
+            None => {
+                let owner_ty = match syn::parse_str::<Type>(owner) {
+                    Ok(t) => t,
+                    Err(e) => return e.to_compile_error(),
+                };
+                quote! {
+                    <#owner_ty as ::std::convert::From<Self>>::from(::std::clone::Clone::clone(self))
+                        .#mname(#(#param_names),*)
+                }
+            }
+        };
+        wrapper_methods.push(quote! {
+            #(#keep_attrs)*
+            #[inline]
+            #vis #sig { #body }
+        });
     }
 
     // Constructor / NonVirtual 方法（保持原 body，走 Rewriter）
