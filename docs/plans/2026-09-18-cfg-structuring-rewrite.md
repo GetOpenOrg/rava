@@ -205,9 +205,23 @@ timeout 10 ../target/debug/test_collections
   紧跟同一跳转的分支臂尾跳转下沉消除。二者使 `for` 形态恢复为 `while cond { .. }`。
 - **循环头临时变量回填**：`let _tN = call?;` 仅服务于循环条件时回填进条件，使 `while cond {` 成立。
 - **汇合变量声明位置**：随 follower 的标签块就位；归约后不再是 follower 的节点，其声明置于函数顶部。
-- **异常处理器**：只翻译正常路径；含异常表的方法在生成代码首行写明未翻译的处理器清单，
-  自检统计单列 `handler_methods` / `handler_jumps`（不静默）。catch 分派依赖异常对象模型，随该模型落地后接入。
+- **try 区域**（method/try_catch.py + blocks.py `_install_try_nodes` + structure.py）：异常表按处理器聚合为 `TryGroup`，
+  每个组在 CFG 中是一个合成的 try 节点 T（后继 = try 体入口 + 各处理器入口），每个块带 `ctx`（覆盖它的组集合）；
+  结构化器校验「词法 try 组集合 == ctx」，不成嵌套即 `CfgError`。终态指标：`handler_methods=0`、`stub_fallback=0`。定稿规则：
+  * **受保护区间截断到处理器入口**：javac 的 finally 表项会越过 catch-any 处理器入口（覆盖其开头的 `astore`），
+    越过部分与 `start_pc >= handler_pc` 的自保护表项同义，区间截断为 `[start_pc, handler_pc)`。
+  * **循环出口后继须 ctx 一致**：循环体内 try 所保护的出口块（try 里的 `throw` / `return`）不属于自然循环体，
+    但只有 `ctx(循环头) == ctx(出口块)` 时才作为 out-follower 放到 `loop` 之后；否则留在循环内按支配关系就位，
+    从而留在其 try 体之内。
+  * **裸 return 收编**：javac 把 `try { return f(); }` 的受保护区间结束在 `xreturn` 之前；只含一条 `*return`
+    且单前驱的块继承前驱的 ctx，`return` 因此留在 try 体内（返回指令自身不抛异常，语义不变）。
+  * **catch 体文本终点**：catch 体终点 = 异常变量的 LocalVariableTable 作用域终点（该 pc 同时作为块边界，且不被
+    fuse / 短路归约吞并）。try 体不正常落出（以 `return` / `athrow` 结尾）时，try 语句之后的代码只经由 catch 体可达；
+    起点不早于该终点、且 ctx 与 T 一致的被支配块作为 T 的 try follower 放在 `java_try!` 之后（与 Java 源码同形），
+    其支配子树随之就位。无调试信息时留在 catch 体内（语义等价）。
+  * **`java_try!` 的完成性判定**覆盖 `match`：switch 的每个臂都以 return / throw 结束时，try 语句类型为 `!`，可位于方法体末尾。
 - **自检统计输出**：`scripts/main.py` 在转译后打印 `[cfg-audit] ...`；`CfgAuditError` 穿透 class_writer 的 stub 降级直接中止转译，
   其余翻译异常计入 `stub_fallback`。
 - **单元测试**：`tests/unit/test_cfg_structuring.py` 直接构造块图（不依赖 JDK），覆盖 while 形态、嵌套 break、
-  汇合标签块、switch 分组、不可归约兜底与自检报错。
+  汇合标签块、switch 分组、不可归约兜底、自检报错，以及 try 区域的各定稿规则（循环内 try 的出口块、
+  处理器入口截断、catch 体终点之后的平级代码、区域不嵌套的拒绝）。端到端形态用例：`tests/e2e/06_exceptions/TestTryShape.java`。

@@ -73,6 +73,7 @@ class Node:
     group: int | None = None
     handlers: list = field(default_factory=list)
     catches: list = field(default_factory=list)
+    catch_ends: list = field(default_factory=list)   # 各 catch 体的文本终点 pc（None = 未知）
 
     def successors(self) -> list[int]:
         if self.kind == 'try':
@@ -338,7 +339,8 @@ class BlockSimulator:
         self.registry = registry
         self.class_tparams = list(class_tparams or [])
         self.ledger = ledger
-        self.blocks = build_blocks(self.instrs, method.exception_table)
+        self.plan = TryCatchPlan(method.exception_table, self.instrs, getattr(method, 'local_vars', None))
+        self.blocks = build_blocks(self.instrs, method.exception_table, self.plan.catch_body_ends())
         self.nodes: dict[int, Node] = {}
 
     # ── 入口 ────────────────────────────────────────────────────────────────
@@ -389,7 +391,8 @@ class BlockSimulator:
         self.entry = 0
         self.handler_bind: dict[int, tuple] = {}     # 处理器入口节点 → (T, 绑定名, 绑定类型)
         self.try_entries: set[int] = set()           # try 体入口块（不参与跳转线程化）
-        plan = TryCatchPlan(self.method.exception_table, self.instrs)
+        self.catch_exits: set[int] = set()           # catch 体文本终点处的块（不并入 catch 体）
+        plan = self.plan
         planned = {c.handler_pc for g in plan.groups for c in g.clauses}
         for start_pc, _end, handler_pc, _ct in (self.method.exception_table or []):
             if start_pc < handler_pc and handler_pc not in planned:
@@ -399,7 +402,10 @@ class BlockSimulator:
         gid = {id(g): k for k, g in enumerate(plan.groups)}
         for b in blocks:
             staged[b.id].ctx = frozenset(gid[id(g)] for g in plan.groups if g.covers(b.start_pc))
+        self._adopt_bare_returns(staged)
         by_start_idx = {b.start_idx: b.id for b in blocks}
+        by_start_pc = {b.start_pc: b.id for b in blocks}
+        self.catch_exits = {by_start_pc[pc] for pc in plan.catch_body_ends()}
 
         chains: dict[int, list[Node]] = {}           # 体入口块 → [T_outer, ..., T_inner]
         next_id = len(blocks)
@@ -415,6 +421,7 @@ class BlockSimulator:
                 t.group = gid[id(g)]
                 for clause in g.clauses:
                     t.handlers.append(by_start_idx[clause.handler_idx])
+                    t.catch_ends.append(clause.body_end_pc)
                     t.catches.append((clause, self.sim.fresh('_caught'),
                                       _binding_type(clause, self.registry)))
                 chain.insert(0, t)
@@ -447,6 +454,22 @@ class BlockSimulator:
                 self.handler_bind[h] = (t.id, bind, bind_ty)
         if 0 in chains:
             self.entry = chains[0][0].id
+
+    def _adopt_bare_returns(self, staged: dict) -> None:
+        """javac 把 `try { return f(); }` 的受保护区间收在 xreturn 之前（返回指令不会抛出异常）。
+        只含一条返回指令、且只有一个前驱的块随其前驱归入同一组 try 区域：
+        return 留在 try 体内，与 Java 源码形状一致；语义不变。"""
+        preds: dict[int, list[int]] = {}
+        for n in staged.values():
+            for s in n.successors():
+                preds.setdefault(s, []).append(n.id)
+        for b in self.blocks:
+            if b.term.kind != 'exit' or b.end_idx - b.start_idx != 1 \
+                    or not self.instrs[b.start_idx].opcode.endswith('return'):
+                continue
+            sources = preds.get(b.id, [])
+            if len(sources) == 1:      # 处理器入口此时尚无前驱（try 节点还未安装），不会被收编
+                staged[b.id].ctx = staged[sources[0]].ctx
 
     def _thread_jumps(self, staged: dict, raw_reach: set) -> None:
         """跳转线程化：只含一条 goto 的块不产生任何代码，指向它的边直接改指其最终目标。
@@ -597,7 +620,7 @@ class BlockSimulator:
 
     def _try_fuse(self, node: Node) -> Node:
         """单前驱直线块并入前驱。返回并入后的当前节点。"""
-        if node.id == self.entry or node.decls or node.kind == 'try':
+        if node.id == self.entry or node.decls or node.kind == 'try' or node.id in self.catch_exits:
             return node
         preds = self._all_preds(node.id)
         if len(preds) != 1:
@@ -617,7 +640,8 @@ class BlockSimulator:
 
     def _try_short_circuit(self, node: Node) -> Node:
         """条件块 B 并入其唯一前驱条件块 P（&& / ||），可级联。"""
-        while node.kind == 'cond' and node.id != self.entry and not node.decls:
+        while node.kind == 'cond' and node.id != self.entry and not node.decls \
+                and node.id not in self.catch_exits:
             preds = self._all_preds(node.id)
             if len(preds) != 1:
                 break

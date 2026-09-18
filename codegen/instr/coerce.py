@@ -89,7 +89,8 @@ def parse_method_ref(comment: str) -> tuple[str | None, str, list, str]:
                .replace('<init>',     '__init__')
                .replace('<clinit>',   '__clinit__'))
 
-    m = re.match(r'(?:([^.]+)\.)?(\w+(?:<\w+>)?):(\([^)]*\).+)', comment)
+    # 方法名按 JVMS §4.2.2：除 . ; [ / < > 之外的任意字符（含 `$`：枚举的 $values、access$NNN、lambda$..）
+    m = re.match(r'(?:([^.]+)\.)?([^.;\[/<>:()]+(?:<\w+>)?):(\([^)]*\).+)', comment)
     if not m:
         return (None, comment, [], 'V')
 

@@ -13,7 +13,10 @@
       * 节点 Y 离开受保护区间（idom(Y) 受 T 的组保护而 Y 不受），或 Y 是 try 体与处理器
         之后的汇合点（idom(Y) == T）：Y 是 T 的 try follower，放在 `Try` 之后
         （javac 内联的 finally 副本、try 语句之后的代码因此在词法上位于 try 之外，不受其保护）
-      * 循环与 try 同时满足时取更外层者
+      * try 体不正常落出（以 return / athrow 结尾）时，try 语句之后的代码只经由 catch 体可达；
+        越过 catch 体文本终点（节点的 catch_ends）的节点同样是 T 的 try follower，
+        生成形状与 Java 源码一致（catch 之后的平级代码）
+      * 循环与 try 同时满足时取更外层者；循环体内的 try 所保护的出口块留在该 try 之内
     放置完成后逐节点校验「词法所处的 try 组集合 == 异常表给出的 try 组集合」，
     不一致（区间与控制流不成嵌套结构）→ CfgError。
 任何跳转都被翻译为 内联 / break / continue 三者之一，不存在「匹配不上」的形态。
@@ -116,6 +119,18 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
     try_nodes = [x for x in flow.rpo if nodes[x].kind == 'try']   # RPO 序 = 外层在前
     try_slots = {x: [nodes[x].target] + list(nodes[x].handlers) for x in try_nodes}
 
+    past_catch: dict[int, set] = {t: set() for t in try_nodes}   # 已位于 t 的 catch 体之后的节点
+
+    def leaves_catch(t: int, d: int, y: int) -> bool:
+        if ctx_of(t) != ctx_of(y):
+            return False
+        ends = getattr(nodes[t], 'catch_ends', None) or []
+        for h, end_pc in zip(nodes[t].handlers, ends):
+            if end_pc is not None and nodes[y].start_pc >= end_pc > nodes[d].start_pc \
+                    and dominates(flow.idom, h, d):
+                return True
+        return False
+
     for y in flow.rpo:
         if y == flow.entry:
             continue
@@ -128,7 +143,10 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
             continue
         parent_loop = None
         for h, body in loops_outer_first:
-            if d in body and y not in body:
+            # 循环体内的 try 所保护的出口块（try 里的 throw / return 不属于自然循环体）必须留在
+            # 该 try 之内：只有词法 try 组集合与 y 一致的循环才能把 y 作为出口后继放到 loop 之后，
+            # 否则 y 留在循环内按支配关系就位（y 不可达循环头，其子树不会落回循环体）
+            if d in body and y not in body and ctx_of(h) == ctx_of(y):
                 parent_loop = h
                 break
         parent_try = None
@@ -137,6 +155,14 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
                 continue
             g = nodes[t].group
             if (d == t or g in ctx_of(d)) and g not in ctx_of(y) and dominates(flow.idom, t, d):
+                parent_try = t
+                break
+            if d in past_catch[t]:
+                past_catch[t].add(y)
+            elif leaves_catch(t, d, y):
+                # catch 体的文本终点之后：try 体不正常落出时，try 语句之后的代码只经由 catch 体可达，
+                # 它仍是 try 语句之后的平级代码，而不是 catch 体的一部分
+                past_catch[t].add(y)
                 parent_try = t
                 break
         if parent_try is not None and parent_loop is not None \

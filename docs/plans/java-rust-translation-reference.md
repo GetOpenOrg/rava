@@ -481,8 +481,9 @@ java_try! {
   无子句命中时异常原样向外传播。
 - `catch (t) { ... }`（无类型）对应异常表的 catch-any 表项（`finally` / `synchronized` 的兜底处理器），
   `t` 的类型为 `Throwable`。
-- `java_unguarded! { ... }` 标出 try 体文本范围内、但不受本层异常表覆盖的代码
-  （javac 内联到 try 体出口处的 finally 副本）：其中抛出的异常越过本层 catch 向外传播。
+- 不受本层异常表覆盖的代码（javac 内联到 try 体出口处的 finally 副本）位于 `java_try!` 之外，
+  其中抛出的异常自然越过本层 catch 向外传播；try 语句之后的代码总是 `java_try!` 之后的平级代码，
+  即使 try 体以 `return` / `throw` 结尾（此时它只经由 catch 体可达）。
 - try 体里的 `return` / `break` / `continue` 保持 Java 语义。
 - 宏内部用带标签块 + `Result` 实现，`match` / `is_instance_of` / `catch_as` 不出现在可读层。
 
