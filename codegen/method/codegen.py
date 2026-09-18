@@ -15,7 +15,7 @@ from ..type_map import (
     jvm_to_rust, sig_type, rust_default, mangle_name, short_cls,
     parse_method_param_types, parse_field_type, parse_class_type_params,
 )
-from ..constants import safe_ident
+from ..constants import safe_ident, PRIMITIVE_RUST_TYPES as _PRIM_TYPES
 from ..stack import StackSim
 from ..cfg import (
     find_loops, find_boolean_conditions, find_if_guards, find_if_else,
@@ -39,6 +39,19 @@ TWO_OP_CMP = frozenset({
     'if_icmpge', 'if_icmple', 'if_icmpgt',
     'if_acmpeq', 'if_acmpne',
 })
+
+
+def _uses_jvm_null_method(ty: str) -> bool:
+    """判断类型是否需要用 .is_jvm_null() 检测 null（java_class! 生成类）。
+    Object / JArray / Rc / 基本类型 / 泛型参数等走 _is_jnull()，生成类走 .is_jvm_null()。"""
+    if ty in ('Object', '()', '') or ty in _PRIM_TYPES:
+        return False
+    if ty.startswith(('JArray<', 'Rc<', 'Vec<', 'Box<', 'std::')):
+        return False
+    # 泛型类型参数（单或短大写字母，如 T, E, K, V, R, N）不是生成类
+    if len(ty) <= 2 and ty[0].isupper() and ty.rstrip('0123456789').isalpha():
+        return False
+    return True
 
 
 def gen_method_body(
@@ -247,6 +260,8 @@ def gen_method_body(
         # 后续 putfield 走 `__set_xxx` 访问器逐字段赋值。
         struct_init = "Self::default()"
         entries.append(('', f"    let mut this = {struct_init};"))
+        # 标记为非 null（Default 初始化时 _jvm_null=true，构造完成后清零）
+        entries.append(('', "    this._init_not_null();"))
         # 泛型类的 this 带类型参数（与 StackSim 实例方法路径一致，避免裸名 E0107/E0308）
         _this_rust = short_cls(method.class_name)
         if _this_rust and _class_tparams:
@@ -296,9 +311,22 @@ def gen_method_body(
             else:
                 a_e, a_t = cur_sim.pop()
                 a_s = render_expr(a_e)
+                a_ty = render_type(a_t)
                 a_is_b = (str(a_t) == 'bool' or getattr(a_t, 'name', '') == 'bool')
                 if a_is_b and op in ('ifeq', 'ifne'):
                     return f'!({a_s})' if op == 'ifne' else a_s
+                # ifnull/ifnonnull：fall-through 条件（分支不跳转时成立）
+                # ifnull 跳转条件=「为空」→ fall-through=「非空」
+                # ifnonnull 跳转条件=「非空」→ fall-through=「为空」
+                # java_class! 生成类走 .is_jvm_null()；Object/JArray/Rc 等走 _is_jnull()
+                if op == 'ifnull':
+                    if _uses_jvm_null_method(a_ty):
+                        return f'!{a_s}.is_jvm_null()'
+                    return f'!_is_jnull(&{a_s})'
+                if op == 'ifnonnull':
+                    if _uses_jvm_null_method(a_ty):
+                        return f'{a_s}.is_jvm_null()'
+                    return f'_is_jnull(&{a_s})'
                 return neg_cmp_op(op, a_s, '')
 
         i = start
@@ -393,9 +421,20 @@ def gen_method_body(
                     else:
                         a_e, a_t = cond_s.pop()
                         a_s2 = render_expr(a_e)
+                        a_ty2 = render_type(a_t)
                         a_is_b2 = (str(a_t) == 'bool' or getattr(a_t, 'name', '') == 'bool')
                         if a_is_b2 and ci.opcode in ('ifeq', 'ifne'):
                             cond_str = f'!({a_s2})' if ci.opcode == 'ifeq' else a_s2
+                        elif ci.opcode == 'ifnull':
+                            if _uses_jvm_null_method(a_ty2):
+                                cond_str = f'{a_s2}.is_jvm_null()'
+                            else:
+                                cond_str = f'_is_jnull(&{a_s2})'
+                        elif ci.opcode == 'ifnonnull':
+                            if _uses_jvm_null_method(a_ty2):
+                                cond_str = f'!{a_s2}.is_jvm_null()'
+                            else:
+                                cond_str = f'!_is_jnull(&{a_s2})'
                         else:
                             cond_str = cmp_op(ci.opcode, a_s2, '')
                     out.append(('', f"{ind}    if {cond_str} {{ break; }}"))

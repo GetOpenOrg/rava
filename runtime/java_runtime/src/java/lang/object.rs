@@ -16,8 +16,8 @@ pub trait ObjectVTable: 'static {
     /// java.lang.Object.hashCode()I 默认实现
     fn hashCode(&self) -> i32 { 0 }
 
-    /// 用于 Display / toString 的 Rust 字符串（对应 Java toString()）
-    fn toString(&self) -> std::string::String {
+    /// 用于 Display/Debug 的 Rust 字符串（内部用途，避免与 Java toString() -> Result<String> 冲突）
+    fn __obj_str(&self) -> std::string::String {
         std::any::type_name::<Self>().to_owned()
     }
 
@@ -36,19 +36,23 @@ pub trait ObjectVTable: 'static {
     fn compareTo(&self, _other: Object) -> crate::error::Result<i32> {
         panic!("stub: java/lang/Comparable.compareTo:(Ljava/lang/Object;)I")
     }
+
+    /// JVM null 检查辅助：Default::default() 代表 null，构造后设为 false。
+    /// java_class! 宏对生成类自动 override；基本类型 / 手写类默认 false（永不为 null）。
+    fn is_jvm_null(&self) -> bool { false }
 }
 
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────
 macro_rules! impl_vtable_primitive {
     ($t:ty) => {
         impl ObjectVTable for $t {
-            fn toString(&self) -> std::string::String { format!("{}", self) }
+            fn __obj_str(&self) -> std::string::String { format!("{}", self) }
             fn as_any(&self) -> &dyn std::any::Any { self }
         }
     };
     ($t:ty, $fmt:ident) => {
         impl ObjectVTable for $t {
-            fn toString(&self) -> std::string::String { crate::$fmt(*self) }
+            fn __obj_str(&self) -> std::string::String { crate::$fmt(*self) }
             fn as_any(&self) -> &dyn std::any::Any { self }
         }
     };
@@ -64,7 +68,7 @@ impl_vtable_primitive!(f64, java_fmt_f64);
 
 /// null/default 值：存储 () 表示 Java null
 impl ObjectVTable for () {
-    fn toString(&self) -> std::string::String { "null".to_owned() }
+    fn __obj_str(&self) -> std::string::String { "null".to_owned() }
     fn as_any(&self) -> &dyn std::any::Any { self }
 }
 
@@ -83,6 +87,15 @@ impl<T: 'static> ObjectVTable for Rc<std::cell::RefCell<Vec<T>>> {
 pub struct JvmRef<T: 'static>(pub T);
 impl<T: 'static> ObjectVTable for JvmRef<T> {
     fn as_any(&self) -> &dyn std::any::Any { &self.0 }
+    fn __obj_str(&self) -> std::string::String {
+        let v: &dyn std::any::Any = &self.0;
+        macro_rules! try_fmt {
+            ($t:ty) => { if let Some(x) = v.downcast_ref::<$t>() { return format!("{}", x); } };
+        }
+        try_fmt!(i32); try_fmt!(i64); try_fmt!(bool);
+        try_fmt!(f32); try_fmt!(f64); try_fmt!(i8); try_fmt!(i16); try_fmt!(u16);
+        std::any::type_name::<T>().to_owned()
+    }
 }
 
 /// `Object` — 所有 Java 类的运行时表示。

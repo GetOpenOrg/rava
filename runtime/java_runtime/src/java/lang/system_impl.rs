@@ -42,11 +42,15 @@ impl System {
 
     #[jvm_native]
     pub fn out() -> PrintStream {
-        PrintStream::default()
+        let mut ps = PrintStream::default();
+        ps._init_not_null();
+        ps
     }
 
     #[jvm_native]
     pub fn err() -> PrintStream {
-        PrintStream::default()
+        let mut ps = PrintStream::default();
+        ps._init_not_null();
+        ps
     }
 }

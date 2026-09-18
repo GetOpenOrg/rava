@@ -72,13 +72,13 @@ impl Object {
 
 impl std::fmt::Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.toString())
+        write!(f, "{}", self.0.__obj_str())
     }
 }
 
 impl std::fmt::Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Object({})", self.0.toString())
+        write!(f, "Object({})", self.0.__obj_str())
     }
 }
 

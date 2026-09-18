@@ -37,11 +37,8 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         elif ret_ty == 'Object' and actual_ty not in ('Object', '()'):
             expr_s = _coerce_to_object(expr_s, actual_ty)
         elif ret_ty != 'Object' and actual_ty == 'Object':
-            # 泛型类型参数（如 T、K、V、E）不实现 Default，用 panic!("null") 代替
-            if ret_ty in _ctparams:
-                expr_s = 'panic!("null")'
-            else:
-                expr_s = f"Default::default()"
+            # java_class! 宏对所有类型参数自动加 Default bound，直接用 Default::default()
+            expr_s = 'Default::default()'
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty)
               and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):

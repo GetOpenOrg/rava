@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use quote::format_ident;
 use syn::{
     visit_mut::{self, VisitMut},
-    Block, Expr, Member,
+    Block, Expr, Ident, Member,
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -260,6 +260,40 @@ pub(crate) fn rewrite_virtual_calls_for_wrapper(block: &mut Block, own_method_na
         }
     }
     VirtualCallRewriter(own_method_names).visit_block_mut(block);
+}
+
+/// 在 base 函数体（`this: &__BT: VTable + ?Sized`）中，将 `this.vtable_method(args)` 改写为
+/// `VTableTrait::vtable_method(this, args)` UFCS，消除同名方法多 supertrait 来源的 E0034 歧义。
+/// `vtable_names`：当前类的 VirtualDefine 方法名集合（即 VTable trait 中声明的方法）。
+pub(crate) fn rewrite_vtable_calls_ufcs_for_base(
+    block: &mut Block,
+    vtable_names: &HashSet<String>,
+    vtable_trait: &Ident,
+) {
+    struct UfcsRewriter<'a>(&'a HashSet<String>, &'a Ident);
+    impl VisitMut for UfcsRewriter<'_> {
+        fn visit_expr_mut(&mut self, expr: &mut Expr) {
+            visit_mut::visit_expr_mut(self, expr);
+            if let Expr::MethodCall(mc) = expr {
+                let recv_is_this = matches!(&*mc.receiver, Expr::Path(p)
+                    if p.path.get_ident().map_or(false, |id| id == "this"));
+                if recv_is_this {
+                    let mname_str = mc.method.to_string();
+                    if !mname_str.starts_with("__") && self.0.contains(&mname_str) {
+                        // this.method(a, b) → VTable::method(this, a, b)
+                        let vtable_ident = self.1;
+                        let method_ident = &mc.method;
+                        let receiver = &mc.receiver;
+                        let orig_args: Vec<&Expr> = mc.args.iter().collect();
+                        *expr = syn::parse_quote! {
+                            #vtable_ident::#method_ident(#receiver, #(#orig_args),*)
+                        };
+                    }
+                }
+            }
+        }
+    }
+    UfcsRewriter(vtable_names, vtable_trait).visit_block_mut(block);
 }
 
 /// 将方法体中 `Ok(Clone::clone(this))` 替换为 `Ok(Default::default())`，

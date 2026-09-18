@@ -6,6 +6,7 @@ impl String {
     pub fn from_owned(s: std::string::String) -> Self {
         let bytes: Vec<i8> = s.into_bytes().into_iter().map(|b| b as i8).collect();
         let mut inst = String::default();
+        inst._init_not_null();
         inst.__set_value(JArray::from(bytes));
         inst.__set_coder(0i8);
         inst

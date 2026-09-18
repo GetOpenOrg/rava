@@ -37,12 +37,20 @@ def find_loops(instrs: list[Instr]) -> list[LoopInfo]:
                     exit_off = off
                     break
 
+        # 嵌套验证：cond_idx 前如有条件分支其目标越过 cond_idx，说明 cond_idx 嵌套在
+        # 该分支 body 内（非循环条件），应降级为无条件循环并保留 exit_off 供内部 break 使用。
         if cond_idx is not None:
-            loops.append(LoopInfo(start_idx, i, cond_idx, exit_off))
-        else:
-            # 无条件循环（for(;;) / while(true)）：cond_idx=None，exit_off=None
-            # 用 cond_idx=i（goto 自身），exit_off=None 标记为无条件 loop {}
-            loops.append(LoopInfo(start_idx, i, None, None))
+            cond_off = instrs[cond_idx].offset
+            for j in range(start_idx, cond_idx):
+                op_j = instrs[j].opcode
+                if (op_j in _BRANCH_OPS and op_j not in ('goto', 'goto_w')
+                        and instrs[j].operand):
+                    target_j = int(instrs[j].operand)
+                    if target_j > cond_off:
+                        cond_idx = None  # 嵌套 → 无条件循环，保留 exit_off
+                        break
+
+        loops.append(LoopInfo(start_idx, i, cond_idx, exit_off))
 
     # 检测 do-while：back-edge 是条件后向分支（if_icmp* <start>）
     while_starts = {lp.start_idx for lp in loops}

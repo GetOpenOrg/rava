@@ -35,7 +35,7 @@ use generic_sig::rebuild_sig_with_generics;
 use parse::{ClassInput, ClassMeta, FnItem};
 use rewrite::{
     replace_clone_this_in_ok, rewrite_base_calls_for_wrapper, rewrite_block,
-    rewrite_virtual_calls_for_wrapper,
+    rewrite_virtual_calls_for_wrapper, rewrite_vtable_calls_ufcs_for_base,
 };
 use util::{attr_str, classify_method, is_basic, strip_meta_attrs, MethodKind};
 
@@ -421,6 +421,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                                 let __wrapper = #struct_ident {
                                     vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
                                     any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                                    _jvm_null: false,
                                 };
                                 let this = &__wrapper;
                                 #(#stmts)*
@@ -530,6 +531,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                                         let __wrapper = #struct_ident {
                                             vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
                                             any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                                            _jvm_null: false,
                                         };
                                         let this = &__wrapper;
                                         #(#stmts)*
@@ -623,6 +625,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                                 let __wrapper = #struct_ident {
                                     vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
                                     any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                                    _jvm_null: false,
                                 };
                                 let this = &__wrapper;
                                 #(#stmts)*
@@ -679,6 +682,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         pub struct #struct_ident #impl_g #where_c {
             pub(crate) vtable: ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
             pub(crate) any: ::std::rc::Rc<dyn ::std::any::Any>,
+            /// JVM null 标志：Default::default() = true（null），构造后调用 _init_not_null() = false
+            pub _jvm_null: bool,
         }
     };
 
@@ -689,6 +694,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 #struct_ident {
                     vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
                     any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    _jvm_null: true,
                 }
             }
         }
@@ -700,6 +706,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 #struct_ident {
                     vtable: ::std::rc::Rc::clone(&self.vtable),
                     any: ::std::rc::Rc::clone(&self.any),
+                    _jvm_null: self._jvm_null,
                 }
             }
         }
@@ -716,7 +723,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let wrapper_debug = quote! {
         impl #impl_g ::std::fmt::Debug for #struct_ident #ty_g #where_c {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                write!(f, "{}({})", stringify!(#struct_ident), ObjectVTable::toString(&*self.vtable))
+                write!(f, "{}({})", stringify!(#struct_ident), ObjectVTable::__obj_str(&*self.vtable))
             }
         }
     };
@@ -728,9 +735,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let obj_vtable_for_wrapper = if !binary_name.is_empty() {
         let to_string_fwd: TokenStream2 = if meta.has_to_string_method {
             quote! {
-                fn toString(&self) -> ::std::string::String {
-                    // 用 UFCS 消歧义：避免与 Java toString() -> Result<String> 冲突
-                    ObjectVTable::toString(&*self.vtable)
+                fn __obj_str(&self) -> ::std::string::String {
+                    ObjectVTable::__obj_str(&*self.vtable)
                 }
             }
         } else {
@@ -749,6 +755,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     self.vtable.is_instance_of(type_id)
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
+                fn is_jvm_null(&self) -> bool { self._jvm_null }
                 #to_string_fwd
                 #hash_code_fwd
             }
@@ -762,6 +769,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // ══════════════════════════════════════════════════════════════════════════
 
     let mut wrapper_methods: Vec<TokenStream2> = Vec::new();
+
+    // _init_not_null：构造器完成后调用，将 _jvm_null 标志清零
+    wrapper_methods.push(quote! {
+        #[doc(hidden)] #[inline]
+        pub fn _init_not_null(&mut self) { self._jvm_null = false; }
+    });
 
     // 字段访问器委托（own fields）
     for (name, ty) in &fields {
@@ -957,6 +970,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 #struct_ident {
                     vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
                     any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    _jvm_null: false,
                 }
             }
         }
@@ -1033,6 +1047,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                         #anc_ident {
                             vtable: child.vtable as ::std::rc::Rc<dyn #anc_vtable #atag>,
                             any: child.any,
+                            _jvm_null: child._jvm_null,
                         }
                     }
                 }
@@ -1137,6 +1152,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 });
             } else {
                 // body 安全（只有 vtable 方法调用 + accessor），可在 &(impl VTable + ?Sized) 运行
+                // 将 this.vtable_method(args) 改为 VTable::vtable_method(this, args) UFCS，
+                // 避免 __BT: VTableA + VTableB 时同名方法产生 E0034 歧义。
+                rewrite_vtable_calls_ufcs_for_base(&mut b, &vtable_define_names, &vtable_trait_ident);
                 let mut body_gen = gen.clone();
                 body_gen.params.push(syn::parse_quote!(__BT));
                 body_gen.make_where_clause().predicates.push(
