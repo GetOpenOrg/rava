@@ -1,5 +1,7 @@
 # 从 codegen/emitter/class_writer.py 中拆出
 
+from ..constants import OBJECT_CLASS as _OBJECT_CLASS
+
 _ACC_PRIVATE = 0x0002
 
 
@@ -39,7 +41,7 @@ def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
 
         oldest: str | None = None
         cur = ci.super_class
-        while cur and cur != 'java/lang/Object' and cur in registry:
+        while cur and cur != _OBJECT_CLASS and cur in registry:
             anc = registry[cur]
             found = False
             for am in anc.methods:

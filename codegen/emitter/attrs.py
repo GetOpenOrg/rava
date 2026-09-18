@@ -5,7 +5,7 @@ Java 元数据注释生成：to_snake、pkg_from_java、访问标志字符串、
 
 import re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
-from ..constants import RUST_KEYWORDS as _RUST_KEYWORDS
+from ..constants import RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
 # Access flags
 _ACC_PUBLIC       = 0x0001
@@ -111,7 +111,7 @@ def _compute_all_superclasses(ci: ClassInfo, registry: dict | None) -> list[str]
     chain: list[str] = []
     cur = ci.super_class
     visited: set[str] = set()
-    while cur and cur not in visited and cur != 'java/lang/Object':
+    while cur and cur not in visited and cur != _OBJECT_CLASS:
         chain.append(_bin_to_rust_short(cur))
         visited.add(cur)
         if registry and cur in registry:
@@ -134,7 +134,7 @@ def _compute_ancestor_fields_layout(ci: ClassInfo, registry: dict | None) -> lis
     chain: list[ClassInfo] = []
     cur = ci.super_class
     visited: set[str] = set()
-    while cur and cur not in visited and cur != 'java/lang/Object' and cur in registry:
+    while cur and cur not in visited and cur != _OBJECT_CLASS and cur in registry:
         visited.add(cur)
         chain.append(registry[cur])
         cur = registry[cur].super_class

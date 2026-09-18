@@ -7,6 +7,7 @@ from ...rs_ir import Var, RawExpr, RawStmt, RsNamed, RsGeneric
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, NEWARRAY_TYPES
 from ..coerce import _coerce_to_object, _is_subtype, _PRIMITIVE_RUST_TYPES, _into_super_chain
+from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 
 
 def sim_arrays(ins, sim, class_name, registry) -> bool:
@@ -23,7 +24,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
     elif op == 'anewarray':
         count_expr, _ = sim.pop()
         # 用完整路径（comment）而非 short_cls，避免 'LString;' 等非全限定名映射到 Object
-        if comment and comment != 'java/lang/Object':
+        if comment and comment != _OBJECT_CLASS:
             elem_t = jvm_to_rust(f'L{comment};', registry)
         else:
             elem_t = 'Object'

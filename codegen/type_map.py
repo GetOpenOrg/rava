@@ -9,6 +9,7 @@ JVM 类型描述符 → Rust 类型的映射与解析工具。
 
 from __future__ import annotations
 import re
+from .constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST, OBJECT_CLASS as _OBJECT_CLASS
 
 
 # ── JVM descriptor → Rust 类型 ──────────────────────────────────
@@ -237,7 +238,7 @@ def _parse_type_list(s: str) -> list[str]:
 # 已知类名 → Rust 类型映射
 _CLASSNAME_MAP: dict[str, str] = {
     'java/lang/String':        'String',
-    'java/lang/Object':        'Object',
+    _OBJECT_CLASS:             'Object',
     'java/lang/CharSequence':  'Object',
     # 特判：Class 非泛化（类型参数纯 phantom，类级签名已在 classfile.py
     # 置空）。mapped 分支忽略 type_args，使 Ljava/lang/Class<*>; → Class，
@@ -563,9 +564,7 @@ def parse_method_param_types(
 # RsType 化：jvm_to_rs_type（Arch-7）
 # ══════════════════════════════════════════════════════════════════════════════
 
-_PRIMITIVE_RUST: frozenset[str] = frozenset({
-    'i32', 'i64', 'f32', 'f64', 'bool', '()', 'i8', 'i16', 'u16', 'usize',
-})
+# _PRIMITIVE_RUST 已统一到 codegen/constants.py 的 PRIMITIVE_RUST_TYPES（顶部 import 为 _PRIMITIVE_RUST）
 
 
 def _rust_str_to_rs_type(rust_str: str) -> 'RsType':

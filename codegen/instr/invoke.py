@@ -13,7 +13,7 @@ from ..type_map import (
     parse_class_type_params as _parse_class_type_params,
     parse_method_param_types as _parse_method_param_types,
 )
-from ..constants import safe_ident as _safe_field
+from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS
 from .coerce import (
     parse_method_ref, _coerce_from_null, _coerce_to_object,
     _coerce_to_interface, _coerce_value, _find_super_chain_to_class,
@@ -197,7 +197,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             # JDK class（含包路径）→ 用 new() 工厂（@synthetic）
             rust_ty_str = jvm_to_rust(f'L{full_cls};', registry)
             # 自动装箱优化：原始包装类型（Integer→i32等）直接用值，跳过构造器调用
-            _PRIM_TYPES = frozenset({'i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'})
+            _PRIM_TYPES = _PRIMITIVE_RUST_TYPES
             if rust_ty_str in _PRIM_TYPES:
                 init_expr = args[0] if args else '0'
                 rust_ty = rust_ty_str
@@ -258,7 +258,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             # java/lang/Object 的 super() 是 no-op（Rust 不需要 Object 初始化）
             raw_cls = cls.rsplit('/', 1)[-1]
             raw_cls_rust = short_cls(raw_cls.replace('$', '_')) or raw_cls.replace('$', '_')
-            if raw_cls_rust in ('Object',) or cls in ('java/lang/Object',):
+            if raw_cls_rust in ('Object',) or cls in (_OBJECT_CLASS,):
                 sim.emit(RawStmt(f"/* invokespecial {comment} (Object no-op) */"))
             else:
                 _init_mangled = _mangle_if_overloaded(cls, '<init>', comment, registry)

@@ -40,6 +40,17 @@ RUNTIME_JAVA_RUNTIME = _os.path.join(RUNTIME_DIR, 'java_runtime')
 RUNTIME_MACROS_CRATE = _os.path.join(RUNTIME_DIR, 'java_rta_macros')
 
 
+# Rust 原生类型集合（不对应 Java 类，供 codegen 内部判断用）
+PRIMITIVE_RUST_TYPES: frozenset[str] = frozenset({
+    'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64',
+    'f32', 'f64', 'bool', 'usize', '()',
+})
+
+# 常用 JVM binary class names
+OBJECT_CLASS = 'java/lang/Object'
+STRING_CLASS = 'java/lang/String'
+
+
 def scratch_pkg_version(out_dir: str) -> str:
     """为 scratch 工作区内的包生成唯一版本号。
 

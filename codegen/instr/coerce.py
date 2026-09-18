@@ -4,7 +4,7 @@
 """
 
 import re
-from ..constants import safe_ident as _safe_field
+from ..constants import safe_ident as _safe_field, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, OBJECT_CLASS as _OBJECT_CLASS
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
     mangle_name,
@@ -225,7 +225,7 @@ def _super_path_to_class(from_cls: str, to_cls: str, registry: dict | None) -> s
     ci = registry.get(from_cls)
     while ci:
         sc = ci.super_class
-        if not sc or sc == 'java/lang/Object':
+        if not sc or sc == _OBJECT_CLASS:
             break
         path_parts.append('_super')
         if sc == to_cls:
@@ -258,7 +258,7 @@ def _find_super_chain_to_class(current_binary: str, target_cls_short: str, regis
         return '_super.'  # fallback
     path_parts: list[str] = []
     sc = ci.super_class
-    while sc and sc != 'java/lang/Object':
+    while sc and sc != _OBJECT_CLASS:
         path_parts.append('_super')
         sc_short = sc.rsplit('/', 1)[-1].replace('$', '_') if '/' in sc else sc.replace('$', '_')
         if sc_short == target_cls_short or sc == target_cls_short:
@@ -307,7 +307,7 @@ def _find_method_super_prefix(class_name: str, mname: str, registry: dict | None
     # 向上遍历继承链查找（同样排除 synthetic/bridge）
     path_parts: list[str] = []
     sc = ci.super_class
-    while sc and sc != 'java/lang/Object' and sc in registry:
+    while sc and sc != _OBJECT_CLASS and sc in registry:
         path_parts.append('_super')
         parent_ci = registry[sc]
         parent_real_methods = [m for m in parent_ci.methods if not m.is_synthetic]
@@ -357,7 +357,7 @@ def _is_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> boo
         if not ci:
             continue
         # 检查超类
-        if ci.super_class and ci.super_class != 'java/lang/Object':
+        if ci.super_class and ci.super_class != _OBJECT_CLASS:
             sc = ci.super_class
             sc_short = _short(sc)
             if sc_short == parent_rust:
@@ -424,7 +424,7 @@ def _is_direct_subtype(child_rust: str, parent_rust: str, registry: dict | None)
     def _short(b: str) -> str:
         return b.rsplit('/', 1)[-1].replace('$', '_')
     # 直接超类
-    if ci.super_class and ci.super_class != 'java/lang/Object':
+    if ci.super_class and ci.super_class != _OBJECT_CLASS:
         if _short(ci.super_class) == parent_rust:
             return True
     # 直接接口列表
@@ -452,7 +452,7 @@ def _get_field_generic_signature(class_name: str, safe_fname: str, registry: dic
             if not f.is_static and _safe_field(f.name) == safe_fname:
                 return f.generic_signature
         sc = getattr(ci, 'super_class', None)
-        if not sc or sc == 'java/lang/Object':
+        if not sc or sc == _OBJECT_CLASS:
             break
         ci = registry.get(sc)
     return ''
@@ -493,7 +493,7 @@ def _resolve_method_owner(class_binary: str, mname: str, registry: dict | None,
         if found:
             return (ci.name, lvl)
         sc = getattr(ci, 'super_class', None)
-        if not sc or sc == 'java/lang/Object':
+        if not sc or sc == _OBJECT_CLASS:
             break
         ci = registry.get(sc)
         lvl += 1
@@ -599,6 +599,4 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
 
 
 # Java 中任何对象都可以传递给 Object 参数（引用协变），Rust 需要显式 Into<Object> 转换
-_PRIMITIVE_RUST_TYPES: frozenset[str] = frozenset({
-    'i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16', '()'
-})
+# _PRIMITIVE_RUST_TYPES 已统一到 codegen/constants.py 的 PRIMITIVE_RUST_TYPES

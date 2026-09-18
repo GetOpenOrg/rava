@@ -3,12 +3,17 @@
 """
 
 import os
+import re as _re
 from collections import Counter
 from ..types import ClassInfo, FieldInfo, ParsedMethod
-from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default
+from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
 from ..type_map import parse_class_type_params, parse_field_type
-from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS
+from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
+
+# 模块级 regex，避免在每次调用时重复编译
+_CLS_RE_NARROW = _re.compile(r'L([^;]+);')          # 平铺 descriptor（如 (LFoo;)V）
+_CLS_RE_WIDE   = _re.compile(r'L([^;<>\[()\s]+)')   # 含嵌套泛型的 generic_signature
 from .attrs import (to_snake, _java_class_block_head,
                     _java_field_attr, _java_method_attr)
 from .method_gen import _gen_native_stub
@@ -45,7 +50,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     """
 
     # ── Step 1: 始终计算引用集合（精确 use 生成的基础）─────────────────────────
-    import re as _re
 
     def _strip_generic(cls: str) -> str:
         """去掉 JVM 类名中的泛型参数（<...>），返回裸 binary name。
@@ -56,14 +60,14 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     _referenced: set[str] = set()
     # 超类链：宏为每个祖先生成 From<Self> for Ancestor，需要全部祖先类型名在作用域内
     _sc_cur = ci.super_class
-    while _sc_cur and _sc_cur != 'java/lang/Object':
+    while _sc_cur and _sc_cur != _OBJECT_CLASS:
         _referenced.add(_sc_cur)
         if registry and _sc_cur in registry:
             _sc_cur = registry[_sc_cur].super_class
         else:
             break
     for _iface in (ci.interfaces or []):
-        if _iface != 'java/lang/Object':
+        if _iface != _OBJECT_CLASS:
             _referenced.add(_iface)
     # 扫描方法指令中的类型引用
     for _m in ci.methods:
@@ -86,7 +90,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     if registry:
         _sc_scan = ci.super_class
         _seen_scan: set[str] = {f.name for f in ci.fields}
-        while _sc_scan and _sc_scan != 'java/lang/Object' and _sc_scan in registry:
+        while _sc_scan and _sc_scan != _OBJECT_CLASS and _sc_scan in registry:
             _sci_scan = registry[_sc_scan]
             for _f2 in _sci_scan.fields:
                 if not _f2.is_static and _f2.name not in _seen_scan:
@@ -94,21 +98,20 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     _seen_scan.add(_f2.name)
             _sc_scan = _sci_scan.super_class
     # 泛型签名中嵌套类型需要用更宽松的 regex（不能用 [^;]+ 因为嵌套 <TT;> 会截断）
-    _cls_re_narrow = _re.compile(r'L([^;]+);')          # 平铺 descriptor（如 (LFoo;)V）
-    _cls_re_wide = _re.compile(r'L([^;<>\[()\s]+)')     # 含嵌套泛型的 generic_signature
+    # _CLS_RE_NARROW / _CLS_RE_WIDE 为模块级常量（文件顶部编译，避免每次重复编译）
     for _f in _all_fields_to_scan:
-        for _m in _cls_re_narrow.finditer(_f.descriptor or ''):
+        for _m in _CLS_RE_NARROW.finditer(_f.descriptor or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
-        for _m in _cls_re_wide.finditer(_f.generic_signature or ''):
+        for _m in _CLS_RE_WIDE.finditer(_f.generic_signature or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
     # 扫描方法描述符（参数和返回值）
     for _method in ci.methods:
-        for _m in _cls_re_narrow.finditer(_method.descriptor or ''):
+        for _m in _CLS_RE_NARROW.finditer(_method.descriptor or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
-        for _m in _cls_re_wide.finditer(getattr(_method, 'generic_signature', '') or ''):
+        for _m in _CLS_RE_WIDE.finditer(getattr(_method, 'generic_signature', '') or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
 
@@ -245,7 +248,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 接口不生成 VTable trait（接口展开为 pub type Iface = Object;），故只处理非接口超类链。
     if not ci.is_interface and registry:
         _vtable_cur = ci.super_class
-        while _vtable_cur and _vtable_cur != 'java/lang/Object':
+        while _vtable_cur and _vtable_cur != _OBJECT_CLASS:
             if generated_classes is None or _vtable_cur in generated_classes or '/' not in _vtable_cur:
                 _vp = _vtable_cur.split('/')
                 if len(_vp) >= 2:
@@ -349,7 +352,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 子类通过宏生成的转发访问器获得「展平字段视图」。
     # 不把父类字段复制进子类 Inner——那会让同一字段存在两份状态并立即分叉。
     _has_super = bool(
-        ci.super_class and ci.super_class != 'java/lang/Object'
+        ci.super_class and ci.super_class != _OBJECT_CLASS
     )
 
     # 用短名作为 Rust 标识符（JDK 类含 /，内部类含 $，均需转换为合法 Rust 名）
@@ -479,7 +482,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         _chain: list = []
         _seen_chain: set[str] = set()
         _cursor = ci.super_class
-        while (_cursor and _cursor != 'java/lang/Object'
+        while (_cursor and _cursor != _OBJECT_CLASS
                and _cursor in registry and _cursor not in _seen_chain):
             _seen_chain.add(_cursor)
             _p_ci = registry[_cursor]
@@ -666,7 +669,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             # <clinit> 中识别到 newarray + dup/index/value/xastore 模式：生成常量数组
             _arr_vals = _clinit_arrays[sf.name]
             _desc_inner = sf.descriptor[1:]   # [B→B, [C→C, [S→S, [I→I
-            _elem_rust = {'B': 'i8', 'C': 'u16', 'S': 'i16', 'I': 'i32'}.get(_desc_inner, 'i8')
+            _elem_rust = _JVM_PRIMITIVE_MAP.get(_desc_inner, 'i8')
             _items = ', '.join(f'{v} as {_elem_rust}' for v in _arr_vals)
             body = f'JArray::from(vec![{_items}])'
             field_meta = _java_field_attr(sf)
@@ -862,7 +865,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         import copy as _copy3
         _vinh_existing: set[tuple] = {(m.name, m.descriptor) for m in visible_methods}
         _vinh_super = ci.super_class
-        while _vinh_super and _vinh_super != 'java/lang/Object' and '/' not in _vinh_super:
+        while _vinh_super and _vinh_super != _OBJECT_CLASS and '/' not in _vinh_super:
             _vinh_sci = registry.get(_vinh_super)
             if _vinh_sci is None:
                 break

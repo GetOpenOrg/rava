@@ -3,21 +3,11 @@
 """
 
 from ..types import Instr, LoopInfo
-
-# 条件分支指令集
-_BRANCH_OPS = frozenset([
-    'if_icmpeq', 'if_icmpne', 'if_icmplt', 'if_icmpge', 'if_icmple', 'if_icmpgt',
-    'if_acmpeq', 'if_acmpne',
-    'ifeq', 'ifne', 'iflt', 'ifge', 'ifle', 'ifgt', 'ifnull', 'ifnonnull',
-])
+from ._opcodes import _BRANCH_OPS, _EXIT_OPS
 
 _TWO_OP_BRANCH_OPS = frozenset([
     'if_icmpeq', 'if_icmpne', 'if_icmplt', 'if_icmpge', 'if_icmple', 'if_icmpgt',
     'if_acmpeq', 'if_acmpne',
-])
-
-_EXIT_OPS = frozenset([
-    'return', 'ireturn', 'lreturn', 'freturn', 'dreturn', 'areturn', 'athrow',
 ])
 
 

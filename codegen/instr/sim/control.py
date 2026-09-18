@@ -5,6 +5,7 @@ from ...rs_ir import Lit, RawExpr, RsNamed
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust
 from ..coerce import _is_subtype
+from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 
 
 def sim_control(ins, sim, class_name, registry) -> bool:
@@ -59,7 +60,7 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 target_rust = jvm_to_rust(f'L{comment};', registry)
             # jvm_to_rust 对接口返回 'Object'；instanceof 子类型判断需要接口的实际 Rust 短名
             # 用二进制名末段（去路径后 $ → _）还原接口 Rust 短名，供 _is_subtype 正确匹配
-            if target_rust == 'Object' and not comment.startswith('[') and comment != 'java/lang/Object':
+            if target_rust == 'Object' and not comment.startswith('[') and comment != _OBJECT_CLASS:
                 _last = comment.rsplit('/', 1)[-1]
                 target_for_subtype = _last.replace('$', '_')
             else:

@@ -8,6 +8,7 @@ from ..rs_ir import (
     RsNamed, RsPrimitive, RsType,
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
 )
+from ..constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_TYPES
 
 
 def _coerce_icmp_operand(expr_str: str, ty_node) -> str:
@@ -34,8 +35,6 @@ def _coerce_acmp_operand(expr_str: str, ty_node) -> str:
     # 方法语法会被遮蔽返回 Result<Object>
     return f"Object::from_any(Clone::clone(&{clean}))"
 
-
-_PRIMITIVE_TYPES = {'i32', 'i64', 'f32', 'f64', 'bool', 'usize', '()'}
 
 def _str_to_rs_type(s: str) -> RsType:
     """将 jvm_to_rust 返回的字符串转换为 RsType 节点。"""

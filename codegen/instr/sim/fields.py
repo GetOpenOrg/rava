@@ -18,6 +18,9 @@ from ..coerce import (
 )
 from ..invoke import _gen_invokespecial
 
+# Rust 内建容器与已知类型短名（用于泛型类型可见性校验）
+_BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'})
+
 
 def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
                                  class_name: str, registry: dict | None,
@@ -47,8 +50,7 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
         # 跨类不可见（声明类参数名与调用方不同）时降级回擦除形态
         _caller_tparams = set(sim.class_type_params) if sim.class_type_params else set()
         _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
-        _builtin_g = {'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'}
-        if all(_n in _caller_tparams or _n in _reg_shorts or _n in _builtin_g
+        if all(_n in _caller_tparams or _n in _reg_shorts or _n in _BUILTIN_G
                for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _parsed)):
             return _parsed
     return ftype
@@ -105,8 +107,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                         # 跨类不可见（声明类参数名与调用方不同）时降级回擦除形态
                         _caller_tparams = set(sim.class_type_params) if sim.class_type_params else set()
                         _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
-                        _builtin_g = {'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'}
-                        if all(_n in _caller_tparams or _n in _reg_shorts or _n in _builtin_g
+                        if all(_n in _caller_tparams or _n in _reg_shorts or _n in _BUILTIN_G
                                for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _parsed)):
                             ftype = _parsed
             # 字段读取 → 宏生成的访问器（方案 §7）。

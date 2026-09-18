@@ -9,6 +9,7 @@ import re
 from collections import deque
 from .classfile import parse_class
 from .emitter import write_cargo_project
+from .constants import OBJECT_CLASS as _OBJECT_CLASS
 
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
@@ -22,7 +23,7 @@ _JDK_STUB_ONLY_PREFIXES = ('sun/', 'jdk/', 'com/sun/', 'com/oracle/', 'java/secu
 
 # java_runtime 已手写实现的类：这些类不再由 jdk_classes 翻译，避免重复定义和命名冲突
 _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
-    'java/lang/Object',
+    _OBJECT_CLASS,
 })
 
 
@@ -343,7 +344,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 ci = parse_class_bytes(data, cls)
                 jdk_infos[cls] = ci
                 # 递归添加父类（_super 字段需要父类类型存在）
-                if (ci.super_class and ci.super_class != 'java/lang/Object'
+                if (ci.super_class and ci.super_class != _OBJECT_CLASS
                         and ci.super_class not in _JAVA_RUNTIME_CLASSES
                         and ci.super_class not in jdk_infos
                         and ci.super_class not in _stub_visited):
@@ -355,7 +356,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
         # 同样为 BFS 调用链中发现的类递归添加父类
         _parent_queue: deque[str] = deque()
         for _ci in list(jdk_infos.values()):
-            if (_ci and _ci.super_class and _ci.super_class != 'java/lang/Object'
+            if (_ci and _ci.super_class and _ci.super_class != _OBJECT_CLASS
                     and _ci.super_class not in _JAVA_RUNTIME_CLASSES
                     and _ci.super_class not in jdk_infos):
                 _parent_queue.append(_ci.super_class)
@@ -369,7 +370,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
             try:
                 ci = parse_class_bytes(data, cls)
                 jdk_infos[cls] = ci
-                if (ci.super_class and ci.super_class != 'java/lang/Object'
+                if (ci.super_class and ci.super_class != _OBJECT_CLASS
                         and ci.super_class not in _JAVA_RUNTIME_CLASSES
                         and ci.super_class not in jdk_infos):
                     _parent_queue.append(ci.super_class)
