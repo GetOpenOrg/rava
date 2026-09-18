@@ -392,11 +392,17 @@ def _parse_type_args(sig: str, i: int, class_type_params: list[str], registry=No
     return args, i
 
 
-def _extract_method_tparam_bounds(sig: str, registry=None) -> 'dict[str, str]':
-    """从方法级泛型参数段 '<T:Ljava/lang/Number;...>' 提取类型变量 → 上界 Rust 类型的映射。
+def _extract_method_tparam_bounds(sig: str, registry=None,
+                                  type_params: 'list[str] | None' = None,
+                                  bound_binaries: 'dict[str, str] | None' = None) -> 'dict[str, str]':
+    """从泛型参数段 '<T:Ljava/lang/Number;...>' 提取类型变量 → 上界 Rust 类型的映射。
     传入 registry 时，接口上界经 _iface_full_path 返回 'Object' 被自动过滤，
     只保留具体类上界（如 Number → "Number"，Enum<T> → "Enum<Object>"）。
+    - type_params：上界内可见的类型变量（类级形参段传入类形参表，
+      `E:Enum<TE;>` → "Enum<E>"；方法级不传 → 擦除为 Object）
+    - bound_binaries：若提供，回填 类型变量 → 上界类 binary name
     """
+    _visible = list(type_params or [])
     if not sig or sig[0] != '<':
         return {}
     bounds: dict[str, str] = {}
@@ -424,9 +430,12 @@ def _extract_method_tparam_bounds(sig: str, registry=None) -> 'dict[str, str]':
                 if i < len(sig) and sig[i] in ('L', '['):
                     # 传入 registry：接口类型 → _iface_full_path → 'Object' → 被过滤
                     # 具体类（Number/Enum 等）→ 正确类型（"Number"、"Enum<Object>"）
-                    rust_t, i = _parse_one_type(sig, i, [], registry)
+                    _b_start = i
+                    rust_t, i = _parse_one_type(sig, i, _visible, registry)
                     if first_class_bound is None and rust_t and rust_t != 'Object':
                         first_class_bound = rust_t
+                        if bound_binaries is not None and sig[_b_start] == 'L':
+                            bound_binaries[name] = re.split(r'[<;.]', sig[_b_start + 1:], maxsplit=1)[0]
                 elif i < len(sig) and sig[i] == 'T':
                     # 以另一类型变量作为上界，直接跳过
                     _, i = _parse_one_type(sig, i, [], None)
@@ -681,6 +690,42 @@ def enclosing_scope_type_args(ci, registry, scope_type_params) -> list[str]:
               if em is not None and em.generic_signature else {})
     scope = set(scope_type_params or ())
     return [p if p in scope else bounds.get(p, 'Object') for p in params]
+
+
+def class_type_param_bounds(ci, registry=None) -> 'dict[str, tuple[str, str]]':
+    """类级类型变量 → (上界 Rust 类型, 上界类 binary name)。
+
+    Java `class C<E extends B<E>>` 的类上界在 Rust 侧等价于 `E: Into<B<E>>`
+    （宏生成的 From<Child> for Ancestor / From<Object> for B 使该约束对子类实参与
+    擦除实参 Object 均成立）。只保留 registry 中存在的具体类上界：
+    接口上界是 Object 别名（无需转换），根类上界无信息量。
+    形参来源与 effective_class_type_params 一致（内部类继承外部类形参及其上界）。
+    """
+    if not registry:
+        return {}
+    decl_ci = ci
+    own = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+    if not own:
+        decl_ci = None
+        for f in ci.fields:
+            if f.is_static or not re.match(r'^this\$\d+$', f.name):
+                continue
+            m = re.match(r'L([^;]+);', f.descriptor)
+            if m:
+                decl_ci = registry.get(m.group(1))
+            break
+    if decl_ci is None or not decl_ci.generic_signature:
+        return {}
+    tparams = parse_class_type_params(decl_ci.generic_signature)
+    binaries: dict[str, str] = {}
+    bounds = _extract_method_tparam_bounds(decl_ci.generic_signature, registry,
+                                           type_params=tparams, bound_binaries=binaries)
+    result: dict[str, tuple[str, str]] = {}
+    for name, rust_t in bounds.items():
+        b_ci = registry.get(binaries.get(name, ''))
+        if name in tparams and b_ci is not None and not b_ci.is_interface:
+            result[name] = (rust_t, b_ci.name)
+    return result
 
 
 def _superclass_sig_segments(sig: str, class_type_params: list[str], registry=None) -> list[list[str]]:

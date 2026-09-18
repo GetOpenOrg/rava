@@ -1231,6 +1231,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 body_gen.make_where_clause().predicates.push(
                     syn::parse_quote!(__BT: #vtable_trait_ident #ty_g + ?Sized)
                 );
+                // 方法自身的 where 子句（类型变量上界约束等）：方法体依赖它，base 函数同样声明
+                if let Some(method_where) = &sig.generics.where_clause {
+                    body_gen.make_where_clause().predicates.extend(method_where.predicates.iter().cloned());
+                }
                 let (body_impl_g, _, body_where_c) = body_gen.split_for_impl();
                 base_fns.push(quote! {
                     #[doc(hidden)]
@@ -1335,6 +1339,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     body_gen.make_where_clause().predicates.push(
                         syn::parse_quote!(__BT: #ancestor_vtable_ident #anc_override_args + ?Sized)
                     );
+                    // 方法自身的 where 子句（类型变量上界约束等）：方法体依赖它，base 函数同样声明
+                    if let Some(method_where) = &sig.generics.where_clause {
+                        body_gen.make_where_clause().predicates.extend(method_where.predicates.iter().cloned());
+                    }
                     let (body_impl_g, _, body_where_c) = body_gen.split_for_impl();
                     base_fns.push(quote! {
                         #[doc(hidden)]

@@ -9,6 +9,7 @@ from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMI
 from ..method import gen_method_body, _indent
 from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names
 from ..type_map import (effective_class_type_params, ancestor_type_args, outer_ref_field_type,
+                        class_type_param_bounds,
                         rust_type_with_args as _rust_type_with_args)
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
@@ -74,6 +75,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     for _iface in (ci.interfaces or []):
         if _iface != _OBJECT_CLASS:
             _referenced.add(_iface)
+    # 类级类型变量的类上界（`E extends B<E>`）：方法体把类型变量值转换为上界类型、
+    # 方法签名声明 `where E: Into<B<E>>`，上界类型名须在作用域内
+    for _tv_bound in class_type_param_bounds(ci, registry).values():
+        _referenced.add(_tv_bound[1])
     # 参与引用扫描的方法集合：自身方法 + 会被注入本类的继承方法体
     # （接口 default 方法、用户类超类链的虚方法——见下方「接口 default 方法继承」
     #   与「超类虚方法继承」两段）。注入的方法体/签名同样出现在本文件中，
