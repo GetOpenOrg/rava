@@ -4,11 +4,10 @@
 
 import os
 import re as _re
-from collections import Counter
 from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
-from ..type_map import parse_class_type_params, parse_field_type
+from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
 # 模块级 regex，避免在每次调用时重复编译
@@ -21,6 +20,31 @@ from .vtable_util import _bin_to_rust, _find_virtual_in
 from .clinit_extract import _push_int_value, _extract_clinit_consts, _extract_clinit_arrays
 
 _safe_field_name = safe_ident
+
+
+def _effective_class_type_params(ci: ClassInfo, registry: dict | None) -> list[str]:
+    """类在 Rust 侧的泛型参数列表。
+
+    - 类自身 Signature 声明了形参（ArrayList<E>）→ 直接使用
+    - 内部类没有自己的形参，但通过 this$N 引用泛型外部类（ArrayList$Itr）→ 继承外部类形参，
+      生成 ArrayList_Itr<E>
+    struct 声明、祖先字段展平等所有需要「某个类的泛型参数」的位置必须共用本函数，
+    否则同一个类在不同位置的泛型形态不一致（E0053）。"""
+    params = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+    if params or not registry:
+        return params
+    for f in ci.fields:
+        if f.is_static or not _re.match(r'^this\$\d+$', f.name):
+            continue
+        outer_m = _re.match(r'L([^;]+);', f.descriptor)
+        if outer_m:
+            outer_ci = registry.get(outer_m.group(1))
+            if outer_ci and outer_ci.generic_signature:
+                outer_tp = parse_class_type_params(outer_ci.generic_signature)
+                if outer_tp:
+                    return list(outer_tp)
+        break
+    return params
 
 _ACC_FINAL   = 0x0010
 _ACC_STATIC  = 0x0008
@@ -379,23 +403,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     struct_name = short_cls(ci.name) if ('/' in ci.name or '$' in ci.name) else ci.name
 
     # 解析类级泛型参数（如 ArrayList<E>、HashMap<K,V>）
-    class_type_params = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
-
-    # 内部类 this$0 字段类型参数继承：
-    # Java 内部类没有自己的 generic_signature，但通过 this$0 访问外部类的类型参数。
-    # 例如 ArrayList$Itr 没有 <E>，但 this$0: ArrayList → 应继承 E，变为 ArrayList_Itr<E>。
-    if not class_type_params and registry:
-        import re as _re_outer
-        for _f in inst_fields:
-            if _re_outer.match(r'^this\$\d+$', _f.name):
-                _om = _re_outer.match(r'L([^;]+);', _f.descriptor)
-                if _om:
-                    _outer_ci = registry.get(_om.group(1))
-                    if _outer_ci and _outer_ci.generic_signature:
-                        _outer_tp = parse_class_type_params(_outer_ci.generic_signature)
-                        if _outer_tp:
-                            class_type_params = list(_outer_tp)
-                break
+    class_type_params = _effective_class_type_params(ci, registry)
 
     # 构建泛型参数字符串（用于 struct 和 impl 头）
     if class_type_params:
@@ -480,20 +488,30 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     # 子类无泛型参数但父类需要（如 CharacterUnicodeScript extends Enum<E>）：用 Object 后备
                     parent_rust += '<' + ', '.join('Object' for _ in parent_params) + '>'
 
+    def _outer_ref_field_rust(f, tparams: list) -> str:
+        """内部类外部引用字段（this$N）：外部类 + 声明类继承的类型参数（如 ArrayList<E>）。
+        非 this$N 字段或外部类非泛型时返回空串。"""
+        import re as _re_f
+        if not (_re_f.match(r'^this\$\d+$', f.name) and tparams and registry):
+            return ''
+        _fm = _re_f.match(r'L([^;]+);', f.descriptor)
+        if not _fm:
+            return ''
+        _outer_ci2 = registry.get(_fm.group(1))
+        if not (_outer_ci2 and _outer_ci2.generic_signature):
+            return ''
+        _outer_tp2 = parse_class_type_params(_outer_ci2.generic_signature)
+        if not _outer_tp2 or len(_outer_tp2) > len(tparams):
+            return ''
+        _outer_short2 = _fm.group(1).rsplit('/', 1)[-1].replace('$', '_')
+        return _outer_short2 + '<' + ', '.join(tparams[:len(_outer_tp2)]) + '>'
+
     def _resolve_field_rust(f) -> str:
         """字段的 Rust 类型：优先字段级 generic_signature（TE; → E），回退裸描述符。
         generic_signature 解析为 Object，或引用了不存在的类型时，用描述符推断。"""
-        # 内部类外部引用字段（this$N）：用外部类 + 继承的类型参数（如 ArrayList<E>）
-        import re as _re_f
-        if _re_f.match(r'^this\$\d+$', f.name) and class_type_params and registry:
-            _fm = _re_f.match(r'L([^;]+);', f.descriptor)
-            if _fm:
-                _outer_ci2 = registry.get(_fm.group(1))
-                if _outer_ci2 and _outer_ci2.generic_signature:
-                    _outer_tp2 = parse_class_type_params(_outer_ci2.generic_signature)
-                    if _outer_tp2 and len(_outer_tp2) <= len(class_type_params):
-                        _outer_short2 = _fm.group(1).rsplit('/', 1)[-1].replace('$', '_')
-                        return _outer_short2 + '<' + ', '.join(class_type_params[:len(_outer_tp2)]) + '>'
+        _outer_rust = _outer_ref_field_rust(f, class_type_params)
+        if _outer_rust:
+            return _outer_rust
         gen_rust = (parse_field_type(f.generic_signature, class_type_params, registry)
                     if f.generic_signature else '')
         desc_rust = jvm_to_rust(f.descriptor, registry)
@@ -508,8 +526,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         否则父类字段变量（如 AbstractRepository<T> 的 tree: T）被子类 tparams
         （['S']）解析成 Object，转发访问器 __set_tree(v: Object) 与父类
         AbstractRepository<S> 的 __set_tree(v: S) E0308。"""
-        gen_rust = (parse_field_type(f.generic_signature, anc_params, registry)
-                    if f.generic_signature else '')
+        # this$N 与祖先自身 struct 声明走同一规则（祖先 tparams），再映射到子类参数，
+        # 否则转发访问器签名（Outer<Object>）与祖先 vtable trait（Outer<E>）不一致。
+        gen_rust = _outer_ref_field_rust(f, anc_params) or (
+            parse_field_type(f.generic_signature, anc_params, registry)
+            if f.generic_signature else '')
         if gen_rust and gen_rust != 'Object' and _validate_field_type(gen_rust, anc_params):
             if anc_map:
                 import re as _re_am
@@ -538,8 +559,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         _declared: set[str] = set()
         for _ancestor in reversed(_chain):
             # 祖先参数 → 子类参数的位置映射（T55 一致）：不足补 Object
-            _anc_params = (parse_class_type_params(_ancestor.generic_signature)
-                           if _ancestor.generic_signature else [])
+            _anc_params = _effective_class_type_params(_ancestor, registry)
             _sub_args = list(class_type_params[:len(_anc_params)])
             while len(_sub_args) < len(_anc_params):
                 _sub_args.append('Object')
@@ -586,28 +606,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
-    # 预扫描接口 default 方法，合并到名字计数中，确保定义与调用侧 mangle 一致
-    _pre_default_names: list[str] = []
-    if ci.interfaces and registry and not ci.is_interface:
-        _pre_sigs = {(m.name, m.descriptor) for m in visible_methods}
-        _pre_q = list(ci.interfaces)
-        _pre_vis: set[str] = set()
-        while _pre_q:
-            _pn = _pre_q.pop(0)
-            if _pn in _pre_vis:
-                continue
-            _pre_vis.add(_pn)
-            _pi = registry.get(_pn)
-            if _pi:
-                _pre_q.extend(_pi.interfaces or [])
-                for _dm in _pi.methods:
-                    if (not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic
-                            and _dm.name not in ('<init>', '<clinit>')
-                            and (_dm.name, _dm.descriptor) not in _pre_sigs):
-                        _pre_default_names.append(_dm.name)
-                        _pre_sigs.add((_dm.name, _dm.descriptor))
-    name_counts = Counter(m.name for m in visible_methods if m.name != '<clinit>') + Counter(_pre_default_names)
-    overloaded_names: set[str] = {name for name, count in name_counts.items() if count > 1}
+    # 重载判定在整条父类链上进行（与调用侧 _mangle_if_overloaded 共用同一函数），
+    # 保证子类方法名不会按名字遮蔽父类的同名异参方法。
+    overloaded_names: set[str] = hierarchy_overloaded_names(ci, registry)
 
     method_blocks: list[str] = []
     module_statics: list[str] = []  # 模块级 static 声明（OnceLock 等），插在 impl 块前
@@ -766,7 +767,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             continue
 
         # 计算虚方法归属（vtable 架构）
-        m.virtual_in = _find_virtual_in(m, ci, registry)
+        m.virtual_in = _find_virtual_in(m, ci, registry, new_format_map)
 
         attr_line = _java_method_attr(m)
         # 判断该方法是否需要翻译字节码：
@@ -921,7 +922,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     continue
                 if _vm.is_static or _vm.is_constructor or _vm.name in ('<init>', '<clinit>'):
                     continue
-                _vm_virt_in = _find_virtual_in(_vm, _vinh_sci, registry)
+                _vm_virt_in = _find_virtual_in(_vm, _vinh_sci, registry, new_format_map)
                 if not _vm_virt_in:
                     continue  # 非虚方法，不继承
                 _vinh_existing.add((_vm.name, _vm.descriptor))

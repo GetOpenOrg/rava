@@ -1,6 +1,7 @@
 # 从 codegen/emitter/class_writer.py 中拆出
 
-from ..constants import OBJECT_CLASS as _OBJECT_CLASS
+from ..constants import safe_ident, OBJECT_CLASS as _OBJECT_CLASS
+from ..type_map import mangle_name
 
 _ACC_PRIVATE = 0x0002
 
@@ -11,7 +12,8 @@ def _bin_to_rust(binary_name: str) -> str:
 
 
 def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
-                     registry: 'dict | None') -> str:
+                     registry: 'dict | None',
+                     handwritten_methods: 'dict | None' = None) -> str:
     """确定虚方法归属的 vtable 类 Rust 名。
     返回空串表示非虚方法；返回当前类 Rust 名表示新定义；返回祖先类 Rust 名表示覆盖。
 
@@ -44,9 +46,15 @@ def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
         while cur and cur != _OBJECT_CLASS and cur in registry:
             anc = registry[cur]
             found = False
+            # 祖先的该方法由共置 _impl.rs 手写（codegen 跳过生成）→ 它不在祖先的
+            # vtable trait 里，不能作为覆盖目标（否则 impl 出 trait 没有的方法，E0407）。
+            _anc_hand = ((handwritten_methods or {}).get(cur) or {}).get('methods', ())
             for am in anc.methods:
                 if am.name == m.name and am.descriptor == m.descriptor:
-                    if not (am.access_flags & _ACC_PRIVATE):
+                    if (safe_ident(am.name) in _anc_hand
+                            or safe_ident(mangle_name(am.name, am.descriptor)) in _anc_hand):
+                        pass
+                    elif not (am.access_flags & _ACC_PRIVATE):
                         anc_overloaded = sum(
                             1 for xm in anc.methods
                             if xm.name == m.name and not xm.is_constructor and not xm.is_static

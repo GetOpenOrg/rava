@@ -7,7 +7,7 @@ from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
 from ..constants import safe_ident as _safe_field
 from .coerce import (
     parse_method_ref,
-    _mangle_if_overloaded,
+    _mangle_if_overloaded, _resolve_bridge_target,
     UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
     _rust_type_to_binary, _get_all_subtypes_ordered,
@@ -230,6 +230,14 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 # 父类链上查不到）保留子类名。
                 _owner_bin, _ = _resolve_method_owner(
                     sub_bin, mname, registry, descriptor=jvm_desc)
+                # 调用描述符只命中 synthetic bridge（Comparable.compareTo(Object) → 实现类的
+                # compareTo(Self)）：owner 取 bridge 的声明类，后续按被桥接的真实方法处理
+                # （继承自祖先的真实方法经 vtable supertrait UFCS 调用）。
+                _bridge_desc = ''
+                if not _owner_bin and registry and registry.get(sub_bin) is not None:
+                    _bridged = _resolve_bridge_target(registry[sub_bin], mname, jvm_desc, registry)
+                    if _bridged is not None:
+                        _owner_bin, _bridge_desc = _bridged[0].name, _bridged[1]
                 _mangle_cls = _owner_bin or sub_rust
                 sub_mname_r = _mangle_if_overloaded(_mangle_cls, mname, comment, registry)
                 sub_mname_r = _safe_field(sub_mname_r)
@@ -245,7 +253,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     if _own_ci17 is not None:
                         for _m in _own_ci17.methods:
                             if (_m.name == mname and not _m.is_synthetic
-                                    and _m.descriptor == jvm_desc):
+                                    and _m.descriptor == (_bridge_desc or jvm_desc)):
                                 _bm17 = _m
                                 break
                         if _bm17 is None:
@@ -314,7 +322,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 # 改为通过 vtable supertrait UFCS 调用：OwnerVTable::method(&*_d.vtable, args)
                 _sub_pfx = _find_method_super_prefix_for_type(
                     sub_rust.split('<')[0], mname, registry,
-                    descriptor=f"({''.join(params)}){ret}",
+                    descriptor=_bridge_desc or f"({''.join(params)}){ret}",
                 )
                 if _sub_pfx and _owner_bin:
                     # 方法在祖先类 _owner_bin 中声明，使用 <dyn OwnerVTable>::method(&*_d.vtable, args)

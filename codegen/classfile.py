@@ -512,6 +512,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     sub_attr_count = r.u2()
     local_names: dict[int, str] = {}
     local_types: dict[int, str] = {}  # slot → generic Signature string
+    # slot → [(start_pc, length, descriptor, name)]：LVT 逐变量的声明类型、名字与作用域
     # 先收集两表原始条目再统一处理：LVT 与 LVTT 的 sub-attribute 顺序不保证
     # （LVTT 可能先于 LVT 出现），且同一 slot 可被多个不同作用域的变量复用
     # （如 resize 的 float ft 与 Node<K,V>[] newTab 共用 slot 6）。

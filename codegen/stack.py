@@ -16,7 +16,7 @@ from .rs_ir import (
 )
 from .render import render_type, render_expr
 from .type_map import short_cls as _short_cls
-from .constants import safe_ident
+from .constants import safe_ident, PRIMITIVE_RUST_TYPES as _SCALAR_TYPE_NAMES
 
 
 def _safe_name(name: str) -> str:
@@ -338,6 +338,15 @@ class StackSim:
                 # Clone::clone 而非 this.clone()：类的 Java clone() 方法会遮蔽 std Clone
                 expr = RawExpr("Clone::clone(this)")
 
+        if (slot in self.locals and not src_is_object and slot not in self._param_slots
+                and decl is not None and decl[1] is None and self.locals[slot][0] == decl_name
+                and getattr(self.locals[slot][1], 'name', '') == 'Object'
+                and isinstance(ty, (RsNamed, RsGeneric))
+                and getattr(ty, 'name', '') not in _SCALAR_TYPE_NAMES):
+            # 声明为 Object/接口的变量在同一作用域内再赋入具体类值：Java 隐式上转 → 装箱后赋值，
+            # 不按值类型 let 阴影（阴影会让按 Object 生成的 dispatch 作用在具体 wrapper 上）
+            expr = RawExpr(f"Object::from_any({render_expr(_clone_moved_var(expr, ty))})")
+            ty = RsNamed('Object')
         if slot in self.locals and decl_name is not None and self.locals[slot][0] != decl_name:
             # slot 被另一个 Java 变量复用：按新变量的声明名重新 let 声明
             del self.locals[slot]

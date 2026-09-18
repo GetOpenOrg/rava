@@ -5,7 +5,7 @@ Java 元数据注释生成：to_snake、pkg_from_java、访问标志字符串、
 
 import re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
-from ..constants import RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
+from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
 # Access flags
 _ACC_PUBLIC       = 0x0001
@@ -147,7 +147,8 @@ def _compute_ancestor_fields_layout(ci: ClassInfo, registry: dict | None) -> lis
         for f in (anc.fields or []):
             if f.is_static:
                 continue
-            safe_name = f.name.lstrip('$').replace('$', '_')
+            # 与 superclass_fields 使用同一命名函数（关键字字段 in → in_），宏按名字精确匹配
+            safe_name = safe_ident(f.name)
             # 同名字段只声明一次（子类可能 shadow，取第一次出现）
             if safe_name not in declared:
                 declared.add(safe_name)

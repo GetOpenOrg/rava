@@ -32,7 +32,7 @@ from ..rs_ir import (
 from ..stack import BOOL
 from ..instr.coerce import _is_subtype, _common_ref_type
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
-from .postprocess import _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
+from .postprocess import _normalize_this_clone, _erase_boxed_ctor_type_args, _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
 
 
 TWO_OP_CMP = frozenset({
@@ -833,6 +833,8 @@ def gen_method_body(
         else:
             lines.append(indent + render_stmt(item).lstrip())
 
+    lines = _erase_boxed_ctor_type_args(lines)
+
     # ── 构造器末尾返回 Ok(this) ────────────────────────────────────
     if is_ctor:
         while lines and lines[-1].strip() in ('return;', 'return Ok(());', 'return Ok(this);'):
@@ -841,6 +843,8 @@ def gen_method_body(
 
     # ── 其他方法的后处理 ──────────────────────────────────────────
     if not is_ctor:
+        if not is_static:
+            lines = _normalize_this_clone(lines)
         if rust_ret == 'bool':
             lines = _fix_bool_returns(lines)
         lines = _remove_trailing_return_ok(lines)
