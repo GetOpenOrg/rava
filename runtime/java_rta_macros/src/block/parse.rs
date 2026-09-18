@@ -18,12 +18,23 @@ pub(crate) struct FnItem {
     pub block: Option<Block>,
 }
 
+/// `impl Iface<Args> for Class<Args> { 擦除签名的方法声明 }` —— 类实现的一个接口（Java `implements`）。
+///
+/// 块内每条声明对应接口的一个实例方法，签名是该方法的**擦除形态**（与 javac 为泛型
+/// 实现类生成的桥接方法同形）；宏据此生成 `impl Iface__VTable for Class__inner`。
+pub(crate) struct InterfaceImpl {
+    /// 接口载体的 Rust 名（路径末段，不含类型实参）
+    pub iface: Ident,
+    pub fns: Vec<FnItem>,
+}
+
 pub(crate) struct ClassInput {
     pub attrs: Vec<Attribute>,
     pub struct_ident: Ident,
     pub generics: syn::Generics,
     pub fields: Vec<(Ident, Type)>,
     pub fns: Vec<FnItem>,
+    pub iface_impls: Vec<InterfaceImpl>,
 }
 
 impl Parse for ClassInput {
@@ -57,22 +68,35 @@ impl Parse for ClassInput {
             let _: Token![;] = input.parse()?;
         }
 
-        let fns = if input.is_empty() {
-            Vec::new()
-        } else {
+        // impl 块序列：`impl Class { .. }`（自有成员）与 `impl Iface for Class { .. }`（实现的接口）
+        let mut fns: Vec<FnItem> = Vec::new();
+        let mut iface_impls: Vec<InterfaceImpl> = Vec::new();
+        while !input.is_empty() {
             let _mid_attrs = input.call(Attribute::parse_outer)?;
             let _: Token![impl] = input.parse()?;
             let _impl_generics: syn::Generics = input.parse()?;
-            let _self_ty: Type = input.parse()?;
+            let first_ty: Type = input.parse()?;
+            let iface = if input.peek(Token![for]) {
+                let _: Token![for] = input.parse()?;
+                let _self_ty: Type = input.parse()?;
+                let (name, _) = split_type_name_args(&first_ty);
+                Some(Ident::new(&name, proc_macro2::Span::call_site()))
+            } else {
+                None
+            };
             if input.peek(Token![where]) {
                 let _: syn::WhereClause = input.parse()?;
             }
             let body;
             syn::braced!(body in input);
-            parse_impl_fns(&body)?
-        };
+            let items = parse_impl_fns(&body)?;
+            match iface {
+                Some(iface) => iface_impls.push(InterfaceImpl { iface, fns: items }),
+                None => fns.extend(items),
+            }
+        }
 
-        Ok(ClassInput { attrs, struct_ident, generics, fields, fns })
+        Ok(ClassInput { attrs, struct_ident, generics, fields, fns, iface_impls })
     }
 }
 

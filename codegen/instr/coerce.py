@@ -141,14 +141,28 @@ def _is_atomic_expr(expr_str: str) -> bool:
     return True
 
 
-def _coerce_to_object(val_str: str, ty: str) -> str:
-    """将任意类型的值强制转换为 Object。
-    基本类型用 .into()（有 From<T> for Object 实现）；
-    其他类型用 Object::from_any(Clone::clone(&..))（通用装箱）。
+def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
+                      class_type_params=(), clone: bool = True) -> str:
+    """值 → Object 引用（Java 的隐式向上转型）。对象身份必须保持：
+
+    - 类实例：`Object::from(x)` —— Object 直接持有该 wrapper，运行时类（is_instance_of）、
+      虚方法覆盖（hashCode/equals/toString）与接口 vtable（`__interface`）全部可达
+    - 类型变量：`Into::<Object>::into(x)`（类型实参恒为引用类型，宏为类型形参补 Into<Object>）
+    - 基本类型：`.into()`
+    - 其余（闭包等无运行时类的值）：`Object::from_any(..)` 不透明装箱
+
     注意 Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）。"""
     if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
         return f"{val_str}.into()"
-    return f"Object::from_any(Clone::clone(&{val_str}))"
+    src = f"Clone::clone(&{val_str})" if clone else val_str
+    if ty in (class_type_params or ()):
+        return f"Into::<Object>::into({src})"
+    if registry:
+        from ..type_map import _registry_short_index
+        _ci = _registry_short_index(registry).get(ty.split('<')[0].strip())
+        if _ci is not None and not _ci.is_interface:
+            return f"Object::from({src})"
+    return f"Object::from_any({src})"
 
 
 _NULL_OBJECT_EXPRS = frozenset({'Object::default()', 'Object::default().clone()'})

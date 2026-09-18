@@ -32,7 +32,7 @@ use syn::{GenericParam, Ident, Type};
 
 use classify::{classify_vtable_body, is_vtable_safe_body, VTableBodyKind};
 use generic_sig::rebuild_sig_with_generics;
-use parse::{split_type_name_args, ClassInput, ClassMeta, FnItem};
+use parse::{split_type_name_args, ClassInput, ClassMeta, FnItem, InterfaceImpl};
 use rewrite::{
     replace_clone_this_in_ok, rewrite_base_calls_for_wrapper, rewrite_block,
     rewrite_virtual_calls_for_wrapper, rewrite_vtable_calls_ufcs_for_base,
@@ -86,14 +86,102 @@ fn expand_non_virtual_fn(
     }
 }
 
-/// 接口展开：与 Java 接口同名的载体类型。
+/// 方法声明的非 self 形参名（`a: T` → `a`）。
+fn param_idents(sig: &syn::Signature) -> Vec<Ident> {
+    sig.inputs.iter().filter_map(|arg| match arg {
+        syn::FnArg::Typed(pt) => match &*pt.pat {
+            syn::Pat::Ident(pi) => Some(pi.ident.clone()),
+            _ => None,
+        },
+        syn::FnArg::Receiver(_) => None,
+    }).collect()
+}
+
+/// 去掉形参上的 `mut`（声明 → 转发方法签名）。
+fn without_param_mut(sig: &syn::Signature) -> syn::Signature {
+    let mut out = sig.clone();
+    for arg in out.inputs.iter_mut() {
+        if let syn::FnArg::Typed(pt) = arg {
+            if let syn::Pat::Ident(pi) = &mut *pt.pat {
+                pi.mutability = None;
+            }
+        }
+    }
+    out
+}
+
+fn tt_mentions(tt: &proc_macro2::TokenTree, names: &HashSet<String>) -> bool {
+    match tt {
+        proc_macro2::TokenTree::Ident(i) => names.contains(&i.to_string()),
+        proc_macro2::TokenTree::Group(g) => g.stream().into_iter().any(|t| tt_mentions(&t, names)),
+        _ => false,
+    }
+}
+
+fn mentions_any(ty: &Type, names: &HashSet<String>) -> bool {
+    quote!(#ty).into_iter().any(|tt| tt_mentions(&tt, names))
+}
+
+/// 类型擦除（JVM 语义）：提及接口类型变量的类型位置在运行时一律是 `Object` 引用；
+/// 其余类型（基本类型、非泛型类、已实参化的类）保持不变。`Result<T>` 只擦除 `T`。
+fn erase_type(ty: &Type, type_params: &HashSet<String>) -> Type {
+    if let Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            if seg.ident == "Result" {
+                if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = ab.args.first() {
+                        let erased = erase_type(inner, type_params);
+                        return syn::parse_quote!(Result<#erased>);
+                    }
+                }
+            }
+        }
+    }
+    if mentions_any(ty, type_params) {
+        syn::parse_quote!(Object)
+    } else {
+        ty.clone()
+    }
+}
+
+/// 接口实例方法声明 → 擦除签名（`Iface__VTable` 的方法签名）。
+fn erase_signature(sig: &syn::Signature, type_params: &HashSet<String>) -> syn::Signature {
+    let mut out = without_param_mut(sig);
+    for arg in out.inputs.iter_mut() {
+        if let syn::FnArg::Typed(pt) = arg {
+            let erased = erase_type(&pt.ty, type_params);
+            *pt.ty = erased;
+        }
+    }
+    if let syn::ReturnType::Type(_, ty) = &mut out.output {
+        let erased = erase_type(ty, type_params);
+        **ty = erased;
+    }
+    out
+}
+
+fn is_instance_decl(f: &FnItem) -> bool {
+    matches!(f.sig.inputs.first(), Some(syn::FnArg::Receiver(_)))
+}
+
+fn is_abstract_decl(f: &FnItem) -> bool {
+    attr_str(&f.attrs, "modifiers").map_or(false, |m| m.split(' ').any(|w| w == "abstract"))
+}
+
+/// 接口展开：与 Java 接口同名的载体类型 + 接口的擦除 vtable。
 ///
-/// - 值语义：持有一个 `Object` 的接口引用（与 `Object` 双向互转 + `Deref<Target = Object>`），
-///   实例方法分派仍走 `Object` 的 vtable；
+/// - `Iface__VTable`：接口实例方法的**擦除签名** trait（无类型参数，对象安全）——
+///   等价 JVM 的 itable：运行时只认擦除后的接口，不认类型实参。实现类的 `java_class!`
+///   块按 `impl Iface for Class` 为其 `__inner` 生成实现。
+/// - 载体 `Iface<E>`：持有一个 `Object` 接口引用（与 `Object` 双向互转 +
+///   `Deref<Target = Object>`）。实例方法保持 Java 的泛型签名（`next() -> Result<E>`），
+///   内部经 `ObjectVTable::__interface` 取得对象的 `Iface__VTable` 视图后分派，
+///   类型变量位置的实参 / 返回值在 `Object` 与 `E` 之间转换（等价 javac 插入的 checkcast）。
+///   函数式接口的 lambda 对象（`Rc<dyn Fn(擦除形参) -> Result<擦除返回>>`）由其唯一抽象方法直接调用。
 /// - 命名空间语义：接口的 static 方法 / static 字段访问器落在载体的 inherent impl 上，
 ///   调用点与 Java 同构（`Map::copyOf(m)`）。
 ///
-/// 类型别名（`type Iface = Object`）无法承担第二点：别名上的关联函数解析到 `Object`，
+/// 类型别名（`type Iface = Object`）无法承担命名空间语义：别名上的关联函数解析到 `Object`，
 /// 且别名不能携带未使用的类型参数。
 fn expand_interface(
     meta: &ClassMeta,
@@ -105,13 +193,101 @@ fn expand_interface(
     let type_params: Vec<&Ident> = gen.params.iter()
         .filter_map(|p| if let GenericParam::Type(tp) = p { Some(&tp.ident) } else { None })
         .collect();
+    let type_param_names: HashSet<String> = type_params.iter().map(|i| i.to_string()).collect();
     let no_fields: HashSet<String> = HashSet::new();
     let static_members: Vec<TokenStream2> = fns.iter()
+        .filter(|f| !is_instance_decl(f))
         .map(|f| expand_non_virtual_fn(f, &meta.binary_name, &no_fields, &no_fields))
         .collect();
     let binary_name = &meta.binary_name;
+    let vtable_ident = format_ident!("{}__VTable", struct_ident);
+
+    let mut vtable_methods: Vec<TokenStream2> = Vec::new();
+    let mut carrier_methods: Vec<TokenStream2> = Vec::new();
+
+    // 继承成员（超接口声明、本接口未重声明）：向上转型为声明接口的载体后调用，
+    // 分派仍经声明接口的 vtable —— 每个 `Iface__VTable` 只含本接口自己声明的方法。
+    for f in fns.iter().filter(|f| is_instance_decl(f)) {
+        let Some(owner) = attr_str(&f.attrs, "inherited_from") else { continue };
+        let owner_ty = match syn::parse_str::<Type>(&owner) {
+            Ok(t) => t,
+            Err(e) => return e.to_compile_error(),
+        };
+        let sig = without_param_mut(&f.sig);
+        let mname = &sig.ident;
+        let args = param_idents(&sig);
+        let keep_attrs = strip_meta_attrs(&f.attrs);
+        carrier_methods.push(quote! {
+            #(#keep_attrs)*
+            #[inline]
+            pub #sig {
+                <#owner_ty as ::std::convert::From<Object>>::from(::std::clone::Clone::clone(&self.__ref))
+                    .#mname(#(#args),*)
+            }
+        });
+    }
+
+    let instance_decls: Vec<&FnItem> = fns.iter()
+        .filter(|f| is_instance_decl(f) && attr_str(&f.attrs, "inherited_from").is_none())
+        .collect();
+    let abstract_count = instance_decls.iter().filter(|f| is_abstract_decl(f)).count();
+
+    for f in &instance_decls {
+        let erased = erase_signature(&f.sig, &type_param_names);
+        let mname = f.sig.ident.clone();
+        let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+        let stub_msg = format!("stub: {}.{}:{}", binary_name, mname, desc);
+        vtable_methods.push(quote! {
+            #[allow(unused_variables)]
+            #erased { panic!(#stub_msg) }
+        });
+
+        let args = param_idents(&f.sig);
+        // 函数式接口的唯一抽象方法：lambda 对象即该方法的实现
+        let lambda_call = if is_abstract_decl(f) && abstract_count == 1 {
+            let erased_param_tys: Vec<Type> = erased.inputs.iter().filter_map(|a| match a {
+                syn::FnArg::Typed(pt) => Some((*pt.ty).clone()),
+                _ => None,
+            }).collect();
+            let erased_ret = match &erased.output {
+                syn::ReturnType::Type(_, ty) => quote! { #ty },
+                syn::ReturnType::Default => quote! { () },
+            };
+            quote! {
+                if let Some(__f) = self.__ref.0.as_any()
+                    .downcast_ref::<::std::rc::Rc<dyn Fn(#(#erased_param_tys),*) -> #erased_ret>>()
+                {
+                    return Ok(::std::convert::From::from(
+                        (__f)(#(::std::convert::Into::into(#args)),*)?));
+                }
+            }
+        } else {
+            quote! {}
+        };
+        let keep_attrs = strip_meta_attrs(&f.attrs);
+        let sig = without_param_mut(&f.sig);
+        let missing_msg = format!("AbstractMethodError: {}.{}:{}", binary_name, mname, desc);
+        carrier_methods.push(quote! {
+            #(#keep_attrs)*
+            pub #sig {
+                let mut __vt: ::std::option::Option<::std::rc::Rc<dyn #vtable_ident>> = None;
+                ObjectVTable::__interface(::std::rc::Rc::clone(&self.__ref.0), &mut __vt);
+                if let Some(__vt) = __vt {
+                    return Ok(::std::convert::From::from(
+                        <dyn #vtable_ident>::#mname(&*__vt #(, ::std::convert::Into::into(#args))*)?));
+                }
+                #lambda_call
+                panic!("{} (receiver: {})", #missing_msg, ObjectVTable::__obj_str(&*self.__ref.0))
+            }
+        });
+    }
 
     quote! {
+        #[allow(non_camel_case_types)]
+        pub trait #vtable_ident: 'static {
+            #(#vtable_methods)*
+        }
+
         #[derive(Clone, Default)]
         pub struct #struct_ident #impl_g #where_c {
             __ref: Object,
@@ -137,25 +313,69 @@ fn expand_interface(
             pub const BINARY_NAME: &'static str = #binary_name;
 
             #(#static_members)*
+
+            #(#carrier_methods)*
+        }
+    }
+}
+
+/// `impl Iface for Class { 擦除签名声明 }` → `impl Iface__VTable for Class__inner`。
+///
+/// 每个方法重建本类 wrapper 后调用其同名（或 `target` 指定的）成员：调用经 wrapper 的
+/// vtable 委托保持多态；擦除签名与成员真实签名之间的转换（`Object` ↔ 类型变量 / 具体类）
+/// 由 `From` / `Into` 按成员签名推断——等价 javac 桥接方法里的 checkcast 与隐式向上转型。
+fn expand_interface_impl(
+    ii: &InterfaceImpl,
+    struct_ident: &Ident,
+    inner_ident: &Ident,
+    vtable_trait_ident: &Ident,
+    gen: &syn::Generics,
+) -> TokenStream2 {
+    let (impl_g, ty_g, where_c) = gen.split_for_impl();
+    let iface_vtable = format_ident!("{}__VTable", ii.iface);
+    let methods: Vec<TokenStream2> = ii.fns.iter().map(|f| {
+        let sig = without_param_mut(&f.sig);
+        let args = param_idents(&sig);
+        let target = attr_str(&f.attrs, "target")
+            .map(|t| Ident::new(&t, proc_macro2::Span::call_site()))
+            .unwrap_or_else(|| sig.ident.clone());
+        quote! {
+            #sig {
+                let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                let __wrapper = #struct_ident {
+                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    _jvm_null: false,
+                };
+                Ok(::std::convert::Into::into(
+                    __wrapper.#target(#(::std::convert::From::from(#args)),*)?))
+            }
+        }
+    }).collect();
+    quote! {
+        impl #impl_g #iface_vtable for #inner_ident #ty_g #where_c {
+            #(#methods)*
         }
     }
 }
 
 fn expand_inner(input: ClassInput) -> TokenStream2 {
-    let ClassInput { attrs, struct_ident, generics, fields, fns } = input;
+    let ClassInput { attrs, struct_ident, generics, fields, fns, iface_impls } = input;
 
     let meta = match ClassMeta::from_attrs(&attrs) {
         Ok(m) => m,
         Err(e) => return e.to_compile_error(),
     };
 
-    // ── 泛型参数补齐 Clone + Default + 'static ──────────────────────────────
+    // ── 泛型参数补齐 Clone + Default + 'static + From<Object> + Into<Object> ──────────────────────────────
     let mut gen = generics.clone();
     for param in &mut gen.params {
         if let GenericParam::Type(tp) = param {
             let mut has_clone = false;
             let mut has_default = false;
             let mut has_static = false;
+            let mut has_from_object = false;
+            let mut has_into_object = false;
             for b in &tp.bounds {
                 match b {
                     syn::TypeParamBound::Trait(t) => {
@@ -164,6 +384,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                                 has_clone = true;
                             } else if s.ident == "Default" {
                                 has_default = true;
+                            } else if s.ident == "From" {
+                                has_from_object = true;
+                            } else if s.ident == "Into" {
+                                has_into_object = true;
                             }
                         }
                     }
@@ -183,6 +407,14 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             }
             if !has_static {
                 tp.bounds.push(syn::parse_quote!('static));
+            }
+            // Java 类型实参恒为引用类型：与 Object 双向可转（装箱 / checkcast）。
+            // 擦除后的接口 vtable、桥接方法在类型变量位置依赖这组转换。
+            if !has_from_object {
+                tp.bounds.push(syn::parse_quote!(::std::convert::From<Object>));
+            }
+            if !has_into_object {
+                tp.bounds.push(syn::parse_quote!(::std::convert::Into<Object>));
             }
         }
     }
@@ -441,6 +673,25 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         quote! {}
     };
 
+    // 接口视图查询：按调用方 slot 的（擦除）接口类型把自身填入
+    let iface_vtable_idents: Vec<Ident> = iface_impls.iter()
+        .map(|ii| format_ident!("{}__VTable", ii.iface))
+        .collect();
+    let interface_query: TokenStream2 = if iface_vtable_idents.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __interface(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
+                #(
+                    if let Some(s) = slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #iface_vtable_idents>>>() {
+                        *s = Some(self);
+                        return;
+                    }
+                )*
+            }
+        }
+    };
+
     let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
             impl #impl_g ObjectVTable for #inner_ident #ty_g #where_c {
@@ -449,6 +700,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 #hash_code_inner_bridge
+                #interface_query
             }
         }
     } else {
@@ -872,6 +1124,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn is_jvm_null(&self) -> bool { self._jvm_null }
+                fn __interface(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
+                    ObjectVTable::__interface(::std::rc::Rc::clone(&self.vtable), slot)
+                }
                 #to_string_fwd
                 #hash_code_fwd
             }
@@ -1424,10 +1679,16 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // 最终组合
     // ══════════════════════════════════════════════════════════════════════════
 
+    // 实现的接口：impl Iface__VTable for __inner（擦除签名 → 本类成员的桥接）
+    let interface_impls: Vec<TokenStream2> = iface_impls.iter()
+        .map(|ii| expand_interface_impl(ii, &struct_ident, &inner_ident, &vtable_trait_ident, &gen))
+        .collect();
+
     quote! {
         #vtable_trait
         #inner_struct
         #obj_vtable_for_inner
+        #(#interface_impls)*
         #(#vtable_impls)*
         #wrapper_struct
         #wrapper_default

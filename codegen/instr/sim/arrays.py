@@ -64,7 +64,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         val_str = render_expr(val_expr)
         val_ty_str = render_type(val_ty)
         if elem_ty == 'Object' and val_ty_str not in ('Object', '()'):
-            val_str = _coerce_to_object(val_str, val_ty_str)
+            val_str = _coerce_to_object(val_str, val_ty_str, registry, sim.class_type_params)
         elif elem_ty != 'Object' and val_ty_str == 'Object':
             val_str = "Default::default()"
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:

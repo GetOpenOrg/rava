@@ -44,7 +44,7 @@ def _normalize_this_clone(lines: list[str], this_is_owned: bool = False) -> list
 
 
 _ERASED_NEW_RE = re.compile(
-    r'(Object::from_any\((?:Clone::clone\(&)?[A-Za-z_]\w*::<)(_(?:, _)*)(>::)')
+    r'((?:Object::from_any|Object::from|Into::<Object>::into)\((?:Clone::clone\(&)?[A-Za-z_]\w*::<)(_(?:, _)*)(>::)')
 
 
 def _erase_boxed_ctor_type_args(lines: list[str]) -> list[str]:

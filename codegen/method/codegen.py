@@ -241,10 +241,14 @@ def gen_method_body(
     def _sim_is_subtype(child: str, parent: str) -> bool:
         return _is_subtype(child, parent, registry)
 
+    def _sim_box_object(expr_s: str, ty_s: str) -> str:
+        from ..instr.coerce import _coerce_to_object
+        return _coerce_to_object(expr_s, ty_s, registry, _class_tparams, clone=False)
+
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                    slot_decls=slot_decls, is_subtype=_sim_is_subtype,
                    return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
-                   in_vtable_body=in_vtable_body)
+                   in_vtable_body=in_vtable_body, box_object=_sim_box_object)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
 
@@ -289,7 +293,7 @@ def gen_method_body(
                 rust_param_type_nodes, is_static, method.class_name, local_names,
                 slot_decls=slot_decls, is_subtype=_sim_is_subtype,
                 return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
-                in_vtable_body=cur_sim.in_vtable_body,
+                in_vtable_body=cur_sim.in_vtable_body, box_object=_sim_box_object,
             )
             s.type_var_bound_uses = sim.type_var_bound_uses
             s.locals = dict(cur_sim.locals)

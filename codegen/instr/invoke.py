@@ -287,17 +287,20 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                                 break
                     if _raw_sp2:
                         _tparam_to_turbofish_idx = {t: i for i, t in enumerate(_cls_tp_list2)}
-                        _OBJ_FROM_PREFIX = 'Object::from_any(Clone::clone(&'
+                        _BOX_PREFIXES = ('Object::from_any(', 'Object::from(', 'Into::<Object>::into(')
                         for _si2, _sp_t2 in enumerate(_raw_sp2):
-                            if (_sp_t2 in _tparam_to_turbofish_idx
-                                    and _si2 < len(args)
-                                    and args[_si2].startswith(_OBJ_FROM_PREFIX)
+                            if not (_sp_t2 in _tparam_to_turbofish_idx and _si2 < len(args)
                                     and args[_si2].endswith('))')):
-                                _tidx2 = _tparam_to_turbofish_idx[_sp_t2]
-                                if (_tidx2 < len(_ctor_tparams)
-                                        and _ctor_tparams[_tidx2] not in ('Object', '_')):
-                                    # 去掉 Object::from_any(Clone::clone(&x)) → Clone::clone(&x)
-                                    args[_si2] = args[_si2][len('Object::from_any('):-1]
+                                continue
+                            _box_pfx = next((bp for bp in _BOX_PREFIXES
+                                             if args[_si2].startswith(bp + 'Clone::clone(&')), None)
+                            if _box_pfx is None:
+                                continue
+                            _tidx2 = _tparam_to_turbofish_idx[_sp_t2]
+                            if (_tidx2 < len(_ctor_tparams)
+                                    and _ctor_tparams[_tidx2] not in ('Object', '_')):
+                                # 形参是类型变量且实参已具体化：撤销向 Object 的上转，保留 Clone::clone(&x)
+                                args[_si2] = args[_si2][len(_box_pfx):-1]
                 type_params_str = ('<' + ', '.join(_ctor_tparams) + '>') if _ctor_tparams else ''
                 rust_ty = raw_cls + type_params_str
                 rust_ty_node = RsNamed(rust_ty)

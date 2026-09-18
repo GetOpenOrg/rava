@@ -24,6 +24,7 @@ from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, _find_virtual_in
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
+from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT
 from ..instr.coerce import _parse_field_ref
 from .clinit_extract import _push_int_value, _extract_clinit_consts, _extract_clinit_arrays
 
@@ -770,9 +771,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if m.is_synthetic and not (m.access_flags & _ACC_BRIDGE)
         and m.name not in ('<init>', '<clinit>')
     ]
+    # 接口重声明的 Object 公开方法（如 Comparator.equals）经 Object vtable 分派，不进接口 vtable
+    from ..instr.coerce import _root_virtual_methods
+    _root_method_keys = _root_virtual_methods() if _is_iface else set()
     for m in emitted_methods:
-        if _is_iface and not m.is_static:
-            continue  # 接口实例方法不落在载体上（vtable 分派 / 实现类继承 default）
+        if _is_iface and not m.is_static and (
+                m.is_synthetic or (m.access_flags & 0x0002) or (m.name, m.descriptor[:m.descriptor.index(')') + 1]) in _root_method_keys):
+            continue  # 私有 / 合成实例方法不是接口契约的一部分
         if m.name == '<clinit>':
             # 用户类：翻译 <clinit> 为 class_init() 函数
             if _is_user_class:
@@ -807,6 +812,16 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         _nf_covered = (_nf_entry or {}).get('methods', set())
         fn_name_check = safe_ident(rust_name or m.name)
         if fn_name_check in _nf_covered:
+            continue
+
+        if _is_iface and not m.is_static:
+            # 接口实例方法（abstract / default）：无方法体的成员声明。宏据此生成擦除签名的
+            # 接口 vtable（`Iface__VTable`）与载体上的同名分派方法；default 方法体由实现类继承展开。
+            _decl = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry,
+                                     class_type_params=class_type_params)
+            _decl_sig = next(ln.strip() for ln in _decl.split('\n') if ln.lstrip().startswith('pub fn '))
+            _decl_sig = _decl_sig[:-1].rstrip() if _decl_sig.endswith('{') else _decl_sig
+            method_blocks.append(_java_method_attr(m) + '\n' + _decl_sig + ';')
             continue
 
         # 计算虚方法归属（vtable 架构）
@@ -1088,15 +1103,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         else:
             block.append(f"pub struct {struct_name}{struct_generic};")
 
-        # 接口无静态成员时不写空 impl 块
-        if method_blocks or not _is_iface:
+        # 接口无成员且不可能补继承成员（无 emission）时不写空 impl 块
+        if method_blocks or not _is_iface or emission is not None:
             block.append('')
             impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
             block.append(f"{impl_header} {{")
-            block.append(impl_body)
-            if emission is not None and not _is_iface:
+            if impl_body:
+                block.append(impl_body)
+            if emission is not None:
                 block.append(_INHERITED_MEMBERS_SLOT)
             block.append("}")
+        if emission is not None and not _is_iface:
+            block.append(_INTERFACE_IMPLS_SLOT)
 
         if emission is not None:
             emission.record_methods(method_blocks)
