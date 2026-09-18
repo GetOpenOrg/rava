@@ -27,9 +27,10 @@ pub trait ObjectVTable: 'static {
     /// 向下转型辅助：返回 self 作为 &dyn Any（供 Object::downcast 使用）
     fn as_any(&self) -> &dyn std::any::Any;
 
-    /// java.lang.Object.getClass() — 返回运行时类对象（简化实现：返回默认 Object）
-    fn getClass(&self) -> crate::error::Result<Object> {
-        Ok(Object(std::rc::Rc::new(())))
+    /// java.lang.Object.getClass()Ljava/lang/Class; — 返回类型与字节码签名一致。
+    /// 简化实现：返回 null Class（Default），运行时类对象模型落地后在此处替换。
+    fn getClass(&self) -> crate::error::Result<crate::java::lang::Class> {
+        Ok(Default::default())
     }
 
     /// java.lang.Comparable.compareTo(Object)I — 接口方法，不实现 Comparable 的类调用时 panic

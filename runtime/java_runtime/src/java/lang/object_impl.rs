@@ -9,7 +9,7 @@ impl Object {
     pub fn unlock(&self) -> Result<()> { Ok(()) }
 
     #[jvm_native]
-    pub fn getClass(&self) -> Result<Object> { Ok(self.clone()) }
+    pub fn getClass(&self) -> Result<crate::java::lang::Class> { self.0.getClass() }
 
     #[jvm_native]
     pub fn hashCode(&self) -> Result<i32> { Ok(0) }

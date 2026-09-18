@@ -85,24 +85,69 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     # Clone::clone 而非 .clone()：捕获值可能是带 Java clone() 的类
                     # 实例实现方法（捕获 this 的 lambda / 绑定接收者的方法引用）：
                     # 第一个捕获值是接收者，以 &self 形式传入
+                    # 构造器引用（<init>）非 static 但无接收者：全部实参进参数表，返回新实例
+                    _impl_is_ctor = _impl_mname == '<init>'
                     _impl_is_instance = False
+                    _impl_has_generic_sig = False
                     _impl_ci = registry.get(_impl_cls_bin) if registry else None
                     if _impl_ci is not None:
                         for _im in _impl_ci.methods:
                             if _im.name == _impl_mname and _im.descriptor == _impl_desc:
-                                _impl_is_instance = not _im.is_static
+                                _impl_is_instance = not _im.is_static and not _impl_is_ctor
+                                _impl_has_generic_sig = bool(_im.generic_signature)
                                 break
+
+                    def _is_erased_ref(_d: str) -> bool:
+                        """描述符类型在 Rust 侧是否表现为擦除的 Object（接口别名 / 未翻译类）。"""
+                        if not (_d.startswith('L') and _d.endswith(';')):
+                            return False
+                        _dci = registry.get(_d[1:-1]) if registry else None
+                        return _dci is None or _dci.is_interface or jvm_to_rust(_d, registry) == 'Object'
+
+                    # 函数式接口的擦除签名（samtype）与实现方法签名之间的适配：
+                    # SAM 实参是擦除的 Object、实现方法形参是具体类 → 拆箱（目标类型由形参推断）
+                    _impl_params = parse_descriptor_params(_impl_desc)
                     _call_cap_list = [f'Clone::clone(&{v})' for v in _cap_var_names]
+                    _call_sam_list = list(_sam_anames)
+                    # 实现方法形参表对应 (捕获值 + SAM 实参) 去掉接收者之后的部分
+                    _recv_from_sam = _impl_is_instance and not _call_cap_list
+                    _sam_param_offset = len(_call_cap_list) - (1 if _impl_is_instance and _call_cap_list else 0)
+                    for _si, _sd in enumerate(_sam_params):
+                        if _recv_from_sam and _si == 0:
+                            continue
+                        _pi = _sam_param_offset + _si - (1 if _recv_from_sam else 0)
+                        if 0 <= _pi < len(_impl_params):
+                            _pd = _impl_params[_pi]
+                            if _pd != _sd and _is_erased_ref(_sd) and not _is_erased_ref(_pd):
+                                _call_sam_list[_si] = f'{_sam_anames[_si]}.downcast()'
                     if _impl_is_instance and _call_cap_list:
+                        # 捕获 this 的 lambda / 绑定接收者的方法引用：第一个捕获值是接收者
                         _call_cap_list[0] = f'&{_cap_var_names[0]}'
+                    elif _recv_from_sam and _call_sam_list:
+                        # 未绑定接收者的方法引用（X::method）：第一个 SAM 实参是接收者
+                        _recv_desc = f'L{_impl_cls_bin};'
+                        if _is_erased_ref(_sam_params[0]) and not _is_erased_ref(_recv_desc):
+                            _recv_ty = jvm_to_rust(_recv_desc, registry)
+                            _call_sam_list[0] = f'&{_sam_anames[0]}.downcast::<{_recv_ty}>()'
+                        else:
+                            _call_sam_list[0] = f'&{_sam_anames[0]}'
                     _call_cap_args  = ', '.join(_call_cap_list)
-                    _call_sam_args  = ', '.join(_sam_anames)
+                    _call_sam_args  = ', '.join(_call_sam_list)
                     _all_call_args  = ', '.join(filter(None, [_call_cap_args, _call_sam_args]))
                     # 生成闭包
                     for _s in _cap_var_stmts:
                         sim.emit(RawStmt(_s))
                     _cap_move = ' '.join(f'Clone::clone(&{v}),' for v in _cap_var_names)
                     _closure_body = f'{_impl_cls_rust}::{_impl_mname_r}({_all_call_args})'
+                    # 返回值适配：SAM 返回 void → 丢弃实现方法返回值；
+                    # SAM 返回擦除的 Object 而实现方法返回具体类型 → 装箱
+                    _impl_ret = f'L{_impl_cls_bin};' if _impl_is_ctor else parse_descriptor_return(_impl_desc)
+                    if _sam_ret == 'V':
+                        if _impl_ret != 'V':
+                            _closure_body = f'{_closure_body}?; Ok(())'
+                    elif _is_erased_ref(_sam_ret) and _impl_ret != 'V' and (
+                            not _is_erased_ref(_impl_ret) or _impl_has_generic_sig):
+                        _closure_body = f'Ok(Object::from_any({_closure_body}?))'
                     _lam_varname = f'__lam_{_lam_idx}'
                     sim.emit(RawStmt(
                         f'let {_lam_varname}: {_fn_type} = std::rc::Rc::new('

@@ -12,7 +12,7 @@ impl PrintStream {
 
     /// getClass() stub：PrintStream 自身的 inherent impl，替代 JvmObjectBase blanket。
     #[jvm_native]
-    pub fn getClass(&self) -> Result<Object> {
-        Ok(Object::default())
+    pub fn getClass(&self) -> Result<crate::java::lang::Class> {
+        Ok(Default::default())
     }
 }

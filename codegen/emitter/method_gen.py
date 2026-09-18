@@ -155,7 +155,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     """为 native / abstract / stub 方法生成 panic! 存根。"""
     from ..type_map import (
         jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return,
-        parse_class_type_params, parse_method_param_types,
+        parse_class_type_params, parse_method_param_types, method_sig_types,
     )
     params = parse_descriptor_params(m.descriptor)
     ret    = parse_descriptor_return(m.descriptor)
@@ -170,10 +170,9 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     # Vec<Class<Object>>）同样采用，否则存根声明与调用点记录 E0308。
     sig_param_types: list[str] = []
     sig_ret_type: str = ''
-    if m.generic_signature:
-        sig_param_types, sig_ret_type = parse_method_param_types(m.generic_signature, _ctparams, registry)
-        if len(sig_param_types) != len(params):
-            sig_param_types = []
+    sig_param_types, sig_ret_type = method_sig_types(ci, m, _ctparams, registry)
+    if len(sig_param_types) != len(params):
+        sig_param_types = []
 
     def _sig_param_valid(sp: str) -> bool:
         if sp in _ctparams:

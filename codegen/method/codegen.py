@@ -13,7 +13,7 @@
 from ..types import ParsedMethod, ClassInfo
 from ..type_map import (
     jvm_to_rust, sig_type, rust_default, mangle_name, short_cls,
-    parse_method_param_types, parse_field_type, parse_class_type_params,
+    parse_method_param_types, method_sig_types, parse_field_type, parse_class_type_params,
 )
 from ..constants import safe_ident, PRIMITIVE_RUST_TYPES as _PRIM_TYPES
 from ..stack import StackSim
@@ -71,12 +71,7 @@ def gen_method_body(
     # Vec<Class<Object>>）同样需要采用 —— 门控不要求类有类型参数；
     # 方法级类型变量（<T> m(T)）在空 class_tparams 下解析为 Object，
     # 与 descriptor 擦除一致，由 _sig_param_valid 兜底。
-    if method.generic_signature:
-        sig_param_types, sig_ret_type = parse_method_param_types(
-            method.generic_signature, _class_tparams, registry
-        )
-    else:
-        sig_param_types, sig_ret_type = [], ''
+    sig_param_types, sig_ret_type = method_sig_types(class_info, method, _class_tparams, registry)
 
     instrs           = method.instrs
     off2idx          = {ins.offset: idx for idx, ins in enumerate(instrs)}
@@ -840,6 +835,7 @@ def gen_method_body(
         while lines and lines[-1].strip() in ('return;', 'return Ok(());', 'return Ok(this);'):
             lines.pop()
         lines.append("    Ok(this)")
+        lines = _normalize_this_clone(lines, this_is_owned=True)
 
     # ── 其他方法的后处理 ──────────────────────────────────────────
     if not is_ctor:

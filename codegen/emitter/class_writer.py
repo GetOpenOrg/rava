@@ -8,7 +8,7 @@ from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
 from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names
-from ..type_map import (effective_class_type_params, ancestor_type_args,
+from ..type_map import (effective_class_type_params, ancestor_type_args, outer_ref_field_type,
                         rust_type_with_args as _rust_type_with_args)
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
@@ -461,19 +461,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                                            _ancestor_args.get(ci.super_class, []))
 
     def _outer_ref_field_rust(f, decl_params: list) -> str:
-        """内部类外部引用字段（this$N）的 Rust 类型：外部类 + 声明类从外部类继承的类型参数
-        （如 ArrayList$Itr.this$0 → ArrayList<E>）。非 this$N 字段或外部类非泛型 → ''。"""
-        import re as _re_f
-        if not (_re_f.match(r'^this\$\d+$', f.name) and decl_params and registry):
-            return ''
-        _fm = _re_f.match(r'L([^;]+);', f.descriptor)
-        _outer_ci2 = registry.get(_fm.group(1)) if _fm else None
-        if _outer_ci2 is None or not _outer_ci2.generic_signature:
-            return ''
-        _outer_tp2 = parse_class_type_params(_outer_ci2.generic_signature)
-        if not _outer_tp2 or len(_outer_tp2) > len(decl_params):
-            return ''
-        return short_cls(_fm.group(1)) + '<' + ', '.join(decl_params[:len(_outer_tp2)]) + '>'
+        return outer_ref_field_type(f, decl_params, registry)
 
     def _resolve_field_rust(f) -> str:
         """字段的 Rust 类型：优先字段级 generic_signature（TE; → E），回退裸描述符。

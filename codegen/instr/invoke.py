@@ -111,7 +111,7 @@ def _resolve_ctor_turbofish_args(
     for m in ci.methods:
         if m.name == '<init>' and m.descriptor == full_desc:
             if m.generic_signature:
-                sp, _ = _parse_method_param_types(m.generic_signature, cls_tparams, registry)
+                sp, _ = _parse_method_param_types(m.generic_signature, cls_tparams, registry, is_static=False)
                 if sp and len(sp) == len(ctor_params):
                     ctor_sig_params = sp
             break
@@ -131,6 +131,26 @@ def _resolve_ctor_turbofish_args(
             return list(cls_tparams)
     # 规则 3：兜底用 _ 让 Rust 从上下文推断（比 Object 更安全，避免 E0308）
     return ['_'] * len(cls_tparams)
+
+
+def _ctor_outer_ref_base(cls_short: str | None, params: list[str], registry: dict | None) -> str:
+    """内部类构造器的首个形参若是编译器注入的外部类引用（this$N），且定义侧按
+    「外部类 + 内部类继承的类型参数」生成（Outer<E>，见 gen_method_body / outer_ref_field_type），
+    返回外部类 Rust 短名，否则 ''。此形参的实例化由实参决定（Rust 从实参推断内部类的
+    类型参数），调用侧不得按擦除形态 Outer<Object> 转换实参。"""
+    if not (cls_short and params and registry):
+        return ''
+    from ..type_map import effective_class_type_params, outer_ref_field_type
+    ci = registry.get(_rust_type_to_binary(cls_short, registry) or '')
+    if ci is None:
+        return ''
+    tparams = effective_class_type_params(ci, registry)
+    for f in ci.fields:
+        if not f.is_static and f.descriptor == params[0]:
+            outer = outer_ref_field_type(f, tparams, registry)
+            if outer:
+                return outer.split('<', 1)[0]
+    return ''
 
 
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
@@ -180,6 +200,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
     )
     args = []
     arg_tys = []
+    _outer_ref_base = _ctor_outer_ref_base(cls, params, registry)
     for _idx_c, param_jvm in enumerate(reversed(params)):
         e_expr, e_ty_node = sim.pop()
         e = render_expr(e_expr)
@@ -187,6 +208,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         _sig_t_c = sig_params_ctor[_pi_c] if sig_params_ctor and _pi_c < len(sig_params_ctor) else None
         expected = _sig_t_c if _sig_t_c is not None else jvm_to_rust(param_jvm, registry)
         ty = render_type(e_ty_node)
+        if _pi_c == 0 and _outer_ref_base and ty.split('<', 1)[0] == _outer_ref_base:
+            expected = ty
         e = _coerce_arg(e, e_ty_node, expected, ty, sim, registry)
         args.insert(0, e)
         arg_tys.insert(0, ty)
@@ -234,7 +257,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                         for _m2 in _ci_ctor2.methods:
                             if _m2.name == '<init>' and _m2.descriptor == _full_desc2 and _m2.generic_signature:
                                 _raw_sp2, _ = _parse_method_param_types(
-                                    _m2.generic_signature, _cls_tp_list2, registry)
+                                    _m2.generic_signature, _cls_tp_list2, registry, is_static=False)
                                 if _raw_sp2 and len(_raw_sp2) != len(params):
                                     _raw_sp2 = None
                                 break
