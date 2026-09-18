@@ -166,13 +166,13 @@ def _coerce_to_interface(actual: str, expected: str) -> bool:
     1. actual 是 expected 接口的已知实现类（如 HashMap → Map）
     2. Vec 元素类型不匹配（Rc<RefCell<Vec<Object>>> → Rc<RefCell<Vec<T>>>）
     """
-    # Vec 元素类型不匹配：两者都是 Rc<RefCell<Vec<T>>> 但元素类型不同
-    _VEC_PREFIX = 'Rc<RefCell<Vec<'
-    _VEC_SUFFIX = '>>>'
-    if (expected.startswith(_VEC_PREFIX) and expected.endswith(_VEC_SUFFIX) and
-            actual.startswith(_VEC_PREFIX) and actual.endswith(_VEC_SUFFIX)):
-        exp_elem = expected[len(_VEC_PREFIX):-len(_VEC_SUFFIX)]
-        act_elem = actual[len(_VEC_PREFIX):-len(_VEC_SUFFIX)]
+    # JArray 元素类型不匹配：两者都是 JArray<T> 但元素类型不同
+    _JARR_PREFIX = 'JArray<'
+    _JARR_SUFFIX = '>'
+    if (expected.startswith(_JARR_PREFIX) and expected.endswith(_JARR_SUFFIX) and
+            actual.startswith(_JARR_PREFIX) and actual.endswith(_JARR_SUFFIX)):
+        exp_elem = expected[len(_JARR_PREFIX):-len(_JARR_SUFFIX)]
+        act_elem = actual[len(_JARR_PREFIX):-len(_JARR_SUFFIX)]
         if exp_elem != act_elem:
             return True
     exp_base = expected.split('<')[0]

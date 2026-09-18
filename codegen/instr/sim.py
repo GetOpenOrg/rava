@@ -60,7 +60,7 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
         import re as _re_g
         _caller_tparams = set(sim.class_type_params) if sim.class_type_params else set()
         _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
-        _builtin_g = {'Object', 'String', 'Rc', 'Vec', 'RefCell'}
+        _builtin_g = {'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'}
         if all(_n in _caller_tparams or _n in _reg_shorts or _n in _builtin_g
                for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _parsed)):
             return _parsed
@@ -398,7 +398,7 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                         import re as _re_g
                         _caller_tparams = set(sim.class_type_params) if sim.class_type_params else set()
                         _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
-                        _builtin_g = {'Object', 'String', 'Rc', 'Vec', 'RefCell'}
+                        _builtin_g = {'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'}
                         if all(_n in _caller_tparams or _n in _reg_shorts or _n in _builtin_g
                                for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _parsed)):
                             ftype = _parsed
@@ -429,9 +429,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             if (ftype != val_ty_name
                     and 'Vec<' in ftype and 'Vec<Object>' in val_ty_name
                     and isinstance(val_expr, RawExpr)
-                    and 'downcast::<Rc<RefCell<Vec<Object>>>>' in val_str_raw):
+                    and 'downcast::<JArray<Object>>' in val_str_raw):
                 val_str_raw = val_str_raw.replace(
-                    'downcast::<Rc<RefCell<Vec<Object>>>>',
+                    'downcast::<JArray<Object>>',
                     f'downcast::<{ftype}>'
                 )
                 val_ty_name = ftype
@@ -512,10 +512,10 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
     # ── 数组 ──
     elif op == 'newarray':
         count_expr, _ = sim.pop()
-        elem_t, zero = NEWARRAY_TYPES.get(operand.strip(), ('i32', '0i32'))
+        elem_t, _zero = NEWARRAY_TYPES.get(operand.strip(), ('i32', '0i32'))
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![{zero}; {render_expr(count_expr)} as usize]));"))
-        sim.push(Var(v), RsNamed(f'Rc<RefCell<Vec<{elem_t}>>>'))
+        sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::new({render_expr(count_expr)});"))
+        sim.push(Var(v), RsNamed(f'JArray<{elem_t}>'))
     elif op == 'anewarray':
         count_expr, _ = sim.pop()
         # 用完整路径（comment）而非 short_cls，避免 'LString;' 等非全限定名映射到 Object
@@ -523,14 +523,9 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
             elem_t = jvm_to_rust(f'L{comment};', registry)
         else:
             elem_t = 'Object'
-        # 多态数组：不再因「元素类有子类」降级为 Vec<Object>。
-        # 6b2ee14 的降级与 LVTT/字段声明的精确类型（如 HashMap.table:
-        # Vec<HashMap_Node<K,V>>）冲突导致 E0308；
-        # 多态存储由 aastore 的子类型 upcast（.into()）处理
         v = sim.fresh('_arr')
-        # 用 Default::default() 而非 ElemType::default()，避免泛型类型（如 Node<K,V>）在 vec![] 中产生语法错误
-        sim.emit(RawStmt(f"let mut {v}: Rc<RefCell<Vec<{elem_t}>>> = Rc::new(RefCell::new(vec![Default::default(); {render_expr(count_expr)} as usize]));"))
-        sim.push(Var(v), RsNamed(f'Rc<RefCell<Vec<{elem_t}>>>'))
+        sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::new({render_expr(count_expr)});"))
+        sim.push(Var(v), RsNamed(f'JArray<{elem_t}>'))
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
         dims = int(dims_str) if dims_str.isdigit() else 2
@@ -539,22 +534,15 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         sim.emit(RawStmt(f"let mut {v}: Vec<Vec<i32>> = vec![vec![0i32; {sizes[-1]} as usize]; {sizes[0]} as usize];"))
         sim.push(Var(v), RsGeneric('Vec', [RsGeneric('Vec', [I32])]))
     elif op in ('iastore', 'lastore', 'fastore', 'dastore'):
-        val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        arr_str = render_expr(arr_expr)
-        val_str = render_expr(val_expr)
-        # Avoid RefCell double-borrow: if val reads from same array, extract to temp first
-        if '.borrow()' in val_str and arr_str in val_str:
-            tmp = sim.fresh('_tmp_val')
-            sim.emit(RawStmt(f"let {tmp} = {val_str};"))
-            val_str = tmp
-        sim.emit(RawStmt(f"{arr_str}.borrow_mut()[{render_expr(idx_expr)} as usize] = {val_str};"))
+        val_expr, _val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {render_expr(val_expr)});"))
     elif op == 'aastore':
         val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
-        _VEC_WRAP = 'Rc<RefCell<Vec<'
-        _VEC_WRAP_END = '>>>'
-        if arr_ty_str.startswith(_VEC_WRAP) and arr_ty_str.endswith(_VEC_WRAP_END):
-            elem_ty = arr_ty_str[len(_VEC_WRAP):-len(_VEC_WRAP_END)]
+        import re as _re_aa
+        _m_aa = _re_aa.match(r'JArray<(.+)>$', arr_ty_str)
+        if _m_aa:
+            elem_ty = _m_aa.group(1)
         elif arr_ty_str.startswith('Vec<') and arr_ty_str.endswith('>'):
             elem_ty = arr_ty_str[4:-1]
         else:
@@ -562,80 +550,60 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
         val_str = render_expr(val_expr)
         val_ty_str = render_type(val_ty)
         if elem_ty == 'Object' and val_ty_str not in ('Object', '()'):
-            # Object 数组（含多态容器）：clone 后装箱以保留实际运行时类型
             val_str = _coerce_to_object(val_str, val_ty_str)
         elif elem_ty != 'Object' and val_ty_str == 'Object':
-            val_str = f"Default::default()"
+            val_str = "Default::default()"
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
             if (elem_ty != val_ty_str
                     and _is_subtype(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)):
-                # vtable 架构：子类元素存入父类数组，用 From trait（.into()）
                 chain = _into_super_chain(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)
                 val_str = f"Clone::clone(&{val_str}){chain}"
             else:
-                # 同类型数组：只需 Clone
                 val_str = f"Clone::clone(&{val_str})"
-        # F-1 fix: 非基本类型 val_str 可能包含 .borrow() 调用（如 aaload 的结果），
-        # 若直接写 arr.borrow_mut()[i] = Clone::clone(&arr.borrow()[j]) 会导致
-        # RefCell 同时持有 borrow 和 borrow_mut 而 panic。先提取到 tmp 释放 borrow。
-        arr_str = render_expr(arr_expr)
-        if val_ty_str not in _PRIMITIVE_RUST_TYPES and '.borrow()' in val_str:
-            tmp = sim.fresh('_aastore_tmp')
-            sim.emit(RawStmt(f"let {tmp} = {val_str};"))
-            val_str = tmp
-        sim.emit(RawStmt(f"{arr_str}.borrow_mut()[{render_expr(idx_expr)} as usize] = {val_str};"))
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {val_str});"))
     elif op == 'bastore':
         val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
-        # boolean[] 在 JVM 中以 bastore 写入，Rust 映射为 Vec<bool>，需要 != 0 转换
-        if arr_ty_str in ('Vec<bool>', 'Rc<RefCell<Vec<bool>>>'):
+        # boolean[] 在 JVM 中以 bastore 写入，需要 != 0 转换
+        if arr_ty_str in ('JArray<bool>', 'Vec<bool>'):
             val_s = render_expr(val_expr)
-            val_ty_s = render_type(val_ty)
-            if val_ty_s == 'bool':
-                coerced = val_s
-            else:
-                coerced = f"(({val_s}) as i8 != 0)"
-            sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = {coerced};"))
+            coerced = val_s if render_type(val_ty) == 'bool' else f"(({val_s}) as i8 != 0)"
+            sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {coerced});"))
         else:
-            sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as i8;"))
+            sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i8);"))
     elif op == 'sastore':
         val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as i16;"))
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i16);"))
     elif op == 'castore':
         val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.borrow_mut()[{render_expr(idx_expr)} as usize] = ({render_expr(val_expr)}) as u16;"))
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as u16);"))
     elif op == 'iaload':
         idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"{render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize]"), I32)
+        sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})"), I32)
     elif op in ('baload', 'saload', 'caload'):
         idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize] as i32)"), I32)
+        sim.push(RawExpr(f"({render_expr(arr_expr)}.get({render_expr(idx_expr)}) as i32)"), I32)
     elif op in ('laload', 'faload', 'daload'):
         idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
         ty = {'l': I64, 'f': F32, 'd': F64}.get(op[0], I32)
-        sim.push(RawExpr(f"{render_expr(arr_expr)}.borrow()[{render_expr(idx_expr)} as usize]"), ty)
+        sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})"), ty)
     elif op == 'aaload':
         idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
-        if arr_ty_str.startswith('Vec<'):
+        import re as _re
+        _m = _re.match(r'JArray<(.+)>$', arr_ty_str)
+        if _m:
+            elem_ty_str = _m.group(1)
+        elif arr_ty_str.startswith('Vec<'):
             elem_ty_str = arr_ty_str[4:-1]
         else:
-            # 处理 Rc<RefCell<Vec<T>>> 形式（java 数组在 Rust 中的标准编码）
-            import re as _re
-            _m = _re.match(r'Rc<RefCell<Vec<(.+)>>>$', arr_ty_str)
-            elem_ty_str = _m.group(1) if _m else 'Object'
-        _idx_s = f"{render_expr(idx_expr)} as usize"
+            elem_ty_str = 'Object'
         _arr_s = render_expr(arr_expr)
-        if elem_ty_str in _PRIMITIVE_RUST_TYPES:
-            # 基本类型实现 Copy，borrow()[idx] 自动解引用为 owned 值，直接使用
-            _load_expr = f"{_arr_s}.borrow()[{_idx_s}]"
-        else:
-            # 引用类型：vec[idx] 解引用为 T（move），&vec[idx] 取引用为 &T，Clone::clone(&T) → T
-            _load_expr = f"Clone::clone(&{_arr_s}.borrow()[{_idx_s}])"
-        sim.push(RawExpr(_load_expr), RsNamed(elem_ty_str))
+        # JArray::get 内部已 clone，直接使用返回值
+        sim.push(RawExpr(f"{_arr_s}.get({render_expr(idx_expr)})"), RsNamed(elem_ty_str))
     elif op == 'arraylength':
         arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(arr_expr)}.borrow().len() as i32)"), I32)
+        sim.push(RawExpr(f"({render_expr(arr_expr)}.len())"), I32)
 
     # ── 方法调用 ──
     elif op == 'invokestatic':

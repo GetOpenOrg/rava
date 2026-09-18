@@ -314,6 +314,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     _self_simple = (ci.name.split('/')[-1] if '/' in ci.name else ci.name).replace('$', '_')
     _seen_imports: set[str] = set()  # 去重键："{rust_pkg}::{simple}"
 
+    # prelude 里已有的泛型/newtype 名称，若 Java 类名与其重名，跳过 use 导入
+    # 调用方通过全路径（crate::java::...::Class）引用，不用短名
+    _PRELUDE_NEWTYPE_NAMES = {'JArray'}
+
     def _add_precise_import(full_cls: str) -> None:
         """按 JVM binary name 添加精确 use 语句，跳过自身类型和重复项。"""
         _parts = full_cls.split('/')
@@ -327,6 +331,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if _key in _seen_imports:
             return
         _seen_imports.add(_key)
+        if _simple in _PRELUDE_NEWTYPE_NAMES:
+            # 名称与 prelude newtype 冲突，跳过 use 导入；调用方应使用全路径引用
+            return
         cross_imports.append(f"use {_prefix}::{_rust_pkg}::{_simple};")
 
     # JDK 包（jdk_crate_pkg_paths 中的包）：按需精确导入
@@ -753,7 +760,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if cv:
             if cv == '__EMPTY_ARRAY__':
                 # iconst_0 → anewarray → putstatic：static final T[] = new T[0]
-                body = 'Rc::new(RefCell::new(Vec::new()))'
+                body = 'JArray::new(0)'
             elif rust_ret == 'String':
                 body = f'String::from("{cv}")'
             elif rust_ret == 'f32':
@@ -820,7 +827,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _desc_inner = sf.descriptor[1:]   # [B→B, [C→C, [S→S, [I→I
             _elem_rust = {'B': 'i8', 'C': 'u16', 'S': 'i16', 'I': 'i32'}.get(_desc_inner, 'i8')
             _items = ', '.join(f'{v} as {_elem_rust}' for v in _arr_vals)
-            body = f'Rc::new(RefCell::new(vec![{_items}]))'
+            body = f'JArray::from(vec![{_items}])'
             field_meta = _java_field_attr(sf)
             method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
         else:

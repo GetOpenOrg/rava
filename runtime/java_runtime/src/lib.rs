@@ -5,7 +5,7 @@ pub mod java;
 pub mod jdk;
 pub mod sun;
 
-pub use array::Array;
+pub use array::JArray;
 pub use error::{JvmError, Result};
 pub use java::lang::Object;
 
@@ -58,7 +58,7 @@ impl PartialEq for MutexHolder {
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 pub mod prelude {
     #![allow(unused_imports)]
-    pub use super::array::Array;
+    pub use super::array::JArray;
     pub use super::error::{JvmError, Result};
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;

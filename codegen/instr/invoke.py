@@ -731,7 +731,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # JVM 数组.getClass() → Object::default()（代表 Class<T[]>）
     # Rust 侧 Vec/数组类型没有 getClass()，但调用方（如 Arrays.copyOf）只用
     # 其结果判断是否为 Object[] 类型；Object::default() 使判断走 Object[] 分支
-    if mname == 'getClass' and obj_ty.startswith('Rc<RefCell<Vec<'):
+    if mname == 'getClass' and obj_ty.startswith('JArray<'):
         v = sim.fresh()
         sim.emit(RawStmt(f"let {v}: Object = Object::default();"))
         sim.push(Var(v), RsNamed('Object'))

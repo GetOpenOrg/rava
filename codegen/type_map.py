@@ -26,12 +26,12 @@ JVM_RUST: dict[str, str] = {
     'Ljava/lang/Long;':    'i64',
     'Ljava/lang/Double;':  'f64',
     'Ljava/lang/Boolean;': 'bool',
-    '[I': 'Rc<RefCell<Vec<i32>>>', '[J': 'Rc<RefCell<Vec<i64>>>',
-    '[F': 'Rc<RefCell<Vec<f32>>>', '[D': 'Rc<RefCell<Vec<f64>>>',
-    '[B': 'Rc<RefCell<Vec<i8>>>',  '[S': 'Rc<RefCell<Vec<i16>>>',
-    '[C': 'Rc<RefCell<Vec<u16>>>', '[Z': 'Rc<RefCell<Vec<bool>>>',
-    '[Ljava/lang/String;': 'Rc<RefCell<Vec<String>>>',
-    '[Ljava/lang/Object;': 'Rc<RefCell<Vec<Object>>>',
+    '[I': 'JArray<i32>', '[J': 'JArray<i64>',
+    '[F': 'JArray<f32>', '[D': 'JArray<f64>',
+    '[B': 'JArray<i8>',  '[S': 'JArray<i16>',
+    '[C': 'JArray<u16>', '[Z': 'JArray<bool>',
+    '[Ljava/lang/String;': 'JArray<String>',
+    '[Ljava/lang/Object;': 'JArray<Object>',
 }
 
 # newarray 操作数 → (Rust 元素类型, 零值字面量)
@@ -89,7 +89,7 @@ def jvm_to_rust(t: str, registry: dict | None = None) -> str:
         return 'Object'
     if t.startswith('['):
         elem = jvm_to_rust(t[1:], registry)
-        return f'Rc<RefCell<Vec<{elem}>>>'
+        return f'JArray<{elem}>'
     return 'Object'
 
 
@@ -386,9 +386,9 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
         return 'Object', end + 1
 
     if c == '[':
-        # 数组 → Rc<RefCell<Vec<elem>>>
+        # 数组 → JArray<elem>
         elem_type, next_i = _parse_one_type(sig, i + 1, class_type_params, registry, method_bounds)
-        return f'Rc<RefCell<Vec<{elem_type}>>>', next_i
+        return f'JArray<{elem_type}>', next_i
 
     if c == '+' or c == '-':
         # 上下界通配符 — 取内部类型

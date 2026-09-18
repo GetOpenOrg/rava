@@ -5,15 +5,13 @@ use crate::java::io::print_stream::PrintStream;
 impl System {
     #[jvm_native]
     pub fn arraycopy(src: Object, src_pos: i32, dest: Object, dest_pos: i32, length: i32) -> Result<()> {
-        let sp = src_pos as usize;
-        let dp = dest_pos as usize;
-        let len = length as usize;
         macro_rules! try_copy {
             ($t:ty) => {
-                if let Some(s) = src.0.as_any().downcast_ref::<Rc<RefCell<Vec<$t>>>>() {
-                    let d = dest.downcast::<Rc<RefCell<Vec<$t>>>>();
-                    let copied: Vec<$t> = s.borrow()[sp..sp + len].to_vec();
-                    d.borrow_mut()[dp..dp + len].clone_from_slice(&copied);
+                if let Some(s) = src.0.as_any().downcast_ref::<JArray<$t>>() {
+                    let d = dest.downcast::<JArray<$t>>();
+                    for i in 0..length {
+                        d.set(dest_pos + i, s.get(src_pos + i));
+                    }
                     return Ok(());
                 }
             };
