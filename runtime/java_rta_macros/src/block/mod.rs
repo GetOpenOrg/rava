@@ -994,6 +994,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             impl #impl_g #struct_ident #ty_g #where_c {
                 pub const BINARY_NAME: &'static str = #binary_name;
             }
+            // vtable 上下文（impl XxxVTable for __inner）中的方法体里 Self = __inner，
+            // Self::BINARY_NAME 必须同样可解析
+            impl #impl_g #inner_ident #ty_g #where_c {
+                pub const BINARY_NAME: &'static str = #binary_name;
+            }
         }
     } else {
         quote! {}

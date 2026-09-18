@@ -199,6 +199,22 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                         _tparams = _parse_class_type_params(_getstatic_cls_ci.generic_signature)
                         if _tparams:
                             _getstatic_turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
+            # 静态字段声明类型恢复（与 getfield 同规则）：getter 按字段级 generic_signature
+            # 生成返回类型（如 HashMap<String, X>），读取侧必须记录同一精确类型，
+            # 否则后续 invoke 的返回类型替换拿不到接收者实参，checkcast 误判源类型为 Object
+            # 而在 wrapper 上生成 .downcast（E0599）。
+            if registry and _getstatic_cls_ci is not None:
+                _sgsig = next((_sf.generic_signature for _sf in _getstatic_cls_ci.fields
+                               if _sf.is_static and _sf.name == field_name), '')
+                if _sgsig:
+                    _s_tparams = (_parse_class_type_params(_getstatic_cls_ci.generic_signature)
+                                  if _getstatic_cls_ci.generic_signature else [])
+                    _s_parsed = _parse_field_type(_sgsig, _s_tparams, registry)
+                    if _s_parsed and _s_parsed != 'Object' and _s_parsed != ty_str:
+                        _s_reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
+                        if all(_n in _s_reg_shorts or _n in _BUILTIN_G
+                               for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _s_parsed)):
+                            ty_str = _s_parsed
             # 若字段名与方法名冲突，emitter 生成了 fieldname_field 后缀，调用方也须一致
             _actual_field_name = field_name
             if _getstatic_cls_ci is not None:

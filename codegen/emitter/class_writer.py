@@ -18,6 +18,7 @@ from .attrs import (to_snake, _java_class_block_head,
                     _java_field_attr, _java_method_attr)
 from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, _find_virtual_in
+from ..instr.coerce import _parse_field_ref
 from .clinit_extract import _push_int_value, _extract_clinit_consts, _extract_clinit_arrays
 
 _safe_field_name = safe_ident
@@ -629,7 +630,19 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # JVM 原始类型描述符集合，可安全包装在 OnceLock<Mutex<T>> 中（均实现 Send + Copy）
     # String（Java 自定义类型）不在此集合，因其含 Rc 字段，不实现 Send
     _MUTABLE_STATIC_DESCS = frozenset({'I', 'J', 'F', 'D', 'Z', 'B', 'C', 'S'})
+    # 在 <clinit> 之外被 putstatic 写入的静态字段（惰性初始化 / 运行期可变状态）：
+    # 必须有真实存储 + setter；未写入时 getter 返回 JVM 默认值（null/0），与 JVM 语义一致。
+    _runtime_written_statics: set[str] = set()
+    for _wm in ci.methods:
+        if _wm.name == '<clinit>':
+            continue
+        for _wi in (_wm.instrs or []):
+            if _wi.opcode == 'putstatic' and _wi.comment:
+                _w_cls, _w_fname, _ = _parse_field_ref(_wi.comment)
+                if _w_cls == ci.name:
+                    _runtime_written_statics.add(_w_fname)
     for sf in ([] if _is_iface else static_fields):
+        _has_storage = _is_user_class or sf.name in _runtime_written_statics
         safe_fname = _safe_field_name(sf.name)
         if safe_fname in existing_method_names:
             # 字段名与方法名冲突：改用 _field 后缀，让 getstatic 仍能访问该字段
@@ -672,7 +685,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 body = cv
             field_meta = _java_field_attr(sf)
             method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
-        elif _is_user_class and sf.descriptor in _MUTABLE_STATIC_DESCS:
+        elif _has_storage and sf.descriptor in _MUTABLE_STATIC_DESCS:
             # 用户类可变静态字段（JVM 原始类型，Send + Copy）：OnceLock<Mutex<T>>
             _static_var = f"_{struct_name}_{safe_fname}_STATIC"
             _default = rust_default(rust_ret)
@@ -692,8 +705,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 f'    *{_static_var}.get_or_init(|| std::sync::Mutex::new({_default})).lock().unwrap() = v;\n'
                 f'}}'
             )
-        elif _is_user_class:
-            # 用户类可变静态字段（非原始类型，不实现 Send）：unsafe static mut Option<T>
+        elif _has_storage:
+            # 用户类 / 运行期可写的可变静态字段（非原始类型，不实现 Send）：unsafe static mut Option<T>
             _static_var = f"_{struct_name}_{safe_fname}_STATIC"
             _default = rust_default(rust_ret)
             module_statics.append(
