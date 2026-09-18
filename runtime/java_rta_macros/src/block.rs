@@ -1966,12 +1966,18 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     }
 
     // VirtualOverride 方法生成 base 函数（VTable 约束为 virtual_in__VTable）
-    // base 函数的 this: &impl AncestorVTable，而本类自有字段的 __get_xxx / Clone::clone 等
-    // 均不在祖先 vtable 中，因此 VirtualOverride base 函数一律生成 panic stub。
-    // （base 函数仅在 invokespecial super 调用时触发，HelloWorld 路径不涉及。）
-    for (_vtable_class, override_fns) in &vtable_overrides {
+    // 安全判断：
+    //   - this.__get_xxx / __set_xxx：仅当 xxx 是超类字段（在祖先 VTable 中有对应 accessor）才安全
+    //   - this.method()（非 __ 前缀）：不安全
+    //   - Clone::clone(this) / Self:: ：不安全
+    // 安全时 bound：__BT: AncestorVTable<ClassTypeParams> + ?Sized
+    let superclass_field_names: std::collections::HashSet<String> = meta.superclass_fields.iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+    for (vtable_class, override_fns) in &vtable_overrides {
+        let ancestor_vtable_ident = format_ident!("{}__{}", vtable_class, "VTable");
         for f in override_fns {
-            if f.block.is_some() {
+            if let Some(block) = &f.block {
                 let sig = &f.sig;
                 let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
                 let non_self_params: Vec<_> = sig.inputs.iter()
@@ -1981,15 +1987,80 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 let mname_str = sig.ident.to_string();
                 let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
                 let binary = &meta.binary_name;
-                let msg = format!("stub: super {}.{}:{}", binary, mname_str, desc);
-                // base 函数全是 panic stub，不需要 vtable trait bound
-                base_fns.push(quote! {
-                    #[doc(hidden)]
-                    #[allow(non_snake_case, unused_variables)]
-                    pub fn #fn_name #base_impl_g (this: &__BT #(, #non_self_params)*) #ret {
-                        panic!(#msg)
+
+                let mut b = block.clone();
+                rewrite_block(&mut b, &basic_names, &ref_names);
+                if let Some(first) = b.stmts.first() {
+                    let fs = quote!(#first).to_string();
+                    if fs.contains("this") && fs.contains("self") {
+                        b.stmts.remove(0);
                     }
-                });
+                }
+                replace_clone_this_in_ok(&mut b);
+
+                let bs = quote!(#b).to_string();
+                let has_bare_clone_this = bs.contains("Clone :: clone (this)")
+                    || bs.contains("Clone :: clone(this)")
+                    || bs.contains("Clone::clone (this)")
+                    || bs.contains("Clone::clone(this)");
+                // 检查 this.xxx() 调用：非超类字段 accessor 或非 __ 前缀方法 → unsafe
+                let has_non_vtable_call = {
+                    let mut found = false;
+                    let parts: Vec<&str> = bs.split("this .").chain(bs.split("this.")).skip(1).collect();
+                    'outer: for part in parts {
+                        let trimmed = part.trim_start();
+                        let mname_call: String = trimmed.chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        if mname_call.is_empty() { continue; }
+                        let rest = &trimmed[mname_call.len()..];
+                        if !rest.trim_start().starts_with('(') { continue; }
+                        if mname_call.starts_with("__") {
+                            // accessor 调用：提取字段名（__get_xxx → xxx，__set_xxx → xxx）
+                            let field_name = mname_call
+                                .strip_prefix("__get_")
+                                .or_else(|| mname_call.strip_prefix("__set_"))
+                                .or_else(|| mname_call.strip_prefix("__borrow_mut_"))
+                                .unwrap_or("");
+                            if !field_name.is_empty() && !superclass_field_names.contains(field_name) {
+                                // 本类自有字段的 accessor，不在祖先 VTable 中 → unsafe
+                                found = true;
+                                break 'outer;
+                            }
+                        } else {
+                            // 普通方法调用（非 __ 前缀）→ unsafe
+                            found = true;
+                            break 'outer;
+                        }
+                    }
+                    found
+                };
+                let has_self_ref = bs.contains("Self ::") || bs.contains("Self::");
+
+                if has_bare_clone_this || has_non_vtable_call || has_self_ref {
+                    let msg = format!("stub: super {}.{}:{}", binary, mname_str, desc);
+                    base_fns.push(quote! {
+                        #[doc(hidden)]
+                        #[allow(non_snake_case, unused_variables)]
+                        pub fn #fn_name #base_impl_g (this: &__BT #(, #non_self_params)*) #ret {
+                            panic!(#msg)
+                        }
+                    });
+                } else {
+                    let mut body_gen = gen.clone();
+                    body_gen.params.push(syn::parse_quote!(__BT));
+                    body_gen.make_where_clause().predicates.push(
+                        syn::parse_quote!(__BT: #ancestor_vtable_ident #ty_g + ?Sized)
+                    );
+                    let (body_impl_g, _, body_where_c) = body_gen.split_for_impl();
+                    base_fns.push(quote! {
+                        #[doc(hidden)]
+                        #[allow(non_snake_case, unused_variables)]
+                        pub fn #fn_name #body_impl_g (this: &__BT #(, #non_self_params)*) #ret #body_where_c {
+                            #b
+                        }
+                    });
+                }
             }
         }
     }
