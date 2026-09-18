@@ -4,6 +4,7 @@ from ..type_map import (
     short_cls,
     parse_class_type_params as _parse_class_type_params,
     parse_method_param_types as _parse_method_param_types,
+    method_sig_types as _method_sig_types,
 )
 from .coerce import (
     _rust_type_to_binary,
@@ -19,6 +20,7 @@ def _lookup_method_sig_params(
     registry: dict | None,
     caller_class_type_params: frozenset[str],
     receiver_targ_map: dict | None = None,
+    receiver_is_this: bool = False,
 ) -> list[str | None] | None:
     """查找被调用方法的 generic_signature，返回真实参数类型列表。
 
@@ -38,12 +40,10 @@ def _lookup_method_sig_params(
     full_desc = '(' + ''.join(descriptor_params) + ')' + descriptor_ret
     for m in ci.methods:
         if m.name == mname and m.descriptor == full_desc:
-            if not m.generic_signature:
-                return None
-            # 用被调用类的类型参数解析 generic_signature
+            # 用被调用类的类型参数解析签名（覆盖方法取最远祖先声明，与定义侧同规则）
             callee_tparams_list = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
             callee_tparams = frozenset(callee_tparams_list)
-            types, _ = _parse_method_param_types(m.generic_signature, callee_tparams_list, registry)
+            types, _ = _method_sig_types(ci, m, callee_tparams_list, registry)
             if not types:
                 return None
             # 将 callee 类型参数映射到 caller 上下文：
@@ -52,7 +52,16 @@ def _lookup_method_sig_params(
             resolved: list[str | None] = []
             for t in types:
                 if t in callee_tparams:
-                    if t in caller_class_type_params:
+                    if (ci.is_interface and not receiver_is_this
+                            and not (receiver_targ_map and t in receiver_targ_map)):
+                        # Arch-1：接口在 Rust 侧是 Object 别名，没有类型参数；
+                        # 其形参与调用方同名（Function<T,R> 在 Optional<T> 内被调用）
+                        # 只是命名巧合，接口方法形参一律是擦除形态。
+                        # 例外：接收者是 this（default 方法体被继承进实现类），形参即本类形参；
+                        # 接收者静态类型是具体泛型类（Set<String> s = new LinkedHashSet<>()）时
+                        # 按接收者实参解析
+                        resolved.append(None)
+                    elif t in caller_class_type_params:
                         resolved.append(t)
                     elif receiver_targ_map and t in receiver_targ_map:
                         resolved.append(receiver_targ_map[t])
@@ -164,12 +173,10 @@ def _lookup_method_sig_ret(
     full_desc = '(' + ''.join(descriptor_params) + ')' + descriptor_ret
     for m in ci.methods:
         if m.name == mname and m.descriptor == full_desc:
-            if not m.generic_signature:
-                return None
             # 非泛型类的方法同样可带泛型签名返回类型（RecursiveTask<BigInteger>）：
             # 方法声明侧（gen_method_body）不要求类有类型参数，调用点必须同规则
             callee_tparams = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
-            _, sig_ret = _parse_method_param_types(m.generic_signature, callee_tparams, registry)
+            _, sig_ret = _method_sig_types(ci, m, callee_tparams, registry)
             if not sig_ret:
                 return None
             # 有效性：所有标识符须为已知类型（与 gen_method_body 的 _sig_param_valid 同规则）
@@ -286,6 +293,7 @@ def _coerce_arg(
     from .coerce import (
         _coerce_from_null, _coerce_to_object, _coerce_to_interface,
         _coerce_value, _is_subtype, _PRIMITIVE_RUST_TYPES, _into_super_chain,
+        _reinstantiate_generic,
     )
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
@@ -307,6 +315,11 @@ def _coerce_arg(
         return _coerce_value(e, e_ty_node, expected)
     if expected == 'i32' and actual in ('i8', 'i16', 'u16', 'bool'):
         return f"({e} as i32)"
+    # 同一泛型类的不同实例化（raw type / 通配符形参接收精确实例化的实参）
+    if _downcast_target_valid(expected, sim, registry):
+        _reinst = _reinstantiate_generic(e, actual, expected)
+        if _reinst is not None:
+            return _reinst
     if (expected not in _PRIMITIVE_RUST_TYPES and actual not in _PRIMITIVE_RUST_TYPES
             and expected not in ('Object', '()', actual)
             and _is_subtype(actual.split('<')[0], expected.split('<')[0], registry)):

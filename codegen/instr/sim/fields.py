@@ -9,17 +9,22 @@ from ...type_map import (
     jvm_to_rust,
     parse_class_type_params as _parse_class_type_params,
     parse_field_type as _parse_field_type,
+    effective_class_type_params as _effective_class_type_params,
+    outer_ref_field_type as _outer_ref_field_type,
 )
-from ...constants import safe_ident as _safe_ident
+from ...constants import safe_ident as _safe_ident, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import (
     _parse_field_ref, _coerce_to_object, _coerce_from_null, _coerce_value,
     _is_subtype, _rust_type_to_binary, _get_field_generic_signature,
     _PRIMITIVE_RUST_TYPES, _into_super_chain, _resolve_static_field_owner,
+    _reinstantiate_generic,
 )
 from ..invoke import _gen_invokespecial
 
 # Rust 内建容器与已知类型短名（用于泛型类型可见性校验）
-_BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'})
+# 基本类型名也必须视为可见：装箱类型实参映射为 Rust 基本类型（X<Boolean> → X<bool>），
+# 否则此类字段的声明类型恢复被整体拒绝，读取侧退化为擦除形态
+_BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'}) | _PRIMITIVE_RUST_TYPES
 
 
 def _static_field_decl_class(cls: str, comment: str, registry: dict | None) -> str:
@@ -47,12 +52,21 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
     if not _g_owner:
         return ftype
     _g_ci = registry.get(_g_owner)
-    _gsig = _get_field_generic_signature(_g_owner, fname, registry)
-    if not (_gsig and _g_ci is not None):
-        return ftype
-    _decl_tparams = (_parse_class_type_params(_g_ci.generic_signature)
-                     if _g_ci.generic_signature else [])
-    _parsed = _parse_field_type(_gsig, _decl_tparams, registry)
+    # 内部类外部引用字段（this$N，无 generic_signature）：与 struct 字段定义同规则
+    _parsed = ''
+    if _g_ci is not None:
+        for _of in _g_ci.fields:
+            if not _of.is_static and _safe_ident(_of.name) == fname:
+                _parsed = _outer_ref_field_type(
+                    _of, _effective_class_type_params(_g_ci, registry), registry)
+                break
+    if not _parsed:
+        _gsig = _get_field_generic_signature(_g_owner, fname, registry)
+        if not (_gsig and _g_ci is not None):
+            return ftype
+        _decl_tparams = (_parse_class_type_params(_g_ci.generic_signature)
+                         if _g_ci.generic_signature else [])
+        _parsed = _parse_field_type(_gsig, _decl_tparams, registry)
     if _parsed and _parsed != 'Object' and _parsed != ftype:
         # 校验：解析结果中的类型名须在调用方可见
         # （当前 impl 类型参数 / registry 短名 / 内建容器），
@@ -163,6 +177,9 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                     val_str = val_str_raw
                 else:
                     val_str = _coerce_to_object(val_str_raw, val_ty_name)
+            elif _reinstantiate_generic(val_str_raw, val_ty_name, ftype) is not None:
+                # raw type / 通配符字段接收精确实例化的值（如自引用的 this）
+                val_str = _reinstantiate_generic(val_str_raw, val_ty_name, ftype)
             elif (ftype not in _PRIMITIVE_RUST_TYPES and val_ty_name not in _PRIMITIVE_RUST_TYPES
                   and ftype not in ('Object', '()', val_ty_name)
                   and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
@@ -244,16 +261,22 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             sim.push(RawExpr(f"/* getstatic {comment} */"), RsNamed('Object'))
 
     elif op == 'putstatic':
-        val_expr, _ps_val_ty = sim.pop()
+        val_expr, val_ty = sim.pop()
         # Java 引用赋值无 move 语义：putstatic 之后源局部变量仍可被使用
         # （dup; putstatic; areturn 模式）→ setter 实参包 Clone::clone 保活（E0382）
-        val_expr = _clone_moved_var(val_expr, _ps_val_ty)
+        val_expr = _clone_moved_var(val_expr, val_ty)
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
         if cls and field_name:
             cls = _static_field_decl_class(cls, comment, registry)
             raw_cls = cls.rsplit('/', 1)[-1].replace('$', '_')
             rust_fname = _safe_ident(field_name)
-            sim.emit(RawStmt(f"{raw_cls}::set_{rust_fname}({render_expr(val_expr)});"))
+            val_str = render_expr(val_expr)
+            # 基本类型静态字段与 putfield 同规则收窄：JVM 操作数栈上 boolean/byte/char/short
+            # 都是 int，写入字段时按字段描述符还原（bool ← `x != 0`，i8/i16/u16 ← as）
+            _sf_ty = jvm_to_rust(descriptor, registry) if descriptor else ''
+            if _sf_ty in _PRIMITIVE_RUST_TYPES:
+                val_str = _coerce_value(val_str, val_ty, _sf_ty)
+            sim.emit(RawStmt(f"{raw_cls}::set_{rust_fname}({val_str});"))
         else:
             sim.emit(RawStmt(f"/* putstatic {cls}.{field_name} = {render_expr(val_expr)} */"))
 

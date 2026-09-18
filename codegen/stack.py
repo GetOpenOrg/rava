@@ -299,6 +299,21 @@ class StackSim:
                 def _base_of(t: RsType) -> str:
                     return getattr(t, 'name', str(t)).split('<')[0].strip()
                 if _base_of(hint) == _base_of(ty):
+                    # 同一泛型类的不同实例化（通配符 static 字段 X<?> 经 unchecked cast
+                    # 赋给 X<T> 局部）：Rust 侧是不同类型，经 Object 边界重新实例化
+                    from .instr.coerce import _reinstantiate_generic
+                    _src_name = getattr(ty, 'name', '')
+                    _hint_name = getattr(hint, 'name', '')
+                    if not (isinstance(expr, Lit) and expr.value == 'Object::default()'):
+                        _src_code = render_expr(expr)
+                        _dc_tail = f".downcast::<{_src_name}>()"
+                        _conv = _reinstantiate_generic(_src_code, _src_name, _hint_name)
+                        if _conv is not None and _src_code.endswith(_dc_tail):
+                            # checkcast 刚产生的擦除形态 downcast：直接改写目标类型，不叠加二次转换
+                            _conv = f"{_src_code[:-len(_dc_tail)]}.downcast::<{_hint_name}>()"
+                        if _conv is not None:
+                            expr = RawExpr(_conv)
+                            force_let_ty = True
                     ty = hint
                 elif (isinstance(hint, RsNamed)
                       and 'Vec<' in hint.name and 'Vec<' in ty.name

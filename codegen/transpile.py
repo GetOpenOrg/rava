@@ -343,6 +343,16 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
             queue.append(_key)
 
     with resolver:
+        # 根类的方法被所有类继承（手写 ObjectVTable 的签名与字节码一致），
+        # 其描述符中的参数/返回类型是全局类型依赖，必须进闭包
+        _root_data = resolver.resolve(_OBJECT_CLASS)
+        if _root_data is not None:
+            try:
+                for _rm in parse_class_bytes(_root_data, _OBJECT_CLASS).methods:
+                    _enqueue_desc_types(_rm.descriptor)
+            except Exception:
+                pass
+
         while queue:
             cls, meth, desc = queue.popleft()
 

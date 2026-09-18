@@ -712,6 +712,22 @@ def superclass_type_args(ci, registry) -> list[str]:
     return [a if _type_arg_is_resolvable(a, own_params, registry) else 'Object' for a in args]
 
 
+def outer_ref_field_type(f, decl_params: list, registry) -> str:
+    """内部类外部引用字段（this$N）的 Rust 类型：外部类 + 声明类从外部类继承的类型参数
+    （如 ArrayList$Itr.this$0 → ArrayList<E>）。非 this$N 字段或外部类非泛型 → ''。
+    struct 字段定义（class_writer）与 getfield/putfield 的字段类型恢复共用。"""
+    if not (re.match(r'^this\$\d+$', f.name) and decl_params and registry):
+        return ''
+    fm = re.match(r'L([^;]+);', f.descriptor)
+    outer_ci = registry.get(fm.group(1)) if fm else None
+    if outer_ci is None or not outer_ci.generic_signature:
+        return ''
+    outer_tp = parse_class_type_params(outer_ci.generic_signature)
+    if not outer_tp or len(outer_tp) > len(decl_params):
+        return ''
+    return short_cls(fm.group(1)) + '<' + ', '.join(decl_params[:len(outer_tp)]) + '>'
+
+
 def rust_type_with_args(short_name: str, args: list[str]) -> str:
     """`Name` + 实参表 → `Name<A, B>`；无实参时为裸名。"""
     return f"{short_name}<{', '.join(args)}>" if args else short_name
@@ -788,8 +804,17 @@ def parse_method_param_types(
     sig: str,
     class_type_params: list[str],
     registry=None,
+    is_static: bool = True,
 ) -> tuple[list[str], str]:
     """从方法 Signature 中解析参数类型和返回类型（Rust 类型字符串）。
+
+    is_static：方法是否为 static。实例方法声明的方法级类型形参遮蔽同名的类级
+      形参（Java 作用域规则：`class P<S> { <S extends Sink> S wrap(S s) }` 里的 S
+      是方法级变量，与类级 S 无关）→ 解析时从类级形参表剔除，按方法级变量
+      （上界 / Object）处理，与父类/接口侧同一方法的擦除形态一致。
+      static 方法不能引用类级形参，其方法级 `<K,V>` 由所在 impl 块的同名
+      形参承载（impl<K,V> X<K,V> { fn f(..: K) }），保留同名解析。
+      定义侧与所有调用侧必须传入同一取值。
 
     class_type_params：类级类型参数名（如 ['E'] 或 ['K', 'V']）
     registry：类注册表，用于 Arch-1 接口擦除（接口类型参数 → Object）
@@ -811,6 +836,10 @@ def parse_method_param_types(
         method_bounds: dict[str, str] = {}
         if i < len(sig) and sig[i] == '<':
             method_bounds = _extract_method_tparam_bounds(sig[i:], registry)
+            if not is_static:
+                _shadowed = set(parse_class_type_params(sig[i:]))
+                if _shadowed & set(class_type_params):
+                    class_type_params = [p for p in class_type_params if p not in _shadowed]
             depth = 1
             i += 1
             while i < len(sig) and depth > 0:
@@ -844,6 +873,46 @@ def parse_method_param_types(
 
     except Exception:
         return [], ''
+
+
+_ACC_PRIVATE = 0x0002
+
+
+def method_sig_types(ci, m, class_type_params: list[str], registry=None) -> tuple[list[str], str]:
+    """方法在 Rust 侧的泛型签名类型（参数表, 返回类型）；([], '') 表示退回描述符擦除形态。
+
+    覆盖方法（超类链上存在同名同描述符的非私有声明）的签名由**最远祖先的声明**决定：
+    Rust trait impl 要求与 trait 声明逐字一致，而 Java 允许子类在擦除相同的前提下
+    把 `Object key()` 重声明为 `K key()`。祖先声明的类型按祖先形参 → 本类视角实参
+    （ancestor_type_args）替换后作为本方法签名；祖先声明无泛型签名 → 退回描述符。
+    方法定义侧（方法体 / native 存根）与所有调用侧统一经此函数取签名。
+    """
+    root_ci, root_m, root_args = None, None, []
+    if registry and not m.is_static and not m.is_constructor and not (m.access_flags & _ACC_PRIVATE):
+        for anc_bin, args in ancestor_type_args(ci, registry):
+            anc = registry.get(anc_bin)
+            if anc is None:
+                break
+            for am in anc.methods:
+                if (am.name == m.name and am.descriptor == m.descriptor
+                        and not am.is_static and not (am.access_flags & _ACC_PRIVATE)):
+                    root_ci, root_m, root_args = anc, am, args
+                    break
+    if root_m is None:
+        if not m.generic_signature:
+            return [], ''
+        return parse_method_param_types(m.generic_signature, class_type_params, registry,
+                                        is_static=m.is_static)
+    if not root_m.generic_signature:
+        return [], ''
+    root_tparams = effective_class_type_params(root_ci, registry)
+    params, ret = parse_method_param_types(root_m.generic_signature, root_tparams, registry,
+                                           is_static=False)
+    if len(root_args) != len(root_tparams):
+        root_args = ['Object'] * len(root_tparams)
+    mapping = dict(zip(root_tparams, root_args))
+    return ([substitute_type_params(p, mapping) for p in params],
+            substitute_type_params(ret, mapping) if ret else ret)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

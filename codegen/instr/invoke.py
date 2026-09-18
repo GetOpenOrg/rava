@@ -112,7 +112,7 @@ def _resolve_ctor_turbofish_args(
     for m in ci.methods:
         if m.name == '<init>' and m.descriptor == full_desc:
             if m.generic_signature:
-                sp, _ = _parse_method_param_types(m.generic_signature, cls_tparams, registry)
+                sp, _ = _parse_method_param_types(m.generic_signature, cls_tparams, registry, is_static=False)
                 if sp and len(sp) == len(ctor_params):
                     ctor_sig_params = sp
             break
@@ -134,6 +134,26 @@ def _resolve_ctor_turbofish_args(
     return ['_'] * len(cls_tparams)
 
 
+def _ctor_outer_ref_base(cls_short: str | None, params: list[str], registry: dict | None) -> str:
+    """内部类构造器的首个形参若是编译器注入的外部类引用（this$N），且定义侧按
+    「外部类 + 内部类继承的类型参数」生成（Outer<E>，见 gen_method_body / outer_ref_field_type），
+    返回外部类 Rust 短名，否则 ''。此形参的实例化由实参决定（Rust 从实参推断内部类的
+    类型参数），调用侧不得按擦除形态 Outer<Object> 转换实参。"""
+    if not (cls_short and params and registry):
+        return ''
+    from ..type_map import effective_class_type_params, outer_ref_field_type
+    ci = registry.get(_rust_type_to_binary(cls_short, registry) or '')
+    if ci is None:
+        return ''
+    tparams = effective_class_type_params(ci, registry)
+    for f in ci.fields:
+        if not f.is_static and f.descriptor == params[0]:
+            outer = outer_ref_field_type(f, tparams, registry)
+            if outer:
+                return outer.split('<', 1)[0]
+    return ''
+
+
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     if '<init>' not in comment and '"<init>"' not in comment:
         # super.method() 调用（invokespecial 非构造器）：
@@ -141,7 +161,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         # 必须精确路由到目标父类的 ._super 链，直接调用父类实现，跳过虚拟派发。
         cls_short, mname, params, ret = parse_method_ref(comment)
         sig_params = _lookup_method_sig_params(
-            cls_short, mname, params, ret, registry, sim.class_type_params
+            cls_short, mname, params, ret, registry, sim.class_type_params,
+            receiver_is_this=True,
         )
         args: list[str] = []
         for _idx, param_jvm in enumerate(reversed(params)):
@@ -181,6 +202,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
     )
     args = []
     arg_tys = []
+    _outer_ref_base = _ctor_outer_ref_base(cls, params, registry)
     for _idx_c, param_jvm in enumerate(reversed(params)):
         e_expr, e_ty_node = sim.pop()
         e = render_expr(e_expr)
@@ -188,6 +210,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         _sig_t_c = sig_params_ctor[_pi_c] if sig_params_ctor and _pi_c < len(sig_params_ctor) else None
         expected = _sig_t_c if _sig_t_c is not None else jvm_to_rust(param_jvm, registry)
         ty = render_type(e_ty_node)
+        if _pi_c == 0 and _outer_ref_base and ty.split('<', 1)[0] == _outer_ref_base:
+            expected = ty
         e = _coerce_arg(e, e_ty_node, expected, ty, sim, registry)
         args.insert(0, e)
         arg_tys.insert(0, ty)
@@ -235,7 +259,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                         for _m2 in _ci_ctor2.methods:
                             if _m2.name == '<init>' and _m2.descriptor == _full_desc2 and _m2.generic_signature:
                                 _raw_sp2, _ = _parse_method_param_types(
-                                    _m2.generic_signature, _cls_tp_list2, registry)
+                                    _m2.generic_signature, _cls_tp_list2, registry, is_static=False)
                                 if _raw_sp2 and len(_raw_sp2) != len(params):
                                     _raw_sp2 = None
                                 break
@@ -318,7 +342,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
 
 
 def _static_call_turbofish(cls: str, class_name: str, sim: StackSim,
-                           registry: dict | None) -> str:
+                           registry: dict | None,
+                           type_bindings: dict | None = None) -> str:
     """泛型类的静态调用路径（`Cls::<...>::method`）所需的 turbofish。
 
     静态方法不使用类的类型参数，调用点无上下文可推断（E0283），必须显式给出。
@@ -341,7 +366,9 @@ def _static_call_turbofish(cls: str, class_name: str, sim: StackSim,
         # 同类静态调用（如 impl<K,V> TreeNode 内调用 TreeNode::checkInvariants）：
         # 实参是精确泛型形态（HashMap_TreeNode<K,V>），turbofish 用当前 impl 的
         # 类型参数；填 Object 会 E0308（expected X<K,V>, found X<Object,Object>）。
-        return '::<' + ', '.join(_tparams) + '>'
+        # type_bindings：按实参绑定的类级类型变量（Optional.ofNullable(U) 等）
+        _tb = type_bindings or {}
+        return '::<' + ', '.join(_tb.get(_tp, _tp) for _tp in _tparams) + '>'
     # 跨类静态调用：用 Object 擦除（无上下文可推断类型参数）
     return '::<' + ', '.join('Object' for _ in _tparams) + '>'
 
@@ -380,6 +407,9 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         cls, mname, params, ret, registry, sim.class_type_params
     )
     args = []
+    # static 泛型方法的类型变量是方法级的（由 impl 块同名形参承载）：形参是裸类型变量而
+    # 实参静态类型不同（Optional<T>.map 内 ofNullable(Object)）→ 该变量按实参绑定
+    _static_tbind: dict[str, str] = {}
     for _idx_s, param_jvm in enumerate(reversed(params)):
         e_expr, ty_node = sim.pop()
         e = render_expr(e_expr)
@@ -387,10 +417,14 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         _pi_s = len(params) - 1 - _idx_s
         _sig_t_s = sig_params_s[_pi_s] if sig_params_s and _pi_s < len(sig_params_s) else None
         expected = _sig_t_s if _sig_t_s is not None else jvm_to_rust(param_jvm, registry)
+        if (expected in (sim.class_type_params or ()) and ty != expected
+                and ty not in _PRIMITIVE_RUST_TYPES and ty != '()'):
+            _static_tbind.setdefault(expected, ty)
         e = _coerce_arg(e, ty_node, expected, ty, sim, registry)
         args.insert(0, e)
 
     needs_q = False  # 是否加 ?（用户类方法返回 Result）
+    turbofish_bound = False  # turbofish 是否采用了 _static_tbind 的实参绑定
 
     # 目标类不在 registry（被截断的内部类如 jdk.internal.*）→ 生成 panic 存根
     if cls and not _class_known(cls, registry):
@@ -412,7 +446,9 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
         rust_mname = _safe_field(_mangle_if_overloaded(cls, mname, comment, registry))
-        turbofish = _static_call_turbofish(cls, class_name, sim, registry)
+        turbofish = _static_call_turbofish(cls, class_name, sim, registry, _static_tbind)
+        # 同类静态调用的 turbofish 采用了实参绑定 → 返回类型同步替换
+        turbofish_bound = bool(turbofish) and _rust_type_to_binary(cls, registry) == class_name and bool(sim.class_type_params)
         call = f"{_cls_path}{cls}{turbofish}::{rust_mname}({', '.join(args)})"
         needs_q = True
 
@@ -432,6 +468,9 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             cls, mname, params, ret, registry,
             caller_class=class_name, caller_tparams=sim.class_type_params,
         )
+        if _sig_ret_s is not None and _static_tbind and turbofish_bound:
+            from ..type_map import substitute_type_params as _subst_tp
+            _sig_ret_s = _subst_tp(_sig_ret_s, _static_tbind)
         if rust_ret == 'Object':
             if _sig_ret_s is not None and _sig_ret_s != 'Object':
                 sim.emit(RawStmt(f"let {v} = Object::from_any({call}{q});"))
