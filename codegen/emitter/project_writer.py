@@ -33,6 +33,13 @@ def _write(path: str, content: str) -> None:
         except Exception:
             pass
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    if os.path.exists(path):
+        try:
+            with open(path, encoding='utf-8') as _ef:
+                if _ef.read() == content:
+                    return  # 内容相同，跳过写入保留 mtime
+        except Exception:
+            pass
     with open(path, 'w') as f:
         f.write(content)
 

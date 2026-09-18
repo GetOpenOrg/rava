@@ -42,6 +42,45 @@ def fmt_dur(sec: float) -> str:
     return f"{int(m)}m{s:04.1f}s"
 
 
+def _copy_if_changed_file(src: str, dst: str) -> None:
+    """复制单个文件，内容相同则跳过（保留 mtime）。"""
+    os.makedirs(os.path.dirname(dst) or '.', exist_ok=True)
+    if os.path.exists(dst):
+        with open(src, 'rb') as f1, open(dst, 'rb') as f2:
+            if f1.read() == f2.read():
+                return
+    shutil.copy2(src, dst)
+
+
+def _write_if_changed(path: str, content: str) -> None:
+    """写文本文件，内容相同则跳过（保留 mtime）。"""
+    if os.path.exists(path):
+        try:
+            with open(path, encoding='utf-8') as f:
+                if f.read() == content:
+                    return
+        except Exception:
+            pass
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+
+def _copy_if_changed(src: str, dst: str) -> None:
+    """递归复制目录，内容未变的文件跳过（保留 mtime），让 cargo 跳过重编。"""
+    for root, dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        dst_root = os.path.join(dst, rel) if rel != '.' else dst
+        os.makedirs(dst_root, exist_ok=True)
+        for fname in files:
+            src_file = os.path.join(root, fname)
+            dst_file = os.path.join(dst_root, fname)
+            if os.path.exists(dst_file):
+                with open(src_file, 'rb') as f1, open(dst_file, 'rb') as f2:
+                    if f1.read() == f2.read():
+                        continue
+            shutil.copy2(src_file, dst_file)
+
+
 def prepare_scratch(out_dir: str, clean: bool = False) -> None:
     """将 runtime/ 手写代码 overlay 进 scratch 工作区。
 
@@ -63,10 +102,10 @@ def prepare_scratch(out_dir: str, clean: bool = False) -> None:
 
     rt_src = os.path.join(RUNTIME_JAVA_RUNTIME, 'src')
     dst_src = os.path.join(out_dir, 'java_runtime', 'src')
-    shutil.copytree(rt_src, dst_src, dirs_exist_ok=True)
+    _copy_if_changed(rt_src, dst_src)
 
-    shutil.copy2(os.path.join(RUNTIME_JAVA_RUNTIME, 'build.rs'),
-                 os.path.join(out_dir, 'java_runtime', 'build.rs'))
+    _copy_if_changed_file(os.path.join(RUNTIME_JAVA_RUNTIME, 'build.rs'),
+                          os.path.join(out_dir, 'java_runtime', 'build.rs'))
 
     cargo_toml = open(os.path.join(RUNTIME_JAVA_RUNTIME, 'Cargo.toml'),
                       encoding='utf-8').read()
@@ -79,9 +118,7 @@ def prepare_scratch(out_dir: str, clean: bool = False) -> None:
         'version = "0.1.0"',
         f'version = "{scratch_pkg_version(out_dir)}"')
     os.makedirs(os.path.join(out_dir, 'java_runtime'), exist_ok=True)
-    with open(os.path.join(out_dir, 'java_runtime', 'Cargo.toml'), 'w',
-              encoding='utf-8') as f:
-        f.write(cargo_toml)
+    _write_if_changed(os.path.join(out_dir, 'java_runtime', 'Cargo.toml'), cargo_toml)
 
     # lib.rs 声明的顶层包目录兜底（占位 mod.rs，codegen 有生成类时覆写）
     for pkg in ('java', 'jdk', 'sun'):

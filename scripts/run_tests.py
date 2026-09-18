@@ -6,8 +6,9 @@
     python3 scripts/run_tests.py                         # 全量运行（顺序）
     python3 scripts/run_tests.py -j 4                    # 并行运行，最多 4 个并发
     python3 scripts/run_tests.py -j 0                    # 并行运行，并发数 = CPU 核数
-    python3 scripts/run_tests.py --filter 01_basics      # 只跑指定目录
-    python3 scripts/run_tests.py --filter TestArrayList  # 只跑指定类名
+    python3 scripts/run_tests.py --filter 01_basics          # 只跑指定目录
+    python3 scripts/run_tests.py --filter TestArrayList      # 只跑指定类名
+    python3 scripts/run_tests.py --filter 01 02 03           # 多个 filter（任意匹配）
     python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt
     python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比
 
@@ -59,10 +60,10 @@ def _run(cmd: list[str], cwd: Path, capture: bool = True,
     return subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True, env=env)
 
 
-def _discover(filter_str: str | None) -> list[Path]:
+def _discover(filter_str: list[str] | None) -> list[Path]:
     files = sorted(E2E.rglob("*.java"))
     if filter_str:
-        files = [f for f in files if filter_str in str(f)]
+        files = [f for f in files if any(s in str(f) for s in filter_str)]
     return files
 
 
@@ -146,7 +147,7 @@ def _update_expected(java_file: Path) -> bool:
 
 # ── 顺序模式 ─────────────────────────────────────────────────────────
 
-def _run_sequential(filter_str: str | None, no_run: bool) -> int:
+def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -214,7 +215,7 @@ def _run_sequential(filter_str: str | None, no_run: bool) -> int:
 
 # ── 并行模式 ─────────────────────────────────────────────────────────
 
-def _run_parallel(filter_str: str | None, jobs: int) -> int:
+def _run_parallel(filter_str: list[str] | None, jobs: int) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -350,7 +351,7 @@ def _run_parallel(filter_str: str | None, jobs: int) -> int:
 
 # ── 入口 ─────────────────────────────────────────────────────────────
 
-def run_tests(filter_str: str | None, no_run: bool, update_expected: bool, jobs: int) -> int:
+def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool, jobs: int) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -371,7 +372,7 @@ def run_tests(filter_str: str | None, no_run: bool, update_expected: bool, jobs:
 def main():
     global OUT, SHARED_TARGET
     ap = argparse.ArgumentParser(description="java_rta 端到端测试框架")
-    ap.add_argument("--filter",          metavar="STR", help="只测试路径中包含此字符串的文件")
+    ap.add_argument("--filter",          metavar="STR", nargs="+", help="只测试路径中包含任意指定字符串的文件（可传多个）")
     ap.add_argument("--no-run",          action="store_true", help="只生成 Rust，不执行对比（仅顺序模式）")
     ap.add_argument("--update-expected", action="store_true", help="重新生成 expected/*.txt（用 java 运行）")
     ap.add_argument("--out-dir",         metavar="DIR", default=None,
