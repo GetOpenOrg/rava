@@ -194,26 +194,36 @@ def _compute_all_supertypes(ci: ClassInfo, registry: dict | None) -> list[str]:
 
 
 _TO_STRING_SIG = ('toString', '()Ljava/lang/String;')
+_HASH_CODE_SIG = ('hashCode', '()I')
+_EQUALS_SIG = ('equals', '(Ljava/lang/Object;)Z')
 
 
-def _to_string_vtable_owner(ci: ClassInfo, registry: 'dict | None',
-                            handwritten_methods: 'dict | None') -> 'str | None':
-    """本类视角下 toString() 所属 vtable 的 Rust 类名；链上无（翻译的）声明则 None。"""
+def _root_method_vtable_owner(ci: ClassInfo, registry: 'dict | None',
+                              handwritten_methods: 'dict | None',
+                              sig: tuple) -> 'str | None':
+    """本类视角下根类虚方法 `sig`（toString / hashCode / equals）所属 vtable 的 Rust 类名；
+    链上无声明、声明是 wrapper 上的手写 inherent 方法、或方法名带重载后缀则 None。"""
     from .vtable_util import _find_virtual_in
+    from ..type_map import method_name_is_mangled
     cur = ci
     seen: set[str] = set()
     while cur is not None and cur.name not in seen:
         seen.add(cur.name)
         decl = next((m for m in (cur.methods or [])
-                     if (m.name, m.descriptor) == _TO_STRING_SIG and not m.is_static), None)
+                     if (m.name, m.descriptor) == sig and not m.is_static), None)
         if decl is not None:
             _hand = ((handwritten_methods or {}).get(cur.name) or {}).get('methods', ())
-            if safe_ident(decl.name) in _hand:
+            if safe_ident(decl.name) in _hand or method_name_is_mangled(cur, decl, registry):
                 return None
             return _find_virtual_in(decl, cur, registry, handwritten_methods) or None
         sc = cur.super_class
         cur = registry.get(sc) if (registry and sc and sc != _OBJECT_CLASS) else None
     return None
+
+
+def _to_string_vtable_owner(ci: ClassInfo, registry: 'dict | None',
+                            handwritten_methods: 'dict | None') -> 'str | None':
+    return _root_method_vtable_owner(ci, registry, handwritten_methods, _TO_STRING_SIG)
 
 
 def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
@@ -238,7 +248,7 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         纯记录用途，宏只读其中少数几个键；
       - 宏展开输入：superclass（Rust 类型文本）/ superclass_fields（codegen 展平）/
         all_supertypes（instanceof 静态展开）/ is_interface /
-        to_string_vtable / has_hash_code_method。
+        to_string_vtable / hash_code_vtable / equals_vtable。
 
     superclass_fields 的键值对由调用方（class_writer）从 registry 展平整条继承链得到，
     顺序必须是父类字段在前（JVM 内存布局，方案 §6）。
@@ -309,17 +319,13 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         _ts_owner = _to_string_vtable_owner(ci, registry, handwritten_methods)
         if _ts_owner:
             lines.append(f'#[to_string_vtable  = "{_ts_owner}"]')
-        # 仅当 hashCode 是当前类的 VirtualDefine 时才生成桥接属性。
-        # VirtualOverride（virtual_in 为祖先类名）时，宏内 UFCS 调用
-        # `ClassName__VTable::hashCode(self)` 会触发 E0782，因为该方法
-        # 并未声明在 ClassName__VTable 自身，而是声明在祖先的 VTable 中。
-        _hm = next((m for m in (ci.methods or [])
-                    if m.name == 'hashCode' and m.descriptor == '()I'), None)
-        if _hm:
-            _class_rust = _short_cls_g(ci.name)
-            _vin = getattr(_hm, 'virtual_in', None)
-            if _vin == _class_rust:
-                lines.append('#[has_hash_code_method = true]')
+        # 根类 hashCode / equals 的运行期目标：同 toString，经声明所属 vtable 分派
+        _hc_owner = _root_method_vtable_owner(ci, registry, handwritten_methods, _HASH_CODE_SIG)
+        if _hc_owner:
+            lines.append(f'#[hash_code_vtable  = "{_hc_owner}"]')
+        _eq_owner = _root_method_vtable_owner(ci, registry, handwritten_methods, _EQUALS_SIG)
+        if _eq_owner:
+            lines.append(f'#[equals_vtable     = "{_eq_owner}"]')
         if impl_methods:
             lines.append(f'#[impl_methods      = "{";".join(sorted(impl_methods))}"]')
     return lines
@@ -397,6 +403,8 @@ def _java_method_attr(m: ParsedMethod) -> str:
     if getattr(m, 'virtual_in', ''):
         vin = m.virtual_in.replace('"', '\\"')
         parts.append(f'virtual_in = "{vin}"')
+    if getattr(m, 'handwritten_body', False):
+        parts.append('body = "handwritten"')
     if m.method_parameters:
         mp_str = ';'.join(f'{n}:{a}' for n, a in m.method_parameters).replace('"', '\\"')
         parts.append(f'method_parameters = "{mp_str}"')

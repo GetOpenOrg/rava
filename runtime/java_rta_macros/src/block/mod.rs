@@ -643,6 +643,15 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     }
                 });
             }
+        } else if attr_str(&f.attrs, "body").as_deref() == Some("handwritten") {
+            // 方法体由共置 `_impl.rs` 手写为 wrapper 上的 `__impl_<method>` → 经钩子重建 wrapper 后执行
+            let impl_name = format_ident!("__impl_{}", mname);
+            vtable_default_methods.push(quote! {
+                #effective_sig {
+                    let __w = self.#as_self_hook();
+                    __w.#impl_name(#(#param_names_for_default),*)
+                }
+            });
         } else {
             // 无方法体（abstract）→ stub，子类必须覆盖
             let msg = format!("stub: {}.{}:{}", binary, mname_str, desc);
@@ -717,18 +726,32 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     };
     let patterns = check_types.iter().map(|s| quote! { #s });
 
-    // 当类声明了 hashCode()I 时，将 vtable 方法桥接到 ObjectVTable::hashCode（返回 i32）
-    let hash_code_inner_bridge: proc_macro2::TokenStream = if meta.has_hash_code_method {
-        quote! {
-            fn hashCode(&self) -> i32 {
-                match #vtable_trait_ident::hashCode(self) {
-                    Ok(h) => h,
-                    Err(_) => 0,
+    // 继承链上有翻译出（或手写体）的 hashCode()I / equals(Object)Z 时，根类的对应入口桥接到
+    // 该虚方法（经所属 vtable 分派，子类覆盖自动生效）——与 toString 同一机制
+    let hash_code_inner_bridge: proc_macro2::TokenStream = match &meta.hash_code_vtable {
+        Some(owner) => {
+            let owner_vtable = format_ident!("{}__VTable", owner);
+            quote! {
+                fn hashCode(&self) -> i32 {
+                    match #owner_vtable::hashCode(self) {
+                        Ok(h) => h,
+                        Err(e) => panic!("hashCode 抛出异常: {:?}", e),
+                    }
                 }
             }
         }
-    } else {
-        quote! {}
+        None => quote! {},
+    };
+    let equals_inner_bridge: proc_macro2::TokenStream = match &meta.equals_vtable {
+        Some(owner) => {
+            let owner_vtable = format_ident!("{}__VTable", owner);
+            quote! {
+                fn equals(&self, other: Object) -> Result<bool> {
+                    #owner_vtable::equals(self, other)
+                }
+            }
+        }
+        None => quote! {},
     };
 
     // 接口视图查询：按调用方 slot 的（擦除）接口类型把自身填入
@@ -784,6 +807,23 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }).collect();
 
+    // 同一组视图的类型驱动形式（`Object::downcast::<T>()`）：slot 为 `Option<祖先 wrapper>` 时写入
+    let ancestor_slot_views: Vec<TokenStream2> = meta.all_superclasses.iter().map(|anc_name| {
+        let anc_ident = format_ident!("{}", anc_name);
+        let anc_vtable = format_ident!("{}__VTable", anc_name);
+        let atag = meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
+        quote! {
+            if let Some(s) = slot.downcast_mut::<::std::option::Option<#anc_ident #atag>>() {
+                *s = ::std::option::Option::Some(#anc_ident::__from_parts(
+                    ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #anc_vtable #atag>,
+                    rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    false,
+                ));
+                return true;
+            }
+        }
+    }).collect();
+
     // Object.clone() 的逐字段浅拷贝：每个字段新建存储单元，值按 Java 语义拷贝
     // （基本类型拷贝值，引用类型拷贝引用）。
     let copy_field_inits: Vec<TokenStream2> = meta.superclass_fields.iter()
@@ -823,6 +863,26 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     #(#ancestor_views)*
                     ::std::option::Option::None
                 }
+                fn __view_into(
+                    &self,
+                    any: ::std::rc::Rc<dyn ::std::any::Any>,
+                    slot: &mut dyn ::std::any::Any,
+                ) -> bool {
+                    let rc = match any.downcast::<#inner_ident #ty_g>() {
+                        Ok(rc) => rc,
+                        Err(_) => return false,
+                    };
+                    if let Some(s) = slot.downcast_mut::<::std::option::Option<#struct_ident #ty_g>>() {
+                        *s = ::std::option::Option::Some(#struct_ident {
+                            vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                            any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                            _jvm_null: false,
+                        });
+                        return true;
+                    }
+                    #(#ancestor_slot_views)*
+                    false
+                }
                 fn __shallow_copy(&self) -> ::std::option::Option<Object> {
                     let rc = ::std::rc::Rc::new(#inner_ident {
                         #(#copy_field_inits,)*
@@ -836,6 +896,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     ::std::option::Option::Some(Object::from(copy))
                 }
                 #hash_code_inner_bridge
+                #equals_inner_bridge
                 #interface_query
                 #to_string_inner_bridge
             }
@@ -1016,6 +1077,17 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                                     }
                                 });
                             }
+                        }
+                        None if attr_str(&f.attrs, "body").as_deref() == Some("handwritten") => {
+                            let impl_name = format_ident!("__impl_{}", sig.ident);
+                            let args = param_idents(sig);
+                            items.push(quote! {
+                                #(#keep_attrs)*
+                                #sig {
+                                    let __w = <Self as #vtable_trait_ident #ty_g>::#as_self_hook(self);
+                                    __w.#impl_name(#(#args),*)
+                                }
+                            });
                         }
                         None => {
                             let mname = sig.ident.to_string();
@@ -1229,12 +1301,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         } else {
             quote! {}
         };
-        let hash_code_fwd: TokenStream2 = if meta.has_hash_code_method {
-            quote! {
-                fn hashCode(&self) -> i32 { ObjectVTable::hashCode(&*self.vtable) }
+        let hash_code_fwd: TokenStream2 = quote! {
+            fn hashCode(&self) -> i32 { ObjectVTable::hashCode(&*self.vtable) }
+            fn equals(&self, other: Object) -> Result<bool> {
+                ObjectVTable::equals(&*self.vtable, other)
             }
-        } else {
-            quote! {}
         };
         quote! {
             impl #impl_g ObjectVTable for #struct_ident #ty_g #where_c {
@@ -1253,6 +1324,13 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     type_id: &str,
                 ) -> ::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>> {
                     self.vtable.__view_as(::std::rc::Rc::clone(&self.any), type_id)
+                }
+                fn __view_into(
+                    &self,
+                    _any: ::std::rc::Rc<dyn ::std::any::Any>,
+                    slot: &mut dyn ::std::any::Any,
+                ) -> bool {
+                    self.vtable.__view_into(::std::rc::Rc::clone(&self.any), slot)
                 }
                 #to_string_fwd
                 #hash_code_fwd
@@ -1580,7 +1658,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let from_object_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
             // Java checkcast 语义：运行时类是本类或其子类均成立（子类对象按运行时类重建本类视图）
-            fn from(obj: #obj) -> Self { obj.checkcast::<Self>(#binary_name) }
+            // null 通过任何 checkcast（JVMS §6.5 checkcast），得到本类的 null 引用
+            fn from(obj: #obj) -> Self {
+                if obj.0.is_jvm_null() { return Self::default(); }
+                obj.checkcast::<Self>(#binary_name)
+            }
         }
     };
 

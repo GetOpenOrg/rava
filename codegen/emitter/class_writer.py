@@ -844,6 +844,17 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         # 计算虚方法归属（vtable 架构）
         m.virtual_in = _find_virtual_in(m, ci, registry, new_format_map)
 
+        # 虚方法的方法体由共置 `_impl.rs` 手写为 `__impl_<method>`：声明留在宏块内（进 vtable、
+        # 参与覆盖与根类方法桥接），宏经 wrapper 钩子执行手写体
+        if m.virtual_in and ('__impl_' + fn_name_check) in _nf_covered:
+            m.handwritten_body = True
+            _decl = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry,
+                                     class_type_params=class_type_params)
+            _decl_sig = next(ln.strip() for ln in _decl.split('\n') if ln.lstrip().startswith('pub fn '))
+            _decl_sig = _decl_sig[:-1].rstrip() if _decl_sig.endswith('{') else _decl_sig
+            method_blocks.append(_java_method_attr(m) + '\n' + _decl_sig + ';')
+            continue
+
         attr_line = _java_method_attr(m)
         # 判断该方法是否需要翻译字节码：
         #   1. native / abstract → 永远生成 stub（panic!）

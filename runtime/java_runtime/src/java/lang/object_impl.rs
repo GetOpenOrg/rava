@@ -42,7 +42,7 @@ impl Object {
         if let (Some(a), Some(b)) = (s1, s2) {
             return Ok(format!("{}", a) == format!("{}", b));
         }
-        Ok(false)
+        self.0.equals(other)
     }
 
     #[jvm_native]

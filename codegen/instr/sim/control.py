@@ -69,14 +69,11 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 return True
             elif src_name != 'Object' and cast_rust not in ('Object', '()', src_name):
                 if _is_subtype(cast_rust.split('<')[0], src_name.split('<')[0], registry):
-                    # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode，E0282）：
-                    # 经 Object::from_any 保留运行时值再 downcast 恢复子类型，
-                    # 不能用 Default::default() 占位（会丢失接收者类型导致无法推断）
-                    # 用 Clone::clone 避免 from_any(val) 消耗所有权导致后续 E0382
-                    _se = render_expr(expr)
-                    if not (_se.startswith('Clone::clone(') or _se.startswith('Default::')):
-                        _se = f"Clone::clone(&{_se})"
-                    expr = RawExpr(f"Object::from_any({_se}).downcast::<{cast_rust}>()")
+                    # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode）：checkcast 语义 ——
+                    # 经 Object 边界（保持对象标识与运行时类）按目标类取回子类视图，null 原样通过
+                    _boxed = _coerce_to_object(render_expr(expr), src_name, registry,
+                                               sim.class_type_params)
+                    expr = RawExpr(f"<{cast_rust}>::from({_boxed})")
                 else:
                     # 静态类型互不为子类型（擦除泛型数组 `(E[][]) Arrays.copyOf(..)`、交叉转型）：
                     # checkcast 是运行时校验 → 经 Object 边界按目标类型取回

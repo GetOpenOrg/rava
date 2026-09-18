@@ -90,4 +90,33 @@ impl BaseLocale {
 
     #[jvm_boundary]
     pub fn getVariant(&self) -> Result<String> { Ok(self.__get_variant()) }
+
+    /// BaseLocale.hashCode()I 的方法体（虚方法：声明在生成的宏块内，经 vtable 分派到此）。
+    /// 与 JDK 一致：h = language.hashCode(); h = 31*h + script/region/variant.hashCode()
+    #[jvm_boundary]
+    pub fn __impl_hashCode(&self) -> Result<i32> {
+        let mut h: i32 = 0;
+        for part in [self.__get_language(), self.__get_script(), self.__get_region(), self.__get_variant()] {
+            h = h.wrapping_mul(31).wrapping_add(string_hash(&text(&part)));
+        }
+        Ok(h)
+    }
+
+    /// BaseLocale.equals(Object)Z 的方法体：四元组按值比较
+    #[jvm_boundary]
+    pub fn __impl_equals(&self, obj: Object) -> Result<bool> {
+        if !obj.is_instance_of(Self::BINARY_NAME) {
+            return Ok(false);
+        }
+        let other = BaseLocale::from(obj);
+        Ok(text(&self.__get_language()) == text(&other.__get_language())
+            && text(&self.__get_script()) == text(&other.__get_script())
+            && text(&self.__get_region()) == text(&other.__get_region())
+            && text(&self.__get_variant()) == text(&other.__get_variant()))
+    }
+}
+
+/// java.lang.String.hashCode 的取值：s[0]*31^(n-1) + ... + s[n-1]（UTF-16 码元）
+fn string_hash(s: &str) -> i32 {
+    s.encode_utf16().fold(0i32, |h, unit| h.wrapping_mul(31).wrapping_add(unit as i32))
 }

@@ -39,9 +39,19 @@ impl Object {
         if let Some(same) = (self as &dyn std::any::Any).downcast_ref::<T>() {
             return Clone::clone(same);
         }
-        Clone::clone(self.0.as_any()
-            .downcast_ref::<T>()
-            .expect("ClassCastException"))
+        if let Some(same) = self.0.as_any().downcast_ref::<T>() {
+            return Clone::clone(same);
+        }
+        // 运行时类是 T 的子类（引用以祖先 / 子类的静态类型流转）：按运行时类重建 T 视图
+        let unused: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(());
+        let mut slot: Option<T> = None;
+        if self.0.__view_into(unused, &mut slot) {
+            if let Some(view) = slot {
+                return view;
+            }
+        }
+        panic!("ClassCastException: {} cannot be cast to {}",
+               self.0.__class_name(), std::any::type_name::<T>())
     }
 
     /// JVM checkcast：把引用还原为类 `T`（binary name 为 `binary_name`）的视图。

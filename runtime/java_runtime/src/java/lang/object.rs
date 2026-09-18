@@ -16,6 +16,10 @@ pub trait ObjectVTable: 'static {
     /// java.lang.Object.hashCode()I 默认实现
     fn hashCode(&self) -> i32 { 0 }
 
+    /// java.lang.Object.equals(Object)Z 的覆盖入口：引用相等已由调用方（`Object::equals`）判定，
+    /// 此处只承载运行时类的覆盖实现；未覆盖的类 → false。
+    fn equals(&self, _other: Object) -> crate::error::Result<bool> { Ok(false) }
+
     /// 用于 Display/Debug 的 Rust 字符串（内部用途，避免与 Java toString() -> Result<String> 冲突）
     fn __obj_str(&self) -> std::string::String {
         std::any::type_name::<Self>().to_owned()
@@ -63,6 +67,14 @@ pub trait ObjectVTable: 'static {
         _any: Rc<dyn std::any::Any>,
         _type_id: &str,
     ) -> Option<Box<dyn std::any::Any>> { None }
+
+    /// checkcast 的类型驱动形式：`slot` 是 `Option<T>`，`T` 为本类或任一祖先类的 wrapper 类型时
+    /// 按运行时类重建该视图写入 `slot` 并返回 true（保留运行时类的覆盖实现）；否则返回 false。
+    fn __view_into(
+        &self,
+        _any: Rc<dyn std::any::Any>,
+        _slot: &mut dyn std::any::Any,
+    ) -> bool { false }
 
     /// `Object.clone()` 的 native 语义：新建同运行时类的对象，逐字段拷贝（浅拷贝）。
     /// java_class! 宏对生成类自动 override；无字段存储的值（装箱基本类型等）返回 None。
@@ -133,6 +145,7 @@ impl_vtable_primitive!(f64, java_fmt_f64);
 impl ObjectVTable for () {
     fn __obj_str(&self) -> std::string::String { "null".to_owned() }
     fn as_any(&self) -> &dyn std::any::Any { self }
+    fn is_jvm_null(&self) -> bool { true }
 }
 
 /// 数组类型（Rc<RefCell<Vec<T>>>）自动装入 Object

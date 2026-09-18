@@ -195,7 +195,9 @@ pub(crate) struct ClassMeta {
     pub is_interface: bool,
     /// toString() 所属 vtable 的 Rust 类名（本类或祖先）；None = 继承链上没有翻译出的 toString。
     pub to_string_vtable: Option<String>,
-    pub has_hash_code_method: bool,
+    /// hashCode()I / equals(Object)Z 所属 vtable 的 Rust 类名（本类或祖先）；None = 沿用根类实现。
+    pub hash_code_vtable: Option<String>,
+    pub equals_vtable: Option<String>,
     /// 共置 `_impl.rs` 手写 impl 块提供的 wrapper inherent 方法名（不在宏块内、不进 vtable）。
     pub impl_methods: Vec<String>,
 }
@@ -243,8 +245,10 @@ impl ClassMeta {
                 m.is_interface = lit_bool(attr)?;
             } else if path.is_ident("to_string_vtable") {
                 m.to_string_vtable = Some(lit_str(attr)?);
-            } else if path.is_ident("has_hash_code_method") {
-                m.has_hash_code_method = lit_bool(attr)?;
+            } else if path.is_ident("hash_code_vtable") {
+                m.hash_code_vtable = Some(lit_str(attr)?);
+            } else if path.is_ident("equals_vtable") {
+                m.equals_vtable = Some(lit_str(attr)?);
             } else if path.is_ident("impl_methods") {
                 let s = lit_str(attr)?;
                 m.impl_methods =
