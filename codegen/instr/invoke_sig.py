@@ -325,12 +325,12 @@ def _coerce_arg(
         # Rust 无隐式子类型化，K 类型的值不能直接当 Object 用 → 装箱为
         # Object(Rc<JvmRef<K>>)，callee 内 downcast::<K>() 可还原。
         if actual in sim.class_type_params:
-            return f"Object::from_any(Clone::clone(&{e}))"
+            return _coerce_to_object(e, actual, registry, sim.class_type_params)
         if e == 'this':
             # 构造器（fn new）里没有 self 关键字，统一用局部变量 this
             # （实例方法里 let this = self;，两者均可见）
             return f"Object::from_any(Clone::clone(this))"
-        return _coerce_to_object(e, actual)
+        return _coerce_to_object(e, actual, registry, sim.class_type_params)
     if expected in ('bool', 'i8', 'i16', 'u16') and actual != expected:
         return _coerce_value(e, e_ty_node, expected)
     if expected == 'i32' and actual in ('i8', 'i16', 'u16', 'bool'):

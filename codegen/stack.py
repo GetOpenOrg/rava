@@ -127,8 +127,11 @@ class StackSim:
                  return_type: str = 'Object',
                  is_constructor: bool = False,
                  class_type_params: list[str] | None = None,
-                 in_vtable_body: bool = False):
+                 in_vtable_body: bool = False,
+                 box_object=None):
         self.stack:      list[tuple[RsExpr, RsType]] = []
+        # (已取得所有权的表达式, Rust 类型) → Object 引用表达式（保持对象身份的向上转型）
+        self._box_object = box_object or (lambda e, _t: f"Object::from_any({e})")
         self._ctr:       int                         = 0
         self.locals:     dict[int, tuple]            = {}   # slot → (name, RsType, is_new)
         self.stmts:      list[RsStmt]                = []
@@ -417,7 +420,7 @@ class StackSim:
                 and getattr(ty, 'name', '') not in _SCALAR_TYPE_NAMES):
             # 声明为 Object/接口的变量在同一作用域内再赋入具体类值：Java 隐式上转 → 装箱后赋值，
             # 不按值类型 let 阴影（阴影会让按 Object 生成的 dispatch 作用在具体 wrapper 上）
-            expr = RawExpr(f"Object::from_any({render_expr(_clone_moved_var(expr, ty))})")
+            expr = RawExpr(self._box_object(render_expr(_clone_moved_var(expr, ty)), render_type(ty)))
             ty = RsNamed('Object')
         if slot in self.locals and decl_name is not None and self.locals[slot][0] != decl_name:
             # slot 被另一个 Java 变量复用：按新变量的声明名重新 let 声明
@@ -437,7 +440,8 @@ class StackSim:
             # （if (s == null) s = "null"）：装箱后赋回原形参，
             # 不能用 let 阴影（阴影只在当前块内可见，块外仍读到旧值且类型不一致）。
             _src = render_expr(_clone_moved_var(expr, ty))
-            self.stmts.append(AssignStmt(Var(self.locals[slot][0]), RawExpr(f"Object::from_any({_src})")))
+            self.stmts.append(AssignStmt(Var(self.locals[slot][0]),
+                                         RawExpr(self._box_object(_src, render_type(ty)))))
             return
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]

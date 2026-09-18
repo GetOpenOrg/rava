@@ -35,10 +35,18 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         if expr_s == 'this' and not sim.is_static:
             expr_s = 'Clone::clone(this)'
         elif ret_ty == 'Object' and actual_ty not in ('Object', '()'):
-            expr_s = _coerce_to_object(expr_s, actual_ty)
+            expr_s = _coerce_to_object(expr_s, actual_ty, registry, _ctparams)
         elif ret_ty != 'Object' and actual_ty == 'Object':
-            # java_class! 宏对所有类型参数自动加 Default bound，直接用 Default::default()
-            expr_s = 'Default::default()'
+            # Object 引用按声明的返回类型返回 = javac 的 checkcast（类型变量位置为 unchecked cast）：
+            # 类型变量（宏补 From<Object> bound）与类 wrapper 经 From<Object> 取回；
+            # null 字面量 / 无运行时类的返回类型取 null 值
+            from ...type_map import _registry_short_index
+            _ret_ci = _registry_short_index(registry).get(ret_ty.split('<')[0].strip()) if registry else None
+            if expr_s != 'Object::default()' and (
+                    ret_ty in _ctparams or (_ret_ci is not None and not _ret_ci.is_interface)):
+                expr_s = f"From::from({expr_s})"
+            else:
+                expr_s = 'Default::default()'
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty)
               and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):

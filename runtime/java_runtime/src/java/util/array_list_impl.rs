@@ -1,16 +1,7 @@
 use crate::prelude::*;
 use super::array_list::ArrayList;
 
-fn e_to_object<E: Clone + 'static>(e: E) -> Object {
-    let any_val: &dyn std::any::Any = &e;
-    if let Some(obj) = any_val.downcast_ref::<Object>() {
-        obj.clone()
-    } else {
-        Object::from_any(e)
-    }
-}
-
-impl<E: Clone + Default + 'static> ArrayList<E> {
+impl<E: Clone + Default + 'static + From<Object> + Into<Object>> ArrayList<E> {
     #[jvm_native]
     pub fn add_obj_arr_obj_i(&self, e: E, elementData_arg: JArray<Object>, s: i32) -> Result<()> {
         let this = self;
@@ -27,7 +18,7 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
             this.__set_elementData(Clone::clone(&new_data));
             elementData = new_data;
         }
-        elementData.set(s, e_to_object(e));
+        elementData.set(s, e.into());
         this.__set_size(s.wrapping_add(1i32));
         Ok(())
     }

@@ -826,6 +826,55 @@ def superclass_type_args(ci, registry) -> list[str]:
     return [a if _type_arg_is_resolvable(a, own_params, registry) else 'Object' for a in args]
 
 
+def superinterface_type_args(ci, registry) -> 'dict[str, list[str]]':
+    """直接超接口的 Rust 类型实参（以 ci 的有效类型参数表达）：{接口 binary name → [实参]}。
+
+    取自类级 Signature 的 SuperinterfaceSignature；raw 继承 / 无 Signature / 不可解析的实参
+    按擦除语义取 Object。非泛型接口 → []。
+    """
+    out: dict[str, list[str]] = {}
+    if not registry:
+        return out
+    own_params = effective_class_type_params(ci, registry)
+    parsed: dict[str, list[str]] = {}
+    sig = ci.generic_signature or ''
+    if sig:
+        i = 0
+        if sig.startswith('<'):
+            depth = 0
+            while i < len(sig):
+                if sig[i] == '<':
+                    depth += 1
+                elif sig[i] == '>':
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                i += 1
+        i = _skip_field_type_sig(sig, i)  # SuperclassSignature
+        while i < len(sig) and sig[i] == 'L':
+            end = _skip_field_type_sig(sig, i)
+            j = i + 1
+            while j < end and sig[j] not in ('<', ';', '.'):
+                j += 1
+            name = sig[i + 1:j]
+            args: list[str] = []
+            if j < end and sig[j] == '<':
+                args, _ = _parse_type_args(sig, j, own_params, registry)
+            parsed[name] = args
+            i = end
+    for iface in (ci.interfaces or []):
+        iface_ci = registry.get(iface)
+        if iface_ci is None:
+            continue
+        params = effective_class_type_params(iface_ci, registry)
+        args = parsed.get(iface, [])
+        if len(args) != len(params):
+            args = ['Object'] * len(params)
+        out[iface] = [a if _type_arg_is_resolvable(a, own_params, registry) else 'Object' for a in args]
+    return out
+
+
 def outer_instance_rust_type(outer_bin: str, decl_params: list, registry) -> str:
     """外部实例在内部类视角下的 Rust 类型：外部类 + 其有效形参中被内部类继承的同名
     类型变量（如 ArrayList$Itr → ArrayList<E>）；未继承的形参取 Object。

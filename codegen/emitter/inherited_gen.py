@@ -77,7 +77,7 @@ class ClassEmission:
             if fn_name is None or '&self' not in sig_line:
                 continue
             signature = sig_line.rstrip()
-            if signature.endswith('{'):
+            if signature.endswith(('{', ';')):
                 signature = signature[:-1].rstrip()
             signature = re.sub(r'\bmut\s+(?=[A-Za-z_][A-Za-z0-9_]*\s*:)', '', signature)
             access = _ACCESS_RE.search(rest)

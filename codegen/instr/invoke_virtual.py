@@ -24,6 +24,26 @@ from .invoke_sig import (_lookup_method_sig_params, _lookup_method_sig_ret, _era
                          _coerce_arg, _split_type_args)
 
 
+def _declaring_interface(iface_ci, mname: str, descriptor: str, registry: dict) -> str:
+    """接口 iface_ci（或其超接口，广度优先）中声明实例方法 mname:descriptor 的接口 binary name。
+    根类方法的重声明（经 Object vtable 分派）、私有 / 合成方法不算接口成员 → ''。"""
+    if (mname, descriptor[:descriptor.index(')') + 1]) in _root_virtual_methods():
+        return ''
+    queue = [iface_ci]
+    seen: set[str] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur.name in seen:
+            continue
+        seen.add(cur.name)
+        for m in cur.methods:
+            if (m.name == mname and m.descriptor == descriptor and not m.is_static
+                    and not m.is_synthetic and not (m.access_flags & 0x0002)):
+                return cur.name
+        queue.extend(registry[i] for i in (cur.interfaces or []) if i in registry)
+    return ''
+
+
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
     # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
@@ -72,7 +92,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # dispatch 链枚举 Object 的全部子类；其余方法走 obj_is_bare 的多态
     # dispatch。参数已在上方 pop 循环中完成 Object::from_any 装箱。
     if obj_ty in (sim.class_type_params or ()):
-        obj_e = f"Object::from_any(Clone::clone(&{obj_e}))"
+        obj_e = f"Into::<Object>::into(Clone::clone(&{obj_e}))"
         obj_ty_node = RsNamed('Object')
         obj_ty = 'Object'
         if mname in ('equals', 'hashCode', 'toString'):
@@ -193,6 +213,29 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         # 多态 dispatch：按继承链（叶→根）依次 downcast，找到实际类型后调用方法
         # cls 是 Rust 短类名（$ 已替换为 _），需转回 binary name 查继承链
         cls_binary = _rust_type_to_binary(cls, registry) or cls
+        # 接口方法：经与接口同名的载体分派（`Into::<I<Object>>::into(obj).m()`）。
+        # 载体按擦除后的接口（itable 语义）向对象查询接口 vtable，不依赖对象的类型实参；
+        # lambda 对象由函数式接口的唯一抽象方法直接调用。不枚举实现类。
+        _iface_ci = registry.get(cls_binary)
+        if _iface_ci is not None and _iface_ci.is_interface:
+            _iface_desc = f"({''.join(params)}){ret}"
+            _decl_bin = _declaring_interface(_iface_ci, mname, _iface_desc, registry)
+            if _decl_bin:
+                if _decl_bin != cls_binary:
+                    _inherited_calls.request(cls_binary, mname, f"({''.join(params)})")
+                _iface_mname = _safe_field(_mangle_if_overloaded(_decl_bin, mname, comment, registry))
+                _iface_tps = _effective_class_type_params(_iface_ci, registry)
+                _iface_targs = f"<{', '.join(['Object'] * len(_iface_tps))}>" if _iface_tps else ''
+                # Into 全限定：接口自身可能声明名为 from 的 Java 静态方法，`Iface::from(..)` 会被其遮蔽
+                _iface_call = (f"Into::<{short_cls(cls_binary)}{_iface_targs}>::into(Clone::clone(&{obj_e}))"
+                               f".{_iface_mname}({arg_str})?")
+                if rust_ret == '()':
+                    sim.emit(RawStmt(f"{_iface_call};"))
+                else:
+                    v = sim.fresh()
+                    sim.emit(RawStmt(f"let {v}: {rust_ret} = {_iface_call};"))
+                    sim.push(Var(v), RsNamed(rust_ret))
+                return
         subtypes = _get_all_subtypes_ordered(cls_binary, registry)
         # 跨 crate 防泄漏：JDK 类文件落在 java_runtime crate，不能引用 user crate
         # 的类型。batch 并集 registry 会把用户测试类也列为 Comparable 等接口的

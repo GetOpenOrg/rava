@@ -13,6 +13,7 @@ from .attrs import to_snake, pkg_from_java
 from .method_gen import _scan_impl_files
 from .class_writer import _gen_class_rs
 from .inherited_gen import ClassEmission, resolve_inherited_members
+from .interface_gen import resolve_interface_impls, resolve_interface_inherited_members
 from .. import inherited_calls as _inherited_calls
 
 
@@ -412,6 +413,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         emissions[ci.name] = _em
 
     # 全部方法体已生成 → 继承成员需求已齐：补声明后统一落盘
+    resolve_interface_impls(emissions, registry,
+                            {k: set(v.get('methods', set())) for k, v in (new_format_map or {}).items()})
+    resolve_interface_inherited_members(emissions, registry)
     resolve_inherited_members(emissions, registry)
     for _em in emissions.values():
         _write(_em.path, _em.text)

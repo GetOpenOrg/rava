@@ -191,7 +191,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                 if len(val_ty_name) <= 2 and val_ty_name[0].isupper() and val_ty_name.rstrip('0123456789').isalpha():
                     val_str = val_str_raw
                 else:
-                    val_str = _coerce_to_object(val_str_raw, val_ty_name)
+                    val_str = _coerce_to_object(val_str_raw, val_ty_name, registry, sim.class_type_params)
             elif _reinstantiate_generic(val_str_raw, val_ty_name, ftype) is not None:
                 # raw type / 通配符字段接收精确实例化的值（如自引用的 this）
                 val_str = _reinstantiate_generic(val_str_raw, val_ty_name, ftype)

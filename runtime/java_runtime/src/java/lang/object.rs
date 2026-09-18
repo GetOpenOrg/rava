@@ -41,6 +41,16 @@ pub trait ObjectVTable: 'static {
     /// JVM null 检查辅助：Default::default() 代表 null，构造后设为 false。
     /// java_class! 宏对生成类自动 override；基本类型 / 手写类默认 false（永不为 null）。
     fn is_jvm_null(&self) -> bool { false }
+
+    /// 接口视图查询（invokeinterface 的运行时入口）：`slot` 是调用方提供的
+    /// `Option<Rc<dyn I__VTable>>`（I 为被调用的 Java 接口）；对象的运行时类实现 I 时，
+    /// 把自身以该接口的擦除 vtable 形态填入 `slot`。
+    ///
+    /// 按「擦除后的接口」选择——`slot` 的类型不含任何类型实参，与 JVM 的 itable 查找一致。
+    /// `java_class!` 宏为每个类按其 `impl Iface for Class` 块生成实现；
+    /// 默认（未实现任何接口的对象）不填 `slot`。
+    #[doc(hidden)]
+    fn __interface(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
 }
 
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────
@@ -108,6 +118,11 @@ impl<T: 'static> ObjectVTable for JvmRef<T> {
 ///   - 通过 `as_any()` + `downcast_ref` 实现类型还原
 #[derive(Clone)]
 pub struct Object(pub Rc<dyn ObjectVTable>);
+
+/// `(void) obj` —— 丢弃引用；使 `()` 满足类型实参的 `From<Object>` 约束。
+impl From<Object> for () {
+    fn from(_: Object) {}
+}
 
 impl Default for Object {
     fn default() -> Self { Object(Rc::new(())) }
