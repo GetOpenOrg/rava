@@ -634,17 +634,6 @@ def _root_virtual_methods() -> set[tuple[str, str]]:
     return _ROOT_VIRTUAL_METHODS
 
 
-def _is_root_inherited_method(class_binary: str, mname: str, descriptor: str,
-                              registry: dict | None) -> bool:
-    """class_binary 及其祖先链均未声明 mname（按参数描述符匹配），且根类声明了它
-    → True：调用应路由到根 vtable，而不是在 wrapper 上找 inherent 方法。"""
-    _pp = descriptor.split(')')[0] + ')'
-    if (mname, _pp) not in _root_virtual_methods():
-        return False
-    _owner, _ = _resolve_method_owner(class_binary, mname, registry, descriptor=descriptor)
-    return not _owner
-
-
 def _parse_field_ref(comment: str) -> tuple[str, str, str]:
     """解析 'Field java/lang/System.out:Ljava/io/PrintStream;' 格式。
     返回 (class_binary_name, field_name, descriptor)。

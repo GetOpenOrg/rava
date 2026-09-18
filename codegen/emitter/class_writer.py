@@ -72,8 +72,26 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     for _iface in (ci.interfaces or []):
         if _iface != _OBJECT_CLASS:
             _referenced.add(_iface)
+    # 注入到本类的接口 default 方法体同样在本文件内展开，其类型引用也要进作用域
+    _scan_methods = list(ci.methods)
+    if registry and ci.interfaces and not ci.is_interface:
+        _dq = list(ci.interfaces)
+        _dseen: set[str] = set()
+        while _dq:
+            _dn = _dq.pop(0)
+            if _dn in _dseen:
+                continue
+            _dseen.add(_dn)
+            _dci = registry.get(_dn)
+            if _dci is None:
+                continue
+            _dq.extend(_dci.interfaces or [])
+            _scan_methods.extend(
+                _dm for _dm in _dci.methods
+                if not _dm.is_abstract and not _dm.is_static and _dm.instrs
+            )
     # 扫描方法指令中的类型引用
-    for _m in ci.methods:
+    for _m in _scan_methods:
         for _instr in (_m.instrs or []):
             _c = _instr.comment
             if not _c:
@@ -821,11 +839,29 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             (mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name)
             for m in visible_methods if m.name not in ('<init>', '<clinit>')
         }
+        # 祖先类已实现的接口：其 default 方法已注入到该祖先（VirtualDefine），
+        # 本类经 VTable supertrait 链继承；重复注入会在 vtable 上产生同名二义（E0034）。
+        _anc_ifaces: set[str] = set()
+        _anc_cur = ci.super_class
+        _anc_seen: set[str] = set()
+        while _anc_cur and _anc_cur in registry and _anc_cur not in _anc_seen:
+            _anc_seen.add(_anc_cur)
+            _anc_ci = registry[_anc_cur]
+            _aq = list(_anc_ci.interfaces or [])
+            while _aq:
+                _an = _aq.pop(0)
+                if _an in _anc_ifaces:
+                    continue
+                _anc_ifaces.add(_an)
+                _a_ci = registry.get(_an)
+                if _a_ci is not None:
+                    _aq.extend(_a_ci.interfaces or [])
+            _anc_cur = _anc_ci.super_class
         # 预扫描：统计所有待继承 default 方法的名字（用于 default 方法之间互相冲突判断）
         default_name_counts: dict[str, int] = {}
         _pre_counted_sigs: set[tuple] = set()
         _pre_iface_queue = list(ci.interfaces)
-        _pre_visited: set[str] = set()
+        _pre_visited: set[str] = set(_anc_ifaces)
         while _pre_iface_queue:
             _iname = _pre_iface_queue.pop(0)
             if _iname in _pre_visited:
@@ -847,7 +883,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         _pre_counted_sigs.add((_dm.name, _dm_pp))
                         default_name_counts[_dm.name] = default_name_counts.get(_dm.name, 0) + 1
         iface_queue: list[str] = list(ci.interfaces)
-        visited_ifaces: set[str] = set()
+        visited_ifaces: set[str] = set(_anc_ifaces)
         while iface_queue:
             iface_name = iface_queue.pop(0)
             if iface_name in visited_ifaces:

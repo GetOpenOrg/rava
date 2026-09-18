@@ -268,6 +268,80 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
         print(f"      警告：{e}，跳过 JDK 元数据生成")
         return [], set()
 
+    def _load_class(name: str):
+        """按需解析类（不加入生成范围，仅供方法解析沿继承层次查找）。"""
+        if name not in class_cache:
+            _data = resolver.resolve(name)
+            try:
+                class_cache[name] = parse_class_bytes(_data, name) if _data is not None else None
+            except Exception:
+                class_cache[name] = None
+        return class_cache[name]
+
+    def _enqueue_declaring_method(ci, meth: str, desc: str) -> None:
+        """JVM 方法解析（JVMS §5.4.3.3）的接口分支：常量池类及其父类链都未声明
+        (meth, desc) 时，实际执行的是父接口的 default 方法。把声明接口的该方法入队，
+        使接口进入 registry、default 方法体注入实现类并进入 vtable。
+        abstract 声明无方法体，不入队（不为无体方法扩大生成范围）。
+        """
+        if meth in ('<init>', '<clinit>'):
+            return
+        _chain = []
+        _cur = ci
+        _seen: set[str] = set()
+        while _cur is not None and _cur.name not in _seen:
+            _seen.add(_cur.name)
+            _chain.append(_cur)
+            _sc = _cur.super_class
+            if not _sc or _sc in _JAVA_RUNTIME_CLASSES:
+                break
+            _cur = _load_class(_sc)
+        # 本类及父类链任一处声明了 (meth, desc) → 由类层次自身承载，不属于 default 方法解析
+        for _anc in _chain[1:]:
+            if any(m.name == meth and m.descriptor == desc for m in _anc.methods):
+                return
+        _owner = None
+        if _owner is None:
+            _iq = deque(i for _c in _chain for i in (_c.interfaces or []))
+            _iseen: set[str] = set()
+            _via: dict[str, str] = {}   # 接口 → 经由哪个子接口到达（回溯继承路径用）
+            while _iq and _owner is None:
+                _in = _iq.popleft()
+                if _in in _iseen:
+                    continue
+                _iseen.add(_in)
+                _ici = _load_class(_in)
+                if _ici is None:
+                    continue
+                _hit = next((m for m in _ici.methods
+                             if m.name == meth and m.descriptor == desc and not m.is_abstract), None)
+                if _hit is not None:
+                    _owner = (_ici, _hit)
+                    break
+                for _sup in (_ici.interfaces or []):
+                    _via.setdefault(_sup, _in)
+                    _iq.append(_sup)
+        if _owner is None:
+            return
+        # 实现类 → 声明接口之间的中间接口必须进 registry（仅类型别名级 stub），
+        # 否则 default 方法注入沿 interfaces 向上遍历时在缺失节点处断链。
+        _step = _via.get(_owner[0].name)
+        while _step is not None:
+            if (_step not in _JAVA_RUNTIME_CLASSES
+                    and not _step.startswith(_JDK_STUB_ONLY_PREFIXES)):
+                field_discover_classes.add(_step)
+            _step = _via.get(_step)
+        _oci, _om = _owner
+        if _om.is_abstract or _om.is_static or _oci.name in _JAVA_RUNTIME_CLASSES:
+            return
+        if _oci.name.startswith(_JDK_STUB_ONLY_PREFIXES):
+            field_discover_classes.add(_oci.name)
+            return
+        _key = (_oci.name, meth, desc)
+        if _key not in visited_methods:
+            visited_methods.add(_key)
+            queue.append(_key)
+
     with resolver:
         while queue:
             cls, meth, desc = queue.popleft()
@@ -295,13 +369,17 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 jdk_infos[cls] = ci
 
             # 追踪该方法的指令引用（精确匹配名字+描述符，避免重载方法误展开）
+            _declared = False
             for m in ci.methods:
                 if m.name == meth and m.descriptor == desc:
+                    _declared = True
                     enqueue_refs(m.instrs or [])
                     # T88：被调方法的描述符参数/返回类型也是类型依赖
                     # （abstract/native 方法无 instrs，签名引用的接口类型
                     # 如 iterator()Ljava/util/Iterator; 仍需进闭包生成）
                     _enqueue_desc_types(m.descriptor)
+            if not _declared:
+                _enqueue_declaring_method(ci, meth, desc)
 
         # 接口方法 → 具体实现类传播（interface dispatch 解析）
         # 场景：user 代码调 invokeinterface java/util/List.add，但 runtime 实际调用 ArrayList.add
@@ -343,9 +421,13 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 continue
             if cls not in jdk_infos:
                 jdk_infos[cls] = ci
+            _declared = False
             for m in ci.methods:
                 if m.name == meth and m.descriptor == desc:
+                    _declared = True
                     enqueue_refs(m.instrs or [])
+            if not _declared:
+                _enqueue_declaring_method(ci, meth, desc)
 
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
