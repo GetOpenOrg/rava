@@ -428,6 +428,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let self_name = struct_ident.to_string();
     let inner_ident = format_ident!("{}__inner", struct_ident);
     let vtable_trait_ident = format_ident!("{}__VTable", struct_ident);
+    // wrapper 重建钩子：`Class__VTable::__as_Class(&self) -> Class`。
+    // 每个（子）类的 __inner 为全部祖先 VTable 实现该钩子，使祖先方法体能在
+    // 「祖先 wrapper 包裹实际 __inner」的上下文中执行（trait default / super 调用）。
+    let as_self_hook = format_ident!("__as_{}", struct_ident);
 
     // 提取 superclass 的泛型参数（如 Enum<Object> → <Object>），供 vtable 继承使用
     // 注意：AngleBracketedGenericArguments 自带 <> 括号，quote! { #ab } 即为 <Object>
@@ -581,12 +585,24 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         let effective_sig = attr_str(&f.attrs, "generic_signature")
             .and_then(|gs| rebuild_sig_with_generics(&f.sig, &gs, &class_type_params))
             .unwrap_or_else(|| f.sig.clone());
-        if f.block.is_some() {
-            // 有方法体 → default 委托 base 函数，subclass 不 override 时走 base 函数
-            // turbofish 传类型参数（避免 E0282）：<ClassTypeParams..., Self>
-            vtable_default_methods.push(quote! {
-                #effective_sig { #fn_base_name::<#(#class_ty_idents,)* Self>(self, #(#param_names_for_default),*) }
-            });
+        if let Some(block) = &f.block {
+            if matches!(classify_vtable_body(block), VTableBodyKind::Safe) {
+                // vtable-safe 方法体 → default 委托 base 函数（体可直接在 &Self 上运行）
+                // turbofish 传类型参数（避免 E0282）：<ClassTypeParams..., Self>
+                vtable_default_methods.push(quote! {
+                    #effective_sig { #fn_base_name::<#(#class_ty_idents,)* Self>(self, #(#param_names_for_default),*) }
+                });
+            } else {
+                // 方法体需要 wrapper 上下文（this 传参 / 非虚方法调用 / Self::）→
+                // 经钩子重建声明类 wrapper，执行 wrapper 上的方法体 `__impl_<method>`
+                let impl_name = format_ident!("__impl_{}", mname);
+                vtable_default_methods.push(quote! {
+                    #effective_sig {
+                        let __w = self.#as_self_hook();
+                        __w.#impl_name(#(#param_names_for_default),*)
+                    }
+                });
+            }
         } else {
             // 无方法体（abstract）→ stub，子类必须覆盖
             let msg = format!("stub: {}.{}:{}", binary, mname_str, desc);
@@ -599,6 +615,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let vtable_trait = quote! {
         #[allow(non_camel_case_types)]
         pub trait #vtable_trait_ident #impl_g #where_c: #vtable_supertrait {
+            #[doc(hidden)]
+            fn #as_self_hook(&self) -> #struct_ident #ty_g;
             #(#vtable_abstract_methods)*
             #(#vtable_default_methods)*
         }
@@ -692,6 +710,22 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     };
 
+    // 继承链上有翻译出的 toString() 时，根类的字符串化入口桥接到该虚方法（经所属 vtable 分派）
+    let to_string_inner_bridge: proc_macro2::TokenStream = match &meta.to_string_vtable {
+        Some(owner) => {
+            let owner_vtable = format_ident!("{}__VTable", owner);
+            quote! {
+                fn __obj_str(&self) -> ::std::string::String {
+                    match #owner_vtable::toString(self) {
+                        Ok(s) => ::std::string::ToString::to_string(&s),
+                        Err(e) => panic!("toString 抛出异常: {:?}", e),
+                    }
+                }
+            }
+        }
+        None => quote! {},
+    };
+
     let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
             impl #impl_g ObjectVTable for #inner_ident #ty_g #where_c {
@@ -701,6 +735,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 #hash_code_inner_bridge
                 #interface_query
+                #to_string_inner_bridge
             }
         }
     } else {
@@ -760,44 +795,29 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 });
             }
         }
-        // VirtualDefine 方法体：Safe→直接放入 vtable impl；NeedsWrapper→wrapper 重建；Skip→跳过
+        // VirtualDefine 方法体：Safe → 直接放入 vtable impl；
+        // 其余（需要 wrapper 上下文）→ 不在此生成，走 trait default 的钩子路径
         for f in &vtable_defines {
             if let Some(block) = &f.block {
-                let sig = &f.sig;
-                let keep_attrs = strip_meta_attrs(&f.attrs);
-                let mut b = block.clone();
-                rewrite_block(&mut b, &basic_names, &ref_names);
-                match classify_vtable_body(block) {
-                    VTableBodyKind::Safe => {
-                        own_accessor_impls.push(quote! { #(#keep_attrs)* #sig #b });
-                    }
-                    VTableBodyKind::NeedsWrapper => {
-                        if let Some(first) = b.stmts.first() {
-                            let fs = quote!(#first).to_string();
-                            if fs.contains("this") && fs.contains("self") {
-                                b.stmts.remove(0);
-                            }
-                        }
-                        rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
-                        let stmts = &b.stmts;
-                        own_accessor_impls.push(quote! {
-                            #(#keep_attrs)*
-                            #sig {
-                                let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
-                                let __wrapper = #struct_ident {
-                                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
-                                    any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
-                                    _jvm_null: false,
-                                };
-                                let this = &__wrapper;
-                                #(#stmts)*
-                            }
-                        });
-                    }
-                    VTableBodyKind::Skip => {}  // 含 Self::，保留 vtable trait default stub
+                if matches!(classify_vtable_body(block), VTableBodyKind::Safe) {
+                    let sig = &f.sig;
+                    let keep_attrs = strip_meta_attrs(&f.attrs);
+                    let mut b = block.clone();
+                    rewrite_block(&mut b, &basic_names, &ref_names);
+                    own_accessor_impls.push(quote! { #(#keep_attrs)* #sig #b });
                 }
             }
         }
+        own_accessor_impls.push(quote! {
+            fn #as_self_hook(&self) -> #struct_ident #ty_g {
+                let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                #struct_ident {
+                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    _jvm_null: false,
+                }
+            }
+        });
 
         vtable_impls.push(quote! {
             impl #impl_g #vtable_trait_ident #ty_g for #inner_ident #ty_g #where_c {
@@ -928,6 +948,20 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             let anc_vtable_args: TokenStream2 =
                 meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
 
+            // 祖先 wrapper 重建钩子（结构体字面量省略泛型实参，由返回类型推导）
+            let anc_ident = format_ident!("{}", anc_name);
+            let anc_hook = format_ident!("__as_{}", anc_name);
+            items.push(quote! {
+                fn #anc_hook(&self) -> #anc_ident #anc_vtable_args {
+                    let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                    #anc_ident {
+                        vtable: __rc.clone() as ::std::rc::Rc<dyn #anc_vtable_ident #anc_vtable_args>,
+                        any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                        _jvm_null: false,
+                    }
+                }
+            });
+
             vtable_impls.push(quote! {
                 impl #impl_g #anc_vtable_ident #anc_vtable_args for #inner_ident #ty_g #where_c {
                     #(#items)*
@@ -962,48 +996,30 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 });
             }
         }
-        // VirtualDefine 方法体（有父类路径）：Safe→直接放，NeedsWrapper→wrapper 重建，Skip→跳过
+        // VirtualDefine 方法体：Safe → 直接放入 vtable impl；
+        // 其余（需要 wrapper 上下文）→ 不在此生成，走 trait default 的钩子路径
         for f in &vtable_defines {
             if let Some(block) = &f.block {
-                let sig = &f.sig;
-                let keep_attrs = strip_meta_attrs(&f.attrs);
-                let mut b = block.clone();
-                rewrite_block(&mut b, &basic_names, &ref_names);
-                match classify_vtable_body(block) {
-                    VTableBodyKind::Safe => {
-                        own_accessor_impls.push(quote! { #(#keep_attrs)* #sig #b });
-                    }
-                    VTableBodyKind::NeedsWrapper => {
-                        if let Some(first) = b.stmts.first() {
-                            let fs = quote!(#first).to_string();
-                            if fs.contains("this") && fs.contains("self") {
-                                b.stmts.remove(0);
-                            }
-                        }
-                        rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
-                        // NeedsWrapper 体在 wrapper 上下文中运行：this = &__wrapper: &Wrapper
-                        // 将 __base(this, ...) 改为 __base(&*this.vtable, ...)
-                        // （base 函数需要 __BT: AncestorVTable，Wrapper 本身不实现，须走 vtable）
-                        rewrite_base_calls_for_wrapper(&mut b);
-                        let stmts = &b.stmts;
-                        own_accessor_impls.push(quote! {
-                            #(#keep_attrs)*
-                            #sig {
-                                let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
-                                let __wrapper = #struct_ident {
-                                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
-                                    any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
-                                    _jvm_null: false,
-                                };
-                                let this = &__wrapper;
-                                #(#stmts)*
-                            }
-                        });
-                    }
-                    VTableBodyKind::Skip => {}
+                if matches!(classify_vtable_body(block), VTableBodyKind::Safe) {
+                    let sig = &f.sig;
+                    let keep_attrs = strip_meta_attrs(&f.attrs);
+                    let mut b = block.clone();
+                    rewrite_block(&mut b, &basic_names, &ref_names);
+                    own_accessor_impls.push(quote! { #(#keep_attrs)* #sig #b });
                 }
             }
         }
+        own_accessor_impls.push(quote! {
+            fn #as_self_hook(&self) -> #struct_ident #ty_g {
+                let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                #struct_ident {
+                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    _jvm_null: false,
+                }
+            }
+        });
+
         vtable_impls.push(quote! {
             impl #impl_g #vtable_trait_ident #ty_g for #inner_ident #ty_g #where_c {
                 #(#own_accessor_impls)*
@@ -1101,7 +1117,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // ══════════════════════════════════════════════════════════════════════════
 
     let obj_vtable_for_wrapper = if !binary_name.is_empty() {
-        let to_string_fwd: TokenStream2 = if meta.has_to_string_method {
+        let to_string_fwd: TokenStream2 = if meta.to_string_vtable.is_some() {
             quote! {
                 fn __obj_str(&self) -> ::std::string::String {
                     ObjectVTable::__obj_str(&*self.vtable)
@@ -1219,16 +1235,20 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         // 2. 将 this.method(args) 改为 (&*this.vtable).method(args)，
         //    通过 vtable supertrait 链访问继承但未显式覆盖的虚方法。
         if let Some(block) = &f.block {
-            if matches!(classify_vtable_body(block), VTableBodyKind::NeedsWrapper) {
+            if !matches!(classify_vtable_body(block), VTableBodyKind::Safe) {
                 let mut b = block.clone();
                 rewrite_block(&mut b, &basic_names, &ref_names);
                 rewrite_base_calls_for_wrapper(&mut b);
                 rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
+                // 方法体落在隐藏的 `__impl_<method>`（不分派）；公开的同名方法统一经 vtable 分派，
+                // 子类覆盖版本对「父类型 wrapper 上的调用」同样生效。
+                let mut impl_sig = sig.clone();
+                impl_sig.ident = format_ident!("__impl_{}", mname);
                 wrapper_methods.push(quote! {
                     #(#keep_attrs)*
-                    #vis #sig #b
+                    #[doc(hidden)]
+                    pub #impl_sig #b
                 });
-                continue;
             }
         }
 
@@ -1530,8 +1550,36 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             };
 
             let has_self_ref = bs_flat.contains("Self ::") || bs_flat.contains("Self::");
-            if has_bare_clone_this || has_non_vtable_call || has_self_ref {
-                // body 不安全（bare Clone::clone(this) 传参 / non-vtable this.method() / Self::）→ panic stub
+            if !matches!(classify_vtable_body(block), VTableBodyKind::Safe) {
+                // 方法体需要 wrapper 上下文 → 经钩子重建本类 wrapper，执行 `__impl_<method>`
+                let _ = (&binary, &mname_str, &desc, has_bare_clone_this, has_non_vtable_call, has_self_ref);
+                let impl_name = format_ident!("__impl_{}", sig.ident);
+                let base_param_names: Vec<syn::Ident> = non_self_params.iter()
+                    .filter_map(|a| {
+                        if let syn::FnArg::Typed(pt) = a {
+                            if let syn::Pat::Ident(pi) = &*pt.pat { Some(pi.ident.clone()) } else { None }
+                        } else { None }
+                    })
+                    .collect();
+                let mut body_gen = gen.clone();
+                body_gen.params.push(syn::parse_quote!(__BT));
+                body_gen.make_where_clause().predicates.push(
+                    syn::parse_quote!(__BT: #vtable_trait_ident #ty_g + ?Sized)
+                );
+                if let Some(method_where) = &sig.generics.where_clause {
+                    body_gen.make_where_clause().predicates.extend(method_where.predicates.iter().cloned());
+                }
+                let (body_impl_g, _, body_where_c) = body_gen.split_for_impl();
+                base_fns.push(quote! {
+                    #[doc(hidden)]
+                    #[allow(non_snake_case, unused_variables)]
+                    pub fn #fn_name #body_impl_g (this: &__BT #(, #non_self_params)*) #ret #body_where_c {
+                        let __w = #vtable_trait_ident::#as_self_hook(this);
+                        __w.#impl_name(#(#base_param_names),*)
+                    }
+                });
+            } else if has_bare_clone_this || has_non_vtable_call || has_self_ref {
+                // vtable-safe 分类下不会出现；保留 stub 以精确报告
                 let msg = format!("stub: super {}.{}:{}", binary, mname_str, desc);
                 base_fns.push(quote! {
                     #[doc(hidden)]

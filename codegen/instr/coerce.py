@@ -590,6 +590,32 @@ def _method_ref_binary_class(comment: str) -> str:
     return c[:dot] if dot > 0 else ''
 
 
+def _method_ref_descriptor(comment: str) -> str:
+    """从 'Method pkg/Cls.name:(desc)ret' 注释中取出方法描述符。"""
+    c = comment.strip()
+    dot = c.find('.')
+    colon = c.find(':', dot)
+    return c[colon + 1:].split()[0] if colon > 0 else ''
+
+
+def _resolve_special_method_owner(class_binary: str, mname: str, descriptor: str,
+                                  registry: dict | None) -> str:
+    """invokespecial（super.m()）的 JVM 方法解析：常量池类是直接父类，方法可能声明在
+    更远的祖先 → 沿父类链找到最近声明类（描述符精确匹配）。找不到返回常量池类本身。"""
+    cur = class_binary
+    seen: set[str] = set()
+    while registry and cur and cur not in seen:
+        seen.add(cur)
+        ci = registry.get(cur)
+        if ci is None:
+            break
+        if any((not m.is_static) and m.name == mname and m.descriptor == descriptor
+               for m in ci.methods):
+            return cur
+        cur = getattr(ci, 'super_class', None)
+    return class_binary
+
+
 def _resolve_static_method_owner(class_binary: str, mname: str, descriptor: str,
                                  registry: dict | None) -> str:
     """invokestatic 的 JVM 方法解析：常量池类可以是子类，static 方法实际声明在

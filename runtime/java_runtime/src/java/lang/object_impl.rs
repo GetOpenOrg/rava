@@ -2,7 +2,22 @@ use crate::prelude::*;
 use super::object::Object;
 use super::string::String as JvmString;
 
+/// `new Object()` 的实例体：无 Java 字段；占 1 字节使每个实例拥有独立堆地址（对象身份）。
+struct Instance(#[allow(dead_code)] u8);
+
+impl super::object::ObjectVTable for Instance {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn hashCode(&self) -> i32 { self as *const Instance as usize as i32 }
+    fn __obj_str(&self) -> std::string::String {
+        format!("java.lang.Object@{:x}", self as *const Instance as usize as i32)
+    }
+}
+
 impl Object {
+    /// java.lang.Object.<init>()V
+    #[jvm_native]
+    pub fn new() -> Result<Object> { Ok(Object(std::rc::Rc::new(Instance(0)))) }
+
     #[jvm_native]
     pub fn lock(&self) -> Result<()> { Ok(()) }
 
@@ -31,9 +46,6 @@ impl Object {
 
     #[jvm_native]
     pub fn toString(&self) -> Result<String> { Ok(String::from(self.0.__obj_str())) }
-
-    #[jvm_native]
-    pub fn flushBuffer(&self) -> Result<()> { Ok(()) }
 
     #[jvm_native]
     pub fn getComponentType(&self) -> Result<Object> {

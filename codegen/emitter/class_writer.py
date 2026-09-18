@@ -376,13 +376,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     continue
                 _orig_cls = _c.replace('Method ', '').replace('InterfaceMethod ', '')
                 _orig_cls = _orig_cls.split('.')[0] if '.' in _orig_cls else _orig_cls
+                # JVM 方法解析：常量池类未声明时，__base 函数属于最近的祖先声明者
+                # （与 invoke.py 的 invokespecial 调用点同源）
+                from ..instr.coerce import (
+                    _resolve_special_method_owner as _rsmo, _method_ref_descriptor as _mrd)
+                _orig_cls = _rsmo(_orig_cls, _mname_s, _mrd(_c), registry)
+                _cls_s = _orig_cls.rsplit('/', 1)[-1].replace('$', '_')
                 _is_jdk = '/' in _orig_cls
                 if _is_jdk:
                     # JDK 类：仅在父类已生成（在 generated_classes 中）时才导入 __base 函数
                     if _orig_cls not in (generated_classes or set()):
                         continue
-                    # 额外检查：_orig_cls 必须在 registry 中自己定义该方法（非继承来的），
-                    # 否则 invokespecial 引用的是祖先方法，_orig_cls 不会生成 __base 函数
+                    # 解析后的声明者仍未声明该方法（祖先链超出 registry）→ 无 __base 函数可导入
                     if registry and _orig_cls in registry:
                         _anc_ci = registry[_orig_cls]
                         if not any(am.name == _mname_s for am in _anc_ci.methods):
@@ -1106,6 +1111,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             superclass_rust=parent_rust,
             superclass_fields=superclass_fields,
             impl_methods=set((_nf_entry or {}).get('methods', set())),
+            handwritten_methods=new_format_map,
         ))
         block.append('')
         # struct 声明：裸类型（封装细节收拢进宏），无 derive / 无 _super / 无 _phantom

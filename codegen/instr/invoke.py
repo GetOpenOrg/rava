@@ -24,6 +24,7 @@ from .coerce import (
     _super_prefix_to_expr, _resolve_method_owner,
     _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,
     _method_ref_binary_class, _resolve_static_method_owner,
+    _method_ref_descriptor, _resolve_special_method_owner,
     _get_all_subtypes_ordered,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
@@ -130,7 +131,9 @@ def _resolve_ctor_turbofish_args(
             return [subst[t] for t in cls_tparams]
     # 规则 2：构造类是当前类 / 当前类的内部类，且类型参数名一致
     if caller_class and sim.class_type_params:
-        if (full_cls == caller_class or full_cls.startswith(caller_class + '$')) \
+        # 同一顶层类之下的内部类共享外部类的类型变量（内部类经 this$N 继承）
+        _same_outer = full_cls.split('$', 1)[0] == caller_class.split('$', 1)[0]
+        if (full_cls == caller_class or full_cls.startswith(caller_class + '$') or _same_outer) \
                 and set(cls_tparams) == set(sim.class_type_params):
             return list(cls_tparams)
     # 规则 3：兜底用 _ 让 Rust 从上下文推断（比 Object 更安全，避免 E0308）
@@ -180,8 +183,13 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         obj_e = render_expr(obj_expr)
         # vtable 架构：invokespecial 非构造器 = super.method() 调用
         # 宏为每个虚方法生成自由函数 ClassName__method_base(this, args)，绕过虚拟派发
-        rust_mname = _safe_field(_mangle_if_overloaded(cls_short or '', mname, comment, registry))
-        base_fn = f"{cls_short}__{rust_mname}_base"
+        # JVM 方法解析：常量池类（直接父类）未声明该方法时，实际目标是最近的祖先声明者
+        _sp_owner = _resolve_special_method_owner(
+            _method_ref_binary_class(comment), mname, _method_ref_descriptor(comment), registry)
+        _owner_short = (_sp_owner.rsplit('/', 1)[-1].replace('$', '_')
+                        if _sp_owner else cls_short) or cls_short
+        rust_mname = _safe_field(_mangle_if_overloaded(_owner_short or '', mname, comment, registry))
+        base_fn = f"{_owner_short}__{rust_mname}_base"
         all_args = [obj_e] + args
         arg_str = ', '.join(all_args)
         rust_ret = jvm_to_rust(ret, registry)
@@ -404,12 +412,6 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         # （owner 短名仅是后缀相同）误判为自动装箱，导致真实的静态工厂调用被丢弃
         if re.search(r'(?<![A-Za-z0-9_$])' + re.escape(skip) + r'(?![A-Za-z0-9_$])', comment):
             return  # 自动装箱：栈顶值保留
-
-    if 'String.valueOf' in comment:
-        a_expr, _ = sim.pop()
-        a = render_expr(a_expr)
-        sim.push(Lit(f'String::from_owned(format!("{{}}", {a}))'), RsNamed('String'))
-        return
 
     cls, mname, params, ret = parse_method_ref(comment)
     # JVM 方法解析：invokestatic 的常量池类可以是子类，static 方法实际声明在祖先类
