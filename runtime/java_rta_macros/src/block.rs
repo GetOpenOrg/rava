@@ -566,6 +566,35 @@ fn rewrite_block_for_base(block: &mut Block, basic: &HashSet<String>, reference:
     SelfToThis { struct_name: struct_ident.clone() }.visit_block_mut(block);
 }
 
+/// 判断方法体是否可以安全放入 vtable 上下文（__inner impl）。
+/// vtable 上下文中 self 是 &dyn Trait，禁止出现：
+///   - Self:: 引用（Self 在 trait 方法中指实现类型，但 __inner 方法中是 __inner 而非 wrapper）
+///   - Clone::clone（可能依赖 wrapper 类型的 Clone impl）
+///   - this.non_accessor_method()（调用 wrapper 上的方法，__inner 无法访问）
+fn is_vtable_safe_body(block: &Block) -> bool {
+    let s = quote!(#block).to_string();
+    if s.contains("Self ::") || s.contains("Self::") {
+        return false;
+    }
+    if s.contains("Clone :: clone") || s.contains("Clone::clone") {
+        return false;
+    }
+    // 检测 this.non_accessor_method() 调用（不以 __ 开头的方法调用）
+    for part in s.split("this .").skip(1) {
+        let trimmed = part.trim_start();
+        let mname: String =
+            trimmed.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !mname.is_empty() && !mname.starts_with("__") {
+            let rest = &trimmed[mname.len()..];
+            let rest_trimmed = rest.trim_start();
+            if rest_trimmed.starts_with('(') {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // all_supertypes 工具
 // ══════════════════════════════════════════════════════════════════════════════
@@ -886,6 +915,21 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 });
             }
         }
+        // VirtualDefine 方法体（vtable-safe 的放入 __inner impl，提供基类默认实现）
+        // 这样当 wrapper.vtable 指向 Self__inner 时，dispatch 到正确的基类方法体（而非 stub panic）
+        for f in &vtable_defines {
+            if let Some(block) = &f.block {
+                if !is_vtable_safe_body(block) {
+                    continue;
+                }
+                let sig = &f.sig;
+                let keep_attrs = strip_meta_attrs(&f.attrs);
+                let mut b = block.clone();
+                rewrite_block(&mut b, &basic_names, &ref_names);
+                own_accessor_impls.push(quote! { #(#keep_attrs)* #sig #b });
+            }
+        }
+
         vtable_impls.push(quote! {
             impl #impl_g #vtable_trait_ident #ty_g for #inner_ident #ty_g #where_c {
                 #(#own_accessor_impls)*
@@ -1205,40 +1249,26 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
 
-    // VirtualDefine 方法（有方法体：直接放到 wrapper，Self=wrapper 类型，可正确 Clone；无方法体：委托到 vtable）
+    // VirtualDefine 方法：wrapper 统一委托到 vtable 以保证多态正确性。
+    // 无论方法是否有 body，wrapper 都通过 vtable dispatch，这样子类覆盖才生效。
     for f in &vtable_defines {
         let sig = &f.sig;
         let mname = &sig.ident;
         let keep_attrs = strip_meta_attrs(&f.attrs);
         let vis = &f.vis;
-        match &f.block {
-            Some(block) => {
-                // 有实际方法体：放到 wrapper 直接方法（不经过 vtable）
-                // 在 wrapper 上下文中 Self=WrapperType，Clone::clone(self) 返回正确类型
-                let mut b = block.clone();
-                rewrite_block(&mut b, &basic_names, &ref_names);
-                wrapper_methods.push(quote! {
-                    #(#keep_attrs)*
-                    #vis #sig #b
-                });
+        let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
+            if let syn::FnArg::Typed(pt) = arg {
+                if let syn::Pat::Ident(pi) = &*pt.pat {
+                    return Some(pi.ident.clone());
+                }
             }
-            None => {
-                // 无方法体（abstract/native stub）：委托到 vtable（UFCS 消歧义）
-                let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
-                    if let syn::FnArg::Typed(pt) = arg {
-                        if let syn::Pat::Ident(pi) = &*pt.pat {
-                            return Some(pi.ident.clone());
-                        }
-                    }
-                    None
-                }).collect();
-                wrapper_methods.push(quote! {
-                    #(#keep_attrs)*
-                    #[inline]
-                    #vis #sig { #vtable_trait_ident::#mname(&*self.vtable, #(#param_names),*) }
-                });
-            }
-        }
+            None
+        }).collect();
+        wrapper_methods.push(quote! {
+            #(#keep_attrs)*
+            #[inline]
+            #vis #sig { #vtable_trait_ident::#mname(&*self.vtable, #(#param_names),*) }
+        });
     }
 
     // VirtualOverride 委托（wrapper 也需要暴露同名方法，转发到 vtable）
