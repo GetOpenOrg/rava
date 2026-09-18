@@ -18,7 +18,7 @@ from .attrs import (to_snake, _java_class_block_head,
                     _java_field_attr, _java_method_attr)
 from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, _find_virtual_in
-from ..instr.coerce import _parse_field_ref
+from ..instr.coerce import _parse_field_ref, _inherited_overload_names
 from .clinit_extract import _push_int_value, _extract_clinit_consts, _extract_clinit_arrays
 
 _safe_field_name = safe_ident
@@ -607,7 +607,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                             and (_dm.name, _dm.descriptor) not in _pre_sigs):
                         _pre_default_names.append(_dm.name)
                         _pre_sigs.add((_dm.name, _dm.descriptor))
-    name_counts = Counter(m.name for m in visible_methods if m.name != '<clinit>') + Counter(_pre_default_names)
+    name_counts = (Counter(m.name for m in visible_methods if m.name != '<clinit>')
+                   + Counter(_pre_default_names)
+                   + Counter(_inherited_overload_names(ci, registry)))
     overloaded_names: set[str] = {name for name, count in name_counts.items() if count > 1}
 
     method_blocks: list[str] = []

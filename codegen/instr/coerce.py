@@ -546,6 +546,42 @@ _JAVA_RUST_NAME_CONFLICTS = frozenset()
 _JAVA_RUST_RENAME: dict[str, str] = {}
 
 
+def _inherited_overload_names(ci, registry: dict | None) -> list[str]:
+    """祖先链上「可经 Deref 到达、且签名与当前类不同」的实例方法名列表（每个不同签名一项）。
+
+    Rust 侧子类 wrapper 经 Deref<Target=Parent> 继承父类 inherent 方法；子类若声明了
+    同名不同参的方法（如父类 limit()/limit(I)，子类协变覆盖 limit(I)），未 mangle 的
+    子类方法会遮蔽父类同名方法（E0599/E0061）。重载判定因此必须覆盖整条继承链：
+    定义侧（class_writer.name_counts）与调用侧（_mangle_if_overloaded）共用本函数。
+    """
+    if not registry or ci is None:
+        return []
+    def _pp(desc: str) -> str:
+        i = desc.find(')')
+        return desc[:i + 1] if i >= 0 else desc
+    seen = {(m.name, _pp(m.descriptor)) for m in ci.methods if not m.is_synthetic}
+    own_names = {m.name for m in ci.methods if not m.is_synthetic}
+    out: list[str] = []
+    cur = getattr(ci, 'super_class', None)
+    visited: set[str] = set()
+    while cur and cur != _OBJECT_CLASS and cur not in visited:
+        visited.add(cur)
+        anc = registry.get(cur)
+        if anc is None or anc.name.rsplit('/', 1)[-1] in _JAVA_RUNTIME_SHORT_NAMES:
+            break
+        for am in anc.methods:
+            if (am.is_synthetic or am.is_static or am.is_constructor
+                    or am.name.startswith('<') or (am.access_flags & 0x0002)
+                    or am.name not in own_names):
+                continue
+            key = (am.name, _pp(am.descriptor))
+            if key not in seen:
+                seen.add(key)
+                out.append(am.name)
+        cur = anc.super_class
+    return out
+
+
 def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dict | None) -> str:
     """查找 registry 中 cls_name 类的 mname 方法是否重载，重载则返回 mangled 名，否则原名。
     支持短名（Objects）和全路径名（java/util/Objects）查找。
@@ -590,6 +626,9 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
             target_ci = _walk_ci
     visible = [m for m in target_ci.methods if not m.is_synthetic]
     same = sum(1 for m in visible if m.name == mname)
+    # 计入祖先链上同名不同参的可继承方法（与 class_writer.name_counts 同规则）
+    if mname != '<init>':
+        same += sum(1 for _n in _inherited_overload_names(target_ci, registry) if _n == mname)
     # 计入接口 default 方法（未覆盖时由 class_writer 注入到 impl 块）
     if target_ci.interfaces and not target_ci.is_interface:
         _iq = list(target_ci.interfaces)
