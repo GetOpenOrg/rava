@@ -317,6 +317,35 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             sim.emit(RawStmt(f"/* invokespecial {comment} */"))
 
 
+def _static_call_turbofish(cls: str, class_name: str, sim: StackSim,
+                           registry: dict | None) -> str:
+    """泛型类的静态调用路径（`Cls::<...>::method`）所需的 turbofish。
+
+    静态方法不使用类的类型参数，调用点无上下文可推断（E0283），必须显式给出。
+    invokestatic 与 invokedynamic（lambda / 方法引用的实现方法调用）共用本规则。
+    cls 可为 Rust 短名或 JVM binary name。
+    """
+    if not registry:
+        return ''
+    _cls_bin = cls if cls in registry else _rust_type_to_binary(cls, registry)
+    if not _cls_bin:
+        return ''
+    _cls_ci = registry.get(_cls_bin)
+    # 接口在 Rust 侧是 `pub type Iface = Object;`（Arch-1），元数为 0，不带 turbofish
+    if not (_cls_ci and _cls_ci.generic_signature and not _cls_ci.is_interface):
+        return ''
+    _tparams = _parse_class_type_params(_cls_ci.generic_signature)
+    if not _tparams:
+        return ''
+    if _cls_bin == class_name and sim.class_type_params:
+        # 同类静态调用（如 impl<K,V> TreeNode 内调用 TreeNode::checkInvariants）：
+        # 实参是精确泛型形态（HashMap_TreeNode<K,V>），turbofish 用当前 impl 的
+        # 类型参数；填 Object 会 E0308（expected X<K,V>, found X<Object,Object>）。
+        return '::<' + ', '.join(_tparams) + '>'
+    # 跨类静态调用：用 Object 擦除（无上下文可推断类型参数）
+    return '::<' + ', '.join('Object' for _ in _tparams) + '>'
+
+
 def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     for skip in BOXING_SKIP_STATIC:
         # 按类名边界匹配：裸子串匹配会把类名以装箱类名结尾的其他类
@@ -383,26 +412,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
         rust_mname = _safe_field(_mangle_if_overloaded(cls, mname, comment, registry))
-        # 泛型类静态方法需要 turbofish，避免 E0283 类型推断歧义
-        turbofish = ''
-        if registry:
-            _cls_bin = _rust_type_to_binary(cls, registry)
-            if _cls_bin:
-                _cls_ci = registry.get(_cls_bin)
-                # 接口在 Rust 侧是 `pub type Iface = Object;`（Arch-1），元数为 0，不带 turbofish
-                if _cls_ci and _cls_ci.generic_signature and not _cls_ci.is_interface:
-                    _tparams = _parse_class_type_params(_cls_ci.generic_signature)
-                    if _tparams:
-                        if _cls_bin == class_name and sim.class_type_params:
-                            # 同类静态调用（如 impl<K,V> TreeNode 内调用
-                            # TreeNode::checkInvariants）：实参是精确泛型形态
-                            # （HashMap_TreeNode<K,V>），turbofish 用当前 impl 的
-                            # 类型参数；填 Object 会 E0308（expected X<K,V>,
-                            # found X<Object,Object>）。
-                            turbofish = '::<' + ', '.join(_tparams) + '>'
-                        else:
-                            # 跨类静态调用：用 Object 擦除（_引发E0283 —— 无上下文可推断K/V）
-                            turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
+        turbofish = _static_call_turbofish(cls, class_name, sim, registry)
         call = f"{_cls_path}{cls}{turbofish}::{rust_mname}({', '.join(args)})"
         needs_q = True
 

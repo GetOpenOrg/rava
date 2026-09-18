@@ -15,6 +15,8 @@ from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLAS
 # 模块级 regex，避免在每次调用时重复编译
 _CLS_RE_NARROW = _re.compile(r'L([^;]+);')          # 平铺 descriptor（如 (LFoo;)V）
 _CLS_RE_WIDE   = _re.compile(r'L([^;<>\[()\s]+)')   # 含嵌套泛型的 generic_signature
+# 操作数为常量池 Class 引用的指令（comment = binary name 或数组描述符）
+_CLASS_OPERAND_OPCODES = frozenset({'new', 'anewarray', 'checkcast', 'instanceof', 'multianewarray'})
 from .attrs import (to_snake, _java_class_block_head,
                     _java_field_attr, _java_method_attr)
 from .method_gen import _gen_native_stub
@@ -72,40 +74,67 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     for _iface in (ci.interfaces or []):
         if _iface != _OBJECT_CLASS:
             _referenced.add(_iface)
-    # 注入到本类的接口 default 方法体同样在本文件内展开，其类型引用也要进作用域
-    _scan_methods = list(ci.methods)
-    if registry and ci.interfaces and not ci.is_interface:
-        _dq = list(ci.interfaces)
-        _dseen: set[str] = set()
-        while _dq:
-            _dn = _dq.pop(0)
-            if _dn in _dseen:
+    # 参与引用扫描的方法集合：自身方法 + 会被注入本类的继承方法体
+    # （接口 default 方法、用户类超类链的虚方法——见下方「接口 default 方法继承」
+    #   与「超类虚方法继承」两段）。注入的方法体/签名同样出现在本文件中，
+    #   其引用的类型必须一并导入，否则产生 E0425/E0433。
+    _scan_methods: list = list(ci.methods)
+    if registry and not ci.is_interface:
+        _scan_iface_queue = list(ci.interfaces or [])
+        _scan_iface_seen: set[str] = set()
+        while _scan_iface_queue:
+            _scan_iname = _scan_iface_queue.pop(0)
+            if _scan_iname in _scan_iface_seen:
                 continue
-            _dseen.add(_dn)
-            _dci = registry.get(_dn)
-            if _dci is None:
+            _scan_iface_seen.add(_scan_iname)
+            _scan_ici = registry.get(_scan_iname)
+            if _scan_ici is None:
                 continue
-            _dq.extend(_dci.interfaces or [])
+            _scan_iface_queue.extend(_scan_ici.interfaces or [])
             _scan_methods.extend(
-                _dm for _dm in _dci.methods
-                if not _dm.is_abstract and not _dm.is_static and _dm.instrs
-            )
+                _dm for _dm in _scan_ici.methods
+                if not _dm.is_abstract and not _dm.is_static)
+        _scan_super = ci.super_class
+        while (_scan_super and _scan_super != _OBJECT_CLASS
+               and '/' not in _scan_super and _scan_super in registry):
+            _scan_methods.extend(registry[_scan_super].methods)
+            _scan_super = registry[_scan_super].super_class
+
+    def _add_desc_refs(text: str) -> None:
+        """把描述符 / 泛型签名文本中出现的全部类引用加入 _referenced。"""
+        for _dm2 in _CLS_RE_WIDE.finditer(text or ''):
+            _dc = _strip_generic(_dm2.group(1))
+            if _dc:
+                _referenced.add(_dc)
+
     # 扫描方法指令中的类型引用
     for _m in _scan_methods:
         for _instr in (_m.instrs or []):
             _c = _instr.comment
             if not _c:
                 continue
-            if _c.startswith(('Method ', 'InterfaceMethod ')):
+            if _c.startswith(('Method ', 'InterfaceMethod ', 'Field ')):
                 _rest = _c.split(' ', 1)[1]
                 _dot = _rest.find('.')
                 if _dot > 0:
                     _referenced.add(_rest[:_dot])
-            elif _c.startswith('Field '):
-                _rest = _c[6:]
-                _dot = _rest.find('.')
-                if _dot > 0:
-                    _referenced.add(_rest[:_dot])
+                # 被调方法的参数/返回类型、被访问字段的类型：
+                # 方法体中以 `let _tN: RetType = ...` / downcast::<ParamType>() 形式出现
+                _colon = _rest.find(':')
+                if _colon > 0:
+                    _add_desc_refs(_rest[_colon + 1:])
+            elif _instr.opcode in _CLASS_OPERAND_OPCODES:
+                # new / anewarray / checkcast / instanceof / multianewarray：
+                # comment 为裸 binary name 或数组描述符（[Lpkg/Cls;）
+                if _c.startswith('['):
+                    _add_desc_refs(_c)
+                else:
+                    _referenced.add(_strip_generic(_c))
+        # 局部变量声明类型（LocalVariableTable / LocalVariableTypeTable）：
+        # 方法体按声明类型生成 `let x: T`
+        for _lv in (getattr(_m, 'local_vars', None) or []):
+            _add_desc_refs(_lv[4])
+            _add_desc_refs(_lv[5])
     # 扫描字段描述符（含超类链继承字段）
     _all_fields_to_scan = list(ci.fields)
     if registry:
@@ -128,7 +157,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
     # 扫描方法描述符（参数和返回值）
-    for _method in ci.methods:
+    for _method in _scan_methods:
         for _m in _CLS_RE_NARROW.finditer(_method.descriptor or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
@@ -142,7 +171,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         from ..instr.coerce import _get_all_subtypes_ordered as _gaso
         from ..type_map import is_jdk as _is_jdk
         _iface_refs: set[str] = set()
-        for _m in ci.methods:
+        for _m in _scan_methods:
             for _instr in (_m.instrs or []):
                 _c = _instr.comment
                 if not _c:

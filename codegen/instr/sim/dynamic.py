@@ -4,7 +4,7 @@ from ...rs_ir import RawExpr, RawStmt, RsNamed
 from ...render import render_expr
 from ...type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
 from ...constants import safe_ident as _safe_ident
-from ..invoke import _gen_string_concat
+from ..invoke import _gen_string_concat, _static_call_turbofish
 from ..coerce import _mangle_if_overloaded
 
 
@@ -74,7 +74,9 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _cap_var_names: list[str] = []
                     for _cv_idx, (_cexpr, _cty, _) in enumerate(_cap_exprs):  # _cap_exprs 已按声明顺序排列（pop 时 insert(0)）
                         _cv_name = f'__lam_cap{_lam_idx}_{_cv_idx}'
-                        _cap_var_stmts.append(f'let {_cv_name} = {render_expr(_cexpr)};')
+                        # Java 捕获的是引用副本：被捕获的局部变量在闭包创建后仍可使用，
+                        # 因此按 Clone 捕获而非 move（否则 E0382 use after move）
+                        _cap_var_stmts.append(f'let {_cv_name} = Clone::clone(&{render_expr(_cexpr)});')
                         _cap_var_names.append(_cv_name)
                     # SAM 参数名
                     _sam_anames = [f'_la{i}' for i in range(len(_sam_ptypes))]
@@ -102,7 +104,11 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     for _s in _cap_var_stmts:
                         sim.emit(RawStmt(_s))
                     _cap_move = ' '.join(f'Clone::clone(&{v}),' for v in _cap_var_names)
-                    _closure_body = f'{_impl_cls_rust}::{_impl_mname_r}({_all_call_args})'
+                    # 泛型类上的实现方法：静态方法不使用类的类型参数，闭包内无上下文可推断（E0283），
+                    # 与 invokestatic 同规则显式给出 turbofish；实例实现方法由接收者类型推断，无需给出
+                    _impl_turbofish = ('' if _impl_is_instance else
+                                       _static_call_turbofish(_impl_cls_bin, class_name, sim, registry))
+                    _closure_body = f'{_impl_cls_rust}{_impl_turbofish}::{_impl_mname_r}({_all_call_args})'
                     _lam_varname = f'__lam_{_lam_idx}'
                     sim.emit(RawStmt(
                         f'let {_lam_varname}: {_fn_type} = std::rc::Rc::new('
