@@ -130,32 +130,8 @@ def gen_method_body(
     else:
         rust_param_types = [jvm_to_rust(t, registry) for t in param_types]
 
-    # 内部类构造器 this$N 参数类型修正：
-    # 内部类构造器第一个参数（外部类实例）由编译器注入，无 generic_signature。
-    # 当内部类继承了外部类的类型参数（如 ArrayList_Itr<E>），将擦除形态（ArrayList<Object>）
-    # 替换为带类型参数的版本（ArrayList<E>），使 __set_this_0(arg_0) 类型匹配。
-    if method.is_constructor and _class_tparams and registry:
-        import re as _re_ctor_ic
-        _outer_field_map: dict[str, str] = {}
-        for _f in class_info.fields:
-            if _f.is_static:
-                continue
-            if _re_ctor_ic.match(r'^this\$\d+$', _f.name):
-                _om = _re_ctor_ic.match(r'L([^;]+);', _f.descriptor)
-                if _om:
-                    _outer_ci = registry.get(_om.group(1))
-                    if _outer_ci and _outer_ci.generic_signature:
-                        _outer_tp = parse_class_type_params(_outer_ci.generic_signature)
-                        if _outer_tp and len(_outer_tp) <= len(_class_tparams):
-                            _outer_short = _om.group(1).rsplit('/', 1)[-1].replace('$', '_')
-                            _outer_field_map[_f.descriptor] = (
-                                _outer_short + '<' + ', '.join(_class_tparams[:len(_outer_tp)]) + '>'
-                            )
-        if _outer_field_map:
-            rust_param_types = [
-                _outer_field_map.get(param_types[k], rt) if k < len(param_types) else rt
-                for k, rt in enumerate(rust_param_types)
-            ]
+    # 构造器的隐式形参（外部实例 / 匿名类转发形参）类型由 method_sig_types →
+    # constructor_sig_types 统一给出，定义侧与调用侧同源。
 
     # 返回类型：如果泛型签名返回值是有效类型且非接口，优先使用；接口类型回退到描述符（Object）。
     if sig_ret_type and _sig_param_valid(sig_ret_type) and not _is_iface_type(sig_ret_type):

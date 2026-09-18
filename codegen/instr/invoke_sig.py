@@ -5,6 +5,8 @@ from ..type_map import (
     parse_class_type_params as _parse_class_type_params,
     parse_method_param_types as _parse_method_param_types,
     method_sig_types as _method_sig_types,
+    effective_class_type_params as _effective_class_type_params,
+    substitute_type_params as _substitute_type_params,
 )
 from .coerce import (
     _rust_type_to_binary,
@@ -41,11 +43,16 @@ def _lookup_method_sig_params(
     for m in ci.methods:
         if m.name == mname and m.descriptor == full_desc:
             # 用被调用类的类型参数解析签名（覆盖方法取最远祖先声明，与定义侧同规则）
-            callee_tparams_list = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+            callee_tparams_list = _effective_class_type_params(ci, registry)
             callee_tparams = frozenset(callee_tparams_list)
             types, _ = _method_sig_types(ci, m, callee_tparams_list, registry)
             if not types:
                 return None
+            if receiver_targ_map:
+                # 参数化形参（X<E_IN, Object>）中的 callee 类型变量按接收者实参替换；
+                # 裸类型变量位置由下方逐项解析
+                types = [t if t in callee_tparams else _substitute_type_params(t, receiver_targ_map)
+                         for t in types]
             # 将 callee 类型参数映射到 caller 上下文：
             # 优先级：receiver_targ_map（接收者泛型实参）> caller_class_type_params（同名类型参数）
             # 若某参数是 callee 的类型参数但无法解析，设 None（降级到 descriptor）
@@ -175,7 +182,7 @@ def _lookup_method_sig_ret(
         if m.name == mname and m.descriptor == full_desc:
             # 非泛型类的方法同样可带泛型签名返回类型（RecursiveTask<BigInteger>）：
             # 方法声明侧（gen_method_body）不要求类有类型参数，调用点必须同规则
-            callee_tparams = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+            callee_tparams = _effective_class_type_params(ci, registry)
             _, sig_ret = _method_sig_types(ci, m, callee_tparams, registry)
             if not sig_ret:
                 return None
@@ -276,6 +283,19 @@ def _substitute_tvars(ty: str, tparams: list[str], targs: list[str]) -> str:
     )
 
 
+def _exact_ancestor_type(actual: str, ancestor_short: str, registry: dict | None) -> str:
+    """静态类型 actual（如 `Child<A, B>`）沿超类链到 ancestor_short 的精确实例化
+    （`Parent<A, B, Object>`）；不在超类链上 → ''。"""
+    from ..type_map import ancestor_type_args, split_rust_type_args, rust_type_with_args
+    ci = registry.get(_rust_type_to_binary(actual.split('<', 1)[0], registry)) if registry else None
+    if ci is None:
+        return ''
+    for anc_bin, args in ancestor_type_args(ci, registry, split_rust_type_args(actual)):
+        if short_cls(anc_bin) == ancestor_short:
+            return rust_type_with_args(ancestor_short, args)
+    return ''
+
+
 def _coerce_arg(
     e: str,
     e_ty_node: object,
@@ -325,7 +345,15 @@ def _coerce_arg(
             and _is_subtype(actual.split('<')[0], expected.split('<')[0], registry)):
         # R-2：子类传给父类参数，通过显式 __into_super() 链（替代已删除的 T55 From impl）
         chain = _into_super_chain(actual.split('<')[0], expected.split('<')[0], registry)
-        return f"Clone::clone(&{e}){chain}"
+        src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
+        # 宏只为「祖先的精确实例化」生成 From（Child<A> → Parent<f(A)>）。形参是同一祖先的
+        # 另一实例化（raw type / 通配符形参）时：先向上转换到精确祖先，再经 Object 边界重新实例化。
+        exact_anc = _exact_ancestor_type(actual, expected.split('<')[0], registry)
+        if (exact_anc and exact_anc != expected and '<' in expected
+                and _downcast_target_valid(expected, sim, registry)
+                and _downcast_target_valid(exact_anc, sim, registry)):
+            return f"Object::from_any(Into::<{exact_anc}>::into({src})).downcast::<{expected}>()"
+        return f"{src}{chain}"
     # Fix 18：actual 是 Object（运行时多态值）而 expected 是具体引用类型 ——
     # Java 调用点隐式 checkcast 语义 → downcast（运行时校验，不符则 panic）。
     # 覆盖「callee 签名参数是精确泛型形态而调用方局部变量被擦除为 Object」

@@ -12,6 +12,9 @@ from ..type_map import (
     jvm_to_rust, short_cls, parse_descriptor_params, is_jdk,
     parse_class_type_params as _parse_class_type_params,
     parse_method_param_types as _parse_method_param_types,
+    effective_class_type_params as _effective_class_type_params,
+    enclosing_scope_type_args as _enclosing_scope_type_args,
+    superclass_type_args as _superclass_type_args,
 )
 from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 from .coerce import (
@@ -103,7 +106,7 @@ def _resolve_ctor_turbofish_args(
     ci = registry.get(full_cls)
     if not ci:
         return None
-    cls_tparams = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
+    cls_tparams = _effective_class_type_params(ci, registry)
     if not cls_tparams:
         return None
     # 规则 1：构造器 generic_signature 的参数位置引用类型变量 → 用实参类型替换
@@ -141,17 +144,15 @@ def _ctor_outer_ref_base(cls_short: str | None, params: list[str], registry: dic
     类型参数），调用侧不得按擦除形态 Outer<Object> 转换实参。"""
     if not (cls_short and params and registry):
         return ''
-    from ..type_map import effective_class_type_params, outer_ref_field_type
+    from ..type_map import effective_class_type_params, outer_instance_class, outer_instance_rust_type
     ci = registry.get(_rust_type_to_binary(cls_short, registry) or '')
     if ci is None:
         return ''
-    tparams = effective_class_type_params(ci, registry)
-    for f in ci.fields:
-        if not f.is_static and f.descriptor == params[0]:
-            outer = outer_ref_field_type(f, tparams, registry)
-            if outer:
-                return outer.split('<', 1)[0]
-    return ''
+    outer_bin = outer_instance_class(ci)
+    if not outer_bin or params[0] != f'L{outer_bin};':
+        return ''
+    outer = outer_instance_rust_type(outer_bin, effective_class_type_params(ci, registry), registry)
+    return outer.split('<', 1)[0] if outer else ''
 
 
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
@@ -197,8 +198,28 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         return
 
     cls, _mname_ctor, params, _ret_ctor = parse_method_ref(comment)
+    # 构造目标的类型实参在调用点静态可知的两种情形 → 形参类型按实参替换：
+    #   - super(...)：父类形参 ← 本类 SuperclassSignature 的实参
+    #   - new 局部 / 匿名类：其类型参数全部继承自外围作用域，按当前作用域实例化
+    _ctor_bin = _method_ref_binary_class(comment)
+    _ctor_ci = registry.get(_ctor_bin) if registry else None
+    _caller_ci = registry.get(class_name) if registry else None
+    _ctor_targ_map: dict | None = None
+    _scope_targs: list[str] | None = None
+    if _ctor_ci is not None:
+        _ctor_eff = _effective_class_type_params(_ctor_ci, registry)
+        if _ctor_eff and getattr(_ctor_ci, 'enclosing_class', ''):
+            _scope_targs = _enclosing_scope_type_args(_ctor_ci, registry, sim.class_type_params)
+            _ctor_targ_map = dict(zip(_ctor_eff, _scope_targs))
+        elif (_ctor_eff and _caller_ci is not None and _caller_ci.super_class == _ctor_bin
+              and _ctor_bin != class_name):
+            _super_targs = _superclass_type_args(_caller_ci, registry)
+            if len(_super_targs) == len(_ctor_eff):
+                _ctor_targ_map = dict(zip(_ctor_eff, _super_targs))
     sig_params_ctor = _lookup_method_sig_params(
-        cls, '<init>', params, 'V', registry, sim.class_type_params
+        cls, '<init>', params, 'V', registry,
+        frozenset() if _ctor_targ_map else sim.class_type_params,
+        receiver_targ_map=_ctor_targ_map,
     )
     args = []
     arg_tys = []
@@ -240,8 +261,9 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 #      （如 Class<T> 内构造 Class$ReflectionData<T>）→ 用当前
                 #      impl 的类型参数
                 #   3. 兜底：Object（擦除）
-                _ctor_tparams = _resolve_ctor_turbofish_args(
-                    full_cls, params, arg_tys, class_name, sim, registry)
+                _ctor_tparams = (list(_scope_targs) if _scope_targs and full_cls == _ctor_bin
+                                 else _resolve_ctor_turbofish_args(
+                                     full_cls, params, arg_tys, class_name, sim, registry))
                 # 后处理：caller 的 class_type_params 为空（如 java/lang/Class 故意抹去
                 # <T>）导致 _coerce_arg 误将 Class_ReflectionData<Object> 包裹进
                 # Object::from_any。但 turbofish 已由 arg_tys 推出具体类型，多余的

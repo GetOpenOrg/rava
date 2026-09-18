@@ -735,6 +735,9 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
     cls_source_file  = ''
     cls_deprecated   = False
     cls_inner_classes: list[InnerClassInfo] = []
+    cls_enclosing_class = ''
+    cls_enclosing_method: tuple | None = None
+    cls_has_enclosing = False
     cls_attr_count = r.u2()
     for _ in range(cls_attr_count):
         attr_name_idx = r.u2()
@@ -751,6 +754,15 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
             cls_source_file = _utf8(pool, sf_idx)
         elif attr_name == 'Deprecated':
             cls_deprecated = True
+        elif attr_name == 'EnclosingMethod':
+            # JVMS §4.7.7：局部类 / 匿名类的直接外围类与外围方法
+            # （method_index 为 0 → 位于初始化器 / 字段初始化表达式中）
+            em_class_idx, em_method_idx = struct.unpack_from('>HH', r.read(4))
+            cls_has_enclosing = True
+            cls_enclosing_class = _utf8(pool, pool[em_class_idx][1]) if em_class_idx else ''
+            if em_method_idx:
+                _nat = pool[em_method_idx]
+                cls_enclosing_method = (_utf8(pool, _nat[1]), _utf8(pool, _nat[2]))
         elif attr_name == 'InnerClasses':
             ic_data = r.read(attr_len)
             ic_r = _Reader(ic_data)
@@ -840,4 +852,6 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         source_file=cls_source_file,
         inner_classes=cls_inner_classes,
         is_deprecated=cls_deprecated,
+        enclosing_class=cls_enclosing_class if cls_has_enclosing else '',
+        enclosing_method=cls_enclosing_method,
     )
