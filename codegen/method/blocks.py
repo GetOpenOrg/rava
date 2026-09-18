@@ -188,6 +188,15 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
     elif same_base and 'Object' in ety_str and 'Object' not in ty_str:
         tv = 'Default::default()'
         ty = ety
+    elif ty_str not in _SCALAR_TYPES and ety_str not in _SCALAR_TYPES and not same_base:
+        # 两臂是无公共父类的引用类型（含类型变量）：按 JVM 校验器的类型合并规则，
+        # 合并点类型为根类 → 两臂各自上转
+        from ..instr.coerce import _coerce_to_object
+        if ty_str != 'Object':
+            tv = _coerce_to_object(tv, ty_str, registry, class_tparams, clone=False)
+        if ety_str != 'Object':
+            ev = _coerce_to_object(ev, ety_str, registry, class_tparams, clone=False)
+        ty = _str_to_rs_type('Object')
     return tv, ev, ty
 
 

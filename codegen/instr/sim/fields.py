@@ -130,24 +130,8 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             # 读取侧必须记录同一类型：否则 sim 记录擦除形态（Object /
             # X<Object,Object> / Rc<RefCell<Vec<Object>>>）而表达式实际是
             # 精确泛型形态，局部变量标注 E0308（expected 擦除, found 精确）。
-            if registry:
-                _g_owner = f_owner if f_owner else class_name
-                _g_ci = registry.get(_g_owner) if _g_owner else None
-                _gsig = _get_field_generic_signature(_g_owner, fname, registry) if _g_owner else None
-                if _gsig and _g_ci is not None:
-                    # 用声明类的类型参数解析（签名中的类型变量属于声明类上下文）
-                    _decl_tparams = (_parse_class_type_params(_g_ci.generic_signature)
-                                     if _g_ci.generic_signature else [])
-                    _parsed = _parse_field_type(_gsig, _decl_tparams, registry)
-                    if _parsed and _parsed != 'Object' and _parsed != ftype:
-                        # 校验：解析结果中的类型名须在调用方可见
-                        # （当前 impl 类型参数 / registry 短名 / 内建容器），
-                        # 跨类不可见（声明类参数名与调用方不同）时降级回擦除形态
-                        _caller_tparams = set(sim.class_type_params) if sim.class_type_params else set()
-                        _reg_shorts = {_k.rsplit('/', 1)[-1].replace('$', '_') for _k in registry}
-                        if all(_n in _caller_tparams or _n in _reg_shorts or _n in _BUILTIN_G
-                               for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _parsed)):
-                            ftype = _parsed
+            # 与 putfield 共用同一恢复规则（含内部类外部引用字段 this$N）。
+            ftype = _restore_field_declared_type(f_owner, fname, ftype, class_name, registry, sim)
             # 字段读取 → 宏生成的访问器（方案 §7）。
             # 继承字段由子类的转发访问器统一暴露（父类字段在前展平，§6），
             # 所以不再需要按接收者静态类型拼 `_super._super.` 路径——

@@ -9,7 +9,7 @@ impl FileOutputStream {
     pub fn FD_ACCESS() -> Object {
         let access = FileDescriptor_1::new()
             .unwrap_or_else(|e| panic!("FileDescriptor 访问器初始化失败: {:?}", e));
-        Object::from_any(access)
+        Object::from(access)
     }
 
     /// native writeBytes(byte[], int, int, boolean)：写入底层文件描述符。
