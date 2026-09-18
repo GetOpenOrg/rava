@@ -612,26 +612,28 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
         # 不是外部类。实参按内部类的有效形参选取：自带形参 → 本段实参；
         # 形参继承自外部类（非静态内部类）→ 外层段实参。
         if j < len(sig) and sig[j] == '.':
-            outer_args = type_args
+            outer_ci = registry.get(class_name) if registry else None
             while j < len(sig) and sig[j] == '.':
                 k = j + 1
                 while k < len(sig) and sig[k] not in ('<', ';', '.'):
                     k += 1
                 class_name = class_name + '$' + sig[j + 1:k]
                 j = k
-                type_args = []
+                seg_args: list[str] = []
                 if j < len(sig) and sig[j] == '<':
-                    type_args, j = _parse_type_args(sig, j, class_type_params, registry, method_bounds)
-            inner_ci = registry.get(class_name) if registry else None
-            if inner_ci is not None:
-                inner_own = (parse_class_type_params(inner_ci.generic_signature)
-                             if inner_ci.generic_signature else [])
-                inner_eff = effective_class_type_params(inner_ci, registry)
-                if not inner_own:
-                    type_args = outer_args
-                if len(type_args) != len(inner_eff):
-                    type_args = ['Object'] * len(inner_eff)
+                    seg_args, j = _parse_type_args(sig, j, class_type_params, registry, method_bounds)
+                inner_ci = registry.get(class_name) if registry else None
+                type_args = (_inner_class_type_args(outer_ci, type_args, inner_ci, seg_args,
+                                                    class_type_params, registry)
+                             if inner_ci is not None else seg_args)
+                outer_ci = inner_ci
             has_type_args = bool(type_args)
+
+        elif has_type_args and registry and class_name in registry:
+            # 无外层段的带实参类型（局部类 `LOuter$1Local<TX;>;`）：继承自外围作用域的形参
+            # 不出现在签名里，按当前作用域补齐
+            type_args = _inner_class_type_args(None, [], registry[class_name], type_args,
+                                               class_type_params, registry)
 
         # 签名里不带实参的泛型类：
         #   - 形参全部继承自外围作用域的内部 / 局部类（javac 对局部类只写 `LOuter$1Var;`），
@@ -778,20 +780,32 @@ def enclosing_method_info(ci, registry):
     return None
 
 
+def _inner_class_type_args(outer_ci, outer_args: list[str], inner_ci, seg_args: list[str],
+                           scope_type_params, registry) -> list[str]:
+    """`Outer<A..>.Inner<B..>` 中 Inner 的有效类型实参：继承自外围作用域的形参取外层实参
+    （外层无对应实参：当前作用域可见的同名类型变量原样传递，否则按擦除取 Object）+ 本段实参。"""
+    own = parse_class_type_params(inner_ci.generic_signature) if inner_ci.generic_signature else []
+    eff = effective_class_type_params(inner_ci, registry)
+    inherited = eff[:len(eff) - len(own)] if own else eff
+    own_args = seg_args if len(seg_args) == len(own) else ['Object'] * len(own)
+    outer_eff = effective_class_type_params(outer_ci, registry) if outer_ci is not None else []
+    outer_map = dict(zip(outer_eff, outer_args)) if len(outer_eff) == len(outer_args) else {}
+    scope = scope_type_params or ()
+    return [outer_map.get(p, p if p in scope else 'Object') for p in inherited] + own_args
+
+
 def effective_class_type_params(ci, registry=None) -> list[str]:
-    """类在 Rust 侧的有效类型参数表。
+    """类在 Rust 侧的有效类型参数表 = 外围作用域的类型变量（被自身同名形参遮蔽者除外）+ 自身形参。
 
     Java 内部类隐式可见外围作用域的类型变量，Rust struct 必须显式声明：
       - 局部 / 匿名类（带 EnclosingMethod）→ 外部实例所属类的有效形参（实例上下文）
-        + 外围方法的方法级形参（遮蔽同名外层形参）+ 自身声明的形参
-      - 成员内部类：自身声明了形参 → 用自身形参；否则继承外部实例所属类的有效形参
+        + 外围方法的方法级形参（遮蔽同名外层形参）
+      - 成员内部类（持有外部实例）→ 外部实例所属类的有效形参
     """
     own = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
     if not registry:
         return own
     is_local = bool(getattr(ci, 'enclosing_class', ''))
-    if own and not is_local:
-        return own
     inherited: list[str] = []
     outer_bin = outer_instance_class(ci)
     outer_ci = registry.get(outer_bin) if outer_bin else None
@@ -831,65 +845,21 @@ def class_type_param_bounds(ci, registry=None) -> 'dict[str, tuple[str, str]]':
     """
     if not registry:
         return {}
-    decl_ci = ci
     own = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
-    if not own:
-        decl_ci = None
-        for f in ci.fields:
-            if f.is_static or not re.match(r'^this\$\d+$', f.name):
-                continue
-            m = re.match(r'L([^;]+);', f.descriptor)
-            if m:
-                decl_ci = registry.get(m.group(1))
-            break
-    if decl_ci is None or not decl_ci.generic_signature:
-        return {}
-    tparams = parse_class_type_params(decl_ci.generic_signature)
-    binaries: dict[str, str] = {}
-    bounds = _extract_method_tparam_bounds(decl_ci.generic_signature, registry,
-                                           type_params=tparams, bound_binaries=binaries)
     result: dict[str, tuple[str, str]] = {}
-    for name, rust_t in bounds.items():
-        b_ci = registry.get(binaries.get(name, ''))
-        if name in tparams and b_ci is not None and not b_ci.is_interface:
-            result[name] = (rust_t, b_ci.name)
+    outer_ci = registry.get(outer_instance_class(ci) or '')
+    if outer_ci is not None and outer_ci is not ci:
+        result = {name: b for name, b in class_type_param_bounds(outer_ci, registry).items()
+                  if name not in own}
+    if own:
+        binaries: dict[str, str] = {}
+        bounds = _extract_method_tparam_bounds(ci.generic_signature, registry,
+                                               type_params=own, bound_binaries=binaries)
+        for name, rust_t in bounds.items():
+            b_ci = registry.get(binaries.get(name, ''))
+            if name in own and b_ci is not None and not b_ci.is_interface:
+                result[name] = (rust_t, b_ci.name)
     return result
-
-
-def _superclass_sig_segments(sig: str, class_type_params: list[str], registry=None) -> list[list[str]]:
-    """解析类级 Signature 中 SuperclassSignature 的各段类型实参。
-
-    `<...>Lpkg/Outer<TE;>.Inner<TX;>;...` → [['E'], ['X']]；无实参的段为 []。
-    """
-    i = 0
-    if sig.startswith('<'):
-        depth = 0
-        while i < len(sig):
-            if sig[i] == '<':
-                depth += 1
-            elif sig[i] == '>':
-                depth -= 1
-                if depth == 0:
-                    i += 1
-                    break
-            i += 1
-    if i >= len(sig) or sig[i] != 'L':
-        return []
-    segments: list[list[str]] = []
-    j = i + 1
-    while j < len(sig):
-        while j < len(sig) and sig[j] not in ('<', ';', '.'):
-            j += 1
-        if j < len(sig) and sig[j] == '<':
-            args, j = _parse_type_args(sig, j, class_type_params, registry)
-            segments.append(args)
-        else:
-            segments.append([])
-        if j < len(sig) and sig[j] == '.':
-            j += 1
-            continue
-        break
-    return segments
 
 
 def _type_arg_is_resolvable(rust_ty: str, class_type_params: list[str], registry) -> bool:
@@ -942,13 +912,23 @@ def superclass_type_args(ci, registry) -> list[str]:
     own_params = effective_class_type_params(ci, registry)
     args: list[str] = []
     if ci.generic_signature:
-        segments = _superclass_sig_segments(ci.generic_signature, own_params, registry)
-        parent_has_own = bool(parse_class_type_params(parent_ci.generic_signature)
-                              if parent_ci.generic_signature else [])
-        non_empty = [s for s in segments if s]
-        if non_empty:
-            # 父类自带形参 → 末段实参；父类形参继承自外部类 → 外层段实参
-            args = non_empty[-1] if parent_has_own else non_empty[0]
+        # SuperclassSignature 按一般类型解析（`Outer<A>.Inner<B>` 的外层实参并入内部类的有效实参）
+        sig = ci.generic_signature
+        i = 0
+        if sig.startswith('<'):
+            depth = 0
+            while i < len(sig):
+                if sig[i] == '<':
+                    depth += 1
+                elif sig[i] == '>':
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                i += 1
+        if i < len(sig) and sig[i] == 'L':
+            parent_ty, _ = _parse_one_type(sig, i, own_params, registry)
+            args = split_rust_type_args(parent_ty)
     if len(args) != len(parent_params):
         args = ['Object'] * len(parent_params)
     return [a if _type_arg_is_resolvable(a, own_params, registry) else 'Object' for a in args]

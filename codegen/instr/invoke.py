@@ -365,10 +365,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 # 若 turbofish 给出的 T 实参不是 Object/_, 则去掉对应参数的包裹。
                 if _ctor_tparams and registry:
                     _ci_ctor2 = registry.get(full_cls)
-                    _cls_tp_list2 = (
-                        _parse_class_type_params(_ci_ctor2.generic_signature)
-                        if _ci_ctor2 and _ci_ctor2.generic_signature else []
-                    )
+                    _cls_tp_list2 = (_effective_class_type_params(_ci_ctor2, registry)
+                                     if _ci_ctor2 else [])
                     _raw_sp2: list | None = None
                     if _ci_ctor2:
                         _full_desc2 = '(' + ''.join(params) + ')V'

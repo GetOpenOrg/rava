@@ -475,6 +475,10 @@ def _coerce_arg(
         # 实参静态类型是类型变量（`S extends SpeciesData`），形参是其上界类：Java 的隐式
         # 子类型转换 → 经 Object 边界按对象标识取回上界类视图
         return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
+    if actual.startswith('JArray<') and expected.startswith('JArray<') and actual != expected:
+        # 数组协变（`T[]` 擦除为 Object[] 的引用传给元素类型具体化的形参）：Java 数组在运行时
+        # 按元素类型具体化，同一数组对象经 Object 边界按形参的元素类型取回（checkcast 语义）
+        return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
     if actual not in _PRIMITIVE_RUST_TYPES:
         # `this` 在 Rust 中是 &Self 引用，Clone::clone(this) 得到 Self，无需多余 &
         if e == 'this':

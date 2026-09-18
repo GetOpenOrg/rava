@@ -82,6 +82,26 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 receiver_is_this=False,
                 receiver_type=_recv_ty,
             )
+    if registry and sig_params_v is None:
+        # 调用描述符在接收者类上只命中 synthetic bridge（`copyInto(Object[],int)` →
+        # `copyInto(Integer[],int)`）：Rust 侧只生成被桥接的真实方法，形参类型按真实方法确定
+        _br_recv_bin = (class_name if _recv_is_this
+                        else _rust_type_to_binary(_recv_base_v, registry)) if (_recv_is_this or _recv_base_v) else ''
+        _br_recv_ci = registry.get(_br_recv_bin or '')
+        if _br_recv_ci is not None and not _br_recv_ci.is_interface:
+            _br_desc = '(' + ''.join(params) + ')' + ret
+            _br_target = _resolve_bridge_target(_br_recv_ci, mname, _br_desc, registry)
+            if _br_target is not None and _br_target[1] != _br_desc:
+                _, _, _br_params, _br_ret = parse_method_ref(f"{mname}:{_br_target[1]}")
+                if len(_br_params) == len(params):
+                    sig_params_v = _lookup_method_sig_params(
+                        _short_cls_g(_br_target[0].name), mname, _br_params, _br_ret, registry,
+                        sim.class_type_params,
+                        receiver_targ_map=receiver_type_arg_map(
+                            _recv_ty, _short_cls_g(_br_target[0].name), registry),
+                        receiver_is_this=_recv_is_this,
+                        receiver_type=_recv_ty,
+                    ) or [jvm_to_rust(_p, registry) for _p in _br_params]
     if sig_params_v is None:
         sig_params_v = _lookup_method_sig_params(
             cls, mname, params, ret, registry, sim.class_type_params,
@@ -313,18 +333,8 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 if '<' not in sub_rust and registry:
                     _sub_ci_g = registry.get(sub_bin)
                     if _sub_ci_g:
-                        import re as _re_icg
-                        _tp_g = _parse_class_type_params(_sub_ci_g.generic_signature) if _sub_ci_g.generic_signature else []
-                        if not _tp_g:
-                            # 内部类：从 this$0 外部类继承类型参数
-                            for _fg in _sub_ci_g.fields:
-                                if _re_icg.match(r'^this\$\d+$', _fg.name):
-                                    _om_g = _re_icg.match(r'L([^;]+);', _fg.descriptor)
-                                    if _om_g:
-                                        _outer_g = registry.get(_om_g.group(1))
-                                        if _outer_g and _outer_g.generic_signature:
-                                            _tp_g = _parse_class_type_params(_outer_g.generic_signature)
-                                    break
+                        from ..type_map import effective_class_type_params as _ectp_g
+                        _tp_g = _ectp_g(_sub_ci_g, registry)
                         if _tp_g:
                             # 使用 Object 作为类型实参（Java 类型擦除语义）：
                             # - 内部类（ArrayList_Itr）的 TypeId 与外部类类型参数绑定

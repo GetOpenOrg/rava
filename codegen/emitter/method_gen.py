@@ -156,15 +156,13 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     """为 native / abstract / stub 方法生成 panic! 存根。"""
     from ..type_map import (
         jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return,
-        parse_class_type_params, parse_method_param_types, method_sig_types,
+        parse_class_type_params, effective_class_type_params, parse_method_param_types, method_sig_types,
     )
     params = parse_descriptor_params(m.descriptor)
     ret    = parse_descriptor_return(m.descriptor)
     rust_ret = jvm_to_rust(ret, registry)
 
-    _ctparams: list[str] = class_type_params or (
-        parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
-    )
+    _ctparams: list[str] = class_type_params or effective_class_type_params(ci, registry)
 
     # 从 generic_signature 提取更具体的参数类型（与 gen_method_body 对齐）。
     # 门控不要求类有类型参数：非泛型类的签名返回类型（getInterfaces0 →
