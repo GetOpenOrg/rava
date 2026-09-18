@@ -470,7 +470,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     *_pkg, _simple_cls = _binary_parts
                     _base_cls_simple = _simple_cls.replace('$', '_')
                     _snake_cls = to_snake(_simple_cls)
-                    _base_mod = '::'.join(_pkg + [_snake_cls])
+                    _base_mod = '::'.join(
+                        f'r#{p}' if p in _RUST_KEYWORDS else p
+                        for p in _pkg + [_snake_cls]
+                    )
                 else:
                     # user class parent method
                     _base_cls_simple = _orig_cls.replace('$', '_')
