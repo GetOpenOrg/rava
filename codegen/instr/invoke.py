@@ -366,7 +366,8 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             _cls_bin = _rust_type_to_binary(cls, registry)
             if _cls_bin:
                 _cls_ci = registry.get(_cls_bin)
-                if _cls_ci and _cls_ci.generic_signature:
+                # 接口在 Rust 侧是 `pub type Iface = Object;`（Arch-1），元数为 0，不带 turbofish
+                if _cls_ci and _cls_ci.generic_signature and not _cls_ci.is_interface:
                     _tparams = _parse_class_type_params(_cls_ci.generic_signature)
                     if _tparams:
                         if _cls_bin == class_name and sim.class_type_params:

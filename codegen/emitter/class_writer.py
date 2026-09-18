@@ -9,6 +9,8 @@ from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
 from ..type_map import parse_class_type_params, parse_field_type
+from ..type_map import (effective_class_type_params, ancestor_type_args,
+                        rust_type_with_args as _rust_type_with_args)
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
 # 模块级 regex，避免在每次调用时重复编译
@@ -378,24 +380,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 用短名作为 Rust 标识符（JDK 类含 /，内部类含 $，均需转换为合法 Rust 名）
     struct_name = short_cls(ci.name) if ('/' in ci.name or '$' in ci.name) else ci.name
 
-    # 解析类级泛型参数（如 ArrayList<E>、HashMap<K,V>）
-    class_type_params = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
-
-    # 内部类 this$0 字段类型参数继承：
-    # Java 内部类没有自己的 generic_signature，但通过 this$0 访问外部类的类型参数。
-    # 例如 ArrayList$Itr 没有 <E>，但 this$0: ArrayList → 应继承 E，变为 ArrayList_Itr<E>。
-    if not class_type_params and registry:
-        import re as _re_outer
-        for _f in inst_fields:
-            if _re_outer.match(r'^this\$\d+$', _f.name):
-                _om = _re_outer.match(r'L([^;]+);', _f.descriptor)
-                if _om:
-                    _outer_ci = registry.get(_om.group(1))
-                    if _outer_ci and _outer_ci.generic_signature:
-                        _outer_tp = parse_class_type_params(_outer_ci.generic_signature)
-                        if _outer_tp:
-                            class_type_params = list(_outer_tp)
-                break
+    # 类的有效类型参数：自身 Signature 形参；内部类无自身形参时继承外部类形参
+    # （Java 内部类经 this$N 隐式可见外部类类型变量，如 ArrayList$Itr → ArrayList_Itr<E>）。
+    class_type_params = effective_class_type_params(ci, registry)
 
     # 构建泛型参数字符串（用于 struct 和 impl 头）
     if class_type_params:
@@ -463,37 +450,36 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         return True
 
     # ── 父类 Rust 类型（含泛型实参）─────────────────────────────────────
+    # 实参取自本类 Signature 的 SuperclassSignature，整条祖先链逐级代入
+    # （见 type_map.ancestor_type_args），不做「子类形参按位置套给父类」的猜测。
     parent_rust = ''
+    _ancestor_args: dict[str, list[str]] = (
+        dict(ancestor_type_args(ci, registry)) if _has_super and registry else {})
     if _has_super:
-        parent_rust = short_cls(ci.super_class)
-        if registry and ci.super_class in registry:
-            parent_ci = registry[ci.super_class]
-            parent_params = parse_class_type_params(parent_ci.generic_signature) if parent_ci.generic_signature else []
-            if parent_params:
-                if class_type_params:
-                    # 子类有泛型参数：传播给父类，不足的用 Object 填充
-                    args = class_type_params[:len(parent_params)]
-                    while len(args) < len(parent_params):
-                        args.append('Object')
-                    parent_rust += '<' + ', '.join(args) + '>'
-                else:
-                    # 子类无泛型参数但父类需要（如 CharacterUnicodeScript extends Enum<E>）：用 Object 后备
-                    parent_rust += '<' + ', '.join('Object' for _ in parent_params) + '>'
+        parent_rust = _rust_type_with_args(short_cls(ci.super_class),
+                                           _ancestor_args.get(ci.super_class, []))
+
+    def _outer_ref_field_rust(f, decl_params: list) -> str:
+        """内部类外部引用字段（this$N）的 Rust 类型：外部类 + 声明类从外部类继承的类型参数
+        （如 ArrayList$Itr.this$0 → ArrayList<E>）。非 this$N 字段或外部类非泛型 → ''。"""
+        import re as _re_f
+        if not (_re_f.match(r'^this\$\d+$', f.name) and decl_params and registry):
+            return ''
+        _fm = _re_f.match(r'L([^;]+);', f.descriptor)
+        _outer_ci2 = registry.get(_fm.group(1)) if _fm else None
+        if _outer_ci2 is None or not _outer_ci2.generic_signature:
+            return ''
+        _outer_tp2 = parse_class_type_params(_outer_ci2.generic_signature)
+        if not _outer_tp2 or len(_outer_tp2) > len(decl_params):
+            return ''
+        return short_cls(_fm.group(1)) + '<' + ', '.join(decl_params[:len(_outer_tp2)]) + '>'
 
     def _resolve_field_rust(f) -> str:
         """字段的 Rust 类型：优先字段级 generic_signature（TE; → E），回退裸描述符。
         generic_signature 解析为 Object，或引用了不存在的类型时，用描述符推断。"""
-        # 内部类外部引用字段（this$N）：用外部类 + 继承的类型参数（如 ArrayList<E>）
-        import re as _re_f
-        if _re_f.match(r'^this\$\d+$', f.name) and class_type_params and registry:
-            _fm = _re_f.match(r'L([^;]+);', f.descriptor)
-            if _fm:
-                _outer_ci2 = registry.get(_fm.group(1))
-                if _outer_ci2 and _outer_ci2.generic_signature:
-                    _outer_tp2 = parse_class_type_params(_outer_ci2.generic_signature)
-                    if _outer_tp2 and len(_outer_tp2) <= len(class_type_params):
-                        _outer_short2 = _fm.group(1).rsplit('/', 1)[-1].replace('$', '_')
-                        return _outer_short2 + '<' + ', '.join(class_type_params[:len(_outer_tp2)]) + '>'
+        _outer_rust = _outer_ref_field_rust(f, class_type_params)
+        if _outer_rust:
+            return _outer_rust
         gen_rust = (parse_field_type(f.generic_signature, class_type_params, registry)
                     if f.generic_signature else '')
         desc_rust = jvm_to_rust(f.descriptor, registry)
@@ -503,13 +489,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 else desc_rust)
 
     def _resolve_anc_field_rust(f, anc_params: list, anc_map: dict) -> str:
-        """祖先字段的 Rust 类型：用祖先自己的 tparams 解析签名，再按位置映射
-        （与 T55 From 链 / parent_rust 的 args 构造一致）替换为子类可见参数。
+        """祖先字段的 Rust 类型：用祖先自己的 tparams 解析签名，再按 anc_map
+        （祖先形参 → 本类视角实参，与 parent_rust / all_superclasses 同源）代入。
         否则父类字段变量（如 AbstractRepository<T> 的 tree: T）被子类 tparams
         （['S']）解析成 Object，转发访问器 __set_tree(v: Object) 与父类
         AbstractRepository<S> 的 __set_tree(v: S) E0308。"""
-        gen_rust = (parse_field_type(f.generic_signature, anc_params, registry)
-                    if f.generic_signature else '')
+        # this$N：与祖先自身 struct 的字段类型同规则（见 _outer_ref_field_rust），再代入实参
+        gen_rust = _outer_ref_field_rust(f, anc_params) or (
+            parse_field_type(f.generic_signature, anc_params, registry)
+            if f.generic_signature else '')
         if gen_rust and gen_rust != 'Object' and _validate_field_type(gen_rust, anc_params):
             if anc_map:
                 import re as _re_am
@@ -537,10 +525,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _cursor = _p_ci.super_class
         _declared: set[str] = set()
         for _ancestor in reversed(_chain):
-            # 祖先参数 → 子类参数的位置映射（T55 一致）：不足补 Object
-            _anc_params = (parse_class_type_params(_ancestor.generic_signature)
-                           if _ancestor.generic_signature else [])
-            _sub_args = list(class_type_params[:len(_anc_params)])
+            # 祖先形参 → 本类视角实参（沿 SuperclassSignature 逐级代入的结果）
+            _anc_params = effective_class_type_params(_ancestor, registry)
+            _sub_args = list(_ancestor_args.get(_ancestor.name, []))
             while len(_sub_args) < len(_anc_params):
                 _sub_args.append('Object')
             _anc_map = dict(zip(_anc_params, _sub_args))
@@ -1053,6 +1040,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             if _already:
                 continue
             _base_name = _vt_name[:-len('__VTable')]
+            if _base_name == struct_name:
+                continue  # 本类的 VTable trait 由 java_class! 宏在本模块内定义，再 use 即 E0255
             _vt_pkg = _vt_simple_to_pkg.get(_base_name)
             # 若 base 类未在 cross_imports 中（如 Writer 在 StreamEncoder 的继承链里但未直接引用），
             # 从 registry 查路径

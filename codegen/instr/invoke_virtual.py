@@ -15,6 +15,7 @@ from .coerce import (
     _resolve_method_owner,
 )
 from ..type_map import parse_class_type_params as _parse_class_type_params
+from ..type_map import ancestor_vtable_args_by_short as _ancestor_vtable_args_by_short
 from .invoke_sig import (_lookup_method_sig_params, _lookup_method_sig_ret,
                          _coerce_arg, _split_type_args)
 
@@ -330,60 +331,6 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                         # 含通配符 _ 时无法用于 dyn Trait 位置，直接调用 vtable
                         _call_expr = f"_d.vtable.{sub_mname_r}({_barg_str})"
                     else:
-                        # 检查 owner 是否泛型，并从 sub_rust 提取匹配的类型实参
-                        _owner_type_args_str = ''
-                        if registry:
-                            _owner_ci_v = registry.get(_owner_bin)
-                            if _owner_ci_v:
-                                _owner_tps = (
-                                    _parse_class_type_params(_owner_ci_v.generic_signature)
-                                    if _owner_ci_v.generic_signature else []
-                                )
-                                if not _owner_tps:
-                                    # 内部类：generic_signature 为 None，从 this$0 外部类继承
-                                    import re as _re_inner_tp
-                                    for _fi_tp in _owner_ci_v.fields:
-                                        if _re_inner_tp.match(r'^this\$\d+$', _fi_tp.name):
-                                            _om_tp = _re_inner_tp.match(r'L([^;]+);', _fi_tp.descriptor)
-                                            if _om_tp:
-                                                _outer_ci_v = registry.get(_om_tp.group(1))
-                                                if _outer_ci_v and _outer_ci_v.generic_signature:
-                                                    _owner_tps = _parse_class_type_params(
-                                                        _outer_ci_v.generic_signature)
-                                            break
-                                if _owner_tps:
-                                    if _sub_type_args:
-                                        # 从 sub_rust 的类型实参取前 N 个
-                                        _sub_args_list = [a.strip() for a in _sub_type_args.split(',')]
-                                        if len(_sub_args_list) >= len(_owner_tps):
-                                            _owner_type_args_str = '<' + ', '.join(_sub_args_list[:len(_owner_tps)]) + '>'
-                                    else:
-                                        # sub 无类型实参：从 sub_bin.generic_signature 解析 owner 的类型实参
-                                        # e.g., Pattern_Qtype generic_sig = Ljava/lang/Enum<Ljava/util/regex/Pattern$Qtype;>;
-                                        _sub_ci_gs = registry.get(sub_bin)
-                                        if _sub_ci_gs and _sub_ci_gs.generic_signature:
-                                            import re as _re_gsp
-                                            _esc_owner = re.escape('L' + _owner_bin)
-                                            _gsp_m = _re_gsp.search(_esc_owner + r'<([^>]+)>;?', _sub_ci_gs.generic_signature)
-                                            if _gsp_m:
-                                                _raw_args = _gsp_m.group(1)
-                                                _targs_gs: list[str] = []
-                                                _gpos = 0
-                                                while _gpos < len(_raw_args):
-                                                    _gc = _raw_args[_gpos]
-                                                    if _gc == 'L':
-                                                        _ge = _raw_args.index(';', _gpos)
-                                                        _targs_gs.append(
-                                                            _raw_args[_gpos+1:_ge].rsplit('/', 1)[-1].replace('$', '_'))
-                                                        _gpos = _ge + 1
-                                                    elif _gc == 'T':
-                                                        _ge = _raw_args.index(';', _gpos)
-                                                        _targs_gs.append('Object')
-                                                        _gpos = _ge + 1
-                                                    else:
-                                                        _gpos += 1
-                                                if _targs_gs and len(_targs_gs) >= len(_owner_tps):
-                                                    _owner_type_args_str = '<' + ', '.join(_targs_gs[:len(_owner_tps)]) + '>'
                         # 完全限定 UFCS：<dyn SubVTable<STA> as VtableOwnerVTable<OTA>>::method(...)
                         # VtableOwner 是方法的真实 VTable 声明类（virtual_in 值），
                         # 可能与 Java owner 不同（如 containsKey virtual_in=AbstractMap 但 Java owner=HashMap）。
@@ -401,6 +348,13 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                                         if _vi:
                                             _vtable_owner_v = _vi
                                         break
+                        # VtableOwner 的类型实参：沿 sub 的 SuperclassSignature 链逐级代入解析
+                        # （各祖先元数不同，不能取 sub 实参的前 N 个）
+                        _owner_type_args_str = ''
+                        _sub_ci_gs = registry.get(sub_bin) if registry else None
+                        if _sub_ci_gs is not None:
+                            _owner_type_args_str = _ancestor_vtable_args_by_short(
+                                _sub_ci_gs, sub_rust, registry).get(_vtable_owner_v, '')
                         _sub_vtable_short = sub_rust.split('<')[0] + '__VTable'
                         _sub_vtable_ta = ('<' + _sub_type_args + '>') if _sub_type_args else ''
                         _call_expr = (f"<dyn {_sub_vtable_short}{_sub_vtable_ta} as {_vtable_owner_v}__VTable{_owner_type_args_str}>::{sub_mname_r}"
@@ -459,6 +413,9 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 仅对当前类自身的 receiver（obj_base 匹配当前类短名）生效；
     # 其他 wrapper 类型的 receiver 仍走常规 vtable 分派检查。
     _cur_class_short = short_cls(class_name) if class_name else ''
+    # 返回类型解析所用的（声明类, 接收者形态）：方法继承自祖先时换成祖先及其实参化形态，
+    # 使祖先的类型变量（ForkJoinTask<V>.join → V）按接收者的超类实参代入
+    _sig_owner, _sig_recv_ty = cls, obj_ty
     _ufcs_vtable_prefix = None  # 若非 None，改写为 UFCS：<dyn _ufcs_vtable_prefix>::rust_mname(&*obj.vtable, args)
     if sim.in_vtable_body and obj_base == _cur_class_short:
         _recv = obj_e
@@ -479,7 +436,11 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 _owner_bin_v, _ = _resolve_method_owner(_obj_jvm, mname, registry, descriptor=_jvm_desc_v)
                 if _owner_bin_v and _owner_bin_v != _obj_jvm:
                     _owner_short_v = _owner_bin_v.rsplit('/', 1)[-1].replace('$', '_')
-                    _ufcs_vtable_prefix = f"<dyn {_owner_short_v}__VTable>"
+                    # owner VTable 的类型实参由接收者静态类型沿超类链代入得到
+                    _owner_args_v = _ancestor_vtable_args_by_short(
+                        _ci_recv, obj_ty, registry).get(_owner_short_v, '')
+                    _ufcs_vtable_prefix = f"<dyn {_owner_short_v}__VTable{_owner_args_v}>"
+                    _sig_owner, _sig_recv_ty = _owner_bin_v, _owner_short_v + _owner_args_v
                     _recv = f"&*{obj_e}.vtable"
                 else:
                     _recv = f"{obj_e}.vtable"
@@ -511,9 +472,9 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             # - 擦除实例化 X<Object,Object> → 精确形态 X<K,V>：记录精确类型，
             #   与被调方法声明（gen_method_body 按 generic_signature 生成）一致
             _sig_ret_v = _lookup_method_sig_ret(
-                cls, mname, params, ret, registry,
+                _sig_owner, mname, params, ret, registry,
                 caller_class=class_name, caller_tparams=sim.class_type_params,
-                receiver_type=obj_ty,
+                receiver_type=_sig_recv_ty,
             )
             _call_str = _build_call(rust_mname, _recv, arg_str)
             if (rust_ret == 'Object' and _sig_ret_v is not None

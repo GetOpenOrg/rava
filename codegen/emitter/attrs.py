@@ -5,6 +5,7 @@ Java 元数据注释生成：to_snake、pkg_from_java、访问标志字符串、
 
 import re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
+from ..type_map import ancestor_type_args, rust_type_with_args
 from ..constants import RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
 # Access flags
@@ -105,19 +106,18 @@ def _bin_to_rust_short(binary_name: str) -> str:
 def _compute_all_superclasses(ci: ClassInfo, registry: dict | None) -> list[str]:
     """计算线性超类链（不含接口），从最深祖先到直接父类，排除 java.lang.Object。
 
-    返回 Rust short names（已做 binary_to_rust 转换）。
+    返回 Rust 类型（short name + 本类视角的类型实参，如 `AbstractPipeline<P_IN, P_OUT, Object>`）：
+    宏为每个祖先生成 `impl Ancestor__VTable<args>` / `From<Self> for Ancestor<args>`，
+    各祖先元数不同，实参必须逐个祖先给出。
     用于 vtable impl 生成：idx=0 是最深祖先（字段声明者），字段 accessor 放在此处。
     """
-    chain: list[str] = []
-    cur = ci.super_class
-    visited: set[str] = set()
-    while cur and cur not in visited and cur != _OBJECT_CLASS:
-        chain.append(_bin_to_rust_short(cur))
-        visited.add(cur)
-        if registry and cur in registry:
-            cur = registry[cur].super_class
-        else:
-            break
+    resolved = ancestor_type_args(ci, registry)
+    chain = [rust_type_with_args(_bin_to_rust_short(anc_bin), args)
+             for anc_bin, args in resolved]
+    # 链尾祖先的父类不在 registry（未翻译）：保留其裸名，链到此为止
+    tail = registry[resolved[-1][0]].super_class if resolved else ci.super_class
+    if tail and tail != _OBJECT_CLASS:
+        chain.append(_bin_to_rust_short(tail))
     chain.reverse()  # 最深祖先在前（idx=0），直接父类在后
     return chain
 
