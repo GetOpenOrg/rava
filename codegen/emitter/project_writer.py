@@ -28,7 +28,9 @@ def _write(path: str, content: str) -> None:
     if _is_jrt_rs and os.path.exists(path):
         try:
             with open(path, encoding='utf-8') as _f:
-                if 'java_rta_macros::java_class' not in _f.read(4096):
+                # 必须读全文：跨包 use 导入多的大类（如 regex/Pattern）生成标记位于 4096 字节之后，
+                # 只读文件头会把生成文件误判为手写文件，scratch 复用时永远不刷新（陈旧产物）。
+                if 'java_rta_macros::java_class' not in _f.read():
                     return  # 手写文件，不覆盖
         except Exception:
             pass

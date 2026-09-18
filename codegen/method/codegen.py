@@ -31,7 +31,7 @@ from ..rs_ir import (
 )
 from ..stack import BOOL
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
-from .postprocess import _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
+from .postprocess import _normalize_this_clone, _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
 
 
 TWO_OP_CMP = frozenset({
@@ -240,8 +240,21 @@ def gen_method_body(
                 slot_hint_types[_hint_slot] = RsNamed(rust_ty_name)
                 slot_hint_starts[_hint_slot] = _hint_start
 
+    # LVT 逐变量声明类型：slot → [(start_pc, end_pc, RsType)]。
+    # - 声明类型为 Object/接口 的变量：生命周期内所有 store 以 Object 形态写入（Java 隐式向上转型）
+    # - load 命中当前 sim 未登记的槽（声明在兄弟分支的子 sim 中）时，以声明类型而非 i32 兜底
+    # 接口在 Rust 层是 `type Iface = Object` 别名（jvm_to_rust 返回其全路径），同属 Object 形态。
+    slot_var_types: dict[int, list[tuple[int, int, RsNamed]]] = {}
+    for _lr_slot, _lr_entries in (method.local_ranges or {}).items():
+        for _lr_start, _lr_len, _lr_desc in _lr_entries:
+            _lr_ci = registry.get(_lr_desc[1:-1]) if (registry and _lr_desc.startswith('L')) else None
+            _lr_rust = 'Object' if (_lr_ci is not None and _lr_ci.is_interface) else jvm_to_rust(_lr_desc, registry)
+            slot_var_types.setdefault(_lr_slot, []).append(
+                (_lr_start, _lr_start + _lr_len, _str_to_rs_type(_lr_rust)))
+
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                    slot_hint_types=slot_hint_types, slot_hint_starts=slot_hint_starts,
+                   slot_var_types=slot_var_types,
                    return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                    in_vtable_body=in_vtable_body)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
@@ -287,6 +300,7 @@ def gen_method_body(
             s = StackSim(
                 rust_param_type_nodes, is_static, method.class_name, local_names,
                 slot_hint_types=slot_hint_types, slot_hint_starts=slot_hint_starts,
+                slot_var_types=slot_var_types,
                 return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                 in_vtable_body=cur_sim.in_vtable_body,
             )
@@ -806,6 +820,8 @@ def gen_method_body(
 
     # ── 其他方法的后处理 ──────────────────────────────────────────
     if not is_ctor:
+        if not is_static:
+            lines = _normalize_this_clone(lines)
         if rust_ret == 'bool':
             lines = _fix_bool_returns(lines)
         lines = _remove_trailing_return_ok(lines)

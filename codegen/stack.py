@@ -16,7 +16,7 @@ from .rs_ir import (
 )
 from .render import render_type, render_expr
 from .type_map import short_cls as _short_cls
-from .constants import safe_ident
+from .constants import safe_ident, PRIMITIVE_RUST_TYPES as _SCALAR_TYPE_NAMES
 
 
 def _safe_name(name: str) -> str:
@@ -95,6 +95,7 @@ class StackSim:
                  local_names: dict[int, str] | None = None,
                  slot_hint_types: dict[int, RsType] | None = None,
                  slot_hint_starts: dict[int, int] | None = None,
+                 slot_var_types: dict[int, list] | None = None,
                  return_type: str = 'Object',
                  is_constructor: bool = False,
                  class_type_params: list[str] | None = None,
@@ -111,6 +112,8 @@ class StackSim:
         self._loc_names  = local_names or {}     # slot → Java variable name
         self._hint_types = slot_hint_types or {}  # slot → precise RsType from LocalVariableTypeTable
         self._hint_starts = slot_hint_starts or {}  # slot → LVTT start_pc（slot 复用检测）
+        # slot → [(start_pc, end_pc, RsType)]：LVT 逐变量声明类型与作用域
+        self._var_types = slot_var_types or {}
         self.current_offset: int                     = 0    # 当前正在处理的字节码偏移
         self._current_depth: int                     = 0
         self._slot_decl_depth: dict[int, int]        = {}  # slot → 首次声明时的嵌套深度
@@ -194,6 +197,20 @@ class StackSim:
 
     # ── 局部变量 ─────────────────────────────────────────────────────────────
 
+    def _declared_var_type(self, slot: int) -> RsType | None:
+        """当前偏移处 slot 上存活变量的 LVT 声明类型（无 LVT 信息时返回 None）。
+        LVT start_pc 指向首个 store 之后的指令，store 自身偏移 = start_pc - 指令大小（≤4）。"""
+        off = self.current_offset
+        for start, end, decl_ty in self._var_types.get(slot, ()):
+            if start - 4 <= off < end:
+                return decl_ty
+        return None
+
+    def _in_object_var_range(self, slot: int) -> bool:
+        """当前偏移是否处于 slot 上某个「LVT 声明类型为 Object/接口」变量的作用域内。"""
+        decl_ty = self._declared_var_type(slot)
+        return decl_ty is not None and render_type(decl_ty) == 'Object'
+
     def store_local(self, slot: int, expr: RsExpr, ty: RsType):
         """
         存储到局部变量槽。
@@ -269,6 +286,18 @@ class StackSim:
                 # Clone::clone 而非 this.clone()：类的 Java clone() 方法会遮蔽 std Clone
                 expr = RawExpr("Clone::clone(this)")
 
+        # LVT 声明类型为 Object/接口 的变量（如 `Iface prev = null; ... prev = impl;`）：
+        # 已以 Object 声明的槽在同一变量作用域内再次写入具体类值时，是 Java 的隐式
+        # 向上转型，不是 slot 复用 → 值装箱为 Object 后赋值，禁止按值类型 let 阴影
+        # （阴影会让后续按 Object 记录生成的 dispatch 代码作用在具体 wrapper 上，E0609）。
+        if (slot in self.locals and not src_is_object
+                and render_type(self.locals[slot][1]) == 'Object'
+                and isinstance(ty, (RsNamed, RsGeneric))
+                and not (isinstance(ty, RsNamed) and ty.name in _SCALAR_TYPE_NAMES)
+                and self._in_object_var_range(slot)):
+            expr = RawExpr(f"Object::from_any({render_expr(_clone_moved_var(expr, ty))})")
+            ty = RsNamed('Object')
+
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
             decl_depth = self._slot_decl_depth.get(slot, 0)
@@ -323,8 +352,10 @@ class StackSim:
             return (Var(name), ty)
         # 槽不在 locals 中（跨 StackSim 路径），仍用 LocalVariableTable 中的名字，
         # 以便 _hoist_if_vars 能将其与同名的 LetStmt 声明关联并正确提升。
+        # 类型以当前偏移处的 LVT 声明类型兜底（按作用域区分槽复用）；无 LVT 才退回 i32。
         name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
-        return (Var(name), I32)
+        decl_ty = self._declared_var_type(slot)
+        return (Var(name), decl_ty if decl_ty is not None else I32)
 
     # ── 辅助：生成 let + 临时变量（供 instr.py 中的"计算并绑定"模式）──────
 

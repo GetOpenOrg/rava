@@ -29,6 +29,15 @@ def _fix_bool_returns(lines: list[str]) -> list[str]:
     return result
 
 
+def _normalize_this_clone(lines: list[str]) -> list[str]:
+    """实例方法中 `this` 是 `&Self`（let this = self;），对它取值拷贝的正确形式是
+    `Clone::clone(this)`（得到 owned Self）。`Clone::clone(&this)` 拷贝的是引用本身
+    （得到 `&Self`），装入 Object 时借用逃逸（E0521），且宏无法识别为 wrapper 语义。
+    各指令路径按通用局部变量规则生成 `Clone::clone(&x)`，在此对 `this` 统一归一化。
+    构造器中 `this` 是 owned 值，不适用本 pass。"""
+    return [re.sub(r'Clone::clone\(&this\)', 'Clone::clone(this)', ln) for ln in lines]
+
+
 def _add_ok_return(lines: list[str], rust_ret: str, always_returns: bool = False) -> list[str]:
     """在方法末尾添加正确的 Ok(?) 返回表达式。
 

@@ -512,6 +512,8 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     sub_attr_count = r.u2()
     local_names: dict[int, str] = {}
     local_types: dict[int, str] = {}  # slot → generic Signature string
+    # slot → [(start_pc, length, descriptor)]：LVT 逐变量的声明类型与作用域
+    local_ranges: dict[int, list[tuple[int, int, str]]] = {}
     # 先收集两表原始条目再统一处理：LVT 与 LVTT 的 sub-attribute 顺序不保证
     # （LVTT 可能先于 LVT 出现），且同一 slot 可被多个不同作用域的变量复用
     # （如 resize 的 float ft 与 Node<K,V>[] newTab 共用 slot 6）。
@@ -532,6 +534,8 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
                 _desc_idx = lvt_r.u2()
                 slot      = lvt_r.u2()
                 _lvt_entries.append((_start_pc, _length, _utf8(pool, name_idx), slot))
+                local_ranges.setdefault(slot, []).append(
+                    (_start_pc, _length, _utf8(pool, _desc_idx)))
         elif sub_name == 'LocalVariableTypeTable':
             # 格式与 LocalVariableTable 相同，但 descriptor 换成 Signature
             sub_data = r.read(sub_len)
@@ -583,6 +587,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
         instrs=instrs,
         local_names=local_names,
         local_types=local_types,
+        local_ranges=local_ranges,
     )
 
 
