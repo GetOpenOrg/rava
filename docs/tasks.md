@@ -21,6 +21,7 @@
 
 **基线（2026-09-17 全量实测，04ed5a0）**：60 e2e，8 通过 / 52 失败（44 编译 + 8 运行阶段）。
 **对照基线（c259180，同一套 CSR 前的 anchor）**：12 通过 / 48 失败（38 编译 + 10 运行阶段）。
+**2026-09-18 里程碑（56f69c1）**：HelloWorld 编译并运行输出 `Hello, World`；TestInheritance 全部通过。vtable 多态架构首次端到端验证成功。
 
 ---
 
@@ -28,7 +29,11 @@
 
 > 已清偿：E0433 `crate::error`（闭包分支路径改裸 `Result`，invoke.py/sim.py 三处）✅ 2026-09-16  
 > 已清偿：E0599 `__get_value` on 基本类型（getfield 接收者为基本类型时恒等返回，sim.py）✅ 2026-09-16  
-> 附带修复：`println(D/F)` 浮点参数经 `java_fmt_*` 格式化（Java 语义 `3.0`）✅ 2026-09-16
+> 附带修复：`println(D/F)` 浮点参数经 `java_fmt_*` 格式化（Java 语义 `3.0`）✅ 2026-09-16  
+> 已清偿：E0407 `_find_virtual_in` mangle 一致性（AbstractCollection.add 单名 vs AbstractList.add_obj 双名边界截断）✅ 2026-09-18 `a5de2ab`  
+> 已清偿：E0392 PhantomData 误报（从 used_words 移除 meta.superclass 文字扫描）✅ 2026-09-18 `56f69c1`  
+> 已清偿：E0308 VirtualOverride vtable body 类型不符（is_vtable_safe_body 双形式检测 + wrapper 重建 + base 函数全 stub）✅ 2026-09-18 `56f69c1`  
+> 已清偿：E0034 clone 方法歧义（wrapper 重建改用 `Clone::clone(self)` 明确指定）✅ 2026-09-18 `56f69c1`
 
 **🔴 回归待修（最高优先级）**：**E0782 接口返回类型泄漏 ×8** — `method_gen.py` 新增「返回类型优先 generic_signature」
 时未套用 Arch-1 的接口→Object 降级，生成 `Result<Iterator<E>>`（`Iterator` 是 Object 别名且未导入，
@@ -63,7 +68,8 @@ TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c2
 ## P1 · 多态与类型封装（1:1 等价系列）
 
 > 目标：生成代码的可读层（`java_class!` 块内）不得出现 `borrow()`/`borrow_mut()`/`downcast`/`__into_super()`。  
-> 详细设计见 `docs/plans/2026-09-18-macro-family-design.md`。
+> 详细设计见 `docs/plans/2026-09-18-macro-family-design.md`。  
+> **已确认无问题**：VirtualOverride 方法在 vtable impl 里使用的签名（参数/返回类型 E/K/V）已由 Python codegen 在生成 `.rs` 文件时应用 `generic_signature` 属性，`block.rs` 宏直接使用 `f.sig`，无需额外 `rebuild_sig_with_generics`。（2026-09-18 验证）
 
 | 任务 | 优先级 | 依赖 | 预计修复 |
 |------|--------|------|---------|
@@ -71,7 +77,7 @@ TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c2
 | **`#[java_virtual]` + `#[java_override]`**：方法属性宏，与 vtable trait 配套；`#[java_virtual]` 注册到 vtable，`#[java_override]` 覆盖父类实现 | P1 | vtable trait | 同上 |
 | **`Array<T>` newtype**：`java_runtime/src/java/lang/array.rs` 定义封装 `Rc<RefCell<Vec<T>>>`，提供 `get(i32)`/`set(i32,T)`/`len()`，codegen 改 `newarray`/`anewarray` 指令 | P1 | 无 | 清除可读层 borrow 调用 |
 | **`impl From<Object> for T`**：`java_class!` 为每个类生成，隐藏 `downcast`；codegen 将 `checkcast T` 改写为 `obj.into()` | P1 | 无 | 清除可读层 downcast 调用 |
-| **`Object::from_any` → `.into()`**：codegen 将 `Object::from_any(v.clone())` 改写为 `v.into()`（依赖 R-1 blanket impl，已实现） | P2 | R-1 ✅ | 清除可读层 from_any 调用 |
+| **`Object::from_any` → `.into()` + `downcast` → `From<Object>`**：invoke.py 4 处残留：① 泛型传 Object 参数时 `Object::from_any(Clone::clone(&e))`（invoke.py:249）；② invokevirtual 返回值擦除时 `Object::from_any(call)`（:645）；③ receiver 为 Object 时 `Object::from_any(...)`（:684）；④ Object 传具体类型参数时 `(..).downcast::<T>()`（:274）。CLAUDE.md §1 明令禁止这些调用出现在可读层，需改为 `.into()` / `From<Object>::from(..)`（依赖 R-1 blanket impl，已实现） | P1→P2 | R-1 ✅ | 清除可读层 from_any/downcast 调用 |
 
 ## P2 · 翻译质量
 
@@ -91,7 +97,7 @@ TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c2
 
 | 任务 | 依赖 | 说明 |
 |------|------|------|
-| **`java_interface!` 宏**：封装 Java `interface`，生成 `InterfaceName__Trait: ObjectVTable` trait，`default` 方法生成 trait 默认实现 | vtable trait | 替代当前手写 trait |
+| **`java_interface!` 宏**：当前接口生成为 `pub type InterfaceName = Object;` 类型别名存根，接口多态（`List<E> list = new ArrayList<>()`后调用接口方法）无法正确表达。需生成 `InterfaceName__Trait: ObjectVTable` trait + vtable wrapper，`default` 方法生成 trait 默认实现。HelloWorld 路径用不到，不阻塞当前测试。| vtable trait | 替代当前类型别名存根 |
 | **`java_enum!` 宏**：封装带方法/字段的 Java `enum`，自动实现 `ObjectVTable`、`ordinal()`/`name()` | 无 | 解锁 enum 相关测试 |
 | **`java_try!` 宏**：封装 `try-catch-finally` 语义，异常路由 + finally 保证 | 异常表解析 | 解锁 TestExceptions、TestTryResources |
 | **`java_switch!` 宏**：封装 `tableswitch`/`lookupswitch`/String switch 语义 | 无 | 解锁 TestSwitchString、TestSwitchExpression |
@@ -125,6 +131,8 @@ TestLinkedList / TestMethodRef / TestArrayDeque / TestTryResources。**对照 c2
 
 | 任务 | 来源 | 说明 |
 |------|------|------|
+| **vtable dispatch Python 侧消除**：`_gen_invokevirtual`（invoke.py:912）仍靠 Python 逐方法判断「调用者是否声明该方法」决定是否加 `.vtable`。长期目标是 Rust 侧 `Deref<Target = dyn Flat__VTable>` 方案，让 Rust 类型系统自动路由，Python 完全不需要分析 vtable 拓扑。当前实现正确工作（HelloWorld/TestInheritance 通过），不阻塞主线。| 架构代码质量 | 等 vtable trait 架构稳定后作为独立架构升级 |
+| **内部类构造器外围实例捕获**：`ClassName$Inner` 的构造器需要访问外围类实例（`this$0`），codegen 当前无处理，生成代码语义错误。涉及匿名类（lambda 脱糖）、迭代器内部类（ArrayList$Itr）等场景。HelloWorld 路径不触发，等相关 e2e 用例出现时修复。| 功能缺口 | 等测试覆盖扩大后按需修复 |
 | IR 结构化（消 RawExpr/RawStmt） | T05/T06/T07/T50/T58/T61/T67 | 架构级，收敛口径见历史文档 T67 |
 | slot 复用与作用域追踪 | T68 | E0425 根因修复 |
 | 泛型精确化 | T66 | LocalVariableTypeTable 驱动 |
