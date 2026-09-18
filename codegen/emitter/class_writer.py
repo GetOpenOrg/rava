@@ -1009,6 +1009,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             ci, registry=registry,
             superclass_rust=parent_rust,
             superclass_fields=superclass_fields,
+            impl_methods=set((_nf_entry or {}).get('methods', set())),
         ))
         block.append('')
         # struct 声明：裸类型（封装细节收拢进宏），无 derive / 无 _super / 无 _phantom

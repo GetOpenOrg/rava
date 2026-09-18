@@ -13,13 +13,14 @@ from ..type_map import (
     parse_class_type_params as _parse_class_type_params,
     parse_method_param_types as _parse_method_param_types,
 )
-from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS
+from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 from .coerce import (
     parse_method_ref, _coerce_from_null, _coerce_to_object,
     _coerce_to_interface, _coerce_value, _find_super_chain_to_class,
     _find_method_super_prefix, _find_method_super_prefix_for_type,
     _super_prefix_to_expr, _resolve_method_owner,
     _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,
+    _method_ref_binary_class, _resolve_static_method_owner,
     _get_all_subtypes_ordered,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
@@ -330,6 +331,22 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         return
 
     cls, mname, params, ret = parse_method_ref(comment)
+    # JVM 方法解析：invokestatic 的常量池类可以是子类，static 方法实际声明在祖先类
+    # → 沿父类链解析到声明类（Rust 的关联函数不随继承可见，E0599）。
+    _cp_cls_bin = _method_ref_binary_class(comment)
+    _cls_path = ''  # 非空：短名在 registry 中跨包重名，调用点改用完整模块路径
+    if registry and _cp_cls_bin:
+        _s_desc = f"({''.join(params)}){ret}"
+        _s_owner = _resolve_static_method_owner(_cp_cls_bin, mname, _s_desc, registry)
+        if _s_owner and _s_owner != _cp_cls_bin:
+            comment = f"Method {_s_owner}.{mname}:{_s_desc}"
+            cls = short_cls(_s_owner)
+            _cp_cls_bin = _s_owner
+        if _cp_cls_bin in registry and _rust_type_to_binary(cls, registry) != _cp_cls_bin:
+            _crate = 'crate' if is_jdk(class_name or '') else 'java_runtime'
+            _cls_path = _crate + '::' + '::'.join(
+                (f'r#{_p}' if _p in _RUST_KEYWORDS else _p)
+                for _p in _cp_cls_bin.split('/')[:-1]) + '::'
     sig_params_s = _lookup_method_sig_params(
         cls, mname, params, ret, registry, sim.class_type_params
     )
@@ -386,7 +403,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
                         else:
                             # 跨类静态调用：用 Object 擦除（_引发E0283 —— 无上下文可推断K/V）
                             turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
-        call = f"{cls}{turbofish}::{rust_mname}({', '.join(args)})"
+        call = f"{_cls_path}{cls}{turbofish}::{rust_mname}({', '.join(args)})"
         needs_q = True
 
     q = '?' if needs_q else ''

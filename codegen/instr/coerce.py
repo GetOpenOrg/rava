@@ -547,6 +547,104 @@ def _resolve_method_owner(class_binary: str, mname: str, registry: dict | None,
     return ('', -1)
 
 
+def _method_ref_binary_class(comment: str) -> str:
+    """从 'Method pkg/Cls.name:(desc)ret' 注释中取出常量池类的完整 binary name。"""
+    c = comment.strip()
+    for prefix in ('InterfaceMethod ', 'Method '):
+        if c.startswith(prefix):
+            c = c[len(prefix):]
+    dot = c.find('.')
+    return c[:dot] if dot > 0 else ''
+
+
+def _resolve_static_method_owner(class_binary: str, mname: str, descriptor: str,
+                                 registry: dict | None) -> str:
+    """invokestatic 的 JVM 方法解析：常量池类可以是子类，static 方法实际声明在
+    祖先类 → 沿父类链找到声明类（描述符精确匹配）。找不到返回 ''。"""
+    if not registry:
+        return ''
+    cur = class_binary
+    seen: set[str] = set()
+    while cur and cur not in seen:
+        seen.add(cur)
+        ci = registry.get(cur)
+        if ci is None:
+            return ''
+        if any(m.is_static and m.name == mname and m.descriptor == descriptor for m in ci.methods):
+            return cur
+        cur = getattr(ci, 'super_class', None)
+    return ''
+
+
+def _resolve_static_field_owner(class_binary: str, field_name: str,
+                                registry: dict | None) -> str:
+    """getstatic/putstatic 的 JVM 字段解析（JVMS §5.4.3.2）：自身 → 父接口 → 父类。
+    field_name 为 .class 中的原始字段名。找不到返回 ''。"""
+    if not registry:
+        return ''
+    seen: set[str] = set()
+
+    def _lookup(cur: str) -> str:
+        if not cur or cur in seen:
+            return ''
+        seen.add(cur)
+        ci = registry.get(cur)
+        if ci is None:
+            return ''
+        if any(f.is_static and f.name == field_name for f in ci.fields):
+            return cur
+        for iface in (ci.interfaces or []):
+            found = _lookup(iface)
+            if found:
+                return found
+        return _lookup(getattr(ci, 'super_class', None) or '')
+
+    return _lookup(class_binary)
+
+
+_ROOT_VIRTUAL_METHODS: set[tuple[str, str]] | None = None
+
+
+def _root_virtual_methods() -> set[tuple[str, str]]:
+    """根类（OBJECT_CLASS）的 public 实例方法集 {(name, '(params)')}。
+
+    根类由 runtime 手写、不在 registry 中；其方法集从 JDK 的 .class 字节码
+    动态解析（不写方法名/类名字面量），供「整条祖先链都未声明该方法 →
+    路由到根 vtable」的判定使用。
+    """
+    global _ROOT_VIRTUAL_METHODS
+    if _ROOT_VIRTUAL_METHODS is None:
+        _ROOT_VIRTUAL_METHODS = set()
+        try:
+            from ..classfile import parse_class_bytes
+            from ..jdk_resolver import JdkResolver
+            with JdkResolver() as _res:
+                _data = _res.resolve(_OBJECT_CLASS)
+            if _data is not None:
+                _root_ci = parse_class_bytes(_data, _OBJECT_CLASS)
+                for _m in _root_ci.methods:
+                    # 仅 public 实例方法：protected 方法（clone/finalize）只能经子类
+                    # 自身的覆写调用，不存在「经根 vtable 对任意对象调用」的语义
+                    if (_m.is_static or _m.is_synthetic or _m.name.startswith('<')
+                            or not (_m.access_flags & 0x0001)):  # ACC_PUBLIC
+                        continue
+                    _ROOT_VIRTUAL_METHODS.add((_m.name, _m.descriptor.split(')')[0] + ')'))
+        except RuntimeError:
+            pass
+    return _ROOT_VIRTUAL_METHODS
+
+
+def _is_root_inherited_method(class_binary: str, mname: str, descriptor: str,
+                              registry: dict | None) -> bool:
+    """class_binary 及其祖先链均未声明 mname（按参数描述符匹配），且根类声明了它
+    → True：调用应路由到根 vtable，而不是在 wrapper 上找 inherent 方法。"""
+    _pp = descriptor.split(')')[0] + ')'
+    if (mname, _pp) not in _root_virtual_methods():
+        return False
+    _owner, _ = _resolve_method_owner(class_binary, mname, registry, descriptor=descriptor)
+    return not _owner
+
+
 def _parse_field_ref(comment: str) -> tuple[str, str, str]:
     """解析 'Field java/lang/System.out:Ljava/io/PrintStream;' 格式。
     返回 (class_binary_name, field_name, descriptor)。

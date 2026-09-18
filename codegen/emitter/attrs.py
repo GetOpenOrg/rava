@@ -194,8 +194,13 @@ def _compute_all_supertypes(ci: ClassInfo, registry: dict | None) -> list[str]:
 
 def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
                            superclass_rust: str = "",
-                           superclass_fields: list[tuple[str, str]] | None = None) -> list[str]:
+                           superclass_fields: list[tuple[str, str]] | None = None,
+                           impl_methods: 'set[str] | None' = None) -> list[str]:
     """生成 `java_class! { ... }` 块内的类级别属性行（方案 §4）。
+
+    impl_methods：共置 `<classname>_impl.rs` 手写 impl 块提供的方法名。它们是 wrapper 上的
+    inherent 方法（不在宏块内、不进 vtable），宏在 wrapper 上下文改写 `this.method()` 时
+    须将其视为本类自有方法。
 
     输出约定（与 Java 源码「缺省即默认」一致，看重生成物可读性）：
     空串 / false / package 可见性（Java 默认）的键整行不写；
@@ -276,6 +281,8 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
             lines.append('#[has_to_string_method = true]')
         if ('hashCode', '()I') in _method_sigs:
             lines.append('#[has_hash_code_method = true]')
+        if impl_methods:
+            lines.append(f'#[impl_methods      = "{";".join(sorted(impl_methods))}"]')
     return lines
 
 

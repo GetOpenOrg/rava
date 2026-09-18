@@ -12,7 +12,7 @@ from .coerce import (
     _JAVA_RUNTIME_SHORT_NAMES,
     _rust_type_to_binary, _get_all_subtypes_ordered,
     _find_method_super_prefix_for_type, _super_prefix_to_expr,
-    _resolve_method_owner,
+    _resolve_method_owner, _root_virtual_methods,
 )
 from ..type_map import parse_class_type_params as _parse_class_type_params
 from ..type_map import ancestor_vtable_args_by_short as _ancestor_vtable_args_by_short
@@ -114,6 +114,20 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         sim.push(Var(v), RsNamed('bool'))
         return
 
+    # 基本类型接收者（包装类映射为 Rust 基本类型）调用根类声明的方法：
+    # 基本类型上没有 Java 方法 → 装箱为 Object 后走根 vtable
+    if (obj_ty in _PRIMITIVE_RUST_TYPES
+            and (mname, f"({''.join(params)})") in _root_virtual_methods()):
+        _rust_ret_p = jvm_to_rust(ret, registry)
+        _call_p = f"Object::from_any({obj_e}).{_safe_field(mname)}({', '.join(args)})?"
+        if _rust_ret_p == '()':
+            sim.emit(RawStmt(f"{_call_p};"))
+        else:
+            _v_p = sim.fresh()
+            sim.emit(RawStmt(f"let {_v_p}: {_rust_ret_p} = {_call_p};"))
+            sim.push(Var(_v_p), RsNamed(_rust_ret_p))
+        return
+
     # JVM 数组.getClass() → Object::default()（代表 Class<T[]>）
     # Rust 侧 Vec/数组类型没有 getClass()，但调用方（如 Arrays.copyOf）只用
     # 其结果判断是否为 Object[] 类型；Object::default() 使判断走 Object[] 分支
@@ -183,6 +197,15 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
 
         # 当前调用的完整 JVM 描述符（供下面 _resolve_method_owner 精确匹配）
         jvm_desc = f"({''.join(params)}){ret}"
+        # 根类（Object）声明的方法：未在自身/祖先链声明该方法的类不生成分支，
+        # 统一落到链尾的根 vtable 调用（Java 语义：继承根类实现），
+        # 而不是在 wrapper 上找不存在的 inherent 方法（E0599）。
+        _root_declared = (mname, f"({''.join(params)})") in _root_virtual_methods()
+        if _root_declared:
+            _root_call = f"{obj_e}.{_safe_field(mname)}({arg_str})?"
+            _chain_tail = f" else {{ {_root_call}; }}" if rust_ret == '()' else f" else {{ {_root_call} }}"
+        else:
+            _chain_tail = '' if rust_ret == '()' else " else { Default::default() }"
         # 只有当目标类有已知子类时，才生成 dispatch 链（否则退化为简单 downcast）
         if subtypes:
             all_types = subtypes + [cls_binary]  # 叶→根
@@ -242,6 +265,8 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     _bridged = _resolve_bridge_target(registry[sub_bin], mname, jvm_desc, registry)
                     if _bridged is not None:
                         _owner_bin, _bridge_desc = _bridged[0].name, _bridged[1]
+                if _root_declared and not _owner_bin:
+                    continue
                 _mangle_cls = _owner_bin or sub_rust
                 sub_mname_r = _mangle_if_overloaded(_mangle_cls, mname, comment, registry)
                 sub_mname_r = _safe_field(sub_mname_r)
@@ -440,19 +465,19 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_call_expr}? }}")
             branches.append(_closure_branch)
             if rust_ret == '()':
-                dispatch_code = ' else '.join(branches)
+                dispatch_code = ' else '.join(branches) + _chain_tail
                 sim.emit(RawStmt(f"{dispatch_code}"))
             else:
-                dispatch_expr = ' else '.join(branches) + f" else {{ Default::default() }}"
+                dispatch_expr = ' else '.join(branches) + _chain_tail
                 sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
                 sim.push(Var(v), RsNamed(rust_ret))
             return
         # 无 subtypes 时（接口无已知实现类）：单独生成闭包 dispatch + 占位
         v = sim.fresh('_vdispatch')
         if rust_ret == '()':
-            sim.emit(RawStmt(_closure_branch))
+            sim.emit(RawStmt(_closure_branch + _chain_tail))
         else:
-            dispatch_expr = _closure_branch + f" else {{ Default::default() }}"
+            dispatch_expr = _closure_branch + _chain_tail
             sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
             sim.push(Var(v), RsNamed(rust_ret))
         return
@@ -463,6 +488,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 返回类型解析所用的（声明类, 接收者形态）：方法继承自祖先时换成祖先及其实参化形态，
     # 使祖先的类型变量（ForkJoinTask<V>.join → V）按接收者的超类实参代入
     _sig_owner, _sig_recv_ty = cls, obj_ty
+    _root_routed = False  # True：调用路由到根 vtable（根类方法返回类型由调用点标注决定）
     _ufcs_vtable_prefix = None  # 若非 None，改写为 UFCS：<dyn _ufcs_vtable_prefix>::rust_mname(&*obj.vtable, args)
     # 仅当接收者就是 this 本身时才直接调用；同类的其他实例（如 compareTo(that) 的 that）
     # 是 wrapper，继承方法必须走常规 vtable / UFCS 分派
@@ -491,6 +517,11 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     _ufcs_vtable_prefix = f"<dyn {_owner_short_v}__VTable{_owner_args_v}>"
                     _sig_owner, _sig_recv_ty = _owner_bin_v, _owner_short_v + _owner_args_v
                     _recv = f"&*{obj_e}.vtable"
+                elif (not _owner_bin_v
+                        and (mname, _param_desc) in _root_virtual_methods()):
+                    # 整条祖先链未声明、由根类声明 → 装箱后走根 vtable
+                    _recv = f"Object::from_any(Clone::clone(&{obj_e}))"
+                    _root_routed = True
                 else:
                     _recv = f"{obj_e}.vtable"
         else:
@@ -509,6 +540,9 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         v = sim.fresh()
         if obj_is_bare and rust_ret not in ('Object', '()') and rust_ret not in _PRIMITIVE_RUST_TYPES:
             sim.emit(RawStmt(f"let {v}: {rust_ret} = Default::default();"))
+        elif _root_routed:
+            sim.emit(RawStmt(f"let {v}: {rust_ret} = {_build_call(rust_mname, _recv, arg_str)}?;"))
+            sim.push(Var(v), RsNamed(rust_ret))
         elif rust_mname == 'clone' and obj_ty not in ('Object', '()'):
             # invokevirtual Object.clone 调用在具体类型上（如数组）：
             # Rust 的 clone() 不返回 Result，用 Object::from_any 包装匹配 Java 返回类型

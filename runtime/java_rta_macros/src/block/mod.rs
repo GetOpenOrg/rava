@@ -362,8 +362,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
     // 当前类自有方法名（VirtualDefine + VirtualOverride + NonVirtual）
     // 在 NeedsWrapper 路径中，不在此集合的 this.method() 调用均为继承虚方法，需通过 vtable 访问。
+    // 共置 `_impl.rs` 的手写方法同样是 wrapper 上的自有 inherent 方法（impl_methods）。
     let own_method_names: HashSet<String> = fns.iter()
         .map(|f| f.sig.ident.to_string())
+        .chain(meta.impl_methods.iter().cloned())
         .collect();
 
     if meta.superclass.is_none() {
@@ -517,6 +519,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                                 // 非 vtable-safe 方法体（含 Clone::clone(this) 等）：
                                 // 去除 codegen 生成的首行 `let this = self;`，
                                 // 改为在 vtable impl 中重建 wrapper 并绑定为 this。
+                                // this 是 wrapper（无 Deref）：继承而未在本类声明的虚方法
+                                // 经 vtable supertrait 链调用，与 VirtualDefine 的 NeedsWrapper 路径一致。
+                                rewrite_base_calls_for_wrapper(&mut b);
+                                rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
                                 if let Some(first) = b.stmts.first() {
                                     let s = quote!(#first).to_string();
                                     if s.contains("this") && s.contains("self") {

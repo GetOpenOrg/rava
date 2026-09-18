@@ -127,6 +127,8 @@ pub(crate) struct ClassMeta {
     pub is_interface: bool,
     pub has_to_string_method: bool,
     pub has_hash_code_method: bool,
+    /// 共置 `_impl.rs` 手写 impl 块提供的 wrapper inherent 方法名（不在宏块内、不进 vtable）。
+    pub impl_methods: Vec<String>,
 }
 
 impl ClassMeta {
@@ -174,6 +176,10 @@ impl ClassMeta {
                 m.has_to_string_method = lit_bool(attr)?;
             } else if path.is_ident("has_hash_code_method") {
                 m.has_hash_code_method = lit_bool(attr)?;
+            } else if path.is_ident("impl_methods") {
+                let s = lit_str(attr)?;
+                m.impl_methods =
+                    s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
             } else if path.is_ident("superclass_fields") {
                 let mut items: Vec<(Ident, Type)> = Vec::new();
                 attr.parse_nested_meta(|meta| {

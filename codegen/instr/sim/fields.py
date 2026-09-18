@@ -2,7 +2,7 @@
 
 import re as _re_g
 
-from ...stack import BOOL
+from ...stack import BOOL, _clone_moved_var
 from ...rs_ir import Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed
 from ...render import render_expr, render_type
 from ...type_map import (
@@ -14,12 +14,21 @@ from ...constants import safe_ident as _safe_ident
 from ..coerce import (
     _parse_field_ref, _coerce_to_object, _coerce_from_null, _coerce_value,
     _is_subtype, _rust_type_to_binary, _get_field_generic_signature,
-    _PRIMITIVE_RUST_TYPES, _into_super_chain,
+    _PRIMITIVE_RUST_TYPES, _into_super_chain, _resolve_static_field_owner,
 )
 from ..invoke import _gen_invokespecial
 
 # Rust 内建容器与已知类型短名（用于泛型类型可见性校验）
 _BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'})
+
+
+def _static_field_decl_class(cls: str, comment: str, registry: dict | None) -> str:
+    """getstatic/putstatic 常量池类 → static 字段的真实声明类（解析失败保持原类）。"""
+    if not cls or not comment:
+        return cls
+    _ref = comment.strip().split(' ', 1)[-1].split(':', 1)[0]
+    _raw_name = _ref.rsplit('.', 1)[-1]
+    return _resolve_static_field_owner(cls, _raw_name, registry) or cls
 
 
 def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
@@ -192,11 +201,14 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             sim.push(Lit('true'), BOOL)
         elif field_name:
             ty_str = jvm_to_rust(descriptor, registry) if descriptor else 'Object'
+            # JVM 字段解析：常量池类可以是子类，static 字段实际声明在祖先类/父接口
+            # → 访问器生成在声明类上，读取侧必须解析到声明类（否则 E0599）
+            cls = _static_field_decl_class(cls, comment, registry)
             # 泛型类静态字段访问需要 turbofish，避免 E0283 类型推断歧义
             _getstatic_turbofish = ''
             _getstatic_cls_ci = None
             if registry and cls:
-                _cls_bin = _rust_type_to_binary(cls.rsplit('/', 1)[-1].replace('$', '_'), registry) if '/' in cls else _rust_type_to_binary(cls.replace('$', '_'), registry)
+                _cls_bin = cls if cls in registry else _rust_type_to_binary(cls.rsplit('/', 1)[-1].replace('$', '_'), registry) if '/' in cls else _rust_type_to_binary(cls.replace('$', '_'), registry)
                 if not _cls_bin and cls in registry:
                     _cls_bin = cls
                 if _cls_bin:
@@ -232,9 +244,13 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             sim.push(RawExpr(f"/* getstatic {comment} */"), RsNamed('Object'))
 
     elif op == 'putstatic':
-        val_expr, _ = sim.pop()
+        val_expr, _ps_val_ty = sim.pop()
+        # Java 引用赋值无 move 语义：putstatic 之后源局部变量仍可被使用
+        # （dup; putstatic; areturn 模式）→ setter 实参包 Clone::clone 保活（E0382）
+        val_expr = _clone_moved_var(val_expr, _ps_val_ty)
         cls, field_name, descriptor = _parse_field_ref(comment) if comment else ('', '', '')
         if cls and field_name:
+            cls = _static_field_decl_class(cls, comment, registry)
             raw_cls = cls.rsplit('/', 1)[-1].replace('$', '_')
             rust_fname = _safe_ident(field_name)
             sim.emit(RawStmt(f"{raw_cls}::set_{rust_fname}({render_expr(val_expr)});"))
