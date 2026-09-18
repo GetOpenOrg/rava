@@ -405,7 +405,7 @@ def _upcast_to_ancestor_instantiation(src: str, actual: str, expected: str,
     if (exact_anc and exact_anc != expected and '<' in expected
             and _downcast_target_valid(expected, sim, registry)
             and _downcast_target_valid(exact_anc, sim, registry)):
-        return f"Object::from(Into::<{exact_anc}>::into({src})).downcast::<{expected}>()"
+        return f"<{expected}>::from(Object::from(Into::<{exact_anc}>::into({src})))"
     return None
 
 

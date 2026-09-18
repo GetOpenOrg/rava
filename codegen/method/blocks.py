@@ -125,14 +125,17 @@ def _is_bool(ty) -> bool:
     return str(ty) == 'bool' or getattr(ty, 'name', '') == 'bool'
 
 
-def jump_condition(op: str, sim: StackSim) -> Cond:
+def jump_condition(op: str, sim: StackSim, registry=None) -> Cond:
     """弹出条件跳转的操作数，返回「跳转成立」的条件。"""
     if op in TWO_OPERAND_BRANCH_OPS:
         b_e, b_t = sim.pop()
         a_e, a_t = sim.pop()
-        coerce = _coerce_acmp_operand if op in ('if_acmpeq', 'if_acmpne') else _coerce_icmp_operand
-        a_s = coerce(render_expr(a_e), a_t)
-        b_s = coerce(render_expr(b_e), b_t)
+        if op in ('if_acmpeq', 'if_acmpne'):
+            a_s = _coerce_acmp_operand(render_expr(a_e), a_t, registry, sim.class_type_params)
+            b_s = _coerce_acmp_operand(render_expr(b_e), b_t, registry, sim.class_type_params)
+        else:
+            a_s = _coerce_icmp_operand(render_expr(a_e), a_t)
+            b_s = _coerce_icmp_operand(render_expr(b_e), b_t)
         return atom(cmp_op(op, a_s, b_s), neg_cmp_op(op, a_s, b_s))
     a_e, a_t = sim.pop()
     if op in ('ifeq', 'ifne') and _is_bool(a_t):
@@ -557,7 +560,7 @@ class BlockSimulator:
             op = ins.opcode
             if i == last and op in JUMP_OPS:
                 if op in COND_BRANCH_OPS:
-                    node.cond = jump_condition(op, sim)
+                    node.cond = jump_condition(op, sim, self.registry)
                 elif op in SWITCH_OPS:
                     key_e, key_t = sim.pop()
                     key_s = render_expr(key_e)

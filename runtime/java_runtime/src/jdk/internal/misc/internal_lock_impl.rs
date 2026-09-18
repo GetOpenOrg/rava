@@ -21,6 +21,12 @@ impl InternalLock {
         Ok(InternalLock::default())
     }
 
+    /// 同一取值（jdk.io.useMonitors=true）：沿用调用方对象自身作监视器。
+    #[jvm_boundary]
+    pub fn newLockOr(obj: Object) -> Result<Object> {
+        Ok(obj)
+    }
+
     #[jvm_boundary]
     pub fn lock(&self) -> Result<()> {
         let guard = unsafe {

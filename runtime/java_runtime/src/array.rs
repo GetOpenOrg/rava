@@ -78,9 +78,10 @@ impl<T> From<Vec<T>> for JArray<T> {
 /// Java 数组是对象：可直接装入 Object（`Object o = arr;`）。
 impl<T: 'static> crate::java::lang::ObjectVTable for JArray<T> {
     fn as_any(&self) -> &dyn std::any::Any { self }
+    fn __identity(&self) -> *const () { Rc::as_ptr(&self.0) as *const () }
 }
 
 /// `(T[]) obj` —— Java 数组类型在运行时是具体化的（reified），按元素类型精确还原。
-impl<T: Clone + 'static> From<crate::java::lang::Object> for JArray<T> {
+impl<T: Clone + Default + 'static> From<crate::java::lang::Object> for JArray<T> {
     fn from(obj: crate::java::lang::Object) -> Self { obj.downcast::<Self>() }
 }

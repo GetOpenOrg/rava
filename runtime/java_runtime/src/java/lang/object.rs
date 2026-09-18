@@ -68,6 +68,16 @@ pub trait ObjectVTable: 'static {
         _type_id: &str,
     ) -> Option<Box<dyn std::any::Any>> { None }
 
+    /// 对象标识（`==` / `!=` 引用比较的依据）：同一 Java 对象的所有引用视图（祖先类 wrapper、
+    /// 接口载体、Object）返回同一值。java_class! 宏对生成类 override 为对象存储的标识单元。
+    #[doc(hidden)]
+    fn __identity(&self) -> *const () { self as *const Self as *const () }
+
+    /// 状态不可变（全部实例字段 final）的泛型类：擦除后的字段值（声明顺序，祖先在前）与对象标识
+    /// 单元。同一泛型类的另一类型实例化据此重建视图（Java 的 unchecked cast）。其余对象 → None。
+    #[doc(hidden)]
+    fn __erased_state(&self) -> Option<(Rc<()>, Vec<Object>)> { None }
+
     /// checkcast 的类型驱动形式：`slot` 是 `Option<T>`，`T` 为本类或任一祖先类的 wrapper 类型时
     /// 按运行时类重建该视图写入 `slot` 并返回 true（保留运行时类的覆盖实现）；否则返回 false。
     fn __view_into(

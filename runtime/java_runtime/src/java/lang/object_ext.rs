@@ -31,7 +31,20 @@ impl Object {
     ///   2. JvmRef 路径：T 通过 from_any 包装，as_any() 返回 &T
     ///      (JvmRef<T>::as_any → &self.0: &dyn Any，downcast_ref::<T>() 成功)
     #[jvm_ext]
-    pub fn downcast<T: std::any::Any + Clone + 'static>(&self) -> T {
+    pub fn downcast<T: std::any::Any + Clone + Default + 'static>(&self) -> T {
+        // null 通过任何引用类型的 checkcast（引用类型的 Default 即 null）；基本类型位置是拆箱
+        if self.0.is_jvm_null() {
+            let tid = std::any::TypeId::of::<T>();
+            let is_primitive = [
+                std::any::TypeId::of::<i8>(), std::any::TypeId::of::<i16>(), std::any::TypeId::of::<u16>(),
+                std::any::TypeId::of::<i32>(), std::any::TypeId::of::<i64>(), std::any::TypeId::of::<f32>(),
+                std::any::TypeId::of::<f64>(), std::any::TypeId::of::<bool>(),
+            ].contains(&tid);
+            if is_primitive {
+                panic!("NullPointerException: 对 null 拆箱为 {}", std::any::type_name::<T>());
+            }
+            return T::default();
+        }
         // Clone::clone 而非 .clone()：T 可能是带 Java clone() 方法的类
         // （Reference/HashMap 等），方法语法会被遮蔽返回 Result<Object>
         // T 本身就是 Object（泛型类以 Object 实例化，如 HashMap<Object, Object> 中的 V）：
@@ -52,6 +65,21 @@ impl Object {
         }
         panic!("ClassCastException: {} cannot be cast to {}",
                self.0.__class_name(), std::any::type_name::<T>())
+    }
+
+    /// checkcast 的非 panic 形式：运行时类是 `T` 或其子类 → Some(视图)，否则 None。
+    #[jvm_ext]
+    pub fn try_checkcast<T: std::any::Any + Clone + 'static>(&self) -> Option<T> {
+        if let Some(same) = (self as &dyn std::any::Any).downcast_ref::<T>() {
+            return Some(Clone::clone(same));
+        }
+        if let Some(same) = self.0.as_any().downcast_ref::<T>() {
+            return Some(Clone::clone(same));
+        }
+        let unused: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(());
+        let mut slot: Option<T> = None;
+        self.0.__view_into(unused, &mut slot);
+        slot
     }
 
     /// JVM checkcast：把引用还原为类 `T`（binary name 为 `binary_name`）的视图。
@@ -150,7 +178,11 @@ impl PartialEq for Object {
         try_eq!(i32); try_eq!(i64); try_eq!(bool);
         try_eq!(f32); try_eq!(f64); try_eq!(i8);
         try_eq!(i16); try_eq!(u16);
-        std::rc::Rc::ptr_eq(&self.0, &other.0)
+        match (self.0.is_jvm_null(), other.0.is_jvm_null()) {
+            (true, true) => true,
+            (false, false) => self.0.__identity() == other.0.__identity(),
+            _ => false,
+        }
     }
 }
 impl Eq for Object {}

@@ -19,21 +19,26 @@ def _coerce_icmp_operand(expr_str: str, ty_node) -> str:
     return expr_str
 
 
-def _coerce_acmp_operand(expr_str: str, ty_node) -> str:
-    """为 if_acmpX 对象引用比较做类型强制转换：非 Object 类型统一装入 Object。
+def _coerce_acmp_operand(expr_str: str, ty_node, registry=None, class_type_params=()) -> str:
+    """为 if_acmpX 对象引用比较做类型强制转换：非 Object 类型统一上转为 Object。
 
-    Java if_acmpeq/if_acmpne 是引用相等比较，Rust 中统一转为 Object 然后用 Object::PartialEq。
+    Java if_acmpeq/if_acmpne 是引用相等比较 → Object 的 PartialEq 按对象标识判定；上转必须保持
+    对象标识：类 / 接口载体经 `Object::from`（持有同一对象），不能不透明装箱。
     """
     ty = render_type(ty_node)
     if ty == 'Object':
         return expr_str
     if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16', 'usize', '()'):
         return expr_str  # 基本类型不应出现在 acmp，原样保留
-    # 引用类型或 self 引用：去掉 &，clone 后装入 Object
+    # 引用类型或 self 引用：去掉 &，clone 后上转
     clean = expr_str[1:] if expr_str.startswith('&') else expr_str
-    # Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等），
-    # 方法语法会被遮蔽返回 Result<Object>
-    return f"Object::from_any(Clone::clone(&{clean}))"
+    if registry:
+        from ..type_map import _registry_short_index
+        if _registry_short_index(registry).get(ty.split('<')[0].strip()) is not None:
+            # Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）
+            return f"Object::from(Clone::clone(&{clean}))"
+    from ..instr.coerce import _coerce_to_object
+    return _coerce_to_object(clean, ty, registry, class_type_params)
 
 
 def _str_to_rs_type(s: str) -> RsType:

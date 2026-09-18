@@ -700,6 +700,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
     }
 
+    // 对象标识单元：wrapper 钩子按值克隆 __inner 重建视图时随之共享，Default（新对象）各自新建
+    inner_field_tokens.push(quote! { pub(crate) __identity: ::std::rc::Rc<()> });
+
     if !phantom_fields.is_empty() {
         inner_field_tokens.push(quote! {
             pub(crate) __phantom: ( #( ::std::marker::PhantomData<fn() -> #phantom_fields>, )* )
@@ -838,6 +841,34 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         })
         .collect();
 
+    // 不可变状态的泛型类：导出擦除后的字段值（连同对象标识单元），供另一类型实例化重建视图
+    let erased_state_fn: TokenStream2 = if meta.immutable_state {
+        let erased_values: Vec<TokenStream2> = meta.superclass_fields.iter()
+            .map(|(n, t)| (n, inherited_is_basic(n, t)))
+            .chain(fields.iter().map(|(n, t)| (n, is_basic(t))))
+            .map(|(name, basic)| {
+                if basic {
+                    quote! { ::std::convert::Into::<Object>::into(self.#name.get()) }
+                } else {
+                    quote! {
+                        ::std::convert::Into::<Object>::into(
+                            self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default())
+                    }
+                }
+            })
+            .collect();
+        quote! {
+            fn __erased_state(&self) -> ::std::option::Option<(::std::rc::Rc<()>, ::std::vec::Vec<Object>)> {
+                ::std::option::Option::Some((
+                    ::std::rc::Rc::clone(&self.__identity),
+                    vec![#(#erased_values),*],
+                ))
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
             impl #impl_g ObjectVTable for #inner_ident #ty_g #where_c {
@@ -846,6 +877,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn __class_name(&self) -> &'static str { #binary_name }
+                fn __identity(&self) -> *const () {
+                    ::std::rc::Rc::as_ptr(&self.__identity) as *const ()
+                }
                 fn __view_as(
                     &self,
                     any: ::std::rc::Rc<dyn ::std::any::Any>,
@@ -897,6 +931,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
                 #hash_code_inner_bridge
                 #equals_inner_bridge
+                #erased_state_fn
                 #interface_query
                 #to_string_inner_bridge
             }
@@ -1274,7 +1309,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let wrapper_partialeq = quote! {
         impl #impl_g ::std::cmp::PartialEq for #struct_ident #ty_g #where_c {
             fn eq(&self, other: &Self) -> bool {
-                ::std::rc::Rc::ptr_eq(&self.vtable, &other.vtable)
+                match (self._jvm_null, other._jvm_null) {
+                    (true, true) => true,
+                    (false, false) => self.vtable.__identity() == other.vtable.__identity(),
+                    _ => false,
+                }
             }
         }
     };
@@ -1318,6 +1357,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     ObjectVTable::__interface(::std::rc::Rc::clone(&self.vtable), slot)
                 }
                 fn __class_name(&self) -> &'static str { self.vtable.__class_name() }
+                fn __identity(&self) -> *const () { self.vtable.__identity() }
+                fn __erased_state(&self) -> ::std::option::Option<(::std::rc::Rc<()>, ::std::vec::Vec<Object>)> {
+                    self.vtable.__erased_state()
+                }
                 fn __view_as(
                     &self,
                     _any: ::std::rc::Rc<dyn ::std::any::Any>,
@@ -1655,12 +1698,58 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // ══════════════════════════════════════════════════════════════════════════
 
     let obj = quote! { Object };
+    // 同一泛型类的另一类型实例化（Java 的 unchecked cast：`(Optional<T>) EMPTY`）：Rust 侧两个
+    // 单态化互不相同。状态不可变的类按擦除字段值重建本实例化的存储并共享对象标识单元，
+    // 与原对象不可区分（字段构造后不变，`==` 按标识单元判定）。
+    let reinstantiate: TokenStream2 = if meta.immutable_state {
+        let rebuilt_fields: Vec<TokenStream2> = meta.superclass_fields.iter()
+            .map(|(n, t)| (n, t, inherited_is_basic(n, t)))
+            .chain(fields.iter().map(|(n, t)| (n, t, is_basic(t))))
+            .map(|(name, ty, basic)| {
+                if basic {
+                    quote! {
+                        #name: ::std::rc::Rc::new(::std::cell::Cell::new(
+                            <#ty as ::std::convert::From<Object>>::from(__values.next().expect("erased state"))))
+                    }
+                } else {
+                    quote! {
+                        #name: ::std::rc::Rc::new(::std::cell::RefCell::new(::std::option::Option::Some(
+                            ::std::boxed::Box::new(
+                                <#ty as ::std::convert::From<Object>>::from(__values.next().expect("erased state"))))))
+                    }
+                }
+            })
+            .collect();
+        quote! {
+            if let ::std::option::Option::Some(same) = obj.try_checkcast::<Self>() {
+                return same;
+            }
+            if obj.0.__class_name() == #binary_name {
+                if let ::std::option::Option::Some((__id, __fields)) = obj.0.__erased_state() {
+                    let mut __values = __fields.into_iter();
+                    let rc = ::std::rc::Rc::new(#inner_ident {
+                        #(#rebuilt_fields,)*
+                        __identity: __id,
+                        ..::std::default::Default::default()
+                    });
+                    return #struct_ident {
+                        vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                        any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                        _jvm_null: false,
+                    };
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
     let from_object_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
             // Java checkcast 语义：运行时类是本类或其子类均成立（子类对象按运行时类重建本类视图）
             // null 通过任何 checkcast（JVMS §6.5 checkcast），得到本类的 null 引用
             fn from(obj: #obj) -> Self {
                 if obj.0.is_jvm_null() { return Self::default(); }
+                #reinstantiate
                 obj.checkcast::<Self>(#binary_name)
             }
         }

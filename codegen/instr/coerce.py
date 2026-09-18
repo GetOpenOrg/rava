@@ -453,7 +453,7 @@ def _reinstantiate_generic(e: str, actual: str, expected: str) -> str | None:
 
     Java 侧 `AbstractPipeline` 原始类型字段可接收任意实例化的 `this`，
     `(Optional<T>) EMPTY` 是无检查转换；Rust 侧 `X<A>` 与 `X<B>` 是不同类型，
-    唯一健全的转换是经 Object 边界做带运行时校验的重新实例化。
+    唯一健全的转换是经 Object 边界（保持对象标识）做带运行时校验的重新实例化。
     actual / expected 基名相同且类型实参不同 → 返回转换表达式，否则 None。"""
     if '<' not in actual or '<' not in expected or actual == expected:
         return None
@@ -464,7 +464,7 @@ def _reinstantiate_generic(e: str, actual: str, expected: str) -> str | None:
         # 实参含推断占位符 `_`（new X<>() 菱形）：由 Rust 类型推断对齐，无需转换
         return None
     src = 'Clone::clone(this)' if e == 'this' else f'Clone::clone(&{e})'
-    return f"Object::from_any({src}).downcast::<{expected}>()"
+    return f"<{expected}>::from(Object::from({src}))"
 
 
 def _into_super_chain(actual_short: str, expected_short: str, registry: dict | None) -> str:
