@@ -12,7 +12,7 @@ from ...type_map import (
     effective_class_type_params as _effective_class_type_params,
     outer_ref_field_type as _outer_ref_field_type,
 )
-from ...constants import safe_ident as _safe_ident
+from ...constants import safe_ident as _safe_ident, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import (
     _parse_field_ref, _coerce_to_object, _coerce_from_null, _coerce_value,
     _is_subtype, _rust_type_to_binary, _get_field_generic_signature,
@@ -21,7 +21,9 @@ from ..coerce import (
 from ..invoke import _gen_invokespecial
 
 # Rust 内建容器与已知类型短名（用于泛型类型可见性校验）
-_BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'})
+# 基本类型名也必须视为可见：装箱类型实参映射为 Rust 基本类型（X<Boolean> → X<bool>），
+# 否则此类字段的声明类型恢复被整体拒绝，读取侧退化为擦除形态
+_BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'}) | _PRIMITIVE_RUST_TYPES
 
 
 def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,

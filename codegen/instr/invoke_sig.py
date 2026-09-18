@@ -20,6 +20,7 @@ def _lookup_method_sig_params(
     registry: dict | None,
     caller_class_type_params: frozenset[str],
     receiver_targ_map: dict | None = None,
+    receiver_is_this: bool = False,
 ) -> list[str | None] | None:
     """查找被调用方法的 generic_signature，返回真实参数类型列表。
 
@@ -51,7 +52,16 @@ def _lookup_method_sig_params(
             resolved: list[str | None] = []
             for t in types:
                 if t in callee_tparams:
-                    if t in caller_class_type_params:
+                    if (ci.is_interface and not receiver_is_this
+                            and not (receiver_targ_map and t in receiver_targ_map)):
+                        # Arch-1：接口在 Rust 侧是 Object 别名，没有类型参数；
+                        # 其形参与调用方同名（Function<T,R> 在 Optional<T> 内被调用）
+                        # 只是命名巧合，接口方法形参一律是擦除形态。
+                        # 例外：接收者是 this（default 方法体被继承进实现类），形参即本类形参；
+                        # 接收者静态类型是具体泛型类（Set<String> s = new LinkedHashSet<>()）时
+                        # 按接收者实参解析
+                        resolved.append(None)
+                    elif t in caller_class_type_params:
                         resolved.append(t)
                     elif receiver_targ_map and t in receiver_targ_map:
                         resolved.append(receiver_targ_map[t])

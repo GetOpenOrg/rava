@@ -28,9 +28,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
     # 解析泛型实参以建立 callee 类型参数 → 接收者实参的映射（如 HashMap<E,Object> → K=E）
     _recv_targ_map: dict | None = None
+    _recv_is_this = False
     _recv_stack_idx = len(params)
     if len(sim.stack) > _recv_stack_idx:
         import re as _re_recv
+        # 接收者是 this（继承到类里的接口 default 方法体）：接口类型形参即本类类型形参
+        _recv_is_this = render_expr(sim.stack[-(_recv_stack_idx + 1)][0]) == 'this'
         _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
         _rm = _re_recv.match(r'^(\w+)<(.+)>$', _recv_ty)
         if _rm and registry:
@@ -46,6 +49,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     sig_params_v = _lookup_method_sig_params(
         cls, mname, params, ret, registry, sim.class_type_params,
         receiver_targ_map=_recv_targ_map,
+        receiver_is_this=_recv_is_this,
     )
     args = []
     for _idx_v, param_jvm in enumerate(reversed(params)):

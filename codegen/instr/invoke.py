@@ -160,7 +160,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         # 必须精确路由到目标父类的 ._super 链，直接调用父类实现，跳过虚拟派发。
         cls_short, mname, params, ret = parse_method_ref(comment)
         sig_params = _lookup_method_sig_params(
-            cls_short, mname, params, ret, registry, sim.class_type_params
+            cls_short, mname, params, ret, registry, sim.class_type_params,
+            receiver_is_this=True,
         )
         args: list[str] = []
         for _idx, param_jvm in enumerate(reversed(params)):
@@ -357,6 +358,9 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         cls, mname, params, ret, registry, sim.class_type_params
     )
     args = []
+    # static 泛型方法的类型变量是方法级的（由 impl 块同名形参承载）：形参是裸类型变量而
+    # 实参静态类型不同（Optional<T>.map 内 ofNullable(Object)）→ 该变量按实参绑定
+    _static_tbind: dict[str, str] = {}
     for _idx_s, param_jvm in enumerate(reversed(params)):
         e_expr, ty_node = sim.pop()
         e = render_expr(e_expr)
@@ -364,10 +368,14 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         _pi_s = len(params) - 1 - _idx_s
         _sig_t_s = sig_params_s[_pi_s] if sig_params_s and _pi_s < len(sig_params_s) else None
         expected = _sig_t_s if _sig_t_s is not None else jvm_to_rust(param_jvm, registry)
+        if (expected in (sim.class_type_params or ()) and ty != expected
+                and ty not in _PRIMITIVE_RUST_TYPES and ty != '()'):
+            _static_tbind.setdefault(expected, ty)
         e = _coerce_arg(e, ty_node, expected, ty, sim, registry)
         args.insert(0, e)
 
     needs_q = False  # 是否加 ?（用户类方法返回 Result）
+    turbofish_bound = False  # turbofish 是否采用了 _static_tbind 的实参绑定
 
     # 目标类不在 registry（被截断的内部类如 jdk.internal.*）→ 生成 panic 存根
     if cls and not _class_known(cls, registry):
@@ -405,7 +413,8 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
                             # （HashMap_TreeNode<K,V>），turbofish 用当前 impl 的
                             # 类型参数；填 Object 会 E0308（expected X<K,V>,
                             # found X<Object,Object>）。
-                            turbofish = '::<' + ', '.join(_tparams) + '>'
+                            turbofish = '::<' + ', '.join(_static_tbind.get(_tp, _tp) for _tp in _tparams) + '>'
+                            turbofish_bound = True
                         else:
                             # 跨类静态调用：用 Object 擦除（_引发E0283 —— 无上下文可推断K/V）
                             turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
@@ -428,6 +437,9 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             cls, mname, params, ret, registry,
             caller_class=class_name, caller_tparams=sim.class_type_params,
         )
+        if _sig_ret_s is not None and _static_tbind and turbofish_bound:
+            from ..type_map import substitute_type_params as _subst_tp
+            _sig_ret_s = _subst_tp(_sig_ret_s, _static_tbind)
         if rust_ret == 'Object':
             if _sig_ret_s is not None and _sig_ret_s != 'Object':
                 sim.emit(RawStmt(f"let {v} = Object::from_any({call}{q});"))

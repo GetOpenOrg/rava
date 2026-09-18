@@ -489,6 +489,10 @@ def _reinstantiate_generic(e: str, actual: str, expected: str) -> str | None:
         return None
     if actual.split('<', 1)[0] != expected.split('<', 1)[0]:
         return None
+    import re as _re_infer
+    if _re_infer.search(r'(?<![\w])_(?![\w])', actual):
+        # 实参含推断占位符 `_`（new X<>() 菱形）：由 Rust 类型推断对齐，无需转换
+        return None
     src = 'Clone::clone(this)' if e == 'this' else f'Clone::clone(&{e})'
     return f"Object::from_any({src}).downcast::<{expected}>()"
 
