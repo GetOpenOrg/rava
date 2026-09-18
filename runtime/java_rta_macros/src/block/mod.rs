@@ -1572,7 +1572,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let obj = quote! { Object };
     let from_object_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
-            fn from(obj: #obj) -> Self { obj.downcast::<Self>() }
+            // Java checkcast 语义：运行时类是本类或其子类均成立（子类对象按运行时类重建本类视图）
+            fn from(obj: #obj) -> Self { obj.checkcast::<Self>(#binary_name) }
         }
     };
 

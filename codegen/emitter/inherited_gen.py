@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from .. import inherited_calls
 from ..constants import OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 from ..type_map import (ancestor_type_args, effective_class_type_params,
+                        implemented_interface_views,
                         interface_member_local_name,
                         short_cls, substitute_type_params, superinterface_type_args)
 
@@ -123,36 +124,6 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
     return f"#[java_method({', '.join(parts)})]\n{signature};"
 
 
-def _implemented_interface_views(recv_ci, registry: dict) -> 'list[tuple[str, list[str]]]':
-    """类 recv 实现的全部接口（自身 + 祖先类 + 超接口闭包）及其在 recv 视角下的类型实参，
-    广度优先、近者在前。"""
-    anc_args = dict(ancestor_type_args(recv_ci, registry))
-    queue: list[tuple[object, dict]] = [(recv_ci, {})]
-    cur = recv_ci.super_class
-    seen_cls: set[str] = {recv_ci.name}
-    while cur and cur in registry and cur not in seen_cls:
-        seen_cls.add(cur)
-        cur_ci = registry[cur]
-        cur_params = effective_class_type_params(cur_ci, registry)
-        cur_args = anc_args.get(cur, [])
-        queue.append((cur_ci, {p: (cur_args[i] if i < len(cur_args) else 'Object')
-                               for i, p in enumerate(cur_params)}))
-        cur = cur_ci.super_class
-    out: list[tuple[str, list[str]]] = []
-    seen: set[str] = set()
-    while queue:
-        cur_ci, mapping = queue.pop(0)
-        for sup_bin, sup_args in superinterface_type_args(cur_ci, registry).items():
-            if sup_bin in seen:
-                continue
-            seen.add(sup_bin)
-            args = [substitute_type_params(a, mapping) for a in sup_args] if mapping else list(sup_args)
-            out.append((sup_bin, args))
-            sup_ci = registry[sup_bin]
-            queue.append((sup_ci, dict(zip(effective_class_type_params(sup_ci, registry), args))))
-    return out
-
-
 def _interface_member_declaration(method: EmittedMethod, owner_bin: str, owner_args: list[str],
                                   recv_ci, registry: dict) -> 'tuple[str, str]':
     """接口方法声明 → 类接收者视角下的继承成员声明；返回 (声明文本, 本类视角的 Rust 方法名)。
@@ -177,9 +148,41 @@ def _interface_member_declaration(method: EmittedMethod, owner_bin: str, owner_a
     return f"#[java_method({', '.join(parts)})]\n{signature};", local_name
 
 
+_SIG_CLASS_RE = re.compile(r'L([A-Za-z_$][\w$]*(?:/[A-Za-z_$][\w$]*)+)[<;]')
+
+
+def type_arg_uses(recv_ci, registry: dict, emissions: 'dict[str, ClassEmission]',
+                  crate_prefix: str) -> dict[str, str]:
+    """接收者视角下类型实参引用的类：Rust 短名 → use 行。
+
+    祖先签名中的类型变量被代入为接收者超类型签名里的实参（`CountedCompleter<Void>` 的 Void），
+    这些类型不出现在祖先文件的 use 里；从接收者及其全部超类型的类级泛型签名中解析
+    binary name，只收已生成的类。"""
+    uses: dict[str, str] = {}
+    queue = [recv_ci]
+    seen: set[str] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur is None or cur.name in seen:
+            continue
+        seen.add(cur.name)
+        for bin_name in _SIG_CLASS_RE.findall(getattr(cur, 'generic_signature', '') or ''):
+            if bin_name not in emissions:
+                continue
+            pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
+                            for p in bin_name.split('/')[:-1])
+            short = short_cls(bin_name)
+            uses.setdefault(short, f"use {crate_prefix}::{pkg}::{short};")
+        for sup in [cur.super_class] + list(cur.interfaces or []):
+            if sup and sup in registry:
+                queue.append(registry[sup])
+    return uses
+
+
 def _imports_for(signature: str, owner: ClassEmission, recv: ClassEmission,
-                 already: set[str]) -> list[str]:
-    """继承成员签名引用的类型：沿用祖先文件里的精确 use（换成接收者所在 crate 的前缀）。"""
+                 already: set[str], arg_uses: 'dict[str, str] | None' = None) -> list[str]:
+    """继承成员签名引用的类型：沿用祖先文件里的精确 use（换成接收者所在 crate 的前缀）；
+    代入的类型实参不在祖先文件中，按 arg_uses（见 type_arg_uses）解析。"""
     owner_uses = {}
     for ln in owner.text.split('\n'):
         m = _USE_RE.match(ln)
@@ -187,10 +190,22 @@ def _imports_for(signature: str, owner: ClassEmission, recv: ClassEmission,
             owner_uses.setdefault(m.group(2), ln.strip())
         elif ln.startswith('java_rta_macros::java_class!'):
             break
+    # 祖先文件不 use 自身：签名引用声明类自身（`fork() -> ForkJoinTask<V>`）时按其包路径导入
+    if '/' in owner.binary_name:
+        owner_short = short_cls(owner.binary_name)
+        owner_pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
+                              for p in owner.binary_name.split('/')[:-1])
+        owner_uses.setdefault(owner_short, f"use {owner.crate_prefix}::{owner_pkg}::{owner_short};")
     out: list[str] = []
     for ident in dict.fromkeys(_IDENT_RE.findall(signature)):
+        if ident in already:
+            continue
         use_line = owner_uses.get(ident)
-        if use_line is None or ident in already:
+        if use_line is None:
+            if not arg_uses or ident not in arg_uses:
+                continue
+            already.add(ident)
+            out.append(arg_uses[ident])
             continue
         if recv.crate_prefix != owner.crate_prefix and use_line.startswith('use crate::'):
             use_line = f"use {recv.crate_prefix}::" + use_line[len('use crate::'):]
@@ -215,6 +230,7 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
             um = _USE_RE.match(ln)
             if um:
                 imported.add(um.group(2))
+        arg_uses = type_arg_uses(recv_ci, registry, emissions, recv.crate_prefix)
         for name, param_desc in sorted(wanted):
             if recv.find(name, param_desc) is not None:
                 continue  # 本类已有（自身声明 / 注入的接口 default 方法）
@@ -232,7 +248,7 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
                 cur = registry[cur].super_class
             if method is None:
                 # 超类链无声明 → 接口方法（抽象类未实现的接口抽象方法 / 未注入本类的 default）
-                for iface_bin, iface_args in _implemented_interface_views(recv_ci, registry):
+                for iface_bin, iface_args in implemented_interface_views(recv_ci, registry):
                     iface = emissions.get(iface_bin)
                     if iface is None or iface.handwritten:
                         continue
@@ -264,7 +280,7 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
             decl = _member_declaration(method, owner_bin, recv_ci, registry)
             members.setdefault(recv_bin, []).append(decl)
             imports.setdefault(recv_bin, []).extend(
-                _imports_for(decl.split('\n', 1)[1], emissions[owner_bin], recv, imported))
+                _imports_for(decl.split('\n', 1)[1], emissions[owner_bin], recv, imported, arg_uses))
 
     for bin_name, em in emissions.items():
         decls = members.get(bin_name, [])

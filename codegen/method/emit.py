@@ -76,8 +76,8 @@ class TreeEmitter:
                 for stmt in self.nodes[it.block].stmts:
                     out.append((ind, stmt))
             elif isinstance(it, Decl):
-                for line in it.lines:
-                    out.append(('', f"{ind}{line}"))
+                for decl in it.lines:
+                    out.append((ind, decl))
             elif isinstance(it, Break):
                 if it.label in self.exit_owner:
                     out.append(('', ind + self._jump('break', self.exit_owner[it.label], ctx, used)))

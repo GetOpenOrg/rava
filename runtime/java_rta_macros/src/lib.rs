@@ -33,12 +33,6 @@ pub fn java_try(input: TokenStream) -> TokenStream {
     try_macro::expand(input.into()).into()
 }
 
-/// `java_unguarded! { ... }` — 标记 try 体文本范围内、不受该层异常表覆盖的代码（内联 finally 副本）。
-#[proc_macro]
-pub fn java_unguarded(input: TokenStream) -> TokenStream {
-    try_macro::expand_unguarded(input.into()).into()
-}
-
 /// `#[java_synchronized]` — 封装 Java `synchronized` 方法，函数级静态 Mutex 保证互斥。
 #[proc_macro_attribute]
 pub fn java_synchronized(attr: TokenStream, item: TokenStream) -> TokenStream {

@@ -206,6 +206,9 @@ class LetStmt:
     ty: Optional[RsType] = None
     mutable: bool = False
     value: Optional[RsExpr] = None
+    # 变量的模拟类型（不渲染）：`ty` 省略（交给 Rust 推断）时，变量提升 pass 仍需要类型
+    # 为前置声明 `let mut x: T = Default::default();` 作标注
+    value_ty: Optional[RsType] = None
 
 
 @dataclass

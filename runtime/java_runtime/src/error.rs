@@ -140,7 +140,7 @@ impl JvmError {
             return cause;
         }
         let throwable: Throwable = cause.catch_as::<Throwable>("java/lang/Throwable");
-        vm_throw(crate::java::lang::ExceptionInInitializerError::new_throwa(throwable))
+        vm_throw(crate::java::lang::ExceptionInInitializerError::new_throwable(throwable))
     }
 
     // ── 未捕获异常报告 ───────────────────────────────────────────────────────

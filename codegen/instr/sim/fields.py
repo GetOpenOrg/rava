@@ -243,18 +243,18 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                 return True
             # 类型变量接收者（`o.ordinal`，o: E，E extends B<E>）：访问器定义在上界类
             # 的 wrapper 上，类型变量本身没有方法（E0599）。Java 侧该访问经上界类型
-            # 静态解析 → Rust 侧把值转换为上界类型（宏生成的 From<Child> for Ancestor，
-            # vtable upcast 保留运行时类型）后再读字段；所需约束 `E: Into<B<E>>`
-            # 记入 sim，由方法签名声明为 where 子句。
+            # 静态解析（类型变量擦除为上界）→ Rust 侧经 Object 的 checkcast 视图转换为上界类型
+            # （按运行时类重建上界类视图，保留运行时类型）后再读字段。不用 `E: Into<B<E>>` 约束：
+            # 覆盖方法不能比 vtable 声明多带约束，约束放 struct 头又会使擦除实例化的证明循环。
             if registry and _recv_ty in (sim.class_type_params or ()):
                 _cur_ci = registry.get(class_name) if class_name else None
                 _tv_bound = (_class_type_param_bounds(_cur_ci, registry).get(_recv_ty)
                              if _cur_ci is not None else None)
                 if _tv_bound is not None:
                     _src = _clone_moved_var(obj_expr, obj_ty)
-                    obj_expr = RawExpr(f"Into::<{_tv_bound[0]}>::into({render_expr(_src)})")
+                    obj_expr = RawExpr(
+                        f"Into::<{_tv_bound[0]}>::into(Into::<Object>::into({render_expr(_src)}))")
                     obj_ty = RsNamed(_tv_bound[0])
-                    sim.type_var_bound_uses[_recv_ty] = _tv_bound[0]
             # 字段声明类型恢复：struct 字段生成（class_writer._resolve_field_rust）
             # 优先字段级 generic_signature（如 interfaces: Vec<Class<Object>>、
             # parent: HashMap_TreeNode<K, V>），宏访问器 __get_xxx() 按声明类型返回。

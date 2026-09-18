@@ -137,8 +137,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # Java 侧该调用经上界类型静态解析 → 转换为上界类型后调用（与 getfield 同规则）
     _tv_bound_v = sim.type_var_bounds.get(obj_ty)
     if _tv_bound_v is not None:
-        sim.type_var_bound_uses[obj_ty] = _tv_bound_v
-        obj_e = f"Into::<{_tv_bound_v}>::into(Clone::clone(&{obj_e}))"
+        obj_e = f"Into::<{_tv_bound_v}>::into(Into::<Object>::into(Clone::clone(&{obj_e})))"
         obj_expr = RawExpr(obj_e)
         obj_ty_node = RsNamed(_tv_bound_v)
         obj_ty = _tv_bound_v
@@ -361,7 +360,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                             sub_rust = sub_rust + '<' + ', '.join(['Object'] * len(_tp_g)) + '>'
                 # Fix 12b：重载 mangle 按声明类（owner）查 —— 子类继承的重载
                 # 方法在子类方法表中查不到同名重载，按子类表 mangle 会得到
-                # 错误的方法名（如 collect 声明处 mangle 为 collect_collec，
+                # 错误的方法名（如 collect 声明处 mangle 为 collect_collector，
                 # 子类分支按子类表查成 collect）。owner 沿父类链解析不到时
                 # （接口 default 方法由 class_writer 注入实现类 impl 块，
                 # 父类链上查不到）保留子类名。
@@ -577,10 +576,14 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 方法继承自祖先时登记继承成员需求，由接收者类的 java_class! 块声明该成员、
     # 宏展开为 wrapper 转发方法，vtable 分派不出现在方法体里。
     _recv = obj_e
-    # this 接收者同样登记：抽象类调用自身未声明的接口抽象方法（`this.getLong(f)`）时，
-    # 成员声明来自接口，由宏展开为经接口载体分派的转发方法。
-    if True:
-        _obj_jvm = _rust_type_to_binary(obj_base, registry) if registry else None
+    # this 接收者同样登记：调用祖先声明的方法、或抽象类调用自身未声明的接口抽象方法
+    # （`this.getLong(f)`）时，由本类 java_class! 块声明转发成员（后者经接口载体分派），
+    # 调用点保持 `this.m(args)`。this 的类取当前类 binary name（短名可能跨包重名）。
+    _this_recv_bin = (class_name if (sim.in_vtable_body and obj_base == _cur_class_short
+                                     and obj_e in ('this', 'self')
+                                     and registry and class_name in registry) else None)
+    if registry:
+        _obj_jvm = _this_recv_bin or _rust_type_to_binary(obj_base, registry)
         _ci_recv = registry.get(_obj_jvm) if _obj_jvm else None
         if _ci_recv is not None:
             _param_desc = '(' + ''.join(params) + ')'
@@ -588,6 +591,16 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 not m.is_synthetic and m.name == mname and m.descriptor.startswith(_param_desc)
                 for m in _ci_recv.methods
             )
+            if _declared_here:
+                # 协变返回：调用描述符（接口 / 祖先视角的返回类型）命中的是 synthetic bridge，
+                # 生成的 Rust 方法是接收者类声明的真实方法 → 返回类型按真实方法记录
+                _real_m = next((m for m in _ci_recv.methods
+                                if not m.is_synthetic and m.name == mname
+                                and m.descriptor.startswith(_param_desc)), None)
+                if _real_m is not None and _real_m.descriptor != _param_desc + ret:
+                    ret = _real_m.descriptor[len(_param_desc):]
+                    rust_ret = jvm_to_rust(ret, registry)
+                    _sig_owner, _sig_recv_ty = _obj_jvm, obj_ty
             if not _declared_here:
                 _jvm_desc_v = _param_desc + ret
                 _owner_bin_v, _ = _resolve_method_owner(_obj_jvm, mname, registry, descriptor=_jvm_desc_v)
@@ -610,6 +623,11 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     _bridged_v = _resolve_bridge_target(_ci_recv, mname, _jvm_desc_v, registry)
                     if _bridged_v is not None:
                         _param_desc = _bridged_v[1].split(')')[0] + ')'
+                        if not _bridged_v[0].is_interface:
+                            # 返回类型 / 签名查找按被桥接的真实方法（与生成的 Rust 方法同源）
+                            _, _, params, ret = parse_method_ref(f"{mname}:{_bridged_v[1]}")
+                            rust_ret = jvm_to_rust(ret, registry)
+                            _sig_owner = _bridged_v[0].name
                         _bridge_owner_short = _bridged_v[0].name.rsplit('/', 1)[-1].replace('$', '_')
                         if _bridged_v[0].name != _obj_jvm and not _bridged_v[0].is_interface:
                             _owner_args_v = _ancestor_vtable_args_by_short(

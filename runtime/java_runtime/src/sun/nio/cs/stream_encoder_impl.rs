@@ -7,7 +7,7 @@ use crate::java::nio::charset::Charset;
 /// 编码结果不在本层缓冲（直接写下游），因此 flushBuffer 无待写数据。
 impl StreamEncoder {
     #[jvm_boundary]
-    pub fn forOutputStreamWriter_output_obj_charse(out: OutputStream, _lock: Object, cs: Charset) -> Result<StreamEncoder> {
+    pub fn forOutputStreamWriter_outputstream_obj_charset(out: OutputStream, _lock: Object, cs: Charset) -> Result<StreamEncoder> {
         let mut se = StreamEncoder::default();
         se._init_not_null();
         se.__set_out(out);

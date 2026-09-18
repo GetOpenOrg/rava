@@ -98,8 +98,11 @@ def parse_switch_operand(operand: str) -> tuple[int, list[tuple[int, int]]]:
     return default_off, pairs
 
 
-def build_blocks(instrs: list[Instr], exception_table: list | None = None) -> list[Block]:
-    """指令序列 → 基本块列表（id 即列表下标，按字节码顺序）。"""
+def build_blocks(instrs: list[Instr], exception_table: list | None = None,
+                 boundaries: list | None = None) -> list[Block]:
+    """指令序列 → 基本块列表（id 即列表下标，按字节码顺序）。
+
+    boundaries：额外的块边界 pc（catch 体的文本终点：其后的代码属于 try 语句之后）。"""
     if not instrs:
         return []
     off2idx = {ins.offset: i for i, ins in enumerate(instrs)}
@@ -119,6 +122,10 @@ def build_blocks(instrs: list[Instr], exception_table: list | None = None) -> li
         for pc in (start_pc, end_pc):
             if pc in off2idx:
                 leaders.add(off2idx[pc])
+
+    for pc in (boundaries or []):
+        if pc in off2idx:
+            leaders.add(off2idx[pc])
 
     for i, ins in enumerate(instrs):
         op = ins.opcode

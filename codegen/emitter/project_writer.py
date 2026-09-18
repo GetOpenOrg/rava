@@ -296,6 +296,11 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             mod_lines = ['#![allow(ambiguous_glob_reexports)]']
             for c in sorted(children):
                 mod_lines.append(_mod_decl(c))
+                # 子包（目录）只声明 pub mod，不 glob 重导出：Java 的包之间没有
+                # 嵌套可见性，java.util 不包含 java.util.stream 的类。若重导出，
+                # 父包与子包的同名类（同一简单名）会在父包命名空间里产生歧义（E0659）。
+                if os.path.join(dir_path, c) in jdk_mod_tree:
+                    continue
                 mod_lines.append(_use_decl(c))
             # K-2: 扫描目录中的 _impl.rs / _ext.rs 共置文件，加入私有 mod 声明。
             # 规则：只有当 X.rs 存在（调用链生成，或手写 overlay 提供）时，
@@ -310,6 +315,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     elif _f.endswith('_ext.rs'):
                         base = _f[:-len('_ext.rs')]
                     else:
+                        continue
+                    # 含生成标记的 *_impl.rs / *_ext.rs 是类名恰以 Impl/Ext 结尾的生成类
+                    # （已在 children 中以 pub mod 声明），不是共置手写文件
+                    if _f[:-3] in children:
                         continue
                     # X.rs 不存在时跳过：_impl.rs 静默，不产生无法解析的 mod 声明
                     if not os.path.exists(os.path.join(dir_path, base + '.rs')):

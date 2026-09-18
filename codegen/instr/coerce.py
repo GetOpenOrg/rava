@@ -7,7 +7,7 @@ import re
 from ..constants import safe_ident as _safe_field, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, OBJECT_CLASS as _OBJECT_CLASS
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
-    mangle_name, hierarchy_overloaded_names,
+    mangle_name, hierarchy_overloaded_names, method_name_is_mangled,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
 )
 
@@ -89,7 +89,8 @@ def parse_method_ref(comment: str) -> tuple[str | None, str, list, str]:
                .replace('<init>',     '__init__')
                .replace('<clinit>',   '__clinit__'))
 
-    m = re.match(r'(?:([^.]+)\.)?(\w+(?:<\w+>)?):(\([^)]*\).+)', comment)
+    # 方法名按 JVMS §4.2.2：除 . ; [ / < > 之外的任意字符（含 `$`：枚举的 $values、access$NNN、lambda$..）
+    m = re.match(r'(?:([^.]+)\.)?([^.;\[/<>:()]+(?:<\w+>)?):(\([^)]*\).+)', comment)
     if not m:
         return (None, comment, [], 'V')
 
@@ -603,9 +604,9 @@ def _resolve_special_method_owner(class_binary: str, mname: str, descriptor: str
     """invokespecial（super.m()）的 JVM 方法解析：常量池类是直接父类，方法可能声明在
     更远的祖先 → 沿父类链找到最近声明类（描述符精确匹配）。找不到返回常量池类本身。"""
     cur = class_binary
-    seen: set[str] = set()
+    seen: list[str] = []
     while registry and cur and cur not in seen:
-        seen.add(cur)
+        seen.append(cur)
         ci = registry.get(cur)
         if ci is None:
             break
@@ -613,7 +614,77 @@ def _resolve_special_method_owner(class_binary: str, mname: str, descriptor: str
                for m in ci.methods):
             return cur
         cur = getattr(ci, 'super_class', None)
-    return class_binary
+    # 父类链上无声明 → 方法体来自接口 default 方法。default 方法体展开到「父类链上最早
+    # 实现该接口的类」（其后代经 VTable supertrait 链继承），__base 函数归属该类。
+    injected_owner = ''
+    for cls in seen:
+        if class_inherits_default_method(cls, mname, descriptor, registry):
+            injected_owner = cls
+    return injected_owner or class_binary
+
+
+def class_inherits_default_method(class_binary: str, mname: str, descriptor: str,
+                                  registry: dict | None) -> bool:
+    """类直接实现的接口闭包（含父接口）中，是否存在 (mname, descriptor) 的 default 方法体。"""
+    ci = registry.get(class_binary) if registry else None
+    if ci is None:
+        return False
+    queue: list[str] = list(ci.interfaces or [])
+    visited: set[str] = set()
+    while queue:
+        iname = queue.pop(0)
+        if iname in visited:
+            continue
+        visited.add(iname)
+        ici = registry.get(iname)
+        if ici is None:
+            continue
+        if any((not m.is_static) and (not m.is_abstract) and m.name == mname
+               and m.descriptor == descriptor for m in ici.methods):
+            return True
+        queue.extend(ici.interfaces or [])
+    return False
+
+
+def _resolve_interface_special_target(iface_binary: str, mname: str, descriptor: str,
+                                      registry: dict | None) -> str:
+    """invokespecial InterfaceMethod（`Iface.super.m()` / 接口私有方法）的 JVM 方法解析：
+    常量池类是接口，方法体可能声明在其父接口 → 自身优先、再按广度遍历父接口，
+    找到最近的「有方法体」的声明者（描述符精确匹配）。常量池类不是 registry 中的接口、
+    或找不到方法体时返回 ''。"""
+    if not registry:
+        return ''
+    root = registry.get(iface_binary)
+    if root is None or not root.is_interface:
+        return ''
+    queue: list[str] = [iface_binary]
+    seen: set[str] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur in seen:
+            continue
+        seen.add(cur)
+        ci = registry.get(cur)
+        if ci is None:
+            continue
+        if any((not m.is_static) and (not m.is_abstract) and m.name == mname
+               and m.descriptor == descriptor for m in ci.methods):
+            return cur
+        queue.extend(ci.interfaces or [])
+    return ''
+
+
+def interface_special_member_name(owner_binary: str, mname: str, descriptor: str,
+                                  registry: dict | None) -> str:
+    """`Iface.super.m(...)` 在实现类中的落点成员名：`Iface_super_m`（m 在接口内重载时带描述符后缀）。
+    接口 default 方法体按「展开到实现类」建模，被覆盖的 default 方法体以该名字的
+    非虚成员形式展开到调用者所在的类。定义侧（class_writer）与调用侧（invokespecial）共用。"""
+    owner_short = owner_binary.rsplit('/', 1)[-1].replace('$', '_')
+    owner_ci = registry.get(owner_binary) if registry else None
+    rust_m = mname
+    if owner_ci is not None and mname in hierarchy_overloaded_names(owner_ci, registry):
+        rust_m = mangle_name(mname, descriptor)
+    return f"{owner_short}_super_{rust_m}"
 
 
 def _resolve_static_method_owner(class_binary: str, mname: str, descriptor: str,
@@ -875,7 +946,15 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
                 from ..type_map import interface_member_local_name as _iface_local
                 _local = _iface_local(target_ci, mname, _call_desc_m.group(1), registry)
                 return _JAVA_RUST_RENAME.get(_local, _local)
-    if mname not in hierarchy_overloaded_names(target_ci, registry):
+    # 按 (name, descriptor) 判定：覆盖方法沿用 vtable 槽位所属祖先中的名字（与定义侧同源）
+    _final_desc_m = re.search(r':(\([^)]*\)\S+)', comment)
+    _call_desc = _final_desc_m.group(1) if _final_desc_m else ''
+    _declared = next((m for m in target_ci.methods
+                      if m.name == mname and m.descriptor == _call_desc), None)
+    _is_mangled = (method_name_is_mangled(target_ci, _declared, registry)
+                   if _declared is not None
+                   else mname in hierarchy_overloaded_names(target_ci, registry))
+    if not _is_mangled:
         # Java→Rust 名字冲突重命名（如 clone→jvm_clone）
         erg_name = _JAVA_RUST_RENAME.get(mname)
         if erg_name is not None:

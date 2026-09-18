@@ -5,6 +5,7 @@ JVM 操作数栈模拟器：将基于栈的字节码转换为 Rust IR 节点（S
 全量使用 IR 节点，不再接受字符串参数。
 """
 
+import re as _re_stack
 from typing import get_args
 
 from .rs_ir import (
@@ -123,6 +124,7 @@ class StackSim:
     def __init__(self, param_rust_types: list[RsType], is_static: bool, class_name: str,
                  local_names: dict[int, str] | None = None,
                  slot_decls: dict[int, list] | None = None,
+                 infer_type_args=None,
                  is_subtype=None,
                  return_type: str = 'Object',
                  is_constructor: bool = False,
@@ -144,6 +146,7 @@ class StackSim:
         # slot → [(start_pc, end_pc, name, RsType|None, from_signature)]：
         # LocalVariableTable/TypeTable 按作用域区间给出的声明名与声明类型（slot 复用按偏移区分）
         self._slot_decls = slot_decls or {}
+        self._infer_type_args = infer_type_args
         self._is_subtype = is_subtype or (lambda _c, _p: False)
         self._param_slots: set[int]                  = set()  # 方法参数占用的 slot（类型由签名决定）
         self.current_offset: int                     = 0    # 当前正在处理的字节码偏移
@@ -154,7 +157,6 @@ class StackSim:
         self.in_vtable_body: bool                    = in_vtable_body
         # 方法体用到的类型变量上界转换：类型变量 → 上界 Rust 类型。
         # 方法签名据此声明 `where E: Into<Bound>`；子 sim 与根 sim 共享同一 dict。
-        self.type_var_bound_uses: dict[str, str]     = {}
         # 类级类型变量 → 上界 Rust 类型（`K extends Task<.., K>`），由方法生成入口填入
         self.type_var_bounds: dict[str, str]         = {}
 
@@ -258,14 +260,14 @@ class StackSim:
         if not entries:
             return None
         off = self.current_offset
-        for start, end, name, rty, from_sig in entries:
+        for start, end, name, rty, from_sig, raw_sig in entries:
             if start <= off < end:
-                return (name, rty, from_sig)
+                return (name, rty, from_sig, raw_sig)
         if for_store:
             nxt = self.next_offset
-            for start, end, name, rty, from_sig in entries:
+            for start, end, name, rty, from_sig, raw_sig in entries:
                 if start == nxt or (nxt <= off and off < start <= off + 4):
-                    return (name, rty, from_sig)
+                    return (name, rty, from_sig, raw_sig)
         return None
 
     def pop_for_store(self) -> tuple[RsExpr, RsType]:
@@ -306,6 +308,20 @@ class StackSim:
         hint = decl[1] if (decl is not None and decl[2]) else None
         decl_ty = decl[1] if (decl is not None and not decl[2]) else None
         force_let_ty = False
+        # 菱形构造结果（类型实参待推断的 `X<_>`）存入有泛型声明的局部：按声明签名解出类型实参。
+        # 只靠 Rust 从后续用法推断时，若元素只以 Object 形态被使用，`_` 永远无解（E0283）。
+        _infer_m = _re_stack.match(r'^(\w+)<(_(?:, _)*)>$', ty.name) if isinstance(ty, RsNamed) else None
+        if _infer_m and decl is not None and decl[3] and self._infer_type_args is not None:
+            _solved = self._infer_type_args(_infer_m.group(1), decl[3])
+            if _solved:
+                _solved_args = ', '.join(_solved)
+                _open_tf = f"{_infer_m.group(1)}::<{_infer_m.group(2)}>::"
+                _src = render_expr(expr)
+                if _src.startswith(_open_tf):
+                    expr = RawExpr(f"{_infer_m.group(1)}::<{_solved_args}>::" + _src[len(_open_tf):])
+                else:
+                    force_let_ty = True
+                ty = RsNamed(f"{_infer_m.group(1)}<{_solved_args}>")
         _INT_FAMILY = ('i32', 'bool', 'u16', 'i8', 'i16')
         ty_name = getattr(ty, 'name', '')
         if ty_name in _INT_FAMILY:
@@ -349,13 +365,13 @@ class StackSim:
                 ty = decl_ty
                 force_let_ty = True
         # 类型变量值赋给声明为其上界类型的局部（`Task<.., K> task = this; task = task.makeChild(..)`，
-        # makeChild 返回 K）：Java 隐式上转 → 转换为上界类型（约束 `K: Into<Bound>` 由方法签名声明）
+        # makeChild 返回 K）：Java 隐式上转 → 经 Object 的 checkcast 视图转换为上界类型
         _tv_bound = self.type_var_bounds.get(ty.name) if isinstance(ty, RsNamed) else None
         _tv_target = hint if hint is not None else decl_ty
         if (_tv_bound is not None and isinstance(_tv_target, (RsNamed, RsGeneric))
                 and getattr(_tv_target, 'name', '').split('<')[0].strip() == _tv_bound.split('<')[0].strip()):
-            self.type_var_bound_uses[ty.name] = _tv_bound
-            expr = RawExpr(f"Into::<{_tv_bound}>::into({render_expr(_clone_moved_var(expr, ty))})")
+            expr = RawExpr(
+                f"Into::<{_tv_bound}>::into(Into::<Object>::into({render_expr(_clone_moved_var(expr, ty))}))")
             ty = RsNamed(_tv_bound)
             hint = None
         # 记录原始栈类型：只有在栈类型为 Object 时才需要 downcast
@@ -462,6 +478,12 @@ class StackSim:
             # 用 let 阴影（shadowing）而非赋值，避免 Rust 类型不匹配
             # T68: slot 在内层作用域（depth > current）中首次声明时，在外层访问必须用 let
             if render_type(old_ty) != render_type(ty) or decl_depth > self._current_depth:
+                if (decl is None and render_type(old_ty) != render_type(ty)
+                        and any(_safe_name(_d[2]) == name for _d in self._slot_decls.get(slot, ()))):
+                    # 存储点不在该槽任何声明变量的作用域内、类型又与槽上已结束作用域的声明变量不同：
+                    # javac 合成变量（for-each 的数组副本等）复用了槽位 → 是另一个变量，按槽位另行命名，
+                    # 不与原声明变量同名（同名 let 在变量提升后会退化为对原变量的赋值）
+                    name = f"local_{slot}"
                 self.locals[slot] = (name, ty, True)
                 self._slot_decl_depth[slot] = self._current_depth
                 value = _maybe_downcast(expr, ty) if src_is_object else expr
@@ -469,7 +491,7 @@ class StackSim:
                 let_ty = ty if (_is_default or force_let_ty) else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
                 # Java 局部变量间赋值在 Rust 中是 move，包 Clone 保活源变量（E0382）
                 value = _clone_moved_var(value, ty)
-                self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
+                self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value, value_ty=ty))
             else:
                 # hint 升级后（栈类型 Object → 局部精确类型）赋给已声明局部：
                 # 值本身仍是 Object（如 from_any 包装的调用结果），
@@ -481,7 +503,11 @@ class StackSim:
                 # Java 引用赋值无 move 语义，包 Clone 保活源变量（E0382）
                 self.stmts.append(AssignStmt(Var(name), _clone_moved_var(expr, ty)))
         else:
-            name = decl_name or _safe_name(self._loc_names.get(slot, f"local_{slot}"))
+            if decl_name is None and self._slot_decls.get(slot) and slot not in self._param_slots:
+                # 槽位有声明变量、但存储点不在任何声明的作用域内：javac 合成变量复用槽位，按槽位命名
+                name = f"local_{slot}"
+            else:
+                name = decl_name or _safe_name(self._loc_names.get(slot, f"local_{slot}"))
             self.locals[slot] = (name, ty, True)
             self._slot_decl_depth[slot] = self._current_depth
             value = _maybe_downcast(expr, ty) if src_is_object else expr
@@ -491,7 +517,7 @@ class StackSim:
             # Java 局部变量间赋值（aload src; astore dst）在 Rust 中是 move，
             # 源变量后续仍会被使用，包 Clone::clone 保活（E0382 use-after-move）
             value = _clone_moved_var(value, ty)
-            self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
+            self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value, value_ty=ty))
 
         # dup 后 astore：同一个 Var("_tN") 可能还留在 stack 上，但 _tN 已被 move。
         # 把 stack 上残留的同名引用替换为目标变量名，防止 E0382 use-after-move。
