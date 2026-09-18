@@ -1238,10 +1238,18 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                         }
                     });
                 } else {
+                    // VirtualOverride 的祖先 VTable 类型参数：
+                    // 若当前类有自己的泛型用 ty_g，否则用 superclass 的类型参数
+                    // （ClassScope 无泛型，实现 AbstractScope__VTable<Object>）
+                    let anc_override_args: proc_macro2::TokenStream = if gen.params.is_empty() {
+                        superclass_vtable_args.clone()
+                    } else {
+                        quote! { #ty_g }
+                    };
                     let mut body_gen = gen.clone();
                     body_gen.params.push(syn::parse_quote!(__BT));
                     body_gen.make_where_clause().predicates.push(
-                        syn::parse_quote!(__BT: #ancestor_vtable_ident #ty_g + ?Sized)
+                        syn::parse_quote!(__BT: #ancestor_vtable_ident #anc_override_args + ?Sized)
                     );
                     let (body_impl_g, _, body_where_c) = body_gen.split_for_impl();
                     base_fns.push(quote! {

@@ -287,21 +287,52 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     _all_fields_to_scan.append(_f2)
                     _seen_scan.add(_f2.name)
             _sc_scan = _sci_scan.super_class
+    # 泛型签名中嵌套类型需要用更宽松的 regex（不能用 [^;]+ 因为嵌套 <TT;> 会截断）
+    _cls_re_narrow = _re.compile(r'L([^;]+);')          # 平铺 descriptor（如 (LFoo;)V）
+    _cls_re_wide = _re.compile(r'L([^;<>\[()\s]+)')     # 含嵌套泛型的 generic_signature
     for _f in _all_fields_to_scan:
-        for _m in _re.finditer(r'L([^;]+);', _f.descriptor or ''):
+        for _m in _cls_re_narrow.finditer(_f.descriptor or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
-        for _m in _re.finditer(r'L([^;]+);', _f.generic_signature or ''):
+        for _m in _cls_re_wide.finditer(_f.generic_signature or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
     # 扫描方法描述符（参数和返回值）
     for _method in ci.methods:
-        for _m in _re.finditer(r'L([^;]+);', _method.descriptor or ''):
+        for _m in _cls_re_narrow.finditer(_method.descriptor or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
-        for _m in _re.finditer(r'L([^;]+);', getattr(_method, 'generic_signature', '') or ''):
+        for _m in _cls_re_wide.finditer(getattr(_method, 'generic_signature', '') or ''):
             _c2 = _strip_generic(_m.group(1))
             if _c2: _referenced.add(_c2)
+
+    # 收集 invokeinterface/invokevirtual 调度分支中引用的子类型
+    # （dispatch 链 downcast_ref::<SubType>() 需要 SubType 在作用域内）
+    if registry:
+        from ..instr.coerce import _get_all_subtypes_ordered as _gaso
+        from ..type_map import is_jdk as _is_jdk
+        _iface_refs: set[str] = set()
+        for _m in ci.methods:
+            for _instr in (_m.instrs or []):
+                _c = _instr.comment
+                if not _c:
+                    continue
+                if _c.startswith(('InterfaceMethod ', 'Method ')):
+                    _rest = _c.split(' ', 1)[1]
+                    _dot = _rest.find('.')
+                    if _dot > 0:
+                        _iface_refs.add(_rest[:_dot])
+        for _iface_bin in _iface_refs:
+            _iface_ci = registry.get(_iface_bin)
+            if _iface_ci is None:
+                continue
+            for _sub_bin in _gaso(_iface_bin, registry):
+                _sub_bin_clean = _strip_generic(_sub_bin)
+                if _is_jdk(_iface_bin):
+                    if _is_jdk(_sub_bin_clean):
+                        _referenced.add(_sub_bin_clean)
+                else:
+                    _referenced.add(_sub_bin_clean)
 
     # 过滤：只保留实际会生成到 scratch 的类型引用，避免为 stub 方法签名里的类型
     # 生成 use 语句（那些类型不在 scratch 里，会导致 E0432）。
@@ -545,10 +576,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if registry else set()
     )
     # 基础内建类型，不需要注册表校验
+    # JArray 是 Rust 端数组包装类型，不对应 Java 类，须手动加入
     _BUILTIN_TYPES = frozenset({
         'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
         'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell',
-        'usize', 'u8',
+        'usize', 'u8', 'JArray',
     })
     # Rust 结构符号，不是类型名，跳过校验
     _RUST_TOKENS = frozenset({'', 'mut', 'dyn', 'static', 'impl'})

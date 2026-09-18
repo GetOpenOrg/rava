@@ -182,6 +182,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
             'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
             'crate',  # 允许 crate::java::... 全路径接口类型通过校验
+            'JArray',  # Rust 端数组包装，不对应 Java 类
         })
         _reg_shorts = (
             {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
