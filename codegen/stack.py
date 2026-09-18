@@ -123,6 +123,9 @@ class StackSim:
         self._slot_decl_depth: dict[int, int]        = {}  # slot → 首次声明时的嵌套深度
         self.underflow_occurred: bool                = False  # 记录是否发生过栈下溢
         self.in_vtable_body: bool                    = in_vtable_body
+        # 方法体用到的类型变量上界转换：类型变量 → 上界 Rust 类型。
+        # 方法签名据此声明 `where E: Into<Bound>`；子 sim 与根 sim 共享同一 dict。
+        self.type_var_bound_uses: dict[str, str]     = {}
 
         def _is_wide(rt: RsType) -> bool:
             """long (i64) 和 double (f64) 在 JVM 中各占 2 个局部变量槽。"""

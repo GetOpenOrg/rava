@@ -29,7 +29,7 @@ from ..rs_ir import (
     RsNamed, RsPrimitive, RsType,
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
 )
-from ..stack import BOOL
+from ..stack import BOOL, _clone_moved_var
 from ..instr.coerce import _is_subtype, _common_ref_type
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
 from .postprocess import _normalize_this_clone, _erase_boxed_ctor_type_args, _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
@@ -40,6 +40,20 @@ TWO_OP_CMP = frozenset({
     'if_icmpge', 'if_icmple', 'if_icmpgt',
     'if_acmpeq', 'if_acmpne',
 })
+
+
+def _arm_value(entry) -> str:
+    """分支臂（三元表达式 / 合并变量赋值）留在栈顶的值 → 值位置表达式。
+
+    臂内的局部变量出现在值位置是 Rust move；Java 引用无 move 语义，
+    该变量在分支之后仍可被使用（`f(l == null ? DEFAULT : l); g(l);`）
+    → 与 astore / putstatic 同规则包 Clone::clone 保活（E0382）。
+    """
+    expr, ty = entry
+    if isinstance(expr, Var) and expr.name == 'this':
+        # this 是 &Self：由调用方统一转为 Clone::clone(this)
+        return render_expr(expr)
+    return render_expr(_clone_moved_var(expr, ty))
 
 
 def _uses_jvm_null_method(ty: str) -> bool:
@@ -301,6 +315,7 @@ def gen_method_body(
                 return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                 in_vtable_body=cur_sim.in_vtable_body,
             )
+            s.type_var_bound_uses = sim.type_var_bound_uses
             s.locals = dict(cur_sim.locals)
             s._slot_decl_depth = dict(cur_sim._slot_decl_depth)
             s.stack = list(cur_sim.stack)
@@ -556,8 +571,8 @@ def gen_method_body(
                         and not then_s.stmts and not else_s.stmts
                         and not then_out and not else_out):
                     # 三元：两个分支各留一个值在栈上，无语句无嵌套输出
-                    tv = render_expr(then_s.stack[-1][0])
-                    ev = render_expr(else_s.stack[-1][0])
+                    tv = _arm_value(then_s.stack[-1])
+                    ev = _arm_value(else_s.stack[-1])
                     # `this` 是 &Self（let this = self;），不能直接用于值位置，需要 Clone::clone
                     if tv == 'this':
                         tv = 'Clone::clone(this)'
@@ -626,8 +641,8 @@ def gen_method_body(
                     ety = else_s.stack[-1][1]
                     ty_str = render_type(ty)
                     ety_str = render_type(ety)
-                    then_val = render_expr(then_s.stack[-1][0])
-                    else_val = render_expr(else_s.stack[-1][0])
+                    then_val = _arm_value(then_s.stack[-1])
+                    else_val = _arm_value(else_s.stack[-1])
                     # `this` 是 &Self，不能直接用于值位置，需要 Clone::clone
                     if then_val == 'this':
                         then_val = 'Clone::clone(this)'
@@ -846,6 +861,13 @@ def gen_method_body(
         lines = _remove_trailing_return_ok(lines)
         _always_returns = function_always_returns(instrs)
         lines = _add_ok_return(lines, rust_ret, _always_returns)
+
+    # 类型变量上界约束（E extends B<E>）：方法体把类型变量值转换为上界类型时，
+    # 约束声明在该方法上而非 struct 头——F-bounded 约束放在 struct 上会使擦除
+    # 实例化 B<Object> 的 well-formed 证明自我循环（E0275）。
+    if sim.type_var_bound_uses:
+        sig += " where " + ", ".join(
+            f"{_tv}: Into<{_b}>" for _tv, _b in sorted(sim.type_var_bound_uses.items()))
 
     body = '\n'.join(lines)
     # 有重载时在方法前加注释，标注原始 Java 签名
