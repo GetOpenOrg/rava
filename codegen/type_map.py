@@ -207,6 +207,83 @@ def mangle_name(name: str, descriptor: str) -> str:
     return f"{name}_{suffix}" if suffix else name
 
 
+
+_OVERLOAD_CACHE: dict[tuple, frozenset] = {}
+
+
+def _class_method_param_sets(ci, registry: dict | None) -> tuple[dict, dict]:
+    """ci 在 Rust 侧 impl 块中的方法表：name → 参数列表集合。
+    返回 (全部方法, 仅实例方法)。包含 class_writer 注入的接口 default 方法
+    （ci 自身未声明同签名时）；synthetic/bridge 不计；协变返回（参数相同）只算一种。"""
+    all_sets: dict[str, set[str]] = {}
+    inst_sets: dict[str, set[str]] = {}
+
+    def _add(m) -> None:
+        params = m.descriptor.split(')')[0]
+        all_sets.setdefault(m.name, set()).add(params)
+        if not m.is_static and not m.is_constructor:
+            inst_sets.setdefault(m.name, set()).add(params)
+
+    for m in ci.methods:
+        if not m.is_synthetic and m.name != '<clinit>':
+            _add(m)
+    if registry and ci.interfaces and not ci.is_interface:
+        queue: list[str] = list(ci.interfaces)
+        seen: set[str] = set()
+        while queue:
+            iname = queue.pop(0)
+            if iname in seen:
+                continue
+            seen.add(iname)
+            ici = registry.get(iname)
+            if ici is None:
+                continue
+            queue.extend(ici.interfaces or [])
+            for m in ici.methods:
+                if (not m.is_abstract and not m.is_static and not m.is_synthetic
+                        and m.name not in ('<init>', '<clinit>')):
+                    _add(m)
+    return all_sets, inst_sets
+
+
+def hierarchy_overloaded_names(ci, registry: dict | None) -> frozenset:
+    """类 ci 中需要按描述符 mangle 的方法名集合 —— 定义侧与调用侧的唯一判定来源。
+
+    Rust 侧子类通过 Deref 到父类来继承实例方法；子类的同名 inherent 方法会**按名字**
+    遮蔽父类的全部同名方法（Java 按 name+descriptor 覆盖），vtable 覆盖又要求子类方法名
+    与祖先 trait 中的名字一致。因此判定必须沿父类链进行：
+      1. ci 自身方法表（含注入的接口 default 方法）中同名出现 ≥2 种参数列表
+      2. 该名字在父类中已被 mangle → 子类沿用（覆盖方法名与祖先 vtable 一致）
+      3. ci 声明了该名字的实例方法，且与祖先链上的同名实例方法合计 ≥2 种参数列表
+         （Buffer.position() / ByteBuffer.position(int) → ByteBuffer 用 position_i，
+         不遮蔽 Buffer.position()）
+    static 方法按路径调用（不经 Deref），不参与跨类判定；<init> 不继承，只看规则 1。
+    判定只向上看：祖先总在 registry 中，结果不随翻译范围变化。接口自身只用规则 1。"""
+    cache_key = (id(registry), len(registry) if registry else 0, ci.name)
+    cached = _OVERLOAD_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    own_all, own_inst = _class_method_param_sets(ci, registry)
+    result: set[str] = {n for n, ps in own_all.items() if len(ps) > 1}
+    if registry and not ci.is_interface:
+        parent = registry.get(ci.super_class) if ci.super_class else None
+        if parent is not None and parent.name != ci.name:
+            # 单调继承：不论 ci 是否重新声明，名字一旦在祖先处 mangle，后代全部沿用
+            result |= hierarchy_overloaded_names(parent, registry) - {'<init>'}
+        inherited: dict[str, set[str]] = {}
+        seen_cls: set[str] = {ci.name}
+        anc = parent
+        while anc is not None and anc.name not in seen_cls:
+            seen_cls.add(anc.name)
+            for n, ps in _class_method_param_sets(anc, registry)[1].items():
+                inherited.setdefault(n, set()).update(ps)
+            anc = registry.get(anc.super_class) if anc.super_class else None
+        result |= {n for n, ps in own_inst.items() if len(ps | inherited.get(n, set())) > 1}
+    frozen = frozenset(result)
+    _OVERLOAD_CACHE[cache_key] = frozen
+    return frozen
+
+
 def _parse_type_list(s: str) -> list[str]:
     types, i = [], 0
     while i < len(s):

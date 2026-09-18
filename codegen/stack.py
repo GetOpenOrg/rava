@@ -197,14 +197,30 @@ class StackSim:
 
     # ── 局部变量 ─────────────────────────────────────────────────────────────
 
-    def _declared_var_type(self, slot: int) -> RsType | None:
-        """当前偏移处 slot 上存活变量的 LVT 声明类型（无 LVT 信息时返回 None）。
-        LVT start_pc 指向首个 store 之后的指令，store 自身偏移 = start_pc - 指令大小（≤4）。"""
+    def _declared_var(self, slot: int) -> tuple | None:
+        """当前偏移处 slot 上存活变量的 LVT 条目 (start, end, RsType, name)；无 LVT 信息返回 None。
+        LVT start_pc 指向首个 store 之后的指令，store 自身偏移 = start_pc - 指令大小（≤4）：
+        即将开始的变量（store 正在初始化它）优先于仍未结束的旧变量。"""
         off = self.current_offset
-        for start, end, decl_ty in self._var_types.get(slot, ()):
-            if start - 4 <= off < end:
-                return decl_ty
+        entries = self._var_types.get(slot, ())
+        for entry in entries:
+            if entry[0] - 4 <= off < entry[0]:
+                return entry
+        for entry in entries:
+            if entry[0] <= off < entry[1]:
+                return entry
         return None
+
+    def _declared_var_type(self, slot: int) -> RsType | None:
+        entry = self._declared_var(slot)
+        return entry[2] if entry is not None else None
+
+    def _local_name(self, slot: int) -> str:
+        """slot 在当前偏移处的变量名：优先 LVT 作用域内的名字，回退槽级代表名。"""
+        entry = self._declared_var(slot)
+        if entry is not None:
+            return _safe_name(entry[3])
+        return _safe_name(self._loc_names.get(slot, f"local_{slot}"))
 
     def _in_object_var_range(self, slot: int) -> bool:
         """当前偏移是否处于 slot 上某个「LVT 声明类型为 Object/接口」变量的作用域内。"""
@@ -298,6 +314,13 @@ class StackSim:
             expr = RawExpr(f"Object::from_any({render_expr(_clone_moved_var(expr, ty))})")
             ty = RsNamed('Object')
 
+        # slot 复用：当前偏移处 LVT 变量名与槽上已登记的名字不同 → 这是一个新变量，
+        # 走首次声明路径（用新名字 let），而不是给旧变量赋值 / 同名阴影。
+        if slot in self.locals \
+                and self._declared_var(slot) is not None \
+                and self._local_name(slot) != self.locals[slot][0]:
+            del self.locals[slot]
+
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
             decl_depth = self._slot_decl_depth.get(slot, 0)
@@ -325,7 +348,7 @@ class StackSim:
                 # Java 引用赋值无 move 语义，包 Clone 保活源变量（E0382）
                 self.stmts.append(AssignStmt(Var(name), _clone_moved_var(expr, ty)))
         else:
-            name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
+            name = self._local_name(slot)
             self.locals[slot] = (name, ty, True)
             self._slot_decl_depth[slot] = self._current_depth
             value = _maybe_downcast(expr, ty) if src_is_object else expr
@@ -353,7 +376,7 @@ class StackSim:
         # 槽不在 locals 中（跨 StackSim 路径），仍用 LocalVariableTable 中的名字，
         # 以便 _hoist_if_vars 能将其与同名的 LetStmt 声明关联并正确提升。
         # 类型以当前偏移处的 LVT 声明类型兜底（按作用域区分槽复用）；无 LVT 才退回 i32。
-        name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
+        name = self._local_name(slot)
         decl_ty = self._declared_var_type(slot)
         return (Var(name), decl_ty if decl_ty is not None else I32)
 

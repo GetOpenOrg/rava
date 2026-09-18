@@ -7,7 +7,7 @@ import re
 from ..constants import safe_ident as _safe_field, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, OBJECT_CLASS as _OBJECT_CLASS
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
-    mangle_name,
+    mangle_name, hierarchy_overloaded_names,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
 )
 
@@ -120,8 +120,25 @@ def _to_i32(expr_str: str, ty: 'RsType') -> str:
     """窄类型（i8/i16/u16/bool）向上转为 i32，避免 JVM int 运算中的类型不匹配。"""
     ty_name = getattr(ty, 'name', '')
     if ty_name in ('i8', 'i16', 'u16', 'bool'):
+        # `as` 优先级高于比较/算术运算符：`a > b as i32` 会被解析为 `a > (b as i32)`，
+        # 非原子表达式必须先整体加括号再转换。
+        if not _is_atomic_expr(expr_str):
+            expr_str = f"({expr_str})"
         return f"({expr_str} as i32)"
     return expr_str
+
+
+def _is_atomic_expr(expr_str: str) -> bool:
+    """表达式是否可直接作为 `as` 的左操作数：标识符/字面量/路径/调用链（括号内内容不计）。"""
+    depth = 0
+    for ch in expr_str.strip():
+        if ch in '([{':
+            depth += 1
+        elif ch in ')]}':
+            depth -= 1
+        elif depth == 0 and not (ch.isalnum() or ch in '_.:?'):
+            return False
+    return True
 
 
 def _coerce_to_object(val_str: str, ty: str) -> str:
@@ -546,6 +563,30 @@ _JAVA_RUST_NAME_CONFLICTS = frozenset()
 _JAVA_RUST_RENAME: dict[str, str] = {}
 
 
+def _resolve_bridge_target(ci, mname: str, descriptor: str, registry: dict):
+    """沿父类链找 descriptor 精确命中的 synthetic bridge，返回 (声明类, 被桥接真实方法的描述符)。
+    找不到 bridge 或真实方法候选不唯一时返回 None。"""
+    bridge_params = parse_descriptor_params(descriptor)
+
+    def _bridgeable(real_desc: str) -> bool:
+        # bridge 只做引用类型的擦除/窄化：基本类型参数必须逐位相同，引用对引用
+        real_params = parse_descriptor_params(real_desc)
+        return len(real_params) == len(bridge_params) and all(
+            (rp == bp) if (len(bp) == 1 or len(rp) == 1) else True
+            for rp, bp in zip(real_params, bridge_params))
+
+    seen: set[str] = set()
+    while ci is not None and ci.name not in seen:
+        seen.add(ci.name)
+        if any(m.is_synthetic and m.name == mname and m.descriptor == descriptor for m in ci.methods):
+            real = [m for m in ci.methods
+                    if not m.is_synthetic and m.name == mname and not m.is_static
+                    and _bridgeable(m.descriptor)]
+            return (ci, real[0].descriptor) if len(real) == 1 else None
+        ci = registry.get(ci.super_class) if ci.super_class else None
+    return None
+
+
 def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dict | None) -> str:
     """查找 registry 中 cls_name 类的 mname 方法是否重载，重载则返回 mangled 名，否则原名。
     支持短名（Objects）和全路径名（java/util/Objects）查找。
@@ -570,28 +611,25 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     # 排除 java_runtime 类（registry 中仍有其 JDK 字节码副本，但方法名不 mangle）
     if target_ci.name.rsplit('/', 1)[-1] in _JAVA_RUNTIME_SHORT_NAMES:
         return mname
-    visible = [m for m in target_ci.methods if not m.is_synthetic]
-    same = sum(1 for m in visible if m.name == mname)
-    # 计入接口 default 方法（未覆盖时由 class_writer 注入到 impl 块）
-    if target_ci.interfaces and not target_ci.is_interface:
-        _iq = list(target_ci.interfaces)
-        _iv: set[str] = set()
-        _seen_sigs: set[tuple] = {(m.name, m.descriptor) for m in visible}
-        while _iq:
-            _in = _iq.pop(0)
-            if _in in _iv:
-                continue
-            _iv.add(_in)
-            _ici = registry.get(_in)
-            if _ici:
-                _iq.extend(_ici.interfaces or [])
-                for _dm in _ici.methods:
-                    if (not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic
-                            and _dm.name == mname
-                            and (_dm.name, _dm.descriptor) not in _seen_sigs):
-                        same += 1
-                        _seen_sigs.add((_dm.name, _dm.descriptor))
-    if same <= 1:
+    # 名字由「声明类」决定：调用目标类（常量池里的类）可能只是继承了该方法，
+    # 沿父类链解析到真正声明 name+descriptor 的类，再用与定义侧相同的判定函数。
+    _call_desc_m = re.search(r':(\([^)]*\)\S+)', comment)
+    if mname != '<init>' and _call_desc_m:
+        _owner_bin, _ = _resolve_method_owner(target_ci.name, mname, registry,
+                                              descriptor=_call_desc_m.group(1))
+        if _owner_bin and _owner_bin in registry:
+            target_ci = registry[_owner_bin]
+            if target_ci.name.rsplit('/', 1)[-1] in _JAVA_RUNTIME_SHORT_NAMES:
+                return mname
+        else:
+            # 调用描述符只命中 synthetic bridge（如 Comparable.compareTo(Object) 分派到
+            # 只声明 compareTo(Self) 的实现类）：bridge 不生成 Rust 方法，名字取它桥接到的
+            # 真实方法（同名、同参数个数、唯一候选）。
+            _bridged = _resolve_bridge_target(target_ci, mname, _call_desc_m.group(1), registry)
+            if _bridged is not None:
+                target_ci, _bridged_desc = _bridged
+                comment = f'{comment.split(":")[0]}:{_bridged_desc}'
+    if mname not in hierarchy_overloaded_names(target_ci, registry):
         # Java→Rust 名字冲突重命名（如 clone→jvm_clone）
         erg_name = _JAVA_RUST_RENAME.get(mname)
         if erg_name is not None:
