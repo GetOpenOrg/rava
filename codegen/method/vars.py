@@ -52,6 +52,23 @@ def _brace_delta(text: str) -> int:
     return code.count('{') - code.count('}')
 
 
+_REMOVED_ENTRY = ('', None)
+
+
+def _demote_let(entries: list, k: int) -> None:
+    """提升后，原位置的 `let x: T = v;` 降为赋值 `x = v;`；无初值的前置声明
+    （`let mut x: T;`）已被提升点的声明取代，标记删除（由 _drop_removed 统一清理）。"""
+    indent, item = entries[k]
+    if item.value is None:
+        entries[k] = _REMOVED_ENTRY
+    else:
+        entries[k] = (indent, AssignStmt(Var(item.name), item.value))
+
+
+def _drop_removed(entries: list) -> None:
+    entries[:] = [e for e in entries if e is not _REMOVED_ENTRY]
+
+
 def _analyze_mutation(stmts):
     """扫描 AssignStmt 目标，将对应的 LetStmt.mutable 设为 True。
 
@@ -178,11 +195,12 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
         insertions.append((loop_k, (loop_indent, LetStmt(name, hoisted_type, True, RawExpr('Default::default()')))))
         # 将 loop 内的 LetStmt 改为 AssignStmt
         if isinstance(inner_item, LetStmt):
-            entries[decl_k] = (inner_indent, AssignStmt(Var(inner_item.name), inner_item.value))
+            _demote_let(entries, decl_k)
 
     # 倒序插入，避免索引偏移（同一 loop 有多个变量时均插入到 loop 前）
     for ins_k, ins_entry in sorted(insertions, key=lambda x: -x[0]):
         entries.insert(ins_k, ins_entry)
+    _drop_removed(entries)
 
 
 def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
@@ -406,7 +424,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
             for ck in range(outer_k, len(entries)):
                 ck_indent, ck_item = entries[ck]
                 if isinstance(ck_item, LetStmt) and ck_item.name == name:
-                    entries[ck] = (ck_indent, AssignStmt(Var(name), ck_item.value))
+                    _demote_let(entries, ck)
 
         # ref_nesting 校验：声明插在 block_k 之前（与 block_k 同层），需保证引用在该层可见。
         if ref_idx >= 0:
@@ -447,10 +465,11 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
                 continue
             inner_indent, inner_item = entries[decl_k]
             if isinstance(inner_item, LetStmt) and inner_item.name == name:
-                entries[decl_k] = (inner_indent, AssignStmt(Var(inner_item.name), inner_item.value))
+                _demote_let(entries, decl_k)
 
     for ins_k, ins_entry in sorted(insertions, key=lambda x: -x[0]):
         entries.insert(ins_k, ins_entry)
+    _drop_removed(entries)
     return True
 
 

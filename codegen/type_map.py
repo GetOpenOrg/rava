@@ -148,7 +148,10 @@ _CLS_ABBREV: dict[str, str] = {
 
 
 def descriptor_to_suffix(descriptor: str) -> str:
-    """把描述符参数部分 '(ITE;)V' 转成后缀字符串（不含 __），如 'i_e'。"""
+    """把描述符参数部分 '(ITE;)V' 转成后缀字符串（不含 __），如 'i_e'。
+
+    类类型用完整的小写简单名（内部类 $ → _），不截断：截断会让同前缀的不同类
+    （如同一外部类的多个内部类、同词根的接口）映射到同一后缀，重载名撞名（E0428/E0201/E0592）。"""
     m = re.match(r'\(([^)]*)\)', descriptor)
     if not m:
         return ''
@@ -171,7 +174,7 @@ def descriptor_to_suffix(descriptor: str) -> str:
             try:
                 end = s.index(';', i + 1)
                 short = s[i+1:end].split('/')[-1].lower().replace('$', '_')
-                parts.append(_CLS_ABBREV.get(short, short[:6])); i = end + 1
+                parts.append(_CLS_ABBREV.get(short, short)); i = end + 1
             except ValueError:
                 i += 1
         elif c == '[':
@@ -182,7 +185,7 @@ def descriptor_to_suffix(descriptor: str) -> str:
                 try:
                     end = s.index(';', j + 1)
                     short = s[j+1:end].split('/')[-1].lower().replace('$', '_')
-                    parts.append('arr_' + _CLS_ABBREV.get(short, short[:3])); i = end + 1
+                    parts.append('arr_' + _CLS_ABBREV.get(short, short)); i = end + 1
                 except ValueError:
                     i = j + 1
             elif j < len(s) and s[j] == 'T':
@@ -282,6 +285,32 @@ def hierarchy_overloaded_names(ci, registry: dict | None) -> frozenset:
     frozen = frozenset(result)
     _OVERLOAD_CACHE[cache_key] = frozen
     return frozen
+
+
+def method_name_is_mangled(ci, method, registry: dict | None) -> bool:
+    """类 ci 声明的方法 method 的 Rust 名是否带描述符后缀 —— 按 (name, descriptor) 判定，
+    定义侧与调用侧共用。
+
+    名字在 ci 中需要 mangle（hierarchy_overloaded_names）时，覆盖方法例外：它实现的是
+    祖先 vtable trait 中的槽位，Rust 名必须与槽位所属类（virtual_in）中的名字一致。
+    槽位所属类未 mangle 该名字、而子类因新增重载 / 注入的接口 default 方法才 mangle 时，
+    覆盖方法沿用槽位名（否则 impl 出祖先 trait 没有的方法，E0407）。"""
+    if method.name not in hierarchy_overloaded_names(ci, registry):
+        return False
+    if not registry or ci.is_interface or method.is_constructor or method.is_static:
+        return True
+    from .emitter.vtable_util import _find_virtual_in, _bin_to_rust
+    slot_owner_rust = _find_virtual_in(method, ci, registry)
+    if not slot_owner_rust or slot_owner_rust == _bin_to_rust(ci.name):
+        return True
+    anc = registry.get(ci.super_class) if ci.super_class else None
+    seen: set[str] = {ci.name}
+    while anc is not None and anc.name not in seen:
+        seen.add(anc.name)
+        if _bin_to_rust(anc.name) == slot_owner_rust:
+            return method.name in hierarchy_overloaded_names(anc, registry)
+        anc = registry.get(anc.super_class) if anc.super_class else None
+    return True
 
 
 def _parse_type_list(s: str) -> list[str]:

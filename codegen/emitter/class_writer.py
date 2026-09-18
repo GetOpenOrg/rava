@@ -8,7 +8,7 @@ from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
 from ..cfg import CfgAuditError, STATS as _CFG_STATS
-from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names
+from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names, method_name_is_mangled
 from ..type_map import (effective_class_type_params, ancestor_type_args, outer_ref_field_type,
                         class_type_param_bounds,
                         rust_type_with_args as _rust_type_with_args)
@@ -121,6 +121,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             if _dc:
                 _referenced.add(_dc)
 
+    # 类级泛型签名（本类 + 超类链）：超类/接口的类型实参（`Base<Arg>`）出现在宏属性
+    # superclass / all_superclasses 与宏生成的祖先转换 impl 中，类型实参名须在作用域内
+    _sig_cur = ci
+    _sig_seen: set[str] = set()
+    while _sig_cur is not None and _sig_cur.name not in _sig_seen:
+        _sig_seen.add(_sig_cur.name)
+        _add_desc_refs(getattr(_sig_cur, 'generic_signature', '') or '')
+        _sig_cur = registry.get(_sig_cur.super_class) if registry and _sig_cur.super_class else None
+
     # 扫描方法指令中的类型引用
     for _m in _scan_methods:
         for _instr in (_m.instrs or []):
@@ -137,6 +146,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 _colon = _rest.find(':')
                 if _colon > 0:
                     _add_desc_refs(_rest[_colon + 1:])
+            elif _instr.opcode == 'invokedynamic':
+                # 方法引用 / lambda：闭包体以 `Owner::m(...)` / `Owner::new(...)` 形式调用
+                # 实现方法，其声明类与签名类型须在作用域内
+                _impl_at = _c.find(' impl:')
+                if _impl_at >= 0:
+                    _impl_ref = _c[_impl_at + len(' impl:'):].split(' ', 1)[0]
+                    _impl_dot = _impl_ref.find('.')
+                    if _impl_dot > 0:
+                        _referenced.add(_impl_ref[:_impl_dot])
+                    _impl_colon = _impl_ref.find(':')
+                    if _impl_colon > 0:
+                        _add_desc_refs(_impl_ref[_impl_colon + 1:])
             elif _instr.opcode in _CLASS_OPERAND_OPCODES:
                 # new / anewarray / checkcast / instanceof / multianewarray：
                 # comment 为裸 binary name 或数组描述符（[Lpkg/Cls;）
@@ -150,9 +171,27 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _add_desc_refs(_lv[4])
             _add_desc_refs(_lv[5])
         # 异常表 catch_type：方法体以 `catch (e: T)` 形式引用
+        _catch_by_handler: dict[int, list[str]] = {}
         for _exc in (getattr(_m, 'exception_table', None) or []):
             if _exc[3]:
                 _referenced.add(_exc[3])
+                _handler_types = _catch_by_handler.setdefault(_exc[2], [])
+                if _exc[3] not in _handler_types:
+                    _handler_types.append(_exc[3])
+        # multi-catch（`catch (e: A | B as LUB)`）：绑定类型是各 catch 类型的最近公共祖先类
+        for _handler_types in _catch_by_handler.values():
+            if len(_handler_types) < 2 or not registry:
+                continue
+            _common: list[str] | None = None
+            for _ct in _handler_types:
+                _chain: list[str] = []
+                _cc = _ct
+                while _cc and _cc != _OBJECT_CLASS and _cc not in _chain:
+                    _chain.append(_cc)
+                    _cc = registry[_cc].super_class if _cc in registry else None
+                _common = _chain if _common is None else [c for c in _common if c in _chain]
+            if _common:
+                _referenced.add(_common[0])
     # 扫描字段描述符（含超类链继承字段）
     _all_fields_to_scan = list(ci.fields)
     if registry:
@@ -362,6 +401,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     if not ci.is_interface:
         import re as _re2
         from ..instr.coerce import parse_method_ref as _pmr
+        from ..instr.coerce import _method_ref_binary_class as _mrbc_imp
         for _m in ci.methods:
             # 只为在调用链上（有实际方法体）的方法生成 __base 函数导入
             # stub 方法的字节码中有 invokespecial 但不会实际调用，不需要 cross-import
@@ -374,8 +414,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 _c = getattr(_ins, 'comment', '') or ''
                 if not _c or '<init>' in _c:
                     continue
-                # InterfaceMethod invokespecial → 接口默认方法，接口无 __base 自由函数
-                if _c.strip().startswith('InterfaceMethod '):
+                # 常量池类是接口（`Iface.super.m()` / 接口私有方法）→ 接口无 __base 自由函数，
+                # 落点是展开到本类的 `Iface_super_m` 成员（见下方方法块生成）
+                _cp_ci = registry.get(_mrbc_imp(_c)) if registry else None
+                if _cp_ci is not None and _cp_ci.is_interface:
                     continue
                 _cls_s, _mname_s, _params_s, _ret_s = _pmr(_c)
                 if not _cls_s:
@@ -401,7 +443,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     # 解析后的声明者仍未声明该方法（祖先链超出 registry）→ 无 __base 函数可导入
                     if registry and _orig_cls in registry:
                         _anc_ci = registry[_orig_cls]
-                        if not any(am.name == _mname_s for am in _anc_ci.methods):
+                        from ..instr.coerce import class_inherits_default_method as _cidm
+                        if (not any(am.name == _mname_s for am in _anc_ci.methods)
+                                and not _cidm(_orig_cls, _mname_s, _mrd(_c), registry)):
                             continue
                     # 从 binary name（java/lang/AbstractStringBuilder）构建完整模块路径
                     _binary_parts = _orig_cls.split('/')
@@ -763,7 +807,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 m.is_synthetic or (m.access_flags & 0x0002) or (m.name, m.descriptor[:m.descriptor.index(')') + 1]) in _root_method_keys):
             continue  # 私有 / 合成实例方法不是接口契约的一部分
         # 确定最终 Rust 方法名（有重载则加描述符后缀）
-        rust_name = mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name
+        rust_name = (mangle_name(m.name, m.descriptor)
+                     if method_name_is_mangled(ci, m, registry) else m.name)
         # 构造器统一用 new / new_suffix
         if m.is_constructor:
             if '<init>' in overloaded_names:
@@ -835,6 +880,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry, class_type_params=class_type_params)
                 method_blocks.append(attr_line + '\n' + stub)
 
+    # 已翻译方法体的接口 default 方法（展开到本类）：其字节码同样可能含 `Iface.super.m()`
+    _translated_defaults: list = []
     # 接口 default 方法继承：当类实现接口但未覆盖其 default 方法时，自动生成继承实现
     if ci.interfaces and registry and not ci.is_interface:
         import copy as _copy
@@ -846,7 +893,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         existing_param_sigs: set[tuple] = {(m.name, _param_part(m.descriptor)) for m in visible_methods}
         # 已用的 Rust 方法名（用于检测 default 方法与类自身方法重名）
         used_rust_names: set[str] = {
-            (mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name)
+            (mangle_name(m.name, m.descriptor) if method_name_is_mangled(ci, m, registry) else m.name)
             for m in visible_methods if m.name not in ('<init>', '<clinit>')
         }
         # 祖先类已实现的接口：其 default 方法已注入到该祖先（VirtualDefine），
@@ -944,6 +991,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                             in_vtable_body=True,
                         )
                         method_blocks.append(dm_attr + '\n' + dm_body)
+                        _translated_defaults.append(dm)
                     except CfgAuditError:
                         raise
                     except Exception as e:
@@ -953,6 +1001,69 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 else:
                     dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry, class_type_params=class_type_params)
                     method_blocks.append(dm_attr + '\n' + dm_stub)
+
+    # `Iface.super.m()` / 接口私有方法（invokespecial InterfaceMethod）的落点：
+    # 接口方法体按「展开到实现类」建模，被本类覆盖的 default 方法体（及接口私有方法体）
+    # 以非虚成员 `Iface_super_m` 展开到本类；展开出的方法体自身的同类调用递归处理。
+    if registry and not ci.is_interface and not stub_bodies:
+        import copy as _copy_sp
+        from ..instr.coerce import (
+            _resolve_interface_special_target as _rist,
+            interface_special_member_name as _ismn,
+            _method_ref_binary_class as _mrbc,
+            _method_ref_descriptor as _mrd_sp,
+            parse_method_ref as _pmr_sp,
+        )
+        _sp_sources: list = [
+            _m for _m in visible_methods
+            if call_chain is None or (ci.name, _m.name, _m.descriptor) in call_chain
+        ] + _translated_defaults
+        _sp_done: set[tuple] = set()
+        while _sp_sources:
+            _src = _sp_sources.pop(0)
+            for _ins in getattr(_src, 'instrs', []) or []:
+                if getattr(_ins, 'opcode', '') != 'invokespecial':
+                    continue
+                _c = (getattr(_ins, 'comment', '') or '').strip()
+                if not _c or '<init>' in _c:
+                    continue
+                _, _sp_mname, _, _ = _pmr_sp(_c)
+                _sp_desc = _mrd_sp(_c)
+                _sp_owner = _rist(_mrbc(_c), _sp_mname, _sp_desc, registry)
+                if not _sp_owner or (_sp_owner, _sp_mname, _sp_desc) in _sp_done:
+                    continue
+                _sp_done.add((_sp_owner, _sp_mname, _sp_desc))
+                _sp_m = next(_im for _im in registry[_sp_owner].methods
+                             if _im.name == _sp_mname and _im.descriptor == _sp_desc
+                             and not _im.is_static and not _im.is_abstract)
+                _sp_rust = safe_ident(_ismn(_sp_owner, _sp_mname, _sp_desc, registry))
+                _sp_adapted = _copy_sp.copy(_sp_m)
+                _sp_adapted.class_name = ci.name
+                _sp_adapted.virtual_in = None  # 非虚：只经 `Iface.super.m()` 静态绑定到达
+                _sp_attr = _java_method_attr(_sp_adapted)
+                _sp_in_cc = (call_chain is None
+                             or (_sp_owner, _sp_mname, _sp_desc) in call_chain)
+                _sp_block = None
+                if _sp_in_cc:
+                    try:
+                        _sp_block = gen_method_body(
+                            _sp_adapted, ci, registry=registry,
+                            class_type_params=class_type_params,
+                            overloaded_names=overloaded_names,
+                            rust_name=_sp_rust,
+                            in_vtable_body=False,
+                        )
+                        _sp_sources.append(_sp_m)
+                    except CfgAuditError:
+                        raise
+                    except Exception as e:
+                        _CFG_STATS.record_stub_fallback(
+                            f"{ci.name}.{_sp_mname}:{_sp_desc}", repr(e))
+                if _sp_block is None:
+                    _sp_block = _gen_native_stub(_sp_adapted, ci, rust_name=_sp_rust,
+                                                 registry=registry,
+                                                 class_type_params=class_type_params)
+                method_blocks.append(_sp_attr + '\n' + _sp_block)
 
     # 超类虚方法继承：若子类未覆盖祖先虚方法，生成继承实现使 vtable impl 包含实际函数体。
     # 这避免子类的 Ancestor__VTable impl 退化为 panic!("stub")。
@@ -1009,7 +1120,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         simple_name = ci.name.split('$')[-1].split('/')[-1]
         fmt_parts = [f'{f.name}={{}}' for f in record_fields]
         fmt_str = f'{simple_name}[{", ".join(fmt_parts)}]'
-        fmt_args = ', '.join(f'self.{safe_ident(f.name)}.get()' for f in record_fields)
+        # 方法体与字节码翻译的方法同一约定：`let this = self;` + 字段访问器
+        # （宏把虚方法体搬进 `this: &__BT` 的自由函数，其中不存在 `self` / `Self`）
+        fmt_args = ', '.join(f'this.__get_{safe_ident(f.name)}()' for f in record_fields)
+        _record_ty = f'{struct_name}{struct_generic}'
         new_blocks = []
         for block in method_blocks:
             if '/* TODO: invokedynamic' in block and any(f'pub fn {n}(' in block for n in ('toString', 'hashCode', 'equals')):
@@ -1018,11 +1132,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     fmtcall = (f'String::from(format!("{fmt_str}", {fmt_args}).as_str())' if fmt_args
                                else f'String::from("{fmt_str}")')
                     new_blocks.append(attr +
-                        f'pub fn toString(&self) -> Result<String> {{\n        Ok({fmtcall})\n    }}')
+                        f'pub fn toString(&self) -> Result<String> {{\n    let this = self;\n    Ok({fmtcall})\n}}')
                 elif 'pub fn hashCode(' in block:
                     attr = block[:block.index('pub fn hashCode(')]
                     new_blocks.append(attr +
-                        f'pub fn hashCode(&self) -> Result<i32> {{\n        Ok(0)\n    }}')
+                        f'pub fn hashCode(&self) -> Result<i32> {{\n    Ok(0)\n}}')
                 elif 'pub fn equals(' in block:
                     attr = block[:block.index('pub fn equals(')]
                     field_cmps = []
@@ -1031,19 +1145,20 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         rust_fty = jvm_to_rust(f.descriptor, registry)
                         if rust_fty == 'String':
                             field_cmps.append(
-                                f'self.__get_{fname}().to_string() == other.__get_{fname}().to_string()'
+                                f'this.__get_{fname}().to_string() == other.__get_{fname}().to_string()'
                             )
                         else:
-                            field_cmps.append(f'self.__get_{fname}() == other.__get_{fname}()')
+                            field_cmps.append(f'this.__get_{fname}() == other.__get_{fname}()')
                     cmp_expr = ' && '.join(field_cmps) if field_cmps else 'true'
                     new_blocks.append(attr +
                         f'pub fn equals(&self, mut o: Object) -> Result<bool> {{\n'
-                        f'        if let Some(other) = o.0.downcast_ref::<Self>() {{\n'
-                        f'            Ok({cmp_expr})\n'
-                        f'        }} else {{\n'
-                        f'            Ok(false)\n'
-                        f'        }}\n'
-                        f'    }}')
+                        f'    let this = self;\n'
+                        f'    if !o.is_instance_of("{ci.name}") {{\n'
+                        f'        return Ok(false);\n'
+                        f'    }}\n'
+                        f'    let other = Into::<{_record_ty}>::into(Clone::clone(&o));\n'
+                        f'    Ok({cmp_expr})\n'
+                        f'}}')
                 else:
                     new_blocks.append(block)
             else:
