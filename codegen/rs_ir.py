@@ -215,6 +215,9 @@ class LetStmt:
 class AssignStmt:
     target: RsExpr
     value: RsExpr
+    # 由声明降级而来的赋值保留值的模拟类型（不渲染）：变量提升 pass 据此在前置声明的类型
+    # 与该次赋值的类型不同时补转换
+    value_ty: Optional[RsType] = None
 
 
 @dataclass

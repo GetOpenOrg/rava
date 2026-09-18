@@ -190,7 +190,16 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                         _iface_tps = effective_class_type_params(_impl_ci, registry)
                         _iface_targs = f"<{', '.join(['Object'] * len(_iface_tps))}>" if _iface_tps else ''
                         _iface_recv = _all_args[0].lstrip('&')
-                        _closure_body = (f"Into::<{_impl_cls_rust}{_iface_targs}>::into(Clone::clone(&{_iface_recv}))"
+                        _iface_recv_src = f"Clone::clone(&{_iface_recv})"
+                        if _call_cap_list:
+                            # 绑定接收者是捕获值：静态类型为具体类（`list::add`，list 是 ArrayList<E>）
+                            # 时先按对象标识上转为擦除的接口引用
+                            _recv_cap_ty = render_type(_cap_exprs[0][1])
+                            if (_recv_cap_ty not in ('Object', '()', '_')
+                                    and _recv_cap_ty not in _PRIMITIVE_RUST_TYPES):
+                                _iface_recv_src = _coerce_to_object(
+                                    _iface_recv, _recv_cap_ty, registry, sim.class_type_params)
+                        _closure_body = (f"Into::<{_impl_cls_rust}{_iface_targs}>::into({_iface_recv_src})"
                                          f".{_impl_mname_r}({', '.join(_all_args[1:])})")
                                         # 返回值适配：SAM 返回 void → 丢弃实现方法返回值；
                     # SAM 返回擦除的 Object 而实现方法返回具体类型 → 装箱

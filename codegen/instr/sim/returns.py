@@ -69,13 +69,14 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
               and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
             # vtable 架构：返回值是子类型，用 From trait（.into()）
             chain = _into_super_chain(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)
-            expr_s = f"{expr_s}{chain}"
+            from ..invoke_sig import _upcast_to_ancestor_instantiation
+            _reinst_anc = _upcast_to_ancestor_instantiation(expr_s, actual_ty, ret_ty, sim, registry)
+            expr_s = _reinst_anc if _reinst_anc is not None else f"{expr_s}{chain}"
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty) and actual_ty != 'Object'):
-            # 类型不兼容（actual 不是 ret 的子类型时，如 checkcast Serializable → return Comparator<Object>）：
-            # 条件 4 已处理 actual→ret 子类型，到这里说明 _is_subtype 未匹配，
-            # 降级为 Default::default() 保证编译通过
-            expr_s = 'Default::default()'
+            # 静态类型互不为子类型（交叉转型 `(Comparator<T> & Serializable)`、同一泛型类的另一实例化）：
+            # javac 在此处的转换是运行时校验 → 经 Object 边界按声明的返回类型取回
+            expr_s = f"From::from({_coerce_to_object(expr_s, actual_ty, registry, _ctparams)})"
         sim.emit(RawStmt(f"return Ok({expr_s});"))
     else:
         return False

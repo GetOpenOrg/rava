@@ -75,7 +75,64 @@ def _demote_let(entries: list, k: int) -> None:
     if item.value is None:
         entries[k] = _REMOVED_ENTRY
     else:
-        entries[k] = (indent, AssignStmt(Var(item.name), item.value))
+        entries[k] = (indent, AssignStmt(Var(item.name), item.value, _hoisted_let_type(item)))
+
+
+_ROOT_TYPE = 'Object'
+
+
+def _is_default_value(value) -> bool:
+    return isinstance(value, RawExpr) and value.code == 'Default::default()'
+
+
+def _merged_slot_type(entries: list, name: str, start: int, end: int):
+    """(start, end) 内同名声明 / 降级赋值的引用类型不一致时，返回汇合类型（根类）；否则 None。
+
+    javac 合成的无名槽（try-finally 里暂存返回值等）在各分支存入不同引用类型、汇合后统一读取：
+    JVM 校验器在汇合点取公共超类型，对应的 Rust 变量取根类，各次存入经装箱上转。"""
+    seen: set[str] = set()
+    for k in range(start + 1, end):
+        item = entries[k][1]
+        if isinstance(item, LetStmt) and item.name == name:
+            ty = _hoisted_let_type(item)
+        elif (isinstance(item, AssignStmt) and isinstance(item.target, Var)
+              and item.target.name == name):
+            ty = item.value_ty
+        else:
+            continue
+        if ty is None:
+            continue
+        rendered = render_type(ty)
+        if rendered in _PRIMITIVE_TYPES or rendered == '()':
+            return None
+        seen.add(rendered)
+    return RsNamed(_ROOT_TYPE) if len(seen) > 1 else None
+
+
+def _box_into_merged(entries: list, name: str, start: int, end: int, box_object) -> None:
+    """汇合类型为根类的槽：(start, end) 内类型更精确的存入值装箱上转。"""
+    for k in range(start + 1, end):
+        indent, item = entries[k]
+        if isinstance(item, LetStmt) and item.name == name:
+            ty = _hoisted_let_type(item)
+        elif (isinstance(item, AssignStmt) and isinstance(item.target, Var)
+              and item.target.name == name):
+            ty = item.value_ty
+        else:
+            continue
+        if ty is None or item.value is None or _is_default_value(item.value):
+            if isinstance(item, LetStmt):
+                item.ty = RsNamed(_ROOT_TYPE) if item.ty is not None else None
+                item.value_ty = RsNamed(_ROOT_TYPE)
+            else:
+                item.value_ty = RsNamed(_ROOT_TYPE)
+            continue
+        rendered = render_type(ty)
+        if rendered != _ROOT_TYPE:
+            item.value = RawExpr(box_object(render_expr(item.value), rendered))
+        if isinstance(item, LetStmt):
+            item.ty = RsNamed(_ROOT_TYPE) if item.ty is not None else None
+        item.value_ty = RsNamed(_ROOT_TYPE)
 
 
 def _drop_removed(entries: list) -> None:
@@ -216,7 +273,8 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
     _drop_removed(entries)
 
 
-def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
+def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
+                   lvt_names: frozenset = frozenset()) -> bool:
     """将在 if/else 块内 let-声明但在块外被读取的变量提升到块前。
 
     JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 if/else 内首次 let-声明，
@@ -465,7 +523,6 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
         hoisted_type = _hoisted_let_type(first_let)
         # 统一用 Default::default()，配合类型注解让 Rust 推断
         default_val = RawExpr('Default::default()')
-        insertions.append((block_k, (block_indent, LetStmt(name, hoisted_type, True, default_val))))
         # 将提升点所辖语句（block_k 开启的整条 if/else、match、loop 语句）内的同名 LetStmt
         # 改为 AssignStmt；语句之外的同名声明是别的 Java 变量，保持各自的 let
         span_end = len(entries)
@@ -473,6 +530,12 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
             if entry_nesting[k2] <= entry_nesting[block_k]:
                 span_end = k2
                 break
+        if box_object is not None and name not in lvt_names:
+            merged_type = _merged_slot_type(entries, name, block_k, span_end)
+            if merged_type is not None:
+                _box_into_merged(entries, name, block_k, span_end, box_object)
+                hoisted_type = merged_type
+        insertions.append((block_k, (block_indent, LetStmt(name, hoisted_type, True, default_val))))
         for decl_k, _ in decl_list:
             if not (block_k < decl_k < span_end):
                 continue

@@ -373,6 +373,13 @@ class StackSim:
                     expr = RawExpr(f"({render_expr(expr)}).into()")
                 ty = decl_ty
                 force_let_ty = True
+        if (isinstance(decl_ty, RsPrimitive) and isinstance(expr, Lit)
+                and expr.value == 'Object::default()'):
+            # 声明为包装类（按基本类型建模）的局部赋 null（`Long inNanos = null`）：
+            # 变量类型以声明为准，不随 null 字面量退化成根类
+            expr = RawExpr('Default::default()')
+            ty = decl_ty
+            force_let_ty = True
         # 类型变量值赋给声明为其上界类型的局部（`Task<.., K> task = this; task = task.makeChild(..)`，
         # makeChild 返回 K）：Java 隐式上转 → 经 Object 的 checkcast 视图转换为上界类型
         _tv_bound = self.type_var_bounds.get(ty.name) if isinstance(ty, RsNamed) else None

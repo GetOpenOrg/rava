@@ -1,5 +1,6 @@
 # 从 codegen/instr/invoke.py 中拆出
 
+from ..constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_TYPE_NAMES
 from ..type_map import short_cls as _short_cls_g
 from ..type_map import (
     short_cls,
@@ -212,6 +213,8 @@ def _downcast_target_valid(expected: str, sim: 'StackSim', registry: dict | None
         return False
     _ok = set(sim.class_type_params or ()) | set(_concrete_class_shorts(registry))
     _ok |= {'Object', 'String', 'Class', 'Rc', 'Vec', 'RefCell', 'Option'}
+    # 基本类型实参（`AbstractPipeline<Object, i32, Object>`：包装类按基本类型建模）
+    _ok |= set(_PRIMITIVE_TYPE_NAMES)
     return all(_n in _ok for _n in _names)
 
 
@@ -392,6 +395,20 @@ def _exact_ancestor_type(actual: str, ancestor_short: str, registry: dict | None
     return ''
 
 
+def _upcast_to_ancestor_instantiation(src: str, actual: str, expected: str,
+                                      sim: 'StackSim', registry: dict | None) -> str | None:
+    """子类值上转到祖先类的「另一实例化」（raw type / 通配符位置：`Parent<A, i32, ?>`）。
+
+    宏只为祖先的精确实例化生成 From（Child<A> → Parent<f(A)>）；目标是同一祖先的另一实例化时
+    先上转到精确祖先，再经 Object 边界（保持对象标识）重新实例化。目标就是精确祖先 → None。"""
+    exact_anc = _exact_ancestor_type(actual, expected.split('<')[0], registry)
+    if (exact_anc and exact_anc != expected and '<' in expected
+            and _downcast_target_valid(expected, sim, registry)
+            and _downcast_target_valid(exact_anc, sim, registry)):
+        return f"Object::from(Into::<{exact_anc}>::into({src})).downcast::<{expected}>()"
+    return None
+
+
 def _coerce_arg(
     e: str,
     e_ty_node: object,
@@ -444,11 +461,9 @@ def _coerce_arg(
         src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
         # 宏只为「祖先的精确实例化」生成 From（Child<A> → Parent<f(A)>）。形参是同一祖先的
         # 另一实例化（raw type / 通配符形参）时：先向上转换到精确祖先，再经 Object 边界重新实例化。
-        exact_anc = _exact_ancestor_type(actual, expected.split('<')[0], registry)
-        if (exact_anc and exact_anc != expected and '<' in expected
-                and _downcast_target_valid(expected, sim, registry)
-                and _downcast_target_valid(exact_anc, sim, registry)):
-            return f"Object::from_any(Into::<{exact_anc}>::into({src})).downcast::<{expected}>()"
+        _reinst_anc = _upcast_to_ancestor_instantiation(src, actual, expected, sim, registry)
+        if _reinst_anc is not None:
+            return _reinst_anc
         return f"{src}{chain}"
     # Fix 18：actual 是 Object（运行时多态值）而 expected 是具体引用类型 ——
     # Java 调用点隐式 checkcast 语义 → downcast（运行时校验，不符则 panic）。

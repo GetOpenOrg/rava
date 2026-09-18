@@ -45,6 +45,46 @@ def _declaring_interface(iface_ci, mname: str, descriptor: str, registry: dict) 
     return ''
 
 
+def _close_open_type_args(sim, stack_idx: int) -> None:
+    """菱形构造结果（类型实参待推断的 `X<_, A>`）直接作方法调用的接收者
+    （`new Task<>(helper, spliterator).invoke()`）：值不流经任何带类型的位置（局部声明、形参、
+    字段、返回值），待推断的类型实参没有约束来源 → 取其擦除（根类），写回构造处的 turbofish。"""
+    import re as _re_open
+    from ..rs_ir import LetStmt as _LetStmt, RawExpr as _RawExpr, RsNamed as _RsNamed, Var as _Var
+    expr, ty = sim.stack[stack_idx]
+    ty_s = render_type(ty)
+    _open = r'(?<![A-Za-z0-9_])_(?![A-Za-z0-9_])'
+    if '<' not in ty_s or not _re_open.search(_open, ty_s):
+        return
+    if not isinstance(expr, _Var):
+        # 构造表达式本身在栈上（`new X<>(..).m()` 未绑定临时变量）
+        _base, _args = ty_s.split('<', 1)
+        _open_tf = f"{_base}::<{_args[:-1]}>::"
+        _code = render_expr(expr)
+        if _code.startswith(_open_tf):
+            _closed = _re_open.sub(_open, 'Object', _args[:-1])
+            sim.stack[stack_idx] = (_RawExpr(f"{_base}::<{_closed}>::" + _code[len(_open_tf):]),
+                                    _RsNamed(f"{_base}<{_closed}>"))
+        return
+    if any(_loc[0] == expr.name for _loc in sim.locals.values()):
+        return      # Java 局部变量：类型实参由声明 / 后续用法确定
+    base, args = ty_s.split('<', 1)
+    open_tf = f"{base}::<{args[:-1]}>::"
+    closed_args = _re_open.sub(_open, 'Object', args[:-1])
+    for stmt in reversed(sim.stmts):
+        if isinstance(stmt, _LetStmt) and stmt.name == expr.name:
+            if not (isinstance(stmt.value, _RawExpr) and stmt.value.code.startswith(open_tf)):
+                return
+            stmt.value = _RawExpr(f"{base}::<{closed_args}>::" + stmt.value.code[len(open_tf):])
+            closed_ty = _RsNamed(f"{base}<{closed_args}>")
+            if stmt.ty is not None:
+                stmt.ty = closed_ty
+            if stmt.value_ty is not None:
+                stmt.value_ty = closed_ty
+            sim.stack[stack_idx] = (expr, closed_ty)
+            return
+
+
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
     # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
@@ -64,6 +104,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         _bv_e, _bv_t = type_var_receiver_bound_view(sim, _rv_e, _rv_t)
         if _bv_t is not _rv_t:
             sim.stack[-(_recv_stack_idx + 1)] = (_bv_e, _bv_t)
+        _close_open_type_args(sim, len(sim.stack) - (_recv_stack_idx + 1))
         _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
         _recv_targ_map = receiver_type_arg_map(_recv_ty, cls, registry)
     sig_params_v = None
