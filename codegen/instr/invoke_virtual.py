@@ -256,6 +256,18 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                                 if _m.name == mname and not _m.is_synthetic
                                 and len(parse_descriptor_params(_m.descriptor)) == len(params)
                             ]
+                            if len(_cands17) > 1:
+                                # 多个同名同参数个数的重载：bridge 目标的每个参数
+                                # 与擦除描述符的 primitive/引用 类别必须逐位一致
+                                # （bridge 只擦除引用类型，不改变 primitive 参数）
+                                def _is_ref17(_d):
+                                    return _d.startswith(('L', '['))
+                                _cands17 = [
+                                    _m for _m in _cands17
+                                    if all(
+                                        _is_ref17(_a) == _is_ref17(_b) and (_is_ref17(_a) or _a == _b)
+                                        for _a, _b in zip(parse_descriptor_params(_m.descriptor), params))
+                                ]
                             if len(_cands17) == 1:
                                 _bm17 = _cands17[0]
                         if _bm17 is not None:

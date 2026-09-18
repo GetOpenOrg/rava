@@ -857,6 +857,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         }
         # 预扫描：统计所有待继承 default 方法的名字（用于 default 方法之间互相冲突判断）
         default_name_counts: dict[str, int] = {}
+        _pre_counted_sigs: set[tuple] = set()
         _pre_iface_queue = list(ci.interfaces)
         _pre_visited: set[str] = set()
         while _pre_iface_queue:
@@ -872,7 +873,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             for _dm in _ici.methods:
                 if not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic and _dm.name not in ('<init>', '<clinit>'):
                     _dm_pp = _param_part(_dm.descriptor)
-                    if (_dm.name, _dm.descriptor) not in existing_sigs and (_dm.name, _dm_pp) not in existing_param_sigs:
+                    # 子接口覆盖父接口的同签名 default（如子接口重新声明 and(P)）只注入一次，
+                    # 计数也必须按 (name, 参数签名) 去重，否则单一方法被误判为重载而 mangle
+                    if ((_dm.name, _dm.descriptor) not in existing_sigs
+                            and (_dm.name, _dm_pp) not in existing_param_sigs
+                            and (_dm.name, _dm_pp) not in _pre_counted_sigs):
+                        _pre_counted_sigs.add((_dm.name, _dm_pp))
                         default_name_counts[_dm.name] = default_name_counts.get(_dm.name, 0) + 1
         iface_queue: list[str] = list(ci.interfaces)
         visited_ifaces: set[str] = set()
