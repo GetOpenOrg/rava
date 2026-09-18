@@ -570,6 +570,24 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     # 排除 java_runtime 类（registry 中仍有其 JDK 字节码副本，但方法名不 mangle）
     if target_ci.name.rsplit('/', 1)[-1] in _JAVA_RUNTIME_SHORT_NAMES:
         return mname
+    # 声明类解析：目标类自身未声明该 (name, descriptor) 时（继承而来，经 Deref 调到祖先的
+    # inherent 方法），重载判定必须以真正声明它的祖先类为准——定义侧 mangle 由声明类的
+    # 重载集合决定（如子类只有 limit(I) 一个协变覆盖，而父类 limit()/limit(I) 为重载）。
+    _desc_decl = re.search(r':(\([^)]*\)\S+)', comment or '')
+    if _desc_decl and mname != '<init>':
+        _want_desc = _desc_decl.group(1)
+        _walk_ci = target_ci
+        _walk_seen: set[str] = set()
+        while _walk_ci is not None and _walk_ci.name not in _walk_seen:
+            _walk_seen.add(_walk_ci.name)
+            if any(m.name == mname and m.descriptor == _want_desc and not m.is_synthetic
+                   for m in _walk_ci.methods):
+                break
+            _sc = getattr(_walk_ci, 'super_class', None)
+            _walk_ci = registry.get(_sc) if _sc else None
+        if (_walk_ci is not None and _walk_ci is not target_ci
+                and _walk_ci.name.rsplit('/', 1)[-1] not in _JAVA_RUNTIME_SHORT_NAMES):
+            target_ci = _walk_ci
     visible = [m for m in target_ci.methods if not m.is_synthetic]
     same = sum(1 for m in visible if m.name == mname)
     # 计入接口 default 方法（未覆盖时由 class_writer 注入到 impl 块）
