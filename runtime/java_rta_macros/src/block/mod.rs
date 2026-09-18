@@ -1095,14 +1095,16 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
             // 判断替换后 body 是否对 &__BT 上下文安全
             let bs = quote!(#b).to_string();
-            let has_bare_clone_this = bs.contains("Clone :: clone (this)")
-                || bs.contains("Clone :: clone(this)")
-                || bs.contains("Clone::clone (this)")
-                || bs.contains("Clone::clone(this)");
+            // 折叠空白（proc_macro2 在 proc macro 上下文中保留原始换行/缩进）
+            let bs_flat: String = bs.split_whitespace().collect::<Vec<_>>().join(" ");
+            let has_bare_clone_this = bs_flat.contains("Clone :: clone (this)")
+                || bs_flat.contains("Clone :: clone(this)")
+                || bs_flat.contains("Clone::clone (this)")
+                || bs_flat.contains("Clone::clone(this)");
             // 检查 this.method() 中是否有非 vtable / 非 accessor 方法
             let has_non_vtable_call = {
                 let mut found = false;
-                let parts: Vec<&str> = bs.split("this .").chain(bs.split("this.")).skip(1).collect();
+                let parts: Vec<&str> = bs_flat.split("this .").chain(bs_flat.split("this.")).skip(1).collect();
                 for part in parts {
                     let trimmed = part.trim_start();
                     let mname: String = trimmed.chars()
@@ -1122,7 +1124,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 found
             };
 
-            let has_self_ref = bs.contains("Self ::") || bs.contains("Self::");
+            let has_self_ref = bs_flat.contains("Self ::") || bs_flat.contains("Self::");
             if has_bare_clone_this || has_non_vtable_call || has_self_ref {
                 // body 不安全（bare Clone::clone(this) 传参 / non-vtable this.method() / Self::）→ panic stub
                 let msg = format!("stub: super {}.{}:{}", binary, mname_str, desc);
@@ -1186,14 +1188,16 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 replace_clone_this_in_ok(&mut b);
 
                 let bs = quote!(#b).to_string();
-                let has_bare_clone_this = bs.contains("Clone :: clone (this)")
-                    || bs.contains("Clone :: clone(this)")
-                    || bs.contains("Clone::clone (this)")
-                    || bs.contains("Clone::clone(this)");
+                // 折叠空白（proc_macro2 在 proc macro 上下文中保留原始换行/缩进）
+                let bs_flat: String = bs.split_whitespace().collect::<Vec<_>>().join(" ");
+                let has_bare_clone_this = bs_flat.contains("Clone :: clone (this)")
+                    || bs_flat.contains("Clone :: clone(this)")
+                    || bs_flat.contains("Clone::clone (this)")
+                    || bs_flat.contains("Clone::clone(this)");
                 // 检查 this.xxx() 调用：非超类字段 accessor 或非 __ 前缀方法 → unsafe
                 let has_non_vtable_call = {
                     let mut found = false;
-                    let parts: Vec<&str> = bs.split("this .").chain(bs.split("this.")).skip(1).collect();
+                    let parts: Vec<&str> = bs_flat.split("this .").chain(bs_flat.split("this.")).skip(1).collect();
                     'outer: for part in parts {
                         let trimmed = part.trim_start();
                         let mname_call: String = trimmed.chars()
@@ -1222,7 +1226,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     }
                     found
                 };
-                let has_self_ref = bs.contains("Self ::") || bs.contains("Self::");
+                let has_self_ref = bs_flat.contains("Self ::") || bs_flat.contains("Self::");
 
                 if has_bare_clone_this || has_non_vtable_call || has_self_ref {
                     let msg = format!("stub: super {}.{}:{}", binary, mname_str, desc);
