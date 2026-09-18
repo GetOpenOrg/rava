@@ -24,6 +24,7 @@ _UPCALL_ATTR_RE = re.compile(
     re.S,
 )
 _CTOR_RUST_NAME = 'new'
+_VIRTUAL_BODY_PREFIX = '__impl_'
 
 
 def _parse_target(tok: str) -> 'tuple[str, str, str] | None':
@@ -63,7 +64,8 @@ class NativeUpcalls:
     def lookup(self, cls: str, member: str) -> list:
         """成员 member（Java 名；构造器为 <init>）对应的手写 fn 声明的全部回调目标。
 
-        手写 fn 名 = Java 名，或 Java 名 + 重载后缀（`name_<suffix>`）。
+        手写 fn 名 = Java 名，或 Java 名 + 重载后缀（`name_<suffix>`）；虚方法体以
+        `__impl_<名>` 形式手写（经 vtable 分派到此），同样计入。
         """
         table = self._load(cls)
         if not table:
@@ -71,6 +73,7 @@ class NativeUpcalls:
         rust = _CTOR_RUST_NAME if member == '<init>' else member
         out: list = []
         for fn_name, targets in table.items():
+            fn_name = fn_name.removeprefix(_VIRTUAL_BODY_PREFIX)
             if fn_name == rust or fn_name.startswith(rust + '_'):
                 out.extend(targets)
         return out

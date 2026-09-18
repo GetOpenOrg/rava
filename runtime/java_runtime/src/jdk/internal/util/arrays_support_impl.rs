@@ -2,6 +2,25 @@ use crate::prelude::*;
 use super::arrays_support::ArraysSupport;
 
 impl ArraysSupport {
+    /// mismatch([B I [B I I)：两段字节区间首个不等元素的相对下标，全等返回 -1。
+    /// JDK 以 Unsafe 向量化比较实现，可观察结果即逐元素比较。
+    #[jvm_boundary]
+    pub fn mismatch_arr_b_i_arr_b_i_i(a: JArray<i8>, a_from_index: i32, b: JArray<i8>,
+                                      b_from_index: i32, length: i32) -> Result<i32> {
+        for i in 0..length {
+            if a.get(a_from_index + i)? != b.get(b_from_index + i)? {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+
+    /// mismatch([B [B I)：同上，两数组均自下标 0 起。
+    #[jvm_boundary]
+    pub fn mismatch_arr_b_arr_b_i(a: JArray<i8>, b: JArray<i8>, length: i32) -> Result<i32> {
+        Self::mismatch_arr_b_i_arr_b_i_i(a, 0, b, 0, length)
+    }
+
     #[jvm_native]
     pub fn newLength(old_length: i32, min_growth: i32, pref_growth: i32) -> Result<i32> {
         let pref_length = old_length.wrapping_add(min_growth.max(pref_growth));

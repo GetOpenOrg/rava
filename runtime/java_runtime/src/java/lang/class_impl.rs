@@ -22,6 +22,7 @@ impl Class {
             Clone::clone(cache.borrow_mut().entry(key).or_insert_with(|| {
                 let mut c = Class::default();
                 c._init_not_null();
+                c.__set_name(Clone::clone(&name));
                 c
             }))
         }))
