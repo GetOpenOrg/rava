@@ -754,32 +754,18 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
 
-    // VirtualDefine 的 default impl（方法体经 Rewriter + SelfToConcrete）
+    // VirtualDefine 的 default impl（有方法体的情况改为 stub，实际体放在 wrapper 直接方法中）
     let mut vtable_default_methods: Vec<TokenStream2> = Vec::new();
     for f in &vtable_defines {
         let sig = &f.sig;
-        let keep_attrs = strip_meta_attrs(&f.attrs);
-        match &f.block {
-            Some(block) => {
-                let mut b = block.clone();
-                rewrite_block(&mut b, &basic_names, &ref_names);
-                // 将 Self::BINARY_NAME 等替换为具体类名（vtable default impl 中 Self 无 BINARY_NAME）
-                SelfToConcrete { struct_name: struct_ident.clone() }.visit_block_mut(&mut b);
-                vtable_default_methods.push(quote! {
-                    #(#keep_attrs)*
-                    #sig #b
-                });
-            }
-            None => {
-                let mname = sig.ident.to_string();
-                let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
-                let binary = &meta.binary_name;
-                let msg = format!("stub: {}.{}:{}", binary, mname, desc);
-                vtable_default_methods.push(quote! {
-                    #sig { panic!(#msg) }
-                });
-            }
-        }
+        let mname_str = sig.ident.to_string();
+        let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+        let binary = &meta.binary_name;
+        let msg = format!("stub: {}.{}:{}", binary, mname_str, desc);
+        // 无论有无方法体，vtable default 一律生成 stub——实际体在 wrapper 上下文中才正确
+        vtable_default_methods.push(quote! {
+            #sig { panic!(#msg) }
+        });
     }
 
     let vtable_trait = quote! {
@@ -1219,26 +1205,40 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
 
-    // VirtualDefine 委托（使用 UFCS 消歧义：同名方法在 ObjectVTable 和本 vtable 中共存）
+    // VirtualDefine 方法（有方法体：直接放到 wrapper，Self=wrapper 类型，可正确 Clone；无方法体：委托到 vtable）
     for f in &vtable_defines {
         let sig = &f.sig;
         let mname = &sig.ident;
-        // 提取参数名用于转发
-        let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
-            if let syn::FnArg::Typed(pt) = arg {
-                if let syn::Pat::Ident(pi) = &*pt.pat {
-                    return Some(pi.ident.clone());
-                }
-            }
-            None
-        }).collect();
         let keep_attrs = strip_meta_attrs(&f.attrs);
         let vis = &f.vis;
-        wrapper_methods.push(quote! {
-            #(#keep_attrs)*
-            #[inline]
-            #vis #sig { #vtable_trait_ident::#mname(&*self.vtable, #(#param_names),*) }
-        });
+        match &f.block {
+            Some(block) => {
+                // 有实际方法体：放到 wrapper 直接方法（不经过 vtable）
+                // 在 wrapper 上下文中 Self=WrapperType，Clone::clone(self) 返回正确类型
+                let mut b = block.clone();
+                rewrite_block(&mut b, &basic_names, &ref_names);
+                wrapper_methods.push(quote! {
+                    #(#keep_attrs)*
+                    #vis #sig #b
+                });
+            }
+            None => {
+                // 无方法体（abstract/native stub）：委托到 vtable（UFCS 消歧义）
+                let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
+                    if let syn::FnArg::Typed(pt) = arg {
+                        if let syn::Pat::Ident(pi) = &*pt.pat {
+                            return Some(pi.ident.clone());
+                        }
+                    }
+                    None
+                }).collect();
+                wrapper_methods.push(quote! {
+                    #(#keep_attrs)*
+                    #[inline]
+                    #vis #sig { #vtable_trait_ident::#mname(&*self.vtable, #(#param_names),*) }
+                });
+            }
+        }
     }
 
     // VirtualOverride 委托（wrapper 也需要暴露同名方法，转发到 vtable）
@@ -1427,21 +1427,28 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
     let mut base_fns: Vec<TokenStream2> = Vec::new();
 
-    // VirtualDefine 方法生成 base 函数（VTable 约束为 Self__VTable）
+    // VirtualDefine 方法生成 base 函数（stub）
+    // VirtualDefine 方法体只能在 wrapper（&StructName）上下文运行：
+    // 需要访问 this.vtable 字段、调用 NonVirtual 方法、Clone::clone(this)→StructName 等。
+    // 在 &impl VTable 上下文中这些均不可用，故生成 panic stub，等 invokespecial 实际需要时再做真正实现。
     for f in &vtable_defines {
-        if let Some(block) = &f.block {
+        if f.block.is_some() {
             let sig = &f.sig;
             let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
             let non_self_params: Vec<_> = sig.inputs.iter()
                 .filter(|a| matches!(a, syn::FnArg::Typed(_)))
                 .collect();
             let ret = &sig.output;
-            let mut b = block.clone();
-            rewrite_block_for_base(&mut b, &basic_names, &ref_names, &struct_ident);
+            let mname_str = sig.ident.to_string();
+            let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+            let binary = &meta.binary_name;
+            let msg = format!("stub: super {}.{}:{}", binary, mname_str, desc);
             base_fns.push(quote! {
                 #[doc(hidden)]
                 #[allow(non_snake_case, unused_variables)]
-                pub fn #fn_name #impl_g (this: &impl #vtable_trait_ident #ty_g #(, #non_self_params)*) #ret #b
+                pub fn #fn_name #impl_g (this: &impl #vtable_trait_ident #ty_g #(, #non_self_params)*) #ret {
+                    panic!(#msg)
+                }
             });
         }
     }

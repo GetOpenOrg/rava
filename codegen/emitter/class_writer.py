@@ -205,7 +205,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   full_impl_classes: set | None = None,
                   conflict_map: dict | None = None,
                   skipped_classes: set | None = None,
-                  user_sibling_imports: list[str] | None = None) -> str:
+                  user_sibling_imports: list[str] | None = None,
+                  generated_classes: set | None = None) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -219,10 +220,22 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # ── Step 1: 始终计算引用集合（精确 use 生成的基础）─────────────────────────
     import re as _re
+
+    def _strip_generic(cls: str) -> str:
+        """去掉 JVM 类名中的泛型参数（<...>），返回裸 binary name。
+        例：java/util/Collection<*> → java/util/Collection"""
+        idx = cls.find('<')
+        return cls[:idx] if idx >= 0 else cls
+
     _referenced: set[str] = set()
-    # 超类和接口：结构性依赖（生成的 struct 字段 / impl 头会引用这些类型）
-    if ci.super_class and ci.super_class != 'java/lang/Object':
-        _referenced.add(ci.super_class)
+    # 超类链：宏为每个祖先生成 From<Self> for Ancestor，需要全部祖先类型名在作用域内
+    _sc_cur = ci.super_class
+    while _sc_cur and _sc_cur != 'java/lang/Object':
+        _referenced.add(_sc_cur)
+        if registry and _sc_cur in registry:
+            _sc_cur = registry[_sc_cur].super_class
+        else:
+            break
     for _iface in (ci.interfaces or []):
         if _iface != 'java/lang/Object':
             _referenced.add(_iface)
@@ -256,15 +269,24 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _sc_scan = _sci_scan.super_class
     for _f in _all_fields_to_scan:
         for _m in _re.finditer(r'L([^;]+);', _f.descriptor or ''):
-            _referenced.add(_m.group(1))
+            _c2 = _strip_generic(_m.group(1))
+            if _c2: _referenced.add(_c2)
         for _m in _re.finditer(r'L([^;]+);', _f.generic_signature or ''):
-            _referenced.add(_m.group(1))
+            _c2 = _strip_generic(_m.group(1))
+            if _c2: _referenced.add(_c2)
     # 扫描方法描述符（参数和返回值）
     for _method in ci.methods:
         for _m in _re.finditer(r'L([^;]+);', _method.descriptor or ''):
-            _referenced.add(_m.group(1))
+            _c2 = _strip_generic(_m.group(1))
+            if _c2: _referenced.add(_c2)
         for _m in _re.finditer(r'L([^;]+);', getattr(_method, 'generic_signature', '') or ''):
-            _referenced.add(_m.group(1))
+            _c2 = _strip_generic(_m.group(1))
+            if _c2: _referenced.add(_c2)
+
+    # 过滤：只保留实际会生成到 scratch 的类型引用，避免为 stub 方法签名里的类型
+    # 生成 use 语句（那些类型不在 scratch 里，会导致 E0432）。
+    if generated_classes is not None:
+        _referenced = {c for c in _referenced if c in generated_classes}
 
     # ── Step 2: 精确 cross_imports（按需逐类型导入，不使用包级 glob）───────────
     cross_imports: list[str] = []
@@ -288,11 +310,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         cross_imports.append(f"use {_prefix}::{_rust_pkg}::{_simple};")
 
     # JDK 包（jdk_crate_pkg_paths 中的包）：按需精确导入
+    # jdk_crate_pkg_paths 是 Rust 路径（java::lang），_referenced 是 JVM 路径（java/lang）
+    # 转换为同一格式再比对
     if jdk_crate_pkg_paths:
-        _pkg_set = set(jdk_crate_pkg_paths)
+        _pkg_set_slash = {
+            p.replace('::', '/').replace('r#', '') for p in jdk_crate_pkg_paths
+        }
         for _full_cls in sorted(_referenced):
             _parts = _full_cls.split('/')
-            if len(_parts) >= 2 and '/'.join(_parts[:-1]) in _pkg_set:
+            if len(_parts) >= 2 and '/'.join(_parts[:-1]) in _pkg_set_slash:
                 _add_precise_import(_full_cls)
 
     # 同包兄弟类：按需精确导入（若自身包未在 jdk_crate_pkg_paths 中）
@@ -349,6 +375,62 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     and _simple not in _added_skipped):
                 cross_imports.append(f"use {_prefix}::{_rust_pkg}::{_simple};")
                 _added_skipped.add(_simple)
+
+    # VTable trait 导入：沿超类链为每个祖先类导入 Ancestor__VTable。
+    # java_class! 宏生成 impl Ancestor__VTable for Self__inner，需要该 trait 在作用域内。
+    # 接口不生成 VTable trait（接口展开为 pub type Iface = Object;），故只处理非接口超类链。
+    if not ci.is_interface and registry:
+        _vtable_cur = ci.super_class
+        while _vtable_cur and _vtable_cur != 'java/lang/Object':
+            if generated_classes is None or _vtable_cur in generated_classes or '/' not in _vtable_cur:
+                _vp = _vtable_cur.split('/')
+                if len(_vp) >= 2:
+                    _vpkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _vp[:-1])
+                    _vsimple = _vp[-1].replace('$', '_')
+                    _vkey = f"{_vpkg}::{_vsimple}__VTable"
+                    if _vkey not in _seen_imports:
+                        _seen_imports.add(_vkey)
+                        cross_imports.append(f"use {_prefix}::{_vpkg}::{_vsimple}__VTable;")
+                elif len(_vp) == 1:
+                    # user class without package path (no '/') — vtable is in same user crate
+                    _vsimple = _vp[0].replace('$', '_')
+                    _mod_n = to_snake(_vp[0])
+                    _vkey = f"crate::{_mod_n}::{_vsimple}__VTable"
+                    if _vkey not in _seen_imports:
+                        _seen_imports.add(_vkey)
+                        cross_imports.append(f"use crate::{_mod_n}::{_vsimple}__VTable;")
+            _vtable_cur = registry[_vtable_cur].super_class if _vtable_cur in registry else None
+
+    # __base 函数导入：扫描方法字节码中的非 <init> invokespecial 指令
+    # 若调用了 user class 的父类方法（invokespecial），生成的 Rust 代码会调用
+    # ParentClass__method_base(this, ...) 自由函数，需导入该函数所在模块。
+    if not ci.is_interface:
+        import re as _re2
+        from ..instr.coerce import parse_method_ref as _pmr
+        for _m in ci.methods:
+            for _ins in getattr(_m, 'instrs', []) or []:
+                if getattr(_ins, 'opcode', '') != 'invokespecial':
+                    continue
+                _c = getattr(_ins, 'comment', '') or ''
+                if not _c or '<init>' in _c:
+                    continue
+                _cls_s, _mname_s, _params_s, _ret_s = _pmr(_c)
+                if not _cls_s or '/' in _c.replace('Method ', '').split('.')[0]:
+                    continue  # JDK class (has '/') — skip
+                # user class parent method → __base function needs import
+                _orig_cls = _c.replace('Method ', '').replace('InterfaceMethod ', '')
+                _orig_cls = _orig_cls.split('.')[0] if '.' in _orig_cls else _orig_cls
+                _base_cls_simple = _orig_cls.replace('$', '_')
+                _base_mod = to_snake(_orig_cls)
+                from ..instr.coerce import _mangle_if_overloaded as _mio
+                _rust_mname_s = _mio(_cls_s, _mname_s, _c, registry)
+                from ..instr.coerce import _safe_field as _sf
+                _rust_mname_s = _sf(_rust_mname_s)
+                _base_fn = f"{_base_cls_simple}__{_rust_mname_s}_base"
+                _bkey = f"crate::{_base_mod}::{_base_fn}"
+                if _bkey not in _seen_imports:
+                    _seen_imports.add(_bkey)
+                    cross_imports.append(f"use crate::{_base_mod}::{_base_fn};")
 
     # 用户内部类兄弟模块导入（crate::mod_name::TypeName）
     if user_sibling_imports:
@@ -869,6 +951,51 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 else:
                     dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry, class_type_params=class_type_params)
                     method_blocks.append(dm_attr + '\n' + dm_stub)
+
+    # 超类虚方法继承：若子类未覆盖祖先虚方法，生成继承实现使 vtable impl 包含实际函数体。
+    # 这避免子类的 Ancestor__VTable impl 退化为 panic!("stub")。
+    # 仅对用户类超类链（无 '/'）处理，JDK 类的继承由 BFS 方法级调用链保证。
+    if not ci.is_interface and registry and ci.super_class and '/' not in ci.super_class:
+        import copy as _copy3
+        _vinh_existing: set[tuple] = {(m.name, m.descriptor) for m in visible_methods}
+        _vinh_super = ci.super_class
+        while _vinh_super and _vinh_super != 'java/lang/Object' and '/' not in _vinh_super:
+            _vinh_sci = registry.get(_vinh_super)
+            if _vinh_sci is None:
+                break
+            for _vm in _vinh_sci.methods:
+                if (_vm.name, _vm.descriptor) in _vinh_existing:
+                    continue
+                if _vm.is_static or _vm.is_constructor or _vm.name in ('<init>', '<clinit>'):
+                    continue
+                _vm_virt_in = _find_virtual_in(_vm, _vinh_sci, registry)
+                if not _vm_virt_in:
+                    continue  # 非虚方法，不继承
+                _vinh_existing.add((_vm.name, _vm.descriptor))
+                _vm2 = _copy3.copy(_vm)
+                _vm2.class_name = ci.name
+                _vm2.virtual_in = _vm_virt_in
+                _vm_attr = _java_method_attr(_vm2)
+                _vm_in_cc = (
+                    call_chain is None or
+                    (ci.name, _vm.name, _vm.descriptor) in call_chain or
+                    (_vinh_super, _vm.name, _vm.descriptor) in call_chain
+                )
+                if _vm.is_native or _vm.is_abstract or not _vm_in_cc or stub_bodies:
+                    _vm_stub = _gen_native_stub(_vm2, ci, registry=registry, class_type_params=class_type_params)
+                    method_blocks.append(_vm_attr + '\n' + _vm_stub)
+                else:
+                    try:
+                        _vm_body = gen_method_body(
+                            _vm2, ci, registry=registry,
+                            class_type_params=class_type_params,
+                            overloaded_names=overloaded_names,
+                        )
+                        method_blocks.append(_vm_attr + '\n' + _vm_body)
+                    except Exception:
+                        _vm_stub = _gen_native_stub(_vm2, ci, registry=registry, class_type_params=class_type_params)
+                        method_blocks.append(_vm_attr + '\n' + _vm_stub)
+            _vinh_super = _vinh_sci.super_class if _vinh_sci.super_class else None
 
     # Record 类（super_class == java/lang/Record）：覆盖 invokedynamic 无法翻译的方法
     if ci.super_class == 'java/lang/Record' and not ci.is_interface:

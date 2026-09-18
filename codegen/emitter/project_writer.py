@@ -175,6 +175,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             if len(_in_scope) >= 2:
                 conflict_map[_sn] = _in_scope
 
+        # 预计算实际生成的类集合，用于过滤 cross_imports（避免为不存在的类型生成 use）
+        _generated_jdk_names: set[str] = {ci.name for ci in jdk_class_infos}
+
         for jdk_ci in jdk_class_infos:
             parts = jdk_ci.name.split('/')          # e.g. ['java','util','ArrayList']
             *pkg_parts, class_name = parts
@@ -196,7 +199,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                             workspace_root=out_dir,
                                             full_impl_classes=full_impl_classes,
                                             conflict_map=conflict_map,
-                                            skipped_classes=skipped_classes))
+                                            skipped_classes=skipped_classes,
+                                            generated_classes=_generated_jdk_names))
             # 更新 mod 树
             parent = jdk_src
             for part in pkg_parts:
@@ -362,6 +366,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
 
     # 写用户类文件
     user_pkg_paths = jdk_crate_pkg_paths if jdk_class_infos else None
+    _user_gen_jdk = {ci.name for ci in jdk_class_infos} if jdk_class_infos else None
     for ci in class_infos:
         file_path, _, _ = layout[ci.name]
         _write(file_path, _gen_class_rs(ci, registry=registry,
@@ -372,7 +377,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                         full_impl_classes=full_impl_classes,
                                         conflict_map=conflict_map if jdk_class_infos else None,
                                         skipped_classes=skipped_classes if jdk_class_infos else None,
-                                        user_sibling_imports=_sibling_imports.get(ci.name)))
+                                        user_sibling_imports=_sibling_imports.get(ci.name),
+                                        generated_classes=_user_gen_jdk))
 
     # 中间 mod.rs（用户子包）
     for dir_path, children in user_mod_tree.items():

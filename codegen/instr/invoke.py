@@ -655,6 +655,48 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             sim.push(Var(v), RsNamed(rust_ret))
 
 
+def _needs_vtable_dispatch(obj_ty: str, cls: str, mname: str, registry,
+                           params: list | None = None) -> bool:
+    """
+    判断是否需要通过 .vtable.method() 进行 vtable 分派。
+
+    条件：obj_ty（receiver Rust 短类名）的 .class 文件中没有以 mname+descriptor
+    精确声明该方法（即该方法是继承来的，生成的 wrapper struct 上没有此方法）。
+
+    注意：
+    - 即使 obj_ty == cls（指令解析类与 receiver 相同），方法也可能是继承的
+      （例如 BufferedWriter.write(String) 继承自 Writer，未在 BufferedWriter 声明）
+    - 仅对非基本类型、非 Object 的已知生成类有效
+    """
+    if not registry:
+        return False
+    if not obj_ty or obj_ty in ('Object', '()') or not obj_ty[0].isupper():
+        return False
+    if obj_ty in _PRIMITIVE_RUST_TYPES:
+        return False
+    obj_jvm = _rust_type_to_binary(obj_ty, registry)
+    if not obj_jvm:
+        return False
+    ci = registry.get(obj_jvm)
+    if ci is None:
+        return False
+    # 精确匹配：检查 mname + descriptor 是否在本类声明的方法列表中
+    # .class 文件中只列出本类声明的方法，不含继承方法
+    if params is not None:
+        # 有 descriptor 信息：精确匹配（名称 + 参数类型前缀）
+        param_desc = '(' + ''.join(params) + ')'
+        for m in ci.methods:
+            if m.name == mname and m.descriptor.startswith(param_desc):
+                return False  # 本类声明了该方法 → wrapper 上有 → 直接调用
+        return True  # 本类没有声明 → 继承来的 → vtable 分派
+    else:
+        # 无 descriptor：仅名称匹配（不精确，兼容旧调用路径）
+        for m in ci.methods:
+            if m.name == mname:
+                return False
+        return True
+
+
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
     sig_params_v = _lookup_method_sig_params(
@@ -893,9 +935,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
             sim.push(Var(v), RsNamed(rust_ret))
         return
+    # receiver 是子类但方法定义在祖先类时，wrapper struct 没有继承该方法，需 vtable 分派
+    _use_vtable = _needs_vtable_dispatch(obj_ty, cls, mname, registry, params=params)
+    _recv = f"{obj_e}.vtable" if _use_vtable else obj_e
     if rust_ret == '()':
         if not obj_is_bare:
-            sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))
+            sim.emit(RawStmt(f"{_recv}.{rust_mname}({arg_str})?;"))
     else:
         v = sim.fresh()
         if obj_is_bare and rust_ret not in ('Object', '()') and rust_ret not in _PRIMITIVE_RUST_TYPES:
@@ -918,12 +963,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             )
             if (rust_ret == 'Object' and _sig_ret_v is not None
                     and _sig_ret_v != 'Object'):
-                sim.emit(RawStmt(f"let {v} = Object::from_any({obj_e}.{rust_mname}({arg_str})?);"))
+                sim.emit(RawStmt(f"let {v} = Object::from_any({_recv}.{rust_mname}({arg_str})?);"))
                 sim.push(Var(v), RsNamed(rust_ret))
             elif (_sig_ret_v is not None and _sig_ret_v != rust_ret
                     and rust_ret not in _PRIMITIVE_RUST_TYPES):
-                sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
+                sim.emit(RawStmt(f"let {v} = {_recv}.{rust_mname}({arg_str})?;"))
                 sim.push(Var(v), RsNamed(_sig_ret_v))
             else:
-                sim.emit(RawStmt(f"let {v} = {obj_e}.{rust_mname}({arg_str})?;"))
+                sim.emit(RawStmt(f"let {v} = {_recv}.{rust_mname}({arg_str})?;"))
                 sim.push(Var(v), RsNamed(rust_ret))
