@@ -580,7 +580,11 @@ fn is_vtable_safe_body(block: &Block) -> bool {
         return false;
     }
     // 检测 this.non_accessor_method() 调用（不以 __ 开头的方法调用）
-    for part in s.split("this .").skip(1) {
+    // proc-macro token stream 中点号可能带空格（"this . foo"）也可能紧凑（"this.foo"），两种都检查
+    let mut parts: Vec<&str> = Vec::new();
+    parts.extend(s.split("this .").skip(1));
+    parts.extend(s.split("this.").skip(1));
+    for part in parts {
         let trimmed = part.trim_start();
         let mname: String =
             trimmed.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
@@ -842,9 +846,6 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let mut type_texts: Vec<String> = Vec::new();
     for (_, ty) in fields.iter().chain(meta.superclass_fields.iter()) {
         type_texts.push(quote!(#ty).to_string());
-    }
-    if let Some(sup) = &meta.superclass {
-        type_texts.push(quote!(#sup).to_string());
     }
     for text in &type_texts {
         let mut cur = String::new();
@@ -1137,10 +1138,35 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                         Some(block) => {
                             let mut b = block.clone();
                             rewrite_block(&mut b, &basic_names, &ref_names);
-                            items.push(quote! {
-                                #(#keep_attrs)*
-                                #sig #b
-                            });
+                            if is_vtable_safe_body(block) {
+                                items.push(quote! {
+                                    #(#keep_attrs)*
+                                    #sig #b
+                                });
+                            } else {
+                                // 非 vtable-safe 方法体（含 Clone::clone(this) 等）：
+                                // 去除 codegen 生成的首行 `let this = self;`，
+                                // 改为在 vtable impl 中重建 wrapper 并绑定为 this。
+                                if let Some(first) = b.stmts.first() {
+                                    let s = quote!(#first).to_string();
+                                    if s.contains("this") && s.contains("self") {
+                                        b.stmts.remove(0);
+                                    }
+                                }
+                                let stmts = &b.stmts;
+                                items.push(quote! {
+                                    #(#keep_attrs)*
+                                    #sig {
+                                        let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                                        let __wrapper = #struct_ident {
+                                            vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                                            any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                                        };
+                                        let this = &__wrapper;
+                                        #(#stmts)*
+                                    }
+                                });
+                            }
                         }
                         None => {
                             let mname = sig.ident.to_string();
@@ -1616,22 +1642,29 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     }
 
     // VirtualOverride 方法生成 base 函数（VTable 约束为 virtual_in__VTable）
+    // base 函数的 this: &impl AncestorVTable，而本类自有字段的 __get_xxx / Clone::clone 等
+    // 均不在祖先 vtable 中，因此 VirtualOverride base 函数一律生成 panic stub。
+    // （base 函数仅在 invokespecial super 调用时触发，HelloWorld 路径不涉及。）
     for (vtable_class, override_fns) in &vtable_overrides {
         let vtable_class_ident = format_ident!("{}__VTable", vtable_class);
         for f in override_fns {
-            if let Some(block) = &f.block {
+            if f.block.is_some() {
                 let sig = &f.sig;
                 let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
                 let non_self_params: Vec<_> = sig.inputs.iter()
                     .filter(|a| matches!(a, syn::FnArg::Typed(_)))
                     .collect();
                 let ret = &sig.output;
-                let mut b = block.clone();
-                rewrite_block_for_base(&mut b, &basic_names, &ref_names, &struct_ident);
+                let mname_str = sig.ident.to_string();
+                let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+                let binary = &meta.binary_name;
+                let msg = format!("stub: super {}.{}:{}", binary, mname_str, desc);
                 base_fns.push(quote! {
                     #[doc(hidden)]
                     #[allow(non_snake_case, unused_variables)]
-                    pub fn #fn_name #impl_g (this: &impl #vtable_class_ident #ty_g #(, #non_self_params)*) #ret #b
+                    pub fn #fn_name #impl_g (this: &impl #vtable_class_ident #ty_g #(, #non_self_params)*) #ret {
+                        panic!(#msg)
+                    }
                 });
             }
         }
