@@ -48,6 +48,7 @@ def gen_method_body(
     class_type_params: list[str] | None = None,
     overloaded_names: set[str] | None = None,
     rust_name: str | None = None,
+    in_vtable_body: bool = False,
 ) -> str:
     _class_tparams = class_type_params or []
 
@@ -198,7 +199,8 @@ def gen_method_body(
 
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                    slot_hint_types=slot_hint_types, return_type=rust_ret,
-                   is_constructor=is_ctor, class_type_params=_class_tparams)
+                   is_constructor=is_ctor, class_type_params=_class_tparams,
+                   in_vtable_body=in_vtable_body)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
 
@@ -241,6 +243,7 @@ def gen_method_body(
                 rust_param_type_nodes, is_static, method.class_name, local_names,
                 slot_hint_types=slot_hint_types, return_type=rust_ret,
                 is_constructor=is_ctor, class_type_params=_class_tparams,
+                in_vtable_body=cur_sim.in_vtable_body,
             )
             s.locals = dict(cur_sim.locals)
             s._slot_decl_depth = dict(cur_sim._slot_decl_depth)

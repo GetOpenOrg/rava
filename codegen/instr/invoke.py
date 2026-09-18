@@ -894,19 +894,24 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
             sim.push(Var(v), RsNamed(rust_ret))
         return
-    # 方法未在 obj_ty 本类声明（继承来的）→ wrapper 无该方法 → 经 vtable 分派。
-    # 方法在本类声明 → wrapper（内联委托 vtable）和 inner（直接 trait 调用）均可直达。
-    _obj_jvm = _rust_type_to_binary(obj_base, registry) if registry else None
-    _ci_recv = registry.get(_obj_jvm) if _obj_jvm else None
-    if _ci_recv is not None:
-        _param_desc = '(' + ''.join(params) + ')' if params is not None else None
-        _declared_here = any(
-            m.name == mname and (_param_desc is None or m.descriptor.startswith(_param_desc))
-            for m in _ci_recv.methods
-        )
-        _recv = obj_e if _declared_here else f"{obj_e}.vtable"
+    # vtable body 上下文（this: &ClassName__inner，无 .vtable 字段）→ 直接调用。
+    # 仅对当前类自身的 receiver（obj_base 匹配当前类短名）生效；
+    # 其他 wrapper 类型的 receiver 仍走常规 vtable 分派检查。
+    _cur_class_short = short_cls(class_name) if class_name else ''
+    if sim.in_vtable_body and obj_base == _cur_class_short:
+        _recv = obj_e
     else:
-        _recv = obj_e  # 手写类 / 不在 registry → 直接调用
+        _obj_jvm = _rust_type_to_binary(obj_base, registry) if registry else None
+        _ci_recv = registry.get(_obj_jvm) if _obj_jvm else None
+        if _ci_recv is not None:
+            _param_desc = '(' + ''.join(params) + ')' if params is not None else None
+            _declared_here = any(
+                m.name == mname and (_param_desc is None or m.descriptor.startswith(_param_desc))
+                for m in _ci_recv.methods
+            )
+            _recv = obj_e if _declared_here else f"{obj_e}.vtable"
+        else:
+            _recv = obj_e  # 手写类 / 不在 registry → 直接调用
     if rust_ret == '()':
         if not obj_is_bare:
             sim.emit(RawStmt(f"{_recv}.{rust_mname}({arg_str})?;"))

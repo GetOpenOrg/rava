@@ -843,6 +843,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     class_type_params=class_type_params,
                     overloaded_names=overloaded_names,
                     rust_name=rust_name,
+                    in_vtable_body=bool(m.virtual_in),
                 )
                 # 用户类 main()：若有 <clinit>，在方法体开头插入 class_init() 调用
                 if (_is_user_class and _has_clinit
@@ -943,6 +944,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                             class_type_params=class_type_params,
                             overloaded_names=overloaded_names,
                             rust_name=dm_rust,
+                            in_vtable_body=True,
                         )
                         method_blocks.append(dm_attr + '\n' + dm_body)
                     except Exception:
@@ -990,6 +992,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                             _vm2, ci, registry=registry,
                             class_type_params=class_type_params,
                             overloaded_names=overloaded_names,
+                            in_vtable_body=True,
                         )
                         method_blocks.append(_vm_attr + '\n' + _vm_body)
                     except Exception:

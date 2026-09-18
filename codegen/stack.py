@@ -96,7 +96,8 @@ class StackSim:
                  slot_hint_types: dict[int, RsType] | None = None,
                  return_type: str = 'Object',
                  is_constructor: bool = False,
-                 class_type_params: list[str] | None = None):
+                 class_type_params: list[str] | None = None,
+                 in_vtable_body: bool = False):
         self.stack:      list[tuple[RsExpr, RsType]] = []
         self._ctr:       int                         = 0
         self.locals:     dict[int, tuple]            = {}   # slot → (name, RsType, is_new)
@@ -111,6 +112,7 @@ class StackSim:
         self._current_depth: int                     = 0
         self._slot_decl_depth: dict[int, int]        = {}  # slot → 首次声明时的嵌套深度
         self.underflow_occurred: bool                = False  # 记录是否发生过栈下溢
+        self.in_vtable_body: bool                    = in_vtable_body
 
         def _is_wide(rt: RsType) -> bool:
             """long (i64) 和 double (f64) 在 JVM 中各占 2 个局部变量槽。"""
