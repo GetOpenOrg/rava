@@ -34,6 +34,11 @@ impl Object {
     pub fn downcast<T: std::any::Any + Clone + 'static>(&self) -> T {
         // Clone::clone 而非 .clone()：T 可能是带 Java clone() 方法的类
         // （Reference/HashMap 等），方法语法会被遮蔽返回 Result<Object>
+        // T 本身就是 Object（泛型类以 Object 实例化，如 HashMap<Object, Object> 中的 V）：
+        // 值无需拆箱，直接返回自身别名
+        if let Some(same) = (self as &dyn std::any::Any).downcast_ref::<T>() {
+            return Clone::clone(same);
+        }
         Clone::clone(self.0.as_any()
             .downcast_ref::<T>()
             .expect("ClassCastException"))

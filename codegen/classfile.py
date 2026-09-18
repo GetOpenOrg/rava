@@ -516,6 +516,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     # （LVTT 可能先于 LVT 出现），且同一 slot 可被多个不同作用域的变量复用
     # （如 resize 的 float ft 与 Node<K,V>[] newTab 共用 slot 6）。
     _lvt_entries: list[tuple[int, int, str, int]] = []    # (start_pc, length, name, slot)
+    _lvt_descs: dict[tuple[int, int, str], str] = {}      # (slot, start_pc, name) → descriptor
     _lvtt_entries: list[tuple[str, str, int, int]] = []   # (name, sig, slot, start_pc)
     for _ in range(sub_attr_count):
         sub_name_idx = r.u2()
@@ -532,6 +533,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
                 _desc_idx = lvt_r.u2()
                 slot      = lvt_r.u2()
                 _lvt_entries.append((_start_pc, _length, _utf8(pool, name_idx), slot))
+                _lvt_descs[(slot, _start_pc, _utf8(pool, name_idx))] = _utf8(pool, _desc_idx)
         elif sub_name == 'LocalVariableTypeTable':
             # 格式与 LocalVariableTable 相同，但 descriptor 换成 Signature
             sub_data = r.read(sub_len)
@@ -565,6 +567,17 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
         if _slot not in local_types and _lvtt_name in _slot_all_names.get(_slot, ()):
             local_types[_slot] = (_sig, _lvtt_start)
 
+    # 按作用域区间的完整局部变量声明表：(slot, start_pc, length, name, descriptor, signature)
+    # 同一 slot 可被多个不同作用域、不同类型的变量复用；store/load 按字节码偏移查表，
+    # 得到该偏移处真实的 Java 声明名与声明类型（signature 为 LVTT 泛型签名，无则为 ''）。
+    _lvtt_by_key = {(_s, _st, _n): _sg for _n, _sg, _s, _st in _lvtt_entries}
+    local_vars: list[tuple[int, int, int, str, str, str]] = [
+        (_slot, _start, _len, _name,
+         _lvt_descs.get((_slot, _start, _name), ''),
+         _lvtt_by_key.get((_slot, _start, _name), ''))
+        for _start, _len, _name, _slot in _lvt_entries
+    ]
+
     instrs = _decode_bytecode(code_bytes, pool, bootstrap_methods or [])
 
     # 参数数量：从描述符推算（static 方法不含 this）
@@ -583,6 +596,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
         instrs=instrs,
         local_names=local_names,
         local_types=local_types,
+        local_vars=local_vars,
     )
 
 

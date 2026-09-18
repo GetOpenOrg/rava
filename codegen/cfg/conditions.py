@@ -98,7 +98,9 @@ def find_boolean_conditions(instrs: list[Instr]) -> dict[int, tuple]:
         if i + 1 >= len(instrs):
             continue
         next1 = instrs[i + 1]
-        if not next1.opcode.startswith('iconst_'):
+        # 仅 iconst_0 / iconst_1 构成布尔物化；iconst_m1 / iconst_2..5（如 `c ? 1 : -1`）
+        # 是普通 int 三元表达式，交给通用 if-else 合并路径处理
+        if next1.opcode not in ('iconst_0', 'iconst_1'):
             continue
         true_val = int(next1.opcode[-1])
 
@@ -117,9 +119,11 @@ def find_boolean_conditions(instrs: list[Instr]) -> dict[int, tuple]:
         if false_idx is None or false_idx != i + 3:
             continue
         false_ins = instrs[false_idx]
-        if not false_ins.opcode.startswith('iconst_'):
+        if false_ins.opcode not in ('iconst_0', 'iconst_1'):
             continue
         false_val = int(false_ins.opcode[-1])
+        if true_val == false_val:
+            continue
 
         end_idx = off2idx.get(end_offset)
         if end_idx is None:

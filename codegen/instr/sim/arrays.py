@@ -6,8 +6,16 @@ from ...stack import I32, I64, F32, F64
 from ...rs_ir import Var, RawExpr, RawStmt, RsNamed, RsGeneric
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, NEWARRAY_TYPES
-from ..coerce import _coerce_to_object, _is_subtype, _PRIMITIVE_RUST_TYPES, _into_super_chain
+from ..coerce import _to_i32, _coerce_to_object, _is_subtype, _PRIMITIVE_RUST_TYPES, _into_super_chain
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
+
+
+def _pop_index(sim):
+    """弹出数组下标：JVM 下标恒为 int，窄类型（char/short/byte 局部）提升为 i32。"""
+    idx_expr, idx_ty = sim.pop()
+    src = render_expr(idx_expr)
+    widened = _to_i32(src, idx_ty)
+    return idx_expr if widened == src else RawExpr(widened)
 
 
 def sim_arrays(ins, sim, class_name, registry) -> bool:
@@ -41,10 +49,10 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         sim.emit(RawStmt(f"let mut {v}: Vec<Vec<i32>> = vec![vec![0i32; {sizes[-1]} as usize]; {sizes[0]} as usize];"))
         sim.push(Var(v), RsGeneric('Vec', [RsGeneric('Vec', [I32])]))
     elif op in ('iastore', 'lastore', 'fastore', 'dastore'):
-        val_expr, _val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        val_expr, _val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {render_expr(val_expr)});"))
     elif op == 'aastore':
-        val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
+        val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
         _m_aa = _re.match(r'JArray<(.+)>$', arr_ty_str)
         if _m_aa:
@@ -68,7 +76,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
                 val_str = f"Clone::clone(&{val_str})"
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {val_str});"))
     elif op == 'bastore':
-        val_expr, val_ty = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
+        val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
         # boolean[] 在 JVM 中以 bastore 写入，需要 != 0 转换
         if arr_ty_str in ('JArray<bool>', 'Vec<bool>'):
@@ -78,23 +86,23 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         else:
             sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i8);"))
     elif op == 'sastore':
-        val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        val_expr, _ = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i16);"))
     elif op == 'castore':
-        val_expr, _ = sim.pop(); idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        val_expr, _ = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as u16);"))
     elif op == 'iaload':
-        idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
         sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})"), I32)
     elif op in ('baload', 'saload', 'caload'):
-        idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(arr_expr)}.get({render_expr(idx_expr)}) as i32)"), I32)
     elif op in ('laload', 'faload', 'daload'):
-        idx_expr, _ = sim.pop(); arr_expr, _ = sim.pop()
+        idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
         ty = {'l': I64, 'f': F32, 'd': F64}.get(op[0], I32)
         sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})"), ty)
     elif op == 'aaload':
-        idx_expr, _ = sim.pop(); arr_expr, arr_ty = sim.pop()
+        idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
         _m = _re.match(r'JArray<(.+)>$', arr_ty_str)
         if _m:

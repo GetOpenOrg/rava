@@ -61,8 +61,11 @@ def _maybe_downcast(expr: RsExpr, ty: RsType) -> RsExpr:
     JDK stub 因类型擦除实际返回 Object，需要 downcast 恢复具体类型。
     对工厂方法 / @synthetic（expr 为 RawExpr）不添加 downcast。
     """
+    # 目标为任意非 Object 引用类型（含裸类型参数 V/K 与非泛型类）都需要 downcast：
+    # 源值的静态类型是 Object，直接 `let v: V = _t0` 必然 E0308。
     if (isinstance(expr, Var) and isinstance(ty, RsNamed)
-            and '<' in ty.name and not ty.name.startswith('Rc<')):
+            and ty.name != 'Object' and not ty.name.startswith('Rc<')
+            and not ty.name.startswith('&') and ty.name != '()'):
         return RawExpr(f"({render_expr(expr)}).downcast::<{ty.name}>()")
     return expr
 
@@ -93,8 +96,8 @@ def _clone_moved_var(expr: RsExpr, ty: RsType) -> RsExpr:
 class StackSim:
     def __init__(self, param_rust_types: list[RsType], is_static: bool, class_name: str,
                  local_names: dict[int, str] | None = None,
-                 slot_hint_types: dict[int, RsType] | None = None,
-                 slot_hint_starts: dict[int, int] | None = None,
+                 slot_decls: dict[int, list] | None = None,
+                 is_subtype=None,
                  return_type: str = 'Object',
                  is_constructor: bool = False,
                  class_type_params: list[str] | None = None,
@@ -109,9 +112,13 @@ class StackSim:
         self.is_constructor = is_constructor
         self.class_type_params: frozenset[str] = frozenset(class_type_params or [])
         self._loc_names  = local_names or {}     # slot → Java variable name
-        self._hint_types = slot_hint_types or {}  # slot → precise RsType from LocalVariableTypeTable
-        self._hint_starts = slot_hint_starts or {}  # slot → LVTT start_pc（slot 复用检测）
+        # slot → [(start_pc, end_pc, name, RsType|None, from_signature)]：
+        # LocalVariableTable/TypeTable 按作用域区间给出的声明名与声明类型（slot 复用按偏移区分）
+        self._slot_decls = slot_decls or {}
+        self._is_subtype = is_subtype or (lambda _c, _p: False)
+        self._param_slots: set[int]                  = set()  # 方法参数占用的 slot（类型由签名决定）
         self.current_offset: int                     = 0    # 当前正在处理的字节码偏移
+        self.next_offset: int                        = 0    # 下一条指令偏移（store 后变量作用域起点）
         self._current_depth: int                     = 0
         self._slot_decl_depth: dict[int, int]        = {}  # slot → 首次声明时的嵌套深度
         self.underflow_occurred: bool                = False  # 记录是否发生过栈下溢
@@ -127,6 +134,7 @@ class StackSim:
                 name = _safe_name(self._loc_names.get(slot, f"arg_{slot}"))
                 self.locals[slot] = (name, rt, False)
                 self._slot_decl_depth[slot] = 0
+                self._param_slots.add(slot)
                 slot += 2 if _is_wide(rt) else 1
         else:
             # this 是当前类的句柄，用 short_cls 转换 JVM 二进制名到 Rust 短名。
@@ -145,6 +153,7 @@ class StackSim:
                 name = _safe_name(self._loc_names.get(slot, f"arg_{idx}"))
                 self.locals[slot] = (name, rt, False)
                 self._slot_decl_depth[slot] = 0
+                self._param_slots.add(slot)
                 slot += 2 if _is_wide(rt) else 1
 
     # ── 作用域深度追踪（T68：JVM slot 复用检测）────────────────────────────
@@ -194,6 +203,25 @@ class StackSim:
 
     # ── 局部变量 ─────────────────────────────────────────────────────────────
 
+    def _decl_at(self, slot: int, for_store: bool):
+        """按当前字节码偏移查 slot 的声明条目 (name, RsType|None, from_signature)。
+        - 作用域覆盖当前偏移的条目优先（对已存活变量的读/再赋值）
+        - store 时：变量作用域从 store 的下一条指令开始，按 next_offset 精确匹配初始化 store
+        未命中返回 None（编译器合成的临时 slot，如 for-each 迭代器、synchronized 锁对象）。"""
+        entries = self._slot_decls.get(slot)
+        if not entries:
+            return None
+        off = self.current_offset
+        for start, end, name, rty, from_sig in entries:
+            if start <= off < end:
+                return (name, rty, from_sig)
+        if for_store:
+            nxt = self.next_offset
+            for start, end, name, rty, from_sig in entries:
+                if start == nxt or (nxt <= off and off < start <= off + 4):
+                    return (name, rty, from_sig)
+        return None
+
     def store_local(self, slot: int, expr: RsExpr, ty: RsType):
         """
         存储到局部变量槽。
@@ -209,14 +237,55 @@ class StackSim:
         # 用 LocalVariableTypeTable 提供的精确类型覆盖泛型擦除后的 Object 或裸类名
         # 仅当当前字节码偏移 >= hint 的 start_pc 时才应用（防止 slot 复用导致
         # 前一变量生命周期内错误套用后继变量的类型，如 for-each 迭代器 slot）
-        hint = self._hint_types.get(slot)
-        if hint is not None:
-            hint_start = self._hint_starts.get(slot, 0)
-            # LVTT start_pc 指变量可读的首指令偏移，store 指令本身偏移 = start_pc - 指令大小
-            # （astore 最大 4 字节）。若 store 偏移远早于 start_pc（差值 > 4），
-            # 说明该 slot 在 hint 变量生命周期之前被复用（如 for-each 迭代器），不应用 hint。
-            if hint_start > 0 and self.current_offset < hint_start - 4:
-                hint = None
+        # 声明表按作用域区间查询：slot 复用时（如 for-each 迭代器 slot 被后续变量复用）
+        # 每个偏移只会命中当时真正存活的那个 Java 变量，不会错误套用其他变量的名字/类型。
+        decl = None if slot in self._param_slots else self._decl_at(slot, for_store=True)
+        decl_name = _safe_name(decl[0]) if decl is not None else None
+        hint = decl[1] if (decl is not None and decl[2]) else None
+        decl_ty = decl[1] if (decl is not None and not decl[2]) else None
+        force_let_ty = False
+        _INT_FAMILY = ('i32', 'bool', 'u16', 'i8', 'i16')
+        ty_name = getattr(ty, 'name', '')
+        if ty_name in _INT_FAMILY:
+            # JVM 操作数栈上 boolean/byte/char/short 都是 int；局部变量的 Rust 类型以
+            # LocalVariableTable 声明为准（int c = s.charAt(i) → c: i32），无声明时按 int。
+            target = getattr(decl_ty, 'name', '') if decl_ty is not None else ''
+            if slot in self._param_slots and slot in self.locals:
+                # 形参的 Rust 类型由方法签名决定（boolean 形参 → bool），回写时对齐
+                target = getattr(self.locals[slot][1], 'name', '')
+            if target not in _INT_FAMILY:
+                target = 'i32' if ty_name == 'bool' else ty_name
+            if target != ty_name:
+                src = render_expr(expr)
+                if target == 'i32':
+                    expr = RawExpr(f"({src}) as i32")
+                elif target == 'bool':
+                    expr = RawExpr(f"(({src}) as i32 != 0i32)")
+                else:
+                    expr = RawExpr(f"((({src}) as i32) as {target})")
+                ty = RsPrimitive(target)
+                force_let_ty = True
+        elif (decl_ty is not None and isinstance(ty, RsNamed) and isinstance(decl_ty, RsNamed)
+              and decl_ty.name != ty.name):
+            _decl_base = decl_ty.name.split('<')[0]
+            _src_base = ty.name.split('<')[0]
+            _is_null = isinstance(expr, Lit) and expr.value == 'Object::default()'
+            if ty.name == 'Object':
+                # 声明为具体类但栈类型退化为 Object（类型推断缺口）：对齐到声明类型
+                if _is_null:
+                    expr = RawExpr('Default::default()')
+                elif '<' not in decl_ty.name:
+                    expr = RawExpr(f"({render_expr(expr)}).downcast::<{decl_ty.name}>()")
+                    force_let_ty = True
+                hint = decl_ty
+            elif _decl_base != _src_base and self._is_subtype(_src_base, _decl_base):
+                # 声明为父类、赋入子类值（Node tail = new Pos(head)）：From 上转换保留运行时类型
+                if isinstance(expr, Var):
+                    expr = RawExpr(f"Clone::clone(&{expr.name}).into()")
+                else:
+                    expr = RawExpr(f"({render_expr(expr)}).into()")
+                ty = decl_ty
+                force_let_ty = True
         # 记录原始栈类型：只有在栈类型为 Object 时才需要 downcast
         src_is_object = isinstance(ty, RsNamed) and ty.name == 'Object'
         if hint is not None:
@@ -269,6 +338,26 @@ class StackSim:
                 # Clone::clone 而非 this.clone()：类的 Java clone() 方法会遮蔽 std Clone
                 expr = RawExpr("Clone::clone(this)")
 
+        if slot in self.locals and decl_name is not None and self.locals[slot][0] != decl_name:
+            # slot 被另一个 Java 变量复用：按新变量的声明名重新 let 声明
+            del self.locals[slot]
+        if (slot in self._param_slots and slot in self.locals
+                and isinstance(expr, Lit) and expr.value == 'Object::default()'
+                and isinstance(self.locals[slot][1], RsNamed)
+                and self.locals[slot][1].name not in ('Object', '()')):
+            # 形参（具体引用类型）被置 null（unscaledVal = null）：保持形参类型，赋默认值；
+            # let 阴影会把类型降级成 Object 且只在当前块内可见
+            self.stmts.append(AssignStmt(Var(self.locals[slot][0]), RawExpr('Default::default()')))
+            return
+        if (slot in self._param_slots and slot in self.locals
+                and getattr(self.locals[slot][1], 'name', '') == 'Object'
+                and _is_ref_ty and not isinstance(ty, (RsPrimitive, RsRef, RsSlice, RsInfer))):
+            # 形参声明为 Object（接口/Object 多态边界），方法体内重新赋入具体类值
+            # （if (s == null) s = "null"）：装箱后赋回原形参，
+            # 不能用 let 阴影（阴影只在当前块内可见，块外仍读到旧值且类型不一致）。
+            _src = render_expr(_clone_moved_var(expr, ty))
+            self.stmts.append(AssignStmt(Var(self.locals[slot][0]), RawExpr(f"Object::from_any({_src})")))
+            return
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
             decl_depth = self._slot_decl_depth.get(slot, 0)
@@ -280,7 +369,7 @@ class StackSim:
                 self._slot_decl_depth[slot] = self._current_depth
                 value = _maybe_downcast(expr, ty) if src_is_object else expr
                 _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
-                let_ty = ty if _is_default else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
+                let_ty = ty if (_is_default or force_let_ty) else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
                 # Java 局部变量间赋值在 Rust 中是 move，包 Clone 保活源变量（E0382）
                 value = _clone_moved_var(value, ty)
                 self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value))
@@ -290,19 +379,18 @@ class StackSim:
                 # 需要 downcast 对齐局部精确类型（与首次声明路径的 _maybe_downcast 一致），
                 # 否则 `kc = _t0`（kc: Class<Object>，_t0: Object）E0308。
                 # 仅处理 Var：RawExpr 可能已含 downcast 或本就不是 Object 值。
-                if (src_is_object and isinstance(expr, Var) and isinstance(ty, RsNamed)
-                        and '<' in ty.name):
-                    expr = RawExpr(f"({render_expr(expr)}).downcast::<{ty.name}>()")
+                if src_is_object:
+                    expr = _maybe_downcast(expr, ty)
                 # Java 引用赋值无 move 语义，包 Clone 保活源变量（E0382）
                 self.stmts.append(AssignStmt(Var(name), _clone_moved_var(expr, ty)))
         else:
-            name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
+            name = decl_name or _safe_name(self._loc_names.get(slot, f"local_{slot}"))
             self.locals[slot] = (name, ty, True)
             self._slot_decl_depth[slot] = self._current_depth
             value = _maybe_downcast(expr, ty) if src_is_object else expr
             # downcast 时让 Rust 推断类型；Default::default() 需保留类型注解；RsGeneric 也让 Rust 推断
             _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
-            let_ty = ty if _is_default else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
+            let_ty = ty if (_is_default or force_let_ty) else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
             # Java 局部变量间赋值（aload src; astore dst）在 Rust 中是 move，
             # 源变量后续仍会被使用，包 Clone::clone 保活（E0382 use-after-move）
             value = _clone_moved_var(value, ty)
@@ -323,6 +411,9 @@ class StackSim:
             return (Var(name), ty)
         # 槽不在 locals 中（跨 StackSim 路径），仍用 LocalVariableTable 中的名字，
         # 以便 _hoist_if_vars 能将其与同名的 LetStmt 声明关联并正确提升。
+        decl = self._decl_at(slot, for_store=False)
+        if decl is not None:
+            return (Var(_safe_name(decl[0])), decl[1] if decl[1] is not None else I32)
         name = _safe_name(self._loc_names.get(slot, f"local_{slot}"))
         return (Var(name), I32)
 

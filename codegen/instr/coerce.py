@@ -437,6 +437,30 @@ def _is_direct_subtype(child_rust: str, parent_rust: str, registry: dict | None)
     return False
 
 
+def _common_ref_type(a_rust: str, b_rust: str, registry: dict | None) -> str | None:
+    """两个非泛型引用类型在分支合并处的公共类型：
+    一方是另一方的子类型 → 取父类型；否则沿 a 的超类链找第一个同为 b 祖先的类。
+    找不到（或含泛型实参）返回 None。"""
+    if not registry or a_rust == b_rust or '<' in a_rust or '<' in b_rust:
+        return None
+    if _is_subtype(a_rust, b_rust, registry):
+        return b_rust
+    if _is_subtype(b_rust, a_rust, registry):
+        return a_rust
+    cur = _rust_type_to_binary(a_rust, registry)
+    seen: set[str] = set()
+    while cur and cur not in seen:
+        seen.add(cur)
+        ci = registry.get(cur)
+        if not ci or not ci.super_class or ci.super_class == _OBJECT_CLASS:
+            return None
+        cur = ci.super_class
+        sc_short = cur.rsplit('/', 1)[-1].replace('$', '_')
+        if _is_subtype(b_rust, sc_short, registry):
+            return sc_short
+    return None
+
+
 def _into_super_chain(actual_short: str, expected_short: str, registry: dict | None) -> str:
     """vtable 架构：子类型向父类型转换统一用 From trait（.into()），
     宏生成 From<Child> for Parent 利用 vtable trait upcasting 保留运行时类型。

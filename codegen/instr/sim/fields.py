@@ -161,6 +161,11 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                 # 先 Clone::clone(&val) 再 .into()，避免 into() 转移所有权后变量失效（E0382）
                 chain = _into_super_chain(val_ty_name.split('<')[0], ftype.split('<')[0], registry)
                 val_str = f"Clone::clone(&{val_str_raw}){chain}"
+            elif (val_ty_name == 'Object' and ftype not in _PRIMITIVE_RUST_TYPES
+                  and ftype not in ('Object', '()') and not ftype.startswith('Rc<')):
+                # 值经擦除边界（泛型静态方法 <T> T f(T) 等）退化为 Object，
+                # 字段声明为具体类/类型参数：downcast 还原（Java 侧此处是隐式 checkcast）
+                val_str = f"({val_str_raw}).downcast::<{ftype}>()"
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
             # 引用类型赋值时加 Clone::clone()，避免 E0382（move after use）
@@ -168,6 +173,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             if (val_ty_name not in _PRIMITIVE_RUST_TYPES
                     and not val_str.startswith('Default::')
                     and '.clone()' not in val_str
+                    and '.downcast::<' not in val_str
                     and 'Clone::clone(' not in val_str):
                 if val_str == 'this' and 'this' in _obj_str:
                     val_str = 'Clone::clone(&this)'

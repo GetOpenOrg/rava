@@ -919,6 +919,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             Some(block) => {
                 let mut b = block.clone();
                 rewrite_block(&mut b, &basic_names, &ref_names);
+                // 构造器 / 非虚方法同样运行在 wrapper 上下文（this: Wrapper 或 &Wrapper）：
+                // super.method() 的 __base(this, ...) 需经 vtable 取得 &__BT: AncestorVTable
+                rewrite_base_calls_for_wrapper(&mut b);
                 wrapper_methods.push(quote! {
                     #(#keep_attrs)*
                     #vis #sig #b

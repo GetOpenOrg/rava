@@ -15,7 +15,7 @@ from .coerce import (
     _resolve_method_owner,
 )
 from ..type_map import parse_class_type_params as _parse_class_type_params
-from .invoke_sig import (_lookup_method_sig_params, _lookup_method_sig_ret,
+from .invoke_sig import (_lookup_method_sig_params, _lookup_method_sig_ret, _erased_ret_is_type_var,
                          _coerce_arg, _split_type_args)
 
 
@@ -524,6 +524,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     and rust_ret not in _PRIMITIVE_RUST_TYPES):
                 sim.emit(RawStmt(f"let {v} = {_call_str}?;"))
                 sim.push(Var(v), RsNamed(_sig_ret_v))
+            elif (rust_ret == 'Object' and _sig_ret_v is None
+                    and _erased_ret_is_type_var(cls, mname, params, ret, registry)):
+                # 返回裸类型变量且无法按接收者实例化（接口 default 方法内联、跨类擦除接收者）：
+                # 真实类型可能是 V 也可能是 Object，幂等装箱保证与 sim 记录的 Object 一致
+                sim.emit(RawStmt(f"let {v} = Object::from_any({_call_str}?);"))
+                sim.push(Var(v), RsNamed(rust_ret))
             else:
                 sim.emit(RawStmt(f"let {v} = {_call_str}?;"))
                 sim.push(Var(v), RsNamed(rust_ret))

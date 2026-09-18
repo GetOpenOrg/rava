@@ -166,9 +166,9 @@ def _lookup_method_sig_ret(
         if m.name == mname and m.descriptor == full_desc:
             if not m.generic_signature:
                 return None
+            # 非泛型类的方法同样可带泛型签名返回类型（RecursiveTask<BigInteger>）：
+            # 方法声明侧（gen_method_body）不要求类有类型参数，调用点必须同规则
             callee_tparams = _parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
-            if not callee_tparams:
-                return None
             _, sig_ret = _parse_method_param_types(m.generic_signature, callee_tparams, registry)
             if not sig_ret:
                 return None
@@ -209,6 +209,34 @@ def _lookup_method_sig_ret(
                 return None
             return sig_ret
     return None
+
+
+def _erased_ret_is_type_var(cls: str | None, mname: str, descriptor_params: list[str],
+                            descriptor_ret: str, registry: dict | None) -> bool:
+    """被调方法（沿 cls 的超类/接口链查找声明）的泛型签名返回类型是否为裸类型变量（TV;）。
+    此时 Rust 端真实返回类型取决于具体实现类（V 或 Object），调用点无法静态确定，
+    须用幂等的 Object 装箱对齐到擦除类型。"""
+    if not cls or not registry:
+        return False
+    full_desc = '(' + ''.join(descriptor_params) + ')' + descriptor_ret
+    start = cls if '/' in cls else (_rust_type_to_binary(cls, registry) or cls)
+    queue, seen = [start], set()
+    while queue:
+        cur = queue.pop(0)
+        if cur in seen:
+            continue
+        seen.add(cur)
+        ci = registry.get(cur)
+        if not ci:
+            continue
+        for m in ci.methods:
+            if m.name == mname and m.descriptor == full_desc:
+                sig = m.generic_signature or ''
+                return ')' in sig and sig.rsplit(')', 1)[1].startswith('T')
+        if ci.super_class:
+            queue.append(ci.super_class)
+        queue.extend(ci.interfaces or [])
+    return False
 
 
 def _split_type_args(s: str) -> list[str]:

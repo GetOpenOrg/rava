@@ -45,6 +45,8 @@ class ParsedMethod:
     instrs:             list
     local_names:        dict = None
     local_types:        dict = None   # slot → (Signature string, start_pc) from LocalVariableTypeTable
+    # 按作用域区间的局部变量声明表：list of (slot, start_pc, length, name, descriptor, signature)
+    local_vars:         list = None
     access_flags:       int  = 0
     is_native:          bool = False
     is_abstract:        bool = False
@@ -61,6 +63,8 @@ class ParsedMethod:
             self.local_names = {}
         if self.local_types is None:
             self.local_types = {}
+        if self.local_vars is None:
+            self.local_vars = []
         if self.exceptions is None:
             self.exceptions = []
         if self.method_parameters is None:

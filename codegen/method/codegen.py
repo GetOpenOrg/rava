@@ -30,6 +30,7 @@ from ..rs_ir import (
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
 )
 from ..stack import BOOL
+from ..instr.coerce import _is_subtype, _common_ref_type
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
 from .postprocess import _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
 
@@ -231,17 +232,32 @@ def gen_method_body(
 
     # 从 LocalVariableTypeTable 预计算精确类型提示（slot → RsType）
     # 仅对引用类型（Object 类型擦除后变成 Object 的槽）有意义
-    slot_hint_types: dict[int, RsNamed] = {}
-    slot_hint_starts: dict[int, int] = {}  # slot → LVTT start_pc，用于检测 slot 复用
-    if method.local_types:
-        for _hint_slot, (_hint_sig, _hint_start) in method.local_types.items():
-            rust_ty_name = parse_field_type(_hint_sig, _class_tparams, registry)
-            if rust_ty_name and rust_ty_name != 'Object':
-                slot_hint_types[_hint_slot] = RsNamed(rust_ty_name)
-                slot_hint_starts[_hint_slot] = _hint_start
+    # 局部变量声明表：slot → [(start_pc, end_pc, name, RsType|None, from_signature)]
+    # 类型优先取 LocalVariableTypeTable 泛型签名（from_signature=True），
+    # 否则取 LocalVariableTable 描述符；Object / 接口别名不构成有效的精确类型（None）。
+    slot_decls: dict[int, list] = {}
+    for _lv_slot, _lv_start, _lv_len, _lv_name, _lv_desc, _lv_sig in (method.local_vars or []):
+        _lv_ty = None
+        _lv_from_sig = False
+        if _lv_sig:
+            _sig_ty_name = parse_field_type(_lv_sig, _class_tparams, registry)
+            if _sig_ty_name and _sig_ty_name != 'Object':
+                _lv_ty = RsNamed(_sig_ty_name)
+                _lv_from_sig = True
+        if _lv_ty is None and _lv_desc:
+            _desc_ty_name = jvm_to_rust(_lv_desc, registry)
+            if _desc_ty_name and _desc_ty_name != 'Object' and '::' not in _desc_ty_name:
+                _lv_ty = _str_to_rs_type(_desc_ty_name)
+        slot_decls.setdefault(_lv_slot, []).append(
+            (_lv_start, _lv_start + _lv_len, _lv_name, _lv_ty, _lv_from_sig))
+    for _lv_entries in slot_decls.values():
+        _lv_entries.sort(key=lambda _e: _e[0])
+
+    def _sim_is_subtype(child: str, parent: str) -> bool:
+        return _is_subtype(child, parent, registry)
 
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                   slot_hint_types=slot_hint_types, slot_hint_starts=slot_hint_starts,
+                   slot_decls=slot_decls, is_subtype=_sim_is_subtype,
                    return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                    in_vtable_body=in_vtable_body)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
@@ -286,7 +302,7 @@ def gen_method_body(
         def make_sub() -> StackSim:
             s = StackSim(
                 rust_param_type_nodes, is_static, method.class_name, local_names,
-                slot_hint_types=slot_hint_types, slot_hint_starts=slot_hint_starts,
+                slot_decls=slot_decls, is_subtype=_sim_is_subtype,
                 return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                 in_vtable_body=cur_sim.in_vtable_body,
             )
@@ -295,6 +311,7 @@ def gen_method_body(
             s.stack = list(cur_sim.stack)
             s._ctr = cur_sim._ctr  # 从父 sim 继承计数器，防止嵌套块生成与外层同名的临时变量
             s.current_offset = cur_sim.current_offset
+            s.next_offset = cur_sim.next_offset
             return s
 
         def pop_fall_cond(op: str) -> str:
@@ -340,6 +357,7 @@ def gen_method_body(
                 if lp.end_idx >= end:
                     # 循环超出当前块范围（不应发生），当普通指令处理
                     cur_sim.current_offset = ins.offset
+                    cur_sim.next_offset = instrs[i + 1].offset if i + 1 < len(instrs) else 0
                     sim_instr(ins, cur_sim, method.class_name, registry=registry)
                     flush_here()
                     i += 1
@@ -576,6 +594,14 @@ def gen_method_body(
                             ev = f"Object::from_any(Clone::clone(&{ev}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             ev = f"({ev} as {ty_str})"
+                        elif _common_ref_type(ty_str, ety_str, registry):
+                            # 两臂是同一继承树上的不同类 → 统一上转为公共父类型
+                            _common = _common_ref_type(ty_str, ety_str, registry)
+                            if ty_str != _common:
+                                tv = f"{_common}::from({tv})"
+                            if ety_str != _common:
+                                ev = f"{_common}::from({ev})"
+                            ty = _str_to_rs_type(_common); ty_str = _common
                         elif (ty_str.split('<')[0] == ety_str.split('<')[0]
                                 and '<' in ty_str and '<' in ety_str
                                 and 'Object' in ty_str
@@ -635,6 +661,14 @@ def gen_method_body(
                             else_val = f"Object::from_any(Clone::clone(&{else_val}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             else_val = f"({else_val} as {ty_str})"
+                        elif _common_ref_type(ty_str, ety_str, registry):
+                            # 两分支是同一继承树上的不同类 → 统一上转为公共父类型
+                            _common = _common_ref_type(ty_str, ety_str, registry)
+                            if ty_str != _common:
+                                then_val = f"{_common}::from({then_val})"
+                            if ety_str != _common:
+                                else_val = f"{_common}::from({else_val})"
+                            ty = _str_to_rs_type(_common); ty_str = _common
                         elif (ty_str.split('<')[0] == ety_str.split('<')[0]
                                 and '<' in ty_str and '<' in ety_str
                                 and 'Object' in ty_str
@@ -770,6 +804,7 @@ def gen_method_body(
 
             # ── 普通指令 ──────────────────────────────────────────────
             cur_sim.current_offset = ins.offset
+            cur_sim.next_offset = instrs[i + 1].offset if i + 1 < len(instrs) else 0
             sim_instr(ins, cur_sim, method.class_name, registry=registry)
             flush_here()
             i += 1

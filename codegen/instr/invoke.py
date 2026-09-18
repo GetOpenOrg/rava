@@ -26,7 +26,7 @@ from .coerce import (
 )
 from .invoke_sig import (
     _registry_iface_shorts, _concrete_class_shorts, _downcast_target_valid,
-    _lookup_method_sig_params, _lookup_method_sig_ret, _split_type_args,
+    _lookup_method_sig_params, _lookup_method_sig_ret, _split_type_args, _erased_ret_is_type_var,
     _substitute_tvars, _coerce_arg,
 )
 from .invoke_virtual import _gen_invokevirtual
@@ -166,7 +166,11 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             sim.emit(RawStmt(f"{base_fn}({arg_str})?;"))
         else:
             v = sim.fresh()
-            sim.emit(RawStmt(f"let {v} = {base_fn}({arg_str})?;"))
+            if rust_ret == 'Object' and _erased_ret_is_type_var(cls_short, mname, params, ret, registry):
+                # super.method() 返回裸类型变量（Reference<T>.get → T）：幂等装箱对齐 sim 的 Object 记录
+                sim.emit(RawStmt(f"let {v} = Object::from_any({base_fn}({arg_str})?);"))
+            else:
+                sim.emit(RawStmt(f"let {v} = {base_fn}({arg_str})?;"))
             sim.push(Var(v), RsNamed(rust_ret))
         return
 
@@ -314,7 +318,9 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
 
 def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     for skip in BOXING_SKIP_STATIC:
-        if skip in comment:
+        # 按类名边界匹配：裸子串匹配会把类名以装箱类名结尾的其他类
+        # （owner 短名仅是后缀相同）误判为自动装箱，导致真实的静态工厂调用被丢弃
+        if re.search(r'(?<![A-Za-z0-9_$])' + re.escape(skip) + r'(?![A-Za-z0-9_$])', comment):
             return  # 自动装箱：栈顶值保留
 
     if 'String.valueOf' in comment:

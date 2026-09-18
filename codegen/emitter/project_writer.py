@@ -28,7 +28,9 @@ def _write(path: str, content: str) -> None:
     if _is_jrt_rs and os.path.exists(path):
         try:
             with open(path, encoding='utf-8') as _f:
-                if 'java_rta_macros::java_class' not in _f.read(4096):
+                # 全文查找生成标记：import 头很长的类（Pattern/HashMap 等）标记位于 4096 字符之后，
+                # 截断读取会把生成文件误判为手写文件，导致复用 scratch 时永不刷新
+                if 'java_rta_macros::java_class' not in _f.read():
                     return  # 手写文件，不覆盖
         except Exception:
             pass

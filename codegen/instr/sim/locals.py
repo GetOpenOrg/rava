@@ -18,10 +18,7 @@ def sim_locals(ins, sim, class_name, registry) -> bool:
     elif op.startswith('aload'): sim.push(*sim.load_local(_parse_slot(op, operand)))
     elif op.startswith('istore'):
         e, ty = sim.pop()
-        # istore 在 JVM 中存储 int；bool 比较结果需要强制转换
-        if getattr(ty, 'name', '') == 'bool':
-            e = RawExpr(f"({render_expr(e)}) as i32")
-            ty = I32
+        # int 家族（bool/u16/i8/i16/i32）到局部声明类型的对齐统一在 store_local 内完成
         sim.store_local(_parse_slot(op, operand), e, ty)
     elif op.startswith('lstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, I64)
     elif op.startswith('fstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F32)
