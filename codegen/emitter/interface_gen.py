@@ -81,6 +81,18 @@ def erased_declaration(method: EmittedMethod, type_params: set[str]) -> 'str | N
     return f"fn {sm.group(1)}({', '.join(out)}) -> Result<{_erase(sm.group(3).strip(), type_params)}>"
 
 
+def _result_reinstantiated(erased: str, member: 'EmittedMethod | None') -> bool:
+    """成员的返回类型与接口擦除声明的返回类型是同一泛型类的不同实例化。"""
+    if member is None:
+        return False
+    em, mm = _SIG_RE.match('pub ' + erased), _SIG_RE.match(member.signature)
+    if em is None or mm is None:
+        return False
+    want, got = em.group(3).strip(), mm.group(3).strip()
+    return ('<' in want and '<' in got and want != got
+            and want.split('<', 1)[0] == got.split('<', 1)[0])
+
+
 def _all_interfaces(ci, registry: dict) -> list[str]:
     """类实现的全部接口（自身 + 超类链 + 超接口传递闭包），按发现顺序去重。"""
     found: dict[str, None] = {}
@@ -188,6 +200,7 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                     param_desc = _param_part(im.descriptor)
                     # 本类共置 _impl.rs 提供的成员先于超类声明（它就是本类对该方法的覆盖）
                     own = recv.find(im.name, param_desc)
+                    located = None
                     if own is not None:
                         target = own.rust_name
                     elif im.rust_name in provided:
@@ -209,7 +222,11 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                                 continue  # 与本类成员重名：继承成员无法声明
                             inherited_calls.request(recv_bin, im.name, param_desc)
                         target = method.rust_name
-                    attr = f'#[java_method(target = "{target}")]\n' if target != im.rust_name else ''
+                        located = method
+                    attr_parts = [f'target = "{target}"'] if target != im.rust_name else []
+                    if _result_reinstantiated(erased, own if own is not None else located):
+                        attr_parts.append('result = "checkcast"')
+                    attr = f"#[java_method({', '.join(attr_parts)})]\n" if attr_parts else ''
                     decls.append(attr + erased + ';')
                     uses.extend(_imports_for(erased, iface, recv, imported))
                 if not decls:

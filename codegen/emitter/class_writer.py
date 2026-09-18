@@ -28,6 +28,7 @@ from .vtable_util import _bin_to_rust, _find_virtual_in
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
 from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT
+from ..type_map import interface_signature_views as _interface_signature_views
 from ..instr.coerce import _parse_field_ref
 
 _safe_field_name = safe_ident
@@ -38,6 +39,25 @@ _CLINIT_FN = '__clinit'
 
 _ACC_FINAL   = 0x0010
 _ACC_STATIC  = 0x0008
+
+
+def _adapt_interface_method(method, ci, iface_bin: str, views: dict):
+    """接口方法体展开到实现类 ci：所属类换成 ci，泛型签名（方法 / 局部变量）里的接口类型变量
+    换成 ci 视角下的类型实参。"""
+    import copy as _copy_adapt
+    from ..type_map import substitute_signature_type_vars as _subst
+    adapted = _copy_adapt.copy(method)
+    adapted.class_name = ci.name
+    view = views.get(iface_bin)
+    if view:
+        adapted.generic_signature = _subst(method.generic_signature, view)
+        if getattr(method, 'local_types', None):
+            adapted.local_types = {slot: (_subst(sig, view), start)
+                                   for slot, (sig, start) in method.local_types.items()}
+        if getattr(method, 'local_vars', None):
+            adapted.local_vars = [tuple(entry[:5]) + (_subst(entry[5], view),)
+                                  for entry in method.local_vars]
+    return adapted
 
 
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
@@ -924,6 +944,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         default_name_counts[_dm.name] = default_name_counts.get(_dm.name, 0) + 1
         iface_queue: list[str] = list(ci.interfaces)
         visited_ifaces: set[str] = set(_anc_ifaces)
+        _iface_sig_views = _interface_signature_views(ci, registry)
         while iface_queue:
             iface_name = iface_queue.pop(0)
             if iface_name in visited_ifaces:
@@ -952,8 +973,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 dm_rust = mangle_name(dm.name, dm.descriptor) if needs_mangle else dm.name
                 used_rust_names.add(dm_rust)
                 # 将 class_name 替换为实现类，使 gen_method_body 生成正确的 this 类型
-                dm_adapted = _copy.copy(dm)
-                dm_adapted.class_name = ci.name
+                dm_adapted = _adapt_interface_method(dm, ci, iface_name, _iface_sig_views)
                 # 接口 default 方法注入实现类时：virtual_in 改为实现类名（VirtualDefine）
                 # 原始 virtual_in 是接口名（如 Drawable），在宏中会生成不存在的 Drawable__VTable impl
                 dm_adapted.virtual_in = _bin_to_rust(ci.name)
@@ -1020,8 +1040,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                              if _im.name == _sp_mname and _im.descriptor == _sp_desc
                              and not _im.is_static and not _im.is_abstract)
                 _sp_rust = safe_ident(_ismn(_sp_owner, _sp_mname, _sp_desc, registry))
-                _sp_adapted = _copy_sp.copy(_sp_m)
-                _sp_adapted.class_name = ci.name
+                _sp_adapted = _adapt_interface_method(
+                    _sp_m, ci, _sp_owner, _interface_signature_views(ci, registry))
                 _sp_adapted.virtual_in = None  # 非虚：只经 `Iface.super.m()` 静态绑定到达
                 _sp_attr = _java_method_attr(_sp_adapted)
                 _sp_in_cc = (call_chain is None

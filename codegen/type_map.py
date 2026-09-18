@@ -1383,6 +1383,148 @@ def implemented_interface_views(recv_ci, registry: dict) -> 'list[tuple[str, lis
     return out
 
 
+def _substitute_type_sig(sig: str, i: int, out: list, mapping: dict) -> int:
+    """把 sig[i:] 处的一个类型签名写入 out（类型变量按 mapping 代入），返回其后的位置。"""
+    if i >= len(sig):
+        return i
+    c = sig[i]
+    if c == '[' or c in ('+', '-'):
+        out.append(c)
+        return _substitute_type_sig(sig, i + 1, out, mapping)
+    if c == 'T':
+        end = sig.find(';', i)
+        if end < 0:
+            out.append(sig[i:])
+            return len(sig)
+        out.append(mapping.get(sig[i + 1:end], sig[i:end + 1]))
+        return end + 1
+    if c != 'L':
+        out.append(c)
+        return i + 1
+    while i < len(sig):
+        ch = sig[i]
+        if ch == ';':
+            out.append(ch)
+            return i + 1
+        if ch == '<':
+            out.append(ch)
+            i += 1
+            while i < len(sig) and sig[i] != '>':
+                i = _substitute_type_sig(sig, i, out, mapping)
+            continue
+        out.append(ch)
+        i += 1
+    return i
+
+
+def substitute_signature_type_vars(sig: str, mapping: dict) -> str:
+    """JVM 泛型签名（字段 / 方法 / 局部变量）里的类型变量按 mapping（名字 → 类型签名）代入。
+    方法自身声明的类型形参遮蔽同名的外层类型变量。"""
+    if not sig or not mapping:
+        return sig
+    out: list[str] = []
+    i = 0
+    if sig[0] == '<':
+        mapping = {k: v for k, v in mapping.items() if k not in parse_class_type_params(sig)}
+        if not mapping:
+            return sig
+        out.append('<')
+        i = 1
+        while i < len(sig) and sig[i] != '>':
+            colon = sig.index(':', i)
+            out.append(sig[i:colon])
+            i = colon
+            while i < len(sig) and sig[i] == ':':
+                out.append(':')
+                i += 1
+                if i < len(sig) and sig[i] in 'LT[':
+                    i = _substitute_type_sig(sig, i, out, mapping)
+        out.append('>')
+        i += 1
+    while i < len(sig):
+        if sig[i] in '()^':
+            out.append(sig[i])
+            i += 1
+        else:
+            i = _substitute_type_sig(sig, i, out, mapping)
+    return ''.join(out)
+
+
+def _supertype_signature_args(ci, registry) -> 'list[tuple[str, list[str]]]':
+    """类签名里的直接超类型（超类 + 超接口）→ (binary name, 各段类型实参的签名，外层在前)。"""
+    sig = ci.generic_signature or ''
+    i = 0
+    if sig.startswith('<'):
+        depth = 0
+        while i < len(sig):
+            if sig[i] == '<':
+                depth += 1
+            elif sig[i] == '>':
+                depth -= 1
+                if depth == 0:
+                    i += 1
+                    break
+            i += 1
+    out: list[tuple[str, list[str]]] = []
+    while i < len(sig) and sig[i] == 'L':
+        end = _skip_field_type_sig(sig, i)
+        name: list[str] = []
+        args: list[str] = []
+        j = i + 1
+        while j < end - 1:
+            ch = sig[j]
+            if ch == '<':
+                j += 1
+                while sig[j] != '>':
+                    k = _skip_field_type_sig(sig, j)
+                    arg = sig[j:k]
+                    # 通配符实参：上界通配取其上界，其余按根类
+                    args.append(arg[1:] if arg[0] == '+' else
+                                f'L{_OBJECT_CLASS};' if arg[0] in '-*' else arg)
+                    j = k
+                j += 1
+            elif ch == '.':
+                name.append('$')
+                j += 1
+            else:
+                name.append(ch)
+                j += 1
+        out.append((''.join(name), args))
+        i = end
+    return out
+
+
+def interface_signature_views(ci, registry) -> 'dict[str, dict[str, str]]':
+    """类 ci 实现的全部接口（自身 + 祖先类 + 超接口闭包）→ 接口类型形参在 ci 视角下的类型签名。
+
+    接口 default 方法体展开到实现类时，其泛型签名里的接口类型变量据此换成实现类作用域内的类型
+    （`Node<T>.asArray: (IntFunction<T[]>)T[]` 在 `ConcNode<E> implements Node<E>` 里是 `E[]`）。
+    原始类型（签名未给实参）的接口不在结果里，其类型变量按擦除处理。"""
+    views: dict[str, dict[str, str]] = {}
+    queue: list[tuple[object, dict]] = [(ci, {})]
+    seen: set[str] = {ci.name}
+    while queue:
+        cur_ci, mapping = queue.pop(0)
+        declared = dict(_supertype_signature_args(cur_ci, registry))
+        supers = ([cur_ci.super_class] if cur_ci.super_class else []) + list(cur_ci.interfaces or [])
+        for sup_bin in supers:
+            sup_ci = registry.get(sup_bin)
+            if sup_ci is None or sup_bin in seen:
+                continue
+            seen.add(sup_bin)
+            params = effective_class_type_params(sup_ci, registry)
+            args = declared.get(sup_bin, [])
+            sup_map: dict[str, str] = {}
+            if params and len(args) == len(params) and mapping is not None:
+                sup_map = {p_: substitute_signature_type_vars(a, mapping)
+                           for p_, a in zip(params, args)}
+            if sup_ci.is_interface and sup_map:
+                views[sup_bin] = sup_map
+            # 祖先以原始类型出现：其类型变量不可代入（None 标记沿链传播）
+            queue.append((sup_ci, sup_map if (sup_map or not params) else None))
+    return views
+
+
 def infer_type_args_from_declared(actual_bin: str, declared_sig: str,
                                   class_type_params: list[str], registry) -> 'list[str] | None':
     """菱形构造 `List<Class<?>> xs = new ArrayList<>()`：由局部变量声明的泛型签名反推被构造类的

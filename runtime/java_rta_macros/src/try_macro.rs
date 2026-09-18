@@ -29,17 +29,20 @@
 //!
 //! ```ignore
 //! {
-//!     let __java_try_r: Result<u8, JvmError> = 'java_try_N: { BODY'; Ok(0) };
-//!     match __java_try_r {
-//!         Ok(1) => break, Ok(2) => continue, Ok(_) => {}
-//!         Err(__thrown) => {
-//!             if __thrown.is_instance_of(<T>::BINARY_NAME) { let e: T = ...; HANDLER }
-//!             else { return Err(__thrown); }
-//!         }
+//!     'java_try_end_N: {
+//!         let __thrown: JvmError = 'java_try_N: { BODY'; break 'java_try_end_N; };
+//!         if __thrown.is_instance_of(<T>::BINARY_NAME) { let e: T = ...; HANDLER }
+//!         else { return Err(__thrown); }
 //!     }
 //! }
 //! ```
-//! 其中 BODY' 是把 `expr?` 改写为 `break 'java_try_N Err(..)` 后的 try 体。
+//! 其中 BODY' 是把 `expr?` 改写为 `break 'java_try_N <异常>` 后的 try 体。
+//! 正常完成与各处理器是控制流图上**各自独立的路径**，在 try 语句之后才汇合——
+//! 每条路径上完成的局部变量初始化对 rustc 的定值分析可见（Java 的 definite assignment
+//! 同样逐路径成立）。把结果先归并成一个值再 `match` 的形式会丢掉这一信息。
+//!
+//! try 体 / 处理器里指向 try 之外循环的 `break` / `continue` 改写为带该循环标签的形式
+//! （`java_class!` 展开方法体时已知外围循环；循环没有标签时为其补一个）。
 //! 闭包体不改写（闭包内的 `?` 属于闭包自身的返回）。
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -117,37 +120,32 @@ fn parse_catch_type(input: ParseStream) -> syn::Result<Type> {
     Ok(Type::Path(path))
 }
 
-/// try 体改写器：把异常出口改为跳到本层标签。
+/// try 语句所在位置的外围循环（break / continue 的目标）。
+#[derive(Clone)]
+enum LoopTarget {
+    /// 外围循环及其标签
+    Label(Lifetime),
+    /// 外围循环未知（`java_try!` 作为独立宏展开）：经流程码转发
+    Unknown,
+}
+
+/// try 体 / 处理器改写器：把异常出口改为跳到本层标签，把指向外围循环的
+/// `break` / `continue` 改为不经过本层标签块的形式。
 struct ExitRewriter {
     label: Lifetime,
+    end_label: Lifetime,
+    /// 是否改写异常出口（try 体：是；处理器：否——处理器里的异常向外传播）
+    rewrite_throws: bool,
+    target: LoopTarget,
     loop_depth: usize,
+    uses_loop_label: bool,
     uses_break: bool,
     uses_continue: bool,
-    error: Option<syn::Error>,
 }
 
 impl ExitRewriter {
     fn macro_name(mac: &syn::Macro) -> Option<std::string::String> {
         mac.path.segments.last().map(|s| s.ident.to_string())
-    }
-
-    /// 处理 try 体里的嵌套宏调用；返回替换后的表达式（None 表示不处理）。
-    fn rewrite_macro(&mut self, mac: &syn::Macro) -> Option<Expr> {
-        match Self::macro_name(mac).as_deref() {
-            Some("java_try") => {
-                // 内层 try 先自洽展开，再由本层改写其残余出口（catch 体、未匹配重抛）
-                let inner: TryInput = match syn::parse2(mac.tokens.clone()) {
-                    Ok(i) => i,
-                    Err(e) => { self.error = Some(e); return None; }
-                };
-                let expanded = expand_input(inner);
-                match syn::parse2::<Expr>(expanded) {
-                    Ok(mut e) => { self.visit_expr_mut(&mut e); Some(e) }
-                    Err(e) => { self.error = Some(e); None }
-                }
-            }
-            _ => None,
-        }
     }
 }
 
@@ -180,57 +178,60 @@ impl VisitMut for ExitRewriter {
         self.loop_depth -= 1;
     }
 
-    fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
-        if let Stmt::Macro(sm) = stmt {
-            if let Some(e) = self.rewrite_macro(&sm.mac) {
-                *stmt = Stmt::Expr(e, Some(Default::default()));
-                return;
-            }
-        }
-        visit_mut::visit_stmt_mut(self, stmt);
-    }
-
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
-        if let Expr::Macro(em) = expr {
-            if let Some(e) = self.rewrite_macro(&em.mac) {
-                *expr = e;
-                return;
-            }
-        }
         // 先改写子表达式，再处理本节点
         visit_mut::visit_expr_mut(self, expr);
         let label = &self.label;
+        let end_label = &self.end_label;
         match expr {
-            Expr::Try(t) => {
+            Expr::Try(t) if self.rewrite_throws => {
                 let inner = &t.expr;
                 *expr = syn::parse_quote! {
                     match #inner {
                         ::core::result::Result::Ok(__v) => __v,
-                        ::core::result::Result::Err(__e) =>
-                            break #label Err(From::from(__e)),
+                        ::core::result::Result::Err(__e) => break #label From::from(__e),
                     }
                 };
             }
-            Expr::Return(r) => {
-                let is_err = match r.expr.as_deref() {
-                    Some(Expr::Call(c)) => match &*c.func {
-                        Expr::Path(p) => p.path.segments.last().map_or(false, |s| s.ident == "Err"),
-                        _ => false,
+            Expr::Return(r) if self.rewrite_throws => {
+                let thrown = match r.expr.as_deref() {
+                    Some(Expr::Call(c)) if c.args.len() == 1 => match &*c.func {
+                        Expr::Path(p)
+                            if p.path.segments.last().map_or(false, |s| s.ident == "Err") =>
+                        {
+                            c.args.first().cloned()
+                        }
+                        _ => None,
                     },
-                    _ => false,
+                    _ => None,
                 };
-                if is_err {
-                    let value = r.expr.as_ref().unwrap();
+                if let Some(value) = thrown {
                     *expr = syn::parse_quote! { break #label #value };
                 }
             }
             Expr::Break(b) if b.label.is_none() && self.loop_depth == 0 => {
-                self.uses_break = true;
-                *expr = syn::parse_quote! { break #label Ok(1u8) };
+                match &self.target {
+                    LoopTarget::Label(l) => {
+                        self.uses_loop_label = true;
+                        *expr = syn::parse_quote! { break #l };
+                    }
+                    LoopTarget::Unknown => {
+                        self.uses_break = true;
+                        *expr = syn::parse_quote! { break #end_label 1u8 };
+                    }
+                }
             }
             Expr::Continue(c) if c.label.is_none() && self.loop_depth == 0 => {
-                self.uses_continue = true;
-                *expr = syn::parse_quote! { break #label Ok(2u8) };
+                match &self.target {
+                    LoopTarget::Label(l) => {
+                        self.uses_loop_label = true;
+                        *expr = syn::parse_quote! { continue #l };
+                    }
+                    LoopTarget::Unknown => {
+                        self.uses_continue = true;
+                        *expr = syn::parse_quote! { break #end_label 2u8 };
+                    }
+                }
             }
             _ => {}
         }
@@ -276,44 +277,33 @@ fn expr_never_falls_through(e: &Expr) -> bool {
     }
 }
 
-fn expand_input(input: TryInput) -> TokenStream2 {
+/// 展开一个 try 语句。try 体与处理器里的嵌套 `java_try!` 必须已经展开（见 `TryExpander`）。
+/// 返回展开结果，以及是否引用了外围循环的标签。
+fn expand_input(input: TryInput, target: LoopTarget) -> (TokenStream2, bool) {
     let n = LABEL_COUNTER.fetch_add(1, Ordering::Relaxed);
     let label = Lifetime::new(&format!("'java_try_{n}"), Span::call_site());
+    let end_label = Lifetime::new(&format!("'java_try_end_{n}"), Span::call_site());
     let mut rewriter = ExitRewriter {
         label: label.clone(),
+        end_label: end_label.clone(),
+        rewrite_throws: true,
+        target,
         loop_depth: 0,
+        uses_loop_label: false,
         uses_break: false,
         uses_continue: false,
-        error: None,
     };
     let mut body = input.body;
-    let normal_arm = if never_falls_through(&body.stmts) {
-        quote! { ::core::result::Result::Ok(_) => unreachable!(), }
-    } else {
-        quote! { ::core::result::Result::Ok(_) => {} }
-    };
+    let falls_through = !never_falls_through(&body.stmts);
     rewriter.visit_block_mut(&mut body);
-    if let Some(e) = rewriter.error {
-        return e.to_compile_error();
-    }
     let body_stmts = &body.stmts;
 
-    let break_arm = if rewriter.uses_break {
-        quote! { ::core::result::Result::Ok(1u8) => break, }
-    } else {
-        quote! {}
-    };
-    let continue_arm = if rewriter.uses_continue {
-        quote! { ::core::result::Result::Ok(2u8) => continue, }
-    } else {
-        quote! {}
-    };
-
     // catch 子句按声明顺序匹配（与异常表顺序一致）
+    rewriter.rewrite_throws = false;
     let mut chain = quote! { { return Err(__thrown); } };
-    for clause in input.catches.iter().rev() {
+    for mut clause in input.catches.into_iter().rev() {
+        rewriter.visit_block_mut(&mut clause.body);
         let binding = &clause.binding;
-        let declared = &clause.declared;
         let matched = &clause.matched;
         let stmts = &clause.body.stmts;
         let condition = if matched.is_empty() {
@@ -321,7 +311,7 @@ fn expand_input(input: TryInput) -> TokenStream2 {
         } else {
             quote! { #( __thrown.is_instance_of(<#matched>::BINARY_NAME) )||* }
         };
-        let bind_value = match declared {
+        let bind_value = match &clause.declared {
             Some(ty) => quote! { let mut #binding: #ty = __thrown.catch_as::<#ty>(<#ty>::BINARY_NAME); },
             None => quote! { let mut #binding = __thrown.catch_any(); },
         };
@@ -334,27 +324,172 @@ fn expand_input(input: TryInput) -> TokenStream2 {
         };
     }
 
-    quote! {
-        {
-            #[allow(unreachable_code)]
-            let __java_try_r: ::core::result::Result<u8, JvmError> = #label: {
-                #(#body_stmts)*
-                ::core::result::Result::Ok(0u8)
-            };
-            match __java_try_r {
-                #break_arm
-                #continue_arm
-                #normal_arm
-                ::core::result::Result::Err(__thrown) => { #chain }
+    let expanded = if rewriter.uses_break || rewriter.uses_continue {
+        // 外围循环未知：正常完成 / 处理器完成 / break / continue 经流程码区分
+        let break_arm = if rewriter.uses_break { quote! { 1u8 => break, } } else { quote! {} };
+        let continue_arm =
+            if rewriter.uses_continue { quote! { 2u8 => continue, } } else { quote! {} };
+        quote! {
+            {
+                #[allow(unreachable_code, unused_labels)]
+                let __java_try_flow: u8 = #end_label: {
+                    let __thrown: JvmError = #label: {
+                        #(#body_stmts)*
+                        break #end_label 0u8;
+                    };
+                    #chain
+                    0u8
+                };
+                match __java_try_flow {
+                    #break_arm
+                    #continue_arm
+                    _ => {}
+                }
             }
+        }
+    } else if falls_through {
+        quote! {
+            {
+                #end_label: {
+                    #[allow(unreachable_code, unused_labels)]
+                    let __thrown: JvmError = #label: {
+                        #(#body_stmts)*
+                        break #end_label;
+                    };
+                    #chain
+                }
+            }
+        }
+    } else {
+        // try 体从不正常完成：整个 try 语句的类型由处理器决定（处理器也都不落出时为 `!`）
+        quote! {
+            {
+                #[allow(unreachable_code, unused_labels)]
+                let __thrown: JvmError = #label: {
+                    #(#body_stmts)*
+                };
+                #chain
+            }
+        }
+    };
+    (expanded, rewriter.uses_loop_label)
+}
+
+/// 自内向外展开 `java_try!`，并维护外围循环栈。
+struct TryExpander {
+    /// 每层循环：(标签, 标签是否由本展开器补上)；None = 尚无标签
+    loops: Vec<Option<(Lifetime, bool)>>,
+    error: Option<syn::Error>,
+}
+
+impl TryExpander {
+    fn expanded(&mut self, mac: &syn::Macro) -> Option<Expr> {
+        if ExitRewriter::macro_name(mac).as_deref() != Some("java_try") {
+            return None;
+        }
+        let mut input = match syn::parse2::<TryInput>(mac.tokens.clone()) {
+            Ok(i) => i,
+            Err(e) => { self.error = Some(e); return None; }
+        };
+        // 内层 try 先自洽展开，再由本层改写其残余出口（catch 体、未匹配重抛）
+        self.visit_block_mut(&mut input.body);
+        for clause in input.catches.iter_mut() {
+            self.visit_block_mut(&mut clause.body);
+        }
+        let (target, fresh) = match self.loops.last() {
+            Some(Some((l, _))) => (LoopTarget::Label(l.clone()), false),
+            Some(None) => {
+                let n = LABEL_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let l = Lifetime::new(&format!("'java_loop_{n}"), Span::call_site());
+                (LoopTarget::Label(l), true)
+            }
+            None => (LoopTarget::Unknown, false),
+        };
+        let fresh_label = match (&target, fresh) {
+            (LoopTarget::Label(l), true) => Some(l.clone()),
+            _ => None,
+        };
+        let (tokens, uses_loop_label) = expand_input(input, target);
+        if uses_loop_label {
+            if let (Some(l), Some(slot)) = (fresh_label, self.loops.last_mut()) {
+                *slot = Some((l, true));
+            }
+        }
+        match syn::parse2::<Expr>(tokens) {
+            Ok(e) => Some(e),
+            Err(e) => { self.error = Some(e); None }
+        }
+    }
+
+    fn enter_loop(&mut self, label: &Option<syn::Label>) {
+        self.loops.push(label.as_ref().map(|l| (l.name.clone(), false)));
+    }
+
+    fn leave_loop(&mut self, label: &mut Option<syn::Label>) {
+        if let Some(Some((l, true))) = self.loops.pop() {
+            *label = Some(syn::Label { name: l, colon_token: Default::default() });
         }
     }
 }
 
+impl VisitMut for TryExpander {
+    fn visit_expr_closure_mut(&mut self, c: &mut syn::ExprClosure) {
+        // 闭包体是独立的控制流：break / continue 不能跨出闭包
+        let saved = std::mem::take(&mut self.loops);
+        visit_mut::visit_expr_closure_mut(self, c);
+        self.loops = saved;
+    }
+
+    fn visit_expr_loop_mut(&mut self, l: &mut syn::ExprLoop) {
+        self.enter_loop(&l.label);
+        self.visit_block_mut(&mut l.body);
+        self.leave_loop(&mut l.label);
+    }
+
+    fn visit_expr_while_mut(&mut self, l: &mut syn::ExprWhile) {
+        self.visit_expr_mut(&mut l.cond);
+        self.enter_loop(&l.label);
+        self.visit_block_mut(&mut l.body);
+        self.leave_loop(&mut l.label);
+    }
+
+    fn visit_expr_for_loop_mut(&mut self, l: &mut syn::ExprForLoop) {
+        self.visit_expr_mut(&mut l.expr);
+        self.enter_loop(&l.label);
+        self.visit_block_mut(&mut l.body);
+        self.leave_loop(&mut l.label);
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
+        if let Stmt::Macro(sm) = stmt {
+            if let Some(e) = self.expanded(&sm.mac) {
+                *stmt = Stmt::Expr(e, None);
+                return;
+            }
+        }
+        visit_mut::visit_stmt_mut(self, stmt);
+    }
+
+    fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        if let Expr::Macro(em) = expr {
+            if let Some(e) = self.expanded(&em.mac) {
+                *expr = e;
+                return;
+            }
+        }
+        visit_mut::visit_expr_mut(self, expr);
+    }
+}
+
+/// 独立的 `java_try! { .. }` 宏调用：外围循环不可见。
 pub fn expand(input: TokenStream2) -> TokenStream2 {
-    match syn::parse2::<TryInput>(input) {
-        Ok(i) => expand_input(i),
-        Err(e) => e.to_compile_error(),
+    let mac: syn::Macro = syn::parse_quote! { java_try! { #input } };
+    let mut expander = TryExpander { loops: Vec::new(), error: None };
+    let expanded = expander.expanded(&mac);
+    match (expander.error, expanded) {
+        (Some(e), _) => e.to_compile_error(),
+        (None, Some(e)) => quote! { #e },
+        (None, None) => quote! {},
     }
 }
 
@@ -362,33 +497,6 @@ pub fn expand(input: TokenStream2) -> TokenStream2 {
 /// `java_class!` 的方法体改写基于语法树，宏调用的内容对它不可见；
 /// 先展开，try / catch 体里的字段访问、继承方法调用才会与体外代码得到同样的改写。
 pub fn expand_in_block(block: &mut Block) {
-    struct TryExpander;
-    impl TryExpander {
-        fn expanded(mac: &syn::Macro) -> Option<Expr> {
-            if ExitRewriter::macro_name(mac).as_deref() != Some("java_try") {
-                return None;
-            }
-            let input = syn::parse2::<TryInput>(mac.tokens.clone()).ok()?;
-            syn::parse2::<Expr>(expand_input(input)).ok()
-        }
-    }
-    impl VisitMut for TryExpander {
-        fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
-            if let Stmt::Macro(sm) = stmt {
-                if let Some(e) = Self::expanded(&sm.mac) {
-                    *stmt = Stmt::Expr(e, None);
-                }
-            }
-            visit_mut::visit_stmt_mut(self, stmt);
-        }
-        fn visit_expr_mut(&mut self, expr: &mut Expr) {
-            if let Expr::Macro(em) = expr {
-                if let Some(e) = Self::expanded(&em.mac) {
-                    *expr = e;
-                }
-            }
-            visit_mut::visit_expr_mut(self, expr);
-        }
-    }
-    TryExpander.visit_block_mut(block);
+    let mut expander = TryExpander { loops: Vec::new(), error: None };
+    expander.visit_block_mut(block);
 }

@@ -5,7 +5,7 @@ from ...stack import BOOL
 from ...rs_ir import Lit, RawExpr, RsNamed
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, short_cls, effective_class_type_params as _effective_class_type_params
-from ..coerce import _is_subtype, _rust_type_to_binary
+from ..coerce import _is_subtype, _rust_type_to_binary, _coerce_to_object
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 
 
@@ -60,6 +60,13 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 else:
                     sim.push(expr, src_ty)
                 return True
+            elif (src_name != 'Object' and cast_rust not in ('Object', '()')
+                  and (sim.type_var_bounds.get(src_name) or '').split('<')[0].strip()
+                      == cast_rust.split('<')[0].strip()):
+                # 类型变量值转型到其上界的擦除类（`K c = task.makeChild(..)`，javac 按 K 的擦除
+                # 补 checkcast）：恒成立，值与静态类型都不变
+                sim.push(expr, src_ty)
+                return True
             elif src_name != 'Object' and cast_rust not in ('Object', '()', src_name):
                 if _is_subtype(cast_rust.split('<')[0], src_name.split('<')[0], registry):
                     # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode，E0282）：
@@ -71,8 +78,11 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                         _se = f"Clone::clone(&{_se})"
                     expr = RawExpr(f"Object::from_any({_se}).downcast::<{cast_rust}>()")
                 else:
-                    # 二次 checkcast（非 Object 源类型）：两种具体类型不兼容，用 Default::default() 占位
-                    expr = RawExpr('Default::default()')
+                    # 静态类型互不为子类型（擦除泛型数组 `(E[][]) Arrays.copyOf(..)`、交叉转型）：
+                    # checkcast 是运行时校验 → 经 Object 边界按目标类型取回
+                    _boxed = _coerce_to_object(render_expr(expr), src_name, registry,
+                                               sim.class_type_params)
+                    expr = RawExpr(f"({_boxed}).downcast::<{cast_rust}>()")
             if cast_rust == 'Object' and src_name not in ('Object', '()'):
                 # 目标擦除为 Object（接口 / 根类）而值有更精确的静态类型（类型变量 T_NODE、
                 # 具体类）：向上转型不改变值，表达式的 Rust 类型仍是源类型 → 记录源类型，

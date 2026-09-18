@@ -21,7 +21,7 @@ from ..type_map import (
 from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 from .coerce import (
     parse_method_ref, _coerce_from_null, _coerce_to_object,
-    _coerce_to_interface, _coerce_value, _find_super_chain_to_class,
+    _coerce_value, _find_super_chain_to_class,
     _find_method_super_prefix, _find_method_super_prefix_for_type,
     _super_prefix_to_expr, _resolve_method_owner,
     _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,

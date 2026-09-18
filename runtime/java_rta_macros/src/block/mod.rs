@@ -360,6 +360,13 @@ fn expand_interface_impl(
         let target = attr_str(&f.attrs, "target")
             .map(|t| Ident::new(&t, proc_macro2::Span::call_site()))
             .unwrap_or_else(|| sig.ident.clone());
+        // 成员返回同一泛型类的另一实例化（`Optional<Double>` 之于接口的 `Optional<? extends
+        // ConstantDesc>`）：Java 侧靠擦除直接通过，Rust 侧经 Object 边界按接口声明类型取回
+        let convert = if attr_str(&f.attrs, "result").as_deref() == Some("checkcast") {
+            quote! { Ok(::std::convert::From::from(Object::from(__result))) }
+        } else {
+            quote! { Ok(::std::convert::Into::into(__result)) }
+        };
         quote! {
             #sig {
                 let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
@@ -368,8 +375,8 @@ fn expand_interface_impl(
                     any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
                     _jvm_null: false,
                 };
-                Ok(::std::convert::Into::into(
-                    __wrapper.#target(#(::std::convert::From::from(#args)),*)?))
+                let __result = __wrapper.#target(#(::std::convert::From::from(#args)),*)?;
+                #convert
             }
         }
     }).collect();

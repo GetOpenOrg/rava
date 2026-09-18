@@ -407,15 +407,13 @@ def _coerce_arg(
     """
     from ..render import render_type as _rt
     from .coerce import (
-        _coerce_from_null, _coerce_to_object, _coerce_to_interface,
+        _coerce_from_null, _coerce_to_object,
         _coerce_value, _is_subtype, _PRIMITIVE_RUST_TYPES, _into_super_chain,
         _reinstantiate_generic,
     )
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
         return null_coerce
-    if _coerce_to_interface(actual, expected):
-        return 'Default::default()'
     if expected == 'Object' and actual not in ('Object', '()'):
         # 泛型参数值（如 K: Clone + Default + 'static）传给 Object 参数：
         # Rust 无隐式子类型化，K 类型的值不能直接当 Object 用 → 装箱为

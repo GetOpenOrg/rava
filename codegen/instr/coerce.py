@@ -159,6 +159,9 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
     src = f"Clone::clone(&{val_str})" if clone else val_str
     if ty in (class_type_params or ()):
         return f"Into::<Object>::into({src})"
+    if ty.startswith('JArray<'):
+        # 数组是对象：Object 直接持有数组引用（元素类型具体化，可按 `T[]` 精确取回）
+        return f"Object::from({src})"
     if registry:
         from ..type_map import _registry_short_index
         _ci = _registry_short_index(registry).get(ty.split('<')[0].strip())
@@ -168,52 +171,6 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
 
 
 _NULL_OBJECT_EXPRS = frozenset({'Object::default()', 'Object::default().clone()'})
-
-# 接口类型 → 已知实现类型集合（用于接口子类型强制转换）
-_INTERFACE_IMPLS: dict[str, frozenset[str]] = {
-    'CharSequence': frozenset({'String', 'StringBuilder', 'StringBuffer', 'AbstractStringBuilder'}),
-    'Map': frozenset({'HashMap', 'TreeMap', 'LinkedHashMap', 'Hashtable', 'WeakHashMap',
-                      'IdentityHashMap', 'ConcurrentHashMap', 'Properties', 'EnumMap',
-                      'ImmutableCollections_Map1', 'ImmutableCollections_MapN'}),
-    'List': frozenset({'ArrayList', 'LinkedList', 'Vector', 'Stack', 'AbstractList',
-                       'ImmutableCollections_List12', 'ImmutableCollections_ListN',
-                       'ProviderList_ServiceList', 'ImmutableCollections_SubList'}),
-    'Set': frozenset({'HashSet', 'LinkedHashSet', 'TreeSet', 'EnumSet',
-                      'ImmutableCollections_Set12', 'ImmutableCollections_SetN',
-                      'TreeMap_EntrySet', 'HashMap_KeySet', 'ConcurrentHashMap_KeySetView'}),
-    'Collection': frozenset({'List', 'Set', 'ArrayList', 'LinkedList', 'HashSet',
-                              'LinkedHashSet', 'TreeSet', 'Vector', 'ArrayDeque'}),
-    'Iterable': frozenset({'Collection', 'List', 'Set', 'ArrayList', 'HashSet', 'LinkedList'}),
-    'Queue': frozenset({'LinkedList', 'ArrayDeque', 'PriorityQueue'}),
-    'Deque': frozenset({'LinkedList', 'ArrayDeque'}),
-    'SortedMap': frozenset({'TreeMap'}),
-    'SortedSet': frozenset({'TreeSet'}),
-    'NavigableMap': frozenset({'TreeMap'}),
-    'NavigableSet': frozenset({'TreeSet'}),
-}
-
-
-def _coerce_to_interface(actual: str, expected: str) -> bool:
-    """当 actual 需要强制转换为 Default::default() 时返回 True。
-    覆盖两类情况：
-    1. actual 是 expected 接口的已知实现类（如 HashMap → Map）
-    2. Vec 元素类型不匹配（Rc<RefCell<Vec<Object>>> → Rc<RefCell<Vec<T>>>）
-    """
-    # JArray 元素类型不匹配：两者都是 JArray<T> 但元素类型不同
-    _JARR_PREFIX = 'JArray<'
-    _JARR_SUFFIX = '>'
-    if (expected.startswith(_JARR_PREFIX) and expected.endswith(_JARR_SUFFIX) and
-            actual.startswith(_JARR_PREFIX) and actual.endswith(_JARR_SUFFIX)):
-        exp_elem = expected[len(_JARR_PREFIX):-len(_JARR_SUFFIX)]
-        act_elem = actual[len(_JARR_PREFIX):-len(_JARR_SUFFIX)]
-        if exp_elem != act_elem:
-            return True
-    exp_base = expected.split('<')[0]
-    act_base = actual.split('<')[0]
-    if exp_base == act_base:
-        return False
-    return act_base in _INTERFACE_IMPLS.get(exp_base, frozenset())
-
 
 def _coerce_from_null(val_str: str, expected: str) -> str | None:
     """若 val_str 是 aconst_null 的结果（Object::default()），
