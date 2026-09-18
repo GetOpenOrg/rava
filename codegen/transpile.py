@@ -271,9 +271,14 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
     enqueued_from: dict[tuple[str, str, str], tuple[str, str, str] | None] = {}
     origin: list = [None]
 
-    def enqueue_refs(instrs):
+    def enqueue_refs(instrs, exception_table=()):
         method_refs, f_classes, static_refs = _collect_method_refs(instrs)
         pending_static_fields.extend(static_refs)
+        # 异常表的 catch_type：catch 分派按类层次匹配，只需类型存根（不引入任何方法）
+        for _entry in (exception_table or ()):
+            _catch = _entry[3]
+            if _catch and _catch.startswith(_JDK_PREFIXES + _JDK_STUB_ONLY_PREFIXES):
+                f_classes.append(_catch)
         for cls in f_classes:
             if cls not in _JAVA_RUNTIME_CLASSES:
                 field_discover_classes.add(cls)
@@ -289,7 +294,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
     # 初始种子：用户类所有方法的引用
     for ci in class_infos:
         for m in ci.methods:
-            enqueue_refs(m.instrs or [])
+            enqueue_refs(m.instrs or [], m.exception_table)
             # T88：用户方法自身描述符里的参数/返回类型也是类型依赖
             # （abstract 方法无 instrs，但其签名引用的接口类型要进闭包）
             _enqueue_desc_types(m.descriptor)
@@ -445,7 +450,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
         for m in ci.methods:
             if m.name == meth and m.descriptor == desc:
                 _declared = True
-                enqueue_refs(m.instrs or [])
+                enqueue_refs(m.instrs or [], m.exception_table)
                 # T88：被调方法的描述符参数/返回类型也是类型依赖
                 # （abstract/native 方法无 instrs，签名引用的接口类型
                 # 如 iterator()Ljava/util/Iterator; 仍需进闭包生成）

@@ -22,19 +22,19 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
         if elementData.len() < needed {
             let new_data = JArray::<Object>::new(needed);
             for i in 0..elementData.len() {
-                new_data.set(i, elementData.get(i));
+                new_data.set(i, elementData.get(i)?)?;
             }
             this.__set_elementData(Clone::clone(&new_data));
             elementData = new_data;
         }
-        elementData.set(s, e_to_object(e));
+        elementData.set(s, e_to_object(e))?;
         this.__set_size(s.wrapping_add(1i32));
         Ok(())
     }
 
     #[jvm_native]
     pub fn elementData(&self, index: i32) -> Result<Object> {
-        Ok(self.__get_elementData().get(index))
+        self.__get_elementData().get(index)
     }
 
     #[jvm_native]

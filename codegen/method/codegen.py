@@ -32,6 +32,7 @@ from ..rs_ir import (
 from ..stack import BOOL, _clone_moved_var
 from ..instr.coerce import _is_subtype, _common_ref_type
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
+from .try_catch import TryCatchPlan, emit_try_group, emit_unguarded_run
 from .postprocess import _normalize_this_clone, _erase_boxed_ctor_type_args, _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
 
 
@@ -89,8 +90,9 @@ def gen_method_body(
 
     instrs           = method.instrs
     off2idx          = {ins.offset: idx for idx, ins in enumerate(instrs)}
+    try_plan         = TryCatchPlan(method.exception_table, instrs)
     _loops           = find_loops(instrs)
-    loop_map         = {lp.start_idx: lp for lp in _loops}
+    loop_map        = {lp.start_idx: lp for lp in _loops}
     bool_cond_map    = find_boolean_conditions(instrs)
     _raw_guards      = find_if_guards(instrs, _loops)
     # boolean-condition 模式优先级更高，排除重叠的 guard 检测
@@ -336,6 +338,25 @@ def gen_method_body(
         while i < end:
             ins = instrs[i]
             op  = ins.opcode
+
+            # ── try/catch（异常表区域，见 try_catch.py）───────────────
+            if try_plan:
+                _run_end = emit_unguarded_run(try_plan, i, end, cur_sim, out, ind,
+                                              process_block, flush_here)
+                if _run_end is not None:
+                    i = _run_end
+                    continue
+                _try_group = try_plan.group_starting_at(i, end)
+                # 循环与 try 同起点：处理器全部落在循环内 → try 属于循环体，先开循环
+                if (_try_group is not None and i in loop_map
+                        and loop_map[i].end_idx < end
+                        and max(c.handler_idx for c in _try_group.clauses) <= loop_map[i].end_idx):
+                    _try_group = None
+                if _try_group is not None:
+                    i = emit_try_group(try_plan, _try_group, end, cur_sim, out, ind,
+                                       process_block, make_sub, flush_here,
+                                       method, instrs, registry)
+                    continue
 
             # ── 循环 ──────────────────────────────────────────────────
             if i in loop_map:

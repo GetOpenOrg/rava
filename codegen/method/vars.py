@@ -43,6 +43,15 @@ def _str_to_rs_type(s: str) -> RsType:
     return RsNamed(s)
 
 
+_STRING_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)'")
+
+
+def _brace_delta(text: str) -> int:
+    """一行渲染文本的块嵌套净变化。字符串 / 字符字面量里的花括号不是块结构，先剔除。"""
+    code = _STRING_LITERAL_RE.sub('', text)
+    return code.count('{') - code.count('}')
+
+
 def _analyze_mutation(stmts):
     """扫描 AssignStmt 目标，将对应的 LetStmt.mutable 设为 True。
 
@@ -91,7 +100,7 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
         if isinstance(item, str):
             if item.rstrip().endswith('loop {'):
                 loop_entry_indices.append(k)
-            delta = item.count('{') - item.count('}')
+            delta = _brace_delta(item)
             nesting += delta
         elif isinstance(item, LetStmt):
             if nesting > 0 and item.name not in declared_at and item.name not in predeclared:
@@ -116,7 +125,7 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
     cur = 0
     for text in rendered:
         entry_nesting.append(cur)
-        cur += text.count('{') - text.count('}')
+        cur += _brace_delta(text)
 
     vars_to_hoist: set[str] = set()
     for name, (decl_k, decl_nesting) in declared_at.items():
@@ -202,7 +211,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
             stripped = item.rstrip()
             if stripped.endswith('{') and not stripped.startswith('}'):
                 block_entry_indices.append(k)
-            delta = item.count('{') - item.count('}')
+            delta = _brace_delta(item)
             nesting += delta
         elif isinstance(item, LetStmt):
             if nesting == 0 and item.name not in predeclared:
@@ -230,7 +239,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
     cur = 0
     for text in rendered:
         entry_nesting.append(cur)
-        cur += text.count('{') - text.count('}')
+        cur += _brace_delta(text)
 
     # Pass 3: 找出需要提升的变量 - 在块外或 else 兄弟块中被引用
     # name → (type_str, decl_list, ref_idx)  ref_idx：触发 found=True 的外部引用位置（-1 表示来自 else 兄弟块）
@@ -287,15 +296,16 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
                         break
 
             if found:
-                # 确定类型：从第一个声明获取
+                # 确定类型：取触发提升的那次声明（同名槽在互不相干的作用域里可以是
+                # 不同的 Java 变量，类型也可能不同，如 switch 各 case 里的 int i / long i）
                 ty_str = None
-                _, first_item = entries[decl_list[0][0]]
+                _, first_item = entries[decl_k]
                 if isinstance(first_item, LetStmt) and first_item.ty is not None:
                     try:
                         ty_str = render_type(first_item.ty)
                     except Exception:
                         ty_str = None
-                vars_to_hoist[name] = (ty_str, decl_list, ref_idx)
+                vars_to_hoist[name] = (ty_str, decl_list, ref_idx, (decl_k, decl_nesting))
                 break
 
     if not vars_to_hoist:
@@ -303,9 +313,8 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
 
     # Pass 4: 找到合适的插入位置（最内层包含第一次声明的块的开始处）
     insertions: list[tuple[int, tuple]] = []
-    for name, (ty_str, decl_list, ref_idx) in vars_to_hoist.items():
-        first_decl_k = decl_list[0][0]
-        first_decl_nesting = decl_list[0][1]
+    for name, (ty_str, decl_list, ref_idx, found_decl) in vars_to_hoist.items():
+        first_decl_k, first_decl_nesting = found_decl
         # 找到包含第一次声明的最近的块起始索引
         block_k = None
         for bk in reversed(block_entry_indices):
@@ -423,8 +432,16 @@ def _hoist_if_vars(entries: list, predeclared: set[str]) -> bool:
         # 统一用 Default::default()，配合类型注解让 Rust 推断
         default_val = RawExpr('Default::default()')
         insertions.append((block_k, (block_indent, LetStmt(name, hoisted_type, True, default_val))))
-        # 将块内所有同名 LetStmt 改为 AssignStmt
+        # 将提升点所辖语句（block_k 开启的整条 if/else、match、loop 语句）内的同名 LetStmt
+        # 改为 AssignStmt；语句之外的同名声明是别的 Java 变量，保持各自的 let
+        span_end = len(entries)
+        for k2 in range(block_k + 1, len(entries)):
+            if entry_nesting[k2] <= entry_nesting[block_k]:
+                span_end = k2
+                break
         for decl_k, _ in decl_list:
+            if not (block_k < decl_k < span_end):
+                continue
             inner_indent, inner_item = entries[decl_k]
             if isinstance(inner_item, LetStmt) and inner_item.name == name:
                 entries[decl_k] = (inner_indent, AssignStmt(Var(inner_item.name), inner_item.value))
@@ -446,7 +463,7 @@ def _promote_undeclared_assigns(entries: list, predeclared: set[str]):
 
     for k, (indent, item) in enumerate(entries):
         if isinstance(item, str):
-            delta = item.count('{') - item.count('}')
+            delta = _brace_delta(item)
             if delta < 0:
                 nesting += delta
                 # 移除在已退出作用域层声明的变量

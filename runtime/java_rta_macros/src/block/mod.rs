@@ -66,13 +66,15 @@ fn expand_non_virtual_fn(
             if class_init::is_init_trigger(sig) {
                 class_init::inject_init_trigger(&mut b);
             }
+            let null_check = class_init::null_receiver_check(sig);
             rewrite_block(&mut b, basic_names, ref_names);
             // 构造器 / 非虚方法同样运行在 wrapper 上下文（this: Wrapper 或 &Wrapper）：
             // super.method() 的 __base(this, ...) 需经 vtable 取得 &__BT: AncestorVTable
             rewrite_base_calls_for_wrapper(&mut b);
+            let stmts = &b.stmts;
             quote! {
                 #(#keep_attrs)*
-                #vis #sig #b
+                #vis #sig { #null_check #(#stmts)* }
             }
         }
         None => {
@@ -467,15 +469,29 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         let atag = meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
         quote! {
             if type_id == <#anc_ident #atag>::BINARY_NAME {
-                let view: #anc_ident #atag = #anc_ident {
-                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #anc_vtable #atag>,
-                    any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
-                    _jvm_null: false,
-                };
+                let view: #anc_ident #atag = #anc_ident::__from_parts(
+                    ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #anc_vtable #atag>,
+                    rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    false,
+                );
                 return ::std::option::Option::Some(::std::boxed::Box::new(view));
             }
         }
     }).collect();
+
+    // Object.clone() 的逐字段浅拷贝：每个字段新建存储单元，值按 Java 语义拷贝
+    // （基本类型拷贝值，引用类型拷贝引用）。
+    let copy_field_inits: Vec<TokenStream2> = meta.superclass_fields.iter()
+        .map(|(n, t)| (n, t))
+        .chain(fields.iter().map(|(n, t)| (n, t)))
+        .map(|(name, ty)| {
+            if is_basic(ty) {
+                quote! { #name: ::std::rc::Rc::new(::std::cell::Cell::new(self.#name.get())) }
+            } else {
+                quote! { #name: ::std::rc::Rc::new(::std::cell::RefCell::new(self.#name.borrow().clone())) }
+            }
+        })
+        .collect();
 
     let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
@@ -501,6 +517,18 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     }
                     #(#ancestor_views)*
                     ::std::option::Option::None
+                }
+                fn __shallow_copy(&self) -> ::std::option::Option<Object> {
+                    let rc = ::std::rc::Rc::new(#inner_ident {
+                        #(#copy_field_inits,)*
+                        ..::std::default::Default::default()
+                    });
+                    let copy: #struct_ident #ty_g = #struct_ident {
+                        vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                        any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                        _jvm_null: false,
+                    };
+                    ::std::option::Option::Some(Object::from(copy))
                 }
                 #hash_code_inner_bridge
             }
@@ -857,6 +885,21 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     };
 
+    // 跨 crate 子类（用户类继承 JDK 类）的向上转换 / 运行时类视图需要按部件重建祖先 wrapper；
+    // 字段保持 crate 私有，经此构造入口完成。
+    let wrapper_from_parts = quote! {
+        impl #impl_g #struct_ident #ty_g #where_c {
+            #[doc(hidden)]
+            pub fn __from_parts(
+                vtable: ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                any: ::std::rc::Rc<dyn ::std::any::Any>,
+                is_null: bool,
+            ) -> Self {
+                #struct_ident { vtable, any, _jvm_null: is_null }
+            }
+        }
+    };
+
     let wrapper_default = quote! {
         impl #impl_g ::std::default::Default for #struct_ident #ty_g #where_c {
             fn default() -> Self {
@@ -1047,10 +1090,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             }
             None
         }).collect();
+        let null_check = class_init::null_receiver_check(sig);
         wrapper_methods.push(quote! {
             #(#keep_attrs)*
             #[inline]
-            #vis #sig { #vtable_trait_ident::#mname(&*self.vtable, #(#param_names),*) }
+            #vis #sig { #null_check #vtable_trait_ident::#mname(&*self.vtable, #(#param_names),*) }
         });
     }
 
@@ -1080,10 +1124,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             let vis = &f.vis;
             // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）
             let anc_vtable = format_ident!("{}__VTable", vtable_class);
+            let null_check = class_init::null_receiver_check(sig);
             wrapper_methods.push(quote! {
                 #(#keep_attrs)*
                 #[inline]
-                #vis #sig { #anc_vtable::#mname(&*self.vtable, #(#param_names),*) }
+                #vis #sig { #null_check #anc_vtable::#mname(&*self.vtable, #(#param_names),*) }
             });
         }
     }
@@ -1127,10 +1172,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
             }
         };
+        let null_check = class_init::null_receiver_check(sig);
         wrapper_methods.push(quote! {
             #(#keep_attrs)*
             #[inline]
-            #vis #sig { #body }
+            #vis #sig { #null_check #body }
         });
     }
 
@@ -1254,11 +1300,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     fn from(child: #struct_ident #ty_g) -> #anc_ident #atag {
                         // 结构体字面量不能用 Type<E> {...} 语法（被解析为比较链），
                         // 省略泛型参数由返回类型推导
-                        #anc_ident {
-                            vtable: child.vtable as ::std::rc::Rc<dyn #anc_vtable #atag>,
-                            any: child.any,
-                            _jvm_null: child._jvm_null,
-                        }
+                        #anc_ident::__from_parts(
+                            child.vtable as ::std::rc::Rc<dyn #anc_vtable #atag>,
+                            child.any,
+                            child._jvm_null,
+                        )
                     }
                 }
             }
@@ -1505,6 +1551,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         #obj_vtable_for_inner
         #(#vtable_impls)*
         #wrapper_struct
+        #wrapper_from_parts
         #wrapper_default
         #wrapper_clone
         #wrapper_partialeq

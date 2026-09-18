@@ -28,7 +28,7 @@ use super::util::strip_meta_attrs;
 pub(crate) const CLINIT_FN: &str = "__clinit";
 
 /// 方法是否返回 `Result<..>`（只有可传播异常的入口才能注入初始化触发）。
-fn returns_result(sig: &Signature) -> bool {
+pub(crate) fn returns_result(sig: &Signature) -> bool {
     if let ReturnType::Type(_, ty) = &sig.output {
         if let Type::Path(tp) = &**ty {
             return tp.path.segments.last().map_or(false, |s| s.ident == "Result");
@@ -40,6 +40,18 @@ fn returns_result(sig: &Signature) -> bool {
 /// 该函数是否是类初始化触发点：无接收者（static 方法 / 构造器 / main）且不是 `<clinit>` 自身。
 pub(crate) fn is_init_trigger(sig: &Signature) -> bool {
     sig.receiver().is_none() && sig.ident != CLINIT_FN && returns_result(sig)
+}
+
+/// 实例方法入口的空接收者检查（JVMS §6.5 invokevirtual / invokespecial / invokeinterface：
+/// objectref 为 null 抛 NullPointerException）。只对可传播异常的方法生成。
+pub(crate) fn null_receiver_check(sig: &Signature) -> proc_macro2::TokenStream {
+    if sig.receiver().is_some() && returns_result(sig) {
+        quote::quote! {
+            if self._jvm_null { return Err(JvmError::null_pointer()); }
+        }
+    } else {
+        quote::quote! {}
+    }
 }
 
 /// 在方法体入口注入 `Self::__class_init()?;`。

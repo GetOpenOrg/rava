@@ -54,6 +54,24 @@ pub trait ObjectVTable: 'static {
         _any: Rc<dyn std::any::Any>,
         _type_id: &str,
     ) -> Option<Box<dyn std::any::Any>> { None }
+
+    /// `Object.clone()` 的 native 语义：新建同运行时类的对象，逐字段拷贝（浅拷贝）。
+    /// java_class! 宏对生成类自动 override；无字段存储的值（装箱基本类型等）返回 None。
+    fn __shallow_copy(&self) -> Option<Object> { None }
+}
+
+/// `super.clone()`（invokespecial java/lang/Object.clone）的落点。
+/// Object.clone 是 ACC_NATIVE：运行时类未实现 Cloneable 时抛 CloneNotSupportedException，
+/// 否则返回逐字段浅拷贝。
+#[allow(non_snake_case)]
+pub fn Object__clone_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<Object> {
+    if !this.is_instance_of("java/lang/Cloneable") {
+        return Err(crate::error::JvmError::clone_not_supported(this.__class_name()));
+    }
+    match this.__shallow_copy() {
+        Some(copy) => Ok(copy),
+        None => Err(crate::error::JvmError::clone_not_supported(this.__class_name())),
+    }
 }
 
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────

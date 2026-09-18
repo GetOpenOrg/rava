@@ -54,11 +54,9 @@ impl BaseLocale {
     pub fn constantBaseLocales() -> Result<JArray<BaseLocale>> {
         Ok(CONSTANT_BASE_LOCALES.with(|cell| {
             Clone::clone(cell.get_or_init(|| {
-                let arr = JArray::<BaseLocale>::new(CONSTANTS.len() as i32);
-                for (i, (language, region)) in CONSTANTS.iter().enumerate() {
-                    arr.set(i as i32, make(language, "", region, ""));
-                }
-                arr
+                JArray::from(CONSTANTS.iter()
+                    .map(|(language, region)| make(language, "", region, ""))
+                    .collect::<Vec<BaseLocale>>())
             }))
         }))
     }

@@ -8,7 +8,7 @@ impl Arrays {
         let copy_len = orig_len.min(newLength);
         let result = JArray::<Object>::new(newLength);
         for i in 0..copy_len {
-            result.set(i, original.get(i));
+            result.set(i, original.get(i)?)?;
         }
         Ok(result)
     }

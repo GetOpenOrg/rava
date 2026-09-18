@@ -458,19 +458,33 @@ try {
     int x = parseInt(s);
 } catch (NumberFormatException e) {
     System.out.println("bad");
+} catch (IllegalStateException | IllegalArgumentException e) {
+    System.out.println(e.getMessage());
 }
 ```
 ```rust
 // 生成
-match parseInt_str(s.clone()) {
-    Ok(x) => { let mut x = x; }
-    Err(e) if e.is_instance_of("java/lang/NumberFormatException") => {
-        let e = e.as_throwable();
-        System::out_println(String::from("bad"))?;
+java_try! {
+    try {
+        let mut x: i32 = Integer::parseInt_str(Clone::clone(&s))?;
+    } catch (e: NumberFormatException) {
+        System::out()?.println_str(String::from("bad"))?;
+    } catch (e: IllegalStateException | IllegalArgumentException as RuntimeException) {
+        System::out()?.println_str(e.getMessage()?)?;
     }
-    Err(e) => return Err(e),
 }
 ```
+
+- 区域来自 Code 属性的异常表（JVMS §4.7.3），不靠字节码模式猜测；同一处理器的多条表项
+  （multi-catch、被内联 finally 切开的区间）合并为一个 catch 子句。
+- 匹配依据异常对象的**运行时类**（含子类），按异常表顺序取第一个命中的子句；
+  无子句命中时异常原样向外传播。
+- `catch (t) { ... }`（无类型）对应异常表的 catch-any 表项（`finally` / `synchronized` 的兜底处理器），
+  `t` 的类型为 `Throwable`。
+- `java_unguarded! { ... }` 标出 try 体文本范围内、但不受本层异常表覆盖的代码
+  （javac 内联到 try 体出口处的 finally 副本）：其中抛出的异常越过本层 catch 向外传播。
+- try 体里的 `return` / `break` / `continue` 保持 Java 语义。
+- 宏内部用带标签块 + `Result` 实现，`match` / `is_instance_of` / `catch_as` 不出现在可读层。
 
 ### 8.3 throw
 
@@ -478,8 +492,27 @@ match parseInt_str(s.clone()) {
 throw new IllegalArgumentException("msg");
 ```
 ```rust
-return Err(JvmError::from(IllegalArgumentException::new_str("msg")?));
+return Err(JvmError::from(IllegalArgumentException::new_str(String::from("msg"))?));
 ```
+
+`JvmError` 只携带被抛出的 Throwable 对象本身（翻译自 JDK 字节码的异常类实例），不含任何
+字符串化的副本；类名、消息、cause 都从对象上读取。
+
+### 8.4 VM 抛出的异常
+
+JVMS 规定由指令自身抛出的异常同样是翻译出的异常类实例，构造器由 `vm_roots.txt` 保证进入调用链：
+
+| 指令 | 条件 | 异常 | 可读层形式 |
+|------|------|------|-----------|
+| `*aload` / `*astore` | 下标越界 | `ArrayIndexOutOfBoundsException` | `arr.get(i)?` / `arr.set(i, v)?` |
+| `idiv` `irem` `ldiv` `lrem` | 除数为 0 | `ArithmeticException("/ by zero")` | `idiv(a, b)?`（除数是非零字面量时保留 `a / b`） |
+| `invokevirtual` 等 | 接收者为 null | `NullPointerException` | `obj.m()?`（检查由 `java_class!` 注入方法入口） |
+| `invokespecial Object.clone` | 运行时类未实现 Cloneable | `CloneNotSupportedException` | `Object__clone_base(this)?` |
+
+### 8.5 未捕获异常
+
+`main` 返回 `Err` 时，入口打印 `Exception in thread "main" <类全名>: <消息>` 到 stderr 并以状态码 1 退出，
+与 `java` 启动器一致。
 
 ---
 
@@ -659,16 +692,33 @@ codegen 通过 registry 中 `ClassInfo.is_interface` 动态识别接口类型，
 // Java
 public static final int MAX_VALUE = 2147483647;
 private static final int[] DIGITS = { ... };
+static int counter;
 ```
 ```rust
 // 生成（方法体内静态字段访问）
-Integer::MAX_VALUE()    // → 2147483647i32（codegen 从 <clinit> 提取常量）
-Integer::DIGITS()       // → static Rc<RefCell<Vec<i32>>> 懒初始化
+Integer::MAX_VALUE()?       // getstatic
+Integer::DIGITS()?          // getstatic
+Counter::set_counter(v)?;   // putstatic
 ```
 
-### 14.2 <clinit> 提取
+存储是 `java_class!` 依据 `static` 字段声明生成的 thread_local 单元，访问器返回 `Result`：
+首次访问会触发类初始化，而类初始化可能抛出异常。
 
-Java 类的静态初始化块 `<clinit>` 中的常量数组赋值由 `_extract_clinit_arrays` 提取，生成 Rust `once_cell::sync::Lazy` 静态值。
+### 14.2 `<clinit>`：类初始化（JVMS §5.5）
+
+`<clinit>` 与普通方法一样**整体从字节码翻译**（`fn __clinit() -> Result<()>`），不做任何常量提取或模式识别。
+`java_class!` 为每个类生成 `__class_init()` 状态机：
+
+| 状态 | 进入条件 | 行为 |
+|------|---------|------|
+| 未初始化 | 首次主动使用（`getstatic` / `putstatic` / `invokestatic` / `new`） | 置为"初始化中" → 先初始化父类 → 执行 `__clinit` |
+| 初始化中 | 同线程递归进入（`<clinit>` 内访问自身静态成员、循环依赖） | 立即返回，读到的是当前已赋的值 |
+| 已初始化 | — | 立即返回 |
+| 出错 | `__clinit` 抛出异常 | 首次：包成 `ExceptionInInitializerError` 抛出；之后每次主动使用抛 `NoClassDefFoundError` |
+
+触发点由宏注入在静态访问器与无接收者方法（静态方法、构造器）的入口，可读层保持 `X::f()?` / `X::m()?` / `X::new()?`。
+用户类与 JDK 类走同一机制；转译 BFS 把被引用类的 `<clinit>` 及其父类链的 `<clinit>` 一并入队。
+调用链进入 `jdk/internal/`、`sun/` 以及 `vm_boundary.txt` 登记的 VM 自举类时截断为手写边界类。
 
 ---
 
@@ -730,6 +780,8 @@ self._super.speak()?
 | `Rc::new(RefCell::new(...))` | 数组/对象创建 | `Array::new(n)` / 构造器 | `Array<T>` + `java_class!` 构造器展开 |
 | `Rc<RefCell<Vec<T>>>` 类型标注 | `T[]` 数组类型 | `Array<T>` | `Array<T>` newtype（§7） |
 | `__get_xxx()` / `__set_xxx()` 直接调用 | 字段读写 | `self.xxx` / `self.xxx = v`（宏重写） | `java_class!` 宏 token 重写 |
+| `match r { Err(e) if e.is_instance_of(..) => .. }` / `catch_as::<T>()` | `try { } catch (T e) { }` | `java_try! { try {..} catch (e: T) {..} }`（§8.2） | `java_try!` 宏 |
+| `__class_init()` / `__clinit()` 直接调用 | 类初始化（JVMS §5.5） | 透明（首次主动使用时自动触发，§14.2） | `java_class!` 宏 |
 
 ### 16.2 各调用的隐藏机制
 

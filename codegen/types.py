@@ -47,6 +47,8 @@ class ParsedMethod:
     local_types:        dict = None   # slot → (Signature string, start_pc) from LocalVariableTypeTable
     # 按作用域区间的局部变量声明表：list of (slot, start_pc, length, name, descriptor, signature)
     local_vars:         list = None
+    # 异常表：list of (start_pc, end_pc, handler_pc, catch_type binary name | None)
+    exception_table:    list = None
     access_flags:       int  = 0
     is_native:          bool = False
     is_abstract:        bool = False
@@ -65,6 +67,8 @@ class ParsedMethod:
             self.local_types = {}
         if self.local_vars is None:
             self.local_vars = []
+        if self.exception_table is None:
+            self.exception_table = []
         if self.exceptions is None:
             self.exceptions = []
         if self.method_parameters is None:

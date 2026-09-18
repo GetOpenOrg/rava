@@ -26,14 +26,30 @@ impl<T: Clone + Default + 'static> JArray<T> {
         JArray(Rc::new(RefCell::new(vec![T::default(); len as usize])))
     }
 
-    /// 读取下标 i 的元素（对应 Java iaload/aaload 等）
-    pub fn get(&self, i: i32) -> T {
-        self.0.borrow()[i as usize].clone()
+    /// 读取下标 i 的元素（对应 Java iaload/aaload 等）。
+    /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *aload）。
+    pub fn get(&self, i: i32) -> crate::error::Result<T> {
+        let data = self.0.borrow();
+        if i < 0 || i as usize >= data.len() {
+            return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
+        }
+        Ok(data[i as usize].clone())
     }
 
-    /// 写入下标 i 的元素（对应 Java iastore/aastore 等）
-    pub fn set(&self, i: i32, v: T) {
-        self.0.borrow_mut()[i as usize] = v;
+    /// 写入下标 i 的元素（对应 Java iastore/aastore 等）。
+    /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *astore）。
+    pub fn set(&self, i: i32, v: T) -> crate::error::Result<()> {
+        let mut data = self.0.borrow_mut();
+        if i < 0 || i as usize >= data.len() {
+            return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
+        }
+        data[i as usize] = v;
+        Ok(())
+    }
+
+    /// 元素快照（手写 VM 层批量读取用，不经过逐元素边界检查）
+    pub fn to_vec(&self) -> Vec<T> {
+        self.0.borrow().clone()
     }
 
     /// 数组长度（对应 Java arraylength 字节码）

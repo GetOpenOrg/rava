@@ -10,7 +10,7 @@ impl System {
                 if let Some(s) = src.0.as_any().downcast_ref::<JArray<$t>>() {
                     let d = dest.downcast::<JArray<$t>>();
                     for i in 0..length {
-                        d.set(dest_pos + i, s.get(src_pos + i));
+                        d.set(dest_pos + i, s.get(src_pos + i)?)?;
                     }
                     return Ok(());
                 }

@@ -72,6 +72,11 @@ impl JvmError {
         }
     }
 
+    /// catch-any 绑定（异常表 catch_type = 0）：athrow 操作数的静态类型即 Throwable。
+    pub fn catch_any(&self) -> crate::java::lang::Throwable {
+        self.catch_as::<crate::java::lang::Throwable>(crate::java::lang::Throwable::BINARY_NAME)
+    }
+
     // ── VM 抛出的异常 ────────────────────────────────────────────────────────
 
     pub fn null_pointer() -> Self {
@@ -106,6 +111,12 @@ impl JvmError {
 
     pub fn class_cast(message: std::string::String) -> Self {
         vm_throw(crate::java::lang::ClassCastException::new_str(String::from(message)))
+    }
+
+    /// Object.clone()：运行时类未实现 Cloneable。消息为类的全限定名（与 HotSpot 一致）。
+    pub fn clone_not_supported(binary_name: &str) -> Self {
+        vm_throw(crate::java::lang::CloneNotSupportedException::new_str(String::from(
+            binary_name.replace('/', "."))))
     }
 
     pub fn illegal_monitor_state(message: &str) -> Self {

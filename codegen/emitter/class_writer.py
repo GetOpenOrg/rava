@@ -147,6 +147,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         for _lv in (getattr(_m, 'local_vars', None) or []):
             _add_desc_refs(_lv[4])
             _add_desc_refs(_lv[5])
+        # 异常表 catch_type：方法体以 `catch (e: T)` 形式引用
+        for _exc in (getattr(_m, 'exception_table', None) or []):
+            if _exc[3]:
+                _referenced.add(_exc[3])
     # 扫描字段描述符（含超类链继承字段）
     _all_fields_to_scan = list(ci.fields)
     if registry:
@@ -379,7 +383,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 _is_jdk = '/' in _orig_cls
                 if _is_jdk:
                     # JDK 类：仅在父类已生成（在 generated_classes 中）时才导入 __base 函数
-                    if _orig_cls not in (generated_classes or set()):
+                    # 层次根类（无父类）整体手写，其 __base 函数由手写模块提供，同样导入
+                    _chain_top = ci.name
+                    while registry and _chain_top in registry and registry[_chain_top].super_class:
+                        _chain_top = registry[_chain_top].super_class
+                    _is_hierarchy_root = (_orig_cls == _chain_top and _orig_cls != ci.name)
+                    if _orig_cls not in (generated_classes or set()) and not _is_hierarchy_root:
                         continue
                     # 额外检查：_orig_cls 必须在 registry 中自己定义该方法（非继承来的），
                     # 否则 invokespecial 引用的是祖先方法，_orig_cls 不会生成 __base 函数

@@ -33,6 +33,25 @@ pub fn java_fmt_f32(v: f32) -> String {
     }
 }
 
+/// 整数除法/取余（JVMS §6.5 idiv / irem / ldiv / lrem）：
+/// 除数为 0 抛 `ArithmeticException("/ by zero")`；`MIN / -1` 按二进制补码回绕。
+pub fn idiv(a: i32, b: i32) -> error::Result<i32> {
+    if b == 0 { return Err(error::JvmError::arithmetic("/ by zero")); }
+    Ok(a.wrapping_div(b))
+}
+pub fn irem(a: i32, b: i32) -> error::Result<i32> {
+    if b == 0 { return Err(error::JvmError::arithmetic("/ by zero")); }
+    Ok(a.wrapping_rem(b))
+}
+pub fn ldiv(a: i64, b: i64) -> error::Result<i64> {
+    if b == 0 { return Err(error::JvmError::arithmetic("/ by zero")); }
+    Ok(a.wrapping_div(b))
+}
+pub fn lrem(a: i64, b: i64) -> error::Result<i64> {
+    if b == 0 { return Err(error::JvmError::arithmetic("/ by zero")); }
+    Ok(a.wrapping_rem(b))
+}
+
 /// JVM null 检查：ifnull/ifnonnull 字节码翻译辅助。
 /// Object::default()（内部 vtable = ()）表示 Java null；其他类型始终返回 false。
 #[inline(always)]
@@ -64,6 +83,7 @@ pub mod prelude {
     pub use super::java::lang::ObjectVTable;
     pub use super::java::lang::String;
     pub use super::_is_jnull;
+    pub use super::{idiv, irem, ldiv, lrem};
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;
@@ -71,4 +91,5 @@ pub mod prelude {
     pub use std::cell::RefCell;
     pub use super::MutexHolder;
     pub use java_rta_macros::{jvm_native, jvm_boundary, jvm_ext};
+    pub use java_rta_macros::{java_try, java_unguarded};
 }
