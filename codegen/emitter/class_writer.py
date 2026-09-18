@@ -315,7 +315,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # VTable trait 导入：沿超类链为每个祖先类导入 Ancestor__VTable。
     # java_class! 宏生成 impl Ancestor__VTable for Self__inner，需要该 trait 在作用域内。
-    # 接口不生成 VTable trait（接口展开为 pub type Iface = Object;），故只处理非接口超类链。
+    # 接口不生成 VTable trait（接口展开为持有 Object 的同名载体类型），故只处理非接口超类链。
     if not ci.is_interface and registry:
         _vtable_cur = ci.super_class
         while _vtable_cur and _vtable_cur != _OBJECT_CLASS:
@@ -405,9 +405,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 全量手写类（native_impl 文件含 pub struct）：codegen 跳过 struct 生成，改输出 pub use _impl::*
     _full_impl = ci.name in (full_impl_classes or set())
 
-    # Arch-1：接口在 Rust 层是 `pub type Name = Object;` 类型别名（由 java_class 宏生成），
-    # 不存在可承载实例/静态方法的 Rust 类型，因此不生成任何 impl 块。
-    # 注：接口静态方法（如 List.of）在当前架构下无归宿，属已知缺口。
+    # 接口在 Rust 层是与 Java 同名的载体类型（由 java_class 宏展开）：
+    #   - 值：持有 Object 的接口引用，实例方法分派走 Object vtable（impl 块不含实例方法；
+    #     default 方法由实现类继承展开，见下方「接口 default 方法继承」）
+    #   - 命名空间：static 字段访问器 / static 方法（含 private static 与 static 合成方法）
+    #     落在载体的 impl 块，调用点与 Java 同构（`Iface::staticMethod(args)`）
     _is_iface = bool(ci.is_interface)
 
     parts: list[str] = [
@@ -644,7 +646,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 _w_cls, _w_fname, _ = _parse_field_ref(_wi.comment)
                 if _w_cls == ci.name:
                     _runtime_written_statics.add(_w_fname)
-    for sf in ([] if _is_iface else static_fields):
+    for sf in static_fields:
         _has_storage = _is_user_class or sf.name in _runtime_written_statics
         safe_fname = _safe_field_name(sf.name)
         if safe_fname in existing_method_names:
@@ -757,7 +759,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if m.is_synthetic and not (m.access_flags & _ACC_BRIDGE)
         and m.name not in ('<init>', '<clinit>')
     ]
-    for m in ([] if _is_iface else emitted_methods):
+    for m in emitted_methods:
+        if _is_iface and not m.is_static:
+            continue  # 接口实例方法不落在载体上（vtable 分派 / 实现类继承 default）
         if m.name == '<clinit>':
             # 用户类：翻译 <clinit> 为 class_init() 函数
             if _is_user_class:
@@ -1053,7 +1057,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # ── 组装 java_class! { ... } 块（方案 §3 核心设计）────────────────────
     # 模块级 static 声明必须留在宏外（宏不接受 struct/impl 之外的项目）。
-    if module_statics and not _is_iface:
+    if module_statics:
         parts.append('\n'.join(module_statics))
 
     if not _full_impl:
@@ -1073,8 +1077,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         else:
             block.append(f"pub struct {struct_name}{struct_generic};")
 
-        # 接口：宏把 struct 展开为 `pub type Name = Object;`（Arch-1），无 impl 块
-        if not _is_iface:
+        # 接口无静态成员时不写空 impl 块
+        if method_blocks or not _is_iface:
             block.append('')
             impl_body = '\n\n'.join(_indent(b) for b in method_blocks)
             block.append(f"{impl_header} {{")

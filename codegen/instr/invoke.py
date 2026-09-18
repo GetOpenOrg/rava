@@ -356,8 +356,8 @@ def _static_call_turbofish(cls: str, class_name: str, sim: StackSim,
     if not _cls_bin:
         return ''
     _cls_ci = registry.get(_cls_bin)
-    # 接口在 Rust 侧是 `pub type Iface = Object;`（Arch-1），元数为 0，不带 turbofish
-    if not (_cls_ci and _cls_ci.generic_signature and not _cls_ci.is_interface):
+    # 接口的静态成员载体与类同构（携带类级类型参数），turbofish 规则一致
+    if not (_cls_ci and _cls_ci.generic_signature):
         return ''
     _tparams = _parse_class_type_params(_cls_ci.generic_signature)
     if not _tparams:

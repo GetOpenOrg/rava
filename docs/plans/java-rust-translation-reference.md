@@ -577,30 +577,51 @@ list.add(100i32)?;
 
 ## 13 接口类型
 
-### 13.1 Arch-1：接口 = Object 别名
+### 13.1 接口 = 同名载体类型
 
-Rust 不支持带类型参数的类型别名（`type Iterator<E> = Object` 非法），接口类型在方法签名中由 codegen 动态擦除为 `Object`：
+每个 Java 接口在 Rust 侧展开为一个与接口同名、携带相同类级类型参数的载体类型（由 `java_class!` 宏在 `#[is_interface = true]` 时生成）：
+
+```rust
+// 宏展开（不出现在可读层）
+pub struct Map<K, V> { __ref: Object, /* PhantomData<K, V> */ }
+impl<K, V> From<Object> for Map<K, V> { ... }     // Object → 接口引用
+impl<K, V> From<Map<K, V>> for Object { ... }     // 接口引用 → Object
+impl<K, V> Deref for Map<K, V> { type Target = Object; ... }
+impl<K, V> Map<K, V> { /* 接口的 static 字段访问器 + static 方法 */ }
+```
+
+载体同时承担两种职责：
+
+| 职责 | 说明 |
+|------|------|
+| 值 | 持有一个 `Object` 接口引用；实例方法分派走 `Object` 的 vtable，default 方法由实现类继承展开 |
+| 命名空间 | 接口的 static 方法 / static 字段 / private static 方法 / static 合成方法（lambda 体）落在载体 impl 上，方法体由字节码翻译 |
 
 ```java
 // Java
-public Iterator<E> iterator() { ... }
-public boolean add(E e, Comparator<E> cmp) { ... }
+Map<String, Integer> m = Map.copyOf(src);
 ```
 ```rust
-// java_class! 块内（codegen 擦除后）
+// 生成（泛型载体的静态调用与泛型类一致，携带擦除 turbofish）
+let m: Object = Map::<Object, Object>::copyOf(src)?;
+```
+
+类型别名（`pub type Map = Object;`）无法承担命名空间职责：别名上的关联函数解析到 `Object`（E0599），且别名不能携带未使用的类型参数。
+
+### 13.2 类型位置
+
+方法签名 / 字段 / 局部变量中的接口类型当前由 codegen 擦除为 `Object`：
+
+```rust
 pub fn iterator(&self) -> Result<Object> { ... }
 pub fn add(&self, e: E, cmp: Object) -> Result<bool> { ... }
 ```
 
-接口参数在方法体内按 `Object` 使用，调用接口方法时 codegen 识别并路由到 `Object` 上的对应调用。
+类型位置改写为 `Iterator<E>` 形态属于 T-2（`2026-09-17-java-rust-type-1to1.md`）；载体类型已是合法的泛型 Rust 类型并提供与 `Object` 的双向互转，T-2 不需要再改变接口的表示。
 
-### 13.2 接口检测机制
+### 13.3 接口检测机制
 
-codegen 通过扫描 registry 中各类的 `interfaces` 字段动态识别接口类型，无任何硬编码的 JDK 类名。所有接口在生成时声明为：
-
-```rust
-pub type SomeInterface = Object;   // 接口 = Object 别名（无泛型参数版本）
-```
+codegen 通过 registry 中 `ClassInfo.is_interface` 动态识别接口类型，无任何硬编码的 JDK 类名。
 
 ---
 

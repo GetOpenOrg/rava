@@ -106,8 +106,13 @@ java_interface! {
 pub trait Comparable__Trait: ObjectVTable {
     fn compareTo(&self, other: Object) -> Result<i32>;  // T 擦除为 Object（Arch-1）
 }
-pub type Comparable = Rc<dyn Comparable__Trait>;
+pub struct Comparable<T> { /* 持有 Rc<dyn Comparable__Trait>，PhantomData<T> */ }
+impl<T> Comparable<T> { /* 接口的 static 方法 / static 字段访问器 */ }
 ```
+
+> 接口名必须是本地载体类型而非 `Rc<dyn ...>` 别名：接口的 static 成员需要 inherent impl 承载
+> （调用点 `Comparator::naturalOrder()` 与 Java 同构），外部类型的别名无法拥有 inherent impl。
+> 载体现状（由 `java_class!` 在 `#[is_interface = true]` 时展开）见 `java-rust-translation-reference.md §13`。
 
 ---
 

@@ -47,6 +47,100 @@ pub fn expand(input: TokenStream2) -> TokenStream2 {
     }
 }
 
+/// Constructor / NonVirtual / static 方法：保持原 body（走 Rewriter）；无 body → panic stub。
+/// 类的 wrapper impl 与接口载体的 impl 共用。
+fn expand_non_virtual_fn(
+    f: &FnItem,
+    binary_name: &str,
+    basic_names: &HashSet<String>,
+    ref_names: &HashSet<String>,
+) -> TokenStream2 {
+    let keep_attrs = strip_meta_attrs(&f.attrs);
+    let vis = &f.vis;
+    let sig = &f.sig;
+    match &f.block {
+        Some(block) => {
+            let mut b = block.clone();
+            rewrite_block(&mut b, basic_names, ref_names);
+            // 构造器 / 非虚方法同样运行在 wrapper 上下文（this: Wrapper 或 &Wrapper）：
+            // super.method() 的 __base(this, ...) 需经 vtable 取得 &__BT: AncestorVTable
+            rewrite_base_calls_for_wrapper(&mut b);
+            quote! {
+                #(#keep_attrs)*
+                #vis #sig #b
+            }
+        }
+        None => {
+            let mname = sig.ident.to_string();
+            let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+            let msg = if desc.is_empty() {
+                format!("stub: {}.{}", binary_name, mname)
+            } else {
+                format!("stub: {}.{}:{}", binary_name, mname, desc)
+            };
+            quote! {
+                #(#keep_attrs)*
+                #vis #sig { panic!(#msg) }
+            }
+        }
+    }
+}
+
+/// 接口展开：与 Java 接口同名的载体类型。
+///
+/// - 值语义：持有一个 `Object` 的接口引用（与 `Object` 双向互转 + `Deref<Target = Object>`），
+///   实例方法分派仍走 `Object` 的 vtable；
+/// - 命名空间语义：接口的 static 方法 / static 字段访问器落在载体的 inherent impl 上，
+///   调用点与 Java 同构（`Map::copyOf(m)`）。
+///
+/// 类型别名（`type Iface = Object`）无法承担第二点：别名上的关联函数解析到 `Object`，
+/// 且别名不能携带未使用的类型参数。
+fn expand_interface(
+    meta: &ClassMeta,
+    struct_ident: &Ident,
+    gen: &syn::Generics,
+    fns: &[FnItem],
+) -> TokenStream2 {
+    let (impl_g, ty_g, where_c) = gen.split_for_impl();
+    let type_params: Vec<&Ident> = gen.params.iter()
+        .filter_map(|p| if let GenericParam::Type(tp) = p { Some(&tp.ident) } else { None })
+        .collect();
+    let no_fields: HashSet<String> = HashSet::new();
+    let static_members: Vec<TokenStream2> = fns.iter()
+        .map(|f| expand_non_virtual_fn(f, &meta.binary_name, &no_fields, &no_fields))
+        .collect();
+    let binary_name = &meta.binary_name;
+
+    quote! {
+        #[derive(Clone, Default)]
+        pub struct #struct_ident #impl_g #where_c {
+            __ref: Object,
+            __phantom: ( #( ::std::marker::PhantomData<fn() -> #type_params>, )* ),
+        }
+
+        impl #impl_g From<Object> for #struct_ident #ty_g #where_c {
+            fn from(obj: Object) -> Self {
+                Self { __ref: obj, __phantom: ::std::default::Default::default() }
+            }
+        }
+
+        impl #impl_g From<#struct_ident #ty_g> for Object #where_c {
+            fn from(iface: #struct_ident #ty_g) -> Object { iface.__ref }
+        }
+
+        impl #impl_g ::std::ops::Deref for #struct_ident #ty_g #where_c {
+            type Target = Object;
+            fn deref(&self) -> &Object { &self.__ref }
+        }
+
+        impl #impl_g #struct_ident #ty_g #where_c {
+            pub const BINARY_NAME: &'static str = #binary_name;
+
+            #(#static_members)*
+        }
+    }
+}
+
 fn expand_inner(input: ClassInput) -> TokenStream2 {
     let ClassInput { attrs, struct_ident, generics, fields, fns } = input;
 
@@ -54,11 +148,6 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         Ok(m) => m,
         Err(e) => return e.to_compile_error(),
     };
-
-    // ── 接口：Arch-1 语义 ────────────────────────────────────────────────────
-    if meta.is_interface {
-        return quote! { pub type #struct_ident = Object; };
-    }
 
     // ── 泛型参数补齐 Clone + Default + 'static ──────────────────────────────
     let mut gen = generics.clone();
@@ -98,6 +187,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
     let (impl_g, ty_g, where_c) = gen.split_for_impl();
+
+    // ── 接口：同名载体类型（接口引用 + 静态成员）────────────────────────────
+    if meta.is_interface {
+        return expand_interface(&meta, &struct_ident, &gen, &fns);
+    }
 
     let self_name = struct_ident.to_string();
     let inner_ident = format_ident!("{}__inner", struct_ident);
@@ -916,36 +1010,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
     // Constructor / NonVirtual 方法（保持原 body，走 Rewriter）
     for f in &non_virtual {
-        let keep_attrs = strip_meta_attrs(&f.attrs);
-        let vis = &f.vis;
-        let sig = &f.sig;
-        match &f.block {
-            Some(block) => {
-                let mut b = block.clone();
-                rewrite_block(&mut b, &basic_names, &ref_names);
-                // 构造器 / 非虚方法同样运行在 wrapper 上下文（this: Wrapper 或 &Wrapper）：
-                // super.method() 的 __base(this, ...) 需经 vtable 取得 &__BT: AncestorVTable
-                rewrite_base_calls_for_wrapper(&mut b);
-                wrapper_methods.push(quote! {
-                    #(#keep_attrs)*
-                    #vis #sig #b
-                });
-            }
-            None => {
-                let mname = sig.ident.to_string();
-                let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
-                let bin = &meta.binary_name;
-                let msg = if desc.is_empty() {
-                    format!("stub: {}.{}", bin, mname)
-                } else {
-                    format!("stub: {}.{}:{}", bin, mname, desc)
-                };
-                wrapper_methods.push(quote! {
-                    #(#keep_attrs)*
-                    #vis #sig { panic!(#msg) }
-                });
-            }
-        }
+        wrapper_methods.push(expand_non_virtual_fn(f, &meta.binary_name, &basic_names, &ref_names));
     }
 
     // __new_with_super（有父类时生成）
