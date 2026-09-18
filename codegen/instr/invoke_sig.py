@@ -145,6 +145,32 @@ def _downcast_target_valid(expected: str, sim: 'StackSim', registry: dict | None
     return all(_n in _ok for _n in _names)
 
 
+def _is_generated_concrete_class(actual: str, sim: 'StackSim', registry: dict | None) -> bool:
+    """actual 是否为 registry 中由字节码生成的具体（非接口）类的 Rust 类型。"""
+    if not registry or not actual:
+        return False
+    _head = actual.split('<', 1)[0].rsplit('::', 1)[-1].strip()
+    if not _head or _head in (sim.class_type_params or ()):
+        return False
+    return _head in _generated_concrete_shorts(registry)
+
+
+_generated_shorts_cache: dict[int, frozenset[str]] = {}
+
+
+def _generated_concrete_shorts(registry: dict) -> frozenset[str]:
+    _key = id(registry)
+    _cached = _generated_shorts_cache.get(_key)
+    if _cached is None:
+        _cached = frozenset(
+            _bin.rsplit('/', 1)[-1].replace('$', '_')
+            for _bin, _ci in registry.items()
+            if not getattr(_ci, 'is_interface', False)
+        )
+        _generated_shorts_cache[_key] = _cached
+    return _cached
+
+
 def _lookup_method_sig_ret(
     cls: str | None,
     mname: str,
@@ -329,7 +355,13 @@ def _coerce_arg(
         if e == 'this':
             # 构造器（fn new）里没有 self 关键字，统一用局部变量 this
             # （实例方法里 let this = self;，两者均可见）
+            if _is_generated_concrete_class(actual, sim, registry):
+                return "Object::from(Clone::clone(this))"
             return f"Object::from_any(Clone::clone(this))"
+        if _is_generated_concrete_class(actual, sim, registry):
+            # 已知具体类的值：直接以自身 vtable 进入 Object（From<T: ObjectVTable>），
+            # 经 Object 发起的 toString/hashCode/equals 才能分派到该类的字节码实现。
+            return f"Object::from(Clone::clone(&{e}))"
         return _coerce_to_object(e, actual)
     if expected in ('bool', 'i8', 'i16', 'u16') and actual != expected:
         return _coerce_value(e, e_ty_node, expected)

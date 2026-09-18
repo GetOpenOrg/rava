@@ -65,8 +65,8 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
         _gsig = _get_field_generic_signature(_g_owner, fname, registry)
         if not (_gsig and _g_ci is not None):
             return ftype
-        _decl_tparams = (_parse_class_type_params(_g_ci.generic_signature)
-                         if _g_ci.generic_signature else [])
+        # 内部类自身无 generic_signature 时，类型参数继承自外部类（与 struct 定义同规则）
+        _decl_tparams = list(_effective_class_type_params(_g_ci, registry) or [])
         _parsed = _parse_field_type(_gsig, _decl_tparams, registry)
     if _parsed and _parsed != 'Object' and _parsed != ftype:
         # 校验：解析结果中的类型名须在调用方可见
@@ -285,6 +285,10 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             cls = _static_field_decl_class(cls, comment, registry)
             raw_cls = cls.rsplit('/', 1)[-1].replace('$', '_')
             rust_fname = _safe_ident(field_name)
+            # 字段名与方法名冲突时定义侧加 _field 后缀（getstatic 同规则），setter 名须一致
+            _put_ci = registry.get(cls) if registry else None
+            if _put_ci is not None and any(m.name == field_name for m in _put_ci.methods):
+                rust_fname = rust_fname + '_field'
             val_str = render_expr(val_expr)
             # 基本类型静态字段与 putfield 同规则收窄：JVM 操作数栈上 boolean/byte/char/short
             # 都是 int，写入字段时按字段描述符还原（bool ← `x != 0`，i8/i16/u16 ← as）

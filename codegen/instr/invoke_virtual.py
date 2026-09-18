@@ -142,21 +142,6 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         sim.push(Var(v), RsNamed('Object'))
         return
 
-    # T38：PrintStream.println 有参版本 → 统一生成 println_v(x)（Display 派发）
-    # 注：无参 println() 保持原名；println_v<T: Display> 处理所有有参版本
-    # 浮点参数先经 java_fmt_*（Java 语义：3.0 不打成 3；NaN/Infinity 拼写一致）
-    if mname == 'println' and cls and cls.endswith('PrintStream') and len(args) == 1:
-        if params == ['D']:
-            sim.emit(RawStmt(f"{obj_e}.println_v(java_fmt_f64({args[0]}))?;"))
-        elif params == ['F']:
-            sim.emit(RawStmt(f"{obj_e}.println_v(java_fmt_f32({args[0]}))?;"))
-        else:
-            # 基本类型传给 println(Object) 时 .into() 产生类型推断歧义：
-            # println_v<T: Display> 直接接受 i32/bool 等，无需装箱
-            arg = args[0].removesuffix('.into()')
-            sim.emit(RawStmt(f"{obj_e}.println_v({arg})?;"))
-        return
-
     # 若接收方 Rust 类型是 java_runtime 手写类，不做 mangle
     obj_base = obj_ty.split('<')[0].strip()  # 去泛型后缀（ArrayList<T> → ArrayList）
     if obj_base in _JAVA_RUNTIME_SHORT_NAMES:
@@ -233,6 +218,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             v = sim.fresh('_vdispatch')
             branches = []
             for sub_bin in all_types:
+                _sub_ci_abs = registry.get(sub_bin)
+                if _sub_ci_abs is not None and _sub_ci_abs.is_abstract and not _sub_ci_abs.is_interface:
+                    # 抽象类不可能是对象的运行期类型：downcast 分支恒不命中，不生成
+                    continue
                 sub_rust = jvm_to_rust(f'L{sub_bin};', registry)
                 if sub_rust == 'Object':
                     # 目标类是接口（jvm_to_rust 对接口返回 Object）：

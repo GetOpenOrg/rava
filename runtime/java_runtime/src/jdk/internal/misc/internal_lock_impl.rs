@@ -14,6 +14,13 @@ thread_local! {
 }
 
 impl InternalLock {
+    /// 对应 -Djdk.io.useMonitors=true 的取值：返回 null，
+    /// 调用方（PrintStream/Writer 等）改走 synchronized(this) 监视器路径。
+    #[jvm_boundary]
+    pub fn newLockOrNull() -> Result<InternalLock> {
+        Ok(InternalLock::default())
+    }
+
     #[jvm_boundary]
     pub fn lock(&self) -> Result<()> {
         let guard = unsafe {

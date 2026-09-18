@@ -603,7 +603,12 @@ def gen_method_body(
                             # → then 侧用 Default::default()，合并类型取 else 侧
                             tv = 'Default::default()'
                             ty = ety; ty_str = ety_str
-                        # else: both are non-primitive structs, leave as-is and hope types match
+                        else:
+                            # 两臂是无公共父类的引用类型（含类型变量）：按 JVM 校验器的
+                            # 类型合并规则，合并点类型为根类 → 两臂各自装箱
+                            tv = f"Object::from_any(Clone::clone(&{tv}))"
+                            ev = f"Object::from_any(Clone::clone(&{ev}))"
+                            ty = _str_to_rs_type('Object'); ty_str = 'Object'
                     # fall_cond 静态 false/true：跳过死代码臂
                     if fall_cond == 'false':
                         cur_sim.push(RawExpr(f"({ev})"), ety)

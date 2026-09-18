@@ -72,7 +72,8 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
 
     # 3. 方法级调用链 BFS 发现 JDK 类
     print(f"[3/4] 扫描 JDK 类引用...", end=' ', flush=True)
-    jdk_class_infos, visited_methods, field_stubs = _discover_jdk_classes_method_level(class_infos)
+    jdk_class_infos, visited_methods, field_stubs = _discover_jdk_classes_method_level(
+        class_infos, runtime_src=os.path.join(out_dir, 'java_runtime', 'src'))
     field_stub_count = sum(1 for ci in jdk_class_infos
                            if any(ci.name == cls for cls in field_stubs))
     bfs_count = len(jdk_class_infos) - field_stub_count
@@ -124,13 +125,15 @@ def _desc_class_refs(desc: str) -> list[str]:
     return re.findall(r'L([^;]+);', desc or '')
 
 
-def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]:
+def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str], list[tuple[str, str]]]:
     """从指令注释中提取方法引用和字段所属类引用（仅 JDK 类）。
 
     Returns:
-        (method_refs, field_classes):
+        (method_refs, field_classes, member_refs):
           method_refs   - (cls, method, descriptor) 三元组，用于 BFS 展开
           field_classes - 通过 getstatic/Field 指令发现的类名，只生成存根不展开方法体
+          member_refs   - (cls, member) 被触达的成员（方法含内部边界类的方法、字段），
+                          用于查询手写实现声明的 Java 回调（见 native_upcalls.py）
     """
 
     def _add_type_refs(desc: str) -> None:
@@ -149,6 +152,9 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
 
     method_refs = []
     field_classes = []
+    member_refs = []
+    boundary_refs = []   # 以内部边界类为常量池类的方法引用（边界类型上的虚调用目标）
+    new_classes = []     # new 指令 / 构造器引用实例化的类
     for instr in (instrs or []):
         c = instr.comment
         if not c:
@@ -162,9 +168,12 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                 cls = rest[:dot]
                 meth = rest[dot+1:colon]
                 desc = rest[colon+1:]
+                if '[' not in cls:
+                    member_refs.append((cls, meth))
                 # stub-only 优先检查（java/security/ 等是 java/ 的子前缀，必须先匹配）
                 if cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
                     field_classes.append(cls)
+                    boundary_refs.append((cls, meth, desc))
                 elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
                     method_refs.append((cls, meth, desc))
                 _add_type_refs(desc)
@@ -181,10 +190,14 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                     cls = rest[:dot]
                     meth = rest[dot+1:colon]
                     desc = rest[colon+1:]
+                    if '[' not in cls:
+                        member_refs.append((cls, meth))
                     if cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
                         field_classes.append(cls)
                     elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
                         method_refs.append((cls, meth, desc))
+                        if meth == '<init>':
+                            new_classes.append(cls)   # 构造器引用 X::new
                     _add_type_refs(desc)
         elif c.startswith('Field '):
             # "Field java/nio/charset/CodingErrorAction.REPLACE:Ljava/nio/charset/CodingErrorAction;"
@@ -197,22 +210,42 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                     field_classes.append(cls)
                 colon = rest.find(':', dot)
                 if colon > dot:
+                    if '[' not in cls:
+                        member_refs.append((cls, rest[dot+1:colon]))
                     _add_type_refs(rest[colon+1:])
         elif c.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in c:
             # stub-only 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
             cls = c.split()[0]
             field_classes.append(cls)
         elif c.startswith(_JDK_PREFIXES) and '[' not in c:
-            # new / checkcast / anewarray: comment = class binary name
+            # new / checkcast / instanceof / anewarray: comment = class binary name
             cls = c.split()[0]
-            method_refs.append((cls, '<init>', '()V'))
-    return method_refs, field_classes
+            if instr.opcode == 'new':
+                # 只有 new 产生该类的运行期实例（RTA 的实例化集合）；
+                # 构造器本身由紧随其后的 invokespecial <init> 方法引用入队
+                new_classes.append(cls)
+            field_classes.append(cls)
+    return method_refs, field_classes, member_refs, boundary_refs, new_classes
 
 
-def _discover_jdk_classes_method_level(class_infos: list) -> list:
-    """方法级调用链 BFS：只追踪实际被调用的方法，不展开未调用方法的依赖类。"""
+def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | None = None) -> list:
+    """方法级调用链 BFS：只追踪实际被调用的方法，不展开未调用方法的依赖类。
+
+    调用边的三个来源：
+      1. 字节码方法引用，按 JVMS §5.4.3.3 解析到声明者（父类链 → 父接口 default）
+      2. 虚调用的运行期目标（RTA）：已实例化类（其 <init> 在调用链上）对虚调用目标的覆盖版本
+      3. 手写 native / 内部边界方法声明的 Java 回调（runtime_src 下共置 `_impl.rs` 的 upcalls）
+    """
     from .classfile import parse_class_bytes
     from .jdk_resolver import JdkResolver
+    from .native_upcalls import NativeUpcalls
+
+    upcalls = NativeUpcalls(runtime_src) if runtime_src else None
+    # 以根类为常量池类的虚方法引用 (name, descriptor)：根类手写、不入 visited_methods
+    root_virtual_targets: set[tuple[str, str]] = set()
+    # 以内部边界类（接口/抽象类）为常量池类的方法引用：边界类自身手写、不入 visited_methods，
+    # 但其公开 API 包内的已实例化子类型（如匿名访问器类）的覆盖版本在调用链上
+    boundary_virtual_targets: set[tuple[str, str, str]] = set()
 
     visited_methods: set[tuple[str, str, str]] = set()
     queue: deque[tuple[str, str, str]] = deque()
@@ -234,18 +267,50 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                          or tcls.startswith(_JDK_STUB_ONLY_PREFIXES))):
                 field_discover_classes.add(tcls)
 
+    seen_members: set[tuple[str, str]] = set()
+    instantiated_classes: set[str] = set()   # RTA：调用链上被 new 出来的类
+
+    def _enqueue_method(key: tuple[str, str, str]) -> None:
+        if key[0] in _JAVA_RUNTIME_CLASSES:
+            return
+        if key not in visited_methods:
+            visited_methods.add(key)
+            queue.append(key)
+
+    def _enqueue_upcalls(cls: str, member: str) -> None:
+        """被触达成员的手写实现声明的 Java 回调目标入队（native → Java 的调用边）。"""
+        if upcalls is None or (cls, member) in seen_members:
+            return
+        seen_members.add((cls, member))
+        for tcls, tmeth, tdesc in upcalls.lookup(cls, member):
+            # 回调目标自身也是被触达的成员：其手写实现可继续声明回调
+            _enqueue_upcalls(tcls, tmeth)
+            if tcls == _OBJECT_CLASS:
+                if tmeth not in ('<init>', '<clinit>'):
+                    root_virtual_targets.add((tmeth, tdesc))
+            elif tcls.startswith(_JDK_STUB_ONLY_PREFIXES):
+                if tcls not in _JAVA_RUNTIME_CLASSES:
+                    field_discover_classes.add(tcls)
+            elif tcls.startswith(_JDK_PREFIXES):
+                _enqueue_method((tcls, tmeth, tdesc))
+                if tmeth == '<init>':
+                    instantiated_classes.add(tcls)   # 手写实现构造的 Java 对象
+            _enqueue_desc_types(tdesc)
+
     def enqueue_refs(instrs):
-        method_refs, f_classes = _collect_method_refs(instrs)
+        method_refs, f_classes, member_refs, boundary_refs, new_classes = _collect_method_refs(instrs)
+        boundary_virtual_targets.update(boundary_refs)
+        instantiated_classes.update(new_classes)
         for cls in f_classes:
             if cls not in _JAVA_RUNTIME_CLASSES:
                 field_discover_classes.add(cls)
         for key in method_refs:
-            cls = key[0]
-            if cls in _JAVA_RUNTIME_CLASSES:
-                continue
-            if key not in visited_methods:
-                visited_methods.add(key)
-                queue.append(key)
+            if key[0] == _OBJECT_CLASS and key[1] not in ('<init>', '<clinit>'):
+                # 根类虚方法（toString/hashCode/equals…）：实际目标是已实例化类的覆盖版本
+                root_virtual_targets.add((key[1], key[2]))
+            _enqueue_method(key)
+        for cls, member in member_refs:
+            _enqueue_upcalls(cls, member)
 
     # 初始种子：用户类所有方法的引用
     for ci in class_infos:
@@ -299,6 +364,11 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
         # 本类及父类链任一处声明了 (meth, desc) → 由类层次自身承载，不属于 default 方法解析
         for _anc in _chain[1:]:
             if any(m.name == meth and m.descriptor == desc for m in _anc.methods):
+                # JVMS §5.4.3.3 步骤 2：实际执行的是最近祖先类声明的方法 → 该方法入队
+                if _anc.name.startswith(_JDK_STUB_ONLY_PREFIXES):
+                    field_discover_classes.add(_anc.name)
+                else:
+                    _enqueue_method((_anc.name, meth, desc))
                 return
         _owner = None
         if _owner is None:
@@ -353,31 +423,12 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
             except Exception:
                 pass
 
-        while queue:
-            cls, meth, desc = queue.popleft()
-
-            # 解析类（首次遇到时）
-            if cls not in class_cache:
-                data = resolver.resolve(cls)
-                if data is None:
-                    class_cache[cls] = None
-                    continue
-                try:
-                    ci = parse_class_bytes(data, cls)
-                    class_cache[cls] = ci
-                    if cls not in jdk_infos:
-                        jdk_infos[cls] = ci
-                except Exception as e:
-                    class_cache[cls] = None
-                    continue
-
-            ci = class_cache.get(cls)
+        def _process(cls: str, meth: str, desc: str) -> None:
+            ci = _load_class(cls)
             if ci is None:
-                continue
-
+                return
             if cls not in jdk_infos:
                 jdk_infos[cls] = ci
-
             # 追踪该方法的指令引用（精确匹配名字+描述符，避免重载方法误展开）
             _declared = False
             for m in ci.methods:
@@ -391,53 +442,71 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
             if not _declared:
                 _enqueue_declaring_method(ci, meth, desc)
 
-        # 接口方法 → 具体实现类传播（interface dispatch 解析）
-        # 场景：user 代码调 invokeinterface java/util/List.add，但 runtime 实际调用 ArrayList.add
-        # BFS 只跟踪接口侧，漏掉具体类的方法实现，需要在 BFS 结束后补齐
-        _iface_methods = [
-            (iface, meth, desc)
-            for iface, meth, desc in list(visited_methods)
-            if (class_cache.get(iface) is not None
-                and getattr(class_cache[iface], 'is_interface', False)
-                and meth not in ('<init>', '<clinit>'))
-        ]
-        for iface, meth, desc in _iface_methods:
-            for concrete_name, concrete_ci in list(jdk_infos.items()):
-                if concrete_ci is None or getattr(concrete_ci, 'is_interface', False):
+        _supertype_cache: dict[str, frozenset] = {}
+
+        def _supertypes(name: str) -> frozenset:
+            """name 的全部超类型（含自身、父类链、传递父接口）。"""
+            if name in _supertype_cache:
+                return _supertype_cache[name]
+            _supertype_cache[name] = frozenset({name})   # 环保护
+            acc = {name}
+            _ci = _load_class(name) if name not in _JAVA_RUNTIME_CLASSES else None
+            if _ci is not None:
+                for _up in ([_ci.super_class] if _ci.super_class else []) + list(_ci.interfaces or []):
+                    acc |= _supertypes(_up)
+            _supertype_cache[name] = frozenset(acc)
+            return _supertype_cache[name]
+
+        _ACC_PRIVATE, _ACC_FINAL = 0x0002, 0x0010
+
+        def _propagate_virtual_targets() -> None:
+            """虚调用目标 → 运行期实际接收者类的覆盖版本。
+
+            - 接口方法：闭包内直接实现该接口的具体类
+            - RTA：已实例化类 X（(X, <init>, *) 在调用链上）是虚调用目标声明类的子类型时，
+              (X, m, d) 入队；X 未声明则由 _process 按方法解析规则落到最近声明者
+            """
+            instantiated = sorted(
+                x for x in instantiated_classes
+                if class_cache.get(x) is not None
+                and not class_cache[x].is_interface and not class_cache[x].is_abstract
+            )
+            for cls, meth, desc in list(visited_methods):
+                if meth in ('<init>', '<clinit>'):
                     continue
-                if iface in (concrete_ci.interfaces or []):
-                    key = (concrete_name, meth, desc)
-                    if key not in visited_methods:
-                        visited_methods.add(key)
-                        queue.append(key)
-        # 对传播出的新方法再跑一轮 BFS
-        while queue:
-            cls, meth, desc = queue.popleft()
-            if cls not in class_cache:
-                data = resolver.resolve(cls)
-                if data is None:
-                    class_cache[cls] = None
+                ci = class_cache.get(cls)
+                if ci is None:
                     continue
-                try:
-                    ci = parse_class_bytes(data, cls)
-                    class_cache[cls] = ci
-                    if cls not in jdk_infos:
-                        jdk_infos[cls] = ci
-                except Exception:
-                    class_cache[cls] = None
+                decl = next((m for m in ci.methods
+                             if m.name == meth and m.descriptor == desc), None)
+                if decl is None or decl.is_static or (decl.access_flags & (_ACC_PRIVATE | _ACC_FINAL)):
                     continue
-            ci = class_cache.get(cls)
-            if ci is None:
-                continue
-            if cls not in jdk_infos:
-                jdk_infos[cls] = ci
-            _declared = False
-            for m in ci.methods:
-                if m.name == meth and m.descriptor == desc:
-                    _declared = True
-                    enqueue_refs(m.instrs or [])
-            if not _declared:
-                _enqueue_declaring_method(ci, meth, desc)
+                if ci.is_interface:
+                    for concrete_name, concrete_ci in list(jdk_infos.items()):
+                        if concrete_ci is None or concrete_ci.is_interface:
+                            continue
+                        if cls in (concrete_ci.interfaces or []):
+                            _enqueue_method((concrete_name, meth, desc))
+                for x in instantiated:
+                    if x != cls and cls in _supertypes(x):
+                        _enqueue_method((x, meth, desc))
+            for meth, desc in sorted(root_virtual_targets):
+                for x in instantiated:
+                    _enqueue_method((x, meth, desc))
+            for cls, meth, desc in sorted(boundary_virtual_targets):
+                if meth in ('<init>', '<clinit>'):
+                    continue
+                for x in instantiated:
+                    if cls in _supertypes(x):
+                        _enqueue_method((x, meth, desc))
+
+        # 不动点：排空队列 → 传播虚调用目标 → 有新方法则继续
+        while True:
+            while queue:
+                _process(*queue.popleft())
+            _propagate_virtual_targets()
+            if not queue:
+                break
 
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos

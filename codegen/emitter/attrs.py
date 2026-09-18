@@ -192,10 +192,34 @@ def _compute_all_supertypes(ci: ClassInfo, registry: dict | None) -> list[str]:
     return sorted(supertypes)
 
 
+_TO_STRING_SIG = ('toString', '()Ljava/lang/String;')
+
+
+def _to_string_vtable_owner(ci: ClassInfo, registry: 'dict | None',
+                            handwritten_methods: 'dict | None') -> 'str | None':
+    """本类视角下 toString() 所属 vtable 的 Rust 类名；链上无（翻译的）声明则 None。"""
+    from .vtable_util import _find_virtual_in
+    cur = ci
+    seen: set[str] = set()
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        decl = next((m for m in (cur.methods or [])
+                     if (m.name, m.descriptor) == _TO_STRING_SIG and not m.is_static), None)
+        if decl is not None:
+            _hand = ((handwritten_methods or {}).get(cur.name) or {}).get('methods', ())
+            if safe_ident(decl.name) in _hand:
+                return None
+            return _find_virtual_in(decl, cur, registry, handwritten_methods) or None
+        sc = cur.super_class
+        cur = registry.get(sc) if (registry and sc and sc != _OBJECT_CLASS) else None
+    return None
+
+
 def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
                            superclass_rust: str = "",
                            superclass_fields: list[tuple[str, str]] | None = None,
-                           impl_methods: 'set[str] | None' = None) -> list[str]:
+                           impl_methods: 'set[str] | None' = None,
+                           handwritten_methods: 'dict | None' = None) -> list[str]:
     """生成 `java_class! { ... }` 块内的类级别属性行（方案 §4）。
 
     impl_methods：共置 `<classname>_impl.rs` 手写 impl 块提供的方法名。它们是 wrapper 上的
@@ -212,7 +236,7 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         纯记录用途，宏只读其中少数几个键；
       - 宏展开输入：superclass（Rust 类型文本）/ superclass_fields（codegen 展平）/
         all_supertypes（instanceof 静态展开）/ is_interface /
-        has_to_string_method / has_hash_code_method。
+        to_string_vtable / has_hash_code_method。
 
     superclass_fields 的键值对由调用方（class_writer）从 registry 展平整条继承链得到，
     顺序必须是父类字段在前（JVM 内存布局，方案 §6）。
@@ -276,9 +300,11 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         supertypes = _compute_all_supertypes(ci, registry)
         if supertypes:
             lines.append(f'#[all_supertypes    = "{";".join(supertypes)}"]')
-        _method_sigs = {(m.name, m.descriptor) for m in (ci.methods or [])}
-        if ('toString', '()Ljava/lang/String;') in _method_sigs:
-            lines.append('#[has_to_string_method = true]')
+        # 根类 toString 的运行期目标：本类或最近祖先声明的 toString()，经其所属 vtable 分派。
+        # 宏据此把 ObjectVTable 的字符串化入口桥接到翻译出的 toString（子类覆盖自动生效）。
+        _ts_owner = _to_string_vtable_owner(ci, registry, handwritten_methods)
+        if _ts_owner:
+            lines.append(f'#[to_string_vtable  = "{_ts_owner}"]')
         # 仅当 hashCode 是当前类的 VirtualDefine 时才生成桥接属性。
         # VirtualOverride（virtual_in 为祖先类名）时，宏内 UFCS 调用
         # `ClassName__VTable::hashCode(self)` 会触发 E0782，因为该方法

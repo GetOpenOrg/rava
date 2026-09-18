@@ -125,7 +125,8 @@ pub(crate) struct ClassMeta {
     pub ancestor_fields_layout: HashMap<String, Vec<String>>,
     pub all_supertypes: Vec<String>,
     pub is_interface: bool,
-    pub has_to_string_method: bool,
+    /// toString() 所属 vtable 的 Rust 类名（本类或祖先）；None = 继承链上没有翻译出的 toString。
+    pub to_string_vtable: Option<String>,
     pub has_hash_code_method: bool,
     /// 共置 `_impl.rs` 手写 impl 块提供的 wrapper inherent 方法名（不在宏块内、不进 vtable）。
     pub impl_methods: Vec<String>,
@@ -172,8 +173,8 @@ impl ClassMeta {
                     s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
             } else if path.is_ident("is_interface") {
                 m.is_interface = lit_bool(attr)?;
-            } else if path.is_ident("has_to_string_method") {
-                m.has_to_string_method = lit_bool(attr)?;
+            } else if path.is_ident("to_string_vtable") {
+                m.to_string_vtable = Some(lit_str(attr)?);
             } else if path.is_ident("has_hash_code_method") {
                 m.has_hash_code_method = lit_bool(attr)?;
             } else if path.is_ident("impl_methods") {
