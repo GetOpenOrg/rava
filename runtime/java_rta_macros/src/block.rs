@@ -1095,11 +1095,14 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let mut inner_field_tokens: Vec<TokenStream2> = Vec::new();
 
     // 继承字段（平铺，不再有 _super）
+    // 用 Rc<Cell<T>> / Rc<RefCell<...>> 而非裸 Cell/RefCell，保证 NeedsWrapper clone
+    // 时共享同一个 Cell，mutations 对原始 inner struct 可见（否则 clone 是值拷贝，
+    // __set_xxx 修改的是孤立副本，调用方看不到变化）。
     for (name, ty) in &meta.superclass_fields {
         let cell_ty = if is_basic(ty) {
-            quote! { ::std::cell::Cell<#ty> }
+            quote! { ::std::rc::Rc<::std::cell::Cell<#ty>> }
         } else {
-            quote! { ::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>> }
+            quote! { ::std::rc::Rc<::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>>> }
         };
         inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
     }
@@ -1107,9 +1110,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // 自有字段
     for (name, ty) in &fields {
         let cell_ty = if is_basic(ty) {
-            quote! { ::std::cell::Cell<#ty> }
+            quote! { ::std::rc::Rc<::std::cell::Cell<#ty>> }
         } else {
-            quote! { ::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>> }
+            quote! { ::std::rc::Rc<::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>>> }
         };
         inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
     }
@@ -1746,13 +1749,13 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             let get = format_ident!("__get_{}", name);
             if is_basic(ty) {
                 field_inits.push(quote! {
-                    #name: ::std::cell::Cell::new(parent.#get()),
+                    #name: ::std::rc::Rc::new(::std::cell::Cell::new(parent.#get())),
                 });
             } else {
                 field_inits.push(quote! {
-                    #name: ::std::cell::RefCell::new(
+                    #name: ::std::rc::Rc::new(::std::cell::RefCell::new(
                         ::std::option::Option::Some(::std::boxed::Box::new(parent.#get()))
-                    ),
+                    )),
                 });
             }
         }
