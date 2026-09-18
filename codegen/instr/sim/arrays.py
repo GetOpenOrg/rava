@@ -25,7 +25,9 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         count_expr, _ = sim.pop()
         # 用完整路径（comment）而非 short_cls，避免 'LString;' 等非全限定名映射到 Object
         if comment and comment != _OBJECT_CLASS:
-            elem_t = jvm_to_rust(f'L{comment};', registry)
+            _elem_raw = jvm_to_rust(f'L{comment};', registry)
+            # 用 _ 替换类型参数中的 Object，让 Rust 从赋值上下文推断泛型（避免 E0308）
+            elem_t = _re.sub(r'\bObject\b', '_', _elem_raw) if '<' in _elem_raw else _elem_raw
         else:
             elem_t = 'Object'
         v = sim.fresh('_arr')

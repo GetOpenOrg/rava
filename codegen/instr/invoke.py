@@ -129,8 +129,8 @@ def _resolve_ctor_turbofish_args(
         if (full_cls == caller_class or full_cls.startswith(caller_class + '$')) \
                 and set(cls_tparams) == set(sim.class_type_params):
             return list(cls_tparams)
-    # 规则 3：兜底擦除
-    return ['Object'] * len(cls_tparams)
+    # 规则 3：兜底用 _ 让 Rust 从上下文推断（比 Object 更安全，避免 E0308）
+    return ['_'] * len(cls_tparams)
 
 
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):

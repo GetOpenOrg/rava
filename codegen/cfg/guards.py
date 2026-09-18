@@ -50,7 +50,8 @@ def find_if_guards(instrs: list[Instr], loops: list[LoopInfo] | None = None) -> 
         if i in excluded:
             continue
         op = ins.opcode
-        if op not in _BRANCH_OPS or not ins.operand:
+        # goto/goto_w 是无条件跳转，不能作为 if-guard 的条件
+        if op not in _BRANCH_OPS or op in ('goto', 'goto_w') or not ins.operand:
             continue
 
         target_offset = int(ins.operand)
@@ -67,7 +68,12 @@ def find_if_guards(instrs: list[Instr], loops: list[LoopInfo] | None = None) -> 
 
         body_instrs = instrs[body_start_idx:target_idx]
 
-        body_has_branches = any(bi.opcode in _BRANCH_OPS for bi in body_instrs)
+        # 仅条件分支（排除无条件 goto/goto_w）才算"非线性 body"
+        # goto 是 break/continue 的载体，不阻止 if-guard 识别
+        body_has_branches = any(
+            bi.opcode in _BRANCH_OPS and bi.opcode not in ('goto', 'goto_w')
+            for bi in body_instrs
+        )
 
         # body 末尾是 exit 指令（*return / athrow）时，即使 body 内含条件分支，
         # 所有路径都从该 exit 退出，guard 仍然成立。

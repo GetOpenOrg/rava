@@ -77,7 +77,8 @@ def find_if_else(
         if i in excluded or i in already:
             continue
         op = ins.opcode
-        if op not in _BRANCH_OPS or not ins.operand:
+        # goto/goto_w 是无条件跳转，不能作为 if-else 的条件指令
+        if op not in _BRANCH_OPS or op in ('goto', 'goto_w') or not ins.operand:
             continue
 
         target_offset = int(ins.operand)
@@ -101,6 +102,11 @@ def find_if_else(
                 if merge_offset > target_offset:
                     merge_idx = off2idx.get(merge_offset)
                     then_end = target_idx - 1   # 不含末尾的 goto（exclusive）
+                    # 特殊情况：then-body 只含该 goto 本身（then_end == body_start 时体为空）
+                    # 例如 "if (j == 5) break;" 的 then-body 只有 goto loop_end
+                    # 此时需要将 goto 包含在 then-body 中，否则 break 丢失
+                    if then_end == body_start:
+                        then_end = target_idx
                     if merge_idx is not None and then_end >= body_start:
                         # then body（可以为空 goto-only）→ 合法 if-else
                         result[i] = IfElseInfo(
