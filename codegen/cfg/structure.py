@@ -8,6 +8,14 @@
       * 否则父节点为 idom(Y)：前向入边 ≥ 2 → in follower（merge 节点）；否则在分支点内联
   - follower 用带标签 block 包裹其前驱所在的子树，到它的跳转即 `break 'label`
   - 回边即 `continue 'header`
+  - try 区域（kind == 'try' 的合成节点 T，见 method/blocks.py）与循环同构：
+      * T 的后继 = try 体入口 + 各处理器入口，分别内联为 `Try` 的 try 体与 catch 体
+      * 节点 Y 离开受保护区间（idom(Y) 受 T 的组保护而 Y 不受），或 Y 是 try 体与处理器
+        之后的汇合点（idom(Y) == T）：Y 是 T 的 try follower，放在 `Try` 之后
+        （javac 内联的 finally 副本、try 语句之后的代码因此在词法上位于 try 之外，不受其保护）
+      * 循环与 try 同时满足时取更外层者
+    放置完成后逐节点校验「词法所处的 try 组集合 == 异常表给出的 try 组集合」，
+    不一致（区间与控制流不成嵌套结构）→ CfgError。
 任何跳转都被翻译为 内联 / break / continue 三者之一，不存在「匹配不上」的形态。
 
 结构树随后经过一组保语义的可读性规整（simplify）。
@@ -18,7 +26,7 @@ import sys
 from dataclasses import dataclass, field
 
 from .conditions import Cond, negate
-from .graph import FlowAnalysis, CfgError
+from .graph import FlowAnalysis, CfgError, dominates
 
 sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
 
@@ -70,6 +78,13 @@ class Switch:
 
 
 @dataclass
+class Try:
+    body: list
+    catches: list              # [(catch 描述, body)]，描述 = 节点 catches 的元素
+    origin: int
+
+
+@dataclass
 class Break:
     label: int
 
@@ -92,23 +107,59 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
     loops_outer_first = sorted(flow.loops.items(), key=lambda kv: -len(kv[1]))
     in_followers: dict[int, list[int]] = {}
     out_followers: dict[int, list[int]] = {}
+    try_followers: dict[int, list[int]] = {}
     follower_set: set[int] = set()
+
+    def ctx_of(x: int) -> frozenset:
+        return getattr(nodes[x], 'ctx', frozenset())
+
+    try_nodes = [x for x in flow.rpo if nodes[x].kind == 'try']   # RPO 序 = 外层在前
+    try_slots = {x: [nodes[x].target] + list(nodes[x].handlers) for x in try_nodes}
 
     for y in flow.rpo:
         if y == flow.entry:
             continue
         d = flow.idom[y]
+        if nodes[d].kind == 'try' and y in try_slots[d]:
+            # try 体入口 / 处理器入口：恒内联为 Try 的 try 体 / catch 体
+            lexical = ctx_of(d) | {nodes[d].group} if y == nodes[d].target else ctx_of(d)
+            if lexical != ctx_of(y):
+                raise CfgError(f"块 pc={nodes[y].start_pc} 的 try 区域与控制流不成嵌套结构")
+            continue
         parent_loop = None
         for h, body in loops_outer_first:
             if d in body and y not in body:
                 parent_loop = h
                 break
-        if parent_loop is not None:
+        parent_try = None
+        for t in try_nodes:
+            if y in try_slots[t]:
+                continue
+            g = nodes[t].group
+            if (d == t or g in ctx_of(d)) and g not in ctx_of(y) and dominates(flow.idom, t, d):
+                parent_try = t
+                break
+        if parent_try is not None and parent_loop is not None \
+                and flow.rpo_index[parent_loop] <= flow.rpo_index[parent_try]:
+            parent_try = None          # 循环更外层（或同一节点：loop 包住 try）
+        if parent_try is not None:
+            try_followers.setdefault(parent_try, []).append(y)
+            follower_set.add(y)
+            lexical = ctx_of(parent_try)
+        elif parent_loop is not None:
             out_followers.setdefault(parent_loop, []).append(y)
             follower_set.add(y)
-        elif flow.forward_in_degree(y) >= 2:
-            in_followers.setdefault(d, []).append(y)
-            follower_set.add(y)
+            lexical = ctx_of(parent_loop)
+        else:
+            if flow.forward_in_degree(y) >= 2:
+                in_followers.setdefault(d, []).append(y)
+                follower_set.add(y)
+            lexical = ctx_of(d)
+            if nodes[d].kind == 'try':
+                raise CfgError(f"控制流绕过 try 入口进入受保护区间（pc={nodes[y].start_pc}）")
+        if lexical != ctx_of(y):
+            raise CfgError(f"块 pc={nodes[y].start_pc} 的 try 区域与控制流不成嵌套结构"
+                           f"（kind={nodes[y].kind} 词法={sorted(lexical)} 实际={sorted(ctx_of(y))}）")
 
     emitted: list[int] = []
 
@@ -119,10 +170,19 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
             return [Break(tgt)]
         return do_tree(tgt)
 
+    def try_arm(src: int, tgt: int) -> list:
+        if tgt in follower_set or flow.is_back_edge(src, tgt):
+            raise CfgError(f"try 区域 pc={nodes[src].start_pc} 的体 / 处理器入口 pc={nodes[tgt].start_pc} "
+                           f"同时是其他控制流的汇合点")
+        return do_tree(tgt)
+
     def terminator(x: int) -> list:
         n = nodes[x]
         if n.kind == 'exit':
             return []
+        if n.kind == 'try':
+            body = try_arm(x, n.target)
+            return [Try(body, [(c, try_arm(x, h)) for c, h in zip(n.catches, n.handlers)], origin=x)]
         if n.kind == 'goto':
             return do_branch(x, n.target)
         if n.kind == 'cond':
@@ -158,6 +218,9 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
         code = Code(x, exits=(n.kind == 'exit'), empty=not n.stmts)
         in_decls, branch = wrap(terminator(x), in_followers.get(x, []))
         core = in_decls + [code] + branch
+        if x in try_followers:
+            try_decls, core = wrap(core, try_followers[x])
+            core = try_decls + core
         if x in flow.loops:
             core = [Loop(x, core)]
         out_decls, body = wrap(core, out_followers.get(x, []))
@@ -200,6 +263,8 @@ def completes_normally(seq: list) -> bool:
         return any(completes_normally(body) for _, body in last.arms)
     if isinstance(last, Loop):
         return last.exit_label is not None or last.while_cond is not None
+    if isinstance(last, Try):
+        return completes_normally(last.body) or any(completes_normally(b) for _, b in last.catches)
     return True   # Block（仍有 break 引用才会保留）/ Decl
 
 
@@ -214,6 +279,10 @@ def _count_breaks(seq: list, label: int) -> int:
             total += _count_breaks(it.then, label) + _count_breaks(it.else_, label)
         elif isinstance(it, Switch):
             for _, body in it.arms:
+                total += _count_breaks(body, label)
+        elif isinstance(it, Try):
+            total += _count_breaks(it.body, label)
+            for _, body in it.catches:
                 total += _count_breaks(body, label)
     return total
 
@@ -230,6 +299,10 @@ def _retarget_breaks(seq: list, labels: set, new_label) -> None:
             _retarget_breaks(it.else_, labels, new_label)
         elif isinstance(it, Switch):
             for _, body in it.arms:
+                _retarget_breaks(body, labels, new_label)
+        elif isinstance(it, Try):
+            _retarget_breaks(it.body, labels, new_label)
+            for _, body in it.catches:
                 _retarget_breaks(body, labels, new_label)
 
 
@@ -274,6 +347,17 @@ def _pass_tail(seq: list, tail: frozenset) -> tuple[list, bool]:
                 changed |= c
                 new_arms.append((vals, body))
             it.arms = new_arms
+            out.append(it)
+        elif isinstance(it, Try):
+            # try 体 / catch 体正常完成 ≡ 落出整个 try 语句
+            it.body, c = _pass_tail(it.body, ctx)
+            changed |= c
+            new_catches = []
+            for desc, body in it.catches:
+                body, c = _pass_tail(body, ctx)
+                changed |= c
+                new_catches.append((desc, body))
+            it.catches = new_catches
             out.append(it)
         elif isinstance(it, Loop):
             it.body, c = _pass_tail(it.body, frozenset({('continue', it.header)}))
@@ -347,6 +431,16 @@ def _pass_if(seq: list) -> tuple[list, bool]:
                 new_arms.append((vals, body))
             it.arms = new_arms
             out.append(it)
+        elif isinstance(it, Try):
+            it.body, c = _pass_if(it.body)
+            changed |= c
+            new_catches = []
+            for desc, body in it.catches:
+                body, c = _pass_if(body)
+                changed |= c
+                new_catches.append((desc, body))
+            it.catches = new_catches
+            out.append(it)
         elif isinstance(it, (Block, Loop)):
             it.body, c = _pass_if(it.body)
             changed |= c
@@ -367,6 +461,10 @@ def _pass_while(seq: list) -> None:
                 _pass_while(body)
         elif isinstance(it, Block):
             _pass_while(it.body)
+        elif isinstance(it, Try):
+            _pass_while(it.body)
+            for _, body in it.catches:
+                _pass_while(body)
         elif isinstance(it, Loop):
             _pass_while(it.body)
             if it.while_cond is not None or it.exit_label is None:
@@ -407,4 +505,8 @@ def walk(seq: list):
             yield from walk(it.else_)
         elif isinstance(it, Switch):
             for _, body in it.arms:
+                yield from walk(body)
+        elif isinstance(it, Try):
+            yield from walk(it.body)
+            for _, body in it.catches:
                 yield from walk(body)

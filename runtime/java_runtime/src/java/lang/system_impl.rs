@@ -4,6 +4,12 @@ use crate::java::io::{BufferedOutputStream, FileDescriptor, FileOutputStream, Pr
 use crate::sun::nio::cs::UTF_8;
 
 impl System {
+    /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制的 native 方法即本文件的 Rust 函数。
+    #[jvm_native]
+    pub fn registerNatives() -> Result<()> {
+        Ok(())
+    }
+
     #[jvm_native]
     pub fn arraycopy(src: Object, src_pos: i32, dest: Object, dest_pos: i32, length: i32) -> Result<()> {
         macro_rules! try_copy {
@@ -11,7 +17,7 @@ impl System {
                 if let Some(s) = src.0.as_any().downcast_ref::<JArray<$t>>() {
                     let d = dest.downcast::<JArray<$t>>();
                     for i in 0..length {
-                        d.set(dest_pos + i, s.get(src_pos + i));
+                        d.set(dest_pos + i, s.get(src_pos + i)?)?;
                     }
                     return Ok(());
                 }
@@ -41,16 +47,17 @@ impl System {
         Ok(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64)
     }
 
-    /// System.out：JVM 在 initPhase1 经 native setOut0 写入的静态字段。
-    /// 对象图与 JDK 一致：PrintStream(BufferedOutputStream(FileOutputStream(fd=1), 128), autoFlush)，
-    /// 三个类全部是字节码翻译版本；本函数只负责「native 写入静态字段」这一步。
-    /// static lineSeparator：JDK 在 initPhase1 中由 line.separator 属性赋值；
-    /// 原生二进制直接给出宿主平台的行分隔符。
+    /// static lineSeparator：JDK 在 initPhase1 中由 line.separator 属性赋值（不经 `<clinit>`）；
+    /// 原生二进制直接给出宿主平台的行分隔符。签名与宏生成的 static 访问器一致（`Result<T>`）。
     #[jvm_native]
-    pub fn lineSeparator_field() -> String {
-        if cfg!(windows) { String::from("\r\n") } else { String::from("\n") }
+    pub fn lineSeparator_field() -> Result<String> {
+        Ok(if cfg!(windows) { String::from("\r\n") } else { String::from("\n") })
     }
 
+    /// System.out / System.err：HotSpot 在 initPhase1 经 native setOut0 / setErr0 写入的静态字段，
+    /// 不经 `<clinit>`，故由手写层提供（签名与宏生成的 static 访问器一致：`Result<T>`）。
+    /// 对象图与 JDK 一致：PrintStream(BufferedOutputStream(FileOutputStream(fd), 128), autoFlush)，
+    /// 三个类全部是字节码翻译版本；本函数只负责「native 写入静态字段」这一步。
     #[jvm_native(upcalls = "
         java/io/FileDescriptor.<init>:(I)V
         java/io/FileOutputStream.<init>:(Ljava/io/FileDescriptor;)V
@@ -58,11 +65,11 @@ impl System {
         java/io/PrintStream.<init>:(Ljava/io/OutputStream;ZLjava/nio/charset/Charset;)V
         sun/nio/cs/UTF_8.INSTANCE:Lsun/nio/cs/UTF_8;
     ")]
-    pub fn out() -> PrintStream {
+    pub fn out() -> Result<PrintStream> {
         thread_local! {
             static STDOUT: PrintStream = new_std_print_stream(1);
         }
-        STDOUT.with(Clone::clone)
+        Ok(STDOUT.with(Clone::clone))
     }
 
     #[jvm_native(upcalls = "
@@ -72,11 +79,11 @@ impl System {
         java/io/PrintStream.<init>:(Ljava/io/OutputStream;ZLjava/nio/charset/Charset;)V
         sun/nio/cs/UTF_8.INSTANCE:Lsun/nio/cs/UTF_8;
     ")]
-    pub fn err() -> PrintStream {
+    pub fn err() -> Result<PrintStream> {
         thread_local! {
             static STDERR: PrintStream = new_std_print_stream(2);
         }
-        STDERR.with(Clone::clone)
+        Ok(STDERR.with(Clone::clone))
     }
 }
 
@@ -86,7 +93,7 @@ fn new_std_print_stream(fd: i32) -> PrintStream {
         let fdo = FileDescriptor::new_i(fd)?;
         let fos = FileOutputStream::new_filede(fdo)?;
         let bos = BufferedOutputStream::new_output_i(fos.into(), 128)?;
-        PrintStream::new_output_z_charse(bos.into(), true, UTF_8::INSTANCE().into())
+        PrintStream::new_output_z_charse(bos.into(), true, UTF_8::INSTANCE()?.into())
     };
     build().unwrap_or_else(|e| panic!("System 标准流初始化失败: {:?}", e))
 }

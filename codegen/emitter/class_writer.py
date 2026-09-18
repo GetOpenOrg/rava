@@ -27,9 +27,11 @@ from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SL
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
 from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT
 from ..instr.coerce import _parse_field_ref
-from .clinit_extract import _push_int_value, _extract_clinit_consts, _extract_clinit_arrays
 
 _safe_field_name = safe_ident
+
+# <clinit> 翻译函数在 java_class! 块内的固定名字（与宏 block/class_init.rs 的约定一致）
+_CLINIT_FN = '__clinit'
 
 
 _ACC_FINAL   = 0x0010
@@ -147,6 +149,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         for _lv in (getattr(_m, 'local_vars', None) or []):
             _add_desc_refs(_lv[4])
             _add_desc_refs(_lv[5])
+        # 异常表 catch_type：方法体以 `catch (e: T)` 形式引用
+        for _exc in (getattr(_m, 'exception_table', None) or []):
+            if _exc[3]:
+                _referenced.add(_exc[3])
     # 扫描字段描述符（含超类链继承字段）
     _all_fields_to_scan = list(ci.fields)
     if registry:
@@ -385,7 +391,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 _is_jdk = '/' in _orig_cls
                 if _is_jdk:
                     # JDK 类：仅在父类已生成（在 generated_classes 中）时才导入 __base 函数
-                    if _orig_cls not in (generated_classes or set()):
+                    # 层次根类（无父类）整体手写，其 __base 函数由手写模块提供，同样导入
+                    _chain_top = ci.name
+                    while registry and _chain_top in registry and registry[_chain_top].super_class:
+                        _chain_top = registry[_chain_top].super_class
+                    _is_hierarchy_root = (_orig_cls == _chain_top and _orig_cls != ci.name)
+                    if _orig_cls not in (generated_classes or set()) and not _is_hierarchy_root:
                         continue
                     # 解析后的声明者仍未声明该方法（祖先链超出 registry）→ 无 __base 函数可导入
                     if registry and _orig_cls in registry:
@@ -634,62 +645,44 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     overloaded_names: set[str] = hierarchy_overloaded_names(ci, registry)
 
     method_blocks: list[str] = []
-    module_statics: list[str] = []  # 模块级 static 声明（OnceLock 等），插在 impl 块前
 
     # 是否是用户类（call_chain is None 表示用户类，所有方法都翻译）
     _is_user_class = call_chain is None
-    # 用户类中有 <clinit> 静态初始化器时，main() 需调用 class_init()
-    _has_clinit = any(m.name == '<clinit>' for m in ci.methods)
 
-    # public static 字段的 getter 方法（用于 getstatic 访问，如 System::out()）
-    # 生成静态字段 getter：有 _impl 覆盖的跳过，其余生成 panic stub 或 constant_value
+    # ── static 字段声明（JVMS §5.5 类初始化的事实层）──────────────────────
+    # codegen 只声明事实，存储 / 访问器 / 初始化触发全部由 java_class! 宏展开：
+    #   ConstantValue 属性 → `pub const NAME: T = 值;`（编译期常量，访问不触发初始化）
+    #   其余 static 字段   → `pub static NAME: T;`（初值由 <clinit> 字节码翻译写入）
+    # 类型存根（没有任何方法在调用链上：内部边界类 / 仅签名引用的类）不会被初始化：
+    # 未被共置手写文件覆盖的 static 字段保持 panic 存根，命中时精确报出字段。
+    _type_only = stub_bodies or (
+        call_chain is not None
+        and not any((ci.name, _m.name, _m.descriptor) in call_chain for _m in ci.methods))
     static_fields = [f for f in ci.fields if f.is_static]
-    existing_method_names: set[str] = {m.name for m in visible_methods}
+    existing_method_names: set[str] = {m.name for m in ci.methods}
     _nf_covered_sf = (_nf_entry or {}).get('methods', set())
-    # 从 <clinit> 提取简单常量赋值（补充 ConstantValue attribute 未覆盖的情况）
-    _clinit_consts = _extract_clinit_consts(ci)
-    # 从 <clinit> 提取常量数组初始化（newarray + dup/index/value/xastore 模式）
-    _clinit_arrays = _extract_clinit_arrays(ci)
-    # JVM 原始类型描述符集合，可安全包装在 OnceLock<Mutex<T>> 中（均实现 Send + Copy）
-    # String（Java 自定义类型）不在此集合，因其含 Rc 字段，不实现 Send
-    _MUTABLE_STATIC_DESCS = frozenset({'I', 'J', 'F', 'D', 'Z', 'B', 'C', 'S'})
-    # 在 <clinit> 之外被 putstatic 写入的静态字段（惰性初始化 / 运行期可变状态）：
-    # 必须有真实存储 + setter；未写入时 getter 返回 JVM 默认值（null/0），与 JVM 语义一致。
-    _runtime_written_statics: set[str] = set()
-    for _wm in ci.methods:
-        if _wm.name == '<clinit>':
-            continue
-        for _wi in (_wm.instrs or []):
-            if _wi.opcode == 'putstatic' and _wi.comment:
-                _w_cls, _w_fname, _ = _parse_field_ref(_wi.comment)
-                if _w_cls == ci.name:
-                    _runtime_written_statics.add(_w_fname)
     for sf in static_fields:
-        _has_storage = _is_user_class or sf.name in _runtime_written_statics
         safe_fname = _safe_field_name(sf.name)
-        if safe_fname in existing_method_names:
-            # 字段名与方法名冲突：改用 _field 后缀，让 getstatic 仍能访问该字段
+        if sf.name in existing_method_names:
+            # 字段名与方法名冲突：改用 _field 后缀（读写侧 fields.py 同规则）
             safe_fname = safe_fname + '_field'
-        # 若 _impl 已覆盖此静态字段访问器，跳过
-        if safe_fname in _nf_covered_sf:
-            continue
-        # 优先用 generic_signature 确定返回类型（包含泛型参数信息）
+        # 优先用 generic_signature 确定字段类型（包含泛型参数信息）
         if sf.generic_signature:
             _gs_ret = parse_field_type(sf.generic_signature, class_type_params, registry)
             # 校验引用的类型存在，否则回退到描述符
             if _gs_ret and _gs_ret != 'Object' and not _validate_field_type(_gs_ret, class_type_params):
                 _gs_ret = ''
+            # static 字段不在类型参数作用域内（Java 同样禁止），引用类型变量时回退描述符
+            if _gs_ret and any(_tp in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', _gs_ret)
+                               for _tp in class_type_params):
+                _gs_ret = ''
         else:
             _gs_ret = ''
         rust_ret = _gs_ret if _gs_ret else jvm_to_rust(sf.descriptor, registry=registry)
-        # ConstantValue attribute 优先；其次尝试从 <clinit> 提取简单常量
-        cv = sf.constant_value or _clinit_consts.get(sf.name, '')
-        body = ''
+        field_meta = _java_field_attr(sf)
+        cv = sf.constant_value
         if cv:
-            if cv == '__EMPTY_ARRAY__':
-                # iconst_0 → anewarray → putstatic：static final T[] = new T[0]
-                body = 'JArray::new(0)'
-            elif rust_ret == 'String':
+            if rust_ret == 'String':
                 body = f'String::from("{cv}")'
             elif rust_ret == 'f32':
                 if cv == 'inf':      body = 'f32::INFINITY'
@@ -707,65 +700,20 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 body = 'true' if cv == '1' else 'false'
             else:
                 body = cv
-        # 运行期可写字段即便有 <clinit> 常量初值也需要真实存储（初值作为未写入时的默认值）
-        _rt_written = sf.name in _runtime_written_statics and not sf.constant_value
-        if cv and not _rt_written:
-            field_meta = _java_field_attr(sf)
-            method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
-        elif _has_storage and sf.descriptor in _MUTABLE_STATIC_DESCS:
-            # 用户类可变静态字段（JVM 原始类型，Send + Copy）：OnceLock<Mutex<T>>
-            _static_var = f"_{struct_name}_{safe_fname}_STATIC"
-            _default = body if (cv and body) else rust_default(rust_ret)
-            module_statics.append(
-                f"static {_static_var}: std::sync::OnceLock<std::sync::Mutex<{rust_ret}>> = std::sync::OnceLock::new();"
-            )
-            field_meta = _java_field_attr(sf)
             method_blocks.append(
                 f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
-                f'pub fn {safe_fname}() -> {rust_ret} {{\n'
-                f'    *{_static_var}.get_or_init(|| std::sync::Mutex::new({_default})).lock().unwrap()\n'
-                f'}}'
-            )
-            method_blocks.append(
-                f'// static field setter: {sf.name}\n'
-                f'pub fn set_{safe_fname}(v: {rust_ret}) {{\n'
-                f'    *{_static_var}.get_or_init(|| std::sync::Mutex::new({_default})).lock().unwrap() = v;\n'
-                f'}}'
-            )
-        elif _has_storage:
-            # 用户类 / 运行期可写的可变静态字段（非原始类型，不实现 Send）：unsafe static mut Option<T>
-            _static_var = f"_{struct_name}_{safe_fname}_STATIC"
-            _default = rust_default(rust_ret)
-            module_statics.append(
-                f"static mut {_static_var}: Option<{rust_ret}> = None;"
-            )
-            field_meta = _java_field_attr(sf)
+                f'pub const {safe_fname}: {rust_ret} = {body};')
+        elif _type_only:
+            if safe_fname in _nf_covered_sf:
+                continue
             method_blocks.append(
                 f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
-                f'pub fn {safe_fname}() -> {rust_ret} {{\n'
-                f'    unsafe {{ {_static_var}.clone().unwrap_or_default() }}\n'
-                f'}}'
-            )
-            method_blocks.append(
-                f'// static field setter: {sf.name}\n'
-                f'pub fn set_{safe_fname}(v: {rust_ret}) {{\n'
-                f'    unsafe {{ {_static_var} = Some(v); }}\n'
-                f'}}'
-            )
-        elif sf.name in _clinit_arrays:
-            # <clinit> 中识别到 newarray + dup/index/value/xastore 模式：生成常量数组
-            _arr_vals = _clinit_arrays[sf.name]
-            _desc_inner = sf.descriptor[1:]   # [B→B, [C→C, [S→S, [I→I
-            _elem_rust = _JVM_PRIMITIVE_MAP.get(_desc_inner, 'i8')
-            _items = ', '.join(f'{v} as {_elem_rust}' for v in _arr_vals)
-            body = f'JArray::from(vec![{_items}])'
-            field_meta = _java_field_attr(sf)
-            method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
+                f'pub fn {safe_fname}() -> Result<{rust_ret}> {{\n'
+                f'    panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")\n}}')
         else:
-            # 生成 panic stub，确保 getstatic 对应的 ClassName::fieldName() 能编译
-            body = f'panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")'
-            field_meta = _java_field_attr(sf)
-            method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
+            method_blocks.append(
+                f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
+                f'pub static {safe_fname}: {rust_ret};')
 
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
     # 非桥接的 synthetic 方法（lambda$xxx$N、access$NNN 等）是 invokedynamic 闭包 /
@@ -781,27 +729,39 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     from ..instr.coerce import _root_virtual_methods
     _root_method_keys = _root_virtual_methods() if _is_iface else set()
     for m in emitted_methods:
+        if m.name == '<clinit>':
+            # <clinit> → `fn __clinit()`：宏生成的 __class_init() 状态机在首次主动使用时调用它。
+            # 类型存根不会被初始化；不在调用链上的 <clinit> 与其它方法同规则生成 panic 存根。
+            if _type_only:
+                continue
+            attr_line = _java_method_attr(m)
+            _clinit_stub = (f'pub fn {_CLINIT_FN}() -> Result<()> {{\n'
+                            f'    panic!("stub: {ci.name}.<clinit>:()V")\n}}')
+            if call_chain is not None and (ci.name, m.name, m.descriptor) not in call_chain:
+                method_blocks.append(attr_line + '\n' + _clinit_stub)
+                continue
+            try:
+                clinit_body = gen_method_body(
+                    m, ci, registry=registry,
+                    class_type_params=class_type_params,
+                    overloaded_names=overloaded_names,
+                    rust_name=_CLINIT_FN,
+                )
+                method_blocks.append(attr_line + '\n' + clinit_body)
+            except CfgAuditError:
+                raise
+            except Exception as e:
+                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}", repr(e))
+                import os as _os
+                if _os.environ.get('JAVA_RTA_DEBUG'):
+                    import traceback as _tb
+                    print(f"[DEBUG] stub fallback for {ci.name}.<clinit>: {e}", file=__import__('sys').stderr)
+                    _tb.print_exc()
+                method_blocks.append(attr_line + '\n' + _clinit_stub)
+            continue
         if _is_iface and not m.is_static and (
                 m.is_synthetic or (m.access_flags & 0x0002) or (m.name, m.descriptor[:m.descriptor.index(')') + 1]) in _root_method_keys):
             continue  # 私有 / 合成实例方法不是接口契约的一部分
-        if m.name == '<clinit>':
-            # 用户类：翻译 <clinit> 为 class_init() 函数
-            if _is_user_class:
-                attr_line = _java_method_attr(m)
-                try:
-                    clinit_body = gen_method_body(
-                        m, ci, registry=registry,
-                        class_type_params=class_type_params,
-                        overloaded_names=overloaded_names,
-                        rust_name='class_init',
-                    )
-                    method_blocks.append(attr_line + '\n' + clinit_body)
-                except CfgAuditError:
-                    raise
-                except Exception as e:
-                    # 翻译失败则跳过，class_init 不存在也不影响编译
-                    _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}", repr(e))
-            continue
         # 确定最终 Rust 方法名（有重载则加描述符后缀）
         rust_name = mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name
         # 构造器统一用 new / new_suffix
@@ -861,15 +821,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     rust_name=rust_name,
                     in_vtable_body=bool(m.virtual_in),
                 )
-                # 用户类 main()：若有 <clinit>，在方法体开头插入 class_init() 调用
-                if (_is_user_class and _has_clinit
-                        and m.name == 'main'
-                        and m.descriptor == '([Ljava/lang/String;)V'):
-                    body = body.replace(
-                        'pub fn main() -> Result<()> {\n',
-                        'pub fn main() -> Result<()> {\n    Self::class_init()?;\n',
-                        1,
-                    )
                 method_blocks.append(attr_line + '\n' + body)
             except CfgAuditError:
                 raise
@@ -1100,10 +1051,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         method_blocks = new_blocks
 
     # ── 组装 java_class! { ... } 块（方案 §3 核心设计）────────────────────
-    # 模块级 static 声明必须留在宏外（宏不接受 struct/impl 之外的项目）。
-    if module_statics:
-        parts.append('\n'.join(module_statics))
-
     if not _full_impl:
         block: list[str] = []
         block.extend(_java_class_block_head(

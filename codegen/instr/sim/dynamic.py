@@ -2,7 +2,7 @@
 
 from ...rs_ir import RawExpr, RawStmt, RsNamed
 from ...render import render_expr
-from ...type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
+from ...type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return, short_cls
 from ...constants import safe_ident as _safe_ident
 from ..invoke import _gen_string_concat, _static_call_turbofish
 from ..coerce import _mangle_if_overloaded
@@ -58,7 +58,7 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _impl_mname   = _impl_method_ref[_dot+1:_impl_colon]  # "lambda$main$0"
                     _impl_desc    = _impl_method_ref[_impl_colon+1:]  # "(I)I"
                     # 转换为 Rust 标识符
-                    _impl_cls_rust  = _impl_cls_bin.rsplit('/', 1)[-1]
+                    _impl_cls_rust  = short_cls(_impl_cls_bin)      # 内部类 `$` → `_`，与定义侧一致
                     # 实现方法名与定义侧同规则 mangle（方法引用指向重载方法 / 构造器时必须一致）
                     _impl_mangled = _mangle_if_overloaded(
                         _impl_cls_bin, _impl_mname,
@@ -183,9 +183,10 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
     # ── 杂项 ──
     elif op in ('nop', 'wide'): pass
     elif op == 'athrow':
+        # 被抛出的就是栈顶对象本身：JvmError 携带该对象，异常表匹配 / getMessage /
+        # 未捕获报告都基于它的运行时类（参考文档 §8.3）
         e_expr, _ = sim.pop()
-        # "athrow".to_owned() 使用 std::string::String，避免与 java_runtime::String 遮蔽冲突
-        sim.emit(RawStmt(f'return Err(JvmError::Custom("athrow".to_owned()));'))
+        sim.emit(RawStmt(f'return Err(JvmError::from({render_expr(e_expr)}));'))
     else:
         return False
     return True

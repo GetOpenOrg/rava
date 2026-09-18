@@ -50,7 +50,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         sim.push(Var(v), RsGeneric('Vec', [RsGeneric('Vec', [I32])]))
     elif op in ('iastore', 'lastore', 'fastore', 'dastore'):
         val_expr, _val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {render_expr(val_expr)});"))
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {render_expr(val_expr)})?;"))
     elif op == 'aastore':
         val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
@@ -74,7 +74,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
                 val_str = f"Clone::clone(&{val_str}){chain}"
             else:
                 val_str = f"Clone::clone(&{val_str})"
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {val_str});"))
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {val_str})?;"))
     elif op == 'bastore':
         val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
@@ -82,25 +82,25 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         if arr_ty_str in ('JArray<bool>', 'Vec<bool>'):
             val_s = render_expr(val_expr)
             coerced = val_s if render_type(val_ty) == 'bool' else f"(({val_s}) as i8 != 0)"
-            sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {coerced});"))
+            sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {coerced})?;"))
         else:
-            sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i8);"))
+            sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i8)?;"))
     elif op == 'sastore':
         val_expr, _ = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i16);"))
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i16)?;"))
     elif op == 'castore':
         val_expr, _ = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as u16);"))
+        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as u16)?;"))
     elif op == 'iaload':
         idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})"), I32)
+        sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})?"), I32)
     elif op in ('baload', 'saload', 'caload'):
         idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(arr_expr)}.get({render_expr(idx_expr)}) as i32)"), I32)
+        sim.push(RawExpr(f"({render_expr(arr_expr)}.get({render_expr(idx_expr)})? as i32)"), I32)
     elif op in ('laload', 'faload', 'daload'):
         idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
         ty = {'l': I64, 'f': F32, 'd': F64}.get(op[0], I32)
-        sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})"), ty)
+        sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})?"), ty)
     elif op == 'aaload':
         idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
@@ -113,7 +113,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
             elem_ty_str = 'Object'
         _arr_s = render_expr(arr_expr)
         # JArray::get 内部已 clone，直接使用返回值
-        sim.push(RawExpr(f"{_arr_s}.get({render_expr(idx_expr)})"), RsNamed(elem_ty_str))
+        sim.push(RawExpr(f"{_arr_s}.get({render_expr(idx_expr)})?"), RsNamed(elem_ty_str))
     elif op == 'arraylength':
         arr_expr, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(arr_expr)}.len())"), I32)

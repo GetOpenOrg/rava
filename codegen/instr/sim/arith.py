@@ -6,6 +6,21 @@ from ...render import render_expr, render_type
 from ..coerce import _to_i32
 
 
+import re as _re_div
+
+
+_SAFE_DIVISOR_RE = _re_div.compile(r'^\(?(\d+)i(?:32|64)\)?$')
+
+
+def _int_division(opcode: str, operator: str, dividend: str, divisor: str) -> str:
+    """整数除法/取余（JVMS §6.5 idiv/irem/ldiv/lrem）：除数为 0 抛 ArithmeticException，
+    MIN / -1 回绕。除数是非零正字面量时两种情况都不可能发生，保留 Java 原样的运算符形式；
+    其余走运行时的同名函数（`idiv(a, b)?`）。"""
+    m = _SAFE_DIVISOR_RE.match(divisor)
+    if m and int(m.group(1)) != 0:
+        return f"({dividend}{operator}{divisor})"
+    return f"{opcode}({dividend}, {divisor})?"
+
 def sim_arith(ins, sim, class_name, registry) -> bool:
     op      = ins.opcode
     operand = ins.operand or ''
@@ -23,10 +38,10 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
         sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_mul({_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'idiv':
         b, bt = sim.pop(); a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}/{_to_i32(render_expr(b), bt)})"), I32)
+        sim.push(RawExpr(_int_division('idiv', '/', _to_i32(render_expr(a), at), _to_i32(render_expr(b), bt))), I32)
     elif op == 'irem':
         b, bt = sim.pop(); a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}%{_to_i32(render_expr(b), bt)})"), I32)
+        sim.push(RawExpr(_int_division('irem', '%', _to_i32(render_expr(a), at), _to_i32(render_expr(b), bt))), I32)
     elif op == 'ineg':
         a, at = sim.pop()
         sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_neg()"), I32)
@@ -71,7 +86,7 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
         a_s = render_expr(a); b_s = render_expr(b)
         if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
         if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
-        sim.push(RawExpr(f"({a_s}/{b_s})"), I64)
+        sim.push(RawExpr(_int_division('ldiv', '/', a_s, b_s)), I64)
     elif op == 'fadd':
         b, _ = sim.pop(); a, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(a)}+{render_expr(b)})"), F32)
@@ -103,7 +118,7 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
         a_s = render_expr(a); b_s = render_expr(b)
         if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
         if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
-        sim.push(RawExpr(f"({a_s}%({b_s}))"), I64)
+        sim.push(RawExpr(_int_division('lrem', '%', a_s, b_s)), I64)
     elif op == 'lneg':
         a, _ = sim.pop()
         sim.push(RawExpr(f"({render_expr(a)}).wrapping_neg()"), I64)

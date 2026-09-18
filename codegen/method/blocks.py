@@ -31,9 +31,10 @@ from ..constants import PRIMITIVE_RUST_TYPES as _PRIM_TYPES
 from ..instr import sim_instr
 from ..instr.coerce import _common_ref_type
 from ..render import render_expr, render_stmt, render_type
-from ..rs_ir import LetStmt, AssignStmt, RawExpr, RawStmt, Var
+from ..rs_ir import LetStmt, AssignStmt, RawExpr, RawStmt, RsNamed, Var
 from ..stack import BOOL, StackSim, _clone_moved_var
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type
+from .try_catch import TryCatchPlan, _binding_type
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ class CondExpr(RawExpr):
 class Node:
     id: int
     start_pc: int
-    kind: str                          # 'cond' | 'goto' | 'switch' | 'exit'
+    kind: str                          # 'cond' | 'goto' | 'switch' | 'exit' | 'try'
     target: int | None = None
     fallthrough: int | None = None
     cases: list = field(default_factory=list)
@@ -66,8 +67,20 @@ class Node:
     exit_locals: dict = field(default_factory=dict)
     processed: bool = False
     removed: bool = False
+    # try 区域：ctx = 覆盖本节点的 try 组编号集合；kind == 'try' 的合成节点另有
+    # target = try 体入口、handlers = 各 catch 子句的处理器入口、catches = [(clause, 绑定名, 绑定类型)]
+    ctx: frozenset = frozenset()
+    group: int | None = None
+    handlers: list = field(default_factory=list)
+    catches: list = field(default_factory=list)
 
     def successors(self) -> list[int]:
+        if self.kind == 'try':
+            out = [self.target]
+            for h in self.handlers:
+                if h not in out:
+                    out.append(h)
+            return out
         if self.kind == 'cond':
             return [self.target] if self.target == self.fallthrough else [self.target, self.fallthrough]
         if self.kind == 'goto':
@@ -332,10 +345,6 @@ class BlockSimulator:
 
     def run(self) -> SimResult:
         blocks = self.blocks
-        succs_raw = {b.id: b.term.successors() for b in blocks}
-        raw_reach = reachable(0, succs_raw)
-        self._register_jumps(succs_raw, raw_reach)
-
         staged: dict[int, Node] = {}
         for b in blocks:
             t = b.term
@@ -344,10 +353,14 @@ class BlockSimulator:
                 id=b.id, start_pc=b.start_pc, kind=kind, target=t.target,
                 fallthrough=t.fallthrough, cases=[(list(v), tg) for v, tg in t.cases],
                 default=t.default, pcs=[t.pc] if t.pc is not None else [])
+        self._install_try_nodes(staged)
+
+        raw_reach = reachable(self.entry, {nid: n.successors() for nid, n in staged.items()})
+        self._register_jumps(raw_reach)
         self._thread_jumps(staged, raw_reach)
 
         succs0 = {nid: n.successors() for nid, n in staged.items()}
-        flow0 = analyze(0, succs0)
+        flow0 = analyze(self.entry, succs0)
         self.flow0 = flow0
         live = set(flow0.rpo)
         for nid in flow0.rpo:
@@ -358,17 +371,92 @@ class BlockSimulator:
                 self._consume(n.pcs, 'structured')
 
         if not flow0.reducible:
+            if self.handler_bind:
+                raise CfgError("含异常处理器的不可归约 CFG")
             return self._run_dispatch()
         return self._run_structured()
+
+    # ── try 区域 ────────────────────────────────────────────────────────────
+
+    def _install_try_nodes(self, staged: dict) -> None:
+        """异常表 → CFG：每个 try 组一个合成节点 T（kind='try'）。
+
+        T 的后继 = try 体入口 + 各处理器入口：处理器由此成为 CFG 的真实块。
+        进入受保护区间的边（源不在该区间内）改指 T；区间内部回到体入口的边保持原样。
+        同一起点的多个组由外到内串成 T_outer → T_inner → 体入口。
+        """
+        blocks = self.blocks
+        self.entry = 0
+        self.handler_bind: dict[int, tuple] = {}     # 处理器入口节点 → (T, 绑定名, 绑定类型)
+        self.try_entries: set[int] = set()           # try 体入口块（不参与跳转线程化）
+        plan = TryCatchPlan(self.method.exception_table, self.instrs)
+        planned = {c.handler_pc for g in plan.groups for c in g.clauses}
+        for start_pc, _end, handler_pc, _ct in (self.method.exception_table or []):
+            if start_pc < handler_pc and handler_pc not in planned:
+                raise CfgError(f"异常处理器 pc={handler_pc} 无法归入任何 try 区域")
+        if not plan.groups:
+            return
+        gid = {id(g): k for k, g in enumerate(plan.groups)}
+        for b in blocks:
+            staged[b.id].ctx = frozenset(gid[id(g)] for g in plan.groups if g.covers(b.start_pc))
+        by_start_idx = {b.start_idx: b.id for b in blocks}
+
+        chains: dict[int, list[Node]] = {}           # 体入口块 → [T_outer, ..., T_inner]
+        next_id = len(blocks)
+        for start_idx, groups in plan.groups_by_start().items():
+            body = by_start_idx[start_idx]
+            self.try_entries.add(body)
+            chain: list[Node] = []
+            inner = set()
+            for g in reversed(groups):               # 内 → 外：ctx(T_g) 不含 g 及其内层同起点组
+                inner.add(gid[id(g)])
+                t = Node(id=0, start_pc=blocks[body].start_pc, kind='try',
+                         ctx=staged[body].ctx - inner)
+                t.group = gid[id(g)]
+                for clause in g.clauses:
+                    t.handlers.append(by_start_idx[clause.handler_idx])
+                    t.catches.append((clause, self.sim.fresh('_caught'),
+                                      _binding_type(clause, self.registry)))
+                chain.insert(0, t)
+            for t in chain:
+                t.id = next_id
+                next_id += 1
+                staged[t.id] = t
+            for t, nxt in zip(chain, chain[1:] + [None]):
+                t.target = nxt.id if nxt is not None else body
+            chains[body] = chain
+
+        def redirect(src: Node, tgt):
+            for t in chains.get(tgt, ()):
+                if t.group not in src.ctx and t is not src:
+                    return t.id
+            return tgt
+
+        for n in list(staged.values()):
+            if n.kind == 'try':
+                n.handlers = [redirect(n, h) for h in n.handlers]
+                continue
+            n.target = redirect(n, n.target)
+            n.fallthrough = redirect(n, n.fallthrough)
+            n.default = redirect(n, n.default)
+            n.cases = [(v, redirect(n, tg)) for v, tg in n.cases]
+        for t in (n for n in staged.values() if n.kind == 'try'):
+            for h, (_clause, bind, bind_ty) in zip(t.handlers, t.catches):
+                if h in self.handler_bind:
+                    raise CfgError(f"处理器 pc={staged[h].start_pc} 被多个 try 区域共用")
+                self.handler_bind[h] = (t.id, bind, bind_ty)
+        if 0 in chains:
+            self.entry = chains[0][0].id
 
     def _thread_jumps(self, staged: dict, raw_reach: set) -> None:
         """跳转线程化：只含一条 goto 的块不产生任何代码，指向它的边直接改指其最终目标。
         （`break` 经由中转 goto 到达循环出口时，&& / || 的两个出口才会落在同一目标上。）"""
         trampoline: dict[int, int] = {}
         for b in self.blocks:
-            if b.id != 0 and b.end_idx - b.start_idx == 1 and b.term.kind == 'goto' \
+            if b.id != 0 and b.id not in self.try_entries and b.id not in self.handler_bind \
+                    and b.end_idx - b.start_idx == 1 and b.term.kind == 'goto' \
                     and b.term.pc is not None and b.term.target != b.id:
-                trampoline[b.id] = b.term.target
+                trampoline[b.id] = staged[b.id].target      # 已含 try 入口改指
 
         def resolve(nid: int) -> int:
             seen = set()
@@ -390,21 +478,16 @@ class BlockSimulator:
                 n.default = final[n.default]
             n.cases = [(v, final.get(tg, tg)) for v, tg in n.cases]
 
-    def _register_jumps(self, succs0: dict, main_reach: set) -> None:
-        handler_reach: set[int] = set()
-        for b in self.blocks:
-            if b.is_handler_entry and b.id not in main_reach:
-                handler_reach |= reachable(b.id, succs0)
-        handler_reach -= main_reach
+    def _register_jumps(self, reach: set) -> None:
+        """登记全部跳转指令；不可达块（含处理器保护自身的重试条目所指向的死代码）记为 dead。"""
         for b in self.blocks:
             for i in range(b.start_idx, b.end_idx):
                 ins = self.instrs[i]
                 if ins.opcode not in JUMP_OPS:
                     continue
                 self.ledger.expect(ins.offset)
-                if b.id in main_reach:
-                    continue
-                self.ledger.consume(ins.offset, 'handler' if b.id in handler_reach else 'dead')
+                if b.id not in reach:
+                    self.ledger.consume(ins.offset, 'dead')
 
     # ── 图查询 ──────────────────────────────────────────────────────────────
 
@@ -419,6 +502,12 @@ class BlockSimulator:
     # ── 单块模拟 ────────────────────────────────────────────────────────────
 
     def _simulate(self, node: Node) -> None:
+        if node.kind == 'try':
+            # 合成节点没有指令：出口状态 = 入口状态
+            node.exit_stack = list(node.entry_stack)
+            node.exit_locals = dict(node.entry_locals)
+            node.processed = True
+            return
         sim = self.sim
         blk = self.blocks[node.id]
         instrs = self.instrs
@@ -508,13 +597,13 @@ class BlockSimulator:
 
     def _try_fuse(self, node: Node) -> Node:
         """单前驱直线块并入前驱。返回并入后的当前节点。"""
-        if node.id == 0 or node.decls:
+        if node.id == self.entry or node.decls or node.kind == 'try':
             return node
         preds = self._all_preds(node.id)
         if len(preds) != 1:
             return node
         p = preds[0]
-        if p is node or not p.processed or p.kind != 'goto':
+        if p is node or not p.processed or p.kind != 'goto' or p.ctx != node.ctx:
             return node
         p.stmts.extend(node.stmts)
         p.kind, p.cond, p.key = node.kind, node.cond, node.key
@@ -528,12 +617,12 @@ class BlockSimulator:
 
     def _try_short_circuit(self, node: Node) -> Node:
         """条件块 B 并入其唯一前驱条件块 P（&& / ||），可级联。"""
-        while node.kind == 'cond' and node.id != 0 and not node.decls:
+        while node.kind == 'cond' and node.id != self.entry and not node.decls:
             preds = self._all_preds(node.id)
             if len(preds) != 1:
                 break
             p = preds[0]
-            if p is node or not p.processed or p.kind != 'cond':
+            if p is node or not p.processed or p.kind != 'cond' or p.ctx != node.ctx:
                 break
             if not all(x is y or x[0] is y[0] for x, y in zip(p.exit_stack, node.exit_stack)) \
                     or len(p.exit_stack) != len(node.exit_stack):
@@ -585,6 +674,8 @@ class BlockSimulator:
                     continue
                 if self._all_preds(b.id)[0] is not p:
                     continue
+                if not (p.ctx == a.ctx == b.ctx == self.nodes[merge_id].ctx):
+                    continue
                 base = len(p.exit_stack)
                 if not all(len(arm.exit_stack) == base + 1
                            and all(x is y or x[0] is y[0] for x, y in zip(p.exit_stack, arm.exit_stack))
@@ -600,7 +691,8 @@ class BlockSimulator:
                 break
 
     def _is_value_arm(self, arm: Node, merge_id: int) -> bool:
-        if arm.id == 0 or arm.kind != 'goto' or arm.target != merge_id or arm.stmts or arm.decls:
+        if arm.id == self.entry or arm.id in self.handler_bind or arm.kind != 'goto' \
+                or arm.target != merge_id or arm.stmts or arm.decls:
             return False
         return len(self._all_preds(arm.id)) == 1
 
@@ -622,18 +714,26 @@ class BlockSimulator:
     def _run_structured(self) -> SimResult:
         nodes = self.nodes
         flow0 = self.flow0
-        live: set[int] = {0}
+        entry = self.entry
+        live: set[int] = {entry}
         for nid in flow0.rpo:
             node = nodes[nid]
             if nid not in live:
                 self._consume(node.pcs, 'dead')
                 node.removed = True
                 continue
-            if nid != 0:
+            if nid != entry:
                 self._try_ternary(nid)
             preds = self._live_preds(nid)
-            if nid == 0:
+            if nid == entry:
                 node.entry_stack, node.entry_locals = [], dict(self.sim.locals)
+            elif nid in self.handler_bind:
+                # 处理器入口：操作数栈只有被捕获的异常对象；局部变量表取 try 入口处的状态
+                t_id, bind, bind_ty = self.handler_bind[nid]
+                if [p.id for p in preds] != [t_id]:
+                    raise CfgError(f"异常处理器 pc={node.start_pc} 同时是正常控制流的目标")
+                node.entry_stack = [(Var(bind), RsNamed(bind_ty))]
+                node.entry_locals = dict(preds[0].exit_locals)
             elif not preds:
                 raise CfgError(f"活块 pc={node.start_pc} 没有已处理的前驱")
             elif len(preds) == 1:
@@ -657,12 +757,15 @@ class BlockSimulator:
         self._inline_loop_header_temps()
         self._promote_cross_block_temps()
         kept = {n.id: n for n in nodes.values() if n.processed and not n.removed}
-        return SimResult(nodes=kept, entry=0, dispatch=False)
+        for h, (t_id, _bind, _ty) in self.handler_bind.items():
+            if h in kept and any(h in n.successors() and n.id != t_id for n in kept.values()):
+                raise CfgError(f"异常处理器 pc={kept[h].start_pc} 同时是正常控制流的目标")
+        return SimResult(nodes=kept, entry=entry, dispatch=False)
 
     def _inline_loop_header_temps(self) -> None:
         """循环头若只由可回填的临时变量构成，回填进条件（使 `while cond {` 形态成立）。"""
         kept = {n.id: n for n in self.nodes.values() if n.processed and not n.removed}
-        flow = analyze(0, {i: n.successors() for i, n in kept.items()})
+        flow = analyze(self.entry, {i: n.successors() for i, n in kept.items()})
         for h in flow.loops:
             node = kept[h]
             if node.kind != 'cond' or not node.stmts or node.decls:

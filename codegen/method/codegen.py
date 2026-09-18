@@ -51,15 +51,15 @@ def _structured_entries(method, sim, registry, class_tparams, ledger) -> list:
         tree = simplify(build_structure(nodes, flow))
         _verify_tree(tree, nodes, flow, ledger)
         entries = []
-    handlers = sorted({(h, ct or 'any') for _, _, h, ct in (method.exception_table or [])})
-    if handlers:
-        # 异常处理器（catch / finally 的异常路径）依赖异常对象模型，当前只翻译正常路径。
-        # 不静默：生成代码带注释，自检统计单列 handler_methods。
-        listing = ', '.join(f"{ct}@{h}" for h, ct in handlers)
-        entries.insert(0, ('', f"    // 未翻译的异常处理器（try 区域内的异常直接向调用方传播）：{listing}"))
-        STATS.record_untranslated_handlers(ledger.method_id, len(handlers))
     entries.extend(emit_tree(tree, nodes))
     ledger.verify()
+    if ledger.method_id not in STATS._seen:
+        live = [n for n in nodes.values() if not n.removed]
+        # 异常表声明的处理器 vs 实际挂到 Try 节点（因而进入结构化树）的处理器
+        declared = {h for _s, _e, h, _ct in (method.exception_table or [])}
+        translated = {nodes[h].start_pc for n in live if n.kind == 'try' for h in n.handlers}
+        STATS.record_try_regions(ledger.method_id, sum(1 for n in live if n.kind == 'try'),
+                                 len(declared - translated))
     STATS.record(ledger, result.dispatch)
     return entries
 
@@ -72,7 +72,7 @@ def _verify_tree(tree: list, nodes: dict, flow, ledger) -> None:
     for item in _st.walk(tree):
         if isinstance(item, _st.Code):
             code_blocks.append(item.block)
-        elif isinstance(item, (_st.If, _st.Switch)):
+        elif isinstance(item, (_st.If, _st.Switch, _st.Try)):
             branch_origins.add(item.origin)
         elif isinstance(item, _st.Loop) and item.cond_origin is not None:
             branch_origins.add(item.cond_origin)
@@ -81,7 +81,7 @@ def _verify_tree(tree: list, nodes: dict, flow, ledger) -> None:
                             f"tree={sorted(code_blocks)} live={sorted(flow.rpo)}")
     for nid in flow.rpo:
         node = nodes[nid]
-        if node.kind in ('cond', 'switch') and nid not in branch_origins:
+        if node.kind in ('cond', 'switch', 'try') and nid not in branch_origins:
             raise CfgAuditError(f"{ledger.method_id}: 块 pc={node.start_pc} 的分支未出现在结构树中 "
                                 f"(jump pc={node.pcs})")
         for pc in node.pcs:

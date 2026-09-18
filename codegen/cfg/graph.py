@@ -111,10 +111,14 @@ def build_blocks(instrs: list[Instr], exception_table: list | None = None) -> li
 
     leaders: set[int] = {0}
     handler_idx: set[int] = set()
-    for (_s, _e, handler_pc, _t) in (exception_table or []):
+    for (start_pc, end_pc, handler_pc, _t) in (exception_table or []):
         if handler_pc in off2idx:
             leaders.add(off2idx[handler_pc])
             handler_idx.add(off2idx[handler_pc])
+        # 受保护区间的两端是块边界：每个块要么整体受某个处理器保护，要么整体不受
+        for pc in (start_pc, end_pc):
+            if pc in off2idx:
+                leaders.add(off2idx[pc])
 
     for i, ins in enumerate(instrs):
         op = ins.opcode

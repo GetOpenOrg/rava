@@ -22,7 +22,10 @@ impl StreamEncoder {
 
     #[jvm_boundary(upcalls = "java/io/OutputStream.write:([BII)V")]
     pub fn write_arr_c_i_i(&self, cbuf: JArray<u16>, off: i32, len: i32) -> Result<()> {
-        let units: Vec<u16> = (off..off + len).map(|i| cbuf.get(i)).collect();
+        let mut units: Vec<u16> = Vec::with_capacity(len.max(0) as usize);
+        for i in off..off + len {
+            units.push(cbuf.get(i)?);
+        }
         self.encode_units(&units)
     }
 

@@ -2,9 +2,9 @@ use crate::prelude::*;
 use super::*;
 
 impl Throwable {
-    // 未触发异常路径时从不被读取；返回哨兵占位（Object::default() = unit rc）
+    /// native fillInStackTrace(int)：原生二进制不维护 Java 栈帧记录，backtrace 保持为空。
     #[jvm_native]
-    pub fn SUPPRESSED_SENTINEL() -> Object {
-        Object::default()
+    pub fn fillInStackTrace_i(&self, _dummy: i32) -> Result<Throwable> {
+        Ok(Clone::clone(self))
     }
 }

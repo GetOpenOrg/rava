@@ -17,7 +17,8 @@ def sim_consts(ins, sim, class_name, registry) -> bool:
     elif op in ('dconst_0', 'dconst_1'):         sim.push(Lit(f"{op[-1]}f64"), F64)
     elif op == 'bipush':                         sim.push(Lit(f"{operand}i32"), I32)
     elif op == 'sipush':                         sim.push(Lit(f"{operand}i32"), I32)
-    elif op == 'ldc':
+    elif op in ('ldc', 'ldc_w', 'ldc2_w'):
+        # 三种宽度的常量装载语义相同，仅常量池索引宽度不同
         if operand.startswith('"'):
             # javap 已经以 "..." 格式给出（operand 是完整的带引号字符串），直接用
             sim.push(Lit(f"String::from({operand})"), RsNamed('String'))
@@ -28,14 +29,6 @@ def sim_consts(ins, sim, class_name, registry) -> bool:
         elif comment.startswith('float '): sim.push(Lit(_float_lit(comment[6:].strip(), 'f32')), F32)
         elif comment.startswith('long '):  sim.push(Lit(comment[5:].strip() + 'i64'), I64)
         elif comment.startswith('double '): sim.push(Lit(_float_lit(comment[7:].strip(), 'f64')), F64)
-        elif comment.startswith('class '): sim.push(Lit('Object::default()'), RsNamed('Object'))
-        else: sim.push(Lit(f"{operand}i32"), I32)
-    elif op in ('ldc2_w', 'ldc_w'):
-        if comment.startswith('long '):   sim.push(Lit(comment[5:].strip() + 'i64'), I64)
-        elif comment.startswith('double '): sim.push(Lit(_float_lit(comment[7:].strip(), 'f64')), F64)
-        elif comment.startswith('String '):
-            lit = _escape_str(comment[7:].rstrip('\n'))
-            sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         elif comment.startswith('class '): sim.push(Lit('Object::default()'), RsNamed('Object'))
         else: sim.push(Lit(f"{operand}i32"), I32)
     elif op == 'aconst_null': sim.push(Lit('Object::default()'), RsNamed('Object'))

@@ -7,7 +7,6 @@
   ternary        折叠为条件表达式（含 boolean 物化）
   const-fold     条件为编译期常量，折叠为无条件边
   dead           所在块在常量折叠后不可达（或字节码本身不可达）
-  handler        仅异常处理器可达（正常路径不翻译，与既有能力一致）
   dispatch       不可归约 CFG 的状态机兜底
 
 未被消费的跳转 → CfgAuditError（生成期错误，不允许静默继续）。
@@ -49,7 +48,8 @@ class AuditStats:
     by_kind: dict = field(default_factory=dict)
     dispatch_methods: int = 0
     stub_fallbacks: list = field(default_factory=list)  # [(method_id, reason)]
-    handler_methods: dict = field(default_factory=dict)  # method_id → 未翻译的异常处理器个数
+    try_regions: int = 0                                 # 结构化为 java_try! 的 try 区域数
+    handler_methods: dict = field(default_factory=dict)  # method_id → 未进入结构化树的异常处理器个数（终态 0）
     _seen: set = field(default_factory=set)
 
     def record(self, ledger: JumpLedger, used_dispatch: bool) -> None:
@@ -70,14 +70,17 @@ class AuditStats:
         if all(m != method_id for m, _ in self.stub_fallbacks):
             self.stub_fallbacks.append((method_id, reason))
 
-    def record_untranslated_handlers(self, method_id: str, count: int) -> None:
-        self.handler_methods[method_id] = count
+    def record_try_regions(self, method_id: str, count: int, untranslated_handlers: int) -> None:
+        self.try_regions += count
+        if untranslated_handlers:
+            self.handler_methods[method_id] = untranslated_handlers
 
     def summary(self) -> str:
         kinds = ' '.join(f"{k}={v}" for k, v in sorted(self.by_kind.items()))
         return (f"[cfg-audit] methods={self.methods} jumps={self.jumps} "
                 f"consumed={self.consumed} unconsumed={self.jumps - self.consumed} "
                 f"dispatch={self.dispatch_methods} "
+                f"try_regions={self.try_regions} "
                 f"handler_methods={len(self.handler_methods)} "
                 f"handler_jumps={self.by_kind.get('handler', 0)} "
                 f"stub_fallback={len(self.stub_fallbacks)} | {kinds}")

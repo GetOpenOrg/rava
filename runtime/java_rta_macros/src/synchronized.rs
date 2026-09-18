@@ -25,7 +25,7 @@
 //! pub fn increment(&self) -> Result<()> {
 //!     static __MONITOR: ::std::sync::Mutex<()> = ::std::sync::Mutex::new(());
 //!     let _guard = __MONITOR.lock().map_err(|_| {
-//!         java_runtime::error::JvmError::Custom("monitor lock failed".to_owned())
+//!         java_runtime::error::JvmError::illegal_monitor_state("monitor lock poisoned")
 //!     })?;
 //!     self.count += 1;
 //!     Ok(())
@@ -52,7 +52,7 @@ pub fn expand(_attr: TokenStream2, item: TokenStream2) -> TokenStream2 {
     // ? 传播：若 Mutex 被 poison（持有线程 panic），转换为 JvmError 向上传递
     let stmt_lock: syn::Stmt = syn::parse_quote! {
         let _guard = __MONITOR.lock().map_err(|_| {
-            java_runtime::error::JvmError::Custom("monitor lock failed".to_owned())
+            java_runtime::error::JvmError::illegal_monitor_state("monitor lock poisoned")
         })?;
     };
 

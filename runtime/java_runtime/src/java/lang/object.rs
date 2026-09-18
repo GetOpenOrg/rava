@@ -51,6 +51,36 @@ pub trait ObjectVTable: 'static {
     /// 默认（未实现任何接口的对象）不填 `slot`。
     #[doc(hidden)]
     fn __interface(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
+    /// 运行时类的 binary name（如 `java/lang/NullPointerException`）。
+    /// java_class! 宏对生成类自动 override；未捕获异常报告等 VM 级设施据此取得类名。
+    fn __class_name(&self) -> &'static str { "java/lang/Object" }
+
+    /// 按运行时类重建 `type_id`（本类或任一祖先类的 binary name）类型的引用视图。
+    /// 对象常以静态类型（如 `Throwable`）流转，catch 需要按运行时类还原为 catch 声明类型。
+    /// `any` 是对象存储的 `Rc<dyn Any>`；wrapper 侧 override 传入自身存储并委托 vtable。
+    fn __view_as(
+        &self,
+        _any: Rc<dyn std::any::Any>,
+        _type_id: &str,
+    ) -> Option<Box<dyn std::any::Any>> { None }
+
+    /// `Object.clone()` 的 native 语义：新建同运行时类的对象，逐字段拷贝（浅拷贝）。
+    /// java_class! 宏对生成类自动 override；无字段存储的值（装箱基本类型等）返回 None。
+    fn __shallow_copy(&self) -> Option<Object> { None }
+}
+
+/// `super.clone()`（invokespecial java/lang/Object.clone）的落点。
+/// Object.clone 是 ACC_NATIVE：运行时类未实现 Cloneable 时抛 CloneNotSupportedException，
+/// 否则返回逐字段浅拷贝。
+#[allow(non_snake_case)]
+pub fn Object__clone_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<Object> {
+    if !this.is_instance_of("java/lang/Cloneable") {
+        return Err(crate::error::JvmError::clone_not_supported(this.__class_name()));
+    }
+    match this.__shallow_copy() {
+        Some(copy) => Ok(copy),
+        None => Err(crate::error::JvmError::clone_not_supported(this.__class_name())),
+    }
 }
 
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────
@@ -128,10 +158,3 @@ impl Default for Object {
     fn default() -> Self { Object(Rc::new(())) }
 }
 
-/// `super.clone()` 的落点：`java/lang/Object.clone` 是 ACC_NATIVE 方法，invokespecial 的
-/// `Object__clone_base(this)` 路由到这里（与宏为生成类产出的 `ClassName__method_base` 同形）。
-/// 浅拷贝需要对象模型提供按运行时类型复制字段的入口，当前调用链尚未实际命中，保持精确存根。
-#[allow(non_snake_case)]
-pub fn Object__clone_base<T: ?Sized>(_this: &T) -> crate::error::Result<Object> {
-    panic!("stub: java/lang/Object.clone:()Ljava/lang/Object;")
-}

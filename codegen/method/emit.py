@@ -4,13 +4,18 @@
 标签策略：循环 'lN、带标签块 'bN，按先序编号；只有被 break / continue 显式引用时才输出标签。
 break / continue 指向最内层循环且中间没有隔着带标签块时省略标签（Rust E0695：
 带标签块内部不允许出现无标签的 break / continue）。
+
+try 区域输出为 `java_try! { try { .. } catch (e: T) { .. } }`。跨越 try 边界的 break / continue
+一律带标签（宏对带标签跳转原样放行，语义与 Java 一致：离开 try 语句，不经过任何 catch）。
 """
 
 from __future__ import annotations
 
 from ..cfg import render_cond, Dispatch, next_pc_lines, PC_VAR
-from ..cfg.structure import Code, Decl, Block, Loop, If, Switch, Break, Continue, _significant
-from ..rs_ir import RawStmt
+from ..cfg.structure import Code, Decl, Block, Loop, If, Switch, Try, Break, Continue, _significant
+from ..render import render_expr, render_type
+from ..rs_ir import LetStmt, RawStmt
+from .try_catch import catch_head
 
 _STEP = '    '
 
@@ -39,6 +44,10 @@ class TreeEmitter:
                 self._number(it.else_)
             elif isinstance(it, Switch):
                 for _, body in it.arms:
+                    self._number(body)
+            elif isinstance(it, Try):
+                self._number(it.body)
+                for _, body in it.catches:
                     self._number(body)
 
     # ── 输出 ───────────────────────────────────────────────────────────────
@@ -101,6 +110,8 @@ class TreeEmitter:
                     self._seq(body, ind + _STEP * 2, ctx, out, used)
                     out.append(('', f"{ind}{_STEP}}}"))
                 out.append(('', f"{ind}}}"))
+            elif isinstance(it, Try):
+                self._try(it, ind, ctx, out, used)
             elif isinstance(it, Dispatch):
                 self._dispatch(it, ind, out)
             else:
@@ -121,6 +132,28 @@ class TreeEmitter:
                 return
             out.append(('', f"{ind}}} else {{"))
             self._seq(it.else_, ind + _STEP, ctx, out, used)
+        out.append(('', f"{ind}}}"))
+
+    def _try(self, it: Try, ind: str, ctx: list, out: list, used: set) -> None:
+        inner_ctx = ctx + [('block', None)]      # try 边界：其内的 break / continue 必须带标签
+        body_ind = ind + _STEP * 2
+        out.append(('', f"{ind}java_try! {{"))
+        out.append(('', f"{ind}{_STEP}try {{"))
+        self._seq(it.body, body_ind, inner_ctx, out, used)
+        for (clause, bind, bind_ty), body in it.catches:
+            handler: list = []
+            self._seq(body, body_ind, inner_ctx, handler, used)
+            # 处理器首条 astore 生成的 `let e: T = _caughtN;` 并入 catch 头
+            if handler and isinstance(handler[0][1], LetStmt):
+                first = handler[0][1]
+                if (first.value is not None and first.ty is not None
+                        and render_expr(first.value) in (bind, f"Clone::clone(&{bind})")
+                        and render_type(first.ty) == bind_ty):
+                    bind = first.name
+                    del handler[0]
+            out.append(('', f"{ind}{_STEP}}} {catch_head(clause, bind, bind_ty)} {{"))
+            out.extend(handler)
+        out.append(('', f"{ind}{_STEP}}}"))
         out.append(('', f"{ind}}}"))
 
     def _dispatch(self, it: Dispatch, ind: str, out: list) -> None:

@@ -4,6 +4,7 @@ mod block;
 mod enum_macro;
 mod switch_macro;
 mod synchronized;
+mod try_macro;
 
 /// `java_class! { ... }` — 块级宏，封装单个 Java 类的全部 Rust 复杂度。
 #[proc_macro]
@@ -23,6 +24,19 @@ pub fn java_enum(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn java_switch(input: TokenStream) -> TokenStream {
     switch_macro::expand(input.into()).into()
+}
+
+/// `java_try! { try { ... } catch (e: T) { ... } }` — 封装 Java try/catch：
+/// 按异常对象的运行时类（含子类）匹配 catch 子句，未匹配则继续向外传播。
+#[proc_macro]
+pub fn java_try(input: TokenStream) -> TokenStream {
+    try_macro::expand(input.into()).into()
+}
+
+/// `java_unguarded! { ... }` — 标记 try 体文本范围内、不受该层异常表覆盖的代码（内联 finally 副本）。
+#[proc_macro]
+pub fn java_unguarded(input: TokenStream) -> TokenStream {
+    try_macro::expand_unguarded(input.into()).into()
 }
 
 /// `#[java_synchronized]` — 封装 Java `synchronized` 方法，函数级静态 Mutex 保证互斥。

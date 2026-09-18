@@ -126,7 +126,7 @@ def render_expr(expr) -> str:
         return f'{simple_name}::new()'
     if isinstance(expr, StaticFieldRef):
         simple_name = expr.class_name.rsplit('/', 1)[-1].replace('$', '_')
-        return f'{simple_name}{expr.turbofish}::{expr.field_name}()'
+        return f'{simple_name}{expr.turbofish}::{expr.field_name}()?'
     if isinstance(expr, RawExpr):
         return expr.code
     return f'/* unknown expr {type(expr).__name__} */'

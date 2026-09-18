@@ -504,17 +504,17 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     code_bytes = r.read(code_len)
 
     # exception table
-    # 每项 (start_pc, end_pc, handler_pc, catch_type)：catch_type 为类二进制名，
-    # 空串表示 catch-all（finally / synchronized 的清理处理器）
+    # 条目：(start_pc, end_pc, handler_pc, catch_type)；catch_type 为 binary name，
+    # None 表示 catch-any（finally / synchronized 的兜底处理器）。顺序即匹配优先级。
     exc_count = r.u2()
-    exception_table: list[tuple[int, int, int, str]] = []
+    exception_table: list[tuple[int, int, int, Optional[str]]] = []
     for _ in range(exc_count):
         _exc_start = r.u2()
         _exc_end = r.u2()
         _exc_handler = r.u2()
         _exc_type_idx = r.u2()
-        _exc_type = _utf8(pool, pool[_exc_type_idx][1]) if _exc_type_idx else ''
-        exception_table.append((_exc_start, _exc_end, _exc_handler, _exc_type))
+        exception_table.append((_exc_start, _exc_end, _exc_handler,
+                                _utf8(pool, _exc_type_idx) if _exc_type_idx else None))
 
     # sub-attributes：解析 LocalVariableTable 和 LocalVariableTypeTable，跳过其他
     sub_attr_count = r.u2()

@@ -28,6 +28,17 @@ pub(crate) struct InterfaceImpl {
     pub fns: Vec<FnItem>,
 }
 
+/// static 字段声明（impl 块内）：
+///   - `pub static NAME: Type;`          → 有存储的静态字段（JVM 默认值起步，由 `<clinit>` / putstatic 写入）
+///   - `pub const NAME: Type = expr;`    → ConstantValue 编译期常量（访问不触发类初始化，JVMS §5.5）
+pub(crate) struct StaticItem {
+    pub attrs: Vec<Attribute>,
+    pub vis: Visibility,
+    pub name: Ident,
+    pub ty: Type,
+    pub const_value: Option<Expr>,
+}
+
 pub(crate) struct ClassInput {
     pub attrs: Vec<Attribute>,
     pub struct_ident: Ident,
@@ -35,6 +46,7 @@ pub(crate) struct ClassInput {
     pub fields: Vec<(Ident, Type)>,
     pub fns: Vec<FnItem>,
     pub iface_impls: Vec<InterfaceImpl>,
+    pub statics: Vec<StaticItem>,
 }
 
 impl Parse for ClassInput {
@@ -71,6 +83,7 @@ impl Parse for ClassInput {
         // impl 块序列：`impl Class { .. }`（自有成员）与 `impl Iface for Class { .. }`（实现的接口）
         let mut fns: Vec<FnItem> = Vec::new();
         let mut iface_impls: Vec<InterfaceImpl> = Vec::new();
+        let mut statics: Vec<StaticItem> = Vec::new();
         while !input.is_empty() {
             let _mid_attrs = input.call(Attribute::parse_outer)?;
             let _: Token![impl] = input.parse()?;
@@ -89,32 +102,61 @@ impl Parse for ClassInput {
             }
             let body;
             syn::braced!(body in input);
-            let items = parse_impl_fns(&body)?;
+            let (items, static_items) = parse_impl_fns(&body)?;
             match iface {
                 Some(iface) => iface_impls.push(InterfaceImpl { iface, fns: items }),
-                None => fns.extend(items),
+                None => {
+                    fns.extend(items);
+                    statics.extend(static_items);
+                }
             }
         }
 
-        Ok(ClassInput { attrs, struct_ident, generics, fields, fns, iface_impls })
+        Ok(ClassInput { attrs, struct_ident, generics, fields, fns, iface_impls, statics })
     }
 }
 
-pub(crate) fn parse_impl_fns(input: ParseStream) -> syn::Result<Vec<FnItem>> {
+pub(crate) fn parse_impl_fns(input: ParseStream) -> syn::Result<(Vec<FnItem>, Vec<StaticItem>)> {
     let mut out = Vec::new();
+    let mut statics = Vec::new();
     while !input.is_empty() {
         let attrs = input.call(Attribute::parse_outer)?;
         let vis: Visibility = input.parse()?;
+        if input.peek(Token![static]) || input.peek(Token![const]) {
+            let is_const = input.peek(Token![const]);
+            if is_const {
+                let _: Token![const] = input.parse()?;
+            } else {
+                let _: Token![static] = input.parse()?;
+            }
+            let name: Ident = input.parse()?;
+            let _: Token![:] = input.parse()?;
+            let ty: Type = input.parse()?;
+            let const_value = if input.peek(Token![=]) {
+                let _: Token![=] = input.parse()?;
+                Some(input.parse::<Expr>()?)
+            } else {
+                None
+            };
+            let _: Token![;] = input.parse()?;
+            if is_const && const_value.is_none() {
+                return Err(syn::Error::new_spanned(&name, "const 静态字段必须带初值"));
+            }
+            statics.push(StaticItem { attrs, vis, name, ty, const_value });
+            continue;
+        }
         let sig: Signature = input.parse()?;
         let block = if input.peek(Token![;]) {
             let _: Token![;] = input.parse()?;
             None
         } else {
-            Some(input.parse::<Block>()?)
+            let mut body = input.parse::<Block>()?;
+            crate::try_macro::expand_in_block(&mut body);
+            Some(body)
         };
         out.push(FnItem { attrs, vis, sig, block });
     }
-    Ok(out)
+    Ok((out, statics))
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
