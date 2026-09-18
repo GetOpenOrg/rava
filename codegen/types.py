@@ -100,6 +100,10 @@ class ClassInfo:
     source_file:       str  = ''
     inner_classes:     list = None   # list[InnerClassInfo]
     is_deprecated:     bool = False
+    # EnclosingMethod attribute（仅局部类 / 匿名类有）：直接外围类 binary name；
+    # enclosing_method = (name, descriptor)，位于初始化器中时为 None
+    enclosing_class:   str  = ''
+    enclosing_method:  tuple = None
 
     def __post_init__(self):
         if self.interfaces is None:

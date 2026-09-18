@@ -80,12 +80,12 @@ def jvm_to_rust(t: str, registry: dict | None = None) -> str:
             # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突
             if ci.is_interface:
                 return _iface_full_path(inner)
-            if ci.generic_signature:
-                tparams = parse_class_type_params(ci.generic_signature)
-                if tparams:
-                    # 所有类型参数填 Object（JVM 类型擦除的 Rust 表现）
-                    objects = ', '.join('Object' for _ in tparams)
-                    return f"{name}<{objects}>"
+            tparams = effective_class_type_params(ci, registry)
+            if tparams:
+                # 所有类型参数填 Object（JVM 类型擦除的 Rust 表现）；
+                # 含内部类从外围作用域继承的类型参数
+                objects = ', '.join('Object' for _ in tparams)
+                return f"{name}<{objects}>"
             return name
         return 'Object'
     if t.startswith('['):
@@ -592,26 +592,95 @@ def parse_class_type_params(sig: str) -> list[str]:
     return params
 
 
+_ACC_MANDATED = 0x8000
+
+
+def outer_instance_class(ci) -> str:
+    """内部类实例所绑定的外部实例所属类（binary name）；无外部实例（静态上下文）→ ''。
+
+    依据（全部来自字节码）：
+      - 合成字段 this$N 的描述符；
+      - javac 在外部实例未被使用时省略 this$N，但构造器仍保留该形参，并在
+        MethodParameters 中标记 ACC_MANDATED —— 以 EnclosingMethod（局部 / 匿名类）
+        或 InnerClasses（成员类）记录的直接外围类核对首个形参描述符。
+    """
+    for f in ci.fields:
+        if not f.is_static and re.match(r'^this\$\d+$', f.name):
+            m = re.match(r'L([^;]+);$', f.descriptor)
+            if m:
+                return m.group(1)
+    enclosing = getattr(ci, 'enclosing_class', '')
+    if not enclosing:
+        for ic in ci.inner_classes or ():
+            if ic.inner_class == ci.name:
+                enclosing = ic.outer_class
+                break
+    if enclosing:
+        for m in ci.methods:
+            if m.name != '<init>' or not m.method_parameters:
+                continue
+            params = parse_descriptor_params(m.descriptor)
+            if (params and params[0] == f'L{enclosing};'
+                    and m.method_parameters[0][1] & _ACC_MANDATED):
+                return enclosing
+    return ''
+
+
+def enclosing_method_info(ci, registry):
+    """局部 / 匿名类的外围方法（EnclosingMethod attribute）→ ParsedMethod；无 → None。"""
+    enclosing = getattr(ci, 'enclosing_class', '')
+    em = getattr(ci, 'enclosing_method', None)
+    if not (enclosing and em and registry):
+        return None
+    outer_ci = registry.get(enclosing)
+    if outer_ci is None:
+        return None
+    for m in outer_ci.methods:
+        if m.name == em[0] and m.descriptor == em[1]:
+            return m
+    return None
+
+
 def effective_class_type_params(ci, registry=None) -> list[str]:
     """类在 Rust 侧的有效类型参数表。
 
-    - 类自身 Signature 声明了形参 → 用自身形参
-    - 否则若是内部类（持有 this$N 字段）→ 继承外部类的形参
-      （Java 内部类隐式可见外部类类型变量，Rust struct 必须显式声明）
+    Java 内部类隐式可见外围作用域的类型变量，Rust struct 必须显式声明：
+      - 局部 / 匿名类（带 EnclosingMethod）→ 外部实例所属类的有效形参（实例上下文）
+        + 外围方法的方法级形参（遮蔽同名外层形参）+ 自身声明的形参
+      - 成员内部类：自身声明了形参 → 用自身形参；否则继承外部实例所属类的有效形参
     """
     own = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
-    if own or not registry:
+    if not registry:
         return own
-    for f in ci.fields:
-        if f.is_static or not re.match(r'^this\$\d+$', f.name):
-            continue
-        m = re.match(r'L([^;]+);', f.descriptor)
-        if m:
-            outer_ci = registry.get(m.group(1))
-            if outer_ci is not None and outer_ci.generic_signature:
-                return list(parse_class_type_params(outer_ci.generic_signature))
-        break
-    return []
+    is_local = bool(getattr(ci, 'enclosing_class', ''))
+    if own and not is_local:
+        return own
+    inherited: list[str] = []
+    outer_bin = outer_instance_class(ci)
+    outer_ci = registry.get(outer_bin) if outer_bin else None
+    if outer_ci is not None and outer_ci is not ci:
+        inherited = list(effective_class_type_params(outer_ci, registry))
+    if is_local:
+        em = enclosing_method_info(ci, registry)
+        if em is not None and em.generic_signature:
+            method_params = parse_class_type_params(em.generic_signature)
+            inherited = [p for p in inherited if p not in method_params] + method_params
+    return [p for p in inherited if p not in own] + own
+
+
+def enclosing_scope_type_args(ci, registry, scope_type_params) -> list[str]:
+    """在构造点（其外围作用域内）实例化 ci 的有效类型参数。
+
+    构造点可见的同名类型变量（scope_type_params：当前 impl 的形参）原样传递；
+    其余是外围方法的方法级类型变量 —— 实例方法内它们在 Rust 侧按上界 / Object
+    擦除（见 parse_method_param_types），实例化取同一形态。
+    """
+    params = effective_class_type_params(ci, registry)
+    em = enclosing_method_info(ci, registry)
+    bounds = (_extract_method_tparam_bounds(em.generic_signature, registry)
+              if em is not None and em.generic_signature else {})
+    scope = set(scope_type_params or ())
+    return [p if p in scope else bounds.get(p, 'Object') for p in params]
 
 
 def _superclass_sig_segments(sig: str, class_type_params: list[str], registry=None) -> list[list[str]]:
@@ -712,20 +781,30 @@ def superclass_type_args(ci, registry) -> list[str]:
     return [a if _type_arg_is_resolvable(a, own_params, registry) else 'Object' for a in args]
 
 
+def outer_instance_rust_type(outer_bin: str, decl_params: list, registry) -> str:
+    """外部实例在内部类视角下的 Rust 类型：外部类 + 其有效形参中被内部类继承的同名
+    类型变量（如 ArrayList$Itr → ArrayList<E>）；未继承的形参取 Object。
+    外部类非泛型 / 不在 registry → ''。"""
+    outer_ci = registry.get(outer_bin) if registry else None
+    if outer_ci is None:
+        return ''
+    outer_tp = effective_class_type_params(outer_ci, registry)
+    if not outer_tp:
+        return ''
+    return rust_type_with_args(short_cls(outer_bin),
+                               [p if p in decl_params else 'Object' for p in outer_tp])
+
+
 def outer_ref_field_type(f, decl_params: list, registry) -> str:
-    """内部类外部引用字段（this$N）的 Rust 类型：外部类 + 声明类从外部类继承的类型参数
-    （如 ArrayList$Itr.this$0 → ArrayList<E>）。非 this$N 字段或外部类非泛型 → ''。
+    """内部类外部引用字段（this$N）的 Rust 类型（见 outer_instance_rust_type）。
+    非 this$N 字段或外部类非泛型 → ''。
     struct 字段定义（class_writer）与 getfield/putfield 的字段类型恢复共用。"""
     if not (re.match(r'^this\$\d+$', f.name) and decl_params and registry):
         return ''
     fm = re.match(r'L([^;]+);', f.descriptor)
-    outer_ci = registry.get(fm.group(1)) if fm else None
-    if outer_ci is None or not outer_ci.generic_signature:
+    if not fm:
         return ''
-    outer_tp = parse_class_type_params(outer_ci.generic_signature)
-    if not outer_tp or len(outer_tp) > len(decl_params):
-        return ''
-    return short_cls(fm.group(1)) + '<' + ', '.join(decl_params[:len(outer_tp)]) + '>'
+    return outer_instance_rust_type(fm.group(1), decl_params, registry)
 
 
 def rust_type_with_args(short_name: str, args: list[str]) -> str:
@@ -876,6 +955,104 @@ def parse_method_param_types(
 
 
 _ACC_PRIVATE = 0x0002
+_ACC_SYNTHETIC = 0x1000
+_LOAD_OPCODE_RE = re.compile(r'^[ailfd]load(?:_(\d))?$')
+
+
+def is_anonymous_class(ci) -> bool:
+    """匿名类：带 EnclosingMethod，且 InnerClasses 中自身条目无简单名。"""
+    if not getattr(ci, 'enclosing_class', ''):
+        return False
+    return any(ic.inner_class == ci.name and not ic.inner_name for ic in ci.inner_classes or ())
+
+
+def _forwarded_super_ctor_params(ci, m) -> 'tuple[str, dict[int, int]]':
+    """构造器体内 super(...) 调用的 (父类构造器描述符, {父类形参下标 → 本构造器形参下标})。
+    只收录「实参是本构造器形参的直接转发（xload slot）」的位置。"""
+    params = parse_descriptor_params(m.descriptor)
+    slot_to_param: dict[int, int] = {}
+    slot = 1
+    for idx, p in enumerate(params):
+        slot_to_param[slot] = idx
+        slot += 2 if p in ('J', 'D') else 1
+    marker = f'Method {ci.super_class}.<init>:'
+    for pos, ins in enumerate(m.instrs):
+        if ins.opcode != 'invokespecial' or not (ins.comment or '').startswith(marker):
+            continue
+        super_desc = ins.comment[len(marker):]
+        n_super = len(parse_descriptor_params(super_desc))
+        forwarded: dict[int, int] = {}
+        for k in range(n_super):
+            src_pos = pos - n_super + k
+            if src_pos < 0:
+                break
+            lm = _LOAD_OPCODE_RE.match(m.instrs[src_pos].opcode)
+            if not lm:
+                continue
+            src_slot = int(lm.group(1)) if lm.group(1) is not None else int(m.instrs[src_pos].operand or -1)
+            if src_slot in slot_to_param:
+                forwarded[k] = slot_to_param[src_slot]
+        return super_desc, forwarded
+    return '', {}
+
+
+def constructor_sig_types(ci, m, class_type_params: list[str], registry=None) -> list[str]:
+    """构造器在 Rust 侧的形参类型表；[] 表示退回描述符擦除形态。
+    定义侧（方法体）与所有调用侧（new / super(...)）统一经 method_sig_types 到达此处。
+
+    构造器的描述符含编译器注入的隐式形参，而 Signature attribute 只描述源码声明的形参：
+      - 外部实例（内部类首个形参）→ 外部类 + 本类继承的类型变量（Outer<E>）
+      - 匿名类构造器（JLS §15.9.5.1：形参与父类构造器一致，无 Signature）
+        → 转发给 super(...) 的形参取父类构造器的泛型形参类型（父类形参按本类的
+          SuperclassSignature 实参替换）
+      - 其余隐式形参（捕获变量 val$x、枚举 name/ordinal）→ 描述符形态
+    """
+    params = parse_descriptor_params(m.descriptor)
+    if not params:
+        return []
+    types = [jvm_to_rust(p, registry) for p in params]
+    recovered = False
+
+    if m.generic_signature:
+        declared, _ = parse_method_param_types(m.generic_signature, class_type_params, registry,
+                                               is_static=False)
+        if len(declared) == len(params):
+            types, recovered = list(declared), True
+        elif declared and m.method_parameters and len(m.method_parameters) == len(params):
+            explicit = [i for i, (_n, flags) in enumerate(m.method_parameters)
+                        if not flags & (_ACC_SYNTHETIC | _ACC_MANDATED)]
+            if len(explicit) == len(declared):
+                for i, t in zip(explicit, declared):
+                    types[i] = t
+                recovered = True
+
+    outer_bin = outer_instance_class(ci)
+    if outer_bin and params[0] == f'L{outer_bin};' and registry:
+        outer_ty = outer_instance_rust_type(outer_bin, class_type_params, registry)
+        if outer_ty:
+            types[0], recovered = outer_ty, True
+
+    if (not m.generic_signature and registry and is_anonymous_class(ci)
+            and ci.super_class in registry):
+        super_desc, forwarded = _forwarded_super_ctor_params(ci, m)
+        parent_ci = registry[ci.super_class]
+        parent_m = next((pm for pm in parent_ci.methods
+                         if pm.name == '<init>' and pm.descriptor == super_desc), None)
+        if parent_m is not None and forwarded:
+            parent_params = effective_class_type_params(parent_ci, registry)
+            parent_types = constructor_sig_types(parent_ci, parent_m, parent_params, registry)
+            parent_args = superclass_type_args(ci, registry)
+            if len(parent_args) != len(parent_params):
+                parent_args = ['Object'] * len(parent_params)
+            mapping = dict(zip(parent_params, parent_args))
+            for super_idx, own_idx in forwarded.items():
+                if super_idx < len(parent_types):
+                    types[own_idx] = substitute_type_params(parent_types[super_idx], mapping)
+                    recovered = True
+
+    return types if recovered else []
+
+
 
 
 def method_sig_types(ci, m, class_type_params: list[str], registry=None) -> tuple[list[str], str]:
@@ -887,6 +1064,8 @@ def method_sig_types(ci, m, class_type_params: list[str], registry=None) -> tupl
     （ancestor_type_args）替换后作为本方法签名；祖先声明无泛型签名 → 退回描述符。
     方法定义侧（方法体 / native 存根）与所有调用侧统一经此函数取签名。
     """
+    if m.name == '<init>':
+        return constructor_sig_types(ci, m, class_type_params, registry), '()'
     root_ci, root_m, root_args = None, None, []
     if registry and not m.is_static and not m.is_constructor and not (m.access_flags & _ACC_PRIVATE):
         for anc_bin, args in ancestor_type_args(ci, registry):
