@@ -91,6 +91,7 @@ def gen_method_body(
         _builtin = frozenset({
             'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
             'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
+            'JArray',  # Rust 端数组包装，不对应 Java 类
         })
         _reg_shorts = (
             {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
@@ -416,6 +417,10 @@ def gen_method_body(
                 guard = if_guard_map[i]
                 fall_cond = pop_fall_cond(op)
                 flush_here()
+                # fall_cond 静态为 false：guard body 是死代码，直接跳过
+                if fall_cond == 'false':
+                    i = guard.continue_idx
+                    continue
                 out.append(('', f"{ind}if {fall_cond} {{"))
                 inner = make_sub()
                 inner.enter_scope()
@@ -502,7 +507,13 @@ def gen_method_body(
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             ev = f"({ev} as {ty_str})"
                         # else: both are non-primitive structs, leave as-is and hope types match
-                    cur_sim.push(RawExpr(f"(if {fall_cond} {{ {tv} }} else {{ {ev} }})"), ty)
+                    # fall_cond 静态 false/true：跳过死代码臂
+                    if fall_cond == 'false':
+                        cur_sim.push(RawExpr(f"({ev})"), ety)
+                    elif fall_cond == 'true':
+                        cur_sim.push(RawExpr(f"({tv})"), ty)
+                    else:
+                        cur_sim.push(RawExpr(f"(if {fall_cond} {{ {tv} }} else {{ {ev} }})"), ty)
                 elif ie.has_else and then_extra == 1 and else_extra == 1:
                     # 两分支均留一个值在栈上且有语句：声明合并变量，分支内赋值后推入栈
                     ty = then_s.stack[-1][1]
@@ -544,31 +555,57 @@ def gen_method_body(
                     merge_v = cur_sim.fresh('_merged')
                     flush_here()
                     out.append(('', f"{ind}let mut {merge_v}: {ty_str};"))
-                    out.append(('', f"{ind}if {fall_cond} {{"))
-                    out.extend(then_out)
-                    for s in then_s.stmts:
-                        out.append((ind + "    ", s))
-                    out.append((ind + "    ", RawStmt(f"{merge_v} = {then_val};")))
-                    out.append(('', f"{ind}}} else {{"))
-                    out.extend(else_out)
-                    for s in else_s.stmts:
-                        out.append((ind + "    ", s))
-                    out.append((ind + "    ", RawStmt(f"{merge_v} = {else_val};")))
-                    out.append(('', f"{ind}}}"))
-                    cur_sim.push(Var(merge_v), ty)
-                    cur_sim.locals = then_s.locals
-                    cur_sim._slot_decl_depth = then_s._slot_decl_depth
-                else:
-                    out.append(('', f"{ind}if {fall_cond} {{"))
-                    out.extend(then_out)
-                    for s in then_s.stmts:
-                        out.append((ind + "    ", s))
-                    if ie.has_else:
+                    if fall_cond == 'false':
+                        # then 臂是死代码，直接渲染 else 臂
+                        out.extend(else_out)
+                        for s in else_s.stmts:
+                            out.append((ind + "    ", s))
+                        out.append((ind + "    ", RawStmt(f"{merge_v} = {else_val};")))
+                        ty = ety; ty_str = ety_str
+                    elif fall_cond == 'true':
+                        # else 臂是死代码，直接渲染 then 臂
+                        out.extend(then_out)
+                        for s in then_s.stmts:
+                            out.append((ind + "    ", s))
+                        out.append((ind + "    ", RawStmt(f"{merge_v} = {then_val};")))
+                    else:
+                        out.append(('', f"{ind}if {fall_cond} {{"))
+                        out.extend(then_out)
+                        for s in then_s.stmts:
+                            out.append((ind + "    ", s))
+                        out.append((ind + "    ", RawStmt(f"{merge_v} = {then_val};")))
                         out.append(('', f"{ind}}} else {{"))
                         out.extend(else_out)
                         for s in else_s.stmts:
                             out.append((ind + "    ", s))
-                    out.append(('', f"{ind}}}"))
+                        out.append((ind + "    ", RawStmt(f"{merge_v} = {else_val};")))
+                        out.append(('', f"{ind}}}"))
+                    cur_sim.push(Var(merge_v), ty)
+                    cur_sim.locals = then_s.locals
+                    cur_sim._slot_decl_depth = then_s._slot_decl_depth
+                else:
+                    if fall_cond == 'false':
+                        # then 臂是死代码，直接渲染 else 臂（若有）
+                        if ie.has_else:
+                            out.extend(else_out)
+                            for s in else_s.stmts:
+                                out.append((ind + "    ", s))
+                    elif fall_cond == 'true' and ie.has_else:
+                        # else 臂是死代码，直接渲染 then 臂
+                        out.extend(then_out)
+                        for s in then_s.stmts:
+                            out.append((ind + "    ", s))
+                    else:
+                        out.append(('', f"{ind}if {fall_cond} {{"))
+                        out.extend(then_out)
+                        for s in then_s.stmts:
+                            out.append((ind + "    ", s))
+                        if ie.has_else:
+                            out.append(('', f"{ind}}} else {{"))
+                            out.extend(else_out)
+                            for s in else_s.stmts:
+                                out.append((ind + "    ", s))
+                        out.append(('', f"{ind}}}"))
                     cur_sim.locals = then_s.locals
                     cur_sim._slot_decl_depth = then_s._slot_decl_depth
 

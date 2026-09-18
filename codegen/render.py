@@ -143,7 +143,14 @@ def _render_block_expr(b: BlockExpr) -> str:
 
 
 def _render_if_expr(e: IfExpr) -> str:
-    s = f'if {render_expr(e.cond)} {_render_block_expr(e.then)}'
+    cond_str = render_expr(e.cond)
+    # 条件静态为 false：跳过 then 块，直接渲染 else 块（若有）
+    # 避免死代码中的类型擦除不一致导致 E0308
+    if cond_str == 'false':
+        if e.else_ is not None:
+            return _render_block_expr(e.else_)
+        return '{}'
+    s = f'if {cond_str} {_render_block_expr(e.then)}'
     if e.else_ is not None:
         s += f' else {_render_block_expr(e.else_)}'
     return s

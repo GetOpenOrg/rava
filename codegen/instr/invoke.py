@@ -33,12 +33,14 @@ def _lookup_method_sig_params(
     descriptor_ret: str,
     registry: dict | None,
     caller_class_type_params: frozenset[str],
+    receiver_targ_map: dict | None = None,
 ) -> list[str | None] | None:
     """查找被调用方法的 generic_signature，返回真实参数类型列表。
 
     返回值中 None 表示该位置降级到 jvm_to_rust(descriptor)。
     只有当 callee 的类型参数在 caller 的类型参数集合中可见时，才保留泛型参数名；
-    否则（调用方用 raw/擦除类型），该位置设为 None，让调用方降级到 descriptor 推导类型。
+    receiver_targ_map 提供 callee 类型参数到接收者实参的映射（如 {K: E, V: Object}），
+    用于解析跨类泛型调用（HashSet<E> 调 HashMap<E,Object>.put(K,V) → K=E）。
     """
     if not cls_short or not registry:
         return None
@@ -60,12 +62,18 @@ def _lookup_method_sig_params(
             if not types:
                 return None
             # 将 callee 类型参数映射到 caller 上下文：
-            # 若某参数是 callee 的类型参数但不在 caller 的类型参数集合中，
-            # 说明 caller 用的是擦除类型（如 raw ArrayList），该位置设 None（降级到 descriptor）
+            # 优先级：receiver_targ_map（接收者泛型实参）> caller_class_type_params（同名类型参数）
+            # 若某参数是 callee 的类型参数但无法解析，设 None（降级到 descriptor）
             resolved: list[str | None] = []
             for t in types:
-                if t in callee_tparams and t not in caller_class_type_params:
-                    resolved.append(None)   # 擦除，使用 jvm_to_rust(descriptor) 降级
+                if t in callee_tparams:
+                    if t in caller_class_type_params:
+                        resolved.append(t)
+                    elif receiver_targ_map and t in receiver_targ_map:
+                        # 从接收者类型实参解析（如 HashMap<E,Object> → K=E）
+                        resolved.append(receiver_targ_map[t])
+                    else:
+                        resolved.append(None)   # 擦除，使用 jvm_to_rust(descriptor) 降级
                 else:
                     resolved.append(t)
             # registry 中所有接口的短名在调用点降级为 Object（Arch-1 接口 = Object
@@ -185,6 +193,7 @@ def _lookup_method_sig_ret(
             _builtin = frozenset({
                 'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
                 'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
+                'JArray',  # Rust 端数组包装，不对应 Java 类
             })
             _reg_shorts = {k.rsplit('/', 1)[-1].replace('$', '_') for k in registry}
             for name in _re_v.findall(r'[A-Za-z_][A-Za-z0-9_]*', sig_ret):
@@ -658,8 +667,27 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
 
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
+    # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
+    # 解析泛型实参以建立 callee 类型参数 → 接收者实参的映射（如 HashMap<E,Object> → K=E）
+    _recv_targ_map: dict | None = None
+    _recv_stack_idx = len(params)
+    if len(sim.stack) > _recv_stack_idx:
+        import re as _re_recv
+        _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
+        _rm = _re_recv.match(r'^(\w+)<(.+)>$', _recv_ty)
+        if _rm and registry:
+            _r_cls_short = _rm.group(1)
+            _r_args = _split_type_args(_rm.group(2))
+            _r_bin = _rust_type_to_binary(_r_cls_short, registry)
+            if _r_bin:
+                _r_ci = registry.get(_r_bin)
+                if _r_ci and getattr(_r_ci, 'generic_signature', None):
+                    _r_tparams = _parse_class_type_params(_r_ci.generic_signature)
+                    if len(_r_tparams) == len(_r_args):
+                        _recv_targ_map = dict(zip(_r_tparams, _r_args))
     sig_params_v = _lookup_method_sig_params(
-        cls, mname, params, ret, registry, sim.class_type_params
+        cls, mname, params, ret, registry, sim.class_type_params,
+        receiver_targ_map=_recv_targ_map,
     )
     args = []
     for _idx_v, param_jvm in enumerate(reversed(params)):
