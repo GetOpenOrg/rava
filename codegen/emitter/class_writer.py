@@ -17,6 +17,7 @@ from .attrs import (to_snake, _java_class_block_head,
                     _java_field_attr, _java_method_attr)
 from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, _find_virtual_in
+from ..instr.coerce import _parse_field_ref
 from .clinit_extract import _push_int_value, _extract_clinit_consts, _extract_clinit_arrays
 
 _safe_field_name = safe_ident
@@ -630,7 +631,19 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # JVM 原始类型描述符集合，可安全包装在 OnceLock<Mutex<T>> 中（均实现 Send + Copy）
     # String（Java 自定义类型）不在此集合，因其含 Rc 字段，不实现 Send
     _MUTABLE_STATIC_DESCS = frozenset({'I', 'J', 'F', 'D', 'Z', 'B', 'C', 'S'})
+    # 在 <clinit> 之外被 putstatic 写入的静态字段（惰性初始化 / 运行期可变状态）：
+    # 必须有真实存储 + setter；未写入时 getter 返回 JVM 默认值（null/0），与 JVM 语义一致。
+    _runtime_written_statics: set[str] = set()
+    for _wm in ci.methods:
+        if _wm.name == '<clinit>':
+            continue
+        for _wi in (_wm.instrs or []):
+            if _wi.opcode == 'putstatic' and _wi.comment:
+                _w_cls, _w_fname, _ = _parse_field_ref(_wi.comment)
+                if _w_cls == ci.name:
+                    _runtime_written_statics.add(_w_fname)
     for sf in ([] if _is_iface else static_fields):
+        _has_storage = _is_user_class or sf.name in _runtime_written_statics
         safe_fname = _safe_field_name(sf.name)
         if safe_fname in existing_method_names:
             # 字段名与方法名冲突：改用 _field 后缀，让 getstatic 仍能访问该字段
@@ -649,6 +662,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         rust_ret = _gs_ret if _gs_ret else jvm_to_rust(sf.descriptor, registry=registry)
         # ConstantValue attribute 优先；其次尝试从 <clinit> 提取简单常量
         cv = sf.constant_value or _clinit_consts.get(sf.name, '')
+        body = ''
         if cv:
             if cv == '__EMPTY_ARRAY__':
                 # iconst_0 → anewarray → putstatic：static final T[] = new T[0]
@@ -671,12 +685,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 body = 'true' if cv == '1' else 'false'
             else:
                 body = cv
+        # 运行期可写字段即便有 <clinit> 常量初值也需要真实存储（初值作为未写入时的默认值）
+        _rt_written = sf.name in _runtime_written_statics and not sf.constant_value
+        if cv and not _rt_written:
             field_meta = _java_field_attr(sf)
             method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
-        elif _is_user_class and sf.descriptor in _MUTABLE_STATIC_DESCS:
+        elif _has_storage and sf.descriptor in _MUTABLE_STATIC_DESCS:
             # 用户类可变静态字段（JVM 原始类型，Send + Copy）：OnceLock<Mutex<T>>
             _static_var = f"_{struct_name}_{safe_fname}_STATIC"
-            _default = rust_default(rust_ret)
+            _default = body if (cv and body) else rust_default(rust_ret)
             module_statics.append(
                 f"static {_static_var}: std::sync::OnceLock<std::sync::Mutex<{rust_ret}>> = std::sync::OnceLock::new();"
             )
@@ -693,8 +710,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 f'    *{_static_var}.get_or_init(|| std::sync::Mutex::new({_default})).lock().unwrap() = v;\n'
                 f'}}'
             )
-        elif _is_user_class:
-            # 用户类可变静态字段（非原始类型，不实现 Send）：unsafe static mut Option<T>
+        elif _has_storage:
+            # 用户类 / 运行期可写的可变静态字段（非原始类型，不实现 Send）：unsafe static mut Option<T>
             _static_var = f"_{struct_name}_{safe_fname}_STATIC"
             _default = rust_default(rust_ret)
             module_statics.append(
@@ -729,7 +746,16 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
 
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
-    for m in ([] if _is_iface else visible_methods):
+    # 非桥接的 synthetic 方法（lambda$xxx$N、access$NNN 等）是 invokedynamic 闭包 /
+    # 内部类访问器的真实调用目标，必须生成定义；桥接方法（ACC_BRIDGE）与真实方法同名，继续过滤。
+    # 注意：它们不参与 name_counts / overloaded_names 统计（编译器保证其名字唯一）。
+    _ACC_BRIDGE = 0x0040
+    emitted_methods = visible_methods + [
+        m for m in ci.methods
+        if m.is_synthetic and not (m.access_flags & _ACC_BRIDGE)
+        and m.name not in ('<init>', '<clinit>')
+    ]
+    for m in ([] if _is_iface else emitted_methods):
         if m.name == '<clinit>':
             # 用户类：翻译 <clinit> 为 class_init() 函数
             if _is_user_class:
@@ -830,6 +856,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         }
         # 预扫描：统计所有待继承 default 方法的名字（用于 default 方法之间互相冲突判断）
         default_name_counts: dict[str, int] = {}
+        _pre_counted_sigs: set[tuple] = set()
         _pre_iface_queue = list(ci.interfaces)
         _pre_visited: set[str] = set()
         while _pre_iface_queue:
@@ -845,7 +872,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             for _dm in _ici.methods:
                 if not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic and _dm.name not in ('<init>', '<clinit>'):
                     _dm_pp = _param_part(_dm.descriptor)
-                    if (_dm.name, _dm.descriptor) not in existing_sigs and (_dm.name, _dm_pp) not in existing_param_sigs:
+                    # 子接口覆盖父接口的同签名 default（如子接口重新声明 and(P)）只注入一次，
+                    # 计数也必须按 (name, 参数签名) 去重，否则单一方法被误判为重载而 mangle
+                    if ((_dm.name, _dm.descriptor) not in existing_sigs
+                            and (_dm.name, _dm_pp) not in existing_param_sigs
+                            and (_dm.name, _dm_pp) not in _pre_counted_sigs):
+                        _pre_counted_sigs.add((_dm.name, _dm_pp))
                         default_name_counts[_dm.name] = default_name_counts.get(_dm.name, 0) + 1
         iface_queue: list[str] = list(ci.interfaces)
         visited_ifaces: set[str] = set()

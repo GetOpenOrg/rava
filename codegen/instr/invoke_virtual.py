@@ -264,9 +264,27 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                                 if _m.name == mname and not _m.is_synthetic
                                 and len(parse_descriptor_params(_m.descriptor)) == len(params)
                             ]
+                            if len(_cands17) > 1:
+                                # 多个同名同参数个数的重载：bridge 目标的每个参数
+                                # 与擦除描述符的 primitive/引用 类别必须逐位一致
+                                # （bridge 只擦除引用类型，不改变 primitive 参数）
+                                def _is_ref17(_d):
+                                    return _d.startswith(('L', '['))
+                                _cands17 = [
+                                    _m for _m in _cands17
+                                    if all(
+                                        _is_ref17(_a) == _is_ref17(_b) and (_is_ref17(_a) or _a == _b)
+                                        for _a, _b in zip(parse_descriptor_params(_m.descriptor), params))
+                                ]
                             if len(_cands17) == 1:
                                 _bm17 = _cands17[0]
                         if _bm17 is not None:
+                            if _bm17.descriptor != jvm_desc:
+                                # bridge 目标的真实描述符与调用点擦除描述符不同：
+                                # 重载 mangle 后缀必须按真实方法的描述符生成，与定义侧一致
+                                sub_mname_r = _safe_field(_mangle_if_overloaded(
+                                    _mangle_cls, mname,
+                                    f"Method {_own_ci17.name}.{mname}:{_bm17.descriptor}", registry))
                             _bp17 = parse_descriptor_params(_bm17.descriptor)
                             if len(_bp17) == len(args) and _bp17 != list(params):
                                 # 从 generic_signature 提取参数类型（若有）
@@ -468,7 +486,9 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 其他 wrapper 类型的 receiver 仍走常规 vtable 分派检查。
     _cur_class_short = short_cls(class_name) if class_name else ''
     _ufcs_vtable_prefix = None  # 若非 None，改写为 UFCS：<dyn _ufcs_vtable_prefix>::rust_mname(&*obj.vtable, args)
-    if sim.in_vtable_body and obj_base == _cur_class_short:
+    # 仅当接收者就是 this 本身时才直接调用；同类的其他实例（如 compareTo(that) 的 that）
+    # 是 wrapper，继承方法必须走常规 vtable / UFCS 分派
+    if sim.in_vtable_body and obj_base == _cur_class_short and obj_e in ('this', 'self'):
         _recv = obj_e
     else:
         _obj_jvm = _rust_type_to_binary(obj_base, registry) if registry else None
