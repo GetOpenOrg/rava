@@ -112,3 +112,11 @@ pub struct Object(pub Rc<dyn ObjectVTable>);
 impl Default for Object {
     fn default() -> Self { Object(Rc::new(())) }
 }
+
+/// `super.clone()` 的落点：`java/lang/Object.clone` 是 ACC_NATIVE 方法，invokespecial 的
+/// `Object__clone_base(this)` 路由到这里（与宏为生成类产出的 `ClassName__method_base` 同形）。
+/// 浅拷贝需要对象模型提供按运行时类型复制字段的入口，当前调用链尚未实际命中，保持精确存根。
+#[allow(non_snake_case)]
+pub fn Object__clone_base<T: ?Sized>(_this: &T) -> crate::error::Result<Object> {
+    panic!("stub: java/lang/Object.clone:()Ljava/lang/Object;")
+}

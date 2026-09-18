@@ -7,6 +7,7 @@ import re as _re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
+from ..cfg import CfgAuditError, STATS as _CFG_STATS
 from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names
 from ..type_map import (effective_class_type_params, ancestor_type_args, outer_ref_field_type,
                         class_type_param_bounds,
@@ -785,8 +786,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         rust_name='class_init',
                     )
                     method_blocks.append(attr_line + '\n' + clinit_body)
-                except Exception:
-                    pass  # 翻译失败则跳过，class_init 不存在也不影响编译
+                except CfgAuditError:
+                    raise
+                except Exception as e:
+                    # 翻译失败则跳过，class_init 不存在也不影响编译
+                    _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}", repr(e))
             continue
         # 确定最终 Rust 方法名（有重载则加描述符后缀）
         rust_name = mangle_name(m.name, m.descriptor) if m.name in overloaded_names else m.name
@@ -847,8 +851,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         1,
                     )
                 method_blocks.append(attr_line + '\n' + body)
+            except CfgAuditError:
+                raise
             except Exception as e:
                 # 翻译失败：退化为 stub，避免生成无效 Rust
+                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}", repr(e))
                 import os as _os
                 if _os.environ.get('JAVA_RTA_DEBUG'):
                     import traceback as _tb
@@ -966,7 +973,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                             in_vtable_body=True,
                         )
                         method_blocks.append(dm_attr + '\n' + dm_body)
-                    except Exception:
+                    except CfgAuditError:
+                        raise
+                    except Exception as e:
+                        _CFG_STATS.record_stub_fallback(f"{ci.name}.{dm.name}:{dm.descriptor}", repr(e))
                         dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry, class_type_params=class_type_params)
                         method_blocks.append(dm_attr + '\n' + dm_stub)
                 else:
@@ -1014,7 +1024,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                             in_vtable_body=True,
                         )
                         method_blocks.append(_vm_attr + '\n' + _vm_body)
-                    except Exception:
+                    except CfgAuditError:
+                        raise
+                    except Exception as e:
+                        _CFG_STATS.record_stub_fallback(f"{ci.name}.{_vm.name}:{_vm.descriptor}", repr(e))
                         _vm_stub = _gen_native_stub(_vm2, ci, registry=registry, class_type_params=class_type_params)
                         method_blocks.append(_vm_attr + '\n' + _vm_stub)
             _vinh_super = _vinh_sci.super_class if _vinh_sci.super_class else None

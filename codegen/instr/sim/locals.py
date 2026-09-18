@@ -17,14 +17,14 @@ def sim_locals(ins, sim, class_name, registry) -> bool:
     elif op.startswith('dload'): e, _ = sim.load_local(_parse_slot(op, operand)); sim.push(e, F64)
     elif op.startswith('aload'): sim.push(*sim.load_local(_parse_slot(op, operand)))
     elif op.startswith('istore'):
-        e, ty = sim.pop()
+        e, ty = sim.pop_for_store()
         # int 家族（bool/u16/i8/i16/i32）到局部声明类型的对齐统一在 store_local 内完成
         sim.store_local(_parse_slot(op, operand), e, ty)
-    elif op.startswith('lstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, I64)
-    elif op.startswith('fstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F32)
-    elif op.startswith('dstore'): e, _ = sim.pop(); sim.store_local(_parse_slot(op, operand), e, F64)
+    elif op.startswith('lstore'): e, _ = sim.pop_for_store(); sim.store_local(_parse_slot(op, operand), e, I64)
+    elif op.startswith('fstore'): e, _ = sim.pop_for_store(); sim.store_local(_parse_slot(op, operand), e, F32)
+    elif op.startswith('dstore'): e, _ = sim.pop_for_store(); sim.store_local(_parse_slot(op, operand), e, F64)
     elif op.startswith('astore'):
-        e, ty = sim.pop()
+        e, ty = sim.pop_for_store()
         sim.store_local(_parse_slot(op, operand), e, ty)
     elif op == 'iinc':
         parts = operand.replace(',', ' ').split()

@@ -1,0 +1,755 @@
+"""
+逐块栈模拟 + CFG 级归约。
+
+输入：方法指令序列的基本块 CFG 与一个 StackSim。
+输出：归约后的节点图（每个节点 = 一段 Rust 语句 + 一个终结：cond / goto / switch / exit），
+      交给 cfg.structure 结构化（不可归约时交给 cfg.dispatch 状态机）。
+
+与 StackSim 的接口：
+  - 每个块以「入口状态」（操作数栈 + 局部变量表）启动模拟；入口状态由已处理的前向前驱汇合得到
+  - 汇合点上各前驱留下的不同栈值 → 合并变量 `_mergedN`（前驱末尾赋值）
+  - 跳转指令由本层解释（弹操作数、构造 Cond），不经过 sim_instr
+
+归约（全部保语义，且每条被吸收的跳转都记入账本）：
+  fuse           单前驱直线块并入前驱
+  short-circuit  `a && b` / `a || b` 的级联条件块并入前驱条件
+  ternary        两臂各留一个值的菱形 → 条件表达式（0/1 两臂 → 布尔表达式）
+  const-fold     编译期常量条件 → 无条件边（死臂不再模拟）
+"""
+
+from __future__ import annotations
+import re
+from dataclasses import dataclass, field
+
+from ..cfg import (
+    CfgError, build_blocks, analyze, reachable,
+    COND_BRANCH_OPS, TWO_OPERAND_BRANCH_OPS, GOTO_OPS, SWITCH_OPS, JUMP_OPS,
+    Cond, atom, negate, cond_and, cond_or, render_cond, map_atoms, cmp_op, neg_cmp_op,
+    JumpLedger,
+)
+from ..constants import PRIMITIVE_RUST_TYPES as _PRIM_TYPES
+from ..instr import sim_instr
+from ..instr.coerce import _common_ref_type
+from ..render import render_expr, render_stmt, render_type
+from ..rs_ir import LetStmt, AssignStmt, RawExpr, RawStmt, Var
+from ..stack import BOOL, StackSim, _clone_moved_var
+from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 数据模型
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class CondExpr(RawExpr):
+    """由条件跳转物化出的布尔值（`return a == b || c;`）。保留 Cond 以便被后续 ifeq/ifne 直接复用。"""
+    cond: Cond = None
+
+
+@dataclass
+class Node:
+    id: int
+    start_pc: int
+    kind: str                          # 'cond' | 'goto' | 'switch' | 'exit'
+    target: int | None = None
+    fallthrough: int | None = None
+    cases: list = field(default_factory=list)
+    default: int | None = None
+    cond: Cond | None = None
+    key: str = ''
+    pcs: list = field(default_factory=list)      # 本节点终结所承载的跳转指令 pc
+    stmts: list = field(default_factory=list)
+    decls: list = field(default_factory=list)    # 本节点入口合并变量的声明行
+    entry_stack: list = field(default_factory=list)
+    entry_locals: dict = field(default_factory=dict)
+    exit_stack: list = field(default_factory=list)
+    exit_locals: dict = field(default_factory=dict)
+    processed: bool = False
+    removed: bool = False
+
+    def successors(self) -> list[int]:
+        if self.kind == 'cond':
+            return [self.target] if self.target == self.fallthrough else [self.target, self.fallthrough]
+        if self.kind == 'goto':
+            return [self.target]
+        if self.kind == 'switch':
+            out: list[int] = []
+            for _, tgt in self.cases:
+                if tgt not in out:
+                    out.append(tgt)
+            if self.default not in out:
+                out.append(self.default)
+            return out
+        return []
+
+
+@dataclass
+class SimResult:
+    nodes: dict
+    entry: int
+    dispatch: bool
+    top_decls: list = field(default_factory=list)   # 状态机模式下提升到函数顶部的声明行
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 条件构造
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _uses_jvm_null_method(ty: str) -> bool:
+    """类型是否用 .is_jvm_null() 检测 null（java_class! 生成类）；其余走 _is_jnull()。"""
+    if ty in ('Object', '()', '') or ty in _PRIM_TYPES:
+        return False
+    if ty.startswith(('JArray<', 'Rc<', 'Vec<', 'Box<', 'std::')):
+        return False
+    if len(ty) <= 2 and ty[0].isupper() and ty.rstrip('0123456789').isalpha():
+        return False
+    return True
+
+
+def _is_bool(ty) -> bool:
+    return str(ty) == 'bool' or getattr(ty, 'name', '') == 'bool'
+
+
+def jump_condition(op: str, sim: StackSim) -> Cond:
+    """弹出条件跳转的操作数，返回「跳转成立」的条件。"""
+    if op in TWO_OPERAND_BRANCH_OPS:
+        b_e, b_t = sim.pop()
+        a_e, a_t = sim.pop()
+        coerce = _coerce_acmp_operand if op in ('if_acmpeq', 'if_acmpne') else _coerce_icmp_operand
+        a_s = coerce(render_expr(a_e), a_t)
+        b_s = coerce(render_expr(b_e), b_t)
+        return atom(cmp_op(op, a_s, b_s), neg_cmp_op(op, a_s, b_s))
+    a_e, a_t = sim.pop()
+    if op in ('ifeq', 'ifne') and _is_bool(a_t):
+        base = a_e.cond if isinstance(a_e, CondExpr) else atom(render_expr(a_e))
+        return base if op == 'ifne' else negate(base)
+    a_s = render_expr(a_e)
+    if op in ('ifnull', 'ifnonnull'):
+        if _uses_jvm_null_method(render_type(a_t)):
+            is_null = atom(f'{a_s}.is_jvm_null()', f'!{a_s}.is_jvm_null()')
+        else:
+            is_null = atom(f'_is_jnull(&{a_s})', f'!_is_jnull(&{a_s})')
+        return is_null if op == 'ifnull' else negate(is_null)
+    return atom(cmp_op(op, a_s, ''), neg_cmp_op(op, a_s, ''))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 分支臂取值与类型统一
+# ─────────────────────────────────────────────────────────────────────────────
+
+_INT_TYPES = frozenset({'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64'})
+_SCALAR_TYPES = _INT_TYPES | {'bool', 'f32', 'f64'}
+_NULL_EXPRS = frozenset({'Object::default()', 'Clone::clone(&Object::default())'})
+
+
+def arm_value(entry) -> str:
+    """留在栈上的值 → 值位置表达式。局部变量出现在值位置是 Rust move，
+    Java 引用无 move 语义 → 包 Clone::clone 保活；this 是 &Self → Clone::clone(this)。"""
+    expr, ty = entry
+    if isinstance(expr, Var) and expr.name == 'this':
+        return 'Clone::clone(this)'
+    return render_expr(_clone_moved_var(expr, ty))
+
+
+def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
+    """两个汇合值统一到同一 Rust 类型。返回 (tv, ev, ty)。"""
+    ty_str, ety_str = render_type(ty), render_type(ety)
+    if ty_str == ety_str:
+        return tv, ev, ty
+    same_base = (ty_str.split('<')[0] == ety_str.split('<')[0] and '<' in ty_str and '<' in ety_str)
+    if ty_str == 'bool' and ety_str in _INT_TYPES:
+        ev = f"({ev} != 0)"
+    elif ety_str == 'bool' and ty_str in _INT_TYPES:
+        tv = f"({tv} != 0)"
+        ty = ety
+    elif ev in _NULL_EXPRS and ty_str not in _SCALAR_TYPES:
+        ev = 'Default::default()'
+    elif tv in _NULL_EXPRS and ety_str not in _SCALAR_TYPES:
+        tv = 'Default::default()'
+        ty = ety
+    elif (ety_str == 'Object' and ty_str not in _SCALAR_TYPES and ty_str != 'Object'
+          and ty_str not in class_tparams):
+        ev = f"({ev}).downcast::<{ty_str}>()"
+    elif (ty_str == 'Object' and ety_str not in _SCALAR_TYPES and ety_str != 'Object'
+          and ety_str not in class_tparams):
+        ev = f"Object::from_any(Clone::clone(&{ev}))"
+    elif ty_str in _SCALAR_TYPES or ety_str in _SCALAR_TYPES:
+        ev = f"({ev} as {ty_str})"
+    elif _common_ref_type(ty_str, ety_str, registry):
+        common = _common_ref_type(ty_str, ety_str, registry)
+        if ty_str != common:
+            tv = f"{common}::from({tv})"
+        if ety_str != common:
+            ev = f"{common}::from({ev})"
+        ty = _str_to_rs_type(common)
+    elif same_base and 'Object' in ty_str and any(t in ety_str for t in class_tparams):
+        tv = 'Default::default()'
+        ty = ety
+    elif same_base and 'Object' in ety_str and 'Object' not in ty_str:
+        tv = 'Default::default()'
+        ty = ety
+    return tv, ev, ty
+
+
+_HOLE = '\x00'
+
+
+def unify_values(entries: list, class_tparams, registry):
+    """N 个汇合值统一类型。返回 ([value_str], ty)。"""
+    values = [arm_value(entries[0])]
+    ty = entries[0][1]
+    for entry in entries[1:]:
+        hole, ev, ty = unify_pair(_HOLE, ty, arm_value(entry), entry[1], class_tparams, registry)
+        if hole != _HOLE:
+            values = [hole.replace(_HOLE, v) for v in values]
+        values.append(ev)
+    return values, ty
+
+
+def _same_entry(a, b) -> bool:
+    if a is b or a[0] is b[0]:
+        return True
+    return render_expr(a[0]) == render_expr(b[0]) and render_type(a[1]) == render_type(b[1])
+
+
+def _same_stack(a: list, b: list) -> bool:
+    return len(a) == len(b) and all(_same_entry(x, y) for x, y in zip(a, b))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 临时变量回填：`let _tN = call?; if _tN {` → 条件内联
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TEMP_LET_RE = re.compile(r'^let (mut )?(_[A-Za-z]\w*?\d+)(?:: (.+?))? = (.*);$', re.S)
+_NO_INLINE_MARKERS = ('Default::default()', '.into()', 'panic!', '\n')
+
+
+def _parse_temp_let(stmt):
+    """RawStmt 形式的临时变量声明 → (name, mutable, ty_text | None, value_text)；否则 None。"""
+    if not isinstance(stmt, RawStmt):
+        return None
+    m = _TEMP_LET_RE.match(stmt.code.strip())
+    if not m:
+        return None
+    return m.group(2), bool(m.group(1)), m.group(3), m.group(4)
+
+
+def _needs_paren(text: str) -> bool:
+    depth = 0
+    for ch in text:
+        if ch in '([{':
+            depth += 1
+        elif ch in ')]}':
+            depth -= 1
+        elif depth == 0 and ch in ' <>=|&+-*/%!':
+            return True
+    return False
+
+
+def _word_count(name: str, text: str) -> int:
+    return len(re.findall(r'(?<![\w.])' + re.escape(name) + r'\b', text))
+
+
+def inline_temps(stmts: list, cond: Cond, exit_stack: list) -> Cond | None:
+    """若 stmts 全部是只用一次的临时变量声明，把它们回填进条件，返回新条件；否则 None。
+
+    保持求值顺序：临时变量在条件文本中的出现顺序必须与声明顺序一致。
+    """
+    if not stmts:
+        return cond
+    temps: list[tuple[str, str]] = []
+    for stmt in stmts:
+        parsed = _parse_temp_let(stmt)
+        if parsed is None:
+            return None
+        name, mutable, _ty, value = parsed
+        if mutable or any(mk in value for mk in _NO_INLINE_MARKERS):
+            return None
+        temps.append((name, value))
+    stack_text = ' '.join(render_expr(e) for e, _ in exit_stack)
+    resolved: dict[str, str] = {}
+    used_in_value: set[str] = set()
+    for name, value in temps:
+        for prev in list(resolved):
+            n = _word_count(prev, value)
+            if n == 0:
+                continue
+            if n != 1 or prev in used_in_value:
+                return None
+            pv = resolved[prev]
+            value = re.sub(r'(?<![\w.])' + re.escape(prev) + r'\b',
+                           lambda _m, _pv=pv: f'({_pv})' if _needs_paren(_pv) else _pv, value)
+            used_in_value.add(prev)
+        resolved[name] = value
+    top = [n for n, _ in temps if n not in used_in_value]
+    text = render_cond(cond)
+    positions = []
+    for name in top:
+        if _word_count(name, text) != 1 or _word_count(name, stack_text) != 0:
+            return None
+        positions.append(re.search(r'(?<![\w.])' + re.escape(name) + r'\b', text).start())
+    for name in used_in_value:
+        if _word_count(name, text) != 0 or _word_count(name, stack_text) != 0:
+            return None
+    if positions != sorted(positions):
+        return None
+
+    def substitute(s: str) -> str:
+        for name in top:
+            val = resolved[name]
+            rep = f'({val})' if _needs_paren(val) else val
+            s = re.sub(r'(?<![\w.])' + re.escape(name) + r'\b', lambda _m, _r=rep: _r, s)
+        return s
+
+    return map_atoms(cond, substitute)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 模拟器
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BlockSimulator:
+    def __init__(self, method, sim: StackSim, registry, class_tparams, ledger: JumpLedger):
+        self.method = method
+        self.instrs = method.instrs
+        self.sim = sim
+        self.registry = registry
+        self.class_tparams = list(class_tparams or [])
+        self.ledger = ledger
+        self.blocks = build_blocks(self.instrs, method.exception_table)
+        self.nodes: dict[int, Node] = {}
+
+    # ── 入口 ────────────────────────────────────────────────────────────────
+
+    def run(self) -> SimResult:
+        blocks = self.blocks
+        succs_raw = {b.id: b.term.successors() for b in blocks}
+        raw_reach = reachable(0, succs_raw)
+        self._register_jumps(succs_raw, raw_reach)
+
+        staged: dict[int, Node] = {}
+        for b in blocks:
+            t = b.term
+            kind = 'goto' if t.kind == 'fall' else t.kind
+            staged[b.id] = Node(
+                id=b.id, start_pc=b.start_pc, kind=kind, target=t.target,
+                fallthrough=t.fallthrough, cases=[(list(v), tg) for v, tg in t.cases],
+                default=t.default, pcs=[t.pc] if t.pc is not None else [])
+        self._thread_jumps(staged, raw_reach)
+
+        succs0 = {nid: n.successors() for nid, n in staged.items()}
+        flow0 = analyze(0, succs0)
+        self.flow0 = flow0
+        live = set(flow0.rpo)
+        for nid in flow0.rpo:
+            self.nodes[nid] = staged[nid]
+        for nid, n in staged.items():
+            # 线程化后失去全部前驱的纯 goto 块：其跳转已由前驱的边承载
+            if nid in raw_reach and nid not in live:
+                self._consume(n.pcs, 'structured')
+
+        if not flow0.reducible:
+            return self._run_dispatch()
+        return self._run_structured()
+
+    def _thread_jumps(self, staged: dict, raw_reach: set) -> None:
+        """跳转线程化：只含一条 goto 的块不产生任何代码，指向它的边直接改指其最终目标。
+        （`break` 经由中转 goto 到达循环出口时，&& / || 的两个出口才会落在同一目标上。）"""
+        trampoline: dict[int, int] = {}
+        for b in self.blocks:
+            if b.id != 0 and b.end_idx - b.start_idx == 1 and b.term.kind == 'goto' \
+                    and b.term.pc is not None and b.term.target != b.id:
+                trampoline[b.id] = b.term.target
+
+        def resolve(nid: int) -> int:
+            seen = set()
+            while nid in trampoline and nid not in seen:
+                seen.add(nid)
+                nid = trampoline[nid]
+            return nid if nid not in trampoline else -1
+
+        final = {nid: resolve(nid) for nid in trampoline}
+        final = {nid: tgt for nid, tgt in final.items() if tgt != -1}
+        if not final:
+            return
+        for n in staged.values():
+            if n.target in final:
+                n.target = final[n.target]
+            if n.fallthrough in final:
+                n.fallthrough = final[n.fallthrough]
+            if n.default in final:
+                n.default = final[n.default]
+            n.cases = [(v, final.get(tg, tg)) for v, tg in n.cases]
+
+    def _register_jumps(self, succs0: dict, main_reach: set) -> None:
+        handler_reach: set[int] = set()
+        for b in self.blocks:
+            if b.is_handler_entry and b.id not in main_reach:
+                handler_reach |= reachable(b.id, succs0)
+        handler_reach -= main_reach
+        for b in self.blocks:
+            for i in range(b.start_idx, b.end_idx):
+                ins = self.instrs[i]
+                if ins.opcode not in JUMP_OPS:
+                    continue
+                self.ledger.expect(ins.offset)
+                if b.id in main_reach:
+                    continue
+                self.ledger.consume(ins.offset, 'handler' if b.id in handler_reach else 'dead')
+
+    # ── 图查询 ──────────────────────────────────────────────────────────────
+
+    def _all_preds(self, nid: int) -> list[Node]:
+        return [p for p in self.nodes.values() if not p.removed and nid in p.successors()]
+
+    def _live_preds(self, nid: int) -> list[Node]:
+        return [self.nodes[p] for p in self.flow0.rpo
+                if self.nodes[p].processed and not self.nodes[p].removed
+                and nid in self.nodes[p].successors()]
+
+    # ── 单块模拟 ────────────────────────────────────────────────────────────
+
+    def _simulate(self, node: Node) -> None:
+        sim = self.sim
+        blk = self.blocks[node.id]
+        instrs = self.instrs
+        sim.stack = list(node.entry_stack)
+        sim.locals = dict(node.entry_locals)
+        sim.stmts = []
+        last = blk.end_idx - 1
+        for i in range(blk.start_idx, blk.end_idx):
+            ins = instrs[i]
+            sim.current_offset = ins.offset
+            sim.next_offset = instrs[i + 1].offset if i + 1 < len(instrs) else 0
+            op = ins.opcode
+            if i == last and op in JUMP_OPS:
+                if op in COND_BRANCH_OPS:
+                    node.cond = jump_condition(op, sim)
+                elif op in SWITCH_OPS:
+                    key_e, key_t = sim.pop()
+                    key_s = render_expr(key_e)
+                    node.key = key_s if render_type(key_t) == 'i32' else f"(({key_s}) as i32)"
+                break
+            sim_instr(ins, sim, self.method.class_name, registry=self.registry)
+        if sim.underflow_occurred:
+            raise CfgError(f"操作数栈下溢（块 pc={node.start_pc}）")
+        node.stmts = sim.stmts
+        node.exit_stack = list(sim.stack)
+        node.exit_locals = dict(sim.locals)
+        sim.stmts = []
+        node.processed = True
+
+    # ── 入口状态汇合 ────────────────────────────────────────────────────────
+
+    def _merge_entry(self, node: Node, preds: list[Node]) -> None:
+        first = preds[0]
+        depth = len(first.exit_stack)
+        for p in preds[1:]:
+            if len(p.exit_stack) != depth:
+                raise CfgError(f"汇合点 pc={node.start_pc} 各前驱栈深不一致")
+        stack = []
+        for k in range(depth):
+            column = [p.exit_stack[k] for p in preds]
+            if all(_same_entry(column[0], c) for c in column[1:]):
+                stack.append(column[0])
+                continue
+            values, ty = unify_values(column, self.class_tparams, self.registry)
+            name = self.sim.fresh('_merged')
+            for p, v in zip(preds, values):
+                p.stmts.append(RawStmt(f"{name} = {v};"))
+            node.decls.append(f"let mut {name}: {render_type(ty)};")
+            stack.append((Var(name), ty))
+        node.entry_stack = stack
+
+        locals_ = dict(first.exit_locals)
+        idom_node = self.nodes.get(self.flow0.idom.get(node.id))
+        for slot in list(locals_):
+            name, ty, _ = locals_[slot]
+            for p in preds[1:]:
+                other = p.exit_locals.get(slot)
+                if other is None or other[0] != name:
+                    del locals_[slot]
+                    break
+                if render_type(other[1]) != render_type(ty) and idom_node is not None and idom_node.processed:
+                    dom_entry = idom_node.exit_locals.get(slot)
+                    if dom_entry is not None and dom_entry[0] == name:
+                        locals_[slot] = dom_entry
+        node.entry_locals = locals_
+
+    # ── 归约 ────────────────────────────────────────────────────────────────
+
+    def _consume(self, pcs: list, kind: str) -> None:
+        for pc in pcs:
+            self.ledger.consume(pc, kind)
+
+    def _fold_const(self, node: Node) -> None:
+        if node.kind != 'cond':
+            return
+        if node.cond.is_const:
+            node.target = node.target if node.cond.value else node.fallthrough
+            node.kind, node.cond, node.fallthrough = 'goto', None, None
+            self._consume(node.pcs, 'const-fold')
+            node.pcs = []
+        elif node.target == node.fallthrough:
+            # 两臂同一目标：条件只为副作用求值
+            node.stmts.append(RawStmt(f"let _ = {render_cond(node.cond)};"))
+            node.kind, node.cond, node.fallthrough = 'goto', None, None
+            self._consume(node.pcs, 'structured')
+            node.pcs = []
+
+    def _try_fuse(self, node: Node) -> Node:
+        """单前驱直线块并入前驱。返回并入后的当前节点。"""
+        if node.id == 0 or node.decls:
+            return node
+        preds = self._all_preds(node.id)
+        if len(preds) != 1:
+            return node
+        p = preds[0]
+        if p is node or not p.processed or p.kind != 'goto':
+            return node
+        p.stmts.extend(node.stmts)
+        p.kind, p.cond, p.key = node.kind, node.cond, node.key
+        p.target, p.fallthrough = node.target, node.fallthrough
+        p.cases, p.default = node.cases, node.default
+        p.exit_stack, p.exit_locals = node.exit_stack, node.exit_locals
+        self._consume(p.pcs, 'structured')
+        p.pcs = list(node.pcs)
+        node.removed = True
+        return p
+
+    def _try_short_circuit(self, node: Node) -> Node:
+        """条件块 B 并入其唯一前驱条件块 P（&& / ||），可级联。"""
+        while node.kind == 'cond' and node.id != 0 and not node.decls:
+            preds = self._all_preds(node.id)
+            if len(preds) != 1:
+                break
+            p = preds[0]
+            if p is node or not p.processed or p.kind != 'cond':
+                break
+            if not all(x is y or x[0] is y[0] for x, y in zip(p.exit_stack, node.exit_stack)) \
+                    or len(p.exit_stack) != len(node.exit_stack):
+                break
+            b_cond = inline_temps(node.stmts, node.cond, node.exit_stack)
+            if b_cond is None:
+                break
+            cp, cb = p.cond, b_cond
+            if p.fallthrough == node.id and p.target != node.id:
+                if node.target == p.target:            # if (P || B) goto T
+                    cond, tgt, fall = cond_or(cp, cb), p.target, node.fallthrough
+                elif node.fallthrough == p.target:     # if (!P && B) goto Bt
+                    cond, tgt, fall = cond_and(negate(cp), cb), node.target, p.target
+                else:
+                    break
+            elif p.target == node.id and p.fallthrough != node.id:
+                if node.target == p.fallthrough:       # if (P && !B) goto Bf
+                    cond, tgt, fall = cond_and(cp, negate(cb)), node.fallthrough, p.fallthrough
+                elif node.fallthrough == p.fallthrough:  # if (P && B) goto Bt
+                    cond, tgt, fall = cond_and(cp, cb), node.target, p.fallthrough
+                else:
+                    break
+            else:
+                break
+            p.cond, p.target, p.fallthrough = cond, tgt, fall
+            p.exit_locals = node.exit_locals
+            self._consume(node.pcs, 'short-circuit')
+            p.pcs.extend(node.pcs)
+            node.removed = True
+            self._fold_const(p)
+            node = p
+        return node
+
+    def _try_ternary(self, merge_id: int) -> None:
+        """汇合点前的菱形：两臂各留一个值 → 条件表达式。"""
+        changed = True
+        while changed:
+            changed = False
+            preds = self._live_preds(merge_id)
+            for a in preds:
+                if not self._is_value_arm(a, merge_id):
+                    continue
+                p = self._all_preds(a.id)[0]
+                if p.kind != 'cond' or not p.processed or p.target == p.fallthrough:
+                    continue
+                other_id = p.fallthrough if p.target == a.id else p.target
+                b = self.nodes[other_id]
+                if b is a or b.removed or not b.processed or not self._is_value_arm(b, merge_id):
+                    continue
+                if self._all_preds(b.id)[0] is not p:
+                    continue
+                base = len(p.exit_stack)
+                if not all(len(arm.exit_stack) == base + 1
+                           and all(x is y or x[0] is y[0] for x, y in zip(p.exit_stack, arm.exit_stack))
+                           for arm in (a, b)):
+                    continue
+                jump_arm = a if p.target == a.id else b
+                fall_arm = b if jump_arm is a else a
+                p.exit_stack = list(p.exit_stack) + [self._ternary_value(p.cond, fall_arm, jump_arm)]
+                self._consume(p.pcs + a.pcs + b.pcs, 'ternary')
+                p.kind, p.cond, p.target, p.fallthrough, p.pcs = 'goto', None, merge_id, None, []
+                a.removed = b.removed = True
+                changed = True
+                break
+
+    def _is_value_arm(self, arm: Node, merge_id: int) -> bool:
+        if arm.id == 0 or arm.kind != 'goto' or arm.target != merge_id or arm.stmts or arm.decls:
+            return False
+        return len(self._all_preds(arm.id)) == 1
+
+    def _ternary_value(self, jump_cond: Cond, fall_arm: Node, jump_arm: Node):
+        fall_entry, jump_entry = fall_arm.exit_stack[-1], jump_arm.exit_stack[-1]
+        literals = {render_expr(fall_entry[0]), render_expr(jump_entry[0])}
+        if literals == {'0i32', '1i32'} and render_type(fall_entry[1]) == 'i32' \
+                and render_type(jump_entry[1]) == 'i32':
+            truth = jump_cond if render_expr(jump_entry[0]) == '1i32' else negate(jump_cond)
+            return (CondExpr(code=f"({render_cond(truth)})", cond=truth), BOOL)
+        tv, ev, ty = unify_pair(arm_value(fall_entry), fall_entry[1],
+                                arm_value(jump_entry), jump_entry[1],
+                                self.class_tparams, self.registry)
+        fall_cond = render_cond(negate(jump_cond))
+        return (RawExpr(f"(if {fall_cond} {{ {tv} }} else {{ {ev} }})"), ty)
+
+    # ── 可归约路径 ──────────────────────────────────────────────────────────
+
+    def _run_structured(self) -> SimResult:
+        nodes = self.nodes
+        flow0 = self.flow0
+        live: set[int] = {0}
+        for nid in flow0.rpo:
+            node = nodes[nid]
+            if nid not in live:
+                self._consume(node.pcs, 'dead')
+                node.removed = True
+                continue
+            if nid != 0:
+                self._try_ternary(nid)
+            preds = self._live_preds(nid)
+            if nid == 0:
+                node.entry_stack, node.entry_locals = [], dict(self.sim.locals)
+            elif not preds:
+                raise CfgError(f"活块 pc={node.start_pc} 没有已处理的前驱")
+            elif len(preds) == 1:
+                node.entry_stack = list(preds[0].exit_stack)
+                node.entry_locals = dict(preds[0].exit_locals)
+            else:
+                self._merge_entry(node, preds)
+            self._simulate(node)
+            self._fold_const(node)
+            for s in node.successors():
+                live.add(s)
+                target = nodes[s]
+                if target.processed and not target.removed and s != nid \
+                        and not _same_stack(node.exit_stack, target.entry_stack):
+                    raise CfgError(f"回边 pc={node.start_pc}→{target.start_pc} 两端操作数栈不一致")
+            if node.id in node.successors() and not _same_stack(node.exit_stack, node.entry_stack):
+                raise CfgError(f"自环 pc={node.start_pc} 两端操作数栈不一致")
+            node = self._try_fuse(node)
+            self._try_short_circuit(node)
+
+        self._inline_loop_header_temps()
+        self._promote_cross_block_temps()
+        kept = {n.id: n for n in nodes.values() if n.processed and not n.removed}
+        return SimResult(nodes=kept, entry=0, dispatch=False)
+
+    def _inline_loop_header_temps(self) -> None:
+        """循环头若只由可回填的临时变量构成，回填进条件（使 `while cond {` 形态成立）。"""
+        kept = {n.id: n for n in self.nodes.values() if n.processed and not n.removed}
+        flow = analyze(0, {i: n.successors() for i, n in kept.items()})
+        for h in flow.loops:
+            node = kept[h]
+            if node.kind != 'cond' or not node.stmts or node.decls:
+                continue
+            cond = inline_temps(node.stmts, node.cond, node.exit_stack)
+            if cond is not None:
+                node.cond, node.stmts = cond, []
+
+    def _promote_cross_block_temps(self) -> None:
+        """在某节点声明、被其他节点引用的临时变量：RawStmt → LetStmt，交给变量提升 pass 管理作用域。"""
+        kept = [n for n in self.nodes.values() if n.processed and not n.removed]
+        declared: dict[str, tuple[Node, int]] = {}
+        for n in kept:
+            for k, stmt in enumerate(n.stmts):
+                parsed = _parse_temp_let(stmt)
+                if parsed is not None:
+                    declared[parsed[0]] = (n, k)
+        if not declared:
+            return
+        name_re = re.compile(r'\b_[A-Za-z]\w*?\d+\b')
+        for n in kept:
+            parts = [render_stmt(s) for s in n.stmts]
+            if n.cond is not None:
+                parts.append(render_cond(n.cond))
+            parts.append(n.key)
+            for name in set(name_re.findall('\n'.join(parts))):
+                owner = declared.get(name)
+                if owner is None or owner[0] is n:
+                    continue
+                o_node, k = owner
+                parsed = _parse_temp_let(o_node.stmts[k])
+                if parsed is None:
+                    continue
+                _, mutable, ty_text, value = parsed
+                ty = _str_to_rs_type(ty_text) if ty_text else None
+                o_node.stmts[k] = LetStmt(name, ty, mutable, RawExpr(value))
+
+    # ── 状态机路径（不可归约 CFG）───────────────────────────────────────────
+
+    def _run_dispatch(self) -> SimResult:
+        nodes = self.nodes
+        sim = self.sim
+        spill: dict[int, list] = {}
+        top_decls: list[str] = []
+        entry_locals: dict[int, dict] = {0: dict(sim.locals)}
+
+        for nid in self.flow0.rpo:
+            node = nodes[nid]
+            node.entry_stack = list(spill.get(nid, []))
+            node.entry_locals = dict(entry_locals.get(nid, {}))
+            self._simulate(node)
+            values = []
+            for expr, ty in node.exit_stack:
+                if len(node.successors()) > 1 and not isinstance(expr, Var):
+                    tmp = sim.fresh('_spill')
+                    node.stmts.append(RawStmt(f"let {tmp} = {render_expr(expr)};"))
+                    expr = Var(tmp)
+                values.append((expr, ty))
+            for s in node.successors():
+                if s not in spill:
+                    spill[s] = [(Var(f"__s{s}_{k}"), ty) for k, (_, ty) in enumerate(values)]
+                    for var, ty in spill[s]:
+                        top_decls.append(f"let mut {var.name}: {render_type(ty)} = Default::default();")
+                    entry_locals[s] = dict(node.exit_locals)
+                if len(spill[s]) != len(values):
+                    raise CfgError(f"状态机：pc={nodes[s].start_pc} 各前驱栈深不一致")
+                for (var, _), entry in zip(spill[s], values):
+                    node.stmts.append(RawStmt(f"{var.name} = {arm_value(entry)};"))
+            self._consume(node.pcs, 'dispatch')
+
+        self._promote_cross_block_temps()
+        hoisted: dict[str, str | None] = {}
+        for node in nodes.values():
+            new_stmts = []
+            for stmt in node.stmts:
+                if not isinstance(stmt, LetStmt):
+                    new_stmts.append(stmt)
+                    continue
+                ty_s = render_type(stmt.ty) if stmt.ty is not None else None
+                if ty_s is None:
+                    for lname, lty, _ in node.exit_locals.values():
+                        if lname == stmt.name:
+                            ty_s = render_type(lty)
+                            break
+                prev = hoisted.get(stmt.name)
+                if prev is not None and ty_s is not None and prev != ty_s:
+                    raise CfgError(f"状态机：变量 {stmt.name} 类型冲突 {prev} / {ty_s}")
+                hoisted[stmt.name] = prev or ty_s
+                if stmt.value is not None:
+                    new_stmts.append(AssignStmt(Var(stmt.name), stmt.value))
+            node.stmts = new_stmts
+        for name, ty_s in hoisted.items():
+            ann = f": {ty_s}" if ty_s else ""
+            top_decls.append(f"let mut {name}{ann} = Default::default();")
+        return SimResult(nodes=dict(nodes), entry=0, dispatch=True, top_decls=top_decls)
+
+
+def simulate_blocks(method, sim: StackSim, registry, class_tparams, ledger: JumpLedger) -> SimResult:
+    return BlockSimulator(method, sim, registry, class_tparams, ledger).run()

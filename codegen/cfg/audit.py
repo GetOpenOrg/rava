@@ -1,0 +1,89 @@
+"""
+跳转消费自检：每个方法的每条 branch / goto / switch 指令必须被某个结构消费。
+
+消费种类（kind）：
+  structured     结构树中的 if / match / 内联 / break / continue
+  short-circuit  并入前驱的 && / || 条件
+  ternary        折叠为条件表达式（含 boolean 物化）
+  const-fold     条件为编译期常量，折叠为无条件边
+  dead           所在块在常量折叠后不可达（或字节码本身不可达）
+  handler        仅异常处理器可达（正常路径不翻译，与既有能力一致）
+  dispatch       不可归约 CFG 的状态机兜底
+
+未被消费的跳转 → CfgAuditError（生成期错误，不允许静默继续）。
+"""
+
+from __future__ import annotations
+from dataclasses import dataclass, field
+
+
+class CfgAuditError(Exception):
+    """存在未被消费的跳转指令。必须中止转译，不得被 stub 降级吞掉。"""
+
+
+@dataclass
+class JumpLedger:
+    """单个方法的跳转账本。"""
+    method_id: str
+    expected: set = field(default_factory=set)          # 所有跳转指令的 pc
+    consumed: dict = field(default_factory=dict)        # pc → kind
+
+    def expect(self, pc: int) -> None:
+        self.expected.add(pc)
+
+    def consume(self, pc: int, kind: str) -> None:
+        self.consumed[pc] = kind
+
+    def verify(self) -> None:
+        missing = sorted(self.expected - set(self.consumed))
+        if missing:
+            raise CfgAuditError(
+                f"{self.method_id}: 未被消费的跳转指令 pc={missing}")
+
+
+@dataclass
+class AuditStats:
+    methods: int = 0
+    jumps: int = 0
+    consumed: int = 0
+    by_kind: dict = field(default_factory=dict)
+    dispatch_methods: int = 0
+    stub_fallbacks: list = field(default_factory=list)  # [(method_id, reason)]
+    handler_methods: dict = field(default_factory=dict)  # method_id → 未翻译的异常处理器个数
+    _seen: set = field(default_factory=set)
+
+    def record(self, ledger: JumpLedger, used_dispatch: bool) -> None:
+        if ledger.method_id in self._seen:
+            return
+        self._seen.add(ledger.method_id)
+        self.methods += 1
+        self.jumps += len(ledger.expected)
+        self.consumed += sum(1 for pc in ledger.expected if pc in ledger.consumed)
+        for pc in ledger.expected:
+            kind = ledger.consumed.get(pc)
+            if kind is not None:
+                self.by_kind[kind] = self.by_kind.get(kind, 0) + 1
+        if used_dispatch:
+            self.dispatch_methods += 1
+
+    def record_stub_fallback(self, method_id: str, reason: str) -> None:
+        if all(m != method_id for m, _ in self.stub_fallbacks):
+            self.stub_fallbacks.append((method_id, reason))
+
+    def record_untranslated_handlers(self, method_id: str, count: int) -> None:
+        self.handler_methods[method_id] = count
+
+    def summary(self) -> str:
+        kinds = ' '.join(f"{k}={v}" for k, v in sorted(self.by_kind.items()))
+        return (f"[cfg-audit] methods={self.methods} jumps={self.jumps} "
+                f"consumed={self.consumed} unconsumed={self.jumps - self.consumed} "
+                f"dispatch={self.dispatch_methods} "
+                f"handler_methods={len(self.handler_methods)} "
+                f"handler_jumps={self.by_kind.get('handler', 0)} "
+                f"stub_fallback={len(self.stub_fallbacks)} | {kinds}")
+
+    def reset(self) -> None:
+        self.__init__()
+
+
+STATS = AuditStats()

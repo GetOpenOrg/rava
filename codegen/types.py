@@ -57,8 +57,13 @@ class ParsedMethod:
     method_parameters:  list = None   # list of (name: str, access_flags: int)
     # vtable 归属：空串=非虚方法; 等于 class_rust_name=新虚方法定义; 其他=覆盖哪个祖先类的 vtable
     virtual_in:         str  = ''
+    # Code attribute 的异常表：list of (start_pc, end_pc, handler_pc, catch_type)，
+    # catch_type 为类二进制名，空串 = catch-all
+    exception_table:    list = None
 
     def __post_init__(self):
+        if self.exception_table is None:
+            self.exception_table = []
         if self.local_names is None:
             self.local_names = {}
         if self.local_types is None:
@@ -110,11 +115,3 @@ class ClassInfo:
             self.interfaces = []
         if self.inner_classes is None:
             self.inner_classes = []
-
-
-@dataclass
-class LoopInfo:
-    start_idx:   int
-    end_idx:     int
-    cond_idx:    int | None   # None 表示无条件循环（for(;;) / while(true)）
-    exit_offset: int | None   # None 表示无退出条件

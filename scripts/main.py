@@ -24,6 +24,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from codegen import transpile
+from codegen.cfg import STATS as CFG_AUDIT_STATS
 from codegen.constants import (RUNTIME_JAVA_RUNTIME, RUNTIME_MACROS_CRATE,
                                scratch_pkg_version)
 from codegen.emitter import to_snake
@@ -156,6 +157,11 @@ def main():
     # 2. codegen
     t0 = time.perf_counter()
     transpile(java_files, out_dir, batch_bin=args.batch)
+    # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
+    print(CFG_AUDIT_STATS.summary())
+    if os.environ.get('JAVA_RTA_DEBUG'):
+        for method_id, reason in CFG_AUDIT_STATS.stub_fallbacks:
+            print(f"[cfg-audit] stub fallback: {method_id}: {reason}")
     t_codegen = time.perf_counter() - t0
     print(f"[time] transpile   {fmt_dur(t_codegen)}")
 

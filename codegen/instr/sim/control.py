@@ -13,18 +13,10 @@ def sim_control(ins, sim, class_name, registry) -> bool:
     operand = ins.operand or ''
     comment = ins.comment or ''
 
-    # ── 控制流（循环由 method.py 处理，此处跳过）──
-    if op.startswith('if_icmp') or op.startswith('if') or op == 'goto':
-        # 未被控制流 map 捕获的分支指令：仍需弹出操作数，防止遗留值污染后续栈状态
-        if op.startswith('if_icmp') or op in ('if_acmpeq', 'if_acmpne'):
-            if sim.stack: sim.pop()
-            if sim.stack: sim.pop()
-        elif op != 'goto':
-            # 单操作数：ifeq / ifne / iflt / ifge / ifgt / ifle / ifnull / ifnonnull
-            if sim.stack: sim.pop()
+    # 跳转指令（if* / goto / switch）由 method/blocks.py 作为块终结解释，不经过本分发
 
     # ── checkcast / instanceof ──
-    elif op == 'checkcast':
+    if op == 'checkcast':
         # 更新栈顶类型为 cast 目标类型；若源类型为 Object，插入运行时 downcast
         if comment and sim.stack:
             import re as _re_cast

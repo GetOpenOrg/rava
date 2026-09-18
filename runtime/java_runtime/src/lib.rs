@@ -62,6 +62,7 @@ pub mod prelude {
     pub use super::error::{JvmError, Result};
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;
+    pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
     pub use super::_is_jnull;
 

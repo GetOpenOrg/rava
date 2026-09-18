@@ -180,12 +180,6 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
     elif op == 'monitorexit':
         sim.pop()  # pop object reference，忽略 monitor
 
-    # ── switch（弹出 key，线性继续，不跳转）──
-    elif op in ('tableswitch', 'lookupswitch'):
-        key, _ = sim.pop()
-        key_s = render_expr(key)
-        sim.emit(RawStmt(f"let _switch_key = {key_s};"))
-
     # ── 杂项 ──
     elif op in ('nop', 'wide'): pass
     elif op == 'athrow':

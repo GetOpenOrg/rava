@@ -9,7 +9,7 @@ from typing import get_args
 
 from .rs_ir import (
     RsExpr, RsStmt, RsType,
-    Var, Lit, RawExpr,
+    Var, Lit, RawExpr, NewPendingExpr,
     LetStmt, AssignStmt,
     RsGeneric, RsPrimitive, RsNamed, RsRef, RsSlice, RsInfer,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
@@ -91,6 +91,32 @@ def _clone_moved_var(expr: RsExpr, ty: RsType) -> RsExpr:
     return RawExpr(f"Clone::clone(&{expr.name})")
 
 
+
+
+_TRIVIAL_RAW_RE = None
+
+
+def _is_trivial_expr(expr: RsExpr) -> bool:
+    """重复求值无副作用且无开销的表达式：变量、字面量、待定 new、默认值、对变量的 Clone。"""
+    global _TRIVIAL_RAW_RE
+    if isinstance(expr, (Var, Lit, NewPendingExpr)):
+        return True
+    if isinstance(expr, RawExpr):
+        if _TRIVIAL_RAW_RE is None:
+            import re
+            _TRIVIAL_RAW_RE = re.compile(
+                r'^(?:[A-Za-z_]\w*|Clone::clone\(&?[A-Za-z_]\w*\)|Default::default\(\)'
+                r'|[A-Za-z_]\w*::default\(\)|-?\d[\w.]*)$')
+        return bool(_TRIVIAL_RAW_RE.match(expr.code.strip()))
+    return False
+
+
+def _materialized_let_type(expr: RsExpr, ty: RsType):
+    """物化临时变量的类型注解：仅当表达式自身不足以让 Rust 推断类型时才标注。"""
+    code = render_expr(expr)
+    if code.endswith('.into()') or 'Default::default()' in code:
+        return ty
+    return None
 
 
 class StackSim:
@@ -188,9 +214,21 @@ class StackSim:
         self.stack.append((expr, ty))
 
     def pop(self) -> tuple[RsExpr, RsType]:
-        """弹栈，返回 (RsExpr, RsType)。"""
+        """弹栈，返回 (RsExpr, RsType)。
+
+        被 dup 的表达式在栈上以同一对象出现多次。Java 语义下它只求值一次，
+        因此消费其中一份时，若其余副本仍在栈上，先物化为临时变量，所有副本改为引用该变量
+        （`++size > threshold` 只自增一次；`dup` 的 `X::new(..)?` 只构造一次）。
+        """
         if self.stack:
-            return self.stack.pop()
+            expr, ty = self.stack.pop()
+            if not _is_trivial_expr(expr) and any(se is expr for se, _ in self.stack):
+                name = self.fresh()
+                self.stmts.append(LetStmt(name, _materialized_let_type(expr, ty), mutable=False, value=expr))
+                var = Var(name)
+                self.stack = [(var, sty) if se is expr else (se, sty) for se, sty in self.stack]
+                return (var, ty)
+            return (expr, ty)
         # 栈下溢：常见于 catch 块隐式压栈的异常对象、复杂控制流分析失败
         # 标记下溢，gen_method_body 会把整个方法退化为 panic!("stub: ...")
         self.underflow_occurred = True
@@ -225,7 +263,23 @@ class StackSim:
                     return (name, rty, from_sig)
         return None
 
+    def pop_for_store(self) -> tuple[RsExpr, RsType]:
+        """供 xstore 使用的弹栈：不物化 dup 副本——store_local 会把局部变量本身作为物化结果，
+        栈上剩余副本改为引用该局部变量（`dup; astore` → `let x = X::new(..)?;` 后栈上是 x）。"""
+        if self.stack:
+            return self.stack.pop()
+        return self.pop()
+
     def store_local(self, slot: int, expr: RsExpr, ty: RsType):
+        """存储到局部变量槽；栈上与被存值相同的 dup 副本改为引用该局部变量。"""
+        source = expr
+        self._store_local(slot, expr, ty)
+        if slot in self.locals and not _is_trivial_expr(source):
+            name, local_ty, _ = self.locals[slot]
+            self.stack = [(Var(name), local_ty) if se is source else (se, sty)
+                          for se, sty in self.stack]
+
+    def _store_local(self, slot: int, expr: RsExpr, ty: RsType):
         """
         存储到局部变量槽。
         - 若槽已存在：生成 AssignStmt 节点
