@@ -663,6 +663,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         rust_ret = _gs_ret if _gs_ret else jvm_to_rust(sf.descriptor, registry=registry)
         # ConstantValue attribute 优先；其次尝试从 <clinit> 提取简单常量
         cv = sf.constant_value or _clinit_consts.get(sf.name, '')
+        body = ''
         if cv:
             if cv == '__EMPTY_ARRAY__':
                 # iconst_0 → anewarray → putstatic：static final T[] = new T[0]
@@ -685,12 +686,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 body = 'true' if cv == '1' else 'false'
             else:
                 body = cv
+        # 运行期可写字段即便有 <clinit> 常量初值也需要真实存储（初值作为未写入时的默认值）
+        _rt_written = sf.name in _runtime_written_statics and not sf.constant_value
+        if cv and not _rt_written:
             field_meta = _java_field_attr(sf)
             method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
         elif _has_storage and sf.descriptor in _MUTABLE_STATIC_DESCS:
             # 用户类可变静态字段（JVM 原始类型，Send + Copy）：OnceLock<Mutex<T>>
             _static_var = f"_{struct_name}_{safe_fname}_STATIC"
-            _default = rust_default(rust_ret)
+            _default = body if (cv and body) else rust_default(rust_ret)
             module_statics.append(
                 f"static {_static_var}: std::sync::OnceLock<std::sync::Mutex<{rust_ret}>> = std::sync::OnceLock::new();"
             )

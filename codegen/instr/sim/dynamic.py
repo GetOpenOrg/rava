@@ -5,6 +5,7 @@ from ...render import render_expr
 from ...type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
 from ...constants import safe_ident as _safe_ident
 from ..invoke import _gen_string_concat
+from ..coerce import _mangle_if_overloaded
 
 
 def sim_dynamic(ins, sim, class_name, registry) -> bool:
@@ -58,7 +59,11 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _impl_desc    = _impl_method_ref[_impl_colon+1:]  # "(I)I"
                     # 转换为 Rust 标识符
                     _impl_cls_rust  = _impl_cls_bin.rsplit('/', 1)[-1]
-                    _impl_mname_r   = _safe_ident(_impl_mname)
+                    # 实现方法名与定义侧同规则 mangle（方法引用指向重载方法 / 构造器时必须一致）
+                    _impl_mangled = _mangle_if_overloaded(
+                        _impl_cls_bin, _impl_mname,
+                        f"Method {_impl_cls_bin}.{_impl_mname}:{_impl_desc}", registry)
+                    _impl_mname_r   = _safe_ident(_impl_mangled.replace('<init>', 'new'))
                     # SAM 方法参数/返回类型 → Rust 类型
                     _sam_params = parse_descriptor_params(_sam_type_desc)
                     _sam_ret    = parse_descriptor_return(_sam_type_desc)
