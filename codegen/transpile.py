@@ -168,6 +168,24 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                 elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
                     method_refs.append((cls, meth, desc))
                 _add_type_refs(desc)
+        elif c.startswith('InvokeDynamic '):
+            # "InvokeDynamic samName:dynDesc impl:Cls.method:implDesc samtype:samDesc"
+            # lambda / 方法引用的实现方法由闭包直接调用，属于调用链的一部分
+            for tok in c.split(' ')[2:]:
+                if not tok.startswith('impl:'):
+                    continue
+                rest = tok[5:]
+                colon = rest.find(':')
+                dot = rest.rfind('.', 0, colon) if colon > 0 else -1
+                if dot > 0:
+                    cls = rest[:dot]
+                    meth = rest[dot+1:colon]
+                    desc = rest[colon+1:]
+                    if cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
+                        field_classes.append(cls)
+                    elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
+                        method_refs.append((cls, meth, desc))
+                    _add_type_refs(desc)
         elif c.startswith('Field '):
             # "Field java/nio/charset/CodingErrorAction.REPLACE:Ljava/nio/charset/CodingErrorAction;"
             # getstatic/putstatic/getfield/putfield - 只发现声明类，不展开其方法体

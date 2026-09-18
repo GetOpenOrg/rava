@@ -28,7 +28,7 @@ def _write(path: str, content: str) -> None:
     if _is_jrt_rs and os.path.exists(path):
         try:
             with open(path, encoding='utf-8') as _f:
-                if 'java_rta_macros::java_class' not in _f.read(4096):
+                if 'java_rta_macros::java_class' not in _f.read():  # 全文查找：import 头较长的生成文件标记可能在 4096 字节之后
                     return  # 手写文件，不覆盖
         except Exception:
             pass

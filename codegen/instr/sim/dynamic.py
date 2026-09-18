@@ -67,7 +67,7 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     # 捕获变量声明
                     _cap_var_stmts: list[str] = []
                     _cap_var_names: list[str] = []
-                    for _cv_idx, (_cexpr, _cty, _) in enumerate(reversed(_cap_exprs)):
+                    for _cv_idx, (_cexpr, _cty, _) in enumerate(_cap_exprs):  # _cap_exprs 已按声明顺序排列（pop 时 insert(0)）
                         _cv_name = f'__lam_cap{_lam_idx}_{_cv_idx}'
                         _cap_var_stmts.append(f'let {_cv_name} = {render_expr(_cexpr)};')
                         _cap_var_names.append(_cv_name)
@@ -78,7 +78,19 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _fn_type = f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)}) -> Result<{_sam_rtype}>>'
                     # 调用实现方法的参数列表（捕获变量 + SAM 参数）
                     # Clone::clone 而非 .clone()：捕获值可能是带 Java clone() 的类
-                    _call_cap_args  = ', '.join(f'Clone::clone(&{v})' for v in _cap_var_names)
+                    # 实例实现方法（捕获 this 的 lambda / 绑定接收者的方法引用）：
+                    # 第一个捕获值是接收者，以 &self 形式传入
+                    _impl_is_instance = False
+                    _impl_ci = registry.get(_impl_cls_bin) if registry else None
+                    if _impl_ci is not None:
+                        for _im in _impl_ci.methods:
+                            if _im.name == _impl_mname and _im.descriptor == _impl_desc:
+                                _impl_is_instance = not _im.is_static
+                                break
+                    _call_cap_list = [f'Clone::clone(&{v})' for v in _cap_var_names]
+                    if _impl_is_instance and _call_cap_list:
+                        _call_cap_list[0] = f'&{_cap_var_names[0]}'
+                    _call_cap_args  = ', '.join(_call_cap_list)
                     _call_sam_args  = ', '.join(_sam_anames)
                     _all_call_args  = ', '.join(filter(None, [_call_cap_args, _call_sam_args]))
                     # 生成闭包

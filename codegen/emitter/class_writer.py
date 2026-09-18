@@ -728,7 +728,16 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             method_blocks.append(f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\npub fn {safe_fname}() -> {rust_ret} {{\n    {body}\n}}')
 
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
-    for m in ([] if _is_iface else visible_methods):
+    # 非桥接的 synthetic 方法（lambda$xxx$N、access$NNN 等）是 invokedynamic 闭包 /
+    # 内部类访问器的真实调用目标，必须生成定义；桥接方法（ACC_BRIDGE）与真实方法同名，继续过滤。
+    # 注意：它们不参与 name_counts / overloaded_names 统计（编译器保证其名字唯一）。
+    _ACC_BRIDGE = 0x0040
+    emitted_methods = visible_methods + [
+        m for m in ci.methods
+        if m.is_synthetic and not (m.access_flags & _ACC_BRIDGE)
+        and m.name not in ('<init>', '<clinit>')
+    ]
+    for m in ([] if _is_iface else emitted_methods):
         if m.name == '<clinit>':
             # 用户类：翻译 <clinit> 为 class_init() 函数
             if _is_user_class:
