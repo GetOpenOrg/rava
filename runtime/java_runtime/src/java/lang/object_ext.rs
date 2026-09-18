@@ -1,7 +1,27 @@
 use crate::prelude::*;
 use super::object::{Object, ObjectVTable, JvmRef};
 
+/// `new Object()` 的实例载体：无字段、身份唯一（每次构造独立的 Rc 分配），
+/// 典型用途是锁对象 / 哨兵对象（`private static final Object LOCK = new Object()`）。
+struct PlainInstance;
+
+impl ObjectVTable for PlainInstance {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn is_instance_of(&self, type_id: &str) -> bool { type_id == "java/lang/Object" }
+    fn hashCode(&self) -> i32 { self as *const Self as usize as i32 }
+    fn __obj_str(&self) -> std::string::String {
+        format!("java.lang.Object@{:x}", self as *const Self as usize as u32)
+    }
+}
+
 impl Object {
+    /// java.lang.Object.<init>()V — 构造一个非 null、身份唯一的普通对象。
+    #[jvm_ext]
+    pub fn new() -> Result<Object> {
+        // PlainInstance 是零尺寸类型，Rc 分配仍保证每个实例地址唯一（Rc 头部含引用计数）
+        Ok(Object(std::rc::Rc::new(PlainInstance)))
+    }
+
     /// 将任意 `'static` 值包装进 Object。
     ///
     /// 对于有 `ObjectVTable` impl 的类型（具体类、基本类型），通过 `JvmRef<T>` 包装；

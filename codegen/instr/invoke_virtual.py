@@ -288,6 +288,14 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                         _owner_bin, _bridge_desc = _bridged[0].name, _bridged[1]
                 if _root_declared and not _owner_bin:
                     continue
+                if not _owner_bin and registry and registry.get(sub_bin) is not None:
+                    _sub_ci_own = registry[sub_bin]
+                    if _sub_ci_own.is_abstract and not _sub_ci_own.is_interface:
+                        # 抽象类自身与祖先链都未声明该方法：对象的运行时类必为其具体子类
+                        # （各有独立分支），本分支在 Java 语义下不可达，不生成。
+                        continue
+                    # 具体类：实现来自祖先注入的接口 default 方法 → 登记继承成员声明
+                    _inherited_calls.request(sub_bin, mname, '(' + ''.join(params) + ')')
                 _mangle_cls = _owner_bin or sub_rust
                 sub_mname_r = _mangle_if_overloaded(_mangle_cls, mname, comment, registry)
                 sub_mname_r = _safe_field(sub_mname_r)
@@ -432,6 +440,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                                     and _m.descriptor.startswith(_param_part_ret)):
                                 _bm_ret = _m
                                 break
+                if _bm_ret is None and rust_ret == 'Object':
+                    # 擦除描述符未命中（泛型接口的具体化实现，如 apply(String)→具体类）：
+                    # 取上面按 bridge 规则解析出的真实方法
+                    _bm_ret = _bm17
                 if _bm_ret is not None:
                     _bret_desc = _bm_ret.descriptor.split(')', 1)[1]
                     _bret_gen = (_bm_ret.generic_signature.split(')', 1)[1]

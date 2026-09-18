@@ -10,7 +10,8 @@ impl ArraysSupport {
         } else {
             let min_length = old_length.wrapping_add(min_growth);
             if min_length < 0 {
-                Err(JvmError::Custom("OutOfMemoryError: array size".to_owned()))
+                Err(JvmError::out_of_memory(&format!(
+                    "Required length exceeds implementation limit: {} + {}", old_length, min_growth)))
             } else if min_length <= (i32::MAX - 8) {
                 Ok(i32::MAX - 8)
             } else {

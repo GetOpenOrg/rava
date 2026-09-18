@@ -1,0 +1,19 @@
+# VM 耦合边界类清单：公开包（java/）里由 JVM 自身引导、承载 VM 设施的类。
+#
+# 这些类在 HotSpot 中由 VM 本地代码直接创建 / 驱动（initPhase1~3、模块系统引导、
+# 类加载、安全管理器），在原生二进制里没有字节码层面的对应物。它们与内部包
+# （jdk/internal/、sun/）同规则处理：调用链 BFS 在此截断，类整体视为手写边界类，
+# 被调用到的方法在 runtime/ 对应目录按需手写，未实现的方法保持 panic!("stub: ...")。
+#
+# 引入动机：类初始化（JVMS §5.5）进入调用链后，<clinit> 的静态可达闭包会沿
+# 安全管理器 → 模块层引导 → 虚拟线程调度器 一路展开到整个并发 / 模块 / 反射子系统，
+# 而这些路径在运行时永不执行（JDK 21 安全管理器恒为 null）。
+#
+# 格式：每行一个类的 binary name（其嵌套类一并视为边界），`#` 开头为注释。
+
+java/lang/SecurityManager
+java/lang/VirtualThread
+java/lang/ClassLoader
+java/lang/Module
+java/lang/ModuleLayer
+java/lang/Class

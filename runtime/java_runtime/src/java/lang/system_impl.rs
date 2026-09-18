@@ -40,17 +40,23 @@ impl System {
         Ok(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64)
     }
 
+    /// static 字段 `out` 的读取访问器。HotSpot 中该字段由 VM 引导阶段（initPhase1 →
+    /// 本地方法 setOut0/setErr0）直接写入，不经 `<clinit>`，故由手写层提供；
+    /// 签名与宏生成的 static 访问器一致（`Result<T>`）。
     #[jvm_native]
-    pub fn out() -> PrintStream {
+    pub fn out() -> Result<PrintStream> {
         let mut ps = PrintStream::default();
         ps._init_not_null();
-        ps
+        Ok(ps)
     }
 
+    /// static 字段 `err` 的读取访问器。HotSpot 中该字段由 VM 引导阶段（initPhase1 →
+    /// 本地方法 setOut0/setErr0）直接写入，不经 `<clinit>`，故由手写层提供；
+    /// 签名与宏生成的 static 访问器一致（`Result<T>`）。
     #[jvm_native]
-    pub fn err() -> PrintStream {
+    pub fn err() -> Result<PrintStream> {
         let mut ps = PrintStream::default();
         ps._init_not_null();
-        ps
+        Ok(ps)
     }
 }

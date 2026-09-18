@@ -189,9 +189,10 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
     # ── 杂项 ──
     elif op in ('nop', 'wide'): pass
     elif op == 'athrow':
+        # 被抛出的就是栈顶对象本身：JvmError 携带该对象，异常表匹配 / getMessage /
+        # 未捕获报告都基于它的运行时类（参考文档 §8.3）
         e_expr, _ = sim.pop()
-        # "athrow".to_owned() 使用 std::string::String，避免与 java_runtime::String 遮蔽冲突
-        sim.emit(RawStmt(f'return Err(JvmError::Custom("athrow".to_owned()));'))
+        sim.emit(RawStmt(f'return Err(JvmError::from({render_expr(e_expr)}));'))
     else:
         return False
     return True

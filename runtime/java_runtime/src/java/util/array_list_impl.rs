@@ -41,8 +41,8 @@ impl<E: Clone + Default + 'static> ArrayList<E> {
     pub fn get(&self, index: i32) -> Result<Object> {
         let size = self.__get_size();
         if index < 0 || index >= size {
-            return Err(JvmError::Custom(format!(
-                "Index: {}, Size: {}", index, size
+            return Err(JvmError::index_out_of_bounds(format!(
+                "Index {} out of bounds for length {}", index, size
             )));
         }
         self.elementData(index)

@@ -41,6 +41,19 @@ pub trait ObjectVTable: 'static {
     /// JVM null 检查辅助：Default::default() 代表 null，构造后设为 false。
     /// java_class! 宏对生成类自动 override；基本类型 / 手写类默认 false（永不为 null）。
     fn is_jvm_null(&self) -> bool { false }
+
+    /// 运行时类的 binary name（如 `java/lang/NullPointerException`）。
+    /// java_class! 宏对生成类自动 override；未捕获异常报告等 VM 级设施据此取得类名。
+    fn __class_name(&self) -> &'static str { "java/lang/Object" }
+
+    /// 按运行时类重建 `type_id`（本类或任一祖先类的 binary name）类型的引用视图。
+    /// 对象常以静态类型（如 `Throwable`）流转，catch 需要按运行时类还原为 catch 声明类型。
+    /// `any` 是对象存储的 `Rc<dyn Any>`；wrapper 侧 override 传入自身存储并委托 vtable。
+    fn __view_as(
+        &self,
+        _any: Rc<dyn std::any::Any>,
+        _type_id: &str,
+    ) -> Option<Box<dyn std::any::Any>> { None }
 }
 
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────

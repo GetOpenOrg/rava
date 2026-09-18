@@ -18,6 +18,7 @@
 //!   - 不等于当前类名 → VirtualOverride（覆盖祖先，进 `impl AncestorVTable for __inner`）
 //!   - 缺失 → Constructor（`new`/`new_*` 前缀）或 NonVirtual
 
+mod class_init;
 mod classify;
 mod generic_sig;
 mod parse;
@@ -61,6 +62,10 @@ fn expand_non_virtual_fn(
     match &f.block {
         Some(block) => {
             let mut b = block.clone();
+            // static 方法 / 构造器入口是类初始化触发点（JVMS §5.5：invokestatic / new）
+            if class_init::is_init_trigger(sig) {
+                class_init::inject_init_trigger(&mut b);
+            }
             rewrite_block(&mut b, basic_names, ref_names);
             // 构造器 / 非虚方法同样运行在 wrapper 上下文（this: Wrapper 或 &Wrapper）：
             // super.method() 的 __base(this, ...) 需经 vtable 取得 &__BT: AncestorVTable
@@ -100,6 +105,7 @@ fn expand_interface(
     struct_ident: &Ident,
     gen: &syn::Generics,
     fns: &[FnItem],
+    statics: &[parse::StaticItem],
 ) -> TokenStream2 {
     let (impl_g, ty_g, where_c) = gen.split_for_impl();
     let type_params: Vec<&Ident> = gen.params.iter()
@@ -110,8 +116,18 @@ fn expand_interface(
         .map(|f| expand_non_virtual_fn(f, &meta.binary_name, &no_fields, &no_fields))
         .collect();
     let binary_name = &meta.binary_name;
+    let impl_methods: HashSet<String> = meta.impl_methods.iter().cloned().collect();
+    let (static_storage, static_accessors) =
+        class_init::expand_statics(struct_ident, statics, &impl_methods);
+    let has_clinit = fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
+    // 接口初始化不触发父接口初始化（JVMS §5.5）
+    let (init_state, class_init_fn) =
+        class_init::expand_class_init(struct_ident, binary_name, None, has_clinit);
 
     quote! {
+        #(#static_storage)*
+        #init_state
+
         #[derive(Clone, Default)]
         pub struct #struct_ident #impl_g #where_c {
             __ref: Object,
@@ -137,12 +153,14 @@ fn expand_interface(
             pub const BINARY_NAME: &'static str = #binary_name;
 
             #(#static_members)*
+            #(#static_accessors)*
+            #class_init_fn
         }
     }
 }
 
 fn expand_inner(input: ClassInput) -> TokenStream2 {
-    let ClassInput { attrs, struct_ident, generics, fields, fns } = input;
+    let ClassInput { attrs, struct_ident, generics, fields, fns, statics } = input;
 
     let meta = match ClassMeta::from_attrs(&attrs) {
         Ok(m) => m,
@@ -190,7 +208,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
     // ── 接口：同名载体类型（接口引用 + 静态成员）────────────────────────────
     if meta.is_interface {
-        return expand_interface(&meta, &struct_ident, &gen, &fns);
+        return expand_interface(&meta, &struct_ident, &gen, &fns, &statics);
     }
 
     let self_name = struct_ident.to_string();
@@ -441,6 +459,24 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         quote! {}
     };
 
+    // 运行时类视图：按运行时类（__inner）重建本类 / 任一祖先类型的 wrapper。
+    // 异常对象以静态类型（如 Throwable）抛出后，catch 需要按运行时类还原为 catch 类型。
+    let ancestor_views: Vec<TokenStream2> = meta.all_superclasses.iter().map(|anc_name| {
+        let anc_ident = format_ident!("{}", anc_name);
+        let anc_vtable = format_ident!("{}__VTable", anc_name);
+        let atag = meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
+        quote! {
+            if type_id == <#anc_ident #atag>::BINARY_NAME {
+                let view: #anc_ident #atag = #anc_ident {
+                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #anc_vtable #atag>,
+                    any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    _jvm_null: false,
+                };
+                return ::std::option::Option::Some(::std::boxed::Box::new(view));
+            }
+        }
+    }).collect();
+
     let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
             impl #impl_g ObjectVTable for #inner_ident #ty_g #where_c {
@@ -448,6 +484,24 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     matches!(type_id, #(#patterns)|*)
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
+                fn __class_name(&self) -> &'static str { #binary_name }
+                fn __view_as(
+                    &self,
+                    any: ::std::rc::Rc<dyn ::std::any::Any>,
+                    type_id: &str,
+                ) -> ::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>> {
+                    let rc = any.downcast::<#inner_ident #ty_g>().ok()?;
+                    if type_id == #binary_name {
+                        let view: #struct_ident #ty_g = #struct_ident {
+                            vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                            any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                            _jvm_null: false,
+                        };
+                        return ::std::option::Option::Some(::std::boxed::Box::new(view));
+                    }
+                    #(#ancestor_views)*
+                    ::std::option::Option::None
+                }
                 #hash_code_inner_bridge
             }
         }
@@ -872,6 +926,14 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn is_jvm_null(&self) -> bool { self._jvm_null }
+                fn __class_name(&self) -> &'static str { self.vtable.__class_name() }
+                fn __view_as(
+                    &self,
+                    _any: ::std::rc::Rc<dyn ::std::any::Any>,
+                    type_id: &str,
+                ) -> ::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>> {
+                    self.vtable.__view_as(::std::rc::Rc::clone(&self.any), type_id)
+                }
                 #to_string_fwd
                 #hash_code_fwd
             }
@@ -1114,9 +1176,22 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         quote! {}
     };
 
+    // static 字段存储 + 访问器、类初始化状态机（JVMS §5.5）
+    let impl_method_set: HashSet<String> = meta.impl_methods.iter().cloned().collect();
+    let (static_storage, static_accessors) =
+        class_init::expand_statics(&struct_ident, &statics, &impl_method_set);
+    let has_clinit = fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
+    let (init_state, class_init_fn) = class_init::expand_class_init(
+        &struct_ident, &meta.binary_name, meta.superclass.as_ref(), has_clinit);
+
     let wrapper_impl = quote! {
+        #(#static_storage)*
+        #init_state
+
         impl #impl_g #struct_ident #ty_g #where_c {
             #(#wrapper_methods)*
+            #(#static_accessors)*
+            #class_init_fn
             #new_with_super
         }
     };

@@ -9,7 +9,7 @@ import re
 from collections import deque
 from .classfile import parse_class
 from .emitter import write_cargo_project
-from .constants import OBJECT_CLASS as _OBJECT_CLASS
+from .constants import OBJECT_CLASS as _OBJECT_CLASS, RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME
 
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
@@ -20,6 +20,30 @@ _JDK_PREFIXES = ('java/', 'javax/')
 # 这是内部边界截断策略的核心——sun/ 等包的实现细节不翻译，只生成类型占位符
 # java/security/ 是 JVM 安全服务层（JDK 21 的 SecurityManager 始终为 null），视为内部边界
 _JDK_STUB_ONLY_PREFIXES = ('sun/', 'jdk/', 'com/sun/', 'com/oracle/', 'java/security/')
+
+
+
+def _read_manifest(name: str) -> list[str]:
+    """读取 runtime/java_runtime/ 下的 VM 清单文件（每行一项，`#` 注释）。"""
+    _path = os.path.join(_RUNTIME_JAVA_RUNTIME, name)
+    if not os.path.exists(_path):
+        return []
+    with open(_path, encoding='utf-8') as _f:
+        return [_l.strip() for _l in _f if _l.strip() and not _l.lstrip().startswith('#')]
+
+
+# VM 耦合边界类：公开包里由 JVM 自身引导 / 承载 VM 设施（模块系统、类加载、安全管理器等）的类。
+# 它们在原生二进制里没有字节码层面的对应物，与内部包同规则：BFS 在此截断，整体手写、按需实现。
+# 清单在 runtime/（手写层真源）维护，生成器不出现任何 JDK 类名。
+_VM_BOUNDARY_CLASSES: frozenset[str] = frozenset(_read_manifest('vm_boundary.txt'))
+
+
+def _is_boundary_class(cls: str) -> bool:
+    """内部包（前缀）或 VM 耦合边界类（清单，含其嵌套类）。"""
+    if cls.startswith(_JDK_STUB_ONLY_PREFIXES):
+        return True
+    return cls.split('$', 1)[0] in _VM_BOUNDARY_CLASSES
+
 
 # java_runtime 已手写实现的类：这些类不再由 jdk_classes 翻译，避免重复定义和命名冲突
 _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
@@ -66,7 +90,6 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
                     continue
                 _seen_class_files.add(inner_file)
                 inner_ci = parse_class(inner_file)
-                inner_ci.methods = [m for m in inner_ci.methods if m.name != '<clinit>']
                 print(f"      内部类: {fname[:-6]} (字段: {[f.name for f in inner_ci.fields]}, 方法: {[m.name for m in inner_ci.methods]})")
                 class_infos.append(inner_ci)
 
@@ -124,13 +147,14 @@ def _desc_class_refs(desc: str) -> list[str]:
     return re.findall(r'L([^;]+);', desc or '')
 
 
-def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]:
+def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str], list[tuple[str, str]]]:
     """从指令注释中提取方法引用和字段所属类引用（仅 JDK 类）。
 
     Returns:
         (method_refs, field_classes):
           method_refs   - (cls, method, descriptor) 三元组，用于 BFS 展开
           field_classes - 通过 getstatic/Field 指令发现的类名，只生成存根不展开方法体
+          static_field_refs - getstatic/putstatic 的 (cls, field)：类初始化触发点（JVMS §5.5）
     """
 
     def _add_type_refs(desc: str) -> None:
@@ -142,13 +166,14 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
         走 field_classes 通道：只生成类型存根，不展开方法体。
         """
         for tcls in _desc_class_refs(desc):
-            if tcls.startswith(_JDK_STUB_ONLY_PREFIXES):
+            if _is_boundary_class(tcls):
                 field_classes.append(tcls)
             elif tcls.startswith(_JDK_PREFIXES):
                 field_classes.append(tcls)
 
     method_refs = []
     field_classes = []
+    static_field_refs = []
     for instr in (instrs or []):
         c = instr.comment
         if not c:
@@ -163,7 +188,7 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                 meth = rest[dot+1:colon]
                 desc = rest[colon+1:]
                 # stub-only 优先检查（java/security/ 等是 java/ 的子前缀，必须先匹配）
-                if cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
+                if _is_boundary_class(cls) and '[' not in cls:
                     field_classes.append(cls)
                 elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
                     method_refs.append((cls, meth, desc))
@@ -181,7 +206,7 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                     cls = rest[:dot]
                     meth = rest[dot+1:colon]
                     desc = rest[colon+1:]
-                    if cls.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in cls:
+                    if _is_boundary_class(cls) and '[' not in cls:
                         field_classes.append(cls)
                     elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
                         method_refs.append((cls, meth, desc))
@@ -195,10 +220,13 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
                 cls = rest[:dot]
                 if (cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES)) and '[' not in cls:
                     field_classes.append(cls)
+                    if instr.opcode in ('getstatic', 'putstatic'):
+                        _fend = rest.find(':', dot)
+                        static_field_refs.append((cls, rest[dot+1:_fend if _fend > dot else len(rest)]))
                 colon = rest.find(':', dot)
                 if colon > dot:
                     _add_type_refs(rest[colon+1:])
-        elif c.startswith(_JDK_STUB_ONLY_PREFIXES) and '[' not in c:
+        elif c.startswith(_JDK_PREFIXES + _JDK_STUB_ONLY_PREFIXES) and '[' not in c and _is_boundary_class(c.split()[0]):
             # stub-only 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
             cls = c.split()[0]
             field_classes.append(cls)
@@ -206,7 +234,7 @@ def _collect_method_refs(instrs) -> tuple[list[tuple[str, str, str]], list[str]]
             # new / checkcast / anewarray: comment = class binary name
             cls = c.split()[0]
             method_refs.append((cls, '<init>', '()V'))
-    return method_refs, field_classes
+    return method_refs, field_classes, static_field_refs
 
 
 def _discover_jdk_classes_method_level(class_infos: list) -> list:
@@ -234,8 +262,18 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                          or tcls.startswith(_JDK_STUB_ONLY_PREFIXES))):
                 field_discover_classes.add(tcls)
 
+    # 类初始化（JVMS §5.5）已入队的类
+    init_enqueued: set[str] = set()
+    # static 字段访问触发点：(常量池类, 字段名)，待 resolver 可用后解析到声明类
+    pending_static_fields: deque[tuple[str, str]] = deque()
+
+    # 调用链溯源：每个入队方法记录其来源方法（JAVA_RTA_BFS_TRACE=<类 binary name> 时输出入链路径）
+    enqueued_from: dict[tuple[str, str, str], tuple[str, str, str] | None] = {}
+    origin: list = [None]
+
     def enqueue_refs(instrs):
-        method_refs, f_classes = _collect_method_refs(instrs)
+        method_refs, f_classes, static_refs = _collect_method_refs(instrs)
+        pending_static_fields.extend(static_refs)
         for cls in f_classes:
             if cls not in _JAVA_RUNTIME_CLASSES:
                 field_discover_classes.add(cls)
@@ -245,6 +283,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 continue
             if key not in visited_methods:
                 visited_methods.add(key)
+                enqueued_from[key] = origin[0]
                 queue.append(key)
 
     # 初始种子：用户类所有方法的引用
@@ -255,10 +294,6 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
             # （abstract 方法无 instrs，但其签名引用的接口类型要进闭包）
             _enqueue_desc_types(m.descriptor)
 
-    if not queue:
-        print("      无 JDK 类引用")
-        return [], set()
-
     class_cache: dict[str, object] = {}
     jdk_infos: dict[str, object] = {}
 
@@ -266,7 +301,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
         resolver = JdkResolver()
     except RuntimeError as e:
         print(f"      警告：{e}，跳过 JDK 元数据生成")
-        return [], set()
+        return [], set(), set()
 
     def _load_class(name: str):
         """按需解析类（不加入生成范围，仅供方法解析沿继承层次查找）。"""
@@ -328,13 +363,13 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
         _step = _via.get(_owner[0].name)
         while _step is not None:
             if (_step not in _JAVA_RUNTIME_CLASSES
-                    and not _step.startswith(_JDK_STUB_ONLY_PREFIXES)):
+                    and not _is_boundary_class(_step)):
                 field_discover_classes.add(_step)
             _step = _via.get(_step)
         _oci, _om = _owner
         if _om.is_abstract or _om.is_static or _oci.name in _JAVA_RUNTIME_CLASSES:
             return
-        if _oci.name.startswith(_JDK_STUB_ONLY_PREFIXES):
+        if _is_boundary_class(_oci.name):
             field_discover_classes.add(_oci.name)
             return
         _key = (_oci.name, meth, desc)
@@ -342,7 +377,96 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
             visited_methods.add(_key)
             queue.append(_key)
 
+    def _translatable(name: str) -> bool:
+        return (bool(name) and name not in _JAVA_RUNTIME_CLASSES
+                and name.startswith(_JDK_PREFIXES)
+                and not _is_boundary_class(name))
+
+    def _enqueue_class_init(name: str) -> None:
+        """类初始化触发（getstatic / putstatic / invokestatic / new）：该类及其父类链的
+        <clinit> 进入调用链。内部边界类无字节码翻译，在边界处截断。"""
+        _cur = name
+        while _translatable(_cur) and _cur not in init_enqueued:
+            init_enqueued.add(_cur)
+            _ci = _load_class(_cur)
+            if _ci is None:
+                return
+            if any(m.name == '<clinit>' for m in _ci.methods):
+                _key = (_cur, '<clinit>', '()V')
+                if _key not in visited_methods:
+                    visited_methods.add(_key)
+                    enqueued_from[_key] = origin[0]
+                    queue.append(_key)
+            _cur = _ci.super_class
+
+    def _static_field_owner(name: str, field: str) -> str:
+        """JVMS §5.4.3.2 字段解析：本类 → 父接口 → 父类，返回声明类。"""
+        _seen: set[str] = set()
+        _stack = [name]
+        while _stack:
+            _n = _stack.pop(0)
+            if not _n or _n in _seen:
+                continue
+            _seen.add(_n)
+            _ci = _load_class(_n) if _translatable(_n) else None
+            if _ci is None:
+                continue
+            if any(f.is_static and f.name == field for f in _ci.fields):
+                return _n
+            _stack.extend(_ci.interfaces or [])
+            _stack.append(_ci.super_class)
+        return name
+
+    def _drain_static_fields() -> None:
+        while pending_static_fields:
+            _cls, _field = pending_static_fields.popleft()
+            _enqueue_class_init(_static_field_owner(_cls, _field))
+
+    def _load_vm_roots() -> list[tuple[str, str, str]]:
+        """VM 根方法清单：手写运行时直接调用的已翻译方法（见清单文件头注释）。"""
+        _roots = []
+        for _line in _read_manifest('vm_roots.txt'):
+            _owner, _, _desc = _line.partition(':')
+            _cls, _, _meth = _owner.rpartition('.')
+            _roots.append((_cls, _meth, _desc))
+        return _roots
+
+    def _process(cls: str, meth: str, desc: str) -> None:
+        # 解析类（首次遇到时）
+        ci = _load_class(cls)
+        if ci is None:
+            return
+        if cls not in jdk_infos:
+            jdk_infos[cls] = ci
+        origin[0] = (cls, meth, desc)
+
+        # 追踪该方法的指令引用（精确匹配名字+描述符，避免重载方法误展开）
+        _declared = False
+        for m in ci.methods:
+            if m.name == meth and m.descriptor == desc:
+                _declared = True
+                enqueue_refs(m.instrs or [])
+                # T88：被调方法的描述符参数/返回类型也是类型依赖
+                # （abstract/native 方法无 instrs，签名引用的接口类型
+                # 如 iterator()Ljava/util/Iterator; 仍需进闭包生成）
+                _enqueue_desc_types(m.descriptor)
+                # invokestatic / new 是类初始化触发点
+                if m.is_static or m.name == '<init>':
+                    _enqueue_class_init(cls)
+        if not _declared:
+            _enqueue_declaring_method(ci, meth, desc)
+        _drain_static_fields()
+
     with resolver:
+        for _root in _load_vm_roots():
+            if _root not in visited_methods:
+                visited_methods.add(_root)
+                queue.append(_root)
+        # 用户类的父类链：用户类初始化先初始化其 JDK 父类
+        for _uci in class_infos:
+            _enqueue_class_init(_uci.super_class)
+        _drain_static_fields()
+
         # 根类的方法被所有类继承（手写 ObjectVTable 的签名与字节码一致），
         # 其描述符中的参数/返回类型是全局类型依赖，必须进闭包
         _root_data = resolver.resolve(_OBJECT_CLASS)
@@ -354,42 +478,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                 pass
 
         while queue:
-            cls, meth, desc = queue.popleft()
-
-            # 解析类（首次遇到时）
-            if cls not in class_cache:
-                data = resolver.resolve(cls)
-                if data is None:
-                    class_cache[cls] = None
-                    continue
-                try:
-                    ci = parse_class_bytes(data, cls)
-                    class_cache[cls] = ci
-                    if cls not in jdk_infos:
-                        jdk_infos[cls] = ci
-                except Exception as e:
-                    class_cache[cls] = None
-                    continue
-
-            ci = class_cache.get(cls)
-            if ci is None:
-                continue
-
-            if cls not in jdk_infos:
-                jdk_infos[cls] = ci
-
-            # 追踪该方法的指令引用（精确匹配名字+描述符，避免重载方法误展开）
-            _declared = False
-            for m in ci.methods:
-                if m.name == meth and m.descriptor == desc:
-                    _declared = True
-                    enqueue_refs(m.instrs or [])
-                    # T88：被调方法的描述符参数/返回类型也是类型依赖
-                    # （abstract/native 方法无 instrs，签名引用的接口类型
-                    # 如 iterator()Ljava/util/Iterator; 仍需进闭包生成）
-                    _enqueue_desc_types(m.descriptor)
-            if not _declared:
-                _enqueue_declaring_method(ci, meth, desc)
+            _process(*queue.popleft())
 
         # 接口方法 → 具体实现类传播（interface dispatch 解析）
         # 场景：user 代码调 invokeinterface java/util/List.add，但 runtime 实际调用 ArrayList.add
@@ -412,32 +501,7 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                         queue.append(key)
         # 对传播出的新方法再跑一轮 BFS
         while queue:
-            cls, meth, desc = queue.popleft()
-            if cls not in class_cache:
-                data = resolver.resolve(cls)
-                if data is None:
-                    class_cache[cls] = None
-                    continue
-                try:
-                    ci = parse_class_bytes(data, cls)
-                    class_cache[cls] = ci
-                    if cls not in jdk_infos:
-                        jdk_infos[cls] = ci
-                except Exception:
-                    class_cache[cls] = None
-                    continue
-            ci = class_cache.get(cls)
-            if ci is None:
-                continue
-            if cls not in jdk_infos:
-                jdk_infos[cls] = ci
-            _declared = False
-            for m in ci.methods:
-                if m.name == meth and m.descriptor == desc:
-                    _declared = True
-                    enqueue_refs(m.instrs or [])
-            if not _declared:
-                _enqueue_declaring_method(ci, meth, desc)
+            _process(*queue.popleft())
 
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
@@ -486,5 +550,15 @@ def _discover_jdk_classes_method_level(class_infos: list) -> list:
                     _parent_queue.append(ci.super_class)
             except Exception:
                 pass
+
+    _trace_cls = os.environ.get('JAVA_RTA_BFS_TRACE')
+    if _trace_cls:
+        for _key in sorted(k for k in visited_methods if k[0] == _trace_cls):
+            _path = []
+            _step = _key
+            while _step is not None and len(_path) < 64:
+                _path.append(f"{_step[0]}.{_step[1]}:{_step[2]}")
+                _step = enqueued_from.get(_step)
+            print("      [bfs-trace] " + "\n          <- ".join(_path))
 
     return list(jdk_infos.values()), visited_methods, field_discover_classes
