@@ -266,29 +266,68 @@ pub fn classify_vtable_body(block: &Block, vtable_names: &HashSet<String>) -> VT
 
 ### 5.2 base 函数安全检查
 
+**两种 base 函数上下文的 `__xxx` 规则不同，必须分开处理：**
+
+| 上下文 | `this` 类型约束 | `__get_xxx` 安全条件 |
+|--------|----------------|---------------------|
+| VirtualDefine base | `&__BT where __BT: CurrentClass__VTable` | 始终安全（当前类 vtable 包含所有字段 accessor） |
+| VirtualOverride base | `&__BT where __BT: AncestorClass__VTable` | 仅当 `xxx` 是超类字段时安全；自有字段不在祖先 vtable 里 |
+
 ```rust
 // gen/virtual_dispatch.rs
-fn is_body_safe_for_base(block: &Block, vtable_names: &HashSet<String>) -> bool {
-    struct Checker<'a> {
-        vtable: &'a HashSet<String>,
-        found_unsafe: bool,
-    }
-    impl<'ast, 'a> Visit<'ast> for Checker<'a> {
-        fn visit_expr_method_call(&mut self, mc: &ExprMethodCall) {
-            if is_this_receiver(&mc.receiver) {
-                let name = mc.method.to_string();
-                // __ 前缀是字段 accessor，始终安全
-                if !name.starts_with("__") && !self.vtable.contains(&name) {
-                    self.found_unsafe = true;
-                }
-            }
-            visit::visit_expr_method_call(self, mc);
+
+// VirtualDefine base fn 安全检查
+// this: &__BT where __BT: CurrentClass__VTable
+// __ 前缀 accessor 始终安全（均在 CurrentClass__VTable 中）
+fn is_define_body_safe_for_base(block: &Block, vtable_define_names: &HashSet<String>) -> bool {
+    let bs = quote!(#block).to_string();
+    // 检查 this.method()（非 __ 前缀），是否全在 vtable_define_names 中
+    for part in bs.split("this .").chain(bs.split("this.")).skip(1) {
+        let trimmed = part.trim_start();
+        let mname: String = trimmed.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !mname.is_empty() && !mname.starts_with("__")
+            && trimmed[mname.len()..].trim_start().starts_with('(')
+            && !vtable_define_names.contains(&mname)
+        {
+            return false;
         }
     }
-    let mut c = Checker { vtable: vtable_names, found_unsafe: false };
-    c.visit_block(block);
-    !c.found_unsafe
+    true
 }
+
+// VirtualOverride base fn 安全检查
+// this: &__BT where __BT: AncestorClass__VTable
+// __ 前缀 accessor 只有超类字段才安全；自有字段 accessor 不在祖先 vtable 里
+fn is_override_body_safe_for_base(
+    block: &Block,
+    superclass_field_names: &HashSet<String>,  // meta.superclass_fields 的字段名集合
+) -> bool {
+    let bs = quote!(#block).to_string();
+    for part in bs.split("this .").chain(bs.split("this.")).skip(1) {
+        let trimmed = part.trim_start();
+        let mname: String = trimmed.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if mname.is_empty() { continue; }
+        if !trimmed[mname.len()..].trim_start().starts_with('(') { continue; }
+        if mname.starts_with("__") {
+            // accessor：提取字段名，只有超类字段才在祖先 vtable 中
+            let field = mname.strip_prefix("__get_")
+                .or_else(|| mname.strip_prefix("__set_"))
+                .or_else(|| mname.strip_prefix("__borrow_mut_"))
+                .unwrap_or("");
+            if !field.is_empty() && !superclass_field_names.contains(field) {
+                return false;  // 自有字段 accessor，祖先 vtable 不含 → unsafe
+            }
+        } else {
+            return false;  // 普通方法调用，祖先 vtable 不一定含 → unsafe
+        }
+    }
+    true
+}
+```
+
+> **注**：上述仍为字符串扫描实现（与现有 block.rs 保持一致）。改为 AST Visit 实现时，`ExprMethodCall` 处理逻辑相同，但 `VisitMut` 需要上下文感知地判断 `__` accessor 中的字段名是否在超类字段集合中。
 ```
 
 ---
