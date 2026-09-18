@@ -422,26 +422,52 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _vtable_cur = registry[_vtable_cur].super_class if _vtable_cur in registry else None
 
     # __base 函数导入：扫描方法字节码中的非 <init> invokespecial 指令
-    # 若调用了 user class 的父类方法（invokespecial），生成的 Rust 代码会调用
-    # ParentClass__method_base(this, ...) 自由函数，需导入该函数所在模块。
+    # 生成的 Rust 代码会调用 ParentClass__method_base(this, ...) 自由函数，
+    # 需导入该函数所在模块（包括 JDK 父类，如 AbstractStringBuilder）。
     if not ci.is_interface:
         import re as _re2
         from ..instr.coerce import parse_method_ref as _pmr
         for _m in ci.methods:
+            # 只为在调用链上（有实际方法体）的方法生成 __base 函数导入
+            # stub 方法的字节码中有 invokespecial 但不会实际调用，不需要 cross-import
+            _m_in_chain = call_chain is None or (ci.name, _m.name, _m.descriptor) in call_chain
+            if not _m_in_chain:
+                continue
             for _ins in getattr(_m, 'instrs', []) or []:
                 if getattr(_ins, 'opcode', '') != 'invokespecial':
                     continue
                 _c = getattr(_ins, 'comment', '') or ''
                 if not _c or '<init>' in _c:
                     continue
+                # InterfaceMethod invokespecial → 接口默认方法，接口无 __base 自由函数
+                if _c.strip().startswith('InterfaceMethod '):
+                    continue
                 _cls_s, _mname_s, _params_s, _ret_s = _pmr(_c)
-                if not _cls_s or '/' in _c.replace('Method ', '').split('.')[0]:
-                    continue  # JDK class (has '/') — skip
-                # user class parent method → __base function needs import
+                if not _cls_s:
+                    continue
                 _orig_cls = _c.replace('Method ', '').replace('InterfaceMethod ', '')
                 _orig_cls = _orig_cls.split('.')[0] if '.' in _orig_cls else _orig_cls
-                _base_cls_simple = _orig_cls.replace('$', '_')
-                _base_mod = to_snake(_orig_cls)
+                _is_jdk = '/' in _orig_cls
+                if _is_jdk:
+                    # JDK 类：仅在父类已生成（在 generated_classes 中）时才导入 __base 函数
+                    if _orig_cls not in (generated_classes or set()):
+                        continue
+                    # 额外检查：_orig_cls 必须在 registry 中自己定义该方法（非继承来的），
+                    # 否则 invokespecial 引用的是祖先方法，_orig_cls 不会生成 __base 函数
+                    if registry and _orig_cls in registry:
+                        _anc_ci = registry[_orig_cls]
+                        if not any(am.name == _mname_s for am in _anc_ci.methods):
+                            continue
+                    # 从 binary name（java/lang/AbstractStringBuilder）构建完整模块路径
+                    _binary_parts = _orig_cls.split('/')
+                    *_pkg, _simple_cls = _binary_parts
+                    _base_cls_simple = _simple_cls.replace('$', '_')
+                    _snake_cls = to_snake(_simple_cls)
+                    _base_mod = '::'.join(_pkg + [_snake_cls])
+                else:
+                    # user class parent method
+                    _base_cls_simple = _orig_cls.replace('$', '_')
+                    _base_mod = to_snake(_orig_cls)
                 from ..instr.coerce import _mangle_if_overloaded as _mio
                 _rust_mname_s = _mio(_cls_s, _mname_s, _c, registry)
                 from ..instr.coerce import _safe_field as _sf
@@ -633,8 +659,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # ── struct 声明（裸类型，封装细节由宏收拢）──────────────────────────
     struct_lines: list[str] = []
     if not _full_impl:
+        # 父类已有的字段名（继承展平），避免子类重复声明（如内部类 this$0 与父类同名）
+        _super_field_names: set[str] = {name for name, _ in superclass_fields}
         for f in inst_fields:
             safe_fname = _safe_field_name(f.name)
+            if safe_fname in _super_field_names:
+                continue  # 父类已展平，不重复声明
             struct_lines.append("    " + _java_field_attr(f))
             struct_lines.append(f"    pub {safe_fname}: {_resolve_field_rust(f)},")
         # 未被字段引用的类型参数由宏补 PhantomData（block.rs），codegen 不再输出 _phantom
@@ -947,10 +977,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                                 default_name_counts.get(dm.name, 0) > 1)
                 dm_rust = mangle_name(dm.name, dm.descriptor) if needs_mangle else dm.name
                 used_rust_names.add(dm_rust)
-                dm_attr = _java_method_attr(dm)
                 # 将 class_name 替换为实现类，使 gen_method_body 生成正确的 this 类型
                 dm_adapted = _copy.copy(dm)
                 dm_adapted.class_name = ci.name
+                # 接口 default 方法注入实现类时：virtual_in 改为实现类名（VirtualDefine）
+                # 原始 virtual_in 是接口名（如 Drawable），在宏中会生成不存在的 Drawable__VTable impl
+                dm_adapted.virtual_in = _bin_to_rust(ci.name)
+                dm_attr = _java_method_attr(dm_adapted)
                 # 仅在调用链上时翻译字节码，否则生成 stub（避免复杂 JDK default 方法引入编译错误）
                 dm_in_cc = (
                     call_chain is None or

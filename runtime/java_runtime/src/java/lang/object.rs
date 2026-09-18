@@ -31,6 +31,11 @@ pub trait ObjectVTable: 'static {
     fn getClass(&self) -> crate::error::Result<Object> {
         Ok(Object(std::rc::Rc::new(())))
     }
+
+    /// java.lang.Comparable.compareTo(Object)I — 接口方法，不实现 Comparable 的类调用时 panic
+    fn compareTo(&self, _other: Object) -> crate::error::Result<i32> {
+        panic!("stub: java/lang/Comparable.compareTo:(Ljava/lang/Object;)I")
+    }
 }
 
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────

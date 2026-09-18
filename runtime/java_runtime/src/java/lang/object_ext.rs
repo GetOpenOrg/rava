@@ -34,6 +34,12 @@ impl Object {
             .expect("ClassCastException"))
     }
 
+    /// java.lang.Comparable.compareTo — 委托到 vtable（String/Integer 等实现类会覆盖）
+    #[jvm_ext]
+    pub fn compareTo(&self, other: Object) -> crate::error::Result<i32> {
+        self.0.compareTo(other)
+    }
+
     /// null 检查：转译模型中 Object 永远非 null，始终返回 false
     #[jvm_ext]
     pub fn is_none(&self) -> bool { false }

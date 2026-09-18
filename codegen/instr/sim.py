@@ -735,15 +735,22 @@ def sim_instr(ins: Instr, sim: StackSim, class_name: str, registry: dict | None 
                 target_rust = jvm_to_rust(comment, registry)
             else:
                 target_rust = jvm_to_rust(f'L{comment};', registry)
+            # jvm_to_rust 对接口返回 'Object'；instanceof 子类型判断需要接口的实际 Rust 短名
+            # 用二进制名末段（去路径后 $ → _）还原接口 Rust 短名，供 _is_subtype 正确匹配
+            if target_rust == 'Object' and not comment.startswith('[') and comment != 'java/lang/Object':
+                _last = comment.rsplit('/', 1)[-1]
+                target_for_subtype = _last.replace('$', '_')
+            else:
+                target_for_subtype = target_rust
             obj_ty_str = render_type(val_ty_inst)
             val_s_inst = render_expr(val_expr_inst)
             if obj_ty_str == 'Object':
                 # 运行时多态：通过 ObjectVTable fn 指针（Arch-2）检查类型继承链
                 # comment 本身就是 JVM 二进制名（如 java/util/List）
                 sim.push(RawExpr(f"({val_s_inst}.is_instance_of(\"{comment}\"))"), BOOL)
-            elif obj_ty_str == target_rust:
+            elif obj_ty_str == target_for_subtype:
                 sim.push(Lit('true'), BOOL)
-            elif _is_subtype(obj_ty_str.split('<')[0], target_rust.split('<')[0], registry):
+            elif _is_subtype(obj_ty_str.split('<')[0], target_for_subtype.split('<')[0], registry):
                 sim.push(Lit('true'), BOOL)
             else:
                 sim.push(Lit('false'), BOOL)

@@ -294,7 +294,8 @@ def _skip_field_type_sig(sig: str, i: int) -> int:
     return i + 1
 
 
-def _parse_type_args(sig: str, i: int, class_type_params: list[str], registry=None) -> tuple[list[str], int]:
+def _parse_type_args(sig: str, i: int, class_type_params: list[str], registry=None,
+                     method_bounds: 'dict | None' = None) -> tuple[list[str], int]:
     """解析 <TypeArgument*>，i 指向 '<'。返回 (类型字符串列表, '>' 之后的位置)。"""
     i += 1  # 跳过 '<'
     args: list[str] = []
@@ -303,17 +304,64 @@ def _parse_type_args(sig: str, i: int, class_type_params: list[str], registry=No
             args.append('Object')
             i += 1
         elif sig[i] in ('+', '-'):
-            t, i = _parse_one_type(sig, i + 1, class_type_params, registry)
+            t, i = _parse_one_type(sig, i + 1, class_type_params, registry, method_bounds)
             args.append(t)
         else:
-            t, i = _parse_one_type(sig, i, class_type_params, registry)
+            t, i = _parse_one_type(sig, i, class_type_params, registry, method_bounds)
             args.append(t)
     if i < len(sig) and sig[i] == '>':
         i += 1  # 跳过 '>'
     return args, i
 
 
-def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=None) -> tuple[str, int]:
+def _extract_method_tparam_bounds(sig: str, registry=None) -> 'dict[str, str]':
+    """从方法级泛型参数段 '<T:Ljava/lang/Number;...>' 提取类型变量 → 上界 Rust 类型的映射。
+    传入 registry 时，接口上界经 _iface_full_path 返回 'Object' 被自动过滤，
+    只保留具体类上界（如 Number → "Number"，Enum<T> → "Enum<Object>"）。
+    """
+    if not sig or sig[0] != '<':
+        return {}
+    bounds: dict[str, str] = {}
+    i = 1  # 跳过 '<'
+    depth = 1
+    while i < len(sig) and depth > 0:
+        c = sig[i]
+        if c == '<':
+            depth += 1
+            i += 1
+        elif c == '>':
+            depth -= 1
+            i += 1
+        elif c.isalpha() or c == '_':
+            # 读取类型变量名（到 ':'）
+            j = i
+            while j < len(sig) and sig[j] not in (':', '<', '>'):
+                j += 1
+            name = sig[i:j]
+            i = j
+            # 解析上界列表：:classbound(:iface1)* 格式
+            first_class_bound: 'str | None' = None
+            while i < len(sig) and sig[i] == ':':
+                i += 1  # 跳过 ':'
+                if i < len(sig) and sig[i] in ('L', '['):
+                    # 传入 registry：接口类型 → _iface_full_path → 'Object' → 被过滤
+                    # 具体类（Number/Enum 等）→ 正确类型（"Number"、"Enum<Object>"）
+                    rust_t, i = _parse_one_type(sig, i, [], registry)
+                    if first_class_bound is None and rust_t and rust_t != 'Object':
+                        first_class_bound = rust_t
+                elif i < len(sig) and sig[i] == 'T':
+                    # 以另一类型变量作为上界，直接跳过
+                    _, i = _parse_one_type(sig, i, [], None)
+                # else: 空类上界（'::'）直接继续下一轮循环
+            if name and first_class_bound:
+                bounds[name] = first_class_bound
+        else:
+            i += 1
+    return bounds
+
+
+def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=None,
+                    method_bounds: 'dict | None' = None) -> tuple[str, int]:
     """从 sig[i] 起解析一个类型（Generic Signature 格式），返回 (rust_type, next_i)。"""
     if i >= len(sig):
         return 'Object', i
@@ -330,17 +378,21 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
         except ValueError:
             return 'Object', len(sig)
         name = sig[i + 1:end]
-        rust_type = name if name in class_type_params else 'Object'
-        return rust_type, end + 1
+        if name in class_type_params:
+            return name, end + 1
+        if method_bounds and name in method_bounds:
+            # 方法级类型变量 → 使用其上界（如 T extends Number → Number）
+            return method_bounds[name], end + 1
+        return 'Object', end + 1
 
     if c == '[':
         # 数组 → Rc<RefCell<Vec<elem>>>
-        elem_type, next_i = _parse_one_type(sig, i + 1, class_type_params, registry)
+        elem_type, next_i = _parse_one_type(sig, i + 1, class_type_params, registry, method_bounds)
         return f'Rc<RefCell<Vec<{elem_type}>>>', next_i
 
     if c == '+' or c == '-':
         # 上下界通配符 — 取内部类型
-        return _parse_one_type(sig, i + 1, class_type_params, registry)
+        return _parse_one_type(sig, i + 1, class_type_params, registry, method_bounds)
 
     if c == '*':
         # 无界通配符
@@ -356,7 +408,7 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
         type_args: list[str] = []
         has_type_args = j < len(sig) and sig[j] == '<'
         if has_type_args:
-            type_args, j = _parse_type_args(sig, j, class_type_params, registry)
+            type_args, j = _parse_type_args(sig, j, class_type_params, registry, method_bounds)
 
         # 跳过 ClassTypeSigSuffix（.InnerClass…）
         while j < len(sig) and sig[j] == '.':
@@ -364,7 +416,7 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
             while j < len(sig) and sig[j] not in ('<', ';', '.'):
                 j += 1
             if j < len(sig) and sig[j] == '<':
-                _, j = _parse_type_args(sig, j, class_type_params)
+                _, j = _parse_type_args(sig, j, class_type_params, registry, method_bounds)
 
         # 跳过结尾 ';'
         if j < len(sig) and sig[j] == ';':
@@ -468,8 +520,10 @@ def parse_method_param_types(
     try:
         i = 0
 
-        # 跳过方法级类型参数 <T:...> —— 不处理方法级泛型
+        # 解析方法级类型参数 <T:Ljava/lang/Number;...>，提取上界用于参数类型解析
+        method_bounds: dict[str, str] = {}
         if i < len(sig) and sig[i] == '<':
+            method_bounds = _extract_method_tparam_bounds(sig[i:], registry)
             depth = 1
             i += 1
             while i < len(sig) and depth > 0:
@@ -484,10 +538,10 @@ def parse_method_param_types(
             return [], ''
         i += 1  # 跳过 '('
 
-        # 解析参数类型
+        # 解析参数类型（方法级类型变量使用上界替代 Object）
         param_types: list[str] = []
         while i < len(sig) and sig[i] != ')':
-            rust_type, i = _parse_one_type(sig, i, class_type_params, registry)
+            rust_type, i = _parse_one_type(sig, i, class_type_params, registry, method_bounds or None)
             param_types.append(rust_type)
 
         if i < len(sig) and sig[i] == ')':
@@ -495,7 +549,7 @@ def parse_method_param_types(
 
         # 解析返回类型（忽略 ThrowsSignature ^...）
         if i < len(sig) and sig[i] != '^':
-            ret_type, _ = _parse_one_type(sig, i, class_type_params, registry)
+            ret_type, _ = _parse_one_type(sig, i, class_type_params, registry, method_bounds or None)
         else:
             ret_type = '()'
 

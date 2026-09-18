@@ -795,6 +795,8 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             _closure_branch = (f'if let Some(__f) = {obj_e}.0.as_any()'
                                f'.downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }}')
 
+        # 当前调用的完整 JVM 描述符（供下面 _resolve_method_owner 精确匹配）
+        jvm_desc = f"({''.join(params)}){ret}"
         # 只有当目标类有已知子类时，才生成 dispatch 链（否则退化为简单 downcast）
         if subtypes:
             all_types = subtypes + [cls_binary]  # 叶→根
