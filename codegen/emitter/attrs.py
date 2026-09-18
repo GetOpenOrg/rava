@@ -279,8 +279,17 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         _method_sigs = {(m.name, m.descriptor) for m in (ci.methods or [])}
         if ('toString', '()Ljava/lang/String;') in _method_sigs:
             lines.append('#[has_to_string_method = true]')
-        if ('hashCode', '()I') in _method_sigs:
-            lines.append('#[has_hash_code_method = true]')
+        # 仅当 hashCode 是当前类的 VirtualDefine 时才生成桥接属性。
+        # VirtualOverride（virtual_in 为祖先类名）时，宏内 UFCS 调用
+        # `ClassName__VTable::hashCode(self)` 会触发 E0782，因为该方法
+        # 并未声明在 ClassName__VTable 自身，而是声明在祖先的 VTable 中。
+        _hm = next((m for m in (ci.methods or [])
+                    if m.name == 'hashCode' and m.descriptor == '()I'), None)
+        if _hm:
+            _class_rust = ci.name.rsplit('/', 1)[-1].replace('$', '_')
+            _vin = getattr(_hm, 'virtual_in', None)
+            if _vin == _class_rust:
+                lines.append('#[has_hash_code_method = true]')
         if impl_methods:
             lines.append(f'#[impl_methods      = "{";".join(sorted(impl_methods))}"]')
     return lines

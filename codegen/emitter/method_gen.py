@@ -257,7 +257,49 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
         if m.name == 'toString' and m.descriptor == '()Ljava/lang/String;':
             body = 'Ok(String::from(Self::BINARY_NAME))'
         elif m.name == 'hashCode' and m.descriptor == '()I':
-            body = 'Ok(0)'
+            # 结构化检测：拥有 value:[B 和 coder:B 字段的类（Java String 类型结构）
+            # 生成 Java String 散列算法，避免硬编码类名（符合规则 4）
+            _has_byte_value = any(
+                getattr(f, 'name', None) == 'value' and getattr(f, 'descriptor', None) == '[B'
+                for f in (ci.fields or [])
+            )
+            _has_byte_coder = any(
+                getattr(f, 'name', None) == 'coder' and getattr(f, 'descriptor', None) == 'B'
+                for f in (ci.fields or [])
+            )
+            if _has_byte_value and _has_byte_coder:
+                # Java Latin1/UTF16 双路径散列（Latin1: coder==0，UTF16: coder==1）
+                # 不使用外层 {} 包裹：宏会把整个内层 block 作为单条语句剥离掉。
+                # 用 let this = self; 兼容两种上下文：
+                #   - impl VTable for __inner：self 是 &__inner，赋值给 this
+                #   - base 自由函数：宏剥离 "let this = self;" 后，this 是参数 &__BT
+                body = (
+                    'let this = self;\n'
+                    '    let val = this.__get_value();\n'
+                    '    let len = val.len();\n'
+                    '    let mut h: i32 = 0i32;\n'
+                    '    if this.__get_coder() == 0i8 {\n'
+                    '        let mut i: i32 = 0i32;\n'
+                    '        loop {\n'
+                    '            if i >= len { break; }\n'
+                    '            h = h.wrapping_mul(31i32).wrapping_add(val.get(i) as u8 as i32);\n'
+                    '            i += 1i32;\n'
+                    '        }\n'
+                    '    } else {\n'
+                    '        let pairs: i32 = len / 2i32;\n'
+                    '        let mut i: i32 = 0i32;\n'
+                    '        loop {\n'
+                    '            if i >= pairs { break; }\n'
+                    '            let b1 = val.get(i * 2i32) as u8;\n'
+                    '            let b2 = val.get(i * 2i32 + 1i32) as u8;\n'
+                    '            h = h.wrapping_mul(31i32).wrapping_add(((b1 as u32) << 8 | b2 as u32) as i32);\n'
+                    '            i += 1i32;\n'
+                    '        }\n'
+                    '    }\n'
+                    '    Ok(h)'
+                )
+            else:
+                body = 'Ok(0)'
         else:
             body = f'panic!("stub: {ci.name}.{m.name}:{m.descriptor}")'
     else:

@@ -173,6 +173,22 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # E0599 防护：接收者是 Object 类型时，Object 结构体不定义具体子类方法，
     # 直接调用会产生 E0599。若目标类已知且有子类，生成 downcast dispatch 链（多态虚分发）。
     obj_is_bare = (obj_ty == 'Object')
+    if obj_is_bare and cls == 'Object' and registry:
+        # Object 类方法（hashCode/equals/compareTo 等）通过 Object 包装器直接调用。
+        # 仅对基本类型返回值或 void 方法走直接调用路径；
+        # 非基本类型返回（如 getClass→Class）保持原来的 closure-only dispatch，
+        # 因为 object_impl.rs 的实现返回 Object 而非具体类型，不能直接赋值。
+        if rust_ret == '()' or rust_ret in _PRIMITIVE_RUST_TYPES:
+            arg_str = ', '.join(args)
+            v = sim.fresh()
+            if rust_ret == '()':
+                sim.emit(RawStmt(f"{obj_e}.{rust_mname}({arg_str})?;"))
+            else:
+                # 基本类型返回值（hashCode→i32, equals→bool, compareTo→i32 等）
+                # 通过 ObjectVTable dyn dispatch 正确路由到实际类型的覆盖实现
+                sim.emit(RawStmt(f"let {v}: {rust_ret} = {obj_e}.{rust_mname}({arg_str})?;"))
+                sim.push(Var(v), RsNamed(rust_ret))
+            return
     if obj_is_bare and cls and registry:
         # 多态 dispatch：按继承链（叶→根）依次 downcast，找到实际类型后调用方法
         # cls 是 Rust 短类名（$ 已替换为 _），需转回 binary name 查继承链

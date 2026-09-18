@@ -427,6 +427,20 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     };
     let patterns = check_types.iter().map(|s| quote! { #s });
 
+    // 当类声明了 hashCode()I 时，将 vtable 方法桥接到 ObjectVTable::hashCode（返回 i32）
+    let hash_code_inner_bridge: proc_macro2::TokenStream = if meta.has_hash_code_method {
+        quote! {
+            fn hashCode(&self) -> i32 {
+                match #vtable_trait_ident::hashCode(self) {
+                    Ok(h) => h,
+                    Err(_) => 0,
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
             impl #impl_g ObjectVTable for #inner_ident #ty_g #where_c {
@@ -434,6 +448,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     matches!(type_id, #(#patterns)|*)
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
+                #hash_code_inner_bridge
             }
         }
     } else {
