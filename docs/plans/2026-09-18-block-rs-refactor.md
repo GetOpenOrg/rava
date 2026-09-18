@@ -115,45 +115,57 @@ runtime/java_rta_macros/src/
 
 ### GenContext
 
+> **2026-09-18 审计补充**：初版 GenContext 有 5 处缺失和 2 处错误，详见下方说明。
+
 ```rust
 // gen/context.rs
 pub(crate) struct GenContext<'a> {
-    // 类标识
+    // ── 标识符 ────────────────────────────────────────────────
     pub struct_ident: &'a Ident,
-    pub inner_ident: Ident,             // format_ident!("{}_inner", ...)
-    pub vtable_trait_ident: Ident,      // format_ident!("{}_VTable", ...)
+    pub self_name: String,              // struct_ident.to_string()，base fn 命名用
+    pub inner_ident: Ident,             // format_ident!("{}__inner", struct_ident)
+    pub vtable_trait_ident: Ident,      // format_ident!("{}__VTable", struct_ident)
 
-    // 泛型参数（从 generics split_for_impl 产出，存 TokenStream2 避免生命周期复杂度）
-    pub impl_g: TokenStream2,
+    // ── 泛型（同时保留完整对象和 split 结果）──────────────────
+    pub gen: syn::Generics,             // 完整对象，§11 需要 gen.clone() 追加 __BT 参数
+    pub impl_g: TokenStream2,           // 便捷引用，各处 quote! 使用
     pub ty_g: TokenStream2,
     pub where_c: TokenStream2,
+    pub class_type_params: Vec<String>, // 类型参数名，§1 generic_sig 重建
+    pub class_ty_idents: Vec<Ident>,    // 类型参数 Ident，§1 turbofish ::<K, V, Self>
 
-    // 类级元数据
-    pub meta: &'a ClassMeta,
+    // ── 元数据 ────────────────────────────────────────────────
+    pub meta: ClassMeta,                // binary_name, superclass, superclass_fields 等
+    pub superclass_vtable_args: TokenStream2, // 父类泛型参数（如 <Object>），§1 §4 §10
 
-    // 字段分类（供 Rewriter 使用）
-    pub basic_names: HashSet<String>,   // 值类型字段
-    pub ref_names: HashSet<String>,     // 引用类型字段
+    // ── 字段 ──────────────────────────────────────────────────
+    pub fields: Vec<(Ident, Type)>,     // own fields，§2 inner struct / §4 accessor / §7 wrapper
+    pub basic_names: HashSet<String>,   // 值类型字段名（供 Rewriter 使用）
+    pub ref_names: HashSet<String>,     // 引用类型字段名（供 Rewriter 使用）
+    pub phantom_fields: Vec<TokenStream2>, // 未被字段使用的泛型参数，§2 PhantomData 字段
 
-    // 方法分类结果
-    pub vtable_defines: Vec<&'a FnItem>,                      // VirtualDefine
-    pub vtable_overrides: HashMap<String, Vec<&'a FnItem>>,   // VirtualOverride，key = 祖先类名
-    pub constructors: Vec<&'a FnItem>,
-    pub non_virtual: Vec<&'a FnItem>,
+    // ── 方法分类 ──────────────────────────────────────────────
+    pub vtable_defines: Vec<&'a FnItem>,
+    pub vtable_overrides: HashMap<String, Vec<&'a FnItem>>,
+    pub non_virtual: Vec<&'a FnItem>,   // Constructor + NonVirtual 合并（代码中不分离）
 
-    // 方法名集合（供 base 函数安全检查使用）
-    pub vtable_method_names: HashSet<String>,   // vtable_defines 的方法名（含祖先 override）
-    pub own_method_names: HashSet<String>,      // 当前类所有声明方法名
-
-    // 泛型类型参数（供 generic_sig 重建使用）
-    pub class_type_params: Vec<String>,
-
-    // 父类 vtable 类型参数（传递给祖先 vtable trait 的类型参数 token）
-    pub superclass_vtable_args: TokenStream2,
+    // ── 方法名集合（两个不同语义，不可合并为一个）────────────
+    pub own_method_names: HashSet<String>,    // 全部方法名，rewrite_virtual_calls_for_wrapper 用
+    pub vtable_define_names: HashSet<String>, // 仅 VirtualDefine 方法名，§11 base fn 安全检查用
 }
 ```
 
-新字段 `vtable_method_names` 是解决 E0599 的关键：base 函数生成时用它检查 `this.xyz()` 是否安全。
+**初版 GenContext 审计发现的问题（2026-09-18）：**
+
+| 问题 | 说明 |
+|------|------|
+| `self_name` 缺失 | `self_name = struct_ident.to_string()`，用于 §1 vtable default impl 和 §11 base fn 命名 |
+| `gen: syn::Generics` 缺失 | 初版只有 `impl_g/ty_g/where_c: TokenStream2`，§11 需要 `gen.clone()` 追加 `__BT` 泛型参数，TokenStream2 无法做到 |
+| `fields` 缺失 | own fields 列表，§2 inner struct / §4 Self__VTable accessor / §7 wrapper accessor 均需要 |
+| `phantom_fields` 缺失 | §2 inner struct 的 PhantomData 字段生成 |
+| `class_ty_idents` 缺失 | §1 vtable default impl turbofish `::<ClassTypeParams, Self>` 避免 E0282 |
+| `constructors` 错误 | 代码中 Constructor 和 NonVirtual 合并到 `non_virtual`，不单独存在 |
+| `vtable_method_names` 概念模糊 | 初版只有一个集合，但代码实际有两个语义不同的集合：`own_method_names`（全部方法，rewrite 用）和 `vtable_define_names`（仅 VirtualDefine，base fn 安全检查用），不能合并 |
 
 ### expand_inner 简化后
 
