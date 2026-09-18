@@ -761,21 +761,6 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         mangle_cls = obj_base if (obj_base and obj_base not in ('Object', '()')) else (cls or '')
         rust_mname = _safe_field(_mangle_if_overloaded(mangle_cls, mname, comment, registry))
 
-    # T76：若方法定义在父类（继承方法），通过 _super 链路由调用
-    # 基于接收者实际 Rust 类型查找方法是否需要通过 _super 路由
-    # 用 JVM 描述符精确匹配重载，避免同名但不同参数的方法干扰路由判断
-    super_method_pfx = ''
-    if registry:
-        recv_base = obj_ty.split('<')[0].strip()
-        cls_short = class_name.rsplit('/', 1)[-1] if class_name and '/' in class_name else (class_name or '')
-        jvm_desc = f"({''.join(params)}){ret}"
-        if recv_base == cls_short:
-            super_method_pfx = _find_method_super_prefix(class_name, mname, registry, descriptor=jvm_desc)
-        elif recv_base and recv_base not in ('Object', '()'):
-            super_method_pfx = _find_method_super_prefix_for_type(recv_base, mname, registry, descriptor=jvm_desc)
-    if super_method_pfx:
-        obj_e = _super_prefix_to_expr(obj_e, super_method_pfx)
-
     # 所有方法统一处理：obj.method(args)?（用户类 + JDK 类均走此路径）
     arg_str = ', '.join(args)
     rust_ret = jvm_to_rust(ret, registry)

@@ -26,6 +26,11 @@ pub trait ObjectVTable: 'static {
 
     /// 向下转型辅助：返回 self 作为 &dyn Any（供 Object::downcast 使用）
     fn as_any(&self) -> &dyn std::any::Any;
+
+    /// java.lang.Object.getClass() — 返回运行时类对象（简化实现：返回默认 Object）
+    fn getClass(&self) -> crate::error::Result<Object> {
+        Ok(Object(std::rc::Rc::new(())))
+    }
 }
 
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────

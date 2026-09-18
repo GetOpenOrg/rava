@@ -38,26 +38,36 @@ def _bin_to_rust(binary_name: str) -> str:
 def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
                      registry: 'dict | None') -> str:
     """确定虚方法归属的 vtable 类 Rust 名。
-    返回空串表示非虚方法；返回当前类 Rust 名表示新定义；返回祖先类 Rust 名表示覆盖。"""
-    # 构造器、静态方法、私有方法、final 方法不参与 vtable
-    if (m.is_constructor or m.is_static or m.is_native
-            or (m.access_flags & _ACC_PRIVATE)
-            or (m.access_flags & _ACC_FINAL)):
+    返回空串表示非虚方法；返回当前类 Rust 名表示新定义；返回祖先类 Rust 名表示覆盖。
+
+    必须找到最远祖先（原始 virtual_in），而非第一个出现的祖先：
+      - A 定义 foo() → A__VTable 含 abstract fn foo()
+      - B extends A 覆盖 foo() → impl A__VTable for B__inner { fn foo() }
+      - C extends B 覆盖 foo() → impl A__VTable for C__inner { fn foo() }
+    C.foo 的 virtual_in 应为 A（最远定义者），不是 B。
+    """
+    # 构造器、静态方法、native 方法不参与 vtable（私有非 native 方法仍可参与）
+    if m.is_constructor or m.is_static or m.is_native:
         return ''
     # 接口 default 方法：视为新定义（放在接口自己的 vtable）
     if ci.is_interface:
         return _bin_to_rust(ci.name)
 
-    # 在祖先链上查找首个定义该 name+descriptor 的类
+    # 沿祖先链找到最远（最上层）定义了该 name+descriptor 的非私有方法的类
+    # final 方法也需要追踪，它覆盖祖先虚方法时仍属于该 vtable
     if registry:
+        oldest: str | None = None
         cur = ci.super_class
-        while cur and cur in registry:
+        while cur and cur != 'java/lang/Object' and cur in registry:
             anc = registry[cur]
             for am in anc.methods:
                 if am.name == m.name and am.descriptor == m.descriptor:
                     if not (am.access_flags & _ACC_PRIVATE):
-                        return _bin_to_rust(cur)
+                        oldest = cur
+                        break
             cur = anc.super_class
+        if oldest is not None:
+            return _bin_to_rust(oldest)
 
     # 未在祖先中找到 → 当前类新定义
     return _bin_to_rust(ci.name)
@@ -207,74 +217,100 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     - user_crate_prefix: 若提供（如 'jdk_classes'），cross_imports 用该 crate 前缀
     """
 
-    # 跨包 glob import：让生成代码能直接用 Objects、Integer 等翻译过的 JDK 类型
-    cross_imports: list[str] = []
-    if jdk_crate_pkg_paths:
-        prefix = user_crate_prefix or 'crate'
-        for pkg_path in jdk_crate_pkg_paths:
-            cross_imports.append(f"use {prefix}::{pkg_path}::*;")
+    # ── Step 1: 始终计算引用集合（精确 use 生成的基础）─────────────────────────
+    import re as _re
+    _referenced: set[str] = set()
+    # 超类和接口：结构性依赖（生成的 struct 字段 / impl 头会引用这些类型）
+    if ci.super_class and ci.super_class != 'java/lang/Object':
+        _referenced.add(ci.super_class)
+    for _iface in (ci.interfaces or []):
+        if _iface != 'java/lang/Object':
+            _referenced.add(_iface)
+    # 扫描方法指令中的类型引用
+    for _m in ci.methods:
+        for _instr in (_m.instrs or []):
+            _c = _instr.comment
+            if not _c:
+                continue
+            if _c.startswith(('Method ', 'InterfaceMethod ')):
+                _rest = _c.split(' ', 1)[1]
+                _dot = _rest.find('.')
+                if _dot > 0:
+                    _referenced.add(_rest[:_dot])
+            elif _c.startswith('Field '):
+                _rest = _c[6:]
+                _dot = _rest.find('.')
+                if _dot > 0:
+                    _referenced.add(_rest[:_dot])
+    # 扫描字段描述符（含超类链继承字段）
+    _all_fields_to_scan = list(ci.fields)
+    if registry:
+        _sc_scan = ci.super_class
+        _seen_scan: set[str] = {f.name for f in ci.fields}
+        while _sc_scan and _sc_scan != 'java/lang/Object' and _sc_scan in registry:
+            _sci_scan = registry[_sc_scan]
+            for _f2 in _sci_scan.fields:
+                if not _f2.is_static and _f2.name not in _seen_scan:
+                    _all_fields_to_scan.append(_f2)
+                    _seen_scan.add(_f2.name)
+            _sc_scan = _sci_scan.super_class
+    for _f in _all_fields_to_scan:
+        for _m in _re.finditer(r'L([^;]+);', _f.descriptor or ''):
+            _referenced.add(_m.group(1))
+        for _m in _re.finditer(r'L([^;]+);', _f.generic_signature or ''):
+            _referenced.add(_m.group(1))
+    # 扫描方法描述符（参数和返回值）
+    for _method in ci.methods:
+        for _m in _re.finditer(r'L([^;]+);', _method.descriptor or ''):
+            _referenced.add(_m.group(1))
+        for _m in _re.finditer(r'L([^;]+);', getattr(_method, 'generic_signature', '') or ''):
+            _referenced.add(_m.group(1))
 
-    # 若文件所在包未包含在全局 glob 导入中（如 jdk/ 前缀），则补充自身包的 glob 导入
-    # 以确保同包兄弟类型（如内部接口）可直接引用
+    # ── Step 2: 精确 cross_imports（按需逐类型导入，不使用包级 glob）───────────
+    cross_imports: list[str] = []
+    _prefix = user_crate_prefix or 'crate'
+    _self_simple = (ci.name.split('/')[-1] if '/' in ci.name else ci.name).replace('$', '_')
+    _seen_imports: set[str] = set()  # 去重键："{rust_pkg}::{simple}"
+
+    def _add_precise_import(full_cls: str) -> None:
+        """按 JVM binary name 添加精确 use 语句，跳过自身类型和重复项。"""
+        _parts = full_cls.split('/')
+        if len(_parts) < 2:
+            return
+        _rust_pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _parts[:-1])
+        _simple = _parts[-1].replace('$', '_')
+        if _simple == _self_simple:
+            return
+        _key = f"{_rust_pkg}::{_simple}"
+        if _key in _seen_imports:
+            return
+        _seen_imports.add(_key)
+        cross_imports.append(f"use {_prefix}::{_rust_pkg}::{_simple};")
+
+    # JDK 包（jdk_crate_pkg_paths 中的包）：按需精确导入
+    if jdk_crate_pkg_paths:
+        _pkg_set = set(jdk_crate_pkg_paths)
+        for _full_cls in sorted(_referenced):
+            _parts = _full_cls.split('/')
+            if len(_parts) >= 2 and '/'.join(_parts[:-1]) in _pkg_set:
+                _add_precise_import(_full_cls)
+
+    # 同包兄弟类：按需精确导入（若自身包未在 jdk_crate_pkg_paths 中）
     if ci.name and '/' in ci.name:
-        _own_pkg_parts = ci.name.split('/')[:-1]
+        _own_pkg = '/'.join(ci.name.split('/')[:-1])
         _own_pkg_path = '::'.join(
-            f'r#{p}' if p in _RUST_KEYWORDS else p for p in _own_pkg_parts
+            f'r#{p}' if p in _RUST_KEYWORDS else p for p in ci.name.split('/')[:-1]
         )
         _existing_pkgs = set(jdk_crate_pkg_paths) if jdk_crate_pkg_paths else set()
         if _own_pkg_path not in _existing_pkgs:
-            _pfx = user_crate_prefix or 'crate'
-            cross_imports.append(f"use {_pfx}::{_own_pkg_path}::*;")
+            for _full_cls in sorted(_referenced):
+                _parts = _full_cls.split('/')
+                if len(_parts) >= 2 and '/'.join(_parts[:-1]) == _own_pkg:
+                    _add_precise_import(_full_cls)
 
-    # 以下两个机制（冲突消歧 + jdk/ 显式导入）共享同一次指令扫描
-    _need_refs = bool(conflict_map or skipped_classes)
-    _referenced: set[str] = set()
-    if _need_refs:
-        # 扫描方法指令中的类型引用
-        for _m in ci.methods:
-            for _instr in (_m.instrs or []):
-                _c = _instr.comment
-                if not _c:
-                    continue
-                if _c.startswith(('Method ', 'InterfaceMethod ')):
-                    _rest = _c.split(' ', 1)[1]
-                    _dot = _rest.find('.')
-                    if _dot > 0:
-                        _referenced.add(_rest[:_dot])
-                elif _c.startswith('Field '):
-                    _rest = _c[6:]
-                    _dot = _rest.find('.')
-                    if _dot > 0:
-                        _referenced.add(_rest[:_dot])
-        # 扫描字段描述符（含超类链继承字段）中引用的类型（含 jdk/ 等跨包引用）
-        import re as _re
-        _all_fields_to_scan = list(ci.fields)
-        if registry:
-            _sc_scan = ci.super_class
-            _seen_scan: set[str] = {f.name for f in ci.fields}
-            while _sc_scan and _sc_scan != 'java/lang/Object' and _sc_scan in registry:
-                _sci_scan = registry[_sc_scan]
-                for _f2 in _sci_scan.fields:
-                    if not _f2.is_static and _f2.name not in _seen_scan:
-                        _all_fields_to_scan.append(_f2)
-                        _seen_scan.add(_f2.name)
-                _sc_scan = _sci_scan.super_class
-        for _f in _all_fields_to_scan:
-            for _m in _re.finditer(r'L([^;]+);', _f.descriptor or ''):
-                _referenced.add(_m.group(1))
-            for _m in _re.finditer(r'L([^;]+);', _f.generic_signature or ''):
-                _referenced.add(_m.group(1))
-        # 扫描方法描述符（参数和返回值）中引用的类型
-        for _method in ci.methods:
-            for _m in _re.finditer(r'L([^;]+);', _method.descriptor or ''):
-                _referenced.add(_m.group(1))
-            for _m in _re.finditer(r'L([^;]+);', getattr(_method, 'generic_signature', '') or ''):
-                _referenced.add(_m.group(1))
-
-    # 消歧：当同一简单名存在于多个包中时，追加显式 use 覆盖 glob 歧义
+    # 消歧：同一简名存在于多个包时，精确 use 覆盖（conflict_map 仍需处理）
     if conflict_map:
-        _own_pkg = '/'.join(ci.name.split('/')[:-1]) if '/' in ci.name else ''
-        _prefix = user_crate_prefix or 'crate'
+        _own_pkg_cm = '/'.join(ci.name.split('/')[:-1]) if '/' in ci.name else ''
 
         def _pkg_to_use(pkg_slash: str) -> str:
             return _prefix + '::' + '::'.join(
@@ -282,34 +318,23 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 for p in pkg_slash.split('/')
             )
 
-        # 本文件自身定义的类型简名（跳过：不能 use 自己定义的名字）
-        # Java 内部类用 $ 分隔，Rust struct 名用 _ 替代
-        _self_simple = (ci.name.split('/')[-1] if '/' in ci.name else ci.name).replace('$', '_')
-
         for _sn, _pkgs in conflict_map.items():
-            # 跳过：本文件就是该类型的定义文件（struct 名会与 use 重复导致 E0255）
             if _sn.replace('$', '_') == _self_simple:
                 continue
-            # 优先：指令中有直接引用的包
             _matches = [p for p in _pkgs if f'{p}/{_sn}' in _referenced]
             if len(_matches) == 1:
                 _chosen = _matches[0]
-            elif _own_pkg in _pkgs:
-                # 次优：文件自身所在包（引用了与本包同名的类型，用本包版本）
-                _chosen = _own_pkg
+            elif _own_pkg_cm in _pkgs:
+                _chosen = _own_pkg_cm
             elif _matches:
                 _chosen = _matches[0]
             else:
-                # 回退：优先 java/ 包，否则取第一个
                 _java = [p for p in _pkgs if p.startswith('java/')]
                 _chosen = _java[0] if _java else _pkgs[0]
-            # Java 内部类 $ → Rust struct 名用 _
             cross_imports.append(f"use {_pkg_to_use(_chosen)}::{_sn.replace('$', '_')};")
 
-    # 为被跳过全局导入的包（如 jdk/）中的类型，按需添加逐文件显式导入
+    # 被跳过包（如 jdk/）中的类型：按需精确导入
     if skipped_classes and _referenced:
-        _prefix2 = user_crate_prefix or 'crate'
-        _self_simple2 = (ci.name.split('/')[-1] if '/' in ci.name else ci.name).replace('$', '_')
         _added_skipped: set[str] = set()
         for _full_cls in sorted(_referenced):
             _cls_parts = _full_cls.split('/')
@@ -318,10 +343,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             _rust_pkg = '::'.join(
                 f'r#{p}' if p in _RUST_KEYWORDS else p for p in _cls_parts[:-1]
             )
-            # Java 内部类 $ → Rust struct 名用 _
             _simple = _cls_parts[-1].replace('$', '_')
-            if f"{_rust_pkg}::{_simple}" in skipped_classes and _simple != _self_simple2 and _simple not in _added_skipped:
-                cross_imports.append(f"use {_prefix2}::{_rust_pkg}::{_simple};")
+            if (f"{_rust_pkg}::{_simple}" in skipped_classes
+                    and _simple != _self_simple
+                    and _simple not in _added_skipped):
+                cross_imports.append(f"use {_prefix}::{_rust_pkg}::{_simple};")
                 _added_skipped.add(_simple)
 
     # 用户内部类兄弟模块导入（crate::mod_name::TypeName）

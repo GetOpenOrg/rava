@@ -123,6 +123,12 @@ struct ClassMeta {
     binary_name: String,
     superclass: Option<Type>,
     superclass_fields: Vec<(Ident, Type)>,
+    /// 线性超类链（从最深祖先到直接父类），Rust short names，不含 Object 和 self。
+    /// 用于 vtable impl 生成。由 codegen attrs.py 的 all_superclasses 属性提供。
+    all_superclasses: Vec<String>,
+    /// 每个祖先自己声明的字段列表：{ancestor_rust_name → [field_names]}。
+    /// 用于将字段 accessor 精确分发到对应祖先的 vtable impl。
+    ancestor_fields_layout: HashMap<String, Vec<String>>,
     all_supertypes: Vec<String>,
     is_interface: bool,
     has_to_string_method: bool,
@@ -140,6 +146,23 @@ impl ClassMeta {
                 let s = lit_str(attr)?;
                 if !s.is_empty() && s != "Object" {
                     m.superclass = Some(syn::parse_str::<Type>(&s)?);
+                }
+            } else if path.is_ident("all_superclasses") {
+                let s = lit_str(attr)?;
+                m.all_superclasses =
+                    s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
+            } else if path.is_ident("ancestor_fields_layout") {
+                let s = lit_str(attr)?;
+                // 格式：AncName:field1,field2;AncName2:field3
+                for seg in s.split(';').filter(|x| !x.is_empty()) {
+                    if let Some((anc, fields_str)) = seg.split_once(':') {
+                        let fields: Vec<String> = fields_str
+                            .split(',')
+                            .filter(|x| !x.is_empty())
+                            .map(|x| x.to_owned())
+                            .collect();
+                        m.ancestor_fields_layout.insert(anc.to_owned(), fields);
+                    }
                 }
             } else if path.is_ident("all_supertypes") {
                 let s = lit_str(attr)?;
@@ -493,35 +516,59 @@ fn rewrite_block(block: &mut Block, basic: &HashSet<String>, reference: &HashSet
     rw.visit_block_mut(block);
 }
 
+/// Base function 中将 `self` 路径表达式替换为 `this`。
+/// 在表达式中将 `Self::xxx` 替换为具体类名（如 `Character::xxx`）。
+/// 用于 vtable default impl 和 base 自由函数。
+struct SelfToConcrete {
+    struct_name: Ident,
+}
+impl VisitMut for SelfToConcrete {
+    fn visit_expr_mut(&mut self, e: &mut Expr) {
+        if let Expr::Path(p) = e {
+            if p.qself.is_none() && !p.path.segments.is_empty() {
+                if p.path.segments[0].ident == "Self" {
+                    p.path.segments[0].ident = self.struct_name.clone();
+                }
+            }
+        }
+        visit_mut::visit_expr_mut(self, e);
+    }
+}
+
+/// 在 base 自由函数体中将 `self` → `this`，`Self` → 具体类名（如 `Character`）。
+/// base 函数中不能使用 `self`/`Self` 关键字（自由函数，无 receiver）。
+struct SelfToThis {
+    struct_name: Ident,
+}
+impl VisitMut for SelfToThis {
+    fn visit_expr_mut(&mut self, e: &mut Expr) {
+        if let Expr::Path(p) = e {
+            if p.qself.is_none() {
+                if let Some(id) = p.path.get_ident() {
+                    if id == "self" {
+                        *e = syn::parse_quote! { this };
+                        return;
+                    }
+                }
+                // Self::XXX → StructName::XXX
+                if !p.path.segments.is_empty() && p.path.segments[0].ident == "Self" {
+                    p.path.segments[0].ident = self.struct_name.clone();
+                    // 继续递归处理
+                }
+            }
+        }
+        visit_mut::visit_expr_mut(self, e);
+    }
+}
+
+fn rewrite_block_for_base(block: &mut Block, basic: &HashSet<String>, reference: &HashSet<String>, struct_ident: &Ident) {
+    rewrite_block(block, basic, reference);
+    SelfToThis { struct_name: struct_ident.clone() }.visit_block_mut(block);
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // all_supertypes 工具
 // ══════════════════════════════════════════════════════════════════════════════
-
-/// 将 JVM binary name（如 `TestInheritance$Animal` 或 `java/lang/Object`）
-/// 转为 Rust 短名（取最后一段，替换 `$` → `_`）。
-fn binary_to_rust_short(name: &str) -> String {
-    let last = name.rsplit('/').next().unwrap_or(name);
-    last.replace('$', "_")
-}
-
-/// 提取祖先列表（排除 Object 和自身），保持 all_supertypes 原始顺序。
-/// 返回 Rust 短名列表。
-fn ancestor_rust_names_ordered(all_supertypes: &[String], self_name: &str) -> Vec<String> {
-    all_supertypes
-        .iter()
-        .filter_map(|s| {
-            let short = binary_to_rust_short(s);
-            if short == "Object" || short == self_name {
-                return None;
-            }
-            // 跳过含 '/' 的 JDK 包路径（非用户类祖先）
-            if s.contains('/') {
-                return None;
-            }
-            Some(short)
-        })
-        .collect()
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 展开入口
@@ -590,6 +637,24 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let inner_ident = format_ident!("{}__inner", struct_ident);
     let vtable_trait_ident = format_ident!("{}__VTable", struct_ident);
 
+    // 提取 superclass 的泛型参数（如 Enum<Object> → <Object>），供 vtable 继承使用
+    // 注意：AngleBracketedGenericArguments 自带 <> 括号，quote! { #ab } 即为 <Object>
+    let superclass_vtable_args: TokenStream2 = meta.superclass.as_ref().map_or(
+        quote! {},
+        |sup_ty| {
+            if let syn::Type::Path(tp) = sup_ty {
+                if let Some(seg) = tp.path.segments.last() {
+                    if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
+                        if !ab.args.is_empty() {
+                            return quote! { #ab };
+                        }
+                    }
+                }
+            }
+            quote! {}
+        },
+    );
+
     // ── 字段集合 ─────────────────────────────────────────────────────────────
     let mut basic_names: HashSet<String> = HashSet::new();
     let mut ref_names: HashSet<String> = HashSet::new();
@@ -655,10 +720,16 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // 1. VTable trait
     // ══════════════════════════════════════════════════════════════════════════
 
-    // supertrait：有父类 → 父类 __VTable；无父类 → ObjectVTable
+    // supertrait：有父类 → 父类 __VTable（携带泛型参数）；无父类 → ObjectVTable
     let vtable_supertrait: TokenStream2 = if let Some(sup_ty) = &meta.superclass {
-        let sup_vtable = format_ident!("{}__VTable", quote!(#sup_ty).to_string().replace(' ', ""));
-        quote! { #sup_vtable }
+        // 提取超类的基础类型名（去掉泛型参数），如 Enum<Object> → Enum
+        let base_name = if let Type::Path(tp) = sup_ty {
+            tp.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default()
+        } else {
+            quote!(#sup_ty).to_string()
+        };
+        let sup_vtable = format_ident!("{}__VTable", base_name);
+        quote! { #sup_vtable #superclass_vtable_args }
     } else {
         quote! { ObjectVTable }
     };
@@ -683,7 +754,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
 
-    // VirtualDefine 的 default impl（方法体经 Rewriter）
+    // VirtualDefine 的 default impl（方法体经 Rewriter + SelfToConcrete）
     let mut vtable_default_methods: Vec<TokenStream2> = Vec::new();
     for f in &vtable_defines {
         let sig = &f.sig;
@@ -692,6 +763,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             Some(block) => {
                 let mut b = block.clone();
                 rewrite_block(&mut b, &basic_names, &ref_names);
+                // 将 Self::BINARY_NAME 等替换为具体类名（vtable default impl 中 Self 无 BINARY_NAME）
+                SelfToConcrete { struct_name: struct_ident.clone() }.visit_block_mut(&mut b);
                 vtable_default_methods.push(quote! {
                     #(#keep_attrs)*
                     #sig #b
@@ -835,20 +908,38 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     } else {
         // ── 有父类：顶层祖先 vtable impl + 其余空 impl + Self__VTable impl ──
 
-        // 计算有序祖先列表（排除 Object 和 self，保持 all_supertypes 原始顺序）
-        let ancestors = ancestor_rust_names_ordered(&meta.all_supertypes, &self_name);
+        // 使用 all_superclasses（深度优先，最深祖先在前），已是 Rust short names
+        let ancestors = meta.all_superclasses.clone();
 
-        // 顶层祖先（第一个，如 "TestInheritance_Animal"）负责所有继承字段 + overrides
-        let _top_ancestor = ancestors.first().cloned();
+        // 构建字段名 → (Ident, Type) 的查找表（superclass_fields 平铺列表）
+        let sc_fields_map: HashMap<String, (Ident, Type)> = meta
+            .superclass_fields
+            .iter()
+            .map(|(n, t)| (n.to_string(), (n.clone(), t.clone())))
+            .collect();
 
-        for (idx, anc_name) in ancestors.iter().enumerate() {
+        for anc_name in ancestors.iter() {
             let anc_vtable_ident = format_ident!("{}__VTable", anc_name);
 
             let mut items: Vec<TokenStream2> = Vec::new();
 
-            if idx == 0 {
-                // 顶层：superclass_fields 的所有 accessor
-                for (name, ty) in &meta.superclass_fields {
+            // 将此祖先自己声明的字段 accessor 放进此 vtable impl
+            let anc_own_field_names: Vec<String> =
+                if let Some(names) = meta.ancestor_fields_layout.get(anc_name) {
+                    names.clone()
+                } else if meta.ancestor_fields_layout.is_empty() {
+                    // 兜底：无 ancestor_fields_layout 时（旧属性），所有字段放最深祖先（首位）
+                    if anc_name == ancestors.first().map(|s| s.as_str()).unwrap_or("") {
+                        meta.superclass_fields.iter().map(|(n, _)| n.to_string()).collect()
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                };
+
+            for field_name in &anc_own_field_names {
+                if let Some((name, ty)) = sc_fields_map.get(field_name) {
                     let get = format_ident!("__get_{}", name);
                     let set = format_ident!("__set_{}", name);
                     if is_basic(ty) {
@@ -902,8 +993,16 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
             }
 
+            // 祖先 vtable 的类型参数：若当前类有泛型用自己的 ty_g，否则用 superclass 的类型参数
+            // 例：Thread_State（无泛型）实现 Enum__VTable<Object>，Object 来自 superclass="Enum<Object>"
+            let anc_vtable_args: TokenStream2 = if gen.params.is_empty() {
+                superclass_vtable_args.clone()
+            } else {
+                quote! { #ty_g }
+            };
+
             vtable_impls.push(quote! {
-                impl #impl_g #anc_vtable_ident #ty_g for #inner_ident #ty_g #where_c {
+                impl #impl_g #anc_vtable_ident #anc_vtable_args for #inner_ident #ty_g #where_c {
                     #(#items)*
                 }
             });
@@ -1019,7 +1118,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let wrapper_debug = quote! {
         impl #impl_g ::std::fmt::Debug for #struct_ident #ty_g #where_c {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                write!(f, "{}({})", stringify!(#struct_ident), self.vtable.toString())
+                write!(f, "{}({})", stringify!(#struct_ident), ObjectVTable::toString(&*self.vtable))
             }
         }
     };
@@ -1032,7 +1131,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         let to_string_fwd: TokenStream2 = if meta.has_to_string_method {
             quote! {
                 fn toString(&self) -> ::std::string::String {
-                    self.vtable.toString()
+                    // 用 UFCS 消歧义：避免与 Java toString() -> Result<String> 冲突
+                    ObjectVTable::toString(&*self.vtable)
                 }
             }
         } else {
@@ -1040,7 +1140,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         };
         let hash_code_fwd: TokenStream2 = if meta.has_hash_code_method {
             quote! {
-                fn hashCode(&self) -> i32 { self.vtable.hashCode() }
+                fn hashCode(&self) -> i32 { ObjectVTable::hashCode(&*self.vtable) }
             }
         } else {
             quote! {}
@@ -1119,7 +1219,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
 
-    // VirtualDefine 委托
+    // VirtualDefine 委托（使用 UFCS 消歧义：同名方法在 ObjectVTable 和本 vtable 中共存）
     for f in &vtable_defines {
         let sig = &f.sig;
         let mname = &sig.ident;
@@ -1137,7 +1237,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         wrapper_methods.push(quote! {
             #(#keep_attrs)*
             #[inline]
-            #vis #sig { self.vtable.#mname(#(#param_names),*) }
+            #vis #sig { #vtable_trait_ident::#mname(&*self.vtable, #(#param_names),*) }
         });
     }
 
@@ -1146,7 +1246,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         .iter()
         .map(|f| f.sig.ident.to_string())
         .collect();
-    for (_vtable_class, override_fns) in &vtable_overrides {
+    for (vtable_class, override_fns) in &vtable_overrides {
         for f in override_fns {
             let mname_str = f.sig.ident.to_string();
             if seen_delegators.contains(&mname_str) {
@@ -1165,10 +1265,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             }).collect();
             let keep_attrs = strip_meta_attrs(&f.attrs);
             let vis = &f.vis;
+            // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）
+            let anc_vtable = format_ident!("{}__VTable", vtable_class);
             wrapper_methods.push(quote! {
                 #(#keep_attrs)*
                 #[inline]
-                #vis #sig { self.vtable.#mname(#(#param_names),*) }
+                #vis #sig { #anc_vtable::#mname(&*self.vtable, #(#param_names),*) }
             });
         }
     }
@@ -1289,16 +1391,25 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
     let from_child_for_parent: TokenStream2 = if meta.superclass.is_some() {
         // 为每个祖先（排除 Object 和自身）生成 From<Self> for Ancestor
-        // 使用 all_supertypes 列表：ancestor_rust_names_ordered 已排除 Object 和 self
-        let ancestors = ancestor_rust_names_ordered(&meta.all_supertypes, &self_name);
+        // 使用 all_superclasses（深度优先，最深祖先在前），已是 Rust short names
+        let ancestors = meta.all_superclasses.clone();
+        // 祖先类型参数：若当前类有泛型用 ty_g，否则用 superclass 的类型参数
+        let anc_type_args: TokenStream2 = if gen.params.is_empty() {
+            superclass_vtable_args.clone()
+        } else {
+            quote! { #ty_g }
+        };
         let impls: Vec<TokenStream2> = ancestors.iter().map(|anc_name| {
             let anc_ident = format_ident!("{}", anc_name);
             let anc_vtable = format_ident!("{}__VTable", anc_name);
+            let atag = anc_type_args.clone();
             quote! {
-                impl #impl_g From<#struct_ident #ty_g> for #anc_ident #ty_g #where_c {
-                    fn from(child: #struct_ident #ty_g) -> #anc_ident #ty_g {
-                        #anc_ident #ty_g {
-                            vtable: child.vtable as ::std::rc::Rc<dyn #anc_vtable #ty_g>,
+                impl #impl_g From<#struct_ident #ty_g> for #anc_ident #atag #where_c {
+                    fn from(child: #struct_ident #ty_g) -> #anc_ident #atag {
+                        // 结构体字面量不能用 Type<E> {...} 语法（被解析为比较链），
+                        // 省略泛型参数由返回类型推导
+                        #anc_ident {
+                            vtable: child.vtable as ::std::rc::Rc<dyn #anc_vtable #atag>,
                             any: child.any,
                         }
                     }
@@ -1321,33 +1432,15 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         if let Some(block) = &f.block {
             let sig = &f.sig;
             let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
-            let mut base_sig = sig.clone();
-            // 替换 &self 接收者为 this: &T
-            base_sig.inputs = syn::punctuated::Punctuated::new();
-            base_sig.inputs.push(syn::parse_quote! { this: &impl #vtable_trait_ident #ty_g });
-            // 追加其余参数
-            for arg in sig.inputs.iter() {
-                if let syn::FnArg::Typed(_) = arg {
-                    base_sig.inputs.push(arg.clone());
-                }
-            }
-            let mut b = block.clone();
-            rewrite_block(&mut b, &basic_names, &ref_names);
-            base_fns.push(quote! {
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub fn #fn_name #impl_g #b
-            });
-            // 修正：不生成带签名的函数，改用简洁方式
-            // 实际上我们需要完整的函数签名，上面的写法有问题，重新写
-            base_fns.pop();
-
-            // 提取参数（不含 self）
-            let non_self_params: Vec<_> = sig.inputs.iter().filter(|a| matches!(a, syn::FnArg::Typed(_))).collect();
+            let non_self_params: Vec<_> = sig.inputs.iter()
+                .filter(|a| matches!(a, syn::FnArg::Typed(_)))
+                .collect();
             let ret = &sig.output;
+            let mut b = block.clone();
+            rewrite_block_for_base(&mut b, &basic_names, &ref_names, &struct_ident);
             base_fns.push(quote! {
                 #[doc(hidden)]
-                #[allow(non_snake_case)]
+                #[allow(non_snake_case, unused_variables)]
                 pub fn #fn_name #impl_g (this: &impl #vtable_trait_ident #ty_g #(, #non_self_params)*) #ret #b
             });
         }
@@ -1360,13 +1453,15 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             if let Some(block) = &f.block {
                 let sig = &f.sig;
                 let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
-                let non_self_params: Vec<_> = sig.inputs.iter().filter(|a| matches!(a, syn::FnArg::Typed(_))).collect();
+                let non_self_params: Vec<_> = sig.inputs.iter()
+                    .filter(|a| matches!(a, syn::FnArg::Typed(_)))
+                    .collect();
                 let ret = &sig.output;
                 let mut b = block.clone();
-                rewrite_block(&mut b, &basic_names, &ref_names);
+                rewrite_block_for_base(&mut b, &basic_names, &ref_names, &struct_ident);
                 base_fns.push(quote! {
                     #[doc(hidden)]
-                    #[allow(non_snake_case)]
+                    #[allow(non_snake_case, unused_variables)]
                     pub fn #fn_name #impl_g (this: &impl #vtable_class_ident #ty_g #(, #non_self_params)*) #ret #b
                 });
             }

@@ -239,8 +239,21 @@ class StackSim:
             'f32', 'f64', 'bool', 'char', '()', 'Object',
         )
         if _is_this and _is_ref_ty:
-            # Clone::clone 而非 this.clone()：类的 Java clone() 方法会遮蔽 std Clone
-            expr = RawExpr("Clone::clone(this)")
+            # synchronized(this) 模式：dup; astore N; monitorenter
+            # 特征：astore 之后栈顶仍有一个 this（dup 留下的，供 monitorenter 消费）。
+            # monitor 追踪变量只被 monitorexit（no-op）使用，生成 () 而非 Clone::clone(this)，
+            # 避免 vtable default impl 中 Self: Clone + Sized 约束失败（E0277）。
+            _top_is_this = (
+                len(self.stack) > 0
+                and isinstance(self.stack[-1][0], Var)
+                and self.stack[-1][0].name == 'this'
+            )
+            if _top_is_this:
+                expr = RawExpr("()")
+                ty = RsNamed("()")
+            else:
+                # Clone::clone 而非 this.clone()：类的 Java clone() 方法会遮蔽 std Clone
+                expr = RawExpr("Clone::clone(this)")
 
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]

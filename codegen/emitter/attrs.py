@@ -97,6 +97,66 @@ def _method_modifiers_str(flags: int) -> str:
     return ' '.join(parts)
 
 
+def _bin_to_rust_short(binary_name: str) -> str:
+    """JVM binary 名 → Rust 类型名（末段，$ → _）。"""
+    return binary_name.rsplit('/', 1)[-1].replace('$', '_')
+
+
+def _compute_all_superclasses(ci: ClassInfo, registry: dict | None) -> list[str]:
+    """计算线性超类链（不含接口），从最深祖先到直接父类，排除 java.lang.Object。
+
+    返回 Rust short names（已做 binary_to_rust 转换）。
+    用于 vtable impl 生成：idx=0 是最深祖先（字段声明者），字段 accessor 放在此处。
+    """
+    chain: list[str] = []
+    cur = ci.super_class
+    visited: set[str] = set()
+    while cur and cur not in visited and cur != 'java/lang/Object':
+        chain.append(_bin_to_rust_short(cur))
+        visited.add(cur)
+        if registry and cur in registry:
+            cur = registry[cur].super_class
+        else:
+            break
+    chain.reverse()  # 最深祖先在前（idx=0），直接父类在后
+    return chain
+
+
+def _compute_ancestor_fields_layout(ci: ClassInfo, registry: dict | None) -> list[tuple[str, list[str]]]:
+    """计算每个祖先类自己声明的非静态字段列表（不含接口，不含 Object）。
+
+    返回 [(ancestor_rust_name, [field_names]), ...] — 从最深祖先到直接父类排列。
+    仅包含有非静态字段的祖先，空字段祖先不输出。
+    用于 vtable impl 生成：宏可将字段 accessor 精确分发到声明该字段的祖先 vtable impl。
+    """
+    if not registry:
+        return []
+    chain: list[ClassInfo] = []
+    cur = ci.super_class
+    visited: set[str] = set()
+    while cur and cur not in visited and cur != 'java/lang/Object' and cur in registry:
+        visited.add(cur)
+        chain.append(registry[cur])
+        cur = registry[cur].super_class
+    chain.reverse()  # 最深祖先在前
+    declared: set[str] = set()
+    result: list[tuple[str, list[str]]] = []
+    for anc in chain:
+        rust_name = _bin_to_rust_short(anc.name)
+        own_fields: list[str] = []
+        for f in (anc.fields or []):
+            if f.is_static:
+                continue
+            safe_name = f.name.lstrip('$').replace('$', '_')
+            # 同名字段只声明一次（子类可能 shadow，取第一次出现）
+            if safe_name not in declared:
+                declared.add(safe_name)
+                own_fields.append(safe_name)
+        if own_fields:
+            result.append((rust_name, own_fields))
+    return result
+
+
 def _compute_all_supertypes(ci: ClassInfo, registry: dict | None) -> list[str]:
     """计算类的所有超类型（自身 + 传递闭合的父类 + 接口），用于 instanceof 检查。
 
@@ -199,6 +259,14 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         items = ', '.join(f'{n}: {t}' for n, t in superclass_fields)
         lines.append(f'#[superclass_fields({items})]')
     if not ci.is_interface:
+        superclasses = _compute_all_superclasses(ci, registry)
+        if superclasses:
+            lines.append(f'#[all_superclasses  = "{";".join(superclasses)}"]')
+        ancestor_fields = _compute_ancestor_fields_layout(ci, registry)
+        if ancestor_fields:
+            # 格式：AncName:field1,field2;AncName2:field3
+            parts = [f'{name}:{",".join(fields)}' for name, fields in ancestor_fields]
+            lines.append(f'#[ancestor_fields_layout = "{";".join(parts)}"]')
         supertypes = _compute_all_supertypes(ci, registry)
         if supertypes:
             lines.append(f'#[all_supertypes    = "{";".join(supertypes)}"]')
