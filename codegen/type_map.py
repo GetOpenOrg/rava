@@ -148,7 +148,10 @@ _CLS_ABBREV: dict[str, str] = {
 
 
 def descriptor_to_suffix(descriptor: str) -> str:
-    """把描述符参数部分 '(ITE;)V' 转成后缀字符串（不含 __），如 'i_e'。"""
+    """把描述符参数部分 '(ITE;)V' 转成后缀字符串（不含 __），如 'i_e'。
+
+    类类型用完整的小写简单名（内部类 $ → _），不截断：截断会让同前缀的不同类
+    （如同一外部类的多个内部类、同词根的接口）映射到同一后缀，重载名撞名（E0428/E0201/E0592）。"""
     m = re.match(r'\(([^)]*)\)', descriptor)
     if not m:
         return ''
@@ -171,7 +174,7 @@ def descriptor_to_suffix(descriptor: str) -> str:
             try:
                 end = s.index(';', i + 1)
                 short = s[i+1:end].split('/')[-1].lower().replace('$', '_')
-                parts.append(_CLS_ABBREV.get(short, short[:6])); i = end + 1
+                parts.append(_CLS_ABBREV.get(short, short)); i = end + 1
             except ValueError:
                 i += 1
         elif c == '[':
@@ -182,7 +185,7 @@ def descriptor_to_suffix(descriptor: str) -> str:
                 try:
                     end = s.index(';', j + 1)
                     short = s[j+1:end].split('/')[-1].lower().replace('$', '_')
-                    parts.append('arr_' + _CLS_ABBREV.get(short, short[:3])); i = end + 1
+                    parts.append('arr_' + _CLS_ABBREV.get(short, short)); i = end + 1
                 except ValueError:
                     i = j + 1
             elif j < len(s) and s[j] == 'T':
@@ -315,91 +318,52 @@ def instance_field_rust_name(owner_bin: str, safe_name: str, registry: dict | No
     return safe_name
 
 
-def _full_descriptor_suffix(descriptor: str) -> str:
-    """描述符参数部分 → 不截断类名的后缀（`methodhandle_arr_obj`）。
-    仅用于截断后缀发生碰撞的重载组：是 descriptor 的纯函数，祖先与后代得到同一个名字。"""
-    parts: list[str] = []
-    for p in parse_descriptor_params(descriptor):
-        dims = len(p) - len(p.lstrip('['))
-        elem = p[dims:]
-        if elem.startswith('L') or elem.startswith('T'):
-            tok = elem[1:-1].split('/')[-1].lower().replace('$', '_')
-            tok = _CLS_ABBREV.get(tok, tok)
-        else:
-            tok = _PRIM_SUFFIX.get(elem, 'x')
-        parts.append('arr_' * dims + tok)
-    return '_'.join(parts)
+def interface_member_local_name(ci, mname: str, descriptor: str, registry: dict | None) -> str:
+    """类 ci 视角下「只声明在接口上的成员」（类链未声明该 name+descriptor）的 Rust 方法名 ——
+    继承成员声明侧与调用侧的唯一判定来源。
+
+    类链上已有同名实例方法（参数列表必然不同：`date(Era,int,int,int)` 对接口的
+    `date(TemporalAccessor)`）时，接口成员与之构成重载 → 按描述符 mangle，不与类方法撞名；
+    类方法自身的名字不受影响（其名字只由类链决定，见 hierarchy_overloaded_names）。"""
+    if mname in hierarchy_overloaded_names(ci, registry):
+        return mangle_name(mname, descriptor)
+    params = descriptor.split(')')[0]
+    seen: set[str] = set()
+    cur = ci
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        declared = _class_method_param_sets(cur, registry)[1].get(mname)
+        if declared is not None:
+            # 同参数列表 = 该成员其实就在类的方法表里（注入的接口 default）→ 名字由类链决定
+            return mname if params in declared else mangle_name(mname, descriptor)
+        cur = registry.get(cur.super_class) if (registry and cur.super_class) else None
+    return mname
 
 
-def full_mangle_name(name: str, descriptor: str) -> str:
-    """方法名 + 不截断的完整描述符后缀（截断后缀碰撞组的统一命名）。"""
-    suffix = _full_descriptor_suffix(descriptor)
-    return f'{name}_{suffix}' if suffix else name
+def method_name_is_mangled(ci, method, registry: dict | None) -> bool:
+    """类 ci 声明的方法 method 的 Rust 名是否带描述符后缀 —— 按 (name, descriptor) 判定，
+    定义侧与调用侧共用。
 
-
-_METHOD_NAME_TABLE_CACHE: dict[tuple, dict] = {}
-
-
-def class_method_rust_names(ci, registry: dict | None) -> dict[tuple[str, str], str]:
-    """类 ci 每个方法 (name, descriptor) → Rust 方法名 —— 定义侧与调用侧共用的唯一名字表。
-
-    1. 基础名：名字需要 mangle（hierarchy_overloaded_names）→ `name_后缀`，否则原名；
-       构造器为 `new` / `new_后缀`
-    2. 截断后缀碰撞（MethodHandle / MethodType 都缩成 `method`）→ 该碰撞组全部改用不截断的
-       完整类名后缀；完整后缀是描述符的纯函数，覆盖方法在后代类中得到与祖先相同的名字
-    3. 后代类覆盖祖先方法时，即使本类内不碰撞，也沿用祖先名字表中的名字（vtable 名字一致）
-    4. 仍然重名（不同包的同名类）→ 按类文件方法顺序追加序号
-    """
-    key = (id(registry), len(registry) if registry else 0, ci.name)
-    cached = _METHOD_NAME_TABLE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    overloaded = hierarchy_overloaded_names(ci, registry)
-
-    def _base(m) -> str:
-        if m.is_constructor:
-            return mangle_name('new', m.descriptor) if '<init>' in overloaded else 'new'
-        return mangle_name(m.name, m.descriptor) if m.name in overloaded else m.name
-
-    def _full(m) -> str:
-        return full_mangle_name('new' if m.is_constructor else m.name, m.descriptor)
-
-    parent = registry.get(ci.super_class) if (registry and ci.super_class and not ci.is_interface) else None
-    parent_table = class_method_rust_names(parent, registry) if (parent is not None and parent.name != ci.name) else {}
-    parent_by_params: dict[tuple[str, str], str] = {}
-    for (pname, pdesc), prust in parent_table.items():
-        parent_by_params.setdefault((pname, pdesc.split(')')[0]), prust)
-
-    methods = [m for m in ci.methods if m.name != '<clinit>']
-    # 真实方法先占名，synthetic（桥接 / lambda 体）后占
-    methods.sort(key=lambda m: 1 if m.is_synthetic else 0)
-    base_groups: dict[str, set[str]] = {}
-    for m in methods:
-        if not m.is_synthetic:
-            base_groups.setdefault(_base(m), set()).add(m.descriptor.split(')')[0])
-    table: dict[tuple[str, str], str] = {}
-    used: dict[str, int] = {}
-    for m in methods:
-        base = _base(m)
-        name = base
-        if not m.is_synthetic and len(base_groups.get(base, ())) > 1:
-            name = _full(m)
-        elif not m.is_constructor and not m.is_static and not m.is_synthetic:
-            inherited = parent_by_params.get((m.name, m.descriptor.split(')')[0]))
-            if inherited is not None and inherited == _full(m) and m.name in overloaded:
-                name = inherited
-        if name in used:
-            used[name] += 1
-            name = f'{name}_{used[name]}'
-        else:
-            used[name] = 0
-        table[(m.name, m.descriptor)] = name
-    # 继承而未重新声明的方法：名字表向下传递，调用点按接收者类查表即可命中
-    for k, v in parent_table.items():
-        if k[0] != '<init>':
-            table.setdefault(k, v)
-    _METHOD_NAME_TABLE_CACHE[key] = table
-    return table
+    名字在 ci 中需要 mangle（hierarchy_overloaded_names）时，覆盖方法例外：它实现的是
+    祖先 vtable trait 中的槽位，Rust 名必须与槽位所属类（virtual_in）中的名字一致。
+    槽位所属类未 mangle 该名字、而子类因新增重载 / 注入的接口 default 方法才 mangle 时，
+    覆盖方法沿用槽位名（否则 impl 出祖先 trait 没有的方法，E0407）。"""
+    if method.name not in hierarchy_overloaded_names(ci, registry):
+        return False
+    if not registry or ci.is_interface or method.is_constructor or method.is_static:
+        return True
+    from .emitter.vtable_util import _find_virtual_in, _bin_to_rust
+    slot_owner_rust = _find_virtual_in(method, ci, registry)
+    if not slot_owner_rust or slot_owner_rust == _bin_to_rust(ci.name):
+        return True
+    anc = registry.get(ci.super_class) if ci.super_class else None
+    seen: set[str] = {ci.name}
+    while anc is not None and anc.name not in seen:
+        seen.add(anc.name)
+        if _bin_to_rust(anc.name) == slot_owner_rust:
+            return method.name in hierarchy_overloaded_names(anc, registry)
+        anc = registry.get(anc.super_class) if anc.super_class else None
+    return True
 
 
 def _parse_type_list(s: str) -> list[str]:
@@ -639,19 +603,23 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
                 if len(type_args) != len(inner_eff):
                     type_args = ['Object'] * len(inner_eff)
             has_type_args = bool(type_args)
-        elif not has_type_args and registry and class_name in registry:
-            # 签名里不带实参的泛型类：局部 / 匿名类的形参全部继承自外围作用域
-            # （javac 以裸 binary name 书写）→ 按当前作用域的同名形参实例化；
-            # 其余是 raw type → 擦除实例化
-            _bare_ci = registry[class_name]
-            if not _bare_ci.is_interface and class_name not in _CLASSNAME_MAP:
-                _bare_eff = effective_class_type_params(_bare_ci, registry)
-                if _bare_eff:
-                    _inherits = not (_bare_ci.generic_signature
-                                     and parse_class_type_params(_bare_ci.generic_signature))
-                    type_args = [p if (_inherits and p in class_type_params) else 'Object'
-                                 for p in _bare_eff]
-                    has_type_args = True
+
+        # 签名里不带实参的泛型类：
+        #   - 形参全部继承自外围作用域的内部 / 局部类（javac 对局部类只写 `LOuter$1Var;`），
+        #     且当前上下文正处于同一外围作用域（这些类型变量可见）→ 实参就是这些类型变量
+        #   - 其余为 raw type → 按擦除语义全部取 Object
+        if not has_type_args and registry and class_name in registry \
+                and not registry[class_name].is_interface and class_name not in _CLASSNAME_MAP:
+            raw_ci = registry[class_name]
+            raw_eff = list(effective_class_type_params(raw_ci, registry) or [])
+            if raw_eff:
+                raw_own = (parse_class_type_params(raw_ci.generic_signature)
+                           if raw_ci.generic_signature else [])
+                if not raw_own and all(p in (class_type_params or []) for p in raw_eff):
+                    type_args = raw_eff
+                else:
+                    type_args = ['Object'] * len(raw_eff)
+                has_type_args = True
 
         # 跳过结尾 ';'
         if j < len(sig) and sig[j] == ';':
@@ -1374,3 +1342,71 @@ def jvm_to_rs_type(
     else:
         rust_str = jvm_to_rust(desc, registry)
     return _rust_str_to_rs_type(rust_str)
+
+
+def implemented_interface_views(recv_ci, registry: dict) -> 'list[tuple[str, list[str]]]':
+    """类 recv 实现的全部接口（自身 + 祖先类 + 超接口闭包）及其在 recv 视角下的类型实参，
+    广度优先、近者在前。"""
+    anc_args = dict(ancestor_type_args(recv_ci, registry))
+    queue: list[tuple[object, dict]] = [(recv_ci, {})]
+    cur = recv_ci.super_class
+    seen_cls: set[str] = {recv_ci.name}
+    while cur and cur in registry and cur not in seen_cls:
+        seen_cls.add(cur)
+        cur_ci = registry[cur]
+        cur_params = effective_class_type_params(cur_ci, registry)
+        cur_args = anc_args.get(cur, [])
+        queue.append((cur_ci, {p: (cur_args[i] if i < len(cur_args) else 'Object')
+                               for i, p in enumerate(cur_params)}))
+        cur = cur_ci.super_class
+    out: list[tuple[str, list[str]]] = []
+    seen: set[str] = set()
+    while queue:
+        cur_ci, mapping = queue.pop(0)
+        for sup_bin, sup_args in superinterface_type_args(cur_ci, registry).items():
+            if sup_bin in seen:
+                continue
+            seen.add(sup_bin)
+            args = [substitute_type_params(a, mapping) for a in sup_args] if mapping else list(sup_args)
+            out.append((sup_bin, args))
+            sup_ci = registry[sup_bin]
+            queue.append((sup_ci, dict(zip(effective_class_type_params(sup_ci, registry), args))))
+    return out
+
+
+def infer_type_args_from_declared(actual_bin: str, declared_sig: str,
+                                  class_type_params: list[str], registry) -> 'list[str] | None':
+    """菱形构造 `List<Class<?>> xs = new ArrayList<>()`：由局部变量声明的泛型签名反推被构造类的
+    类型实参（javac 的菱形推断结果不在字节码里，但声明类型在 LocalVariableTypeTable 里）。
+
+    声明类型是被构造类自身 / 祖先类 / 已实现接口的某个实例化；把该超类型在被构造类形参
+    视角下的实参（`List<E>`）与声明实参逐位对齐，解出每个形参。任一形参无解 → None。"""
+    if not registry or not declared_sig.startswith('L') or '<' not in declared_sig:
+        return None
+    lt = declared_sig.index('<')
+    declared_bin = declared_sig[1:lt]
+    ci = registry.get(actual_bin)
+    if ci is None or declared_bin not in registry:
+        return None
+    try:
+        declared_args, _ = _parse_type_args(declared_sig, lt, class_type_params, registry)
+    except Exception:
+        return None
+    params = list(effective_class_type_params(ci, registry) or [])
+    if not params:
+        return None
+    views: dict[str, list[str]] = {actual_bin: list(params)}
+    for anc_bin, anc_args in ancestor_type_args(ci, registry):
+        views.setdefault(anc_bin, list(anc_args))
+    for iface_bin, iface_args in implemented_interface_views(ci, registry):
+        views.setdefault(iface_bin, list(iface_args))
+    view = views.get(declared_bin)
+    if view is None or len(view) != len(declared_args):
+        return None
+    solved: dict[str, str] = {}
+    for view_arg, declared_arg in zip(view, declared_args):
+        if view_arg in params:
+            solved.setdefault(view_arg, declared_arg)
+    if any(p not in solved for p in params):
+        return None
+    return [solved[p] for p in params]

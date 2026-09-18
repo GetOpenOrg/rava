@@ -24,9 +24,11 @@ import sys
 from dataclasses import dataclass, field
 
 from .. import inherited_calls
-from ..constants import OBJECT_CLASS as _OBJECT_CLASS
+from ..constants import OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 from ..type_map import (ancestor_type_args, effective_class_type_params,
-                        short_cls, substitute_type_params)
+                        implemented_interface_views,
+                        interface_member_local_name,
+                        short_cls, substitute_type_params, superinterface_type_args)
 
 # 类文本中的两个插入位（整行），由 resolve_inherited_members 统一替换
 IMPORTS_SLOT = '//@@java_rta:inherited-imports@@'
@@ -122,9 +124,65 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
     return f"#[java_method({', '.join(parts)})]\n{signature};"
 
 
+def _interface_member_declaration(method: EmittedMethod, owner_bin: str, owner_args: list[str],
+                                  recv_ci, registry: dict) -> 'tuple[str, str]':
+    """接口方法声明 → 类接收者视角下的继承成员声明；返回 (声明文本, 本类视角的 Rust 方法名)。
+
+    抽象类未声明的接口抽象方法（`this.getLong(f)`）：实现位于运行时具体子类，宏把该成员
+    展开为经接口载体分派的转发方法。方法名按接收者类层次的重载判定（与调用点同源），
+    与接口侧名字不同时用 `target` 指明载体上的方法。"""
+    owner_params = effective_class_type_params(registry[owner_bin], registry)
+    mapping = {p: (owner_args[i] if i < len(owner_args) else 'Object')
+               for i, p in enumerate(owner_params)}
+    signature = substitute_type_params(method.signature, mapping)
+    local_name = interface_member_local_name(recv_ci, method.name, method.descriptor, registry)
+    parts = [f'name = "{method.name}"', f'descriptor = "{method.descriptor}"']
+    if method.access:
+        parts.append(f'access = "{method.access}"')
+    parts.append(f'inherited_from = "{_rust_type(owner_bin, owner_args)}"')
+    parts.append('owner_kind = "interface"')
+    if local_name != method.rust_name:
+        parts.append(f'target = "{method.rust_name}"')
+        signature = re.sub(r'^pub fn\s+' + re.escape(method.rust_name) + r'\b',
+                           f'pub fn {local_name}', signature)
+    return f"#[java_method({', '.join(parts)})]\n{signature};", local_name
+
+
+_SIG_CLASS_RE = re.compile(r'L([A-Za-z_$][\w$]*(?:/[A-Za-z_$][\w$]*)+)[<;]')
+
+
+def type_arg_uses(recv_ci, registry: dict, emissions: 'dict[str, ClassEmission]',
+                  crate_prefix: str) -> dict[str, str]:
+    """接收者视角下类型实参引用的类：Rust 短名 → use 行。
+
+    祖先签名中的类型变量被代入为接收者超类型签名里的实参（`CountedCompleter<Void>` 的 Void），
+    这些类型不出现在祖先文件的 use 里；从接收者及其全部超类型的类级泛型签名中解析
+    binary name，只收已生成的类。"""
+    uses: dict[str, str] = {}
+    queue = [recv_ci]
+    seen: set[str] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur is None or cur.name in seen:
+            continue
+        seen.add(cur.name)
+        for bin_name in _SIG_CLASS_RE.findall(getattr(cur, 'generic_signature', '') or ''):
+            if bin_name not in emissions:
+                continue
+            pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
+                            for p in bin_name.split('/')[:-1])
+            short = short_cls(bin_name)
+            uses.setdefault(short, f"use {crate_prefix}::{pkg}::{short};")
+        for sup in [cur.super_class] + list(cur.interfaces or []):
+            if sup and sup in registry:
+                queue.append(registry[sup])
+    return uses
+
+
 def _imports_for(signature: str, owner: ClassEmission, recv: ClassEmission,
-                 already: set[str]) -> list[str]:
-    """继承成员签名引用的类型：沿用祖先文件里的精确 use（换成接收者所在 crate 的前缀）。"""
+                 already: set[str], arg_uses: 'dict[str, str] | None' = None) -> list[str]:
+    """继承成员签名引用的类型：沿用祖先文件里的精确 use（换成接收者所在 crate 的前缀）；
+    代入的类型实参不在祖先文件中，按 arg_uses（见 type_arg_uses）解析。"""
     owner_uses = {}
     for ln in owner.text.split('\n'):
         m = _USE_RE.match(ln)
@@ -132,10 +190,22 @@ def _imports_for(signature: str, owner: ClassEmission, recv: ClassEmission,
             owner_uses.setdefault(m.group(2), ln.strip())
         elif ln.startswith('java_rta_macros::java_class!'):
             break
+    # 祖先文件不 use 自身：签名引用声明类自身（`fork() -> ForkJoinTask<V>`）时按其包路径导入
+    if '/' in owner.binary_name:
+        owner_short = short_cls(owner.binary_name)
+        owner_pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
+                              for p in owner.binary_name.split('/')[:-1])
+        owner_uses.setdefault(owner_short, f"use {owner.crate_prefix}::{owner_pkg}::{owner_short};")
     out: list[str] = []
     for ident in dict.fromkeys(_IDENT_RE.findall(signature)):
+        if ident in already:
+            continue
         use_line = owner_uses.get(ident)
-        if use_line is None or ident in already:
+        if use_line is None:
+            if not arg_uses or ident not in arg_uses:
+                continue
+            already.add(ident)
+            out.append(arg_uses[ident])
             continue
         if recv.crate_prefix != owner.crate_prefix and use_line.startswith('use crate::'):
             use_line = f"use {recv.crate_prefix}::" + use_line[len('use crate::'):]
@@ -160,6 +230,7 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
             um = _USE_RE.match(ln)
             if um:
                 imported.add(um.group(2))
+        arg_uses = type_arg_uses(recv_ci, registry, emissions, recv.crate_prefix)
         for name, param_desc in sorted(wanted):
             if recv.find(name, param_desc) is not None:
                 continue  # 本类已有（自身声明 / 注入的接口 default 方法）
@@ -176,6 +247,30 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
                         break
                 cur = registry[cur].super_class
             if method is None:
+                # 超类链无声明 → 接口方法（抽象类未实现的接口抽象方法 / 未注入本类的 default）
+                for iface_bin, iface_args in implemented_interface_views(recv_ci, registry):
+                    iface = emissions.get(iface_bin)
+                    if iface is None or iface.handwritten:
+                        continue
+                    iface_method = iface.find(name, param_desc)
+                    if iface_method is None:
+                        continue
+                    decl, local_name = _interface_member_declaration(
+                        iface_method, iface_bin, iface_args, recv_ci, registry)
+                    if local_name in taken:
+                        break
+                    taken.add(local_name)
+                    members.setdefault(recv_bin, []).append(decl)
+                    owner_ty = _rust_type(iface_bin, iface_args)
+                    uses = _imports_for(decl.split('\n', 1)[1] + ' ' + owner_ty, iface, recv, imported)
+                    iface_short = short_cls(iface_bin)
+                    if iface_short not in imported:
+                        imported.add(iface_short)
+                        pkg = '::'.join(f'r#{seg}' if seg in _RUST_KEYWORDS else seg
+                                        for seg in iface_bin.split('/')[:-1])
+                        uses.append(f"use {recv.crate_prefix}::{pkg}::{iface_short};")
+                    imports.setdefault(recv_bin, []).extend(uses)
+                    break
                 continue
             if method.rust_name in taken:
                 print(f"[codegen] 继承成员 {recv_bin}.{method.rust_name} 与本类方法重名，未声明"
@@ -185,7 +280,7 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
             decl = _member_declaration(method, owner_bin, recv_ci, registry)
             members.setdefault(recv_bin, []).append(decl)
             imports.setdefault(recv_bin, []).extend(
-                _imports_for(decl.split('\n', 1)[1], emissions[owner_bin], recv, imported))
+                _imports_for(decl.split('\n', 1)[1], emissions[owner_bin], recv, imported, arg_uses))
 
     for bin_name, em in emissions.items():
         decls = members.get(bin_name, [])

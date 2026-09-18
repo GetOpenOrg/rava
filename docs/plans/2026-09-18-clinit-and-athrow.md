@@ -104,8 +104,9 @@ impl<T: Into<Object>> From<T> for JvmError      // athrow：return Err(JvmError:
 1. 表项按 `handler_pc` 分组：同一处理器的多条表项（multi-catch、被内联 finally 切开的区间）合并；
    `start_pc >= handler_pc` 的自保护表项丢弃。
 2. 覆盖区间集合相同的处理器组成一个 `TryGroup`（同一 try 的多个 catch）；同起点的多个组，处理器越靠后越外层。
-3. try 体文本范围 = `[start_idx, 首个处理器)`；其中不被某个活动组覆盖的指令用 `java_unguarded!` 包裹，
-   层数 = 不覆盖它的活动组数。
+3. 受保护区间之外的指令（javac 内联的 finally 副本、try 体尾部的 goto）不属于 try 体：每个块按「被哪些组覆盖」
+   标注 `ctx`，结构化器把未覆盖的块放在 `java_try!` 之外（try follower）。越过处理器入口的区间截断到处理器入口；
+   只含一条 `*return` 的单前驱块继承前驱的 ctx。不存在「try 体内的不受保护片段」这一形态，也没有对应的宏。
 4. 处理器体终点：非末位 → 下一个处理器；末位 → `goto END` 目标、处理器变量的 LVT 作用域终点、当前块终点三者最近者。
 5. 处理器首条 `astore` 合并进 catch 头；catch-any 的绑定类型沿 `vm_roots.txt` 中任一异常类的父类链取到根下一层
    （Python 中不出现 JDK 类名字面量）。
@@ -124,8 +125,9 @@ impl<T: Into<Object>> From<T> for JvmError      // athrow：return Err(JvmError:
 ```
 
 try 体改写（`syn::visit_mut`）：`expr?` 与 `return Err(x)` → `break 'java_try_N Err(..)`；循环深度 0 的
-`break` / `continue` → 流程码转发；闭包与嵌套 item 不改写；嵌套 `java_try!` 先展开再由外层改写其残余出口；
-`java_unguarded!` 剥一层且内容不访问。
+`break` / `continue` → 流程码转发；闭包与嵌套 item 不改写；嵌套 `java_try!` 先展开再由外层改写其残余出口。
+完成性判定（try 体 / catch 体是否必然不落出）覆盖 `return` / `break` / `continue`、无标签块、带 else 的 `if`、
+全部臂都不落出的 `match` 与嵌套 `java_try!`。
 
 ### 4.4 与控制流结构化重写的衔接
 

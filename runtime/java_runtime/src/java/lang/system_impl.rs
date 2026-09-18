@@ -91,9 +91,9 @@ impl System {
 fn new_std_print_stream(fd: i32) -> PrintStream {
     let build = || -> Result<PrintStream> {
         let fdo = FileDescriptor::new_i(fd)?;
-        let fos = FileOutputStream::new_filede(fdo)?;
-        let bos = BufferedOutputStream::new_output_i(fos.into(), 128)?;
-        PrintStream::new_output_z_charse(bos.into(), true, UTF_8::INSTANCE()?.into())
+        let fos = FileOutputStream::new_filedescriptor(fdo)?;
+        let bos = BufferedOutputStream::new_outputstream_i(fos.into(), 128)?;
+        PrintStream::new_outputstream_z_charset(bos.into(), true, UTF_8::INSTANCE()?.into())
     };
     build().unwrap_or_else(|e| panic!("System 标准流初始化失败: {:?}", e))
 }

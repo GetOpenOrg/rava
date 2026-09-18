@@ -20,8 +20,8 @@
 //!   而是转入按声明顺序匹配的 catch 子句；匹配依据是异常对象的**运行时类**
 //!   （含子类），由 `JvmError::is_instance_of(<T>::BINARY_NAME)` 判定。
 //! - 无子句匹配时异常原样继续向外传播（外层 `java_try!` 或方法调用者）。
-//! - `java_unguarded! { ... }` 标记位于 try 体文本范围内、但不受本层异常表覆盖的代码
-//!   （javac 内联的 finally 副本）：本层不改写其中的异常出口，由更外层决定。
+//! - 不受本层异常表覆盖的代码（javac 内联的 finally 副本、try 语句之后的代码）由生成器
+//!   放在 `java_try!` 之外，try 体内的每条语句都受本层保护。
 //! - try 体中的 `return Ok(v)`、`break`、`continue` 保持 Java 语义
 //!   （后两者经流程码转发到 try 之外的循环）。
 //!
@@ -146,14 +146,6 @@ impl ExitRewriter {
                     Err(e) => { self.error = Some(e); None }
                 }
             }
-            Some("java_unguarded") => {
-                // 本层异常表不覆盖：剥掉一层标记，内容保持原样（不访问）
-                let tokens = &mac.tokens;
-                match syn::parse2::<Expr>(quote! { { #tokens } }) {
-                    Ok(e) => Some(e),
-                    Err(e) => { self.error = Some(e); None }
-                }
-            }
             _ => None,
         }
     }
@@ -258,11 +250,6 @@ fn never_falls_through(stmts: &[Stmt]) -> bool {
 
 fn macro_never_falls_through(mac: &syn::Macro) -> bool {
     match ExitRewriter::macro_name(mac).as_deref() {
-        Some("java_unguarded") => {
-            let tokens = &mac.tokens;
-            syn::parse2::<Block>(quote! { { #tokens } })
-                .map_or(false, |b| never_falls_through(&b.stmts))
-        }
         Some("java_try") => syn::parse2::<TryInput>(mac.tokens.clone()).map_or(false, |t| {
             never_falls_through(&t.body.stmts)
                 && t.catches.iter().all(|c| never_falls_through(&c.body.stmts))
@@ -282,6 +269,8 @@ fn expr_never_falls_through(e: &Expr) -> bool {
             }
             None => false,
         },
+        // switch 的每个臂都以 return / throw 结束（match 总是穷尽的，含 `_` 臂）
+        Expr::Match(m) => m.arms.iter().all(|arm| expr_never_falls_through(&arm.body)),
         Expr::Macro(m) => macro_never_falls_through(&m.mac),
         _ => false,
     }
@@ -367,11 +356,6 @@ pub fn expand(input: TokenStream2) -> TokenStream2 {
         Ok(i) => expand_input(i),
         Err(e) => e.to_compile_error(),
     }
-}
-
-/// 顶层（不在任何 `java_try!` 体内）的 `java_unguarded!`：没有需要豁免的外层，原样展开。
-pub fn expand_unguarded(input: TokenStream2) -> TokenStream2 {
-    quote! { { #input } }
 }
 
 /// 就地展开方法体里的全部 `java_try!`（供 `java_class!` 在改写方法体之前调用）。

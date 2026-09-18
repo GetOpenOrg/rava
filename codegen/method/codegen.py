@@ -244,7 +244,7 @@ def gen_method_body(
             if _desc_ty_name and _desc_ty_name != 'Object' and '::' not in _desc_ty_name:
                 _lv_ty = _str_to_rs_type(_desc_ty_name)
         slot_decls.setdefault(_lv_slot, []).append(
-            (_lv_start, _lv_start + _lv_len, _lv_name, _lv_ty, _lv_from_sig))
+            (_lv_start, _lv_start + _lv_len, _lv_name, _lv_ty, _lv_from_sig, _lv_sig or ''))
     for _lv_entries in slot_decls.values():
         _lv_entries.sort(key=lambda _e: _e[0])
 
@@ -255,10 +255,33 @@ def gen_method_body(
         from ..instr.coerce import _coerce_to_object
         return _coerce_to_object(expr_s, ty_s, registry, _class_tparams, clone=False)
 
+    def _sim_infer_type_args(actual_short: str, declared_sig: str):
+        from ..instr.coerce import _rust_type_to_binary
+        from ..type_map import infer_type_args_from_declared
+        _actual_bin = _rust_type_to_binary(actual_short, registry)
+        if not _actual_bin:
+            return None
+        _solved = infer_type_args_from_declared(_actual_bin, declared_sig, list(_class_tparams or []), registry)
+        if _solved is None:
+            return None
+        # 声明实参引用了生成范围之外的类（调用链未触及）：该类型的值在生成代码中不可能以
+        # 静态类型出现，元素只会以 Object 形态流动 → 该实参按擦除取 Object
+        import re as _re_scope
+        def _in_scope(_arg: str) -> bool:
+            return all(_n in (_class_tparams or ()) or _n in _PRIM_TYPES
+                       or _n in ('Object', 'JArray') or _rust_type_to_binary(_n, registry)
+                       for _n in _re_scope.findall(r'[A-Za-z_][A-Za-z0-9_]*', _arg))
+        return [_a if _in_scope(_a) else 'Object' for _a in _solved]
+
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                    slot_decls=slot_decls, is_subtype=_sim_is_subtype,
                    return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
-                   in_vtable_body=in_vtable_body, box_object=_sim_box_object)
+                   in_vtable_body=in_vtable_body, box_object=_sim_box_object,
+                   infer_type_args=_sim_infer_type_args)
+    _bounds_ci = registry.get(method.class_name) if registry else None
+    if _bounds_ci is not None and _class_tparams:
+        from ..type_map import class_type_param_bounds
+        sim.type_var_bounds = {tv: b[0] for tv, b in class_type_param_bounds(_bounds_ci, registry).items()}
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
 
@@ -331,13 +354,6 @@ def gen_method_body(
         lines = _remove_trailing_return_ok(lines)
         _always_returns = function_always_returns(instrs)
         lines = _add_ok_return(lines, rust_ret, _always_returns)
-
-    # 类型变量上界约束（E extends B<E>）：方法体把类型变量值转换为上界类型时，
-    # 约束声明在该方法上而非 struct 头——F-bounded 约束放在 struct 上会使擦除
-    # 实例化 B<Object> 的 well-formed 证明自我循环（E0275）。
-    if sim.type_var_bound_uses:
-        sig += " where " + ", ".join(
-            f"{_tv}: Into<{_b}>" for _tv, _b in sorted(sim.type_var_bound_uses.items()))
 
     body = '\n'.join(lines)
     # 有重载时在方法前加注释，标注原始 Java 签名

@@ -17,26 +17,21 @@ from .coerce import (
     _JAVA_RUNTIME_SHORT_NAMES,
 )
 
-def type_var_receiver_bound_view(sim, obj_expr, obj_ty, class_name, registry):
-    """类型变量接收者（o: E，E extends B<E>）→ 上界类型视图 (expr, type)。
+def type_var_receiver_bound_view(sim, obj_expr, obj_ty):
+    """有类上界的类型变量接收者（o: E，E extends B<E>）→ 上界类型视图 (expr, type)。
 
     成员（字段访问器 / 方法）定义在上界类的 wrapper 上，类型变量本身没有成员（E0599）。
-    Java 侧该访问经上界类型静态解析 → Rust 侧把值转换为上界类型（宏生成的
-    From<Child> for Ancestor，vtable upcast 保留运行时类型）；所需约束
-    `E: Into<B<E>>` 记入 sim，由方法签名声明为 where 子句。
-    无类上界（接口上界 / 无界）时原样返回。
+    Java 侧该访问经上界类型静态解析（类型变量擦除为上界）→ Rust 侧经 Object 的 checkcast
+    视图转换为上界类型（按运行时类重建上界类视图，保留运行时类型）。不用 `E: Into<B<E>>`
+    约束：覆盖方法不能比 vtable 声明多带约束，约束放 struct 头又会使擦除实例化的证明循环。
+    getfield / putfield / invokevirtual 共用；无类上界（接口上界 / 无界）时原样返回。
     """
-    _recv_ty = render_type(obj_ty)
-    if not registry or _recv_ty not in (sim.class_type_params or ()):
-        return obj_expr, obj_ty
-    _cur_ci = registry.get(class_name) if class_name else None
-    _tv_bound = (_class_type_param_bounds(_cur_ci, registry).get(_recv_ty)
-                 if _cur_ci is not None else None)
-    if _tv_bound is None:
+    _bound = sim.type_var_bounds.get(render_type(obj_ty))
+    if _bound is None:
         return obj_expr, obj_ty
     _src = _clone_moved_var(obj_expr, obj_ty)
-    sim.type_var_bound_uses[_recv_ty] = _tv_bound[0]
-    return RawExpr(f"Into::<{_tv_bound[0]}>::into({render_expr(_src)})"), RsNamed(_tv_bound[0])
+    return (RawExpr(f"Into::<{_bound}>::into(Into::<Object>::into({render_expr(_src)}))"),
+            RsNamed(_bound))
 
 
 def _lookup_method_sig_params(

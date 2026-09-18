@@ -4,17 +4,18 @@ from ...stack import BOOL
 from ...rs_ir import Lit, RawExpr, RsNamed
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, short_cls, effective_class_type_params as _effective_class_type_params
-from ..coerce import _is_subtype, _coerce_to_object
+from ..coerce import _is_subtype, _rust_type_to_binary
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 
 
-def _is_class_instance_type(rust_ty: str, registry) -> bool:
-    """Rust 类型是否是 registry 中某个（非接口）类的 wrapper。"""
-    if not registry:
-        return False
-    from ...type_map import _registry_short_index
-    _ci = _registry_short_index(registry).get(rust_ty.split('<')[0].strip())
-    return _ci is not None and not _ci.is_interface
+def _erased_shape(rust_ty: str) -> str:
+    """去掉类类型实参后的形态（数组保留元素形态）：`JArray<Entry<K, V>>` → `JArray<Entry>`。"""
+    import re
+    prev = None
+    while prev != rust_ty:
+        prev = rust_ty
+        rust_ty = re.sub(r'\b(?!JArray\b)(\w+)<[^<>]*>', r'\1', rust_ty)
+    return rust_ty
 
 
 def sim_control(ins, sim, class_name, registry) -> bool:
@@ -49,13 +50,15 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             src_name = getattr(src_ty, 'name', str(src_ty))
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
                 expr = RawExpr(f"({render_expr(expr)}).downcast::<{cast_rust}>()")
-            elif (cast_rust == 'Object' and src_name not in ('Object', '()')
-                  and (src_name in (sim.class_type_params or ())
-                       or _is_class_instance_type(src_name, registry))):
-                # 转为接口 / Object（`(Comparable) key`，key: K）：Java 的上转，值按对象标识进入
-                # Object 边界，与记录的类型一致
-                expr = RawExpr(_coerce_to_object(render_expr(expr), src_name, registry,
-                                                 sim.class_type_params))
+            elif (src_name != 'Object' and cast_rust not in ('Object', '()', src_name)
+                  and _erased_shape(src_name) == _erased_shape(cast_rust)):
+                # 同一擦除类型、仅类型实参不同（`(Entry<K,V>[]) new Entry<?,?>[n]`）：JVM 上类型实参
+                # 不参与 checkcast，值不变；源侧待推断的 `_` 由目标类型给出
+                if '_' in _re_cast.findall(r'\w+', src_name):
+                    sim.push(expr, RsNamed(cast_rust))
+                else:
+                    sim.push(expr, src_ty)
+                return True
             elif src_name != 'Object' and cast_rust not in ('Object', '()', src_name):
                 if _is_subtype(cast_rust.split('<')[0], src_name.split('<')[0], registry):
                     # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode，E0282）：
@@ -69,7 +72,26 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 else:
                     # 二次 checkcast（非 Object 源类型）：两种具体类型不兼容，用 Default::default() 占位
                     expr = RawExpr('Default::default()')
-            sim.push(expr, RsNamed(cast_rust))
+            if cast_rust == 'Object' and src_name not in ('Object', '()'):
+                # 目标擦除为 Object（接口 / 根类）而值有更精确的静态类型（类型变量 T_NODE、
+                # 具体类）：向上转型不改变值，表达式的 Rust 类型仍是源类型 → 记录源类型，
+                # 由使用点按真实类型转换（记成 Object 会让使用点漏掉装箱，E0277）
+                # 例外：源是具体类且静态上并未实现目标接口（交叉转型，运行时子类才实现，
+                # `(DirectBuffer) byteBuffer`）——接口视图只能经对象身份取得 → 装箱为 Object
+                _src_base = src_name.split('<')[0]
+                _tgt_short = comment.rsplit('/', 1)[-1].replace('$', '_')
+                if (comment != _OBJECT_CLASS and not comment.startswith('[')
+                        and _rust_type_to_binary(_src_base, registry)
+                        and _src_base != _tgt_short
+                        and not _is_subtype(_src_base, _tgt_short, registry)):
+                    _se = render_expr(expr)
+                    if not _se.startswith('Clone::clone('):
+                        _se = f"Clone::clone(&{_se})"
+                    sim.push(RawExpr(f"Into::<Object>::into({_se})"), RsNamed('Object'))
+                else:
+                    sim.push(expr, src_ty)
+            else:
+                sim.push(expr, RsNamed(cast_rust))
     elif op == 'instanceof':
         # JVM 语义: pop objectref, push int(0/1)
         # 通过 registry 继承链做静态类型分析：

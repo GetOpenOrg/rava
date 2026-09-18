@@ -44,6 +44,24 @@ impl Object {
             .expect("ClassCastException"))
     }
 
+    /// JVM checkcast：把引用还原为类 `T`（binary name 为 `binary_name`）的视图。
+    /// 运行时类就是 `T` → 直接取出；运行时类是 `T` 的子类 → 按运行时类重建 `T` 视图
+    /// （vtable upcast，保留运行时类的覆盖实现）；否则 ClassCastException。
+    #[jvm_ext]
+    pub fn checkcast<T: std::any::Any + Clone + 'static>(&self, binary_name: &str) -> T {
+        if let Some(same) = (self as &dyn std::any::Any).downcast_ref::<T>() {
+            return Clone::clone(same);
+        }
+        if let Some(same) = self.0.as_any().downcast_ref::<T>() {
+            return Clone::clone(same);
+        }
+        let unused: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(());
+        match self.0.__view_as(unused, binary_name).and_then(|boxed| boxed.downcast::<T>().ok()) {
+            Some(view) => *view,
+            None => panic!("ClassCastException: {} cannot be cast to {}", self.0.__class_name(), binary_name),
+        }
+    }
+
     /// java.lang.Comparable.compareTo — 委托到 vtable（String/Integer 等实现类会覆盖）
     #[jvm_ext]
     pub fn compareTo(&self, other: Object) -> crate::error::Result<i32> {

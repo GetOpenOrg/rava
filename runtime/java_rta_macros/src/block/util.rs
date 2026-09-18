@@ -92,14 +92,21 @@ pub(crate) enum MethodKind {
     /// 宏在 wrapper 上生成同名 inherent 方法，使调用点与 Java 一致（`obj.method(args)`）：
     ///   - `vtable_owner = Some(T)`：虚方法，经 `T__VTable` supertrait 分派（保持多态）
     ///   - `vtable_owner = None`：祖先的非虚方法（native 等），向上转型后调用
+    ///   - `owner_kind = "interface"`：owner 是本类（经超类 / 超接口）实现的接口，本类及祖先类
+    ///     均未声明该方法（抽象类隐式继承的接口抽象方法，JVMS §5.4.3.3 的 miranda 方法）：
+    ///     经接口载体分派，由对象运行时类的接口 vtable 命中具体实现
     /// owner / vtable_owner 均为本类视角下的 Rust 类型（含类型实参，如 `AbstractList<E>`）。
-    Inherited { owner: String, vtable_owner: Option<String> },
+    Inherited { owner: String, vtable_owner: Option<String>, interface_owner: bool },
 }
 
 pub(crate) fn classify_method(attrs: &[Attribute], sig: &Signature, self_name: &str) -> MethodKind {
     let mname = sig.ident.to_string();
     if let Some(owner) = attr_str(attrs, "inherited_from") {
-        return MethodKind::Inherited { owner, vtable_owner: attr_str(attrs, "vtable_owner") };
+        return MethodKind::Inherited {
+            owner,
+            vtable_owner: attr_str(attrs, "vtable_owner"),
+            interface_owner: attr_str(attrs, "owner_kind").as_deref() == Some("interface"),
+        };
     }
     if let Some(virtual_in) = attr_str(attrs, "virtual_in") {
         if virtual_in == self_name {

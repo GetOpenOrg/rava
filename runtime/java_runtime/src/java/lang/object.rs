@@ -83,6 +83,28 @@ pub fn Object__clone_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::R
     }
 }
 
+/// `super.hashCode()`（invokespecial java/lang/Object.hashCode）的落点。
+/// Object.hashCode 是 ACC_NATIVE：身份哈希，取实例体的堆地址（与 `new Object()` 实例一致）。
+#[allow(non_snake_case)]
+pub fn Object__hashCode_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<i32> {
+    Ok(this as *const T as *const () as usize as i32)
+}
+
+/// `super.equals(o)`（invokespecial java/lang/Object.equals）的落点：引用相等（`this == o`）。
+/// `this` 是实例体引用，`other` 的 Rc 数据指针指向同一实例体时为同一对象。
+#[allow(non_snake_case)]
+pub fn Object__equals_base<T: ObjectVTable + ?Sized>(this: &T, other: Object) -> crate::error::Result<bool> {
+    Ok(std::ptr::eq(this as *const T as *const (), Rc::as_ptr(&other.0) as *const ()))
+}
+
+/// `super.toString()`（invokespecial java/lang/Object.toString）的落点：
+/// `getClass().getName() + "@" + Integer.toHexString(hashCode())`，hashCode 走虚派发。
+#[allow(non_snake_case)]
+pub fn Object__toString_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<crate::java::lang::String> {
+    let text = format!("{}@{:x}", this.__class_name().replace('/', "."), this.hashCode());
+    Ok(crate::java::lang::String::from(text))
+}
+
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────
 macro_rules! impl_vtable_primitive {
     ($t:ty) => {

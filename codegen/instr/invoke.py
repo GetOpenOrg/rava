@@ -26,6 +26,7 @@ from .coerce import (
     _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,
     _method_ref_binary_class, _resolve_static_method_owner,
     _method_ref_descriptor, _resolve_special_method_owner,
+    _resolve_interface_special_target, interface_special_member_name,
     _get_all_subtypes_ordered,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
@@ -223,6 +224,26 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         # vtable 架构：invokespecial 非构造器 = super.method() 调用
         # 宏为每个虚方法生成自由函数 ClassName__method_base(this, args)，绕过虚拟派发
         # JVM 方法解析：常量池类（直接父类）未声明该方法时，实际目标是最近的祖先声明者
+        # `Iface.super.m()` / 接口私有方法（invokespecial InterfaceMethod）：接口方法体展开在
+        # 调用者所在的类上（成员 `Iface_super_m`，由 class_writer 按字节码扫描声明）→ 成员调用
+        # （常量池类是接口即属此类，由 registry 判定）
+        _iface_owner = _resolve_interface_special_target(
+            _method_ref_binary_class(comment), mname, _method_ref_descriptor(comment), registry)
+        if _iface_owner:
+            _member = _safe_field(interface_special_member_name(
+                _iface_owner, mname, _method_ref_descriptor(comment), registry))
+            _call = f"{obj_e}.{_member}({', '.join(args)})?"
+            rust_ret = jvm_to_rust(ret, registry)
+            if rust_ret == '()':
+                sim.emit(RawStmt(f"{_call};"))
+            else:
+                v = sim.fresh()
+                if rust_ret == 'Object' and _erased_ret_is_type_var(cls_short, mname, params, ret, registry):
+                    sim.emit(RawStmt(f"let {v} = Object::from_any({_call});"))
+                else:
+                    sim.emit(RawStmt(f"let {v} = {_call};"))
+                sim.push(Var(v), RsNamed(rust_ret))
+            return
         _sp_owner = _resolve_special_method_owner(
             _method_ref_binary_class(comment), mname, _method_ref_descriptor(comment), registry)
         _owner_short = (_sp_owner.rsplit('/', 1)[-1].replace('$', '_')
@@ -455,9 +476,10 @@ def _static_call_turbofish(cls: str, class_name: str, sim: StackSim,
         return ''
     _cls_ci = registry.get(_cls_bin)
     # 接口的静态成员载体与类同构（携带类级类型参数），turbofish 规则一致
-    if not (_cls_ci and _cls_ci.generic_signature):
+    if not _cls_ci:
         return ''
-    _tparams = _parse_class_type_params(_cls_ci.generic_signature)
+    # 有效形参：含内部 / 局部类从外围作用域继承的类型变量（struct 的泛型形参同源）
+    _tparams = _effective_class_type_params(_cls_ci, registry)
     if not _tparams:
         return ''
     if _cls_bin == class_name and sim.class_type_params:
@@ -567,7 +589,9 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
     elif cls and '/' in cls:
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
     else:
-        rust_mname = _safe_field(_mangle_if_overloaded(cls, mname, comment, registry))
+        # 短名跨包重名时按常量池里的 binary name 定位声明类（短名反查会命中同名的另一个类）
+        rust_mname = _safe_field(_mangle_if_overloaded(
+            _cp_cls_bin if _cls_path else cls, mname, comment, registry))
         turbofish = ('::<' + ', '.join(_static_inst) + '>' if _static_inst
                      else _static_call_turbofish(cls, class_name, sim, registry, _static_tbind))
         # 同类静态调用的 turbofish 采用了实参绑定 → 返回类型同步替换

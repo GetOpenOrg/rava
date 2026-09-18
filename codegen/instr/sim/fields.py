@@ -13,8 +13,9 @@ from ...type_map import (
     outer_ref_field_type as _outer_ref_field_type,
     class_type_param_bounds as _class_type_param_bounds,
     instance_field_rust_name as _instance_field_rust_name,
+    ancestor_type_args as _ancestor_type_args,
+    split_rust_type_args as _split_rust_type_args,
     substitute_type_params as _substitute_type_params,
-    short_cls as _short_cls,
 )
 from ...constants import safe_ident as _safe_ident, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import (
@@ -24,13 +25,12 @@ from ..coerce import (
     _reinstantiate_generic,
 )
 from ..invoke import _gen_invokespecial
-from ..invoke_sig import receiver_type_arg_map as _receiver_type_arg_map, type_var_receiver_bound_view
+from ..invoke_sig import type_var_receiver_bound_view
 
 # Rust 内建容器与已知类型短名（用于泛型类型可见性校验）
 # 基本类型名也必须视为可见：装箱类型实参映射为 Rust 基本类型（X<Boolean> → X<bool>），
 # 否则此类字段的声明类型恢复被整体拒绝，读取侧退化为擦除形态
 _BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'}) | _PRIMITIVE_RUST_TYPES
-
 
 
 def _static_field_decl_class(cls: str, comment: str, registry: dict | None) -> str:
@@ -57,7 +57,15 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
     _g_owner = f_owner if f_owner else class_name
     if not _g_owner:
         return ftype
-    _g_ci = registry.get(_g_owner)
+    _ref_ci = registry.get(_g_owner)
+    # 字段解析（JVMS §5.4.3.2）：字段引用的限定类是接收者静态类型，声明类可能是其祖先；
+    # generic_signature 里的类型变量属于声明类，须在声明类的形参上下文中解析
+    _g_ci = _ref_ci
+    while _g_ci is not None and not any(
+            not _of.is_static and _safe_ident(_of.name) == fname for _of in _g_ci.fields):
+        _g_ci = registry.get(_g_ci.super_class) if _g_ci.super_class else None
+    if _g_ci is None:
+        _g_ci = _ref_ci
     # 内部类外部引用字段（this$N，无 generic_signature）：与 struct 字段定义同规则
     _parsed = ''
     if _g_ci is not None:
@@ -70,24 +78,25 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
         _gsig = _get_field_generic_signature(_g_owner, fname, registry)
         if not (_gsig and _g_ci is not None):
             return ftype
-        # 字段签名里的类型变量属于声明类（常量池类可以是其后代）：按声明类的类型形参解析，
-        # 再按接收者静态类型视角代入（Box<U>.state: U，接收者 Sink<T, I> extends Box<I> → I；
-        # 接收者是擦除实例化 Sink<Object, Object> → Object），与宏生成的访问器类型一致
-        _decl_ci = _g_ci
-        _seen_decl: set[str] = set()
-        while (_decl_ci is not None and _decl_ci.name not in _seen_decl
-               and not any(not _f.is_static and _safe_ident(_f.name) == fname for _f in _decl_ci.fields)):
-            _seen_decl.add(_decl_ci.name)
-            _decl_ci = registry.get(_decl_ci.super_class) if _decl_ci.super_class else None
-        if _decl_ci is None:
-            _decl_ci = _g_ci
         # 内部类自身无 generic_signature 时，类型参数继承自外部类（与 struct 定义同规则）
-        _decl_tparams = list(_effective_class_type_params(_decl_ci, registry) or [])
+        _decl_tparams = list(_effective_class_type_params(_g_ci, registry) or [])
         _parsed = _parse_field_type(_gsig, _decl_tparams, registry)
-        if _parsed and recv_ty and _decl_tparams:
-            _recv_map = _receiver_type_arg_map(recv_ty, _short_cls(_decl_ci.name), registry)
-            if _recv_map:
-                _parsed = _substitute_type_params(_parsed, _recv_map)
+    if _parsed and _g_ci is not None and recv_ty:
+        # 字段声明在接收者静态类型的祖先上（`this.curChunk`，声明为祖先的 T_ARR）：
+        # 祖先类型变量按接收者视角的超类实参代入——与接收者类的转发访问器
+        # （superclass_fields 展平）同一规则，读取侧记录的类型与访问器返回类型一致
+        _recv_bin = _rust_type_to_binary(recv_ty.split('<')[0].strip(), registry)
+        _recv_ci = registry.get(_recv_bin) if _recv_bin else None
+        if _recv_ci is None and _ref_ci is not None and _ref_ci.name != _g_ci.name:
+            _recv_ci = _ref_ci
+        if _recv_ci is not None and _recv_ci.name != _g_ci.name:
+            _anc_view = dict(_ancestor_type_args(_recv_ci, registry, _split_rust_type_args(recv_ty) or None))
+            if _g_ci.name in _anc_view:
+                _owner_params = list(_effective_class_type_params(_g_ci, registry) or [])
+                _owner_args = list(_anc_view[_g_ci.name])
+                _parsed = _substitute_type_params(_parsed, {
+                    _p: (_owner_args[_i] if _i < len(_owner_args) else 'Object')
+                    for _i, _p in enumerate(_owner_params)})
     if _parsed and _parsed != 'Object' and _parsed != ftype:
         # 校验：解析结果中的类型名须在调用方可见
         # （当前 impl 类型参数 / registry 短名 / 内建容器），
@@ -116,8 +125,9 @@ def _resolve_static_field(cls: str, field_name: str, descriptor: str, comment: s
             _cls_bin = cls
         if _cls_bin:
             _getstatic_cls_ci = registry.get(_cls_bin)
-            if _getstatic_cls_ci and _getstatic_cls_ci.generic_signature:
-                _tparams = _parse_class_type_params(_getstatic_cls_ci.generic_signature)
+            if _getstatic_cls_ci:
+                # 有效形参：含内部 / 局部类从外围作用域继承的类型变量（struct 的泛型形参同源）
+                _tparams = _effective_class_type_params(_getstatic_cls_ci, registry)
                 if _tparams:
                     _getstatic_turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
     # 静态字段声明类型恢复（与 getfield 同规则）：getter 按字段级 generic_signature
@@ -239,10 +249,10 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                 return True
             # 类型变量接收者（`o.ordinal`，o: E，E extends B<E>）：访问器定义在上界类
             # 的 wrapper 上，类型变量本身没有方法（E0599）。Java 侧该访问经上界类型
-            # 静态解析 → Rust 侧把值转换为上界类型（宏生成的 From<Child> for Ancestor，
-            # vtable upcast 保留运行时类型）后再读字段；所需约束 `E: Into<B<E>>`
-            # 记入 sim，由方法签名声明为 where 子句。
-            obj_expr, obj_ty = type_var_receiver_bound_view(sim, obj_expr, obj_ty, class_name, registry)
+            # 静态解析（类型变量擦除为上界）→ Rust 侧经 Object 的 checkcast 视图转换为上界类型
+            # （按运行时类重建上界类视图，保留运行时类型）后再读字段。不用 `E: Into<B<E>>` 约束：
+            # 覆盖方法不能比 vtable 声明多带约束，约束放 struct 头又会使擦除实例化的证明循环。
+            obj_expr, obj_ty = type_var_receiver_bound_view(sim, obj_expr, obj_ty)
             # 字段声明类型恢复：struct 字段生成（class_writer._resolve_field_rust）
             # 优先字段级 generic_signature（如 interfaces: Vec<Class<Object>>、
             # parent: HashMap_TreeNode<K, V>），宏访问器 __get_xxx() 按声明类型返回。
@@ -268,7 +278,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             cls_owner, fname, fdesc = _parse_field_ref(comment)
             ftype = jvm_to_rust(fdesc, registry) if fdesc else 'i32'
             # 类型变量接收者（`task.leftChild = x`，task: K）：与 getfield 同规则，经上界类型写字段
-            obj_expr, obj_ty = type_var_receiver_bound_view(sim, obj_expr, obj_ty, class_name, registry)
+            obj_expr, obj_ty = type_var_receiver_bound_view(sim, obj_expr, obj_ty)
             # Fix 15：字段声明类型恢复（与 getfield 对齐，原数组特例泛化）——
             # 擦除形态（HashMap_Node<Object,Object> / Vec<Object>）恢复为声明
             # 类 tparams 上下文的精确泛型形态（HashMap_Node<K,V> / Vec<E>），

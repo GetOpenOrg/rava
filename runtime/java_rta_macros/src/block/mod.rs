@@ -475,8 +475,19 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // ── 字段集合 ─────────────────────────────────────────────────────────────
     let mut basic_names: HashSet<String> = HashSet::new();
     let mut ref_names: HashSet<String> = HashSet::new();
-    for (name, ty) in fields.iter().chain(meta.superclass_fields.iter()) {
+    // 继承字段的存储形态由声明它的祖先决定（见 superclass_reference_fields）
+    let inherited_is_basic = |name: &syn::Ident, ty: &syn::Type| -> bool {
+        is_basic(ty) && !meta.superclass_reference_fields.contains(&name.to_string())
+    };
+    for (name, ty) in fields.iter() {
         if is_basic(ty) {
+            basic_names.insert(name.to_string());
+        } else {
+            ref_names.insert(name.to_string());
+        }
+    }
+    for (name, ty) in meta.superclass_fields.iter() {
+        if inherited_is_basic(name, ty) {
             basic_names.insert(name.to_string());
         } else {
             ref_names.insert(name.to_string());
@@ -491,11 +502,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let mut vtable_overrides: HashMap<String, Vec<&FnItem>> = HashMap::new();
     let mut non_virtual: Vec<&FnItem> = Vec::new();
     // inherited:       继承成员声明（祖先声明、本类未覆盖）→ wrapper 上的转发方法
-    let mut inherited: Vec<(&FnItem, String, Option<String>)> = Vec::new();
+    let mut inherited: Vec<(&FnItem, String, Option<String>, bool)> = Vec::new();
 
     for f in &fns {
         match classify_method(&f.attrs, &f.sig, &self_name) {
-            MethodKind::Inherited { owner, vtable_owner } => inherited.push((f, owner, vtable_owner)),
+            MethodKind::Inherited { owner, vtable_owner, interface_owner } =>
+                inherited.push((f, owner, vtable_owner, interface_owner)),
             MethodKind::VirtualDefine => vtable_defines.push(f),
             MethodKind::VirtualOverride { vtable_class } => {
                 vtable_overrides.entry(vtable_class).or_default().push(f);
@@ -654,7 +666,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // 时共享同一个 Cell，mutations 对原始 inner struct 可见（否则 clone 是值拷贝，
     // __set_xxx 修改的是孤立副本，调用方看不到变化）。
     for (name, ty) in &meta.superclass_fields {
-        let cell_ty = if is_basic(ty) {
+        let cell_ty = if inherited_is_basic(name, ty) {
             quote! { ::std::rc::Rc<::std::cell::Cell<#ty>> }
         } else {
             quote! { ::std::rc::Rc<::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>>> }
@@ -768,10 +780,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // Object.clone() 的逐字段浅拷贝：每个字段新建存储单元，值按 Java 语义拷贝
     // （基本类型拷贝值，引用类型拷贝引用）。
     let copy_field_inits: Vec<TokenStream2> = meta.superclass_fields.iter()
-        .map(|(n, t)| (n, t))
-        .chain(fields.iter().map(|(n, t)| (n, t)))
-        .map(|(name, ty)| {
-            if is_basic(ty) {
+        .map(|(n, t)| (n, inherited_is_basic(n, t)))
+        .chain(fields.iter().map(|(n, t)| (n, is_basic(t))))
+        .map(|(name, basic)| {
+            if basic {
                 quote! { #name: ::std::rc::Rc::new(::std::cell::Cell::new(self.#name.get())) }
             } else {
                 quote! { #name: ::std::rc::Rc::new(::std::cell::RefCell::new(self.#name.borrow().clone())) }
@@ -944,7 +956,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 if let Some((name, ty)) = sc_fields_map.get(field_name) {
                     let get = format_ident!("__get_{}", name);
                     let set = format_ident!("__set_{}", name);
-                    if is_basic(ty) {
+                    if inherited_is_basic(name, ty) {
                         items.push(quote! {
                             fn #get(&self) -> #ty { self.#name.get() }
                             fn #set(&self, v: #ty) { self.#name.set(v); }
@@ -983,31 +995,17 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                                     #sig #b
                                 });
                             } else {
-                                // 非 vtable-safe 方法体（含 Clone::clone(this) 等）：
-                                // 去除 codegen 生成的首行 `let this = self;`，
-                                // 改为在 vtable impl 中重建 wrapper 并绑定为 this。
-                                // this 是 wrapper（无 Deref）：继承而未在本类声明的虚方法
-                                // 经 vtable supertrait 链调用，与 VirtualDefine 的 NeedsWrapper 路径一致。
-                                rewrite_base_calls_for_wrapper(&mut b);
-                                rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
-                                if let Some(first) = b.stmts.first() {
-                                    let s = quote!(#first).to_string();
-                                    if s.contains("this") && s.contains("self") {
-                                        b.stmts.remove(0);
-                                    }
-                                }
-                                let stmts = &b.stmts;
+                                // 方法体需要 wrapper 上下文（this 传参 / 非虚方法调用 / Self::）：
+                                // 方法体只落在 wrapper 的 `__impl_<method>` 上（见 wrapper 方法生成），
+                                // 此处经钩子重建本类 wrapper 后执行——与 VirtualDefine 同一路径，
+                                // super 调用的 base 函数也复用它（不分派，精确命中本类实现）。
+                                let impl_name = format_ident!("__impl_{}", sig.ident);
+                                let args = param_idents(sig);
                                 items.push(quote! {
                                     #(#keep_attrs)*
                                     #sig {
-                                        let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
-                                        let __wrapper = #struct_ident {
-                                            vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
-                                            any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
-                                            _jvm_null: false,
-                                        };
-                                        let this = &__wrapper;
-                                        #(#stmts)*
+                                        let __w = <Self as #vtable_trait_ident #ty_g>::#as_self_hook(self);
+                                        __w.#impl_name(#(#args),*)
                                     }
                                 });
                             }
@@ -1300,7 +1298,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     for (name, ty) in &meta.superclass_fields {
         let get = format_ident!("__get_{}", name);
         let set = format_ident!("__set_{}", name);
-        if is_basic(ty) {
+        if inherited_is_basic(name, ty) {
             wrapper_methods.push(quote! {
                 #[doc(hidden)] #[inline]
                 pub fn #get(&self) -> #ty { self.vtable.#get() }
@@ -1398,6 +1396,23 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             }).collect();
             let keep_attrs = strip_meta_attrs(&f.attrs);
             let vis = &f.vis;
+            // 需要 wrapper 上下文的覆盖体：方法体落在隐藏的 `__impl_<method>`（不分派），
+            // vtable impl 与 super 调用的 base 函数都经钩子重建 wrapper 后执行它。
+            if let Some(block) = &f.block {
+                if !is_vtable_safe_body(block) {
+                    let mut b = block.clone();
+                    rewrite_block(&mut b, &basic_names, &ref_names);
+                    rewrite_base_calls_for_wrapper(&mut b);
+                    rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
+                    let mut impl_sig = sig.clone();
+                    impl_sig.ident = format_ident!("__impl_{}", mname);
+                    wrapper_methods.push(quote! {
+                        #(#keep_attrs)*
+                        #[doc(hidden)]
+                        pub #impl_sig #b
+                    });
+                }
+            }
             // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）
             let anc_vtable = format_ident!("{}__VTable", vtable_class);
             let null_check = class_init::null_receiver_check(sig);
@@ -1412,7 +1427,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // 继承成员：wrapper 上的同名转发方法（调用点写 `obj.method(args)`，与 Java 一致）。
     // 虚方法经「本类 VTable → 声明该方法的祖先 VTable」的完全限定 UFCS 分派：
     // 既保持多态，又消除同名方法多 supertrait 来源的歧义（E0034）。
-    for (f, owner, vtable_owner) in &inherited {
+    for (f, owner, vtable_owner, interface_owner) in &inherited {
         let sig = &f.sig;
         let mname = &sig.ident;
         let vis = &f.vis;
@@ -1442,9 +1457,22 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     Ok(t) => t,
                     Err(e) => return e.to_compile_error(),
                 };
-                quote! {
-                    <#owner_ty as ::std::convert::From<Self>>::from(::std::clone::Clone::clone(self))
-                        .#mname(#(#param_names),*)
+                if *interface_owner {
+                    // 接口载体持有对象引用（保留运行时类）→ 接口 vtable 分派到具体实现。
+                    // 接口侧的方法名（重载改名按接口自身判定）可能与本类视角下的名字不同 → `target`
+                    let target = attr_str(&f.attrs, "target")
+                        .map(|t| Ident::new(&t, proc_macro2::Span::call_site()))
+                        .unwrap_or_else(|| mname.clone());
+                    quote! {
+                        <#owner_ty as ::std::convert::From<Object>>::from(
+                            <Object as ::std::convert::From<Self>>::from(::std::clone::Clone::clone(self)))
+                            .#target(#(#param_names),*)
+                    }
+                } else {
+                    quote! {
+                        <#owner_ty as ::std::convert::From<Self>>::from(::std::clone::Clone::clone(self))
+                            .#mname(#(#param_names),*)
+                    }
                 }
             }
         };
@@ -1467,7 +1495,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         let mut field_inits: Vec<TokenStream2> = Vec::new();
         for (name, ty) in &meta.superclass_fields {
             let get = format_ident!("__get_{}", name);
-            if is_basic(ty) {
+            if inherited_is_basic(name, ty) {
                 field_inits.push(quote! {
                     #name: ::std::rc::Rc::new(::std::cell::Cell::new(parent.#get())),
                 });
@@ -1544,7 +1572,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let obj = quote! { Object };
     let from_object_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
-            fn from(obj: #obj) -> Self { obj.downcast::<Self>() }
+            // Java checkcast 语义：运行时类是本类或其子类均成立（子类对象按运行时类重建本类视图）
+            fn from(obj: #obj) -> Self { obj.checkcast::<Self>(#binary_name) }
         }
     };
 
@@ -1736,112 +1765,66 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
 
-    // VirtualOverride 方法生成 base 函数（VTable 约束为 virtual_in__VTable）
-    // 安全判断：
-    //   - this.__get_xxx / __set_xxx：仅当 xxx 是超类字段（在祖先 VTable 中有对应 accessor）才安全
-    //   - this.method()（非 __ 前缀）：不安全
-    //   - Clone::clone(this) / Self:: ：不安全
-    // 安全时 bound：__BT: AncestorVTable<ClassTypeParams> + ?Sized
-    let superclass_field_names: std::collections::HashSet<String> = meta.superclass_fields.iter()
-        .map(|(name, _)| name.to_string())
-        .collect();
-    for (vtable_class, override_fns) in &vtable_overrides {
-        let ancestor_vtable_ident = format_ident!("{}__{}", vtable_class, "VTable");
+    // VirtualOverride 方法生成 base 函数（`super.m()` 的精确目标，不分派）。
+    // 约束统一为本类 VTable：`__BT: Self__VTable<..>`——调用方一定是本类的子类（或本类自身），
+    // 其 vtable 经 supertrait 链满足该约束；本类及全部祖先的字段访问器都在约束可见范围内
+    // （祖先 VTable 约束只能看到该祖先的字段，读不到中间层 / 本类字段）。
+    //   - vtable-safe 方法体（只有字段访问器）→ 直接在 `&__BT` 上执行
+    //   - 其余 → 经钩子重建本类 wrapper，执行 wrapper 上的 `__impl_<method>`
+    let mut seen_override_bases: HashSet<String> = HashSet::new();
+    for (_vtable_class, override_fns) in &vtable_overrides {
         for f in override_fns {
-            if let Some(block) = &f.block {
-                let sig = &f.sig;
-                let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
-                let non_self_params: Vec<_> = sig.inputs.iter()
-                    .filter(|a| matches!(a, syn::FnArg::Typed(_)))
-                    .collect();
-                let ret = &sig.output;
-                let mname_str = sig.ident.to_string();
-                let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
-                let binary = &meta.binary_name;
+            let Some(block) = &f.block else { continue };
+            let sig = &f.sig;
+            if vtable_define_names.contains(&sig.ident.to_string())
+                || !seen_override_bases.insert(sig.ident.to_string())
+            {
+                continue;
+            }
+            let fn_name = format_ident!("{}__{}_base", self_name, sig.ident);
+            let non_self_params: Vec<_> = sig.inputs.iter()
+                .filter(|a| matches!(a, syn::FnArg::Typed(_)))
+                .collect();
+            let ret = &sig.output;
 
+            let mut body_gen = gen.clone();
+            body_gen.params.push(syn::parse_quote!(__BT));
+            body_gen.make_where_clause().predicates.push(
+                syn::parse_quote!(__BT: #vtable_trait_ident #ty_g + ?Sized)
+            );
+            // 方法自身的 where 子句（类型变量上界约束等）：方法体依赖它，base 函数同样声明
+            if let Some(method_where) = &sig.generics.where_clause {
+                body_gen.make_where_clause().predicates.extend(method_where.predicates.iter().cloned());
+            }
+            let (body_impl_g, _, body_where_c) = body_gen.split_for_impl();
+
+            let body: TokenStream2 = if is_vtable_safe_body(block) {
                 let mut b = block.clone();
                 rewrite_block(&mut b, &basic_names, &ref_names);
+                // 去掉首句 "let this = self;"（base 函数参数直接就是 this）
                 if let Some(first) = b.stmts.first() {
                     let fs = quote!(#first).to_string();
                     if fs.contains("this") && fs.contains("self") {
                         b.stmts.remove(0);
                     }
                 }
-                replace_clone_this_in_ok(&mut b);
-
-                let bs = quote!(#b).to_string();
-                // 折叠空白（proc_macro2 在 proc macro 上下文中保留原始换行/缩进）
-                let bs_flat: String = bs.split_whitespace().collect::<Vec<_>>().join(" ");
-                let has_bare_clone_this = bs_flat.contains("Clone :: clone (this)")
-                    || bs_flat.contains("Clone :: clone(this)")
-                    || bs_flat.contains("Clone::clone (this)")
-                    || bs_flat.contains("Clone::clone(this)");
-                // 检查 this.xxx() 调用：非超类字段 accessor 或非 __ 前缀方法 → unsafe
-                let has_non_vtable_call = {
-                    let mut found = false;
-                    let parts: Vec<&str> = bs_flat.split("this .").chain(bs_flat.split("this.")).skip(1).collect();
-                    'outer: for part in parts {
-                        let trimmed = part.trim_start();
-                        let mname_call: String = trimmed.chars()
-                            .take_while(|c| c.is_alphanumeric() || *c == '_')
-                            .collect();
-                        if mname_call.is_empty() { continue; }
-                        let rest = &trimmed[mname_call.len()..];
-                        if !rest.trim_start().starts_with('(') { continue; }
-                        if mname_call.starts_with("__") {
-                            // accessor 调用：提取字段名（__get_xxx → xxx，__set_xxx → xxx）
-                            let field_name = mname_call
-                                .strip_prefix("__get_")
-                                .or_else(|| mname_call.strip_prefix("__set_"))
-                                .or_else(|| mname_call.strip_prefix("__borrow_mut_"))
-                                .unwrap_or("");
-                            if !field_name.is_empty() && !superclass_field_names.contains(field_name) {
-                                // 本类自有字段的 accessor，不在祖先 VTable 中 → unsafe
-                                found = true;
-                                break 'outer;
-                            }
-                        } else {
-                            // 普通方法调用（非 __ 前缀）→ unsafe
-                            found = true;
-                            break 'outer;
-                        }
-                    }
-                    found
-                };
-                let has_self_ref = bs_flat.contains("Self ::") || bs_flat.contains("Self::");
-
-                if has_bare_clone_this || has_non_vtable_call || has_self_ref {
-                    let msg = format!("stub: super {}.{}:{}", binary, mname_str, desc);
-                    base_fns.push(quote! {
-                        #[doc(hidden)]
-                        #[allow(non_snake_case, unused_variables)]
-                        pub fn #fn_name #base_impl_g (this: &__BT #(, #non_self_params)*) #ret {
-                            panic!(#msg)
-                        }
-                    });
-                } else {
-                    // VirtualOverride 的祖先 VTable 类型实参：取该祖先在 all_superclasses 中的实参
-                    let anc_override_args: proc_macro2::TokenStream =
-                        meta.ancestor_type_args.get(vtable_class).cloned().unwrap_or_default();
-                    let mut body_gen = gen.clone();
-                    body_gen.params.push(syn::parse_quote!(__BT));
-                    body_gen.make_where_clause().predicates.push(
-                        syn::parse_quote!(__BT: #ancestor_vtable_ident #anc_override_args + ?Sized)
-                    );
-                    // 方法自身的 where 子句（类型变量上界约束等）：方法体依赖它，base 函数同样声明
-                    if let Some(method_where) = &sig.generics.where_clause {
-                        body_gen.make_where_clause().predicates.extend(method_where.predicates.iter().cloned());
-                    }
-                    let (body_impl_g, _, body_where_c) = body_gen.split_for_impl();
-                    base_fns.push(quote! {
-                        #[doc(hidden)]
-                        #[allow(non_snake_case, unused_variables)]
-                        pub fn #fn_name #body_impl_g (this: &__BT #(, #non_self_params)*) #ret #body_where_c {
-                            #b
-                        }
-                    });
+                let stmts = &b.stmts;
+                quote! { #(#stmts)* }
+            } else {
+                let impl_name = format_ident!("__impl_{}", sig.ident);
+                let args = param_idents(sig);
+                quote! {
+                    let __w = #vtable_trait_ident::#as_self_hook(this);
+                    __w.#impl_name(#(#args),*)
                 }
-            }
+            };
+            base_fns.push(quote! {
+                #[doc(hidden)]
+                #[allow(non_snake_case, unused_variables)]
+                pub fn #fn_name #body_impl_g (this: &__BT #(, #non_self_params)*) #ret #body_where_c {
+                    #body
+                }
+            });
         }
     }
 

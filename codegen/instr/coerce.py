@@ -7,7 +7,7 @@ import re
 from ..constants import safe_ident as _safe_field, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, OBJECT_CLASS as _OBJECT_CLASS
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
-    mangle_name, hierarchy_overloaded_names, class_method_rust_names,
+    mangle_name, hierarchy_overloaded_names, method_name_is_mangled,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
 )
 
@@ -89,7 +89,8 @@ def parse_method_ref(comment: str) -> tuple[str | None, str, list, str]:
                .replace('<init>',     '__init__')
                .replace('<clinit>',   '__clinit__'))
 
-    m = re.match(r'(?:([^.]+)\.)?(\w+(?:<\w+>)?):(\([^)]*\).+)', comment)
+    # 方法名按 JVMS §4.2.2：除 . ; [ / < > 之外的任意字符（含 `$`：枚举的 $values、access$NNN、lambda$..）
+    m = re.match(r'(?:([^.]+)\.)?([^.;\[/<>:()]+(?:<\w+>)?):(\([^)]*\).+)', comment)
     if not m:
         return (None, comment, [], 'V')
 
@@ -603,9 +604,9 @@ def _resolve_special_method_owner(class_binary: str, mname: str, descriptor: str
     """invokespecial（super.m()）的 JVM 方法解析：常量池类是直接父类，方法可能声明在
     更远的祖先 → 沿父类链找到最近声明类（描述符精确匹配）。找不到返回常量池类本身。"""
     cur = class_binary
-    seen: set[str] = set()
+    seen: list[str] = []
     while registry and cur and cur not in seen:
-        seen.add(cur)
+        seen.append(cur)
         ci = registry.get(cur)
         if ci is None:
             break
@@ -613,7 +614,77 @@ def _resolve_special_method_owner(class_binary: str, mname: str, descriptor: str
                for m in ci.methods):
             return cur
         cur = getattr(ci, 'super_class', None)
-    return class_binary
+    # 父类链上无声明 → 方法体来自接口 default 方法。default 方法体展开到「父类链上最早
+    # 实现该接口的类」（其后代经 VTable supertrait 链继承），__base 函数归属该类。
+    injected_owner = ''
+    for cls in seen:
+        if class_inherits_default_method(cls, mname, descriptor, registry):
+            injected_owner = cls
+    return injected_owner or class_binary
+
+
+def class_inherits_default_method(class_binary: str, mname: str, descriptor: str,
+                                  registry: dict | None) -> bool:
+    """类直接实现的接口闭包（含父接口）中，是否存在 (mname, descriptor) 的 default 方法体。"""
+    ci = registry.get(class_binary) if registry else None
+    if ci is None:
+        return False
+    queue: list[str] = list(ci.interfaces or [])
+    visited: set[str] = set()
+    while queue:
+        iname = queue.pop(0)
+        if iname in visited:
+            continue
+        visited.add(iname)
+        ici = registry.get(iname)
+        if ici is None:
+            continue
+        if any((not m.is_static) and (not m.is_abstract) and m.name == mname
+               and m.descriptor == descriptor for m in ici.methods):
+            return True
+        queue.extend(ici.interfaces or [])
+    return False
+
+
+def _resolve_interface_special_target(iface_binary: str, mname: str, descriptor: str,
+                                      registry: dict | None) -> str:
+    """invokespecial InterfaceMethod（`Iface.super.m()` / 接口私有方法）的 JVM 方法解析：
+    常量池类是接口，方法体可能声明在其父接口 → 自身优先、再按广度遍历父接口，
+    找到最近的「有方法体」的声明者（描述符精确匹配）。常量池类不是 registry 中的接口、
+    或找不到方法体时返回 ''。"""
+    if not registry:
+        return ''
+    root = registry.get(iface_binary)
+    if root is None or not root.is_interface:
+        return ''
+    queue: list[str] = [iface_binary]
+    seen: set[str] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur in seen:
+            continue
+        seen.add(cur)
+        ci = registry.get(cur)
+        if ci is None:
+            continue
+        if any((not m.is_static) and (not m.is_abstract) and m.name == mname
+               and m.descriptor == descriptor for m in ci.methods):
+            return cur
+        queue.extend(ci.interfaces or [])
+    return ''
+
+
+def interface_special_member_name(owner_binary: str, mname: str, descriptor: str,
+                                  registry: dict | None) -> str:
+    """`Iface.super.m(...)` 在实现类中的落点成员名：`Iface_super_m`（m 在接口内重载时带描述符后缀）。
+    接口 default 方法体按「展开到实现类」建模，被覆盖的 default 方法体以该名字的
+    非虚成员形式展开到调用者所在的类。定义侧（class_writer）与调用侧（invokespecial）共用。"""
+    owner_short = owner_binary.rsplit('/', 1)[-1].replace('$', '_')
+    owner_ci = registry.get(owner_binary) if registry else None
+    rust_m = mname
+    if owner_ci is not None and mname in hierarchy_overloaded_names(owner_ci, registry):
+        rust_m = mangle_name(mname, descriptor)
+    return f"{owner_short}_super_{rust_m}"
 
 
 def _resolve_static_method_owner(class_binary: str, mname: str, descriptor: str,
@@ -733,27 +804,96 @@ _JAVA_RUST_NAME_CONFLICTS = frozenset()
 _JAVA_RUST_RENAME: dict[str, str] = {}
 
 
-def _resolve_bridge_target(ci, mname: str, descriptor: str, registry: dict):
-    """沿父类链找 descriptor 精确命中的 synthetic bridge，返回 (声明类, 被桥接真实方法的描述符)。
-    找不到 bridge 或真实方法候选不唯一时返回 None。"""
-    bridge_params = parse_descriptor_params(descriptor)
+def _signature_polymorphic_descriptor(comment: str, registry: dict | None) -> str | None:
+    """调用目标是签名多态方法（JVMS §2.9.3）时返回其声明描述符，否则 None。
 
-    def _bridgeable(real_desc: str) -> bool:
-        # bridge 只做引用类型的擦除/窄化：基本类型参数必须逐位相同，引用对引用
-        real_params = parse_descriptor_params(real_desc)
-        return len(real_params) == len(bridge_params) and all(
-            (rp == bp) if (len(bp) == 1 or len(rp) == 1) else True
-            for rp, bp in zip(real_params, bridge_params))
+    判定完全来自字节码：目标类中该名字只有一个方法，带 ACC_NATIVE + ACC_VARARGS，
+    唯一形参为根类数组。调用点描述符由 javac 按实参静态类型现场合成，与声明描述符不同；
+    声明侧只有 `m(Object[])` 一个入口，调用点须把实参装进 Object[]。"""
+    if not registry:
+        return None
+    cm = _BRIDGE_CALL_RE.match((comment or '').strip())
+    if cm is None:
+        return None
+    ci = registry.get(cm.group(1))
+    if ci is None:
+        return None
+    named = [m for m in ci.methods if m.name == cm.group(2)]
+    if len(named) != 1:
+        return None
+    decl = named[0]
+    # 0x0100 = ACC_NATIVE，0x0080 = ACC_VARARGS
+    if (decl.access_flags & 0x0180) != 0x0180 or decl.is_static:
+        return None
+    from ..constants import OBJECT_CLASS as _root
+    if not decl.descriptor.startswith(f'([L{_root};)'):
+        return None
+    if decl.descriptor == cm.group(3):
+        return None
+    return decl.descriptor
+
+
+_BRIDGE_CALL_RE = re.compile(r'^(?:Interface)?Method\s+([^.\s]+)\.([^:\s]+):(\(\S*\)\S+)')
+
+
+def _bridge_call_target(bridge, mname: str, registry: dict):
+    """bridge 方法体里被桥接的真实方法：(声明类 ClassInfo, 真实描述符)；不可解析时 None。"""
+    for ins in reversed(bridge.instrs or []):
+        if not (ins.opcode or '').startswith('invoke'):
+            continue
+        cm = _BRIDGE_CALL_RE.match((ins.comment or '').strip())
+        if cm is None or cm.group(2) != mname:
+            continue
+        real_params = cm.group(3).split(')')[0] + ')'
+
+        def _declared(owner_ci):
+            return next((m for m in owner_ci.methods
+                         if not m.is_synthetic and m.name == mname
+                         and m.descriptor.startswith(real_params)), None)
+
+        owner_ci = registry.get(cm.group(1))
+        real = _declared(owner_ci) if owner_ci is not None else None
+        if real is None:
+            owner_bin, _ = _resolve_method_owner(cm.group(1), mname, registry, descriptor=cm.group(3))
+            owner_ci = registry.get(owner_bin) if owner_bin else None
+            real = _declared(owner_ci) if owner_ci is not None else None
+        return (owner_ci, real.descriptor) if real is not None else None
+    return None
+
+
+def _resolve_bridge_target(ci, mname: str, descriptor: str, registry: dict):
+    """找 descriptor 精确命中的 synthetic bridge，返回 (真实方法的声明类, 真实方法的描述符)。
+
+    查找顺序与 JVM 方法解析一致：先沿父类链，再到实现的接口闭包（接口里的 bridge：
+    `Node.OfDouble.copyInto(Object[],int)` → default `copyInto(Double[],int)`）。
+    被桥接的真实方法直接读自 bridge 的字节码：javac 生成的 bridge 体只有一条同名方法调用
+    （invokevirtual this.m(真实描述符)，或真实方法继承自祖先时的 invokespecial super.m(..)）。
+    后者的声明类沿调用指令的 owner 向上解析——真实方法不一定与 bridge 同类
+    （`EmptySpliterator.OfDouble.tryAdvance(DoubleConsumer)` 桥接到祖先的 `tryAdvance(Object)`）。
+    找不到 bridge 或其目标不可解析时返回 None。"""
+    def _bridge_in(c):
+        return next((m for m in c.methods
+                     if m.is_synthetic and m.name == mname and m.descriptor == descriptor), None)
 
     seen: set[str] = set()
-    while ci is not None and ci.name not in seen:
-        seen.add(ci.name)
-        if any(m.is_synthetic and m.name == mname and m.descriptor == descriptor for m in ci.methods):
-            real = [m for m in ci.methods
-                    if not m.is_synthetic and m.name == mname and not m.is_static
-                    and _bridgeable(m.descriptor)]
-            return (ci, real[0].descriptor) if len(real) == 1 else None
-        ci = registry.get(ci.super_class) if ci.super_class else None
+    pending_ifaces: list[str] = []
+    cur = ci
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        bridge = _bridge_in(cur)
+        if bridge is not None:
+            return _bridge_call_target(bridge, mname, registry)
+        pending_ifaces.extend(cur.interfaces or [])
+        cur = registry.get(cur.super_class) if cur.super_class else None
+    while pending_ifaces:
+        iface_ci = registry.get(pending_ifaces.pop(0))
+        if iface_ci is None or iface_ci.name in seen:
+            continue
+        seen.add(iface_ci.name)
+        bridge = _bridge_in(iface_ci)
+        if bridge is not None:
+            return _bridge_call_target(bridge, mname, registry)
+        pending_ifaces.extend(iface_ci.interfaces or [])
     return None
 
 
@@ -797,9 +937,24 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
             # 真实方法（同名、同参数个数、唯一候选）。
             _bridged = _resolve_bridge_target(target_ci, mname, _call_desc_m.group(1), registry)
             if _bridged is not None:
-                target_ci, _bridged_desc = _bridged
-                comment = f'{comment.split(":")[0]}:{_bridged_desc}'
-    if mname not in hierarchy_overloaded_names(target_ci, registry):
+                # 真实方法声明在接口（default，注入到实现类）→ 名字仍按调用目标类层次判定
+                if not _bridged[0].is_interface:
+                    target_ci = _bridged[0]
+                comment = f'{comment.split(":")[0]}:{_bridged[1]}'
+            elif not target_ci.is_interface:
+                # 类链未声明该方法：只声明在接口上的成员（抽象类上调用接口抽象方法）
+                from ..type_map import interface_member_local_name as _iface_local
+                _local = _iface_local(target_ci, mname, _call_desc_m.group(1), registry)
+                return _JAVA_RUST_RENAME.get(_local, _local)
+    # 按 (name, descriptor) 判定：覆盖方法沿用 vtable 槽位所属祖先中的名字（与定义侧同源）
+    _final_desc_m = re.search(r':(\([^)]*\)\S+)', comment)
+    _call_desc = _final_desc_m.group(1) if _final_desc_m else ''
+    _declared = next((m for m in target_ci.methods
+                      if m.name == mname and m.descriptor == _call_desc), None)
+    _is_mangled = (method_name_is_mangled(target_ci, _declared, registry)
+                   if _declared is not None
+                   else mname in hierarchy_overloaded_names(target_ci, registry))
+    if not _is_mangled:
         # Java→Rust 名字冲突重命名（如 clone→jvm_clone）
         erg_name = _JAVA_RUST_RENAME.get(mname)
         if erg_name is not None:
@@ -807,12 +962,7 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
         return mname
     desc_m = re.search(r':(\([^)]*\)\S+)', comment)
     raw_desc = desc_m.group(1) if desc_m else ''
-    # 名字取自声明类的方法名字表（与定义侧同源：截断后缀碰撞的重载组用完整类名后缀）
-    result = class_method_rust_names(target_ci, registry).get((mname, raw_desc))
-    if result is None:
-        result = mangle_name(mname, raw_desc) if raw_desc else mname
-    elif mname == '<init>':
-        result = '<init>' + result[len('new'):]
+    result = mangle_name(mname, raw_desc) if raw_desc else mname
     # 重载后的名字若与 Rust 原生名字冲突也需重命名
     return _JAVA_RUST_RENAME.get(result, result)
 

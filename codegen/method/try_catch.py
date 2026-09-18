@@ -23,6 +23,9 @@ class CatchClause:
     # catch_type binary names；空列表 = catch-any（finally / monitor 兜底）
     catch_types: list = field(default_factory=list)
     is_catch_any: bool = False
+    # catch 体的文本终点（异常变量的 LocalVariableTable 作用域终点）；无调试信息时为 None。
+    # 只决定「catch 之后的代码」的词法位置（两种位置语义等价），不参与异常语义
+    body_end_pc: Optional[int] = None
 
 
 @dataclass
@@ -43,9 +46,10 @@ class TryGroup:
 class TryCatchPlan:
     """一个方法的全部 try 区域；结构化器按指令下标查询。"""
 
-    def __init__(self, exception_table: list, instrs: list):
+    def __init__(self, exception_table: list, instrs: list, local_vars: list | None = None):
         self._instrs = instrs
         self._off2idx = {ins.offset: idx for idx, ins in enumerate(instrs)}
+        self._local_vars = local_vars or []
         self.groups: list[TryGroup] = self._build(exception_table or [])
         self._by_start: dict[int, list[TryGroup]] = {}
         for g in self.groups:
@@ -64,6 +68,10 @@ class TryCatchPlan:
                 # 处理器保护自身（finally / monitorexit 的重试条目）：
                 # 该语义由 Rust 侧的作用域释放承担，不构成 try 区域
                 continue
+            if end_pc > handler_pc:
+                # javac 的 finally 区间会越过处理器入口（覆盖 catch-any 处理器开头的 astore）：
+                # 越过入口的部分同样是「处理器保护自身」，受保护区间截断到处理器入口
+                end_pc = handler_pc
             h = by_handler.get(handler_pc)
             if h is None:
                 h = by_handler[handler_pc] = {'ranges': set(), 'types': [], 'any': False}
@@ -89,7 +97,8 @@ class TryCatchPlan:
                 groups.append(g)
             g.clauses.append(CatchClause(
                 handler_pc=handler_pc, handler_idx=handler_idx,
-                catch_types=list(h['types']), is_catch_any=h['any']))
+                catch_types=list(h['types']), is_catch_any=h['any'],
+                body_end_pc=self._catch_body_end(handler_idx)))
 
         result = []
         for g in groups:
@@ -102,6 +111,23 @@ class TryCatchPlan:
                 continue
             result.append(g)
         return result
+
+    def _catch_body_end(self, handler_idx: int) -> Optional[int]:
+        """处理器首条 astore 的目标槽 → 该异常变量的作用域终点（必须是指令边界）。"""
+        first = self._instrs[handler_idx]
+        if not first.opcode.startswith('astore') or handler_idx + 1 >= len(self._instrs):
+            return None
+        op = first.opcode
+        slot = int(op.split('_')[-1]) if '_' in op else int((first.operand or '0').strip())
+        scope_start = self._instrs[handler_idx + 1].offset
+        for lv_slot, lv_start, lv_len, *_rest in self._local_vars:
+            if lv_slot == slot and lv_start == scope_start:
+                end = lv_start + lv_len
+                return end if end in self._off2idx else None
+        return None
+
+    def catch_body_ends(self) -> list:
+        return sorted({c.body_end_pc for g in self.groups for c in g.clauses if c.body_end_pc is not None})
 
     @staticmethod
     def _merge_ranges(ranges) -> tuple:

@@ -8,8 +8,8 @@ from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
 from ..constants import safe_ident as _safe_field
 from .coerce import (
     parse_method_ref,
-    _mangle_if_overloaded, _resolve_bridge_target,
-    UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES, _coerce_to_object,
+    _mangle_if_overloaded, _resolve_bridge_target, _signature_polymorphic_descriptor,
+    UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
     _rust_type_to_binary, _get_all_subtypes_ordered,
     _find_method_super_prefix_for_type, _super_prefix_to_expr,
@@ -44,40 +44,41 @@ def _declaring_interface(iface_ci, mname: str, descriptor: str, registry: dict) 
     return ''
 
 
-def _abstract_interface_member(recv_ci, mname: str, descriptor: str, registry: dict) -> str:
-    """抽象类接收者调用的方法在其类链上没有任何声明、且其实现的接口闭包里只有抽象声明
-    （`this.tryAdvance(Consumer)`：方法由具体子类各自实现）→ 返回类直接实现链上、
-    能到达该声明的接口 binary name；接口闭包里存在 default 实现或类链上有声明 → ''。"""
-    if recv_ci is None or recv_ci.is_interface or not recv_ci.is_abstract:
-        return ''
-    if _resolve_method_owner(recv_ci.name, mname, registry, descriptor=descriptor)[0]:
-        return ''
-    if _resolve_bridge_target(recv_ci, mname, descriptor, registry) is not None:
-        return ''
-    direct: list[str] = []
-    cur, seen_cls = recv_ci, set()
-    while cur is not None and cur.name not in seen_cls:
-        seen_cls.add(cur.name)
-        direct.extend(i for i in (cur.interfaces or []) if i in registry)
-        cur = registry.get(cur.super_class) if cur.super_class else None
-    via = ''
-    queue, seen = [(i, i) for i in direct], set()
-    while queue:
-        iface, root = queue.pop(0)
-        if iface in seen:
-            continue
-        seen.add(iface)
-        for m in registry[iface].methods:
-            if (m.name == mname and m.descriptor == descriptor and not m.is_static
-                    and not m.is_synthetic):
-                if not m.is_abstract:
-                    return ''
-                via = via or root
-        queue.extend((i, root) for i in (registry[iface].interfaces or []) if i in registry)
-    return via
+def _gen_signature_polymorphic(sim: StackSim, comment: str, decl_desc: str, class_name: str,
+                               registry: dict | None) -> None:
+    """签名多态调用（`mh.invokeExact(a, b)` / `VALUE.compareAndSet(this, e, n)`）：
+    调用点实参按 Java varargs 语义装入 Object[]，再按声明描述符走常规虚调用；
+    声明返回根类而调用点要求具体类型时，结果按调用点返回类型转换。"""
+    _cls, _mname, call_params, call_ret = parse_method_ref(comment)
+    boxed: list[str] = []
+    for _ in call_params:
+        a_expr, a_ty = sim.pop()
+        boxed.insert(0, _coerce_arg(render_expr(a_expr), a_ty, 'Object', render_type(a_ty), sim, registry))
+    arr = sim.fresh()
+    sim.emit(RawStmt(f"let mut {arr}: JArray<Object> = JArray::<Object>::new({len(boxed)}i32);"))
+    for i, b in enumerate(boxed):
+        sim.emit(RawStmt(f"{arr}.set({i}i32, {b})?;"))
+    sim.push(Var(arr), RsNamed('JArray<Object>'))
+    decl_comment = comment[:comment.index(':(') + 1] + decl_desc
+    _gen_invokevirtual(sim, decl_comment, class_name, registry)
+    decl_ret = decl_desc[decl_desc.index(')') + 1:]
+    if call_ret == 'V' and decl_ret != 'V' and sim.stack:
+        sim.pop()  # 调用点丢弃结果（调用语句已落地为 let 绑定）
+    elif call_ret != decl_ret and sim.stack:
+        r_expr, r_ty = sim.pop()
+        want = jvm_to_rust(call_ret, registry)
+        have = render_type(r_ty)
+        if want != have:
+            r_expr = RawExpr(_coerce_arg(render_expr(r_expr), r_ty, want, have, sim, registry))
+            r_ty = RsNamed(want)
+        sim.push(r_expr, r_ty)
 
 
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
+    _poly_desc = _signature_polymorphic_descriptor(comment, registry)
+    if _poly_desc is not None:
+        _gen_signature_polymorphic(sim, comment, _poly_desc, class_name, registry)
+        return
     cls, mname, params, ret = parse_method_ref(comment)
     # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
     # 解析泛型实参以建立 callee 类型参数 → 接收者实参的映射（如 HashMap<E,Object> → K=E）
@@ -93,28 +94,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         # 上界类的 wrapper 上 → 接收者换成上界类型视图（与 getfield/putfield 同规则），
         # 之后的签名查找、实参映射、分派均按上界类型进行。无类上界时保持原样。
         _rv_e, _rv_t = sim.stack[-(_recv_stack_idx + 1)]
-        _bv_e, _bv_t = type_var_receiver_bound_view(sim, _rv_e, _rv_t, class_name, registry)
+        _bv_e, _bv_t = type_var_receiver_bound_view(sim, _rv_e, _rv_t)
         if _bv_t is not _rv_t:
             sim.stack[-(_recv_stack_idx + 1)] = (_bv_e, _bv_t)
         _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
-        # 抽象类接收者上只由接口抽象声明的方法（类的 vtable 里没有该成员，实现位于具体子类）
-        # → 与 invokeinterface 同路径：签名按声明接口解析，接收者按对象标识上转后经接口载体分派
-        _recv_base_ai = _recv_ty.split('<')[0].strip()
-        if (registry and _recv_base_ai not in ('Object', '()')
-                and _recv_base_ai not in _JAVA_RUNTIME_SHORT_NAMES):
-            _recv_bin_ai = _rust_type_to_binary(_recv_base_ai, registry)
-            _via_iface = _abstract_interface_member(
-                registry.get(_recv_bin_ai) if _recv_bin_ai else None,
-                mname, f"({''.join(params)}){ret}", registry)
-            if _via_iface:
-                _rv_e2, _rv_t2 = sim.stack[-(_recv_stack_idx + 1)]
-                _rv_s2 = render_expr(_rv_e2)
-                _rv_boxed = (_coerce_to_object('Clone::clone(this)', _recv_ty, registry,
-                                               sim.class_type_params, clone=False)
-                             if _rv_s2 == 'this' else
-                             _coerce_to_object(_rv_s2, _recv_ty, registry, sim.class_type_params))
-                sim.stack[-(_recv_stack_idx + 1)] = (RawExpr(_rv_boxed), RsNamed('Object'))
-                cls, _recv_ty, _recv_is_this = short_cls(_via_iface), 'Object', False
         _recv_targ_map = receiver_type_arg_map(_recv_ty, cls, registry)
     sig_params_v = _lookup_method_sig_params(
         cls, mname, params, ret, registry, sim.class_type_params,
@@ -135,6 +118,19 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     obj_expr, obj_ty_node = sim.pop()
     obj_e = render_expr(obj_expr)
     obj_ty = render_type(obj_ty_node)
+
+    # `new Foo<>(..).m()`：构造结果直接作接收者。接收者位置不提供任何类型推断上下文，
+    # 构造器 turbofish 里待推断的 `_` 永远无解（E0283）→ 按擦除语义落为 Object。
+    # 已绑定到局部变量的构造结果不在此列（后续赋值 / 传参仍可提供推断）。
+    import re as _re_infer
+    _infer_m = _re_infer.match(r'^(\w+)<(_(?:, _)*)>$', obj_ty)
+    if _infer_m and obj_e.startswith(f"{_infer_m.group(1)}::<{_infer_m.group(2)}>::"):
+        _erased_args = ', '.join('Object' for _ in _infer_m.group(2).split(', '))
+        obj_e = (f"{_infer_m.group(1)}::<{_erased_args}>::"
+                 + obj_e[len(f"{_infer_m.group(1)}::<{_infer_m.group(2)}>::"):])
+        obj_ty = f"{_infer_m.group(1)}<{_erased_args}>"
+        obj_expr = RawExpr(obj_e)
+        obj_ty_node = RsNamed(obj_ty)
 
     # Fix 16：泛型参数接收者（如 k.equals(pk) 中 k: K）——inherent 方法不在
     # 类型参数上可见（E0599）。装箱为 Object 后：Object 自身的方法
@@ -354,7 +350,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                             sub_rust = sub_rust + '<' + ', '.join(['Object'] * len(_tp_g)) + '>'
                 # Fix 12b：重载 mangle 按声明类（owner）查 —— 子类继承的重载
                 # 方法在子类方法表中查不到同名重载，按子类表 mangle 会得到
-                # 错误的方法名（如 collect 声明处 mangle 为 collect_collec，
+                # 错误的方法名（如 collect 声明处 mangle 为 collect_collector，
                 # 子类分支按子类表查成 collect）。owner 沿父类链解析不到时
                 # （接口 default 方法由 class_writer 注入实现类 impl 块，
                 # 父类链上查不到）保留子类名。
@@ -366,7 +362,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 _bridge_desc = ''
                 if not _owner_bin and registry and registry.get(sub_bin) is not None:
                     _bridged = _resolve_bridge_target(registry[sub_bin], mname, jvm_desc, registry)
-                    if _bridged is not None:
+                    if _bridged is not None and not _bridged[0].is_interface:
                         _owner_bin, _bridge_desc = _bridged[0].name, _bridged[1]
                 if _root_declared and not _owner_bin:
                     continue
@@ -570,8 +566,14 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     # 方法继承自祖先时登记继承成员需求，由接收者类的 java_class! 块声明该成员、
     # 宏展开为 wrapper 转发方法，vtable 分派不出现在方法体里。
     _recv = obj_e
-    if not (sim.in_vtable_body and obj_base == _cur_class_short and obj_e in ('this', 'self')):
-        _obj_jvm = _rust_type_to_binary(obj_base, registry) if registry else None
+    # this 接收者同样登记：调用祖先声明的方法、或抽象类调用自身未声明的接口抽象方法
+    # （`this.getLong(f)`）时，由本类 java_class! 块声明转发成员（后者经接口载体分派），
+    # 调用点保持 `this.m(args)`。this 的类取当前类 binary name（短名可能跨包重名）。
+    _this_recv_bin = (class_name if (sim.in_vtable_body and obj_base == _cur_class_short
+                                     and obj_e in ('this', 'self')
+                                     and registry and class_name in registry) else None)
+    if registry:
+        _obj_jvm = _this_recv_bin or _rust_type_to_binary(obj_base, registry)
         _ci_recv = registry.get(_obj_jvm) if _obj_jvm else None
         if _ci_recv is not None:
             _param_desc = '(' + ''.join(params) + ')'
@@ -579,6 +581,16 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 not m.is_synthetic and m.name == mname and m.descriptor.startswith(_param_desc)
                 for m in _ci_recv.methods
             )
+            if _declared_here:
+                # 协变返回：调用描述符（接口 / 祖先视角的返回类型）命中的是 synthetic bridge，
+                # 生成的 Rust 方法是接收者类声明的真实方法 → 返回类型按真实方法记录
+                _real_m = next((m for m in _ci_recv.methods
+                                if not m.is_synthetic and m.name == mname
+                                and m.descriptor.startswith(_param_desc)), None)
+                if _real_m is not None and _real_m.descriptor != _param_desc + ret:
+                    ret = _real_m.descriptor[len(_param_desc):]
+                    rust_ret = jvm_to_rust(ret, registry)
+                    _sig_owner, _sig_recv_ty = _obj_jvm, obj_ty
             if not _declared_here:
                 _jvm_desc_v = _param_desc + ret
                 _owner_bin_v, _ = _resolve_method_owner(_obj_jvm, mname, registry, descriptor=_jvm_desc_v)
@@ -595,8 +607,25 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     _recv = f"Object::from_any(Clone::clone(&{obj_e}))"
                     _root_routed = True
                 else:
-                    # 超类链上无字节码声明：接口 default 方法（注入到实现它的类）
-                    _inherited_calls.request(_obj_jvm, mname, _param_desc)
+                    # 超类链上无字节码声明：
+                    #   · 调用描述符只命中 synthetic bridge → 按被桥接真实方法的参数登记；
+                    #   · 否则为接口方法（default 注入到实现类 / 抽象方法由接口载体分派）。
+                    _bridged_v = _resolve_bridge_target(_ci_recv, mname, _jvm_desc_v, registry)
+                    if _bridged_v is not None:
+                        _param_desc = _bridged_v[1].split(')')[0] + ')'
+                        if not _bridged_v[0].is_interface:
+                            # 返回类型 / 签名查找按被桥接的真实方法（与生成的 Rust 方法同源）
+                            _, _, params, ret = parse_method_ref(f"{mname}:{_bridged_v[1]}")
+                            rust_ret = jvm_to_rust(ret, registry)
+                            _sig_owner = _bridged_v[0].name
+                        _bridge_owner_short = _bridged_v[0].name.rsplit('/', 1)[-1].replace('$', '_')
+                        if _bridged_v[0].name != _obj_jvm and not _bridged_v[0].is_interface:
+                            _owner_args_v = _ancestor_vtable_args_by_short(
+                                _ci_recv, obj_ty, registry).get(_bridge_owner_short, '')
+                            _sig_owner = _bridged_v[0].name
+                            _sig_recv_ty = _bridge_owner_short + _owner_args_v
+                    if _bridged_v is None or _bridged_v[0].name != _obj_jvm:
+                        _inherited_calls.request(_obj_jvm, mname, _param_desc)
 
     def _build_call(mname_r, recv, args):
         return f"{recv}.{mname_r}({args})"
