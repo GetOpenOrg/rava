@@ -94,6 +94,7 @@ class StackSim:
     def __init__(self, param_rust_types: list[RsType], is_static: bool, class_name: str,
                  local_names: dict[int, str] | None = None,
                  slot_hint_types: dict[int, RsType] | None = None,
+                 slot_hint_starts: dict[int, int] | None = None,
                  return_type: str = 'Object',
                  is_constructor: bool = False,
                  class_type_params: list[str] | None = None,
@@ -109,6 +110,8 @@ class StackSim:
         self.class_type_params: frozenset[str] = frozenset(class_type_params or [])
         self._loc_names  = local_names or {}     # slot → Java variable name
         self._hint_types = slot_hint_types or {}  # slot → precise RsType from LocalVariableTypeTable
+        self._hint_starts = slot_hint_starts or {}  # slot → LVTT start_pc（slot 复用检测）
+        self.current_offset: int                     = 0    # 当前正在处理的字节码偏移
         self._current_depth: int                     = 0
         self._slot_decl_depth: dict[int, int]        = {}  # slot → 首次声明时的嵌套深度
         self.underflow_occurred: bool                = False  # 记录是否发生过栈下溢
@@ -204,7 +207,16 @@ class StackSim:
         assert isinstance(ty, _TYPE_CLASSES), \
             f"store_local() requires RsType, got {type(ty)}: {ty!r}"
         # 用 LocalVariableTypeTable 提供的精确类型覆盖泛型擦除后的 Object 或裸类名
+        # 仅当当前字节码偏移 >= hint 的 start_pc 时才应用（防止 slot 复用导致
+        # 前一变量生命周期内错误套用后继变量的类型，如 for-each 迭代器 slot）
         hint = self._hint_types.get(slot)
+        if hint is not None:
+            hint_start = self._hint_starts.get(slot, 0)
+            # LVTT start_pc 指变量可读的首指令偏移，store 指令本身偏移 = start_pc - 指令大小
+            # （astore 最大 4 字节）。若 store 偏移远早于 start_pc（差值 > 4），
+            # 说明该 slot 在 hint 变量生命周期之前被复用（如 for-each 迭代器），不应用 hint。
+            if hint_start > 0 and self.current_offset < hint_start - 4:
+                hint = None
         # 记录原始栈类型：只有在栈类型为 Object 时才需要 downcast
         src_is_object = isinstance(ty, RsNamed) and ty.name == 'Object'
         if hint is not None:

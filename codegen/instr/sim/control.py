@@ -27,10 +27,20 @@ def sim_control(ins, sim, class_name, registry) -> bool:
     elif op == 'checkcast':
         # 更新栈顶类型为 cast 目标类型；若源类型为 Object，插入运行时 downcast
         if comment and sim.stack:
+            import re as _re_cast
             if comment.startswith('['):
                 cast_rust = jvm_to_rust(comment, registry)
             else:
                 cast_rust = jvm_to_rust(f'L{comment};', registry)
+            # 若 cast_rust 含 Object 类型参数（类型擦除产物），且当前类有相同数量的类型参数，
+            # 用当前类的类型参数替换（如 HashMap<K,V> 上下文里 HashMap_TreeNode<Object,Object> → <K,V>）
+            # 这比 _ 更精确：_ 在无类型标注的变量赋值中会引发 E0283，显式类型参数不会
+            if '<' in cast_rust and sim.class_type_params:
+                _obj_count = len(_re_cast.findall(r'\bObject\b', cast_rust))
+                _cur_params = sorted(sim.class_type_params)  # 按字母排序取稳定顺序
+                if _obj_count == len(_cur_params):
+                    _repl_iter = iter(_cur_params)
+                    cast_rust = _re_cast.sub(r'\bObject\b', lambda _m: next(_repl_iter), cast_rust)
             expr, src_ty = sim.pop()
             src_name = getattr(src_ty, 'name', str(src_ty))
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
@@ -40,7 +50,11 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                     # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode，E0282）：
                     # 经 Object::from_any 保留运行时值再 downcast 恢复子类型，
                     # 不能用 Default::default() 占位（会丢失接收者类型导致无法推断）
-                    expr = RawExpr(f"Object::from_any({render_expr(expr)}).downcast::<{cast_rust}>()")
+                    # 用 Clone::clone 避免 from_any(val) 消耗所有权导致后续 E0382
+                    _se = render_expr(expr)
+                    if not (_se.startswith('Clone::clone(') or _se.startswith('Default::')):
+                        _se = f"Clone::clone(&{_se})"
+                    expr = RawExpr(f"Object::from_any({_se}).downcast::<{cast_rust}>()")
                 else:
                     # 二次 checkcast（非 Object 源类型）：两种具体类型不兼容，用 Default::default() 占位
                     expr = RawExpr('Default::default()')

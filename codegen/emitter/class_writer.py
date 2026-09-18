@@ -158,6 +158,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 调用方通过全路径（crate::java::...::Class）引用，不用短名
     _PRELUDE_NEWTYPE_NAMES = {'JArray'}
 
+    # 简名 → 第一个导入路径 key，用于检测跨包同名冲突（E0252）
+    _seen_simples: dict[str, str] = {}
+
     def _add_precise_import(full_cls: str) -> None:
         """按 JVM binary name 添加精确 use 语句，跳过自身类型和重复项。"""
         _parts = full_cls.split('/')
@@ -170,7 +173,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         _key = f"{_rust_pkg}::{_simple}"
         if _key in _seen_imports:
             return
+        # 同名已被不同路径导入（跨包同名冲突），跳过以避免 E0252
+        if _simple in _seen_simples and _seen_simples[_simple] != _key:
+            return
         _seen_imports.add(_key)
+        _seen_simples[_simple] = _key
         if _simple in _PRELUDE_NEWTYPE_NAMES:
             # 名称与 prelude newtype 冲突，跳过 use 导入；调用方应使用全路径引用
             return
@@ -215,6 +222,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             if _sn.replace('$', '_') == _self_simple:
                 continue
             _matches = [p for p in _pkgs if f'{p}/{_sn}' in _referenced]
+            # 文件未引用此简名的任何变体，跳过（不生成无用 use）
+            if not _matches:
+                continue
             if len(_matches) == 1:
                 _chosen = _matches[0]
             elif _own_pkg_cm in _pkgs:
@@ -224,11 +234,18 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             else:
                 _java = [p for p in _pkgs if p.startswith('java/')]
                 _chosen = _java[0] if _java else _pkgs[0]
-            cross_imports.append(f"use {_pkg_to_use(_chosen)}::{_sn.replace('$', '_')};")
+            # 检查 _seen_imports 去重，以及简名冲突（_seen_simples）
+            _cm_rust_pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _chosen.split('/'))
+            _cm_sn = _sn.replace('$', '_')
+            _cm_key = f"{_cm_rust_pkg}::{_cm_sn}"
+            if _cm_key not in _seen_imports and (
+                    _cm_sn not in _seen_simples or _seen_simples[_cm_sn] == _cm_key):
+                _seen_imports.add(_cm_key)
+                _seen_simples[_cm_sn] = _cm_key
+                cross_imports.append(f"use {_pkg_to_use(_chosen)}::{_cm_sn};")
 
     # 被跳过包（如 jdk/）中的类型：按需精确导入
     if skipped_classes and _referenced:
-        _added_skipped: set[str] = set()
         for _full_cls in sorted(_referenced):
             _cls_parts = _full_cls.split('/')
             if len(_cls_parts) < 2:
@@ -237,11 +254,14 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 f'r#{p}' if p in _RUST_KEYWORDS else p for p in _cls_parts[:-1]
             )
             _simple = _cls_parts[-1].replace('$', '_')
+            _sk_key = f"{_rust_pkg}::{_simple}"
             if (f"{_rust_pkg}::{_simple}" in skipped_classes
                     and _simple != _self_simple
-                    and _simple not in _added_skipped):
+                    and _sk_key not in _seen_imports
+                    and (_simple not in _seen_simples or _seen_simples[_simple] == _sk_key)):
                 cross_imports.append(f"use {_prefix}::{_rust_pkg}::{_simple};")
-                _added_skipped.add(_simple)
+                _seen_imports.add(_sk_key)
+                _seen_simples[_simple] = _sk_key
 
     # VTable trait 导入：沿超类链为每个祖先类导入 Ancestor__VTable。
     # java_class! 宏生成 impl Ancestor__VTable for Self__inner，需要该 trait 在作用域内。
@@ -361,6 +381,22 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 解析类级泛型参数（如 ArrayList<E>、HashMap<K,V>）
     class_type_params = parse_class_type_params(ci.generic_signature) if ci.generic_signature else []
 
+    # 内部类 this$0 字段类型参数继承：
+    # Java 内部类没有自己的 generic_signature，但通过 this$0 访问外部类的类型参数。
+    # 例如 ArrayList$Itr 没有 <E>，但 this$0: ArrayList → 应继承 E，变为 ArrayList_Itr<E>。
+    if not class_type_params and registry:
+        import re as _re_outer
+        for _f in inst_fields:
+            if _re_outer.match(r'^this\$\d+$', _f.name):
+                _om = _re_outer.match(r'L([^;]+);', _f.descriptor)
+                if _om:
+                    _outer_ci = registry.get(_om.group(1))
+                    if _outer_ci and _outer_ci.generic_signature:
+                        _outer_tp = parse_class_type_params(_outer_ci.generic_signature)
+                        if _outer_tp:
+                            class_type_params = list(_outer_tp)
+                break
+
     # 构建泛型参数字符串（用于 struct 和 impl 头）
     if class_type_params:
         type_params_str = ', '.join(class_type_params)
@@ -447,6 +483,17 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     def _resolve_field_rust(f) -> str:
         """字段的 Rust 类型：优先字段级 generic_signature（TE; → E），回退裸描述符。
         generic_signature 解析为 Object，或引用了不存在的类型时，用描述符推断。"""
+        # 内部类外部引用字段（this$N）：用外部类 + 继承的类型参数（如 ArrayList<E>）
+        import re as _re_f
+        if _re_f.match(r'^this\$\d+$', f.name) and class_type_params and registry:
+            _fm = _re_f.match(r'L([^;]+);', f.descriptor)
+            if _fm:
+                _outer_ci2 = registry.get(_fm.group(1))
+                if _outer_ci2 and _outer_ci2.generic_signature:
+                    _outer_tp2 = parse_class_type_params(_outer_ci2.generic_signature)
+                    if _outer_tp2 and len(_outer_tp2) <= len(class_type_params):
+                        _outer_short2 = _fm.group(1).rsplit('/', 1)[-1].replace('$', '_')
+                        return _outer_short2 + '<' + ', '.join(class_type_params[:len(_outer_tp2)]) + '>'
         gen_rust = (parse_field_type(f.generic_signature, class_type_params, registry)
                     if f.generic_signature else '')
         desc_rust = jvm_to_rust(f.descriptor, registry)
@@ -985,6 +1032,43 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             parts.append(_indent(line) if line else '')
         parts.append("}")
         parts.append('')
+
+    # 扫描方法体中使用的 VTable trait（UFCS 调用 XxxVTable::method(...)），
+    # 为未导入的 VTable 类型补充 use 语句（避免 E0433）。
+    # 不盲目为所有类添加 __VTable（手写类如 Object/String 不一定有），
+    # 而是按实际生成代码中出现的名称按需导入。
+    import re as _re_vt2
+    _all_body_text2 = '\n'.join(method_blocks) if method_blocks else ''
+    _used_vtables = set(_re_vt2.findall(r'\b(\w+__VTable)\b', _all_body_text2))
+    if _used_vtables:
+        _vt_simple_to_pkg: dict[str, str] = {}
+        for _vt_ci_line in cross_imports:
+            _vt_m = _re_vt2.match(r'use (.+)::(\w+);$', _vt_ci_line.strip())
+            if _vt_m:
+                _vt_simple_to_pkg[_vt_m.group(2)] = _vt_m.group(1)
+        _extra_vt_imports: list[str] = []
+        for _vt_name in sorted(_used_vtables):
+            _already = any(_vt_name + ';' in _ci or _vt_name + '::' in _ci
+                           for _ci in cross_imports)
+            if _already:
+                continue
+            _base_name = _vt_name[:-len('__VTable')]
+            _vt_pkg = _vt_simple_to_pkg.get(_base_name)
+            # 若 base 类未在 cross_imports 中（如 Writer 在 StreamEncoder 的继承链里但未直接引用），
+            # 从 registry 查路径
+            if _vt_pkg is None and registry:
+                _norm = _base_name.replace('_', '$')
+                for _rk in registry:
+                    _rshort = _rk.rsplit('/', 1)[-1]
+                    if _rshort.replace('$', '_') == _base_name or _rshort == _norm:
+                        _rparts = _rk.split('/')
+                        if len(_rparts) >= 2:
+                            _rpkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _rparts[:-1])
+                            _vt_pkg = f"{_prefix}::{_rpkg}"
+                        break
+            if _vt_pkg is not None:
+                _extra_vt_imports.append(f"use {_vt_pkg}::{_vt_name};")
+        parts.extend(_extra_vt_imports)
 
     # BINARY_NAME / ObjectVTable / Into<Object> / From<Object> / Debug 全部由
     # java_class! 宏在编译期展开（方案 §11 职责边界总表）。

@@ -158,8 +158,9 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                   and ftype not in ('Object', '()', val_ty_name)
                   and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
                 # vtable 架构：子类型赋给祖先类型字段，用 From trait（.into()）
+                # 先 Clone::clone(&val) 再 .into()，避免 into() 转移所有权后变量失效（E0382）
                 chain = _into_super_chain(val_ty_name.split('<')[0], ftype.split('<')[0], registry)
-                val_str = f"{val_str_raw}{chain}"
+                val_str = f"Clone::clone(&{val_str_raw}){chain}"
             else:
                 val_str = _coerce_value(val_str_raw, val_ty, ftype)
             # 引用类型赋值时加 Clone::clone()，避免 E0382（move after use）

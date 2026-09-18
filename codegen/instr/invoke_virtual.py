@@ -196,6 +196,32 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 # 错误，该分支不可编译 → 丢弃
                 if sub_rust in _PRIMITIVE_RUST_TYPES:
                     continue
+                # 泛型类（如 ArrayList_Itr<E>）：jvm_to_rust 返回裸名，downcast_ref
+                # 需要完整泛型实参，用 `_` 通配符让 Rust 自动推断（E0107 防护）。
+                # 内部类（ArrayList_Itr）通过 this$0 继承外部类类型参数，
+                # 不在自身 generic_signature 中声明，需额外检测。
+                if '<' not in sub_rust and registry:
+                    _sub_ci_g = registry.get(sub_bin)
+                    if _sub_ci_g:
+                        import re as _re_icg
+                        _tp_g = _parse_class_type_params(_sub_ci_g.generic_signature) if _sub_ci_g.generic_signature else []
+                        if not _tp_g:
+                            # 内部类：从 this$0 外部类继承类型参数
+                            for _fg in _sub_ci_g.fields:
+                                if _re_icg.match(r'^this\$\d+$', _fg.name):
+                                    _om_g = _re_icg.match(r'L([^;]+);', _fg.descriptor)
+                                    if _om_g:
+                                        _outer_g = registry.get(_om_g.group(1))
+                                        if _outer_g and _outer_g.generic_signature:
+                                            _tp_g = _parse_class_type_params(_outer_g.generic_signature)
+                                    break
+                        if _tp_g:
+                            # 使用 Object 作为类型实参（Java 类型擦除语义）：
+                            # - 内部类（ArrayList_Itr）的 TypeId 与外部类类型参数绑定
+                            # - downcast_ref::<ArrayList_Itr<_>>() 无法推断 `_`（E0283）
+                            # - 使用 Object 使代码可编译；iterator() 存储 ArrayList_Itr<E>
+                            #   时已做 Object::from_any 擦除，运行时 TypeId 匹配 Object 参数形式
+                            sub_rust = sub_rust + '<' + ', '.join(['Object'] * len(_tp_g)) + '>'
                 # Fix 12b：重载 mangle 按声明类（owner）查 —— 子类继承的重载
                 # 方法在子类方法表中查不到同名重载，按子类表 mangle 会得到
                 # 错误的方法名（如 collect 声明处 mangle 为 collect_collec，
@@ -235,31 +261,112 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                         if _bm17 is not None:
                             _bp17 = parse_descriptor_params(_bm17.descriptor)
                             if len(_bp17) == len(args) and _bp17 != list(params):
+                                # 从 generic_signature 提取参数类型（若有）
+                                # 格式：(TE;Ljava/lang/String;...)RetType
+                                _gen_params17: list[str] = []
+                                if _bm17.generic_signature:
+                                    import re as _re_gs
+                                    _gs_inner = _re_gs.match(r'\(([^)]*)\)', _bm17.generic_signature)
+                                    if _gs_inner:
+                                        _gp_str = _gs_inner.group(1)
+                                        _gp_pos = 0
+                                        while _gp_pos < len(_gp_str):
+                                            _c = _gp_str[_gp_pos]
+                                            if _c == 'T':
+                                                _te = _gp_str.index(';', _gp_pos)
+                                                _gen_params17.append(_gp_str[_gp_pos:_te+1])
+                                                _gp_pos = _te + 1
+                                            elif _c == 'L':
+                                                _te = _gp_str.index(';', _gp_pos)
+                                                _gen_params17.append(_gp_str[_gp_pos:_te+1])
+                                                _gp_pos = _te + 1
+                                            elif _c in 'BCDFIJSZ':
+                                                _gen_params17.append(_c)
+                                                _gp_pos += 1
+                                            elif _c == '[':
+                                                _gp_pos += 1
+                                                # 跳过数组维度
+                                            else:
+                                                _gp_pos += 1
                                 _bparts17 = []
                                 for _i17, _bd17 in enumerate(_bp17):
                                     _bt17 = jvm_to_rust(_bd17, registry)
                                     _shared17 = jvm_to_rust(params[_i17], registry)
+                                    # 若 generic_signature 参数是类型变量（TE; 格式），
+                                    # 说明是类型擦除产物（如 Enum.compareTo(E) → (Enum)），
+                                    # 不做 downcast：实际参数类型是类型变量对应的运行时类型
+                                    _is_type_var17 = (
+                                        _i17 < len(_gen_params17)
+                                        and _gen_params17[_i17].startswith('T')
+                                        and _gen_params17[_i17].endswith(';')
+                                    )
                                     if (_bt17 not in ('Object', '()')
-                                            and _shared17 == 'Object'):
+                                            and _shared17 == 'Object'
+                                            and not _is_type_var17):
                                         _bparts17.append(
                                             f"({args[_i17]}).downcast::<{_bt17}>()")
                                     else:
                                         _bparts17.append(args[_i17])
                                 _barg_str = ', '.join(_bparts17)
                 # T76：方法定义在父类（如 getKey 定义在 HashMap_Node，TreeNode
-                # 经继承获得）时，dispatch 分支同样需要 _super 链路由，
-                # 否则 _d.getKey() E0599（no method in &HashMap_TreeNode）
-                _d_recv = '_d'
+                # 经继承获得）时，dispatch 分支需路由到父类方法。
+                # 新架构（java_class! 宏）wrapper 不生成 __super() 方法，
+                # 改为通过 vtable supertrait UFCS 调用：OwnerVTable::method(&*_d.vtable, args)
                 _sub_pfx = _find_method_super_prefix_for_type(
                     sub_rust.split('<')[0], mname, registry,
                     descriptor=f"({''.join(params)}){ret}",
                 )
-                if _sub_pfx:
+                if _sub_pfx and _owner_bin:
+                    # 方法在祖先类 _owner_bin 中声明，使用 <dyn OwnerVTable>::method(&*_d.vtable, args)
+                    # 形式消歧义（避免 E0034）且满足 Rust 2021 trait object UFCS 语法。
+                    # 不含 `dyn` 的裸 UFCS（TypeName__VTable::method(...)）是 E0782。
+                    _owner_short_v = _owner_bin.rsplit('/', 1)[-1].replace('$', '_')
+                    _sep_v = ', ' if _barg_str else ''
+                    # 提取 sub_rust 的类型实参（如 LinkedHashMap<Object, Object> → 'Object, Object'）
+                    import re as _re_ta
+                    _ta_m = _re_ta.search(r'<(.+)>$', sub_rust)
+                    _sub_type_args = _ta_m.group(1) if _ta_m else ''
+                    if '_' in _sub_type_args:
+                        # 含通配符 _ 时无法用于 dyn Trait 位置，直接调用 vtable
+                        _call_expr = f"_d.vtable.{sub_mname_r}({_barg_str})"
+                    else:
+                        # 检查 owner 是否泛型，并从 sub_rust 提取匹配的类型实参
+                        _owner_type_args_str = ''
+                        if _sub_type_args and registry:
+                            _owner_ci_v = registry.get(_owner_bin)
+                            if _owner_ci_v:
+                                _owner_tps = (
+                                    _parse_class_type_params(_owner_ci_v.generic_signature)
+                                    if _owner_ci_v.generic_signature else []
+                                )
+                                if not _owner_tps:
+                                    # 内部类：generic_signature 为 None，从 this$0 外部类继承
+                                    import re as _re_inner_tp
+                                    for _fi_tp in _owner_ci_v.fields:
+                                        if _re_inner_tp.match(r'^this\$\d+$', _fi_tp.name):
+                                            _om_tp = _re_inner_tp.match(r'L([^;]+);', _fi_tp.descriptor)
+                                            if _om_tp:
+                                                _outer_ci_v = registry.get(_om_tp.group(1))
+                                                if _outer_ci_v and _outer_ci_v.generic_signature:
+                                                    _owner_tps = _parse_class_type_params(
+                                                        _outer_ci_v.generic_signature)
+                                            break
+                                if _owner_tps:
+                                    _sub_args_list = [a.strip() for a in _sub_type_args.split(',')]
+                                    if len(_sub_args_list) >= len(_owner_tps):
+                                        _owner_type_args_str = '<' + ', '.join(_sub_args_list[:len(_owner_tps)]) + '>'
+                        _call_expr = (f"<dyn {_owner_short_v}__VTable{_owner_type_args_str}>::{sub_mname_r}"
+                                      f"(&*_d.vtable{_sep_v}{_barg_str})")
+                elif _sub_pfx:
+                    # fallback（owner 未知）：保留旧的 __super() 路由
                     _d_recv = _super_prefix_to_expr('_d', _sub_pfx)
-                if rust_ret == '()':
-                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_d_recv}.{sub_mname_r}({_barg_str})?; }}")
+                    _call_expr = f"{_d_recv}.{sub_mname_r}({_barg_str})"
                 else:
-                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_d_recv}.{sub_mname_r}({_barg_str})? }}")
+                    _call_expr = f"_d.{sub_mname_r}({_barg_str})"
+                if rust_ret == '()':
+                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_call_expr}?; }}")
+                else:
+                    branches.append(f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_call_expr}? }}")
             branches.append(_closure_branch)
             if rust_ret == '()':
                 dispatch_code = ' else '.join(branches)
@@ -290,7 +397,7 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
         if _ci_recv is not None:
             _param_desc = '(' + ''.join(params) + ')' if params is not None else None
             _declared_here = any(
-                m.name == mname and (_param_desc is None or m.descriptor.startswith(_param_desc))
+                not m.is_synthetic and m.name == mname and (_param_desc is None or m.descriptor.startswith(_param_desc))
                 for m in _ci_recv.methods
             )
             _recv = obj_e if _declared_here else f"{obj_e}.vtable"

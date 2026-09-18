@@ -213,6 +213,40 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 #   3. 兜底：Object（擦除）
                 _ctor_tparams = _resolve_ctor_turbofish_args(
                     full_cls, params, arg_tys, class_name, sim, registry)
+                # 后处理：caller 的 class_type_params 为空（如 java/lang/Class 故意抹去
+                # <T>）导致 _coerce_arg 误将 Class_ReflectionData<Object> 包裹进
+                # Object::from_any。但 turbofish 已由 arg_tys 推出具体类型，多余的
+                # Object::from_any 包装会引发 E0308（Object ≠ Class_ReflectionData<Object>）。
+                # 若 turbofish 给出的 T 实参不是 Object/_, 则去掉对应参数的包裹。
+                if _ctor_tparams and registry:
+                    _ci_ctor2 = registry.get(full_cls)
+                    _cls_tp_list2 = (
+                        _parse_class_type_params(_ci_ctor2.generic_signature)
+                        if _ci_ctor2 and _ci_ctor2.generic_signature else []
+                    )
+                    _raw_sp2: list | None = None
+                    if _ci_ctor2:
+                        _full_desc2 = '(' + ''.join(params) + ')V'
+                        for _m2 in _ci_ctor2.methods:
+                            if _m2.name == '<init>' and _m2.descriptor == _full_desc2 and _m2.generic_signature:
+                                _raw_sp2, _ = _parse_method_param_types(
+                                    _m2.generic_signature, _cls_tp_list2, registry)
+                                if _raw_sp2 and len(_raw_sp2) != len(params):
+                                    _raw_sp2 = None
+                                break
+                    if _raw_sp2:
+                        _tparam_to_turbofish_idx = {t: i for i, t in enumerate(_cls_tp_list2)}
+                        _OBJ_FROM_PREFIX = 'Object::from_any(Clone::clone(&'
+                        for _si2, _sp_t2 in enumerate(_raw_sp2):
+                            if (_sp_t2 in _tparam_to_turbofish_idx
+                                    and _si2 < len(args)
+                                    and args[_si2].startswith(_OBJ_FROM_PREFIX)
+                                    and args[_si2].endswith('))')):
+                                _tidx2 = _tparam_to_turbofish_idx[_sp_t2]
+                                if (_tidx2 < len(_ctor_tparams)
+                                        and _ctor_tparams[_tidx2] not in ('Object', '_')):
+                                    # 去掉 Object::from_any(Clone::clone(&x)) → Clone::clone(&x)
+                                    args[_si2] = args[_si2][len('Object::from_any('):-1]
                 type_params_str = ('<' + ', '.join(_ctor_tparams) + '>') if _ctor_tparams else ''
                 rust_ty = raw_cls + type_params_str
                 rust_ty_node = RsNamed(rust_ty)
@@ -343,6 +377,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
                             # found X<Object,Object>）。
                             turbofish = '::<' + ', '.join(_tparams) + '>'
                         else:
+                            # 跨类静态调用：用 Object 擦除（_引发E0283 —— 无上下文可推断K/V）
                             turbofish = '::<' + ', '.join('Object' for _ in _tparams) + '>'
         call = f"{cls}{turbofish}::{rust_mname}({', '.join(args)})"
         needs_q = True

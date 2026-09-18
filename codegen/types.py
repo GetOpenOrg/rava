@@ -44,7 +44,7 @@ class ParsedMethod:
     args_size:          int
     instrs:             list
     local_names:        dict = None
-    local_types:        dict = None   # slot → Signature string (LocalVariableTypeTable)
+    local_types:        dict = None   # slot → (Signature string, start_pc) from LocalVariableTypeTable
     access_flags:       int  = 0
     is_native:          bool = False
     is_abstract:        bool = False

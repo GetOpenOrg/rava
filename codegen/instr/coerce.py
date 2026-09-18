@@ -298,8 +298,11 @@ def _find_method_super_prefix(class_name: str, mname: str, registry: dict | None
         return ''
     # 当前类直接方法中是否有该方法名（排除 synthetic/bridge 桥接方法，它们不会生成 Rust 实现）
     real_methods = [m for m in ci.methods if not m.is_synthetic]
-    if descriptor:
-        if any(m.name == mname and m.descriptor == descriptor for m in real_methods):
+    # 描述符匹配：用参数部分前缀匹配（忽略返回类型）以处理协变返回的接口/实现描述符差异
+    # 例如：Appendable.append(CharSequence)Appendable vs Writer.append(CharSequence)Writer
+    _param_part = (descriptor.split(')')[0] + ')') if descriptor else ''
+    if _param_part:
+        if any(m.name == mname and m.descriptor.startswith(_param_part) for m in real_methods):
             return ''
     else:
         if any(m.name == mname for m in real_methods):
@@ -311,8 +314,8 @@ def _find_method_super_prefix(class_name: str, mname: str, registry: dict | None
         path_parts.append('_super')
         parent_ci = registry[sc]
         parent_real_methods = [m for m in parent_ci.methods if not m.is_synthetic]
-        if descriptor:
-            found = any(m.name == mname and m.descriptor == descriptor for m in parent_real_methods)
+        if _param_part:
+            found = any(m.name == mname and m.descriptor.startswith(_param_part) for m in parent_real_methods)
         else:
             found = any(m.name == mname for m in parent_real_methods)
         if found:
@@ -484,10 +487,13 @@ def _resolve_method_owner(class_binary: str, mname: str, registry: dict | None,
         return ('', -1)
     ci = registry.get(class_binary)
     lvl = 0
+    # 参数部分前缀匹配：忽略返回类型差异（协变返回，如接口 Appendable.append→Appendable
+    # vs 实现 Writer.append→Writer），排除 synthetic/bridge 方法
+    _param_part = (descriptor.split(')')[0] + ')') if descriptor else ''
     while ci is not None:
         real = [m for m in ci.methods if not m.is_synthetic]
-        if descriptor:
-            found = any(m.name == mname and m.descriptor == descriptor for m in real)
+        if _param_part:
+            found = any(m.name == mname and m.descriptor.startswith(_param_part) for m in real)
         else:
             found = any(m.name == mname for m in real)
         if found:

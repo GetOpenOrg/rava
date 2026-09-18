@@ -516,7 +516,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     # （LVTT 可能先于 LVT 出现），且同一 slot 可被多个不同作用域的变量复用
     # （如 resize 的 float ft 与 Node<K,V>[] newTab 共用 slot 6）。
     _lvt_entries: list[tuple[int, int, str, int]] = []    # (start_pc, length, name, slot)
-    _lvtt_entries: list[tuple[int, str, int]] = []        # (name, sig, slot)
+    _lvtt_entries: list[tuple[str, str, int, int]] = []   # (name, sig, slot, start_pc)
     for _ in range(sub_attr_count):
         sub_name_idx = r.u2()
         sub_len      = r.u4()
@@ -543,7 +543,7 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
                 name_idx  = lvtt_r.u2()
                 sig_idx   = lvtt_r.u2()
                 slot      = lvtt_r.u2()
-                _lvtt_entries.append((_utf8(pool, name_idx), _utf8(pool, sig_idx), slot))
+                _lvtt_entries.append((_utf8(pool, name_idx), _utf8(pool, sig_idx), slot, _start_pc))
         else:
             r.skip(sub_len)
 
@@ -561,9 +561,9 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     # LVTT：只要 LVTT 变量名与该 slot 的任一 LVT 名字一致即采用精确类型
     # （原逻辑仅比对唯一代表名，slot 复用时短作用域泛型变量的 hint 被误杀，
     # 如 newTab 的 [Ljava/util/HashMap$Node<TK;TV;>; → Vec<HashMap_Node<K,V>>）
-    for _lvtt_name, _sig, _slot in _lvtt_entries:
+    for _lvtt_name, _sig, _slot, _lvtt_start in _lvtt_entries:
         if _slot not in local_types and _lvtt_name in _slot_all_names.get(_slot, ()):
-            local_types[_slot] = _sig
+            local_types[_slot] = (_sig, _lvtt_start)
 
     instrs = _decode_bytecode(code_bytes, pool, bootstrap_methods or [])
 

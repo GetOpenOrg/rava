@@ -121,6 +121,33 @@ def gen_method_body(
     else:
         rust_param_types = [jvm_to_rust(t, registry) for t in param_types]
 
+    # 内部类构造器 this$N 参数类型修正：
+    # 内部类构造器第一个参数（外部类实例）由编译器注入，无 generic_signature。
+    # 当内部类继承了外部类的类型参数（如 ArrayList_Itr<E>），将擦除形态（ArrayList<Object>）
+    # 替换为带类型参数的版本（ArrayList<E>），使 __set_this_0(arg_0) 类型匹配。
+    if method.is_constructor and _class_tparams and registry:
+        import re as _re_ctor_ic
+        _outer_field_map: dict[str, str] = {}
+        for _f in class_info.fields:
+            if _f.is_static:
+                continue
+            if _re_ctor_ic.match(r'^this\$\d+$', _f.name):
+                _om = _re_ctor_ic.match(r'L([^;]+);', _f.descriptor)
+                if _om:
+                    _outer_ci = registry.get(_om.group(1))
+                    if _outer_ci and _outer_ci.generic_signature:
+                        _outer_tp = parse_class_type_params(_outer_ci.generic_signature)
+                        if _outer_tp and len(_outer_tp) <= len(_class_tparams):
+                            _outer_short = _om.group(1).rsplit('/', 1)[-1].replace('$', '_')
+                            _outer_field_map[_f.descriptor] = (
+                                _outer_short + '<' + ', '.join(_class_tparams[:len(_outer_tp)]) + '>'
+                            )
+        if _outer_field_map:
+            rust_param_types = [
+                _outer_field_map.get(param_types[k], rt) if k < len(param_types) else rt
+                for k, rt in enumerate(rust_param_types)
+            ]
+
     # 返回类型：如果泛型签名返回值是有效类型且非接口，优先使用；接口类型回退到描述符（Object）。
     if sig_ret_type and _sig_param_valid(sig_ret_type) and not _is_iface_type(sig_ret_type):
         rust_ret = sig_ret_type
@@ -192,15 +219,17 @@ def gen_method_body(
     # 从 LocalVariableTypeTable 预计算精确类型提示（slot → RsType）
     # 仅对引用类型（Object 类型擦除后变成 Object 的槽）有意义
     slot_hint_types: dict[int, RsNamed] = {}
+    slot_hint_starts: dict[int, int] = {}  # slot → LVTT start_pc，用于检测 slot 复用
     if method.local_types:
-        for _hint_slot, _hint_sig in method.local_types.items():
+        for _hint_slot, (_hint_sig, _hint_start) in method.local_types.items():
             rust_ty_name = parse_field_type(_hint_sig, _class_tparams, registry)
             if rust_ty_name and rust_ty_name != 'Object':
                 slot_hint_types[_hint_slot] = RsNamed(rust_ty_name)
+                slot_hint_starts[_hint_slot] = _hint_start
 
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
-                   slot_hint_types=slot_hint_types, return_type=rust_ret,
-                   is_constructor=is_ctor, class_type_params=_class_tparams,
+                   slot_hint_types=slot_hint_types, slot_hint_starts=slot_hint_starts,
+                   return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                    in_vtable_body=in_vtable_body)
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}
@@ -242,14 +271,15 @@ def gen_method_body(
         def make_sub() -> StackSim:
             s = StackSim(
                 rust_param_type_nodes, is_static, method.class_name, local_names,
-                slot_hint_types=slot_hint_types, return_type=rust_ret,
-                is_constructor=is_ctor, class_type_params=_class_tparams,
+                slot_hint_types=slot_hint_types, slot_hint_starts=slot_hint_starts,
+                return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                 in_vtable_body=cur_sim.in_vtable_body,
             )
             s.locals = dict(cur_sim.locals)
             s._slot_decl_depth = dict(cur_sim._slot_decl_depth)
             s.stack = list(cur_sim.stack)
             s._ctr = cur_sim._ctr  # 从父 sim 继承计数器，防止嵌套块生成与外层同名的临时变量
+            s.current_offset = cur_sim.current_offset
             return s
 
         def pop_fall_cond(op: str) -> str:
@@ -281,6 +311,7 @@ def gen_method_body(
                 lp = loop_map[i]
                 if lp.end_idx >= end:
                     # 循环超出当前块范围（不应发生），当普通指令处理
+                    cur_sim.current_offset = ins.offset
                     sim_instr(ins, cur_sim, method.class_name, registry=registry)
                     flush_here()
                     i += 1
@@ -506,6 +537,21 @@ def gen_method_body(
                             ev = f"Object::from_any(Clone::clone(&{ev}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             ev = f"({ev} as {ty_str})"
+                        elif (ty_str.split('<')[0] == ety_str.split('<')[0]
+                                and '<' in ty_str and '<' in ety_str
+                                and 'Object' in ty_str
+                                and any(t in ety_str for t in _class_tparams)):
+                            # then 侧含 Object（如 ReferenceQueue<Object>），else 侧含类型变量（如 ReferenceQueue<T>）
+                            # → then 侧用 Default::default()，合并类型取 else 侧（消除 E0308）
+                            tv = 'Default::default()'
+                            ty = ety; ty_str = ety_str
+                        elif (ty_str.split('<')[0] == ety_str.split('<')[0]
+                                and '<' in ty_str and '<' in ety_str
+                                and 'Object' in ety_str and 'Object' not in ty_str):
+                            # then 侧具体泛型（JArray<Class>），else 侧擦除形态（JArray<Object>）
+                            # → then 侧用 Default::default()，合并类型取 else 侧
+                            tv = 'Default::default()'
+                            ty = ety; ty_str = ety_str
                         # else: both are non-primitive structs, leave as-is and hope types match
                     # fall_cond 静态 false/true：跳过死代码臂
                     if fall_cond == 'false':
@@ -550,6 +596,20 @@ def gen_method_body(
                             else_val = f"Object::from_any(Clone::clone(&{else_val}))"
                         elif ty_str in _prim_types or ety_str in _prim_types:
                             else_val = f"({else_val} as {ty_str})"
+                        elif (ty_str.split('<')[0] == ety_str.split('<')[0]
+                                and '<' in ty_str and '<' in ety_str
+                                and 'Object' in ty_str
+                                and any(t in ety_str for t in _class_tparams)):
+                            # then 侧含 Object，else 侧含类型变量 → then 侧 Default::default()
+                            then_val = 'Default::default()'
+                            ty = ety; ty_str = ety_str
+                        elif (ty_str.split('<')[0] == ety_str.split('<')[0]
+                                and '<' in ty_str and '<' in ety_str
+                                and 'Object' in ety_str and 'Object' not in ty_str):
+                            # then 侧具体泛型（JArray<Class>），else 侧擦除形态（JArray<Object>）
+                            # → then 侧 Default::default()，合并类型取 else 侧（Java 类型安全近似）
+                            then_val = 'Default::default()'
+                            ty = ety; ty_str = ety_str
                     # 同步子 sim 的计数器，防止合并变量名与嵌套 if/else 的合并变量名碰撞
                     cur_sim._ctr = max(cur_sim._ctr, then_s._ctr, else_s._ctr)
                     merge_v = cur_sim.fresh('_merged')
@@ -670,6 +730,7 @@ def gen_method_body(
                 continue
 
             # ── 普通指令 ──────────────────────────────────────────────
+            cur_sim.current_offset = ins.offset
             sim_instr(ins, cur_sim, method.class_name, registry=registry)
             flush_here()
             i += 1
