@@ -8,7 +8,7 @@ from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
 from ..constants import safe_ident as _safe_field
 from .coerce import (
     parse_method_ref,
-    _mangle_if_overloaded, _resolve_bridge_target, _signature_polymorphic_descriptor,
+    _mangle_if_overloaded, _resolve_bridge_target,
     UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
     _rust_type_to_binary, _get_all_subtypes_ordered,
@@ -44,41 +44,7 @@ def _declaring_interface(iface_ci, mname: str, descriptor: str, registry: dict) 
     return ''
 
 
-def _gen_signature_polymorphic(sim: StackSim, comment: str, decl_desc: str, class_name: str,
-                               registry: dict | None) -> None:
-    """签名多态调用（`mh.invokeExact(a, b)` / `VALUE.compareAndSet(this, e, n)`）：
-    调用点实参按 Java varargs 语义装入 Object[]，再按声明描述符走常规虚调用；
-    声明返回根类而调用点要求具体类型时，结果按调用点返回类型转换。"""
-    _cls, _mname, call_params, call_ret = parse_method_ref(comment)
-    boxed: list[str] = []
-    for _ in call_params:
-        a_expr, a_ty = sim.pop()
-        boxed.insert(0, _coerce_arg(render_expr(a_expr), a_ty, 'Object', render_type(a_ty), sim, registry))
-    arr = sim.fresh()
-    sim.emit(RawStmt(f"let mut {arr}: JArray<Object> = JArray::<Object>::new({len(boxed)}i32);"))
-    for i, b in enumerate(boxed):
-        sim.emit(RawStmt(f"{arr}.set({i}i32, {b})?;"))
-    sim.push(Var(arr), RsNamed('JArray<Object>'))
-    decl_comment = comment[:comment.index(':(') + 1] + decl_desc
-    _gen_invokevirtual(sim, decl_comment, class_name, registry)
-    decl_ret = decl_desc[decl_desc.index(')') + 1:]
-    if call_ret == 'V' and decl_ret != 'V' and sim.stack:
-        sim.pop()  # 调用点丢弃结果（调用语句已落地为 let 绑定）
-    elif call_ret != decl_ret and sim.stack:
-        r_expr, r_ty = sim.pop()
-        want = jvm_to_rust(call_ret, registry)
-        have = render_type(r_ty)
-        if want != have:
-            r_expr = RawExpr(_coerce_arg(render_expr(r_expr), r_ty, want, have, sim, registry))
-            r_ty = RsNamed(want)
-        sim.push(r_expr, r_ty)
-
-
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
-    _poly_desc = _signature_polymorphic_descriptor(comment, registry)
-    if _poly_desc is not None:
-        _gen_signature_polymorphic(sim, comment, _poly_desc, class_name, registry)
-        return
     cls, mname, params, ret = parse_method_ref(comment)
     # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
     # 解析泛型实参以建立 callee 类型参数 → 接收者实参的映射（如 HashMap<E,Object> → K=E）
@@ -99,12 +65,29 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             sim.stack[-(_recv_stack_idx + 1)] = (_bv_e, _bv_t)
         _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
         _recv_targ_map = receiver_type_arg_map(_recv_ty, cls, registry)
-    sig_params_v = _lookup_method_sig_params(
-        cls, mname, params, ret, registry, sim.class_type_params,
-        receiver_targ_map=_recv_targ_map,
-        receiver_is_this=_recv_is_this,
-        receiver_type=_recv_ty,
-    )
+    sig_params_v = None
+    _recv_base_v = _recv_ty.split('<')[0].strip()
+    if registry and _recv_base_v and _recv_base_v != cls and not _recv_is_this:
+        # 接口方法经具体类接收者调用（`Map<Long,String> m = new HashMap<>(); m.put(k, v)`，
+        # 局部变量的 Rust 类型是构造出的类实例化）：Rust 侧解析到类自身的方法，
+        # 形参类型按类的声明签名 + 接收者实参确定，而非接口的擦除载体形态
+        _recv_cls_ci = registry.get(_rust_type_to_binary(_recv_base_v, registry) or '')
+        _call_cls_ci = registry.get(_rust_type_to_binary(cls, registry) or '')
+        if (_recv_cls_ci is not None and not _recv_cls_ci.is_interface
+                and _call_cls_ci is not None and _call_cls_ci.is_interface):
+            sig_params_v = _lookup_method_sig_params(
+                _recv_base_v, mname, params, ret, registry, sim.class_type_params,
+                receiver_targ_map=receiver_type_arg_map(_recv_ty, _recv_base_v, registry),
+                receiver_is_this=False,
+                receiver_type=_recv_ty,
+            )
+    if sig_params_v is None:
+        sig_params_v = _lookup_method_sig_params(
+            cls, mname, params, ret, registry, sim.class_type_params,
+            receiver_targ_map=_recv_targ_map,
+            receiver_is_this=_recv_is_this,
+            receiver_type=_recv_ty,
+        )
     args = []
     for _idx_v, param_jvm in enumerate(reversed(params)):
         e_expr, e_ty_node = sim.pop()

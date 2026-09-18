@@ -804,35 +804,6 @@ _JAVA_RUST_NAME_CONFLICTS = frozenset()
 _JAVA_RUST_RENAME: dict[str, str] = {}
 
 
-def _signature_polymorphic_descriptor(comment: str, registry: dict | None) -> str | None:
-    """调用目标是签名多态方法（JVMS §2.9.3）时返回其声明描述符，否则 None。
-
-    判定完全来自字节码：目标类中该名字只有一个方法，带 ACC_NATIVE + ACC_VARARGS，
-    唯一形参为根类数组。调用点描述符由 javac 按实参静态类型现场合成，与声明描述符不同；
-    声明侧只有 `m(Object[])` 一个入口，调用点须把实参装进 Object[]。"""
-    if not registry:
-        return None
-    cm = _BRIDGE_CALL_RE.match((comment or '').strip())
-    if cm is None:
-        return None
-    ci = registry.get(cm.group(1))
-    if ci is None:
-        return None
-    named = [m for m in ci.methods if m.name == cm.group(2)]
-    if len(named) != 1:
-        return None
-    decl = named[0]
-    # 0x0100 = ACC_NATIVE，0x0080 = ACC_VARARGS
-    if (decl.access_flags & 0x0180) != 0x0180 or decl.is_static:
-        return None
-    from ..constants import OBJECT_CLASS as _root
-    if not decl.descriptor.startswith(f'([L{_root};)'):
-        return None
-    if decl.descriptor == cm.group(3):
-        return None
-    return decl.descriptor
-
-
 _BRIDGE_CALL_RE = re.compile(r'^(?:Interface)?Method\s+([^.\s]+)\.([^:\s]+):(\(\S*\)\S+)')
 
 
