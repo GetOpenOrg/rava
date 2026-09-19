@@ -31,6 +31,7 @@ from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SL
 from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT
 from ..type_map import interface_signature_views as _interface_signature_views
 from ..instr.coerce import _parse_field_ref
+from ..instr.coerce import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 
 _safe_field_name = safe_ident
 
@@ -475,6 +476,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # 全量手写类（native_impl 文件含 pub struct）：codegen 跳过 struct 生成，改输出 pub use _impl::*
     _full_impl = ci.name in (full_impl_classes or set())
+    if not _full_impl:
+        # G-10 账本：本类方法由本轮生成（手写全量类的方法不走 class_writer，不参与断言）
+        LAMBDA_NAME_LEDGER.generated_classes.add(ci.name)
 
     # 接口在 Rust 层是与 Java 同名的载体类型（由 java_class 宏展开）：
     #   - 值：持有 Object 的接口引用，实例方法分派走 Object vtable（impl 块不含实例方法；
@@ -697,6 +701,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     overloaded_names: set[str] = hierarchy_overloaded_names(ci, registry)
 
     method_blocks: list[str] = []
+    # G-10：接口私有实例 lambda body 落在 java_class! 块之外的擦除 impl 块
+    # （不进接口 vtable / 不被实现类继承），见方法循环内的专门分支
+    _iface_lambda_blocks: list[str] = []
 
     # 是否是用户类（call_chain is None 表示用户类，所有方法都翻译）
     _is_user_class = call_chain is None
@@ -811,9 +818,40 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     _tb.print_exc()
                 method_blocks.append(attr_line + '\n' + _clinit_stub)
             continue
+        if _is_iface and not m.is_static and m.is_synthetic and m.name.startswith('lambda$'):
+            # G-10：接口的私有实例 lambda body（如 Comparator.lambda$thenComparing$...）。
+            # 不是接口契约成员：不进 Iface__VTable、不被实现类继承展开，而是落在接口
+            # 载体擦除实例化（Iface<Object>）的固有 impl 块 —— 调用点（sim/dynamic.py
+            # 的接口实例分支）生成 Into::<Iface<Object>>::into(recv).<name>(args)，
+            # 接收者即擦除载体，body 内对 this 的虚调用经载体 vtable 分派（JVM 语义：
+            # 私有 lambda 体在运行时接收者上执行）。方法名取 lambda_impl_rust_name
+            # 单一来源，与调用点引用名一起受 G-10 生成期断言保护。
+            _lam_rust = lambda_impl_rust_name(ci.name, m.name, m.descriptor, registry)
+            # this 按擦除实例化定型（Comparator<T> → Comparator<Object>），与调用点
+            # 接收者的 Into::<Iface<Object>> 一致；body 内 Object 实参直接命中擦除签名
+            _lam_ctparams = ['Object'] * len(class_type_params) if class_type_params else []
+            _lam_in_chain = (call_chain is None or (ci.name, m.name, m.descriptor) in call_chain)
+            try:
+                _lam_block = gen_method_body(
+                    m, ci, registry=registry,
+                    class_type_params=_lam_ctparams,
+                    overloaded_names=overloaded_names,
+                    rust_name=_lam_rust,
+                ) if (_lam_in_chain and not stub_bodies) else _gen_native_stub(
+                    m, ci, rust_name=_lam_rust, registry=registry,
+                    class_type_params=_lam_ctparams)
+            except CfgAuditError:
+                raise
+            except Exception as e:
+                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}", repr(e))
+                _lam_block = _gen_native_stub(m, ci, rust_name=_lam_rust, registry=registry,
+                                              class_type_params=_lam_ctparams)
+            _iface_lambda_blocks.append(_lam_block)
+            LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, _lam_rust)
+            continue
         if _is_iface and not m.is_static and (
                 m.is_synthetic or (m.access_flags & 0x0002) or (m.name, m.descriptor[:m.descriptor.index(')') + 1]) in _root_method_keys):
-            continue  # 私有 / 合成实例方法不是接口契约的一部分
+            continue  # 其余私有 / 合成实例方法不是接口契约的一部分
         # 确定最终 Rust 方法名（有重载则加描述符后缀）
         rust_name = (mangle_name(m.name, m.descriptor)
                      if method_name_is_mangled(ci, m, registry) else m.name)
@@ -834,7 +872,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         _nf_covered = (_nf_entry or {}).get('methods', set())
         fn_name_check = safe_ident(rust_name or m.name)
         if fn_name_check in _nf_covered:
+            # 手写共置文件按同一 mangle 规则提供实现 → 定义名仍记为计算名（G-10 账本）
+            LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
             continue
+        # G-10 账本：定义侧登记最终 Rust 名（stub / 翻译体 / 接口声明各路径统一在此登记）
+        LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
 
         if _is_iface and not m.is_static:
             # 接口实例方法（abstract / default）：无方法体的成员声明。宏据此生成擦除签名的
@@ -1233,12 +1275,25 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         parts.append("}")
         parts.append('')
 
+        # G-10：接口私有实例 lambda body 的擦除固有 impl 块。置于 java_class! 块之外，
+        # 避免被宏归入接口 vtable / 载体分派（lambda 体不是接口契约，只被 invokedynamic
+        # 调用点按名引用）。this 与调用点接收者同为 Iface<Object> 擦除实例化。
+        if _iface_lambda_blocks:
+            _lam_recv = (f"{struct_name}<{', '.join(['Object'] * len(class_type_params))}>"
+                         if class_type_params else struct_name)
+            parts.append('// G-10: 接口私有实例 lambda body —— 载体擦除实例化上的固有方法')
+            parts.append(f'impl {_lam_recv} {{')
+            for _lb in _iface_lambda_blocks:
+                parts.append(_indent(_lb))
+            parts.append('}')
+            parts.append('')
+
     # 扫描方法体中使用的 VTable trait（UFCS 调用 XxxVTable::method(...)），
     # 为未导入的 VTable 类型补充 use 语句（避免 E0433）。
     # 不盲目为所有类添加 __VTable（手写类如 Object/String 不一定有），
     # 而是按实际生成代码中出现的名称按需导入。
     import re as _re_vt2
-    _all_body_text2 = '\n'.join(method_blocks) if method_blocks else ''
+    _all_body_text2 = '\n'.join(method_blocks + _iface_lambda_blocks) if (method_blocks or _iface_lambda_blocks) else ''
     _used_vtables = set(_re_vt2.findall(r'\b(\w+__VTable)\b', _all_body_text2))
     if _used_vtables:
         _vt_simple_to_pkg: dict[str, str] = {}

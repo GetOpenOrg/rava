@@ -17,6 +17,7 @@ from .class_writer import _gen_class_rs
 from .inherited_gen import ClassEmission, resolve_inherited_members
 from .interface_gen import resolve_interface_impls, resolve_interface_inherited_members
 from .. import inherited_calls as _inherited_calls
+from ..instr.coerce import LAMBDA_NAME_LEDGER
 
 
 _RUNTIME_JRT_SRC = os.path.join(_RUNTIME_JAVA_RUNTIME, 'src')
@@ -155,6 +156,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 两阶段生成：先生成全部类文本（期间调用点登记继承成员需求），
     # 再统一补上继承成员声明后落盘（见 inherited_gen.py）
     _inherited_calls.reset()
+    LAMBDA_NAME_LEDGER.reset()
     _WRITTEN_THIS_RUN.clear()
     emissions: dict[str, ClassEmission] = {}
 
@@ -460,6 +462,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                  generated_classes=_user_gen_jdk,
                                  emission=_em)
         emissions[ci.name] = _em
+
+    # G-10 生成期断言：invokedynamic 实现方法的「调用点引用名 ↔ 定义名」恒等，
+    # 且被引用方法在生成类中必须存在定义（不一致直接抛错，防止静默生成坏代码）
+    LAMBDA_NAME_LEDGER.check()
 
     # 全部方法体已生成 → 继承成员需求已齐：补声明后统一落盘
     resolve_interface_impls(emissions, registry,
