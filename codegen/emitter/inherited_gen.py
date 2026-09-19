@@ -29,6 +29,7 @@ from ..type_map import (ancestor_type_args, effective_class_type_params,
                         implemented_interface_views,
                         interface_member_local_name,
                         short_cls, substitute_type_params, superinterface_type_args)
+from .attrs import to_snake
 
 # 类文本中的两个插入位（整行），由 resolve_inherited_members 统一替换
 IMPORTS_SLOT = '//@@java_rta:inherited-imports@@'
@@ -151,6 +152,32 @@ def _interface_member_declaration(method: EmittedMethod, owner_bin: str, owner_a
 _SIG_CLASS_RE = re.compile(r'L([A-Za-z_$][\w$]*(?:/[A-Za-z_$][\w$]*)+)[<;]')
 
 
+def class_use_path(binary_name: str, crate_prefix: str,
+                   emissions: 'dict[str, ClassEmission] | None' = None) -> str:
+    """类在 Rust 中的完整引用路径（不含 `use` 关键字与末尾 `;`）。
+
+    两种 crate 布局决定了路径写到哪一层：
+
+      - JDK 类（java/lang/String，落在 java_runtime crate）：包目录的 mod.rs 有
+        `pub use <mod>::*;` 再导出，故为 `<crate 前缀>::java::lang::String`
+      - 用户类（默认包，落在 user crate）：main.rs 只做 `mod` 声明、无再导出，
+        必须写到模块层 `crate::test_interfaces_drawable::TestInterfaces_Drawable`
+
+    crate_prefix 是「接收者文件引用 JDK 类型所用的前缀」；用户类一律用 `crate`
+    （用户类只被同 crate 的用户类引用）。判断归属看目标类的 emission：
+    JDK 类的 crate_prefix 为 'crate'（它自身就在 java_runtime 里），用户类为 'java_runtime'。
+    """
+    short = short_cls(binary_name)
+    em = (emissions or {}).get(binary_name)
+    pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
+                    for p in binary_name.split('/')[:-1])
+    if not pkg or (em is not None and em.crate_prefix != 'crate'):
+        # 无包名（用户类）：文件即模块，路径必须写到模块层
+        mod = to_snake(binary_name)
+        return f"crate::{mod}::{short}"
+    return f"{crate_prefix}::{pkg}::{short}"
+
+
 def type_arg_uses(recv_ci, registry: dict, emissions: 'dict[str, ClassEmission]',
                   crate_prefix: str) -> dict[str, str]:
     """接收者视角下类型实参引用的类：Rust 短名 → use 行。
@@ -169,10 +196,8 @@ def type_arg_uses(recv_ci, registry: dict, emissions: 'dict[str, ClassEmission]'
         for bin_name in _SIG_CLASS_RE.findall(getattr(cur, 'generic_signature', '') or ''):
             if bin_name not in emissions:
                 continue
-            pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
-                            for p in bin_name.split('/')[:-1])
             short = short_cls(bin_name)
-            uses.setdefault(short, f"use {crate_prefix}::{pkg}::{short};")
+            uses.setdefault(short, f"use {class_use_path(bin_name, crate_prefix, emissions)};")
         for sup in [cur.super_class] + list(cur.interfaces or []):
             if sup and sup in registry:
                 queue.append(registry[sup])
@@ -266,9 +291,7 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
                     iface_short = short_cls(iface_bin)
                     if iface_short not in imported:
                         imported.add(iface_short)
-                        pkg = '::'.join(f'r#{seg}' if seg in _RUST_KEYWORDS else seg
-                                        for seg in iface_bin.split('/')[:-1])
-                        uses.append(f"use {recv.crate_prefix}::{pkg}::{iface_short};")
+                        uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions)};")
                     imports.setdefault(recv_bin, []).extend(uses)
                     break
                 continue

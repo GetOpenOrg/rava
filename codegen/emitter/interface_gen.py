@@ -30,7 +30,7 @@ import sys
 from ..type_map import (effective_class_type_params, short_cls, substitute_type_params,
                         superinterface_type_args)
 from .inherited_gen import (ClassEmission, EmittedMethod, IMPORTS_SLOT, MEMBERS_SLOT,
-                            _imports_for, _USE_RE, type_arg_uses)
+                            _imports_for, _USE_RE, class_use_path, type_arg_uses)
 
 # 类文本中的插入位（整行，位于 java_class! 块内、impl 块之后）
 IMPLS_SLOT = '//@@java_rta:interface-impls@@'
@@ -157,9 +157,9 @@ def _locate(recv_bin: str, name: str, param_desc: str, emissions: 'dict[str, Cla
     return None
 
 
-def _vtable_use(iface_bin: str, crate_prefix: str) -> str:
-    pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in iface_bin.split('/')[:-1])
-    return f"use {crate_prefix}::{pkg}::{short_cls(iface_bin)}__VTable;"
+def _vtable_use(iface_bin: str, crate_prefix: str,
+                emissions: 'dict[str, ClassEmission] | None' = None) -> str:
+    return f"use {class_use_path(iface_bin, crate_prefix, emissions)}__VTable;"
 
 
 def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dict,
@@ -234,7 +234,7 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                 vt_name = short_cls(iface_bin) + '__VTable'
                 if vt_name not in imported:
                     imported.add(vt_name)
-                    uses.append(_vtable_use(iface_bin, recv.crate_prefix))
+                    uses.append(_vtable_use(iface_bin, recv.crate_prefix, emissions))
                 body = '\n'.join('    ' + ln for d in decls for ln in d.split('\n'))
                 blocks.append(f"impl{recv_generics} {short_cls(iface_bin)} for {recv_ty} {{\n{body}\n}}")
 
@@ -318,7 +318,8 @@ def resolve_interface_inherited_members(emissions: 'dict[str, ClassEmission]', r
                 owner_short = short_cls(owner_bin)
                 if owner_short not in imported:
                     imported.add(owner_short)
-                    uses.append(_vtable_use(owner_bin, recv.crate_prefix).replace('__VTable;', ';'))
+                    uses.append(_vtable_use(owner_bin, recv.crate_prefix, emissions)
+                                .replace('__VTable;', ';'))
                 break
         if decls:
             body = '\n\n'.join(decls)
