@@ -98,6 +98,22 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
                 _parsed = _substitute_type_params(_parsed, {
                     _p: (_owner_args[_i] if _i < len(_owner_args) else 'Object')
                     for _i, _p in enumerate(_owner_params)})
+        elif _recv_ci is not None and _recv_ci.name == _g_ci.name:
+            # 字段就声明在接收者自己的类上（`Pair<A, B>.second`）：宏访问器
+            # `__get_second()` 按接收者实例化返回 B 的实参类型（Pair<.., String>
+            # 上返回 String）。声明类类型变量名在调用方不可见时此前直接退回擦除
+            # Object，读取侧记录与访问器实际返回类型脱节 —— 紧随的 checkcast
+            # 源侧被判为 Object，在已是 String 的 getter 结果上再发
+            # `.downcast::<String>()`（E0599，A-3 形态 2）。此处按接收者记录的
+            # 类型实参代入，与访问器返回类型对齐；checkcast 同型走 control.py
+            # 的 no-op 路径。实参含推断占位 `_` 或为空（裸类名）时不可代入，
+            # 保持既有擦除回退。
+            _owner_params_s = list(_effective_class_type_params(_g_ci, registry) or [])
+            _owner_args_s = list(_split_rust_type_args(recv_ty) or [])
+            if (_owner_params_s and len(_owner_args_s) == len(_owner_params_s)
+                    and _owner_args_s != _owner_params_s
+                    and not any(_re_g.search(r'(?<![\w])_(?![\w])', _a) for _a in _owner_args_s)):
+                _parsed = _substitute_type_params(_parsed, dict(zip(_owner_params_s, _owner_args_s)))
     if _parsed and _parsed != 'Object' and _parsed != ftype:
         # 校验：解析结果中的类型名须在调用方可见
         # （当前 impl 类型参数 / registry 短名 / 内建容器），
