@@ -73,7 +73,7 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                     # 经 Object 边界（保持对象标识与运行时类）按目标类取回子类视图，null 原样通过
                     _boxed = _coerce_to_object(render_expr(expr), src_name, registry,
                                                sim.class_type_params)
-                    expr = RawExpr(f"<{cast_rust}>::from({_boxed})")
+                    expr = RawExpr(f"<{cast_rust} as ::std::convert::From<Object>>::from({_boxed})")
                 else:
                     # 静态类型互不为子类型（擦除泛型数组 `(E[][]) Arrays.copyOf(..)`、交叉转型）：
                     # checkcast 是运行时校验 → 经 Object 边界按目标类型取回

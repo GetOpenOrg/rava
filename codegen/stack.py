@@ -406,12 +406,15 @@ class StackSim:
                     force_let_ty = True
                 elif (not isinstance(expr, Var)
                       and isinstance(hint, RsNamed) and hint.name.startswith('JArray<')
-                      and not (isinstance(expr, Lit) and expr.value == 'Object::default()')):
+                      and render_expr(expr) not in ('Default::default()', 'Object::default()')):
                     # 栈类型 Object、声明为数组类型（`for (int[] r : objArr)` 的元素经
                     # Object 流转，S-2.2）：值 downcast 恢复数组类型并保留 let 注解。
                     # 非 Var 值（aaload 结果等 RawExpr）不落入 _maybe_downcast 的
                     # Var-only 分支，不在此还原会让记录类型（JArray<T>）与 let 实际
                     # 推断类型（Object）脱节，后续 Clone::clone 赋值 E0308。
+                    # null 字面量（Default::default()，此处已是 RawExpr）穿透任何
+                    # checkcast，不 downcast——(Default::default()).downcast::<T>()
+                    # 因接收者无类型而 E0282。
                     expr = RawExpr(f"({render_expr(expr)}).downcast::<{hint.name}>()")
                     force_let_ty = True
                 ty = hint

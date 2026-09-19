@@ -151,7 +151,7 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 
 **子问题 1 — null 语义**：`JArray::default()` 是空数组，`null` 数组与空数组不可区分；对 null 数组的访问不抛 NPE。终态：`JArray` 具备 null 状态，`arraylength`/`xaload`/`xastore` 在 null 上抛 `NullPointerException`。
 
-**子问题 2 — 多维数组访问 API 缺失**（e2e-issues B5，触发用例：TestMultiArray）：`Object` 上未暴露数组长度与元素访问方法，codegen 生成了 `obj.set(i, v)` / `obj.len()` 等调用，但 `Object` 没有这些方法，报 `no method named set/len found for struct Object`。
+**子问题 2 — 多维数组访问 API 缺失**【已修复，R7 轮，TestMultiArray 零差异通过】：`Object` 上未暴露数组长度与元素访问方法，codegen 生成了 `obj.set(i, v)` / `obj.len()` 等调用，但 `Object` 没有这些方法，报 `no method named set/len found for struct Object`。
 
 根因：多维数组（`int[][]`、`String[][]`）在 runtime 以 `Rc<RefCell<Vec<T>>>` 存储，装进 `Object` 后，调用方无法通过 `Object` 直接访问内部向量。
 
@@ -172,7 +172,7 @@ codegen 的 `xaload`/`xastore`/`arraylength` 指令生成改为调用上述方�
 
 **子问题 1 — 装箱 null**：`Integer`/`Long` 等被建模为原生值，`Integer x = null`、`Map.get` 未命中返回 null 后拆箱抛 NPE 等语义缺失。终态：装箱类型是真实对象（来自字节码翻译的 `java/lang/Integer`），自动装拆箱即字节码里的 `valueOf`/`intValue` 调用，不做特殊建模。
 
-**子问题 2 — null 引用比较语义错误**（e2e-issues B7，触发用例：TestAutoboxing）：
+**子问题 2 — null 引用比较语义错误**【已修复，R7 轮：`PartialEq` null 短路 + `Object::default()` singleton】（触发用例 TestAutoboxing 剩余 diff 为子问题 1 的 `i32` 拆平路径）：
 ```java
 Integer nullable = null;
 System.out.println(nullable == null);  // Java 输出 true
@@ -235,7 +235,9 @@ R5-B 让 `short_cls` 对冲突类生成带包限定的 Rust 类型名（`Era` �
 - **设计方向**：优先让 enum 类走**普通类翻译路径**（`java_class!` 宏 + struct），以 `static OnceLock<Vec<EnumClass>>` 存储常量数组（`values()`），`ordinal()` 和 `name()` 由生成器从字节码生成，不需要特殊 enum Rust 关键字。这样与继承链（`Enum` 基类）、`ObjectVTable` 体系、接口实现均自然兼容。
 - **终态**：TestEnumBasic、TestEnumMethods、TestSwitchEnum 全部通过；enum 常量的 `ordinal()`/`name()`/`equals()` 语义正确；`switch (enumVal)` 生成的 `match` 按 ordinal 分派；`JvmError::Custom` 等自造 API 不出现在 codegen 输出中。
 
-### S-16 继承方法体未注入子类 vtable 槽位 【P1】
+### S-16 继承方法体未注入子类 vtable 槽位 【已修复，R7 轮】
+
+> **R7 轮已修复**（16248cb，合入 main）：继承声明带转发体——常规方法调 owner 的 `__base` 自由函数（与 super 调用同源），手写方法经 `__as_Owner` 钩子执行 `__impl_<m>`；宏为子类 `__inner` 按 `vtable_owner` 填祖先 vtable 槽位。**下文「依赖 A-1」的判断被证伪**：`From<Child> for Parent` 是同一 inner Rc 的 upcast，`Into` 占位形态不可行，base 函数形态不依赖 A-1。TestLinkedList 通过；无体 `inherited_from` 声明 219→0（三树合计）。TestInheritedMethod 推进后阻塞在 A-7（`MyList.get(I)String` 协变 override 不被识别），A-7 落地后复跑。
 
 - **现状**（e2e-issues E2，触发用例：TestLinkedList、TestInheritedMethod）：当一个具体子类继承了祖先类的方法实现（而非 override）时，emitter 将子类的该方法槽位生成为**无体声明**（`inherited_from = AncestorClass`），运行时通过 vtable 虚分派落到的是 abstract 声明而非实际实现。
   
@@ -283,7 +285,9 @@ R5-B 新增：`_impl.rs` 定义 `__impl_<m>` 时，codegen 在宏块里生成 `b
 ### G-8 类型变量→上界转换经 `Object` 中转 【P2】
 R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」而让类型变量到上界的转换经 `Object` + `checkcast`。A-1 落地后类型变量字段本身就是 `Object` 存储，此转换退化为一次视图构造。终态：随 A-1 收敛，不单独处理。
 
-### G-9 循环体内 if/else 分支被整段丢弃 【P2】
+### G-9 循环体内 if/else 分支被整段丢弃 【已修复，R7 轮】
+
+> **R7 轮（2026-09-19 深夜）已修复**：instanceof 运行时化 + 槽位 widening 合入 main（分支 g9-instanceof-widening，f60dabe）。TestCasting 逐行一致通过、`instanceof_fold` 6→0、putVal 的 4 处 E0308 清零、回归 3/3 PASS。实际根因比下文更进一步：putVal 的 `e` 槽**有** LVT 声明（Node<K,V>）但落入 `hint` 通道而非 `decl_ty`，既有上转规则未触发——修复为补齐 hint 路径的上转规则 + 无 LVT 合成槽取最近公共类祖先（`_common_ref_type_widening`）。遗留：接收者是类型变量（K）的 instanceof 仍按互不为子类型折叠（预存行为）。
 
 > **R6 轮排查结论（2026-09-19）**：根因**不在 CFG 结构化**，而在 `sim/control.py` 的 `instanceof` 静态折叠——接收者静态类型是目标超类（`Animal` 变量 vs `Dog`）时被折叠为编译期 `false`，`if (x instanceof T)` 分支被当死代码消除（TestCasting 的 4 处 instanceof 全中，循环内外皆然）。已交付：
 > - `[cfg-audit]` 新增 `instanceof_fold=N` 指标（此前该类静默错误无任何指示器）；
@@ -297,7 +301,9 @@ R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」�
 - **终态**：`TestCasting` 的生成代码中循环体内分支数与原始字节码一致；`scripts/main.py` 输出的 `[cfg-audit]` 中无 `unconsumed-blocks` 计数（循环内分支丢弃的直接指示器）。
 - **调试方法**：`python3 scripts/main.py TestCasting.java --no-run` 后查看生成的 `while` 循环体，与 `javap -c TestCasting` 的跳转表逐条对照，定位第一个被丢弃的 `if` 对应的 CFG 边。
 
-### G-10 lambda 方法命名与调用点不一致 【P1】
+### G-10 lambda 方法命名与调用点不一致 【已修复，R7 轮】
+
+> **R7 轮已修复**（2febbae，合入 main）：命名唯一来源 `lambda_impl_rust_name()` + `LAMBDA_NAME_LEDGER` 生成期断言（名字漂移/定义缺失直接 RuntimeError）。实测根因与下文略有出入：命名并未算错，而是**定义侧从未生成**——接口 default 方法内的 lambda 体是 javac 编译的非 static 私有合成方法，被 class_writer 的「私有合成实例方法非接口契约」分支跳过。现生成到 `java_class!` 块之外的擦除实例化固有 impl（不进接口 vtable）。`no method named lambda_*` 3→0 / 22→0。TestComparator 编译通过后运行期卡在 `AccessController.doPrivileged` 存根（A-5/P-3 链路）；TestFunctionalInterface 剩 1 处 E0308（A-5 范畴）。
 
 - **现状**（e2e-issues B4，触发用例：TestComparator、TestFunctionalInterface）：`invokedynamic` 指令生成的 lambda 实现方法（如 `lambda_thenComparing_36697e65_1`）与 call site 生成的调用名称不匹配，导致 `no method named lambda_andThen_1 found` 等编译错误。与 A-5 的宏观缺陷（lambda 不是对象）属于同一根因链但独立触发：即使 A-5 尚未落地，命名不一致本身就能独立修复。
 - **根因**：`invokedynamic` 的 bootstrap 方法分析（`sim/dynamic.py`）与 lambda body 方法生成（`method_gen.py`）在命名方案上各自独立推导，未共享同一命名逻辑。部分 lambda 的哈希后缀或序号由不同代码路径计算，导致生成的方法名与调用点期望的名称不一致。
@@ -368,7 +374,7 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 > - **教训（记入验证口径）**：复用 scratch 的测试结果在生成器变更后不可信，milestone 验证一律 `--clean`。
 
 1. **批次 1 — 事实基础（剩余）**：**G-9**（循环内 if/else 整段丢失，TestCasting 静默错误，`cfg-audit` 抓不到——先补 `unconsumed-blocks` 指标再排查）＋ **V-3**（可读性审计行）＋ 用修复后的生成器重跑一次全量 e2e 建立真实基线（R6 后预计显著好于 32/65，多数旧失败是陈旧文件假象）。
-2. **批次 2 — 快速增益（不依赖 A 类，可并行）**：A-3 部分（checkcast 三形态的两个简单 case）→ S-16（继承方法体注入，`Into::<Ancestor>::into(self.clone())` 占位）→ G-10（lambda 命名单一来源）→ S-3.2（null 引用比较 singleton）→ S-2.2（Object 数组访问 API）→ S-15（enum 走普通类路径；当前 TestEnumBasic 卡在 `Enum.name()` 存根）。
+2. **批次 2 — 快速增益（不依赖 A 类，可并行）**：**R7 轮第一波已交付（2026-09-19 深夜，四分支合入 main 零冲突）**：G-9 完整修复（instanceof 运行时化 + 槽位 widening，TestCasting 通过）、S-16（TestLinkedList 通过）、S-2.2（TestMultiArray 通过）、S-3.2（null singleton）、G-10（lambda 命名单一来源 + 生成期断言）。合并后定向回归：新通过 TestCasting/TestLinkedList/TestMultiArray；两个失败均为已知边界（TestAutoboxing→S-3.1 的 `i32` 拆平，TestInheritedMethod→A-7 协变 override）。**第二波待做**：S-15（enum 走普通类路径，与 S-16 同改 class_writer 故排其后；TestEnumBasic 卡在 `Enum.name()` 存根）、A-3 部分（checkcast 三形态的两个简单 case：`Result<T>` 补 `?`、已知同类型省略 downcast——G-9 只做了 instanceof，checkcast 两 case 仍开放）。
 3. **批次 3 — 架构主线（串行）**：A-1 存储层擦除 → A-3 完整 IR 化 → A-6 `__interface` 全覆盖 → A-5 lambda 对象化（吸收 G-10；含 A-4 协变 upcast）→ A-7 协变覆盖；以 A-2 计数表全 0 + V-3 审计行统一验收。
 4. **批次 3' — 质量重做（与批次 3 并行）**：G-1/G-2/G-3（提升与槽位分型迁到 rs_ir）。G-2 终态会让「未初始化即使用」从静默 `Default::default()` 变编译错误，建议在 A-1 稳定后开启，避免两边同时震荡。
 5. **批次 4 — 语义补齐**：随架构落地（S-1、S-4、S-5 剩余、S-6）；独立推进（S-2.1、S-3.1、S-7–S-10）。

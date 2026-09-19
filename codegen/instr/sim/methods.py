@@ -74,7 +74,7 @@ def _gen_signature_polymorphic(sim, comment: str, decl_desc: str, class_name, re
         sim.push(r_expr, r_ty)
         return
     v = sim.fresh()
-    sim.emit(RawStmt(f"let {v}: {target} = <{target}>::from({render_expr(r_expr)});"))
+    sim.emit(RawStmt(f"let {v}: {target} = <{target} as ::std::convert::From<Object>>::from({render_expr(r_expr)});"))
     sim.push(Var(v), RsNamed(target))
 
 
