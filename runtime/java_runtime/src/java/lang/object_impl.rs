@@ -25,8 +25,14 @@ impl Object {
     #[jvm_native]
     pub fn unlock(&self) -> Result<()> { Ok(()) }
 
+    /// JVM 语义：对 null 引用调 getClass 抛 NPE（invokevirtual 的隐式 null 检查）。
     #[jvm_native]
-    pub fn getClass(&self) -> Result<crate::java::lang::Class> { self.0.getClass() }
+    pub fn getClass(&self) -> Result<crate::java::lang::Class> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        self.0.getClass()
+    }
 
     #[jvm_native]
     pub fn hashCode(&self) -> Result<i32> { Ok(self.0.hashCode()) }

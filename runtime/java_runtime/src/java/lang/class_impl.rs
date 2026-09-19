@@ -99,6 +99,16 @@ impl Class {
         Ok(Clone::clone(&self.__get_name()))
     }
 
+    /// `Class.getSimpleName()`：简单名。顶层类取最后一个 `.` 之后的段，
+    /// 嵌套类再取最后一个 `$` 之后的段（JDK getSimpleBinaryName 的常见形态）；
+    /// 数组 / 匿名类等罕见形态按现状原样返回，按需再补。
+    pub fn __impl_getSimpleName(&self) -> Result<String> {
+        let full = format!("{}", self.__get_name());
+        let simple = full.rsplit('.').next().unwrap_or("");
+        let simple = simple.rsplit('$').next().unwrap_or("");
+        Ok(String::from(simple))
+    }
+
     /// `Class.desiredAssertionStatus()`：该类的断言是否启用。
     ///
     /// 原生二进制没有 `-ea` / `-da` 开关，断言恒为禁用（即 JVM 的默认行为），

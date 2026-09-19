@@ -32,9 +32,14 @@ pub trait ObjectVTable: 'static {
     fn as_any(&self) -> &dyn std::any::Any;
 
     /// java.lang.Object.getClass()Ljava/lang/Class; — 返回类型与字节码签名一致。
-    /// 简化实现：返回 null Class（Default），运行时类对象模型落地后在此处替换。
+    /// 以 `__class_name()` 经 `Class::for_class` 取类对象（线程内按名缓存，身份语义）。
+    /// null 检查语义：JVM 里对 null 引用调 getClass 抛 NPE，由调用侧的 null 守卫承载；
+    /// 此处到达即 receiver 非 null。
     fn getClass(&self) -> crate::error::Result<crate::java::lang::Class> {
-        Ok(Default::default())
+        Ok(crate::java::lang::Class::for_class(
+            crate::java::lang::String::from(self.__class_name()),
+            &[],
+        ))
     }
 
     /// java.lang.Comparable.compareTo(Object)I — 接口方法，不实现 Comparable 的类调用时 panic
