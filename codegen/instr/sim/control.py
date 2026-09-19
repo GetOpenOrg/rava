@@ -105,18 +105,13 @@ def sim_control(ins, sim, class_name, registry) -> bool:
         # 静态类型分析（registry 继承链）：
         #   obj 静态类型 IS-A target  → true（子类一定是父类，编译期可证）
         #   obj 静态类型 == target    → true
-        #   其余（obj 是 target 超类、或互不为子类型）→ 编译期 false，计入 instanceof_fold 审计
-        #
-        # ⚠ obj 是 target 超类时（Animal 变量 instanceof Dog）按 JVM 语义应运行时判定，
-        #   运行时机制也已具备（超类包装持有具体子类 vtable；ObjectVTable::is_instance_of
-        #   按 all_supertypes 匹配 binary name；checkcast 的 <T>::from(装箱) 同步可用）。
-        #   但运行时化会让被折叠消除的分支复活，暴露槽位定型缺陷：JDK 类无
-        #   LocalVariableTable，同一 slot 在兄弟分支赋不同类型（HashMap.putVal 的 e：
-        #   TreeNode 分支 / Node 分支）时首赋值类型成为声明类型，复活分支的赋值报
-        #   E0308（TestCollections/TestArrayList 回归实测）。完整修复 = 此处运行时化 +
-        #   槽位按公共祖先 widening（G-3）一起落地，见 remaining-issues G-9。届时恢复：
-        #     _boxed = _coerce_to_object(val_s, obj_base, registry, sim.class_type_params)
-        #     push RawExpr f"({_boxed}).is_instance_of(\"{comment}\")"
+        #   obj 静态类型是 target 的超类（Animal 变量 instanceof Dog）→ 运行时判定：
+        #     装箱为 Object（超类包装持有具体子类的 vtable），ObjectVTable::is_instance_of
+        #     按 all_supertypes 匹配 binary name（宏静态展开 patterns，含类自身）
+        #   其余（互不为子类型）→ 编译期 false，计入 instanceof_fold 审计
+        # 槽位定型配套：同一 slot 在兄弟分支赋不同引用类型时按公共祖先 widening
+        # （vars.py 的合并 pass），运行时化复活的分支（HashMap.putVal 的
+        # `p instanceof TreeNode`）才能与首赋值类型共存。
         val_expr_inst, val_ty_inst = sim.pop() if sim.stack else (None, None)
         if comment and val_ty_inst is not None:
             if comment.startswith('['):
@@ -139,6 +134,13 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 sim.push(Lit('true'), BOOL)
             elif _is_subtype(obj_ty_str.split('<')[0], target_for_subtype.split('<')[0], registry):
                 sim.push(Lit('true'), BOOL)
+            elif _is_subtype(target_for_subtype.split('<')[0], obj_ty_str.split('<')[0], registry):
+                # obj 静态类型是 target 的超类：装箱后按运行时类判定（is_instance_of 按
+                # vtable 的 all_supertypes 匹配 binary name，含类自身）
+                val_s_inst = render_expr(val_expr_inst)
+                _boxed_inst = _coerce_to_object(val_s_inst, obj_ty_str.split('<')[0], registry,
+                                                sim.class_type_params)
+                sim.push(RawExpr(f"({_boxed_inst}).is_instance_of(\"{comment}\")"), BOOL)
             else:
                 from ...cfg import STATS as _STATS_INST
                 _STATS_INST.record_instanceof_fold()

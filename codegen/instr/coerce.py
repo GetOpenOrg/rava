@@ -448,6 +448,39 @@ def _common_ref_type(a_rust: str, b_rust: str, registry: dict | None) -> str | N
     return None
 
 
+def _common_ref_type_widening(a_rust: str, b_rust: str, registry: dict | None) -> str | None:
+    """槽位 widening 用的公共祖先（含泛型形态）：
+    - 基名走 _common_ref_type（继承链，多级跳跃），接口 / 根类 / 无公共祖先 → None
+    - 双方类型实参完全一致时保留实参（`TreeNode<K, V>` 与 `Node<K, V>` → `Node<K, V>`）；
+      实参不一致（不同实例化）不做 widening → 调用方回退根类合并。
+    返回的类祖先保证双方都是其子类型，宏按 all_superclasses 生成 From<Child> for Ancestor，
+    存入侧可用 `.into()` 上转（保持对象标识与运行时类）。"""
+    def _split(t: str) -> tuple[str, str]:
+        base, _, args = t.partition('<')
+        return base.strip(), args.strip()
+    a_base, a_args = _split(a_rust)
+    b_base, b_args = _split(b_rust)
+    common = _common_ref_type(a_base, b_base, registry)
+    if common is None or common == _OBJECT_CLASS:
+        return None
+    if _is_interface(common, registry):
+        return None
+    if not a_args and not b_args:
+        return common
+    if a_args and a_args == b_args:
+        return f"{common}<{a_args}>"
+    return None
+
+
+def _is_interface(rust_short: str, registry: dict | None) -> bool:
+    """Rust 短类名（去泛型实参）在 registry 中是否为接口。未知类型按非接口处理。"""
+    if not registry:
+        return False
+    from ..type_map import _registry_short_index
+    ci = _registry_short_index(registry).get(rust_short.split('<')[0].strip())
+    return ci is not None and ci.is_interface
+
+
 def _reinstantiate_generic(e: str, actual: str, expected: str) -> str | None:
     """同一泛型类的不同实例化之间的转换（Java 的 raw type / 通配符 / unchecked cast）。
 

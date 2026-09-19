@@ -126,6 +126,7 @@ class StackSim:
                  slot_decls: dict[int, list] | None = None,
                  infer_type_args=None,
                  is_subtype=None,
+                 is_interface=None,
                  return_type: str = 'Object',
                  is_constructor: bool = False,
                  class_type_params: list[str] | None = None,
@@ -148,6 +149,9 @@ class StackSim:
         self._slot_decls = slot_decls or {}
         self._infer_type_args = infer_type_args
         self._is_subtype = is_subtype or (lambda _c, _p: False)
+        # 短类名是否为接口：hint 拓宽（声明为父类、赋入子类值）只对类祖先做 From 上转，
+        # 接口不在宏的 all_superclasses 链上（无 From<Child> for Iface），需跳过
+        self._is_interface = is_interface or (lambda _s: False)
         self._param_slots: set[int]                  = set()  # 方法参数占用的 slot（类型由签名决定）
         self.current_offset: int                     = 0    # 当前正在处理的字节码偏移
         self.next_offset: int                        = 0    # 下一条指令偏移（store 后变量作用域起点）
@@ -438,6 +442,21 @@ class StackSim:
                             expr = RawExpr(_conv)
                             force_let_ty = True
                     ty = hint
+                elif (not self._is_interface(_base_of(hint))
+                      and _base_of(hint) not in ('Object', '()')
+                      and self._is_subtype(_base_of(ty), _base_of(hint))):
+                    # 声明类型（LVTT/LVT 签名）是值类型的父类（`Node e = putTreeVal(..)`，
+                    # Java 隐式拓宽赋值，字节码无 checkcast）：From 上转到声明类型，
+                    # 槽位静态类型与 JVM 局部变量的声明类型一致 —— 同一 slot 在兄弟分支
+                    # 赋不同子类型时都汇合到声明类型（JVM 校验器在控制流合并点的行为）。
+                    # 与 decl_ty（描述符声明的父类）路径同一规则；接口声明不做 From 上转
+                    # （宏只为类祖先生成 From<Child>，见 _is_interface 钩子说明）。
+                    if isinstance(expr, Var):
+                        expr = RawExpr(f"Clone::clone(&{expr.name}).into()")
+                    else:
+                        expr = RawExpr(f"({render_expr(expr)}).into()")
+                    ty = hint
+                    force_let_ty = True
                 elif (isinstance(hint, RsNamed)
                       and 'Vec<' in hint.name and 'Vec<' in ty.name
                       and hint.name != ty.name

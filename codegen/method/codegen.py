@@ -252,6 +252,10 @@ def gen_method_body(
     def _sim_is_subtype(child: str, parent: str) -> bool:
         return _is_subtype(child, parent, registry)
 
+    def _sim_is_interface(short_name: str) -> bool:
+        from ..instr.coerce import _is_interface as _is_iface
+        return _is_iface(short_name, registry)
+
     def _sim_box_object(expr_s: str, ty_s: str) -> str:
         from ..instr.coerce import _coerce_to_object
         return _coerce_to_object(expr_s, ty_s, registry, _class_tparams, clone=False)
@@ -276,6 +280,7 @@ def gen_method_body(
 
     sim = StackSim(rust_param_type_nodes, is_static, method.class_name, local_names,
                    slot_decls=slot_decls, is_subtype=_sim_is_subtype,
+                   is_interface=_sim_is_interface,
                    return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                    in_vtable_body=in_vtable_body, box_object=_sim_box_object,
                    infer_type_args=_sim_infer_type_args)
@@ -328,7 +333,7 @@ def gen_method_body(
     from ..stack import _safe_name as _safe_local_name
     _lvt_names = frozenset(_safe_local_name(_d[2]) for _ds in sim._slot_decls.values() for _d in _ds)
     for _ in range(64):
-        if not _hoist_if_vars(entries, predeclared, sim._box_object, _lvt_names):
+        if not _hoist_if_vars(entries, predeclared, sim._box_object, _lvt_names, registry):
             break
     _promote_undeclared_assigns(entries, predeclared)
 

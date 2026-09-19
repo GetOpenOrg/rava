@@ -90,12 +90,15 @@ def _is_default_value(value) -> bool:
     return isinstance(value, RawExpr) and value.code == 'Default::default()'
 
 
-def _merged_slot_type(entries: list, name: str, start: int, end: int):
-    """(start, end) 内同名声明 / 降级赋值的引用类型不一致时，返回汇合类型（根类）；否则 None。
+def _merged_slot_type(entries: list, name: str, start: int, end: int, registry=None):
+    """(start, end) 内同名声明 / 降级赋值的引用类型不一致时，返回汇合类型；否则 None。
 
-    javac 合成的无名槽（try-finally 里暂存返回值等）在各分支存入不同引用类型、汇合后统一读取：
-    JVM 校验器在汇合点取公共超类型，对应的 Rust 变量取根类，各次存入经装箱上转。"""
-    seen: set[str] = set()
+    同一 slot 在兄弟分支存入不同引用类型时，JVM 校验器在控制流合并点取公共祖先
+    （JVM 局部变量的静态类型是其声明类型）：汇合类型取继承链上最近的公共类祖先
+    （`TreeNode<K,V>` 与 `Node<K,V>` → `Node<K,V>`，各存入侧经 From 上转，保持
+    对象标识与运行时类）；无公共类祖先（接口 / 不同实例化 / 互不相干类）时回退
+    根类，存入侧按装箱上转（try-finally 暂存槽等只以 Object 形态流动的合成槽）。"""
+    seen: list[str] = []
     for k in range(start + 1, end):
         item = entries[k][1]
         if isinstance(item, LetStmt) and item.name == name:
@@ -110,12 +113,24 @@ def _merged_slot_type(entries: list, name: str, start: int, end: int):
         rendered = render_type(ty)
         if rendered in _PRIMITIVE_TYPES or rendered == '()':
             return None
-        seen.add(rendered)
-    return RsNamed(_ROOT_TYPE) if len(seen) > 1 else None
+        if rendered not in seen:
+            seen.append(rendered)
+    if len(seen) < 2:
+        return None
+    from ..instr.coerce import _common_ref_type_widening
+    common = seen[0]
+    for other in seen[1:]:
+        common = _common_ref_type_widening(common, other, registry)
+        if common is None:
+            return RsNamed(_ROOT_TYPE)
+    return RsNamed(common)
 
 
-def _box_into_merged(entries: list, name: str, start: int, end: int, box_object) -> None:
-    """汇合类型为根类的槽：(start, end) 内类型更精确的存入值装箱上转。"""
+def _widen_into_merged(entries: list, name: str, start: int, end: int,
+                       merged: RsNamed, box_object) -> None:
+    """汇合类型为公共类祖先的槽：各次存入按 From 上转（`.into()`，保持对象标识）。
+    汇合类型为根类（无公共类祖先）时装箱上转（沿用原语义）。"""
+    _is_root = render_type(merged) == _ROOT_TYPE
     for k in range(start + 1, end):
         indent, item = entries[k]
         if isinstance(item, LetStmt) and item.name == name:
@@ -127,17 +142,35 @@ def _box_into_merged(entries: list, name: str, start: int, end: int, box_object)
             continue
         if ty is None or item.value is None or _is_default_value(item.value):
             if isinstance(item, LetStmt):
-                item.ty = RsNamed(_ROOT_TYPE) if item.ty is not None else None
-                item.value_ty = RsNamed(_ROOT_TYPE)
+                item.ty = merged if item.ty is not None else None
+                item.value_ty = merged
             else:
-                item.value_ty = RsNamed(_ROOT_TYPE)
+                item.value_ty = merged
             continue
         rendered = render_type(ty)
-        if rendered != _ROOT_TYPE:
-            item.value = RawExpr(box_object(render_expr(item.value), rendered))
+        if rendered != render_type(merged):
+            if _is_root:
+                item.value = RawExpr(box_object(render_expr(item.value), rendered))
+            else:
+                # 公共祖先路径：值是该祖先的子类型，`.into()` 目标由汇合后的声明类型给出
+                _src = render_expr(item.value)
+                item.value = RawExpr(f"{_src}.into()" if _is_atomic_rs(_src) else f"({_src}).into()")
         if isinstance(item, LetStmt):
-            item.ty = RsNamed(_ROOT_TYPE) if item.ty is not None else None
-        item.value_ty = RsNamed(_ROOT_TYPE)
+            item.ty = merged if item.ty is not None else None
+        item.value_ty = merged
+
+
+def _is_atomic_rs(expr_str: str) -> bool:
+    """渲染后的 Rust 表达式是否原子（调用链 / 路径）：决定 `.into()` 前是否加括号。"""
+    depth = 0
+    for ch in expr_str.strip():
+        if ch in '([{':
+            depth += 1
+        elif ch in ')]}':
+            depth -= 1
+        elif depth == 0 and not (ch.isalnum() or ch in '_.:?'):
+            return False
+    return True
 
 
 def _drop_removed(entries: list) -> None:
@@ -279,7 +312,7 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
 
 
 def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
-                   lvt_names: frozenset = frozenset()) -> bool:
+                   lvt_names: frozenset = frozenset(), registry=None) -> bool:
     """将在 if/else 块内 let-声明但在块外被读取的变量提升到块前。
 
     JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 if/else 内首次 let-声明，
@@ -536,9 +569,11 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                 span_end = k2
                 break
         if box_object is not None and name not in lvt_names:
-            merged_type = _merged_slot_type(entries, name, block_k, span_end)
+            # 同槽异型（javac 合成槽，无声明类型）：按 JVM 合并点语义取公共祖先
+            # widening；无公共类祖先时回退根类装箱
+            merged_type = _merged_slot_type(entries, name, block_k, span_end, registry)
             if merged_type is not None:
-                _box_into_merged(entries, name, block_k, span_end, box_object)
+                _widen_into_merged(entries, name, block_k, span_end, merged_type, box_object)
                 hoisted_type = merged_type
         insertions.append((block_k, (block_indent, LetStmt(name, hoisted_type, True, default_val))))
         for decl_k, _ in decl_list:
