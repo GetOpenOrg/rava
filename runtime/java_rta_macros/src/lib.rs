@@ -1,22 +1,17 @@
 use proc_macro::TokenStream;
 
 mod block;
-mod enum_macro;
 mod switch_macro;
 mod synchronized;
 mod try_macro;
 
 /// `java_class! { ... }` — 块级宏，封装单个 Java 类的全部 Rust 复杂度。
+///
+/// Java enum 在字节码层面就是普通类（继承 `java/lang/Enum`，常量为 static final
+/// 字段），同样经此宏翻译；不再有独立的 enum 表示路径。
 #[proc_macro]
 pub fn java_class(input: TokenStream) -> TokenStream {
     block::expand(input.into()).into()
-}
-
-/// `java_enum! { ... }` — 块级宏，封装 Java `enum`。
-/// 自动生成 ordinal()/name()/values()/valueOf() + ObjectVTable impl。
-#[proc_macro]
-pub fn java_enum(input: TokenStream) -> TokenStream {
-    enum_macro::expand(input.into()).into()
 }
 
 /// `java_switch! { expr; arm => body, ... }` — 封装 Java switch 语义。

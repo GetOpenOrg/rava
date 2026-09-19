@@ -275,6 +275,15 @@ fn expand_interface(
         let keep_attrs = strip_meta_attrs(&f.attrs);
         let sig = without_param_mut(&f.sig);
         let missing_msg = format!("AbstractMethodError: {}.{}:{}", binary_name, mname, desc);
+        // default 方法体（codegen 以载体为接收者翻译一份落到接口块内）：载体分派的
+        // 最终回退 —— vtable 未命中（lambda / 闭包接收者不实现 `Iface__VTable`）
+        // 且非 SAM 直调时执行 default 体，对应 JVM 对函数式接口实例调用 default
+        // 方法的语义（类覆盖 / 实现类展开体仍经 vtable 优先分派）。
+        let default_fallback = if let Some(block) = &f.block {
+            quote! { return #block; }
+        } else {
+            quote! {}
+        };
         carrier_methods.push(quote! {
             #(#keep_attrs)*
             pub #sig {
@@ -285,6 +294,7 @@ fn expand_interface(
                         <dyn #vtable_ident>::#mname(&*__vt #(, ::std::convert::Into::into(#args))*)?));
                 }
                 #lambda_call
+                #default_fallback
                 panic!("{} (receiver: {})", #missing_msg, ObjectVTable::__obj_str(&*self.__ref.0))
             }
         });
@@ -294,9 +304,9 @@ fn expand_interface(
     let (static_storage, static_accessors) =
         class_init::expand_statics(struct_ident, statics, &impl_methods);
     let has_clinit = fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
-    // 接口初始化不触发父接口初始化（JVMS §5.5）
+    // 接口初始化不触发父接口初始化（JVMS §5.5）；接口无实例形态，不登记常量目录
     let (init_state, class_init_fn) =
-        class_init::expand_class_init(struct_ident, binary_name, None, has_clinit);
+        class_init::expand_class_init(struct_ident, binary_name, None, has_clinit, quote! {});
 
     quote! {
         #[allow(non_camel_case_types)]
@@ -1678,8 +1688,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let (static_storage, static_accessors) =
         class_init::expand_statics(&struct_ident, &statics, &impl_method_set);
     let has_clinit = fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
+    // 自身类型 static 字段（枚举常量形态）→ 初始化完成后登记常量目录
+    let constant_register = class_init::constant_directory_registration(
+        &struct_ident, binary_name, &statics);
     let (init_state, class_init_fn) = class_init::expand_class_init(
-        &struct_ident, &meta.binary_name, meta.superclass.as_ref(), has_clinit);
+        &struct_ident, &meta.binary_name, meta.superclass.as_ref(), has_clinit,
+        constant_register);
 
     let wrapper_impl = quote! {
         #(#static_storage)*

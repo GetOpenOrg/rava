@@ -148,8 +148,13 @@ def _desc_class_refs(desc: str) -> list[str]:
     return re.findall(r'L([^;]+);', desc or '')
 
 
-def _collect_method_refs(instrs) -> tuple:
-    """从指令注释中提取方法引用和字段所属类引用（仅 JDK 类）。
+def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset()) -> tuple:
+    """从指令注释中提取方法引用和字段所属类引用（JDK 类 + 用户类）。
+
+    用户类的方法引用也进 method_refs：用户类自身方法虽全部作为种子展开，但以
+    用户类为常量池类的**继承方法**调用（如 enum 子类调用基类的 name()/ordinal()）
+    必须经 _process 走 JVM 方法解析（JVMS §5.4.3.3）落到最近声明祖先，否则
+    基类方法永远不入调用链。
 
     Returns:
         (method_refs, field_classes, member_refs, boundary_refs, new_classes, static_field_refs):
@@ -199,7 +204,7 @@ def _collect_method_refs(instrs) -> tuple:
                 if _is_boundary_class(cls) and '[' not in cls:
                     field_classes.append(cls)
                     boundary_refs.append((cls, meth, desc))
-                elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
+                elif (cls.startswith(_JDK_PREFIXES) or cls in user_class_names) and '[' not in cls:
                     method_refs.append((cls, meth, desc))
                 _add_type_refs(desc)
         elif c.startswith('InvokeDynamic '):
@@ -264,6 +269,11 @@ def _collect_method_refs(instrs) -> tuple:
                 # 构造器本身由紧随其后的 invokespecial <init> 方法引用入队
                 new_classes.append(cls)
             field_classes.append(cls)
+        elif instr.opcode == 'new' and '[' not in c and c.split()[0] in user_class_names:
+            # 用户类的 new（如 enum 常量在 <clinit> 中构造）：进 RTA 实例化集合，
+            # 虚调用目标才能传播到该类的覆盖/继承方法。用户类不走 field_classes
+            # 通道（不进 jdk_infos，user crate 整体生成）。
+            new_classes.append(c.split()[0])
     return method_refs, field_classes, member_refs, boundary_refs, new_classes, static_field_refs
 
 
@@ -278,6 +288,13 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     from .classfile import parse_class_bytes
     from .jdk_resolver import JdkResolver
     from .native_upcalls import NativeUpcalls
+
+    # 用户类（含内部类）按 binary name 索引：方法解析沿继承层次查找时同样可见。
+    # 没有这一步，以用户类为常量池类的方法引用（如 enum 子类调用继承自 JDK 基类的
+    # name()/ordinal()）在 _process 中找不到声明者，JVM 方法解析（JVMS §5.4.3.3）
+    # 的父类链分支不会发生，基类方法永远不入调用链。
+    user_infos: dict[str, object] = {ci.name: ci for ci in class_infos}
+    user_names: frozenset[str] = frozenset(user_infos)
 
     upcalls = NativeUpcalls(runtime_src) if runtime_src else None
     # 以根类为常量池类的虚方法引用 (name, descriptor)：根类手写、不入 visited_methods
@@ -348,7 +365,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
     def enqueue_refs(instrs, exception_table=()):
         (method_refs, f_classes, member_refs, boundary_refs, new_classes,
-         static_refs) = _collect_method_refs(instrs)
+         static_refs) = _collect_method_refs(instrs, user_class_names=user_names)
         boundary_virtual_targets.update(boundary_refs)
         instantiated_classes.update(new_classes)
         pending_static_fields.extend(static_refs)
@@ -386,7 +403,12 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         return [], set(), set()
 
     def _load_class(name: str):
-        """按需解析类（不加入生成范围，仅供方法解析沿继承层次查找）。"""
+        """按需解析类（不加入生成范围，仅供方法解析沿继承层次查找）。
+
+        用户类不在 JDK 档案里，从入参 class_infos 取。
+        """
+        if name in user_infos:
+            return user_infos[name]
         if name not in class_cache:
             _data = resolver.resolve(name)
             try:
@@ -523,7 +545,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         ci = _load_class(cls)
         if ci is None:
             return
-        if cls not in jdk_infos:
+        # 用户类由 user crate 从 class_infos 整体生成，不进 jdk_infos（否则重复定义）
+        if cls not in jdk_infos and cls not in user_infos:
             jdk_infos[cls] = ci
         origin[0] = (cls, meth, desc)
 
@@ -589,10 +612,14 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             - RTA：已实例化类 X（(X, <init>, *) 在调用链上）是虚调用目标声明类的子类型时，
               (X, m, d) 入队；X 未声明则由 _process 按方法解析规则落到最近声明者
             """
+            def _ci_of(name: str):
+                """实例化类的 ClassInfo：用户类在 user_infos，JDK 类在 class_cache。"""
+                return user_infos.get(name) or class_cache.get(name)
+
             instantiated = sorted(
                 x for x in instantiated_classes
-                if class_cache.get(x) is not None
-                and not class_cache[x].is_interface and not class_cache[x].is_abstract
+                if _ci_of(x) is not None
+                and not _ci_of(x).is_interface and not _ci_of(x).is_abstract
             )
             for cls, meth, desc in list(visited_methods):
                 if meth in ('<init>', '<clinit>'):

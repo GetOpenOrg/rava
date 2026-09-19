@@ -134,28 +134,37 @@ pub fn Object__toString_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error
 }
 
 // ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────
+//
+// 装箱身份（JLS §5.1.7）：基本类型值装箱进 Object 后，其运行时类是对应的包装类。
+// 包装类方法在本架构中擦除为原始类型（`Double.valueOf(D)Double` 翻译为恒等），
+// 因此原始类型盒自身承载包装类的 binary name —— `instanceof Double`、getClass()、
+// 异常消息对装箱值给出与 JVM 一致的答案（Formatter 按参数运行时类分派即依赖此）。
 macro_rules! impl_vtable_primitive {
-    ($t:ty) => {
+    ($t:ty, $bin:literal) => {
         impl ObjectVTable for $t {
             fn __obj_str(&self) -> std::string::String { format!("{}", self) }
+            fn __class_name(&self) -> &'static str { $bin }
+            fn is_instance_of(&self, type_id: &str) -> bool { type_id == $bin }
             fn as_any(&self) -> &dyn std::any::Any { self }
         }
     };
-    ($t:ty, $fmt:ident) => {
+    ($t:ty, $bin:literal, $fmt:ident) => {
         impl ObjectVTable for $t {
             fn __obj_str(&self) -> std::string::String { crate::$fmt(*self) }
+            fn __class_name(&self) -> &'static str { $bin }
+            fn is_instance_of(&self, type_id: &str) -> bool { type_id == $bin }
             fn as_any(&self) -> &dyn std::any::Any { self }
         }
     };
 }
-impl_vtable_primitive!(i32);
-impl_vtable_primitive!(i64);
-impl_vtable_primitive!(bool);
-impl_vtable_primitive!(i8);
-impl_vtable_primitive!(i16);
-impl_vtable_primitive!(u16);
-impl_vtable_primitive!(f32, java_fmt_f32);
-impl_vtable_primitive!(f64, java_fmt_f64);
+impl_vtable_primitive!(i32, "java/lang/Integer");
+impl_vtable_primitive!(i64, "java/lang/Long");
+impl_vtable_primitive!(bool, "java/lang/Boolean");
+impl_vtable_primitive!(i8,  "java/lang/Byte");
+impl_vtable_primitive!(i16, "java/lang/Short");
+impl_vtable_primitive!(u16, "java/lang/Character");
+impl_vtable_primitive!(f32, "java/lang/Float", java_fmt_f32);
+impl_vtable_primitive!(f64, "java/lang/Double", java_fmt_f64);
 
 /// null/default 值：存储 () 表示 Java null
 impl ObjectVTable for () {

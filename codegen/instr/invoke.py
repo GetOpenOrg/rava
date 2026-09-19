@@ -17,6 +17,7 @@ from ..type_map import (
     enclosing_scope_type_args as _enclosing_scope_type_args,
     superclass_type_args as _superclass_type_args,
     method_sig_types as _method_sig_types,
+    ancestor_type_args as _ancestor_type_args,
 )
 from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 from .coerce import (
@@ -529,6 +530,27 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             _peek_s = [render_type(t) for _, t in sim.stack[len(sim.stack) - len(params):]]
             _bound_s = _bind_type_args(_raw_sig or [], _peek_s, _static_tps)
             _static_inst = [_bound_s.get(t, 'Object') for t in _static_tps]
+    # 祖先精化：跨类静态调用的常量池类是当前类的祖先（enum 子类的 valueOf 里
+    # invokestatic 基类方法）时，实参未绑定的类型参数按子类泛型签名实例化
+    # （Day 的 `Ljava/lang/Enum<LTestEnumBasic$Day;>;` → E=Day）。javac 在该位置
+    # 的静态推断即此结果（字节码因擦除退化为 Object，调用点需恢复具体形态，
+    # 否则返回值无法构造具体实例化的祖先视图）。
+    _static_anc_refined = False
+    if (_static_inst and registry and class_name and _cp_cls_bin
+            and _cp_cls_bin != class_name):
+        _cur_ci = registry.get(class_name)
+        if _cur_ci is not None:
+            for _anc_bin, _anc_args in _ancestor_type_args(_cur_ci, registry):
+                if _anc_bin != _cp_cls_bin:
+                    continue
+                _refined = [
+                    (_anc_args[i] if i < len(_anc_args) and _anc_args[i] != 'Object' else a)
+                    for i, a in enumerate(_static_inst)
+                ]
+                if _refined != _static_inst:
+                    _static_inst = _refined
+                    _static_anc_refined = any(a != 'Object' for a in _static_inst)
+                break
     _static_targ_map = (dict(zip(_parse_class_type_params(_static_ci.generic_signature), _static_inst))
                         if _static_inst else None)
     sig_params_s = _lookup_method_sig_params(
@@ -616,6 +638,12 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         if _sig_ret_s is not None and _static_tbind and turbofish_bound:
             from ..type_map import substitute_type_params as _subst_tp
             _sig_ret_s = _subst_tp(_sig_ret_s, _static_tbind)
+        if (_static_anc_refined and _sig_ret_s in (None, rust_ret)
+                and rust_ret.split('<')[0].strip() == short_cls(_cp_cls_bin)):
+            # 擦除返回即被调类自身的擦除实例化（Enum<Object>）且方法级签名无法给出
+            # 更具体类型（valueOf 的 <T> 是方法级变量）→ 与 turbofish 同步为祖先
+            # 精化后的实例化（Enum<TestEnumBasic_Day>），否则局部标注与表达式 E0308
+            _sig_ret_s = f"{short_cls(_cp_cls_bin)}<{', '.join(_static_inst)}>"
         if rust_ret == 'Object':
             if _sig_ret_s is not None and _sig_ret_s != 'Object':
                 sim.emit(RawStmt(f"let {v} = Object::from_any({call}{q});"))
