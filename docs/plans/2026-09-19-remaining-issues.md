@@ -285,6 +285,12 @@ R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」�
 
 ### G-9 循环体内 if/else 分支被整段丢弃 【P2】
 
+> **R6 轮排查结论（2026-09-19）**：根因**不在 CFG 结构化**，而在 `sim/control.py` 的 `instanceof` 静态折叠——接收者静态类型是目标超类（`Animal` 变量 vs `Dog`）时被折叠为编译期 `false`，`if (x instanceof T)` 分支被当死代码消除（TestCasting 的 4 处 instanceof 全中，循环内外皆然）。已交付：
+> - `[cfg-audit]` 新增 `instanceof_fold=N` 指标（此前该类静默错误无任何指示器）；
+> - 实测验证了运行时化路径（`ObjectVTable::is_instance_of` 按 all_supertypes 匹配 + checkcast 的 `<T>::from` 视图恢复）：TestCasting 全通过；
+> - 但运行时化令 HashMap.putVal 的 TreeNode 分支复活，暴露**槽位定型缺陷**（JDK 类无 LVT，同一 slot 兄弟分支赋不同类型时首赋值类型成为声明类型 → E0308，TestCollections/TestArrayList 回归）。已按纪律回退发射，代码注释中保留了恢复步骤。
+> - **终态修复 = instanceof 运行时化 + G-3 槽位按公共祖先 widening 一起落地**（与 R5-C 早前的独立试验结论一致）。
+
 - **现状**（e2e-issues B2，触发用例：TestCasting）：CFG 结构化重写在循环体内的条件分支上存在缺陷——`while` 循环体里的 `if/else` 分支会被整段省略，只保留分支内某一个基本块（通常是非条件路径）。实测 TestCasting 有 4 处 `instanceof` 判断，生成代码只剩 2 个，循环内 `if/else` 完全丢失，导致输出 diff。
 - **根因**：`codegen/cfg/structuring.py` 在处理循环体内嵌套的条件分支时，支配关系计算或 region 归属判断存在错误，将 if/else 的两个后继合并为同一路径，或将其中一条路径误判为循环出口而跳过。具体触发点需通过 `TestCasting` 的字节码反编译对比 CFG 图确认。
 - **影响范围**：不只限于 `instanceof`，任何循环体内包含多出口 if/else 的方法体均可能触发。
@@ -329,6 +335,8 @@ R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」�
 
 ### V-3 可读性无自动化检验 【P2】
 A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在 `[cfg-audit]` 旁输出 `[readability-audit]`（各禁用形态计数），`run_tests.py` 汇总；目标值全 0。
+
+> **R6 轮已交付前半**：`main.py` 现于每次转译后输出 `[readability-audit] from_any=N downcast=N downcast_ref=N rc_new=N borrow=N`（只统计含生成标记的文件，与 A-2 口径一致）。`run_tests.py` 汇总尚未做。
 
 ### V-4 单元测试运行器 【P3】
 环境未装 pytest，`tests/unit/test_cfg_structuring.py`（17 个用例）用 `python3 -m unittest` 运行。终态：在 CLAUDE.md「常用命令」中写明单元测试命令。

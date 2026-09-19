@@ -162,6 +162,34 @@ def main():
     if os.environ.get('JAVA_RTA_DEBUG'):
         for method_id, reason in CFG_AUDIT_STATS.stub_fallbacks:
             print(f"[cfg-audit] stub fallback: {method_id}: {reason}")
+    # 可读性自检（V-3）：§16 禁止出现在可读层的调用形态计数，终态全 0。
+    # 只统计生成文件（含 java_rta_macros::java_class 标记）：手写 *_impl.rs / *_ext.rs /
+    # 基础设施（object.rs、error.rs 等）不计入，与 A-2 验收口径一致。
+    _READABILITY_PATTERNS = (
+        ('from_any', 'Object::from_any'),
+        ('downcast', '.downcast::<'),
+        ('downcast_ref', 'downcast_ref'),
+        ('rc_new', 'Rc::new('),
+        ('borrow', '.borrow()'),
+    )
+    _counts = {label: 0 for label, _pat in _READABILITY_PATTERNS}
+    for _crate in ('java_runtime', 'user'):
+        _src_root = os.path.join(out_dir, _crate, 'src')
+        for _root, _dirs, _files in os.walk(_src_root):
+            for _fname in _files:
+                if not _fname.endswith('.rs'):
+                    continue
+                _fpath = os.path.join(_root, _fname)
+                try:
+                    with open(_fpath, encoding='utf-8') as _rf:
+                        _text = _rf.read()
+                except Exception:
+                    continue
+                if 'java_rta_macros::java_class' not in _text:
+                    continue  # 手写 / 基础设施文件
+                for _label, _pat in _READABILITY_PATTERNS:
+                    _counts[_label] += _text.count(_pat)
+    print("[readability-audit] " + ' '.join(f"{k}={v}" for k, v in _counts.items()))
     t_codegen = time.perf_counter() - t0
     print(f"[time] transpile   {fmt_dur(t_codegen)}")
 

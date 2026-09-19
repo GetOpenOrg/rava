@@ -50,6 +50,7 @@ class AuditStats:
     stub_fallbacks: list = field(default_factory=list)  # [(method_id, reason)]
     try_regions: int = 0                                 # 结构化为 java_try! 的 try 区域数
     handler_methods: dict = field(default_factory=dict)  # method_id → 未进入结构化树的异常处理器个数（终态 0）
+    instanceof_folds: int = 0                             # instanceof 静态折叠为编译期 false 的次数
     _seen: set = field(default_factory=set)
 
     def record(self, ledger: JumpLedger, used_dispatch: bool) -> None:
@@ -75,6 +76,16 @@ class AuditStats:
         if untranslated_handlers:
             self.handler_methods[method_id] = untranslated_handlers
 
+    def record_instanceof_fold(self) -> None:
+        """instanceof 被静态判为编译期 false（接收者与目标静态类型互不为子类型关系）。
+
+        该折叠会把依赖运行时类型的分支当死代码消除——TestCasting 丢失全部
+        `if (x instanceof T)` 分支即此（G-9）。审计行展示该计数，超预期时
+        优先怀疑 instanceof 折叠误判（接收者静态类型是目标超类的场景已改为
+        运行时判定，见 sim/control.py）。
+        """
+        self.instanceof_folds += 1
+
     def summary(self) -> str:
         kinds = ' '.join(f"{k}={v}" for k, v in sorted(self.by_kind.items()))
         return (f"[cfg-audit] methods={self.methods} jumps={self.jumps} "
@@ -83,7 +94,8 @@ class AuditStats:
                 f"try_regions={self.try_regions} "
                 f"handler_methods={len(self.handler_methods)} "
                 f"handler_jumps={self.by_kind.get('handler', 0)} "
-                f"stub_fallback={len(self.stub_fallbacks)} | {kinds}")
+                f"stub_fallback={len(self.stub_fallbacks)} "
+                f"instanceof_fold={self.instanceof_folds} | {kinds}")
 
     def reset(self) -> None:
         self.__init__()

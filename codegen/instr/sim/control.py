@@ -102,11 +102,21 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 sim.push(expr, RsNamed(cast_rust))
     elif op == 'instanceof':
         # JVM 语义: pop objectref, push int(0/1)
-        # 通过 registry 继承链做静态类型分析：
-        #   obj 静态类型 IS-A target  → true（子类一定是父类）
+        # 静态类型分析（registry 继承链）：
+        #   obj 静态类型 IS-A target  → true（子类一定是父类，编译期可证）
         #   obj 静态类型 == target    → true
-        #   否则（obj 是 target 超类，或无继承关系）→ false
-        #   值语义下 Dog.into()→Animal 后类型信息已丢失，超类变量对子类 instanceof 为 false
+        #   其余（obj 是 target 超类、或互不为子类型）→ 编译期 false，计入 instanceof_fold 审计
+        #
+        # ⚠ obj 是 target 超类时（Animal 变量 instanceof Dog）按 JVM 语义应运行时判定，
+        #   运行时机制也已具备（超类包装持有具体子类 vtable；ObjectVTable::is_instance_of
+        #   按 all_supertypes 匹配 binary name；checkcast 的 <T>::from(装箱) 同步可用）。
+        #   但运行时化会让被折叠消除的分支复活，暴露槽位定型缺陷：JDK 类无
+        #   LocalVariableTable，同一 slot 在兄弟分支赋不同类型（HashMap.putVal 的 e：
+        #   TreeNode 分支 / Node 分支）时首赋值类型成为声明类型，复活分支的赋值报
+        #   E0308（TestCollections/TestArrayList 回归实测）。完整修复 = 此处运行时化 +
+        #   槽位按公共祖先 widening（G-3）一起落地，见 remaining-issues G-9。届时恢复：
+        #     _boxed = _coerce_to_object(val_s, obj_base, registry, sim.class_type_params)
+        #     push RawExpr f"({_boxed}).is_instance_of(\"{comment}\")"
         val_expr_inst, val_ty_inst = sim.pop() if sim.stack else (None, None)
         if comment and val_ty_inst is not None:
             if comment.startswith('['):
@@ -120,18 +130,22 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             else:
                 target_for_subtype = target_rust
             obj_ty_str = render_type(val_ty_inst)
-            val_s_inst = render_expr(val_expr_inst)
             if obj_ty_str == 'Object':
                 # 运行时多态：通过 ObjectVTable fn 指针（Arch-2）检查类型继承链
                 # comment 本身就是 JVM 二进制名（如 java/util/List）
+                val_s_inst = render_expr(val_expr_inst)
                 sim.push(RawExpr(f"({val_s_inst}.is_instance_of(\"{comment}\"))"), BOOL)
             elif obj_ty_str == target_for_subtype:
                 sim.push(Lit('true'), BOOL)
             elif _is_subtype(obj_ty_str.split('<')[0], target_for_subtype.split('<')[0], registry):
                 sim.push(Lit('true'), BOOL)
             else:
+                from ...cfg import STATS as _STATS_INST
+                _STATS_INST.record_instanceof_fold()
                 sim.push(Lit('false'), BOOL)
         else:
+            from ...cfg import STATS as _STATS_INST
+            _STATS_INST.record_instanceof_fold()
             sim.push(Lit('false'), BOOL)
     else:
         return False
