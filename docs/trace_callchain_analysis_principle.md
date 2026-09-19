@@ -2,6 +2,23 @@
 
 ---
 
+## 0. 文档定位与适用范围
+
+**本文描述的是 `scripts/trace_callchain*.py` 这一独立分析工具的算法原理，不是转译主流程的实现。**
+
+两者是**两套独立实现**：
+
+| | `scripts/trace_callchain*.py` | `codegen/transpile.py::_discover_jdk_classes_method_level` |
+|---|---|---|
+| 定位 | 独立的链路分析 / 算法验证工具 | 转译流水线的一部分，产出真正参与 codegen 的类闭包 |
+| 是否被主流程调用 | **否**（`scripts/main.py` 与 `codegen/` 均无引用） | 是，`transpile()` 第 3 步调用 |
+| 输出 | 调用链 + 引用集合 + 统计报告 | `jdk_class_infos` / `visited_methods` / `field_stubs` |
+
+因此本文描述的算法细节**不能**直接当作转译器的行为依据。两者的覆盖差异见 **第九节**，
+主流程侧独有的机制（边界截断、native upcall、default 方法解析等）见 **第 9.2 节**。
+
+---
+
 ## 一、整体架构
 
 脚本的核心任务是：**从用户编写的 Java 类出发，静态模拟 JVM 的类加载与方法分派过程，把运行时会真正触达的每一个类、每一个方法、每一条初始化路径都找出来**，不依赖实际运行，纯粹分析字节码。
@@ -61,6 +78,9 @@ JDK jmods（zip 格式的 .class 库）
 - `B C D F I J S Z V` → 基本类型，忽略
 
 **原因**：字段声明了类型，即使方法体里没有任何对该字段的 get/put 操作，编译后仍然存在该类型依赖，Rust/C++ codegen 生成结构体时需要知道字段类型对应的类定义。
+
+> **主流程对照（2026-09-19 核对）**：`codegen/transpile.py` **只**在遇到 `getstatic/putstatic/getfield/putfield` 指令时收集该字段描述符里的类型（`_collect_method_refs` → `_add_type_refs`），
+> **没有**在首次解析类时遍历 `ci.fields` 统一收集声明类型。若某个类仅作为类型存根进入闭包、且从未被字段指令触达，其字段类型会缺失。见 9.3 缺口 B。
 
 ---
 
@@ -139,6 +159,9 @@ JDK jmods（zip 格式的 .class 库）
 
 Java 代码 `Class<?> c = ArrayList.class;` 或 `getClass().isAssignableFrom(List.class)` 会生成 `ldc Class java/util/List` 指令。这是类引用进入链路的又一个入口，原来完全被忽略。
 
+> **主流程对照（2026-09-19 核对）**：**未覆盖**。`codegen/classfile.py::_ldc_str` 对 `CONSTANT_Class` 生成的注释形如 `class java/util/List`（带 `class ` 前缀），
+> 而 `codegen/transpile.py::_collect_method_refs` 的末条分支只匹配 `comment.startswith(_JDK_PREFIXES)`，因此该通道被静默丢弃。见 9.3 缺口 A。
+
 **变长指令的特殊处理：**
 
 | 指令 | 处理规则 |
@@ -147,6 +170,9 @@ Java 代码 `Class<?> c = ArrayList.class;` 或 `getClass().isAssignableFrom(Lis
 | `lookupswitch` (0xAB) | 需要 4 字节对齐填充 + npairs 数量计算 |
 | `wide` (0xC4) | 后跟 1 字节子操作码，若子操作码是 `iinc (0x84)` 则总长 6 字节，否则 4 字节 |
 | `multianewarray` (0xC5) | 3字节索引 + 1字节维度数，共 4 字节 |
+
+> **主流程对照**：`multianewarray` 已正确解码，注释为元素类型名；但多维**引用**数组的注释形如 `[[Ljava/lang/String;`，
+> 含 `[` 字符，被 `_collect_method_refs` 的 `'[' not in c` 守卫过滤掉 → 元素类型不进闭包。见 9.3 缺口 C。
 
 ---
 
@@ -184,9 +210,14 @@ interfaces[i] (u2) → 常量池 CONSTANT_Class → 接口名
 
 ---
 
-### 2.7 `invokedynamic` 的 BootstrapMethods 属性（当前版本跳过）
+### 2.7 `invokedynamic` 的 BootstrapMethods 属性（`trace_callchain.py` 当前版本跳过）
 
 Lambda 表达式和字符串拼接（`+` 运算符在 Java 9+ 由 `StringConcatFactory` 处理）会生成 `invokedynamic` 指令。完整处理需要解析 `BootstrapMethods` 属性，找到对应的 `MethodHandle`，追踪到实际调用的方法。当前版本跳过此指令，是已知的局限。
+
+> **主流程对照**：**已覆盖，且比本节描述更完整**。`codegen/classfile.py::_parse_bootstrap_methods` 解析 `BootstrapMethods`，
+> 对 `LambdaMetafactory` 提取 `sam_type`（SAM 方法类型）与 `impl_method`（实现方法 `Cls.name:desc`），对 `makeConcatWithConstants` 提取模板串，
+> 一并写入指令注释；`transpile.py` 再从 `impl:` 令牌把实现方法入队（`impl:Cls.method:desc`）。
+> 差异：`samtype:` 令牌**未被** `_collect_method_refs` 使用，SAM 函数式接口类型不由此进闭包（通常已由方法描述符通道覆盖，故未暴露为故障）。
 
 ---
 
@@ -309,6 +340,10 @@ invokevirtual List.add() 但栈顶是 ArrayList → 精确分派到 ArrayList.ad
   把 (cls, '<clinit>', '()V') 入队展开
 ```
 
+> **主流程对照**：`codegen/transpile.py::_enqueue_class_init` 在 **4 个**触发点生效——`new`、`<init>` 展开、
+> `invokestatic`（`m.is_static`）、`getstatic`/`putstatic`（`_drain_static_fields` → `_static_field_owner`），
+> 并沿**父类链**递归入队，比上面的近似处理更完整。
+
 HelloWorld 实际触发的 `<clinit>` 共 **54 个**，包括 `ArrayList.<clinit>`（初始化空数组常量）、`Pattern.<clinit>`（注册正则引擎）、`HashMap$TreeNode.<clinit>`（红黑树常量）等。
 
 ---
@@ -347,10 +382,72 @@ java.base.jmod
 
 ## 八、已知局限（需要后续补充）
 
-| 局限 | 影响 | 补充方向 |
-|------|------|---------|
-| `invokedynamic` 跳过 | Lambda 调用链断开，字符串拼接底层类丢失 | 解析 `BootstrapMethods` 属性，追踪 `MethodHandle` |
-| invokestatic 不触发 `<clinit>` | 部分静态工厂类的初始化路径丢失 | `invokestatic` 时也将目标类加入 `instantiated` |
-| 接口继承链只做一层传播 | 间接接口实现的具体方法可能丢失 | 递归展开接口父接口，或在 `is_subtype` 里递归查 |
-| 反射调用完全不追踪 | `Class.forName`/`Method.invoke` 的动态目标丢失 | 需要常量字符串传播分析（超出静态分析能力范围） |
-| 注解处理器 | `@Override`/`@FunctionalInterface` 等元信息引用 | 解析 `RuntimeVisibleAnnotations` 属性 |
+> **2026-09-19 修订**：下表前 3 条描述的是 `trace_callchain.py` 的状态；其中第 1、2、3 条在**转译主流程**中已不存在（见第九节），
+> 请勿据此判断 `codegen/transpile.py` 的能力。第 4、5 条两者都仍未处理。
+
+| # | 局限 | 影响 | 补充方向 | 主流程是否已修复 |
+|---|------|------|---------|------------------|
+| 1 | `invokedynamic` 跳过 | Lambda 调用链断开，字符串拼接底层类丢失 | 解析 `BootstrapMethods` 属性，追踪 `MethodHandle` | **已修复**（见 2.7 对照） |
+| 2 | invokestatic 不触发 `<clinit>` | 部分静态工厂类的初始化路径丢失 | `invokestatic` 时也将目标类加入 `instantiated` | **已修复**（`_enqueue_class_init`，且额外覆盖 getstatic/putstatic） |
+| 3 | 接口继承链只做一层传播 | 间接接口实现的具体方法可能丢失 | 递归展开接口父接口，或在 `is_subtype` 里递归查 | **已修复**（`_supertypes` 传递闭包） |
+| 4 | 反射调用完全不追踪 | `Class.forName`/`Method.invoke` 的动态目标丢失 | 需要常量字符串传播分析（超出静态分析能力范围） | 否 |
+| 5 | 注解处理器 | `@Override`/`@FunctionalInterface` 等元信息引用 | 解析 `RuntimeVisibleAnnotations` 属性 | 否 |
+
+---
+
+## 九、与转译主流程的覆盖对照
+
+核对日期：2026-09-19。对照对象：`codegen/transpile.py::_discover_jdk_classes_method_level`
++ `codegen/classfile.py`，即真正决定「哪些类与方法被转译」的那套实现。
+
+### 9.1 逐条覆盖情况
+
+| 本文条目 | 主流程实现 | 状态 |
+|---|---|---|
+| 2.1 常量池（Utf8/Class/String/Fieldref/Methodref/InterfaceMethodref/NameAndType/MethodHandle/MethodType/Dynamic/InvokeDynamic） | `_parse_constant_pool` 全部覆盖，Long/Double 双槽已跳过 | 完全覆盖 |
+| 2.2 字段表描述符类型 | 仅字段**指令**处收集（`_add_type_refs`），未遍历 `ci.fields` 统一收集 | 部分（缺口 B） |
+| 2.3 方法表：native / abstract / static 标志、描述符类型、`<init>`、`<clinit>`、Code 属性 | 全覆盖；abstract/native 无 `instrs` 自然不展开，但描述符类型仍收集 | 完全覆盖 |
+| 2.4 类型一 invokevirtual / invokespecial / invokestatic / invokeinterface / invokedynamic | 全覆盖，invokedynamic 解析到实现方法并入队 | 完全覆盖 |
+| 2.4 类型二 `new` | 进入 `instantiated_classes`（RTA 实例化集合） | 完全覆盖 |
+| 2.4 类型三 getstatic / putstatic / getfield / putfield | 全覆盖，并额外解析字段声明类（`_static_field_owner`，JVMS §5.4.3.2） | 超越 |
+| 2.4 类型四 `anewarray` / `checkcast` / `instanceof` | 覆盖 | 完全覆盖 |
+| 2.4 类型四 `multianewarray` | 已解码，但多维引用数组的 `[` 前缀被守卫过滤 | 部分（缺口 C） |
+| 2.4 类型五 `ldc` / `ldc_w` 加载 Class | **未覆盖** | 缺口（见 A） |
+| 2.5 异常表 `catch_type` | 覆盖（`enqueue_refs` 内遍历 `exception_table`） | 完全覆盖 |
+| 2.6 类继承结构（super_class / interfaces） | 覆盖，并以 `_supertypes` 做传递闭包 | 超越 |
+| 2.7 BootstrapMethods | 覆盖（见 2.7 对照） | 超越 |
+| 3.2 L1 Native 边界 | 覆盖：native 无字节码，展开即终止；描述符类型仍进闭包 | 完全覆盖 |
+| 3.3 L2 `<clinit>` 门控 | 覆盖且更严：`new` / `invokestatic` / `getstatic` / `putstatic` 四处触发，沿父类链递归 | 超越 |
+| 3.4 L3 RTA 虚调用过滤 | 覆盖：RTA + **不动点迭代**，另含根类虚目标（`Object.toString` 等）与边界虚目标两类传播 | 超越 |
+| 3.5 VTA 操作数栈类型追踪 | **未实现**，以保守 RTA 替代（闭包偏大，但不漏） | 未实现（可接受） |
+| 通道 1 调用链展开 | 覆盖 | 完全覆盖 |
+| 通道 2 方法描述符类型 | 覆盖（`_enqueue_desc_types`，含用户类种子方法自身描述符） | 完全覆盖 |
+| 通道 3 字段声明类型 | 未覆盖 | 缺口（见 B） |
+| 通道 4 字节码直接类引用 | 覆盖，缺 `ldc` 与 `multianewarray` | 部分（缺口 A / C） |
+| 通道 5 异常表 catch 类型 | 覆盖 | 完全覆盖 |
+| 七、模块清单 9 项 | 均以内联函数 / 闭包形式存在于 `transpile.py`（`_load_class`、`_enqueue_declaring_method`、`_propagate_virtual_targets`、`_enqueue_class_init`、`JdkResolver` 等） | 完全覆盖 |
+
+### 9.2 主流程有、本文未描述的机制
+
+这些是转译器独有、分析脚本不必关心的设计：
+
+- **内部包边界截断**：`sun/`、`jdk/`、`com/sun/`、`com/oracle/`、`java/security/` 以及 `runtime/java_runtime/vm_boundary.txt` 清单内的类，
+  只生成类型占位符、方法体为 `panic!` stub，BFS 在此截断。**这是策略取舍，不是缺陷。**
+- **native upcall 反向边**：手写 runtime 的 `_impl.rs` 可声明「native 方法回调 Java」的目标，反向注入调用链。
+- **JVMS §5.4.3.3 方法解析**：常量池类未声明目标方法时，沿父类链找最近声明者；未找到再沿父接口找 `default` 方法，
+  并把中间接口补进 registry，保证 default 方法注入不断链。
+- **VM 根方法清单**：`runtime/java_runtime/vm_roots.txt` 声明手写运行时直接调用的已翻译方法，作为 BFS 的额外种子。
+- **用户类父类链初始化**：用户类的 JDK 父类先初始化。
+- **不动点收敛**：`queue` 排空 → 传播虚调用目标 → 有新方法则继续，直到不再增长。
+
+### 9.3 主流程侧的实际缺口
+
+| 缺口 | 位置 | 影响 | 建议改法 |
+|---|---|---|---|
+| **A. `ldc` 加载 Class 字面量不进闭包** | `transpile.py::_collect_method_refs` 末条分支只匹配 `comment.startswith(_JDK_PREFIXES)`，而 `_ldc_str` 产出 `class java/util/List` | `X.class` 字面量引入的类不进闭包 → 该类缺失或退化为无初始化存根。与本文 2.4 类型五同源 | 新增分支：`comment` 以 `class ` 开头时取 `comment.split()[1]`，按现有 `field_classes` / `field_discover_classes` 通道处理 |
+| **B. 字段声明类型未统一收集** | `transpile.py::_discover_jdk_classes_method_level` 未遍历 `ci.fields` | 仅作类型存根、又从未被字段指令触达的类，其字段引用的 JDK 类不进闭包 → 生成代码引用不存在的类型 | 解析类时统一 `_enqueue_desc_types(f.descriptor)`（可先只对 `field_discover_classes` 内的类生效，控制闭包膨胀） |
+| **C. `multianewarray` 多维引用数组元素类型被过滤** | 同上，`'[' not in c` 守卫 | `new String[2][3]` 的 `String` 不由此进闭包（通常被其它通道覆盖，故尚未暴露为故障） | 对 `multianewarray` 的注释先剥掉前导 `[` 再取类名 |
+| D. `samtype:` 未使用 | `transpile.py::_collect_method_refs` 的 `InvokeDynamic` 分支只取 `impl:` | SAM 函数式接口类型不由此进闭包 | 需要时按 `_add_type_refs(sam)` 处理 |
+
+> **注意**：A、B、C 都会**扩大**闭包（更多类进入转译范围）。改动后必须跑全量回归——
+> 闭包变大可能引入新的编译错误，也可能让构建变慢。建议逐项改、逐项验。

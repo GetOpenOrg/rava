@@ -29,7 +29,11 @@ def sim_consts(ins, sim, class_name, registry) -> bool:
         elif comment.startswith('float '): sim.push(Lit(_float_lit(comment[6:].strip(), 'f32')), F32)
         elif comment.startswith('long '):  sim.push(Lit(comment[5:].strip() + 'i64'), I64)
         elif comment.startswith('double '): sim.push(Lit(_float_lit(comment[7:].strip(), 'f64')), F64)
-        elif comment.startswith('class '): sim.push(Lit('Object::default()'), RsNamed('Object'))
+        elif comment.startswith('class '):
+            # 类字面量（X.class / X[].class）：生成携带 binary name 的 Class 对象。
+            # 过去这里退化为 Object::default()（null），任何对它的调用都 NPE。
+            _bin = comment[6:].strip()
+            sim.push(Lit(f'Class::for_class(String::from("{_bin}"))'), RsNamed('Class'))
         else: sim.push(Lit(f"{operand}i32"), I32)
     elif op == 'aconst_null': sim.push(Lit('Object::default()'), RsNamed('Object'))
     else:

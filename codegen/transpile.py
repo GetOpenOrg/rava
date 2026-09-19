@@ -11,6 +11,10 @@ from .classfile import parse_class
 from .emitter import write_cargo_project
 from .constants import OBJECT_CLASS as _OBJECT_CLASS, RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME
 
+# `ldc` 装载类字面量（`X.class`）时，栈上得到的是 java/lang/Class 实例；
+# 该类型必须存在于闭包，否则生成的 `Class::for_class(..)` 无处可指。
+_CLASS_CLASS = 'java/lang/Class'
+
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
 # 只展开公开 API（java/ javax/）；内部实现包（sun/ jdk/ com.sun/ com.oracle/）截断为 stub
@@ -241,6 +245,11 @@ def _collect_method_refs(instrs) -> tuple:
                     if '[' not in cls:
                         member_refs.append((cls, rest[dot+1:colon]))
                     _add_type_refs(rest[colon+1:])
+        elif c.startswith('class '):
+            # ldc / ldc_w 装载的类字面量（`X.class` / `X[].class`）：栈上是
+            # java/lang/Class 实例，该类型必须进闭包（目标类本身不需要转译 ——
+            # Class 对象只承载 binary name，见 Class::for_class）。
+            field_classes.append(_CLASS_CLASS)
         elif c.startswith(_JDK_PREFIXES + _JDK_STUB_ONLY_PREFIXES) and '[' not in c and _is_boundary_class(c.split()[0]):
             # stub-only 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
             cls = c.split()[0]
