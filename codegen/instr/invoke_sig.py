@@ -442,7 +442,10 @@ def _coerce_arg(
             # （实例方法里 let this = self;，两者均可见）
             if _is_generated_concrete_class(actual, sim, registry):
                 return "Object::from(Clone::clone(this))"
-            return f"Object::from_any(Clone::clone(this))"
+            # 接口载体（default 方法体落到接口自身块时的 this）等其余形态经
+            # _coerce_to_object：载体走 `Object::from`（From 解包 __ref，保持接收者
+            # 身份）；from_any 双重包装会使接口查询 / SAM 闭包直调失联。
+            return _coerce_to_object('this', actual, registry, sim.class_type_params)
         return _coerce_to_object(e, actual, registry, sim.class_type_params)
     if expected in ('bool', 'i8', 'i16', 'u16') and actual != expected:
         return _coerce_value(e, e_ty_node, expected)

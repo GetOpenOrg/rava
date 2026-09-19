@@ -121,11 +121,16 @@ pub(crate) fn expand_statics(
 ///
 /// 状态：0 = 未初始化；1 = 初始化中 / 已完成（同线程递归与后续访问都立即返回）；
 ///       2 = erroneous（`<clinit>` 曾抛出异常）。
+///
+/// `register` 为初始化成功后追加执行的语句（常量目录登记，见
+/// `constant_directory_registration`），在 `<clinit>` 之后执行——此时 static
+/// 字段已就位，取值闭包经访问器读到的是初始化完成的值。
 pub(crate) fn expand_class_init(
     struct_ident: &Ident,
     binary_name: &str,
     superclass: Option<&Type>,
     has_clinit: bool,
+    register: TokenStream2,
 ) -> (TokenStream2, TokenStream2) {
     let state = format_ident!("__CLINIT_STATE_{}", struct_ident);
     let storage = quote! {
@@ -136,10 +141,13 @@ pub(crate) fn expand_class_init(
     };
     let init_super = superclass.map(|sup| quote! { <#sup>::__class_init()?; });
     let clinit_ident = format_ident!("{}", CLINIT_FN);
+    // 带 `?;` 的语句形态（不再作为尾表达式）：常量目录登记语句要追加在
+    // `<clinit>` 之后；无 `<clinit>` 时不生成该语句（独立的 `Ok(())?;`
+    // 缺少类型上下文，无法推断）。
     let run_clinit = if has_clinit {
-        quote! { Self::#clinit_ident() }
+        quote! { Self::#clinit_ident()?; }
     } else {
-        quote! { Ok(()) }
+        quote! {}
     };
     let member = quote! {
         #[doc(hidden)]
@@ -155,6 +163,8 @@ pub(crate) fn expand_class_init(
             let run = || -> Result<()> {
                 #init_super
                 #run_clinit
+                #register
+                Ok(())
             };
             match run() {
                 Ok(()) => Ok(()),
@@ -166,4 +176,50 @@ pub(crate) fn expand_class_init(
         }
     };
     (storage, member)
+}
+
+/// 常量目录登记语句：声明了「自身类型（无泛型实参）static 字段」的类，
+/// 在初始化完成后把 (字段名 → 取值闭包) 登记到运行时常量目录。
+///
+/// Java 枚举常量即该形态（`static final Day MONDAY`，字段名 == 常量名，javac
+/// 保证），是 JDK `Class.enumConstantDirectory` 目录项的来源；登记按结构形态
+/// 判定，不感知枚举语义。非常量（ConstantValue）与数组形态（`$VALUES`）不登记。
+pub(crate) fn constant_directory_registration(
+    struct_ident: &Ident,
+    binary_name: &str,
+    statics: &[StaticItem],
+) -> TokenStream2 {
+    let entries: Vec<TokenStream2> = statics.iter().filter(|st| {
+        if st.const_value.is_some() {
+            return false;
+        }
+        match &st.ty {
+            syn::Type::Path(tp) if tp.qself.is_none() => tp.path.segments.last()
+                .map(|seg| seg.ident == *struct_ident && seg.arguments.is_empty())
+                .unwrap_or(false),
+            _ => false,
+        }
+    }).map(|st| {
+        let name = &st.name;
+        let lit = name.to_string();
+        quote! {
+            (
+                ::std::string::String::from(#lit),
+                ::std::rc::Rc::new(|| -> Result<Object> { Ok(Object::from(Self::#name()?)) })
+            )
+        }
+    }).collect();
+    if entries.is_empty() {
+        return quote! {};
+    }
+    let dotted = binary_name.replace('/', ".");
+    quote! {
+        {
+            let __entries: ::std::vec::Vec<(
+                ::std::string::String,
+                ::std::rc::Rc<dyn Fn() -> Result<Object>>
+            )> = ::std::vec![#(#entries),*];
+            register_constant_directory(#dotted, __entries);
+        }
+    }
 }

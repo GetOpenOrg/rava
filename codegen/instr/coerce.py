@@ -149,6 +149,8 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
 
     - 类实例：`Object::from(x)` —— Object 直接持有该 wrapper，运行时类（is_instance_of）、
       虚方法覆盖（hashCode/equals/toString）与接口 vtable（`__interface`）全部可达
+    - 接口载体：同样 `Object::from(x)` —— 载体的 From 解包 `__ref`，保持底层接收者的
+      对象身份（`from_any` 会把载体自身装成新对象，双重包装后接口查询与 SAM 直调失联）
     - 类型变量：`Into::<Object>::into(x)`（类型实参恒为引用类型，宏为类型形参补 Into<Object>）
     - 基本类型：`.into()`
     - 其余（闭包等无运行时类的值）：`Object::from_any(..)` 不透明装箱
@@ -165,7 +167,7 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
     if registry:
         from ..type_map import _registry_short_index
         _ci = _registry_short_index(registry).get(ty.split('<')[0].strip())
-        if _ci is not None and not _ci.is_interface:
+        if _ci is not None:
             return f"Object::from({src})"
     return f"Object::from_any({src})"
 

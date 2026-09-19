@@ -74,6 +74,42 @@ impl PartialEq for MutexHolder {
     fn eq(&self, other: &Self) -> bool { std::sync::Arc::ptr_eq(&self.0, &other.0) }
 }
 
+// ── 常量目录（JDK `Class.enumConstantDirectory` 的数据面）────────────────────
+//
+// `java_class!` 宏在类初始化（JVMS §5.5）完成后，为声明了「自身类型 static 字段」
+// 的类登记（常量名 → 取值闭包）——Java 枚举常量即该形态（`static final Day MONDAY`，
+// 值由 `<clinit>` 写入线程局部存储）。查询侧（手写 `Enum.valueOf`）按类对象的
+// binary name（点分）取常量。登记只看结构形态，不感知枚举语义；非枚举类的
+// 同形态 static 字段一并登记，无副作用（目录仅被常量名查找消费）。
+
+type ConstantGetter = std::rc::Rc<dyn Fn() -> Result<Object>>;
+
+std::thread_local! {
+    static CONSTANT_DIRECTORY: std::cell::RefCell<
+        std::collections::HashMap<std::string::String, Vec<(std::string::String, ConstantGetter)>>
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// 登记一个类的常量目录项。`binary_name` 为 JVM binary name（斜线 / $ 形态），
+/// 内部归一为点分形态（与 `Class` 对象承载的名字一致）。
+pub fn register_constant_directory(binary_name: &str, entries: Vec<(std::string::String, ConstantGetter)>) {
+    CONSTANT_DIRECTORY.with(|dir| {
+        dir.borrow_mut().insert(binary_name.replace('/', "."), entries);
+    });
+}
+
+/// 按类名 + 常量名取常量。类未登记（无该形态 static 字段 / 尚未初始化）或
+/// 常量不存在 → None；常量取值闭包失败（如 erroneous 类初始化后置访问）→ None。
+pub fn lookup_constant(binary_name: &str, constant_name: &str) -> Option<Object> {
+    CONSTANT_DIRECTORY.with(|dir| {
+        let dir = dir.borrow();
+        dir.get(binary_name)?
+            .iter()
+            .find(|(name, _)| name == constant_name)
+            .and_then(|(_, get)| get().ok())
+    })
+}
+
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 pub mod prelude {
     #![allow(unused_imports)]
@@ -88,6 +124,7 @@ pub mod prelude {
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;
+    pub use super::{register_constant_directory, lookup_constant};
     pub use std::rc::Rc;
     pub use std::cell::RefCell;
     pub use super::MutexHolder;

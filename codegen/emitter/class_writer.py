@@ -879,8 +879,70 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
 
         if _is_iface and not m.is_static:
-            # 接口实例方法（abstract / default）：无方法体的成员声明。宏据此生成擦除签名的
-            # 接口 vtable（`Iface__VTable`）与载体上的同名分派方法；default 方法体由实现类继承展开。
+            # 接口实例方法（abstract / default）：宏据此生成擦除签名的接口 vtable
+            # （`Iface__VTable`）与载体上的同名分派方法。abstract 保持无体声明；
+            # default 方法体由实现类继承展开（类覆盖优先），**同时**以载体为接收者
+            # 翻译一份落到接口自身块内 —— 载体分派在 vtable 查询未命中（lambda /
+            # 闭包接收者不实现 `Iface__VTable`）时执行它，对应 JVM 对函数式接口
+            # 实例调用 default 方法的语义（A-5 的闭包接收者路径）。
+            _dm_iface_body = None
+            # 含 `Iface.super.m()`（invokespecial 常量池类为接口）的 default 体不落到
+            # 接口载体：其展开成员（`Owner_super_m`）建模在实现类，载体上下文不存在。
+            # 判定与调用侧（invoke.py invokespecial）同源：_resolve_interface_special_target。
+            from ..instr.coerce import (
+                _resolve_interface_special_target as _rist_dm,
+                _method_ref_binary_class as _mrbc_dm,
+                _method_ref_descriptor as _mrd_dm,
+            )
+
+            def _ref_mname(c: str) -> str:
+                _rest = c.split(' ', 1)[1] if ' ' in c else c
+                _dot = _rest.find('.')
+                _colon = _rest.find(':', _dot)
+                return _rest[_dot + 1:_colon] if 0 < _dot < _colon else ''
+
+            _has_iface_super = False
+            for _ins in (m.instrs or []):
+                if _ins.opcode != 'invokespecial' or not _ins.comment:
+                    continue
+                if _rist_dm(_mrbc_dm(_ins.comment), _ref_mname(_ins.comment),
+                            _mrd_dm(_ins.comment), registry):
+                    _has_iface_super = True
+                    break
+            # 载体只声明本接口的方法：default 体调用本接口未声明的方法（典型：
+            # `this.hasNext()` 声明在父接口 Iterator）时不落接口 —— 实现类侧的
+            # 继承成员展开（inherited_from）在载体上下文不存在，仍走类 vtable 分派。
+            _own_sigs = {(_mm.name, _mm.descriptor) for _mm in ci.methods}
+            _calls_nonself = False
+            for _ins in (m.instrs or []):
+                if _ins.opcode not in ('invokevirtual', 'invokeinterface') or not _ins.comment:
+                    continue
+                if (_ref_mname(_ins.comment), _mrd_dm(_ins.comment)) not in _own_sigs:
+                    _calls_nonself = True
+                    break
+            _dm_in_cc = (
+                not m.is_abstract and not m.is_synthetic and not _has_iface_super
+                and not _calls_nonself
+                and (call_chain is None or (ci.name, m.name, m.descriptor) in call_chain)
+            )
+            if _dm_in_cc and not stub_bodies:
+                try:
+                    _dm_iface_body = gen_method_body(
+                        m, ci, registry=registry,
+                        class_type_params=class_type_params,
+                        overloaded_names=overloaded_names,
+                        rust_name=rust_name,
+                        in_vtable_body=False,
+                    )
+                except CfgAuditError:
+                    raise
+                except Exception as e:
+                    _CFG_STATS.record_stub_fallback(
+                        f"{ci.name}.{m.name}:{m.descriptor}(iface-default)", repr(e))
+                    _dm_iface_body = None
+            if _dm_iface_body is not None:
+                method_blocks.append(_java_method_attr(m) + '\n' + _dm_iface_body)
+                continue
             _decl = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry,
                                      class_type_params=class_type_params)
             _decl_sig = next(ln.strip() for ln in _decl.split('\n') if ln.lstrip().startswith('pub fn '))

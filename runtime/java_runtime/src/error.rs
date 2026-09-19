@@ -164,8 +164,12 @@ impl JvmError {
     }
 
     /// main 线程未捕获异常出口：按 Java 格式输出到 stderr，进程退出码 1。
+    /// `JAVA_RTA_UNCAUGHT_BT=1` 时附打印时 Rust backtrace（定位抛出点的诊断开关）。
     pub fn report_uncaught(&self) -> ! {
         eprintln!("Exception in thread \"main\" {}", self.describe());
+        if std::env::var_os("JAVA_RTA_UNCAUGHT_BT").is_some() {
+            eprintln!("{}", std::backtrace::Backtrace::force_capture());
+        }
         std::process::exit(1)
     }
 }
