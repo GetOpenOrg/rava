@@ -1,14 +1,18 @@
 """继承成员声明生成：把调用侧登记的「接收者类需要某继承方法」落到定义侧。
 
 Java 子类天然拥有祖先的非私有实例方法；Rust wrapper 之间没有继承关系。
-终态做法：接收者类的 java_class! 块里出现一条**无方法体的继承成员声明**
+终态做法：接收者类的 java_class! 块里出现一条**带转发体的继承成员声明**
 
     #[java_method(name = "speak", descriptor = "()I", access = "public",
                   inherited_from = "Animal", vtable_owner = "Animal")]
-    pub fn speak(&self) -> Result<i32>;
+    pub fn speak(&self) -> Result<i32> { Animal__speak_base::<Self>(self) }
 
-宏据此在 wrapper 上展开同名转发方法（虚方法经声明它的祖先 VTable 分派，保持多态；
-非虚方法向上转型后调用）。调用点因此与 Java 完全一致：`dog.speak()`。
+宏据此做两件事（见 block/mod.rs「继承成员填槽」）：
+  - wrapper 上展开同名转发方法（虚方法经声明它的祖先 VTable 分派，保持多态）
+  - 本类对 vtable_owner 的 vtable impl 用该体填槽——否则 vtable_owner 声明为
+    abstract（实现位于中间祖先）时，槽位落到声明类的 trait default（stub panic），
+    虚分派命中空洞（S-16）。转发体与 super 调用同源：精确命中 owner 的实现，
+    this 以本类 __inner 视图传入（supertrait 链满足 base 函数的 `__BT` 约束）。
 
 数据流：
   1. 方法体生成期间，调用点向 codegen.inherited_calls 登记需求（按需，不全量）
@@ -52,6 +56,7 @@ class EmittedMethod:
     signature: str       # `pub fn name(&self, ..) -> Result<..>`（不含方法体、参数不带 mut）
     access: str          # public / protected / private / ''（package）
     virtual_in: str      # 声明该虚方法的 VTable 所属类（Rust 短名）；非虚方法为空
+    handwritten: bool = False  # body = "handwritten"：无块，体在共置 _impl.rs 的 __impl_<m>
 
 
 @dataclass
@@ -80,7 +85,7 @@ class ClassEmission:
             if fn_name is None or '&self' not in sig_line:
                 continue
             signature = sig_line.rstrip()
-            if signature.endswith(('{', ';')):
+            if signature.endswith((';', '{')):
                 signature = signature[:-1].rstrip()
             signature = re.sub(r'\bmut\s+(?=[A-Za-z_][A-Za-z0-9_]*\s*:)', '', signature)
             access = _ACCESS_RE.search(rest)
@@ -90,6 +95,7 @@ class ClassEmission:
                 signature=signature,
                 access=access.group(1) if access else '',
                 virtual_in=virtual_in.group(1) if virtual_in else '',
+                handwritten=bool(re.search(r'\bbody\s*=\s*"handwritten"', rest)),
             ))
 
     def find(self, name: str, param_descriptor: str) -> 'EmittedMethod | None':
@@ -104,8 +110,73 @@ def _rust_type(binary_name: str, args: list[str]) -> str:
     return f"{base}<{', '.join(args)}>" if args else base
 
 
+def _param_idents(signature: str) -> list[str]:
+    """`pub fn name(&self, a: T, b: U) -> R` → ['a', 'b']。
+
+    顶层逗号分割（忽略泛型 / 括号内的逗号）；跳过 self 接收者；去掉 mut 绑定。"""
+    start = signature.find('(')
+    if start < 0:
+        return []
+    depth, end = 0, -1
+    for i in range(start, len(signature)):
+        if signature[i] in '(<[':
+            depth += 1
+        elif signature[i] in ')>]':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
+        end = len(signature)
+    parts: list[str] = []
+    depth, cur = 0, ''
+    for ch in signature[start + 1:end]:
+        if ch in '(<[':
+            depth += 1
+        elif ch in ')>]':
+            depth -= 1
+        if ch == ',' and depth == 0:
+            parts.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur)
+    out: list[str] = []
+    for p in parts:
+        p = p.strip()
+        if not p or p == 'self' or p == 'mut self' or p.startswith('&'):
+            continue
+        name = p.split(':', 1)[0].strip()
+        if name.startswith('mut '):
+            name = name[4:].strip()
+        if name and _IDENT_RE.fullmatch(name):
+            out.append(name)
+    return out
+
+
+def _forward_body(method: EmittedMethod, owner_bin: str, owner_args: list[str]) -> str:
+    """继承成员的转发体：精确执行 owner 祖先的实现（super 调用同源，不经 vtable 分派）。
+
+    运行上下文是「本类对 vtable_owner 的 vtable impl」（Self = 本类 __inner）：
+      - 常规：调用 owner 宏展开生成的 `Owner__m_base` 自由函数；this 以 __inner 视图
+        传入，经 supertrait 链满足 base 函数的 `__BT: Owner__VTable` 约束。turbofish
+        传 owner 视角实参 + Self。
+      - 手写（body = "handwritten"，宏不生成 base 函数）：经 `__as_Owner` 钩子（owner
+        自身 vtable trait 的 self-hook）重建 owner wrapper 视图后执行其共置 `__impl_<m>`。"""
+    args = _param_idents(method.signature)
+    owner_short = short_cls(owner_bin)
+    if not method.handwritten:
+        turbo = ', '.join([*owner_args, 'Self'])
+        call = f"self, {', '.join(args)}" if args else 'self'
+        return f"{owner_short}__{method.rust_name}_base::<{turbo}>({call})"
+    hook_trait = f"{owner_short}__VTable" + (f"<{', '.join(owner_args)}>" if owner_args else '')
+    return (f"<Self as {hook_trait}>::__as_{owner_short}(self)"
+            f".__impl_{method.rust_name}({', '.join(args)})")
+
+
 def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry: dict) -> str:
-    """祖先方法声明 → 接收者类视角下的继承成员声明（两行文本）。"""
+    """祖先方法声明 → 接收者类视角下的继承成员声明（声明 + 转发体）。"""
     anc_args = dict(ancestor_type_args(recv_ci, registry))
     owner_ci = registry[owner_bin]
     owner_params = effective_class_type_params(owner_ci, registry)
@@ -115,14 +186,18 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
                for i, p in enumerate(owner_params)}
     signature = substitute_type_params(method.signature, mapping)
 
+    vt_bin, vt_args = owner_bin, owner_args
+    if method.virtual_in:
+        vt_bin = next((b for b in anc_args if short_cls(b) == method.virtual_in), owner_bin)
+        vt_args = anc_args.get(vt_bin, [])
     parts = [f'name = "{method.name}"', f'descriptor = "{method.descriptor}"']
     if method.access:
         parts.append(f'access = "{method.access}"')
     parts.append(f'inherited_from = "{_rust_type(owner_bin, owner_args)}"')
     if method.virtual_in:
-        vt_bin = next((b for b in anc_args if short_cls(b) == method.virtual_in), owner_bin)
-        parts.append(f'vtable_owner = "{_rust_type(vt_bin, anc_args.get(vt_bin, []))}"')
-    return f"#[java_method({', '.join(parts)})]\n{signature};"
+        parts.append(f'vtable_owner = "{_rust_type(vt_bin, vt_args)}"')
+    body = _forward_body(method, owner_bin, owner_args)
+    return f"#[java_method({', '.join(parts)})]\n{signature} {{ {body} }}"
 
 
 def _interface_member_declaration(method: EmittedMethod, owner_bin: str, owner_args: list[str],
@@ -304,6 +379,15 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
             members.setdefault(recv_bin, []).append(decl)
             imports.setdefault(recv_bin, []).extend(
                 _imports_for(decl.split('\n', 1)[1], emissions[owner_bin], recv, imported, arg_uses))
+            # 转发体调用的 owner __base 自由函数（宏在 owner 模块展开，pub 可达）：
+            # 经与类型相同的再导出路径导入（与祖先 __VTable trait 导入同构）
+            if not method.handwritten:
+                base_short = f"{short_cls(owner_bin)}__{method.rust_name}_base"
+                if base_short not in imported:
+                    imported.add(base_short)
+                    base_path = (class_use_path(owner_bin, recv.crate_prefix, emissions)
+                                 + f"__{method.rust_name}_base")
+                    imports.setdefault(recv_bin, []).append(f"use {base_path};")
 
     for bin_name, em in emissions.items():
         decls = members.get(bin_name, [])
