@@ -1,21 +1,27 @@
 # `trace_callchain.py` 完整分析原理
 
+> **2026-09-19 完整版修订**：本文描述 `scripts/trace_callchain.py` 的**完整版实现**（2026-09-19 重写）。
+> 历史版本 `trace_callchain0917.py` / `trace_callchain0919.py` 保留作对照，不再演进：
+> 基线版在字段指令处提取字段描述符类型（0917 起被移除），0919 补了 ldc/catch/字段声明三条通道
+> 但丢失了字段描述符通道，且两者的层次索引不随 `shared_cache` 重建（见 3.4 注）。
+> 完整版统一实现下述全部机制。
+
 ---
 
 ## 0. 文档定位与适用范围
 
-**本文描述的是 `scripts/trace_callchain*.py` 这一独立分析工具的算法原理，不是转译主流程的实现。**
+**本文描述的是 `scripts/trace_callchain.py` 这一独立分析工具的算法原理，不是转译主流程的实现。**
 
 两者是**两套独立实现**：
 
-| | `scripts/trace_callchain*.py` | `codegen/transpile.py::_discover_jdk_classes_method_level` |
+| | `scripts/trace_callchain.py` | `codegen/transpile.py::_discover_jdk_classes_method_level` |
 |---|---|---|
 | 定位 | 独立的链路分析 / 算法验证工具 | 转译流水线的一部分，产出真正参与 codegen 的类闭包 |
-| 是否被主流程调用 | **否**（`scripts/main.py` 与 `codegen/` 均无引用） | 是，`transpile()` 第 3 步调用 |
+| 是否被主流程调用 | **否**（`scripts/main.py` 无引用；`codegen/transpile.py:301` 仅注释提及） | 是，`transpile()` 第 3 步调用 |
 | 输出 | 调用链 + 引用集合 + 统计报告 | `jdk_class_infos` / `visited_methods` / `field_stubs` |
 
 因此本文描述的算法细节**不能**直接当作转译器的行为依据。两者的覆盖差异见 **第九节**，
-主流程侧独有的机制（边界截断、native upcall、default 方法解析等）见 **第 9.2 节**。
+主流程侧独有的机制（边界截断、native upcall 等）见 **第 9.2 节**。
 
 ---
 
@@ -87,6 +93,7 @@ JDK jmods（zip 格式的 .class 库）
 ### 2.3 方法表（Methods）
 
 每个方法有：`access_flags`、`name_index`、`descriptor_index`、属性列表（含 `Code` 属性）。
+脚本将每个方法解析为 7 元组 `(name, descriptor, bytecode, is_native, is_abstract, is_static, catch_types)`。
 
 **必须提取的内容：**
 
@@ -149,8 +156,9 @@ JDK jmods（zip 格式的 .class 库）
 | 0xBD | `anewarray` | 创建引用类型数组 | 提取元素类型，加入引用集合 |
 | 0xC0 | `checkcast` | 类型强制转换 | 提取目标类型，加入引用集合 |
 | 0xC1 | `instanceof` | 类型判断 | 提取判断类型，加入引用集合 |
+| 0xC5 | `multianewarray` | 创建多维引用数组 | 操作数是数组类名（如 `[[Ljava/lang/String;`），剥掉全部 `[` 前缀后提取元素类名，基本类型元素忽略（完整版新增） |
 
-**类型五：常量加载指令**（本次修补新增）
+**类型五：常量加载指令**（0919 引入，完整版保留）
 
 | 操作码 | 指令 | 含义 | 处理方式 |
 |--------|------|------|---------|
@@ -276,6 +284,15 @@ while 队列非空:
 
 Two-pass 变体：先做一遍无过滤 BFS 收集全量 `instantiated`，再用完整集合重做一遍，精度更高。
 
+**层次索引的生命周期（完整版修复，历史版本缺陷）**：RTA 依赖的 `hier_super` / `hier_ifaces` 是每次
+BFS 调用的局部状态，而类解析结果放在跨调用共享的 `shared_cache` 里。历史版本 `get()` 在缓存命中时
+提前返回、不重建层次索引，导致 two-pass 第二程（必然热缓存）层次索引为空，`is_subtype` 退化为
+`sub == sup`，接口分派目标整体丢失；受限域实验（闭包只含 ArrayList/List 等类）证实了这一点。
+完整版的两条规则：
+1. **缓存命中即重建**：`get()` 命中 `shared_cache` 时同步回填 `hier_super` / `hier_ifaces`；
+2. **惰性解析**：`is_subtype` 沿父类链上溯时，中间类若尚未解析则先 `get()` 再查，
+   避免链在未解析的中间类处提前断裂。
+
 ---
 
 ### 3.5 VTA（可选）：操作数栈类型追踪
@@ -289,7 +306,29 @@ aload_1       → 栈顶 = "java/util/ArrayList"
 invokevirtual List.add() 但栈顶是 ArrayList → 精确分派到 ArrayList.add()
 ```
 
+接收者类型追踪同时覆盖 `invokevirtual` 与 `invokeinterface`（完整版起，历史版本仅前者）。
 减少因声明类型为接口/抽象类而引入的保守展开，降低调用链规模。
+
+---
+
+### 3.6 方法解析：沿父类链与接口闭包定位声明者（完整版新增）
+
+字节码里 `(类名, 方法名, 描述符)` 三元组的"类名"是**调用点的静态类型**，不一定是声明者：
+`new ArrayList<>().toString()` 的 Methodref 是 `ArrayList.toString`，而 `toString` 声明在
+`AbstractCollection`。历史版本出队时只在本类方法表里精确匹配，继承方法与 default 方法直接断链。
+
+完整版按 JVMS §5.4.3.3 / §5.4.3.4 近似实现 `find_declaring`，出队目标未在本类命中时：
+
+1. 沿父类链自下而上找 `(name, desc)` 精确声明者，优先带方法体/native 的声明；
+   声明为 abstract 时继续上溯找具体实现，保留首个 abstract 声明者兜底（收集描述符类型）；
+2. 类链整条找不到时，沿「父类链 + 接口」传递闭包找 default 方法（必带方法体）声明者；
+3. 仍找不到时，退化为**同名 ACC_NATIVE 声明**——覆盖签名多态方法
+   （`MethodHandle.invokeBasic` / `invoke` / `VarHandle.get` 等）：javac 按实际参数签名生成调用点
+   描述符，与声明描述符必然不同，精确匹配永远失败；这类目标本质是 native/intrinsic 边界，
+   记入 `native_stubs`。
+
+`<init>` / `<clinit>` 不参与继承解析（构造器与静态初始化块不可继承）。
+完全找不到声明者的目标记入 `unresolved` 集合并随报告输出（历史版本为静默丢弃）。
 
 ---
 
@@ -310,12 +349,12 @@ invokevirtual List.add() 但栈顶是 ArrayList → 精确分派到 ArrayList.ad
   时机：首次解析该类时统一收集
 
 通道 4：字节码中的直接类引用
-  new / checkcast / instanceof / anewarray → new_cls 或 other_refs → refs
-  getstatic / getfield 等字段指令 → 字段所属类 + 字段类型 → refs
-  ldc / ldc_w（CONSTANT_Class 条目）→ refs  ← 本次新增
+  new / checkcast / instanceof / anewarray / multianewarray → new_cls 或 other_refs → refs
+  getstatic / getfield 等字段指令 → 字段所属类 + 字段描述符类型 → refs
+  ldc / ldc_w（CONSTANT_Class 条目）→ refs
 
 通道 5：异常表 catch 类型
-  Code 属性内异常表每条的 catch_type → refs  ← 本次新增
+  Code 属性内异常表每条的 catch_type → refs  ← 0919 引入，完整版保留
 ```
 
 ---
@@ -330,21 +369,26 @@ invokevirtual List.add() 但栈顶是 ArrayList → 精确分派到 ArrayList.ad
   2. invokestatic 调用该类的静态方法（隐含类初始化）
   3. getstatic/putstatic 访问该类的静态字段
 
-脚本的近似处理：
-  - 将条件简化为：类是否在 instantiated 集合中（由 new 指令填入）
-  - invokestatic 隐含的 <clinit> 没有单独触发逻辑（已知局限）
+脚本的实现（完整版起与 JVM 语义对齐，历史版本仅实现条件 1 的近似）：
 
-展开时机：
-  BFS 主循环里，每次匹配到某类的某个方法时，
-  同时检查该类是否有 <clinit>，若有且类在 instantiated 中，
-  把 (cls, '<clinit>', '()V') 入队展开
+  - 维护独立的 `initialized` 集合（与 RTA 的 `instantiated` 分开）；
+  - 三类触发点各自调用 `_init_class`：
+      new 指令                → 实例化类进入 instantiated，同时初始化
+      invokestatic 目标类      → 初始化
+      getstatic/putstatic 属主 → 初始化（字段指令扫描时单独归类 `sfield_cls`）
+  - `_init_class` 沿父类链自底向上逐类触发（JVM §5.5：初始化子类前必须先初始化父类），幂等；
+  - 触发时**直接把 `(cls, '<clinit>', '()V') 入队**，而不是等该类的其它方法出队时顺带检查——
+    历史版本的顺带检查存在时序缺口：若某类的全部方法出队之后该类才被实例化/初始化，
+    其 `<clinit>` 永远不会再展开（two-pass 预置 instantiated 可部分缓解，单程无法自愈）。
 ```
 
 > **主流程对照**：`codegen/transpile.py::_enqueue_class_init` 在 **4 个**触发点生效——`new`、`<init>` 展开、
 > `invokestatic`（`m.is_static`）、`getstatic`/`putstatic`（`_drain_static_fields` → `_static_field_owner`），
 > 并沿**父类链**递归入队，比上面的近似处理更完整。
 
-HelloWorld 实际触发的 `<clinit>` 共 **54 个**，包括 `ArrayList.<clinit>`（初始化空数组常量）、`Pattern.<clinit>`（注册正则引擎）、`HashMap$TreeNode.<clinit>`（红黑树常量）等。
+HelloWorld 实际触发的 `<clinit>` 共 **54 个**（主流程口径，含 `ArrayList.<clinit>` 空数组常量、
+`Pattern.<clinit>` 正则引擎注册、`HashMap$TreeNode.<clinit>` 红黑树常量等）；
+完整版脚本按相同触发语义运行，实际数量以 `docs/reports/trace-HelloWorld.md` 报告为准。
 
 ---
 
@@ -371,27 +415,29 @@ java.base.jmod
 | **ClassParser** | 解析 `.class` 二进制，提取常量池/字段/方法/异常表 | `parse(bytes) → ClassInfo` |
 | **DescriptorParser** | 从方法/字段描述符提取所有 `L类名;` 引用 | `extract_classes(desc) → [str]` |
 | **BytecodeScanner** | 扫描字节码指令，识别 5 类引用 | `scan(bytecode, pool) → ScanResult` |
-| **VtaAnalyzer** | 操作数栈模拟，推断 invokevirtual 接收者类型 | `analyze(bytecode, pool) → {pc: type}` |
+| **VtaAnalyzer** | 操作数栈模拟，推断 invokevirtual/invokeinterface 接收者类型 | `analyze(bytecode, pool) → {pc: type}` |
 | **JdkResolver** | 从 jmods 目录按类名读取字节码 | `resolve(class_name) → bytes?` |
-| **HierarchyIndex** | 维护类继承/接口实现关系，支持子类型查询 | `is_subtype(sub, sup) → bool` |
+| **HierarchyIndex** | 维护类继承/接口实现关系，支持子类型查询（随解析缓存重建、查询时惰性解析） | `is_subtype(sub, sup) → bool` |
+| **MethodResolver** | JVMS §5.4.3.3/§5.4.3.4 近似：沿父类链/接口闭包定位声明者，签名多态方法归 native 边界 | `find_declaring(cls, name, desc) → (cls, method)?` |
 | **BfsEngine** | 核心 BFS 调度，管理队列/visited/instantiated/refs | `run(seeds) → BfsResult` |
-| **ClinitTracker** | 跟踪哪些类被实例化，决定是否展开 `<clinit>` | `on_new(cls)` / `should_expand(cls) → bool` |
+| **ClinitTracker** | 三类触发点（new/invokestatic/getstatic·putstatic）+ 父类链递归，触发即入队 | `init_class(cls)` |
 | **StatsCollector** | 按类型分类统计所有触达的类和方法 | `summarize(visited, refs) → Report` |
 
 ---
 
 ## 八、已知局限（需要后续补充）
 
-> **2026-09-19 修订**：下表前 3 条描述的是 `trace_callchain.py` 的状态；其中第 1、2、3 条在**转译主流程**中已不存在（见第九节），
-> 请勿据此判断 `codegen/transpile.py` 的能力。第 4、5 条两者都仍未处理。
+> **2026-09-19 完整版修订**：完整版脚本已修复第 2、3、6 条；第 1 条转译主流程已修复、脚本仍未实现；
+> 第 4、5 条两者都仍未处理。
 
-| # | 局限 | 影响 | 补充方向 | 主流程是否已修复 |
-|---|------|------|---------|------------------|
-| 1 | `invokedynamic` 跳过 | Lambda 调用链断开，字符串拼接底层类丢失 | 解析 `BootstrapMethods` 属性，追踪 `MethodHandle` | **已修复**（见 2.7 对照） |
-| 2 | invokestatic 不触发 `<clinit>` | 部分静态工厂类的初始化路径丢失 | `invokestatic` 时也将目标类加入 `instantiated` | **已修复**（`_enqueue_class_init`，且额外覆盖 getstatic/putstatic） |
-| 3 | 接口继承链只做一层传播 | 间接接口实现的具体方法可能丢失 | 递归展开接口父接口，或在 `is_subtype` 里递归查 | **已修复**（`_supertypes` 传递闭包） |
-| 4 | 反射调用完全不追踪 | `Class.forName`/`Method.invoke` 的动态目标丢失 | 需要常量字符串传播分析（超出静态分析能力范围） | 否 |
-| 5 | 注解处理器 | `@Override`/`@FunctionalInterface` 等元信息引用 | 解析 `RuntimeVisibleAnnotations` 属性 | 否 |
+| # | 局限 | 影响 | 补充方向 | 完整版脚本 | 主流程 |
+|---|------|------|---------|-----------|--------|
+| 1 | `invokedynamic` 跳过 | Lambda 调用链断开，字符串拼接底层类丢失 | 解析 `BootstrapMethods` 属性，追踪 `MethodHandle` | 未修复 | **已修复**（见 2.7 对照） |
+| 2 | invokestatic 不触发 `<clinit>` | 部分静态工厂类的初始化路径丢失 | 见第五节 | **已修复**（三触发 + 父类链） | **已修复**（`_enqueue_class_init`） |
+| 3 | 层次索引不随缓存重建 / 接口传播断链 | 热缓存（含 two-pass 第二程）下 `is_subtype` 退化为 `sub==sup`，接口分派目标丢失；间接接口实现的具体方法可能丢失 | 见 3.4 注 | **已修复**（缓存命中重建 + 惰性解析） | 不适用（实现不同） |
+| 4 | 反射调用完全不追踪 | `Class.forName`/`Method.invoke` 的动态目标丢失 | 需要常量字符串传播分析（超出静态分析能力范围） | 未修复 | 否 |
+| 5 | 注解处理器 | `@Override`/`@FunctionalInterface` 等元信息引用 | 解析 `RuntimeVisibleAnnotations` 属性 | 未修复 | 否 |
+| 6 | 方法解析不沿父类链（历史版本） | 继承方法与 default 方法断链，且静默丢弃 | 见 3.6 | **已实现**（含签名多态 native 兜底） | **已实现**（`_enqueue_declaring_method`） |
 
 ---
 
@@ -420,25 +466,24 @@ java.base.jmod
 | 3.3 L2 `<clinit>` 门控 | 覆盖且更严：`new` / `invokestatic` / `getstatic` / `putstatic` 四处触发，沿父类链递归 | 超越 |
 | 3.4 L3 RTA 虚调用过滤 | 覆盖：RTA + **不动点迭代**，另含根类虚目标（`Object.toString` 等）与边界虚目标两类传播 | 超越 |
 | 3.5 VTA 操作数栈类型追踪 | **未实现**，以保守 RTA 替代（闭包偏大，但不漏） | 未实现（可接受） |
+| 3.6 方法解析（JVMS §5.4.3.3/§5.4.3.4 近似） | `_enqueue_declaring_method`：沿父类链找最近声明者，未找到再沿父接口找 default 方法并补进 registry | 覆盖（脚本另含签名多态 native 兜底） |
 | 通道 1 调用链展开 | 覆盖 | 完全覆盖 |
 | 通道 2 方法描述符类型 | 覆盖（`_enqueue_desc_types`，含用户类种子方法自身描述符） | 完全覆盖 |
 | 通道 3 字段声明类型 | 未覆盖 | 缺口（见 B） |
 | 通道 4 字节码直接类引用 | 覆盖，缺 `ldc` 与 `multianewarray` | 部分（缺口 A / C） |
 | 通道 5 异常表 catch 类型 | 覆盖 | 完全覆盖 |
-| 七、模块清单 9 项 | 均以内联函数 / 闭包形式存在于 `transpile.py`（`_load_class`、`_enqueue_declaring_method`、`_propagate_virtual_targets`、`_enqueue_class_init`、`JdkResolver` 等） | 完全覆盖 |
+| 七、模块清单 10 项 | 9 项以内联函数 / 闭包形式存在于 `transpile.py`（`_load_class`、`_enqueue_declaring_method`、`_propagate_virtual_targets`、`_enqueue_class_init`、`JdkResolver` 等）；**VtaAnalyzer 无对应物**（见 3.5 行） | 9/10 |
 
-### 9.2 主流程有、本文未描述的机制
-
-这些是转译器独有、分析脚本不必关心的设计：
+### 9.2 主流程有、本文工具未实现/不必关心的机制
 
 - **内部包边界截断**：`sun/`、`jdk/`、`com/sun/`、`com/oracle/`、`java/security/` 以及 `runtime/java_runtime/vm_boundary.txt` 清单内的类，
-  只生成类型占位符、方法体为 `panic!` stub，BFS 在此截断。**这是策略取舍，不是缺陷。**
+  只生成类型占位符、方法体为 `panic!` stub，BFS 在此截断。**这是策略取舍，不是缺陷**（脚本侧的同名机制是 `bfs_internal_boundary` 分析模式）。
 - **native upcall 反向边**：手写 runtime 的 `_impl.rs` 可声明「native 方法回调 Java」的目标，反向注入调用链。
-- **JVMS §5.4.3.3 方法解析**：常量池类未声明目标方法时，沿父类链找最近声明者；未找到再沿父接口找 `default` 方法，
-  并把中间接口补进 registry，保证 default 方法注入不断链。
 - **VM 根方法清单**：`runtime/java_runtime/vm_roots.txt` 声明手写运行时直接调用的已翻译方法，作为 BFS 的额外种子。
 - **用户类父类链初始化**：用户类的 JDK 父类先初始化。
 - **不动点收敛**：`queue` 排空 → 传播虚调用目标 → 有新方法则继续，直到不再增长。
+
+> JVMS §5.4.3.3 方法解析原列于此；完整版脚本已实现（见 3.6）并更新 9.1 对照行，不再是"本文未描述"。
 
 ### 9.3 主流程侧的实际缺口
 

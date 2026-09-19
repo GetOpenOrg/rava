@@ -1,15 +1,45 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 方法级调用链追踪（独立脚本，不依赖项目代码）
 
 从用户 Java 类出发，BFS 追踪实际被调用的方法链路，统计所有涉及的 JDK 类。
-包含三层优化：
-  L1 native 边界  — native 方法无字节码，显式标记为边界，不尝试展开
-  L2 <clinit> 隔离 — 静态初始化块只在类被 new 实例化后才跟随
-  L3 RTA 虚调用  — 虚分发只解析到 instantiated 集合里的具体子类
+实现 docs/trace_callchain_analysis_principle.md 描述的完整算法：
+
+  五条引用发现通道：
+    1 调用链展开   2 方法描述符类型   3 字段声明类型
+    4 字节码直接类引用（new/checkcast/instanceof/anewarray/multianewarray/
+      字段属主+字段描述符类型/ldc Class）   5 异常表 catch 类型
+  三层优化：
+    L1 native 边界  — native 方法无字节码，显式标记为边界，不尝试展开
+    L2 <clinit> 门控 — 按 JVM 初始化语义触发（new / invokestatic /
+                       getstatic/putstatic 三类），沿父类链递归初始化，
+                       触发时直接入队（不受 BFS 出队顺序影响）
+    L3 RTA 虚调用   — 虚分发只解析到 instantiated 集合里的具体子类型
+  方法解析（JVMS §5.4.3.3/§5.4.3.4 近似）：
+    出队目标若在本类方法表未命中，沿父类链/接口闭包定位声明者，
+    继承方法与 default 方法不再断链
+  VTA（可选）     — 方法内操作数栈类型追踪，覆盖 invokevirtual 与 invokeinterface
+  Two-pass RTA    — 先无过滤收集全量 instantiated，再带种子精确重跑；
+                     层次索引随 shared_cache 重建，跨 pass 不丢失
+
+2026-09-19 完整版相对 0919 版的补全：
+  1. 字段指令同时提取字段描述符类型（恢复自基线版，0917 起丢失）
+  2. multianewarray 提取元素类型（剥 [ 前缀）
+  3. 方法解析：目标类未声明时沿父类链/接口闭包找声明者
+  4. 层次索引生命周期：get() 命中 shared_cache 时同步重建 hier_super/hier_ifaces，
+     修复 two-pass 等共享缓存模式下 is_subtype 退化为 sub==sup、RTA 失效的问题
+  5. <clinit> 触发补全：invokestatic / getstatic/putstatic 属主 + 父类链 + 直接入队
+     （修复"类的方法全部出队后才被实例化则 <clinit> 永不展开"的时序缺口）
+  6. 方法表提取 ACC_ABSTRACT / ACC_STATIC
+  7. VTA 接收者类型追踪覆盖 invokeinterface
+  8. unresolved 统计：解析不到声明者的调用目标显式记录并输出
 
 用法:
     python3 scripts/trace_callchain.py tests/e2e/01_basics/HelloWorld.java
+    python3 scripts/trace_callchain.py HelloWorld.java --tree
+    python3 scripts/trace_callchain.py HelloWorld.java --tree --max-depth 6
+    python3 scripts/trace_callchain.py HelloWorld.java --tree-only
 """
 
 import os
@@ -19,6 +49,7 @@ import sys
 import zipfile
 from collections import deque
 from pathlib import Path
+from typing import NamedTuple
 
 # ─── 常量池标签 ──────────────────────────────────────────────────────────────────
 _UTF8          = 1
@@ -82,10 +113,14 @@ class _R:
 
 def _parse_class(data: bytes):
     """
-    解析 .class 文件，返回 (class_name, pool, methods, super_name, iface_names)
-      methods      : list of (name, descriptor, bytecode | None, is_native)
-      super_name   : 父类 binary name（java/lang/Object 返回 None）
-      iface_names  : 实现的接口列表
+    解析 .class 文件，返回 (class_name, pool, methods, super_name, iface_names, field_type_refs)
+      class_name     : 本类二进制名
+      pool           : 常量池列表
+      methods        : list of (name, descriptor, bytecode | None,
+                                is_native, is_abstract, is_static, catch_types)
+      super_name     : 父类 binary name（java/lang/Object 返回 None）
+      iface_names    : 实现的接口列表
+      field_type_refs: 字段声明描述符中引用的类名列表（通道 3）
     """
     r = _R(data)
     if r.u4() != 0xCAFEBABE:
@@ -129,19 +164,26 @@ def _parse_class(data: bytes):
     ifc_cnt   = r.u2()
     ifc_idxs  = [r.u2() for _ in range(ifc_cnt)]
 
-    # 跳过字段表
+    # 解析字段表，提取字段描述符中引用的类型（通道 3）
+    field_type_refs: list[str] = []
     for _ in range(r.u2()):
-        r.skip(6)
-        for _ in range(r.u2()): r.skip(2); r.skip(r.u4())
+        r.skip(2)                                # field access_flags
+        r.skip(2)                                # name_index
+        fdesc = pool[r.u2()][1]                  # descriptor_index → 字段类型描述符
+        field_type_refs.extend(_extract_desc_classes(fdesc))
+        for _ in range(r.u2()): r.skip(2); r.skip(r.u4())  # attributes
 
-    # 解析方法表（含 is_native）
+    # 解析方法表（access 标志 + 异常表捕获类型）
     methods = []
     for _ in range(r.u2()):
-        m_acc  = r.u2()                          # L1: 读取 access_flags
-        mname  = pool[r.u2()][1]
-        mdesc  = pool[r.u2()][1]
-        is_native = bool(m_acc & 0x0100)         # ACC_NATIVE
-        bytecode  = None
+        m_acc       = r.u2()
+        mname       = pool[r.u2()][1]
+        mdesc       = pool[r.u2()][1]
+        is_native   = bool(m_acc & 0x0100)       # ACC_NATIVE → L1 边界
+        is_abstract = bool(m_acc & 0x0400)       # ACC_ABSTRACT → 无方法体，仅描述符依赖
+        is_static   = bool(m_acc & 0x0008)       # ACC_STATIC
+        bytecode    = None
+        catch_types: list[str] = []              # 异常表捕获类型（通道 5）
         for _ in range(r.u2()):
             aname = pool[r.u2()][1]
             alen  = r.u4()
@@ -149,15 +191,23 @@ def _parse_class(data: bytes):
                 r.skip(4)
                 clen = r.u4()
                 bytecode = r.read(clen)
-                r.skip(r.u2() * 8)
+                # 异常表：每条 8 字节，最后4字节是 catch_type 常量池索引
+                for _ in range(r.u2()):
+                    r.skip(6)                    # from_pc, to_pc, handler_pc
+                    ct_idx = r.u2()              # catch_type (0 = finally)
+                    if ct_idx != 0:
+                        e = pool[ct_idx]
+                        if e and e[0] == _CLASS:
+                            cname = _utf8(pool, e[1])
+                            if cname: catch_types.append(cname)
                 for _ in range(r.u2()): r.skip(2); r.skip(r.u4())
             else:
                 r.skip(alen)
-        methods.append((mname, mdesc, bytecode, is_native))
+        methods.append((mname, mdesc, bytecode, is_native, is_abstract, is_static, catch_types))
 
     class_name = pool[pool[this_idx][1]][1]
 
-    # L3: 提取父类和接口（用于 RTA 子类型判断）
+    # 提取父类和接口（用于 RTA 子类型判断与 JVMS 方法解析）
     super_name = None
     if super_idx != 0:
         e = pool[super_idx]
@@ -173,7 +223,7 @@ def _parse_class(data: bytes):
             n = _utf8(pool, e[1])
             if n: iface_names.append(n)
 
-    return class_name, pool, methods, super_name, iface_names
+    return class_name, pool, methods, super_name, iface_names, field_type_refs
 
 
 def _utf8(pool, idx): e = pool[idx]; return e[1] if e and e[0] == _UTF8 else ''
@@ -206,6 +256,17 @@ def _fref_type_desc(pool, ref_idx):
     if not nat or nat[0] != _NAME_TYPE: return None
     return _utf8(pool, nat[2])
 
+def _elem_cls(pool, cls_idx):
+    """从数组类名（如 [[Ljava/lang/String;）提取引用元素类名；基本类型返回 None。"""
+    e = pool[cls_idx]
+    if not e or e[0] != _CLASS: return None
+    n = _utf8(pool, e[1]).lstrip('[')
+    if n.startswith('L') and n.endswith(';'):
+        n = n[1:-1]
+    if not n or len(n) == 1 and n in 'BCDFIJSZ':
+        return None
+    return n if '[' not in n else None
+
 
 def _count_args(desc: str) -> int:
     """从方法描述符计算参数个数（不含 this）"""
@@ -233,7 +294,7 @@ def _count_args(desc: str) -> int:
 
 def _extract_desc_classes(desc: str) -> list[str]:
     """
-    从方法描述符中提取所有引用类型的类名（参数 + 返回值）。
+    从方法/字段描述符中提取所有引用类型的类名。
     例如 (Ljava/util/List;I)Ljava/lang/String; → ['java/util/List', 'java/lang/String']
     数组类型会剥掉 [ 前缀后再提取，基本类型和 void 忽略。
     """
@@ -265,7 +326,7 @@ def _extract_desc_classes(desc: str) -> list[str]:
 
 def _vta_analyze(bytecode: bytes, pool, return_summaries: dict | None = None) -> dict:
     """
-    线性操作数栈模拟（VTA），返回 {invokevirtual指令偏移量: 接收者具体类名或None}。
+    线性操作数栈模拟（VTA），返回 {invokevirtual/invokeinterface 指令偏移量: 接收者具体类名或None}。
     None 表示无法静态确定，调用方应保守回退到声明类型。
     只处理引用类型，忽略分支合并（线性扫描）。
     return_summaries: {(cls,name,desc) → concrete_type} — 跨方法返回类型摘要
@@ -336,6 +397,18 @@ def _vta_analyze(bytecode: bytes, pool, return_summaries: dict | None = None) ->
                     push(_ret_type(cls, nm, desc))
             i += 3
 
+        elif op == 0xB9:                              # invokeinterface → 记录接收者
+            ref = _mref(pool, struct.unpack_from('>H', bytecode, i+1)[0])
+            if ref:
+                cls, nm, desc = ref
+                nargs = _count_args(desc)
+                idx = len(stack) - 1 - nargs
+                result[i] = stack[idx] if 0 <= idx < len(stack) else None
+                for _ in range(nargs + 1): pop()
+                if ')' in desc and desc[desc.index(')') + 1] != 'V':
+                    push(_ret_type(cls, nm, desc))
+            i += 5
+
         elif op in (0xB7, 0xB8):                      # invokespecial / invokestatic
             ref = _mref(pool, struct.unpack_from('>H', bytecode, i+1)[0])
             if ref:
@@ -346,16 +419,6 @@ def _vta_analyze(bytecode: bytes, pool, return_summaries: dict | None = None) ->
                 if ')' in desc and desc[desc.index(')') + 1] != 'V':
                     push(_ret_type(cls, nm, desc))
             i += 3
-
-        elif op == 0xB9:                              # invokeinterface
-            ref = _mref(pool, struct.unpack_from('>H', bytecode, i+1)[0])
-            if ref:
-                cls, nm, desc = ref
-                nargs = _count_args(desc)
-                for _ in range(nargs + 1): pop()
-                if ')' in desc and desc[desc.index(')') + 1] != 'V':
-                    push(_ret_type(cls, nm, desc))
-            i += 5
 
         elif op == 0xBA: i += 5                      # invokedynamic（跳过）
 
@@ -428,25 +491,32 @@ def _compute_return_summaries(visited: set, cache: dict) -> dict:
             continue  # 基本类型或数组，不追踪
         parsed = cache.get(cls)
         if not parsed: continue
-        _, pool, methods, _, _ = parsed
-        for mname, mdesc, bc, _ in methods:
-            if mname == name and mdesc == desc and bc:
-                rt = _vta_return_type(bc, pool)
+        _, pool, methods, _, _, _ = parsed
+        for m in methods:
+            if m[0] == name and m[1] == desc and m[2]:
+                rt = _vta_return_type(m[2], pool)
                 if rt: summaries[(cls, name, desc)] = rt
     return summaries
 
 
 # ─── 字节码扫描 ──────────────────────────────────────────────────────────────────
-def _scan(bytecode: bytes, pool, vta_override: dict | None = None):
+class ScanResult(NamedTuple):
+    """一次字节码扫描的全部发现（对应文档第四节五条通道的原始输入）。"""
+    vcalls:     list  # (cls, name, desc) invokevirtual / invokeinterface → RTA/VTA
+    dcalls:     list  # (cls, name, desc) invokespecial    → 直接跟随
+    scalls:     list  # (cls, name, desc) invokestatic    → 直接跟随 + 触发 <clinit>
+    new_cls:    list  # new 实例化的类                     → RTA instantiated + 触发 <clinit>
+    sfield_cls: list  # getstatic/putstatic 属主类         → 触发 <clinit>
+    other_refs: list  # 其余类型引用（字段属主/字段描述符类型/ldc/anewarray/...）
+
+
+def _scan(bytecode: bytes, pool, vta_override: dict | None = None) -> ScanResult:
     """
-    返回 (vcalls, dcalls, new_cls, other_refs)
-      vcalls     : invokevirtual / invokeinterface → L3 RTA 分析目标
-      dcalls     : invokespecial / invokestatic    → 直接跟随
-      new_cls    : new 指令实例化的类              → L2 instantiated
-      other_refs : field / anewarray / checkcast   → 仅记录引用
-    vta_override: {pc → concrete_cls} — 若提供，invokevirtual 使用 VTA 确定的接收者类型
+    vta_override: {pc → concrete_cls} — 若提供，invokevirtual/invokeinterface
+                  使用 VTA 确定的接收者类型替换声明类型。
     """
-    vcalls, dcalls, new_cls, other_refs = [], [], [], []
+    vcalls, dcalls, scalls = [], [], []
+    new_cls, sfield_cls, other_refs = [], [], []
     i, n = 0, len(bytecode)
 
     while i < n:
@@ -457,26 +527,45 @@ def _scan(bytecode: bytes, pool, vta_override: dict | None = None):
             if ref:
                 cls, nm, desc = ref
                 # VTA: 若已知具体接收者类型，替换声明类型
-                if op == 0xB6 and vta_override and i in vta_override and vta_override[i]:
+                if vta_override and i in vta_override and vta_override[i]:
                     cls = vta_override[i]
                 vcalls.append((cls, nm, desc))
                 # 收集描述符中参数/返回值涉及的类型
                 other_refs.extend(_extract_desc_classes(desc))
             i += 3 if op == 0xB6 else 5
 
-        elif op in (0xB7, 0xB8):                   # invokespecial, invokestatic
+        elif op == 0xB7:                          # invokespecial → 直接跟随
             ref = _mref(pool, struct.unpack_from('>H', bytecode, i + 1)[0])
             if ref:
                 dcalls.append(ref)
-                # 收集描述符中参数/返回值涉及的类型
-                _, _, desc = ref
-                other_refs.extend(_extract_desc_classes(desc))
+                other_refs.extend(_extract_desc_classes(ref[2]))
             i += 3
 
-        elif op == 0xBA:                            # invokedynamic（跳过）
+        elif op == 0xB8:                          # invokestatic → 直接跟随 + 初始化
+            ref = _mref(pool, struct.unpack_from('>H', bytecode, i + 1)[0])
+            if ref:
+                scalls.append(ref)
+                other_refs.extend(_extract_desc_classes(ref[2]))
+            i += 3
+
+        elif op == 0xBA:                          # invokedynamic（跳过，已知局限）
             i += 5
 
-        elif op == 0xBB:                            # new → L2 instantiated
+        elif op == 0x12:                          # ldc → Class/String/MethodType 常量
+            entry = pool[bytecode[i + 1]]
+            if entry and entry[0] == _CLASS:
+                cls = _utf8(pool, entry[1])
+                if cls and '[' not in cls: other_refs.append(cls)
+            i += 2
+
+        elif op == 0x13:                          # ldc_w → 宽索引版 ldc
+            entry = pool[struct.unpack_from('>H', bytecode, i + 1)[0]]
+            if entry and entry[0] == _CLASS:
+                cls = _utf8(pool, entry[1])
+                if cls and '[' not in cls: other_refs.append(cls)
+            i += 3
+
+        elif op == 0xBB:                          # new → RTA instantiated + <clinit>
             cls = _cls_name(pool, struct.unpack_from('>H', bytecode, i + 1)[0])
             if cls: new_cls.append(cls)
             i += 3
@@ -484,12 +573,20 @@ def _scan(bytecode: bytes, pool, vta_override: dict | None = None):
         elif op in (0xB2, 0xB3, 0xB4, 0xB5):      # getstatic/putstatic/getfield/putfield
             ref_idx = struct.unpack_from('>H', bytecode, i + 1)[0]
             cls = _fref_cls(pool, ref_idx)
-            if cls: other_refs.append(cls)
-            # 字段类型描述符中的类型引用（如 Ljava/util/Iterator; 中的 Iterator）
+            if cls:
+                other_refs.append(cls)
+                if op in (0xB2, 0xB3):            # 静态字段访问属主 → 触发 <clinit>
+                    sfield_cls.append(cls)
+            # 字段描述符里的类型（如 System.out:Ljava/io/PrintStream; 的 PrintStream）
             fdesc = _fref_type_desc(pool, ref_idx)
             if fdesc:
                 other_refs.extend(_extract_desc_classes(fdesc))
             i += 3
+
+        elif op == 0xC5:                          # multianewarray → 元素类型
+            cls = _elem_cls(pool, struct.unpack_from('>H', bytecode, i + 1)[0])
+            if cls: other_refs.append(cls)
+            i += 4
 
         elif op in (0xBD, 0xC0, 0xC1):             # anewarray / checkcast / instanceof
             cls = _cls_name(pool, struct.unpack_from('>H', bytecode, i + 1)[0])
@@ -510,19 +607,19 @@ def _scan(bytecode: bytes, pool, vta_override: dict | None = None):
             i += np * 8
 
         elif op == 0xC4:                            # wide
-            sub = bytecode[i + 1]
+            sub = bytecode[i+1]
             i += 6 if sub == 0x84 else 4
 
         else:
             sz = _SZ[op]
             i += sz if sz else 1
 
-    return vcalls, dcalls, new_cls, other_refs
+    return ScanResult(vcalls, dcalls, scalls, new_cls, sfield_cls, other_refs)
 
 
 # ─── 截断候选分析 ──────────────────────────────────────────────────────────────────
 
-def bfs_depth_analysis(user_class_files: list[str], resolver: JdkResolver,
+def bfs_depth_analysis(user_class_files: list[str], resolver: 'JdkResolver',
                        shared_cache: dict | None = None) -> tuple[dict, dict]:
     """
     逐层 BFS：追踪每个 JDK 类首次出现在调用链的深度（方法调用层数）。
@@ -533,8 +630,6 @@ def bfs_depth_analysis(user_class_files: list[str], resolver: JdkResolver,
       layers      : {depth → set[cls]}  按层分组的类集合
     """
     sc = shared_cache if shared_cache is not None else {}
-    hier_super: dict = {}
-    hier_ifaces: dict = {}
 
     def get(cls):
         if cls in sc: return sc[cls]
@@ -543,10 +638,9 @@ def bfs_depth_analysis(user_class_files: list[str], resolver: JdkResolver,
         try:
             result = _parse_class(data)
             sc[cls] = result
-            _, _, _, sn, ifaces = result
-            hier_super[cls] = sn; hier_ifaces[cls] = ifaces
             return result
-        except Exception: sc[cls] = None; return None
+        except Exception:
+            sc[cls] = None; return None
 
     visited:     set[tuple] = set()
     queue:       deque       = deque()  # (cls, name, desc, depth)
@@ -555,11 +649,11 @@ def bfs_depth_analysis(user_class_files: list[str], resolver: JdkResolver,
     # 种子：从用户 .class 文件的方法体里直接扫出来的调用 → 深度 1
     for path in user_class_files:
         with open(path, 'rb') as f: data = f.read()
-        _, pool, methods, _, _ = _parse_class(data)
-        for _, _, bc, _ in methods:
-            if not bc: continue
-            vcalls, dcalls, _, _ = _scan(bc, pool)
-            for cls, nm, desc in vcalls + dcalls:
+        _, pool, methods, _, _, _ = _parse_class(data)
+        for m in methods:
+            if not m[2]: continue
+            sr = _scan(m[2], pool)
+            for cls, nm, desc in sr.vcalls + sr.dcalls + sr.scalls:
                 if _in_scope(cls):
                     key = (cls, nm, desc)
                     if key not in visited:
@@ -573,11 +667,11 @@ def bfs_depth_analysis(user_class_files: list[str], resolver: JdkResolver,
             class_depth[cls] = depth
         parsed = get(cls)
         if parsed is None: continue
-        _, pool, methods, _, _ = parsed
-        for mname, mdesc, bc, _ in methods:
-            if mname == name and mdesc == desc and bc:
-                vcalls, dcalls, _, _ = _scan(bc, pool)
-                for ref_cls, nm2, desc2 in vcalls + dcalls:
+        _, pool, methods, _, _, _ = parsed
+        for m in methods:
+            if m[0] == name and m[1] == desc and m[2]:
+                sr = _scan(m[2], pool)
+                for ref_cls, nm2, desc2 in sr.vcalls + sr.dcalls + sr.scalls:
                     if _in_scope(ref_cls):
                         key2 = (ref_cls, nm2, desc2)
                         if key2 not in visited:
@@ -618,17 +712,18 @@ def analyze_internal_boundary(visited: set, cache: dict) -> list:
         parsed = cache.get(cls)
         if not parsed:
             continue
-        _, pool, methods, _, _ = parsed
-        for mname, mdesc, bc, _ in methods:
-            if mname != name or mdesc != desc or not bc:
+        _, pool, methods, _, _, _ = parsed
+        for m in methods:
+            if m[0] != name or m[1] != desc or not m[2]:
                 continue
-            vcalls, dcalls, new_refs, other_refs = _scan(bc, pool)
+            sr = _scan(m[2], pool)
             calls_int = [
                 (ref_cls, nm, d)
-                for ref_cls, nm, d in vcalls + dcalls
+                for ref_cls, nm, d in sr.vcalls + sr.dcalls + sr.scalls
                 if _is_internal(ref_cls)
             ]
-            refs_int = [c for c in new_refs + other_refs if _is_internal(c)]
+            refs_int = [c for c in sr.new_cls + sr.sfield_cls + sr.other_refs
+                        if _is_internal(c)]
             if calls_int or refs_int:
                 results.append({
                     'cls':            cls,
@@ -652,15 +747,15 @@ def build_class_dep_graph(visited: set, cache: dict) -> dict:
     for cls, name, desc in visited:
         parsed = cache.get(cls)
         if not parsed: continue
-        _, pool, methods, _, _ = parsed
-        for mname, mdesc, bc, _ in methods:
-            if mname == name and mdesc == desc and bc:
-                vcalls, dcalls, new_refs, other_refs = _scan(bc, pool)
+        _, pool, methods, _, _, _ = parsed
+        for m in methods:
+            if m[0] == name and m[1] == desc and m[2]:
+                sr = _scan(m[2], pool)
                 deps = dep_graph.setdefault(cls, set())
-                for ref_cls, _, _ in vcalls + dcalls:
+                for ref_cls, _, _ in sr.vcalls + sr.dcalls + sr.scalls:
                     if _in_scope(ref_cls) and ref_cls != cls:
                         deps.add(ref_cls)
-                for ref_cls in new_refs + other_refs:
+                for ref_cls in sr.new_cls + sr.sfield_cls + sr.other_refs:
                     if _in_scope(ref_cls) and ref_cls != cls:
                         deps.add(ref_cls)
     return dep_graph
@@ -717,15 +812,13 @@ def analyze_cutoff_candidates(
         total_methods = 0
         parsed = cache.get(cls)
         if parsed:
-            _, _, methods, _, _ = parsed
-            for mname, mdesc, _, is_native in methods:
+            for m in parsed[2]:
                 total_methods += 1
-                if is_native: native_count += 1
+                if m[3]: native_count += 1
 
         called = entry_methods.get(cls, [])
         is_natural_leaf = bool(called) and all(
-            any(mname == nm and is_native
-                for mname, _, _, is_native in (parsed[2] if parsed else []))
+            any(m[0] == nm and m[3] for m in (parsed[2] if parsed else []))
             for nm, _ in called
         ) if parsed else False
 
@@ -741,6 +834,21 @@ def analyze_cutoff_candidates(
 
     results.sort(key=lambda x: x['elim_count'], reverse=True)
     return results[:top_n]
+
+
+def _method_flag_stats(visited: set, cache: dict) -> tuple[int, int]:
+    """统计 visited 目标中声明为 abstract / static 的方法数（按引用类近似）。"""
+    n_abstract = n_static = 0
+    for cls, name, desc in visited:
+        p = cache.get(cls)
+        if not p:
+            continue
+        for m in p[2]:
+            if m[0] == name and m[1] == desc:
+                n_abstract += bool(m[4])
+                n_static  += bool(m[5])
+                break
+    return n_abstract, n_static
 
 
 # ─── JDK resolver ────────────────────────────────────────────────────────────────
@@ -798,7 +906,6 @@ _PREFIXES = ('java/', 'javax/', 'sun/', 'com/sun/', 'com/oracle/', 'jdk/')
 def _in_scope(cls: str) -> bool:
     return cls.startswith(_PREFIXES)
 
-
 # 内部包前缀：出现即截断（不展开方法体，生成 stub）
 _INTERNAL_PREFIXES = ('sun/', 'jdk/', 'com/sun/', 'com/oracle/')
 
@@ -822,7 +929,17 @@ _DEFAULT_CUTOFFS = frozenset({
 })
 
 
-# ─── BFS 核心（三层 + two-pass RTA + VTA + 截断 可选） ────────────────────────────
+# ─── BFS 核心（三层 + 方法解析 + two-pass RTA + VTA + 截断 可选） ────────────────
+class BfsResult(NamedTuple):
+    visited:      set   # (cls, name, desc) 已入队的调用目标
+    all_classes:  set   # 调用链类 ∪ 仅引用类
+    native_stubs: set   # native 边界方法 (声明类, name, desc)
+    instantiated: set   # RTA 实例化集合（new 指令填入）
+    cache:        dict  # 类解析缓存（shared_cache）
+    initialized:  set   # 已触发 <clinit> 的类（JVM 初始化语义，含父类链）
+    unresolved:   set   # 解析不到声明者的调用目标
+
+
 def bfs(user_class_files: list[str], resolver: JdkResolver,
         seed_instantiated: set | None = None,
         use_rta: bool = True,
@@ -830,7 +947,7 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
         cutoff_classes: frozenset | None = None,
         return_summaries: dict | None = None,
         shared_cache: dict | None = None,
-        call_graph: dict | None = None):
+        call_graph: dict | None = None) -> BfsResult:
     """
     通用 BFS 入口。
 
@@ -840,15 +957,16 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
       use_vta            : 是否启用方法内操作数栈类型分析
       cutoff_classes     : 截断边界类集合——到达这些类时记录但不展开其方法体
       return_summaries   : 跨方法返回类型摘要，增强 VTA 精度
-      shared_cache       : 多次 BFS 间共享的类解析缓存（避免重复解析字节码）
-
-    返回 (visited_methods, all_classes, native_stubs, instantiated, cache)
+      shared_cache       : 多次 BFS 间共享的类解析缓存（层次索引随之重建）
+      call_graph         : 若非 None，收集 {调用方方法 → 被调方法集合}
     """
     visited:      set[tuple] = set()
     queue:        deque       = deque()
     refs:         set[str]    = set()
     native_stubs: set[tuple]  = set()
     instantiated: set[str]    = set(seed_instantiated or ())
+    initialized:  set[str]    = set()
+    unresolved:   set[tuple]  = set()
 
     hier_super:  dict[str, str | None] = {}
     hier_ifaces: dict[str, list[str]]  = {}
@@ -856,13 +974,21 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
     _cur: list = [None]   # 当前正在处理的方法 key，用于构建调用图边
 
     def get(cls):
-        if cls in cache: return cache[cls]
+        if cls in cache:
+            r = cache[cls]
+            # 命中 shared_cache 时同步重建层次索引，否则 two-pass 第二程
+            # hier 为空、is_subtype 退化为 sub==sup，RTA 子类型分派失效
+            if r is not None and cls not in hier_super:
+                _, _, _, sn, ifaces, _ = r
+                hier_super[cls]  = sn
+                hier_ifaces[cls] = ifaces
+            return r
         data = resolver.get(cls)
         if data is None: cache[cls] = None; return None
         try:
             result = _parse_class(data)
             cache[cls] = result
-            _, _, _, sn, ifaces = result
+            _, _, _, sn, ifaces, _ = result
             hier_super[cls]  = sn
             hier_ifaces[cls] = ifaces
             return result
@@ -872,17 +998,82 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
         if sub == sup: return True
         if sub in _seen: return False
         seen2 = _seen | {sub}
+        if sub not in hier_super:
+            get(sub)                     # 惰性解析：层次未建则先解析
+            if sub not in hier_super:    # 解析失败（类不存在/不可读）→ 视为叶节点
+                return False
         parent = hier_super.get(sub)
         if parent and is_subtype(parent, sup, seen2): return True
         for iface in hier_ifaces.get(sub, []):
             if is_subtype(iface, sup, seen2): return True
         return False
 
+    def find_declaring(cls, name, desc):
+        """
+        JVMS §5.4.3.3 / §5.4.3.4 方法解析近似，返回 (声明类, 方法元组) 或 None：
+        1. 沿父类链自下而上找 (name, desc) 精确声明者，优先带方法体/native 的声明
+           （声明为 abstract 时继续上溯找具体实现，保留首个 abstract 声明者兜底）；
+        2. 类链整条找不到时，沿「父类链 + 接口」传递闭包找 default 方法声明者；
+        3. 仍找不到时，退化为同名 ACC_NATIVE 声明——覆盖签名多态方法
+           （MethodHandle.invokeBasic / VarHandle.get 等，其调用点描述符由 javac
+           按实际签名生成，与声明描述符必然不同，精确匹配永远失败），
+           这类目标本质是 native/intrinsic 边界，无方法体可展开。
+        """
+        chain: list[str] = []
+        c, seen = cls, set()
+        while c is not None and c not in seen:
+            seen.add(c)
+            chain.append(c)
+            get(c)
+            c = hier_super.get(c)
+
+        fallback = None
+        for k in chain:
+            p = get(k)
+            if p is None:
+                continue
+            for m in p[2]:
+                if m[0] == name and m[1] == desc:
+                    if m[2] or m[3]:
+                        return k, m
+                    if fallback is None:
+                        fallback = (k, m)
+                    break
+
+        # 接口传递闭包（default 方法一定带方法体）
+        iface_seen: set = set(chain)
+        iface_q = deque()
+        for k in chain:
+            iface_q.extend(hier_ifaces.get(k, ()))
+        while iface_q:
+            k = iface_q.popleft()
+            if k in iface_seen:
+                continue
+            iface_seen.add(k)
+            get(k)
+            iface_q.extend(hier_ifaces.get(k, ()))
+            p = get(k)
+            if p is None:
+                continue
+            for m in p[2]:
+                if m[0] == name and m[1] == desc and (m[2] or m[3]):
+                    return k, m
+
+        # 同名 native 兜底（签名多态边界）
+        for k in chain:
+            p = get(k)
+            if p is None:
+                continue
+            for m in p[2]:
+                if m[0] == name and m[3]:
+                    return k, m
+        return fallback
+
     def enqueue(cls, name, desc):
         if cutoff_classes and cls in cutoff_classes:
             refs.add(cls)  # 记录截断类，但不展开其方法体
             return
-        if name == '<clinit>' and cls not in instantiated:
+        if name == '<clinit>' and cls not in initialized:
             return
         key = (cls, name, desc)
         if call_graph is not None and _cur[0] is not None:
@@ -891,18 +1082,44 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
             visited.add(key)
             queue.append(key)
 
+    def _init_class(cls: str) -> None:
+        """JVM §5.5：初始化一个类前须先初始化其全部父类。幂等；触发即入队。"""
+        chain = []
+        c, seen = cls, set()
+        while c is not None and c not in seen and _in_scope(c):
+            seen.add(c)
+            chain.append(c)
+            get(c)
+            c = hier_super.get(c)
+        for c in reversed(chain):        # 父类先初始化
+            if c not in initialized:
+                initialized.add(c)
+                enqueue(c, '<clinit>', '()V')
+
     def process(bytecode, pool):
         vta_hints = _vta_analyze(bytecode, pool, return_summaries) if use_vta else None
-        vcalls, dcalls, new_refs, other_refs = _scan(bytecode, pool, vta_hints)
+        sr = _scan(bytecode, pool, vta_hints)
 
-        for cls in new_refs:
-            if _in_scope(cls): instantiated.add(cls); refs.add(cls)
-        for cls in other_refs:
-            if _in_scope(cls): refs.add(cls)
-        for cls, nm, desc in dcalls:
+        for cls in sr.new_cls:
+            if _in_scope(cls):
+                instantiated.add(cls)     # RTA 实例化集合
+                refs.add(cls)
+                _init_class(cls)          # new → 触发 <clinit>（含父类链）
+        for cls in sr.sfield_cls:         # getstatic/putstatic 属主 → 初始化
+            if _in_scope(cls):
+                refs.add(cls)
+                _init_class(cls)
+        for cls in sr.other_refs:
+            if _in_scope(cls):
+                refs.add(cls)
+        for cls, nm, desc in sr.dcalls:   # invokespecial → 直接跟随
             if _in_scope(cls): enqueue(cls, nm, desc)
+        for cls, nm, desc in sr.scalls:   # invokestatic → 直接跟随 + 初始化
+            if _in_scope(cls):
+                enqueue(cls, nm, desc)
+                _init_class(cls)
 
-        for cls, nm, desc in vcalls:
+        for cls, nm, desc in sr.vcalls:
             if not _in_scope(cls): continue
             if not use_rta:
                 enqueue(cls, nm, desc)
@@ -917,72 +1134,97 @@ def bfs(user_class_files: list[str], resolver: JdkResolver,
 
     for path in user_class_files:
         with open(path, 'rb') as f: data = f.read()
-        ucls, pool, methods, _, _ = _parse_class(data)
-        for mname, mdesc, bc, _ in methods:
-            # 用户方法自身描述符里的参数/返回类型也是类型依赖
-            for dcls in _extract_desc_classes(mdesc):
-                if _in_scope(dcls):
-                    refs.add(dcls)
-            if bc:
+        ucls, pool, methods, _, _, field_refs = _parse_class(data)
+        # 用户类字段声明类型（通道 3）
+        for dcls in field_refs:
+            if _in_scope(dcls): refs.add(dcls)
+        for m in methods:
+            # 方法描述符里的参数/返回类型（通道 2）
+            for dcls in _extract_desc_classes(m[1]):
+                if _in_scope(dcls): refs.add(dcls)
+            # 异常表捕获类型（通道 5）
+            for dcls in m[6]:
+                if _in_scope(dcls): refs.add(dcls)
+            if m[2]:
                 if call_graph is not None:
-                    _cur[0] = (ucls, mname, mdesc)
-                process(bc, pool)
+                    _cur[0] = (ucls, m[0], m[1])
+                process(m[2], pool)
 
     while queue:
         cls, name, desc = queue.popleft()
         if call_graph is not None:
             _cur[0] = (cls, name, desc)
-        parsed = get(cls)
-        if parsed is None: continue
-        _, pool, methods, _, _ = parsed
-        for mname, mdesc, bc, is_native in methods:
-            if mname == name and mdesc == desc:
-                # 无论方法体是否存在，描述符里的参数/返回类型都是类型依赖
-                for dcls in _extract_desc_classes(mdesc):
-                    if _in_scope(dcls):
-                        refs.add(dcls)
-                if is_native:
-                    native_stubs.add((cls, name, desc))
-                elif bc:
-                    process(bc, pool)
+        # <init>/<clinit> 不参与继承解析；其余目标沿父类链/接口闭包定位声明者
+        if name in ('<init>', '<clinit>'):
+            target, m = cls, None
+        else:
+            found = find_declaring(cls, name, desc)
+            if found is None:
+                unresolved.add((cls, name, desc))
+                for dcls in _extract_desc_classes(desc):
+                    if _in_scope(dcls): refs.add(dcls)
+                continue
+            target, m = found
+        parsed = get(target)
+        if parsed is None:
+            unresolved.add((cls, name, desc))
+            continue
+        _, pool, methods, _, _, field_refs = parsed
+        # 通道 3：该类字段声明类型（首次解析该类时纳入）
+        for dcls in field_refs:
+            if _in_scope(dcls): refs.add(dcls)
+        if m is None:                # <init>/<clinit>：本类精确匹配
+            for mm in methods:
+                if mm[0] == name and mm[1] == desc:
+                    m = mm
+                    break
+        if m is not None:
+            # 通道 2：声明者描述符类型
+            for dcls in _extract_desc_classes(m[1]):
+                if _in_scope(dcls): refs.add(dcls)
+            # 通道 5：异常表 catch 类型
+            for dcls in m[6]:
+                if _in_scope(dcls): refs.add(dcls)
+            if m[1] == desc and m[2]:
+                process(m[2], pool)
+            elif m[3]:               # native 边界（含签名多态的同名 native 匹配）
+                native_stubs.add((target, name, desc))
+            # 其余：abstract 声明 → 无方法体，仅类型依赖已收集
 
     all_classes = {c for c, _, _ in visited} | refs
-    return visited, all_classes, native_stubs, instantiated, cache
+    return BfsResult(visited, all_classes, native_stubs, instantiated,
+                     cache, initialized, unresolved)
 
 
 def bfs_two_pass(user_class_files: list[str], resolver: JdkResolver,
                  shared_cache: dict | None = None):
     """Two-pass RTA：先收集全部 instantiated，再带种子做精确 RTA 过滤。"""
     sc = shared_cache if shared_cache is not None else {}
-    visited, _, _, inst, _ = bfs(user_class_files, resolver,
-                                  use_rta=False, shared_cache=sc)
+    pass1 = bfs(user_class_files, resolver, use_rta=False, shared_cache=sc)
     return bfs(user_class_files, resolver,
-               seed_instantiated=inst, use_rta=True, shared_cache=sc)
+               seed_instantiated=pass1.instantiated, use_rta=True, shared_cache=sc)
 
 
 def bfs_two_pass_with_graph(user_class_files: list[str], resolver: JdkResolver,
-                             shared_cache: dict | None = None):
-    """Two-pass RTA + 调用图收集，供树状打印使用。"""
+                            shared_cache: dict | None = None):
+    """Two-pass RTA + 调用图收集，供树状打印使用。返回 (BfsResult, call_graph)。"""
     sc = shared_cache if shared_cache is not None else {}
-    _, _, _, inst, _ = bfs(user_class_files, resolver,
-                            use_rta=False, shared_cache=sc)
+    pass1 = bfs(user_class_files, resolver, use_rta=False, shared_cache=sc)
     cg: dict = {}
-    visited, all_cls, native_stubs, _, cache = bfs(
-        user_class_files, resolver,
-        seed_instantiated=inst, use_rta=True,
-        call_graph=cg, shared_cache=sc,
-    )
-    return visited, all_cls, native_stubs, cg, cache
+    result = bfs(user_class_files, resolver,
+                 seed_instantiated=pass1.instantiated, use_rta=True,
+                 call_graph=cg, shared_cache=sc)
+    return result, cg
 
 
 def bfs_vta(user_class_files: list[str], resolver: JdkResolver,
             shared_cache: dict | None = None):
     """VTA + Two-pass RTA：方法内栈分析 + 精确 RTA。"""
     sc = shared_cache if shared_cache is not None else {}
-    _, _, _, inst, _ = bfs(user_class_files, resolver,
-                            use_rta=False, use_vta=True, shared_cache=sc)
+    pass1 = bfs(user_class_files, resolver, use_rta=False, use_vta=True, shared_cache=sc)
     return bfs(user_class_files, resolver,
-               seed_instantiated=inst, use_rta=True, use_vta=True, shared_cache=sc)
+               seed_instantiated=pass1.instantiated, use_rta=True, use_vta=True,
+               shared_cache=sc)
 
 
 def bfs_interprocedural(user_class_files: list[str], resolver: JdkResolver,
@@ -995,19 +1237,17 @@ def bfs_interprocedural(user_class_files: list[str], resolver: JdkResolver,
     """
     sc = shared_cache if shared_cache is not None else {}
     # 第一轮：建立基础调用图
-    _, _, _, inst, _ = bfs(user_class_files, resolver,
-                            use_rta=False, use_vta=True, shared_cache=sc)
-    visited1, _, _, _, _ = bfs(user_class_files, resolver,
-                                seed_instantiated=inst, use_rta=True,
-                                use_vta=True, shared_cache=sc)
+    pass1 = bfs(user_class_files, resolver, use_rta=False, use_vta=True, shared_cache=sc)
+    visited1 = bfs(user_class_files, resolver,
+                   seed_instantiated=pass1.instantiated, use_rta=True,
+                   use_vta=True, shared_cache=sc)
     # 分析轮：计算返回类型摘要
-    summaries = _compute_return_summaries(visited1, sc)
+    summaries = _compute_return_summaries(visited1.visited, sc)
     # 第二轮：带摘要重跑
-    _, _, _, inst2, _ = bfs(user_class_files, resolver,
-                             use_rta=False, use_vta=True,
-                             return_summaries=summaries, shared_cache=sc)
+    pass2 = bfs(user_class_files, resolver, use_rta=False, use_vta=True,
+                return_summaries=summaries, shared_cache=sc)
     return bfs(user_class_files, resolver,
-               seed_instantiated=inst2, use_rta=True, use_vta=True,
+               seed_instantiated=pass2.instantiated, use_rta=True, use_vta=True,
                return_summaries=summaries, shared_cache=sc)
 
 
@@ -1020,16 +1260,15 @@ def bfs_cutoff(user_class_files: list[str], resolver: JdkResolver,
       默认截断 I/O 编码底层（StreamEncoder / CharsetEncoder 等）。
     """
     sc = shared_cache if shared_cache is not None else {}
-    _, _, _, inst, _ = bfs(user_class_files, resolver,
-                            use_rta=False, use_vta=True,
-                            cutoff_classes=cutoff_classes, shared_cache=sc)
+    pass1 = bfs(user_class_files, resolver, use_rta=False, use_vta=True,
+                cutoff_classes=cutoff_classes, shared_cache=sc)
     return bfs(user_class_files, resolver,
-               seed_instantiated=inst, use_rta=True, use_vta=True,
+               seed_instantiated=pass1.instantiated, use_rta=True, use_vta=True,
                cutoff_classes=cutoff_classes, shared_cache=sc)
 
 
 def bfs_internal_boundary(user_class_files: list[str], resolver: JdkResolver,
-                           shared_cache: dict | None = None):
+                          shared_cache: dict | None = None):
     """
     内部包边界截断：凡是 sun/ jdk/ com/sun/ com/oracle/ 的类，
     只记录引用，不展开其方法体（视为 native stub 边界）。
@@ -1039,21 +1278,17 @@ def bfs_internal_boundary(user_class_files: list[str], resolver: JdkResolver,
 
     # 动态构建 cutoff 集合：把 BFS 过程中遇到的所有内部类收集进来
     # 通过在 enqueue 里拦截实现，无需预先知道完整列表
-    # 使用 bfs() 的 cutoff_classes 机制，但需要动态扩展
     # 方案：先做一次扫描收集所有内部类，再传入 cutoff_classes
 
     # 第一步：无截断跑一遍收集全部类（用 Two-pass RTA 基准）
-    visited_all, all_cls, _, inst, _ = bfs(user_class_files, resolver,
-                                            use_rta=False, shared_cache=sc)
-    # 找出所有内部类
-    internal_classes = frozenset(c for c in all_cls if _is_internal(c))
+    pass1 = bfs(user_class_files, resolver, use_rta=False, shared_cache=sc)
+    internal_classes = frozenset(c for c in pass1.all_classes if _is_internal(c))
 
     # 第二步：以内部类为截断边界重跑
-    _, _, _, inst2, _ = bfs(user_class_files, resolver,
-                             use_rta=False, use_vta=True,
-                             cutoff_classes=internal_classes, shared_cache=sc)
+    pass2 = bfs(user_class_files, resolver, use_rta=False, use_vta=True,
+                cutoff_classes=internal_classes, shared_cache=sc)
     return bfs(user_class_files, resolver,
-               seed_instantiated=inst2, use_rta=True, use_vta=True,
+               seed_instantiated=pass2.instantiated, use_rta=True, use_vta=True,
                cutoff_classes=internal_classes, shared_cache=sc)
 
 
@@ -1064,10 +1299,10 @@ def _get_user_methods(user_class_files: list[str]) -> list[tuple]:
     roots = []
     for path in user_class_files:
         with open(path, 'rb') as f: data = f.read()
-        cls_name, _, methods, _, _ = _parse_class(data)
-        for mname, mdesc, bc, _ in methods:
-            if mname != '<clinit>' and bc:
-                roots.append((cls_name, mname, mdesc))
+        cls_name, _, methods, _, _, _ = _parse_class(data)
+        for m in methods:
+            if m[0] != '<clinit>' and m[2]:
+                roots.append((cls_name, m[0], m[1]))
     return roots
 
 
@@ -1191,84 +1426,166 @@ def main():
         if skip_stats:
             # --tree-only：只做两遍 RTA，收集调用图，直接打印树
             print('[3/3] Two-pass RTA + 调用图 ...', end=' ', flush=True)
-            _, _, tree_nat, tree_cg, _ = bfs_two_pass_with_graph(
+            tree_result, tree_cg = bfs_two_pass_with_graph(
                 user_classes, resolver, shared)
             print('完成')
             roots = _get_user_methods(user_classes)
-            print_call_tree(roots, tree_cg, tree_nat, max_depth=args.max_depth)
+            print_call_tree(roots, tree_cg, tree_result.native_stubs,
+                            max_depth=args.max_depth)
             return
 
         print('[3/N] 单程 RTA ...', end=' ', flush=True)
-        r1_m, r1_cls, r1_nat, _, _ = bfs(user_classes, resolver, shared_cache=shared)
-        print(f'完成  {len(r1_cls)} 类 / {len(r1_m)} 方法')
+        r1 = bfs(user_classes, resolver, shared_cache=shared)
+        print(f'完成  {len(r1.all_classes)} 类 / {len(r1.visited)} 方法')
 
         print('[3/N] Two-pass RTA ...', end=' ', flush=True)
-        r2_m, r2_cls, r2_nat, _, _ = bfs_two_pass(user_classes, resolver, shared)
-        print(f'完成  {len(r2_cls)} 类 / {len(r2_m)} 方法')
+        r2 = bfs_two_pass(user_classes, resolver, shared_cache=shared)
+        print(f'完成  {len(r2.all_classes)} 类 / {len(r2.visited)} 方法')
 
         print('[3/N] VTA + Two-pass RTA ...', end=' ', flush=True)
-        r3_m, r3_cls, r3_nat, _, _ = bfs_vta(user_classes, resolver, shared)
-        print(f'完成  {len(r3_cls)} 类 / {len(r3_m)} 方法')
+        r3 = bfs_vta(user_classes, resolver, shared_cache=shared)
+        print(f'完成  {len(r3.all_classes)} 类 / {len(r3.visited)} 方法')
 
         print('[3/N] 跨方法返回类型传播（Inter-proc VTA）...', end=' ', flush=True)
-        r4_m, r4_cls, r4_nat, _, _ = bfs_interprocedural(user_classes, resolver, shared)
-        print(f'完成  {len(r4_cls)} 类 / {len(r4_m)} 方法')
+        r4 = bfs_interprocedural(user_classes, resolver, shared_cache=shared)
+        print(f'完成  {len(r4.all_classes)} 类 / {len(r4.visited)} 方法')
 
         print('[3/N] 语义截断（Cutoff）...', end=' ', flush=True)
-        r5_m, r5_cls, r5_nat, _, _ = bfs_cutoff(user_classes, resolver, shared_cache=shared)
-        print(f'完成  {len(r5_cls)} 类 / {len(r5_m)} 方法')
+        r5 = bfs_cutoff(user_classes, resolver, shared_cache=shared)
+        print(f'完成  {len(r5.all_classes)} 类 / {len(r5.visited)} 方法')
 
         print('[3/N] 内部包边界截断（sun/jdk/com.sun 自动截断）...', end=' ', flush=True)
-        r6_m, r6_cls, r6_nat, _, _ = bfs_internal_boundary(user_classes, resolver, shared)
-        print(f'完成  {len(r6_cls)} 类 / {len(r6_m)} 方法')
+        r6 = bfs_internal_boundary(user_classes, resolver, shared_cache=shared)
+        print(f'完成  {len(r6.all_classes)} 类 / {len(r6.visited)} 方法')
 
-    def _summary(methods, classes, nat):
-        call_cls = {c for c, _, _ in methods}
-        return call_cls, classes - call_cls
+    # ── 综合统计（基于 Two-pass RTA 结果）────────────────────────────────────────
+    def _summary(res: BfsResult):
+        call_cls = {c for c, _, _ in res.visited}
+        return call_cls, res.all_classes - call_cls
 
-    c1, ro1 = _summary(r1_m, r1_cls, r1_nat)
-    c2, ro2 = _summary(r2_m, r2_cls, r2_nat)
-    c3, ro3 = _summary(r3_m, r3_cls, r3_nat)
-    c4, ro4 = _summary(r4_m, r4_cls, r4_nat)
-    c5, ro5 = _summary(r5_m, r5_cls, r5_nat)
-    c6, ro6 = _summary(r6_m, r6_cls, r6_nat)
+    c1, ro1 = _summary(r1)
+    c2, ro2 = _summary(r2)
+    c3, ro3 = _summary(r3)
+    c4, ro4 = _summary(r4)
+    c5, ro5 = _summary(r5)
+    c6, ro6 = _summary(r6)
 
     rows = [
-        ('单程 RTA',                      r1_m, r1_cls, r1_nat, c1, ro1),
-        ('Two-pass RTA',                  r2_m, r2_cls, r2_nat, c2, ro2),
-        ('VTA + Two-pass RTA',            r3_m, r3_cls, r3_nat, c3, ro3),
-        ('Inter-proc VTA',                r4_m, r4_cls, r4_nat, c4, ro4),
-        ('Cutoff（手动 11 类）',           r5_m, r5_cls, r5_nat, c5, ro5),
-        ('Internal Boundary（sun/jdk/…）', r6_m, r6_cls, r6_nat, c6, ro6),
+        ('单程 RTA',                       r1, c1, ro1),
+        ('Two-pass RTA',                   r2, c2, ro2),
+        ('VTA + Two-pass RTA',             r3, c3, ro3),
+        ('Inter-proc VTA',                 r4, c4, ro4),
+        ('Cutoff（手动 11 类）',            r5, c5, ro5),
+        ('Internal Boundary（sun/jdk/…）', r6, c6, ro6),
     ]
 
-    print()
-    print('┌───────────────────────────────────────────────────────────────────┐')
-    print('│  模式                    │  类（调用链+引用）   │  方法  │ native │')
-    print('├───────────────────────────────────────────────────────────────────┤')
-    for name, ms, cls, nat, cc, ro in rows:
-        print(f'│  {name:<22}  │  {len(cc):3}+{len(ro):3} = {len(cls):4}      │  {len(ms):5} │  {len(nat):4} │')
-    print('└───────────────────────────────────────────────────────────────────┘')
-    print()
-    print(f'截断边界类（{len(_DEFAULT_CUTOFFS)} 个）：')
-    for c in sorted(_DEFAULT_CUTOFFS): print(f'  {c}')
+    # 使用 Two-pass RTA 作为后续所有分析的基准
+    vm, vcls, vnat = r2.visited, r2.all_classes, r2.native_stubs
 
-    # ── 截断候选分析 ──────────────────────────────────────────────────────────
+    # ── §1 模式对比汇总表 ─────────────────────────────────────────────────────
+    print()
+    print('╔═══════════════════════════════════════════════════════════════════════╗')
+    print('║               调用链分析报告  —  模式对比汇总                       ║')
+    print('╠═══════════════════════════════════════════════════════════════════════╣')
+    print('║  模式                    │  调用链类  │  仅引用  │  合计  │  方法  │ native ║')
+    print('╠═══════════════════════════════════════════════════════════════════════╣')
+    for rname, res, cc, ro in rows:
+        print(f'║  {rname:<22}  │  {len(cc):>6}  │  {len(ro):>6}  │  {len(res.all_classes):>5}  │  {len(res.visited):>5} │  {len(res.native_stubs):>4} ║')
+    print('╚═══════════════════════════════════════════════════════════════════════╝')
+
+    # ── §2 全链路触达统计（Two-pass RTA 基准）────────────────────────────────
+    all_visited_cls   = {c for c, _, _ in vm}
+    ref_only_cls      = vcls - all_visited_cls
+    clinit_methods    = {(c, n, d) for c, n, d in vm if n == '<clinit>'}
+    init_methods      = {(c, n, d) for c, n, d in vm if n == '<init>'}
+    static_methods    = {(c, n, d) for c, n, d in vm
+                         if n not in ('<init>', '<clinit>')}
+    native_cls        = {c for c, _, _ in vnat}
+    internal_cls      = {c for c in vcls if _is_internal(c)}
+    public_api_cls    = {c for c in all_visited_cls if not _is_internal(c)}
+    n_abstract, n_static = _method_flag_stats(vm, shared)
+
+    # 字段/常量/异常引用类（仅引用通道，来自描述符/字段声明/catch/ldc）
+    ref_type_cls = ref_only_cls  # 已经是 vcls - visited_cls
+
+    print()
+    print('┌─────────────────────────────────────────────────────────────────────┐')
+    print('│              § 全链路触达统计（Two-pass RTA 基准）                  │')
+    print('├──────────────────────────────────────────┬──────────────────────────┤')
+    print(f'│  触达类总数（调用链 + 仅引用）            │  {len(vcls):>6} 个              │')
+    print(f'│    ├ 调用链展开类（有方法被调用）          │  {len(all_visited_cls):>6} 个              │')
+    print(f'│    │   ├ 公开 API 类（java/javax/）       │  {len(public_api_cls):>6} 个              │')
+    print(f'│    │   └ 内部实现类（sun/jdk/com.sun/）   │  {len(internal_cls):>6} 个              │')
+    print(f'│    └ 仅引用类（类型/字段/常量/catch引用） │  {len(ref_type_cls):>6} 个              │')
+    print('├──────────────────────────────────────────┼──────────────────────────┤')
+    print(f'│  触达方法总数                             │  {len(vm):>6} 个              │')
+    print(f'│    ├ 普通方法调用（invokevirtual 等）      │  {len(static_methods):>6} 个              │')
+    print(f'│    ├ 构造方法 <init>                      │  {len(init_methods):>6} 个              │')
+    print(f'│    └ 静态初始化块 <clinit>                │  {len(clinit_methods):>6} 个              │')
+    print(f'│    ├ （其中声明为 abstract）              │  {n_abstract:>6} 个              │')
+    print(f'│    └ （其中声明为 static）                │  {n_static:>6} 个              │')
+    print('├──────────────────────────────────────────┼──────────────────────────┤')
+    print(f'│  已触发 <clinit> 初始化的类               │  {len(r2.initialized):>6} 个              │')
+    print(f'│  未解析调用目标（找不到声明者）           │  {len(r2.unresolved):>6} 个              │')
+    print(f'│  Native 边界方法                          │  {len(vnat):>6} 个              │')
+    print(f'│  Native 边界所在类                        │  {len(native_cls):>6} 个              │')
+    print('└──────────────────────────────────────────┴──────────────────────────┘')
+
+    if r2.unresolved:
+        print()
+        print(f'【未解析调用目标（前 20 / 共 {len(r2.unresolved)} 个）】')
+        for cls, nm, d in sorted(r2.unresolved)[:20]:
+            print(f'  {cls}.{nm}{d}')
+
+    # ── §3 方法类型细分 ───────────────────────────────────────────────────────
+    print()
+    print('【§3 方法类型细分（Two-pass RTA）】')
+    print()
+
+    # 按类统计 <clinit> / <init> / 普通方法
+    cls_method_stats: dict[str, dict] = {}
+    for cls2, nm2, desc2 in vm:
+        s = cls_method_stats.setdefault(cls2, {'clinit': 0, 'init': 0, 'normal': 0, 'native': 0})
+        if nm2 == '<clinit>': s['clinit'] += 1
+        elif nm2 == '<init>': s['init'] += 1
+        else: s['normal'] += 1
+        if (cls2, nm2, desc2) in vnat: s['native'] += 1
+
+    print(f'  <clinit> 静态初始化：{len(clinit_methods)} 个，涉及类：')
+    for cls2, nm2, desc2 in sorted(clinit_methods):
+        print(f'    {cls2}.<clinit>{desc2}')
+
+    print()
+    print(f'  <init> 构造方法：{len(init_methods)} 个，涉及类（前 20）：')
+    for cls2, nm2, desc2 in sorted(init_methods)[:20]:
+        nat_mark = '  [native]' if (cls2, nm2, desc2) in vnat else ''
+        print(f'    {cls2}.<init>{desc2}{nat_mark}')
+    if len(init_methods) > 20:
+        print(f'    …（+{len(init_methods)-20} 个）')
+
+    # ── §4 仅引用类型来源分析 ─────────────────────────────────────────────────
+    print()
+    print('【§4 仅引用类（字段声明/描述符/catch/ldc 来源，不展开方法体）】')
+    print(f'  共 {len(ref_type_cls)} 个：')
+    for c in sorted(ref_type_cls)[:40]:
+        print(f'  {c}')
+    if len(ref_type_cls) > 40:
+        print(f'  …（+{len(ref_type_cls)-40} 个，见报告文件）')
+
+    # ── §5 截断候选分析 ───────────────────────────────────────────────────────
     print()
     print('[分析] 计算截断候选（Two-pass RTA 基准）...', end=' ', flush=True)
-    # 用 Two-pass RTA 的结果做候选分析（最接近真实调用链）
-    dep_graph = build_class_dep_graph(r2_m, shared)
-    # seed_classes: 直接从用户代码引用的 JDK 类
-    all_r2_cls = {c for c, _, _ in r2_m}
+    dep_graph = build_class_dep_graph(vm, shared)
+    all_vm_cls = {c for c, _, _ in vm}
     candidates = analyze_cutoff_candidates(
-        r2_m, r2_cls, shared, dep_graph,
-        seed_classes=all_r2_cls,
+        vm, vcls, shared, dep_graph,
+        seed_classes=all_vm_cls,
         top_n=25,
     )
     print('完成')
 
     print()
-    print('【截断候选 Top 25（按"截断后消除类数"降序）】')
+    print('【§5 截断候选 Top 25（按"截断后消除类数"降序）】')
     print(f'  {"排名":<4} {"消除类数":>6}  {"native/总方法":>12}  {"类名"}')
     print(f'  {"─"*4} {"─"*6}  {"─"*12}  {"─"*50}')
     for rank, c in enumerate(candidates, 1):
@@ -1276,37 +1593,35 @@ def main():
         print(f'  {rank:<4} {c["elim_count"]:>6}  '
               f'{c["native_count"]:>5}/{c["total_methods"]:<5}  '
               f'{c["cls"]}{leaf_mark}')
-        for nm, desc in c['entry_methods'][:3]:
-            print(f'       {"":>6}  {"":>12}    └ {nm}{desc}')
+        for nm2, desc2 in c['entry_methods'][:3]:
+            print(f'       {"":>6}  {"":>12}    └ {nm2}{desc2}')
         if len(c['entry_methods']) > 3:
             print(f'       {"":>6}  {"":>12}    └ （+{len(c["entry_methods"])-3} 个方法）')
     print()
     print('  ★ = 所有被调方法均为 native（天然截断边界，手写成本最低）')
 
-    # ── 边界方法分析（公开API → 内部实现的调用） ────────────────────────────────
+    # ── §6 边界方法（公开API → 内部实现） ────────────────────────────────────
     print()
     print('[分析] 分析公开API→内部类边界方法...', end=' ', flush=True)
-    boundary_methods = analyze_internal_boundary(r2_m, shared)
+    boundary_methods = analyze_internal_boundary(vm, shared)
     print(f'完成  {len(boundary_methods)} 个边界方法，涉及 '
           f'{len({r["cls"] for r in boundary_methods})} 个公开API类')
 
     print()
-    print('【需要 native 实现的边界方法（公开API中直接调用内部类的方法）】')
+    print('【§6 边界方法（公开API中直接调用内部类，需手写native实现）】')
     cur_cls = None
     for r in boundary_methods:
         if r['cls'] != cur_cls:
             cur_cls = r['cls']
             print(f'\n  {cur_cls}')
         sig = f'{r["name"]}{r["desc"]}'
-        internals = ', '.join(
-            c.split('/')[-1] for c, _, _ in r['calls_internal'][:3]
-        )
+        internals = ', '.join(c.split('/')[-1] for c, _, _ in r['calls_internal'][:3])
         if not internals:
             internals = ', '.join(c.split('/')[-1] for c in r['refs_internal'][:3])
         print(f'    ├ {sig}')
         print(f'    │  → {internals}')
 
-    # ── 调用链深度分析 ────────────────────────────────────────────────────────
+    # ── §7 调用链深度分析 ─────────────────────────────────────────────────────
     print()
     print('[分析] 调用链深度分析...', end=' ', flush=True)
     with JdkResolver(jmods) as resolver2:
@@ -1315,7 +1630,7 @@ def main():
     print(f'完成  最大深度 {chain_max_depth}，涉及 {len(class_depth)} 个类')
 
     print()
-    print('【调用链深度分层（每层新引入的类数）】')
+    print('【§7 调用链深度分层（每层新引入的类数）】')
     print(f'  {"深度":>4}  {"本层新增":>8}  {"累计类数":>8}  代表性类（前 3 个）')
     print(f'  {"─"*4}  {"─"*8}  {"─"*8}  {"─"*55}')
     cumulative = 0
@@ -1328,7 +1643,16 @@ def main():
             sample_str += f', ...(+{len(cls_at_d)-3})'
         print(f'  {d:>4}  {len(cls_at_d):>8}  {cumulative:>8}  {sample_str}')
 
-    # 写报告（包含所有模式对比 + Cutoff 详细方法列表）
+    # ── §8 Native 边界方法完整列表 ────────────────────────────────────────────
+    print()
+    print(f'【§8 Native 边界方法完整列表（共 {len(vnat)} 个）】')
+    nat_by_cls: dict[str, list] = {}
+    for nc, nn, nd in sorted(vnat): nat_by_cls.setdefault(nc, []).append(f'{nn}{nd}')
+    for nc in sorted(nat_by_cls):
+        print(f'  {nc}')
+        for sig in nat_by_cls[nc]: print(f'    └ {sig}')
+
+    # ── 写 Markdown 报告 ──────────────────────────────────────────────────────
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     reports_dir  = os.path.join(project_root, 'docs', 'reports')
     os.makedirs(reports_dir, exist_ok=True)
@@ -1338,83 +1662,121 @@ def main():
     from datetime import date
     with open(report, 'w', encoding='utf-8') as f:
         f.write(f'# 调用链追踪：{stem0}\n\n生成时间：{date.today()}\n\n')
-        f.write('## 模式对比\n\n')
-        f.write('| 模式 | 类（调用链+引用） | 方法数 | native 边界 |\n')
-        f.write('|------|----------------:|-------:|------------:|\n')
-        for name, ms, cls, nat, cc, ro in rows:
-            f.write(f'| {name} | {len(cc)}+{len(ro)}={len(cls)} | {len(ms)} | {len(nat)} |\n')
+
+        # 模式对比
+        f.write('## § 模式对比\n\n')
+        f.write('| 模式 | 调用链类 | 仅引用 | 合计 | 方法数 | native |\n')
+        f.write('|------|--------:|------:|-----:|-------:|-------:|\n')
+        for rname, res, cc, ro in rows:
+            f.write(f'| {rname} | {len(cc)} | {len(ro)} | {len(res.all_classes)} | '
+                    f'{len(res.visited)} | {len(res.native_stubs)} |\n')
         f.write('\n')
 
-        # 边界方法：公开API → 内部实现
-        f.write('## 边界方法（公开API直接调用内部类，需手写native实现）\n\n')
-        f.write('> 这些方法属于 `java/`/`javax/` 公开API，但方法体内调用了 `sun/`/`jdk/` 内部类。\n')
-        f.write('> 采用内部包边界截断策略时，**这些方法需要在 `jdk_classes/src/**/*_impl.rs` 中手写实现**。\n\n')
-        prev_cls = None
+        # 全链路触达统计
+        f.write('## § 全链路触达统计（Two-pass RTA 基准）\n\n')
+        f.write(f'| 指标 | 数值 |\n|------|-----:|\n')
+        f.write(f'| 触达类总数 | {len(vcls)} |\n')
+        f.write(f'| 调用链展开类 | {len(all_visited_cls)} |\n')
+        f.write(f'| 公开API类（java/javax） | {len(public_api_cls)} |\n')
+        f.write(f'| 内部实现类（sun/jdk） | {len(internal_cls)} |\n')
+        f.write(f'| 仅引用类 | {len(ref_type_cls)} |\n')
+        f.write(f'| 触达方法总数 | {len(vm)} |\n')
+        f.write(f'| 普通方法调用 | {len(static_methods)} |\n')
+        f.write(f'| 构造方法 `<init>` | {len(init_methods)} |\n')
+        f.write(f'| 静态初始化块 `<clinit>` | {len(clinit_methods)} |\n')
+        f.write(f'| 已触发 `<clinit>` 初始化的类 | {len(r2.initialized)} |\n')
+        f.write(f'| 未解析调用目标 | {len(r2.unresolved)} |\n')
+        f.write(f'| abstract 声明方法 | {n_abstract} |\n')
+        f.write(f'| static 声明方法 | {n_static} |\n')
+        f.write(f'| Native 边界方法 | {len(vnat)} |\n')
+        f.write(f'| Native 边界所在类 | {len(native_cls)} |\n\n')
+
+        # <clinit> 清单
+        f.write('## § 静态初始化块 `<clinit>` 触达清单\n\n')
+        f.write('| 类 | 描述符 |\n|----|---------|\n')
+        for cls2, nm2, desc2 in sorted(clinit_methods):
+            f.write(f'| `{cls2}` | `{desc2}` |\n')
+        f.write('\n')
+
+        # <init> 清单
+        f.write('## § 构造方法 `<init>` 触达清单\n\n')
+        f.write('| 类 | 描述符 | native |\n|----|---------|:------:|\n')
+        for cls2, nm2, desc2 in sorted(init_methods):
+            nat_mark = '✓' if (cls2, nm2, desc2) in vnat else ''
+            f.write(f'| `{cls2}` | `{desc2}` | {nat_mark} |\n')
+        f.write('\n')
+
+        # 仅引用类
+        f.write('## § 仅引用类（字段声明/描述符/catch/ldc 来源）\n\n')
+        for c in sorted(ref_type_cls): f.write(f'- `{c}`\n')
+        f.write('\n')
+
+        # 未解析目标
+        if r2.unresolved:
+            f.write('## § 未解析调用目标\n\n')
+            for cls, nm, d in sorted(r2.unresolved):
+                f.write(f'- `{cls}.{nm}{d}`\n')
+            f.write('\n')
+
+        # 边界方法
+        f.write('## § 边界方法（公开API直接调用内部类，需手写native实现）\n\n')
+        f.write('> 采用内部包边界截断策略时，**这些方法需要手写实现**。\n\n')
+        prev_cls2 = None
         for r in boundary_methods:
-            if r['cls'] != prev_cls:
-                prev_cls = r['cls']
-                f.write(f'### `{r["cls"]}`\n\n')
-                f.write('| 方法签名 | 调用的内部类 |\n')
-                f.write('|---------|------------|\n')
+            if r['cls'] != prev_cls2:
+                prev_cls2 = r['cls']
+                f.write(f'### `{r["cls"]}`\n\n| 方法签名 | 调用的内部类 |\n|---------|------------|\n')
             internals = set(c for c, _, _ in r['calls_internal']) | set(r['refs_internal'])
             internals_str = ', '.join(f'`{c}`' for c in sorted(internals)[:4])
-            if len(internals) > 4:
-                internals_str += f', +{len(internals)-4}'
+            if len(internals) > 4: internals_str += f', +{len(internals)-4}'
             f.write(f'| `{r["name"]}{r["desc"]}` | {internals_str} |\n')
         f.write('\n')
 
-        # 调用链深度分层
-        f.write('## 调用链深度分层\n\n')
-        f.write('> 深度 1 = 直接从用户代码调用的 JDK 类；每深一层 = 再经过一次方法调用。\n\n')
-        f.write('| 深度 | 本层新增类 | 累计类数 | 代表性类（前 5） |\n')
-        f.write('|-----:|----------:|---------:|----------------|\n')
+        # 深度分层
+        f.write('## § 调用链深度分层\n\n')
+        f.write('| 深度 | 本层新增 | 累计 | 代表性类（前5） |\n|-----:|---------:|-----:|----------------|\n')
         cum = 0
         for d in sorted(layers):
-            cls_at_d = layers[d]
-            cum += len(cls_at_d)
+            cls_at_d = layers[d]; cum += len(cls_at_d)
             samples = ', '.join(f'`{c}`' for c in sorted(cls_at_d)[:5])
-            if len(cls_at_d) > 5:
-                samples += f', …+{len(cls_at_d)-5}'
+            if len(cls_at_d) > 5: samples += f', …+{len(cls_at_d)-5}'
             f.write(f'| {d} | {len(cls_at_d)} | {cum} | {samples} |\n')
         f.write('\n')
 
-        # 截断候选分析
-        f.write('## 截断候选分析（Top 25）\n\n')
-        f.write('> 依据：截断该类后，从调用链中消除的下游类数。消除数越高 = 截断价值越大。\n\n')
+        # 截断候选
+        f.write('## § 截断候选分析（Top 25）\n\n')
         f.write('| 排名 | 消除类数 | native/总方法 | 天然边界 | 类名 | 需手写方法 |\n')
         f.write('|-----:|---------:|-------------:|:--------:|------|----------|\n')
         for rank, c in enumerate(candidates, 1):
             leaf = '★' if c['is_natural_leaf'] else ''
-            methods_str = '<br>'.join(f'`{nm}{desc}`' for nm, desc in c['entry_methods'][:5])
-            if len(c['entry_methods']) > 5:
-                methods_str += f'<br>+{len(c["entry_methods"])-5} more'
-            f.write(f'| {rank} | {c["elim_count"]} | '
-                    f'{c["native_count"]}/{c["total_methods"]} | {leaf} | '
-                    f'`{c["cls"]}` | {methods_str} |\n')
+            ms_str = '<br>'.join(f'`{nm2}{desc2}`' for nm2, desc2 in c['entry_methods'][:5])
+            if len(c['entry_methods']) > 5: ms_str += f'<br>+{len(c["entry_methods"])-5} more'
+            f.write(f'| {rank} | {c["elim_count"]} | {c["native_count"]}/{c["total_methods"]} '
+                    f'| {leaf} | `{c["cls"]}` | {ms_str} |\n')
         f.write('\n')
 
-        # 截断边界说明
-        f.write('## Cutoff 截断边界\n\n')
-        for c in sorted(_DEFAULT_CUTOFFS): f.write(f'- `{c}`\n')
-        f.write('\n')
-
-        # Cutoff 模式详细方法列表（类数最少，最接近目标）
-        f.write('## Cutoff 模式调用链方法\n\n')
-        by5: dict[str, list[str]] = {}
-        for cls, nm, desc in r5_m: by5.setdefault(cls, []).append(f'{nm}{desc}')
-        for cls in sorted(by5):
-            f.write(f'### `{cls}`\n\n')
-            for sig in sorted(by5[cls]): f.write(f'- `{sig}`\n')
+        # Native 边界完整列表
+        f.write('## § Native 边界方法完整列表\n\n')
+        for nc in sorted(nat_by_cls):
+            f.write(f'### `{nc}`\n\n')
+            for sig in nat_by_cls[nc]: f.write(f'- `{sig}`\n')
             f.write('\n')
 
-        if r5_nat:
-            f.write('## Native 边界方法\n\n')
-            for cls, nm, desc in sorted(r5_nat):
-                f.write(f'- `{cls}.{nm}{desc}`\n')
-        ro5_list = r5_cls - {c for c, _, _ in r5_m}
+        # Cutoff 模式详细方法列表
+        f.write('## § Cutoff 模式调用链方法\n\n')
+        by5: dict[str, list[str]] = {}
+        for cls2, nm2, desc2 in r5.visited: by5.setdefault(cls2, []).append(f'{nm2}{desc2}')
+        for cls2 in sorted(by5):
+            f.write(f'### `{cls2}`\n\n')
+            for sig in sorted(by5[cls2]): f.write(f'- `{sig}`\n')
+            f.write('\n')
+        f.write('## § Cutoff 截断边界\n\n')
+        for c in sorted(_DEFAULT_CUTOFFS): f.write(f'- `{c}`\n')
+        f.write('\n')
+        ro5_list = r5.all_classes - {c for c, _, _ in r5.visited}
         if ro5_list:
-            f.write('\n## 仅引用类（截断边界内）\n\n')
-            for cls in sorted(ro5_list): f.write(f'- `{cls}`\n')
+            f.write('## § 仅引用类（Cutoff 边界内）\n\n')
+            for cls2 in sorted(ro5_list): f.write(f'- `{cls2}`\n')
 
     print(f'\n详细报告 → {report}')
 
@@ -1424,11 +1786,12 @@ def main():
         print('[分析] 构建调用图（Two-pass RTA）...', end=' ', flush=True)
         with JdkResolver(jmods) as resolver3:
             shared3: dict = {}
-            _, _, tree_nat, tree_cg, _ = bfs_two_pass_with_graph(
+            tree_result, tree_cg = bfs_two_pass_with_graph(
                 user_classes, resolver3, shared3)
         print('完成')
         roots = _get_user_methods(user_classes)
-        print_call_tree(roots, tree_cg, tree_nat, max_depth=args.max_depth)
+        print_call_tree(roots, tree_cg, tree_result.native_stubs,
+                        max_depth=args.max_depth)
 
 
 if __name__ == '__main__':
