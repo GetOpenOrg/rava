@@ -492,7 +492,10 @@ def _reinstantiate_generic(e: str, actual: str, expected: str) -> str | None:
 
     Java 侧 `AbstractPipeline` 原始类型字段可接收任意实例化的 `this`，
     `(Optional<T>) EMPTY` 是无检查转换；Rust 侧 `X<A>` 与 `X<B>` 是不同类型，
-    唯一健全的转换是经 Object 边界（保持对象标识）做带运行时校验的重新实例化。
+    经 Object 边界构造目标实例化的视图。A-1 存储层擦除落地后
+    `From<Object> for X<A>` 对任意 A 成立（__inner 非泛型，共享存储与对象
+    标识，运行时按擦除类判定）——本转换由宏的擦除路径支撑，不再依赖
+    （已删除的）#[immutable_state] 逐字段重建。
     actual / expected 基名相同且类型实参不同 → 返回转换表达式，否则 None。"""
     if '<' not in actual or '<' not in expected or actual == expected:
         return None

@@ -213,12 +213,10 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
     elif (val_ty_name == 'Object' and ftype not in _PRIMITIVE_RUST_TYPES
           and ftype not in ('Object', '()') and not ftype.startswith('Rc<')):
         # 值经擦除边界（泛型静态方法 <T> T f(T) 等）退化为 Object，
-        # 字段声明为具体类/类型参数：downcast 还原（Java 侧此处是隐式 checkcast）
-        if ftype in (class_type_params or ()):
-            # 类型变量槽：经宏为类型形参补的 From<Object> 取回（与 areturn / 实参同规则）
-            val_str = f"From::from(Clone::clone(&{val_str_raw}))"
-        else:
-            val_str = f"({val_str_raw}).downcast::<{ftype}>()"
+        # 字段声明为具体类/类型参数：checkcast 还原（Java 侧此处是隐式 checkcast）。
+        # 统一经 From<Object>（A-1 存储层擦除后对任意类型实参成立，共享存储与
+        # 对象标识）；Object::downcast 按精确 TypeId 判定，跨实例化会误抛 CCE。
+        val_str = f"From::from(Clone::clone(&{val_str_raw}))"
     else:
         val_str = _coerce_value(val_str_raw, val_ty, ftype)
     # 引用类型赋值时加 Clone::clone()，避免 E0382（move after use）
