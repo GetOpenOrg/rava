@@ -34,11 +34,23 @@ from .inherited_gen import (ClassEmission, EmittedMethod, IMPORTS_SLOT, MEMBERS_
 
 # 类文本中的插入位（整行，位于 java_class! 块内、impl 块之后）
 IMPLS_SLOT = '//@@java_rta:interface-impls@@'
+# 协变 upcast impl 的插入位（整行，位于 java_class! 块之外 —— 载体构造不是宏输入）
+UPCASTS_SLOT = '//@@java_rta:interface-upcasts@@'
 
 _ACC_ABSTRACT = 0x0400
 _ACC_BRIDGE = 0x0040
 _IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\b')
 _SIG_RE = re.compile(r'^pub fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*->\s*Result<(.*)>\s*$')
+
+
+# 协变 upcast impl 的类型形参约束 —— 与宏 block/mod.rs 为类类型形参注入的约束集
+# 保持一致（wrapper 的 ObjectVTable impl 带这套约束，`Object::from(v)` 依赖它）。
+_PARAM_BOUNDS = "Clone + Default + 'static + From<Object> + Into<Object>"
+
+
+def _bounded_generics(params: list[str]) -> str:
+    """upcast impl 的泛型头：每个类型形参带宏注入约束。"""
+    return f"<{', '.join(f'{p}: {_PARAM_BOUNDS}' for p in params)}>" if params else ''
 
 
 def _split_top_level(text: str) -> list[str]:
@@ -173,6 +185,7 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
     for recv_bin, recv in emissions.items():
         recv_ci = registry.get(recv_bin)
         blocks: list[str] = []
+        upcasts: list[str] = []
         uses: list[str] = []
         if (recv_ci is not None and not recv.handwritten and IMPLS_SLOT in recv.text
                 and not recv_ci.is_interface and not (recv_ci.access_flags & _ACC_ABSTRACT)):
@@ -191,7 +204,8 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                 iface_ci = registry.get(iface_bin)
                 if iface is None or iface_ci is None or iface.handwritten or not iface.methods:
                     continue
-                type_params = set(effective_class_type_params(iface_ci, registry))
+                iface_params = effective_class_type_params(iface_ci, registry)
+                type_params = set(iface_params)
                 decls: list[str] = []
                 for im in iface.methods:
                     erased = erased_declaration(im, type_params)
@@ -237,6 +251,25 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                     uses.append(_vtable_use(iface_bin, recv.crate_prefix, emissions))
                 body = '\n'.join('    ' + ln for d in decls for ln in d.split('\n'))
                 blocks.append(f"impl{recv_generics} {short_cls(iface_bin)} for {recv_ty} {{\n{body}\n}}")
+                # A-4 协变 upcast：类实例 → 擦除接口载体视图（宏块之外的普通 Rust impl）。
+                # 调用点（invokeinterface / 擦除签名的隐式上转）生成 `Into::<I<Object>>::into(v)`：
+                # JVM 的 itable 只认擦除接口，接口载体也只持有 Object 引用，任意类实例化
+                # 上转到 `I<Object..>` 都是同一视图（保持对象身份，运行时类可达）。
+                erased_iface_ty = short_cls(iface_bin) + (
+                    f"<{', '.join(['Object'] * len(iface_params))}>" if iface_params else '')
+                if short_cls(iface_bin) not in imported:
+                    imported.add(short_cls(iface_bin))
+                    uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions)};")
+                # 实现体必须用显式 UFCS：接口载体可能自带 Java `static from(..)` 工厂方法
+                # （如 ChronoLocalDate.from），`Iface::from(..)` 路径解析会被固有方法遮蔽，
+                # 错调工厂方法（返回 Result）而非 From trait。
+                upcasts.append(
+                    f"impl{_bounded_generics(recv_params)} From<{recv_ty}> for {erased_iface_ty} {{\n"
+                    f"    fn from(v: {recv_ty}) -> Self {{\n"
+                    f"        <{erased_iface_ty} as ::std::convert::From<Object>>::from(\n"
+                    f"            <Object as ::std::convert::From<{recv_ty}>>::from(v))\n"
+                    f"    }}\n"
+                    f"}}")
 
         if blocks:
             text = '\n\n'.join(blocks)
@@ -244,6 +277,14 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
         else:
             impl_text = ''
         recv.text = re.sub(r'^[ \t]*' + re.escape(IMPLS_SLOT) + r'\n', lambda _m: impl_text,
+                           recv.text, flags=re.M)
+        # 协变 upcast impl（宏块外，顶格书写；无 upcast 时移除占位注释行）
+        if upcasts:
+            upcast_text = ('// 协变 upcast：类实例 → 擦除接口载体视图（A-4，接口类型实参在运行时不存在）\n'
+                           + '\n'.join(upcasts) + '\n')
+        else:
+            upcast_text = ''
+        recv.text = re.sub(r'^[ \t]*' + re.escape(UPCASTS_SLOT) + r'\n', lambda _m: upcast_text,
                            recv.text, flags=re.M)
         if uses:
             use_text = ''.join(ln + '\n' for ln in uses)
