@@ -50,3 +50,14 @@ pub(crate) fn classify_vtable_body(block: &Block) -> VTableBodyKind {
 pub(crate) fn is_vtable_safe_body(block: &Block) -> bool {
     matches!(classify_vtable_body(block), VTableBodyKind::Safe)
 }
+
+/// A-1 存储层擦除后的门控分类：泛型类（带类型形参）的方法体不走 vtable 直连（Safe）
+/// 路径 —— `impl<P..> X__VTable<P..> for X__inner` 覆盖全部实例化，inner 上下文对
+/// `this.__get_x()` / `this.vtable_method()` 的解析无法定实例化（E0283）。统一改走
+/// wrapper 钩子（NeedsWrapper）：wrapper 的 vtable 槽位类型已知，签名不歧义。
+pub(crate) fn vtable_body_kind_gated(block: &Block, class_is_generic: bool) -> VTableBodyKind {
+    match classify_vtable_body(block) {
+        VTableBodyKind::Safe if class_is_generic => VTableBodyKind::NeedsWrapper,
+        other => other,
+    }
+}

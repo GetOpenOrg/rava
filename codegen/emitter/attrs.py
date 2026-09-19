@@ -226,25 +226,6 @@ def _to_string_vtable_owner(ci: ClassInfo, registry: 'dict | None',
     return _root_method_vtable_owner(ci, registry, handwritten_methods, _TO_STRING_SIG)
 
 
-def _has_immutable_state(ci: ClassInfo, registry: 'dict | None') -> bool:
-    """泛型类且全部实例字段（含继承链）为 final：对象状态构造后不变。
-    宏据此支持「同一泛型类的另一类型实例化」按字段重建视图（Java 的 unchecked cast）。"""
-    from ..type_map import effective_class_type_params
-    if ci.is_interface or not registry or not effective_class_type_params(ci, registry):
-        return False
-    cur = ci
-    seen: set[str] = set()
-    while cur is not None and cur.name not in seen:
-        seen.add(cur.name)
-        if any(not f.is_static and not (f.access_flags & _ACC_FINAL) for f in (cur.fields or [])):
-            return False
-        sc = cur.super_class
-        if not sc or sc == _OBJECT_CLASS:
-            return True
-        cur = registry.get(sc)
-    return False
-
-
 def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
                            superclass_rust: str = "",
                            superclass_fields: list[tuple[str, str]] | None = None,
@@ -345,8 +326,6 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         _eq_owner = _root_method_vtable_owner(ci, registry, handwritten_methods, _EQUALS_SIG)
         if _eq_owner:
             lines.append(f'#[equals_vtable     = "{_eq_owner}"]')
-        if _has_immutable_state(ci, registry):
-            lines.append('#[immutable_state   = true]')
         if impl_methods:
             lines.append(f'#[impl_methods      = "{";".join(sorted(impl_methods))}"]')
     return lines

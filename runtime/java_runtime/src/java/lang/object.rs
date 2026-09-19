@@ -84,10 +84,12 @@ pub trait ObjectVTable: 'static {
     #[doc(hidden)]
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { None }
 
-    /// 状态不可变（全部实例字段 final）的泛型类：擦除后的字段值（声明顺序，祖先在前）与对象标识
-    /// 单元。同一泛型类的另一类型实例化据此重建视图（Java 的 unchecked cast）。其余对象 → None。
+    /// 擦除存储导出（A-1 存储层擦除）：`slot` 是 `Option<Rc<dyn Any>>`，类 wrapper 填入
+    /// 自身持有的非泛型 `Rc<X__inner>`（其 TypeId 与类型实参无关）。`From<Object> for X<A>`
+    /// 的擦除路径据此对任意类型实参重建视图（Java 泛型运行时本就擦除）。
+    /// 其余对象（基本类型、闭包等）不填 `slot`。
     #[doc(hidden)]
-    fn __erased_state(&self) -> Option<(Rc<()>, Vec<Object>)> { None }
+    fn __erased_inner(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
 
     /// checkcast 的类型驱动形式：`slot` 是 `Option<T>`，`T` 为本类或任一祖先类的 wrapper 类型时
     /// 按运行时类重建该视图写入 `slot` 并返回 true（保留运行时类的覆盖实现）；否则返回 false。
