@@ -487,6 +487,8 @@ java.base.jmod
 
 ### 9.3 主流程侧的实际缺口
 
+> **状态更新（2026-09-20 R8 轮）**：A/B/C/D 四项已全部修复入 main（连同接口间接传播与签名多态可观测性）。A 由 fc5da7a/702b180 落地；B 按"先只对 field_discover_classes 生效"的分阶段策略落地（stub 通道内字段类型传递闭包，BFS 调用链通道的字段暂不收集）；C/D 同批落地。实测影响（TestCollections）：123 → 268 类（B 贡献几乎全部，均为 type-only 存根，归因与口径见提交记录）；接口间接实现传播在 TestCollections 闭包 +0，在大闭包待观察。另新增 `[bfs-audit] sig-poly-native=N root-inherited=N unresolved=N` 审计行（签名多态边界 / 根类桥接 / 真实缺口三分）。B 的"影响"原描述不准确：真实后果是 `jvm_to_rust` 对 registry 外类型 fallback 成 `Object` 的**静默类型退化**，不是"引用不存在的类型"。
+
 | 缺口 | 位置 | 影响 | 建议改法 |
 |---|---|---|---|
 | **A. `ldc` 加载 Class 字面量不进闭包** | `transpile.py::_collect_method_refs` 末条分支只匹配 `comment.startswith(_JDK_PREFIXES)`，而 `_ldc_str` 产出 `class java/util/List` | `X.class` 字面量引入的类不进闭包 → 该类缺失或退化为无初始化存根。与本文 2.4 类型五同源 | 新增分支：`comment` 以 `class ` 开头时取 `comment.split()[1]`，按现有 `field_classes` / `field_discover_classes` 通道处理 |

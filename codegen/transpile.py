@@ -211,6 +211,11 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset())
             # "InvokeDynamic samName:dynDesc impl:Cls.method:implDesc samtype:samDesc"
             # lambda / 方法引用的实现方法由闭包直接调用，属于调用链的一部分
             for tok in c.split(' ')[2:]:
+                if tok.startswith('samtype:'):
+                    # SAM 接口的函数式描述符类型（缺口 D）：通常已被 impl: 令牌的
+                    # 方法描述符通道覆盖，此处防御性收集
+                    _add_type_refs(tok[len('samtype:'):])
+                    continue
                 if not tok.startswith('impl:'):
                     continue
                 rest = tok[5:]
@@ -257,6 +262,13 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset())
             _lit_cls = c[6:].split()[0] if c[6:].split() else ''
             if _lit_cls and not _lit_cls.startswith('[') and '/' in _lit_cls:
                 field_classes.append(_lit_cls)
+        elif c.startswith('['):
+            # 数组形态的类操作数注释（multianewarray / anewarray / checkcast /
+            # instanceof 的 "[[Ljava/lang/String;" 裸描述符）：元素类型进闭包
+            # （type-only）。此前所有分支都要求 '[' not in c，数组元素类型
+            # 完全不进闭包（trace 完整版发现的缺口 C）。_desc_class_refs 的
+            # 正则天然吃数组描述符，只提取 L...; 内层类名。
+            _add_type_refs(c)
         elif c.startswith(_JDK_PREFIXES + _JDK_STUB_ONLY_PREFIXES) and '[' not in c and _is_boundary_class(c.split()[0]):
             # stub-only 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
             cls = c.split()[0]
@@ -417,14 +429,57 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 class_cache[name] = None
         return class_cache[name]
 
-    def _enqueue_declaring_method(ci, meth: str, desc: str) -> None:
+    _sig_poly_native: set[tuple] = set()   # 精确匹配失败但链上有同名 ACC_NATIVE（签名多态边界，预期内）
+    _root_inherited: set[tuple] = set()    # 声明者落到手写根类 Object（根 vtable 桥接承载，预期内）
+    _unresolved_calls: set[tuple] = set()  # 链上完全无同名声明（真实缺口，需排查）
+    _root_method_names: frozenset | None = None
+
+    def _object_method_names() -> frozenset:
+        """手写根类 Object 声明的方法名集合（从 jmods 解析 Object.class，无字面量）。
+        根类方法由 vtable 桥接机制（#[hash_code_vtable] 等）承载，不经 BFS 入队。"""
+        nonlocal _root_method_names
+        if _root_method_names is None:
+            _names: set[str] = set()
+            try:
+                _data = resolver.resolve(_OBJECT_CLASS)
+                if _data is not None:
+                    _names = {m.name for m in parse_class_bytes(_data, _OBJECT_CLASS).methods}
+            except Exception:
+                pass
+            _root_method_names = frozenset(_names)
+        return _root_method_names
+
+    def _record_unresolved(ci, meth: str, desc: str) -> None:
+        """签名多态调用（MethodHandle.invokeBasic / VarHandle.get 等）的调用点
+        描述符由 javac 按实参生成，与声明描述符必然不同 → 精确匹配必败，此前
+        静默 return（trace 完整版发现：HelloWorld 规模此类目标 1500+ 条）。
+        命中同名 ACC_NATIVE 的归 native 边界（手写层职责）；链上完全无同名
+        声明的才是真实缺口。「为什么这个方法没被翻译」从此可观测。"""
+        _cur, _seen = ci, set()
+        while _cur is not None and _cur.name not in _seen:
+            _seen.add(_cur.name)
+            if any(m.name == meth and m.is_native for m in _cur.methods):
+                _sig_poly_native.add((ci.name, meth, desc))
+                return
+            _sc = _cur.super_class
+            if not _sc or _sc in _JAVA_RUNTIME_CLASSES:
+                # 链到手写根类：Object 声明的同名方法由根 vtable 桥接承载（预期内），
+                # 其余才是真实缺口
+                if meth in _object_method_names():
+                    _root_inherited.add((ci.name, meth, desc))
+                    return
+                break
+            _cur = _load_class(_sc)
+        _unresolved_calls.add((ci.name, meth, desc))
+
+    def _enqueue_declaring_method(ci, meth: str, desc: str) -> bool:
         """JVM 方法解析（JVMS §5.4.3.3）的接口分支：常量池类及其父类链都未声明
         (meth, desc) 时，实际执行的是父接口的 default 方法。把声明接口的该方法入队，
         使接口进入 registry、default 方法体注入实现类并进入 vtable。
         abstract 声明无方法体，不入队（不为无体方法扩大生成范围）。
         """
         if meth in ('<init>', '<clinit>'):
-            return
+            return True   # 非方法解析范畴，不算未解析
         _chain = []
         _cur = ci
         _seen: set[str] = set()
@@ -443,7 +498,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     field_discover_classes.add(_anc.name)
                 else:
                     _enqueue_method((_anc.name, meth, desc))
-                return
+                return True
         _owner = None
         if _owner is None:
             _iq = deque(i for _c in _chain for i in (_c.interfaces or []))
@@ -466,7 +521,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     _via.setdefault(_sup, _in)
                     _iq.append(_sup)
         if _owner is None:
-            return
+            return False   # 链上与接口闭包都无精确声明 → 调用方按未解析归类
         # 实现类 → 声明接口之间的中间接口必须进 registry（仅类型别名级 stub），
         # 否则 default 方法注入沿 interfaces 向上遍历时在缺失节点处断链。
         _step = _via.get(_owner[0].name)
@@ -477,14 +532,15 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             _step = _via.get(_step)
         _oci, _om = _owner
         if _om.is_abstract or _om.is_static or _oci.name in _JAVA_RUNTIME_CLASSES:
-            return
+            return True   # 已解析到声明，按策略不入队（不为无体方法扩大生成范围）
         if _is_boundary_class(_oci.name):
             field_discover_classes.add(_oci.name)
-            return
+            return True
         _key = (_oci.name, meth, desc)
         if _key not in visited_methods:
             visited_methods.add(_key)
             queue.append(_key)
+        return True
 
     def _translatable(name: str) -> bool:
         return (bool(name) and name not in _JAVA_RUNTIME_CLASSES
@@ -564,7 +620,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 if m.is_static or m.name == '<init>':
                     _enqueue_class_init(cls)
         if not _declared:
-            _enqueue_declaring_method(ci, meth, desc)
+            if not _enqueue_declaring_method(ci, meth, desc):
+                _record_unresolved(ci, meth, desc)
         _drain_static_fields()
 
     with resolver:
@@ -635,7 +692,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     for concrete_name, concrete_ci in list(jdk_infos.items()):
                         if concrete_ci is None or concrete_ci.is_interface:
                             continue
-                        if cls in (concrete_ci.interfaces or []):
+                        # 传递实现（经由父接口间接实现）与直接实现同等对待：
+                        # 只查直接 interfaces 会漏掉非实例化但已生成的间接实现类
+                        # （其 vtable 注入随之缺失）。_supertypes 有缓存与环保护。
+                        if cls in _supertypes(concrete_ci.name):
                             _enqueue_method((concrete_name, meth, desc))
                 for x in instantiated:
                     if x != cls and cls in _supertypes(x):
@@ -658,6 +718,15 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             if not queue:
                 break
 
+        # 签名多态 / 未解析调用的可观测性（与 JAVA_RTA_BFS_TRACE 溯源互补）
+        if _sig_poly_native or _unresolved_calls or _root_inherited:
+            print(f"[bfs-audit] sig-poly-native={len(_sig_poly_native)} "
+                  f"root-inherited={len(_root_inherited)} "
+                  f"unresolved={len(_unresolved_calls)}")
+            if os.environ.get('JAVA_RTA_DEBUG'):
+                for _k in sorted(_unresolved_calls):
+                    print(f"[bfs-audit] unresolved: {_k[0]}.{_k[1]}:{_k[2]}")
+
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
         _stub_queue: deque[str] = deque(field_discover_classes)
@@ -672,6 +741,20 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             try:
                 ci = parse_class_bytes(data, cls)
                 jdk_infos[cls] = ci
+                # 缺口 B（分阶段首期：仅 field_discover 通道）：字段声明类型进闭包
+                # （type-only）。未被指令触达的字段类型此前静默退化为 Object
+                # （jvm_to_rust 对 registry 外类型的 fallback），继承字段展平时
+                # 暴露访问器签名 E0308。stub 通道内的字段类型传递闭包由此展开；
+                # BFS 调用链通道（_process）的字段暂不收集（闭包膨胀按 9.3 分阶段）。
+                for _f in ci.fields:
+                    for _ftcls in _desc_class_refs(_f.descriptor):
+                        if (_ftcls not in _JAVA_RUNTIME_CLASSES
+                                and (_ftcls.startswith(_JDK_PREFIXES)
+                                     or _ftcls.startswith(_JDK_STUB_ONLY_PREFIXES))
+                                and _ftcls not in _stub_visited):
+                            _stub_visited.add(_ftcls)
+                            field_discover_classes.add(_ftcls)
+                            _stub_queue.append(_ftcls)
                 # 递归添加父类（_super 字段需要父类类型存在）
                 if (ci.super_class and ci.super_class != _OBJECT_CLASS
                         and ci.super_class not in _JAVA_RUNTIME_CLASSES
