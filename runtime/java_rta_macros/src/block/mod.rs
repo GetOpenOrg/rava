@@ -1137,6 +1137,25 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
             }
 
+            // 继承成员填槽（S-16）：带转发体的继承声明把体放进本类对 vtable_owner 的
+            // vtable impl。vtable_owner 声明为 abstract（实现位于中间祖先）时，trait
+            // default 是 stub panic——不填槽则子类对象经 vtable 虚分派命中空洞声明。
+            // 转发体由 emitter 生成（Owner__m_base / __as_Owner 钩子，super 调用同源）。
+            for (f, _owner, vtable_owner, _interface_owner) in &inherited {
+                let Some(block) = &f.block else { continue };
+                let Some(vo) = vtable_owner else { continue };
+                let vo_ty = match syn::parse_str::<Type>(vo) {
+                    Ok(t) => t,
+                    Err(e) => return e.to_compile_error(),
+                };
+                let (vo_name, _) = split_type_name_args(&vo_ty);
+                if vo_name != *anc_name {
+                    continue;
+                }
+                let sig = &f.sig;
+                items.push(quote! { #sig #block });
+            }
+
             // 祖先 vtable 的类型实参：逐个祖先取 all_superclasses 中携带的实参
             // 例：ReferencePipeline<P_IN, P_OUT> 实现 AbstractPipeline__VTable<P_IN, P_OUT, Object>
             //     与 PipelineHelper__VTable<P_OUT>（元数、顺序各不相同）
