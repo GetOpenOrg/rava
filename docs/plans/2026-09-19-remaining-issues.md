@@ -30,8 +30,8 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 | 编号 | 类别 | 条目数 | 最高优先级 |
 |------|------|--------|-----------|
 | [A](#a-架构缺口最高优先级) | 架构缺口 | 7 | P0 |
-| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 14 | P1 |
-| [G](#g-生成器与宏的内部质量) | 生成器与宏内部质量 | 8 | P1 |
+| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 16 | P1 |
+| [G](#g-生成器与宏的内部质量) | 生成器与宏内部质量 | 10 | P1 |
 | [P](#p-项目原则违规) | 项目原则违规 | 3 | P1 |
 | [V](#v-验证覆盖缺口) | 验证覆盖缺口 | 4 | P1 |
 | [R](#r-仓库事务) | 仓库事务 | 3 | P2 |
@@ -69,18 +69,66 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 ### A-3 checkcast / instanceof 仍是字符串形态 【P0】
 
 - **现状**：R5-B 已把「合法的子类向下转换」改为 `<T>::from(Object)`（`ObjectVTable::__view_into`），R5-C 引入 `Object::checkcast`（复用 `__view_as`）。但 `.downcast::<T>()` 字符串形态仍被 `stack.py`（hint 重定向）、`fields.py`、`invoke_sig.py`、`codegen.py` 等 15+ 处模式匹配依赖；`downcast(&self)` 与 `into(self)` 所有权语义不同。instanceof 在「静态类型是目标祖先」时仍走静态判定而非运行时判定。
-- **终态**：rs_ir 增加 `CastExpr` / `InstanceOfExpr` 节点，所有消费方按节点而非字符串匹配；instanceof 全部按擦除类做运行时判定；失败的 checkcast 抛 `ClassCastException`（见 S-1）。
-- **验收指标**：codegen 中对 `downcast` 字符串的模式匹配 = 0。
+- **Codegen 当前错误的三种 checkcast 生成形态**（实测触发，对应 e2e-issues C2 的 6 个用例）：
+
+  | 表达式静态类型 | 目标类型 `T` | 当前生成（错误） | 终态生成（正确） |
+  |---|---|---|---|
+  | `Result<Object, JvmError>` | `T` | `expr.downcast::<T>()` | `expr?.downcast::<T>()` 或 `T::try_from(expr?)?` |
+  | 已知静态类型 == `T`（如 `String` → `String`） | `T` | `expr.downcast::<T>()` | `expr`（no-op，直接省略） |
+  | `Object` | `T` | `expr.downcast::<T>()` | `T::try_from(expr)?` / `Object::checkcast::<T>(expr)` |
+
+  第二种情况是「已知源类型 == 目标类型时仍发出 downcast」，在 `String`、`Integer` 等具体类型上报 `no method named downcast found for struct String`，属于 codegen 的冗余转换，优先于 runtime 修改单独修复。
+
+- **协变 upcast 路径缺失**（与 A-4 同源但独立于 lambda）：`List<Object>: From<ArrayList<_>>` 这类报错根因是 codegen 在生成 `java_class!` 宏块时未为每个 `implements` 接口生成 `impl From<ClassName> for InterfaceName`。当泛型参数被擦除为 `Object` 后，`ArrayList<Object>` 与 `List<Object>` 之间缺少 `From` 实现，编译器报 `the trait bound List<Object>: From<ArrayList<Object>> is not satisfied`。终态需在 `class_writer.py` 的 `java_class!` 块生成逻辑里对每个接口发出此 impl（见 A-4）。
+- **终态**：rs_ir 增加 `CastExpr` / `InstanceOfExpr` 节点，所有消费方按节点而非字符串匹配；instanceof 全部按擦除类做运行时判定；失败的 checkcast 抛 `ClassCastException`（见 S-1）；协变 upcast 由 `java_class!` 生成的 `From` impl 覆盖。
+- **验收指标**：codegen 中对 `downcast` 字符串的模式匹配 = 0；`expect("ClassCastException")` = 0。
 
 ### A-4 接口 carrier 未进入类型位置（T-2） 【P1】
 
 - **现状**：接口类型的参数/返回值/局部变量/字段多数仍生成 `Object`，调用点经擦除载体转换。`Constable.describeConstable` 这类「擦除接口签名 vs 类的具体泛型返回」靠 R5-B/C 的局部转换过编译。
-- **终态**：接口类型位置一律为 `I<E>` carrier；调用点为 `it.hasNext()` / `it.next()`；协变返回由 vtable 槽位的擦除签名 + carrier 的类型化视图统一处理。
+- **协变 upcast 子问题**：A-3 中提到的「`List<Object>: From<ArrayList<_>>` 缺失」属于 A-4 的具体落地需求。`java_class!` 宏块生成时，对类声明的每个 `implements` 接口，需同时生成：
+  ```rust
+  impl From<ClassName> for InterfaceName {
+      fn from(v: ClassName) -> Self { /* carrier 包装 */ }
+  }
+  impl TryFrom<Object> for InterfaceName {
+      type Error = JvmError;
+      fn try_from(obj: Object) -> Result<Self, JvmError> { /* downcast + wrap */ }
+  }
+  ```
+  这样 `let list: List<String> = ArrayList::new();` 的 upcast 就能走 `From` 而不是 `Object::from_any`，同时 `Function<Object,Object>: From<Object>` 也得到满足（见 A-5 与 S-15 的函数式接口实现）。
+- **终态**：接口类型位置一律为 `I<E>` carrier；调用点为 `it.hasNext()` / `it.next()`；协变返回由 vtable 槽位的擦除签名 + carrier 的类型化视图统一处理；`java_class!` 对每个 `implements` 接口生成 `From` + `TryFrom<Object>` impl；接口 upcast 的 `Object::from_any` = 0。
 
 ### A-5 lambda 不是对象 【P1】
 
-- **现状**：lambda 以闭包装箱（`Object::from_any` + carrier 中的 `downcast_ref` 回落）；不实现 `I__VTable`，因此 default 方法不能在 lambda 上调用，`__interface` 查询对 lambda 无效。
-- **终态**：每个 `invokedynamic` 站点生成实现 `I__VTable` 的合成类（与 JVM 的 LambdaMetafactory 产物同构），捕获变量为字段；闭包 `downcast_ref` 回落 = 0。
+- **现状**：lambda 以闭包装箱（`Object::from_any` + carrier 中的 `downcast_ref` 回落）；不实现 `I__VTable`，因此 default 方法不能在 lambda 上调用，`__interface` 查询对 lambda 无效。实测影响用例：TestLambda、TestMethodRef、TestOptional、TestArraysUtil、TestPatternMatch、TestStreamBasic、TestStreamAdvanced、TestStreamCollectors、TestStringRegex、TestInterfaceStatic、TestEnumMethods、TestFunctionalInterface（12 个，对应 e2e-issues C1）。
+- **设计方向**（在现有 `Rc<dyn ObjectVTable>` 架构上演进，不引入新公开 trait）：
+
+  1. **每个函数式接口独立 struct**，签名对应各接口 arity（不用单一变参 `Lambda` 结构体，以保留类型信息供调用点使用）：
+     ```rust
+     // runtime/java_runtime/src/java/util/function/function.rs
+     #[derive(Clone)]
+     pub struct Function(pub Rc<dyn Fn(Object) -> Result<Object>>);
+     impl ObjectVTable for Function { ... }
+     impl From<Function> for Object { ... }   // 装箱
+     impl TryFrom<Object> for Function {       // 解箱（不用 From，保留 ClassCastException 语义）
+         type Error = JvmError;
+         fn try_from(obj: Object) -> Result<Self, JvmError> { obj.try_checkcast::<Function>() ... }
+     }
+     ```
+     需实现的接口（按 e2e 实测报错）：`Function`、`Supplier`、`Consumer`、`BiConsumer`、`BinaryOperator`、`Predicate`、`UnaryOperator`、`BiFunction`、`Comparator`（及其余 12 个报错接口，随测试扩大按需补充）。
+
+  2. **`invokedynamic` 站点** codegen 生成：
+     ```rust
+     let f = Function::new(Rc::new(move |arg: Object| -> Result<Object> { /* body */ }));
+     let obj: Object = Object::from(f);  // blanket From<T: ObjectVTable>
+     ```
+
+  3. **解箱调用点** codegen 生成 `Function::try_from(obj)?` 而非 `obj.downcast_ref::<Fn(...)>()`。
+
+  4. **lambda 方法命名一致性**（见 G-10）：`invokedynamic` 生成的 lambda body 方法名必须与调用点保持一致；两处应在同一 codegen 逻辑中生成，不可各自独立命名。
+
+- **终态**：每个 `invokedynamic` 站点生成实现 `I__VTable` 的合成类（与 JVM 的 LambdaMetafactory 产物同构），捕获变量为字段；`downcast_ref` 回落 = 0；`Object::from_any` 的函数式接口路径 = 0；`TryFrom<Object>` 为 12 个常用接口全覆盖。
 
 ### A-6 抽象类、枚举、手写类缺少 `__interface` 【P1】
 
@@ -99,11 +147,42 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 ### S-1 失败的 checkcast 不抛 `ClassCastException` 【P1】
 `downcast` 失败仍是 `expect("ClassCastException")`（进程 panic，不可被 Java `catch` 捕获）。`JvmError::class_cast` 已就绪。终态：全部失败路径返回 `Err(JvmError::class_cast(..))`，`expect("ClassCastException")` = 0。依赖 A-3。
 
-### S-2 数组无法表示 `null` 【P1】
-`JArray::default()` 是空数组，`null` 数组与空数组不可区分；对 null 数组的访问不抛 NPE。终态：`JArray` 具备 null 状态，`arraylength`/`xaload`/`xastore` 在 null 上抛 `NullPointerException`。
+### S-2 数组无法表示 `null` + 多维数组访问 API 缺失 【P1】
 
-### S-3 装箱类型无法表示 `null` 【P1】
-`Integer`/`Long` 等被建模为原生值，`Integer x = null`、`Map.get` 未命中返回 null 后拆箱抛 NPE 等语义缺失。终态：装箱类型是真实对象（来自字节码翻译的 `java/lang/Integer`），自动装拆箱即字节码里的 `valueOf`/`intValue` 调用，不做特殊建模。
+**子问题 1 — null 语义**：`JArray::default()` 是空数组，`null` 数组与空数组不可区分；对 null 数组的访问不抛 NPE。终态：`JArray` 具备 null 状态，`arraylength`/`xaload`/`xastore` 在 null 上抛 `NullPointerException`。
+
+**子问题 2 — 多维数组访问 API 缺失**（e2e-issues B5，触发用例：TestMultiArray）：`Object` 上未暴露数组长度与元素访问方法，codegen 生成了 `obj.set(i, v)` / `obj.len()` 等调用，但 `Object` 没有这些方法，报 `no method named set/len found for struct Object`。
+
+根因：多维数组（`int[][]`、`String[][]`）在 runtime 以 `Rc<RefCell<Vec<T>>>` 存储，装进 `Object` 后，调用方无法通过 `Object` 直接访问内部向量。
+
+终态：在 `runtime/java_runtime/src/java/lang/object_ext.rs` 为 `Object` 扩展数组访问 API（**不引入泛型参数，改为按元素类型分支**，原因：codegen 在运行时不知道泛型 T，无法指定类型参数）：
+```rust
+impl Object {
+    pub fn array_length(&self) -> Result<i32>;          // arraylength
+    pub fn array_load_object(&self, idx: i32) -> Result<Object>;   // aaload
+    pub fn array_store_object(&self, idx: i32, val: Object) -> Result<()>;  // aastore
+    pub fn array_load_int(&self, idx: i32) -> Result<i32>;          // iaload
+    pub fn array_store_int(&self, idx: i32, val: i32) -> Result<()>; // iastore
+    // 同理 long / float / double / byte / char / short
+}
+```
+codegen 的 `xaload`/`xastore`/`arraylength` 指令生成改为调用上述方法；同时 `set`/`get`/`len` 等自造名称不再发出。
+
+### S-3 装箱类型无法表示 `null` + null 引用比较语义错误 【P1】
+
+**子问题 1 — 装箱 null**：`Integer`/`Long` 等被建模为原生值，`Integer x = null`、`Map.get` 未命中返回 null 后拆箱抛 NPE 等语义缺失。终态：装箱类型是真实对象（来自字节码翻译的 `java/lang/Integer`），自动装拆箱即字节码里的 `valueOf`/`intValue` 调用，不做特殊建模。
+
+**子问题 2 — null 引用比较语义错误**（e2e-issues B7，触发用例：TestAutoboxing）：
+```java
+Integer nullable = null;
+System.out.println(nullable == null);  // Java 输出 true
+```
+当前 codegen 生成的 `==` 比较对 null 引用返回 false。根因：`Object` 的 `PartialEq` 通过 `__identity()` 比较两个 `Rc<dyn ObjectVTable>` 的指针，而 `Default::default()`（null）的指针并非固定值——每次调用 `Object::default()` 都新建一个 `Rc::new(())`，导致两个 null 对象的身份不同。
+
+终态：
+- null 对象用 **singleton** 实现：`thread_local!` 缓存唯一 null 对象，`Object::default()` 返回该 singleton 的 clone（同一 `Rc` 指针）。
+- 或：`PartialEq` 先检测 `is_jvm_null()`，两侧均为 null 则相等，一侧为 null 则不等。
+- `nullable == null` 的输出 diff = 0（TestAutoboxing 通过）。
 
 ### S-4 数组协变不完整 【P1】
 `JArray` 的 `Covariant` 视图只支持上转为 `Object[]`；转为祖先类数组（`Integer[]` → `Number[]`）失败；存入错误元素类型抛 `ClassCastException` 而非 `ArrayStoreException`。终态：任意祖先元素类型的协变视图 + `ArrayStoreException`。依赖 A-1 的类型化视图机制。
@@ -138,6 +217,44 @@ JVMS §5.5 的触发点里，手写 static native 的调用、带 default 方法
 ### S-14 跨包同简单名类 【已处理，待观察】
 R5-B 让 `short_cls` 对冲突类生成带包限定的 Rust 类型名（`Era` 冲突）。需确认：重载后缀（`mangle_name`）里两个同简单名类是否仍可能撞名（R5-A 提出的理论风险）。终态：后缀冲突时同样采用包限定，冲突数 = 0。
 
+### S-15 enum 支持缺失 【P1】
+
+- **现状**（e2e-issues B3，触发用例：TestEnumBasic、TestEnumMethods、TestSwitchEnum）：enum 相关的 codegen 与 runtime 存在大量对齐缺口，实测报错超过 25 处 `mismatched types`，以及 `JvmError::Custom` 不存在、`Result::__get_next` 缺失、`downcast` 缺失等。本条目追踪 enum 支持的完整缺口。
+- **已知缺口分类**：
+
+  | 缺口 | 具体报错 | 根因 |
+  |---|---|---|
+  | enum 常量生成 | `mismatched types` × 25 | codegen 为 enum 常量生成了与 runtime enum 表示不匹配的类型 |
+  | `ordinal()` / `name()` | stub panic 或类型错误 | enum 基础方法未在 runtime 或生成器中实现 |
+  | `values()` 静态方法 | 编译失败或运行时错误 | enum 的静态初始化逻辑（`<clinit>` 中填充 `$VALUES`）未完整翻译 |
+  | `switch` on enum | 编译失败 | `lookupswitch`/`tableswitch` 对 enum ordinal 的映射未建模 |
+  | `JvmError::Custom` | `no variant or associated item named Custom found` | codegen 使用了 runtime 不存在的错误变体 |
+  | `Result::__get_next` | `no method named __get_next found` | codegen 生成了 runtime 不存在的 API |
+
+- **根因**：Java enum 在 JVM 字节码层面是普通类（继承 `java/lang/Enum`），其常量是该类的 `static final` 字段，`values()` 是编译器插入的静态方法。当前 codegen 在翻译 `ACC_ENUM` 类时走了独立的特殊路径，但该路径与现有 runtime 的 struct/vtable 表示方案不兼容。
+- **设计方向**：优先让 enum 类走**普通类翻译路径**（`java_class!` 宏 + struct），以 `static OnceLock<Vec<EnumClass>>` 存储常量数组（`values()`），`ordinal()` 和 `name()` 由生成器从字节码生成，不需要特殊 enum Rust 关键字。这样与继承链（`Enum` 基类）、`ObjectVTable` 体系、接口实现均自然兼容。
+- **终态**：TestEnumBasic、TestEnumMethods、TestSwitchEnum 全部通过；enum 常量的 `ordinal()`/`name()`/`equals()` 语义正确；`switch (enumVal)` 生成的 `match` 按 ordinal 分派；`JvmError::Custom` 等自造 API 不出现在 codegen 输出中。
+
+### S-16 继承方法体未注入子类 vtable 槽位 【P1】
+
+- **现状**（e2e-issues E2，触发用例：TestLinkedList、TestInheritedMethod）：当一个具体子类继承了祖先类的方法实现（而非 override）时，emitter 将子类的该方法槽位生成为**无体声明**（`inherited_from = AncestorClass`），运行时通过 vtable 虚分派落到的是 abstract 声明而非实际实现。
+  
+  具体报错：`stub: java/util/AbstractCollection.iterator:()Ljava/util/Iterator;`——分析层已正确找到 `AbstractSequentialList.iterator` 并翻译，但 `LinkedList`（其子类）的 `iterator` 槽位生成为无体声明，调用时 panic 在 stub 上。
+
+- **根因**：`codegen/emitter/` 中处理 `inherited_from` 方法的路径（`class_writer.py` 或 `method_gen.py`）在识别到「子类未 override、方法来自祖先」时，选择了生成无体声明（仅声明 vtable 槽位存在），而不是生成「将调用转发到祖先实现」的方法体。这导致该槽位在子类 vtable 中是一个空洞。
+
+- **与 A-7 的区别**：A-7 处理的是「协变返回 override」（子类 override 了方法，但返回类型是祖先方法返回类型的子类），S-16 处理的是「子类完全不 override、直接继承祖先实现」的场景——后者在 Java 语义中应直接复用祖先的方法体。
+
+- **修复方向**：在 `class_writer.py` / `method_gen.py` 的继承方法生成路径中，当 `inherited_from != None` 且当前类没有字节码实现时，生成转发到祖先实现的方法体：
+  ```rust
+  fn iterator(&self) -> Result<Iterator> {
+      AncestorClass::iterator(self)   // 或等价的 UFCS 调用
+  }
+  ```
+  需确保转发的接收者类型转换合法（子类视图 → 祖先视图）。
+
+- **终态**：TestLinkedList、TestInheritedMethod 通过；`AbstractCollection.iterator` stub 不被命中；生成代码中「有 `inherited_from` 但无方法体」的声明 = 0。
+
 ---
 
 ## G. 生成器与宏的内部质量
@@ -165,6 +282,21 @@ R5-B 新增：`_impl.rs` 定义 `__impl_<m>` 时，codegen 在宏块里生成 `b
 
 ### G-8 类型变量→上界转换经 `Object` 中转 【P2】
 R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」而让类型变量到上界的转换经 `Object` + `checkcast`。A-1 落地后类型变量字段本身就是 `Object` 存储，此转换退化为一次视图构造。终态：随 A-1 收敛，不单独处理。
+
+### G-9 循环体内 if/else 分支被整段丢弃 【P2】
+
+- **现状**（e2e-issues B2，触发用例：TestCasting）：CFG 结构化重写在循环体内的条件分支上存在缺陷——`while` 循环体里的 `if/else` 分支会被整段省略，只保留分支内某一个基本块（通常是非条件路径）。实测 TestCasting 有 4 处 `instanceof` 判断，生成代码只剩 2 个，循环内 `if/else` 完全丢失，导致输出 diff。
+- **根因**：`codegen/cfg/structuring.py` 在处理循环体内嵌套的条件分支时，支配关系计算或 region 归属判断存在错误，将 if/else 的两个后继合并为同一路径，或将其中一条路径误判为循环出口而跳过。具体触发点需通过 `TestCasting` 的字节码反编译对比 CFG 图确认。
+- **影响范围**：不只限于 `instanceof`，任何循环体内包含多出口 if/else 的方法体均可能触发。
+- **终态**：`TestCasting` 的生成代码中循环体内分支数与原始字节码一致；`scripts/main.py` 输出的 `[cfg-audit]` 中无 `unconsumed-blocks` 计数（循环内分支丢弃的直接指示器）。
+- **调试方法**：`python3 scripts/main.py TestCasting.java --no-run` 后查看生成的 `while` 循环体，与 `javap -c TestCasting` 的跳转表逐条对照，定位第一个被丢弃的 `if` 对应的 CFG 边。
+
+### G-10 lambda 方法命名与调用点不一致 【P1】
+
+- **现状**（e2e-issues B4，触发用例：TestComparator、TestFunctionalInterface）：`invokedynamic` 指令生成的 lambda 实现方法（如 `lambda_thenComparing_36697e65_1`）与 call site 生成的调用名称不匹配，导致 `no method named lambda_andThen_1 found` 等编译错误。与 A-5 的宏观缺陷（lambda 不是对象）属于同一根因链但独立触发：即使 A-5 尚未落地，命名不一致本身就能独立修复。
+- **根因**：`invokedynamic` 的 bootstrap 方法分析（`sim/dynamic.py`）与 lambda body 方法生成（`method_gen.py`）在命名方案上各自独立推导，未共享同一命名逻辑。部分 lambda 的哈希后缀或序号由不同代码路径计算，导致生成的方法名与调用点期望的名称不一致。
+- **终态**：lambda body 方法名由单一来源（`sim/dynamic.py` 的 bootstrap 分析结果）决定，`method_gen.py` 和调用点 codegen 均从该来源读取，不独立推导；TestComparator、TestFunctionalInterface 编译通过，调用点与定义名一致。
+- **优先级说明**：此 bug 独立于 A-5（lambda 对象化）存在，在 A-5 完整落地前可单独修复，消除至少 2 个用例的编译失败。A-5 落地时应将 lambda body 方法纳入合成类的方法生成流程，此时 G-10 的修复成果应被 A-5 的统一命名机制吸收。
 
 ---
 
@@ -223,7 +355,16 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 ## 推荐执行顺序
 
 1. **R-1**（解除 `main` 阻塞）→ **V-1**（全量基线，只记录不修）。
-2. **A-1 存储层擦除** → **A-3 Cast/InstanceOf IR 化** → **A-6 `__interface` 全覆盖** → **A-5 lambda 对象化** → **A-4 carrier 进类型位置** → **A-7 协变覆盖**；以 **A-2** 的计数表（全 0）和 **V-3** 的审计行作为统一验收。
-3. **G-1/G-2/G-3**（提升与槽位分型在 rs_ir 上重做）与第 2 步并行，二者文件重叠小。
-4. **S 类**：S-1、S-4、S-5、S-6 随 A-1/A-3 落地；S-2、S-3、S-7–S-10 独立推进。
-5. **P-1/P-2** 清零；**G-4–G-7**、**V-2/V-4**、**R-2/R-3** 收尾。
+2. **A-3 checkcast 三种情况修正**（先修 codegen 的两个简单 case：`Result<T>` 加 `?`、已知类型省略 downcast）→ 立即消灭 C2 的 6 个编译失败，不依赖其他 A 类改造。
+3. **G-10 lambda 命名修复**（独立 bug，不等 A-5 落地）→ 消灭 TestComparator / TestFunctionalInterface 编译失败。
+4. **S-16 继承方法体注入**（独立于 A 类，修 emitter 的转发方法体生成）→ TestLinkedList / TestInheritedMethod 通过。
+5. **S-15 enum 支持**（让 enum 走普通类翻译路径）→ TestEnumBasic / TestEnumMethods / TestSwitchEnum 通过。
+6. **S-2 子问题 2 — 数组访问 API**（在 `Object` 上补 `array_length`/`array_load_xxx`/`array_store_xxx`）→ TestMultiArray 通过。
+7. **S-3 子问题 2 — null 引用比较**（singleton null 或 `PartialEq` 检测 `is_jvm_null`）→ TestAutoboxing 通过。
+8. **A-1 存储层擦除** → **A-3 Cast/InstanceOf IR 化（完整）** → **A-6 `__interface` 全覆盖** → **A-5 lambda 对象化**（含 A-4 协变 upcast + `From`/`TryFrom` 生成）→ **A-7 协变覆盖**；以 **A-2** 的计数表（全 0）和 **V-3** 的审计行作为统一验收。
+9. **G-1/G-2/G-3**（提升与槽位分型在 rs_ir 上重做）与第 8 步并行，二者文件重叠小。
+10. **G-9 循环内分支修复**（需要定位 CFG structuring 的具体回归点）与第 8-9 步并行排查。
+11. **S 类**：S-1、S-4、S-5、S-6 随 A-1/A-3 落地；S-2 子问题 1（数组 null）、S-3 子问题 1（装箱 null）、S-7–S-10 独立推进。
+12. **P-1/P-2** 清零；**G-4–G-8**、**V-2/V-4**、**R-2/R-3** 收尾。
+
+> 步骤 2–7 为**不依赖 A 类架构改造的快速增益**，优先执行可在 A-1 落地前额外通过约 10–12 个用例。步骤 8 起为架构改造主线，预计数天级别工作量。
