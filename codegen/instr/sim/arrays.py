@@ -18,6 +18,14 @@ def _pop_index(sim):
     return idx_expr if widened == src else RawExpr(widened)
 
 
+def _is_object_receiver(arr_ty) -> bool:
+    """数组指令接收者是否擦除为 Object（S-2.2：多维数组元素经 Object 流转、Object[] 持有
+    数组引用等）。是 → 走 Object 的数组访问 API（array_load_*/array_store_*/array_length，
+    元素类型由指令操作码决定）；JArray/Vec 接收者保持类型化 get/set/len 快路径。"""
+    t = render_type(arr_ty)
+    return not (t.startswith('JArray<') or t.startswith('Vec<'))
+
+
 def sim_arrays(ins, sim, class_name, registry) -> bool:
     op      = ins.opcode
     operand = ins.operand or ''
@@ -62,17 +70,33 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         sim.emit(RawStmt(f"let mut {v}: {arr_t} = {init};"))
         sim.push(Var(v), RsNamed(arr_t))
     elif op in ('iastore', 'lastore', 'fastore', 'dastore'):
-        val_expr, _val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
+        val_expr, _val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         val_s = render_expr(val_expr)
         # JVM 操作数栈上 byte/short/char/boolean 都是 int：窄类型局部变量存入宽数组时显式加宽
         _elem_prim = {'iastore': 'i32', 'lastore': 'i64', 'fastore': 'f32', 'dastore': 'f64'}[op]
         _val_prim = render_type(_val_ty)
         if _val_prim in _PRIMITIVE_RUST_TYPES and _val_prim != _elem_prim:
             val_s = f"(({val_s}) as {_elem_prim})"
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {val_s})?;"))
+        _arr_s = render_expr(arr_expr)
+        if _is_object_receiver(arr_ty):
+            _api = {'iastore': 'array_store_int', 'lastore': 'array_store_long',
+                    'fastore': 'array_store_float', 'dastore': 'array_store_double'}[op]
+            sim.emit(RawStmt(f"{_arr_s}.{_api}({render_expr(idx_expr)}, {val_s})?;"))
+        else:
+            sim.emit(RawStmt(f"{_arr_s}.set({render_expr(idx_expr)}, {val_s})?;"))
     elif op == 'aastore':
         val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
+        if _is_object_receiver(arr_ty):
+            # 擦除为 Object 的数组接收者：元素类型未知，值统一装箱为 Object 后经
+            # Object::array_store_object 转发（协变视图按源元素类型做存储检查）
+            val_str = render_expr(val_expr)
+            val_ty_str = render_type(val_ty)
+            if val_ty_str not in ('Object', '()'):
+                val_str = _coerce_to_object(val_str, val_ty_str, registry, sim.class_type_params)
+            sim.emit(RawStmt(
+                f"{render_expr(arr_expr)}.array_store_object({render_expr(idx_expr)}, {val_str})?;"))
+            return True
         _m_aa = _re.match(r'JArray<(.+)>$', arr_ty_str)
         if _m_aa:
             elem_ty = _m_aa.group(1)
@@ -113,31 +137,61 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
         # boolean[] 在 JVM 中以 bastore 写入，需要 != 0 转换
-        if arr_ty_str in ('JArray<bool>', 'Vec<bool>'):
+        if _is_object_receiver(arr_ty):
+            # 擦除接收者：boolean[]/byte[] 由 array_store_byte 运行时分派（JVM 两类型共用 bastore）
+            sim.emit(RawStmt(
+                f"{render_expr(arr_expr)}.array_store_byte({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i32)?;"))
+        elif arr_ty_str in ('JArray<bool>', 'Vec<bool>'):
             val_s = render_expr(val_expr)
             coerced = val_s if render_type(val_ty) == 'bool' else f"(({val_s}) as i8 != 0)"
             sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {coerced})?;"))
         else:
             sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i8)?;"))
     elif op == 'sastore':
-        val_expr, _ = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i16)?;"))
+        val_expr, _ = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
+        if _is_object_receiver(arr_ty):
+            sim.emit(RawStmt(
+                f"{render_expr(arr_expr)}.array_store_short({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i32)?;"))
+        else:
+            sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i16)?;"))
     elif op == 'castore':
-        val_expr, _ = sim.pop(); idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as u16)?;"))
+        val_expr, _ = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
+        if _is_object_receiver(arr_ty):
+            sim.emit(RawStmt(
+                f"{render_expr(arr_expr)}.array_store_char({render_expr(idx_expr)}, ({render_expr(val_expr)}) as i32)?;"))
+        else:
+            sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, ({render_expr(val_expr)}) as u16)?;"))
     elif op == 'iaload':
-        idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})?"), I32)
+        idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
+        if _is_object_receiver(arr_ty):
+            sim.push(RawExpr(f"{render_expr(arr_expr)}.array_load_int({render_expr(idx_expr)})?"), I32)
+        else:
+            sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})?"), I32)
     elif op in ('baload', 'saload', 'caload'):
-        idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(arr_expr)}.get({render_expr(idx_expr)})? as i32)"), I32)
+        idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
+        if _is_object_receiver(arr_ty):
+            # Object API 已按 JVM 栈形态返回符号/零扩展后的 i32
+            _api = {'baload': 'array_load_byte', 'saload': 'array_load_short',
+                    'caload': 'array_load_char'}[op]
+            sim.push(RawExpr(f"{render_expr(arr_expr)}.{_api}({render_expr(idx_expr)})?"), I32)
+        else:
+            sim.push(RawExpr(f"({render_expr(arr_expr)}.get({render_expr(idx_expr)})? as i32)"), I32)
     elif op in ('laload', 'faload', 'daload'):
-        idx_expr = _pop_index(sim); arr_expr, _ = sim.pop()
+        idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         ty = {'l': I64, 'f': F32, 'd': F64}.get(op[0], I32)
-        sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})?"), ty)
+        if _is_object_receiver(arr_ty):
+            _api = {'laload': 'array_load_long', 'faload': 'array_load_float',
+                    'daload': 'array_load_double'}[op]
+            sim.push(RawExpr(f"{render_expr(arr_expr)}.{_api}({render_expr(idx_expr)})?"), ty)
+        else:
+            sim.push(RawExpr(f"{render_expr(arr_expr)}.get({render_expr(idx_expr)})?"), ty)
     elif op == 'aaload':
         idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
+        if _is_object_receiver(arr_ty):
+            sim.push(RawExpr(
+                f"{render_expr(arr_expr)}.array_load_object({render_expr(idx_expr)})?"), RsNamed('Object'))
+            return True
         _m = _re.match(r'JArray<(.+)>$', arr_ty_str)
         if _m:
             elem_ty_str = _m.group(1)
@@ -149,8 +203,12 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         # JArray::get 内部已 clone，直接使用返回值
         sim.push(RawExpr(f"{_arr_s}.get({render_expr(idx_expr)})?"), RsNamed(elem_ty_str))
     elif op == 'arraylength':
-        arr_expr, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(arr_expr)}.len())"), I32)
+        arr_expr, arr_ty = sim.pop()
+        if _is_object_receiver(arr_ty):
+            # Object::array_length 返回 Result（null 检查）；JArray::len 直接返回 i32
+            sim.push(RawExpr(f"({render_expr(arr_expr)}.array_length()?)"), I32)
+        else:
+            sim.push(RawExpr(f"({render_expr(arr_expr)}.len())"), I32)
     else:
         return False
     return True
