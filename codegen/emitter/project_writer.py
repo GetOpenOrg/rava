@@ -9,6 +9,7 @@ from ..types import ClassInfo
 from ..type_map import short_cls
 from ..constants import RUST_KEYWORDS as _RUST_KEYWORDS
 from ..constants import RUNTIME_MACROS_CRATE as _MACROS_CRATE
+from ..constants import RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME
 from ..constants import scratch_pkg_version as _scratch_pkg_version
 from .attrs import to_snake, pkg_from_java
 from .method_gen import _scan_impl_files
@@ -18,28 +19,45 @@ from .interface_gen import resolve_interface_impls, resolve_interface_inherited_
 from .. import inherited_calls as _inherited_calls
 
 
+_RUNTIME_JRT_SRC = os.path.join(_RUNTIME_JAVA_RUNTIME, 'src')
+_JRT_SRC_SEP = 'java_runtime' + os.sep + 'src' + os.sep
+
+
 def _is_handwritten(path: str) -> bool:
-    """java_runtime/src/ 下已存在且不含自动生成标记的 .rs 文件 = 手写文件。"""
+    """java_runtime/src/ 下的 .rs 是否为手写文件。
+
+    判定依据（CLAUDE.md：「手写代码唯一真源在 runtime/」）：overlay 把
+    `runtime/java_runtime/src/**` 复制进 scratch，**同相对路径是否存在于
+    runtime/java_runtime/src/** 才是手写的充要条件**。
+
+    旧实现按「文件内容是否含 `java_rta_macros::java_class` 标记」判定，有致命缺陷：
+    历史版本生成的存根文件（如 PhantomData struct 形态的 `Function`）不含该标记，
+    会被永久误判为手写文件 → codegen 永不刷新它们。这些文件停留在旧形态（缺
+    `From<Object>` / `Into<Object>` 等转换 impl），编译期表现为大面积
+    `X: From<Object> is not satisfied`，与真实 codegen 缺口难以区分。
+    """
     _basename = os.path.basename(path)
-    _is_jrt_rs = (
-        path.endswith('.rs')
-        and 'java_runtime' + os.sep + 'src' in path
-        and _basename not in ('mod.rs', 'lib.rs')
-    )
-    if _is_jrt_rs and os.path.exists(path):
-        try:
-            with open(path, encoding='utf-8') as _f:
-                # 全文查找生成标记：import 头很长的类（Pattern/HashMap 等）标记位于 4096 字符之后，
-                # 截断读取会把生成文件误判为手写文件，导致复用 scratch 时永不刷新
-                return 'java_rta_macros::java_class' not in _f.read()
-        except Exception:
-            return False
-    return False
+    if not (path.endswith('.rs') and _JRT_SRC_SEP in path):
+        return False
+    if _basename in ('mod.rs', 'lib.rs'):
+        return False
+    # scratch 中 java_runtime/src/ 之后的相对路径 → 在 runtime/ 真源中查找
+    _idx = path.rfind(_JRT_SRC_SEP)
+    if _idx < 0:
+        return False
+    _rel = path[_idx + len(_JRT_SRC_SEP):]
+    return os.path.exists(os.path.join(_RUNTIME_JRT_SRC, _rel))
+
+
+# 本轮 write_cargo_project 实际落盘（或内容相同跳过落盘）的生成文件路径。
+# 用于区分「本轮生成」与「同 scratch 上次运行的幸存文件」（见 _write_jdk_mod_tree 的清除段）。
+_WRITTEN_THIS_RUN: set[str] = set()
 
 
 def _write(path: str, content: str) -> None:
     """创建目录并写文件。
-    对 java_runtime/src/ 下的 .rs 文件，若已存在且不含自动生成标记，则视为手写文件保留不覆盖。
+    对 java_runtime/src/ 下的 .rs，若同相对路径存在于 runtime/java_runtime/src/
+    （= 手写真源），则保留不覆盖（见 `_is_handwritten`）。
     mod.rs / lib.rs / user/ 下文件始终正常写入。
     """
     if _is_handwritten(path):
@@ -49,9 +67,11 @@ def _write(path: str, content: str) -> None:
         try:
             with open(path, encoding='utf-8') as _ef:
                 if _ef.read() == content:
+                    _WRITTEN_THIS_RUN.add(path)  # 内容相同视为本轮产物
                     return  # 内容相同，跳过写入保留 mtime
         except Exception:
             pass
+    _WRITTEN_THIS_RUN.add(path)
     with open(path, 'w') as f:
         f.write(content)
 
@@ -135,6 +155,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 两阶段生成：先生成全部类文本（期间调用点登记继承成员需求），
     # 再统一补上继承成员声明后落盘（见 inherited_gen.py）
     _inherited_calls.reset()
+    _WRITTEN_THIS_RUN.clear()
     emissions: dict[str, ClassEmission] = {}
 
     # 构建 registry（用户类 + JDK 类）
@@ -249,6 +270,23 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
 
     def _write_jdk_mod_tree() -> None:
         """JDK 类文件全部落盘后调用：mod.rs 如实声明磁盘上的全部模块。"""
+        # 陈旧生成文件清除：带生成标记（java_rta_macros::java_class）、但本轮未写入的
+        # .rs 是同 scratch 上次运行的幸存者。若不清除，下方的磁盘扫描会把它们的模块
+        # 声明重新挂进 mod.rs，与手写 companion（E0592，如 unsafe_.rs + unsafe__impl.rs）
+        # 或本轮闭包冲突。手写文件无生成标记，不受影响。
+        for _root_sweep, _dirs_sweep, _files_sweep in os.walk(jdk_src):
+            for _fname_sweep in _files_sweep:
+                if not _fname_sweep.endswith('.rs') or _fname_sweep in ('lib.rs', 'mod.rs'):
+                    continue
+                _fpath_sweep = os.path.join(_root_sweep, _fname_sweep)
+                if _fpath_sweep in _WRITTEN_THIS_RUN:
+                    continue
+                try:
+                    with open(_fpath_sweep, encoding='utf-8') as _fs_sweep:
+                        if 'java_rta_macros::java_class' in _fs_sweep.read():
+                            os.remove(_fpath_sweep)
+                except Exception:
+                    pass  # 读取失败时保守保留，交由 mod 树扫描处理
         # 从磁盘全量重建 jdk_mod_tree：mod.rs 如实声明磁盘上的全部模块。
         # 磁盘内容 = 手写 overlay（runtime/ 复制进来的 object.rs、function 存根、
         # companion）+ 本次生成的类文件 + 同 scratch 上次运行的幸存文件。

@@ -49,6 +49,7 @@ PRIMITIVE_RUST_TYPES: frozenset[str] = frozenset({
 # 常用 JVM binary class names
 OBJECT_CLASS = 'java/lang/Object'
 STRING_CLASS = 'java/lang/String'
+CLASS_CLASS = 'java/lang/Class'
 
 
 def scratch_pkg_version(out_dir: str) -> str:

@@ -32,8 +32,26 @@ def sim_consts(ins, sim, class_name, registry) -> bool:
         elif comment.startswith('class '):
             # 类字面量（X.class / X[].class）：生成携带 binary name 的 Class 对象。
             # 过去这里退化为 Object::default()（null），任何对它的调用都 NPE。
+            # 第二参数是超类型闭包（父类链 + 全部接口，来自 registry），供
+            # Class.isAssignableFrom 做静态可知的指派判定；数组与闭包外类为空。
             _bin = comment[6:].strip()
-            sim.push(Lit(f'Class::for_class(String::from("{_bin}"))'), RsNamed('Class'))
+            _supers: list[str] = []
+            if not _bin.startswith('[') and registry:
+                _seen: set[str] = set()
+                _queue: list[str] = [_bin]
+                while _queue:
+                    _cur = _queue.pop(0)
+                    _ci = registry.get(_cur)
+                    if _ci is None:
+                        continue
+                    for _sup in [_ci.super_class] + list(_ci.interfaces or []):
+                        if _sup and _sup not in _seen:
+                            _seen.add(_sup)
+                            _supers.append(_sup)
+                            _queue.append(_sup)
+            _supers_lit = ', '.join(f'"{s}"' for s in _supers)
+            sim.push(Lit(f'Class::for_class(String::from("{_bin}"), &[{_supers_lit}])'),
+                     RsNamed('Class'))
         else: sim.push(Lit(f"{operand}i32"), I32)
     elif op == 'aconst_null': sim.push(Lit('Object::default()'), RsNamed('Object'))
     else:

@@ -9,11 +9,7 @@ import re
 from collections import deque
 from .classfile import parse_class
 from .emitter import write_cargo_project
-from .constants import OBJECT_CLASS as _OBJECT_CLASS, RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME
-
-# `ldc` 装载类字面量（`X.class`）时，栈上得到的是 java/lang/Class 实例；
-# 该类型必须存在于闭包，否则生成的 `Class::for_class(..)` 无处可指。
-_CLASS_CLASS = 'java/lang/Class'
+from .constants import OBJECT_CLASS as _OBJECT_CLASS, CLASS_CLASS as _CLASS_CLASS, RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME
 
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
@@ -250,6 +246,12 @@ def _collect_method_refs(instrs) -> tuple:
             # java/lang/Class 实例，该类型必须进闭包（目标类本身不需要转译 ——
             # Class 对象只承载 binary name，见 Class::for_class）。
             field_classes.append(_CLASS_CLASS)
+            # 字面量目标类本身以 stub 进入闭包：Class.isAssignableFrom 需要它的
+            # 父类链 + 接口闭包（registry 按解析出的 ClassInfo 提供层次）。
+            # 数组字面量（`[Ljava/lang/String;`）无层次可言，跳过。
+            _lit_cls = c[6:].split()[0] if c[6:].split() else ''
+            if _lit_cls and not _lit_cls.startswith('[') and '/' in _lit_cls:
+                field_classes.append(_lit_cls)
         elif c.startswith(_JDK_PREFIXES + _JDK_STUB_ONLY_PREFIXES) and '[' not in c and _is_boundary_class(c.split()[0]):
             # stub-only 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
             cls = c.split()[0]

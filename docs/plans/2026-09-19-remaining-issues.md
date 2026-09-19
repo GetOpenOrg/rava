@@ -352,19 +352,18 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 
 ---
 
-## 推荐执行顺序
+## 推荐执行顺序（2026-09-19 R6 轮修订）
 
-1. **R-1**（解除 `main` 阻塞）→ **V-1**（全量基线，只记录不修）。
-2. **A-3 checkcast 三种情况修正**（先修 codegen 的两个简单 case：`Result<T>` 加 `?`、已知类型省略 downcast）→ 立即消灭 C2 的 6 个编译失败，不依赖其他 A 类改造。
-3. **G-10 lambda 命名修复**（独立 bug，不等 A-5 落地）→ 消灭 TestComparator / TestFunctionalInterface 编译失败。
-4. **S-16 继承方法体注入**（独立于 A 类，修 emitter 的转发方法体生成）→ TestLinkedList / TestInheritedMethod 通过。
-5. **S-15 enum 支持**（让 enum 走普通类翻译路径）→ TestEnumBasic / TestEnumMethods / TestSwitchEnum 通过。
-6. **S-2 子问题 2 — 数组访问 API**（在 `Object` 上补 `array_length`/`array_load_xxx`/`array_store_xxx`）→ TestMultiArray 通过。
-7. **S-3 子问题 2 — null 引用比较**（singleton null 或 `PartialEq` 检测 `is_jvm_null`）→ TestAutoboxing 通过。
-8. **A-1 存储层擦除** → **A-3 Cast/InstanceOf IR 化（完整）** → **A-6 `__interface` 全覆盖** → **A-5 lambda 对象化**（含 A-4 协变 upcast + `From`/`TryFrom` 生成）→ **A-7 协变覆盖**；以 **A-2** 的计数表（全 0）和 **V-3** 的审计行作为统一验收。
-9. **G-1/G-2/G-3**（提升与槽位分型在 rs_ir 上重做）与第 8 步并行，二者文件重叠小。
-10. **G-9 循环内分支修复**（需要定位 CFG structuring 的具体回归点）与第 8-9 步并行排查。
-11. **S 类**：S-1、S-4、S-5、S-6 随 A-1/A-3 落地；S-2 子问题 1（数组 null）、S-3 子问题 1（装箱 null）、S-7–S-10 独立推进。
-12. **P-1/P-2** 清零；**G-4–G-8**、**V-2/V-4**、**R-2/R-3** 收尾。
+> **R6 轮记录（本日，已完成）**：R5 集成后的全量基线（32/65）中约 20 个失败是两个基础设施假回归，已修复：
+> - **R6-a 陈旧生成文件复活**：复用 scratch 时，上一轮幸存的生成 `.rs`（带 `java_rta_macros::java_class` 标记、本轮未写入）被 mod 树的磁盘扫描重新挂进编译，与手写 companion 撞名（`E0592 getUnsafe` 重复，波及 6 个测试）或污染闭包（`E0433 Class`，波及 14 个测试）。修复：`project_writer._write_jdk_mod_tree` 落盘前清除此类文件（`_WRITTEN_THIS_RUN` 集合区分本轮产物）。
+> - **R6-b ldc 类字面量的 `Class` 导入缺失**：`Class::for_class(..)` 发射点（`sim/consts.py`）不在 import 扫描来源里。修复：`class_writer` 指令扫描新增 `class ` 注释分支 → 引用 `java/lang/Class`（常量收敛到 `constants.CLASS_CLASS`）。顺带完成 `Class.isAssignableFrom`（生成器在类字面量处静态推导超类型闭包传入 `for_class`，运行时侧表查询），TestClassLiteral 全通过。
+> - **教训（记入验证口径）**：复用 scratch 的测试结果在生成器变更后不可信，milestone 验证一律 `--clean`。
 
-> 步骤 2–7 为**不依赖 A 类架构改造的快速增益**，优先执行可在 A-1 落地前额外通过约 10–12 个用例。步骤 8 起为架构改造主线，预计数天级别工作量。
+1. **批次 1 — 事实基础（剩余）**：**G-9**（循环内 if/else 整段丢失，TestCasting 静默错误，`cfg-audit` 抓不到——先补 `unconsumed-blocks` 指标再排查）＋ **V-3**（可读性审计行）＋ 用修复后的生成器重跑一次全量 e2e 建立真实基线（R6 后预计显著好于 32/65，多数旧失败是陈旧文件假象）。
+2. **批次 2 — 快速增益（不依赖 A 类，可并行）**：A-3 部分（checkcast 三形态的两个简单 case）→ S-16（继承方法体注入，`Into::<Ancestor>::into(self.clone())` 占位）→ G-10（lambda 命名单一来源）→ S-3.2（null 引用比较 singleton）→ S-2.2（Object 数组访问 API）→ S-15（enum 走普通类路径；当前 TestEnumBasic 卡在 `Enum.name()` 存根）。
+3. **批次 3 — 架构主线（串行）**：A-1 存储层擦除 → A-3 完整 IR 化 → A-6 `__interface` 全覆盖 → A-5 lambda 对象化（吸收 G-10；含 A-4 协变 upcast）→ A-7 协变覆盖；以 A-2 计数表全 0 + V-3 审计行统一验收。
+4. **批次 3' — 质量重做（与批次 3 并行）**：G-1/G-2/G-3（提升与槽位分型迁到 rs_ir）。G-2 终态会让「未初始化即使用」从静默 `Default::default()` 变编译错误，建议在 A-1 稳定后开启，避免两边同时震荡。
+5. **批次 4 — 语义补齐**：随架构落地（S-1、S-4、S-5 剩余、S-6）；独立推进（S-2.1、S-3.1、S-7–S-10）。
+6. **批次 5 — 清理收尾**：P-1/P-2 清零；G-4–G-8、V-2/V-4、R-2/R-3。
+
+> 批次 2 各项互相独立，适合 worktree 子代理并行；单项收益见各条目的触发用例。

@@ -14,6 +14,7 @@ from ..type_map import (effective_class_type_params, ancestor_type_args, outer_r
                         class_type_param_bounds,
                         rust_type_with_args as _rust_type_with_args)
 from ..constants import (safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS,
+                         CLASS_CLASS as _CLASS_CLASS,
                          PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, STRING_CLASS)
 
 # 模块级 regex，避免在每次调用时重复编译
@@ -187,6 +188,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     _add_desc_refs(_c)
                 else:
                     _referenced.add(_strip_generic(_c))
+            elif _c.startswith('class '):
+                # ldc / ldc_w 类字面量（`X.class`）：方法体发射 `Class::for_class(..)`，
+                # 结果类型 Class 须在本文件作用域内（E0433 的来源）
+                _referenced.add(_CLASS_CLASS)
         # 局部变量声明类型（LocalVariableTable / LocalVariableTypeTable）：
         # 方法体按声明类型生成 `let x: T`
         for _lv in (getattr(_m, 'local_vars', None) or []):
