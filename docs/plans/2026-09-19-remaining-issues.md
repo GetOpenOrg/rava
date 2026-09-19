@@ -188,7 +188,7 @@ System.out.println(nullable == null);  // Java 输出 true
 `JArray` 的 `Covariant` 视图只支持上转为 `Object[]`；转为祖先类数组（`Integer[]` → `Number[]`）失败；存入错误元素类型抛 `ClassCastException` 而非 `ArrayStoreException`。终态：任意祖先元素类型的协变视图 + `ArrayStoreException`。依赖 A-1 的类型化视图机制。
 
 ### S-5 `getClass()` / 类字面量不可用 【P1】
-`getClass()` 返回空 `Class`（R8 triage：TestMultiCatch、TestDefaultMethods 均卡在 `getClass().getSimpleName()` 的 null NPE；最小修复——`__class_name` 已在 vtable 上，getClass 可返回带名字的非 null Class）；基本类型 `Class` 只带名字；类字面量（`Foo.class`）、`desiredAssertionStatus` 缺失；`getClass() == PrintStream.class` 实际是 `null == null`。终态：每个类有唯一 `Class` 对象（按擦除类），`__class_name` 与之打通，类字面量与 `getClass()` 返回同一对象。
+`getClass()` 返回空 `Class`（**最小修复已落地 R8**：getClass 经 `__class_name` + `Class::for_class` 返回非 null Class，ae78bf9；TestMultiCatch、TestDefaultMethods 因此通过。完整终态——类字面量同一性、`desiredAssertionStatus` 等——仍未做）；基本类型 `Class` 只带名字；类字面量（`Foo.class`）、`desiredAssertionStatus` 缺失；`getClass() == PrintStream.class` 实际是 `null == null`。终态：每个类有唯一 `Class` 对象（按擦除类），`__class_name` 与之打通，类字面量与 `getClass()` 返回同一对象。
 
 ### S-6 identity hash 缺失 【P1】
 未声明 `hashCode` 的类返回 0（全部哈希冲突，功能正确但退化为链表）；`Object.equals` 里保留了 String 内容比较的捷径；字符串字面量 intern 的同一性未建模。R5-B 已加入各视图共享的 `__identity`。终态：`Object.hashCode` 的 native 实现基于 `__identity` 生成 identity hash；`Object.equals` 为纯引用比较；`ldc` 字符串字面量经 intern 表返回同一对象；捷径 = 0。
@@ -318,7 +318,8 @@ javac 21 对内部类的 `putfield this$0` 先于 `invokespecial super.<init>`�
 ### S-17 pattern switch 的 typeSwitch bootstrap 未翻译 【P1，R8 triage 新增】
 Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译为 `invokedynamic SwitchBootstraps.typeSwitch`；`sim/dynamic.py` 对非 LambdaMetafactory bootstrap 走 `Object::default()` 占位 → `Object as i32` E0605（TestPatternMatch）。终态：case 序编译为 instanceof 链（衔接 G-9 的运行时化）+ guard + target index。
 
-### G-12 负整数字面量装箱缺括号 【P3，R8 triage 新增】
+### G-12 负整数字面量装箱缺括号 【已修复，R8 轮】
+`-1i32.into()` 补为 `(-1i32).into()`（c643d7d，合入 main）。TestPatternMatch 的 E0282 归零，该测试剩余 2×E0605 属 S-17。
 `-1i32.into()` 应为 `(-1i32).into()`（一元负号阻断目标类型推断，E0282；语义上也是 `-(1i32.into())`）。小时级以内。
 
 ---
@@ -384,7 +385,7 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 > - **R6-b ldc 类字面量的 `Class` 导入缺失**：`Class::for_class(..)` 发射点（`sim/consts.py`）不在 import 扫描来源里。修复：`class_writer` 指令扫描新增 `class ` 注释分支 → 引用 `java/lang/Class`（常量收敛到 `constants.CLASS_CLASS`）。顺带完成 `Class.isAssignableFrom`（生成器在类字面量处静态推导超类型闭包传入 `for_class`，运行时侧表查询），TestClassLiteral 全通过。
 > - **教训（记入验证口径）**：复用 scratch 的测试结果在生成器变更后不可信，milestone 验证一律 `--clean`。
 
-> **V-1 新基线（2026-09-20，全量实测）**：46/65 通过（19 失败）。本会话累计 +14（R6 假回归修复 ×4 + R7 批次 2 ×10）。剩余失败的错误族聚类：E0277 From 跨实例化族（TestWildcards `List<Object>: From<ArrayList<_>>`、TestStreamBasic/Advanced/Collectors 共用 `CountedCompleter<Object>: From<...Sorter<T>>`、TestNestedGeneric 部分）→ **A-1/A-4 主线**；A-5 lambda/函数式接口族（TestLambda/TestOptional/TestComparator/TestFunctionalInterface 部分）；S-3.1（TestAutoboxing 第 10 行）；A-7（TestInheritedMethod）；E0605 Object as i32（TestPatternMatch，instanceof+强转模式）；未分类轻量失败待triage（TestGenericMethod/TestVar/TestBoundedGenerics/TestMultiCatch/TestComparable/TestDefaultMethods/TestArraysUtil）。
+> **V-1 基线：2026-09-20 全量实测 46/65；R8 快速收益后 48/65（TestMultiCatch、TestDefaultMethods 转胜，定向验证）**。本会话累计 +14（R6 假回归修复 ×4 + R7 批次 2 ×10）。剩余失败的错误族聚类：E0277 From 跨实例化族（TestWildcards `List<Object>: From<ArrayList<_>>`、TestStreamBasic/Advanced/Collectors 共用 `CountedCompleter<Object>: From<...Sorter<T>>`、TestNestedGeneric 部分）→ **A-1/A-4 主线**；A-5 lambda/函数式接口族（TestLambda/TestOptional/TestComparator/TestFunctionalInterface 部分）；S-3.1（TestAutoboxing 第 10 行）；A-7（TestInheritedMethod）；E0605 Object as i32（TestPatternMatch，instanceof+强转模式）；轻量失败已全部 triage 归类（TestGenericMethod→S-3.1 接口分派、TestVar→G-11、TestBoundedGenerics/TestLambda→S-4+S-3.1、TestComparable/TestComparator 下一层→S-3.1/A-5、TestDefaultMethods/TestMultiCatch→已修复、TestPatternMatch→S-17、TestOptional→A-1、TestArraysUtil→待大闭包分类）。
 
 1. **批次 1 — 事实基础（剩余）**：**G-9**（循环内 if/else 整段丢失，TestCasting 静默错误，`cfg-audit` 抓不到——先补 `unconsumed-blocks` 指标再排查）＋ **V-3**（可读性审计行）＋ 用修复后的生成器重跑一次全量 e2e 建立真实基线（R6 后预计显著好于 32/65，多数旧失败是陈旧文件假象）。
 2. **批次 2 — 快速增益（不依赖 A 类，可并行）**：**R7 轮第一波已交付（2026-09-19 深夜，四分支合入 main 零冲突）**：G-9 完整修复（instanceof 运行时化 + 槽位 widening，TestCasting 通过）、S-16（TestLinkedList 通过）、S-2.2（TestMultiArray 通过）、S-3.2（null singleton）、G-10（lambda 命名单一来源 + 生成期断言）。合并后定向回归：新通过 TestCasting/TestLinkedList/TestMultiArray；两个失败均为已知边界（TestAutoboxing→S-3.1 的 `i32` 拆平，TestInheritedMethod→A-7 协变 override）。**第二波已交付（R7，2026-09-20 凌晨）**：A-3 部分（checkcast 形态 2 经 getfield 类型实参代入修复归零，TestNestedGeneric 8→5；形态 1 经全库排查确认为 0 生成路径）、S-15（enum 三测试全过 + TestStringFormat 转胜，根因是 BFS 对用户类不可见）。批次 2 完毕，下一批次为 A 类架构主线（A-1 起步）。
