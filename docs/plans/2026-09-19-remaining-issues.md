@@ -217,7 +217,9 @@ JVMS §5.5 的触发点里，手写 static native 的调用、带 default 方法
 ### S-14 跨包同简单名类 【已处理，待观察】
 R5-B 让 `short_cls` 对冲突类生成带包限定的 Rust 类型名（`Era` 冲突）。需确认：重载后缀（`mangle_name`）里两个同简单名类是否仍可能撞名（R5-A 提出的理论风险）。终态：后缀冲突时同样采用包限定，冲突数 = 0。
 
-### S-15 enum 支持缺失 【P1】
+### S-15 enum 支持缺失 【已修复，R7 轮第二波】
+
+> **R7 轮第二波已修复**（301db7d，合入 main）：TestEnumBasic / TestEnumMethods / TestSwitchEnum 全过，附带 TestStringFormat 转胜（printf 链路）。**根因与下文分析不同**：enum 表示层早已走普通类路径（S-16 转发生效），真正卡点是 **BFS 调用链对用户类不可见**——`_collect_method_refs`、`new` 的 RTA 实例化、`_load_class` 只认 JDK 前缀，`TestEnumBasic$Day.name` 的父类链解析（JVMS §5.4.3.3）不发生，`Enum.name/ordinal/toString` 永不入链成 stub。修复后常量/values()/switch-on-enum 全由既有 `<clinit>`+静态字段+CFG 机制承接；`java_enum!` 宏与 enum 特殊路径删除；`Enum.valueOf` 手写（查运行时常量目录）。遗留：泛型上下文的 `Enum::<Object>::valueOf` 命中会 CCE（依赖 A-1，已注释）；接口 default 体落载体的保守过滤边界见报告。
 
 - **现状**（e2e-issues B3，触发用例：TestEnumBasic、TestEnumMethods、TestSwitchEnum）：enum 相关的 codegen 与 runtime 存在大量对齐缺口，实测报错超过 25 处 `mismatched types`，以及 `JvmError::Custom` 不存在、`Result::__get_next` 缺失、`downcast` 缺失等。本条目追踪 enum 支持的完整缺口。
 - **已知缺口分类**：
@@ -374,7 +376,7 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 > - **教训（记入验证口径）**：复用 scratch 的测试结果在生成器变更后不可信，milestone 验证一律 `--clean`。
 
 1. **批次 1 — 事实基础（剩余）**：**G-9**（循环内 if/else 整段丢失，TestCasting 静默错误，`cfg-audit` 抓不到——先补 `unconsumed-blocks` 指标再排查）＋ **V-3**（可读性审计行）＋ 用修复后的生成器重跑一次全量 e2e 建立真实基线（R6 后预计显著好于 32/65，多数旧失败是陈旧文件假象）。
-2. **批次 2 — 快速增益（不依赖 A 类，可并行）**：**R7 轮第一波已交付（2026-09-19 深夜，四分支合入 main 零冲突）**：G-9 完整修复（instanceof 运行时化 + 槽位 widening，TestCasting 通过）、S-16（TestLinkedList 通过）、S-2.2（TestMultiArray 通过）、S-3.2（null singleton）、G-10（lambda 命名单一来源 + 生成期断言）。合并后定向回归：新通过 TestCasting/TestLinkedList/TestMultiArray；两个失败均为已知边界（TestAutoboxing→S-3.1 的 `i32` 拆平，TestInheritedMethod→A-7 协变 override）。**第二波待做**：S-15（enum 走普通类路径，与 S-16 同改 class_writer 故排其后；TestEnumBasic 卡在 `Enum.name()` 存根）、A-3 部分（checkcast 三形态的两个简单 case：`Result<T>` 补 `?`、已知同类型省略 downcast——G-9 只做了 instanceof，checkcast 两 case 仍开放）。
+2. **批次 2 — 快速增益（不依赖 A 类，可并行）**：**R7 轮第一波已交付（2026-09-19 深夜，四分支合入 main 零冲突）**：G-9 完整修复（instanceof 运行时化 + 槽位 widening，TestCasting 通过）、S-16（TestLinkedList 通过）、S-2.2（TestMultiArray 通过）、S-3.2（null singleton）、G-10（lambda 命名单一来源 + 生成期断言）。合并后定向回归：新通过 TestCasting/TestLinkedList/TestMultiArray；两个失败均为已知边界（TestAutoboxing→S-3.1 的 `i32` 拆平，TestInheritedMethod→A-7 协变 override）。**第二波已交付（R7，2026-09-20 凌晨）**：A-3 部分（checkcast 形态 2 经 getfield 类型实参代入修复归零，TestNestedGeneric 8→5；形态 1 经全库排查确认为 0 生成路径）、S-15（enum 三测试全过 + TestStringFormat 转胜，根因是 BFS 对用户类不可见）。批次 2 完毕，下一批次为 A 类架构主线（A-1 起步）。
 3. **批次 3 — 架构主线（串行）**：A-1 存储层擦除 → A-3 完整 IR 化 → A-6 `__interface` 全覆盖 → A-5 lambda 对象化（吸收 G-10；含 A-4 协变 upcast）→ A-7 协变覆盖；以 A-2 计数表全 0 + V-3 审计行统一验收。
 4. **批次 3' — 质量重做（与批次 3 并行）**：G-1/G-2/G-3（提升与槽位分型迁到 rs_ir）。G-2 终态会让「未初始化即使用」从静默 `Default::default()` 变编译错误，建议在 A-1 稳定后开启，避免两边同时震荡。
 5. **批次 4 — 语义补齐**：随架构落地（S-1、S-4、S-5 剩余、S-6）；独立推进（S-2.1、S-3.1、S-7–S-10）。
