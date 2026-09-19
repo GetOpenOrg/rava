@@ -161,6 +161,7 @@ impl<T> From<Vec<T>> for JArray<T> {
 impl<T: Clone + From<Object> + Into<Object> + 'static> crate::java::lang::ObjectVTable for JArray<T> {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn __identity(&self) -> *const () { self.identity() }
+    fn __array_len(&self) -> Option<crate::error::Result<i32>> { Some(Ok(self.len())) }
 
     /// checkcast 到数组类型：同元素类型 → 自身；视图还原 → 交给源数组判定；
     /// 引用类型数组 → `Object[]`：协变视图。其余为 ClassCastException（返回 false）。

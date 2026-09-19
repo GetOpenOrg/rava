@@ -73,6 +73,12 @@ pub trait ObjectVTable: 'static {
     #[doc(hidden)]
     fn __identity(&self) -> *const () { self as *const Self as *const () }
 
+    /// 以 Object 流转的数组（`Object::array_length`，S-2.2）：本运行时类是数组 → 长度；
+    /// 非数组 → None。JArray 与数组载体（Rc<RefCell<Vec<T>>>）override；元素类型对长度
+    /// 无关紧要，故不按元素类型分支，避免枚举所有实例化。
+    #[doc(hidden)]
+    fn __array_len(&self) -> Option<crate::error::Result<i32>> { None }
+
     /// 状态不可变（全部实例字段 final）的泛型类：擦除后的字段值（声明顺序，祖先在前）与对象标识
     /// 单元。同一泛型类的另一类型实例化据此重建视图（Java 的 unchecked cast）。其余对象 → None。
     #[doc(hidden)]
@@ -161,6 +167,9 @@ impl ObjectVTable for () {
 /// 数组类型（Rc<RefCell<Vec<T>>>）自动装入 Object
 impl<T: 'static> ObjectVTable for Rc<std::cell::RefCell<Vec<T>>> {
     fn as_any(&self) -> &dyn std::any::Any { self }
+    fn __array_len(&self) -> Option<crate::error::Result<i32>> {
+        Some(Ok(self.borrow().len() as i32))
+    }
 }
 
 /// `JvmRef<T>` — 将没有 `ObjectVTable` impl 的任意值（泛型参数、接口类型存根等）包装进 Object。
@@ -199,7 +208,17 @@ impl From<Object> for () {
     fn from(_: Object) {}
 }
 
+/// Java null 的唯一实例（S-3.2）：`Object::default()` 每次新建 `Rc::new(())` 时，
+/// 两个 null 的 `__identity()` 不同，凡按身份比较的路径（`Object__equals_base` 的指针
+/// 相等、协变视图的 `identity` 等）会把 null 误判为互不相等。null 用 thread_local
+/// singleton 后所有 null 共享同一 `Rc` 指针，身份比较与 `PartialEq` 的 null 短路
+///（object_ext.rs，先于本 singleton 存在的第二道防线）语义一致。
 impl Default for Object {
-    fn default() -> Self { Object(Rc::new(())) }
+    fn default() -> Self {
+        thread_local! {
+            static JVM_NULL: Object = Object(Rc::new(()));
+        }
+        JVM_NULL.with(|null| null.clone())
+    }
 }
 

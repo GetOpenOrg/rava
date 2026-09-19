@@ -129,6 +129,167 @@ impl Object {
         try_fmt!(i16); try_fmt!(u16);
         None
     }
+
+    // ── S-2.2：Object 上的数组访问 API ─────────────────────────────────────
+    // 多维数组 / 擦除数组以 Object 流转后，xaload / xastore / arraylength 需要
+    // 按元素类型读写内部 JArray。不引入泛型参数：转译期与运行时都不知道擦除数组的
+    // 元素类型，方法名即元素类型（codegen 由指令操作码选择，如 iaload → array_load_int）。
+    // 与 JArray::get/set 一致：越界抛 ArrayIndexOutOfBoundsException（内部转发），
+    // null 数组抛 NullPointerException（JVMS §6.5 arraylength / *aload / *astore）。
+
+    /// 数组访问前的 null 检查：接收者是 Java null → NullPointerException
+    fn array_npe_check(&self) -> Result<()> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        Ok(())
+    }
+
+    /// 运行时类不是数组（或元素类型与指令不符）→ ClassCastException。
+    /// 仅防御性触发：JVM 校验器保证 xaload/xastore 的静态类型合法，转译代码不应到达。
+    fn array_type_mismatch(&self, op: &str, expect: &str) -> crate::error::JvmError {
+        crate::error::JvmError::class_cast(std::string::String::from(
+            format!("{}: 运行时类 {} 不是{}", op, self.0.__class_name(), expect)))
+    }
+
+    /// arraylength：数组长度。任意元素类型（长度与元素类型无关，经 vtable 钩子）。
+    #[jvm_ext]
+    pub fn array_length(&self) -> Result<i32> {
+        self.array_npe_check()?;
+        match self.0.__array_len() {
+            Some(len) => len,
+            None => Err(self.array_type_mismatch("arraylength", "数组")),
+        }
+    }
+
+    /// aaload：读引用元素。引用元素数组（含 `Object[]`、`String[]`、任意类数组、
+    /// 多维数组、协变视图）经 `__view_into` 取 `JArray<Object>` 视图转发；
+    /// 基本元素数组按元素类型分支装入 Object（防御路径）。
+    #[jvm_ext]
+    pub fn array_load_object(&self, idx: i32) -> Result<Object> {
+        self.array_npe_check()?;
+        let unused: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(());
+        let mut slot: Option<JArray<Object>> = None;
+        self.0.__view_into(unused, &mut slot);
+        if let Some(view) = slot {
+            return view.get(idx);
+        }
+        macro_rules! try_prim_load {
+            ($t:ty) => {
+                if let Some(arr) = self.0.as_any().downcast_ref::<JArray<$t>>() {
+                    return arr.get(idx).map(|v| Object::from(v));
+                }
+            };
+        }
+        try_prim_load!(i32); try_prim_load!(i64); try_prim_load!(f32); try_prim_load!(f64);
+        try_prim_load!(i8);  try_prim_load!(i16); try_prim_load!(u16); try_prim_load!(bool);
+        Err(self.array_type_mismatch("aaload", "引用元素数组"))
+    }
+
+    /// aastore：写引用元素。值经协变视图按源元素类型转发（存储检查在源数组侧）；
+    /// 基本元素数组按元素类型还原后写入，类型不符抛 ClassCastException（防御路径）。
+    #[jvm_ext]
+    pub fn array_store_object(&self, idx: i32, val: Object) -> Result<()> {
+        self.array_npe_check()?;
+        let unused: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(());
+        let mut slot: Option<JArray<Object>> = None;
+        self.0.__view_into(unused, &mut slot);
+        if let Some(view) = slot {
+            return view.set(idx, val);
+        }
+        macro_rules! try_prim_store {
+            ($t:ty) => {
+                if let Some(arr) = self.0.as_any().downcast_ref::<JArray<$t>>() {
+                    if let Some(v) = val.0.as_any().downcast_ref::<$t>() {
+                        return arr.set(idx, Clone::clone(v));
+                    }
+                    return Err(self.array_type_mismatch("aastore", "基本元素数组"));
+                }
+            };
+        }
+        try_prim_store!(i32); try_prim_store!(i64); try_prim_store!(f32); try_prim_store!(f64);
+        try_prim_store!(i8);  try_prim_store!(i16); try_prim_store!(u16); try_prim_store!(bool);
+        Err(self.array_type_mismatch("aastore", "引用元素数组"))
+    }
+}
+
+/// 数组元素访问（基本类型，S-2.2）：元素类型与 JVM 栈形态一致（int/long/float/double）。
+/// 宏定义须在模块作用域（impl 内不允许 macro_rules 定义），展开进下方 impl Object。
+macro_rules! array_elem_exact {
+    ($load:ident, $store:ident, $elem:ty, $stack:ty, $desc:literal) => {
+        #[jvm_ext]
+        pub fn $load(&self, idx: i32) -> Result<$stack> {
+            self.array_npe_check()?;
+            match self.0.as_any().downcast_ref::<JArray<$elem>>() {
+                Some(arr) => arr.get(idx),
+                None => Err(self.array_type_mismatch(concat!($desc, "aload"), concat!(" ", $desc, "[]"))),
+            }
+        }
+        #[jvm_ext]
+        pub fn $store(&self, idx: i32, val: $stack) -> Result<()> {
+            self.array_npe_check()?;
+            match self.0.as_any().downcast_ref::<JArray<$elem>>() {
+                Some(arr) => arr.set(idx, val),
+                None => Err(self.array_type_mismatch(concat!($desc, "astore"), concat!(" ", $desc, "[]"))),
+            }
+        }
+    };
+}
+
+/// 数组元素访问（窄类型，S-2.2）：JVM 操作数栈上 byte/char/short 都是 int（JVMS §2.11.1），
+/// 装载符号/零扩展到 i32，存储显式收窄。
+macro_rules! array_elem_narrow {
+    ($load:ident, $store:ident, $elem:ty, $desc:literal) => {
+        #[jvm_ext]
+        pub fn $load(&self, idx: i32) -> Result<i32> {
+            self.array_npe_check()?;
+            match self.0.as_any().downcast_ref::<JArray<$elem>>() {
+                Some(arr) => arr.get(idx).map(|v| v as i32),
+                None => Err(self.array_type_mismatch(concat!($desc, "aload"), concat!(" ", $desc, "[]"))),
+            }
+        }
+        #[jvm_ext]
+        pub fn $store(&self, idx: i32, val: i32) -> Result<()> {
+            self.array_npe_check()?;
+            match self.0.as_any().downcast_ref::<JArray<$elem>>() {
+                Some(arr) => arr.set(idx, val as $elem),
+                None => Err(self.array_type_mismatch(concat!($desc, "astore"), concat!(" ", $desc, "[]"))),
+            }
+        }
+    };
+}
+
+impl Object {
+    array_elem_exact!(array_load_int,    array_store_int,    i32, i32, "i");
+    array_elem_exact!(array_load_long,   array_store_long,   i64, i64, "l");
+    array_elem_exact!(array_load_float,  array_store_float,  f32, f32, "f");
+    array_elem_exact!(array_load_double, array_store_double, f64, f64, "d");
+    array_elem_narrow!(array_load_char,  array_store_char,  u16, "c");
+    array_elem_narrow!(array_load_short, array_store_short, i16, "s");
+
+    /// baload/bastore：JVM 对 boolean[] 与 byte[] 共用同一指令，运行时按实际元素类型分派
+    #[jvm_ext]
+    pub fn array_load_byte(&self, idx: i32) -> Result<i32> {
+        self.array_npe_check()?;
+        if let Some(arr) = self.0.as_any().downcast_ref::<JArray<bool>>() {
+            return arr.get(idx).map(|v| v as i32);
+        }
+        match self.0.as_any().downcast_ref::<JArray<i8>>() {
+            Some(arr) => arr.get(idx).map(|v| v as i32),
+            None => Err(self.array_type_mismatch("baload", " byte[] 或 boolean[]")),
+        }
+    }
+    #[jvm_ext]
+    pub fn array_store_byte(&self, idx: i32, val: i32) -> Result<()> {
+        self.array_npe_check()?;
+        if let Some(arr) = self.0.as_any().downcast_ref::<JArray<bool>>() {
+            return arr.set(idx, val != 0);
+        }
+        match self.0.as_any().downcast_ref::<JArray<i8>>() {
+            Some(arr) => arr.set(idx, val as i8),
+            None => Err(self.array_type_mismatch("bastore", " byte[] 或 boolean[]")),
+        }
+    }
 }
 
 impl std::fmt::Display for Object {
