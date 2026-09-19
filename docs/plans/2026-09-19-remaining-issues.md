@@ -170,7 +170,7 @@ codegen 的 `xaload`/`xastore`/`arraylength` 指令生成改为调用上述方�
 
 ### S-3 装箱类型无法表示 `null` + null 引用比较语义错误 【P1】
 
-**子问题 1 — 装箱 null**：`Integer`/`Long` 等被建模为原生值，`Integer x = null`、`Map.get` 未命中返回 null 后拆箱抛 NPE 等语义缺失。终态：装箱类型是真实对象（来自字节码翻译的 `java/lang/Integer`），自动装拆箱即字节码里的 `valueOf`/`intValue` 调用，不做特殊建模。
+**子问题 1 — 装箱 null**（R8 triage 补充：原生装箱值的 `ObjectVTable` 无 `__interface`，对装箱包装类的接口调用必然 AbstractMethodError——TestGenericMethod 的 `max(3,7)` 实证，String 对照组通过；修复随本条目的真实对象化）：`Integer`/`Long` 等被建模为原生值，`Integer x = null`、`Map.get` 未命中返回 null 后拆箱抛 NPE 等语义缺失。终态：装箱类型是真实对象（来自字节码翻译的 `java/lang/Integer`），自动装拆箱即字节码里的 `valueOf`/`intValue` 调用，不做特殊建模。
 
 **子问题 2 — null 引用比较语义错误**【已修复，R7 轮：`PartialEq` null 短路 + `Object::default()` singleton】（触发用例 TestAutoboxing 剩余 diff 为子问题 1 的 `i32` 拆平路径）：
 ```java
@@ -188,7 +188,7 @@ System.out.println(nullable == null);  // Java 输出 true
 `JArray` 的 `Covariant` 视图只支持上转为 `Object[]`；转为祖先类数组（`Integer[]` → `Number[]`）失败；存入错误元素类型抛 `ClassCastException` 而非 `ArrayStoreException`。终态：任意祖先元素类型的协变视图 + `ArrayStoreException`。依赖 A-1 的类型化视图机制。
 
 ### S-5 `getClass()` / 类字面量不可用 【P1】
-`getClass()` 返回空 `Class`；基本类型 `Class` 只带名字；类字面量（`Foo.class`）、`desiredAssertionStatus` 缺失；`getClass() == PrintStream.class` 实际是 `null == null`。终态：每个类有唯一 `Class` 对象（按擦除类），`__class_name` 与之打通，类字面量与 `getClass()` 返回同一对象。
+`getClass()` 返回空 `Class`（R8 triage：TestMultiCatch、TestDefaultMethods 均卡在 `getClass().getSimpleName()` 的 null NPE；最小修复——`__class_name` 已在 vtable 上，getClass 可返回带名字的非 null Class）；基本类型 `Class` 只带名字；类字面量（`Foo.class`）、`desiredAssertionStatus` 缺失；`getClass() == PrintStream.class` 实际是 `null == null`。终态：每个类有唯一 `Class` 对象（按擦除类），`__class_name` 与之打通，类字面量与 `getClass()` 返回同一对象。
 
 ### S-6 identity hash 缺失 【P1】
 未声明 `hashCode` 的类返回 0（全部哈希冲突，功能正确但退化为链表）；`Object.equals` 里保留了 String 内容比较的捷径；字符串字面量 intern 的同一性未建模。R5-B 已加入各视图共享的 `__identity`。终态：`Object.hashCode` 的 native 实现基于 `__identity` 生成 identity hash；`Object.equals` 为纯引用比较；`ldc` 字符串字面量经 intern 表返回同一对象；捷径 = 0。
@@ -311,6 +311,15 @@ R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」�
 - **根因**：`invokedynamic` 的 bootstrap 方法分析（`sim/dynamic.py`）与 lambda body 方法生成（`method_gen.py`）在命名方案上各自独立推导，未共享同一命名逻辑。部分 lambda 的哈希后缀或序号由不同代码路径计算，导致生成的方法名与调用点期望的名称不一致。
 - **终态**：lambda body 方法名由单一来源（`sim/dynamic.py` 的 bootstrap 分析结果）决定，`method_gen.py` 和调用点 codegen 均从该来源读取，不独立推导；TestComparator、TestFunctionalInterface 编译通过，调用点与定义名一致。
 - **优先级说明**：此 bug 独立于 A-5（lambda 对象化）存在，在 A-5 完整落地前可单独修复，消除至少 2 个用例的编译失败。A-5 落地时应将 lambda body 方法纳入合成类的方法生成流程，此时 G-10 的修复成果应被 A-5 的统一命名机制吸收。
+
+### G-11 `__new_with_super` 重建抹掉构造器早期已赋字段 【P1，R8 triage 新增】
+javac 21 对内部类的 `putfield this$0` 先于 `invokespecial super.<init>`（javap 实证），而 super 调用被建模为 `__new_with_super` 整体重建（`block/mod.rs:1669` 的 `#inner{..Default::default()}`），重建后本类字段归 null → 后续 NPE（TestVar 的 TreeMap$EntrySet 实证）。宏层小时级可修（重建保留旧 this 字段），但与 A-1 构造语义重叠——**归入 A-1 合入后的跟进项**。
+
+### S-17 pattern switch 的 typeSwitch bootstrap 未翻译 【P1，R8 triage 新增】
+Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译为 `invokedynamic SwitchBootstraps.typeSwitch`；`sim/dynamic.py` 对非 LambdaMetafactory bootstrap 走 `Object::default()` 占位 → `Object as i32` E0605（TestPatternMatch）。终态：case 序编译为 instanceof 链（衔接 G-9 的运行时化）+ guard + target index。
+
+### G-12 负整数字面量装箱缺括号 【P3，R8 triage 新增】
+`-1i32.into()` 应为 `(-1i32).into()`（一元负号阻断目标类型推断，E0282；语义上也是 `-(1i32.into())`）。小时级以内。
 
 ---
 
