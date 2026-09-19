@@ -638,8 +638,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                     _inherited_calls.request(_obj_jvm, mname, _param_desc)
                 elif (not _owner_bin_v
                         and (mname, _param_desc) in _root_virtual_methods()):
-                    # 整条祖先链未声明、由根类声明 → 装箱后走根 vtable
-                    _recv = f"Object::from_any(Clone::clone(&{obj_e}))"
+                    # 整条祖先链未声明、由根类声明 → 装箱后走根 vtable。
+                    # Object::from（非 from_any）：保持接收者的 vtable（运行时类名、
+                    # is_instance_of、覆盖的 hashCode/equals/toString），JvmRef 装箱会丢这些
+                    _recv = f"Object::from(Clone::clone(&{obj_e}))"
                     _root_routed = True
                 else:
                     # 超类链上无字节码声明：

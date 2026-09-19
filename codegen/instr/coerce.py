@@ -157,6 +157,10 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
 
     注意 Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）。"""
     if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
+        # G-12：负数字面量补外层括号——方法调用优先级高于一元负号，
+        # `-1i32.into()` 解析为 `-(1i32.into())`，目标类型推断失败（E0282）
+        if val_str.lstrip().startswith('-'):
+            return f"({val_str}).into()"
         return f"{val_str}.into()"
     src = f"Clone::clone(&{val_str})" if clone else val_str
     if ty in (class_type_params or ()):
