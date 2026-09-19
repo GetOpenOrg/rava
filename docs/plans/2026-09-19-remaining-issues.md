@@ -251,7 +251,7 @@ R5-B 让 `short_cls` 对冲突类生成带包限定的 Rust 类型名（`Era` �
       AncestorClass::iterator(self)   // 或等价的 UFCS 调用
   }
   ```
-  需确保转发的接收者类型转换合法（子类视图 → 祖先视图）。
+  需确保转发的接收者类型转换合法（子类视图 → 祖先视图）。当前系统已有继承层次的视图转换（通过 `Object::from` / `Into::<Ancestor>::into` 链），对已有字节码的具体子类可先行用 `Into::<AncestorClass>::into(self.clone())` 占位；完整实现（任意子类 → 祖先的视图构造均合法）依赖 **A-1**（`X__inner` 去掉类型形参、存储层擦除落地），在 A-1 之前部分可用。
 
 - **终态**：TestLinkedList、TestInheritedMethod 通过；`AbstractCollection.iterator` stub 不被命中；生成代码中「有 `inherited_from` 但无方法体」的声明 = 0。
 
