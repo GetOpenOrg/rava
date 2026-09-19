@@ -893,5 +893,76 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     return _JAVA_RUST_RENAME.get(result, result)
 
 
+# ── G-10：invokedynamic 实现方法命名的单一来源 ──────────────────────────
+
+def lambda_impl_rust_name(impl_cls_bin: str, impl_mname: str, impl_desc: str,
+                          registry: dict | None) -> str:
+    """invokedynamic 实现方法（lambda body / 方法引用目标）的 Rust 名 —— 单一来源。
+
+    调用点（instr/sim/dynamic.py 的 bootstrap 分析）与定义侧（emitter/class_writer
+    的方法生成）都必须经此函数取名，禁止各自推导：重载 mangle、`<init>` → `new`、
+    safe_ident 三步在此收拢（G-10 根因：两路独立推导得到不同哈希后缀/序号，
+    产生 `no method named lambda_*` 编译错误）。
+    """
+    mangled = _mangle_if_overloaded(
+        impl_cls_bin, impl_mname,
+        f"Method {impl_cls_bin}.{impl_mname}:{impl_desc}", registry)
+    return _safe_field(mangled.replace('<init>', 'new'))
+
+
+class _LambdaNameLedger:
+    """G-10 生成期断言：同一 invokedynamic 站点的「body 方法定义名」与「调用点引用名」恒等。
+
+    调用点（sim/dynamic.py）经 record_reference 登记 (类, Java 方法名) → 引用名集合；
+    定义侧（class_writer 每个生成/声明/存根化的方法）经 record_definition 登记同一键
+    → 定义名集合；project_writer 生成收尾时 check()：
+      1. 引用名必须出现在同类同名方法的定义名集合中（命名漂移直接抛错）；
+      2. 引用目标的类在本轮经 class_writer 生成过，却没有任何该方法的定义
+         → 定义被过滤/丢失（接口私有实例 lambda 曾被整体跳过）→ 抛错。
+    按 (类, Java 方法名) 而非描述符聚合：`_mangle_if_overloaded` 会把指向 synthetic
+    bridge 的 impl 引用改按桥接后的真实方法取名（描述符不同、名字与真实定义一致），
+    按名字集合比对不会误伤。未在本轮生成的类（手写 java_runtime 类 / registry
+    之外）不参与断言，由 Rust 编译器兜底报错。
+    """
+
+    def __init__(self) -> None:
+        self.references: dict[tuple[str, str], set[str]] = {}
+        self.definitions: dict[tuple[str, str], set[str]] = {}
+        self.generated_classes: set[str] = set()
+
+    def reset(self) -> None:
+        self.references.clear()
+        self.definitions.clear()
+        self.generated_classes.clear()
+
+    def record_reference(self, cls_bin: str, mname: str, rust_name: str) -> None:
+        self.references.setdefault((cls_bin, mname), set()).add(rust_name)
+
+    def record_definition(self, cls_bin: str, mname: str, rust_name: str) -> None:
+        self.definitions.setdefault((cls_bin, mname), set()).add(rust_name)
+
+    def check(self) -> None:
+        problems: list[str] = []
+        for (cls_bin, mname), ref_names in sorted(self.references.items()):
+            if cls_bin not in self.generated_classes:
+                continue
+            def_names = self.definitions.get((cls_bin, mname))
+            if not def_names:
+                problems.append(f"{cls_bin}.{mname} → 调用点引用 "
+                                f"{sorted(ref_names)}，但该类本轮生成时未输出此方法的任何定义（被过滤/跳过）")
+                continue
+            drifted = sorted(ref_names - def_names)
+            if drifted:
+                problems.append(f"{cls_bin}.{mname} → 调用点引用 {drifted} "
+                                f"不在定义名集合 {sorted(def_names)} 中")
+        if problems:
+            head = '\n'.join(f'  [G-10] {p}' for p in problems[:10])
+            more = f'\n  ...（共 {len(problems)} 处）' if len(problems) > 10 else ''
+            raise RuntimeError('invokedynamic 实现方法命名/定义不一致（G-10 断言）：\n'
+                               + head + more)
+
+
+LAMBDA_NAME_LEDGER = _LambdaNameLedger()
+
 # Java 中任何对象都可以传递给 Object 参数（引用协变），Rust 需要显式 Into<Object> 转换
 # _PRIMITIVE_RUST_TYPES 已统一到 codegen/constants.py 的 PRIMITIVE_RUST_TYPES

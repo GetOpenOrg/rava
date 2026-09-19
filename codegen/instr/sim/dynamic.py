@@ -4,9 +4,9 @@ from ...rs_ir import LetStmt, RawExpr, RawStmt, RsNamed, Var
 from ...render import render_expr, render_type
 from ...type_map import (jvm_to_rust, parse_descriptor_params, parse_descriptor_return, short_cls,
                          effective_class_type_params, method_sig_types)
-from ...constants import safe_ident as _safe_ident
 from ..invoke import _gen_string_concat, _static_call_turbofish
-from ..coerce import _mangle_if_overloaded, _coerce_to_object, _reinstantiate_generic, _PRIMITIVE_RUST_TYPES
+from ..coerce import (lambda_impl_rust_name, LAMBDA_NAME_LEDGER, _coerce_to_object,
+                      _reinstantiate_generic, _PRIMITIVE_RUST_TYPES)
 
 
 def sim_dynamic(ins, sim, class_name, registry) -> bool:
@@ -60,11 +60,11 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _impl_desc    = _impl_method_ref[_impl_colon+1:]  # "(I)I"
                     # 转换为 Rust 标识符
                     _impl_cls_rust  = short_cls(_impl_cls_bin)      # 内部类 `$` → `_`，与定义侧一致
-                    # 实现方法名与定义侧同规则 mangle（方法引用指向重载方法 / 构造器时必须一致）
-                    _impl_mangled = _mangle_if_overloaded(
-                        _impl_cls_bin, _impl_mname,
-                        f"Method {_impl_cls_bin}.{_impl_mname}:{_impl_desc}", registry)
-                    _impl_mname_r   = _safe_ident(_impl_mangled.replace('<init>', 'new'))
+                    # G-10：实现方法名取 lambda_impl_rust_name 单一来源（定义侧 class_writer
+                    # 同源取名），调用点引用名在此登记，生成收尾由账本断言两侧恒等
+                    _impl_mname_r = lambda_impl_rust_name(
+                        _impl_cls_bin, _impl_mname, _impl_desc, registry)
+                    LAMBDA_NAME_LEDGER.record_reference(_impl_cls_bin, _impl_mname, _impl_mname_r)
                     # SAM 方法参数/返回类型 → Rust 类型
                     _sam_params = parse_descriptor_params(_sam_type_desc)
                     _sam_ret    = parse_descriptor_return(_sam_type_desc)
