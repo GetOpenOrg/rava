@@ -172,6 +172,13 @@
 
 ---
 
+> **执行状态（2026-09-20）**：窗口 0 与窗口 1 已全部完成并入 main。
+> - 窗口 0：① transpile→callchain（c6771aa）② structure→simplify（6cc5955）
+> - 窗口 1：⑤ type_map 四分（实测依赖纠正计划表三处归属：parse_class_type_params/effective_class_type_params 下沉 type_map、rust_type_with_args 归 type_args）④ class_writer 三步（_gen_class_rs 1350→317 行）③ block/mod.rs 2545→86 行（erasure/interface + gen/ 五模块 + GenContext；GenContext 与 09-18 审计表的 4 项差异均为 A-1 后置变化的合理调整，见 a66a030 提交）
+> - 每步均以指纹法（⑤④：三行审计指纹逐位一致；③：PYTHONHASHSEED=0 下生成树 diff -r 逐字节一致）验证行为保持
+> - 遗留：gen/virtual_dispatch.rs 703 行超 ≤600 指标（§1+§4+§11 既定分组的固有体量，Phase 3 级函数分解另行立项）；生成器 PYTHONHASHSEED 非确定性记入 G-4（根因：vars.py 变量提升按 set 迭代序发射，随 #11 G-2 重写一并修复）
+> - 窗口 2（coerce/invoke_virtual 拆分，A-3 开工前）与窗口 3（G-1/G-2 开工时）按原时序挂起
+
 ## 七、验收
 
 - 每步：`cargo check`（Rust）/ `python3 -m py_compile codegen/**/*.py runtime`（Python）通过
