@@ -335,65 +335,111 @@ pub(crate) fn replace_clone_this_in_ok(block: &mut Block) {
     CloneThisReplacer.visit_block_mut(block);
 }
 
-/// A-1 存储层擦除：祖先 vtable impl 删减了未出现在祖先实参里的类型形参
-/// （filtered_anc_impl_header），但继承成员的转发体（Python 生成）在 base 调用的
-/// turbofish / 钩子类型实参里可能引用它们。把转发体中这些形参替换为 `Object`——
-/// `impl<P..> Owner__VTable<args(P..)> for X__inner` 覆盖全部实例化，P 全取 Object
-/// 恒可满足；base 函数体是参数化的，行为一致。
+/// A-1 vtable 去形参：inner 上的 vtable impl 均不携带本类类型形参，但继承成员的
+/// 转发体（Python 生成）在 base 调用的 turbofish 里可能引用它们。把 turbofish 中
+/// 这些形参替换为 `Object`（base 函数体是参数化的，行为一致）；`vtable_erasure`
+/// 名集（owner 类型形参位置的代入形态，槽位条目签名已 Object 化）命中的 turbofish
+/// 实参同样取 `Object`（base 函数在该实例化下边界转换为恒等）；`X__VTable<..>`
+/// 限定路径的实参整体剥除（trait 已非泛型）。
+/// 转发体的擦除边界规格（A-1）：槽位条目签名是擦除形态，转发目标（base 函数 /
+/// 擦除 wrapper 的 `__impl_<m>`）在 objectize 形态上执行——嵌套提及位置（如
+/// `HashMap_Node<K, V>`）两侧形态不同，需显式转换。
+pub(crate) struct ForwardConvSpec {
+    /// 形参名 → 还原目标类型（`<T as From<Object>>::from(arg)`）
+    pub arg_convs: Vec<(String, syn::Type)>,
+    /// 返回值：擦除条目内层 → objectize 内层（`.map(<Erased as From<Obj>>::from)`）
+    pub ret_conv: Option<(syn::Type, syn::Type)>,
+}
+
 pub(crate) fn rewrite_dropped_params_in_inherited_body(
     block: &mut Block,
     dropped: &HashSet<String>,
+    erasure: &HashSet<String>,
+    conv: &ForwardConvSpec,
 ) {
-    struct DroppedRewriter<'a>(&'a HashSet<String>);
+    struct DroppedRewriter<'a>(
+        &'a HashSet<String>,
+        &'a HashSet<String>,
+        &'a ForwardConvSpec,
+    );
     impl VisitMut for DroppedRewriter<'_> {
         fn visit_expr_mut(&mut self, e: &mut Expr) {
             visit_mut::visit_expr_mut(self, e);
-            // `Owner__m_base::<A, B, Self>(...)`：turbofish 实参里被删形参 → Object
+            // `Owner__m_base::<A, B, Self>(...)`：turbofish 实参里被删形参 / 擦除形态 → Object
             if let Expr::Call(call) = e {
+                let mut is_base = false;
                 if let Expr::Path(p) = &mut *call.func {
                     if p.qself.is_none() && p.path.segments.len() == 1 {
                         let seg = &mut p.path.segments[0];
-                        let is_base = seg.ident.to_string().ends_with("_base");
+                        is_base = seg.ident.to_string().ends_with("_base");
                         if is_base {
                             if let syn::PathArguments::AngleBracketed(ab) = &mut seg.arguments {
-                                rewrite_dropped_in_args(&mut ab.args, self.0);
+                                rewrite_args(&mut ab.args, self.0, self.1);
                             }
                         }
                     }
                 }
-            }
-            // 手写形态 `<Self as Owner__VTable<A, B>>::__as_Owner(self).__impl_m(..)`：
-            // 限定路径的类型实参同样处理
-            if let Expr::MethodCall(_) = e {
-                // 经 visit 已处理 qself 内部；此处在 token 层兜底处理 qself 泛型
+                if is_base {
+                    // 实参按形参名还原（擦除 Object → objectize 形态）
+                    for arg in call.args.iter_mut() {
+                        if let Expr::Path(p) = arg {
+                            if let Some(id) = p.path.get_ident() {
+                                if let Some((_, obj_ty)) = self.2.arg_convs.iter()
+                                    .find(|(n, _)| *n == id.to_string())
+                                {
+                                    let obj_ty = obj_ty.clone();
+                                    *arg = syn::parse_quote!(
+                                        <#obj_ty as ::std::convert::From<Object>>::from(#arg));
+                                }
+                            }
+                        }
+                    }
+                    // 返回值：Result<Obj> → Result<Erased>
+                    if let Some((erased_inner, obj_inner)) = &self.2.ret_conv {
+                        let erased_inner = erased_inner.clone();
+                        let obj_inner = obj_inner.clone();
+                        *e = syn::parse_quote!(
+                            #e.map(|__v| <#erased_inner as ::std::convert::From<#obj_inner>>::from(__v)));
+                    }
+                }
             }
         }
         fn visit_type_path_mut(&mut self, tp: &mut syn::TypePath) {
             visit_mut::visit_type_path_mut(self, tp);
             if let Some(seg) = tp.path.segments.last_mut() {
                 if seg.ident.to_string().ends_with("__VTable") {
-                    if let syn::PathArguments::AngleBracketed(ab) = &mut seg.arguments {
-                        rewrite_dropped_in_args(&mut ab.args, self.0);
-                    }
+                    // vtable 去形参（A-1）：`X__VTable` 为非泛型 trait —— 限定路径上
+                    // 遗留的类型实参整体剥除（`<Self as Owner__VTable<A, B>>` →
+                    // `<Self as Owner__VTable>`）
+                    seg.arguments = syn::PathArguments::None;
                 }
             }
         }
     }
-    fn rewrite_dropped_in_args(
+    fn rewrite_args(
         args: &mut syn::punctuated::Punctuated<syn::GenericArgument, syn::token::Comma>,
         dropped: &HashSet<String>,
+        erasure: &HashSet<String>,
     ) {
         for a in args.iter_mut() {
-            if let syn::GenericArgument::Type(syn::Type::Path(tp)) = a {
-                if tp.qself.is_none() && tp.path.segments.len() == 1 {
-                    if let Some(id) = tp.path.get_ident() {
-                        if dropped.contains(&id.to_string()) {
-                            *a = syn::parse_quote!(Object);
+            if let syn::GenericArgument::Type(ty) = a {
+                let flat: String = quote::quote!(#ty).to_string()
+                    .chars().filter(|c| !c.is_whitespace()).collect();
+                if erasure.contains(&flat) {
+                    *a = syn::parse_quote!(Object);
+                    continue;
+                }
+                if let syn::Type::Path(tp) = ty {
+                    if tp.qself.is_none() && tp.path.segments.len() == 1 {
+                        if let Some(id) = tp.path.get_ident() {
+                            if dropped.contains(&id.to_string()) {
+                                *a = syn::parse_quote!(Object);
+                            }
                         }
                     }
                 }
             }
         }
     }
-    DroppedRewriter(dropped).visit_block_mut(block);
+    DroppedRewriter(dropped, erasure, conv).visit_block_mut(block);
 }

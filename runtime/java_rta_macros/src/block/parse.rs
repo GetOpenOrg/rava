@@ -184,6 +184,9 @@ pub(crate) struct ClassMeta {
     pub superclass_fields: Vec<(Ident, Type)>,
     /// 祖先按类型变量声明、本类视角代入为基本类型的继承字段：存储与访问器按引用字段处理
     pub superclass_reference_fields: std::collections::HashSet<String>,
+    /// 声明方（祖先）按自身类型形参声明、已被声明方宏 Object 化的继承字段（A-1 擦除
+    /// 按声明类判定）：继承者的存储 / 访问器签名同步擦除
+    pub superclass_erased_fields: std::collections::HashSet<String>,
     /// 线性超类链（从最深祖先到直接父类），Rust short names，不含 Object 和 self。
     pub all_superclasses: Vec<String>,
     /// 每个祖先在本类视角下的类型实参（含尖括号，如 `<P_IN, P_OUT, Object>`）；非泛型祖先为空。
@@ -256,6 +259,10 @@ impl ClassMeta {
             } else if path.is_ident("superclass_reference_fields") {
                 let s = lit_str(attr)?;
                 m.superclass_reference_fields =
+                    s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
+            } else if path.is_ident("superclass_erased_fields") {
+                let s = lit_str(attr)?;
+                m.superclass_erased_fields =
                     s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
             } else if path.is_ident("superclass_fields") {
                 let mut items: Vec<(Ident, Type)> = Vec::new();

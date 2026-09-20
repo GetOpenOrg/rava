@@ -230,6 +230,7 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
                            superclass_rust: str = "",
                            superclass_fields: list[tuple[str, str]] | None = None,
                            superclass_reference_fields: list[str] | None = None,
+                           superclass_erased_fields: list[str] | None = None,
                            impl_methods: 'set[str] | None' = None,
                            handwritten_methods: 'dict | None' = None) -> list[str]:
     """生成 `java_class! { ... }` 块内的类级别属性行（方案 §4）。
@@ -302,6 +303,8 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         lines.append(f'#[superclass_fields({items})]')
     if superclass_reference_fields:
         lines.append(f'#[superclass_reference_fields = "{";".join(superclass_reference_fields)}"]')
+    if superclass_erased_fields:
+        lines.append(f'#[superclass_erased_fields = "{";".join(superclass_erased_fields)}"]')
     if not ci.is_interface:
         superclasses = _compute_all_superclasses(ci, registry)
         if superclasses:

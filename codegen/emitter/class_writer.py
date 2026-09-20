@@ -628,6 +628,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # （见 §16：复制字段会造成同一字段两份状态）。
     superclass_fields: list[tuple[str, str]] = []
     superclass_reference_fields: list[str] = []
+    superclass_erased_fields: list[str] = []
     if _has_super and registry and not _full_impl:
         _chain: list = []
         _seen_chain: set[str] = set()
@@ -663,6 +664,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 if (_sf_view_ty in _PRIMITIVE_RUST_TYPES and _resolve_anc_field_rust(
                         _f, _anc_params, {_p: _p for _p in _anc_params}) not in _PRIMITIVE_RUST_TYPES):
                     superclass_reference_fields.append(_sf_name)
+                # 声明方（祖先）按自身类型形参声明的字段 → 存储与访问器已被声明方的宏
+                # Object 化（A-1 擦除按声明类判定）——继承者的宏按名单同步擦除
+                _declared_ty = _resolve_anc_field_rust(
+                    _f, _anc_params, {_p: _p for _p in _anc_params})
+                if any(_re.search(r'\b' + _re.escape(_p) + r'\b', _declared_ty)
+                       for _p in _anc_params):
+                    superclass_erased_fields.append(_sf_name)
 
     # ── struct 声明（裸类型，封装细节由宏收拢）──────────────────────────
     struct_lines: list[str] = []
@@ -1304,6 +1312,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             superclass_rust=parent_rust,
             superclass_fields=superclass_fields,
             superclass_reference_fields=superclass_reference_fields,
+            superclass_erased_fields=superclass_erased_fields,
             impl_methods=set((_nf_entry or {}).get('methods', set())),
             handwritten_methods=new_format_map,
         ))
