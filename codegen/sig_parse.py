@@ -208,6 +208,15 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
         mapped = _CLASSNAME_MAP.get(class_name)
         if mapped is not None:
             rust_type = mapped
+        elif registry is not None and class_name not in registry:
+            # 闭包外类型：没有生成模块，其 use 会被 import 过滤器拒绝（防 E0432），
+            # 渲染简名必然落成 E0425——或与同简名的其他类静默错配（JDK 25 语料：
+            # java/lang/annotation/Annotation 撞上 java/lang/classfile/Annotation，
+            # getAnnotationsByType 的 [TA; 上界替换渲染出无 import 的裸名）。
+            # 与 jvm_to_rust 对 registry 外类型的 fallback 同一哲学：签名位置
+            # 一律退化为 Object。这类类型只出现在从未被调用的 panic stub 签名里
+            # （调用链上的方法其描述符类型经 T88 通道必然入闭包），无可观察影响。
+            rust_type = 'Object'
         else:
             short = short_cls(class_name)
             # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突
