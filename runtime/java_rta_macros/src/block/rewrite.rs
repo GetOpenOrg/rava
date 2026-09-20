@@ -453,24 +453,29 @@ pub(crate) fn rewrite_dropped_params_in_inherited_body(
     fn rewrite_args(
         args: &mut syn::punctuated::Punctuated<syn::GenericArgument, syn::token::Comma>,
         dropped: &HashSet<String>,
-        erasure: &HashSet<String>,
+        _erasure: &HashSet<String>,
     ) {
+        // 只改写「被删的本类类型形参」标识（turbofish 实参里不可见）：裸形参 → Object，
+        // 嵌套提及（`Optional<T>` / `Sink<T, Optional<T>>`）→ objectize（内部标识替换
+        // 为 Object；base 函数体是参数化的，行为一致）。
+        // vtable_erasure 名集的位置不改写 turbofish——它们的 base 形参保持代入形态，
+        // 由 ForwardConvSpec 的显式转换在擦除条目签名一侧对齐。
         for a in args.iter_mut() {
             if let syn::GenericArgument::Type(ty) = a {
-                let flat: String = quote::quote!(#ty).to_string()
-                    .chars().filter(|c| !c.is_whitespace()).collect();
-                if erasure.contains(&flat) {
-                    *a = syn::parse_quote!(Object);
-                    continue;
-                }
-                if let syn::Type::Path(tp) = ty {
-                    if tp.qself.is_none() && tp.path.segments.len() == 1 {
-                        if let Some(id) = tp.path.get_ident() {
-                            if dropped.contains(&id.to_string()) {
-                                *a = syn::parse_quote!(Object);
-                            }
-                        }
-                    }
+                let mentions_dropped = quote::quote!(#ty).into_iter().any(|tt| match &tt {
+                    proc_macro2::TokenTree::Ident(i) => dropped.contains(&i.to_string()),
+                    _ => false,
+                });
+                if mentions_dropped {
+                    let replaced: Vec<proc_macro2::TokenStream> =
+                        quote::quote!(#ty).into_iter().map(|tt| match tt {
+                            proc_macro2::TokenTree::Ident(i)
+                                if dropped.contains(&i.to_string()) =>
+                                quote::quote! { Object },
+                            other => quote::quote! { #other },
+                        }).collect();
+                    let ts: proc_macro2::TokenStream = quote::quote! { #(#replaced)* };
+                    *a = syn::parse_quote!(#ts);
                 }
             }
         }

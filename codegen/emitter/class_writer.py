@@ -62,6 +62,64 @@ def _adapt_interface_method(method, ci, iface_bin: str, views: dict):
     return adapted
 
 
+def _override_vtable_erasure(m, ci, registry) -> list[str]:
+    """覆盖方法在「声明祖先 vtable」上的擦除位置：接收者签名里对应位置的类型串。
+
+    声明祖先按自身类型形参声明的参数 / 返回位置，在祖先 vtable（Object 化签名）上
+    已是 Object；继承者（本类）的覆盖条目签名需按名单同步擦除。位置判定以
+    「同名同描述符方法在祖先声明中的泛型签名」提及祖先形参为准。"""
+    if not registry:
+        return []
+    from ..type_map import parse_method_param_types
+    # 声明祖先：沿超类链找 virtual_in 对应的类
+    owner_bin = None
+    cur = ci.super_class
+    seen: set[str] = set()
+    while cur and cur not in seen and cur in registry:
+        seen.add(cur)
+        if short_cls(cur) == m.virtual_in:
+            owner_bin = cur
+            break
+        cur = registry[cur].super_class
+    if owner_bin is None:
+        return []
+    owner_ci = registry[owner_bin]
+    owner_params = effective_class_type_params(owner_ci, registry)
+    if not owner_params:
+        return []
+    owner_m = next((x for x in (owner_ci.methods or [])
+                    if x.name == m.name and x.descriptor == m.descriptor
+                    and not x.is_static), None)
+    if owner_m is None:
+        return []
+    own_types, own_ret = parse_method_param_types(
+        m.generic_signature, effective_class_type_params(ci, registry),
+        registry, is_static=False)
+    own_types, own_ret = list(own_types or []), own_ret
+    anc_types, anc_ret = parse_method_param_types(
+        owner_m.generic_signature, owner_params, registry, is_static=False)
+    anc_types, anc_ret = list(anc_types or []), anc_ret
+    out: list[str] = []
+    for i, anc_ty in enumerate(anc_types):
+        if any(_re.search(r'\b' + _re.escape(_p) + r'\b', anc_ty) for _p in owner_params):
+            if i < len(own_types) and own_types[i] and own_types[i] != 'Object':
+                out.append(own_types[i])
+    def _result_inner(ty: str):
+        mm = _re.match(r'^Result<(.*)>$', ty or '')
+        return mm.group(1) if mm else None
+    anc_inner = _result_inner(anc_ret)
+    if anc_inner and any(
+            _re.search(r'\b' + _re.escape(_p) + r'\b', anc_inner) for _p in owner_params):
+        own_inner = _result_inner(own_ret)
+        if own_inner and own_inner != 'Object':
+            out.append(own_inner)
+    elif anc_ret and anc_ret != 'Result<()>' and any(
+            _re.search(r'\b' + _re.escape(_p) + r'\b', anc_ret) for _p in owner_params):
+        if own_ret and own_ret != 'Object':
+            out.append(own_ret)
+    return list(dict.fromkeys(out))
+
+
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   jdk_crate_pkg_paths: list[str] | None = None,
                   stub_bodies: bool = False,
@@ -960,6 +1018,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
         # 计算虚方法归属（vtable 架构）
         m.virtual_in = _find_virtual_in(m, ci, registry, new_format_map)
+        # A-1 擦除按声明类判定：覆盖条目的签名里，「声明祖先按自身类型形参声明的位置」
+        # 在祖先 vtable 上已是 Object → 记录接收者视角下这些位置的代入形态（类型串），
+        # 宏据此擦除 vtable impl 条目 / 包装 base 调用 turbofish（vtable_erasure）
+        if m.virtual_in and m.virtual_in != short_cls(ci.name):
+            m.vtable_erasure = _override_vtable_erasure(m, ci, registry)
 
         # 虚方法的方法体由共置 `_impl.rs` 手写为 `__impl_<method>`：声明留在宏块内（进 vtable、
         # 参与覆盖与根类方法桥接），宏经 wrapper 钩子执行手写体

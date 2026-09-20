@@ -179,8 +179,19 @@ def _sig_param_types(signature: str) -> 'tuple[list[str], str]':
     """`pub fn name(&self, a: T, b: U) -> R` → (['T', 'U'], 'R')。
     顶层逗号 / 箭头按括号与尖括号深度切分（与 _param_idents 同一深度规则）。"""
     start = signature.find('(')
-    end = signature.rfind(')')
-    if start < 0 or end < 0:
+    if start < 0:
+        return [], ''
+    # 形参列表的右括号：从 '(' 起做深度计数回到 0 的位置（返回类型的括号不计入）
+    depth, end = 0, -1
+    for i in range(start, len(signature)):
+        if signature[i] in '(<[':
+            depth += 1
+        elif signature[i] in ')>]':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
         return [], ''
     params_str = signature[start + 1:end]
     parts, depth, cur = [], 0, ''

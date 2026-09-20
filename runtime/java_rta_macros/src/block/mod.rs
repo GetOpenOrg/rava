@@ -159,6 +159,33 @@ fn same_type_tokens(a: &Type, b: &Type) -> bool {
 }
 
 /// `Result<T>` 返回类型中的 `T`；非 `Result<..>` 返回返回 None。
+/// 类型实参流（`<T, Object>`）的顶层元数；空实参流返回 0。
+fn type_args_arity(args: &TokenStream2) -> usize {
+    let mut ts: Vec<proc_macro2::TokenTree> = args.clone().into_iter().collect();
+    if ts.is_empty() {
+        return 0;
+    }
+    let starts_lt = matches!(ts.first(), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '<');
+    let ends_gt = matches!(ts.last(), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '>');
+    if starts_lt && ends_gt && ts.len() >= 2 {
+        ts.drain(0..1);
+        ts.pop();
+    }
+    let mut depth = 0usize;
+    let mut n = 1usize;
+    for tt in &ts {
+        if let proc_macro2::TokenTree::Punct(p) = tt {
+            match p.as_char() {
+                '<' | '(' | '[' => depth += 1,
+                '>' | ')' | ']' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => n += 1,
+                _ => {}
+            }
+        }
+    }
+    n
+}
+
 /// 与给定类型实参流（`<T, Object>`）同元数的全 `Object` 实参流；空实参流返回空。
 /// 用于从「本类视角的祖先实参元数」推导祖先的擦除实例化（祖先 trait 的钩子返回类型）。
 fn erased_args_of_same_arity(args: &TokenStream2) -> TokenStream2 {
@@ -363,6 +390,24 @@ fn erase_signature(sig: &syn::Signature, type_params: &HashSet<String>) -> syn::
     erase_signature_with(sig, type_params, &HashSet::new())
 }
 
+/// impl 条目的擦除签名：同 erase_signature_with，但保留形参的 `mut` ——
+/// 带方法体的条目（Safe 覆盖体直挂）可能对形参赋值（E0384）。
+fn erase_item_signature_with(
+    sig: &syn::Signature,
+    type_params: &HashSet<String>,
+    exact: &HashSet<String>,
+) -> syn::Signature {
+    let mut out = erase_signature_with(sig, type_params, exact);
+    for (a, b) in out.inputs.iter_mut().zip(sig.inputs.iter()) {
+        if let (syn::FnArg::Typed(pt), syn::FnArg::Typed(orig)) = (a, b) {
+            if let (syn::Pat::Ident(pi), syn::Pat::Ident(oi)) = (&mut *pt.pat, &*orig.pat) {
+                pi.mutability = oi.mutability;
+            }
+        }
+    }
+    out
+}
+
 /// 擦除签名（扩展判据）：提及本类类型形参 → Object；类型扁平 token 命中
 /// `vtable_erasure` 名集（owner 类型形参位置的代入形态）→ 同样 Object。
 fn erase_signature_with(
@@ -402,7 +447,9 @@ fn erasure_set_of(f: &FnItem, type_param_names: &HashSet<String>) -> HashSet<Str
     let mut set = type_param_names.clone();
     if let Some(e) = attr_str(&f.attrs, "vtable_erasure") {
         for t in e.split(';').filter(|x| !x.is_empty()) {
-            set.insert(t.to_string());
+            // 与 flat_type_tokens 同一规范化（去全部空白）——Python 侧类型串带空格
+            let flat: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+            set.insert(flat);
         }
     }
     set
@@ -415,6 +462,7 @@ fn forward_conv_spec(
     orig: &syn::Signature,
     erased: &syn::Signature,
     type_param_names: &HashSet<String>,
+    erasure: &HashSet<String>,
 ) -> ForwardConvSpec {
     let mut arg_convs: Vec<(String, Type)> = Vec::new();
     let orig_params: Vec<&Type> = orig.inputs.iter().filter_map(|a| match a {
@@ -425,11 +473,34 @@ fn forward_conv_spec(
         syn::FnArg::Typed(pt) => Some(&*pt.ty),
         _ => None,
     }).collect();
-    for (i, (o, e)) in orig_params.iter().zip(erased_params.iter()).enumerate() {
-        if !mentions_any(o, type_param_names) {
-            continue; // 未提及本类形参：两形态一致
+    // 裸单标识符类型（`T` / `Status`）：base 调用的 turbofish 实参即此类型，
+    // 被「被删形参 / 擦除名集」改写为 Object 后 base 形参已是 Object——无需显式转换；
+    // 嵌套形态（`HashMap_Node<K, V>`）的 turbofish 只改写内部实参，base 形参保持
+    // 包装形态 → 需 From<Object> 还原
+    let is_bare_ident = |ty: &Type| -> bool {
+        if let Type::Path(tp) = ty {
+            tp.qself.is_none() && tp.path.segments.len() == 1 && tp.path.segments[0].arguments.is_none()
+        } else {
+            false
         }
-        let obj = objectize_type(o, type_param_names);
+    };
+    for (i, (o, e)) in orig_params.iter().zip(erased_params.iter()).enumerate() {
+        let mentions_own = mentions_any(o, type_param_names);
+        let hits_erasure = !erasure.is_empty()
+            && erasure.contains(&flat_type_tokens(o));
+        if !(mentions_own || hits_erasure) {
+            continue;
+        }
+        // 本类形参的裸位置由 turbofish 改写消解（base 形参已 Object）；
+        // vtable_erasure 命中的位置（含裸形态）base 形参保持代入形态 → 显式转换
+        if mentions_own && !hits_erasure && is_bare_ident(o) {
+            continue;
+        }
+        let obj: Type = if mentions_any(o, type_param_names) {
+            objectize_type(o, type_param_names)
+        } else {
+            (*o).clone()
+        };
         if !same_type_tokens(&obj, e) {
             if let Some((name, _)) = orig.inputs.iter().filter_map(|a| match a {
                 syn::FnArg::Typed(pt) => match &*pt.pat {
@@ -445,8 +516,15 @@ fn forward_conv_spec(
     let mut ret_conv = None;
     if let (syn::ReturnType::Type(_, o), syn::ReturnType::Type(_, e)) = (&orig.output, &erased.output) {
         if let (Some(oi), Some(ei)) = (result_inner_ty(o), result_inner_ty(e)) {
-            if mentions_any(oi, type_param_names) {
-                let obj_inner = objectize_type(oi, type_param_names);
+            let mentions_own = mentions_any(oi, type_param_names);
+            let hits_erasure = !erasure.is_empty()
+                && erasure.contains(&flat_type_tokens(oi));
+            if (mentions_own || hits_erasure) && !(mentions_own && !hits_erasure && is_bare_ident(oi)) {
+                let obj_inner: Type = if mentions_any(oi, type_param_names) {
+                    objectize_type(oi, type_param_names)
+                } else {
+                    (*oi).clone()
+                };
                 if !same_type_tokens(&obj_inner, ei) {
                     ret_conv = Some((ei.clone(), obj_inner));
                 }
@@ -707,6 +785,7 @@ fn erased_impl_call(
     sig: &syn::Signature,
     impl_name: &Ident,
     type_param_names: &HashSet<String>,
+    erasure: &HashSet<String>,
 ) -> TokenStream2 {
     let conv_args: Vec<TokenStream2> = sig.inputs.iter().filter_map(|a| match a {
         syn::FnArg::Typed(pt) => {
@@ -714,9 +793,21 @@ fn erased_impl_call(
                 syn::Pat::Ident(pi) => pi.ident.clone(),
                 _ => return None,
             };
-            if mentions_any(&pt.ty, type_param_names) {
-                let obj_ty = objectize_type(&pt.ty, type_param_names);
-                let erased_ty = erase_type(&pt.ty, type_param_names);
+            let mentions = mentions_any(&pt.ty, type_param_names);
+            let hits = !erasure.is_empty()
+                && erasure.contains(&flat_type_tokens(&pt.ty));
+            if mentions || hits {
+                let obj_ty = if mentions {
+                    objectize_type(&pt.ty, type_param_names)
+                } else {
+                    (*pt.ty).clone()
+                };
+                // 命中擦除名集的位置，条目签名一侧已是 Object（erase_signature_with）
+                let erased_ty: Type = if hits && !mentions {
+                    syn::parse_quote!(Object)
+                } else {
+                    erase_type(&pt.ty, type_param_names)
+                };
                 if same_type_tokens(&obj_ty, &erased_ty) {
                     Some(quote! { #ident })
                 } else {
@@ -731,9 +822,20 @@ fn erased_impl_call(
     let mut call = quote! { __w.#impl_name(#(#conv_args),*) };
     if let syn::ReturnType::Type(_, ty) = &sig.output {
         if let Some(inner) = result_inner_ty(ty) {
-            if mentions_any(inner, type_param_names) {
-                let obj_inner = objectize_type(inner, type_param_names);
-                let erased_inner = erase_type(inner, type_param_names);
+            let mentions = mentions_any(inner, type_param_names);
+            let hits = !erasure.is_empty()
+                && erasure.contains(&flat_type_tokens(inner));
+            if mentions || hits {
+                let obj_inner = if mentions {
+                    objectize_type(inner, type_param_names)
+                } else {
+                    inner.clone()
+                };
+                let erased_inner: Type = if hits && !mentions {
+                    syn::parse_quote!(Object)
+                } else {
+                    erase_type(inner, type_param_names)
+                };
                 if !same_type_tokens(&obj_inner, &erased_inner) {
                     call = quote! {
                         #call.map(|__v| <#erased_inner as ::std::convert::From<#obj_inner>>::from(__v))
@@ -755,8 +857,9 @@ fn erased_wrapper_call(
     erased_ty_args: &TokenStream2,
     phantom_init: &TokenStream2,
     type_param_names: &HashSet<String>,
+    erasure: &HashSet<String>,
 ) -> TokenStream2 {
-    let call = erased_impl_call(sig, impl_name, type_param_names);
+    let call = erased_impl_call(sig, impl_name, type_param_names, erasure);
     quote! {
         let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
         let __w: #struct_ident #erased_ty_args = #struct_ident {
@@ -1018,7 +1121,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 // 经钩子重建声明类的擦除实例化 wrapper，执行 wrapper 方法体 `__impl_<method>`
                 // （签名已擦除，边界转换见 erased_impl_call）
                 let impl_name = format_ident!("__impl_{}", mname);
-                let call = erased_impl_call(&effective_sig, &impl_name, &type_param_names);
+                let call = erased_impl_call(
+                    &effective_sig, &impl_name, &type_param_names, &HashSet::new());
                 vtable_default_methods.push(quote! {
                     #erased_default_sig {
                         let __w = self.#as_self_hook();
@@ -1029,7 +1133,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         } else if attr_str(&f.attrs, "body").as_deref() == Some("handwritten") {
             // 方法体由共置 `_impl.rs` 手写为 wrapper 上的 `__impl_<method>` → 经钩子重建 wrapper 后执行
             let impl_name = format_ident!("__impl_{}", mname);
-            let call = erased_impl_call(&effective_sig, &impl_name, &type_param_names);
+            let call = erased_impl_call(
+                &effective_sig, &impl_name, &type_param_names, &HashSet::new());
             vtable_default_methods.push(quote! {
                 #erased_default_sig {
                     let __w = self.#as_self_hook();
@@ -1385,7 +1490,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 for f in override_fns {
                     let sig = &f.sig;
                     let keep_attrs = strip_meta_attrs(&f.attrs);
-                    let erased_item_sig = erase_signature(sig, &type_param_names);
+                    // 覆盖条目可能直挂方法体（Safe）→ 保留形参 mut（体可能赋值）；
+                    // 声明祖先的类型形参位置（vtable_erasure 名集）一并擦除
+                    let ov_erasure = erasure_set_of(f, &type_param_names);
+                    let erased_item_sig = erase_item_signature_with(
+                        sig, &type_param_names, &ov_erasure);
                     match &f.block {
                         Some(block) => {
                             let mut b = block.clone();
@@ -1406,6 +1515,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                                 let wrapper_call = erased_wrapper_call(
                                     sig, &impl_name, &struct_ident, &vtable_trait_ident,
                                     &erased_ty_args, &phantom_init, &type_param_names,
+                                    &ov_erasure,
                                 );
                                 items.push(quote! {
                                     #(#keep_attrs)*
@@ -1418,6 +1528,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                             let wrapper_call = erased_wrapper_call(
                                 sig, &impl_name, &struct_ident, &vtable_trait_ident,
                                 &erased_ty_args, &phantom_init, &type_param_names,
+                                &ov_erasure,
                             );
                             items.push(quote! {
                                 #(#keep_attrs)*
@@ -1455,7 +1566,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 let sig = &f.sig;
                 let erasure = erasure_set_of(f, &type_param_names);
                 let erased_item_sig = erase_signature_with(sig, &type_param_names, &erasure);
-                let conv = forward_conv_spec(sig, &erased_item_sig, &type_param_names);
+                let conv = forward_conv_spec(sig, &erased_item_sig, &type_param_names, &erasure);
                 let mut b = block.clone();
                 // 槽位上下文不携带本类类型形参（vtable 去形参）→ 转发体的 base 调用
                 // turbofish 里被删形参 / 擦除形态取 Object（base 函数体是参数化的，
@@ -1900,13 +2011,14 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
             }
             // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）；
-            // 方法签名已 Object 化 → 边界转换同 VirtualDefine 委托
+            // 方法签名已 Object 化 → 边界转换同 VirtualDefine 委托（含 vtable_erasure 名集）
             let anc_vtable = format_ident!("{}__VTable", vtable_class);
-            let conv_args = erased_call_args(sig, &type_param_names);
+            let ov_erasure = erasure_set_of(f, &type_param_names);
+            let conv_args = erased_call_args_with(sig, &type_param_names, &ov_erasure);
             let call = quote! {
                 #anc_vtable::#mname(&*self.vtable, #(#conv_args),*)
             };
-            let dispatch = erased_call_ret_conv(sig, &type_param_names, call);
+            let dispatch = erased_call_ret_conv_with(sig, &type_param_names, &ov_erasure, call);
             let null_check = class_init::null_receiver_check(sig);
             wrapper_methods.push(quote! {
                 #(#keep_attrs)*
@@ -2142,17 +2254,47 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             let anc_ident = format_ident!("{}", anc_name);
             let anc_vtable = format_ident!("{}__VTable", anc_name);
             let atag = meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
-            let anc_from_parts: TokenStream2 = if atag.is_empty() {
-                quote! { #anc_ident::__from_parts }
-            } else {
-                quote! { #anc_ident::#atag::__from_parts }
-            };
+            if atag.is_empty() {
+                // 非泛型祖先：目标无类型实参
+                return quote! {
+                    impl #impl_g From<#struct_ident #ty_g> for #anc_ident #where_c {
+                        fn from(child: #struct_ident #ty_g) -> #anc_ident {
+                            #anc_ident::__from_parts(
+                                child.vtable as ::std::rc::Rc<dyn #anc_vtable>,
+                                child.any,
+                                child._jvm_null,
+                            )
+                        }
+                    }
+                };
+            }
+            // 泛型祖先：擦除实例化视图（A-1 γ'）——对祖先的**任意**类型实参成立
+            // （Java 泛型运行时擦除，vtable 非泛型后 upcast 不再依赖实参一致；
+            // `CountedCompleter<Object>: From<Sorter<T>>` 这类跨实例化 upcast）。
+            // 祖先形参以带宏标准 bound 的新形参承载（宏为所有类的形参注入同一组
+            // Clone/Default/'static/From<Object>/Into<Object>，祖先 wrapper 的 impl
+            // 上下文恰要求这组 bound）。
+            let arity = type_args_arity(&atag);
+            let mut gamma_gen = gen.clone();
+            for i in 0..arity {
+                let pid = format_ident!("__Anc{}", i);
+                let p: syn::TypeParam = syn::parse_quote! {
+                    #pid : Clone + Default + 'static
+                        + ::std::convert::From<Object> + ::std::convert::Into<Object>
+                };
+                gamma_gen.params.push(syn::GenericParam::Type(p));
+            }
+            let (gamma_impl_g, _, gamma_where_c) = gamma_gen.split_for_impl();
+            let anc_params: Vec<Ident> = (0..arity)
+                .map(|i| format_ident!("__Anc{}", i))
+                .collect();
+            let anc_ty_args = quote! { <#(#anc_params),*> };
             quote! {
-                impl #impl_g From<#struct_ident #ty_g> for #anc_ident #atag #where_c {
-                    fn from(child: #struct_ident #ty_g) -> #anc_ident #atag {
-                        // 结构体字面量不能用 Type<E> {...} 语法（被解析为比较链），
-                        // 省略泛型参数由返回类型推导
-                        #anc_from_parts(
+                impl #gamma_impl_g
+                    From<#struct_ident #ty_g> for #anc_ident #anc_ty_args #gamma_where_c
+                {
+                    fn from(child: #struct_ident #ty_g) -> #anc_ident #anc_ty_args {
+                        #anc_ident::#anc_ty_args::__from_parts(
                             child.vtable as ::std::rc::Rc<dyn #anc_vtable>,
                             child.any,
                             child._jvm_null,

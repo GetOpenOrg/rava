@@ -406,6 +406,9 @@ def _java_method_attr(m: ParsedMethod) -> str:
     if getattr(m, 'virtual_in', ''):
         vin = m.virtual_in.replace('"', '\\"')
         parts.append(f'virtual_in = "{vin}"')
+    if getattr(m, 'vtable_erasure', None):
+        ve = ';'.join(m.vtable_erasure).replace('"', '\\"')
+        parts.append(f'vtable_erasure = "{ve}"')
     if getattr(m, 'handwritten_body', False):
         parts.append('body = "handwritten"')
     if m.method_parameters:

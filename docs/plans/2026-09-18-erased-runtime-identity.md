@@ -93,6 +93,17 @@ Java 泛型在运行时被擦除：`ArrayList<String>` 与 `ArrayList<Object>` �
 
 ## 6 阶段 2（后续步骤，全部以 §2 指标为验收）
 
+> **vtable 去形参已落地（2026-09-20，分支 fix/a1-vtable-erasure）**：`X__VTable` 非泛型
+> （签名 Object 化，与 `I__VTable` 同构）；`__as_X` 钩子返回擦除实例化 `X<Object, ..>`；
+> base 函数签名保持类型化（Python 调用点不变），体经钩子在「类型化 ↔ objectize」边界
+> 转换；wrapper 类型形参以 PhantomData 持有；擦除按**声明类**判定——Python 输出
+> `superclass_erased_fields`（字段）与 `vtable_erasure`（方法位置的类型串名单），宏据此
+> 擦除继承者条目签名 / 做嵌套位置（`HashMap_Node<K,V>` / `PipelineHelper<i32>`）的
+> From/Into 边界转换；返回值还原 null 容忍（primitive 位置取 Default）。`From<X<A..>>
+> for Anc<B..>` 拓宽为对祖先**任意**实例化成立（擦除实例化视图，γ'）。实测：TestStreamBasic
+> 编译 0 错误（运行期阻塞在 S-4 的 JArray 精确元素类型取回）；红线 8 测试 + TestStringBuilder
+> 金丝雀全 PASS。可读层计数持平（downcast_ref 链的移除在下方步骤 4，另行落地）。
+>
 > **A-1 存储层擦除已部分落地（2026-09-20，`6c731b1` + `b7c7f45`，分支 fix/a1-erased-storage）**：
 > 步骤 1 的存储层与类身份转换核心已交付——`X__inner` 非泛型（提及类型形参的实例字段以
 > Object 存储，访问器边界 From/Into 转换）；`From<Object> for X<A>` 对任意 A 成立（新钩子
