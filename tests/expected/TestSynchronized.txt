@@ -1,0 +1,6 @@
+counter=3
+trace=mbto
+reentrant trace=!rrr
+holder=5
+multithread counter=2000
+done
