@@ -2,15 +2,15 @@
 
 from ..constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_TYPE_NAMES
 from ..type_map import short_cls as _short_cls_g
+from ..sig_parse import parse_method_param_types as _parse_method_param_types
+from ..sig_types import method_sig_types as _method_sig_types
+from ..type_args import substitute_type_params as _substitute_type_params
 from ..type_map import (
     short_cls,
     parse_class_type_params as _parse_class_type_params,
-    parse_method_param_types as _parse_method_param_types,
-    method_sig_types as _method_sig_types,
     effective_class_type_params as _effective_class_type_params,
-    substitute_type_params as _substitute_type_params,
 )
-from ..type_map import class_type_param_bounds as _class_type_param_bounds
+from ..type_args import class_type_param_bounds as _class_type_param_bounds
 from ..stack import _clone_moved_var
 from ..rs_ir import RawExpr, RsNamed
 from ..render import render_expr, render_type
@@ -145,7 +145,7 @@ def receiver_type_arg_map(recv_ty: str, owner_short: str | None, registry: dict 
     无法确定（接收者是 Object / 类型变量 / 接口视角）→ None。"""
     if not registry or not owner_short or not recv_ty:
         return None
-    from ..type_map import ancestor_type_args, split_rust_type_args
+    from ..type_args import ancestor_type_args, split_rust_type_args
     recv_base = recv_ty.split('<', 1)[0].strip()
     recv_ci = registry.get(_rust_type_to_binary(recv_base, registry) or '')
     owner_ci = registry.get(_rust_type_to_binary(owner_short, registry) or '')
@@ -385,7 +385,7 @@ def _substitute_tvars(ty: str, tparams: list[str], targs: list[str]) -> str:
 def _exact_ancestor_type(actual: str, ancestor_short: str, registry: dict | None) -> str:
     """静态类型 actual（如 `Child<A, B>`）沿超类链到 ancestor_short 的精确实例化
     （`Parent<A, B, Object>`）；不在超类链上 → ''。"""
-    from ..type_map import ancestor_type_args, split_rust_type_args, rust_type_with_args
+    from ..type_args import ancestor_type_args, split_rust_type_args, rust_type_with_args
     ci = registry.get(_rust_type_to_binary(actual.split('<', 1)[0], registry)) if registry else None
     if ci is None:
         return ''

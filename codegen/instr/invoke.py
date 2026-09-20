@@ -9,15 +9,15 @@ from ..rs_ir import (
     Lit, Var, RawExpr, RawStmt, NewPendingExpr, RsNamed,
 )
 from ..render import render_expr, render_type
+from ..sig_parse import parse_method_param_types as _parse_method_param_types
+from ..sig_types import method_sig_types as _method_sig_types
+from ..type_args import (ancestor_type_args as _ancestor_type_args,
+                         enclosing_scope_type_args as _enclosing_scope_type_args,
+                         superclass_type_args as _superclass_type_args)
 from ..type_map import (
     jvm_to_rust, short_cls, parse_descriptor_params, is_jdk,
     parse_class_type_params as _parse_class_type_params,
-    parse_method_param_types as _parse_method_param_types,
     effective_class_type_params as _effective_class_type_params,
-    enclosing_scope_type_args as _enclosing_scope_type_args,
-    superclass_type_args as _superclass_type_args,
-    method_sig_types as _method_sig_types,
-    ancestor_type_args as _ancestor_type_args,
 )
 from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 from .coerce import (
@@ -190,7 +190,8 @@ def _ctor_outer_ref_base(cls_short: str | None, params: list[str], registry: dic
     类型参数），调用侧不得按擦除形态 Outer<Object> 转换实参。"""
     if not (cls_short and params and registry):
         return ''
-    from ..type_map import effective_class_type_params, outer_instance_class, outer_instance_rust_type
+    from ..type_args import outer_instance_rust_type
+    from ..type_map import effective_class_type_params, outer_instance_class
     ci = registry.get(_rust_type_to_binary(cls_short, registry) or '')
     if ci is None:
         return ''
@@ -266,7 +267,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         # base 函数的泛型形参 = 声明类的类型形参 + 接收者类型；实参不提及声明类类型形参时
         # （onCompletion(CountedCompleter<?>)）无处可推断（E0283）→ 按本类视角的祖先实参显式给出
         if _self_ci is not None and _owner_short != short_cls(class_name):
-            from ..type_map import ancestor_vtable_args_by_short as _anc_args_by_short
+            from ..type_args import ancestor_vtable_args_by_short as _anc_args_by_short
             _owner_targs = _anc_args_by_short(_self_ci, _self_ty, registry).get(_owner_short, '')
             if _owner_targs:
                 base_fn += f"::{_owner_targs[:-1]}, _>"
@@ -647,7 +648,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             receiver_type=(f"{short_cls(_cp_cls_bin)}<{', '.join(_static_inst)}>" if _static_inst else None),
         )
         if _sig_ret_s is not None and _static_tbind and turbofish_bound:
-            from ..type_map import substitute_type_params as _subst_tp
+            from ..type_args import substitute_type_params as _subst_tp
             _sig_ret_s = _subst_tp(_sig_ret_s, _static_tbind)
         if (_static_anc_refined and _sig_ret_s in (None, rust_ret)
                 and rust_ret.split('<')[0].strip() == short_cls(_cp_cls_bin)):

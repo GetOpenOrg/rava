@@ -9,10 +9,13 @@ from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
 from ..cfg import CfgAuditError, STATS as _CFG_STATS
-from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names, method_name_is_mangled, instance_field_rust_name
-from ..type_map import (effective_class_type_params, ancestor_type_args, outer_ref_field_type,
-                        class_type_param_bounds,
-                        rust_type_with_args as _rust_type_with_args)
+from ..type_map import parse_class_type_params
+from ..sig_parse import parse_field_type
+from ..sig_types import (hierarchy_overloaded_names, instance_field_rust_name,
+                         method_name_is_mangled)
+from ..type_args import (ancestor_type_args, class_type_param_bounds,
+                         outer_ref_field_type, rust_type_with_args as _rust_type_with_args)
+from ..type_map import effective_class_type_params
 from ..constants import (safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS,
                          CLASS_CLASS as _CLASS_CLASS,
                          PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, STRING_CLASS)
@@ -29,7 +32,7 @@ from .vtable_util import _bin_to_rust, _find_virtual_in
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
 from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT, UPCASTS_SLOT as _INTERFACE_UPCASTS_SLOT
-from ..type_map import interface_signature_views as _interface_signature_views
+from ..type_args import interface_signature_views as _interface_signature_views
 from ..instr.coerce import _parse_field_ref
 from ..instr.coerce import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 
@@ -47,7 +50,7 @@ def _adapt_interface_method(method, ci, iface_bin: str, views: dict):
     """接口方法体展开到实现类 ci：所属类换成 ci，泛型签名（方法 / 局部变量）里的接口类型变量
     换成 ci 视角下的类型实参。"""
     import copy as _copy_adapt
-    from ..type_map import substitute_signature_type_vars as _subst
+    from ..sig_parse import substitute_signature_type_vars as _subst
     adapted = _copy_adapt.copy(method)
     adapted.class_name = ci.name
     view = views.get(iface_bin)
@@ -70,7 +73,7 @@ def _override_vtable_erasure(m, ci, registry) -> list[str]:
     「同名同描述符方法在祖先声明中的泛型签名」提及祖先形参为准。"""
     if not registry:
         return []
-    from ..type_map import parse_method_param_types
+    from ..sig_parse import parse_method_param_types
     # 声明祖先：沿超类链找 virtual_in 对应的类
     owner_bin = None
     cur = ci.super_class

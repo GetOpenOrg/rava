@@ -12,9 +12,11 @@
 
 from ..type_map import short_cls as _short_cls_g
 from ..types import ParsedMethod, ClassInfo
+from ..sig_parse import parse_field_type, parse_method_param_types
+from ..sig_types import method_sig_types
 from ..type_map import (
     jvm_to_rust, sig_type, rust_default, mangle_name, short_cls,
-    parse_method_param_types, method_sig_types, parse_field_type, parse_class_type_params,
+    parse_class_type_params,
 )
 from ..constants import safe_ident, PRIMITIVE_RUST_TYPES as _PRIM_TYPES
 from ..stack import StackSim
@@ -263,7 +265,7 @@ def gen_method_body(
 
     def _sim_infer_type_args(actual_short: str, declared_sig: str):
         from ..instr.coerce import _rust_type_to_binary
-        from ..type_map import infer_type_args_from_declared
+        from ..sig_types import infer_type_args_from_declared
         _actual_bin = _rust_type_to_binary(actual_short, registry)
         if not _actual_bin:
             return None
@@ -287,7 +289,7 @@ def gen_method_body(
                    infer_type_args=_sim_infer_type_args)
     _bounds_ci = registry.get(method.class_name) if registry else None
     if _bounds_ci is not None and _class_tparams:
-        from ..type_map import class_type_param_bounds
+        from ..type_args import class_type_param_bounds
         sim.type_var_bounds = {tv: b[0] for tv, b in class_type_param_bounds(_bounds_ci, registry).items()}
     # 记录参数和 this 的名字（在函数签名中已声明，无需提升）
     predeclared: set[str] = {name for name, _, _ in sim.locals.values()}

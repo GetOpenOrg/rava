@@ -6,9 +6,10 @@
 from ..type_map import short_cls as _short_cls_g
 import re
 from ..constants import safe_ident as _safe_field, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, OBJECT_CLASS as _OBJECT_CLASS
+from ..sig_types import hierarchy_overloaded_names, method_name_is_mangled
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
-    mangle_name, hierarchy_overloaded_names, method_name_is_mangled,
+    mangle_name,
     BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
 )
 
@@ -911,7 +912,7 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
                 comment = f'{comment.split(":")[0]}:{_bridged[1]}'
             elif not target_ci.is_interface:
                 # 类链未声明该方法：只声明在接口上的成员（抽象类上调用接口抽象方法）
-                from ..type_map import interface_member_local_name as _iface_local
+                from ..sig_types import interface_member_local_name as _iface_local
                 _local = _iface_local(target_ci, mname, _call_desc_m.group(1), registry)
                 return _JAVA_RUST_RENAME.get(_local, _local)
     # 按 (name, descriptor) 判定：覆盖方法沿用 vtable 槽位所属祖先中的名字（与定义侧同源）

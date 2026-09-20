@@ -17,10 +17,10 @@ from .coerce import (
     _resolve_method_owner, _root_virtual_methods,
 )
 from ..type_map import parse_class_type_params as _parse_class_type_params
-from ..type_map import ancestor_vtable_args_by_short as _ancestor_vtable_args_by_short
-from ..type_map import (ancestor_type_args as _ancestor_type_args,
-                        effective_class_type_params as _effective_class_type_params,
-                        split_rust_type_args as _split_rust_type_args)
+from ..type_args import ancestor_vtable_args_by_short as _ancestor_vtable_args_by_short
+from ..type_args import (ancestor_type_args as _ancestor_type_args,
+                         split_rust_type_args as _split_rust_type_args)
+from ..type_map import effective_class_type_params as _effective_class_type_params
 from .invoke_sig import (receiver_type_arg_map, type_var_receiver_bound_view, _lookup_method_sig_params, _lookup_method_sig_ret, _erased_ret_is_type_var,
                          _coerce_arg, _split_type_args)
 

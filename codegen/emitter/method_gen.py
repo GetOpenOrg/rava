@@ -154,9 +154,11 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
                      registry: dict | None = None,
                      class_type_params: list | None = None) -> str:
     """为 native / abstract / stub 方法生成 panic! 存根。"""
+    from ..sig_parse import parse_method_param_types
+    from ..sig_types import method_sig_types
     from ..type_map import (
         jvm_to_rust, sig_type, parse_descriptor_params, parse_descriptor_return,
-        parse_class_type_params, effective_class_type_params, parse_method_param_types, method_sig_types,
+        parse_class_type_params, effective_class_type_params,
     )
     params = parse_descriptor_params(m.descriptor)
     ret    = parse_descriptor_return(m.descriptor)

@@ -6,7 +6,8 @@ Java 元数据注释生成：to_snake、pkg_from_java、访问标志字符串、
 from ..type_map import short_cls as _short_cls_g
 import re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
-from ..type_map import ancestor_type_args, rust_type_with_args, instance_field_rust_name
+from ..sig_types import instance_field_rust_name
+from ..type_args import ancestor_type_args, rust_type_with_args
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
 # Access flags
@@ -204,7 +205,7 @@ def _root_method_vtable_owner(ci: ClassInfo, registry: 'dict | None',
     """本类视角下根类虚方法 `sig`（toString / hashCode / equals）所属 vtable 的 Rust 类名；
     链上无声明、声明是 wrapper 上的手写 inherent 方法、或方法名带重载后缀则 None。"""
     from .vtable_util import _find_virtual_in
-    from ..type_map import method_name_is_mangled
+    from ..sig_types import method_name_is_mangled
     cur = ci
     seen: set[str] = set()
     while cur is not None and cur.name not in seen:

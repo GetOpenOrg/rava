@@ -6,17 +6,19 @@ import re as _re_g
 from ...stack import BOOL, _clone_moved_var
 from ...rs_ir import Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed
 from ...render import render_expr, render_type
+from ...sig_parse import parse_field_type as _parse_field_type
+from ...sig_types import instance_field_rust_name as _instance_field_rust_name
+from ...type_args import (
+    ancestor_type_args as _ancestor_type_args,
+    class_type_param_bounds as _class_type_param_bounds,
+    outer_ref_field_type as _outer_ref_field_type,
+    split_rust_type_args as _split_rust_type_args,
+    substitute_type_params as _substitute_type_params,
+)
 from ...type_map import (
     jvm_to_rust,
     parse_class_type_params as _parse_class_type_params,
-    parse_field_type as _parse_field_type,
     effective_class_type_params as _effective_class_type_params,
-    outer_ref_field_type as _outer_ref_field_type,
-    class_type_param_bounds as _class_type_param_bounds,
-    instance_field_rust_name as _instance_field_rust_name,
-    ancestor_type_args as _ancestor_type_args,
-    split_rust_type_args as _split_rust_type_args,
-    substitute_type_params as _substitute_type_params,
 )
 from ...constants import safe_ident as _safe_ident, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import (

@@ -29,10 +29,10 @@ from dataclasses import dataclass, field
 
 from .. import inherited_calls
 from ..constants import OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
-from ..type_map import (ancestor_type_args, effective_class_type_params,
-                        implemented_interface_views,
-                        interface_member_local_name,
-                        short_cls, substitute_type_params, superinterface_type_args)
+from ..sig_types import interface_member_local_name
+from ..type_args import (ancestor_type_args, implemented_interface_views,
+                         substitute_type_params, superinterface_type_args)
+from ..type_map import effective_class_type_params, short_cls
 from .attrs import to_snake
 
 # 类文本中的两个插入位（整行），由 resolve_inherited_members 统一替换

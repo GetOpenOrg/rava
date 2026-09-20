@@ -27,8 +27,8 @@ from .. import inherited_calls
 from ..constants import OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
 import sys
 
-from ..type_map import (effective_class_type_params, short_cls, substitute_type_params,
-                        superinterface_type_args)
+from ..type_args import substitute_type_params, superinterface_type_args
+from ..type_map import effective_class_type_params, short_cls
 from .inherited_gen import (ClassEmission, EmittedMethod, IMPORTS_SLOT, MEMBERS_SLOT,
                             _imports_for, _USE_RE, class_use_path, type_arg_uses)
 
