@@ -46,6 +46,7 @@ fn main() {
 
     let hierarchy = scan_class_hierarchy(src_dir);
     write_hierarchy_table(&hierarchy);
+    write_direct_super_table(&scan_direct_super(src_dir));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
@@ -159,6 +160,50 @@ fn scan_class_hierarchy(src_dir: &Path) -> BTreeMap<String, String> {
         }
     }
     result
+}
+
+/// 类 → 直接父类（java_class! 块的 super_class 属性；接口无 super_class 属性）。
+/// 消费方：Class.getSuperclass（class_impl.rs）。
+fn scan_direct_super(src_dir: &Path) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    if !src_dir.exists() { return result; }
+    for path in walk_rs_files(src_dir) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+            }
+            if let Some(sup) = extract_attr_padded(trimmed, "super_class") {
+                if !current.is_empty() && !sup.is_empty() {
+                    result.insert(current.clone(), sup);
+                }
+            }
+        }
+    }
+    result
+}
+
+fn write_direct_super_table(entries: &BTreeMap<String, String>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：类 → 直接父类表（binary name → super_class 属性）。
+         // 数据源：java_class! 块的 super_class 属性（接口无该属性，天然缺席）。
+         // 消费方：Class.getSuperclass（class_impl.rs）。请勿手改。
+
+         pub static CLASS_DIRECT_SUPER: &[(&str, &str)] = &[
+",
+    );
+    for (name, sup) in entries {
+        out.push_str(&format!("    ({:?}, {:?}),\n", name, sup));
+    }
+    out.push_str("];
+");
+    let path = Path::new(&out_dir).join("direct_super_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 direct_super_table.rs 失败: {e}");
+    }
 }
 
 fn write_hierarchy_table(entries: &BTreeMap<String, String>) {

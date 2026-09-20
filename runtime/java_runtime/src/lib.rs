@@ -112,6 +112,20 @@ pub fn lookup_constant(binary_name: &str, constant_name: &str) -> Option<Object>
     })
 }
 
+/// 按类名取常量宇宙（JDK `JavaLangAccess.getEnumConstantsShared` 的数据面）：
+/// 返回该类登记的全部常量，登记序 == 字段声明序（枚举常量即 ordinal 序）。
+/// 类未登记 → None；任一常量取值失败 → None。取值闭包经访问器触发类初始化，
+/// 已初始化类（枚举宇宙的常态消费方）直接命中。
+pub fn constant_directory_universe(binary_name: &str) -> Option<Vec<Object>> {
+    CONSTANT_DIRECTORY.with(|dir| {
+        let dir = dir.borrow();
+        dir.get(binary_name)?
+            .iter()
+            .map(|(_, get)| get().ok())
+            .collect::<Option<Vec<Object>>>()
+    })
+}
+
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 pub mod prelude {
     #![allow(unused_imports)]
@@ -126,7 +140,7 @@ pub mod prelude {
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;
-    pub use super::{register_constant_directory, lookup_constant};
+    pub use super::{register_constant_directory, lookup_constant, constant_directory_universe};
     pub use std::rc::Rc;
     pub use std::cell::RefCell;
     pub use super::MutexHolder;

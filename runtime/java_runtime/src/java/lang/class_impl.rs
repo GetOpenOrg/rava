@@ -81,6 +81,22 @@ impl Class {
         Ok(Clone::clone(&self.__get_name()))
     }
 
+    /// native `Class.getSuperclass()`：直接父类的 Class 对象。
+    ///
+    /// 查询经 build.rs 从 `java_class!` 的 super_class 属性生成的直接父类表
+    /// （与 isAssignableFrom 的层次表同源）。Object 自身 / 接口 / 基本类型 /
+    /// 未登记类（闭包外、数组）→ null（JLS 对接口与 Object 返回 null 的语义）。
+    #[jvm_native]
+    pub fn getSuperclass(&self) -> Result<Class> {
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        match __direct_super::CLASS_DIRECT_SUPER.iter().find(|(n, _)| *n == name) {
+            // for_class 的缓存键是斜线形态（与 ldc 类字面量同一调用形态）——身份语义
+            //（`zuper == Enum.class`）依赖同一缓存条目
+            Some((_, sup)) => Ok(Class::for_class(String::from(*sup))),
+            None => Ok(Class::default()),
+        }
+    }
+
     /// `Class.getSimpleName()`：简单名。顶层类取最后一个 `.` 之后的段，
     /// 嵌套类再取最后一个 `$` 之后的段（JDK getSimpleBinaryName 的常见形态）；
     /// 数组 / 匿名类等罕见形态按现状原样返回，按需再补。
@@ -104,4 +120,9 @@ impl Class {
 /// build.rs 生成的类层次表（OUT_DIR/hierarchy_table.rs，含模块级 static）。
 mod __hierarchy {
     include!(concat!(env!("OUT_DIR"), "/hierarchy_table.rs"));
+}
+
+/// build.rs 生成的直接父类表（OUT_DIR/direct_super_table.rs）。
+mod __direct_super {
+    include!(concat!(env!("OUT_DIR"), "/direct_super_table.rs"));
 }

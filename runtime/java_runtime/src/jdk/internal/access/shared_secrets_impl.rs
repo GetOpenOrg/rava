@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use super::shared_secrets::SharedSecrets;
+use super::java_lang_access_impl::SystemJavaLangAccess;
 use std::cell::RefCell;
 
 // SharedSecrets 的 static 槽位：各公开 API 类在自己的 <clinit> 里登记访问器实例。
@@ -7,6 +8,7 @@ use std::cell::RefCell;
 thread_local! {
     static JAVA_IO_FILE_DESCRIPTOR_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_IO_PRINT_STREAM_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JAVA_LANG_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
 }
 
 impl SharedSecrets {
@@ -34,5 +36,23 @@ impl SharedSecrets {
     #[jvm_boundary]
     pub fn getJavaIOPrintStreamAccess() -> Result<Object> {
         Ok(JAVA_IO_PRINT_STREAM_ACCESS.with(|slot| slot.borrow().clone()).unwrap_or_default())
+    }
+
+    #[jvm_boundary]
+    pub fn setJavaLangAccess(jla: Object) -> Result<()> {
+        JAVA_LANG_ACCESS.with(|slot| *slot.borrow_mut() = Some(jla));
+        Ok(())
+    }
+
+    /// JDK 中由 `System.<clinit>` → `setJavaLangAccess()` 登记 `System$JavaLangAccess`
+    /// 实例；`System` 的 `<clinit>` 翻译未覆盖该内部类构造（边界截断），此处槽位
+    /// 为空时直接构造登记——首次取用即生效，与 JDK「初始化后必有实例」的语义一致。
+    #[jvm_boundary]
+    pub fn getJavaLangAccess() -> Result<Object> {
+        if JAVA_LANG_ACCESS.with(|slot| slot.borrow().is_none()) {
+            let obj = Object::from(SystemJavaLangAccess);
+            JAVA_LANG_ACCESS.with(|slot| *slot.borrow_mut() = Some(obj));
+        }
+        Ok(JAVA_LANG_ACCESS.with(|slot| slot.borrow().clone()).unwrap_or_default())
     }
 }
