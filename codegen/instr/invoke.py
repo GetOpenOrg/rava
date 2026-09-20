@@ -462,7 +462,9 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                     # super(...)：以已构造好的父类值重建 this（宏的 __new_with_super）。
                     # JVM 校验器保证 <init> 的 invokespecial 只指向直接父类或同类，
                     # 所以这里恒为 1 层，不需要按层数拼 _super 路径。
-                    sim.emit(RawStmt(f"this = Self::__new_with_super({ctor_call}?);"))
+                    # 旧 this 一并传入：javac 可能在 super() 之前 putfield 本类字段
+                    # （如内部类的 this$0），重建必须保留这些已赋值（G-11）。
+                    sim.emit(RawStmt(f"this = Self::__new_with_super({ctor_call}?, this);"))
                 else:
                     # 同类构造器委托 this(args)：直接替换 this（初始占位值丢弃）
                     sim.emit(RawStmt(f"this = {ctor_call}?;"))

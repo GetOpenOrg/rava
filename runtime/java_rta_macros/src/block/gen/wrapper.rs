@@ -482,9 +482,36 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 });
             }
         }
+        // 本类自有字段从旧 this 保留（G-11）：javac 21 对内部类构造器的
+        // `putfield this$N` 先于 `invokespecial super.<init>`，重建若按
+        // Default::default() 会把已赋字段抹掉 → 后续解引用 NPE（TestVar 的
+        // TreeMap$EntrySet 实证）。存储形态与本类声明一致。
+        for (name, _ty) in ctx.fields {
+            let get = format_ident!("__get_{}", name);
+            if ctx.is_erased(name) {
+                field_inits.push(quote! {
+                    #name: ::std::rc::Rc::new(::std::cell::RefCell::new(
+                        ::std::option::Option::Some(::std::boxed::Box::new(
+                            ::std::convert::Into::<Object>::into(old.#get())))
+                    )),
+                });
+            } else if ctx.basic_names.contains(&name.to_string()) {
+                field_inits.push(quote! {
+                    #name: ::std::rc::Rc::new(::std::cell::Cell::new(old.#get())),
+                });
+            } else {
+                field_inits.push(quote! {
+                    #name: ::std::rc::Rc::new(::std::cell::RefCell::new(
+                        ::std::option::Option::Some(::std::boxed::Box::new(old.#get()))
+                    )),
+                });
+            }
+        }
         quote! {
             #[doc(hidden)]
-            pub fn __new_with_super(parent: #sup_ty) -> Self {
+            #[allow(unused_variables)]
+            pub fn __new_with_super(parent: #sup_ty, old: Self) -> Self {
+                let _ = &old;
                 let inner = #inner_ident {
                     #(#field_inits)*
                     ..::std::default::Default::default()
