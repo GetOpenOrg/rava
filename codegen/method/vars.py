@@ -129,7 +129,7 @@ def _merged_slot_type(entries: list, name: str, start: int, end: int, registry=N
             seen.append(rendered)
     if len(seen) < 2:
         return None
-    from ..instr.coerce import _common_ref_type_widening
+    from ..instr.hierarchy import _common_ref_type_widening
     common = seen[0]
     for other in seen[1:]:
         common = _common_ref_type_widening(common, other, registry)

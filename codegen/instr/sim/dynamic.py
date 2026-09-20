@@ -6,8 +6,9 @@ from ...sig_types import method_sig_types
 from ...type_map import (jvm_to_rust, parse_descriptor_params, parse_descriptor_return, short_cls,
                          effective_class_type_params)
 from ..invoke import _gen_string_concat, _static_call_turbofish
-from ..coerce import (lambda_impl_rust_name, LAMBDA_NAME_LEDGER, _coerce_to_object,
-                      _reinstantiate_generic, _PRIMITIVE_RUST_TYPES)
+from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
+from ..coerce import _coerce_to_object, _reinstantiate_generic
+from ..member_naming import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 
 
 def sim_dynamic(ins, sim, class_name, registry) -> bool:

@@ -198,7 +198,7 @@ def collect_referenced(ci, registry, generated_classes) -> set[str]:
     # 收集 invokeinterface/invokevirtual 调度分支中引用的子类型
     # （dispatch 链 downcast_ref::<SubType>() 需要 SubType 在作用域内）
     if registry:
-        from ..instr.coerce import _get_all_subtypes_ordered as _gaso
+        from ..instr.hierarchy import _get_all_subtypes_ordered as _gaso
         from ..type_map import is_jdk as _is_jdk
         _iface_refs: set[str] = set()
         for _m in _scan_methods:
@@ -353,8 +353,8 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
     # 需导入该函数所在模块（包括 JDK 父类，如 AbstractStringBuilder）。
     if not ci.is_interface:
         import re as _re2
-        from ..instr.coerce import parse_method_ref as _pmr
-        from ..instr.coerce import _method_ref_binary_class as _mrbc_imp
+        from ..instr.member_owner import parse_method_ref as _pmr
+        from ..instr.member_naming import _method_ref_binary_class as _mrbc_imp
         for _m in ci.methods:
             # 只为在调用链上（有实际方法体）的方法生成 __base 函数导入
             # stub 方法的字节码中有 invokespecial 但不会实际调用，不需要 cross-import
@@ -379,8 +379,8 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                 _orig_cls = _orig_cls.split('.')[0] if '.' in _orig_cls else _orig_cls
                 # JVM 方法解析：常量池类未声明时，__base 函数属于最近的祖先声明者
                 # （与 invoke.py 的 invokespecial 调用点同源）
-                from ..instr.coerce import (
-                    _resolve_special_method_owner as _rsmo, _method_ref_descriptor as _mrd)
+                from ..instr.member_owner import _resolve_special_method_owner as _rsmo
+                from ..instr.member_naming import _method_ref_descriptor as _mrd
                 _orig_cls = _rsmo(_orig_cls, _mname_s, _mrd(_c), registry)
                 _cls_s = _short_cls_g(_orig_cls)
                 _is_jdk = '/' in _orig_cls
@@ -396,7 +396,7 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                     # 解析后的声明者仍未声明该方法（祖先链超出 registry）→ 无 __base 函数可导入
                     if registry and _orig_cls in registry:
                         _anc_ci = registry[_orig_cls]
-                        from ..instr.coerce import class_inherits_default_method as _cidm
+                        from ..instr.member_owner import class_inherits_default_method as _cidm
                         if (not any(am.name == _mname_s for am in _anc_ci.methods)
                                 and not _cidm(_orig_cls, _mname_s, _mrd(_c), registry)):
                             continue
@@ -413,9 +413,9 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                     # user class parent method
                     _base_cls_simple = _orig_cls.replace('$', '_')
                     _base_mod = to_snake(_orig_cls)
-                from ..instr.coerce import _mangle_if_overloaded as _mio
+                from ..instr.member_naming import _mangle_if_overloaded as _mio
                 _rust_mname_s = _mio(_cls_s, _mname_s, _c, registry)
-                from ..instr.coerce import _safe_field as _sf
+                from ..constants import safe_ident as _sf
                 _rust_mname_s = _sf(_rust_mname_s)
                 _base_fn = f"{_base_cls_simple}__{_rust_mname_s}_base"
                 _bkey = f"crate::{_base_mod}::{_base_fn}"

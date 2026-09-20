@@ -21,12 +21,11 @@ from ...type_map import (
     effective_class_type_params as _effective_class_type_params,
 )
 from ...constants import safe_ident as _safe_ident, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
-from ..coerce import (
-    _parse_field_ref, _coerce_to_object, _coerce_from_null, _coerce_value,
-    _is_subtype, _rust_type_to_binary, _get_field_generic_signature,
-    _PRIMITIVE_RUST_TYPES, _into_super_chain, _resolve_static_field_owner,
-    _reinstantiate_generic,
-)
+from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
+from ..coerce import _coerce_to_object, _coerce_from_null, _coerce_value, _reinstantiate_generic
+from ..hierarchy import _is_subtype, _rust_type_to_binary, _into_super_chain
+from ..member_owner import _get_field_generic_signature, _resolve_static_field_owner
+from ..member_naming import _parse_field_ref
 from ..invoke import _gen_invokespecial
 from ..invoke_sig import type_var_receiver_bound_view
 

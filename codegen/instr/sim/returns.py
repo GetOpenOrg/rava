@@ -2,7 +2,9 @@
 
 from ...rs_ir import RawStmt
 from ...render import render_expr, render_type
-from ..coerce import _coerce_to_object, _coerce_value, _is_subtype, _into_super_chain, _PRIMITIVE_RUST_TYPES
+from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
+from ..coerce import _coerce_to_object, _coerce_value
+from ..hierarchy import _is_subtype, _into_super_chain
 
 import re as _re_ret
 from .control import _erased_shape

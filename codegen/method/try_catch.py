@@ -164,7 +164,7 @@ def _throwable_root(registry: dict) -> str:
 
 def _binding_type(clause: CatchClause, registry: dict) -> str:
     from ..type_map import short_cls
-    from ..instr.coerce import _common_ref_type
+    from ..instr.hierarchy import _common_ref_type
     if clause.is_catch_any or not clause.catch_types:
         return short_cls(_throwable_root(registry))
     lub = short_cls(clause.catch_types[0])

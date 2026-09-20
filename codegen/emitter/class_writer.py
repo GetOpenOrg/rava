@@ -30,8 +30,8 @@ from .field_gen import _resolve_field_rust, _resolve_anc_field_rust
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
 from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT, UPCASTS_SLOT as _INTERFACE_UPCASTS_SLOT
-from ..instr.coerce import _parse_field_ref
-from ..instr.coerce import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
+from ..instr.member_naming import _parse_field_ref
+from ..instr.member_naming import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 
 _safe_field_name = safe_ident
 
@@ -169,7 +169,7 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
         and m.name not in ('<init>', '<clinit>')
     ]
     # 接口重声明的 Object 公开方法（如 Comparator.equals）经 Object vtable 分派，不进接口 vtable
-    from ..instr.coerce import _root_virtual_methods
+    from ..instr.member_owner import _root_virtual_methods
     _root_method_keys = _root_virtual_methods() if _is_iface else set()
     for m in emitted_methods:
         if m.name == '<clinit>':
@@ -253,8 +253,10 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
             # 含 `Iface.super.m()`（invokespecial 常量池类为接口）的 default 体不落到
             # 接口载体：其展开成员（`Owner_super_m`）建模在实现类，载体上下文不存在。
             # 判定与调用侧（invoke.py invokespecial）同源：_resolve_interface_special_target。
-            from ..instr.coerce import (
+            from ..instr.member_owner import (
                 _resolve_interface_special_target as _rist_dm,
+            )
+            from ..instr.member_naming import (
                 _method_ref_binary_class as _mrbc_dm,
                 _method_ref_descriptor as _mrd_dm,
             )
@@ -515,12 +517,14 @@ def _emit_interface_special_members(ci, registry, call_chain, stub_bodies,
     # 以非虚成员 `Iface_super_m` 展开到本类；展开出的方法体自身的同类调用递归处理。
     if registry and not ci.is_interface and not stub_bodies:
         import copy as _copy_sp
-        from ..instr.coerce import (
+        from ..instr.member_owner import (
             _resolve_interface_special_target as _rist,
             interface_special_member_name as _ismn,
+            parse_method_ref as _pmr_sp,
+        )
+        from ..instr.member_naming import (
             _method_ref_binary_class as _mrbc,
             _method_ref_descriptor as _mrd_sp,
-            parse_method_ref as _pmr_sp,
         )
         _sp_sources: list = [
             _m for _m in visible_methods

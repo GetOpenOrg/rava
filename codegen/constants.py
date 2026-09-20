@@ -40,6 +40,12 @@ RUNTIME_JAVA_RUNTIME = _os.path.join(RUNTIME_DIR, 'java_runtime')
 RUNTIME_MACROS_CRATE = _os.path.join(RUNTIME_DIR, 'java_rta_macros')
 
 
+# java_runtime 手写实现的短类名：这些类的方法名不经过 mangle（hand-written API 已定好名称）
+# System/PrintStream/String/Math/ArrayList/HashMap/HashSet/StringBuilder 由 jdk_classes 字节码翻译提供
+JAVA_RUNTIME_SHORT_NAMES: frozenset[str] = frozenset({
+    'Object',
+})
+
 # Rust 原生类型集合（不对应 Java 类，供 codegen 内部判断用）
 PRIMITIVE_RUST_TYPES: frozenset[str] = frozenset({
     'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64',

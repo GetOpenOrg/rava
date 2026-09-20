@@ -5,7 +5,8 @@ from ...stack import BOOL
 from ...rs_ir import Lit, RawExpr, RsNamed
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, short_cls, effective_class_type_params as _effective_class_type_params
-from ..coerce import _is_subtype, _rust_type_to_binary, _coerce_to_object
+from ..coerce import _coerce_to_object
+from ..hierarchy import _is_subtype, _rust_type_to_binary
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 
 

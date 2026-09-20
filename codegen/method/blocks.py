@@ -29,7 +29,7 @@ from ..cfg import (
 )
 from ..constants import PRIMITIVE_RUST_TYPES as _PRIM_TYPES
 from ..instr import sim_instr
-from ..instr.coerce import _common_ref_type
+from ..instr.hierarchy import _common_ref_type
 from ..render import render_expr, render_stmt, render_type
 from ..rs_ir import LetStmt, AssignStmt, RawExpr, RawStmt, RsNamed, Var
 from ..stack import BOOL, StackSim, _clone_moved_var

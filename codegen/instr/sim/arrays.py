@@ -6,7 +6,9 @@ from ...stack import I32, I64, F32, F64
 from ...rs_ir import Var, RawExpr, RawStmt, RsNamed, RsGeneric
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, NEWARRAY_TYPES
-from ..coerce import _to_i32, _coerce_to_object, _is_subtype, _PRIMITIVE_RUST_TYPES, _into_super_chain
+from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
+from ..coerce import _to_i32, _coerce_to_object
+from ..hierarchy import _is_subtype, _into_super_chain
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 
 

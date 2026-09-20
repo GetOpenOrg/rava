@@ -132,7 +132,7 @@ def _param_part(descriptor: str) -> str:
 
 def _bridge_real_descriptor(ci, name: str, descriptor: str, registry: dict) -> 'tuple[str, str] | None':
     """沿超类链找 (name, descriptor 形参) 命中的桥接方法 → (声明类, 真实方法描述符)。"""
-    from ..instr.coerce import _resolve_bridge_target
+    from ..instr.member_owner import _resolve_bridge_target
     hit = _resolve_bridge_target(ci, name, descriptor, registry)
     if hit is None:
         # 桥接方法的返回类型可能与接口声明不同（协变）：按形参匹配

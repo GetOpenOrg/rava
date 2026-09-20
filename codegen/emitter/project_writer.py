@@ -17,7 +17,7 @@ from .class_writer import _gen_class_rs
 from .inherited_gen import ClassEmission, resolve_inherited_members
 from .interface_gen import resolve_interface_impls, resolve_interface_inherited_members
 from .. import inherited_calls as _inherited_calls
-from ..instr.coerce import LAMBDA_NAME_LEDGER
+from ..instr.member_naming import LAMBDA_NAME_LEDGER
 
 
 _RUNTIME_JRT_SRC = os.path.join(_RUNTIME_JAVA_RUNTIME, 'src')

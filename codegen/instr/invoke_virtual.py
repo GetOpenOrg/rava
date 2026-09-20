@@ -7,14 +7,22 @@ from ..rs_ir import Lit, Var, RawExpr, RawStmt, RsNamed
 from ..render import render_expr, render_type
 from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
 from ..constants import safe_ident as _safe_field
-from .coerce import (
-    parse_method_ref, _coerce_to_object,
-    _mangle_if_overloaded, _resolve_bridge_target,
-    _PRIMITIVE_RUST_TYPES,
-    _JAVA_RUNTIME_SHORT_NAMES,
+from ..constants import (
+    PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES,
+    JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES,
+)
+from .coerce import _coerce_to_object
+from .hierarchy import (
     _rust_type_to_binary, _get_all_subtypes_ordered,
-    _find_method_super_prefix_for_type, _super_prefix_to_expr,
+    _super_prefix_to_expr,
+)
+from .member_owner import (
+    parse_method_ref,
     _resolve_method_owner, _root_virtual_methods,
+    _find_method_super_prefix_for_type,
+)
+from .member_naming import (
+    _mangle_if_overloaded, _resolve_bridge_target,
 )
 from ..type_map import parse_class_type_params as _parse_class_type_params
 from ..type_args import ancestor_vtable_args_by_short as _ancestor_vtable_args_by_short

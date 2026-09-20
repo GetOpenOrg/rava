@@ -32,7 +32,7 @@ from ..rs_ir import (
     RsNamed, RsPrimitive, RsType,
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
 )
-from ..instr.coerce import _is_subtype
+from ..instr.hierarchy import _is_subtype
 from .blocks import simulate_blocks
 from .emit import emit_tree
 from .vars import _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
@@ -256,7 +256,7 @@ def gen_method_body(
         return _is_subtype(child, parent, registry)
 
     def _sim_is_interface(short_name: str) -> bool:
-        from ..instr.coerce import _is_interface as _is_iface
+        from ..instr.hierarchy import _is_interface as _is_iface
         return _is_iface(short_name, registry)
 
     def _sim_box_object(expr_s: str, ty_s: str) -> str:
@@ -264,7 +264,7 @@ def gen_method_body(
         return _coerce_to_object(expr_s, ty_s, registry, _class_tparams, clone=False)
 
     def _sim_infer_type_args(actual_short: str, declared_sig: str):
-        from ..instr.coerce import _rust_type_to_binary
+        from ..instr.hierarchy import _rust_type_to_binary
         from ..sig_types import infer_type_args_from_declared
         _actual_bin = _rust_type_to_binary(actual_short, registry)
         if not _actual_bin:

@@ -20,18 +20,31 @@ from ..type_map import (
     effective_class_type_params as _effective_class_type_params,
 )
 from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
+from ..constants import (
+    PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES,
+    JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES,
+)
 from .coerce import (
-    parse_method_ref, _coerce_from_null, _coerce_to_object,
-    _coerce_value, _find_super_chain_to_class,
-    _find_method_super_prefix, _find_method_super_prefix_for_type,
-    _super_prefix_to_expr, _resolve_method_owner,
-    _mangle_if_overloaded, _class_known, _is_subtype, _rust_type_to_binary,
-    _method_ref_binary_class, _resolve_static_method_owner,
-    _method_ref_descriptor, _resolve_special_method_owner,
-    _resolve_interface_special_target, interface_special_member_name,
+    _coerce_from_null, _coerce_to_object,
+    _coerce_value,
+)
+from .hierarchy import (
+    _find_super_chain_to_class,
+    _super_prefix_to_expr, _is_subtype, _rust_type_to_binary,
     _get_all_subtypes_ordered,
-    _PRIMITIVE_RUST_TYPES,
-    _JAVA_RUNTIME_SHORT_NAMES,
+)
+from .member_owner import (
+    parse_method_ref,
+    _find_method_super_prefix, _find_method_super_prefix_for_type,
+    _resolve_method_owner,
+    _resolve_static_method_owner,
+    _resolve_special_method_owner,
+    _resolve_interface_special_target, interface_special_member_name,
+)
+from .member_naming import (
+    _mangle_if_overloaded, _class_known,
+    _method_ref_binary_class,
+    _method_ref_descriptor,
 )
 from .invoke_sig import (
     _registry_iface_shorts, _concrete_class_shorts, _downcast_target_valid,

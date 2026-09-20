@@ -3,7 +3,7 @@
 from ...stack import I32, I64, F32, F64
 from ...rs_ir import Var, RawExpr, RawStmt
 from ...render import render_expr
-from ..coerce import _parse_slot
+from ..member_naming import _parse_slot
 
 
 def sim_locals(ins, sim, class_name, registry) -> bool:

@@ -14,10 +14,8 @@ from ..type_args import class_type_param_bounds as _class_type_param_bounds
 from ..stack import _clone_moved_var
 from ..rs_ir import RawExpr, RsNamed
 from ..render import render_expr, render_type
-from .coerce import (
-    _rust_type_to_binary,
-    _JAVA_RUNTIME_SHORT_NAMES,
-)
+from ..constants import JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES
+from .hierarchy import _rust_type_to_binary
 
 def type_var_receiver_bound_view(sim, obj_expr, obj_ty):
     """有类上界的类型变量接收者（o: E，E extends B<E>）→ 上界类型视图 (expr, type)。
@@ -423,11 +421,12 @@ def _coerce_arg(
     actual:   实际栈顶类型字符串
     """
     from ..render import render_type as _rt
+    from ..constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
     from .coerce import (
         _coerce_from_null, _coerce_to_object,
-        _coerce_value, _is_subtype, _PRIMITIVE_RUST_TYPES, _into_super_chain,
-        _reinstantiate_generic,
+        _coerce_value, _reinstantiate_generic,
     )
+    from .hierarchy import _is_subtype, _into_super_chain
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
         return null_coerce

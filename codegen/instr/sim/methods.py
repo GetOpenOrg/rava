@@ -4,7 +4,8 @@ from ...rs_ir import Var, RawStmt, RsNamed
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
 from ...constants import PRIMITIVE_RUST_TYPES
-from ..coerce import _coerce_to_object, _method_ref_binary_class, _method_ref_descriptor
+from ..coerce import _coerce_to_object
+from ..member_naming import _method_ref_binary_class, _method_ref_descriptor
 from ..invoke import _gen_invokestatic, _gen_invokevirtual
 
 _ACC_VARARGS = 0x0080
