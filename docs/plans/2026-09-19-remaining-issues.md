@@ -84,7 +84,9 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 - **根因与依赖**：依赖 A-1（类 vtable 查询取代 downcast 链）、A-3（checkcast IR 化）、A-4（接口 carrier 进类型位置）、A-5（lambda 对象化）。
 - **终态**：上表全部为 0；checkcast 的可读形态为 `<T>::from(obj)` / `Into::<T>::into(obj)`，接口调用为 `it.hasNext()`。
 
-### A-3 checkcast / instanceof 仍是字符串形态 【P0】
+### A-3 checkcast / instanceof 仍是字符串形态 【已修复，R10 轮】
+
+> **R10 轮已修复**（6a6e22c 合入 main）：rs_ir 增 CastExpr（checked/unchecked/box_first）与 InstanceOfExpr 节点，渲染统一经 render_cast；运行时 `Object::try_cast` 失败返回 `Err(JvmError::class_cast)`（**S-1 随之落地**：checkcast CCE 可被 java_try 捕获，探针输出与 Java 逐字一致）；`_reinstantiate_generic` 4 处发射点归零删除；codegen `.downcast::<` 字符串发射 12→0。TestNestedGeneric 编译 2→0 且全量通过。K-6 的槽位签名模型未被 IR 顺带解决（makeSink 卡点仍在，独立推进）。
 
 - **现状**：R5-B 已把「合法的子类向下转换」改为 `<T>::from(Object)`（`ObjectVTable::__view_into`），R5-C 引入 `Object::checkcast`（复用 `__view_as`）。但 `.downcast::<T>()` 字符串形态仍被 `stack.py`（hint 重定向）、`fields.py`、`invoke_sig.py`、`codegen.py` 等 15+ 处模式匹配依赖；`downcast(&self)` 与 `into(self)` 所有权语义不同。instanceof 在「静态类型是目标祖先」时仍走静态判定而非运行时判定。
 - **Codegen 当前错误的三种 checkcast 生成形态**（实测触发，对应 e2e-issues C2 的 6 个用例）：
@@ -162,7 +164,8 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 
 ## S. JVM 语义缺口
 
-### S-1 失败的 checkcast 不抛 `ClassCastException` 【P1】
+### S-1 失败的 checkcast 不抛 `ClassCastException` 【已修复，R10 轮】
+随 A-3 落地（`Object::try_cast` 返回 Err，探针验证可捕获）。
 `downcast` 失败仍是 `expect("ClassCastException")`（进程 panic，不可被 Java `catch` 捕获）。`JvmError::class_cast` 已就绪。终态：全部失败路径返回 `Err(JvmError::class_cast(..))`，`expect("ClassCastException")` = 0。依赖 A-3。
 
 ### S-2 数组无法表示 `null` + 多维数组访问 API 缺失 【P1】
