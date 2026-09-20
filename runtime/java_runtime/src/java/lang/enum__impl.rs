@@ -15,6 +15,11 @@ impl<E: Clone + Default + 'static + From<Object> + Into<Object>> Enum<E> {
     /// E=子类自身）；泛型上下文里未精化的 `Enum::<Object>::valueOf` 无法构造
     /// 擦除实参的祖先视图（依赖存储层擦除，见计划 A-1），命中路径会抛
     /// ClassCastException。
+    ///
+    /// 错误路径构造的异常（Rust→Java 反向边）经 upcalls 属性声明，BFS 触达
+    /// 本方法时入队其翻译（原 vm_roots.txt 的无条件种子收窄为按需——valueOf
+    /// 未被调用的构建无需翻译这两个构造器）。
+    #[jvm_native(upcalls = "java/lang/NullPointerException.<init>:(Ljava/lang/String;)V java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
     pub fn valueOf(enumClass: Class, name: String) -> Result<Enum<E>> {
         let cls_name = format!("{}", enumClass.__get_name());
         if let Some(found) = lookup_constant(&cls_name, &format!("{}", name)) {

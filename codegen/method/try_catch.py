@@ -151,20 +151,15 @@ class TryCatchPlan:
 # ── catch 绑定 ──────────────────────────────────────────────────────────
 
 def _throwable_root(registry: dict) -> str:
-    """athrow 操作数的静态类型（catch-any 绑定类型）：从 VM 根清单里任一异常类
-    沿超类链上溯到根类之下的第一个类。不以字面量出现 JDK 类名。"""
-    from ..constants import OBJECT_CLASS
-    from ..transpile import _read_manifest
-    for line in _read_manifest('vm_roots.txt'):
-        cur = line.split('.', 1)[0]
-        seen = set()
-        while cur in registry and cur not in seen:
-            seen.add(cur)
-            parent = registry[cur].super_class
-            if not parent or parent == OBJECT_CLASS:
-                return cur
-            cur = parent
-    raise RuntimeError("vm_roots.txt 未提供可解析的异常类，无法确定 catch-any 的绑定类型")
+    """athrow 操作数的静态类型（catch-any 绑定类型）= Throwable。
+
+    此前借 vm_roots.txt 里的异常类沿超类链上溯定位（无字面量的权宜）——该清单
+    已删除（VM 依赖声明并入 error.rs 的 vm-upcalls）。现按 constants 的共享
+    常量直接取（与 OBJECT_CLASS / CLASS_CLASS 同一先例），registry 校验存在。"""
+    from ..constants import THROWABLE_CLASS
+    if THROWABLE_CLASS not in registry:
+        raise RuntimeError(f"catch-any 绑定类型 {THROWABLE_CLASS} 不在 registry，无法生成 catch 分派")
+    return THROWABLE_CLASS
 
 
 def _binding_type(clause: CatchClause, registry: dict) -> str:

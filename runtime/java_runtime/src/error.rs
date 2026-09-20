@@ -5,7 +5,11 @@
 //! VM 自身抛出的异常（空引用、数组越界、类初始化失败等）同样构造翻译后的 Java 异常对象，
 //! 因此 catch、`getMessage()`、未捕获报告对用户异常与 VM 异常完全一致。
 //!
-//! 本文件调用的已翻译构造器登记在 `runtime/java_runtime/vm_roots.txt`（VM 根方法清单）。
+//! 本文件直接调用的已翻译 Java 方法（Rust→Java 反向边，字节码不可见）在下方
+//! `vm-upcalls` 行声明，转译 BFS 以此为种子——声明在使用处，与 `_impl.rs` 的
+//! upcalls 属性机制同一形态（原独立清单 vm_roots.txt 已并入此处）。
+
+// vm-upcalls: java/lang/NullPointerException.<init>:()V java/lang/ArrayIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/IndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/StringIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/NegativeArraySizeException.<init>:(Ljava/lang/String;)V java/lang/ArithmeticException.<init>:(Ljava/lang/String;)V java/lang/ClassCastException.<init>:(Ljava/lang/String;)V java/lang/IllegalMonitorStateException.<init>:(Ljava/lang/String;)V java/lang/CloneNotSupportedException.<init>:(Ljava/lang/String;)V java/lang/OutOfMemoryError.<init>:(Ljava/lang/String;)V java/lang/NoClassDefFoundError.<init>:(Ljava/lang/String;)V java/lang/ExceptionInInitializerError.<init>:(Ljava/lang/Throwable;)V java/lang/Throwable.getMessage:()Ljava/lang/String;
 
 use crate::java::lang::{Object, ObjectVTable, String, Throwable};
 

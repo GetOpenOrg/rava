@@ -587,13 +587,30 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             _cls, _field = pending_static_fields.popleft()
             _enqueue_class_init(_static_field_owner(_cls, _field))
 
+    _VM_UPCALL_RE = re.compile(r'^//\s*vm-upcalls:\s*(.+)$')
+
     def _load_vm_roots() -> list[tuple[str, str, str]]:
-        """VM 根方法清单：手写运行时直接调用的已翻译方法（见清单文件头注释）。"""
+        """VM 基础设施的 Java 依赖种子（Rust→Java 反向边，不在任何字节码里）：
+        声明在使用处——error.rs 头部的 `// vm-upcalls:` 行，格式与 upcalls 属性
+        一致（空白分隔的 类.方法:描述符）。共置 _impl.rs 的反向边由
+        native_upcalls 的属性机制在被触达时按需入队；此处只收基础设施的
+        无条件种子（原独立清单 vm_roots.txt 已并入，机制统一）。"""
         _roots = []
-        for _line in _read_manifest('vm_roots.txt'):
-            _owner, _, _desc = _line.partition(':')
-            _cls, _, _meth = _owner.rpartition('.')
-            _roots.append((_cls, _meth, _desc))
+        _err_path = os.path.join(_RUNTIME_JAVA_RUNTIME, 'src', 'error.rs')
+        try:
+            with open(_err_path, encoding='utf-8') as _f:
+                for _line in _f:
+                    _m = _VM_UPCALL_RE.match(_line)
+                    if not _m:
+                        continue
+                    for _tok in _m.group(1).split():
+                        if '.' not in _tok or ':' not in _tok:
+                            continue
+                        _owner, _, _desc = _tok.partition(':')
+                        _cls, _, _meth = _owner.rpartition('.')
+                        _roots.append((_cls, _meth, _desc))
+        except OSError:
+            pass
         return _roots
 
     def _process(cls: str, meth: str, desc: str) -> None:

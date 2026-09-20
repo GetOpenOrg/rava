@@ -50,6 +50,7 @@ PRIMITIVE_RUST_TYPES: frozenset[str] = frozenset({
 OBJECT_CLASS = 'java/lang/Object'
 STRING_CLASS = 'java/lang/String'
 CLASS_CLASS = 'java/lang/Class'
+THROWABLE_CLASS = 'java/lang/Throwable'
 
 
 def scratch_pkg_version(out_dir: str) -> str:
