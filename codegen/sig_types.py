@@ -15,7 +15,8 @@ from .type_args import (ancestor_type_args, implemented_interface_views,
                         outer_instance_rust_type, substitute_type_params,
                         superclass_type_args)
 from .type_map import (_ACC_MANDATED, effective_class_type_params, jvm_to_rust,
-                       mangle_name, outer_instance_class, parse_descriptor_params)
+                       mangle_name, outer_instance_class, parse_descriptor_params,
+                       short_cls as _short_cls_g)
 
 
 _OVERLOAD_CACHE: dict[tuple, frozenset] = {}
@@ -272,6 +273,22 @@ def constructor_sig_types(ci, m, class_type_params: list[str], registry=None) ->
     return types if recovered else []
 
 
+def receiver_member_name(m_name: str, m_descriptor: str, recv_ci, registry) -> str:
+    """继承成员在接收者 wrapper 上的名字 = 接收者重载态下的 mangle 名（K-6）。
+
+    调用侧统一按接收者重载态命名（_mangle_if_overloaded ← 本函数的判定来源
+    hierarchy_overloaded_names 单调继承）。跨分支重载发散时（cancel()V 只存在于
+    一条祖先分支、cancel(Z)Z 只存在于另一条）接收者态与声明者态不同名：
+    wrapper 成员名必须取接收者态（调用点可解析），而 vtable 槽位名是声明者
+    trait 的成员名（声明者态），经 vtable_name 属性传给宏（槽位填充分派 /
+    wrapper UFCS 分派）。两态一致时（常态）二者同名为 mangle_name 结果或裸名；
+    Rust 关键词名（type / match 等）经 safe_ident 转义（type_），与调用侧
+    _safe_field 及定义侧 gen_method_body 的 safe_ident 同一约定。"""
+    if m_name in hierarchy_overloaded_names(recv_ci, registry):
+        return _safe_ident(mangle_name(m_name, m_descriptor))
+    return _safe_ident(m_name)
+
+
 def method_sig_types(ci, m, class_type_params: list[str], registry=None) -> tuple[list[str], str]:
     """方法在 Rust 侧的泛型签名类型（参数表, 返回类型）；([], '') 表示退回描述符擦除形态。
 
@@ -309,6 +326,87 @@ def method_sig_types(ci, m, class_type_params: list[str], registry=None) -> tupl
     mapping = dict(zip(root_tparams, root_args))
     return ([substitute_type_params(p, mapping) for p in params],
             substitute_type_params(ret, mapping) if ret else ret)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 发射签名单一来源（K-6）：方法最终写进 Rust impl 块的参数 / 返回类型串
+# ══════════════════════════════════════════════════════════════════════════════
+
+_SIG_TYPE_BUILTIN = frozenset({
+    'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
+    'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
+    'JArray',  # Rust 端数组包装，不对应 Java 类
+})
+
+_IFACE_SHORTS_CACHE: dict[int, frozenset[str]] = {}
+
+
+def registry_iface_shorts(registry: 'dict | None') -> frozenset[str]:
+    """registry 中所有接口的 Rust 短名（含 $→_ 替换），按 id(registry) 缓存。
+    方法签名中的接口类型按 T-2 擦除为描述符形态，判定依赖此集合。"""
+    if not registry:
+        return frozenset()
+    key = id(registry)
+    cached = _IFACE_SHORTS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    shorts = frozenset(
+        _short_cls_g(bin_name) for bin_name, ci in registry.items()
+        if getattr(ci, 'is_interface', False)
+    )
+    _IFACE_SHORTS_CACHE[key] = shorts
+    return shorts
+
+
+def sig_type_string_valid(sp: str, class_tparams, registry: 'dict | None') -> bool:
+    """generic_signature 派生的类型串是否可直接用于发射签名。
+    满足以下任一条件则有效：
+      1. sp 是类级类型参数（T/E/K/V 等）
+      2. sp 中所有标识符均为已知类型（内建 / 类级参数 / 注册表中存在 / 大写开头的 Java 类名）
+    大写开头名称视为合法 Java 短类名（可能由 glob import 引入），只拒绝
+    全小写且不在内建集合的标识符（如未知 Rust 语法符）。"""
+    if sp in class_tparams:
+        return True
+    import re as _re
+    for name in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', sp):
+        if name in _SIG_TYPE_BUILTIN or name in class_tparams:
+            continue
+        if registry and name in {_short_cls_g(k) for k in registry}:
+            continue
+        return False
+    return True
+
+
+def sig_type_string_is_iface(sp: str, registry: 'dict | None') -> bool:
+    """类型串的首个标识符是否为 registry 中的接口（T-2：方法签名中接口类型
+    擦除为描述符形态）。"""
+    m = re.match(r'^(\w+)(?:<|$)', sp)
+    return bool(m and m.group(1) in registry_iface_shorts(registry))
+
+
+def emitted_method_sig_types(ci, m, class_type_params: list, registry=None) -> tuple[list[str], str]:
+    """方法发射到 Rust impl 块的最终参数 / 返回类型串 —— gen_method_body 与
+    vtable 擦除名单（K-6）的单一来源。
+
+    method_sig_types 的结果逐位过滤：类型串无效或首标识符是接口 → 回退该位的
+    描述符形态（jvm_to_rust）；泛型签名缺失 / 参数位数不符 → 整体描述符形态。
+    vtable_erasure 条目按 token 全等匹配发射签名，必须与这里逐字一致。"""
+    sig_params, sig_ret = method_sig_types(ci, m, class_type_params, registry)
+    if sig_params and len(sig_params) == len(m.param_types):
+        jps = [jvm_to_rust(t, registry) for t in m.param_types]
+        params = [
+            sp if (sig_type_string_valid(sp, class_type_params, registry)
+                   and not sig_type_string_is_iface(sp, registry)) else jp
+            for sp, jp in zip(sig_params, jps)
+        ]
+    else:
+        params = [jvm_to_rust(t, registry) for t in m.param_types]
+    if sig_ret and sig_type_string_valid(sig_ret, class_type_params, registry) \
+            and not sig_type_string_is_iface(sig_ret, registry):
+        ret = sig_ret
+    else:
+        ret = jvm_to_rust(m.return_type, registry)
+    return params, ret
 
 
 # ══════════════════════════════════════════════════════════════════════════════

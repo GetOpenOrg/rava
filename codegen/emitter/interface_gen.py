@@ -28,9 +28,11 @@ from ..constants import OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KE
 import sys
 
 from ..type_args import substitute_type_params, superinterface_type_args
+from ..sig_types import receiver_member_name
 from ..type_map import effective_class_type_params, short_cls
 from .inherited_gen import (ClassEmission, EmittedMethod, IMPORTS_SLOT, MEMBERS_SLOT,
-                            _imports_for, _USE_RE, class_use_path, type_arg_uses)
+                            _imports_for, _USE_RE, class_use_path, type_arg_uses,
+                            resolve_bridge_member)
 
 # 类文本中的插入位（整行，位于 java_class! 块内、impl 块之后）
 IMPLS_SLOT = '//@@java_rta:interface-impls@@'
@@ -232,10 +234,21 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                             continue
                         owner_bin, method = hit
                         if owner_bin != recv_bin:
-                            if method.rust_name in own_names or method.rust_name in provided:
+                            # 成员最终名字的预测与 resolve_inherited_members 的生成
+                            # 顺序一致：桥接优先（JVM 方法解析顺序），其余按接收者
+                            # 重载态命名（与调用侧一致——跨分支重载发散时与声明者
+                            # 名不同）。预测错名 → 接口分派体调用不存在的成员（E0599）
+                            bridge = resolve_bridge_member(
+                                recv_ci, im.name, param_desc, registry, emissions, recv)
+                            recv_target = (bridge['member_name'] if bridge is not None
+                                           else receiver_member_name(
+                                               method.name, method.descriptor, recv_ci, registry))
+                            if recv_target in own_names or recv_target in provided:
                                 continue  # 与本类成员重名：继承成员无法声明
                             inherited_calls.request(recv_bin, im.name, param_desc)
-                        target = method.rust_name
+                            target = recv_target
+                        else:
+                            target = method.rust_name
                         located = method
                     attr_parts = [f'target = "{target}"'] if target != im.rust_name else []
                     if _result_reinstantiated(erased, own if own is not None else located):

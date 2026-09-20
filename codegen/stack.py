@@ -158,6 +158,10 @@ class StackSim:
         self.next_offset: int                        = 0    # 下一条指令偏移（store 后变量作用域起点）
         self._current_depth: int                     = 0
         self._slot_decl_depth: dict[int, int]        = {}  # slot → 首次声明时的嵌套深度
+        # slot → 当前绑定创建时的字节码偏移：区分「同一 Java 变量的再赋值」与
+        # 「javac 槽位复用（另一变量的首次赋值）」——同名不同声明区间的两个变量
+        # 共用槽位时（catch 变量 e 在多个 handler 间复用），后者必须 let 阴影
+        self._slot_bind_pos: dict[int, int]          = {}
         self.underflow_occurred: bool                = False  # 记录是否发生过栈下溢
         self.in_vtable_body: bool                    = in_vtable_body
         # 方法体用到的类型变量上界转换：类型变量 → 上界 Rust 类型。
@@ -573,6 +577,39 @@ class StackSim:
             # 用 let 阴影（shadowing）而非赋值，避免 Rust 类型不匹配
             # T68: slot 在内层作用域（depth > current）中首次声明时，在外层访问必须用 let
             if render_type(old_ty) != render_type(ty) or decl_depth > self._current_depth:
+                _bind_pos = self._slot_bind_pos.get(slot)
+                _same_var_decl = next((
+                    (_st, _en) for _st, _en, _nm, *_r in self._slot_decls.get(slot, ())
+                    if _st <= self.current_offset < _en and _safe_name(_nm) == name), None)
+                if (decl is not None and decl_name == name
+                        and _same_var_decl is not None
+                        and _bind_pos is not None
+                        # LVT 区间从初始化 store 的下一条指令开始（javac 约定），
+                        # 绑定创建点允许落在 start-1（初始化 store 偏移）
+                        and max(0, _same_var_decl[0] - 1) <= _bind_pos < _same_var_decl[1]
+                        and decl_depth <= self._current_depth
+                        and isinstance(old_ty, (RsNamed, RsGeneric))
+                        and getattr(old_ty, 'name', '') not in _SCALAR_TYPE_NAMES
+                        and getattr(old_ty, 'name', '') != '()'
+                        and isinstance(ty, (RsNamed, RsGeneric))
+                        and getattr(ty, 'name', '') not in _SCALAR_TYPE_NAMES):
+                    # 同一 Java 变量（当前绑定与本次存储落在同一 LVT 声明区间内）在
+                    # 原声明仍可见处存入渲染不同的引用类型（raw/通配实例化 ↔ 具体实例化
+                    # 的漂移，如 AbstractPipeline.wrapSink 的 `p = p.previousStage`：
+                    # 变量声明为具体实例化、字段是 Object 实参实例化）。JVM 槽位是
+                    # 函数级单一可变变量，let 阴影只在当前块内可见——循环体内赋值会在
+                    # 迭代间丢失（循环变量永不前进 → 死循环）。经 Object 边界按声明
+                    # 类型重建（From<Object> for X<A> 的擦除路径对任意实例化成立，
+                    # 保持对象标识；等价 Java 的 raw/unchecked 赋值），落回原变量赋值。
+                    # 引用类型间的家族不符会在 From<Object> 路径抛 CCE（checkcast 语义）。
+                    # 同名但跨声明区间（javac 槽位复用：多个 catch handler 的 e）
+                    # 不属于同变量 → 维持既有 let 阴影路径
+                    _src = render_expr(_clone_moved_var(expr, ty))
+                    self.stmts.append(AssignStmt(
+                        Var(name),
+                        RawExpr(f'<{render_type(old_ty)} as ::std::convert::From<Object>>'
+                                f'::from(Object::from({_src}))')))
+                    return
                 if (decl is None and render_type(old_ty) != render_type(ty)
                         and any(_safe_name(_d[2]) == name for _d in self._slot_decls.get(slot, ()))):
                     # 存储点不在该槽任何声明变量的作用域内、类型又与槽上已结束作用域的声明变量不同：
@@ -581,6 +618,7 @@ class StackSim:
                     name = f"local_{slot}"
                 self.locals[slot] = (name, ty, True)
                 self._slot_decl_depth[slot] = self._current_depth
+                self._slot_bind_pos[slot] = self.current_offset
                 value = _maybe_downcast(expr, ty) if src_is_object else expr
                 _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
                 let_ty = ty if (_is_default or force_let_ty) else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
@@ -601,6 +639,7 @@ class StackSim:
             name = decl_name or self._undeclared_slot_name(slot)
             self.locals[slot] = (name, ty, True)
             self._slot_decl_depth[slot] = self._current_depth
+            self._slot_bind_pos[slot] = self.current_offset
             value = _maybe_downcast(expr, ty) if src_is_object else expr
             # downcast 时让 Rust 推断类型；Default::default() 需保留类型注解；RsGeneric 也让 Rust 推断
             _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'

@@ -436,13 +436,18 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 };
                 let (vo_name, _vo_args) = split_type_name_args(&vo_ty);
                 let vo_trait = format_ident!("{}__VTable", vo_name);
+                // K-6：跨分支重载发散时成员名（接收者态）≠ 槽位名（声明者态）→
+                // UFCS 目标取 vtable_name 属性给出的 trait 成员名
+                let slot_name = attr_str(&f.attrs, "vtable_name")
+                    .map(|t| Ident::new(&t, proc_macro2::Span::call_site()))
+                    .unwrap_or_else(|| mname.clone());
                 // vtable 去形参（A-1）：两个 trait 均非泛型；被调方法签名已 Object 化 →
                 // 形参 / 返回值在边界转换（类型化 wrapper 方法 ↔ 擦除 vtable 分派），
                 // owner 类型形参位置（vtable_erasure 名集）一并装箱 / 还原
                 let erasure = erasure_set_of(f, &ctx.type_param_names);
                 let conv_args = erased_call_args_with(sig, &ctx.type_param_names, &erasure);
                 let call = quote! {
-                    <dyn #vtable_trait_ident as #vo_trait>::#mname(&*self.vtable, #(#conv_args),*)
+                    <dyn #vtable_trait_ident as #vo_trait>::#slot_name(&*self.vtable, #(#conv_args),*)
                 };
                 erased_call_ret_conv_with(sig, &ctx.type_param_names, &erasure, call)
             }
