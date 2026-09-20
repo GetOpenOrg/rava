@@ -90,6 +90,16 @@ pub trait ObjectVTable: 'static {
     #[doc(hidden)]
     fn __erased_inner(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
 
+    /// 擦除 vtable 导出（A-1 部件形态，与 `__erased_inner` 配对）：`slot` 是调用方
+    /// （`From<Object> for X<A>`，知道目标类 X）构造的 `Option<Rc<dyn X__VTable>>`。
+    /// 对象的运行时类是 X 或 X 的子类时，把自身 vtable 以 X 的擦除 vtable 形态填入
+    /// （类 vtable trait 非泛型、超类链是其 supertrait —— 子类 vtable 直接上转）。
+    /// 与 `__erased_inner` 导出的存储合成 `X<A>` 的任意实例化视图——「运行时类是本类
+    /// 子类 + 目标实例化非精确实参」的重建（如 `Enum::<Object>::from(枚举常量)`）。
+    /// 其余对象（基本类型、闭包、接口载体等）不填 `slot`。
+    #[doc(hidden)]
+    fn __erased_vtable(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
+
     /// 数组协变的元素赋值兼容探针（S-4）：receiver 是引用元素数组（JArray），`slot` 是
     /// 调用方（`From<Object> for JArray<T>`，知道目标元素类型 T）构造的 `Option<T>`。
     /// 本钩子以「源元素类型的探针对象」view_into 该 slot——祖先名单静态生成（与元素值

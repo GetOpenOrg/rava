@@ -278,11 +278,16 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
 /// `(T[]) obj` —— checkcast 到数组类型（见 `__view_into` / `__array_elem_assignable`）。
 ///
 /// null 通过任意数组类型的 checkcast（以目标形态的 null 还原）；同元素类型 / 已有视图
-/// 还原 / `Object[]` 上转走 `__view_into` 既有形态；其余引用元素数组按「目标元素类型
-/// 是源元素类型（运行时元素类型）自身或其祖先」判定，通过则以源数组的 Object 级协变
-/// 视图（存储擦除）重建 `JArray<T>`——读出按 T 重建视图、写入按源元素类型做存储检查。
-/// 判定失败抛 ClassCastException（JVMS §6.5 checkcast）。
-impl<T: Clone + Default + 'static> From<Object> for JArray<T> {
+/// 还原 / `Object[]` 上转走 `__view_into` 既有形态；其余引用元素数组先按「目标元素
+/// 类型是源元素类型（运行时元素类型）自身或其祖先」判定（协变上转）。上转不满足时
+/// 走泛型数组的擦除还原（对标 wrapper `From<Object>` 的 `is_instance_of` + 擦除重建
+/// 路径）：javac 对 `[TK;`（K 为类型变量）插入的 checkcast 目标是 K 的擦除（界类型），
+/// 运行时不做元素级检查——源静态元素类型是 T 的祖先形态时（如 `JArray<Enum<Object>>`
+/// 还原为 `JArray<K>`，K extends Enum<K>），按运行时元素判定（全部与 T 的 binary name
+/// 赋值兼容，或空数组 / 全 null）。两条路径都以源数组的 Object 级协变视图（存储擦除）
+/// 重建 `JArray<T>`——读出按 T 重建视图、写入按源元素类型做存储检查。判定失败抛
+/// ClassCastException（JVMS §6.5 checkcast）。
+impl<T: Clone + Default + From<Object> + Into<Object> + 'static> From<Object> for JArray<T> {
     fn from(obj: Object) -> Self {
         if obj.0.is_jvm_null() {
             return Self::default();
@@ -292,22 +297,42 @@ impl<T: Clone + Default + 'static> From<Object> for JArray<T> {
         }
         let mut elem_slot: Option<T> = None;
         if obj.0.__array_elem_assignable(&mut elem_slot) && elem_slot.is_some() {
-            // 元素访问经 Object 的数组 API（array_length / array_load_object /
-            // array_store_object）转发到源数组：读出在 JArray<T>::get 边界按 T 重建，
-            // 写入在源数组的协变视图闭包做存储检查（ArrayStoreException）
-            let origin = Clone::clone(&obj);
-            let (for_len, for_get, for_set) =
-                (Clone::clone(&origin), Clone::clone(&origin), Clone::clone(&origin));
-            return JArray(Rc::new(Repr::Covariant(CovariantView {
-                len: Rc::new(move || {
-                    for_len.array_length().expect("covariant view of non-null array")
-                }),
-                get: Rc::new(move |i| for_get.array_load_object(i)),
-                set: Rc::new(move |i, v| for_set.array_store_object(i, v)),
-                origin,
-            })));
+            return erased_object_view(obj);
+        }
+        if !Self::has_primitive_elements() {
+            let unused: Rc<dyn std::any::Any> = Rc::new(());
+            let mut erased: Option<JArray<Object>> = None;
+            obj.0.__view_into(unused, &mut erased);
+            if let Some(view) = erased {
+                let t_name = Into::<Object>::into(T::default()).0.__class_name();
+                let len = view.len().unwrap_or(0);
+                let compatible = (0..len).all(|i| match view.get(i) {
+                    Ok(e) => e.0.is_jvm_null() || e.0.is_instance_of(t_name),
+                    Err(_) => false,
+                });
+                if compatible {
+                    return erased_object_view(obj);
+                }
+            }
         }
         panic!("ClassCastException: {} cannot be cast to {}",
                obj.0.__class_name(), std::any::type_name::<Self>())
     }
+}
+
+/// 源数组的 Object 级协变视图：元素访问经 Object 的数组 API（array_length /
+/// array_load_object / array_store_object）转发到源数组——读出在 `JArray<T>::get`
+/// 边界按 T 重建（wrapper 经擦除路径，保持运行时类），写入在源数组的协变视图闭包
+/// 做存储检查（ArrayStoreException）。对象标识与源数组相同。
+fn erased_object_view<T: 'static>(origin: Object) -> JArray<T> {
+    let (for_len, for_get, for_set) =
+        (Clone::clone(&origin), Clone::clone(&origin), Clone::clone(&origin));
+    JArray(Rc::new(Repr::Covariant(CovariantView {
+        len: Rc::new(move || {
+            for_len.array_length().expect("covariant view of non-null array")
+        }),
+        get: Rc::new(move |i| for_get.array_load_object(i)),
+        set: Rc::new(move |i, v| for_set.array_store_object(i, v)),
+        origin,
+    })))
 }

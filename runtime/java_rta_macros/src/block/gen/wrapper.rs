@@ -131,6 +131,11 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 ObjectVTable::equals(&*self.vtable, other)
             }
         };
+        // 擦除 vtable 导出的祖先槽位（类祖先的 vtable trait 名；vtable 非泛型，
+        // 超类链是其 supertrait —— 子类 vtable 可直接上转）
+        let ancestor_vtable_idents: Vec<syn::Ident> = ctx.meta.all_superclasses.iter()
+            .map(|anc_name| format_ident!("{}__VTable", anc_name))
+            .collect();
         // 运行时类视图（A-1 后落在 wrapper 侧：Object 直接持有 wrapper，类型实参只在
         // wrapper 的 impl 上下文可见）：按 binary name 重建本类 / 任一祖先类型的 wrapper。
         // 祖先视图 = 宏生成的 From<Self> for Ancestor（vtable trait upcasting，保持运行时类）。
@@ -204,6 +209,28 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     {
                         *s = ::std::option::Option::Some(::std::rc::Rc::clone(&self.any));
                     }
+                }
+                /// 擦除 vtable 导出（A-1 部件形态）：按调用方 slot 的（擦除）类 vtable
+                /// 类型把自身 vtable 填入——自身槽位直取；祖先类槽位经 supertrait 上转
+                /// （类 vtable trait 非泛型，与类型实参无关）。与 `__erased_inner` 配对，
+                /// 供 `From<Object> for X<A>` 重建「运行时类是本类或其子类」的任意实例化视图。
+                fn __erased_vtable(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
+                    if let ::std::option::Option::Some(s) =
+                        slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #vtable_trait_ident>>>()
+                    {
+                        *s = ::std::option::Option::Some(::std::rc::Rc::clone(&self.vtable));
+                        return;
+                    }
+                    #(
+                        if let ::std::option::Option::Some(s) =
+                            slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #ancestor_vtable_idents>>>()
+                        {
+                            *s = ::std::option::Option::Some(
+                                ::std::rc::Rc::clone(&self.vtable)
+                                    as ::std::rc::Rc<dyn #ancestor_vtable_idents>);
+                            return;
+                        }
+                    )*
                 }
                 fn __view_as(
                     &self,
