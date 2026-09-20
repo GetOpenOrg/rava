@@ -10,7 +10,7 @@ from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMI
 from ..method import gen_method_body, _indent
 from ..cfg import CfgAuditError, STATS as _CFG_STATS
 from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names, method_name_is_mangled, instance_field_rust_name
-from ..type_map import (effective_class_type_params, ancestor_type_args, outer_ref_field_type,
+from ..type_map import (effective_class_type_params, ancestor_type_args,
                         rust_type_with_args as _rust_type_with_args)
 from ..constants import (safe_ident, OBJECT_CLASS as _OBJECT_CLASS,
                          PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, STRING_CLASS)
@@ -20,6 +20,8 @@ from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, _find_virtual_in
 from .import_gen import (collect_referenced, gen_cross_imports,
                          scan_used_vtable_imports)
+from .field_gen import (_resolve_field_rust, _resolve_anc_field_rust,
+                         _validate_field_type)
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
 from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT, UPCASTS_SLOT as _INTERFACE_UPCASTS_SLOT
@@ -206,47 +208,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         {_short_cls_g(_k) for _k in registry}
         if registry else set()
     )
-    # 基础内建类型，不需要注册表校验
-    # JArray 是 Rust 端数组包装类型，不对应 Java 类，须手动加入
-    _BUILTIN_TYPES = frozenset({
-        'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
-        'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell',
-        'usize', 'u8', 'JArray',
-    })
-    # Rust 结构符号，不是类型名，跳过校验
-    _RUST_TOKENS = frozenset({'', 'mut', 'dyn', 'static', 'impl'})
-
-    def _extract_type_names(rust_ty: str) -> list[str]:
-        """从 Rust 类型字符串中提取所有类型名（包含嵌套泛型参数中的类型）。"""
-        names: list[str] = []
-        current: list[str] = []
-        for ch in rust_ty:
-            if ch in ('<', '>', ',', ' ', '&', "'", '[', ']', ':'):
-                word = ''.join(current).strip()
-                if word:
-                    names.append(word)
-                current = []
-            else:
-                current.append(ch)
-        word = ''.join(current).strip()
-        if word:
-            names.append(word)
-        return names
-
-    def _validate_field_type(rust_ty: str, type_params: list[str]) -> bool:
-        """递归检查 rust_ty 中所有类型名是否可用（内建/类型参数/注册表中存在）。
-        若任何嵌套类型名未知，返回 False，调用方将回退到裸描述符类型。"""
-        # crate:: 全路径（_iface_full_path 生成，如 crate::java::util::Iterator）：
-        # 路径段 java/util/lang 不在内建集合里，但整体是有效引用，直接通过
-        import re as _re_fp
-        cleaned = _re_fp.sub(r'\bcrate(?:::\w+)+\b', 'Object', rust_ty)
-        for name in _extract_type_names(cleaned):
-            if name in _RUST_TOKENS:
-                continue
-            if name in _BUILTIN_TYPES or name in type_params or name in _registry_short_names:
-                continue
-            return False  # 有未知类型名，校验失败
-        return True
 
     # ── 父类 Rust 类型（含泛型实参）─────────────────────────────────────
     # 实参取自本类 Signature 的 SuperclassSignature，整条祖先链逐级代入
@@ -258,42 +219,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         parent_rust = _rust_type_with_args(short_cls(ci.super_class),
                                            _ancestor_args.get(ci.super_class, []))
 
-    def _outer_ref_field_rust(f, decl_params: list) -> str:
-        return outer_ref_field_type(f, decl_params, registry)
-
-    def _resolve_field_rust(f) -> str:
-        """字段的 Rust 类型：优先字段级 generic_signature（TE; → E），回退裸描述符。
-        generic_signature 解析为 Object，或引用了不存在的类型时，用描述符推断。"""
-        _outer_rust = _outer_ref_field_rust(f, class_type_params)
-        if _outer_rust:
-            return _outer_rust
-        gen_rust = (parse_field_type(f.generic_signature, class_type_params, registry)
-                    if f.generic_signature else '')
-        desc_rust = jvm_to_rust(f.descriptor, registry)
-        return (gen_rust
-                if gen_rust and gen_rust != 'Object'
-                and _validate_field_type(gen_rust, class_type_params)
-                else desc_rust)
-
-    def _resolve_anc_field_rust(f, anc_params: list, anc_map: dict) -> str:
-        """祖先字段的 Rust 类型：用祖先自己的 tparams 解析签名，再按 anc_map
-        （祖先形参 → 本类视角实参，与 parent_rust / all_superclasses 同源）代入。
-        否则父类字段变量（如 AbstractRepository<T> 的 tree: T）被子类 tparams
-        （['S']）解析成 Object，转发访问器 __set_tree(v: Object) 与父类
-        AbstractRepository<S> 的 __set_tree(v: S) E0308。"""
-        # this$N：与祖先自身 struct 的字段类型同规则（见 _outer_ref_field_rust），再代入实参
-        gen_rust = _outer_ref_field_rust(f, anc_params) or (
-            parse_field_type(f.generic_signature, anc_params, registry)
-            if f.generic_signature else '')
-        if gen_rust and gen_rust != 'Object' and _validate_field_type(gen_rust, anc_params):
-            if anc_map:
-                import re as _re_am
-                gen_rust = _re_am.sub(
-                    r'\b[A-Za-z_]\w*\b',
-                    lambda m: anc_map.get(m.group(0), m.group(0)),
-                    gen_rust)
-            return gen_rust
-        return jvm_to_rust(f.descriptor, registry)
 
     # ── 继承链字段展平（方案 §6）────────────────────────────────────────
     # codegen 侧展平整条继承链，父类字段在前；宏侧零 registry 依赖。
@@ -329,18 +254,21 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 if _sf_name in _declared:
                     continue
                 _declared.add(_sf_name)
-                _sf_view_ty = _resolve_anc_field_rust(_f, _anc_params, _anc_map)
+                _sf_view_ty = _resolve_anc_field_rust(
+                    _f, _anc_params, _anc_map, registry, _registry_short_names)
                 superclass_fields.append((_sf_name, _sf_view_ty))
                 # 祖先按类型变量声明（引用存储 + __borrow_mut 访问器）而本类视角代入成基本类型
                 # （Box<U>.state 在 `extends Box<Long>` 下是 i64）：存储形态由声明方决定，
                 # 宏须按引用字段实现祖先 VTable 的访问器
                 if (_sf_view_ty in _PRIMITIVE_RUST_TYPES and _resolve_anc_field_rust(
-                        _f, _anc_params, {_p: _p for _p in _anc_params}) not in _PRIMITIVE_RUST_TYPES):
+                        _f, _anc_params, {_p: _p for _p in _anc_params},
+                        registry, _registry_short_names) not in _PRIMITIVE_RUST_TYPES):
                     superclass_reference_fields.append(_sf_name)
                 # 声明方（祖先）按自身类型形参声明的字段 → 存储与访问器已被声明方的宏
                 # Object 化（A-1 擦除按声明类判定）——继承者的宏按名单同步擦除
                 _declared_ty = _resolve_anc_field_rust(
-                    _f, _anc_params, {_p: _p for _p in _anc_params})
+                    _f, _anc_params, {_p: _p for _p in _anc_params},
+                    registry, _registry_short_names)
                 if any(_re.search(r'\b' + _re.escape(_p) + r'\b', _declared_ty)
                        for _p in _anc_params):
                     superclass_erased_fields.append(_sf_name)
@@ -355,7 +283,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             if safe_fname in _super_field_names:
                 continue  # 父类已展平，不重复声明
             struct_lines.append("    " + _java_field_attr(f))
-            struct_lines.append(f"    pub {safe_fname}: {_resolve_field_rust(f)},")
+            struct_lines.append(
+                f"    pub {safe_fname}: "
+                f'{_resolve_field_rust(f, class_type_params, registry, _registry_short_names)},')
         # 未被字段引用的类型参数由宏补 PhantomData（block.rs），codegen 不再输出 _phantom
 
 
@@ -410,7 +340,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if sf.generic_signature:
             _gs_ret = parse_field_type(sf.generic_signature, class_type_params, registry)
             # 校验引用的类型存在，否则回退到描述符
-            if _gs_ret and _gs_ret != 'Object' and not _validate_field_type(_gs_ret, class_type_params):
+            if (_gs_ret and _gs_ret != 'Object'
+                    and not _validate_field_type(_gs_ret, class_type_params,
+                                                 _registry_short_names)):
                 _gs_ret = ''
             # static 字段不在类型参数作用域内（Java 同样禁止），引用类型变量时回退描述符
             if _gs_ret and any(_tp in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', _gs_ret)
