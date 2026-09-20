@@ -344,7 +344,9 @@ javac 21 对内部类的 `putfield this$0` 先于 `invokespecial super.<init>`�
 ### K-6 继承成员擦除缺口 【P1，K 系列发现】
 两类：协变返回覆盖的父槽位归属（`makeSink():S` 在子类生成 `virtual_in=self` 而非父槽 override）；祖先形参代入具体实参的签名位置（`PipelineHelper<P_OUT>` → `PipelineHelper<Integer>`）。泛化 `vtable_erasure` 的朴素尝试（描述符形态不同即擦除）引发 15 错误已回退——Python 侧需持有槽位签名的精确模型，与 A-3 的 CastExpr IR 化有交集。
 
-### S-17 pattern switch 的 typeSwitch bootstrap 未翻译 【P1，R8 triage 新增】
+### S-17 pattern switch 的 typeSwitch bootstrap 未翻译 【已修复，R10 轮】
+
+> **R10 轮已修复**（d2428cb 合入 main）：classfile 解析 `SwitchBootstraps.typeSwitch` 的 Class 常量标签序列（`tslabels:` 令牌），sim/dynamic 生成运行时 instanceof 链（null→-1、restart 下标守卫、未命中→labels.length）；guarded pattern 的回边重启与 `case X var` 的绑定分别由既有 CFG 结构化与 A-3 的 `try_cast` 自然承接。TestPatternMatch 输出逐字节一致（含 4 个 guarded 分支 + sealed MatchException 通路）；三个经典 switch 测试实测不经 typeSwitch、保持 PASS。**未支持归类**：Integer/String 常量标签（需 vtable 数值桥，macros 领域）、EnumDesc（CONSTANT_Dynamic）——保持可见 E0605 占位不静默。
 Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译为 `invokedynamic SwitchBootstraps.typeSwitch`；`sim/dynamic.py` 对非 LambdaMetafactory bootstrap 走 `Object::default()` 占位 → `Object as i32` E0605（TestPatternMatch）。终态：case 序编译为 instanceof 链（衔接 G-9 的运行时化）+ guard + target index。
 
 ### G-12 负整数字面量装箱缺括号 【已修复，R8 轮】
