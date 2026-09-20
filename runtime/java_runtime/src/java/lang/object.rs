@@ -38,7 +38,6 @@ pub trait ObjectVTable: 'static {
     fn getClass(&self) -> crate::error::Result<crate::java::lang::Class> {
         Ok(crate::java::lang::Class::for_class(
             crate::java::lang::String::from(self.__class_name()),
-            &[],
         ))
     }
 

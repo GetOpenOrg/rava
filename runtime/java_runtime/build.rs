@@ -1,10 +1,13 @@
-/// build.rs — 自动扫描生成的 .rs 文件，维护 native_status.toml
+/// build.rs — 自动扫描生成的 .rs 文件，维护 native_status.toml 与类层次表
 ///
 /// 职责：
 ///   1. 扫描 src/ 下所有 .rs 文件，提取 #[java_class] / #[java_native] 属性
 ///   2. 扫描 src/ 下 *_impl.rs 文件，对照已实现的方法（K-4 共置结构）
 ///   3. 更新 native_status.toml：implemented / needed / stub / not-needed
 ///   4. 打印 "needed" 状态的 native 方法清单（警告，不阻断构建）
+///   5. 从 java_class! 块的 all_supertypes 属性生成类层次表（OUT_DIR/
+///      hierarchy_table.rs），供 Class.isAssignableFrom 等运行时查询——
+///      层次数据只在 Rust 侧表达一份（来自 class 元数据），Python 侧不再推导
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -40,6 +43,9 @@ fn main() {
     }
 
     write_status(status_file, &new_status);
+
+    let hierarchy = scan_class_hierarchy(src_dir);
+    write_hierarchy_table(&hierarchy);
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
@@ -113,11 +119,72 @@ fn parse_native_comments(content: &str, out: &mut Vec<NativeMethod>) {
     }
 }
 
+/// 生成属性的键与 '=' 之间有对齐填充空格（`#[binary_name       = "..."]`），
+/// 此提取器容忍空白；键须以 `#[` 前缀出现，避免子串误配。
+fn extract_attr_padded(s: &str, key: &str) -> Option<String> {
+    let start = s.find(&format!("#[{}", key))?;
+    let rest = s[start + key.len() + 2..].trim_start();
+    let rest = rest.strip_prefix('=')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
 fn extract_attr(s: &str, key: &str) -> Option<String> {
     let pattern = format!("{} = \"", key);
     let start = s.find(&pattern)? + pattern.len();
     let end = s[start..].find('"')? + start;
     Some(s[start..end].to_owned())
+}
+
+/// 类层次表扫描：java_class! 块内的裸属性行（`#[binary_name = "..."]` 与
+/// `#[all_supertypes = "..."]` 各自独立成行，同一块内 binary_name 在前）。
+/// all_supertypes 以 ';' 分隔、含类自身（attrs._compute_all_supertypes）。
+fn scan_class_hierarchy(src_dir: &Path) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    if !src_dir.exists() { return result; }
+    for path in walk_rs_files(src_dir) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+            }
+            if let Some(supers) = extract_attr_padded(trimmed, "all_supertypes") {
+                if !current.is_empty() {
+                    result.insert(current.clone(), supers);
+                }
+            }
+        }
+    }
+    result
+}
+
+fn write_hierarchy_table(entries: &BTreeMap<String, String>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：类层次表（binary name → 全部超类型，含自身）。
+         // 数据源：java_class! 块的 all_supertypes 属性（class 元数据推导）。
+         // 消费方：Class.isAssignableFrom（class_impl.rs）。请勿手改。
+
+         pub static CLASS_HIERARCHY: &[(&str, &[&str])] = &[
+",
+    );
+    for (name, supers) in entries {
+        let items: Vec<String> = supers.split(';')
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("{:?}", s))
+            .collect();
+        out.push_str(&format!("    ({:?}, &[{}]),
+", name, items.join(", ")));
+    }
+    out.push_str("];
+");
+    let path = Path::new(&out_dir).join("hierarchy_table.rs");
+    if let Err(e) = fs::write(&path, out) {
+        eprintln!("build.rs: cannot write hierarchy table: {}", e);
+    }
 }
 
 fn scan_impls(src_dir: &Path) -> HashSet<String> {

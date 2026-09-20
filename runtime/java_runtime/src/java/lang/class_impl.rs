@@ -3,14 +3,6 @@ use super::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-// 类字面量携带的超类型闭包（点分名 → 超类型点分名列表）。
-// for_class 登记时写入，__impl_isAssignableFrom 查询；线程内生命周期与
-// Class 对象缓存（CLASSES）一致。
-thread_local! {
-    static SUPERTYPES: RefCell<HashMap<std::string::String, Vec<std::string::String>>> =
-        RefCell::new(HashMap::new());
-}
-
 impl Class {
     /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制无此需要。
     #[jvm_native]
@@ -40,13 +32,11 @@ impl Class {
     /// 的 Class 对象，首次请求时创建并在线程内缓存 —— 保证 `X.class == X.class`
     /// 的身份语义（JVMS §5.1 运行时常量池的类引用只解析一次）。
     ///
-    /// `supertypes` 是生成器静态推导的超类型闭包（父类链 + 全部接口，binary
-    /// name 形式），按点分名登记到下方 `SUPERTYPES` 侧表，供
-    /// `isAssignableFrom` 查询；数组与闭包外类传空切片。
-    ///
     /// `getName()` 返回 Java 形式的二进制名：斜线换点（`java/util/List` →
     /// `java.util.List`），数组类型保持 JVM 描述符形态（`[Ljava.lang.String;`）。
-    pub fn for_class(binary_name: String, supertypes: &[&str]) -> Class {
+    /// isAssignableFrom 的层次查询在运行时经 build.rs 生成的层次表进行，
+    /// 此处不再携带/登记超类型数据。
+    pub fn for_class(binary_name: String) -> Class {
         thread_local! {
             static CLASSES: RefCell<HashMap<std::string::String, Class>> =
                 RefCell::new(HashMap::new());
@@ -57,16 +47,6 @@ impl Class {
                 let mut c = Class::default();
                 c._init_not_null();
                 c.__set_name(String::from(key.replace('/', ".").as_str()));
-                SUPERTYPES.with(|t| {
-                    if !supertypes.is_empty() {
-                        t.borrow_mut().insert(
-                            std::string::String::from(key.replace('/', ".").as_str()),
-                            supertypes.iter()
-                                .map(|s| std::string::String::from(s.replace('/', ".")))
-                                .collect(),
-                        );
-                    }
-                });
                 c
             }))
         })
@@ -77,17 +57,19 @@ impl Class {
     /// （父类链 + 全部接口，见 codegen ldc 类字面量的第二参数），随 `for_class`
     /// 登记到线程内侧表；未登记的目标（闭包外类、数组、基本类型）仅同名相等。
     pub fn isAssignableFrom(&self, cls: Class) -> Result<bool> {
-        let self_name = format!("{}", self.__get_name());
-        let cls_name = format!("{}", cls.__get_name());
+        let self_name = format!("{}", self.__get_name()).replace('.', "/");
+        let cls_name = format!("{}", cls.__get_name()).replace('.', "/");
         if self_name == cls_name {
             return Ok(true);
         }
-        Ok(SUPERTYPES.with(|t| {
-            t.borrow()
-                .get(&cls_name)
-                .map(|supers| supers.contains(&self_name))
-                .unwrap_or(false)
-        }))
+        // cls 的超类型闭包（含自身）包含 self 即可赋值。层次表由 build.rs 从
+        // java_class! 的 all_supertypes 属性生成（class 元数据的唯一表达）；
+        // 未生成/接口载体的 cls 不在表中，退化为同名相等（与 JVM 语义的差异
+        // 仅影响"参数侧从未进入闭包"的场景）。
+        Ok(__hierarchy::CLASS_HIERARCHY.iter()
+            .find(|(n, _)| *n == cls_name)
+            .map(|(_, supers)| supers.iter().any(|s| *s == self_name))
+            .unwrap_or(false))
     }
 
     /// `Class.getName()`：返回类对象的二进制名（Java 形式，点分隔）。
@@ -117,4 +99,9 @@ impl Class {
     pub fn __impl_desiredAssertionStatus(&self) -> Result<bool> {
         Ok(false)
     }
+}
+
+/// build.rs 生成的类层次表（OUT_DIR/hierarchy_table.rs，含模块级 static）。
+mod __hierarchy {
+    include!(concat!(env!("OUT_DIR"), "/hierarchy_table.rs"));
 }
