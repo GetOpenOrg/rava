@@ -134,6 +134,48 @@ def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     return True, ""
 
 
+# ── V-3 可读性审计汇总 ──────────────────────────────────────────────
+
+_READABILITY_RE = re.compile(r"^\[readability-audit\]\s+(.+)$", re.MULTILINE)
+
+
+def _parse_readability(log: str) -> dict[str, int]:
+    """从转译输出解析 [readability-audit] 行的禁用调用计数（A-2 口径）。"""
+    m = _READABILITY_RE.search(log)
+    if not m:
+        return {}
+    counts: dict[str, int] = {}
+    for part in m.group(1).split():
+        k, _, v = part.partition("=")
+        try:
+            counts[k] = int(v)
+        except ValueError:
+            pass
+    return counts
+
+
+def _print_readability_summary(per_test: dict[str, dict[str, int]]) -> None:
+    """汇总各测试的可读性审计计数；目标全 0（A-2 禁用调用清零的验收口径）。"""
+    if not per_test:
+        return
+    totals: dict[str, int] = {}
+    nonzero: list[str] = []
+    for name, counts in sorted(per_test.items()):
+        if not counts:
+            continue
+        bad = {k: v for k, v in counts.items() if v}
+        for k, v in counts.items():
+            totals[k] = totals.get(k, 0) + v
+        if bad:
+            nonzero.append(f"{name}({', '.join(f'{k}={v}' for k, v in sorted(bad.items()))})")
+    line = " ".join(f"{k}={v}" for k, v in sorted(totals.items()))
+    print(f"\n[readability] {line}  (合计 {sum(totals.values())}，"
+          f"{len(per_test)} 个测试，目标全 0)")
+    if nonzero:
+        shown = "; ".join(nonzero[:6])
+        print(f"  非零: {shown}{'…' if len(nonzero) > 6 else ''}")
+
+
 def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
     """直接执行 binary。返回 (状态, stdout)：状态 ∈ ok / timeout / error。"""
     bin_name = _to_bin_name(class_name)
@@ -205,6 +247,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
     passed = failed = skipped = 0
     t_all = time.perf_counter()
     t_transpile_total = t_build_total = t_run_total = 0.0
+    readability_counts: dict[str, dict[str, int]] = {}
     fail_categories: dict[str, list[str]] = {}
 
     def _fail(cat: str, rel_str: str) -> None:
@@ -235,6 +278,10 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
             print(log[-500:])
             _fail("transpile", str(rel))
             continue
+
+        _rc = _parse_readability(log)
+        if _rc:
+            readability_counts[class_name] = _rc
 
         if no_run:
             print(f"{prog} [NORUN ] {rel}  — transpile OK ({fmt_dur(t_transpile)})")
@@ -285,6 +332,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
     print(f"Elapsed: {fmt_dur(elapsed)}"
           f"  (transpile {fmt_dur(t_transpile_total)}, build {fmt_dur(t_build_total)},"
           f" run {fmt_dur(t_run_total)})")
+    _print_readability_summary(readability_counts)
     return 0 if failed == 0 else 1
 
 
@@ -315,20 +363,24 @@ def _run_parallel(filter_str: list[str] | None, jobs: int) -> int:
     print(f"\n[batch] 并行转译 {len(pending)} 个测试（max_workers={jobs}）…")
     t_all = time.perf_counter()
 
-    def _transpile_one(java_file: Path) -> tuple[Path, bool, str]:
+    def _transpile_one(java_file: Path) -> tuple[Path, bool, str, dict[str, int]]:
         ws = _test_workspace(_to_bin_name(_class_name(java_file)))
-        return java_file, *_transpile(java_file, out_dir=ws)
+        ok, log = _transpile(java_file, out_dir=ws)
+        return java_file, ok, log, _parse_readability(log)
 
     transpile_ok: list[Path] = []
     transpile_fail: list[Path] = []
+    readability_counts: dict[str, dict[str, int]] = {}
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         futures = {executor.submit(_transpile_one, f): f for f in pending}
         for fut in as_completed(futures):
-            java_file, ok, log = fut.result()
+            java_file, ok, log, rc = fut.result()
             rel = java_file.relative_to(ROOT)
             if ok:
                 print(f"  [transpile] {rel} OK", flush=True)
                 transpile_ok.append(java_file)
+                if rc:
+                    readability_counts[_class_name(java_file)] = rc
             else:
                 print(f"  [transpile] {rel} FAIL", flush=True)
                 print(log[-300:])
@@ -421,6 +473,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int) -> int:
     print(f"Elapsed: {fmt_dur(elapsed)}"
           f"  (transpile {fmt_dur(t_transpile)}, build {fmt_dur(t_build)},"
           f" run {fmt_dur(time.perf_counter() - t_run_start)})")
+    _print_readability_summary(readability_counts)
     return 0 if failed == 0 else 1
 
 
