@@ -1,0 +1,11 @@
+date=2024-02-29
+leap=true
+dow=THURSDAY
+len=29
+plus=2024-03-01
+minus=2024-01-29
+with=2024-02-26
+cmp=-1
+epoch=0
+notleap=false
+dayOfYear=60

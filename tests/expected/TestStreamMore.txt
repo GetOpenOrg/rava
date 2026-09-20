@@ -1,0 +1,8 @@
+takeWhile=[1, 2, 3]
+dropWhile=[3, 4, 5, 6]
+ofNullable=1,0
+iterate=[1, 3, 5, 7, 9]
+toList=[2, 4, 6, 8, 10, 12]
+mapMulti=[1, 2, 3]
+mutableReduce=[10, 20, 30, 40, 50, 60]
+flatMap=[1, 2, 3, 4]

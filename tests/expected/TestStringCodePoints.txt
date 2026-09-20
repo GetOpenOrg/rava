@@ -1,0 +1,10 @@
+length=4
+codePointCount=3
+charAt0=65
+codePointAt0=65
+codePointAt1=128512
+isHigh=false
+isLow=true
+offset=1
+asciiLen=5
+isSurrogatePair=true

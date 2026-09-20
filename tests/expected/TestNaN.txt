@@ -1,0 +1,10 @@
+nanEq=false
+nanPlus=NaN
+inf=Infinity
+infSub=NaN
+negZeroEq=true
+negZeroDiv=-Infinity
+str=NaN
+minNormal=2.2250738585072014E-308
+isNaN=true
+infAdd=Infinity

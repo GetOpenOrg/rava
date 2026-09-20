@@ -1,0 +1,6 @@
+fromByte=ab
+fromInt=00001234
+fromBytes=01ff3c
+parse=15
+parseBytes=[-34, -83, -66, -17]
+delimited=0a 0b

@@ -1,0 +1,8 @@
+127eq=true
+128eq=false
+valueOf128eq=false
+equals128=true
+unboxNull=NullPointerException
+list=[1, 2, 3]
+sum=6
+sumBox=15

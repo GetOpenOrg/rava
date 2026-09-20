@@ -1,0 +1,16 @@
+stripLeading=[hello  
+ world 	 ]
+stripTrailing=[  hello  
+ world]
+lines=3
+linesContent=>line1>line2>line3
+transform=84
+chars=3
+codePoints=3
+isBlank=true
+trimIndent=[hello
+world
+]
+stripIndent=[hello
+  world
+]

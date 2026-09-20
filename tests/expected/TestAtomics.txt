@@ -1,0 +1,7 @@
+ai=15
+ar=set
+al=99
+ab=true
+ab2=false
+latch=0
+aia=10,20

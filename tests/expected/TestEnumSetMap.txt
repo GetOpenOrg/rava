@@ -1,0 +1,8 @@
+all=[MON, TUE, WED, THU, FRI, SAT, SUN]
+few=[MON, WED]
+range=[TUE, WED, THU]
+none=[]
+em={MON=work, SAT=rest}
+emGet=work
+valueOfBad=IllegalArgumentException
+vals=[MON, TUE, WED, THU, FRI, SAT, SUN]

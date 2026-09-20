@@ -1,0 +1,12 @@
+round=3,-2
+floor=2.0,-3.0
+ceil=3.0,-2.0
+rint=2.0,4.0
+signum=-1.0,0.0
+ieee=1.0
+abs=7
+max=8
+min=3
+nanMin=NaN
+nanMax=NaN
+trunc=2

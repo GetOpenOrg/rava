@@ -1,0 +1,6 @@
+contentRead=true
+lines=2
+mismatchSame=-1
+mismatchDiff=0
+exists=true
+cleaned=true

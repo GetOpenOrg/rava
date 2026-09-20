@@ -1,0 +1,4 @@
+caught=IOException:boom
+varargs=[a, b, c]
+varargsNum=[1, 2, 3]
+varargsEmpty=[]

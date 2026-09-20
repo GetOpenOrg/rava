@@ -1,0 +1,13 @@
+rotL=878082066
+rotR=2014458966
+bitCount=16
+lead0=31
+trail0=3
+hob=256
+lob=32
+rev=-2147483648
+revBytes=2018915346
+signum=-1,0,1
+bin=101
+hex=ff
+hob0=0

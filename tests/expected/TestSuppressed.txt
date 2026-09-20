@@ -1,0 +1,5 @@
+primary=body
+suppCount=1
+supp=close-fail
+bodyOnly=body-fail
+suppCount2=0

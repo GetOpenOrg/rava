@@ -1,0 +1,6 @@
+custom=2024-03-15 13:45:30
+parsed=2024-03-15T13:45:30
+iso=2024-03-15
+basic=20240315
+named=Friday, March 2024
+ofPatternInt=2024/03

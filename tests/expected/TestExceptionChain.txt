@@ -1,0 +1,5 @@
+msg=wrap
+cause=root
+causeType=IllegalArgumentException
+sameRef=true
+msg2=base

@@ -1,0 +1,5 @@
+thenApply=42
+combine=ab
+async=7
+allOf=99
+exceptionally=0

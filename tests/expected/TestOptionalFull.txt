@@ -1,0 +1,8 @@
+present=v
+empty-branch
+or=fallback
+stream=V
+emptyStream=0
+flatMap=20
+filterEmpty=-1
+threw=NoSuchElementException

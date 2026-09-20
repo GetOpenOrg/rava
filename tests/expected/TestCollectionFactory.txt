@@ -1,0 +1,9 @@
+list=[a, b]
+set=[1, 2, 3]
+map=[x=1, y=2]
+entries={p=10}
+listAdd=UnsupportedOperationException
+mapPut=UnsupportedOperationException
+copyOf=[a, b]
+toArray=[a, b]
+setCopyOf=[1, 2, 3]
