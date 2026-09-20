@@ -1,0 +1,24 @@
+11
+-1
+[LONG KEY]
+flatMap=value-known-nested
+flatMap empty=fallback
+filter len>3=value-known
+filter impossible=filtered out
+orElse=default
+orElseGet=lazy-42
+orElseThrow -> missing
+sink=[got:value-known, absent]
+isPresent=true false
+isEmpty(Java11)=true
+of(null) -> NullPointerException
+ofNullable(null) present=false
+equals=true
+toString=Optional[a]
+collected=[p, q]
+OptionalInt max=3
+OptionalInt empty get=-99
+parse ok=123
+parse bad=-1
+parse chain=20
+done

@@ -1,0 +1,27 @@
+sum=16
+count=6
+min=1
+max=5
+avg=2.6666666666666665
+distinct sorted=[1, 2, 3, 4, 5]
+range(1,5)=[1, 2, 3, 4]
+rangeClosed(1,5)=[1, 2, 3, 4, 5]
+range sum even=30
+iterate=[1, 2, 4, 8, 16, 32]
+stats count=6 min=1 max=5 sum=16 avg=2.6666666666666665
+mapped=[1, 4, 9]
+mapToObj=[n1, n2]
+reduce sum=10
+reduce product=24
+long sum=15
+long mapped=50000000000
+double avg=2.5
+double sum=0.30000000000000004
+boxed sorted=[1, 2, 3]
+flatMap words=[a, b, c, d]
+joined=1-2-3-4
+to int sum=24
+summarizing=24
+takeWhile(<3)=[1, 2]
+dropWhile(<3)=[3, 1]
+done

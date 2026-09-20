@@ -1,0 +1,13 @@
+circle r=2.0
+square side=3.0
+triangle b/h
+areas=12.566370614359172 9.0 10.0
+sw-circle:2.0
+sw-square:3.0
+sw-other
+expr=12
+record equals=true
+record toString=Square[side=2.0]
+null instanceof=false
+switch null -> null-shape
+done

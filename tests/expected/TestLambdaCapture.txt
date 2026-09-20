@@ -1,0 +1,12 @@
+field-value|captured-local|10|ARG
+field-value|captured-local|10|ARG2
+static-value:count=1
+static-value:count=2
+host.count=2
+6 101
+field-value#explicit
+curried 3*4=12
+loop capture total=30
+field-value|captured-local|10|x
+ABC!
+done

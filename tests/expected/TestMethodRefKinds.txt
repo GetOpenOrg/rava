@@ -1,0 +1,17 @@
+alice/1
+ctor0=anonymous/0
+ctor1=bob/0
+ctorSub=carol/9
+bound age=40
+bound greet=hi dave
+unbound age=40
+unbound greet=hey dave
+arrayCtor len=3 [a, b, c]
+intArray=[0, 7]
+superRef produced=true
+x
+yy
+zzz
+appended=xyyzzz
+upper host
+done
