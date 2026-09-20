@@ -30,7 +30,7 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 | 编号 | 类别 | 条目数 | 最高优先级 |
 |------|------|--------|-----------|
 | [A](#a-架构缺口最高优先级) | 架构缺口 | 7 | P0 |
-| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 16 | P1 |
+| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 17 | P1 |
 | [G](#g-生成器与宏的内部质量) | 生成器与宏内部质量 | 10 | P1 |
 | [P](#p-项目原则违规) | 项目原则违规 | 3 | P1 |
 | [V](#v-验证覆盖缺口) | 验证覆盖缺口 | 4 | P1 |
@@ -155,7 +155,9 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 - **现状**：抽象类跳过接口实现（由具体子类承担）；枚举与手写类（含内部边界类）没有 `__interface`。对这些类的对象做接口查询会得到 `AbstractMethodError`（此前 `FileDescriptor_1` 已踩过一次）。
 - **终态**：所有声明了接口的类（抽象、枚举、手写）都经宏获得 `__interface`；手写类通过 `java_class!` 的属性声明接口集合，不手写 vtable 粘合代码。
 
-### A-7 协变返回覆盖未建模为祖先槽位的 override 【P1】
+### A-7 协变返回覆盖未建模为祖先槽位的 override 【已修复，K-6 轮】
+
+> **K-6 轮已修复**（c25e2cb 合入 main）：协变覆盖归父槽——`virtual_in` 指向真实声明者（如 `reduce_ops_1.rs` 的 `makeSink` 返回协变 `ReduceOps$1ReducingSink` 仍归 `ReduceOps_ReduceOp` 槽位）+ `vtable_erasure` 记录擦除形态；接收者态/声明者态命名经 `receiver_member_name` + 宏 `vtable_name` 属性解耦。TestInheritedMethod PASS（曾卡 `MyList.get(I)String` 协变 override）；红线 19/19；TestStreamBasic 的 `makeSink` 存根消除、输出与期望逐字一致。
 
 - **现状**：`position(I)ByteBuffer` 这类协变返回覆盖在子类另立同名槽位，与祖先槽位并存。R5-A 用「转发成员按描述符完全限定分派」消除了 E0034，但经祖先类型调用时分派到的仍是祖先槽位的实现，多态语义不完整。桥接方法目前由 R5-C 从桥字节码读取真实目标来解析。
 - **终态**：协变覆盖 = 祖先槽位的 override（返回值上转为祖先槽位的擦除返回类型）+ 子类侧的类型化访问器；javac 桥接方法不生成独立槽位。并存槽位数 = 0。
@@ -348,6 +350,11 @@ javac 21 对内部类的 `putfield this$0` 先于 `invokespecial super.<init>`�
 
 > **R10 轮已修复**（d2428cb 合入 main）：classfile 解析 `SwitchBootstraps.typeSwitch` 的 Class 常量标签序列（`tslabels:` 令牌），sim/dynamic 生成运行时 instanceof 链（null→-1、restart 下标守卫、未命中→labels.length）；guarded pattern 的回边重启与 `case X var` 的绑定分别由既有 CFG 结构化与 A-3 的 `try_cast` 自然承接。TestPatternMatch 输出逐字节一致（含 4 个 guarded 分支 + sealed MatchException 通路）；三个经典 switch 测试实测不经 typeSwitch、保持 PASS。**未支持归类**：Integer/String 常量标签（需 vtable 数值桥，macros 领域）、EnumDesc（CONSTANT_Dynamic）——保持可见 E0605 占位不静默。
 Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译为 `invokedynamic SwitchBootstraps.typeSwitch`；`sim/dynamic.py` 对非 LambdaMetafactory bootstrap 走 `Object::default()` 占位 → `Object as i32` E0605（TestPatternMatch）。终态：case 序编译为 instanceof 链（衔接 G-9 的运行时化）+ guard + target index。
+
+### S-18 经接口分派的方法实现体未进 BFS 调用链 【P1】
+
+- **现状**：TestStreamAdvanced 编译通过，运行期命中 `AbstractPipeline.sequential` 的 `panic!("stub")`（K-6 轮实测）。调用点经接口类型发起调用，BFS 将接口方法入队，但未沿「实现该接口的类层次」收录具体实现体——`AbstractPipeline.sequential` 有字节码，却在生成侧被当作调用链外方法生成存根。根因待查：既有「接口方法 → 具体实现类传播」为何未覆盖该路径（疑点：只查直接 `implements`，未沿父类链或接口继承闭包传播；或传播时机晚于方法体生成）。
+- **终态**：接口方法的调用链收录覆盖全部传递实现类（含抽象类中途实现）；调用链内方法命中存根 = 0（编译期 `stub_fallback` 与运行期 panic 双口径）。
 
 ### G-12 负整数字面量装箱缺括号 【已修复，R8 轮】
 `-1i32.into()` 补为 `(-1i32).into()`（c643d7d，合入 main）。TestPatternMatch 的 E0282 归零，该测试剩余 2×E0605 属 S-17。
