@@ -122,6 +122,14 @@ _OPCODE_NAMES = {
 _NEWARRAY_TYPES = {4: 'boolean', 5: 'char', 6: 'float', 7: 'double',
                    8: 'byte', 9: 'short', 10: 'int', 11: 'long'}
 
+# S-17: typeSwitch 标签中 primitive type pattern 的 Class 常量名（primitive 描述符）
+# → wrapper 类二进制名（`case int x` 的运行时判定等价于 java/lang/Integer）
+_PRIM_CLASS_TO_WRAPPER = {
+    'B': 'java/lang/Byte', 'C': 'java/lang/Character', 'D': 'java/lang/Double',
+    'F': 'java/lang/Float', 'I': 'java/lang/Integer', 'J': 'java/lang/Long',
+    'S': 'java/lang/Short', 'Z': 'java/lang/Boolean',
+}
+
 
 # ── 解析器主体 ───────────────────────────────────────────────────────────────
 
@@ -362,6 +370,17 @@ def _decode_bytecode(code: bytes, pool: list, bootstrap_methods: list[dict] | No
                             comment += f' impl:{impl}'
                         if sam:
                             comment += f' samtype:{sam}'
+                    # S-17: typeSwitch — 嵌入 case 标签序列（kind:值，逗号分隔；
+                    # 值内 % , 空白百分号编码，comment 按空格分词）
+                    labels = bsm.get('switch_labels')
+                    if labels is not None:
+                        toks = []
+                        for lkind, lval in labels:
+                            enc = (lval.replace('%', '%25')
+                                       .replace(',', '%2C')
+                                       .replace(' ', '%20'))
+                            toks.append(f'{lkind}:{enc}')
+                        comment += ' tslabels:' + ','.join(toks)
         elif op == 0xbc:   # newarray
             atype = code[pos]; pos += 1
             operand = _NEWARRAY_TYPES.get(atype, str(atype))
@@ -471,6 +490,11 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
         # Arch-3: 对 LambdaMetafactory 提取 SAM 类型 + 实现方法信息
         sam_type = None    # args[0]: SAM 方法类型描述符
         impl_method = None  # args[1]: 实现方法 ClassName.name:desc
+        # S-17: 对 SwitchBootstraps.typeSwitch 提取 case 标签序列
+        # 每项 (kind, value)：kind 'c' = Class 标签（value 为二进制名，primitive
+        # 描述符已归一化为 wrapper 类），'s' = String 常量，'i' = Integer 常量，
+        # '?' = 其余形态（EnumDesc 的 CONSTANT_Dynamic 等，翻译侧归类不支持）
+        switch_labels = None
         bsm_entry = pool[method_ref] if method_ref < len(pool) else None
         if bsm_entry and bsm_entry[0] == 'MethodHandle':
             bsm_ref_str = _ref_to_str(pool, bsm_entry[2])
@@ -483,12 +507,29 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
                 arg1 = pool[arg_indices[1]] if arg_indices[1] < len(pool) else None
                 if arg1 and arg1[0] == 'MethodHandle':
                     impl_method = _ref_to_str(pool, arg1[2])
+            elif 'SwitchBootstraps' in bsm_ref_str and 'typeSwitch' in bsm_ref_str:
+                switch_labels = []
+                for ai in arg_indices:
+                    ent = pool[ai] if ai < len(pool) else None
+                    if ent and ent[0] == 'Class':
+                        name = _utf8(pool, ent[1])
+                        # primitive type pattern 以 primitive 描述符的 Class 常量编码
+                        # （`case int x` → Integer.TYPE）：运行时判定等价于 wrapper 类
+                        name = _PRIM_CLASS_TO_WRAPPER.get(name, name)
+                        switch_labels.append(('c', name))
+                    elif ent and ent[0] == 'String':
+                        switch_labels.append(('s', _utf8(pool, ent[1])))
+                    elif ent and ent[0] in ('Integer', 'Long', 'Float', 'Double'):
+                        switch_labels.append(('i', str(ent[1])))
+                    else:
+                        switch_labels.append(('?', ''))
         result.append({
             'method_ref': method_ref,
             'arg_indices': arg_indices,
             'template': template,
             'sam_type': sam_type,
             'impl_method': impl_method,
+            'switch_labels': switch_labels,
         })
     return result
 

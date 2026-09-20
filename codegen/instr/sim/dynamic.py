@@ -1,14 +1,79 @@
 # 从 codegen/instr/sim.py 中拆出
 
-from ...rs_ir import LetStmt, RawExpr, RawStmt, RsNamed, Var
+from ...rs_ir import LetStmt, Lit, RawExpr, RawStmt, RsNamed, Var
 from ...render import render_expr, render_type
 from ...sig_types import method_sig_types
+from ...stack import I32
 from ...type_map import (jvm_to_rust, parse_descriptor_params, parse_descriptor_return, short_cls,
                          effective_class_type_params)
 from ..invoke import _gen_string_concat, _static_call_turbofish
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import _coerce_to_object, _render_cast, _same_generic_family
 from ..member_naming import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
+
+
+def _decode_tslabels(comment: str) -> list[tuple[str, str]] | None:
+    """comment 中提取 typeSwitch 的 case 标签序列（S-17）。
+
+    格式 `tslabels:c:bin0,c:bin1,...`（值内 % / , / 空白百分号编码，见
+    classfile._decode_bytecode）。无 tslabels 令牌返回 None。"""
+    for tok in comment.split(' '):
+        if tok.startswith('tslabels:'):
+            labels: list[tuple[str, str]] = []
+            for item in tok[len('tslabels:'):].split(','):
+                if not item:
+                    continue
+                kind, _, val = item.partition(':')
+                val = val.replace('%20', ' ').replace('%2C', ',').replace('%25', '%')
+                labels.append((kind, val))
+            return labels
+    return None
+
+
+def _gen_type_switch(sim, comment: str, registry) -> None:
+    """S-17: `SwitchBootstraps.typeSwitch` 调用点 → 运行时标签判定链。
+
+    调用点描述符 `(Ljava/lang/Object;I)I`：栈上 (selector, restart) → 命中下标。
+    JVM 语义（SwitchBootstraps javadoc / createMethodHandleSwitch）：
+      - selector 为 null → -1（`case null` 由 javac 在 switch 前用 ifnull 单独编译）
+      - 自 restart 起首个匹配标签的下标；未命中 → len(labels)（tableswitch default 消化）
+      - Class 标签 = 运行时 instanceof；连续相同标签由「首个下标先判」等价去重
+    guarded pattern（`case X when g`）无需感知：guard 失败路径将 restart 置为下一
+    case 下标后跳回本调用点（CFG 回边 → 循环），`restart <= i` 守卫跳过已否决标签。
+    case 绑定（`case X var`）也无需感知：分支内 javac 显式 checkcast + astore。
+    """
+    labels = _decode_tslabels(comment) or []
+    # 调用点固定弹 (restart: i32, selector: 引用)
+    restart_e, _restart_t = sim.pop()
+    sel_e, sel_t = sim.pop()
+    restart_s = render_expr(restart_e)
+    # selector 求值一次（JVM 语义），统一到 Object 后由 ObjectVTable::is_instance_of
+    # 按运行时类判定（G-9）；具体类型经 Object 边界装箱保持对象身份
+    sel_ty = render_type(sel_t)
+    if sel_ty == 'Object':
+        obj_expr = sel_e if isinstance(sel_e, (Var, Lit)) else sim.fresh_let('__ts_sel', sel_e, sel_t)
+    else:
+        coerced = _coerce_to_object(render_expr(sel_e), sel_ty, registry, sim.class_type_params)
+        obj_expr = sim.fresh_let('__ts_sel', RawExpr(coerced), RsNamed('Object'))
+    obj_s = render_expr(obj_expr)
+    if any(kind != 'c' for kind, _ in labels):
+        # String / Integer 常量标签（`case "x"` / `case 42` 于 Object selector）与
+        # EnumDesc：等值判定需 Objects.equals / integerEqCheck（Number 族 intValue
+        # 比较）桥，暂未落地 —— 保持可见的占位失败，归类报告，不静默给错值
+        sim.emit(RawStmt(
+            '/* TODO S-17: typeSwitch 含未支持的标签形态（'
+            + ','.join(kind for kind, _ in labels if kind != 'c')
+            + '），退化为占位 */'))
+        sim.push(RawExpr('Object::default()'), RsNamed('Object'))
+        return
+    # null → -1；否则按标签序判定（`restart <= i` 守卫实现 restart 语义）；未命中 → len
+    chain = f'if _is_jnull(&{obj_s}) {{ -1 }} else '
+    for i, (_kind, bin_name) in enumerate(labels):
+        chain += (f'if {restart_s} <= {i} && {obj_s}.is_instance_of("{bin_name}") '
+                  f'{{ {i} }} else ')
+    chain += f'{{ {len(labels)} }}'
+    idx = sim.fresh_let('__ts_idx', RawExpr(chain), I32)
+    sim.push(idx, I32)
 
 
 def sim_dynamic(ins, sim, class_name, registry) -> bool:
@@ -20,6 +85,8 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
     if op == 'invokedynamic':
         if comment and 'makeConcatWithConstants' in comment:
             _gen_string_concat(sim, comment, registry)
+        elif comment and 'tslabels:' in comment:
+            _gen_type_switch(sim, comment, registry)
         else:
             # 解析 comment 格式：
             # "InvokeDynamic samName:dynDesc [impl:Cls.method:implDesc] [samtype:samDesc]"
