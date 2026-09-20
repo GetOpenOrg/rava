@@ -854,6 +854,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         super_class=super_class,
         interfaces=interfaces,
         access_flags=access_flags,
+        major_version=major,
         is_interface=bool(access_flags & ACC_INTERFACE),
         is_abstract=bool(access_flags & ACC_ABSTRACT),
         is_enum=bool(access_flags & ACC_ENUM),

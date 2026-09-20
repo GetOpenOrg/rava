@@ -177,8 +177,17 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     class_cache: dict[str, object] = {}
     jdk_infos: dict[str, object] = {}
 
+    # 语料版本自动匹配：用户 .class 的最高主版本 → 对应 JDK 语料。
+    # major-44 即 JDK 主版本（65→21、69→25）；--jdk 显式指定写入 JAVA_HOME，
+    # 优先级高于此自动推导（find_java_home 的解析顺序）。混合版本取最高。
+    _max_major = max((getattr(ci, 'major_version', 0) for ci in class_infos), default=0)
+    _prefer = _max_major - 44 if _max_major >= 45 else None
+
     try:
-        resolver = JdkResolver()
+        if _prefer:
+            print(f"      语料选择：用户类 class 版本 {_max_major} → JDK {_prefer} jmods"
+                  f"（--jdk 显式指定优先）", flush=True)
+        resolver = JdkResolver(prefer_major=_prefer)
     except RuntimeError as e:
         print(f"      警告：{e}，跳过 JDK 元数据生成")
         return [], set(), set()

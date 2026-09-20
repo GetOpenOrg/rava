@@ -38,18 +38,54 @@ _JDK_PREFIXES = (
 )
 
 
-def find_java_home() -> Path:
+def _installed_brew_jdks() -> list[tuple[int, Path]]:
+    """brew Cellar 已安装的 JDK：(主版本, JAVA_HOME)，按版本升序。
+
+    覆盖 openjdk@NN 与裸 openjdk（即最新版）两种命名。
+    """
+    import re as _re
+    cellar = Path('/opt/homebrew/Cellar')
+    result: list[tuple[int, Path]] = []
+    if not cellar.is_dir():
+        return result
+    for formula in cellar.iterdir():
+        if not formula.name.startswith('openjdk'):
+            continue
+        for version_dir in formula.iterdir():
+            home = version_dir / 'libexec' / 'openjdk.jdk' / 'Contents' / 'Home'
+            if not (home / 'jmods').is_dir():
+                continue
+            m = _re.search(r'openjdk@(\d+)', str(home)) or _re.search(
+                r'Cellar/openjdk/(\d+)', str(home))
+            if m:
+                result.append((int(m.group(1)), home))
+    return sorted(result)
+
+
+def find_java_home(prefer_major: int | None = None) -> Path:
     """
     按优先级找到 JAVA_HOME：
-    1. JAVA_HOME 环境变量
-    2. java 可执行文件路径推断
-    3. macOS brew 下的 openjdk（21 优先，然后 17）
+    1. JAVA_HOME 环境变量（--jdk 显式指定会写入此变量，用户意图优先）
+    2. prefer_major 精确匹配的已安装 JDK（用户 .class 文件版本自动推导，
+       见 callchain 的语料选择）
+    3. prefer_major 的最小上界已安装 JDK（更新语料是 API 超集）
+    4. java 可执行文件路径推断
+    5. macOS brew 下的 openjdk（21 优先，然后 17）
     """
     java_home_env = os.environ.get('JAVA_HOME', '')
     if java_home_env:
         p = Path(java_home_env)
         if (p / 'jmods').is_dir():
             return p
+
+    if prefer_major:
+        installed = _installed_brew_jdks()
+        exact = next((h for m, h in installed if m == prefer_major), None)
+        if exact is not None:
+            return exact
+        upper = next((h for m, h in installed if m >= prefer_major), None)
+        if upper is not None:
+            return upper
 
     # 通过 java -XshowSettings:all 取 java.home 系统属性
     try:
@@ -96,9 +132,10 @@ class JdkResolver:
     首次访问某个 jmod 时打开，整个生命周期内保持打开。
     """
 
-    def __init__(self, java_home: Optional[Path | str] = None):
+    def __init__(self, java_home: Optional[Path | str] = None,
+                 prefer_major: int | None = None):
         if java_home is None:
-            java_home = find_java_home()
+            java_home = find_java_home(prefer_major=prefer_major)
         self._home = Path(java_home)
         self._jmods_dir = self._home / 'jmods'
         # jmod 文件名 → zipfile.ZipFile | None（None 表示打开失败）

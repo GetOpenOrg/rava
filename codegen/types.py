@@ -108,6 +108,7 @@ class ClassInfo:
     generic_signature: str  = ''
     source_file:       str  = ''
     inner_classes:     list = None   # list[InnerClassInfo]
+    major_version:     int  = 0      # class 文件主版本（45–70），0 = 未记录
     is_deprecated:     bool = False
     # EnclosingMethod attribute（仅局部类 / 匿名类有）：直接外围类 binary name；
     # enclosing_method = (name, descriptor)，位于初始化器中时为 None
