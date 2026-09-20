@@ -1,0 +1,12 @@
+adder(5) 8
+adder(100) 103
+mul(7) 42
+accumulated=10
+step0 -> 1
+step1 -> 101
+step2 -> 201
+loop total=303
+9 true-case
+-9 false-case
+anon 9
+done

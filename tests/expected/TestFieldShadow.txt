@@ -1,0 +1,15 @@
+child.getValue()=parent-value
+child.getChildValue()=child-value
+child.getSuperValue()=parent-value
+child view: value=child-value number=2
+via super: value=parent-value number=1
+parent view: value=parent-value number=1
+local=local-value field=child-value super=parent-value
+local number=3 this.number=2
+as parent value=parent-value number=1
+as child value=child-value
+poly getValue()=parent-value
+param=param-value static=static-field
+ctor: this=outer-instance local=outer-instance-local
+local=shadowing-local field=outer-instance
+done

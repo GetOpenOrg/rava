@@ -1,0 +1,11 @@
+hello executed
+HEY!
+normalize=spaced
+shout=QUIET!
+labelled=[a]
+version=pipeline-1.0
+run=x executed
+run=X!
+custom: y 
+z
+done
