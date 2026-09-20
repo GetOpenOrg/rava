@@ -1,0 +1,23 @@
+inner caught A-iae
+inner finally A
+outer caught wrapped:A-iae
+inner finally B
+outer caught ise -> B-ise
+finally without catch
+caught after finally no-catch
+unwind level 0
+unwind level 1
+unwind level 2
+unwind level 3
+level result=3
+level3 caught
+level2 caught from3
+outermost finally
+level1 caught from2
+deep body
+deep finally
+shallow finally
+catch then rethrow
+finally after rethrow
+final handler second
+done

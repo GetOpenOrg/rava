@@ -1,0 +1,14 @@
+finally r=3
+case1=2
+finally overrides
+case2=2
+caught x
+finally after catch
+case3=10
+case4=99
+case5=abc
+inner finally
+outer finally
+case6=2
+swallow result=99
+done

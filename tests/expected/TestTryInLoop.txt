@@ -1,0 +1,7 @@
+loop1=skip |10 |20 |skip |40 |50 |
+continueTrace=f0 body1 f1 f2 body3 f3 
+breakTrace=0[0]1[1][2]
+#1 #2 #2 foundFirstEven=2
+labeled=00 (0,0)01 (0,1)02 (0,2)10 (1,0)11 (1,1)(1,2)
+results=[rollback0, start1, 10, start2, 20, rollback3, start4, 40]
+done
