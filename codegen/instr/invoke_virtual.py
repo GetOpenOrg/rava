@@ -671,7 +671,10 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             _call_str = _build_call(rust_mname, _recv, arg_str)
             if (rust_ret == 'Object' and _sig_ret_v is not None
                     and _sig_ret_v != 'Object'):
-                sim.emit(RawStmt(f"let {v} = Object::from_any({_call_str}?);"))
+                # 签名真实返回类型装箱（S-3.1）：registry 类走 Object::from —— vtable
+                # 桥接（toString/equals/is_instance_of）与 downcast 还原全部可达；
+                # 类型变量走 Into；仅未知形态才 from_any 不透明包装
+                sim.emit(RawStmt(f"let {v} = {_coerce_to_object(f'{_call_str}?', _sig_ret_v, registry, sim.class_type_params)};"))
                 sim.push(Var(v), RsNamed(rust_ret))
             elif (_sig_ret_v is not None and _sig_ret_v != rust_ret
                     and rust_ret not in _PRIMITIVE_RUST_TYPES):

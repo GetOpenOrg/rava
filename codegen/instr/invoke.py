@@ -53,7 +53,7 @@ def _gen_string_concat(sim: StackSim, comment: str):
 
     args = []
     for p in reversed(params):
-        e_expr, _ = sim.pop()
+        e_expr, e_ty = sim.pop()
         raw = render_expr(e_expr)
         # Java 浮点数格式化：整数值需显示 .0（如 5.0 而非 5）
         if p in ('D',):
@@ -63,6 +63,15 @@ def _gen_string_concat(sim: StackSim, comment: str):
         elif p in ('C',):
             # Java char (u16) 必须转为 Rust char 才能以字符形式格式化
             raw = f"char::from_u32({raw} as u32).unwrap_or('?')"
+        elif (p.startswith('L') or p.startswith('[')) and p != 'Ljava/lang/String;':
+            # 引用类型参数：Java 语义是 String.valueOf(x)（虚 toString 分派，S-3.1
+            # 后装箱值是翻译对象）。预物化为临时变量（toString 返回 Result，
+            # format! 内不能传播 ?）；Object::toString 经 vtable __obj_str 桥接，
+            # null 给出 "null"，与 JVM 一致。String 自身走 Display 快速路径不变。
+            _boxed = _coerce_to_object(raw, render_type(e_ty), registry, sim.class_type_params)
+            _sv = sim.fresh()
+            sim.emit(RawStmt(f"let {_sv}: String = {_boxed}.toString()?;"))
+            raw = _sv
         args.insert(0, raw)
 
     tmpl_m = re.search(r' template:(.+)$', comment)
@@ -657,7 +666,10 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             _sig_ret_s = f"{short_cls(_cp_cls_bin)}<{', '.join(_static_inst)}>"
         if rust_ret == 'Object':
             if _sig_ret_s is not None and _sig_ret_s != 'Object':
-                sim.emit(RawStmt(f"let {v} = Object::from_any({call}{q});"))
+                # 签名真实返回类型装箱（S-3.1）：registry 类走 Object::from —— vtable
+                # 桥接（toString/equals/is_instance_of）与 downcast 还原全部可达；
+                # 类型变量走 Into；仅未知形态才 from_any 不透明包装
+                sim.emit(RawStmt(f"let {v} = {_coerce_to_object(f'{call}{q}', _sig_ret_s, registry, sim.class_type_params)};"))
             else:
                 sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
             sim.push(Var(v), RsNamed(rust_ret))

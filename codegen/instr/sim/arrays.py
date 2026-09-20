@@ -205,10 +205,11 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
     elif op == 'arraylength':
         arr_expr, arr_ty = sim.pop()
         if _is_object_receiver(arr_ty):
-            # Object::array_length 返回 Result（null 检查）；JArray::len 直接返回 i32
+            # Object::array_length 返回 Result（null 检查）
             sim.push(RawExpr(f"({render_expr(arr_expr)}.array_length()?)"), I32)
         else:
-            sim.push(RawExpr(f"({render_expr(arr_expr)}.len())"), I32)
+            # JArray::len 返回 Result：null 数组引用抛 NPE（JVMS §6.5 arraylength）
+            sim.push(RawExpr(f"({render_expr(arr_expr)}.len()?)"), I32)
     else:
         return False
     return True

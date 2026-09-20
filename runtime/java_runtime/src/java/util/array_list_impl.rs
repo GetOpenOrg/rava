@@ -6,13 +6,13 @@ impl<E: Clone + Default + 'static + From<Object> + Into<Object>> ArrayList<E> {
     pub fn add_obj_arr_obj_i(&self, e: E, elementData_arg: JArray<Object>, s: i32) -> Result<()> {
         let this = self;
         let mut elementData = elementData_arg;
-        if s == elementData.len() {
+        if s == elementData.len()? {
             elementData = this.grow()?;
         }
         let needed = s + 1;
-        if elementData.len() < needed {
+        if elementData.len()? < needed {
             let new_data = JArray::<Object>::new(needed);
-            for i in 0..elementData.len() {
+            for i in 0..elementData.len()? {
                 new_data.set(i, elementData.get(i)?)?;
             }
             this.__set_elementData(Clone::clone(&new_data));

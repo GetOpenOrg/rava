@@ -203,9 +203,14 @@ def _root_method_vtable_owner(ci: ClassInfo, registry: 'dict | None',
                               handwritten_methods: 'dict | None',
                               sig: tuple) -> 'str | None':
     """本类视角下根类虚方法 `sig`（toString / hashCode / equals）所属 vtable 的 Rust 类名；
-    链上无声明、声明是 wrapper 上的手写 inherent 方法、或方法名带重载后缀则 None。"""
+    链上无声明、声明是 wrapper 上的手写 inherent 方法、或方法最终 Rust 名带重载后缀则 None。
+
+    mangle 判定按「最终 Rust 名」而非 method_name_is_mangled 的粗判定：无参方法的
+    描述符后缀为空（mangle_name 原名返回），同名 static 重载（Integer.toString(I)、
+    Long.hashCode(J) 等）不改变无参槽位方法的名字，不能因此放弃 vtable 桥接。"""
     from .vtable_util import _find_virtual_in
     from ..sig_types import method_name_is_mangled
+    from ..type_map import mangle_name
     cur = ci
     seen: set[str] = set()
     while cur is not None and cur.name not in seen:
@@ -214,7 +219,9 @@ def _root_method_vtable_owner(ci: ClassInfo, registry: 'dict | None',
                      if (m.name, m.descriptor) == sig and not m.is_static), None)
         if decl is not None:
             _hand = ((handwritten_methods or {}).get(cur.name) or {}).get('methods', ())
-            if safe_ident(decl.name) in _hand or method_name_is_mangled(cur, decl, registry):
+            _final_name = (mangle_name(decl.name, decl.descriptor)
+                           if method_name_is_mangled(cur, decl, registry) else decl.name)
+            if safe_ident(decl.name) in _hand or _final_name != decl.name:
                 return None
             return _find_virtual_in(decl, cur, registry, handwritten_methods) or None
         sc = cur.super_class

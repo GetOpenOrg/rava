@@ -299,6 +299,26 @@ class StackSim:
             self.stack = [(Var(name), local_ty) if se is source else (se, sty)
                           for se, sty in self.stack]
 
+    def _freeze_stack_var_copies(self, name: str):
+        """写入局部变量前，把栈上残留的同名 Var 快照到临时变量（xstore 版 iinc 快照规则）。
+
+        JVM 字节码里加载恒先于存储：`f(value++)` 编译为 `lload; dup2; ladd; lstore;
+        invokespecial` —— dup2 留在栈上的副本是递增前的旧值。Rust 侧变量名在赋值后
+        指向新值，栈上副本若仍以名字渲染会读到新值 → 先冻结到 `_name_pre` 临时变量。
+        Copy 类型直接复制，引用类型经 Clone::clone 保持别名语义。"""
+        copies = [(j, sty) for j, (se, sty) in enumerate(self.stack)
+                  if isinstance(se, Var) and se.name == name]
+        if not copies:
+            return
+        snap_by_ty: dict[str, Var] = {}
+        for j, sty in copies:
+            key = render_type(sty)
+            snap = snap_by_ty.get(key)
+            if snap is None:
+                snap = self.fresh_let(f'_{name}_pre', _clone_moved_var(Var(name), sty), sty)
+                snap_by_ty[key] = snap
+            self.stack[j] = (snap, sty)
+
     def _store_local(self, slot: int, expr: RsExpr, ty: RsType):
         """
         存储到局部变量槽。
@@ -320,6 +340,9 @@ class StackSim:
         decl_name = _safe_name(decl[0]) if decl is not None else None
         hint = decl[1] if (decl is not None and decl[2]) else None
         decl_ty = decl[1] if (decl is not None and not decl[2]) else None
+        # 加载先于存储（dup2 副本等）：写入前冻结栈上同名 Var 的旧值快照
+        if slot in self.locals:
+            self._freeze_stack_var_copies(self.locals[slot][0])
         force_let_ty = False
         # 菱形构造结果（类型实参待推断的 `X<_>`）存入有泛型声明的局部：按声明签名解出类型实参。
         # 只靠 Rust 从后续用法推断时，若元素只以 Object 形态被使用，`_` 永远无解（E0283）。

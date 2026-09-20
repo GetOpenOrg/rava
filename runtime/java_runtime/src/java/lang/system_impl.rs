@@ -12,11 +12,20 @@ impl System {
 
     #[jvm_native]
     pub fn arraycopy(src: Object, src_pos: i32, dest: Object, dest_pos: i32, length: i32) -> Result<()> {
+        // JVM arraycopy 是 memmove 语义：src 与 dest 是同一数组且区间重叠时，
+        // 逐元素前向复制会把尚未读取的源元素覆盖掉（TimSort 的插入移位即此形态）。
+        // 同一数组（对象标识相等）按区间方向选择复制顺序。
         macro_rules! try_copy {
             ($t:ty) => {
                 if let Some(s) = src.0.as_any().downcast_ref::<JArray<$t>>() {
                     let d = dest.downcast::<JArray<$t>>();
-                    for i in 0..length {
+                    let backward = s == &d && dest_pos > src_pos;
+                    let range: Box<dyn Iterator<Item = i32>> = if backward {
+                        Box::new((0..length).rev())
+                    } else {
+                        Box::new(0..length)
+                    };
+                    for i in range {
                         d.set(dest_pos + i, s.get(src_pos + i)?)?;
                     }
                     return Ok(());

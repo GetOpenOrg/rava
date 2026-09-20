@@ -210,7 +210,11 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                             _closure_body = f'{_closure_body}?; Ok(())'
                     elif _is_erased_ref(_sam_ret) and _impl_ret != 'V' and (
                             not _is_erased_ref(_impl_ret) or _impl_has_generic_sig):
-                        _closure_body = f'Ok(Object::from_any({_closure_body}?))'
+                        # 按实现方法的返回类型装箱（S-3.1）：registry 类（Integer 等
+                        # 翻译类）走 Object::from —— 对象身份、运行时类与接口 vtable
+                        # 全部可达；仅未知形态（闭包等）才 from_any 不透明包装
+                        _impl_ret_rust = jvm_to_rust(_impl_ret, registry)
+                        _closure_body = (f'Ok({_coerce_to_object(f"{_closure_body}?", _impl_ret_rust, registry, sim.class_type_params)})')
                     _lam_varname = f'__lam_{_lam_idx}'
                     # 函数对象以 Object（函数式接口的擦除形态）绑定为 LetStmt：
                     # 在 try / 分支体内创建、体外消费时由变量提升 pass 管理作用域

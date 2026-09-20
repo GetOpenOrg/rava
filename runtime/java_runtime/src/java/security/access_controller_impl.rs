@@ -16,7 +16,11 @@ impl AccessController {
     /// action 是已擦除的 `Object`：经 `__interface` 分派（等价 JVM itable 查找）
     /// 取 `PrivilegedAction__VTable` 视图后调用擦除签名的 `run()`。
     /// action 为 null 时按 JVM 语义抛 NullPointerException。
-    #[jvm_boundary]
+    ///
+    /// upcalls：经擦除 vtable 分派调用 action.run()。upcall 声明是静态的，
+    /// 动态接收者无法表达——按当前调用图唯一的 PrivilegedAction 实现者声明
+    /// （GetBooleanAction.run，其手写体 __impl_run 再声明自己的依赖）。
+    #[jvm_boundary(upcalls = "sun/security/action/GetBooleanAction.run:()Ljava/lang/Boolean;")]
     pub fn doPrivileged_privilegedaction(action: Object) -> Result<Object> {
         if action.0.is_jvm_null() {
             return Err(JvmError::null_pointer());

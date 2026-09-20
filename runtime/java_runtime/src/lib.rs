@@ -53,11 +53,13 @@ pub fn lrem(a: i64, b: i64) -> error::Result<i64> {
 }
 
 /// JVM null 检查：ifnull/ifnonnull 字节码翻译辅助。
-/// Object::default()（内部 vtable = ()）表示 Java null；其他类型始终返回 false。
+/// Object 内部的 vtable `is_jvm_null()` 是唯一判定（S-3.1 后统一）：
+/// `Object::default()`（内部 vtable = `()`）、null 包装类值（`_jvm_null` 未清零）、
+/// null 数组（`JArray` 的 `Repr::Null`）都以同一 vtable 钩子呈现 null 语义。
 #[inline(always)]
 pub fn _is_jnull<T: 'static>(val: &T) -> bool {
     if let Some(obj) = (val as &dyn std::any::Any).downcast_ref::<Object>() {
-        obj.0.as_any().downcast_ref::<()>().is_some()
+        obj.0.is_jvm_null()
     } else {
         false
     }

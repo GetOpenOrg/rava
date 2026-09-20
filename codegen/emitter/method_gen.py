@@ -277,7 +277,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
                 body = (
                     'let this = self;\n'
                     '    let val = this.__get_value();\n'
-                    '    let len = val.len();\n'
+                    '    let len = val.len()?;\n'
                     '    let mut h: i32 = 0i32;\n'
                     '    if this.__get_coder() == 0i8 {\n'
                     '        let mut i: i32 = 0i32;\n'

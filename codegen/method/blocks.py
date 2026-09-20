@@ -110,11 +110,13 @@ class SimResult:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _uses_jvm_null_method(ty: str, type_params=()) -> bool:
-    """类型是否用 .is_jvm_null() 检测 null（java_class! 生成类）；其余走 _is_jnull()。
-    type_params：当前类的类型变量（`T_BUFFER` 等任意命名），类型变量上没有 wrapper 方法。"""
+    """类型是否用 .is_jvm_null() 检测 null（java_class! 生成类、JArray 数组引用）；
+    其余走 _is_jnull()。
+    type_params：当前类的类型变量（`T_BUFFER` 等任意命名），类型变量上没有 wrapper 方法。
+    JArray 的 null 是 Repr::Null（S-3.1：null 数组引用与空数组严格区分），由固有方法承载。"""
     if ty in ('Object', '()', '') or ty in _PRIM_TYPES or ty in type_params:
         return False
-    if ty.startswith(('JArray<', 'Rc<', 'Vec<', 'Box<', 'std::')):
+    if ty.startswith(('Rc<', 'Vec<', 'Box<', 'std::')):
         return False
     if len(ty) <= 2 and ty[0].isupper() and ty.rstrip('0123456789').isalpha():
         return False
@@ -176,10 +178,14 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
         return tv, ev, ty
     same_base = (ty_str.split('<')[0] == ety_str.split('<')[0] and '<' in ty_str and '<' in ety_str)
     if ty_str == 'bool' and ety_str in _INT_TYPES:
-        ev = f"({ev} != 0)"
-    elif ety_str == 'bool' and ty_str in _INT_TYPES:
-        tv = f"({tv} != 0)"
+        # 汇合点的 JVM 类型两侧必然一致；bool 侧只可能来自 0/1 菱形折叠
+        # （比较结果值，_ternary_value），int 侧是同 JVM int 类型的值
+        # （`x < y ? -1 : (x == y ? 0 : 1)`）→ 以 int 为准，bool 经 as 还原 0/1。
+        # 反方向（int → `!= 0`）会破坏非 0/1 int 值（-1 变 1）。
+        tv = f"({tv} as {ety_str})"
         ty = ety
+    elif ety_str == 'bool' and ty_str in _INT_TYPES:
+        ev = f"({ev} as {ty_str})"
     elif ev in _NULL_EXPRS and ty_str not in _SCALAR_TYPES:
         ev = 'Default::default()'
     elif tv in _NULL_EXPRS and ety_str not in _SCALAR_TYPES:

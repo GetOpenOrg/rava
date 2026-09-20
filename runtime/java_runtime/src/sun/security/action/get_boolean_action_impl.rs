@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use super::GetBooleanAction;
+use crate::java::lang::Boolean;
 
 // 内部边界类 sun.security.action.GetBooleanAction：读一个 boolean 系统属性的
 // PrivilegedAction。struct 由字节码生成；按 Arrays$LegacyMergeSort 调用链按需实现
@@ -34,8 +35,10 @@ impl GetBooleanAction {
     }
 
     /// `run()`（虚方法，经 wrapper 钩子 `__impl_run` 执行）：读属性表返回 Boolean。
-    #[jvm_boundary]
-    pub fn __impl_run(&self) -> Result<bool> {
-        Ok(get_boolean_property(&format!("{}", self.__get_theProp())))
+    /// S-3.1 后 Boolean 是字节码翻译类（不再是原生 bool），经 valueOf 构造
+    ///（upcalls 声明使 valueOf 进入调用链，得到字节码翻译体而非存根）。
+    #[jvm_boundary(upcalls = "java/lang/Boolean.valueOf:(Z)Ljava/lang/Boolean;")]
+    pub fn __impl_run(&self) -> Result<Boolean> {
+        Boolean::valueOf_z(get_boolean_property(&format!("{}", self.__get_theProp())))
     }
 }
