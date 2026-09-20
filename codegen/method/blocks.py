@@ -193,7 +193,16 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
         ty = ety
     elif (ety_str == 'Object' and ty_str not in _SCALAR_TYPES and ty_str != 'Object'
           and ty_str not in class_tparams):
-        ev = f"({ev}).downcast::<{ty_str}>()"
+        # Object 臂与具体类型臂汇合：JVM 校验器的合并点是公共祖先，Rust 需要两臂
+        # 同型 → Object 臂按具体臂类型还原视图。checkcast 语义（A-3：try_cast，
+        # 失败返回 Err 可被 java_try 捕获，S-1，替代 downcast 的 panic）
+        from ..instr.coerce import _render_cast
+        from ..instr.hierarchy import _rust_type_to_binary
+        _bin16 = _rust_type_to_binary(ty_str.split('<')[0], registry)
+        if _bin16:
+            ev = _render_cast(ev, ty_str, binary_name=_bin16, checked=True)
+        else:
+            ev = f"({ev}).into()"
     elif (ty_str == 'Object' and ety_str not in _SCALAR_TYPES and ety_str != 'Object'
           and ety_str not in class_tparams):
         ev = f"Object::from_any(Clone::clone(&{ev}))"

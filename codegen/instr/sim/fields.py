@@ -4,7 +4,7 @@ from ...type_map import short_cls as _short_cls_g
 import re as _re_g
 
 from ...stack import BOOL, _clone_moved_var
-from ...rs_ir import Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed
+from ...rs_ir import CastExpr, Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed
 from ...render import render_expr, render_type
 from ...sig_parse import parse_field_type as _parse_field_type
 from ...sig_types import instance_field_rust_name as _instance_field_rust_name
@@ -22,7 +22,7 @@ from ...type_map import (
 )
 from ...constants import safe_ident as _safe_ident, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
-from ..coerce import _coerce_to_object, _coerce_from_null, _coerce_value, _reinstantiate_generic
+from ..coerce import _coerce_to_object, _coerce_from_null, _coerce_value, _render_cast, _same_generic_family
 from ..hierarchy import _is_subtype, _rust_type_to_binary, _into_super_chain
 from ..member_owner import _get_field_generic_signature, _resolve_static_field_owner
 from ..member_naming import _parse_field_ref
@@ -178,16 +178,14 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
     """putfield / putstatic 共用：把栈顶值转换为字段声明类型 ftype 的存储表达式。"""
     val_str_raw = render_expr(val_expr)
     val_ty_name = render_type(val_ty)
-    # Vec<Object>(擦除) ↔ Vec<E>(泛型)：当 ftype 是参数化 Vec 而 val 是擦除 Vec 时，
-    # 将 val 的 downcast 目标类型替换为泛型版本，使字段赋值类型一致
+    # Vec<Object>(擦除) ↔ Vec<E>(泛型)：当 ftype 是参数化 Vec 而值按擦除数组还原
+    # （CastExpr 目标 JArray<Object>，A-3 节点分派）时，重定向转换目标为泛型版本，
+    # 使字段赋值类型一致（旧字符串改写形态在当前语料零触发，见报告）
     if (ftype != val_ty_name
             and 'Vec<' in ftype and 'Vec<Object>' in val_ty_name
-            and isinstance(val_expr, RawExpr)
-            and 'downcast::<JArray<Object>>' in val_str_raw):
-        val_str_raw = val_str_raw.replace(
-            'downcast::<JArray<Object>>',
-            f'downcast::<{ftype}>'
-        )
+            and isinstance(val_expr, CastExpr) and val_expr.target == 'JArray<Object>'):
+        val_expr = CastExpr(val_expr.expr, ftype)
+        val_str_raw = render_expr(val_expr)
         val_ty_name = ftype
     # null 值（aconst_null → Object::default()）赋给具体类型字段时用 Default::default()
     null_coerce = _coerce_from_null(val_str_raw, ftype)
@@ -201,9 +199,10 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
         # 字段在 Java 中就声明为 Object（真实多态边界）：任何值（含类型变量值、this）装箱存入。
         # 身份保持的向上转型（Object::from / Into::<Object>），运行时类与接口 vtable 保持可达
         val_str = _coerce_to_object(val_str_raw, val_ty_name, registry, class_type_params)
-    elif _reinstantiate_generic(val_str_raw, val_ty_name, ftype) is not None:
-        # raw type / 通配符字段接收精确实例化的值（如自引用的 this）
-        val_str = _reinstantiate_generic(val_str_raw, val_ty_name, ftype)
+    elif _same_generic_family(val_ty_name, ftype):
+        # raw type / 通配符字段接收精确实例化的值（如自引用的 this）：
+        # CastExpr 的擦除路径（A-3，替代已删除的 _reinstantiate_generic 字符串发射）
+        val_str = _render_cast(val_str_raw, ftype, box_first=True)
     elif (ftype not in _PRIMITIVE_RUST_TYPES and val_ty_name not in _PRIMITIVE_RUST_TYPES
           and ftype not in ('Object', '()', val_ty_name)
           and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
@@ -220,12 +219,13 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
         val_str = f"From::from(Clone::clone(&{val_str_raw}))"
     else:
         val_str = _coerce_value(val_str_raw, val_ty, ftype)
-    # 引用类型赋值时加 Clone::clone()，避免 E0382（move after use）
+    # 引用类型赋值时加 Clone::clone()，避免 E0382（move after use）。
+    # CastExpr 的两条渲染形态（From 视图 / try_cast）自带 Clone::clone。
     if (val_ty_name not in _PRIMITIVE_RUST_TYPES
             and not val_str.startswith('Default::')
             and '.clone()' not in val_str
-            and '.downcast::<' not in val_str
-            and 'Clone::clone(' not in val_str):
+            and 'Clone::clone(' not in val_str
+            and not isinstance(val_expr, CastExpr)):
         if val_str == 'this' and 'this' in _obj_str:
             val_str = 'Clone::clone(&this)'
         elif val_str != 'this':

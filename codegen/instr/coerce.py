@@ -128,21 +128,38 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
 _NULL_OBJECT_EXPRS = frozenset({'Object::default()', 'Object::default().clone()'})
 
 
-def _checkcast_runtime_expr(val_str: str, target: str) -> str:
-    """checkcast / 按声明类型还原的运行时入口（S-4）。
+def _render_cast(e, target: str, binary_name: str = '', checked: bool = False,
+                 box_first: bool = False) -> str:
+    """checkcast / 跨实例化转换的唯一发射入口（A-3 IR 化）。
 
-    - 数组目标（`JArray<...>`）：`From<Object> for JArray<T>`——downcast 的泛型路径
-      无法分解出元素类型，数组 checkcast 的判定（null 还原 / 同元素类型还原 /
-      任意祖先元素类型协变视图 / 泛型数组的擦除还原）由 From 侧的元素类型 T 驱动。
-    - 类目标：`<T as From<Object>>::from(..)`——wrapper 的 From 自带三层路径
-      （null 还原 / `__view_into` 视图 / `is_instance_of` + 擦除部件重建），覆盖
-      「运行时类是目标类或其子类 + 目标实例化非精确实参」的泛型擦除场景
-      （`(Enum) key` 于 `Enum<K extends Enum<K>>`）；`Object::downcast` 的 slot 按精确
-      TypeId 判定，跨实例化会误抛 ClassCastException。
-    From 按值收 Object（downcast 借用接收者）→ 统一先 Clone::clone，值可能在兄弟分支
-    继续使用（`Object o; if(..) f((int[]) o); else g((long[]) o);`，E0382）。
+    字符串管线（invoke 实参、putfield 存值、lambda 捕获）经本入口构造 CastExpr
+    节点并立即渲染；IR 管线（stack 模拟、CFG）直接构造 CastExpr 节点入栈——
+    两条管线同一渲染源（render.render_cast），消费方按节点分派而非匹配字符串。
+
+    - checked=True：checkcast 语义，`try_cast::<target>("binary_name")?`，
+      失败返回 Err(JvmError::class_cast)（S-1，可被 java_try 捕获）；
+    - checked=False：`<target as From<Object>>::from(..)` 静态合法视图转换
+      （跨实例化擦除路径，A-1：From<Object> for X<A> 对任意 A 成立）；
+    - box_first=True：e 是具体 wrapper（非 Object）时先装箱（保持对象标识）。
     """
-    return f"<{target} as ::std::convert::From<Object>>::from(Clone::clone(&{val_str}))"
+    from ..rs_ir import CastExpr, RawExpr
+    from ..render import render_cast
+    child = e if isinstance(e, RawExpr) else RawExpr(e)
+    return render_cast(CastExpr(child, target, binary_name=binary_name,
+                                checked=checked, box_first=box_first))
+
+
+def _same_generic_family(actual: str, expected: str) -> bool:
+    """同一泛型类的不同实例化（raw type / 通配符 / unchecked cast）：
+    基名相同且类型实参不同 → 经 Object 边界重建目标实例化视图（CastExpr 的
+    擦除路径）。实参含推断占位 `_`（new X<>() 菱形）时由 Rust 类型推断对齐，
+    不算跨实例化。"""
+    if '<' not in actual or '<' not in expected or actual == expected:
+        return False
+    if actual.split('<', 1)[0] != expected.split('<', 1)[0]:
+        return False
+    import re as _re_infer
+    return not _re_infer.search(r'(?<![\w])_(?![\w])', actual)
 
 
 def _coerce_from_null(val_str: str, expected: str) -> str | None:
@@ -176,28 +193,6 @@ def _coerce_value(val_str: str, val_ty: 'RsType', target: str) -> str:
             val_str = f"({val_str} as i32)"
         return f"(({val_str}) as {target})"
     return val_str
-
-
-def _reinstantiate_generic(e: str, actual: str, expected: str) -> str | None:
-    """同一泛型类的不同实例化之间的转换（Java 的 raw type / 通配符 / unchecked cast）。
-
-    Java 侧 `AbstractPipeline` 原始类型字段可接收任意实例化的 `this`，
-    `(Optional<T>) EMPTY` 是无检查转换；Rust 侧 `X<A>` 与 `X<B>` 是不同类型，
-    经 Object 边界构造目标实例化的视图。A-1 存储层擦除落地后
-    `From<Object> for X<A>` 对任意 A 成立（__inner 非泛型，共享存储与对象
-    标识，运行时按擦除类判定）——本转换由宏的擦除路径支撑，不再依赖
-    （已删除的）#[immutable_state] 逐字段重建。
-    actual / expected 基名相同且类型实参不同 → 返回转换表达式，否则 None。"""
-    if '<' not in actual or '<' not in expected or actual == expected:
-        return None
-    if actual.split('<', 1)[0] != expected.split('<', 1)[0]:
-        return None
-    import re as _re_infer
-    if _re_infer.search(r'(?<![\w])_(?![\w])', actual):
-        # 实参含推断占位符 `_`（new X<>() 菱形）：由 Rust 类型推断对齐，无需转换
-        return None
-    src = 'Clone::clone(this)' if e == 'this' else f'Clone::clone(&{e})'
-    return f"<{expected} as ::std::convert::From<Object>>::from(Object::from({src}))"
 
 
 # Java 中任何对象都可以传递给 Object 参数（引用协变），Rust 需要显式 Into<Object> 转换

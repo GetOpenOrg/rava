@@ -423,17 +423,17 @@ def _coerce_arg(
     from ..render import render_type as _rt
     from ..constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
     from .coerce import (
-        _coerce_from_null, _coerce_to_object,
-        _coerce_value, _reinstantiate_generic,
+        _coerce_from_null, _coerce_to_object, _coerce_value,
+        _render_cast, _same_generic_family,
     )
-    from .hierarchy import _is_subtype, _into_super_chain
+    from .hierarchy import _is_subtype, _into_super_chain, _rust_type_to_binary
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
         return null_coerce
     if expected == 'Object' and actual not in ('Object', '()'):
         # 泛型参数值（如 K: Clone + Default + 'static）传给 Object 参数：
         # Rust 无隐式子类型化，K 类型的值不能直接当 Object 用 → 装箱为
-        # Object(Rc<JvmRef<K>>)，callee 内 downcast::<K>() 可还原。
+        # Object(Rc<JvmRef<K>>)，callee 内按类型形参的 From<Object> bound 可还原。
         if actual in sim.class_type_params:
             return _coerce_to_object(e, actual, registry, sim.class_type_params)
         if e == 'this':
@@ -450,11 +450,11 @@ def _coerce_arg(
         return _coerce_value(e, e_ty_node, expected)
     if expected == 'i32' and actual in ('i8', 'i16', 'u16', 'bool'):
         return f"({e} as i32)"
-    # 同一泛型类的不同实例化（raw type / 通配符形参接收精确实例化的实参）
+    # 同一泛型类的不同实例化（raw type / 通配符形参接收精确实例化的实参）：
+    # CastExpr 的擦除路径（A-3，替代已删除的 _reinstantiate_generic 字符串发射）
     if _downcast_target_valid(expected, sim, registry):
-        _reinst = _reinstantiate_generic(e, actual, expected)
-        if _reinst is not None:
-            return _reinst
+        if _same_generic_family(actual, expected):
+            return _render_cast(e, expected, box_first=True)
     if (expected not in _PRIMITIVE_RUST_TYPES and actual not in _PRIMITIVE_RUST_TYPES
             and expected not in ('Object', '()', actual)
             and _is_subtype(actual.split('<')[0], expected.split('<')[0], registry)):
@@ -468,16 +468,20 @@ def _coerce_arg(
             return _reinst_anc
         return f"{src}{chain}"
     # Fix 18：actual 是 Object（运行时多态值）而 expected 是具体引用类型 ——
-    # Java 调用点隐式 checkcast 语义 → downcast（运行时校验，不符则 panic）。
+    # Java 调用点隐式 checkcast 语义（A-3：CastExpr checked 形态，失败返回
+    # Err(JvmError::class_cast) 可被 java_try 捕获，S-1）。
     # 覆盖「callee 签名参数是精确泛型形态而调用方局部变量被擦除为 Object」
     # 的场景（如 rotateLeft(root: TreeNode<K,V>) 传入 Object 局部变量）。
     # 目标类型须为具体类（非接口别名）/ 类级类型参数 / 内建容器，接口名
-    # （List<..>、Consumer<T>）与方法级类型变量不是合法 downcast 目标。
+    # （List<..>、Consumer<T>）与方法级类型变量不是合法 checkcast 目标。
     if (expected not in _PRIMITIVE_RUST_TYPES and actual == 'Object'
             and expected not in ('Object', '()')
             and expected not in (sim.class_type_params or ())
             and _downcast_target_valid(expected, sim, registry)):
-        return f"({e}).downcast::<{expected}>()"
+        _bin18 = _rust_type_to_binary(expected.split('<')[0], registry)
+        if _bin18:
+            return _render_cast(e, expected, binary_name=_bin18, checked=True)
+        return _render_cast(e, expected)
     if actual == 'Object' and expected in (sim.class_type_params or ()):
         # 形参是类型变量而实参经擦除边界（方法级类型变量、Object 局部变量）退化为 Object：
         # javac 的 unchecked cast → 经宏为类型形参补的 From<Object> 取回（与 areturn 同规则）

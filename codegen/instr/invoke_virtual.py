@@ -11,7 +11,7 @@ from ..constants import (
     PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES,
     JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES,
 )
-from .coerce import _coerce_to_object
+from .coerce import _coerce_to_object, _render_cast
 from .hierarchy import (
     _rust_type_to_binary, _get_all_subtypes_ordered,
     _super_prefix_to_expr,
@@ -104,16 +104,56 @@ def _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
             sim.push(Var(_v_p), RsNamed(_rust_ret_p))
         return True
 
-    # JVM 数组.getClass() → Object::default()（代表 Class<T[]>）
-    # Rust 侧 Vec/数组类型没有 getClass()，但调用方（如 Arrays.copyOf）只用
-    # 其结果判断是否为 Object[] 类型；Object::default() 使判断走 Object[] 分支
+    # JVM 数组.getClass() → Class::for_class("<数组描述符>")（元素类型静态可知）。
+    # 调用方（Arrays.copyOf / copyOfRange）用结果与 Object[].class 比较：
+    # `== Object[].class` 为真 → 走 new Object[n] 分支（与 JVM 一致）。
+    # 此前发射 Object::default()（null），null 与任何 Class 不等 → 恒走
+    # Array.newInstance(newType.getComponentType()) 分支 → null Class 解引用 NPE。
+    # 元素类型含无法解析的形态（类型变量等）时保持 null 兜底（调用方按 Object[] 语义
+    # 使用结果的场景已由描述符路径覆盖）。
     if mname == 'getClass' and obj_ty.startswith('JArray<'):
+        _desc = _jarray_type_desc(obj_ty, registry)
+        if _desc is not None:
+            v = sim.fresh()
+            sim.emit(RawStmt(
+                f"let {v}: Class = Class::for_class(String::from(\"{_desc}\"));"))
+            sim.push(Var(v), RsNamed('Class'))
+            return True
         v = sim.fresh()
         sim.emit(RawStmt(f"let {v}: Object = Object::default();"))
         sim.push(Var(v), RsNamed('Object'))
         return True
 
     return False
+
+
+_PRIM_DESC: dict[str, str] = {
+    'i8': 'B', 'i16': 'S', 'i32': 'I', 'i64': 'J',
+    'f32': 'F', 'f64': 'D', 'bool': 'Z', 'u16': 'C',
+}
+
+
+def _jarray_type_desc(arr_rust: str, registry: dict | None) -> str | None:
+    """Rust 数组类型串 → JVM 数组描述符（`JArray<JArray<String>>` → `[[Ljava/lang/String;`）。
+    元素类型无法解析（类型变量 / 未知容器）→ None。"""
+    elem = arr_rust[len('JArray<'):-1]
+    # 嵌套数组递归（JArray<...> 内层可能带空格）
+    if elem.startswith('JArray<') and elem.endswith('>'):
+        inner = _jarray_type_desc(elem, registry)
+        return None if inner is None else '[' + inner
+    if elem in _PRIM_DESC:
+        return '[' + _PRIM_DESC[elem]
+    elem_base = elem.split('<', 1)[0].strip()
+    if elem_base == 'Object':
+        # java/lang/Object 不经 registry 翻译（运行时根类），描述符恒可知；
+        # binary 名引用 constants.OBJECT_CLASS（Python 侧不散置 JDK 类名字面量）
+        from ..constants import OBJECT_CLASS as _OBJECT_CLASS
+        return '[L' + _OBJECT_CLASS + ';'
+    from .hierarchy import _rust_type_to_binary
+    bin_name = _rust_type_to_binary(elem_base, registry)
+    if not bin_name:
+        return None
+    return '[L' + bin_name + ';'
 
 
 def _emit_object_direct_call(sim, obj_e, args, rust_mname, rust_ret) -> bool:
@@ -233,7 +273,7 @@ def _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
 
 def _subtype_branch(registry, sub_bin, mname, comment, params, ret,
                     args, arg_str, jvm_desc, _root_declared, rust_ret, obj_e):
-    """单个 downcast 分支：owner 解析（Fix 12b）→ bridge 参数 downcast（Fix 17）→
+    """单个 downcast 分支：owner 解析（Fix 12b）→ bridge 参数 checkcast（Fix 17）→
     _super 路由与协变返回包装；不可编译 / 不可达分支返回 None（跳过）。"""
     _sub_ci_abs = registry.get(sub_bin)
     if _sub_ci_abs is not None and _sub_ci_abs.is_abstract and not _sub_ci_abs.is_interface:
@@ -350,15 +390,15 @@ def _subtype_branch(registry, sub_bin, mname, comment, params, ret,
 def _bridge_downcast_args(registry, sub_bin, sub_rust, mname, comment, params,
                           args, arg_str, jvm_desc, _bridge_desc, _owner_bin,
                           _mangle_cls, sub_mname_r):
-    """Fix 17：bridge 分派的参数 downcast —— dispatch 共享 args 按擦除描述符
-    coercion，子类分支的真实方法参数是具体类型 → per-branch 包装
-    .downcast::<T>()（等价 bridge 方法内的 checkcast）。返回
+    """Fix 17：bridge 分派的参数 checkcast —— dispatch 共享 args 按擦除描述符
+    coercion，子类分支的真实方法参数是具体类型 → per-branch 经 CastExpr 的
+    try_cast 还原（等价 bridge 方法内的 checkcast，A-3）。返回
     (可能按真实描述符改写的分支方法名, 分支实参串, 解析出的真实方法 _bm17)。"""
-    # Fix 17：bridge 分派的参数 downcast —— dispatch 的共享 args 按
+    # Fix 17：bridge 分派的参数 checkcast —— dispatch 的共享 args 按
     # 擦除描述符 coercion（如 Comparable.compareTo(Object) 的参数为
     # Object），但子类分支的真实方法（bridge 的目标，如
-    # Byte.compareTo(Byte)）参数是具体类型 → per-branch 包装
-    # .downcast::<T>()（等价 bridge 方法内的 checkcast）。
+    # Byte.compareTo(Byte)）参数是具体类型 → per-branch 经 CastExpr 的
+    # try_cast 还原（等价 bridge 方法内的 checkcast，A-3）。
     _barg_str = arg_str
     _bm17 = None
     if registry:
@@ -451,17 +491,30 @@ def _bridge_downcast_args(registry, sub_bin, sub_rust, mname, comment, params,
                         )
                         if _is_type_var17 and _shared17 == 'Object':
                             # 类型变量按 owner 在该子类视角下的实参实例化
-                            # （Enum<E> 经子类 SuperclassSignature 得 E=子类自身）→ 具体类型时 downcast
+                            # （Enum<E> 经子类 SuperclassSignature 得 E=子类自身）→
+                            # 具体类型时按 checkcast 语义还原（A-3：try_cast，失败返回
+                            # Err 可被 java_try 捕获；binary 无法解析时退 From 视图路径）
                             _tv_inst17 = _tv_map17.get(_gen_params17[_i17][1:-1], 'Object')
                             if _tv_inst17 not in ('Object', '()', '_'):
-                                _bparts17.append(
-                                    f"({args[_i17]}).downcast::<{_tv_inst17}>()")
+                                _tv_bin17 = _rust_type_to_binary(
+                                    _tv_inst17.split('<')[0], registry)
+                                if _tv_bin17:
+                                    _bparts17.append(_render_cast(
+                                        args[_i17], _tv_inst17,
+                                        binary_name=_tv_bin17, checked=True))
+                                else:
+                                    _bparts17.append(_render_cast(args[_i17], _tv_inst17))
                                 continue
                         if (_bt17 not in ('Object', '()')
                                 and _shared17 == 'Object'
                                 and not _is_type_var17):
-                            _bparts17.append(
-                                f"({args[_i17]}).downcast::<{_bt17}>()")
+                            # 具体形参的隐式 checkcast（bridge 方法内 javac 补的
+                            # checkcast）：binary name 直接取自真实描述符（L..; / [..）
+                            _bt_bin17 = (_bd17 if _bd17.startswith('[')
+                                         else _bd17[1:-1])
+                            _bparts17.append(_render_cast(
+                                args[_i17], _bt17,
+                                binary_name=_bt_bin17, checked=True))
                         else:
                             _bparts17.append(args[_i17])
                     _barg_str = ', '.join(_bparts17)

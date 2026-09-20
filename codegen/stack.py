@@ -10,7 +10,7 @@ from typing import get_args
 
 from .rs_ir import (
     RsExpr, RsStmt, RsType,
-    Var, Lit, RawExpr, NewPendingExpr,
+    Var, Lit, RawExpr, NewPendingExpr, CastExpr,
     LetStmt, AssignStmt,
     RsGeneric, RsPrimitive, RsNamed, RsRef, RsSlice, RsInfer,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
@@ -59,17 +59,16 @@ _STMT_CLASSES = tuple(get_args(RsStmt))
 
 def _maybe_downcast(expr: RsExpr, ty: RsType) -> RsExpr:
     """当 expr 是 Var（新鲜临时变量）且目标类型含泛型参数时，
-    JDK stub 因类型擦除实际返回 Object，需要 downcast 恢复具体类型。
-    对工厂方法 / @synthetic（expr 为 RawExpr）不添加 downcast。
+    JDK stub 因类型擦除实际返回 Object，需要按目标类型还原视图。
+    对工厂方法 / @synthetic（expr 为 RawExpr）不添加转换。
+    A-3：发射 CastExpr 节点（unchecked From<Object> 视图路径），消费方按节点分派。
     """
-    # 目标为任意非 Object 引用类型（含裸类型参数 V/K 与非泛型类）都需要 downcast：
+    # 目标为任意非 Object 引用类型（含裸类型参数 V/K 与非泛型类）都需要还原：
     # 源值的静态类型是 Object，直接 `let v: V = _t0` 必然 E0308。
     if (isinstance(expr, Var) and isinstance(ty, RsNamed)
             and ty.name != 'Object' and not ty.name.startswith('Rc<')
             and not ty.name.startswith('&') and ty.name != '()'):
-        # 数组目标走 From<Object>（元素类型驱动的 checkcast，S-4）
-        from .instr.coerce import _checkcast_runtime_expr
-        return RawExpr(_checkcast_runtime_expr(render_expr(expr), ty.name))
+        return CastExpr(expr, ty.name)
     return expr
 
 
@@ -391,7 +390,7 @@ class StackSim:
                 if _is_null:
                     expr = RawExpr('Default::default()')
                 elif '<' not in decl_ty.name:
-                    expr = RawExpr(f"({render_expr(expr)}).downcast::<{decl_ty.name}>()")
+                    expr = CastExpr(expr, decl_ty.name)
                     force_let_ty = True
                 hint = decl_ty
             elif _decl_base != _src_base and self._is_subtype(_src_base, _decl_base):
@@ -433,28 +432,28 @@ class StackSim:
                       and isinstance(hint, RsNamed) and hint.name.startswith('JArray<')
                       and render_expr(expr) not in ('Default::default()', 'Object::default()')):
                     # 栈类型 Object、声明为数组类型（`for (int[] r : objArr)` 的元素经
-                    # Object 流转，S-2.2）：值 downcast 恢复数组类型并保留 let 注解。
+                    # Object 流转，S-2.2）：值按数组目标还原视图并保留 let 注解。
                     # 非 Var 值（aaload 结果等 RawExpr）不落入 _maybe_downcast 的
                     # Var-only 分支，不在此还原会让记录类型（JArray<T>）与 let 实际
                     # 推断类型（Object）脱节，后续 Clone::clone 赋值 E0308。
                     # null 字面量（Default::default()，此处已是 RawExpr）穿透任何
-                    # checkcast，不 downcast——(Default::default()).downcast::<T>()
-                    # 因接收者无类型而 E0282。
-                    from .instr.coerce import _checkcast_runtime_expr
-                    expr = RawExpr(_checkcast_runtime_expr(render_expr(expr), hint.name))
+                    # checkcast，不转换——unchecked From 在 null 接收者上无类型可依。
+                    expr = CastExpr(expr, hint.name)
                     force_let_ty = True
                 ty = hint
             elif (isinstance(ty, RsNamed) and getattr(hint, 'name', '') in self.class_type_params
                   and ty.name != hint.name and ty.name not in _SCALAR_TYPE_NAMES):
                 # 声明类型是类型变量（`S s = (S) x`，checkcast 落在 S 的上界类）：
-                # 值经 Object 边界按对象标识取回类型变量视图
-                _code = render_expr(expr)
-                _dc_tail = f".downcast::<{ty.name}>()"
-                if _code.endswith(_dc_tail):
-                    _boxed = _code[:-len(_dc_tail)]
+                # 值经 Object 边界按对象标识取回类型变量视图。
+                # 源值若是 checkcast 的 CastExpr（A-3 节点），其待转值即装箱前的
+                # Object 值——按节点分派取子表达式（box_first 形态的子值是具体
+                # wrapper，仍走统一装箱路径）。
+                if isinstance(expr, CastExpr) and expr.target == ty.name and not expr.box_first:
+                    expr = RawExpr(f"From::from({render_expr(expr.expr)})")
                 else:
-                    _boxed = self._box_object(render_expr(_clone_moved_var(expr, ty)), ty.name)
-                expr = RawExpr(f"From::from({_boxed})")
+                    _boxed = self._box_object(
+                        render_expr(_clone_moved_var(expr, ty)), ty.name)
+                    expr = RawExpr(f"From::from({_boxed})")
                 ty = hint
                 force_let_ty = True
             elif (isinstance(ty, RsNamed) and isinstance(hint, (RsNamed, RsGeneric))):
@@ -470,15 +469,15 @@ class StackSim:
                     # 的视图（A-1 存储层擦除后 From<Object> for X<A> 对任意 A 成立，
                     # 共享同一存储与对象标识）。注意不能改写成 `.downcast::<目标>()`：
                     # Object::downcast 按精确 TypeId 判定，跨实例化会误抛 ClassCastException。
-                    from .instr.coerce import _reinstantiate_generic
+                    # A-3：发射 CastExpr 节点（unchecked 擦除路径），替代已删除的
+                    # `_reinstantiate_generic` 字符串发射。
+                    from .instr.coerce import _same_generic_family
                     _src_name = getattr(ty, 'name', '')
                     _hint_name = getattr(hint, 'name', '')
-                    if not (isinstance(expr, Lit) and expr.value == 'Object::default()'):
-                        _src_code = render_expr(expr)
-                        _conv = _reinstantiate_generic(_src_code, _src_name, _hint_name)
-                        if _conv is not None:
-                            expr = RawExpr(_conv)
-                            force_let_ty = True
+                    if (not (isinstance(expr, Lit) and expr.value == 'Object::default()')
+                            and _same_generic_family(_src_name, _hint_name)):
+                        expr = CastExpr(expr, _hint_name, box_first=True)
+                        force_let_ty = True
                     ty = hint
                 elif (not self._is_interface(_base_of(hint))
                       and _base_of(hint) not in ('Object', '()')
@@ -498,12 +497,12 @@ class StackSim:
                 elif (isinstance(hint, RsNamed)
                       and 'Vec<' in hint.name and 'Vec<' in ty.name
                       and hint.name != ty.name
-                      and isinstance(expr, RawExpr) and '.downcast::<' in expr.code):
+                      and isinstance(expr, CastExpr) and expr.target == 'JArray<Object>'):
                     # Vec<Object> (checkcast 擦除) ↔ Vec<E> (LVT 类型参数)：
-                    # 替换 downcast 目标为 hint 类型，使字段赋值类型一致
-                    dc_pos = expr.code.index('.downcast::<')
-                    inner = expr.code[:dc_pos]
-                    expr = RawExpr(f"{inner}.downcast::<{hint.name}>()")
+                    # 按 CastExpr 节点分派（A-3），重定向转换目标为 hint 类型，
+                    # 使字段赋值类型一致（旧字符串改写形态在当前语料零触发，见报告）
+                    expr = CastExpr(expr.expr, hint.name,
+                                    binary_name=expr.binary_name, checked=expr.checked)
                     ty = hint
         # null（aconst_null）赋给非 Object 提示类型时：Object::default() → Default::default()
         # 让显式类型注解决定具体类型，避免类型不匹配
