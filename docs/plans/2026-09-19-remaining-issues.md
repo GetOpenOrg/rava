@@ -188,7 +188,7 @@ codegen 的 `xaload`/`xastore`/`arraylength` 指令生成改为调用上述方�
 
 ### S-3 装箱类型无法表示 `null` + null 引用比较语义错误 【P1】
 
-**子问题 1 — 装箱 null**（R8 triage 补充：原生装箱值的 `ObjectVTable` 无 `__interface`，对装箱包装类的接口调用必然 AbstractMethodError——TestGenericMethod 的 `max(3,7)` 实证，String 对照组通过；修复随本条目的真实对象化）：`Integer`/`Long` 等被建模为原生值，`Integer x = null`、`Map.get` 未命中返回 null 后拆箱抛 NPE 等语义缺失。终态：装箱类型是真实对象（来自字节码翻译的 `java/lang/Integer`），自动装拆箱即字节码里的 `valueOf`/`intValue` 调用，不做特殊建模。
+**子问题 1 — 装箱 null**【已修复，R9 轮】：装箱类型真实对象化落地（1f15d10/8d48271/f965a3a 合入 main）——删除 type_map 装箱拆平条目与 BOXING_SKIP/UNBOX_VIRTUAL 透明建模，`Ljava/lang/Integer;` 引用位置走翻译类，valueOf/intValue 就是普通字节码调用；JArray 增 Repr::Null（null 引用≠空数组，顺带落地 S-2 子问题 1 的数组 null 表示）；菱形 bool/int 统一改向修 `Integer.compare`；System.arraycopy 补 memmove 语义（修 TimSort 预存 bug）。TestAutoboxing 16/16、TestGenericMethod、TestLambda 转胜；readability from_any TSB 867→445；红线 10/10 + TSB 金丝雀 PASS。TestBoundedGenerics 编译通过、运行期 CCE 归 S-4（JArray 任意父类元素视图）。R8 triage 补充：原生装箱值的 `ObjectVTable` 无 `__interface`，对装箱包装类的接口调用必然 AbstractMethodError——TestGenericMethod 的 `max(3,7)` 实证，String 对照组通过；修复随本条目的真实对象化）：`Integer`/`Long` 等被建模为原生值，`Integer x = null`、`Map.get` 未命中返回 null 后拆箱抛 NPE 等语义缺失。终态：装箱类型是真实对象（来自字节码翻译的 `java/lang/Integer`），自动装拆箱即字节码里的 `valueOf`/`intValue` 调用，不做特殊建模。
 
 **子问题 2 — null 引用比较语义错误**【已修复，R7 轮：`PartialEq` null 短路 + `Object::default()` singleton】（触发用例 TestAutoboxing 剩余 diff 为子问题 1 的 `i32` 拆平路径）：
 ```java
