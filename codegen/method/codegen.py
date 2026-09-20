@@ -10,10 +10,9 @@
 - return e; → return Ok(e);
 """
 
-from ..type_map import short_cls as _short_cls_g
 from ..types import ParsedMethod, ClassInfo
 from ..sig_parse import parse_field_type, parse_method_param_types
-from ..sig_types import method_sig_types
+from ..sig_types import emitted_method_sig_types
 from ..type_map import (
     jvm_to_rust, sig_type, rust_default, mangle_name, short_cls,
     parse_class_type_params,
@@ -108,64 +107,18 @@ def gen_method_body(
     # 注：非泛型类的 generic_signature（如 ClassLoader.getInterfaces0 →
     # Vec<Class<Object>>）同样需要采用 —— 门控不要求类有类型参数；
     # 方法级类型变量（<T> m(T)）在空 class_tparams 下解析为 Object，
-    # 与 descriptor 擦除一致，由 _sig_param_valid 兜底。
-    sig_param_types, sig_ret_type = method_sig_types(class_info, method, _class_tparams, registry)
+    # 与 descriptor 擦除一致，由 sig_type_string_valid 兜底。
+    # 发射签名单一来源（K-6）：method_sig_types 结果逐位过滤（类型串无效 /
+    # 首标识符是接口 → 回退描述符形态），与 vtable 擦除名单共用同一函数 ——
+    # 擦除条目按 token 全等匹配发射签名，两侧必须逐字一致。
+    # 构造器的隐式形参（外部实例 / 匿名类转发形参）类型由 method_sig_types →
+    # constructor_sig_types 统一给出，定义侧与调用侧同源。
+    rust_param_types, rust_ret = emitted_method_sig_types(
+        class_info, method, _class_tparams, registry)
 
     instrs           = method.instrs
     param_types      = method.param_types
 
-    # 参数类型：如果泛型签名提供了类型变量或更具体的参数化类型，优先使用
-    def _sig_param_valid(sp: str) -> bool:
-        """检查 generic_signature 派生的参数类型是否可用。
-        满足以下任一条件则有效：
-          1. sp 是类级类型参数（T/E/K/V 等）
-          2. sp 中所有标识符均为已知类型（内建/类级参数/注册表中存在/大写开头的 Java 类名）
-        大写开头名称视为合法 Java 短类名（可能由 glob import 引入），只拒绝
-        全小写且不在内建集合的标识符（如未知 Rust 语法符）。
-        """
-        if sp in _class_tparams:
-            return True
-        _builtin = frozenset({
-            'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
-            'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
-            'JArray',  # Rust 端数组包装，不对应 Java 类
-        })
-        _reg_shorts = (
-            {_short_cls_g(k) for k in registry}
-            if registry else set()
-        )
-        import re as _re
-        for name in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', sp):
-            if name in _builtin or name in _class_tparams or name in _reg_shorts:
-                continue
-            return False
-        return True
-
-    # T-2：接口类型在方法签名中擦除为 Object；用 registry 动态检测（无硬编码 JDK 名，Principle 4）。
-    from ..instr.invoke import _registry_iface_shorts as _reg_iface_shorts_fn
-    _iface_shorts = _reg_iface_shorts_fn(registry)
-    import re as _re_iface
-    def _is_iface_type(sp: str) -> bool:
-        m = _re_iface.match(r'^(\w+)(?:<|$)', sp)
-        return bool(m and m.group(1) in _iface_shorts)
-
-    if sig_param_types and len(sig_param_types) == len(param_types):
-        jps = [jvm_to_rust(t, registry) for t in param_types]
-        rust_param_types = [
-            sp if (_sig_param_valid(sp) and not _is_iface_type(sp)) else jp
-            for sp, jp in zip(sig_param_types, jps)
-        ]
-    else:
-        rust_param_types = [jvm_to_rust(t, registry) for t in param_types]
-
-    # 构造器的隐式形参（外部实例 / 匿名类转发形参）类型由 method_sig_types →
-    # constructor_sig_types 统一给出，定义侧与调用侧同源。
-
-    # 返回类型：如果泛型签名返回值是有效类型且非接口，优先使用；接口类型回退到描述符（Object）。
-    if sig_ret_type and _sig_param_valid(sig_ret_type) and not _is_iface_type(sig_ret_type):
-        rust_ret = sig_ret_type
-    else:
-        rust_ret = jvm_to_rust(method.return_type, registry)
     is_ctor          = method.is_constructor
     is_static        = method.is_static
 

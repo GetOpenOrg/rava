@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 from .. import inherited_calls
 from ..constants import OBJECT_CLASS as _OBJECT_CLASS, RUST_KEYWORDS as _RUST_KEYWORDS
-from ..sig_types import interface_member_local_name
+from ..sig_types import interface_member_local_name, receiver_member_name
 from ..type_args import (ancestor_type_args, implemented_interface_views,
                          substitute_type_params, superinterface_type_args)
 from ..type_map import effective_class_type_params, short_cls
@@ -253,8 +253,54 @@ def _owner_erasure_entries(owner_sig: str, substituted_sig: str, owner_params: l
     return [t for t in dict.fromkeys(out) if t and t != 'Object']
 
 
+def _slot_erasure_entries(vt_bin: str, method: 'EmittedMethod',
+                          substituted_sig: str, registry: dict) -> list[str]:
+    """继承成员的槽位擦除名单（K-6）：名单按**槽位声明**（vtable_owner 的声明，
+    非中间声明者 inherited_from）计算。
+
+    槽位的 Object 位 = 声明者发射签名（emitted_method_sig_types，与其文件逐字
+    同源）里字面 Object / 提及声明者自身类型形参的形参 / 返回位置；接收者视角
+    下代入后的类型串（substituted_sig）在这些位置保持具体形态（具体实参 / 协变
+    返回的具体类）时入名单，宏据此整体 Object 化。"""
+    vt_ci = registry.get(vt_bin)
+    if vt_ci is None:
+        return []
+    from ..sig_types import emitted_method_sig_types
+    param_desc = method.descriptor.split(')', 1)[0] + ')'
+    vt_m = next((x for x in vt_ci.methods
+                 if x.name == method.name and not x.is_synthetic and not x.is_static
+                 and x.descriptor.split(')', 1)[0] + ')' == param_desc), None)
+    if vt_m is None:
+        return []
+    vt_params = effective_class_type_params(vt_ci, registry)
+    slot_types, slot_ret = emitted_method_sig_types(vt_ci, vt_m, vt_params, registry)
+    subst_types, subst_ret = _sig_param_types(substituted_sig)
+    subst_inner = _result_inner(subst_ret) or subst_ret if subst_ret else ''
+
+    def _slot_is_object(ty: str) -> bool:
+        if not ty or ty in ('Object', '()'):
+            return True
+        return any(re.search(r'\b' + re.escape(p) + r'\b', ty) for p in vt_params)
+
+    out: list[str] = []
+    for i, slot_ty in enumerate(slot_types):
+        if _slot_is_object(slot_ty) and i < len(subst_types) \
+                and subst_types[i] and subst_types[i] != 'Object':
+            out.append(subst_types[i])
+    slot_inner = _result_inner(slot_ret)
+    target = slot_inner if slot_inner is not None else slot_ret
+    if target and _slot_is_object(target) and subst_inner \
+            and subst_inner not in ('Object', '()'):
+        out.append(subst_inner)
+    return out
+
+
 def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry: dict) -> str:
-    """祖先方法声明 → 接收者类视角下的继承成员声明（声明 + 转发体）。"""
+    """祖先方法声明 → 接收者类视角下的继承成员声明（声明 + 转发体）。
+
+    成员名取接收者重载态（receiver_member_name）：跨分支重载发散时与声明者
+    trait 槽位名不同，槽位名经 vtable_name 属性传给宏（成员体不变——base 函数
+    名 / this 传递均按 owner 模块解析）。"""
     anc_args = dict(ancestor_type_args(recv_ci, registry))
     owner_ci = registry[owner_bin]
     owner_params = effective_class_type_params(owner_ci, registry)
@@ -263,6 +309,11 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
     mapping = {p: (owner_args[i] if i < len(owner_args) else 'Object')
                for i, p in enumerate(owner_params)}
     signature = substitute_type_params(method.signature, mapping)
+    recv_name = receiver_member_name(method.name, method.descriptor, recv_ci, registry)
+    if recv_name != method.rust_name:
+        _old_head = f"pub fn {method.rust_name}("
+        if signature.startswith(_old_head):
+            signature = f"pub fn {recv_name}(" + signature[len(_old_head):]
 
     vt_bin, vt_args = owner_bin, owner_args
     if method.virtual_in:
@@ -274,32 +325,34 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
     parts.append(f'inherited_from = "{_rust_type(owner_bin, owner_args)}"')
     if method.virtual_in:
         parts.append(f'vtable_owner = "{_rust_type(vt_bin, vt_args)}"')
-    erasure = _owner_erasure_entries(method.signature, signature, owner_params)
+        if recv_name != method.rust_name:
+            parts.append(f'vtable_name = "{method.rust_name}"')
+    # 擦除名单按槽位声明（vtable_owner）计算；槽位声明不可解析（未翻译 / 手写）
+    # 时回落按 inherited_from 声明者形参判定（既有路径）
+    erasure = _slot_erasure_entries(vt_bin, method, signature, registry)
+    if not erasure:
+        erasure = _owner_erasure_entries(method.signature, signature, owner_params)
     if erasure:
         parts.append(f'vtable_erasure = "{";".join(erasure)}"')
     body = _forward_body(method, owner_bin, owner_args)
     return f"#[java_method({', '.join(parts)})]\n{signature} {{ {body} }}"
 
 
-def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
-                            recv_ci, registry: dict, emissions: dict) -> 'tuple[str, str] | None':
-    """接收者类（或其超类链）的 synthetic bridge → bridge 转发成员声明。
+def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
+                          emissions: dict, recv: 'ClassEmission | None' = None) -> 'dict | None':
+    """(name, param_desc) 的 synthetic 桥接解析核心（JVM 方法解析顺序：桥接优先）。
 
-    javac 为泛型形参 / 协变返回生成的 ACC_BRIDGE 方法（如
-    `EnumMap.put(Object,Object)` → `put(Enum,Object)`）不生成 Rust 实现，但它是对
-    该签名（name, param_desc）的**本类声明**：vtable / itable 分派经它转发到真实方法。
-    不识别它会把分派落到超类链的普通声明（`Map.put` → `AbstractMap.put` 的
-    UnsupportedOperationException 体）。成员体在 self 上调用 bridge 的真实方法
-    （虚分派，子类覆盖生效），并以 `virtual_in` 填声明类的 vtable 槽位（桥接签名
-    即擦除签名，与 vtable 的 Object 化参数天然一致）。
+    _bridge_override_member（生成声明）与接口 impl 的 target 预测（interface_gen）
+    共用——两者必须对「wrapper 成员最终叫什么名字」给出同一答案，否则接口
+    分派体会调用不存在的成员（E0599）。
 
-    返回 (声明文本, 导入扫描用签名文本, 真实方法的补充需求)：真实方法声明在祖先时，
-    bridge 体调用的 `self.<real>` 需要 wrapper 一并补上其继承成员，补充需求以
-    (方法名, 参数描述符) 给出（本类声明则为 None）。无 bridge / 真实方法不可解析
-    → None（回落到普通继承路径）。
-    """
+    返回 dict：member_name（wrapper 成员名 = 槽位声明者名；纯接口桥接按接收者
+    视角）、vt_short（vtable 槽位声明类短名，纯接口桥接为 ''）、real_sig /
+    real_rust（真实方法签名与调用名，接收者视角）、real_want（真实方法的补充
+    需求 (name, param_desc)，本类声明为 None）、bridge（桥接 ParsedMethod）。
+    无桥接 / 桥接不可解析 → None（回落普通继承路径；None 条件与既有
+    _bridge_override_member 逐字一致）。"""
     from ..instr.member_owner import _resolve_bridge_target
-    from ..type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
 
     # 超类链（含自身）中找 (name, param_desc) 精确命中的 synthetic bridge（JVM 方法解析顺序）
     bridge = None
@@ -330,7 +383,7 @@ def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
         return None
 
     # 真实方法的签名与 Rust 名（接收者视角）：本类声明直接取；祖先声明代入接收者实参
-    real_m = recv.find(name, real_param)
+    real_m = recv.find(name, real_param) if recv is not None else None
     real_want = None
     if real_m is not None:
         real_sig = real_m.signature
@@ -348,7 +401,8 @@ def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
         mapping = {p: (owner_args[i] if i < len(owner_args) else 'Object')
                    for i, p in enumerate(owner_params)}
         real_sig = substitute_type_params(found.signature, mapping)
-        real_rust = found.rust_name
+        # 调用目标 = 接收者 wrapper 上的成员名（real_want 伴随成员按同一命名生成）
+        real_rust = receiver_member_name(found.name, found.descriptor, recv_ci, registry)
         real_want = (name, real_param)
 
     # 声明类的 vtable 槽位：超类链上有该签名的声明 → VirtualOverride 填槽；成员名取
@@ -373,6 +427,41 @@ def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
         member_name = interface_member_local_name(recv_ci, name, bridge.descriptor, registry)
     if member_name == real_rust:
         return None  # 转发到自身（同名）：交回普通继承路径
+    return {
+        'member_name': member_name, 'vt_short': vt_short,
+        'real_sig': real_sig, 'real_rust': real_rust,
+        'real_want': real_want, 'bridge': bridge,
+    }
+
+
+def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
+                            recv_ci, registry: dict, emissions: dict) -> 'tuple[str, str] | None':
+    """接收者类（或其超类链）的 synthetic bridge → bridge 转发成员声明。
+
+    javac 为泛型形参 / 协变返回生成的 ACC_BRIDGE 方法（如
+    `EnumMap.put(Object,Object)` → `put(Enum,Object)`）不生成 Rust 实现，但它是对
+    该签名（name, param_desc）的**本类声明**：vtable / itable 分派经它转发到真实方法。
+    不识别它会把分派落到超类链的普通声明（`Map.put` → `AbstractMap.put` 的
+    UnsupportedOperationException 体）。成员体在 self 上调用 bridge 的真实方法
+    （虚分派，子类覆盖生效），并以 `virtual_in` 填声明类的 vtable 槽位（桥接签名
+    即擦除签名，与 vtable 的 Object 化参数天然一致）。
+
+    返回 (声明文本, 导入扫描用签名文本, 真实方法的补充需求)：真实方法声明在祖先时，
+    bridge 体调用的 `self.<real>` 需要 wrapper 一并补上其继承成员，补充需求以
+    (方法名, 参数描述符) 给出（本类声明则为 None）。无 bridge / 真实方法不可解析
+    → None（回落到普通继承路径）。
+    """
+    from ..type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
+
+    resolved = resolve_bridge_member(recv_ci, name, param_desc, registry, emissions, recv)
+    if resolved is None:
+        return None
+    member_name = resolved['member_name']
+    vt_short = resolved['vt_short']
+    real_sig = resolved['real_sig']
+    real_rust = resolved['real_rust']
+    real_want = resolved['real_want']
+    bridge = resolved['bridge']
 
     # bridge 成员签名：按 bridge 描述符渲染（桥接位置即擦除静态类型）
     param_tys = [jvm_to_rust(p, registry) for p in parse_descriptor_params(bridge.descriptor)]
@@ -593,8 +682,11 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
                     # 真实方法声明在祖先 → 一并补其继承成员（bridge 体调用 self.<real>）
                     if real_want is not None and recv.find(*real_want) is None:
                         real_owner_bin, real_method = _super_decl(*real_want)
-                        if real_method is not None and real_method.rust_name not in taken:
-                            taken.add(real_method.rust_name)
+                        real_recv_name = (receiver_member_name(
+                            real_method.name, real_method.descriptor, recv_ci, registry)
+                            if real_method is not None else '')
+                        if real_method is not None and real_recv_name not in taken:
+                            taken.add(real_recv_name)
                             real_decl = _member_declaration(real_method, real_owner_bin, recv_ci, registry)
                             members.setdefault(recv_bin, []).append(real_decl)
                             imports.setdefault(recv_bin, []).extend(
@@ -634,11 +726,12 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
                     imports.setdefault(recv_bin, []).extend(uses)
                     break
                 continue
-            if method.rust_name in taken:
-                print(f"[codegen] 继承成员 {recv_bin}.{method.rust_name} 与本类方法重名，未声明"
+            recv_name = receiver_member_name(method.name, method.descriptor, recv_ci, registry)
+            if recv_name in taken:
+                print(f"[codegen] 继承成员 {recv_bin}.{recv_name} 与本类方法重名，未声明"
                       f"（来自 {owner_bin}.{name}{method.descriptor}）", file=sys.stderr)
                 continue
-            taken.add(method.rust_name)
+            taken.add(recv_name)
             decl = _member_declaration(method, owner_bin, recv_ci, registry)
             members.setdefault(recv_bin, []).append(decl)
             imports.setdefault(recv_bin, []).extend(

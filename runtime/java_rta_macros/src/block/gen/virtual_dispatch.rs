@@ -11,7 +11,7 @@ use syn::{Ident, Type};
 use super::super::classify::{vtable_body_kind_gated, VTableBodyKind};
 use super::super::erasure::{
     erase_item_signature_with, erase_signature, erase_signature_with, erased_args_of_same_arity,
-    erased_hook_call, erasure_set_of, forward_conv_spec,
+    erased_hook_call, erasure_set_of, forward_conv_spec, result_inner_ty, same_type_tokens,
 };
 use super::super::generic_sig::rebuild_sig_with_generics;
 use super::super::interface::{erased_impl_call, erased_wrapper_call, expand_interface_impl};
@@ -312,10 +312,38 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                             let mut b = block.clone();
                             rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
                             if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
-                                items.push(quote! {
-                                    #(#keep_attrs)*
-                                    #erased_item_sig #b
-                                });
+                                // K-6a：擦除命中返回位（协变返回 / 具体实参位置 →
+                                // Object）时，Safe 体直挂须在返回位置装箱——体本身
+                                // 返回子类精确类型，与槽位的 Object 返回不一致。
+                                // 闭包包裹：body 内的 return / ? 语义不变（闭包返回
+                                // 原签名的 Result<精确类型>），出口统一 Into<Object>
+                                let orig_ret_inner: Option<&Type> = match &sig.output {
+                                    syn::ReturnType::Type(_, ty) => result_inner_ty(ty),
+                                    syn::ReturnType::Default => None,
+                                };
+                                let erased_ret_inner: Option<&Type> = match &erased_item_sig.output {
+                                    syn::ReturnType::Type(_, ty) => result_inner_ty(ty),
+                                    syn::ReturnType::Default => None,
+                                };
+                                let ret_erased_hit = match (orig_ret_inner, erased_ret_inner) {
+                                    (Some(oi), Some(ei)) => !same_type_tokens(oi, ei),
+                                    _ => false,
+                                };
+                                if let (true, Some(orig_inner)) = (ret_erased_hit, orig_ret_inner) {
+                                    items.push(quote! {
+                                        #(#keep_attrs)*
+                                        #erased_item_sig {
+                                            // Result 经 prelude 可见（java_runtime 与 user crate 同一形态）
+                                            let __ret: Result<#orig_inner> = (|| #b)();
+                                            Ok(::std::convert::Into::<Object>::into(__ret?))
+                                        }
+                                    });
+                                } else {
+                                    items.push(quote! {
+                                        #(#keep_attrs)*
+                                        #erased_item_sig #b
+                                    });
+                                }
                             } else {
                                 // 方法体需要 wrapper 上下文（this 传参 / 非虚方法调用 / Self::）：
                                 // 方法体只落在 wrapper 的 `__impl_<method>` 上（见 wrapper 方法生成），
@@ -378,6 +406,12 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 let sig = &f.sig;
                 let erasure = erasure_set_of(f, &ctx.type_param_names);
                 let erased_item_sig = erase_signature_with(sig, &ctx.type_param_names, &erasure);
+                // K-6：跨分支重载发散时 wrapper 成员名（接收者态）≠ vtable 槽位名
+                //（声明者态）→ 按 vtable_name 属性改写槽位条目名（trait 成员名）
+                let mut erased_item_sig = erased_item_sig;
+                if let Some(vn) = attr_str(&f.attrs, "vtable_name") {
+                    erased_item_sig.ident = Ident::new(&vn, proc_macro2::Span::call_site());
+                }
                 let conv = forward_conv_spec(sig, &erased_item_sig, &ctx.type_param_names, &erasure);
                 let mut b = block.clone();
                 // 槽位上下文不携带本类类型形参（vtable 去形参）→ 转发体的 base 调用

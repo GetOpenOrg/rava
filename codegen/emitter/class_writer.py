@@ -14,6 +14,7 @@ from ..sig_parse import parse_field_type
 from ..type_args import (ancestor_type_args, class_type_param_bounds, outer_ref_field_type,
                          interface_signature_views as _interface_signature_views,
                          rust_type_with_args as _rust_type_with_args)
+from ..sig_types import emitted_method_sig_types
 from ..sig_types import (hierarchy_overloaded_names, instance_field_rust_name,
                          method_name_is_mangled)
 from ..constants import (safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS,
@@ -22,7 +23,7 @@ from ..constants import (safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLA
 
 from .attrs import _java_class_block_head, _java_field_attr, _java_method_attr
 from .method_gen import _gen_native_stub
-from .vtable_util import _bin_to_rust, _find_virtual_in
+from .vtable_util import _bin_to_rust, resolve_virtual_slot
 from .clinit_extract import _gen_static_field_blocks, _gen_clinit_block
 from .import_gen import (collect_referenced, gen_cross_imports,
                          scan_used_vtable_imports)
@@ -58,12 +59,29 @@ def _adapt_interface_method(method, ci, iface_bin: str, views: dict):
     return adapted
 
 
-def _resolve_interface_default(ci, meth: str, desc: str, registry):
-    """在 ci 的实现接口闭包里找 (meth, desc) 的 default（非 abstract）声明者——
-    JVM 方法解析（JVMS §5.4.3.3）的接口分支，与 callchain 的 _enqueue_declaring_method
-    同一解析语义。返回 (ClassInfo, method) 或 (None, None)。"""
+def _owner_slot_declaration(owner_ci, m, registry):
+    """槽位声明者在 owner（或其接口闭包的 default 声明者）上的方法声明。
+
+    按槽位精确签名匹配：同名 + 同参数描述符（K-6a：协变返回覆盖的子类描述符
+    与声明者不同，返回类型可收窄）。精确描述符优先，其次协变（非私有、非
+    static）。owner 类链未声明时按接口 default 解析（E0053：owner 解析失败
+    返回 None → 覆盖条目的 owner 形参位未擦除，trait impl 签名不匹配）。
+    返回 (声明者 ClassInfo, method) 或 (None, None)。真实声明优先（synthetic /
+    bridge 是编译器产物，其描述符复述更早声明者的擦除形态，不作槽位签名源）。"""
+    hit = next((x for x in (owner_ci.methods or [])
+                if x.name == m.name and x.descriptor == m.descriptor
+                and not x.is_static and not x.is_synthetic), None)
+    if hit is None:
+        from .vtable_util import _ACC_PRIVATE, _same_vtable_slot
+        hit = next((x for x in (owner_ci.methods or [])
+                    if _same_vtable_slot(x, m)
+                    and not x.is_static and not x.is_synthetic
+                    and not (x.access_flags & _ACC_PRIVATE)), None)
+    if hit is not None:
+        return owner_ci, hit
+    from .vtable_util import _descriptor_param_part
     from collections import deque
-    queue = deque(ci.interfaces or [])
+    queue = deque(owner_ci.interfaces or [])
     seen: set[str] = set()
     while queue:
         name = queue.popleft()
@@ -74,7 +92,9 @@ def _resolve_interface_default(ci, meth: str, desc: str, registry):
         if ici is None:
             continue
         hit = next((x for x in (ici.methods or [])
-                    if x.name == meth and x.descriptor == desc
+                    if x.name == m.name and not x.is_synthetic
+                    and _descriptor_param_part(x.descriptor)
+                    == _descriptor_param_part(m.descriptor)
                     and not x.is_static and not x.is_abstract), None)
         if hit is not None:
             return ici, hit
@@ -83,14 +103,17 @@ def _resolve_interface_default(ci, meth: str, desc: str, registry):
 
 
 def _override_vtable_erasure(m, ci, registry) -> list[str]:
-    """覆盖方法在「声明祖先 vtable」上的擦除位置：接收者签名里对应位置的类型串。
+    """覆盖方法在「声明祖先 vtable」上的擦除名单 —— 槽位精确签名模型（K-6）。
 
-    声明祖先按自身类型形参声明的参数 / 返回位置，在祖先 vtable（Object 化签名）上
-    已是 Object；继承者（本类）的覆盖条目签名需按名单同步擦除。位置判定以
-    「同名同描述符方法在祖先声明中的泛型签名」提及祖先形参为准。"""
+    槽位（声明祖先 A 的 A__VTable）签名 = A 的发射签名（emitted_method_sig_types，
+    与 A 的文件逐字同源）经 A 的类型形参 Object 化（A-1 按声明类判定）：提及 A
+    自身形参、或字面 Object（接口过滤 / 原生 Object 声明，如
+    MethodHandle.internalProperties → Object）的形参 / 返回位置，槽位上是 Object。
+    覆盖者（本类）的发射签名在这些位置可能保持具体形态——本类形参（宏按
+    type_param 擦除自行消解）、祖先形参代入后的具体实参（K-6b）、协变返回的
+    具体类（K-6a）——后两类由本名单按 token 全等交给宏整体 Object 化。"""
     if not registry:
         return []
-    from ..sig_parse import parse_method_param_types
     # 声明祖先：沿超类链找 virtual_in 对应的类
     owner_bin = None
     cur = ci.super_class
@@ -104,46 +127,45 @@ def _override_vtable_erasure(m, ci, registry) -> list[str]:
     if owner_bin is None:
         return []
     owner_ci = registry[owner_bin]
-    owner_params = effective_class_type_params(owner_ci, registry)
-    if not owner_params:
-        return []
-    owner_m = next((x for x in (owner_ci.methods or [])
-                    if x.name == m.name and x.descriptor == m.descriptor
-                    and not x.is_static), None)
+    # 槽位声明：owner（含接口 default 分支）按槽位签名（同名 + 同参数描述符）解析
+    decl_ci, owner_m = _owner_slot_declaration(owner_ci, m, registry)
     if owner_m is None:
-        # owner 超类未声明 (name, desc)：声明者是接口 default（如 Map.replace——
-        # AbstractMap 未声明它）。沿 owner 的接口闭包解析声明者（E0053：owner 解析
-        # 失败返回空名单 → 覆盖条目的 owner 形参位未擦除，trait impl 签名不匹配）；
-        # 擦除位置按声明接口自身的类型形参判定
-        iface_ci, iface_m = _resolve_interface_default(owner_ci, m.name, m.descriptor, registry)
-        if iface_m is None:
-            return []
-        owner_ci, owner_m, owner_params = iface_ci, iface_m, effective_class_type_params(iface_ci, registry)
-    own_types, own_ret = parse_method_param_types(
-        m.generic_signature, effective_class_type_params(ci, registry),
-        registry, is_static=False)
-    own_types, own_ret = list(own_types or []), own_ret
-    anc_types, anc_ret = parse_method_param_types(
-        owner_m.generic_signature, owner_params, registry, is_static=False)
+        return []
+    owner_params = effective_class_type_params(decl_ci, registry)
+    # 槽位侧：声明者发射签名；Object 位 = 字面 Object / 空，或提及声明者自身形参
+    #（与 vtable_util._slot_return_is_object 同一判定，槽位归属的跳转校验同源）
+    anc_types, anc_ret = emitted_method_sig_types(
+        decl_ci, owner_m, owner_params, registry)
     anc_types, anc_ret = list(anc_types or []), anc_ret
+    # 本类侧：发射签名（K-6b：祖先形参已代入接收者视角实参；K-6a：无 Signature
+    # 的协变覆盖回退描述符形态）—— 与 gen_method_body 逐字同源
+    own_types, own_ret = emitted_method_sig_types(
+        ci, m, effective_class_type_params(ci, registry), registry)
+    own_types, own_ret = list(own_types or []), own_ret
+
+    def _slot_position_is_object(ty: str) -> bool:
+        if not ty or ty in ('Object', '()'):
+            return True
+        return any(_re.search(r'\b' + _re.escape(_p) + r'\b', ty) for _p in owner_params)
+
     out: list[str] = []
     for i, anc_ty in enumerate(anc_types):
-        if any(_re.search(r'\b' + _re.escape(_p) + r'\b', anc_ty) for _p in owner_params):
+        if _slot_position_is_object(anc_ty):
             if i < len(own_types) and own_types[i] and own_types[i] != 'Object':
                 out.append(own_types[i])
     def _result_inner(ty: str):
         mm = _re.match(r'^Result<(.*)>$', ty or '')
         return mm.group(1) if mm else None
     anc_inner = _result_inner(anc_ret)
-    if anc_inner and any(
-            _re.search(r'\b' + _re.escape(_p) + r'\b', anc_inner) for _p in owner_params):
-        own_inner = _result_inner(own_ret)
-        if own_inner and own_inner != 'Object':
+    if anc_inner is not None:
+        if _slot_position_is_object(anc_inner):
+            own_inner = _result_inner(own_ret) or own_ret
+            if own_inner and own_inner not in ('Object', '()'):
+                out.append(own_inner)
+    elif _slot_position_is_object(anc_ret):
+        own_inner = _result_inner(own_ret) or own_ret
+        if own_inner and own_inner not in ('Object', '()'):
             out.append(own_inner)
-    elif anc_ret and anc_ret != 'Result<()>' and any(
-            _re.search(r'\b' + _re.escape(_p) + r'\b', anc_ret) for _p in owner_params):
-        if own_ret and own_ret != 'Object':
-            out.append(own_ret)
     return list(dict.fromkeys(out))
 
 
@@ -316,8 +338,9 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
             method_blocks.append(_java_method_attr(m) + '\n' + _decl_sig + ';')
             continue
 
-        # 计算虚方法归属（vtable 架构）
-        m.virtual_in = _find_virtual_in(m, ci, registry, new_format_map)
+        # 计算虚方法归属（vtable 架构）：精确描述符路径（_find_virtual_in，重载计数
+        # 不变）→ 判为本类新槽位时按协变模型归属父槽位（K-6a，resolve_virtual_slot）
+        m.virtual_in = resolve_virtual_slot(m, ci, registry, new_format_map)
         # A-1 擦除按声明类判定：覆盖条目的签名里，「声明祖先按自身类型形参声明的位置」
         # 在祖先 vtable 上已是 Object → 记录接收者视角下这些位置的代入形态（类型串），
         # 宏据此擦除 vtable impl 条目 / 包装 base 调用 turbofish（vtable_erasure）
@@ -584,16 +607,31 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                                          method_blocks) -> None:
     """超类虚方法继承：若子类未覆盖祖先虚方法，生成继承实现使 vtable impl
     包含实际函数体（避免子类 Ancestor__VTable impl 退化为 panic 存根）。
-    仅对用户类超类链处理。原 _gen_class_rs 内联段逐字搬移，闭包变量改为
-    本函数参数。"""
-    # 超类虚方法继承：若子类未覆盖祖先虚方法，生成继承实现使 vtable impl 包含实际函数体。
-    # 这避免子类的 Ancestor__VTable impl 退化为 panic!("stub")。
-    # 仅对用户类超类链（无 '/'）处理，JDK 类的继承由 BFS 方法级调用链保证。
-    if not ci.is_interface and registry and ci.super_class and '/' not in ci.super_class:
+
+    用户类超类链（无 '/'）保持全量处理（体内发射）；JDK 超类链（K-6 后放开）
+    的槽位填补经 inherited_calls 登记需求，由 inherited_gen 在两阶段生成的
+    第二阶段统一生成**转发成员**——与调用点触发的继承成员同一机制：owner 的
+    rust_name（与声明者 trait 名一致）、槽位擦除名单、base 函数导入全部单一
+    来源。全量体重发射在 JDK 链不可行：体引用的类型不在本文件导入集（E0433）、
+    方法名按接收者重载态 mangle 与声明者 trait 名不一致（E0407）、手写伴生调用
+    （如 Throwable 的 fillInStackTrace_i）在子类上下文不可解析（E0599）、
+    synthetic 桥接被整体复制（E0201）。转发体（Owner__m_base / __as_Owner 钩子）
+    在 owner 模块上下文执行真实体，与 super 调用同源，不重发射字节码。
+
+    JDK 链门控：(祖先类, 方法) 已在 BFS 调用链上——虚分派经声明类的 wrapper
+    静态类型落在具体子类的 impl 上（如 PipelineHelper.wrapAndCopyInto 声明抽象、
+    AbstractPipeline 实现 final、ReferencePipeline_Head 运行期接收），BFS 只保证
+    实现体的收录，不保证槽位在每个翻译子类上有条目——缺条目则落回声明类的
+    trait default（抽象声明 = stub panic）。抽象声明不登记（无体可转发，trait
+    default 即存根）；native 声明仅在其体由共置 _impl.rs 手写时登记（__impl_
+    钩子路径），未手写的 native 转发到声明类存根与 trait default 等价。"""
+    _user_chain = bool(ci.super_class) and '/' not in ci.super_class
+    if not ci.is_interface and registry and ci.super_class and (_user_chain or call_chain is not None):
         import copy as _copy3
+        from .. import inherited_calls as _inherited_calls
         _vinh_existing: set[tuple] = {(m.name, m.descriptor) for m in visible_methods}
         _vinh_super = ci.super_class
-        while _vinh_super and _vinh_super != _OBJECT_CLASS and '/' not in _vinh_super:
+        while _vinh_super and _vinh_super != _OBJECT_CLASS and _vinh_super in registry:
             _vinh_sci = registry.get(_vinh_super)
             if _vinh_sci is None:
                 break
@@ -602,19 +640,36 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     continue
                 if _vm.is_static or _vm.is_constructor or _vm.name in ('<init>', '<clinit>'):
                     continue
-                _vm_virt_in = _find_virtual_in(_vm, _vinh_sci, registry, new_format_map)
-                if not _vm_virt_in:
-                    continue  # 非虚方法，不继承
-                _vinh_existing.add((_vm.name, _vm.descriptor))
-                _vm2 = _copy3.copy(_vm)
-                _vm2.class_name = ci.name
-                _vm2.virtual_in = _vm_virt_in
-                _vm_attr = _java_method_attr(_vm2)
                 _vm_in_cc = (
                     call_chain is None or
                     (ci.name, _vm.name, _vm.descriptor) in call_chain or
                     (_vinh_super, _vm.name, _vm.descriptor) in call_chain
                 )
+                if not _user_chain and not _vm_in_cc:
+                    continue  # JDK 链：调用链未收录的祖先虚方法不登记（无体可转发，
+                    # 留空槽位 = 声明类 trait default，与既有行为一致）
+                _vinh_existing.add((_vm.name, _vm.descriptor))
+                if not _user_chain:
+                    # JDK 链：槽位填补经继承成员转发（inherited_gen 第二阶段生成）。
+                    # 登记键 = (接收者, Java 方法名, 参数描述符部分)，与调用点触发
+                    # 的需求同一账本（去重 / bridge 优先级 / 导入全部复用）
+                    if not _vm.is_abstract:
+                        _anc_hand = ((new_format_map or {}).get(_vinh_super) or {}).get('methods', ())
+                        _hand_hit = (safe_ident(_vm.name) in _anc_hand
+                                     or safe_ident(mangle_name(_vm.name, _vm.descriptor)) in _anc_hand)
+                        if not _vm.is_native or _hand_hit:
+                            _inherited_calls.request(
+                                ci.name, _vm.name, _vm.descriptor.split(')', 1)[0] + ')')
+                    continue
+                # 祖先虚方法自身的槽位归属同样经协变模型解析（K-6a：祖先的协变覆盖
+                # 在祖先文件里归父槽位，本类继承展开须填同一个槽）
+                _vm_virt_in = resolve_virtual_slot(_vm, _vinh_sci, registry, new_format_map)
+                if not _vm_virt_in:
+                    continue  # 非虚方法，不继承
+                _vm2 = _copy3.copy(_vm)
+                _vm2.class_name = ci.name
+                _vm2.virtual_in = _vm_virt_in
+                _vm_attr = _java_method_attr(_vm2)
                 if _vm.is_native or _vm.is_abstract or not _vm_in_cc or stub_bodies:
                     _vm_stub = _gen_native_stub(_vm2, ci, registry=registry, class_type_params=class_type_params)
                     method_blocks.append(_vm_attr + '\n' + _vm_stub)
