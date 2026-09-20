@@ -141,18 +141,40 @@
 
 ---
 
-## 六、执行顺序与验收
+## 六、执行时序（与任务路线图对齐）
 
-**顺序**（每步一个独立提交）：
+> 路线图见 [2026-09-19-remaining-issues.md](2026-09-19-remaining-issues.md)，# 编号沿用其任务序号。
+> 原则：**拆分跟着"谁接下来要写这个文件"走——写到哪、拆到哪**；在途分支在改的文件绝不拆，没人碰的冷文件才允许提前拆。每个窗口都卡在"基线全绿 + 该文件最大修改者尚未开工"的节点。
+> 不采用"全部任务做完再拆"：`block/mod.rs` 是 #3/#5/#7/#8/#10 五批任务的写入目标，每合入一批，最终拆分更大更险；也不采用"现在全拆"：A-1 在途 + type_map/coerce/emitter 是后续任务热区，提前拆完到开工时 diff 上下文已变，合入冲突照旧。
 
-1. **P0-a** `block/mod.rs`：`erasure.rs` + `interface.rs` 先行（零依赖搬移），再执行 gen/ 四模块 + GenContext（Phase 2/3）
-2. **P0-b** `class_writer.py`：`clinit_extract.py` → `import_gen.py` → 字段解析器并入 `field_gen.py` → 主函数调用序列化
-3. **P1** `type_map` 四分 → `coerce` 三分一留 → `invoke_virtual` 函数分解 → `transpile` BFS 抽取（前三者均为纯搬移 + import 替换）
-4. **P2** `cfg/simplify.py` → `method/unify.py` + `fusion.py` → `stack._store_local` 分解 → `vars._hoist_if_vars` 分解
+### 路线图任务 → 文件写入面（决定窗口位置）
 
-**验收**：
+| 路线图任务 | 主要写入文件 |
+|---|---|
+| #1/#2 A-1 vtable 去形参化（在途，`/tmp/wt-a1b`） | `block/mod.rs` |
+| #3 G-11 `__new_with_super` | `block/mod.rs`（拆分后即 `gen/struct_layout.rs`） |
+| #5 S-3.1 装箱真实对象化 | `type_map.py`、`coerce.py` 值强转半区、gen/ 派发 |
+| #6 S-4 数组协变 | gen/、invoke 链 |
+| #7 A-3 完整 IR 化 | `coerce.py`（吸收 `_reinstantiate_generic` 4 处发射点）、rs_ir |
+| #8 A-7 / #10 A-5/A-6/A-4 | gen/、`invoke.py`/`invoke_virtual.py`、class_writer（lambda 类发射） |
+| #11 G-1/G-2 变量提升迁 rs_ir | `stack.py`、`method/vars.py`、`method/blocks.py` |
+
+### 窗口表（每步一个独立提交）
+
+| 窗口 | 时点 | 拆什么 | 为什么是这里 |
+|---|---|---|---|
+| 0 | **现在**（#1 A-1 代理运行期间） | ① `transpile.py` → `callchain.py`（§3.5）② `cfg/structure.py` → `simplify.py`（§3.8） | 冷文件，路线图全程无人碰，零冲突，用掉等待时间。A-1 在途期间**不碰** block/mod.rs、type_map、coerce、emitter |
+| 1 | #2 A-1 合入并过红线回归后，#3 G-11 与 #5 S-3.1 之前 | ③ `block/mod.rs`（§3.1：erasure/interface 抽出 → gen/ 五模块 + GenContext）④ `class_writer.py`（§3.3：clinit_extract → import_gen → 字段解析器并入 field_gen → 主函数调用序列化）⑤ `type_map.py` 四分（§3.2） | 刚合入 + 刚全绿 = 最理想基线；#3/#5/#8 的写入面全部落在拆分后的小模块上。#3 G-11 在 ③ 之后做，改 `gen/struct_layout.rs` |
+| 2 | #7 A-3 开工前 | ⑥ `coerce.py` 拆分（§3.4：hierarchy / member_owner / member_naming）⑦ `invoke_virtual.py` 函数分解（§3.7，接收者解析并入 member_owner） | A-3 要吸收 coerce 的 `_reinstantiate_generic`，先拆再吸收免二次搬移；#5 S-3.1 对 coerce 的改动集中在值强转半区，该半区拆分后原地不动，不受影响 |
+| 3 | #11 G-1/G-2 开工时（作为其第一步） | ⑧ `method/unify.py` + `method/fusion.py`（§3.6）⑨ `stack._store_local` 分解（§四）⑩ `vars._hoist_if_vars` 分解（§四） | G-2 本来就要迁变量提升逻辑，这三个文件的拆分就是它的第一步，不单独立项 |
+
+净成本 ≈ 3 个天级窗口 + 窗口 0 顺手项，换取 #3/#5/#7/#8/#10/#11 全部在 ≤600 行、单函数 ≤150 行的模块上开发，且拆分成本不再随任务增长。
+
+---
+
+## 七、验收
 
 - 每步：`cargo check`（Rust）/ `python3 -m py_compile codegen/**/*.py runtime`（Python）通过
-- 基线：改造前 `python3 scripts/run_tests.py --clean` 全量跑一遍存日志；每步后 `--filter` 定向重跑受影响测试；每个 P 级完成后全量对比基线，通过率不得退步
-- 纯搬移步骤（P1 前三项、P2 全部）零逻辑改动，diff 只允许 import 行与函数签名
+- 基线：改造前 `python3 scripts/run_tests.py --clean` 全量跑一遍存日志；每步后 `--filter` 定向重跑受影响测试；每个窗口完成后全量对比基线，通过率不得退步
+- 纯搬移步骤（窗口 0、1、2 全部，及窗口 3 的 ⑧）零逻辑改动，diff 只允许 import 行与函数签名；⑨⑩ 为方法内部分解，diff 允许阶段函数抽取
 - 终态：`wc -l` 全目录核对 §五 指标表
