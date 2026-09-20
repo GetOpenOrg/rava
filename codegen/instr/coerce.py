@@ -131,17 +131,18 @@ _NULL_OBJECT_EXPRS = frozenset({'Object::default()', 'Object::default().clone()'
 def _checkcast_runtime_expr(val_str: str, target: str) -> str:
     """checkcast / 按声明类型还原的运行时入口（S-4）。
 
-    - 类目标：`Object::downcast::<T>()`——wrapper 名单（__view_into）+ 擦除回退
-      （downcast 内部路径），借用接收者，不移动值。
     - 数组目标（`JArray<...>`）：`From<Object> for JArray<T>`——downcast 的泛型路径
       无法分解出元素类型，数组 checkcast 的判定（null 还原 / 同元素类型还原 /
-      任意祖先元素类型协变视图）由 From 侧的元素类型 T 驱动。From 按值收 Object
-      （downcast 借用接收者）→ 统一先 Clone::clone，值可能在兄弟分支继续使用
-      （`Object o; if(..) f((int[]) o); else g((long[]) o);`，E0382）。
+      任意祖先元素类型协变视图 / 泛型数组的擦除还原）由 From 侧的元素类型 T 驱动。
+    - 类目标：`<T as From<Object>>::from(..)`——wrapper 的 From 自带三层路径
+      （null 还原 / `__view_into` 视图 / `is_instance_of` + 擦除部件重建），覆盖
+      「运行时类是目标类或其子类 + 目标实例化非精确实参」的泛型擦除场景
+      （`(Enum) key` 于 `Enum<K extends Enum<K>>`）；`Object::downcast` 的 slot 按精确
+      TypeId 判定，跨实例化会误抛 ClassCastException。
+    From 按值收 Object（downcast 借用接收者）→ 统一先 Clone::clone，值可能在兄弟分支
+    继续使用（`Object o; if(..) f((int[]) o); else g((long[]) o);`，E0382）。
     """
-    if target.startswith('JArray<'):
-        return f"<{target} as ::std::convert::From<Object>>::from(Clone::clone(&{val_str}))"
-    return f"({val_str}).downcast::<{target}>()"
+    return f"<{target} as ::std::convert::From<Object>>::from(Clone::clone(&{val_str}))"
 
 
 def _coerce_from_null(val_str: str, expected: str) -> str | None:

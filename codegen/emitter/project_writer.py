@@ -471,7 +471,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     resolve_interface_impls(emissions, registry,
                             {k: set(v.get('methods', set())) for k, v in (new_format_map or {}).items()})
     resolve_interface_inherited_members(emissions, registry)
-    resolve_inherited_members(emissions, registry)
+    resolve_inherited_members(emissions, registry,
+                              impl_methods={k: set(v.get('methods', set()))
+                                            for k, v in (new_format_map or {}).items()})
     for _em in emissions.values():
         _write(_em.path, _em.text)
     _write_jdk_mod_tree()

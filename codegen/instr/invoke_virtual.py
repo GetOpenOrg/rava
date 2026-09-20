@@ -468,6 +468,64 @@ def _bridge_downcast_args(registry, sub_bin, sub_rust, mname, comment, params,
     return sub_mname_r, _barg_str, _bm17
 
 
+_SUBCLASS_INDEX: dict[int, dict[str, list[str]]] = {}
+
+# 泛型签名里的类型变量 token（`TP_IN;` / `TV;`；前面的负向后顾排除 `Lfoo/Type;` 形态）
+_TYPE_VAR_TOKEN = __import__('re').compile(r'(?<![A-Za-z0-9_$/])T[A-Za-z0-9_$]+;')
+
+
+def _virtually_dispatched(recv_ci, mname: str, param_desc: str, registry: dict) -> bool:
+    """(mname, param_desc) 沿接收者超类链的最近声明是否可安全按子类槽位登记。
+
+    跳过三类：private（invokespecial 静态解析，JLS §8.4.8）、final（不可覆盖，
+    运行时行为恒为声明类实现）、声明签名提及声明类类型变量的方法（`TP_IN;` 形态——
+    祖先形参代入具体实参的位置，如 `PipelineHelper<P_OUT>` → `PipelineHelper<Integer>`，
+    继承成员的 vtable_erasure 按名匹配覆盖不到，槽位签名会与 trait 声明不一致；
+    归类继承成员擦除缺口）。
+    """
+    _ACC_PRIVATE = 0x0002
+    _ACC_FINAL = 0x0010
+    cur, seen = recv_ci, set()
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        m = next((x for x in cur.methods
+                  if not x.is_synthetic and x.name == mname
+                  and x.descriptor.startswith(param_desc)), None)
+        if m is not None:
+            if m.access_flags & (_ACC_PRIVATE | _ACC_FINAL):
+                return False
+            gs = getattr(m, 'generic_signature', '') or ''
+            if _TYPE_VAR_TOKEN.search(gs):
+                return False
+            return True
+        cur = registry.get(cur.super_class) if cur.super_class else None
+    return True
+
+
+def _closure_subclasses(registry: dict) -> dict[str, list[str]]:
+    """registry 的类子类索引：{祖先 binary name → [闭包内全部子类 binary name]}。
+
+    按 id(registry) 记忆化（一次转译内共享；换 registry 时重建）。虚调用的运行时
+    槽位分派需要为闭包子类登记继承成员（见 _resolve_direct_call_sig 的登记点）。
+    """
+    key = id(registry)
+    cached = _SUBCLASS_INDEX.get(key)
+    if cached is not None:
+        return cached
+    subs: dict[str, list[str]] = {}
+    for bin_name, ci in registry.items():
+        if getattr(ci, 'is_interface', False) or not getattr(ci, 'super_class', ''):
+            continue
+        cur, seen = ci.super_class, set()
+        while cur and cur not in seen and cur in registry:
+            seen.add(cur)
+            subs.setdefault(cur, []).append(bin_name)
+            cur = registry[cur].super_class
+    _SUBCLASS_INDEX.clear()  # 只保留当前 registry 的索引
+    _SUBCLASS_INDEX[key] = subs
+    return subs
+
+
 def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
                              obj_base, obj_e, obj_ty, registry):
     """非 bare 接收者的调用形态解析：vtable body 内 this 直调 / 继承成员登记 /
@@ -548,6 +606,18 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
                             _sig_recv_ty = _bridge_owner_short + _owner_args_v
                     if _bridged_v is None or _bridged_v[0].name != _obj_jvm:
                         _inherited_calls.request(_obj_jvm, mname, _param_desc)
+            # `this.m(args)` 虚调用（wrapper 体由宏重写为 vtable UFCS 分派、vtable 体直呼
+            # trait 方法——均经 this.vtable 的运行时类槽位）：中间祖先覆盖了方法而叶类
+            # 未再声明时（AbstractPipeline.opIsStateful 抽象 → StatelessOp 覆盖 → 过滤器
+            # 阶段类静默继承），叶类槽位为空会分派到声明类的 trait default（抽象 stub /
+            # 声明体），丢失中间覆盖。为每个未自行声明该方法的闭包子类登记继承成员需求
+            # （成员体转发到链上最近声明者，等价 JVM 子类 vtable 继承条目）。外部接收者
+            # 的调用按静态类型成员分派（sig-poly 站点已按子类分支登记），不在本登记范围。
+            # private 方法 invokespecial 静态解析、final 方法不可覆盖，均跳过。
+            if (obj_e in ('this', 'self') and not _ci_recv.is_interface
+                    and _virtually_dispatched(_ci_recv, mname, _param_desc, registry)):
+                for _sub_bin in _closure_subclasses(registry).get(_obj_jvm, ()):
+                    _inherited_calls.request(_sub_bin, mname, _param_desc)
     return params, ret, rust_ret, _sig_owner, _sig_recv_ty, _recv, _root_routed
 
 
