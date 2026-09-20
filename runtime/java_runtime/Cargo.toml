@@ -10,3 +10,19 @@ path = "src/lib.rs"
 [dependencies]
 parking_lot = "0.12"
 java_rta_macros = { path = "../java_rta_macros" }
+
+[lints.rust]
+# 生成代码的固有形态不做告警（括号防御性包裹 / 未触达存根 / JVM 槽位复用赋值 /
+# Java 命名）。手写层开发期需要诊断时，临时注释本表即可。
+unused_parens = "allow"
+unused_braces = "allow"
+dead_code = "allow"
+unused_assignments = "allow"
+unused_variables = "allow"
+unused_mut = "allow"
+unused_imports = "allow"
+non_snake_case = "allow"
+non_camel_case_types = "allow"
+non_upper_case_globals = "allow"
+unreachable_code = "allow"
+unreachable_patterns = "allow"

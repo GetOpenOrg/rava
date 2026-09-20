@@ -46,11 +46,6 @@ pub(crate) fn classify_vtable_body(block: &Block) -> VTableBodyKind {
     VTableBodyKind::Safe
 }
 
-/// VirtualOverride 安全性检查：委托给 classify_vtable_body。
-pub(crate) fn is_vtable_safe_body(block: &Block) -> bool {
-    matches!(classify_vtable_body(block), VTableBodyKind::Safe)
-}
-
 /// A-1 存储层擦除后的门控分类：泛型类（带类型形参）的方法体不走 vtable 直连（Safe）
 /// 路径 —— `impl<P..> X__VTable<P..> for X__inner` 覆盖全部实例化，inner 上下文对
 /// `this.__get_x()` / `this.vtable_method()` 的解析无法定实例化（E0283）。统一改走
