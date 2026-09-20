@@ -1,0 +1,17 @@
+size=3
+contains alice=true
+contains dave=false
+remove bob=true
+remove bob again=false
+names=[alice, carol]
+keys size=3
+has(1,a)=true
+has(9,z)=false
+containsAll b=false
+union=[w, x, y, z]
+intersection=[y, z]
+difference=[x]
+empty isEmpty=true size=0
+names cleared isEmpty=true
+withNull size=2 hasNull=true
+done

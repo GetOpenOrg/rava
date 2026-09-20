@@ -1,0 +1,36 @@
+indexOf Hello=0
+lastIndexOf Hello=14
+indexOf Hello from 2=14
+indexOf missing=-1
+indexOf('H')=0
+indexOf('H',1)=14
+lastIndexOf('o')=18
+charAt(0)=H
+charAt(7)=W
+length=25
+substring(7,12)=World
+substring(7)=World! Hello Again
+subSequence=Hello
+split len=4 [a, b, c, d]
+split limit2 len=2 [a, b,c,d]
+regex split len=3 [a, , b]
+replace Hello->Bye=Bye, World! Bye Again
+replaceChar l->L=heLLo
+replaceAll digits=a#b#c#
+replaceFirst digit=a#b2c3
+chars len=3 first=a
+new String(char[])=abc
+valueOf(int)=42
+valueOf(char[])=xy
+valueOf(bool)=true
+valueOf(double)=1.5
+valueOf(obj)=sbVal
+valueOf(null)=null
+concat=abcd
+join=a-b-c
+matches \d+=true
+matches [A-Z]+=true
+charAt oob -> StringIndexOutOfBoundsException
+substring reversed -> StringIndexOutOfBoundsException
+codes=65 66 67
+done

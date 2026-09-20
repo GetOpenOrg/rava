@@ -1,0 +1,18 @@
+copyOf(3)=[1, 2, 3]
+copyOf(7)=[1, 2, 3, 4, 5, 0, 0]
+copyOfRange(1,4)=[2, 3, 4]
+arraycopy=[1, 2, 3, 4, 5, 0]
+arraycopy offset=[0, 0, 2, 3, 4, 0]
+self copy forward=[1, 1, 2, 3, 4]
+self copy backward=[2, 3, 4, 5, 5]
+identity shared=true
+refCopy=[shared!, b, null]
+original mutated=shared!
+rows=2 row0=[1, 2]
+deep row0=[1, 2, 99] original row0=[1, 2]
+arraycopy oob -> ArrayIndexOutOfBoundsException
+negative srcPos -> ArrayIndexOutOfBoundsException
+non-array src -> ArrayStoreException
+cloned=[100, 2, 3, 4, 5]
+source unchanged=[1, 2, 3, 4, 5]
+done

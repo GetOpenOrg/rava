@@ -1,0 +1,30 @@
+firstKey=alpha
+lastKey=delta
+size=4
+keys in order=[alpha, bravo, charlie, delta]
+values=[1, 2, 3, 4]
+lower(charlie)=bravo
+floor(charlie)=charlie
+higher(charlie)=delta
+ceiling(charlie)=charlie
+headMap(charlie)=[alpha, bravo]
+tailMap(charlie)=[charlie, delta]
+subMap(bravo,delta)=[bravo, charlie]
+pollFirst=alpha->1 size=3
+pollLast=delta->4 size=2
+descending keys=[3, 2, 1]
+descending first=3
+treeset=[1, 3, 5, 7, 9] size=5
+first=1 last=9
+lower(5)=3 higher(5)=7
+ceiling(6)=7 floor(6)=5
+headSet(5)=[1, 3]
+tailSet(5)=[5, 7, 9]
+subSet(3,7)=[3, 5]
+pollFirst=1 pollLast=9
+after poll=[3, 5, 7]
+byLength=[a, aa, bb, ccc]
+copied keys=[x, y]
+names=[bravo, charlie]
+headSet(3,true)=[3]
+done

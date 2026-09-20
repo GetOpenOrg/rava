@@ -1,0 +1,27 @@
+size=3
+alice=90
+bob=75
+missing=null
+old bob=75 new bob=80
+hasKey=true
+hasKey2=false
+hasValue=true
+removed=88 size=2
+remove missing=null
+getOrDefault=-1
+putIfAbsent new=null
+putIfAbsent exist=60
+replace=60
+dave=62
+erin(computed)=40
+erin(again)=40
+merged alice=95
+nullKey value=null-key
+k value=null
+size=2
+containsKey(null)=true
+id2=three size=2
+scores{alice=95 bob=80 dave=62 erin=40 }
+isEmpty=false
+after clear isEmpty=true
+done

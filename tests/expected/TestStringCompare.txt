@@ -1,0 +1,31 @@
+equals=false
+equalsIgnoreCase=true
+equals self=true
+compareTo=-47
+compareTo lower=-32
+compareToIgnoreCase=0
+cmp aaa vs aab=-1
+cmp a vs ab=-1
+startsWith He=true
+startsWith offset=true
+endsWith lo=true
+contains ell=true
+contains zz=false
+region(0,Hello)=true
+region ignore case=true
+empty isEmpty=true length=0
+blank isEmpty=false isBlank=true
+tab isBlank=true
+length=5
+trim=[Hello]
+strip=[Hello]
+stripLeading=[Hello  ]
+stripTrailing=[  Hello]
+toUpperCase=HELLO
+toLowerCase=hello
+repeat=ababab
+contentEquals sb=true
+lit==heap=false
+lit.equals(heap)=true
+interned==lit=true
+done
