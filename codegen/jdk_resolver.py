@@ -38,27 +38,34 @@ _JDK_PREFIXES = (
 )
 
 
-def _installed_brew_jdks() -> list[tuple[int, Path]]:
-    """brew Cellar 已安装的 JDK：(主版本, JAVA_HOME)，按版本升序。
-
-    覆盖 openjdk@NN 与裸 openjdk（即最新版）两种命名。
-    """
+def _installed_jdks() -> list[tuple[int, Path]]:
+    """本机已安装的 JDK（macOS brew + Linux /usr/lib/jvm）：
+    (主版本, JAVA_HOME)，按版本升序。与 scripts/jdk_select.py 同源逻辑。"""
     import re as _re
-    cellar = Path('/opt/homebrew/Cellar')
     result: list[tuple[int, Path]] = []
-    if not cellar.is_dir():
-        return result
-    for formula in cellar.iterdir():
-        if not formula.name.startswith('openjdk'):
-            continue
-        for version_dir in formula.iterdir():
-            home = version_dir / 'libexec' / 'openjdk.jdk' / 'Contents' / 'Home'
-            if not (home / 'jmods').is_dir():
+
+    def _add(home: Path) -> None:
+        if not (home / 'jmods').is_dir():
+            return
+        m = (_re.search(r'openjdk@(\d+)', str(home))
+             or _re.search(r'Cellar/openjdk/(\d+)', str(home))
+             or _re.search(r'java-(\d+)-openjdk', str(home))
+             or _re.search(r'/openjdk-(\d+)', str(home)))
+        if m:
+            result.append((int(m.group(1)), home))
+
+    cellar = Path('/opt/homebrew/Cellar')
+    if cellar.is_dir():
+        for formula in cellar.iterdir():
+            if not formula.name.startswith('openjdk'):
                 continue
-            m = _re.search(r'openjdk@(\d+)', str(home)) or _re.search(
-                r'Cellar/openjdk/(\d+)', str(home))
-            if m:
-                result.append((int(m.group(1)), home))
+            for version_dir in formula.iterdir():
+                _add(version_dir / 'libexec' / 'openjdk.jdk' / 'Contents' / 'Home')
+    jvm_dir = Path('/usr/lib/jvm')
+    if jvm_dir.is_dir():
+        for jvm in jvm_dir.iterdir():
+            if jvm.is_dir():
+                _add(jvm)
     return sorted(result)
 
 
@@ -79,7 +86,7 @@ def find_java_home(prefer_major: int | None = None) -> Path:
             return p
 
     if prefer_major:
-        installed = _installed_brew_jdks()
+        installed = _installed_jdks()
         exact = next((h for m, h in installed if m == prefer_major), None)
         if exact is not None:
             return exact
@@ -105,13 +112,16 @@ def find_java_home(prefer_major: int | None = None) -> Path:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
-    # macOS Homebrew 常见路径（优先新版本）
+    # 常见安装路径（macOS brew / Linux jvm 目录；不存在的自动跳过）
     brew_candidates = [
         '/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home',
         '/opt/homebrew/Cellar/openjdk@17/17.0.20.1/libexec/openjdk.jdk/Contents/Home',
         '/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home',
         '/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home',
         '/Library/Java/JavaVirtualMachines/openjdk-17.jdk/Contents/Home',
+        '/usr/lib/jvm/java-21-openjdk-amd64',
+        '/usr/lib/jvm/java-17-openjdk-amd64',
+        '/usr/lib/jvm/java-11-openjdk-amd64',
     ]
     for candidate in brew_candidates:
         p = Path(candidate)

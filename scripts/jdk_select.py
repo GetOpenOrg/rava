@@ -20,35 +20,52 @@ import re
 import subprocess
 from pathlib import Path
 
-_CELLAR = Path('/opt/homebrew/Cellar')
+_CELLAR = Path('/opt/homebrew/Cellar')      # macOS brew
+_JVM_DIR = Path('/usr/lib/jvm')             # Linux（Ubuntu/Debian 系）
 
 
 def _major_of(home: Path) -> int | None:
-    """从安装路径推断主版本：openjdk@21/21.0.11 → 21；openjdk/26.0.2 → 26。"""
-    m = re.search(r'openjdk@(\d+)', str(home))
-    if m:
-        return int(m.group(1))
-    m = re.search(r'Cellar/openjdk/(\d+)', str(home))
-    if m:
-        return int(m.group(1))
+    """从安装路径推断主版本，覆盖三种安装命名：
+    - brew:  openjdk@21/21.0.11 → 21；Cellar/openjdk/26.0.2 → 26
+    - Linux: java-21-openjdk-amd64 → 21；openjdk-21/ → 21（Debian 风格）
+    """
+    for pat in (r'openjdk@(\d+)', r'Cellar/openjdk/(\d+)',
+                r'java-(\d+)-openjdk', r'/openjdk-(\d+)'):
+        m = re.search(pat, str(home))
+        if m:
+            return int(m.group(1))
     return None
 
 
 def list_installed_jdks() -> list[tuple[int, Path]]:
-    """列出本机 brew 安装的 JDK：(主版本, JAVA_HOME) 按版本升序。"""
+    """列出本机已安装的 JDK（macOS brew + Linux /usr/lib/jvm）：
+    (主版本, JAVA_HOME) 按版本升序。"""
     result: list[tuple[int, Path]] = []
-    if not _CELLAR.is_dir():
-        return result
-    for formula in _CELLAR.iterdir():
-        if not formula.name.startswith('openjdk'):
-            continue
-        for version_dir in formula.iterdir():
-            home = version_dir / 'libexec' / 'openjdk.jdk' / 'Contents' / 'Home'
-            if not (home / 'jmods').is_dir():
+    seen: set[Path] = set()
+
+    def _add(home: Path) -> None:
+        if home in seen or not (home / 'jmods').is_dir():
+            return
+        major = _major_of(home)
+        if major is not None:
+            seen.add(home)
+            result.append((major, home))
+
+    # macOS brew：Cellar/openjdk@NN/<ver>/libexec/openjdk.jdk/Contents/Home
+    if _CELLAR.is_dir():
+        for formula in _CELLAR.iterdir():
+            if not formula.name.startswith('openjdk'):
                 continue
-            major = _major_of(home)
-            if major is not None:
-                result.append((major, home))
+            for version_dir in formula.iterdir():
+                _add(version_dir / 'libexec' / 'openjdk.jdk' / 'Contents' / 'Home')
+
+    # Linux：/usr/lib/jvm/java-NN-openjdk-*（Ubuntu）或 openjdk-NN（Debian）
+    if _JVM_DIR.is_dir():
+        for jvm in _JVM_DIR.iterdir():
+            if not jvm.is_dir():
+                continue
+            _add(jvm)   # Ubuntu/Debian：jmods 直接在 JVM 根下
+
     return sorted(result)
 
 
@@ -67,6 +84,7 @@ def resolve_jdk_home(major: int | None = None) -> Path | None:
             return home
     # brew 未命中时尝试 macOS java_home（覆盖系统安装的 JVM）；
     # java_home 对不存在的版本可能回退默认 JVM，须用 release 文件校验主版本
+    # macOS java_home 兜底（不存在该命令的平台上 FileNotFoundError 被吞）
     try:
         r = subprocess.run(['/usr/libexec/java_home', '-v', str(major)],
                            capture_output=True, text=True, timeout=5)
