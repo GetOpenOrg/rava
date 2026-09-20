@@ -335,6 +335,12 @@ R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」�
 ### G-11 `__new_with_super` 重建抹掉构造器早期已赋字段 【P1，R8 triage 新增】
 javac 21 对内部类的 `putfield this$0` 先于 `invokespecial super.<init>`（javap 实证），而 super 调用被建模为 `__new_with_super` 整体重建（`block/mod.rs:1669` 的 `#inner{..Default::default()}`），重建后本类字段归 null → 后续 NPE（TestVar 的 TreeMap$EntrySet 实证）。宏层小时级可修（重建保留旧 this 字段），但与 A-1 构造语义重叠——**归入 A-1 合入后的跟进项**。
 
+### K-5 构造器链身份与构造器虚分派 【P1，K 系列发现】
+每层构造器 `Self::default()` 各建对象身份；构造器体内的 `this.m()` 虚分派落在本层 inner 的抽象槽位（stub）。且 `previousStage.nextStage` 存入临时抽象层包装造成身份断裂。触发：streams 三测统一卡点（`AbstractPipeline.opIsStateful` ← 构造器链）。终态：子类身份先建，父类构造器经父类视图（`__from_parts`，vtable 上转）在其上执行——JVM 单一对象模型。与 G-11 同族（G-11 修了字段保留，本条是身份/分派）。
+
+### K-6 继承成员擦除缺口 【P1，K 系列发现】
+两类：协变返回覆盖的父槽位归属（`makeSink():S` 在子类生成 `virtual_in=self` 而非父槽 override）；祖先形参代入具体实参的签名位置（`PipelineHelper<P_OUT>` → `PipelineHelper<Integer>`）。泛化 `vtable_erasure` 的朴素尝试（描述符形态不同即擦除）引发 15 错误已回退——Python 侧需持有槽位签名的精确模型，与 A-3 的 CastExpr IR 化有交集。
+
 ### S-17 pattern switch 的 typeSwitch bootstrap 未翻译 【P1，R8 triage 新增】
 Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译为 `invokedynamic SwitchBootstraps.typeSwitch`；`sim/dynamic.py` 对非 LambdaMetafactory bootstrap 走 `Object::default()` 占位 → `Object as i32` E0605（TestPatternMatch）。终态：case 序编译为 instanceof 链（衔接 G-9 的运行时化）+ guard + target index。
 
