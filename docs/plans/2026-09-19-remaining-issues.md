@@ -202,7 +202,9 @@ System.out.println(nullable == null);  // Java 输出 true
 - 或：`PartialEq` 先检测 `is_jvm_null()`，两侧均为 null 则相等，一侧为 null 则不等。
 - `nullable == null` 的输出 diff = 0（TestAutoboxing 通过）。
 
-### S-4 数组协变不完整 【P1】
+### S-4 数组协变不完整 【已修复，R9 轮】
+
+> **R9 轮已修复**（ee5e394/cb15707 合入 main）：`From<Object> for JArray<T>` 任意祖先元素类型协变视图（存储擦除 + `__array_elem_assignable` 赋值兼容探针，静态生成祖先名单、与元素值无关）；aastore 运行时检查三序（null / wrapper 祖先名单 / 运行时类名 `is_instance_of`），不满足抛 `ArrayStoreException`（vm-upcalls 种子入链，可被 java_try 捕获）；数组 checkcast 统一经 `From<Object>`。TestBoundedGenerics 转胜；streams 三测编译全通（TestStreamCollectors 9×E0308 清零——真凶是 Z 字段 bool/int icmp 加宽，非 E0053 预判的 owner 解析；`_resolve_interface_default` 防御性落地）。**streams 下一层统一卡点**：`SharedSecrets.getJavaLangAccess` stub → 新增 K 系列条目（见 P-3 扩充）。预存 gap 实证：checkcast 失败的 CCE panic 不可被 java_try 捕获（归 S-1/A-3）。
 `JArray` 的 `Covariant` 视图只支持上转为 `Object[]`；转为祖先类数组（`Integer[]` → `Number[]`）失败；存入错误元素类型抛 `ClassCastException` 而非 `ArrayStoreException`。终态：任意祖先元素类型的协变视图 + `ArrayStoreException`。依赖 A-1 的类型化视图机制。
 
 ### S-5 `getClass()` / 类字面量不可用 【P1】
