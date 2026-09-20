@@ -13,7 +13,7 @@ from .rs_ir import (
     # 表达式
     Lit, Var, BinOp, UnOp, Call, MethodCall, FieldAccess, Index,
     Cast, RefExpr, DerefExpr, BlockExpr, IfExpr, MacroExpr, RawExpr,
-    NewPendingExpr, StaticFieldRef,
+    NewPendingExpr, StaticFieldRef, CastExpr, InstanceOfExpr,
     # 语句
     LetStmt, AssignStmt, ExprStmt, ReturnStmt,
     BreakStmt, ContinueStmt, LoopStmt, IfStmt, RawStmt,
@@ -128,6 +128,10 @@ def render_expr(expr) -> str:
     if isinstance(expr, StaticFieldRef):
         simple_name = _short_cls_g(expr.class_name)
         return f'{simple_name}{expr.turbofish}::{expr.field_name}()?'
+    if isinstance(expr, CastExpr):
+        return render_cast(expr)
+    if isinstance(expr, InstanceOfExpr):
+        return f'({render_expr(expr.expr)}).is_instance_of("{expr.binary_name}")'
     if isinstance(expr, RawExpr):
         return expr.code
     return f'/* unknown expr {type(expr).__name__} */'
@@ -141,6 +145,26 @@ def _render_block_expr(b: BlockExpr) -> str:
         lines.append(f'{_INDENT}{render_expr(b.tail)}\n')
     lines.append('}')
     return ''.join(lines)
+
+
+def _clone_src(expr) -> str:
+    """转换源的保活取值：Java 引用无 move 语义，统一 Clone::clone。
+    `this` 在实例方法中是 &Self（Clone::clone(this) 借引用克隆本体，
+    Clone::clone(&this) 会克隆引用本身），与 _coerce_arg / _coerce_stored_value 同规则。"""
+    if isinstance(expr, Var) and expr.name == 'this':
+        return 'Clone::clone(this)'
+    return f"Clone::clone(&{render_expr(expr)})"
+
+
+def render_cast(c: CastExpr) -> str:
+    """CastExpr 的统一渲染（A-3）：checkcast 语义（可失败，S-1）与
+    静态合法的 From<Object> 视图转换（跨实例化擦除路径）共用本入口。"""
+    src = _clone_src(c.expr)
+    if c.box_first:
+        src = f"Object::from({src})"
+    if c.checked:
+        return f'{src}.try_cast::<{c.target}>("{c.binary_name}")?'
+    return f"<{c.target} as ::std::convert::From<Object>>::from({src})"
 
 
 def _render_if_expr(e: IfExpr) -> str:

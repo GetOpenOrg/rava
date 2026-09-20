@@ -7,7 +7,7 @@ from ...type_map import (jvm_to_rust, parse_descriptor_params, parse_descriptor_
                          effective_class_type_params)
 from ..invoke import _gen_string_concat, _static_call_turbofish
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
-from ..coerce import _coerce_to_object, _reinstantiate_generic
+from ..coerce import _coerce_to_object, _render_cast, _same_generic_family
 from ..member_naming import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 
 
@@ -19,7 +19,7 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
     # ── invokedynamic ──
     if op == 'invokedynamic':
         if comment and 'makeConcatWithConstants' in comment:
-            _gen_string_concat(sim, comment)
+            _gen_string_concat(sim, comment, registry)
         else:
             # 解析 comment 格式：
             # "InvokeDynamic samName:dynDesc [impl:Cls.method:implDesc] [samtype:samDesc]"
@@ -117,6 +117,13 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     # 函数式接口的擦除签名（samtype）与实现方法签名之间的适配：
                     # SAM 实参是擦除的 Object、实现方法形参是具体类 → 拆箱（目标类型由形参推断）
                     _impl_params = parse_descriptor_params(_impl_desc)
+                    if (_impl_ci is None and not _impl_is_ctor
+                            and len(_impl_params) + 1 == len(_sam_params)):
+                        # impl 类不在 registry（java/lang/Object 等运行时层类）：其方法
+                        # 是 &self 实例方法（描述符不含接收者），SAM 实参恰多一个 →
+                        # 第一个 SAM 实参是接收者（`Object::toString`，A-3 修复 E0308：
+                        # 此前按静态形态传值，&self 形参收到 Object 报 E0308）
+                        _impl_is_instance = True
                     _call_cap_list = [f'Clone::clone(&{v})' for v in _cap_var_names]
                     _call_sam_list = list(_sam_anames)
                     # 实现方法形参表对应 (捕获值 + SAM 实参) 去掉接收者之后的部分
@@ -129,7 +136,11 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                         if 0 <= _pi < len(_impl_params):
                             _pd = _impl_params[_pi]
                             if _pd != _sd and _is_erased_ref(_sd) and not _is_erased_ref(_pd):
-                                _call_sam_list[_si] = f'{_sam_anames[_si]}.downcast()'
+                                # SAM 擦除实参 → 实现方法具体形参：checkcast 语义
+                                # （A-3：try_cast 失败返回 Err 可被 java_try 捕获，S-1；
+                                # 目标类型由形参推断，turbofish 不写）
+                                _sam_bin = _pd if _pd.startswith('[') else _pd[1:-1]
+                                _call_sam_list[_si] = f'{_sam_anames[_si]}.try_cast("{_sam_bin}")?'
                             elif (_is_erased_ref(_sd) and not _impl_ci.is_interface
                                   and len(_impl_sig_types) == len(_impl_params)
                                   and _impl_sig_types[_pi] in _impl_tparams):
@@ -155,13 +166,13 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                             # 合成 lambda 方法的形参是擦除实例化（X<Object, Object>），捕获值是精确
                             # 实例化（X<T, bool>）：经 Object 边界重新实例化。
                             # 形参类型与方法定义侧同源：有泛型签名取签名，否则取描述符擦除形态
+                            # （A-3：CastExpr 的擦除路径，替代已删除的 _reinstantiate_generic）
                             _cap_expected = (_impl_sig_types[_cp_idx]
                                              if len(_impl_sig_types) == len(_impl_params)
                                              else jvm_to_rust(_impl_params[_cp_idx], registry))
-                            _re_inst = _reinstantiate_generic(
-                                _cap_var_names[_ci_idx], _cap_ty, _cap_expected or '')
-                            if _re_inst is not None:
-                                _call_cap_list[_ci_idx] = _re_inst
+                            if _same_generic_family(_cap_ty, _cap_expected or ''):
+                                _call_cap_list[_ci_idx] = _render_cast(
+                                    _cap_var_names[_ci_idx], _cap_expected, box_first=True)
                     if _impl_is_instance and _call_cap_list:
                         # 捕获 this 的 lambda / 绑定接收者的方法引用：第一个捕获值是接收者
                         _call_cap_list[0] = f'&{_cap_var_names[0]}'
@@ -169,8 +180,10 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                         # 未绑定接收者的方法引用（X::method）：第一个 SAM 实参是接收者
                         _recv_desc = f'L{_impl_cls_bin};'
                         if _is_erased_ref(_sam_params[0]) and not _is_erased_ref(_recv_desc):
+                            # 擦除的 SAM 接收者 → 实现类具体接收者：checkcast 语义
+                            # （A-3：try_cast 失败返回 Err，可被 java_try 捕获，S-1）
                             _recv_ty = jvm_to_rust(_recv_desc, registry)
-                            _call_sam_list[0] = f'&{_sam_anames[0]}.downcast::<{_recv_ty}>()'
+                            _call_sam_list[0] = f'&{_sam_anames[0]}.try_cast::<{_recv_ty}>("{_impl_cls_bin}")?'
                         else:
                             _call_sam_list[0] = f'&{_sam_anames[0]}'
                     _call_cap_args  = ', '.join(_call_cap_list)

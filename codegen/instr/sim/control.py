@@ -2,7 +2,7 @@
 
 from ...type_map import short_cls as _short_cls_g
 from ...stack import BOOL
-from ...rs_ir import Lit, RawExpr, RsNamed
+from ...rs_ir import CastExpr, InstanceOfExpr, Lit, RawExpr, RsNamed
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, short_cls, effective_class_type_params as _effective_class_type_params
 from ..coerce import _coerce_to_object
@@ -29,9 +29,10 @@ def sim_control(ins, sim, class_name, registry) -> bool:
 
     # ── checkcast / instanceof ──
     if op == 'checkcast':
-        # 更新栈顶类型为 cast 目标类型；若源类型为 Object，插入运行时 downcast
+        # 更新栈顶类型为 cast 目标类型；若源类型为 Object，插入运行时 checkcast。
+        # 发射一律为 CastExpr 节点（A-3）：checked 形态失败返回 Err(JvmError::class_cast)
+        # 可被 java_try 捕获（S-1），消费方按节点分派（不再匹配 downcast 字符串）。
         if comment and sim.stack:
-            import re as _re_cast
             if comment.startswith('['):
                 cast_rust = jvm_to_rust(comment, registry)
             else:
@@ -51,13 +52,14 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             expr, src_ty = sim.pop()
             src_name = getattr(src_ty, 'name', str(src_ty))
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
-                # 类目标：downcast；数组目标：From（元素类型驱动的协变判定，S-4）
-                from ..coerce import _checkcast_runtime_expr
-                expr = RawExpr(_checkcast_runtime_expr(render_expr(expr), cast_rust))
+                # 源是 Object（擦除边界）：checkcast 语义（null 还原 / `__view_into` 视图 /
+                # is_instance_of + 擦除部件重建由 try_cast 按序判定，数组目标按元素类型驱动）
+                expr = CastExpr(expr, cast_rust, binary_name=comment, checked=True)
             elif (src_name != 'Object' and cast_rust not in ('Object', '()', src_name)
                   and _erased_shape(src_name) == _erased_shape(cast_rust)):
                 # 同一擦除类型、仅类型实参不同（`(Entry<K,V>[]) new Entry<?,?>[n]`）：JVM 上类型实参
                 # 不参与 checkcast，值不变；源侧待推断的 `_` 由目标类型给出
+                import re as _re_cast
                 if '_' in _re_cast.findall(r'\w+', src_name):
                     sim.push(expr, RsNamed(cast_rust))
                 else:
@@ -65,7 +67,7 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 return True
             elif (src_name != 'Object' and cast_rust not in ('Object', '()')
                   and (sim.type_var_bounds.get(src_name) or '').split('<')[0].strip()
-                      == cast_rust.split('<')[0].strip()):
+                  == cast_rust.split('<')[0].strip()):
                 # 类型变量值转型到其上界的擦除类（`K c = task.makeChild(..)`，javac 按 K 的擦除
                 # 补 checkcast）：恒成立，值与静态类型都不变
                 sim.push(expr, src_ty)
@@ -73,17 +75,15 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             elif src_name != 'Object' and cast_rust not in ('Object', '()', src_name):
                 if _is_subtype(cast_rust.split('<')[0], src_name.split('<')[0], registry):
                     # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode）：checkcast 语义 ——
-                    # 经 Object 边界（保持对象标识与运行时类）按目标类取回子类视图，null 原样通过
-                    _boxed = _coerce_to_object(render_expr(expr), src_name, registry,
-                                               sim.class_type_params)
-                    expr = RawExpr(f"<{cast_rust} as ::std::convert::From<Object>>::from({_boxed})")
+                    # 经 Object 边界（保持对象标识与运行时类）按目标类取回子类视图，null 原样通过；
+                    # 失败（运行时类不是目标族）抛 ClassCastException（S-1：Err 而非 panic）
+                    expr = CastExpr(expr, cast_rust, binary_name=comment, checked=True, box_first=True)
                 else:
                     # 静态类型互不为子类型（擦除泛型数组 `(E[][]) Arrays.copyOf(..)`、交叉转型）：
                     # checkcast 是运行时校验 → 经 Object 边界按目标类型取回
                     _boxed = _coerce_to_object(render_expr(expr), src_name, registry,
                                                sim.class_type_params)
-                    from ..coerce import _checkcast_runtime_expr
-                    expr = RawExpr(_checkcast_runtime_expr(_boxed, cast_rust))
+                    expr = CastExpr(RawExpr(_boxed), cast_rust, binary_name=comment, checked=True)
             if cast_rust == 'Object' and src_name not in ('Object', '()'):
                 # 目标擦除为 Object（接口 / 根类）而值有更精确的静态类型（类型变量 T_NODE、
                 # 具体类）：向上转型不改变值，表达式的 Rust 类型仍是源类型 → 记录源类型，
@@ -116,6 +116,8 @@ def sim_control(ins, sim, class_name, registry) -> bool:
         # 槽位定型配套：同一 slot 在兄弟分支赋不同引用类型时按公共祖先 widening
         # （vars.py 的合并 pass），运行时化复活的分支（HashMap.putVal 的
         # `p instanceof TreeNode`）才能与首赋值类型共存。
+        # 运行时判定统一发射 InstanceOfExpr 节点（A-3），经擦除类（vtable 静态
+        # 超类型名单）判定，消费方按节点分派。
         val_expr_inst, val_ty_inst = sim.pop() if sim.stack else (None, None)
         if comment and val_ty_inst is not None:
             if comment.startswith('['):
@@ -132,8 +134,7 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             if obj_ty_str == 'Object':
                 # 运行时多态：通过 ObjectVTable fn 指针（Arch-2）检查类型继承链
                 # comment 本身就是 JVM 二进制名（如 java/util/List）
-                val_s_inst = render_expr(val_expr_inst)
-                sim.push(RawExpr(f"({val_s_inst}.is_instance_of(\"{comment}\"))"), BOOL)
+                sim.push(InstanceOfExpr(val_expr_inst, comment), BOOL)
             elif obj_ty_str == target_for_subtype:
                 sim.push(Lit('true'), BOOL)
             elif _is_subtype(obj_ty_str.split('<')[0], target_for_subtype.split('<')[0], registry):
@@ -144,7 +145,7 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 val_s_inst = render_expr(val_expr_inst)
                 _boxed_inst = _coerce_to_object(val_s_inst, obj_ty_str.split('<')[0], registry,
                                                 sim.class_type_params)
-                sim.push(RawExpr(f"({_boxed_inst}).is_instance_of(\"{comment}\")"), BOOL)
+                sim.push(InstanceOfExpr(RawExpr(_boxed_inst), comment), BOOL)
             else:
                 from ...cfg import STATS as _STATS_INST
                 _STATS_INST.record_instanceof_fold()

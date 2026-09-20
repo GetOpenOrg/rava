@@ -188,11 +188,45 @@ class StaticFieldRef:
     turbofish: str = ''   # 泛型类型参数，如 '::<Object>' 用于消歧 E0283
 
 
+@dataclass
+class CastExpr:
+    """checkcast / 跨实例化转换（A-3 IR 化）：替代 `.downcast::<T>()` 与
+    `is_instance_of("...")` 字面量的字符串拼接形态，所有消费方按本节点分派。
+
+    - checked=True（checkcast 语义，运行时可失败，S-1）：
+      `Clone::clone(&expr).try_cast::<target>("binary_name")?`
+      失败返回 Err(JvmError::class_cast)，可被 java_try 捕获（替代 panic）。
+    - checked=False（静态合法的视图转换 / 跨实例化擦除路径，A-1）：
+      `<target as From<Object>>::from(Clone::clone(&expr))`
+      —— `From<Object> for X<A>` 对任意 A 成立（共享存储与对象标识）。
+    - box_first=True：expr 是具体 wrapper（非 Object）时先 `Object::from` 装箱
+      （保持对象标识与运行时类），再经上述路径转换。
+    binary_name 仅 checked=True 时使用（运行时类族判定依据）。
+    """
+    expr: RsExpr
+    target: str           # 目标 Rust 类型串（含泛型实参，如 'HashMap_Node<K, V>'）
+    binary_name: str = '' # 目标 JVM binary 名（checked=True 的运行时判定依据）
+    checked: bool = False
+    box_first: bool = False
+
+
+@dataclass
+class InstanceOfExpr:
+    """instanceof 的运行时判定（A-3 IR 化）：接收者的运行时类是否 IS-A binary_name。
+
+    静态可判定的折叠（接收者静态类型与目标互为子类型关系 → 恒真/恒假）在生成侧
+    完成（Lit(true)/Lit(false)，计入 instanceof_fold 审计），不进入本节点；
+    运行时判定统一经擦除类（ObjectVTable::is_instance_of 按静态超类型名单匹配）。
+    """
+    expr: RsExpr
+    binary_name: str      # 目标 JVM binary 名（如 "java/lang/String"）
+
+
 RsExpr = Union[
     Lit, Var, BinOp, UnOp, Call, MethodCall,
     FieldAccess, Index, Cast, RefExpr, DerefExpr,
     BlockExpr, IfExpr, MacroExpr, RawExpr,
-    NewPendingExpr, StaticFieldRef,
+    NewPendingExpr, StaticFieldRef, CastExpr, InstanceOfExpr,
 ]
 
 

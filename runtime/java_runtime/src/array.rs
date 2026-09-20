@@ -275,6 +275,25 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
     }
 }
 
+/// 擦除数组的逐元素兼容判定（`From<Object> for JArray<T>` 与 `Object::try_cast`
+/// 共用，A-3）：源数组可按 Object 级协变视图观察、且每个非 null 元素的运行时类与
+/// T 的 binary name 赋值兼容 → checkcast 到 `JArray<T>` 成立（泛型数组的擦除还原
+/// 路径：`(String[]) objArr`，源静态元素类型是 T 的祖先形态）。空数组 / 全 null 恒兼容。
+pub(crate) fn erased_array_compatible<T: Clone + Default + Into<Object> + 'static>(obj: &Object) -> bool {
+    let unused: Rc<dyn std::any::Any> = Rc::new(());
+    let mut erased: Option<JArray<Object>> = None;
+    obj.0.__view_into(unused, &mut erased);
+    if let Some(view) = erased {
+        let t_name = Into::<Object>::into(T::default()).0.__class_name();
+        let len = view.len().unwrap_or(0);
+        return (0..len).all(|i| match view.get(i) {
+            Ok(e) => e.0.is_jvm_null() || e.0.is_instance_of(t_name),
+            Err(_) => false,
+        });
+    }
+    false
+}
+
 /// `(T[]) obj` —— checkcast 到数组类型（见 `__view_into` / `__array_elem_assignable`）。
 ///
 /// null 通过任意数组类型的 checkcast（以目标形态的 null 还原）；同元素类型 / 已有视图
@@ -299,21 +318,8 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> From<Object> fo
         if obj.0.__array_elem_assignable(&mut elem_slot) && elem_slot.is_some() {
             return erased_object_view(obj);
         }
-        if !Self::has_primitive_elements() {
-            let unused: Rc<dyn std::any::Any> = Rc::new(());
-            let mut erased: Option<JArray<Object>> = None;
-            obj.0.__view_into(unused, &mut erased);
-            if let Some(view) = erased {
-                let t_name = Into::<Object>::into(T::default()).0.__class_name();
-                let len = view.len().unwrap_or(0);
-                let compatible = (0..len).all(|i| match view.get(i) {
-                    Ok(e) => e.0.is_jvm_null() || e.0.is_instance_of(t_name),
-                    Err(_) => false,
-                });
-                if compatible {
-                    return erased_object_view(obj);
-                }
-            }
+        if !Self::has_primitive_elements() && erased_array_compatible::<T>(&obj) {
+            return erased_object_view(obj);
         }
         panic!("ClassCastException: {} cannot be cast to {}",
                obj.0.__class_name(), std::any::type_name::<Self>())

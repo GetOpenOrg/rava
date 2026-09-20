@@ -56,7 +56,7 @@ from .invoke_virtual import _gen_invokevirtual
 
 
 
-def _gen_string_concat(sim: StackSim, comment: str):
+def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None):
     """处理 invokedynamic makeConcatWithConstants 字符串拼接。
     结果为 java.lang.String（通过 String::from(format!(...)) 转换）。
     """
@@ -448,11 +448,25 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 else:
                     init_expr = f"{raw_cls}::{ctor_name}()?"
         elif raw_cls and '/' not in raw_cls:
-            # 用户类：new()? 返回 Result<Self>，同样 mangle 重载构造器
+            # 用户类：new()? 返回 Result<Self>，同样 mangle 重载构造器。
+            # 泛型类与 JDK 分支同规则给出 turbofish（A-3）：钻石实例化由
+            # `_resolve_ctor_turbofish_args` 的静态近似解析（实参合一 > 同类同名
+            # 形参 > Object 擦除兜底）——仅靠 Rust 推断时，实参经 From<Object>
+            # 进入类型变量形参（unchecked cast）无锚点（E0283）。
+            _ctor_tparams_u: list[str] | None = None
+            if registry and _ctor_ci is not None:
+                _ctor_eff_u = _effective_class_type_params(_ctor_ci, registry)
+                if _ctor_eff_u:
+                    _ctor_tparams_u = (list(_scope_targs) if _scope_targs and full_cls == _ctor_bin
+                                       else list(_resolved_targs) if _resolved_targs and full_cls == _ctor_bin
+                                       else _resolve_ctor_turbofish_args(
+                                           full_cls, params, arg_tys, class_name, sim, registry))
+            type_params_str_u = ('<' + ', '.join(_ctor_tparams_u) + '>') if _ctor_tparams_u else ''
+            # 重载构造器：用 '<init>' 查重载再替换为 'new'，以匹配 method.py 生成的定义
             _init_mangled2 = _mangle_if_overloaded(raw_cls, '<init>', comment, registry)
             ctor_name    = _safe_field(_init_mangled2.replace('<init>', 'new'))
-            init_expr    = f"{raw_cls}::{ctor_name}({', '.join(args)})?"
-            rust_ty      = raw_cls
+            init_expr    = f"{raw_cls}{('::' + type_params_str_u) if type_params_str_u else ''}::{ctor_name}({', '.join(args)})?"
+            rust_ty      = raw_cls + type_params_str_u
             rust_ty_node = RsNamed(rust_ty)
         else:
             init_expr    = f"/* {raw_cls}::new() */"
