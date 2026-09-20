@@ -224,6 +224,30 @@ def _ctor_outer_ref_base(cls_short: str | None, params: list[str], registry: dic
     return outer.split('<', 1)[0] if outer else ''
 
 
+def _super_ctor_view_args(class_name: str, comment: str, registry: dict | None) -> list[str]:
+    """super(...) 目标父类在本类定义内部视角下的类型实参（K-5 父类视图实例化）。
+
+    与宏 superclass 属性 / import 扫描同源（SuperclassSignature 逐级代入），直接
+    父类为 ancestor_type_args 链首；目标不在链上（兜底路径）时按擦除语义取全
+    Object（vtable 非泛型，任意实例化行为一致）。非泛型父类返回 []。"""
+    if not registry or not class_name:
+        return []
+    _ci = registry.get(class_name)
+    _tgt = _method_ref_binary_class(comment)
+    if _ci is None or not _tgt:
+        return []
+    from ..type_args import ancestor_type_args as _anc_targs
+    for _anc_bin, _anc_as in _anc_targs(_ci, registry):
+        if _anc_bin == _tgt:
+            return list(_anc_as)
+    _tgt_ci = registry.get(_tgt)
+    if _tgt_ci is not None:
+        _tps = _effective_class_type_params(_tgt_ci, registry)
+        if _tps:
+            return ['Object'] * len(_tps)
+    return []
+
+
 def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     if '<init>' not in comment and '"<init>"' not in comment:
         # super.method() 调用（invokespecial 非构造器）：
@@ -476,20 +500,30 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 sim.emit(RawStmt(f"/* invokespecial {comment} (Object no-op) */"))
             else:
                 _init_mangled = _mangle_if_overloaded(cls, '<init>', comment, registry)
-                ctor_name = _safe_field(_init_mangled.replace('<init>', 'new'))
+                init_on_name = _safe_field(_init_mangled.replace('<init>', '__init_on'))
                 arg_str = ', '.join(args)
-                ctor_call = f"{raw_cls_rust}::{ctor_name}({arg_str})"
                 super_pfx = _find_super_chain_to_class(class_name, raw_cls_rust, registry) if registry else '_super.'
                 if super_pfx:
-                    # super(...)：以已构造好的父类值重建 this（宏的 __new_with_super）。
+                    # super(...)（K-5，JVM 单一对象模型）：不重建对象。已存在的 this 经
+                    # From<Self> for Parent（宏生成的 vtable 上转，any 共享部件）以父类
+                    # 视图传入父类 __init_on —— 父类体内的 putfield 经访问器落在唯一
+                    # 身份的 inner 上，this.m() 虚分派命中最终子类的 override；super 前
+                    # 已赋字段天然保留（取代 G-11 的 __new_with_super 重建保留）。
                     # JVM 校验器保证 <init> 的 invokespecial 只指向直接父类或同类，
-                    # 所以这里恒为 1 层，不需要按层数拼 _super 路径。
-                    # 旧 this 一并传入：javac 可能在 super() 之前 putfield 本类字段
-                    # （如内部类的 this$0），重建必须保留这些已赋值（G-11）。
-                    sim.emit(RawStmt(f"this = Self::__new_with_super({ctor_call}?, this);"))
+                    # 这里恒为 1 层。泛型父类按本类 SuperclassSignature 的实参给出
+                    # 视图实例化（与宏 superclass 属性、import 扫描同源）。
+                    _sup_args = _super_ctor_view_args(class_name, comment, registry)
+                    _sup_ty = raw_cls_rust + (f"<{', '.join(_sup_args)}>" if _sup_args else '')
+                    _path = (f"{raw_cls_rust}::<{', '.join(_sup_args)}>::{init_on_name}"
+                             if _sup_args else f"{raw_cls_rust}::{init_on_name}")
+                    _view = (f"<{_sup_ty} as ::std::convert::From<Self>>::from"
+                             f"(::std::clone::Clone::clone(&this))")
+                    sim.emit(RawStmt(
+                        f"{_path}({_view}{', ' if args else ''}{arg_str})?;"))
                 else:
-                    # 同类构造器委托 this(args)：直接替换 this（初始占位值丢弃）
-                    sim.emit(RawStmt(f"this = {ctor_call}?;"))
+                    # 同类构造器委托 this(args)：同一身份上执行被委托构造器体（K-5）
+                    sim.emit(RawStmt(
+                        f"this = Self::{init_on_name}(this{', ' if args else ''}{arg_str})?;"))
         else:
             sim.emit(RawStmt(f"/* invokespecial {comment} */"))
 

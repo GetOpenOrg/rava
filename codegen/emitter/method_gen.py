@@ -315,8 +315,23 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
             f'}}'
         )
 
-    return (
+    base_fn = (
         f'pub fn {fn_name}({sig_self}{args_str}) -> {ret_type} {{\n'
         f'    {body}\n'
         f'}}'
     )
+    # 构造器双入口（K-5）：存根构造器同样提供 `__init_on` 孪生入口 —— 子类
+    # super(...) 以父类视图调用父类 __init_on，编译期必须存在（运行期与 new
+    # 同一存根 panic，位置报告一致）。
+    if m.is_constructor:
+        _twin = (fn_name.replace('new', '__init_on', 1)
+                 if fn_name.startswith('new') else f'__init_on_{fn_name}')
+        _twin_args = f'this: Self{", " + args_str if args_str else ""}'
+        base_fn += (
+            f'\n\n#[doc(hidden)]\n'
+            f'pub fn {_twin}({_twin_args}) -> {ret_type} {{\n'
+            f'    let _ = &this;\n'
+            f'    {body}\n'
+            f'}}'
+        )
+    return base_fn
