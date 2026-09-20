@@ -16,8 +16,11 @@ from ..constants import safe_ident as _safe_field, OBJECT_CLASS as _OBJECT_CLASS
 from ..sig_types import hierarchy_overloaded_names
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
-    mangle_name,
+    mangle_name, jvm_to_rust,
 )
+from ..render import render_expr, render_type
+from .invoke_sig import receiver_type_arg_map, type_var_receiver_bound_view, _lookup_method_sig_params
+
 from .hierarchy import _rust_type_to_binary
 
 
@@ -383,3 +386,133 @@ def _resolve_bridge_target(ci, mname: str, descriptor: str, registry: dict):
             return _bridge_call_target(bridge, mname, registry)
         pending_ifaces.extend(iface_ci.interfaces or [])
     return None
+
+def _declaring_interface(iface_ci, mname: str, descriptor: str, registry: dict) -> str:
+    """接口 iface_ci（或其超接口，广度优先）中声明实例方法 mname:descriptor 的接口 binary name。
+    根类方法的重声明（经 Object vtable 分派）、私有 / 合成方法不算接口成员 → ''。"""
+    if (mname, descriptor[:descriptor.index(')') + 1]) in _root_virtual_methods():
+        return ''
+    queue = [iface_ci]
+    seen: set[str] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur.name in seen:
+            continue
+        seen.add(cur.name)
+        for m in cur.methods:
+            if (m.name == mname and m.descriptor == descriptor and not m.is_static
+                    and not m.is_synthetic and not (m.access_flags & 0x0002)):
+                return cur.name
+        queue.extend(registry[i] for i in (cur.interfaces or []) if i in registry)
+    return ''
+def _close_open_type_args(sim, stack_idx: int) -> None:
+    """菱形构造结果（类型实参待推断的 `X<_, A>`）直接作方法调用的接收者
+    （`new Task<>(helper, spliterator).invoke()`）：值不流经任何带类型的位置（局部声明、形参、
+    字段、返回值），待推断的类型实参没有约束来源 → 取其擦除（根类），写回构造处的 turbofish。"""
+    import re as _re_open
+    from ..rs_ir import LetStmt as _LetStmt, RawExpr as _RawExpr, RsNamed as _RsNamed, Var as _Var
+    expr, ty = sim.stack[stack_idx]
+    ty_s = render_type(ty)
+    _open = r'(?<![A-Za-z0-9_])_(?![A-Za-z0-9_])'
+    if '<' not in ty_s or not _re_open.search(_open, ty_s):
+        return
+    if not isinstance(expr, _Var):
+        # 构造表达式本身在栈上（`new X<>(..).m()` 未绑定临时变量）
+        _base, _args = ty_s.split('<', 1)
+        _open_tf = f"{_base}::<{_args[:-1]}>::"
+        _code = render_expr(expr)
+        if _code.startswith(_open_tf):
+            _closed = _re_open.sub(_open, 'Object', _args[:-1])
+            sim.stack[stack_idx] = (_RawExpr(f"{_base}::<{_closed}>::" + _code[len(_open_tf):]),
+                                    _RsNamed(f"{_base}<{_closed}>"))
+        return
+    if any(_loc[0] == expr.name for _loc in sim.locals.values()):
+        return      # Java 局部变量：类型实参由声明 / 后续用法确定
+    base, args = ty_s.split('<', 1)
+    open_tf = f"{base}::<{args[:-1]}>::"
+    closed_args = _re_open.sub(_open, 'Object', args[:-1])
+    for stmt in reversed(sim.stmts):
+        if isinstance(stmt, _LetStmt) and stmt.name == expr.name:
+            if not (isinstance(stmt.value, _RawExpr) and stmt.value.code.startswith(open_tf)):
+                return
+            stmt.value = _RawExpr(f"{base}::<{closed_args}>::" + stmt.value.code[len(open_tf):])
+            closed_ty = _RsNamed(f"{base}<{closed_args}>")
+            if stmt.ty is not None:
+                stmt.ty = closed_ty
+            if stmt.value_ty is not None:
+                stmt.value_ty = closed_ty
+            sim.stack[stack_idx] = (expr, closed_ty)
+            return
+
+
+def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: str,
+                                class_name: str, registry: dict | None):
+    """接收者解析与泛型实参映射（§3.7 从 _gen_invokevirtual 上移）：
+    在弹出参数前 peek 接收者类型，建立 callee 类型参数 → 接收者实参的映射
+    （如 HashMap<E,Object> → K=E），并按「接口经具体类接收者 / bridge 擦除描述符 /
+    常量池类」三级策略解析被调方法的真实形参类型列表。会改写接收者栈位
+    （类型变量 → 上界视图、菱形 `_` 实参 → 擦除闭合）。"""
+    # 在弹出参数前先 peek 接收者类型（在栈顶之下 len(params) 个位置），
+    # 解析泛型实参以建立 callee 类型参数 → 接收者实参的映射（如 HashMap<E,Object> → K=E）
+    _recv_targ_map: dict | None = None
+    _recv_is_this = False
+    _recv_ty = ''
+    _recv_stack_idx = len(params)
+    if len(sim.stack) > _recv_stack_idx:
+        import re as _re_recv
+        # 接收者是 this（继承到类里的接口 default 方法体）：接口类型形参即本类类型形参
+        _recv_is_this = render_expr(sim.stack[-(_recv_stack_idx + 1)][0]) == 'this'
+        # 类型变量接收者（task.makeChild(..)，task: K，K extends B<..,K>）：方法定义在
+        # 上界类的 wrapper 上 → 接收者换成上界类型视图（与 getfield/putfield 同规则），
+        # 之后的签名查找、实参映射、分派均按上界类型进行。无类上界时保持原样。
+        _rv_e, _rv_t = sim.stack[-(_recv_stack_idx + 1)]
+        _bv_e, _bv_t = type_var_receiver_bound_view(sim, _rv_e, _rv_t)
+        if _bv_t is not _rv_t:
+            sim.stack[-(_recv_stack_idx + 1)] = (_bv_e, _bv_t)
+        _close_open_type_args(sim, len(sim.stack) - (_recv_stack_idx + 1))
+        _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
+        _recv_targ_map = receiver_type_arg_map(_recv_ty, cls, registry)
+    sig_params_v = None
+    _recv_base_v = _recv_ty.split('<')[0].strip()
+    if registry and _recv_base_v and _recv_base_v != cls and not _recv_is_this:
+        # 接口方法经具体类接收者调用（`Map<Long,String> m = new HashMap<>(); m.put(k, v)`，
+        # 局部变量的 Rust 类型是构造出的类实例化）：Rust 侧解析到类自身的方法，
+        # 形参类型按类的声明签名 + 接收者实参确定，而非接口的擦除载体形态
+        _recv_cls_ci = registry.get(_rust_type_to_binary(_recv_base_v, registry) or '')
+        _call_cls_ci = registry.get(_rust_type_to_binary(cls, registry) or '')
+        if (_recv_cls_ci is not None and not _recv_cls_ci.is_interface
+                and _call_cls_ci is not None and _call_cls_ci.is_interface):
+            sig_params_v = _lookup_method_sig_params(
+                _recv_base_v, mname, params, ret, registry, sim.class_type_params,
+                receiver_targ_map=receiver_type_arg_map(_recv_ty, _recv_base_v, registry),
+                receiver_is_this=False,
+                receiver_type=_recv_ty,
+            )
+    if registry and sig_params_v is None:
+        # 调用描述符在接收者类上只命中 synthetic bridge（`copyInto(Object[],int)` →
+        # `copyInto(Integer[],int)`）：Rust 侧只生成被桥接的真实方法，形参类型按真实方法确定
+        _br_recv_bin = (class_name if _recv_is_this
+                        else _rust_type_to_binary(_recv_base_v, registry)) if (_recv_is_this or _recv_base_v) else ''
+        _br_recv_ci = registry.get(_br_recv_bin or '')
+        if _br_recv_ci is not None and not _br_recv_ci.is_interface:
+            _br_desc = '(' + ''.join(params) + ')' + ret
+            _br_target = _resolve_bridge_target(_br_recv_ci, mname, _br_desc, registry)
+            if _br_target is not None and _br_target[1] != _br_desc:
+                _, _, _br_params, _br_ret = parse_method_ref(f"{mname}:{_br_target[1]}")
+                if len(_br_params) == len(params):
+                    sig_params_v = _lookup_method_sig_params(
+                        _short_cls_g(_br_target[0].name), mname, _br_params, _br_ret, registry,
+                        sim.class_type_params,
+                        receiver_targ_map=receiver_type_arg_map(
+                            _recv_ty, _short_cls_g(_br_target[0].name), registry),
+                        receiver_is_this=_recv_is_this,
+                        receiver_type=_recv_ty,
+                    ) or [jvm_to_rust(_p, registry) for _p in _br_params]
+    if sig_params_v is None:
+        sig_params_v = _lookup_method_sig_params(
+            cls, mname, params, ret, registry, sim.class_type_params,
+            receiver_targ_map=_recv_targ_map,
+            receiver_is_this=_recv_is_this,
+            receiver_type=_recv_ty,
+        )
+    return sig_params_v
