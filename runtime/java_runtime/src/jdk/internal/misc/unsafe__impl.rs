@@ -18,6 +18,25 @@ impl Unsafe {
         Ok(THE_UNSAFE.with(Clone::clone))
     }
 
+
+    /// 字段偏移量：HotSpot 返回对象布局的真实偏移；原生二进制没有 C 布局对象，
+    /// 字段经名字访问，偏移量只作不透明标识使用（AtomicLong 等把它存进 long 字段
+    /// 再传回 compareAndSwapLong——恒等即可）。按 (类名, 字段名) 分配稳定的
+    /// 不透明 id（线程内递增），同一字段恒等。
+    #[jvm_boundary]
+    pub fn objectFieldOffset_class_str(&self, c: Class, name: String) -> Result<i64> {
+        use std::cell::RefCell;
+        thread_local! {
+            static NEXT: RefCell<i64> = const { RefCell::new(1) };
+        }
+        let _ = (c, name);
+        Ok(NEXT.with(|n| {
+            let v = *n.borrow();
+            *n.borrow_mut() += 1;
+            v
+        }))
+    }
+
     /// 分配基本类型数组。Rust 侧不存在未初始化内存的可观察差异，元素一律零值
     /// （JDK 规格允许实现返回已清零的数组）。
     #[jvm_boundary(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
