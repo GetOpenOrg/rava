@@ -140,7 +140,19 @@ def main():
     ap.add_argument('--clean', action='store_true', help='转译前清空 scratch 工作区')
     ap.add_argument('--no-run', action='store_true', help='只生成 Rust 代码，不编译运行')
     ap.add_argument('--batch', action='store_true', help='批量模式：写 src/bin/<class>.rs（供并行测试用）')
+    ap.add_argument('--jdk', type=int, default=None, metavar='N',
+                    help='指定 JDK 主版本（javac 与翻译语料同源；默认沿用 JAVA_HOME 或自动发现）')
     args = ap.parse_args()
+
+    if args.jdk is not None:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from jdk_select import resolve_jdk_home, list_installed_jdks
+        _home = resolve_jdk_home(args.jdk)
+        if _home is None:
+            _installed = '\n'.join(f"  JDK {m}: {h}" for m, h in list_installed_jdks())
+            sys.exit(f"未找到 JDK {args.jdk}。本机已安装：\n{_installed}")
+        os.environ['JAVA_HOME'] = str(_home)
+        print(f"[jdk] JAVA_HOME → {_home} (JDK {args.jdk})")
 
     java_files = args.java_files or [_DEFAULT_JAVA]
     stem = os.path.splitext(os.path.basename(java_files[0]))[0]

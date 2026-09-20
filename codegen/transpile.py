@@ -27,9 +27,13 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
     class_dir = os.path.join(src_dir, 'classes')
     os.makedirs(class_dir, exist_ok=True)
 
-    # 1. javac
-    print(f"[1/4] javac {' '.join(java_files)}")
-    r = subprocess.run(['javac', '-g', '-d', class_dir] + java_files,
+    # 1. javac（JAVA_HOME 同源解析，与 jdk_resolver 的语料保持同一 JDK）
+    _javac = 'javac'
+    _home = os.environ.get('JAVA_HOME', '')
+    if _home and os.path.exists(os.path.join(_home, 'bin', 'javac')):
+        _javac = os.path.join(_home, 'bin', 'javac')
+    print(f"[1/4] {_javac} {' '.join(java_files)}")
+    r = subprocess.run([_javac, '-g', '-d', class_dir] + java_files,
                        capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"javac failed:\n{r.stderr}")
