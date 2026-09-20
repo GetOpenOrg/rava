@@ -93,7 +93,19 @@ Java 泛型在运行时被擦除：`ArrayList<String>` 与 `ArrayList<Object>` �
 
 ## 6 阶段 2（后续步骤，全部以 §2 指标为验收）
 
-1. **`__inner` 与类 vtable 擦除**（方案 a）：`X__inner`、`X__VTable` 去掉类型形参；类型变量字段存 `Object`；`From<Object> for X<A>` 改为向对象查询类 vtable（与 `__interface` 同机制，按擦除类），对任意 `A` 成立且支持向上转型目标。完成后删除 `_reinstantiate_generic`。
+> **A-1 存储层擦除已部分落地（2026-09-20，`6c731b1` + `b7c7f45`，分支 fix/a1-erased-storage）**：
+> 步骤 1 的存储层与类身份转换核心已交付——`X__inner` 非泛型（提及类型形参的实例字段以
+> Object 存储，访问器边界 From/Into 转换）；`From<Object> for X<A>` 对任意 A 成立（新钩子
+> `ObjectVTable::__erased_inner` 取回非泛型 Rc，按擦除类重建任意实例化视图，共享存储与
+> 对象标识）；`#[immutable_state]` 机制整体删除；视图重建 / 浅拷贝移到 wrapper 侧。
+> `X__VTable<P>` 仍带类型形参（签名保持类型化）——接口 vtable impl 与「祖先实参未引用
+> 全部形参」的祖先 impl 经全 Object 擦除实例化构造 wrapper（分派本身是擦除的）。
+> 可见收益：TestWildcards E0277 跨实例化族清零（转阻塞在 S-3.1 装箱视图）、TestNestedGeneric
+> 编译错误 5→2。`_reinstantiate_generic` 的 4 个发射点保留（转换本体仍需发射，已由擦除
+> 路径正确支撑），归零待步骤 2 的 CastExpr 吸收。已知边界：JArray 元素数组的跨实例化取回
+> 仍按精确元素类型（S-4）；`From<Object>` 失败路径仍 panic（S-1）。
+
+1. **`__inner` 与类 vtable 擦除**（方案 a）：`X__inner`、`X__VTable` 去掉类型形参；类型变量字段存 `Object`；`From<Object> for X<A>` 改为向对象查询类 vtable（与 `__interface` 同机制，按擦除类），对任意 `A` 成立且支持向上转型目标。完成后删除 `_reinstantiate_generic`。【存储层与 From<Object> 已落地；`X__VTable` 的去形参与方法签名擦除（wrapper 全量边界转换）为剩余部分】
 2. **checkcast 统一为 `Into::<T>::into(obj)`**：当前 `.downcast::<T>()` 字符串形态被 `stack.py`（hint 重定向）、`fields.py`、`invoke_sig.py`、`codegen.py` 共 15+ 处模式匹配依赖，且 `downcast(&self)` 与 `into(self)` 的所有权语义不同；本轮试改后 TestStringBuilder 出现 16 个错误，已回退。需在步骤 1 之后以 IR 节点（`CastExpr`）替代字符串形态一次性替换。
 3. **instanceof 在「静态类型是目标祖先」时走运行时判定**：本轮试改后原先被静态 `false` 屏蔽的分支变活，暴露出子类值赋给父类局部变量缺少向上转型（`e = _t1`，TreeNode → Node）以及三元合并的类型不一致（位于控制流结构化区域，非本任务范围）。需与控制流改造合并后启用。
 4. **移除 `invokevirtual` 在 `Object` 接收者上的类 downcast 链**（剩余 `downcast_ref` 的主要来源）：依赖步骤 1 的类 vtable 查询。

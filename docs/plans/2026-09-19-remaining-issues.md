@@ -44,6 +44,17 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 
 ### A-1 存储层擦除未落地：可变泛型类无法跨实例化互转 【P0】
 
+> **核心已落地（2026-09-20，`6c731b1` 阶段 α + `b7c7f45` 阶段 β，分支 fix/a1-erased-storage）**：
+> `X__inner` 非泛型（提及类型形参的字段以 Object 存储）；`From<Object> for X<A>` 对任意 A
+> 成立（`__erased_inner` 钩子 + 按擦除类判定，共享存储与对象标识）；`#[immutable_state]`
+> 机制整体删除（attrs.py 停发，宏与 runtime 的 `__erased_state` 移除，验收「= 0」达成）；
+> 视图重建 / 浅拷贝移到 wrapper 侧。可见收益：TestWildcards E0277 族清零（编译通过，转
+> 阻塞在 S-3.1 的 Integer→Number 装箱视图）、TestNestedGeneric 编译错误 5→2（余菱形推断，
+> A-3/G-3 范畴）。**剩余**：`X__VTable<P>` 仍带类型形参（签名类型化）——完全去形参需把
+> 方法签名擦除进 vtable、wrapper 全量边界转换（与接口载体同构），属本条目的下一增量；
+> `_reinstantiate_generic` 4 个发射点保留（发射本体仍必要，已由擦除路径正确支撑），
+> 归零需 A-3 的 CastExpr 吸收；JArray 元素数组跨实例化取回按精确元素类型（S-4）。
+
 - **现状**：`X__inner<T>`、`X__VTable<T>` 仍带类型形参，Rust 单态化使 `X<Object>` 与 `X<T>` 是两个不相关的类型。R5-B 为「字段全 final 的泛型类」加了 `#[immutable_state]`（`From<Object>` 从擦除字段值重建实例并共享 `__identity`），只覆盖不可变类（如 `(Optional<T>) EMPTY`）。可变泛型类的不同实例化之间不能互转，子类对象不能在另一实例化下重建视图。
 - **根因**：Java 泛型是擦除的（运行时只有一个 `X`），Rust 生成代码却按类型实参分裂了运行时身份。
 - **终态**（即 `2026-09-18-erased-runtime-identity.md` §6 步骤 1，方案 a）：`X__inner`、`X__VTable` 为非泛型；类型变量字段以 `Object` 存储；wrapper `X<A>` 仅以 `PhantomData<A>` 携带类型实参，是同一 `Rc<X__inner>` 上的类型化视图；`From<Object> for X<A>` 对任意 `A` 成立。

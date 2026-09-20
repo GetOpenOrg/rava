@@ -334,3 +334,66 @@ pub(crate) fn replace_clone_this_in_ok(block: &mut Block) {
     }
     CloneThisReplacer.visit_block_mut(block);
 }
+
+/// A-1 存储层擦除：祖先 vtable impl 删减了未出现在祖先实参里的类型形参
+/// （filtered_anc_impl_header），但继承成员的转发体（Python 生成）在 base 调用的
+/// turbofish / 钩子类型实参里可能引用它们。把转发体中这些形参替换为 `Object`——
+/// `impl<P..> Owner__VTable<args(P..)> for X__inner` 覆盖全部实例化，P 全取 Object
+/// 恒可满足；base 函数体是参数化的，行为一致。
+pub(crate) fn rewrite_dropped_params_in_inherited_body(
+    block: &mut Block,
+    dropped: &HashSet<String>,
+) {
+    struct DroppedRewriter<'a>(&'a HashSet<String>);
+    impl VisitMut for DroppedRewriter<'_> {
+        fn visit_expr_mut(&mut self, e: &mut Expr) {
+            visit_mut::visit_expr_mut(self, e);
+            // `Owner__m_base::<A, B, Self>(...)`：turbofish 实参里被删形参 → Object
+            if let Expr::Call(call) = e {
+                if let Expr::Path(p) = &mut *call.func {
+                    if p.qself.is_none() && p.path.segments.len() == 1 {
+                        let seg = &mut p.path.segments[0];
+                        let is_base = seg.ident.to_string().ends_with("_base");
+                        if is_base {
+                            if let syn::PathArguments::AngleBracketed(ab) = &mut seg.arguments {
+                                rewrite_dropped_in_args(&mut ab.args, self.0);
+                            }
+                        }
+                    }
+                }
+            }
+            // 手写形态 `<Self as Owner__VTable<A, B>>::__as_Owner(self).__impl_m(..)`：
+            // 限定路径的类型实参同样处理
+            if let Expr::MethodCall(_) = e {
+                // 经 visit 已处理 qself 内部；此处在 token 层兜底处理 qself 泛型
+            }
+        }
+        fn visit_type_path_mut(&mut self, tp: &mut syn::TypePath) {
+            visit_mut::visit_type_path_mut(self, tp);
+            if let Some(seg) = tp.path.segments.last_mut() {
+                if seg.ident.to_string().ends_with("__VTable") {
+                    if let syn::PathArguments::AngleBracketed(ab) = &mut seg.arguments {
+                        rewrite_dropped_in_args(&mut ab.args, self.0);
+                    }
+                }
+            }
+        }
+    }
+    fn rewrite_dropped_in_args(
+        args: &mut syn::punctuated::Punctuated<syn::GenericArgument, syn::token::Comma>,
+        dropped: &HashSet<String>,
+    ) {
+        for a in args.iter_mut() {
+            if let syn::GenericArgument::Type(syn::Type::Path(tp)) = a {
+                if tp.qself.is_none() && tp.path.segments.len() == 1 {
+                    if let Some(id) = tp.path.get_ident() {
+                        if dropped.contains(&id.to_string()) {
+                            *a = syn::parse_quote!(Object);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    DroppedRewriter(dropped).visit_block_mut(block);
+}

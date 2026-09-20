@@ -31,12 +31,13 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{GenericParam, Ident, Type};
 
-use classify::{classify_vtable_body, is_vtable_safe_body, vtable_body_kind_gated, VTableBodyKind};
+use classify::{vtable_body_kind_gated, VTableBodyKind};
 use generic_sig::rebuild_sig_with_generics;
 use parse::{split_type_name_args, ClassInput, ClassMeta, FnItem, InterfaceImpl};
 use rewrite::{
     replace_clone_this_in_ok, rewrite_base_calls_for_wrapper, rewrite_block,
-    rewrite_virtual_calls_for_wrapper, rewrite_vtable_calls_ufcs_for_base,
+    rewrite_dropped_params_in_inherited_body, rewrite_virtual_calls_for_wrapper,
+    rewrite_vtable_calls_ufcs_for_base,
 };
 use util::{attr_str, classify_method, is_basic, strip_meta_attrs, MethodKind};
 
@@ -500,7 +501,7 @@ fn erased_wrapper_call(
     // 其余直接重新包 Ok（上方已用 ? 解包）
     let ret_expr: TokenStream2 = match &sig.output {
         syn::ReturnType::Type(_, ty) => {
-            let mut conv = quote! { Ok(__result) };
+            let mut conv = quote! { __result };
             if let Type::Path(tp) = &**ty {
                 if let Some(seg) = tp.path.segments.last() {
                     if seg.ident == "Result" {
@@ -508,8 +509,8 @@ fn erased_wrapper_call(
                             if let Some(syn::GenericArgument::Type(inner)) = ab.args.first() {
                                 if mentions_any(inner, type_param_names) {
                                     conv = quote! {
-                                        Ok(__result.map(|__v|
-                                            <#inner as ::std::convert::From<Object>>::from(__v)))
+                                        __result.map(|__v|
+                                            <#inner as ::std::convert::From<Object>>::from(__v))
                                     };
                                 }
                             }
@@ -519,7 +520,7 @@ fn erased_wrapper_call(
             }
             conv
         }
-        syn::ReturnType::Default => quote! { Ok(__result) },
+        syn::ReturnType::Default => quote! { __result },
     };
     quote! {
         let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
@@ -528,7 +529,7 @@ fn erased_wrapper_call(
             any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
             _jvm_null: false,
         };
-        let __result = __w.#impl_name(#(#conv_args),*)?;
+        let __result = __w.#impl_name(#(#conv_args),*);
         #ret_expr
     }
 }
@@ -735,17 +736,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 fn #get(&self) -> #ty;
                 fn #set(&self, v: #ty);
             });
-        } else if is_basic(ty) {
-            vtable_abstract_methods.push(quote! {
-                fn #get(&self) -> #ty;
-                fn #set(&self, v: #ty);
-            });
         } else {
-            let borm = format_ident!("__borrow_mut_{}", name);
             vtable_abstract_methods.push(quote! {
                 fn #get(&self) -> #ty;
                 fn #set(&self, v: #ty);
-                fn #borm(&self) -> ::std::cell::RefMut<'_, #ty>;
             });
         }
     }
@@ -1025,7 +1019,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // 擦除字段（__inner 中以 Object 存储）：get/set 签名保持声明类型，边界经
     // From<Object> / Into<Object> 转换（等价 javac 在字段访问处插入的 checkcast）；
     // 不生成 __borrow_mut_（擦除存储无法返回 RefMut<声明类型>，且无任何消费方）。
-    let accessor_impl_items = |name: &syn::Ident, ty: &Type| -> TokenStream2 {
+    let accessor_impl_items = |name: &syn::Ident, ty: &Type, basic: bool| -> TokenStream2 {
         let get = format_ident!("__get_{}", name);
         let set = format_ident!("__set_{}", name);
         if is_erased(name) {
@@ -1039,24 +1033,18 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                         ::std::boxed::Box::new(::std::convert::Into::<Object>::into(v)));
                 }
             }
-        } else if is_basic(ty) {
+        } else if basic {
             quote! {
                 fn #get(&self) -> #ty { self.#name.get() }
                 fn #set(&self, v: #ty) { self.#name.set(v); }
             }
         } else {
-            let borm = format_ident!("__borrow_mut_{}", name);
             quote! {
                 fn #get(&self) -> #ty {
                     self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
                 }
                 fn #set(&self, v: #ty) {
                     *self.#name.borrow_mut() = Some(::std::boxed::Box::new(v));
-                }
-                fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> {
-                    ::std::cell::RefMut::map(self.#name.borrow_mut(), |opt| {
-                        opt.as_deref_mut().expect("field not initialized")
-                    })
                 }
             }
         }
@@ -1066,7 +1054,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         // ── 无父类：impl Self__VTable for __inner ────────────────────────────
         let mut own_accessor_impls: Vec<TokenStream2> = Vec::new();
         for (name, ty) in &fields {
-            own_accessor_impls.push(accessor_impl_items(name, ty));
+            own_accessor_impls.push(accessor_impl_items(name, ty, is_basic(ty)));
         }
         // VirtualDefine 方法体：Safe → 直接放入 vtable impl；
         // 其余（需要 wrapper 上下文）→ 不在此生成，走 trait default 的钩子路径
@@ -1146,7 +1134,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
             for field_name in &anc_own_field_names {
                 if let Some((name, ty)) = sc_fields_map.get(field_name) {
-                    items.push(accessor_impl_items(name, ty));
+                    items.push(accessor_impl_items(name, ty, inherited_is_basic(name, ty)));
                 }
             }
 
@@ -1239,7 +1227,17 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     continue;
                 }
                 let sig = &f.sig;
-                items.push(quote! { #sig #block });
+                let mut b = block.clone();
+                if !anc_keeps_all_params {
+                    // 转发体的 base 调用 turbofish / 钩子实参可能引用本 impl 已删除的
+                    // 类型形参 → 替换为 Object（泛型 impl 覆盖全部实例化，行为参数化一致）
+                    let dropped: HashSet<String> = gen.type_params()
+                        .map(|tp| tp.ident.to_string())
+                        .filter(|p| !anc_arg_idents.contains(p))
+                        .collect();
+                    rewrite_dropped_params_in_inherited_body(&mut b, &dropped);
+                }
+                items.push(quote! { #sig #b });
             }
 
             // 祖先 wrapper 重建钩子（经 __from_parts：祖先可能在另一个 crate，字段不可见）
@@ -1266,7 +1264,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         // Self__VTable impl（own fields 的 accessor）
         let mut own_accessor_impls: Vec<TokenStream2> = Vec::new();
         for (name, ty) in &fields {
-            own_accessor_impls.push(accessor_impl_items(name, ty));
+            own_accessor_impls.push(accessor_impl_items(name, ty, is_basic(ty)));
         }
         // VirtualDefine 方法体：Safe → 直接放入 vtable impl；
         // 其余（需要 wrapper 上下文）→ 不在此生成，走 trait default 的钩子路径
@@ -1545,45 +1543,19 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
     // 字段访问器委托（own fields）。擦除字段不委托 __borrow_*（vtable 未声明，擦除存储
     // 无法返回 RefMut<声明类型>；无任何消费方）。
-    let wrapper_delegate_items = |name: &syn::Ident, ty: &Type, basic: bool| -> TokenStream2 {
+    // 擦除与否只影响存储/impl 侧；wrapper 委托形态一致（__borrow_* 已整体删除）
+    let wrapper_delegate_items = |name: &syn::Ident, ty: &Type| -> TokenStream2 {
         let get = format_ident!("__get_{}", name);
         let set = format_ident!("__set_{}", name);
-        if is_erased(name) {
-            quote! {
-                #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { self.vtable.#get() }
-                #[doc(hidden)] #[inline]
-                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
-            }
-        } else if basic {
-            quote! {
-                #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { self.vtable.#get() }
-                #[doc(hidden)] #[inline]
-                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
-            }
-        } else {
-            let bor = format_ident!("__borrow_{}", name);
-            let borm = format_ident!("__borrow_mut_{}", name);
-            quote! {
-                #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { self.vtable.#get() }
-                #[doc(hidden)] #[inline]
-                pub fn #borm(&self) -> ::std::cell::RefMut<'_, #ty> { self.vtable.#borm() }
-                #[doc(hidden)] #[inline]
-                pub fn #bor(&self) -> ::std::cell::RefMut<'_, #ty> { self.vtable.#borm() }
-                #[doc(hidden)] #[inline]
-                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
-            }
+        quote! {
+            #[doc(hidden)] #[inline]
+            pub fn #get(&self) -> #ty { self.vtable.#get() }
+            #[doc(hidden)] #[inline]
+            pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
         }
     };
-    for (name, ty) in &fields {
-        wrapper_methods.push(wrapper_delegate_items(name, ty, is_basic(ty)));
-    }
-
-    // 字段访问器委托（superclass_fields，继承字段）
-    for (name, ty) in &meta.superclass_fields {
-        wrapper_methods.push(wrapper_delegate_items(name, ty, inherited_is_basic(name, ty)));
+    for (name, ty) in fields.iter().chain(meta.superclass_fields.iter()) {
+        wrapper_methods.push(wrapper_delegate_items(name, ty));
     }
 
     // VirtualDefine 方法：wrapper 统一委托到 vtable 以保证多态正确性。
