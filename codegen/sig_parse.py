@@ -24,11 +24,8 @@ _CLASSNAME_MAP: dict[str, str] = {
     # 置空）。mapped 分支忽略 type_args，使 Ljava/lang/Class<*>; → Class，
     # 与 jvm_to_rust 的 registry 分支（裸 Class）保持一致。
     'java/lang/Class':         'Class',
-    'java/lang/Integer':       'i32',
-    'java/lang/Long':          'i64',
-    'java/lang/Double':        'f64',
-    'java/lang/Float':         'f32',
-    'java/lang/Boolean':       'bool',
+    # S-3.1：装箱类型（Integer/Long/...）不再映射为原生值 —— 签名里的
+    # Ljava/lang/Integer; 是引用类型，走 registry 分支得到翻译类
     'java/lang/StringBuilder': 'String',
     'java/lang/StringBuffer':  'String',
 }

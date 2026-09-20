@@ -10,7 +10,6 @@ from ..sig_types import hierarchy_overloaded_names, method_name_is_mangled
 from ..type_map import (
     parse_descriptor_params, parse_descriptor_return,
     mangle_name,
-    BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
 )
 
 # Python float → Rust 字面量（处理 nan/inf/-inf 等特殊值）

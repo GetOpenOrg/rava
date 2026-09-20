@@ -30,7 +30,7 @@ from .coerce import (
     _method_ref_descriptor, _resolve_special_method_owner,
     _resolve_interface_special_target, interface_special_member_name,
     _get_all_subtypes_ordered,
-    BOXING_SKIP_STATIC, UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
+    _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
 )
 from .invoke_sig import (
@@ -506,12 +506,9 @@ def _static_call_turbofish(cls: str, class_name: str, sim: StackSim,
 
 
 def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
-    for skip in BOXING_SKIP_STATIC:
-        # 按类名边界匹配：裸子串匹配会把类名以装箱类名结尾的其他类
-        # （owner 短名仅是后缀相同）误判为自动装箱，导致真实的静态工厂调用被丢弃
-        if re.search(r'(?<![A-Za-z0-9_$])' + re.escape(skip) + r'(?![A-Za-z0-9_$])', comment):
-            return  # 自动装箱：栈顶值保留
-
+    # S-3.1：装箱类的 valueOf 不再跳过 —— javac 插入的 Integer.valueOf 等装箱调用
+    # 就是普通 invokestatic，走正常翻译路径调用字节码翻译出的工厂方法
+    #（Integer.valueOf 自带 -128~127 缓存池语义）。
     cls, mname, params, ret = parse_method_ref(comment)
     # JVM 方法解析：invokestatic 的常量池类可以是子类，static 方法实际声明在祖先类
     # → 沿父类链解析到声明类（Rust 的关联函数不随继承可见，E0599）。

@@ -28,10 +28,9 @@ JVM_RUST: dict[str, str] = {
     # Class<Object>（jvm_to_rust 的 registry 分支），与 generic_signature
     # 解析（_parse_one_type → Class<Object>）保持一致；registry 缺 Class
     # 时 fallback 到 Object（与反射擦除语义等价）。
-    'Ljava/lang/Integer;': 'i32',
-    'Ljava/lang/Long;':    'i64',
-    'Ljava/lang/Double;':  'f64',
-    'Ljava/lang/Boolean;': 'bool',
+    # S-3.1：装箱类型（Integer/Long/...）不再拆平为原生值 —— 描述符
+    # Ljava/lang/Integer; 是引用类型，走 registry 分支得到字节码翻译类；
+    # 描述符 I（int）与 Ljava/lang/Integer;（Integer）在字节码里本就区分清晰。
     '[I': 'JArray<i32>', '[J': 'JArray<i64>',
     '[F': 'JArray<f32>', '[D': 'JArray<f64>',
     '[B': 'JArray<i8>',  '[S': 'JArray<i16>',
@@ -50,22 +49,6 @@ NEWARRAY_TYPES: dict[str, tuple[str, str]] = {
     'short':   ('i16',  '0i16'),
     'char':    ('u16',  '0u16'),
     'boolean': ('bool', 'false'),
-}
-
-
-# 装箱方法（调用端透明：保留栈顶值不变）
-BOXING_SKIP_STATIC: set[str] = {
-    'java/lang/Integer.valueOf', 'java/lang/Long.valueOf',
-    'java/lang/Double.valueOf',  'java/lang/Float.valueOf',
-    'java/lang/Boolean.valueOf',
-    'Integer.valueOf', 'Long.valueOf', 'Double.valueOf',
-    'Float.valueOf',   'Boolean.valueOf',
-}
-
-# 拆箱方法（虚方法，返回原始值）
-UNBOX_VIRTUAL: set[str] = {
-    'intValue', 'longValue', 'doubleValue',
-    'floatValue', 'booleanValue', 'byteValue', 'shortValue',
 }
 
 

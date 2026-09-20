@@ -8,9 +8,9 @@ from ..render import render_expr, render_type
 from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
 from ..constants import safe_ident as _safe_field
 from .coerce import (
-    parse_method_ref,
+    parse_method_ref, _coerce_to_object,
     _mangle_if_overloaded, _resolve_bridge_target,
-    UNBOX_VIRTUAL, _PRIMITIVE_RUST_TYPES,
+    _PRIMITIVE_RUST_TYPES,
     _JAVA_RUNTIME_SHORT_NAMES,
     _rust_type_to_binary, _get_all_subtypes_ordered,
     _find_method_super_prefix_for_type, _super_prefix_to_expr,
@@ -196,31 +196,6 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 sim.emit(RawStmt(f"let {_v_eq}: {_rust_ret_eq} = {obj_e}.{mname}({_arg_str_eq})?;"))
                 sim.push(Var(_v_eq), RsNamed(_rust_ret_eq))
             return
-    if mname in UNBOX_VIRTUAL:
-        _UNBOX_TARGET = {
-            'intValue': 'i32', 'longValue': 'i64', 'doubleValue': 'f64',
-            'floatValue': 'f32', 'booleanValue': 'bool', 'byteValue': 'i8', 'shortValue': 'i16',
-            'charValue': 'u16',
-        }
-        target_ty = _UNBOX_TARGET.get(mname)
-        if target_ty is None or obj_ty == target_ty:
-            sim.push(obj_expr, obj_ty_node)
-            return
-        # 接收者已是基本类型但与目标不同（Boolean.valueOf 被 BOXING_SKIP_STATIC 跳过
-        # 后栈上留 i32，再调 booleanValue 期望 bool）：生成类型转换而非方法调用
-        if obj_ty in _PRIMITIVE_RUST_TYPES:
-            v = sim.fresh()
-            if target_ty == 'bool':
-                sim.emit(RawStmt(f"let {v}: bool = ({obj_e} != 0);"))
-            else:
-                sim.emit(RawStmt(f"let {v}: {target_ty} = {obj_e} as {target_ty};"))
-            sim.push(Var(v), RsNamed(target_ty))
-            return
-        # 接收者是装箱对象（Integer/Double/Number 等），生成实际方法调用完成解箱
-        v = sim.fresh()
-        sim.emit(RawStmt(f"let {v}: {target_ty} = {obj_e}.{mname}()?;"))
-        sim.push(Var(v), RsNamed(target_ty))
-        return
 
     # 基本类型 .equals(x) → 生成 == 比较（基本类型无 equals 方法）
     if mname == 'equals' and len(args) == 1 and obj_ty in _PRIMITIVE_RUST_TYPES:

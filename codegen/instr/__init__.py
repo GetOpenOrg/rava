@@ -9,7 +9,7 @@ from .coerce import (
     parse_method_ref, _coerce_from_null, _coerce_to_object,
     _coerce_value, _find_method_super_prefix,
     _find_super_chain_to_class, _parse_field_ref, _class_known,
-    _mangle_if_overloaded, BOXING_SKIP_STATIC, UNBOX_VIRTUAL,
+    _mangle_if_overloaded,
 )
 
 __all__ = ['sim_instr']
