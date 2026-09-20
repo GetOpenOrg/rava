@@ -158,6 +158,27 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> JArray<T> {
     }
 
     /// 元素快照（手写 VM 层批量读取用，不经过逐元素边界检查）
+    /// 手写 native 的就地整段访问（Own 形态直取底层 Vec）。回调内多元素读写
+    /// 免逐元素 Result；返回回调返回值。null 接收者抛 NPE；协变视图（元素类型
+    /// 擦除）无原生切片可取——调用方（DecimalDigits 等接收 new byte[] 直造数组
+    /// 的 native）当前不触达，触达时再经逐 get/set 适配。
+    pub fn with_vec<R>(
+        &self, f: impl FnOnce(&mut [T]) -> R,
+    ) -> crate::error::Result<R> {
+        match &*self.0 {
+            Repr::Own(cells) => {
+                let mut data = cells.borrow_mut();
+                Ok(f(&mut data))
+            }
+            Repr::Covariant(_) => {
+                let e = crate::java::lang::UnsupportedOperationException::new_str(
+                    crate::java::lang::String::from("JArray::with_vec on covariant view"));
+                Err(crate::error::JvmError::from(e?))
+            }
+            Repr::Null => Err(crate::error::JvmError::null_pointer()),
+        }
+    }
+
     pub fn to_vec(&self) -> Vec<T> {
         match &*self.0 {
             Repr::Own(cells) => cells.borrow().clone(),
