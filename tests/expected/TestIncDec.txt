@@ -1,0 +1,21 @@
+a=6 b=5
+c=6 d=6
+i = i++ => 0
+j = ++j => 1
+x=6 r=13
+y--=5 then y=4
+--y=3 then y=3
+arr=10,2,3 k=1
+consume=10 idx=1
+consume=2 idx=2
+up=012 down=321
+viaPre=012
+byte=2
+char=b
+long=4
+double=3.0
+byte +=100 -> -56
+compound chain=1
+bitwise compound=1
+int += 2.7 -> 7
+done

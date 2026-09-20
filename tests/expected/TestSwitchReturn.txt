@@ -1,0 +1,19 @@
+95 -> 4
+85 -> 3
+75 -> 2
+65 -> 1
+40 -> 0
+one
+two-plus
+three-loop-return
+default path
+other
+q=true
+not quit
+a=false
+label=weekday-3
+computed=500
+mapped=10
+kind=two
+thrown -> unsupported
+done

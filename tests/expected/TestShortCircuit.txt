@@ -1,0 +1,25 @@
+eval A-left
+A: false
+eval B-left
+eval B-right
+B: true
+eval C-left
+C: true
+eval D-left
+eval D-right
+D: true
+eval E-left
+eval E-right
+E: false
+eval F-left
+eval F-right
+F: true
+guarded=false
+eval G1
+G: true
+eval loop0
+eval loop1
+eval loop2
+eval loop3
+loop i=3
+done
