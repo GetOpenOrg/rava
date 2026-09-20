@@ -12,7 +12,8 @@ try 区域输出为 `java_try! { try { .. } catch (e: T) { .. } }`。跨越 try 
 from __future__ import annotations
 
 from ..cfg import render_cond, Dispatch, next_pc_lines, PC_VAR
-from ..cfg.structure import Code, Decl, Block, Loop, If, Switch, Try, Break, Continue, _significant
+from ..cfg.structure import Code, Decl, Block, Loop, If, Switch, Try, Break, Continue
+from ..cfg.simplify import _significant
 from ..render import render_expr, render_type
 from ..rs_ir import LetStmt, RawStmt
 from .try_catch import catch_head

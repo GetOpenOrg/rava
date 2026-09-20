@@ -16,7 +16,8 @@ from .conditions import (
     cmp_op, neg_cmp_op,
 )
 from . import structure
-from .structure import structure as build_structure, simplify
+from .structure import structure as build_structure
+from .simplify import simplify
 from .dispatch import Dispatch, build_dispatch, next_pc_lines, PC_VAR
 from .audit import CfgAuditError, JumpLedger, AuditStats, STATS
 

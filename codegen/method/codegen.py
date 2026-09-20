@@ -23,6 +23,7 @@ from ..cfg import (
     JumpLedger, CfgAuditError, STATS,
 )
 from ..cfg import structure as _st
+from ..cfg.simplify import walk as _simplify_walk
 from ..instr import sim_instr
 from ..render import render_stmt, render_expr, render_type
 from ..rs_ir import (
@@ -70,7 +71,7 @@ def _verify_tree(tree: list, nodes: dict, flow, ledger) -> None:
     通过后，块终结所承载的跳转指令记为 structured。"""
     code_blocks: list[int] = []
     branch_origins: set[int] = set()
-    for item in _st.walk(tree):
+    for item in _simplify_walk(tree):
         if isinstance(item, _st.Code):
             code_blocks.append(item.block)
         elif isinstance(item, (_st.If, _st.Switch, _st.Try)):
