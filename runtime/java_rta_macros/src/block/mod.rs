@@ -37,7 +37,7 @@ use parse::{split_type_name_args, ClassInput, ClassMeta, FnItem, InterfaceImpl};
 use rewrite::{
     replace_clone_this_in_ok, rewrite_base_calls_for_wrapper, rewrite_block,
     rewrite_dropped_params_in_inherited_body, rewrite_virtual_calls_for_wrapper,
-    rewrite_vtable_calls_ufcs_for_base, ForwardConvSpec,
+    rewrite_vtable_calls_ufcs_for_base, ForwardConvSpec, VDispatchSig,
 };
 use util::{attr_str, classify_method, is_basic, strip_meta_attrs, MethodKind};
 
@@ -1238,6 +1238,33 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         .chain(meta.impl_methods.iter().cloned())
         .collect();
 
+    // wrapper 方法体经 `this.vtable` 分派的继承虚方法边界规格（A-1 β'）：
+    // vtable 方法签名已 Object 化 → 调用点按「提及本类形参 / 命中 vtable_erasure 名集」装箱，
+    // 返回值 null 容忍还原
+    let vdispatch: HashMap<String, VDispatchSig> = inherited.iter()
+        .filter(|(.., vo, _)| vo.is_some())
+        .map(|(f, ..)| {
+            let erasure = erasure_set_of(f, &type_param_names);
+            let box_args: Vec<bool> = f.sig.inputs.iter().filter_map(|a| match a {
+                syn::FnArg::Typed(pt) => Some(
+                    mentions_any(&pt.ty, &type_param_names)
+                    || (!erasure.is_empty()
+                        && erasure.contains(&flat_type_tokens(&pt.ty)))),
+                _ => None,
+            }).collect();
+            let ret_conv: Option<Type> = match &f.sig.output {
+                syn::ReturnType::Type(_, ty) => result_inner_ty(ty).and_then(|inner| {
+                    let hit = mentions_any(inner, &type_param_names)
+                        || (!erasure.is_empty()
+                            && erasure.contains(&flat_type_tokens(inner)));
+                    if hit { Some(inner.clone()) } else { None }
+                }),
+                syn::ReturnType::Default => None,
+            };
+            (f.sig.ident.to_string(), VDispatchSig { box_args, ret_conv })
+        })
+        .collect();
+
     // 字段访问器 impl 体（三个 vtable impl 生成点共用）。
     // 擦除字段（__inner 中以 Object 存储）：签名 Object 化（与 trait 声明一致），
     // impl 直连存储（Object 进 Object 出）；类型化转换移到 wrapper 委托（β' 边界）。
@@ -1811,7 +1838,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 let mut b = block.clone();
                 rewrite_block(&mut b, &basic_names, &ref_names);
                 rewrite_base_calls_for_wrapper(&mut b);
-                rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
+                rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names, &vdispatch);
                 // 方法体落在隐藏的 `__impl_<method>`（不分派）；公开的同名方法统一经 vtable 分派，
                 // 子类覆盖版本对「父类型 wrapper 上的调用」同样生效。
                 let mut impl_sig = sig.clone();
@@ -1862,7 +1889,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     let mut b = block.clone();
                     rewrite_block(&mut b, &basic_names, &ref_names);
                     rewrite_base_calls_for_wrapper(&mut b);
-                    rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
+                    rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names, &vdispatch);
                     let mut impl_sig = sig.clone();
                     impl_sig.ident = format_ident!("__impl_{}", mname);
                     wrapper_methods.push(quote! {

@@ -240,11 +240,28 @@ pub(crate) fn rewrite_base_calls_for_wrapper(block: &mut Block) {
     BaseCallRewriter.visit_block_mut(block);
 }
 
+/// wrapper 上虚分派（经 `this.vtable` 的继承方法）的边界转换规格（A-1 β'）：
+/// vtable 方法签名已 Object 化，wrapper 方法体的调用点在此装箱 / 还原。
+#[derive(Default)]
+pub(crate) struct VDispatchSig {
+    /// 逐形参是否需要 `Into::<Object>::into` 装箱
+    pub box_args: Vec<bool>,
+    /// 返回 `Result<T>` 且 T 需要还原（null 容忍的 `From<Object>` map）
+    pub ret_conv: Option<syn::Type>,
+}
+
 /// 在 wrapper impl 的 NeedsWrapper body 中，将未在当前类自有方法集合里的 `this.method(args)`
-/// 改写为 `(&*this.vtable).method(args)`。
+/// 改写为 `(&*this.vtable).method(args)`，并按 `VDispatchSig` 做擦除边界转换。
 /// `own_method_names`：当前类所有已声明方法名（VirtualDefine + VirtualOverride + NonVirtual）。
-pub(crate) fn rewrite_virtual_calls_for_wrapper(block: &mut Block, own_method_names: &HashSet<String>) {
-    struct VirtualCallRewriter<'a>(&'a HashSet<String>);
+pub(crate) fn rewrite_virtual_calls_for_wrapper(
+    block: &mut Block,
+    own_method_names: &HashSet<String>,
+    dispatch: &std::collections::HashMap<String, VDispatchSig>,
+) {
+    struct VirtualCallRewriter<'a>(
+        &'a HashSet<String>,
+        &'a std::collections::HashMap<String, VDispatchSig>,
+    );
     impl VisitMut for VirtualCallRewriter<'_> {
         fn visit_expr_mut(&mut self, expr: &mut Expr) {
             visit_mut::visit_expr_mut(self, expr);
@@ -255,12 +272,29 @@ pub(crate) fn rewrite_virtual_calls_for_wrapper(block: &mut Block, own_method_na
                     let mname = mc.method.to_string();
                     if !mname.starts_with("__") && !self.0.contains(&mname) {
                         mc.receiver = Box::new(syn::parse_quote!(&*this.vtable));
+                        if let Some(sig) = self.1.get(&mname) {
+                            for (i, arg) in mc.args.iter_mut().enumerate() {
+                                if *sig.box_args.get(i).unwrap_or(&false) {
+                                    *arg = syn::parse_quote!(
+                                        ::std::convert::Into::<Object>::into(#arg));
+                                }
+                            }
+                            if let Some(inner) = &sig.ret_conv {
+                                let inner = inner.clone();
+                                *expr = syn::parse_quote!(
+                                    #expr.map(|__v| if __v.0.is_jvm_null() {
+                                        ::std::default::Default::default()
+                                    } else {
+                                        <#inner as ::std::convert::From<Object>>::from(__v)
+                                    }));
+                            }
+                        }
                     }
                 }
             }
         }
     }
-    VirtualCallRewriter(own_method_names).visit_block_mut(block);
+    VirtualCallRewriter(own_method_names, dispatch).visit_block_mut(block);
 }
 
 /// 在 base 函数体（`this: &__BT: VTable + ?Sized`）中，将 `this.vtable_method(args)` 改写为
