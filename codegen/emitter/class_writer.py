@@ -9,7 +9,8 @@ from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
 from ..cfg import CfgAuditError, STATS as _CFG_STATS
-from ..type_map import parse_class_type_params, parse_field_type, hierarchy_overloaded_names, method_name_is_mangled, instance_field_rust_name
+from ..type_map import (parse_class_type_params, hierarchy_overloaded_names,
+                        method_name_is_mangled, instance_field_rust_name)
 from ..type_map import (effective_class_type_params, ancestor_type_args,
                         rust_type_with_args as _rust_type_with_args)
 from ..constants import (safe_ident, OBJECT_CLASS as _OBJECT_CLASS,
@@ -18,10 +19,10 @@ from ..constants import (safe_ident, OBJECT_CLASS as _OBJECT_CLASS,
 from .attrs import _java_class_block_head, _java_field_attr, _java_method_attr
 from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, _find_virtual_in
+from .clinit_extract import _gen_static_field_blocks, _gen_clinit_block
 from .import_gen import (collect_referenced, gen_cross_imports,
                          scan_used_vtable_imports)
-from .field_gen import (_resolve_field_rust, _resolve_anc_field_rust,
-                         _validate_field_type)
+from .field_gen import _resolve_field_rust, _resolve_anc_field_rust
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
 from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT, UPCASTS_SLOT as _INTERFACE_UPCASTS_SLOT
@@ -31,8 +32,6 @@ from ..instr.coerce import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 
 _safe_field_name = safe_ident
 
-# <clinit> 翻译函数在 java_class! 块内的固定名字（与宏 block/class_init.rs 的约定一致）
-_CLINIT_FN = '__clinit'
 
 
 _ACC_FINAL   = 0x0010
@@ -319,74 +318,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # 是否是用户类（call_chain is None 表示用户类，所有方法都翻译）
     _is_user_class = call_chain is None
 
-    # ── static 字段声明（JVMS §5.5 类初始化的事实层）──────────────────────
-    # codegen 只声明事实，存储 / 访问器 / 初始化触发全部由 java_class! 宏展开：
-    #   ConstantValue 属性 → `pub const NAME: T = 值;`（编译期常量，访问不触发初始化）
-    #   其余 static 字段   → `pub static NAME: T;`（初值由 <clinit> 字节码翻译写入）
-    # 类型存根（没有任何方法在调用链上：内部边界类 / 仅签名引用的类）不会被初始化：
-    # 未被共置手写文件覆盖的 static 字段保持 panic 存根，命中时精确报出字段。
+    # ── static 字段声明（JVMS §5.5 类初始化的事实层）→ clinit_extract ──────
     _type_only = stub_bodies or (
         call_chain is not None
         and not any((ci.name, _m.name, _m.descriptor) in call_chain for _m in ci.methods))
-    static_fields = [f for f in ci.fields if f.is_static]
-    existing_method_names: set[str] = {m.name for m in ci.methods}
-    _nf_covered_sf = (_nf_entry or {}).get('methods', set())
-    for sf in static_fields:
-        safe_fname = _safe_field_name(sf.name)
-        if sf.name in existing_method_names:
-            # 字段名与方法名冲突：改用 _field 后缀（读写侧 fields.py 同规则）
-            safe_fname = safe_fname + '_field'
-        # 优先用 generic_signature 确定字段类型（包含泛型参数信息）
-        if sf.generic_signature:
-            _gs_ret = parse_field_type(sf.generic_signature, class_type_params, registry)
-            # 校验引用的类型存在，否则回退到描述符
-            if (_gs_ret and _gs_ret != 'Object'
-                    and not _validate_field_type(_gs_ret, class_type_params,
-                                                 _registry_short_names)):
-                _gs_ret = ''
-            # static 字段不在类型参数作用域内（Java 同样禁止），引用类型变量时回退描述符
-            if _gs_ret and any(_tp in _re.findall(r'[A-Za-z_][A-Za-z0-9_]*', _gs_ret)
-                               for _tp in class_type_params):
-                _gs_ret = ''
-        else:
-            _gs_ret = ''
-        rust_ret = _gs_ret if _gs_ret else jvm_to_rust(sf.descriptor, registry=registry)
-        field_meta = _java_field_attr(sf)
-        cv = sf.constant_value
-        if cv:
-            if rust_ret == 'String':
-                body = f'String::from("{cv}")'
-            elif rust_ret == 'f32':
-                if cv == 'inf':      body = 'f32::INFINITY'
-                elif cv == '-inf':   body = 'f32::NEG_INFINITY'
-                elif cv == 'NaN':    body = 'f32::NAN'
-                else:                body = f'{cv}f32'
-            elif rust_ret == 'f64':
-                if cv == 'inf':      body = 'f64::INFINITY'
-                elif cv == '-inf':   body = 'f64::NEG_INFINITY'
-                elif cv == 'NaN':    body = 'f64::NAN'
-                else:                body = f'{cv}f64'
-            elif rust_ret == 'i64':
-                body = f'{cv}i64'
-            elif rust_ret == 'bool':
-                body = 'true' if cv == '1' else 'false'
-            else:
-                body = cv
-            method_blocks.append(
-                f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
-                f'pub const {safe_fname}: {rust_ret} = {body};')
-        elif _type_only:
-            if safe_fname in _nf_covered_sf:
-                continue
-            method_blocks.append(
-                f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
-                f'pub fn {safe_fname}() -> Result<{rust_ret}> {{\n'
-                f'    panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")\n}}')
-        else:
-            method_blocks.append(
-                f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
-                f'pub static {safe_fname}: {rust_ret};')
-
+    method_blocks.extend(_gen_static_field_blocks(
+        ci, registry, class_type_params, _type_only, _nf_entry,
+        _registry_short_names))
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
     # 非桥接的 synthetic 方法（lambda$xxx$N、access$NNN 等）是 invokedynamic 闭包 /
     # 内部类访问器的真实调用目标，必须生成定义；桥接方法（ACC_BRIDGE）与真实方法同名，继续过滤。
@@ -404,32 +342,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if m.name == '<clinit>':
             # <clinit> → `fn __clinit()`：宏生成的 __class_init() 状态机在首次主动使用时调用它。
             # 类型存根不会被初始化；不在调用链上的 <clinit> 与其它方法同规则生成 panic 存根。
-            if _type_only:
-                continue
-            attr_line = _java_method_attr(m)
-            _clinit_stub = (f'pub fn {_CLINIT_FN}() -> Result<()> {{\n'
-                            f'    panic!("stub: {ci.name}.<clinit>:()V")\n}}')
-            if call_chain is not None and (ci.name, m.name, m.descriptor) not in call_chain:
-                method_blocks.append(attr_line + '\n' + _clinit_stub)
-                continue
-            try:
-                clinit_body = gen_method_body(
-                    m, ci, registry=registry,
-                    class_type_params=class_type_params,
-                    overloaded_names=overloaded_names,
-                    rust_name=_CLINIT_FN,
-                )
-                method_blocks.append(attr_line + '\n' + clinit_body)
-            except CfgAuditError:
-                raise
-            except Exception as e:
-                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}", repr(e))
-                import os as _os
-                if _os.environ.get('JAVA_RTA_DEBUG'):
-                    import traceback as _tb
-                    print(f"[DEBUG] stub fallback for {ci.name}.<clinit>: {e}", file=__import__('sys').stderr)
-                    _tb.print_exc()
-                method_blocks.append(attr_line + '\n' + _clinit_stub)
+            _clinit_block = _gen_clinit_block(
+                m, ci, registry=registry, class_type_params=class_type_params,
+                overloaded_names=overloaded_names, call_chain=call_chain,
+                _type_only=_type_only)
+            if _clinit_block is not None:
+                method_blocks.append(_clinit_block)
             continue
         if _is_iface and not m.is_static and m.is_synthetic and m.name.startswith('lambda$'):
             # G-10：接口的私有实例 lambda body（如 Comparator.lambda$thenComparing$...）。
