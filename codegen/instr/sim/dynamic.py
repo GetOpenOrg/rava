@@ -7,9 +7,75 @@ from ...stack import I32
 from ...type_map import (jvm_to_rust, parse_descriptor_params, parse_descriptor_return, short_cls,
                          effective_class_type_params)
 from ..invoke import _gen_string_concat, _static_call_turbofish
-from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
+from ...classfile import _PRIM_CLASS_TO_WRAPPER
+from ...constants import (PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES,
+                          safe_ident as _safe_field)
 from ..coerce import _coerce_to_object, _render_cast, _same_generic_family
-from ..member_naming import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
+from ..member_naming import (lambda_impl_rust_name, LAMBDA_NAME_LEDGER,
+                             _mangle_if_overloaded)
+
+
+def _unbox_object_arg(val_expr: str, prim_desc: str, registry) -> str | None:
+    """Object 形态的 SAM 实参 → 实现方法基本类型形参（LambdaMetafactory 装箱适配
+    的拆箱侧，S-3.1 残留）：`x.try_cast::<Integer>("java/lang/Integer")?.intValue()?`。
+
+    SAM 实参经擦除边界以 Object 流动，其中是装箱对象（真实 wrapper 实例）；
+    实现方法形参是基本类型（`Integer::sum` 的 (II)I 适配 BinaryOperator 的
+    (Object,Object)）。wrapper 二进制名由 primitive 描述符映射
+    （classfile._PRIM_CLASS_TO_WRAPPER），拆箱方法与 Rust 类型名从 registry 的
+    wrapper 类动态解析（实例方法、零实参、名以 Value 结尾、返回该基本类型，
+    P-1 不引入 JDK 类名字面量）。解析失败返回 None，调用方退化为直接传参
+    （编译期 E0308 暴露，而非运行期空类名 CCE）。"""
+    if registry is None or prim_desc not in _PRIM_CLASS_TO_WRAPPER:
+        return None
+    wrapper_bin = _PRIM_CLASS_TO_WRAPPER[prim_desc]
+    wci = registry.get(wrapper_bin)
+    if wci is None:
+        return None
+    unbox_m = next((m for m in wci.methods
+                    if not m.is_static and m.name.endswith('Value')
+                    and parse_descriptor_params(m.descriptor) == []
+                    and parse_descriptor_return(m.descriptor) == prim_desc), None)
+    if unbox_m is None:
+        return None
+    wrapper_rust = jvm_to_rust(f'L{wci.name};', registry)
+    if wrapper_rust == 'Object':
+        return None
+    mname_r = _safe_field(_mangle_if_overloaded(
+        wci.name, unbox_m.name, f'{unbox_m.name}:{unbox_m.descriptor}', registry))
+    return f'{val_expr}.try_cast::<{wrapper_rust}>("{wci.name}")?.{mname_r}()?'
+
+
+def _box_prim_via_valueof(val_expr: str, prim_desc: str, registry) -> str | None:
+    """基本类型表达式 → Object 形态的 SAM 返回值（LambdaMetafactory 装箱适配的
+    装箱侧，S-3.1）：`Object::from(Integer::valueOf_i(x)?)`。
+
+    实现方法返回基本类型、SAM 返回擦除引用（`Integer::sum` 的 (II)I 对
+    BinaryOperator 的 (Object,Object)Object）。必须经 wrapper 的 valueOf 工厂
+    装成真实包装对象（含缓存池语义，与 javac 行为一致）：`.into()` 产生的是
+    原生盒（Rc<i32>，类名报告 java/lang/Integer 但非翻译 Integer），折叠状态
+    再入 SAM 时 try_cast::<Integer> 无法命中。valueOf 方法与 Rust 类型名从
+    registry 的 wrapper 类动态解析（static、单实参为该基本类型、返回该
+    wrapper，P-1 不引入 JDK 类名字面量）。解析失败返回 None，调用方退回
+    `_coerce_to_object` 的 `.into()` 原生盒路径。"""
+    if registry is None or prim_desc not in _PRIM_CLASS_TO_WRAPPER:
+        return None
+    wrapper_bin = _PRIM_CLASS_TO_WRAPPER[prim_desc]
+    wci = registry.get(wrapper_bin)
+    if wci is None:
+        return None
+    valueof_m = next((m for m in wci.methods
+                      if m.is_static and m.name == 'valueOf'
+                      and parse_descriptor_params(m.descriptor) == [prim_desc]
+                      and parse_descriptor_return(m.descriptor) == f'L{wci.name};'), None)
+    if valueof_m is None:
+        return None
+    wrapper_rust = jvm_to_rust(f'L{wci.name};', registry)
+    if wrapper_rust == 'Object':
+        return None
+    mname_r = _safe_field(_mangle_if_overloaded(
+        wci.name, valueof_m.name, f'{valueof_m.name}:{valueof_m.descriptor}', registry))
+    return f'Object::from({wrapper_rust}::{mname_r}({val_expr})?)'
 
 
 def _decode_tslabels(comment: str) -> list[tuple[str, str]] | None:
@@ -203,11 +269,20 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                         if 0 <= _pi < len(_impl_params):
                             _pd = _impl_params[_pi]
                             if _pd != _sd and _is_erased_ref(_sd) and not _is_erased_ref(_pd):
-                                # SAM 擦除实参 → 实现方法具体形参：checkcast 语义
-                                # （A-3：try_cast 失败返回 Err 可被 java_try 捕获，S-1；
-                                # 目标类型由形参推断，turbofish 不写）
-                                _sam_bin = _pd if _pd.startswith('[') else _pd[1:-1]
-                                _call_sam_list[_si] = f'{_sam_anames[_si]}.try_cast("{_sam_bin}")?'
+                                if _pd in _PRIM_CLASS_TO_WRAPPER:
+                                    # SAM 擦除实参是装箱对象、实现方法形参是基本类型
+                                    # （`Integer::sum` 的 (II)I 适配 BinaryOperator 的
+                                    # (Object,Object)）：cast 到 wrapper 后调拆箱方法
+                                    # （此前 _pd[1:-1] 切出空类名，运行期必 CCE，S-3.1）
+                                    _call_sam_list[_si] = (
+                                        _unbox_object_arg(_sam_anames[_si], _pd, registry)
+                                        or _sam_anames[_si])
+                                else:
+                                    # SAM 擦除实参 → 实现方法具体形参：checkcast 语义
+                                    # （A-3：try_cast 失败返回 Err 可被 java_try 捕获，S-1；
+                                    # 目标类型由形参推断，turbofish 不写）
+                                    _sam_bin = _pd if _pd.startswith('[') else _pd[1:-1]
+                                    _call_sam_list[_si] = f'{_sam_anames[_si]}.try_cast("{_sam_bin}")?'
                             elif (_is_erased_ref(_sd) and not _impl_ci.is_interface
                                   and len(_impl_sig_types) == len(_impl_params)
                                   and _impl_sig_types[_pi] in _impl_tparams):
@@ -289,6 +364,18 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     if _sam_ret == 'V':
                         if _impl_ret != 'V':
                             _closure_body = f'{_closure_body}?; Ok(())'
+                    elif _is_erased_ref(_sam_ret) and _impl_ret in _PRIM_CLASS_TO_WRAPPER:
+                        # 实现方法返回基本类型、SAM 返回擦除引用（`Integer::sum` 的 I 对
+                        # BinaryOperator 的 Ljava/lang/Object;）：经 wrapper::valueOf
+                        # 装成真实包装对象（S-3.1）——`.into()` 的原生盒（Rc<i32>）类名
+                        # 虽是 java/lang/Integer，但 downcast 不命中翻译 Integer，
+                        # 折叠状态再入 SAM 时 try_cast::<Integer> 必失败
+                        _boxed = _box_prim_via_valueof(f'{_closure_body}?', _impl_ret, registry)
+                        if _boxed is not None:
+                            _closure_body = f'Ok({_boxed})'
+                        else:
+                            _impl_ret_rust = jvm_to_rust(_impl_ret, registry)
+                            _closure_body = (f'Ok({_coerce_to_object(f"{_closure_body}?", _impl_ret_rust, registry, sim.class_type_params)})')
                     elif _is_erased_ref(_sam_ret) and _impl_ret != 'V' and (
                             not _is_erased_ref(_impl_ret) or _impl_has_generic_sig):
                         # 按实现方法的返回类型装箱（S-3.1）：registry 类（Integer 等
