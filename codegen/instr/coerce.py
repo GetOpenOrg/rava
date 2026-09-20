@@ -179,19 +179,19 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
 _NULL_OBJECT_EXPRS = frozenset({'Object::default()', 'Object::default().clone()'})
 
 
-def _checkcast_runtime_expr(val_str: str, target: str, val_is_var: bool = False) -> str:
+def _checkcast_runtime_expr(val_str: str, target: str) -> str:
     """checkcast / 按声明类型还原的运行时入口（S-4）。
 
     - 类目标：`Object::downcast::<T>()`——wrapper 名单（__view_into）+ 擦除回退
       （downcast 内部路径），借用接收者，不移动值。
     - 数组目标（`JArray<...>`）：`From<Object> for JArray<T>`——downcast 的泛型路径
       无法分解出元素类型，数组 checkcast 的判定（null 还原 / 同元素类型还原 /
-      任意祖先元素类型协变视图）由 From 侧的元素类型 T 驱动。From 按值收 Object，
-      值可能被后续使用时（局部变量）先 Clone::clone。
+      任意祖先元素类型协变视图）由 From 侧的元素类型 T 驱动。From 按值收 Object
+      （downcast 借用接收者）→ 统一先 Clone::clone，值可能在兄弟分支继续使用
+      （`Object o; if(..) f((int[]) o); else g((long[]) o);`，E0382）。
     """
     if target.startswith('JArray<'):
-        _val = f"Clone::clone(&{val_str})" if val_is_var else val_str
-        return f"<{target} as ::std::convert::From<Object>>::from({_val})"
+        return f"<{target} as ::std::convert::From<Object>>::from(Clone::clone(&{val_str}))"
     return f"({val_str}).downcast::<{target}>()"
 
 

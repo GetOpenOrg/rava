@@ -58,6 +58,30 @@ def _adapt_interface_method(method, ci, iface_bin: str, views: dict):
     return adapted
 
 
+def _resolve_interface_default(ci, meth: str, desc: str, registry):
+    """在 ci 的实现接口闭包里找 (meth, desc) 的 default（非 abstract）声明者——
+    JVM 方法解析（JVMS §5.4.3.3）的接口分支，与 callchain 的 _enqueue_declaring_method
+    同一解析语义。返回 (ClassInfo, method) 或 (None, None)。"""
+    from collections import deque
+    queue = deque(ci.interfaces or [])
+    seen: set[str] = set()
+    while queue:
+        name = queue.popleft()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ici = (registry or {}).get(name)
+        if ici is None:
+            continue
+        hit = next((x for x in (ici.methods or [])
+                    if x.name == meth and x.descriptor == desc
+                    and not x.is_static and not x.is_abstract), None)
+        if hit is not None:
+            return ici, hit
+        queue.extend(ici.interfaces or [])
+    return None, None
+
+
 def _override_vtable_erasure(m, ci, registry) -> list[str]:
     """覆盖方法在「声明祖先 vtable」上的擦除位置：接收者签名里对应位置的类型串。
 
@@ -87,7 +111,14 @@ def _override_vtable_erasure(m, ci, registry) -> list[str]:
                     if x.name == m.name and x.descriptor == m.descriptor
                     and not x.is_static), None)
     if owner_m is None:
-        return []
+        # owner 超类未声明 (name, desc)：声明者是接口 default（如 Map.replace——
+        # AbstractMap 未声明它）。沿 owner 的接口闭包解析声明者（E0053：owner 解析
+        # 失败返回空名单 → 覆盖条目的 owner 形参位未擦除，trait impl 签名不匹配）；
+        # 擦除位置按声明接口自身的类型形参判定
+        iface_ci, iface_m = _resolve_interface_default(owner_ci, m.name, m.descriptor, registry)
+        if iface_m is None:
+            return []
+        owner_ci, owner_m, owner_params = iface_ci, iface_m, effective_class_type_params(iface_ci, registry)
     own_types, own_ret = parse_method_param_types(
         m.generic_signature, effective_class_type_params(ci, registry),
         registry, is_static=False)

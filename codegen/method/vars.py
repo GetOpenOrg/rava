@@ -12,9 +12,21 @@ from ..constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_TYPES
 
 
 def _coerce_icmp_operand(expr_str: str, ty_node) -> str:
-    """为 if_icmpX 比较的操作数做类型强制转换：u16/i8/i16 → i32"""
+    """为 if_icmpX 比较的操作数做类型强制转换：u16/i8/i16/bool → i32。
+
+    boolean 在 JVM 操作数栈上就是 int（JVMS §2.11.1，Z 字段/局部经 getfield /
+    iload 推入后与 int 常量 if_icmp 比较）；S-3.1 装箱对象化后 Z 槽位以 Rust
+    bool 承载 → 比较前显式加宽，否则 `bool == i32` E0308（TreeMap$Entry.color
+    的 `p.color == BLACK` 实证）。非原子表达式先整体加括号再转换。
+    """
+    from ..instr.coerce import _is_atomic_expr
     ty = render_type(ty_node)
     if ty in ('u16', 'i8', 'i16'):
+        return f"({expr_str} as i32)"
+    if ty == 'bool':
+        # 非原子表达式先整体加括号（`a && b as i32` 会解析为 `a && (b as i32)`）
+        if not _is_atomic_expr(expr_str):
+            expr_str = f"({expr_str})"
         return f"({expr_str} as i32)"
     return expr_str
 

@@ -67,10 +67,9 @@ def _maybe_downcast(expr: RsExpr, ty: RsType) -> RsExpr:
     if (isinstance(expr, Var) and isinstance(ty, RsNamed)
             and ty.name != 'Object' and not ty.name.startswith('Rc<')
             and not ty.name.startswith('&') and ty.name != '()'):
-        # 数组目标走 From<Object>（元素类型驱动的 checkcast，S-4）；值是局部变量，
-        # From 按值收 Object → 先 Clone::clone 保活
+        # 数组目标走 From<Object>（元素类型驱动的 checkcast，S-4）
         from .instr.coerce import _checkcast_runtime_expr
-        return RawExpr(_checkcast_runtime_expr(render_expr(expr), ty.name, val_is_var=True))
+        return RawExpr(_checkcast_runtime_expr(render_expr(expr), ty.name))
     return expr
 
 
