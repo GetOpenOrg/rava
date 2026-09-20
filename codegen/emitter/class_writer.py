@@ -2,16 +2,24 @@
 单个 Java 类 → Rust 文件内容生成：_gen_class_rs 主函数。
 """
 
-from ..type_map import short_cls as _short_cls_g
 import os
 import re as _re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
-from ..type_map import jvm_to_rust, mangle_name, short_cls, rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP
 from ..method import gen_method_body, _indent
 from ..cfg import CfgAuditError, STATS as _CFG_STATS
-from ..type_map import (parse_class_type_params, hierarchy_overloaded_names,
-                        method_name_is_mangled, instance_field_rust_name)
+# type_map 导入按「type_map.py 四分」归属分组（路径仍为当前 main 的单文件形态；
+# 拆分合入后按组改指 sig_parse / type_args / sig_types，集成合并时机械处理）：
+# —— type_map.py 保留段：JVM→Rust 基础映射 / descriptor 解析 / 短名配置
+from ..type_map import (short_cls, short_cls as _short_cls_g, jvm_to_rust, mangle_name,
+                        rust_default, _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP,
+                        instance_field_rust_name)
+# —— sig_parse.py：泛型签名递归下降解析
+from ..type_map import parse_class_type_params
+# —— type_args.py：层次类型实参解析
 from ..type_map import (effective_class_type_params, ancestor_type_args,
+                        interface_signature_views as _interface_signature_views)
+# —— sig_types.py：方法/构造器签名类型 + RsType 构造
+from ..type_map import (hierarchy_overloaded_names, method_name_is_mangled,
                         rust_type_with_args as _rust_type_with_args)
 from ..constants import (safe_ident, OBJECT_CLASS as _OBJECT_CLASS,
                          PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES, STRING_CLASS)
@@ -26,13 +34,10 @@ from .field_gen import _resolve_field_rust, _resolve_anc_field_rust
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
 from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT, UPCASTS_SLOT as _INTERFACE_UPCASTS_SLOT
-from ..type_map import interface_signature_views as _interface_signature_views
 from ..instr.coerce import _parse_field_ref
 from ..instr.coerce import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 
 _safe_field_name = safe_ident
-
-
 
 _ACC_FINAL   = 0x0010
 _ACC_STATIC  = 0x0008
@@ -115,216 +120,17 @@ def _override_vtable_erasure(m, ci, registry) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
-                  jdk_crate_pkg_paths: list[str] | None = None,
-                  stub_bodies: bool = False,
-                  call_chain: set | None = None,
-                  new_format_map: dict | None = None,
-                  workspace_root: str | None = None,
-                  user_crate_prefix: str | None = None,
-                  full_impl_classes: set | None = None,
-                  conflict_map: dict | None = None,
-                  skipped_classes: set | None = None,
-                  user_sibling_imports: list[str] | None = None,
-                  generated_classes: set | None = None,
-                  emission: 'ClassEmission | None' = None) -> str:
-    """生成单个 Java 类对应的完整 .rs 文件内容。
+def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
+                        _nf_entry, class_type_params, overloaded_names,
+                        visible_methods, _type_only, _is_iface,
+                        method_blocks, _iface_lambda_blocks) -> None:
+    """方法翻译主循环：visible + 非桥接 synthetic 方法逐个发射。
 
-    生成规则：
-    - 实例字段用 Field<T> 包装（提供 Java 字段语义的内部可变性）
-    - 方法直接在 impl 块中，无 raw:: 子模块
-    - 所有方法返回 Result<T>
-    - 每个 struct / field / method 前加 // @java_* 注释供 build.rs 扫描
-    - new_format_map: 若提供，为覆盖的类插入 #[path] mod _impl; 并跳过被覆盖方法
-    - user_crate_prefix: 若提供（如 'jdk_classes'），cross_imports 用该 crate 前缀
-    - emission: 若提供，记录本类实际生成的方法声明，并在文本中留出继承成员声明的
-      两个插入位（use 区 / impl 块尾），由 inherited_gen.resolve_inherited_members 统一填充
-    """
-
-    # ── Step 1+2: 引用收集与精确 cross_imports（import_gen）─────────────────
-    _referenced = collect_referenced(ci, registry, generated_classes)
-    cross_imports = gen_cross_imports(
-        ci, registry, jdk_crate_pkg_paths, call_chain, generated_classes,
-        conflict_map, skipped_classes, user_sibling_imports,
-        user_crate_prefix, _referenced)
-
-    # 全量手写类（native_impl 文件含 pub struct）：codegen 跳过 struct 生成，改输出 pub use _impl::*
-    _full_impl = ci.name in (full_impl_classes or set())
-    if not _full_impl:
-        # G-10 账本：本类方法由本轮生成（手写全量类的方法不走 class_writer，不参与断言）
-        LAMBDA_NAME_LEDGER.generated_classes.add(ci.name)
-
-    # 接口在 Rust 层是与 Java 同名的载体类型（由 java_class 宏展开）：
-    #   - 值：持有 Object 的接口引用，实例方法分派走 Object vtable（impl 块不含实例方法；
-    #     default 方法由实现类继承展开，见下方「接口 default 方法继承」）
-    #   - 命名空间：static 字段访问器 / static 方法（含 private static 与 static 合成方法）
-    #     落在载体的 impl 块，调用点与 Java 同构（`Iface::staticMethod(args)`）
-    _is_iface = bool(ci.is_interface)
-
-    parts: list[str] = [
-        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs)]",
-        f"use {user_crate_prefix or 'crate'}::prelude::*;",
-        *cross_imports,
-        *([_INHERITED_IMPORTS_SLOT] if emission is not None else []),
-        "",
-    ]
-    inst_fields = [f for f in ci.fields if not f.is_static]
-
-    # Option C（方案 §16「_super 语义边界」）：`_super` 是父类状态的**唯一所有者**，
-    # 子类通过宏生成的转发访问器获得「展平字段视图」。
-    # 不把父类字段复制进子类 Inner——那会让同一字段存在两份状态并立即分叉。
-    _has_super = bool(
-        ci.super_class and ci.super_class != _OBJECT_CLASS
-    )
-
-    # 用短名作为 Rust 标识符（JDK 类含 /，内部类含 $，均需转换为合法 Rust 名）
-    struct_name = short_cls(ci.name) if ('/' in ci.name or '$' in ci.name) else ci.name
-
-    # 类的有效类型参数：自身 Signature 形参；内部类无自身形参时继承外部类形参
-    # （Java 内部类经 this$N 隐式可见外部类类型变量，如 ArrayList$Itr → ArrayList_Itr<E>）。
-    class_type_params = effective_class_type_params(ci, registry)
-
-    # 构建泛型参数字符串（用于 struct 和 impl 头）
-    if class_type_params:
-        type_params_str = ', '.join(class_type_params)
-        # 泛型参数需要 Clone + Default + 'static。
-        # 这组 bound 是纯粹的 Rust 能力声明——故意不引入 `JavaType` 这类
-        # 游离于 Java 命名空间之外的 trait 名（CLAUDE.md 命名原则，方案 §4）。
-        # Default 是必须的：`_super: Default::default()` 与字段默认值都要求它。
-        bounds_str = ', '.join(f"{p}: Clone + Default + 'static" for p in class_type_params)
-        struct_generic = f"<{type_params_str}>"   # bounds 由 java_class! 宏展开时注入，不出现在生成代码
-        ty_params_only = f"<{type_params_str}>"
-        # impl 头只写裸参数：块级宏用 struct 上的 generics（含补齐的 bound 与 where 子句）
-        # 重新生成 impl 头，这里的 impl generics 仅作读者提示。
-        impl_header   = f"impl<{type_params_str}> {struct_name}<{type_params_str}>"
-    else:
-        struct_generic = ''
-        ty_params_only = ''
-        impl_header   = f"impl {struct_name}"
-
-    # 构建注册表短名集合，用于校验字段类型中引用的类是否存在
-    _registry_short_names: set[str] = (
-        {_short_cls_g(_k) for _k in registry}
-        if registry else set()
-    )
-
-    # ── 父类 Rust 类型（含泛型实参）─────────────────────────────────────
-    # 实参取自本类 Signature 的 SuperclassSignature，整条祖先链逐级代入
-    # （见 type_map.ancestor_type_args），不做「子类形参按位置套给父类」的猜测。
-    parent_rust = ''
-    _ancestor_args: dict[str, list[str]] = (
-        dict(ancestor_type_args(ci, registry)) if _has_super and registry else {})
-    if _has_super:
-        parent_rust = _rust_type_with_args(short_cls(ci.super_class),
-                                           _ancestor_args.get(ci.super_class, []))
-
-
-    # ── 继承链字段展平（方案 §6）────────────────────────────────────────
-    # codegen 侧展平整条继承链，父类字段在前；宏侧零 registry 依赖。
-    # 注意：展平结果只用于生成「转发访问器」，父类字段的实际存储在 `_super` 里
-    # （见 §16：复制字段会造成同一字段两份状态）。
-    superclass_fields: list[tuple[str, str]] = []
-    superclass_reference_fields: list[str] = []
-    superclass_erased_fields: list[str] = []
-    if _has_super and registry and not _full_impl:
-        _chain: list = []
-        _seen_chain: set[str] = set()
-        _cursor = ci.super_class
-        while (_cursor and _cursor != _OBJECT_CLASS
-               and _cursor in registry and _cursor not in _seen_chain):
-            _seen_chain.add(_cursor)
-            _p_ci = registry[_cursor]
-            _chain.append(_p_ci)
-            _cursor = _p_ci.super_class
-        _declared: set[str] = set()
-        for _ancestor in reversed(_chain):
-            # 祖先形参 → 本类视角实参（沿 SuperclassSignature 逐级代入的结果）
-            _anc_params = effective_class_type_params(_ancestor, registry)
-            _sub_args = list(_ancestor_args.get(_ancestor.name, []))
-            while len(_sub_args) < len(_anc_params):
-                _sub_args.append('Object')
-            _anc_map = dict(zip(_anc_params, _sub_args))
-            for _f in _ancestor.fields:
-                if _f.is_static:
-                    continue
-                # 隐藏更上层祖先同名字段的声明取独立槽位名（Java 字段按声明类静态解析）
-                _sf_name = instance_field_rust_name(
-                    _ancestor.name, _safe_field_name(_f.name), registry)
-                if _sf_name in _declared:
-                    continue
-                _declared.add(_sf_name)
-                _sf_view_ty = _resolve_anc_field_rust(
-                    _f, _anc_params, _anc_map, registry, _registry_short_names)
-                superclass_fields.append((_sf_name, _sf_view_ty))
-                # 祖先按类型变量声明（引用存储 + __borrow_mut 访问器）而本类视角代入成基本类型
-                # （Box<U>.state 在 `extends Box<Long>` 下是 i64）：存储形态由声明方决定，
-                # 宏须按引用字段实现祖先 VTable 的访问器
-                if (_sf_view_ty in _PRIMITIVE_RUST_TYPES and _resolve_anc_field_rust(
-                        _f, _anc_params, {_p: _p for _p in _anc_params},
-                        registry, _registry_short_names) not in _PRIMITIVE_RUST_TYPES):
-                    superclass_reference_fields.append(_sf_name)
-                # 声明方（祖先）按自身类型形参声明的字段 → 存储与访问器已被声明方的宏
-                # Object 化（A-1 擦除按声明类判定）——继承者的宏按名单同步擦除
-                _declared_ty = _resolve_anc_field_rust(
-                    _f, _anc_params, {_p: _p for _p in _anc_params},
-                    registry, _registry_short_names)
-                if any(_re.search(r'\b' + _re.escape(_p) + r'\b', _declared_ty)
-                       for _p in _anc_params):
-                    superclass_erased_fields.append(_sf_name)
-
-    # ── struct 声明（裸类型，封装细节由宏收拢）──────────────────────────
-    struct_lines: list[str] = []
-    if not _full_impl:
-        # 父类已有的字段名（继承展平），避免子类重复声明（如内部类 this$0 与父类同名）
-        _super_field_names: set[str] = {name for name, _ in superclass_fields}
-        for f in inst_fields:
-            safe_fname = instance_field_rust_name(ci.name, _safe_field_name(f.name), registry)
-            if safe_fname in _super_field_names:
-                continue  # 父类已展平，不重复声明
-            struct_lines.append("    " + _java_field_attr(f))
-            struct_lines.append(
-                f"    pub {safe_fname}: "
-                f'{_resolve_field_rust(f, class_type_params, registry, _registry_short_names)},')
-        # 未被字段引用的类型参数由宏补 PhantomData（block.rs），codegen 不再输出 _phantom
-
-
-    # T76 的 as_xxx / into_xxx upcast 方法已由 java_class! 宏统一承接
-    # （宏生成 `__super()` / `__into_super()`，upcast 与字段存储解耦，见方案 §16）。
-
-    # T55 已删除（R-2）：
-    # From<Child> for Parent 链由 invoke.py / sim.py 的显式 __into_super() 链替代，
-    # 宏为有父类的类生成 Deref<Target=Parent> 覆盖引用层面的向上转型。
-    # upcast 调用点：Clone::clone(&child).__into_super().__into_super()...（见 coerce._into_super_chain）
-
-    # T55b 已删除（Arch-5）：
-    # Arch-1 后接口 = Object 类型别名，From<ConcreteClass> for Interface 语义上等于
-    # From<ConcreteClass> for Object，与 java_class 宏生成的 Into<Object> 冲突且
-    # 会用 Default::default() 丢弃具体数据。
-    # 正确路径：ConcreteClass.into() → Object，通过 java_class 宏生成的 Into<Object> 完成。
-    # K-2: 共置 _impl.rs 文件由 project_writer 在生成阶段复制；class_writer 不再生成 #[path] 块。
-    _nf_entry = (new_format_map or {}).get(ci.name)
-
-    # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
-    visible_methods = [m for m in ci.methods if not m.is_synthetic]
-    # 重载判定在整条父类链上进行（与调用侧 _mangle_if_overloaded 共用同一函数），
-    # 保证子类方法名不会按名字遮蔽父类的同名异参方法。
-    overloaded_names: set[str] = hierarchy_overloaded_names(ci, registry)
-
-    method_blocks: list[str] = []
-    # G-10：接口私有实例 lambda body 落在 java_class! 块之外的擦除 impl 块
-    # （不进接口 vtable / 不被实现类继承），见方法循环内的专门分支
-    _iface_lambda_blocks: list[str] = []
-
-    # 是否是用户类（call_chain is None 表示用户类，所有方法都翻译）
-    _is_user_class = call_chain is None
-
-    # ── static 字段声明（JVMS §5.5 类初始化的事实层）→ clinit_extract ──────
-    _type_only = stub_bodies or (
-        call_chain is not None
-        and not any((ci.name, _m.name, _m.descriptor) in call_chain for _m in ci.methods))
-    method_blocks.extend(_gen_static_field_blocks(
-        ci, registry, class_type_params, _type_only, _nf_entry,
-        _registry_short_names))
+    <clinit> → __clinit（clinit_extract）；G-10 接口私有 lambda body 落
+    java_class! 块外的擦除固有 impl 块；接口实例方法发声明 / 载体 default 体；
+    普通方法按调用链翻译字节码或生成 stub。结果追加进 method_blocks 与
+    _iface_lambda_blocks。原 _gen_class_rs 内联段逐字搬移，闭包变量改为本
+    函数参数。"""
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
     # 非桥接的 synthetic 方法（lambda$xxx$N、access$NNN 等）是 invokedynamic 闭包 /
     # 内部类访问器的真实调用目标，必须生成定义；桥接方法（ACC_BRIDGE）与真实方法同名，继续过滤。
@@ -539,8 +345,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                 stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry, class_type_params=class_type_params)
                 method_blocks.append(attr_line + '\n' + stub)
 
-    # 已翻译方法体的接口 default 方法（展开到本类）：其字节码同样可能含 `Iface.super.m()`
-    _translated_defaults: list = []
+
+def _emit_interface_default_inheritance(ci, registry, call_chain, stub_bodies,
+                                        class_type_params, overloaded_names,
+                                        visible_methods, method_blocks,
+                                        _translated_defaults) -> None:
+    """接口 default 方法继承：当类实现接口但未覆盖其 default 方法时，自动生成继承实现。
+    已翻译体记入 _translated_defaults（Iface.super 展开段的种子）。原
+    _gen_class_rs 内联段逐字搬移（含守卫与祖先接口去重 / 预扫描计数），闭包
+    变量改为本函数参数。"""
     # 接口 default 方法继承：当类实现接口但未覆盖其 default 方法时，自动生成继承实现
     if ci.interfaces and registry and not ci.is_interface:
         import copy as _copy
@@ -661,6 +474,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                     dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry, class_type_params=class_type_params)
                     method_blocks.append(dm_attr + '\n' + dm_stub)
 
+
+def _emit_interface_special_members(ci, registry, call_chain, stub_bodies,
+                                    class_type_params, overloaded_names,
+                                    visible_methods, method_blocks,
+                                    _translated_defaults) -> None:
+    """`Iface.super.m()` / 接口私有方法（invokespecial InterfaceMethod）的落点：
+    接口方法体按「展开到实现类」建模，以非虚成员 Iface_super_m 展开到本类，
+    展开出的方法体自身的同类调用递归处理。原 _gen_class_rs 内联段逐字搬移，
+    闭包变量改为本函数参数。"""
     # `Iface.super.m()` / 接口私有方法（invokespecial InterfaceMethod）的落点：
     # 接口方法体按「展开到实现类」建模，被本类覆盖的 default 方法体（及接口私有方法体）
     # 以非虚成员 `Iface_super_m` 展开到本类；展开出的方法体自身的同类调用递归处理。
@@ -724,6 +546,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                                                  class_type_params=class_type_params)
                 method_blocks.append(_sp_attr + '\n' + _sp_block)
 
+
+def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
+                                         new_format_map, class_type_params,
+                                         overloaded_names, visible_methods,
+                                         method_blocks) -> None:
+    """超类虚方法继承：若子类未覆盖祖先虚方法，生成继承实现使 vtable impl
+    包含实际函数体（避免子类 Ancestor__VTable impl 退化为 panic 存根）。
+    仅对用户类超类链处理。原 _gen_class_rs 内联段逐字搬移，闭包变量改为
+    本函数参数。"""
     # 超类虚方法继承：若子类未覆盖祖先虚方法，生成继承实现使 vtable impl 包含实际函数体。
     # 这避免子类的 Ancestor__VTable impl 退化为 panic!("stub")。
     # 仅对用户类超类链（无 '/'）处理，JDK 类的继承由 BFS 方法级调用链保证。
@@ -773,6 +604,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                         method_blocks.append(_vm_attr + '\n' + _vm_stub)
             _vinh_super = _vinh_sci.super_class if _vinh_sci.super_class else None
 
+
+def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
+                                method_blocks) -> list[str]:
+    """Record 类（super_class == java/lang/Record）：覆盖 invokedynamic 无法翻译的
+    toString / hashCode / equals 为字段级实现。原 _gen_class_rs 内联段逐字
+    搬移；原 method_blocks 重绑定改为返回新列表。"""
     # Record 类（super_class == java/lang/Record）：覆盖 invokedynamic 无法翻译的方法
     if ci.super_class == 'java/lang/Record' and not ci.is_interface:
         record_fields = [f for f in ci.fields if not f.is_static]
@@ -831,6 +668,250 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             else:
                 new_blocks.append(block)
         method_blocks = new_blocks
+    return method_blocks
+
+
+def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
+                  jdk_crate_pkg_paths: list[str] | None = None,
+                  stub_bodies: bool = False,
+                  call_chain: set | None = None,
+                  new_format_map: dict | None = None,
+                  workspace_root: str | None = None,
+                  user_crate_prefix: str | None = None,
+                  full_impl_classes: set | None = None,
+                  conflict_map: dict | None = None,
+                  skipped_classes: set | None = None,
+                  user_sibling_imports: list[str] | None = None,
+                  generated_classes: set | None = None,
+                  emission: 'ClassEmission | None' = None) -> str:
+    """生成单个 Java 类对应的完整 .rs 文件内容。
+
+    生成规则：
+    - 实例字段用 Field<T> 包装（提供 Java 字段语义的内部可变性）
+    - 方法直接在 impl 块中，无 raw:: 子模块
+    - 所有方法返回 Result<T>
+    - 每个 struct / field / method 前加 // @java_* 注释供 build.rs 扫描
+    - new_format_map: 若提供，为覆盖的类插入 #[path] mod _impl; 并跳过被覆盖方法
+    - user_crate_prefix: 若提供（如 'jdk_classes'），cross_imports 用该 crate 前缀
+    - emission: 若提供，记录本类实际生成的方法声明，并在文本中留出继承成员声明的
+      两个插入位（use 区 / impl 块尾），由 inherited_gen.resolve_inherited_members 统一填充
+    """
+
+    # ── Step 1+2: 引用收集与精确 cross_imports（import_gen）─────────────────
+    _referenced = collect_referenced(ci, registry, generated_classes)
+    cross_imports = gen_cross_imports(
+        ci, registry, jdk_crate_pkg_paths, call_chain, generated_classes,
+        conflict_map, skipped_classes, user_sibling_imports,
+        user_crate_prefix, _referenced)
+
+    # 全量手写类（native_impl 文件含 pub struct）：codegen 跳过 struct 生成，改输出 pub use _impl::*
+    _full_impl = ci.name in (full_impl_classes or set())
+    if not _full_impl:
+        # G-10 账本：本类方法由本轮生成（手写全量类的方法不走 class_writer，不参与断言）
+        LAMBDA_NAME_LEDGER.generated_classes.add(ci.name)
+
+    # 接口在 Rust 层是与 Java 同名的载体类型（由 java_class 宏展开）：
+    #   - 值：持有 Object 的接口引用，实例方法分派走 Object vtable（impl 块不含实例方法；
+    #     default 方法由实现类继承展开，见下方「接口 default 方法继承」）
+    #   - 命名空间：static 字段访问器 / static 方法（含 private static 与 static 合成方法）
+    #     落在载体的 impl 块，调用点与 Java 同构（`Iface::staticMethod(args)`）
+    _is_iface = bool(ci.is_interface)
+
+    parts: list[str] = [
+        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs)]",
+        f"use {user_crate_prefix or 'crate'}::prelude::*;",
+        *cross_imports,
+        *([_INHERITED_IMPORTS_SLOT] if emission is not None else []),
+        "",
+    ]
+    inst_fields = [f for f in ci.fields if not f.is_static]
+
+    # Option C（方案 §16「_super 语义边界」）：`_super` 是父类状态的**唯一所有者**，
+    # 子类通过宏生成的转发访问器获得「展平字段视图」。
+    # 不把父类字段复制进子类 Inner——那会让同一字段存在两份状态并立即分叉。
+    _has_super = bool(
+        ci.super_class and ci.super_class != _OBJECT_CLASS
+    )
+
+    # 用短名作为 Rust 标识符（JDK 类含 /，内部类含 $，均需转换为合法 Rust 名）
+    struct_name = short_cls(ci.name) if ('/' in ci.name or '$' in ci.name) else ci.name
+
+    # 类的有效类型参数：自身 Signature 形参；内部类无自身形参时继承外部类形参
+    # （Java 内部类经 this$N 隐式可见外部类类型变量，如 ArrayList$Itr → ArrayList_Itr<E>）。
+    class_type_params = effective_class_type_params(ci, registry)
+
+    # 构建泛型参数字符串（用于 struct 和 impl 头）
+    if class_type_params:
+        type_params_str = ', '.join(class_type_params)
+        # 泛型参数需要 Clone + Default + 'static。
+        # 这组 bound 是纯粹的 Rust 能力声明——故意不引入 `JavaType` 这类
+        # 游离于 Java 命名空间之外的 trait 名（CLAUDE.md 命名原则，方案 §4）。
+        # Default 是必须的：`_super: Default::default()` 与字段默认值都要求它。
+        bounds_str = ', '.join(f"{p}: Clone + Default + 'static" for p in class_type_params)
+        struct_generic = f"<{type_params_str}>"   # bounds 由 java_class! 宏展开时注入，不出现在生成代码
+        ty_params_only = f"<{type_params_str}>"
+        # impl 头只写裸参数：块级宏用 struct 上的 generics（含补齐的 bound 与 where 子句）
+        # 重新生成 impl 头，这里的 impl generics 仅作读者提示。
+        impl_header   = f"impl<{type_params_str}> {struct_name}<{type_params_str}>"
+    else:
+        struct_generic = ''
+        ty_params_only = ''
+        impl_header   = f"impl {struct_name}"
+
+    # 构建注册表短名集合，用于校验字段类型中引用的类是否存在
+    _registry_short_names: set[str] = (
+        {_short_cls_g(_k) for _k in registry}
+        if registry else set()
+    )
+
+    # ── 父类 Rust 类型（含泛型实参）─────────────────────────────────────
+    # 实参取自本类 Signature 的 SuperclassSignature，整条祖先链逐级代入
+    # （见 type_map.ancestor_type_args），不做「子类形参按位置套给父类」的猜测。
+    parent_rust = ''
+    _ancestor_args: dict[str, list[str]] = (
+        dict(ancestor_type_args(ci, registry)) if _has_super and registry else {})
+    if _has_super:
+        parent_rust = _rust_type_with_args(short_cls(ci.super_class),
+                                           _ancestor_args.get(ci.super_class, []))
+
+
+    # ── 继承链字段展平（方案 §6）────────────────────────────────────────
+    # codegen 侧展平整条继承链，父类字段在前；宏侧零 registry 依赖。
+    # 注意：展平结果只用于生成「转发访问器」，父类字段的实际存储在 `_super` 里
+    # （见 §16：复制字段会造成同一字段两份状态）。
+    superclass_fields: list[tuple[str, str]] = []
+    superclass_reference_fields: list[str] = []
+    superclass_erased_fields: list[str] = []
+    if _has_super and registry and not _full_impl:
+        _chain: list = []
+        _seen_chain: set[str] = set()
+        _cursor = ci.super_class
+        while (_cursor and _cursor != _OBJECT_CLASS
+               and _cursor in registry and _cursor not in _seen_chain):
+            _seen_chain.add(_cursor)
+            _p_ci = registry[_cursor]
+            _chain.append(_p_ci)
+            _cursor = _p_ci.super_class
+        _declared: set[str] = set()
+        for _ancestor in reversed(_chain):
+            # 祖先形参 → 本类视角实参（沿 SuperclassSignature 逐级代入的结果）
+            _anc_params = effective_class_type_params(_ancestor, registry)
+            _sub_args = list(_ancestor_args.get(_ancestor.name, []))
+            while len(_sub_args) < len(_anc_params):
+                _sub_args.append('Object')
+            _anc_map = dict(zip(_anc_params, _sub_args))
+            for _f in _ancestor.fields:
+                if _f.is_static:
+                    continue
+                # 隐藏更上层祖先同名字段的声明取独立槽位名（Java 字段按声明类静态解析）
+                _sf_name = instance_field_rust_name(
+                    _ancestor.name, _safe_field_name(_f.name), registry)
+                if _sf_name in _declared:
+                    continue
+                _declared.add(_sf_name)
+                _sf_view_ty = _resolve_anc_field_rust(
+                    _f, _anc_params, _anc_map, registry, _registry_short_names)
+                superclass_fields.append((_sf_name, _sf_view_ty))
+                # 祖先按类型变量声明（引用存储 + __borrow_mut 访问器）而本类视角代入成基本类型
+                # （Box<U>.state 在 `extends Box<Long>` 下是 i64）：存储形态由声明方决定，
+                # 宏须按引用字段实现祖先 VTable 的访问器
+                if (_sf_view_ty in _PRIMITIVE_RUST_TYPES and _resolve_anc_field_rust(
+                        _f, _anc_params, {_p: _p for _p in _anc_params},
+                        registry, _registry_short_names) not in _PRIMITIVE_RUST_TYPES):
+                    superclass_reference_fields.append(_sf_name)
+                # 声明方（祖先）按自身类型形参声明的字段 → 存储与访问器已被声明方的宏
+                # Object 化（A-1 擦除按声明类判定）——继承者的宏按名单同步擦除
+                _declared_ty = _resolve_anc_field_rust(
+                    _f, _anc_params, {_p: _p for _p in _anc_params},
+                    registry, _registry_short_names)
+                if any(_re.search(r'\b' + _re.escape(_p) + r'\b', _declared_ty)
+                       for _p in _anc_params):
+                    superclass_erased_fields.append(_sf_name)
+
+    # ── struct 声明（裸类型，封装细节由宏收拢）──────────────────────────
+    struct_lines: list[str] = []
+    if not _full_impl:
+        # 父类已有的字段名（继承展平），避免子类重复声明（如内部类 this$0 与父类同名）
+        _super_field_names: set[str] = {name for name, _ in superclass_fields}
+        for f in inst_fields:
+            safe_fname = instance_field_rust_name(ci.name, _safe_field_name(f.name), registry)
+            if safe_fname in _super_field_names:
+                continue  # 父类已展平，不重复声明
+            struct_lines.append("    " + _java_field_attr(f))
+            struct_lines.append(
+                f"    pub {safe_fname}: "
+                f'{_resolve_field_rust(f, class_type_params, registry, _registry_short_names)},')
+        # 未被字段引用的类型参数由宏补 PhantomData（block.rs），codegen 不再输出 _phantom
+
+
+    # T76 的 as_xxx / into_xxx upcast 方法已由 java_class! 宏统一承接
+    # （宏生成 `__super()` / `__into_super()`，upcast 与字段存储解耦，见方案 §16）。
+
+    # T55 已删除（R-2）：
+    # From<Child> for Parent 链由 invoke.py / sim.py 的显式 __into_super() 链替代，
+    # 宏为有父类的类生成 Deref<Target=Parent> 覆盖引用层面的向上转型。
+    # upcast 调用点：Clone::clone(&child).__into_super().__into_super()...（见 coerce._into_super_chain）
+
+    # T55b 已删除（Arch-5）：
+    # Arch-1 后接口 = Object 类型别名，From<ConcreteClass> for Interface 语义上等于
+    # From<ConcreteClass> for Object，与 java_class 宏生成的 Into<Object> 冲突且
+    # 会用 Default::default() 丢弃具体数据。
+    # 正确路径：ConcreteClass.into() → Object，通过 java_class 宏生成的 Into<Object> 完成。
+    # K-2: 共置 _impl.rs 文件由 project_writer 在生成阶段复制；class_writer 不再生成 #[path] 块。
+    _nf_entry = (new_format_map or {}).get(ci.name)
+
+    # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
+    visible_methods = [m for m in ci.methods if not m.is_synthetic]
+    # 重载判定在整条父类链上进行（与调用侧 _mangle_if_overloaded 共用同一函数），
+    # 保证子类方法名不会按名字遮蔽父类的同名异参方法。
+    overloaded_names: set[str] = hierarchy_overloaded_names(ci, registry)
+
+    method_blocks: list[str] = []
+    # G-10：接口私有实例 lambda body 落在 java_class! 块之外的擦除 impl 块
+    # （不进接口 vtable / 不被实现类继承），见方法循环内的专门分支
+    _iface_lambda_blocks: list[str] = []
+
+    # 是否是用户类（call_chain is None 表示用户类，所有方法都翻译）
+    _is_user_class = call_chain is None
+
+    # ── static 字段声明（JVMS §5.5 类初始化的事实层）→ clinit_extract ──────
+    _type_only = stub_bodies or (
+        call_chain is not None
+        and not any((ci.name, _m.name, _m.descriptor) in call_chain for _m in ci.methods))
+    method_blocks.extend(_gen_static_field_blocks(
+        ci, registry, class_type_params, _type_only, _nf_entry,
+        _registry_short_names))
+    # 方法翻译主循环（可见方法 + 非桥接 synthetic；<clinit> / 接口 lambda /
+    # 接口声明 / 虚方法体发射，见 _emit_method_blocks）
+    _emit_method_blocks(
+        ci, registry, call_chain=call_chain, stub_bodies=stub_bodies,
+        new_format_map=new_format_map, _nf_entry=_nf_entry,
+        class_type_params=class_type_params, overloaded_names=overloaded_names,
+        visible_methods=visible_methods, _type_only=_type_only,
+        _is_iface=_is_iface, method_blocks=method_blocks,
+        _iface_lambda_blocks=_iface_lambda_blocks)
+
+    # 已翻译方法体的接口 default 方法（展开到本类）：其字节码同样可能含 `Iface.super.m()`
+    _translated_defaults: list = []
+    _emit_interface_default_inheritance(
+        ci, registry, call_chain=call_chain, stub_bodies=stub_bodies,
+        class_type_params=class_type_params, overloaded_names=overloaded_names,
+        visible_methods=visible_methods, method_blocks=method_blocks,
+        _translated_defaults=_translated_defaults)
+    _emit_interface_special_members(
+        ci, registry, call_chain=call_chain, stub_bodies=stub_bodies,
+        class_type_params=class_type_params, overloaded_names=overloaded_names,
+        visible_methods=visible_methods, method_blocks=method_blocks,
+        _translated_defaults=_translated_defaults)
+    _emit_superclass_virtual_inheritance(
+        ci, registry, call_chain=call_chain, stub_bodies=stub_bodies,
+        new_format_map=new_format_map,
+        class_type_params=class_type_params, overloaded_names=overloaded_names,
+        visible_methods=visible_methods, method_blocks=method_blocks)
+
+    # Record 类：覆盖 invokedynamic 无法翻译的方法（_patch_record_method_blocks）
+    method_blocks = _patch_record_method_blocks(
+        ci, registry, struct_name, struct_generic, method_blocks)
 
     # ── 组装 java_class! { ... } 块（方案 §3 核心设计）────────────────────
     if not _full_impl:
@@ -899,7 +980,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     parts.extend(scan_used_vtable_imports(
         method_blocks, _iface_lambda_blocks, cross_imports,
         struct_name, registry, _prefix))
-
 
     # BINARY_NAME / ObjectVTable / Into<Object> / From<Object> / Debug 全部由
     # java_class! 宏在编译期展开（方案 §11 职责边界总表）。
