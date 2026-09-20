@@ -130,6 +130,17 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
                     and _is_subtype(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)):
                 chain = _into_super_chain(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)
                 val_str = f"Clone::clone(&{val_str}){chain}"
+            elif elem_ty != val_ty_str:
+                # 值静态类型与元素类型无子型关系（`Number[] n = intArr; n[0] = 3.14;`
+                # ——元素类型来自值流推断，比 javac 的声明元素类型更精确）：Java 侧按
+                # 声明元素类型静态合法，运行时按运行时元素类型检查 → 经 Object 边界
+                # 走 aastore 存储检查路径（不满足抛 ArrayStoreException，S-4）
+                _val_obj = _coerce_to_object(val_str, val_ty_str, registry,
+                                             sim.class_type_params)
+                sim.emit(RawStmt(
+                    f"Object::from(Clone::clone(&{render_expr(arr_expr)}))"
+                    f".array_store_object({render_expr(idx_expr)}, {_val_obj})?;"))
+                return True
             else:
                 val_str = f"Clone::clone(&{val_str})"
         sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {val_str})?;"))

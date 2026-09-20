@@ -90,6 +90,14 @@ pub trait ObjectVTable: 'static {
     #[doc(hidden)]
     fn __erased_inner(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
 
+    /// 数组协变的元素赋值兼容探针（S-4）：receiver 是引用元素数组（JArray），`slot` 是
+    /// 调用方（`From<Object> for JArray<T>`，知道目标元素类型 T）构造的 `Option<T>`。
+    /// 本钩子以「源元素类型的探针对象」view_into 该 slot——祖先名单静态生成（与元素值
+    /// 无关），填充成功 ⇔ T 是源元素类型自身或其祖先（JLS §4.10.3 数组子类型条件）。
+    /// 非数组对象不响应（默认 false，checkcast 由其余钩子判定）。
+    #[doc(hidden)]
+    fn __array_elem_assignable(&self, _slot: &mut dyn std::any::Any) -> bool { false }
+
     /// checkcast 的类型驱动形式：`slot` 是 `Option<T>`，`T` 为本类或任一祖先类的 wrapper 类型时
     /// 按运行时类重建该视图写入 `slot` 并返回 true（保留运行时类的覆盖实现）；否则返回 false。
     fn __view_into(

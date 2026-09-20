@@ -67,7 +67,10 @@ def _maybe_downcast(expr: RsExpr, ty: RsType) -> RsExpr:
     if (isinstance(expr, Var) and isinstance(ty, RsNamed)
             and ty.name != 'Object' and not ty.name.startswith('Rc<')
             and not ty.name.startswith('&') and ty.name != '()'):
-        return RawExpr(f"({render_expr(expr)}).downcast::<{ty.name}>()")
+        # 数组目标走 From<Object>（元素类型驱动的 checkcast，S-4）；值是局部变量，
+        # From 按值收 Object → 先 Clone::clone 保活
+        from .instr.coerce import _checkcast_runtime_expr
+        return RawExpr(_checkcast_runtime_expr(render_expr(expr), ty.name, val_is_var=True))
     return expr
 
 
@@ -438,7 +441,8 @@ class StackSim:
                     # null 字面量（Default::default()，此处已是 RawExpr）穿透任何
                     # checkcast，不 downcast——(Default::default()).downcast::<T>()
                     # 因接收者无类型而 E0282。
-                    expr = RawExpr(f"({render_expr(expr)}).downcast::<{hint.name}>()")
+                    from .instr.coerce import _checkcast_runtime_expr
+                    expr = RawExpr(_checkcast_runtime_expr(render_expr(expr), hint.name))
                     force_let_ty = True
                 ty = hint
             elif (isinstance(ty, RsNamed) and getattr(hint, 'name', '') in self.class_type_params

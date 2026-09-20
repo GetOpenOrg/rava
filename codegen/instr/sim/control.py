@@ -50,7 +50,9 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             expr, src_ty = sim.pop()
             src_name = getattr(src_ty, 'name', str(src_ty))
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
-                expr = RawExpr(f"({render_expr(expr)}).downcast::<{cast_rust}>()")
+                # 类目标：downcast；数组目标：From（元素类型驱动的协变判定，S-4）
+                from ..coerce import _checkcast_runtime_expr
+                expr = RawExpr(_checkcast_runtime_expr(render_expr(expr), cast_rust))
             elif (src_name != 'Object' and cast_rust not in ('Object', '()', src_name)
                   and _erased_shape(src_name) == _erased_shape(cast_rust)):
                 # 同一擦除类型、仅类型实参不同（`(Entry<K,V>[]) new Entry<?,?>[n]`）：JVM 上类型实参
@@ -79,7 +81,8 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                     # checkcast 是运行时校验 → 经 Object 边界按目标类型取回
                     _boxed = _coerce_to_object(render_expr(expr), src_name, registry,
                                                sim.class_type_params)
-                    expr = RawExpr(f"({_boxed}).downcast::<{cast_rust}>()")
+                    from ..coerce import _checkcast_runtime_expr
+                    expr = RawExpr(_checkcast_runtime_expr(_boxed, cast_rust))
             if cast_rust == 'Object' and src_name not in ('Object', '()'):
                 # 目标擦除为 Object（接口 / 根类）而值有更精确的静态类型（类型变量 T_NODE、
                 # 具体类）：向上转型不改变值，表达式的 Rust 类型仍是源类型 → 记录源类型，

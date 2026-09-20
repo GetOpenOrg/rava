@@ -9,7 +9,7 @@
 //! `vm-upcalls` 行声明，转译 BFS 以此为种子——声明在使用处，与 `_impl.rs` 的
 //! upcalls 属性机制同一形态（原独立清单 vm_roots.txt 已并入此处）。
 
-// vm-upcalls: java/lang/NullPointerException.<init>:()V java/lang/ArrayIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/IndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/StringIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/NegativeArraySizeException.<init>:(Ljava/lang/String;)V java/lang/ArithmeticException.<init>:(Ljava/lang/String;)V java/lang/ClassCastException.<init>:(Ljava/lang/String;)V java/lang/IllegalMonitorStateException.<init>:(Ljava/lang/String;)V java/lang/CloneNotSupportedException.<init>:(Ljava/lang/String;)V java/lang/OutOfMemoryError.<init>:(Ljava/lang/String;)V java/lang/NoClassDefFoundError.<init>:(Ljava/lang/String;)V java/lang/ExceptionInInitializerError.<init>:(Ljava/lang/Throwable;)V java/lang/Throwable.getMessage:()Ljava/lang/String;
+// vm-upcalls: java/lang/NullPointerException.<init>:()V java/lang/ArrayIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/IndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/StringIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/NegativeArraySizeException.<init>:(Ljava/lang/String;)V java/lang/ArithmeticException.<init>:(Ljava/lang/String;)V java/lang/ClassCastException.<init>:(Ljava/lang/String;)V java/lang/ArrayStoreException.<init>:(Ljava/lang/String;)V java/lang/IllegalMonitorStateException.<init>:(Ljava/lang/String;)V java/lang/CloneNotSupportedException.<init>:(Ljava/lang/String;)V java/lang/OutOfMemoryError.<init>:(Ljava/lang/String;)V java/lang/NoClassDefFoundError.<init>:(Ljava/lang/String;)V java/lang/ExceptionInInitializerError.<init>:(Ljava/lang/Throwable;)V java/lang/Throwable.getMessage:()Ljava/lang/String;
 
 use crate::java::lang::{Object, ObjectVTable, String, Throwable};
 
@@ -121,6 +121,13 @@ impl JvmError {
 
     pub fn class_cast(message: std::string::String) -> Self {
         vm_throw(crate::java::lang::ClassCastException::new_str(String::from(message)))
+    }
+
+    /// aastore 存储检查失败（JLS §10.5 / S-4 数组协变）：值与数组元素类型不赋值兼容。
+    /// 消息为值的运行时类全限定名（与 HotSpot 一致）。
+    pub fn array_store(value_class: &str) -> Self {
+        vm_throw(crate::java::lang::ArrayStoreException::new_str(String::from(
+            value_class.replace('/', "."))))
     }
 
     /// Object.clone()：运行时类未实现 Cloneable。消息为类的全限定名（与 HotSpot 一致）。
