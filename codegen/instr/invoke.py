@@ -26,7 +26,7 @@ from ..constants import (
 )
 from .coerce import (
     _coerce_from_null, _coerce_to_object,
-    _coerce_value,
+    _coerce_value, _escape_str,
 )
 from .hierarchy import (
     _find_super_chain_to_class,
@@ -91,10 +91,17 @@ def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None
     if tmpl_m:
         template = tmpl_m.group(1)
         parts = template.split('\x01')
+
+        def _tmpl_seg(p: str) -> str:
+            # 模板是常量池解码值：先按 Rust 字面量转义（反斜杠双写、控制字符），
+            # 再双写 format! 占位花括号。顺序不可反——_escape_str 不产生花括号，
+            # 反过来先双写会把 `{{` 里的 `\` 处理乱。与字面量同一解码值契约。
+            return _escape_str(p).replace('{', '{{').replace('}', '}}')
+
         if len(parts) == len(args) + 1:
             fmt_str = ''.join(
-                (p.replace('{', '{{').replace('}', '}}') + '{}' if i < len(args)
-                 else p.replace('{', '{{').replace('}', '}}'))
+                (_tmpl_seg(p) + '{}' if i < len(args)
+                 else _tmpl_seg(p))
                 for i, p in enumerate(parts)
             )
             fmt_args = ', '.join(args)
