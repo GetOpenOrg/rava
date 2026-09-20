@@ -65,13 +65,22 @@ impl DecimalDigits {
             while v <= -100 {
                 let q = v / 100;
                 pos -= 2;
-                let r = v - q * 100;
-                arr[pos] = b'0' as i8 + (r / 10) as i8;
-                arr[pos + 1] = b'0' as i8 + (r % 10) as i8;
+                let d = q * 100 - v;          // 剩余两位（正数）
+                arr[pos] = b'0' as i8 + (d / 10) as i8;
+                arr[pos + 1] = b'0' as i8 + (d % 10) as i8;
                 v = q;
             }
-            pos -= 1;
-            arr[pos] = b'0' as i8 - v as i8; // v ∈ [-9,0]，数字 = -v
+            if v <= -10 {
+                // 两位剩余（[-99,-10]）：-v 即两位数字面
+                pos -= 2;
+                let d = -v;
+                arr[pos] = b'0' as i8 + (d / 10) as i8;
+                arr[pos + 1] = b'0' as i8 + (d % 10) as i8;
+            } else {
+                // 单位剩余（[-9,0]）
+                pos -= 1;
+                arr[pos] = b'0' as i8 - v as i8;
+            }
             if negative {
                 pos -= 1;
                 arr[pos] = b'-' as i8;
@@ -94,7 +103,7 @@ impl DecimalDigits {
                 pos -= 8;
                 let mut r = v - q * 100_000_000;
                 for k in (0..4).rev() {
-                    let pair = (r % 100) as i64;
+                    let pair = (0i64 - r % 100) as i64;
                     arr[pos + k * 2] = b'0' as i8 + (pair / 10) as i8;
                     arr[pos + k * 2 + 1] = b'0' as i8 + (pair % 10) as i8;
                     r /= 100;
@@ -104,13 +113,20 @@ impl DecimalDigits {
             while v <= -100 {
                 let q = v / 100;
                 pos -= 2;
-                let r = v - q * 100;
-                arr[pos] = b'0' as i8 + (r / 10) as i8;
-                arr[pos + 1] = b'0' as i8 + (r % 10) as i8;
+                let d = q * 100 - v;
+                arr[pos] = b'0' as i8 + (d / 10) as i8;
+                arr[pos + 1] = b'0' as i8 + (d % 10) as i8;
                 v = q;
             }
-            pos -= 1;
-            arr[pos] = b'0' as i8 - v as i8;
+            if v <= -10 {
+                pos -= 2;
+                let d = -v;
+                arr[pos] = b'0' as i8 + (d / 10) as i8;
+                arr[pos + 1] = b'0' as i8 + (d % 10) as i8;
+            } else {
+                pos -= 1;
+                arr[pos] = b'0' as i8 - v as i8;
+            }
             if negative {
                 pos -= 1;
                 arr[pos] = b'-' as i8;
@@ -131,21 +147,30 @@ impl DecimalDigits {
             while v <= -100 {
                 let q = v / 100;
                 pos -= 2;
-                let r = v - q * 100;
+                let d = q * 100 - v;
                 let p2 = pos << 1;
-                arr[p2] = b'0' as i8 + (r / 10) as i8;
-                arr[p2 + 2] = b'0' as i8 + (r % 10) as i8;
+                arr[p2 + 1] = b'0' as i8 + (d / 10) as i8;   // 高字节 0 由零初始化保证
+                arr[p2 + 3] = b'0' as i8 + (d % 10) as i8;
                 v = q;
             }
-            pos -= 1;
-            let p2 = pos << 1;
-            arr[p2] = b'0' as i8 - v as i8;
-            arr[p2 + 1] = 0;
+            let single = if v <= -10 {
+                pos -= 2;
+                let d = -v;
+                let p2 = pos << 1;
+                arr[p2 + 1] = b'0' as i8 + (d / 10) as i8;
+                arr[p2 + 3] = b'0' as i8 + (d % 10) as i8;
+                false
+            } else {
+                pos -= 1;
+                let p2 = pos << 1;
+                arr[p2 + 1] = b'0' as i8 - v as i8;
+                true
+            };
+            let _ = single;
             if negative {
                 pos -= 1;
                 let p2 = pos << 1;
-                arr[p2] = b'-' as i8;
-                arr[p2 + 1] = 0;
+                arr[p2 + 1] = b'-' as i8;
             }
         })?;
         Ok(pos as i32)
@@ -165,7 +190,7 @@ impl DecimalDigits {
                 pos -= 8;
                 let mut r = v - q * 100_000_000;
                 for k in (0..4).rev() {
-                    let pair = (r % 100) as i64;
+                    let pair = (0i64 - r % 100) as i64;
                     arr[pos + k * 2] = b'0' as u16 + (pair / 10) as u16;
                     arr[pos + k * 2 + 1] = b'0' as u16 + (pair % 10) as u16;
                     r /= 100;
@@ -175,13 +200,20 @@ impl DecimalDigits {
             while v <= -100 {
                 let q = v / 100;
                 pos -= 2;
-                let r = v - q * 100;
-                arr[pos] = b'0' as u16 + (r / 10) as u16;
-                arr[pos + 1] = b'0' as u16 + (r % 10) as u16;
+                let d = q * 100 - v;
+                arr[pos] = b'0' as u16 + (d / 10) as u16;
+                arr[pos + 1] = b'0' as u16 + (d % 10) as u16;
                 v = q;
             }
-            pos -= 1;
-            arr[pos] = (b'0' as i64 - v) as u16;
+            if v <= -10 {
+                pos -= 2;
+                let d = -v;
+                arr[pos] = b'0' as u16 + (d / 10) as u16;
+                arr[pos + 1] = b'0' as u16 + (d % 10) as u16;
+            } else {
+                pos -= 1;
+                arr[pos] = (b'0' as i64 - v) as u16;
+            }
             if negative {
                 pos -= 1;
                 arr[pos] = b'-' as u16;
