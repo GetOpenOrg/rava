@@ -139,12 +139,14 @@ pub fn Object__toString_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error
     Ok(crate::java::lang::String::from(text))
 }
 
-// ── 基本类型 ObjectVTable impl（供自动装箱路径使用）────────────────────────────
+// ── 基本类型 ObjectVTable impl（int 装箱进 Object 的场景）─────────────────────
 //
-// 装箱身份（JLS §5.1.7）：基本类型值装箱进 Object 后，其运行时类是对应的包装类。
-// 包装类方法在本架构中擦除为原始类型（`Double.valueOf(D)Double` 翻译为恒等），
-// 因此原始类型盒自身承载包装类的 binary name —— `instanceof Double`、getClass()、
-// 异常消息对装箱值给出与 JVM 一致的答案（Formatter 按参数运行时类分派即依赖此）。
+// S-3.1 后装箱类型（Integer/Long/...）是字节码翻译出的真实类，`Integer.valueOf`
+// 等工厂由翻译体承载（含缓存池语义）。原生值只在「未经 javac 装箱就流入 Object
+// 位置」的角落出现（类型变量擦除边界、手写层的 Object::from_any(i32) 等）：
+// 此时基本类型盒自身承载对应包装类的 binary name —— getClass()、instanceof、
+// 异常消息对这些值给出与 JVM 一致的答案。这与翻译类路径（wrapper 的 vtable）
+// 互不冲突：Rc<i32> 与 Rc<Integer> 的 TypeId 不同，downcast 各自精确命中。
 macro_rules! impl_vtable_primitive {
     ($t:ty, $bin:literal) => {
         impl ObjectVTable for $t {
