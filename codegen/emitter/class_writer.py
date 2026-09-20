@@ -28,7 +28,7 @@ from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, _find_virtual_in
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
-from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT
+from .interface_gen import IMPLS_SLOT as _INTERFACE_IMPLS_SLOT, UPCASTS_SLOT as _INTERFACE_UPCASTS_SLOT
 from ..type_map import interface_signature_views as _interface_signature_views
 from ..instr.coerce import _parse_field_ref
 from ..instr.coerce import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
@@ -1335,6 +1335,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         for line in block:
             parts.append(_indent(line) if line else '')
         parts.append("}")
+        if emission is not None:
+            # A-4 协变 upcast 占位（interface_gen 填充：impl From<Class> for Iface<Object>，
+            # 载体构造依赖其私有字段，必须经载体的 From<Object>，不属于宏输入）
+            parts.append(_INTERFACE_UPCASTS_SLOT)
         parts.append('')
 
         # G-10：接口私有实例 lambda body 的擦除固有 impl 块。置于 java_class! 块之外，
