@@ -299,17 +299,15 @@ def gen_method_body(
     # - RsStmt 条目是 IR 节点，等待 mutation 分析后再渲染
     entries: list = []
 
-    # ── 构造器：创建 this ───────────────────────────────────────────
+    # ── 构造器：双入口拆分（K-5，JVM 单一对象模型）──────────────────
+    # `new`（最外层 new 的具体类构造入口）建立对象身份一次：Self::default()
+    # 创建唯一 inner（__identity 单元 + any Rc），_init_not_null 清 null 标志，
+    # 随即把 this 传入 `__init_on`。构造器体全部落在 `__init_on`：super(...) 发射为
+    # `Parent::__init_on(<Parent as From<Self>>::from(Clone::clone(&this)), args)`
+    # ——this 经父类视图（vtable 上转 + any 共享部件）传入，父类体内的 putfield 经
+    # 访问器落在唯一身份上、this.m() 虚分派命中最终子类 override；this(...) 委托
+    # 同样传入同一 this。body 模拟阶段 this 仍以局部变量身份参与（sim.locals[0]）。
     if is_ctor:
-        # struct 是 java_class! 宏生成的 newtype（`Name(RefCell/Name__inner)`），
-        # 无法用结构体字面量构造。宏为 Inner 派生 Default（各字段取类型默认值，
-        # 与 JVM 的零初始化语义一致），因此统一用 `Self::default()` 起手，
-        # 后续 putfield 走 `__set_xxx` 访问器逐字段赋值。
-        struct_init = "Self::default()"
-        entries.append(('', f"    let mut this = {struct_init};"))
-        # 标记为非 null（Default 初始化时 _jvm_null=true，构造完成后清零）
-        entries.append(('', "    this._init_not_null();"))
-        # 泛型类的 this 带类型参数（与 StackSim 实例方法路径一致，避免裸名 E0107/E0308）
         _this_rust = short_cls(method.class_name)
         if _this_rust and _class_tparams:
             _this_rust = f"{_this_rust}<{', '.join(_class_tparams)}>"
@@ -370,4 +368,34 @@ def gen_method_body(
     body = '\n'.join(lines)
     # 有重载时在方法前加注释，标注原始 Java 签名
     prefix = f"// java: {method.name}{method.descriptor}\n" if _overloaded else ""
+
+    if is_ctor:
+        # K-5 双入口返回：`new` 建身份 + 转发；`__init_on` 持有构造器体（this 为首参，
+        # owned Self —— super()/this() 委托在其上传入同一身份）。名字与 invoke.py
+        # 调用侧同源（new / __init_on + 同一重载后缀）。
+        _fwd_params: list[str] = []
+        _fwd_args: list[str] = []
+        for _p in params:
+            _pn, _pt = _p.split(':', 1)
+            _pn = _pn.removeprefix('mut ').strip()
+            _fwd_params.append(f"{_pn}: {_pt.strip()}")
+            _fwd_args.append(_pn)
+        _init_on_name = ('__init_on' + rust_fn_name[3:]
+                         if rust_fn_name.startswith('new')
+                         else f'__init_on_{rust_fn_name}')
+        _new_sig = f"pub fn {rust_fn_name}({', '.join(_fwd_params)}) -> Result<Self>"
+        _init_on_sig = (f"pub fn {_init_on_name}(mut this: Self"
+                        f"{', ' if params else ''}{', '.join(params)}) -> Result<Self>")
+        _fwd_call = (f"Self::{_init_on_name}(this"
+                     f"{', ' + ', '.join(_fwd_args) if _fwd_args else ''})")
+        new_fn = (
+            f"{prefix}{_new_sig} {{\n"
+            f"    let mut this = Self::default();\n"
+            f"    this._init_not_null();\n"
+            f"    {_fwd_call}\n"
+            f"}}"
+        )
+        init_on_fn = f"#[doc(hidden)]\n{_init_on_sig} {{\n{body}\n}}"
+        return new_fn + "\n\n" + init_on_fn
+
     return f"{prefix}{sig} {{\n{body}\n}}"

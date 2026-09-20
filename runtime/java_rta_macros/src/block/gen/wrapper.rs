@@ -1,6 +1,6 @@
 //! Java 类型包装：wrapper struct（vtable + any 两指针 + JVM null 标志）、
 //! Default/Clone/PartialEq/Debug、impl ObjectVTable for Wrapper（R-1 blanket From<T> 需要）、
-//! wrapper impl 块（字段访问器委托 + 虚方法委托 + 构造器 + __new_with_super）。
+//! wrapper impl 块（字段访问器委托 + 虚方法委托 + 构造器 new/__init_on 双入口）。
 
 use std::collections::HashSet;
 
@@ -270,7 +270,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     };
 
     // ══════════════════════════════════════════════════════════════════════════
-    // 7. Impl block on wrapper（字段访问器委托 + 虚方法委托 + 构造器 + __new_with_super）
+    // 7. Impl block on wrapper（字段访问器委托 + 虚方法委托 + 构造器双入口）
     // ══════════════════════════════════════════════════════════════════════════
 
     let mut wrapper_methods: Vec<TokenStream2> = Vec::new();
@@ -483,78 +483,13 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
         wrapper_methods.push(expand_non_virtual_fn(f, &ctx.meta.binary_name, &ctx.basic_names, &ctx.ref_names));
     }
 
-    // __new_with_super（有父类时生成）
-    let new_with_super: TokenStream2 = if let Some(sup_ty) = &ctx.meta.superclass {
-        // 从 parent 的字段访问器拉取 superclass_fields 的值，初始化 __inner。
-        // 擦除字段以 Object 存储：访问器值经 Into<Object> 装箱写入。
-        let mut field_inits: Vec<TokenStream2> = Vec::new();
-        for (name, ty) in &ctx.meta.superclass_fields {
-            let get = format_ident!("__get_{}", name);
-            if ctx.is_erased(name) {
-                field_inits.push(quote! {
-                    #name: ::std::rc::Rc::new(::std::cell::RefCell::new(
-                        ::std::option::Option::Some(::std::boxed::Box::new(
-                            ::std::convert::Into::<Object>::into(parent.#get())))
-                    )),
-                });
-            } else if ctx.inherited_is_basic(name, ty) {
-                field_inits.push(quote! {
-                    #name: ::std::rc::Rc::new(::std::cell::Cell::new(parent.#get())),
-                });
-            } else {
-                field_inits.push(quote! {
-                    #name: ::std::rc::Rc::new(::std::cell::RefCell::new(
-                        ::std::option::Option::Some(::std::boxed::Box::new(parent.#get()))
-                    )),
-                });
-            }
-        }
-        // 本类自有字段从旧 this 保留（G-11）：javac 21 对内部类构造器的
-        // `putfield this$N` 先于 `invokespecial super.<init>`，重建若按
-        // Default::default() 会把已赋字段抹掉 → 后续解引用 NPE（TestVar 的
-        // TreeMap$EntrySet 实证）。存储形态与本类声明一致。
-        for (name, _ty) in ctx.fields {
-            let get = format_ident!("__get_{}", name);
-            if ctx.is_erased(name) {
-                field_inits.push(quote! {
-                    #name: ::std::rc::Rc::new(::std::cell::RefCell::new(
-                        ::std::option::Option::Some(::std::boxed::Box::new(
-                            ::std::convert::Into::<Object>::into(old.#get())))
-                    )),
-                });
-            } else if ctx.basic_names.contains(&name.to_string()) {
-                field_inits.push(quote! {
-                    #name: ::std::rc::Rc::new(::std::cell::Cell::new(old.#get())),
-                });
-            } else {
-                field_inits.push(quote! {
-                    #name: ::std::rc::Rc::new(::std::cell::RefCell::new(
-                        ::std::option::Option::Some(::std::boxed::Box::new(old.#get()))
-                    )),
-                });
-            }
-        }
-        quote! {
-            #[doc(hidden)]
-            #[allow(unused_variables)]
-            pub fn __new_with_super(parent: #sup_ty, old: Self) -> Self {
-                let _ = &old;
-                let inner = #inner_ident {
-                    #(#field_inits)*
-                    ..::std::default::Default::default()
-                };
-                let rc = ::std::rc::Rc::new(inner);
-                #struct_ident {
-                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident>,
-                    any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
-                    _jvm_null: false,
-                    #phantom_init
-                }
-            }
-        }
-    } else {
-        quote! {}
-    };
+    // K-5 构造器链身份：不再有 __new_with_super。对象身份在最外层 `new` 的具体类
+    // 构造器内经 `Self::default()` 建立一次；`super(...)` 由 Python 侧发射为
+    // `Parent::__init_on(<Parent as From<Self>>::from(Clone::clone(&this)), args)`
+    // ——this 以父类视图（vtable 上转 + any 共享部件）传入父类构造器体，putfield
+    // 经访问器落在唯一身份的 inner 上，`this.m()` 虚分派命中最终子类的 override
+    //（JVM 单一对象模型）。super 前已赋字段（G-11 的 this$0 场景）天然保留，
+    // G-11 的重建保留逻辑随重建一起消亡。
 
     // static 字段存储 + 访问器、类初始化状态机（JVMS §5.5）
     let impl_method_set: HashSet<String> = ctx.meta.impl_methods.iter().cloned().collect();
@@ -576,7 +511,6 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
             #(#wrapper_methods)*
             #(#static_accessors)*
             #class_init_fn
-            #new_with_super
         }
     };
 
