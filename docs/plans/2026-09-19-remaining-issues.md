@@ -44,6 +44,13 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 
 ### A-1 存储层擦除未落地：可变泛型类无法跨实例化互转 【P0】
 
+> **vtable 去形参已落地（2026-09-20，分支 fix/a1-vtable-erasure）**：`X__VTable` 非
+> 泛型（签名 Object 化、擦除按声明类判定——`superclass_erased_fields` / `vtable_erasure`
+> 名单由 Python 输出）；`From<X<A..>> for Anc<B..>` 拓宽为任意祖先实例化（`CountedCompleter
+> <Object>: From<Sorter<T>>` 这类跨实例化 upcast 成立）。TestStreamBasic 编译 0 错误
+> （运行期阻塞在 S-4）；红线 8 测试 + TestStringBuilder 全 PASS。构造器 turbofish 的
+> `_` 回退改为「调用方同名形参，否则 Object」（γ' 拓宽移除了 `.into()` 的推断锚点）。
+>
 > **核心已落地（2026-09-20，`6c731b1` 阶段 α + `b7c7f45` 阶段 β，分支 fix/a1-erased-storage）**：
 > `X__inner` 非泛型（提及类型形参的字段以 Object 存储）；`From<Object> for X<A>` 对任意 A
 > 成立（`__erased_inner` 钩子 + 按擦除类判定，共享存储与对象标识）；`#[immutable_state]`

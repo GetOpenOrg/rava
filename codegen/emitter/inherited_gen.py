@@ -175,6 +175,84 @@ def _forward_body(method: EmittedMethod, owner_bin: str, owner_args: list[str]) 
             f".__impl_{method.rust_name}({', '.join(args)})")
 
 
+def _sig_param_types(signature: str) -> 'tuple[list[str], str]':
+    """`pub fn name(&self, a: T, b: U) -> R` → (['T', 'U'], 'R')。
+    顶层逗号 / 箭头按括号与尖括号深度切分（与 _param_idents 同一深度规则）。"""
+    start = signature.find('(')
+    if start < 0:
+        return [], ''
+    # 形参列表的右括号：从 '(' 起做深度计数回到 0 的位置（返回类型的括号不计入）
+    depth, end = 0, -1
+    for i in range(start, len(signature)):
+        if signature[i] in '(<[':
+            depth += 1
+        elif signature[i] in ')>]':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
+        return [], ''
+    params_str = signature[start + 1:end]
+    parts, depth, cur = [], 0, ''
+    for ch in params_str:
+        if ch in '(<[':
+            depth += 1
+        elif ch in ')>]':
+            depth -= 1
+        if ch == ',' and depth == 0:
+            parts.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur)
+    types = []
+    for p in parts:
+        p = p.strip()
+        if not p or p.startswith('&') or p in ('self', 'mut self'):
+            continue
+        types.append(p.split(':', 1)[1].strip() if ':' in p else p)
+    ret = ''
+    arrow = signature.rfind('->')
+    if arrow >= 0:
+        ret = signature[arrow + 2:].strip()
+    return types, ret
+
+
+def _result_inner(ty: str) -> 'str | None':
+    """`Result<T>` → 'T'；其余 None。"""
+    m = re.match(r'^Result<(.*)>$', ty)
+    return m.group(1) if m else None
+
+
+def _owner_erasure_entries(owner_sig: str, substituted_sig: str, owner_params: list[str]) -> list[str]:
+    """owner（声明类）签名中提及自身类型形参的位置 → 接收者视角下代入后的类型串。
+
+    声明方的 vtable 方法签名在这些位置已是 Object（A-1 擦除按声明类判定）；接收者的
+    槽位条目 / wrapper 转发需按名单同步擦除（宏按 token 全等匹配，含嵌套形态整体）。"""
+    if not owner_params:
+        return []
+    owner_types, owner_ret = _sig_param_types(owner_sig)
+    subst_types, subst_ret = _sig_param_types(substituted_sig)
+    def mentions(ty: str) -> bool:
+        return any(re.search(r'\b' + re.escape(p) + r'\b', ty) for p in owner_params)
+    out: list[str] = []
+    for i, ty in enumerate(owner_types):
+        if mentions(ty) and i < len(subst_types):
+            out.append(subst_types[i])
+    if owner_ret:
+        inner = _result_inner(owner_ret)
+        if inner is not None:
+            if mentions(inner):
+                s_inner = _result_inner(subst_ret) if subst_ret else None
+                if s_inner is not None:
+                    out.append(s_inner)
+        elif mentions(owner_ret):
+            out.append(subst_ret)
+    return [t for t in dict.fromkeys(out) if t and t != 'Object']
+
+
 def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry: dict) -> str:
     """祖先方法声明 → 接收者类视角下的继承成员声明（声明 + 转发体）。"""
     anc_args = dict(ancestor_type_args(recv_ci, registry))
@@ -196,6 +274,9 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
     parts.append(f'inherited_from = "{_rust_type(owner_bin, owner_args)}"')
     if method.virtual_in:
         parts.append(f'vtable_owner = "{_rust_type(vt_bin, vt_args)}"')
+    erasure = _owner_erasure_entries(method.signature, signature, owner_params)
+    if erasure:
+        parts.append(f'vtable_erasure = "{";".join(erasure)}"')
     body = _forward_body(method, owner_bin, owner_args)
     return f"#[java_method({', '.join(parts)})]\n{signature} {{ {body} }}"
 

@@ -168,8 +168,19 @@ def _resolve_ctor_turbofish_args(
         if (full_cls == caller_class or full_cls.startswith(caller_class + '$') or _same_outer) \
                 and set(cls_tparams) == set(sim.class_type_params):
             return list(cls_tparams)
-    # 规则 3：实参已确定的类型变量取其绑定，其余用 _ 让 Rust 从上下文推断
-    return [subst.get(t, '_') for t in cls_tparams]
+    # 规则 3：实参已确定的类型变量取其绑定；未确定的优先取调用方同名类型变量
+    # （EnumSet<E> 内构造 RegularEnumSet<E>），否则取 Object——A-1 存储擦除后
+    # 实例化只是视图（From 跨实例化成立），Object 恒可行；`_` 会因祖先 From 的
+    # 任意实例化拓宽（γ'）失去推断锚点
+    out: list[str] = []
+    for t in cls_tparams:
+        if t in subst:
+            out.append(subst[t])
+        elif caller_class and sim.class_type_params and t in sim.class_type_params:
+            out.append(t)
+        else:
+            out.append('Object')
+    return out
 
 
 def _ctor_outer_ref_base(cls_short: str | None, params: list[str], registry: dict | None) -> str:

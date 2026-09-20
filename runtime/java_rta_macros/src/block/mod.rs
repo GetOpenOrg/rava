@@ -37,7 +37,7 @@ use parse::{split_type_name_args, ClassInput, ClassMeta, FnItem, InterfaceImpl};
 use rewrite::{
     replace_clone_this_in_ok, rewrite_base_calls_for_wrapper, rewrite_block,
     rewrite_dropped_params_in_inherited_body, rewrite_virtual_calls_for_wrapper,
-    rewrite_vtable_calls_ufcs_for_base,
+    rewrite_vtable_calls_ufcs_for_base, ForwardConvSpec, VDispatchSig,
 };
 use util::{attr_str, classify_method, is_basic, strip_meta_attrs, MethodKind};
 
@@ -130,17 +130,16 @@ fn mentions_any(ty: &Type, names: &HashSet<String>) -> bool {
     quote!(#ty).into_iter().any(|tt| tt_mentions(&tt, names))
 }
 
-/// 祖先 vtable 的类型实参流（形如 `<K, V, Object>`，以本类类型形参表达）中，
-/// 把本类类型形参替换为 `Object`：非泛型 impl 上下文（`impl ObjectVTable for X__inner`）
-/// 里桥接调用祖先 vtable 方法时用于消解类型实参推断——该实参形态恒被
-/// `impl<P..> Anc__VTable<args(P..)> for X__inner` 覆盖（P 全取 Object）。
-fn objectize_args(args: &TokenStream2, params: &HashSet<String>) -> TokenStream2 {
-    let replaced: Vec<TokenStream2> = args.clone().into_iter().map(|tt| match tt {
+/// token 流中出现的本类类型形参标识符替换为 `Object`（保持类型结构）：
+/// 描述「方法体落在擦除实例化 `X<Object, ..>` wrapper 上时，签名的实例化形态」
+/// （`JArray<E>` → `JArray<Object>`，裸 `E` → `Object`）。
+fn objectize_ts(ts: &TokenStream2, params: &HashSet<String>) -> TokenStream2 {
+    let replaced: Vec<TokenStream2> = ts.clone().into_iter().map(|tt| match tt {
         proc_macro2::TokenTree::Ident(i) => {
             if params.contains(&i.to_string()) { quote! { Object } } else { quote! { #i } }
         }
         proc_macro2::TokenTree::Group(g) => {
-            let inner = objectize_args(&g.stream(), params);
+            let inner = objectize_ts(&g.stream(), params);
             let rebuilt = proc_macro2::Group::new(g.delimiter(), inner);
             quote! { #rebuilt }
         }
@@ -149,54 +148,219 @@ fn objectize_args(args: &TokenStream2, params: &HashSet<String>) -> TokenStream2
     quote! { #(#replaced)* }
 }
 
-/// token 流中出现的所有标识符（含嵌套组）。
-fn collect_type_idents(ts: &TokenStream2, out: &mut HashSet<String>) {
-    for tt in ts.clone().into_iter() {
-        match tt {
-            proc_macro2::TokenTree::Ident(i) => {
-                out.insert(i.to_string());
-            }
-            proc_macro2::TokenTree::Group(g) => collect_type_idents(&g.stream(), out),
-            _ => {}
-        }
-    }
+fn objectize_type(ty: &Type, params: &HashSet<String>) -> Type {
+    let ts = objectize_ts(&quote!(#ty), params);
+    syn::parse_quote!(#ts)
 }
 
-/// 祖先 vtable impl 头（A-1：__inner 非泛型）：只保留「祖先实参里出现」的类型形参 ——
-/// 未被 trait 实参约束的形参触发 E0207，且 vtable supertrait 证明 / upcast 时无法推断
-/// 该形参（E0283）。impl 条目（访问器 / 覆盖 / 钩子）的签名只经祖先实参映射到保留下来的
-/// 形参，删除其余形参不影响条目。where 谓词同步过滤（丢弃引用了被删形参的谓词）。
-fn filtered_anc_impl_header(
-    gen: &syn::Generics,
-    trait_ident: &Ident,
-    anc_args: &TokenStream2,
-    self_ty: &Ident,
-) -> TokenStream2 {
-    let mut args_idents: HashSet<String> = HashSet::new();
-    collect_type_idents(anc_args, &mut args_idents);
-    let all_params: Vec<String> = gen.type_params().map(|tp| tp.ident.to_string()).collect();
-    let kept_params: Vec<&syn::TypeParam> = gen.type_params()
-        .filter(|tp| args_idents.contains(&tp.ident.to_string()))
-        .collect();
-    let dropped: HashSet<String> = all_params.iter().cloned()
-        .filter(|p| !args_idents.contains(p))
-        .collect();
-    let mut header = quote! { impl };
-    if !kept_params.is_empty() {
-        header.extend(quote! { <#(#kept_params),*> });
+/// 两个类型的 token 文本是否一致（边界转换必要性的判据）。
+fn same_type_tokens(a: &Type, b: &Type) -> bool {
+    quote!(#a).to_string() == quote!(#b).to_string()
+}
+
+/// `Result<T>` 返回类型中的 `T`；非 `Result<..>` 返回返回 None。
+/// 类型实参流（`<T, Object>`）的顶层元数；空实参流返回 0。
+fn type_args_arity(args: &TokenStream2) -> usize {
+    let mut ts: Vec<proc_macro2::TokenTree> = args.clone().into_iter().collect();
+    if ts.is_empty() {
+        return 0;
     }
-    header.extend(quote! { #trait_ident #anc_args for #self_ty });
-    if let Some(wc) = &gen.where_clause {
-        let preds: Vec<&syn::WherePredicate> = wc.predicates.iter().filter(|p| {
-            let mut idents: HashSet<String> = HashSet::new();
-            collect_type_idents(&quote! { #p }, &mut idents);
-            !idents.iter().any(|i| dropped.contains(i))
-        }).collect();
-        if !preds.is_empty() {
-            header.extend(quote! { where #(#preds),* });
+    let starts_lt = matches!(ts.first(), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '<');
+    let ends_gt = matches!(ts.last(), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '>');
+    if starts_lt && ends_gt && ts.len() >= 2 {
+        ts.drain(0..1);
+        ts.pop();
+    }
+    let mut depth = 0usize;
+    let mut n = 1usize;
+    for tt in &ts {
+        if let proc_macro2::TokenTree::Punct(p) = tt {
+            match p.as_char() {
+                '<' | '(' | '[' => depth += 1,
+                '>' | ')' | ']' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => n += 1,
+                _ => {}
+            }
         }
     }
-    header
+    n
+}
+
+/// 与给定类型实参流（`<T, Object>`）同元数的全 `Object` 实参流；空实参流返回空。
+/// 用于从「本类视角的祖先实参元数」推导祖先的擦除实例化（祖先 trait 的钩子返回类型）。
+fn erased_args_of_same_arity(args: &TokenStream2) -> TokenStream2 {
+    let mut ts: Vec<proc_macro2::TokenTree> = args.clone().into_iter().collect();
+    if ts.is_empty() {
+        return quote! {};
+    }
+    // 剥除外层 <>（实参流自带的括号不计入深度）
+    let starts_lt = matches!(ts.first(), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '<');
+    let ends_gt = matches!(ts.last(), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '>');
+    if starts_lt && ends_gt && ts.len() >= 2 {
+        ts.drain(0..1);
+        ts.pop();
+    }
+    let mut depth = 0usize;
+    let mut n = 1usize;
+    for tt in &ts {
+        if let proc_macro2::TokenTree::Punct(p) = tt {
+            match p.as_char() {
+                '<' | '(' | '[' => depth += 1,
+                '>' | ')' | ']' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => n += 1,
+                _ => {}
+            }
+        }
+    }
+    let objs = vec![quote! { Object }; n];
+    quote! { <#(#objs),*> }
+}
+
+fn result_inner_ty(ty: &Type) -> Option<&Type> {
+    if let Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            if seg.ident == "Result" {
+                if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = ab.args.first() {
+                        return Some(inner);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 类型化调用点 → 擦除 vtable 方法的实参转换：提及类型形参的形参经 `Into::<Object>`
+/// 装箱（擦除签名在这些位置接收 `Object`），其余原样传递。
+fn erased_call_args(
+    sig: &syn::Signature,
+    type_param_names: &HashSet<String>,
+) -> Vec<TokenStream2> {
+    erased_call_args_with(sig, type_param_names, &HashSet::new())
+}
+
+/// 同 erased_call_args，附加「扁平 token 全等命中即装箱」的扩展判据
+/// （vtable_erasure 名集：owner 类型形参位置的代入形态）。
+fn erased_call_args_with(
+    sig: &syn::Signature,
+    type_param_names: &HashSet<String>,
+    exact: &HashSet<String>,
+) -> Vec<TokenStream2> {
+    sig.inputs.iter().filter_map(|a| match a {
+        syn::FnArg::Typed(pt) => {
+            let ident = match &*pt.pat {
+                syn::Pat::Ident(pi) => pi.ident.clone(),
+                _ => return None,
+            };
+            let hit = mentions_any(&pt.ty, type_param_names)
+                || (!exact.is_empty() && exact.contains(&flat_type_tokens(&pt.ty)));
+            if hit {
+                Some(quote! { ::std::convert::Into::<Object>::into(#ident) })
+            } else {
+                Some(quote! { #ident })
+            }
+        }
+        _ => None,
+    }).collect()
+}
+
+/// 擦除 vtable 调用（返回 `Result<Object>`）→ 调用点签名返回 `Result<T>`（T 提及类型
+/// 形参）的还原：`.map(<T as From<Object>>::from)`；其余情形原样返回调用表达式。
+fn erased_call_ret_conv(
+    sig: &syn::Signature,
+    type_param_names: &HashSet<String>,
+    call: TokenStream2,
+) -> TokenStream2 {
+    erased_call_ret_conv_with(sig, type_param_names, &HashSet::new(), call)
+}
+
+fn erased_call_ret_conv_with(
+    sig: &syn::Signature,
+    type_param_names: &HashSet<String>,
+    exact: &HashSet<String>,
+    call: TokenStream2,
+) -> TokenStream2 {
+    if let syn::ReturnType::Type(_, ty) = &sig.output {
+        if let Some(inner) = result_inner_ty(ty) {
+            let hit = mentions_any(inner, type_param_names)
+                || (!exact.is_empty() && exact.contains(&flat_type_tokens(inner)));
+            if hit {
+                // null 容忍：null 经由擦除 vtable 往返后在值位置还原（Java 丢弃返回值 /
+                // 引用位置 null）——primitive 位置取 Default（与类型化直连时代码的
+                // Ok(Default::default()) 行为一致），避免拆箱 NPE（S-1 家族的值位形态）
+                return quote! {
+                    #call.map(|__v| if __v.0.is_jvm_null() {
+                        ::std::default::Default::default()
+                    } else {
+                        <#inner as ::std::convert::From<Object>>::from(__v)
+                    })
+                };
+            }
+        }
+    }
+    call
+}
+
+/// 类型化签名上下文（base 函数体：类形参在作用域内）经 `__as_X` 钩子（返回擦除实例化
+/// `X<Object, ..>`）执行 wrapper 的 `__impl_<m>`：形参 / 返回值在「类型化 ↔ objectize」
+/// 边界转换——裸类型形参经 Into/From<Object>，嵌套提及（`JArray<E>`）经 Object 装拆箱
+/// （元素类型跨实例化按精确类型取回，S-4 边界）。Python 调用点的 turbofish 不变。
+fn erased_hook_call(
+    sig: &syn::Signature,
+    impl_name: &Ident,
+    vtable_trait_ident: &Ident,
+    as_self_hook: &Ident,
+    type_param_names: &HashSet<String>,
+) -> TokenStream2 {
+    let conv_args: Vec<TokenStream2> = sig.inputs.iter().filter_map(|a| match a {
+        syn::FnArg::Typed(pt) => {
+            let ident = match &*pt.pat {
+                syn::Pat::Ident(pi) => pi.ident.clone(),
+                _ => return None,
+            };
+            if mentions_any(&pt.ty, type_param_names) {
+                let obj_ty = objectize_type(&pt.ty, type_param_names);
+                Some(quote! { <#obj_ty as ::std::convert::From<Object>>::from(
+                    ::std::convert::Into::<Object>::into(#ident)) })
+            } else {
+                Some(quote! { #ident })
+            }
+        }
+        _ => None,
+    }).collect();
+    let mut call = quote! { __w.#impl_name(#(#conv_args),*) };
+    if let syn::ReturnType::Type(_, ty) = &sig.output {
+        if let Some(inner) = result_inner_ty(ty) {
+            if mentions_any(inner, type_param_names) {
+                let obj_inner = objectize_type(inner, type_param_names);
+                let obj_is_object = same_type_tokens(
+                    &obj_inner,
+                    &syn::parse_quote!(Object));
+                if obj_is_object {
+                    // 裸类型形参：vtable 位置是 Object，primitive 实参下 null 需取
+                    // Default（与类型化直连代码行为一致），避免拆箱 NPE
+                    call = quote! {
+                        #call.map(|__v| if __v.0.is_jvm_null() {
+                            ::std::default::Default::default()
+                        } else {
+                            <#inner as ::std::convert::From<Object>>::from(__v)
+                        })
+                    };
+                } else {
+                    // 嵌套提及：objectize 形态 → Object 装箱 → 还原（From 对 null 安全）
+                    call = quote! {
+                        #call.map(|__v| <#inner as ::std::convert::From<Object>>::from(
+                            ::std::convert::Into::<Object>::into(__v)))
+                    };
+                }
+            }
+        }
+    }
+    quote! {
+        let __w = #vtable_trait_ident::#as_self_hook(this);
+        #call
+    }
 }
 
 /// 类型擦除（JVM 语义）：提及接口类型变量的类型位置在运行时一律是 `Object` 引用；
@@ -223,18 +387,157 @@ fn erase_type(ty: &Type, type_params: &HashSet<String>) -> Type {
 
 /// 接口实例方法声明 → 擦除签名（`Iface__VTable` 的方法签名）。
 fn erase_signature(sig: &syn::Signature, type_params: &HashSet<String>) -> syn::Signature {
+    erase_signature_with(sig, type_params, &HashSet::new())
+}
+
+/// impl 条目的擦除签名：同 erase_signature_with，但保留形参的 `mut` ——
+/// 带方法体的条目（Safe 覆盖体直挂）可能对形参赋值（E0384）。
+fn erase_item_signature_with(
+    sig: &syn::Signature,
+    type_params: &HashSet<String>,
+    exact: &HashSet<String>,
+) -> syn::Signature {
+    let mut out = erase_signature_with(sig, type_params, exact);
+    for (a, b) in out.inputs.iter_mut().zip(sig.inputs.iter()) {
+        if let (syn::FnArg::Typed(pt), syn::FnArg::Typed(orig)) = (a, b) {
+            if let (syn::Pat::Ident(pi), syn::Pat::Ident(oi)) = (&mut *pt.pat, &*orig.pat) {
+                pi.mutability = oi.mutability;
+            }
+        }
+    }
+    out
+}
+
+/// 擦除签名（扩展判据）：提及本类类型形参 → Object；类型扁平 token 命中
+/// `vtable_erasure` 名集（owner 类型形参位置的代入形态）→ 同样 Object。
+fn erase_signature_with(
+    sig: &syn::Signature,
+    type_params: &HashSet<String>,
+    exact: &HashSet<String>,
+) -> syn::Signature {
+    let ty_erased = |ty: &Type| -> Type {
+        if !exact.is_empty() && exact.contains(&flat_type_tokens(ty)) {
+            return syn::parse_quote!(Object);
+        }
+        erase_type(ty, type_params)
+    };
+    let ret_erased = |ty: &Type| -> Type {
+        if let Some(inner) = result_inner_ty(ty) {
+            if !exact.is_empty() && exact.contains(&flat_type_tokens(inner)) {
+                return syn::parse_quote!(Result<Object>);
+            }
+        }
+        erase_type(ty, type_params)
+    };
     let mut out = without_param_mut(sig);
     for arg in out.inputs.iter_mut() {
         if let syn::FnArg::Typed(pt) = arg {
-            let erased = erase_type(&pt.ty, type_params);
-            *pt.ty = erased;
+            *pt.ty = ty_erased(&pt.ty);
         }
     }
     if let syn::ReturnType::Type(_, ty) = &mut out.output {
-        let erased = erase_type(ty, type_params);
-        **ty = erased;
+        **ty = ret_erased(&ty);
     }
     out
+}
+
+/// 方法条目的擦除名集：本类类型形参 ∪ `vtable_erasure` 属性携带的「owner 类型形参
+/// 位置在接收者视角下代入后的类型串」（声明方 vtable 已在这些位置 Object 化，A-1）。
+fn erasure_set_of(f: &FnItem, type_param_names: &HashSet<String>) -> HashSet<String> {
+    let mut set = type_param_names.clone();
+    if let Some(e) = attr_str(&f.attrs, "vtable_erasure") {
+        for t in e.split(';').filter(|x| !x.is_empty()) {
+            // 与 flat_type_tokens 同一规范化（去全部空白）——Python 侧类型串带空格
+            let flat: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+            set.insert(flat);
+        }
+    }
+    set
+}
+
+/// 转发体（槽位条目 → base 函数 / 擦除 wrapper `__impl_<m>`）的边界转换规格：
+/// 逐位置比较「擦除条目签名」与「objectize 后的原签名」，形态不同的位置需要显式
+/// From<Object> / From<Obj> 转换（嵌套提及，如 `HashMap_Node<K, V>`）。
+fn forward_conv_spec(
+    orig: &syn::Signature,
+    erased: &syn::Signature,
+    type_param_names: &HashSet<String>,
+    erasure: &HashSet<String>,
+) -> ForwardConvSpec {
+    let mut arg_convs: Vec<(String, Type)> = Vec::new();
+    let orig_params: Vec<&Type> = orig.inputs.iter().filter_map(|a| match a {
+        syn::FnArg::Typed(pt) => Some(&*pt.ty),
+        _ => None,
+    }).collect();
+    let erased_params: Vec<&Type> = erased.inputs.iter().filter_map(|a| match a {
+        syn::FnArg::Typed(pt) => Some(&*pt.ty),
+        _ => None,
+    }).collect();
+    // 裸单标识符类型（`T` / `Status`）：base 调用的 turbofish 实参即此类型，
+    // 被「被删形参 / 擦除名集」改写为 Object 后 base 形参已是 Object——无需显式转换；
+    // 嵌套形态（`HashMap_Node<K, V>`）的 turbofish 只改写内部实参，base 形参保持
+    // 包装形态 → 需 From<Object> 还原
+    let is_bare_ident = |ty: &Type| -> bool {
+        if let Type::Path(tp) = ty {
+            tp.qself.is_none() && tp.path.segments.len() == 1 && tp.path.segments[0].arguments.is_none()
+        } else {
+            false
+        }
+    };
+    for (i, (o, e)) in orig_params.iter().zip(erased_params.iter()).enumerate() {
+        let mentions_own = mentions_any(o, type_param_names);
+        let hits_erasure = !erasure.is_empty()
+            && erasure.contains(&flat_type_tokens(o));
+        if !(mentions_own || hits_erasure) {
+            continue;
+        }
+        // 本类形参的裸位置由 turbofish 改写消解（base 形参已 Object）；
+        // vtable_erasure 命中的位置（含裸形态）base 形参保持代入形态 → 显式转换
+        if mentions_own && !hits_erasure && is_bare_ident(o) {
+            continue;
+        }
+        let obj: Type = if mentions_any(o, type_param_names) {
+            objectize_type(o, type_param_names)
+        } else {
+            (*o).clone()
+        };
+        if !same_type_tokens(&obj, e) {
+            if let Some((name, _)) = orig.inputs.iter().filter_map(|a| match a {
+                syn::FnArg::Typed(pt) => match &*pt.pat {
+                    syn::Pat::Ident(pi) => Some((pi.ident.to_string(), ())),
+                    _ => None,
+                },
+                _ => None,
+            }).nth(i) {
+                arg_convs.push((name, obj));
+            }
+        }
+    }
+    let mut ret_conv = None;
+    if let (syn::ReturnType::Type(_, o), syn::ReturnType::Type(_, e)) = (&orig.output, &erased.output) {
+        if let (Some(oi), Some(ei)) = (result_inner_ty(o), result_inner_ty(e)) {
+            let mentions_own = mentions_any(oi, type_param_names);
+            let hits_erasure = !erasure.is_empty()
+                && erasure.contains(&flat_type_tokens(oi));
+            if (mentions_own || hits_erasure) && !(mentions_own && !hits_erasure && is_bare_ident(oi)) {
+                let obj_inner: Type = if mentions_any(oi, type_param_names) {
+                    objectize_type(oi, type_param_names)
+                } else {
+                    (*oi).clone()
+                };
+                if !same_type_tokens(&obj_inner, ei) {
+                    ret_conv = Some((ei.clone(), obj_inner));
+                }
+            }
+        }
+    }
+    ForwardConvSpec { arg_convs, ret_conv }
+}
+
+/// 类型的扁平 token 文本（去空白）——与 Python 侧 vtable_erasure 条目全等匹配用。
+fn flat_type_tokens(ty: &Type) -> String {
+    quote!(#ty).to_string()
+        .chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 fn is_instance_decl(f: &FnItem) -> bool {
@@ -435,9 +738,10 @@ fn expand_interface_impl(
     inner_ident: &Ident,
     vtable_trait_ident: &Ident,
     erased_ty_args: &TokenStream2,
+    phantom_init: &TokenStream2,
 ) -> TokenStream2 {
     let iface_vtable = format_ident!("{}__VTable", ii.iface);
-    let erased_vt: TokenStream2 = quote! { dyn #vtable_trait_ident #erased_ty_args };
+    let erased_vt: TokenStream2 = quote! { dyn #vtable_trait_ident };
     let methods: Vec<TokenStream2> = ii.fns.iter().map(|f| {
         let sig = without_param_mut(&f.sig);
         let args = param_idents(&sig);
@@ -458,6 +762,7 @@ fn expand_interface_impl(
                     vtable: __rc.clone() as ::std::rc::Rc<#erased_vt>,
                     any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
                     _jvm_null: false,
+                    #phantom_init
                 };
                 let __result = __wrapper.#target(#(::std::convert::From::from(#args)),*)?;
                 #convert
@@ -471,66 +776,99 @@ fn expand_interface_impl(
     }
 }
 
-/// 经擦除实例化的 wrapper（`X<Object, ...>`）执行 `__impl_<m>`：用于不携带本类全部
-/// 类型形参的 impl 上下文（祖先 vtable impl 删减形参后）。形参提及类型形参的位置经
-/// `Into<Object>` 装箱、返回值经 `From<Object>` 还原（等价 javac 桥接方法的 checkcast）。
-fn erased_wrapper_call(
+/// 擦除签名的 vtable 条目（trait default 体 / impl 条目体）经擦除实例化 wrapper
+/// （`X<Object, ...>`）执行 `__impl_<m>`。条目签名是擦除形态（提及类型形参处一律
+/// `Object`），`__impl_<m>` 在擦除 wrapper 上的形态是 objectize(签名)——两者的差异
+/// 只出现在「嵌套提及」（`JArray<E>` / `Foo<E>`）：实参经 `From<Object>` 还原、返回值
+/// 经 blanket `From<T: ObjectVTable> for Object` 装箱。
+fn erased_impl_call(
     sig: &syn::Signature,
     impl_name: &Ident,
-    struct_ident: &Ident,
-    vtable_trait_ident: &Ident,
-    erased_ty_args: &TokenStream2,
     type_param_names: &HashSet<String>,
+    erasure: &HashSet<String>,
 ) -> TokenStream2 {
     let conv_args: Vec<TokenStream2> = sig.inputs.iter().filter_map(|a| match a {
         syn::FnArg::Typed(pt) => {
-            // 形参名（跳过 pattern 的 mut 等修饰，表达式位置只接受标识符）
             let ident = match &*pt.pat {
                 syn::Pat::Ident(pi) => pi.ident.clone(),
                 _ => return None,
             };
-            if mentions_any(&pt.ty, type_param_names) {
-                Some(quote! { ::std::convert::Into::<Object>::into(#ident) })
+            let mentions = mentions_any(&pt.ty, type_param_names);
+            let hits = !erasure.is_empty()
+                && erasure.contains(&flat_type_tokens(&pt.ty));
+            if mentions || hits {
+                let obj_ty = if mentions {
+                    objectize_type(&pt.ty, type_param_names)
+                } else {
+                    (*pt.ty).clone()
+                };
+                // 命中擦除名集的位置，条目签名一侧已是 Object（erase_signature_with）
+                let erased_ty: Type = if hits && !mentions {
+                    syn::parse_quote!(Object)
+                } else {
+                    erase_type(&pt.ty, type_param_names)
+                };
+                if same_type_tokens(&obj_ty, &erased_ty) {
+                    Some(quote! { #ident })
+                } else {
+                    Some(quote! { <#obj_ty as ::std::convert::From<Object>>::from(#ident) })
+                }
             } else {
                 Some(quote! { #ident })
             }
         }
         _ => None,
     }).collect();
-    // 返回 `Result<T>` 且 T 提及类型形参 → 从擦除返回值按本签名类型还原；
-    // 其余直接重新包 Ok（上方已用 ? 解包）
-    let ret_expr: TokenStream2 = match &sig.output {
-        syn::ReturnType::Type(_, ty) => {
-            let mut conv = quote! { __result };
-            if let Type::Path(tp) = &**ty {
-                if let Some(seg) = tp.path.segments.last() {
-                    if seg.ident == "Result" {
-                        if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                            if let Some(syn::GenericArgument::Type(inner)) = ab.args.first() {
-                                if mentions_any(inner, type_param_names) {
-                                    conv = quote! {
-                                        __result.map(|__v|
-                                            <#inner as ::std::convert::From<Object>>::from(__v))
-                                    };
-                                }
-                            }
-                        }
-                    }
+    let mut call = quote! { __w.#impl_name(#(#conv_args),*) };
+    if let syn::ReturnType::Type(_, ty) = &sig.output {
+        if let Some(inner) = result_inner_ty(ty) {
+            let mentions = mentions_any(inner, type_param_names);
+            let hits = !erasure.is_empty()
+                && erasure.contains(&flat_type_tokens(inner));
+            if mentions || hits {
+                let obj_inner = if mentions {
+                    objectize_type(inner, type_param_names)
+                } else {
+                    inner.clone()
+                };
+                let erased_inner: Type = if hits && !mentions {
+                    syn::parse_quote!(Object)
+                } else {
+                    erase_type(inner, type_param_names)
+                };
+                if !same_type_tokens(&obj_inner, &erased_inner) {
+                    call = quote! {
+                        #call.map(|__v| <#erased_inner as ::std::convert::From<#obj_inner>>::from(__v))
+                    };
                 }
             }
-            conv
         }
-        syn::ReturnType::Default => quote! { __result },
-    };
+    }
+    call
+}
+
+/// impl `X__VTable for X__inner` 条目（签名已擦除）的体：从 `self`（&X__inner）构造
+/// 擦除实例化 wrapper 后执行 `__impl_<m>`（边界转换见 erased_impl_call）。
+fn erased_wrapper_call(
+    sig: &syn::Signature,
+    impl_name: &Ident,
+    struct_ident: &Ident,
+    vtable_trait_ident: &Ident,
+    erased_ty_args: &TokenStream2,
+    phantom_init: &TokenStream2,
+    type_param_names: &HashSet<String>,
+    erasure: &HashSet<String>,
+) -> TokenStream2 {
+    let call = erased_impl_call(sig, impl_name, type_param_names, erasure);
     quote! {
         let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
         let __w: #struct_ident #erased_ty_args = #struct_ident {
-            vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #erased_ty_args>,
+            vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident>,
             any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
             _jvm_null: false,
+            #phantom_init
         };
-        let __result = __w.#impl_name(#(#conv_args),*);
-        #ret_expr
+        #call
     }
 }
 
@@ -608,24 +946,6 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // 「祖先 wrapper 包裹实际 __inner」的上下文中执行（trait default / super 调用）。
     let as_self_hook = format_ident!("__as_{}", struct_ident);
 
-    // 提取 superclass 的泛型参数（如 Enum<Object> → <Object>），供 vtable 继承使用
-    // 注意：AngleBracketedGenericArguments 自带 <> 括号，quote! { #ab } 即为 <Object>
-    let superclass_vtable_args: TokenStream2 = meta.superclass.as_ref().map_or(
-        quote! {},
-        |sup_ty| {
-            if let syn::Type::Path(tp) = sup_ty {
-                if let Some(seg) = tp.path.segments.last() {
-                    if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                        if !ab.args.is_empty() {
-                            return quote! { #ab };
-                        }
-                    }
-                }
-            }
-            quote! {}
-        },
-    );
-
     // ── 字段集合 ─────────────────────────────────────────────────────────────
     let mut basic_names: HashSet<String> = HashSet::new();
     let mut ref_names: HashSet<String> = HashSet::new();
@@ -688,7 +1008,9 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         .map(|(n, _)| n.to_string())
         .collect();
     let is_erased = |name: &syn::Ident| -> bool {
-        erased_own.contains(&name.to_string()) || erased_super.contains(&name.to_string())
+        erased_own.contains(&name.to_string())
+            || erased_super.contains(&name.to_string())
+            || meta.superclass_erased_fields.contains(&name.to_string())
     };
     // 擦除实例化的类型实参（全 Object）：`X<Object, ..., Object>`。Object 满足全部形参
     // bound（宏补的 Clone/Default/'static/From<Object>/Into<Object> 与 Python 侧类上界的
@@ -705,12 +1027,27 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     };
     // 泛型类：方法体统一走 wrapper 钩子（见 classify::vtable_body_kind_gated 的说明）
     let class_is_generic = !class_type_params.is_empty();
+    // wrapper 的类型形参不再出现在字段里（vtable 去形参后为非泛型 Rc<dyn X__VTable>）
+    // → PhantomData 标记持有形参（与接口载体的 __phantom 同构），E0392 消除
+    let phantom_field: TokenStream2 = if class_is_generic {
+        let params: Vec<&Ident> = gen.params.iter()
+            .filter_map(|p| if let GenericParam::Type(tp) = p { Some(&tp.ident) } else { None })
+            .collect();
+        quote! { __phantom: ( #( ::std::marker::PhantomData<fn() -> #params>, )* ) }
+    } else {
+        quote! {}
+    };
+    let phantom_init: TokenStream2 = if class_is_generic {
+        quote! { __phantom: ::std::default::Default::default(), }
+    } else {
+        quote! {}
+    };
 
     // ══════════════════════════════════════════════════════════════════════════
-    // 1. VTable trait
+    // 1. VTable trait —— 非泛型（A-1 去形参：与接口载体 `I__VTable` 对齐）
     // ══════════════════════════════════════════════════════════════════════════
 
-    // supertrait：有父类 → 父类 __VTable（携带泛型参数）；无父类 → ObjectVTable
+    // supertrait：有父类 → 父类 __VTable（同为非泛型）；无父类 → ObjectVTable
     let vtable_supertrait: TokenStream2 = if let Some(sup_ty) = &meta.superclass {
         // 提取超类的基础类型名（去掉泛型参数），如 Enum<Object> → Enum
         let base_name = if let Type::Path(tp) = sup_ty {
@@ -719,22 +1056,22 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             quote!(#sup_ty).to_string()
         };
         let sup_vtable = format_ident!("{}__VTable", base_name);
-        quote! { #sup_vtable #superclass_vtable_args }
+        quote! { #sup_vtable }
     } else {
         quote! { ObjectVTable }
     };
 
     // 字段 accessor 抽象方法（只有 own fields，不含继承字段）。
-    // 擦除字段（声明类型提及类型形参，__inner 中以 Object 存储）：只声明 get/set ——
-    // 擦除存储无法返回 RefMut<声明类型>（__borrow_mut_ 无任何消费方，直接不生成）。
+    // 擦除字段（声明类型提及类型形参，__inner 中以 Object 存储）：签名同步 Object 化 ——
+    // impl 直连存储（Object 进 Object 出），类型化转换移到 wrapper 委托（β' 边界）。
     let mut vtable_abstract_methods: Vec<TokenStream2> = Vec::new();
     for (name, ty) in &fields {
         let get = format_ident!("__get_{}", name);
         let set = format_ident!("__set_{}", name);
         if is_erased(name) {
             vtable_abstract_methods.push(quote! {
-                fn #get(&self) -> #ty;
-                fn #set(&self, v: #ty);
+                fn #get(&self) -> Object;
+                fn #set(&self, v: Object);
             });
         } else {
             vtable_abstract_methods.push(quote! {
@@ -744,14 +1081,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         }
     }
 
-    // VirtualDefine 的 default impl：
-    // - 有方法体 → default 委托 ClassName__method_base 自由函数（base 函数含实际体或 stub）
-    //   subclass 若未 override，走 base 函数路径（Safe → 实际实现；NeedsWrapper/Skip → stub panic）
+    // VirtualDefine 的 default impl（A-1 去形参：签名 Object 化）：
+    // - 有方法体 → default 委托 ClassName__method_base 自由函数（base 函数含实际体或
+    //   钩子桥接；Safe 路径仅非泛型类，turbofish ::<Self>）
     // - 无方法体（abstract）→ default 生成 stub（子类必须覆盖，未覆盖则运行时命中）
-    // 注：调用 base 函数时用 turbofish ::<ClassTypeParams..., Self> 避免 E0282 类型推断失败
-    let class_ty_idents: Vec<syn::Ident> = gen.params.iter()
-        .filter_map(|p| if let syn::GenericParam::Type(tp) = p { Some(tp.ident.clone()) } else { None })
-        .collect();
     let mut vtable_default_methods: Vec<TokenStream2> = Vec::new();
     for f in &vtable_defines {
         let mname = &f.sig.ident;
@@ -770,51 +1103,58 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         let mname_str = f.sig.ident.to_string();
         let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
         let binary = &meta.binary_name;
-        // generic_signature 重建：将 Object 参数/返回替换为类型变量（K, V 等）
+        // generic_signature 重建：将 Object 参数/返回替换为类型变量（K, V 等），
+        // 再整体 Object 化为擦除 vtable 签名（提及类型形参的位置 → Object）
         let effective_sig = attr_str(&f.attrs, "generic_signature")
             .and_then(|gs| rebuild_sig_with_generics(&f.sig, &gs, &class_type_params))
             .unwrap_or_else(|| f.sig.clone());
+        let erased_default_sig = erase_signature(&effective_sig, &type_param_names);
         if let Some(block) = &f.block {
             if matches!(vtable_body_kind_gated(block, class_is_generic), VTableBodyKind::Safe) {
-                // vtable-safe 方法体 → default 委托 base 函数（体可直接在 &Self 上运行）
-                // turbofish 传类型参数（避免 E0282）：<ClassTypeParams..., Self>
+                // vtable-safe 方法体（仅非泛型类）→ default 委托 base 函数
+                // （体可直接在 &Self 上运行）；turbofish ::<Self>
                 vtable_default_methods.push(quote! {
-                    #effective_sig { #fn_base_name::<#(#class_ty_idents,)* Self>(self, #(#param_names_for_default),*) }
+                    #erased_default_sig { #fn_base_name::<Self>(self, #(#param_names_for_default),*) }
                 });
             } else {
                 // 方法体需要 wrapper 上下文（this 传参 / 非虚方法调用 / Self::）→
-                // 经钩子重建声明类 wrapper，执行 wrapper 上的方法体 `__impl_<method>`
+                // 经钩子重建声明类的擦除实例化 wrapper，执行 wrapper 方法体 `__impl_<method>`
+                // （签名已擦除，边界转换见 erased_impl_call）
                 let impl_name = format_ident!("__impl_{}", mname);
+                let call = erased_impl_call(
+                    &effective_sig, &impl_name, &type_param_names, &HashSet::new());
                 vtable_default_methods.push(quote! {
-                    #effective_sig {
+                    #erased_default_sig {
                         let __w = self.#as_self_hook();
-                        __w.#impl_name(#(#param_names_for_default),*)
+                        #call
                     }
                 });
             }
         } else if attr_str(&f.attrs, "body").as_deref() == Some("handwritten") {
             // 方法体由共置 `_impl.rs` 手写为 wrapper 上的 `__impl_<method>` → 经钩子重建 wrapper 后执行
             let impl_name = format_ident!("__impl_{}", mname);
+            let call = erased_impl_call(
+                &effective_sig, &impl_name, &type_param_names, &HashSet::new());
             vtable_default_methods.push(quote! {
-                #effective_sig {
+                #erased_default_sig {
                     let __w = self.#as_self_hook();
-                    __w.#impl_name(#(#param_names_for_default),*)
+                    #call
                 }
             });
         } else {
             // 无方法体（abstract）→ stub，子类必须覆盖
             let msg = format!("stub: {}.{}:{}", binary, mname_str, desc);
             vtable_default_methods.push(quote! {
-                #effective_sig { panic!(#msg) }
+                #erased_default_sig { panic!(#msg) }
             });
         }
     }
 
     let vtable_trait = quote! {
         #[allow(non_camel_case_types)]
-        pub trait #vtable_trait_ident #impl_g #where_c: #vtable_supertrait {
+        pub trait #vtable_trait_ident: #vtable_supertrait {
             #[doc(hidden)]
-            fn #as_self_hook(&self) -> #struct_ident #ty_g;
+            fn #as_self_hook(&self) -> #struct_ident #erased_ty_args;
             #(#vtable_abstract_methods)*
             #(#vtable_default_methods)*
         }
@@ -889,19 +1229,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     // Object（ancestor_type_args 只含祖先）；owner 是祖先时把本类形参替换为 Object。
     let bridge_path = |owner: &str| -> TokenStream2 {
         let owner_vtable = format_ident!("{}__VTable", owner);
-        match meta.ancestor_type_args.get(owner) {
-            Some(a) if !a.is_empty() => {
-                let args = objectize_args(a, &type_param_names);
-                quote! { #owner_vtable::#args }
-            }
-            _ => {
-                if owner == self_name && !erased_ty_args.is_empty() {
-                    quote! { #owner_vtable::#erased_ty_args }
-                } else {
-                    quote! { #owner_vtable }
-                }
-            }
-        }
+        quote! { #owner_vtable }
     };
     let hash_code_inner_bridge: proc_macro2::TokenStream = match &meta.hash_code_vtable {
         Some(owner) => {
@@ -1015,22 +1343,47 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         .chain(meta.impl_methods.iter().cloned())
         .collect();
 
+    // wrapper 方法体经 `this.vtable` 分派的继承虚方法边界规格（A-1 β'）：
+    // vtable 方法签名已 Object 化 → 调用点按「提及本类形参 / 命中 vtable_erasure 名集」装箱，
+    // 返回值 null 容忍还原
+    let vdispatch: HashMap<String, VDispatchSig> = inherited.iter()
+        .filter(|(.., vo, _)| vo.is_some())
+        .map(|(f, ..)| {
+            let erasure = erasure_set_of(f, &type_param_names);
+            let box_args: Vec<bool> = f.sig.inputs.iter().filter_map(|a| match a {
+                syn::FnArg::Typed(pt) => Some(
+                    mentions_any(&pt.ty, &type_param_names)
+                    || (!erasure.is_empty()
+                        && erasure.contains(&flat_type_tokens(&pt.ty)))),
+                _ => None,
+            }).collect();
+            let ret_conv: Option<Type> = match &f.sig.output {
+                syn::ReturnType::Type(_, ty) => result_inner_ty(ty).and_then(|inner| {
+                    let hit = mentions_any(inner, &type_param_names)
+                        || (!erasure.is_empty()
+                            && erasure.contains(&flat_type_tokens(inner)));
+                    if hit { Some(inner.clone()) } else { None }
+                }),
+                syn::ReturnType::Default => None,
+            };
+            (f.sig.ident.to_string(), VDispatchSig { box_args, ret_conv })
+        })
+        .collect();
+
     // 字段访问器 impl 体（三个 vtable impl 生成点共用）。
-    // 擦除字段（__inner 中以 Object 存储）：get/set 签名保持声明类型，边界经
-    // From<Object> / Into<Object> 转换（等价 javac 在字段访问处插入的 checkcast）；
-    // 不生成 __borrow_mut_（擦除存储无法返回 RefMut<声明类型>，且无任何消费方）。
+    // 擦除字段（__inner 中以 Object 存储）：签名 Object 化（与 trait 声明一致），
+    // impl 直连存储（Object 进 Object 出）；类型化转换移到 wrapper 委托（β' 边界）。
     let accessor_impl_items = |name: &syn::Ident, ty: &Type, basic: bool| -> TokenStream2 {
         let get = format_ident!("__get_{}", name);
         let set = format_ident!("__set_{}", name);
         if is_erased(name) {
             quote! {
-                fn #get(&self) -> #ty {
-                    <#ty as ::std::convert::From<Object>>::from(
-                        self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default())
+                fn #get(&self) -> Object {
+                    self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
                 }
-                fn #set(&self, v: #ty) {
+                fn #set(&self, v: Object) {
                     *self.#name.borrow_mut() = ::std::option::Option::Some(
-                        ::std::boxed::Box::new(::std::convert::Into::<Object>::into(v)));
+                        ::std::boxed::Box::new(v));
                 }
             }
         } else if basic {
@@ -1051,12 +1404,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     };
 
     if meta.superclass.is_none() {
-        // ── 无父类：impl Self__VTable for __inner ────────────────────────────
+        // ── 无父类：impl Self__VTable for __inner（非泛型，A-1 去形参）──────────
         let mut own_accessor_impls: Vec<TokenStream2> = Vec::new();
         for (name, ty) in &fields {
             own_accessor_impls.push(accessor_impl_items(name, ty, is_basic(ty)));
         }
-        // VirtualDefine 方法体：Safe → 直接放入 vtable impl；
+        // VirtualDefine 方法体：Safe（仅非泛型类）→ 直接放入 vtable impl；
         // 其余（需要 wrapper 上下文）→ 不在此生成，走 trait default 的钩子路径
         for f in &vtable_defines {
             if let Some(block) = &f.block {
@@ -1070,18 +1423,19 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             }
         }
         own_accessor_impls.push(quote! {
-            fn #as_self_hook(&self) -> #struct_ident #ty_g {
+            fn #as_self_hook(&self) -> #struct_ident #erased_ty_args {
                 let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
                 #struct_ident {
-                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident>,
                     any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
                     _jvm_null: false,
+                    #phantom_init
                 }
             }
         });
 
         vtable_impls.push(quote! {
-            impl #impl_g #vtable_trait_ident #ty_g for #inner_ident #where_c {
+            impl #vtable_trait_ident for #inner_ident {
                 #(#own_accessor_impls)*
             }
         });
@@ -1101,19 +1455,12 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         for anc_name in ancestors.iter() {
             let anc_vtable_ident = format_ident!("{}__VTable", anc_name);
 
-            // 祖先 vtable 的类型实参：逐个祖先取 all_superclasses 中携带的实参
-            // 例：ReferencePipeline<P_IN, P_OUT> 实现 AbstractPipeline__VTable<P_IN, P_OUT, Object>
-            //     与 PipelineHelper__VTable<P_OUT>（元数、顺序各不相同）
+            // 祖先 vtable 的类型实参（本类视角）：仅用于推导祖先的形参元数 ——
+            // vtable 去形参（A-1）后 impl 头与钩子返回类型均按「该元数的全 Object
+            // 擦除实例化」生成（祖先 trait 声明的钩子返回 `Anc<Object, ..>`）。
             let anc_vtable_args: TokenStream2 =
                 meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
-            // __inner 非泛型（A-1）：祖先 impl 只保留实参里出现的类型形参 —— 未被 trait
-            // 实参约束的形参触发 E0207，且 vtable supertrait 证明 / upcast 时无法推断（E0283）。
-            let anc_impl_header =
-                filtered_anc_impl_header(&gen, &anc_vtable_ident, &anc_vtable_args, &inner_ident);
-            let mut anc_arg_idents: HashSet<String> = HashSet::new();
-            collect_type_idents(&anc_vtable_args, &mut anc_arg_idents);
-            let anc_keeps_all_params = gen.type_params()
-                .all(|tp| anc_arg_idents.contains(&tp.ident.to_string()));
+            let anc_erased_args = erased_args_of_same_arity(&anc_vtable_args);
 
             let mut items: Vec<TokenStream2> = Vec::new();
 
@@ -1138,11 +1485,16 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
             }
 
-            // VirtualOverride 方法：virtual_in == anc_name
+            // VirtualOverride 方法：virtual_in == anc_name（签名随 trait 整体 Object 化）
             if let Some(override_fns) = vtable_overrides.get(anc_name) {
                 for f in override_fns {
                     let sig = &f.sig;
                     let keep_attrs = strip_meta_attrs(&f.attrs);
+                    // 覆盖条目可能直挂方法体（Safe）→ 保留形参 mut（体可能赋值）；
+                    // 声明祖先的类型形参位置（vtable_erasure 名集）一并擦除
+                    let ov_erasure = erasure_set_of(f, &type_param_names);
+                    let erased_item_sig = erase_item_signature_with(
+                        sig, &type_param_names, &ov_erasure);
                     match &f.block {
                         Some(block) => {
                             let mut b = block.clone();
@@ -1150,52 +1502,37 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                             if matches!(vtable_body_kind_gated(block, class_is_generic), VTableBodyKind::Safe) {
                                 items.push(quote! {
                                     #(#keep_attrs)*
-                                    #sig #b
+                                    #erased_item_sig #b
                                 });
                             } else {
                                 // 方法体需要 wrapper 上下文（this 传参 / 非虚方法调用 / Self::）：
                                 // 方法体只落在 wrapper 的 `__impl_<method>` 上（见 wrapper 方法生成），
-                                // 此处经钩子重建本类 wrapper 后执行——与 VirtualDefine 同一路径，
+                                // 此处经擦除实例化的 wrapper 执行——与 VirtualDefine 同一路径，
                                 // super 调用的 base 函数也复用它（不分派，精确命中本类实现）。
-                                // 本祖先 impl 删减了未出现在祖先实参里的类型形参时（A-1），
-                                // 钩子签名不可命名 → 经擦除实例化的 wrapper 执行（分派经 vtable
-                                // 是擦除的，任一实例化行为参数化一致），形参 / 返回值在边界转换。
+                                // impl 签名已擦除：形参 / 返回值在边界与擦除 wrapper 的
+                                // `__impl_<method>`（类型实参全 Object）做 Object ↔ 类型化转换。
                                 let impl_name = format_ident!("__impl_{}", sig.ident);
-                                let wrapper_call = if anc_keeps_all_params {
-                                    let args = param_idents(sig);
-                                    quote! {
-                                        let __w = <Self as #vtable_trait_ident #ty_g>::#as_self_hook(self);
-                                        __w.#impl_name(#(#args),*)
-                                    }
-                                } else {
-                                    erased_wrapper_call(
-                                        sig, &impl_name, &struct_ident, &vtable_trait_ident,
-                                        &erased_ty_args, &type_param_names,
-                                    )
-                                };
+                                let wrapper_call = erased_wrapper_call(
+                                    sig, &impl_name, &struct_ident, &vtable_trait_ident,
+                                    &erased_ty_args, &phantom_init, &type_param_names,
+                                    &ov_erasure,
+                                );
                                 items.push(quote! {
                                     #(#keep_attrs)*
-                                    #sig { #wrapper_call }
+                                    #erased_item_sig { #wrapper_call }
                                 });
                             }
                         }
                         None if attr_str(&f.attrs, "body").as_deref() == Some("handwritten") => {
                             let impl_name = format_ident!("__impl_{}", sig.ident);
-                            let wrapper_call = if anc_keeps_all_params {
-                                let args = param_idents(sig);
-                                quote! {
-                                    let __w = <Self as #vtable_trait_ident #ty_g>::#as_self_hook(self);
-                                    __w.#impl_name(#(#args),*)
-                                }
-                            } else {
-                                erased_wrapper_call(
-                                    sig, &impl_name, &struct_ident, &vtable_trait_ident,
-                                    &erased_ty_args, &type_param_names,
-                                )
-                            };
+                            let wrapper_call = erased_wrapper_call(
+                                sig, &impl_name, &struct_ident, &vtable_trait_ident,
+                                &erased_ty_args, &phantom_init, &type_param_names,
+                                &ov_erasure,
+                            );
                             items.push(quote! {
                                 #(#keep_attrs)*
-                                #sig { #wrapper_call }
+                                #erased_item_sig { #wrapper_call }
                             });
                         }
                         None => {
@@ -1204,7 +1541,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                             let bin = &meta.binary_name;
                             let msg = format!("stub: {}.{}:{}", bin, mname, desc);
                             items.push(quote! {
-                                #sig { panic!(#msg) }
+                                #erased_item_sig { panic!(#msg) }
                             });
                         }
                     }
@@ -1227,27 +1564,38 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     continue;
                 }
                 let sig = &f.sig;
+                let erasure = erasure_set_of(f, &type_param_names);
+                let erased_item_sig = erase_signature_with(sig, &type_param_names, &erasure);
+                let conv = forward_conv_spec(sig, &erased_item_sig, &type_param_names, &erasure);
                 let mut b = block.clone();
-                if !anc_keeps_all_params {
-                    // 转发体的 base 调用 turbofish / 钩子实参可能引用本 impl 已删除的
-                    // 类型形参 → 替换为 Object（泛型 impl 覆盖全部实例化，行为参数化一致）
-                    let dropped: HashSet<String> = gen.type_params()
-                        .map(|tp| tp.ident.to_string())
-                        .filter(|p| !anc_arg_idents.contains(p))
-                        .collect();
-                    rewrite_dropped_params_in_inherited_body(&mut b, &dropped);
-                }
-                items.push(quote! { #sig #b });
+                // 槽位上下文不携带本类类型形参（vtable 去形参）→ 转发体的 base 调用
+                // turbofish 里被删形参 / 擦除形态取 Object（base 函数体是参数化的，
+                // 行为参数化一致）；`X__VTable<..>` 路径的实参整体剥除。
+                let dropped: HashSet<String> = if class_is_generic {
+                    gen.type_params().map(|tp| tp.ident.to_string()).collect()
+                } else {
+                    HashSet::new()
+                };
+                rewrite_dropped_params_in_inherited_body(&mut b, &dropped, &erasure, &conv);
+                items.push(quote! { #erased_item_sig #b });
             }
 
-            // 祖先 wrapper 重建钩子（经 __from_parts：祖先可能在另一个 crate，字段不可见）
+            // 祖先 wrapper 重建钩子（经 __from_parts：祖先可能在另一个 crate，字段不可见）。
+            // 返回祖先的擦除实例化（与祖先 trait 声明的钩子签名一致，A-1 去形参）。
+            // turbofish：vtable 非泛型后 __from_parts 的祖先形参不再经实参类型钉住
+            // （非泛型祖先无实参，返回类型可钉住，直接调用）。
             let anc_ident = format_ident!("{}", anc_name);
             let anc_hook = format_ident!("__as_{}", anc_name);
+            let anc_from_parts: TokenStream2 = if anc_erased_args.is_empty() {
+                quote! { #anc_ident::__from_parts }
+            } else {
+                quote! { #anc_ident::#anc_erased_args::__from_parts }
+            };
             items.push(quote! {
-                fn #anc_hook(&self) -> #anc_ident #anc_vtable_args {
+                fn #anc_hook(&self) -> #anc_ident #anc_erased_args {
                     let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
-                    #anc_ident::__from_parts(
-                        __rc.clone() as ::std::rc::Rc<dyn #anc_vtable_ident #anc_vtable_args>,
+                    #anc_from_parts(
+                        __rc.clone() as ::std::rc::Rc<dyn #anc_vtable_ident>,
                         __rc as ::std::rc::Rc<dyn ::std::any::Any>,
                         false,
                     )
@@ -1255,7 +1603,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             });
 
             vtable_impls.push(quote! {
-                #anc_impl_header {
+                impl #anc_vtable_ident for #inner_ident {
                     #(#items)*
                 }
             });
@@ -1280,18 +1628,19 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             }
         }
         own_accessor_impls.push(quote! {
-            fn #as_self_hook(&self) -> #struct_ident #ty_g {
+            fn #as_self_hook(&self) -> #struct_ident #erased_ty_args {
                 let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
                 #struct_ident {
-                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident>,
                     any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
                     _jvm_null: false,
+                    #phantom_init
                 }
             }
         });
 
         vtable_impls.push(quote! {
-            impl #impl_g #vtable_trait_ident #ty_g for #inner_ident #where_c {
+            impl #vtable_trait_ident for #inner_ident {
                 #(#own_accessor_impls)*
             }
         });
@@ -1305,21 +1654,22 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 for f in override_fns {
                     let sig = &f.sig;
                     let keep_attrs = strip_meta_attrs(&f.attrs);
+                    let erased_item_sig = erase_signature(sig, &type_param_names);
                     match &f.block {
                         Some(block) => {
                             let mut b = block.clone();
                             rewrite_block(&mut b, &basic_names, &ref_names);
-                            items.push(quote! { #(#keep_attrs)* #sig #b });
+                            items.push(quote! { #(#keep_attrs)* #erased_item_sig #b });
                         }
                         None => {
                             let mname = sig.ident.to_string();
                             let msg = format!("stub: {}.{}", meta.binary_name, mname);
-                            items.push(quote! { #sig { panic!(#msg) } });
+                            items.push(quote! { #erased_item_sig { panic!(#msg) } });
                         }
                     }
                 }
                 vtable_impls.push(quote! {
-                    impl #impl_g #anc_vtable_ident #ty_g for #inner_ident #where_c {
+                    impl #anc_vtable_ident for #inner_ident {
                         #(#items)*
                     }
                 });
@@ -1334,10 +1684,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
     let wrapper_struct = quote! {
         #[allow(non_camel_case_types)]
         pub struct #struct_ident #impl_g #where_c {
-            pub(crate) vtable: ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+            pub(crate) vtable: ::std::rc::Rc<dyn #vtable_trait_ident>,
             pub(crate) any: ::std::rc::Rc<dyn ::std::any::Any>,
             /// JVM null 标志：Default::default() = true（null），构造后调用 _init_not_null() = false
             pub _jvm_null: bool,
+            #phantom_field
         }
     };
 
@@ -1347,11 +1698,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         impl #impl_g #struct_ident #ty_g #where_c {
             #[doc(hidden)]
             pub fn __from_parts(
-                vtable: ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                vtable: ::std::rc::Rc<dyn #vtable_trait_ident>,
                 any: ::std::rc::Rc<dyn ::std::any::Any>,
                 is_null: bool,
             ) -> Self {
-                #struct_ident { vtable, any, _jvm_null: is_null }
+                #struct_ident { vtable, any, _jvm_null: is_null, #phantom_init }
             }
         }
     };
@@ -1361,9 +1712,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             fn default() -> Self {
                 let rc = ::std::rc::Rc::new(<#inner_ident as ::std::default::Default>::default());
                 #struct_ident {
-                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident>,
                     any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
                     _jvm_null: true,
+                    #phantom_init
                 }
             }
         }
@@ -1376,6 +1728,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     vtable: ::std::rc::Rc::clone(&self.vtable),
                     any: ::std::rc::Rc::clone(&self.any),
                     _jvm_null: self._jvm_null,
+                    #phantom_init
                 }
             }
         }
@@ -1513,10 +1866,13 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 }
                 fn __shallow_copy(&self) -> ::std::option::Option<Object> {
                     let __rc = ::std::rc::Rc::new(<#inner_ident as ::std::default::Default>::default());
-                    let __copy = #struct_ident {
-                        vtable: ::std::rc::Rc::clone(&__rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    // 类型标注：vtable 去形参后字面量的字段不再提及本类形参——全部字段
+                    // 为具体类型的类（E 无从钉住）会触发 E0283；以 Self 钉住
+                    let __copy: Self = #struct_ident {
+                        vtable: ::std::rc::Rc::clone(&__rc) as ::std::rc::Rc<dyn #vtable_trait_ident>,
                         any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
                         _jvm_null: false,
+                        #phantom_init
                     };
                     #(#copy_stmts)*
                     ::std::option::Option::Some(Object::from(__copy))
@@ -1541,17 +1897,30 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
         pub fn _init_not_null(&mut self) { self._jvm_null = false; }
     });
 
-    // 字段访问器委托（own fields）。擦除字段不委托 __borrow_*（vtable 未声明，擦除存储
-    // 无法返回 RefMut<声明类型>；无任何消费方）。
-    // 擦除与否只影响存储/impl 侧；wrapper 委托形态一致（__borrow_* 已整体删除）
+    // 字段访问器委托（own + 继承字段）。vtable 访问器签名已 Object 化（A-1 去形参）：
+    // 擦除字段的类型化转换（From<Object> / Into<Object>）发生在 wrapper 委托边界 ——
+    // 等价 javac 在字段访问处插入的 checkcast。
     let wrapper_delegate_items = |name: &syn::Ident, ty: &Type| -> TokenStream2 {
         let get = format_ident!("__get_{}", name);
         let set = format_ident!("__set_{}", name);
-        quote! {
-            #[doc(hidden)] #[inline]
-            pub fn #get(&self) -> #ty { self.vtable.#get() }
-            #[doc(hidden)] #[inline]
-            pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
+        if is_erased(name) {
+            quote! {
+                #[doc(hidden)] #[inline]
+                pub fn #get(&self) -> #ty {
+                    <#ty as ::std::convert::From<Object>>::from(self.vtable.#get())
+                }
+                #[doc(hidden)] #[inline]
+                pub fn #set(&self, v: #ty) {
+                    self.vtable.#set(::std::convert::Into::<Object>::into(v));
+                }
+            }
+        } else {
+            quote! {
+                #[doc(hidden)] #[inline]
+                pub fn #get(&self) -> #ty { self.vtable.#get() }
+                #[doc(hidden)] #[inline]
+                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
+            }
         }
     };
     for (name, ty) in fields.iter().chain(meta.superclass_fields.iter()) {
@@ -1580,7 +1949,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 let mut b = block.clone();
                 rewrite_block(&mut b, &basic_names, &ref_names);
                 rewrite_base_calls_for_wrapper(&mut b);
-                rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
+                rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names, &vdispatch);
                 // 方法体落在隐藏的 `__impl_<method>`（不分派）；公开的同名方法统一经 vtable 分派，
                 // 子类覆盖版本对「父类型 wrapper 上的调用」同样生效。
                 let mut impl_sig = sig.clone();
@@ -1593,19 +1962,18 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             }
         }
 
-        let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
-            if let syn::FnArg::Typed(pt) = arg {
-                if let syn::Pat::Ident(pi) = &*pt.pat {
-                    return Some(pi.ident.clone());
-                }
-            }
-            None
-        }).collect();
+        // vtable 方法签名已 Object 化（A-1）→ 类型化 wrapper 方法与擦除分派之间在
+        // 此边界转换（形参装箱 / 返回值还原）
+        let conv_args = erased_call_args(sig, &type_param_names);
+        let call = quote! {
+            #vtable_trait_ident::#mname(&*self.vtable, #(#conv_args),*)
+        };
+        let dispatch = erased_call_ret_conv(sig, &type_param_names, call);
         let null_check = class_init::null_receiver_check(sig);
         wrapper_methods.push(quote! {
             #(#keep_attrs)*
             #[inline]
-            #vis #sig { #null_check #vtable_trait_ident::#mname(&*self.vtable, #(#param_names),*) }
+            #vis #sig { #null_check #dispatch }
         });
     }
 
@@ -1623,14 +1991,6 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             seen_delegators.insert(mname_str);
             let sig = &f.sig;
             let mname = &sig.ident;
-            let param_names: Vec<_> = sig.inputs.iter().filter_map(|arg| {
-                if let syn::FnArg::Typed(pt) = arg {
-                    if let syn::Pat::Ident(pi) = &*pt.pat {
-                        return Some(pi.ident.clone());
-                    }
-                }
-                None
-            }).collect();
             let keep_attrs = strip_meta_attrs(&f.attrs);
             let vis = &f.vis;
             // 需要 wrapper 上下文的覆盖体：方法体落在隐藏的 `__impl_<method>`（不分派），
@@ -1640,7 +2000,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     let mut b = block.clone();
                     rewrite_block(&mut b, &basic_names, &ref_names);
                     rewrite_base_calls_for_wrapper(&mut b);
-                    rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names);
+                    rewrite_virtual_calls_for_wrapper(&mut b, &own_method_names, &vdispatch);
                     let mut impl_sig = sig.clone();
                     impl_sig.ident = format_ident!("__impl_{}", mname);
                     wrapper_methods.push(quote! {
@@ -1650,13 +2010,20 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     });
                 }
             }
-            // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）
+            // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）；
+            // 方法签名已 Object 化 → 边界转换同 VirtualDefine 委托（含 vtable_erasure 名集）
             let anc_vtable = format_ident!("{}__VTable", vtable_class);
+            let ov_erasure = erasure_set_of(f, &type_param_names);
+            let conv_args = erased_call_args_with(sig, &type_param_names, &ov_erasure);
+            let call = quote! {
+                #anc_vtable::#mname(&*self.vtable, #(#conv_args),*)
+            };
+            let dispatch = erased_call_ret_conv_with(sig, &type_param_names, &ov_erasure, call);
             let null_check = class_init::null_receiver_check(sig);
             wrapper_methods.push(quote! {
                 #(#keep_attrs)*
                 #[inline]
-                #vis #sig { #null_check #anc_vtable::#mname(&*self.vtable, #(#param_names),*) }
+                #vis #sig { #null_check #dispatch }
             });
         }
     }
@@ -1683,11 +2050,17 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     Ok(t) => t,
                     Err(e) => return e.to_compile_error(),
                 };
-                let (vo_name, vo_args) = split_type_name_args(&vo_ty);
+                let (vo_name, _vo_args) = split_type_name_args(&vo_ty);
                 let vo_trait = format_ident!("{}__VTable", vo_name);
-                quote! {
-                    <dyn #vtable_trait_ident #ty_g as #vo_trait #vo_args>::#mname(&*self.vtable, #(#param_names),*)
-                }
+                // vtable 去形参（A-1）：两个 trait 均非泛型；被调方法签名已 Object 化 →
+                // 形参 / 返回值在边界转换（类型化 wrapper 方法 ↔ 擦除 vtable 分派），
+                // owner 类型形参位置（vtable_erasure 名集）一并装箱 / 还原
+                let erasure = erasure_set_of(f, &type_param_names);
+                let conv_args = erased_call_args_with(sig, &type_param_names, &erasure);
+                let call = quote! {
+                    <dyn #vtable_trait_ident as #vo_trait>::#mname(&*self.vtable, #(#conv_args),*)
+                };
+                erased_call_ret_conv_with(sig, &type_param_names, &erasure, call)
             }
             None => {
                 let owner_ty = match syn::parse_str::<Type>(owner) {
@@ -1761,9 +2134,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 };
                 let rc = ::std::rc::Rc::new(inner);
                 #struct_ident {
-                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident>,
                     any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
                     _jvm_null: false,
+                    #phantom_init
                 }
             }
         }
@@ -1845,9 +2219,10 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     {
                         return #struct_ident {
                             vtable: ::std::rc::Rc::clone(&__rc)
-                                as ::std::rc::Rc<dyn #vtable_trait_ident #ty_g>,
+                                as ::std::rc::Rc<dyn #vtable_trait_ident>,
                             any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
                             _jvm_null: false,
+                            #phantom_init
                         };
                     }
                 }
@@ -1879,13 +2254,48 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             let anc_ident = format_ident!("{}", anc_name);
             let anc_vtable = format_ident!("{}__VTable", anc_name);
             let atag = meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
+            if atag.is_empty() {
+                // 非泛型祖先：目标无类型实参
+                return quote! {
+                    impl #impl_g From<#struct_ident #ty_g> for #anc_ident #where_c {
+                        fn from(child: #struct_ident #ty_g) -> #anc_ident {
+                            #anc_ident::__from_parts(
+                                child.vtable as ::std::rc::Rc<dyn #anc_vtable>,
+                                child.any,
+                                child._jvm_null,
+                            )
+                        }
+                    }
+                };
+            }
+            // 泛型祖先：擦除实例化视图（A-1 γ'）——对祖先的**任意**类型实参成立
+            // （Java 泛型运行时擦除，vtable 非泛型后 upcast 不再依赖实参一致；
+            // `CountedCompleter<Object>: From<Sorter<T>>` 这类跨实例化 upcast）。
+            // 祖先形参以带宏标准 bound 的新形参承载（宏为所有类的形参注入同一组
+            // Clone/Default/'static/From<Object>/Into<Object>，祖先 wrapper 的 impl
+            // 上下文恰要求这组 bound）。
+            let arity = type_args_arity(&atag);
+            let mut gamma_gen = gen.clone();
+            for i in 0..arity {
+                let pid = format_ident!("__Anc{}", i);
+                let p: syn::TypeParam = syn::parse_quote! {
+                    #pid : Clone + Default + 'static
+                        + ::std::convert::From<Object> + ::std::convert::Into<Object>
+                };
+                gamma_gen.params.push(syn::GenericParam::Type(p));
+            }
+            let (gamma_impl_g, _, gamma_where_c) = gamma_gen.split_for_impl();
+            let anc_params: Vec<Ident> = (0..arity)
+                .map(|i| format_ident!("__Anc{}", i))
+                .collect();
+            let anc_ty_args = quote! { <#(#anc_params),*> };
             quote! {
-                impl #impl_g From<#struct_ident #ty_g> for #anc_ident #atag #where_c {
-                    fn from(child: #struct_ident #ty_g) -> #anc_ident #atag {
-                        // 结构体字面量不能用 Type<E> {...} 语法（被解析为比较链），
-                        // 省略泛型参数由返回类型推导
-                        #anc_ident::__from_parts(
-                            child.vtable as ::std::rc::Rc<dyn #anc_vtable #atag>,
+                impl #gamma_impl_g
+                    From<#struct_ident #ty_g> for #anc_ident #anc_ty_args #gamma_where_c
+                {
+                    fn from(child: #struct_ident #ty_g) -> #anc_ident #anc_ty_args {
+                        #anc_ident::#anc_ty_args::__from_parts(
+                            child.vtable as ::std::rc::Rc<dyn #anc_vtable>,
                             child.any,
                             child._jvm_null,
                         )
@@ -1981,20 +2391,17 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
             let has_self_ref = bs_flat.contains("Self ::") || bs_flat.contains("Self::");
             if !matches!(vtable_body_kind_gated(block, class_is_generic), VTableBodyKind::Safe) {
-                // 方法体需要 wrapper 上下文 → 经钩子重建本类 wrapper，执行 `__impl_<method>`
+                // 方法体需要 wrapper 上下文 → 经钩子重建本类擦除实例化 wrapper，执行
+                // `__impl_<method>`。base 函数签名保持类型化（Python 调用点的 turbofish
+                // 不变）；钩子返回擦除实例化 → 形参 / 返回值在边界转换（A-1 去形参）。
                 let _ = (&binary, &mname_str, &desc, has_bare_clone_this, has_non_vtable_call, has_self_ref);
                 let impl_name = format_ident!("__impl_{}", sig.ident);
-                let base_param_names: Vec<syn::Ident> = non_self_params.iter()
-                    .filter_map(|a| {
-                        if let syn::FnArg::Typed(pt) = a {
-                            if let syn::Pat::Ident(pi) = &*pt.pat { Some(pi.ident.clone()) } else { None }
-                        } else { None }
-                    })
-                    .collect();
+                let body = erased_hook_call(
+                    sig, &impl_name, &vtable_trait_ident, &as_self_hook, &type_param_names);
                 let mut body_gen = gen.clone();
                 body_gen.params.push(syn::parse_quote!(__BT));
                 body_gen.make_where_clause().predicates.push(
-                    syn::parse_quote!(__BT: #vtable_trait_ident #ty_g + ?Sized)
+                    syn::parse_quote!(__BT: #vtable_trait_ident + ?Sized)
                 );
                 if let Some(method_where) = &sig.generics.where_clause {
                     body_gen.make_where_clause().predicates.extend(method_where.predicates.iter().cloned());
@@ -2004,8 +2411,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                     #[doc(hidden)]
                     #[allow(non_snake_case, unused_variables)]
                     pub fn #fn_name #body_impl_g (this: &__BT #(, #non_self_params)*) #ret #body_where_c {
-                        let __w = #vtable_trait_ident::#as_self_hook(this);
-                        __w.#impl_name(#(#base_param_names),*)
+                        #body
                     }
                 });
             } else if has_bare_clone_this || has_non_vtable_call || has_self_ref {
@@ -2026,7 +2432,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 let mut body_gen = gen.clone();
                 body_gen.params.push(syn::parse_quote!(__BT));
                 body_gen.make_where_clause().predicates.push(
-                    syn::parse_quote!(__BT: #vtable_trait_ident #ty_g + ?Sized)
+                    syn::parse_quote!(__BT: #vtable_trait_ident + ?Sized)
                 );
                 // 方法自身的 where 子句（类型变量上界约束等）：方法体依赖它，base 函数同样声明
                 if let Some(method_where) = &sig.generics.where_clause {
@@ -2069,7 +2475,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
             let mut body_gen = gen.clone();
             body_gen.params.push(syn::parse_quote!(__BT));
             body_gen.make_where_clause().predicates.push(
-                syn::parse_quote!(__BT: #vtable_trait_ident #ty_g + ?Sized)
+                syn::parse_quote!(__BT: #vtable_trait_ident + ?Sized)
             );
             // 方法自身的 where 子句（类型变量上界约束等）：方法体依赖它，base 函数同样声明
             if let Some(method_where) = &sig.generics.where_clause {
@@ -2090,12 +2496,11 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
                 let stmts = &b.stmts;
                 quote! { #(#stmts)* }
             } else {
-                let impl_name = format_ident!("__impl_{}", sig.ident);
-                let args = param_idents(sig);
-                quote! {
-                    let __w = #vtable_trait_ident::#as_self_hook(this);
-                    __w.#impl_name(#(#args),*)
-                }
+                // 方法体需要 wrapper 上下文 → 经钩子重建本类擦除实例化 wrapper，执行
+                // `__impl_<method>`（签名保持类型化，边界转换同 VirtualDefine base 函数）
+                erased_hook_call(
+                    sig, &format_ident!("__impl_{}", sig.ident),
+                    &vtable_trait_ident, &as_self_hook, &type_param_names)
             };
             base_fns.push(quote! {
                 #[doc(hidden)]
@@ -2113,7 +2518,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 
     // 实现的接口：impl Iface__VTable for __inner（擦除签名 → 本类成员的桥接）
     let interface_impls: Vec<TokenStream2> = iface_impls.iter()
-        .map(|ii| expand_interface_impl(ii, &struct_ident, &inner_ident, &vtable_trait_ident, &erased_ty_args))
+        .map(|ii| expand_interface_impl(ii, &struct_ident, &inner_ident, &vtable_trait_ident,
+                                        &erased_ty_args, &phantom_init))
         .collect();
 
     quote! {
