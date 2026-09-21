@@ -9,6 +9,7 @@ thread_local! {
     static JAVA_IO_FILE_DESCRIPTOR_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_IO_PRINT_STREAM_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JAVA_LANG_REF_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
 }
 
 impl SharedSecrets {
@@ -41,6 +42,15 @@ impl SharedSecrets {
     #[jvm_boundary]
     pub fn setJavaLangAccess(jla: Object) -> Result<()> {
         JAVA_LANG_ACCESS.with(|slot| *slot.borrow_mut() = Some(jla));
+        Ok(())
+    }
+
+    /// `Reference.<clinit>` 登记的引用处理访问器（waitForReferenceProcessing 等）。
+    /// 原生二进制无引用处理器线程 / GC，访问器无从消费——按 JDK 形态存储，
+    /// 槽位无读取方。
+    #[jvm_boundary]
+    pub fn setJavaLangRefAccess(a: Object) -> Result<()> {
+        JAVA_LANG_REF_ACCESS.with(|slot| *slot.borrow_mut() = Some(a));
         Ok(())
     }
 
