@@ -58,6 +58,8 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 
 **与 ruva 模型的分歧（已评估，不采纳）**：单继承组合 + `Deref`（本项目用 vtable 双指针，多态保真度更高）；`String` = `Vec<u16>`（本项目走字节码翻译，保留 compact strings）；`null` = `Option<T>`（与 Object 模型冲突，null 缺口按 S-2/S-3 单独修）；「内部 API 不支持」三层边界（本项目翻译 JDK 自身字节码，`jdk/internal/` 走边界类按需手写，哲学相反）。
 
+**完整评估结论与远期素材**（告警规范 + `--deny`、等价比例估算、框架适配层 v2+ 方案、转译决策树）见 [2026-09-21-ruva-compat-reference.md](2026-09-21-ruva-compat-reference.md)。
+
 ---
 
 ## A. 架构缺口（最高优先级）
