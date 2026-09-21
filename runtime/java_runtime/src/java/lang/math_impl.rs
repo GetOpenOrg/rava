@@ -17,7 +17,9 @@ impl Math {
     #[jvm_native] pub fn IEEEremainder(f1: f64, f2: f64) -> Result<f64> { Ok(f1 - f2 * (f1 / f2).round()) }
     #[jvm_native] pub fn ceil(a: f64) -> Result<f64> { Ok(a.ceil()) }
     #[jvm_native] pub fn floor(a: f64) -> Result<f64> { Ok(a.floor()) }
-    #[jvm_native] pub fn rint(a: f64) -> Result<f64> { Ok(a.round()) }
+    // rint：不手写。JDK 21 起 StrictMath.rint 为纯 Java 实现（(2^52+|a|)-2^52 的
+    // HALF_EVEN 舍入），Math.rint 转译后直接落到该字节码链，逐位与 JVM 一致；
+    // 此前手写的 a.round() 是 half-away-from-zero，曾致 rint(2.5)=3.0 规格破坏（S-19）。
     #[jvm_native] pub fn pow(a: f64, b: f64) -> Result<f64> { Ok(a.powf(b)) }
     #[jvm_native] pub fn round__f(a: f32) -> Result<i32> { Ok(a.round() as i32) }
     #[jvm_native] pub fn round__d(a: f64) -> Result<i64> { Ok(a.round() as i64) }
