@@ -22,48 +22,30 @@ def _float_lit(val_str: str, ty: str) -> str:
 
 
 def _escape_str(s: str) -> str:
-    """将原始字符串内容转义为 Rust 字符串字面量内容（不含两端的 "）。
-    处理：\\ → \\\\，" → \\"，控制字符，以及无效的 \\% 等 Java 格式化符号。"""
+    """将字符串常量的解码值转义为 Rust 字符串字面量内容（不含两端的 "）。
+
+    输入契约：常量池 Utf8 的解码值（classfile._ldc_str 产出），即字符序列本身。
+    值里的反斜杠是字面文本而非转义序列，一律双写——例如 Properties 的
+    "Malformed \\uxxxx encoding."，值含 `\\`+`u`，必须落成 Rust 的 `\\\\u`，
+    若原样保留 `\\u` 会产出非法的 unicode 转义（rustc E0709 类编译错误）。"""
     result = []
-    i = 0
-    while i < len(s):
-        c = s[i]
+    for c in s:
         if c == '\\':
-            # 已有反斜杠：检查下一个字符是否构成合法 Rust 转义序列
-            if i + 1 < len(s):
-                nc = s[i + 1]
-                if nc in ('"', "'", '\\', 'n', 'r', 't', '0', 'x', 'u'):
-                    result.append('\\')
-                    result.append(nc)
-                    i += 2
-                    continue
-                else:
-                    # 非法转义（如 \%、\u 后跟非十六进制）→ 转义为 \\
-                    result.append('\\\\')
-                    i += 1
-                    continue
-            else:
-                result.append('\\\\')
-                i += 1
+            result.append('\\\\')
         elif c == '"':
             result.append('\\"')
-            i += 1
         elif c == '\n':
             result.append('\\n')
-            i += 1
         elif c == '\r':
             result.append('\\r')
-            i += 1
         elif c == '\t':
             result.append('\\t')
-            i += 1
         else:
             cp = ord(c)
             if cp < 0x20 or (0x7f <= cp <= 0x9f):
                 result.append(f'\\u{{{cp:04x}}}')
             else:
                 result.append(c)
-            i += 1
     return ''.join(result)
 
 

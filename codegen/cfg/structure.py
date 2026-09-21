@@ -25,6 +25,7 @@
 """
 
 from __future__ import annotations
+import os
 import sys
 from dataclasses import dataclass, field
 
@@ -135,6 +136,10 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
         if y == flow.entry:
             continue
         d = flow.idom[y]
+        if os.environ.get('JAVA_RTA_CFG_DEBUG'):
+            print(f"[cfg-dbg] y={y} pc={nodes[y].start_pc} kind={nodes[y].kind} d={d} "
+                  f"ctx_y={sorted(ctx_of(y))} ctx_d={sorted(ctx_of(d))} "
+                  f"in_try_slots={y in {s for sl in try_slots.values() for s in sl}}")
         if nodes[d].kind == 'try' and y in try_slots[d]:
             # try 体入口 / 处理器入口：恒内联为 Try 的 try 体 / catch 体
             lexical = ctx_of(d) | {nodes[d].group} if y == nodes[d].target else ctx_of(d)
@@ -147,6 +152,16 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
             # 该 try 之内：只有词法 try 组集合与 y 一致的循环才能把 y 作为出口后继放到 loop 之后，
             # 否则 y 留在循环内按支配关系就位（y 不可达循环头，其子树不会落回循环体）
             if d in body and y not in body and ctx_of(h) == ctx_of(y):
+                if nodes[y].kind == 'exit' and len(flow.preds[y]) == 1:
+                    # 单前驱的 return / athrow 块留在循环体内（随其唯一前驱的分支臂
+                    # 内联渲染），不提升为循环 follower：提升会把语句搬到循环之后，
+                    # 若它词法上位于 catch 体（try 节点经异常边把处理器拉进循环体
+                    # 闭包，处理器里的 rethrow athrow 块因此落在 body 外），catch
+                    # 绑定变量的引用就落到作用域外（E0425，如
+                    # ZoneRulesProvider.<clinit> 的 instanceof→continue / athrow）。
+                    # return / athrow 本身终结控制流，单前驱时无需 label 跳转。
+                    # 多前驱的 exit 块仍是其他前驱 break 的目标，保持 follower 形态。
+                    continue
                 parent_loop = h
                 break
         parent_try = None
@@ -186,6 +201,13 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
         if lexical != ctx_of(y):
             raise CfgError(f"块 pc={nodes[y].start_pc} 的 try 区域与控制流不成嵌套结构"
                            f"（kind={nodes[y].kind} 词法={sorted(lexical)} 实际={sorted(ctx_of(y))}）")
+        if os.environ.get('JAVA_RTA_CFG_DEBUG'):
+            _which = ('try_follower' if parent_try is not None else
+                      'loop_follower' if parent_loop is not None else
+                      'in_follower' if y in follower_set else 'inline')
+            print(f"[cfg-dbg] y={y} pc={nodes[y].start_pc} kind={nodes[y].kind} d={d} -> {_which} "
+                  f"parent_try={parent_try} parent_loop={parent_loop} "
+                  f"ctx_y={sorted(ctx_of(y))} ctx_d={sorted(ctx_of(d))}")
 
     emitted: list[int] = []
 

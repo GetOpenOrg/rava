@@ -93,7 +93,9 @@ def _gen_static_field_blocks(ci, registry, class_type_params: list,
             blocks.append(
                 f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
                 f'pub fn {safe_fname}() -> Result<{rust_ret}> {{\n'
-                f'    panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")\n}}')
+                f'    panic!("stub: {ci.name}.{sf.name}:{sf.descriptor}")\n}}\n'
+                f'pub fn set_{safe_fname}(v: {rust_ret}) -> Result<()> {{\n'
+                f'    panic!("stub-set: {ci.name}.{sf.name}:{sf.descriptor}")\n}}')
         else:
             blocks.append(
                 f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'

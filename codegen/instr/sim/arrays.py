@@ -34,13 +34,13 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
     comment = ins.comment or ''
 
     if op == 'newarray':
-        count_expr, _ = sim.pop()
+        count_expr = _pop_index(sim)   # JVM 计数恒为 int：readShort 等窄来源提升为 i32
         elem_t, _zero = NEWARRAY_TYPES.get(operand.strip(), ('i32', '0i32'))
         v = sim.fresh('_arr')
         sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::new({render_expr(count_expr)});"))
         sim.push(Var(v), RsNamed(f'JArray<{elem_t}>'))
     elif op == 'anewarray':
-        count_expr, _ = sim.pop()
+        count_expr = _pop_index(sim)
         # 用完整路径（comment）而非 short_cls，避免 'LString;' 等非全限定名映射到 Object
         if comment and comment != _OBJECT_CLASS:
             _elem_raw = jvm_to_rust(f'L{comment};', registry)
@@ -54,7 +54,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
         dims = int(dims_str) if dims_str.isdigit() else 2
-        sizes = [render_expr(sim.pop()[0]) for _ in range(dims)][::-1]
+        sizes = [render_expr(_pop_index(sim)) for _ in range(dims)][::-1]
         # 常量池项是数组类描述符（`[[I` / `[[Lpkg/Name;`）：数组类型按描述符映射；
         # 给出长度的各维逐层构造（每行是独立数组对象），未给长度的内层维保持 null
         _arr_desc = comment.strip().strip('"') if comment else ''

@@ -27,7 +27,7 @@ impl Thread {
     }
 
     #[jvm_native]
-    pub fn getThreadGroup(&self) -> Result<Object> {
-        Ok(Object::default())
+    pub fn getThreadGroup(&self) -> Result<ThreadGroup> {
+        Ok(ThreadGroup::default())
     }
 }
