@@ -395,12 +395,17 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 }
             }
             // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）；
-            // 方法签名已 Object 化 → 边界转换同 VirtualDefine 委托（含 vtable_erasure 名集）
+            // 方法签名已 Object 化 → 边界转换同 VirtualDefine 委托（含 vtable_erasure 名集）。
+            // K-6 槽位名解耦：wrapper 名（本类重载态）≠ trait 槽位名（声明者态）时
+            // UFCS 目标取 vtable_name 属性给出的 trait 成员名
             let anc_vtable = format_ident!("{}__VTable", vtable_class);
+            let slot_name = attr_str(&f.attrs, "vtable_name")
+                .map(|t| Ident::new(&t, proc_macro2::Span::call_site()))
+                .unwrap_or_else(|| mname.clone());
             let ov_erasure = erasure_set_of(f, &ctx.type_param_names);
             let conv_args = erased_call_args_with(sig, &ctx.type_param_names, &ov_erasure);
             let call = quote! {
-                #anc_vtable::#mname(&*self.vtable, #(#conv_args),*)
+                #anc_vtable::#slot_name(&*self.vtable, #(#conv_args),*)
             };
             let dispatch = erased_call_ret_conv_with(sig, &ctx.type_param_names, &ov_erasure, call);
             let null_check = class_init::null_receiver_check(sig);

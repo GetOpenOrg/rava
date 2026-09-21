@@ -414,6 +414,10 @@ def _java_method_attr(m: ParsedMethod) -> str:
     if getattr(m, 'virtual_in', ''):
         vin = m.virtual_in.replace('"', '\\"')
         parts.append(f'virtual_in = "{vin}"')
+        # 槽位名解耦：覆盖条目 wrapper 名（本类重载态）≠ 槽位 trait 成员名
+        #（槽位声明者态）时显式携带，宏按它命名 vtable impl 条目
+        if getattr(m, 'vtable_name', ''):
+            parts.append('vtable_name = "{}"'.format(m.vtable_name.replace('"', '\\"')))
     if getattr(m, 'vtable_erasure', None):
         ve = ';'.join(m.vtable_erasure).replace('"', '\\"')
         parts.append(f'vtable_erasure = "{ve}"')

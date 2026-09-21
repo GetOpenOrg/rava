@@ -59,6 +59,10 @@ class ParsedMethod:
     method_parameters:  list = None   # list of (name: str, access_flags: int)
     # vtable 归属：空串=非虚方法; 等于 class_rust_name=新虚方法定义; 其他=覆盖哪个祖先类的 vtable
     virtual_in:         str  = ''
+    # 槽位名解耦（覆盖条目 wrapper 名 ≠ 祖先 vtable trait 槽位名时）：trait 成员名，
+    # 与继承成员（inherited_gen）的 vtable_name 同一机制。wrapper 名按本类重载态
+    # （hierarchy_overloaded_names 单一权威），trait 槽位名按槽位声明者的重载态。
+    vtable_name:        str  = ''
     # Code attribute 的异常表：list of (start_pc, end_pc, handler_pc, catch_type)，
     # catch_type 为类二进制名，空串 = catch-all
     exception_table:    list = None

@@ -140,16 +140,81 @@ def _covariant_virtual_owner(m: 'ParsedMethod', ci: 'ClassInfo',
     return _bin_to_rust(oldest) if oldest is not None else ''
 
 
+def _chain_depth(owner_rust: str, ci: 'ClassInfo', registry: 'dict | None') -> int:
+    """owner_rust 在 ci 超类链上的位置（直接父类 = 0，越远越大；不在链上 = -1）。"""
+    cur = ci.super_class
+    seen: set[str] = {ci.name}
+    depth = 0
+    while cur and cur not in seen:
+        seen.add(cur)
+        if _bin_to_rust(cur) == owner_rust:
+            return depth
+        if not registry or cur not in registry:
+            return -1
+        cur = registry[cur].super_class
+        depth += 1
+    return -1
+
+
 def resolve_virtual_slot(m: 'ParsedMethod', ci: 'ClassInfo',
                          registry: 'dict | None',
                          handwritten_methods: 'dict | None' = None) -> str:
-    """虚方法槽位归属的完整解析：``_find_virtual_in``（精确描述符，重载计数
-    不变）→ 槽位精确签名模型（K-6a：同名同参数描述符的更远声明者，含桥接
-    计数误伤与协变链穿透）给出更远归属时优先，无可对齐归属时回落既有结果。"""
+    """虚方法槽位归属的完整解析。
+
+    两条路径可以给出不同（都非本类）的归属：
+      - ``_find_virtual_in``：精确描述符（同名同参同返回）的最远声明者；
+      - 槽位精确签名模型（K-6a，``_covariant_virtual_owner``）：同名同参数描述符
+        （返回可协变、含 bridge 计数误伤）的最远声明者。
+    不一致时取超类链上**更远**的声明者：精确描述符命中即 JVMS §5.4.5 的同一
+    槽位，协变模型只在精确匹配失败（bridge 改写返回）时才给出不同的（更远的）
+    归属；更近的结果源于协变模型的重载 mangle 守卫在 mangle 边界提前截断。
+    取更远者保证链上各类对同一方法归属同一点（覆盖传递性）。
+
+    归属只决定 trait 槽位（vtable impl 填充位置），wrapper 名按本类重载态
+    （method_name_is_mangled / receiver_member_name），两者不同名时经
+    vtable_name 属性解耦（slot_member_rust_name）。"""
     slot = _find_virtual_in(m, ci, registry, handwritten_methods)
     if not slot or not registry or ci.is_interface:
         return slot
-    return _covariant_virtual_owner(m, ci, registry, handwritten_methods) or slot
+    self_rust = _bin_to_rust(ci.name)
+    cov = _covariant_virtual_owner(m, ci, registry, handwritten_methods)
+    if cov and cov != slot:
+        if slot == self_rust:
+            return cov
+        return slot if _chain_depth(slot, ci, registry) >= _chain_depth(cov, ci, registry) else cov
+    return cov or slot
+
+
+def slot_member_rust_name(m: 'ParsedMethod', ci: 'ClassInfo',
+                          registry: 'dict | None',
+                          handwritten_methods: 'dict | None' = None) -> str:
+    """覆盖条目对应的祖先 vtable trait 槽位成员名（槽位声明者视角下的 Rust 名）。
+
+    槽位声明者由 resolve_virtual_slot 的归属结果定位；其 (m.name, 参数描述符) 声明
+    的名字按声明者自身重载态判定（method_name_is_mangled 纯接收者态）——与该声明者
+    文件里实际发射的名字同源。声明不可解析（链断裂 / 手写）时返回空串（调用方
+    不解耦，维持旧形态）。"""
+    from ..sig_types import method_name_is_mangled
+    from ..type_map import mangle_name as _mangle
+    owner_rust = resolve_virtual_slot(m, ci, registry, handwritten_methods)
+    if not owner_rust or owner_rust == _bin_to_rust(ci.name):
+        return ''
+    cur = ci.super_class
+    seen: set[str] = {ci.name}
+    while cur and cur not in seen:
+        seen.add(cur)
+        if _bin_to_rust(cur) == owner_rust:
+            decl = next((x for x in registry[cur].methods
+                         if not x.is_synthetic and _same_vtable_slot(x, m)), None)
+            if decl is None:
+                return ''
+            return (_mangle(decl.name, decl.descriptor)
+                    if method_name_is_mangled(registry[cur], decl, registry)
+                    else decl.name)
+        if cur not in registry:
+            return ''
+        cur = registry[cur].super_class
+    return ''
 
 
 def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
@@ -173,20 +238,19 @@ def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
 
     # 沿祖先链找到最远（最上层）定义了该 name+descriptor 的非私有方法的类
     # final 方法也需要追踪，它覆盖祖先虚方法时仍属于该 vtable
-    # 额外约束：若祖先与当前类的同名方法数量不同（mangle 状态不同），Rust 方法名将不一致，
-    # 不能继续追踪（否则 vtable trait 声明与 impl 的方法名不同 → E0407）。
+    #
+    # 重载 mangle 状态差异（祖先与当前类同名方法数量不同）不中止追踪：名字一致性
+    # 由槽位名解耦保证——wrapper 名按本类重载态（method_name_is_mangled 纯判定 /
+    # receiver_member_name），trait 槽位 impl 名按槽位声明者态，不同名时经
+    # vtable_name 属性改写（与继承成员的 K-6 机制统一）。旧计数守卫会把「子类因
+    # 实现接口方法新增同名重载」的覆盖（如 WhileOps$1Op.opWrapSink：覆盖
+    # AbstractPipeline 槽位 + 实现 WhileOps$DropWhileOp 接口方法）误判为本类新
+    # 槽位 → 祖先槽位无人覆盖，虚分派落到 trait default 的 stub panic（S-18 家族）。
     if registry:
-        # 当前类中 m.name 的同名非构造/非静态方法数
-        cur_overloaded = sum(
-            1 for cm in ci.methods
-            if cm.name == m.name and not cm.is_constructor and not cm.is_static
-        ) > 1
-
         oldest: str | None = None
         cur = ci.super_class
         while cur and cur != _OBJECT_CLASS and cur in registry:
             anc = registry[cur]
-            found = False
             # 祖先的该方法由共置 _impl.rs 手写（codegen 跳过生成）→ 它不在祖先的
             # vtable trait 里，不能作为覆盖目标（否则 impl 出 trait 没有的方法，E0407）。
             _anc_hand = ((handwritten_methods or {}).get(cur) or {}).get('methods', ())
@@ -196,19 +260,8 @@ def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
                             or safe_ident(mangle_name(am.name, am.descriptor)) in _anc_hand):
                         pass
                     elif not (am.access_flags & _ACC_PRIVATE):
-                        anc_overloaded = sum(
-                            1 for xm in anc.methods
-                            if xm.name == m.name and not xm.is_constructor and not xm.is_static
-                        ) > 1
-                        if cur_overloaded != anc_overloaded:
-                            # mangle 状态不同 → Rust 方法名不一致 → 停止追踪
-                            cur = None
-                        else:
-                            oldest = cur
-                    found = True
+                        oldest = cur
                     break
-            if cur is None:
-                break
             cur = anc.super_class
         if oldest is not None:
             return _bin_to_rust(oldest)

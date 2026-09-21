@@ -329,8 +329,11 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 _ici = _load_class(_in)
                 if _ici is None:
                     continue
+                # abstract 声明同样是有效的解析结果：实现体在实现类层次里
+                # （S-18——Stream.sequential 声明于 BaseStream，实现于
+                # AbstractPipeline）。default（有方法体）则由下方入队。
                 _hit = next((m for m in _ici.methods
-                             if m.name == meth and m.descriptor == desc and not m.is_abstract), None)
+                             if m.name == meth and m.descriptor == desc), None)
                 if _hit is not None:
                     _owner = (_ici, _hit)
                     break
@@ -496,10 +499,47 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
         _ACC_PRIVATE, _ACC_FINAL = 0x0002, 0x0010
 
+        def _resolve_virtual_slot(ci, meth: str, desc: str):
+            """JVMS §5.4.3.3 声明槽位解析：本类 → 父类链（最近优先）→ 接口闭包。
+            调用点的常量池类未必自身声明该方法（S-18：invokeinterface
+            Stream.sequential，声明在父接口 BaseStream、实现体在抽象类
+            AbstractPipeline）——此时槽位沿继承层次解析，接口闭包里的
+            abstract 声明与 default 同样是有效槽位。返回 (声明者, 方法) 或 None。
+            """
+            _cur, _seen = ci, set()
+            _chain = []
+            while _cur is not None and _cur.name not in _seen:
+                _seen.add(_cur.name)
+                _chain.append(_cur)
+                _m = next((m for m in _cur.methods
+                           if m.name == meth and m.descriptor == desc), None)
+                if _m is not None:
+                    return _cur, _m
+                _sc = _cur.super_class
+                if not _sc or _sc in _JAVA_RUNTIME_CLASSES:
+                    break
+                _cur = _load_class(_sc)
+            _iq = deque(i for _c in _chain for i in (_c.interfaces or []))
+            _iseen: set[str] = set()
+            while _iq:
+                _in = _iq.popleft()
+                if _in in _iseen:
+                    continue
+                _iseen.add(_in)
+                _ici = _load_class(_in)
+                if _ici is None:
+                    continue
+                _m = next((m for m in _ici.methods
+                           if m.name == meth and m.descriptor == desc), None)
+                if _m is not None:
+                    return _ici, _m
+                _iq.extend(_ici.interfaces or [])
+            return None
+
         def _propagate_virtual_targets() -> None:
             """虚调用目标 → 运行期实际接收者类的覆盖版本。
 
-            - 接口方法：闭包内直接实现该接口的具体类
+            - 接口方法：闭包内直接实现该接口的具体类（含抽象类中途实现）
             - RTA：已实例化类 X（(X, <init>, *) 在调用链上）是虚调用目标声明类的子类型时，
               (X, m, d) 入队；X 未声明则由 _process 按方法解析规则落到最近声明者
             """
@@ -520,7 +560,14 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     continue
                 decl = next((m for m in ci.methods
                              if m.name == meth and m.descriptor == desc), None)
-                if decl is None or decl.is_static or (decl.access_flags & (_ACC_PRIVATE | _ACC_FINAL)):
+                if decl is None:
+                    # 常量池类自身未声明：沿继承层次解析槽位（父类链 → 接口闭包，
+                    # abstract 同样有效）。无槽位的方法不构成虚分派目标（无覆盖可传播）。
+                    _slot = _resolve_virtual_slot(ci, meth, desc)
+                    if _slot is None:
+                        continue
+                    ci, decl = _slot
+                if decl.is_static or (decl.access_flags & (_ACC_PRIVATE | _ACC_FINAL)):
                     continue
                 if ci.is_interface:
                     for concrete_name, concrete_ci in list(jdk_infos.items()):

@@ -193,6 +193,8 @@ def _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
         if _decl_bin:
             if _decl_bin != cls_binary:
                 _inherited_calls.request(cls_binary, mname, f"({''.join(params)})")
+            # 名字视角 = 声明接口（接口载体的继承成员按声明接口重载态命名，
+            # interface_gen 机制——如 Sink 载体上来自 Consumer 的 accept 裸名）
             _iface_mname = _safe_field(_mangle_if_overloaded(_decl_bin, mname, comment, registry))
             _iface_tps = _effective_class_type_params(_iface_ci, registry)
             _iface_targs = f"<{', '.join(['Object'] * len(_iface_tps))}>" if _iface_tps else ''
@@ -332,7 +334,9 @@ def _subtype_branch(registry, sub_bin, mname, comment, params, ret,
             return None
         # 具体类：实现来自祖先注入的接口 default 方法 → 登记继承成员声明
         _inherited_calls.request(sub_bin, mname, '(' + ''.join(params) + ')')
-    _mangle_cls = _owner_bin or sub_rust
+    # 名字视角 = 接收者（_d 的类型 sub_rust：本类覆盖与继承成员都在其 wrapper 上，
+    # 名字按接收者重载态）——声明者 _owner_bin 只用于 base 函数 / 继承成员登记
+    _mangle_cls = sub_bin or sub_rust
     sub_mname_r = _mangle_if_overloaded(_mangle_cls, mname, comment, registry)
     sub_mname_r = _safe_field(sub_mname_r)
     sub_mname_r, _barg_str, _bm17 = _bridge_downcast_args(

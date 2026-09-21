@@ -23,7 +23,7 @@ from ..constants import (safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLA
 
 from .attrs import _java_class_block_head, _java_field_attr, _java_method_attr
 from .method_gen import _gen_native_stub
-from .vtable_util import _bin_to_rust, resolve_virtual_slot
+from .vtable_util import _bin_to_rust, resolve_virtual_slot, slot_member_rust_name
 from .clinit_extract import _gen_static_field_blocks, _gen_clinit_block
 from .import_gen import (collect_referenced, gen_cross_imports,
                          scan_used_vtable_imports)
@@ -338,13 +338,15 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
             method_blocks.append(_java_method_attr(m) + '\n' + _decl_sig + ';')
             continue
 
-        # 计算虚方法归属（vtable 架构）：精确描述符路径（_find_virtual_in，重载计数
-        # 不变）→ 判为本类新槽位时按协变模型归属父槽位（K-6a，resolve_virtual_slot）
+        # 计算虚方法归属（vtable 架构）：精确描述符路径（_find_virtual_in）→ 判为本类新槽位时
+        # 按协变模型归属父槽位（K-6a，resolve_virtual_slot；两路不一致取更远声明者）
         m.virtual_in = resolve_virtual_slot(m, ci, registry, new_format_map)
-        # A-1 擦除按声明类判定：覆盖条目的签名里，「声明祖先按自身类型形参声明的位置」
-        # 在祖先 vtable 上已是 Object → 记录接收者视角下这些位置的代入形态（类型串），
-        # 宏据此擦除 vtable impl 条目 / 包装 base 调用 turbofish（vtable_erasure）
+        # 槽位名解耦（K-6 机制推广到覆盖条目）：wrapper 名按本类重载态（rust_name），
+        # trait 槽位 impl 名按槽位声明者态——两者不同时经 vtable_name 属性传给宏
         if m.virtual_in and m.virtual_in != short_cls(ci.name):
+            _slot_name = slot_member_rust_name(m, ci, registry, new_format_map)
+            if _slot_name and _slot_name != rust_name:
+                m.vtable_name = _slot_name
             m.vtable_erasure = _override_vtable_erasure(m, ci, registry)
 
         # 虚方法的方法体由共置 `_impl.rs` 手写为 `__impl_<method>`：声明留在宏块内（进 vtable、

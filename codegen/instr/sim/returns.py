@@ -40,7 +40,13 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         _returns_this = expr_s == 'this' and not sim.is_static
         if _returns_this:
             expr_s = 'Clone::clone(this)'
-        if _returns_this and ret_ty == 'Object' and actual_ty not in ('Object', '()'):
+        if _returns_this and ret_ty in _ctparams:
+            # 声明返回类型变量（`return (S) this`，javac 在擦除层省略 checkcast——
+            # S 擦除为边界接口、this 已是其实现类，如 AbstractPipeline.sequential）：
+            # 经 Object 边界取回，类型形参由宏补 From<Object> bound（身份保持的
+            # 视图重建，Java unchecked cast 语义）
+            expr_s = f"From::from({_coerce_to_object(expr_s, actual_ty, registry, _ctparams, clone=False)})"
+        elif _returns_this and ret_ty == 'Object' and actual_ty not in ('Object', '()'):
             # 声明返回 Object / 接口（`return this` 于返回接口类型的方法）：身份保持的向上转型
             expr_s = _coerce_to_object(expr_s, actual_ty, registry, _ctparams, clone=False)
         elif _returns_this and (ret_ty.split('<')[0] == actual_ty.split('<')[0]
