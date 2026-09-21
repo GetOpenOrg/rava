@@ -53,7 +53,7 @@ A-3（CastExpr IR 化）是完整样板：checkcast/instanceof 从「15+ 处字�
 
 | # | 调整 | 消灭什么 | 现状条目 |
 |---|---|---|---|
-| L1-a | **类型对象化（TypeIR）**：`str` → 类型代数（基本/引用/数组/类型变量/接口载体/泛型实例化），子类型、擦除、协变查询成为类型对象的方法 | 37 处字符串手术；21 处重复推导 | 新立候选。**深度口径（与重写方案 §2.3 对齐）：完全体直接在 Rust `ty` crate 定型，不经过 Python 中转**——Python 侧只做到窗口 3 级别（rs_ir 边界零 String 往返），避免投资弃件 |
+| L1-a | **类型对象化（TypeIR）**：`str` → 类型代数（基本/引用/数组/类型变量/接口载体/泛型实例化），子类型、擦除、协变查询成为类型对象的方法 | 37 处字符串手术；21 处重复推导 | **最小层已落地（`e488ec5`+`92e3db5`）：`codegen/jvm_type.py` 400 行 + 35 单测 + hierarchy._is_subtype 委托试点（204 万对对拍零分歧、双种子零 diff、五审计线一致）**。完全体仍定 Rust `ty` crate（本层即其规格本体）；下一批接入点按位点数排序：control.py(7)/stack.py(5)/returns.py(5)/invoke_sig.py(5)/fields.py(3)/blocks.py(2)/arrays.py(2) → CastExpr.target 族升维 |
 | L1-b | **M-3 签名类型决策进宏**：宏持 `#[descriptor]`/`#[generic_signature]` 做 JVM→Rust 映射 | `type_map.py` 423 行 + 散布映射；P-1 的字面量表失去存在理由 | 既有 M-3（原排 IR 收敛后，**建议提前做 invoke 路径试点**）。**投资保留性**：宏侧（`java_rta_gen`）在重写后原样存活——这是少数「在 Python 时代做、Rust 时代全额继承」的杠杆 |
 | L1-c | **T-1 bounds 进宏**：`impl ArrayList<E>` 的 bounds 由 `java_class!` 从 generic_signature 注入 | Python 侧 bounds 计算与透传 | 既有 T-1（无依赖，可先行） |
 
