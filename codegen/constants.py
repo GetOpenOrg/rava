@@ -57,6 +57,9 @@ OBJECT_CLASS = 'java/lang/Object'
 STRING_CLASS = 'java/lang/String'
 CLASS_CLASS = 'java/lang/Class'
 THROWABLE_CLASS = 'java/lang/Throwable'
+# LambdaMetafactory 默认产物恒实现的标记接口（JVM 语义事实；与 OBJECT_CLASS 同级的
+# 架构常量，A-5 函数式接口合成对象的 is_instance_of 静态名单使用）
+SERIALIZABLE_CLASS = 'java/io/Serializable'
 
 
 def scratch_pkg_version(out_dir: str) -> str:

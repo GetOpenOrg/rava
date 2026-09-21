@@ -27,10 +27,6 @@ fn is_instance_decl(f: &FnItem) -> bool {
     matches!(f.sig.inputs.first(), Some(syn::FnArg::Receiver(_)))
 }
 
-fn is_abstract_decl(f: &FnItem) -> bool {
-    attr_str(&f.attrs, "modifiers").map_or(false, |m| m.split(' ').any(|w| w == "abstract"))
-}
-
 /// 接口展开：与 Java 接口同名的载体类型 + 接口的擦除 vtable。
 ///
 /// - `Iface__VTable`：接口实例方法的**擦除签名** trait（无类型参数，对象安全）——
@@ -40,7 +36,8 @@ fn is_abstract_decl(f: &FnItem) -> bool {
 ///   `Deref<Target = Object>`）。实例方法保持 Java 的泛型签名（`next() -> Result<E>`），
 ///   内部经 `ObjectVTable::__interface` 取得对象的 `Iface__VTable` 视图后分派，
 ///   类型变量位置的实参 / 返回值在 `Object` 与 `E` 之间转换（等价 javac 插入的 checkcast）。
-///   函数式接口的 lambda 对象（`Rc<dyn Fn(擦除形参) -> Result<擦除返回>>`）由其唯一抽象方法直接调用。
+///   函数式接口的 lambda 实例是 A-5 合成对象（`Iface__Lambda`，sam_objects 生成），
+///   实现 `Iface__VTable` 并经 `__interface` 应答——SAM 与 default 方法都走 vtable 分派。
 /// - 命名空间语义：接口的 static 方法 / static 字段访问器落在载体的 inherent impl 上，
 ///   调用点与 Java 同构（`Map::copyOf(m)`）。
 ///
@@ -94,7 +91,6 @@ pub(crate) fn expand_interface(
     let instance_decls: Vec<&FnItem> = fns.iter()
         .filter(|f| is_instance_decl(f) && attr_str(&f.attrs, "inherited_from").is_none())
         .collect();
-    let abstract_count = instance_decls.iter().filter(|f| is_abstract_decl(f)).count();
 
     for f in &instance_decls {
         let erased = erase_signature(&f.sig, &type_param_names);
@@ -107,27 +103,27 @@ pub(crate) fn expand_interface(
         });
 
         let args = param_idents(&f.sig);
-        // 函数式接口的唯一抽象方法：lambda 对象即该方法的实现
-        let lambda_call = if is_abstract_decl(f) && abstract_count == 1 {
-            let erased_param_tys: Vec<Type> = erased.inputs.iter().filter_map(|a| match a {
-                syn::FnArg::Typed(pt) => Some((*pt.ty).clone()),
-                _ => None,
-            }).collect();
-            let erased_ret = match &erased.output {
-                syn::ReturnType::Type(_, ty) => quote! { #ty },
-                syn::ReturnType::Default => quote! { () },
-            };
+        // A-5：default 方法体提为载体固有方法 `__default_<m>`——合成对象
+        // （`Iface__Lambda`）的 vtable default 条目经它执行默认体而不重入
+        // 载体分派（载体 → vtable → 条目 → 载体 …… 会环）；载体的最终回退
+        // 同样调用它（单一默认体，两处消费）。JVM lambda 类继承接口 default
+        // 的语义由此承载。
+        let default_method: Option<proc_macro2::TokenStream> = f.block.as_ref().map(|block| {
+            let mut d_sig = without_param_mut(&f.sig);
+            d_sig.ident = format_ident!("__default_{}", f.sig.ident);
             quote! {
-                if let Some(__f) = self.__ref.0.as_any()
-                    .downcast_ref::<::std::rc::Rc<dyn Fn(#(#erased_param_tys),*) -> #erased_ret>>()
-                {
-                    return Ok(::std::convert::From::from(
-                        (__f)(#(::std::convert::Into::into(#args)),*)?));
-                }
+                #[doc(hidden)]
+                pub #d_sig #block
             }
+        });
+        let default_fallback = if default_method.is_some() {
+            let d_ident = format_ident!("__default_{}", f.sig.ident);
+            let d_args = param_idents(&f.sig);
+            quote! { return self.#d_ident(#(#d_args),*); }
         } else {
             quote! {}
         };
+        let default_method = default_method.unwrap_or_default();
         let keep_attrs = strip_meta_attrs(&f.attrs);
         let sig = without_param_mut(&f.sig);
         let missing_msg = format!("AbstractMethodError: {}.{}:{}", binary_name, mname, desc);
@@ -135,12 +131,8 @@ pub(crate) fn expand_interface(
         // 最终回退 —— vtable 未命中（lambda / 闭包接收者不实现 `Iface__VTable`）
         // 且非 SAM 直调时执行 default 体，对应 JVM 对函数式接口实例调用 default
         // 方法的语义（类覆盖 / 实现类展开体仍经 vtable 优先分派）。
-        let default_fallback = if let Some(block) = &f.block {
-            quote! { return #block; }
-        } else {
-            quote! {}
-        };
         carrier_methods.push(quote! {
+            #default_method
             #(#keep_attrs)*
             pub #sig {
                 let mut __vt: ::std::option::Option<::std::rc::Rc<dyn #vtable_ident>> = None;
@@ -149,7 +141,6 @@ pub(crate) fn expand_interface(
                     return Ok(::std::convert::From::from(
                         <dyn #vtable_ident>::#mname(&*__vt #(, ::std::convert::Into::into(#args))*)?));
                 }
-                #lambda_call
                 #default_fallback
                 panic!("{} (receiver: {})", #missing_msg, ObjectVTable::__obj_str(&*self.__ref.0))
             }

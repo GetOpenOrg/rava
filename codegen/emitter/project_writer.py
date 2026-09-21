@@ -158,6 +158,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 再统一补上继承成员声明后落盘（见 inherited_gen.py）
     _inherited_calls.reset()
     LAMBDA_NAME_LEDGER.reset()
+    from . import sam_objects as _sam_objects
+    _sam_objects.reset()
     _WRITTEN_THIS_RUN.clear()
     emissions: dict[str, ClassEmission] = {}
 
@@ -171,6 +173,12 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 扫描 jdk_classes/src/**/*_impl.rs，构建 new_format_map（已手写方法 → codegen 跳过 stub）
     # 传入 registry 使 _scan_impl_files 能通过 registry 解析嵌套类的真实 binary_name（如 HashMap$TreeNode）
     new_format_map, full_impl_classes = _scan_impl_files(out_dir, registry=registry)
+
+    # A-5 预扫描：本轮全部 invokedynamic 站点的 samtype → 可合成函数式接口集。
+    # 必须先于类文本生成：站点（sim/dynamic.py）发射时即需判定合成对象装箱
+    # 还是回落闭包装箱，合成可行性（接口发射/手写覆盖/函数式）此刻定案。
+    _sam_objects.prescan(registry, jdk_class_infos or [], class_infos,
+                         full_impl_classes)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
@@ -489,6 +497,9 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     resolve_inherited_members(emissions, registry,
                               impl_methods={k: set(v.get('methods', set()))
                                             for k, v in (new_format_map or {}).items()})
+    # A-5 收尾：函数式接口合成对象（接口文件尾部的伴生段；条目签名 / default
+    # 体有无取此刻的发射记录，与落盘内容同源）
+    _sam_objects.synthesize(emissions, registry)
     for _em in emissions.values():
         _write(_em.path, _em.text)
     _write_jdk_mod_tree()
