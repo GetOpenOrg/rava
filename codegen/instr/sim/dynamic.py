@@ -1,6 +1,7 @@
 # 从 codegen/instr/sim.py 中拆出
 
 from ...rs_ir import LetStmt, Lit, RawExpr, RawStmt, RsNamed, Var
+from ... import equiv_audit
 from ...render import render_expr, render_type
 from ...sig_types import method_sig_types
 from ...stack import I32
@@ -424,6 +425,7 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
         # JVMS §6.5：弹出 objectref，进入其监视器（null → NPE 由运行时承载）。
         # 操作数装箱为 Object（保持对象身份——wrapper 克隆共享存储的 __identity
         # 单元），重复 acquire/release 经身份命中同一监视器。
+        equiv_audit.record('monitor-mt')   # 条件等价：多线程互斥语义（S-11）
         obj_expr, _ty = sim.pop()
         sim.emit(RawStmt(f'{_monitor_operand(obj_expr)}.monitor_enter()?;'))
     elif op == 'monitorexit':

@@ -185,10 +185,11 @@ def _print_readability_summary(per_test: dict[str, dict[str, int]]) -> None:
 _EQUIV_RE = re.compile(r"^\[equiv-audit\]\s+(.+)$", re.MULTILINE)
 
 # 可 --deny 的等价 ID（= codegen/equiv_audit.py 的发射口径全集；
-# monitor-mt 待 S-20 合入后补埋、stacktrace 无 codegen 发射点，均不在列）
+# monitor-mt 已随 S-20 落地补埋（2026-09-21）；stacktrace 无 codegen 发射点，不在列）
 EQUIV_IDS = (
     'identity-hash', 'intern-identity', 'null-array', 'boxed-null',
     'class-literal', 'record-hash', 'neg-array', 'field-npe', 'class-init',
+    'monitor-mt',
 )
 
 

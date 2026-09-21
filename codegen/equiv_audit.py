@@ -60,20 +60,21 @@ class-init       S-10：类初始化触发点缺口——(a) 手写静态 native
 
 本批不埋的 ID（告警目录 seed 共 11 个）：
 
-- ``monitor-mt``（monitorenter 多线程互斥，条件等价，S-11/tasks.md P1）：
-  monitorenter 发射点正被并行任务 S-20（锁真实化）改动，本批不碰
-  codegen 的 monitor 相关代码以避免冲突；待 S-20 合入后在 monitorenter/
-  monitorexit 的发射位置（instr/sim/ 下对应模块）补埋。
 - ``stacktrace``（fillInStackTrace / 栈帧）：无独立 codegen 发射点（行为在
   runtime 的异常构造路径），随 S 候选条目立项后另行接入。
+- ``monitor-mt``（monitorenter 多线程互斥，条件等价，S-11）：**已补埋
+  （2026-09-21，S-20 monitor.rs 落地后）**——埋点两处：instr/sim/dynamic.py
+  的 monitorenter 指令发射分支 + method/codegen.py 的 ACC_SYNCHRONIZED
+  方法前导 MonitorGuard（实例锁/静态锁各计 1）。
 """
 
 from __future__ import annotations
 
-# 发射口径的 ID 全集（按 compatibility.md §4 目录顺序，扣除本批不埋的两个）
+# 发射口径的 ID 全集（按 compatibility.md §4 目录顺序，扣除 stacktrace）
 IDS: tuple[str, ...] = (
     'identity-hash', 'intern-identity', 'null-array', 'boxed-null',
     'class-literal', 'record-hash', 'neg-array', 'field-npe', 'class-init',
+    'monitor-mt',
 )
 
 _counts: dict[str, int] = {i: 0 for i in IDS}

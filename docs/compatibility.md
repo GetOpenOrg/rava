@@ -70,7 +70,7 @@
 2. **废弃 API 告警为独立正交类别**（`Deprecated:` 前缀），可与等价告警同时出现在同一特性上。
 3. **`--deny` 分级升级**：默认告警放行；`--deny near-approx` 全局升级为错误；`--deny near-approx::<id>` 细粒度升级（对齐 rustc lint 模型）。
 4. **最小可执行形态**：`[equiv-audit]` 审计行——codegen 在可检测的近/条件等价发射点（monitorenter 生成、identity hash 路径、null 数组操作等）输出计数，`run_tests.py` 汇总（完全仿照已落地的 `[readability-audit]`：`scripts/main.py` 发射、runner 顺序/并行双模式解析）。**已立项落地（2026-09-21，`codegen/equiv_audit.py`）**：
-   - 发射口径 9 个 ID（下表扣除 `monitor-mt`/`stacktrace`）：`main.py` 转译后输出 `[equiv-audit] <id>=<n> …`（只列非零项），各 ID 的口径与埋点位置见 `codegen/equiv_audit.py` 模块注释。计数是**发射点数而非缺陷数**——目标是可观测，不是全 0。
+   - 发射口径 10 个 ID（下表扣除 `stacktrace`——无 codegen 发射点）：`main.py` 转译后输出 `[equiv-audit] <id>=<n> …`（只列非零项），各 ID 的口径与埋点位置见 `codegen/equiv_audit.py` 模块注释。计数是**发射点数而非缺陷数**——目标是可观测，不是全 0。`monitor-mt` 已随 S-20 监视器真实化（`monitor.rs`，2026-09-21）补埋（monitorenter 指令发射 + ACC_SYNCHRONIZED 方法前导两处）。
    - runner（`scripts/run_tests.py`）两模式解析并在结尾输出 `[equiv]` 汇总（各 ID 总计 + 非零测试名单）；run 族失败自动直跑二进制抓 stderr 分类子族（`stub-hit` / `native-hit` / `s8-crash`（capacity overflow，S-8 崩溃族）/ `runtime-panic`），追加在失败五分类之后（`[run-classify]` 行）。
    - `--deny` 分级：`--deny equiv`（任一非零即整体失败）、`--deny equiv::<id>`（细粒度）、`--deny stub-hit`（run 失败 stub 子族）；默认全放行。
 

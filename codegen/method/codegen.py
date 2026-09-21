@@ -11,6 +11,7 @@
 """
 
 from ..types import ParsedMethod, ClassInfo
+from .. import equiv_audit
 from ..sig_parse import parse_field_type, parse_method_param_types
 from ..sig_types import emitted_method_sig_types
 from ..type_map import (
@@ -276,6 +277,7 @@ def gen_method_body(
     # 释放——RAII 守卫。实例方法锁 this，静态方法锁声明类的 Class 对象；
     # 可重入，单线程语义不变。构造器 / <clinit> 不可同步（JLS），天然缺席。
     if not is_ctor and method.name != '<clinit>' and (method.access_flags & 0x0020):
+        equiv_audit.record('monitor-mt')   # 条件等价：同步方法监视器（S-11）
         if is_static:
             entries.append(('', f'    let __sync_guard = '
                                 f'MonitorGuard::acquire(&class_monitor("{method.class_name}"))?;'))
