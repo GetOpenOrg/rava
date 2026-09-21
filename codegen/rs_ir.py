@@ -206,6 +206,10 @@ class CastExpr:
       —— `From<Object> for X<A>` 对任意 A 成立（共享存储与对象标识）。
     - box_first=True：expr 是具体 wrapper（非 Object）时先 `Object::from` 装箱
       （保持对象标识与运行时类），再经上述路径转换。
+    - interface_target=True（A-4 批次 1，checkcast 到接口）：目标是 registry 接口、
+      Rust 侧擦除记录为 Object——判定经 `try_cast_iface(binary_name)`（null 通过 +
+      is_instance_of 按运行时类静态超类型名单，含接口闭包），值不变（同一对象），
+      栈类型保持 Object（载体进类型位置后翻转为目标载体形态）。
     binary_name 仅 checked=True 时使用（运行时类族判定依据）。
     """
     expr: RsExpr
@@ -213,6 +217,7 @@ class CastExpr:
     binary_name: str = '' # 目标 JVM binary 名（checked=True 的运行时判定依据）
     checked: bool = False
     box_first: bool = False
+    interface_target: bool = False
 
 
 @dataclass

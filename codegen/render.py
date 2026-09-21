@@ -163,6 +163,11 @@ def render_cast(c: CastExpr) -> str:
     if c.box_first:
         src = f"Object::from({src})"
     if c.checked:
+        if c.interface_target:
+            # A-4 批次 1：checkcast 到接口（目标擦除记录为 Object）——try_cast::<Object>
+            # 的 downcast 快路径恒命中（&Object 即 T），判定须由 is_instance_of 承担 →
+            # 专用入口（null 通过 / 实现关系判定 / 幂等，失败 Err(class_cast) 可捕获，S-1）
+            return f'{src}.try_cast_iface("{c.binary_name}")?'
         if c.target.startswith('JArray<') and c.target.endswith('>'):
             # 数组目标的 checkcast：元素类型驱动（try_cast_array，S-4/A-1 与
             # From<Object> for JArray<E> 的合流决策点）；目标整体类型在 Rust

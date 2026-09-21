@@ -149,6 +149,23 @@ impl Object {
         }
     }
 
+    /// checkcast 到接口（A-4 批次 1，与 try_cast 的接口目标对偶）：接口类型在
+    /// Rust 侧擦除记录为 Object，`try_cast::<Object>` 的 downcast 快路径恒命中，
+    /// 实现关系判定须由 `is_instance_of`（运行时类的静态超类型名单，含接口闭包）
+    /// 承担。null 通过任何接口 checkcast（JVMS §6.5）；命中即同一对象（幂等）；
+    /// 未实现返回 Err(class_cast)——沿 `?` 传播、可被 java_try 捕获（S-1）。
+    #[jvm_ext]
+    pub fn try_cast_iface(&self, binary_name: &str) -> Result<Object> {
+        if self.0.is_jvm_null() || self.0.is_instance_of(binary_name) {
+            return Ok(self.clone());
+        }
+        Err(crate::error::JvmError::class_cast(format!(
+            "class {} cannot be cast to interface {}",
+            self.0.__class_name().replace('/', "."),
+            binary_name.replace('/', "."),
+        )))
+    }
+
     /// java.lang.Comparable.compareTo — 委托到 vtable（String/Integer 等实现类会覆盖）
     #[jvm_ext]
     pub fn compareTo(&self, other: Object) -> crate::error::Result<i32> {

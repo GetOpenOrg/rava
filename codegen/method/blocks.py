@@ -205,7 +205,14 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
             ev = f"({ev}).into()"
     elif (ty_str == 'Object' and ety_str not in _SCALAR_TYPES and ety_str != 'Object'
           and ety_str not in class_tparams):
-        ev = f"Object::from_any(Clone::clone(&{ev}))"
+        # A-4（阶段 0 证据 merge-box 段）：具体类型臂并入擦除 Object 合并槽（目标的
+        # Java 静态类型多为接口——trySplit 等协变三元合并）。装箱经 _coerce_to_object
+        # 单一决策点（与下方无公共父类分支同一约定，clone=False——arm_value 已是值
+        # 位置表达式）：registry 类走 Object::from 保持对象身份与 vtable（from_any
+        # 装成 JvmRef 会丢运行时类 / is_instance_of / __interface 应答）；仅未知形态
+        # 回落 from_any。
+        from ..instr.coerce import _coerce_to_object
+        ev = _coerce_to_object(ev, ety_str, registry, class_tparams, clone=False)
     elif ty_str in _SCALAR_TYPES or ety_str in _SCALAR_TYPES:
         ev = f"({ev} as {ty_str})"
     elif _common_ref_type(ty_str, ety_str, registry):
