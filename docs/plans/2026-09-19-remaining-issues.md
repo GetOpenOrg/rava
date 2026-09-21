@@ -402,6 +402,8 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 ### P-3 内部边界类按需实现的现状清单 【跟踪项】
 本轮新增/修改的边界与 native 实现：`unsafe__impl.rs`（`getUnsafe`、`allocateUninitializedArray`）、`arrays_support_impl.rs`（`vectorizedHashCode`、byte `mismatch`）、`StaticProperty.USER_*`、`locale_utils_impl.rs`、`BaseLocale.hashCode/equals`、`InternalLock.newLockOr`、`Class.getPrimitiveClass`、`shared_secrets_impl.rs`、`class_impl.rs`、`throwable_impl.rs`、`stream_encoder_impl.rs`、`utf_8_impl.rs`、`vm_impl.rs`、`blocker_impl.rs`、`file_descriptor_impl.rs`、`file_output_stream_impl.rs`、`thread_impl.rs`。其余方法保持 `panic!("stub: ...")`，随测试覆盖扩大按需补全（符合原则 3b，非缺陷）。
 
+> **2026-09-21 P-3 轮补全（7b64afa）**：`java_lang_access_impl.rs` 新增 `join`（按 JDK 21 `String.join` 字节码算法还原：coder 按位或、Latin1→UTF16 按位展宽、溢出抛 OOM）——TestStreamCollectors 通过；新增 `jdk/internal/math/double_to_decimal_impl.rs`（`appendTo`/`toString`/`<init>`，g 表 1234 个 long 从 `MathUtils.<clinit>` 机械提取，5271 个 double 与 JDK 21 对拍零差异）——TestStringBuilderOps 通过。**注意**：BFS 在 JavaLangAccess 接口截断，看不见 JLA.join→`String.join` 静态这条边，生成侧 `String.join_str_str_str_arr_str_i` 仍为存根——此类「接口截断导致静态边不可见」若再出现，考虑对边界接口的 upcall 声明做静态边收录。遗留按需项：`DoubleToDecimal.split`（Formatter `%f/%e/%g`）、`FloatToDecimal`。
+
 ---
 
 ## V. 验证覆盖缺口
