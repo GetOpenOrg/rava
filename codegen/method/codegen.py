@@ -270,6 +270,19 @@ def gen_method_body(
         # 实例方法：绑定 this = self，供字节码（aload_0 + getfield/putfield）使用
         entries.append(('', "    let this = self;"))
 
+    # ── ACC_SYNCHRONIZED 前导（S-20 真实化，0x0020 == emitter.attrs._ACC_SYNCHRONIZED）──
+    # 同步方法（JLS §8.4.3.6 / JVMS §2.11.10）字节码无 monitorenter/exit，由
+    # 方法标志承载：进入时获取监视器，任何完成路径（return / 异常 / panic 展开）
+    # 释放——RAII 守卫。实例方法锁 this，静态方法锁声明类的 Class 对象；
+    # 可重入，单线程语义不变。构造器 / <clinit> 不可同步（JLS），天然缺席。
+    if not is_ctor and method.name != '<clinit>' and (method.access_flags & 0x0020):
+        if is_static:
+            entries.append(('', f'    let __sync_guard = '
+                                f'MonitorGuard::acquire(&class_monitor("{method.class_name}"))?;'))
+        else:
+            entries.append(('', '    let __sync_guard = '
+                                'MonitorGuard::acquire(&Object::from(Clone::clone(this)))?;'))
+
     # ── 控制流：逐块模拟 + 归约 → 结构化（或状态机兜底）→ entries ─────────
     ledger = JumpLedger(f"{method.class_name}.{method.name}:{method.descriptor}")
     entries.extend(_structured_entries(method, sim, registry, _class_tparams, ledger))

@@ -54,6 +54,69 @@ impl Object {
     #[jvm_native]
     pub fn toString(&self) -> Result<String> { Ok(String::from(self.0.__obj_str())) }
 
+    // ── Object 监视器方法（S-20）：bare-Object 接收者的调用落点 ─────────────
+    //
+    // invokevirtual java/lang/Object.{wait,notify,notifyAll} 在接收者静态类型为
+    // Object 时直调本层固有方法（与 getClass 同一形态）；具体类型接收者经
+    // ObjectVTable 的默认方法（object.rs）分派。命名与生成侧同源（描述符后缀）。
+
+    /// java.lang.Object.wait()V（等价 wait(0)）
+    #[jvm_native]
+    pub fn wait(&self) -> Result<()> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        crate::monitor::wait_timeout(self.0.__identity() as usize, false, 0, 0)
+    }
+
+    /// java.lang.Object.wait(J)V
+    #[jvm_native]
+    pub fn wait_l(&self, millis: i64) -> Result<()> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        crate::monitor::wait_timeout(self.0.__identity() as usize, false, millis, 0)
+    }
+
+    /// java.lang.Object.wait(JI)V
+    #[jvm_native]
+    pub fn wait_l_i(&self, millis: i64, nanos: i32) -> Result<()> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        crate::monitor::wait_timeout(self.0.__identity() as usize, false, millis, nanos)
+    }
+
+    /// java.lang.Object.notify()V：无等待者时静默
+    #[jvm_native]
+    pub fn notify(&self) -> Result<()> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        crate::monitor::notify(self.0.__identity() as usize, false)
+    }
+
+    /// java.lang.Object.notifyAll()V
+    #[jvm_native]
+    pub fn notify_all(&self) -> Result<()> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        crate::monitor::notify_all(self.0.__identity() as usize, false)
+    }
+
+    /// monitorenter（指令侧，codegen 发射）：可重入获取监视器
+    #[jvm_ext]
+    pub fn monitor_enter(&self) -> Result<()> {
+        crate::monitor::enter(self.0.__identity() as usize, self.0.is_jvm_null())
+    }
+
+    /// monitorexit（指令侧，codegen 发射）：释放一层重入计数
+    #[jvm_ext]
+    pub fn monitor_exit(&self) -> Result<()> {
+        crate::monitor::exit(self.0.__identity() as usize)
+    }
+
     #[jvm_native]
     pub fn getComponentType(&self) -> Result<Object> {
         panic!("stub: Class.getComponentType()")

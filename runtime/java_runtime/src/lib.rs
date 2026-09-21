@@ -3,6 +3,7 @@ pub mod array;
 pub mod error;
 pub mod java;
 pub mod jdk;
+pub mod monitor;
 pub mod sun;
 
 pub use array::JArray;
@@ -141,6 +142,7 @@ pub mod prelude {
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;
     pub use super::{register_constant_directory, lookup_constant, constant_directory_universe};
+    pub use super::monitor::{MonitorGuard, class_monitor};
     pub use std::rc::Rc;
     pub use std::cell::RefCell;
     pub use super::MutexHolder;

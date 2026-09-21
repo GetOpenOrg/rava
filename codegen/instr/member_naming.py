@@ -79,12 +79,61 @@ _JAVA_RUST_NAME_CONFLICTS = frozenset()
 _JAVA_RUST_RENAME: dict[str, str] = {}
 
 
+_ROOT_API_NAMES: frozenset[str] | None = None
+
+
+def _handwritten_root_api() -> frozenset[str]:
+    """手写根类 `java/lang/Object` 的 API 名面（pub fn 名）。
+
+    根类不经 registry 翻译（运行时根类），其同名重载的 Rust 命名
+    （wait()V→wait、wait(J)V→wait_l、wait(JI)V→wait_l_i）以手写层为唯一权威；
+    与 method_gen._scan_impl_files 同一来源（runtime/java_runtime/src），不在
+    Python 侧维护方法名字表。单一形态方法（equals/notify/...）的后缀名不在
+    名面中，调用侧名字不受影响。"""
+    global _ROOT_API_NAMES
+    if _ROOT_API_NAMES is None:
+        import os
+        names: set[str] = set()
+        base = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            'runtime', 'java_runtime', 'src', 'java', 'lang')
+        for fname in ('object_impl.rs', 'object_ext.rs', 'object.rs'):
+            try:
+                with open(os.path.join(base, fname), encoding='utf-8') as fh:
+                    names.update(m.group(1) for m in
+                                 re.finditer(r'\bpub fn\s+(\w+)\s*[(<]', fh.read()))
+            except OSError:
+                pass
+        _ROOT_API_NAMES = frozenset(names)
+    return _ROOT_API_NAMES
+
+
+def _handwritten_root_overload_name(mname: str, comment: str) -> str | None:
+    """根类 Object 声明的同名重载（S-20 wait 族）→ 描述符后缀名。
+
+    `wait` 只由 Object 声明（final），任意接收者的 wait 调用都落在根类 API 上；
+    后缀名存在于手写 API 名面时采用（wait_l / wait_l_i），否则保持原名
+    （wait()V 无后缀；equals 等的候选后缀名不在名面，不触发）。"""
+    desc_m = re.search(r':(\([^)]*\)\S+)', comment)
+    if not desc_m:
+        return None
+    mangled = mangle_name(mname, desc_m.group(1))
+    if mangled != mname and mangled in _handwritten_root_api():
+        return mangled
+    return None
+
+
 def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dict | None) -> str:
     """查找 registry 中 cls_name 类的 mname 方法是否重载，重载则返回 mangled 名，否则原名。
     支持短名（Objects）和全路径名（java/util/Objects）查找。
-    java_runtime 手写类（ArrayList/Object 等）不做 mangle，其 API 已固定。"""
+    java_runtime 手写类（ArrayList/Object 等）不做 mangle，其 API 已固定；
+    根类 Object 的 wait 族重载按手写 API 名面取名（见 _handwritten_root_overload_name）。"""
     if not registry or not mname or (mname.startswith('<') and mname != '<init>'):
         return mname
+    # 根类 Object 声明的同名重载：描述符后缀名在手写 API 名面时直接采用
+    _root_mangled = _handwritten_root_overload_name(mname, comment)
+    if _root_mangled is not None:
+        return _root_mangled
     # java_runtime 手写类直接跳过 mangle（其 API 已固定，不走 jdk_classes 重命名逻辑）
     short = cls_name.rsplit('/', 1)[-1]
     if short in _JAVA_RUNTIME_SHORT_NAMES:

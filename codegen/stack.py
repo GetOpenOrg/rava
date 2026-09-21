@@ -522,16 +522,18 @@ class StackSim:
         if _is_this and _is_ref_ty:
             # synchronized(this) 模式：dup; astore N; monitorenter
             # 特征：astore 之后栈顶仍有一个 this（dup 留下的，供 monitorenter 消费）。
-            # monitor 追踪变量只被 monitorexit（no-op）使用，生成 () 而非 Clone::clone(this)，
-            # 避免 vtable default impl 中 Self: Clone + Sized 约束失败（E0277）。
+            # monitor 追踪变量供配对的 monitorexit（异常处理器路径）使用——存身份等价
+            # 的 Object 装箱（wrapper 克隆共享存储 __identity，与 monitorenter 侧
+            # 命中同一监视器）。vtable 上下文的 Clone::clone(this) 由
+            # classify_vtable_body 路由到 wrapper 重建（NeedsWrapper）。
             _top_is_this = (
                 len(self.stack) > 0
                 and isinstance(self.stack[-1][0], Var)
                 and self.stack[-1][0].name == 'this'
             )
             if _top_is_this:
-                expr = RawExpr("()")
-                ty = RsNamed("()")
+                expr = RawExpr("Object::from(Clone::clone(this))")
+                ty = RsNamed("Object")
             else:
                 # Clone::clone 而非 this.clone()：类的 Java clone() 方法会遮蔽 std Clone
                 expr = RawExpr("Clone::clone(this)")

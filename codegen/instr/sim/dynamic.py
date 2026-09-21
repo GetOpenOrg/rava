@@ -15,6 +15,20 @@ from ..member_naming import (lambda_impl_rust_name, LAMBDA_NAME_LEDGER,
                              _mangle_if_overloaded)
 
 
+def _monitor_operand(obj_expr) -> str:
+    """monitorenter / monitorexit 的操作数 → 保持对象身份的 Object 表达式。
+
+    - `this`（&Self / owned Self）：`Object::from(Clone::clone(this))`——
+      vtable 上下文的归类（classify_vtable_body）按 `Clone::clone(this)`
+      子串路由到 wrapper 重建；owned-this（构造器）由 _normalize_this_clone 归一。
+    - 其余表达式：`Into::<Object>::into(Clone::clone(&expr))`（Object 自反 /
+      wrapper / String / Class / JArray 均满足 blanket From）。
+    同一对象的多次装箱共享存储身份（__identity 单元），监视器挂接点唯一。"""
+    if isinstance(obj_expr, Var) and obj_expr.name == 'this':
+        return 'Object::from(Clone::clone(this))'
+    return f'Into::<Object>::into(Clone::clone(&({render_expr(obj_expr)})))'
+
+
 def _unbox_object_arg(val_expr: str, prim_desc: str, registry) -> str | None:
     """Object 形态的 SAM 实参 → 实现方法基本类型形参（LambdaMetafactory 装箱适配
     的拆箱侧，S-3.1 残留）：`x.try_cast::<Integer>("java/lang/Integer")?.intValue()?`。
@@ -405,11 +419,16 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                 if _ret_desc != 'V':
                     sim.push(RawExpr('Object::default()'), RsNamed('Object'))
 
-    # ── 同步（忽略，不支持多线程语义）──
+    # ── 同步（S-20 真实化：可重入监视器，单线程语义不变）──
     elif op == 'monitorenter':
-        sim.pop()  # pop object reference，忽略 monitor
+        # JVMS §6.5：弹出 objectref，进入其监视器（null → NPE 由运行时承载）。
+        # 操作数装箱为 Object（保持对象身份——wrapper 克隆共享存储的 __identity
+        # 单元），重复 acquire/release 经身份命中同一监视器。
+        obj_expr, _ty = sim.pop()
+        sim.emit(RawStmt(f'{_monitor_operand(obj_expr)}.monitor_enter()?;'))
     elif op == 'monitorexit':
-        sim.pop()  # pop object reference，忽略 monitor
+        obj_expr, _ty = sim.pop()
+        sim.emit(RawStmt(f'{_monitor_operand(obj_expr)}.monitor_exit()?;'))
 
     # ── 杂项 ──
     elif op in ('nop', 'wide'): pass
