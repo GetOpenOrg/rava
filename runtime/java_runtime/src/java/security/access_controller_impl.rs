@@ -1,12 +1,24 @@
 use crate::prelude::*;
 use super::AccessController;
+use super::AccessControlContext;
 use super::PrivilegedAction__VTable;
 
 // 内部边界类 java.security.AccessController（java/security/ 属 VM 安全服务层，BFS 截断）。
-// 按 java.util.Arrays$LegacyMergeSort 调用链按需实现 doPrivileged(PrivilegedAction)，
+// 按调用链按需实现（doPrivileged：Arrays$LegacyMergeSort；getContext：Thread.<init>），
 // 其余方法保持 panic 存根。
 
 impl AccessController {
+    /// `AccessControlContext getContext()`：返回当前访问控制上下文
+    /// （`Thread.<init>` 的 acc==null 分支消费）。
+    ///
+    /// 原生二进制无安全管制（SecurityManager 恒 null、访问控制上下文从不
+    /// 安装）：HotSpot 在未安装 SM 时该上下文为空且从不被检查。返回 null
+    /// 载体——消费点仅写入 `Thread.inheritedAccessControlContext` 字段，
+    /// 读取侧（checkPermission 路径）在 SM==null 下全短路。
+    #[jvm_boundary]
+    pub fn getContext() -> Result<AccessControlContext> {
+        Ok(AccessControlContext::default())
+    }
     /// `doPrivileged(PrivilegedAction<T>)T`：直呼 action 的 `run()` 并返回其结果。
     ///
     /// 原生单线程二进制没有安全管制（JDK 21 的 SecurityManager 恒为 null、

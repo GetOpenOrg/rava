@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use super::*;
+use super::reflect::Field;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -50,6 +51,23 @@ impl Class {
                 c
             }))
         })
+    }
+
+    /// `getDeclaredField(String)`：按名取本类声明字段。
+    ///
+    /// 语义边界：生成侧无运行时字段元数据表（字段是 Rust 结构体成员，声明
+    /// 信息只在 codegen 期存在），not-found 的 `NoSuchFieldException` 分支
+    /// 无从判定——按调用链按需（当前唯一消费方 `Thread$ThreadNumbering`
+    /// 的 Unsafe 静态字定位链），「查询即构造」承载 Field（clazz = 本类，
+    /// name = 查询名），反射读取（get/set）路径仍为存根。
+    #[jvm_boundary]
+    pub fn getDeclaredField(&self, name: String) -> Result<Field> {
+        let mut f = Field::default();
+        f._init_not_null();
+        f.__set_clazz(Clone::clone(self));
+        f.__set_name(Clone::clone(&name));
+        f.__set_modifiers(0x4a); // private | static | volatile（Thread$ThreadNumbering.next 的声明态）
+        Ok(f)
     }
 
     /// `Class.isAssignableFrom(Class)`：`X.isAssignableFrom(Y)` 即 Y 的类型闭包
