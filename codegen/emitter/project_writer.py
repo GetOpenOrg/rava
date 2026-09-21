@@ -13,6 +13,7 @@ from ..constants import RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME
 from ..constants import scratch_pkg_version as _scratch_pkg_version
 from .attrs import to_snake, pkg_from_java
 from .method_gen import _scan_impl_files
+from .import_gen import collect_referenced
 from .class_writer import _gen_class_rs
 from .inherited_gen import ClassEmission, resolve_inherited_members
 from .interface_gen import resolve_interface_impls, resolve_interface_inherited_members
@@ -380,11 +381,16 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # scratch 语义：不做清理。同 scratch 复跑 = 同测试作用域，文件全部被覆写；
     # 换测试 = 换 scratch 目录（脚本层保证）。残留文件不被 lib.rs 声明，无害。
 
-    # 提取包名
+    # 提取包名：按字节码 SourceFile 属性对应源文件。同一编译单元的全部类
+    # （入口、嵌套、兄弟顶层类）共享该文件的 package 声明；位置 zip 配对
+    # 无法覆盖类发现阶段加入的附加类
     packages: dict[str, str] = {}
     if java_files:
-        for jf, ci in zip(java_files, class_infos):
-            packages[ci.name] = pkg_from_java(jf)
+        _pkg_by_source = {os.path.basename(jf): pkg_from_java(jf) for jf in java_files}
+        for ci in class_infos:
+            _pkg = _pkg_by_source.get(ci.source_file)
+            if _pkg is not None:
+                packages[ci.name] = _pkg
 
     # 计算文件路径
     layout: dict[str, tuple] = {}
@@ -407,8 +413,11 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         user_mod_tree.setdefault(parent, set()).add(mod_name)
         user_reexport.setdefault(parent, set()).add((mod_name, ci.name))
 
-    # 构建每个用户类所需的兄弟内部类导入（crate::mod::Type）
-    # 原则：一个外部类文件引用其内部类时，需要 use crate::{inner_mod}::{InnerType}
+    # 构建每个用户类所需的同 crate 兄弟类导入（use crate::[pkg::]mod::Type）
+    # 原则：用户类引用同编译单元的其他用户类（嵌套类、同文件兄弟顶层类——各自
+    # 独立成文件）时，类型名须经 use 引入作用域。引用集来自字节码
+    # （collect_referenced：超类/接口/描述符/指令注释/局部变量表/分派子类型）；
+    # 内部类关系额外经 InnerClasses 属性补充
     _user_layout_names: set[str] = set(layout.keys())
     _sibling_imports: dict[str, list[str]] = {}
     for ci in class_infos:
@@ -418,12 +427,18 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         def _add_import(class_name: str) -> None:
             if class_name not in _user_layout_names or class_name == ci.name:
                 return
-            mod_n = to_snake(class_name)
+            _, _pkg_parts, _mod_n = layout[class_name]
+            _mod_path = '::'.join(_pkg_parts + [_mod_n])
             type_n = short_cls(class_name)
-            line = f"use crate::{mod_n}::{type_n};"
+            line = f"use crate::{_mod_path}::{type_n};"
             if line not in seen_imports:
                 seen_imports.add(line)
                 imports.append(line)
+
+        # 字节码引用集里的其他用户类（generated_classes=None 不做生成集过滤，
+        # JDK 名由 _add_import 的布局成员检查排除）
+        for _ref in sorted(collect_referenced(ci, registry, None)):
+            _add_import(_ref)
 
         # 通过 InnerClasses 属性发现该类定义的内部类
         for ic in (ci.inner_classes or []):

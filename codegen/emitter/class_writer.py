@@ -626,19 +626,33 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
     实现体的收录，不保证槽位在每个翻译子类上有条目——缺条目则落回声明类的
     trait default（抽象声明 = stub panic）。抽象声明不登记（无体可转发，trait
     default 即存根）；native 声明仅在其体由共置 _impl.rs 手写时登记（__impl_
-    钩子路径），未手写的 native 转发到声明类存根与 trait default 等价。"""
+    钩子路径），未手写的 native 转发到声明类存根与 trait default 等价。
+
+    链模式按**逐祖先**判定（非仅直接超类）：用户超类链可经用户祖先进入 JDK
+    祖先（枚举常量体 Operation$1 → Operation → java/lang/Enum），JDK 祖先段
+    必须切换为转发——全量体重发射在 JDK 链不可行的四条理由见上（E0433 /
+    E0407 / E0599 / E0201）。
+
+    覆盖判定按 vtable 槽位语义（同名 + 参数描述符，返回可协变，键与
+    _same_vtable_slot 同构），与接口 default 继承的 existing_param_sigs 一致：
+    协变覆盖（get()Integer 覆盖 get()Object）经 vtable_erasure 已填父槽位，
+    精确描述符匹配漏判 → 父方法重发射与真实覆盖重名（E0201）。"""
     _user_chain = bool(ci.super_class) and '/' not in ci.super_class
     if not ci.is_interface and registry and ci.super_class and (_user_chain or call_chain is not None):
         import copy as _copy3
         from .. import inherited_calls as _inherited_calls
-        _vinh_existing: set[tuple] = {(m.name, m.descriptor) for m in visible_methods}
+        from .vtable_util import _descriptor_param_part as _vinh_param_part
+        # 覆盖判定键：vtable 槽位（name + 参数描述符部分，返回类型协变不计）
+        _vinh_existing: set[tuple] = {
+            (m.name, _vinh_param_part(m.descriptor)) for m in visible_methods}
         _vinh_super = ci.super_class
         while _vinh_super and _vinh_super != _OBJECT_CLASS and _vinh_super in registry:
+            _vinh_is_user = '/' not in _vinh_super   # 链模式逐祖先判定
             _vinh_sci = registry.get(_vinh_super)
             if _vinh_sci is None:
                 break
             for _vm in _vinh_sci.methods:
-                if (_vm.name, _vm.descriptor) in _vinh_existing:
+                if (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_existing:
                     continue
                 if _vm.is_static or _vm.is_constructor or _vm.name in ('<init>', '<clinit>'):
                     continue
@@ -647,11 +661,11 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     (ci.name, _vm.name, _vm.descriptor) in call_chain or
                     (_vinh_super, _vm.name, _vm.descriptor) in call_chain
                 )
-                if not _user_chain and not _vm_in_cc:
+                if not _vinh_is_user and not _vm_in_cc:
                     continue  # JDK 链：调用链未收录的祖先虚方法不登记（无体可转发，
                     # 留空槽位 = 声明类 trait default，与既有行为一致）
-                _vinh_existing.add((_vm.name, _vm.descriptor))
-                if not _user_chain:
+                _vinh_existing.add((_vm.name, _vinh_param_part(_vm.descriptor)))
+                if not _vinh_is_user:
                     # JDK 链：槽位填补经继承成员转发（inherited_gen 第二阶段生成）。
                     # 登记键 = (接收者, Java 方法名, 参数描述符部分)，与调用点触发
                     # 的需求同一账本（去重 / bridge 优先级 / 导入全部复用）
