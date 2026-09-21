@@ -408,12 +408,12 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 
 | # | 缺陷 | 证据 | 状态 |
 |---|---|---|---|
-| 1 | `Math.rint` 未按 HALF_EVEN（rint(2.5) 应 2.0） | TestMathRound `rint=2.0`→`3.0` | fcb04ce 复现 |
-| 2 | NaN 判定与 NaN `==`：JLS 15.21.1（NaN≠NaN）、`Double.isNaN` | TestNaN `nanEq=false`→`true`、`isNaN` 反转；TestFloatBits 同根 | fcb04ce 复现（FloatBits 28474b1 复现） |
-| 3 | 增补字符（非 BMP）字面量未走 UTF-16 表示，代理对被 Latin1 分支吞掉 | TestStringCodePoints `length=4`→`20`、`codePointAt1` 128512→239 | fcb04ce 复现 |
-| 4 | `Double.toString` 科学计数规则缺失（<1e-3 / ≥1e7） | TestMathExact `ulp=2.22E-16`→`0.000…313` | **28474b1 复现** |
+| 1 | `Math.rint` 未按 HALF_EVEN（rint(2.5) 应 2.0） | TestMathRound `rint=2.0`→`3.0` | **✅ 已修（0078906）**：删手写 rint，落回已转译的 `StrictMath.rint` 纯 Java 链（JDK 21 已非 native fdlibm）；21.9 万点对拍逐位一致 |
+| 2 | NaN 判定与 NaN `==`：JLS 15.21.1（NaN≠NaN）、`Double.isNaN` | TestNaN `nanEq=false`→`true`、`isNaN` 反转；TestFloatBits 同根 | **✅ 已修（73a6c54）**：根因在 codegen 比较发射——dcmpl/dcmpg 降级为双比较致 NaN 三路值算 0；改发 `partial_cmp().map_or(∓1, o as i32)`（JVMS §6.5 语义）；1.9 万对值对拍零差异；TestNaN/TestFloatBits 转绿 |
+| 3 | 增补字符（非 BMP）字面量未走 UTF-16 表示，代理对被 Latin1 分支吞掉 | TestStringCodePoints `length=4`→`20`、`codePointAt1` 128512→239 | 待修（string 域） |
+| 4 | `Double.toString` 科学计数规则缺失（<1e-3 / ≥1e7） | TestMathExact `ulp=2.22E-16`→`0.000…313`（**现为该测试唯一剩余 diff**） | 待修（java_fmt_f64，format 域） |
 | 5 | 栈帧未填充（`fillInStackTrace`/`getStackTrace` 空） | TestCustomException（当前被 E0425 编译错挡在前面，见 S-18 注记） | 待 import 缺口修复后复验 |
-| 6 | `expm1` 尾数值偏差（2026-09-21 午后新增） | TestMathExact `expm1=1.718281828459045`→`…453`——expm1 native 精度或最短表示格式化 | 28474b1 复现 |
+| 6 | `expm1` 尾数值偏差（2026-09-21 午后新增） | TestMathExact `expm1=1.718281828459045`→`…453` | **✅ 已修（444ad9a）**：纯 1 ulp 值差——删手写 `exp_m1()`，落回已转译 `StrictMath.expm1 → FdLibm` 链（fdlibm 常量从 .class ConstantValue 逐位还原）；202.6 万点对拍零差异 |
 
 - **终态**：上表 5 项输出与 Java 逐字一致；#4 落在 `java_fmt_f64`，#5 落在 throwable 边界层，其余为 math/string native 补全。
 - **验收指标**：对应用例 output diff = 0。

@@ -39,7 +39,7 @@
 | **S-20 `Object.wait/notify/notifyAll`** | 166 归类新增（4 用例） | runtime 补三方法接 InternalLock；与 monitorenter 真实化联动 |
 | **数组视图 coerce 族** | 166 归类新增，**复验升级 6 例**（第二大杠杆） | 编译期 2（TestArrayCopy/TestBigInteger E0308）+ 运行期 CCE 4（TestArrayCovariance/BigDecimal/DurationPeriod/LocalDate，`Object`→`JArray<T>` 含多维未发射）；JDK25 批 8 例同型 E0308 待判同根因——若同根因合计 14 例 |
 | **native 双件：`CDS.getRandomSeedForDumping` + `StringUTF16.isBigEndian`** | 4.2 复验新增（8 例） | 两处 runtime 手写（数行级）：CDS 压 6 用例（ListOf/LinkedHash/CollectionFactory/StreamMore/AutoboxEdge/LambdaVar），isBigEndian 压 2（StringSearch/StringEdge）——收益密度最高 |
-| **S-19 输出一致性缺陷群（六件）** | 166 归类新增 P1 | `Math.rint` HALF_EVEN / NaN 判定与 `==` / 非 BMP 字面量 UTF-16 / `Double.toString` 科学计数（java_fmt_f64）/ 栈帧填充（挡在 E0425 后）/ **expm1 尾数偏差（28474b1 新增）**；前 4 项+expm1 已复现 |
+| **S-19 剩余三件（#3/#4/#5）** | math 三件已修（rint/NaN/expm1，`0078906`+`73a6c54`+`444ad9a`，TestMathRound/TestNaN/TestFloatBits 转绿；NaN 根因为 codegen dcmpl/dcmpg 发射层，全部浮点比较受益） | 剩：非 BMP 字面量 UTF-16（TestStringCodePoints，string 域）、`Double.toString` 科学计数（TestMathExact 唯一剩余行，java_fmt_f64）、栈帧填充（挡在 TestCustomException E0425 后） |
 | **downcast 链移除（859 处）** | A-1 后主推 | A-2 可读层清零主杠杆：`from_any`/`downcast_ref`/`.downcast::<T>()` 在方法体清零；纯 Python 侧 + 宏封装；前置全就绪 |
 
 ## P1 · 功能缺口
