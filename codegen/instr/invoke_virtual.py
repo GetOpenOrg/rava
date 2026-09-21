@@ -218,7 +218,21 @@ def _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
                 sim.emit(RawStmt(f"{_iface_call};"))
             else:
                 v = sim.fresh()
-                sim.emit(RawStmt(f"let {v}: {rust_ret} = {_iface_call};"))
+                # 擦除描述符返回 Object 而接口签名给出具体引用类型（Node_OfDouble
+                # .asPrimitiveArray → JArray<f64>）：装箱为 Object 记录（返回位
+                # Object↔JArray<T>，与 _emit_call_result 的对齐规则同源）。方法可在
+                # 接口闭包的祖先接口上声明（OfPrimitive 的 T_ARR），按声明者解析
+                _sig_ret_v = _lookup_method_sig_ret(
+                    short_cls(_decl_bin), mname, params, ret, registry,
+                    caller_class=getattr(sim, 'class_name', ''),
+                    caller_tparams=sim.class_type_params,
+                    receiver_type=f"{short_cls(cls_binary)}{_iface_targs}",
+                )
+                if rust_ret == 'Object' and _sig_ret_v is not None and _sig_ret_v != 'Object':
+                    sim.emit(RawStmt(
+                        f"let {v}: {rust_ret} = {_coerce_to_object(_iface_call, _sig_ret_v, registry, sim.class_type_params)};"))
+                else:
+                    sim.emit(RawStmt(f"let {v}: {rust_ret} = {_iface_call};"))
                 sim.push(Var(v), RsNamed(rust_ret))
             return
     subtypes = _get_all_subtypes_ordered(cls_binary, registry)
@@ -715,10 +729,14 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
             sim.emit(RawStmt(f"let {v}: {rust_ret} = {_build_call(rust_mname, _recv, arg_str)}?;"))
             sim.push(Var(v), RsNamed(rust_ret))
         elif rust_mname == 'clone' and obj_ty not in ('Object', '()'):
-            # invokevirtual Object.clone 调用在具体类型上（如数组）：
-            # Rust 的 clone() 不返回 Result，用 Object::from_any 包装匹配 Java 返回类型
-            # Clone::clone 而非 .clone()：接收者可能是带 Java clone() 的类
-            sim.emit(RawStmt(f"let {v}: Object = Object::from_any(Clone::clone(&{obj_e}));"))
+            # invokevirtual Object.clone 调用在具体类型上（如数组）：Java 的 clone 是
+            # 浅拷贝（新对象、字段 / 元素共享引用），不是 Rust 的引用克隆——
+            # Object__clone_base 经接收者 vtable 的 __shallow_copy 派发（数组 →
+            # 新数组；未实现 Cloneable → CloneNotSupportedException，与 Java 一致），
+            # 结果以 Object 返回（与 Object.clone 的返回类型一致）。
+            # `this` 在实例方法中已是 &Self（再取 && 会脱离 ObjectVTable 约束）
+            _recv_clone = 'this' if obj_e == 'this' else f'&{obj_e}'
+            sim.emit(RawStmt(f"let {v}: Object = Object__clone_base({_recv_clone})?;"))
             sim.push(Var(v), RsNamed('Object'))
         else:
             # 签名真实返回类型与擦除类型不一致时的对齐（与 invokestatic 同规则）：
