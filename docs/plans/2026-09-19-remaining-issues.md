@@ -145,7 +145,11 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
   这样 `let list: List<String> = ArrayList::new();` 的 upcast 就能走 `From` 而不是 `Object::from_any`，同时 `Function<Object,Object>: From<Object>` 也得到满足（见 A-5 与 S-15 的函数式接口实现）。
 - **终态**：接口类型位置一律为 `I<E>` carrier；调用点为 `it.hasNext()` / `it.next()`；协变返回由 vtable 槽位的擦除签名 + carrier 的类型化视图统一处理；`java_class!` 对每个 `implements` 接口生成 `From` + `TryFrom<Object>` impl；接口 upcast 的 `Object::from_any` = 0。
 
-### A-5 lambda 不是对象 【P1】
+### A-5 lambda 不是对象 【已修复，A-5 轮】
+
+> **已修复（`4fa0f6d`+`54e2026`+`50eede0`，三批：合成对象/站点装箱/回退移除）**：`sam_objects.py` 预扫描 invokedynamic 站点按 JLS §9.8 证据驱动生成 `<Iface>__Lambda` 合成对象（共置接口翻译文件尾部；27 个 JDK 接口实测生成，UnaryOperator 因语料未现不铺）；`ObjectVTable` 带 `__interface` 闭包应答 + Serializable 名单（LambdaMetafactory 恒实现集）；SAM 直调闭包、default 经宏 `__default_` 因子化执行；`TryFrom<Object>` 保留 CCE 语义。站点改 `Object::from(X__Lambda::new(..))`，两处 `Rc<dyn Fn>` 回退删除。**量化（17 用例 vs 基线）：`downcast_ref` 70→0、`from_any` 4018→1588（−60.5%）**；equiv/raw/bfs 五审计线逐字一致；触发用例保持全绿（注：其"reversed 尾 2 行/1 E0308"症状已被 downcast 链移除先行修复，本任务验证语义=架构整体替换后保持绿+指标达成）；独立探针证实 `instanceof Predicate/Serializable`=true、default-on-lambda 正确。**遗留**：跨接口强转 CCE 归 A-3/A-4；桥接位空档（合成对象对桥接覆盖槽不提供条目，与旧行为等价）随桥接建模深化；`rc_new` 每闭包一站为语义必需，A-2 口径维持现状计数（归零需闭包 IR 化为捕获字段类形态）。`from_any` 残余 1588 归属 A-4 域（泛型擦除位取值/构造合并/静态装箱）。
+
+### A-5（原文）
 
 - **现状**：lambda 以闭包装箱（`Object::from_any` + carrier 中的 `downcast_ref` 回落）；不实现 `I__VTable`，因此 default 方法不能在 lambda 上调用，`__interface` 查询对 lambda 无效。实测影响用例：TestLambda、TestMethodRef、TestOptional、TestArraysUtil、TestPatternMatch、TestStreamBasic、TestStreamAdvanced、TestStreamCollectors、TestStringRegex、TestInterfaceStatic、TestEnumMethods、TestFunctionalInterface（12 个，对应 e2e-issues C1）。
 - **设计方向**（在现有 `Rc<dyn ObjectVTable>` 架构上演进，不引入新公开 trait）：
