@@ -129,7 +129,11 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 - **终态**：rs_ir 增加 `CastExpr` / `InstanceOfExpr` 节点，所有消费方按节点而非字符串匹配；instanceof 全部按擦除类做运行时判定；失败的 checkcast 抛 `ClassCastException`（见 S-1）；协变 upcast 由 `java_class!` 生成的 `From` impl 覆盖。
 - **验收指标**：codegen 中对 `downcast` 字符串的模式匹配 = 0；`expect("ClassCastException")` = 0。
 
-### A-4 接口 carrier 未进入类型位置（T-2） 【P1】
+### A-4 接口 carrier 未进入类型位置（T-2） 【阶段 0+两批已落地，批次 3+ 遗留】
+
+> **阶段 0+批次 1+2（2026-09-22，`c29b83a`+`2e9e328`+`bdda2fb`）**：证据落盘 `docs/reports/2026-09-21-a4-phase0-evidence.md`——from_any 2538 分段（**A-1 取值端 62% 勿误伤 / A-4 merge-box 段 26% 已全灭**：合并槽装箱改经 `_coerce_to_object` 单一决策点，25 测集 from_any 879→617，残余 100% A-1 域）；**真正主度量=接口载体调用点转换 `Into::<I>::into(..).m()` 32931 处**（from_any 的 13 倍）——批次 3+ 类型位置载体化的攻坚对象。批次 1'：**checkcast 到接口真实化**（`try_cast_iface`：null 通过+接口闭包判定+可捕获 Err，关闭"接口 cast 目标被静默丢弃"空档，A-5 遗留的跨接口 CCE 随之落地）；`TryFrom<Object> for Iface` 因 blanket impl 冲突（E0119）不可行，CCE 语义由 try_cast_iface 承担。验收：25 测集 27/27 in-scope、streams/lambda/接口族全绿、双种子归零、bfs 不变。**批次 3+（形参→返回→局部/字段，消解 32931）**：五擦除点改造序与强耦合风险（emitted_method_sig_types 牵动 K-6/interface_gen/sam_objects）见证据文档 §6，建议 TestIterator 穿透起步。
+
+### A-4（原文）
 
 - **现状**：接口类型的参数/返回值/局部变量/字段多数仍生成 `Object`，调用点经擦除载体转换。`Constable.describeConstable` 这类「擦除接口签名 vs 类的具体泛型返回」靠 R5-B/C 的局部转换过编译。
 - **协变 upcast 子问题**：A-3 中提到的「`List<Object>: From<ArrayList<_>>` 缺失」属于 A-4 的具体落地需求。`java_class!` 宏块生成时，对类声明的每个 `implements` 接口，需同时生成：
