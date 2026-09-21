@@ -38,11 +38,17 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
     if r.returncode != 0:
         sys.exit(f"javac failed:\n{r.stderr}")
 
-    # 2. 解析用户 .class 二进制（含内部类 $ 文件）
+    # 2. 解析用户 .class 二进制：编译单元闭包（入口类 + 同源文件的全部类）
+    #    javac 把同一 .java 的全部类输出到 classes/：入口类、其嵌套类（Outer$Inner、
+    #    匿名/局部类 Outer$1）、以及同文件的兄弟顶层类（含非 public，如 ShapeBase）
+    #    及其嵌套类。判据是字节码 SourceFile 属性 == 源文件名（规则一：字节码是
+    #    唯一数据源）。classes/ 目录按 feature 目录共享，历史运行会混入其他编译
+    #    单元的 .class，不能整目录收编，必须按 SourceFile 过滤。
     class_infos = []
     _seen_class_files: set[str] = set()
     for jf in java_files:
-        class_name = os.path.splitext(os.path.basename(jf))[0]
+        source_name = os.path.basename(jf)
+        class_name = os.path.splitext(source_name)[0]
         class_file = os.path.join(class_dir, class_name + '.class')
 
         print(f"[2/4] 解析 {class_name}.class")
@@ -52,16 +58,24 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
         class_infos.append(ci)
         _seen_class_files.add(class_file)
 
-        # 发现同目录下的内部类（OuterClass$Inner.class）
+        # 同编译单元类发现：SourceFile 属性与源文件一致的全部 .class
         for fname in sorted(os.listdir(class_dir)):
-            if fname.startswith(class_name + '$') and fname.endswith('.class'):
-                inner_file = os.path.join(class_dir, fname)
-                if inner_file in _seen_class_files:
-                    continue
-                _seen_class_files.add(inner_file)
-                inner_ci = parse_class(inner_file)
-                print(f"      内部类: {fname[:-6]} (字段: {[f.name for f in inner_ci.fields]}, 方法: {[m.name for m in inner_ci.methods]})")
-                class_infos.append(inner_ci)
+            if not fname.endswith('.class'):
+                continue
+            unit_file = os.path.join(class_dir, fname)
+            if unit_file in _seen_class_files:
+                continue
+            try:
+                unit_ci = parse_class(unit_file)
+            except (ValueError, OSError):
+                continue   # 共享目录里的历史产物/损坏文件，不属于本编译单元
+            if unit_ci.source_file != source_name:
+                continue
+            _seen_class_files.add(unit_file)
+            class_infos.append(unit_ci)
+            print(f"      同文件类: {unit_ci.name} "
+                  f"(字段: {[f.name for f in unit_ci.fields]}, "
+                  f"方法: {[m.name for m in unit_ci.methods]})")
 
     # 3. 方法级调用链 BFS 发现 JDK 类
     print(f"[3/4] 扫描 JDK 类引用...", end=' ', flush=True)
