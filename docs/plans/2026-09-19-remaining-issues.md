@@ -396,6 +396,8 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 
 - **终态**：接口方法的调用链收录覆盖全部传递实现类（含抽象类中途实现）；调用链内方法命中存根 = 0（编译期 `stub_fallback` 与运行期 panic 双口径）。
 
+> **S-18 后续（2026-09-21 午后复验发现）**：闭包扩大暴露**用户类 import 生成缺口**——TestCustomException 的内部类 `SubFineException` 方法签名/体内引用 `PrintStream`/`Throwable_PrintStreamOrWriter`/`ObjectInputStream`/`Class` 共 7 处 E0425，用户类文件的 import 扫描未覆盖 JDK 类型引用（此前这些方法体未入译故未暴露）。归 S-18/K-6 后续增量。
+
 ### S-19 输出一致性缺陷群：浮点/字符串规格破坏 【P1，2026-09-21 基线新增】
 
 > 均属**规格等价承诺域**的缺陷（当前破坏规格，非边界偏差）；归类证据与 diff 明细见 [2026-09-21-e2e-baseline-classification.md §五](2026-09-21-e2e-baseline-classification.md)。
@@ -403,10 +405,11 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 | # | 缺陷 | 证据 | 状态 |
 |---|---|---|---|
 | 1 | `Math.rint` 未按 HALF_EVEN（rint(2.5) 应 2.0） | TestMathRound `rint=2.0`→`3.0` | fcb04ce 复现 |
-| 2 | NaN 判定与 NaN `==`：JLS 15.21.1（NaN≠NaN）、`Double.isNaN` | TestNaN `nanEq=false`→`true`、`isNaN` 反转 | fcb04ce 复现 |
+| 2 | NaN 判定与 NaN `==`：JLS 15.21.1（NaN≠NaN）、`Double.isNaN` | TestNaN `nanEq=false`→`true`、`isNaN` 反转；TestFloatBits 同根 | fcb04ce 复现（FloatBits 28474b1 复现） |
 | 3 | 增补字符（非 BMP）字面量未走 UTF-16 表示，代理对被 Latin1 分支吞掉 | TestStringCodePoints `length=4`→`20`、`codePointAt1` 128512→239 | fcb04ce 复现 |
-| 4 | `Double.toString` 科学计数规则缺失（<1e-3 / ≥1e7） | TestMathExact `ulp=2.22E-16`→`0.000…313` | 待复验 |
-| 5 | 栈帧未填充（`fillInStackTrace`/`getStackTrace` 空） | TestCustomException `has stack frames=true`→`false` | 待复验 |
+| 4 | `Double.toString` 科学计数规则缺失（<1e-3 / ≥1e7） | TestMathExact `ulp=2.22E-16`→`0.000…313` | **28474b1 复现** |
+| 5 | 栈帧未填充（`fillInStackTrace`/`getStackTrace` 空） | TestCustomException（当前被 E0425 编译错挡在前面，见 S-18 注记） | 待 import 缺口修复后复验 |
+| 6 | `expm1` 尾数值偏差（2026-09-21 午后新增） | TestMathExact `expm1=1.718281828459045`→`…453`——expm1 native 精度或最短表示格式化 | 28474b1 复现 |
 
 - **终态**：上表 5 项输出与 Java 逐字一致；#4 落在 `java_fmt_f64`，#5 落在 throwable 边界层，其余为 math/string native 补全。
 - **验收指标**：对应用例 output diff = 0。

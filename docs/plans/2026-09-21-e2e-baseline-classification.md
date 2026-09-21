@@ -120,23 +120,25 @@ TestOverload（生成语法错误 `")={}""`）、TestStringSearch（`unknown cha
 | TestArrayBounds ✓本机 | **`capacity overflow`（raw_vec）——负长度直通 Vec 分配，进程崩溃** | codegen-panic | S-8（现状升级，见条目） |
 | TestInheritedMethod | K-6 后应 PASS，用户基线 run error | 待复验（疑陈旧树） | — |
 
-### 4.2 待定向清单（30，用户基线 stderr 缺失）
+### 4.2 run 族定向复验（30 例，2026-09-21 午后完成，main @ 28474b1 顺序跑 + 二进制 stderr 定性）
 
-- **streams**：TestStreamAdvanced（S-18 修复后应 PASS，疑陈旧树）、TestStreamBasic、TestStreamMore
-- **函数式/Optional**：TestMethodRef、TestCollectionFactory
-- **maps**：TestLinkedHash、TestMapIteration、TestTreeMapSet
-- **集合边角**：TestListOf、TestCollectionsUtil、TestEnumSetMap、TestSequencedCollections、TestArraysUtil、TestArrayCovariance
-- **datetime**：TestDurationPeriod、TestLocalDate　**bignum**：TestBigDecimal
-- **io/format**：TestPrintStreamApi、TestHexFormat、TestFormatLocale、TestRandomSeed
-- **字符串**：TestStringEdge、TestStringNewMethods
-- **其他**：TestNestedTry、TestRecordPattern、TestPecs、TestSuppressed、TestAutoboxEdge、TestAtomics、TestLambdaVar
+**陈旧树筛结论**：30 例中仅 TestMethodRef 转绿（第 6 个假失败实证，前 5 = TSB/TSBO/TestOptionalFull/TestIncDec/TestShortCircuit）；TestMethodRefKinds 经子串误命中带入，属 A-8 辅助类族。**26 个 run 错误全部定性**：
 
-判定命令模板（每个约 40s）：
+| 族 | 用例 | 数量 | stderr 证据 / 根因 | 承接 |
+|---|---|---|---|---|
+| **`CDS.getRandomSeedForDumping` native 缺失** | TestListOf / TestLinkedHash / TestCollectionFactory / TestStreamMore / TestAutoboxEdge / TestLambdaVar | **6** | `native: jdk/internal/misc/CDS.getRandomSeedForDumping:()J` | runtime 手写一处（收益密度最高） |
+| **数组视图 CCE（运行期）** | TestArrayCovariance / TestBigDecimal / TestDurationPeriod / TestLocalDate | **4** | `ClassCastException: java/lang/Object cannot be cast to JArray<JArray<BigInteger>>`（返回值/多维位置 `Object`→`JArray<T>` 未发射） | **数组视图 coerce 族**——与 §3.3 编译期 2 例（TestArrayCopy E0308 实证）同根因候选，族规模 2→6，JDK25 或 +8 |
+| `StringUTF16.isBigEndian` native 缺失 | TestStringSearch / TestStringEdge | 2 | `native: java/lang/StringUTF16.isBigEndian:()Z` | runtime 一行（`cfg!(target_endian)`） |
+| 反射族 `getDeclaredField` | TestCollectionsUtil / TestRandomSeed | 2 | `stub: java/lang/Class.getDeclaredField` | 反射族（静态注册表终态方向已定） |
+| 异常层次 CCE | TestNestedTry / TestSuppressed | 2 | `IllegalStateException cannot be cast to RuntimeException`、`RuntimeException cannot be cast to Exception` | 新归类：异常类继承 upcast 转换缺失 |
+| 散点 stub（边界按需） | TestArraysUtil（`ArraysSupport.mismatch([I[II)` int 版）/ TestPrintStreamApi（`FloatToDecimal.toString`——P-3 已知遗留）/ TestAtomics（`Unsafe.getAndAddInt`）/ TestSequencedCollections（`NullableKeyValueHolder.<init>`）/ TestFormatLocale（`LocaleProviderAdapter.getAdapter`）/ TestHexFormat（`US_ASCII.INSTANCE` 静态字段） | 6 | 各自 `stub: ` | P-3 清单扩充 |
+| NPE/异常逃逸 | TestTreeMapSet（toString NPE 变 panic 逃逸）/ TestMapIteration（`UnsupportedOperationException: remove` 逃逸顶层，Java 侧应可捕获） | 2 | panic / `Exception in thread` | S-9 邻域（可捕获性） |
+| enum 反射 | TestEnumSetMap | 1 | `ClassCastException: java/lang/Class not an enum` | 反射族邻域 |
+| **用户类方法被 stub（异常信号）** | TestRecordPattern | 1 | `stub: TestRecordPattern.describe:(Ljava/lang/Object;)Ljava/lang/String;` | **待查**：用户类方法不应被 stub，疑 record/合成方法生成路径跳过（G-10 同型：私有合成实例方法曾被跳过） |
 
-```bash
-PYTHONPATH= python3 scripts/run_tests.py --filter <TestName> 2>&1 | tee /tmp/probe-<name>.log
-./build/target/debug/<bin> 2>&1 | tail -5   # 若已构建，直接抓 stderr 定子族
-```
+**compile 3 例**：TestMethodRefKinds（E0433 Person → A-8 族）、TestStringNewMethods（E0599 `exactOutputSizeIfKnown` 于 Object → 擦除接收者成员解析族，与 TestStreamNumeric 同型）、TestPecs（E0432 unresolved import `java::lang::Appendable` → 新形态，接口/mod 树邻域，原基线为 run error——树更新后失败形态已变）。
+
+**队列影响**：数组视图 coerce 族升级为 6 例（编译 2 + 运行 4）并列第二大杠杆；`CDS.getRandomSeedForDumping` + `isBigEndian` 两个 native 合计 8 例、runtime 数行——快速收益包。
 
 ---
 
@@ -147,10 +149,10 @@ PYTHONPATH= python3 scripts/run_tests.py --filter <TestName> 2>&1 | tee /tmp/pro
 | TestMathRound ✓复现 | `rint=2.0,4.0`→`3.0,4.0`：**Math.rint 应 HALF_EVEN**（rint(2.5)=2.0），当前 half-away | 规格破坏 | S-19 |
 | TestNaN ✓复现 | `nanEq=false`→`true`（**JLS 15.21.1：NaN≠NaN**）；`isNaN=true`→`false` | 规格破坏 | S-19 |
 | TestStringCodePoints ✓复现 | `length=4`→`20`、`codePointAt1=128512`→`239`：**增补字符字面量未走 UTF-16 表示**（compact strings 的 Latin1 分支吞掉代理对） | 规格破坏 | S-19 |
-| TestFloatBits | `isNaN=true`→`false`（与 TestNaN isNaN 同根，大概率复现） | 规格破坏（待复验） | S-19 |
-| TestMathExact | `ulp=2.220446049250313E-16`→`0.000…313`：Double.toString 的 1e-3/1e7 科学计数规则缺失 | 规格破坏（待复验） | S-19（java_fmt_f64） |
-| TestStringCompare | `interned==lit=true`→`false`：intern 同一性 | **equiv-boundary**（compatibility.md §3 已标） | S-6 |
-| TestCustomException | `has stack frames=true`→`false`：栈帧未填充 | 待复验（疑真缺陷） | S-19（throwable 边界） |
+| TestFloatBits ✓复现（2026-09-21 午后） | `isNaN=true`→`false`（与 TestNaN isNaN 同根） | 规格破坏 | S-19 |
+| TestMathExact ✓复现（2026-09-21 午后） | `ulp=2.220446049250313E-16`→`0.000…313`（科学计数规则缺失）＋**新增第二处**：`expm1=1.718281828459045`→`…453`（尾数值不同——expm1 算法精度或最短表示格式化，并入 S-19） | 规格破坏 | S-19（java_fmt_f64 / expm1 native） |
+| TestStringCompare ✓复现（2026-09-21 午后） | `interned==lit=true`→`false`：intern 同一性 | **equiv-boundary**（compatibility.md §3 已标） | S-6 |
+| TestCustomException **改判 compile 族**（2026-09-21 午后） | `E0425: cannot find type PrintStream / Throwable_PrintStreamOrWriter / ObjectInputStream / Class`——用户内部类 `SubFineException` 的签名/体内 JDK 类型**未生成 import**（7 处）；疑 S-18 扩大闭包后方法体入译暴露的 import 生成缺口。原「栈帧未填充」症状被挡在编译错后面，修完 import 后需回到该症状验证 S-19 #5 | 规格破坏＋import 生成缺口（新） | S-19 #5 ＋ S-18 后续增量 |
 | TestIncDec / TestShortCircuit | r 值 / bool 渲染 diff | **陈旧树假象**（本机 PASS） | 无需立项 |
 
 ## 六、transpile 族（1）

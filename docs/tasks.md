@@ -33,11 +33,12 @@
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| **陈旧树筛 + run 族定向复验** | 等用户拉平后执行 | 用户侧 pull 到 fa7cf10 后按归类文档 §4.2 清单 `--filter` 定向复验（30 run + 待复验 output），把 79 失败收敛到真实面 |
+| ~~陈旧树筛 + run 族定向复验~~ | **✅ 完成（2026-09-21 午后）** | 30 例复验 + 26 run 族 stderr 定性 + 4 output 族复验全记录：归类文档 §4.2/§五。假失败第 6 例（TestMethodRef）；数组视图族升 6 例；CDS/isBigEndian native 双件 8 例 |
 | **A-8 同文件辅助类未进闭包** | 166 归类新增，最大单一杠杆（15 用例） | 编译族 15 例统一 E0433/E0425；证据：scratch 内辅助类文件未生成 |
 | **S-20 `Object.wait/notify/notifyAll`** | 166 归类新增（4 用例） | runtime 补三方法接 InternalLock；与 monitorenter 真实化联动 |
-| **数组视图 coerce 族** | 166 归类新增 | 实参位置 `Object`→`JArray<T>` 视图转换未发射（TestArrayCopy E0308 实证）；JDK25 批 8 例同型 E0308 待判同根因 |
-| **S-19 输出一致性缺陷群（五件）** | 166 归类新增 P1 | `Math.rint` HALF_EVEN / NaN 判定与 `==` / 非 BMP 字面量 UTF-16 / `Double.toString` 科学计数（java_fmt_f64）/ 栈帧填充；前 3 项 fcb04ce 已复现，后 2 项待复验 |
+| **数组视图 coerce 族** | 166 归类新增，**复验升级 6 例**（第二大杠杆） | 编译期 2（TestArrayCopy/TestBigInteger E0308）+ 运行期 CCE 4（TestArrayCovariance/BigDecimal/DurationPeriod/LocalDate，`Object`→`JArray<T>` 含多维未发射）；JDK25 批 8 例同型 E0308 待判同根因——若同根因合计 14 例 |
+| **native 双件：`CDS.getRandomSeedForDumping` + `StringUTF16.isBigEndian`** | 4.2 复验新增（8 例） | 两处 runtime 手写（数行级）：CDS 压 6 用例（ListOf/LinkedHash/CollectionFactory/StreamMore/AutoboxEdge/LambdaVar），isBigEndian 压 2（StringSearch/StringEdge）——收益密度最高 |
+| **S-19 输出一致性缺陷群（六件）** | 166 归类新增 P1 | `Math.rint` HALF_EVEN / NaN 判定与 `==` / 非 BMP 字面量 UTF-16 / `Double.toString` 科学计数（java_fmt_f64）/ 栈帧填充（挡在 E0425 后）/ **expm1 尾数偏差（28474b1 新增）**；前 4 项+expm1 已复现 |
 | **downcast 链移除（859 处）** | A-1 后主推 | A-2 可读层清零主杠杆：`from_any`/`downcast_ref`/`.downcast::<T>()` 在方法体清零；纯 Python 侧 + 宏封装；前置全就绪 |
 
 ## P1 · 功能缺口
@@ -65,6 +66,8 @@
 | catch 变量作用域（2 例） | 166 归类 | TestDateTimeFormat / TestZonedDateTime `E0425 ex`——catch 形参在后续引用点不可见，G-1/G-3 邻域 |
 | 接口槽位成员缺失（2 例） | 166 归类 | TestStreamNumeric E0407 / TestPriorityQueue E0599——槽位沿继承层次的签名/成员解析，K-6/S-18 后续增量 |
 | 一次性编译错（4 例） | 166 归类 | TestOverload 生成语法、TestStringSearch（escape 已修、转 run 族）、TestSwitchNull E0605（S-17 已归类 Integer/String 常量标签）、TestCollectorsMore E0061 |
+| 用户类 import 生成缺口（1 例，S-18 后续） | §4.2 复验新增 | TestCustomException 内部类签名/体内引用 `PrintStream` 等 JDK 类型未生成 import（7 处 E0425）——S-18 扩闭包暴露；疑与 catch 作用域族同域的 import/作用域生成面 |
+| 异常层次 upcast CCE（2 例） | §4.2 复验新增 | TestNestedTry / TestSuppressed：`IllegalStateException→RuntimeException`、`RuntimeException→Exception` 转换失败 |
 | IR 结构化收敛 | T05/T06/T07/T50/T58/T61/T67 | RawExpr/RawStmt 消除，架构级 |
 
 ## P3 · 长期重构（不阻塞主线）
