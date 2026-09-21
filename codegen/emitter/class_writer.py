@@ -7,6 +7,7 @@ import re as _re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..method import gen_method_body, _indent
 from ..cfg import CfgAuditError, STATS as _CFG_STATS
+from .. import equiv_audit
 from ..type_map import (short_cls, short_cls as _short_cls_g, jvm_to_rust, mangle_name,
                         rust_default, parse_class_type_params, effective_class_type_params,
                         _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP)
@@ -740,6 +741,10 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
                     new_blocks.append(attr +
                         f'pub fn toString(&self) -> Result<String> {{\n    let this = self;\n    Ok({fmtcall})\n}}')
                 elif 'pub fn hashCode(' in block:
+                    # [equiv-audit] record-hash（S-7）：record hashCode 发射
+                    # Ok(0)（ObjectMethods 的 31 多项式未实现）——每个 record
+                    # 类计 1，只计数不改发射
+                    equiv_audit.record('record-hash')
                     attr = block[:block.index('pub fn hashCode(')]
                     new_blocks.append(attr +
                         f'pub fn hashCode(&self) -> Result<i32> {{\n    Ok(0)\n}}')

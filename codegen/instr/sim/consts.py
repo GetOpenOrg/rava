@@ -3,6 +3,7 @@
 from ...stack import I32, I64, F32, F64
 from ...rs_ir import Lit, RsNamed
 from ..coerce import _float_lit, _escape_str
+from ... import equiv_audit
 
 
 def sim_consts(ins, sim, class_name, registry) -> bool:
@@ -34,6 +35,9 @@ def sim_consts(ins, sim, class_name, registry) -> bool:
             # 过去这里退化为 Object::default()（null），任何对它的调用都 NPE。
             # isAssignableFrom 的层次查询在运行时进行（build.rs 从 all_supertypes
             # 生成层次表），此处不再静态推导超类型闭包。
+            # [equiv-audit] class-literal（S-5）：每次构造新 Class 对象，与
+            # getClass() 的同一性是近似等价——只计数，不改发射。
+            equiv_audit.record('class-literal')
             _bin = comment[6:].strip()
             sim.push(Lit(f'Class::for_class(String::from("{_bin}"))'), RsNamed('Class'))
         else: sim.push(Lit(f"{operand}i32"), I32)

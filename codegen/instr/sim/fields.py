@@ -28,6 +28,7 @@ from ..member_owner import _get_field_generic_signature, _resolve_static_field_o
 from ..member_naming import _parse_field_ref
 from ..invoke import _gen_invokespecial
 from ..invoke_sig import type_var_receiver_bound_view
+from ... import equiv_audit
 
 # Rust 内建容器与已知类型短名（用于泛型类型可见性校验）
 # 基本类型名也必须视为可见：装箱类型实参映射为 Rust 基本类型（X<Boolean> → X<bool>），
@@ -282,6 +283,10 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             # 继承字段由子类的转发访问器统一暴露（父类字段在前展平，§6），
             # 所以不再需要按接收者静态类型拼 `_super._super.` 路径——
             # 那层复杂度已收拢进宏（见方案 §16：_super 语义边界）。
+            # [equiv-audit] field-npe（S-9）：Object 接收者的 getfield——null
+            # 接收者不抛 NPE 的路径，只计数不改发射
+            if render_type(obj_ty) == 'Object':
+                equiv_audit.record('field-npe')
             _slot = _instance_field_rust_name(f_owner or class_name, fname, registry)
             sim.push(RawExpr(f"{render_expr(obj_expr)}.__get_{_slot}()"), RsNamed(ftype))
         else:
@@ -308,6 +313,9 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                                            class_type_params=sim.class_type_params)
             # 字段写入 → 宏生成的 `__set_xxx` 访问器（方案 §7）。
             # 继承字段同样由转发访问器承接，无需 `_super` 前缀路径（§16）。
+            # [equiv-audit] field-npe（S-9）：Object 接收者的 putfield，同 getfield
+            if render_type(obj_ty) == 'Object':
+                equiv_audit.record('field-npe')
             _slot = _instance_field_rust_name(cls_owner or class_name, fname, registry)
             sim.emit(RawStmt(f"{render_expr(obj_expr)}.__set_{_slot}({val_str});"))
         else:

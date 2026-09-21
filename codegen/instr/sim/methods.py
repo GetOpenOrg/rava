@@ -6,7 +6,9 @@ from ...type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_r
 from ...constants import PRIMITIVE_RUST_TYPES
 from ..coerce import _coerce_to_object
 from ..member_naming import _method_ref_binary_class, _method_ref_descriptor
+from ..member_owner import parse_method_ref
 from ..invoke import _gen_invokestatic, _gen_invokevirtual
+from ... import equiv_audit
 
 _ACC_VARARGS = 0x0080
 _ACC_NATIVE = 0x0100
@@ -79,6 +81,22 @@ def _gen_signature_polymorphic(sim, comment: str, decl_desc: str, class_name, re
     sim.push(Var(v), RsNamed(target))
 
 
+def _iface_default_init_gap(comment: str, registry) -> bool:
+    """[equiv-audit] class-init（S-10 子缺口 b）的判定：invokeinterface 的目标
+    是接口上带体的 default 方法时返回 True。JVMS §5.5 要求访问接口的非抽象方法
+    前触发接口自身初始化；当前接口载体分派路径无该触发点。粗口径：只查常量池
+    接口自身声明（声明在父接口的经链解析，不追——计数偏保守）。"""
+    if not registry:
+        return False
+    ci = registry.get(_method_ref_binary_class(comment))
+    if ci is None or not ci.is_interface:
+        return False
+    _cls, mname, params, ret = parse_method_ref(comment)
+    _desc = f"({''.join(params)}){ret}"
+    return any(m.name == mname and m.descriptor == _desc and not m.is_abstract
+               for m in ci.methods)
+
+
 def sim_methods(ins, sim, class_name, registry) -> bool:
     op      = ins.opcode
     operand = ins.operand or ''
@@ -93,6 +111,10 @@ def sim_methods(ins, sim, class_name, registry) -> bool:
     if op == 'invokestatic':
         _gen_invokestatic(sim, comment, class_name, registry=registry)
     elif op in ('invokevirtual', 'invokeinterface'):
+        # [equiv-audit] class-init（S-10）：invokeinterface → 接口 default 方法，
+        # 接口自身初始化未触发（JVMS §5.5 触发点缺口），只计数不改发射
+        if op == 'invokeinterface' and _iface_default_init_gap(comment, registry):
+            equiv_audit.record('class-init')
         _gen_invokevirtual(sim, comment, class_name, registry=registry)
     else:
         return False
