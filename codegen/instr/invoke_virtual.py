@@ -189,8 +189,9 @@ def _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
                           sig_params_v):
     """bare Object 接收者的多态分派（§6 步骤 4）：接口经载体 / 根类方法经根
     vtable 单次直调 / 类虚方法经类 vtable 查询（`__virtual_view` 擦除视图重建，
-    共享存储与对象标识）后在 wrapper 边界调用目标方法；闭包回退（Arch-3，
-    A-5 lambda 对象化域）保留。所有路径发射后返回。"""
+    共享存储与对象标识）后在 wrapper 边界调用目标方法。lambda 是 A-5 合成对象
+    （接口方法的载体分支经 `__interface` + vtable 分派，default 同覆盖），
+    SAM 闭包回退已移除。所有路径发射后返回。"""
     # 多态 dispatch：cls 是 Rust 短类名（$ 已替换为 _），需转回 binary name
     cls_binary = _rust_type_to_binary(cls, registry) or cls
     # 接口方法：经与接口同名的载体分派（`Into::<I<Object>>::into(obj).m()`）。
@@ -258,19 +259,16 @@ def _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
             sim, obj_e, _cls_ci, cls_binary, _cls_rust, mname, comment, params,
             ret, args, arg_str, rust_ret, registry, sig_params_v)
         return
-    # 未翻译类 / 接口残余形：无 wrapper 可建 —— 闭包回退 + 占位（既有兜底）
-    _sam_ptypes = [jvm_to_rust(p, registry) for p in params]
-    _fn_type = (f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)})'
-                f' -> Result<{rust_ret}>>')
+    # 未翻译类 / 接口残余形：无 wrapper 可建 —— 记默认值占位（既有兜底的终值形态）。
+    # SAM 闭包回退已随 A-5 移除：lambda 一律是合成对象（实现接口闭包 __VTable、
+    # 经 `__interface` 应答），接口方法的分派在上面的载体分支完成；此处到达的
+    # 接收者既无接口载体也无类 vtable，不再有可调用的实现。
     if rust_ret == '()':
         sim.emit(RawStmt(
-            f'if let Some(__f) = {obj_e}.0.as_any()'
-            f'.downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})?; }}'))
+            f'/* A-5: 未翻译接收者残余 {cls}.{mname} —— 无可分派实现 */'))
     else:
         v = sim.fresh('_vdispatch')
-        sim.emit(RawStmt(
-            f"let {v}: {rust_ret} = if let Some(__f) = {obj_e}.0.as_any()"
-            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }} else {{ Default::default() }};"))
+        sim.emit(RawStmt(f"let {v}: {rust_ret} = Default::default();"))
         sim.push(Var(v), RsNamed(rust_ret))
     return
 
@@ -327,8 +325,9 @@ def _erased_view_sig(cls_ci, mname, params, ret, registry):
 def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
                                 mname, comment, params, ret, args, arg_str,
                                 rust_ret, registry, sig_params_v):
-    """类 vtable 分派的发射体：`__virtual_view` 视图重建 + wrapper 方法调用 +
-    闭包 SAM 回退。含继承成员登记（本类 + 闭包子类的槽位填充，S-16）与
+    """类 vtable 分派的发射体：`__virtual_view` 视图重建 + wrapper 方法调用。
+    SAM 闭包回退已随 A-5 移除（lambda 经接口载体分派，不可能是类实例）。
+    含继承成员登记（本类 + 闭包子类的槽位填充，S-16）与
     形参 / 返回值的擦除边界对齐。"""
     from ..rs_ir import RsNamed as _RsNamed
     pdesc = '(' + ''.join(params) + ')'
@@ -375,19 +374,14 @@ def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
     _cls_tps = _effective_class_type_params(cls_ci, registry)
     _erased_targs = f"<{', '.join(['Object'] * len(_cls_tps))}>" if _cls_tps else ''
     _view_recv = f"{cls_rust}{_erased_targs}::__virtual_view(&{obj_e})"
-    # Arch-3: 闭包回退 —— Rc<dyn Fn(...)> downcast（lambda / 方法引用），
-    # SAM 参数列表对应 invokevirtual 的实际参数类型。Result 用裸名：两个 crate
-    # 的生成文件均经 prelude 引入（java_runtime: crate::prelude /
-    # user: crate::error::Result），写 crate::error::Result 在 user crate 是 E0433。
-    _sam_ptypes = [jvm_to_rust(p, registry) for p in params]
-    _fn_type = (f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)})'
-                f' -> Result<{rust_ret}>>')
+    # 类虚方法分派（§6 步骤 4）：`__virtual_view` 命中即调用；未命中（闭包、
+    # 无运行时类值）记默认值。SAM 闭包回退已随 A-5 移除——lambda 只实现接口
+    # （合成对象经接口载体 + `__interface` 分派），不可能是本类实例，类虚方法
+    # 的接收者在合法 Java 中恒命中 `__virtual_view`，未命中是无实现可调的残余。
     _call_expr = f"_d.{mname_r}({barg_str})?"
     if rust_ret == '()':
         sim.emit(RawStmt(
-            f"if let Some(_d) = {_view_recv} {{ {_call_expr}; }} "
-            f"else if let Some(__f) = {obj_e}.0.as_any()"
-            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})?; }}"))
+            f"if let Some(_d) = {_view_recv} {{ {_call_expr}; }}"))
         return
     v = sim.fresh('_vdispatch')
     # 返回对齐（与 _emit_call_result 同规则）：擦除描述符返回 Object 而发射签名
@@ -398,23 +392,17 @@ def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
         _boxed = _coerce_to_object(_call_expr, sig_r_w, registry, sim.class_type_params)
         sim.emit(RawStmt(
             f"let {v}: {rust_ret} = if let Some(_d) = {_view_recv} {{ {_boxed} }} "
-            f"else if let Some(__f) = {obj_e}.0.as_any()"
-            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }} "
             f"else {{ Default::default() }};"))
         sim.push(Var(v), RsNamed(rust_ret))
     elif (sig_r_w is not None and sig_r_w != rust_ret
             and rust_ret not in _PRIMITIVE_RUST_TYPES):
         sim.emit(RawStmt(
             f"let {v} = if let Some(_d) = {_view_recv} {{ {_call_expr} }} "
-            f"else if let Some(__f) = {obj_e}.0.as_any()"
-            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }} "
             f"else {{ Default::default() }};"))
         sim.push(Var(v), RsNamed(sig_r_w))
     else:
         sim.emit(RawStmt(
             f"let {v}: {rust_ret} = if let Some(_d) = {_view_recv} {{ {_call_expr} }} "
-            f"else if let Some(__f) = {obj_e}.0.as_any()"
-            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }} "
             f"else {{ Default::default() }};"))
         sim.push(Var(v), RsNamed(rust_ret))
 

@@ -27,10 +27,6 @@ fn is_instance_decl(f: &FnItem) -> bool {
     matches!(f.sig.inputs.first(), Some(syn::FnArg::Receiver(_)))
 }
 
-fn is_abstract_decl(f: &FnItem) -> bool {
-    attr_str(&f.attrs, "modifiers").map_or(false, |m| m.split(' ').any(|w| w == "abstract"))
-}
-
 /// 接口展开：与 Java 接口同名的载体类型 + 接口的擦除 vtable。
 ///
 /// - `Iface__VTable`：接口实例方法的**擦除签名** trait（无类型参数，对象安全）——
@@ -95,7 +91,6 @@ pub(crate) fn expand_interface(
     let instance_decls: Vec<&FnItem> = fns.iter()
         .filter(|f| is_instance_decl(f) && attr_str(&f.attrs, "inherited_from").is_none())
         .collect();
-    let abstract_count = instance_decls.iter().filter(|f| is_abstract_decl(f)).count();
 
     for f in &instance_decls {
         let erased = erase_signature(&f.sig, &type_param_names);
@@ -129,28 +124,6 @@ pub(crate) fn expand_interface(
             quote! {}
         };
         let default_method = default_method.unwrap_or_default();
-        // SAM 闭包直调（批次1 过渡：站点仍以 Rc<dyn Fn> 闭包装箱，合成对象接管后
-        // 于批次3 移除）：函数式接口的唯一抽象方法由闭包直接执行
-        let lambda_call = if is_abstract_decl(f) && abstract_count == 1 {
-            let erased_param_tys: Vec<Type> = erased.inputs.iter().filter_map(|a| match a {
-                syn::FnArg::Typed(pt) => Some((*pt.ty).clone()),
-                _ => None,
-            }).collect();
-            let erased_ret = match &erased.output {
-                syn::ReturnType::Type(_, ty) => quote! { #ty },
-                syn::ReturnType::Default => quote! { () },
-            };
-            quote! {
-                if let Some(__f) = self.__ref.0.as_any()
-                    .downcast_ref::<::std::rc::Rc<dyn Fn(#(#erased_param_tys),*) -> #erased_ret>>()
-                {
-                    return Ok(::std::convert::From::from(
-                        (__f)(#(::std::convert::Into::into(#args)),*)?));
-                }
-            }
-        } else {
-            quote! {}
-        };
         let keep_attrs = strip_meta_attrs(&f.attrs);
         let sig = without_param_mut(&f.sig);
         let missing_msg = format!("AbstractMethodError: {}.{}:{}", binary_name, mname, desc);
@@ -168,7 +141,6 @@ pub(crate) fn expand_interface(
                     return Ok(::std::convert::From::from(
                         <dyn #vtable_ident>::#mname(&*__vt #(, ::std::convert::Into::into(#args))*)?));
                 }
-                #lambda_call
                 #default_fallback
                 panic!("{} (receiver: {})", #missing_msg, ObjectVTable::__obj_str(&*self.__ref.0))
             }
