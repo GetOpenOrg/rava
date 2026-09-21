@@ -47,7 +47,7 @@
 | **Unsafe 对象布局族散点（TestLocalDate 下一层）** | native 双件报告 | `Unsafe.arrayBaseOffset`（卡点：ConcurrentHashMap `<clinit>` ABASE 行）+ 同链排队 `arrayIndexScale`/`objectFieldOffset`——Unsafe 族按需补 |
 | **native 双件：`CDS.getRandomSeedForDumping` + `StringUTF16.isBigEndian`** | 4.2 复验新增（8 例） | 两处 runtime 手写（数行级）：CDS 压 6 用例（ListOf/LinkedHash/CollectionFactory/StreamMore/AutoboxEdge/LambdaVar），isBigEndian 压 2（StringSearch/StringEdge）——收益密度最高 |
 | **S-19 剩余三件（#3/#4/#5）** | math 三件已修（rint/NaN/expm1，`0078906`+`73a6c54`+`444ad9a`，TestMathRound/TestNaN/TestFloatBits 转绿；NaN 根因为 codegen dcmpl/dcmpg 发射层，全部浮点比较受益） | 剩：非 BMP 字面量 UTF-16（TestStringCodePoints，string 域）、`Double.toString` 科学计数（TestMathExact 唯一剩余行，java_fmt_f64）、栈帧填充（挡在 TestCustomException E0425 后） |
-| **downcast 链移除（859 处）** | A-1 后主推 | A-2 可读层清零主杠杆：`from_any`/`downcast_ref`/`.downcast::<T>()` 在方法体清零；纯 Python 侧 + 宏封装；前置全就绪 |
+| ~~downcast 链移除（859 处）~~ | **✅ 完成（2026-09-21，fix/downcast-chain-removal）** | 方案 §6 步骤 4：根方法根 vtable 直调 + 类虚方法 `__virtual_view` 部件重建分派（宏新增）+ SAM 回退保留；`downcast_ref` 方法体清零（TestStringBuilder 1104→6，余全 SAM）；红线/streams/金丝雀 18/18，7 例失败经基线对照确认既有；指纹不变、双种子归零（链顺序不确定性源消失）；`from_any` 残余归 A-4/A-5（清单见分支报告） |
 
 ## P1 · 功能缺口
 
