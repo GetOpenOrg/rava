@@ -246,6 +246,29 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
     fn is_jvm_null(&self) -> bool { JArray::is_jvm_null(self) }
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { Some(self.len()) }
 
+    /// JLS §10.8 / §4.10.4：数组的直接超类型是 Object、Cloneable、Serializable。
+    /// 有意不按 "java/lang/Object" 匹配——aastore_storable 的元素类型名探针对
+    /// 多维数组退化为 "java/lang/Object"（数组的类名探针无元素信息），按名放行
+    /// 会使异构数组元素的存储检查失效（元素是数组的情形走 `__view_into` 臂）。
+    fn is_instance_of(&self, type_id: &str) -> bool {
+        matches!(type_id, "java/lang/Cloneable" | "java/io/Serializable")
+    }
+
+    /// `Object.clone()`（invokevirtual）在数组上的语义（JLS §10.7）：浅拷贝——
+    /// 新数组对象、逐元素共享引用（元素自身的 Clone 即引用共享）。Own 形态按
+    /// 当前元素类型重建；协变视图委托源数组（克隆保持运行时元素类型，Java 的
+    /// clone 不改变数组的具体类型）。
+    fn __shallow_copy(&self) -> Option<Object> {
+        match &*self.0 {
+            Repr::Own(cells) => {
+                let data = cells.borrow();
+                Some(Object::from(JArray::from(data.clone())))
+            }
+            Repr::Covariant(view) => view.origin.0.__shallow_copy(),
+            Repr::Null => Some(Object::from(Clone::clone(self))),
+        }
+    }
+
     /// checkcast 到数组类型：同元素类型 → 自身；视图还原 → 交给源数组判定；
     /// 引用类型数组 → `Object[]`：协变视图。其余目标元素类型由
     /// `From<Object> for JArray<T>`（知道目标元素类型）经 `__array_elem_assignable`
@@ -296,10 +319,18 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
     }
 }
 
-/// 擦除数组的逐元素兼容判定（`From<Object> for JArray<T>` 与 `Object::try_cast`
-/// 共用，A-3）：源数组可按 Object 级协变视图观察、且每个非 null 元素的运行时类与
-/// T 的 binary name 赋值兼容 → checkcast 到 `JArray<T>` 成立（泛型数组的擦除还原
-/// 路径：`(String[]) objArr`，源静态元素类型是 T 的祖先形态）。空数组 / 全 null 恒兼容。
+/// 擦除数组的逐元素兼容判定（`From<Object> for JArray<T>` 的擦除还原臂，
+/// A-3）：源数组可按 Object 级协变视图观察、且每个非 null 元素与目标元素
+/// 类型 T 赋值兼容 → checkcast 到 `JArray<T>` 成立（泛型数组的擦除还原
+/// 路径：`(String[]) objArr`，源静态元素类型是 T 的祖先形态）。空数组 /
+/// 全 null 恒兼容。
+///
+/// 元素兼容按序两臂：`try_checkcast::<T>`（同类型 / 祖先 wrapper 视图 /
+/// 数组元素——`__view_into` 驱动，元素本身是数组（`JArray` 不实现
+/// `is_instance_of`）与数组协变视图只有此臂可判）；T 的 null 探针类名
+/// 非退化（`java/lang/Object`——T 自身是数组或接口别名时探针失义）时补
+/// `is_instance_of`（覆盖未经 javac 装箱、以原生值盒（`Rc<i32>` 带 Integer
+/// vtable）流入 Object 槽位的元素）。
 pub(crate) fn erased_array_compatible<T: Clone + Default + Into<Object> + 'static>(obj: &Object) -> bool {
     let unused: Rc<dyn std::any::Any> = Rc::new(());
     let mut erased: Option<JArray<Object>> = None;
@@ -308,11 +339,39 @@ pub(crate) fn erased_array_compatible<T: Clone + Default + Into<Object> + 'stati
         let t_name = Into::<Object>::into(T::default()).0.__class_name();
         let len = view.len().unwrap_or(0);
         return (0..len).all(|i| match view.get(i) {
-            Ok(e) => e.0.is_jvm_null() || e.0.is_instance_of(t_name),
+            Ok(e) => e.0.is_jvm_null()
+                || e.try_checkcast::<T>().is_some()
+                || (t_name != "java/lang/Object" && e.0.is_instance_of(t_name)),
             Err(_) => false,
         });
     }
     false
+}
+
+/// checkcast 到 `JArray<T>` 的判定与视图构造（可失败形态，S-4 / A-1 的
+/// 唯一决策点）：按序 null 还原 / 同形态取回（`__view_into`：同元素类型、
+/// 视图还原、`Object[]` 上转）/ 协变上转（`__array_elem_assignable`：目标
+/// 元素类型是源元素类型的祖先）/ 擦除还原（逐元素兼容）。均不满足 → None
+/// （ClassCastException）。`From<Object>`（panic 形态，非法转换的进程级
+/// 断言）与 `Object::try_cast`（Err 形态，可被 java_try 捕获，S-1）共用，
+/// 两条 cast 路径对数组目标的语义完全一致。
+pub(crate) fn try_array_view<T: Clone + Default + From<Object> + Into<Object> + 'static>(
+    obj: &Object,
+) -> Option<JArray<T>> {
+    if obj.0.is_jvm_null() {
+        return Some(JArray::default());
+    }
+    if let Some(same) = obj.try_checkcast::<JArray<T>>() {
+        return Some(same);
+    }
+    let mut elem_slot: Option<T> = None;
+    if obj.0.__array_elem_assignable(&mut elem_slot) && elem_slot.is_some() {
+        return Some(erased_object_view(Clone::clone(obj)));
+    }
+    if !JArray::<T>::has_primitive_elements() && erased_array_compatible::<T>(obj) {
+        return Some(erased_object_view(Clone::clone(obj)));
+    }
+    None
 }
 
 /// `(T[]) obj` —— checkcast 到数组类型（见 `__view_into` / `__array_elem_assignable`）。
@@ -329,21 +388,10 @@ pub(crate) fn erased_array_compatible<T: Clone + Default + Into<Object> + 'stati
 /// ClassCastException（JVMS §6.5 checkcast）。
 impl<T: Clone + Default + From<Object> + Into<Object> + 'static> From<Object> for JArray<T> {
     fn from(obj: Object) -> Self {
-        if obj.0.is_jvm_null() {
-            return Self::default();
-        }
-        if let Some(same) = obj.try_checkcast::<Self>() {
-            return same;
-        }
-        let mut elem_slot: Option<T> = None;
-        if obj.0.__array_elem_assignable(&mut elem_slot) && elem_slot.is_some() {
-            return erased_object_view(obj);
-        }
-        if !Self::has_primitive_elements() && erased_array_compatible::<T>(&obj) {
-            return erased_object_view(obj);
-        }
-        panic!("ClassCastException: {} cannot be cast to {}",
-               obj.0.__class_name(), std::any::type_name::<Self>())
+        try_array_view::<T>(&obj).unwrap_or_else(|| {
+            panic!("ClassCastException: {} cannot be cast to {}",
+                   obj.0.__class_name(), std::any::type_name::<Self>())
+        })
     }
 }
 
