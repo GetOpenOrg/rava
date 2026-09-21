@@ -11,7 +11,7 @@
 1. **架构问题优先**：先做架构改造，测试错误待架构完成后自然消解，禁止因为测试失败而中断架构工作转去修 Bug。
 2. **架构完成前禁止全量测试**：定向验证（红线集 + 金丝雀）除外，全量 run_tests.py 只在架构节点合入后由主会话统一执行。
 3. **子代理串行执行**：一次只运行一个子代理（用户指定，内存约束）；前一个完成并合入验证后再启动下一个。
-4. **任务执行顺序**：streams 三测收尾（S-18 → P-3）→ 166 全量基线归类 → A-1 剩余主体（类 vtable 去形参化）→ downcast 链清零。
+4. **任务执行顺序**：P-3（S-18 已合入 fcb04ce）→ 陈旧树筛 + run 族定向复验 → A-8 / S-20 快速收益 → A-1 剩余主体（类 vtable 去形参化）→ downcast 链清零。
 
 ---
 
@@ -20,11 +20,11 @@
 - `docs/plans/java-rust-translation-reference.md` — 翻译对照（宏家族 §16）
 - `docs/tasks-history.md` — T01-T81 历史全记录
 
-**基线（2026-09-21，a20a31f 实测）**：
-- TestStringBuilder：编译 0 错误（起点 909），运行输出 22 行与 Java 逐字一致；`cfg-audit` unconsumed=0 / stub_fallback=0。
-- 红线 19/19 全绿；TestArrayList / TestCollections / TestExceptions / TestStaticInit / TestTryShape 输出全部与 Java 一致。
-- 旧 65 测基数 55/65（估）；**166 新测试全量结果待用户提供**。
-- 架构里程碑链：vtable 双指针多态 → CFG 支配树结构化（含 try/catch `java_try!`、`<clinit>` 语义、异常对象）→ println 字节码化 → K-6 槽位签名模型 → 擦除运行时身份阶段 1（非泛型 `I__VTable` + `__interface`）。
+**基线（2026-09-21）**：
+- **166 全量（用户 Ubuntu，JDK21）**：87 PASS / 79 FAIL；**跑批树落后 main，混有陈旧污染**——fcb04ce 干净树复核 18 例，TestStringBuilder / TestOptionalFull / TestIncDec / TestShortCircuit 已 PASS（假象），真实失败面待复验收敛。归类全记录：`2026-09-21-e2e-baseline-classification.md`（新立项 A-8 / S-19 / S-20；S-8 / S-9 实测升级）。
+- 红线 19/19 全绿（a20a31f 实测）；TestStringBuilder 编译 0 错误、输出 22 行与 Java 逐字一致（fcb04ce 复核 PASS，含金丝雀）。
+- 架构里程碑链：vtable 双指针多态 → CFG 支配树结构化（含 try/catch `java_try!`、`<clinit>` 语义、异常对象）→ println 字节码化 → K-6 槽位签名模型 → 擦除运行时身份阶段 1（非泛型 `I__VTable` + `__interface`）→ S-18 接口分派 BFS（fcb04ce）。
+- 教训：**全量跑批必须 tee 落盘**（本轮 224 分钟 stdout-only，38 个 run 族无 stderr 只能二次定向）。
 
 ---
 
@@ -32,19 +32,21 @@
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| **S-18 经接口分派的方法实现体未进 BFS** | 子代理运行中（`/tmp/wt-s18`，接管前任现场） | TestStreamAdvanced 通过；`AbstractPipeline.sequential` 存根根因 = 接口方法未沿实现类层次收录实现体 |
-| **P-3 `JavaLangAccess.join` 边界补全** | 排队（串行规则，S-18 合入后启动） | TestStreamCollectors 通过；按调用链迭代补全后续存根 |
-| **downcast 链移除（859 处）** | streams 后的下一主推 | A-2 可读层清零主杠杆：`from_any`/`downcast_ref`/`.downcast::<T>()` 在方法体清零；纯 Python 侧 + 宏封装；前置全就绪（vtable 非泛型、`__view_into`/`checkcast` 钩子齐备） |
+| **P-3 `JavaLangAccess.join` 边界补全** | 下一启动（串行规则） | TestStreamCollectors 通过；按调用链迭代补全后续存根（TestOptional 的 `Integer.valueOf` stub 一并扩清单） |
+| **陈旧树筛 + run 族定向复验** | 等用户拉平后执行 | 用户侧 pull 到 fcb04ce 后按归类文档 §4.2 清单 `--filter` 定向复验（30 run + 待复验 output），把 79 失败收敛到真实面 |
+| **A-8 同文件辅助类未进闭包** | 166 归类新增，最大单一杠杆（15 用例） | 编译族 15 例统一 E0433/E0425；证据：scratch 内辅助类文件未生成 |
+| **S-20 `Object.wait/notify/notifyAll`** | 166 归类新增（4 用例） | runtime 补三方法接 InternalLock；与 monitorenter 真实化联动 |
+| **数组视图 coerce 族** | 166 归类新增 | 实参位置 `Object`→`JArray<T>` 视图转换未发射（TestArrayCopy E0308 实证）；JDK25 批 8 例同型 E0308 待判同根因 |
+| **downcast 链移除（859 处）** | A-1 后主推 | A-2 可读层清零主杠杆：`from_any`/`downcast_ref`/`.downcast::<T>()` 在方法体清零；纯 Python 侧 + 宏封装；前置全就绪 |
 | **A-1 剩余主体：类 vtable 去形参化** | 擦除阶段 2，多日级重构 | 非泛型 `X__inner` + 类型化视图：可变泛型类跨实例化互转、子类对象跨实例化重建；同时解锁 downcast 清零的存储层基础 |
-| **166 全量基线** | 等用户提供结果 | 按错误族归类下一波任务 |
 
 ## P1 · 功能缺口
 
 | 任务 | 来源 | 说明 |
 |------|------|------|
 | record `hashCode` 恒为 `Ok(0)` | R5 遗留 | `toString`/`equals` 已真实化，`hashCode` 未实现（S-7） |
-| `monitorenter`/`monitorexit` 为 no-op | 同步系列（原 T80） | 当前 pop 忽略——单线程正确；多线程需接 `InternalLock`（实现已就绪，`parking_lot::ReentrantMutex`） |
-| TestTryShape 缺期望文件（V-2） | R5-D 新增测试 | `tests/expected/TestTryShape.txt` 未入库，全量对比会误报 |
+| `monitorenter`/`monitorexit` 为 no-op | 同步系列（原 T80） | 当前 pop 忽略——单线程正确；多线程需接 `InternalLock`（实现已就绪，`parking_lot::ReentrantMutex`）；与 S-20（wait/notify 建模）同批推进 |
+| TestTryShape 缺期望文件（V-2） | R5-D 新增测试 | ~~`tests/expected/TestTryShape.txt` 未入库~~ **已过期**：166 全量中 TestTryShape PASS，expected 已入库，可关闭 |
 | 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | S-10 剩余 | 见 remaining-issues S-10 |
 
 ## P2 · 翻译质量

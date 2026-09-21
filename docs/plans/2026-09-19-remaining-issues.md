@@ -29,8 +29,8 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 
 | 编号 | 类别 | 条目数 | 最高优先级 |
 |------|------|--------|-----------|
-| [A](#a-架构缺口最高优先级) | 架构缺口 | 7 | P0 |
-| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 17 | P1 |
+| [A](#a-架构缺口最高优先级) | 架构缺口 | 8 | P0 |
+| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 19 | P1 |
 | [G](#g-生成器与宏的内部质量) | 生成器与宏内部质量 | 10 | P1 |
 | [P](#p-项目原则违规) | 项目原则违规 | 3 | P1 |
 | [V](#v-验证覆盖缺口) | 验证覆盖缺口 | 4 | P1 |
@@ -184,6 +184,13 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 - **现状**：`position(I)ByteBuffer` 这类协变返回覆盖在子类另立同名槽位，与祖先槽位并存。R5-A 用「转发成员按描述符完全限定分派」消除了 E0034，但经祖先类型调用时分派到的仍是祖先槽位的实现，多态语义不完整。桥接方法目前由 R5-C 从桥字节码读取真实目标来解析。
 - **终态**：协变覆盖 = 祖先槽位的 override（返回值上转为祖先槽位的擦除返回类型）+ 子类侧的类型化访问器；javac 桥接方法不生成独立槽位。并存槽位数 = 0。
 
+### A-8 同文件辅助类未进转译闭包 【P0，2026-09-21 基线新增】
+
+- **现状**（166 基线，2026-09-21）：15 个用例编译失败，统一形态 `E0433/E0425: cannot find type/value <Aux>`（TestConstructorChain 的 ShapeBase、TestMethodRefKinds 的 Person、TestSealed 的 Add、TestVarContext 的 DataHolder 等，全清单见 [2026-09-21-e2e-baseline-classification.md §3.1](2026-09-21-e2e-baseline-classification.md)）。**证据**：TestConstructorChain 的 scratch `user/src/` 只有入口类文件——辅助类文件根本未生成（非 mod 树漏挂）。
+- **根因**（方向，待定向确认）：类装载/BFS 闭包只从 public 入口类出发；同文件兄弟类虽被常量池引用（`new ShapeBase`）但未触发装载或未发射。与 S-15「BFS 对用户类不可见」同域，层级在类发现而非方法解析。
+- **终态**：同 `.java` 的全部顶层类（含非 public）与被引用嵌套类进入闭包并发射；15 用例编译清零。
+- **验收指标**：§3.1 清单 15 用例 compile = 0。
+
 ---
 
 ## S. JVM 语义缺口
@@ -245,9 +252,11 @@ record 的 `toString`/`equals` 已由生成器按组件生成，`hashCode` 体�
 
 ### S-8 `NegativeArraySizeException` 缺失 【P2 · 近似等价】
 `newarray`/`anewarray`/`multianewarray` 对负长度未抛异常。终态：VM 抛出异常对象，与数组 `get/set` 的 `Result` 机制一致。
+> **实测升级（2026-09-21，TestArrayBounds）**：负长度不止是「未抛异常」——直通 Rust `Vec` 分配触发 `capacity overflow` **进程崩溃**（raw_vec panic，非可捕获 JvmError）。终态不变，优先级按崩溃对待。
 
 ### S-9 null 字段访问不抛 NPE 【P2 · 近似等价】
 null 接收者的方法调用已抛 NPE，`getfield`/`putfield` 尚未。终态：两者一致。
+> **实测补充（2026-09-21，TestOptionalChain）**：抛出的 NPE 存在**不可被 `catch` 捕获**的路径——`Optional.of(null)` 的 NPE 逃逸顶层，与 S-1 修复前的 CCE 不可捕获同型。NPE 全路径可捕获性随本条目一并验收。
 
 ### S-10 类初始化触发点不完整 【P2 · 近似等价】
 JVMS §5.5 的触发点里，手写 static native 的调用、带 default 方法的接口的初始化尚未触发 `__class_init()`。终态：§5.5 列出的触发点全覆盖。
@@ -379,6 +388,28 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 
 - **终态**：接口方法的调用链收录覆盖全部传递实现类（含抽象类中途实现）；调用链内方法命中存根 = 0（编译期 `stub_fallback` 与运行期 panic 双口径）。
 
+### S-19 输出一致性缺陷群：浮点/字符串规格破坏 【P1，2026-09-21 基线新增】
+
+> 均属**规格等价承诺域**的缺陷（当前破坏规格，非边界偏差）；归类证据与 diff 明细见 [2026-09-21-e2e-baseline-classification.md §五](2026-09-21-e2e-baseline-classification.md)。
+
+| # | 缺陷 | 证据 | 状态 |
+|---|---|---|---|
+| 1 | `Math.rint` 未按 HALF_EVEN（rint(2.5) 应 2.0） | TestMathRound `rint=2.0`→`3.0` | fcb04ce 复现 |
+| 2 | NaN 判定与 NaN `==`：JLS 15.21.1（NaN≠NaN）、`Double.isNaN` | TestNaN `nanEq=false`→`true`、`isNaN` 反转 | fcb04ce 复现 |
+| 3 | 增补字符（非 BMP）字面量未走 UTF-16 表示，代理对被 Latin1 分支吞掉 | TestStringCodePoints `length=4`→`20`、`codePointAt1` 128512→239 | fcb04ce 复现 |
+| 4 | `Double.toString` 科学计数规则缺失（<1e-3 / ≥1e7） | TestMathExact `ulp=2.22E-16`→`0.000…313` | 待复验 |
+| 5 | 栈帧未填充（`fillInStackTrace`/`getStackTrace` 空） | TestCustomException `has stack frames=true`→`false` | 待复验 |
+
+- **终态**：上表 5 项输出与 Java 逐字一致；#4 落在 `java_fmt_f64`，#5 落在 throwable 边界层，其余为 math/string native 补全。
+- **验收指标**：对应用例 output diff = 0。
+
+### S-20 `Object.wait/notify/notifyAll` 未建模 【P1，2026-09-21 基线新增】
+
+- **现状**：`runtime/java_runtime` 的 `Object` 无三个 monitor 方法（grep 证实），4 个用例统一 `E0599: no method named wait found for struct object::Object`（TestSynchronized、TestThreadJoin、TestVirtualThread、TestWaitNotify）。
+- **根因**：Object 监视器方法未建模；`InternalLock`（parking_lot ReentrantMutex + Condvar）已就绪（S-11 邻域），只差 Object 层挂接与 `monitorenter` 接入（tasks.md P1 行联动）。
+- **终态**：`Object` 提供 `wait/notify/notifyAll`，语义接 InternalLock；与 `monitorenter`/`monitorexit` 的真实化同批或紧随。
+- **验收指标**：4 用例编译清零；TestSynchronized、TestWaitNotify 输出一致。
+
 ### G-12 负整数字面量装箱缺括号 【已修复，R8 轮】
 `-1i32.into()` 补为 `(-1i32).into()`（c643d7d，合入 main）。TestPatternMatch 的 E0282 归零，该测试剩余 2×E0605 属 S-17。
 `-1i32.into()` 应为 `(-1i32).into()`（一元负号阻断目标类型推断，E0282；语义上也是 `-(1i32.into())`）。小时级以内。
@@ -410,6 +441,8 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 
 ### V-1 全量 e2e 未运行 【P1】
 本轮只验证了 6 个测试。`tests/e2e/` 其余测试在 CFG 重写、擦除阶段 1、`<clinit>`/异常、命名方案变更之后的状态未知。按项目原则，全量运行放在 A 类架构改造之后；但在合入 `main` 后应至少跑一次 `python3 scripts/run_tests.py -j 4` 建立新基线并归档到 `docs/reports/`。
+
+> **2026-09-21 基线已回收**：用户 JDK21 全量 87/166 PASS（含陈旧树污染——跑批树落后 main，fcb04ce 复验证实 TestStringBuilder/TestOptionalFull/TestIncDec/TestShortCircuit 已 PASS）。家族归类、run 族 stderr 定性、JDK25 部分数据与复验清单见 [2026-09-21-e2e-baseline-classification.md](2026-09-21-e2e-baseline-classification.md)。遗留动作：剩余失败定向复验后按 §一规程归族。
 
 ### V-2 TestTryShape 缺期望输出 【P2】
 `tests/expected/TestTryShape.txt` 不存在，R5-B/D 用临时文件比对。终态：用 `java` 实跑生成并提交。
