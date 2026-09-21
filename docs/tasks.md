@@ -11,7 +11,7 @@
 1. **架构问题优先**：先做架构改造，测试错误待架构完成后自然消解，禁止因为测试失败而中断架构工作转去修 Bug。
 2. **架构完成前禁止全量测试**：定向验证（红线集 + 金丝雀）除外，全量 run_tests.py 只在架构节点合入后由主会话统一执行。
 3. **子代理串行执行**：一次只运行一个子代理（用户指定，内存约束）；前一个完成并合入验证后再启动下一个。
-4. **任务执行顺序**：P-3（S-18 已合入 fcb04ce）→ 陈旧树筛 + run 族定向复验 → A-8 / S-20 快速收益 → A-1 剩余主体（类 vtable 去形参化）→ downcast 链清零。
+4. **任务执行顺序**：陈旧树筛 + run 族定向复验 → A-8 / S-20 快速收益 → A-1 剩余主体（类 vtable 去形参化）→ downcast 链清零。
 
 ---
 
@@ -23,7 +23,8 @@
 **基线（2026-09-21）**：
 - **166 全量（用户 Ubuntu，JDK21）**：87 PASS / 79 FAIL；**跑批树落后 main，混有陈旧污染**——fcb04ce 干净树复核 18 例，TestStringBuilder / TestOptionalFull / TestIncDec / TestShortCircuit 已 PASS（假象），真实失败面待复验收敛。归类全记录：`2026-09-21-e2e-baseline-classification.md`（新立项 A-8 / S-19 / S-20；S-8 / S-9 实测升级）。
 - 红线 19/19 全绿（a20a31f 实测）；TestStringBuilder 编译 0 错误、输出 22 行与 Java 逐字一致（fcb04ce 复核 PASS，含金丝雀）。
-- 架构里程碑链：vtable 双指针多态 → CFG 支配树结构化（含 try/catch `java_try!`、`<clinit>` 语义、异常对象）→ println 字节码化 → K-6 槽位签名模型 → 擦除运行时身份阶段 1（非泛型 `I__VTable` + `__interface`）→ S-18 接口分派 BFS（fcb04ce）。
+- **streams 三测全绿（2026-09-21 午后，P-3 合入后主会话 --clean 6/6）**：TestStreamBasic / TestStreamAdvanced / TestStreamCollectors + TestStringBuilderOps 全 PASS，输出逐字一致。
+- 架构里程碑链：vtable 双指针多态 → CFG 支配树结构化（含 try/catch `java_try!`、`<clinit>` 语义、异常对象）→ println 字节码化 → K-6 槽位签名模型 → 擦除运行时身份阶段 1（非泛型 `I__VTable` + `__interface`）→ S-18 接口分派 BFS（fcb04ce）→ P-3 边界补全（7b64afa，join + DoubleToDecimal）。
 - 教训：**全量跑批必须 tee 落盘**（本轮 224 分钟 stdout-only，38 个 run 族无 stderr 只能二次定向）。
 
 ---
@@ -32,8 +33,7 @@
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| **P-3 `JavaLangAccess.join` 边界补全** | 下一启动（串行规则） | TestStreamCollectors 通过；按调用链迭代补全后续存根（TestOptional 的 `Integer.valueOf` stub 一并扩清单） |
-| **陈旧树筛 + run 族定向复验** | 等用户拉平后执行 | 用户侧 pull 到 fcb04ce 后按归类文档 §4.2 清单 `--filter` 定向复验（30 run + 待复验 output），把 79 失败收敛到真实面 |
+| **陈旧树筛 + run 族定向复验** | 等用户拉平后执行 | 用户侧 pull 到 fa7cf10 后按归类文档 §4.2 清单 `--filter` 定向复验（30 run + 待复验 output），把 79 失败收敛到真实面 |
 | **A-8 同文件辅助类未进闭包** | 166 归类新增，最大单一杠杆（15 用例） | 编译族 15 例统一 E0433/E0425；证据：scratch 内辅助类文件未生成 |
 | **S-20 `Object.wait/notify/notifyAll`** | 166 归类新增（4 用例） | runtime 补三方法接 InternalLock；与 monitorenter 真实化联动 |
 | **数组视图 coerce 族** | 166 归类新增 | 实参位置 `Object`→`JArray<T>` 视图转换未发射（TestArrayCopy E0308 实证）；JDK25 批 8 例同型 E0308 待判同根因 |
