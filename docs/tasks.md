@@ -21,6 +21,8 @@
 - `docs/plans/java-rust-translation-reference.md` — 翻译对照（宏家族 §16）
 - `docs/tasks-history.md` — T01-T81 历史全记录
 
+**基线（2026-09-22 凌晨，用户 Ubuntu 全量 @ ~afa3890 树，双进程与定向批并发）**：**113 PASS / 53 FAIL**（较初基线 87 **+26**）——compile 13 / run 33 / output 6 / transpile 1，run 族自动分类：stub-hit 16、runtime-panic 9、s8-crash 1、unclassified 7。**失败清单双进程合并实战通过**（定向批写 22 条保留 32 → 全量合并 53，无丢失）。**注意该树未含线程层**（TestSynchronized/ThreadJoin/WaitNotify 三例仍红）——下轮 pull 后预期 116+。TestRefKindsFull PASS→FAIL 复现定性：`stub: Integer.valueOf`（与 TestOptional 同族，装箱旁路 from_any 被对象化收编后揭开，非行为回归）。此前 compile 族多项推进到下一层（HashSetOps→UOE remove、GenericBoundsCombo→collection.rs panic、DateTimeFormat/ZonedDateTime→E0308）。
+
 **基线（2026-09-21）**：
 - **166 全量（用户 Ubuntu，JDK21）**：87 PASS / 79 FAIL；**跑批树落后 main，混有陈旧污染**——fcb04ce 干净树复核 18 例，TestStringBuilder / TestOptionalFull / TestIncDec / TestShortCircuit 已 PASS（假象），真实失败面待复验收敛。归类全记录：`2026-09-21-e2e-baseline-classification.md`（新立项 A-8 / S-19 / S-20；S-8 / S-9 实测升级）。
 - 红线 19/19 全绿（a20a31f 实测）；TestStringBuilder 编译 0 错误、输出 22 行与 Java 逐字一致（fcb04ce 复核 PASS，含金丝雀）。
@@ -58,7 +60,7 @@
 | record `hashCode` 恒为 `Ok(0)` | R5 遗留 | `toString`/`equals` 已真实化，`hashCode` 未实现（S-7） |
 | ~~`monitorenter`/`monitorexit` 为 no-op~~ | **✅ 随 S-20 真实化（`4e6a2a2`）** | 监视器经 `monitor.rs` 侧表真实 acquire/release，单线程语义不变（可重入）；`[equiv-audit] monitor-mt` 已埋点观测。剩余：多线程调度语义随线程层立项 |
 | 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | S-10 剩余 | 见 remaining-issues S-10 |
-| stub-hit 分流：包装类边界层 | 166 归类 | TestOptional 实证 `stub: java/lang/Integer.valueOf:(I)`——走 T-4（包装类从字节码生成）路线或并入 P-3 扩清单 |
+| stub-hit 分流：包装类边界层（**2 例**） | 166 归类 + 2026-09-22 全量 | TestOptional + **TestRefKindsFull（PASS→FAIL：装箱旁路 from_any 被对象化收编后揭开 valueOf stub，74f70dd 复现定性）**——走 T-4（包装类从字节码生成）路线或 P-3 扩清单 |
 | JDK25 边界 stubs 遗留 | P-3 轮 | `DoubleToDecimal.split`（Formatter `%f/%e/%g`）、`FloatToDecimal`、`Random__nextInt_i_base`（E0432）——随 JDK25 用例按需补 |
 | ~~等价告警基建 `[equiv-audit]`~~ | **✅ 完成（ruva 方案 ③ 落地）** | 9 ID 发射点计数 + runner `[equiv]` 汇总 + run 族失败自动分类（`[run-classify]`：stub-hit/native-hit/s8-crash/runtime-panic）+ `--deny equiv[::id]/stub-hit`；生成代码零变化实证；monitor-mt 待 S-20 合入后补埋（一处计数器） |
 | e2e 差分补缺（等价探针） | ruva 吸收方案 ② | identityHashCode / finalize / 弱软虚引用 / Object.clone——166 实测零覆盖，探针用例随对应 S 条目修复排队 |
