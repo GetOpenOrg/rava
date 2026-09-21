@@ -64,9 +64,16 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         count_expr = _pop_index(sim)
         # 用完整路径（comment）而非 short_cls，避免 'LString;' 等非全限定名映射到 Object
         if comment and comment != _OBJECT_CLASS:
-            _elem_raw = jvm_to_rust(f'L{comment};', registry)
-            # 用 _ 替换类型参数中的 Object，让 Rust 从赋值上下文推断泛型（避免 E0308）
-            elem_t = _re.sub(r'\bObject\b', '_', _elem_raw) if '<' in _elem_raw else _elem_raw
+            if comment.startswith('['):
+                # 组件本身是数组类（`int[][]` → anewarray class "[I"）：comment 已是
+                # 元素描述符，直接映射（`L[I;` 是非法描述符，曾把多维数组的元素类型
+                # 擦除为 Object，aaload 后丢失静态元素类型——实参位 E0308 的根因）
+                _elem_raw = jvm_to_rust(comment, registry)
+                elem_t = _elem_raw
+            else:
+                _elem_raw = jvm_to_rust(f'L{comment};', registry)
+                # 用 _ 替换类型参数中的 Object，让 Rust 从赋值上下文推断泛型（避免 E0308）
+                elem_t = _re.sub(r'\bObject\b', '_', _elem_raw) if '<' in _elem_raw else _elem_raw
         else:
             elem_t = 'Object'
         v = sim.fresh('_arr')
