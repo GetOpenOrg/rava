@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import time
+import fcntl
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -200,34 +201,49 @@ def _load_failed(path: Path) -> set:
 
 
 def _save_failed(path: Path, names: set) -> None:
+    """原子写（临时文件 + os.replace）：其他进程任意时刻读到的都是完整文件。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_FAILED_HEADER + "".join(f"{n}\n" for n in sorted(names)),
-                    encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(_FAILED_HEADER + "".join(f"{n}\n" for n in sorted(names)),
+                   encoding="utf-8")
+    os.replace(tmp, path)
 
 
 class _FailedRatchet:
     """失败清单写穿棘轮：每个测试出结果**立即**落盘（边测边进/出列），
     进程被中断（Ctrl-C/超时杀）也不丢已累积的结果；跑批中可随时 tail
-    该文件观察。线程安全（并行模式 worker 并发记录）。"""
+    该文件观察。
+
+    **多进程并发安全**（一个全量 + 一个定向跑批共用同一清单）：
+    每次记录在跨进程文件锁（flock 清单同名 .lock）内做「重读 → 合并 → 原子写」
+    ——写前重读文件吸收其他进程已落盘的更新，不会用本进程的内存快照覆盖掉
+    别人的条目；线程锁负责单进程内并行 worker 的串行化。"""
 
     def __init__(self, path: Path, prev: set):
         self.path = path
         self.failed = set(prev)
         self.removed = self.added = 0
         self._lock = threading.Lock()
-        _save_failed(path, self.failed)
 
     def record(self, name: str, ok: bool) -> None:
         with self._lock:
-            if ok:
-                if name in self.failed:
-                    self.failed.discard(name)
-                    self.removed += 1
-            else:
-                if name not in self.failed:
-                    self.added += 1
-                self.failed.add(name)
-            _save_failed(self.path, self.failed)
+            lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+            with open(lock_path, "w") as lf:
+                fcntl.flock(lf, fcntl.LOCK_EX)
+                try:
+                    current = _load_failed(self.path)   # 重读：吸收其他进程的写入
+                    if ok:
+                        if name in current:
+                            current.discard(name)
+                            self.removed += 1
+                    else:
+                        if name not in current:
+                            self.added += 1
+                        current.add(name)
+                    self.failed = current
+                    _save_failed(self.path, current)
+                finally:
+                    fcntl.flock(lf, fcntl.LOCK_UN)
 
     def summary(self) -> None:
         print(f"[failed-file] {self.path.relative_to(ROOT)}：保留 {len(self.failed)}"
