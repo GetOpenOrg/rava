@@ -292,8 +292,10 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
     # Pass 3: 对需要提升的变量进行修改
     # 先收集所有插入操作（在 loop 前插入 let mut NAME = Default::default();）
     # 用倒序插入，避免索引偏移
+    # G-4 确定性：按名排序遍历——同一 loop 位置的多变量插入序否则随 set 迭代序
+    # （PYTHONHASHSEED）漂移，生成物不可 diff
     insertions: list[tuple[int, tuple]] = []  # (index, entry) to insert BEFORE
-    for name in vars_to_hoist:
+    for name in sorted(vars_to_hoist):
         decl_k, decl_nesting = declared_at[name]
         # 找到包含此声明的最近的 loop { 索引
         loop_k = None
