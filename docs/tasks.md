@@ -51,7 +51,7 @@
 | 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | S-10 剩余 | 见 remaining-issues S-10 |
 | stub-hit 分流：包装类边界层 | 166 归类 | TestOptional 实证 `stub: java/lang/Integer.valueOf:(I)`——走 T-4（包装类从字节码生成）路线或并入 P-3 扩清单 |
 | JDK25 边界 stubs 遗留 | P-3 轮 | `DoubleToDecimal.split`（Formatter `%f/%e/%g`）、`FloatToDecimal`、`Random__nextInt_i_base`（E0432）——随 JDK25 用例按需补 |
-| 等价告警基建 `[equiv-audit]` | ruva 吸收方案 ③ | 仿已落地 readability-audit：main.py 发射 + run_tests 汇总 + `--deny equiv/near-approx` + stub-hit 自动分类；告警目录 seed 已入 compatibility.md；陈旧树筛收敛后立项 |
+| ~~等价告警基建 `[equiv-audit]`~~ | **✅ 完成（ruva 方案 ③ 落地）** | 9 ID 发射点计数 + runner `[equiv]` 汇总 + run 族失败自动分类（`[run-classify]`：stub-hit/native-hit/s8-crash/runtime-panic）+ `--deny equiv[::id]/stub-hit`；生成代码零变化实证；monitor-mt 待 S-20 合入后补埋（一处计数器） |
 | e2e 差分补缺（等价探针） | ruva 吸收方案 ② | identityHashCode / finalize / 弱软虚引用 / Object.clone——166 实测零覆盖，探针用例随对应 S 条目修复排队 |
 
 ## P2 · 翻译质量
