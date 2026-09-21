@@ -11,7 +11,7 @@
 1. **架构问题优先**：先做架构改造，测试错误待架构完成后自然消解，禁止因为测试失败而中断架构工作转去修 Bug。
 2. **架构完成前禁止全量测试**：定向验证（红线集 + 金丝雀）除外，全量 run_tests.py 只在架构节点合入后由主会话统一执行。
 3. **子代理串行执行**：一次只运行一个子代理（用户指定，内存约束）；前一个完成并合入验证后再启动下一个。
-4. **任务执行顺序**：陈旧树筛 + run 族定向复验 → A-8 / S-20 快速收益 → A-1 剩余主体（类 vtable 去形参化）→ downcast 链清零。
+4. **任务执行顺序（2026-09-21 同步）**：陈旧树筛 + run 族定向复验 → A-8 / S-20 / 数组视图 coerce 族快速收益 → downcast 链清零（方案 §6 步骤 4）→ S-19 规格破坏五件 → A-5/A-6/A-4 收口 A-2 → 窗口 3（G-1/G-2/G-3，间歇期）。**A-1 已全部闭环**（2026-09-20 α/β + vtable 去形参，`X__inner`/`X__VTable` 均非泛型），不再占队列。
 
 ---
 
@@ -37,8 +37,8 @@
 | **A-8 同文件辅助类未进闭包** | 166 归类新增，最大单一杠杆（15 用例） | 编译族 15 例统一 E0433/E0425；证据：scratch 内辅助类文件未生成 |
 | **S-20 `Object.wait/notify/notifyAll`** | 166 归类新增（4 用例） | runtime 补三方法接 InternalLock；与 monitorenter 真实化联动 |
 | **数组视图 coerce 族** | 166 归类新增 | 实参位置 `Object`→`JArray<T>` 视图转换未发射（TestArrayCopy E0308 实证）；JDK25 批 8 例同型 E0308 待判同根因 |
+| **S-19 输出一致性缺陷群（五件）** | 166 归类新增 P1 | `Math.rint` HALF_EVEN / NaN 判定与 `==` / 非 BMP 字面量 UTF-16 / `Double.toString` 科学计数（java_fmt_f64）/ 栈帧填充；前 3 项 fcb04ce 已复现，后 2 项待复验 |
 | **downcast 链移除（859 处）** | A-1 后主推 | A-2 可读层清零主杠杆：`from_any`/`downcast_ref`/`.downcast::<T>()` 在方法体清零；纯 Python 侧 + 宏封装；前置全就绪 |
-| **A-1 剩余主体：类 vtable 去形参化** | 擦除阶段 2，多日级重构 | 非泛型 `X__inner` + 类型化视图：可变泛型类跨实例化互转、子类对象跨实例化重建；同时解锁 downcast 清零的存储层基础 |
 
 ## P1 · 功能缺口
 
@@ -46,8 +46,11 @@
 |------|------|------|
 | record `hashCode` 恒为 `Ok(0)` | R5 遗留 | `toString`/`equals` 已真实化，`hashCode` 未实现（S-7） |
 | `monitorenter`/`monitorexit` 为 no-op | 同步系列（原 T80） | 当前 pop 忽略——单线程正确；多线程需接 `InternalLock`（实现已就绪，`parking_lot::ReentrantMutex`）；与 S-20（wait/notify 建模）同批推进 |
-| TestTryShape 缺期望文件（V-2） | R5-D 新增测试 | ~~`tests/expected/TestTryShape.txt` 未入库~~ **已过期**：166 全量中 TestTryShape PASS，expected 已入库，可关闭 |
 | 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | S-10 剩余 | 见 remaining-issues S-10 |
+| stub-hit 分流：包装类边界层 | 166 归类 | TestOptional 实证 `stub: java/lang/Integer.valueOf:(I)`——走 T-4（包装类从字节码生成）路线或并入 P-3 扩清单 |
+| JDK25 边界 stubs 遗留 | P-3 轮 | `DoubleToDecimal.split`（Formatter `%f/%e/%g`）、`FloatToDecimal`、`Random__nextInt_i_base`（E0432）——随 JDK25 用例按需补 |
+| 等价告警基建 `[equiv-audit]` | ruva 吸收方案 ③ | 仿已落地 readability-audit：main.py 发射 + run_tests 汇总 + `--deny equiv/near-approx` + stub-hit 自动分类；告警目录 seed 已入 compatibility.md；陈旧树筛收敛后立项 |
+| e2e 差分补缺（等价探针） | ruva 吸收方案 ② | identityHashCode / finalize / 弱软虚引用 / Object.clone——166 实测零覆盖，探针用例随对应 S 条目修复排队 |
 
 ## P2 · 翻译质量
 
@@ -59,6 +62,9 @@
 | 语义桩计数 | T72 | 指令级统一标记未做 |
 | 类级并行解析 | T65 | 测试级并行已实现（run_tests.py），类级未做 |
 | 生成输出非确定性 | R5-D 发现 | 提升 `let` 的顺序随 set 迭代序变化，影响 diff 对比 |
+| catch 变量作用域（2 例） | 166 归类 | TestDateTimeFormat / TestZonedDateTime `E0425 ex`——catch 形参在后续引用点不可见，G-1/G-3 邻域 |
+| 接口槽位成员缺失（2 例） | 166 归类 | TestStreamNumeric E0407 / TestPriorityQueue E0599——槽位沿继承层次的签名/成员解析，K-6/S-18 后续增量 |
+| 一次性编译错（4 例） | 166 归类 | TestOverload 生成语法、TestStringSearch（escape 已修、转 run 族）、TestSwitchNull E0605（S-17 已归类 Integer/String 常量标签）、TestCollectorsMore E0061 |
 | IR 结构化收敛 | T05/T06/T07/T50/T58/T61/T67 | RawExpr/RawStmt 消除，架构级 |
 
 ## P3 · 长期重构（不阻塞主线）

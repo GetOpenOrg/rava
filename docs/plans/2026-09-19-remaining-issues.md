@@ -30,8 +30,8 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 | 编号 | 类别 | 条目数 | 最高优先级 |
 |------|------|--------|-----------|
 | [A](#a-架构缺口最高优先级) | 架构缺口 | 8 | P0 |
-| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 19 | P1 |
-| [G](#g-生成器与宏的内部质量) | 生成器与宏内部质量 | 10 | P1 |
+| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 20 | P1 |
+| [G](#g-生成器与宏的内部质量) | 生成器与宏内部质量 | 12 | P1 |
 | [P](#p-项目原则违规) | 项目原则违规 | 3 | P1 |
 | [V](#v-验证覆盖缺口) | 验证覆盖缺口 | 4 | P1 |
 | [R](#r-仓库事务) | 仓库事务 | 3 | P2 |
@@ -64,7 +64,9 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 
 ## A. 架构缺口（最高优先级）
 
-### A-1 存储层擦除未落地：可变泛型类无法跨实例化互转 【P0 · 运行时症状为近似等价】
+### A-1 存储层擦除未落地：可变泛型类无法跨实例化互转 【已闭环，2026-09-20/21】
+
+> **已闭环（2026-09-21 核销）**：`X__inner` 与 `X__VTable` 均非泛型、`From<Object> for X<A>` 对任意 A 成立——下方 2026-09-20「核心已落地」注记中的「剩余：`X__VTable<P>` 仍带类型形参」已被其上方的 vtable 去形参落地取代。验收：`_reinstantiate_generic` 已随 A-3 归零删除、`#[immutable_state]` = 0。**后续主线 = 方案 §6 步骤 4（downcast 链移除，tasks.md 在列）**；泛型上下文 `Enum::<Object>::valueOf` CCE 类残留症状随 downcast/视图收口观察。
 
 > **vtable 去形参已落地（2026-09-20，分支 fix/a1-vtable-erasure）**：`X__VTable` 非
 > 泛型（签名 Object 化、擦除按声明类判定——`superclass_erased_fields` / `vtable_erasure`
@@ -340,7 +342,10 @@ R5-B 让 `short_cls` 对冲突类生成带包限定的 Rust 类型名（`Era` �
 ### G-7 手写虚方法体机制需写入参考文档 【P2】
 R5-B 新增：`_impl.rs` 定义 `__impl_<m>` 时，codegen 在宏块里生成 `body = "handwritten"` 的无体声明，使其进入 vtable；`native_upcalls.py` 识别 `__impl_` 函数上的 upcall 声明；`#[hash_code_vtable]` / `#[equals_vtable]` 取代 `has_hash_code_method`；`#[immutable_state]`；`#[superclass_reference_fields]`。终态：以上属性全部记入 `java-rust-translation-reference.md` 与 `2026-09-18-macro-family-design.md`。
 
-### G-8 类型变量→上界转换经 `Object` 中转 【P2】
+### G-8 类型变量→上界转换经 `Object` 中转 【已消解，随 A-1，2026-09-21 核销】
+
+> A-1 已闭环：类型变量字段本身已是 `Object` 存储，该中转退化为一次视图构造，不再单独处理。
+
 R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」而让类型变量到上界的转换经 `Object` + `checkcast`。A-1 落地后类型变量字段本身就是 `Object` 存储，此转换退化为一次视图构造。终态：随 A-1 收敛，不单独处理。
 
 ### G-9 循环体内 if/else 分支被整段丢弃 【已修复，R7 轮】
@@ -368,7 +373,10 @@ R5-C 为绕开「vtable override 上不允许附加 `where TV: Into<Bound>`」�
 - **终态**：lambda body 方法名由单一来源（`sim/dynamic.py` 的 bootstrap 分析结果）决定，`method_gen.py` 和调用点 codegen 均从该来源读取，不独立推导；TestComparator、TestFunctionalInterface 编译通过，调用点与定义名一致。
 - **优先级说明**：此 bug 独立于 A-5（lambda 对象化）存在，在 A-5 完整落地前可单独修复，消除至少 2 个用例的编译失败。A-5 落地时应将 lambda body 方法纳入合成类的方法生成流程，此时 G-10 的修复成果应被 A-5 的统一命名机制吸收。
 
-### G-11 `__new_with_super` 重建抹掉构造器早期已赋字段 【P1，R8 triage 新增】
+### G-11 `__new_with_super` 重建抹掉构造器早期已赋字段 【已修复，R8 轮】
+
+> **已修复（`4b6ca99`）**：重建保留 super() 前已赋的本类字段，TestVar 转胜（49/65 里程碑计入）。
+
 javac 21 对内部类的 `putfield this$0` 先于 `invokespecial super.<init>`（javap 实证），而 super 调用被建模为 `__new_with_super` 整体重建（`block/mod.rs:1669` 的 `#inner{..Default::default()}`），重建后本类字段归 null → 后续 NPE（TestVar 的 TreeMap$EntrySet 实证）。宏层小时级可修（重建保留旧 this 字段），但与 A-1 构造语义重叠——**归入 A-1 合入后的跟进项**。
 
 ### K-5 构造器链身份与构造器虚分派 【P1，K 系列发现】
@@ -444,7 +452,10 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 
 > **2026-09-21 基线已回收**：用户 JDK21 全量 87/166 PASS（含陈旧树污染——跑批树落后 main，fcb04ce 复验证实 TestStringBuilder/TestOptionalFull/TestIncDec/TestShortCircuit 已 PASS）。家族归类、run 族 stderr 定性、JDK25 部分数据与复验清单见 [2026-09-21-e2e-baseline-classification.md](2026-09-21-e2e-baseline-classification.md)。遗留动作：剩余失败定向复验后按 §一规程归族。
 
-### V-2 TestTryShape 缺期望输出 【P2】
+### V-2 TestTryShape 缺期望输出 【已关闭，2026-09-21 核销】
+
+> expected 已入库，166 全量中 TestTryShape PASS，本条无剩余动作。
+
 `tests/expected/TestTryShape.txt` 不存在，R5-B/D 用临时文件比对。终态：用 `java` 实跑生成并提交。
 
 ### V-3 可读性无自动化检验 【P2】
@@ -459,7 +470,10 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 
 ## R. 仓库事务
 
-### R-1 `main` 尚未更新 【P1】
+### R-1 `main` 尚未更新 【已过期，2026-09-21 核销】
+
+> main 已远超 `8910fa5`（2026-09-21 现至 `2351683`），`jdk-scan-HelloWorld.md` 已 gitignore，本条无剩余动作。
+
 `main` 在 `59c3355`，可快进到 `integrate-tsb` @ `8910fa5`。被主工作区未提交的 `docs/reports/jdk-scan-HelloWorld.md` 阻塞（该文件两边都有修改，可能属于另一个会话）。处理方式：在主工作区提交或还原该文件后执行 `git merge --ff-only integrate-tsb`。
 
 ### R-2 待清理的 worktree 与分支 【P2，需用户确认】
@@ -475,6 +489,8 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 ---
 
 ## 推荐执行顺序（2026-09-19 R6 轮修订）
+
+> **现行队列（2026-09-21 同步）**：以 `docs/tasks.md` 执行约束为准——陈旧树筛复验 → A-8 / S-20 / 数组视图 coerce 族快速收益 → downcast 链清零（方案 §6 步骤 4）→ S-19 五件 → A-5/A-6/A-4 收口 A-2 → 窗口 3（G-1/G-2/G-3，间歇期）。A-1/K-5/K-6/A-3/A-7/S-17/S-18/G-11/G-12 均已闭环。以下为 R6 期历史记录。
 
 > **R6 轮记录（本日，已完成）**：R5 集成后的全量基线（32/65）中约 20 个失败是两个基础设施假回归，已修复：
 > - **R6-a 陈旧生成文件复活**：复用 scratch 时，上一轮幸存的生成 `.rs`（带 `java_rta_macros::java_class` 标记、本轮未写入）被 mod 树的磁盘扫描重新挂进编译，与手写 companion 撞名（`E0592 getUnsafe` 重复，波及 6 个测试）或污染闭包（`E0433 Class`，波及 14 个测试）。修复：`project_writer._write_jdk_mod_tree` 落盘前清除此类文件（`_WRITTEN_THIS_RUN` 集合区分本轮产物）。
