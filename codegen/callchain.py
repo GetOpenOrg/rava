@@ -608,21 +608,39 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 for _k in sorted(_unresolved_calls):
                     print(f"[bfs-audit] unresolved: {_k[0]}.{_k[1]}:{_k[2]}")
 
-        # 手写 _impl.rs / _ext.rs 的签名引用类型随宿主类入闭包（type-only stub 通道）
-        if runtime_src:
-            for _cls in list(jdk_infos.keys()):
-                for _ref in _impl_signature_type_refs(_cls, runtime_src, resolver):
-                    if (_ref not in jdk_infos
-                            and _ref not in _JAVA_RUNTIME_CLASSES
-                            and (_ref.startswith(_JDK_PREFIXES)
-                                 or _ref.startswith(_JDK_STUB_ONLY_PREFIXES))):
-                        field_discover_classes.add(_ref)
-
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
         _stub_queue: deque[str] = deque(field_discover_classes)
         _stub_visited: set[str] = set(field_discover_classes)
-        while _stub_queue:
+
+        # 手写 _impl.rs / _ext.rs 的签名引用类型随宿主类入闭包（type-only stub 通道）。
+        # 与 stub 扩展构成不动点：stub 通道新入的宿主类（如经 field_discover 进入的
+        # DoubleToDecimal）同样要收集 _impl 签名引用——单轮扫描会漏收伴生 impl 引用
+        # 的类型（E0432），曾被旧 scratch 的陈旧 appendable.rs 掩盖（TestCasting 等
+        # 四红线干净树实证）。
+        _impl_scanned: set[str] = set()
+
+        def _scan_impl_refs() -> bool:
+            added = False
+            for _cls in list(jdk_infos.keys()):
+                if _cls in _impl_scanned:
+                    continue
+                _impl_scanned.add(_cls)
+                for _ref in _impl_signature_type_refs(_cls, runtime_src, resolver):
+                    if (_ref not in jdk_infos
+                            and _ref not in _JAVA_RUNTIME_CLASSES
+                            and (_ref.startswith(_JDK_PREFIXES)
+                                 or _ref.startswith(_JDK_STUB_ONLY_PREFIXES))
+                            and _ref not in _stub_visited):
+                        _stub_visited.add(_ref)
+                        field_discover_classes.add(_ref)
+                        _stub_queue.append(_ref)
+                        added = True
+            return added
+
+        while _stub_queue or (runtime_src and _scan_impl_refs()):
+            if not _stub_queue:
+                continue
             cls = _stub_queue.popleft()
             if cls in jdk_infos:
                 continue
