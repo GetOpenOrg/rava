@@ -334,7 +334,9 @@ R5-B 让 `short_cls` 对冲突类生成带包限定的 Rust 类型名（`Era` �
 ### G-3 局部变量槽位分型 【P1】
 同一 slot 先后存放不同类型的值时（`readObject0`、`LambdaFormEditor.putInCache`、javac 合成变量），R5-B/C 用「合成变量命名 `local_N`」「未命名槽位合并时类型统一」处理。终态：按活跃区间（def-use 链）拆分变量，每个区间独立命名与分型；与 LVT 的对应只用于取名。
 
-### G-4 生成输出不确定 【P2】
+### G-4 生成输出不确定 【已修复，阶段 A 仪表轮】
+
+> **已修复（`b6ab58d`，`c5727a0` 合入）**：两处不确定性源——①`vars.py` 的 `vars_to_hoist` 集合迭代（同 loop 位置多变量插入序漂移）→ 按名排序遍历；②`_get_all_subtypes_ordered` 依赖 registry 插入序（**downcast 分派链分支顺序随 PYTHONHASHSEED 漂移**——比原记录多出的一个源，TestStringBuilder 实测 23 文件 44 行漂移）→ BFS 兄弟节点按 binary name 排序。验证：双种子（1/2/3）生成树 diff 归零（排除 Cargo.toml/.DS_Store）；红线抽查 8/9 PASS（唯一失败=子串带入的反射族既有项；顺带证实 TestVarContext 已随 `0b22604` 转绿）。**附带交付 `[raw-audit]` 仪表**（`90d2e93`）：raw_expr/raw_stmt 构造事件计数 + type_surgery_sites 静态位点扫描（基线 63，含 `startswith('JArray<')` 口径）+ runner `[raw]` 汇总——G-4 是该仪表可比性的前提，二者同批落地。
 提升出的 `let mut x = ...;` 行顺序在两次运行间会变化（遍历 set/dict 的顺序）。只影响 diff，但妨碍回归比对。终态：同输入两次生成的输出逐字节一致。
 
 ### G-5 宏里的遗留代码 【P3】

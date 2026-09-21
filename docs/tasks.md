@@ -68,7 +68,7 @@
 | 布尔压缩 | T70 | `if c {1i32} else {0i32}` → bool（R5 已修部分：lxor/比较产物） |
 | 语义桩计数 | T72 | 指令级统一标记未做 |
 | 类级并行解析 | T65 | 测试级并行已实现（run_tests.py），类级未做 |
-| 生成输出非确定性 | R5-D 发现 | 提升 `let` 的顺序随 set 迭代序变化，影响 diff 对比 |
+| ~~生成输出非确定性~~ | **✅ 已修（`b6ab58d`，G-4）** | 两处源：vars.py 提升集合迭代 + downcast 链 registry 插入序（新发现的第二源）→ 均排序遍历；双种子生成树 diff 归零。附带 `[raw-audit]` 仪表落地（`90d2e93`） |
 | catch 变量作用域（2 例） | 166 归类 | TestDateTimeFormat / TestZonedDateTime `E0425 ex`——catch 形参在后续引用点不可见，G-1/G-3 邻域 |
 | 接口槽位成员缺失（2 例） | 166 归类 | TestStreamNumeric E0407 / TestPriorityQueue E0599——槽位沿继承层次的签名/成员解析，K-6/S-18 后续增量 |
 | 一次性编译错（4 例） | 166 归类 | TestOverload 生成语法、TestStringSearch（escape 已修、转 run 族）、TestSwitchNull E0605（S-17 已归类 Integer/String 常量标签）、TestCollectorsMore E0061 |
