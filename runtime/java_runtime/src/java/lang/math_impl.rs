@@ -17,7 +17,9 @@ impl Math {
     #[jvm_native] pub fn IEEEremainder(f1: f64, f2: f64) -> Result<f64> { Ok(f1 - f2 * (f1 / f2).round()) }
     #[jvm_native] pub fn ceil(a: f64) -> Result<f64> { Ok(a.ceil()) }
     #[jvm_native] pub fn floor(a: f64) -> Result<f64> { Ok(a.floor()) }
-    #[jvm_native] pub fn rint(a: f64) -> Result<f64> { Ok(a.round()) }
+    // rint：不手写。JDK 21 起 StrictMath.rint 为纯 Java 实现（(2^52+|a|)-2^52 的
+    // HALF_EVEN 舍入），Math.rint 转译后直接落到该字节码链，逐位与 JVM 一致；
+    // 此前手写的 a.round() 是 half-away-from-zero，曾致 rint(2.5)=3.0 规格破坏（S-19）。
     #[jvm_native] pub fn pow(a: f64, b: f64) -> Result<f64> { Ok(a.powf(b)) }
     #[jvm_native] pub fn round__f(a: f32) -> Result<i32> { Ok(a.round() as i32) }
     #[jvm_native] pub fn round__d(a: f64) -> Result<i64> { Ok(a.round() as i64) }
@@ -26,7 +28,11 @@ impl Math {
     #[jvm_native] pub fn cosh(x: f64) -> Result<f64> { Ok(x.cosh()) }
     #[jvm_native] pub fn tanh(x: f64) -> Result<f64> { Ok(x.tanh()) }
     #[jvm_native] pub fn hypot(x: f64, y: f64) -> Result<f64> { Ok(x.hypot(y)) }
-    #[jvm_native] pub fn expm1(x: f64) -> Result<f64> { Ok(x.exp_m1()) }
+    // expm1：不手写。StrictMath.expm1 → FdLibm.Expm1.compute 是纯 Java fdlibm
+    // 移植（JDK 9+），Math.expm1 转译后直接落到该字节码链，与 JDK 逐位一致；
+    // 此前手写的 x.exp_m1() 在 expm1(1.0) 上比 fdlibm 多 1 ulp
+    // （1.7182818284590453 vs 1.718281828459045，fdlibm 本身允许 1 ulp 误差，
+    // 与正确舍入的 Rust 实现不同属正常现象，对齐须按 fdlibm 算法）。
     #[jvm_native] pub fn log1p(x: f64) -> Result<f64> { Ok(x.ln_1p()) }
     #[jvm_native] pub fn toRadians(angdeg: f64) -> Result<f64> { Ok(angdeg.to_radians()) }
     #[jvm_native] pub fn toDegrees(angrad: f64) -> Result<f64> { Ok(angrad.to_degrees()) }
