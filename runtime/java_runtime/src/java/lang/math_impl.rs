@@ -28,7 +28,11 @@ impl Math {
     #[jvm_native] pub fn cosh(x: f64) -> Result<f64> { Ok(x.cosh()) }
     #[jvm_native] pub fn tanh(x: f64) -> Result<f64> { Ok(x.tanh()) }
     #[jvm_native] pub fn hypot(x: f64, y: f64) -> Result<f64> { Ok(x.hypot(y)) }
-    #[jvm_native] pub fn expm1(x: f64) -> Result<f64> { Ok(x.exp_m1()) }
+    // expm1：不手写。StrictMath.expm1 → FdLibm.Expm1.compute 是纯 Java fdlibm
+    // 移植（JDK 9+），Math.expm1 转译后直接落到该字节码链，与 JDK 逐位一致；
+    // 此前手写的 x.exp_m1() 在 expm1(1.0) 上比 fdlibm 多 1 ulp
+    // （1.7182818284590453 vs 1.718281828459045，fdlibm 本身允许 1 ulp 误差，
+    // 与正确舍入的 Rust 实现不同属正常现象，对齐须按 fdlibm 算法）。
     #[jvm_native] pub fn log1p(x: f64) -> Result<f64> { Ok(x.ln_1p()) }
     #[jvm_native] pub fn toRadians(angdeg: f64) -> Result<f64> { Ok(angdeg.to_radians()) }
     #[jvm_native] pub fn toDegrees(angrad: f64) -> Result<f64> { Ok(angrad.to_degrees()) }
