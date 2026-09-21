@@ -140,6 +140,11 @@ impl JvmError {
         vm_throw(crate::java::lang::IllegalMonitorStateException::new_str(String::from(message)))
     }
 
+    /// `Object.wait` 参数校验（HotSpot JVM_MonitorWait 同序：先于持有检查）。
+    pub fn illegal_argument(message: &str) -> Self {
+        vm_throw(crate::java::lang::IllegalArgumentException::new_str(String::from(message)))
+    }
+
     pub fn out_of_memory(message: &str) -> Self {
         vm_throw(crate::java::lang::OutOfMemoryError::new_str(String::from(message)))
     }

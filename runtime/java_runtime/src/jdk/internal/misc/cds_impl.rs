@@ -14,4 +14,14 @@ impl CDS {
     pub fn initializeFromArchive(_arg0: Class) -> Result<()> {
         Ok(())
     }
+
+    /// `CDS.getRandomSeedForDumping:()J`：CDS 归档转储期（-Xshare:dump）用的随机
+    /// 种子。HotSpot JVM_GetRandomSeedForDumping 仅在转储期返回 os 种子，
+    /// **正常运行路径恒返回 0**。唯一消费方 ImmutableCollections.<clinit> 在
+    /// seed==0 时回落 System.nanoTime()——与无归档 JVM 的常规路径逐字一致，
+    /// 该值不进入任何可观测输出（compact strings / SALT 散列种子均为内部状态）。
+    #[jvm_native]
+    pub fn getRandomSeedForDumping() -> Result<i64> {
+        Ok(0)
+    }
 }

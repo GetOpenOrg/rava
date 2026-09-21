@@ -11,6 +11,7 @@ from .. import equiv_audit
 from ..constants import (
     PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES,
     JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES,
+    OBJECT_CLASS as _OBJECT_CLASS,
 )
 from .coerce import _coerce_to_object, _render_cast
 from .hierarchy import (
@@ -779,10 +780,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     if _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
                                  params, ret, registry):
         return
-    # 若接收方 Rust 类型是 java_runtime 手写类，不做 mangle
+    # 若接收方 Rust 类型是 java_runtime 手写类：API 名面固定，仅根类 Object 的
+    # 同名重载（wait(J)/wait(JI) → wait_l/wait_l_i，S-20）按描述符后缀取名
     obj_base = obj_ty.split('<')[0].strip()  # 去泛型后缀（ArrayList<T> → ArrayList）
     if obj_base in _JAVA_RUNTIME_SHORT_NAMES:
-        rust_mname = _safe_field(mname)
+        rust_mname = _safe_field(
+            _mangle_if_overloaded(_OBJECT_CLASS, mname, comment, registry))
     else:
         # 优先用接收者实际类型 mangle（invokeinterface 通过接口调用时 cls 是接口，
         # 接口只有一个方法→漏判重载；用实际 receiver 类型能正确找到重载）
