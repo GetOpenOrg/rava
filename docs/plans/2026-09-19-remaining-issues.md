@@ -2,7 +2,7 @@
 
 > 创建日期：2026-09-19
 > 基线：分支 `integrate-tsb` @ `8910fa5`（CFG 结构化重写 + 擦除运行时身份阶段 1 + `<clinit>`/异常对象 + PrintStream 字节码翻译 + R5-A/B/C/D 四个错误族清零）
-> 关联计划：[`2026-09-18-erased-runtime-identity.md`](2026-09-18-erased-runtime-identity.md)、[`2026-09-18-cfg-structuring-rewrite.md`](2026-09-18-cfg-structuring-rewrite.md)、[`2026-09-18-clinit-and-athrow.md`](2026-09-18-clinit-and-athrow.md)、[`2026-09-18-printstream-bytecode.md`](2026-09-18-printstream-bytecode.md)、[`2026-09-15-e2e-unresolved-issues.md`](2026-09-15-e2e-unresolved-issues.md)、[`java-rust-translation-reference.md`](java-rust-translation-reference.md)
+> 关联计划：[`2026-09-18-erased-runtime-identity.md`](2026-09-18-erased-runtime-identity.md)、[`2026-09-18-cfg-structuring-rewrite.md`](2026-09-18-cfg-structuring-rewrite.md)、[`2026-09-18-clinit-and-athrow.md`](2026-09-18-clinit-and-athrow.md)、[`2026-09-18-printstream-bytecode.md`](2026-09-18-printstream-bytecode.md)、[`2026-09-15-e2e-unresolved-issues.md`](2026-09-15-e2e-unresolved-issues.md)、[`java-rust-translation-reference.md`](java-rust-translation-reference.md)、[`2026-09-21-codegen-type-convergence.md`](2026-09-21-codegen-type-convergence.md)（**生成器类型系统收敛路线图**：擦除-恢复/字符串手术/特例 if 链三形态的统一诊断与五层调整清单，A/T/G/M 条目的架构总线）
 
 本文记录当前已知的**全部**遗留问题：架构缺口、JVM 语义缺口、生成器内部质量、项目原则违规、验证覆盖缺口、仓库事务。每一条给出现状、根因、终态目标（量化）。所有条目的解法只允许落在生成器（`codegen/`）、宏（`runtime/java_rta_macros/`）、手写层（`runtime/java_runtime/` 的 native `*_impl.rs` 与内部边界类）；禁止修改 `build/` 下的生成文件。
 

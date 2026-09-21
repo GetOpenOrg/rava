@@ -17,6 +17,7 @@
 
 **关联追踪文档**：
 - `docs/plans/2026-09-19-remaining-issues.md` — **当前主线**：A/S/G/P/V/R 六类遗留问题全清单（架构缺口/JVM 语义/生成器质量/原则违规/验证/仓库）
+- `docs/plans/2026-09-21-codegen-type-convergence.md` — **生成器类型系统收敛路线图**：擦除-恢复/字符串手术/特例 if 链的统一诊断、五层调整清单（TypeIR/M-3/A-4/转换 IR 化/downcast 链）、量化终态
 - `docs/plans/java-rust-translation-reference.md` — 翻译对照（宏家族 §16）
 - `docs/tasks-history.md` — T01-T81 历史全记录
 
