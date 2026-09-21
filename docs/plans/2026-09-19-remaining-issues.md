@@ -186,7 +186,11 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 - **现状**：`position(I)ByteBuffer` 这类协变返回覆盖在子类另立同名槽位，与祖先槽位并存。R5-A 用「转发成员按描述符完全限定分派」消除了 E0034，但经祖先类型调用时分派到的仍是祖先槽位的实现，多态语义不完整。桥接方法目前由 R5-C 从桥字节码读取真实目标来解析。
 - **终态**：协变覆盖 = 祖先槽位的 override（返回值上转为祖先槽位的擦除返回类型）+ 子类侧的类型化访问器；javac 桥接方法不生成独立槽位。并存槽位数 = 0。
 
-### A-8 同文件辅助类未进转译闭包 【P0，2026-09-21 基线新增】
+### A-8 同文件辅助类未进转译闭包 【已修复，A-8 轮】
+
+> **已修复（`1be8caa` 合入，分支 `fix/a8-sibling-classes` 两提交 `a82c98e`+`da2596a`）**：`transpile.py` 改为 **SourceFile 属性判据的编译单元闭包**（扫描 `classes/` 全部 `.class`，`ci.source_file == 源文件名` 才收编——规则一合规，共享目录历史产物由此排除）；`project_writer.py` 包名映射与用户类交叉引用导入改 `collect_referenced` 字节码引用集驱动；`class_writer.py` 超类虚方法继承改**逐祖先**判定 + 槽位语义覆盖键（协变覆盖 `get()Integer` 覆盖 `get()Object` 漏判 E0201）。**15/15 用例 E0433/E0425 清零**：TestFieldShadow / TestEnumAdvanced / TestInnerClass / TestInstanceOfChain 全过；其余 11 例 compile 清零后暴露下一层（已归类）：泛型用户父类参数位擦除（TestBridgeMethod E0053/E0308，A-1 参数位延伸）、中文字符串双重编码（TestConstructorChain/TestInitOrder，UTF-8 stdout 规格破坏）、Double.toString 整数渲染（TestSealed，S-19 邻域）、接口冲突 default 分派（TestInterfaceConflict）、接口 private 方法载体（TestInterfacePrivate E0599）、方法引用接收者 coerce（TestMethodRefKinds E0308）、泛型 record `==`（TestRecordAdvanced E0369）、`HashSet.remove` stub（TestHashSetOps）。闭包指纹 20/20 与 main 一致。
+>
+> **连带修复（`0b22604`）**：A-8 验证发现 **P-3 引入的潜伏回归**——`double_to_decimal_impl.rs` 引用 `java/lang/Appendable`，但 `_impl_signature_type_refs` 扫描只覆盖 BFS 通道类，经 stub 通道进入的宿主类不收集伴生引用 → 四红线（TestCasting/TestVarargs/TestAutoboxing/TestBoundedGenerics）**干净 scratch 下 E0432**，此前一直被旧 scratch 的陈旧 `appendable.rs` 掩盖（含 P-3 轮验证——未用 --clean）。修法：扫描与 stub 扩展构成**不动点**。验证：四红线干净树全绿；TestArrayList 源码树逐字节一致（零影响面）；TestCasting 闭包 +appendable/formatted_fp_decimal/math_utils（预期传播）。
 
 - **现状**（166 基线，2026-09-21）：15 个用例编译失败，统一形态 `E0433/E0425: cannot find type/value <Aux>`（TestConstructorChain 的 ShapeBase、TestMethodRefKinds 的 Person、TestSealed 的 Add、TestVarContext 的 DataHolder 等，全清单见 [2026-09-21-e2e-baseline-classification.md §3.1](2026-09-21-e2e-baseline-classification.md)）。**证据**：TestConstructorChain 的 scratch `user/src/` 只有入口类文件——辅助类文件根本未生成（非 mod 树漏挂）。
 - **根因**（方向，待定向确认）：类装载/BFS 闭包只从 public 入口类出发；同文件兄弟类虽被常量池引用（`new ShapeBase`）但未触发装载或未发射。与 S-15「BFS 对用户类不可见」同域，层级在类发现而非方法解析。

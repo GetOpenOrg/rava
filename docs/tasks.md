@@ -34,7 +34,8 @@
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
 | ~~陈旧树筛 + run 族定向复验~~ | **✅ 完成（2026-09-21 午后）** | 30 例复验 + 26 run 族 stderr 定性 + 4 output 族复验全记录：归类文档 §4.2/§五。假失败第 6 例（TestMethodRef）；数组视图族升 6 例；CDS/isBigEndian native 双件 8 例 |
-| **A-8 同文件辅助类未进闭包** | 166 归类新增，最大单一杠杆（15 用例） | 编译族 15 例统一 E0433/E0425；证据：scratch 内辅助类文件未生成 |
+| ~~A-8 同文件辅助类未进闭包~~ | **✅ 完成（`1be8caa`）** | 15/15 E0433/E0425 清零，4 例全过（FieldShadow/EnumAdvanced/InnerClass/InstanceOfChain），闭包指纹 20/20 一致；连带修复 P-3 潜伏回归 Appendable E0432（`0b22604`，四红线干净树恢复全绿） |
+| **A-8 下一层（11 例 compile 清零后暴露，已归类）** | 166 归类/A-8 报告 | 泛型用户父类**参数位擦除**（TestBridgeMethod，A-1 参数位延伸）；**中文字符串双重编码**（TestConstructorChain/TestInitOrder，UTF-8 stdout 规格破坏，2 例）；Double.toString 整数渲染（TestSealed，S-19 邻域）；接口冲突 default 分派（TestInterfaceConflict）；接口 private 方法载体（TestInterfacePrivate）；方法引用接收者 coerce（TestMethodRefKinds）；泛型 record `==`（TestRecordAdvanced）；`HashSet.remove` stub（TestHashSetOps）；TestGenericBoundsCombo/TestVarContext 的 Appendable 缺口已随 `0b22604` 消失待复验 |
 | **S-20 `Object.wait/notify/notifyAll`** | 166 归类新增（4 用例） | runtime 补三方法接 InternalLock；与 monitorenter 真实化联动 |
 | **数组视图 coerce 族** | 166 归类新增，**复验升级 6 例**（第二大杠杆） | 编译期 2（TestArrayCopy/TestBigInteger E0308）+ 运行期 CCE 4（TestArrayCovariance/BigDecimal/DurationPeriod/LocalDate，`Object`→`JArray<T>` 含多维未发射）；JDK25 批 8 例同型 E0308 待判同根因——若同根因合计 14 例 |
 | **native 双件：`CDS.getRandomSeedForDumping` + `StringUTF16.isBigEndian`** | 4.2 复验新增（8 例） | 两处 runtime 手写（数行级）：CDS 压 6 用例（ListOf/LinkedHash/CollectionFactory/StreamMore/AutoboxEdge/LambdaVar），isBigEndian 压 2（StringSearch/StringEdge）——收益密度最高 |
