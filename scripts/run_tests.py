@@ -111,6 +111,49 @@ def _to_bin_name(class_name: str) -> str:
     return s.lower()
 
 
+# ── 行输出格式化：时间戳 + 列对齐 + 转译辅助列（引用类计数 / 语料混用告警）──
+_CLASSES_RE = re.compile(r"完成[，,]\s*(\d+) 个调用链类 \+ (\d+) 个 field stub = (\d+) 个")
+_CORPUS_RE = re.compile(r"语料选择：用户类 class 版本 (\d+) → JDK (\d+)")
+
+
+def _now_hms() -> str:
+    return time.strftime("%H:%M:%S")
+
+
+def _name_width(files: list) -> int:
+    """测试名列宽：按发现清单自适应（相对 tests/e2e/ 的路径），夹在 [34, 58]。"""
+    lens = [len(str(f.relative_to(E2E))) for f in files] or [34]
+    return min(max(max(lens), 34), 58)
+
+
+def _transpile_aux(log: str) -> str:
+    """转译输出的行尾辅助列：BFS 引用类计数（调用链+field stub）+ 语料/JDK
+    混用告警（class 版本-44 ≠ 语料 JDK 时——TestListOf 教训：PATH javac 25
+    劫持会让同一测试在两个 JDK 语料间漂移）。"""
+    parts = []
+    m = _CLASSES_RE.search(log)
+    if m:
+        parts.append(f"cls {m.group(1)}+{m.group(2)}")
+    c = _CORPUS_RE.search(log)
+    if c and int(c.group(1)) - 44 != int(c.group(2)):
+        parts.append(f"MIX! class{c.group(1)}->jdk{c.group(2)}")
+    return " | ".join(parts)
+
+
+def _pline(name_w: int, status: str, name, tail: str = "", aux: str = "",
+           prog: str = "") -> None:
+    """统一行输出（两模式共用）：
+    [HH:MM:SS] [ N/M] [PASS] name<pad> tail  | cls ..+.. | MIX! ..
+    状态列宽 5 保持 [ PASS ] / [ FAIL ] 既有 token 不变（下游 grep 兼容）。"""
+    head = f"[{_now_hms()}] {prog} " if prog else f"[{_now_hms()}] "
+    line = f"{head}[{status:^5}] {str(name):<{name_w}}"
+    if tail:
+        line += f" {tail}"
+    if aux:
+        line += f"  | {aux}"
+    print(line, flush=True)
+
+
 def _test_workspace(bin_name: str) -> Path:
     """每测试独立 scratch 工作区。"""
     return OUT / bin_name
@@ -437,6 +480,10 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         print(f"No test files found (filter={filter_str!r})")
         return 1
 
+    print(f"[start] {time.strftime('%Y-%m-%d %H:%M:%S')} | sequential"
+          + (f" | filter: {' '.join(filter_str)}" if filter_str else ""))
+    name_w = _name_width(files)
+
     passed = failed = skipped = 0
     t_all = time.perf_counter()
     t_transpile_total = t_build_total = t_run_total = 0.0
@@ -469,7 +516,8 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         t_transpile = time.perf_counter() - t0
         t_transpile_total += t_transpile
         if not ok:
-            print(f"{prog} [ FAIL ] {rel}  — transpile error ({fmt_dur(t_transpile)})")
+            _pline(name_w, "FAIL", java_file.relative_to(E2E),
+                   f"— transpile error ({fmt_dur(t_transpile)})", prog=prog)
             print(log[-500:])
             _fail("transpile", str(rel))
             continue
@@ -483,7 +531,9 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
             equiv_counts[class_name] = _ec
 
         if no_run:
-            print(f"{prog} [NORUN ] {rel}  — transpile OK ({fmt_dur(t_transpile)})")
+            _pline(name_w, "NORUN", java_file.relative_to(E2E),
+                   f"— transpile OK ({fmt_dur(t_transpile)})",
+                   aux=_transpile_aux(log), prog=prog)
             skipped += 1
             continue
 
@@ -492,7 +542,9 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         t_build = time.perf_counter() - t0
         t_build_total += t_build
         if not ok:
-            print(f"{prog} [ FAIL ] {rel}  — compile error ({fmt_dur(t_build)})  {err}")
+            _pline(name_w, "FAIL", java_file.relative_to(E2E),
+                   f"— compile error ({fmt_dur(t_build)})  {err}",
+                   aux=_transpile_aux(log), prog=prog)
             _fail("compile", str(rel))
             continue
 
@@ -502,26 +554,31 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         t_run_total += t_run
         timing = f"transpile {fmt_dur(t_transpile)}, build {fmt_dur(t_build)}, run {fmt_dur(t_run)}"
         if status == "timeout":
-            print(f"{prog} [ FAIL ] {rel}  — run timeout (> {fmt_dur(RUN_TIMEOUT)})  ({timing})")
+            _pline(name_w, "FAIL", java_file.relative_to(E2E),
+                   f"— run timeout (> {fmt_dur(RUN_TIMEOUT)})  ({timing})",
+                   aux=_transpile_aux(log), prog=prog)
             _fail("run-timeout", str(rel))
             continue
         if status == "error":
             # run 族失败：直跑二进制抓 stderr 自动分类子族（stub-hit 等）
             fam, detail = _classify_run_failure(class_name)
             run_sub[class_name] = (fam, detail)
-            print(f"{prog} [ FAIL ] {rel}  — run error  ({timing})")
+            _pline(name_w, "FAIL", java_file.relative_to(E2E),
+                   f"— run error  ({timing})", aux=_transpile_aux(log), prog=prog)
             _fail("run", str(rel))
             continue
 
         diff = _diff(expected, actual, class_name)
         if diff:
-            print(f"{prog} [ FAIL ] {rel}  — output mismatch  ({timing})")
+            _pline(name_w, "FAIL", java_file.relative_to(E2E),
+                   f"— output mismatch  ({timing})", aux=_transpile_aux(log), prog=prog)
             print("".join(diff[:40]))
             if len(diff) > 40:
                 print(f"  … ({len(diff) - 40} more lines)")
             _fail("output", str(rel))
         else:
-            print(f"{prog} [ PASS ] {rel}  ({timing})")
+            _pline(name_w, "PASS", java_file.relative_to(E2E),
+                   f"({timing})", aux=_transpile_aux(log), prog=prog)
             passed += 1
 
     total = passed + failed + skipped
@@ -535,6 +592,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     print(f"Elapsed: {fmt_dur(elapsed)}"
           f"  (transpile {fmt_dur(t_transpile_total)}, build {fmt_dur(t_build_total)},"
           f" run {fmt_dur(t_run_total)})")
+    print(f"[end] {time.strftime('%Y-%m-%d %H:%M:%S')}")
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
     _summarize_raw()
@@ -550,12 +608,18 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         print(f"No test files found (filter={filter_str!r})")
         return 1
 
+    print(f"[start] {time.strftime('%Y-%m-%d %H:%M:%S')} | parallel (jobs={jobs})"
+          + (f" | filter: {' '.join(filter_str)}" if filter_str else ""))
+    name_w = _name_width(files)
+    aux_by_file: dict = {}
+
     # 过滤无 expected 文件的测试
     pending: list[Path] = []
     skipped = 0
     for f in files:
         if _read_expected(_class_name(f)) is None:
-            print(f"[ SKIP ] {f.relative_to(ROOT)}  (no expected/{_class_name(f)}.txt)")
+            _pline(name_w, "SKIP", f.relative_to(E2E),
+                   f"(no expected/{_class_name(f)}.txt)", prog=f"[{files.index(f)+1:>3}/{len(files)}]")
             skipped += 1
         else:
             pending.append(f)
@@ -591,6 +655,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                     readability_counts[_class_name(java_file)] = rc
                 if ec:
                     equiv_counts[_class_name(java_file)] = ec
+                aux_by_file[java_file] = _transpile_aux(log)
             else:
                 print(f"  [transpile] {rel} FAIL", flush=True)
                 print(log[-300:])
@@ -643,7 +708,8 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     run_sub: dict[str, tuple[str, str]] = {}
 
     for java_file in build_fail:
-        print(f"[ FAIL ] {java_file.relative_to(ROOT)}  — compile error")
+        _pline(name_w, "FAIL", java_file.relative_to(E2E), "— compile error",
+               aux=aux_by_file.get(java_file, ""))
         failed += 1
 
     def _run_one(java_file: Path) -> tuple[Path, bool, str, list[str]]:
@@ -663,21 +729,22 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         for fut in as_completed(futures):
             java_file, ok, err_msg, diff = fut.result()
             rel = java_file.relative_to(ROOT)
+            _aux = aux_by_file.get(java_file, "")
             if not ok and err_msg:
-                print(f"[ FAIL ] {rel}  — {err_msg}")
+                _pline(name_w, "FAIL", java_file.relative_to(E2E), f"— {err_msg}", aux=_aux)
                 failed += 1
             elif diff:
-                print(f"[ FAIL ] {rel}")
+                _pline(name_w, "FAIL", java_file.relative_to(E2E), "— output mismatch", aux=_aux)
                 print("".join(diff[:40]))
                 if len(diff) > 40:
                     print(f"  … ({len(diff) - 40} more lines)")
                 failed += 1
             else:
-                print(f"[ PASS ] {rel}")
+                _pline(name_w, "PASS", java_file.relative_to(E2E), aux=_aux)
                 passed += 1
 
     for java_file in transpile_fail:
-        print(f"[ FAIL ] {java_file.relative_to(ROOT)}  — transpile error")
+        _pline(name_w, "FAIL", java_file.relative_to(E2E), "— transpile error")
         failed += 1
 
     total = passed + failed + skipped
@@ -688,6 +755,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     print(f"Elapsed: {fmt_dur(elapsed)}"
           f"  (transpile {fmt_dur(t_transpile)}, build {fmt_dur(t_build)},"
           f" run {fmt_dur(time.perf_counter() - t_run_start)})")
+    print(f"[end] {time.strftime('%Y-%m-%d %H:%M:%S')}")
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
     _summarize_raw()
