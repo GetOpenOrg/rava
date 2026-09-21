@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -204,22 +205,33 @@ def _save_failed(path: Path, names: set) -> None:
                     encoding="utf-8")
 
 
-def _update_failed_file(path: Path, prev: set, outcomes: dict) -> None:
-    """outcomes: 测试名(ROOT 相对路径) -> True(PASS)/False(FAIL)；未运行的不动。"""
-    keep = set(prev)
-    removed = added = 0
-    for name, ok in outcomes.items():
-        if ok:
-            if name in keep:
-                keep.discard(name)
-                removed += 1
-        elif name not in keep:
-            added += 1
-        if not ok:
-            keep.add(name)
-    _save_failed(path, keep)
-    print(f"[failed-file] {path.relative_to(ROOT)}：保留 {len(keep)}"
-          f"（本次出列 {removed}、进列 {added}）—— `--failed` 按此回归")
+class _FailedRatchet:
+    """失败清单写穿棘轮：每个测试出结果**立即**落盘（边测边进/出列），
+    进程被中断（Ctrl-C/超时杀）也不丢已累积的结果；跑批中可随时 tail
+    该文件观察。线程安全（并行模式 worker 并发记录）。"""
+
+    def __init__(self, path: Path, prev: set):
+        self.path = path
+        self.failed = set(prev)
+        self.removed = self.added = 0
+        self._lock = threading.Lock()
+        _save_failed(path, self.failed)
+
+    def record(self, name: str, ok: bool) -> None:
+        with self._lock:
+            if ok:
+                if name in self.failed:
+                    self.failed.discard(name)
+                    self.removed += 1
+            else:
+                if name not in self.failed:
+                    self.added += 1
+                self.failed.add(name)
+            _save_failed(self.path, self.failed)
+
+    def summary(self) -> None:
+        print(f"[failed-file] {self.path.relative_to(ROOT)}：保留 {len(self.failed)}"
+              f"（本次出列 {self.removed}、进列 {self.added}）—— `--failed` 按此回归")
 
 
 def _apply_failed_filter(files: list, failed_set: set) -> list:
@@ -593,13 +605,13 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     run_sub: dict[str, tuple[str, str]] = {}
     fail_categories: dict[str, list[str]] = {}
 
-    outcomes: dict[str, bool] = {}
+    ratchet = _FailedRatchet(failed_path, prev_failed)
 
     def _fail(cat: str, rel_str: str) -> None:
         nonlocal failed
         failed += 1
         fail_categories.setdefault(cat, []).append(rel_str)
-        outcomes[rel_str] = False
+        ratchet.record(rel_str, False)
 
     total_files = len(files)
     for idx, java_file in enumerate(files, 1):
@@ -694,7 +706,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
                    f"({timing})",
                    aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, bin_name, _eta), prog=prog)
             passed += 1
-            outcomes[str(rel)] = True
+            ratchet.record(str(rel), True)
 
     total = passed + failed + skipped
     elapsed = time.perf_counter() - t_all
@@ -708,7 +720,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
           f"  (transpile {fmt_dur(t_transpile_total)}, build {fmt_dur(t_build_total)},"
           f" run {fmt_dur(t_run_total)})")
     print(f"[end] {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    _update_failed_file(failed_path, prev_failed, outcomes)
+    ratchet.summary()
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
     _summarize_raw()
@@ -723,7 +735,6 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                   skip_failed: bool = False) -> int:
     failed_path = failed_path or _failed_file_path(None)
     prev_failed = _load_failed(failed_path)
-    outcomes: dict[str, bool] = {}
     files = _discover(filter_str)
     if use_failed:
         files = _apply_failed_filter(files, prev_failed)
@@ -740,6 +751,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
 
     print(f"[start] {time.strftime('%Y-%m-%d %H:%M:%S')} | parallel (jobs={jobs})"
           + (f" | filter: {' '.join(filter_str)}" if filter_str else ""))
+    ratchet = _FailedRatchet(failed_path, prev_failed)
     _print_env_header()
     name_w = _name_width(files)
     aux_by_file: dict = {}
@@ -793,7 +805,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                 print(f"  [transpile] {rel} FAIL", flush=True)
                 print(log[-300:])
                 transpile_fail.append(java_file)
-                outcomes[str(rel)] = False
+                ratchet.record(str(rel), False)
 
     if not transpile_ok:
         print("所有转译均失败，退出。")
@@ -845,7 +857,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         _a = aux_by_file.get(java_file) or ("", 0, 0)
         _pline(name_w, "FAIL", java_file.relative_to(E2E), "— compile error",
                aux=_aux_full(_a[0], _a[2], _a[1]))
-        outcomes[str(java_file.relative_to(ROOT))] = False
+        ratchet.record(str(java_file.relative_to(ROOT)), False)
         failed += 1
 
     def _run_one(java_file: Path) -> tuple[Path, bool, str, list[str]]:
@@ -870,7 +882,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                              _to_bin_name(_class_name(java_file)))
             if not ok and err_msg:
                 _pline(name_w, "FAIL", java_file.relative_to(E2E), f"— {err_msg}", aux=_aux)
-                outcomes[str(java_file.relative_to(ROOT))] = False
+                ratchet.record(str(java_file.relative_to(ROOT)), False)
                 failed += 1
             elif diff:
                 _n_diff = sum(1 for l in diff if l[:1] in "+-" and not l.startswith(("+++", "---")))
@@ -879,16 +891,16 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                 print("".join(diff[:40]))
                 if len(diff) > 40:
                     print(f"  … ({len(diff) - 40} more lines)")
-                outcomes[str(java_file.relative_to(ROOT))] = False
+                ratchet.record(str(java_file.relative_to(ROOT)), False)
                 failed += 1
             else:
                 _pline(name_w, "PASS", java_file.relative_to(E2E), aux=_aux)
-                outcomes[str(java_file.relative_to(ROOT))] = True
+                ratchet.record(str(java_file.relative_to(ROOT)), True)
                 passed += 1
 
     for java_file in transpile_fail:
         _pline(name_w, "FAIL", java_file.relative_to(E2E), "— transpile error")
-        outcomes[str(java_file.relative_to(ROOT))] = False
+        ratchet.record(str(java_file.relative_to(ROOT)), False)
         failed += 1
 
     total = passed + failed + skipped
@@ -900,7 +912,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
           f"  (transpile {fmt_dur(t_transpile)}, build {fmt_dur(t_build)},"
           f" run {fmt_dur(time.perf_counter() - t_run_start)})")
     print(f"[end] {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    _update_failed_file(failed_path, prev_failed, outcomes)
+    ratchet.summary()
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
     _summarize_raw()
