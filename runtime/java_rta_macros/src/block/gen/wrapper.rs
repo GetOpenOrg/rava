@@ -61,6 +61,28 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
             ) -> Self {
                 #struct_ident { vtable, any, _jvm_null: is_null, #phantom_init }
             }
+
+            /// invokevirtual 在 Object 接收者上的类 vtable 分派入口（§6 步骤 4）：
+            /// 运行时类是本类或其子类 → `Some(本实例化视图)`。vtable / 存储部件取自
+            /// 原对象（与 `From<Object>` 擦除路径同源——共享存储与对象标识，子类
+            /// vtable 经 supertrait 上转）；其余（闭包、无运行时类值）→ `None`，
+            /// 调用方回落闭包 SAM 分支。对任意类型实参成立（Java 泛型运行时擦除）。
+            #[doc(hidden)]
+            pub fn __virtual_view(obj: &Object) -> ::std::option::Option<Self> {
+                let mut __vt: ::std::option::Option<
+                    ::std::rc::Rc<dyn #vtable_trait_ident>> = ::std::option::Option::None;
+                ObjectVTable::__erased_vtable(::std::rc::Rc::clone(&obj.0), &mut __vt);
+                let __vt = __vt?;
+                let mut __store: ::std::option::Option<
+                    ::std::rc::Rc<dyn ::std::any::Any>> = ::std::option::Option::None;
+                ObjectVTable::__erased_inner(::std::rc::Rc::clone(&obj.0), &mut __store);
+                Some(#struct_ident {
+                    vtable: __vt,
+                    any: __store?,
+                    _jvm_null: false,
+                    #phantom_init
+                })
+            }
         }
     };
 

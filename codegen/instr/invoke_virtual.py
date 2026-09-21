@@ -5,7 +5,7 @@ from ..stack import StackSim
 from .. import inherited_calls as _inherited_calls
 from ..rs_ir import Lit, Var, RawExpr, RawStmt, RsNamed
 from ..render import render_expr, render_type
-from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
+from ..type_map import jvm_to_rust, short_cls
 from ..constants import safe_ident as _safe_field
 from .. import equiv_audit
 from ..constants import (
@@ -14,27 +14,22 @@ from ..constants import (
     OBJECT_CLASS as _OBJECT_CLASS,
 )
 from .coerce import _coerce_to_object, _render_cast
-from .hierarchy import (
-    _rust_type_to_binary, _get_all_subtypes_ordered,
-    _super_prefix_to_expr,
-)
+from .hierarchy import _rust_type_to_binary
 from .member_owner import (
     parse_method_ref,
     _resolve_method_owner, _root_virtual_methods,
-    _find_method_super_prefix_for_type,
     _declaring_interface, _close_open_type_args,
     _resolve_virtual_sig_params,
 )
 from .member_naming import (
     _mangle_if_overloaded, _resolve_bridge_target,
 )
-from ..type_map import parse_class_type_params as _parse_class_type_params
 from ..type_args import ancestor_vtable_args_by_short as _ancestor_vtable_args_by_short
 from ..type_args import (ancestor_type_args as _ancestor_type_args,
-                         split_rust_type_args as _split_rust_type_args)
+                         substitute_type_params as _substitute_type_params)
 from ..type_map import effective_class_type_params as _effective_class_type_params
 from .invoke_sig import (_lookup_method_sig_ret, _erased_ret_is_type_var,
-                         _coerce_arg, _split_type_args)
+                         _coerce_arg)
 
 
 def _pop_receiver_and_args(sim, params, sig_params_v, registry):
@@ -190,11 +185,13 @@ def _emit_object_direct_call(sim, obj_e, args, rust_mname, rust_ret) -> bool:
 
 
 def _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
-                          args, arg_str, rust_ret, registry):
-    """bare Object 接收者的多态分派：接口经载体 / 类经 downcast 链（叶→根）/
-    闭包回退（Arch-3）；所有路径发射后返回。"""
-    # 多态 dispatch：按继承链（叶→根）依次 downcast，找到实际类型后调用方法
-    # cls 是 Rust 短类名（$ 已替换为 _），需转回 binary name 查继承链
+                          args, arg_str, rust_ret, registry, rust_mname,
+                          sig_params_v):
+    """bare Object 接收者的多态分派（§6 步骤 4）：接口经载体 / 根类方法经根
+    vtable 单次直调 / 类虚方法经类 vtable 查询（`__virtual_view` 擦除视图重建，
+    共享存储与对象标识）后在 wrapper 边界调用目标方法；闭包回退（Arch-3，
+    A-5 lambda 对象化域）保留。所有路径发射后返回。"""
+    # 多态 dispatch：cls 是 Rust 短类名（$ 已替换为 _），需转回 binary name
     cls_binary = _rust_type_to_binary(cls, registry) or cls
     # 接口方法：经与接口同名的载体分派（`Into::<I<Object>>::into(obj).m()`）。
     # 载体按擦除后的接口（itable 语义）向对象查询接口 vtable，不依赖对象的类型实参；
@@ -235,321 +232,191 @@ def _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
                     sim.emit(RawStmt(f"let {v}: {rust_ret} = {_iface_call};"))
                 sim.push(Var(v), RsNamed(rust_ret))
             return
-    subtypes = _get_all_subtypes_ordered(cls_binary, registry)
-    # 跨 crate 防泄漏：JDK 类文件落在 java_runtime crate，不能引用 user crate
-    # 的类型。batch 并集 registry 会把用户测试类也列为 Comparable 等接口的
-    # 子类，烘焙进 java_runtime 后产生 E0425（类型不在本 crate 作用域）。
-    # 因此 JDK 类的分派链只枚举 JDK 子类；user 类文件可引用两者（依赖方向合法）。
-    if is_jdk(cls_binary):
-        subtypes = [s for s in subtypes if is_jdk(s)]
-    cls_rust = jvm_to_rust(f'L{cls_binary};', registry)
-    # Arch-3: 闭包回退 —— Rc<dyn Fn(...)> downcast（lambda / 方法引用）
-    # SAM 参数列表对应 invokevirtual/invokeinterface 的实际参数类型
-    # Result 用裸名：两个 crate 的生成文件均经 prelude 引入
-    # （java_runtime: crate::prelude / user: crate::error::Result），
-    # 写 crate::error::Result 在 user crate 里是 E0433。
+    # 根类（Object）声明的方法：单次根 vtable 分派。声明 / 覆盖该方法的类都在
+    # 自身的 ObjectVTable impl 上把入口桥接到所属 vtable（struct_layout 的
+    # hashCode/equals 桥接 + wrapper 的 hash_code_fwd / to_string_fwd），
+    # 按子类枚举的 downcast 链与根调用到达同一实现（JVM 的 vtable 继承条目
+    # 语义），链是纯冗余——链尾即全部语义。
+    if (mname, f"({''.join(params)})") in _root_virtual_methods():
+        _root_call = f"{obj_e}.{rust_mname}({arg_str})?"
+        if rust_ret == '()':
+            sim.emit(RawStmt(f"{_root_call};"))
+        else:
+            v = sim.fresh()
+            sim.emit(RawStmt(f"let {v}: {rust_ret} = {_root_call};"))
+            sim.push(Var(v), RsNamed(rust_ret))
+        return
+    # 类虚方法：经类 vtable 分派（依赖 A-1 的类 vtable 去形参与 __erased_vtable /
+    # __erased_inner 部件导出）。`Cls::<Object, ..>::__virtual_view(&obj)` 按运行时
+    # 类查询本类擦除 vtable（子类经 supertrait 上转填充），命中即以原对象的
+    # (vtable, 存储) 部件重建本类擦除实例化视图——共享存储与对象标识，与
+    # From<Object> 擦除路径同源；未命中（闭包、无运行时类值）回落闭包 SAM 分支。
+    _cls_ci = registry.get(cls_binary)
+    _cls_rust = jvm_to_rust(f'L{cls_binary};', registry) if _cls_ci is not None else 'Object'
+    if _cls_ci is not None and not _cls_ci.is_interface and _cls_rust != 'Object':
+        _emit_class_vtable_dispatch(
+            sim, obj_e, _cls_ci, cls_binary, _cls_rust, mname, comment, params,
+            ret, args, arg_str, rust_ret, registry, sig_params_v)
+        return
+    # 未翻译类 / 接口残余形：无 wrapper 可建 —— 闭包回退 + 占位（既有兜底）
     _sam_ptypes = [jvm_to_rust(p, registry) for p in params]
     _fn_type = (f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)})'
                 f' -> Result<{rust_ret}>>')
     if rust_ret == '()':
-        _closure_branch = (f'if let Some(__f) = {obj_e}.0.as_any()'
-                           f'.downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})?; }}')
+        sim.emit(RawStmt(
+            f'if let Some(__f) = {obj_e}.0.as_any()'
+            f'.downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})?; }}'))
     else:
-        _closure_branch = (f'if let Some(__f) = {obj_e}.0.as_any()'
-                           f'.downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }}')
-
-    # 当前调用的完整 JVM 描述符（供下面 _resolve_method_owner 精确匹配）
-    jvm_desc = f"({''.join(params)}){ret}"
-    # 根类（Object）声明的方法：未在自身/祖先链声明该方法的类不生成分支，
-    # 统一落到链尾的根 vtable 调用（Java 语义：继承根类实现），
-    # 而不是在 wrapper 上找不存在的 inherent 方法（E0599）。
-    _root_declared = (mname, f"({''.join(params)})") in _root_virtual_methods()
-    if _root_declared:
-        _root_call = f"{obj_e}.{_safe_field(mname)}({arg_str})?"
-        _chain_tail = f" else {{ {_root_call}; }}" if rust_ret == '()' else f" else {{ {_root_call} }}"
-    else:
-        _chain_tail = '' if rust_ret == '()' else " else { Default::default() }"
-    # 只有当目标类有已知子类时，才生成 dispatch 链（否则退化为简单 downcast）
-    if subtypes:
-        all_types = subtypes + [cls_binary]  # 叶→根
         v = sim.fresh('_vdispatch')
-        branches = []
-        for sub_bin in all_types:
-            _branch = _subtype_branch(registry, sub_bin, mname, comment, params, ret,
-                                      args, arg_str, jvm_desc, _root_declared,
-                                      rust_ret, obj_e)
-            if _branch is not None:
-                branches.append(_branch)
-        branches.append(_closure_branch)
-        if rust_ret == '()':
-            dispatch_code = ' else '.join(branches) + _chain_tail
-            sim.emit(RawStmt(f"{dispatch_code}"))
-        else:
-            dispatch_expr = ' else '.join(branches) + _chain_tail
-            sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
-            sim.push(Var(v), RsNamed(rust_ret))
-        return
-    # 无 subtypes 时（接口无已知实现类）：单独生成闭包 dispatch + 占位
-    v = sim.fresh('_vdispatch')
-    if rust_ret == '()':
-        sim.emit(RawStmt(_closure_branch + _chain_tail))
-    else:
-        dispatch_expr = _closure_branch + _chain_tail
-        sim.emit(RawStmt(f"let {v}: {rust_ret} = {dispatch_expr};"))
+        sim.emit(RawStmt(
+            f"let {v}: {rust_ret} = if let Some(__f) = {obj_e}.0.as_any()"
+            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }} else {{ Default::default() }};"))
         sim.push(Var(v), RsNamed(rust_ret))
     return
 
 
-def _subtype_branch(registry, sub_bin, mname, comment, params, ret,
-                    args, arg_str, jvm_desc, _root_declared, rust_ret, obj_e):
-    """单个 downcast 分支：owner 解析（Fix 12b）→ bridge 参数 checkcast（Fix 17）→
-    _super 路由与协变返回包装；不可编译 / 不可达分支返回 None（跳过）。"""
-    _sub_ci_abs = registry.get(sub_bin)
-    if _sub_ci_abs is not None and _sub_ci_abs.is_abstract and not _sub_ci_abs.is_interface:
-        # 抽象类不可能是对象的运行期类型：downcast 分支恒不命中，不生成
-        return None
-    sub_rust = jvm_to_rust(f'L{sub_bin};', registry)
-    if sub_rust == 'Object':
-        # 目标类是接口（jvm_to_rust 对接口返回 Object）：
-        # downcast_ref::<Object>() 恒为 Some，会遮蔽闭包回退分支，
-        # 且 Object 上没有业务方法（E0599），直接丢弃该分支
-        return None
-    # Fix 12a：包装类在 JVM_RUST 中映射为基本类型（Boolean→bool、
-    # Double→f64 等），downcast_ref::<bool>() 不满足 Any 约束是硬
-    # 错误，该分支不可编译 → 丢弃
-    if sub_rust in _PRIMITIVE_RUST_TYPES:
-        return None
-    # 泛型类（如 ArrayList_Itr<E>）：jvm_to_rust 返回裸名，downcast_ref
-    # 需要完整泛型实参，用 `_` 通配符让 Rust 自动推断（E0107 防护）。
-    # 内部类（ArrayList_Itr）通过 this$0 继承外部类类型参数，
-    # 不在自身 generic_signature 中声明，需额外检测。
-    if '<' not in sub_rust and registry:
-        _sub_ci_g = registry.get(sub_bin)
-        if _sub_ci_g:
-            from ..type_map import effective_class_type_params as _ectp_g
-            _tp_g = _ectp_g(_sub_ci_g, registry)
-            if _tp_g:
-                # 使用 Object 作为类型实参（Java 类型擦除语义）：
-                # - 内部类（ArrayList_Itr）的 TypeId 与外部类类型参数绑定
-                # - downcast_ref::<ArrayList_Itr<_>>() 无法推断 `_`（E0283）
-                # - 使用 Object 使代码可编译；iterator() 存储 ArrayList_Itr<E>
-                #   时已做 Object::from_any 擦除，运行时 TypeId 匹配 Object 参数形式
-                sub_rust = sub_rust + '<' + ', '.join(['Object'] * len(_tp_g)) + '>'
-    # Fix 12b：重载 mangle 按声明类（owner）查 —— 子类继承的重载
-    # 方法在子类方法表中查不到同名重载，按子类表 mangle 会得到
-    # 错误的方法名（如 collect 声明处 mangle 为 collect_collector，
-    # 子类分支按子类表查成 collect）。owner 沿父类链解析不到时
-    # （接口 default 方法由 class_writer 注入实现类 impl 块，
-    # 父类链上查不到）保留子类名。
-    _owner_bin, _ = _resolve_method_owner(
-        sub_bin, mname, registry, descriptor=jvm_desc)
-    # 调用描述符只命中 synthetic bridge（Comparable.compareTo(Object) → 实现类的
-    # compareTo(Self)）：owner 取 bridge 的声明类，后续按被桥接的真实方法处理
-    # （继承自祖先的真实方法经 vtable supertrait UFCS 调用）。
-    _bridge_desc = ''
-    if not _owner_bin and registry and registry.get(sub_bin) is not None:
-        _bridged = _resolve_bridge_target(registry[sub_bin], mname, jvm_desc, registry)
-        if _bridged is not None and not _bridged[0].is_interface:
-            _owner_bin, _bridge_desc = _bridged[0].name, _bridged[1]
-    if _root_declared and not _owner_bin:
-        return None
-    if not _owner_bin and registry and registry.get(sub_bin) is not None:
-        _sub_ci_own = registry[sub_bin]
-        if _sub_ci_own.is_abstract and not _sub_ci_own.is_interface:
-            # 抽象类自身与祖先链都未声明该方法：对象的运行时类必为其具体子类
-            # （各有独立分支），本分支在 Java 语义下不可达，不生成。
-            return None
-        # 具体类：实现来自祖先注入的接口 default 方法 → 登记继承成员声明
-        _inherited_calls.request(sub_bin, mname, '(' + ''.join(params) + ')')
-    # 名字视角 = 接收者（_d 的类型 sub_rust：本类覆盖与继承成员都在其 wrapper 上，
-    # 名字按接收者重载态）——声明者 _owner_bin 只用于 base 函数 / 继承成员登记
-    _mangle_cls = sub_bin or sub_rust
-    sub_mname_r = _mangle_if_overloaded(_mangle_cls, mname, comment, registry)
-    sub_mname_r = _safe_field(sub_mname_r)
-    sub_mname_r, _barg_str, _bm17 = _bridge_downcast_args(
-        registry, sub_bin, sub_rust, mname, comment, params, args, arg_str,
-        jvm_desc, _bridge_desc, _owner_bin, _mangle_cls, sub_mname_r)
-    # 方法由祖先 _owner_bin 声明、sub 自身未覆盖：分支内同样写 `_d.method(args)`，
-    # 并登记 sub 需要该继承成员 —— 由 sub 的 java_class! 块声明、宏展开为
-    # wrapper 转发方法（内部经声明该方法的祖先 VTable 分派，消除 E0034 歧义）。
-    _sub_pfx = _find_method_super_prefix_for_type(
-        sub_rust.split('<')[0], mname, registry,
-        descriptor=_bridge_desc or f"({''.join(params)}){ret}",
-    )
-    if _sub_pfx and _owner_bin:
-        _inherited_calls.request(
-            sub_bin, mname, (_bridge_desc or jvm_desc).split(')')[0] + ')')
-        _call_expr = f"_d.{sub_mname_r}({_barg_str})"
-    elif _sub_pfx:
-        # fallback（owner 未知）：保留旧的 __super() 路由
-        _d_recv = _super_prefix_to_expr('_d', _sub_pfx)
-        _call_expr = f"{_d_recv}.{sub_mname_r}({_barg_str})"
-    else:
-        _call_expr = f"_d.{sub_mname_r}({_barg_str})"
-    # 协变返回：dispatch 结果按擦除描述符为 Object，分支真实方法返回具体类型
-    # → 分支内向上转型（等价 Java bridge 方法的隐式 upcast）。
-    _branch_wrap_obj = False
-    _bm_ret = None
-    if rust_ret == 'Object' and registry:
-        _own_ci_ret = registry.get(_owner_bin or sub_bin)
-        _param_part_ret = '(' + ''.join(params) + ')'
-        if _own_ci_ret is not None:
-            for _m in _own_ci_ret.methods:
-                if (_m.name == mname and not _m.is_synthetic
-                        and _m.descriptor.startswith(_param_part_ret)):
-                    _bm_ret = _m
-                    break
-    if _bm_ret is None and rust_ret == 'Object':
-        # 擦除描述符未命中（泛型接口的具体化实现，如 apply(String)→具体类）：
-        # 取上面按 bridge 规则解析出的真实方法
-        _bm_ret = _bm17
-    if _bm_ret is not None:
-        _bret_desc = _bm_ret.descriptor.split(')', 1)[1]
-        _bret_gen = (_bm_ret.generic_signature.split(')', 1)[1]
-                     if _bm_ret.generic_signature and ')' in _bm_ret.generic_signature else '')
-        if (not _bret_gen.startswith('T')
-                and jvm_to_rust(_bret_desc, registry) not in ('Object', '()')):
-            _branch_wrap_obj = True
-    if _branch_wrap_obj:
-        return f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ Object::from_any({_call_expr}?) }}"
-    elif rust_ret == '()':
-        return f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_call_expr}?; }}"
-    else:
-        return f"if let Some(_d) = {obj_e}.0.as_any().downcast_ref::<{sub_rust}>() {{ {_call_expr}? }}"
+def _erased_view_sig(cls_ci, mname, params, ret, registry):
+    """调用目标在接收者擦除实例化（`Cls<Object, ..>` wrapper 视角）下的
+    (形参类型列表, 返回类型)。
+
+    沿 cls 超类链找 (mname, 参数描述符) 的最近非 synthetic 声明，取其发射签名
+    （emitted_method_sig_types，与定义侧文件逐字同源），把声明者类型变量按
+    「接收者全 Object 实参」的祖先实参代入（裸变量 → Object，参数化形态的
+    实参位同步 Object 化）。调用描述符只命中 synthetic 桥接时按被桥接的真实
+    方法解析（Fix 17 同源）。链上无声明 → (None, None)。"""
+    full_desc = '(' + ''.join(params) + ')' + ret
+    pdesc = '(' + ''.join(params) + ')'
+    from ..sig_types import emitted_method_sig_types
+
+    def _subst_owner(view_ci, m):
+        owner_tps = _effective_class_type_params(view_ci, registry)
+        sig_ps, sig_r = emitted_method_sig_types(view_ci, m, owner_tps, registry)
+        if view_ci.name == cls_ci.name:
+            mapping = {p: 'Object' for p in owner_tps}
+        else:
+            recv_tps = _effective_class_type_params(cls_ci, registry)
+            anc_args = dict(_ancestor_type_args(
+                cls_ci, registry, ['Object'] * len(recv_tps))).get(view_ci.name, [])
+            mapping = {p: (anc_args[i] if i < len(anc_args) else 'Object')
+                       for i, p in enumerate(owner_tps)}
+        return ([_substitute_type_params(p, mapping) for p in sig_ps],
+                _substitute_type_params(sig_r, mapping))
+
+    cur, seen = cls_ci, set()
+    while cur is not None and cur.name not in seen and not cur.is_interface:
+        seen.add(cur.name)
+        m = next((x for x in cur.methods
+                  if not x.is_synthetic and x.name == mname
+                  and x.descriptor.startswith(pdesc)), None)
+        if m is not None:
+            return _subst_owner(cur, m)
+        cur = registry.get(cur.super_class) if cur.super_class else None
+    # 桥接（形参擦除：`compareTo(Object)` → `compareTo(Enum)`）：真实方法的
+    # 发射签名按其声明者解析
+    _bt = _resolve_bridge_target(cls_ci, mname, full_desc, registry)
+    if _bt is not None and not _bt[0].is_interface:
+        real_ci, real_desc = _bt[0], _bt[1]
+        m = next((x for x in real_ci.methods
+                  if not x.is_synthetic and x.name == mname
+                  and x.descriptor == real_desc), None)
+        if m is not None:
+            return _subst_owner(real_ci, m)
+    return None, None
 
 
-def _bridge_downcast_args(registry, sub_bin, sub_rust, mname, comment, params,
-                          args, arg_str, jvm_desc, _bridge_desc, _owner_bin,
-                          _mangle_cls, sub_mname_r):
-    """Fix 17：bridge 分派的参数 checkcast —— dispatch 共享 args 按擦除描述符
-    coercion，子类分支的真实方法参数是具体类型 → per-branch 经 CastExpr 的
-    try_cast 还原（等价 bridge 方法内的 checkcast，A-3）。返回
-    (可能按真实描述符改写的分支方法名, 分支实参串, 解析出的真实方法 _bm17)。"""
-    # Fix 17：bridge 分派的参数 checkcast —— dispatch 的共享 args 按
-    # 擦除描述符 coercion（如 Comparable.compareTo(Object) 的参数为
-    # Object），但子类分支的真实方法（bridge 的目标，如
-    # Byte.compareTo(Byte)）参数是具体类型 → per-branch 经 CastExpr 的
-    # try_cast 还原（等价 bridge 方法内的 checkcast，A-3）。
-    _barg_str = arg_str
-    _bm17 = None
-    if registry:
-        _own_ci17 = registry.get(_owner_bin or sub_bin)
-        if _own_ci17 is not None:
-            for _m in _own_ci17.methods:
-                if (_m.name == mname and not _m.is_synthetic
-                        and _m.descriptor == (_bridge_desc or jvm_desc)):
-                    _bm17 = _m
-                    break
-            if _bm17 is None:
-                # 精确 descriptor 失败（bridge 擦除场景）：
-                # 按名字 + 参数个数唯一匹配真实方法
-                _cands17 = [
-                    _m for _m in _own_ci17.methods
-                    if _m.name == mname and not _m.is_synthetic
-                    and len(parse_descriptor_params(_m.descriptor)) == len(params)
-                ]
-                if len(_cands17) > 1:
-                    # 多个同名同参数个数的重载：bridge 目标的每个参数
-                    # 与擦除描述符的 primitive/引用 类别必须逐位一致
-                    # （bridge 只擦除引用类型，不改变 primitive 参数）
-                    def _is_ref17(_d):
-                        return _d.startswith(('L', '['))
-                    _cands17 = [
-                        _m for _m in _cands17
-                        if all(
-                            _is_ref17(_a) == _is_ref17(_b) and (_is_ref17(_a) or _a == _b)
-                            for _a, _b in zip(parse_descriptor_params(_m.descriptor), params))
-                    ]
-                if len(_cands17) == 1:
-                    _bm17 = _cands17[0]
-            if _bm17 is not None:
-                if _bm17.descriptor != jvm_desc:
-                    # bridge 目标的真实描述符与调用点擦除描述符不同：
-                    # 重载 mangle 后缀必须按真实方法的描述符生成，与定义侧一致
-                    sub_mname_r = _safe_field(_mangle_if_overloaded(
-                        _mangle_cls, mname,
-                        f"Method {_own_ci17.name}.{mname}:{_bm17.descriptor}", registry))
-                _bp17 = parse_descriptor_params(_bm17.descriptor)
-                if len(_bp17) == len(args) and _bp17 != list(params):
-                    # 从 generic_signature 提取参数类型（若有）
-                    # 格式：(TE;Ljava/lang/String;...)RetType
-                    _gen_params17: list[str] = []
-                    if _bm17.generic_signature:
-                        import re as _re_gs
-                        _gs_inner = _re_gs.match(r'\(([^)]*)\)', _bm17.generic_signature)
-                        if _gs_inner:
-                            _gp_str = _gs_inner.group(1)
-                            _gp_pos = 0
-                            while _gp_pos < len(_gp_str):
-                                _c = _gp_str[_gp_pos]
-                                if _c == 'T':
-                                    _te = _gp_str.index(';', _gp_pos)
-                                    _gen_params17.append(_gp_str[_gp_pos:_te+1])
-                                    _gp_pos = _te + 1
-                                elif _c == 'L':
-                                    _te = _gp_str.index(';', _gp_pos)
-                                    _gen_params17.append(_gp_str[_gp_pos:_te+1])
-                                    _gp_pos = _te + 1
-                                elif _c in 'BCDFIJSZ':
-                                    _gen_params17.append(_c)
-                                    _gp_pos += 1
-                                elif _c == '[':
-                                    _gp_pos += 1
-                                    # 跳过数组维度
-                                else:
-                                    _gp_pos += 1
-                    _bparts17 = []
-                    _tv_map17: dict[str, str] = {}
-                    _sub_ci17 = registry.get(sub_bin)
-                    if _sub_ci17 is not None:
-                        _own_tps17 = _effective_class_type_params(_own_ci17, registry)
-                        if _own_ci17.name == sub_bin:
-                            _own_args17 = _split_rust_type_args(sub_rust)
-                        else:
-                            _own_args17 = dict(_ancestor_type_args(
-                                _sub_ci17, registry, _split_rust_type_args(sub_rust))).get(_own_ci17.name, [])
-                        _tv_map17 = dict(zip(_own_tps17, _own_args17))
-                    for _i17, _bd17 in enumerate(_bp17):
-                        _bt17 = jvm_to_rust(_bd17, registry)
-                        _shared17 = jvm_to_rust(params[_i17], registry)
-                        # 若 generic_signature 参数是类型变量（TE; 格式），
-                        # 说明是类型擦除产物（如 Enum.compareTo(E) → (Enum)），
-                        # 不做 downcast：实际参数类型是类型变量对应的运行时类型
-                        _is_type_var17 = (
-                            _i17 < len(_gen_params17)
-                            and _gen_params17[_i17].startswith('T')
-                            and _gen_params17[_i17].endswith(';')
-                        )
-                        if _is_type_var17 and _shared17 == 'Object':
-                            # 类型变量按 owner 在该子类视角下的实参实例化
-                            # （Enum<E> 经子类 SuperclassSignature 得 E=子类自身）→
-                            # 具体类型时按 checkcast 语义还原（A-3：try_cast，失败返回
-                            # Err 可被 java_try 捕获；binary 无法解析时退 From 视图路径）
-                            _tv_inst17 = _tv_map17.get(_gen_params17[_i17][1:-1], 'Object')
-                            if _tv_inst17 not in ('Object', '()', '_'):
-                                _tv_bin17 = _rust_type_to_binary(
-                                    _tv_inst17.split('<')[0], registry)
-                                if _tv_bin17:
-                                    _bparts17.append(_render_cast(
-                                        args[_i17], _tv_inst17,
-                                        binary_name=_tv_bin17, checked=True))
-                                else:
-                                    _bparts17.append(_render_cast(args[_i17], _tv_inst17))
-                                continue
-                        if (_bt17 not in ('Object', '()')
-                                and _shared17 == 'Object'
-                                and not _is_type_var17):
-                            # 具体形参的隐式 checkcast（bridge 方法内 javac 补的
-                            # checkcast）：binary name 直接取自真实描述符（L..; / [..）
-                            _bt_bin17 = (_bd17 if _bd17.startswith('[')
-                                         else _bd17[1:-1])
-                            _bparts17.append(_render_cast(
-                                args[_i17], _bt17,
-                                binary_name=_bt_bin17, checked=True))
-                        else:
-                            _bparts17.append(args[_i17])
-                    _barg_str = ', '.join(_bparts17)
-    return sub_mname_r, _barg_str, _bm17
+def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
+                                mname, comment, params, ret, args, arg_str,
+                                rust_ret, registry, sig_params_v):
+    """类 vtable 分派的发射体：`__virtual_view` 视图重建 + wrapper 方法调用 +
+    闭包 SAM 回退。含继承成员登记（本类 + 闭包子类的槽位填充，S-16）与
+    形参 / 返回值的擦除边界对齐。"""
+    from ..rs_ir import RsNamed as _RsNamed
+    pdesc = '(' + ''.join(params) + ')'
+    # 名字视角 = 接收者（Cls 的 wrapper：本类覆盖与继承成员都在其 wrapper 上，
+    # 名字按本类重载态）——与 typed 接收者路径（_resolve_direct_call_sig 后的
+    # _emit_call_result）同一 mangle 源
+    mname_r = _safe_field(_mangle_if_overloaded(cls_binary, mname, comment, registry))
+    # 继承成员登记：本类未声明时由 inherited_gen 在本类 wrapper 上补转发成员；
+    # 闭包内全部子类逐一登记（未自行声明的子类按链上最近声明者填 vtable 槽，
+    # 等价 JVM 子类 vtable 继承条目；与 this 虚调用的登记同一机制）
+    _inherited_calls.request(cls_binary, mname, pdesc)
+    if _virtually_dispatched(cls_ci, mname, pdesc, registry):
+        for _sub_bin in _closure_subclasses(registry).get(cls_binary, ()):
+            _inherited_calls.request(_sub_bin, mname, pdesc)
+    # 形参边界：wrapper 方法（擦除实例化）签名 vs 调用点实参（擦除描述符 /
+    # 调用方泛型视图）逐位对齐——类型变量位实参装箱为 Object、桥接的具体
+    # 形参按 checkcast 语义还原（A-3 try_cast）
+    sig_ps_w, sig_r_w = _erased_view_sig(cls_ci, mname, params, ret, registry)
+    wargs = list(args)
+    if sig_ps_w is not None and len(sig_ps_w) == len(args):
+        for _i, _a in enumerate(args):
+            _expected = sig_ps_w[_i]
+            _actual = (sig_params_v[_i] if sig_params_v and _i < len(sig_params_v)
+                       and sig_params_v[_i] is not None
+                       else jvm_to_rust(params[_i], registry))
+            if _expected == _actual or _expected in (None, '()'):
+                continue
+            if _expected == 'Object':
+                wargs[_i] = _coerce_arg(_a, _RsNamed(_actual), 'Object', _actual,
+                                        sim, registry)
+            elif _actual == 'Object':
+                # 桥接的真实形参是具体类型：等价 bridge 方法内的 checkcast
+                #（binary 无法解析的形态退 From 视图路径，与 Fix 17 同源）
+                _bin17 = _rust_type_to_binary(_expected.split('<')[0], registry)
+                if _bin17:
+                    wargs[_i] = _render_cast(_a, _expected,
+                                             binary_name=_bin17, checked=True)
+                else:
+                    wargs[_i] = _render_cast(_a, _expected)
+            else:
+                wargs[_i] = _coerce_arg(_a, _RsNamed(_actual), _expected, _actual,
+                                        sim, registry)
+    barg_str = ', '.join(wargs)
+    _cls_tps = _effective_class_type_params(cls_ci, registry)
+    _erased_targs = f"<{', '.join(['Object'] * len(_cls_tps))}>" if _cls_tps else ''
+    _view_recv = f"{cls_rust}{_erased_targs}::__virtual_view(&{obj_e})"
+    # Arch-3: 闭包回退 —— Rc<dyn Fn(...)> downcast（lambda / 方法引用），
+    # SAM 参数列表对应 invokevirtual 的实际参数类型。Result 用裸名：两个 crate
+    # 的生成文件均经 prelude 引入（java_runtime: crate::prelude /
+    # user: crate::error::Result），写 crate::error::Result 在 user crate 是 E0433。
+    _sam_ptypes = [jvm_to_rust(p, registry) for p in params]
+    _fn_type = (f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)})'
+                f' -> Result<{rust_ret}>>')
+    _call_expr = f"_d.{mname_r}({barg_str})?"
+    if rust_ret == '()':
+        sim.emit(RawStmt(
+            f"if let Some(_d) = {_view_recv} {{ {_call_expr}; }} "
+            f"else if let Some(__f) = {obj_e}.0.as_any()"
+            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})?; }}"))
+        return
+    v = sim.fresh('_vdispatch')
+    # 返回对齐（与 _emit_call_result 同规则）：擦除描述符返回 Object 而发射签名
+    # 给出具体类型（协变 / 泛型签名）→ 装箱保持 Object 记录（S-3.1，registry 类
+    # 走 Object::from，vtable 桥接与后续分派全部可达）；raw 形态（X）对精确
+    # 实例化（X<Object,..>）→ 记录精确形态；其余直接按 rust_ret 记录。
+    if rust_ret == 'Object' and sig_r_w is not None and sig_r_w != 'Object':
+        _boxed = _coerce_to_object(_call_expr, sig_r_w, registry, sim.class_type_params)
+        sim.emit(RawStmt(
+            f"let {v}: {rust_ret} = if let Some(_d) = {_view_recv} {{ {_boxed} }} "
+            f"else if let Some(__f) = {obj_e}.0.as_any()"
+            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }} "
+            f"else {{ Default::default() }};"))
+        sim.push(Var(v), RsNamed(rust_ret))
+    elif (sig_r_w is not None and sig_r_w != rust_ret
+            and rust_ret not in _PRIMITIVE_RUST_TYPES):
+        sim.emit(RawStmt(
+            f"let {v} = if let Some(_d) = {_view_recv} {{ {_call_expr} }} "
+            f"else if let Some(__f) = {obj_e}.0.as_any()"
+            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }} "
+            f"else {{ Default::default() }};"))
+        sim.push(Var(v), RsNamed(sig_r_w))
+    else:
+        sim.emit(RawStmt(
+            f"let {v}: {rust_ret} = if let Some(_d) = {_view_recv} {{ {_call_expr} }} "
+            f"else if let Some(__f) = {obj_e}.0.as_any()"
+            f".downcast_ref::<{_fn_type}>() {{ (__f)({arg_str})? }} "
+            f"else {{ Default::default() }};"))
+        sim.push(Var(v), RsNamed(rust_ret))
 
 
 _SUBCLASS_INDEX: dict[int, dict[str, list[str]]] = {}
@@ -814,14 +681,16 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     arg_str = ', '.join(args)
     rust_ret = jvm_to_rust(ret, registry)
     # E0599 防护：接收者是 Object 类型时，Object 结构体不定义具体子类方法，
-    # 直接调用会产生 E0599。若目标类已知且有子类，生成 downcast dispatch 链（多态虚分发）。
+    # 直接调用会产生 E0599 → 走 bare 接收者的多态分派（§6 步骤 4：根 vtable
+    # 直调 / 类 vtable 视图重建 / 接口载体 / 闭包回退）。
     obj_is_bare = (obj_ty == 'Object')
     if obj_is_bare and cls == 'Object' and registry:
         if _emit_object_direct_call(sim, obj_e, args, rust_mname, rust_ret):
             return
     if obj_is_bare and cls and registry:
         _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
-                              args, arg_str, rust_ret, registry)
+                              args, arg_str, rust_ret, registry,
+                              rust_mname=rust_mname, sig_params_v=sig_params_v)
         return
     params, ret, rust_ret, _sig_owner, _sig_recv_ty, _recv, _root_routed = _resolve_direct_call_sig(
         sim, class_name, cls, mname, params, ret, rust_ret, obj_base, obj_e, obj_ty, registry)
