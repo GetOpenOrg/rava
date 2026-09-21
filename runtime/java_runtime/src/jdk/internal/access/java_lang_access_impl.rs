@@ -22,17 +22,23 @@ use crate::java::lang::String;
 pub(super) struct SystemJavaLangAccess;
 
 /// `String.getBytes(byte[] dst, int dstBegin, byte coder)` 的字节级等价：
-/// 把 `src` 的内容写入 `dst`（UTF-16BE 布局，与生成侧 StringUTF16.putChar 的
-/// HI_BYTE_SHIFT/LO_BYTE_SHIFT 一致）。src 为 Latin1 且目标 coder 为 UTF16 时
-/// 逐字节展宽（高字节补 0）。
+/// 把 `src` 的内容写入 `dst`（UTF-16 布局与生成侧 StringUTF16.putChar 的
+/// HI_BYTE_SHIFT/LO_BYTE_SHIFT 一致，即平台字节序）。src 为 Latin1 且目标
+/// coder 为 UTF16 时逐字节展宽（高位字节按平台字节序补 0）。
 fn _get_bytes_into(src_val: &[i8], src_coder: i8, dst: &mut Vec<i8>, dst_coder: i8) {
     if src_coder == dst_coder {
         dst.extend_from_slice(src_val);
     } else {
-        // Latin1 → UTF16BE：高字节 0 在前
+        // Latin1 → UTF16：零字节与字符字节按 HI/LO_BYTE_SHIFT 顺序排列
+        // （大端 [0, b]；小端 [b, 0]）
         for &b in src_val {
-            dst.push(0);
-            dst.push(b);
+            if cfg!(target_endian = "big") {
+                dst.push(0);
+                dst.push(b);
+            } else {
+                dst.push(b);
+                dst.push(0);
+            }
         }
     }
 }

@@ -178,6 +178,51 @@ class _Reader:
         return self._pos
 
 
+def _decode_mutf8(b: bytes) -> str:
+    """解码常量池的 Modified UTF-8（JVMS §4.4.7）。
+
+    与标准 UTF-8 的差异：U+0000 编码为两字节 `C0 80`；增补字符（非 BMP）
+    以 UTF-16 代理对形式逐半编码（CESU-8 式两个 3 字节序列），不存在
+    4 字节序列。标准 `bytes.decode('utf-8')` 会把代理对判为非法字节，
+    `errors='replace'` 把 😀 的 6 字节吞成 6 个 U+FFFD——非 BMP 字面量
+    在转译期即丢码点（S-19 #3）。
+
+    解码出 UTF-16 码元序列后把合法代理对合并为码点；孤立代理与残缺
+    序列按 UTF-8 惯例替换为 U+FFFD（javac 产出的常量池不会出现，防御
+    性兜底，同时保证产出可写入 UTF-8 文本的合法 str）。"""
+    units: list[int] = []
+    i, n = 0, len(b)
+    while i < n:
+        c = b[i]
+        if c < 0x80:
+            units.append(c)
+            i += 1
+        elif (c >> 5) == 0b110 and i + 1 < n and (b[i + 1] >> 6) == 0b10:
+            units.append(((c & 0x1f) << 6) | (b[i + 1] & 0x3f))
+            i += 2
+        elif ((c >> 4) == 0b1110 and i + 2 < n
+              and (b[i + 1] >> 6) == 0b10 and (b[i + 2] >> 6) == 0b10):
+            units.append(((c & 0x0f) << 12) | ((b[i + 1] & 0x3f) << 6) | (b[i + 2] & 0x3f))
+            i += 3
+        else:
+            units.append(0xFFFD)
+            i += 1
+    out: list[str] = []
+    j = 0
+    while j < len(units):
+        u = units[j]
+        if 0xD800 <= u <= 0xDBFF and j + 1 < len(units) and 0xDC00 <= units[j + 1] <= 0xDFFF:
+            out.append(chr(0x10000 + ((u - 0xD800) << 10) + (units[j + 1] - 0xDC00)))
+            j += 2
+        elif 0xD800 <= u <= 0xDFFF:
+            out.append('\ufffd')
+            j += 1
+        else:
+            out.append(chr(u))
+            j += 1
+    return ''.join(out)
+
+
 def _parse_constant_pool(r: _Reader, count: int) -> list:
     """返回索引从 1 开始的常量池列表（索引 0 为 None）。"""
     pool = [None] * count   # pool[0] 未使用
@@ -187,7 +232,7 @@ def _parse_constant_pool(r: _Reader, count: int) -> list:
         tag = r.u1()
         if tag == TAG_UTF8:
             length = r.u2()
-            pool[i] = ('Utf8', r.read(length).decode('utf-8', errors='replace'))
+            pool[i] = ('Utf8', _decode_mutf8(r.read(length)))
         elif tag == TAG_INTEGER:
             pool[i] = ('Integer', r.i4())
         elif tag == TAG_FLOAT:
