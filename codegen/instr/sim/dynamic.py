@@ -399,13 +399,32 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                         _impl_ret_rust = jvm_to_rust(_impl_ret, registry)
                         _closure_body = (f'Ok({_coerce_to_object(f"{_closure_body}?", _impl_ret_rust, registry, sim.class_type_params)})')
                     _lam_varname = f'__lam_{_lam_idx}'
+                    # A-5 lambda 对象化：samtype 是函数式接口（且可合成，预扫描定案）时，
+                    # 闭包经合成对象装箱——`Object::from(I__Lambda::new(Rc::new(closure)))`。
+                    # 合成对象实现接口闭包的 __VTable（SAM 直调闭包 / default 经载体
+                    # __default_<m> 体）并应答 __interface 查询；不可合成（非函数式 /
+                    # 接口未发射 / 手写覆盖）回落闭包装箱（from_any + downcast 回退域）。
                     # 函数对象以 Object（函数式接口的擦除形态）绑定为 LetStmt：
                     # 在 try / 分支体内创建、体外消费时由变量提升 pass 管理作用域
+                    from ...emitter.sam_objects import site_ctor_path, record_site
+                    _sam_iface_bin = ''
+                    if _sam_type_desc.startswith('('):
+                        _iface_ret = parse_descriptor_return(_dyn_desc)
+                        if _iface_ret.startswith('L') and _iface_ret.endswith(';'):
+                            _sam_iface_bin = _iface_ret[1:-1]
+                    _sam_ctor = (site_ctor_path(_sam_iface_bin, class_name)
+                                 if _sam_iface_bin else None)
+                    if _sam_ctor is not None:
+                        record_site(_sam_iface_bin, _sam_type_desc, class_name)
+                        _lam_box_expr = (f'Object::from({_sam_ctor}(std::rc::Rc::new('
+                                         f'move |{_fn_params_sig}| -> Result<{_sam_rtype}> '
+                                         f'{{ {_closure_body} }})))')
+                    else:
+                        _lam_box_expr = (f'Object::from_any(std::rc::Rc::new('
+                                         f'move |{_fn_params_sig}| -> Result<{_sam_rtype}> '
+                                         f'{{ {_closure_body} }}) as {_fn_type})')
                     sim.emit(LetStmt(_lam_varname, RsNamed('Object'), False, RawExpr(
-                        f'Object::from_any(std::rc::Rc::new('
-                        f'move |{_fn_params_sig}| -> Result<{_sam_rtype}> '
-                        f'{{ {_closure_body} }}) as {_fn_type})'
-                    )))
+                        _lam_box_expr)))
                     sim.push(Var(_lam_varname), RsNamed('Object'))
                 else:
                     sim.emit(RawStmt(f"/* TODO: {op} {operand} (impl parse failed) */"))
