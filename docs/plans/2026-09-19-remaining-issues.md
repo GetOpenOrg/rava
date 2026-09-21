@@ -40,9 +40,29 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 
 ---
 
+## 等价等级标注（吸收自 ruva 兼容模型，2026-09-21）
+
+> 来源：`ruva-compat-model_1.md` 的六级等价分类。用于标注条目**对 Java 语义的承诺等级**，只加在语义可见的条目上（S 类为主）；架构/质量类（G/P/V/R）不标。
+
+六级从强到弱：**规格等价 > 行为等价 > 语义等价 > 条件等价 > 近似等价 > 不可等价**。
+
+**传递性规则**：类的有效等级 = min(自身, 全部依赖成员的等级)。用户类调用到近似等价的 JDK 方法时整体降级。终态：codegen 输出每类有效等价等级报告；**166 测试归类时，失败先判断是否落在下表已知边界，是则记「边界偏差」而非 bug**。
+
+| 语义缺口 | 等级 |
+|---|---|
+| S-2/S-3（null 表示）、S-5（`getClass`）、S-6（identity hash）、S-7（record `hashCode`）、S-8/S-9（NPE 族）、S-10（类初始化触发点） | 近似等价 |
+| A-1 的运行时症状：通配符/跨实例化转换 `ClassCastException` | 近似等价 |
+| `monitorenter`/`monitorexit` no-op（tasks.md 跟踪，`InternalLock` 已就绪待接入） | 条件等价：单线程行为等价，多线程降级 |
+| S-11（`newLockOrNull` 恒返回 null） | 条件等价：单线程行为等价 |
+| 反射族（`Method.invoke` / `Field.get`，V-1 归类后按需立项） | 终态方向：静态注册表——`Class::for_class` + `CLASS_HIERARCHY`（build.rs）已验证此路线 |
+
+**与 ruva 模型的分歧（已评估，不采纳）**：单继承组合 + `Deref`（本项目用 vtable 双指针，多态保真度更高）；`String` = `Vec<u16>`（本项目走字节码翻译，保留 compact strings）；`null` = `Option<T>`（与 Object 模型冲突，null 缺口按 S-2/S-3 单独修）；「内部 API 不支持」三层边界（本项目翻译 JDK 自身字节码，`jdk/internal/` 走边界类按需手写，哲学相反）。
+
+---
+
 ## A. 架构缺口（最高优先级）
 
-### A-1 存储层擦除未落地：可变泛型类无法跨实例化互转 【P0】
+### A-1 存储层擦除未落地：可变泛型类无法跨实例化互转 【P0 · 运行时症状为近似等价】
 
 > **vtable 去形参已落地（2026-09-20，分支 fix/a1-vtable-erasure）**：`X__VTable` 非
 > 泛型（签名 Object 化、擦除按声明类判定——`superclass_erased_fields` / `vtable_erasure`
@@ -170,7 +190,7 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 随 A-3 落地（`Object::try_cast` 返回 Err，探针验证可捕获）。
 `downcast` 失败仍是 `expect("ClassCastException")`（进程 panic，不可被 Java `catch` 捕获）。`JvmError::class_cast` 已就绪。终态：全部失败路径返回 `Err(JvmError::class_cast(..))`，`expect("ClassCastException")` = 0。依赖 A-3。
 
-### S-2 数组无法表示 `null` + 多维数组访问 API 缺失 【P1】
+### S-2 数组无法表示 `null` + 多维数组访问 API 缺失 【P1 · 近似等价】
 
 **子问题 1 — null 语义**：`JArray::default()` 是空数组，`null` 数组与空数组不可区分；对 null 数组的访问不抛 NPE。终态：`JArray` 具备 null 状态，`arraylength`/`xaload`/`xastore` 在 null 上抛 `NullPointerException`。
 
@@ -191,7 +211,7 @@ impl Object {
 ```
 codegen 的 `xaload`/`xastore`/`arraylength` 指令生成改为调用上述方法；同时 `set`/`get`/`len` 等自造名称不再发出。
 
-### S-3 装箱类型无法表示 `null` + null 引用比较语义错误 【P1】
+### S-3 装箱类型无法表示 `null` + null 引用比较语义错误 【P1 · 近似等价】
 
 **子问题 1 — 装箱 null**【已修复，R9 轮】：装箱类型真实对象化落地（1f15d10/8d48271/f965a3a 合入 main）——删除 type_map 装箱拆平条目与 BOXING_SKIP/UNBOX_VIRTUAL 透明建模，`Ljava/lang/Integer;` 引用位置走翻译类，valueOf/intValue 就是普通字节码调用；JArray 增 Repr::Null（null 引用≠空数组，顺带落地 S-2 子问题 1 的数组 null 表示）；菱形 bool/int 统一改向修 `Integer.compare`；System.arraycopy 补 memmove 语义（修 TimSort 预存 bug）。TestAutoboxing 16/16、TestGenericMethod、TestLambda 转胜；readability from_any TSB 867→445；红线 10/10 + TSB 金丝雀 PASS。TestBoundedGenerics 编译通过、运行期 CCE 归 S-4（JArray 任意父类元素视图）。R8 triage 补充：原生装箱值的 `ObjectVTable` 无 `__interface`，对装箱包装类的接口调用必然 AbstractMethodError——TestGenericMethod 的 `max(3,7)` 实证，String 对照组通过；修复随本条目的真实对象化）：`Integer`/`Long` 等被建模为原生值，`Integer x = null`、`Map.get` 未命中返回 null 后拆箱抛 NPE 等语义缺失。终态：装箱类型是真实对象（来自字节码翻译的 `java/lang/Integer`），自动装拆箱即字节码里的 `valueOf`/`intValue` 调用，不做特殊建模。
 
@@ -212,25 +232,25 @@ System.out.println(nullable == null);  // Java 输出 true
 > **R9 轮已修复**（ee5e394/cb15707 合入 main）：`From<Object> for JArray<T>` 任意祖先元素类型协变视图（存储擦除 + `__array_elem_assignable` 赋值兼容探针，静态生成祖先名单、与元素值无关）；aastore 运行时检查三序（null / wrapper 祖先名单 / 运行时类名 `is_instance_of`），不满足抛 `ArrayStoreException`（vm-upcalls 种子入链，可被 java_try 捕获）；数组 checkcast 统一经 `From<Object>`。TestBoundedGenerics 转胜；streams 三测编译全通（TestStreamCollectors 9×E0308 清零——真凶是 Z 字段 bool/int icmp 加宽，非 E0053 预判的 owner 解析；`_resolve_interface_default` 防御性落地）。**streams 下一层统一卡点**：`SharedSecrets.getJavaLangAccess` stub → 新增 K 系列条目（见 P-3 扩充）。预存 gap 实证：checkcast 失败的 CCE panic 不可被 java_try 捕获（归 S-1/A-3）。
 `JArray` 的 `Covariant` 视图只支持上转为 `Object[]`；转为祖先类数组（`Integer[]` → `Number[]`）失败；存入错误元素类型抛 `ClassCastException` 而非 `ArrayStoreException`。终态：任意祖先元素类型的协变视图 + `ArrayStoreException`。依赖 A-1 的类型化视图机制。
 
-### S-5 `getClass()` / 类字面量不可用 【P1】
+### S-5 `getClass()` / 类字面量不可用 【P1 · 近似等价】
 `getClass()` 返回空 `Class`（**最小修复已落地 R8**：getClass 经 `__class_name` + `Class::for_class` 返回非 null Class，ae78bf9；TestMultiCatch、TestDefaultMethods 因此通过。完整终态——类字面量同一性、`desiredAssertionStatus` 等——仍未做）；基本类型 `Class` 只带名字；类字面量（`Foo.class`）、`desiredAssertionStatus` 缺失；`getClass() == PrintStream.class` 实际是 `null == null`。终态：每个类有唯一 `Class` 对象（按擦除类），`__class_name` 与之打通，类字面量与 `getClass()` 返回同一对象。
 
-### S-6 identity hash 缺失 【P1】
+### S-6 identity hash 缺失 【P1 · 近似等价】
 未声明 `hashCode` 的类返回 0（全部哈希冲突，功能正确但退化为链表）；`Object.equals` 里保留了 String 内容比较的捷径；字符串字面量 intern 的同一性未建模。R5-B 已加入各视图共享的 `__identity`。终态：`Object.hashCode` 的 native 实现基于 `__identity` 生成 identity hash；`Object.equals` 为纯引用比较；`ldc` 字符串字面量经 intern 表返回同一对象；捷径 = 0。
 
-### S-7 record 的 `hashCode` 恒为 0 【P1】
+### S-7 record 的 `hashCode` 恒为 0 【P1 · 近似等价】
 record 的 `toString`/`equals` 已由生成器按组件生成，`hashCode` 体仍是 `Ok(0)`。终态：按 `ObjectMethods` 引导方法语义组合各组件的 hash（31 多项式）。
 
-### S-8 `NegativeArraySizeException` 缺失 【P2】
+### S-8 `NegativeArraySizeException` 缺失 【P2 · 近似等价】
 `newarray`/`anewarray`/`multianewarray` 对负长度未抛异常。终态：VM 抛出异常对象，与数组 `get/set` 的 `Result` 机制一致。
 
-### S-9 null 字段访问不抛 NPE 【P2】
+### S-9 null 字段访问不抛 NPE 【P2 · 近似等价】
 null 接收者的方法调用已抛 NPE，`getfield`/`putfield` 尚未。终态：两者一致。
 
-### S-10 类初始化触发点不完整 【P2】
+### S-10 类初始化触发点不完整 【P2 · 近似等价】
 JVMS §5.5 的触发点里，手写 static native 的调用、带 default 方法的接口的初始化尚未触发 `__class_init()`。终态：§5.5 列出的触发点全覆盖。
 
-### S-11 `InternalLock.newLockOrNull` 恒返回 null 【P2】
+### S-11 `InternalLock.newLockOrNull` 恒返回 null 【P2 · 条件等价：单线程行为等价】
 当前走 synchronized 回落路径，单线程下无差异。终态：随线程/同步模型（`2026-09-14-java-sync-threading.md`）一并实现。
 
 ### S-12 非嵌套 try 区域的布局偏差 【P3】
