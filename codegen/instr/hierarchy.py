@@ -21,42 +21,33 @@ def _rust_type_to_binary(rust_short: str, registry: dict | None) -> str:
 
 def _is_subtype(child_rust: str, parent_rust: str, registry: dict | None) -> bool:
     """判断 child_rust 是否是 parent_rust 的子类型（通过 registry 继承链+接口链查找）。
-    两个参数都是 Rust 短类名（如 IOException, Throwable）。"""
+    两个参数都是 Rust 短类名（如 IOException, Throwable）。
+
+    TypeIR 试点（收敛路线图 L1-a 单一权威化第一步）：内部实现委托
+    JvmType.is_subtype_of（codegen/jvm_type.py 类型代数，闭包集带缓存），
+    函数签名与调用方不变。保留旧实现的三点可观察语义（行为零变化）：
+      - 严格子类型：child == parent（或解析到同一 binary）→ False，不自反；
+      - java/lang/Object 恒不作为成立目标（旧 BFS 显式跳过 Object 超类边，
+        registry 外以 'Object' 短名查询同理）；
+      - child 短名必须能在 registry 反查到 binary，否则 False；
+        parent 反查不到时按 Rust 短名占位匹配闭包（旧实现的比较键就是
+        Rust 短名——闭包上未注册祖先只有短名这一跨域可比身份）。
+    """
     if not registry or child_rust == parent_rust:
         return False
     child_bin = _rust_type_to_binary(child_rust, registry)
     if not child_bin:
         return False
-
-    def _short(binary: str) -> str:
-        return _short_cls_g(binary)
-
-    visited: set[str] = set()
-    queue: list[str] = [child_bin]
-    while queue:
-        cur_bin = queue.pop(0)
-        if cur_bin in visited:
-            continue
-        visited.add(cur_bin)
-        ci = registry.get(cur_bin)
-        if not ci:
-            continue
-        # 检查超类
-        if ci.super_class and ci.super_class != _OBJECT_CLASS:
-            sc = ci.super_class
-            sc_short = _short(sc)
-            if sc_short == parent_rust:
-                return True
-            if sc not in visited:
-                queue.append(sc)
-        # 检查接口列表
-        for iface in (ci.interfaces or []):
-            iface_short = _short(iface)
-            if iface_short == parent_rust:
-                return True
-            if iface not in visited:
-                queue.append(iface)
-    return False
+    parent_bin = _rust_type_to_binary(parent_rust, registry)
+    if parent_bin == _OBJECT_CLASS or (not parent_bin
+                                       and parent_rust == _short_cls_g(_OBJECT_CLASS)):
+        return False
+    from ..jvm_type import JvmType
+    child_t = JvmType.class_of(child_bin, registry)
+    target_t = JvmType.class_of(parent_bin if parent_bin else parent_rust, registry)
+    if child_t.binary == target_t.binary:
+        return False  # 解析到同一 binary：严格语义不自反
+    return child_t.is_subtype_of(target_t, registry)
 
 
 def _has_subtypes(class_binary: str, registry: dict | None) -> bool:
