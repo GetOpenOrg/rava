@@ -78,13 +78,15 @@ def _get_all_subtypes_ordered(class_binary: str, registry: dict | None) -> list[
     用于生成 downcast dispatch 链：更具体的类型先试，避免父类匹配遮盖子类。"""
     if not registry:
         return []
-    # BFS 收集所有子类（含传递子类）
+    # BFS 收集所有子类（含传递子类）。
+    # G-4 确定性：兄弟节点按 binary name 排序——registry 插入序可能经上游集合
+    # 迭代随 PYTHONHASHSEED 漂移，直接迭代会把不确定性传染给 downcast 分派链
     all_subs: list[str] = []
     queue: list[str] = [class_binary]
     visited: set[str] = {class_binary}
     while queue:
         cur = queue.pop(0)
-        for binary, ci in registry.items():
+        for binary, ci in sorted(registry.items()):
             if ci is None or binary in visited:
                 continue
             if ci.super_class == cur or (ci.interfaces and cur in ci.interfaces):

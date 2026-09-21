@@ -208,6 +208,11 @@ def main():
     # --deny 升级），不是全 0。monitor-mt 待 S-20（锁真实化）合入后补埋，
     # 详见 codegen/equiv_audit.py 模块注释。
     print(EQUIV_AUDIT.summary())
+    # Raw 发射与类型字符串手术仪表（收敛路线图 L5-b / 阶段 A）：
+    # raw_expr/raw_stmt 为本次转译的构造事件数，type_surgery_sites 为源码静态位点数。
+    # 终态全 0（Raw 全部类型化、类型查询全部经 TypeIR）；趋势只降不升。
+    from codegen import raw_audit as _RAW_AUDIT
+    print(_RAW_AUDIT.summary())
     t_codegen = time.perf_counter() - t0
     print(f"[time] transpile   {fmt_dur(t_codegen)}")
 
