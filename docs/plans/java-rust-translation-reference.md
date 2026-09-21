@@ -24,6 +24,7 @@
 14. [静态字段与 `<clinit>`](#14-静态字段与-clinit)
 15. [方法调用约定](#15-方法调用约定)
 16. [禁止出现在可读层的调用列表](#16-禁止出现在可读层的调用列表)
+17. [宏机制分工与 Java API 处理管线映射](#17-宏机制分工与-java-api-处理管线映射)
 
 ---
 
@@ -862,6 +863,48 @@ codegen 侧：`aastore` / `astore` 赋值给 Object 类型变量时，生成 `.i
 | `downcast::<T>()` | ⚠️ 待修复（需 codegen 改 `checkcast` 生成 + 宏生成 `From<Object>`） |
 | `Object::from_any(v)` | ⚠️ 待修复（codegen 需改用 `.into()`，blanket impl 已就绪） |
 | `Rc<RefCell<Vec<T>>>` 类型标注 | ⚠️ 待修复（`Array<T>` Step 1，见 §7） |
+
+---
+
+## 17 宏机制分工与 Java API 处理管线映射
+
+> 日期：2026-09-21。回答「Java API 处理管线各环节分别适合哪种宏机制（声明式 / 过程 / 派生 / attribute）」。
+> 关联：收敛路线图 [`2026-09-21-codegen-type-convergence.md`](2026-09-21-codegen-type-convergence.md)（宏扩展面是 L1/L2 层的执行手段）；重写方案 R1（`java_rta_gen` 拆库）。
+
+### 17.1 三机制在本项目的实际比例（与生态常规倒置，原因见 17.3）
+
+| 机制 | 生态常规（serde/clap 模式） | 本项目 |
+|------|------------------------------|--------|
+| 派生宏 | 主力：已有 Rust 类型 + 一行注解 → impl | **生成代码 0 个**（唯一采用点 = R-3 `#[derive(Debug)]`，语义恰好兼容）；Clone/PartialEq 因 Java 对象模型语义冲突**不可用**（Clone 须共享存储保 `__identity`，非逐字段克隆） |
+| 过程宏 | 库作者深水区 | **主力**：`java_class!`（块宏，DSL→全套对象模型）、`java_try!`/`java_switch!`、`#[java_synchronized]`、标记三件套 `#[jvm_native]`/`#[jvm_boundary]`/`#[jvm_ext]`（零展开锚点，供 Python 扫描与审计口径） |
+| 声明式宏 | 内部小模板 | 手写层同构重复：`impl_vtable_primitive!`、`array_elem_exact!`/`array_elem_narrow!`、局部 `try_fmt!` 族 |
+
+### 17.2 管线环节 × 机制映射（现状 / 已立项 / 新建议）
+
+| 管线环节 | 机制 | 状态 |
+|---|---|---|
+| JDK 类对象模型生成（struct/inner/vtable/From/槽位） | 过程宏（`java_class!`） | ✅ 核心 |
+| 类型映射（JVM 描述符→Rust 类型） | 过程宏：宏从 `#[descriptor]`/`#[generic_signature]` 自行决策 | 已立项 = **M-3** |
+| 泛型 bounds 注入 | 过程宏：从 generic_signature 注入 | 已立项 = **T-1** |
+| 手写边界层角色标记 | attribute 宏（标记型，零展开） | ✅ 已有 |
+| 手写 native 的 upcall 包装（`__impl_<m>` 进 vtable、签名适配、异常包装样板） | **attribute 宏（展开型）**：标注在 `__impl_` 函数上自动生成——P-3 类手写还原的每方法样板可消 | **新建议**（G-7 邻域，小时级试点） |
+| JVM 算术语义样板（手写还原时 `wrapping_*`、`>>>`→u64、long 回绕） | **声明式宏**（`jvm_long!` 族固定模板） | **新建议**（随手写层增长按需） |
+| 手写类的接口声明（`__interface` 覆盖，不手写 vtable 粘合） | 过程宏：`java_class!` 属性声明接口集合 | 已立项 = **A-6** |
+| 反射静态注册（`getDeclaredField` 族） | 过程宏注册模式（inventory 路线）+ build.rs 层次表 | 终态方向已采纳（反射族条目） |
+| Debug 生成 | 派生宏（字段全满足 Debug 处） | 已立项 = **R-3** |
+| synchronized / try / switch 语义 | 过程宏 | ✅ 已有 |
+| 对拍测试模板（如 DoubleToDecimal 5271 点零差异） | 声明式宏：参数化测试 | **新建议**（小时级，随验证需求） |
+
+### 17.3 分界判据（为什么派生宏缺席、块宏当主力）
+
+1. **信息可见性**：派生宏只能看见单个 item；Java API 处理的信息源是跨类字节码事实（父槽位归属 K-6、接口闭包、`new_format_map` 手写覆盖、擦除名单）——必须经 DSL 元数据**显式喂进块宏**（`#[binary_name]`/`#[super_class]`/`#[generic_signature]` 一族）。`java_class!` 实质是 proc macro 形态的领域对象编译器前端。
+2. **语义冲突**：标准 derive 的默认语义（逐字段）与 Java 对象模型（共享存储/身份相等/Java toString 形态）冲突——这个域里大多数 trait 不能让编译器按默认规则猜。
+
+**不适合宏、必须留在编译器驱动的环节**：BFS 调用链发现与闭包计算（跨类全局分析，S-18 教训层）、槽位归属解析（全 registry 视角）、CFG 结构化（方法级全局 Pass）。一句话判据：**单类/单方法视角的机械生成归宏，全局分析的决策归驱动**——M-3 的本质就是把这条线尽量往宏侧推。
+
+### 17.4 优先序
+
+已立项项（M-3/T-1/A-6/R-3/反射 inventory）随既定路线走；三个新建议中**「手写 native 的 upcall 包装宏化」最值得先做**（消灭 P-3 类手写还原的每方法样板，与 G-7 同批），另两个随手写层增长按需补。
 
 ---
 
