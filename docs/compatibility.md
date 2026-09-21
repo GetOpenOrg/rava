@@ -41,7 +41,8 @@
 | 整数 wrapping / 位运算 / 窄化截断 | 规格等价 | TestArithmetic / TestOverflow / TestIntOverflow / TestUnsignedInt PASS | — |
 | 浮点算术（IEEE 754） | 规格等价 | TestDouble PASS；**NaN 判定、`Math.rint`、小数值科学计数格式当前破坏规格——属缺陷非边界** | 待立项（归类文档 §新发现） |
 | 异常链 / CCE / ASE / NPE（引用接收者） | 行为等价 | TestExceptions / TestInheritance / TestCasting PASS | — |
-| `monitorenter` / `monitorexit` 互斥 | 条件等价 | 单线程 PASS（TestSynchronized 卡 `Object.wait` API 缺失，非 monitor 本体）；多线程未接入 | S-11 / tasks.md P1 |
+| `monitorenter` / `monitorexit` 互斥 | 条件等价 | 单线程/协作调度 PASS（TestSynchronized 全绿）；真并发待对象模型 Send/Sync 化 | S-11（monitor.rs 已真实化） |
+| **`Thread.start/join/sleep/isAlive` + wait/notify 协作调度** | 条件等价 | **确定性输出程序=语义等价**（TestSynchronized/TestThreadJoin/TestWaitNotify 全绿——`8eca47b`：start0 就绪队列登记、join/wait/sleep 嵌套泵推进）。边界：依赖真实 interleaving 的输出不可达；限时 wait 无到点自醒（JLS §17.3 虚假唤醒语义）；无通知源的无限 wait 忙转；InterruptedException 未实现（语料无中断等待）；sleep 不驻留 | S-11 线程档位（真并发待 Send/Sync 化） |
 | `Object.wait` / `notify` / `notifyAll` | 行为等价（目标） | **未实现**（`Object` 无该方法，4 用例 E0599） | 待立项（runtime 小改） |
 | identity hash / 默认 `Object.hashCode` | 近似等价 | 未实测（166 无 identityHashCode 用例） | S-6 |
 | `String.intern` 同一性（`==`） | 近似等价 | **实测未齐**（TestStringCompare FAIL：interned==lit=true→false） | S-6 |

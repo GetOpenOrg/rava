@@ -273,8 +273,11 @@ null 接收者的方法调用已抛 NPE，`getfield`/`putfield` 尚未。终态�
 ### S-10 类初始化触发点不完整 【P2 · 近似等价】
 JVMS §5.5 的触发点里，手写 static native 的调用、带 default 方法的接口的初始化尚未触发 `__class_init()`。终态：§5.5 列出的触发点全覆盖。
 
-### S-11 `InternalLock.newLockOrNull` 恒返回 null 【P2 · 条件等价：单线程行为等价】
-当前走 synchronized 回落路径，单线程下无差异。终态：随线程/同步模型（`2026-09-14-java-sync-threading.md`）一并实现。
+### S-11 `InternalLock.newLockOrNull` 恒返回 null 【P2 · 条件等价】
+
+> **线程档位已落（2026-09-22，`8eca47b`）**：协作调度（start0 就绪队列 + 嵌套泵 + monitor ticket 等待集）——TestSynchronized/TestThreadJoin/TestWaitNotify 全绿；条件等价边界见 compatibility.md 线程行。真并发（OS 线程互斥）待对象模型 Send/Sync 化，InternalLock 随之。
+
+当前走 synchronized 回落路径，单线程下无差异。终态：随线程/同步模型一并实现。
 
 ### S-12 非嵌套 try 区域的布局偏差 【P3】
 无调试信息（无 LocalVariableTable）时，catch 之后的代码仍留在 catch 体内（语义等价，形状与源码不同）；`try { a(); } catch (E e) { throw ..; } return;`（void）会把 `return` 放进 try 体。终态：不依赖调试信息，由异常表 + 支配关系推断 catch 体终点。
