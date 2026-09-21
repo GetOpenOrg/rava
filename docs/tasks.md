@@ -36,7 +36,7 @@
 |------|------|------------|
 | ~~陈旧树筛 + run 族定向复验~~ | **✅ 完成（2026-09-21 午后）** | 30 例复验 + 26 run 族 stderr 定性 + 4 output 族复验全记录：归类文档 §4.2/§五。假失败第 6 例（TestMethodRef）；数组视图族升 6 例；CDS/isBigEndian native 双件 8 例 |
 | ~~A-8 同文件辅助类未进闭包~~ | **✅ 完成（`1be8caa`）** | 15/15 E0433/E0425 清零，4 例全过（FieldShadow/EnumAdvanced/InnerClass/InstanceOfChain），闭包指纹 20/20 一致；连带修复 P-3 潜伏回归 Appendable E0432（`0b22604`，四红线干净树恢复全绿） |
-| **A-8 下一层（11 例 compile 清零后暴露，已归类）** | 166 归类/A-8 报告 | 泛型用户父类**参数位擦除**（TestBridgeMethod，A-1 参数位延伸）；**中文字符串双重编码**（TestConstructorChain/TestInitOrder，UTF-8 stdout 规格破坏，2 例）；Double.toString 整数渲染（TestSealed，S-19 邻域）；接口冲突 default 分派（TestInterfaceConflict）；接口 private 方法载体（TestInterfacePrivate）；方法引用接收者 coerce（TestMethodRefKinds）；泛型 record `==`（TestRecordAdvanced）；`HashSet.remove` stub（TestHashSetOps）；TestGenericBoundsCombo/TestVarContext 的 Appendable 缺口已随 `0b22604` 消失待复验 |
+| **A-8 下一层（11 例 compile 清零后暴露，已归类）** | 166 归类/A-8 报告 | 泛型用户父类**参数位擦除**（TestBridgeMethod，A-1 参数位延伸）；~~中文双重编码（2 例）~~ **✅ 随 S-19 #3 MUTF-8 修复顺带关闭**（TestConstructorChain/TestInitOrder Ubuntu+macOS 双确认）；**record toString 的 double `.0` 渲染**（TestSealed `Square[side=2]`→`2.0`，java_fmt_f64 的 record 组件路径，S-19 #4 邻域补件）；接口冲突 default 分派（TestInterfaceConflict）；接口 private 方法载体（TestInterfacePrivate）；方法引用接收者 coerce（TestMethodRefKinds）；泛型 record `==`（TestRecordAdvanced）；`HashSet.remove` stub（TestHashSetOps）；TestGenericBoundsCombo/TestVarContext 的 Appendable 缺口已随 `0b22604` 消失待复验 |
 | ~~S-20 `Object.wait/notify/notifyAll`~~ | **✅ 完成（`23fe881`）** | `monitor.rs` 双条件队列监视器 + monitorenter/同步方法/同步块四发射面真实化；12/12 编译清零、TestStringSearch 全绿、红线 23/23 含 streams。**未接 InternalLock（论证见 monitor.rs），S-11 终态随线程模型** |
 | ~~native 双件：CDS + isBigEndian~~ | **✅ 完成（`9873095`）** | CDS 恒 0（HotSpot 语义）+ isBigEndian `cfg!` + Thread.registerNatives no-op；6+2 用例编译/运行推进，TestStringSearch 全绿。**下一层已归类**：线程层总闸 3 例、ImmutableCollections 载体分派 3 例（A-4 邻域）、SharedSecrets.getJavaUtilCollectionAccess 2 例（P-3 邻域）、Charset clinit、toString 装箱分派 1 行 |
 | **线程层（S-20 下一层总闸，3 例）** | S-20 报告 | TestSynchronized/TestThreadJoin/TestWaitNotify 同卡 `currentThread()` 平台线程对象字段未填充（NPE）；含 start0/sleep0/join 语义与 wait 的 InterruptedException——随线程模型立项（S-11 邻域） |
@@ -74,7 +74,7 @@
 | catch 变量作用域（2 例） | 166 归类 | TestDateTimeFormat / TestZonedDateTime `E0425 ex`——catch 形参在后续引用点不可见，G-1/G-3 邻域 |
 | 接口槽位成员缺失（2 例） | 166 归类 | TestStreamNumeric E0407 / TestPriorityQueue E0599——槽位沿继承层次的签名/成员解析，K-6/S-18 后续增量 |
 | 一次性编译错（4 例） | 166 归类 | TestOverload 生成语法、TestStringSearch（escape 已修、转 run 族）、TestSwitchNull E0605（S-17 已归类 Integer/String 常量标签）、TestCollectorsMore E0061 |
-| 用户类 import 生成缺口（1 例，S-18 后续） | §4.2 复验新增 | TestCustomException 内部类签名/体内引用 `PrintStream` 等 JDK 类型未生成 import（7 处 E0425）——S-18 扩闭包暴露；疑与 catch 作用域族同域的 import/作用域生成面 |
+| ~~用户类 import 生成缺口~~ | **✅ 随 A-8 消失（2026-09-22 核验）** | TestCustomException 干净树编译通过（Ubuntu 2224f02+ 与 macOS 双确认）——E0425 被 A-8 的 `collect_referenced` 字节码引用集驱动导入扩展顺带修复；**S-19 #5 栈帧 diff 现在直达**（仅 `has stack frames` 1 行） |
 | 异常层次 upcast CCE（2 例） | §4.2 复验新增 | TestNestedTry / TestSuppressed：`IllegalStateException→RuntimeException`、`RuntimeException→Exception` 转换失败 |
 | IR 结构化收敛 | T05/T06/T07/T50/T58/T61/T67 | RawExpr/RawStmt 消除，架构级 |
 

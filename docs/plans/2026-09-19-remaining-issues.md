@@ -404,7 +404,7 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 
 - **终态**：接口方法的调用链收录覆盖全部传递实现类（含抽象类中途实现）；调用链内方法命中存根 = 0（编译期 `stub_fallback` 与运行期 panic 双口径）。
 
-> **S-18 后续（2026-09-21 午后复验发现）**：闭包扩大暴露**用户类 import 生成缺口**——TestCustomException 的内部类 `SubFineException` 方法签名/体内引用 `PrintStream`/`Throwable_PrintStreamOrWriter`/`ObjectInputStream`/`Class` 共 7 处 E0425，用户类文件的 import 扫描未覆盖 JDK 类型引用（此前这些方法体未入译故未暴露）。归 S-18/K-6 后续增量。
+> **S-18 后续（2026-09-21 发现，2026-09-22 核销）**：用户类 import 生成缺口（TestCustomException 7 处 E0425）**已随 A-8 的 `collect_referenced` 导入扩展消失**（Ubuntu/macOS 干净树双确认编译通过）——S-19 #5 栈帧 diff 由此直达（仅 1 行 `has stack frames`）。
 
 ### S-19 输出一致性缺陷群：浮点/字符串规格破坏 【P1，2026-09-21 基线新增】
 
@@ -416,7 +416,7 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 | 2 | NaN 判定与 NaN `==`：JLS 15.21.1（NaN≠NaN）、`Double.isNaN` | TestNaN `nanEq=false`→`true`、`isNaN` 反转；TestFloatBits 同根 | **✅ 已修（73a6c54）**：根因在 codegen 比较发射——dcmpl/dcmpg 降级为双比较致 NaN 三路值算 0；改发 `partial_cmp().map_or(∓1, o as i32)`（JVMS §6.5 语义）；1.9 万对值对拍零差异；TestNaN/TestFloatBits 转绿 |
 | 3 | 增补字符（非 BMP）字面量未走 UTF-16 表示，代理对被 Latin1 分支吞掉 | TestStringCodePoints `length=4`→`20`、`codePointAt1` 128512→239 | **✅ 已修（`16296bf`）**：两段根因——常量池 MUTF-8 用标准 UTF-8 + errors='replace' 解码毁代理对（JVMS §4.4.7 正确解码器补齐）+ `from_owned` 恒 UTF-8/Latin1（改 JDK compact strings 语义：≤U+00FF Latin1 否则 UTF-16 平台字节序，顺带修 0x80-0xFF 同族缺陷） |
 | 4 | `Double.toString` 科学计数规则缺失（<1e-3 / ≥1e7） | TestMathExact `ulp=2.22E-16`→`0.000…313` | **✅ 已修（`2c27f14`）**：完整算法上移 `java_fmt_f64` 单一实现（最短往返+科学区间 2 位有效+平局取偶），`double_impl.rs` 删除本地实现转发——拼接/装箱 toString/Double.toString 三入口同源 |
-| 5 | 栈帧未填充（`fillInStackTrace`/`getStackTrace` 空） | TestCustomException（当前被 E0425 编译错挡在前面，见 S-18 注记） | 待 import 缺口修复后复验 |
+| 5 | 栈帧未填充（`fillInStackTrace`/`getStackTrace` 空） | TestCustomException（import 缺口已随 A-8 消失，**diff 现在直达：仅 `has stack frames` 1 行**） | 可达，待修（throwable 边界层） |
 | 6 | `expm1` 尾数值偏差（2026-09-21 午后新增） | TestMathExact `expm1=1.718281828459045`→`…453` | **✅ 已修（444ad9a）**：纯 1 ulp 值差——删手写 `exp_m1()`，落回已转译 `StrictMath.expm1 → FdLibm` 链（fdlibm 常量从 .class ConstantValue 逐位还原）；202.6 万点对拍零差异 |
 
 - **终态**：上表 5 项输出与 Java 逐字一致；#4 落在 `java_fmt_f64`，#5 落在 throwable 边界层，其余为 math/string native 补全。
