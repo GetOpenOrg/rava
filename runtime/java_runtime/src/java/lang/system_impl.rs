@@ -12,13 +12,20 @@ impl System {
 
     #[jvm_native]
     pub fn arraycopy(src: Object, src_pos: i32, dest: Object, dest_pos: i32, length: i32) -> Result<()> {
+        // JVM 规范（System.arraycopy）：src 或 dest 为 null → NullPointerException；
+        // src 或 dest 不是数组 → ArrayStoreException（可被 java_try 捕获，不 panic）。
+        if src.0.is_jvm_null() || dest.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
         // JVM arraycopy 是 memmove 语义：src 与 dest 是同一数组且区间重叠时，
         // 逐元素前向复制会把尚未读取的源元素覆盖掉（TimSort 的插入移位即此形态）。
         // 同一数组（对象标识相等）按区间方向选择复制顺序。
         macro_rules! try_copy {
             ($t:ty) => {
-                if let Some(s) = src.0.as_any().downcast_ref::<JArray<$t>>() {
-                    let d = dest.downcast::<JArray<$t>>();
+                if let (Some(s), Some(d)) = (
+                    src.0.as_any().downcast_ref::<JArray<$t>>(),
+                    dest.try_checkcast::<JArray<$t>>(),
+                ) {
                     let backward = s == &d && dest_pos > src_pos;
                     let range: Box<dyn Iterator<Item = i32>> = if backward {
                         Box::new((0..length).rev())
@@ -41,7 +48,28 @@ impl System {
         try_copy!(bool);
         try_copy!(i16);
         try_copy!(Object);
-        panic!("stub: System.arraycopy: unsupported array element type")
+        // 引用元素数组的其余形态（多维数组 JArray<JArray<T>>、以协变视图 / Object 擦除
+        // 流转的数组）：经 `__view_into` 构造 Object 级协变视图逐元素复制（S-4）——
+        // 写入走源数组的 aastore 存储检查，元素类型不兼容抛 ArrayStoreException；
+        // 同一数组的重叠区间按对象标识（视图委托源数组）识别，保持 memmove 语义。
+        let unused: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(());
+        let mut src_view: Option<JArray<Object>> = None;
+        let mut dest_view: Option<JArray<Object>> = None;
+        src.0.__view_into(std::rc::Rc::clone(&unused), &mut src_view);
+        dest.0.__view_into(unused, &mut dest_view);
+        if let (Some(s), Some(d)) = (src_view, dest_view) {
+            let backward = s == d && dest_pos > src_pos;
+            let range: Box<dyn Iterator<Item = i32>> = if backward {
+                Box::new((0..length).rev())
+            } else {
+                Box::new(0..length)
+            };
+            for i in range {
+                d.set(dest_pos + i, s.get(src_pos + i)?)?;
+            }
+            return Ok(());
+        }
+        Err(crate::error::JvmError::array_store(src.0.__class_name()))
     }
 
     #[jvm_native]

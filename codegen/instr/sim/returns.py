@@ -59,11 +59,13 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         elif ret_ty != 'Object' and actual_ty == 'Object':
             # Object 引用按声明的返回类型返回 = javac 的 checkcast（类型变量位置为 unchecked cast）：
             # 类型变量（宏补 From<Object> bound）与类 wrapper 经 From<Object> 取回；
-            # null 字面量 / 无运行时类的返回类型取 null 值
+            # 数组目标（JArray 不在 registry）走 From<Object> for JArray<T> 的数组视图
+            # （R9/S-4），不能落到 null 零值；null 字面量 / 无运行时类的返回类型取 null 值
             from ...type_map import _registry_short_index
             _ret_ci = _registry_short_index(registry).get(ret_ty.split('<')[0].strip()) if registry else None
             if expr_s != 'Object::default()' and (
-                    ret_ty in _ctparams or (_ret_ci is not None and not _ret_ci.is_interface)):
+                    ret_ty in _ctparams or ret_ty.startswith('JArray<')
+                    or (_ret_ci is not None and not _ret_ci.is_interface)):
                 expr_s = f"From::from({expr_s})"
             else:
                 expr_s = 'Default::default()'

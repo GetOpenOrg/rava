@@ -108,9 +108,9 @@ impl Object {
     ///      子类按超类实参映射的视图、数组同元素类型 / 协变视图）；
     ///   3. 类目标：运行时类是目标类族（`is_instance_of` 按静态超类型名单匹配，
     ///      含子类）→ `<T as From<Object>>` 的擦除路径（`__erased_vtable` +
-    ///      `__erased_inner` 部件重建，共享存储与对象标识，A-1）；
-    ///   4. 数组目标（binary_name 以 `[` 开头）：`From<Object> for JArray<T>` 的
-    ///      元素类型驱动判定（协变探针 / 擦除数组逐元素兼容，与 array.rs 同规则）。
+    ///      `__erased_inner` 部件重建，共享存储与对象标识，A-1）。
+    /// 数组目标（binary_name 以 `[` 开头）走 `try_cast_array`：判定由元素类型
+    /// 驱动（`array::try_array_view`），`T = JArray<E>` 整体在类型层取不出 E。
     #[jvm_ext]
     pub fn try_cast<T>(&self, binary_name: &str) -> Result<T>
     where T: Clone + Default + Into<Object> + From<Object> + 'static {
@@ -120,11 +120,7 @@ impl Object {
         if let Some(same) = self.try_checkcast::<T>() {
             return Ok(same);
         }
-        if binary_name.starts_with('[') {
-            if crate::array::erased_array_compatible::<T>(self) {
-                return Ok(<T as From<Object>>::from(self.clone()));
-            }
-        } else if self.0.is_instance_of(binary_name) {
+        if self.0.is_instance_of(binary_name) {
             return Ok(<T as From<Object>>::from(self.clone()));
         }
         Err(crate::error::JvmError::class_cast(format!(
@@ -132,6 +128,25 @@ impl Object {
             self.0.__class_name().replace('/', "."),
             binary_name.replace('/', "."),
         )))
+    }
+
+    /// checkcast 到数组类型（S-4 / A-1 与 checkcast/checkcast 路径的合流点）：
+    /// `E` 是目标元素类型（发射侧由 checkcast 目标描述符给出）。判定与视图构造
+    /// 全部经 `array::try_array_view`——null 还原 / 同形态取回 / 协变上转探针
+    /// （`__array_elem_assignable`）/ 擦除还原（逐元素兼容），与
+    /// `From<Object> for JArray<E>` 同一决策点；失败返回 Err（可被 java_try
+    /// 捕获，S-1），与类目标的 `try_cast` 对偶。
+    #[jvm_ext]
+    pub fn try_cast_array<E>(&self, binary_name: &str) -> Result<JArray<E>>
+    where E: Clone + Default + Into<Object> + From<Object> + 'static {
+        match crate::array::try_array_view::<E>(self) {
+            Some(view) => Ok(view),
+            None => Err(crate::error::JvmError::class_cast(format!(
+                "class {} cannot be cast to class {}",
+                self.0.__class_name().replace('/', "."),
+                binary_name.replace('/', "."),
+            ))),
+        }
     }
 
     /// java.lang.Comparable.compareTo — 委托到 vtable（String/Integer 等实现类会覆盖）
