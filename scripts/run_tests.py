@@ -9,6 +9,8 @@
     python3 scripts/run_tests.py --filter 01_basics          # 只跑指定目录
     python3 scripts/run_tests.py --filter TestArrayList      # 只跑指定类名
     python3 scripts/run_tests.py --filter 01 02 03           # 多个 filter（任意匹配）
+    python3 scripts/run_tests.py --failed                    # 只跑失败清单（build/failed_tests.txt），PASS 自动出列
+    python3 scripts/run_tests.py --skip-failed               # 跳过清单内已知失败（干净面快速迭代）
     python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt（并行，-j 控制并发）
     python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比
     python3 scripts/run_tests.py --jdk 25                # 指定 JDK 主版本（javac/java/翻译语料同源）
@@ -177,6 +179,51 @@ def _aux_full(cls_aux: str, raw_v: int, eq_v: int, bin_name: str = "",
                          f"bin {_bin_size_mb(bin_name)}" if bin_name else "",
                          eta) if p]
     return " | ".join(parts)
+
+
+# ── 失败清单（棘轮）：全量跑批累积失败，--failed 只跑清单，通过自动出列 ──
+_FAILED_HEADER = ("# run_tests.py 失败清单（自动维护，勿手编）：\n"
+                  "# - 任何一次跑批：FAIL 进列 / 跑到且 PASS 出列 / 未跑的不动\n"
+                  "# - --failed 按本清单回归；--failed-file 可改路径\n")
+
+
+def _failed_file_path(cli_path: str | None) -> Path:
+    return Path(cli_path) if cli_path else OUT / "failed_tests.txt"
+
+
+def _load_failed(path: Path) -> set:
+    if not path.exists():
+        return set()
+    return {ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.startswith('#')}
+
+
+def _save_failed(path: Path, names: set) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_FAILED_HEADER + "".join(f"{n}\n" for n in sorted(names)),
+                    encoding="utf-8")
+
+
+def _update_failed_file(path: Path, prev: set, outcomes: dict) -> None:
+    """outcomes: 测试名(ROOT 相对路径) -> True(PASS)/False(FAIL)；未运行的不动。"""
+    keep = set(prev)
+    removed = added = 0
+    for name, ok in outcomes.items():
+        if ok:
+            if name in keep:
+                keep.discard(name)
+                removed += 1
+        elif name not in keep:
+            added += 1
+        if not ok:
+            keep.add(name)
+    _save_failed(path, keep)
+    print(f"[failed-file] {path.relative_to(ROOT)}：保留 {len(keep)}"
+          f"（本次出列 {removed}、进列 {added}）—— `--failed` 按此回归")
+
+
+def _apply_failed_filter(files: list, failed_set: set) -> list:
+    return [f for f in files if str(f.relative_to(ROOT)) in failed_set]
 
 
 def _print_env_header() -> None:
@@ -513,8 +560,21 @@ def _update_expected(java_file: Path) -> tuple[str, str]:
 # ── 顺序模式 ─────────────────────────────────────────────────────────
 
 def _run_sequential(filter_str: list[str] | None, no_run: bool,
-                    deny: list[str]) -> int:
+                    deny: list[str], use_failed: bool = False,
+                    failed_path: Path | None = None,
+                    skip_failed: bool = False) -> int:
+    failed_path = failed_path or _failed_file_path(None)
+    prev_failed = _load_failed(failed_path)
     files = _discover(filter_str)
+    if use_failed:
+        files = _apply_failed_filter(files, prev_failed)
+        if not files:
+            print(f"失败清单为空或与 filter 无交集（{failed_path}）。")
+            return 0
+        print(f"[failed] 回归模式：清单 {len(prev_failed)} 个，本次运行 {len(files)} 个")
+    elif skip_failed:
+        files = [f for f in files if str(f.relative_to(ROOT)) not in prev_failed]
+        print(f"[skip-failed] 跳过清单内 {len(prev_failed)} 个已知失败，本次运行 {len(files)} 个")
     if not files:
         print(f"No test files found (filter={filter_str!r})")
         return 1
@@ -533,10 +593,13 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     run_sub: dict[str, tuple[str, str]] = {}
     fail_categories: dict[str, list[str]] = {}
 
+    outcomes: dict[str, bool] = {}
+
     def _fail(cat: str, rel_str: str) -> None:
         nonlocal failed
         failed += 1
         fail_categories.setdefault(cat, []).append(rel_str)
+        outcomes[rel_str] = False
 
     total_files = len(files)
     for idx, java_file in enumerate(files, 1):
@@ -631,6 +694,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
                    f"({timing})",
                    aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, bin_name, _eta), prog=prog)
             passed += 1
+            outcomes[str(rel)] = True
 
     total = passed + failed + skipped
     elapsed = time.perf_counter() - t_all
@@ -644,6 +708,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
           f"  (transpile {fmt_dur(t_transpile_total)}, build {fmt_dur(t_build_total)},"
           f" run {fmt_dur(t_run_total)})")
     print(f"[end] {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    _update_failed_file(failed_path, prev_failed, outcomes)
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
     _summarize_raw()
@@ -653,8 +718,22 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
 # ── 并行模式 ─────────────────────────────────────────────────────────
 
 def _run_parallel(filter_str: list[str] | None, jobs: int,
-                  deny: list[str]) -> int:
+                  deny: list[str], use_failed: bool = False,
+                  failed_path: Path | None = None,
+                  skip_failed: bool = False) -> int:
+    failed_path = failed_path or _failed_file_path(None)
+    prev_failed = _load_failed(failed_path)
+    outcomes: dict[str, bool] = {}
     files = _discover(filter_str)
+    if use_failed:
+        files = _apply_failed_filter(files, prev_failed)
+        if not files:
+            print(f"失败清单为空或与 filter 无交集（{failed_path}）。")
+            return 0
+        print(f"[failed] 回归模式：清单 {len(prev_failed)} 个，本次运行 {len(files)} 个")
+    elif skip_failed:
+        files = [f for f in files if str(f.relative_to(ROOT)) not in prev_failed]
+        print(f"[skip-failed] 跳过清单内 {len(prev_failed)} 个已知失败，本次运行 {len(files)} 个")
     if not files:
         print(f"No test files found (filter={filter_str!r})")
         return 1
@@ -714,6 +793,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                 print(f"  [transpile] {rel} FAIL", flush=True)
                 print(log[-300:])
                 transpile_fail.append(java_file)
+                outcomes[str(rel)] = False
 
     if not transpile_ok:
         print("所有转译均失败，退出。")
@@ -765,6 +845,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         _a = aux_by_file.get(java_file) or ("", 0, 0)
         _pline(name_w, "FAIL", java_file.relative_to(E2E), "— compile error",
                aux=_aux_full(_a[0], _a[2], _a[1]))
+        outcomes[str(java_file.relative_to(ROOT))] = False
         failed += 1
 
     def _run_one(java_file: Path) -> tuple[Path, bool, str, list[str]]:
@@ -789,6 +870,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                              _to_bin_name(_class_name(java_file)))
             if not ok and err_msg:
                 _pline(name_w, "FAIL", java_file.relative_to(E2E), f"— {err_msg}", aux=_aux)
+                outcomes[str(java_file.relative_to(ROOT))] = False
                 failed += 1
             elif diff:
                 _n_diff = sum(1 for l in diff if l[:1] in "+-" and not l.startswith(("+++", "---")))
@@ -797,13 +879,16 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                 print("".join(diff[:40]))
                 if len(diff) > 40:
                     print(f"  … ({len(diff) - 40} more lines)")
+                outcomes[str(java_file.relative_to(ROOT))] = False
                 failed += 1
             else:
                 _pline(name_w, "PASS", java_file.relative_to(E2E), aux=_aux)
+                outcomes[str(java_file.relative_to(ROOT))] = True
                 passed += 1
 
     for java_file in transpile_fail:
         _pline(name_w, "FAIL", java_file.relative_to(E2E), "— transpile error")
+        outcomes[str(java_file.relative_to(ROOT))] = False
         failed += 1
 
     total = passed + failed + skipped
@@ -815,6 +900,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
           f"  (transpile {fmt_dur(t_transpile)}, build {fmt_dur(t_build)},"
           f" run {fmt_dur(time.perf_counter() - t_run_start)})")
     print(f"[end] {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    _update_failed_file(failed_path, prev_failed, outcomes)
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
     _summarize_raw()
@@ -863,7 +949,8 @@ def _update_expected_parallel(files: list[Path], jobs: int) -> int:
 # ── 入口 ─────────────────────────────────────────────────────────────
 
 def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool, jobs: int,
-              deny: list[str]) -> int:
+              deny: list[str], use_failed: bool = False,
+              failed_file: str | None = None, skip_failed: bool = False) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -873,8 +960,12 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
         return _update_expected_parallel(files, jobs)
 
     if jobs > 1:
-        return _run_parallel(filter_str, jobs, deny)
-    return _run_sequential(filter_str, no_run, deny)
+        return _run_parallel(filter_str, jobs, deny, use_failed=use_failed,
+                             failed_path=_failed_file_path(failed_file),
+                             skip_failed=skip_failed)
+    return _run_sequential(filter_str, no_run, deny, use_failed=use_failed,
+                           failed_path=_failed_file_path(failed_file),
+                           skip_failed=skip_failed)
 
 
 def main():
@@ -889,6 +980,9 @@ def main():
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     ap.add_argument("--jdk",             type=int, default=None, metavar="N",
                     help="指定 JDK 主版本（javac/java/翻译语料同源；默认沿用 JAVA_HOME 或自动发现）")
+    ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
+    ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")
+    ap.add_argument("--failed-file",     metavar="PATH", default=None, help="失败清单路径（默认 build/failed_tests.txt）")
     ap.add_argument("--deny",            action="append", default=[], metavar="SPEC",
                     help="拒绝升级（默认全放行，可叠加）：equiv = 任一等价发射点非零即整体失败；"
                          "equiv::<id> = 细粒度（id 见 [equiv-audit] 行）；"
@@ -896,6 +990,8 @@ def main():
     args = ap.parse_args()
 
     _validate_deny(args.deny)
+    if args.failed and args.skip_failed:
+        sys.exit("--failed 与 --skip-failed 互斥：前者只跑清单、后者跳过清单。")
 
     if args.out_dir is not None:
         OUT = Path(args.out_dir)
@@ -910,7 +1006,9 @@ def main():
     if jobs == 0:
         jobs = os.cpu_count() or 4
 
-    sys.exit(run_tests(args.filter, args.no_run, args.update_expected, jobs, args.deny))
+    sys.exit(run_tests(args.filter, args.no_run, args.update_expected, jobs, args.deny,
+                       use_failed=args.failed, failed_file=args.failed_file,
+                       skip_failed=args.skip_failed))
 
 
 if __name__ == "__main__":
