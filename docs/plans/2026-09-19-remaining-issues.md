@@ -30,7 +30,7 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 | 编号 | 类别 | 条目数 | 最高优先级 |
 |------|------|--------|-----------|
 | [A](#a-架构缺口最高优先级) | 架构缺口 | 8 | P0 |
-| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 20 | P1 |
+| [S](#s-jvm-语义缺口) | JVM 语义缺口 | 21 | P1 |
 | [G](#g-生成器与宏的内部质量) | 生成器与宏内部质量 | 12 | P1 |
 | [P](#p-项目原则违规) | 项目原则违规 | 3 | P1 |
 | [V](#v-验证覆盖缺口) | 验证覆盖缺口 | 4 | P1 |
@@ -92,7 +92,9 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 - **验收指标**：`_reinstantiate_generic` 调用点 = 0；`#[immutable_state]` 重建路径 = 0（被通用视图机制取代）；依赖「带类型实参 TypeId」的运行时判定 = 0。
 - **规模**：多日级重构，涉及宏 `block/mod.rs` 的 struct/vtable 展开、`coerce.py`、`fields.py`、`invoke*.py`。
 
-### A-2 可读层禁用调用未清零 【P0】
+### A-2 可读层禁用调用未清零 【P0 · 主杠杆已落地】
+
+> **downcast 链移除已落地（2026-09-21，`fix/downcast-chain-removal`）**：方案 §6 步骤 4——根方法根 vtable 直调 + 类虚方法 `__virtual_view` 擦除实例化视图分派（宏 wrapper.rs 新增，与 `__from_parts` 同块）+ SAM 回退保留（A-5 域）。**`downcast_ref` 方法体清零**（TSB 1104→6，余 6 全为 SAM）；`[raw-audit]` 7 测试切片 3320→~37；type_surgery_sites 63→62。**剩余 = `from_any`（TSB 347）+ SAM 6 处**，归属：`__clinit` 静态装箱 ~30、lambda 装箱 ~60、擦除字段存边界 ~17、泛型静态工厂/返回装箱余量——待 A-4/A-5 收口。
 
 - **现状**（TestStringBuilder 生成代码实测，不含 `*_impl.rs`）：
 
@@ -412,13 +414,17 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 |---|---|---|---|
 | 1 | `Math.rint` 未按 HALF_EVEN（rint(2.5) 应 2.0） | TestMathRound `rint=2.0`→`3.0` | **✅ 已修（0078906）**：删手写 rint，落回已转译的 `StrictMath.rint` 纯 Java 链（JDK 21 已非 native fdlibm）；21.9 万点对拍逐位一致 |
 | 2 | NaN 判定与 NaN `==`：JLS 15.21.1（NaN≠NaN）、`Double.isNaN` | TestNaN `nanEq=false`→`true`、`isNaN` 反转；TestFloatBits 同根 | **✅ 已修（73a6c54）**：根因在 codegen 比较发射——dcmpl/dcmpg 降级为双比较致 NaN 三路值算 0；改发 `partial_cmp().map_or(∓1, o as i32)`（JVMS §6.5 语义）；1.9 万对值对拍零差异；TestNaN/TestFloatBits 转绿 |
-| 3 | 增补字符（非 BMP）字面量未走 UTF-16 表示，代理对被 Latin1 分支吞掉 | TestStringCodePoints `length=4`→`20`、`codePointAt1` 128512→239 | 待修（string 域） |
-| 4 | `Double.toString` 科学计数规则缺失（<1e-3 / ≥1e7） | TestMathExact `ulp=2.22E-16`→`0.000…313`（**现为该测试唯一剩余 diff**） | 待修（java_fmt_f64，format 域） |
+| 3 | 增补字符（非 BMP）字面量未走 UTF-16 表示，代理对被 Latin1 分支吞掉 | TestStringCodePoints `length=4`→`20`、`codePointAt1` 128512→239 | **✅ 已修（`16296bf`）**：两段根因——常量池 MUTF-8 用标准 UTF-8 + errors='replace' 解码毁代理对（JVMS §4.4.7 正确解码器补齐）+ `from_owned` 恒 UTF-8/Latin1（改 JDK compact strings 语义：≤U+00FF Latin1 否则 UTF-16 平台字节序，顺带修 0x80-0xFF 同族缺陷） |
+| 4 | `Double.toString` 科学计数规则缺失（<1e-3 / ≥1e7） | TestMathExact `ulp=2.22E-16`→`0.000…313` | **✅ 已修（`2c27f14`）**：完整算法上移 `java_fmt_f64` 单一实现（最短往返+科学区间 2 位有效+平局取偶），`double_impl.rs` 删除本地实现转发——拼接/装箱 toString/Double.toString 三入口同源 |
 | 5 | 栈帧未填充（`fillInStackTrace`/`getStackTrace` 空） | TestCustomException（当前被 E0425 编译错挡在前面，见 S-18 注记） | 待 import 缺口修复后复验 |
 | 6 | `expm1` 尾数值偏差（2026-09-21 午后新增） | TestMathExact `expm1=1.718281828459045`→`…453` | **✅ 已修（444ad9a）**：纯 1 ulp 值差——删手写 `exp_m1()`，落回已转译 `StrictMath.expm1 → FdLibm` 链（fdlibm 常量从 .class ConstantValue 逐位还原）；202.6 万点对拍零差异 |
 
 - **终态**：上表 5 项输出与 Java 逐字一致；#4 落在 `java_fmt_f64`，#5 落在 throwable 边界层，其余为 math/string native 补全。
 - **验收指标**：对应用例 output diff = 0。
+
+### S-21 生成侧 String.hashCode 的 UTF16 分支硬编码大端 【P3，S-19 #3 修复时发现】
+
+> S-19 #3 修复（16296bf）使 `from_owned` 可产 UTF-16 平台字节序内容后暴露：生成侧 `String.hashCode` 的 UTF16 分支按 `(b1<<8)|b2` 大端读取，与平台字节序（本机 LE）存储不一致——非 Latin1 字符串的 hash 与 JDK 不同。当前无测试打印其可观测效应。终态：与 `StringUTF16.putChar` 的 HI/LO_BYTE_SHIFT 布局一致（平台字节序）。
 
 ### S-20 `Object.wait/notify/notifyAll` 未建模 【已修复，S-20 轮】
 
