@@ -427,10 +427,14 @@ class StackSim:
         if hint is not None:
             if src_is_object:
                 if (getattr(hint, 'name', '') in self.class_type_params
-                        and isinstance(expr, RawExpr) and expr.code != 'Default::default()'):
+                        and isinstance(expr, (RawExpr, CastExpr))
+                        and render_expr(expr) != 'Default::default()'):
                     # `E v = (E) es[i]`：擦除后无 checkcast，Object 值直接存入声明为类型变量的
-                    # 局部 → 经宏补的 From<Object> bound 按对象标识取回类型变量视图
-                    expr = RawExpr(f"From::from({expr.code})")
+                    # 局部 → 经宏补的 From<Object> bound 按对象标识取回类型变量视图。
+                    # CastExpr（A-4 批次 1 的接口 checkcast，`<D extends Iface> D v = (D) t`
+                    # —— javac 按 D 的擦上界发 checkcast 接口）同样返回 Object，
+                    # 判定已由 try_cast_iface 完成，这里只做 D 视图取回
+                    expr = RawExpr(f"From::from({render_expr(expr)})")
                     force_let_ty = True
                 elif (not isinstance(expr, Var)
                       and isinstance(hint, RsNamed) and hint.name.startswith('JArray<')

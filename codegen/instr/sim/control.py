@@ -51,6 +51,17 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                     cast_rust = cast_rust.replace(_erased, f"{short_cls(_cast_elem)}<{', '.join(_cast_tps)}>")
             expr, src_ty = sim.pop()
             src_name = getattr(src_ty, 'name', str(src_ty))
+            # A-4 批次 1：checkcast 到接口（目标 jvm_to_rust 擦除为 Object）。此前
+            # 静默丢弃（cast_rust=='Object' 落到通用 else）→ 跨接口强转的 CCE 空档；
+            # 现发射 interface_target 形态的 CastExpr（try_cast_iface：null 通过 /
+            # is_instance_of 按运行时类接口闭包判定 / 失败 Err 可捕获，S-1），
+            # 栈类型保持擦除记录 Object——载体进类型位置后翻转为目标载体形态。
+            _tgt_ci = registry.get(comment) if (registry and not comment.startswith('[')) else None
+            if src_name == 'Object' and _tgt_ci is not None and _tgt_ci.is_interface:
+                expr = CastExpr(expr, 'Object', binary_name=comment, checked=True,
+                                interface_target=True)
+                sim.push(expr, RsNamed('Object'))
+                return True
             if src_name == 'Object' and cast_rust not in ('Object', '()'):
                 # 源是 Object（擦除边界）：checkcast 语义（null 还原 / `__view_into` 视图 /
                 # is_instance_of + 擦除部件重建由 try_cast 按序判定，数组目标按元素类型驱动）
