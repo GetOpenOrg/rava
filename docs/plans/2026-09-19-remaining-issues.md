@@ -392,7 +392,7 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 ### V-3 可读性无自动化检验 【P2】
 A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在 `[cfg-audit]` 旁输出 `[readability-audit]`（各禁用形态计数），`run_tests.py` 汇总；目标值全 0。
 
-> **R6 轮已交付前半**：`main.py` 现于每次转译后输出 `[readability-audit] from_any=N downcast=N downcast_ref=N rc_new=N borrow=N`（只统计含生成标记的文件，与 A-2 口径一致）。`run_tests.py` 汇总尚未做。
+> **R6 轮已交付**：`main.py` 每次转译后输出 `[readability-audit] from_any=N downcast=N downcast_ref=N rc_new=N borrow=N`（只统计含生成标记的文件，与 A-2 口径一致）；`run_tests.py` 顺序与并行两种模式均解析该行并在结尾汇总 `[readability]`（各形态总计 + 非零测试名单，目标全 0）。V-3 关闭，后续以 A-2 计数清零为验收。
 
 ### V-4 单元测试运行器 【P3】
 环境未装 pytest，`tests/unit/test_cfg_structuring.py`（17 个用例）用 `python3 -m unittest` 运行。终态：在 CLAUDE.md「常用命令」中写明单元测试命令。

@@ -1,6 +1,6 @@
 # 从 codegen/instr/sim.py 中拆出
 
-from ...stack import I32, I64, F32, F64
+from ...stack import I32, I64, F32, F64, BOOL
 from ...rs_ir import RawExpr, Cast
 from ...render import render_expr, render_type
 from ..coerce import _to_i32
@@ -56,13 +56,26 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
         sim.push(RawExpr(f"(({_to_i32(render_expr(a), at)} as u32>>({_to_i32(render_expr(b), bt)}&0x1f)) as i32)"), I32)
     elif op == 'iand':
         b, bt = sim.pop(); a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}&{_to_i32(render_expr(b), bt)})"), I32)
+        if render_type(at) == 'bool' and render_type(bt) == 'bool':
+            # Java boolean & / |（非短路，两侧都求值）：两个操作数都是 boolean 时
+            # iand/ior 是位级布尔运算，结果保持 boolean——下游 makeConcat (ZZ)Z、
+            # istore 到 boolean 局部等按 true/false 处理，不能塌成 0/1 的 i32。
+            # Rust bool 的 & / | 与 Java 一样两侧都求值（非 && / ||）。
+            sim.push(RawExpr(f"({render_expr(a)}&{render_expr(b)})"), BOOL)
+        else:
+            sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}&{_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'ior':
         b, bt = sim.pop(); a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}|{_to_i32(render_expr(b), bt)})"), I32)
+        if render_type(at) == 'bool' and render_type(bt) == 'bool':
+            sim.push(RawExpr(f"({render_expr(a)}|{render_expr(b)})"), BOOL)
+        else:
+            sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}|{_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'ixor':
         b, bt = sim.pop(); a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}^{_to_i32(render_expr(b), bt)})"), I32)
+        if render_type(at) == 'bool' and render_type(bt) == 'bool':
+            sim.push(RawExpr(f"({render_expr(a)}^{render_expr(b)})"), BOOL)
+        else:
+            sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}^{_to_i32(render_expr(b), bt)})"), I32)
     elif op == 'ladd':
         b, b_ty = sim.pop(); a, a_ty = sim.pop()
         a_s = render_expr(a); b_s = render_expr(b)

@@ -259,10 +259,54 @@ fn macro_never_falls_through(mac: &syn::Macro) -> bool {
     }
 }
 
+/// 扫描循环体：是否存在绑定到**本层**循环的无标签 `break`。
+/// 有 → 本循环可正常落出；没有 → `loop` 的 Rust 类型是 `!`（每个出口都是
+/// return / continue / 指向外层标签的 break），try 体以它结尾时不落出。
+/// 嵌套循环的无标签 break 绑定到嵌套循环自身，不计；闭包的控制流独立，不下钻。
+struct BreakScan {
+    depth: usize,
+    found: bool,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for BreakScan {
+    fn visit_expr_break(&mut self, b: &'ast syn::ExprBreak) {
+        if b.label.is_none() && self.depth == 0 {
+            self.found = true;
+        }
+        syn::visit::visit_expr_break(self, b);
+    }
+    fn visit_expr_loop(&mut self, l: &'ast syn::ExprLoop) {
+        self.depth += 1;
+        syn::visit::visit_expr_loop(self, l);
+        self.depth -= 1;
+    }
+    fn visit_expr_while(&mut self, w: &'ast syn::ExprWhile) {
+        self.depth += 1;
+        syn::visit::visit_expr_while(self, w);
+        self.depth -= 1;
+    }
+    fn visit_expr_for_loop(&mut self, f: &'ast syn::ExprForLoop) {
+        self.depth += 1;
+        syn::visit::visit_expr_for_loop(self, f);
+        self.depth -= 1;
+    }
+    fn visit_expr_closure(&mut self, _c: &'ast syn::ExprClosure) {
+        // 闭包有自己的返回通道，其 break 与本层循环无关
+    }
+}
+
 fn expr_never_falls_through(e: &Expr) -> bool {
     match e {
         Expr::Return(_) | Expr::Continue(_) => true,
         Expr::Break(_) => true,
+        Expr::Loop(l) => {
+            // `loop` 含绑定本层的 break 才会落出；否则类型为 `!`（每条出口都是
+            // return / continue / 跨层 break，生成代码的典型形态：
+            // loop { if c { return Ok(v); } ...步进... }）
+            let mut scan = BreakScan { depth: 0, found: false };
+            syn::visit::Visit::visit_block(&mut scan, &l.body);
+            !scan.found
+        }
         Expr::Block(b) if b.label.is_none() => never_falls_through(&b.block.stmts),
         Expr::If(i) => match &i.else_branch {
             Some((_, els)) => {

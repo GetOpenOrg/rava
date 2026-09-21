@@ -25,6 +25,45 @@ _JDK_STUB_ONLY_PREFIXES = ('sun/', 'jdk/', 'com/sun/', 'com/oracle/', 'java/secu
 
 
 
+# 手写 impl 文件内的类型引用：crate::pkg::path::Name 全路径 + 同包裸 CamelCase 名
+_IMPL_FULL_PATH_RE = re.compile(r'crate::((?:r#\w+|\w+)(?:::(?:r#\w+|\w+))*)::([A-Z]\w*)')
+_IMPL_BARE_NAME_RE = re.compile(r'\b([A-Z][A-Za-z0-9_]*)\b')
+
+
+def _impl_signature_type_refs(cls: str, runtime_src: str, resolver) -> list[str]:
+    """手写共置 `_impl.rs` / `_ext.rs` 签名引用的 JDK 类（binary name 列表）。
+
+    手写实现的返回/参数类型是宿主类的真实依赖：如 Thread.getThreadGroup 的
+    手写签名返回 ThreadGroup——该类不在闭包时 scratch 编译 E0425。映射两条路：
+    `crate::<pkg>::<Name>` 全路径；同包裸名（impl 文件经 `use super::*` 引入）。
+    候选都经 resolver 验证存在，避免把注释/字符串词误当类名。"""
+    from .emitter.attrs import to_snake
+
+    *pkg, simple = cls.split('/')
+    base = os.path.join(runtime_src, *pkg) if pkg else runtime_src
+    out: list[str] = []
+    for suffix in ('_impl.rs', '_ext.rs'):
+        path = os.path.join(base, to_snake(simple) + suffix)
+        if not os.path.isfile(path):
+            continue
+        try:
+            content = open(path, encoding='utf-8').read()
+        except OSError:
+            continue
+        for m in _IMPL_FULL_PATH_RE.finditer(content):
+            pkg_path = m.group(1).replace('::', '/').replace('r#', '')
+            cand = f'{pkg_path}/{m.group(2)}'
+            if resolver.resolve(cand) is not None:
+                out.append(cand)
+        for m in _IMPL_BARE_NAME_RE.finditer(content):
+            if not pkg:
+                continue
+            cand = '/'.join(pkg + [m.group(1)])
+            if resolver.resolve(cand) is not None:
+                out.append(cand)
+    return out
+
+
 def _read_manifest(name: str) -> list[str]:
     """读取 runtime/java_runtime/ 下的 VM 清单文件（每行一项，`#` 注释）。"""
     _path = os.path.join(_RUNTIME_JAVA_RUNTIME, name)
@@ -568,6 +607,16 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             if os.environ.get('JAVA_RTA_DEBUG'):
                 for _k in sorted(_unresolved_calls):
                     print(f"[bfs-audit] unresolved: {_k[0]}.{_k[1]}:{_k[2]}")
+
+        # 手写 _impl.rs / _ext.rs 的签名引用类型随宿主类入闭包（type-only stub 通道）
+        if runtime_src:
+            for _cls in list(jdk_infos.keys()):
+                for _ref in _impl_signature_type_refs(_cls, runtime_src, resolver):
+                    if (_ref not in jdk_infos
+                            and _ref not in _JAVA_RUNTIME_CLASSES
+                            and (_ref.startswith(_JDK_PREFIXES)
+                                 or _ref.startswith(_JDK_STUB_ONLY_PREFIXES))):
+                        field_discover_classes.add(_ref)
 
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos

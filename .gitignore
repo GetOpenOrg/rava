@@ -25,3 +25,6 @@ docs/reports/jdk-scan-*
 
 # WorkBuddy 工作区数据
 /.workbuddy
+
+# 本地测试日志
+*.log
