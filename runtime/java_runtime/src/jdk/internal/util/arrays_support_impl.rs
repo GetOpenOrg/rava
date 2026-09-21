@@ -21,6 +21,21 @@ impl ArraysSupport {
         Self::mismatch_arr_b_i_arr_b_i_i(a, 0, b, 0, length)
     }
 
+    /// mismatch([I [I I)：两段 int 区间首个不等元素的相对下标，全等返回 -1。
+    /// JDK 21 方法体（javap 核对）：首元素快筛 → vectorizedMismatch 向量化前缀
+    /// （命返回 i≥0，否则 ~i=已证相等元素数，换算 `length - (~i)` 续扫）→
+    /// 标量尾扫 → `iconst_m1`。向量 intrinsic 的可观察结果即逐元素比较，
+    /// 与 byte 版同族，直接逐元素实现。
+    #[jvm_boundary]
+    pub fn mismatch_arr_i_arr_i_i(a: JArray<i32>, b: JArray<i32>, length: i32) -> Result<i32> {
+        for i in 0..length {
+            if a.get(i)? != b.get(i)? {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+
     #[jvm_native]
     pub fn newLength(old_length: i32, min_growth: i32, pref_growth: i32) -> Result<i32> {
         let pref_length = old_length.wrapping_add(min_growth.max(pref_growth));
