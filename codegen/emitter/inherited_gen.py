@@ -42,6 +42,7 @@ MEMBERS_SLOT = '//@@java_rta:inherited-members@@'
 _ATTR_RE = re.compile(r'#\[java_(?:method|native)\(name = "((?:[^"\\]|\\.)*)", descriptor = "((?:[^"\\]|\\.)*)"([^\n]*)')
 _ACCESS_RE = re.compile(r'\baccess = "([^"]*)"')
 _VIRTUAL_IN_RE = re.compile(r'\bvirtual_in = "([^"]*)"')
+_VTABLE_NAME_RE = re.compile(r'\bvtable_name = "([^"]*)"')
 _FN_NAME_RE = re.compile(r'^pub fn\s+([A-Za-z_][A-Za-z0-9_]*)')
 _USE_RE = re.compile(r'^use\s+(.+)::([A-Za-z_][A-Za-z0-9_]*);\s*$')
 _IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\b')
@@ -52,10 +53,11 @@ class EmittedMethod:
     """某个类实际输出到 java_class! 块里的一条实例方法声明。"""
     name: str            # Java 方法名
     descriptor: str      # JVM 描述符
-    rust_name: str       # 生成的 Rust 方法名（含重载改名）
+    rust_name: str       # 生成的 Rust 方法名（含重载改名，本类重载态）
     signature: str       # `pub fn name(&self, ..) -> Result<..>`（不含方法体、参数不带 mut）
     access: str          # public / protected / private / ''（package）
     virtual_in: str      # 声明该虚方法的 VTable 所属类（Rust 短名）；非虚方法为空
+    vtable_name: str = ''  # 槽位名解耦：wrapper 名 ≠ 槽位 trait 成员名时的 trait 成员名
     handwritten: bool = False  # body = "handwritten"：无块，体在共置 _impl.rs 的 __impl_<m>
 
 
@@ -90,11 +92,13 @@ class ClassEmission:
             signature = re.sub(r'\bmut\s+(?=[A-Za-z_][A-Za-z0-9_]*\s*:)', '', signature)
             access = _ACCESS_RE.search(rest)
             virtual_in = _VIRTUAL_IN_RE.search(rest)
+            vtable_name = _VTABLE_NAME_RE.search(rest)
             self.methods.append(EmittedMethod(
                 name=name, descriptor=descriptor, rust_name=fn_name.group(1),
                 signature=signature,
                 access=access.group(1) if access else '',
                 virtual_in=virtual_in.group(1) if virtual_in else '',
+                vtable_name=vtable_name.group(1) if vtable_name else '',
                 handwritten=bool(re.search(r'\bbody\s*=\s*"handwritten"', rest)),
             ))
 
@@ -319,14 +323,17 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
     if method.virtual_in:
         vt_bin = next((b for b in anc_args if short_cls(b) == method.virtual_in), owner_bin)
         vt_args = anc_args.get(vt_bin, [])
+    # 槽位 trait 成员名 = 声明者 emission 的槽位名（声明者自身 wrapper 名与槽位名
+    # 解耦时由其 vtable_name 属性携带，见 vtable_util.slot_member_rust_name）
+    slot_name = method.vtable_name or method.rust_name
     parts = [f'name = "{method.name}"', f'descriptor = "{method.descriptor}"']
     if method.access:
         parts.append(f'access = "{method.access}"')
     parts.append(f'inherited_from = "{_rust_type(owner_bin, owner_args)}"')
     if method.virtual_in:
         parts.append(f'vtable_owner = "{_rust_type(vt_bin, vt_args)}"')
-        if recv_name != method.rust_name:
-            parts.append(f'vtable_name = "{method.rust_name}"')
+        if recv_name != slot_name:
+            parts.append(f'vtable_name = "{slot_name}"')
     # 擦除名单按槽位声明（vtable_owner）计算；槽位声明不可解析（未翻译 / 手写）
     # 时回落按 inherited_from 声明者形参判定（既有路径）
     erasure = _slot_erasure_entries(vt_bin, method, signature, registry)
@@ -405,10 +412,10 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
         real_rust = receiver_member_name(found.name, found.descriptor, recv_ci, registry)
         real_want = (name, real_param)
 
-    # 声明类的 vtable 槽位：超类链上有该签名的声明 → VirtualOverride 填槽；成员名取
-    # 声明类的 Rust 方法名（与该类 vtable trait 的槽位名同源），virtual_in 为声明类短名。
-    # 纯接口桥接（超类链无声明）无槽位：接口经载体分派直接落到本 wrapper 方法，
-    # 名字按接收者视角的重载判定。
+    # 声明类的 vtable 槽位：超类链上有该签名的声明 → VirtualOverride 填槽；槽位成员名
+    # 取声明者 emission 的槽位名（wrapper 名与槽位名解耦时由 vtable_name 属性携带），
+    # virtual_in 为声明类短名。纯接口桥接（超类链无声明）无槽位：接口经载体分派直接
+    # 落到本 wrapper 方法，名字按接收者视角的重载判定。
     vt_short = ''
     member_name = ''
     cur = recv_ci.super_class
@@ -420,7 +427,7 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
             found = anc_em.find(name, param_desc)
             if found is not None:
                 vt_short = short_cls(cur)
-                member_name = found.rust_name
+                member_name = found.vtable_name or found.rust_name
                 break
         cur = registry[cur].super_class
     if not member_name:

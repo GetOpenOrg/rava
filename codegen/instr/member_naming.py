@@ -10,7 +10,7 @@ import re
 
 from ..type_map import short_cls as _short_cls_g
 from ..constants import safe_ident as _safe_field, JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES
-from ..sig_types import hierarchy_overloaded_names, method_name_is_mangled
+from ..sig_types import hierarchy_overloaded_names
 from ..type_map import mangle_name
 from .member_owner import _resolve_method_owner, _resolve_bridge_target
 
@@ -103,8 +103,11 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     # 排除 java_runtime 类（registry 中仍有其 JDK 字节码副本，但方法名不 mangle）
     if target_ci.name.rsplit('/', 1)[-1] in _JAVA_RUNTIME_SHORT_NAMES:
         return mname
-    # 名字由「声明类」决定：调用目标类（常量池里的类）可能只是继承了该方法，
-    # 沿父类链解析到真正声明 name+descriptor 的类，再用与定义侧相同的判定函数。
+    # 接收者类（常量池类 / 栈上静态类型）：wrapper 成员名（本类声明 + 继承成员
+    # 的 receiver_member_name）都按接收者重载态发射——最终名字必须同视角。
+    recv_ci = target_ci
+    # 声明类解析：调用目标类（常量池里的类）可能只是继承了该方法，沿父类链解析到
+    # 真正声明 name+descriptor 的类（手写类判定 / bridge 描述符换源用）。
     _call_desc_m = re.search(r':(\([^)]*\)\S+)', comment)
     if mname != '<init>' and _call_desc_m:
         _owner_bin, _ = _resolve_method_owner(target_ci.name, mname, registry,
@@ -128,14 +131,13 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
                 from ..sig_types import interface_member_local_name as _iface_local
                 _local = _iface_local(target_ci, mname, _call_desc_m.group(1), registry)
                 return _JAVA_RUST_RENAME.get(_local, _local)
-    # 按 (name, descriptor) 判定：覆盖方法沿用 vtable 槽位所属祖先中的名字（与定义侧同源）
-    _final_desc_m = re.search(r':(\([^)]*\)\S+)', comment)
-    _call_desc = _final_desc_m.group(1) if _final_desc_m else ''
-    _declared = next((m for m in target_ci.methods
-                      if m.name == mname and m.descriptor == _call_desc), None)
-    _is_mangled = (method_name_is_mangled(target_ci, _declared, registry)
-                   if _declared is not None
-                   else mname in hierarchy_overloaded_names(target_ci, registry))
+    # 按 (name, descriptor) 判定，单一权威 hierarchy_overloaded_names：
+    #   - 类接收者：接收者视角（wrapper 上本类声明与继承成员同名——inherited_gen
+    #     的 receiver_member_name 机制），声明者态可能因接收者新增同名重载而发散；
+    #   - 接口接收者：声明者视角（接口继承成员按声明接口的重载态命名——
+    #     interface_gen 机制，如 Sink 从 Consumer 继承的 accept 裸名）。
+    _name_ci = target_ci if recv_ci.is_interface else recv_ci
+    _is_mangled = mname in hierarchy_overloaded_names(_name_ci, registry)
     if not _is_mangled:
         # Java→Rust 名字冲突重命名（如 clone→jvm_clone）
         erg_name = _JAVA_RUST_RENAME.get(mname)

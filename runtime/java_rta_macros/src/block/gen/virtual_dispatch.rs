@@ -307,6 +307,13 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     let ov_erasure = erasure_set_of(f, &ctx.type_param_names);
                     let erased_item_sig = erase_item_signature_with(
                         sig, &ctx.type_param_names, &ov_erasure);
+                    // K-6（覆盖条目沿用继承成员的解耦机制）：wrapper 成员名（本类重载态）
+                    // ≠ 槽位 trait 成员名（声明者态）时，按 vtable_name 属性改写槽位
+                    // 条目名——trait impl 与声明者的槽位声明逐字一致
+                    let mut erased_item_sig = erased_item_sig;
+                    if let Some(vn) = attr_str(&f.attrs, "vtable_name") {
+                        erased_item_sig.ident = Ident::new(&vn, proc_macro2::Span::call_site());
+                    }
                     match &f.block {
                         Some(block) => {
                             let mut b = block.clone();

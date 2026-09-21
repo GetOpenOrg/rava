@@ -150,28 +150,15 @@ def interface_member_local_name(ci, mname: str, descriptor: str, registry: dict 
 
 def method_name_is_mangled(ci, method, registry: dict | None) -> bool:
     """类 ci 声明的方法 method 的 Rust 名是否带描述符后缀 —— 按 (name, descriptor) 判定，
-    定义侧与调用侧共用。
+    定义侧与调用侧共用。纯接收者重载态判定（hierarchy_overloaded_names 单一权威），
+    与 receiver_member_name（继承成员 wrapper 名）同一视角。
 
-    名字在 ci 中需要 mangle（hierarchy_overloaded_names）时，覆盖方法例外：它实现的是
-    祖先 vtable trait 中的槽位，Rust 名必须与槽位所属类（virtual_in）中的名字一致。
-    槽位所属类未 mangle 该名字、而子类因新增重载 / 注入的接口 default 方法才 mangle 时，
-    覆盖方法沿用槽位名（否则 impl 出祖先 trait 没有的方法，E0407）。"""
-    if method.name not in hierarchy_overloaded_names(ci, registry):
-        return False
-    if not registry or ci.is_interface or method.is_constructor or method.is_static:
-        return True
-    from .emitter.vtable_util import _find_virtual_in, _bin_to_rust
-    slot_owner_rust = _find_virtual_in(method, ci, registry)
-    if not slot_owner_rust or slot_owner_rust == _bin_to_rust(ci.name):
-        return True
-    anc = registry.get(ci.super_class) if ci.super_class else None
-    seen: set[str] = {ci.name}
-    while anc is not None and anc.name not in seen:
-        seen.add(anc.name)
-        if _bin_to_rust(anc.name) == slot_owner_rust:
-            return method.name in hierarchy_overloaded_names(anc, registry)
-        anc = registry.get(anc.super_class) if anc.super_class else None
-    return True
+    vtable 槽位名不再经此函数的「例外」对齐：覆盖条目的 wrapper 名按本类重载态
+    （可能 mangle），trait 槽位 impl 名按槽位声明者的重载态，两者不同时经
+    vtable_name 属性解耦（与继承成员的 K-6 机制统一）。旧例外（覆盖沿用槽位
+    未 mangle 名）在「本类因同名重载而 mangle」时与本类所有调用点/继承成员的
+    接收者态名字发散（E0599/E0407，S-18 轮实证）。"""
+    return method.name in hierarchy_overloaded_names(ci, registry)
 
 
 _ACC_PRIVATE = 0x0002
