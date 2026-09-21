@@ -170,6 +170,11 @@ class RawExpr:
     """逃生舱：直接插入原始表达式字符串（过渡期使用）。"""
     code: str
 
+    def __post_init__(self) -> None:
+        # [raw-audit] L5-b 仪表：构造事件计数（只读，不影响发射）
+        from . import raw_audit
+        raw_audit.record_raw('raw_expr')
+
 
 @dataclass
 class NewPendingExpr:
@@ -290,6 +295,11 @@ class IfStmt:
 class RawStmt:
     """逃生舱：直接插入一行原始语句字符串（过渡期使用）。"""
     code: str
+
+    def __post_init__(self) -> None:
+        # [raw-audit] L5-b 仪表：构造事件计数（只读，不影响发射）
+        from . import raw_audit
+        raw_audit.record_raw('raw_stmt')
 
 
 RsStmt = Union[

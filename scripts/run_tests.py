@@ -183,6 +183,8 @@ def _print_readability_summary(per_test: dict[str, dict[str, int]]) -> None:
 # ── 等价发射点审计汇总（compatibility.md §4；对齐 readability 模式） ─────
 
 _EQUIV_RE = re.compile(r"^\[equiv-audit\]\s+(.+)$", re.MULTILINE)
+_RAW_RE = re.compile(r"^\[raw-audit\]\s+(.+)$", re.MULTILINE)
+_RAW_TOTALS: dict[str, int] = {}
 
 # 可 --deny 的等价 ID（= codegen/equiv_audit.py 的发射口径全集；
 # monitor-mt 已随 S-20 落地补埋（2026-09-21）；stacktrace 无 codegen 发射点，不在列）
@@ -229,6 +231,33 @@ def _print_equiv_summary(per_test: dict[str, dict[str, int]]) -> None:
     if nonzero:
         shown = "; ".join(nonzero[:6])
         print(f"  非零: {shown}{'…' if len(nonzero) > 6 else ''}")
+
+
+def _parse_raw(log: str) -> None:
+    """累加 [raw-audit] 行（Raw 发射计数 + 静态位点，收敛路线 L5-b）。"""
+    m = _RAW_RE.search(log)
+    if not m:
+        return
+    for p in m.group(1).split():
+        k, _, v = p.partition('=')
+        if k in ('raw_expr', 'raw_stmt'):
+            _RAW_TOTALS[k] = _RAW_TOTALS.get(k, 0) + int(v)
+        elif k == 'type_surgery_sites':
+            _RAW_TOTALS['sites'] = int(v)   # 静态度量，取末值
+    _RAW_TOTALS['runs'] = _RAW_TOTALS.get('runs', 0) + 1
+
+
+def _summarize_raw() -> None:
+    """[raw] 汇总：本次跑批的 Raw 发射与类型手术静态位点（收敛路线 L5-b / 阶段 A）。
+    终态全 0（Raw 全部类型化 IR、类型查询全经 TypeIR）；趋势只降不升。"""
+    if not _RAW_TOTALS.get('runs'):
+        return
+    e = _RAW_TOTALS.get('raw_expr', 0)
+    s = _RAW_TOTALS.get('raw_stmt', 0)
+    print(f"\n[raw] raw_expr={e} raw_stmt={s}  "
+          f"(合计 {e + s}，{_RAW_TOTALS['runs']} 次转译；"
+          f"type_surgery_sites={_RAW_TOTALS.get('sites', 0)} 为源码静态位点)"
+          f"——终态全 0，趋势只降不升")
 
 
 # ── run 失败子族自动分类（直跑二进制抓 stderr，不经 cargo） ────────────
@@ -449,6 +478,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         if _rc:
             readability_counts[class_name] = _rc
         _ec = _parse_equiv(log)
+        _parse_raw(log)
         if _ec:
             equiv_counts[class_name] = _ec
 
@@ -507,6 +537,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
           f" run {fmt_dur(t_run_total)})")
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
+    _summarize_raw()
     return _apply_deny(deny, equiv_counts, run_sub, failed)
 
 
@@ -541,6 +572,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     def _transpile_one(java_file: Path) -> tuple[Path, bool, str, dict[str, int], dict[str, int]]:
         ws = _test_workspace(_to_bin_name(_class_name(java_file)))
         ok, log = _transpile(java_file, out_dir=ws)
+        _parse_raw(log)
         return java_file, ok, log, _parse_readability(log), _parse_equiv(log)
 
     transpile_ok: list[Path] = []
@@ -658,6 +690,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
           f" run {fmt_dur(time.perf_counter() - t_run_start)})")
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
+    _summarize_raw()
     return _apply_deny(deny, equiv_counts, run_sub, failed)
 
 
