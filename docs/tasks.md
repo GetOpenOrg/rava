@@ -36,7 +36,9 @@
 | ~~陈旧树筛 + run 族定向复验~~ | **✅ 完成（2026-09-21 午后）** | 30 例复验 + 26 run 族 stderr 定性 + 4 output 族复验全记录：归类文档 §4.2/§五。假失败第 6 例（TestMethodRef）；数组视图族升 6 例；CDS/isBigEndian native 双件 8 例 |
 | ~~A-8 同文件辅助类未进闭包~~ | **✅ 完成（`1be8caa`）** | 15/15 E0433/E0425 清零，4 例全过（FieldShadow/EnumAdvanced/InnerClass/InstanceOfChain），闭包指纹 20/20 一致；连带修复 P-3 潜伏回归 Appendable E0432（`0b22604`，四红线干净树恢复全绿） |
 | **A-8 下一层（11 例 compile 清零后暴露，已归类）** | 166 归类/A-8 报告 | 泛型用户父类**参数位擦除**（TestBridgeMethod，A-1 参数位延伸）；**中文字符串双重编码**（TestConstructorChain/TestInitOrder，UTF-8 stdout 规格破坏，2 例）；Double.toString 整数渲染（TestSealed，S-19 邻域）；接口冲突 default 分派（TestInterfaceConflict）；接口 private 方法载体（TestInterfacePrivate）；方法引用接收者 coerce（TestMethodRefKinds）；泛型 record `==`（TestRecordAdvanced）；`HashSet.remove` stub（TestHashSetOps）；TestGenericBoundsCombo/TestVarContext 的 Appendable 缺口已随 `0b22604` 消失待复验 |
-| **S-20 `Object.wait/notify/notifyAll`** | 166 归类新增（4 用例） | runtime 补三方法接 InternalLock；与 monitorenter 真实化联动 |
+| ~~S-20 `Object.wait/notify/notifyAll`~~ | **✅ 完成（`23fe881`）** | `monitor.rs` 双条件队列监视器 + monitorenter/同步方法/同步块四发射面真实化；12/12 编译清零、TestStringSearch 全绿、红线 23/23 含 streams。**未接 InternalLock（论证见 monitor.rs），S-11 终态随线程模型** |
+| ~~native 双件：CDS + isBigEndian~~ | **✅ 完成（`9873095`）** | CDS 恒 0（HotSpot 语义）+ isBigEndian `cfg!` + Thread.registerNatives no-op；6+2 用例编译/运行推进，TestStringSearch 全绿。**下一层已归类**：线程层总闸 3 例、ImmutableCollections 载体分派 3 例（A-4 邻域）、SharedSecrets.getJavaUtilCollectionAccess 2 例（P-3 邻域）、Charset clinit、toString 装箱分派 1 行 |
+| **线程层（S-20 下一层总闸，3 例）** | S-20 报告 | TestSynchronized/TestThreadJoin/TestWaitNotify 同卡 `currentThread()` 平台线程对象字段未填充（NPE）；含 start0/sleep0/join 语义与 wait 的 InterruptedException——随线程模型立项（S-11 邻域） |
 | **数组视图 coerce 族** | 166 归类新增，**复验升级 6 例**（第二大杠杆） | 编译期 2（TestArrayCopy/TestBigInteger E0308）+ 运行期 CCE 4（TestArrayCovariance/BigDecimal/DurationPeriod/LocalDate，`Object`→`JArray<T>` 含多维未发射）；JDK25 批 8 例同型 E0308 待判同根因——若同根因合计 14 例 |
 | **native 双件：`CDS.getRandomSeedForDumping` + `StringUTF16.isBigEndian`** | 4.2 复验新增（8 例） | 两处 runtime 手写（数行级）：CDS 压 6 用例（ListOf/LinkedHash/CollectionFactory/StreamMore/AutoboxEdge/LambdaVar），isBigEndian 压 2（StringSearch/StringEdge）——收益密度最高 |
 | **S-19 剩余三件（#3/#4/#5）** | math 三件已修（rint/NaN/expm1，`0078906`+`73a6c54`+`444ad9a`，TestMathRound/TestNaN/TestFloatBits 转绿；NaN 根因为 codegen dcmpl/dcmpg 发射层，全部浮点比较受益） | 剩：非 BMP 字面量 UTF-16（TestStringCodePoints，string 域）、`Double.toString` 科学计数（TestMathExact 唯一剩余行，java_fmt_f64）、栈帧填充（挡在 TestCustomException E0425 后） |
@@ -47,7 +49,7 @@
 | 任务 | 来源 | 说明 |
 |------|------|------|
 | record `hashCode` 恒为 `Ok(0)` | R5 遗留 | `toString`/`equals` 已真实化，`hashCode` 未实现（S-7） |
-| `monitorenter`/`monitorexit` 为 no-op | 同步系列（原 T80） | 当前 pop 忽略——单线程正确；多线程需接 `InternalLock`（实现已就绪，`parking_lot::ReentrantMutex`）；与 S-20（wait/notify 建模）同批推进 |
+| ~~`monitorenter`/`monitorexit` 为 no-op~~ | **✅ 随 S-20 真实化（`4e6a2a2`）** | 监视器经 `monitor.rs` 侧表真实 acquire/release，单线程语义不变（可重入）；`[equiv-audit] monitor-mt` 已埋点观测。剩余：多线程调度语义随线程层立项 |
 | 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | S-10 剩余 | 见 remaining-issues S-10 |
 | stub-hit 分流：包装类边界层 | 166 归类 | TestOptional 实证 `stub: java/lang/Integer.valueOf:(I)`——走 T-4（包装类从字节码生成）路线或并入 P-3 扩清单 |
 | JDK25 边界 stubs 遗留 | P-3 轮 | `DoubleToDecimal.split`（Formatter `%f/%e/%g`）、`FloatToDecimal`、`Random__nextInt_i_base`（E0432）——随 JDK25 用例按需补 |

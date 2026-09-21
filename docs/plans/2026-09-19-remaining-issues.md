@@ -418,7 +418,9 @@ Java 21 `case Type var` / `case X when guard` / sealed switch 由 javac 编译�
 - **终态**：上表 5 项输出与 Java 逐字一致；#4 落在 `java_fmt_f64`，#5 落在 throwable 边界层，其余为 math/string native 补全。
 - **验收指标**：对应用例 output diff = 0。
 
-### S-20 `Object.wait/notify/notifyAll` 未建模 【P1，2026-09-21 基线新增】
+### S-20 `Object.wait/notify/notifyAll` 未建模 【已修复，S-20 轮】
+
+> **已修复（`4e6a2a2`+`9873095`，`23fe881` 合入；主会话 18 测试验证批吻合）**：新增 `runtime/java_runtime/src/monitor.rs`——按对象身份（`__identity`）惰性挂接的监视器侧表，互斥量 + **双条件队列**（锁竞争队列与 wait 等待队列分离，避免 notify 丢唤醒），可重入，wait 释放全部重入计数后按原计数重获取（JLS §17.2），异常序对齐 HotSpot（IAE 先于 IMSE）。**四个发射面**：monitorenter/monitorexit 指令真实发射、synchronized(this) 的 dup;astore 追踪、ACC_SYNCHRONIZED 方法前导 MonitorGuard（RAII）、wait 族重载命名（member_naming 扫手写层名面）。**未接 InternalLock**（它是 JDK I/O 层 Java 级锁，承载不了跨线程互斥——S-11 终态随线程模型另行收敛，论证在 monitor.rs 头注）。附带三 native：`CDS.getRandomSeedForDumping`（HotSpot 语义恒 0，实证种子不进输出）、`StringUTF16.isBigEndian`（`cfg!` 逐字一致，**TestStringSearch 全绿**）、`Thread.registerNatives` no-op。**验收**：12/12 目标编译清零；TestSynchronized 输出前 4 行逐字一致（静态/Class 锁/实例锁/可重入全形态）；红线 23/23 含 streams 三测（主会话复核）。**下一层（已归类）**：线程层总闸（currentThread 字段填充/start0/join——Synchronized/ThreadJoin/WaitNotify 三例同卡）、`ContinuationSupport.isSupported`（VirtualThread）、`SharedSecrets.getJavaUtilCollectionAccess`（2 例）、`Charset.<clinit>`（StringEdge）、ImmutableCollections_ListN 载体分派 AME（3 例，A-4 邻域）、bare-Object toString 装箱分派（AutoboxEdge 1 行）。
 
 - **现状**：`runtime/java_runtime` 的 `Object` 无三个 monitor 方法（grep 证实），4 个用例统一 `E0599: no method named wait found for struct object::Object`（TestSynchronized、TestThreadJoin、TestVirtualThread、TestWaitNotify）。
 - **根因**：Object 监视器方法未建模；`InternalLock`（parking_lot ReentrantMutex + Condvar）已就绪（S-11 邻域），只差 Object 层挂接与 `monitorenter` 接入（tasks.md P1 行联动）。
