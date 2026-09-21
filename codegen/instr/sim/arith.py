@@ -187,7 +187,13 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
     elif op in ('fcmpl', 'fcmpg', 'dcmpl', 'dcmpg'):
         b, _ = sim.pop(); a, _ = sim.pop()
         a_s = render_expr(a); b_s = render_expr(b)
-        sim.push(RawExpr(f"(({a_s}>({b_s})) as i32-(({a_s})<({b_s})) as i32)"), I32)
+        # JVMS §6.5：任一操作数为 NaN 时 fcmpl/dcmpl 结果为 -1、fcmpg/dcmpg 为 +1
+        #（非 NaN 时 -1/0/1）。partial_cmp 对 NaN 返回 None，map_or 默认值即 NaN
+        # 分支，Ordering 转 i32 恰为 -1/0/1；操作数各求值一次。
+        nan_val = '-1' if op in ('fcmpl', 'dcmpl') else '1'
+        sim.push(RawExpr(
+            f"(({a_s}).partial_cmp(&({b_s})).map_or({nan_val}i32, |o| o as i32))"
+        ), I32)
 
     # ── 类型转换 ──
     elif op == 'i2l': a, _ = sim.pop(); sim.push(Cast(a, I64), I64)
