@@ -119,7 +119,7 @@ Java 泛型在运行时被擦除：`ArrayList<String>` 与 `ArrayList<Object>` �
 1. **`__inner` 与类 vtable 擦除**（方案 a）：`X__inner`、`X__VTable` 去掉类型形参；类型变量字段存 `Object`；`From<Object> for X<A>` 改为向对象查询类 vtable（与 `__interface` 同机制，按擦除类），对任意 `A` 成立且支持向上转型目标。完成后删除 `_reinstantiate_generic`。【存储层与 From<Object> 已落地；`X__VTable` 的去形参与方法签名擦除（wrapper 全量边界转换）为剩余部分】
 2. **checkcast 统一为 `Into::<T>::into(obj)`**：当前 `.downcast::<T>()` 字符串形态被 `stack.py`（hint 重定向）、`fields.py`、`invoke_sig.py`、`codegen.py` 共 15+ 处模式匹配依赖，且 `downcast(&self)` 与 `into(self)` 的所有权语义不同；本轮试改后 TestStringBuilder 出现 16 个错误，已回退。需在步骤 1 之后以 IR 节点（`CastExpr`）替代字符串形态一次性替换。
 3. **instanceof 在「静态类型是目标祖先」时走运行时判定**：本轮试改后原先被静态 `false` 屏蔽的分支变活，暴露出子类值赋给父类局部变量缺少向上转型（`e = _t1`，TreeNode → Node）以及三元合并的类型不一致（位于控制流结构化区域，非本任务范围）。需与控制流改造合并后启用。
-4. **移除 `invokevirtual` 在 `Object` 接收者上的类 downcast 链**（剩余 `downcast_ref` 的主要来源）：依赖步骤 1 的类 vtable 查询。
+4. **移除 `invokevirtual` 在 `Object` 接收者上的类 downcast 链**（剩余 `downcast_ref` 的主要来源）：依赖步骤 1 的类 vtable 查询。【已落地（2026-09-21，分支 fix/downcast-chain-removal）】根类方法（hashCode/equals/toString/getClass/wait/notify 族）单次根 vtable 直调（覆盖类的 ObjectVTable impl 已桥接到自身 vtable，链与根调用同宿）；类虚方法经宏新增的 `__virtual_view(&Object) -> Option<Self>`（`__erased_vtable`+`__erased_inner` 部件重建本类擦除实例化视图，共享存储与对象标识）分派，闭包 SAM 回退保留（A-5 域）。`_subtype_branch`/`_bridge_downcast_args` 链构建整体删除。TestStringBuilder 实测 downcast_ref 1104→6（余 6 全为 SAM 回退），红线/streams/金丝雀 18/18 全绿（另 7 例基线既有失败经 2cb6cea 干净树对照确认同型同点），闭包指纹三计数不变，**双种子生成树 diff 归零（链分支顺序这一不确定性源随链消失）**。
 5. **T-2 载体进入类型位置**：接口类型的参数/返回值/局部变量/字段用 `I<E>` 而非 `Object`，调用点成为 `it.hasNext()`。
 6. **lambda 对象实现 `I__VTable`**：替换载体里的闭包 `downcast_ref` 回落，使 default 方法可在 lambda 上调用。
 7. **抽象类、枚举、手写类的接口实现**：抽象类当前跳过（由具体子类承担）；手写类与枚举尚无 `__interface`。
