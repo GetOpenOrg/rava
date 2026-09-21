@@ -59,6 +59,8 @@ class EmittedMethod:
     virtual_in: str      # 声明该虚方法的 VTable 所属类（Rust 短名）；非虚方法为空
     vtable_name: str = ''  # 槽位名解耦：wrapper 名 ≠ 槽位 trait 成员名时的 trait 成员名
     handwritten: bool = False  # body = "handwritten"：无块，体在共置 _impl.rs 的 __impl_<m>
+    is_abstract: bool = False  # abstract 声明（接口契约的抽象方法；A-5 SAM 判定用）
+    has_body: bool = False    # 本轮翻译出了方法体（接口 default 的载体体；A-5 合成对象用）
 
 
 @dataclass
@@ -87,6 +89,7 @@ class ClassEmission:
             if fn_name is None or '&self' not in sig_line:
                 continue
             signature = sig_line.rstrip()
+            has_body = not block.rstrip().endswith(';')
             if signature.endswith((';', '{')):
                 signature = signature[:-1].rstrip()
             signature = re.sub(r'\bmut\s+(?=[A-Za-z_][A-Za-z0-9_]*\s*:)', '', signature)
@@ -100,6 +103,8 @@ class ClassEmission:
                 virtual_in=virtual_in.group(1) if virtual_in else '',
                 vtable_name=vtable_name.group(1) if vtable_name else '',
                 handwritten=bool(re.search(r'\bbody\s*=\s*"handwritten"', rest)),
+                is_abstract=bool(re.search(r'\bis_abstract\s*=\s*true', rest)),
+                has_body=has_body,
             ))
 
     def find(self, name: str, param_descriptor: str) -> 'EmittedMethod | None':
