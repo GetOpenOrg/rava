@@ -4,13 +4,14 @@
 //! JDK 中该接口由 `java/lang/System$JavaLangAccess`（System 的内部类）实现，
 //! `System.<clinit>` 经 `setJavaLangAccess()` 登记到 SharedSecrets。该内部类实现
 //! `jdk/internal/` 内部接口，属内部边界族 → 本文件整体手写（规则 3b）：只实现
-//! 调用链触达的 `getEnumConstantsShared`，其余方法走接口 vtable trait 的默认
-//! `panic!("stub: ...")` 存根（生成侧 java_lang_access.rs 自带）。
+//! 调用链触达的 `getEnumConstantsShared` 与 `join`，其余方法走接口 vtable
+//! trait 的默认 `panic!("stub: ...")` 存根（生成侧 java_lang_access.rs 自带）。
 
 use crate::prelude::*;
 use super::java_lang_access::JavaLangAccess__VTable;
 use crate::java::lang::Class;
 use crate::java::lang::Enum;
+use crate::java::lang::String;
 
 /// `java/lang/System$JavaLangAccess` 的手写实现对象。
 ///
@@ -19,6 +20,22 @@ use crate::java::lang::Enum;
 /// 槽位——等价 JVM itable 条目，接口载体（`Into::<JavaLangAccess>::into(obj)`）
 /// 的分派由此命中。
 pub(super) struct SystemJavaLangAccess;
+
+/// `String.getBytes(byte[] dst, int dstBegin, byte coder)` 的字节级等价：
+/// 把 `src` 的内容写入 `dst`（UTF-16BE 布局，与生成侧 StringUTF16.putChar 的
+/// HI_BYTE_SHIFT/LO_BYTE_SHIFT 一致）。src 为 Latin1 且目标 coder 为 UTF16 时
+/// 逐字节展宽（高字节补 0）。
+fn _get_bytes_into(src_val: &[i8], src_coder: i8, dst: &mut Vec<i8>, dst_coder: i8) {
+    if src_coder == dst_coder {
+        dst.extend_from_slice(src_val);
+    } else {
+        // Latin1 → UTF16BE：高字节 0 在前
+        for &b in src_val {
+            dst.push(0);
+            dst.push(b);
+        }
+    }
+}
 
 impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// `getEnumConstantsShared(Class<E>)E[]`：枚举宇宙从运行时常量目录重建
@@ -33,6 +50,68 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
                 elems.into_iter().map(Enum::<Object>::from).collect::<Vec<Enum<Object>>>()
             )),
         }
+    }
+
+    /// `join(String prefix, String suffix, String delimiter, String[] elements, int size)`：
+    /// JDK 中转发到 `String.join` 包私有指定例程（prefix + el0 + delim + ... + el_{size-1}
+    /// + suffix，仅取 elements 前 size 个）。BFS 在本接口截断看不见该边，生成侧
+    /// `String.join(String,String,String,String[],int)` 不在链上，故按其字节码算法
+    /// 在此还原：coder = 各部 coder 按位或，长度以 char 计后 `<< coder` 折算字节，
+    /// 分段写入（Latin1 段写入 UTF16 目标时按 getBytes 展宽），溢出抛
+    /// OutOfMemoryError（与 JDK 一致）。
+    fn join(&self, prefix: String, suffix: String, delimiter: String,
+            elements: JArray<String>, size: i32) -> Result<String> {
+        let prefix_val = prefix.__get_value().to_vec();
+        let suffix_val = suffix.__get_value().to_vec();
+        let delim_val = delimiter.__get_value().to_vec();
+        let mut icoder: i8 = prefix.__get_coder() | suffix.__get_coder();
+        // char 长度（Latin1：1 字节 1 char；UTF16：2 字节 1 char）
+        let char_len = |v: &[i8], c: i8| -> i64 {
+            (v.len() as i64) >> (c as u32 & 1)
+        };
+        let mut len: i64 = char_len(&prefix_val, prefix.__get_coder())
+            + char_len(&suffix_val, suffix.__get_coder());
+        if size > 1 {
+            // 多于一个元素时发射 size - 1 个分隔符
+            len += (size as i64 - 1) * char_len(&delim_val, delimiter.__get_coder());
+            icoder |= delimiter.__get_coder();
+        }
+        let mut elem_vals: Vec<(Vec<i8>, i8)> = Vec::new();
+        for i in 0..size {
+            let el = elements.get(i)?;
+            let v = el.__get_value().to_vec();
+            len += char_len(&v, el.__get_coder());
+            icoder |= el.__get_coder();
+            elem_vals.push((v, el.__get_coder()));
+        }
+        let coder: i8 = icoder;
+        // long 溢出与 int 溢出双重检查（JDK：len < 0 || (len <<= coder) != (int) len）
+        if len < 0 {
+            return Err(JvmError::out_of_memory(
+                "Requested string length exceeds VM limit"));
+        }
+        let byte_len = len << (coder as u32 & 1);
+        if byte_len != (byte_len as i32 as i64) {
+            return Err(JvmError::out_of_memory(
+                "Requested string length exceeds VM limit"));
+        }
+        let mut value: Vec<i8> = Vec::with_capacity(byte_len as usize);
+        _get_bytes_into(&prefix_val, prefix.__get_coder(), &mut value, coder);
+        if size > 0 {
+            let (v0, c0) = &elem_vals[0];
+            _get_bytes_into(v0, *c0, &mut value, coder);
+            for i in 1..size {
+                _get_bytes_into(&delim_val, delimiter.__get_coder(), &mut value, coder);
+                let (v, c) = &elem_vals[i as usize];
+                _get_bytes_into(v, *c, &mut value, coder);
+            }
+        }
+        _get_bytes_into(&suffix_val, suffix.__get_coder(), &mut value, coder);
+        let mut inst = String::default();
+        inst._init_not_null();
+        inst.__set_value(JArray::from(value));
+        inst.__set_coder(coder);
+        Ok(inst)
     }
 }
 
