@@ -153,6 +153,11 @@ def _coerce_from_null(val_str: str, expected: str) -> str | None:
     if expected in ('Object', '()') or expected in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
         return None
     # null 作为参数：用 Default::default() 提供类型安全的零值
+    # [equiv-audit] boxed-null（S-3）：装箱 null 路径——null 字面量流入具体
+    # 引用类型槽位被替换为零值（参数经 _coerce_arg、字段存储经 fields.py 两条
+    # 消费路径共用本入口），只计数不改发射
+    from .. import equiv_audit
+    equiv_audit.record('boxed-null')
     return 'Default::default()'
 
 

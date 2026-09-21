@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from codegen import transpile
 from codegen.cfg import STATS as CFG_AUDIT_STATS
+from codegen import equiv_audit as EQUIV_AUDIT
 from codegen.constants import (RUNTIME_JAVA_RUNTIME, RUNTIME_MACROS_CRATE,
                                scratch_pkg_version)
 from codegen.emitter import to_snake
@@ -202,6 +203,11 @@ def main():
                 for _label, _pat in _READABILITY_PATTERNS:
                     _counts[_label] += _text.count(_pat)
     print("[readability-audit] " + ' '.join(f"{k}={v}" for k, v in _counts.items()))
+    # 近似/条件等价发射点审计（compatibility.md §4）：逐发射点计数，只列非零项。
+    # 口径：计数是「该形态的发射点数」而非缺陷数——目标是可观测（runner 汇总 +
+    # --deny 升级），不是全 0。monitor-mt 待 S-20（锁真实化）合入后补埋，
+    # 详见 codegen/equiv_audit.py 模块注释。
+    print(EQUIV_AUDIT.summary())
     t_codegen = time.perf_counter() - t0
     print(f"[time] transpile   {fmt_dur(t_codegen)}")
 

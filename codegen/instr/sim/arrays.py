@@ -10,6 +10,20 @@ from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import _to_i32, _coerce_to_object
 from ..hierarchy import _is_subtype, _into_super_chain
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
+from ... import equiv_audit
+
+# 数组创建指令（neg-array 口径：S-8 潜在负长度路径——长度是运行期值，codegen
+# 无法静态判定，当前对这三个指令的全部发射点计数；S-8 修复后转为创建点总量观测）
+_ARRAY_CREATE_OPS = frozenset({'newarray', 'anewarray', 'multianewarray'})
+
+# 数组访问指令（null-array 口径：S-2.1 null 表示语义的作用面——这些指令在
+# Java 语义里对 null 数组引用抛 NPE（JVMS §6.5），null 表示的行为近似性
+# 全部体现在这组发射点上）
+_ARRAY_ACCESS_OPS = frozenset({
+    'arraylength',
+    'iaload', 'laload', 'faload', 'daload', 'aaload', 'baload', 'saload', 'caload',
+    'iastore', 'lastore', 'fastore', 'dastore', 'aastore', 'bastore', 'sastore', 'castore',
+})
 
 
 def _pop_index(sim):
@@ -32,6 +46,13 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
     op      = ins.opcode
     operand = ins.operand or ''
     comment = ins.comment or ''
+
+    # [equiv-audit] 只读计数，不改发射内容（neg-array / null-array 口径见
+    # codegen/equiv_audit.py 模块注释）
+    if op in _ARRAY_CREATE_OPS:
+        equiv_audit.record('neg-array')
+    elif op in _ARRAY_ACCESS_OPS:
+        equiv_audit.record('null-array')
 
     if op == 'newarray':
         count_expr = _pop_index(sim)   # JVM 计数恒为 int：readShort 等窄来源提升为 i32

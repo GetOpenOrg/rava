@@ -12,6 +12,10 @@
     python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt（并行，-j 控制并发）
     python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比
     python3 scripts/run_tests.py --jdk 25                # 指定 JDK 主版本（javac/java/翻译语料同源）
+    python3 scripts/run_tests.py --deny equiv            # 任一等价发射点非零 → 整体失败
+    python3 scripts/run_tests.py --deny equiv::neg-array # 细粒度拒绝（对齐 rustc lint 模型）
+    python3 scripts/run_tests.py --deny stub-hit         # run 失败的 stub 子族 → 整体失败
+    python3 scripts/run_tests.py --deny equiv --deny stub-hit   # 可叠加
 
 工作区模型（见 docs/plans/2026-09-16-per-test-scratch-workspace.md）：
     build/<test>/   每测试独立 scratch（手写 overlay + 该测试的生成代码）
@@ -176,6 +180,164 @@ def _print_readability_summary(per_test: dict[str, dict[str, int]]) -> None:
         print(f"  非零: {shown}{'…' if len(nonzero) > 6 else ''}")
 
 
+# ── 等价发射点审计汇总（compatibility.md §4；对齐 readability 模式） ─────
+
+_EQUIV_RE = re.compile(r"^\[equiv-audit\]\s+(.+)$", re.MULTILINE)
+
+# 可 --deny 的等价 ID（= codegen/equiv_audit.py 的发射口径全集；
+# monitor-mt 待 S-20 合入后补埋、stacktrace 无 codegen 发射点，均不在列）
+EQUIV_IDS = (
+    'identity-hash', 'intern-identity', 'null-array', 'boxed-null',
+    'class-literal', 'record-hash', 'neg-array', 'field-npe', 'class-init',
+)
+
+
+def _parse_equiv(log: str) -> dict[str, int]:
+    """从转译输出解析 [equiv-audit] 行的等价发射点计数（全零行是 `none`）。"""
+    m = _EQUIV_RE.search(log)
+    if not m:
+        return {}
+    counts: dict[str, int] = {}
+    for part in m.group(1).split():
+        k, _, v = part.partition("=")
+        try:
+            counts[k] = int(v)
+        except ValueError:
+            pass
+    return counts
+
+
+def _print_equiv_summary(per_test: dict[str, dict[str, int]]) -> None:
+    """汇总各测试的等价发射点计数。口径：发射点数而非缺陷数——近似等价允许
+    存在，目标是可观测（--deny 可升级），与 readability 的「目标全 0」不同。"""
+    if not per_test:
+        return
+    totals: dict[str, int] = {}
+    nonzero: list[str] = []
+    for name, counts in sorted(per_test.items()):
+        if not counts:
+            continue
+        bad = {k: v for k, v in counts.items() if v}
+        for k, v in counts.items():
+            totals[k] = totals.get(k, 0) + v
+        if bad:
+            nonzero.append(f"{name}({', '.join(f'{k}={v}' for k, v in sorted(bad.items()))})")
+    line = " ".join(f"{k}={v}" for k, v in sorted(totals.items())) or "none"
+    print(f"\n[equiv] {line}  (合计 {sum(totals.values())}，{len(per_test)} 个测试，"
+          f"口径：发射点数非缺陷数，观测即可，--deny 可升级)")
+    if nonzero:
+        shown = "; ".join(nonzero[:6])
+        print(f"  非零: {shown}{'…' if len(nonzero) > 6 else ''}")
+
+
+# ── run 失败子族自动分类（直跑二进制抓 stderr，不经 cargo） ────────────
+#
+# 失败五分类（transpile / compile / run-timeout / run / output）之后，对 run 族
+# 失败自动重跑二进制并按 stderr 分类子族：
+#   stub-hit       panic 消息以 `stub: ` 开头——调用链内未翻译方法的可见 stub
+#   native-hit     panic 消息含 `native: ` —— 手写 native 的显式未实现标记
+#   s8-crash       `capacity overflow` —— S-8 负长度直通 Vec 分配的进程崩溃族
+#   runtime-panic  其余 panic —— 运行期非预期崩溃
+# 子族经 --deny stub-hit 可升级为整体失败；其余子族的 deny 待后续按需扩展。
+
+RUN_SUBFAMILIES = ('stub-hit', 'native-hit', 's8-crash', 'runtime-panic')
+
+
+def _classify_run_failure(class_name: str) -> tuple[str, str]:
+    """run 失败后直跑二进制抓 stderr 分类。返回 (子族, 摘要)；
+    子族为空串表示无法分类（如重跑超时 / 无 panic 输出）。"""
+    bin_path = SHARED_TARGET / "debug" / _to_bin_name(class_name)
+    if not bin_path.exists():
+        return "", "binary missing on re-run"
+    try:
+        r = subprocess.run([str(bin_path)], capture_output=True, text=True,
+                           timeout=RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return "", "timeout on re-run"
+    stderr = r.stderr or ""
+    if r.returncode == 0:
+        return "", "re-run exited 0 (flaky)"
+    m = re.search(r"stub: \S[^\n]*", stderr)
+    if m:
+        return "stub-hit", m.group(0).strip()
+    m = re.search(r"native: \S[^\n]*", stderr)
+    if m:
+        return "native-hit", m.group(0).strip()
+    if "capacity overflow" in stderr:
+        return "s8-crash", "capacity overflow (S-8 NegativeArraySizeException 缺失)"
+    m = re.search(r"panicked at [^\n]*", stderr)
+    if m:
+        return "runtime-panic", m.group(0).strip()[:120]
+    return "", (stderr.strip().splitlines() or ["no stderr"])[-1][:120]
+
+
+def _print_run_subfamily_summary(sub: dict[str, tuple[str, str]]) -> None:
+    """run 族失败的子族标注（追加在失败五分类之后，只新增行）。"""
+    if not sub:
+        return
+    by_fam: dict[str, list[str]] = {}
+    for name in sorted(sub):
+        fam, detail = sub[name]
+        by_fam.setdefault(fam or "unclassified", []).append(f"{name}[{detail}]")
+    parts = [f"{fam}={len(names)} ({', '.join(names[:4])}{'…' if len(names) > 4 else ''})"
+             for fam, names in sorted(by_fam.items())]
+    print(f"[run-classify] run 族失败子族: " + "；".join(parts))
+
+
+# ── --deny 拒绝升级（compatibility.md §4.3；默认全放行） ──────────────
+
+
+def _validate_deny(deny: list[str]) -> None:
+    """校验 --deny 规格：equiv / equiv::<id>（id 须在发射口径全集内）/ stub-hit。"""
+    valid = {'equiv', 'stub-hit'} | {f"equiv::{i}" for i in EQUIV_IDS}
+    bad = [d for d in deny if d not in valid]
+    if bad:
+        known_ids = ', '.join(EQUIV_IDS)
+        sys.exit(f"无效 --deny 规格: {', '.join(bad)}\n"
+                 f"可用: equiv | equiv::<id>（id ∈ {known_ids}）| stub-hit")
+
+
+def _deny_violations(deny: list[str],
+                     equiv_counts: dict[str, dict[str, int]],
+                     run_sub: dict[str, tuple[str, str]]) -> list[str]:
+    """按 --deny 规格收集违规消息（不改变测试通过判定本身，只影响退出码）。"""
+    msgs: list[str] = []
+    for spec in deny:
+        if spec == 'equiv':
+            for name, counts in sorted(equiv_counts.items()):
+                bad = {k: v for k, v in counts.items() if v}
+                if bad:
+                    msgs.append(f"--deny equiv: {name} "
+                                + ', '.join(f"{k}={v}" for k, v in sorted(bad.items())))
+        elif spec.startswith('equiv::'):
+            eid = spec[len('equiv::'):]
+            for name, counts in sorted(equiv_counts.items()):
+                if counts.get(eid):
+                    msgs.append(f"--deny {spec}: {name} {eid}={counts[eid]}")
+        elif spec == 'stub-hit':
+            for name in sorted(run_sub):
+                fam, detail = run_sub[name]
+                if fam == 'stub-hit':
+                    msgs.append(f"--deny stub-hit: {name} [{detail}]")
+    return msgs
+
+
+def _apply_deny(deny: list[str],
+                equiv_counts: dict[str, dict[str, int]],
+                run_sub: dict[str, tuple[str, str]], failed: int) -> int:
+    """打印违规并决定最终退出码：deny 命中时整体失败（即使测试全 PASS）。"""
+    if not deny:
+        return 1 if failed else 0
+    violations = _deny_violations(deny, equiv_counts, run_sub)
+    if violations:
+        print(f"\n[deny] {len(violations)} 处违规（--deny {' '.join(deny)}）:")
+        for msg in violations:
+            print(f"  {msg}")
+        return 1
+    print(f"\n[deny] {' '.join(deny)}: 0 违规")
+    return 1 if failed else 0
+
+
 def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
     """直接执行 binary。返回 (状态, stdout)：状态 ∈ ok / timeout / error。"""
     bin_name = _to_bin_name(class_name)
@@ -238,7 +400,8 @@ def _update_expected(java_file: Path) -> tuple[str, str]:
 
 # ── 顺序模式 ─────────────────────────────────────────────────────────
 
-def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
+def _run_sequential(filter_str: list[str] | None, no_run: bool,
+                    deny: list[str]) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -248,6 +411,8 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
     t_all = time.perf_counter()
     t_transpile_total = t_build_total = t_run_total = 0.0
     readability_counts: dict[str, dict[str, int]] = {}
+    equiv_counts: dict[str, dict[str, int]] = {}
+    run_sub: dict[str, tuple[str, str]] = {}
     fail_categories: dict[str, list[str]] = {}
 
     def _fail(cat: str, rel_str: str) -> None:
@@ -282,6 +447,9 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
         _rc = _parse_readability(log)
         if _rc:
             readability_counts[class_name] = _rc
+        _ec = _parse_equiv(log)
+        if _ec:
+            equiv_counts[class_name] = _ec
 
         if no_run:
             print(f"{prog} [NORUN ] {rel}  — transpile OK ({fmt_dur(t_transpile)})")
@@ -307,6 +475,9 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
             _fail("run-timeout", str(rel))
             continue
         if status == "error":
+            # run 族失败：直跑二进制抓 stderr 自动分类子族（stub-hit 等）
+            fam, detail = _classify_run_failure(class_name)
+            run_sub[class_name] = (fam, detail)
             print(f"{prog} [ FAIL ] {rel}  — run error  ({timing})")
             _fail("run", str(rel))
             continue
@@ -329,16 +500,19 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool) -> int:
     if fail_categories:
         for cat, names in fail_categories.items():
             print(f"  {cat}: {len(names)}  ({', '.join(names[:6])}{'…' if len(names) > 6 else ''})")
+    _print_run_subfamily_summary(run_sub)
     print(f"Elapsed: {fmt_dur(elapsed)}"
           f"  (transpile {fmt_dur(t_transpile_total)}, build {fmt_dur(t_build_total)},"
           f" run {fmt_dur(t_run_total)})")
     _print_readability_summary(readability_counts)
-    return 0 if failed == 0 else 1
+    _print_equiv_summary(equiv_counts)
+    return _apply_deny(deny, equiv_counts, run_sub, failed)
 
 
 # ── 并行模式 ─────────────────────────────────────────────────────────
 
-def _run_parallel(filter_str: list[str] | None, jobs: int) -> int:
+def _run_parallel(filter_str: list[str] | None, jobs: int,
+                  deny: list[str]) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -363,24 +537,27 @@ def _run_parallel(filter_str: list[str] | None, jobs: int) -> int:
     print(f"\n[batch] 并行转译 {len(pending)} 个测试（max_workers={jobs}）…")
     t_all = time.perf_counter()
 
-    def _transpile_one(java_file: Path) -> tuple[Path, bool, str, dict[str, int]]:
+    def _transpile_one(java_file: Path) -> tuple[Path, bool, str, dict[str, int], dict[str, int]]:
         ws = _test_workspace(_to_bin_name(_class_name(java_file)))
         ok, log = _transpile(java_file, out_dir=ws)
-        return java_file, ok, log, _parse_readability(log)
+        return java_file, ok, log, _parse_readability(log), _parse_equiv(log)
 
     transpile_ok: list[Path] = []
     transpile_fail: list[Path] = []
     readability_counts: dict[str, dict[str, int]] = {}
+    equiv_counts: dict[str, dict[str, int]] = {}
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         futures = {executor.submit(_transpile_one, f): f for f in pending}
         for fut in as_completed(futures):
-            java_file, ok, log, rc = fut.result()
+            java_file, ok, log, rc, ec = fut.result()
             rel = java_file.relative_to(ROOT)
             if ok:
                 print(f"  [transpile] {rel} OK", flush=True)
                 transpile_ok.append(java_file)
                 if rc:
                     readability_counts[_class_name(java_file)] = rc
+                if ec:
+                    equiv_counts[_class_name(java_file)] = ec
             else:
                 print(f"  [transpile] {rel} FAIL", flush=True)
                 print(log[-300:])
@@ -430,6 +607,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int) -> int:
     t_run_start = time.perf_counter()
 
     passed = failed = 0
+    run_sub: dict[str, tuple[str, str]] = {}
 
     for java_file in build_fail:
         print(f"[ FAIL ] {java_file.relative_to(ROOT)}  — compile error")
@@ -439,6 +617,9 @@ def _run_parallel(filter_str: list[str] | None, jobs: int) -> int:
         class_name = _class_name(java_file)
         ok, actual = _run_binary(class_name)
         if not ok:
+            # run 族失败：直跑二进制抓 stderr 自动分类子族（stub-hit 等）
+            fam, detail = _classify_run_failure(class_name)
+            run_sub[class_name] = (fam, detail)
             return java_file, False, "binary error", []
         expected = _read_expected(class_name)
         diff = _diff(expected, actual, class_name)
@@ -470,11 +651,13 @@ def _run_parallel(filter_str: list[str] | None, jobs: int) -> int:
     elapsed = time.perf_counter() - t_all
     print(f"\n{'='*50}")
     print(f"Results: {passed} passed, {failed} failed, {skipped} skipped / {total} total")
+    _print_run_subfamily_summary(run_sub)
     print(f"Elapsed: {fmt_dur(elapsed)}"
           f"  (transpile {fmt_dur(t_transpile)}, build {fmt_dur(t_build)},"
           f" run {fmt_dur(time.perf_counter() - t_run_start)})")
     _print_readability_summary(readability_counts)
-    return 0 if failed == 0 else 1
+    _print_equiv_summary(equiv_counts)
+    return _apply_deny(deny, equiv_counts, run_sub, failed)
 
 
 # ── 期望输出更新（并行） ─────────────────────────────────────────────
@@ -518,7 +701,8 @@ def _update_expected_parallel(files: list[Path], jobs: int) -> int:
 
 # ── 入口 ─────────────────────────────────────────────────────────────
 
-def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool, jobs: int) -> int:
+def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool, jobs: int,
+              deny: list[str]) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -528,8 +712,8 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
         return _update_expected_parallel(files, jobs)
 
     if jobs > 1:
-        return _run_parallel(filter_str, jobs)
-    return _run_sequential(filter_str, no_run)
+        return _run_parallel(filter_str, jobs, deny)
+    return _run_sequential(filter_str, no_run, deny)
 
 
 def main():
@@ -544,7 +728,13 @@ def main():
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     ap.add_argument("--jdk",             type=int, default=None, metavar="N",
                     help="指定 JDK 主版本（javac/java/翻译语料同源；默认沿用 JAVA_HOME 或自动发现）")
+    ap.add_argument("--deny",            action="append", default=[], metavar="SPEC",
+                    help="拒绝升级（默认全放行，可叠加）：equiv = 任一等价发射点非零即整体失败；"
+                         "equiv::<id> = 细粒度（id 见 [equiv-audit] 行）；"
+                         "stub-hit = run 失败的 stub 子族（二进制 stderr 含 `stub: `）")
     args = ap.parse_args()
+
+    _validate_deny(args.deny)
 
     if args.out_dir is not None:
         OUT = Path(args.out_dir)
@@ -559,7 +749,7 @@ def main():
     if jobs == 0:
         jobs = os.cpu_count() or 4
 
-    sys.exit(run_tests(args.filter, args.no_run, args.update_expected, jobs))
+    sys.exit(run_tests(args.filter, args.no_run, args.update_expected, jobs, args.deny))
 
 
 if __name__ == "__main__":

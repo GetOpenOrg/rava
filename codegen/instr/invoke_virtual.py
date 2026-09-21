@@ -7,6 +7,7 @@ from ..rs_ir import Lit, Var, RawExpr, RawStmt, RsNamed
 from ..render import render_expr, render_type
 from ..type_map import jvm_to_rust, short_cls, parse_descriptor_params, is_jdk
 from ..constants import safe_ident as _safe_field
+from .. import equiv_audit
 from ..constants import (
     PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES,
     JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES,
@@ -72,6 +73,10 @@ def _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
     """四类特殊接收者路径（装箱类型变量的 Object 手写直调 / 基本类型 equals 的
     == 比较 / 基本类型接收者的根类方法 / 数组 getClass），命中即发射并返回 True。"""
     if _obj_is_typevar and mname in ('equals', 'hashCode', 'toString'):
+        # [equiv-audit] identity-hash（S-6）：类型变量接收者装箱后直调 Object
+        # 手写实现——hashCode 未被运行时类覆盖时落到默认（非 identity）实现
+        if mname == 'hashCode':
+            equiv_audit.record('identity-hash')
         _rust_ret_eq = jvm_to_rust(ret, registry)
         _arg_str_eq = ', '.join(args)
         if _rust_ret_eq == '()':
@@ -112,6 +117,9 @@ def _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
     # 元素类型含无法解析的形态（类型变量等）时保持 null 兜底（调用方按 Object[] 语义
     # 使用结果的场景已由描述符路径覆盖）。
     if mname == 'getClass' and obj_ty.startswith('JArray<'):
+        # [equiv-audit] class-literal（S-5）：数组 getClass 的
+        # Class::for_class 早路径——每次构造新 Class 对象，同一性近似
+        equiv_audit.record('class-literal')
         _desc = _jarray_type_desc(obj_ty, registry)
         if _desc is not None:
             v = sim.fresh()
@@ -163,6 +171,10 @@ def _emit_object_direct_call(sim, obj_e, args, rust_mname, rust_ret) -> bool:
     # 非基本类型返回（如 getClass→Class）保持原来的 closure-only dispatch，
     # 因为 object_impl.rs 的实现返回 Object 而非具体类型，不能直接赋值。
     if rust_ret == '()' or rust_ret in _PRIMITIVE_RUST_TYPES:
+        # [equiv-audit] identity-hash（S-6）：bare Object 接收者的 hashCode 直调
+        # ——经 ObjectVTable 分派，运行时类未覆盖时落到默认（非 identity）实现
+        if rust_mname == 'hashCode':
+            equiv_audit.record('identity-hash')
         arg_str = ', '.join(args)
         v = sim.fresh()
         if rust_ret == '()':
@@ -641,6 +653,10 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
                     # 整条祖先链未声明、由根类声明 → 装箱后走根 vtable。
                     # Object::from（非 from_any）：保持接收者的 vtable（运行时类名、
                     # is_instance_of、覆盖的 hashCode/equals/toString），JvmRef 装箱会丢这些
+                    # [equiv-audit] identity-hash（S-6）：接收者链上无人声明
+                    # hashCode → 恒走根 vtable 默认实现（当前非 identity hash）
+                    if mname == 'hashCode':
+                        equiv_audit.record('identity-hash')
                     _recv = f"Object::from(Clone::clone(&{obj_e}))"
                     _root_routed = True
                 else:
@@ -738,6 +754,16 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
 
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
     cls, mname, params, ret = parse_method_ref(comment)
+    # [equiv-audit] 按字节码常量池方法名匹配的近似等价形态（invokevirtual /
+    # invokeinterface 共用本入口），只计数不改发射：
+    # - intern-identity（S-6）：String.intern 调用点——intern 后 == 的同一性
+    #   是近似等价（该名由 String 独占声明，名字即字节码事实）
+    # - class-literal（S-5）：getClass 调用点——返回 Class 对象的同一性近似
+    #   （数组接收者的早路径在 _try_early_receiver_paths 里另行计数）
+    if mname == 'intern':
+        equiv_audit.record('intern-identity')
+    elif mname == 'getClass':
+        equiv_audit.record('class-literal')
     sig_params_v = _resolve_virtual_sig_params(sim, cls, mname, params, ret,
                                               class_name, registry)
     args, obj_e, obj_ty = _pop_receiver_and_args(sim, params, sig_params_v, registry)

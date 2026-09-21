@@ -587,6 +587,11 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
     # 就是普通 invokestatic，走正常翻译路径调用字节码翻译出的工厂方法
     #（Integer.valueOf 自带 -128~127 缓存池语义）。
     cls, mname, params, ret = parse_method_ref(comment)
+    # [equiv-audit] identity-hash（S-6）：System.identityHashCode 静态调用点。
+    # 按方法名匹配（字节码常量池事实：该名只由 System 声明），只计数不改发射。
+    from .. import equiv_audit
+    if mname == 'identityHashCode':
+        equiv_audit.record('identity-hash')
     # JVM 方法解析：invokestatic 的常量池类可以是子类，static 方法实际声明在祖先类
     # → 沿父类链解析到声明类（Rust 的关联函数不随继承可见，E0599）。
     _cp_cls_bin = _method_ref_binary_class(comment)
@@ -603,6 +608,17 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             _cls_path = _crate + '::' + '::'.join(
                 (f'r#{_p}' if _p in _RUST_KEYWORDS else _p)
                 for _p in _cp_cls_bin.split('/')[:-1]) + '::'
+    # [equiv-audit] class-init（S-10 子缺口 a）：手写静态 native 的调用点——目标
+    # 方法在字节码里是 ACC_NATIVE（实现在手写 *_impl.rs，不在 java_class! 宏块
+    # 内）时，入口没有宏注入的 `Self::__class_init()?;`，JVMS §5.5 的该触发点
+    # 缺失。按（解析后的声明类, 方法名, 描述符）匹配，只计数不改发射。
+    if registry and _cp_cls_bin:
+        _ci_nat = registry.get(_cp_cls_bin)
+        if _ci_nat is not None:
+            if any(m.name == mname and m.is_static and m.is_native
+                   and m.descriptor.startswith(f"({''.join(params)})")
+                   for m in _ci_nat.methods):
+                equiv_audit.record('class-init')
     # 跨类静态调用的实例化先于实参转换确定：类级类型变量由实参静态类型合一得到
     # （`EnumSet.of(e)` → `EnumSet::<Characteristics>::of(e)`），未绑定的取 Object；
     # 形参期望类型、turbofish、返回类型三者共用这一份实例化
