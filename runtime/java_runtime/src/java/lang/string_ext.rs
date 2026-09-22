@@ -38,6 +38,14 @@ impl String {
 
 impl std::fmt::Display for String {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Java 语义：null 字符串的字符串转换是字面 "null"（JLS §5.1.11 / §15.18.1，
+        // println(String) 同）。null 载体（_jvm_null 未清零）的 value 为 JArray
+        // Repr::Null，直接解码会在 to_vec panic（array.rs）——先守卫再取值。
+        // 判定走 vtable is_jvm_null()（S-3.1 统一入口），与 Object 侧 null 的
+        // "null" 呈现（object.rs 的 () vtable __obj_str）同语义。
+        if ObjectVTable::is_jvm_null(self) {
+            return write!(f, "null");
+        }
         let val = self.__get_value().to_vec();
         let len = val.len() as i32;
         if self.__get_coder() == 0i8 {
