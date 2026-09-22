@@ -21,7 +21,7 @@
 - `docs/plans/java-rust-translation-reference.md` — 翻译对照（宏家族 §16）
 - `docs/tasks-history.md` — T01-T81 历史全记录
 
-**基线（2026-09-22 凌晨，用户 Ubuntu 全量 @ ~afa3890 树，双进程与定向批并发）**：**113 PASS / 53 FAIL**（较初基线 87 **+26**）——compile 13 / run 33 / output 6 / transpile 1，run 族自动分类：stub-hit 16、runtime-panic 9、s8-crash 1、unclassified 7。**失败清单双进程合并实战通过**（定向批写 22 条保留 32 → 全量合并 53，无丢失）。**注意该树未含线程层**（TestSynchronized/ThreadJoin/WaitNotify 三例仍红）——下轮 pull 后预期 116+。TestRefKindsFull PASS→FAIL 复现定性：`stub: Integer.valueOf`（与 TestOptional 同族，装箱旁路 from_any 被对象化收编后揭开，非行为回归）。此前 compile 族多项推进到下一层（HashSetOps→UOE remove、GenericBoundsCombo→collection.rs panic、DateTimeFormat/ZonedDateTime→E0308）。
+**基线（2026-09-22 凌晨，用户 Ubuntu 全量 @ ~afa3890 树，双进程与定向批并发）**：**113 PASS / 53 FAIL**（较初基线 87 **+26**）——compile 13 / run 33 / output 6 / transpile 1，run 族自动分类：stub-hit 16、runtime-panic 9、s8-crash 1、unclassified 7。**失败清单双进程合并实战通过**（定向批写 22 条保留 32 → 全量合并 53，无丢失）。**`--failed` 回归已实证线程层三例转绿出列（a705fd9 树：TestSynchronized/ThreadJoin/WaitNotify PASS，清单 53→50）+ `--skip-failed` 干净面 113/113 全绿——有效基线 116/166**。棘轮全循环验证：全量播种 → --failed 回归出列 → --skip-failed 零失败快速面。TestCollectionsUtil 层进（getDeclaredField 随线程层落地，下一卡点 Unsafe.objectFieldOffset）；新见 native：Reflection.getCallerClass（TestAtomics 下一层）。TestRefKindsFull PASS→FAIL 复现定性：`stub: Integer.valueOf`（与 TestOptional 同族，装箱旁路 from_any 被对象化收编后揭开，非行为回归）。此前 compile 族多项推进到下一层（HashSetOps→UOE remove、GenericBoundsCombo→collection.rs panic、DateTimeFormat/ZonedDateTime→E0308）。
 
 **基线（2026-09-21）**：
 - **166 全量（用户 Ubuntu，JDK21）**：87 PASS / 79 FAIL；**跑批树落后 main，混有陈旧污染**——fcb04ce 干净树复核 18 例，TestStringBuilder / TestOptionalFull / TestIncDec / TestShortCircuit 已 PASS（假象），真实失败面待复验收敛。归类全记录：`2026-09-21-e2e-baseline-classification.md`（新立项 A-8 / S-19 / S-20；S-8 / S-9 实测升级）。
