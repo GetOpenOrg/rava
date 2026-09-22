@@ -2,6 +2,7 @@
 //! 按需实现（K-2 规则），其余保持 panic 存根。
 
 use crate::prelude::*;
+use crate::java::lang::IllegalArgumentException;
 use super::random_support::RandomSupport;
 
 impl RandomSupport {
@@ -38,5 +39,45 @@ impl RandomSupport {
         let t = crate::java::lang::System::currentTimeMillis()?;
         let n = crate::java::lang::System::nanoTime()?;
         Ok(Self::mixStafford13(t)? ^ Self::mixStafford13(n)?)
+    }
+
+    /// `checkBound(int)V`：非正边界抛 `IllegalArgumentException("bound must be
+    /// positive")`（按 OpenJDK 21 字节码逐指令还原）。消费方：有界随机数
+    /// 入口（`nextInt(bound)` / `nextLong(bound)` 等）的参数前置校验。
+    #[jvm_boundary(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
+    pub fn checkBound_i(bound: i32) -> Result<()> {
+        if bound <= 0 {
+            return Err(JvmError::from(IllegalArgumentException::new_str(
+                String::from("bound must be positive"))?));
+        }
+        Ok(())
+    }
+
+    /// `boundedNextInt(RandomGenerator, int)I`：有界nextInt 的均匀化核心，按
+    /// OpenJDK 21 字节码逐指令还原——`r = rng.nextInt()`；`m = bound - 1`；
+    /// bound 为 2 的幂 → `r &= m`；否则拒绝采样循环
+    /// （`u = r >>> 1`；`u + m - (r = u % bound) < 0` 时 `u = rng.nextInt() >>> 1`
+    /// 重来，加减按 JVM 二进制补码回绕）。`rng.nextInt()` 经接口载体分派
+    /// （itable 语义，不枚举实现类）。
+    #[jvm_boundary(upcalls = "java/util/random/RandomGenerator.nextInt:()I")]
+    pub fn boundedNextInt_randomgenerator_i(rng: Object, bound: i32) -> Result<i32> {
+        let next_int = || -> Result<i32> {
+            Into::<crate::java::util::random::RandomGenerator>::into(Clone::clone(&rng)).nextInt()
+        };
+        let m = bound.wrapping_sub(1);
+        let mut r = next_int()?;
+        if (bound & m) == 0 {
+            r &= m;
+        } else {
+            let mut u = ((r as u32) >> 1) as i32;
+            loop {
+                r = irem(u, bound)?;
+                if u.wrapping_add(m).wrapping_sub(r) >= 0 {
+                    break;
+                }
+                u = ((next_int()? as u32) >> 1) as i32;
+            }
+        }
+        Ok(r)
     }
 }
