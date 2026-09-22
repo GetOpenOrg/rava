@@ -128,6 +128,33 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     # 通过 getstatic/Field 指令发现的类：只生成存根，不展开方法体
     field_discover_classes: set[str] = set()
 
+    def _enqueue_iface_stub(cls_bin: str) -> None:
+        """类声明的直接接口（传递闭包）进 type-only stub 通道。
+
+        interface_gen 的 _all_interfaces 沿 registry 的 interfaces 边发现类的
+        接口 impl 关系（ListItr 实现 ListIterator、分派经 Iterator 载体——
+        ListIterator 缺席 registry 时 Iterator impl 关系不可达 → AbstractMethodError）。
+        与 _enqueue_desc_types 同通道：只生成类型存根，不展开方法体（调用未触达
+        的接口方法不扩大生成范围）。
+        """
+        _iq = deque([cls_bin])
+        _iseen: set[str] = set()
+        while _iq:
+            _in = _iq.popleft()
+            if _in in _iseen:
+                continue
+            _iseen.add(_in)
+            _ici = _load_class(_in)
+            if _ici is None:
+                continue
+            for _sup in (_ici.interfaces or []):
+                if (_sup not in _JAVA_RUNTIME_CLASSES
+                        and (_sup.startswith(_JDK_PREFIXES)
+                             or _sup.startswith(_JDK_STUB_ONLY_PREFIXES))
+                        and _sup not in field_discover_classes):
+                    field_discover_classes.add(_sup)
+                _iq.append(_sup)
+
     def _enqueue_desc_types(desc: str) -> None:
         """T88：方法描述符的参数/返回类型也是类型依赖（type-only）。
 
@@ -441,6 +468,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         # 用户类由 user crate 从 class_infos 整体生成，不进 jdk_infos（否则重复定义）
         if cls not in jdk_infos and cls not in user_infos:
             jdk_infos[cls] = ci
+            # 类声明的接口闭包进 stub 通道（_enqueue_iface_stub 注释——接口 impl
+            # 关系的发现依赖 registry 的 interfaces 边）
+            if cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES):
+                _enqueue_iface_stub(cls)
         origin[0] = (cls, meth, desc)
 
         # 追踪该方法的指令引用（精确匹配名字+描述符，避免重载方法误展开）
@@ -650,6 +681,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             try:
                 ci = parse_class_bytes(data, cls)
                 jdk_infos[cls] = ci
+                # stub 通道类同样收集其接口闭包（同 _process——接口 impl 关系发现）
+                _enqueue_iface_stub(cls)
                 # 缺口 B（分阶段首期：仅 field_discover 通道）：字段声明类型进闭包
                 # （type-only）。未被指令触达的字段类型此前静默退化为 Object
                 # （jvm_to_rust 对 registry 外类型的 fallback），继承字段展平时
