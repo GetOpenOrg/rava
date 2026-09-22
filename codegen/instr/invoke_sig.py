@@ -101,6 +101,15 @@ def _lookup_method_sig_params(
             callee_tparams_list = _effective_class_type_params(ci, registry)
             callee_tparams = frozenset(callee_tparams_list)
             types, _ = _method_sig_types(ci, m, callee_tparams_list, registry)
+            if not types and not _handwritten_boundary_method(cls_bin, mname):
+                # 泛型签名无效（通配符位等 sig_type_string_valid 拒绝）→ 回退定义侧
+                # 发射签名（emitted_method_sig_types，与槽位擦除名单同源 K-6）——
+                # 调用侧期望与成员形参一致（如 tryAdvance(Consumer<-Integer>) 的
+                # 载体形参），不再整体降级描述符擦除形态。手写边界方法（`#[jvm_boundary]`）
+                # 例外：其 Rust 签名由共置 _impl.rs 独立持有（可能仍为 Object 擦除
+                # 形态），维持描述符回退。
+                from ..sig_types import emitted_method_sig_types as _ems_fallback
+                types, _ = _ems_fallback(ci, m, callee_tparams_list, registry)
             if not types:
                 return None
             if receiver_targ_map:

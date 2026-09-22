@@ -374,7 +374,10 @@ def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
     barg_str = ', '.join(wargs)
     _cls_tps = _effective_class_type_params(cls_ci, registry)
     _erased_targs = f"<{', '.join(['Object'] * len(_cls_tps))}>" if _cls_tps else ''
-    _view_recv = f"{cls_rust}{_erased_targs}::__virtual_view(&{obj_e})"
+    # 接收者静态类型串可能已带泛型实参（K-6b 擦除发射后为 Cls<Object>）：turbofish
+    # 统一在裸基名上追加擦除实参，避免 Cls<Object><Object> 双后缀
+    _cls_base_rust = cls_rust.split('<', 1)[0].strip()
+    _view_recv = f"{_cls_base_rust}{_erased_targs}::__virtual_view(&{obj_e})"
     # 类虚方法分派（§6 步骤 4）：`__virtual_view` 命中即调用；未命中（闭包、
     # 无运行时类值）记默认值。SAM 闭包回退已随 A-5 移除——lambda 只实现接口
     # （合成对象经接口载体 + `__interface` 分派），不可能是本类实例，类虚方法

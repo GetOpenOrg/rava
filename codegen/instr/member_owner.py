@@ -520,11 +520,26 @@ def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: st
             )
     if registry and sig_params_v is None:
         # 调用描述符在接收者类上只命中 synthetic bridge（`copyInto(Object[],int)` →
-        # `copyInto(Integer[],int)`）：Rust 侧只生成被桥接的真实方法，形参类型按真实方法确定
+        # `copyInto(Integer[],int)`）：Rust 侧只生成被桥接的真实方法，形参类型按真实方法确定。
+        # 接收者类链上有真实（非 synthetic）精确声明时优先（JVM 方法解析序：自身/父类链
+        # 声明先于接口桥接——`AbstractIntSpliterator.tryAdvance(Consumer)` 是真声明，
+        # 不得走 OfInt 的桥接解析拿 IntConsumer 形参）
         _br_recv_bin = (class_name if _recv_is_this
                         else _rust_type_to_binary(_recv_base_v, registry)) if (_recv_is_this or _recv_base_v) else ''
         _br_recv_ci = registry.get(_br_recv_bin or '')
+        _br_desc_full = '(' + ''.join(params) + ')' + ret
+        _br_has_real = False
         if _br_recv_ci is not None and not _br_recv_ci.is_interface:
+            _br_walk, _br_seen = _br_recv_ci, set()
+            while _br_walk is not None and _br_walk.name not in _br_seen:
+                _br_seen.add(_br_walk.name)
+                if any(not m.is_synthetic and m.name == mname
+                       and m.descriptor == _br_desc_full for m in _br_walk.methods):
+                    _br_has_real = True
+                    break
+                _br_walk = registry.get(_br_walk.super_class) if _br_walk.super_class else None
+        if (_br_recv_ci is not None and not _br_recv_ci.is_interface
+                and not _br_has_real):
             _br_desc = '(' + ''.join(params) + ')' + ret
             _br_target = _resolve_bridge_target(_br_recv_ci, mname, _br_desc, registry)
             if _br_target is not None and _br_target[1] != _br_desc:
