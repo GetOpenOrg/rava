@@ -199,6 +199,26 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     return true;
                 }
             }
+        })).chain(ctx.meta.iface_carrier_views.iter().filter_map(|iface_ty| {
+            // A-4 批次 6：接口载体臂——JLS 4.10.3 的子类型关系含接口（数组协变与
+            // try_checkcast::<载体> 按此判定），祖先臂只覆盖父类链。成员清单由
+            // codegen 过滤并给出擦除载体形态（非泛型裸短名 / 泛型 `I<Object, ..>`，
+            // 闭包外接口无生成载体类型，不在此列）；填充走 From<Object> 的载体包装
+            // （非受检视图——对象身份保持，分派经运行时类 itable）。
+            // UFCS 必须显式：接口载体可能自带 Java `static from(..)` 工厂方法，
+            // `Iface::from(..)` 路径解析会被固有方法遮蔽（同 interface_gen upcast）。
+            let ty = syn::parse_str::<Type>(iface_ty).ok()?;
+            Some(quote! {
+                if let ::std::option::Option::Some(s) =
+                    slot.downcast_mut::<::std::option::Option<#ty>>()
+                {
+                    *s = ::std::option::Option::Some(
+                        <#ty as ::std::convert::From<Object>>::from(
+                            <Object as ::std::convert::From<Self>>::from(
+                                ::std::clone::Clone::clone(self))));
+                    return true;
+                }
+            })
         })).collect();
         // Object.clone() 的逐字段浅拷贝：新对象（新标识单元），每个字段新建存储单元，
         // 值按 Java 语义拷贝（基本类型拷贝值，引用类型拷贝引用）。经 wrapper 访问器

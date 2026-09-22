@@ -350,8 +350,11 @@ impl FloatToDecimal {
     /// 的底层例程。NON_SPECIAL 分支 JDK 先 `instanceof StringBuilder`/`StringBuffer`
     /// 走 `append(char[])` 快路径，否则逐 char `append(c)`——三条路径可观察行为
     /// 一致，统一经 Appendable 接口分派（与 double 版同约定）。
+    ///
+    /// A-4 批次 6：形参/返回按接口载体形态书写（与 double 版同一约定，
+    /// `append_seq` 的 CharSequence 实参按闭包形态推断定标）。
     #[jvm_boundary]
-    pub fn appendTo(v: f32, arg1: Object) -> Result<Object> {
+    pub fn appendTo(v: f32, arg1: Appendable) -> Result<Appendable> {
         let d = _new_instance()?;
         let special: Option<&str> = match _to_decimal(&d, v)? {
             PLUS_ZERO => Some("0.0"),
@@ -362,17 +365,17 @@ impl FloatToDecimal {
             _ => None,
         };
         if let Some(s) = special {
-            Into::<Appendable>::into(Clone::clone(&arg1))
-                .append_seq(Object::from(String::from(s)))?;
+            Clone::clone(&arg1)
+                .append_seq(Into::into(Object::from(String::from(s))))?;
             return Ok(arg1);
         }
         let bytes = d.__get_bytes();
         let n = d.__get_index() + 1;
-        let mut app = Into::<Appendable>::into(Clone::clone(&arg1));
+        let mut app = Clone::clone(&arg1);
         for i in 0..n {
             // (char) bytes[i]：byte 符号扩展到 int 再截位到 char
             let c = bytes.get(i)? as i32 as u16;
-            app = Into::<Appendable>::into(app.append_c(c)?);
+            app = app.append_c(c)?;
         }
         Ok(arg1)
     }

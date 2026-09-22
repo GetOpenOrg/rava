@@ -458,6 +458,11 @@ CARRIER_TYPE_POSITIONS: 'frozenset[str] | None' = frozenset({
     'java/util/Comparable',
     'java/util/stream/Collector',
     *_FUNCTION_IFACES,
+    # 批次 6：CharSequence/Appendable 字符族（前次试做因手写 decimal 层阻塞回退，
+    # 本次两侧同步：runtime 手写体 appendTo/append_seq 按载体边界适配，
+    # 见 docs/reports/2026-09-21-a4-phase0-evidence.md §8 遗留 1）
+    'java/lang/CharSequence',
+    'java/lang/Appendable',
 })
 
 

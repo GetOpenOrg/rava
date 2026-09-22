@@ -211,6 +211,15 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
             j += 1
 
         # 映射类名到 Rust 类型
+        # A-4 批次 6：已铺设载体化的接口（本表仅 CharSequence 一员）优先发射载体
+        # `I<Object, ..>`——判定单一来源 jvm_type.carrier_type（惰性 import 防回环），
+        # 未启用 / 闭包外回落本表的 Object 擦除（批次 3-5 五擦除点同口径）。
+        if registry is not None and registry.get(class_name) is not None \
+                and getattr(registry[class_name], 'is_interface', False):
+            from .jvm_type import carrier_type
+            _carrier = carrier_type(class_name, registry)
+            if _carrier is not None:
+                return _carrier, j
         mapped = _CLASSNAME_MAP.get(class_name)
         if mapped is not None:
             rust_type = mapped

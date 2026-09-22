@@ -257,15 +257,13 @@ TSB 记分牌累计 **1879 → 1010（−46.3%）**。
 
 ### 遗留登记（终态 None 的次序依据）
 
-1. **CharSequence/Appendable——被手写 decimal 层阻塞**（本任实证）：载体化后两形态硬错——
-   (a) `DoubleToDecimal::appendTo(d, <Appendable as From<_>>::from(..))` 调用点发射载体而
-   手写签名 `appendTo(v: f64, arg1: Object)`（abstract_string_builder.rs:605）；
-   (b) 手写体自身 `.append_seq(Object::from(String::from(s)))` 传 Object 而载体签名要
-   `CharSequence`（double_to_decimal_impl.rs:397）。(b) 在 runtime/ 手写层，本分支纪律
-   「不碰 runtime 除宏外」不可修——需与手写层协同批（终态口径：手写层按载体签名书写，
-   或该族维持 Object 回退名单）。
-2. **Spliterator 族**（批次 5 沿暂缓）：特化桥接 forEachRemaining(Object)↔(LongConsumer)
-   名/型解析发散（既有登记）。
+1. ~~**CharSequence/Appendable——被手写 decimal 层阻塞**~~（**批次 6 已解决**，见 §9）：
+   原阻塞两面——(a) 调用点发射载体而手写签名收 Object；(b) 手写体 append_seq 传 Object
+   而载体签名要 CharSequence——批次 6 按终态口径「手写层按载体签名书写」双侧同步落地。
+2. **Spliterator 族**（批次 5 沿暂缓，批次 6 沿评估维持）：特化桥接
+   forEachRemaining(Object)↔(LongConsumer) 名/型解析发散（既有登记）；批次 6 的字符族
+   载体化与 iface_carrier_views 机制不触及该阻塞面（发散在方法名/形参型的桥接解析，
+   非接口类型位置），维持暂缓不改判定。
 3. **TSB 残余 1010 分布**：Temporal 族 ~211 / Spliterator 族 ~126 / CharSequence+Appendable
    ~100（上述阻塞）/ Node+Stream+Sink ~136（streams 内部接口族，Sink extends Consumer 的
    父链 upcast 机制已备）/ Pattern_CharPredicate 45 / 已铺设族残余位（Consumer 41、
@@ -328,3 +326,55 @@ TOTAL                                      1836    0 1813   23    17106     2061
 try_cast_iface 4827（批次 3 后快照）→ 2376（−50.8%，载体 checkcast 接管）。
 记分牌曲线（TSB 口径）：1879（基线）→ 1744（批次 3）→ 1211（批次 4）→ 1010（批次 5），
 累计 −46.3%；全测集口径 32931 →（批次 3 后 30199）→ 17106。
+
+## 9. 批次 6 落地（CharSequence/Appendable 载体化 + 手写 decimal 层双侧适配）
+
+接管背景：前任代理静默死亡（WIP 六文件已保护提交 `bca0f46`，未验证）；本任自实测复现
+起步，WIP 验证为完整可用——九例定向回归面全绿，无需追加修复。基点 `cfb1783`，先并
+main（`548c08b`：TypeIR 批次 2 六消费点 + 散点三件 + macros 异常 upcast `__erased_vtable`
+机制 + docs `485fc19`），merge 干净无冲突，两机制（`__erased_vtable` 委托 /
+iface_carrier_views 臂）在 wrapper.rs 共存验证。
+
+### 批次 6 要点（第五任，前 WIP 作者+本任验证）
+
+- **铺设**：`CARRIER_TYPE_POSITIONS` + `java/lang/CharSequence`、`java/lang/Appendable`
+  （jvm_type.py 单一决策点）。
+- **sig_parse 第五擦除点**：`_parse_one_type` 对启用接口的早返回载体发射——必须早于
+  `_CLASSNAME_MAP` 查表（`java/lang/CharSequence → 'Object'` 的批次前旧擦除会把载体
+  短路掉）；既有 240 行分支处理未铺设接口，无双重应用。
+- **接口视图臂（新机制）**：`#[iface_carrier_views]` 属性（attrs.py 生成本类实现且
+  闭包内的接口之擦除载体 Rust 类型清单）→ macros parse.rs 解析 → wrapper.rs 的
+  `__view_into` 探针生成接口载体臂（`From<Object>` 包装填充，UFCS 显式防 `static from`
+  工厂遮蔽）。动机：JLS 4.10.3 子类型关系含接口——数组协变（String[] → CharSequence[]）
+  与 `try_checkcast::<载体>` 此前对接口位一律 false（祖先臂只覆盖父类链）。铺设门无关：
+  未铺设接口的臂是死代码（槽位形态 Object 永不匹配），门宽化后自动激活。
+- **interface_gen**：闭包内接口的载体 use 行先行（标记接口无 impl 关系但臂引用其类型，
+  晚登记将 E0433）。
+- **手写 decimal 层双侧适配（§8 遗留 1 的终态口径）**：double/float/floating 三个
+  `appendTo` 签名 `Object → Appendable`（入+返回位），体内 `Into::<Appendable>::into`
+  显式转换全部摘除（形参已是载体）；`append_seq` 实参改推断式 `Into::into`——
+  CharSequence 实参位的发射形态取决于其是否入闭包，两形态下 `Object: Into<_>` 均成立。
+  生成侧调用点（abstract_string_builder.rs:592/606）发射 `<Appendable as From<_>>::from`
+  载体实参，两侧对齐。
+- **语义冲突扫描（先例两处的同型检查）**：runtime/java_runtime/src 全量 grep——
+  CharSequence/Appendable 仅 decimal 三文件，无其他手写/stub 签名需对齐。
+
+### 批次 6 绿门（定向，全量待服务器）
+
+- 九例建运对金标全绿：TestStringBuilder / TestStreamBasic / TestStreamCollectors /
+  TestDouble（Ryū appendTo 直达路径）/ TestStringBuilderOps / TestStringCodePoints /
+  TestPatternMatch（checkcast/instanceof 臂面）/ TestInterfaces / TestIterator。
+- `[bfs-audit]`：TSB `22/2734/0` 不变，九例 unresolved 全 0；readability：TSB
+  from_any=105 不变、downcast=downcast_ref=0；type_surgery_sites=27（TypeIR 批次 2 后值）。
+- 双种子（PYTHONHASHSEED 1/2 生成树 diff）：TSB + TestIterator 双双一致。
+- 记分牌（对照 §8 终态表）：TSB 1010→913、TSC 1009→912、TPM 975→878、
+  TSBuiider 981→878（各 −97~−103，即 TSB 残余分布里 CharSequence+Appendable ~100 的
+  兑现）；小闭包（Double/SBOps/SCP/Iter/Interfaces）Into<I> 持平（≈2，Object 途径结构
+  残余非本批对象）；from_any/cast_if 逐例持平。
+- Python 单测：tests.unit.test_erased_queries 10/10（发现 tests/unit 有 8 例既有
+  `st.walk` 缺属性错误，main 上同现——非本批引入，非本域不越界修）。
+
+### 批次 6 后 TSB 残余展望（913 的去向，供下一批排期）
+
+Temporal 族 ~211 / Spliterator 族 ~126（沿暂缓）/ Node+Stream+Sink ~136 /
+Pattern_CharPredicate 45 / 已铺设族残余位（Consumer 41、Comparable 30）。

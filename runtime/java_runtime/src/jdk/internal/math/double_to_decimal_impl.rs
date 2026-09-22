@@ -381,8 +381,14 @@ impl DoubleToDecimal {
     /// 走 `append(char[])` 快路径，否则逐 char `append(c)`——三条路径可观察行为
     /// 一致（char[] 追加 == 逐字符追加，返回同一 app），统一经 Appendable 接口
     /// 分派（append(C) / append(CharSequence) 槽位）。
+    ///
+    /// A-4 批次 6：形参/返回按接口载体形态书写（Appendable 载体——批次 4 的
+    /// `List<Object>` 手写边界同一约定；该类进入闭包时 Appendable 经 T88 必在
+    /// 闭包内）。`append_seq` 的 CharSequence 实参用推断式 `Into::into`：该参数
+    /// 位的发射形态取决于 CharSequence 是否入闭包（载体 `CharSequence` 或擦除
+    /// `Object`），两形态下 `Object: Into<_>` 均成立，由调用点期望类型定标。
     #[jvm_boundary]
-    pub fn appendTo(v: f64, arg1: Object) -> Result<Object> {
+    pub fn appendTo(v: f64, arg1: Appendable) -> Result<Appendable> {
         let d = DoubleToDecimal::new(false)?;
         let special: Option<&str> = match _to_decimal(&d, v)? {
             PLUS_ZERO => Some("0.0"),
@@ -393,17 +399,17 @@ impl DoubleToDecimal {
             _ => None,
         };
         if let Some(s) = special {
-            Into::<Appendable>::into(Clone::clone(&arg1))
-                .append_seq(Object::from(String::from(s)))?;
+            Clone::clone(&arg1)
+                .append_seq(Into::into(Object::from(String::from(s))))?;
             return Ok(arg1);
         }
         let bytes = d.__get_bytes();
         let n = d.__get_index() + 1;
-        let mut app = Into::<Appendable>::into(Clone::clone(&arg1));
+        let mut app = Clone::clone(&arg1);
         for i in 0..n {
             // (char) bytes[i]：byte 符号扩展到 int 再截位到 char
             let c = bytes.get(i)? as i32 as u16;
-            app = Into::<Appendable>::into(app.append_c(c)?);
+            app = app.append_c(c)?;
         }
         Ok(arg1)
     }
