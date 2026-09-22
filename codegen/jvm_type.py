@@ -37,6 +37,7 @@ substitute() + registry 缓存）……它不是弃件：就是 Rust `ty` crate 
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -398,3 +399,63 @@ def _contained(actual: JvmType, formal: JvmType, registry: 'dict | None') -> boo
             return actual.is_subtype_of(fb, registry)
         return fb.is_subtype_of(actual, registry)
     return actual == formal
+
+
+# ── A-4 批次 3+：接口类型位置载体化（单一决策点）────────────────────────────
+#
+# 接口名进入类型位置（形参 / 返回 / 局部 / 字段）时发射擦除载体形态
+# `I<Object, ..>`（接口载体：持有 Object 引用的真实 Rust 类型，方法经
+# `__interface` itable 分派），使调用点从 `Into::<I<Object>>::into(obj).m()`
+# 变为 `it.m()` 直调（主度量 32931 处的消灭对象）。
+#
+# 五个擦除点（sig_types.emitted_method_sig_types / method_gen 存根 /
+# invoke_sig 调用点实参解析 / type_map.jvm_to_rust / sig_parse._parse_one_type）
+# 一律经本组函数取判定，禁止平行实现：
+#   carrier_type(binary, registry)          binary → 载体串（未启用 → None）
+#   carrier_type_for_ident(rust_ty, registry) Rust 类型串首标识符 → 载体串
+#
+# 铺设控制：CARRIER_TYPE_POSITIONS 列出已启用接口的 binary name；
+# None = 全部接口（终态）。批次逐批宽化，全部批次落地后置 None。
+
+CARRIER_TYPE_POSITIONS: 'frozenset[str] | None' = frozenset({
+    'java/util/Iterator',      # 批次 3 穿透起步（证据文档 §6 建议）
+})
+
+
+def iface_carrier_enabled(binary: str) -> bool:
+    """接口是否已进入类型位置载体化铺设。"""
+    gate = CARRIER_TYPE_POSITIONS
+    return gate is None or binary in gate
+
+
+def carrier_type(binary: str, registry: 'dict | None') -> 'str | None':
+    """启用接口 → 擦除载体 Rust 类型串 `Short<Object, ..>`；否则 None。
+
+    非接口 / 不在 registry（闭包外）/ 未启用 → None，调用方回退既有擦除路径
+    （jvm_to_rust 接口分支的 Object 化）。形参数取 effective_class_type_params
+    （含内部类从外围继承的形参——与 jvm_to_rust 的类泛型分支同一口径）。"""
+    if not registry or not iface_carrier_enabled(binary):
+        return None
+    ci = registry.get(binary)
+    if ci is None or not getattr(ci, 'is_interface', False):
+        return None
+    from .type_map import effective_class_type_params
+    params = effective_class_type_params(ci, registry)
+    if params:
+        return f"{short_cls(binary)}<{', '.join('Object' for _ in params)}>"
+    return short_cls(binary)
+
+
+def carrier_type_for_ident(rust_ty: str, registry: 'dict | None') -> 'str | None':
+    """Rust 类型串（`Iterator<E>` / `List<String>` / `Consumer` …）的首标识符
+    命中启用接口 → 载体串；否则 None。调用点实参解析与签名过滤共用。"""
+    if not registry or not rust_ty:
+        return None
+    m = re.match(r'^(\w+)', rust_ty)
+    if m is None:
+        return None
+    from .type_map import _registry_short_index
+    ci = _registry_short_index(registry).get(m.group(1))
+    if ci is None or not getattr(ci, 'is_interface', False):
+        return None
+    return carrier_type(ci.name, registry)

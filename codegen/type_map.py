@@ -65,8 +65,14 @@ def jvm_to_rust(t: str, registry: dict | None = None) -> str:
             if not name:
                 return 'Object'
             ci = registry[inner]
-            # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突
+            # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突。
+            # A-4 批次 3+：已铺设载体化的接口发射擦除载体 `I<Object, ..>`
+            # （判定单一来源 jvm_type.carrier_type，惰性 import 防回环）
             if ci.is_interface:
+                from .jvm_type import carrier_type
+                _carrier = carrier_type(inner, registry)
+                if _carrier is not None:
+                    return _carrier
                 return _iface_full_path(inner)
             tparams = effective_class_type_params(ci, registry)
             if tparams:

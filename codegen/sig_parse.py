@@ -89,9 +89,15 @@ def _extract_method_tparam_bounds(sig: str, registry=None,
                 if i < len(sig) and sig[i] in ('L', '['):
                     # 传入 registry：接口类型 → _iface_full_path → 'Object' → 被过滤
                     # 具体类（Number/Enum 等）→ 正确类型（"Number"、"Enum<Object>"）
+                    # A-4 批次 3+：接口载体化后接口上界解析为载体串（不再是 'Object'），
+                    # 上界是 Rust trait 位置而非值位置——载体上界同样按接口上界过滤，
+                    # 与载体化前的语义逐字一致（where K: Into<Bound> 只对具体类上界成立）
                     _b_start = i
                     rust_t, i = _parse_one_type(sig, i, _visible, registry)
-                    if first_class_bound is None and rust_t and rust_t != 'Object':
+                    from .jvm_type import carrier_type_for_ident
+                    _is_carrier_bound = carrier_type_for_ident(rust_t, registry) == rust_t
+                    if (first_class_bound is None and rust_t and rust_t != 'Object'
+                            and not _is_carrier_bound):
                         first_class_bound = rust_t
                         if bound_binaries is not None and sig[_b_start] == 'L':
                             bound_binaries[name] = re.split(r'[<;.]', sig[_b_start + 1:], maxsplit=1)[0]
@@ -219,9 +225,16 @@ def _parse_one_type(sig: str, i: int, class_type_params: list[str], registry=Non
             rust_type = 'Object'
         else:
             short = short_cls(class_name)
-            # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突
+            # Arch-1：接口 = Object 类型别名，用全路径避免与 Rust prelude 冲突。
+            # A-4 批次 3+：已铺设载体化的接口发射擦除载体 `I<Object, ..>`
+            # （判定单一来源 jvm_type.carrier_type，惰性 import 防回环）
             if registry and class_name in registry and registry[class_name].is_interface:
-                rust_type = _iface_full_path(class_name)
+                from .jvm_type import carrier_type
+                _carrier = carrier_type(class_name, registry)
+                if _carrier is not None:
+                    rust_type = _carrier
+                else:
+                    rust_type = _iface_full_path(class_name)
             elif has_type_args:
                 rust_type = f"{short}<{', '.join(type_args)}>"
             else:

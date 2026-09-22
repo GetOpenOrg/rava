@@ -240,7 +240,7 @@ def gen_method_body(
                    is_interface=_sim_is_interface,
                    return_type=rust_ret, is_constructor=is_ctor, class_type_params=_class_tparams,
                    in_vtable_body=in_vtable_body, box_object=_sim_box_object,
-                   infer_type_args=_sim_infer_type_args)
+                   infer_type_args=_sim_infer_type_args, registry=registry)
     _bounds_ci = registry.get(method.class_name) if registry else None
     if _bounds_ci is not None and _class_tparams:
         from ..type_args import class_type_param_bounds

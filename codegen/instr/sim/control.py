@@ -56,8 +56,14 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             # 现发射 interface_target 形态的 CastExpr（try_cast_iface：null 通过 /
             # is_instance_of 按运行时类接口闭包判定 / 失败 Err 可捕获，S-1），
             # 栈类型保持擦除记录 Object——载体进类型位置后翻转为目标载体形态。
+            # 批次 3+：已铺设载体化的接口不再走本分支——cast_rust 已是载体
+            # `I<Object>`，下方通用 checked 臂发射 try_cast::<I<Object>>（null 还原
+            # + downcast 快路径 + is_instance_of 名单，命中经 From<Object> 包装），
+            # 栈类型记录为载体。
             _tgt_ci = registry.get(comment) if (registry and not comment.startswith('[')) else None
-            if src_name == 'Object' and _tgt_ci is not None and _tgt_ci.is_interface:
+            from ...jvm_type import carrier_type as _carrier_type
+            if (src_name == 'Object' and _tgt_ci is not None and _tgt_ci.is_interface
+                    and _carrier_type(comment, registry) is None):
                 expr = CastExpr(expr, 'Object', binary_name=comment, checked=True,
                                 interface_target=True)
                 sim.push(expr, RsNamed('Object'))

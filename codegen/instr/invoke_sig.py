@@ -427,9 +427,28 @@ def _coerce_arg(
         _render_cast, _same_generic_family,
     )
     from .hierarchy import _is_subtype, _into_super_chain, _rust_type_to_binary
+    from ..jvm_type import carrier_type_for_ident
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
         return null_coerce
+    _carrier_expected = carrier_type_for_ident(expected, registry)
+    if _carrier_expected is not None and _carrier_expected == expected:
+        # A-4 批次 3+：形参是已铺设的接口载体。实参 → 载体的边界转换：
+        #   - 实参已是同载体：Clone 保持 move 语义（与尾部兜底同形）；
+        #   - 具体实现类：协变 upcast（interface_gen 的 From<C> for I<Object>，
+        #     任意类实例化上转到擦除载体是同一视图，保持对象身份）；
+        #   - Object / 其余静态类型：经 From<Object> 的非受检载体包装（javac
+        #     unchecked 语义——接口视图按运行时类成立，载体只持 Object 引用）。
+        #     From<_> 的 UFCS 形态不可被接口自带的 Java 静态 from 工厂遮蔽。
+        if actual == expected and actual not in _PRIMITIVE_RUST_TYPES:
+            if e == 'this':
+                return f"Clone::clone({e})"
+            return f"Clone::clone(&{e})"
+        if actual == 'Object':
+            return f"<{expected} as ::std::convert::From<_>>::from(Clone::clone(&{e}))"
+        _src_c = f"Clone::clone(this)" if e == 'this' else f"Clone::clone(&{e})"
+        return f"<{expected} as ::std::convert::From<_>>::from(" \
+               f"{_coerce_to_object(_src_c, actual, registry, sim.class_type_params, clone=False)})"
     if expected == 'Object' and actual not in ('Object', '()'):
         # 泛型参数值（如 K: Clone + Default + 'static）传给 Object 参数：
         # Rust 无隐式子类型化，K 类型的值不能直接当 Object 用 → 装箱为

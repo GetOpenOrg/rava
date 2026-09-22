@@ -132,7 +132,8 @@ class StackSim:
                  is_constructor: bool = False,
                  class_type_params: list[str] | None = None,
                  in_vtable_body: bool = False,
-                 box_object=None):
+                 box_object=None,
+                 registry: 'dict | None' = None):
         self.stack:      list[tuple[RsExpr, RsType]] = []
         # (已取得所有权的表达式, Rust 类型) → Object 引用表达式（保持对象身份的向上转型）
         self._box_object = box_object or (lambda e, _t: f"Object::from_any({e})")
@@ -164,6 +165,8 @@ class StackSim:
         self._slot_bind_pos: dict[int, int]          = {}
         self.underflow_occurred: bool                = False  # 记录是否发生过栈下溢
         self.in_vtable_body: bool                    = in_vtable_body
+        # 类型位置载体化判定（A-4 批次 3+）的 registry 视图（只读查询）
+        self._registry = registry
         # 方法体用到的类型变量上界转换：类型变量 → 上界 Rust 类型。
         # 方法签名据此声明 `where E: Into<Bound>`；子 sim 与根 sim 共享同一 dict。
         # 类级类型变量 → 上界 Rust 类型（`K extends Task<.., K>`），由方法生成入口填入
@@ -389,7 +392,25 @@ class StackSim:
             _decl_base = decl_ty.name.split('<')[0]
             _src_base = ty.name.split('<')[0]
             _is_null = isinstance(expr, Lit) and expr.value == 'Object::default()'
-            if ty.name == 'Object':
+            from .jvm_type import carrier_type_for_ident as _carrier_type_for_ident
+            _carrier_decl = _carrier_type_for_ident(decl_ty.name, self._registry)
+            if _carrier_decl is not None and _carrier_decl == decl_ty.name:
+                # A-4 批次 3+：局部声明类型是已铺设的接口载体（LVTT/LVT 经
+                # sig_parse/jvm_to_rust 翻转）。栈值 → 载体的边界转换：
+                #   - 值已是同载体：Clone 保活（move 语义）；
+                #   - 值是 Object / 具体实现类：经 Object 边界的非受检载体包装
+                #     （From<_> 的 UFCS 不可被接口自带的静态 from 工厂遮蔽，
+                #     与 _coerce_arg 的载体分支同源）。
+                if ty.name != _carrier_decl:
+                    _src = render_expr(_clone_moved_var(expr, ty))
+                    if _is_null:
+                        expr = RawExpr('Default::default()')
+                    else:
+                        expr = RawExpr(
+                            f"<{_carrier_decl} as ::std::convert::From<_>>::from({_src})")
+                    force_let_ty = True
+                ty = decl_ty
+            elif ty.name == 'Object':
                 # 声明为具体类但栈类型退化为 Object（类型推断缺口）：对齐到声明类型
                 if _is_null:
                     expr = RawExpr('Default::default()')
