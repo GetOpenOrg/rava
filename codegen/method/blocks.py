@@ -223,11 +223,18 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
             ev = f"{common}::from({ev})"
         ty = _str_to_rs_type(common)
     elif same_base and 'Object' in ty_str and any(t in ety_str for t in class_tparams):
-        tv = 'Default::default()'
+        # 同基泛型的「擦除 Object 实例化臂 vs 具体泛型臂」：合并点取具体臂类型，
+        # Object 实例化臂经 Object 边界重建（From<Object> for X<A> 任意 A 成立，
+        # 身份保持——A-4 批次 6 combine 修复 86bf63a 同型），不静默 Default::default()
+        # （会灭真值：TreeMap_NavigableSubMap.navigableKeySet 的缓存命中臂 →
+        # 第二次起返回 null KeySet → NPE）。null 臂（aconst_null）不进此分支——
+        # 已被上方 _NULL_EXPRS 分支接管（hash_map spliterator 的三处合法 null 臂）。
+        tv = f"<{ety_str} as ::std::convert::From<Object>>::from(Object::from({tv}))"
         ty = ety
     elif same_base and 'Object' in ety_str and 'Object' not in ty_str:
-        tv = 'Default::default()'
-        ty = ety
+        # 镜像：tv 是具体泛型臂（保留原值），ev 是擦除 Object 实例化臂 → 经 Object
+        # 边界按 tv 的类型重建，合并点取具体臂类型
+        ev = f"<{ty_str} as ::std::convert::From<Object>>::from(Object::from({ev}))"
     elif same_base and '<' in ty_str and '<' in ety_str:
         # 同一泛型类的不同实例化（静态泛型方法的类型变量解与擦除元素臂——andTree 的
         # CompletableFuture<Void> 与 cfs.get 的 <Object>）：合并点取擦除实例化

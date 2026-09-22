@@ -453,6 +453,27 @@ def _emit_interface_default_inheritance(ci, registry, call_chain, stub_bodies,
             idx = desc.find(')')
             return desc[:idx + 1] if idx >= 0 else desc
         existing_param_sigs: set[tuple] = {(m.name, _param_part(m.descriptor)) for m in visible_methods}
+        # 覆盖判定沿父类链（JVM 方法解析沿超类链查找）：祖先类自身的实例方法
+        # （非 static / 非 private / 非 synthetic / 非构造器）同样构成覆盖——
+        # HashMap$KeyIterator 未声明 remove，但父类 HashMap$HashIterator 的
+        # public remove 已覆盖 Iterator.remove；只查本类会把 default 体（UOE）
+        # 注入本类，遮蔽继承的正确实现。槽位填补由 resolve_interface_impls 的
+        # _locate 沿链定位后经 inherited_calls 登记转发成员（与 hasNext 同机制）。
+        # 祖先**类的方法**在此累积；祖先实现的**接口**仍由下方 _anc_ifaces 去重
+        # 机制处理（防 E0034 的作用不变）。
+        _sup_cur = ci.super_class
+        _sup_seen: set[str] = set()
+        while _sup_cur and _sup_cur in registry and _sup_cur not in _sup_seen:
+            _sup_seen.add(_sup_cur)
+            _sup_ci = registry[_sup_cur]
+            for _sm in _sup_ci.methods:
+                if (_sm.is_static or _sm.is_synthetic
+                        or _sm.name in ('<init>', '<clinit>')
+                        or (_sm.access_flags & 0x0002)):
+                    continue
+                existing_sigs.add((_sm.name, _sm.descriptor))
+                existing_param_sigs.add((_sm.name, _param_part(_sm.descriptor)))
+            _sup_cur = _sup_ci.super_class
         # 已用的 Rust 方法名（用于检测 default 方法与类自身方法重名）
         used_rust_names: set[str] = {
             (mangle_name(m.name, m.descriptor) if method_name_is_mangled(ci, m, registry) else m.name)
