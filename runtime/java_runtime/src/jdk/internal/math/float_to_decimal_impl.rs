@@ -111,7 +111,7 @@ fn _remove_trailing_zeroes(d: &FloatToDecimal) -> Result<()> {
 fn _append8_digits(d: &FloatToDecimal, m: i32) -> Result<()> {
     let mut y = _y(m);
     for _ in 0..8 {
-        let t = 10 * y;
+        let t = 10i32.wrapping_mul(y);
         _append_digit(d, (t as u32 >> 28) as i32)?;
         y = t & MASK_28;
     }
@@ -143,14 +143,14 @@ fn _to_chars1(d: &FloatToDecimal, h: i32, l: i32, e: i32) -> Result<i32> {
     let mut t: i32;
     let mut i = 1;
     while i < e {
-        t = 10 * y;
+        t = 10i32.wrapping_mul(y);
         _append_digit(d, (t as u32 >> 28) as i32)?;
         y = t & MASK_28;
         i += 1;
     }
     _append(d, b'.')?;
     while i <= 8 {
-        t = 10 * y;
+        t = 10i32.wrapping_mul(y);
         _append_digit(d, (t as u32 >> 28) as i32)?;
         y = t & MASK_28;
         i += 1;
