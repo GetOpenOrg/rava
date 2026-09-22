@@ -11,6 +11,11 @@
 ///   6. 从 java_class! 块的 java_field 属性行生成字段元数据表（OUT_DIR/
 ///      field_table.rs：binary name → 名/描述符/修饰位/static/ConstantValue），
 ///      供 Class.getDeclaredField / Field.get/set 反射查询
+///   7. 从 java_class! 块的 java_method / java_native 属性行生成方法元数据表
+///      （OUT_DIR/method_table.rs：binary name → 名/描述符/修饰位/static/
+///      native/abstract，声明序保留），供 Class.getDeclaredMethod 与
+///      MethodHandleNatives.resolve（MemberName 解析内核）查询。方法身份键
+///      是 (name, descriptor) 二元组（重载语义），与字段表同源同协议。
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -51,6 +56,7 @@ fn main() {
     write_hierarchy_table(&hierarchy);
     write_direct_super_table(&scan_direct_super(src_dir));
     write_field_table(&scan_class_fields(src_dir));
+    write_method_table(&scan_class_methods(src_dir));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
@@ -274,8 +280,16 @@ fn modifier_bits(s: &str) -> i32 {
             "protected"    => 0x0004,
             "static"       => 0x0008,
             "final"        => 0x0010,
+            "synchronized" => 0x0020,
             "volatile"     => 0x0040,
             "transient"    => 0x0080,
+            // 方法侧同位异名（JVMS access_flags：字段 volatile=0x40/方法
+            // bridge=0x40、字段 transient=0x80/方法 varargs=0x80——
+            // java.lang.reflect.Modifier 对方法读 varargs 位）
+            "varargs"      => 0x0080,
+            "native"       => 0x0100,
+            "abstract"     => 0x0400,
+            "strictfp"     => 0x0800,
             "synthetic"    => 0x1000,
             "enum"         => 0x4000,
             _ => 0,
@@ -294,8 +308,7 @@ fn extract_flag(s: &str, key: &str) -> Option<bool> {
     else { None }
 }
 
-fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
     let mut out = String::from(
         "// 由 build.rs 自动生成：字段元数据表（binary name → 声明字段序列，声明序 = slot）。
          // 数据源：java_class! 块内 java_field 属性（字段声明元数据的唯一表达，规则四）。
@@ -331,6 +344,105 @@ fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {
     let path = Path::new(&out_dir).join("field_table.rs");
     if let Err(e) = fs::write(&path, &out) {
         panic!("写 field_table.rs 失败: {e}");
+    }
+}
+
+/// 单个声明方法的元数据（java_method / java_native 属性行的结构化形态）。
+/// modifiers 为 java.lang.reflect.Modifier 位集（方法侧：synchronized=0x20 /
+/// varargs=0x80 / native=0x100 / abstract=0x400）；name 含 `<init>` /
+/// `<clinit>` 行（构造器/类初始化器的声明记录，消费方按 JDK 语义过滤——
+/// getDeclaredMethods 不见二者、getDeclaredConstructors 取 `<init>`）。
+struct MethodMeta {
+    name:       String,
+    descriptor: String,
+    modifiers:  i32,
+    is_static:  bool,
+    is_native:  bool,
+    is_abstract: bool,
+}
+
+/// 方法元数据扫描：java_class! 块内 java_method / java_native 属性行。
+/// 形态（生成树实测，2026-09-22 TestAtomics scratch 27,080 + 290 行）：
+/// - 单段路径 `#[java_method(` / `#[java_native(`（无 cfg_attr 包裹形态）；
+/// - 身份键 `name = "` / `descriptor = "` 单空格；布尔标志对齐填充
+///   （`is_static    = true` 4 空格），须用 extract_flag 容忍式提取；
+/// - 无 name/descriptor 的 `target = "...”` / `result = "..."` 行是 codegen
+///   提示属性（接口适配器/checkcast 标记），不是方法声明行，按身份键缺席
+///   排除。native 方法的元数据也是方法表行（JDK 反射对 native 一视同仁）。
+/// 声明顺序保留（getDeclaredMethods0 的 slot 语义）。
+/// 消费方：Class.getDeclaredMethod（class_impl.rs）、MethodHandleNatives.
+/// resolve 的方法/构造器 kind（method_handle_natives_impl.rs）。
+fn scan_class_methods(src_dir: &Path) -> BTreeMap<String, Vec<MethodMeta>> {
+    let mut result: BTreeMap<String, Vec<MethodMeta>> = BTreeMap::new();
+    if !src_dir.exists() { return result; }
+    for path in walk_rs_files(src_dir) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+            }
+            let Some(open) = trimmed.find("java_method(").or_else(|| trimmed.find("java_native(")) else { continue };
+            if current.is_empty() { continue; }
+            let window = &trimmed[open..];
+            let (Some(name), Some(descriptor)) =
+                (extract_attr(window, "name"), extract_attr(window, "descriptor"))
+            else { continue };
+            let access    = extract_attr(window, "access").unwrap_or_default();
+            let modifiers = extract_attr(window, "modifiers").unwrap_or_default();
+            let bits = modifier_bits(&access) | modifier_bits(&modifiers);
+            let is_static = extract_flag(window, "is_static")
+                .unwrap_or_else(|| modifiers.split_whitespace().any(|t| t == "static"));
+            let is_native = extract_flag(window, "is_native")
+                .unwrap_or_else(|| modifiers.split_whitespace().any(|t| t == "native"));
+            let is_abstract = extract_flag(window, "is_abstract")
+                .unwrap_or_else(|| modifiers.split_whitespace().any(|t| t == "abstract"));
+            result.entry(current.clone()).or_default().push(MethodMeta {
+                name, descriptor, modifiers: bits, is_static, is_native, is_abstract,
+            });
+        }
+    }
+    result
+}
+
+fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：方法元数据表（binary name → 声明方法序列，声明序 = slot）。
+         // 数据源：java_class! 块内 java_method / java_native 属性（方法声明元数据的唯一表达）。
+         // 消费方：Class.getDeclaredMethod（class_impl.rs）、MethodHandleNatives.resolve 的
+         // 方法/构造器 kind（method_handle_natives_impl.rs）。方法身份键是 (name, descriptor)
+         // 二元组（重载语义）。modifiers 为 java.lang.reflect.Modifier 位集。请勿手改。
+
+         pub struct MethodMeta {
+             pub name:        &'static str,
+             pub descriptor:  &'static str,
+             pub modifiers:   i32,
+             pub is_static:   bool,
+             pub is_native:   bool,
+             pub is_abstract: bool,
+         }
+
+         pub static CLASS_METHODS: &[(&str, &[MethodMeta])] = &[
+         ",
+    );
+    for (class, methods) in entries {
+        if methods.is_empty() { continue; }
+        out.push_str(&format!("    ({:?}, &[\n", class));
+        for m in methods {
+            out.push_str(&format!(
+                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {} }},\n",
+                m.name, m.descriptor, m.modifiers, m.is_static, m.is_native, m.is_abstract,
+            ));
+        }
+        out.push_str("    ]),\n");
+    }
+    out.push_str("];
+");
+    let path = Path::new(&out_dir).join("method_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 method_table.rs 失败: {e}");
     }
 }
 

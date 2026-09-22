@@ -97,6 +97,18 @@ impl Class {
         Ok(format!("{}", self.__get_name()).starts_with('['))
     }
 
+    /// native `Class.isPrimitive()`：基本类型类判定。基本类型的 Class 经
+    /// getPrimitiveClass 创建，名字是基本类型字面量（int / boolean / …，
+    /// 无包前缀）；按显式名单判定（九种，JLS §4.2），非基本类型（含数组、
+    /// void 的 Class 缺席形态）→ false。
+    /// 消费方：VarHandles.makeFieldHandle 的字段类型分派链。
+    #[jvm_native]
+    pub fn isPrimitive(&self) -> Result<bool> {
+        let name = format!("{}", self.__get_name());
+        Ok(matches!(name.as_str(),
+            "boolean" | "byte" | "char" | "short" | "int" | "long" | "float" | "double"))
+    }
+
     /// native `Class.getComponentType()`：数组类返回元素 Class，非数组返回 null。
     ///
     /// 数组类的名字是 JVM 描述符形态（`[I`、`[Ljava.lang.String;`、`[[I`——
@@ -124,6 +136,26 @@ impl Class {
             .find(|(n, _)| *n == cls_key)
             .and_then(|(_, fs)| fs.iter().find(|f| f.name == name))
             .map(|f| (f.descriptor, f.is_static, f.modifiers, f.constant))
+    }
+
+    /// 反射族内部：按 (name, descriptor) 二元组查本类声明方法元数据（修饰位 /
+    /// static / native / abstract）。方法重载使 name 不唯一，命中判定必须
+    /// 名与描述符配对（JDK getDeclaredMethod 语义——参数类型还原成描述符后
+    /// 比对）。消费方：MethodHandleNatives.resolve 的方法/构造器 kind
+    /// （method_handle_natives_impl.rs，MemberName 解析内核）；未声明 → None。
+    pub fn __declared_method_meta(&self, name: &str, descriptor: &str) -> Option<(i32, bool, bool, bool)> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        __methods::CLASS_METHODS.iter()
+            .find(|(n, _)| *n == cls_key)
+            .and_then(|(_, ms)| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
+            .map(|m| (m.modifiers, m.is_static, m.is_native, m.is_abstract))
+    }
+
+    /// 反射族内部：描述符 → Class 对象（class_for_descriptor 的类型面）。
+    /// MethodHandleNatives.resolve 的字段 kind 类型核对共用（描述符还原的
+    /// Class 与 MemberName 携带的 Class 按名相等）。
+    pub fn __class_for_descriptor(desc: &str) -> Class {
+        class_for_descriptor(desc)
     }
 
     /// `Class.isAssignableFrom(Class)`：`X.isAssignableFrom(Y)` 即 Y 的类型闭包
@@ -230,4 +262,10 @@ mod __direct_super {
 /// CLASS_FIELDS static）。
 mod __fields {
     include!(concat!(env!("OUT_DIR"), "/field_table.rs"));
+}
+
+/// build.rs 生成的方法元数据表（OUT_DIR/method_table.rs，含 MethodMeta 与
+/// CLASS_METHODS static）。
+mod __methods {
+    include!(concat!(env!("OUT_DIR"), "/method_table.rs"));
 }
