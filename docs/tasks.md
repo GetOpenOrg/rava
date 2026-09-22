@@ -11,7 +11,7 @@
 1. **架构问题优先**：先做架构改造，测试错误待架构完成后自然消解，禁止因为测试失败而中断架构工作转去修 Bug。
 2. **架构完成前禁止全量测试**：定向验证（红线集 + 金丝雀）除外，全量 run_tests.py 只在架构节点合入后由主会话统一执行。
 3. **子代理串行执行**：一次只运行一个子代理（用户指定，内存约束）；前一个完成并合入验证后再启动下一个。
-4. **任务执行顺序（2026-09-21 同步）**：陈旧树筛 + run 族定向复验 → A-8 / S-20 / 数组视图 coerce 族快速收益 → downcast 链清零（方案 §6 步骤 4）→ S-19 规格破坏五件 → A-5/A-6/A-4 收口 A-2 → 窗口 3（G-1/G-2/G-3，间歇期）。**A-1 已全部闭环**（2026-09-20 α/β + vtable 去形参，`X__inner`/`X__VTable` 均非泛型），不再占队列。
+4. **任务执行顺序（2026-09-23 同步）**：~~陈旧树筛→A-8/S-20/数组视图→downcast 链→S-19→A-5/A-4~~ **全部完成**。当前：ice 修复①② + `__unsafe_int_cell` 委托 + TestSealed `.0`（在途双开）→ K-6b 双侧一致（6 例）→ G-3 三重槽（窗口 3 前置）→ TypeIR 批次 3（invoke 域 9 处）→ M-3 试点 → 窗口 3 → P-1/Rust 重写 R0（三信号中"发现频率月级"仍差）。**子代理并行纪律：本机 ≤2（内存）+ 另一机 2；本地禁全量（定向 ≤10 例），全量归用户服务器**。
 
 ---
 
@@ -42,6 +42,7 @@
 | ~~S-20 `Object.wait/notify/notifyAll`~~ | **✅ 完成（`23fe881`）** | `monitor.rs` 双条件队列监视器 + monitorenter/同步方法/同步块四发射面真实化；12/12 编译清零、TestStringSearch 全绿、红线 23/23 含 streams。**未接 InternalLock（论证见 monitor.rs），S-11 终态随线程模型** |
 | ~~native 双件：CDS + isBigEndian~~ | **✅ 完成（`9873095`）** | CDS 恒 0（HotSpot 语义）+ isBigEndian `cfg!` + Thread.registerNatives no-op；6+2 用例编译/运行推进，TestStringSearch 全绿。**下一层已归类**：线程层总闸 3 例、ImmutableCollections 载体分派 3 例（A-4 邻域）、SharedSecrets.getJavaUtilCollectionAccess 2 例（P-3 邻域）、Charset clinit、toString 装箱分派 1 行 |
 | ~~TypeIR 最小层~~ | **✅ 完成（`e488ec5`+`92e3db5`）** | `jvm_type.py` 六变体代数（erasure/substitute/is_subtype_of + registry 闭包缓存）+ 35 单测；试点 hierarchy._is_subtype 委托——204 万对对拍零分歧、双种子零 diff、五审计线一致。**下一批接入点已排**：control.py(7)/stack.py(5)/returns.py(5)/invoke_sig.py(5)/fields.py(3)/blocks.py(2)/arrays.py(2)——A-5 合入后可续（invoke_sig 在其域） |
+| ~~TypeIR 批次 2：六消费点迁移~~ | **✅ 完成（`c440b73`，7 提交）** | control(12 含 A-4 债务2)/stack(6+共享擦除查询入口)/returns(10)/fields(5)/blocks(3)/arrays(6)——**type_surgery 69→27**；行为零变化四重验证；+10 单测。余量 27 大头=invoke_sig 5+invoke_virtual 4（批次 3，排 compile 族后） |
 | ~~A-4 批次 3-6：类型位置载体化~~ | **✅ 主战役收官（批次 6=`0526bb4`，第二任零修复纯验证收官）** | CharSequence/Appendable + decimal 双侧对齐 + iface_carrier_views 接口位；记分牌 TSB 1010→913（−100=CharSequence 残余兑现）；主会话 5/5 定向复核全绿；Spliterator 沿暂缓（证据 §9：阻塞面在特化桥接非类型位置）。**累计 Into<I> −49%** |
 | ~~A-4 批次 3-5：类型位置载体化~~ | **✅ 完成（四任接力，`2bb2255` 合入）** | **`Into<I>` 32931→17106（−48%）**：批次 3 Iterator 穿透（carrier_type 单一决策点）→ 批次 4 集合族 → 批次 5 函数式族 39 接口 + 载体 instanceof 运行时化（抓修 streams 红线破口）。遗留：CharSequence/Appendable 手写层阻塞（证据 §8）、Spliterator 沿、TSB 残余 1010 分布、type_surgery +7 债务（TypeIR 批次 2 消化）。主会话修 stubs×a4b3 语义冲突（impl 签名对齐） |
 | ~~A-4 批次 6：CharSequence/Appendable 载体化~~ | **✅ 完成（`fix/a4b6-charsequence`，前任 WIP+本任验证收官）** | §8 遗留 1 双侧落地：铺设两接口 + sig_parse 早返回（越过 `_CLASSNAME_MAP` 旧擦除）+ `#[iface_carrier_views]` 接口视图臂（JLS 4.10.3 数组协变/checkcast 的接口位）+ decimal 三文件 appendTo 载体签名。九例定向全绿（全量待服务器）；TSB 1010→913 / TSC 1009→912 / TPM 975→878；bfs-audit、双种子、from_any 持平。Spliterator 沿评估维持暂缓（证据 §9） |
@@ -51,12 +52,15 @@
 | 数组 getClass 命名（1 例） | 数组视图族遗留 | TestArrayCovariance 唯一剩余 diff：`type=String[]`→`Object;`——vtable `__class_name` 返回 `&'static str` 无法携带元素类型，独立族（签名限制级） |
 | JDK25 语料适配（原 8 例 E0308 的硬阻塞） | 数组视图族判定 | 17/23 错误=JDK25 语料 DoubleToDecimal 结构变化（手写 overlay 字段失配）+ concurrent 成员解析；另有 LVT 间隙声明一处反向装箱。JDK25 定向任务，随 166 全量 JDK25 轮立项 |
 | ~~runtime 散点三件包~~ | **✅ 完成（`9b58672`+`928328f`）** | **3 例全绿**（TestOptional/TestRefKindsFull/TestRandomSeed，主会话 5/6 复核含回归）：Integer.valueOf（[-128,127] 缓存保身份 + toString 顺带收层）+ RandomSupport 族（upcalls 接口级回调边让 BFS 自动翻译 SplittableRandom 实现类——零手写零枚举）。**第 3 件改判归 macros 域**（见下） |
-| **异常 upcast 中间型 catch 缺口（macros ~15 行）** | scatter3 根因定位移交：wrapper `__erased_vtable`/`__view_as` 按静态类生成臂，缺向运行时 inner 的委托（`__interface` 已有此委托——不对称缺口）；「Throwable < catch T < 运行时 R」中间型 catch_as 四路径全败落 panic。修法=`struct_layout.rs` inner 补 `__erased_vtable` 覆盖（运行时类自身+祖先槽）+ `wrapper.rs` 未命中后委托 `self.vtable` | 解锁 TestNestedTry/TestSuppressed（**等 a4b6 合入后做**——macros 域冲突） |
+| ~~异常 upcast 中间型 catch 缺口~~ | **✅ 完成（`548c08b`，主会话直做）** | inner `__erased_vtable` 运行时类覆盖 + wrapper 委托；**TestNestedTry/TestSuppressed 双绿**，13 测试回归全过。踩坑：`Rc::clone` 泛型推断方向（inner 侧显式 `as` 上转） |
 | ~~S-8 负数组崩溃~~ | **✅ 件 1 合入（`030b7ab`，另一台机器代理交付，主会话复核确认）** | 三创建指令经 `JArray::try_new/try_new_with` 抛真实 NegativeArraySizeException（Err 可捕获）；不可失败形态饱和为空数组作手写层崩溃防线；Arrays.copyOf 同接入。**TestArrayBounds s8-crash 转绿**（我首次复跑遇陈旧 scratch 假失败，fresh 后 PASS——个中差异已核实为生成物未刷新）。等效审计口径同步更新（neg-array 转为创建点总量观测） |
 | ~~ImmutableCollections 分派族（ice-dispatch 调查）~~ | **✅ 调查报告交付（零改码，另一台机器代理）** | 7 例根因表：①default 注入扫父类链（_emit_interface_default_inheritance 只查本类——10-15 行，**建议最先做**，HashSetOps/MapIteration 2 例）②unify_pair 灭真值（TreeMap_KeySet 三元真臂→Default::default()，TreeMapSet 1 例）③ListIterator 未进语料闭包（attrs.py _compute_all_supertypes 断链，AutoboxEdge/LinkedHash 2 例，随 A-4 排期）④string Display null 守卫（HashMapOps 1 例）⑤GenericBoundsCombo 本机不复现需对账。行号纠正：iterator.rs:12/17 是宏 span 非真 bug 位点 |
 | ~~反射族 Method 元数据表（membername）~~ | **✅ 完成（`d8f17b8`+`376a6cd`+`6564a04`，主会话 5/5 复核）** | L1 方法表（build.rs，(name,descriptor) 键+exceptions 列）+ L2 `getDeclaredMethod/getDeclaredMethods` 转正 + MethodHandleNatives.resolve 内核 + 12 层伴生放行——**TestAtomics FAIL→4/7 行**（ai/ar/al/ab 四行正确）；**MethodDemo 转正**（语料 168→169）。**下一层归类**：`Unsafe.compareAndSetInt` 经 AQS 基类视图无共享 int 单元——宏域 `__unsafe_int_cell` 臂委托缺口（与 `__erased_vtable` 同型的 inner/wrapper 不对称，A-4 域，修法≈wrapper 臂失败后委托 self.vtable 或 inner 补臂） |
 | ~~compile 14 族攻坚~~ | **✅ 8/14 全绿（10 提交，主会话 10/10 复核含红线）** | 全绿：RecordAdvanced(E0369)/SwitchNull(S-17 完成：String/Integer 常量标签判定桥)/InterfacePrivate(Java9+ 私有方法落载体)/MethodRefKinds(绑定接收者 coerce)/BridgeMethod(**桥方法体落槽统一机制**+toString 恒虚)/PriorityQueue(接口闭包二段解析 JLS 5.4.3.3)/CollectorsMore(return this 擦除重建)/Pecs(BFS 接口闭包 stub 通道)；StreamNumeric 10错→2。**遗留 6 例归类**：DateTimeFormat/ZonedDateTime/FilesApi=**G-3 三重复用槽**（try 暂存+监视对象+catch 形参同槽，需窗口 3）；StreamNumeric×2/StringNewMethods×4=**K-6b 双侧一致**（宏 __impl_ 体改写）；CompletableFuture=anewarray `_` 落 arrays.py（另一机 scatter4 域，诊断已移交） |
 | ~~反射族 Field 元数据表~~ | **✅ 完成（`18f1fa2`+`2803715`+`417c315`，主会话 5/5 复核）** | build.rs FIELD_TABLE + getDeclaredField not-found 抛 NoSuchFieldException（可捕获）+ getComponentType/Array.newArray/Field.get/set 最小实现；**TestCollectionFactory 转绿**；探针转正 FieldDemo/TestReflectProbe（**语料 166→168**，golden 以 java 实跑生成）；MemberName 方法表评估入档（`2026-09-22-method-metadata-table-eval.md`：方法属性 4 空格对齐坑、L3 分派协议须与 A-4 合流） |
+| **🔄 在途（2026-09-23 晨双开，基 86cad51）** | ice-fix 代理（/tmp/wt-ice-fix） | ①default 注入扫父类链（HashSetOps/MapIteration 2 例）+ ②unify_pair 不灭真值（TreeMapSet 1 例）——调查表修复①②，估 ≤15 行/件 |
+| **🔄 在途** | unsafe-cell 代理（/tmp/wt-unsafe-cell） | ①`__unsafe_int_cell/long_cell` 臂委托（548c08b 同型，**TestAtomics 冲刺 7/7**，现 4/7）+ ②TestSealed record toString double `.0` 渲染 |
+| **🔄 在途（另一台机器）** | scatter4 件 2 | toString 桥接（TestSequencedCollections 4 行 diff，`_root_method_vtable_owner` 对手写 toString 摘除 `to_string_vtable`） |
 | ~~stub-hit 散点大礼包（约 10 处）~~ | **✅ 完成（`fix/stub-scatter-pack` 7 提交，+1704）** | **5 例全绿**（CollectionsUtil/LocalDate/FormatLocale/HexFormat/PrintStreamApi，主会话 7/7 复核含回归）；Unsafe 对象布局+实例字段原子族（ObjectVTable `__unsafe_long/int_cell` 钩子）、getCallerClass、getAdapter（德语数据）、US_ASCII 族、FloatToDecimal（**顺带修两处 Schubfach 移植 bug**：int 回绕缺失/float 平局括号，千例对拍零差异）。**下一层归类**：TestBigInteger=codegen 参数重绑定（ifnull 分支 astore 死局部）；TestCollectionFactory=`Class.getComponentType`（反射域）；TestAtomics=MemberName 元数据表（reflect 域）；TestSequencedCollections=手写 toString 桥接（emitter `_root_method_vtable_owner`） |
 | ~~native 散点双件：availableProcessors + mismatch int 版~~ | **✅ 完成（`fix/native-scatter-2`）** | **TestArraysUtil 全绿**；TestLocalDate 卡点解除（NCPU 判定：仅作批次切分阈值不进输出，无需归一）。mismatch 语义核正：ArraysSupport 层恒 -1（「较小剩余长度」是公开 API Arrays.mismatch 行为，由翻译字节码承担） |
 | **Unsafe 对象布局族散点（TestLocalDate 下一层）** | native 双件报告 | `Unsafe.arrayBaseOffset`（卡点：ConcurrentHashMap `<clinit>` ABASE 行）+ 同链排队 `arrayIndexScale`/`objectFieldOffset`——Unsafe 族按需补 |
@@ -71,7 +75,7 @@
 | record `hashCode` 恒为 `Ok(0)` | R5 遗留 | `toString`/`equals` 已真实化，`hashCode` 未实现（S-7） |
 | ~~`monitorenter`/`monitorexit` 为 no-op~~ | **✅ 随 S-20 真实化（`4e6a2a2`）** | 监视器经 `monitor.rs` 侧表真实 acquire/release，单线程语义不变（可重入）；`[equiv-audit] monitor-mt` 已埋点观测。剩余：多线程调度语义随线程层立项 |
 | 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | S-10 剩余 | 见 remaining-issues S-10 |
-| stub-hit 分流：包装类边界层（**2 例**） | 166 归类 + 2026-09-22 全量 | TestOptional + **TestRefKindsFull（PASS→FAIL：装箱旁路 from_any 被对象化收编后揭开 valueOf stub，74f70dd 复现定性）**——走 T-4（包装类从字节码生成）路线或 P-3 扩清单 |
+| ~~stub-hit 分流：包装类边界层（2 例）~~ | **✅ 随散点三件包（`9b58672`）** | Integer.valueOf [-128,127] 缓存保身份 + toString；TestOptional/TestRefKindsFull 双绿。T-4（包装类走生成）仍是终态方向，缓存实现为过渡 |
 | JDK25 边界 stubs 遗留 | P-3 轮 | `DoubleToDecimal.split`（Formatter `%f/%e/%g`）、`FloatToDecimal`、`Random__nextInt_i_base`（E0432）——随 JDK25 用例按需补 |
 | ~~等价告警基建 `[equiv-audit]`~~ | **✅ 完成（ruva 方案 ③ 落地）** | 9 ID 发射点计数 + runner `[equiv]` 汇总 + run 族失败自动分类（`[run-classify]`：stub-hit/native-hit/s8-crash/runtime-panic）+ `--deny equiv[::id]/stub-hit`；生成代码零变化实证；monitor-mt 待 S-20 合入后补埋（一处计数器） |
 | e2e 差分补缺（等价探针） | ruva 吸收方案 ② | identityHashCode / finalize / 弱软虚引用 / Object.clone——166 实测零覆盖，探针用例随对应 S 条目修复排队 |
@@ -90,7 +94,7 @@
 | 接口槽位成员缺失（2 例） | 166 归类 | TestStreamNumeric E0407 / TestPriorityQueue E0599——槽位沿继承层次的签名/成员解析，K-6/S-18 后续增量 |
 | 一次性编译错（4 例） | 166 归类 | TestOverload 生成语法、TestStringSearch（escape 已修、转 run 族）、TestSwitchNull E0605（S-17 已归类 Integer/String 常量标签）、TestCollectorsMore E0061 |
 | ~~用户类 import 生成缺口~~ | **✅ 随 A-8 消失（2026-09-22 核验）** | TestCustomException 干净树编译通过（Ubuntu 2224f02+ 与 macOS 双确认）——E0425 被 A-8 的 `collect_referenced` 字节码引用集驱动导入扩展顺带修复；**S-19 #5 栈帧 diff 现在直达**（仅 `has stack frames` 1 行） |
-| 异常层次 upcast CCE（2 例） | §4.2 复验新增 | TestNestedTry / TestSuppressed：`IllegalStateException→RuntimeException`、`RuntimeException→Exception` 转换失败 |
+| ~~异常层次 upcast CCE（2 例）~~ | **✅ 随 macros 修（`548c08b`）** | 同上条 |
 | IR 结构化收敛 | T05/T06/T07/T50/T58/T61/T67 | RawExpr/RawStmt 消除，架构级 |
 
 ## P3 · 长期重构（不阻塞主线）
