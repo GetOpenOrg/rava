@@ -1,7 +1,7 @@
 # 从 codegen/instr/sim.py 中拆出
 
 from ...type_map import short_cls as _short_cls_g
-from ...stack import BOOL
+from ...stack import BOOL, erased_base
 from ...rs_ir import CastExpr, InstanceOfExpr, Lit, RawExpr, RsNamed
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, short_cls, effective_class_type_params as _effective_class_type_params
@@ -95,14 +95,14 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                     sim.push(expr, src_ty)
                 return True
             elif (src_name != 'Object' and cast_rust not in ('Object', '()')
-                  and (sim.type_var_bounds.get(src_name) or '').split('<')[0].strip()
-                  == cast_rust.split('<')[0].strip()):
+                  and erased_base(sim.type_var_bounds.get(src_name) or '')
+                  == erased_base(cast_rust)):
                 # 类型变量值转型到其上界的擦除类（`K c = task.makeChild(..)`，javac 按 K 的擦除
                 # 补 checkcast）：恒成立，值与静态类型都不变
                 sim.push(expr, src_ty)
                 return True
             elif src_name != 'Object' and cast_rust not in ('Object', '()', src_name):
-                if _is_subtype(cast_rust.split('<')[0], src_name.split('<')[0], registry):
+                if _is_subtype(erased_base(cast_rust), erased_base(src_name), registry):
                     # 合法向下转型（源静态类型是目标的父类，如 Node → TreeNode）：checkcast 语义 ——
                     # 经 Object 边界（保持对象标识与运行时类）按目标类取回子类视图，null 原样通过；
                     # 失败（运行时类不是目标族）抛 ClassCastException（S-1：Err 而非 panic）
@@ -119,7 +119,7 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 # 由使用点按真实类型转换（记成 Object 会让使用点漏掉装箱，E0277）
                 # 例外：源是具体类且静态上并未实现目标接口（交叉转型，运行时子类才实现，
                 # `(DirectBuffer) byteBuffer`）——接口视图只能经对象身份取得 → 装箱为 Object
-                _src_base = src_name.split('<')[0]
+                _src_base = erased_base(src_name)
                 _tgt_short = _short_cls_g(comment)
                 if (comment != _OBJECT_CLASS and not comment.startswith('[')
                         and _rust_type_to_binary(_src_base, registry)
@@ -160,28 +160,30 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             else:
                 target_for_subtype = target_rust
             obj_ty_str = render_type(val_ty_inst)
+            _obj_base = erased_base(obj_ty_str)
+            _tgt_base = erased_base(target_for_subtype)
             if obj_ty_str == 'Object':
                 # 运行时多态：通过 ObjectVTable fn 指针（Arch-2）检查类型继承链
                 # comment 本身就是 JVM 二进制名（如 java/util/List）
                 sim.push(InstanceOfExpr(val_expr_inst, comment), BOOL)
             elif obj_ty_str == target_for_subtype:
                 sim.push(Lit('true'), BOOL)
-            elif _is_subtype(obj_ty_str.split('<')[0], target_for_subtype.split('<')[0], registry):
+            elif _is_subtype(_obj_base, _tgt_base, registry):
                 sim.push(Lit('true'), BOOL)
-            elif _is_subtype(target_for_subtype.split('<')[0], obj_ty_str.split('<')[0], registry):
+            elif _is_subtype(_tgt_base, _obj_base, registry):
                 # obj 静态类型是 target 的超类：装箱后按运行时类判定（is_instance_of 按
                 # vtable 的 all_supertypes 匹配 binary name，含类自身）
                 val_s_inst = render_expr(val_expr_inst)
-                _boxed_inst = _coerce_to_object(val_s_inst, obj_ty_str.split('<')[0], registry,
+                _boxed_inst = _coerce_to_object(val_s_inst, _obj_base, registry,
                                                 sim.class_type_params)
                 sim.push(InstanceOfExpr(RawExpr(_boxed_inst), comment), BOOL)
-            elif _carrier_ident_enabled(obj_ty_str.split('<')[0], registry):
+            elif _carrier_ident_enabled(_obj_base, registry):
                 # obj 静态类型是接口载体（A-4 批次 3+）：实现者开放——运行时对象可
                 # 同时实现目标接口（`Consumer 变量 instanceof IntConsumer`，streams 的
                 # instanceof 快路径依赖）或属于目标类族，接口间「互不为子类型」不构成
                 # 编译期否证 → 装箱（解包 __ref，保持运行时类）后按运行时判定
                 val_s_inst = render_expr(val_expr_inst)
-                _boxed_inst = _coerce_to_object(val_s_inst, obj_ty_str.split('<')[0], registry,
+                _boxed_inst = _coerce_to_object(val_s_inst, _obj_base, registry,
                                                 sim.class_type_params)
                 sim.push(InstanceOfExpr(RawExpr(_boxed_inst), comment), BOOL)
             else:
