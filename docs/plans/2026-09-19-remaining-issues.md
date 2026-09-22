@@ -129,7 +129,9 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 - **终态**：rs_ir 增加 `CastExpr` / `InstanceOfExpr` 节点，所有消费方按节点而非字符串匹配；instanceof 全部按擦除类做运行时判定；失败的 checkcast 抛 `ClassCastException`（见 S-1）；协变 upcast 由 `java_class!` 生成的 `From` impl 覆盖。
 - **验收指标**：codegen 中对 `downcast` 字符串的模式匹配 = 0；`expect("ClassCastException")` = 0。
 
-### A-4 接口 carrier 未进入类型位置（T-2） 【批次 3-5 已落地（四任接力），主杠杆过半】
+### A-4 接口 carrier 未进入类型位置（T-2） 【批次 3-6 全落地，主战役收官】
+
+> **批次 6（2026-09-23，`0526bb4` 合入）**：CharSequence/Appendable 载体化 + decimal 三文件双侧签名对齐（§8 遗留 1 终态落地）+ `#[iface_carrier_views]` 补 JLS 4.10.3 接口位（数组协变/try_checkcast 此前对接口恒 false）+ sig_parse 第五擦除点早返回越过旧 `CharSequence→Object` 映射。记分牌：TSB 1010→913、TSC→912（各 −~100 = CharSequence 残余的兑现）。Spliterator 沿维持暂缓（阻塞面在特化桥接名/型解析，非类型位置，证据 §9）。**批次 3-6 累计：`Into<I>` 32931→~16900（−49%）；TSB 1879→913。**
 
 > **批次 3-5（2026-09-22，`627f6dc`+`9d61405`+`29893be`+`fef8d76`，`2bb2255` 合入）**：批次 3=Iterator 端到端穿透（`jvm_type.carrier_type` 单一决策点）；批次 4=集合族放量（List/Collection/Set/Map/Queue/Deque/ListIterator）；批次 5=函数式接口族（39 个 function 接口+Comparator/Comparable/Collector）+**载体 instanceof 运行时化**（接管期抓修的红线破口：载体静态类型折叠致 streams `instanceof IntConsumer` 快路径被常量条件消除）。**主度量：全测集 `Into<I>` 32931→17106（−48.0%）**；TSB 记分牌 1879→1010；from_any 2538→1836；try_cast_iface 4827→2376。**遗留**：CharSequence/Appendable 被手写 decimal 层签名阻塞（`appendTo(v, Object)` vs 载体 CharSequence——实证登记证据文档 §8，需 runtime 侧一轮适配）；Spliterator 沿暂缓；TSB 残余 1010 分布（Temporal ~211/Spliterator ~126/Node+Stream+Sink ~136）；type_surgery_sites 62→69（+7 边界适配位点，TypeIR 批次 2 消化）。**主会话合入期修复 stubs×a4b3 语义冲突**（JavaUtilCollectionAccess 手写 impl 签名对齐）。
 
