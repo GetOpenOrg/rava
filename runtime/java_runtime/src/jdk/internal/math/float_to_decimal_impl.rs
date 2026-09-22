@@ -259,7 +259,9 @@ fn _to_decimal_q_c_dk(d: &FloatToDecimal, q: i32, c: i32, dk: i32) -> Result<i32
         return _to_chars(d, if uin { s } else { t }, k + dk);
     }
     // 两者皆入 Rv：取更近 v 者（平局取偶）
-    let cmp = vb - (s + (t << 1));
+    // JDK：vb - (s + t << 1)——Java 移位优先级低于加法，即 2(s+t)（s/t 中点），
+    // 非先移 t（曾致 1/3f/16777216f 平局侧末位 +1）
+    let cmp = vb - ((s + t) << 1);
     _to_chars(d, if cmp < 0 || (cmp == 0 && (s & 0x1) == 0) { s } else { t },
               k + dk)
 }
