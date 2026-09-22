@@ -1034,9 +1034,15 @@ def main():
     if jobs == 0:
         jobs = os.cpu_count() or 4
 
-    sys.exit(run_tests(args.filter, args.no_run, args.update_expected, jobs, args.deny,
-                       use_failed=args.failed, failed_file=args.failed_file,
-                       skip_failed=args.skip_failed))
+    try:
+        sys.exit(run_tests(args.filter, args.no_run, args.update_expected, jobs, args.deny,
+                           use_failed=args.failed, failed_file=args.failed_file,
+                           skip_failed=args.skip_failed))
+    except KeyboardInterrupt:
+        # Ctrl-C：失败清单是写穿棘轮（每测即落盘），已完成的结果已保住；
+        # 子进程由 SIGINT 直接终止，这里只做安静退出，不打 traceback。
+        print(f"\n[interrupt] 用户中断——已完成测试的结果已写入失败清单与日志。")
+        sys.exit(130)
 
 
 if __name__ == "__main__":
