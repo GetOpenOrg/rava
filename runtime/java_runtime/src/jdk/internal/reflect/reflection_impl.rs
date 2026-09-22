@@ -4,6 +4,26 @@
 use crate::prelude::*;
 use super::reflection::Reflection;
 use crate::java::lang::Class;
+use crate::java::util::Set;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    /// 字段过滤登记表：声明类 binary name（斜线形态）→ 对反射字段枚举隐藏
+    /// 的字段名集合。`registerFieldsToFilter` 写入；`Class.getDeclaredFields`
+    /// （复数形态，class_impl.rs）消费——JDK 的 fieldFilterMap 协议：隐藏类
+    /// 实现细节字段（如 MethodHandles$Lookup 的 lookupClass / allowedModes），
+    /// 对单字段查询（getDeclaredField）不生效。运行时对象为 Rc 单线程形态，
+    /// 登记表随之线程内（与 unsafe__impl 的字段偏移登记表同族）。
+    static FIELD_FILTERS: RefCell<HashMap<std::string::String, Vec<std::string::String>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// 反射族内部：binary name 的登记过滤字段名集（未登记 → None）。消费方：
+/// Class.getDeclaredFields（复数形态，按名过滤）。
+pub(crate) fn __field_filter(binary_name: &str) -> Option<Vec<std::string::String>> {
+    FIELD_FILTERS.with(|t| t.borrow().get(binary_name).cloned())
+}
 
 /// Rust 符号路径 → Java 声明类 binary name（斜线形态）。
 ///
@@ -138,5 +158,31 @@ impl Reflection {
             }
         }
         Ok(Class::default())
+    }
+
+    /// static synchronized `registerFieldsToFilter(Class, Set)`：登记对
+    /// `getDeclaredFields`（复数形态）隐藏的字段名（JDK 用途：内部实现字段
+    /// 不进反射枚举）。参数形态取擦除 Object（调用点 codegen 的泛型擦除
+    /// 传参形态），内部还原 Set；元素按 String 收敛（协议消费方全部传
+    /// String 名单），非 String 元素忽略（JDK 泛型签名即 Set<String>）。
+    /// 重复登记取后者（JDK newMap.put 语义）。null 类按 JDK 抛 NPE。
+    pub fn registerFieldsToFilter(containingClass: Class, fieldNames: Object) -> Result<()> {
+        if containingClass.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let key = format!("{}", containingClass.__get_name()).replace('.', "/");
+        let set: Set<Object> = Set::<Object>::from(Clone::clone(&fieldNames));
+        let mut names: Vec<std::string::String> = Vec::new();
+        let mut it = set.iterator()?;
+        while it.hasNext()? {
+            let e = it.next()?;
+            if let Ok(s) = Object::from(e).try_cast::<crate::java::lang::String>("java/lang/String") {
+                names.push(format!("{}", s));
+            }
+        }
+        FIELD_FILTERS.with(|t| {
+            t.borrow_mut().insert(key, names);
+        });
+        Ok(())
     }
 }

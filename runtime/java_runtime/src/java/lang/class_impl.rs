@@ -88,6 +88,15 @@ impl Class {
         Ok(f)
     }
 
+    /// native `Class.isArray()`：数组类判定。数组类的名字是 JVM 描述符形态
+    /// （`[I`、`[Ljava.lang.String;`——for_class 的存储形态），首字符 `[`
+    /// 即数组（JLS：数组的运行时类是 JVM 创建的 Array 类型）。
+    /// 消费方：MethodHandles 链的 checkSymbolicClass / findVarHandle 类型检查。
+    #[jvm_native]
+    pub fn isArray(&self) -> Result<bool> {
+        Ok(format!("{}", self.__get_name()).starts_with('['))
+    }
+
     /// native `Class.getComponentType()`：数组类返回元素 Class，非数组返回 null。
     ///
     /// 数组类的名字是 JVM 描述符形态（`[I`、`[Ljava.lang.String;`、`[[I`——
