@@ -20,6 +20,7 @@ from .member_owner import (
     _resolve_method_owner, _root_virtual_methods,
     _declaring_interface, _close_open_type_args,
     _resolve_virtual_sig_params,
+    private_interface_method_target as _private_iface_target,
 )
 from .member_naming import (
     _mangle_if_overloaded, _resolve_bridge_target,
@@ -653,6 +654,36 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
     if _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
                                  params, ret, registry):
         return
+    # 接口私有实例方法（Java 9+，javac 自 default 体发射 invokeinterface）：JVM 解析后
+    # 直接执行接口自身的实现（非契约成员：不进 vtable、不被实现类继承，实现类同名
+    # 方法不构成覆盖）。定义侧在接口载体擦除实例化的固有 impl 块（class_writer 的
+    # iface-private 分支）——接收者静态类型即接口载体时直调，否则经 A-4 载体视图
+    # 转换（From<Impl> / From<Object> 均经 Object 边界保持对象身份）。
+    if registry and cls:
+        _pv_bin = _private_iface_target(cls, mname, f"({''.join(params)}){ret}", registry)
+        if _pv_bin is not None:
+            _pv_short = short_cls(_pv_bin)
+            _pv_mname = _safe_field(_mangle_if_overloaded(_pv_bin, mname, comment, registry))
+            _pv_tps = _effective_class_type_params(registry[_pv_bin], registry)
+            _pv_targs = f"<{', '.join(['Object'] * len(_pv_tps))}>" if _pv_tps else ''
+            _pv_arg_str = ', '.join(args)
+            rust_ret_pv = jvm_to_rust(ret, registry)
+            if obj_ty.split('<')[0].strip() == _pv_short:
+                _pv_recv_e = obj_e
+            elif obj_e == 'this':
+                _pv_recv_e = (f"Into::<{_pv_short}{_pv_targs}>::into(Clone::clone(this))")
+            elif obj_e.startswith('&'):
+                _pv_recv_e = (f"Into::<{_pv_short}{_pv_targs}>::into(Clone::clone({obj_e[1:]}))")
+            else:
+                _pv_recv_e = (f"Into::<{_pv_short}{_pv_targs}>::into(Clone::clone(&{obj_e}))")
+            _pv_call = f"{_pv_recv_e}.{_pv_mname}({_pv_arg_str})?"
+            if rust_ret_pv == '()':
+                sim.emit(RawStmt(f"{_pv_call};"))
+            else:
+                v = sim.fresh()
+                sim.emit(RawStmt(f"let {v}: {rust_ret_pv} = {_pv_call};"))
+                sim.push(Var(v), RsNamed(rust_ret_pv))
+            return
     # 若接收方 Rust 类型是 java_runtime 手写类：API 名面固定，仅根类 Object 的
     # 同名重载（wait(J)/wait(JI) → wait_l/wait_l_i，S-20）按描述符后缀取名
     obj_base = obj_ty.split('<')[0].strip()  # 去泛型后缀（ArrayList<T> → ArrayList）

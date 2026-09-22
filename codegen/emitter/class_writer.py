@@ -236,6 +236,41 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
             _iface_lambda_blocks.append(_lam_block)
             LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, _lam_rust)
             continue
+        if _is_iface and not m.is_static and not m.is_synthetic \
+                and (m.access_flags & 0x0002) \
+                and (m.name, m.descriptor[:m.descriptor.index(')') + 1]) not in _root_method_keys:
+            # Java 9+ 接口私有实例方法：非契约成员（不进 Iface__VTable、不被实现类
+            # 继承——JVM 对 invokeinterface 私有目标的解析是直接执行接口自身的实现，
+            # 实现类同名方法不构成覆盖）。与 G-10 lambda 体同形：落接口载体擦除
+            # 实例化的固有 impl 块（java_class! 块之外，不产生 vtable / 分派成员），
+            # 调用侧（invoke_virtual 的私有接口方法分支）经载体路由。
+            _pv_ctparams = ['Object'] * len(class_type_params) if class_type_params else []
+            _pv_in_chain = (call_chain is None or (ci.name, m.name, m.descriptor) in call_chain)
+            _pv_rust = (mangle_name(m.name, m.descriptor)
+                        if method_name_is_mangled(ci, m, registry) else m.name)
+            if _pv_rust in used_rust_names:
+                used_rust_names[_pv_rust] += 1
+                _pv_rust = f'{_pv_rust}_{used_rust_names[_pv_rust]}'
+            else:
+                used_rust_names[_pv_rust] = 0
+            try:
+                _pv_block = gen_method_body(
+                    m, ci, registry=registry,
+                    class_type_params=_pv_ctparams,
+                    overloaded_names=overloaded_names,
+                    rust_name=_pv_rust,
+                ) if (_pv_in_chain and not stub_bodies) else _gen_native_stub(
+                    m, ci, rust_name=_pv_rust, registry=registry,
+                    class_type_params=_pv_ctparams)
+            except CfgAuditError:
+                raise
+            except Exception as e:
+                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}(iface-private)", repr(e))
+                _pv_block = _gen_native_stub(m, ci, rust_name=_pv_rust, registry=registry,
+                                             class_type_params=_pv_ctparams)
+            _iface_lambda_blocks.append(_pv_block)
+            LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, safe_ident(_pv_rust))
+            continue
         if _is_iface and not m.is_static and (
                 m.is_synthetic or (m.access_flags & 0x0002) or (m.name, m.descriptor[:m.descriptor.index(')') + 1]) in _root_method_keys):
             continue  # 其余私有 / 合成实例方法不是接口契约的一部分
@@ -457,7 +492,9 @@ def _emit_interface_default_inheritance(ci, registry, call_chain, stub_bodies,
             if _ici.interfaces:
                 _pre_iface_queue.extend(_ici.interfaces)
             for _dm in _ici.methods:
-                if not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic and _dm.name not in ('<init>', '<clinit>'):
+                if (not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic
+                        and not (_dm.access_flags & 0x0002)
+                        and _dm.name not in ('<init>', '<clinit>')):
                     _dm_pp = _param_part(_dm.descriptor)
                     # 子接口覆盖父接口的同签名 default（如子接口重新声明 and(P)）只注入一次，
                     # 计数也必须按 (name, 参数签名) 去重，否则单一方法被误判为重载而 mangle
@@ -480,7 +517,9 @@ def _emit_interface_default_inheritance(ci, registry, call_chain, stub_bodies,
             if iface_ci.interfaces:
                 iface_queue.extend(iface_ci.interfaces)
             for dm in iface_ci.methods:
-                if dm.is_abstract or dm.is_static or dm.is_synthetic or dm.name in ('<init>', '<clinit>'):
+                if (dm.is_abstract or dm.is_static or dm.is_synthetic
+                        or (dm.access_flags & 0x0002)
+                        or dm.name in ('<init>', '<clinit>')):
                     continue
                 if (dm.name, dm.descriptor) in existing_sigs:
                     continue

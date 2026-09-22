@@ -234,6 +234,36 @@ def _resolve_interface_special_target(iface_binary: str, mname: str, descriptor:
     return ''
 
 
+def private_interface_method_target(iface_binary: str, mname: str, descriptor: str,
+                                    registry: 'dict | None') -> 'str | None':
+    """invokevirtual / invokeinterface 常量池类为接口且目标为私有实例方法（Java 9+）
+    时的声明接口 binary；非此形态返回 None。解析与 _resolve_interface_special_target
+    同源（自身优先、广度遍历父接口、描述符精确匹配），额外要求命中方法带 ACC_PRIVATE
+    且有方法体（私有方法必然非抽象）。"""
+    if not registry:
+        return None
+    root = registry.get(iface_binary)
+    if root is None or not root.is_interface:
+        return None
+    queue: list[str] = [iface_binary]
+    seen: set[str] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur in seen:
+            continue
+        seen.add(cur)
+        ci = registry.get(cur)
+        if ci is None:
+            continue
+        for m in ci.methods:
+            if (m.name == mname and m.descriptor == descriptor
+                    and not m.is_static and not m.is_abstract
+                    and (m.access_flags & 0x0002)):
+                return cur
+        queue.extend(ci.interfaces or [])
+    return None
+
+
 def interface_special_member_name(owner_binary: str, mname: str, descriptor: str,
                                   registry: dict | None) -> str:
     """`Iface.super.m(...)` 在实现类中的落点成员名：`Iface_super_m`（m 在接口内重载时带描述符后缀）。
