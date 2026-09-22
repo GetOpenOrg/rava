@@ -11,6 +11,7 @@
 use crate::prelude::*;
 use super::java_util_collection_access::JavaUtilCollectionAccess__VTable;
 use crate::java::util::ImmutableCollections;
+use crate::java::util::List;
 use std::rc::Rc;
 
 /// `java/util/ImmutableCollections$1` 的手写实现对象（JDK 的匿名访问器）。
@@ -20,11 +21,11 @@ use std::rc::Rc;
 pub(super) struct ImmutableCollectionsCollAccess;
 
 impl JavaUtilCollectionAccess__VTable for ImmutableCollectionsCollAccess {
-    fn listFromTrustedArray(&self, arg0: JArray<Object>) -> Result<Object> {
+    fn listFromTrustedArray(&self, arg0: JArray<Object>) -> Result<List<Object>> {
         ImmutableCollections::listFromTrustedArray(arg0)
     }
 
-    fn listFromTrustedArrayNullsAllowed(&self, arg0: JArray<Object>) -> Result<Object> {
+    fn listFromTrustedArrayNullsAllowed(&self, arg0: JArray<Object>) -> Result<List<Object>> {
         ImmutableCollections::listFromTrustedArrayNullsAllowed(arg0)
     }
 }
