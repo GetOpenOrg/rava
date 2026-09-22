@@ -120,6 +120,26 @@ impl Unsafe {
         Ok(THE_UNSAFE.with(Clone::clone))
     }
 
+    /// `ensureClassInitialized(Class)`：确保类初始化完成（HotSpot 走 VM 类初始化）。
+    /// 本运行的类初始化由翻译层的 `__class_init` 惰性协议承载（首次主动使用
+    /// 即初始化）——无需（也无法）从手写层按 Class 对象强制触发，no-op 即
+    /// 与惰性协议一致（初始化只是推迟到真实首次使用）。
+    /// 消费链：VarHandle.<clinit>（VarHandleGuards 的预初始化）、
+    /// VarHandles.makeFieldHandle 的静态字段分支。
+    #[jvm_boundary]
+    pub fn ensureClassInitialized(&self, _c: Class) -> Result<()> {
+        Ok(())
+    }
+
+    /// `shouldBeInitialized(Class)`：类是否已初始化。惰性 `__class_init` 协议
+    /// 下「未初始化」只在首次主动使用前可观察——对查询方恒「已初始化」
+    /// （false）等价于把初始化时机推迟到真实首次使用，与 ensureClassInitialized
+    /// 的 no-op 语义自洽。
+    #[jvm_boundary]
+    pub fn shouldBeInitialized(&self, _c: Class) -> Result<bool> {
+        Ok(false)
+    }
+
 
     /// 字段偏移量：HotSpot 返回对象布局的真实偏移；原生二进制没有 C 布局对象，
     /// 字段经名字访问，偏移量只作不透明标识使用（AtomicLong 等把它存进 long 字段

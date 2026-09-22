@@ -18,4 +18,23 @@ impl VM {
     pub fn getSavedProperty(_key: String) -> Result<String> {
         Ok(String::default())
     }
+
+    /// `setJavaLangInvokeInited()` / `isJavaLangInvokeInited()`：java.lang.invoke
+    /// 初始化完成标记（MethodHandleNatives.<clinit> 尾声置位；读者用它区分
+    /// 「引导早期」与「机制就绪」）。原生二进制的引导顺序由 BFS 闭包静态
+    /// 决定，标记照 JDK 语义置位/查询（线程内）。
+    pub fn setJavaLangInvokeInited() -> Result<()> {
+        thread_local! {
+            static INVOKE_INITED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        INVOKE_INITED.with(|f| f.set(true));
+        Ok(())
+    }
+
+    pub fn isJavaLangInvokeInited() -> Result<bool> {
+        thread_local! {
+            static INVOKE_INITED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        Ok(INVOKE_INITED.with(|f| f.get()))
+    }
 }
