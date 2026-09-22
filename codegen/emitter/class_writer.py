@@ -848,6 +848,14 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
             _rf_ty = jvm_to_rust(_rf.descriptor, registry)
             _rf_get = f'this.__get_{safe_ident(_rf.name)}()'
             if _rf_ty in _PRIMITIVE_RUST_TYPES or _rf_ty == jvm_to_rust(f'L{STRING_CLASS};', registry):
+                # Java 浮点分量按 Double/Float.toString 表示渲染（ObjectMethods 语义）：
+                # 整值保留 .0（2.0 不得压成 2），NaN/Infinity 同 Java 文本。与字符串拼接
+                # （_gen_string_concat）同一 java_fmt_* 入口；其余基本类型 Rust Display
+                # 与 Java String.valueOf 一致，直取。
+                if _rf_ty == 'f64':
+                    return f'java_fmt_f64({_rf_get})'
+                if _rf_ty == 'f32':
+                    return f'java_fmt_f32({_rf_get})'
                 return _rf_get
             return f'Into::<Object>::into({_rf_get}).toString()?'
         # 方法体与字节码翻译的方法同一约定：`let this = self;` + 字段访问器
