@@ -138,14 +138,14 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     // ══════════════════════════════════════════════════════════════════════════
 
     let obj_vtable_for_wrapper = if !binary_name.is_empty() {
-        let to_string_fwd: TokenStream2 = if ctx.meta.to_string_vtable.is_some() {
-            quote! {
-                fn __obj_str(&self) -> ::std::string::String {
-                    ObjectVTable::__obj_str(&*self.vtable)
-                }
+        // toString 在 Java 恒为虚方法：wrapper 一律把字符串化经 vtable 分派到运行时类
+        // （祖先视图（From<Child> for Ancestor）的 wrapper 由此获得多态 toString——
+        // 如 Number 视图转发 Integer 的 toString；未覆盖类落到 __inner 的默认
+        // type_name，与既有输出一致。hashCode/equals 同此形态，本就无条件转发）。
+        let to_string_fwd: TokenStream2 = quote! {
+            fn __obj_str(&self) -> ::std::string::String {
+                ObjectVTable::__obj_str(&*self.vtable)
             }
-        } else {
-            quote! {}
         };
         let hash_code_fwd: TokenStream2 = quote! {
             fn hashCode(&self) -> i32 { ObjectVTable::hashCode(&*self.vtable) }

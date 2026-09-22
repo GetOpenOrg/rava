@@ -236,6 +236,41 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
             _iface_lambda_blocks.append(_lam_block)
             LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, _lam_rust)
             continue
+        if _is_iface and not m.is_static and not m.is_synthetic \
+                and (m.access_flags & 0x0002) \
+                and (m.name, m.descriptor[:m.descriptor.index(')') + 1]) not in _root_method_keys:
+            # Java 9+ 接口私有实例方法：非契约成员（不进 Iface__VTable、不被实现类
+            # 继承——JVM 对 invokeinterface 私有目标的解析是直接执行接口自身的实现，
+            # 实现类同名方法不构成覆盖）。与 G-10 lambda 体同形：落接口载体擦除
+            # 实例化的固有 impl 块（java_class! 块之外，不产生 vtable / 分派成员），
+            # 调用侧（invoke_virtual 的私有接口方法分支）经载体路由。
+            _pv_ctparams = ['Object'] * len(class_type_params) if class_type_params else []
+            _pv_in_chain = (call_chain is None or (ci.name, m.name, m.descriptor) in call_chain)
+            _pv_rust = (mangle_name(m.name, m.descriptor)
+                        if method_name_is_mangled(ci, m, registry) else m.name)
+            if _pv_rust in used_rust_names:
+                used_rust_names[_pv_rust] += 1
+                _pv_rust = f'{_pv_rust}_{used_rust_names[_pv_rust]}'
+            else:
+                used_rust_names[_pv_rust] = 0
+            try:
+                _pv_block = gen_method_body(
+                    m, ci, registry=registry,
+                    class_type_params=_pv_ctparams,
+                    overloaded_names=overloaded_names,
+                    rust_name=_pv_rust,
+                ) if (_pv_in_chain and not stub_bodies) else _gen_native_stub(
+                    m, ci, rust_name=_pv_rust, registry=registry,
+                    class_type_params=_pv_ctparams)
+            except CfgAuditError:
+                raise
+            except Exception as e:
+                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}(iface-private)", repr(e))
+                _pv_block = _gen_native_stub(m, ci, rust_name=_pv_rust, registry=registry,
+                                             class_type_params=_pv_ctparams)
+            _iface_lambda_blocks.append(_pv_block)
+            LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, safe_ident(_pv_rust))
+            continue
         if _is_iface and not m.is_static and (
                 m.is_synthetic or (m.access_flags & 0x0002) or (m.name, m.descriptor[:m.descriptor.index(')') + 1]) in _root_method_keys):
             continue  # 其余私有 / 合成实例方法不是接口契约的一部分
@@ -457,7 +492,9 @@ def _emit_interface_default_inheritance(ci, registry, call_chain, stub_bodies,
             if _ici.interfaces:
                 _pre_iface_queue.extend(_ici.interfaces)
             for _dm in _ici.methods:
-                if not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic and _dm.name not in ('<init>', '<clinit>'):
+                if (not _dm.is_abstract and not _dm.is_static and not _dm.is_synthetic
+                        and not (_dm.access_flags & 0x0002)
+                        and _dm.name not in ('<init>', '<clinit>')):
                     _dm_pp = _param_part(_dm.descriptor)
                     # 子接口覆盖父接口的同签名 default（如子接口重新声明 and(P)）只注入一次，
                     # 计数也必须按 (name, 参数签名) 去重，否则单一方法被误判为重载而 mangle
@@ -480,7 +517,9 @@ def _emit_interface_default_inheritance(ci, registry, call_chain, stub_bodies,
             if iface_ci.interfaces:
                 iface_queue.extend(iface_ci.interfaces)
             for dm in iface_ci.methods:
-                if dm.is_abstract or dm.is_static or dm.is_synthetic or dm.name in ('<init>', '<clinit>'):
+                if (dm.is_abstract or dm.is_static or dm.is_synthetic
+                        or (dm.access_flags & 0x0002)
+                        or dm.name in ('<init>', '<clinit>')):
                     continue
                 if (dm.name, dm.descriptor) in existing_sigs:
                     continue
@@ -646,6 +685,9 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
         # 覆盖判定键：vtable 槽位（name + 参数描述符部分，返回类型协变不计）
         _vinh_existing: set[tuple] = {
             (m.name, _vinh_param_part(m.descriptor)) for m in visible_methods}
+        # 本轮已发射的槽位（name + 参数部分）：链上多个祖先重复声明同签名（含
+        # 逐级协变重声明）时只落一次，桥路径不受 _vinh_existing 初始集抑制
+        _vinh_done: set[tuple] = set()
         _vinh_super = ci.super_class
         while _vinh_super and _vinh_super != _OBJECT_CLASS and _vinh_super in registry:
             _vinh_is_user = '/' not in _vinh_super   # 链模式逐祖先判定
@@ -653,7 +695,25 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
             if _vinh_sci is None:
                 break
             for _vm in _vinh_sci.methods:
-                if (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_existing:
+                # 桥方法（ACC_BRIDGE）是槽位覆盖的语义载体：javac 为两类覆盖合成
+                # 「与祖先槽位精确同签名」的桥——
+                #   - 泛型父类/接口的参数位擦除覆盖（put(Object) → put(String)）
+                #   - 协变返回覆盖（value()Number → value()Integer）
+                # 桥体（checkcast / 转发 + 返回位上转）翻译后落槽，替代按本类视角
+                # 代入的存根（签名与擦除槽位不符，E0053）或描述符不匹配的漏判。
+                _vm_bridge = None
+                if (not _vm.is_static and not _vm.is_constructor
+                        and _vm.name not in ('<init>', '<clinit>')):
+                    _has_exact = any(m.name == _vm.name and m.descriptor == _vm.descriptor
+                                     for m in visible_methods)
+                    if not _has_exact:
+                        _vm_bridge = next((b for b in ci.methods
+                                           if (b.access_flags & 0x0040) and not b.is_static
+                                           and b.name == _vm.name
+                                           and b.descriptor == _vm.descriptor), None)
+                if (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_existing \
+                        and (_vm_bridge is None
+                             or (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_done):
                     continue
                 if _vm.is_static or _vm.is_constructor or _vm.name in ('<init>', '<clinit>'):
                     continue
@@ -666,10 +726,14 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     continue  # JDK 链：调用链未收录的祖先虚方法不登记（无体可转发，
                     # 留空槽位 = 声明类 trait default，与既有行为一致）
                 _vinh_existing.add((_vm.name, _vinh_param_part(_vm.descriptor)))
+                if (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_done:
+                    continue
+                _vinh_done.add((_vm.name, _vinh_param_part(_vm.descriptor)))
                 if not _vinh_is_user:
-                    # JDK 链：槽位填补经继承成员转发（inherited_gen 第二阶段生成）。
-                    # 登记键 = (接收者, Java 方法名, 参数描述符部分)，与调用点触发
-                    # 的需求同一账本（去重 / bridge 优先级 / 导入全部复用）
+                    # JDK 链：槽位填补经继承成员转发（inherited_gen 第二阶段生成，
+                    # 桥成员槽位由其 _bridge_override_member 机制处理——virtual_in 归
+                    # 真实声明链）。登记键 = (接收者, Java 方法名, 参数描述符部分)，
+                    # 与调用点触发的需求同一账本（去重 / bridge 优先级 / 导入全部复用）
                     if not _vm.is_abstract:
                         _anc_hand = ((new_format_map or {}).get(_vinh_super) or {}).get('methods', ())
                         _hand_hit = (safe_ident(_vm.name) in _anc_hand
@@ -683,10 +747,69 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                 _vm_virt_in = resolve_virtual_slot(_vm, _vinh_sci, registry, new_format_map)
                 if not _vm_virt_in:
                     continue  # 非虚方法，不继承
+                if _vm_bridge is not None:
+                    # 槽位是否已由本类可见覆盖经协变落位填充（返回位 Object 化可表达的
+                    # 协变覆盖，如 ClassCache$1.computeValue → ClassValue 槽）：已填则
+                    # 桥再发射会与真实覆盖在 vtable impl 重复（E0201），跳过
+                    _slot_filled = any(
+                        (not m.is_static and not m.is_constructor and m.name == _vm.name
+                         and resolve_virtual_slot(m, ci, registry, new_format_map) == _vm_virt_in)
+                        for m in visible_methods)
+                    if _slot_filled:
+                        continue
                 _vm2 = _copy3.copy(_vm)
                 _vm2.class_name = ci.name
                 _vm2.virtual_in = _vm_virt_in
                 _vm_attr = _java_method_attr(_vm2)
+                if _vm_bridge is not None and _vm_in_cc and not stub_bodies:
+                    # 桥 wrapper 名：与可见方法同名即 mangle（可见方法与桥常仅返回位不同，
+                    # 重载判定可能漏计桥自身）；同名同参（仅返回不同，参数位 mangle 无法
+                    # 区分）→ 沿 Iface_super_m 命名约定取唯一名，槽位名经 vtable_name 传递
+                    _vb_base = _vm_bridge.name
+                    if any(m.name == _vm_bridge.name for m in visible_methods):
+                        _same_params = any(
+                            m.name == _vm_bridge.name
+                            and _vinh_param_part(m.descriptor) == _vinh_param_part(_vm_bridge.descriptor)
+                            for m in visible_methods)
+                        if _same_params:
+                            from ..instr.member_owner import (
+                                interface_special_member_name as _ismn_vb,
+                            )
+                            from ..instr.hierarchy import _rust_type_to_binary as _rtb_vb
+                            _vb_owner_bin = (_rtb_vb(_vm_virt_in, registry) or _vinh_super)
+                            _vb_base = safe_ident(_ismn_vb(
+                                _vb_owner_bin, _vm_bridge.name, _vm_bridge.descriptor, registry))
+                        else:
+                            _vb_base = mangle_name(_vm_bridge.name, _vm_bridge.descriptor)
+                    _vb2 = _copy3.copy(_vm_bridge)
+                    _vb2.class_name = ci.name
+                    _vb2.virtual_in = _vm_virt_in
+                    if _vm_virt_in and _vm_virt_in != short_cls(ci.name):
+                        _slot_name = slot_member_rust_name(_vm2, ci, registry, new_format_map)
+                        if _slot_name and _slot_name != _vb_base:
+                            _vb2.vtable_name = _slot_name
+                        _vb2.vtable_erasure = _override_vtable_erasure(_vm2, ci, registry)
+                    try:
+                        _vb_body = gen_method_body(
+                            _vm_bridge, ci, registry=registry,
+                            class_type_params=class_type_params,
+                            overloaded_names=overloaded_names,
+                            rust_name=_vb_base,
+                            in_vtable_body=True,
+                        )
+                        method_blocks.append(_java_method_attr(_vb2) + '\n' + _vb_body)
+                        continue
+                    except CfgAuditError:
+                        raise
+                    except Exception as e:
+                        # 桥体翻译失败：本类已有同参可见覆盖（协变/参数位）时回退旧
+                        # 行为（跳过——槽位由既有机制处理），避免与真实覆盖重复定义；
+                        # 无可见覆盖（抽象祖先参数位）时保持存根
+                        _CFG_STATS.record_stub_fallback(f"{ci.name}.{_vm.name}:{_vm.descriptor}(bridge)", repr(e))
+                        if any(m.name == _vm.name
+                               and _vinh_param_part(m.descriptor) == _vinh_param_part(_vm.descriptor)
+                               for m in visible_methods):
+                            continue
                 if _vm.is_native or _vm.is_abstract or not _vm_in_cc or stub_bodies:
                     _vm_stub = _gen_native_stub(_vm2, ci, registry=registry, class_type_params=class_type_params)
                     method_blocks.append(_vm_attr + '\n' + _vm_stub)
@@ -750,16 +873,28 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
                         f'pub fn hashCode(&self) -> Result<i32> {{\n    Ok(0)\n}}')
                 elif 'pub fn equals(' in block:
                     attr = block[:block.index('pub fn equals(')]
+                    from ..jvm_type import Primitive as _JvmPrimitive, ClassRef as _JvmClassRef
+                    from ..jvm_type import from_descriptor as _jvm_from_desc
                     field_cmps = []
                     for f in record_fields:
                         fname = safe_ident(f.name)
-                        rust_fty = jvm_to_rust(f.descriptor, registry)
-                        if rust_fty == 'String':
+                        # 分量比较形态经 jvm_type 代数判定（规则六：类型决策走类型对象）：
+                        # 基本分量 == ；String 分量值等（to_string() ==，与既有路径一致）；
+                        # 其余引用分量（含泛型 T，擦除描述符 Ljava/lang/Object;）按 javac
+                        # 字节码语义走擦除 Object.equals 虚分派（运行时类覆盖优先，
+                        # Box<Integer> 的 Integer.equals 即值等）
+                        _f_ty = _jvm_from_desc(f.descriptor)
+                        if isinstance(_f_ty, _JvmPrimitive):
+                            field_cmps.append(f'this.__get_{fname}() == other.__get_{fname}()')
+                        elif isinstance(_f_ty, _JvmClassRef) and _f_ty.binary == STRING_CLASS:
                             field_cmps.append(
                                 f'this.__get_{fname}().to_string() == other.__get_{fname}().to_string()'
                             )
                         else:
-                            field_cmps.append(f'this.__get_{fname}() == other.__get_{fname}()')
+                            field_cmps.append(
+                                f'Into::<Object>::into(this.__get_{fname}())'
+                                f'.equals(Into::<Object>::into(other.__get_{fname}()))?'
+                            )
                     cmp_expr = ' && '.join(field_cmps) if field_cmps else 'true'
                     new_blocks.append(attr +
                         f'pub fn equals(&self, mut o: Object) -> Result<bool> {{\n'

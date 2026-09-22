@@ -228,6 +228,20 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
     elif same_base and 'Object' in ety_str and 'Object' not in ty_str:
         tv = 'Default::default()'
         ty = ety
+    elif same_base and '<' in ty_str and '<' in ety_str:
+        # 同一泛型类的不同实例化（静态泛型方法的类型变量解与擦除元素臂——andTree 的
+        # CompletableFuture<Void> 与 cfs.get 的 <Object>）：合并点取擦除实例化
+        #（与菱形落定同形态），各臂经 Object 边界重建（From<Object> for X<A> 对任意
+        # A 成立，保持对象标识；运行时类校验由视图承载）
+        from ..type_args import split_rust_type_args as _split_rust_args
+        _base = erased_base(ty_str)
+        _arity = max(len(_split_rust_args(ty_str)), len(_split_rust_args(ety_str)))
+        _tgt = f"{_base}<{', '.join(['Object'] * _arity)}>"
+        if ty_str != _tgt:
+            tv = f"<{_tgt} as ::std::convert::From<Object>>::from(Object::from({tv}))"
+        if ety_str != _tgt:
+            ev = f"<{_tgt} as ::std::convert::From<Object>>::from(Object::from({ev}))"
+        ty = _str_to_rs_type(_tgt)
     elif ty_str not in _SCALAR_TYPES and ety_str not in _SCALAR_TYPES and not same_base:
         # 两臂是无公共父类的引用类型（含类型变量）：按 JVM 校验器的类型合并规则，
         # 合并点类型为根类 → 两臂各自上转

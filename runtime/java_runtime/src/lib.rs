@@ -223,6 +223,22 @@ pub fn _is_jnull<T: 'static>(val: &T) -> bool {
 }
 
 
+/// S-17: typeSwitch String 常量标签判定（SwitchBootstraps 语义 `label.equals(selector)`：
+/// selector 非 String 恒 false）。经运行时类判定 + `__obj_str` 内容比较，不依赖闭包内
+/// 是否生成 java/lang/String 类型定义（K-2 规则：运行时手写层不引用转译类）。
+#[inline]
+pub fn _ts_str_label_eq(label: &str, sel: &Object) -> bool {
+    sel.is_instance_of("java/lang/String") && sel.0.__obj_str() == label
+}
+
+/// S-17: typeSwitch Integer 常量标签判定（selector instanceof Integer 且值相等；
+/// Integer 的 `__obj_str` 为十进制表示，与 i32 的 Display 逐字符一致）。
+#[inline]
+pub fn _ts_int_label_eq(label: i32, sel: &Object) -> bool {
+    sel.is_instance_of("java/lang/Integer") && sel.0.__obj_str() == std::format!("{}", label)
+}
+
+
 /// MutexHolder：包装 parking_lot::ReentrantMutex，为 InternalLock 等需要 PartialEq 的结构体使用
 #[derive(Clone)]
 pub struct MutexHolder(pub std::sync::Arc<parking_lot::ReentrantMutex<()>>);
@@ -293,6 +309,8 @@ pub mod prelude {
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
     pub use super::_is_jnull;
+    pub use super::_ts_str_label_eq;
+    pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
 
     pub use super::java_fmt_f64;

@@ -137,21 +137,30 @@ def _gen_type_switch(sim, comment: str, registry) -> None:
         coerced = _coerce_to_object(render_expr(sel_e), sel_ty, registry, sim.class_type_params)
         obj_expr = sim.fresh_let('__ts_sel', RawExpr(coerced), RsNamed('Object'))
     obj_s = render_expr(obj_expr)
-    if any(kind != 'c' for kind, _ in labels):
-        # String / Integer 常量标签（`case "x"` / `case 42` 于 Object selector）与
-        # EnumDesc：等值判定需 Objects.equals / integerEqCheck（Number 族 intValue
-        # 比较）桥，暂未落地 —— 保持可见的占位失败，归类报告，不静默给错值
+    if any(kind not in ('c', 's', 'i') for kind, _ in labels):
+        # EnumDesc 等（CONSTANT_Dynamic 形态）暂未落地 —— 保持可见的占位失败，
+        # 归类报告，不静默给错值
         sim.emit(RawStmt(
             '/* TODO S-17: typeSwitch 含未支持的标签形态（'
-            + ','.join(kind for kind, _ in labels if kind != 'c')
+            + ','.join(kind for kind, _ in labels if kind not in ('c', 's', 'i'))
             + '），退化为占位 */'))
         sim.push(RawExpr('Object::default()'), RsNamed('Object'))
         return
-    # null → -1；否则按标签序判定（`restart <= i` 守卫实现 restart 语义）；未命中 → len
+    # null → -1；否则按标签序判定（`restart <= i` 守卫实现 restart 语义）；未命中 → len。
+    # 标签谓词（SwitchBootstraps.typeSwitch 语义）：
+    #   'c' Class 标签 = 运行时 instanceof；'s' String 常量 = label.equals(selector)；
+    #   'i' Integer 常量 = selector instanceof Integer 且值相等（判定桥见 java_runtime
+    #   lib.rs 的 _ts_str_label_eq / _ts_int_label_eq，经 prelude 导出）
+    import json as _json_ts
     chain = f'if _is_jnull(&{obj_s}) {{ -1 }} else '
-    for i, (_kind, bin_name) in enumerate(labels):
-        chain += (f'if {restart_s} <= {i} && {obj_s}.is_instance_of("{bin_name}") '
-                  f'{{ {i} }} else ')
+    for i, (_kind, _lval) in enumerate(labels):
+        if _kind == 'c':
+            _pred = f'{obj_s}.is_instance_of("{_lval}")'
+        elif _kind == 's':
+            _pred = f'_ts_str_label_eq({_json_ts.dumps(_lval)}, &{obj_s})'
+        else:  # 'i'
+            _pred = f'_ts_int_label_eq({_lval}, &{obj_s})'
+        chain += f'if {restart_s} <= {i} && {_pred} {{ {i} }} else '
     chain += f'{{ {len(labels)} }}'
     idx = sim.fresh_let('__ts_idx', RawExpr(chain), I32)
     sim.push(idx, I32)
@@ -265,13 +274,15 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     # 函数式接口的擦除签名（samtype）与实现方法签名之间的适配：
                     # SAM 实参是擦除的 Object、实现方法形参是具体类 → 拆箱（目标类型由形参推断）
                     _impl_params = parse_descriptor_params(_impl_desc)
-                    if (_impl_ci is None and not _impl_is_ctor
-                            and len(_impl_params) + 1 == len(_sam_params)):
-                        # impl 类不在 registry（java/lang/Object 等运行时层类）：其方法
-                        # 是 &self 实例方法（描述符不含接收者），SAM 实参恰多一个 →
-                        # 第一个 SAM 实参是接收者（`Object::toString`，A-3 修复 E0308：
-                        # 此前按静态形态传值，&self 形参收到 Object 报 E0308）
-                        _impl_is_instance = True
+                    if (_impl_ci is None and not _impl_is_ctor):
+                        # impl 类不在 registry（java/lang/Object 等运行时手写层类）：其实例
+                        # 方法是 &self 形态（描述符不含接收者）。接收者来自两处之一：
+                        #   - SAM 首参（未绑定 X::m，A-3）：SAM 实参数恰比描述符形参多一个
+                        #   - 捕获首值（绑定 recv::m / this::m）：捕获数恰比描述符形参多一个
+                        if len(_impl_params) + 1 == len(_sam_params):
+                            _impl_is_instance = True
+                        elif _cap_var_names and len(_cap_var_names) == len(_impl_params) + 1:
+                            _impl_is_instance = True
                     _call_cap_list = [f'Clone::clone(&{v})' for v in _cap_var_names]
                     _call_sam_list = list(_sam_anames)
                     from ...jvm_type import carrier_type_for_ident as _carrier_of
@@ -362,7 +373,13 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                                     _cap_var_names[_ci_idx], _cap_expected, box_first=True)
                     if _impl_is_instance and _call_cap_list:
                         # 捕获 this 的 lambda / 绑定接收者的方法引用：第一个捕获值是接收者
-                        _call_cap_list[0] = f'&{_cap_var_names[0]}'
+                        if _impl_ci is None and not _impl_is_ctor:
+                            # 实现类在运行时手写层（java/lang/Object 等）：UFCS 第一实参是
+                            # &self（实现类形态）——捕获接收者是调用点子类实例，先经
+                            # Object 边界上转（保持对象身份，虚分派在 vtable 上进行）
+                            _call_cap_list[0] = (f'&Object::from(Clone::clone(&{_cap_var_names[0]}))')
+                        else:
+                            _call_cap_list[0] = f'&{_cap_var_names[0]}'
                     elif _recv_from_sam and _call_sam_list:
                         # 未绑定接收者的方法引用（X::method）：第一个 SAM 实参是接收者
                         _recv_desc = f'L{_impl_cls_bin};'
