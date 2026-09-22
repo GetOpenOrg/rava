@@ -6,30 +6,104 @@ use std::collections::HashMap;
 
 // 内部边界类 jdk.internal.misc.Unsafe：按调用链按需实现，其余保持 panic 存根。
 
-/// 实例字段偏移的不透明 id 登记：键 = (声明类 binary name, 字段名)。
+// ── 数组对象布局常量（HotSpot 64 位 + CompressedOops 的真实值） ──────────
+// 原生二进制没有 C 数组布局，元素经下标访问；base/scale 只需与访问器族的
+// 偏移解码自洽（生产者 arrayBaseOffset/arrayIndexScale 与消费者
+// getReferenceAcquire 族使用同一组常量），具体值不进可观察输出。
+//
+// ABASE 对全部数组类恒 16（64 位压缩 oops 的数组对象头）；引用元素 stride 4
+// （压缩指针）。CHM 等消费方按 `offset = (i << ASHIFT) + ABASE`、
+// `ASHIFT = 31 - numberOfLeadingZeros(scale)` 计算，反解
+// `i = (offset - 16) >> 2`。
+const ARRAY_BASE_OFFSET: i64 = 16;
+const REF_INDEX_SCALE: i64 = 4;
+
+/// 数组类的元素 stride（HotSpot arrayIndexScale0 语义）：按 Class 名的数组
+/// 描述符给出。名字来自 `Class::for_class`（斜线转点后的形态），前导 `[` 后
+/// 是元素描述符；引用元素（`L...;` / 嵌套 `[`）取压缩指针 4。
+fn _array_index_scale_by_name(name: &str) -> Option<i64> {
+    let elem = name.strip_prefix('[')?;
+    Some(match elem {
+        "Z" | "B" => 1,
+        "C" | "S" => 2,
+        "I" | "F" => 4,
+        "J" | "D" => 8,
+        _ => 4,
+    })
+}
+
+/// 引用元素数组的擦除视图（S-4 协变视图通道）：经 `__view_into` 把任意引用
+/// 元素数组还原为 `JArray<Object>`（get/set 委托源数组存储），供 Unsafe 的
+/// 引用访问器族按下标读写。基本元素数组 / 非数组对象返回 None。
+fn _erased_ref_array(o: &Object) -> Option<JArray<Object>> {
+    let unused: Rc<dyn std::any::Any> = Rc::new(());
+    let mut slot: Option<JArray<Object>> = None;
+    if o.0.__view_into(unused, &mut slot) {
+        slot
+    } else {
+        None
+    }
+}
+
+/// 引用访问器族的偏移解码：`offset = (i << ASHIFT) + ABASE` 的逆
+/// （引用元素 scale=4 → ASHIFT=2）。
+fn _ref_array_index(offset: i64) -> i32 {
+    ((offset - ARRAY_BASE_OFFSET) / REF_INDEX_SCALE) as i32
+}
+
+/// 实例字段偏移登记表（线程本地）：正向 (声明类 binary name, 字段名) → id，
+/// 反向 id → 字段名。`objectFieldOffset` 两重载共用；id 消费见
+/// `_instance_long_cell`（实例字段 long 原子）与 `getAndAddInt`（计数器键）。
+thread_local! {
+    static FIELD_OFFSETS: RefCell<HashMap<(std::string::String, std::string::String), i64>> =
+        RefCell::new(HashMap::new());
+    static FIELD_OFFSET_NEXT: RefCell<i64> = const { RefCell::new(1) };
+    static FIELD_OFFSET_BY_ID: RefCell<HashMap<i64, std::string::String>> = RefCell::new(HashMap::new());
+}
+
+/// 实例字段偏移的不透明 id：键 = (声明类 binary name, 字段名)，同一字段恒等。
 ///
 /// 原生二进制没有 C 对象布局，字段经名字访问——偏移量只作不透明标识。
 /// `objectFieldOffset(Field)` 与 `objectFieldOffset(Class, String)` 按 JDK 语义
 /// 对同一字段返回同一值，共用本登记表（Field 经 getDeclaredField 每次构造
 /// 新对象，对象身份不稳定，字段身份 = 声明类 + 字段名）。
-/// 消费形态是原子计数器键（getAndAddInt 以 (基址身份, offset) 寻址），
-/// 不同字段 id 互异即可，id 具体值不进可观察输出。
+/// 消费形态一：实例字段 long 原子（compareAndSetLong 等经
+/// `ObjectVTable::__unsafe_long_cell` 按字段名取共享存储单元，写入对直接
+/// 字段读取可见）；消费形态二：原子计数器键（getAndAddInt 以 (基址身份,
+/// offset) 寻址）。id 具体值不进可观察输出。
 fn _object_field_offset_id(clazz_name: std::string::String, field_name: std::string::String) -> i64 {
-    thread_local! {
-        static OFFSETS: RefCell<HashMap<(std::string::String, std::string::String), i64>> =
-            RefCell::new(HashMap::new());
-        static NEXT: RefCell<i64> = const { RefCell::new(1) };
-    }
-    OFFSETS.with(|offsets| {
-        let next = NEXT.with(|n| {
+    FIELD_OFFSETS.with(|offsets| {
+        let next = FIELD_OFFSET_NEXT.with(|n| {
             let v = *n.borrow();
             *n.borrow_mut() += 1;
             v
         });
-        *offsets.borrow_mut()
-            .entry((clazz_name, field_name))
-            .or_insert(next)
+        let id = *offsets.borrow_mut()
+            .entry((clazz_name, Clone::clone(&field_name)))
+            .or_insert(next);
+        FIELD_OFFSET_BY_ID.with(|by_id| {
+            by_id.borrow_mut().insert(id, field_name);
+        });
+        id
     })
+}
+
+/// 偏移 id → 字段名（实例字段登记表的反查；静态字偏移 / 哨兵不在表内 → None）。
+fn _offset_field_name(offset: i64) -> Option<std::string::String> {
+    FIELD_OFFSET_BY_ID.with(|by_id| by_id.borrow().get(&offset).cloned())
+}
+
+/// 偏移 id → 实例字段的共享 long 存储单元（经 ObjectVTable 的字段名协议）。
+/// 未登记的 id 或运行时类无该平铺 long 字段 → None。
+fn _instance_long_cell(o: &Object, offset: i64) -> Option<Rc<std::cell::Cell<i64>>> {
+    let field = _offset_field_name(offset)?;
+    o.0.__unsafe_long_cell(&field)
+}
+
+/// 偏移 id → 实例字段的共享 int 存储单元（`_instance_long_cell` 的 int 镜像）。
+fn _instance_int_cell(o: &Object, offset: i64) -> Option<Rc<std::cell::Cell<i32>>> {
+    let field = _offset_field_name(offset)?;
+    o.0.__unsafe_int_cell(&field)
 }
 
 impl Unsafe {
@@ -68,6 +142,180 @@ impl Unsafe {
         ))
     }
 
+    /// `arrayBaseOffset(Class)`：数组存储里首个元素前的头部长度。HotSpot 64 位
+    /// （压缩 oops）对所有数组类返回 16；原生二进制无 C 布局，该值与访问器族
+    /// 的偏移解码共用常量（自洽即可，不进可观察输出）。null 类按 JDK 抛 NPE。
+    #[jvm_boundary]
+    pub fn arrayBaseOffset(&self, arrayClass: Class) -> Result<i32> {
+        if Object::from(Clone::clone(&arrayClass)).0.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let name = format!("{}", arrayClass.__get_name());
+        if _array_index_scale_by_name(&name).is_none() {
+            // JDK 语义：非数组类的返回值未定义（HotSpot 走 assert/崩溃）
+            panic!("stub: jdk/internal/misc/Unsafe.arrayBaseOffset:(Ljava/lang/Class;)I (非数组类 {})", name);
+        }
+        Ok(ARRAY_BASE_OFFSET as i32)
+    }
+
+    /// `arrayIndexScale(Class)`：数组元素的寻址 stride（字节）。HotSpot 语义按
+    /// 元素类型给出（引用元素为压缩指针 4）；消费方（CHM 的 ASHIFT 等）据此
+    /// 构造偏移，访问器族用同一组常量反解下标。null 类按 JDK 抛 NPE。
+    #[jvm_boundary]
+    pub fn arrayIndexScale(&self, arrayClass: Class) -> Result<i32> {
+        if Object::from(Clone::clone(&arrayClass)).0.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let name = format!("{}", arrayClass.__get_name());
+        match _array_index_scale_by_name(&name) {
+            Some(scale) => Ok(scale as i32),
+            None => panic!("stub: jdk/internal/misc/Unsafe.arrayIndexScale:(Ljava/lang/Class;)I (非数组类 {})", name),
+        }
+    }
+
+    /// `compareAndSetLong(Object o, long offset, long expected, long x)`：实例字段
+    /// long 的 CAS——经 `__unsafe_long_cell` 取共享存储单元（与直接字段读取同一
+    /// 存储，JVM 字段内存语义）。单 OS 线程协作调度下读-比-写不可分割。
+    #[jvm_boundary]
+    pub fn compareAndSetLong(&self, o: Object, offset: i64, expected: i64, x: i64) -> Result<bool> {
+        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.compareAndSetLong:(Ljava/lang/Object;JJJ)Z (实例字段 offset={} 无共享 long 单元)", offset)
+        });
+        let current = cell.get();
+        if current == expected {
+            cell.set(x);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// `getLongVolatile(Object o, long offset)`：实例字段 volatile 读。
+    #[jvm_boundary]
+    pub fn getLongVolatile(&self, o: Object, offset: i64) -> Result<i64> {
+        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getLongVolatile:(Ljava/lang/Object;J)J (实例字段 offset={} 无共享 long 单元)", offset)
+        });
+        Ok(cell.get())
+    }
+
+    /// `putLongVolatile(Object o, long offset, long x)`：实例字段 volatile 写。
+    /// `AtomicLong.set` 等经此路径——写入对 `__get_value` 直读可见。
+    #[jvm_boundary]
+    pub fn putLongVolatile(&self, o: Object, offset: i64, x: i64) -> Result<()> {
+        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.putLongVolatile:(Ljava/lang/Object;JJ)V (实例字段 offset={} 无共享 long 单元)", offset)
+        });
+        cell.set(x);
+        Ok(())
+    }
+
+    /// `putLong(Object o, long offset, long x)`：实例字段 plain 写（与
+    /// putLongVolatile 同一存储单元；单 OS 线程协作调度下无可见性差异）。
+    /// 消费方：`ThreadLocalRandom.localInit` 对 Thread.threadLocalRandomSeed。
+    #[jvm_boundary]
+    pub fn putLong_obj_l_l(&self, o: Object, offset: i64, x: i64) -> Result<()> {
+        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.putLong:(Ljava/lang/Object;JJ)V (实例字段 offset={} 无共享 long 单元)", offset)
+        });
+        cell.set(x);
+        Ok(())
+    }
+
+    /// `getInt(Object o, long offset)`：实例字段 int 读（plain 形态）。
+    /// 消费方：`ThreadLocalRandom.current` 对 Thread.threadLocalRandomProbe。
+    #[jvm_boundary]
+    pub fn getInt_obj_l(&self, o: Object, offset: i64) -> Result<i32> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getInt:(Ljava/lang/Object;J)I (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        Ok(cell.get())
+    }
+
+    /// `putInt(Object o, long offset, int x)`：实例字段 int 写（plain 形态）。
+    #[jvm_boundary]
+    pub fn putInt_obj_l_i(&self, o: Object, offset: i64, x: i32) -> Result<()> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.putInt:(Ljava/lang/Object;JI)V (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        cell.set(x);
+        Ok(())
+    }
+
+    /// `compareAndSetInt(Object o, long offset, int expected, int x)`：实例字段
+    /// int 的 CAS（`_instance_long_cell` 的 int 镜像路径）。
+    #[jvm_boundary]
+    pub fn compareAndSetInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<bool> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.compareAndSetInt:(Ljava/lang/Object;JII)Z (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        let current = cell.get();
+        if current == expected {
+            cell.set(x);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// `getIntVolatile(Object o, long offset)`：实例字段 int volatile 读。
+    #[jvm_boundary]
+    pub fn getIntVolatile(&self, o: Object, offset: i64) -> Result<i32> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getIntVolatile:(Ljava/lang/Object;J)I (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        Ok(cell.get())
+    }
+
+    /// `putIntVolatile(Object o, long offset, int x)`：实例字段 int volatile 写。
+    #[jvm_boundary]
+    pub fn putIntVolatile(&self, o: Object, offset: i64, x: i32) -> Result<()> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.putIntVolatile:(Ljava/lang/Object;JI)V (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        cell.set(x);
+        Ok(())
+    }
+
+    /// `getReferenceAcquire(Object o, long offset)`：引用元素数组按偏移读
+    /// （CHM `tabAt`）。数组经擦除协变视图还原 `JArray<Object>`，偏移按
+    /// `i = (offset - ABASE) >> 2` 反解（引用元素 stride 4）。
+    #[jvm_boundary]
+    pub fn getReferenceAcquire(&self, o: Object, offset: i64) -> Result<Object> {
+        let arr = _erased_ref_array(&o).unwrap_or_else(|| {
+            panic!("jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object; (offset={} 的载体不是引用元素数组)", offset)
+        });
+        arr.get(_ref_array_index(offset))
+    }
+
+    /// `putReferenceRelease(Object o, long offset, Object x)`：引用元素数组按
+    /// 偏移写（CHM `setTabAt`）。经协变视图的 aastore 存储检查写回源数组。
+    #[jvm_boundary]
+    pub fn putReferenceRelease(&self, o: Object, offset: i64, x: Object) -> Result<()> {
+        let arr = _erased_ref_array(&o).unwrap_or_else(|| {
+            panic!("jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V (offset={} 的载体不是引用元素数组)", offset)
+        });
+        arr.set(_ref_array_index(offset), x)
+    }
+
+    /// `compareAndSetReference(Object o, long offset, Object expected, Object x)`：
+    /// 引用元素数组槽位 CAS（CHM `casTabAt`）。比较按 Java `==`（对象身份，
+    /// `PartialEq for Object`）；单 OS 线程协作调度下读-比-写不可分割。
+    #[jvm_boundary]
+    pub fn compareAndSetReference(&self, o: Object, offset: i64, expected: Object, x: Object) -> Result<bool> {
+        let arr = _erased_ref_array(&o).unwrap_or_else(|| {
+            panic!("jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z (offset={} 的载体不是引用元素数组)", offset)
+        });
+        let i = _ref_array_index(offset);
+        let current = arr.get(i)?;
+        if current == expected {
+            arr.set(i, x)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// `getAndAddLong(Object o, long offset, long delta)`：原子读取并加 delta，
     /// 返回旧值。
     ///
@@ -76,11 +324,17 @@ impl Unsafe {
     /// 推进线程 id 计数）。原生二进制没有原始内存布局：静态原子字以 offset 为
     /// 键的全局计数器承载（键来自 `Thread.getNextThreadIdOffset` 的固定哨兵，
     /// 与 objectFieldOffset 的实例字段不透明 id 无交集——消费面不同）。
-    /// `o` 非 null（实例字段原子）暂无消费方，保持存根。
+    /// `o` 非 null（实例字段原子，如 CHM `addCount` 的 baseCount）经
+    /// `__unsafe_long_cell` 的共享存储单元承载。
     #[jvm_boundary]
     pub fn getAndAddLong(&self, o: Object, offset: i64, delta: i64) -> Result<i64> {
         if !o.0.is_jvm_null() {
-            panic!("stub: jdk/internal/misc/Unsafe.getAndAddLong:(Ljava/lang/Object;JJ)J (实例字段原子)");
+            let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
+                panic!("stub: jdk/internal/misc/Unsafe.getAndAddLong:(Ljava/lang/Object;JJ)J (实例字段 offset={} 无共享 long 单元)", offset)
+            });
+            let old = cell.get();
+            cell.set(old.wrapping_add(delta));
+            return Ok(old);
         }
         use std::cell::RefCell;
         use std::collections::HashMap;
@@ -122,12 +376,23 @@ impl Unsafe {
     }
 
     /// `getAndAddInt(Object base, long offset, int delta)`：原子读取并加 delta，
-    /// 返回旧值。静态字原子（base 为 staticFieldBase 返回的基址，offset 为
-    /// staticFieldOffset 的不透明 id，如 `Thread$ThreadNumbering.next` 的线程
-    /// 名计数）——原生二进制无原始内存，以 (基址身份, 偏移) 键的全局字承载；
-    /// base 为 null 载体时身份取 0（与真实对象身份不冲突）。
+    /// 返回旧值。两条消费路径：
+    /// - 实例字段原子（offset 出自 objectFieldOffset 登记表，如
+    ///   `AtomicInteger.incrementAndGet` 的 value 字段）——经 `__unsafe_int_cell`
+    ///   的共享存储单元（写入对 `__get_value` 直读可见）；
+    /// - 静态字原子（base 为 staticFieldBase 返回的基址，offset 为
+    ///   staticFieldOffset 的不透明 id，如 `Thread$ThreadNumbering.next` 的线程
+    ///   名计数）——原生二进制无原始内存，以 (基址身份, 偏移) 键的全局字承载；
+    ///   base 为 null 载体时身份取 0（与真实对象身份不冲突）。
     #[jvm_boundary]
     pub fn getAndAddInt(&self, base: Object, offset: i64, delta: i32) -> Result<i32> {
+        if !base.0.is_jvm_null() {
+            if let Some(cell) = _instance_int_cell(&base, offset) {
+                let old = cell.get();
+                cell.set(old.wrapping_add(delta));
+                return Ok(old);
+            }
+        }
         use std::cell::RefCell;
         use std::collections::HashMap;
         thread_local! {

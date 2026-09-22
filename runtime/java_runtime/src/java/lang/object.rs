@@ -180,6 +180,22 @@ pub trait ObjectVTable: 'static {
     /// `Object.clone()` 的 native 语义：新建同运行时类的对象，逐字段拷贝（浅拷贝）。
     /// java_class! 宏对生成类自动 override；无字段存储的值（装箱基本类型等）返回 None。
     fn __shallow_copy(&self) -> Option<Object> { None }
+
+    /// Unsafe 实例字段 long 原子协议（`Unsafe.getLongVolatile`/`putLongVolatile`/
+    /// `compareAndSetLong`/`getAndAddLong` 的实例字段形态）：按字段名取共享的
+    /// long 字存储单元。java_class! 宏为每个含非擦除 `long` 字段的生成类按
+    /// 平铺字段名单生成臂（含继承字段）；其余（无该字段 / 数组 / 基本类型盒）
+    /// 返回 None。返回的 `Rc<Cell<i64>>` 与该对象全部 wrapper 视图共享——
+    /// Unsafe 经 Object 写入对直接字段读取（`__get_xxx`）可见，与 JVM 的字段
+    /// 内存语义一致（Unsafe 与普通字段访问指向同一存储）。
+    #[doc(hidden)]
+    fn __unsafe_long_cell(&self, _field: &str) -> Option<Rc<std::cell::Cell<i64>>> { None }
+
+    /// Unsafe 实例字段 int 原子协议（`Unsafe.getInt`/`putInt`/`compareAndSetInt`/
+    /// `getAndAddInt` 的实例字段形态）：`__unsafe_long_cell` 的 int 镜像，
+    /// 按字段名取共享的 int 存储单元（`Rc<Cell<i32>>`）。
+    #[doc(hidden)]
+    fn __unsafe_int_cell(&self, _field: &str) -> Option<Rc<std::cell::Cell<i32>>> { None }
 }
 
 /// `super.clone()`（invokespecial java/lang/Object.clone）的落点。
