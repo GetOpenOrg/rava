@@ -106,6 +106,21 @@ impl<T: 'static> JArray<T> {
             std::any::TypeId::of::<f64>(), std::any::TypeId::of::<bool>(),
         ].contains(&element)
     }
+
+    /// 基本元素类型的 JVM 描述符字符（静态分派，与 has_primitive_elements 同一
+    /// TypeId 手法）；引用元素类型 → None。
+    fn primitive_elem_descriptor() -> Option<&'static str> {
+        let element = std::any::TypeId::of::<T>();
+        Some(if element == std::any::TypeId::of::<i8>() { "B" }
+            else if element == std::any::TypeId::of::<i16>() { "S" }
+            else if element == std::any::TypeId::of::<u16>() { "C" }
+            else if element == std::any::TypeId::of::<i32>() { "I" }
+            else if element == std::any::TypeId::of::<i64>() { "J" }
+            else if element == std::any::TypeId::of::<f32>() { "F" }
+            else if element == std::any::TypeId::of::<f64>() { "D" }
+            else if element == std::any::TypeId::of::<bool>() { "Z" }
+            else { return None })
+    }
 }
 
 impl<T: Clone + Default + 'static> JArray<T> {
@@ -245,6 +260,30 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
     fn __identity(&self) -> *const () { self.identity() }
     fn is_jvm_null(&self) -> bool { JArray::is_jvm_null(self) }
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { Some(self.len()) }
+
+    /// 数组类的 Class 对象（JLS §10.8：`new String[0].getClass()` 是
+    /// `[Ljava.lang.String;`）。binary name 为 JVM 描述符形态、斜线键——与
+    /// ldc 的 `X[].class`（`Class::for_class("[Ljava/lang/String;")`）落同一
+    /// 缓存条目，`a.getClass() == X[].class` 的身份语义由此成立。基本元素
+    /// 静态取描述符字符；引用元素经元素 vtable 的 getClass 递归取得（嵌套
+    /// 数组因此正确：`JArray<JArray<T>>` → `[[T`）。
+    fn getClass(&self) -> crate::error::Result<crate::java::lang::Class> {
+        if let Some(d) = Self::primitive_elem_descriptor() {
+            return Ok(crate::java::lang::Class::for_class(
+                crate::java::lang::String::from(format!("[{}", d).as_str())));
+        }
+        let elem_name = format!("{}", Into::<Object>::into(T::default())
+            .0.getClass()?
+            .__get_name())
+            .replace('.', "/");
+        let binary = if elem_name.starts_with('[') {
+            format!("[{}", elem_name)
+        } else {
+            format!("[L{};", elem_name)
+        };
+        Ok(crate::java::lang::Class::for_class(
+            crate::java::lang::String::from(binary.as_str())))
+    }
 
     /// JLS §10.8 / §4.10.4：数组的直接超类型是 Object、Cloneable、Serializable。
     /// 有意不按 "java/lang/Object" 匹配——aastore_storable 的元素类型名探针对

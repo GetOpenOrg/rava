@@ -1,0 +1,3 @@
+getB=0
+afterSetB=512
+modsB=1
