@@ -3,12 +3,11 @@
 //! `SequencedCollection` 视图的 `firstEntry`/`lastEntry`/`pollFirstEntry` 等
 //! 以它包装内部 Map.Entry（防暴露内部条目）。
 //!
-//! 已知缺口（非本域）：toString（`key + "=" + value`）无法进入可观察输出——
-//! 内部边界类的方法整体为生成侧占位（规则 3b，upcalls 不能使边界类方法翻译），
-//! 手写 toString 又会使生成侧按设计摘除 to_string_vtable 桥接
-//! （`_root_method_vtable_owner`：手写 inherent 方法 → None），字符串拼接的
-//! Display 捷径因此回落 `std::any::type_name`。需 emitter 侧为「边界类手写
-//! toString」保留桥接（codegen 域）。equals/hashCode 同为占位（消费面未达）。
+//! 已知缺口（非本域）：toString 已由 `__impl_toString` 手写体承接（JDK 语义
+//! `key + "=" + value`，经 vtable 槽位参与根类桥接——`_root_method_vtable_owner`
+//! 只摘除 inherent 形态的手写 toString，`__impl_` 形态的声明保留在宏块内，
+//! to_string_vtable 属性不摘除，与 Double/Integer 的既有先例同型）。equals /
+//! hashCode 仍为占位（消费面未达）。
 
 use crate::prelude::*;
 use super::nullable_key_value_holder::NullableKeyValueHolder;
@@ -43,5 +42,18 @@ where
         this.__set_key(K::from(k));
         this.__set_value(V::from(v));
         Ok(this)
+    }
+
+    /// `toString()`：`key + "=" + value`（JDK 语义；键值 null 经 Object 的
+    /// null vtable 呈现 "null"）。手写体取 `__impl_toString` 形态而非 inherent
+    /// `toString`：方法声明保留在 java_class! 宏块内（`body = "handwritten"`），
+    /// 经 vtable 槽位参与根类桥接与子类覆盖（to_string_vtable 属性不摘除），
+    /// 字符串拼接（makeConcat → Object::toString → __obj_str）由此取到本实现
+    /// 而非生成侧的边界类占位（BINARY_NAME）。
+    #[jvm_boundary]
+    pub fn __impl_toString(&self) -> Result<String> {
+        let k: Object = Into::into(Clone::clone(&self.__get_key()));
+        let v: Object = Into::into(Clone::clone(&self.__get_value()));
+        Ok(String::from(format!("{}={}", k, v).as_str()))
     }
 }
