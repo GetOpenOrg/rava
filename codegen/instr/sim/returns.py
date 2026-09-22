@@ -40,6 +40,8 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         _returns_this = expr_s == 'this' and not sim.is_static
         if _returns_this:
             expr_s = 'Clone::clone(this)'
+        from ...jvm_type import carrier_type_for_ident
+        _carrier_ret = carrier_type_for_ident(ret_ty, registry)
         if _returns_this and ret_ty in _ctparams:
             # 声明返回类型变量（`return (S) this`，javac 在擦除层省略 checkcast——
             # S 擦除为边界接口、this 已是其实现类，如 AbstractPipeline.sequential）：
@@ -49,6 +51,19 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         elif _returns_this and ret_ty == 'Object' and actual_ty not in ('Object', '()'):
             # 声明返回 Object / 接口（`return this` 于返回接口类型的方法）：身份保持的向上转型
             expr_s = _coerce_to_object(expr_s, actual_ty, registry, _ctparams, clone=False)
+        elif _carrier_ret is not None and ret_ty == _carrier_ret:
+            # A-4 批次 3+：声明返回类型是已铺设的接口载体。
+            #   - 值已是同载体：原样返回；
+            #   - 值是 Object（擦除边界）：From::from 取回（javac unchecked cast 语义，
+            #     接口视图按运行时类成立；返回位有类型上下文，From::from 目标可推断）；
+            #   - 具体类 / 其余静态类型（含 return this）：经 Object 边界的协变 upcast
+            #     （保持对象身份与运行时类，与 _coerce_arg 的载体分支同源）。
+            if actual_ty == ret_ty:
+                pass
+            elif actual_ty == 'Object':
+                expr_s = f"::std::convert::From::from({expr_s})"
+            else:
+                expr_s = f"::std::convert::From::from({_coerce_to_object(expr_s, actual_ty, registry, _ctparams)})"
         elif _returns_this and (ret_ty.split('<')[0] == actual_ty.split('<')[0]
                                 or not _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
             # 返回类型就是本类：this 的克隆即返回值。

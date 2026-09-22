@@ -97,7 +97,8 @@ def _lookup_method_sig_params(
             # 优先级：receiver_targ_map（接收者泛型实参）> caller_class_type_params（同名类型参数）
             # 若某参数是 callee 的类型参数但无法解析，设 None（降级到 descriptor）
             resolved: list[str | None] = []
-            for t in types:
+            subst_pos: set[int] = set()   # 经类型变量代入得到该值的位置（非直签接口形态）
+            for _ti, t in enumerate(types):
                 if t in callee_tparams:
                     if (ci.is_interface and not receiver_is_this
                             and not (receiver_targ_map and t in receiver_targ_map)):
@@ -110,6 +111,7 @@ def _lookup_method_sig_params(
                         resolved.append(None)
                     elif receiver_targ_map and t in receiver_targ_map:
                         resolved.append(receiver_targ_map[t])
+                        subst_pos.add(_ti)
                     elif t in caller_class_type_params:
                         resolved.append(t)
                     else:
@@ -117,15 +119,44 @@ def _lookup_method_sig_params(
                 else:
                     resolved.append(t)
             # registry 中所有接口的短名在调用点降级为 Object（Arch-1 接口 = Object
-            # 类型别名，泛型形态 X<...> 不是合法 Rust 类型）
+            # 类型别名，泛型形态 X<...> 不是合法 Rust 类型）。
+            # A-4 批次 3+：两类载体形态例外——
+            #   a) 经类型变量代入（构造器 turbofish 绑定 / 接收者实参映射）：被调方
+            #      声明的是类型变量，rustc 按绑定展开为载体，实参必须是载体；
+            #   b) 直签接口形态且描述符同名（`Ljava/util/Iterator;` ↔ Iterator）：
+            #      声明侧（method_gen/emitted_method_sig_types 的接口回退）按描述符
+            #      发射同一载体。描述符是桥接擦除（`Ljava/lang/Object;`，javac 对
+            #      OfLong 桥接 forEachRemaining(Object)）时维持 Object——与声明侧一致。
             import re as _re_iface
+            from ..jvm_type import carrier_type_for_ident as _carrier_keep
+            from ..type_map import jvm_to_rust as _jvm_to_rust_g
             _reg_iface_shorts = _registry_iface_shorts(registry)
+            # 手写边界方法：接口位置的契约是 Object（其 _impl.rs 签名先于载体化）
+            _hw = _handwritten_boundary_method(cls_bin, mname)
             final_resolved: list[str | None] = []
-            for t in resolved:
+            for _ri, t in enumerate(resolved):
+                if _hw and _ri < len(descriptor_params):
+                    _t_base = t.split('<')[0] if t else ''
+                    _d_rust = _jvm_to_rust_g(descriptor_params[_ri], registry)
+                    _d_base = _d_rust.split('<')[0]
+                    if (t is not None and _t_base in _reg_iface_shorts) or (
+                            t is None and _d_base in _reg_iface_shorts):
+                        final_resolved.append('Object')
+                        continue
                 if t is not None:
                     _m = _re_iface.match(r'^(\w+)(?:<|$)', t)
                     if _m and _m.group(1) in _reg_iface_shorts:
-                        final_resolved.append(None)
+                        _desc_base = (_jvm_to_rust_g(descriptor_params[_ri], registry).split('<')[0]
+                                      if _ri < len(descriptor_params) else '')
+                        # receiver_is_this（接口 default 方法体内 this.xxx）：发射侧
+                        # （virtual_in 语境的存根）按描述符擦除，调用侧不得按接收者
+                        # 实参映射发射载体——否则与存根签名发散
+                        if ((_carrier_keep(t, registry) == t and _ri in subst_pos
+                                and not receiver_is_this)
+                                or _desc_base == t.split('<')[0]):
+                            final_resolved.append(t)
+                        else:
+                            final_resolved.append(None)
                         continue
                 final_resolved.append(t)
             return final_resolved
@@ -133,6 +164,42 @@ def _lookup_method_sig_params(
 
 
 _iface_shorts_cache: dict[int, frozenset[str]] = {}
+
+
+_HANDWRITTEN_BOUNDARY_CACHE: dict[tuple[str, str], bool] = {}
+
+
+def _handwritten_boundary_method(cls_bin: str, mname: str) -> bool:
+    """callee 是否由 runtime/ 手写 `_impl.rs` 伴生文件提供（`#[jvm_boundary]`）。
+
+    手写边界方法的 Rust 签名是调用契约的真源（早于 A-4 载体化，接口位置一律
+    擦除 Object）；载体化后调用点解析须按其签名回退 Object，而非发射载体。
+    与 project_writer._is_handwritten 同一存在性判据（runtime/java_runtime/src
+    下同相对路径），加 `fn {mname}` 前缀探测（重载后缀缀于 Java 原名之后，
+    如 `fn checkIndex_i_i_bifunction`）。"""
+    key = (cls_bin, mname)
+    hit = _HANDWRITTEN_BOUNDARY_CACHE.get(key)
+    if hit is not None:
+        return hit
+    import os as _os
+    from ..constants import RUNTIME_JAVA_RUNTIME
+    from ..emitter.attrs import to_snake as _to_snake
+    result = False
+    parts = cls_bin.split('/')
+    if len(parts) >= 2:
+        *pkg, cls_name = parts
+        parent = _os.path.join(RUNTIME_JAVA_RUNTIME, 'src', *pkg)
+        probe = f'fn {mname}'
+        for cand in (_to_snake(cls_name), _to_snake(cls_name) + '_t'):
+            try:
+                with open(_os.path.join(parent, cand + '_impl.rs'), encoding='utf-8') as fh:
+                    if probe in fh.read():
+                        result = True
+                        break
+            except OSError:
+                continue
+    _HANDWRITTEN_BOUNDARY_CACHE[key] = result
+    return result
 
 
 def receiver_type_arg_map(recv_ty: str, owner_short: str | None, registry: dict | None) -> dict | None:
@@ -318,6 +385,10 @@ def _lookup_method_sig_ret(
                                    for _n in _re_v.findall(r'[A-Za-z_][A-Za-z0-9_]*', _sub)):
                                 return _sub
                 return None
+            # 手写边界方法（_impl.rs）：接口返回位置的契约是 Object（签名先于载体化）
+            if _handwritten_boundary_method(cls_bin, mname) \
+                    and sig_ret.split('<')[0] in _registry_iface_shorts(registry):
+                return 'Object'
             return sig_ret
     return None
 
@@ -427,9 +498,28 @@ def _coerce_arg(
         _render_cast, _same_generic_family,
     )
     from .hierarchy import _is_subtype, _into_super_chain, _rust_type_to_binary
+    from ..jvm_type import carrier_type_for_ident
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
         return null_coerce
+    _carrier_expected = carrier_type_for_ident(expected, registry)
+    if _carrier_expected is not None and _carrier_expected == expected:
+        # A-4 批次 3+：形参是已铺设的接口载体。实参 → 载体的边界转换：
+        #   - 实参已是同载体：Clone 保持 move 语义（与尾部兜底同形）；
+        #   - 具体实现类：协变 upcast（interface_gen 的 From<C> for I<Object>，
+        #     任意类实例化上转到擦除载体是同一视图，保持对象身份）；
+        #   - Object / 其余静态类型：经 From<Object> 的非受检载体包装（javac
+        #     unchecked 语义——接口视图按运行时类成立，载体只持 Object 引用）。
+        #     From<_> 的 UFCS 形态不可被接口自带的 Java 静态 from 工厂遮蔽。
+        if actual == expected and actual not in _PRIMITIVE_RUST_TYPES:
+            if e == 'this':
+                return f"Clone::clone({e})"
+            return f"Clone::clone(&{e})"
+        if actual == 'Object':
+            return f"<{expected} as ::std::convert::From<_>>::from(Clone::clone(&{e}))"
+        _src_c = f"Clone::clone(this)" if e == 'this' else f"Clone::clone(&{e})"
+        return f"<{expected} as ::std::convert::From<_>>::from(" \
+               f"{_coerce_to_object(_src_c, actual, registry, sim.class_type_params, clone=False)})"
     if expected == 'Object' and actual not in ('Object', '()'):
         # 泛型参数值（如 K: Clone + Default + 'static）传给 Object 参数：
         # Rust 无隐式子类型化，K 类型的值不能直接当 Object 用 → 装箱为

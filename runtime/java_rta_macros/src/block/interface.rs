@@ -180,6 +180,22 @@ pub(crate) fn expand_interface(
             fn from(iface: #struct_ident #ty_g) -> Object { iface.__ref }
         }
 
+        // 载体进入类型位置（A-4 批次 3+：形参 / 返回 / 局部 / 字段）后，字段存储层
+        // `__inner` 的 `derive(PartialEq, Debug)` 要求载体满足同一约束——与类 Wrapper
+        // 同形：身份相等（同一底层对象 = 同一接口视图；null 单例共享指针恒等），
+        // Debug 经运行时 toString 桥接。
+        impl #impl_g ::std::cmp::PartialEq for #struct_ident #ty_g #where_c {
+            fn eq(&self, other: &Self) -> bool {
+                self.__ref.0.__identity() == other.__ref.0.__identity()
+            }
+        }
+
+        impl #impl_g ::std::fmt::Debug for #struct_ident #ty_g #where_c {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                write!(f, "{}({})", stringify!(#struct_ident), ObjectVTable::__obj_str(&*self.__ref.0))
+            }
+        }
+
         impl #impl_g ::std::ops::Deref for #struct_ident #ty_g #where_c {
             type Target = Object;
             fn deref(&self) -> &Object { &self.__ref }
@@ -187,6 +203,13 @@ pub(crate) fn expand_interface(
 
         impl #impl_g #struct_ident #ty_g #where_c {
             pub const BINARY_NAME: &'static str = #binary_name;
+
+            /// null 探测与类 Wrapper 的固有方法同形（类型位置载体化后，null 检查
+            /// 发射面 `x.is_jvm_null()` 对载体与 wrapper 统一）：载体 null 即其底层
+            /// Object 引用是 null 单例。
+            pub fn is_jvm_null(&self) -> bool {
+                ObjectVTable::is_jvm_null(&*self.__ref.0)
+            }
 
             #(#static_members)*
             #(#static_accessors)*

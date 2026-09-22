@@ -287,12 +287,15 @@ def _quote_path(jbin: str, em, emissions: dict) -> str:
     return class_use_path(jbin, em.crate_prefix, emissions)
 
 
-def _entry_sig_parts(em_method, jci, registry: dict) -> 'tuple[str, list[str]] | None':
-    """发射记录的方法 → (vtable 擦除条目签名, 形参名列表)。
+def _entry_sig_parts(em_method, jci, registry: dict) -> 'tuple[str, list[str], list[str]] | None':
+    """发射记录的方法 → (vtable 擦除条目签名, 形参名列表, 条目形参类型列表)。
 
     擦除规则与宏 vtable trait（interface_gen.erased_declaration）同源：提及
-    接口类型变量的类型位置整体 Object 化。签名形如
-    `m(&self, a: Object) -> Result<Object>`（不含 fn 前缀，impl 条目书写用）。"""
+    接口类型变量的类型位置整体 Object 化；载体形态（`Comparator<Object>`，
+    无类型变量提及）宏 trait 原样保留——条目签名同。签名形如
+    `m(&self, a: Object) -> Result<Object>`（不含 fn 前缀，impl 条目书写用）。
+    A-4 批次 5：一并返回条目形参类型，供条目体按「条目形参 → 声明形参」的
+    实际差集做桥接（同为载体直传；Object → 载体才 From 包装）。"""
     from .interface_gen import erased_declaration, _split_top_level
     type_params = set(effective_class_type_params(jci, registry))
     erased = erased_declaration(em_method, type_params)
@@ -300,8 +303,10 @@ def _entry_sig_parts(em_method, jci, registry: dict) -> 'tuple[str, list[str]] |
         return None
     head = erased[len('fn '):]
     rest = erased[erased.index('(') + 1:erased.rindex(')')]
-    params = [p.split(':')[0].strip() for p in _split_top_level(rest)]
-    return head, params[1:]  # 去 &self
+    parts = _split_top_level(rest)
+    names = [p.split(':')[0].strip() for p in parts]
+    types = [p.partition(':')[2].strip() for p in parts]
+    return head, names[1:], types[1:]  # 去 &self
 
 
 def _declared_sig_parts(em_method) -> 'tuple[list[str], str] | None':
@@ -341,13 +346,26 @@ def _mentions(ty: str, tparams: set[str]) -> bool:
     return bool(tparams & set(_IDENT_RE.findall(ty)))
 
 
-def _default_entry_body(em_m, jci, registry: dict, j_erased_ty: str, args: list[str]) -> 'str | None':
+def _is_carrier_type(rust_ty: str, registry: dict) -> bool:
+    """类型串是否为已铺设载体化的接口载体形态（判定单一来源 jvm_type）。"""
+    if not registry or not rust_ty:
+        return False
+    from ..jvm_type import carrier_type_for_ident
+    return carrier_type_for_ident(rust_ty, registry) == rust_ty
+
+
+def _default_entry_body(em_m, jci, registry: dict, j_erased_ty: str, args: list[str],
+                        entry_tys: 'list[str] | None' = None) -> 'str | None':
     """default 条目体：`<J<Object,..> as From<Object>>::from(..).__default_m(..)`。
 
-    擦除条目形参恒为 Object（提及类型变量的位置整体 Object 化），载体默认体
-    在擦除实例化上的形参是「类型变量代入 Object 后」的形态——嵌套提及
-    （`Comparator<T>`）需经 `From<Object>` 还原；返回值提及类型变量时经
-    `Into<Object>` 装箱（与宏 expand_interface_impl 的边界转换同规则）。"""
+    擦除条目形参按声明而定（提及类型变量的位置整体 Object 化；载体形态
+    `Comparator<Object>` 宏 trait 原样保留），载体默认体在擦除实例化上的形参
+    是「类型变量代入 Object 后」的形态——嵌套提及（`Comparator<T>`）需经
+    `From<Object>` 还原；返回值提及类型变量时经 `Into<Object>` 装箱（与宏
+    expand_interface_impl 的边界转换同规则）。
+    A-4 批次 3+：形参桥接按「条目形参 → 声明形参」的实际差集——同为载体直传；
+    条目形参是 Object 而声明是载体才 From<Object> 包装（接口视图按运行时类
+    成立）。返回是载体时解包 __ref 装箱。"""
     parts = _declared_sig_parts(em_m)
     if parts is None:
         return None
@@ -356,9 +374,15 @@ def _default_entry_body(em_m, jci, registry: dict, j_erased_ty: str, args: list[
     if len(param_tys) != len(args):
         return None
     call_args: list[str] = []
-    for a, ty in zip(args, param_tys):
+    for _i_a, (a, ty) in enumerate(zip(args, param_tys)):
+        _entry_ty = entry_tys[_i_a] if entry_tys and _i_a < len(entry_tys) else 'Object'
         if _mentions(ty, tparams):
             call_args.append(f'<{_subst_type_vars(ty, tparams)} as From<Object>>::from({a})')
+        elif _is_carrier_type(ty, registry):
+            if ty == _entry_ty:
+                call_args.append(a)  # 条目形参已是同载体：直传
+            else:
+                call_args.append(f'<{ty} as From<Object>>::from({a})')
         else:
             call_args.append(a)
     # UFCS 取 From：接口载体可能自带 Java static from 工厂（ChronoLocalDate.from），
@@ -368,6 +392,9 @@ def _default_entry_body(em_m, jci, registry: dict, j_erased_ty: str, args: list[
     if _mentions(ret_ty, tparams):
         # 声明返回提及类型变量 → 条目（擦除）返回 Object：解包后装箱
         return f'Ok(Into::<Object>::into({call}?))'
+    if _is_carrier_type(ret_ty, registry):
+        # 声明返回是载体：宏 trait 的条目返回原样保留载体 → Result 直接透传
+        return call
     # 声明返回不含类型变量 → 擦除签名与声明一致，Result 直接透传
     return call
 
@@ -461,7 +488,7 @@ def synthesize(emissions: dict, registry: dict) -> None:
                 sig_parts = _entry_sig_parts(em_m, jci, registry)
                 if sig_parts is None:
                     continue
-                head, args = sig_parts
+                head, args, entry_tys = sig_parts
                 arg_str = ', '.join(args)
                 if key == sam_key:
                     body = f'(self.0)({arg_str})'
@@ -477,7 +504,8 @@ def synthesize(emissions: dict, registry: dict) -> None:
                     kpath = _quote_path(kbin, em, emissions)
                     k_params = effective_class_type_params(kci, registry)
                     k_targs = f"<{', '.join(['Object'] * len(k_params))}>" if k_params else ''
-                    body = _default_entry_body(em_k, kci, registry, f'{kpath}{k_targs}', args)
+                    body = _default_entry_body(em_k, kci, registry, f'{kpath}{k_targs}', args,
+                                               entry_tys=entry_tys)
                     if body is None:
                         continue
                 entries.append(f'    fn {head} {{ {body} }}')

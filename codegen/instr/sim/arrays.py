@@ -72,8 +72,15 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
                 elem_t = _elem_raw
             else:
                 _elem_raw = jvm_to_rust(f'L{comment};', registry)
-                # 用 _ 替换类型参数中的 Object，让 Rust 从赋值上下文推断泛型（避免 E0308）
-                elem_t = _re.sub(r'\bObject\b', '_', _elem_raw) if '<' in _elem_raw else _elem_raw
+                # 用 _ 替换类型参数中的 Object，让 Rust 从赋值上下文推断泛型（避免 E0308）。
+                # A-4 批次 3+：接口载体除外——载体的 Object 实参就是擦除运行时形态，
+                # 无赋值上下文可推断（E0283），保持 `I<Object, ..>` 原样
+                from ...jvm_type import carrier_type_for_ident as _carrier_of
+                if ('<' in _elem_raw
+                        and _carrier_of(_elem_raw, registry) != _elem_raw):
+                    elem_t = _re.sub(r'\bObject\b', '_', _elem_raw)
+                else:
+                    elem_t = _elem_raw
         else:
             elem_t = 'Object'
         v = sim.fresh('_arr')

@@ -179,6 +179,8 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
     """putfield / putstatic 共用：把栈顶值转换为字段声明类型 ftype 的存储表达式。"""
     val_str_raw = render_expr(val_expr)
     val_ty_name = render_type(val_ty)
+    from ...jvm_type import carrier_type_for_ident
+    _carrier_stored = carrier_type_for_ident(ftype, registry)
     # Vec<Object>(擦除) ↔ Vec<E>(泛型)：当 ftype 是参数化 Vec 而值按擦除数组还原
     # （CastExpr 目标 JArray<Object>，A-3 节点分派）时，重定向转换目标为泛型版本，
     # 使字段赋值类型一致（旧字符串改写形态在当前语料零触发，见报告）
@@ -192,6 +194,25 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
     null_coerce = _coerce_from_null(val_str_raw, ftype)
     if null_coerce is not None:
         val_str = null_coerce
+    elif _carrier_stored is not None and _carrier_stored == ftype and val_ty_name != ftype:
+        # A-4 批次 3+：字段声明类型是已铺设的接口载体。值 → 载体的边界转换：
+        # Object 直接 From<_> 包装（非受检，接口视图按运行时类成立）；具体类 /
+        # 其余静态类型先经 _coerce_to_object 保持对象身份。UFCS 形态不可被接口
+        # 自带的静态 from 工厂遮蔽（与 _coerce_arg 的载体分支同源）。
+        if val_ty_name == 'Object':
+            val_str = f"<{ftype} as ::std::convert::From<_>>::from(Clone::clone(&{val_str_raw}))"
+        else:
+            val_str = f"<{ftype} as ::std::convert::From<_>>::from(" \
+                      f"{_coerce_to_object(val_str_raw, val_ty_name, registry, class_type_params)})"
+    elif (ftype in (class_type_params or ())
+            and val_ty_name != 'Object' and val_ty_name != '()'
+            and carrier_type_for_ident(val_ty_name, registry) == val_ty_name):
+        # A-4 批次 5：字段声明是类型变量（`S extends Spliterator<T>` 的
+        # lastNodeSpliterator: S），值是接口载体（javac 按擦除上界补的 checkcast
+        # 在载体化后落在载体上）。经 Object 边界按类型变量的 From<Object> bound
+        # 取回（宏为类型形参补的 bound）——载体解包 __ref，S 视图按运行时类成立
+        val_str = f"<{ftype} as ::std::convert::From<Object>>::from(" \
+                  f"Object::from({val_str_raw}))"
     elif ftype == 'Object' and slot_is_type_var and val_ty_name not in ('Object', '()'):
         # 字段声明为类型变量，但声明类的参数名在调用方不可见（ftype 保持擦除形态）：
         # 槽位类型是接收者的类型实参，值按原类型直接存入。

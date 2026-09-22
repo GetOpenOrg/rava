@@ -189,8 +189,16 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
         blocks: list[str] = []
         upcasts: list[str] = []
         uses: list[str] = []
-        if (recv_ci is not None and not recv.handwritten and IMPLS_SLOT in recv.text
-                and not recv_ci.is_interface and not (recv_ci.access_flags & _ACC_ABSTRACT)):
+        if (recv_ci is not None and not recv.handwritten
+                and (IMPLS_SLOT in recv.text or recv_ci.is_interface)):
+            # 抽象类 / 接口不发射接口 vtable impl（无实例，itable 条目由具体实现类
+            # 承担——既有语义），但 A-4 批次 3+ 起静态类型值会流经接口位置：
+            #   - 抽象类作为静态类型（Writer→Appendable / AbstractList→List）；
+            #   - 子接口载体上转到父接口载体（Spliterator_OfLong→Spliterator<Object>，
+            #     JDK 泛型特化接口族的常规形态——宏接口 impl 的返回桥接与调用点
+            #     上转都依赖；经 Object 边界保持对象身份，载体只持同一 __ref）。
+            _recv_abstract = bool(recv_ci.access_flags & _ACC_ABSTRACT)
+            _recv_is_iface = bool(recv_ci.is_interface)
             imported = {short_cls(recv_bin)}
             for ln in recv.text.split('\n'):
                 um = _USE_RE.match(ln)
@@ -201,6 +209,12 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
             recv_params = effective_class_type_params(recv_ci, registry)
             recv_generics = f"<{', '.join(recv_params)}>" if recv_params else ''
             recv_ty = short_cls(recv_bin) + (f"<{', '.join(recv_params)}>" if recv_params else '')
+            # 接口接收者的 upcast 源是其擦除载体形态（泛型特化接口在类型位置恒为
+            # I<Object, ..>——From<I<Object,..>> 覆盖全部静态出现）；类接收者保持
+            # 泛型源（任意实例化上转同一载体视图，Object::from 接受 C<E>）
+            _upcast_src_ty = (short_cls(recv_bin) + (f"<{', '.join(['Object'] * len(recv_params))}>"
+                                                     if recv_params else '')
+                              if _recv_is_iface else '')
             for iface_bin in _all_interfaces(recv_ci, registry):
                 iface = emissions.get(iface_bin)
                 iface_ci = registry.get(iface_bin)
@@ -209,7 +223,7 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                 iface_params = effective_class_type_params(iface_ci, registry)
                 type_params = set(iface_params)
                 decls: list[str] = []
-                for im in iface.methods:
+                for im in (iface.methods if not (_recv_abstract or _recv_is_iface) else ()):
                     erased = erased_declaration(im, type_params)
                     if erased is None:
                         continue
@@ -256,18 +270,22 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                     attr = f"#[java_method({', '.join(attr_parts)})]\n" if attr_parts else ''
                     decls.append(attr + erased + ';')
                     uses.extend(_imports_for(erased, iface, recv, imported))
-                if not decls:
-                    continue
-                vt_name = short_cls(iface_bin) + '__VTable'
-                if vt_name not in imported:
-                    imported.add(vt_name)
-                    uses.append(_vtable_use(iface_bin, recv.crate_prefix, emissions))
-                body = '\n'.join('    ' + ln for d in decls for ln in d.split('\n'))
-                blocks.append(f"impl{recv_generics} {short_cls(iface_bin)} for {recv_ty} {{\n{body}\n}}")
-                # A-4 协变 upcast：类实例 → 擦除接口载体视图（宏块之外的普通 Rust impl）。
-                # 调用点（invokeinterface / 擦除签名的隐式上转）生成 `Into::<I<Object>>::into(v)`：
-                # JVM 的 itable 只认擦除接口，接口载体也只持有 Object 引用，任意类实例化
-                # 上转到 `I<Object..>` 都是同一视图（保持对象身份，运行时类可达）。
+                if not decls and not (_recv_abstract or _recv_is_iface):
+                    continue  # 具体类：无可落地的成员即无 impl 关系（原语义）
+                if decls:
+                    vt_name = short_cls(iface_bin) + '__VTable'
+                    if vt_name not in imported:
+                        imported.add(vt_name)
+                        uses.append(_vtable_use(iface_bin, recv.crate_prefix, emissions))
+                    body = '\n'.join('    ' + ln for d in decls for ln in d.split('\n'))
+                    blocks.append(f"impl{recv_generics} {short_cls(iface_bin)} for {recv_ty} {{\n{body}\n}}")
+                # A-4 协变 upcast：类实例 / 子接口载体 → 擦除接口载体视图（宏块之外的
+                # 普通 Rust impl）。调用点（invokeinterface / 擦除签名的隐式上转）生成
+                # `Into::<I<Object>>::into(v)`：JVM 的 itable 只认擦除接口，接口载体也
+                # 只持有 Object 引用，任意类实例化上转到 `I<Object..>` 都是同一视图
+                # （保持对象身份，运行时类可达）；子接口载体（Spliterator_OfLong →
+                # Spliterator<Object>）经 Object 边界解包再包装，同一 __ref。
+                _up_src = _upcast_src_ty or recv_ty
                 erased_iface_ty = short_cls(iface_bin) + (
                     f"<{', '.join(['Object'] * len(iface_params))}>" if iface_params else '')
                 if short_cls(iface_bin) not in imported:
@@ -276,11 +294,13 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                 # 实现体必须用显式 UFCS：接口载体可能自带 Java `static from(..)` 工厂方法
                 # （如 ChronoLocalDate.from），`Iface::from(..)` 路径解析会被固有方法遮蔽，
                 # 错调工厂方法（返回 Result）而非 From trait。
+                # 接口接收者的 impl 头不带泛型（载体源/目标都是擦除实例化，具体类型）。
+                _up_g = '' if _recv_is_iface else _bounded_generics(recv_params)
                 upcasts.append(
-                    f"impl{_bounded_generics(recv_params)} From<{recv_ty}> for {erased_iface_ty} {{\n"
-                    f"    fn from(v: {recv_ty}) -> Self {{\n"
+                    f"impl{_up_g} From<{_up_src}> for {erased_iface_ty} {{\n"
+                    f"    fn from(v: {_up_src}) -> Self {{\n"
                     f"        <{erased_iface_ty} as ::std::convert::From<Object>>::from(\n"
-                    f"            <Object as ::std::convert::From<{recv_ty}>>::from(v))\n"
+                    f"            <Object as ::std::convert::From<{_up_src}>>::from(v))\n"
                     f"    }}\n"
                     f"}}")
 

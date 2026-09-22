@@ -8,6 +8,12 @@ from ...type_map import jvm_to_rust, short_cls, effective_class_type_params as _
 from ..coerce import _coerce_to_object
 from ..hierarchy import _is_subtype, _rust_type_to_binary
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
+from ...jvm_type import carrier_type_for_ident
+
+
+def _carrier_ident_enabled(rust_ty_base: str, registry) -> bool:
+    """静态类型首标识符是否为已铺设载体化的接口（instanceof 运行时化的判据）。"""
+    return carrier_type_for_ident(rust_ty_base, registry) is not None
 
 
 def _erased_shape(rust_ty: str) -> str:
@@ -46,7 +52,13 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                     _cast_elem = _cast_elem[1:-1] if _cast_elem.startswith('L') else ''
                 _cast_ci = registry.get(_cast_elem)
                 _cast_tps = _effective_class_type_params(_cast_ci, registry) if _cast_ci else []
-                if _cast_tps and all(_tp in sim.class_type_params for _tp in _cast_tps):
+                from ...jvm_type import carrier_type as _cast_carrier
+                _cast_is_carrier = (_cast_ci is not None and _cast_ci.is_interface
+                                    and _cast_carrier(_cast_elem, registry) is not None)
+                if (_cast_tps and not _cast_is_carrier
+                        and all(_tp in sim.class_type_params for _tp in _cast_tps)):
+                    # 接口载体不参与共享类型变量的实例化还原：载体是擦除运行时形态
+                    # （I<Object> 即 itable 视图），按 T 重新实例化会得到非法类型
                     _erased = f"{short_cls(_cast_elem)}<{', '.join(['Object'] * len(_cast_tps))}>"
                     cast_rust = cast_rust.replace(_erased, f"{short_cls(_cast_elem)}<{', '.join(_cast_tps)}>")
             expr, src_ty = sim.pop()
@@ -56,8 +68,14 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             # 现发射 interface_target 形态的 CastExpr（try_cast_iface：null 通过 /
             # is_instance_of 按运行时类接口闭包判定 / 失败 Err 可捕获，S-1），
             # 栈类型保持擦除记录 Object——载体进类型位置后翻转为目标载体形态。
+            # 批次 3+：已铺设载体化的接口不再走本分支——cast_rust 已是载体
+            # `I<Object>`，下方通用 checked 臂发射 try_cast::<I<Object>>（null 还原
+            # + downcast 快路径 + is_instance_of 名单，命中经 From<Object> 包装），
+            # 栈类型记录为载体。
             _tgt_ci = registry.get(comment) if (registry and not comment.startswith('[')) else None
-            if src_name == 'Object' and _tgt_ci is not None and _tgt_ci.is_interface:
+            from ...jvm_type import carrier_type as _carrier_type
+            if (src_name == 'Object' and _tgt_ci is not None and _tgt_ci.is_interface
+                    and _carrier_type(comment, registry) is None):
                 expr = CastExpr(expr, 'Object', binary_name=comment, checked=True,
                                 interface_target=True)
                 sim.push(expr, RsNamed('Object'))
@@ -153,6 +171,15 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             elif _is_subtype(target_for_subtype.split('<')[0], obj_ty_str.split('<')[0], registry):
                 # obj 静态类型是 target 的超类：装箱后按运行时类判定（is_instance_of 按
                 # vtable 的 all_supertypes 匹配 binary name，含类自身）
+                val_s_inst = render_expr(val_expr_inst)
+                _boxed_inst = _coerce_to_object(val_s_inst, obj_ty_str.split('<')[0], registry,
+                                                sim.class_type_params)
+                sim.push(InstanceOfExpr(RawExpr(_boxed_inst), comment), BOOL)
+            elif _carrier_ident_enabled(obj_ty_str.split('<')[0], registry):
+                # obj 静态类型是接口载体（A-4 批次 3+）：实现者开放——运行时对象可
+                # 同时实现目标接口（`Consumer 变量 instanceof IntConsumer`，streams 的
+                # instanceof 快路径依赖）或属于目标类族，接口间「互不为子类型」不构成
+                # 编译期否证 → 装箱（解包 __ref，保持运行时类）后按运行时判定
                 val_s_inst = render_expr(val_expr_inst)
                 _boxed_inst = _coerce_to_object(val_s_inst, obj_ty_str.split('<')[0], registry,
                                                 sim.class_type_params)

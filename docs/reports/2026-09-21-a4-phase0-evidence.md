@@ -206,3 +206,125 @@ TestComparable                         0     0
 TestOptional                           0     0
 TOTAL                                879   617
 ```
+
+## 8. 批次 3–5 落地（类型位置载体化，接管代理续做）
+
+四任接力（批次 3/4 = 第三任，批次 5 = 第四任），全部经 `jvm_type.CARRIER_TYPE_POSITIONS`
+单一决策点宽化，五擦除点（emitted_method_sig_types / method_gen 存根 / invoke_sig 调用点 /
+type_map.jvm_to_rust / sig_parse）自动同变：
+
+| 批次 | 提交 | 铺设接口 | TSB 记分牌 Into::<I> |
+|------|------|----------|----------------------|
+| 基线 | 74f70dd | — | 1879 |
+| 3 | 627f6dc | Iterator | 1744（TestIterator 18→8，Into::<Iterator> 清零） |
+| 4 | 9d61405 | List/Collection/Set/Map/Map$Entry/Queue/Deque/ListIterator | 1211 |
+| 5 | 29893be | 39 function 接口 + Comparator/Comparable/Collector | **1010** |
+
+TSB 记分牌累计 **1879 → 1010（−46.3%）**。
+
+### 批次 5 要点（第四任）
+
+- **子接口载体 → 父接口载体 upcast**（interface_gen 新发射环）：`impl From<BinaryOperator<Object>>
+  for BiFunction<Object, Object, Object>` 等——抽象类 / 接口接收者不发射 vtable impl（itable
+  条目由具体实现类承担），但静态类型值的隐式上转（Writer→Appendable 形态）经 Object 边界
+  保持对象身份。宏 interface.rs 的 `From<Object>`/`From<Self> for Object` 双向已备。
+- **载体 instanceof 运行时化**（sim/control）：载体化后接口局部值（`Consumer<Object>` 变量）
+  的 `instanceof` 不再按「互不为子类型」折叠编译期 false——实现者开放，运行时对象可同时
+  实现目标接口。**实证**：不修则 streams 的 instanceof 快路径整体消失
+  （RangeIntSpliterator.forEachRemaining 的 `action::accept` 装箱链 CCE：
+  `Integer cannot be cast to Integer`——裸 i32 装箱的 Object 类名是 Integer 但 as_any 是 i32，
+  Consumer 条目桥接 `Integer::from(Object)` 精确命中失败），TestStreamAdvanced 红线破；
+  修复后快路径复活（`Object::from(action).is_instance_of("java/util/function/IntConsumer")`）。
+- **SAM 条目差集桥接**（sam_objects）：default 条目体按「条目形参 → 声明形参」实际差集——
+  同为载体直传，Object→载体才 `From<Object>` 包装；载体返回 Result 直接透传。
+- **调用点实参载体例外**（invoke_sig）：类型变量代入（构造器 turbofish / 接收者实参映射）与
+  描述符直签同名两类保持载体；手写边界方法（`_impl.rs` 伴生，签名先于载体化）接口位回退
+  Object——`_handwritten_boundary_method` 存在性探测与 project_writer 同判据。
+
+### 批次 5 绿门
+
+- 42 例回归矩阵 32 PASS，10 失败全数定责基线：TestCollectionsUtil（Unsafe stub）/ 
+  TestMethodRefKinds（E0308）/ TestOptional / TestOptionalChain（NPE 族）沿 §6 既有；
+  TestLinkedHash / TestMapIteration / TestPriorityQueue / TestTreeMapSet 沿批次 4 复核；
+  **TestStringEdge 与 TestHashMapOps 本任新增对照**：基线 5757b73 同型同点
+  （Charset.<clinit> stub + internSame=false / null 数组 NPE 族），main 已由其他分支治愈
+  （sun/nio/cs 手写层等），合并即消。golden（expected/*.txt 对比）零差异——32 PASS 输出
+  逐字一致。
+- 审计线：TSB `[bfs-audit] 22/2734/0` 不变；downcast_ref=0；双种子归零（TSB + TestIterator）；
+  `type_surgery_sites` 62→69（+7 为批次 5 边界适配新增静态位点）；
+  TSB from_any 101→105（+4 全为 `.apply(..)` 返回位 val-typevar——A-1 取值端结构性残余，
+  Function/BiFunction 载体化后返回显式 Object，禁区不追）。
+
+### 遗留登记（终态 None 的次序依据）
+
+1. **CharSequence/Appendable——被手写 decimal 层阻塞**（本任实证）：载体化后两形态硬错——
+   (a) `DoubleToDecimal::appendTo(d, <Appendable as From<_>>::from(..))` 调用点发射载体而
+   手写签名 `appendTo(v: f64, arg1: Object)`（abstract_string_builder.rs:605）；
+   (b) 手写体自身 `.append_seq(Object::from(String::from(s)))` 传 Object 而载体签名要
+   `CharSequence`（double_to_decimal_impl.rs:397）。(b) 在 runtime/ 手写层，本分支纪律
+   「不碰 runtime 除宏外」不可修——需与手写层协同批（终态口径：手写层按载体签名书写，
+   或该族维持 Object 回退名单）。
+2. **Spliterator 族**（批次 5 沿暂缓）：特化桥接 forEachRemaining(Object)↔(LongConsumer)
+   名/型解析发散（既有登记）。
+3. **TSB 残余 1010 分布**：Temporal 族 ~211 / Spliterator 族 ~126 / CharSequence+Appendable
+   ~100（上述阻塞）/ Node+Stream+Sink ~136（streams 内部接口族，Sink extends Consumer 的
+   父链 upcast 机制已备）/ Pattern_CharPredicate 45 / 已铺设族残余位（Consumer 41、
+   Comparable 30——Object 途径流入的结构残余，终态收敛）。
+
+### 终态全量测量（45 测集，@29893be）
+
+```
+test                                   from_any  mrg  let  inl  Into<I> Into<Obj> cast_if
+test_ArrayList                                0    0    0    0        5        92       2
+test_ArraysUtil                             103    0  102    1      975      1082     130
+test_AutoboxEdge                              2    0    1    1        2        74       0
+test_Autoboxing                               0    0    0    0        2        51       0
+test_BoundedGenerics                          0    0    0    0        3        43       0
+test_Casting                                  0    0    0    0        2        49       0
+test_CollectionFactory                      103    0  102    1      997      1093     133
+test_Collections                              0    0    0    0        5        90       2
+test_Comparable                               0    0    0    0       19        43      15
+test_Comparator                               0    0    0    0       25        75      20
+test_DefaultMethods                           0    0    0    0        2        41       0
+test_EnumMethods                            103    0  102    1      975      1078     130
+test_ForEach                                  1    0    1    0        2        44       0
+test_FunctionalInterface                    103    0  102    1     1004      1080     130
+test_GenericMethod                            0    0    0    0        3        43       0
+test_HashMapOps                              40    0   40    0       22       170      17
+test_InheritedMethod                          0    0    0    0        2        48       0
+test_InterfaceStatic                        103    0  102    1      975      1082     130
+test_Interfaces                               0    0    0    0        3        43       0
+test_Iterator                                 0    0    0    0        2        46       0
+test_Lambda                                   0    0    0    0       20        81      15
+test_LambdaCapture                          103    0  102    1      975      1078     130
+test_LambdaVar                              104    0  103    1      986      1082     130
+test_LinkedHash                               2    0    1    1        5       127       2
+test_LinkedList                               2    0    2    0        2        49       0
+test_ListOf                                   2    0    1    1       19       135      15
+test_MapIteration                             5    0    5    0       22       137      17
+test_MethodRef                                0    0    0    0        2        48       0
+test_MultiCatch                               0    0    0    0        2        41       0
+test_Optional                                 0    0    0    0        2        48       0
+test_OptionalFull                           103    0  102    1      987      1081     130
+test_PatternMatch                           103    0  102    1      975      1078     130
+test_PriorityQueue                            4    0    3    1       23       120      18
+test_Sorting                                  0    0    0    0        2        41       0
+test_StreamAdvanced                         107    0  105    2     1044      1106     146
+test_StreamBasic                            105    0  104    1     1010      1099     131
+test_StreamCollectors                       111    0  110    1     1009      1173     131
+test_StreamMore                             108    0  106    2     1031      1103     144
+test_StringBuilder                          103    0  102    1      981      1084     130
+test_StringBuilderOps                         0    0    0    0        2        43       0
+test_StringEdge                               4    0    4    0        8       143       2
+test_StringRegex                            103    0  102    1      981      1082     130
+test_StringSearch                           103    0  102    1      981      1078     130
+test_TreeMapSet                             106    0  105    1     1010      1141     136
+test_Varargs                                  0    0    0    0        2        45       0
+TOTAL                                      1836    0 1813   23    17106     20610    2376
+```
+
+全测集口径前后对照：**Into::<I> 32931（§7 基线 @74f70dd）→ 17106（本表 @29893be，
+−48.0%）**；from_any 2538 → 1836（−27.7%，残余 let-align 为主，A-1 取值端域）；
+try_cast_iface 4827（批次 3 后快照）→ 2376（−50.8%，载体 checkcast 接管）。
+记分牌曲线（TSB 口径）：1879（基线）→ 1744（批次 3）→ 1211（批次 4）→ 1010（批次 5），
+累计 −46.3%；全测集口径 32931 →（批次 3 后 30199）→ 17106。
