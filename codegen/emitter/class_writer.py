@@ -685,6 +685,9 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
         # 覆盖判定键：vtable 槽位（name + 参数描述符部分，返回类型协变不计）
         _vinh_existing: set[tuple] = {
             (m.name, _vinh_param_part(m.descriptor)) for m in visible_methods}
+        # 本轮已发射的槽位（name + 参数部分）：链上多个祖先重复声明同签名（含
+        # 逐级协变重声明）时只落一次，桥路径不受 _vinh_existing 初始集抑制
+        _vinh_done: set[tuple] = set()
         _vinh_super = ci.super_class
         while _vinh_super and _vinh_super != _OBJECT_CLASS and _vinh_super in registry:
             _vinh_is_user = '/' not in _vinh_super   # 链模式逐祖先判定
@@ -692,7 +695,25 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
             if _vinh_sci is None:
                 break
             for _vm in _vinh_sci.methods:
-                if (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_existing:
+                # 桥方法（ACC_BRIDGE）是槽位覆盖的语义载体：javac 为两类覆盖合成
+                # 「与祖先槽位精确同签名」的桥——
+                #   - 泛型父类/接口的参数位擦除覆盖（put(Object) → put(String)）
+                #   - 协变返回覆盖（value()Number → value()Integer）
+                # 桥体（checkcast / 转发 + 返回位上转）翻译后落槽，替代按本类视角
+                # 代入的存根（签名与擦除槽位不符，E0053）或描述符不匹配的漏判。
+                _vm_bridge = None
+                if (not _vm.is_static and not _vm.is_constructor
+                        and _vm.name not in ('<init>', '<clinit>')):
+                    _has_exact = any(m.name == _vm.name and m.descriptor == _vm.descriptor
+                                     for m in visible_methods)
+                    if not _has_exact:
+                        _vm_bridge = next((b for b in ci.methods
+                                           if (b.access_flags & 0x0040) and not b.is_static
+                                           and b.name == _vm.name
+                                           and b.descriptor == _vm.descriptor), None)
+                if (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_existing \
+                        and (_vm_bridge is None
+                             or (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_done):
                     continue
                 if _vm.is_static or _vm.is_constructor or _vm.name in ('<init>', '<clinit>'):
                     continue
@@ -705,10 +726,14 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     continue  # JDK 链：调用链未收录的祖先虚方法不登记（无体可转发，
                     # 留空槽位 = 声明类 trait default，与既有行为一致）
                 _vinh_existing.add((_vm.name, _vinh_param_part(_vm.descriptor)))
+                if (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_done:
+                    continue
+                _vinh_done.add((_vm.name, _vinh_param_part(_vm.descriptor)))
                 if not _vinh_is_user:
-                    # JDK 链：槽位填补经继承成员转发（inherited_gen 第二阶段生成）。
-                    # 登记键 = (接收者, Java 方法名, 参数描述符部分)，与调用点触发
-                    # 的需求同一账本（去重 / bridge 优先级 / 导入全部复用）
+                    # JDK 链：槽位填补经继承成员转发（inherited_gen 第二阶段生成，
+                    # 桥成员槽位由其 _bridge_override_member 机制处理——virtual_in 归
+                    # 真实声明链）。登记键 = (接收者, Java 方法名, 参数描述符部分)，
+                    # 与调用点触发的需求同一账本（去重 / bridge 优先级 / 导入全部复用）
                     if not _vm.is_abstract:
                         _anc_hand = ((new_format_map or {}).get(_vinh_super) or {}).get('methods', ())
                         _hand_hit = (safe_ident(_vm.name) in _anc_hand
@@ -722,10 +747,69 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                 _vm_virt_in = resolve_virtual_slot(_vm, _vinh_sci, registry, new_format_map)
                 if not _vm_virt_in:
                     continue  # 非虚方法，不继承
+                if _vm_bridge is not None:
+                    # 槽位是否已由本类可见覆盖经协变落位填充（返回位 Object 化可表达的
+                    # 协变覆盖，如 ClassCache$1.computeValue → ClassValue 槽）：已填则
+                    # 桥再发射会与真实覆盖在 vtable impl 重复（E0201），跳过
+                    _slot_filled = any(
+                        (not m.is_static and not m.is_constructor and m.name == _vm.name
+                         and resolve_virtual_slot(m, ci, registry, new_format_map) == _vm_virt_in)
+                        for m in visible_methods)
+                    if _slot_filled:
+                        continue
                 _vm2 = _copy3.copy(_vm)
                 _vm2.class_name = ci.name
                 _vm2.virtual_in = _vm_virt_in
                 _vm_attr = _java_method_attr(_vm2)
+                if _vm_bridge is not None and _vm_in_cc and not stub_bodies:
+                    # 桥 wrapper 名：与可见方法同名即 mangle（可见方法与桥常仅返回位不同，
+                    # 重载判定可能漏计桥自身）；同名同参（仅返回不同，参数位 mangle 无法
+                    # 区分）→ 沿 Iface_super_m 命名约定取唯一名，槽位名经 vtable_name 传递
+                    _vb_base = _vm_bridge.name
+                    if any(m.name == _vm_bridge.name for m in visible_methods):
+                        _same_params = any(
+                            m.name == _vm_bridge.name
+                            and _vinh_param_part(m.descriptor) == _vinh_param_part(_vm_bridge.descriptor)
+                            for m in visible_methods)
+                        if _same_params:
+                            from ..instr.member_owner import (
+                                interface_special_member_name as _ismn_vb,
+                            )
+                            from ..instr.hierarchy import _rust_type_to_binary as _rtb_vb
+                            _vb_owner_bin = (_rtb_vb(_vm_virt_in, registry) or _vinh_super)
+                            _vb_base = safe_ident(_ismn_vb(
+                                _vb_owner_bin, _vm_bridge.name, _vm_bridge.descriptor, registry))
+                        else:
+                            _vb_base = mangle_name(_vm_bridge.name, _vm_bridge.descriptor)
+                    _vb2 = _copy3.copy(_vm_bridge)
+                    _vb2.class_name = ci.name
+                    _vb2.virtual_in = _vm_virt_in
+                    if _vm_virt_in and _vm_virt_in != short_cls(ci.name):
+                        _slot_name = slot_member_rust_name(_vm2, ci, registry, new_format_map)
+                        if _slot_name and _slot_name != _vb_base:
+                            _vb2.vtable_name = _slot_name
+                        _vb2.vtable_erasure = _override_vtable_erasure(_vm2, ci, registry)
+                    try:
+                        _vb_body = gen_method_body(
+                            _vm_bridge, ci, registry=registry,
+                            class_type_params=class_type_params,
+                            overloaded_names=overloaded_names,
+                            rust_name=_vb_base,
+                            in_vtable_body=True,
+                        )
+                        method_blocks.append(_java_method_attr(_vb2) + '\n' + _vb_body)
+                        continue
+                    except CfgAuditError:
+                        raise
+                    except Exception as e:
+                        # 桥体翻译失败：本类已有同参可见覆盖（协变/参数位）时回退旧
+                        # 行为（跳过——槽位由既有机制处理），避免与真实覆盖重复定义；
+                        # 无可见覆盖（抽象祖先参数位）时保持存根
+                        _CFG_STATS.record_stub_fallback(f"{ci.name}.{_vm.name}:{_vm.descriptor}(bridge)", repr(e))
+                        if any(m.name == _vm.name
+                               and _vinh_param_part(m.descriptor) == _vinh_param_part(_vm.descriptor)
+                               for m in visible_methods):
+                            continue
                 if _vm.is_native or _vm.is_abstract or not _vm_in_cc or stub_bodies:
                     _vm_stub = _gen_native_stub(_vm2, ci, registry=registry, class_type_params=class_type_params)
                     method_blocks.append(_vm_attr + '\n' + _vm_stub)
