@@ -12,8 +12,9 @@ from ..hierarchy import _is_subtype, _into_super_chain
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 from ... import equiv_audit
 
-# 数组创建指令（neg-array 口径：S-8 潜在负长度路径——长度是运行期值，codegen
-# 无法静态判定，当前对这三个指令的全部发射点计数；S-8 修复后转为创建点总量观测）
+# 数组创建指令（neg-array 口径：S-8 修复后创建点全部经 JArray::try_new/try_new_with
+# 的负长度检查（NegativeArraySizeException，Err 形态可被 java_try 捕获），本计数转为
+# 创建点总量观测）
 _ARRAY_CREATE_OPS = frozenset({'newarray', 'anewarray', 'multianewarray'})
 
 # 数组访问指令（null-array 口径：S-2.1 null 表示语义的作用面——这些指令在
@@ -58,7 +59,8 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         count_expr = _pop_index(sim)   # JVM 计数恒为 int：readShort 等窄来源提升为 i32
         elem_t, _zero = NEWARRAY_TYPES.get(operand.strip(), ('i32', '0i32'))
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::new({render_expr(count_expr)});"))
+        # try_new：负长度抛 NegativeArraySizeException（S-8，Err 形态随方法体 Result 传播）
+        sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::try_new({render_expr(count_expr)})?;"))
         sim.push(Var(v), RsNamed(f'JArray<{elem_t}>'))
     elif op == 'anewarray':
         count_expr = _pop_index(sim)
@@ -84,7 +86,8 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         else:
             elem_t = 'Object'
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::new({render_expr(count_expr)});"))
+        # try_new：负长度抛 NegativeArraySizeException（S-8）
+        sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::try_new({render_expr(count_expr)})?;"))
         sim.push(Var(v), RsNamed(f'JArray<{elem_t}>'))
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
@@ -100,11 +103,13 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
             _levels.append(_cur_t)
             _m_lv = _re.match(r'JArray<(.+)>$', _cur_t)
             _cur_t = _m_lv.group(1) if _m_lv else 'Object'
-        init = f"{_levels[-1].replace('JArray<', 'JArray::<', 1)}::new({sizes[-1]})"
+        # try_new / try_new_with：任一已给维度为负抛 NegativeArraySizeException（S-8）；
+        # 内层维的 Err 经逐行构造的闭包返回值传播（闭包返回 Result，无需内层 `?`）
+        init = f"{_levels[-1].replace('JArray<', 'JArray::<', 1)}::try_new({sizes[-1]})"
         for _lv in range(dims - 2, -1, -1):
-            init = f"{_levels[_lv].replace('JArray<', 'JArray::<', 1)}::new_with({sizes[_lv]}, || {init})"
+            init = f"{_levels[_lv].replace('JArray<', 'JArray::<', 1)}::try_new_with({sizes[_lv]}, || {init})"
         v = sim.fresh('_arr')
-        sim.emit(RawStmt(f"let mut {v}: {arr_t} = {init};"))
+        sim.emit(RawStmt(f"let mut {v}: {arr_t} = {init}?;"))
         sim.push(Var(v), RsNamed(arr_t))
     elif op in ('iastore', 'lastore', 'fastore', 'dastore'):
         val_expr, _val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
@@ -147,13 +152,13 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
             # `spine[i] = (E[]) new Object[n]`：javac 擦除了 unchecked cast，新建数组的元素类型
             # 由它存入的槽位决定 → 数组在创建处即按槽位元素类型实例化（JArray<E>），
             # 而不是先建 JArray<Object> 再转换（两者是不同的运行时类型）
-            _fresh_decl = f"let mut {val_str}: JArray<Object> = JArray::<Object>::new("
+            _fresh_decl = f"let mut {val_str}: JArray<Object> = JArray::<Object>::try_new("
             for _si in range(len(sim.stmts) - 1, -1, -1):
                 _st = sim.stmts[_si]
                 if isinstance(_st, RawStmt) and _st.code.startswith(_fresh_decl):
                     _inner_t = elem_ty[len('JArray<'):-1]
                     sim.stmts[_si] = RawStmt(
-                        f"let mut {val_str}: {elem_ty} = JArray::<{_inner_t}>::new("
+                        f"let mut {val_str}: {elem_ty} = JArray::<{_inner_t}>::try_new("
                         + _st.code[len(_fresh_decl):])
                     val_ty_str = elem_ty
                     break
