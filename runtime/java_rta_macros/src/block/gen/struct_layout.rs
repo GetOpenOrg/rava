@@ -4,7 +4,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::Ident;
 
-use super::super::util::is_basic;
+use super::super::util::{is_basic, type_is_int, type_is_long};
 use super::context::GenContext;
 
 /// Inner struct（平铺字段：superclass_fields + own fields，非泛型——A-1 存储层擦除）
@@ -177,6 +177,66 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         }
     };
 
+    // Unsafe 实例字段原子协议（运行时类应答）：inner 平铺持有全部继承字段且存储
+    // 即共享单元（Rc<Cell<i64/i32>>），按字段名直答。wrapper 侧的同名方法按静态
+    // 类生成臂（downcast 自身 inner）——静态基类视图（如 AQS 视图承载
+    // CountDownLatch$Sync inner）的请求臂不可达，由 wrapper 未命中后经 vtable
+    // 委托到本覆盖应答（与 `__erased_vtable` 的「inner 覆盖 + wrapper 委托」
+    // 同型）。臂只对非擦除的裸 i64/i32 平铺字段生成；字段不在名单 → 不生成方法，
+    // 落 object.rs 的 trait 默认 None（调用方归 stub）。
+    let inner_long_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+        .chain(ctx.fields.iter())
+        .filter(|(name, ty)| !ctx.is_erased(name) && type_is_long(ty))
+        .map(|(name, _)| {
+            let field_str = name.to_string();
+            quote! {
+                #field_str => ::std::option::Option::Some(
+                    ::std::rc::Rc::clone(&self.#name)),
+            }
+        })
+        .collect();
+    let inner_int_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+        .chain(ctx.fields.iter())
+        .filter(|(name, ty)| !ctx.is_erased(name) && type_is_int(ty))
+        .map(|(name, _)| {
+            let field_str = name.to_string();
+            quote! {
+                #field_str => ::std::option::Option::Some(
+                    ::std::rc::Rc::clone(&self.#name)),
+            }
+        })
+        .collect();
+    let inner_long_cell_query: TokenStream2 = if inner_long_cell_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __unsafe_long_cell(
+                &self,
+                field: &str,
+            ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<i64>>> {
+                match field {
+                    #(#inner_long_cell_arms)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+        }
+    };
+    let inner_int_cell_query: TokenStream2 = if inner_int_cell_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __unsafe_int_cell(
+                &self,
+                field: &str,
+            ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<i32>>> {
+                match field {
+                    #(#inner_int_cell_arms)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+        }
+    };
+
     // A-1 存储层擦除后，inner 的 ObjectVTable impl 只承载「按擦除类」的判定与桥接：
     // 视图重建（__view_as / __view_into）、逐字段浅拷贝（__shallow_copy）与擦除存储
     // 导出（__erased_state，已删除）都移到 wrapper 侧——Object 直接持有 wrapper
@@ -197,6 +257,8 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #equals_inner_bridge
                 #interface_query
                 #erased_vtable_query
+                #inner_long_cell_query
+                #inner_int_cell_query
                 #to_string_inner_bridge
             }
         }
