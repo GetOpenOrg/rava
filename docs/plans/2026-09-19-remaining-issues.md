@@ -54,7 +54,7 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 | A-1 的运行时症状：通配符/跨实例化转换 `ClassCastException` | 近似等价 |
 | `monitorenter`/`monitorexit` no-op（tasks.md 跟踪，`InternalLock` 已就绪待接入） | 条件等价：单线程行为等价，多线程降级 |
 | S-11（`newLockOrNull` 恒返回 null） | 条件等价：单线程行为等价 |
-| 反射族（`Method.invoke` / `Field.get`，V-1 归类后按需立项） | 终态方向：静态注册表——`Class::for_class` + `CLASS_HIERARCHY`（build.rs）已验证此路线 |
+| 反射族（`Method.invoke` / `Field.get`） | **Field 侧已落地（2026-09-22，`18f1fa2`）：FIELD_TABLE + not-found 语义 + getComponentType/Field.get/set，TestCollectionFactory 转绿、探针转正 2 用例**；Method 侧评估入档（方法属性 4 空格对齐坑；L3 `Method.invoke` 分派协议须与 A-4 载体化合流——`2026-09-22-method-metadata-table-eval.md`） |
 
 **与 ruva 模型的分歧（已评估，不采纳）**：单继承组合 + `Deref`（本项目用 vtable 双指针，多态保真度更高）；`String` = `Vec<u16>`（本项目走字节码翻译，保留 compact strings）；`null` = `Option<T>`（与 Object 模型冲突，null 缺口按 S-2/S-3 单独修）；「内部 API 不支持」三层边界（本项目翻译 JDK 自身字节码，`jdk/internal/` 走边界类按需手写，哲学相反）。
 
