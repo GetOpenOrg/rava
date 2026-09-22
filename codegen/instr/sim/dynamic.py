@@ -137,21 +137,30 @@ def _gen_type_switch(sim, comment: str, registry) -> None:
         coerced = _coerce_to_object(render_expr(sel_e), sel_ty, registry, sim.class_type_params)
         obj_expr = sim.fresh_let('__ts_sel', RawExpr(coerced), RsNamed('Object'))
     obj_s = render_expr(obj_expr)
-    if any(kind != 'c' for kind, _ in labels):
-        # String / Integer 常量标签（`case "x"` / `case 42` 于 Object selector）与
-        # EnumDesc：等值判定需 Objects.equals / integerEqCheck（Number 族 intValue
-        # 比较）桥，暂未落地 —— 保持可见的占位失败，归类报告，不静默给错值
+    if any(kind not in ('c', 's', 'i') for kind, _ in labels):
+        # EnumDesc 等（CONSTANT_Dynamic 形态）暂未落地 —— 保持可见的占位失败，
+        # 归类报告，不静默给错值
         sim.emit(RawStmt(
             '/* TODO S-17: typeSwitch 含未支持的标签形态（'
-            + ','.join(kind for kind, _ in labels if kind != 'c')
+            + ','.join(kind for kind, _ in labels if kind not in ('c', 's', 'i'))
             + '），退化为占位 */'))
         sim.push(RawExpr('Object::default()'), RsNamed('Object'))
         return
-    # null → -1；否则按标签序判定（`restart <= i` 守卫实现 restart 语义）；未命中 → len
+    # null → -1；否则按标签序判定（`restart <= i` 守卫实现 restart 语义）；未命中 → len。
+    # 标签谓词（SwitchBootstraps.typeSwitch 语义）：
+    #   'c' Class 标签 = 运行时 instanceof；'s' String 常量 = label.equals(selector)；
+    #   'i' Integer 常量 = selector instanceof Integer 且值相等（判定桥见 java_runtime
+    #   lib.rs 的 _ts_str_label_eq / _ts_int_label_eq，经 prelude 导出）
+    import json as _json_ts
     chain = f'if _is_jnull(&{obj_s}) {{ -1 }} else '
-    for i, (_kind, bin_name) in enumerate(labels):
-        chain += (f'if {restart_s} <= {i} && {obj_s}.is_instance_of("{bin_name}") '
-                  f'{{ {i} }} else ')
+    for i, (_kind, _lval) in enumerate(labels):
+        if _kind == 'c':
+            _pred = f'{obj_s}.is_instance_of("{_lval}")'
+        elif _kind == 's':
+            _pred = f'_ts_str_label_eq({_json_ts.dumps(_lval)}, &{obj_s})'
+        else:  # 'i'
+            _pred = f'_ts_int_label_eq({_lval}, &{obj_s})'
+        chain += f'if {restart_s} <= {i} && {_pred} {{ {i} }} else '
     chain += f'{{ {len(labels)} }}'
     idx = sim.fresh_let('__ts_idx', RawExpr(chain), I32)
     sim.push(idx, I32)
