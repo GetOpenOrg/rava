@@ -7,13 +7,19 @@ use crate::java::lang::Class;
 
 /// Rust 符号路径 → Java 声明类 binary name（斜线形态）。
 ///
-/// 翻译方法的符号形态（std Backtrace Display）：
-/// `<java_runtime::java::util::concurrent::atomic::atomic_reference::AtomicReference>::__clinit`
-/// —— `java_runtime::` 前缀后是包的 snake 模块段、类型段、方法段（可能带
-/// `::<泛参>` / `::{closure}` 尾巴）。规则：
-/// - 泛参与闭包尾巴（首个 `<` 起）截断；
+/// 翻译方法的符号形态（std Backtrace Display，TestAtomics scratch 实测）：
+/// - 包裹体形态：`<java_runtime::jdk::internal::reflect::reflection::Reflection>::getCallerClass`
+///   （inherent 方法按类型的规范化路径符号化，`_impl.rs` 伴生方法亦然）；
+/// - 泛型尾巴形态：`...::AtomicReference::<Object>::__clinit` / `...::{closure#0}`。
+/// 解析规则：
+/// - 取首个 `<` 到其后首个 `>` 的内部为路径体（泛型实参尾巴一并截断），
+///   无 `<` 按裸路径；旧的「剥首 `<` 剥尾 `>`」会把 `>` 留在类型段里
+///   （`Reflection>`）导致永不命中——本批修正；
 /// - 从右向左跳过方法/函数段（小写或下划线开头、空段），首个大写开头段 = 类型段；
 /// - 类型段的 `_` 是内部类 `$` 分隔（Java 类名不含下划线，宏对嵌套类即此命名）；
+/// - 包段末段的「类文件 stem」（snake(类简单名)，如 atomic_reference / reflection /
+///   method_handles）不是 Java 包——codegen 每类一文件，类型自身模块名恰是 stem，
+///   归一化比较（去 `_`/`$` 后小写相等）命中即剥掉；不命中（非 java_runtime 形态）保留；
 /// - 包段的单词式关键字转义（尾随一个 `_`，如 `unsafe_`）剥掉下划线。
 /// 解析不出（非 java_runtime 帧 / 形态不符）返回 None。
 fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
@@ -23,9 +29,17 @@ fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
         "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe",
         "use", "where", "while",
     ];
-    let s = symbol.trim_start_matches('<').trim_end_matches('>');
-    let start = s.find("java_runtime::")?;
-    let path = s[start..].split('<').next()?;
+    // 路径体：`<...>` 包裹体取内部（首个 `>` 前截断，泛型实参一并丢弃），
+    // 其后的 `::method` 段对类解析无意义；无包裹体按裸路径。
+    let path: &str = if let Some(open) = symbol.find('<') {
+        let rest = &symbol[open + 1..];
+        let end = rest.find('>').unwrap_or(rest.len());
+        &rest[..end]
+    } else {
+        symbol
+    };
+    let start = path.find("java_runtime::")?;
+    let path = path[start..].split('<').next()?;
     let segs: Vec<&str> = path.split("::").collect();
     // 从右向左找类型段（首个大写开头段；小写/下划线开头为方法或辅助函数段）
     let mut idx = segs.len();
@@ -51,6 +65,15 @@ fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
             pkg.push(stripped.to_owned());
         } else {
             pkg.push((*seg).to_owned());
+        }
+    }
+    // 末段若是类型自身文件的 stem（snake(类简单名)）则剥掉——它不是 Java 包段
+    if let Some(last) = pkg.last() {
+        let norm = |s: &str| -> std::string::String {
+            s.chars().filter(|c| *c != '_' && *c != '$').flat_map(|c| c.to_lowercase()).collect()
+        };
+        if norm(last) == norm(&type_name) {
+            pkg.pop();
         }
     }
     if pkg.is_empty() {
