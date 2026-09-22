@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use super::shared_secrets::SharedSecrets;
 use super::java_lang_access_impl::SystemJavaLangAccess;
+use super::java_util_collection_access_impl::ImmutableCollectionsCollAccess;
 use std::cell::RefCell;
 
 // SharedSecrets 的 static 槽位：各公开 API 类在自己的 <clinit> 里登记访问器实例。
@@ -10,6 +11,7 @@ thread_local! {
     static JAVA_IO_PRINT_STREAM_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_REF_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JAVA_UTIL_COLLECTION_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
 }
 
 impl SharedSecrets {
@@ -64,5 +66,21 @@ impl SharedSecrets {
             JAVA_LANG_ACCESS.with(|slot| *slot.borrow_mut() = Some(obj));
         }
         Ok(JAVA_LANG_ACCESS.with(|slot| slot.borrow().clone()).unwrap_or_default())
+    }
+
+    /// JDK 中由 `ImmutableCollections.<clinit>` 以匿名类登记（转发该类同名静态，
+    /// `Stream.toList` 的 trusted-array 路径消费）。与 getJavaLangAccess 同约定：
+    /// 槽位为空时直接构造登记（无状态对象，首次取用即生效）。
+    ///
+    /// upcalls：匿名类的两个转发目标静态不在任何字节码调用边上（BFS 在本边界
+    /// 截断），经此声明拉入闭包——触达即翻译，`listFromTrustedArrayNullsAllowed`
+    /// （ReferencePipeline.toList 实际消费的变体）不再停留 panic 存根。
+    #[jvm_boundary(upcalls = "java/util/ImmutableCollections.listFromTrustedArray:([Ljava/lang/Object;)Ljava/util/List; java/util/ImmutableCollections.listFromTrustedArrayNullsAllowed:([Ljava/lang/Object;)Ljava/util/List;")]
+    pub fn getJavaUtilCollectionAccess() -> Result<Object> {
+        if JAVA_UTIL_COLLECTION_ACCESS.with(|slot| slot.borrow().is_none()) {
+            let obj = Object::from(ImmutableCollectionsCollAccess);
+            JAVA_UTIL_COLLECTION_ACCESS.with(|slot| *slot.borrow_mut() = Some(obj));
+        }
+        Ok(JAVA_UTIL_COLLECTION_ACCESS.with(|slot| slot.borrow().clone()).unwrap_or_default())
     }
 }
