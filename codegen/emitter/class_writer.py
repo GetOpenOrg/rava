@@ -750,16 +750,28 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
                         f'pub fn hashCode(&self) -> Result<i32> {{\n    Ok(0)\n}}')
                 elif 'pub fn equals(' in block:
                     attr = block[:block.index('pub fn equals(')]
+                    from ..jvm_type import Primitive as _JvmPrimitive, ClassRef as _JvmClassRef
+                    from ..jvm_type import from_descriptor as _jvm_from_desc
                     field_cmps = []
                     for f in record_fields:
                         fname = safe_ident(f.name)
-                        rust_fty = jvm_to_rust(f.descriptor, registry)
-                        if rust_fty == 'String':
+                        # 分量比较形态经 jvm_type 代数判定（规则六：类型决策走类型对象）：
+                        # 基本分量 == ；String 分量值等（to_string() ==，与既有路径一致）；
+                        # 其余引用分量（含泛型 T，擦除描述符 Ljava/lang/Object;）按 javac
+                        # 字节码语义走擦除 Object.equals 虚分派（运行时类覆盖优先，
+                        # Box<Integer> 的 Integer.equals 即值等）
+                        _f_ty = _jvm_from_desc(f.descriptor)
+                        if isinstance(_f_ty, _JvmPrimitive):
+                            field_cmps.append(f'this.__get_{fname}() == other.__get_{fname}()')
+                        elif isinstance(_f_ty, _JvmClassRef) and _f_ty.binary == STRING_CLASS:
                             field_cmps.append(
                                 f'this.__get_{fname}().to_string() == other.__get_{fname}().to_string()'
                             )
                         else:
-                            field_cmps.append(f'this.__get_{fname}() == other.__get_{fname}()')
+                            field_cmps.append(
+                                f'Into::<Object>::into(this.__get_{fname}())'
+                                f'.equals(Into::<Object>::into(other.__get_{fname}()))?'
+                            )
                     cmp_expr = ' && '.join(field_cmps) if field_cmps else 'true'
                     new_blocks.append(attr +
                         f'pub fn equals(&self, mut o: Object) -> Result<bool> {{\n'
