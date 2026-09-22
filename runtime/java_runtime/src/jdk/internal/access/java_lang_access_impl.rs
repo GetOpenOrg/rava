@@ -4,14 +4,16 @@
 //! JDK 中该接口由 `java/lang/System$JavaLangAccess`（System 的内部类）实现，
 //! `System.<clinit>` 经 `setJavaLangAccess()` 登记到 SharedSecrets。该内部类实现
 //! `jdk/internal/` 内部接口，属内部边界族 → 本文件整体手写（规则 3b）：只实现
-//! 调用链触达的 `getEnumConstantsShared` 与 `join`，其余方法走接口 vtable
-//! trait 的默认 `panic!("stub: ...")` 存根（生成侧 java_lang_access.rs 自带）。
+//! 调用链触达的 `newStringNoRepl`、`getEnumConstantsShared` 与 `join`，其余方法
+//! 走接口 vtable trait 的默认 `panic!("stub: ...")` 存根（生成侧
+//! java_lang_access.rs 自带）。
 
 use crate::prelude::*;
 use super::java_lang_access::JavaLangAccess__VTable;
 use crate::java::lang::Class;
 use crate::java::lang::Enum;
 use crate::java::lang::String;
+use crate::java::nio::charset::Charset;
 
 /// `java/lang/System$JavaLangAccess` 的手写实现对象。
 ///
@@ -44,6 +46,39 @@ fn _get_bytes_into(src_val: &[i8], src_coder: i8, dst: &mut Vec<i8>, dst_coder: 
 }
 
 impl JavaLangAccess__VTable for SystemJavaLangAccess {
+    /// `newStringNoRepl(byte[], Charset)`：JDK 转发 `StringCoding.newStringNoRepl`
+    /// （REPORT 动作解码，错码抛 CharacterCodingException）。语料消费面为
+    /// Latin-1 / UTF-8 两族：Latin-1 逐字节为 char（紧凑 LATIN1 coder，无错码
+    /// 面）；UTF-8 严格解码（错码路径以 stub 文本报错——CharacterCodingException
+    /// 不强制入闭包，K-2 编译面约束，语料无误码输入）。其余 charset 未消费。
+    fn newStringNoRepl(&self, arg0: JArray<i8>, arg1: Charset) -> Result<String> {
+        let name = if arg1.is_jvm_null() {
+            std::string::String::new()
+        } else {
+            format!("{}", arg1.__get_name())
+        };
+        match name.as_str() {
+            "ISO-8859-1" => {
+                let mut inst = String::default();
+                inst._init_not_null();
+                inst.__set_value(Clone::clone(&arg0));
+                inst.__set_coder(0i8);
+                Ok(inst)
+            }
+            "UTF-8" => {
+                let mut raw: Vec<u8> = Vec::new();
+                for i in 0..arg0.len()? {
+                    raw.push(arg0.get(i)? as u8);
+                }
+                match std::str::from_utf8(&raw) {
+                    Ok(text) => Ok(String::from_owned(text.to_owned())),
+                    Err(e) => panic!("stub: java/nio/charset/CharacterCodingException (newStringNoRepl UTF-8 malformed at {})", e.valid_up_to()),
+                }
+            }
+            _ => panic!("stub: jdk/internal/access/JavaLangAccess.newStringNoRepl:([BLjava/nio/charset/Charset;)Ljava/lang/String; (charset {} 未消费)", name),
+        }
+    }
+
     /// `getEnumConstantsShared(Class<E>)E[]`：枚举宇宙从运行时常量目录重建
     /// （`java_class!` 宏在类初始化后按「自身类型 static 字段」形态登记，枚举
     /// 常量即该形态，登记序 == 声明序 == ordinal 序）。入参 Class 的名字为点分

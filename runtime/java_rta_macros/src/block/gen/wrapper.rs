@@ -18,7 +18,7 @@ use super::super::parse::split_type_name_args;
 use super::super::rewrite::{
     rewrite_base_calls_for_wrapper, rewrite_block, rewrite_virtual_calls_for_wrapper,
 };
-use super::super::util::{attr_str, strip_meta_attrs};
+use super::super::util::{attr_str, strip_meta_attrs, type_is_int, type_is_long};
 use super::context::GenContext;
 
 /// §5-§7 Wrapper struct + Default/Clone/PartialEq/Debug + impl ObjectVTable for Wrapper
@@ -211,6 +211,33 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 quote! { __copy.#set(self.#get()); }
             })
             .collect();
+        // Unsafe 实例字段 long 原子协议（ObjectVTable::__unsafe_long_cell）：平铺字段
+        // （继承 + 自有）里非擦除 `long` 字段的共享存储单元臂。unsafe__impl 经
+        // offset→字段名反查后按名分派；返回的 Rc<Cell<i64>> 与全部 wrapper 视图共享，
+        // Unsafe 写入对直接字段读取（__get_xxx）可见（与 JVM 字段内存语义一致）。
+        let long_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+            .chain(ctx.fields.iter())
+            .filter(|(name, ty)| !ctx.is_erased(name) && type_is_long(ty))
+            .map(|(name, _)| {
+                let field_str = name.to_string();
+                quote! {
+                    (::std::option::Option::Some(i), #field_str) =>
+                        ::std::option::Option::Some(::std::rc::Rc::clone(&i.#name)),
+                }
+            })
+            .collect();
+        // 同一协议的 int 镜像（`__unsafe_int_cell`）：平铺的非擦除 `int` 字段。
+        let int_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+            .chain(ctx.fields.iter())
+            .filter(|(name, ty)| !ctx.is_erased(name) && type_is_int(ty))
+            .map(|(name, _)| {
+                let field_str = name.to_string();
+                quote! {
+                    (::std::option::Option::Some(i), #field_str) =>
+                        ::std::option::Option::Some(::std::rc::Rc::clone(&i.#name)),
+                }
+            })
+            .collect();
         quote! {
             impl #impl_g ObjectVTable for #struct_ident #ty_g #where_c {
                 fn is_instance_of(&self, type_id: &str) -> bool {
@@ -282,6 +309,29 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     };
                     #(#copy_stmts)*
                     ::std::option::Option::Some(Object::from(__copy))
+                }
+                /// Unsafe 实例字段 long 原子协议：按字段名取共享存储单元（ObjectVTable
+                /// 侧默认 None，见 object.rs）。臂覆盖平铺的非擦除 long 字段；字段名
+                /// 不在本类名单（无关类 / 引用字段 / int 族）→ None，由调用方归 stub。
+                fn __unsafe_long_cell(
+                    &self,
+                    field: &str,
+                ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<i64>>> {
+                    match (self.any.downcast_ref::<#inner_ident>(), field) {
+                        #(#long_cell_arms)*
+                        _ => ::std::option::Option::None,
+                    }
+                }
+                /// Unsafe 实例字段 int 原子协议：`__unsafe_long_cell` 的 int 镜像
+                /// （平铺的非擦除 int 字段臂）。
+                fn __unsafe_int_cell(
+                    &self,
+                    field: &str,
+                ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<i32>>> {
+                    match (self.any.downcast_ref::<#inner_ident>(), field) {
+                        #(#int_cell_arms)*
+                        _ => ::std::option::Option::None,
+                    }
                 }
                 #to_string_fwd
                 #hash_code_fwd
