@@ -204,6 +204,15 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
         else:
             val_str = f"<{ftype} as ::std::convert::From<_>>::from(" \
                       f"{_coerce_to_object(val_str_raw, val_ty_name, registry, class_type_params)})"
+    elif (ftype in (class_type_params or ())
+            and val_ty_name != 'Object' and val_ty_name != '()'
+            and carrier_type_for_ident(val_ty_name, registry) == val_ty_name):
+        # A-4 批次 5：字段声明是类型变量（`S extends Spliterator<T>` 的
+        # lastNodeSpliterator: S），值是接口载体（javac 按擦除上界补的 checkcast
+        # 在载体化后落在载体上）。经 Object 边界按类型变量的 From<Object> bound
+        # 取回（宏为类型形参补的 bound）——载体解包 __ref，S 视图按运行时类成立
+        val_str = f"<{ftype} as ::std::convert::From<Object>>::from(" \
+                  f"Object::from({val_str_raw}))"
     elif ftype == 'Object' and slot_is_type_var and val_ty_name not in ('Object', '()'):
         # 字段声明为类型变量，但声明类的参数名在调用方不可见（ftype 保持擦除形态）：
         # 槽位类型是接收者的类型实参，值按原类型直接存入。

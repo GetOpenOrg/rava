@@ -46,7 +46,13 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                     _cast_elem = _cast_elem[1:-1] if _cast_elem.startswith('L') else ''
                 _cast_ci = registry.get(_cast_elem)
                 _cast_tps = _effective_class_type_params(_cast_ci, registry) if _cast_ci else []
-                if _cast_tps and all(_tp in sim.class_type_params for _tp in _cast_tps):
+                from ...jvm_type import carrier_type as _cast_carrier
+                _cast_is_carrier = (_cast_ci is not None and _cast_ci.is_interface
+                                    and _cast_carrier(_cast_elem, registry) is not None)
+                if (_cast_tps and not _cast_is_carrier
+                        and all(_tp in sim.class_type_params for _tp in _cast_tps)):
+                    # 接口载体不参与共享类型变量的实例化还原：载体是擦除运行时形态
+                    # （I<Object> 即 itable 视图），按 T 重新实例化会得到非法类型
                     _erased = f"{short_cls(_cast_elem)}<{', '.join(['Object'] * len(_cast_tps))}>"
                     cast_rust = cast_rust.replace(_erased, f"{short_cls(_cast_elem)}<{', '.join(_cast_tps)}>")
             expr, src_ty = sim.pop()

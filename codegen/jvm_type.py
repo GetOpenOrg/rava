@@ -417,6 +417,31 @@ def _contained(actual: JvmType, formal: JvmType, registry: 'dict | None') -> boo
 # 铺设控制：CARRIER_TYPE_POSITIONS 列出已启用接口的 binary name；
 # None = 全部接口（终态）。批次逐批宽化，全部批次落地后置 None。
 
+_FUNCTION_IFACES = {
+    'java/util/function/Consumer', 'java/util/function/BiConsumer',
+    'java/util/function/Supplier', 'java/util/function/Function',
+    'java/util/function/BiFunction', 'java/util/function/Predicate',
+    'java/util/function/BiPredicate', 'java/util/function/UnaryOperator',
+    'java/util/function/BinaryOperator',
+    'java/util/function/IntFunction', 'java/util/function/IntPredicate',
+    'java/util/function/IntSupplier',
+    'java/util/function/IntUnaryOperator', 'java/util/function/IntBinaryOperator',
+    'java/util/function/ToIntFunction', 'java/util/function/ToLongFunction',
+    'java/util/function/ToDoubleFunction', 'java/util/function/LongFunction',
+    'java/util/function/DoubleFunction', 'java/util/function/BooleanSupplier',
+    'java/util/function/ObjIntConsumer', 'java/util/function/ObjDoubleConsumer',
+    'java/util/function/ObjLongConsumer', 'java/util/function/DoubleBinaryOperator',
+    'java/util/function/DoublePredicate',
+    'java/util/function/DoubleSupplier', 'java/util/function/DoubleUnaryOperator',
+    'java/util/function/LongBinaryOperator', 
+    'java/util/function/LongPredicate', 'java/util/function/LongSupplier',
+    'java/util/function/LongUnaryOperator', 'java/util/function/ToIntBiFunction',
+    'java/util/function/ToLongBiFunction', 'java/util/function/ToDoubleBiFunction',
+    'java/util/function/LongToIntFunction', 'java/util/function/LongToDoubleFunction',
+    'java/util/function/DoubleToIntFunction', 'java/util/function/DoubleToLongFunction',
+    'java/util/function/IntToLongFunction', 'java/util/function/IntToDoubleFunction',
+}
+
 CARRIER_TYPE_POSITIONS: 'frozenset[str] | None' = frozenset({
     'java/util/Iterator',      # 批次 3 穿透起步（证据文档 §6 建议）
     'java/util/ListIterator',  # 批次 4：集合族（Iterator 直系，hasNext/next 同族分派）
@@ -427,6 +452,12 @@ CARRIER_TYPE_POSITIONS: 'frozenset[str] | None' = frozenset({
     'java/util/Map$Entry',
     'java/util/Queue',
     'java/util/Deque',
+    # 批次 5：函数式接口族 + 比较器（Spliterator 族暂缓：特化桥接
+    # forEachRemaining(Object)↔(LongConsumer) 的名/型解析发散，见证据文档遗留节）
+    'java/util/Comparator',
+    'java/util/Comparable',
+    'java/util/stream/Collector',
+    *_FUNCTION_IFACES,
 })
 
 

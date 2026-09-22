@@ -328,19 +328,21 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                                     if _cp_idx < len(_impl_params) else '')
                         _cp_carrier = _carrier_of(_cp_rust, registry)
                         if (_cp_idx < len(_impl_params)
-                                and _cp_carrier is not None and _cp_carrier == _cp_rust
-                                and _cap_ty != _cp_carrier):
-                            # A-4 批次 3+：实现方法形参是已铺设接口载体。捕获值已是
-                            # 同载体 → 保持列表初始 Clone::clone(&v)；是 Object / 具体类
-                            # → 经 Object 边界的非受检查体包装（与 _coerce_arg 同源）
+                                and _cp_carrier is not None and _cp_carrier == _cp_rust):
+                            # A-4 批次 3+：实现方法形参是已铺设接口载体——本分支完全
+                            # 消费，不再落入下方擦除装箱分支。捕获值已是同载体 → 保持
+                            # 列表初始 Clone::clone(&v)；是 Object / 具体类 → 经 Object
+                            # 边界的非受检查体包装（与 _coerce_arg 同源）
                             if _cap_ty == 'Object':
+                                # Fn 闭包可多次调用：Clone 取值，不 move 捕获变量（E0507）
                                 _call_cap_list[_ci_idx] = (
                                     f'<{_cp_carrier} as ::std::convert::From<_>>'
-                                    f'::from({_cap_var_names[_ci_idx]})')
-                            elif _cap_ty not in ('()', '_'):
+                                    f'::from(Clone::clone(&{_cap_var_names[_ci_idx]}))')
+                            elif _cap_ty not in ('()', '_') and _cap_ty != _cp_carrier:
                                 _call_cap_list[_ci_idx] = (
                                     f'<{_cp_carrier} as ::std::convert::From<_>>::from('
                                     f'{_coerce_to_object(_cap_var_names[_ci_idx], _cap_ty, registry, sim.class_type_params)})')
+                            continue
                         elif (_cp_idx < len(_impl_params) and _is_erased_ref(_impl_params[_cp_idx])
                                 and _cap_ty not in ('Object', '()', '_')
                                 and _cap_ty not in _PRIMITIVE_RUST_TYPES
