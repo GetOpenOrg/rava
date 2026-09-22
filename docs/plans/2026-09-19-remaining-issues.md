@@ -129,7 +129,11 @@ TestStringBuilder 闭包规模：1287 个生成文件、7378 个方法、19598 �
 - **终态**：rs_ir 增加 `CastExpr` / `InstanceOfExpr` 节点，所有消费方按节点而非字符串匹配；instanceof 全部按擦除类做运行时判定；失败的 checkcast 抛 `ClassCastException`（见 S-1）；协变 upcast 由 `java_class!` 生成的 `From` impl 覆盖。
 - **验收指标**：codegen 中对 `downcast` 字符串的模式匹配 = 0；`expect("ClassCastException")` = 0。
 
-### A-4 接口 carrier 未进入类型位置（T-2） 【阶段 0+两批已落地，批次 3+ 遗留】
+### A-4 接口 carrier 未进入类型位置（T-2） 【批次 3-5 已落地（四任接力），主杠杆过半】
+
+> **批次 3-5（2026-09-22，`627f6dc`+`9d61405`+`29893be`+`fef8d76`，`2bb2255` 合入）**：批次 3=Iterator 端到端穿透（`jvm_type.carrier_type` 单一决策点）；批次 4=集合族放量（List/Collection/Set/Map/Queue/Deque/ListIterator）；批次 5=函数式接口族（39 个 function 接口+Comparator/Comparable/Collector）+**载体 instanceof 运行时化**（接管期抓修的红线破口：载体静态类型折叠致 streams `instanceof IntConsumer` 快路径被常量条件消除）。**主度量：全测集 `Into<I>` 32931→17106（−48.0%）**；TSB 记分牌 1879→1010；from_any 2538→1836；try_cast_iface 4827→2376。**遗留**：CharSequence/Appendable 被手写 decimal 层签名阻塞（`appendTo(v, Object)` vs 载体 CharSequence——实证登记证据文档 §8，需 runtime 侧一轮适配）；Spliterator 沿暂缓；TSB 残余 1010 分布（Temporal ~211/Spliterator ~126/Node+Stream+Sink ~136）；type_surgery_sites 62→69（+7 边界适配位点，TypeIR 批次 2 消化）。**主会话合入期修复 stubs×a4b3 语义冲突**（JavaUtilCollectionAccess 手写 impl 签名对齐）。
+
+### A-4 前段（阶段 0+两批）
 
 > **阶段 0+批次 1+2（2026-09-22，`c29b83a`+`2e9e328`+`bdda2fb`）**：证据落盘 `docs/reports/2026-09-21-a4-phase0-evidence.md`——from_any 2538 分段（**A-1 取值端 62% 勿误伤 / A-4 merge-box 段 26% 已全灭**：合并槽装箱改经 `_coerce_to_object` 单一决策点，25 测集 from_any 879→617，残余 100% A-1 域）；**真正主度量=接口载体调用点转换 `Into::<I>::into(..).m()` 32931 处**（from_any 的 13 倍）——批次 3+ 类型位置载体化的攻坚对象。批次 1'：**checkcast 到接口真实化**（`try_cast_iface`：null 通过+接口闭包判定+可捕获 Err，关闭"接口 cast 目标被静默丢弃"空档，A-5 遗留的跨接口 CCE 随之落地）；`TryFrom<Object> for Iface` 因 blanket impl 冲突（E0119）不可行，CCE 语义由 try_cast_iface 承担。验收：25 测集 27/27 in-scope、streams/lambda/接口族全绿、双种子归零、bfs 不变。**批次 3+（形参→返回→局部/字段，消解 32931）**：五擦除点改造序与强耦合风险（emitted_method_sig_types 牵动 K-6/interface_gen/sam_objects）见证据文档 §6，建议 TestIterator 穿透起步。
 
