@@ -349,9 +349,11 @@ fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {    let Ok(out
 
 /// 单个声明方法的元数据（java_method / java_native 属性行的结构化形态）。
 /// modifiers 为 java.lang.reflect.Modifier 位集（方法侧：synchronized=0x20 /
-/// varargs=0x80 / native=0x100 / abstract=0x400）；name 含 `<init>` /
-/// `<clinit>` 行（构造器/类初始化器的声明记录，消费方按 JDK 语义过滤——
-/// getDeclaredMethods 不见二者、getDeclaredConstructors 取 `<init>`）。
+/// varargs=0x80 / native=0x100 / abstract=0x400）；exceptions 为 throws 子句
+/// 的 binary name 列表（Method.getExceptionTypes 的数据源）；name 含
+/// `<init>` / `<clinit>` 行（构造器/类初始化器的声明记录，消费方按 JDK
+/// 语义过滤——getDeclaredMethods 不见二者、getDeclaredConstructors 取
+/// `<init>`）。
 struct MethodMeta {
     name:       String,
     descriptor: String,
@@ -359,6 +361,7 @@ struct MethodMeta {
     is_static:  bool,
     is_native:  bool,
     is_abstract: bool,
+    exceptions: Vec<String>,
 }
 
 /// 方法元数据扫描：java_class! 块内 java_method / java_native 属性行。
@@ -398,8 +401,11 @@ fn scan_class_methods(src_dir: &Path) -> BTreeMap<String, Vec<MethodMeta>> {
                 .unwrap_or_else(|| modifiers.split_whitespace().any(|t| t == "native"));
             let is_abstract = extract_flag(window, "is_abstract")
                 .unwrap_or_else(|| modifiers.split_whitespace().any(|t| t == "abstract"));
+            let exceptions = extract_attr(window, "exceptions")
+                .map(|s| s.split(',').filter(|t| !t.is_empty()).map(str::to_owned).collect())
+                .unwrap_or_default();
             result.entry(current.clone()).or_default().push(MethodMeta {
-                name, descriptor, modifiers: bits, is_static, is_native, is_abstract,
+                name, descriptor, modifiers: bits, is_static, is_native, is_abstract, exceptions,
             });
         }
     }
@@ -422,6 +428,7 @@ fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
              pub is_static:   bool,
              pub is_native:   bool,
              pub is_abstract: bool,
+             pub exceptions:  &'static [&'static str],
          }
 
          pub static CLASS_METHODS: &[(&str, &[MethodMeta])] = &[
@@ -431,9 +438,11 @@ fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
         if methods.is_empty() { continue; }
         out.push_str(&format!("    ({:?}, &[\n", class));
         for m in methods {
+            let excs: Vec<String> = m.exceptions.iter().map(|e| format!("{:?}", e)).collect();
             out.push_str(&format!(
-                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {} }},\n",
+                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}] }},\n",
                 m.name, m.descriptor, m.modifiers, m.is_static, m.is_native, m.is_abstract,
+                excs.join(", "),
             ));
         }
         out.push_str("    ]),\n");

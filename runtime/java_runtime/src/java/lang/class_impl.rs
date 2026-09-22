@@ -151,6 +151,108 @@ impl Class {
             .map(|m| (m.modifiers, m.is_static, m.is_native, m.is_abstract))
     }
 
+    /// 反射族内部：本类声明方法行（构造器/类初始化器行含在内，消费方按
+    /// JDK 语义过滤）。消费方：getDeclaredMethod / getDeclaredMethods。
+    fn __declared_method_rows(&self) -> &'static [__methods::MethodMeta] {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        __methods::CLASS_METHODS.iter()
+            .find(|(n, _)| *n == cls_key)
+            .map(|(_, ms)| *ms)
+            .unwrap_or(&[])
+    }
+
+    /// `getDeclaredMethod(String, Class<?>...)`：按名 + 参数类型取本类声明
+    /// 方法（反射族静态注册表路线，与 getDeclaredField 同构）。
+    ///
+    /// 命中判定：JDK 语义不比较返回类型（重载只按参数区分）——表键是含
+    /// 返回类型的完整描述符，匹配按「描述符参数段 == 查询参数类型序列」。
+    /// 命中 → 查询即构造 Method（clazz/name/modifiers/slot=声明序/returnType
+    /// =描述符返回段还原/parameterTypes=参数段还原/exceptionTypes=throws
+    /// 子句 binary name 列表还原）。未命中 → NoSuchMethodException（真实
+    /// 异常对象、消息=方法名，可被 java_try 捕获）。
+    #[jvm_boundary(upcalls = "java/lang/NoSuchMethodException.<init>:(Ljava/lang/String;)V")]
+    pub fn getDeclaredMethod(&self, name: String, parameterTypes: JArray<Class>) -> Result<crate::java::lang::reflect::Method> {
+        let query = format!("{}", name);
+        let rows = self.__declared_method_rows();
+        // 查询参数类型序列（binary name 斜线形态；数组类名是描述符形态
+        // `[I` / `[Ljava/lang/String;——与参数描述符的归一名直接可比）
+        let mut qparams: Vec<std::string::String> = Vec::new();
+        for i in 0..parameterTypes.len()? {
+            let p = parameterTypes.get(i)?;
+            qparams.push(format!("{}", p.__get_name()).replace('.', "/"));
+        }
+        // 参数描述符归一：基本类型描述符字符 → 类型名；`L<类>;` → `<类>`；
+        // 数组描述符原样（数组类名即描述符形态）
+        let norm = |d: &str| -> std::string::String {
+            let mapped = match d {
+                "Z" => "boolean", "B" => "byte", "C" => "char", "S" => "short",
+                "I" => "int", "J" => "long", "F" => "float", "D" => "double",
+                other => other.strip_prefix('L')
+                    .and_then(|s| s.strip_suffix(';'))
+                    .unwrap_or(other),
+            };
+            mapped.to_owned()
+        };
+        let hit = rows.iter().enumerate()
+            .filter(|(_, m)| m.name == query)
+            .find(|(_, m)| {
+                descriptor_params(m.descriptor).iter().map(|d| norm(d)).collect::<Vec<_>>() == qparams
+            });
+        let Some((slot, meta)) = hit else {
+            // JDK 消息形态：`声明类点形态.方法名(参数类型名, ...)`（数组类名
+            // 保持描述符形态，与 Class.getName 一致）
+            let detail = format!(
+                "{}.{}({})",
+                self.__get_name(),
+                query,
+                qparams.iter().map(|p| p.replace('/', ".")).collect::<Vec<_>>().join(",")
+            );
+            return match crate::java::lang::NoSuchMethodException::new_str(String::from(detail.as_str())) {
+                Ok(ex) => Err(ex.into()),
+                Err(nested) => Err(nested),
+            };
+        };
+        Ok(Self::__method_from_meta(Clone::clone(self), meta, slot as i32))
+    }
+
+    /// `getDeclaredMethods()`：本类全部声明方法的构造序列（声明序；JDK 语义
+    /// 不含构造器与类初始化器——`<init>`/`<clinit>` 行过滤）。
+    pub fn getDeclaredMethods(&self) -> Result<JArray<crate::java::lang::reflect::Method>> {
+        let mut out: Vec<crate::java::lang::reflect::Method> = Vec::new();
+        for (slot, meta) in self.__declared_method_rows().iter().enumerate() {
+            if meta.name == "<init>" || meta.name == "<clinit>" {
+                continue;
+            }
+            out.push(Self::__method_from_meta(Clone::clone(self), meta, slot as i32));
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// 方法元数据行 → Method（查询即构造）。parameterTypes / returnType 从
+    /// 描述符还原（class_for_descriptor 的数组形态：`[...` 直接 for_class），
+    /// exceptionTypes 从 throws 子句列表还原。
+    fn __method_from_meta(clazz: Class, meta: &'static __methods::MethodMeta, slot: i32) -> crate::java::lang::reflect::Method {
+        let params: Vec<Class> = descriptor_params(meta.descriptor)
+            .into_iter()
+            .map(|p| class_for_descriptor(&p))
+            .collect();
+        let ret_start = meta.descriptor.find(')').map(|i| i + 1).unwrap_or(meta.descriptor.len());
+        let ret = class_for_descriptor(&meta.descriptor[ret_start..]);
+        let excs: Vec<Class> = meta.exceptions.iter()
+            .map(|e| Class::for_class(String::from(*e)))
+            .collect();
+        let mut m = crate::java::lang::reflect::Method::default();
+        m._init_not_null();
+        m.__set_clazz(clazz);
+        m.__set_name(String::from(meta.name));
+        m.__set_modifiers(meta.modifiers);
+        m.__set_slot(slot);
+        m.__set_returnType(ret);
+        m.__set_parameterTypes(JArray::from(params));
+        m.__set_exceptionTypes(JArray::from(excs));
+        m
+    }
+
     /// 反射族内部：描述符 → Class 对象（class_for_descriptor 的类型面）。
     /// MethodHandleNatives.resolve 的字段 kind 类型核对共用（描述符还原的
     /// Class 与 MemberName 携带的 Class 按名相等）。
@@ -246,6 +348,33 @@ fn class_for_descriptor(desc: &str) -> Class {
         Some(b'Z') => prim("boolean"),
         _ => Class::default(),
     }
+}
+
+/// 方法描述符的参数段 → 逐参数描述符序列（`"(ILjava/lang/String;[I)V"` →
+/// ["I", "Ljava/lang/String;", "[I"]；顶层右括号定界，嵌套 `[` 前缀整体归
+/// 当前参数）。消费方：getDeclaredMethod 的参数配对（重载语义：JDK 查询
+/// 不含返回类型）与 Method.parameterTypes 还原。
+fn descriptor_params(descriptor: &str) -> Vec<std::string::String> {
+    let Some(open) = descriptor.find('(') else { return Vec::new() };
+    let Some(close) = descriptor[open..].find(')').map(|i| i + open) else { return Vec::new() };
+    let body = &descriptor[open + 1..close];
+    let mut out = Vec::new();
+    let mut cur = std::string::String::new();
+    for ch in body.chars() {
+        cur.push(ch);
+        if cur.starts_with('L') {
+            // 类描述符：累积到 ';' 闭合
+            if ch == ';' { out.push(std::mem::take(&mut cur)); }
+            continue;
+        }
+        if ch == '[' {
+            // 数组前缀：归当前参数继续累积（[[I / [Ljava/lang/String; 均整体）
+            continue;
+        }
+        // 基本类型字符（Z B C S I J F D）自成一段
+        out.push(std::mem::take(&mut cur));
+    }
+    out
 }
 
 /// build.rs 生成的类层次表（OUT_DIR/hierarchy_table.rs，含模块级 static）。
