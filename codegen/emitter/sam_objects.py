@@ -287,18 +287,6 @@ def _quote_path(jbin: str, em, emissions: dict) -> str:
     return class_use_path(jbin, em.crate_prefix, emissions)
 
 
-def _erase_carriers_in_sig(sig: str, registry) -> str:
-    """签名文本中的接口载体形态整体替换为 Object（与宏 trait 的类型变量擦除合流）。"""
-    import re as _re_ec
-    while True:
-        for m in _re_ec.finditer(r'\b[A-Z]\w*(?:<[^<>]*>)?', sig):
-            if _is_carrier_type(m.group(0), registry):
-                sig = sig[:m.start()] + 'Object' + sig[m.end():]
-                break
-        else:
-            return sig
-
-
 def _entry_sig_parts(em_method, jci, registry: dict) -> 'tuple[str, list[str], list[str]] | None':
     """发射记录的方法 → (vtable 擦除条目签名, 形参名列表, 条目形参类型列表)。
 

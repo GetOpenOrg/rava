@@ -8,6 +8,12 @@ from ...type_map import jvm_to_rust, short_cls, effective_class_type_params as _
 from ..coerce import _coerce_to_object
 from ..hierarchy import _is_subtype, _rust_type_to_binary
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
+from ...jvm_type import carrier_type_for_ident
+
+
+def _carrier_ident_enabled(rust_ty_base: str, registry) -> bool:
+    """静态类型首标识符是否为已铺设载体化的接口（instanceof 运行时化的判据）。"""
+    return carrier_type_for_ident(rust_ty_base, registry) is not None
 
 
 def _erased_shape(rust_ty: str) -> str:
@@ -165,6 +171,15 @@ def sim_control(ins, sim, class_name, registry) -> bool:
             elif _is_subtype(target_for_subtype.split('<')[0], obj_ty_str.split('<')[0], registry):
                 # obj 静态类型是 target 的超类：装箱后按运行时类判定（is_instance_of 按
                 # vtable 的 all_supertypes 匹配 binary name，含类自身）
+                val_s_inst = render_expr(val_expr_inst)
+                _boxed_inst = _coerce_to_object(val_s_inst, obj_ty_str.split('<')[0], registry,
+                                                sim.class_type_params)
+                sim.push(InstanceOfExpr(RawExpr(_boxed_inst), comment), BOOL)
+            elif _carrier_ident_enabled(obj_ty_str.split('<')[0], registry):
+                # obj 静态类型是接口载体（A-4 批次 3+）：实现者开放——运行时对象可
+                # 同时实现目标接口（`Consumer 变量 instanceof IntConsumer`，streams 的
+                # instanceof 快路径依赖）或属于目标类族，接口间「互不为子类型」不构成
+                # 编译期否证 → 装箱（解包 __ref，保持运行时类）后按运行时判定
                 val_s_inst = render_expr(val_expr_inst)
                 _boxed_inst = _coerce_to_object(val_s_inst, obj_ty_str.split('<')[0], registry,
                                                 sim.class_type_params)
