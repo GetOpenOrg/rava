@@ -218,8 +218,17 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
             for iface_bin in _all_interfaces(recv_ci, registry):
                 iface = emissions.get(iface_bin)
                 iface_ci = registry.get(iface_bin)
-                if iface is None or iface_ci is None or iface.handwritten or not iface.methods:
+                if iface is None or iface_ci is None or iface.handwritten:
                     continue
+                # A-4 批次 6：闭包内接口的载体类型 use 先行——wrapper 的
+                # iface_carrier_views 视图臂（__view_into 接口载体臂）引用载体类型；
+                # 标记接口（无 vtable 成员）无 impl 关系不产生 use，臂引用将 E0433。
+                # 文件头 allow(unused_imports)，未引用不告警。
+                if short_cls(iface_bin) not in imported:
+                    imported.add(short_cls(iface_bin))
+                    uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions)};")
+                if not iface.methods:
+                    continue  # 标记接口：无成员可落地，无 impl/upcast 关系（原语义）
                 iface_params = effective_class_type_params(iface_ci, registry)
                 type_params = set(iface_params)
                 decls: list[str] = []
@@ -288,9 +297,7 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                 _up_src = _upcast_src_ty or recv_ty
                 erased_iface_ty = short_cls(iface_bin) + (
                     f"<{', '.join(['Object'] * len(iface_params))}>" if iface_params else '')
-                if short_cls(iface_bin) not in imported:
-                    imported.add(short_cls(iface_bin))
-                    uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions)};")
+                # 载体 use 行已在循环头先行登记（A-4 批次 6，标记接口同样需要）
                 # 实现体必须用显式 UFCS：接口载体可能自带 Java `static from(..)` 工厂方法
                 # （如 ChronoLocalDate.from），`Iface::from(..)` 路径解析会被固有方法遮蔽，
                 # 错调工厂方法（返回 Result）而非 From trait。

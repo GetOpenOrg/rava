@@ -68,14 +68,16 @@ impl FloatingDecimal_BinaryToASCIIConverter__VTable for SchubfachConverter {
         Ok(Clone::clone(&self.formatted))
     }
 
-    fn appendTo(&self, arg0: Object) -> Result<()> {
+    fn appendTo(&self, arg0: Appendable) -> Result<()> {
         // 与 FloatToDecimal.appendTo 的 Appendable 分派同形态：逐 char 追加
         // （byte 符号扩展到 int 再截位到 char）。
+        // A-4 批次 6：itable 擦除签名的接口位按载体形态书写（本文件被编译的
+        // 闭包内 Appendable 必经 T88 入闭包——本方法体本就引用其载体）。
         let val = self.formatted.__get_value();
-        let mut app = Into::<Appendable>::into(Clone::clone(&arg0));
+        let mut app = Clone::clone(&arg0);
         for i in 0..val.len()? {
             let c = val.get(i)? as i32 as u16;
-            app = Into::<Appendable>::into(app.append_c(c)?);
+            app = app.append_c(c)?;
         }
         Ok(())
     }

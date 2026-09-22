@@ -325,6 +325,28 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         supertypes = _compute_all_supertypes(ci, registry)
         if supertypes:
             lines.append(f'#[all_supertypes    = "{";".join(supertypes)}"]')
+        # A-4 批次 6：本类实现且在闭包内（载体类型已生成）的接口——擦除载体形态
+        # Rust 类型清单（非泛型裸短名；泛型 `I<Object, ..>`，与类型位置载体同形）。
+        # 宏为每个成员在 wrapper 的类型驱动视图探针（__view_into）生成接口载体臂：
+        # JLS 4.10.3 数组协变（String[] → CharSequence[]）与 try_checkcast::<载体>
+        # 按此判定（此前接口不在祖先名单——父类链臂只覆盖超类，接口位一律 false，
+        # 详见 array.rs __array_elem_assignable / erased_array_compatible）。
+        # 闭包过滤是硬前提：闭包外接口无 Rust 载体类型，臂引用将 E0433。
+        # 铺设门（CARRIER_TYPE_POSITIONS）无关：未铺设接口的载体类型同样存在，
+        # 臂为死代码（槽位形态是 Object，永不匹配），门宽化后自动激活。
+        from ..type_map import effective_class_type_params
+        _iface_views: list[str] = []
+        for st in supertypes:
+            if (st == ci.name or registry is None or st not in registry
+                    or not getattr(registry[st], 'is_interface', False)):
+                continue
+            _params = effective_class_type_params(registry[st], registry)
+            _ty = _bin_to_rust_short(st) + (
+                f"<{', '.join('Object' for _ in _params)}>" if _params else '')
+            if _ty not in _iface_views:
+                _iface_views.append(_ty)
+        if _iface_views:
+            lines.append(f'#[iface_carrier_views = "{";".join(sorted(_iface_views))}"]')
         # 根类 toString 的运行期目标：本类或最近祖先声明的 toString()，经其所属 vtable 分派。
         # 宏据此把 ObjectVTable 的字符串化入口桥接到翻译出的 toString（子类覆盖自动生效）。
         _ts_owner = _to_string_vtable_owner(ci, registry, handwritten_methods)
