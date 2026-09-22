@@ -300,6 +300,16 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                             return;
                         }
                     )*
+                    // 静态类臂未命中 → 委托 vtable 对象（= 运行时类 inner）的擦除查询：
+                    // 祖先视图包装（如 Throwable 视图承载 IllegalStateException inner）对
+                    // 「运行时类自身/其祖先」槽位的请求由此应答——中间型（Throwable <
+                    // catch T < 运行时 R）catch_as 的擦除重建 Path A。vtable trait 链根部
+                    // 超 trait 即 ObjectVTable，上转恒可到达 inner 侧的覆盖。
+                    ObjectVTable::__erased_vtable(
+                        ::std::rc::Rc::clone(&self.vtable)
+                            as ::std::rc::Rc<dyn ObjectVTable>,
+                        slot,
+                    );
                 }
                 fn __view_as(
                     &self,

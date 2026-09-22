@@ -32,14 +32,12 @@ where
     /// `<init>(Map.Entry<K, V>)`：`Objects.requireNonNull(entry)` 后取
     /// entry 的 key/value。调用方（生成侧）已做 `try_cast_iface` 到
     /// `java/util/Map$Entry`；此处经接口载体分派 getKey/getValue。
+    /// 签名随 A-4 批次 4 载体化对齐：调用点 Map$Entry 类型位置已产 Map_Entry 载体
+    /// （stubs×a4b3 语义冲突第三处——同 JavaUtilCollectionAccess 族）。
     #[jvm_boundary]
-    pub fn new_map_entry(entry: Object) -> Result<Self> {
-        if entry.0.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let e = Into::<Map_Entry<Object, Object>>::into(entry);
-        let k = e.getKey()?;
-        let v = e.getValue()?;
+    pub fn new_map_entry(entry: Map_Entry<Object, Object>) -> Result<Self> {
+        let k = entry.getKey()?;
+        let v = entry.getValue()?;
         let mut this = Self::default();
         this._init_not_null();
         this.__set_key(K::from(k));

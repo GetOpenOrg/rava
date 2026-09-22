@@ -11,6 +11,7 @@ use super::context::GenContext;
 /// 与 impl ObjectVTable for __inner（按擦除类的判定 + toString/hashCode/equals 桥接）。
 pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let inner_ident = &ctx.inner_ident;
+    let vtable_trait_ident = &ctx.vtable_trait_ident;
 
     // ══════════════════════════════════════════════════════════════════════════
     // 2. Inner struct（平铺字段：superclass_fields + own ctx.fields）—— 非泛型（A-1 存储层擦除）
@@ -144,6 +145,38 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         None => quote! {},
     };
 
+    // 擦除 vtable 查询（运行时类覆盖）：inner 即 vtable 对象（`impl *__VTable for
+    // __inner`），按调用方 slot 的（擦除）类 vtable 类型把自身填入——运行时类自身槽
+    // 直取 self；祖先类槽经 supertrait 上转。与上方 `__interface` 的接口查询同型，
+    // 意义在于**按运行时类**应答（wrapper 侧的同名方法按静态类生成臂，祖先视图包装
+    // 的「降回中间类」查询由此承接——中间型 catch/checkcast 的擦除重建路径）。
+    let ancestor_vtable_idents: Vec<Ident> = ctx.meta.all_superclasses.iter()
+        .filter(|anc| !anc.is_empty())
+        .map(|anc| format_ident!("{}__VTable", anc))
+        .collect();
+    let erased_vtable_query: TokenStream2 = quote! {
+        fn __erased_vtable(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
+            if let ::std::option::Option::Some(s) =
+                slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #vtable_trait_ident>>>()
+            {
+                *s = ::std::option::Option::Some(
+                    ::std::rc::Rc::clone(&self)
+                        as ::std::rc::Rc<dyn #vtable_trait_ident>);
+                return;
+            }
+            #(
+                if let ::std::option::Option::Some(s) =
+                    slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #ancestor_vtable_idents>>>()
+                {
+                    *s = ::std::option::Option::Some(
+                        ::std::rc::Rc::clone(&self)
+                            as ::std::rc::Rc<dyn #ancestor_vtable_idents>);
+                    return;
+                }
+            )*
+        }
+    };
+
     // A-1 存储层擦除后，inner 的 ObjectVTable impl 只承载「按擦除类」的判定与桥接：
     // 视图重建（__view_as / __view_into）、逐字段浅拷贝（__shallow_copy）与擦除存储
     // 导出（__erased_state，已删除）都移到 wrapper 侧——Object 直接持有 wrapper
@@ -163,6 +196,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #hash_code_inner_bridge
                 #equals_inner_bridge
                 #interface_query
+                #erased_vtable_query
                 #to_string_inner_bridge
             }
         }

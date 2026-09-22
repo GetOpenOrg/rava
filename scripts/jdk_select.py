@@ -16,11 +16,18 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
 
-_CELLAR = Path('/opt/homebrew/Cellar')      # macOS brew
+# macOS brew 前缀两种都要扫：Apple Silicon /opt/homebrew、Intel /usr/local；
+# HOMEBREW_PREFIX（brew shellenv 导出）置顶覆盖自定义安装，去重避免双计
+_CELLARS: list[Path] = []
+for _p in (os.environ.get('HOMEBREW_PREFIX'), '/opt/homebrew', '/usr/local'):
+    _c = Path(_p) / 'Cellar' if _p else None
+    if _c and _c not in _CELLARS:
+        _CELLARS.append(_c)
 _JVM_DIR = Path('/usr/lib/jvm')             # Linux（Ubuntu/Debian 系）
 
 
@@ -52,8 +59,10 @@ def list_installed_jdks() -> list[tuple[int, Path]]:
             result.append((major, home))
 
     # macOS brew：Cellar/openjdk@NN/<ver>/libexec/openjdk.jdk/Contents/Home
-    if _CELLAR.is_dir():
-        for formula in _CELLAR.iterdir():
+    for cellar in _CELLARS:
+        if not cellar.is_dir():
+            continue
+        for formula in cellar.iterdir():
             if not formula.name.startswith('openjdk'):
                 continue
             for version_dir in formula.iterdir():

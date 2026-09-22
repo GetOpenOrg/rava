@@ -3,7 +3,7 @@
 from ...type_map import short_cls as _short_cls_g
 import re as _re_g
 
-from ...stack import BOOL, _clone_moved_var
+from ...stack import BOOL, _clone_moved_var, erased_base, erased_class_of
 from ...rs_ir import CastExpr, Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed
 from ...render import render_expr, render_type
 from ...sig_parse import parse_field_type as _parse_field_type
@@ -88,7 +88,8 @@ def _restore_field_declared_type(f_owner: str, fname: str, ftype: str,
         # 字段声明在接收者静态类型的祖先上（`this.curChunk`，声明为祖先的 T_ARR）：
         # 祖先类型变量按接收者视角的超类实参代入——与接收者类的转发访问器
         # （superclass_fields 展平）同一规则，读取侧记录的类型与访问器返回类型一致
-        _recv_bin = _rust_type_to_binary(recv_ty.split('<')[0].strip(), registry)
+        _recv_ref = erased_class_of(recv_ty, registry)
+        _recv_bin = _recv_ref.binary if _recv_ref is not None else ''
         _recv_ci = registry.get(_recv_bin) if _recv_bin else None
         if _recv_ci is None and _ref_ci is not None and _ref_ci.name != _g_ci.name:
             _recv_ci = _ref_ci
@@ -227,10 +228,10 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
         val_str = _render_cast(val_str_raw, ftype, box_first=True)
     elif (ftype not in _PRIMITIVE_RUST_TYPES and val_ty_name not in _PRIMITIVE_RUST_TYPES
           and ftype not in ('Object', '()', val_ty_name)
-          and _is_subtype(val_ty_name.split('<')[0], ftype.split('<')[0], registry)):
+          and _is_subtype(erased_base(val_ty_name), erased_base(ftype), registry)):
         # vtable 架构：子类型赋给祖先类型字段，用 From trait（.into()）
         # 先 Clone::clone(&val) 再 .into()，避免 into() 转移所有权后变量失效（E0382）
-        chain = _into_super_chain(val_ty_name.split('<')[0], ftype.split('<')[0], registry)
+        chain = _into_super_chain(erased_base(val_ty_name), erased_base(ftype), registry)
         val_str = f"Clone::clone(&{val_str_raw}){chain}"
     elif (val_ty_name == 'Object' and ftype not in _PRIMITIVE_RUST_TYPES
           and ftype not in ('Object', '()') and not ftype.startswith('Rc<')):
