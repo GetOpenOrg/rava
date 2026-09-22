@@ -2,7 +2,7 @@
 
 import re as _re
 
-from ...stack import I32, I64, F32, F64
+from ...stack import I32, I64, F32, F64, erased_base, is_jvm_array
 from ...rs_ir import Var, RawExpr, RawStmt, RsNamed, RsGeneric
 from ...render import render_expr, render_type
 from ...type_map import jvm_to_rust, NEWARRAY_TYPES
@@ -39,7 +39,7 @@ def _is_object_receiver(arr_ty) -> bool:
     数组引用等）。是 → 走 Object 的数组访问 API（array_load_*/array_store_*/array_length，
     元素类型由指令操作码决定）；JArray/Vec 接收者保持类型化 get/set/len 快路径。"""
     t = render_type(arr_ty)
-    return not (t.startswith('JArray<') or t.startswith('Vec<'))
+    return not (is_jvm_array(t) or t.startswith('Vec<'))
 
 
 def sim_arrays(ins, sim, class_name, registry) -> bool:
@@ -143,7 +143,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
             elem_ty = 'Object'
         val_str = render_expr(val_expr)
         val_ty_str = render_type(val_ty)
-        if (val_ty_str == 'JArray<Object>' and elem_ty.startswith('JArray<') and elem_ty != val_ty_str):
+        if (val_ty_str == 'JArray<Object>' and is_jvm_array(elem_ty) and elem_ty != val_ty_str):
             # `spine[i] = (E[]) new Object[n]`：javac 擦除了 unchecked cast，新建数组的元素类型
             # 由它存入的槽位决定 → 数组在创建处即按槽位元素类型实例化（JArray<E>），
             # 而不是先建 JArray<Object> 再转换（两者是不同的运行时类型）
@@ -164,8 +164,8 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
             val_str = f"From::from(Clone::clone(&{val_str}))"
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
             if (elem_ty != val_ty_str
-                    and _is_subtype(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)):
-                chain = _into_super_chain(val_ty_str.split('<')[0], elem_ty.split('<')[0], registry)
+                    and _is_subtype(erased_base(val_ty_str), erased_base(elem_ty), registry)):
+                chain = _into_super_chain(erased_base(val_ty_str), erased_base(elem_ty), registry)
                 val_str = f"Clone::clone(&{val_str}){chain}"
             elif elem_ty != val_ty_str:
                 # 值静态类型与元素类型无子型关系（`Number[] n = intArr; n[0] = 3.14;`

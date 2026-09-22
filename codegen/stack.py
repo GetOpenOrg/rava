@@ -16,8 +16,9 @@ from .rs_ir import (
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
 )
 from .render import render_type, render_expr
-from .type_map import short_cls as _short_cls
+from .type_map import short_cls as _short_cls, _registry_short_index
 from .constants import safe_ident, PRIMITIVE_RUST_TYPES as _SCALAR_TYPE_NAMES
+from .jvm_type import JvmType, ClassRef
 
 
 def _safe_name(name: str) -> str:
@@ -55,6 +56,45 @@ UNIT = RsPrimitive('()')
 _EXPR_CLASSES = get_args(RsExpr)
 _TYPE_CLASSES = get_args(RsType)
 _STMT_CLASSES = tuple(get_args(RsStmt))
+
+
+# ── TypeIR 擦除查询入口（收敛路线图 L1-a 批次 2）────────────────────────────
+#
+# 栈侧类型事实以 Rust 类型串（RsType.name）承载；进入类型代数（codegen/jvm_type）
+# 查询前先擦除到裸类身份。此前各消费点散布「split 取首段」类文本解剖（control/
+# returns/fields/blocks/arrays 等），现统一经本组边界函数——字符串手术位点收敛于
+# 此一处，类型问题（子类型 / is_interface / 数组形态）全部在类型对象上求解：
+#   erased_base(rust_ty)          → 擦除基名（JvmType.erasure 的边界投影）
+#   erased_class_of(rust_ty, reg) → 擦除 ClassRef（registry 域内补 is_interface）
+#   is_jvm_array(rust_ty)         → 引用数组形态（JvmType Array 变体的发射形态）
+
+def erased_base(rust_ty: str) -> str:
+    """Rust 类型串的擦除基名（`ArrayList<T>` → `ArrayList`、`JArray<Entry<K, V>>`
+    → `JArray`）：JvmType.erasure() 在字符串边界的投影——泛型实参不参与裸名判定。
+    首标识符提取与 jvm_type.carrier_type_for_ident 同型；非标识符开头（`()`
+    等擦除外形态）保持原串，下游 registry 反查同不可解析。"""
+    m = _re_stack.match(r'\s*(\w+)', rust_ty)
+    return m.group(1) if m else rust_ty
+
+
+def erased_class_of(rust_ty: str, registry: 'dict | None' = None) -> 'ClassRef | None':
+    """Rust 类型串 → 擦除 ClassRef：基名经 registry 短名索引解析为 binary 身份
+    （JvmType.class_of 补全 is_interface）。域外短名 / registry 缺失 / 非标识符
+    形态 → None（调用方回退既有擦除路径，与 _rust_type_to_binary 的空串约定
+    同一语义）。"""
+    base = erased_base(rust_ty)
+    if not registry or not base:
+        return None
+    ci = _registry_short_index(registry).get(base)
+    if ci is None:
+        return None
+    return JvmType.class_of(ci.name, registry)
+
+
+def is_jvm_array(rust_ty: str) -> bool:
+    """Rust 类型串是否为引用数组形态 `JArray<..>`（jvm_type Array 变体的发射
+    形态探测）。Vec<..> 是 Rust 侧容器、非 JVM 数组概念，不在本查询域内。"""
+    return _re_stack.match(r'JArray<', rust_ty) is not None
 
 
 def _maybe_downcast(expr: RsExpr, ty: RsType) -> RsExpr:
@@ -389,8 +429,8 @@ class StackSim:
                 force_let_ty = True
         elif (decl_ty is not None and isinstance(ty, RsNamed) and isinstance(decl_ty, RsNamed)
               and decl_ty.name != ty.name):
-            _decl_base = decl_ty.name.split('<')[0]
-            _src_base = ty.name.split('<')[0]
+            _decl_base = erased_base(decl_ty.name)
+            _src_base = erased_base(ty.name)
             _is_null = isinstance(expr, Lit) and expr.value == 'Object::default()'
             from .jvm_type import carrier_type_for_ident as _carrier_type_for_ident
             _carrier_decl = _carrier_type_for_ident(decl_ty.name, self._registry)
@@ -438,7 +478,7 @@ class StackSim:
         _tv_bound = self.type_var_bounds.get(ty.name) if isinstance(ty, RsNamed) else None
         _tv_target = hint if hint is not None else decl_ty
         if (_tv_bound is not None and isinstance(_tv_target, (RsNamed, RsGeneric))
-                and getattr(_tv_target, 'name', '').split('<')[0].strip() == _tv_bound.split('<')[0].strip()):
+                and erased_base(getattr(_tv_target, 'name', '')) == erased_base(_tv_bound)):
             expr = RawExpr(
                 f"Into::<{_tv_bound}>::into(Into::<Object>::into({render_expr(_clone_moved_var(expr, ty))}))")
             ty = RsNamed(_tv_bound)
@@ -458,7 +498,7 @@ class StackSim:
                     expr = RawExpr(f"From::from({render_expr(expr)})")
                     force_let_ty = True
                 elif (not isinstance(expr, Var)
-                      and isinstance(hint, RsNamed) and hint.name.startswith('JArray<')
+                      and isinstance(hint, RsNamed) and is_jvm_array(hint.name)
                       and render_expr(expr) not in ('Default::default()', 'Object::default()')):
                     # 栈类型 Object、声明为数组类型（`for (int[] r : objArr)` 的元素经
                     # Object 流转，S-2.2）：值按数组目标还原视图并保留 let 注解。
@@ -489,9 +529,9 @@ class StackSim:
                 # 裸类名（HashMap_TreeNode）或擦除实例化（HashMap_TreeNode<Object, Object>）
                 # → hint 带泛型（HashMap_TreeNode<K, V>）。
                 # LVTT hint 的泛型实参嵌在 name 字符串里（如 'HashMap_TreeNode<K, V>'），
-                # 比较必须按 base 名（split('<')[0]）进行，否则三种形态永远不相等。
+                # 比较必须按擦除基名进行，否则三种形态永远不相等。
                 def _base_of(t: RsType) -> str:
-                    return getattr(t, 'name', str(t)).split('<')[0].strip()
+                    return erased_base(getattr(t, 'name', str(t)))
                 if _base_of(hint) == _base_of(ty):
                     # 同一泛型类的不同实例化（通配符 static 字段 X<?> 经 unchecked cast
                     # 赋给 X<T> 局部）：Rust 侧是不同类型，经 Object 边界构造目标实例化

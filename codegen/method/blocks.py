@@ -32,7 +32,7 @@ from ..instr import sim_instr
 from ..instr.hierarchy import _common_ref_type
 from ..render import render_expr, render_stmt, render_type
 from ..rs_ir import LetStmt, AssignStmt, RawExpr, RawStmt, RsNamed, Var
-from ..stack import BOOL, StackSim, _clone_moved_var
+from ..stack import BOOL, StackSim, _clone_moved_var, erased_base, erased_class_of
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type
 from .try_catch import TryCatchPlan, _binding_type
 
@@ -176,7 +176,8 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
     ty_str, ety_str = render_type(ty), render_type(ety)
     if ty_str == ety_str:
         return tv, ev, ty
-    same_base = (ty_str.split('<')[0] == ety_str.split('<')[0] and '<' in ty_str and '<' in ety_str)
+    same_base = (erased_base(ty_str) == erased_base(ety_str)
+                 and '<' in ty_str and '<' in ety_str)
     if ty_str == 'bool' and ety_str in _INT_TYPES:
         # 汇合点的 JVM 类型两侧必然一致；bool 侧只可能来自 0/1 菱形折叠
         # （比较结果值，_ternary_value），int 侧是同 JVM int 类型的值
@@ -197,10 +198,9 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
         # 同型 → Object 臂按具体臂类型还原视图。checkcast 语义（A-3：try_cast，
         # 失败返回 Err 可被 java_try 捕获，S-1，替代 downcast 的 panic）
         from ..instr.coerce import _render_cast
-        from ..instr.hierarchy import _rust_type_to_binary
-        _bin16 = _rust_type_to_binary(ty_str.split('<')[0], registry)
-        if _bin16:
-            ev = _render_cast(ev, ty_str, binary_name=_bin16, checked=True)
+        _ty_ref = erased_class_of(ty_str, registry)
+        if _ty_ref is not None:
+            ev = _render_cast(ev, ty_str, binary_name=_ty_ref.binary, checked=True)
         else:
             ev = f"({ev}).into()"
     elif (ty_str == 'Object' and ety_str not in _SCALAR_TYPES and ety_str != 'Object'
