@@ -49,7 +49,7 @@
 | null 数组表示 / 数组 NPE | 近似等价 | 未实测 | S-2.1 |
 | `getClass` / 类字面量同一性 | 近似等价（完整终态后为语义等价） | 基础路径 PASS（TestClassLiteral）；同一性未实测 | S-5 |
 | record `hashCode`（31 多项式） | 近似等价 | 未实测（TestRecord 基础路径 PASS） | S-7 |
-| 栈回溯 / stack frames | 近似等价 | **实测未齐**（TestCustomException FAIL：has stack frames=false） | S 候选 |
+| 栈回溯 / stack frames | 近似等价（档位：帧数真实、内容近似） | **已实测**（S-19 #5，TestCustomException PASS；探针首四帧与 JDK 21 同名同序，帧内容为 Rust 栈符号属声明边界） | ~~S-19 #5~~ 已修 |
 | 数组负长度 `NegativeArraySizeException` | 近似等价 | 未实测 | S-8 |
 | null 接收者 `getfield`/`putfield` NPE | 近似等价 | 未实测 | S-9 |
 | 类初始化触发点全集（JVMS §5.5） | 近似等价 | 部分（手写 static native、接口自身初始化未触发） | S-10 |
@@ -88,7 +88,7 @@
 | `neg-array` | `NegativeArraySizeException` | 近似等价 | S-8 |
 | `field-npe` | null 接收者 `getfield`/`putfield` | 近似等价 | S-9 |
 | `monitor-mt` | `monitorenter` 多线程互斥 | 条件等价 | S-11 / tasks.md P1 |
-| `stacktrace` | `fillInStackTrace` / 栈帧 | 近似等价 | S 候选 |
+| `stacktrace` | `fillInStackTrace` / 栈帧 | 近似等价 | S-19 #5（已修；无 codegen 发射点维持不埋点） |
 | `class-init` | JVMS §5.5 未覆盖触发点 | 近似等价 | S-10 |
 
 埋点状态（2026-09-21）：除下两条外均已接入 `[equiv-audit]`——
