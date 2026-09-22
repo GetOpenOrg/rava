@@ -36,7 +36,7 @@ A-3（CastExpr IR 化）是完整样板：checkcast/instanceof 从「15+ 处字�
 
 | 度量 | 现值（2026-09-21 阶段 A 仪表上线后） | 终态 |
 |---|---|---|
-| 类型字符串手术（`split('<')` 类） | 静态位点 **63**（`[raw-audit] type_surgery_sites` 口径，含 `startswith('JArray<')`；此前 37 为 split-only 口径） | **0**（类型查询全部经类型对象） |
+| 类型字符串手术（`split('<')` 类） | **27**（2026-09-22 晚：TypeIR 批次 2 六消费点迁移 + A-4 +2 债务清偿——69→27；余量大头=invoke_sig 5+invoke_virtual 4 等并行域/后续批次） | **0**（类型查询全部经类型对象） |
 | `RawExpr/RawStmt` 字符串发射 | 全形态调用点 187；运行时构造事件计数已上仪表（TSB 单次转译 raw_expr=31771 raw_stmt=53690——趋势基线） | **0**（全部为类型化 IR 节点；render 层只做节点→文本的单向渲染） |
 | 生成确定性（G-4） | **✅ 已修**（`b6ab58d`：vars 提升排序 + downcast 链 BFS 兄弟排序；双种子生成树 diff 归零） | 保持（golden diff 可比性前提已就位） |
 | `_coerce_arg` 特例分支 | ~15 个场景 | **个位数**（只剩真语义转换：装箱/拆箱、隐式数值拓宽） |
