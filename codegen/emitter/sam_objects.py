@@ -341,13 +341,23 @@ def _mentions(ty: str, tparams: set[str]) -> bool:
     return bool(tparams & set(_IDENT_RE.findall(ty)))
 
 
+def _is_carrier_type(rust_ty: str, registry: dict) -> bool:
+    """类型串是否为已铺设载体化的接口载体形态（判定单一来源 jvm_type）。"""
+    if not registry or not rust_ty:
+        return False
+    from ..jvm_type import carrier_type_for_ident
+    return carrier_type_for_ident(rust_ty, registry) == rust_ty
+
+
 def _default_entry_body(em_m, jci, registry: dict, j_erased_ty: str, args: list[str]) -> 'str | None':
     """default 条目体：`<J<Object,..> as From<Object>>::from(..).__default_m(..)`。
 
     擦除条目形参恒为 Object（提及类型变量的位置整体 Object 化），载体默认体
     在擦除实例化上的形参是「类型变量代入 Object 后」的形态——嵌套提及
     （`Comparator<T>`）需经 `From<Object>` 还原；返回值提及类型变量时经
-    `Into<Object>` 装箱（与宏 expand_interface_impl 的边界转换同规则）。"""
+    `Into<Object>` 装箱（与宏 expand_interface_impl 的边界转换同规则）。
+    A-4 批次 3+：形参/返回是已铺设载体（`List<Object>` 等）时同桥接——形参经
+    载体 From<Object> 非受检包装（接口视图按运行时类成立），返回解包 __ref。"""
     parts = _declared_sig_parts(em_m)
     if parts is None:
         return None
@@ -359,14 +369,16 @@ def _default_entry_body(em_m, jci, registry: dict, j_erased_ty: str, args: list[
     for a, ty in zip(args, param_tys):
         if _mentions(ty, tparams):
             call_args.append(f'<{_subst_type_vars(ty, tparams)} as From<Object>>::from({a})')
+        elif _is_carrier_type(ty, registry):
+            call_args.append(f'<{ty} as From<Object>>::from({a})')
         else:
             call_args.append(a)
     # UFCS 取 From：接口载体可能自带 Java static from 工厂（ChronoLocalDate.from），
     # 路径解析会被固有方法遮蔽（与 interface_gen 的 upcast 同款防护）
     call = (f'<{j_erased_ty} as From<Object>>::from(Object::from(Clone::clone(self)))'
             f'.__default_{em_m.rust_name}({", ".join(call_args)})')
-    if _mentions(ret_ty, tparams):
-        # 声明返回提及类型变量 → 条目（擦除）返回 Object：解包后装箱
+    if _mentions(ret_ty, tparams) or _is_carrier_type(ret_ty, registry):
+        # 声明返回提及类型变量 / 是载体 → 条目（擦除）返回 Object：解包后装箱
         return f'Ok(Into::<Object>::into({call}?))'
     # 声明返回不含类型变量 → 擦除签名与声明一致，Result 直接透传
     return call

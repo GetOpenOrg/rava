@@ -419,6 +419,14 @@ def _contained(actual: JvmType, formal: JvmType, registry: 'dict | None') -> boo
 
 CARRIER_TYPE_POSITIONS: 'frozenset[str] | None' = frozenset({
     'java/util/Iterator',      # 批次 3 穿透起步（证据文档 §6 建议）
+    'java/util/ListIterator',  # 批次 4：集合族（Iterator 直系，hasNext/next 同族分派）
+    'java/util/List',
+    'java/util/Collection',
+    'java/util/Set',
+    'java/util/Map',
+    'java/util/Map$Entry',
+    'java/util/Queue',
+    'java/util/Deque',
 })
 
 

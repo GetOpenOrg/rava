@@ -274,6 +274,7 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                         _impl_is_instance = True
                     _call_cap_list = [f'Clone::clone(&{v})' for v in _cap_var_names]
                     _call_sam_list = list(_sam_anames)
+                    from ...jvm_type import carrier_type_for_ident as _carrier_of
                     # 实现方法形参表对应 (捕获值 + SAM 实参) 去掉接收者之后的部分
                     _recv_from_sam = _impl_is_instance and not _call_cap_list
                     _sam_param_offset = len(_call_cap_list) - (1 if _impl_is_instance and _call_cap_list else 0)
@@ -283,7 +284,17 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                         _pi = _sam_param_offset + _si - (1 if _recv_from_sam else 0)
                         if 0 <= _pi < len(_impl_params):
                             _pd = _impl_params[_pi]
-                            if _pd != _sd and _is_erased_ref(_sd) and not _is_erased_ref(_pd):
+                            _pd_rust = jvm_to_rust(_pd, registry)
+                            _pd_carrier = _carrier_of(_pd_rust, registry)
+                            if (_pd_carrier is not None and _pd_carrier == _pd_rust
+                                    and _pd != _sd and _is_erased_ref(_sd)):
+                                # A-4 批次 3+：实现方法形参是已铺设接口载体——SAM 擦除
+                                # 实参经载体的 From<Object> 非受检包装（UFCS 不被接口
+                                # 自带静态 from 工厂遮蔽，与 _coerce_arg 载体分支同源）
+                                _call_sam_list[_si] = (
+                                    f'<{_pd_carrier} as ::std::convert::From<Object>>'
+                                    f'::from({_sam_anames[_si]})')
+                            elif _pd != _sd and _is_erased_ref(_sd) and not _is_erased_ref(_pd):
                                 if _pd in _PRIM_CLASS_TO_WRAPPER:
                                     # SAM 擦除实参是装箱对象、实现方法形参是基本类型
                                     # （`Integer::sum` 的 (II)I 适配 BinaryOperator 的
@@ -304,7 +315,7 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                                 # 实现方法形参是声明类的类型变量（`this::addLast`，addLast(E)）：
                                 # SAM 的擦除实参经宏补的 From<Object> bound 取回类型变量视图
                                 _call_sam_list[_si] = f'From::from({_sam_anames[_si]})'
-                            elif len(_sd) == 1 and jvm_to_rust(_pd, registry) == 'Object':
+                            elif len(_sd) == 1 and _pd_rust == 'Object':
                                 # SAM 实参是基本类型、实现方法形参是引用（metafactory 的装箱适配）
                                 _call_sam_list[_si] = f'{_sam_anames[_si]}.into()'
                     # 捕获值 → 实现方法形参：形参是擦除引用（接口 / Object）而捕获值是具体类实例
@@ -313,7 +324,24 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     for _ci_idx in range(_cap_recv, len(_call_cap_list)):
                         _cp_idx = _ci_idx - _cap_recv
                         _cap_ty = render_type(_cap_exprs[_ci_idx][1])
-                        if (_cp_idx < len(_impl_params) and _is_erased_ref(_impl_params[_cp_idx])
+                        _cp_rust = (jvm_to_rust(_impl_params[_cp_idx], registry)
+                                    if _cp_idx < len(_impl_params) else '')
+                        _cp_carrier = _carrier_of(_cp_rust, registry)
+                        if (_cp_idx < len(_impl_params)
+                                and _cp_carrier is not None and _cp_carrier == _cp_rust
+                                and _cap_ty != _cp_carrier):
+                            # A-4 批次 3+：实现方法形参是已铺设接口载体。捕获值已是
+                            # 同载体 → 保持列表初始 Clone::clone(&v)；是 Object / 具体类
+                            # → 经 Object 边界的非受检查体包装（与 _coerce_arg 同源）
+                            if _cap_ty == 'Object':
+                                _call_cap_list[_ci_idx] = (
+                                    f'<{_cp_carrier} as ::std::convert::From<_>>'
+                                    f'::from({_cap_var_names[_ci_idx]})')
+                            elif _cap_ty not in ('()', '_'):
+                                _call_cap_list[_ci_idx] = (
+                                    f'<{_cp_carrier} as ::std::convert::From<_>>::from('
+                                    f'{_coerce_to_object(_cap_var_names[_ci_idx], _cap_ty, registry, sim.class_type_params)})')
+                        elif (_cp_idx < len(_impl_params) and _is_erased_ref(_impl_params[_cp_idx])
                                 and _cap_ty not in ('Object', '()', '_')
                                 and _cap_ty not in _PRIMITIVE_RUST_TYPES
                                 and not _cap_ty.startswith(('JArray<', 'Vec<', '&'))):
@@ -392,10 +420,14 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                             _impl_ret_rust = jvm_to_rust(_impl_ret, registry)
                             _closure_body = (f'Ok({_coerce_to_object(f"{_closure_body}?", _impl_ret_rust, registry, sim.class_type_params)})')
                     elif _is_erased_ref(_sam_ret) and _impl_ret != 'V' and (
-                            not _is_erased_ref(_impl_ret) or _impl_has_generic_sig):
+                            not _is_erased_ref(_impl_ret) or _impl_has_generic_sig
+                            or _carrier_of(jvm_to_rust(_impl_ret, registry), registry)
+                            == jvm_to_rust(_impl_ret, registry)):
                         # 按实现方法的返回类型装箱（S-3.1）：registry 类（Integer 等
                         # 翻译类）走 Object::from —— 对象身份、运行时类与接口 vtable
-                        # 全部可达；仅未知形态（闭包等）才 from_any 不透明包装
+                        # 全部可达；仅未知形态（闭包等）才 from_any 不透明包装。
+                        # A-4 批次 3+：返回是已铺设载体（`List<Object>` 等）也走本支——
+                        # _coerce_to_object 对载体发射 Object::from（解包 __ref 装箱）
                         _impl_ret_rust = jvm_to_rust(_impl_ret, registry)
                         _closure_body = (f'Ok({_coerce_to_object(f"{_closure_body}?", _impl_ret_rust, registry, sim.class_type_params)})')
                     _lam_varname = f'__lam_{_lam_idx}'
