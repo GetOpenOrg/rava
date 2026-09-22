@@ -3,6 +3,7 @@
 from ...rs_ir import RawStmt
 from ...render import render_expr, render_type
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
+from ...stack import erased_base, erased_class_of, is_jvm_array
 from ..coerce import _coerce_to_object, _coerce_value
 from ..hierarchy import _is_subtype, _into_super_chain
 
@@ -36,6 +37,9 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         actual_ty = render_type(e_ty)
         ret_ty = getattr(sim, 'return_type', 'Object')
         _ctparams = getattr(sim, 'class_type_params', frozenset())
+        # 擦除基名（TypeIR 查询边界）：下方裸名判定 / 子类型判定共用
+        _ret_base = erased_base(ret_ty)
+        _actual_base = erased_base(actual_ty)
         # 实例方法返回 this 时，this 是 &Self 引用，需要 Clone::clone 才能返回 owned 值
         _returns_this = expr_s == 'this' and not sim.is_static
         if _returns_this:
@@ -64,8 +68,8 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
                 expr_s = f"::std::convert::From::from({expr_s})"
             else:
                 expr_s = f"::std::convert::From::from({_coerce_to_object(expr_s, actual_ty, registry, _ctparams)})"
-        elif _returns_this and (ret_ty.split('<')[0] == actual_ty.split('<')[0]
-                                or not _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
+        elif _returns_this and (_ret_base == _actual_base
+                                or not _is_subtype(_actual_base, _ret_base, registry)):
             # 返回类型就是本类：this 的克隆即返回值。
             # 返回类型是祖先类（`return this` 于声明返回父类的方法）→ 落到下方子类型上转分支
             pass
@@ -76,11 +80,10 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
             # 类型变量（宏补 From<Object> bound）与类 wrapper 经 From<Object> 取回；
             # 数组目标（JArray 不在 registry）走 From<Object> for JArray<T> 的数组视图
             # （R9/S-4），不能落到 null 零值；null 字面量 / 无运行时类的返回类型取 null 值
-            from ...type_map import _registry_short_index
-            _ret_ci = _registry_short_index(registry).get(ret_ty.split('<')[0].strip()) if registry else None
+            _ret_ref = erased_class_of(ret_ty, registry)
             if expr_s != 'Object::default()' and (
-                    ret_ty in _ctparams or ret_ty.startswith('JArray<')
-                    or (_ret_ci is not None and not _ret_ci.is_interface)):
+                    ret_ty in _ctparams or is_jvm_array(ret_ty)
+                    or (_ret_ref is not None and not _ret_ref.is_interface)):
                 expr_s = f"From::from({expr_s})"
             else:
                 expr_s = 'Default::default()'
@@ -91,9 +94,9 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
             pass
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty)
-              and _is_subtype(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)):
+              and _is_subtype(_actual_base, _ret_base, registry)):
             # vtable 架构：返回值是子类型，用 From trait（.into()）
-            chain = _into_super_chain(actual_ty.split('<')[0], ret_ty.split('<')[0], registry)
+            chain = _into_super_chain(_actual_base, _ret_base, registry)
             from ..invoke_sig import _upcast_to_ancestor_instantiation
             _reinst_anc = _upcast_to_ancestor_instantiation(expr_s, actual_ty, ret_ty, sim, registry)
             expr_s = _reinst_anc if _reinst_anc is not None else f"{expr_s}{chain}"
