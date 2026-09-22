@@ -8,6 +8,9 @@
 ///   5. 从 java_class! 块的 all_supertypes 属性生成类层次表（OUT_DIR/
 ///      hierarchy_table.rs），供 Class.isAssignableFrom 等运行时查询——
 ///      层次数据只在 Rust 侧表达一份（来自 class 元数据），Python 侧不再推导
+///   6. 从 java_class! 块的 java_field 属性行生成字段元数据表（OUT_DIR/
+///      field_table.rs：binary name → 名/描述符/修饰位/static/ConstantValue），
+///      供 Class.getDeclaredField / Field.get/set 反射查询
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -47,6 +50,7 @@ fn main() {
     let hierarchy = scan_class_hierarchy(src_dir);
     write_hierarchy_table(&hierarchy);
     write_direct_super_table(&scan_direct_super(src_dir));
+    write_field_table(&scan_class_fields(src_dir));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
@@ -203,6 +207,130 @@ fn write_direct_super_table(entries: &BTreeMap<String, String>) {
     let path = Path::new(&out_dir).join("direct_super_table.rs");
     if let Err(e) = fs::write(&path, &out) {
         panic!("写 direct_super_table.rs 失败: {e}");
+    }
+}
+
+/// 单个声明字段的元数据（`java_field` 属性行的结构化形态）。
+/// modifiers 为 java.lang.reflect.Modifier 位集（public=0x1 / private=0x2 /
+/// protected=0x4 / static=0x8 / final=0x10 / volatile=0x40 / transient=0x80 …）；
+/// constant 是 ConstantValue 属性的整数值（仅整型常量收录，字符串等形态缺席）。
+struct FieldMeta {
+    name:       String,
+    descriptor: String,
+    modifiers:  i32,
+    is_static:  bool,
+    constant:   Option<i64>,
+}
+
+/// 字段元数据扫描：java_class! 块内 java_field 属性行（每字段独立成行，
+/// `#[cfg_attr(any(), java_field(name = "x", descriptor = "I", access =
+/// "private", modifiers = "static final", is_static = true))]`）。类上下文
+/// 与层次表同源（同块内 binary_name 在前）。声明顺序保留（Field.slot 语义）。
+/// 消费方：Class.getDeclaredField / Field.get/set（class_impl.rs / field_impl.rs）。
+fn scan_class_fields(src_dir: &Path) -> BTreeMap<String, Vec<FieldMeta>> {
+    let mut result: BTreeMap<String, Vec<FieldMeta>> = BTreeMap::new();
+    if !src_dir.exists() { return result; }
+    for path in walk_rs_files(src_dir) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+            }
+            let Some(open) = trimmed.find("java_field(") else { continue };
+            if current.is_empty() { continue; }
+            // 属性行自 java_field( 起截取，键值对提取只在该窗口内进行，
+            // 避免行内其他 token（如 generic_signature 的泛型描述）误配。
+            let window = &trimmed[open..];
+            let (Some(name), Some(descriptor)) =
+                (extract_attr(window, "name"), extract_attr(window, "descriptor"))
+            else { continue };
+            let access    = extract_attr(window, "access").unwrap_or_default();
+            let modifiers = extract_attr(window, "modifiers").unwrap_or_default();
+            let bits = modifier_bits(&access) | modifier_bits(&modifiers);
+            // static 判定：is_static 显式标志优先（生成器对 static 字段发出），
+            // 无标志时回退到 modifiers 词面（手写形态容错）。
+            let is_static = extract_flag(window, "is_static")
+                .unwrap_or_else(|| modifiers.split_whitespace().any(|t| t == "static"));
+            let constant = extract_attr(window, "constant_value")
+                .and_then(|v| v.strip_suffix('L').unwrap_or(&v).parse::<i64>().ok());
+            result.entry(current.clone()).or_default().push(FieldMeta {
+                name, descriptor, modifiers: bits, is_static, constant,
+            });
+        }
+    }
+    result
+}
+
+/// 访问标志 / 修饰符词串 → java.lang.reflect.Modifier 位集。
+/// 未知 token（varargs 等）忽略。
+fn modifier_bits(s: &str) -> i32 {
+    let mut bits = 0i32;
+    for tok in s.split_whitespace() {
+        bits |= match tok {
+            "public"       => 0x0001,
+            "private"      => 0x0002,
+            "protected"    => 0x0004,
+            "static"       => 0x0008,
+            "final"        => 0x0010,
+            "volatile"     => 0x0040,
+            "transient"    => 0x0080,
+            "synthetic"    => 0x1000,
+            "enum"         => 0x4000,
+            _ => 0,
+        };
+    }
+    bits
+}
+
+/// 布尔属性提取（`key = true/false`，容忍对齐空格）；缺席 → None。
+fn extract_flag(s: &str, key: &str) -> Option<bool> {
+    let start = s.find(&format!("{} ", key))?;
+    let rest = s[start + key.len()..].trim_start();
+    let rest = rest.strip_prefix('=')?.trim_start();
+    if rest.starts_with("true") { Some(true) }
+    else if rest.starts_with("false") { Some(false) }
+    else { None }
+}
+
+fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：字段元数据表（binary name → 声明字段序列，声明序 = slot）。
+         // 数据源：java_class! 块内 java_field 属性（字段声明元数据的唯一表达，规则四）。
+         // 消费方：Class.getDeclaredField / Field.get/set（class_impl.rs / field_impl.rs）。
+         // modifiers 为 java.lang.reflect.Modifier 位集；constant 为 ConstantValue 整数值。
+         // 请勿手改。
+
+         pub struct FieldMeta {
+             pub name:       &'static str,
+             pub descriptor: &'static str,
+             pub modifiers:  i32,
+             pub is_static:  bool,
+             pub constant:   Option<i64>,
+         }
+
+         pub static CLASS_FIELDS: &[(&str, &[FieldMeta])] = &[
+",
+    );
+    for (class, fields) in entries {
+        if fields.is_empty() { continue; }
+        out.push_str(&format!("    ({:?}, &[\n", class));
+        for f in fields {
+            out.push_str(&format!(
+                "        FieldMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, constant: {} }},\n",
+                f.name, f.descriptor, f.modifiers, f.is_static,
+                match f.constant { Some(v) => format!("Some({}i64)", v), None => "None".to_owned() },
+            ));
+        }
+        out.push_str("    ]),\n");
+    }
+    out.push_str("];
+");
+    let path = Path::new(&out_dir).join("field_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 field_table.rs 失败: {e}");
     }
 }
 
