@@ -124,15 +124,47 @@ impl<T: 'static> JArray<T> {
 }
 
 impl<T: Clone + Default + 'static> JArray<T> {
-    /// 创建长度为 len 的数组，元素初始化为类型默认值（对应 Java newarray/anewarray）
+    /// 创建长度为 len 的数组，元素初始化为类型默认值（对应 Java newarray/anewarray）。
+    ///
+    /// 负长度在此饱和为空数组（手写 native 内部路径的进程崩溃防线：`vec![T; len as usize]`
+    /// 对负 len 是不可捕获的 `capacity overflow` panic）。Java 语义的创建点
+    /// （newarray/anewarray 字节码翻译）必须走 [`Self::try_new`]——负长度抛
+    /// `NegativeArraySizeException`（JVMS §6.5，Err 形态可被 java_try 捕获）。
     pub fn new(len: i32) -> Self {
-        JArray::from(vec![T::default(); len as usize])
+        JArray::from(vec![T::default(); len.max(0) as usize])
+    }
+
+    /// `newarray`/`anewarray` 的可失败创建：负长度抛 `NegativeArraySizeException`
+    /// （真实异常对象，与数组 get/set 的 Result 机制一致）。
+    pub fn try_new(len: i32) -> crate::error::Result<Self> {
+        if len < 0 {
+            return Err(crate::error::JvmError::negative_array_size(len));
+        }
+        Ok(JArray::from(vec![T::default(); len as usize]))
     }
 
     /// 创建长度为 len 的数组，每个元素由 init 独立构造（对应 Java multianewarray：
-    /// 每一行是独立的数组对象，不能共享同一个默认值的引用）
+    /// 每一行是独立的数组对象，不能共享同一个默认值的引用）。负长度饱和为空数组
+    /// （同 [`Self::new`] 的崩溃防线语义）。
     pub fn new_with(len: i32, init: impl Fn() -> T) -> Self {
         JArray::from((0..len.max(0)).map(|_| init()).collect::<Vec<T>>())
+    }
+
+    /// `multianewarray` 的可失败创建：任一已给维度为负即抛 `NegativeArraySizeException`——
+    /// 外层维先行检查（外层为 0 时内层闭包不执行，与 Java `new int[0][-1]` 不抛一致），
+    /// 内层维的 Err 在逐行构造中传播。每行由 init 独立构造（行间不共享引用）。
+    pub fn try_new_with(
+        len: i32,
+        init: impl Fn() -> crate::error::Result<T>,
+    ) -> crate::error::Result<Self> {
+        if len < 0 {
+            return Err(crate::error::JvmError::negative_array_size(len));
+        }
+        let mut rows = Vec::with_capacity(len as usize);
+        for _ in 0..len {
+            rows.push(init()?);
+        }
+        Ok(JArray::from(rows))
     }
 }
 
