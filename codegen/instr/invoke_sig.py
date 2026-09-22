@@ -62,7 +62,8 @@ def _lookup_method_sig_params(
         return None
     full_desc = '(' + ''.join(descriptor_params) + ')' + descriptor_ret
     # JVM 方法解析：常量池类未声明该方法时，目标是超类链上最近的声明者；
-    # 形参类型变量属于声明者，按接收者静态类型视角代入
+    # 超类链未命中再查接口闭包（JLS 5.4.3.3 类方法解析的二段——`AbstractQueue`
+    # 的 offer 声明在 Queue）；形参类型变量属于声明者，按接收者静态类型视角代入
     if mname != '<init>' and not any(m.name == mname and m.descriptor == full_desc for m in ci.methods):
         _seen_owner: set[str] = {ci.name}
         _cur = registry.get(ci.super_class) if ci.super_class else None
@@ -74,6 +75,26 @@ def _lookup_method_sig_params(
                     receiver_targ_map = receiver_type_arg_map(receiver_type, short_cls(ci.name), registry)
                 break
             _cur = registry.get(_cur.super_class) if _cur.super_class else None
+        if not any(m.name == mname and m.descriptor == full_desc for m in ci.methods):
+            # 接口闭包广度优先（JVM 解析取最具体接口——按 BFS 序首个命中即最近声明）
+            _iface_queue = list(ci.interfaces or [])
+            while _iface_queue:
+                _ifn = _iface_queue.pop(0)
+                if _ifn in _seen_owner or _ifn not in registry:
+                    continue
+                _seen_owner.add(_ifn)
+                _if_ci = registry[_ifn]
+                if any(m.name == mname and m.descriptor == full_desc for m in _if_ci.methods):
+                    ci = _if_ci
+                    if receiver_type:
+                        _nm = receiver_type_arg_map(
+                            receiver_type, short_cls(ci.name), registry)
+                        if _nm is None:
+                            _nm = _iface_view_targ_map(receiver_type, ci, registry)
+                        if _nm is not None:
+                            receiver_targ_map = _nm
+                    break
+                _iface_queue.extend(_if_ci.interfaces or [])
     for m in ci.methods:
         if m.name == mname and m.descriptor == full_desc:
             # 用被调用类的类型参数解析签名（覆盖方法取最远祖先声明，与定义侧同规则）
@@ -200,6 +221,32 @@ def _handwritten_boundary_method(cls_bin: str, mname: str) -> bool:
                 continue
     _HANDWRITTEN_BOUNDARY_CACHE[key] = result
     return result
+
+
+def _iface_view_targ_map(recv_ty: str, iface_ci, registry: dict | None) -> 'dict | None':
+    """类接收者 → 接口声明者的形参映射（receiver_type_arg_map 只沿超类链，接口
+    边缘经 implemented_interface_views 的接收者视角实参）：`AbstractQueue<E>` 对
+    `Queue<E>` → {E: E}；`ArrayList<Consumer<Object>>` 对 `List<E>` → {E: Consumer<Object>}。
+    接收者无显式实参时按接收者形参名直传（this 于本类体内即此形态）。"""
+    if not registry or not recv_ty:
+        return None
+    from ..type_args import (implemented_interface_views, split_rust_type_args,
+                             substitute_type_params)
+    recv_base = recv_ty.split('<', 1)[0].strip()
+    recv_ci = registry.get(_rust_type_to_binary(recv_base, registry) or '')
+    if recv_ci is None:
+        return None
+    owner_params = _effective_class_type_params(iface_ci, registry)
+    for _if_bin, _if_args in implemented_interface_views(recv_ci, registry):
+        if _if_bin != iface_ci.name:
+            continue
+        recv_params = _effective_class_type_params(recv_ci, registry)
+        recv_args = split_rust_type_args(recv_ty)
+        if recv_args and len(recv_args) == len(recv_params):
+            _amap = dict(zip(recv_params, recv_args))
+            _if_args = [substitute_type_params(a, _amap) for a in _if_args]
+        return dict(zip(owner_params, _if_args)) if len(_if_args) == len(owner_params) else None
+    return None
 
 
 def receiver_type_arg_map(recv_ty: str, owner_short: str | None, registry: dict | None) -> dict | None:
