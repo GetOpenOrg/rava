@@ -12,6 +12,7 @@ thread_local! {
     static JAVA_LANG_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_REF_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_UTIL_COLLECTION_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JAVA_UTIL_CONCURRENT_FJP_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
 }
 
 impl SharedSecrets {
@@ -53,6 +54,15 @@ impl SharedSecrets {
     #[jvm_boundary]
     pub fn setJavaLangRefAccess(a: Object) -> Result<()> {
         JAVA_LANG_REF_ACCESS.with(|slot| *slot.borrow_mut() = Some(a));
+        Ok(())
+    }
+
+    /// `ForkJoinPool.<clinit>` 登记的 FJP 访问器（容器/配置查询，供
+    /// serviceability 与虚拟线程层消费）。单线程协作档位下闭包内无读取方
+    /// （getJavaUtilConcurrentFJPAccess 未被触达）——按 JDK 形态存储即可。
+    #[jvm_boundary]
+    pub fn setJavaUtilConcurrentFJPAccess(a: Object) -> Result<()> {
+        JAVA_UTIL_CONCURRENT_FJP_ACCESS.with(|slot| *slot.borrow_mut() = Some(a));
         Ok(())
     }
 

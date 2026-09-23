@@ -70,19 +70,20 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
                 # 组件本身是数组类（`int[][]` → anewarray class "[I"）：comment 已是
                 # 元素描述符，直接映射（`L[I;` 是非法描述符，曾把多维数组的元素类型
                 # 擦除为 Object，aaload 后丢失静态元素类型——实参位 E0308 的根因）
-                _elem_raw = jvm_to_rust(comment, registry)
-                elem_t = _elem_raw
+                elem_t = jvm_to_rust(comment, registry)
             else:
-                _elem_raw = jvm_to_rust(f'L{comment};', registry)
-                # 用 _ 替换类型参数中的 Object，让 Rust 从赋值上下文推断泛型（避免 E0308）。
-                # A-4 批次 3+：接口载体除外——载体的 Object 实参就是擦除运行时形态，
-                # 无赋值上下文可推断（E0283），保持 `I<Object, ..>` 原样
-                from ...jvm_type import carrier_type_for_ident as _carrier_of
-                if ('<' in _elem_raw
-                        and _carrier_of(_elem_raw, registry) != _elem_raw):
-                    elem_t = _re.sub(r'\bObject\b', '_', _elem_raw)
-                else:
-                    elem_t = _elem_raw
+                # 组件类型在指令操作数里恒可知（描述符），发射即终态：jvm_to_rust 按
+                # JVM 类型擦除给运行时形态——泛型类填 Object 实参（`C<Object>`）、已
+                # 铺设载体化的接口发载体 `I<Object, ..>`（判定单一来源 jvm_type.
+                # carrier_type，经 type_map.jvm_to_rust 内联）。此前曾在此用 `_` 替换
+                # Object 实参、寄望赋值上下文推断（0e6ff4f 为 E0308 的绕行）：数组仅经
+                # Object 边界流转时（varargs 实参装箱、Object 载体存取）无推断锚——
+                # let 标注自身就是上下文 → E0283（TestCompletableFuture 的
+                # allOf(f, g)，`JArray<CompletableFuture<_>>`）。异实参值（如
+                # `CompletableFuture<Integer>` 存 `JArray<CompletableFuture<Object>>`）
+                # 由 aastore 的 S-4 Object 边界存储检查兜住（运行时元素类型检查，即
+                # JVMS aastore 的 ArrayStoreException 语义），不依赖发射期猜测。
+                elem_t = jvm_to_rust(f'L{comment};', registry)
         else:
             elem_t = 'Object'
         v = sim.fresh('_arr')
