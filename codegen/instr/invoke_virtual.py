@@ -342,6 +342,9 @@ def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
     _inherited_calls.request(cls_binary, mname, pdesc)
     if _virtually_dispatched(cls_ci, mname, pdesc, registry):
         for _sub_bin in _closure_subclasses(registry).get(cls_binary, ()):
+            # K-6b：类型变量签名的方法逐子类判定（有 bridge 才登记）
+            if not _virtually_dispatched(cls_ci, mname, pdesc, registry, sub_bin=_sub_bin):
+                continue
             _inherited_calls.request(_sub_bin, mname, pdesc)
     # 形参边界：wrapper 方法（擦除实例化）签名 vs 调用点实参（擦除描述符 /
     # 调用方泛型视图）逐位对齐——类型变量位实参装箱为 Object、桥接的具体
@@ -417,7 +420,8 @@ _SUBCLASS_INDEX: dict[int, dict[str, list[str]]] = {}
 _TYPE_VAR_TOKEN = __import__('re').compile(r'(?<![A-Za-z0-9_$/])T[A-Za-z0-9_$]+;')
 
 
-def _virtually_dispatched(recv_ci, mname: str, param_desc: str, registry: dict) -> bool:
+def _virtually_dispatched(recv_ci, mname: str, param_desc: str, registry: dict,
+                          sub_bin: 'str | None' = None) -> bool:
     """(mname, param_desc) 沿接收者超类链的最近声明是否可安全按子类槽位登记。
 
     跳过三类：private（invokespecial 静态解析，JLS §8.4.8）、final（不可覆盖，
@@ -425,7 +429,14 @@ def _virtually_dispatched(recv_ci, mname: str, param_desc: str, registry: dict) 
     祖先形参代入具体实参的位置，如 `PipelineHelper<P_OUT>` → `PipelineHelper<Integer>`，
     继承成员的 vtable_erasure 按名匹配覆盖不到，槽位签名会与 trait 声明不一致；
     归类继承成员擦除缺口）。
-    """
+
+    K-6b 放行：sub_bin 指定（逐子类登记判定）且该子类自身或其超类链上有对应
+    synthetic bridge（参数描述符 = 槽位擦除形态）时放行——inherited_gen 的桥成员
+    路径（_bridge_override_member 按 bridge 描述符渲染签名）与槽位擦除形态天然
+    一致，正是 JVM 为参数位擦除覆盖（arrayLength(T_ARR) 被 arrayLength(int[])
+    覆盖）记录的槽位同一性；无 bridge 的子类维持跳过（普通继承路径对不上，
+    归类继承成员擦除缺口）。sub_bin 为 None（族级判定）时交由逐子类判定，
+    不再整族跳过。"""
     _ACC_PRIVATE = 0x0002
     _ACC_FINAL = 0x0010
     cur, seen = recv_ci, set()
@@ -439,10 +450,32 @@ def _virtually_dispatched(recv_ci, mname: str, param_desc: str, registry: dict) 
                 return False
             gs = getattr(m, 'generic_signature', '') or ''
             if _TYPE_VAR_TOKEN.search(gs):
-                return False
+                if sub_bin is None:
+                    # K-6b：类型变量签名（`TP_IN;` / `TT_ARR;` 形态）——是否登记由
+                    # 逐子类判定（有 bridge 见证才放行），族级不再整体跳过
+                    return True
+                return _chain_has_bridge(sub_bin, mname, param_desc, registry)
             return True
         cur = registry.get(cur.super_class) if cur.super_class else None
     return True
+
+
+def _chain_has_bridge(sub_bin: str, mname: str, param_desc: str, registry: dict) -> bool:
+    """sub_bin 自身及其超类链上的 (mname, 参数描述符) synthetic bridge 存在性（K-6b）。
+
+    bridge 的参数描述符即槽位的擦除形态（javac 为参数位擦除 / 协变返回覆盖合成，
+    体是对真实方法的 checkcast 转发）。"""
+    cur = registry.get(sub_bin)
+    seen: set[str] = set()
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        if any(b.is_synthetic and (b.access_flags & 0x0040) and not b.is_static
+               and b.name == mname
+               and b.descriptor.split(')', 1)[0] + ')' == param_desc
+               for b in cur.methods):
+            return True
+        cur = registry.get(cur.super_class) if cur.super_class else None
+    return False
 
 
 def _closure_subclasses(registry: dict) -> dict[str, list[str]]:
@@ -564,6 +597,10 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
             if (obj_e in ('this', 'self') and not _ci_recv.is_interface
                     and _virtually_dispatched(_ci_recv, mname, _param_desc, registry)):
                 for _sub_bin in _closure_subclasses(registry).get(_obj_jvm, ()):
+                    # K-6b：类型变量签名的方法逐子类判定（有 bridge 才登记）
+                    if not _virtually_dispatched(_ci_recv, mname, _param_desc, registry,
+                                                 sub_bin=_sub_bin):
+                        continue
                     _inherited_calls.request(_sub_bin, mname, _param_desc)
     return params, ret, rust_ret, _sig_owner, _sig_recv_ty, _recv, _root_routed
 

@@ -158,6 +158,7 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     # 声明类解析：调用目标类（常量池里的类）可能只是继承了该方法，沿父类链解析到
     # 真正声明 name+descriptor 的类（手写类判定 / bridge 描述符换源用）。
     _call_desc_m = re.search(r':(\([^)]*\)\S+)', comment)
+    _bridged_iface_desc: 'str | None' = None
     if mname != '<init>' and _call_desc_m:
         _owner_bin, _ = _resolve_method_owner(target_ci.name, mname, registry,
                                               descriptor=_call_desc_m.group(1))
@@ -174,6 +175,8 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
                 # 真实方法声明在接口（default，注入到实现类）→ 名字仍按调用目标类层次判定
                 if not _bridged[0].is_interface:
                     target_ci = _bridged[0]
+                else:
+                    _bridged_iface_desc = _bridged[1]
                 comment = f'{comment.split(":")[0]}:{_bridged[1]}'
             elif not target_ci.is_interface:
                 # 类链未声明该方法：只声明在接口上的成员（抽象类上调用接口抽象方法）
@@ -188,6 +191,15 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
     _name_ci = target_ci if recv_ci.is_interface else recv_ci
     _is_mangled = mname in hierarchy_overloaded_names(_name_ci, registry)
     if not _is_mangled:
+        if _bridged_iface_desc is not None and not recv_ci.is_interface:
+            # K-6b：桥接重定向到接口真实声明（擦除描述符 → 具体形态，如
+            # tryAdvance(Object)Z → OfInt 桥 → tryAdvance(IntConsumer)Z）后，名字
+            # 不得回落裸名——按接收者视角的接口成员名单一权威（inherited_gen
+            # 定义侧 _interface_member_declaration 同源）取名：调用落在定义侧
+            # 发射的 wrapper 成员上，实参 coerce 预期与其发射签名一致。
+            from ..sig_types import interface_member_local_name as _iface_local_b
+            _local = _iface_local_b(recv_ci, mname, _bridged_iface_desc, registry)
+            return _JAVA_RUST_RENAME.get(_local, _local)
         # Java→Rust 名字冲突重命名（如 clone→jvm_clone）
         erg_name = _JAVA_RUST_RENAME.get(mname)
         if erg_name is not None:
