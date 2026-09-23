@@ -57,4 +57,14 @@ impl StaticProperty {
     pub fn USER_EXTENSIONS_DISPLAY() -> Result<String> { Self::USER_EXTENSIONS() }
     #[jvm_boundary]
     pub fn USER_EXTENSIONS_FORMAT() -> Result<String> { Self::USER_EXTENSIONS() }
+
+    /// `user.dir`：VM 启动时的工作目录快照（System.initPhase1 与
+    /// StaticProperty.userDir() 同源）。原生二进制语义 = 进程启动时的
+    /// 当前目录；目录形态不规约（JDK 不做 canonicalize——UnixFileSystem
+    /// 构造侧的 Util.normalize 负责规约）。
+    #[jvm_boundary]
+    pub fn USER_DIR() -> Result<String> {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        Ok(String::from(cwd.to_str().unwrap_or("")))
+    }
 }
