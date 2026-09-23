@@ -336,8 +336,13 @@ def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
                                         sim, registry)
             elif _actual == 'Object':
                 # 桥接的真实形参是具体类型：等价 bridge 方法内的 checkcast
-                #（binary 无法解析的形态退 From 视图路径，与 Fix 17 同源）
-                _bin17 = _rust_type_to_binary(_expected.split('<')[0], registry)
+                #（binary 无法解析的形态退 From 视图路径，与 Fix 17 同源）。
+                # TypeIR 批次 3（V2）：形参头 → binary 经类型对象（ClassRef.binary，
+                # 域内解析），替代形参头文本解剖 + 短名反查
+                from ..jvm_type import from_rust_type, ClassRef as _ClassRefT
+                _exp17 = from_rust_type(_expected, registry)
+                _bin17 = (_exp17.binary if isinstance(_exp17, _ClassRefT) and registry
+                          and _exp17.binary in registry else '')
                 if _bin17:
                     wargs[_i] = _render_cast(_a, _expected,
                                              binary_name=_bin17, checked=True)
