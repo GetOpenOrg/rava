@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 use super::mac_osx_file_system_provider::MacOSXFileSystemProvider;
-use super::unix_file_system::UnixFileSystem;
+use super::unix_file_system::implref::UnixFileSystem;
 use crate::java::lang::String;
 use crate::jdk::internal::util::StaticProperty;
 

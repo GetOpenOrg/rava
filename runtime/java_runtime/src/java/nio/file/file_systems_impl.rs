@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 use super::file_systems::FileSystems;
-use crate::java::nio::file::FileSystem;
+use crate::java::nio::file::file_system::implref::FileSystem;
 use crate::sun::nio::fs::DefaultFileSystemProvider;
 
 impl FileSystems {

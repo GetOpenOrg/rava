@@ -17,7 +17,7 @@ fn to_bytes(s: &String) -> Vec<u8> {
     format!("{}", s).into_bytes()
 }
 
-impl super::unix_file_system::UnixFileSystem {
+impl super::unix_file_system::implref::UnixFileSystem {
     /// `<init>(UnixFileSystemProvider, String)`：JDK 构造语义——
     /// defaultDirectory = normalizeAndCheck(dir) 的 jnu 编码；必须以 '/' 开头；
     /// chdirAllowed（sun.nio.fs.chdirAllowed，缺省 false）为真或 cwd 与默认目录

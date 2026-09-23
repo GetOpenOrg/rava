@@ -6,7 +6,7 @@
 //! no-op）。其余成员（子路径/relativize/toUri/迭代器等）保持 panic 存根。
 
 use crate::prelude::*;
-use super::unix_file_system::UnixFileSystem;
+use super::unix_file_system::implref::UnixFileSystem;
 use super::unix_path::UnixPath;
 use crate::java::nio::file::InvalidPathException;
 use crate::java::nio::file::ProviderMismatchException;
