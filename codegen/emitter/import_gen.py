@@ -45,6 +45,71 @@ def _add_desc_refs(text: str, _referenced: set[str]) -> None:
         if _dc:
             _referenced.add(_dc)
 
+
+def _superclass_arg_refs(ci, registry) -> set[str]:
+    """类操作数（new / checkcast 等）超类链实例化里引用的类（import 收账）。
+
+    方法体对子类值上转时按其实例化渲染祖先视图（invoke_sig 的
+    `_exact_ancestor_type` → `Into::<Ancestor<Arg>>`，如
+    `new ForkJoinTask$AdaptedRunnableAction` 上转出 `ForkJoinTask<Void>`）。
+    Arg 里的类来自操作数类超类链各节点 generic_signature 的**超类实参部分**
+    （AdaptedRunnableAction 的 `LForkJoinTask<Ljava/lang/Void;>;` → Void）——
+    不在本类自身签名 / LVT / 描述符的任何扫描面里，无此收账则 E0425。
+
+    只取超类部分顶层实参（不含超类自身名字与接口段）：实参才是发射面新出现的
+    名字，超类名总是与期望类型同名（已由期望类型路径导入），接口不经
+    ancestor_type_args 渲染——收窄保证既有文件引用集零扰动。"""
+    out: set[str] = set()
+    cur = ci
+    seen: set[str] = set()
+    while (cur is not None and cur.name not in seen and cur.name != _OBJECT_CLASS
+           and cur.super_class and cur.super_class != _OBJECT_CLASS
+           and cur.super_class in registry):
+        seen.add(cur.name)
+        sig = getattr(cur, 'generic_signature', '') or ''
+        i = 0
+        if sig.startswith('<'):
+            depth = 0
+            while i < len(sig):
+                if sig[i] == '<':
+                    depth += 1
+                elif sig[i] == '>':
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                i += 1
+        # 超类类型 `Lpkg/Parent<Args>;` 到首个深度 0 的 `;` 结束（其后是接口段）；
+        # 有顶层 `<...>` 时其实参段为渲染面（首个 `<` 到配对 `>`，深度平衡）
+        if i < len(sig) and sig[i] == 'L':
+            depth, j = 0, i
+            sup_end = -1
+            while j < len(sig):
+                if sig[j] == '<':
+                    depth += 1
+                elif sig[j] == '>':
+                    depth -= 1
+                elif sig[j] == ';' and depth == 0:
+                    sup_end = j
+                    break
+                j += 1
+            if sup_end > 0:
+                lt = sig.find('<', i, sup_end)
+                if lt >= 0:
+                    # 从顶层开括号之后起扫：配对闭括号使深度转负（嵌套括号先开后闭）
+                    depth, j = 0, lt + 1
+                    while j < sup_end:
+                        if sig[j] == '<':
+                            depth += 1
+                        elif sig[j] == '>':
+                            depth -= 1
+                            if depth < 0:
+                                _add_desc_refs(sig[lt + 1:j], out)
+                                break
+                        j += 1
+        cur = registry[cur.super_class]
+    return out
+
 def collect_referenced(ci, registry, generated_classes) -> set[str]:
     """Step 1：计算本类文件需引用的类型集合（精确 use 生成的基础）。"""
     _referenced: set[str] = set()
@@ -134,6 +199,12 @@ def collect_referenced(ci, registry, generated_classes) -> set[str]:
                     _add_desc_refs(_c, _referenced)
                 else:
                     _referenced.add(_strip_generic(_c))
+                    # 类操作数的超类链实例化收账（见 _superclass_arg_refs）：
+                    # 上转渲染的祖先实参类（ForkJoinTask<Void> 的 Void）
+                    if registry:
+                        _op_ci = registry.get(_strip_generic(_c))
+                        if _op_ci is not None:
+                            _referenced |= _superclass_arg_refs(_op_ci, registry)
             elif _c.startswith('class '):
                 # ldc / ldc_w 类字面量（`X.class`）：方法体发射 `Class::for_class(..)`，
                 # 结果类型 Class 须在本文件作用域内（E0433 的来源）
