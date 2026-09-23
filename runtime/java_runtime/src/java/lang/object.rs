@@ -196,6 +196,27 @@ pub trait ObjectVTable: 'static {
     /// 按字段名取共享的 int 存储单元（`Rc<Cell<i32>>`）。
     #[doc(hidden)]
     fn __unsafe_int_cell(&self, _field: &str) -> Option<Rc<std::cell::Cell<i32>>> { None }
+
+    /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
+    /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名读共享的
+    /// 引用存储单元。引用字段（含擦除字段）的存储是
+    /// `Rc<RefCell<Option<Box<T>>>>`——与 int/long 的 `Cell<i64/i32>` 不同，
+    /// 载体类型随字段声明类型异构（`Box<Object>` / `Box<Completion>` / ...），
+    /// 无法以统一 cell 类型导出，故以读/写双方法承载（值在边界经
+    /// `From<Object>` / `Into<Object>` 转换，与字段访问器的边界协议一致）。
+    /// java_class! 宏为每个含引用字段的生成类按平铺字段名单（含继承字段）
+    /// 生成臂；其余返回 None（调用方归 stub）。读与 `__get_xxx` 同一存储，
+    /// 经 Unsafe/VarHandle 写入对直接字段读取可见（JVM 字段内存语义）；
+    /// `None`（未写入）与 `Some(Box<null>)` 均以 jvm-null Object 应答。
+    #[doc(hidden)]
+    fn __unsafe_ref_get(&self, _field: &str) -> Option<Object> { None }
+
+    /// 引用原子协议的写形态：命中字段名单则写入并返回 true；未命中 → false
+    /// （与 `__unsafe_ref_get` 的 None 同一未命中语义，bool 仅为区分「命中」）。
+    /// 写入值经 `<T as From<Object>>::from` 还原字段声明类型的视图（null 直通，
+    /// 类型不符按 checkcast 语义处理——与 Java 字段存储检查同型）。
+    #[doc(hidden)]
+    fn __unsafe_ref_set(&self, _field: &str, _v: Object) -> bool { false }
 }
 
 /// `super.clone()`（invokespecial java/lang/Object.clone）的落点。
