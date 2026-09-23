@@ -114,16 +114,20 @@ def _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
     # `== Object[].class`（ldc 类字面量）身份比较成立——Arrays.copyOf /
     # copyOfRange 的同型判定不受影响（异型数组按 JVM 语义不再误判为
     # Object[]）。
-    if mname == 'getClass' and obj_ty.startswith('JArray<'):
-        # [equiv-audit] class-literal（S-5）：数组 getClass 的发射早路径
-        #（动态分派后数组侧同一性已精确；计数维持发射点口径）
-        equiv_audit.record('class-literal')
-        _recv = obj_e[1:] if obj_e.startswith('&') else obj_e
-        v = sim.fresh()
-        sim.emit(RawStmt(
-            f"let {v}: Class = Object::from(Clone::clone(&{_recv})).0.getClass()?;"))
-        sim.push(Var(v), RsNamed('Class'))
-        return True
+    if mname == 'getClass':
+        # TypeIR 批次 3（V1）：数组接收者判定走类型对象（Array 变体），
+        # 替代 obj_ty 的数组前缀文本形态探测
+        from ..jvm_type import from_rust_type, Array as _ArrayT
+        if isinstance(from_rust_type(obj_ty, registry), _ArrayT):
+            # [equiv-audit] class-literal（S-5）：数组 getClass 的发射早路径
+            #（动态分派后数组侧同一性已精确；计数维持发射点口径）
+            equiv_audit.record('class-literal')
+            _recv = obj_e[1:] if obj_e.startswith('&') else obj_e
+            v = sim.fresh()
+            sim.emit(RawStmt(
+                f"let {v}: Class = Object::from(Clone::clone(&{_recv})).0.getClass()?;"))
+            sim.push(Var(v), RsNamed('Class'))
+            return True
 
     return False
 
@@ -332,8 +336,13 @@ def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
                                         sim, registry)
             elif _actual == 'Object':
                 # 桥接的真实形参是具体类型：等价 bridge 方法内的 checkcast
-                #（binary 无法解析的形态退 From 视图路径，与 Fix 17 同源）
-                _bin17 = _rust_type_to_binary(_expected.split('<')[0], registry)
+                #（binary 无法解析的形态退 From 视图路径，与 Fix 17 同源）。
+                # TypeIR 批次 3（V2）：形参头 → binary 经类型对象（ClassRef.binary，
+                # 域内解析），替代形参头文本解剖 + 短名反查
+                from ..jvm_type import from_rust_type, ClassRef as _ClassRefT
+                _exp17 = from_rust_type(_expected, registry)
+                _bin17 = (_exp17.binary if isinstance(_exp17, _ClassRefT) and registry
+                          and _exp17.binary in registry else '')
                 if _bin17:
                     wargs[_i] = _render_cast(_a, _expected,
                                              binary_name=_bin17, checked=True)
@@ -676,7 +685,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             _pv_targs = f"<{', '.join(['Object'] * len(_pv_tps))}>" if _pv_tps else ''
             _pv_arg_str = ', '.join(args)
             rust_ret_pv = jvm_to_rust(ret, registry)
-            if obj_ty.split('<')[0].strip() == _pv_short:
+            # TypeIR 批次 3（V3）：接收者静态类型是否即私有接口所属载体——
+            # erasure 基名经 binary 比较（短名单射下与旧短名比较等价），
+            # 替代接收者头部文本解剖
+            from ..jvm_type import from_rust_type, JvmType as _JvmTypeT
+            if from_rust_type(obj_ty, registry).erasure() \
+                    == _JvmTypeT.class_of(_pv_bin, registry):
                 _pv_recv_e = obj_e
             elif obj_e == 'this':
                 _pv_recv_e = (f"Into::<{_pv_short}{_pv_targs}>::into(Clone::clone(this))")
@@ -693,8 +707,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 sim.push(Var(v), RsNamed(rust_ret_pv))
             return
     # 若接收方 Rust 类型是 java_runtime 手写类：API 名面固定，仅根类 Object 的
-    # 同名重载（wait(J)/wait(JI) → wait_l/wait_l_i，S-20）按描述符后缀取名
-    obj_base = obj_ty.split('<')[0].strip()  # 去泛型后缀（ArrayList<T> → ArrayList）
+    # 同名重载（wait(J)/wait(JI) → wait_l/wait_l_i，S-20）按描述符后缀取名。
+    # TypeIR 批次 3（V4）：接收者基名经类型对象 erasure 头标识符取
+    # （rust_head_name：ClassRef → short_cls(binary)、Array → 'JArray'、
+    # Primitive → Rust 拼写、占位 → 短名本身），替代接收者头部文本解剖
+    from ..jvm_type import from_rust_type, rust_head_name
+    obj_base = rust_head_name(from_rust_type(obj_ty, registry).erasure())  # ArrayList<T> → ArrayList
     if obj_base in _JAVA_RUNTIME_SHORT_NAMES:
         rust_mname = _safe_field(
             _mangle_if_overloaded(_OBJECT_CLASS, mname, comment, registry))

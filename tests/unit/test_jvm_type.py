@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from codegen.jvm_type import (Array, ClassRef, JvmType, Null, Primitive, TypeVar,
                               Wildcard, from_descriptor, from_signature,
+                              from_rust_type, rust_head_name,
                               _super_closure)
 from codegen.types import ClassInfo
 
@@ -389,6 +390,72 @@ class DisplayAndHashTests(unittest.TestCase):
                          '? extends java.lang.String')
         self.assertEqual(Wildcard('-').to_display(), '? super Object')
         self.assertEqual(Null().to_display(), 'null')
+
+
+class FromRustTypeTests(unittest.TestCase):
+    """Rust 表面语言 → JvmType 反向解析（invoke 域类型决策的边界入口）。"""
+
+    def test_primitives_and_unit(self):
+        self.assertEqual(from_rust_type('i32', REG), Primitive('int'))
+        self.assertEqual(from_rust_type('i64', REG), Primitive('long'))
+        self.assertEqual(from_rust_type('bool', REG), Primitive('boolean'))
+        self.assertEqual(from_rust_type('u16', REG), Primitive('char'))
+        self.assertEqual(from_rust_type('()', REG), Primitive('void'))
+
+    def test_object_and_registry_resolution(self):
+        self.assertEqual(from_rust_type('Object', REG),
+                         ClassRef('java/lang/Object'))
+        self.assertEqual(from_rust_type('ArrayList', REG),
+                         ClassRef('java/util/ArrayList', (), False))
+        self.assertEqual(from_rust_type('List', REG),
+                         ClassRef('java/util/List', (), True))
+        # 参数化形态：binary / is_interface 由 head 反查，实参递归解析
+        self.assertEqual(
+            from_rust_type('ArrayList<String>', REG),
+            ClassRef('java/util/ArrayList', (ClassRef('java/lang/String'),), False))
+        # 域外占位：反查不到的 head，binary = 短名本身（同 _is_subtype 父类占位口径）
+        self.assertEqual(from_rust_type('NotRegistered', REG),
+                         ClassRef('NotRegistered'))
+        # 无 registry 时一切引用形态均为占位（Object 例外：常量身份）
+        self.assertEqual(from_rust_type('ArrayList', None),
+                         ClassRef('ArrayList'))
+
+    def test_array_and_wildcard(self):
+        self.assertEqual(from_rust_type('JArray<i32>', REG),
+                         Array(Primitive('int')))
+        self.assertEqual(
+            from_rust_type('JArray<JArray<Object>>', REG),
+            Array(Array(ClassRef('java/lang/Object'))))
+        # 裸 JArray 无实参 → 占位 ClassRef（旧文本解剖的 'JArray' 基名口径）
+        self.assertEqual(from_rust_type('JArray', REG), ClassRef('JArray'))
+        self.assertEqual(
+            from_rust_type('Parent<A, i32, ?>', REG),
+            ClassRef('Parent', (ClassRef('A'), Primitive('int'), Wildcard('*'))))
+
+    def test_malformed_degrades_to_bare_head(self):
+        # 实参段未闭合：降级裸 head 占位（与旧 split 头部解剖等价的宽容性）
+        self.assertEqual(from_rust_type('Foo<Bar', REG), ClassRef('Foo'))
+        # 空串 / 无前导标识符 → Null 哨兵（消费点按「无类身份」处理）
+        self.assertEqual(from_rust_type('', REG), Null())
+        self.assertEqual(from_rust_type('   ', REG), Null())
+
+    def test_rust_head_name_roundtrip(self):
+        # rust_head_name(from_rust_type(s)) 的头 == s 的 split('<')[0]（去空白）
+        for s in ('ArrayList', 'ArrayList<String>', 'List<Iterator<Object>>',
+                  'JArray<JArray<Object>>', 'Object', 'K', 'i32', '()',
+                  'NotRegistered<X>', 'HashMap_Node<K, V>'):
+            head = rust_head_name(from_rust_type(s, REG))
+            self.assertEqual(head, s.split('<')[0].strip(), s)
+        self.assertEqual(rust_head_name(from_rust_type('?', REG)), '?')
+        self.assertEqual(rust_head_name(Null()), '')
+        # Primitive 的 Rust 拼写往返
+        self.assertEqual(rust_head_name(Primitive('void')), '()')
+
+    def test_is_interface_via_parse(self):
+        # 接口身份判定走类型对象（invoke 实参载体保留/降级决策的基础）
+        self.assertTrue(from_rust_type('List<String>', REG).is_interface)
+        self.assertFalse(from_rust_type('ArrayList<String>', REG).is_interface)
+        self.assertFalse(from_rust_type('NotRegistered', REG).is_interface)
 
 
 if __name__ == '__main__':

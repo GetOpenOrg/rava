@@ -157,37 +157,46 @@ def _lookup_method_sig_params(
             #      声明侧（method_gen/emitted_method_sig_types 的接口回退）按描述符
             #      发射同一载体。描述符是桥接擦除（`Ljava/lang/Object;`，javac 对
             #      OfLong 桥接 forEachRemaining(Object)）时维持 Object——与声明侧一致。
-            import re as _re_iface
-            from ..jvm_type import carrier_type_for_ident as _carrier_keep
+            # TypeIR 批次 3（S1）：类型串头是否 registry 接口、描述符擦除头与形参头
+            # 同一，均经类型对象判定（from_rust_type → is_interface / erasure 相等），
+            # 替代 split('<')[0] 头部解剖 + 短名集成员检查 / 短名相等比较。
+            # 行为零变化约束（148c6bc 保护带）：判定结果与旧短名口径逐点一致
+            # （configure_short_names 后短名 → binary 单射）
+            from ..jvm_type import (ClassRef as _ClassRefS1,
+                                    carrier_type_for_ident as _carrier_keep,
+                                    from_rust_type as _frt_s1)
             from ..type_map import jvm_to_rust as _jvm_to_rust_g
-            _reg_iface_shorts = _registry_iface_shorts(registry)
+
+            def _iface_head(rust_ty: str) -> bool:
+                _t_s1 = _frt_s1(rust_ty, registry)
+                return isinstance(_t_s1, _ClassRefS1) and _t_s1.is_interface
+
             # 手写边界方法：接口位置的契约是 Object（其 _impl.rs 签名先于载体化）
             _hw = _handwritten_boundary_method(cls_bin, mname, full_desc, registry)
             final_resolved: list[str | None] = []
             for _ri, t in enumerate(resolved):
                 if _hw and _ri < len(descriptor_params):
-                    _t_base = t.split('<')[0] if t else ''
                     _d_rust = _jvm_to_rust_g(descriptor_params[_ri], registry)
-                    _d_base = _d_rust.split('<')[0]
-                    if (t is not None and _t_base in _reg_iface_shorts) or (
-                            t is None and _d_base in _reg_iface_shorts):
+                    if ((t is not None and _iface_head(t))
+                            or (t is None and _iface_head(_d_rust))):
                         final_resolved.append('Object')
                         continue
-                if t is not None:
-                    _m = _re_iface.match(r'^(\w+)(?:<|$)', t)
-                    if _m and _m.group(1) in _reg_iface_shorts:
-                        _desc_base = (_jvm_to_rust_g(descriptor_params[_ri], registry).split('<')[0]
-                                      if _ri < len(descriptor_params) else '')
-                        # receiver_is_this（接口 default 方法体内 this.xxx）：发射侧
-                        # （virtual_in 语境的存根）按描述符擦除，调用侧不得按接收者
-                        # 实参映射发射载体——否则与存根签名发散
-                        if ((_carrier_keep(t, registry) == t and _ri in subst_pos
-                                and not receiver_is_this)
-                                or _desc_base == t.split('<')[0]):
-                            final_resolved.append(t)
-                        else:
-                            final_resolved.append(None)
-                        continue
+                if t is not None and _iface_head(t):
+                    _desc_rust = (_jvm_to_rust_g(descriptor_params[_ri], registry)
+                                  if _ri < len(descriptor_params) else '')
+                    # 描述符擦除头与形参头同一（erasure binary 相等 ⇔ 旧短名相等）
+                    _same_head = (_frt_s1(_desc_rust, registry).erasure()
+                                  == _frt_s1(t, registry).erasure())
+                    # receiver_is_this（接口 default 方法体内 this.xxx）：发射侧
+                    # （virtual_in 语境的存根）按描述符擦除，调用侧不得按接收者
+                    # 实参映射发射载体——否则与存根签名发散
+                    if ((_carrier_keep(t, registry) == t and _ri in subst_pos
+                            and not receiver_is_this)
+                            or _same_head):
+                        final_resolved.append(t)
+                    else:
+                        final_resolved.append(None)
+                    continue
                 final_resolved.append(t)
             return final_resolved
     return None
@@ -421,6 +430,10 @@ def _lookup_method_sig_ret(
                 return None
             # 有效性：所有标识符须为已知类型（与 gen_method_body 的 _sig_param_valid 同规则）
             import re as _re_v
+            from ..jvm_type import ClassRef as _ClassRefS2
+            from ..jvm_type import from_rust_type as _frt_s2
+            from ..jvm_type import rust_head_name as _rhn_s2
+            from ..type_args import split_rust_type_args as _split_args_s2
             _builtin = frozenset({
                 'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
                 'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
@@ -441,12 +454,15 @@ def _lookup_method_sig_ret(
                     return sig_ret
                 # 跨类：接收者是 callee 的参数化形态 → 按接收者实参替换
                 if receiver_type:
-                    _recv_base = receiver_type.split('<')[0].strip()
+                    # TypeIR 批次 3（S2a）：接收者头部经类型对象——基名 binary 与
+                    # callee binary 比较（短名单射下与旧短名比较等价）、实参存在性
+                    # = args 非空，替代 split('<')[0]/endswith('>') 文本探测
+                    _recv_t = _frt_s2(receiver_type, registry)
+                    _recv_base = _rhn_s2(_recv_t.erasure())
                     _callee_short = short_cls(cls_bin)
-                    if (_recv_base == _callee_short and '<' in receiver_type
-                            and receiver_type.endswith('>')):
-                        _inner = receiver_type[len(_recv_base) + 1:receiver_type.rfind('>')]
-                        _rargs = _split_type_args(_inner)
+                    if (isinstance(_recv_t, _ClassRefS2) and _recv_t.binary == cls_bin
+                            and _recv_t.args):
+                        _rargs = _split_args_s2(receiver_type)
                         if len(_rargs) == len(callee_tparams):
                             _sub = _substitute_tvars(sig_ret, callee_tparams, _rargs)
                             _caller_set = set(caller_tparams) if caller_tparams else set()
@@ -475,9 +491,12 @@ def _lookup_method_sig_ret(
                                 return _sub
                             break
                 return None
-            # 手写边界方法（_impl.rs）：接口返回位置的契约是 Object（签名先于载体化）
+            # 手写边界方法（_impl.rs）：接口返回位置的契约是 Object（签名先于载体化）。
+            # TypeIR 批次 3（S2b）：返回头是否 registry 接口经类型对象 is_interface，
+            # 替代返回头文本解剖 + 短名集成员检查
+            _sr_hw_t = _frt_s2(sig_ret, registry)
             if _handwritten_boundary_method(cls_bin, mname, full_desc, registry) \
-                    and sig_ret.split('<')[0] in _registry_iface_shorts(registry):
+                    and isinstance(_sr_hw_t, _ClassRefS2) and _sr_hw_t.is_interface:
                 return 'Object'
             return sig_ret
     return None
@@ -541,16 +560,24 @@ def _substitute_tvars(ty: str, tparams: list[str], targs: list[str]) -> str:
     )
 
 
-def _exact_ancestor_type(actual: str, ancestor_short: str, registry: dict | None) -> str:
-    """静态类型 actual（如 `Child<A, B>`）沿超类链到 ancestor_short 的精确实例化
-    （`Parent<A, B, Object>`）；不在超类链上 → ''。"""
+def _exact_ancestor_type(actual: str, ancestor_t: object, registry: dict | None) -> str:
+    """静态类型 actual（如 `Child<A, B>`，Rust 类型串）沿超类链到目标祖先类型对象
+    ancestor_t（ClassRef，TypeIR 批次 3 S3：erasure 基名经 binary 比较——
+    短名单射下与旧短名比较等价）的精确实例化（`Parent<A, B, Object>`）；
+    不在超类链上 / 目标非 ClassRef → ''。"""
     from ..type_args import ancestor_type_args, split_rust_type_args, rust_type_with_args
-    ci = registry.get(_rust_type_to_binary(actual.split('<', 1)[0], registry)) if registry else None
+    from ..jvm_type import ClassRef as _ClassRefS3, from_rust_type as _frt_s3
+    if not registry or not isinstance(ancestor_t, _ClassRefS3):
+        return ''
+    actual_t = _frt_s3(actual, registry)
+    if not isinstance(actual_t, _ClassRefS3):
+        return ''
+    ci = registry.get(actual_t.binary)
     if ci is None:
         return ''
     for anc_bin, args in ancestor_type_args(ci, registry, split_rust_type_args(actual)):
-        if short_cls(anc_bin) == ancestor_short:
-            return rust_type_with_args(ancestor_short, args)
+        if anc_bin == ancestor_t.binary:
+            return rust_type_with_args(short_cls(anc_bin), args)
     return ''
 
 
@@ -558,10 +585,13 @@ def _upcast_to_ancestor_instantiation(src: str, actual: str, expected: str,
                                       sim: 'StackSim', registry: dict | None) -> str | None:
     """子类值上转到祖先类的「另一实例化」（raw type / 通配符位置：`Parent<A, i32, ?>`）。
 
-    宏只为祖先的精确实例化生成 From（Child<A> → Parent<f(A)>）；目标是同一祖先的另一实例化时
+    宏只为祖先的精确实参化生成 From（Child<A> → Parent<f(A)>）；目标是同一祖先的另一实例化时
     先上转到精确祖先，再经 Object 边界（保持对象标识）重新实例化。目标就是精确祖先 → None。"""
-    exact_anc = _exact_ancestor_type(actual, expected.split('<')[0], registry)
-    if (exact_anc and exact_anc != expected and '<' in expected
+    from ..jvm_type import ClassRef as _ClassRefS3u, from_rust_type as _frt_s3u
+    _expected_t = _frt_s3u(expected, registry)
+    exact_anc = _exact_ancestor_type(actual, _expected_t.erasure(), registry)
+    if (exact_anc and exact_anc != expected
+            and isinstance(_expected_t, _ClassRefS3u) and _expected_t.args
             and _downcast_target_valid(expected, sim, registry)
             and _downcast_target_valid(exact_anc, sim, registry)):
         return f"<{expected} as ::std::convert::From<Object>>::from(Object::from(Into::<{exact_anc}>::into({src})))"
@@ -587,8 +617,10 @@ def _coerce_arg(
         _coerce_from_null, _coerce_to_object, _coerce_value,
         _render_cast, _same_generic_family,
     )
-    from .hierarchy import _is_subtype, _into_super_chain, _rust_type_to_binary
-    from ..jvm_type import carrier_type_for_ident
+    from .hierarchy import _into_super_chain
+    from ..jvm_type import (Array, ClassRef, carrier_type_for_ident,
+                            from_rust_type, rust_head_name,
+                            strict_erased_subtype)
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
         return null_coerce
@@ -635,11 +667,17 @@ def _coerce_arg(
     if _downcast_target_valid(expected, sim, registry):
         if _same_generic_family(actual, expected):
             return _render_cast(e, expected, box_first=True)
+    # TypeIR 批次 3（S5）：实参 → 形参的子类上转判定走类型对象
+    # （strict_erased_subtype：erasure 基名严格子类型，语义与 _is_subtype
+    # 适配层逐点一致），替代 actual/expected 基名的 split('<')[0] 文本解剖
+    _act_t = from_rust_type(actual, registry)
+    _exp_t = from_rust_type(expected, registry)
     if (expected not in _PRIMITIVE_RUST_TYPES and actual not in _PRIMITIVE_RUST_TYPES
             and expected not in ('Object', '()', actual)
-            and _is_subtype(actual.split('<')[0], expected.split('<')[0], registry)):
+            and strict_erased_subtype(_act_t, _exp_t, registry)):
         # R-2：子类传给父类参数，通过显式 __into_super() 链（替代已删除的 T55 From impl）
-        chain = _into_super_chain(actual.split('<')[0], expected.split('<')[0], registry)
+        chain = _into_super_chain(rust_head_name(_act_t.erasure()),
+                                  rust_head_name(_exp_t.erasure()), registry)
         src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
         # 宏只为「祖先的精确实例化」生成 From（Child<A> → Parent<f(A)>）。形参是同一祖先的
         # 另一实例化（raw type / 通配符形参）时：先向上转换到精确祖先，再经 Object 边界重新实例化。
@@ -658,7 +696,10 @@ def _coerce_arg(
             and expected not in ('Object', '()')
             and expected not in (sim.class_type_params or ())
             and _downcast_target_valid(expected, sim, registry)):
-        _bin18 = _rust_type_to_binary(expected.split('<')[0], registry)
+        # TypeIR 批次 3（S4a）：checkcast 目标 binary 经类型对象（ClassRef.binary，
+        # 域内解析；域外 / 数组 / 基本类型 → ''，与 _rust_type_to_binary 同口径）
+        _bin18 = (_exp_t.binary if isinstance(_exp_t, ClassRef) and registry
+                  and _exp_t.binary in registry else '')
         if _bin18:
             return _render_cast(e, expected, binary_name=_bin18, checked=True)
         return _render_cast(e, expected)
@@ -674,12 +715,16 @@ def _coerce_arg(
         # 实参静态类型是类型变量（`S extends SpeciesData`），形参是其上界类：Java 的隐式
         # 子类型转换 → 经 Object 边界按对象标识取回上界类视图
         return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
-    if actual == 'Object' and expected.startswith('JArray<'):
+    # TypeIR 批次 3（S4b）：数组形态判定走类型对象（Array 变体），
+    # 替代 actual/expected 的数组前缀文本形态探测
+    _act_is_arr = isinstance(_act_t, Array)
+    _exp_is_arr = isinstance(_exp_t, Array)
+    if actual == 'Object' and _exp_is_arr:
         # 擦除为 Object 的数组值流入类型化数组形参（`Object o = intArr; f((int[]) o)`
         # 的实参位；checkcast 被验证器省略或已在上游消费）：经 `From<Object> for
         # JArray<T>` 的数组视图机制取回（R9 协变视图 / S-4 探针，checkcast 语义）
         return f"From::from(Clone::clone(&{e}))"
-    if actual.startswith('JArray<') and expected.startswith('JArray<') and actual != expected:
+    if _act_is_arr and _exp_is_arr and actual != expected:
         # 数组协变（`T[]` 擦除为 Object[] 的引用传给元素类型具体化的形参）：Java 数组在运行时
         # 按元素类型具体化，同一数组对象经 Object 边界按形参的元素类型取回（checkcast 语义）
         return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
