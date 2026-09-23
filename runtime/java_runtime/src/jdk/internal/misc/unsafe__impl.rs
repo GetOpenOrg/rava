@@ -242,6 +242,18 @@ impl Unsafe {
         Ok(())
     }
 
+    /// `getLong(Object o, long offset)`：实例字段 long 读（plain 形态，与
+    /// getLongVolatile 同一存储单元）。
+    /// 消费方：`ThreadLocalRandom.nextSeed` 对 Thread.threadLocalRandomSeed
+    /// （读改写种子的读半边；localInit 的写半边是 putLong_obj_l_l）。
+    #[jvm_boundary]
+    pub fn getLong_obj_l(&self, o: Object, offset: i64) -> Result<i64> {
+        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getLong:(Ljava/lang/Object;J)J (实例字段 offset={} 无共享 long 单元)", offset)
+        });
+        Ok(cell.get())
+    }
+
     /// `getInt(Object o, long offset)`：实例字段 int 读（plain 形态）。
     /// 消费方：`ThreadLocalRandom.current` 对 Thread.threadLocalRandomProbe。
     #[jvm_boundary]
