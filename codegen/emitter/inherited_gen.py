@@ -426,6 +426,13 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
     # 取声明者 emission 的槽位名（wrapper 名与槽位名解耦时由 vtable_name 属性携带），
     # virtual_in 为声明类短名。纯接口桥接（超类链无声明）无槽位：接口经载体分派直接
     # 落到本 wrapper 方法，名字按接收者视角的重载判定。
+    #
+    # 槽位归属沿声明链上溯到根声明者（K-6a 覆盖传递性）：最近声明者自身的
+    # virtual_in 指向更远时（AbstractQueue.add 是对 Collection.add 槽的覆盖，
+    # virtual_in=AbstractCollection），停在最近声明者会 impl 出该 trait 没有的
+    # 槽位（E0407），wrapper 的 UFCS 分派 `Trait::member` 随之把 trait 名解析到
+    # 类型位（E0782 级联）。与 _member_declaration 的 vt_bin 解析（method.virtual_in
+    # 沿 anc_args 定位）同一语义，此处按 registry 链迭代到不动点。
     vt_short = ''
     member_name = ''
     cur = recv_ci.super_class
@@ -436,8 +443,27 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
         if anc_em is not None and not anc_em.handwritten:
             found = anc_em.find(name, param_desc)
             if found is not None:
-                vt_short = short_cls(cur)
-                member_name = found.vtable_name or found.rust_name
+                slot_cur, slot_m = cur, found
+                while slot_m.virtual_in and slot_m.virtual_in != short_cls(slot_cur):
+                    up = slot_cur
+                    up_seen: set[str] = set()
+                    nxt = None
+                    while up and up != _OBJECT_CLASS and up in registry and up not in up_seen:
+                        up_seen.add(up)
+                        if short_cls(up) == slot_m.virtual_in:
+                            nxt = up
+                            break
+                        up = registry[up].super_class
+                    if nxt is None:
+                        break
+                    up_em = emissions.get(nxt)
+                    up_found = (up_em.find(name, param_desc)
+                                if up_em is not None and not up_em.handwritten else None)
+                    if up_found is None:
+                        break  # 根声明者不可读（手写 / 未生成）→ 维持最近声明者归属
+                    slot_cur, slot_m = nxt, up_found
+                vt_short = short_cls(slot_cur)
+                member_name = slot_m.vtable_name or slot_m.rust_name
                 break
         cur = registry[cur].super_class
     if not member_name:
