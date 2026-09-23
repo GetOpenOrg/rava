@@ -27,7 +27,8 @@ from .method_gen import _gen_native_stub
 from .vtable_util import _bin_to_rust, resolve_virtual_slot, slot_member_rust_name
 from .clinit_extract import _gen_static_field_blocks, _gen_clinit_block
 from .import_gen import (collect_referenced, gen_cross_imports,
-                         scan_used_vtable_imports)
+                         scan_used_vtable_imports,
+                         scan_supplementary_iface_imports)
 from .field_gen import _resolve_field_rust, _resolve_anc_field_rust
 from .inherited_gen import (ClassEmission, IMPORTS_SLOT as _INHERITED_IMPORTS_SLOT,
                             MEMBERS_SLOT as _INHERITED_MEMBERS_SLOT)
@@ -170,16 +171,49 @@ def _override_vtable_erasure(m, ci, registry) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _ancestor_iface_member_names(ci, registry) -> set[str]:
+    """本接口全部祖先接口的实例成员名集合（Java 名 + mangle 形态）。
+
+    接口伴生契约补发（见 _emit_method_blocks 尾段）的防重依据：祖先接口成员
+    经 inherited_from 转发路径在载体上落同名方法，补发声明与之撞名会 E0592。
+    BFS 序确定性（队列排序），mangle 形态无条件并入——过包含只影响「本可补发
+    的同名方法被跳过」，不影响正确性。
+    """
+    names: set[str] = set()
+    if not registry:
+        return names
+    queue = sorted(ci.interfaces or [])
+    seen: set[str] = set()
+    while queue:
+        iname = queue.pop(0)
+        if iname in seen:
+            continue
+        seen.add(iname)
+        ici = registry.get(iname)
+        if ici is None:
+            continue
+        queue.extend(sorted(ici.interfaces or []))
+        for m in ici.methods:
+            if m.is_static or m.is_synthetic or m.name in ('<init>', '<clinit>'):
+                continue
+            names.add(m.name)
+            names.add(mangle_name(m.name, m.descriptor))
+    return names
+
+
 def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
                         _nf_entry, class_type_params, overloaded_names,
                         visible_methods, _type_only, _is_iface,
-                        method_blocks, _iface_lambda_blocks) -> None:
+                        method_blocks, _iface_lambda_blocks,
+                        _iface_supp_blocks) -> None:
     """方法翻译主循环：visible + 非桥接 synthetic 方法逐个发射。
 
     <clinit> → __clinit（clinit_extract）；G-10 接口私有 lambda body 落
     java_class! 块外的擦除固有 impl 块；接口实例方法发声明 / 载体 default 体；
     普通方法按调用链翻译字节码或生成 stub。结果追加进 method_blocks 与
-    _iface_lambda_blocks。原 _gen_class_rs 内联段逐字搬移，闭包变量改为本
+    _iface_lambda_blocks。接口伴生契约补发（模型缺席的 Iface__VTable 伴生
+    成员声明）追加进 _iface_supp_blocks（同时落 method_blocks；独立成表供
+    import 兜底扫描）。原 _gen_class_rs 内联段逐字搬移，闭包变量改为本
     函数参数。"""
     used_rust_names: dict[str, int] = {}  # 追踪已用名，防止 mangle 碰撞后重名
     # 非桥接的 synthetic 方法（lambda$xxx$N、access$NNN 等）是 invokedynamic 闭包 /
@@ -296,6 +330,19 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
         if fn_name_check in _nf_covered:
             # 手写共置文件按同一 mangle 规则提供实现 → 定义名仍记为计算名（G-10 账本）
             LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
+            # 接口例外（伴生隐含契约）：接口实例方法的伴生实现落在 `Iface__VTable`
+            # trait 上，而 trait 成员由本块声明生成——跳过声明即 trait 缺成员，
+            # 伴生 `impl Iface__VTable` 直接 E0407。接口实例方法恒发 abstract
+            # 声明（370-374 同款形态），类场景跳过逻辑不动（类的伴生经 inherent
+            # impl / __impl_ 路径自足）。static 方法仍跳过（命名空间函数在载体
+            # 固有 impl 上，伴生 pub fn 直接落位，不进 vtable）。
+            if _is_iface and not m.is_static:
+                _decl = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry,
+                                         class_type_params=class_type_params)
+                _decl_sig = next(ln.strip() for ln in _decl.split('\n')
+                                 if ln.lstrip().startswith('pub fn '))
+                _decl_sig = _decl_sig[:-1].rstrip() if _decl_sig.endswith('{') else _decl_sig
+                method_blocks.append(_java_method_attr(m) + '\n' + _decl_sig + ';')
             continue
         # G-10 账本：定义侧登记最终 Rust 名（stub / 翻译体 / 接口声明各路径统一在此登记）
         LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
@@ -434,6 +481,36 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
                     _tb.print_exc()
                 stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry, class_type_params=class_type_params)
                 method_blocks.append(attr_line + '\n' + stub)
+
+    # ── 接口伴生契约补发（E0407 根治）─────────────────────────────────────
+    # 手写伴生文件以 `impl Iface__VTable for X` 提供的方法集是生成 trait 的
+    # 隐含契约：无论类模型是否含该方法（JDK 版本演化改名——JDK25 把
+    # JavaLangAccess.newStringNoRepl 改名 uncheckedNewStringNoRepl，旧名伴生
+    # 实现在 / 调用边消失），trait 恒含伴生已实现的方法集。类模型缺席的方法
+    # 在此按伴生签名原样补发 abstract 声明（宏对无体接口声明生成默认 panic
+    # 存根 + 载体分派，伴生 impl 覆盖真体）；模型已有的方法经上方主循环 /
+    # 覆盖分支已声明，此处跳过。
+    if _is_iface:
+        _iface_sigs = (_nf_entry or {}).get('iface_method_sigs', {})
+        if _iface_sigs:
+            from ..instr.member_owner import _root_virtual_methods as _root_vm_supp
+            _skip_names = set(used_rust_names) | _ancestor_iface_member_names(ci, registry)
+            # Object 根方法重声明经 Object vtable 分派（不进接口 vtable，194 行
+            # 同判据），伴生契约不含它们
+            _skip_names |= {nm for nm, _dp in _root_vm_supp()}
+            for _mname in sorted(_iface_sigs):
+                if _mname in _skip_names:
+                    continue
+                _params, _ret = _iface_sigs[_mname]
+                _recv_params = f'&self, {_params}' if _params else '&self'
+                _supp = (
+                    '// 伴生契约声明（E0407）：手写 _impl 文件实现 Iface__VTable 的'
+                    '成员，类模型不含此方法（JDK 版本演化），\n// 生成 trait 恒含'
+                    '伴生方法集——签名取自伴生 impl，逐字一致保证 trait 相干。\n'
+                    f'pub fn {_mname}({_recv_params}) -> {_ret};')
+                used_rust_names[_mname] = 0
+                method_blocks.append(_supp)
+                _iface_supp_blocks.append(_supp)
 
 
 def _emit_interface_default_inheritance(ci, registry, call_chain, stub_bodies,
@@ -1179,6 +1256,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     # G-10：接口私有实例 lambda body 落在 java_class! 块之外的擦除 impl 块
     # （不进接口 vtable / 不被实现类继承），见方法循环内的专门分支
     _iface_lambda_blocks: list[str] = []
+    # 接口伴生契约补发声明（模型缺席的 Iface__VTable 伴生成员）——独立成表
+    # 供 import 兜底扫描（import_gen.scan_supplementary_iface_imports）
+    _iface_supp_blocks: list[str] = []
 
     # 是否是用户类（call_chain is None 表示用户类，所有方法都翻译）
     _is_user_class = call_chain is None
@@ -1198,7 +1278,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         class_type_params=class_type_params, overloaded_names=overloaded_names,
         visible_methods=visible_methods, _type_only=_type_only,
         _is_iface=_is_iface, method_blocks=method_blocks,
-        _iface_lambda_blocks=_iface_lambda_blocks)
+        _iface_lambda_blocks=_iface_lambda_blocks,
+        _iface_supp_blocks=_iface_supp_blocks)
 
     # 已翻译方法体的接口 default 方法（展开到本类）：其字节码同样可能含 `Iface.super.m()`
     _translated_defaults: list = []
@@ -1295,6 +1376,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         method_blocks, _iface_lambda_blocks, cross_imports,
         struct_name, registry, _prefix,
         crate_prefix_resolver=crate_prefix_resolver))
+    # 接口伴生契约补发声明的类型兜底导入：collect_referenced 按类模型收集，
+    # 模型缺席方法的签名类型（伴生文件带来）在此按发射文本补齐
+    if _iface_supp_blocks:
+        parts.extend(scan_supplementary_iface_imports(
+            _iface_supp_blocks, cross_imports, struct_name, registry, _prefix,
+            crate_prefix_resolver=crate_prefix_resolver))
 
     # BINARY_NAME / ObjectVTable / Into<Object> / From<Object> / Debug 全部由
     # java_class! 宏在编译期展开（方案 §11 职责边界总表）。

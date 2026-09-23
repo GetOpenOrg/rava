@@ -57,11 +57,64 @@ def _parse_synthetic_fn(line: str) -> dict | None:
     }
 
 
+def _scan_vtable_impl_sigs(content: str) -> dict[str, dict[str, tuple[str, str]]]:
+    """提取手写文件中 `impl <X>__VTable for <T>` 块内的实例方法签名。
+
+    返回 {trait_短名: {rust_fn_name: (params_str, ret_str)}}（params 已剥掉
+    `&self` 接收者，与 trait 声明形态一致）。签名可能跨行（如 join 的六参
+    形态）——按括号配对完整捕获，保证与伴生 impl 逐字一致（Rust trait impl
+    的签名相干性要求）。一个文件可实现多个接口的 vtable（如
+    locale_provider_adapter_impl.rs），按 trait 标识分组互不混串。
+
+    跳过非 Java 契约成员：`__` 前缀的 upcast / 内部钩子（__as_Xxx）与
+    ObjectVTable 协议成员（as_any / __class_name / __obj_str / __interface）。
+    """
+    import re as _re
+    _PROTO_FNS = frozenset({
+        'as_any', '__class_name', '__obj_str', '__interface',
+        '__to_string', '__hash_code', '__equals',
+    })
+    sigs: dict[str, dict[str, tuple[str, str]]] = {}
+    for vm in _re.finditer(r'\bimpl\s+(\w+)__VTable\s+for\s+[^{]*\{', content):
+        trait_ident = vm.group(1)
+        start = vm.end()
+        depth = 1
+        i = start
+        while i < len(content) and depth:
+            if content[i] == '{':
+                depth += 1
+            elif content[i] == '}':
+                depth -= 1
+            i += 1
+        body = content[start:i - 1]
+        for fm in _re.finditer(r'\bfn\s+(\w+)\s*(?:<[^>]*>)?\s*\(', body):
+            name = fm.group(1)
+            if name.startswith('_') or name in _PROTO_FNS:
+                continue
+            j = fm.end()
+            pdepth = 1
+            while j < len(body) and pdepth:
+                if body[j] == '(':
+                    pdepth += 1
+                elif body[j] == ')':
+                    pdepth -= 1
+                j += 1
+            params = body[fm.end():j - 1]
+            params = _re.sub(r'^\s*(?:&(?:mut\s+)?self\s*,?\s*)', '', params)
+            rm = _re.match(r'\s*->\s*([^{;]+)', body[j:])
+            ret = rm.group(1).strip() if rm else '()'
+            sigs.setdefault(trait_ident, {})[name] = (params.strip(), ret)
+    return sigs
+
+
 def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple[dict, set]:
     """扫描 java_runtime/src/**/*_impl.rs 共置手写文件，提取已实现的方法名。
     codegen 根据返回的 new_format_map 跳过对应方法的 stub 生成。
     返回:
       new_format_map: {class_binary -> {'methods': set[str]}}
+        另含 'iface_method_sigs' 键：接口伴生（`impl Iface__VTable for X`）
+        实现的方法签名 {rust_fn_name: (params, ret)}——生成 trait 的隐含契约
+        （class_writer 据此保证 trait 恒含伴生方法集，E0407 根治）。
       (空集占位，保持调用签名兼容)
     """
     import re as _re
@@ -146,6 +199,32 @@ def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple
             if method_names:
                 entry = new_format_map.setdefault(class_binary, {'methods': set()})
                 entry['methods'].update(method_names)
+
+            # 接口 vtable 伴生实现：`impl <X>__VTable for <T>` 的方法集登记到
+            # **trait 标识对应的接口**条目（X 是接口的 Rust 短名——嵌套接口伴生
+            # 文件如 floating_decimal_impl.rs 实现的是 FloatingDecimal$Binary
+            # ASCIIConverter 的 vtable，而非文件名映射的外围类）。生成 trait 恒含
+            # 该方法集（伴生隐含契约）：类模型缺席（JDK 版本演化改名）时由
+            # class_writer 补发声明，任何语料 / JDK 版本下 E0407 消失。
+            _vt_sigs = _scan_vtable_impl_sigs(content)
+            if _vt_sigs:
+                _file_pkg = '/'.join(parts[:-1])
+                for _vt_ident, _vt_methods in sorted(_vt_sigs.items()):
+                    # 短名 → binary：同包优先（同名类跨包歧义时文件包即真源），
+                    # 其余按 registry 序取首个保证确定性
+                    _cands = sorted(_bn for _bn in (registry or {})
+                                    if _bn.count('/')
+                                    and _bn.rsplit('/', 1)[-1].replace('$', '_') == _vt_ident)
+                    _cands_same_pkg = [c for c in _cands if c.rsplit('/', 1)[0] == _file_pkg]
+                    _vt_bin = (_cands_same_pkg or _cands or [class_binary])[0]
+                    # 只登记接口：类 vtable 伴生（如 LocaleProviderAdapter__VTable）
+                    # 的成员走类块正常声明路径（不依赖 skip），补发声明是接口独有
+                    # 契约（Iface__VTable 恒含伴生方法集）
+                    _vt_ci = (registry or {}).get(_vt_bin)
+                    if _vt_ci is not None and not getattr(_vt_ci, 'is_interface', False):
+                        continue
+                    _vt_entry = new_format_map.setdefault(_vt_bin, {'methods': set()})
+                    _vt_entry.setdefault('iface_method_sigs', {}).update(_vt_methods)
 
     return new_format_map, set()
 
