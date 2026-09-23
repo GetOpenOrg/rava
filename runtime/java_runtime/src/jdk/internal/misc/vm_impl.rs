@@ -37,4 +37,13 @@ impl VM {
         }
         Ok(INVOKE_INITED.with(|f| f.get()))
     }
+
+    /// `VM.isModuleSystemInited()`：模块系统初始化完成标记。原生二进制的
+    /// 类型宇宙由 BFS 闭包静态组装（进入 main 前完成），模块层概念不在
+    /// 运行时呈现——调用点（如 ClassLoader 的引导期分支）语义上处于
+    /// 「系统模块已就绪」档位，恒真。
+    #[jvm_boundary]
+    pub fn isModuleSystemInited() -> Result<bool> {
+        Ok(true)
+    }
 }
