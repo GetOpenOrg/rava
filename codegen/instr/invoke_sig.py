@@ -587,8 +587,10 @@ def _coerce_arg(
         _coerce_from_null, _coerce_to_object, _coerce_value,
         _render_cast, _same_generic_family,
     )
-    from .hierarchy import _is_subtype, _into_super_chain, _rust_type_to_binary
-    from ..jvm_type import carrier_type_for_ident
+    from .hierarchy import _into_super_chain
+    from ..jvm_type import (Array, ClassRef, carrier_type_for_ident,
+                            from_rust_type, rust_head_name,
+                            strict_erased_subtype)
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
         return null_coerce
@@ -635,11 +637,17 @@ def _coerce_arg(
     if _downcast_target_valid(expected, sim, registry):
         if _same_generic_family(actual, expected):
             return _render_cast(e, expected, box_first=True)
+    # TypeIR 批次 3（S5）：实参 → 形参的子类上转判定走类型对象
+    # （strict_erased_subtype：erasure 基名严格子类型，语义与 _is_subtype
+    # 适配层逐点一致），替代 actual/expected 基名的 split('<')[0] 文本解剖
+    _act_t = from_rust_type(actual, registry)
+    _exp_t = from_rust_type(expected, registry)
     if (expected not in _PRIMITIVE_RUST_TYPES and actual not in _PRIMITIVE_RUST_TYPES
             and expected not in ('Object', '()', actual)
-            and _is_subtype(actual.split('<')[0], expected.split('<')[0], registry)):
+            and strict_erased_subtype(_act_t, _exp_t, registry)):
         # R-2：子类传给父类参数，通过显式 __into_super() 链（替代已删除的 T55 From impl）
-        chain = _into_super_chain(actual.split('<')[0], expected.split('<')[0], registry)
+        chain = _into_super_chain(rust_head_name(_act_t.erasure()),
+                                  rust_head_name(_exp_t.erasure()), registry)
         src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
         # 宏只为「祖先的精确实例化」生成 From（Child<A> → Parent<f(A)>）。形参是同一祖先的
         # 另一实例化（raw type / 通配符形参）时：先向上转换到精确祖先，再经 Object 边界重新实例化。
