@@ -194,20 +194,30 @@ impl Unsafe {
         _instance_ref_set(o, offset, v)
     }
 
-    /// `arrayBaseOffset(Class)`：数组存储里首个元素前的头部长度。HotSpot 64 位
-    /// （压缩 oops）对所有数组类返回 16；原生二进制无 C 布局，该值与访问器族
-    /// 的偏移解码共用常量（自洽即可，不进可观察输出）。null 类按 JDK 抛 NPE。
+    /// `arrayBaseOffset(Class)` 的实现核心（`core_` 约定）：数组存储里首个
+    /// 元素前的头部长度。HotSpot 64 位（压缩 oops）对所有数组类返回 16；原生
+    /// 二进制无 C 布局，该值与访问器族的偏移解码共用常量（自洽即可，不进可
+    /// 观察输出）。null 类按 JDK 抛 NPE。
+    ///
+    /// 返回宽度按 JDK 25 形态书写（long）：该方法签名随 JDK 演化（javap：
+    /// jdk.internal.misc.Unsafe.arrayBaseOffset JDK21 `()I` → JDK25 `()J`，
+    /// 消费方 CHM.ABASE 字段同步 I→J），伴生不再以 Java 名直接暴露（避免与
+    /// 生成侧模型签名同名相撞 E0592）；生成侧 class_writer 检出 `core_` 核
+    /// 心后按**当前模型宽度**发适配声明转发本核心（转发体经 `this.` 调用
+    /// ——宏据 NeedsWrapper 分类落到 wrapper 上下文，核心即在 wrapper 上；宽度差经显式
+    /// `as` 还原），调用
+    /// 面（含 putstatic 值侧）恒为模型类型——两版模型下编译面归零。
     #[jvm_boundary]
-    pub fn arrayBaseOffset(&self, arrayClass: Class) -> Result<i32> {
+    pub fn core_arrayBaseOffset(&self, arrayClass: Class) -> Result<i64> {
         if Object::from(Clone::clone(&arrayClass)).0.is_jvm_null() {
             return Err(JvmError::null_pointer());
         }
         let name = format!("{}", arrayClass.__get_name());
         if _array_index_scale_by_name(&name).is_none() {
             // JDK 语义：非数组类的返回值未定义（HotSpot 走 assert/崩溃）
-            panic!("stub: jdk/internal/misc/Unsafe.arrayBaseOffset:(Ljava/lang/Class;)I (非数组类 {})", name);
+            panic!("stub: jdk/internal/misc/Unsafe.arrayBaseOffset:(Ljava/lang/Class;)J (非数组类 {})", name);
         }
-        Ok(ARRAY_BASE_OFFSET as i32)
+        Ok(ARRAY_BASE_OFFSET)
     }
 
     /// `arrayIndexScale(Class)`：数组元素的寻址 stride（字节）。HotSpot 语义按

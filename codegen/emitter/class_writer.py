@@ -171,6 +171,31 @@ def _override_vtable_erasure(m, ci, registry) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _split_top_level(s: str) -> list[str]:
+    """按顶层逗号切分参数表（泛型实参 / 嵌套尖括号内的逗号不切）。"""
+    parts, depth, cur = [], 0, ''
+    for ch in s:
+        if ch in '<(':
+            depth += 1
+        elif ch in '>)':
+            depth -= 1
+        if ch == ',' and depth == 0:
+            parts.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur)
+    return parts
+
+
+def _result_inner(ty: str) -> str | None:
+    """`Result<T>` → `T`；非该形态返回 None。"""
+    if ty.startswith('Result<') and ty.endswith('>'):
+        return ty[len('Result<'):-1].strip()
+    return None
+
+
 def _ancestor_iface_member_names(ci, registry) -> set[str]:
     """本接口全部祖先接口的实例成员名集合（Java 名 + mangle 形态）。
 
@@ -441,6 +466,39 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
             _decl_sig = next(ln.strip() for ln in _decl.split('\n') if ln.lstrip().startswith('pub fn '))
             _decl_sig = _decl_sig[:-1].rstrip() if _decl_sig.endswith('{') else _decl_sig
             method_blocks.append(_java_method_attr(m) + '\n' + _decl_sig + ';')
+            continue
+
+        # 伴生核心适配（E0308 根治）：伴生文件以 `core_<rust方法名>` 提供跨
+        # JDK 模型共享的实现核心——原语宽度随 JDK 演化的方法（javap：
+        # jdk.internal.misc.Unsafe.arrayBaseOffset JDK21 ()I → JDK25 ()J，消费方
+        # CHM.ABASE 字段同步 I→J）单签名无法同时满足两版模型，伴生核心按当前
+        # JDK 形态书写、不以 Java 名暴露（避免 E0592 同名相撞）；此处按**当前
+        # 模型签名**发适配声明：转发体经 `this.` 调用核心（宏 NeedsWrapper
+        # 分类 → wrapper 上下文，核心即在 wrapper 上）并按模型宽度显式还原
+        # （as），调用面（含 putstatic 值侧、invoke 结果压栈）恒为模型类型。
+        _core_entry = ((_nf_entry or {}).get('method_cores', {}) or {}).get(fn_name_check)
+        if _core_entry is not None and not m.is_static:
+            LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
+            _decl = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry,
+                                     class_type_params=class_type_params)
+            _decl_sig = next(ln.strip() for ln in _decl.split('\n')
+                             if ln.lstrip().startswith('pub fn '))
+            _decl_sig = _decl_sig[:-1].rstrip() if _decl_sig.endswith('{') else _decl_sig
+            _core_name, _core_ret = _core_entry
+            # 转发实参：声明参数表剥接收者后按名转发（核心形参类型与模型一致，
+            # 签名相干由伴生核心约定保证）
+            _ps = _decl_sig[_decl_sig.index('(') + 1:_decl_sig.rindex(')')]
+            _arg_names = [p.split(':')[0].strip() for p in _split_top_level(_ps) if ':' in p]
+            _model_ret = _decl_sig.rsplit('->', 1)[1].strip()
+            # 宽度还原：模型 / 核心返回内层均为原语且不同 → as 显式转换
+            _mr = _result_inner(_model_ret)
+            _cr = _result_inner(_core_ret)
+            _cast = (f' as {_mr}' if (_mr and _cr and _mr != _cr
+                     and _mr in _PRIMITIVE_RUST_TYPES and _cr in _PRIMITIVE_RUST_TYPES)
+                     else '')
+            method_blocks.append(
+                _java_method_attr(m) + '\n' + _decl_sig
+                + f' {{ let this = self; Ok(this.{_core_name}({", ".join(_arg_names)})?{_cast}) }}')
             continue
 
         attr_line = _java_method_attr(m)

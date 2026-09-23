@@ -107,14 +107,36 @@ def _scan_vtable_impl_sigs(content: str) -> dict[str, dict[str, tuple[str, str]]
     return sigs
 
 
+def _extract_fn_sig_at(text: str, fm) -> tuple[str, str] | None:
+    """从 `fn name(...)` 匹配点提取 (params, ret)——括号配对跨行捕获。"""
+    import re as _re
+    j = fm.end()
+    pdepth = 1
+    while j < len(text) and pdepth:
+        if text[j] == '(':
+            pdepth += 1
+        elif text[j] == ')':
+            pdepth -= 1
+        j += 1
+    params = text[fm.end():j - 1]
+    params = _re.sub(r'^\s*(?:&(?:mut\s+)?self\s*,?\s*)', '', params)
+    rm = _re.match(r'\s*->\s*([^{;]+)', text[j:])
+    ret = rm.group(1).strip() if rm else '()'
+    return params.strip(), ret
+
+
 def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple[dict, set]:
     """扫描 java_runtime/src/**/*_impl.rs 共置手写文件，提取已实现的方法名。
     codegen 根据返回的 new_format_map 跳过对应方法的 stub 生成。
     返回:
       new_format_map: {class_binary -> {'methods': set[str]}}
-        另含 'iface_method_sigs' 键：接口伴生（`impl Iface__VTable for X`）
-        实现的方法签名 {rust_fn_name: (params, ret)}——生成 trait 的隐含契约
-        （class_writer 据此保证 trait 恒含伴生方法集，E0407 根治）。
+        另含两个键：
+        - 'iface_method_sigs'：接口伴生（`impl Iface__VTable for X`）实现的
+          方法签名 {rust_fn_name: (params, ret)}——生成 trait 的隐含契约
+          （class_writer 据此保证 trait 恒含伴生方法集，E0407 根治）；
+        - 'method_cores'：伴生核心（`fn core_<rust方法名>`，跨 JDK 模型共享
+          的实现核心，原语宽度按当前 JDK 形态）{rust方法名: (核心fn名, ret)}
+          ——class_writer 按当前模型宽度发适配声明转发（E0308 根治）。
       (空集占位，保持调用签名兼容)
     """
     import re as _re
@@ -199,6 +221,21 @@ def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple
             if method_names:
                 entry = new_format_map.setdefault(class_binary, {'methods': set()})
                 entry['methods'].update(method_names)
+
+            # 伴生核心（`core_<rust方法名>`，不带 __ 前缀——宏 NeedsWrapper
+            # 分类按 `this.<非__方法>(` 判定，转发体需落 wrapper 上下文）：
+            # 跨 JDK 模型共享的实现核心，返回宽度按书写时的当前 JDK 形态
+            # （如 core_arrayBaseOffset 按 JDK25 long）。class_writer 检出后按
+            # 当前模型宽度发适配声明转发（显式 as 还原）——原语宽度随 JDK
+            # 演化的方法由此双模型通吃。
+            for cm in _re.finditer(r'\bfn\s+(core_\w+)\s*(?:<[^>]*>)?\s*\(', content):
+                core_name = cm.group(1)
+                core_sig = _extract_fn_sig_at(content, cm)
+                if core_sig is None:
+                    continue
+                entry = new_format_map.setdefault(class_binary, {'methods': set()})
+                entry.setdefault('method_cores', {})[core_name[len('core_'):]] = (
+                    core_name, core_sig[1])
 
             # 接口 vtable 伴生实现：`impl <X>__VTable for <T>` 的方法集登记到
             # **trait 标识对应的接口**条目（X 是接口的 Rust 短名——嵌套接口伴生
