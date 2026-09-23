@@ -44,7 +44,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from jdk_select import resolve_jdk_home
+from jdk_select import resolve_jdk_home, _major_of
+
+
+def _current_jdk_major() -> 'int | None':
+    """当前生效 JDK 的 major（JAVA_HOME 同源解析；无法解析时 None=旧式不分文件）。"""
+    home = os.environ.get('JAVA_HOME', '')
+    return _major_of(Path(home)) if home else None
 
 ROOT   = Path(__file__).parent.parent
 TESTS  = ROOT / "tests"
@@ -184,27 +190,68 @@ def _aux_full(cls_aux: str, raw_v: int, eq_v: int, bin_name: str = "",
 
 
 # ── 失败清单（棘轮）：全量跑批累积失败，--failed 只跑清单，通过自动出列 ──
-_FAILED_HEADER = ("# run_tests.py 失败清单（自动维护，勿手编）：\n"
-                  "# - 任何一次跑批：FAIL 进列 / 跑到且 PASS 出列 / 未跑的不动\n"
-                  "# - --failed 按本清单回归；--failed-file 可改路径\n")
+def _failed_header(jdk_major: int | None) -> str:
+    # 头部 `# jdk: N` 是清单的身份行：同一文件只服务一个 JDK 版本的失败集
+    # （不同版本语料/手写覆盖面不同，失败集不可比），读取侧据此校验防混用
+    return ("# run_tests.py 失败清单（自动维护，勿手编）：\n"
+            "# - 任何一次跑批：FAIL 进列 / 跑到且 PASS 出列 / 未跑的不动\n"
+            "# - --failed 按本清单回归；--failed-file 可改路径\n"
+            f"# jdk: {jdk_major}\n")
 
 
-def _failed_file_path(cli_path: str | None) -> Path:
-    return Path(cli_path) if cli_path else OUT / "failed_tests.txt"
+_FAILED_HEADER = _failed_header(None)
+
+
+def _failed_file_path(cli_path: str | None, jdk_major: int | None = None) -> Path:
+    # 默认清单按 JDK 版本分文件：不同版本的失败集互不可比（语料/手写覆盖面
+    # 都随版本变化），混在同一清单里 --failed 会在错误版本下重跑假失败
+    if cli_path:
+        return Path(cli_path)
+    if jdk_major is not None:
+        return OUT / f"failed_tests_jdk{jdk_major}.txt"
+    return OUT / "failed_tests.txt"
+
+
+def _migrate_legacy_failed_list(jdk_major: int | None) -> None:
+    """旧无版本清单（failed_tests.txt）→ 版本化清单的一次性迁移。
+
+    历史清单全部产生自 JDK21 基线轮；混入的其它版本条目（如有）在 JDK21
+    --failed 回归中 PASS 即自然出列自愈。迁移以新头部（含 `# jdk: 21` 身份
+    行）重写落盘，旧文件移除。仅在目标不存在时执行一次。"""
+    if jdk_major is None or jdk_major == 21:
+        legacy = OUT / "failed_tests.txt"
+        target = OUT / f"failed_tests_jdk{jdk_major}.txt" if jdk_major else None
+        if target is not None and legacy.exists() and not target.exists():
+            entries = _load_failed(legacy)
+            _save_failed(target, entries, jdk_major)
+            legacy.unlink()
+            print(f"[failed-file] 旧清单迁移：{legacy.name} → {target.name}"
+                  f"（视为 JDK21 基线，{len(entries)} 条）")
 
 
 def _load_failed(path: Path) -> set:
     if not path.exists():
         return set()
-    return {ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
+    return {ln.strip() for ln in path.read_text(encoding='utf-8').splitlines()
             if ln.strip() and not ln.startswith('#')}
 
 
-def _save_failed(path: Path, names: set) -> None:
+def _failed_jdk_of(path: Path) -> 'int | None':
+    """清单头部 `# jdk: N` 的解析（无头部=旧格式，返回 None 不校验）。"""
+    if not path.exists():
+        return None
+    for ln in path.read_text(encoding='utf-8').splitlines():
+        m = re.match(r'#\s*jdk:\s*(\d+)', ln.strip())
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _save_failed(path: Path, names: set, jdk_major: 'int | None' = None) -> None:
     """原子写（临时文件 + os.replace）：其他进程任意时刻读到的都是完整文件。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(_FAILED_HEADER + "".join(f"{n}\n" for n in sorted(names)),
+    tmp.write_text(_failed_header(jdk_major) + "".join(f"{n}\n" for n in sorted(names)),
                    encoding="utf-8")
     os.replace(tmp, path)
 
@@ -219,9 +266,10 @@ class _FailedRatchet:
     ——写前重读文件吸收其他进程已落盘的更新，不会用本进程的内存快照覆盖掉
     别人的条目；线程锁负责单进程内并行 worker 的串行化。"""
 
-    def __init__(self, path: Path, prev: set):
+    def __init__(self, path: Path, prev: set, jdk_major: 'int | None' = None):
         self.path = path
         self.failed = set(prev)
+        self.jdk_major = jdk_major
         self.removed = self.added = 0
         self._lock = threading.Lock()
 
@@ -241,7 +289,7 @@ class _FailedRatchet:
                             self.added += 1
                         current.add(name)
                     self.failed = current
-                    _save_failed(self.path, current)
+                    _save_failed(self.path, current, self.jdk_major)
                 finally:
                     fcntl.flock(lf, fcntl.LOCK_UN)
 
@@ -596,8 +644,9 @@ def _update_expected(java_file: Path) -> tuple[str, str]:
 def _run_sequential(filter_str: list[str] | None, no_run: bool,
                     deny: list[str], use_failed: bool = False,
                     failed_path: Path | None = None,
-                    skip_failed: bool = False) -> int:
-    failed_path = failed_path or _failed_file_path(None)
+                    skip_failed: bool = False,
+                    jdk_major: 'int | None' = None) -> int:
+    failed_path = failed_path or _failed_file_path(None, jdk_major)
     prev_failed = _load_failed(failed_path)
     files = _discover(filter_str)
     if use_failed:
@@ -627,7 +676,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     run_sub: dict[str, tuple[str, str]] = {}
     fail_categories: dict[str, list[str]] = {}
 
-    ratchet = _FailedRatchet(failed_path, prev_failed)
+    ratchet = _FailedRatchet(failed_path, prev_failed, jdk_major)
 
     def _fail(cat: str, rel_str: str) -> None:
         nonlocal failed
@@ -754,8 +803,9 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
 def _run_parallel(filter_str: list[str] | None, jobs: int,
                   deny: list[str], use_failed: bool = False,
                   failed_path: Path | None = None,
-                  skip_failed: bool = False) -> int:
-    failed_path = failed_path or _failed_file_path(None)
+                  skip_failed: bool = False,
+                  jdk_major: 'int | None' = None) -> int:
+    failed_path = failed_path or _failed_file_path(None, jdk_major)
     prev_failed = _load_failed(failed_path)
     files = _discover(filter_str)
     if use_failed:
@@ -773,7 +823,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
 
     print(f"[start] {time.strftime('%Y-%m-%d %H:%M:%S')} | parallel (jobs={jobs})"
           + (f" | filter: {' '.join(filter_str)}" if filter_str else ""))
-    ratchet = _FailedRatchet(failed_path, prev_failed)
+    ratchet = _FailedRatchet(failed_path, prev_failed, jdk_major)
     _print_env_header()
     name_w = _name_width(files)
     aux_by_file: dict = {}
@@ -993,13 +1043,25 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
     if update_expected:
         return _update_expected_parallel(files, jobs)
 
+    # 清单按 JDK 版本分文件 + 头部身份校验：不同版本语料/手写覆盖面不同，
+    # 失败集不可比——错版本下 --failed 会重跑假失败（已发生过：JDK25 的
+    # HelloWorld 混入 JDK21 清单）。旧无版本清单一次性迁移（视为 21）。
+    jdk_major = _current_jdk_major()
+    _migrate_legacy_failed_list(jdk_major)
+    failed_path = _failed_file_path(failed_file, jdk_major)
+    listed_jdk = _failed_jdk_of(failed_path)
+    if (listed_jdk is not None and jdk_major is not None and listed_jdk != jdk_major):
+        sys.exit(f"[failed-file] 清单 {failed_path} 是 JDK{listed_jdk} 的失败集，"
+                 f"当前运行 JDK{jdk_major}——不同版本失败集不可比。"
+                 f"请用对应 --jdk 运行，或 --failed-file 指定独立清单。")
+
     if jobs > 1:
         return _run_parallel(filter_str, jobs, deny, use_failed=use_failed,
-                             failed_path=_failed_file_path(failed_file),
-                             skip_failed=skip_failed)
+                             failed_path=failed_path,
+                             skip_failed=skip_failed, jdk_major=jdk_major)
     return _run_sequential(filter_str, no_run, deny, use_failed=use_failed,
-                           failed_path=_failed_file_path(failed_file),
-                           skip_failed=skip_failed)
+                           failed_path=failed_path,
+                           skip_failed=skip_failed, jdk_major=jdk_major)
 
 
 def main():
