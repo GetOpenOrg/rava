@@ -707,8 +707,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
                 sim.push(Var(v), RsNamed(rust_ret_pv))
             return
     # 若接收方 Rust 类型是 java_runtime 手写类：API 名面固定，仅根类 Object 的
-    # 同名重载（wait(J)/wait(JI) → wait_l/wait_l_i，S-20）按描述符后缀取名
-    obj_base = obj_ty.split('<')[0].strip()  # 去泛型后缀（ArrayList<T> → ArrayList）
+    # 同名重载（wait(J)/wait(JI) → wait_l/wait_l_i，S-20）按描述符后缀取名。
+    # TypeIR 批次 3（V4）：接收者基名经类型对象 erasure 头标识符取
+    # （rust_head_name：ClassRef → short_cls(binary)、Array → 'JArray'、
+    # Primitive → Rust 拼写、占位 → 短名本身），替代接收者头部文本解剖
+    from ..jvm_type import from_rust_type, rust_head_name
+    obj_base = rust_head_name(from_rust_type(obj_ty, registry).erasure())  # ArrayList<T> → ArrayList
     if obj_base in _JAVA_RUNTIME_SHORT_NAMES:
         rust_mname = _safe_field(
             _mangle_if_overloaded(_OBJECT_CLASS, mname, comment, registry))
