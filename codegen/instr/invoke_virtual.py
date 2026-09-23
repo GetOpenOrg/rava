@@ -685,7 +685,12 @@ def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: d
             _pv_targs = f"<{', '.join(['Object'] * len(_pv_tps))}>" if _pv_tps else ''
             _pv_arg_str = ', '.join(args)
             rust_ret_pv = jvm_to_rust(ret, registry)
-            if obj_ty.split('<')[0].strip() == _pv_short:
+            # TypeIR 批次 3（V3）：接收者静态类型是否即私有接口所属载体——
+            # erasure 基名经 binary 比较（短名单射下与旧短名比较等价），
+            # 替代接收者头部文本解剖
+            from ..jvm_type import from_rust_type, JvmType as _JvmTypeT
+            if from_rust_type(obj_ty, registry).erasure() \
+                    == _JvmTypeT.class_of(_pv_bin, registry):
                 _pv_recv_e = obj_e
             elif obj_e == 'this':
                 _pv_recv_e = (f"Into::<{_pv_short}{_pv_targs}>::into(Clone::clone(this))")
