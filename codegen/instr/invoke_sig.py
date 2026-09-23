@@ -101,7 +101,7 @@ def _lookup_method_sig_params(
             callee_tparams_list = _effective_class_type_params(ci, registry)
             callee_tparams = frozenset(callee_tparams_list)
             types, _ = _method_sig_types(ci, m, callee_tparams_list, registry)
-            if not types and not _handwritten_boundary_method(cls_bin, mname):
+            if not types and not _handwritten_boundary_method(cls_bin, mname, full_desc, registry):
                 # 泛型签名无效（通配符位等 sig_type_string_valid 拒绝）→ 回退定义侧
                 # 发射签名（emitted_method_sig_types，与槽位擦除名单同源 K-6）——
                 # 调用侧期望与成员形参一致（如 tryAdvance(Consumer<-Integer>) 的
@@ -162,7 +162,7 @@ def _lookup_method_sig_params(
             from ..type_map import jvm_to_rust as _jvm_to_rust_g
             _reg_iface_shorts = _registry_iface_shorts(registry)
             # 手写边界方法：接口位置的契约是 Object（其 _impl.rs 签名先于载体化）
-            _hw = _handwritten_boundary_method(cls_bin, mname)
+            _hw = _handwritten_boundary_method(cls_bin, mname, full_desc, registry)
             final_resolved: list[str | None] = []
             for _ri, t in enumerate(resolved):
                 if _hw and _ri < len(descriptor_params):
@@ -196,34 +196,47 @@ def _lookup_method_sig_params(
 _iface_shorts_cache: dict[int, frozenset[str]] = {}
 
 
-_HANDWRITTEN_BOUNDARY_CACHE: dict[tuple[str, str], bool] = {}
+_HANDWRITTEN_BOUNDARY_CACHE: dict[tuple[str, str, str], bool] = {}
 
 
-def _handwritten_boundary_method(cls_bin: str, mname: str) -> bool:
-    """callee 是否由 runtime/ 手写 `_impl.rs` 伴生文件提供（`#[jvm_boundary]`）。
+def _handwritten_boundary_method(cls_bin: str, mname: str, full_desc: str,
+                                 registry: dict | None = None) -> bool:
+    """callee 的**该重载**是否由 runtime/ 手写 `_impl.rs` 伴生文件提供（`#[jvm_boundary]`）。
 
-    手写边界方法的 Rust 签名是调用契约的真源（早于 A-4 载体化，接口位置一律
+    手写重载的 Rust 签名是该重载调用契约的真源（早于 A-4 载体化，接口位置一律
     擦除 Object）；载体化后调用点解析须按其签名回退 Object，而非发射载体。
     与 project_writer._is_handwritten 同一存在性判据（runtime/java_runtime/src
-    下同相对路径），加 `fn {mname}` 前缀探测（重载后缀缀于 Java 原名之后，
-    如 `fn checkIndex_i_i_bifunction`）。"""
-    key = (cls_bin, mname)
+    下同相对路径），fn 名精确探测：名字经 _mangle_if_overloaded 与生成侧同一
+    权威（重载 mangle——`add:(Ljava/lang/Object;)Z` → add_obj），按词边界
+    （`fn name(` / `fn name<`）匹配。旧前缀子串探测把「同名其它重载有手写」
+    误判成「本重载有手写」——ArrayList 手写 add(Object,Object[],int) 曾遮蔽
+    add(Object)Z 的实参位接口载体代入（接收者泛型实参 E:=Consumer<Object> 被
+    整体降级 Object 装箱，定义侧按 E 特化 → E0308）。`<init>` 手写体以
+    `fn new` 落位，不属于本签名解析域，恒 False（与旧探测 `fn <init>` 恒不中
+    一致）。"""
+    if mname == '<init>':
+        return False
+    key = (cls_bin, mname, full_desc)
     hit = _HANDWRITTEN_BOUNDARY_CACHE.get(key)
     if hit is not None:
         return hit
     import os as _os
+    import re as _re_probe
     from ..constants import RUNTIME_JAVA_RUNTIME
     from ..emitter.attrs import to_snake as _to_snake
+    from .member_naming import _mangle_if_overloaded
     result = False
     parts = cls_bin.split('/')
     if len(parts) >= 2:
         *pkg, cls_name = parts
         parent = _os.path.join(RUNTIME_JAVA_RUNTIME, 'src', *pkg)
-        probe = f'fn {mname}'
+        _rust = _mangle_if_overloaded(
+            cls_bin, mname, f'Method {cls_bin}.{mname}:{full_desc}', registry)
+        _probe = _re_probe.compile(rf'fn {_re_probe.escape(_rust)}\s*(?:<|\()')
         for cand in (_to_snake(cls_name), _to_snake(cls_name) + '_t'):
             try:
                 with open(_os.path.join(parent, cand + '_impl.rs'), encoding='utf-8') as fh:
-                    if probe in fh.read():
+                    if _probe.search(fh.read()):
                         result = True
                         break
             except OSError:
@@ -463,7 +476,7 @@ def _lookup_method_sig_ret(
                             break
                 return None
             # 手写边界方法（_impl.rs）：接口返回位置的契约是 Object（签名先于载体化）
-            if _handwritten_boundary_method(cls_bin, mname) \
+            if _handwritten_boundary_method(cls_bin, mname, full_desc, registry) \
                     and sig_ret.split('<')[0] in _registry_iface_shorts(registry):
                 return 'Object'
             return sig_ret
