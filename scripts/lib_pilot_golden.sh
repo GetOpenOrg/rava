@@ -42,7 +42,7 @@ esac
 echo "== [1/3] JVM 侧 golden（真 jar）=="
 rm -rf classes && "$JAVAC" -d classes -cp "$CP" "$MAIN.java"
 "$JAVA" -cp "classes:$CP" "$MAIN" > "golden/${MODE}_jvm.txt"
-echo "JVM 侧 $(wc -l < golden/${MODE}_jvm.txt | tr -d ' ') 行"
+echo "JVM 侧 $(wc -l < "golden/${MODE}_jvm.txt" | tr -d ' ') 行"
 
 echo "== [2/3] 转译 + cargo run（翻译 crate）=="
 cd "$REPO_ROOT"
@@ -56,13 +56,14 @@ print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', sys.argv[1]).lower())
 PY
 )"
 (cd "$SCRATCH" && CARGO_TARGET_DIR="$REPO_ROOT/build/target" \
-    cargo run --quiet --bin "$(basename "$SCRATCH")" > "tests/lib_pilot/golden/${MODE}_rs.txt" 2>"/tmp/${MODE}_cargo.err") \
+    cargo run --quiet --bin "$(basename "$SCRATCH")" \
+    > "$REPO_ROOT/tests/lib_pilot/golden/${MODE}_rs.txt" 2>"/tmp/${MODE}_cargo.err") \
     || { echo "cargo run 失败，见 /tmp/${MODE}_cargo.err" >&2; exit 1; }
 
 echo "== [3/3] 逐字对账 =="
 if diff -u "tests/lib_pilot/golden/${MODE}_jvm.txt" "tests/lib_pilot/golden/${MODE}_rs.txt"; then
-    echo "GOLDEN OK（$MODE）"
+    echo "GOLDEN OK（${MODE}）"
 else
-    echo "GOLDEN DIFF（$MODE）" >&2
+    echo "GOLDEN DIFF（${MODE}）" >&2
     exit 1
 fi
