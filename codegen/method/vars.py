@@ -185,6 +185,36 @@ def _is_atomic_rs(expr_str: str) -> bool:
     return True
 
 
+def _forms_alignable(later_ty_s: str | None, hoisted_ty_s: str | None, registry=None) -> bool:
+    """后到形态能否对齐到提升声明类型（并入同一绑定）：
+    同型直接可赋；引用子类型经 `.into()` 上转（JVM 槽位声明类型语义，
+    HashSet 存入 Set 声明槽）。不成立（基本类型 vs 引用 / 无关引用，
+    如 try 结果暂存 i32 vs synchronized 监视对象 Object、String vs Object）
+    时两形态是同槽不同 JVM 变量（G-3 活跃区间分型），必须拆分绑定。"""
+    if later_ty_s is None or hoisted_ty_s is None:
+        return True   # 无类型信息可判：维持并入（旧行为）
+    if later_ty_s == hoisted_ty_s:
+        return True
+    later_base = later_ty_s.split('<')[0].strip()
+    hoisted_base = hoisted_ty_s.split('<')[0].strip()
+    if later_base in _PRIMITIVE_TYPES or hoisted_base in _PRIMITIVE_TYPES:
+        return False
+    from ..instr.hierarchy import _is_subtype
+    return _is_subtype(later_base, hoisted_base, registry)
+
+
+def _align_store_value(item, hoisted_type, later_ty_s: str, hoisted_ty_s: str) -> None:
+    """把待降级声明的值侧对齐到提升声明类型（子类型 → `.into()`，目标由
+    降级赋值的接收者类型给出）。无类型标注的声明同时补 value_ty。"""
+    if _is_default_value(item.value):
+        item.value_ty = hoisted_type
+        return
+    if later_ty_s != hoisted_ty_s:
+        _src = render_expr(item.value)
+        item.value = RawExpr(f"{_src}.into()" if _is_atomic_rs(_src) else f"({_src}).into()")
+    item.value_ty = hoisted_type
+
+
 def _drop_removed(entries: list) -> None:
     entries[:] = [e for e in entries if e is not _REMOVED_ENTRY]
 
@@ -543,11 +573,35 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                 # 顶层声明在 ref 之前或没有外部 ref → 已可见，无需提升
                 continue
             # 顶层声明在 ref 之后 → 需要提升；同时将该顶层声明也转为 AssignStmt
-            # （否则它会成为第二次声明，遮蔽提升后的 let，引发新的 E0425）
-            for ck in range(outer_k, len(entries)):
-                ck_indent, ck_item = entries[ck]
-                if isinstance(ck_item, LetStmt) and ck_item.name == name:
-                    _demote_let(entries, ck)
+            # （否则它会成为第二次声明，遮蔽提升后的 let，引发新的 E0425）。
+            # 例外（G-3 槽位复用，如 BufferedReader.read 的 slot 6）：顶层后到的
+            # let 是同槽另一个 JVM 变量（synchronized 监视对象 Object，活跃区间
+            # 与 try 结果暂存 i32/String 不相交，slot 不在 LVT）——类型不可对齐时
+            # 保留它自己的 let：词法作用域天然隔离两形态，且后续扫描的
+            # let_decl_check 以该 let 为界不再把形态 A 的声明再提升到 if 之外，
+            # 消除「单一绑定承载 i32 与 Object 两形态」的 E0308。
+            outer_item = entries[outer_k][1]
+            _outer_ty_s: str | None = None
+            _outer_split = False
+            if isinstance(outer_item, LetStmt):
+                try:
+                    _t = _hoisted_let_type(outer_item)
+                    _outer_ty_s = render_type(_t) if _t is not None else None
+                except Exception:
+                    _outer_ty_s = None
+                # 类型不可对齐 → 同槽两个 JVM 变量（G-3 活跃区间分型）：
+                # 保留顶层后到 let 为独立绑定（词法作用域隔离），不降级、不并入
+                _outer_split = (ty_str is not None
+                                and not _forms_alignable(_outer_ty_s, ty_str, registry))
+            if not _outer_split:
+                for ck in range(outer_k, len(entries)):
+                    ck_indent, ck_item = entries[ck]
+                    if isinstance(ck_item, LetStmt) and ck_item.name == name:
+                        if (_outer_ty_s is not None and ty_str is not None
+                                and _outer_ty_s != ty_str and not _is_default_value(ck_item.value)):
+                            _align_store_value(ck_item, _str_to_rs_type(ty_str),
+                                               _outer_ty_s, ty_str)
+                        _demote_let(entries, ck)
 
         # ref_nesting 校验：声明插在 block_k 之前（与 block_k 同层），需保证引用在该层可见。
         if ref_idx >= 0:
@@ -595,6 +649,22 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                 continue
             inner_indent, inner_item = entries[decl_k]
             if isinstance(inner_item, LetStmt) and inner_item.name == name:
+                # 降级前值侧对齐到提升声明类型：兄弟分支同名不同形（javac 三元两臂
+                # 拆两条 LVT 区间，stack.py 按槽复用走 let 阴影——else 臂 HashSet 存入
+                # Set 声明槽），子类型经 `.into()` 上转（Files.newByteChannel 的 set /
+                # FileSystemProvider.newByteChannel 的 opts）。类型不可对齐的形态
+                #（基本 vs 引用）不在此路径——那类冲突由顶层后到 let 的保留拆分承载。
+                if hoisted_type is not None:
+                    _later = _hoisted_let_type(inner_item)
+                    try:
+                        _later_s = render_type(_later) if _later is not None else None
+                    except Exception:
+                        _later_s = None
+                    _hoisted_s = render_type(hoisted_type)
+                    if (_later_s is not None and _later_s != _hoisted_s
+                            and _forms_alignable(_later_s, _hoisted_s, registry)
+                            and not _is_default_value(inner_item.value)):
+                        _align_store_value(inner_item, hoisted_type, _later_s, _hoisted_s)
                 _demote_let(entries, decl_k)
 
     for ins_k, ins_entry in sorted(insertions, key=lambda x: -x[0]):

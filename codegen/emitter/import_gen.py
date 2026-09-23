@@ -151,6 +151,14 @@ def collect_referenced(ci, registry, generated_classes) -> set[str]:
                 _handler_types = _catch_by_handler.setdefault(_exc[2], [])
                 if _exc[3] not in _handler_types:
                     _handler_types.append(_exc[3])
+            else:
+                # catch_type 为空 = catch-any 处理器（try/finally 合成的 rethrow 臂）：
+                # 绑定类型按 try_catch._throwable_root 恒为 Throwable，方法体以
+                # `let e: Throwable = _caughtN;` / `catch (e: Throwable)` 引用。
+                # 合成处理器无 LVT 条目，用户类（源码无 catch 变量）不会经
+                # 局部变量声明路径兜底引入 → 在此显式收账，否则用户 bin E0425
+                from ..constants import THROWABLE_CLASS as _THROWABLE_CLASS
+                _referenced.add(_THROWABLE_CLASS)
         # multi-catch（`catch (e: A | B as LUB)`）：绑定类型是各 catch 类型的最近公共祖先类
         for _handler_types in _catch_by_handler.values():
             if len(_handler_types) < 2 or not registry:
