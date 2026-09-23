@@ -666,7 +666,10 @@ def _coerce_arg(
             and expected not in ('Object', '()')
             and expected not in (sim.class_type_params or ())
             and _downcast_target_valid(expected, sim, registry)):
-        _bin18 = _rust_type_to_binary(expected.split('<')[0], registry)
+        # TypeIR 批次 3（S4a）：checkcast 目标 binary 经类型对象（ClassRef.binary，
+        # 域内解析；域外 / 数组 / 基本类型 → ''，与 _rust_type_to_binary 同口径）
+        _bin18 = (_exp_t.binary if isinstance(_exp_t, ClassRef) and registry
+                  and _exp_t.binary in registry else '')
         if _bin18:
             return _render_cast(e, expected, binary_name=_bin18, checked=True)
         return _render_cast(e, expected)
@@ -682,12 +685,16 @@ def _coerce_arg(
         # 实参静态类型是类型变量（`S extends SpeciesData`），形参是其上界类：Java 的隐式
         # 子类型转换 → 经 Object 边界按对象标识取回上界类视图
         return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
-    if actual == 'Object' and expected.startswith('JArray<'):
+    # TypeIR 批次 3（S4b）：数组形态判定走类型对象（Array 变体），
+    # 替代 actual/expected 的数组前缀文本形态探测
+    _act_is_arr = isinstance(_act_t, Array)
+    _exp_is_arr = isinstance(_exp_t, Array)
+    if actual == 'Object' and _exp_is_arr:
         # 擦除为 Object 的数组值流入类型化数组形参（`Object o = intArr; f((int[]) o)`
         # 的实参位；checkcast 被验证器省略或已在上游消费）：经 `From<Object> for
         # JArray<T>` 的数组视图机制取回（R9 协变视图 / S-4 探针，checkcast 语义）
         return f"From::from(Clone::clone(&{e}))"
-    if actual.startswith('JArray<') and expected.startswith('JArray<') and actual != expected:
+    if _act_is_arr and _exp_is_arr and actual != expected:
         # 数组协变（`T[]` 擦除为 Object[] 的引用传给元素类型具体化的形参）：Java 数组在运行时
         # 按元素类型具体化，同一数组对象经 Object 边界按形参的元素类型取回（checkcast 语义）
         return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
