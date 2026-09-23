@@ -246,7 +246,13 @@ class _FailedRatchet:
                     fcntl.flock(lf, fcntl.LOCK_UN)
 
     def summary(self) -> None:
-        print(f"[failed-file] {self.path.relative_to(ROOT)}：保留 {len(self.failed)}"
+        # 清单路径可能不在仓库内（--failed-file /tmp/... 或相对路径）——
+        # relative_to 会 ValueError，展示用回退原样路径
+        try:
+            shown = str(self.path.relative_to(ROOT))
+        except ValueError:
+            shown = str(self.path)
+        print(f"[failed-file] {shown}：保留 {len(self.failed)}"
               f"（本次出列 {self.removed}、进列 {self.added}）—— `--failed` 按此回归")
 
 
