@@ -306,10 +306,33 @@ impl Class {
     }
 
     /// `Class.getSimpleName()`：简单名。顶层类取最后一个 `.` 之后的段，
-    /// 嵌套类再取最后一个 `$` 之后的段（JDK getSimpleBinaryName 的常见形态）；
-    /// 数组 / 匿名类等罕见形态按现状原样返回，按需再补。
+    /// 嵌套类再取最后一个 `$` 之后的段（JDK getSimpleBinaryName 的常见形态）。
+    /// 数组类（名字是 JVM 描述符形态，`for_class` 的存储形态）取元素类型的
+    /// 简单名再按维度补 `[]`（JDK 语义：`[Ljava.lang.String;` → `String[]`、
+    /// `[[I` → `int[][]`，getArrayName 逐维展开）。
     pub fn __impl_getSimpleName(&self) -> Result<String> {
         let full = format!("{}", self.__get_name());
+        if full.starts_with('[') {
+            let dims = full.chars().take_while(|c| *c == '[').count();
+            let comp = &full[dims..];
+            let comp_simple = if let Some(inner) =
+                comp.strip_prefix('L').and_then(|s| s.strip_suffix(';'))
+            {
+                let s = inner.rsplit('.').next().unwrap_or("");
+                s.rsplit('$').next().unwrap_or("").to_owned()
+            } else {
+                match comp {
+                    "Z" => "boolean", "B" => "byte", "C" => "char", "S" => "short",
+                    "I" => "int", "J" => "long", "F" => "float", "D" => "double",
+                    other => other,
+                }.to_owned()
+            };
+            let mut simple = comp_simple;
+            for _ in 0..dims {
+                simple.push_str("[]");
+            }
+            return Ok(String::from(simple.as_str()));
+        }
         let simple = full.rsplit('.').next().unwrap_or("");
         let simple = simple.rsplit('$').next().unwrap_or("");
         Ok(String::from(simple))

@@ -68,7 +68,11 @@ impl std::fmt::Display for String {
 }
 
 impl From<&str> for String {
-    fn from(s: &str) -> Self { String::from_owned(s.to_owned()) }
+    /// 字面量加载路径（ldc 发射形态 `String::from("...")`，S-6）：Java 字符串
+    /// 字面量属于常量池驻留项，故经全局驻留表取规范实例——相同内容的字面量
+    /// 与 `intern()` 结果是同一对象（JLS §3.10.5）。拼接等非字面量构造走
+    /// `from_owned`（新对象，不入表），与 Java 语义一致。
+    fn from(s: &str) -> Self { String::from_owned(s.to_owned()).__interned() }
 }
 
 impl From<std::string::String> for String {
