@@ -637,6 +637,26 @@ class StackSim:
             self.stmts.append(AssignStmt(Var(self.locals[slot][0]),
                                          RawExpr(self._box_object(_src, render_type(ty)))))
             return
+        if (slot in self._param_slots and slot in self.locals
+                and isinstance(self.locals[slot][1], RsNamed)
+                and self.locals[slot][1].name not in ('Object', '()')
+                and isinstance(ty, (RsNamed, RsGeneric))
+                and getattr(ty, 'name', '') not in _SCALAR_TYPE_NAMES
+                and render_type(self.locals[slot][1]) != render_type(ty)):
+            # 形参声明为具体引用类型，方法体内赋入异型引用值（`if (rnd == null)
+            # rnd = ThreadLocalRandom.current()`，rnd: Random、值: ThreadLocalRandom）：
+            # 形参槽强制 decl=None，decl_ty 子类上转分支不达、槽位复用改名又按名字全域
+            # 匹配误判成合成变量 → 落死局部 local_N，形参永不重绑定。与下方同变量分支
+            # （LVT 声明区间内漂移）同源：经 Object 边界按形参声明类型 From<Object>
+            # 重建（子类值按超类擦除 vtable 重建视图，共享存储与对象标识；家族不符抛
+            # CCE，checkcast 语义），赋回原形参——let 阴影只在当前块内可见，块外
+            # （循环体/后续语句）仍读到旧值，运行期 NPE。
+            _src = render_expr(_clone_moved_var(expr, ty))
+            self.stmts.append(AssignStmt(
+                Var(self.locals[slot][0]),
+                RawExpr(f'<{render_type(self.locals[slot][1])} as ::std::convert::From<Object>>'
+                        f'::from(Object::from({_src}))')))
+            return
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
             decl_depth = self._slot_decl_depth.get(slot, 0)
@@ -678,10 +698,14 @@ class StackSim:
                                 f'::from(Object::from({_src}))')))
                     return
                 if (decl is None and render_type(old_ty) != render_type(ty)
-                        and any(_safe_name(_d[2]) == name for _d in self._slot_decls.get(slot, ()))):
+                        and any(_safe_name(_d[2]) == name and not (_d[0] <= self.current_offset < _d[1])
+                                for _d in self._slot_decls.get(slot, ()))):
                     # 存储点不在该槽任何声明变量的作用域内、类型又与槽上已结束作用域的声明变量不同：
                     # javac 合成变量（for-each 的数组副本等）复用了槽位 → 是另一个变量，按槽位另行命名，
-                    # 不与原声明变量同名（同名 let 在变量提升后会退化为对原变量的赋值）
+                    # 不与原声明变量同名（同名 let 在变量提升后会退化为对原变量的赋值）。
+                    # 名字匹配限定「区间不覆盖当前偏移」的声明条目：命中覆盖当前偏移的条目
+                    # （如形参自身的 LVT 条目——恒覆盖整个方法体）会把形参重绑定误判成
+                    # 合成变量改名，落死局部 local_N。
                     name = f"local_{slot}"
                 self.locals[slot] = (name, ty, True)
                 self._slot_decl_depth[slot] = self._current_depth
