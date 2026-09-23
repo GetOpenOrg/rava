@@ -212,22 +212,6 @@ def _failed_file_path(cli_path: str | None, jdk_major: int | None = None) -> Pat
     return OUT / "failed_tests.txt"
 
 
-def _migrate_legacy_failed_list(jdk_major: int | None) -> None:
-    """旧无版本清单（failed_tests.txt）→ 版本化清单的一次性迁移。
-
-    历史清单全部产生自 JDK21 基线轮；混入的其它版本条目（如有）在 JDK21
-    --failed 回归中 PASS 即自然出列自愈。迁移以新头部（含 `# jdk: 21` 身份
-    行）重写落盘，旧文件移除。仅在目标不存在时执行一次。"""
-    if jdk_major is None or jdk_major == 21:
-        legacy = OUT / "failed_tests.txt"
-        target = OUT / f"failed_tests_jdk{jdk_major}.txt" if jdk_major else None
-        if target is not None and legacy.exists() and not target.exists():
-            entries = _load_failed(legacy)
-            _save_failed(target, entries, jdk_major)
-            legacy.unlink()
-            print(f"[failed-file] 旧清单迁移：{legacy.name} → {target.name}"
-                  f"（视为 JDK21 基线，{len(entries)} 条）")
-
 
 def _load_failed(path: Path) -> set:
     if not path.exists():
@@ -1047,7 +1031,6 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
     # 失败集不可比——错版本下 --failed 会重跑假失败（已发生过：JDK25 的
     # HelloWorld 混入 JDK21 清单）。旧无版本清单一次性迁移（视为 21）。
     jdk_major = _current_jdk_major()
-    _migrate_legacy_failed_list(jdk_major)
     failed_path = _failed_file_path(failed_file, jdk_major)
     listed_jdk = _failed_jdk_of(failed_path)
     if (listed_jdk is not None and jdk_major is not None and listed_jdk != jdk_major):
