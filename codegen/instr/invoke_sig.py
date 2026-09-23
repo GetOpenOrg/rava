@@ -421,6 +421,10 @@ def _lookup_method_sig_ret(
                 return None
             # 有效性：所有标识符须为已知类型（与 gen_method_body 的 _sig_param_valid 同规则）
             import re as _re_v
+            from ..jvm_type import ClassRef as _ClassRefS2
+            from ..jvm_type import from_rust_type as _frt_s2
+            from ..jvm_type import rust_head_name as _rhn_s2
+            from ..type_args import split_rust_type_args as _split_args_s2
             _builtin = frozenset({
                 'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
                 'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
@@ -441,12 +445,15 @@ def _lookup_method_sig_ret(
                     return sig_ret
                 # 跨类：接收者是 callee 的参数化形态 → 按接收者实参替换
                 if receiver_type:
-                    _recv_base = receiver_type.split('<')[0].strip()
+                    # TypeIR 批次 3（S2a）：接收者头部经类型对象——基名 binary 与
+                    # callee binary 比较（短名单射下与旧短名比较等价）、实参存在性
+                    # = args 非空，替代 split('<')[0]/endswith('>') 文本探测
+                    _recv_t = _frt_s2(receiver_type, registry)
+                    _recv_base = _rhn_s2(_recv_t.erasure())
                     _callee_short = short_cls(cls_bin)
-                    if (_recv_base == _callee_short and '<' in receiver_type
-                            and receiver_type.endswith('>')):
-                        _inner = receiver_type[len(_recv_base) + 1:receiver_type.rfind('>')]
-                        _rargs = _split_type_args(_inner)
+                    if (isinstance(_recv_t, _ClassRefS2) and _recv_t.binary == cls_bin
+                            and _recv_t.args):
+                        _rargs = _split_args_s2(receiver_type)
                         if len(_rargs) == len(callee_tparams):
                             _sub = _substitute_tvars(sig_ret, callee_tparams, _rargs)
                             _caller_set = set(caller_tparams) if caller_tparams else set()
@@ -475,9 +482,12 @@ def _lookup_method_sig_ret(
                                 return _sub
                             break
                 return None
-            # 手写边界方法（_impl.rs）：接口返回位置的契约是 Object（签名先于载体化）
+            # 手写边界方法（_impl.rs）：接口返回位置的契约是 Object（签名先于载体化）。
+            # TypeIR 批次 3（S2b）：返回头是否 registry 接口经类型对象 is_interface，
+            # 替代返回头文本解剖 + 短名集成员检查
+            _sr_hw_t = _frt_s2(sig_ret, registry)
             if _handwritten_boundary_method(cls_bin, mname, full_desc, registry) \
-                    and sig_ret.split('<')[0] in _registry_iface_shorts(registry):
+                    and isinstance(_sr_hw_t, _ClassRefS2) and _sr_hw_t.is_interface:
                 return 'Object'
             return sig_ret
     return None
