@@ -244,6 +244,174 @@ class Null(JvmType):
 
 # ── 构造入口：描述符 / 泛型签名 ─────────────────────────────────
 
+# Rust 基本类型拼写 → JVM 基本类型名（from_rust_type 的反向映射；
+# u8/u32/u64/usize 无 JVM 对应物，不在表内——按域外占位处理）
+_RUST_PRIM: dict[str, str] = {
+    'bool': 'boolean', 'i8': 'byte', 'u16': 'char', 'i16': 'short',
+    'i32': 'int', 'i64': 'long', 'f32': 'float', 'f64': 'double',
+    '()': 'void',
+}
+
+_PRIM_TO_RUST: dict[str, str] = {v: k for k, v in _RUST_PRIM.items()}
+
+# (id(registry), len(registry), rust_ty) → 解析结果。失效约定同 _CLOSURE_CACHE。
+_RUST_PARSE_CACHE: dict[tuple, JvmType] = {}
+
+
+def from_rust_type(rust_ty: str, registry: 'dict | None' = None) -> JvmType:
+    """Rust 类型串（codegen 表面语言，如 ``ArrayList<String>`` / ``JArray<i32>`` /
+    ``Object`` / ``K``）→ JvmType——发射侧 jvm_to_rust 的反向边界解析器（查询侧）。
+
+    消费点（invoke 域类型决策，收敛路线图 L1-a 批次 3）以本入口替代
+    ``split('<')[0]`` 头部文本解剖：类型身份（binary / 是否接口）与形态
+    （数组 / 参数化 / 基本类型）经类型对象查询。
+
+    文法：``'&'? head ('<' arg (',' arg)* '>')?``，head = 标识符或 ``'()'``，
+    arg 递归同文法且可为 ``'?'``（通配符）。映射：
+
+    - ``i32`` 等 Rust 基本类型拼写（``'()'`` → void）→ ``Primitive``；
+    - ``JArray<E>`` → ``Array``（裸 ``JArray`` 无实参时按占位 ClassRef 处理）；
+    - ``Object`` → ``ClassRef(java/lang/Object)``；
+    - 其余 head 经 ``_registry_short_index`` 反查 binary（is_interface 同步补全；
+      configure_short_names 保证短名 → binary 单射）；反查不到 → ``ClassRef(head)``
+      占位（binary = 短名，registry 域外身份，同 _is_subtype 的父类占位口径）；
+    - ``'?'`` → ``Wildcard('*')``；空串 / 无前导标识符 → ``Null()``（全函数哨兵，
+      消费点按「无类身份」处理，与旧头部解剖对空串的行为一致）。
+
+    宽容性：取最长有效前缀——head 后无 ``'<'`` 即裸形态；实参段畸形（未闭合 /
+    尾随残片）时降级为裸 head 占位（旧路径对畸形输入同样只取头部文本，无更严格
+    语义可失去）。幂等可缓存。"""
+    key = (id(registry), len(registry) if registry else 0, rust_ty)
+    hit = _RUST_PARSE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    ty = _parse_rust_type(rust_ty, registry)
+    if len(_RUST_PARSE_CACHE) > 8192:  # 防御性上限（正常转译远小于此）
+        _RUST_PARSE_CACHE.clear()
+    _RUST_PARSE_CACHE[key] = ty
+    return ty
+
+
+def _parse_rust_type(s: str, registry: 'dict | None') -> JvmType:
+    s = s.strip()
+    while s.startswith('&'):
+        s = s[1:].lstrip()
+    if not s:
+        return Null()
+    if s.startswith('?'):
+        return Wildcard('*')
+    m = re.match(r'[A-Za-z_][A-Za-z0-9_]*|\(\)', s)
+    if m is None:
+        return Null()
+    head = m.group(0)
+    rest = s[m.end():].lstrip()
+    args: 'tuple[JvmType, ...] | None' = None
+    if rest.startswith('<'):
+        args = _parse_rust_args(rest, registry)
+    prim = _RUST_PRIM.get(head)
+    if prim is not None:
+        return Primitive(prim)
+    if head == 'JArray':
+        if args is not None and len(args) == 1:
+            return Array(args[0])
+        return ClassRef(head)  # 裸/畸形 JArray：占位（域外包装名）
+    binary = head
+    is_iface = False
+    if head == 'Object':
+        binary = OBJECT_CLASS
+    elif registry:
+        from .type_map import _registry_short_index
+        ci = _registry_short_index(registry).get(head)
+        if ci is not None:
+            binary, is_iface = ci.name, bool(ci.is_interface)
+    if args is None:
+        return ClassRef(binary, (), is_iface)
+    return ClassRef(binary, args, is_iface)
+
+
+def _parse_rust_args(s: str, registry: 'dict | None') -> 'tuple[JvmType, ...] | None':
+    """解析 ``<A, B, ...>`` 实参段（s 以 '<' 开头）。畸形（未闭合）→ None。"""
+    args: list[JvmType] = []
+    i = 1
+    while i < len(s):
+        if s[i] == '>':
+            return tuple(args)
+        # 逐个实参：递归取一个类型后应见 ',' 或 '>'
+        one, j = _scan_rust_one(s, i, registry)
+        if one is None:
+            return None
+        args.append(one)
+        while j < len(s) and s[j] in ' \t':
+            j += 1
+        if j >= len(s):
+            return None
+        if s[j] == ',':
+            i = j + 1
+            continue
+        if s[j] == '>':
+            return tuple(args)
+        return None
+    return None
+
+
+def _scan_rust_one(s: str, i: int, registry: 'dict | None') -> 'tuple[JvmType, int] | None':
+    """从 i 起扫描一个完整类型（含嵌套实参段），返回 (类型, 结束位置)。"""
+    n = len(s)
+    while i < n and s[i] in ' \t':
+        i += 1
+    if i >= n:
+        return None
+    if s[i] == '?':
+        return Wildcard('*'), i + 1
+    m = re.match(r'[A-Za-z_][A-Za-z0-9_]*|\(\)', s[i:])
+    if m is None:
+        return None
+    head = m.group(0)
+    j = i + m.end()
+    if j < n and s[j] == '<':
+        # 嵌套实参段：配平尖括号后整段递归（复用主文法，保证嵌套形态一致）
+        depth = 0
+        k = j
+        while k < n:
+            if s[k] == '<':
+                depth += 1
+            elif s[k] == '>':
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        if k >= n:
+            return None
+        inner_t = _parse_rust_type(s[i:k + 1], registry)
+        return inner_t, k + 1
+    prim = _RUST_PRIM.get(head)
+    if prim is not None:
+        return Primitive(prim), j
+    return from_rust_type(head, registry), j
+
+
+def rust_head_name(ty: JvmType) -> str:
+    """类型对象的 Rust 基名（去实参的头标识符）——被替代位点
+    ``split('<')[0]`` 文本解剖的类型对象等价物：
+
+    - ``ClassRef`` → ``short_cls(binary)``（registry 域内即解析输入的头标识符
+      ——短名 → binary 单射的逆；域外占位的 binary 即短名本身）；
+    - ``Array`` → ``'JArray'``（数组包装族名，裸名口径与旧文本解剖一致）；
+    - ``Primitive`` → Rust 拼写（void → ``'()'``）；
+    - ``TypeVar`` → 变量名；``Wildcard`` → ``'?'``；``Null`` → ``''``。"""
+    if isinstance(ty, ClassRef):
+        return short_cls(ty.binary)
+    if isinstance(ty, Array):
+        return 'JArray'
+    if isinstance(ty, Primitive):
+        return _PRIM_TO_RUST.get(ty.kind, ty.kind)
+    if isinstance(ty, TypeVar):
+        return ty.name
+    if isinstance(ty, Wildcard):
+        return '?'
+    return ''
+
+
 def from_descriptor(desc: str) -> JvmType:
     """JVM 字段描述符（JVMS §4.3.2）→ JvmType：'I'、'[I'、'[[Ljava/lang/String;'、
     'Ljava/util/List;'。非法描述符抛 ValueError（类型层宁严不宽）。"""
