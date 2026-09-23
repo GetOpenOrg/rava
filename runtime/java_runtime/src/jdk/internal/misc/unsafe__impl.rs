@@ -299,6 +299,19 @@ impl Unsafe {
         Ok(cell.get())
     }
 
+    /// `getIntOpaque(Object o, long offset)`：实例字段 int opaque 读
+    /// （JDK 9+ `Unsafe.getIntOpaque`，VarHandle getOpaque 的底层形态）。
+    /// 单线程协作档位（S-11）无跨线程重排可见性差异——与 plain/volatile
+    /// 读同一存储单元。消费方：ForkJoinPool.getParallelismOpaque
+    /// （CompletableFuture 公共池并行度 → USE_COMMON_POOL 判定链）。
+    #[jvm_boundary]
+    pub fn getIntOpaque(&self, o: Object, offset: i64) -> Result<i32> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getIntOpaque:(Ljava/lang/Object;J)I (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        Ok(cell.get())
+    }
+
     /// `putIntVolatile(Object o, long offset, int x)`：实例字段 int volatile 写。
     #[jvm_boundary]
     pub fn putIntVolatile(&self, o: Object, offset: i64, x: i32) -> Result<()> {
