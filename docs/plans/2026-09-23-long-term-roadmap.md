@@ -74,8 +74,32 @@
 |---|---|---|---|
 | 1 | **R0 门槛①口径** | 修订口径（红线全绿 + 166 失败全归类为 runtime/边界/线程类 + 新错误族月级）vs 旧口径（65/65，基数已过时）。决定重写启动时点 | 随 S2 结束评估（文档已有修订建议，rust-generator-rewrite 前提决策段） |
 | 2 | **线程模型终态** | 单线程协作调度深化（VirtualThread 以等价边界处理）vs 真并发语义（monitor-mt 从观测转实装）——投入差一个量级 | 以 VirtualThread 调查结论 + 真实语料需求为准绳，S1 末或 S3 |
-| 3 | **语料扩张时机与形态** | 定向 e2e 继续加例 vs 引入真实项目 pilot——影响「月级错误族」信号可信度与 S 族收口排序 | S2–S3 间 |
+| 3 | **语料扩张时机与形态** | 定向 e2e 继续加例 vs 引入真实项目 pilot——影响「月级错误族」信号可信度与 S 族收口排序（**阶梯建议已展开，见下方 §四-3 附**） | S2–S3 间 |
 | 4 | **JDK 版本策略** | 21 深耕 + 25 适配轮的节奏；是否把「新 JDK 版本零适配成本」立为 P-1 动态解析的验收口径之一 | 随 JDK25 适配轮（S3） |
+
+### §四-3 附：真实项目 pilot 阶梯（2026-09-23 建议方案，待拍板）
+
+**pilot 定义**：选真实开源 Java 项目，其 jar 的 `.class` 作为转译输入，连同其 JUnit 测试套件一起翻译，用**同一套测试在 JVM 与 Rust 两侧的运行结果**做 golden 对账——169 定向语料之外的真实世界压力面，直接标定「新错误族频率」（R0 信号 c）的可信度。远期指向「迁移 Java 生态 jar → Rust 包」的北极星。
+
+**测试库先行的硬理由**：后续每个 jar pilot 的验证 harness 就是它自带的 JUnit 测试套件——**不先翻译 JUnit/Hamcrest，任何库 pilot 都没有自验证能力**，测试库是地基而非可选项。但**构建工具（Maven/Gradle/Ant）是最差首批目标**：动态类加载容器 + DSL 脚本引擎 + 网络依赖解析 + 守护线程，正打静态闭包翻译模型的死穴，且其价值在编排进程而非库语义，迁移价值密度最低。
+
+| 阶段 | 项目 | 选择理由 | 压测面 |
+|---|---|---|---|
+| P0 | **JUnit 4.13.2 + Hamcrest 2.2**（选 4 不选 5：5 的 Launcher 机制大得多） | 一切后续 pilot 的验证地基；Hamcrest 极小、纯计算 | Hamcrest `Matcher<T>` 接口族 = A-4/T-2 载体系统的真实消费者；JUnit 注解模型压反射 L1/L2、Runner 机制逼 L3 排期；`@Test(timeout=)` 触线程模型决策 |
+| P1 | **commons-lang3**（或 commons-text） | 数百类、纯计算为主、Apache 协议、API 面广 | 字符串/数值输出一致性（S-19 延伸）；`ReflectionToStringBuilder`/`SystemUtils`/Locale 压反射与 runtime |
+| P2 | **commons-io** 或 **Jackson core**（streaming） | 文件 I/O / 流式解析器，无 GUI 无网络 | runtime I/O 层深度（现有手写 file/blocker 件的试金石）；Jackson 纯计算、闭包可控 |
+| P3 | **Guava 切片**（`collect` 原始集合、`base`）→ 整库 | 生态公认压测标杆 | 10k+ 类闭包、泛型深水区、ListenableFuture → 线程模型决策（§四-2）的实测输入 |
+| 远期 | AssertJ / Eclipse Collections / Guice 等 | 按需 | — |
+
+**明确不早期碰**：Maven/Gradle/Ant（类加载容器）、Mockito（Instrumentation agent + 运行时字节码生成，超出静态翻译模型）、Spring（动态代理/AOP）、Netty（unsafe + epoll NIO）。
+
+**逼出的能力缺口（= 工程收益，每个 pilot 阶段自然排期）**：
+1. **库模式发射**：jar → lib crate + 公开 API 面映射（当前管线是「单 main 类 → bin」；提前给重写方案 `driver` crate 定义需求）；
+2. **driver 的 jar 输入模式**：BFS 语料机制架构上已兼容任意 `.class` 来源（不区分 jmods 与 jar），入口需从「单 .java」扩为「jar + 测试入口清单」；
+3. **反射 L3、I/O 深度、时钟/随机确定性沙箱**（golden 可复现的前提）；
+4. **线程模型决策提前兑现**：从纸面讨论变实测数据。
+
+**管理预期**：「迁移整个 Java 生态」是北极星不是里程碑——阶梯每步独立产出价值（harness / 压测数据 / 被逼出的能力），失败可停在任意阶。P0/P1 建议插在 S2–S3 间启动，与 M-3/TypeIR 收敛互相验证。
 
 ---
 
