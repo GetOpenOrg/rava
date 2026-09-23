@@ -29,7 +29,7 @@ from ..cfg import (
 )
 from ..constants import PRIMITIVE_RUST_TYPES as _PRIM_TYPES
 from ..instr import sim_instr
-from ..instr.hierarchy import _common_ref_type
+from ..instr.hierarchy import _common_ref_type, _common_ref_type_widening
 from ..render import render_expr, render_stmt, render_type
 from ..rs_ir import LetStmt, AssignStmt, RawExpr, RawStmt, RsNamed, Var
 from ..stack import BOOL, StackSim, _clone_moved_var, erased_base
@@ -225,6 +225,24 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
             tv = f"{common}::from({tv})"
         if ety_str != common:
             ev = f"{common}::from({ev})"
+        ty = _str_to_rs_type(common)
+    elif _common_ref_type_widening(ty_str, ety_str, registry):
+        # 泛型父子类臂（类型实参一致）：TreeNode<K, V> 臂并入 Node<K, V> 臂——基名走
+        # 继承链公共类祖先（与槽位 widening _merged_slot_type 同一规则），实参一致
+        # 保留实参。合并点取父类，子类臂经宏 all_superclasses 生成的 From<Child> for
+        # Ancestor 上转（__from_parts 保对象标识与运行时类，vtable 视图窄化到祖先）。
+        # 不补此分支时泛型对落「无公共父类」分支双双上转根类——合并局部是合成槽，
+        # 定型退化 Object 后接收者方法全丢（CHM.clear 的三目合并
+        # p = (f.hash>=0) ? f : ((f instanceof TreeBin) ? t.first : null)，
+        # 两臂字节码真型 Node<K,V> / TreeNode<K,V>，p.is_jvm_null/__get_next E0599）。
+        # 接口祖先 / 根类 / 实参不一致由 _common_ref_type_widening 自行拒绝（None）
+        # → 维持后续分支语义不变。置于非泛型 _common_ref_type 分支之后：非泛型对
+        # 行为逐字不变（回归热区）。
+        common = _common_ref_type_widening(ty_str, ety_str, registry)
+        if ty_str != common:
+            tv = f"<{common} as ::std::convert::From<_>>::from({tv})"
+        if ety_str != common:
+            ev = f"<{common} as ::std::convert::From<_>>::from({ev})"
         ty = _str_to_rs_type(common)
     elif same_base and 'Object' in ty_str and any(t in ety_str for t in class_tparams):
         # 同基泛型的「擦除 Object 实例化臂 vs 具体泛型臂」：合并点取具体臂类型，

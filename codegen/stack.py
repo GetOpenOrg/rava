@@ -671,9 +671,17 @@ class StackSim:
                 if (decl is not None and decl_name == name
                         and _same_var_decl is not None
                         and _bind_pos is not None
-                        # LVT 区间从初始化 store 的下一条指令开始（javac 约定），
-                        # 绑定创建点允许落在 start-1（初始化 store 偏移）
-                        and max(0, _same_var_decl[0] - 1) <= _bind_pos < _same_var_decl[1]
+                        # LVT 区间从初始化 store 的下一条指令开始（javac 约定），绑定
+                        # 创建点允许落在区间起点之前（初始化 store 偏移）。逐区间偏移
+                        # 算术只覆盖一字节 astore_N（start-1）；两字节 astore N 的初始
+                        # 化 store 落 start-2（ObjectStreamClass.getProtectionDomains 的
+                        # pds 槽：pc29 初始化 astore / LVT start 31 实证）——改按区间
+                        # 判定：绑定点不落入本槽**其他** LVT 声明区间（同名跨区间是
+                        # javac 槽位复用的另一个变量 → 维持 let 阴影路径），且先于本
+                        # 区间终点。
+                        and not any(_st <= _bind_pos < _en and (_st, _en) != _same_var_decl
+                                    for _st, _en, _nm, *_r in self._slot_decls.get(slot, ()))
+                        and _bind_pos < _same_var_decl[1]
                         and decl_depth <= self._current_depth
                         and isinstance(old_ty, (RsNamed, RsGeneric))
                         and getattr(old_ty, 'name', '') not in _SCALAR_TYPE_NAMES
