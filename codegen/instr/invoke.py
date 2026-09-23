@@ -275,6 +275,40 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             receiver_is_this=True,
             receiver_type=_self_ty or None,
         )
+        _sp_owner = _resolve_special_method_owner(
+            _method_ref_binary_class(comment), mname, _method_ref_descriptor(comment), registry)
+        _owner_short = (_short_cls_g(_sp_owner)
+                        if _sp_owner else cls_short) or cls_short
+        # 基类调用的被调方是 Owner__m_base 自由函数：形参类型是声明类的类型变量
+        # （turbofish 已按本类祖先链绑定实例化），不是擦除存根。sig 查询在
+        # receiver_is_this 语境会把接口载体形参按描述符降级 None（防 virtual_in
+        # 存根与调用侧发散——但 base 函数不存在该发散）→ 对降级位置按「声明签名
+        # 的裸类型变量形参 + turbofish 实例化」重建期望类型，实参与 turbofish 同源
+        # （Hashtable$EntrySet 的 super.add(e)：E→Map_Entry 载体被降级 → 实参装箱
+        # Object 而 base 形参是 E 实例化 → E0308）。
+        if (sig_params and None in sig_params and _self_ci is not None
+                and _sp_owner and _owner_short != short_cls(class_name)):
+            from ..type_args import (ancestor_vtable_args_by_short as _anc_args_by_short,
+                                     split_rust_type_args as _split_rust_args)
+            _owner_ci = registry.get(_sp_owner)
+            if _owner_ci is not None:
+                _owner_eff = _effective_class_type_params(_owner_ci, registry)
+                # _owner_targs 形如 '<A, B>'（A 自身可含嵌套泛型）：去首尾角括号后按嵌套感知切分
+                _owner_targs = _anc_args_by_short(_self_ci, _self_ty, registry).get(_owner_short, '')
+                _owner_inst = _split_rust_args(f"T{_owner_targs}") if _owner_targs else []
+                if _owner_inst and len(_owner_inst) == len(_owner_eff):
+                    _var_inst = dict(zip(_owner_eff, _owner_inst))
+                    _full_desc = '(' + ''.join(params) + ')' + ret
+                    _decl_m = next((mm for mm in _owner_ci.methods
+                                    if mm.name == mname and mm.descriptor == _full_desc), None)
+                    if _decl_m is not None:
+                        _decl_types, _ = _method_sig_types(_owner_ci, _decl_m, _owner_eff, registry)
+                        if _decl_types and len(_decl_types) == len(sig_params):
+                            sig_params = [
+                                (_var_inst[_decl_types[i]]
+                                 if (sp is None and _decl_types[i] in _var_inst) else sp)
+                                for i, sp in enumerate(sig_params)
+                            ]
         args: list[str] = []
         for _idx, param_jvm in enumerate(reversed(params)):
             e_expr, e_ty_node = sim.pop()
@@ -311,10 +345,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                     sim.emit(RawStmt(f"let {v} = {_call};"))
                 sim.push(Var(v), RsNamed(rust_ret))
             return
-        _sp_owner = _resolve_special_method_owner(
-            _method_ref_binary_class(comment), mname, _method_ref_descriptor(comment), registry)
-        _owner_short = (_short_cls_g(_sp_owner)
-                        if _sp_owner else cls_short) or cls_short
+        # _sp_owner/_owner_short 已在 sig_params 重建段解析（本函数前部）
         rust_mname = _safe_field(_mangle_if_overloaded(_owner_short or '', mname, comment, registry))
         base_fn = f"{_owner_short}__{rust_mname}_base"
         # base 函数的泛型形参 = 声明类的类型形参 + 接收者类型；实参不提及声明类类型形参时
