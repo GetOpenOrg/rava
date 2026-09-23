@@ -107,7 +107,8 @@ def _gen_clinit_block(m, ci, registry: dict | None, class_type_params: list,
                       overloaded_names: set, call_chain: set | None,
                       _type_only: bool) -> 'str | None':
     """<clinit> → `fn __clinit()`：宏生成的 __class_init() 状态机在首次主动使用时调用它。
-    类型存根不会被初始化；不在调用链上的 <clinit> 与其它方法同规则生成 panic 存根。
+    类型存根不会被初始化；不在调用链上的 <clinit> 与其它方法同规则生成 panic 存根
+    （内部边界类例外，见下方分支——初始化为手写层职责）。
     返回 None 表示跳过不生成；返回 str 为待追加的方法块（含 @java_method 属性行）。"""
     if _type_only:
         return None
@@ -115,6 +116,20 @@ def _gen_clinit_block(m, ci, registry: dict | None, class_type_params: list,
     _clinit_stub = (f'pub fn {_CLINIT_FN}() -> Result<()> {{\n'
                     f'    panic!("stub: {ci.name}.<clinit>:()V")\n}}')
     if call_chain is not None and (ci.name, m.name, m.descriptor) not in call_chain:
+        from ..callchain import _is_boundary_class
+        if _is_boundary_class(ci.name):
+            # 内部边界类的 <clinit> 不在调用链上时**不发 panic 存根**：BFS 截断
+            # 策略下边界类的静态状态（含类初始化）是手写层职责——手写 impl 静态
+            # 方法的调用点本就缺初始化触发（equiv-audit class-init 登记的既有
+            # 审计偏差，S-10 子缺口 a）。迟至静态边补扫使边界类获得翻译体静态
+            # 方法后，宏按 JVMS §5.5 在其入口注入 Self::__class_init()?——若此处
+            # 发存根 <clinit>，任何静态调用必然先命中存根崩溃（JDK25
+            # ArraysSupport.<clinit> 实证，其 isBigEndian 等依赖无手写实现、
+            # 翻译体也只会撞下一层存根）。不发生成 → 宏 has_clinit=false →
+            # __class_init() 为 no-op：与该类补扫前（type-only 无 <clinit>）及
+            # 手写 impl 静态的可观察行为一致。判定单源：callchain 的
+            # _is_boundary_class（截断策略同一决策点）。
+            return None
         return attr_line + '\n' + _clinit_stub
     try:
         clinit_body = gen_method_body(
