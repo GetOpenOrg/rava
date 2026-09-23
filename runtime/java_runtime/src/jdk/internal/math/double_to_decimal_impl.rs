@@ -1,20 +1,34 @@
 //! `jdk/internal/math/DoubleToDecimal` 手写实现（内部边界类；仅当
 //! `double_to_decimal.rs` 进入闭包生成时编译，见 K-2 规则）。
 //!
-//! 算法按 OpenJDK 21 字节码逐指令还原（javap 对照 `toDecimal`/`toDecimal(IJI)`/
-//! `rop`/`toChars`/`toChars1..3`/`lowDigits`/`append8Digits`/
-//! `removeTrailingZeroes`/`y`/`exponent`/`append`/`appendDigit` 全量方法体）：
-//! shortest round-trip 十进制表示（Ryū/Giuliani [1]）。`MathUtils` 的
-//! `flog10pow2`/`flog10threeQuartersPow2`/`flog2pow10`/`g1`/`g0`/`pow10`
-//! 随体私有实现——`g` 表 1234 个 long 从 `MathUtils.<clinit>` 的 ldc2_w 序列
-//! 机械提取（K_MIN=-324 起，每 k 两条 g1/g0，与源码十六进制注释抽查一致）。
+//! 按 JDK 25 形态书写（L1 兼容改写，2026-09-23 jdk25 语料适配）：私有算法
+//! 全部改为 **byte[]/index 显式传参**（JDK 22 引入 `ToDecimal` 抽象基类后的
+//! 无实例字段模型），不依赖宿主类任何字段/访问器——JDK 21 与 JDK 25 两种
+//! 生成形态下均编译（JDK 21 侧 `bytes`/`index` 字段不再被触达）。
+//! javap -c 对照 `ToDecimal.putChar/putDigit/put8Digits/y/removeTrailingZeroes/
+//! special` 与 `DoubleToDecimal.toDecimal(×2)/rop/toChars/toChars1..3/
+//! lowDigits/exponent` 全量方法体：
+//!
+//! - 写指针约 定：`putChar` 写 `bytes[index]` 返回 `index+1`（JDK 25 预递增
+//!   约定；JDK 21 为 `bytes[++index]` 后递增——同一字符序列的两种坐标）；
+//! - 特殊值编码左移 8 位（`ToDecimal.PLUS_ZERO=256 .. NAN=1280`），非特殊
+//!   返回写入长度（`toDecimal` 结果 `- start`），与 `& 0xFF00` 判定配套；
+//! - 算法本体与 JDK 21 逐指令等价（shortest round-trip 十进制表示，
+//!   Ryū/Giuletti [1]），字符输出逐位一致。
+//!
+//! `MathUtils` 的 `flog10pow2`/`flog10threeQuartersPow2`/`flog2pow10`/
+//! `g1`/`g0`/`pow10` 随体私有实现——`g` 表 1234 个 long 从
+//! `MathUtils.<clinit>` 的 ldc2_w 序列机械提取（K_MIN=-324 起，每 k 两条
+//! g1/g0，与源码十六进制注释抽查一致）。
 //!
 //! Java long 运算两处语义差异必须在 Rust 显式建模：
 //! - 溢出回绕：`c << 2`、`cb << h`、`f *= pow10(H - len)` 等用 wrapping 系；
 //! - `>>>` 逻辑右移：转 u64 再移位。
 //!
-//! 本文件只实现调用链触达的 `toString`/`appendTo`（fd 参数恒为 null 路径，
-//! `split` 留给生成侧存根）。
+//! 入口仅 `toString`（`Double.toString` 链）与 `appendTo`（JDK 21 语料
+//! `ASB.append(double)` 消费；JDK 25 该方法已删，仅 dead_code）。fd 参数
+//! 恒为 null 路径（`split` 留给生成侧存根；JDK 25 的 `putDecimal`/
+//! `toDecimalString` 不在 toString 链上，同为生成侧存根）。
 //!
 //! [1] Giulietti, "The Schubfach way to render doubles", 2020.
 
@@ -35,13 +49,14 @@ const BQ_MASK: i32 = (1 << 11) - 1;
 const T_MASK: i64 = (1i64 << (P - 1)) - 1;
 const MASK_63: i64 = i64::MAX;
 const MASK_28: i32 = (1 << 28) - 1;
-const NON_SPECIAL: i32 = 0;
-const PLUS_ZERO: i32 = 1;
-const MINUS_ZERO: i32 = 2;
-const PLUS_INF: i32 = 3;
-const MINUS_INF: i32 = 4;
-const NAN: i32 = 5;
 const MAX_CHARS: i32 = H + 7;
+
+// ── ToDecimal 常量（JDK 25 形态：特殊值编码左移 8 位） ───────────────
+const PLUS_ZERO: i32 = 256;
+const MINUS_ZERO: i32 = 512;
+const PLUS_INF: i32 = 768;
+const MINUS_INF: i32 = 1024;
+const NAN_: i32 = 1280;
 
 // ── MathUtils 常量（javap：ConstantValue 属性） ─────────────────────
 // C_10 = floor(log10(2) * 2^41)，A_10 = floor(log10(3/4) * 2^41)
@@ -84,129 +99,129 @@ fn _multiply_high(x: i64, y: i64) -> i64 {
     ((x as i128 * y as i128) >> 64) as i64
 }
 
-// ── 私有算法（实例态：bytes 缓冲 + index 写指针，经访问器读写） ──
+// ── 私有算法（JDK 25 形态：bytes/index 显式传参，LATIN1 通道；写指针为
+//    预递增约定——putChar 写 bytes[index] 返回 index+1） ──────────────
 
-/// `append(int c)`：`bytes[++index] = (byte) c`
-fn _append(d: &DoubleToDecimal, c: u8) -> Result<()> {
-    let i = d.__get_index() + 1;
-    d.__set_index(i);
-    d.__get_bytes().set(i, c as i8)
+/// `ToDecimal.putChar(byte[], int, int)`（LATIN1 分支；UTF16 分支走 JLA，
+/// toString 链不触达）：`bytes[index] = (byte) c`，返回 `index + 1`
+fn _put_char(bytes: &JArray<i8>, index: i32, c: u8) -> Result<i32> {
+    bytes.set(index, c as i8)?;
+    Ok(index + 1)
 }
 
-/// `appendDigit(int d)`：`bytes[++index] = (byte) ('0' + d)`
-fn _append_digit(d: &DoubleToDecimal, digit: i32) -> Result<()> {
-    _append(d, (b'0' as i32 + digit) as u8)
+/// `ToDecimal.putDigit(byte[], int, int)`：`'0' + d`
+fn _put_digit(bytes: &JArray<i8>, index: i32, digit: i32) -> Result<i32> {
+    _put_char(bytes, index, (b'0' as i32 + digit) as u8)
 }
 
-/// `y(int a)`：floor((a + 1) 2^28 / 10^8) - 1（左到右逐位提取，[3] 算法 1）
+/// `y(int a)`（ToDecimal static）：floor((a + 1) 2^28 / 10^8) - 1（左到右
+/// 逐位提取，[3] 算法 1）
 fn _y(a: i32) -> i32 {
     (((_multiply_high(((a + 1) as i64) << 28, 193_428_131_138_340_668i64) as u64) >> 20) as i32) - 1
 }
 
-/// `removeTrailingZeroes()`：去尾零，但保留 '.' 右侧那一个
-fn _remove_trailing_zeroes(d: &DoubleToDecimal) -> Result<()> {
-    while d.__get_bytes().get(d.__get_index())? == b'0' as i8 {
-        d.__set_index(d.__get_index() - 1);
+/// `ToDecimal.removeTrailingZeroes(byte[], int)`（LATIN1 分支）：去尾零，
+/// 但保留 '.' 右侧那一个；返回新 index
+fn _remove_trailing_zeroes(bytes: &JArray<i8>, index: i32) -> Result<i32> {
+    let mut index = index;
+    while bytes.get(index - 1)? == b'0' as i8 {
+        index -= 1;
     }
-    if d.__get_bytes().get(d.__get_index())? == b'.' as i8 {
-        d.__set_index(d.__get_index() + 1);
+    if bytes.get(index - 1)? == b'.' as i8 {
+        index += 1;
     }
-    Ok(())
+    Ok(index)
 }
 
-/// `append8Digits(int m)`：8 位数字左到右写入
-fn _append8_digits(d: &DoubleToDecimal, m: i32) -> Result<()> {
+/// `ToDecimal.put8Digits(byte[], int, int)`（= put8DigitsLatin1）：8 位数字
+/// 左到右写入，返回 `index + 8`
+fn _put8_digits(bytes: &JArray<i8>, index: i32, m: i32) -> Result<i32> {
     let mut y = _y(m);
-    for _ in 0..8 {
+    for i in 0..8 {
         let t = 10i32.wrapping_mul(y);
-        _append_digit(d, (t as u32 >> 28) as i32)?;
+        bytes.set(index + i, (b'0' as i32 + (t as u32 >> 28) as i32) as u8 as i8)?;
         y = t & MASK_28;
     }
-    Ok(())
+    Ok(index + 8)
 }
 
-/// `lowDigits(int l)`：l != 0 时补齐低 8 位再去尾零
-fn _low_digits(d: &DoubleToDecimal, l: i32) -> Result<()> {
-    if l != 0 {
-        _append8_digits(d, l)?;
-    }
-    _remove_trailing_zeroes(d)
+/// `lowDigits(byte[], int, int)`：l != 0 时补齐低 8 位再去尾零
+fn _low_digits(bytes: &JArray<i8>, index: i32, l: i32) -> Result<i32> {
+    let index = if l != 0 { _put8_digits(bytes, index, l)? } else { index };
+    _remove_trailing_zeroes(bytes, index)
 }
 
-/// `exponent(int e)`：'E' + 有符号指数（至多三位）
-fn _exponent(d: &DoubleToDecimal, e: i32) -> Result<()> {
+/// `exponent(byte[], int, int)`：'E' + 有符号指数（至多三位），返回新 index
+fn _exponent(bytes: &JArray<i8>, index: i32, e: i32) -> Result<i32> {
+    let mut index = _put_char(bytes, index, b'E')?;
     let mut e = e;
-    _append(d, b'E')?;
     if e < 0 {
-        _append(d, b'-')?;
+        index = _put_char(bytes, index, b'-')?;
         e = -e;
     }
     if e < 10 {
-        _append_digit(d, e)?;
-        return Ok(());
+        return _put_digit(bytes, index, e);
     }
     let mut dd: i32;
     if e >= 100 {
         // floor(e / 100) = floor(1_311 e / 2^17)
         dd = ((e.wrapping_mul(1_311) as u32) >> 17) as i32;
-        _append_digit(d, dd)?;
+        index = _put_digit(bytes, index, dd)?;
         e -= 100 * dd;
     }
     // floor(e / 10) = floor(103 e / 2^10)
     dd = ((e.wrapping_mul(103) as u32) >> 10) as i32;
-    _append_digit(d, dd)?;
-    _append_digit(d, e - 10 * dd)
+    index = _put_digit(bytes, index, dd)?;
+    _put_digit(bytes, index, e - 10 * dd)
 }
 
-/// `toChars1(h, m, l, e)`：0 < e <= 7，无前导零的定点格式
-fn _to_chars1(d: &DoubleToDecimal, h: i32, m: i32, l: i32, e: i32) -> Result<i32> {
-    _append_digit(d, h)?;
+/// `toChars1(byte[], int, h, m, l, e)`：0 < e <= 7，无前导零的定点格式
+fn _to_chars1(bytes: &JArray<i8>, index: i32, h: i32, m: i32, l: i32, e: i32) -> Result<i32> {
+    let mut index = _put_digit(bytes, index, h)?;
     let mut y = _y(m);
     let mut t: i32;
     let mut i = 1;
     while i < e {
         t = 10i32.wrapping_mul(y);
-        _append_digit(d, (t as u32 >> 28) as i32)?;
+        index = _put_digit(bytes, index, (t as u32 >> 28) as i32)?;
         y = t & MASK_28;
         i += 1;
     }
-    _append(d, b'.')?;
+    index = _put_char(bytes, index, b'.')?;
     while i <= 8 {
         t = 10i32.wrapping_mul(y);
-        _append_digit(d, (t as u32 >> 28) as i32)?;
+        index = _put_digit(bytes, index, (t as u32 >> 28) as i32)?;
         y = t & MASK_28;
         i += 1;
     }
-    _low_digits(d, l)?;
-    Ok(NON_SPECIAL)
+    _low_digits(bytes, index, l)
 }
 
-/// `toChars2(h, m, l, e)`：-3 < e <= 0，带前导零的定点格式
-fn _to_chars2(d: &DoubleToDecimal, h: i32, m: i32, l: i32, mut e: i32) -> Result<i32> {
-    _append_digit(d, 0)?;
-    _append(d, b'.')?;
+/// `toChars2(byte[], int, h, m, l, e)`：-3 < e <= 0，带前导零的定点格式
+fn _to_chars2(bytes: &JArray<i8>, index: i32, h: i32, m: i32, l: i32, mut e: i32) -> Result<i32> {
+    let mut index = _put_digit(bytes, index, 0)?;
+    index = _put_char(bytes, index, b'.')?;
     while e < 0 {
-        _append_digit(d, 0)?;
+        index = _put_digit(bytes, index, 0)?;
         e += 1;
     }
-    _append_digit(d, h)?;
-    _append8_digits(d, m)?;
-    _low_digits(d, l)?;
-    Ok(NON_SPECIAL)
+    index = _put_digit(bytes, index, h)?;
+    index = _put8_digits(bytes, index, m)?;
+    _low_digits(bytes, index, l)
 }
 
-/// `toChars3(h, m, l, e)`：e > 7 或 e <= -3，计算机科学计数法
-fn _to_chars3(d: &DoubleToDecimal, h: i32, m: i32, l: i32, e: i32) -> Result<i32> {
-    _append_digit(d, h)?;
-    _append(d, b'.')?;
-    _append8_digits(d, m)?;
-    _low_digits(d, l)?;
-    _exponent(d, e - 1)?;
-    Ok(NON_SPECIAL)
+/// `toChars3(byte[], int, h, m, l, e)`：e > 7 或 e <= -3，计算机科学计数法
+fn _to_chars3(bytes: &JArray<i8>, index: i32, h: i32, m: i32, l: i32, e: i32) -> Result<i32> {
+    let mut index = _put_digit(bytes, index, h)?;
+    index = _put_char(bytes, index, b'.')?;
+    index = _put8_digits(bytes, index, m)?;
+    index = _low_digits(bytes, index, l)?;
+    _exponent(bytes, index, e - 1)
 }
 
-/// `toChars(long f, int e, FormattedFPDecimal fd)`：格式化 f·10^e（fd == null 路径）
-fn _to_chars(d: &DoubleToDecimal, f: i64, e: i32) -> Result<i32> {
+/// `toChars(byte[], int, long f, int e, fd)`：格式化 f·10^e（fd == null 路径；
+/// JDK 25 的 fd != null 早退分支属于 `split` 链，不在此实现）
+fn _to_chars(bytes: &JArray<i8>, index: i32, f: i64, e: i32) -> Result<i32> {
     let mut f = f;
     let mut e = e;
     // 10^(len-1) <= f < 10^len
@@ -224,15 +239,15 @@ fn _to_chars(d: &DoubleToDecimal, f: i64, e: i32) -> Result<i32> {
     let m = (hm as i32).wrapping_sub(100_000_000i32.wrapping_mul(h));
 
     if 0 < e && e <= 7 {
-        return _to_chars1(d, h, m, l, e);
+        return _to_chars1(bytes, index, h, m, l, e);
     }
     if -3 < e && e <= 0 {
-        return _to_chars2(d, h, m, l, e);
+        return _to_chars2(bytes, index, h, m, l, e);
     }
-    _to_chars3(d, h, m, l, e)
+    _to_chars3(bytes, index, h, m, l, e)
 }
 
-/// `rop(g1, g0, cp)`：rop(cp·g·2^(-127))，g = g1·2^63 + g0
+/// `rop(g1, g0, cp)`（static）：rop(cp·g·2^(-127))，g = g1·2^63 + g0
 fn _rop(g1: i64, g0: i64, cp: i64) -> i64 {
     let x1 = _multiply_high(g0, cp);
     let y0 = g1.wrapping_mul(cp);
@@ -242,8 +257,9 @@ fn _rop(g1: i64, g0: i64, cp: i64) -> i64 {
     vbp | (((z & MASK_63).wrapping_add(MASK_63) as u64 >> 63) as i64)
 }
 
-/// `toDecimal(int q, long c, int dk, FormattedFPDecimal fd)`：c·2^q 的最短十进制
-fn _to_decimal_q_c_dk(d: &DoubleToDecimal, q: i32, c: i64, dk: i32) -> Result<i32> {
+/// `toDecimal(byte[], int, q, c, dk, fd)`：c·2^q 的最短十进制
+/// （fd == null 路径；返回写后 index）
+fn _to_decimal_q_c_dk(bytes: &JArray<i8>, index: i32, q: i32, c: i64, dk: i32) -> Result<i32> {
     let out = (c as i32) & 0x1;
     let cb = c.wrapping_shl(2);
     let cbr = cb.wrapping_add(2);
@@ -270,13 +286,14 @@ fn _to_decimal_q_c_dk(d: &DoubleToDecimal, q: i32, c: i64, dk: i32) -> Result<i3
     let s = vb >> 2;
     if s >= 100 {
         // s' = floor(s/10) = floor(s·115292150460684698·2^4 / 2^64)
+        // （JDK 25 预移位：multiplyHigh(s, 1844674407370955168)）
         let sp10 = 10i64.wrapping_mul(
             _multiply_high(s, 115_292_150_460_684_698i64.wrapping_shl(4)));
         let tp10 = sp10.wrapping_add(10);
         let upin = vbl.wrapping_add(out as i64) <= sp10.wrapping_shl(2);
         let wpin = tp10.wrapping_shl(2).wrapping_add(out as i64) <= vbr;
         if upin != wpin {
-            return _to_chars(d, if upin { sp10 } else { tp10 }, k);
+            return _to_chars(bytes, index, if upin { sp10 } else { tp10 }, k);
         }
     }
     // u = s·10^k 与 w = t·10^k 恰一入 Rv
@@ -284,23 +301,26 @@ fn _to_decimal_q_c_dk(d: &DoubleToDecimal, q: i32, c: i64, dk: i32) -> Result<i3
     let uin = vbl.wrapping_add(out as i64) <= s.wrapping_shl(2);
     let win = t.wrapping_shl(2).wrapping_add(out as i64) <= vbr;
     if uin != win {
-        return _to_chars(d, if uin { s } else { t }, k.wrapping_add(dk));
+        return _to_chars(bytes, index, if uin { s } else { t }, k.wrapping_add(dk));
     }
     // 两者皆入 Rv：取更近 v 者（平局取偶）
     let cmp = vb.wrapping_sub(s.wrapping_add(t).wrapping_shl(1));
-    _to_chars(d, if cmp < 0 || (cmp == 0 && (s & 0x1) == 0) { s } else { t },
+    _to_chars(bytes, index, if cmp < 0 || (cmp == 0 && (s & 0x1) == 0) { s } else { t },
               k.wrapping_add(dk))
 }
 
-/// `toDecimal(double v, FormattedFPDecimal fd)`：入口分流（fd == null 路径）
-fn _to_decimal(d: &DoubleToDecimal, v: f64) -> Result<i32> {
+/// `toDecimal(byte[], int, double, fd)`：入口分流（fd == null 路径）。
+/// 非特殊返回写入长度（`end - start`，与 `& 0xFF00` 判定配套：长度 < 256，
+/// 特殊码 ≥ 256），特殊返回 `ToDecimal` 左移 8 位编码
+fn _to_decimal(bytes: &JArray<i8>, index: i32, v: f64) -> Result<i32> {
     let bits = v.to_bits() as i64;
     let t = bits & T_MASK;
     let bq = ((bits as u64 >> 52) as i32) & BQ_MASK;
     if bq < BQ_MASK {
-        d.__set_index(-1);
+        let start = index;
+        let mut index = index;
         if bits < 0 {
-            _append(d, b'-')?;
+            index = _put_char(bytes, index, b'-')?;
         }
         if bq != 0 {
             // 规格化值；快速路径（[1] §8.3）：mq = -Q_MIN + 1 - bq
@@ -309,18 +329,18 @@ fn _to_decimal(d: &DoubleToDecimal, v: f64) -> Result<i32> {
             if 0 < mq && mq < P {
                 let f = c >> mq;
                 if f.wrapping_shl(mq as u32) == c {
-                    return _to_chars(d, f, 0);
+                    return Ok(_to_chars(bytes, index, f, 0)? - start);
                 }
             }
-            return _to_decimal_q_c_dk(d, -mq, c, 0);
+            return Ok(_to_decimal_q_c_dk(bytes, index, -mq, c, 0)? - start);
         }
         if t != 0 {
             // 次规格化值
-            return if t < C_TINY {
-                _to_decimal_q_c_dk(d, Q_MIN, 10 * t, -1)
+            return Ok(if t < C_TINY {
+                _to_decimal_q_c_dk(bytes, index, Q_MIN, 10 * t, -1)? - start
             } else {
-                _to_decimal_q_c_dk(d, Q_MIN, t, 0)
-            };
+                _to_decimal_q_c_dk(bytes, index, Q_MIN, t, 0)? - start
+            });
         }
         return Ok(if bits == 0 {
             PLUS_ZERO
@@ -329,18 +349,29 @@ fn _to_decimal(d: &DoubleToDecimal, v: f64) -> Result<i32> {
         });
     }
     if t != 0 {
-        return Ok(NAN);
+        return Ok(NAN_);
     }
     Ok(if bits > 0 { PLUS_INF } else { MINUS_INF })
 }
 
-/// `charsToString()`：bytes[0..=index] 以 Latin1 紧凑字符串构造（JDK 走废弃的
-/// `new String(bytes, 0, 0, index+1)`，即逐字节为 char）
-fn _chars_to_string(d: &DoubleToDecimal) -> Result<String> {
-    let n = d.__get_index() + 1;
+/// `ToDecimal.special(int)`（static）：特殊值 → 字符串（lookupswitch 的
+/// default 分支是 NaN，覆盖 NAN=1280）
+fn _special(m: i32) -> &'static str {
+    match m {
+        PLUS_ZERO => "0.0",
+        MINUS_ZERO => "-0.0",
+        PLUS_INF => "Infinity",
+        MINUS_INF => "-Infinity",
+        _ => "NaN",
+    }
+}
+
+/// `new String(bytes, 0, n, ISO_8859_1.INSTANCE)`：bytes[0..n] 以 Latin1
+/// 紧凑字符串构造（JDK 21 侧等价 `charsToString()` 的字符序列）
+fn _chars_to_string(bytes: &JArray<i8>, n: i32) -> Result<String> {
     let mut chars = Vec::with_capacity(n as usize);
     for i in 0..n {
-        chars.push(d.__get_bytes().get(i)? as u8 as char);
+        chars.push(bytes.get(i)? as u8 as char);
     }
     let mut inst = String::default();
     inst._init_not_null();
@@ -351,33 +382,22 @@ fn _chars_to_string(d: &DoubleToDecimal) -> Result<String> {
 }
 
 impl DoubleToDecimal {
-    /// `<init>(boolean noChars)`：分配 MAX_CHARS 字节缓冲（noChars 时保持 null）
-    #[jvm_boundary]
-    pub fn new(noChars: bool) -> Result<Self> {
-        let mut inst = DoubleToDecimal::default();
-        inst._init_not_null();
-        if !noChars {
-            inst.__set_bytes(JArray::new(MAX_CHARS));
-        }
-        Ok(inst)
-    }
-
-    /// `toString(double v)`：`Double.toString` 的底层例程
+    /// `toString(double)`：`Double.toString` 的底层例程（JDK 25 形态：
+    /// 自包含分配 MAX_CHARS 缓冲，`m & 0xFF00`（ldc 65280）分流特殊值）
     #[jvm_boundary]
     pub fn toString(v: f64) -> Result<String> {
-        let d = DoubleToDecimal::new(false)?;
-        match _to_decimal(&d, v)? {
-            NON_SPECIAL => _chars_to_string(&d),
-            PLUS_ZERO => Ok(String::from("0.0")),
-            MINUS_ZERO => Ok(String::from("-0.0")),
-            PLUS_INF => Ok(String::from("Infinity")),
-            MINUS_INF => Ok(String::from("-Infinity")),
-            _ => Ok(String::from("NaN")),
+        let bytes = JArray::new(MAX_CHARS);
+        let m = _to_decimal(&bytes, 0, v)?;
+        if m & 0xFF00 == 0 {
+            _chars_to_string(&bytes, m & 0xFF)
+        } else {
+            Ok(String::from(_special(m)))
         }
     }
 
     /// `appendTo(double v, Appendable app)`：`AbstractStringBuilder.append(double)`
-    /// 的底层例程。NON_SPECIAL 分支 JDK 先 `instanceof StringBuilder`/`StringBuffer`
+    /// 的底层例程（JDK 21 语料消费；JDK 25 已删除该方法，此处仅 dead_code）。
+    /// NON_SPECIAL 分支 JDK 先 `instanceof StringBuilder`/`StringBuffer`
     /// 走 `append(char[])` 快路径，否则逐 char `append(c)`——三条路径可观察行为
     /// 一致（char[] 追加 == 逐字符追加，返回同一 app），统一经 Appendable 接口
     /// 分派（append(C) / append(CharSequence) 槽位）。
@@ -389,22 +409,14 @@ impl DoubleToDecimal {
     /// `Object`），两形态下 `Object: Into<_>` 均成立，由调用点期望类型定标。
     #[jvm_boundary]
     pub fn appendTo(v: f64, arg1: Appendable) -> Result<Appendable> {
-        let d = DoubleToDecimal::new(false)?;
-        let special: Option<&str> = match _to_decimal(&d, v)? {
-            PLUS_ZERO => Some("0.0"),
-            MINUS_ZERO => Some("-0.0"),
-            PLUS_INF => Some("Infinity"),
-            MINUS_INF => Some("-Infinity"),
-            NAN => Some("NaN"),
-            _ => None,
-        };
-        if let Some(s) = special {
+        let bytes = JArray::new(MAX_CHARS);
+        let m = _to_decimal(&bytes, 0, v)?;
+        if m & 0xFF00 != 0 {
             Clone::clone(&arg1)
-                .append_seq(Into::into(Object::from(String::from(s))))?;
+                .append_seq(Into::into(Object::from(String::from(_special(m)))))?;
             return Ok(arg1);
         }
-        let bytes = d.__get_bytes();
-        let n = d.__get_index() + 1;
+        let n = m & 0xFF;
         let mut app = Clone::clone(&arg1);
         for i in 0..n {
             // (char) bytes[i]：byte 符号扩展到 int 再截位到 char
