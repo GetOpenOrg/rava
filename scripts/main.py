@@ -11,6 +11,17 @@ per-test scratch workspace（见 docs/plans/2026-09-16-per-test-scratch-workspac
     python3 scripts/main.py tests/e2e/04_collections/TestArrayList.java
     python3 scripts/main.py tests/e2e/01_basics/TestArithmetic.java --no-run
     python3 scripts/main.py tests/e2e/01_basics/TestArithmetic.java --clean   # 清空 scratch 后重建
+
+    # jar 输入模式（依赖库成 crate，docs/plans/2026-09-23-junit-crate-pilot.md M1/M2）：
+    python3 scripts/main.py tests/lib_pilot/HamcrestAssertMain.java --jdk 21 --clean \
+        --lib hamcrest=/path/hamcrest-3.0.jar
+    python3 scripts/main.py tests/lib_pilot/JunitAssertMain.java --jdk 21 --clean \
+        --lib hamcrest=/path/hamcrest-3.0.jar \
+        --lib junit4=/path/junit-4.13.2.jar:seed=org.junit.Assert
+
+--lib 规格 NAME=JAR[:seed=FQN[,FQN...]]（可重复，顺序即依赖序）：
+  无 seed  = 整包模式（jar 全部类进 lib crate，种子 = 全部 public 类成员）
+  有 seed  = 子集模式（只有种子类闭包内的 jar 类进 crate）
 """
 
 import argparse
@@ -133,6 +144,34 @@ def prepare_scratch(out_dir: str, clean: bool = False) -> None:
                         '// `pub mod` 声明仍需可解析；有生成类时被 codegen 覆写。\n')
 
 
+def _parse_lib_specs(raw_libs: list[str]) -> list:
+    """解析 --lib 规格 NAME=JAR[:seed=FQN[,FQN...]] → LibSpec 列表。"""
+    from codegen.transpile import LibSpec
+    specs = []
+    seen_names: set[str] = set()
+    for raw in raw_libs:
+        head, _, seed_part = raw.partition(':seed=')
+        if '=' not in head:
+            sys.exit(f"--lib 格式应为 NAME=JAR[:seed=FQN[,FQN...]]，收到: {raw}")
+        name, _, jar = head.partition('=')
+        if not name or not jar:
+            sys.exit(f"--lib 的 NAME/JAR 不能为空: {raw}")
+        if name in seen_names:
+            sys.exit(f"--lib crate 名重复: {name}")
+        if not os.path.exists(jar):
+            sys.exit(f"--lib jar 不存在: {jar}")
+        seen_names.add(name)
+        seeds = None
+        if seed_part:
+            seeds = [fqn.strip().replace('.', '/') for fqn in seed_part.split(',')
+                     if fqn.strip()]
+            if not seeds:
+                sys.exit(f"--lib seed 为空: {raw}")
+        specs.append(LibSpec(crate_name=name, jar_path=os.path.abspath(jar),
+                             seed_classes=seeds))
+    return specs
+
+
 def main():
     ap = argparse.ArgumentParser(description='Java .class → Rust 转译器')
     ap.add_argument('java_files', nargs='*', help='.java 源文件列表（默认 tests/e2e/01_basics/HelloWorld.java）')
@@ -143,7 +182,14 @@ def main():
     ap.add_argument('--batch', action='store_true', help='批量模式：写 src/bin/<class>.rs（供并行测试用）')
     ap.add_argument('--jdk', type=int, default=None, metavar='N',
                     help='指定 JDK 主版本（javac 与翻译语料同源；默认沿用 JAVA_HOME 或自动发现）')
+    ap.add_argument('--lib', action='append', default=[], metavar='NAME=JAR[:seed=FQN]',
+                    help='jar 输入模式：依赖库发射为 lib crate（可重复；无 seed=整包，'
+                         '有 seed=只收种子类闭包）。顺序即 crate 依赖序')
     args = ap.parse_args()
+
+    lib_specs = _parse_lib_specs(args.lib)
+    if lib_specs and args.batch:
+        sys.exit('jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）')
 
     if args.jdk is not None:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -169,7 +215,7 @@ def main():
 
     # 2. codegen
     t0 = time.perf_counter()
-    transpile(java_files, out_dir, batch_bin=args.batch)
+    transpile(java_files, out_dir, batch_bin=args.batch, lib_specs=lib_specs)
     # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
     print(CFG_AUDIT_STATS.summary())
     if os.environ.get('JAVA_RTA_DEBUG'):
@@ -186,7 +232,10 @@ def main():
         ('borrow', '.borrow()'),
     )
     _counts = {label: 0 for label, _pat in _READABILITY_PATTERNS}
-    for _crate in ('java_runtime', 'user'):
+    _audit_crates = ['java_runtime', 'user']
+    if lib_specs:
+        _audit_crates = ['java_runtime', *[s.crate_name for s in lib_specs], 'user']
+    for _crate in _audit_crates:
         _src_root = os.path.join(out_dir, _crate, 'src')
         for _root, _dirs, _files in os.walk(_src_root):
             for _fname in _files:

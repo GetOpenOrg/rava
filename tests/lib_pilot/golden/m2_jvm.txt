@@ -1,0 +1,30 @@
+PASS assertTrue-pass
+FAIL assertTrue-fail :: null
+FAIL assertTrue-msg-fail :: 真值检查
+PASS assertFalse-pass
+FAIL assertFalse-fail :: null
+PASS assertEquals-long-pass
+FAIL assertEquals-long-fail :: expected:<5> but was:<6>
+PASS assertEquals-obj-pass
+FAIL assertEquals-obj-fail :: expected:<[expected]字符串> but was:<[actual]字符串>
+FAIL assertEquals-msg-fail :: 带 reason expected:<1> but was:<2>
+PASS assertEquals-double-pass
+FAIL assertEquals-double-fail :: expected:<0.5> but was:<0.30000000000000004>
+PASS assertEquals-object-pass
+PASS assertNotEquals-pass
+FAIL assertNotEquals-fail :: Values should be different. Actual: 3
+PASS assertNull-pass
+FAIL assertNull-fail :: expected null, but was:<not-null>
+PASS assertNotNull-pass
+PASS assertSame-pass
+PASS assertNotSame-pass
+PASS assertThat-pass
+FAIL assertThat-fail :: 
+Expected: is "bye"
+     but: was "hello world"
+FAIL assertThat-msg-fail :: 桥接失败
+Expected: is <2>
+     but: was <1>
+FAIL fail-plain :: null
+FAIL fail-msg :: 主动失败
+DONE

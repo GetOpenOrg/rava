@@ -72,6 +72,11 @@ class ClassEmission:
     text: str = ''
     handwritten: bool = False    # 目标文件是手写文件：生成文本不落盘，记录不可信
     methods: list[EmittedMethod] = field(default_factory=list)
+    crate_name: str = ''         # 本类发射到的 crate（'java_runtime'/'user'/lib crate 名）。
+    # crate_prefix 只描述「本文件引用 JDK 类型的前缀」，无法区分多个 lib crate
+    # （hamcrest 与 junit4 的文件都是 'java_runtime'）；跨 crate 引用定向
+    # （class_use_path / _imports_for）以 crate_name 为准。空串 = 既有语义
+    # （JDK 类 / 未标记），走 legacy 分支。
 
     def record_methods(self, method_blocks: list[str]) -> None:
         for block in method_blocks:
@@ -543,24 +548,38 @@ _SIG_CLASS_RE = re.compile(r'L([A-Za-z_$][\w$]*(?:/[A-Za-z_$][\w$]*)+)[<;]')
 
 
 def class_use_path(binary_name: str, crate_prefix: str,
-                   emissions: 'dict[str, ClassEmission] | None' = None) -> str:
+                   emissions: 'dict[str, ClassEmission] | None' = None,
+                   recv_crate: str = '') -> str:
     """类在 Rust 中的完整引用路径（不含 `use` 关键字与末尾 `;`）。
 
-    两种 crate 布局决定了路径写到哪一层：
+    crate 布局决定路径写到哪一层：
 
       - JDK 类（java/lang/String，落在 java_runtime crate）：包目录的 mod.rs 有
         `pub use <mod>::*;` 再导出，故为 `<crate 前缀>::java::lang::String`
       - 用户类（默认包，落在 user crate）：main.rs 只做 `mod` 声明、无再导出，
         必须写到模块层 `crate::test_interfaces_drawable::TestInterfaces_Drawable`
+      - lib crate 类（jar 输入模式，crate_name 已标记）：路径按目标 crate 定向——
+        接收者同 crate 用 `crate::`，跨 crate（junit4 引 hamcrest 的 Matcher）
+        用 lib crate 名。lib crate 的包 mod.rs 与 JDK 同构（pub use 再导出），
+        统一 prefix::pkg::Simple 形态。
 
     crate_prefix 是「接收者文件引用 JDK 类型所用的前缀」；用户类一律用 `crate`
     （用户类只被同 crate 的用户类引用）。判断归属看目标类的 emission：
-    JDK 类的 crate_prefix 为 'crate'（它自身就在 java_runtime 里），用户类为 'java_runtime'。
+    JDK 类的 crate_prefix 为 'crate'（它自身就在 java_runtime 里），用户类为
+    'java_runtime'；lib 类以 crate_name 区分（crate_prefix 与用户类同值）。
     """
     short = short_cls(binary_name)
     em = (emissions or {}).get(binary_name)
     pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
                     for p in binary_name.split('/')[:-1])
+    _lib_crate = getattr(em, 'crate_name', '') if em is not None else ''
+    if _lib_crate and _lib_crate != 'java_runtime':
+        _prefix = 'crate' if _lib_crate == recv_crate else _lib_crate
+        if not pkg:
+            # 无包名（用户 crate 默认包）：文件即模块，路径必须写到模块层
+            mod = to_snake(binary_name)
+            return f"{_prefix}::{mod}::{short}"
+        return f"{_prefix}::{pkg}::{short}"
     if not pkg or (em is not None and em.crate_prefix != 'crate'):
         # 无包名（用户类）：文件即模块，路径必须写到模块层
         mod = to_snake(binary_name)
@@ -569,7 +588,7 @@ def class_use_path(binary_name: str, crate_prefix: str,
 
 
 def type_arg_uses(recv_ci, registry: dict, emissions: 'dict[str, ClassEmission]',
-                  crate_prefix: str) -> dict[str, str]:
+                  crate_prefix: str, recv_crate: str = '') -> dict[str, str]:
     """接收者视角下类型实参引用的类：Rust 短名 → use 行。
 
     祖先签名中的类型变量被代入为接收者超类型签名里的实参（`CountedCompleter<Void>` 的 Void），
@@ -587,7 +606,9 @@ def type_arg_uses(recv_ci, registry: dict, emissions: 'dict[str, ClassEmission]'
             if bin_name not in emissions:
                 continue
             short = short_cls(bin_name)
-            uses.setdefault(short, f"use {class_use_path(bin_name, crate_prefix, emissions)};")
+            uses.setdefault(
+                short,
+                f"use {class_use_path(bin_name, crate_prefix, emissions, recv_crate)};")
         for sup in [cur.super_class] + list(cur.interfaces or []):
             if sup and sup in registry:
                 queue.append(registry[sup])
@@ -595,8 +616,9 @@ def type_arg_uses(recv_ci, registry: dict, emissions: 'dict[str, ClassEmission]'
 
 
 def _imports_for(signature: str, owner: ClassEmission, recv: ClassEmission,
-                 already: set[str], arg_uses: 'dict[str, str] | None' = None) -> list[str]:
-    """继承成员签名引用的类型：沿用祖先文件里的精确 use（换成接收者所在 crate 的前缀）；
+                 already: set[str], arg_uses: 'dict[str, str] | None' = None,
+                 emissions: 'dict[str, ClassEmission] | None' = None) -> list[str]:
+    """继承成员签名引用的类型：沿用祖先文件里的精确 use（跨 crate 时按目标 crate 重定向）；
     代入的类型实参不在祖先文件中，按 arg_uses（见 type_arg_uses）解析。"""
     owner_uses = {}
     for ln in owner.text.split('\n'):
@@ -608,9 +630,11 @@ def _imports_for(signature: str, owner: ClassEmission, recv: ClassEmission,
     # 祖先文件不 use 自身：签名引用声明类自身（`fork() -> ForkJoinTask<V>`）时按其包路径导入
     if '/' in owner.binary_name:
         owner_short = short_cls(owner.binary_name)
-        owner_pkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
-                              for p in owner.binary_name.split('/')[:-1])
-        owner_uses.setdefault(owner_short, f"use {owner.crate_prefix}::{owner_pkg}::{owner_short};")
+        owner_uses.setdefault(
+            owner_short,
+            f"use {class_use_path(owner.binary_name, owner.crate_prefix, emissions, getattr(recv, 'crate_name', ''))};")
+    _recv_crate = getattr(recv, 'crate_name', '')
+    _owner_crate = getattr(owner, 'crate_name', '') or 'java_runtime'
     out: list[str] = []
     for ident in dict.fromkeys(_IDENT_RE.findall(signature)):
         if ident in already:
@@ -622,8 +646,10 @@ def _imports_for(signature: str, owner: ClassEmission, recv: ClassEmission,
             already.add(ident)
             out.append(arg_uses[ident])
             continue
-        if recv.crate_prefix != owner.crate_prefix and use_line.startswith('use crate::'):
-            use_line = f"use {recv.crate_prefix}::" + use_line[len('use crate::'):]
+        if use_line.startswith('use crate::') and _owner_crate != _recv_crate:
+            # 祖先文件里的同 crate 引用落到接收者 crate 时重定向到声明者 crate
+            # （junit4 接收者复制 hamcrest 祖先的 `use crate::org::hamcrest::X`）
+            use_line = f"use {_owner_crate}::" + use_line[len('use crate::'):]
         already.add(ident)
         out.append(use_line)
     return out
@@ -653,7 +679,8 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
             um = _USE_RE.match(ln)
             if um:
                 imported.add(um.group(2))
-        arg_uses = type_arg_uses(recv_ci, registry, emissions, recv.crate_prefix)
+        arg_uses = type_arg_uses(recv_ci, registry, emissions, recv.crate_prefix,
+                                 getattr(recv, 'crate_name', ''))
 
         def _super_decl(mname: str, pdesc: str):
             """超类链上 (mname, pdesc) 的最近声明者；返回 (owner_bin, EmittedMethod)。"""
@@ -690,7 +717,8 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
                     taken.add(fn_match.group(1))
                     members.setdefault(recv_bin, []).append(decl)
                     imports.setdefault(recv_bin, []).extend(
-                        _imports_for(sig_text, recv, recv, imported, arg_uses))
+                        _imports_for(sig_text, recv, recv, imported, arg_uses,
+                                     emissions=emissions))
                     # 真实方法声明在祖先 → 一并补其继承成员（bridge 体调用 self.<real>）
                     if real_want is not None and recv.find(*real_want) is None:
                         real_owner_bin, real_method = _super_decl(*real_want)
@@ -708,7 +736,8 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
                                 base_short = f"{short_cls(real_owner_bin)}__{real_method.rust_name}_base"
                                 if base_short not in imported:
                                     imported.add(base_short)
-                                    base_path = (class_use_path(real_owner_bin, recv.crate_prefix, emissions)
+                                    base_path = (class_use_path(real_owner_bin, recv.crate_prefix, emissions,
+                                                                getattr(recv, 'crate_name', ''))
                                                  + f"__{real_method.rust_name}_base")
                                     imports.setdefault(recv_bin, []).append(f"use {base_path};")
                     continue
@@ -730,11 +759,12 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
                     taken.add(local_name)
                     members.setdefault(recv_bin, []).append(decl)
                     owner_ty = _rust_type(iface_bin, iface_args)
-                    uses = _imports_for(decl.split('\n', 1)[1] + ' ' + owner_ty, iface, recv, imported)
+                    uses = _imports_for(decl.split('\n', 1)[1] + ' ' + owner_ty, iface, recv, imported,
+                                        emissions=emissions)
                     iface_short = short_cls(iface_bin)
                     if iface_short not in imported:
                         imported.add(iface_short)
-                        uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions)};")
+                        uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions, getattr(recv, 'crate_name', ''))};")
                     imports.setdefault(recv_bin, []).extend(uses)
                     break
                 continue
@@ -747,14 +777,16 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
             decl = _member_declaration(method, owner_bin, recv_ci, registry)
             members.setdefault(recv_bin, []).append(decl)
             imports.setdefault(recv_bin, []).extend(
-                _imports_for(decl.split('\n', 1)[1], emissions[owner_bin], recv, imported, arg_uses))
+                _imports_for(decl.split('\n', 1)[1], emissions[owner_bin], recv, imported, arg_uses,
+                             emissions=emissions))
             # 转发体调用的 owner __base 自由函数（宏在 owner 模块展开，pub 可达）：
             # 经与类型相同的再导出路径导入（与祖先 __VTable trait 导入同构）
             if not method.handwritten:
                 base_short = f"{short_cls(owner_bin)}__{method.rust_name}_base"
                 if base_short not in imported:
                     imported.add(base_short)
-                    base_path = (class_use_path(owner_bin, recv.crate_prefix, emissions)
+                    base_path = (class_use_path(owner_bin, recv.crate_prefix, emissions,
+                                                getattr(recv, 'crate_name', ''))
                                  + f"__{method.rust_name}_base")
                     imports.setdefault(recv_bin, []).append(f"use {base_path};")
 

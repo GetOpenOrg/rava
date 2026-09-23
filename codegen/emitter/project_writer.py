@@ -149,11 +149,18 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                          jdk_class_infos: list[ClassInfo] | None = None,
                          java_files: list[str] | None = None,
                          batch_bin: bool = False,
-                         visited_methods: set | None = None):
+                         visited_methods: set | None = None,
+                         lib_crate_classes: dict[str, list[ClassInfo]] | None = None):
     """
     生成 Cargo workspace，包含两个子 crate：
       java_runtime/  — VM 基础设施 + JDK 字节码翻译（合并，git 管理基础设施部分）
       user/          — 用户 Java 代码翻译
+
+    lib_crate_classes（jar 输入模式的 --lib 发射）：{crate 名 → 类列表}。
+    每个 lib crate 发射为 crate-type=["lib"] 的独立 crate（hamcrest / junit4）：
+    lib.rs 汇出模块树、Java 可见性映射（public→pub、其余→pub(crate) 近似，
+    access_flags 驱动）、引用按目标 crate 定向（junit4→hamcrest→java_runtime）。
+    依赖方向 = 字典插入序（后面的 crate path 依赖前面的）。
     """
     import shutil
 
@@ -182,8 +189,11 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     _WRITTEN_THIS_RUN.clear()
     emissions: dict[str, ClassEmission] = {}
 
-    # 构建 registry（用户类 + JDK 类）
+    # 构建 registry（用户类 + lib crate 类 + JDK 类）
     registry: dict = {ci.name: ci for ci in class_infos}
+    for _lc_classes in (lib_crate_classes or {}).values():
+        for _lci in _lc_classes:
+            registry.setdefault(_lci.name, _lci)
     if jdk_class_infos:
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
@@ -197,7 +207,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 必须先于类文本生成：站点（sim/dynamic.py）发射时即需判定合成对象装箱
     # 还是回落闭包装箱，合成可行性（接口发射/手写覆盖/函数式）此刻定案。
     _sam_objects.prescan(registry, jdk_class_infos or [], class_infos,
-                         full_impl_classes)
+                         full_impl_classes,
+                         lib_crate_classes=lib_crate_classes)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}
@@ -269,7 +280,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             # 调用链上的非 native 方法翻译字节码，调用链外的方法生成 panic! 存根
             # new_format_map 中已有 _impl.rs 实现的方法，codegen 跳过那些方法的 stub 生成
             _em = ClassEmission(binary_name=jdk_ci.name, crate_prefix='crate', path=file_path,
-                                handwritten=_is_handwritten(file_path))
+                                handwritten=_is_handwritten(file_path), crate_name='java_runtime')
             _em.text = _gen_class_rs(jdk_ci, registry=registry,
                                      jdk_crate_pkg_paths=jdk_crate_pkg_paths,
                                      call_chain=visited_methods,
@@ -288,6 +299,105 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                 parent = os.path.join(parent, part)
                 jdk_mod_tree.setdefault(parent, set()).add(mod_name)
 
+    # ── lib crate 发射（jar 输入模式：--lib）───────────────────────────────
+    # 每个 lib crate 一个 crate-type=["lib"] 的独立 crate：类文件 + lib.rs 模块树
+    # + 可见性映射 + 按目标 crate 定向的引用。依赖方向 = 字典插入序。
+    _lib_sets: dict[str, set[str]] = {}
+    if lib_crate_classes:
+        _jdk_generated_now = _generated_jdk_names if jdk_class_infos else set()
+        for _lc_name, _lc_classes in lib_crate_classes.items():
+            _lib_sets[_lc_name] = {ci.name for ci in _lc_classes}
+
+        def _make_lib_resolver(current_crate: str):
+            def _resolve(bin_name: str) -> str:
+                for _cname, _names in _lib_sets.items():
+                    if bin_name in _names:
+                        return 'crate' if _cname == current_crate else _cname
+                return 'java_runtime'
+            return _resolve
+
+        _lib_generated_all = set(_jdk_generated_now)
+        for _names in _lib_sets.values():
+            _lib_generated_all |= _names
+
+        for _lc_name, _lc_classes in lib_crate_classes.items():
+            _lc_dir = os.path.join(out_dir, _lc_name)
+            _lc_src = os.path.join(_lc_dir, 'src')
+            _lc_resolver = _make_lib_resolver(_lc_name)
+            # E0761 预检：snake 类名与同目录子包目录同名时改 _t 后缀（与 JDK 循环同规则）
+            _lc_pkg_dirs: dict[str, set[str]] = {}
+            for _lc_ci in _lc_classes:
+                _parent = _lc_src
+                for _part in _lc_ci.name.split('/')[:-1]:
+                    _lc_pkg_dirs.setdefault(_parent, set()).add(_part)
+                    _parent = os.path.join(_parent, _part)
+            for _lc_ci in sorted(_lc_classes, key=lambda c: c.name):
+                *_lc_pkg_parts, _lc_cls_name = _lc_ci.name.split('/')
+                _lc_mod = to_snake(_lc_cls_name)
+                _lc_parent_dir = os.path.join(_lc_src, *_lc_pkg_parts)
+                if _lc_mod in _lc_pkg_dirs.get(_lc_parent_dir, set()):
+                    _lc_mod = _lc_mod + '_t'
+                _lc_path = os.path.join(_lc_parent_dir, _lc_mod + '.rs')
+                _em = ClassEmission(binary_name=_lc_ci.name, crate_prefix='java_runtime',
+                                    path=_lc_path, crate_name=_lc_name)
+                _em.text = _gen_class_rs(
+                    _lc_ci, registry=registry,
+                    user_crate_prefix='java_runtime',
+                    call_chain=visited_methods,
+                    new_format_map=new_format_map,
+                    workspace_root=out_dir,
+                    full_impl_classes=full_impl_classes,
+                    generated_classes=_lib_generated_all,
+                    emission=_em,
+                    crate_prefix_resolver=_lc_resolver,
+                    java_visibility=True)
+                emissions[_lc_ci.name] = _em
+            # lib.rs：顶层包模块树（sorted 确定性；_mod_decl 定义在函数后段，此处内联同规则）
+            _lc_top_pkgs = sorted({ci.name.split('/')[0]
+                                   for ci in _lc_classes if '/' in ci.name})
+            _lib_rs = ['#![allow(unused_variables, unused_mut, dead_code, '
+                       'non_snake_case, unused_imports, non_camel_case_types, '
+                       'non_upper_case_globals, static_mut_refs, ambiguous_glob_reexports)]']
+            _lib_rs += [f'pub mod {"r#" + p if p in _RUST_KEYWORDS else p};'
+                        for p in _lc_top_pkgs]
+            _write(os.path.join(_lc_src, 'lib.rs'), '\n'.join(_lib_rs) + '\n')
+            # Cargo.toml：crate-type=["lib"]，依赖前面的 lib crate（插入序）
+            _lc_deps = ['java_runtime    = { path = "../java_runtime" }',
+                        f'java_rta_macros = {{ path = "{_MACROS_CRATE}" }}']
+            for _prev in lib_crate_classes:
+                if _prev == _lc_name:
+                    break
+                _lc_deps.append(f'{_prev:<15} = {{ path = "../{_prev}" }}')
+            _write(os.path.join(_lc_dir, 'Cargo.toml'), '\n'.join([
+                '[package]',
+                f'name = "{_lc_name}"',
+                f'version = "{_scratch_pkg_version(_lc_dir)}"',
+                'edition = "2021"',
+                '',
+                '[lib]',
+                f'name = "{_lc_name}"',
+                'path = "src/lib.rs"',
+                'crate-type = ["lib"]',
+                '',
+                '[dependencies]',
+                *_lc_deps,
+                '',
+                '[lints.rust]',
+                'unused_parens = "allow"',
+                'unused_braces = "allow"',
+                'dead_code = "allow"',
+                'unused_assignments = "allow"',
+                'unused_variables = "allow"',
+                'unused_mut = "allow"',
+                'unused_imports = "allow"',
+                'non_snake_case = "allow"',
+                'non_camel_case_types = "allow"',
+                'non_upper_case_globals = "allow"',
+                'unreachable_code = "allow"',
+                'unreachable_patterns = "allow"',
+                '',
+            ]))
+
     def _mod_decl(name: str) -> str:
         """生成 pub mod 声明，对 Rust 关键字用 r# 转义。"""
         safe = f'r#{name}' if name in _RUST_KEYWORDS else name
@@ -298,13 +408,17 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         safe = f'r#{name}' if name in _RUST_KEYWORDS else name
         return f'pub use {safe}::*;'
 
-    def _write_jdk_mod_tree() -> None:
-        """JDK 类文件全部落盘后调用：mod.rs 如实声明磁盘上的全部模块。"""
+    def _write_jdk_mod_tree(src_root: str | None = None) -> None:
+        """类文件全部落盘后调用：mod.rs 如实声明磁盘上的全部模块。
+
+        src_root 参数化（lib crate 的 src 复用同一逻辑：陈旧清扫 / 磁盘重建 /
+        companion 声明 / glob 再导出），默认 java_runtime/src（既有行为不变）。"""
+        _src_root = jdk_src if src_root is None else src_root
         # 陈旧生成文件清除：带生成标记（java_rta_macros::java_class）、但本轮未写入的
         # .rs 是同 scratch 上次运行的幸存者。若不清除，下方的磁盘扫描会把它们的模块
         # 声明重新挂进 mod.rs，与手写 companion（E0592，如 unsafe_.rs + unsafe__impl.rs）
         # 或本轮闭包冲突。手写文件无生成标记，不受影响。
-        for _root_sweep, _dirs_sweep, _files_sweep in os.walk(jdk_src):
+        for _root_sweep, _dirs_sweep, _files_sweep in os.walk(_src_root):
             for _fname_sweep in _files_sweep:
                 if not _fname_sweep.endswith('.rs') or _fname_sweep in ('lib.rs', 'mod.rs'):
                     continue
@@ -317,14 +431,14 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                             os.remove(_fpath_sweep)
                 except Exception:
                     pass  # 读取失败时保守保留，交由 mod 树扫描处理
-        # 从磁盘全量重建 jdk_mod_tree：mod.rs 如实声明磁盘上的全部模块。
+        # 从磁盘全量重建 mod 树：mod.rs 如实声明磁盘上的全部模块。
         # 磁盘内容 = 手写 overlay（runtime/ 复制进来的 object.rs、function 存根、
         # companion）+ 本次生成的类文件 + 同 scratch 上次运行的幸存文件。
-        # 用作用域内的 jdk_mod_tree 直接写 mod.rs 会抹掉其余文件的声明（E0432/E0433）。
+        # 用作用域内的 mod 树直接写 mod.rs 会抹掉其余文件的声明（E0432/E0433）。
         # 扫描收集全部 .rs，自底向上传播目录，只声明有文件的目录（避免 E0583）。
         jdk_mod_tree: dict[str, set[str]] = {}
-        if os.path.isdir(jdk_src):
-            for root, _dirs, files in os.walk(jdk_src):
+        if os.path.isdir(_src_root):
+            for root, _dirs, files in os.walk(_src_root):
                 for fname in files:
                     if not fname.endswith('.rs') or fname in ('lib.rs', 'mod.rs'):
                         continue
@@ -348,7 +462,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             while _changed:
                 _changed = False
                 for _dp in list(jdk_mod_tree.keys()):
-                    if _dp == jdk_src:
+                    if _dp == _src_root:
                         continue
                     _par = os.path.dirname(_dp)
                     _dn  = os.path.basename(_dp)
@@ -361,7 +475,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
 
         # 中间 mod.rs（jdk 子包）：pub mod + pub use *（使 glob import 能拿到类型）
         for dir_path, children in jdk_mod_tree.items():
-            if dir_path == jdk_src:
+            if dir_path == _src_root:
                 continue
             mod_lines = ['#![allow(ambiguous_glob_reexports)]']
             for c in sorted(children):
@@ -497,20 +611,33 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 写用户类文件
     user_pkg_paths = jdk_crate_pkg_paths if jdk_class_infos else None
     _user_gen_jdk = {ci.name for ci in jdk_class_infos} if jdk_class_infos else None
+    # lib 模式：用户类引用 lib crate 类 + JDK 闭包，按目标 crate 定向
+    _user_resolver = None
+    if lib_crate_classes:
+        def _user_resolve(bin_name: str) -> str:
+            for _cname, _names in _lib_sets.items():
+                if bin_name in _names:
+                    return _cname
+            return 'java_runtime'
+        _user_resolver = _user_resolve
+        _user_gen_jdk = (_user_gen_jdk or set()) | _lib_generated_all
+        user_pkg_paths = None
     for ci in class_infos:
         file_path, _, _ = layout[ci.name]
-        _em = ClassEmission(binary_name=ci.name, crate_prefix='java_runtime', path=file_path)
+        _em = ClassEmission(binary_name=ci.name, crate_prefix='java_runtime',
+                            path=file_path, crate_name='user')
         _em.text = _gen_class_rs(ci, registry=registry,
                                  jdk_crate_pkg_paths=user_pkg_paths,
                                  user_crate_prefix='java_runtime',
                                  new_format_map=new_format_map,
                                  workspace_root=out_dir,
                                  full_impl_classes=full_impl_classes,
-                                 conflict_map=conflict_map if jdk_class_infos else None,
-                                 skipped_classes=skipped_classes if jdk_class_infos else None,
+                                 conflict_map=None if _user_resolver else (conflict_map if jdk_class_infos else None),
+                                 skipped_classes=None if _user_resolver else (skipped_classes if jdk_class_infos else None),
                                  user_sibling_imports=_sibling_imports.get(ci.name),
                                  generated_classes=_user_gen_jdk,
-                                 emission=_em)
+                                 emission=_em,
+                                 crate_prefix_resolver=_user_resolver)
         emissions[ci.name] = _em
 
     # G-10 生成期断言：invokedynamic 实现方法的「调用点引用名 ↔ 定义名」恒等，
@@ -530,6 +657,13 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     for _em in emissions.values():
         _write(_em.path, _em.text)
     _write_jdk_mod_tree()
+    # lib crate 的包 mod 树（同一逻辑：陈旧清扫 / 磁盘重建 / glob 再导出）
+    for _lc_name in (lib_crate_classes or {}):
+        _write_jdk_mod_tree(os.path.join(out_dir, _lc_name, 'src'))
+    _complete_jrt_lib_rs(out_dir)
+
+
+
 
     # 中间 mod.rs（用户子包）
     for dir_path, children in user_mod_tree.items():
@@ -598,6 +732,13 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '',
         ]
         _write(os.path.join(user_src, 'main.rs'), '\n'.join(main_lines))
+        _user_dep_lines = [
+            'java_runtime    = { path = "../java_runtime" }',
+            f'java_rta_macros = {{ path = "{_MACROS_CRATE}" }}',
+        ]
+        # lib 模式：用户 bin crate 消费全部 lib crate（jar 输入的交付形态）
+        for _lc_dep in (lib_crate_classes or {}):
+            _user_dep_lines.append(f'{_lc_dep:<15} = {{ path = "../{_lc_dep}" }}')
         cargo_toml_lines = [
             '[package]',
             'name = "user"',
@@ -609,8 +750,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             'path = "src/main.rs"',
             '',
             '[dependencies]',
-            'java_runtime    = { path = "../java_runtime" }',
-            f'java_rta_macros = {{ path = "{_MACROS_CRATE}" }}',
+            *_user_dep_lines,
             '',
             '[lints.rust]',
             'unused_parens = "allow"',
@@ -632,9 +772,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 5. scratch workspace 根 Cargo.toml（幂等，每次覆写相同内容）
     #    java_rta_macros 不复制进 scratch，作为 runtime/ 的 path 依赖参与编译
     #    （绝对路径稳定 → 共享 CARGO_TARGET_DIR 下指纹不变，宏与 syn/quote 缓存命中）
+    _members = ['java_runtime', *(lib_crate_classes or {}), 'user']
     _write(os.path.join(out_dir, 'Cargo.toml'), '\n'.join([
         '[workspace]',
-        'members = ["java_runtime", "user"]',
+        f'members = {repr(_members).replace("'", '"')}',
         'resolver = "2"',
         '',
         '[profile.release]',
@@ -647,4 +788,38 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
 
     if jdk_class_infos:
         print(f'[codegen] JDK 翻译 → {len(jdk_class_infos)} 个类')
+    for _lc_name, _lc_classes in (lib_crate_classes or {}).items():
+        print(f'[codegen] lib crate {_lc_name} → {len(_lc_classes)} 个类')
     print(f'[codegen] Cargo workspace → {out_dir}/')
+
+
+def _complete_jrt_lib_rs(out_dir: str) -> None:
+    """scratch java_runtime/src/lib.rs 的顶层模块补全。
+
+    手写 lib.rs（runtime/ 真源的 scratch 副本）只声明既有闭包出现过的顶层包
+    （java/jdk/sun + 基础设施）。jar 输入模式的库闭包会首次拉入新顶层根
+    （hamcrest beans→com/（sun.beans）、xml→javax/）——占位目录由 codegen
+    落盘，但 mod 声明缺失使整 crate E0583/E0433。按磁盘实际存在的顶层包目录
+    补声明到 scratch 副本（不碰 runtime/ 真源；非 jar 路径的三根已声明，零追加）。
+    """
+    _lib_rs = os.path.join(out_dir, 'java_runtime', 'src', 'lib.rs')
+    _src_root = os.path.join(out_dir, 'java_runtime', 'src')
+    if not os.path.isfile(_lib_rs) or not os.path.isdir(_src_root):
+        return
+    with open(_lib_rs, encoding='utf-8') as _f:
+        _text = _f.read()
+    _declared: set[str] = set()
+    for _m in re.finditer(r'^\s*(?:pub\s+)?mod\s+(r#\s*)?(\w+)\s*;', _text, re.M):
+        _declared.add(_m.group(2))
+    _missing: list[str] = []
+    for _name in sorted(os.listdir(_src_root)):
+        if (_name in _declared or not _name.isidentifier()
+                or not os.path.isdir(os.path.join(_src_root, _name))):
+            continue
+        if os.path.isfile(os.path.join(_src_root, _name, 'mod.rs')):
+            _safe = f'r#{_name}' if _name in _RUST_KEYWORDS else _name
+            _missing.append(f'pub mod {_safe};')
+    if _missing:
+        with open(_lib_rs, 'a', encoding='utf-8') as _f:
+            _f.write('\n// jar 输入模式：新顶层包根（按磁盘实际目录补全，非手写清单成员）\n'
+                     + '\n'.join(_missing) + '\n')

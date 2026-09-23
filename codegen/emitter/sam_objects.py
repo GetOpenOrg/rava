@@ -59,10 +59,11 @@ class SamSpec:
 
 
 class _PathCtx:
-    """class_use_path 所需的最小 emission 视图（crate_prefix）。"""
+    """class_use_path 所需的最小 emission 视图（crate_prefix + crate_name）。"""
 
-    def __init__(self, crate_prefix: str):
+    def __init__(self, crate_prefix: str, crate_name: str = ''):
         self.crate_prefix = crate_prefix
+        self.crate_name = crate_name
 
 
 # 本轮全部可合成接口（{iface_bin: SamSpec}）；站点（sim/dynamic.py）与合成
@@ -213,7 +214,7 @@ def _jdk_iface_handwritten(iface_bin: str) -> bool:
 
 
 def prescan(registry: dict, jdk_class_infos: list, user_class_infos: list,
-            full_impl_classes: set) -> None:
+            full_impl_classes: set, lib_crate_classes: dict | None = None) -> None:
     """预扫描全部字节码的 invokedynamic 站点，得出可合成接口集。
 
     必须在类文本生成（站点发射）之前调用：站点需要即时判定走合成对象装箱
@@ -223,8 +224,15 @@ def prescan(registry: dict, jdk_class_infos: list, user_class_infos: list,
 
     user_names = {ci.name for ci in user_class_infos}
     _user_class_names = frozenset(user_names)
-    _path_ctx = {name: _PathCtx('java_runtime' if name in user_names else 'crate')
-                 for name in registry}
+    # lib crate 归属（jar 输入模式）：SAM 接口在 lib crate 时，站点构造路径按
+    # 目标 crate 定向（user/bin 依赖全部 lib crate；同 crate 用 crate::）
+    _lib_crate_of: dict[str, str] = {
+        ci.name: cname for cname, classes in (lib_crate_classes or {}).items()
+        for ci in classes}
+    _path_ctx = {name: _PathCtx(
+        'java_runtime' if name in user_names else 'crate',
+        _lib_crate_of.get(name, ''))
+        for name in registry}
 
     candidates: set[str] = set()
     for ci in list(user_class_infos) + list(jdk_class_infos):
@@ -264,8 +272,11 @@ def site_ctor_path(iface_bin: str, current_class: str) -> 'str | None':
     if spec is None:
         return None
     from .inherited_gen import class_use_path
-    crate_prefix = 'java_runtime' if current_class in _user_class_names else 'crate'
-    return class_use_path(iface_bin, crate_prefix, _path_ctx) + '__Lambda::new'
+    _caller_em = _path_ctx.get(current_class)
+    _recv_crate = (getattr(_caller_em, 'crate_name', '')
+                   or ('user' if current_class in _user_class_names else 'java_runtime'))
+    crate_prefix = 'crate' if _recv_crate == 'java_runtime' else 'java_runtime'
+    return class_use_path(iface_bin, crate_prefix, _path_ctx, _recv_crate) + '__Lambda::new'
 
 
 def record_site(iface_bin: str, sam_desc: str, current_class: str) -> None:
@@ -282,9 +293,13 @@ def record_site(iface_bin: str, sam_desc: str, current_class: str) -> None:
 # ── 合成对象文本生成（全部类文本生成后、落盘前）─────────────────────────
 
 def _quote_path(jbin: str, em, emissions: dict) -> str:
-    """接口 J 在合成对象所在文件（接口 I 的文件）中的全限定类型路径。"""
+    """接口 J 在合成对象所在文件（接口 I 的文件）中的全限定类型路径。
+
+    recv_crate = 宿主文件的 crate：J 与宿主同 crate（junit4 接口文件内
+    引用本 crate 接口）走 crate::，跨 crate 走目标 crate 名。"""
     from .inherited_gen import class_use_path
-    return class_use_path(jbin, em.crate_prefix, emissions)
+    return class_use_path(jbin, em.crate_prefix, emissions,
+                          getattr(em, 'crate_name', ''))
 
 
 def _entry_sig_parts(em_method, jci, registry: dict) -> 'tuple[str, list[str], list[str]] | None':
