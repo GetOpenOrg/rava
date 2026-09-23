@@ -84,6 +84,19 @@ impl System {
         Ok(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64)
     }
 
+    /// native `identityHashCode(Object)I`：对象身份哈希（与内容无关，
+    /// `Object.hashCode` 的默认语义）。JLS 未规定算法，仅要求同对象多次调用
+    /// 一致、不同对象尽量不同；载体经 vtable `__identity()`（存储地址）取身份
+    /// 后截断到 32 位——与 JVM 的 32 位身份哈希同宽度（碰撞行为等价级）。
+    /// null 载体 → 0（JDK 语义）。
+    #[jvm_native]
+    pub fn identityHashCode(x: Object) -> Result<i32> {
+        if x.0.is_jvm_null() {
+            return Ok(0);
+        }
+        Ok(x.0.__identity() as i32)
+    }
+
     /// static lineSeparator：JDK 在 initPhase1 中由 line.separator 属性赋值（不经 `<clinit>`）；
     /// 原生二进制直接给出宿主平台的行分隔符。签名与宏生成的 static 访问器一致（`Result<T>`）。
     #[jvm_native]
