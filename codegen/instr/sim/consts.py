@@ -24,7 +24,10 @@ def sim_consts(ins, sim, class_name, registry) -> bool:
             # javap 已经以 "..." 格式给出（operand 是完整的带引号字符串），直接用
             sim.push(Lit(f"String::from({operand})"), RsNamed('String'))
         elif comment.startswith('String '):
-            lit = _escape_str(comment[7:].rstrip('\n'))
+            # comment 由 classfile._ldc_str 构造，值为常量池解码原样（无行尾
+            # 换行附加）——不得 rstrip：尾部 \n 是常量内容（文本块尾行、
+            # joining("\n") 等），剥掉会把 "\n" 常量发射成空串
+            lit = _escape_str(comment[7:])
             sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         elif comment.startswith('int '):    sim.push(Lit(comment[4:].strip() + 'i32'), I32)
         elif comment.startswith('float '): sim.push(Lit(_float_lit(comment[6:].strip(), 'f32')), F32)
