@@ -590,3 +590,67 @@ def scan_used_vtable_imports(method_blocks: list[str],
             if _vt_pkg is not None:
                 _extra_vt_imports.append(f"use {_vt_pkg}::{_vt_name};")
     return _extra_vt_imports
+
+
+def scan_supplementary_iface_imports(supp_blocks: list[str],
+                                     cross_imports: list[str], struct_name: str,
+                                     registry: dict | None, _prefix: str,
+                                     crate_prefix_resolver=None) -> list[str]:
+    """接口伴生契约补发声明的类型兜底导入（E0407 修复配套）。
+
+    补发声明（模型缺席的 Iface__VTable 伴生成员）的签名类型来自手写伴生
+    文件，不经 collect_referenced 的类模型收集——在此按发射文本扫描标识符，
+    为「registry 已知短名且未导入」的类型补 use 语句（与
+    scan_used_vtable_imports 同一落位：parts 尾部模块级 use，合法 Rust）。
+
+    prelude / 原语 / 本类短名不导入（prelude 由生成文件头部统一定义：
+    JArray / Result / Object / String / Rc / RefCell 等）。
+    """
+    _PRELUDE_NAMES = frozenset({
+        'JArray', 'JvmError', 'Result', 'Object', 'ObjectVTable', 'String',
+        'Rc', 'RefCell', 'Vec', 'Box', 'Option', 'MonitorGuard',
+        'Object__clone_base', '_is_jnull',
+    })
+    _BUILTIN_NAMES = frozenset({
+        'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64', 'usize',
+        'f32', 'f64', 'bool', '()', 'self',
+    })
+    _extra: list[str] = []
+    if not supp_blocks or not registry:
+        return _extra
+    _text = '\n'.join(supp_blocks)
+    _used = set(_re.findall(r'\b([A-Z]\w+)\b', _text))
+    _used -= _PRELUDE_NAMES | _BUILTIN_NAMES
+    if not _used:
+        return _extra
+    # 短名 → registry binary（确定性：排序后取首；同短名多类时补发签名的
+    # 伴生文件与目标接口同 crate，任一同名类均可解析为合法 use——选首个）
+    _short_to_bin: dict[str, str] = {}
+    for _bn in sorted(registry):
+        if not _bn.count('/'):
+            continue
+        _short = _bn.rsplit('/', 1)[-1].replace('$', '_')
+        _short_to_bin.setdefault(_short, _bn)
+    _imported_simples: set[str] = set()
+    _simple_to_pkg: dict[str, str] = {}
+    for _ci_line in cross_imports:
+        _m = _re.match(r'use (.+)::(\w+);$', _ci_line.strip())
+        if _m:
+            _imported_simples.add(_m.group(2))
+            _simple_to_pkg.setdefault(_m.group(2), _m.group(1))
+    for _name in sorted(_used):
+        if _name == struct_name or _name in _imported_simples:
+            continue
+        _bn = _short_to_bin.get(_name)
+        if _bn is None:
+            continue
+        _pkg = _simple_to_pkg.get(_name)
+        if _pkg is None:
+            _rparts = _bn.split('/')
+            _rpkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p
+                              for p in _rparts[:-1])
+            _rprefix = (crate_prefix_resolver(_bn)
+                        if crate_prefix_resolver is not None else _prefix)
+            _pkg = f"{_rprefix}::{_rpkg}"
+        _extra.append(f"use {_pkg}::{_name};")
+    return _extra
