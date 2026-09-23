@@ -106,59 +106,27 @@ def _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
             sim.push(Var(_v_p), RsNamed(_rust_ret_p))
         return True
 
-    # JVM 数组.getClass() → Class::for_class("<数组描述符>")（元素类型静态可知）。
-    # 调用方（Arrays.copyOf / copyOfRange）用结果与 Object[].class 比较：
-    # `== Object[].class` 为真 → 走 new Object[n] 分支（与 JVM 一致）。
-    # 此前发射 Object::default()（null），null 与任何 Class 不等 → 恒走
-    # Array.newInstance(newType.getComponentType()) 分支 → null Class 解引用 NPE。
-    # 元素类型含无法解析的形态（类型变量等）时保持 null 兜底（调用方按 Object[] 语义
-    # 使用结果的场景已由描述符路径覆盖）。
+    # JVM 数组.getClass() → Object::from(数组).0.getClass()（动态分派）。
+    # 数组类由创建时的元素类型决定（JLS §10.8），接收者的静态元素类型
+    # （协变上转后是祖先）拿不到运行时数组名——JArray 的 ObjectVTable::
+    # getClass 对协变视图委托源数组，`String[]` 以 `Object[]` 形态流转时
+    # 仍取 `[Ljava.lang.String;`。Class 一律经 for_class 的同一缓存条目，
+    # `== Object[].class`（ldc 类字面量）身份比较成立——Arrays.copyOf /
+    # copyOfRange 的同型判定不受影响（异型数组按 JVM 语义不再误判为
+    # Object[]）。
     if mname == 'getClass' and obj_ty.startswith('JArray<'):
-        # [equiv-audit] class-literal（S-5）：数组 getClass 的
-        # Class::for_class 早路径——每次构造新 Class 对象，同一性近似
+        # [equiv-audit] class-literal（S-5）：数组 getClass 的发射早路径
+        #（动态分派后数组侧同一性已精确；计数维持发射点口径）
         equiv_audit.record('class-literal')
-        _desc = _jarray_type_desc(obj_ty, registry)
-        if _desc is not None:
-            v = sim.fresh()
-            sim.emit(RawStmt(
-                f"let {v}: Class = Class::for_class(String::from(\"{_desc}\"));"))
-            sim.push(Var(v), RsNamed('Class'))
-            return True
+        _recv = obj_e[1:] if obj_e.startswith('&') else obj_e
         v = sim.fresh()
-        sim.emit(RawStmt(f"let {v}: Object = Object::default();"))
-        sim.push(Var(v), RsNamed('Object'))
+        sim.emit(RawStmt(
+            f"let {v}: Class = Object::from(Clone::clone(&{_recv})).0.getClass()?;"))
+        sim.push(Var(v), RsNamed('Class'))
         return True
 
     return False
 
-
-_PRIM_DESC: dict[str, str] = {
-    'i8': 'B', 'i16': 'S', 'i32': 'I', 'i64': 'J',
-    'f32': 'F', 'f64': 'D', 'bool': 'Z', 'u16': 'C',
-}
-
-
-def _jarray_type_desc(arr_rust: str, registry: dict | None) -> str | None:
-    """Rust 数组类型串 → JVM 数组描述符（`JArray<JArray<String>>` → `[[Ljava/lang/String;`）。
-    元素类型无法解析（类型变量 / 未知容器）→ None。"""
-    elem = arr_rust[len('JArray<'):-1]
-    # 嵌套数组递归（JArray<...> 内层可能带空格）
-    if elem.startswith('JArray<') and elem.endswith('>'):
-        inner = _jarray_type_desc(elem, registry)
-        return None if inner is None else '[' + inner
-    if elem in _PRIM_DESC:
-        return '[' + _PRIM_DESC[elem]
-    elem_base = elem.split('<', 1)[0].strip()
-    if elem_base == 'Object':
-        # java/lang/Object 不经 registry 翻译（运行时根类），描述符恒可知；
-        # binary 名引用 constants.OBJECT_CLASS（Python 侧不散置 JDK 类名字面量）
-        from ..constants import OBJECT_CLASS as _OBJECT_CLASS
-        return '[L' + _OBJECT_CLASS + ';'
-    from .hierarchy import _rust_type_to_binary
-    bin_name = _rust_type_to_binary(elem_base, registry)
-    if not bin_name:
-        return None
-    return '[L' + bin_name + ';'
 
 
 def _emit_object_direct_call(sim, obj_e, args, rust_mname, rust_ret) -> bool:

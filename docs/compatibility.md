@@ -47,7 +47,7 @@
 | identity hash / 默认 `Object.hashCode` | 近似等价 | 未实测（166 无 identityHashCode 用例） | S-6 |
 | `String.intern` 同一性（`==`） | 语义等价 | **已实测**（TestStringCompare PASS：interned==lit=true、lit==heap=false——runtime 全局驻留表，字面量路径 `From<&str>` 与 `intern()` 同表取规范实例；拼接走 `from_owned` 不入表）。TestStringEdge 同机制行待复跑（invoke 域预存编译断，与本修无关） | ~~S-6 intern~~ 已修（identity-hash 同条目另一半仍未实测） |
 | null 数组表示 / 数组 NPE | 近似等价 | 未实测 | S-2.1 |
-| `getClass` / 类字面量同一性 | 近似等价（完整终态后为语义等价） | 基础路径 PASS（TestClassLiteral）；同一性未实测 | S-5 |
+| `getClass` / 类字面量同一性 | 近似等价（完整终态后为语义等价） | 基础路径 PASS（TestClassLiteral）；**数组 getClass 已实测**（TestArrayCovariance PASS：`arr.getClass()` 动态分派——JArray 协变视图委托源数组取运行时元素类型，`getSimpleName` 按 JDK 数组形态命名（`String[]`/`int[][]`）；Class 一律经 for_class 缓存，`== X[].class` 身份成立）；非数组类字面量同一性未实测 | S-5（数组臂已修） |
 | record `hashCode`（31 多项式） | 近似等价 | 未实测（TestRecord 基础路径 PASS） | S-7 |
 | 栈回溯 / stack frames | 近似等价（档位：帧数真实、内容近似） | **已实测**（S-19 #5，TestCustomException PASS；探针首四帧与 JDK 21 同名同序，帧内容为 Rust 栈符号属声明边界） | ~~S-19 #5~~ 已修 |
 | 数组负长度 `NegativeArraySizeException` | 近似等价 | 未实测 | S-8 |
@@ -83,7 +83,7 @@
 | `intern-identity` | `String.intern` + `==` | ~~近似等价~~ 已修（runtime 驻留表；计数维持发射点口径） | ~~S-6~~ |
 | `null-array` | JArray null 表示 / null 数组访问 | 近似等价 | S-2.1 |
 | `boxed-null` | 装箱类型 null 路径 | 近似等价 | S-3 |
-| `class-literal` | `getClass`/类字面量同一性 | 近似等价 | S-5 |
+| `class-literal` | `getClass`/类字面量同一性 | 近似等价（数组 getClass 臂已动态化，S-5 数组侧已修；计数维持发射点口径） | S-5 |
 | `record-hash` | record `hashCode` | 近似等价 | S-7 |
 | `neg-array` | `NegativeArraySizeException` | 近似等价 | S-8 |
 | `field-npe` | null 接收者 `getfield`/`putfield` | 近似等价 | S-9 |

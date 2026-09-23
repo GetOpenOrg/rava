@@ -296,10 +296,16 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
     /// 数组类的 Class 对象（JLS §10.8：`new String[0].getClass()` 是
     /// `[Ljava.lang.String;`）。binary name 为 JVM 描述符形态、斜线键——与
     /// ldc 的 `X[].class`（`Class::for_class("[Ljava/lang/String;")`）落同一
-    /// 缓存条目，`a.getClass() == X[].class` 的身份语义由此成立。基本元素
+    /// 缓存条目，`a.getClass() == X[].class` 的身份语义由此成立。协变视图
+    /// 委托源数组（数组类由创建时的元素类型决定，与观察形态无关）；基本元素
     /// 静态取描述符字符；引用元素经元素 vtable 的 getClass 递归取得（嵌套
     /// 数组因此正确：`JArray<JArray<T>>` → `[[T`）。
     fn getClass(&self) -> crate::error::Result<crate::java::lang::Class> {
+        // 协变视图：`String[]` 以 `Object[]` 形态流转时 getClass 仍是
+        // `[Ljava.lang.String;`——委托源数组取运行时元素类型。
+        if let Repr::Covariant(view) = &*self.0 {
+            return view.origin.0.getClass();
+        }
         if let Some(d) = Self::primitive_elem_descriptor() {
             return Ok(crate::java::lang::Class::for_class(
                 crate::java::lang::String::from(format!("[{}", d).as_str())));
