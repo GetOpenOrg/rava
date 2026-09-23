@@ -207,7 +207,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 必须先于类文本生成：站点（sim/dynamic.py）发射时即需判定合成对象装箱
     # 还是回落闭包装箱，合成可行性（接口发射/手写覆盖/函数式）此刻定案。
     _sam_objects.prescan(registry, jdk_class_infos or [], class_infos,
-                         full_impl_classes)
+                         full_impl_classes,
+                         lib_crate_classes=lib_crate_classes)
 
     # 写 JDK 翻译文件，构建 jdk mod 树
     jdk_mod_tree: dict[str, set[str]] = {}

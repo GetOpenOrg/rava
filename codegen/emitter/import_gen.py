@@ -207,7 +207,12 @@ def collect_referenced(ci, registry, generated_classes) -> set[str]:
     # （dispatch 链 downcast_ref::<SubType>() 需要 SubType 在作用域内）
     if registry:
         from ..instr.hierarchy import _get_all_subtypes_ordered as _gaso
-        from ..type_map import is_jdk as _is_jdk
+        # JDK 命名空间判定（真前缀）：is_jdk 的 '/' 存在性检查在 jar 输入模式下把
+        # lib crate 类也算作 JDK（registry 跨 crate 合并后，AssertionError 的
+        # junit 子类漏进 hamcrest 文件的引用集 → 幽灵 use junit4::，E0433）。
+        # 既有 .java 路径等价（旧 registry 只含 JDK 命名空间 + 无包用户类）。
+        _JDK_NS = ('java/', 'javax/', 'jdk/', 'sun/', 'com/sun/', 'com/oracle/',
+                   'org/xml/', 'org/w3c/', 'org/ietf/')
         _iface_refs: set[str] = set()
         for _m in _scan_methods:
             for _instr in (_m.instrs or []):
@@ -225,8 +230,8 @@ def collect_referenced(ci, registry, generated_classes) -> set[str]:
                 continue
             for _sub_bin in _gaso(_iface_bin, registry):
                 _sub_bin_clean = _strip_generic(_sub_bin)
-                if _is_jdk(_iface_bin):
-                    if _is_jdk(_sub_bin_clean):
+                if _iface_bin.startswith(_JDK_NS):
+                    if _sub_bin_clean.startswith(_JDK_NS):
                         _referenced.add(_sub_bin_clean)
                 else:
                     _referenced.add(_sub_bin_clean)

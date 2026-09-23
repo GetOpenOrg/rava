@@ -361,6 +361,11 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             # CombinableMatcher.templatedListWith）：base 函数的类形参在 this
             # 擦除形态上不可推断（E0283）→ 按当前 impl 的类型形参显式给出
             base_fn += f"::<{', '.join(sim.class_type_params)}, _>"
+        # base 函数首参是 vtable 引用：宏（rewrite.rs）把字面 this/self 接收者
+        # 重写为 `&*this.vtable`；非 this 接收者（synthetic access$ 桥的参数局部，
+        # access$100 实证）宏不重写——此处按同一形态发射。
+        if obj_e not in ('this', 'self'):
+            obj_e = f'&*({obj_e}).vtable'
         all_args = [obj_e] + args
         arg_str = ', '.join(all_args)
         rust_ret = jvm_to_rust(ret, registry)

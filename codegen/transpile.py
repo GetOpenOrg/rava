@@ -175,9 +175,12 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
         extra_seed_classes=_lib_seed_classes or None)
 
     # jar 模式闭包拆分：BFS 发现集里归属 jar 的类拆到对应 lib crate（整包模式
-    # 再并入 jar 全集——wholesale 语义），其余（java/ javax/ …）留在 java_runtime
+    # 再并入 jar 全集——wholesale 语义），其余（java/ javax/ …）留在 java_runtime。
+    # dict 按 lib_specs 声明序预置——crate 依赖方向（后面的 path 依赖前面的）
+    # 是用户声明语义，不能由 BFS 发现序（哪只 jar 的类先被触达）决定。
     _lib_crate_classes: dict[str, list] = {}
     if lib_specs:
+        _lib_crate_classes = {spec.crate_name: [] for spec in lib_specs}
         _jdk_only: list = []
         for ci in jdk_class_infos:
             _crate = _crate_of.get(ci.name)
