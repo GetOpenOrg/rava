@@ -90,6 +90,7 @@ class TryCatchPlan:
             handler_idx = self._off2idx.get(handler_pc)
             if handler_idx is None:
                 continue
+            h['ranges'] = self._coalesce_return_gaps(h['ranges'])
             key = self._merge_ranges(h['ranges'])
             g = by_ranges.get(key)
             if g is None:
@@ -138,6 +139,40 @@ class TryCatchPlan:
             else:
                 merged.append([s, e])
         return tuple((s, e) for s, e in merged)
+
+    # return 家族指令：不抛异常、终结控制流（并入受护区间不改捕获行为）
+    _RETURN_OPS = frozenset(('ireturn', 'lreturn', 'freturn', 'dreturn',
+                             'areturn', 'return'))
+
+    def _coalesce_return_gaps(self, ranges: set) -> set:
+        """合并「裸 return 间隙」（javac 区间精确化的逆操作）。
+
+        javac 把不抛异常的指令（xreturn/goto）剔出受护区间：循环的
+        continue/retry goto 会给同一 try 开出以单条 goto 为首块的新区间——该块
+        被 `_thread_jumps` 当 trampoline 消除后，`_split_disjoint_try_ranges`
+        的补装前提（区间首块存在）不成立 → CfgError → panic 存根（实测固定
+        卡 `AbstractMap.equals` 与 `OIS$BlockDataInputStream.readBlockHeader`，
+        7680 方法级闭包每闭包 2 个语义缺口）。
+
+        同 handler 排序相邻区间，若间隙内全部指令均为 xreturn：并入受护区间。
+        JVM 语义等价——return 不抛异常，扩大的区间在 return 指令处终结，
+        捕获行为不变；合并后多区间 try 退化为与 Java 源码形状同构的单区间
+        （「try 包循环」），走既有全绿路径。record 卫兵形态零影响（其间隙是
+        实指令，不满足合并条件，继续走 325d7da 的区间分裂路径）。"""
+        rs = sorted(ranges)
+        if len(rs) < 2:
+            return ranges
+        out = [rs[0]]
+        for s, e in rs[1:]:
+            ps, pe = out[-1]
+            gap_all_return = all(
+                ins.opcode in self._RETURN_OPS
+                for ins in self._instrs if pe <= ins.offset < s)
+            if gap_all_return:
+                out[-1] = (ps, max(pe, e))
+            else:
+                out.append((s, e))
+        return set(out)
 
     # ── 查询接口 ────────────────────────────────────────────────────
     def __bool__(self) -> bool:
