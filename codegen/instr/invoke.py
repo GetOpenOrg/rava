@@ -76,6 +76,11 @@ def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None
         elif p in ('C',):
             # Java char (u16) 必须转为 Rust char 才能以字符形式格式化
             raw = f"char::from_u32({raw} as u32).unwrap_or('?')"
+        elif p in ('Z',):
+            # Java 布尔拼接（JLS §5.1.11）呈现 true/false：布尔短路表达式经
+            # 分支合并以 i32（1/0）流动，栈类型仍为 bool 时保持原样
+            if render_type(e_ty) != 'bool':
+                raw = f'({raw} != 0)'
         elif (p.startswith('L') or p.startswith('[')) and p != 'Ljava/lang/String;':
             # 引用类型参数：Java 语义是 String.valueOf(x)（虚 toString 分派，S-3.1
             # 后装箱值是翻译对象）。预物化为临时变量（toString 返回 Result，

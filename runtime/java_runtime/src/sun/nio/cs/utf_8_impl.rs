@@ -23,4 +23,16 @@ impl UTF_8 {
         }
         Ok(INSTANCE.with(Clone::clone))
     }
+
+    /// `newDecoder()`：JDK 返回 UTF_8$Decoder（CharsetDecoder 协议机器）。
+    /// POSIX 档 A 的解码在 StreamDecoder 伴生内直连承载（见 stream_decoder_impl），
+    /// 此处返回携带 charset 引用的合成 decoder（消费面只读 dec.charset() 构造
+    /// 快照）；UTF_8$Decoder 的 CoderResult 机器留档 B。
+    #[jvm_boundary]
+    pub fn __impl_newDecoder(&self) -> Result<crate::java::nio::charset::CharsetDecoder> {
+        let mut dec = crate::java::nio::charset::CharsetDecoder::default();
+        dec._init_not_null();
+        dec.__set_charset(Clone::clone(self).into());
+        Ok(dec)
+    }
 }
