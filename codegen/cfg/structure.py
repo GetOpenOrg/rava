@@ -165,13 +165,26 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
                 parent_loop = h
                 break
         parent_try = None
+        matched = False
         for t in try_nodes:
             if y in try_slots[t]:
                 continue
             g = nodes[t].group
             if (d == t or g in ctx_of(d)) and g not in ctx_of(y) and dominates(flow.idom, t, d):
-                parent_try = t
-                break
+                matched = True
+                # 候选须与 y 同词法层（ctx 相等——follower 放在 t 的 Try 之后，
+                # 词法位置即 t 所在层；不等者由放置后的一致性校验兜底报错）。
+                # 同层多候选（同一 try 组的不相连受护区间各一个节点，见
+                # codegen._split_disjoint_try_ranges 的补装）取支配链最深者：
+                # y 离开的是离它最近的区间；取首个（RPO 最外层）会把 follower
+                # 挂到别的子树，Break 越过层级界线，simplify 拆掉无引用 Block
+                # 后即成悬空标签。支配链上祖先必然 RPO 靠前，max rpo 即最近。
+                if ctx_of(t) == ctx_of(y) and (parent_try is None
+                                              or flow.rpo_index[t] > flow.rpo_index[parent_try]):
+                    parent_try = t
+                continue
+            if matched:
+                continue          # 已有支配匹配：与原「匹配即止」语义一致，不做后续记账
             if d in past_catch[t]:
                 past_catch[t].add(y)
             elif leaves_catch(t, d, y):
