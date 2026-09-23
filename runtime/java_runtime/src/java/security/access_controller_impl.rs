@@ -30,8 +30,16 @@ impl AccessController {
     /// action 为 null 时按 JVM 语义抛 NullPointerException。
     ///
     /// upcalls：经擦除 vtable 分派调用 action.run()。upcall 声明是静态的，
-    /// 动态接收者无法表达——按当前调用图唯一的 PrivilegedAction 实现者声明
+    /// 动态接收者无法表达——按当前调用图的 PrivilegedAction 实现者声明
     /// （GetBooleanAction.run，其手写体 __impl_run 再声明自己的依赖）。
+    ///
+    /// 注：接口级回调边（声明 `java/security/PrivilegedAction.run:()Ljava/lang/Object;`，
+    /// BFS 接口分派自动翻译闭包内全部实现类）已在 callchain.py 落地并验证
+    /// （FileSystems$DefaultFileSystemHolder$1 / ZoneRulesProvider$1 两例 stub 消除），
+    /// 但激活会使含休眠序列化闭包的测试（StreamBasic/PatternMatch 等，其闭包内
+    /// ObjectStreamClass.<init> 的 doPrivileged 调用点绑定匿名实现者）翻译反射
+    /// 巨闭包，暴露 blocks.py unify 域（三目合并退化接收者 E0599）等三族编译缺口
+    /// ——禁改域，待其清偿后把声明翻转为接口级（一行）。
     #[jvm_boundary(upcalls = "sun/security/action/GetBooleanAction.run:()Ljava/lang/Boolean;")]
     pub fn doPrivileged_privilegedaction(action: Object) -> Result<Object> {
         if action.0.is_jvm_null() {

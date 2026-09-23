@@ -181,6 +181,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
     seen_members: set[tuple[str, str]] = set()
     instantiated_classes: set[str] = set()   # RTA：调用链上被 new 出来的类
+    # 边界接口回调边（延迟解析：种子阶段 _load_class 尚未定义，收集后待
+    # _propagate_virtual_targets 前 drain）
+    _pending_iface_edges: list[tuple[str, str, str]] = []
 
     def _enqueue_method(key: tuple[str, str, str]) -> None:
         if key[0] in _JAVA_RUNTIME_CLASSES:
@@ -204,6 +207,13 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             elif _is_boundary_class(tcls):
                 if tcls not in _JAVA_RUNTIME_CLASSES:
                     field_discover_classes.add(tcls)
+                    # 接口级回调边的边界接口形态（RandomSupport 族先例）：upcall 目标
+                    # 声明在边界接口（java/security/PrivilegedAction 等）上时，实现类
+                    # （匿名内部类等，在公开包里由字节码翻译）无法经声明接口方法键入队。
+                    # 延迟到 _load_class 可用后解析：接口则入队方法键，使
+                    # _propagate_virtual_targets 的接口分支把闭包内全部具体实现类的
+                    # 覆盖版本（含协变桥方法）带入调用链——实现类零枚举。
+                    _pending_iface_edges.append((tcls, tmeth, tdesc))
             elif tcls.startswith(_JDK_PREFIXES):
                 _enqueue_method((tcls, tmeth, tdesc))
                 if tmeth == '<init>':
@@ -567,6 +577,27 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 _iq.extend(_ici.interfaces or [])
             return None
 
+        def _drain_iface_edges() -> None:
+            """解析延迟的边界接口回调边：目标确为接口则方法键入队。
+
+            判型解析不落 class_cache（_load_class 的缓存写入会把边界类提前
+            替换成已解析形态，改变后续 _ci_of/RTA 过滤的可见性——GetBooleanAction
+            一类非接口目标的加载副作用曾使 AbstractClassLoaderValue 从 stub 通道
+            误入方法通道）。确为接口时经 _enqueue_method → _process 正规加载。"""
+            while _pending_iface_edges:
+                _edge = _pending_iface_edges.pop()
+                _ici = class_cache.get(_edge[0])
+                if _ici is None:
+                    _data = resolver.resolve(_edge[0])
+                    if _data is None:
+                        continue
+                    try:
+                        _ici = parse_class_bytes(_data, _edge[0])
+                    except Exception:
+                        continue
+                if _ici is not None and _ici.is_interface:
+                    _enqueue_method(_edge)
+
         def _propagate_virtual_targets() -> None:
             """虚调用目标 → 运行期实际接收者类的覆盖版本。
 
@@ -574,6 +605,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             - RTA：已实例化类 X（(X, <init>, *) 在调用链上）是虚调用目标声明类的子类型时，
               (X, m, d) 入队；X 未声明则由 _process 按方法解析规则落到最近声明者
             """
+            _drain_iface_edges()
             def _ci_of(name: str):
                 """实例化类的 ClassInfo：用户类在 user_infos，JDK 类在 class_cache。"""
                 return user_infos.get(name) or class_cache.get(name)
@@ -583,7 +615,12 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 if _ci_of(x) is not None
                 and not _ci_of(x).is_interface and not _ci_of(x).is_abstract
             )
-            for cls, meth, desc in list(visited_methods):
+            # sorted：BFS 的传播与入队对集合按全序迭代——集合（visited_methods 等）
+            # 的迭代序随 PYTHONHASHSEED 漂移，会使 stub 通道 / 父类补全通道对
+            # 边缘类（AbstractClassLoaderValue 一类双通道可达者）的归属在两次
+            # 转译间翻转（闭包指纹 ±1、生成树 diff 非零）。排序后处理序确定，
+            # 闭包与生成树对哈希种子稳定。
+            for cls, meth, desc in sorted(visited_methods):
                 if meth in ('<init>', '<clinit>'):
                     continue
                 ci = class_cache.get(cls)
@@ -641,7 +678,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
-        _stub_queue: deque[str] = deque(field_discover_classes)
+        # sorted：种子序确定（集合迭代序随哈希种子漂移，见 _propagate_virtual_targets 注）
+        _stub_queue: deque[str] = deque(sorted(field_discover_classes))
         _stub_visited: set[str] = set(field_discover_classes)
 
         # 手写 _impl.rs / _ext.rs 的签名引用类型随宿主类入闭包（type-only stub 通道）。
