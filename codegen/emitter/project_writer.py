@@ -55,6 +55,25 @@ def _is_handwritten(path: str) -> bool:
 # 用于区分「本轮生成」与「同 scratch 上次运行的幸存文件」（见 _write_jdk_mod_tree 的清除段）。
 _WRITTEN_THIS_RUN: set[str] = set()
 
+# 共置手写 impl（K-3a/K-4）编译期硬引用的语料条件生成类：impl 文件名 → 同目录
+# 依赖文件元组。companion 声明以此为准——依赖不齐时 impl 整体不参与编译（其
+# 服务的原生方法回落 panic 存根），而不是产生无法解析的 mod 声明拖垮 scratch。
+# MemberName/MethodType 经 owner 的 Java 签名闭包通常恒在场，防御性列入；
+# 三 flavor 类只被 var_handle_impl 的 Rust import 引用（Java 闭包不可见），
+# 语料未触达 VarHandles 工厂时缺席是常态（如 TestStringEdge 只触达 VarHandle
+# 本体）。
+_IMPL_FILE_DEPS: dict[str, tuple[str, ...]] = {
+    'var_handle_impl.rs': (
+        'var_handle_booleans_field_instance_read_only.rs',
+        'var_handle_ints_field_instance_read_only.rs',
+        'var_handle_longs_field_instance_read_only.rs',
+    ),
+    'method_handle_natives_impl.rs': (
+        'member_name.rs',
+        'method_type.rs',
+    ),
+}
+
 
 def _write(path: str, content: str) -> None:
     """创建目录并写文件。
@@ -373,6 +392,14 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                         continue
                     # X.rs 不存在时跳过：_impl.rs 静默，不产生无法解析的 mod 声明
                     if not os.path.exists(os.path.join(dir_path, base + '.rs')):
+                        continue
+                    # 依赖闭包不齐时跳过：impl 编译期硬引用的语料条件生成类（同目录
+                    # sibling）缺席则该 impl 整体不参与编译——等价于该 impl 尚不存在，
+                    # 其服务的原生方法回落 panic 存根——而不是让 mod 声明拖着无法
+                    # 解析的 import 拖垮整个 scratch。var_handle_impl 的三条 flavor
+                    # 硬 import（FieldInstanceReadOnly 三族 try_cast 目标）即此形态。
+                    if not all(os.path.exists(os.path.join(dir_path, _dep))
+                               for _dep in _IMPL_FILE_DEPS.get(_f, ())):
                         continue
                     companion_mods.append(f'mod {_f[:-3]};')
                     # X.rs 在磁盘但不在 children（如手写 object.rs）→ 补充 pub mod 声明
