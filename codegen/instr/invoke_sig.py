@@ -440,6 +440,27 @@ def _lookup_method_sig_ret(
                             if all(_n in _builtin or _n in _reg_shorts or _n in _caller_set
                                    for _n in _re_v.findall(r'[A-Za-z_][A-Za-z0-9_]*', _sub)):
                                 return _sub
+                    # K-6b：接收者是 callee 声明接口的子接口 / 实现类（调用点经
+                    # `Iface.super 视角` 或擦除载体分派，receiver_type 不带精确实参）
+                    # → 按接收者在 registry 里的真实接口实例化（OfInt 的 extends
+                    # 实参把 OfPrimitive 的 T_ARR 定为 int[]）替换类型变量。调用侧
+                    # 返回 coerce 预期与定义侧发射签名同源（asPrimitiveArray 的
+                    # JArray<i32> 装箱为 Object，对应字节码的擦除返回 + checkcast）。
+                    _recv_ci_v = registry.get(
+                        _rust_type_to_binary(_recv_base, registry) or '')
+                    if _recv_ci_v is not None:
+                        from ..type_args import implemented_interface_views
+                        for _if_bin, _if_args in implemented_interface_views(_recv_ci_v, registry):
+                            if short_cls(_if_bin) != _callee_short:
+                                continue
+                            if len(_if_args) != len(callee_tparams):
+                                break
+                            _sub = _substitute_tvars(sig_ret, callee_tparams, _if_args)
+                            _caller_set = set(caller_tparams) if caller_tparams else set()
+                            if all(_n in _builtin or _n in _reg_shorts or _n in _caller_set
+                                   for _n in _re_v.findall(r'[A-Za-z_][A-Za-z0-9_]*', _sub)):
+                                return _sub
+                            break
                 return None
             # 手写边界方法（_impl.rs）：接口返回位置的契约是 Object（签名先于载体化）
             if _handwritten_boundary_method(cls_bin, mname) \

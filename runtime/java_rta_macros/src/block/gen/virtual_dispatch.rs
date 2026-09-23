@@ -319,6 +319,39 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                             let mut b = block.clone();
                             rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
                             if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
+                                // K-6b：参数位擦除还原——槽位签名被 vtable_erasure /
+                                // 类型形参提及 Object 化的形参，体开头以类型化局部
+                                // 遮蔽（From<Object> 还原，与 NeedsWrapper 路径的
+                                // erased_impl_call 同一边界转换语义）。判定与
+                                // erase_signature_with 同一谓词的镜像（逐位比较原
+                                // 签名 / 擦除签名 token）：定义侧「槽位签名」与
+                                // 「体执行形态」不再各自决定，调用侧 coerce 预期
+                                // （wrapper 公开方法的类型化签名）与之同源。
+                                let arg_restores: Vec<TokenStream2> = sig.inputs.iter()
+                                    .zip(erased_item_sig.inputs.iter())
+                                    .filter_map(|(o, e)| {
+                                        let (syn::FnArg::Typed(opt), syn::FnArg::Typed(ept)) = (o, e) else {
+                                            return None;
+                                        };
+                                        let syn::Pat::Ident(opi) = &*opt.pat else {
+                                            return None;
+                                        };
+                                        if same_type_tokens(&opt.ty, &ept.ty) {
+                                            return None;
+                                        }
+                                        let ident = &opi.ident;
+                                        let mut_kw = if opi.mutability.is_some() {
+                                            quote! { mut }
+                                        } else {
+                                            quote! {}
+                                        };
+                                        let orig_ty = &opt.ty;
+                                        Some(quote! {
+                                            let #mut_kw #ident: #orig_ty =
+                                                <#orig_ty as ::std::convert::From<Object>>::from(#ident);
+                                        })
+                                    })
+                                    .collect();
                                 // K-6a：擦除命中返回位（协变返回 / 具体实参位置 →
                                 // Object）时，Safe 体直挂须在返回位置装箱——体本身
                                 // 返回子类精确类型，与槽位的 Object 返回不一致。
@@ -340,9 +373,18 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                                     items.push(quote! {
                                         #(#keep_attrs)*
                                         #erased_item_sig {
+                                            #(#arg_restores)*
                                             // Result 经 prelude 可见（java_runtime 与 user crate 同一形态）
                                             let __ret: Result<#orig_inner> = (|| #b)();
                                             Ok(::std::convert::Into::<Object>::into(__ret?))
+                                        }
+                                    });
+                                } else if !arg_restores.is_empty() {
+                                    items.push(quote! {
+                                        #(#keep_attrs)*
+                                        #erased_item_sig {
+                                            #(#arg_restores)*
+                                            #b
                                         }
                                     });
                                 } else {
