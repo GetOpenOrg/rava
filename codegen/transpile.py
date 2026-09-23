@@ -32,8 +32,16 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False):
     _home = os.environ.get('JAVA_HOME', '')
     if _home and os.path.exists(os.path.join(_home, 'bin', 'javac')):
         _javac = os.path.join(_home, 'bin', 'javac')
+    # 预览语法（如 JDK21 未命名变量 `_`，JEP 443/456）需 --enable-preview，且该
+    # 标志必须与 --release/-source 同用；major 取当前 javac 自身版本号，与非预览
+    # 编译行为一致（--release N == 默认源/目标平台），仅放开预览语法面。
+    _ver = subprocess.run([_javac, '-version'], capture_output=True, text=True)
+    m = re.search(r'(\d+)', _ver.stdout or _ver.stderr or '')
+    _preview_args: list[str] = []
+    if m and int(m.group(1)) >= 14:
+        _preview_args = ['--enable-preview', '--release', m.group(1)]
     print(f"[1/4] {_javac} {' '.join(java_files)}")
-    r = subprocess.run([_javac, '-g', '-d', class_dir] + java_files,
+    r = subprocess.run([_javac, '-g'] + _preview_args + ['-d', class_dir] + java_files,
                        capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"javac failed:\n{r.stderr}")
