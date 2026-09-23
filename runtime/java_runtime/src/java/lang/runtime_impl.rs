@@ -2,20 +2,23 @@ use crate::prelude::*;
 use super::*;
 
 impl Runtime {
-    /// native availableProcessors()：可用处理器数。HotSpot 的
-    /// JVM_ActiveProcessorCount 返回 os::active_processor_count()（受 affinity /
-    /// cgroup 配额约束的进程可用并行度），语义等价 Rust 标准库的
-    /// std::thread::available_parallelism()。
+    /// native availableProcessors()：可用处理器数。
     ///
-    /// 可观测性：该值不进入任何输出——java.base 中唯一消费形态是
-    /// j.u.c 类的 `static final int NCPU = Runtime.getRuntime()
-    /// .availableProcessors()`（ConcurrentHashMap / Striped64 等），仅作
-    /// 批次切分阈值，单线程语义下不影响结果。查询失败（affinity 不可得
-    /// 等）按 JVM 对不确定环境的惯例回落 1。
+    /// 对象模型是单线程协作调度（S-11，`Rc` 非 Send、无 OS 线程，见
+    /// java/lang/thread_impl.rs 模块注释）——本运行时可实际利用的处理器数
+    /// 恒为 1，如实报告 1（等价真机以 `-XX:ActiveProcessorCount=1` / 单核
+    /// 环境启动的 JVM 配置档）。此前返回
+    /// `std::thread::available_parallelism()` 的真实核数并断言「该值不进入
+    /// 任何输出」：该断言被 CompletableFuture 打破——
+    /// `USE_COMMON_POOL = ForkJoinPool.getCommonPoolParallelism() > 1` 在
+    /// 多核报告下为 true，异步任务选入 commonPool（`ForkJoinPool.execute`
+    /// 的 work-stealing 执行体在单线程档位不可承载，存根 panic）；单核报告
+    /// 下为 false，异步任务走 `ThreadPerTaskExecutor`（每任务一线程，由既有
+    /// 协作调度泵推进）——与单核 JVM 行为一致。j.u.c 其余消费
+    /// （ConcurrentHashMap / Striped64 的 NCPU 批次切分阈值）在单线程语义
+    /// 下不改变结果。
     #[jvm_native]
     pub fn availableProcessors(&self) -> Result<i32> {
-        Ok(std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
-            .unwrap_or(1))
+        Ok(1)
     }
 }
