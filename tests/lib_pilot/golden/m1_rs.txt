@@ -1,0 +1,23 @@
+PASS is-equals-pass
+FAIL is-equals-fail :: 
+Expected: is "expected"
+     but: was "actual"
+PASS equalTo-pass
+PASS not-pass
+FAIL not-fail :: 
+Expected: not <7>
+     but: was <7>
+PASS nullValue-pass
+PASS notNullValue-pass
+PASS allOf-pass
+FAIL allOf-fail :: 
+Expected: (is "hello" and is "world")
+     but: is "world" was "hello"
+FAIL anyOf-fail :: 
+Expected: (is "aaa" or is "bbb")
+     but: was "zzz"
+FAIL reason-fail :: reason文本
+Expected: is <2>
+     but: was <1>
+PASS matcher-var-pass
+DONE

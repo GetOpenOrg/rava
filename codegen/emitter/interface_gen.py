@@ -172,8 +172,9 @@ def _locate(recv_bin: str, name: str, param_desc: str, emissions: 'dict[str, Cla
 
 
 def _vtable_use(iface_bin: str, crate_prefix: str,
-                emissions: 'dict[str, ClassEmission] | None' = None) -> str:
-    return f"use {class_use_path(iface_bin, crate_prefix, emissions)}__VTable;"
+                emissions: 'dict[str, ClassEmission] | None' = None,
+                recv_crate: str = '') -> str:
+    return f"use {class_use_path(iface_bin, crate_prefix, emissions, recv_crate)}__VTable;"
 
 
 def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dict,
@@ -226,7 +227,7 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                 # 文件头 allow(unused_imports)，未引用不告警。
                 if short_cls(iface_bin) not in imported:
                     imported.add(short_cls(iface_bin))
-                    uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions)};")
+                    uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions, getattr(recv, 'crate_name', ''))};")
                 if not iface.methods:
                     continue  # 标记接口：无成员可落地，无 impl/upcast 关系（原语义）
                 iface_params = effective_class_type_params(iface_ci, registry)
@@ -278,14 +279,15 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                         attr_parts.append('result = "checkcast"')
                     attr = f"#[java_method({', '.join(attr_parts)})]\n" if attr_parts else ''
                     decls.append(attr + erased + ';')
-                    uses.extend(_imports_for(erased, iface, recv, imported))
+                    uses.extend(_imports_for(erased, iface, recv, imported, emissions=emissions))
                 if not decls and not (_recv_abstract or _recv_is_iface):
                     continue  # 具体类：无可落地的成员即无 impl 关系（原语义）
                 if decls:
                     vt_name = short_cls(iface_bin) + '__VTable'
                     if vt_name not in imported:
                         imported.add(vt_name)
-                        uses.append(_vtable_use(iface_bin, recv.crate_prefix, emissions))
+                        uses.append(_vtable_use(iface_bin, recv.crate_prefix, emissions,
+                                                getattr(recv, 'crate_name', '')))
                     body = '\n'.join('    ' + ln for d in decls for ln in d.split('\n'))
                     blocks.append(f"impl{recv_generics} {short_cls(iface_bin)} for {recv_ty} {{\n{body}\n}}")
                 # A-4 协变 upcast：类实例 / 子接口载体 → 擦除接口载体视图（宏块之外的
@@ -367,7 +369,8 @@ def resolve_interface_inherited_members(emissions: 'dict[str, ClassEmission]', r
             if um:
                 imported.add(um.group(2))
         views = _superinterface_views(recv_ci, registry)
-        arg_uses = type_arg_uses(recv_ci, registry, emissions, recv.crate_prefix)
+        arg_uses = type_arg_uses(recv_ci, registry, emissions, recv.crate_prefix,
+                                 getattr(recv, 'crate_name', ''))
         decls: list[str] = []
         uses: list[str] = []
         for name, param_desc in sorted(wanted):
@@ -395,11 +398,13 @@ def resolve_interface_inherited_members(emissions: 'dict[str, ClassEmission]', r
                     attr.append(f'access = "{method.access}"')
                 attr.append(f'inherited_from = "{owner_ty}"')
                 decls.append(f"#[java_method({', '.join(attr)})]\n{signature};")
-                uses.extend(_imports_for(signature + ' ' + owner_ty, owner, recv, imported, arg_uses))
+                uses.extend(_imports_for(signature + ' ' + owner_ty, owner, recv, imported, arg_uses,
+                                         emissions=emissions))
                 owner_short = short_cls(owner_bin)
                 if owner_short not in imported:
                     imported.add(owner_short)
-                    uses.append(_vtable_use(owner_bin, recv.crate_prefix, emissions)
+                    uses.append(_vtable_use(owner_bin, recv.crate_prefix, emissions,
+                                            getattr(recv, 'crate_name', ''))
                                 .replace('__VTable;', ';'))
                 break
         if decls:

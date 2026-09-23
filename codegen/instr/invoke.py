@@ -355,6 +355,12 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             _owner_targs = _anc_args_by_short(_self_ci, _self_ty, registry).get(_owner_short, '')
             if _owner_targs:
                 base_fn += f"::{_owner_targs[:-1]}, _>"
+        elif (_self_ci is not None and _owner_short == short_cls(class_name)
+                and sim.class_type_params):
+            # 同类泛型 base 调用（私有成员经 invokespecial 自调用，如
+            # CombinableMatcher.templatedListWith）：base 函数的类形参在 this
+            # 擦除形态上不可推断（E0283）→ 按当前 impl 的类型形参显式给出
+            base_fn += f"::<{', '.join(sim.class_type_params)}, _>"
         all_args = [obj_e] + args
         arg_str = ', '.join(all_args)
         rust_ret = jvm_to_rust(ret, registry)
@@ -371,11 +377,32 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         return
 
     cls, _mname_ctor, params, _ret_ctor = parse_method_ref(comment)
+    # javac 私有构造器访问桥（pre-nestmates）：synthetic <init>(..., X$1) 委托到
+    # 同类真实私有 <init>（Condition$Matched / ComparatorMatcherBuilder$ComparatorMatcher
+    # 实证——hamcrest 闭包首见）。调用点按桥描述符解析（栈上含末位 null token），
+    # 发射按委托目标建模（桥体仅转发）：comment/params 换成目标构造器，token 弹栈弃置。
+    _ctor_bin = _method_ref_binary_class(comment)
+    _ctor_ci = registry.get(_ctor_bin) if registry else None
+    if _ctor_ci is not None:
+        _bridge_desc = '(' + ''.join(params) + ')V'
+        _bridge_m = next((m for m in _ctor_ci.methods
+                          if m.name == '<init>' and m.descriptor == _bridge_desc), None)
+        if _bridge_m is not None and _bridge_m.is_synthetic:
+            for _b_ins in (_bridge_m.instrs or []):
+                _b_c = _b_ins.comment or ''
+                if (_b_ins.opcode == 'invokespecial' and _b_c.startswith('Method ')
+                        and '.<init>:' in _b_c):
+                    _bt_cls, _bt_m, _bt_p, _ = parse_method_ref(_b_c)
+                    if (_bt_m == '<init>' and _bt_cls == short_cls(_ctor_bin)
+                            and len(_bt_p) < len(params)):
+                        for _ in range(len(params) - len(_bt_p)):
+                            sim.pop()   # 桥 token（aconst_null）弃置
+                        params = _bt_p
+                        comment = _b_c
+                    break
     # 构造目标的类型实参在调用点静态可知的两种情形 → 形参类型按实参替换：
     #   - super(...)：父类形参 ← 本类 SuperclassSignature 的实参
     #   - new 局部 / 匿名类：其类型参数全部继承自外围作用域，按当前作用域实例化
-    _ctor_bin = _method_ref_binary_class(comment)
-    _ctor_ci = registry.get(_ctor_bin) if registry else None
     _caller_ci = registry.get(class_name) if registry else None
     _ctor_targ_map: dict | None = None
     _scope_targs: list[str] | None = None

@@ -97,17 +97,57 @@ def _desc_class_refs(desc: str) -> list[str]:
     return re.findall(r'L([^;]+);', desc or '')
 
 
-def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | None = None) -> list:
+def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | None = None, *,
+                                       lib_registries: list | None = None,
+                                       lib_prefixes: tuple[str, ...] = (),
+                                       extra_seed_classes: list[str] | None = None) -> list:
     """方法级调用链 BFS：只追踪实际被调用的方法，不展开未调用方法的依赖类。
 
     调用边的三个来源：
       1. 字节码方法引用，按 JVMS §5.4.3.3 解析到声明者（父类链 → 父接口 default）
       2. 虚调用的运行期目标（RTA）：已实例化类（其 <init> 在调用链上）对虚调用目标的覆盖版本
       3. 手写 native / 内部边界方法声明的 Java 回调（runtime_src 下共置 `_impl.rs` 的 upcalls）
+
+    jar 输入模式的扩展参数（默认值 = 既有 .java 路径行为，零改动）：
+      lib_registries      - 依赖 jar 的类注册表列表（binary name → ClassInfo，枚举自
+                            jar 条目）。_load_class 在 JDK jmods 之前优先查它们，
+                            使跨 jar 引用（junit→hamcrest）可解析；命中者进
+                            jdk_infos（调用链通道）——由驱动层按 jar 归属拆分到
+                            对应 lib crate，不落 java_runtime。lib 类不进
+                            class_infos（用户类通道全量翻译、不参与虚分派传播），
+                            与 JDK 类同走可达性发现：RTA / 接口传播、存根与父类
+                            补全通道对 lib 类统一生效。
+      lib_prefixes        - jar 类的 binary name 前缀（如 ('org/junit/',)）。
+                            _collect_method_refs / _translatable / 接口闭包等
+                            原以 _JDK_PREFIXES 为界的门对 lib 前缀同权放开。
+      extra_seed_classes  - lib crate 的种子类 binary name 列表：整包模式 = jar
+                            全部类（公开 API 面 = 全部 public 类成员入链）；
+                            子集模式（M2 junit Assert 子集）= 种子类列表（其余
+                            jar 类经调用链可达性发现）。
     """
     from .classfile import parse_class_bytes
     from .jdk_resolver import JdkResolver
     from .native_upcalls import NativeUpcalls
+
+    # jar 类注册表（lib crate 输入）：_load_class / 存根通道在 JDK jmods 之前
+    # 优先命中——库自身与其跨 jar 引用（junit→hamcrest）从 jar 解析。
+    _lib_registries: list = lib_registries or []
+
+    def _lib_lookup(name: str):
+        for _reg in _lib_registries:
+            if name in _reg:
+                return _reg[name]
+        return None
+
+    def _resolve_class_bytes(name: str):
+        """jar 优先的类解析（存根 / 父类补全通道共用）：jar 类已解析直接取，其余走 jmods。"""
+        if lib_prefixes and name.startswith(lib_prefixes):
+            return _lib_lookup(name)
+        _data = resolver.resolve(name)
+        try:
+            return parse_class_bytes(_data, name) if _data is not None else None
+        except Exception:
+            return None
 
     # 用户类（含内部类）按 binary name 索引：方法解析沿继承层次查找时同样可见。
     # 没有这一步，以用户类为常量池类的方法引用（如 enum 子类调用继承自 JDK 基类的
@@ -150,7 +190,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             for _sup in (_ici.interfaces or []):
                 if (_sup not in _JAVA_RUNTIME_CLASSES
                         and (_sup.startswith(_JDK_PREFIXES)
-                             or _sup.startswith(_JDK_STUB_ONLY_PREFIXES))
+                             or _sup.startswith(_JDK_STUB_ONLY_PREFIXES)
+                             or _sup.startswith(lib_prefixes))
                         and _sup not in field_discover_classes):
                     field_discover_classes.add(_sup)
                 _iq.append(_sup)
@@ -167,7 +208,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         for tcls in _desc_class_refs(desc):
             if (tcls not in _JAVA_RUNTIME_CLASSES
                     and (tcls.startswith(_JDK_PREFIXES)
-                         or tcls.startswith(_JDK_STUB_ONLY_PREFIXES))):
+                         or tcls.startswith(_JDK_STUB_ONLY_PREFIXES)
+                         or tcls.startswith(lib_prefixes))):
                 field_discover_classes.add(tcls)
 
     # 类初始化（JVMS §5.5）已入队的类
@@ -224,7 +266,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
     def enqueue_refs(instrs, exception_table=()):
         (method_refs, f_classes, member_refs, boundary_refs, new_classes,
-         static_refs) = _collect_method_refs(instrs, user_class_names=user_names)
+         static_refs) = _collect_method_refs(instrs, user_class_names=user_names,
+                                             extra_prefixes=lib_prefixes)
         boundary_virtual_targets.update(boundary_refs)
         instantiated_classes.update(new_classes)
         pending_static_fields.extend(static_refs)
@@ -244,12 +287,28 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         for cls, member in member_refs:
             _enqueue_upcalls(cls, member)
 
-    # 初始种子：用户类所有方法的引用
+    # 初始种子：用户类所有方法的引用（既有 .java 路径行为，不变）
     for ci in class_infos:
         for m in ci.methods:
             enqueue_refs(m.instrs or [], m.exception_table)
             # T88：用户方法自身描述符里的参数/返回类型也是类型依赖
             # （abstract 方法无 instrs，但其签名引用的接口类型要进闭包）
+            _enqueue_desc_types(m.descriptor)
+
+    # lib crate 种子（jar 输入模式）：种子类的 public 成员是 crate 的公开 API 面
+    # （classfile access_flags 驱动，零猜测）。方法键自身入链——公开成员是消费
+    # 者入口，未被他方调用的公开方法也必须有翻译体（否则退化为 panic 存根，
+    # 库语义破损）；非 public 成员经调用图从 public 方法可达时自然入链。
+    for _seed in (extra_seed_classes or []):
+        _sci = _lib_lookup(_seed)
+        if _sci is None:
+            print(f"[bfs-audit] lib seed 未命中 jar 注册表: {_seed}")
+            continue
+        for m in _sci.methods:
+            if not (m.access_flags & 0x0001):   # ACC_PUBLIC
+                continue
+            _enqueue_method((_seed, m.name, m.descriptor))
+            enqueue_refs(m.instrs or [], m.exception_table)
             _enqueue_desc_types(m.descriptor)
 
     class_cache: dict[str, object] = {}
@@ -273,10 +332,20 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     def _load_class(name: str):
         """按需解析类（不加入生成范围，仅供方法解析沿继承层次查找）。
 
-        用户类不在 JDK 档案里，从入参 class_infos 取。
+        用户类不在 JDK 档案里，从入参 class_infos 取；jar 类（lib crate 输入）
+        优先于 JDK jmods——跨 jar 引用与库自身类都从 jar 注册表解析。
         """
         if name in user_infos:
             return user_infos[name]
+        if lib_prefixes and name.startswith(lib_prefixes):
+            _lci = _lib_lookup(name)
+            if _lci is not None:
+                # 落 class_cache：虚分派传播（RTA / 接口实现扫描）按 class_cache
+                # 迭代 visited_methods——lib 类不落缓存则其覆盖方法永不入链
+                #（StringDescription.append(String) 覆盖实证：protected 覆盖不
+                # 在公开种子面，靠传播到达），运行期命中 panic 存根。
+                class_cache[name] = _lci
+                return _lci
         if name not in class_cache:
             _data = resolver.resolve(name)
             try:
@@ -403,7 +472,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
     def _translatable(name: str) -> bool:
         return (bool(name) and name not in _JAVA_RUNTIME_CLASSES
-                and name.startswith(_JDK_PREFIXES)
+                and (name.startswith(_JDK_PREFIXES)
+                     or name.startswith(lib_prefixes))
                 and not _is_boundary_class(name))
 
     def _enqueue_class_init(name: str) -> None:
@@ -482,7 +552,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             jdk_infos[cls] = ci
             # 类声明的接口闭包进 stub 通道（_enqueue_iface_stub 注释——接口 impl
             # 关系的发现依赖 registry 的 interfaces 边）
-            if cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES):
+            if (cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES)
+                    or cls.startswith(lib_prefixes)):
                 _enqueue_iface_stub(cls)
         origin[0] = (cls, meth, desc)
 
@@ -725,11 +796,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             cls = _stub_queue.popleft()
             if cls in jdk_infos:
                 continue
-            data = resolver.resolve(cls)
-            if data is None:
+            ci = _resolve_class_bytes(cls)
+            if ci is None:
                 continue
             try:
-                ci = parse_class_bytes(data, cls)
                 jdk_infos[cls] = ci
                 # stub 通道类同样收集其接口闭包（同 _process——接口 impl 关系发现）
                 _enqueue_iface_stub(cls)
@@ -768,11 +838,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             cls = _parent_queue.popleft()
             if cls in jdk_infos:
                 continue
-            data = resolver.resolve(cls)
-            if data is None:
+            ci = _resolve_class_bytes(cls)
+            if ci is None:
                 continue
             try:
-                ci = parse_class_bytes(data, cls)
                 jdk_infos[cls] = ci
                 if (ci.super_class and ci.super_class != _OBJECT_CLASS
                         and ci.super_class not in _JAVA_RUNTIME_CLASSES
@@ -820,13 +889,17 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     return list(jdk_infos.values()), visited_methods, field_discover_classes
 
 
-def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset()) -> tuple:
+def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset(),
+                         extra_prefixes: tuple[str, ...] = ()) -> tuple:
     """从指令注释中提取方法引用和字段所属类引用（JDK 类 + 用户类）。
 
     用户类的方法引用也进 method_refs：用户类自身方法虽全部作为种子展开，但以
     用户类为常量池类的**继承方法**调用（如 enum 子类调用基类的 name()/ordinal()）
     必须经 _process 走 JVM 方法解析（JVMS §5.4.3.3）落到最近声明祖先，否则
     基类方法永远不入调用链。
+
+    extra_prefixes：jar 输入模式的库类前缀（如 ('org/junit/',)）——库类与
+    JDK 公开包同权进各引用通道（方法 / 字段 / 描述符 / 类字面量 / new）。
 
     Returns:
         (method_refs, field_classes, member_refs, boundary_refs, new_classes, static_field_refs):
@@ -848,7 +921,7 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset())
         for tcls in _desc_class_refs(desc):
             if _is_boundary_class(tcls):
                 field_classes.append(tcls)
-            elif tcls.startswith(_JDK_PREFIXES):
+            elif tcls.startswith(_JDK_PREFIXES) or tcls.startswith(extra_prefixes):
                 field_classes.append(tcls)
 
     method_refs = []
@@ -876,7 +949,8 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset())
                 if _is_boundary_class(cls) and '[' not in cls:
                     field_classes.append(cls)
                     boundary_refs.append((cls, meth, desc))
-                elif (cls.startswith(_JDK_PREFIXES) or cls in user_class_names) and '[' not in cls:
+                elif (cls.startswith(_JDK_PREFIXES) or cls in user_class_names
+                      or cls.startswith(extra_prefixes)) and '[' not in cls:
                     method_refs.append((cls, meth, desc))
                 _add_type_refs(desc)
         elif c.startswith('InvokeDynamic '):
@@ -901,7 +975,8 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset())
                         member_refs.append((cls, meth))
                     if _is_boundary_class(cls) and '[' not in cls:
                         field_classes.append(cls)
-                    elif cls.startswith(_JDK_PREFIXES) and '[' not in cls:
+                    elif (cls.startswith(_JDK_PREFIXES)
+                          or cls.startswith(extra_prefixes)) and '[' not in cls:
                         method_refs.append((cls, meth, desc))
                         if meth == '<init>':
                             new_classes.append(cls)   # 构造器引用 X::new
@@ -913,7 +988,8 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset())
             dot = rest.find('.')
             if dot > 0:
                 cls = rest[:dot]
-                if (cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES)) and '[' not in cls:
+                if (cls.startswith(_JDK_PREFIXES) or cls.startswith(_JDK_STUB_ONLY_PREFIXES)
+                        or cls.startswith(extra_prefixes)) and '[' not in cls:
                     field_classes.append(cls)
                     if instr.opcode in ('getstatic', 'putstatic'):
                         _fend = rest.find(':', dot)
@@ -941,11 +1017,12 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset())
             # 完全不进闭包（trace 完整版发现的缺口 C）。_desc_class_refs 的
             # 正则天然吃数组描述符，只提取 L...; 内层类名。
             _add_type_refs(c)
-        elif c.startswith(_JDK_PREFIXES + _JDK_STUB_ONLY_PREFIXES) and '[' not in c and _is_boundary_class(c.split()[0]):
+        elif c.startswith(_JDK_PREFIXES + _JDK_STUB_ONLY_PREFIXES + tuple(extra_prefixes)) \
+                and '[' not in c and _is_boundary_class(c.split()[0]):
             # stub-only 内部类的 new/checkcast 指令 → 仅生成存根，不展开方法体
             cls = c.split()[0]
             field_classes.append(cls)
-        elif c.startswith(_JDK_PREFIXES) and '[' not in c:
+        elif c.startswith(_JDK_PREFIXES + tuple(extra_prefixes)) and '[' not in c:
             # new / checkcast / instanceof / anewarray: comment = class binary name
             cls = c.split()[0]
             if instr.opcode == 'new':

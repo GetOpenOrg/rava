@@ -272,17 +272,38 @@ def _add_precise_import(full_cls: str, _prefix: str, _self_simple: str,
 def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                       generated_classes, conflict_map, skipped_classes,
                       user_sibling_imports, user_crate_prefix,
-                      _referenced: set[str]) -> list[str]:
-    """Step 2：精确 cross_imports（按需逐类型导入，不使用包级 glob）。"""
+                      _referenced: set[str],
+                      crate_prefix_resolver=None) -> list[str]:
+    """Step 2：精确 cross_imports（按需逐类型导入，不使用包级 glob）。
+
+    crate_prefix_resolver（lib crate 发射模式）：binary name → 目标 crate 名
+    （'crate' / 'java_runtime' / 'hamcrest' / ...）。提供时每个引用类按其归属
+    crate 定向导入——多 lib crate workspace（junit4 引 hamcrest 又引 JDK 闭包）
+    的唯一正确形态；此时跳过包集合过滤分支（jdk_crate_pkg_paths / 同包 /
+    消歧 / skipped），VTable 与 __base 导入同样按目标 crate 定向。
+    """
     cross_imports: list[str] = []
     _prefix = user_crate_prefix or 'crate'
     _self_simple = _short_cls_g(ci.name)
     _seen_imports: set[str] = set()  # 去重键："{rust_pkg}::{simple}"
 
-    # JDK 包（jdk_crate_pkg_paths 中的包）：按需精确导入
-    # jdk_crate_pkg_paths 是 Rust 路径（java::lang），_referenced 是 JVM 路径（java/lang）
-    # 转换为同一格式再比对
-    if jdk_crate_pkg_paths:
+    if crate_prefix_resolver is not None:
+        # lib 模式：生成集内的引用类逐个定向（各 crate 包 mod.rs 均 `pub use <mod>::*`
+        # 再导出，统一 prefix::pkg::Simple 形态）。无包用户类不在此列（同 crate，
+        # 由 user_sibling_imports 承载）。
+        _generated = (generated_classes or set())
+        for _full_cls in sorted(_referenced):
+            if _full_cls == ci.name or _full_cls not in _generated:
+                continue
+            if len(_full_cls.split('/')) < 2:
+                continue
+            _add_precise_import(_full_cls, crate_prefix_resolver(_full_cls),
+                                _self_simple, _seen_imports, _seen_simples,
+                                cross_imports)
+    elif jdk_crate_pkg_paths:
+        # JDK 包（jdk_crate_pkg_paths 中的包）：按需精确导入
+        # jdk_crate_pkg_paths 是 Rust 路径（java::lang），_referenced 是 JVM 路径（java/lang）
+        # 转换为同一格式再比对
         _pkg_set_slash = {
             p.replace('::', '/').replace('r#', '') for p in jdk_crate_pkg_paths
         }
@@ -292,7 +313,7 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                 _add_precise_import(_full_cls, _prefix, _self_simple, _seen_imports, _seen_simples, cross_imports)
 
     # 同包兄弟类：按需精确导入（若自身包未在 jdk_crate_pkg_paths 中）
-    if ci.name and '/' in ci.name:
+    if crate_prefix_resolver is None and ci.name and '/' in ci.name:
         _own_pkg = '/'.join(ci.name.split('/')[:-1])
         _own_pkg_path = '::'.join(
             f'r#{p}' if p in _RUST_KEYWORDS else p for p in ci.name.split('/')[:-1]
@@ -305,7 +326,7 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                     _add_precise_import(_full_cls, _prefix, _self_simple, _seen_imports, _seen_simples, cross_imports)
 
     # 消歧：同一简名存在于多个包时，精确 use 覆盖（conflict_map 仍需处理）
-    if conflict_map:
+    if crate_prefix_resolver is None and conflict_map:
         # 同简单名的类各有唯一的 Rust 类型名（short_cls 的包限定消歧），被引用者逐个导入
         for _sn, _pkgs in conflict_map.items():
             for _p in sorted(_pkgs):
@@ -313,7 +334,7 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                     _add_precise_import(f'{_p}/{_sn}', _prefix, _self_simple, _seen_imports, _seen_simples, cross_imports)
 
     # 被跳过包（如 jdk/）中的类型：按需精确导入
-    if skipped_classes and _referenced:
+    if crate_prefix_resolver is None and skipped_classes and _referenced:
         for _full_cls in sorted(_referenced):
             _cls_parts = _full_cls.split('/')
             if len(_cls_parts) < 2:
@@ -345,7 +366,9 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                     _vkey = f"{_vpkg}::{_vsimple}__VTable"
                     if _vkey not in _seen_imports:
                         _seen_imports.add(_vkey)
-                        cross_imports.append(f"use {_prefix}::{_vpkg}::{_vsimple}__VTable;")
+                        _vtp = (crate_prefix_resolver(_vtable_cur)
+                                if crate_prefix_resolver is not None else _prefix)
+                        cross_imports.append(f"use {_vtp}::{_vpkg}::{_vsimple}__VTable;")
                 elif len(_vp) == 1:
                     # user class without package path (no '/') — vtable is in same user crate
                     _vsimple = _vp[0].replace('$', '_')
@@ -390,6 +413,10 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                 from ..instr.member_owner import _resolve_special_method_owner as _rsmo
                 from ..instr.member_naming import _method_ref_descriptor as _mrd
                 _orig_cls = _rsmo(_orig_cls, _mname_s, _mrd(_c), registry)
+                if _orig_cls == ci.name:
+                    continue   # 自模块的 base 函数由 java_class! 宏在本模块定义，
+                    # 调用点直接用裸名；自导入与宏定义同名即 E0255（同类重载的
+                    # invokespecial，如 BaseDescription.toJavaSyntax(C) 私有体）
                 _cls_s = _short_cls_g(_orig_cls)
                 _is_jdk = '/' in _orig_cls
                 if _is_jdk:
@@ -429,7 +456,12 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                 _bkey = f"crate::{_base_mod}::{_base_fn}"
                 if _bkey not in _seen_imports:
                     _seen_imports.add(_bkey)
-                    cross_imports.append(f"use crate::{_base_mod}::{_base_fn};")
+                    # __base 自由函数随声明者 crate 定向（lib 模式：junit4 的
+                    # ComparisonFailure 转发 java/lang/AssertionError 的 base 函数）
+                    _bprefix = 'crate'
+                    if _is_jdk and crate_prefix_resolver is not None:
+                        _bprefix = crate_prefix_resolver(_orig_cls)
+                    cross_imports.append(f"use {_bprefix}::{_base_mod}::{_base_fn};")
 
     # 用户内部类兄弟模块导入（crate::mod_name::TypeName）
     if user_sibling_imports:
@@ -439,7 +471,8 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
 def scan_used_vtable_imports(method_blocks: list[str],
                              _iface_lambda_blocks: list[str],
                              cross_imports: list[str], struct_name: str,
-                             registry: dict | None, _prefix: str) -> list[str]:
+                             registry: dict | None, _prefix: str,
+                             crate_prefix_resolver=None) -> list[str]:
 # 扫描方法体中使用的 VTable trait（UFCS 调用 XxxVTable::method(...)），
 # 为未导入的 VTable 类型补充 use 语句（避免 E0433）。
 # 不盲目为所有类添加 __VTable（手写类如 Object/String 不一定有），
@@ -474,7 +507,9 @@ def scan_used_vtable_imports(method_blocks: list[str],
                         _rparts = _rk.split('/')
                         if len(_rparts) >= 2:
                             _rpkg = '::'.join(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _rparts[:-1])
-                            _vt_pkg = f"{_prefix}::{_rpkg}"
+                            _rprefix = (crate_prefix_resolver(_rk)
+                                        if crate_prefix_resolver is not None else _prefix)
+                            _vt_pkg = f"{_rprefix}::{_rpkg}"
                         break
             if _vt_pkg is not None:
                 _extra_vt_imports.append(f"use {_vt_pkg}::{_vt_name};")

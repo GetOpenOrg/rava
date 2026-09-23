@@ -26,8 +26,10 @@ _CLASSNAME_MAP: dict[str, str] = {
     'java/lang/Class':         'Class',
     # S-3.1：装箱类型（Integer/Long/...）不再映射为原生值 —— 签名里的
     # Ljava/lang/Integer; 是引用类型，走 registry 分支得到翻译类
-    'java/lang/StringBuilder': 'String',
-    'java/lang/StringBuffer':  'String',
+    # StringBuilder / StringBuffer 不在特判表（T29 时代的 'String' 别名已删）：
+    # 翻译类真实存在（java/beans/FeatureDescriptor 的 appendTo 重载族实证——
+    # 别名使 (SB,String,Reference) 重载的首参渲染成 String，E0308），
+    # 走 registry 分支得短名 + cross_imports 导入，与 jvm_to_rust 描述符路径一致。
 }
 
 

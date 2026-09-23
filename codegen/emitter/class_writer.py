@@ -942,6 +942,36 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
     return method_blocks
 
 
+def _java_member_vis(access_flags: int) -> str:
+    """Java 可见性 → Rust 可见性（lib crate 发射模式，classfile access_flags 驱动）。
+
+    public → pub；package-private / protected / private → pub(crate) 近似
+    （Java 包可见性在 Rust 无对应；protected 的子类可见由继承成员转发承载，
+    crate 内可见是合法超集）。宏侧（java_rta_macros block/parse.rs）以 syn
+    Visibility 解析并透传，pub(crate) 是合法输入。
+    """
+    return 'pub' if access_flags & 0x0001 else 'pub(crate)'
+
+
+_BLOCK_ATTR_ACCESS_RE = _re.compile(r'\baccess = "(public|protected|private|package)"')
+_BLOCK_PUB_LINE_RE = _re.compile(r'^pub (fn|static|const) ', _re.M)
+
+
+def _downgrade_non_public_blocks(blocks: list[str]) -> None:
+    """可见性映射（lib crate）：块首 @java_* 属性行 access 非 public 的成员块，
+    行首 pub 声明整体降级为 pub(crate)（保留 fn/static/const 关键字）。
+    就地改写，零猜测（属性值源自 classfile）。"""
+    for i, block in enumerate(blocks):
+        head = block.split('\n', 1)[0]
+        if ('#[java_method(' not in head and '#[java_native(' not in head
+                and 'java_field(' not in head):
+            continue
+        m = _BLOCK_ATTR_ACCESS_RE.search(head)
+        if m is not None and m.group(1) == 'public':
+            continue
+        blocks[i] = _BLOCK_PUB_LINE_RE.sub(r'pub(crate) \1 ', block)
+
+
 def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   jdk_crate_pkg_paths: list[str] | None = None,
                   stub_bodies: bool = False,
@@ -954,7 +984,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
                   skipped_classes: set | None = None,
                   user_sibling_imports: list[str] | None = None,
                   generated_classes: set | None = None,
-                  emission: 'ClassEmission | None' = None) -> str:
+                  emission: 'ClassEmission | None' = None,
+                  crate_prefix_resolver=None,
+                  java_visibility: bool = False) -> str:
     """生成单个 Java 类对应的完整 .rs 文件内容。
 
     生成规则：
@@ -964,6 +996,10 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     - 每个 struct / field / method 前加 // @java_* 注释供 build.rs 扫描
     - new_format_map: 若提供，为覆盖的类插入 #[path] mod _impl; 并跳过被覆盖方法
     - user_crate_prefix: 若提供（如 'jdk_classes'），cross_imports 用该 crate 前缀
+    - crate_prefix_resolver: 若提供（lib crate 发射模式），引用按目标类归属 crate
+      逐个定向（'crate' / 'java_runtime' / lib crate 名），覆盖单一前缀语义
+    - java_visibility: 若置位（lib crate 类），Java 可见性映射生效——公开面由
+      classfile access_flags 驱动（public→pub，其余→pub(crate) 近似）
     - emission: 若提供，记录本类实际生成的方法声明，并在文本中留出继承成员声明的
       两个插入位（use 区 / impl 块尾），由 inherited_gen.resolve_inherited_members 统一填充
     """
@@ -973,7 +1009,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     cross_imports = gen_cross_imports(
         ci, registry, jdk_crate_pkg_paths, call_chain, generated_classes,
         conflict_map, skipped_classes, user_sibling_imports,
-        user_crate_prefix, _referenced)
+        user_crate_prefix, _referenced,
+        crate_prefix_resolver=crate_prefix_resolver)
 
     # 全量手写类（native_impl 文件含 pub struct）：codegen 跳过 struct 生成，改输出 pub use _impl::*
     _full_impl = ci.name in (full_impl_classes or set())
@@ -1109,8 +1146,9 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             if safe_fname in _super_field_names:
                 continue  # 父类已展平，不重复声明
             struct_lines.append("    " + _java_field_attr(f))
+            _fvis = _java_member_vis(f.access_flags) if java_visibility else 'pub'
             struct_lines.append(
-                f"    pub {safe_fname}: "
+                f"    {_fvis} {safe_fname}: "
                 f'{_resolve_field_rust(f, class_type_params, registry, _registry_short_names)},')
         # 未被字段引用的类型参数由宏补 PhantomData（block.rs），codegen 不再输出 _phantom
 
@@ -1186,6 +1224,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # ── 组装 java_class! { ... } 块（方案 §3 核心设计）────────────────────
     if not _full_impl:
+        # 可见性映射（lib crate）：先记录方法声明（record_methods 解析 `pub fn` 前缀），
+        # 再降级非 public 成员块——记录与文本最终形态解耦
+        if emission is not None:
+            emission.record_methods(method_blocks)
+        if java_visibility:
+            _downgrade_non_public_blocks(method_blocks)
+        _struct_vis = _java_member_vis(ci.access_flags) if java_visibility else 'pub'
         block: list[str] = []
         block.extend(_java_class_block_head(
             ci, registry=registry,
@@ -1199,11 +1244,11 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         block.append('')
         # struct 声明：裸类型（封装细节收拢进宏），无 derive / 无 _super / 无 _phantom
         if struct_lines:
-            block.append(f"pub struct {struct_name}{struct_generic} {{")
+            block.append(f"{_struct_vis} struct {struct_name}{struct_generic} {{")
             block.extend(struct_lines)
             block.append("}")
         else:
-            block.append(f"pub struct {struct_name}{struct_generic};")
+            block.append(f"{_struct_vis} struct {struct_name}{struct_generic};")
 
         # 接口无成员且不可能补继承成员（无 emission）时不写空 impl 块
         if method_blocks or not _is_iface or emission is not None:
@@ -1218,8 +1263,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if emission is not None and not _is_iface:
             block.append(_INTERFACE_IMPLS_SLOT)
 
-        if emission is not None:
-            emission.record_methods(method_blocks)
         parts.append("java_rta_macros::java_class! {")
         for line in block:
             parts.append(_indent(line) if line else '')
@@ -1250,7 +1293,8 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     _prefix = user_crate_prefix or 'crate'
     parts.extend(scan_used_vtable_imports(
         method_blocks, _iface_lambda_blocks, cross_imports,
-        struct_name, registry, _prefix))
+        struct_name, registry, _prefix,
+        crate_prefix_resolver=crate_prefix_resolver))
 
     # BINARY_NAME / ObjectVTable / Into<Object> / From<Object> / Debug 全部由
     # java_class! 宏在编译期展开（方案 §11 职责边界总表）。
