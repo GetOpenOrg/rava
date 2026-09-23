@@ -95,8 +95,13 @@ def apply_jdk_choice(major: int) -> None:
 
 
 def _cargo_env() -> dict:
-    """共享编译缓存环境变量。"""
-    return dict(os.environ, CARGO_TARGET_DIR=str(SHARED_TARGET))
+    """共享编译缓存环境变量。
+
+    CARGO_INCREMENTAL=0：1500+ 类的宽闭包 crate 上，增量编译的元数据
+    双份内存是 OOM 的压垮点（服务器 SIGKILL 实证——同树本地 PASS）；
+    scratch 语义下每轮重生成源文件，增量命中本就趋零，关闭无损失。"""
+    return dict(os.environ, CARGO_TARGET_DIR=str(SHARED_TARGET),
+                CARGO_INCREMENTAL='0')
 
 
 def _run(cmd: list[str], cwd: Path, capture: bool = True,
