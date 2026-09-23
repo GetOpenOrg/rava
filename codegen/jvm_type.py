@@ -412,6 +412,32 @@ def rust_head_name(ty: JvmType) -> str:
     return ''
 
 
+def strict_erased_subtype(actual: JvmType, expected: JvmType,
+                          registry: 'dict | None') -> bool:
+    """erasure 基名级的严格子类型（invoke 实参上转判定，TypeIR 批次 3 S5）。
+
+    与 hierarchy._is_subtype（字符串键适配层，TypeIR 试点已委托本模块）的
+    可观察语义逐点一致——调用侧从 Rust 类型串解析出类型对象后经本查询决策，
+    替代 actual 基名的头部文本解剖：
+
+    - 不自反：erasure 后同 binary（或解析前即同短名）→ False；
+    - java/lang/Object 恒不作为成立目标（上转 Object 归装箱路径，不是
+      __into_super 链）；
+    - actual 基名须 registry 域内（占位/数组/基本类型 → False）；
+      expected 域外时按短名占位匹配闭包（is_subtype_of 的 _closure_hit 路径）。
+    """
+    a, e = actual.erasure(), expected.erasure()
+    if not (isinstance(a, ClassRef) and isinstance(e, ClassRef)):
+        return False
+    if a.binary == e.binary:
+        return False
+    if e.binary == OBJECT_CLASS:
+        return False
+    if registry is not None and a.binary not in registry:
+        return False
+    return a.is_subtype_of(e, registry)
+
+
 def from_descriptor(desc: str) -> JvmType:
     """JVM 字段描述符（JVMS §4.3.2）→ JvmType：'I'、'[I'、'[[Ljava/lang/String;'、
     'Ljava/util/List;'。非法描述符抛 ValueError（类型层宁严不宽）。"""
