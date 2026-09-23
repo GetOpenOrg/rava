@@ -5,8 +5,24 @@ use crate::sun::nio::cs::UTF_8;
 
 impl System {
     /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制的 native 方法即本文件的 Rust 函数。
-    #[jvm_native]
+    ///
+    /// 同时承担 HotSpot `System.initPhase1` 的角色：`<clinit>` 后由 VM 引导填充
+    /// `System.props`（JDK 里来自 VM 快照属性）。原生二进制无 -D 注入机制，
+    /// 系统属性恒空——挂空 Properties（全部查询缺席，与 GetPropertyAction
+    /// .privilegedGetProperties 同一语义）。构造不经 JDK 构造器链
+    /// （Properties.<init> → Hashtable 族种子在 sig_types 载体化上有 codegen
+    /// 域缺口），按擦除字段协议直接挂空后备 ConcurrentHashMap
+    /// （Properties.getProperty 消费 `map` 字段）。
+    /// 消费链：ZoneRulesProvider.<clinit> 的 doPrivileged 回调
+    /// ZoneRulesProvider$1.run → System.getProperty（属性缺席 → 走
+    /// TzdbZoneRulesProvider 默认分支）；不初始化则 null props 上调用
+    /// getProperty → NPE → ExceptionInInitializerError。
+    #[jvm_native(upcalls = "java/util/concurrent/ConcurrentHashMap.<init>:()V")]
     pub fn registerNatives() -> Result<()> {
+        let mut p = crate::java::util::Properties::default();
+        p._init_not_null();
+        p.__set_map(crate::java::util::concurrent::ConcurrentHashMap::<Object, Object>::new()?);
+        System::set_props(p)?;
         Ok(())
     }
 

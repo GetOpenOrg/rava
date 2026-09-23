@@ -184,6 +184,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     # 边界接口回调边（延迟解析：种子阶段 _load_class 尚未定义，收集后待
     # _propagate_virtual_targets 前 drain）
     _pending_iface_edges: list[tuple[str, str, str]] = []
+    # 已确认接口形态的回调边键（迟至 stub/父类通道的实现者清扫用，见函数尾注）
+    _drained_iface_keys: list[tuple[str, str, str]] = []
 
     def _enqueue_method(key: tuple[str, str, str]) -> None:
         if key[0] in _JAVA_RUNTIME_CLASSES:
@@ -596,6 +598,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     except Exception:
                         continue
                 if _ici is not None and _ici.is_interface:
+                    _drained_iface_keys.append(_edge)
                     _enqueue_method(_edge)
 
         def _propagate_virtual_targets() -> None:
@@ -646,6 +649,15 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                         # （其 vtable 注入随之缺失）。_supertypes 有缓存与环保护。
                         if cls in _supertypes(concrete_ci.name):
                             _enqueue_method((concrete_name, meth, desc))
+                            # 手写体实现者的回调链（doPrivileged 接口级回调边激活实证）：
+                            # 接口边落到边界类实现者（sun/ 包 GetBooleanAction——方法体经
+                            # 共置 _impl.rs 的 __impl_run 提供）时，其手写体声明的 Java
+                            # 回调（Boolean.valueOf）同样入队。枚举形态的 upcalls
+                            # （GetBooleanAction.run 直连）经 _enqueue_upcalls 递归载体
+                            # 覆盖此链；接口级翻转后无递归载体，只在方法 BFS 期本分支
+                            # 触达的实现者上补——迟至 stub 通道的实现者见函数尾清扫。
+                            # 幂等（seen_members）。
+                            _enqueue_upcalls(concrete_name, meth)
                 for x in instantiated:
                     if x != cls and cls in _supertypes(x):
                         _enqueue_method((x, meth, desc))
@@ -768,6 +780,32 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     _parent_queue.append(ci.super_class)
             except Exception:
                 pass
+
+        # 迟至实现者清扫（doPrivileged 接口级回调边激活实证）：接口分派传播只扫
+        # 当时已在 jdk_infos 的实现类，而边界类实现者（GetBooleanAction）多经
+        # field_discover 的 stub 通道**晚于**方法 BFS 进闭包——其 run 覆盖与手写体
+        # 回调（Boolean.valueOf）都不入队，小闭包测试（TestHashMapOps 经
+        # Arrays$LegacyMergeSort.<clinit> → doPrivileged 触达）运行期命中 valueOf
+        # 存根。三个通道沉降后按已确认的接口边键窄幅补扫（只补接口边实现者，不重跑
+        # 整轮 _propagate_virtual_targets——stub 通道的类型闭环不重开，
+        # LocaleSyntaxException E0425 实证全量重跑的扰动）。排序遍历保确定性；
+        # _process 带进的新类若也是实现者，外层不动点覆盖。
+        while True:
+            _added = False
+            for _ecls, _emeth, _edesc in sorted(_drained_iface_keys):
+                for _c_name in sorted(jdk_infos):
+                    _c_ci = jdk_infos[_c_name]
+                    if _c_ci is None or _c_ci.is_interface:
+                        continue
+                    if _ecls in _supertypes(_c_name):
+                        if (_c_name, _emeth, _edesc) not in visited_methods:
+                            _enqueue_method((_c_name, _emeth, _edesc))
+                            _enqueue_upcalls(_c_name, _emeth)
+                            _added = True
+            while queue:
+                _process(*queue.popleft())
+            if not _added:
+                break
 
     _trace_cls = os.environ.get('JAVA_RTA_BFS_TRACE')
     if _trace_cls:

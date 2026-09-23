@@ -145,7 +145,14 @@ def _common_ref_type_widening(a_rust: str, b_rust: str, registry: dict | None) -
     存入侧可用 `.into()` 上转（保持对象标识与运行时类）。"""
     def _split(t: str) -> tuple[str, str]:
         base, _, args = t.partition('<')
-        return base.strip(), args.strip()
+        args = args.strip()
+        # partition 在首个 '<' 切分：args 带原始收尾 '>'（`Node<K, V>` → 'K, V>'；
+        # 嵌套实参 `Entry<String, JArray<Object>>` → 'String, JArray<Object>>'）。
+        # 只剥最外层一个——嵌套实参的内层 '>' 保留，否则重组 f"{common}<{args}>"
+        # 会重复收尾（`Node<K, V>>`，此前无泛型实参一致的调用方，潜伏未触发）。
+        if args.endswith('>'):
+            args = args[:-1].rstrip()
+        return base.strip(), args
     a_base, a_args = _split(a_rust)
     b_base, b_args = _split(b_rust)
     common = _common_ref_type(a_base, b_base, registry)

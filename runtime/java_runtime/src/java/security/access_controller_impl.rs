@@ -29,18 +29,16 @@ impl AccessController {
     /// 取 `PrivilegedAction__VTable` 视图后调用擦除签名的 `run()`。
     /// action 为 null 时按 JVM 语义抛 NullPointerException。
     ///
-    /// upcalls：经擦除 vtable 分派调用 action.run()。upcall 声明是静态的，
-    /// 动态接收者无法表达——按当前调用图的 PrivilegedAction 实现者声明
-    /// （GetBooleanAction.run，其手写体 __impl_run 再声明自己的依赖）。
-    ///
-    /// 注：接口级回调边（声明 `java/security/PrivilegedAction.run:()Ljava/lang/Object;`，
-    /// BFS 接口分派自动翻译闭包内全部实现类）已在 callchain.py 落地并验证
-    /// （FileSystems$DefaultFileSystemHolder$1 / ZoneRulesProvider$1 两例 stub 消除），
-    /// 但激活会使含休眠序列化闭包的测试（StreamBasic/PatternMatch 等，其闭包内
-    /// ObjectStreamClass.<init> 的 doPrivileged 调用点绑定匿名实现者）翻译反射
-    /// 巨闭包，暴露 blocks.py unify 域（三目合并退化接收者 E0599）等三族编译缺口
-    /// ——禁改域，待其清偿后把声明翻转为接口级（一行）。
-    #[jvm_boundary(upcalls = "sun/security/action/GetBooleanAction.run:()Ljava/lang/Boolean;")]
+    /// upcalls（接口级回调边，已激活）：声明 `java/security/PrivilegedAction.run`
+    /// ——upcall 目标在边界接口上，callchain 的 `_pending_iface_edges` 把接口方法键
+    /// 入队，`_propagate_virtual_targets` 接口分支自动翻译闭包内全部实现类
+    /// （FileSystems$DefaultFileSystemHolder$1 / ZoneRulesProvider$1 两族 stub 消除，
+    /// 零实现类枚举）。此前休眠在枚举形态（GetBooleanAction.run 单实现者）：
+    /// 激活暴露的 blocks.py unify 三族编译缺口（三目合并退化接收者 E0599 /
+    /// 双局部声明载体 E0308 / 基类调用载体实参装箱 E0308）已由 fix/unify-fourth
+    /// 清偿——unify_pair 泛型 widening 第五增量、_store_local 绑定点区间判定、
+    /// invokespecial 基类调用实参重建。
+    #[jvm_boundary(upcalls = "java/security/PrivilegedAction.run:()Ljava/lang/Object;")]
     pub fn doPrivileged_privilegedaction(action: Object) -> Result<Object> {
         if action.0.is_jvm_null() {
             return Err(JvmError::null_pointer());
