@@ -157,37 +157,46 @@ def _lookup_method_sig_params(
             #      声明侧（method_gen/emitted_method_sig_types 的接口回退）按描述符
             #      发射同一载体。描述符是桥接擦除（`Ljava/lang/Object;`，javac 对
             #      OfLong 桥接 forEachRemaining(Object)）时维持 Object——与声明侧一致。
-            import re as _re_iface
-            from ..jvm_type import carrier_type_for_ident as _carrier_keep
+            # TypeIR 批次 3（S1）：类型串头是否 registry 接口、描述符擦除头与形参头
+            # 同一，均经类型对象判定（from_rust_type → is_interface / erasure 相等），
+            # 替代 split('<')[0] 头部解剖 + 短名集成员检查 / 短名相等比较。
+            # 行为零变化约束（148c6bc 保护带）：判定结果与旧短名口径逐点一致
+            # （configure_short_names 后短名 → binary 单射）
+            from ..jvm_type import (ClassRef as _ClassRefS1,
+                                    carrier_type_for_ident as _carrier_keep,
+                                    from_rust_type as _frt_s1)
             from ..type_map import jvm_to_rust as _jvm_to_rust_g
-            _reg_iface_shorts = _registry_iface_shorts(registry)
+
+            def _iface_head(rust_ty: str) -> bool:
+                _t_s1 = _frt_s1(rust_ty, registry)
+                return isinstance(_t_s1, _ClassRefS1) and _t_s1.is_interface
+
             # 手写边界方法：接口位置的契约是 Object（其 _impl.rs 签名先于载体化）
             _hw = _handwritten_boundary_method(cls_bin, mname, full_desc, registry)
             final_resolved: list[str | None] = []
             for _ri, t in enumerate(resolved):
                 if _hw and _ri < len(descriptor_params):
-                    _t_base = t.split('<')[0] if t else ''
                     _d_rust = _jvm_to_rust_g(descriptor_params[_ri], registry)
-                    _d_base = _d_rust.split('<')[0]
-                    if (t is not None and _t_base in _reg_iface_shorts) or (
-                            t is None and _d_base in _reg_iface_shorts):
+                    if ((t is not None and _iface_head(t))
+                            or (t is None and _iface_head(_d_rust))):
                         final_resolved.append('Object')
                         continue
-                if t is not None:
-                    _m = _re_iface.match(r'^(\w+)(?:<|$)', t)
-                    if _m and _m.group(1) in _reg_iface_shorts:
-                        _desc_base = (_jvm_to_rust_g(descriptor_params[_ri], registry).split('<')[0]
-                                      if _ri < len(descriptor_params) else '')
-                        # receiver_is_this（接口 default 方法体内 this.xxx）：发射侧
-                        # （virtual_in 语境的存根）按描述符擦除，调用侧不得按接收者
-                        # 实参映射发射载体——否则与存根签名发散
-                        if ((_carrier_keep(t, registry) == t and _ri in subst_pos
-                                and not receiver_is_this)
-                                or _desc_base == t.split('<')[0]):
-                            final_resolved.append(t)
-                        else:
-                            final_resolved.append(None)
-                        continue
+                if t is not None and _iface_head(t):
+                    _desc_rust = (_jvm_to_rust_g(descriptor_params[_ri], registry)
+                                  if _ri < len(descriptor_params) else '')
+                    # 描述符擦除头与形参头同一（erasure binary 相等 ⇔ 旧短名相等）
+                    _same_head = (_frt_s1(_desc_rust, registry).erasure()
+                                  == _frt_s1(t, registry).erasure())
+                    # receiver_is_this（接口 default 方法体内 this.xxx）：发射侧
+                    # （virtual_in 语境的存根）按描述符擦除，调用侧不得按接收者
+                    # 实参映射发射载体——否则与存根签名发散
+                    if ((_carrier_keep(t, registry) == t and _ri in subst_pos
+                            and not receiver_is_this)
+                            or _same_head):
+                        final_resolved.append(t)
+                    else:
+                        final_resolved.append(None)
+                    continue
                 final_resolved.append(t)
             return final_resolved
     return None
