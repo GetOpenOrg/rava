@@ -850,6 +850,85 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             except Exception:
                 pass
 
+        # 迟至静态边补扫（JDK25 StringLatin1.hashCode → ArraysSupport.hashCodeOfUnsigned
+        # 实证）：以内部边界类为常量池类的**静态**方法引用（invokestatic）在
+        # _collect_method_refs 落 boundary_refs 通道，而该通道的消费端——虚调用
+        # 目标传播（RTA / 接口实现者）——只对实例方法有意义，静态边被确定性丢弃
+        # （与时机无关）；发射侧却对该边照常渲染直调（ArraysSupport::hashCodeOfUnsigned(...)），
+        # 被调方无手写 impl 时落 panic 存根，运行期命中即 stub 崩溃——发射集与
+        # 入队集在此失配。三个通道沉降后按 boundary_virtual_targets 已登记键窄幅
+        # 补扫（不重走字节码、不重跑 _propagate_virtual_targets / stub 通道——
+        # LocaleSyntaxException E0425 教训）：静态声明、非 native/abstract（有字节码
+        # 可译）、无手写 impl 覆盖（与发射侧 _nf_covered 同一真源：共置
+        # _impl.rs/_ext.rs 的 pub fn 名，见 NativeUpcalls.provides）的键入队翻译。
+        # 手写 impl 已覆盖的键不入队——其字节码引用不是手写体的依赖，入队只会
+        # 无谓扩大闭包、扰动既有指纹。补扫只入方法键：类本体留在 stub 通道
+        # （cls 集不变，闭包指纹零扰动）；静态键不参与虚分派传播，无需重跑
+        # _propagate_virtual_targets。链式静态边（补入方法体引用更多未覆盖边界
+        # 静态）与 _process 带进的新类由外层不动点覆盖；排序遍历保确定性。
+        while True:
+            _added = False
+            for _scls, _smeth, _sdesc in sorted(boundary_virtual_targets):
+                if (_smeth in ('<init>', '<clinit>')
+                        or (_scls, _smeth, _sdesc) in visited_methods):
+                    continue
+                # 判定探测不落 class_cache（同 _drain_iface_edges 注：提前缓存
+                # 会改变 _ci_of / RTA 过滤的可见性）；确需入队时经
+                # _enqueue_method → _process 正规加载
+                _sci = class_cache.get(_scls)
+                if _sci is None:
+                    _sdata = resolver.resolve(_scls)
+                    try:
+                        _sci = (parse_class_bytes(_sdata, _scls)
+                                if _sdata is not None else None)
+                    except Exception:
+                        _sci = None
+                    if _sci is None:
+                        continue
+                _sdecl = next((m for m in _sci.methods
+                               if m.name == _smeth and m.descriptor == _sdesc), None)
+                if (_sdecl is None or not _sdecl.is_static
+                        or _sdecl.is_native or _sdecl.is_abstract):
+                    continue
+                # 门 1：类处于增量手写管理（impl 文件存在）才补译缺口；无 impl 文件的
+                # 边界类保持整体 panic 存根节奏（CLAUDE.md 3b 按需推进，未实现即
+                # 如实存根）。无此门，补扫会把全部未覆盖边界静态边（JDK21 Stream
+                # 语料 ~90 条：ValueConversions/Modules/ZoneInfoFile 族）及其传递
+                # 引用整体展开——正是 4b776b6 记录的 stub 通道类型闭环重开。
+                if upcalls is None or not upcalls.has_impls(_scls):
+                    continue
+                # 门 2：成员已由手写 impl 提供则不入队（字节码引用不是手写体依赖）
+                if upcalls.provides(_scls, _smeth):
+                    continue
+                # 门 3：缺口方法自含可译——其字节码的外部方法引用必须落在已服务
+                # 域（公开 API / 用户类 / 同类自身 / 手写 impl 已覆盖成员）。
+                # 指向未覆盖边界机制的引用（BootLoader.loadLibrary → 匿名
+                # PrivilegedAction、FloatingDecimal.parseHexString → $ASCIIToBinary
+                # 转换器族）说明该方法的翻译需要展开新的边界机制——发射层对
+                # 边界内部结构（冲突改名的嵌套类型、doPrivileged 的 Object 载体）
+                # 的渲染不完整（E0433 BootLoader_1 / 可读层 from_any 实证），这类
+                # 边保持既有 panic 存根（命中即如实报缺口，按 3b 节奏手写补全）。
+                # 判定只看 _collect_method_refs 的 boundary_refs 通道：公开 API /
+                # 用户类 / lib 类引用本就走方法通道可译；边界引用按
+                # 同类自身 / impl 覆盖白名单放行。
+                _refs_ok = True
+                for _rcls, _rmeth, _rdesc in _collect_method_refs(
+                        _sdecl.instrs, user_class_names=user_names,
+                        extra_prefixes=lib_prefixes)[3]:
+                    if _rcls != _scls and not upcalls.provides(_rcls, _rmeth):
+                        _refs_ok = False
+                        break
+                if not _refs_ok:
+                    continue
+                if os.environ.get('JAVA_RTA_BFS_EDGE_AUDIT'):
+                    print(f"[bfs-audit] late-static-edge: {_scls}.{_smeth}:{_sdesc}")
+                _enqueue_method((_scls, _smeth, _sdesc))
+                _added = True
+            while queue:
+                _process(*queue.popleft())
+            if not _added:
+                break
+
         # 迟至实现者清扫（doPrivileged 接口级回调边激活实证）：接口分派传播只扫
         # 当时已在 jdk_infos 的实现类，而边界类实现者（GetBooleanAction）多经
         # field_discover 的 stub 通道**晚于**方法 BFS 进闭包——其 run 覆盖与手写体
