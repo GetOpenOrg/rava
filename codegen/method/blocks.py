@@ -32,7 +32,7 @@ from ..instr import sim_instr
 from ..instr.hierarchy import _common_ref_type
 from ..render import render_expr, render_stmt, render_type
 from ..rs_ir import LetStmt, AssignStmt, RawExpr, RawStmt, RsNamed, Var
-from ..stack import BOOL, StackSim, _clone_moved_var, erased_base, erased_class_of
+from ..stack import BOOL, StackSim, _clone_moved_var, erased_base
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type
 from .try_catch import TryCatchPlan, _binding_type
 
@@ -194,15 +194,19 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
         ty = ety
     elif (ety_str == 'Object' and ty_str not in _SCALAR_TYPES and ty_str != 'Object'
           and ty_str not in class_tparams):
-        # Object 臂与具体类型臂汇合：JVM 校验器的合并点是公共祖先，Rust 需要两臂
-        # 同型 → Object 臂按具体臂类型还原视图。checkcast 语义（A-3：try_cast，
-        # 失败返回 Err 可被 java_try 捕获，S-1，替代 downcast 的 panic）
-        from ..instr.coerce import _render_cast
-        _ty_ref = erased_class_of(ty_str, registry)
-        if _ty_ref is not None:
-            ev = _render_cast(ev, ty_str, binary_name=_ty_ref.binary, checked=True)
-        else:
-            ev = f"({ev}).into()"
+        # 具体类型臂与擦除 Object 臂汇合（对端臂字节码真型是接口/根类——如
+        # Nodes.builder 的 else 臂调用 builder() 声明返回 Node$Builder，接口擦成
+        # Object）：JVM 校验器的合并点是公共祖先，绝不窄于任一臂——异构兄弟类
+        # （FixedNodeBuilder vs SpinedNodeBuilder 同父 Builder）不能定型为首臂
+        # 具体类并伪造 checkcast（try_cast 制造 Java 没有的 CCE）。合并局部是
+        # 合成槽无 LVT 声明形态可依 → 合并点按擦除 Object 落定，具体臂经
+        # _coerce_to_object 上转（Object::from 保对象标识与 vtable，后续接口
+        # 调用动态分派，与声明接口类型的字节码语义一致）。源码真 checkcast
+        # （javac 对显式窄化的发射）已在上游 sim/control.py 定型臂类型，两臂
+        # 同型不进此分支——此分支恒为「对端静态类型更宽」的形态。
+        from ..instr.coerce import _coerce_to_object
+        tv = _coerce_to_object(tv, ty_str, registry, class_tparams, clone=False)
+        ty = _str_to_rs_type('Object')
     elif (ty_str == 'Object' and ety_str not in _SCALAR_TYPES and ety_str != 'Object'
           and ety_str not in class_tparams):
         # A-4（阶段 0 证据 merge-box 段）：具体类型臂并入擦除 Object 合并槽（目标的
