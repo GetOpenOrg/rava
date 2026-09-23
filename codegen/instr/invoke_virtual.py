@@ -114,16 +114,20 @@ def _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
     # `== Object[].class`（ldc 类字面量）身份比较成立——Arrays.copyOf /
     # copyOfRange 的同型判定不受影响（异型数组按 JVM 语义不再误判为
     # Object[]）。
-    if mname == 'getClass' and obj_ty.startswith('JArray<'):
-        # [equiv-audit] class-literal（S-5）：数组 getClass 的发射早路径
-        #（动态分派后数组侧同一性已精确；计数维持发射点口径）
-        equiv_audit.record('class-literal')
-        _recv = obj_e[1:] if obj_e.startswith('&') else obj_e
-        v = sim.fresh()
-        sim.emit(RawStmt(
-            f"let {v}: Class = Object::from(Clone::clone(&{_recv})).0.getClass()?;"))
-        sim.push(Var(v), RsNamed('Class'))
-        return True
+    if mname == 'getClass':
+        # TypeIR 批次 3（V1）：数组接收者判定走类型对象（Array 变体），
+        # 替代 obj_ty 的数组前缀文本形态探测
+        from ..jvm_type import from_rust_type, Array as _ArrayT
+        if isinstance(from_rust_type(obj_ty, registry), _ArrayT):
+            # [equiv-audit] class-literal（S-5）：数组 getClass 的发射早路径
+            #（动态分派后数组侧同一性已精确；计数维持发射点口径）
+            equiv_audit.record('class-literal')
+            _recv = obj_e[1:] if obj_e.startswith('&') else obj_e
+            v = sim.fresh()
+            sim.emit(RawStmt(
+                f"let {v}: Class = Object::from(Clone::clone(&{_recv})).0.getClass()?;"))
+            sim.push(Var(v), RsNamed('Class'))
+            return True
 
     return False
 
