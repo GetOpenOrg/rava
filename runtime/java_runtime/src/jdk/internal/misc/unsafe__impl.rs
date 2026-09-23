@@ -106,6 +106,25 @@ fn _instance_int_cell(o: &Object, offset: i64) -> Option<Rc<std::cell::Cell<i32>
     o.0.__unsafe_int_cell(&field)
 }
 
+/// 偏移 id → 实例引用字段读（VarHandle 引用族消费）：字段名经登记表反查后走
+/// ObjectVTable 的引用原子协议（`__unsafe_ref_get`）。与数组引用访问器族
+/// （`getReferenceAcquire` 等，偏移按数组布局反解下标）分立——VarHandle 的
+/// Field 家族偏移恒出自 objectFieldOffset 登记表，两口径不混用。
+/// 未登记的 id 或运行时类无该引用字段 → None。
+fn _instance_ref_get(o: &Object, offset: i64) -> Option<Object> {
+    let field = _offset_field_name(offset)?;
+    o.0.__unsafe_ref_get(&field)
+}
+
+/// 偏移 id → 实例引用字段写（`_instance_ref_get` 的镜像）：命中写入返回 true，
+/// 未登记 / 无臂 → false。
+fn _instance_ref_set(o: &Object, offset: i64, v: Object) -> bool {
+    match _offset_field_name(offset) {
+        Some(field) => o.0.__unsafe_ref_set(&field, v),
+        None => false,
+    }
+}
+
 impl Unsafe {
     /// 进程内唯一的 Unsafe 实例（对应静态字段 theUnsafe）。
     #[jvm_boundary]
@@ -160,6 +179,19 @@ impl Unsafe {
             format!("{}", f.__get_clazz().__get_name()),
             format!("{}", f.__get_name()),
         ))
+    }
+
+    /// 偏移 id → 实例引用字段读（VarHandle 引用族 `get`/`getVolatile`/CAS 的
+    /// 读侧消费，非 Unsafe 的 Java 公开面）：经 `_instance_ref_get` 的登记表
+    /// 反查 + ObjectVTable 引用原子协议。
+    pub(crate) fn __vh_ref_get(&self, o: &Object, offset: i64) -> Option<Object> {
+        _instance_ref_get(o, offset)
+    }
+
+    /// 偏移 id → 实例引用字段写（VarHandle 引用族 `set`/`setVolatile`/CAS 的
+    /// 写侧消费）：命中写入 true，未登记 / 运行时类无该引用字段 → false。
+    pub(crate) fn __vh_ref_set(&self, o: &Object, offset: i64, v: Object) -> bool {
+        _instance_ref_set(o, offset, v)
     }
 
     /// `arrayBaseOffset(Class)`：数组存储里首个元素前的头部长度。HotSpot 64 位
@@ -331,6 +363,87 @@ impl Unsafe {
             panic!("jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object; (offset={} 的载体不是引用元素数组)", offset)
         });
         arr.get(_ref_array_index(offset))
+    }
+
+    // ── 引用访问器的通用形态（plain / volatile / opaque 同一族）───────────────
+    //
+    // 载体驱动分派：holder 是引用元素数组 → 数组形态（协变视图 + 偏移反解，
+    // 与 acquire/release 形态同一套常量）；否则实例字段形态（偏移经登记表
+    // 反查字段名 + ObjectVTable 引用原子协议——与直接字段读取同一存储单元，
+    // JVM 字段内存语义）。单 OS 线程协作调度下三种访问序无可见性区别
+    // （同一单元，S-11）。消费面：LockSupport.setBlocker（Thread.parkBlocker）、
+    // AQS Node.prev、ThreadLocalRandom 的 Thread.threadLocals 清理、
+    // ClassSpecializer 的 speciesData 槽等。
+
+    /// `getReference(Object o, long offset)`：引用读（plain）。
+    #[jvm_boundary]
+    pub fn getReference(&self, o: Object, offset: i64) -> Result<Object> {
+        if let Some(arr) = _erased_ref_array(&o) {
+            return arr.get(_ref_array_index(offset));
+        }
+        match _instance_ref_get(&o, offset) {
+            Some(v) => Ok(v),
+            None => panic!("stub: jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object; (offset={} 无实例引用字段臂且非引用元素数组)", offset),
+        }
+    }
+
+    /// `putReference(Object o, long offset, Object x)`：引用写（plain）。
+    #[jvm_boundary]
+    pub fn putReference(&self, o: Object, offset: i64, x: Object) -> Result<()> {
+        if let Some(arr) = _erased_ref_array(&o) {
+            return arr.set(_ref_array_index(offset), x);
+        }
+        if _instance_ref_set(&o, offset, x) {
+            return Ok(());
+        }
+        panic!("stub: jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V (offset={} 无实例引用字段臂且非引用元素数组)", offset)
+    }
+
+    /// `getReferenceVolatile(Object o, long offset)`：引用 volatile 读。
+    #[jvm_boundary]
+    pub fn getReferenceVolatile(&self, o: Object, offset: i64) -> Result<Object> {
+        self.getReference(o, offset)
+    }
+
+    /// `putReferenceVolatile(Object o, long offset, Object x)`：引用 volatile 写。
+    #[jvm_boundary]
+    pub fn putReferenceVolatile(&self, o: Object, offset: i64, x: Object) -> Result<()> {
+        self.putReference(o, offset, x)
+    }
+
+    /// `getReferenceOpaque(Object o, long offset)`：引用 opaque 读
+    /// （JDK 9+ `Unsafe.getReferenceOpaque`）。
+    #[jvm_boundary]
+    pub fn getReferenceOpaque(&self, o: Object, offset: i64) -> Result<Object> {
+        self.getReference(o, offset)
+    }
+
+    /// `putReferenceOpaque(Object o, long offset, Object x)`：引用 opaque 写
+    /// （LockSupport.setBlocker 的写路径）。
+    #[jvm_boundary]
+    pub fn putReferenceOpaque(&self, o: Object, offset: i64, x: Object) -> Result<()> {
+        self.putReference(o, offset, x)
+    }
+
+    /// `park(boolean isAbsolute, long time)`：LockSupport.park 的 VM 底座
+    /// （permit 语义的阻塞）。单线程协作档位（S-11）与 `Thread.sleep0` 同一
+    /// 承载：被「阻塞」的当前模拟线程泵运行就绪模拟线程（CompletableFuture
+    /// 的 ThreadPerTaskExecutor 异步任务在此推进——完成后 `waitingGet` 的
+    /// 重查循环即返回），泵尽返回（JLS §17.3 允许的虚假唤醒形态）。permit
+    /// 簿记不驻留：调用方（LockSupport.park/CF waitingGet）均为条件循环 +
+    /// 重查消费面，虚假唤醒语义下观察面等价。blocker 字段（parkBlocker）由
+    /// 上层 `putReferenceOpaque` 携带（栈轨迹消费面，golden 不可见）。
+    #[jvm_boundary]
+    pub fn park(&self, _is_absolute: bool, _time: i64) -> Result<()> {
+        crate::monitor::cooperative_park()
+    }
+
+    /// `unpark(Object thread)`：LockSupport.unpark 的 VM 底座。协作档位下
+    /// 唤醒动作发生在泵内（被 park 的线程不在 OS 等待上）——permit 授予后
+    /// 的重新调度由泵的 FIFO 与调用方重查循环兑现 → no-op。
+    #[jvm_boundary]
+    pub fn unpark(&self, _thread: Object) -> Result<()> {
+        Ok(())
     }
 
     /// `putReferenceRelease(Object o, long offset, Object x)`：引用元素数组按

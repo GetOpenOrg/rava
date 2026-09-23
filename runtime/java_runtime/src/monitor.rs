@@ -251,6 +251,19 @@ fn coop_pump() -> Option<CoopPump> {
     COOP_PUMP.with(|c| *c.borrow())
 }
 
+/// 协作档位的 park 底座（`Unsafe.park` 的消费面，与 `wait_timeout` 的泵路径
+/// 同型但无监视器簿记）：泵运行就绪模拟线程后返回——返回本身是 JLS §17.3
+/// 允许的虚假唤醒形态，调用方（LockSupport.park / CF waitingGet）的条件
+/// 循环重查消费面兑现等价。未登记泵（从未有线程启动）→ 直接返回（无就绪
+/// 线程可推进，阻塞不可达的形态与 sleep0 同一取舍）。
+pub fn cooperative_park() -> Result<()> {
+    if let Some(pump) = coop_pump() {
+        let ticket: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+        pump(&ticket, 0)?;
+    }
+    Ok(())
+}
+
 // ── 身份侧表 ─────────────────────────────────────────────────────────────────
 
 fn side_table() -> &'static Mutex<HashMap<usize, Arc<Monitor>>> {

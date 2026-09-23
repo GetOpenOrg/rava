@@ -237,6 +237,128 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         }
     };
 
+    // Unsafe/VarHandle 实例字段引用原子协议（运行时类应答）：引用字段（非基本，
+    // 含擦除字段——擦除载体本就是 `Rc<RefCell<Option<Box<Object>>>>`）按字段名
+    // 直答读/写。与 int/long cell 的关键差异：引用载体类型随声明类型异构
+    // （`Box<Object>` / `Box<Completion>`），无统一 cell 类型可导出 → 读值在臂内
+    // `Object::from` 上转、写值 `<T as From<Object>>::from` 还原（边界转换与
+    // 字段访问器协议一致，null 双形态经 unwrap_or_default/default 归一）。
+    // wrapper 侧同名方法按静态类生成臂（downcast 自身 inner，直接 cell 访问）
+    // ——静态基类视图（如 Completion 视图承载 UniApply inner）的请求臂不可达，
+    // 由 wrapper 未命中后经 vtable 委托到本覆盖应答（与 `__unsafe_long_cell`
+    // 的「inner 覆盖 + wrapper 委托」同型）。字段不在名单 → 不生成方法，落
+    // object.rs 的 trait 默认（读 None / 写 false，调用方归 stub）。
+    let inner_ref_get_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+        .filter(|(name, ty)| ctx.is_erased(name) || !ctx.inherited_is_basic(name, ty))
+        .map(|(name, _)| {
+            let field_str = name.to_string();
+            if ctx.is_erased(name) {
+                quote! {
+                    #field_str => ::std::option::Option::Some(
+                        ::std::option::Option::unwrap_or_default(
+                            self.#name.borrow().as_deref().map(::std::clone::Clone::clone))),
+                }
+            } else {
+                quote! {
+                    #field_str => ::std::option::Option::Some(
+                        ::std::option::Option::unwrap_or_default(
+                            self.#name.borrow().as_deref()
+                                .map(|__b| Object::from(::std::clone::Clone::clone(__b))))),
+                }
+            }
+        })
+        .chain(ctx.fields.iter()
+            .filter(|(name, ty)| ctx.is_erased(name) || !is_basic(ty))
+            .map(|(name, _)| {
+                let field_str = name.to_string();
+                if ctx.is_erased(name) {
+                    quote! {
+                        #field_str => ::std::option::Option::Some(
+                            ::std::option::Option::unwrap_or_default(
+                                self.#name.borrow().as_deref().map(::std::clone::Clone::clone))),
+                    }
+                } else {
+                    quote! {
+                        #field_str => ::std::option::Option::Some(
+                            ::std::option::Option::unwrap_or_default(
+                                self.#name.borrow().as_deref()
+                                    .map(|__b| Object::from(::std::clone::Clone::clone(__b))))),
+                    }
+                }
+            }))
+        .collect();
+    let inner_ref_set_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+        .filter(|(name, ty)| ctx.is_erased(name) || !ctx.inherited_is_basic(name, ty))
+        .map(|(name, ty)| {
+            let field_str = name.to_string();
+            if ctx.is_erased(name) {
+                quote! {
+                    #field_str => {
+                        *self.#name.borrow_mut() =
+                            ::std::option::Option::Some(::std::boxed::Box::new(v));
+                        true
+                    }
+                }
+            } else {
+                quote! {
+                    #field_str => {
+                        *self.#name.borrow_mut() = ::std::option::Option::Some(
+                            ::std::boxed::Box::new(
+                                <#ty as ::std::convert::From<Object>>::from(v)));
+                        true
+                    }
+                }
+            }
+        })
+        .chain(ctx.fields.iter()
+            .filter(|(name, ty)| ctx.is_erased(name) || !is_basic(ty))
+            .map(|(name, ty)| {
+                let field_str = name.to_string();
+                if ctx.is_erased(name) {
+                    quote! {
+                        #field_str => {
+                            *self.#name.borrow_mut() =
+                                ::std::option::Option::Some(::std::boxed::Box::new(v));
+                            true
+                        }
+                    }
+                } else {
+                    quote! {
+                        #field_str => {
+                            *self.#name.borrow_mut() = ::std::option::Option::Some(
+                                ::std::boxed::Box::new(
+                                    <#ty as ::std::convert::From<Object>>::from(v)));
+                            true
+                        }
+                    }
+                }
+            }))
+        .collect();
+    let inner_ref_get_query: TokenStream2 = if inner_ref_get_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __unsafe_ref_get(&self, field: &str) -> ::std::option::Option<Object> {
+                match field {
+                    #(#inner_ref_get_arms)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+        }
+    };
+    let inner_ref_set_query: TokenStream2 = if inner_ref_set_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __unsafe_ref_set(&self, field: &str, v: Object) -> bool {
+                match field {
+                    #(#inner_ref_set_arms)*
+                    _ => false,
+                }
+            }
+        }
+    };
+
     // A-1 存储层擦除后，inner 的 ObjectVTable impl 只承载「按擦除类」的判定与桥接：
     // 视图重建（__view_as / __view_into）、逐字段浅拷贝（__shallow_copy）与擦除存储
     // 导出（__erased_state，已删除）都移到 wrapper 侧——Object 直接持有 wrapper
@@ -259,6 +381,8 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #erased_vtable_query
                 #inner_long_cell_query
                 #inner_int_cell_query
+                #inner_ref_get_query
+                #inner_ref_set_query
                 #to_string_inner_bridge
             }
         }
