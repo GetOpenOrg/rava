@@ -615,7 +615,12 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 if _ci_of(x) is not None
                 and not _ci_of(x).is_interface and not _ci_of(x).is_abstract
             )
-            for cls, meth, desc in list(visited_methods):
+            # sorted：BFS 的传播与入队对集合按全序迭代——集合（visited_methods 等）
+            # 的迭代序随 PYTHONHASHSEED 漂移，会使 stub 通道 / 父类补全通道对
+            # 边缘类（AbstractClassLoaderValue 一类双通道可达者）的归属在两次
+            # 转译间翻转（闭包指纹 ±1、生成树 diff 非零）。排序后处理序确定，
+            # 闭包与生成树对哈希种子稳定。
+            for cls, meth, desc in sorted(visited_methods):
                 if meth in ('<init>', '<clinit>'):
                     continue
                 ci = class_cache.get(cls)
@@ -673,7 +678,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
-        _stub_queue: deque[str] = deque(field_discover_classes)
+        # sorted：种子序确定（集合迭代序随哈希种子漂移，见 _propagate_virtual_targets 注）
+        _stub_queue: deque[str] = deque(sorted(field_discover_classes))
         _stub_visited: set[str] = set(field_discover_classes)
 
         # 手写 _impl.rs / _ext.rs 的签名引用类型随宿主类入闭包（type-only stub 通道）。
