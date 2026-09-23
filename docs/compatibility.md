@@ -26,7 +26,7 @@
 | **行为等价** | 外部可观测行为一致（副作用、异常、执行顺序） | `JvmError`/真实 Throwable 异常链、CCE/ArrayStoreException、`java_try!`、try-finally、vtable 双指针虚分派、`InternalLock`（ReentrantMutex） |
 | **语义等价** | 输入输出与异常一致，内部机制允许不同 | 集合为 Rust 实现、稳定排序、String 走字节码翻译保留 compact strings |
 | **条件等价** | 等价性取决于运行时条件，**分档承诺** | `monitorenter`：单线程 = 行为等价；多线程互斥待 InternalLock 接入（S-11） |
-| **近似等价** | 已知、可列举的偏差场景；**不允许静默**（告警契约 §5） | identity hash、intern 同一性、null 数组、`getClass` 终态、record `hashCode`、栈回溯（详见 §3） |
+| **近似等价** | 已知、可列举的偏差场景；**不允许静默**（告警契约 §5） | identity hash、null 数组、`getClass` 终态、record `hashCode`、栈回溯（详见 §3；intern 同一性已修出列） |
 | **不可等价** | 无法在此架构下承诺；转译期报错或可见 stub | ClassLoader 动态加载、Agent、运行时生成类 |
 
 **传递性规则**：类的有效等价等级 = min(自身声明等级, 全部依赖成员的等级)。用户类调用到近似等价的 JDK 方法时整体降级，不得静默宣称更高等级。终态：codegen 输出每类有效等价等级报告（待立项，规格来源即本节）。
@@ -45,7 +45,7 @@
 | **`Thread.start/join/sleep/isAlive` + wait/notify 协作调度** | 条件等价 | **确定性输出程序=语义等价**（TestSynchronized/TestThreadJoin/TestWaitNotify 全绿——`8eca47b`：start0 就绪队列登记、join/wait/sleep 嵌套泵推进）。边界：依赖真实 interleaving 的输出不可达；限时 wait 无到点自醒（JLS §17.3 虚假唤醒语义）；无通知源的无限 wait 忙转；InterruptedException 未实现（语料无中断等待）；sleep 不驻留 | S-11 线程档位（真并发待 Send/Sync 化） |
 | `Object.wait` / `notify` / `notifyAll` | 行为等价（目标） | **未实现**（`Object` 无该方法，4 用例 E0599） | 待立项（runtime 小改） |
 | identity hash / 默认 `Object.hashCode` | 近似等价 | 未实测（166 无 identityHashCode 用例） | S-6 |
-| `String.intern` 同一性（`==`） | 近似等价 | **实测未齐**（TestStringCompare FAIL：interned==lit=true→false） | S-6 |
+| `String.intern` 同一性（`==`） | 语义等价 | **已实测**（TestStringCompare PASS：interned==lit=true、lit==heap=false——runtime 全局驻留表，字面量路径 `From<&str>` 与 `intern()` 同表取规范实例；拼接走 `from_owned` 不入表）。TestStringEdge 同机制行待复跑（invoke 域预存编译断，与本修无关） | ~~S-6 intern~~ 已修（identity-hash 同条目另一半仍未实测） |
 | null 数组表示 / 数组 NPE | 近似等价 | 未实测 | S-2.1 |
 | `getClass` / 类字面量同一性 | 近似等价（完整终态后为语义等价） | 基础路径 PASS（TestClassLiteral）；同一性未实测 | S-5 |
 | record `hashCode`（31 多项式） | 近似等价 | 未实测（TestRecord 基础路径 PASS） | S-7 |
@@ -80,7 +80,7 @@
 | ID | 触发点 | 等级 | 条目 |
 |---|---|---|---|
 | `identity-hash` | `System.identityHashCode` / 默认 hashCode 路径 | 近似等价 | S-6 |
-| `intern-identity` | `String.intern` + `==` | 近似等价 | S-6 |
+| `intern-identity` | `String.intern` + `==` | ~~近似等价~~ 已修（runtime 驻留表；计数维持发射点口径） | ~~S-6~~ |
 | `null-array` | JArray null 表示 / null 数组访问 | 近似等价 | S-2.1 |
 | `boxed-null` | 装箱类型 null 路径 | 近似等价 | S-3 |
 | `class-literal` | `getClass`/类字面量同一性 | 近似等价 | S-5 |
