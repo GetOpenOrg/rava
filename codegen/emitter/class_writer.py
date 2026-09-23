@@ -1412,6 +1412,15 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
             parts.append(_INTERFACE_UPCASTS_SLOT)
         parts.append('')
 
+        # implref 稳定引用别名：冲突改名的 struct 标识随闭包组合漂移（同名类是否
+        # 共存决定 short_cls 是否加前缀），共置 _impl.rs 的跨闭包引用形态须经恒定
+        # 路径取类型。别名收在同名子模块内，不参与包级 glob 再导出，不重回冲突
+        # （glob-glob 的 implref 同名歧义仅在使用点报错，生成代码不使用裸名）。
+        _java_simple = ci.name.rsplit('/', 1)[-1].replace('$', '_')
+        parts.append(f'#[doc(hidden)]')
+        parts.append(f'pub mod implref {{ pub use super::{struct_name} as {_java_simple}; }}')
+        parts.append('')
+
         # G-10：接口私有实例 lambda body 的擦除固有 impl 块。置于 java_class! 块之外，
         # 避免被宏归入接口 vtable / 载体分派（lambda 体不是接口契约，只被 invokedynamic
         # 调用点按名引用）。this 与调用点接收者同为 Iface<Object> 擦除实例化。

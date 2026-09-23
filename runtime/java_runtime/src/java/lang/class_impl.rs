@@ -11,6 +11,26 @@ impl Class {
         Ok(())
     }
 
+    /// `getModule()`：类所属模块。原生二进制无模块系统（vm_boundary：
+    /// java/lang/Module 整体手写）——JDK 类全部落在 java.base，用户类落在
+    /// 未命名模块；消费面（Files.writeString 的调用方模块一致性检查等）只做
+    /// 相等比较，单一单例即可承载（JDK 类侧与 JVM 行为一致：java.base 类
+    /// 同模块恒真）。模块名/层级的完整语义不在档 A 面内。
+    #[jvm_boundary]
+    pub fn getModule(&self) -> Result<Module> {
+        thread_local! {
+            static THE_MODULE: RefCell<Option<Module>> = const { RefCell::new(None) };
+        }
+        Ok(THE_MODULE.with(|cell| {
+            if cell.borrow().is_none() {
+                let mut m = Module::default();
+                m._init_not_null();
+                *cell.borrow_mut() = Some(m);
+            }
+            Clone::clone(cell.borrow().as_ref().unwrap())
+        }))
+    }
+
     /// native getPrimitiveClass(String)：每个基本类型名对应唯一的 Class 对象
     /// （`Integer.TYPE == int.class` 的身份语义），首次请求时创建。
     #[jvm_native]

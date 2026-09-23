@@ -46,6 +46,61 @@ fn _get_bytes_into(src_val: &[i8], src_coder: i8, dst: &mut Vec<i8>, dst_coder: 
 }
 
 impl JavaLangAccess__VTable for SystemJavaLangAccess {
+    /// `getBytesNoRepl(String, Charset)`：JDK 转发 `StringCoding.getBytesNoRepl`
+    /// （REPORT 动作编码，不可映射抛 CharacterCodingException）。POSIX 档 A
+    /// 消费面（Files.writeString → UTF-8）：UTF-8 直编码（全部 Unicode 标量可
+    /// 映射；孤立代理对经 Display 的替换呈现，NoRepl 严格面外）；ISO-8859-1
+    /// 逐 code unit 一字节（> 0xFF 不可映射，错码路径与 newStringNoRepl 同一
+    /// stub 文本报错惯例）。其余 charset 未消费。
+    fn getBytesNoRepl(&self, arg0: String, arg1: Charset) -> Result<JArray<i8>> {
+        let name = if arg1.is_jvm_null() {
+            std::string::String::new()
+        } else {
+            format!("{}", arg1.__get_name())
+        };
+        match name.as_str() {
+            "UTF-8" => {
+                let s: std::string::String = format!("{}", arg0);
+                Ok(JArray::from(
+                    s.into_bytes().into_iter().map(|b| b as i8).collect::<Vec<i8>>(),
+                ))
+            }
+            "ISO-8859-1" => {
+                let val = arg0.__get_value().to_vec();
+                let units: Vec<u16> = if arg0.__get_coder() == 0i8 {
+                    val.iter().map(|b| *b as u8 as u16).collect()
+                } else {
+                    (0..val.len() / 2)
+                        .map(|i| {
+                            let b0 = val[i * 2] as u8;
+                            let b1 = val[i * 2 + 1] as u8;
+                            if cfg!(target_endian = "big") {
+                                u16::from_be_bytes([b0, b1])
+                            } else {
+                                u16::from_le_bytes([b0, b1])
+                            }
+                        })
+                        .collect()
+                };
+                let mut bytes: Vec<i8> = Vec::with_capacity(units.len());
+                for u in units {
+                    if u > 0xFF {
+                        panic!(
+                            "stub: java/nio/charset/CharacterCodingException (getBytesNoRepl ISO-8859-1 unmappable U+{:04X})",
+                            u
+                        );
+                    }
+                    bytes.push(u as u8 as i8);
+                }
+                Ok(JArray::from(bytes))
+            }
+            _ => panic!(
+                "stub: jdk/internal/access/JavaLangAccess.getBytesNoRepl:(Ljava/lang/String;Ljava/nio/charset/Charset;)[B (charset {} 未消费)",
+                name
+            ),
+        }
+    }
+
     /// `newStringNoRepl(byte[], Charset)`：JDK 转发 `StringCoding.newStringNoRepl`
     /// （REPORT 动作解码，错码抛 CharacterCodingException）。语料消费面为
     /// Latin-1 / UTF-8 两族：Latin-1 逐字节为 char（紧凑 LATIN1 coder，无错码
