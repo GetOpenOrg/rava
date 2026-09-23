@@ -504,8 +504,13 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     # （已在 children 中以 pub mod 声明），不是共置手写文件
                     if _f[:-3] in children:
                         continue
-                    # X.rs 不存在时跳过：_impl.rs 静默，不产生无法解析的 mod 声明
-                    if not os.path.exists(os.path.join(dir_path, base + '.rs')):
+                    # X.rs 不存在时跳过：_impl.rs 静默，不产生无法解析的 mod 声明。
+                    # 碰撞后缀类（类名与子包目录同名 → 生成文件 X_t.rs，如
+                    # java/lang/Module → module_t.rs）的伴生文件仍按无后缀命名
+                    # （module_impl.rs——_scan_impl_files 经 registry 以类名映射），
+                    # 存在性判定同时接受 X.rs / X_t.rs 两种宿主形态
+                    if not (os.path.exists(os.path.join(dir_path, base + '.rs'))
+                            or os.path.exists(os.path.join(dir_path, base + '_t.rs'))):
                         continue
                     # 依赖闭包不齐时跳过：impl 编译期硬引用的语料条件生成类（同目录
                     # sibling）缺席则该 impl 整体不参与编译——等价于该 impl 尚不存在，

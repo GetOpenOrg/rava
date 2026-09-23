@@ -365,14 +365,18 @@ impl Unsafe {
     }
 
     /// `getReferenceAcquire(Object o, long offset)`：引用元素数组按偏移读
-    /// （CHM `tabAt`）。数组经擦除协变视图还原 `JArray<Object>`，偏移按
-    /// `i = (offset - ABASE) >> 2` 反解（引用元素 stride 4）。
+    ///（CHM `tabAt`）：数组经擦除协变视图还原 `JArray<Object>`，偏移按
+    /// `i = (offset - ABASE) >> 2` 反解（引用元素 stride 4）；实例字段形态
+    ///（登记表反查 + 引用原子协议）与 getReference 同一存储单元（S-11）。
     #[jvm_boundary]
     pub fn getReferenceAcquire(&self, o: Object, offset: i64) -> Result<Object> {
-        let arr = _erased_ref_array(&o).unwrap_or_else(|| {
-            panic!("jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object; (offset={} 的载体不是引用元素数组)", offset)
-        });
-        arr.get(_ref_array_index(offset))
+        if let Some(arr) = _erased_ref_array(&o) {
+            return arr.get(_ref_array_index(offset));
+        }
+        match _instance_ref_get(&o, offset) {
+            Some(v) => Ok(v),
+            None => panic!("jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object; (offset={} 无实例引用字段臂且非引用元素数组)", offset),
+        }
     }
 
     // ── 引用访问器的通用形态（plain / volatile / opaque 同一族）───────────────
@@ -456,32 +460,47 @@ impl Unsafe {
         Ok(())
     }
 
-    /// `putReferenceRelease(Object o, long offset, Object x)`：引用元素数组按
-    /// 偏移写（CHM `setTabAt`）。经协变视图的 aastore 存储检查写回源数组。
+    /// `putReferenceRelease(Object o, long offset, Object x)`：引用写
+    ///（release）。载体驱动分派：引用元素数组 → 偏移反解（CHM `setTabAt`，
+    /// 协变视图 + aastore 存储检查）；否则实例字段形态（与 putReference
+    /// 同一存储单元，S-11）。
     #[jvm_boundary]
     pub fn putReferenceRelease(&self, o: Object, offset: i64, x: Object) -> Result<()> {
-        let arr = _erased_ref_array(&o).unwrap_or_else(|| {
-            panic!("jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V (offset={} 的载体不是引用元素数组)", offset)
-        });
-        arr.set(_ref_array_index(offset), x)
+        if let Some(arr) = _erased_ref_array(&o) {
+            return arr.set(_ref_array_index(offset), x);
+        }
+        if _instance_ref_set(&o, offset, x) {
+            return Ok(());
+        }
+        panic!("jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V (offset={} 无实例引用字段臂且非引用元素数组)", offset)
     }
 
     /// `compareAndSetReference(Object o, long offset, Object expected, Object x)`：
-    /// 引用元素数组槽位 CAS（CHM `casTabAt`）。比较按 Java `==`（对象身份，
-    /// `PartialEq for Object`）；单 OS 线程协作调度下读-比-写不可分割。
+    /// 槽位/字段 CAS。载体驱动分派：引用元素数组（CHM `casTabAt`）按偏移
+    /// 反解；实例字段（BufferedInputStream.close 的 buf 清空）走登记表反查
+    /// + 引用原子协议。比较按 Java `==`（对象身份，`PartialEq for Object`）；
+    /// 单 OS 线程协作调度下读-比-写不可分割。
     #[jvm_boundary]
     pub fn compareAndSetReference(&self, o: Object, offset: i64, expected: Object, x: Object) -> Result<bool> {
-        let arr = _erased_ref_array(&o).unwrap_or_else(|| {
-            panic!("jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z (offset={} 的载体不是引用元素数组)", offset)
-        });
-        let i = _ref_array_index(offset);
-        let current = arr.get(i)?;
+        let (current, swap): (Object, Box<dyn FnOnce() -> Result<bool>>) =
+            if let Some(arr) = _erased_ref_array(&o) {
+                let i = _ref_array_index(offset);
+                let cur = arr.get(i)?;
+                let arr2 = arr;
+                (cur, Box::new(move || arr2.set(i, x).map(|_| true)))
+            } else {
+                match _instance_ref_get(&o, offset) {
+                    Some(cur) => {
+                        let holder = o;
+                        (cur, Box::new(move || Ok(_instance_ref_set(&holder, offset, x))))
+                    }
+                    None => panic!("jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z (offset={} 无实例引用字段臂且非引用元素数组)", offset),
+                }
+            };
         if current == expected {
-            arr.set(i, x)?;
-            Ok(true)
-        } else {
-            Ok(false)
+            return swap();
         }
+        Ok(false)
     }
 
     /// `getAndAddLong(Object o, long offset, long delta)`：原子读取并加 delta，

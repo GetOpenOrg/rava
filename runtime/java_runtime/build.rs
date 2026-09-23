@@ -68,6 +68,7 @@ fn main() {
     write_direct_super_table(&scan_direct_super(&meta_roots));
     write_field_table(&scan_class_fields(&meta_roots));
     write_method_table(&scan_class_methods(&meta_roots));
+    write_modifiers_table(&scan_class_modifiers(&meta_roots));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
@@ -459,6 +460,78 @@ fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
     let path = Path::new(&out_dir).join("method_table.rs");
     if let Err(e) = fs::write(&path, &out) {
         panic!("写 method_table.rs 失败: {e}");
+    }
+}
+
+/// 类 → java.lang.reflect.Modifier 位集（Class.getModifiers 的数据源）。
+/// 类级属性扫描：`#[access` 含 public → PUBLIC(0x1)；无 super_class 属性 →
+/// 接口（INTERFACE|ABSTRACT，JVMS 语义：接口恒 abstract）——Object 除外
+///（无父类但非接口）；final 位无类级属性源，不发射（无反射消费方依赖）。
+fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
+    let mut result: BTreeMap<String, i32> = BTreeMap::new();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        let mut is_public = false;
+        let mut has_super = false;
+        let mut touched = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                if !current.is_empty() && touched {
+                    let name = std::mem::take(&mut current);
+                    let is_object = name == "java/lang/Object";
+                    result.insert(name, class_modifier_bits(is_public, has_super, is_object));
+                }
+                current = name;
+                is_public = false;
+                has_super = false;
+                touched = true;
+                continue;
+            }
+            if current.is_empty() { continue; }
+            if trimmed.starts_with("#[access") && trimmed.contains("public") {
+                is_public = true;
+            }
+            if trimmed.starts_with("#[super_class") && !trimmed.contains("\"\"") {
+                has_super = true;
+            }
+        }
+        if !current.is_empty() && touched {
+            let is_object = current == "java/lang/Object";
+            result.insert(current, class_modifier_bits(is_public, has_super, is_object));
+        }
+    }
+    result
+}
+
+/// public 位 + 接口位（无父类且非 java/lang/Object → INTERFACE|ABSTRACT）。
+fn class_modifier_bits(is_public: bool, has_super_class: bool, is_object: bool) -> i32 {
+    let mut bits = 0i32;
+    if is_public { bits |= 0x0001; }
+    if !has_super_class && !is_object { bits |= 0x0200 | 0x0400; }
+    bits
+}
+
+fn write_modifiers_table(entries: &BTreeMap<String, i32>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：类修饰符表（binary name → Modifier 位集）。
+         // 数据源：java_class! 块的 access / super_class 属性。接口（无 super_class，
+         // Object 除外）恒含 INTERFACE|ABSTRACT。final 位无属性源不发射。
+         // 消费方：Class.getModifiers（class_impl.rs）。请勿手改。
+
+         pub static CLASS_MODIFIERS: &[(&str, i32)] = &[
+",
+    );
+    for (name, mods) in entries {
+        out.push_str(&format!("    ({:?}, {:#06x}),\n", name, mods));
+    }
+    out.push_str("];
+");
+    let path = Path::new(&out_dir).join("modifiers_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 modifiers_table.rs 失败: {e}");
     }
 }
 
