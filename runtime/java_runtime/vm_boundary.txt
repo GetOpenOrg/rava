@@ -17,3 +17,12 @@ java/lang/ClassLoader
 java/lang/Module
 java/lang/ModuleLayer
 java/lang/Class
+
+# POSIX 原生族档 A（2026-09-23）：FileSystems.getDefault 的默认持有者链
+# （DefaultFileSystemHolder → $1 → getDefaultProvider → getFileSystem("file:///")）
+# 中，getFileSystem 为 UnixFileSystemProvider 的 final 声明——生成侧继承成员的
+# 需求登记不覆盖「静态类型接收者 + 抽象槽位」形态，平台 provider 子类（sun/ 存根）
+# 的 vtable 槽位缺失。类按边界惯例整体手写：getDefault 以
+# DefaultFileSystemProvider.theFileSystem() 等价承载（doPrivileged 在无安全管理器
+# 时透明，JDK 可观测行为一致）。其余成员保持 panic 存根。
+java/nio/file/FileSystems
