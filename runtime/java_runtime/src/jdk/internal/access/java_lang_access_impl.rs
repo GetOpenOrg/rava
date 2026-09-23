@@ -103,6 +103,13 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// 在此还原：coder = 各部 coder 按位或，长度以 char 计后 `<< coder` 折算字节，
     /// 分段写入（Latin1 段写入 UTF16 目标时按 getBytes 展宽），溢出抛
     /// OutOfMemoryError（与 JDK 一致）。
+    /// `layers(ClassLoader)`：加载器可见的模块层序列（ModuleLayer.layers）。
+    /// 单二进制无模块层——恒空 Stream（消费方 ServiceLoader 的
+    /// ModuleServicesLookupIterator 迭代即终止，无附加 provider）。
+    fn layers_classloader(&self, _arg0: crate::java::lang::ClassLoader) -> Result<Object> {
+        crate::java::util::stream::Stream::<Object>::empty()
+    }
+
     fn join(&self, prefix: String, suffix: String, delimiter: String,
             elements: JArray<String>, size: i32) -> Result<String> {
         let prefix_val = prefix.__get_value().to_vec();

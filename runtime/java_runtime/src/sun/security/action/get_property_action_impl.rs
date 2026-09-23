@@ -1,39 +1,33 @@
 //! `sun/security/action/GetPropertyAction` 手写伴生：内部边界类，按调用链
 //! 按需实现（K-2 规则），其余保持 panic 存根。
 //!
-//! 消费链：MethodHandleStatics.<clinit>（DEBUG 属性扫描）。原生二进制无
-//! -D 注入机制，系统属性恒空——privilegedGetProperties 返回空 Properties
-//! （属性缺席的 JDK 等价语义）；privilegedGetProperty 恒缺席值。
+//! 属性真源：`System.props`（System.registerNatives 在 initPhase1 对应物
+//! 阶段填充的 VM 快照子集，见 system_impl.rs）。本类是特权读取的无操作
+//! 包装——安全器不存在，读取即直查。
 
 use crate::prelude::*;
 use super::get_property_action::GetPropertyAction;
 use crate::java::lang::String;
 use crate::java::util::Properties;
-use crate::java::util::concurrent::ConcurrentHashMap;
 
 impl GetPropertyAction {
-    /// static `privilegedGetProperties()`：全量系统属性快照——原生二进制
-    /// 属性恒空，返回空 Properties。构造不经 JDK 构造器链（Properties.<init>
-    /// → Hashtable 族的种子在 sig_types 载体化上有 codegen 域缺口，本域禁改），
-    /// 按擦除字段协议直接挂空后备 ConcurrentHashMap（Properties.getProperty
-    /// 消费 `map` 字段——空表 → 全部查询缺席，与「属性恒缺席」语义一致）。
+    /// static `privilegedGetProperties()`：全量系统属性快照——返回
+    /// `System.props`（VM 快照子集；无安全器，无需副本）。
+    #[jvm_boundary(upcalls = "java/util/Properties.getProperty:(Ljava/lang/String;)Ljava/lang/String;")]
     pub fn privilegedGetProperties() -> Result<Properties> {
-        let mut p = Properties::default();
-        p._init_not_null();
-        p.__set_map(ConcurrentHashMap::<Object, Object>::new()?);
-        Ok(p)
+        crate::java::lang::System::props()
     }
 
-    /// static `privilegedGetProperty(String)`：单属性查询——恒缺席 → null。
+    /// static `privilegedGetProperty(String)`：单属性查询，缺席 → null。
+    #[jvm_boundary(upcalls = "java/util/Properties.getProperty:(Ljava/lang/String;)Ljava/lang/String;")]
     pub fn privilegedGetProperty(theProp: String) -> Result<String> {
-        let _ = theProp;
-        Ok(String::default())
+        crate::java::lang::System::props()?.getProperty_str(theProp)
     }
 
     /// static `privilegedGetProperty(String, String)`：带默认值——属性缺席
     /// 时返回默认值（JDK 语义）。
+    #[jvm_boundary(upcalls = "java/util/Properties.getProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")]
     pub fn privilegedGetProperty_str_str(theProp: String, defaultVal: String) -> Result<String> {
-        let _ = theProp;
-        Ok(defaultVal)
+        crate::java::lang::System::props()?.getProperty_str_str(theProp, defaultVal)
     }
 }

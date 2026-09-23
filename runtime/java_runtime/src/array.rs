@@ -328,7 +328,36 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
     /// 多维数组退化为 "java/lang/Object"（数组的类名探针无元素信息），按名放行
     /// 会使异构数组元素的存储检查失效（元素是数组的情形走 `__view_into` 臂）。
     fn is_instance_of(&self, type_id: &str) -> bool {
-        matches!(type_id, "java/lang/Cloneable" | "java/io/Serializable")
+        if matches!(type_id, "java/lang/Cloneable" | "java/io/Serializable") {
+            return true;
+        }
+        if !type_id.starts_with('[') {
+            return false;
+        }
+        // instanceof 数组目标（instanceof byte[] 等，描述符形态）：
+        //   - null 数组通过任意 instanceof（JVMS aconst_null 语义）；
+        //   - 协变视图按源数组（运行时元素类型）判定；
+        //   - 同描述符成立；目标 "[Ljava/lang/Object;" 按数组协变恒成立
+        //（JLS §4.10.4：任意引用元素数组是 Object[] 的子类型——基本元素
+        //     数组不是，故只在引用元素分支放行）。
+        if matches!(&*self.0, Repr::Null) {
+            return true;
+        }
+        if let Repr::Covariant(view) = &*self.0 {
+            return view.origin.0.is_instance_of(type_id);
+        }
+        if let Some(d) = Self::primitive_elem_descriptor() {
+            return type_id == format!("[{}", d);
+        }
+        let target = type_id.replace('.', "/");
+        if target == "[Ljava/lang/Object;" {
+            return true;
+        }
+        // 引用元素 / 嵌套数组：与 getClass 的描述符形态比对
+        match self.getClass() {
+            Ok(c) => format!("{}", c.__get_name()).replace('.', "/") == target,
+            Err(_) => false,
+        }
     }
 
     /// `Object.clone()`（invokevirtual）在数组上的语义（JLS §10.7）：浅拷贝——

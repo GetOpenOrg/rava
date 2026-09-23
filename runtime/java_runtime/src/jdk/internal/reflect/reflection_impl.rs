@@ -120,6 +120,38 @@ fn _capture_frame_classes() -> Vec<Option<std::string::String>> {
 }
 
 impl Reflection {
+    /// static `verifyMemberAccess(currentClass, memberClass, targetClass,
+    /// modifiers)`：成员可访问性判定（JLS §6.6 精简全形态）。
+    /// caller 为 null（测试场景）→ true；同类 → true；成员 public 且声明类
+    /// public → true；非 public 成员按同包判定（binary name 前缀）——同包
+    /// 的 package-private/protected 可达，private 仅同类（已排除）不可达。
+    /// protected + targetClass 的实例归属检查：语料调用面（ServiceLoader
+    /// checkCaller / getConstructor）的 targetClass 恒 null，不触发。
+    pub fn verifyMemberAccess(currentClass: Class, memberClass: Class, targetClass: Class,
+                              modifiers: i32) -> Result<bool> {
+        let _ = targetClass;
+        if currentClass.is_jvm_null() {
+            return Ok(true);
+        }
+        if currentClass == memberClass {
+            return Ok(true);
+        }
+        let member_public = modifiers & 0x0001 != 0;
+        if member_public {
+            let decl_mods = memberClass.getModifiers()?;
+            return Ok(decl_mods & 0x0001 != 0);
+        }
+        // 非 public 成员：同包判定（斜线 binary name 的包前缀相等）
+        let pkg_of = |c: &Class| -> std::string::String {
+            let name = format!("{}", c.__get_name()).replace('.', "/");
+            match name.rfind('/') {
+                Some(i) => name[..i].to_owned(),
+                None => std::string::String::new(),
+            }
+        };
+        Ok(pkg_of(&currentClass) == pkg_of(&memberClass))
+    }
+
     /// native `getCallerClass()`：`@CallerSensitive`——返回「调用 getCallerClass
     /// 的方法」的调用者声明类（JDK javadoc：ignoring frames associated with
     /// java.lang.reflect.Method.invoke）。

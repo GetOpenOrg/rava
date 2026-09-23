@@ -23,6 +23,47 @@ fn posix_locale() -> (std::string::String, std::string::String) {
 }
 
 impl StaticProperty {
+    /// java.home：原生二进制无真实 JDK 安装目录，返回稳定伪值锚定嵌入资源
+    /// 路径协议（`<JAVA_RUNTIME_HOME>/lib/tzdb.dat` 在 FileInputStream.open0
+    /// 的资源重定向层命中，见 jdk_resources 模块）。与 JDK 快照属性语义一致：
+    /// 恒定、进程内不变（System.props 的 java.home 同源同值）。
+    #[jvm_boundary]
+    pub fn javaHome() -> Result<String> {
+        Ok(String::from(crate::jdk_resources::JAVA_RUNTIME_HOME))
+    }
+
+    /// user.dir：进程工作目录（JDK 快照自 initPhase1 的 user.dir 属性）。
+    #[jvm_boundary]
+    pub fn userDir() -> Result<String> {
+        Ok(String::from(std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .as_str()))
+    }
+
+    /// user.home：$HOME（POSIX 语义）。
+    #[jvm_boundary]
+    pub fn userHome() -> Result<String> {
+        Ok(String::from(std::env::var("HOME").unwrap_or_default().as_str()))
+    }
+
+    /// user.name：$USER，回落 $LOGNAME。
+    #[jvm_boundary]
+    pub fn userName() -> Result<String> {
+        Ok(String::from(std::env::var("USER")
+            .or_else(|_| std::env::var("LOGNAME"))
+            .unwrap_or_default()
+            .as_str()))
+    }
+
+    /// java.io.tmpdir：$TMPDIR，回落 /tmp。
+    #[jvm_boundary]
+    pub fn javaIoTmpDir() -> Result<String> {
+        Ok(String::from(std::env::var("TMPDIR")
+            .unwrap_or_else(|_| std::string::String::from("/tmp"))
+            .as_str()))
+    }
+
     #[jvm_boundary]
     pub fn USER_LANGUAGE() -> Result<String> { Ok(String::from(posix_locale().0.as_str())) }
     #[jvm_boundary]

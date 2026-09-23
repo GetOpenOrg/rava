@@ -346,6 +346,28 @@ impl Class {
     pub fn __impl_desiredAssertionStatus(&self) -> Result<bool> {
         Ok(false)
     }
+
+    /// `Class.getModule()`：类所属模块。单二进制无模块层——全类集归属
+    /// 无名模块单例（module_impl::unnamed_module，isNamed 恒 false）。
+    pub fn __impl_getModule(&self) -> Result<crate::java::lang::Module> {
+        Ok(super::module_impl::unnamed_module())
+    }
+
+    /// native `Class.getModifiers()`：类修饰符位集（Modifier 协议）。
+    /// 查询经 build.rs 从 java_class! 的 access/super_class 属性生成的修饰符
+    /// 表；未登记形态按 JVM 语义：数组/基本类型类恒 PUBLIC|FINAL|ABSTRACT，
+    /// 其余（闭包外类）同款位集（语料合法程序跨包引用必经 public）。
+    #[jvm_native]
+    pub fn getModifiers(&self) -> Result<i32> {
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        if name.starts_with('[') {
+            return Ok(0x0001 | 0x0010 | 0x0400);
+        }
+        Ok(__modifiers::CLASS_MODIFIERS.iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, m)| *m)
+            .unwrap_or(0x0001 | 0x0010 | 0x0400))
+    }
 }
 
 /// 描述符 → Class 对象（getDeclaredField 的 type 填充与 getComponentType 的
@@ -420,4 +442,9 @@ mod __fields {
 /// CLASS_METHODS static）。
 mod __methods {
     include!(concat!(env!("OUT_DIR"), "/method_table.rs"));
+}
+
+/// build.rs 生成的类修饰符表（OUT_DIR/modifiers_table.rs）。
+mod __modifiers {
+    include!(concat!(env!("OUT_DIR"), "/modifiers_table.rs"));
 }
