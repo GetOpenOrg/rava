@@ -39,6 +39,137 @@ from .vars import _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_i
 from .postprocess import _normalize_this_clone, _erase_boxed_ctor_type_args, _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
 
 
+def _split_disjoint_try_ranges(method, nodes: dict) -> None:
+    """同一 try 组的不相连受护区间：为首个之外的每个区间补装合成 try 节点。
+
+    javac 对 record pattern（JEP 440/441）的解构访问器逐个发卫兵：每个访问器
+    调用一个 3 指令 try 区间，全部指向同一个 MatchException 包装处理器——一个
+    try 组（TryCatchPlan 按 handler 聚合）因此携带多个互不相连的区间。模拟层
+    （blocks.py）只为首区间装 try 节点并改指入边，后续区间的入口边直入受护
+    区块；结构化放置不变量「词法 try 组集合 == 控制流 try 组集合」在区间重入
+    处必炸（CfgError），方法整体退化为 panic 存根（TestRecordPattern 的
+    describe/classify/nested 即此）。
+
+    本函数在模拟完成后、结构化前重写节点图：
+      - 每个后续区间一个合成 try 节点 T_j：体入口 = 区间首块（build_blocks 以
+        区间两端为 leader，该块恒存在），group / catches / catch_ends 沿用本组；
+      - 处理器入口的**私有子图**（全部前驱都在子图内的节点——模拟层保证处理器
+        入口的前驱恰为本组 try 节点，故该子图就是处理器链）整体克隆挂到 T_j：
+        每个区间得到自己的 java_try! 与逐字相同的 catch，与异常表逐区间一致；
+        克隆链汇回正常流的边保持指向原节点（两路在共享块汇合，语义不变）；
+      - 组外（ctx 不含本组）指向区间首块的边改指 T_j（与 blocks.py 首区间的
+        redirect 同规则）。
+    """
+    from dataclasses import replace as _dc_replace
+
+    from .blocks import Node
+    from .try_catch import TryCatchPlan
+
+    plan = TryCatchPlan(method.exception_table, method.instrs,
+                        getattr(method, 'local_vars', None))
+    try_of_group: dict[int, object] = {}
+    for n in nodes.values():
+        if n.kind == 'try' and n.group is not None and n.group not in try_of_group:
+            try_of_group[n.group] = n
+    multi = [(gid, g) for gid, g in enumerate(plan.groups)
+             if len(g.ranges) > 1 and gid in try_of_group]
+    if not multi:
+        return
+    by_start_pc: dict[int, object] = {}
+    for n in nodes.values():
+        if n.kind != 'try':          # try 节点与体入口块同 start_pc，只登记普通块
+            by_start_pc[n.start_pc] = n
+    preds: dict[int, set] = {}
+    for n in nodes.values():
+        for s in n.successors():
+            preds.setdefault(s, set()).add(n.id)
+    next_id = max(nodes) + 1
+
+    def _fresh_id() -> int:
+        nonlocal next_id
+        nid = next_id
+        next_id += 1
+        return nid
+
+    def _clone_handler_chain(h: int) -> int:
+        """处理器入口 h 的私有子图克隆（返回克隆入口 id）。
+
+        私有 = 从 h 出发可达、且全部前驱都在私有集内（h 除外——其唯一前驱是
+        try 节点）。处理器体内分支 / 循环照常覆盖；汇回共享流的节点不入集，
+        克隆边指向原节点。
+        """
+        private = {h}
+        changed = True
+        while changed:
+            changed = False
+            for x in nodes.values():
+                if x.id in private or x.kind == 'try':
+                    continue
+                ps = preds.get(x.id, set())
+                if ps and ps <= private:
+                    private.add(x.id)
+                    changed = True
+        reach = {h}
+        work = [h]
+        while work:
+            for s in nodes[work.pop()].successors():
+                if s in private and s not in reach:
+                    reach.add(s)
+                    work.append(s)
+        clone: dict[int, int] = {}
+
+        def clone_of(x: int) -> int:
+            if x not in reach:
+                return x                     # 汇回共享流：两路在原节点汇合
+            if x in clone:
+                return clone[x]
+            src = nodes[x]
+            c = _dc_replace(src, id=_fresh_id(), pcs=list(src.pcs),
+                            stmts=list(src.stmts), decls=list(src.decls))
+            clone[x] = c.id
+            nodes[c.id] = c
+            c.target = clone_of(src.target)
+            c.fallthrough = clone_of(src.fallthrough)
+            c.default = clone_of(src.default)
+            c.cases = [(v, clone_of(tg)) for v, tg in src.cases]
+            return c.id
+
+        return clone_of(h)
+
+    for gid, g in multi:
+        t = try_of_group[gid]
+        for start_pc, _end in g.ranges[1:]:
+            entry = by_start_pc.get(start_pc)
+            if entry is None or entry.kind == 'try':
+                raise CfgError(f"try 区间 pc={start_pc} 缺少可作体入口的块")
+            tj = Node(id=_fresh_id(), start_pc=start_pc, kind='try',
+                      target=entry.id,
+                      handlers=[_clone_handler_chain(h) for h in t.handlers],
+                      catches=[(c, b, ty) for (c, b, ty) in t.catches],
+                      catch_ends=list(t.catch_ends), group=t.group,
+                      ctx=frozenset(x for x in entry.ctx if x != t.group))
+            nodes[tj.id] = tj
+
+            def _retarget(slot: int, src) -> int:
+                # 组外指向区间首块的边改指 T_j（与首区间 redirect 同规则；
+                # try 节点自身的目标是它自己区间的体入口，不受影响）
+                if (slot == entry.id and slot != src.id
+                        and t.group not in src.ctx):
+                    return tj.id
+                return slot
+
+            for n in list(nodes.values()):
+                if n is tj:
+                    continue
+                if n.kind == 'try':
+                    n.handlers = [_retarget(h, n) for h in n.handlers]
+                else:
+                    n.target = _retarget(n.target, n)
+                    n.fallthrough = _retarget(n.fallthrough, n)
+                    n.default = _retarget(n.default, n)
+                    n.cases = [(v, _retarget(tg, n)) for v, tg in n.cases]
+
+
 def _structured_entries(method, sim, registry, class_tparams, ledger) -> list:
     """方法指令 → entries。所有跳转指令的消费情况记入 ledger 并在此校验。"""
     if not method.instrs:
@@ -49,6 +180,7 @@ def _structured_entries(method, sim, registry, class_tparams, ledger) -> list:
         tree = build_dispatch(nodes, result.entry, list(nodes))
         entries = [('', f"    {line}") for line in result.top_decls]
     else:
+        _split_disjoint_try_ranges(method, nodes)
         flow = analyze(result.entry, {i: n.successors() for i, n in nodes.items()})
         if not flow.reducible:
             raise CfgError("归约后的 CFG 不可归约")
