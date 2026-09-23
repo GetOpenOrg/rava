@@ -26,7 +26,13 @@ fn main() {
     let status_file = Path::new("../native_status.toml");
 
     println!("cargo:rerun-if-changed=src/");
+    println!("cargo:rerun-if-changed=../user/src/");
     println!("cargo:rerun-if-env-changed=JAVA_RTA_STRICT");
+    // 类宇宙 = 运行时 crate 树 + 用户 crate 树（../user/src）。元数据表（层次/
+    // 直接父类/字段/方法）描述整个项目的类，用户类与生成 JDK 类同一属性协议
+    // （java_class!）。native 状态与 _impl 共置是运行时自身的覆盖面概念，仍只
+    // 扫运行时树。
+    let user_src_dir = Path::new("../user/src");
 
     let native_methods = scan_native_methods(src_dir);
     let status: BTreeMap<String, BTreeMap<String, String>> = load_status(status_file);
@@ -52,11 +58,16 @@ fn main() {
 
     write_status(status_file, &new_status);
 
-    let hierarchy = scan_class_hierarchy(src_dir);
+    let meta_roots: Vec<&Path> = if user_src_dir.is_dir() {
+        vec![src_dir, user_src_dir]
+    } else {
+        vec![src_dir]
+    };
+    let hierarchy = scan_class_hierarchy(&meta_roots);
     write_hierarchy_table(&hierarchy);
-    write_direct_super_table(&scan_direct_super(src_dir));
-    write_field_table(&scan_class_fields(src_dir));
-    write_method_table(&scan_class_methods(src_dir));
+    write_direct_super_table(&scan_direct_super(&meta_roots));
+    write_field_table(&scan_class_fields(&meta_roots));
+    write_method_table(&scan_class_methods(&meta_roots));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
@@ -151,10 +162,9 @@ fn extract_attr(s: &str, key: &str) -> Option<String> {
 /// 类层次表扫描：java_class! 块内的裸属性行（`#[binary_name = "..."]` 与
 /// `#[all_supertypes = "..."]` 各自独立成行，同一块内 binary_name 在前）。
 /// all_supertypes 以 ';' 分隔、含类自身（attrs._compute_all_supertypes）。
-fn scan_class_hierarchy(src_dir: &Path) -> BTreeMap<String, String> {
+fn scan_class_hierarchy(roots: &[&Path]) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
-    if !src_dir.exists() { return result; }
-    for path in walk_rs_files(src_dir) {
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
         let content = fs::read_to_string(&path).unwrap_or_default();
         let mut current = String::new();
         for line in content.lines() {
@@ -174,10 +184,9 @@ fn scan_class_hierarchy(src_dir: &Path) -> BTreeMap<String, String> {
 
 /// 类 → 直接父类（java_class! 块的 super_class 属性；接口无 super_class 属性）。
 /// 消费方：Class.getSuperclass（class_impl.rs）。
-fn scan_direct_super(src_dir: &Path) -> BTreeMap<String, String> {
+fn scan_direct_super(roots: &[&Path]) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
-    if !src_dir.exists() { return result; }
-    for path in walk_rs_files(src_dir) {
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
         let content = fs::read_to_string(&path).unwrap_or_default();
         let mut current = String::new();
         for line in content.lines() {
@@ -233,10 +242,9 @@ struct FieldMeta {
 /// "private", modifiers = "static final", is_static = true))]`）。类上下文
 /// 与层次表同源（同块内 binary_name 在前）。声明顺序保留（Field.slot 语义）。
 /// 消费方：Class.getDeclaredField / Field.get/set（class_impl.rs / field_impl.rs）。
-fn scan_class_fields(src_dir: &Path) -> BTreeMap<String, Vec<FieldMeta>> {
+fn scan_class_fields(roots: &[&Path]) -> BTreeMap<String, Vec<FieldMeta>> {
     let mut result: BTreeMap<String, Vec<FieldMeta>> = BTreeMap::new();
-    if !src_dir.exists() { return result; }
-    for path in walk_rs_files(src_dir) {
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
         let content = fs::read_to_string(&path).unwrap_or_default();
         let mut current = String::new();
         for line in content.lines() {
@@ -375,10 +383,9 @@ struct MethodMeta {
 /// 声明顺序保留（getDeclaredMethods0 的 slot 语义）。
 /// 消费方：Class.getDeclaredMethod（class_impl.rs）、MethodHandleNatives.
 /// resolve 的方法/构造器 kind（method_handle_natives_impl.rs）。
-fn scan_class_methods(src_dir: &Path) -> BTreeMap<String, Vec<MethodMeta>> {
+fn scan_class_methods(roots: &[&Path]) -> BTreeMap<String, Vec<MethodMeta>> {
     let mut result: BTreeMap<String, Vec<MethodMeta>> = BTreeMap::new();
-    if !src_dir.exists() { return result; }
-    for path in walk_rs_files(src_dir) {
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
         let content = fs::read_to_string(&path).unwrap_or_default();
         let mut current = String::new();
         for line in content.lines() {

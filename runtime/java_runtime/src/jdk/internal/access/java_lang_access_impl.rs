@@ -85,6 +85,9 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// binary name，与目录键一致。空 / 未命中返回 null（JDK 对非枚举类同此）。
     fn getEnumConstantsShared(&self, arg0: Class) -> Result<JArray<Enum<Object>>> {
         let cls_name = format!("{}", arg0.__get_name());
+        // JVM 反射路径语义：读常量宇宙前强制目标类初始化（常量目录在
+        // `<clinit>` 之后登记，未初始化则宇宙必然为空——见 lib.rs 钩子表）
+        crate::ensure_class_initialized(&cls_name)?;
         match constant_directory_universe(&cls_name) {
             None => Ok(JArray::default()),
             Some(elems) => Ok(JArray::from(

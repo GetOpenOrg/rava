@@ -520,6 +520,24 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     use_path = '::'.join(pkg_parts + [main_class]) if pkg_parts else f'{mod_name}::{main_class}'
     bin_name = to_snake(main_class.split('/')[-1])   # snake_case，如 TestArrayList → test_array_list
 
+    # 枚举形态类（自身类型 static 字段——与宏侧常量目录登记同一结构谓词）的
+    # class-init 钩子登记：main 启动时登记，运行时反射按名消费方
+    # （getEnumConstantsShared / Enum.valueOf）经 ensure_class_initialized 强制
+    # 目标类初始化（JVM 反射路径语义；ldc 类字面量保持 init-passive）。
+    # 仅用户类：JDK 生成枚举冷反射语料不存在，手写边界类无 __class_init。
+    hook_lines: list[str] = []
+    for ci in class_infos:
+        if not any(f.is_static and f.descriptor == f'L{ci.name};' for f in ci.fields):
+            continue
+        _, _pkg, _mod = layout[ci.name]
+        hook_path = '::'.join(['crate', *_pkg, _mod, short_cls(ci.name)])
+        hook_lines.append(
+            f'    ("{ci.name}", std::rc::Rc::new(|| {hook_path}::__class_init())),')
+    hook_block = ''
+    if hook_lines:
+        hook_block = ('    java_runtime::register_class_init_hooks(&[\n'
+                      + '\n'.join(hook_lines) + '\n    ]);\n')
+
     if batch_bin:
         # 批量模式：每个 bin 用 #[path] 独立包含自己的类文件，不共享 lib.rs。
         # 这样某个测试编译失败不会影响其他测试。
@@ -532,6 +550,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             f'use {use_path};',
             '',
             'fn main() {',
+            *([hook_block] if hook_block else []),
             f'    {main_class}::main().unwrap_or_else(|e| e.report_uncaught());',
             '}',
             '',
@@ -546,6 +565,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             f'use {use_path};',
             '',
             'fn main() {',
+            *([hook_block] if hook_block else []),
             f'    {main_class}::main().unwrap_or_else(|e| e.report_uncaught());',
             '}',
             '',

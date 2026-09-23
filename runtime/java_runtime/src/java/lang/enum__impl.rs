@@ -22,6 +22,9 @@ impl<E: Clone + Default + 'static + From<Object> + Into<Object>> Enum<E> {
     #[jvm_native(upcalls = "java/lang/NullPointerException.<init>:(Ljava/lang/String;)V java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
     pub fn valueOf(enumClass: Class, name: String) -> Result<Enum<E>> {
         let cls_name = format!("{}", enumClass.__get_name());
+        // JVM 反射路径语义：按名查常量前强制目标类初始化（常量目录在
+        // `<clinit>` 之后登记——见 lib.rs 钩子表）
+        crate::ensure_class_initialized(&cls_name)?;
         if let Some(found) = lookup_constant(&cls_name, &format!("{}", name)) {
             return Ok(Enum::<E>::from(found));
         }

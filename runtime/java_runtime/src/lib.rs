@@ -299,6 +299,46 @@ pub fn constant_directory_universe(binary_name: &str) -> Option<Vec<Object>> {
     })
 }
 
+// ── 类初始化钩子（JVM 反射路径强制初始化的数据面）──────────────────────────
+//
+// JVM 语义：`Class` 字面量（ldc）不触发初始化（JVMS §5.5 无 passivity 例外），
+// 但反射式消费方（`getEnumConstantsShared`、`Class.getEnumConstants`、
+// `Enum.valueOf(Class, name)` 等）会强制目标类初始化后再读常量。名字 token
+// `Class::for_class` 与用户类的 `__class_init` 之间没有通道——生成项目在 main
+// 启动时按语料登记钩子（枚举形态类，与常量目录同一结构谓词），运行时按名代调。
+
+pub type ClassInitHook = std::rc::Rc<dyn Fn() -> Result<()>>;
+
+std::thread_local! {
+    static CLASS_INIT_HOOKS: std::cell::RefCell<
+        std::collections::HashMap<std::string::String, ClassInitHook>
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// 生成项目 main 启动时登记类初始化钩子。`binary_name` 归一规则与常量目录一致。
+pub fn register_class_init_hooks(hooks: &[(&str, ClassInitHook)]) {
+    CLASS_INIT_HOOKS.with(|h| {
+        let mut h = h.borrow_mut();
+        for (name, hook) in hooks {
+            h.insert(name.replace('/', "."), Clone::clone(hook));
+        }
+    });
+}
+
+/// 按名强制类初始化（JVM 反射路径语义）。未登记（非语料类 / 手写边界类）→
+/// no-op；已初始化 → `__class_init` 状态机立即返回；初始化抛错 → 原样传播
+/// （erroneous 状态与异常包装由状态机承载）。
+pub fn ensure_class_initialized(binary_name: &str) -> Result<()> {
+    let hook = CLASS_INIT_HOOKS.with(|h| {
+        let h = h.borrow();
+        h.get(binary_name.replace('/', ".").as_str()).map(Clone::clone)
+    });
+    match hook {
+        Some(f) => f(),
+        None => Ok(()),
+    }
+}
+
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 pub mod prelude {
     #![allow(unused_imports)]
