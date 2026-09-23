@@ -541,16 +541,24 @@ def _substitute_tvars(ty: str, tparams: list[str], targs: list[str]) -> str:
     )
 
 
-def _exact_ancestor_type(actual: str, ancestor_short: str, registry: dict | None) -> str:
-    """静态类型 actual（如 `Child<A, B>`）沿超类链到 ancestor_short 的精确实例化
-    （`Parent<A, B, Object>`）；不在超类链上 → ''。"""
+def _exact_ancestor_type(actual: str, ancestor_t: object, registry: dict | None) -> str:
+    """静态类型 actual（如 `Child<A, B>`，Rust 类型串）沿超类链到目标祖先类型对象
+    ancestor_t（ClassRef，TypeIR 批次 3 S3：erasure 基名经 binary 比较——
+    短名单射下与旧短名比较等价）的精确实例化（`Parent<A, B, Object>`）；
+    不在超类链上 / 目标非 ClassRef → ''。"""
     from ..type_args import ancestor_type_args, split_rust_type_args, rust_type_with_args
-    ci = registry.get(_rust_type_to_binary(actual.split('<', 1)[0], registry)) if registry else None
+    from ..jvm_type import ClassRef as _ClassRefS3, from_rust_type as _frt_s3
+    if not registry or not isinstance(ancestor_t, _ClassRefS3):
+        return ''
+    actual_t = _frt_s3(actual, registry)
+    if not isinstance(actual_t, _ClassRefS3):
+        return ''
+    ci = registry.get(actual_t.binary)
     if ci is None:
         return ''
     for anc_bin, args in ancestor_type_args(ci, registry, split_rust_type_args(actual)):
-        if short_cls(anc_bin) == ancestor_short:
-            return rust_type_with_args(ancestor_short, args)
+        if anc_bin == ancestor_t.binary:
+            return rust_type_with_args(short_cls(anc_bin), args)
     return ''
 
 
@@ -558,10 +566,13 @@ def _upcast_to_ancestor_instantiation(src: str, actual: str, expected: str,
                                       sim: 'StackSim', registry: dict | None) -> str | None:
     """子类值上转到祖先类的「另一实例化」（raw type / 通配符位置：`Parent<A, i32, ?>`）。
 
-    宏只为祖先的精确实例化生成 From（Child<A> → Parent<f(A)>）；目标是同一祖先的另一实例化时
+    宏只为祖先的精确实参化生成 From（Child<A> → Parent<f(A)>）；目标是同一祖先的另一实例化时
     先上转到精确祖先，再经 Object 边界（保持对象标识）重新实例化。目标就是精确祖先 → None。"""
-    exact_anc = _exact_ancestor_type(actual, expected.split('<')[0], registry)
-    if (exact_anc and exact_anc != expected and '<' in expected
+    from ..jvm_type import ClassRef as _ClassRefS3u, from_rust_type as _frt_s3u
+    _expected_t = _frt_s3u(expected, registry)
+    exact_anc = _exact_ancestor_type(actual, _expected_t.erasure(), registry)
+    if (exact_anc and exact_anc != expected
+            and isinstance(_expected_t, _ClassRefS3u) and _expected_t.args
             and _downcast_target_valid(expected, sim, registry)
             and _downcast_target_valid(exact_anc, sim, registry)):
         return f"<{expected} as ::std::convert::From<Object>>::from(Object::from(Into::<{exact_anc}>::into({src})))"
