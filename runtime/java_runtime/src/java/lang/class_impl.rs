@@ -580,6 +580,16 @@ impl Class {
         Ok(JArray::from(out))
     }
 
+    /// `Class.isRecord()`：record 类判定（JVMS §4.7.30 Record 属性在场；
+    /// 发射侧 is_record 属性 → build.rs record 表）。数组 / 基本类型类恒 false。
+    pub fn isRecord(&self) -> Result<bool> {
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        if name.starts_with('[') {
+            return Ok(false);
+        }
+        Ok(__record::RECORD_CLASSES.contains(&name.as_str()))
+    }
+
     /// `Class.isMemberClass()`：是否成员类（有具名外围类的嵌套类）。数据源
     /// 是 java_class! 块的 inner_classes 属性（build.rs 侧无表——本方法按
     /// 名字约定判：成员类的 binary name 以 `$` 分隔且非数组/基本类型；
@@ -704,4 +714,9 @@ mod __methods {
 /// build.rs 生成的类修饰符表（OUT_DIR/modifiers_table.rs）。
 mod __modifiers {
     include!(concat!(env!("OUT_DIR"), "/modifiers_table.rs"));
+}
+
+/// build.rs 生成的 record 类集（OUT_DIR/record_table.rs）。
+mod __record {
+    include!(concat!(env!("OUT_DIR"), "/record_table.rs"));
 }

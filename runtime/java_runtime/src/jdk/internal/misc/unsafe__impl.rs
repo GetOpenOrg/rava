@@ -126,6 +126,20 @@ fn _instance_ref_set(o: &Object, offset: i64, v: Object) -> bool {
 }
 
 impl Unsafe {
+    /// `loadFence()`：JVM 内存序（LoadLoad|LoadStore）——单线程原生二进制下
+    /// 取 Acquire 栅栏即观测等价。
+    pub fn loadFence(&self) -> Result<()> {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+        Ok(())
+    }
+
+    /// `storeFence()`：JVM 内存序（StoreStore|LoadStore）——Release 栅栏等价
+    /// （ClassValue.initializeMap 等发布路径触达）。
+    pub fn storeFence(&self) -> Result<()> {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
     /// 进程内唯一的 Unsafe 实例（对应静态字段 theUnsafe）。
     #[jvm_boundary]
     pub fn getUnsafe() -> Result<Unsafe> {
