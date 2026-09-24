@@ -109,27 +109,81 @@ def is_jdk(cls: str) -> bool:
 # 跨包同简单名的类：binary name → 带包限定的 Rust 类型名（由 configure_short_names 从 registry 算出）
 _QUALIFIED_SHORT_NAMES: dict[str, str] = {}
 
+# Rust prelude 可见名与 Java 类短名的冲突集（短名消歧的第二域）。
+#
+# 两个来源：java_runtime::prelude（runtime/java_runtime/src/lib.rs 的
+# `pub mod prelude` 再导出）与 std::prelude::v1（edition 2021）。收录口径 =
+# **发射面会以裸名引用的名字**（类型命名空间）：
+#   - Result：每个翻译方法的返回类型（`-> Result<T>`），JUnit 闭包的
+#     org/junit.runner.Result 遮蔽它即 E0107 ×全闭包（M3 缺口 1 实锤）；
+#   - Object / String / ObjectVTable / JArray / JvmError / MonitorGuard /
+#     Rc / RefCell：JVM_RUST 直映射或发射面裸引用（Rc::new / RefCell /
+#     JvmError::… / bounds 文本 Clone + Default）；
+#   - Option / Some / None / Ok / Err / Vec：std prelude 中发射面裸引用者。
+# 明确不收录发射面从不裸引用的名字（Iterator / Debug / Box / Copy / Sized /
+# Send / Sync / Drop / Fn* / Eq / Ord / Hash / …）：java/util/Iterator、
+# sun/security/util/Debug 等语料类实证与 prelude 同名无害（for 循环脱糖经
+# lang item 解析，不取 prelude 路径），收录即无差别扰动既有语料生成树。
+# 该集与 prelude 同步演进：新增裸引用的 prelude 名时须在此登记。
+_PRELUDE_CONFLICT_NAMES = frozenset({
+    # java_runtime::prelude 再导出（类型 / 别名）
+    'JArray', 'JvmError', 'Result', 'Object', 'ObjectVTable', 'String',
+    'MonitorGuard', 'Rc', 'RefCell',
+    # std::prelude::v1（发射面裸引用：Ok( / Err( / Some( / None / Option< /
+    # Vec< / 泛型 bounds 文本 Clone + Default）
+    'Option', 'Some', 'None', 'Ok', 'Err', 'Vec', 'Clone', 'Default',
+})
+
+# prelude 名的 java/lang 本主：JVM_RUST 直映射（不经 short_cls），短名即
+# prelude 名本身，属「同一实体」而非冲突——改它们会让直映射与 struct 发射分叉。
+_PRELUDE_CANONICAL_OWNERS = {
+    'String': 'java/lang/String',
+    'Object': 'java/lang/Object',
+}
+
+# 本轮因 prelude 冲突改名的 binary（审计可观测：触发面应收敛在 junit 闭包等
+# 少数语料，163 语料零扰动）
+_PRELUDE_DISAMBIGUATED: list[str] = []
+
 
 def configure_short_names(registry: dict | None) -> None:
     """按 registry 计算 Rust 类型名的消歧表。
 
-    Rust 类型名 = 类的简单名（`$` → `_`）。不同包的类简单名相同时（Java 靠包名区分，
-    Rust 侧类型名字符串是类型身份的唯一载体，跨文件流动），同名组内按 binary name
-    字典序最小者保留简单名，其余以完整 binary name（`/`、`$` → `_`）为 Rust 类型名——
-    结构体、vtable、`use` 导入、类型串 ↔ binary 反查全部经 short_cls 取同一名字。
+    Rust 类型名 = 类的简单名（`$` → `_`）。两类冲突源：
+      1. registry 内不同包同简单名（Java 靠包名区分，Rust 侧类型名字符串是
+         类型身份的唯一载体，跨文件流动）：同名组内按 binary name 字典序最小者
+         保留简单名，其余以完整 binary name（`/`、`$` → `_`）为 Rust 类型名；
+      2. Rust prelude 可见名（_PRELUDE_CONFLICT_NAMES）：Java 类短名与之相同时，
+         类自身的 struct 定义（模块内局部项遮蔽 glob 导入）与跨文件精确 use
+         导入（精确导入遮蔽 glob）都会遮蔽 prelude 名，同样触发限定改名——
+         java.lang 的本主除外（_PRELUDE_CANONICAL_OWNERS）。
+    结构体、vtable、`use` 导入、类型串 ↔ binary 反查全部经 short_cls 取同一
+    名字（本函数是短名消歧的单一决策点）。
     """
     _QUALIFIED_SHORT_NAMES.clear()
     _SHORT_INDEX_CACHE.clear()
+    del _PRELUDE_DISAMBIGUATED[:]
+    _canonical_present = {b for b in _PRELUDE_CANONICAL_OWNERS.values()
+                          if b in (registry or {})}
     groups: dict[str, list[str]] = {}
     for binary in (registry or {}):
-        if '/' not in binary:
-            continue
+        if '/' not in binary or binary in _canonical_present:
+            continue  # 本主不参与任何冲突组（短名即 prelude 名，同一实体）
         groups.setdefault(binary.rsplit('/', 1)[-1].replace('$', '_'), []).append(binary)
     for members in groups.values():
         if len(members) < 2:
             continue
         for binary in sorted(members)[1:]:
             _QUALIFIED_SHORT_NAMES[binary] = binary.replace('/', '_').replace('$', '_')
+    for short, members in groups.items():
+        if short not in _PRELUDE_CONFLICT_NAMES:
+            continue
+        for binary in members:
+            if binary in _QUALIFIED_SHORT_NAMES:
+                continue  # 组内已被限定（组内改名值与 prelude 限定一致）
+            _QUALIFIED_SHORT_NAMES[binary] = binary.replace('/', '_').replace('$', '_')
+            _PRELUDE_DISAMBIGUATED.append(binary)
+    _PRELUDE_DISAMBIGUATED.sort()
 
 
 def short_cls(cls: str) -> str:

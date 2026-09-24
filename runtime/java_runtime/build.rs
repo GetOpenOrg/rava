@@ -17,7 +17,7 @@
 ///      MethodHandleNatives.resolve（MemberName 解析内核）查询。方法身份键
 ///      是 (name, descriptor) 二元组（重载语义），与字段表同源同协议。
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -73,6 +73,7 @@ fn main() {
     write_field_table(&scan_class_fields(&meta_roots));
     write_method_table(&scan_class_methods(&meta_roots));
     write_modifiers_table(&scan_class_modifiers(&meta_roots));
+    write_record_table(&scan_record_classes(&meta_roots));
     write_annotation_table(&scan_annotations(&meta_roots));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
@@ -646,6 +647,9 @@ fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
         let mut current = String::new();
         let mut is_public = false;
         let mut has_super = false;
+        // 类级 modifiers 属性词面（static 位只经此路径进表——成员嵌套类的
+        // ACC_STATIC 在 InnerClasses 条目，发射侧已并入 modifiers 串）
+        let mut mods_str = String::new();
         let mut touched = false;
         for line in content.lines() {
             let trimmed = line.trim();
@@ -653,11 +657,14 @@ fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
                 if !current.is_empty() && touched {
                     let name = std::mem::take(&mut current);
                     let is_object = name == "java/lang/Object";
-                    result.insert(name, class_modifier_bits(is_public, has_super, is_object));
+                    result.insert(name,
+                        class_modifier_bits(is_public, has_super, is_object)
+                            | modifier_bits(&mods_str));
                 }
                 current = name;
                 is_public = false;
                 has_super = false;
+                mods_str.clear();
                 touched = true;
                 continue;
             }
@@ -668,18 +675,22 @@ fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
             if trimmed.starts_with("#[super_class") && !trimmed.contains("\"\"") {
                 has_super = true;
             }
+            if let Some(m) = extract_attr_padded(trimmed, "modifiers") {
+                mods_str = m;
+            }
         }
         if !current.is_empty() && touched {
             let is_object = current == "java/lang/Object";
-            result.insert(current, class_modifier_bits(is_public, has_super, is_object));
+            result.insert(current,
+                class_modifier_bits(is_public, has_super, is_object)
+                    | modifier_bits(&mods_str));
         }
     }
     result
 }
 
 /// public 位 + 接口位（无父类且非 java/lang/Object → INTERFACE|ABSTRACT）。
-fn class_modifier_bits(is_public: bool, has_super_class: bool, is_object: bool) -> i32 {
-    let mut bits = 0i32;
+fn class_modifier_bits(is_public: bool, has_super_class: bool, is_object: bool) -> i32 {    let mut bits = 0i32;
     if is_public { bits |= 0x0001; }
     if !has_super_class && !is_object { bits |= 0x0200 | 0x0400; }
     bits
@@ -704,6 +715,50 @@ fn write_modifiers_table(entries: &BTreeMap<String, i32>) {
     let path = Path::new(&out_dir).join("modifiers_table.rs");
     if let Err(e) = fs::write(&path, &out) {
         panic!("写 modifiers_table.rs 失败: {e}");
+    }
+}
+
+/// record 类集（is_record 属性在场 = Record 属性在场，Class.isRecord 判据）。
+fn scan_record_classes(roots: &[&Path]) -> BTreeSet<String> {
+    let mut result = BTreeSet::new();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+                continue;
+            }
+            if !current.is_empty()
+                && trimmed.starts_with("#[is_record")
+                && trimmed.contains("true")
+            {
+                result.insert(current.clone());
+            }
+        }
+    }
+    result
+}
+
+fn write_record_table(entries: &BTreeSet<String>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：record 类集（binary name；Record 属性在场）。
+         // 数据源：java_class! 块的 is_record 属性（classfile 的 Record 属性判定）。
+         // 消费方：Class.isRecord（class_impl.rs）。请勿手改。
+
+         pub static RECORD_CLASSES: &[&str] = &[
+",
+    );
+    for name in entries {
+        out.push_str(&format!("    {:?},\n", name));
+    }
+    out.push_str("];
+");
+    let path = Path::new(&out_dir).join("record_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 record_table.rs 失败: {e}");
     }
 }
 

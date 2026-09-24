@@ -991,6 +991,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
     cls_enclosing_method: tuple | None = None
     cls_has_enclosing = False
     cls_annotations: list = []
+    cls_is_record = False
     cls_attr_count = r.u2()
     for _ in range(cls_attr_count):
         attr_name_idx = r.u2()
@@ -1009,6 +1010,10 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
             cls_source_file = _utf8(pool, sf_idx)
         elif attr_name == 'Deprecated':
             cls_deprecated = True
+        elif attr_name == 'Record':
+            # JVMS §4.7.30：record 类的组件声明（isRecord 查询的唯一判据——
+            # JVM Class.isRecord = 有 Record 属性的类）。载荷（组件表）不消费。
+            cls_is_record = True
         elif attr_name == 'EnclosingMethod':
             # JVMS §4.7.7：局部类 / 匿名类的直接外围类与外围方法
             # （method_index 为 0 → 位于初始化器 / 字段初始化表达式中）
@@ -1109,6 +1114,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         is_interface=bool(access_flags & ACC_INTERFACE),
         is_abstract=bool(access_flags & ACC_ABSTRACT),
         is_enum=bool(access_flags & ACC_ENUM),
+        is_record=cls_is_record,
         generic_signature=_cls_sig,
         source_file=cls_source_file,
         inner_classes=cls_inner_classes,

@@ -19,8 +19,10 @@ impl GetPropertyAction {
     }
 
     /// static `privilegedGetProperty(String)`：单属性查询，缺席 → null。
+    /// （重载 mangling：本类同时声明 (String) 与 (String,String) 两形态，
+    /// 生成侧名面为 `privilegedGetProperty_str`——伴生按同名面接线）
     #[jvm_boundary(upcalls = "java/util/Properties.getProperty:(Ljava/lang/String;)Ljava/lang/String;")]
-    pub fn privilegedGetProperty(theProp: String) -> Result<String> {
+    pub fn privilegedGetProperty_str(theProp: String) -> Result<String> {
         crate::java::lang::System::props()?.getProperty_str(theProp)
     }
 

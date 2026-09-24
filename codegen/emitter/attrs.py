@@ -72,7 +72,24 @@ def _class_modifiers_str(flags: int) -> str:
     if flags & _ACC_ENUM:       parts.append('enum')
     if flags & _ACC_ANNOTATION: parts.append('annotation')
     if flags & _ACC_SYNTHETIC:  parts.append('synthetic')
+    if flags & _ACC_STATIC:     parts.append('static')
     return ' '.join(parts)
+
+
+def _effective_class_flags(ci) -> int:
+    """类对 Class.getModifiers() 语义的修饰符位集来源合并。
+
+    成员嵌套类（静态 / 非静态）的 static 位不在类文件自身的 access_flags
+    （JVMS：ACC_STATIC 只出现在 InnerClasses 条目），而在本类 inner_classes
+    的自引用条目上——JVM 的 Class.getModifiers 对嵌套类即取 InnerClasses 条目
+    位集。合并两者后交 _class_modifiers_str，使 Modifier.isStatic(
+    clazz.getModifiers()) 等查询与 JVM 一致（JUnit 的 AnnotatedBuilder 依赖
+    它区分静态 / 非静态成员类）。"""
+    flags = ci.access_flags or 0
+    for ic in (ci.inner_classes or ()):
+        if ic.inner_class == ci.name:
+            flags |= ic.access_flags or 0
+    return flags
 
 
 def _field_modifiers_str(flags: int) -> str:
@@ -279,7 +296,7 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         _access = _access_str(ci.access_flags)
         if _access != 'package':
             lines.append(f'#[access            = "{_access}"]')
-        _mods = _class_modifiers_str(ci.access_flags)
+        _mods = _class_modifiers_str(_effective_class_flags(ci))
         if _mods:
             lines.append(f'#[modifiers         = "{_mods}"]')
     if ci.generic_signature:
@@ -288,6 +305,8 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         lines.append('#[is_abstract       = true]')
     if ci.is_enum:
         lines.append('#[is_enum           = true]')
+    if ci.is_record:
+        lines.append('#[is_record         = true]')
     if ci.is_deprecated:
         lines.append('#[is_deprecated     = true]')
     if ci.source_file:
