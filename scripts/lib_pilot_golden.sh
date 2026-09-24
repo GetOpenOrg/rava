@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
-# lib pilot golden 对账（M1/M2，docs/plans/2026-09-23-junit-crate-pilot.md）
+# lib pilot golden 对账（M1/M2/M3，docs/plans/2026-09-23-junit-crate-pilot.md）
 #
 # 用法：
 #   scripts/lib_pilot_golden.sh m1     # hamcrest crate：JVM 真 hamcrest vs 翻译 crate
 #   scripts/lib_pilot_golden.sh m2     # junit4 crate（Assert 子集）：同上
+#   scripts/lib_pilot_golden.sh m3     # junit4 crate（Runner 路径）：JUnitCore.runClasses
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
 #
-# 前置：--jdk 21 的 JAVA_HOME（默认 /opt/homebrew/opt/openjdk@21）；jar 资产在
-# pilot-deps/target/pilot-libs/（可经 PILOT_LIBS 覆盖）。
+# 前置：JDK 21（JAVA_HOME 未设时自动发现）；jar 资产在与本仓库同层的
+# ../pilot-deps/target/pilot-libs/（pilot-deps/fetch.sh 导出；可经 PILOT_LIBS 覆盖）。
 # 流程：javac（-cp jars）→ java 真 jar 侧 golden → main.py --lib 转译 →
 # cargo run 翻译侧输出 → diff 逐字对账。golden 文本随仓库存档于
 # tests/lib_pilot/golden/（跑批可复现的对账凭据）。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LIBS="${PILOT_LIBS:-/Users/yuwei/dev/workspace/pilot-deps/target/pilot-libs}"
-export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
+# jar 资产默认按兄弟目录相对寻径（pilot-deps 与本仓库同层摆放，fetch.sh 导出位）
+LIBS="${PILOT_LIBS:-$REPO_ROOT/../pilot-deps/target/pilot-libs}"
+# JAVA_HOME 未设时经 jdk_select 自动发现 JDK 21（macOS brew / Linux /usr/lib/jvm 通吃）
+if [[ -z "${JAVA_HOME:-}" ]]; then
+    JAVA_HOME="$(cd "$REPO_ROOT/scripts" && python3 -c 'from jdk_select import resolve_jdk_home as r; h = r(21); print(h or "")')"
+    [[ -n "$JAVA_HOME" ]] || { echo "未找到 JDK 21，请设置 JAVA_HOME" >&2; exit 2; }
+fi
+export JAVA_HOME
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
-MODE="${1:?用法: $0 m1|m2 [--no-transpile]}"
+MODE="${1:?用法: $0 m1|m2|m3 [--no-transpile]}"
 TRANSPILE=1
 [[ "${2:-}" == "--no-transpile" ]] && TRANSPILE=0
 
@@ -36,12 +43,20 @@ m2)
     LIB_ARGS=(--lib "hamcrest=$LIBS/hamcrest-3.0.jar"
               --lib "junit4=$LIBS/junit-4.13.2.jar:seed=org.junit.Assert")
     ;;
+m3)
+    # Runner 路径：种子 = JUnitCore（runClasses 入口）+ Assert（用例断言面）+
+    # Test 注解（@Test 发现）；Runner 族其余成员由可达性通道 BFS 拉入
+    MAIN=JunitRunnerMain
+    CP="$LIBS/junit-4.13.2.jar:$LIBS/hamcrest-3.0.jar"
+    LIB_ARGS=(--lib "hamcrest=$LIBS/hamcrest-3.0.jar"
+              --lib "junit4=$LIBS/junit-4.13.2.jar:seed=org.junit.runner.JUnitCore,org.junit.Assert,org.junit.Test")
+    ;;
 *) echo "未知模式: $MODE" >&2; exit 2;;
 esac
 
 echo "== [1/3] JVM 侧 golden（真 jar）=="
 rm -rf classes && "$JAVAC" -d classes -cp "$CP" "$MAIN.java"
-"$JAVA" -cp "classes:$CP" "$MAIN" > "golden/${MODE}_jvm.txt"
+"$JAVA" -Dstdout.encoding=UTF-8 -cp "classes:$CP" "$MAIN" > "golden/${MODE}_jvm.txt"
 echo "JVM 侧 $(wc -l < "golden/${MODE}_jvm.txt" | tr -d ' ') 行"
 
 echo "== [2/3] 转译 + cargo run（翻译 crate）=="
