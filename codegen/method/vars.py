@@ -93,7 +93,8 @@ def _demote_let(entries: list, k: int) -> None:
     if item.value is None:
         entries[k] = _REMOVED_ENTRY
     else:
-        entries[k] = (indent, AssignStmt(Var(item.name), item.value, _hoisted_let_type(item)))
+        entries[k] = (indent, AssignStmt(Var(item.name), item.value, _hoisted_let_type(item),
+                                         slot=item.slot, bind_off=item.bind_off))
 
 
 _ROOT_TYPE = 'Object'
@@ -186,6 +187,78 @@ def _is_atomic_rs(expr_str: str) -> bool:
     return True
 
 
+def _lvt_covering_entry(entries: list, off: int, name: str):
+    """LVT 声明区间中覆盖 store 偏移 off 的**本名**条目 (start, end, name, ty)。
+
+    覆盖判定同 stack._decl_at：存活区间内（start <= off < end）的读 / 再赋值，
+    或初始化 store（javac 约定 LVT start = 初始化 store 的下一条指令偏移，
+    store 落 start 前 1~4 字节：一字节 astore_N 为 start-1，两字节 astore N
+    为 start-2，ObjectStreamClass.getProtectionDomains 的 pds 槽实证 start-2，
+    留 4 字节余量）。覆盖 off 的区间名字不符（槽被别的变量占用）不算——
+    无本名覆盖 → None（该存点是 javac 合成绑定，不在 LVT）。
+    """
+    from ..stack import _safe_name
+    for start, end, nm, ty, *_rest in entries:
+        if _safe_name(nm) != name:
+            continue
+        if start <= off < end or (off < start <= off + 4):
+            return (start, end, nm, ty)
+    return None
+
+
+def _same_jvm_var(a, b, slot_decls) -> bool | None:
+    """LVT 区间驱动的变量身份：同名两语句是否同一 JVM 变量。
+
+    证据源是 LocalVariableTable 的 (start, length) 活跃区间（slot_decls：
+    slot → [(start, end, name, ty, ...)]，start/end 为字节码偏移）：
+    - 异槽同名必是两个 JVM 变量（`int i` 槽 9 / `long i` 槽 19——long 占
+      双槽，javac 给同名异型变量分不同槽）→ False；
+    - 存点未被本名区间覆盖（javac 合成绑定：for-each 迭代器、synchronized
+      监视对象——G-3 的 local_N 家族，槽上只有**别人**的区间）→ None，
+      无身份证据，调用方维持原有名字 + 类型身份模型；
+    - 同槽本名覆盖区间声明类型不一致（`Node p` 与复用同槽的 `TreeNode p`：
+      区间内 name 均为 p 但 LVT 签名异型）→ False；
+    - 同槽本名同型且两存点间该槽无**异名**区间换主（javac 按控制流把一个
+      变量的活跃区间拆成多条 LVT 条目：CHM.transfer 的 ln 在 runBit 两
+      分支各一段，[420,426) ∪ [433,551) 同槽同名同型）→ True，是同一变量
+      的分段活跃区间，必须并入同一 Rust 绑定。
+    """
+    if a is None or b is None or slot_decls is None:
+        return None
+    sa = getattr(a, 'slot', None)
+    sb = getattr(b, 'slot', None)
+    oa = getattr(a, 'bind_off', None)
+    ob = getattr(b, 'bind_off', None)
+    if sa is None or sb is None or oa is None or ob is None:
+        return None
+    if sa != sb:
+        return False
+    entries = slot_decls.get(sa)
+    if not entries:
+        return None
+    from ..stack import _safe_name
+    name = getattr(a, 'name', None)
+    if name is None and getattr(a, 'target', None) is not None:
+        name = getattr(a.target, 'name', None)
+    ea = _lvt_covering_entry(entries, oa, name)
+    eb = _lvt_covering_entry(entries, ob, name)
+    if ea is None or eb is None:
+        return None
+    ta, tb = ea[3], eb[3]
+    try:
+        ra = render_type(ta) if ta is not None else None
+        rb = render_type(tb) if tb is not None else None
+    except Exception:
+        return None
+    if ra != rb:
+        return False
+    lo, hi = (oa, ob) if oa <= ob else (ob, oa)
+    for start, end, nm, *_rest in entries:
+        if _safe_name(nm) != name and start < hi and end > lo:
+            return False   # 两存点间该槽被异名区间换主：另一个变量
+    return True
+
+
 def _forms_alignable(later_ty_s: str | None, hoisted_ty_s: str | None, registry=None) -> bool:
     """后到形态能否对齐到提升声明类型（并入同一绑定）：
     同型直接可赋；引用子类型经 `.into()` 上转（JVM 槽位声明类型语义，
@@ -252,12 +325,14 @@ def _analyze_mutation(stmts):
     mark(stmts)
 
 
-def _hoist_loop_vars(entries: list, predeclared: set[str]):
+def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
     """将在 loop{} 内 let-声明但在 loop 外被读取的变量提升到 loop 前。
 
     JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 loop 内首次 let-声明，
     但在 loop 退出后被读取，Rust 报 E0425。
     修复：在 loop 前插入 let mut NAME = Default::default();，loop 内改为赋值。
+    slot_decls：LVT 声明表（slot → [(start, end, name, ...)]），驱动
+    _same_jvm_var 的变量身份判定。
     """
     # Pass 1: 收集所有在嵌套块中声明的变量及其位置
     nesting = 0
@@ -350,7 +425,12 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
         # 从声明处取类型注解，生成 Default::default() 带类型注解（避免 E0282 类型推断失败）
         inner_indent, inner_item = entries[decl_k]
         hoisted_type = _hoisted_let_type(inner_item)
-        insertions.append((loop_k, (loop_indent, LetStmt(name, hoisted_type, True, RawExpr('Default::default()')))))
+        # 插入的提升声明继承被提升声明的 JVM 身份（槽位 / store 偏移）：
+        # 后续轮次的 _same_jvm_var 身份判定据此把同变量的分段 let 并回本绑定
+        insertions.append((loop_k, (loop_indent, LetStmt(
+            name, hoisted_type, True, RawExpr('Default::default()'),
+            slot=getattr(inner_item, 'slot', None),
+            bind_off=getattr(inner_item, 'bind_off', None)))))
         # 将 loop 内的 LetStmt 改为 AssignStmt
         if isinstance(inner_item, LetStmt):
             _demote_let(entries, decl_k)
@@ -362,13 +442,15 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
 
 
 def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
-                   lvt_names: frozenset = frozenset(), registry=None) -> bool:
+                   lvt_names: frozenset = frozenset(), registry=None, slot_decls=None) -> bool:
     """将在 if/else 块内 let-声明但在块外被读取的变量提升到块前。
 
     JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 if/else 内首次 let-声明，
     但在 if-else 结束后被读取，Rust 报 E0425。
     修复：在 if 前插入 let mut NAME: TYPE = Default::default();，
     块内所有同名 LetStmt 改为 AssignStmt。
+    slot_decls：LVT 声明表（slot → [(start, end, name, ...)]），驱动
+    _same_jvm_var 的变量身份判定。
 
     返回 True 表示本次有提升，调用方可循环直到返回 False。
     """
@@ -584,7 +666,39 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
         if name in outer_decls:
             outer_k = outer_decl_first_k.get(name, -1)
             if ref_idx < 0 or outer_k < 0 or outer_k <= ref_idx:
-                # 顶层声明在 ref 之前或没有外部 ref → 已可见，无需提升
+                # 顶层声明在 ref 之前或没有外部 ref → 已可见，无需提升。
+                # 但同名分段 let（javac 按控制流把一个 JVM 变量的活跃区间拆成
+                # 多条 LVT 条目，兄弟分支各自的绑定；LVT 同槽同名区间证据，
+                # _same_jvm_var）会在自己的块内遮蔽顶层绑定吞掉分支内赋值
+                # （CHM.transfer 的 ln/hn：resize 丢节点）——降级为赋值并回
+                # 同一绑定。类型不可对齐的形态是同槽两个 JVM 变量（G-3 家族，
+                # 身份判定 False / 无证据 None），不在降级之列，保留各自 let。
+                outer_item = entries[outer_k][1]
+                for dk, _dn in decl_list:
+                    if dk <= outer_k:
+                        continue
+                    d_item = entries[dk][1] if dk < len(entries) else None
+                    if not (isinstance(d_item, LetStmt) and d_item.name == name):
+                        continue
+                    if _same_jvm_var(outer_item, d_item, slot_decls) is not True:
+                        continue
+                    _outer_ty = _hoisted_let_type(outer_item)
+                    if _outer_ty is not None:
+                        _later = _hoisted_let_type(d_item)
+                        try:
+                            _later_s = render_type(_later) if _later is not None else None
+                        except Exception:
+                            # B 组计数：值侧对齐检查跳过（静默降级可观测化）
+                            if fallback_audit.STRICT:
+                                raise
+                            fallback_audit.record('vars-type-later')
+                            _later_s = None
+                        _outer_s = render_type(_outer_ty)
+                        if (_later_s is not None and _later_s != _outer_s
+                                and _forms_alignable(_later_s, _outer_s, registry)
+                                and not _is_default_value(d_item.value)):
+                            _align_store_value(d_item, _outer_ty, _later_s, _outer_s)
+                    _demote_let(entries, dk)
                 continue
             # 顶层声明在 ref 之后 → 需要提升；同时将该顶层声明也转为 AssignStmt
             # （否则它会成为第二次声明，遮蔽提升后的 let，引发新的 E0425）。
@@ -661,12 +775,21 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
             if merged_type is not None:
                 _widen_into_merged(entries, name, block_k, span_end, merged_type, box_object)
                 hoisted_type = merged_type
-        insertions.append((block_k, (block_indent, LetStmt(name, hoisted_type, True, default_val))))
+        insertions.append((block_k, (block_indent, LetStmt(
+            name, hoisted_type, True, default_val,
+            slot=getattr(first_let, 'slot', None),
+            bind_off=getattr(first_let, 'bind_off', None)))))
         for decl_k, _ in decl_list:
             if not (block_k < decl_k < span_end):
                 continue
             inner_indent, inner_item = entries[decl_k]
             if isinstance(inner_item, LetStmt) and inner_item.name == name:
+                # 身份证据判定的异槽同名（LVT 证据 _same_jvm_var is False）：span 内
+                # 的同名声明是另一个 JVM 变量（slot 复用换主），不并入本提升绑定，
+                # 保留其自己的 let（词法作用域隔离，G-3 家族语义）；无证据（None，
+                # 合成槽 / 未标注）维持原有并入降级行为
+                if _same_jvm_var(first_let, inner_item, slot_decls) is False:
+                    continue
                 # 降级前值侧对齐到提升声明类型：兄弟分支同名不同形（javac 三元两臂
                 # 拆两条 LVT 区间，stack.py 按槽复用走 let 阴影——else 臂 HashSet 存入
                 # Set 声明槽），子类型经 `.into()` 上转（Files.newByteChannel 的 set /
@@ -721,6 +844,8 @@ def _promote_undeclared_assigns(entries: list, predeclared: set[str]):
         elif isinstance(item, AssignStmt) and isinstance(item.target, Var):
             name = item.target.name
             if name not in predeclared and name not in declared:
-                # 变量在当前词法作用域不可见 → 提升为 LetStmt（类型由 Rust 推断）
-                entries[k] = (indent, LetStmt(name, None, True, item.value))
+                # 变量在当前词法作用域不可见 → 提升为 LetStmt（类型由 Rust 推断）；
+                # 继承原赋值的 JVM 身份标注（槽位 / store 偏移）
+                entries[k] = (indent, LetStmt(name, None, True, item.value,
+                                              slot=item.slot, bind_off=item.bind_off))
                 declared[name] = nesting

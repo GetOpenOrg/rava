@@ -253,6 +253,12 @@ class LetStmt:
     # 变量的模拟类型（不渲染）：`ty` 省略（交给 Rust 推断）时，变量提升 pass 仍需要类型
     # 为前置声明 `let mut x: T = Default::default();` 作标注
     value_ty: Optional[RsType] = None
+    # 变量身份（不渲染）：创建该绑定的 JVM 局部变量槽与 store 的字节码偏移。
+    # 供变量提升 pass 做 LVT 区间驱动的身份判定（vars._same_jvm_var）：
+    # 同名语句是否同一 JVM 变量，以 LocalVariableTable 的 (start, length)
+    # 活跃区间为证据源
+    slot: Optional[int] = None
+    bind_off: Optional[int] = None
 
 
 @dataclass
@@ -262,6 +268,9 @@ class AssignStmt:
     # 由声明降级而来的赋值保留值的模拟类型（不渲染）：变量提升 pass 据此在前置声明的类型
     # 与该次赋值的类型不同时补转换
     value_ty: Optional[RsType] = None
+    # 变量身份（不渲染）：语义同 LetStmt.slot / bind_off
+    slot: Optional[int] = None
+    bind_off: Optional[int] = None
 
 
 @dataclass

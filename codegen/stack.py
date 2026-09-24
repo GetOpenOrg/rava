@@ -625,7 +625,8 @@ class StackSim:
                 and self.locals[slot][1].name not in ('Object', '()')):
             # 形参（具体引用类型）被置 null（unscaledVal = null）：保持形参类型，赋默认值；
             # let 阴影会把类型降级成 Object 且只在当前块内可见
-            self.stmts.append(AssignStmt(Var(self.locals[slot][0]), RawExpr('Default::default()')))
+            self.stmts.append(AssignStmt(Var(self.locals[slot][0]), RawExpr('Default::default()'),
+                                         slot=slot, bind_off=self.current_offset))
             return
         if (slot in self._param_slots and slot in self.locals
                 and getattr(self.locals[slot][1], 'name', '') == 'Object'
@@ -635,7 +636,8 @@ class StackSim:
             # 不能用 let 阴影（阴影只在当前块内可见，块外仍读到旧值且类型不一致）。
             _src = render_expr(_clone_moved_var(expr, ty))
             self.stmts.append(AssignStmt(Var(self.locals[slot][0]),
-                                         RawExpr(self._box_object(_src, render_type(ty)))))
+                                         RawExpr(self._box_object(_src, render_type(ty))),
+                                         slot=slot, bind_off=self.current_offset))
             return
         if (slot in self._param_slots and slot in self.locals
                 and isinstance(self.locals[slot][1], RsNamed)
@@ -655,7 +657,8 @@ class StackSim:
             self.stmts.append(AssignStmt(
                 Var(self.locals[slot][0]),
                 RawExpr(f'<{render_type(self.locals[slot][1])} as ::std::convert::From<Object>>'
-                        f'::from(Object::from({_src}))')))
+                        f'::from(Object::from({_src}))'),
+                slot=slot, bind_off=self.current_offset))
             return
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
@@ -703,7 +706,8 @@ class StackSim:
                     self.stmts.append(AssignStmt(
                         Var(name),
                         RawExpr(f'<{render_type(old_ty)} as ::std::convert::From<Object>>'
-                                f'::from(Object::from({_src}))')))
+                                f'::from(Object::from({_src}))'),
+                        slot=slot, bind_off=self.current_offset))
                     return
                 if (decl is None and render_type(old_ty) != render_type(ty)
                         and any(_safe_name(_d[2]) == name and not (_d[0] <= self.current_offset < _d[1])
@@ -723,7 +727,8 @@ class StackSim:
                 let_ty = ty if (_is_default or force_let_ty) else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
                 # Java 局部变量间赋值在 Rust 中是 move，包 Clone 保活源变量（E0382）
                 value = _clone_moved_var(value, ty)
-                self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value, value_ty=ty))
+                self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value, value_ty=ty,
+                                          slot=slot, bind_off=self.current_offset))
             else:
                 # hint 升级后（栈类型 Object → 局部精确类型）赋给已声明局部：
                 # 值本身仍是 Object（如 from_any 包装的调用结果），
@@ -733,7 +738,8 @@ class StackSim:
                 if src_is_object:
                     expr = _maybe_downcast(expr, ty)
                 # Java 引用赋值无 move 语义，包 Clone 保活源变量（E0382）
-                self.stmts.append(AssignStmt(Var(name), _clone_moved_var(expr, ty)))
+                self.stmts.append(AssignStmt(Var(name), _clone_moved_var(expr, ty),
+                                             slot=slot, bind_off=self.current_offset))
         else:
             name = decl_name or self._undeclared_slot_name(slot)
             self.locals[slot] = (name, ty, True)
@@ -746,7 +752,8 @@ class StackSim:
             # Java 局部变量间赋值（aload src; astore dst）在 Rust 中是 move，
             # 源变量后续仍会被使用，包 Clone::clone 保活（E0382 use-after-move）
             value = _clone_moved_var(value, ty)
-            self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value, value_ty=ty))
+            self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value, value_ty=ty,
+                                      slot=slot, bind_off=self.current_offset))
 
         # dup 后 astore：同一个 Var("_tN") 可能还留在 stack 上，但 _tN 已被 move。
         # 把 stack 上残留的同名引用替换为目标变量名，防止 E0382 use-after-move。
