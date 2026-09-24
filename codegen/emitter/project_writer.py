@@ -3,6 +3,7 @@ Cargo workspace 写出：_write、_update_user_lib_rs、_append_cargo_bin、writ
 """
 
 from ..type_map import short_cls as _short_cls_g, configure_short_names as _configure_short_names
+from ..type_map import PRELUDE_SHADOW_HITS as _PRELUDE_SHADOW_HITS
 import os
 import re
 from ..types import ClassInfo
@@ -202,6 +203,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for jci in jdk_class_infos:
             registry.setdefault(jci.name, jci)
     _configure_short_names(registry)
+    if _PRELUDE_SHADOW_HITS:
+        # prelude 遮蔽消歧触发点（Java 类短名 ∈ prelude 保留名 → 限定名发射）
+        print(f"      [short-names] prelude 遮蔽消歧 {len(_PRELUDE_SHADOW_HITS)} 处: "
+              + ', '.join(_PRELUDE_SHADOW_HITS))
 
     # 扫描 jdk_classes/src/**/*_impl.rs，构建 new_format_map（已手写方法 → codegen 跳过 stub）
     # 传入 registry 使 _scan_impl_files 能通过 registry 解析嵌套类的真实 binary_name（如 HashMap$TreeNode）
