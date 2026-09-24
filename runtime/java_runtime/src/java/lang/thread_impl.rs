@@ -124,6 +124,13 @@ impl Thread {
         Ok(())
     }
 
+    /// native `sleepNanos0(long)`：JDK25 对 `sleep0(long)` 的改名（参数同为纳秒，
+    /// 语义不变）——两版语料各经各自名面触达，同一实现。
+    #[jvm_native]
+    pub fn sleepNanos0(nanos: i64) -> Result<()> {
+        Self::sleep0(nanos)
+    }
+
     /// native `currentThread()`：返回当前（唯一）OS 线程的平台线程对象。
     /// 首次调用构造一次并缓存——与 JVM 平台线程对象线程内唯一一致；字段按
     /// 语料消费清单填充（模块注释），构造路径绕开 `Thread.<init>` 的安全
