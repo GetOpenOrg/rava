@@ -63,6 +63,36 @@ fn __member_key(m: &Method) -> Option<(std::string::String, std::string::String,
 }
 
 impl Method {
+    /// `invoke(Object, Object[])`：L3 反射分派（协议见 reflect_dispatch 模块
+    /// 头注）。JDK 语义：目标方法抛出的任何 Throwable 一律包装为
+    /// InvocationTargetException（cause = 原异常——JUnit 的 ReflectiveCallable
+    /// 捕获后 getTargetException 解包）；访问检查近似（override_ 或 public
+    /// 之外 → IllegalAccessException，与 Field.get 同一策略）。
+    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V")]
+    pub fn invoke_obj_arr_obj(&self, obj: Object, args: JArray<Object>) -> Result<Object> {
+        let name = format!("{}", self.__get_name());
+        let mods = self.__get_modifiers();
+        if !self.__get_override_() && (mods & 0x0001) == 0 {
+            return Err(JvmError::from(crate::java::lang::IllegalAccessException::new_str(
+                String::from(format!("Class can not access a member with modifiers {}", mods)))?));
+        }
+        let Some((cls_key, _n, desc)) = __member_key(self) else {
+            panic!("stub: Method.invoke 无声明键（非表构造的 Method）: {}", name);
+        };
+        let ret = crate::reflect_dispatch::reflect_invoke(
+            &cls_key, &name, &desc, obj, &args);
+        match ret {
+            Ok(v) => Ok(v),
+            // 目标异常 → InvocationTargetException 包装（JDK Method.invoke 契约）
+            Err(e) => {
+                let ite = crate::java::lang::reflect::InvocationTargetException::new_throwable(
+                    <crate::java::lang::Throwable as From<Object>>::from(
+                        Clone::clone(e.thrown())))?;
+                Err(JvmError::from(ite))
+            }
+        }
+    }
+
     /// 本方法挂载点的注解条目（空 = 无注解 / 非表构造形态）。
     fn __anno_entries(&self) -> &'static [crate::annotation_meta::__anno_table::AnnotationEntry] {
         match __member_key(self) {

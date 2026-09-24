@@ -96,13 +96,21 @@ impl Object {
         crate::monitor::notify(self.0.__identity() as usize, false)
     }
 
-    /// java.lang.Object.notifyAll()V
+    /// java.lang.Object.notifyAll()V：notifyAll 无重载，mangle_name 保持
+    /// 原名——翻译侧 invokevirtual 呼叫这个名字（notify_all 是早期蛇形名，
+    /// 手写内部消费方继续可用，双名同体）。
     #[jvm_native]
     pub fn notify_all(&self) -> Result<()> {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
         crate::monitor::notify_all(self.0.__identity() as usize, false)
+    }
+
+    /// notifyAll 的生成侧名（mangle 语义别名，见上）
+    #[jvm_native]
+    pub fn notifyAll(&self) -> Result<()> {
+        self.notify_all()
     }
 
     /// monitorenter（指令侧，codegen 发射）：可重入获取监视器

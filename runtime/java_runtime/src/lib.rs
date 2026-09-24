@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 pub mod annotation_meta;
 pub mod array;
+pub mod reflect_dispatch;
 pub mod error;
 pub mod java;
 pub mod jdk;

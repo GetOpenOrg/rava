@@ -367,13 +367,25 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
         # lib 模式：生成集内的引用类逐个定向（各 crate 包 mod.rs 均 `pub use <mod>::*`
         # 再导出，统一 prefix::pkg::Simple 形态）。无包用户类不在此列（同 crate，
         # 由 user_sibling_imports 承载）。
+        # 可达性过滤（声明序依赖方向，resolver 携带元数据）：发射 crate 只导入
+        # 自身 / java_runtime / 声明序在前的 lib crate——反向跨 crate 引用来自
+        # 子类型收集（非 JDK 接口的实现者不受 _JDK_NS 过滤保护），是 M5 跨
+        # crate 分派边界，导入即 E0433。
+        _lib_order = getattr(crate_prefix_resolver, '_rfl_lib_order', None)
+        _cur_crate = getattr(crate_prefix_resolver, '_rfl_current_crate', None)
         _generated = (generated_classes or set())
         for _full_cls in sorted(_referenced):
             if _full_cls == ci.name or _full_cls not in _generated:
                 continue
             if len(_full_cls.split('/')) < 2:
                 continue
-            _add_precise_import(_full_cls, crate_prefix_resolver(_full_cls),
+            _target = crate_prefix_resolver(_full_cls)
+            if (_lib_order is not None and _target != 'crate'
+                    and _target != 'java_runtime' and _target != _cur_crate
+                    and _target in _lib_order and _cur_crate in _lib_order
+                    and _lib_order.index(_target) > _lib_order.index(_cur_crate)):
+                continue
+            _add_precise_import(_full_cls, _target,
                                 _self_simple, _seen_imports, _seen_simples,
                                 cross_imports)
     elif jdk_crate_pkg_paths:

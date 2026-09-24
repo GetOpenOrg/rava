@@ -317,6 +317,13 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         for m in _sci.methods:
             if not (m.access_flags & 0x0001):   # ACC_PUBLIC
                 continue
+            # main(String[]) 不入 lib 种子面：它是命令行入口而非库 API（bin
+            # 入口由用户 main 承担），且其体引用 args 形参——发射侧的 main
+            # 参数省略约定（method_gen：`pub fn main()`）会造出悬空引用
+            #（JUnitCore.main→runMain(args) 实证）。可达性不受影响：有真实
+            # 调用边时照常入链（此时按普通调用边语义发射）。
+            if m.is_static and m.name == 'main' and m.descriptor == '([Ljava/lang/String;)V':
+                continue
             _enqueue_method((_seed, m.name, m.descriptor))
             enqueue_refs(m.instrs or [], m.exception_table)
             _enqueue_desc_types(m.descriptor)
