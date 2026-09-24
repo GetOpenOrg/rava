@@ -511,14 +511,16 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                         if (not any(am.name == _mname_s for am in _anc_ci.methods)
                                 and not _cidm(_orig_cls, _mname_s, _mrd(_c), registry)):
                             continue
-                    # 从 binary name（java/lang/AbstractStringBuilder）构建完整模块路径
-                    _binary_parts = _orig_cls.split('/')
-                    *_pkg, _simple_cls = _binary_parts
+                    # 包级再导出路径（JDK/lib 包 mod.rs 一律 `pub use <mod>::*`）：
+                    # 与 inherited_gen 的 class_use_path 同一决策口径。不拼
+                    # to_snake(类名) 模块段——类名 snake 与同目录子包撞名时落盘侧
+                    # 会改 _t 后缀（E0761 预防，见 project_writer），模块段路径无法
+                    # 从 binary name 单侧复算（java/util/Random 落 random_t.rs，而
+                    # crate::java::util::random:: 是子包模块，非 Random 的模块）。
                     _base_cls_simple = _short_cls_g(_orig_cls)
-                    _snake_cls = to_snake(_simple_cls)
                     _base_mod = '::'.join(
                         f'r#{p}' if p in _RUST_KEYWORDS else p
-                        for p in _pkg + [_snake_cls]
+                        for p in _orig_cls.split('/')[:-1]
                     )
                 else:
                     # user class parent method

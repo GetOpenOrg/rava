@@ -51,6 +51,15 @@ def _impl_signature_type_refs(cls: str, runtime_src: str, resolver) -> list[str]
             content = open(path, encoding='utf-8').read()
         except OSError:
             continue
+        # 自动生成的类文件碰巧以 _impl.rs / _ext.rs 结尾（类名本身含 Impl/Ext，
+        # 如 java/net/InetAddressImpl → inet_address_impl.rs，恰落在同包 InetAddress
+        # 的共置 impl 路径上）：scratch 复用模式下上一轮的生成残留会伪装成手写
+        # impl，其类型引用被误入队（净 +4 field stub 的 clean/warm 闭包漂移，
+        # TestCollectionsUtil 实证 365→369）。与 native_upcalls._load 同判据跳过：
+        # 生成类文件恒含限定宏调用，手写 impl 恒不含（含裸 `java_class!` 的
+        # doc 注释不误伤）。
+        if 'java_rta_macros::java_class' in content:
+            continue
         for m in _IMPL_FULL_PATH_RE.finditer(content):
             pkg_path = m.group(1).replace('::', '/').replace('r#', '')
             cand = f'{pkg_path}/{m.group(2)}'
