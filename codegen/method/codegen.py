@@ -421,9 +421,11 @@ def gen_method_body(
     ledger = JumpLedger(f"{method.class_name}.{method.name}:{method.descriptor}")
     entries.extend(_structured_entries(method, sim, registry, _class_tparams, ledger))
 
-    # 栈下溢：控制流分析失败，整个方法退化为 panic!("stub: ...") 避免生成无法编译的残缺代码
+    # 栈下溢：控制流分析失败，整个方法退化为 panic!("stub: ...") 避免生成无法编译的残缺代码。
+    # 并入 CfgError 家族（fallback-audit 方案 §4.1）：A 组吞点白名单化后，
+    # 这是需要 stub 兜底的「控制流语义限制」之列，与 blocks.py 的块级下溢同族
     if sim.underflow_occurred:
-        raise RuntimeError(f"stack underflow in {method.class_name}.{method.name}")
+        raise CfgError(f"stack underflow in {method.class_name}.{method.name}")
 
     # ── IR mutation 分析（渲染前）────────────────────────────────────
     ir_stmts = [item for _, item in entries if not isinstance(item, str)]

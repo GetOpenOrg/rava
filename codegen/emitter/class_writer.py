@@ -6,8 +6,9 @@ import os
 import re as _re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..method import gen_method_body, _indent
-from ..cfg import CfgAuditError, STATS as _CFG_STATS
 from .. import equiv_audit
+from .. import fallback_audit as _fallback_audit
+
 from ..type_map import (short_cls, short_cls as _short_cls_g, jvm_to_rust, mangle_name,
                         rust_default, parse_class_type_params, effective_class_type_params,
                         _PRIMITIVE_MAP as _JVM_PRIMITIVE_MAP)
@@ -37,6 +38,11 @@ from ..instr.member_naming import _parse_field_ref
 from ..instr.member_naming import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 
 _safe_field_name = safe_ident
+
+# A 组九吞点的兜底异常白名单（fallback-audit 方案 §4.2）：默认 (CfgError,)，
+# JAVA_RTA_STRICT=1 时为空元组（九点全穿，无 stub 兜底）。单点定义见
+# fallback_audit 模块（env 只在那里读一次）
+_FALLBACK_EXC = _fallback_audit.FALLBACK_EXC
 
 _ACC_FINAL   = 0x0010
 _ACC_STATIC  = 0x0008
@@ -286,10 +292,12 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
                 ) if (_lam_in_chain and not stub_bodies) else _gen_native_stub(
                     m, ci, rust_name=_lam_rust, registry=registry,
                     class_type_params=_lam_ctparams)
-            except CfgAuditError:
-                raise
-            except Exception as e:
-                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}", repr(e))
+            except _FALLBACK_EXC as e:
+                # A 组白名单兜底（fallback-audit 方案 §4.1）：只兜控制流语义限制
+                # （CfgError 家族，含并入的栈下溢）；CfgAuditError 与其余异常
+                # （ImportError/NameError/TypeError 等 bug）穿透硬失败
+                _fallback_audit.stub_fallback(
+                    f"{ci.name}.{m.name}:{m.descriptor}", 'iface-lambda', e)
                 _lam_block = _gen_native_stub(m, ci, rust_name=_lam_rust, registry=registry,
                                               class_type_params=_lam_ctparams)
             _iface_lambda_blocks.append(_lam_block)
@@ -321,10 +329,9 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
                 ) if (_pv_in_chain and not stub_bodies) else _gen_native_stub(
                     m, ci, rust_name=_pv_rust, registry=registry,
                     class_type_params=_pv_ctparams)
-            except CfgAuditError:
-                raise
-            except Exception as e:
-                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}(iface-private)", repr(e))
+            except _FALLBACK_EXC as e:
+                _fallback_audit.stub_fallback(
+                    f"{ci.name}.{m.name}:{m.descriptor}", 'iface-private', e)
                 _pv_block = _gen_native_stub(m, ci, rust_name=_pv_rust, registry=registry,
                                              class_type_params=_pv_ctparams)
             _iface_lambda_blocks.append(_pv_block)
@@ -430,11 +437,9 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
                         rust_name=rust_name,
                         in_vtable_body=False,
                     )
-                except CfgAuditError:
-                    raise
-                except Exception as e:
-                    _CFG_STATS.record_stub_fallback(
-                        f"{ci.name}.{m.name}:{m.descriptor}(iface-default)", repr(e))
+                except _FALLBACK_EXC as e:
+                    _fallback_audit.stub_fallback(
+                        f"{ci.name}.{m.name}:{m.descriptor}", 'iface-default', e)
                     _dm_iface_body = None
             if _dm_iface_body is not None:
                 method_blocks.append(_java_method_attr(m) + '\n' + _dm_iface_body)
@@ -527,16 +532,12 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
                     in_vtable_body=bool(m.virtual_in),
                 )
                 method_blocks.append(attr_line + '\n' + body)
-            except CfgAuditError:
-                raise
-            except Exception as e:
-                # 翻译失败：退化为 stub，避免生成无效 Rust
-                _CFG_STATS.record_stub_fallback(f"{ci.name}.{m.name}:{m.descriptor}", repr(e))
-                import os as _os
-                if _os.environ.get('JAVA_RTA_DEBUG'):
-                    import traceback as _tb
-                    print(f"[DEBUG] stub fallback for {ci.name}.{m.name}{m.descriptor}: {e}", file=__import__('sys').stderr)
-                    _tb.print_exc()
+            except _FALLBACK_EXC as e:
+                # 翻译失败：退化为 stub，避免生成无效 Rust（白名单兜底——只兜
+                # CfgError 家族的语义限制，代码 bug 穿透；DEBUG traceback 见
+                # fallback_audit.stub_fallback，九点统一）
+                _fallback_audit.stub_fallback(
+                    f"{ci.name}.{m.name}:{m.descriptor}", 'main', e)
                 stub = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry, class_type_params=class_type_params)
                 method_blocks.append(attr_line + '\n' + stub)
 
@@ -714,10 +715,9 @@ def _emit_interface_default_inheritance(ci, registry, call_chain, stub_bodies,
                         )
                         method_blocks.append(dm_attr + '\n' + dm_body)
                         _translated_defaults.append(dm)
-                    except CfgAuditError:
-                        raise
-                    except Exception as e:
-                        _CFG_STATS.record_stub_fallback(f"{ci.name}.{dm.name}:{dm.descriptor}", repr(e))
+                    except _FALLBACK_EXC as e:
+                        _fallback_audit.stub_fallback(
+                            f"{ci.name}.{dm.name}:{dm.descriptor}", 'iface-inherit', e)
                         dm_stub = _gen_native_stub(dm_adapted, ci, rust_name=dm_rust, registry=registry, class_type_params=class_type_params)
                         method_blocks.append(dm_attr + '\n' + dm_stub)
                 else:
@@ -787,11 +787,9 @@ def _emit_interface_special_members(ci, registry, call_chain, stub_bodies,
                             in_vtable_body=False,
                         )
                         _sp_sources.append(_sp_m)
-                    except CfgAuditError:
-                        raise
-                    except Exception as e:
-                        _CFG_STATS.record_stub_fallback(
-                            f"{ci.name}.{_sp_mname}:{_sp_desc}", repr(e))
+                    except _FALLBACK_EXC as e:
+                        _fallback_audit.stub_fallback(
+                            f"{ci.name}.{_sp_mname}:{_sp_desc}", 'iface-special', e)
                 if _sp_block is None:
                     _sp_block = _gen_native_stub(_sp_adapted, ci, rust_name=_sp_rust,
                                                  registry=registry,
@@ -955,13 +953,12 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                         )
                         method_blocks.append(_java_method_attr(_vb2) + '\n' + _vb_body)
                         continue
-                    except CfgAuditError:
-                        raise
-                    except Exception as e:
+                    except _FALLBACK_EXC as e:
                         # 桥体翻译失败：本类已有同参可见覆盖（协变/参数位）时回退旧
                         # 行为（跳过——槽位由既有机制处理），避免与真实覆盖重复定义；
                         # 无可见覆盖（抽象祖先参数位）时保持存根
-                        _CFG_STATS.record_stub_fallback(f"{ci.name}.{_vm.name}:{_vm.descriptor}(bridge)", repr(e))
+                        _fallback_audit.stub_fallback(
+                            f"{ci.name}.{_vm.name}:{_vm.descriptor}", 'bridge', e)
                         if any(m.name == _vm.name
                                and _vinh_param_part(m.descriptor) == _vinh_param_part(_vm.descriptor)
                                for m in visible_methods):
@@ -978,10 +975,9 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                             in_vtable_body=True,
                         )
                         method_blocks.append(_vm_attr + '\n' + _vm_body)
-                    except CfgAuditError:
-                        raise
-                    except Exception as e:
-                        _CFG_STATS.record_stub_fallback(f"{ci.name}.{_vm.name}:{_vm.descriptor}", repr(e))
+                    except _FALLBACK_EXC as e:
+                        _fallback_audit.stub_fallback(
+                            f"{ci.name}.{_vm.name}:{_vm.descriptor}", 'super-inherit', e)
                         _vm_stub = _gen_native_stub(_vm2, ci, registry=registry, class_type_params=class_type_params)
                         method_blocks.append(_vm_attr + '\n' + _vm_stub)
             _vinh_super = _vinh_sci.super_class if _vinh_sci.super_class else None

@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from .constants import OBJECT_CLASS as _OBJECT_CLASS
+from . import fallback_audit
 from .type_map import (_PRIMITIVE_MAP, effective_class_type_params, parse_class_type_params,
                        short_cls, _iface_full_path)
 
@@ -264,7 +265,10 @@ def parse_field_type(sig: str, class_type_params: list[str], registry=None) -> s
     try:
         rust_type, _ = _parse_one_type(sig, 0, class_type_params, registry)
         return rust_type
-    except Exception:
+    except (ValueError, IndexError):
+        # B 组收窄（fallback-audit 方案 §4.1）：签名残缺是 ValueError/IndexError
+        # 形态；AttributeError/NameError/TypeError 等代码 bug 不再吞、穿透硬失败
+        fallback_audit.record('sig-parse-field')
         return ''
 
 
@@ -353,7 +357,10 @@ def parse_method_param_types(
 
         return param_types, ret_type
 
-    except Exception:
+    except (ValueError, IndexError):
+        # B 组收窄（fallback-audit 方案 §4.1）：同 parse_field_type，只兜签名
+        # 残缺形态，代码 bug 穿透
+        fallback_audit.record('sig-parse-method')
         return [], ''
 
 

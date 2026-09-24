@@ -30,6 +30,7 @@ import os
 import re
 
 from ..constants import OBJECT_CLASS as _OBJECT_CLASS, SERIALIZABLE_CLASS as _SERIALIZABLE
+from .. import fallback_audit
 from ..type_map import (jvm_to_rust, short_cls, effective_class_type_params,
                         parse_descriptor_params, parse_descriptor_return)
 from .attrs import to_snake
@@ -192,7 +193,10 @@ def _functional_sam(iface_bin: str, registry: dict) -> 'SamSpec | None':
         params = [jvm_to_rust(p, registry) for p in parse_descriptor_params(desc)]
         rd = parse_descriptor_return(desc)
         ret = '()' if rd == 'V' else jvm_to_rust(rd, registry)
-    except Exception:
+    except (ValueError, IndexError):
+        # B 组收窄（fallback-audit 方案 §4.1）：描述符残缺形态（None → 站点
+        # 回落闭包装箱）；代码 bug 穿透硬失败
+        fallback_audit.record('sam-functional')
         return None
     return SamSpec(iface_bin, name, desc, params, ret, closure)
 
@@ -247,7 +251,9 @@ def prescan(registry: dict, jdk_class_infos: list, user_class_infos: list,
                     continue
                 try:
                     ret_desc = parse_descriptor_return(toks[1].split(':', 1)[1])
-                except Exception:
+                except (ValueError, IndexError):
+                    # B 组收窄（fallback-audit 方案 §4.1）：描述符残缺 → 跳过站点
+                    fallback_audit.record('sam-prescan')
                     continue
                 if ret_desc.startswith('L') and ret_desc.endswith(';'):
                     candidates.add(ret_desc[1:-1])

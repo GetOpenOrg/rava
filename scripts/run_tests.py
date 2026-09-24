@@ -17,6 +17,7 @@
     python3 scripts/run_tests.py --deny equiv            # 任一等价发射点非零 → 整体失败
     python3 scripts/run_tests.py --deny equiv::neg-array # 细粒度拒绝（对齐 rustc lint 模型）
     python3 scripts/run_tests.py --deny stub-hit         # run 失败的 stub 子族 → 整体失败
+    python3 scripts/run_tests.py --deny fallback         # 任一静默兜底点非零 → 整体失败（K-6b 防线）
     python3 scripts/run_tests.py --deny equiv --deny stub-hit   # 可叠加
 
 工作区模型（见 docs/plans/2026-09-16-per-test-scratch-workspace.md）：
@@ -425,6 +426,67 @@ def _print_equiv_summary(per_test: dict[str, dict[str, int]]) -> None:
         print(f"  非零: {shown}{'…' if len(nonzero) > 6 else ''}")
 
 
+# ── 静默兜底审计汇总（fallback-audit 方案 §4.3；对齐 equiv 模式） ──────
+
+_FALLBACK_RE = re.compile(r"^\[fallback-audit\]\s+(.+)$", re.MULTILINE)
+_FALLBACK_RUNS = 0   # 带 [fallback-audit] 行的转译次数（全零时汇总也可见）
+
+# 可 --deny 的兜底 ID（= codegen/fallback_audit.py 的 B 组口径全集）
+FALLBACK_IDS = (
+    'sig-parse-field', 'sig-parse-method', 'type-map-params',
+    'vars-render-loop', 'vars-render-if', 'vars-type-decl',
+    'vars-type-outer', 'vars-type-later',
+    'sam-functional', 'sam-prescan',
+    'cc-load-class', 'cc-root-names', 'cc-root-desc',
+    'cc-stub-chan', 'cc-parent-queue',
+)
+
+
+def _parse_fallback(log: str) -> dict[str, int]:
+    """从转译输出解析 [fallback-audit] 行的静默兜底计数（全零行是 `none`，
+    计入 _FALLBACK_RUNS 使全零口径在汇总可见）。"""
+    global _FALLBACK_RUNS
+    m = _FALLBACK_RE.search(log)
+    if not m:
+        return {}
+    _FALLBACK_RUNS += 1
+    counts: dict[str, int] = {}
+    for part in m.group(1).split():
+        k, _, v = part.partition("=")
+        try:
+            counts[k] = int(v)
+        except ValueError:
+            pass
+    return counts
+
+
+def _print_fallback_summary(per_test: dict[str, dict[str, int]]) -> None:
+    """汇总各测试的静默兜底计数。目标全 0：B 组收窄是死代码收窄（2026-09-23
+    审计实证全语料零触发），任何非零都极可能是真 bug（K-6b / typeir-b3 型
+    「安全网吞 bug」）——与 equiv 的「观测即可」不同，非零应当排查。"""
+    if not per_test:
+        if _FALLBACK_RUNS:
+            print(f"\n[fallback] none  (合计 0，{_FALLBACK_RUNS} 次转译零触发——"
+                  f"死代码收窄零损失口径成立)")
+        return
+    totals: dict[str, int] = {}
+    nonzero: list[str] = []
+    for name, counts in sorted(per_test.items()):
+        if not counts:
+            continue
+        bad = {k: v for k, v in counts.items() if v}
+        for k, v in counts.items():
+            totals[k] = totals.get(k, 0) + v
+        if bad:
+            nonzero.append(f"{name}({', '.join(f'{k}={v}' for k, v in sorted(bad.items()))})")
+    line = " ".join(f"{k}={v}" for k, v in sorted(totals.items())) or "none"
+    print(f"\n[fallback] {line}  (合计 {sum(totals.values())}，{len(per_test)} 个测试，"
+          f"目标全 0——非零=收窄后仍触发的兜底，极可能是真 bug)")
+    if nonzero:
+        shown = "; ".join(nonzero[:6])
+        print(f"  非零: {shown}{'…' if len(nonzero) > 6 else ''}")
+
+
 def _parse_raw(log: str) -> int:
     """累加 [raw-audit] 行（收敛路线 L5-b）并返回本测试的 raw 合计（行尾列用）。"""
     m = _RAW_RE.search(log)
@@ -513,18 +575,22 @@ def _print_run_subfamily_summary(sub: dict[str, tuple[str, str]]) -> None:
 
 
 def _validate_deny(deny: list[str]) -> None:
-    """校验 --deny 规格：equiv / equiv::<id>（id 须在发射口径全集内）/ stub-hit。"""
-    valid = {'equiv', 'stub-hit'} | {f"equiv::{i}" for i in EQUIV_IDS}
+    """校验 --deny 规格：equiv / equiv::<id> / stub-hit / fallback / fallback::<id>。"""
+    valid = ({'equiv', 'stub-hit', 'fallback'}
+             | {f"equiv::{i}" for i in EQUIV_IDS}
+             | {f"fallback::{i}" for i in FALLBACK_IDS})
     bad = [d for d in deny if d not in valid]
     if bad:
-        known_ids = ', '.join(EQUIV_IDS)
+        known = {'equiv': f"equiv::<id>（id ∈ {', '.join(EQUIV_IDS)}）",
+                 'fallback': f"fallback::<id>（id ∈ {', '.join(FALLBACK_IDS)}）"}
         sys.exit(f"无效 --deny 规格: {', '.join(bad)}\n"
-                 f"可用: equiv | equiv::<id>（id ∈ {known_ids}）| stub-hit")
+                 f"可用: {' | '.join(['equiv', *sorted(known.values()), 'stub-hit'])}")
 
 
 def _deny_violations(deny: list[str],
                      equiv_counts: dict[str, dict[str, int]],
-                     run_sub: dict[str, tuple[str, str]]) -> list[str]:
+                     run_sub: dict[str, tuple[str, str]],
+                     fallback_counts: dict[str, dict[str, int]]) -> list[str]:
     """按 --deny 规格收集违规消息（不改变测试通过判定本身，只影响退出码）。"""
     msgs: list[str] = []
     for spec in deny:
@@ -539,6 +605,17 @@ def _deny_violations(deny: list[str],
             for name, counts in sorted(equiv_counts.items()):
                 if counts.get(eid):
                     msgs.append(f"--deny {spec}: {name} {eid}={counts[eid]}")
+        elif spec == 'fallback':
+            for name, counts in sorted(fallback_counts.items()):
+                bad = {k: v for k, v in counts.items() if v}
+                if bad:
+                    msgs.append(f"--deny fallback: {name} "
+                                + ', '.join(f"{k}={v}" for k, v in sorted(bad.items())))
+        elif spec.startswith('fallback::'):
+            fid = spec[len('fallback::'):]
+            for name, counts in sorted(fallback_counts.items()):
+                if counts.get(fid):
+                    msgs.append(f"--deny {spec}: {name} {fid}={counts[fid]}")
         elif spec == 'stub-hit':
             for name in sorted(run_sub):
                 fam, detail = run_sub[name]
@@ -549,11 +626,12 @@ def _deny_violations(deny: list[str],
 
 def _apply_deny(deny: list[str],
                 equiv_counts: dict[str, dict[str, int]],
-                run_sub: dict[str, tuple[str, str]], failed: int) -> int:
+                run_sub: dict[str, tuple[str, str]], failed: int,
+                fallback_counts: dict[str, dict[str, int]] | None = None) -> int:
     """打印违规并决定最终退出码：deny 命中时整体失败（即使测试全 PASS）。"""
     if not deny:
         return 1 if failed else 0
-    violations = _deny_violations(deny, equiv_counts, run_sub)
+    violations = _deny_violations(deny, equiv_counts, run_sub, fallback_counts or {})
     if violations:
         print(f"\n[deny] {len(violations)} 处违规（--deny {' '.join(deny)}）:")
         for msg in violations:
@@ -657,6 +735,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     t_transpile_total = t_build_total = t_run_total = 0.0
     readability_counts: dict[str, dict[str, int]] = {}
     equiv_counts: dict[str, dict[str, int]] = {}
+    fallback_counts: dict[str, dict[str, int]] = {}
     run_sub: dict[str, tuple[str, str]] = {}
     fail_categories: dict[str, list[str]] = {}
 
@@ -701,11 +780,14 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         if _rc:
             readability_counts[class_name] = _rc
         _ec = _parse_equiv(log)
+        _fc = _parse_fallback(log)
         _raw_per = _parse_raw(log)
         _eq_sum = sum(_ec.values()) if _ec else 0
         _parse_raw(log)
         if _ec:
             equiv_counts[class_name] = _ec
+        if _fc:
+            fallback_counts[class_name] = _fc
 
         if no_run:
             _pline(name_w, "NORUN", java_file.relative_to(E2E),
@@ -778,8 +860,10 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     ratchet.summary()
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
+    _print_fallback_summary(fallback_counts)
     _summarize_raw()
-    return _apply_deny(deny, equiv_counts, run_sub, failed)
+    return _apply_deny(deny, equiv_counts, run_sub, failed,
+                       fallback_counts=fallback_counts)
 
 
 # ── 并行模式 ─────────────────────────────────────────────────────────
@@ -832,20 +916,23 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     print(f"\n[batch] 并行转译 {len(pending)} 个测试（max_workers={jobs}）…")
     t_all = time.perf_counter()
 
-    def _transpile_one(java_file: Path) -> tuple[Path, bool, str, dict[str, int], dict[str, int]]:
+    def _transpile_one(java_file: Path) -> tuple[Path, bool, str, dict[str, int],
+                                                 dict[str, int], dict[str, int]]:
         ws = _test_workspace(_to_bin_name(_class_name(java_file)))
         ok, log = _transpile(java_file, out_dir=ws)
         _parse_raw(log)
-        return java_file, ok, log, _parse_readability(log), _parse_equiv(log)
+        return (java_file, ok, log, _parse_readability(log), _parse_equiv(log),
+                _parse_fallback(log))
 
     transpile_ok: list[Path] = []
     transpile_fail: list[Path] = []
     readability_counts: dict[str, dict[str, int]] = {}
     equiv_counts: dict[str, dict[str, int]] = {}
+    fallback_counts: dict[str, dict[str, int]] = {}
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         futures = {executor.submit(_transpile_one, f): f for f in pending}
         for fut in as_completed(futures):
-            java_file, ok, log, rc, ec = fut.result()
+            java_file, ok, log, rc, ec, fc = fut.result()
             rel = java_file.relative_to(ROOT)
             if ok:
                 print(f"  [transpile] {rel} OK", flush=True)
@@ -854,6 +941,8 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                     readability_counts[_class_name(java_file)] = rc
                 if ec:
                     equiv_counts[_class_name(java_file)] = ec
+                if fc:
+                    fallback_counts[_class_name(java_file)] = fc
                 aux_by_file[java_file] = (_transpile_aux(log),
                                           sum(ec.values()) if ec else 0,
                                           _parse_raw(log))
@@ -971,8 +1060,10 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     ratchet.summary()
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
+    _print_fallback_summary(fallback_counts)
     _summarize_raw()
-    return _apply_deny(deny, equiv_counts, run_sub, failed)
+    return _apply_deny(deny, equiv_counts, run_sub, failed,
+                       fallback_counts=fallback_counts)
 
 
 # ── 期望输出更新（并行） ─────────────────────────────────────────────
@@ -1065,6 +1156,8 @@ def main():
     ap.add_argument("--deny",            action="append", default=[], metavar="SPEC",
                     help="拒绝升级（默认全放行，可叠加）：equiv = 任一等价发射点非零即整体失败；"
                          "equiv::<id> = 细粒度（id 见 [equiv-audit] 行）；"
+                         "fallback / fallback::<id> = 静默兜底点非零（id 见 [fallback-audit] 行，"
+                         "收窄后非零极可能是真 bug）；"
                          "stub-hit = run 失败的 stub 子族（二进制 stderr 含 `stub: `）")
     args = ap.parse_args()
 
