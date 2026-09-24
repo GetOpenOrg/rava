@@ -186,6 +186,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     LAMBDA_NAME_LEDGER.reset()
     from . import sam_objects as _sam_objects
     _sam_objects.reset()
+    from . import annotation_objects as _anno_objects
+    _anno_objects.reset()
+    from . import dispatch_gen as _dispatch_gen
+    _dispatch_gen.reset()
     _WRITTEN_THIS_RUN.clear()
     emissions: dict[str, ClassEmission] = {}
 
@@ -308,12 +312,21 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         for _lc_name, _lc_classes in lib_crate_classes.items():
             _lib_sets[_lc_name] = {ci.name for ci in _lc_classes}
 
+        _lib_order = list(lib_crate_classes or {})
+
         def _make_lib_resolver(current_crate: str):
             def _resolve(bin_name: str) -> str:
                 for _cname, _names in _lib_sets.items():
                     if bin_name in _names:
                         return 'crate' if _cname == current_crate else _cname
                 return 'java_runtime'
+            # 声明序元数据（gen_cross_imports 的可达性过滤）：发射 crate 只能
+            # 引用自身 + java_runtime + 声明序在前的 lib crate（依赖方向按
+            # 声明序）。反向跨 crate 引用（如 hamcrest 文件的子类型收集捡到
+            # junit4 类——非 JDK 接口实现者不在 _JDK_NS 过滤域内）是 M5 跨
+            # crate 分派边界，导入即 E0433，在此显式过滤。
+            _resolve._rfl_current_crate = current_crate
+            _resolve._rfl_lib_order = _lib_order
             return _resolve
 
         _lib_generated_all = set(_jdk_generated_now)
@@ -659,6 +672,15 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # A-5 收尾：函数式接口合成对象（接口文件尾部的伴生段；条目签名 / default
     # 体有无取此刻的发射记录，与落盘内容同源）
     _sam_objects.synthesize(emissions, registry)
+    # 反射 L3 段 1 收尾：注解代理合成（getAnnotation 的实例形态——JDK 动态
+    # 代理的翻译期同构物；条目签名同取发射记录）。必须在落盘前；工厂登记行
+    # 由 main 生成段经 _anno_objects.registration_lines() 消费。
+    _anno_objects.synthesize(emissions, registry)
+    # 反射 L3 段 2 收尾：用户类分派闭包（Method.invoke / Constructor.
+    # newInstance 的按名协议，java_runtime::reflect_dispatch 头注定稿）。
+    # 登记行由 main 生成段经 _dispatch_gen.registration_lines() 消费。
+    _dispatch_gen.synthesize(emissions, registry,
+                             user_bins={ci.name for ci in class_infos})
     for _em in emissions.values():
         _write(_em.path, _em.text)
     _write_jdk_mod_tree()
@@ -703,6 +725,18 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     if hook_lines:
         hook_block = ('    java_runtime::register_class_init_hooks(&[\n'
                       + '\n'.join(hook_lines) + '\n    ]);\n')
+    # 注解工厂登记（反射 L3 段 1）：全部合成注解代理的 from_values 工厂
+    #（用户树 + lib crate + java_runtime 三域——user bin 是唯一能看到全部
+    # crate 的发射点；与类初始化钩子同一登记模式）
+    _anno_reg_lines = _anno_objects.registration_lines()
+    if _anno_reg_lines:
+        hook_block += ('    java_runtime::annotation_meta::register_annotation_factories(&[\n'
+                       + '\n'.join(_anno_reg_lines) + '\n    ]);\n')
+    # L3 分派闭包登记（反射段 2）：用户类 __reflect_dispatch 注册表
+    _disp_reg_lines = _dispatch_gen.registration_lines()
+    if _disp_reg_lines:
+        hook_block += ('    java_runtime::reflect_dispatch::register_method_dispatch(&[\n'
+                       + '\n'.join(_disp_reg_lines) + '\n    ]);\n')
 
     if batch_bin:
         # 批量模式：每个 bin 用 #[path] 独立包含自己的类文件，不共享 lib.rs。

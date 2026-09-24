@@ -298,6 +298,11 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
             for ic in ci.inner_classes
         )
         lines.append(f'#[inner_classes     = "{_q(ic_strs)}"]')
+    if ci.runtime_annotations:
+        # 反射 L3 段 1：类挂载点注解（编码见 classfile.encode_annotations；
+        # 载荷自带转义，此处不再过 _q——build.rs 按原文透传，运行时侧解码）
+        from ..classfile import encode_annotations as _enc_annos
+        lines.append(f'#[annotations       = "{_enc_annos(ci.runtime_annotations)}"]')
 
     # ── 段 2：宏展开输入（缺省即 Default）─────────────────────────────────
     lines.append('')
@@ -388,6 +393,9 @@ def _java_field_attr(f: FieldInfo) -> str:
         parts.append(f'constant_value = "{f.constant_value}"')
     if f.is_deprecated:
         parts.append('is_deprecated = true')
+    if f.runtime_annotations:
+        from ..classfile import encode_annotations as _enc_annos
+        parts.append(f'annotations = "{_enc_annos(f.runtime_annotations)}"')
     return '#[cfg_attr(any(), java_field(' + ', '.join(parts) + '))]'
 
 
@@ -448,6 +456,9 @@ def _java_method_attr(m: ParsedMethod) -> str:
     if m.method_parameters:
         mp_str = ';'.join(f'{n}:{a}' for n, a in m.method_parameters).replace('"', '\\"')
         parts.append(f'method_parameters = "{mp_str}"')
+    if m.runtime_annotations:
+        from ..classfile import encode_annotations as _enc_annos
+        parts.append(f'annotations = "{_enc_annos(m.runtime_annotations)}"')
     # native 需要显式标记（宏靠「无方法体」也认，但显式标记让文件读者一眼看出
     # 这是 native 声明）
     if m.is_native:

@@ -388,6 +388,225 @@ impl Class {
             .map(|(_, m)| *m)
             .unwrap_or(0x0001 | 0x0010 | 0x0400))
     }
+
+    /// Class 值的 null 判定（生成 wrapper 不是 Object 元组——经 From<Object>
+    /// 协议装箱后判；查询族共用）。
+    fn __class_arg_is_null(c: &Class) -> bool {
+        Object::from(Clone::clone(c)).0.is_jvm_null()
+    }
+
+    /// `getDeclaredFields()`：本类全部声明字段的构造序列（字段表驱动，
+    /// getDeclaredField 的复数形态——同一张 build.rs 字段表循环输出）。
+    pub fn getDeclaredFields(&self) -> Result<JArray<Field>> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        let mut out: Vec<Field> = Vec::new();
+        if let Some((_, fs)) = __fields::CLASS_FIELDS.iter().find(|(n, _)| *n == cls_key) {
+            for (slot, meta) in fs.iter().enumerate() {
+                let mut f = Field::default();
+                f._init_not_null();
+                f.__set_clazz(Clone::clone(self));
+                f.__set_name(String::from(meta.name));
+                f.__set_modifiers(meta.modifiers);
+                f.__set_slot(slot as i32);
+                f.__set_type_(class_for_descriptor(meta.descriptor));
+                out.push(f);
+            }
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// `getDeclaredConstructors()`：本类全部声明构造器（方法表 `<init>` 行；
+    /// 构造器身份键 = (类, 描述符)——参数还原同 __method_from_meta）。
+    pub fn getDeclaredConstructors(&self) -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        let mut out: Vec<crate::java::lang::reflect::Constructor<Object>> = Vec::new();
+        if let Some((_, ms)) = __methods::CLASS_METHODS.iter().find(|(n, _)| *n == cls_key) {
+            for (slot, meta) in ms.iter().enumerate() {
+                if meta.name != "<init>" {
+                    continue;
+                }
+                let mut c = crate::java::lang::reflect::Constructor::<Object>::default();
+                c._init_not_null();
+                c.__set_clazz(Clone::clone(self));
+                c.__set_modifiers(meta.modifiers);
+                c.__set_slot(slot as i32);
+                let params: Vec<Class> = descriptor_params(meta.descriptor).into_iter()
+                    .map(|p| class_for_descriptor(&p)).collect();
+                c.__set_parameterTypes(JArray::from(params));
+                let excs: Vec<Class> = meta.exceptions.iter()
+                    .map(|e| Class::for_class(String::from(*e))).collect();
+                c.__set_exceptionTypes(JArray::from(excs));
+                out.push(c);
+            }
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// `getConstructors()`：public 构造器（含继承——JDK getConstructors0 沿
+    /// 父类链收集 public `<init>`；本实现沿直接父类表上溯，public 位过滤）。
+    pub fn getConstructors(&self) -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>> {
+        let mut out: Vec<crate::java::lang::reflect::Constructor<Object>> = Vec::new();
+        let mut cur = format!("{}", self.__get_name()).replace('.', "/");
+        let mut hops = 0usize;
+        loop {
+            if let Some(em) = self.constructor_rows(&cur) {
+                out.extend(em);
+            }
+            match __direct_super::CLASS_DIRECT_SUPER.iter().find(|(n, _)| *n == cur) {
+                Some((_, sup)) => {
+                    cur = (*sup).to_owned();
+                    hops += 1;
+                    if hops > 256 { break; }
+                }
+                None => break,
+            }
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// 内部：指定类的 public 构造器序列（getConstructors 的一跳）。
+    fn constructor_rows(&self, cls_key: &str)
+        -> Option<Vec<crate::java::lang::reflect::Constructor<Object>>> {
+        let (_, ms) = __methods::CLASS_METHODS.iter().find(|(n, _)| *n == cls_key)?;
+        let mut out = Vec::new();
+        for (slot, meta) in ms.iter().enumerate() {
+            if meta.name != "<init>" || (meta.modifiers & 0x0001) == 0 {
+                continue;
+            }
+            let mut c = crate::java::lang::reflect::Constructor::<Object>::default();
+            c._init_not_null();
+            c.__set_clazz(Class::for_class(String::from(cls_key)));
+            c.__set_modifiers(meta.modifiers);
+            c.__set_slot(slot as i32);
+            let params: Vec<Class> = descriptor_params(meta.descriptor).into_iter()
+                .map(|p| class_for_descriptor(&p)).collect();
+            c.__set_parameterTypes(JArray::from(params));
+            out.push(c);
+        }
+        Some(out)
+    }
+
+    /// `getMethod(String, Class...)`：按名 + 参数类型取 public 方法（含继承，
+    /// JDK 语义：沿父类链 + 接口默认——本实现沿直接父类链，public 过滤；
+    /// 未命中 → NoSuchMethodException，消息形态与 getDeclaredMethod 同族）。
+    #[jvm_boundary(upcalls = "java/lang/NoSuchMethodException.<init>:(Ljava/lang/String;)V")]
+    pub fn getMethod(&self, name: String, parameterTypes: JArray<Class>) -> Result<crate::java::lang::reflect::Method> {
+        let query = format!("{}", name);
+        let mut qparams: Vec<std::string::String> = Vec::new();
+        for i in 0..parameterTypes.len()? {
+            let p = parameterTypes.get(i)?;
+            qparams.push(format!("{}", p.__get_name()).replace('.', "/"));
+        }
+        let norm = |d: &str| -> std::string::String {
+            let mapped = match d {
+                "Z" => "boolean", "B" => "byte", "C" => "char", "S" => "short",
+                "I" => "int", "J" => "long", "F" => "float", "D" => "double",
+                other => other.strip_prefix('L')
+                    .and_then(|s| s.strip_suffix(';'))
+                    .unwrap_or(other),
+            };
+            mapped.to_owned()
+        };
+        let mut cur = format!("{}", self.__get_name()).replace('.', "/");
+        let mut hops = 0usize;
+        loop {
+            let rows = __methods::CLASS_METHODS.iter()
+                .find(|(n, _)| *n == cur)
+                .map(|(_, ms)| *ms)
+                .unwrap_or(&[]);
+            let hit = rows.iter().enumerate()
+                .filter(|(_, m)| m.name == query && (m.modifiers & 0x0001) != 0)
+                .find(|(_, m)| {
+                    descriptor_params(m.descriptor).iter().map(|d| norm(d)).collect::<Vec<_>>() == qparams
+                });
+            if let Some((slot, meta)) = hit {
+                let owner = Class::for_class(String::from(cur.as_str()));
+                return Ok(Self::__method_from_meta(owner, meta, slot as i32));
+            }
+            match __direct_super::CLASS_DIRECT_SUPER.iter().find(|(n, _)| *n == cur) {
+                Some((_, sup)) => {
+                    cur = (*sup).to_owned();
+                    hops += 1;
+                    if hops > 256 { break; }
+                }
+                None => break,
+            }
+        }
+        let detail = format!(
+            "{}.{}({})",
+            self.__get_name(), query,
+            qparams.iter().map(|p| p.replace('/', ".")).collect::<Vec<_>>().join(",")
+        );
+        match crate::java::lang::NoSuchMethodException::new_str(String::from(detail.as_str())) {
+            Ok(ex) => Err(ex.into()),
+            Err(nested) => Err(nested),
+        }
+    }
+
+    /// `Class.isAnnotationPresent(Class)`：类挂载点注解存在性（反射 L3 段 1）。
+    /// 注解元数据表经 build.rs 从 java_class! 块的 annotations 属性生成；
+    /// 按名匹配（纯存在性——不构造实例，无需注解工厂）。未登记类（闭包外
+    /// / 数组 / 基本类型）→ false。
+    pub fn isAnnotationPresent(&self, annotationClass: Class) -> Result<bool> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
+        Ok(crate::annotation_meta::has_annotation(
+            crate::annotation_meta::class_annotation_entries(&cls_key), &anno))
+    }
+
+    /// `Class.getAnnotation(Class)`：类挂载点注解实例（返回注解接口的载体
+    /// 视图——调用侧 checkcast 后经载体调用元素方法）。实例经注解工厂构造
+    ///（翻译期合成的最小注解实例，见 annotation_meta 模块头注）；未命中 →
+    /// null（JDK 语义）。
+    pub fn getAnnotation(&self, annotationClass: Class) -> Result<Object> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
+        let Some(hit) = crate::annotation_meta::find_annotation(
+            crate::annotation_meta::class_annotation_entries(&cls_key), &anno) else {
+            return Ok(Object::default());
+        };
+        crate::annotation_meta::annotation_instance(hit.anno, hit.elements)
+    }
+
+    /// `Class.getAnnotations()`：类挂载点全部注解实例（声明序）。@Inherited
+    /// 语义（父类注解继承）不承载——语料消费方（Description 等）只读声明面。
+    pub fn getAnnotations(&self) -> Result<JArray<Object>> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        let entries = crate::annotation_meta::class_annotation_entries(&cls_key);
+        let mut out: Vec<Object> = Vec::new();
+        for e in entries {
+            out.push(crate::annotation_meta::annotation_instance(e.anno, e.elements)?);
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// `Class.isMemberClass()`：是否成员类（有具名外围类的嵌套类）。数据源
+    /// 是 java_class! 块的 inner_classes 属性（build.rs 侧无表——本方法按
+    /// 名字约定判：成员类的 binary name 以 `$` 分隔且非数组/基本类型；
+    /// 数组类名以 `[` 开头恒 false，无 `$` 的顶层类 false）。
+    pub fn isMemberClass(&self) -> Result<bool> {
+        let name = format!("{}", self.__get_name());
+        if name.starts_with('[') {
+            return Ok(false);
+        }
+        Ok(name.contains('$'))
+    }
+
+    /// `Class.cast(Object)`：运行时类型转换（JDK 语义：isInstance 通过返回
+    /// 原对象，否则 ClassCastException；null 通过返回 null）。
+    pub fn cast(&self, obj: Object) -> Result<Object> {
+        if obj.0.is_jvm_null() {
+            return Ok(obj);
+        }
+        let self_key = format!("{}", self.__get_name()).replace('.', "/");
+        if obj.0.is_instance_of(&self_key) {
+            return Ok(obj);
+        }
+        let ex = crate::java::lang::ClassCastException::new_str(String::from(format!(
+            "class {} cannot be cast to class {}",
+            obj.0.__class_name().replace('/', "."), self_key.replace('/', "."))))?;
+        Err(JvmError::from(ex))
+    }
 }
 
 /// 描述符 → Class 对象（getDeclaredField 的 type 填充与 getComponentType 的
@@ -440,6 +659,24 @@ fn descriptor_params(descriptor: &str) -> Vec<std::string::String> {
         out.push(std::mem::take(&mut cur));
     }
     out
+}
+
+/// 反射族内部：直接父类表查询（L3 分派协议的上溯数据面，
+/// reflect_dispatch::reflect_invoke 消费）。
+pub fn __direct_super_lookup(class_slash: &str) -> Option<&'static str> {
+    __direct_super::CLASS_DIRECT_SUPER.iter()
+        .find(|(n, _)| *n == class_slash)
+        .map(|(_, s)| *s)
+}
+
+/// 反射族内部：方法元数据表的 static 判定（L3 分派协议的 static/虚分派
+/// 判别面，reflect_dispatch 消费）。未声明 → false（按虚方法处理，上溯）。
+pub fn __method_is_static(class_slash: &str, name: &str, descriptor: &str) -> bool {
+    __methods::CLASS_METHODS.iter()
+        .find(|(n, _)| *n == class_slash)
+        .and_then(|(_, ms)| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
+        .map(|m| m.is_static)
+        .unwrap_or(false)
 }
 
 /// build.rs 生成的类层次表（OUT_DIR/hierarchy_table.rs，含模块级 static）。
