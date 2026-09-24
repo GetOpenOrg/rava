@@ -16,9 +16,13 @@ impl Properties {
     }
 
     /// `getProperty(String, String)`：单参语义 + 缺席回落默认值。
+    /// null 判定用 String wrapper 的 vtable 钩子 `is_jvm_null()`（S-3.1 唯一判定）；
+    /// `_is_jnull` 只对 `Object` 载体生效（`downcast_ref::<Object>`），对 wrapper
+    /// 类型恒 false——缺席键会漏回落默认值（TestAtomics 的 MethodHandleStatics
+    /// clinit parseInt(null) 即此回归）。
     pub fn __impl_getProperty_str_str(&self, key: String, defaultValue: String) -> Result<String> {
         let v = self.__impl_lookup_string(key)?;
-        if _is_jnull(&v) {
+        if v.is_jvm_null() {
             Ok(defaultValue)
         } else {
             Ok(v)
