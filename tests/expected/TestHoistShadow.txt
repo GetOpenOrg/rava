@@ -1,0 +1,4 @@
+lo=52
+hi=60
+kinds=88
+widths=40
