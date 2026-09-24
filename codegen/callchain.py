@@ -866,6 +866,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 continue
             try:
                 jdk_infos[cls] = ci
+                # 父类补全进来的类同样登记其接口闭包（清单第 20 项漏口 ②：Reader→
+                # Readable、AccessibleObject→AnnotatedElement 等此前从未登记）；
+                # 物化由收尾接口 drain 统一承担
+                _enqueue_iface_stub(cls)
                 if (ci.super_class and ci.super_class != _OBJECT_CLASS
                         and ci.super_class not in _JAVA_RUNTIME_CLASSES
                         and ci.super_class not in jdk_infos):
@@ -978,6 +982,22 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 _process(*queue.popleft())
             if not _added:
                 break
+
+        # 收尾接口 drain（清单第 20 项，c23a4b0 stub 通道宽化）：_enqueue_iface_stub
+        # 只把接口写入 field_discover_classes 账本，物化只发生在 stub 通道处理循环
+        # ——而该循环消费的是入口快照，循环内 / 父类补全 / 迟至补扫登记的接口从未
+        # 物化（登记了但不在 registry：interface_gen 不发 impl I for C、超接口链断开、
+        # bare 分派落 Default::default()）。三通道沉降后按账本物化**接口本体**：
+        # 不回灌 stub 通道（接口不展开字段类型 / 超类，不重开 4b776b6 类型闭环），
+        # 新增类恒 ⊆ 账本且全部 is_interface。_enqueue_iface_stub 已按接口边传递
+        # 闭包，单轮即不动点；排序遍历保双种子确定性。
+        for _iname in sorted(field_discover_classes):
+            if _iname in jdk_infos:
+                continue
+            _ici = _resolve_class_bytes(_iname)
+            if _ici is None or not _ici.is_interface:
+                continue
+            jdk_infos[_iname] = _ici
 
     _trace_cls = os.environ.get('JAVA_RTA_BFS_TRACE')
     if _trace_cls:
