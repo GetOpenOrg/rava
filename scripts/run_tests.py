@@ -45,7 +45,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from jdk_select import resolve_jdk_home, _major_of
+from jdk_select import apply_jdk, _major_of
 
 
 def _current_jdk_major() -> 'int | None':
@@ -101,15 +101,10 @@ def _jdk_tool(name: str) -> str:
     return name
 
 
-def apply_jdk_choice(major: int) -> None:
-    """--jdk N：解析本机安装并写入 JAVA_HOME（javac/java/翻译语料全部同源）。"""
-    home = resolve_jdk_home(major)
-    if home is None:
-        from jdk_select import list_installed_jdks
-        installed = '\n'.join(f"  JDK {m}: {h}" for m, h in list_installed_jdks())
-        sys.exit(f"未找到 JDK {major}。本机已安装：\n{installed}")
-    os.environ['JAVA_HOME'] = str(home)
-    print(f"[jdk] JAVA_HOME → {home} (JDK {major})")
+def apply_jdk_choice(major: 'int | None') -> None:
+    """JDK 选择（jdk_select.apply_jdk 唯一入口，javac/java/翻译语料全部同源）：
+    --jdk > JAVA_RTA_JDK > JAVA_HOME > .jdk-version > 最新已安装。"""
+    apply_jdk(major)
 
 
 def _cargo_env() -> dict:
@@ -1227,7 +1222,7 @@ def main():
     ap.add_argument("--jobs", "-j",      type=int, default=1, metavar="N",
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     ap.add_argument("--jdk",             type=int, default=None, metavar="N",
-                    help="指定 JDK 主版本（javac/java/翻译语料同源；默认沿用 JAVA_HOME 或自动发现）")
+                    help="指定 JDK 主版本（javac/java/翻译语料同源；默认 JAVA_RTA_JDK > JAVA_HOME > .jdk-version）")
     ap.add_argument("--release",         action="store_true", help="release 档位构建运行（LTO 慢编译/快运行；默认 dev）")
     ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
     ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")
@@ -1254,8 +1249,7 @@ def main():
     if args.release:
         PROFILE_DIR = "release"
 
-    if args.jdk is not None:
-        apply_jdk_choice(args.jdk)
+    apply_jdk_choice(args.jdk)
 
     # JDK 版本层在 JAVA_HOME 解析后确定：scratch/target/logs 统一走 _versioned
     JDK_LAYER = str(_current_jdk_major()) if _current_jdk_major() is not None else None

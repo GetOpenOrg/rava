@@ -182,7 +182,7 @@ def main():
     ap.add_argument('--no-run', action='store_true', help='只生成 Rust 代码，不编译运行')
     ap.add_argument('--batch', action='store_true', help='批量模式：写 src/bin/<class>.rs（供并行测试用）')
     ap.add_argument('--jdk', type=int, default=None, metavar='N',
-                    help='指定 JDK 主版本（javac 与翻译语料同源；默认沿用 JAVA_HOME 或自动发现）')
+                    help='指定 JDK 主版本（javac 与翻译语料同源；默认 JAVA_RTA_JDK > JAVA_HOME > .jdk-version）')
     ap.add_argument('--lib', action='append', default=[], metavar='NAME=JAR[:seed=FQN]',
                     help='jar 输入模式：依赖库发射为 lib crate（可重复；无 seed=整包，'
                          '有 seed=只收种子类闭包）。顺序即 crate 依赖序')
@@ -192,15 +192,12 @@ def main():
     if lib_specs and args.batch:
         sys.exit('jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）')
 
-    if args.jdk is not None:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from jdk_select import resolve_jdk_home, list_installed_jdks
-        _home = resolve_jdk_home(args.jdk)
-        if _home is None:
-            _installed = '\n'.join(f"  JDK {m}: {h}" for m, h in list_installed_jdks())
-            sys.exit(f"未找到 JDK {args.jdk}。本机已安装：\n{_installed}")
-        os.environ['JAVA_HOME'] = str(_home)
-        print(f"[jdk] JAVA_HOME → {_home} (JDK {args.jdk})")
+    # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > JAVA_RTA_JDK > JAVA_HOME >
+    # .jdk-version > 最新已安装——多 JDK 并存时不随系统默认 java 漂移。run_tests 子进程
+    # 已继承父进程选定的 JAVA_HOME，此处静默沿用
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from jdk_select import apply_jdk
+    apply_jdk(args.jdk, quiet=(args.jdk is None and bool(os.environ.get('JAVA_HOME'))))
 
     java_files = args.java_files or [_DEFAULT_JAVA]
     stem = os.path.splitext(os.path.basename(java_files[0]))[0]

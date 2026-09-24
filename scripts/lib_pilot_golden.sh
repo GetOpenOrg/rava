@@ -17,11 +17,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # jar 资产默认按兄弟目录相对寻径（pilot-deps 与本仓库同层摆放，fetch.sh 导出位）
 LIBS="${PILOT_LIBS:-$REPO_ROOT/../pilot-deps/target/pilot-libs}"
-# JAVA_HOME 未设时经 jdk_select 自动发现 JDK 21（macOS brew / Linux /usr/lib/jvm 通吃）
-if [[ -z "${JAVA_HOME:-}" ]]; then
-    JAVA_HOME="$(cd "$REPO_ROOT/scripts" && python3 -c 'from jdk_select import resolve_jdk_home as r; h = r(21); print(h or "")')"
-    [[ -n "$JAVA_HOME" ]] || { echo "未找到 JDK 21，请设置 JAVA_HOME" >&2; exit 2; }
-fi
+# JDK 选择与 main.py / run_tests.py 同一入口（jdk_select）：JAVA_RTA_JDK > JAVA_HOME >
+# .jdk-version（21）> 最新已安装；macOS brew / Linux /usr/lib/jvm 通吃
+JAVA_HOME="$(python3 "$REPO_ROOT/scripts/jdk_select.py")" || { echo "未找到可用 JDK，请设置 JAVA_HOME 或 JAVA_RTA_JDK" >&2; exit 2; }
 export JAVA_HOME
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
 MODE="${1:?用法: $0 m1|m2|m3 [--no-transpile]}"
