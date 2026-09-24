@@ -470,7 +470,12 @@ fn modifier_bits(s: &str) -> i32 {
             // java.lang.reflect.Modifier 对方法读 varargs 位）
             "varargs"      => 0x0080,
             "native"       => 0x0100,
+            // 类侧专有（java_class! 块 modifiers 属性，attrs._class_modifiers_str）：
+            // 生成的接口块带 super_class=Object，class_modifier_bits 的「无父类即
+            // 接口」推断对其不成立——INTERFACE/ANNOTATION 位以修饰词为准
+            "interface"    => 0x0200,
             "abstract"     => 0x0400,
+            "annotation"   => 0x2000,
             "strictfp"     => 0x0800,
             "synthetic"    => 0x1000,
             "enum"         => 0x4000,

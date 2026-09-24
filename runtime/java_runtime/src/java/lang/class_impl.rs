@@ -582,6 +582,119 @@ impl Class {
 
     /// `Class.isRecord()`：record 类判定（JVMS §4.7.30 Record 属性在场；
     /// 发射侧 is_record 属性 → build.rs record 表）。数组 / 基本类型类恒 false。
+    /// `Class.getClassLoader()`：类加载器不建模（单一静态链接映像，无运行期
+    /// 加载），一律返回 null——即 JDK 对引导类的返回形态。消费方以「null 或
+    /// 安全管理器缺席」短路（ObjectStreamClass.getProtectionDomains：
+    /// `cl.getClassLoader() != null && System.getSecurityManager() != null`，
+    /// JDK 21 安全管理器恒 null，两种返回可观测等价）。
+    pub fn getClassLoader(&self) -> Result<crate::java::lang::ClassLoader> {
+        Ok(crate::java::lang::ClassLoader::default())
+    }
+
+    /// `Class.getPackageName()`：数组类取最内层元素类型的包；基本类型类（含
+    /// void）为 "java.lang"；其余取 binary name 最后一个 `.` 之前的部分，无包
+    /// 为 ""（JDK 21 语义）。消费方：ObjectStreamClass.packageEquals（包可见
+    /// 成员判定）。
+    pub fn getPackageName(&self) -> Result<String> {
+        let name = format!("{}", self.__get_name()).replace('/', ".");
+        let elem = name.trim_start_matches('[');
+        let pkg = if elem.len() != name.len() {
+            // 数组：元素描述符 `Lpkg.Cls;` 或基本类型字符
+            match elem.strip_prefix('L').and_then(|s| s.strip_suffix(';')) {
+                Some(cls) => cls.rsplit_once('.').map(|(p, _)| p.to_owned()).unwrap_or_default(),
+                None => "java.lang".to_owned(),
+            }
+        } else if self.isPrimitive()? || name == "void" {
+            "java.lang".to_owned()
+        } else {
+            name.rsplit_once('.').map(|(p, _)| p.to_owned()).unwrap_or_default()
+        };
+        Ok(String::from(pkg))
+    }
+
+    /// native `Class.isInstance(Object)`：null → false；否则按运行时类的
+    /// is_instance_of（vtable 按 binary name 斜线形态应答，含超类与接口闭包）。
+    /// 基本类型类恒 false（JLS：无值是基本类型 Class 的实例）。
+    #[jvm_native]
+    pub fn isInstance(&self, obj: Object) -> Result<bool> {
+        if obj.0.is_jvm_null() || self.isPrimitive()? {
+            return Ok(false);
+        }
+        let key = format!("{}", self.__get_name()).replace('.', "/");
+        Ok(obj.0.is_instance_of(&key))
+    }
+
+    /// `Class.getDeclaredConstructor(Class...)`：在 getDeclaredConstructors
+    /// （build.rs 方法表的 `<init>` 行）中按参数类型序列精确匹配；未命中 →
+    /// NoSuchMethodException（消息形态 `pkg.Cls.<init>(p1, p2)`，JDK
+    /// methodToString 同型）。消费方：ReflectionFactory.
+    /// newConstructorForSerialization 的首个不可序列化超类无参构造查找。
+    pub fn getDeclaredConstructor(&self, parameterTypes: JArray<Class>)
+        -> Result<crate::java::lang::reflect::Constructor<Object>>
+    {
+        let mut want: Vec<std::string::String> = Vec::new();
+        for i in 0..parameterTypes.len()? {
+            want.push(format!("{}", parameterTypes.get(i)?.__get_name()).replace('/', "."));
+        }
+        let ctors = self.getDeclaredConstructors()?;
+        for i in 0..ctors.len()? {
+            let c = ctors.get(i)?;
+            let ps = c.__get_parameterTypes();
+            if ps.len()? as usize != want.len() {
+                continue;
+            }
+            let mut same = true;
+            for (j, w) in want.iter().enumerate() {
+                if format!("{}", ps.get(j as i32)?.__get_name()).replace('/', ".") != *w {
+                    same = false;
+                    break;
+                }
+            }
+            if same {
+                return Ok(c);
+            }
+        }
+        let owner = format!("{}", self.__get_name()).replace('/', ".");
+        Err(JvmError::from(crate::java::lang::NoSuchMethodException::new_str(
+            String::from(format!("{}.<init>({})", owner, want.join(", "))))?))
+    }
+
+    /// `Class.descriptorString()`（JVMS §4.3.2 字段描述符）：基本类型 → 单字母
+    /// （void → `V`）；数组类名即描述符形态（for_class 存储 `[I` /
+    /// `[Ljava.lang.String;`，点换斜线即 JDK 结果）；其余 → `L<binary>;`。
+    /// 隐藏类的 `.` 分隔形态不在翻译语料内。
+    /// 消费方：ObjectStreamField 构造（字段签名 `signature` 计算）。
+    pub fn descriptorString(&self) -> Result<String> {
+        let name = format!("{}", self.__get_name());
+        let prim = match name.as_str() {
+            "boolean" => Some("Z"), "byte" => Some("B"), "char" => Some("C"),
+            "short" => Some("S"), "int" => Some("I"), "long" => Some("J"),
+            "float" => Some("F"), "double" => Some("D"), "void" => Some("V"),
+            _ => None,
+        };
+        Ok(String::from(match prim {
+            Some(p) => p.to_string(),
+            None if name.starts_with('[') => name.replace('.', "/"),
+            None => format!("L{};", name.replace('.', "/")),
+        }))
+    }
+
+    /// native `Class.isInterface()`：接口（含注解类型）判定，读 build.rs 修饰符表的
+    /// INTERFACE 位（与 getModifiers 同源）。数组类 / 基本类型类 → false
+    /// （JLS：数组类型与基本类型都不是接口）；闭包外类（表中缺席）→ false。
+    /// 消费方：ObjectStreamClass 构造链（Result.<clinit> 的序列化元数据查询）。
+    #[jvm_native]
+    pub fn isInterface(&self) -> Result<bool> {
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        if name.starts_with('[') || self.isPrimitive()? {
+            return Ok(false);
+        }
+        Ok(__modifiers::CLASS_MODIFIERS.iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, m)| (*m & 0x0200) != 0)
+            .unwrap_or(false))
+    }
+
     pub fn isRecord(&self) -> Result<bool> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
         if name.starts_with('[') {
