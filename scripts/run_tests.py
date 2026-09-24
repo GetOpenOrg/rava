@@ -73,6 +73,8 @@ def fmt_dur(sec: float) -> str:
 RUN_TIMEOUT = 300
 # 构建档位目录（debug/release）：--release 开关切换，bin 路径与 build 命令统一读它
 PROFILE_DIR = "debug"
+# 失败现场日志目录：rustc 完整输出 / 运行期 panic+backtrace 落盘，行式输出只留摘要
+LOGS_DIR = OUT / "logs"
 
 
 def _cargo_profile_args() -> list[str]:
@@ -359,9 +361,18 @@ def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     except subprocess.TimeoutExpired:
         return False, f"build timeout ({fmt_dur(BUILD_TIMEOUT)})"
     if r.returncode != 0:
+        if r.returncode < 0:
+            sig = -r.returncode
+            return False, (f"killed by signal {sig}"
+                           + ("——疑似 OOM（rustc 被 OOM Killer，CARGO_INCREMENTAL=0/加 swap" if sig == 9 else ""))
+        # rustc 完整输出落盘（行式只留首错行；悬案定位曾靠用户手工重跑 cargo 取全文）
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        (LOGS_DIR / f"{_to_bin_name(class_name)}.build.log").write_text(
+            r.stderr or "", encoding="utf-8")
         err = next((ln for ln in r.stderr.splitlines() if ln.startswith("error")),
                    "unknown build error")
-        return False, err[:120]
+        log_path = LOGS_DIR / (_to_bin_name(class_name) + ".build.log")
+        return False, err[:120] + f"（全文 → {log_path}）"
     return True, ""
 
 
@@ -676,15 +687,36 @@ def _apply_deny(deny: list[str],
 
 
 def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
-    """直接执行 binary。返回 (状态, stdout)：状态 ∈ ok / timeout / error。"""
+    """直接执行 binary。返回 (状态, stdout)：状态 ∈ ok / timeout / error / killed。
+
+    可观测性三件（hashCodeOfUnsigned 三轮反查的教训）：
+    - RUST_BACKTRACE=1：panic 自带符号化 backtrace（debug 档有符号），stub 命中的
+      调用链一目了然；
+    - stderr 落盘 LOGS_DIR/<bin>.run.log：panic 消息/backtrace 此前被整体丢弃，
+      失败只能手工重跑二进制反查；
+    - 信号死亡检测：returncode<0 为信号（-9=SIGKILL——服务器 OOM Killer，
+      streams 悬案三天才破的直接原因），状态标 killed 并注明疑似 OOM。"""
     bin_name = _to_bin_name(class_name)
     bin_path = SHARED_TARGET / PROFILE_DIR / bin_name
     try:
-        r = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=timeout,
+                           env=dict(os.environ, RUST_BACKTRACE="1"))
     except subprocess.TimeoutExpired:
         return "timeout", ""
     if r.returncode != 0:
-        return "error", r.stdout
+        if r.returncode < 0:
+            sig = -r.returncode
+            hint = "疑似 OOM（OOM Killer）" if sig == 9 else f"signal {sig}"
+            return "error", (r.stdout or "") + f"\n[killed] 进程被信号 {sig} 终止——{hint}"
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        (LOGS_DIR / f"{bin_name}.run.log").write_text(
+            r.stderr or "(stderr 空)", encoding="utf-8")
+        first_panic = next((ln for ln in (r.stderr or "").splitlines()
+                            if "panicked at" in ln or ln.startswith("stub:")), "")
+        detail = (r.stdout or "") + (f"\n[panic] {first_panic}"
+                                     f"（backtrace 全量 → {LOGS_DIR / f'{bin_name}.run.log'}）"
+                                     if first_panic else "")
+        return "error", detail
     return "ok", r.stdout
 
 
