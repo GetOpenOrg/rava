@@ -119,14 +119,14 @@ impl Class {
 
     /// native `Class.isPrimitive()`：基本类型类判定。基本类型的 Class 经
     /// getPrimitiveClass 创建，名字是基本类型字面量（int / boolean / …，
-    /// 无包前缀）；按显式名单判定（九种，JLS §4.2），非基本类型（含数组、
-    /// void 的 Class 缺席形态）→ false。
+    /// 无包前缀）；按显式名单判定（八种基本类型 + void，JDK `void.class.
+    /// isPrimitive()` 为 true），非基本类型（含数组）→ false。
     /// 消费方：VarHandles.makeFieldHandle 的字段类型分派链。
     #[jvm_native]
     pub fn isPrimitive(&self) -> Result<bool> {
         let name = format!("{}", self.__get_name());
         Ok(matches!(name.as_str(),
-            "boolean" | "byte" | "char" | "short" | "int" | "long" | "float" | "double"))
+            "boolean" | "byte" | "char" | "short" | "int" | "long" | "float" | "double" | "void"))
     }
 
     /// native `Class.getComponentType()`：数组类返回元素 Class，非数组返回 null。
@@ -197,7 +197,10 @@ impl Class {
         // 查询参数类型序列（binary name 斜线形态；数组类名是描述符形态
         // `[I` / `[Ljava/lang/String;——与参数描述符的归一名直接可比）
         let mut qparams: Vec<std::string::String> = Vec::new();
-        for i in 0..parameterTypes.len()? {
+        // null 参数类型数组 ≡ 空数组（JDK arrayContentsEq(null, []) 为真；
+        // ObjectStreamClass.getPrivateMethod(cl, "readObjectNoData", null, ..) 即此形态）
+        let __n = if parameterTypes.is_jvm_null() { 0 } else { parameterTypes.len()? };
+        for i in 0..__n {
             let p = parameterTypes.get(i)?;
             qparams.push(format!("{}", p.__get_name()).replace('.', "/"));
         }
@@ -493,7 +496,10 @@ impl Class {
     pub fn getMethod(&self, name: String, parameterTypes: JArray<Class>) -> Result<crate::java::lang::reflect::Method> {
         let query = format!("{}", name);
         let mut qparams: Vec<std::string::String> = Vec::new();
-        for i in 0..parameterTypes.len()? {
+        // null 参数类型数组 ≡ 空数组（JDK arrayContentsEq(null, []) 为真；
+        // ObjectStreamClass.getPrivateMethod(cl, "readObjectNoData", null, ..) 即此形态）
+        let __n = if parameterTypes.is_jvm_null() { 0 } else { parameterTypes.len()? };
+        for i in 0..__n {
             let p = parameterTypes.get(i)?;
             qparams.push(format!("{}", p.__get_name()).replace('.', "/"));
         }
@@ -633,7 +639,10 @@ impl Class {
         -> Result<crate::java::lang::reflect::Constructor<Object>>
     {
         let mut want: Vec<std::string::String> = Vec::new();
-        for i in 0..parameterTypes.len()? {
+        // null 参数类型数组 ≡ 空数组（JDK arrayContentsEq(null, []) 为真；
+        // ObjectStreamClass.getPrivateMethod(cl, "readObjectNoData", null, ..) 即此形态）
+        let __n = if parameterTypes.is_jvm_null() { 0 } else { parameterTypes.len()? };
+        for i in 0..__n {
             want.push(format!("{}", parameterTypes.get(i)?.__get_name()).replace('/', "."));
         }
         let ctors = self.getDeclaredConstructors()?;
@@ -753,6 +762,10 @@ fn class_for_descriptor(desc: &str) -> Class {
         Some(b'J') => prim("long"),
         Some(b'S') => prim("short"),
         Some(b'Z') => prim("boolean"),
+        // 返回描述符 V：void.class（与 Void.TYPE = getPrimitiveClass("void") 同一
+        // 缓存实例——JUnit validatePublicVoid 的 `getReturnType() != Void.TYPE`
+        // 身份比较依赖此；缺席时 void 方法返回类型为 null，@Test 校验全部失败）
+        Some(b'V') => prim("void"),
         _ => Class::default(),
     }
 }
