@@ -517,6 +517,150 @@ def _constant_value_str(pool: list, cv_idx: int) -> str:
     return ''
 
 
+# ── RuntimeVisibleAnnotations / AnnotationDefault（JVMS §4.7.16 / §4.7.22）──
+#
+# 注解元数据（反射 L3 段 1）的解析与编码：element_value → `tag:载荷`。
+# 该编码是三侧（attrs 发射 → build.rs 造表 → java_runtime::annotation 解码）
+# 透传的单一形态——载荷内出现的分隔符（`; # = "`、反斜杠、控制字符）一律
+# 以 `\` 前缀转义（控制字符用字母助记 / `\uXXXX`）；数组（tag a）各元素为
+# `tag:载荷` 以 `;` 连接；嵌套注解（tag @）为 `binary#name=tag:载荷#...`
+#（与外层同构递归）。转义只在载荷层发生——元素名/类型名是标识符，裸传。
+
+_ANNO_RESERVED = set('%;#="\\\n\r\t')
+
+
+def _anno_esc(s: str) -> str:
+    r"""载荷百分号编码：保留字符（分隔符 / 反斜杠 / 引号 / 控制字符）→ %XX。
+
+    属性行字符串必须是合法 Rust 字面量（java_class! 块被 proc-macro tokenize，
+    反斜杠转义会炸词法）；百分号编码只产生 [0-9A-F] 与 %，字面量安全。
+    """
+    out = []
+    for ch in s:
+        if ch in _ANNO_RESERVED or ord(ch) < 0x20:
+            b = ch.encode('utf-8')
+            out.append(''.join(f'%{byte:02X}' for byte in b))
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
+def _anno_unesc(s: str) -> str:
+    import urllib.parse
+    return urllib.parse.unquote(s, errors='strict')
+
+
+def _anno_desc_to_bin(desc: str) -> str:
+    """注解类型描述符 `Lx/y/Z;` → binary name（非 L 形态原样返回，防御）。"""
+    if desc.startswith('L') and desc.endswith(';'):
+        return desc[1:-1]
+    return desc
+
+
+def _anno_split(s: str, sep: str) -> list:
+    """按 sep 切分（载荷内保留字符已百分号编码——sep 只以分隔符身份出现）。"""
+    return s.split(sep)
+
+
+def _parse_element_value(r: '_Reader', pool: list) -> tuple:
+    """element_value → (tag, 编码载荷)。未支持形态 tag='x'。
+
+    载荷：基本类型为十进制文本；String 已转义；enum 为 `binary#常量名`；
+    class 为（已转义的）JVM 描述符；数组为 `tag:载荷;tag:载荷;...`；
+    嵌套注解为 `binary#name=tag:载荷#...`。
+    """
+    tag = chr(r.u1())
+    if tag == 's':
+        idx = r.u2()
+        s = pool[idx][1] if idx < len(pool) else ''
+        return (tag, _anno_esc(str(s)))
+    if tag in 'BCISZJFD':
+        idx = r.u2()
+        if tag in 'BCIS':
+            v = pool[idx][1] if idx < len(pool) else 0
+            return (tag, str(v))
+        if tag == 'Z':
+            v = pool[idx][1] if idx < len(pool) else 0
+            return (tag, 'true' if v else 'false')
+        if tag == 'J':
+            v = pool[idx][1] if idx < len(pool) else 0
+            return (tag, str(v))
+        v = pool[idx][1] if idx < len(pool) else 0.0
+        return (tag, repr(v))
+    if tag == 'e':
+        type_idx = r.u2()
+        type_name = _utf8(pool, type_idx) if type_idx else ''
+        const_idx = r.u2()
+        const_name = _utf8(pool, const_idx) if const_idx else ''
+        return (tag, f'{_anno_desc_to_bin(type_name)}#{const_name}')
+    if tag == 'c':
+        idx = r.u2()
+        cls_desc = _utf8(pool, idx) if idx else ''
+        # class 字面量载荷保持 JVM 描述符形态（`Lx/Y;` / `[I`）——运行时经
+        # class_for_descriptor 还原 Class（数组元素类型的原生形态）
+        return (tag, _anno_esc(cls_desc))
+    if tag == '@':
+        # 复合载荷整体再编码一层：内层分隔符（# = ;）不与外层切分冲突，
+        # 解码端先整体百分号解码再递归拆分
+        return (tag, _anno_esc(_parse_annotation_body(r, pool)))
+    if tag == '[':
+        n = r.u2()
+        parts = []
+        for _ in range(n):
+            t, v = _parse_element_value(r, pool)
+            parts.append(f'{t}:{v}')
+        return (tag, _anno_esc(';'.join(parts)))
+    return ('x', '')
+
+
+def _parse_annotation_body(r: '_Reader', pool: list) -> str:
+    """annotation 结构体（不含条目数前缀）→ `binary#name=tag:载荷#...`。"""
+    type_idx = r.u2()
+    type_bin = _anno_desc_to_bin(_utf8(pool, type_idx) if type_idx else '')
+    parts = [_anno_esc(type_bin)]
+    n = r.u2()
+    for _ in range(n):
+        name_idx = r.u2()
+        name = _utf8(pool, name_idx) if name_idx else ''
+        tag, val = _parse_element_value(r, pool)
+        parts.append(f'{name}={tag}:{val}')
+    return '#'.join(parts)
+
+
+def _parse_annotations_attr(data: bytes, pool: list) -> list:
+    """RuntimeVisibleAnnotations 属性体 → list[AnnoInfo]（声明序）。"""
+    from .types import AnnoInfo, AnnoElem
+    r = _Reader(data)
+    n = r.u2()
+    out = []
+    for _ in range(n):
+        text = _parse_annotation_body(r, pool)
+        segs = _anno_split(text, '#')
+        type_bin = _anno_unesc(segs[0])
+        info = AnnoInfo(type_bin=type_bin)
+        for seg in segs[1:]:
+            name, _, rest = seg.partition('=')
+            tag, _, payload = rest.partition(':')
+            info.elements.append(AnnoElem(name=name, tag=tag, value=payload))
+        out.append(info)
+    return out
+
+
+def encode_annotations(annos: list) -> str:
+    """list[AnnoInfo] → 属性行载荷文本（`binary#name=tag:载荷#...;...`）。
+
+    与 _parse_annotation_body 的编码同一形态（AnnoInfo → 文本），供 attrs
+    属性行发射使用；`;` 分隔多条注解。
+    """
+    parts = []
+    for a in annos:
+        segs = [_anno_esc(a.type_bin)]
+        for e in a.elements:
+            segs.append(f'{e.name}={e.tag}:{e.value}')
+        parts.append('#'.join(segs))
+    return ';'.join(parts)
+
+
 def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
     """解析 BootstrapMethods attribute，返回 bootstrap method 信息列表。"""
     r = _Reader(data)
@@ -749,6 +893,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         f_generic_sig  = ''
         f_constant_val = ''
         f_deprecated   = False
+        f_annotations: list = []
         attr_count = r.u2()
         for _ in range(attr_count):
             a_name_idx = r.u2()
@@ -762,6 +907,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 f_constant_val = _constant_value_str(pool, cv_idx)
             elif a_name == 'Deprecated':
                 f_deprecated = True  # 属性体长度为 0
+            elif a_name == 'RuntimeVisibleAnnotations':
+                f_annotations = _parse_annotations_attr(r.read(a_len), pool)
             else:
                 r.skip(a_len)
         fields.append(FieldInfo(
@@ -772,6 +919,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
             generic_signature=f_generic_sig,
             constant_value=f_constant_val,
             is_deprecated=f_deprecated,
+            runtime_annotations=f_annotations,
         ))
 
     # ── methods（第一步：收集原始数据，延迟解码字节码）─────────────────────
@@ -789,6 +937,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         m_is_synthetic = bool(m_flags & 0x1000)  # ACC_SYNTHETIC flag
         m_deprecated   = False
         m_parameters: list[tuple[str, int]] = []  # (name, access_flags)
+        m_annotations: list = []
+        m_anno_default: tuple = None
         for _ in range(attr_count):
             attr_name_idx = r.u2()
             attr_len      = r.u4()
@@ -809,6 +959,12 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 m_is_synthetic = True
             elif attr_name == 'Deprecated':
                 m_deprecated = True
+            elif attr_name == 'RuntimeVisibleAnnotations':
+                m_annotations = _parse_annotations_attr(r.read(attr_len), pool)
+            elif attr_name == 'AnnotationDefault':
+                # 注解类型方法的元素默认值（ JVMS §4.7.22：单个 element_value）
+                ad_r = _Reader(r.read(attr_len))
+                m_anno_default = _parse_element_value(ad_r, pool)
             elif attr_name == 'MethodParameters':
                 mp_data = r.read(attr_len)
                 mp_r = _Reader(mp_data)
@@ -822,7 +978,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 r.skip(attr_len)
         raw_methods.append((m_flags, m_name, m_desc, code_attr_bytes,
                             m_exceptions, m_generic_sig, m_is_synthetic,
-                            m_deprecated, m_parameters))
+                            m_deprecated, m_parameters, m_annotations,
+                            m_anno_default))
 
     # ── 类级 attribute（含 BootstrapMethods、Signature、SourceFile）────────
     bootstrap_methods: list[dict] = []
@@ -833,6 +990,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
     cls_enclosing_class = ''
     cls_enclosing_method: tuple | None = None
     cls_has_enclosing = False
+    cls_annotations: list = []
     cls_attr_count = r.u2()
     for _ in range(cls_attr_count):
         attr_name_idx = r.u2()
@@ -844,6 +1002,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         elif attr_name == 'Signature':
             sig_idx = struct.unpack_from('>H', r.read(2))[0]
             cls_generic_sig = _utf8(pool, sig_idx)
+        elif attr_name == 'RuntimeVisibleAnnotations':
+            cls_annotations = _parse_annotations_attr(r.read(attr_len), pool)
         elif attr_name == 'SourceFile':
             sf_idx = struct.unpack_from('>H', r.read(2))[0]
             cls_source_file = _utf8(pool, sf_idx)
@@ -884,7 +1044,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
     methods: list[ParsedMethod] = []
     for (m_flags, m_name, m_desc, code_attr_bytes,
          m_exceptions, m_generic_sig, m_is_synthetic,
-         m_deprecated, m_parameters) in raw_methods:
+         m_deprecated, m_parameters, m_annotations,
+         m_anno_default) in raw_methods:
         is_native   = bool(m_flags & ACC_NATIVE)
         is_abstract = bool(m_flags & ACC_ABSTRACT)
         is_static   = bool(m_flags & ACC_STATIC)
@@ -908,6 +1069,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 generic_signature=m_generic_sig,
                 is_deprecated=m_deprecated,
                 method_parameters=m_parameters,
+                runtime_annotations=m_annotations,
+                annotation_default=m_anno_default,
             ))
         else:
             sub_r = _Reader(code_attr_bytes)
@@ -923,6 +1086,8 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                 parsed.generic_signature  = m_generic_sig
                 parsed.is_deprecated      = m_deprecated
                 parsed.method_parameters  = m_parameters
+                parsed.runtime_annotations = m_annotations
+                parsed.annotation_default  = m_anno_default
                 methods.append(parsed)
 
     # 泛型擦除特判：java/lang/Class 的类型参数 <T> 是纯 phantom（反射类型
@@ -950,4 +1115,5 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         is_deprecated=cls_deprecated,
         enclosing_class=cls_enclosing_class if cls_has_enclosing else '',
         enclosing_method=cls_enclosing_method,
+        runtime_annotations=cls_annotations,
     )

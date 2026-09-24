@@ -24,6 +24,32 @@ class InnerClassInfo:
 
 
 @dataclass
+class AnnoElem:
+    """注解元素值对（RuntimeVisibleAnnotations 的 element_value_pair）。
+
+    tag 为 JVMS element_value 标签字符：z/b/c/s/i/j/f/d（基本类型）/
+    g（class）/e（enum）/s（String）/a（数组）/@（嵌套注解）/x（未支持形态）。
+    value 为编码后载荷文本（编码在 classfile.encode_element_value —— 转义
+    `\\ ; # = "`，数组/嵌套递归同编码；attrs/build.rs/运行时三侧原样透传，
+    java_runtime::annotation 的解码端按同一转义表还原）。
+    """
+    name:  str
+    tag:   str
+    value: str
+
+
+@dataclass
+class AnnoInfo:
+    """单条 RuntimeVisibleAnnotations 记录（挂载于类/方法/字段三处）。"""
+    type_bin:  str        # 注解类型 binary name（`L..;` 描述符已剥壳）
+    elements:  list = None  # list[AnnoElem]，声明序
+
+    def __post_init__(self):
+        if self.elements is None:
+            self.elements = []
+
+
+@dataclass
 class FieldInfo:
     name:              str
     descriptor:        str
@@ -32,6 +58,7 @@ class FieldInfo:
     generic_signature: str  = ''
     constant_value:    str  = ''   # static final 字段的字面量（ConstantValue attribute）
     is_deprecated:     bool = False
+    runtime_annotations: list = None   # list[AnnoInfo]（RuntimeVisibleAnnotations）
 
 
 @dataclass
@@ -57,6 +84,8 @@ class ParsedMethod:
     generic_signature:  str  = ''
     is_deprecated:      bool = False
     method_parameters:  list = None   # list of (name: str, access_flags: int)
+    runtime_annotations: list = None  # list[AnnoInfo]（RuntimeVisibleAnnotations）
+    annotation_default: tuple = None  # (tag, 编码载荷)（AnnotationDefault，仅注解类型方法）
     # vtable 归属：空串=非虚方法; 等于 class_rust_name=新虚方法定义; 其他=覆盖哪个祖先类的 vtable
     virtual_in:         str  = ''
     # 槽位名解耦（覆盖条目 wrapper 名 ≠ 祖先 vtable trait 槽位名时）：trait 成员名，
@@ -70,6 +99,8 @@ class ParsedMethod:
     def __post_init__(self):
         if self.exception_table is None:
             self.exception_table = []
+        if self.runtime_annotations is None:
+            self.runtime_annotations = []
         if self.local_names is None:
             self.local_names = {}
         if self.local_types is None:
@@ -118,9 +149,12 @@ class ClassInfo:
     # enclosing_method = (name, descriptor)，位于初始化器中时为 None
     enclosing_class:   str  = ''
     enclosing_method:  tuple = None
+    runtime_annotations: list = None   # list[AnnoInfo]（RuntimeVisibleAnnotations）
 
     def __post_init__(self):
         if self.interfaces is None:
             self.interfaces = []
         if self.inner_classes is None:
             self.inner_classes = []
+        if self.runtime_annotations is None:
+            self.runtime_annotations = []

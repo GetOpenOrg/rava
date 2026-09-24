@@ -388,8 +388,51 @@ impl Class {
             .map(|(_, m)| *m)
             .unwrap_or(0x0001 | 0x0010 | 0x0400))
     }
-}
 
+    /// Class 值的 null 判定（生成 wrapper 不是 Object 元组——经 From<Object>
+    /// 协议装箱后判；查询族共用）。
+    fn __class_arg_is_null(c: &Class) -> bool {
+        Object::from(Clone::clone(c)).0.is_jvm_null()
+    }
+
+    /// `Class.isAnnotationPresent(Class)`：类挂载点注解存在性（反射 L3 段 1）。
+    /// 注解元数据表经 build.rs 从 java_class! 块的 annotations 属性生成；
+    /// 按名匹配（纯存在性——不构造实例，无需注解工厂）。未登记类（闭包外
+    /// / 数组 / 基本类型）→ false。
+    pub fn isAnnotationPresent(&self, annotationClass: Class) -> Result<bool> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
+        Ok(crate::annotation_meta::has_annotation(
+            crate::annotation_meta::class_annotation_entries(&cls_key), &anno))
+    }
+
+    /// `Class.getAnnotation(Class)`：类挂载点注解实例（返回注解接口的载体
+    /// 视图——调用侧 checkcast 后经载体调用元素方法）。实例经注解工厂构造
+    ///（翻译期合成的最小注解实例，见 annotation_meta 模块头注）；未命中 →
+    /// null（JDK 语义）。
+    pub fn getAnnotation(&self, annotationClass: Class) -> Result<Object> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
+        let Some(hit) = crate::annotation_meta::find_annotation(
+            crate::annotation_meta::class_annotation_entries(&cls_key), &anno) else {
+            return Ok(Object::default());
+        };
+        crate::annotation_meta::annotation_instance(hit.anno, hit.elements)
+    }
+
+    /// `Class.getAnnotations()`：类挂载点全部注解实例（声明序）。@Inherited
+    /// 语义（父类注解继承）不承载——语料消费方（Description 等）只读声明面。
+    pub fn getAnnotations(&self) -> Result<JArray<Object>> {
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        let entries = crate::annotation_meta::class_annotation_entries(&cls_key);
+        let mut out: Vec<Object> = Vec::new();
+        for e in entries {
+            out.push(crate::annotation_meta::annotation_instance(e.anno, e.elements)?);
+        }
+        Ok(JArray::from(out))
+    }
+
+}
 /// 描述符 → Class 对象（getDeclaredField 的 type 填充与 getComponentType 的
 /// 元素解析共用）：`L<类>;` / `[<描述符>` 经 for_class（斜线键与 ldc 类字面量
 /// 同一缓存条目，身份一致）；基本类型描述符经 getPrimitiveClass 的唯一实例。

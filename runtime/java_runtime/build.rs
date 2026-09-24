@@ -27,12 +27,17 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=../user/src/");
-    println!("cargo:rerun-if-env-changed=JAVA_RTA_STRICT");
-    // 类宇宙 = 运行时 crate 树 + 用户 crate 树（../user/src）。元数据表（层次/
-    // 直接父类/字段/方法）描述整个项目的类，用户类与生成 JDK 类同一属性协议
-    // （java_class!）。native 状态与 _impl 共置是运行时自身的覆盖面概念，仍只
-    // 扫运行时树。
-    let user_src_dir = Path::new("../user/src");
+    println!("cargo:rerun-if-env=changed=JAVA_RTA_STRICT");
+    // 类宇宙 = 运行时 crate 树 + 用户 crate 树（../user/src）+ lib crate 树
+    //（jar 输入模式的兄弟 crate，如 junit4/hamcrest——2026-09-23 用户树扩展
+    // 的延续，元数据表（层次/直接父类/字段/方法/注解）描述整个 workspace 的
+    // 类）。用户类与 lib 类与生成 JDK 类同一属性协议（java_class!）。
+    // native 状态与 _impl 共置是运行时自身的覆盖面概念，仍只扫运行时树。
+    let mut meta_roots: Vec<PathBuf> = vec![src_dir.to_path_buf(), PathBuf::from("../user/src")];
+    for lib_root in discover_lib_crate_roots() {
+        println!("cargo:rerun-if-changed={}", lib_root.display());
+        meta_roots.push(lib_root);
+    }
 
     let native_methods = scan_native_methods(src_dir);
     let status: BTreeMap<String, BTreeMap<String, String>> = load_status(status_file);
@@ -58,17 +63,17 @@ fn main() {
 
     write_status(status_file, &new_status);
 
-    let meta_roots: Vec<&Path> = if user_src_dir.is_dir() {
-        vec![src_dir, user_src_dir]
-    } else {
-        vec![src_dir]
-    };
+    let meta_roots: Vec<&Path> = meta_roots.iter()
+        .filter(|p| p.is_dir())
+        .map(|p| p.as_path())
+        .collect();
     let hierarchy = scan_class_hierarchy(&meta_roots);
     write_hierarchy_table(&hierarchy);
     write_direct_super_table(&scan_direct_super(&meta_roots));
     write_field_table(&scan_class_fields(&meta_roots));
     write_method_table(&scan_class_methods(&meta_roots));
     write_modifiers_table(&scan_class_modifiers(&meta_roots));
+    write_annotation_table(&scan_annotations(&meta_roots));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
@@ -276,6 +281,173 @@ fn scan_class_fields(roots: &[&Path]) -> BTreeMap<String, Vec<FieldMeta>> {
         }
     }
     result
+}
+
+/// 兄弟 lib crate 的 src 树发现（jar 输入模式：junit4/hamcrest 等）。判据 =
+/// 兄弟目录含 Cargo.toml + src/（排除自身/用户/target）。确定序（排序）保证
+/// 表生成稳定。
+fn discover_lib_crate_roots() -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir("..") else { return Vec::new() };
+    let mut roots: Vec<PathBuf> = entries.flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir()
+            && p.join("Cargo.toml").is_file()
+            && p.join("src").is_dir()
+            && p.file_name().and_then(|n| n.to_str()) != Some("java_runtime")
+            && p.file_name().and_then(|n| n.to_str()) != Some("user"))
+        .map(|p| p.join("src"))
+        .collect();
+    roots.sort();
+    roots
+}
+
+/// 单条注解记录（RuntimeVisibleAnnotations 的 annotation 结构）。
+/// elements 的值保持「tag:载荷」编码文本透传（编码在 codegen/classfile，
+/// 解码在 java_runtime::annotation——build.rs 不解释载荷）。
+struct AnnoEntry {
+    anno:     String,
+    elements: Vec<(String, String)>,
+}
+
+/// 切分（载荷内保留字符已百分号编码——分隔符只以分隔身份出现）。
+fn anno_split(s: &str, sep: char) -> Vec<&str> {
+    s.split(sep).collect()
+}
+
+/// 注解载荷文本（`bin#name=tag:载荷#...;...`）→ 条目序列。
+fn parse_anno_entries(text: &str) -> Vec<AnnoEntry> {
+    let mut out = Vec::new();
+    for entry in anno_split(text, ';') {
+        if entry.is_empty() { continue; }
+        let segs = anno_split(entry, '#');
+        if segs.is_empty() { continue; }
+        let mut e = AnnoEntry { anno: segs[0].to_owned(), elements: Vec::new() };
+        for seg in &segs[1..] {
+            let Some(eq) = seg.find('=') else { continue };
+            e.elements.push((seg[..eq].to_owned(), seg[eq + 1..].to_owned()));
+        }
+        out.push(e);
+    }
+    out
+}
+
+/// 三挂载点注解扫描（反射 L3 段 1）：
+///   - 类级：java_class! 块内 `#[annotations = "..."]` 属性行（binary_name 上下文）；
+///   - 方法级：java_method / java_native 属性行的 `annotations = "..."` 键
+///     （键 = (类, 方法名, 描述符)——与 method_table 同一身份键）；
+///   - 字段级：java_field 属性行的 `annotations = "..."` 键（键 = (类, 字段名)）。
+/// 消费方：Class/Method/Field 的 isAnnotationPresent / getAnnotation /
+/// getAnnotations（class_impl.rs / method_impl.rs / field_impl.rs）。
+fn scan_annotations(roots: &[&Path]) -> AnnotationTables {
+    let mut tables = AnnotationTables::default();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+            }
+            if current.is_empty() { continue; }
+            // 类级属性行
+            if let Some(text) = extract_attr_padded(trimmed, "annotations") {
+                tables.classes.entry(current.clone()).or_default()
+                    .extend(parse_anno_entries(&text));
+                continue;
+            }
+            // 方法/字段属性行：窗口内提取
+            let Some(open) = trimmed.find("java_method(").or_else(|| trimmed.find("java_native("))
+                .or_else(|| trimmed.find("java_field(")) else { continue };
+            let window = &trimmed[open..];
+            let Some(text) = extract_attr(window, "annotations") else { continue };
+            let entries = parse_anno_entries(&text);
+            if entries.is_empty() { continue; }
+            if window.starts_with("java_field(") {
+                if let Some(fname) = extract_attr(window, "name") {
+                    tables.fields.entry((current.clone(), fname)).or_default().extend(entries);
+                }
+            } else if let (Some(mname), Some(desc)) =
+                (extract_attr(window, "name"), extract_attr(window, "descriptor"))
+            {
+                tables.methods.entry((current.clone(), mname, desc)).or_default().extend(entries);
+            }
+        }
+    }
+    tables
+}
+
+#[derive(Default)]
+struct AnnotationTables {
+    classes:  BTreeMap<String, Vec<AnnoEntry>>,
+    methods:  BTreeMap<(String, String, String), Vec<AnnoEntry>>,
+    fields:   BTreeMap<(String, String), Vec<AnnoEntry>>,
+}
+
+fn write_annotation_table(t: &AnnotationTables) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：注解元数据表（反射 L3 段 1）。
+         // 数据源：java_class! 块的 annotations 属性（类级）与 java_method /
+         // java_native / java_field 属性行的 annotations 键——文本来自
+         // codegen 对 RuntimeVisibleAnnotations 的解析编码，元素值保持
+         // 「tag:载荷」编码透传，解码在 java_runtime::annotation。
+         // 消费方：Class/Method/Field 的 isAnnotationPresent / getAnnotation /
+         // getAnnotations。请勿手改。
+
+         pub struct AnnotationEntry {
+             pub anno:     &'static str,
+             pub elements: &'static [(&'static str, &'static str)],
+         }
+
+         pub static CLASS_ANNOTATIONS: &[(&str, &[AnnotationEntry])] = &[
+         ",
+    );
+    for (class, entries) in &t.classes {
+        if entries.is_empty() { continue; }
+        out.push_str(&format!("    ({:?}, &[\n", class));
+        out.push_str(&anno_entries_text(entries));
+        out.push_str("    ]),\n");
+    }
+    out.push_str("];
+
+pub static METHOD_ANNOTATIONS: &[(&str, &str, &str, &[AnnotationEntry])] = &[
+");
+    for ((class, name, desc), entries) in &t.methods {
+        if entries.is_empty() { continue; }
+        out.push_str(&format!("    ({:?}, {:?}, {:?}, &[\n", class, name, desc));
+        out.push_str(&anno_entries_text(entries));
+        out.push_str("    ]),\n");
+    }
+    out.push_str("];
+
+pub static FIELD_ANNOTATIONS: &[(&str, &str, &[AnnotationEntry])] = &[
+");
+    for ((class, name), entries) in &t.fields {
+        if entries.is_empty() { continue; }
+        out.push_str(&format!("    ({:?}, {:?}, &[\n", class, name));
+        out.push_str(&anno_entries_text(entries));
+        out.push_str("    ]),\n");
+    }
+    out.push_str("];
+");
+    let path = Path::new(&out_dir).join("annotation_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 annotation_table.rs 失败: {e}");
+    }
+}
+
+fn anno_entries_text(entries: &[AnnoEntry]) -> String {
+    let mut out = String::new();
+    for e in entries {
+        let elems: Vec<String> = e.elements.iter()
+            .map(|(n, v)| format!("({:?}, {:?})", n, v))
+            .collect();
+        out.push_str(&format!(
+            "        AnnotationEntry {{ anno: {:?}, elements: &[{}] }},\n",
+            e.anno, elems.join(", "),
+        ));
+    }
+    out
 }
 
 /// 访问标志 / 修饰符词串 → java.lang.reflect.Modifier 位集。

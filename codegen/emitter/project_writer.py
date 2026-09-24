@@ -186,6 +186,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     LAMBDA_NAME_LEDGER.reset()
     from . import sam_objects as _sam_objects
     _sam_objects.reset()
+    from . import annotation_objects as _anno_objects
+    _anno_objects.reset()
     _WRITTEN_THIS_RUN.clear()
     emissions: dict[str, ClassEmission] = {}
 
@@ -659,6 +661,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # A-5 收尾：函数式接口合成对象（接口文件尾部的伴生段；条目签名 / default
     # 体有无取此刻的发射记录，与落盘内容同源）
     _sam_objects.synthesize(emissions, registry)
+    # 反射 L3 段 1 收尾：注解代理合成（getAnnotation 的实例形态——JDK 动态
+    # 代理的翻译期同构物；条目签名同取发射记录）。必须在落盘前；工厂登记行
+    # 由 main 生成段经 _anno_objects.registration_lines() 消费。
+    _anno_objects.synthesize(emissions, registry)
     for _em in emissions.values():
         _write(_em.path, _em.text)
     _write_jdk_mod_tree()
@@ -703,6 +709,13 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     if hook_lines:
         hook_block = ('    java_runtime::register_class_init_hooks(&[\n'
                       + '\n'.join(hook_lines) + '\n    ]);\n')
+    # 注解工厂登记（反射 L3 段 1）：全部合成注解代理的 from_values 工厂
+    #（用户树 + lib crate + java_runtime 三域——user bin 是唯一能看到全部
+    # crate 的发射点；与类初始化钩子同一登记模式）
+    _anno_reg_lines = _anno_objects.registration_lines()
+    if _anno_reg_lines:
+        hook_block += ('    java_runtime::annotation_meta::register_annotation_factories(&[\n'
+                       + '\n'.join(_anno_reg_lines) + '\n    ]);\n')
 
     if batch_bin:
         # 批量模式：每个 bin 用 #[path] 独立包含自己的类文件，不共享 lib.rs。
