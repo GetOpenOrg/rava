@@ -15,7 +15,7 @@ from .rs_ir import (
     RsGeneric, RsPrimitive, RsNamed, RsRef, RsSlice, RsInfer,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
 )
-from .render import render_type, render_expr
+from .render import render_type, render_expr, upcast_expr
 from .type_map import short_cls as _short_cls, _registry_short_index
 from .constants import safe_ident, PRIMITIVE_RUST_TYPES as _SCALAR_TYPE_NAMES
 from .jvm_type import JvmType, ClassRef
@@ -460,10 +460,8 @@ class StackSim:
                 hint = decl_ty
             elif _decl_base != _src_base and self._is_subtype(_src_base, _decl_base):
                 # 声明为父类、赋入子类值（Node tail = new Pos(head)）：From 上转换保留运行时类型
-                if isinstance(expr, Var):
-                    expr = RawExpr(f"Clone::clone(&{expr.name}).into()")
-                else:
-                    expr = RawExpr(f"({render_expr(expr)}).into()")
+                expr = RawExpr(upcast_expr(expr.name, 'clone') if isinstance(expr, Var)
+                               else upcast_expr(render_expr(expr), 'paren'))
                 ty = decl_ty
                 force_let_ty = True
         if (isinstance(decl_ty, RsPrimitive) and isinstance(expr, Lit)
@@ -557,10 +555,8 @@ class StackSim:
                     # 赋不同子类型时都汇合到声明类型（JVM 校验器在控制流合并点的行为）。
                     # 与 decl_ty（描述符声明的父类）路径同一规则；接口声明不做 From 上转
                     # （宏只为类祖先生成 From<Child>，见 _is_interface 钩子说明）。
-                    if isinstance(expr, Var):
-                        expr = RawExpr(f"Clone::clone(&{expr.name}).into()")
-                    else:
-                        expr = RawExpr(f"({render_expr(expr)}).into()")
+                    expr = RawExpr(upcast_expr(expr.name, 'clone') if isinstance(expr, Var)
+                                   else upcast_expr(render_expr(expr), 'paren'))
                     ty = hint
                     force_let_ty = True
                 elif (isinstance(hint, RsNamed)

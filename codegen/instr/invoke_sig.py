@@ -13,7 +13,7 @@ from ..type_map import (
 from ..type_args import class_type_param_bounds as _class_type_param_bounds
 from ..stack import _clone_moved_var
 from ..rs_ir import RawExpr, RsNamed
-from ..render import render_expr, render_type
+from ..render import render_expr, render_type, upcast_expr
 from ..constants import JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES
 from .hierarchy import _rust_type_to_binary
 
@@ -617,7 +617,6 @@ def _coerce_arg(
         _coerce_from_null, _coerce_to_object, _coerce_value,
         _render_cast, _same_generic_family,
     )
-    from .hierarchy import _into_super_chain
     from ..jvm_type import (Array, ClassRef, carrier_type_for_ident,
                             from_rust_type, rust_head_name,
                             strict_erased_subtype)
@@ -675,16 +674,14 @@ def _coerce_arg(
     if (expected not in _PRIMITIVE_RUST_TYPES and actual not in _PRIMITIVE_RUST_TYPES
             and expected not in ('Object', '()', actual)
             and strict_erased_subtype(_act_t, _exp_t, registry)):
-        # R-2：子类传给父类参数，通过显式 __into_super() 链（替代已删除的 T55 From impl）
-        chain = _into_super_chain(rust_head_name(_act_t.erasure()),
-                                  rust_head_name(_exp_t.erasure()), registry)
+        # 子类实参传给类祖先形参：按值上转（宏 From<Self> for Ancestor，R-2′ 统一形态）
         src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
         # 宏只为「祖先的精确实例化」生成 From（Child<A> → Parent<f(A)>）。形参是同一祖先的
         # 另一实例化（raw type / 通配符形参）时：先向上转换到精确祖先，再经 Object 边界重新实例化。
         _reinst_anc = _upcast_to_ancestor_instantiation(src, actual, expected, sim, registry)
         if _reinst_anc is not None:
             return _reinst_anc
-        return f"{src}{chain}"
+        return upcast_expr(src)
     # Fix 18：actual 是 Object（运行时多态值）而 expected 是具体引用类型 ——
     # Java 调用点隐式 checkcast 语义（A-3：CastExpr checked 形态，失败返回
     # Err(JvmError::class_cast) 可被 java_try 捕获，S-1）。

@@ -511,6 +511,8 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 `main` 在 `59c3355`，可快进到 `integrate-tsb` @ `8910fa5`。被主工作区未提交的 `docs/reports/jdk-scan-HelloWorld.md` 阻塞（该文件两边都有修改，可能属于另一个会话）。处理方式：在主工作区提交或还原该文件后执行 `git merge --ff-only integrate-tsb`。
 
 ### R-2 待清理的 worktree 与分支 【P2，需用户确认】
+
+> 注：本条为「仓库类」R 编号，与清单第 6 项「R-2 Deref 替换 From 继承链」（已关闭，改立 R-2′）无关。
 - 已合入、可删：R5 四个代理（`agent-a7c86c6c…`、`a91c2200…`、`ada7cb15…`、`a8a7063b…`）与上一轮四个代理（`agent-a404cfb…`、`a3e0755…`、`afae540…`、`a78105d…`）的 worktree 和分支。
 - 来源不明、未合入：`worktree-agent-a4015d0b860f76189`（`481b73e`「refactor: 常量统一管理…」）。
 - 备份：`backup/main-wip-2026-09-18`、`backup/main-wip-2026-09-18-b`、`java_rta_test`。

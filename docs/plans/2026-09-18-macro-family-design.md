@@ -22,6 +22,8 @@
 | `Object::from_any(v)` | blanket `impl From<T> for Object` (R-1) |
 | `Rc<RefCell<Vec<T>>>` 类型标注 | `Array<T>` 类型别名 |
 | `__into_super()` 链调用 | `Deref<Target=Parent>` coercion |
+
+> ⚠️ **过期（2026-09-24，R-2′）**：`_super` 嵌套 / `__super()` / `__into_super()` / `Deref<Target=Parent>` 已被字段平铺 + 宏 `From<Self> for Ancestor` + wrapper 继承转发取代，代码与生成物零出现。现行说明见 `java-rust-translation-reference.md` §5，调研见 `docs/reports/2026-09-24-r2-deref-survey.md`。
 | `ObjectVTable` trait 名（外部可见） | 宏内部展开细节 |
 
 ---

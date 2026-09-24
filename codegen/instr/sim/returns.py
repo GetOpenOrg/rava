@@ -1,11 +1,11 @@
 # 从 codegen/instr/sim.py 中拆出
 
 from ...rs_ir import RawStmt
-from ...render import render_expr, render_type
+from ...render import render_expr, render_type, upcast_expr
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ...stack import erased_base, erased_class_of, is_jvm_array
 from ..coerce import _coerce_to_object, _coerce_value
-from ..hierarchy import _is_subtype, _into_super_chain, _rust_type_to_binary
+from ..hierarchy import _is_subtype, _rust_type_to_binary
 
 import re as _re_ret
 from .control import _erased_shape
@@ -109,11 +109,10 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty)
               and _is_subtype(_actual_base, _ret_base, registry)):
-            # vtable 架构：返回值是子类型，用 From trait（.into()）
-            chain = _into_super_chain(_actual_base, _ret_base, registry)
+            # 返回值是类祖先的子类型：按值上转（宏 From<Self> for Ancestor，R-2′ 统一形态）
             from ..invoke_sig import _upcast_to_ancestor_instantiation
             _reinst_anc = _upcast_to_ancestor_instantiation(expr_s, actual_ty, ret_ty, sim, registry)
-            expr_s = _reinst_anc if _reinst_anc is not None else f"{expr_s}{chain}"
+            expr_s = _reinst_anc if _reinst_anc is not None else upcast_expr(expr_s)
         elif (ret_ty not in _PRIMITIVE_RUST_TYPES and actual_ty not in _PRIMITIVE_RUST_TYPES
               and ret_ty not in ('Object', '()', actual_ty) and actual_ty != 'Object'):
             # 静态类型互不为子类型（交叉转型 `(Comparator<T> & Serializable)`、同一泛型类的另一实例化）：

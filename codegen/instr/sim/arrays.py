@@ -4,11 +4,11 @@ import re as _re
 
 from ...stack import I32, I64, F32, F64, erased_base, is_jvm_array
 from ...rs_ir import Var, RawExpr, RawStmt, RsNamed, RsGeneric
-from ...render import render_expr, render_type
+from ...render import render_expr, render_type, upcast_expr
 from ...type_map import jvm_to_rust, NEWARRAY_TYPES
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import _to_i32, _coerce_to_object
-from ..hierarchy import _is_subtype, _into_super_chain
+from ..hierarchy import _is_subtype
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 from ... import equiv_audit
 
@@ -171,8 +171,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
             if (elem_ty != val_ty_str
                     and _is_subtype(erased_base(val_ty_str), erased_base(elem_ty), registry)):
-                chain = _into_super_chain(erased_base(val_ty_str), erased_base(elem_ty), registry)
-                val_str = f"Clone::clone(&{val_str}){chain}"
+                val_str = upcast_expr(val_str, 'clone')
             elif elem_ty != val_ty_str:
                 # 值静态类型与元素类型无子型关系（`Number[] n = intArr; n[0] = 3.14;`
                 # ——元素类型来自值流推断，比 javac 的声明元素类型更精确）：Java 侧按

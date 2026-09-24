@@ -12,7 +12,7 @@
 2. [原生类型](#2-原生类型)
 3. [引用类型与对象模型](#3-引用类型与对象模型)
 4. [字段访问封装](#4-字段访问封装)
-5. [继承与 Deref 链](#5-继承与-deref-链)
+5. [继承与向上转型](#5-继承与向上转型)
 6. [虚方法分发（多态）](#6-虚方法分发多态)
 7. [数组](#7-数组)（`Array<T>` 封装 `Rc<RefCell<Vec<T>>>`）
 8. [异常处理](#8-异常处理)
@@ -186,61 +186,76 @@ self.cause = RuntimeException::new_str("msg")?;
 
 ---
 
-## 5 继承与 Deref 链
+## 5 继承与向上转型
 
-### 5.1 继承字段展平
+> 2026-09-24 按现行对象模型重写（R-2′）。旧版描述的 `_super` 嵌套、`Deref<Target=Parent>`、
+> `__into_super()` 均已被 K-5 单一对象模型 / 字段平铺 / A-1 擦除 vtable / wrapper 化取代，
+> 代码与生成物中零出现（调研：`docs/reports/2026-09-24-r2-deref-survey.md`）。
 
-父类的实例字段以 `_super: Parent` 存储在子类内：
+### 5.1 继承字段平铺
 
-```java
-// Java
-class Dog extends Animal { ... }
-```
-```rust
-// java_class! 展开的 inner struct（不可见）
-struct Dog__inner {
-    _super: Animal__inner,  // 继承字段
-    // Dog 自己的字段...
-}
-```
-
-子类可以直接访问父类字段（`self.name` 等），宏负责转发访问器。
-
-### 5.2 Deref 向上转型
-
-每个类自动获得 `Deref<Target=DirectParent>`，支持 Rust deref coercion：
-
-```java
-// Java：Dog 可以直接调用 Animal 的方法
-dog.getName();   // getName 定义在 Animal
-```
-```rust
-// 生成的 Rust：通过 Deref 自动找到父类方法
-dog.getName()?;  // Deref: Dog → Animal → ... 自动解引用
-
-// 宏展开后（不可见）：
-// impl Deref for Dog {
-//     type Target = Animal;
-//     fn deref(&self) -> &Animal { &self.0.borrow()._super }
-// }
-```
-
-不需要逐层 `From<Dog> for Animal` 显式转换。
-
-### 5.3 __into_super() 显式向上转型
-
-当方法接受父类参数时，codegen 生成 `__into_super()` 调用：
+对象是 wrapper（`vtable: Rc<dyn C__VTable>` + 存储指针 + null 标记），子类**不持有**父类实例；
+父类的实例字段按声明平铺进子类存储，宏为之生成同名访问器：
 
 ```java
 // Java
-Animal a = dog;  // 赋值给父类引用
+class Dog extends Animal { ... }   // Animal 有字段 name
+```
+```rust
+// 生成的 Rust（java_class! 块头）
+#[superclass        = "TestInheritance_Animal"]
+#[superclass_fields(name: String)]     // 父类字段平铺进 Dog 的存储
+```
+
+子类直接访问父类字段（`this.__get_name()` 等），无需任何父类路径。
+
+### 5.2 按值向上转型：`.into()`
+
+子类值赋给父类类型（实参、返回值、字段、数组元素、局部变量）统一发射为 `.into()`：
+
+```java
+// Java
+Animal a = dog;
+animals[1] = d;
 ```
 ```rust
 // 生成的 Rust
-let mut a: Animal = Clone::clone(&dog).__into_super();
+let mut a: Animal = Clone::clone(&dog).into();
+_arr5.set(1i32, Clone::clone(&d).into())?;
 ```
 
-**注意**：此处发生静态类型转换，虚方法分发能力依赖下节的 vtable 机制保留。
+- 运行时真源：宏 `type_conversions` §10 为**每个祖先**生成 `impl From<Self> for Ancestor`
+  （vtable trait upcasting：`Rc<dyn Dog__VTable>` → `Rc<dyn Animal__VTable>`，保留运行时类，
+  虚分派不丢失）；泛型祖先按 A-1 γ' 形态对任意实参成立。多层继承同样一跳。
+- 发射侧唯一决策点：`codegen/render.py::upcast_expr`（包装方式 clone / paren / auto / none，
+  形态统一为后缀 `.into()`，目标类型由左值 / 形参 / 返回位给定）。判定走 TypeIR
+  （`hierarchy._is_subtype` → `jvm_type.strict_erased_subtype`）。
+- 接口与 Object 不走此路径：接口是载体类型（§13，`From<X> for Iface`）；Object 是装箱（§12）。
+
+### 5.3 父类方法与 `super` 调用
+
+```java
+// Java
+dog.getName();                 // getName 定义在 Animal
+return super.speak() + "!";   // GuideDog 调父类实现
+```
+```rust
+// 生成的 Rust
+dog.getName()?;                                  // wrapper 上的继承转发成员（经 vtable 虚分派）
+let _t0 = TestInheritance_Dog__speak_base(this)?; // super 调用：声明者的 base 函数（静态绑定）
+```
+
+- 继承方法：`inherited_gen` 在子类 wrapper 上生成 `inherited_from = ...` 转发成员，
+  调用经 vtable 落到运行时类的实现（等价 JVM 子类 vtable 继承条目）。
+- `super.m()`：调用父类的 `Owner__m_base` 自由函数（invokespecial 语义，不经 vtable）。
+- 构造链 `super(...)`：`Animal::__init_on(<Animal as From<Self>>::from(Clone::clone(&this)), ..)`
+  ——以父类视图驱动父类构造体（K-5 单一对象）。
+
+### 5.4 为什么不用 `Deref<Target=Parent>`
+
+wrapper 模型下子类没有可借出的 `&Parent`；上转全部是**按值**的（deref coercion 只作用于引用）；
+一个类型只能有一个 `Deref`（接口载体已占用 `Deref<Target=Object>`），也无法表达泛型父类的
+跨实例化上转。方法解析已由继承转发成员承担。故 R-2（Deref 方案）关闭，由 5.2 的统一形态取代。
 
 ---
 
@@ -278,7 +293,7 @@ pub struct Animal(Rc<dyn Animal__VTable>);
 // 宏为 Dog 自动生成（不可见）
 impl Animal__VTable for Dog__inner {
     fn speak(&self)   -> Result<String> { self.speak_impl() }     // 覆盖
-    fn getName(&self) -> Result<String> { self._super.getName() } // 委托父类
+    fn getName(&self) -> Result<String> { Animal__getName_base(self) } // 未覆盖：转发到声明者实现（字段平铺，无 _super）
 }
 ```
 
@@ -343,7 +358,7 @@ codegen Python 侧根据字节码 access flags 标注，`java_class!` 宏据此�
 
 ### 6.5 当前状态
 
-> ⚠️ **虚方法 vtable（本节）尚在规划阶段**，当前实现使用 `__into_super()` 向上转型 + 静态绑定。修复 `TestInheritance` 多态分发需实现此节。  
+> ⚠️（2026-09-24 注）本节原「规划阶段 / `__into_super()` 向上转型 + 静态绑定」描述已过期：vtable 双指针多态已实现，向上转型见 §5.2（`.into()`，保留运行时类）。  
 > 涉及改动：`java_rta_macros/src/block.rs`（生成 vtable trait）+ `codegen/method/codegen.py`（标注 `is_virtual`）。
 
 ---
@@ -761,8 +776,7 @@ super.speak()
 ```
 ```rust
 // 生成
-self._super.speak()?
-// 或通过 Deref 链自动解引用
+TestInheritance_Dog__speak_base(this)?   // 父类声明者的 base 函数（§5.3）
 ```
 
 ---
@@ -915,7 +929,7 @@ codegen 侧：`aastore` / `astore` 赋值给 Object 类型变量时，生成 `.i
 | `java_class!` 宏展开 | `runtime/java_rta_macros/src/block.rs` |
 | 字段 RefCell/Cell 包裹 | `block.rs` §字段存储类型 |
 | per-class vtable trait 生成（规划中） | `block.rs` + `codegen/method/codegen.py` |
-| Deref 继承链 | `block.rs` + R-2 |
+| 类祖先向上转型 | 宏 `type_conversions.rs` §10（`From<Self> for Ancestor`）+ `codegen/render.py::upcast_expr`（R-2′） |
 | blanket `Into<Object>` | `runtime/java_runtime/src/lib.rs` |
 | `impl From<Object> for T`（规划中） | `block.rs` 宏生成 |
 | `Array<T>` newtype（规划中） | `runtime/java_runtime/src/java/lang/array.rs` |

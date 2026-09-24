@@ -5,7 +5,7 @@ import re as _re_g
 
 from ...stack import BOOL, _clone_moved_var, erased_base, erased_class_of
 from ...rs_ir import CastExpr, Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed
-from ...render import render_expr, render_type
+from ...render import render_expr, render_type, upcast_expr
 from ...sig_parse import parse_field_type as _parse_field_type
 from ...sig_types import instance_field_rust_name as _instance_field_rust_name
 from ...type_args import (
@@ -23,7 +23,7 @@ from ...type_map import (
 from ...constants import safe_ident as _safe_ident, PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import _coerce_to_object, _coerce_from_null, _coerce_value, _render_cast, _same_generic_family
-from ..hierarchy import _is_subtype, _rust_type_to_binary, _into_super_chain
+from ..hierarchy import _is_subtype, _rust_type_to_binary
 from ..member_owner import _get_field_generic_signature, _resolve_static_field_owner
 from ..member_naming import _parse_field_ref
 from ..invoke import _gen_invokespecial
@@ -231,8 +231,7 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
           and _is_subtype(erased_base(val_ty_name), erased_base(ftype), registry)):
         # vtable 架构：子类型赋给祖先类型字段，用 From trait（.into()）
         # 先 Clone::clone(&val) 再 .into()，避免 into() 转移所有权后变量失效（E0382）
-        chain = _into_super_chain(erased_base(val_ty_name), erased_base(ftype), registry)
-        val_str = f"Clone::clone(&{val_str_raw}){chain}"
+        val_str = upcast_expr(val_str_raw, 'clone')
     elif (val_ty_name == 'Object' and ftype not in _PRIMITIVE_RUST_TYPES
           and ftype not in ('Object', '()') and not ftype.startswith('Rc<')):
         # 值经擦除边界（泛型静态方法 <T> T f(T) 等）退化为 Object，

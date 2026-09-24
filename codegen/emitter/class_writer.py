@@ -1336,13 +1336,12 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         # 未被字段引用的类型参数由宏补 PhantomData（block.rs），codegen 不再输出 _phantom
 
 
-    # T76 的 as_xxx / into_xxx upcast 方法已由 java_class! 宏统一承接
-    # （宏生成 `__super()` / `__into_super()`，upcast 与字段存储解耦，见方案 §16）。
-
-    # T55 已删除（R-2）：
-    # From<Child> for Parent 链由 invoke.py / sim.py 的显式 __into_super() 链替代，
-    # 宏为有父类的类生成 Deref<Target=Parent> 覆盖引用层面的向上转型。
-    # upcast 调用点：Clone::clone(&child).__into_super().__into_super()...（见 coerce._into_super_chain）
+    # 类祖先上转的运行时真源：java_class! 宏 type_conversions §10 为每个祖先生成
+    # `From<Self> for Ancestor`（vtable trait upcasting，保留运行时类；泛型祖先按
+    # A-1 γ' 对任意实参成立）。字段平铺（无 `_super` 嵌套 / `__super()` /
+    # `__into_super()` / Deref）；Python 侧调用形态唯一决策点 = render.upcast_expr
+    # （R-2′）。T55（class_writer 的 From<Child> for Parent 链）与 T76 upcast 方法
+    # 均已删除。
 
     # T55b 已删除（Arch-5）：
     # Arch-1 后接口 = Object 类型别名，From<ConcreteClass> for Interface 语义上等于

@@ -422,7 +422,7 @@ def strict_erased_subtype(actual: JvmType, expected: JvmType,
 
     - 不自反：erasure 后同 binary（或解析前即同短名）→ False；
     - java/lang/Object 恒不作为成立目标（上转 Object 归装箱路径，不是
-      __into_super 链）；
+      类祖先按值上转 render.upcast_expr）；
     - actual 基名须 registry 域内（占位/数组/基本类型 → False）；
       expected 域外时按短名占位匹配闭包（is_subtype_of 的 _closure_hit 路径）。
     """

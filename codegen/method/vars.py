@@ -4,7 +4,7 @@
 
 import re
 from .. import fallback_audit
-from ..render import render_stmt, render_expr, render_type
+from ..render import render_stmt, render_expr, render_type, upcast_expr
 from ..rs_ir import (
     RsNamed, RsPrimitive, RsType,
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
@@ -167,23 +167,10 @@ def _widen_into_merged(entries: list, name: str, start: int, end: int,
             else:
                 # 公共祖先路径：值是该祖先的子类型，`.into()` 目标由汇合后的声明类型给出
                 _src = render_expr(item.value)
-                item.value = RawExpr(f"{_src}.into()" if _is_atomic_rs(_src) else f"({_src}).into()")
+                item.value = RawExpr(upcast_expr(_src, 'auto'))
         if isinstance(item, LetStmt):
             item.ty = merged if item.ty is not None else None
         item.value_ty = merged
-
-
-def _is_atomic_rs(expr_str: str) -> bool:
-    """渲染后的 Rust 表达式是否原子（调用链 / 路径）：决定 `.into()` 前是否加括号。"""
-    depth = 0
-    for ch in expr_str.strip():
-        if ch in '([{':
-            depth += 1
-        elif ch in ')]}':
-            depth -= 1
-        elif depth == 0 and not (ch.isalnum() or ch in '_.:?'):
-            return False
-    return True
 
 
 def _lvt_covering_entry(entries: list, off: int, name: str):
@@ -285,7 +272,7 @@ def _align_store_value(item, hoisted_type, later_ty_s: str, hoisted_ty_s: str) -
         return
     if later_ty_s != hoisted_ty_s:
         _src = render_expr(item.value)
-        item.value = RawExpr(f"{_src}.into()" if _is_atomic_rs(_src) else f"({_src}).into()")
+        item.value = RawExpr(upcast_expr(_src, 'auto'))
     item.value_ty = hoisted_type
 
 

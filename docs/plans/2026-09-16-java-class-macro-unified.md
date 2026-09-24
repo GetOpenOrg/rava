@@ -682,6 +682,8 @@ pub fn __set_size(&self, v: i32)             { self.0.size.set(v); }
 
 宏对外只暴露三个合法入口：`__super()` / `__into_super()` / `__new_with_super()`。
 
+> ⚠️ **过期（2026-09-24，R-2′）**：`_super` 嵌套 / `__super()` / `__into_super()` / `Deref<Target=Parent>` 已被字段平铺 + 宏 `From<Self> for Ancestor` + wrapper 继承转发取代，代码与生成物零出现。现行说明见 `java-rust-translation-reference.md` §5，调研见 `docs/reports/2026-09-24-r2-deref-survey.md`。
+
 ### 16.5 codegen 侧的连带简化
 
 转发访问器抹平了深度差异之后，codegen 不再需要按接收者静态类型拼 `_super._super.` 路径：

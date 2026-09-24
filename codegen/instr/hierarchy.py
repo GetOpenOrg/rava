@@ -174,31 +174,6 @@ def _is_interface(rust_short: str, registry: dict | None) -> bool:
     return ref is not None and ref.is_interface
 
 
-def _super_path_to_class(from_cls: str, to_cls: str, registry: dict | None) -> str:
-    """计算从 from_cls 到 to_cls 的 _super 访问路径。
-    返回如 '_super._super.' 形式的前缀，若 from_cls == to_cls 或未找到则返回 ''。
-    用于 T76：父类字段/方法的访问需要通过 _super 链路由。"""
-    if not registry or not from_cls or not to_cls or from_cls == to_cls:
-        return ''
-    path_parts: list[str] = []
-    ci = registry.get(from_cls)
-    while ci:
-        sc = ci.super_class
-        if not sc or sc == _OBJECT_CLASS:
-            break
-        path_parts.append('_super')
-        if sc == to_cls:
-            return '.'.join(path_parts) + '.'
-        ci = registry.get(sc)
-    return ''
-
-
-# T76 的 `_find_field_super_prefix` / `_find_field_super_prefix_for_type` 已删除。
-# 它们为「按接收者静态类型拼 `_super._super.` 字段路径」而存在；现在继承字段由
-# java_class! 宏生成的转发访问器统一暴露（方案 §6 展平 + §16 _super 语义边界），
-# getfield/putfield 直接发 `__get_xxx()` / `__set_xxx(v)`，路径计算不再需要。
-
-
 def _find_super_chain_to_class(current_binary: str, target_cls_short: str, registry: dict | None) -> str:
     """从 current_binary 到 target_cls_short（Rust 短名）的 _super 链前缀。
     用于 invokespecial super.method() 的精确路由（跳过虚拟派发，直接访问目标父类实例）。
@@ -227,24 +202,3 @@ def _find_super_chain_to_class(current_binary: str, target_cls_short: str, regis
             break
         sc = sc_ci.super_class
     return '_super.'  # fallback: 至少一级 _super（目标类在继承链上但未在 registry 中）
-
-
-def _super_prefix_to_expr(recv: str, pfx: str) -> str:
-    """把 `_super.` / `_super._super.` 前缀转成 `__super()` 调用链。
-
-    java_class! 宏把 `_super` 收成实现细节（方案 §16）：宏外只能通过 `__super()`
-    取父类引用，不允许拼字段路径。于是
-
-        this._super.m()           → this.__super().m()
-        this._super._super.m()    → this.__super().__super().m()
-
-    层数由前缀里 `_super` 出现的次数决定，与旧实现一一对应。
-    """
-    return recv + '.__super()' * pfx.count('_super')
-
-
-def _into_super_chain(actual_short: str, expected_short: str, registry: dict | None) -> str:
-    """vtable 架构：子类型向父类型转换统一用 From trait（.into()），
-    宏生成 From<Child> for Parent 利用 vtable trait upcasting 保留运行时类型。
-    """
-    return '.into()'

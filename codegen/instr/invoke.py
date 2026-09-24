@@ -30,7 +30,7 @@ from .coerce import (
 )
 from .hierarchy import (
     _find_super_chain_to_class,
-    _super_prefix_to_expr, _is_subtype, _rust_type_to_binary,
+    _is_subtype, _rust_type_to_binary,
     _get_all_subtypes_ordered,
 )
 from .member_owner import (

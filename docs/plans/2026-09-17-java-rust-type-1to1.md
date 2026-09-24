@@ -512,6 +512,8 @@ where
 
 ### R-2 `Deref<Target=Parent>` 替换 From 继承链
 
+> ⚠️ **已关闭（2026-09-24，改立 R-2′）**：`_super` 嵌套 / `__super()` / `__into_super()` / `Deref<Target=Parent>` 已被字段平铺 + 宏 `From<Self> for Ancestor` + wrapper 继承转发取代，代码与生成物零出现。现行说明见 `java-rust-translation-reference.md` §5，调研见 `docs/reports/2026-09-24-r2-deref-survey.md`。
+
 **目标**：宏为每个有直接父类的生成类生成一个 `Deref` impl，通过 Rust deref coercion 自动处理多层继承链；删除 codegen 中 T55 `From<Child> for Parent` 生成循环。
 
 > **状态：✅ 已完成** — commit `b40b8c3`（2026-09-17）  

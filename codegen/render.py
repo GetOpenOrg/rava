@@ -325,3 +325,39 @@ def render_file(items: list, preamble: str = '') -> str:
         parts.append(preamble.rstrip())
     parts.extend(render_item(it) for it in items)
     return '\n\n'.join(parts) + '\n'
+
+
+# ── 类祖先按值上转（R-2′：上转发射的唯一形态决策点）─────────────────────────
+#
+# 子类值 → 类祖先类型（非接口、非 Object）的转换由宏 type_conversions §10 为
+# 每个祖先生成的 `From<Self> for Ancestor`（vtable trait upcasting，保留运行时
+# 类）承担；Python 侧只决定调用形态。形态统一为后缀 `.into()`（目标类型由左值 /
+# 形参 / 返回位给定）。各调用点只选包装方式：
+#   wrap='none'  —— src 已是可后缀的表达式（调用链 / 已 clone 的实参）
+#   wrap='clone' —— src 是位置（变量 / 字段路径），先 Clone::clone(&src) 保所有权（E0382）
+#   wrap='paren' —— src 恒加括号（非变量的任意表达式）
+#   wrap='auto'  —— 原子表达式（is_atomic_rs）直接后缀，否则加括号
+# 形态变更（如统一为 `<T as From<_>>::from`）只改此处；后续 UpcastExpr IR 节点
+# 的 render 分派同样落在这里。
+
+def is_atomic_rs(expr_str: str) -> bool:
+    """渲染后的 Rust 表达式是否原子（调用链 / 路径）：决定 `.into()` 前是否加括号。"""
+    depth = 0
+    for ch in expr_str.strip():
+        if ch in '([{':
+            depth += 1
+        elif ch in ')]}':
+            depth -= 1
+        elif depth == 0 and not (ch.isalnum() or ch in '_.:?'):
+            return False
+    return True
+
+
+def upcast_expr(src: str, wrap: str = 'none') -> str:
+    """子类值按值上转到类祖先类型的发射文本（见上方模块段说明）。"""
+    if wrap == 'clone':
+        src = f"Clone::clone(&{src})"
+    elif wrap == 'paren' or (wrap == 'auto' and not is_atomic_rs(src)):
+        src = f"({src})"
+    return f"{src}.into()"
+

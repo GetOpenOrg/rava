@@ -63,7 +63,7 @@ A-3（CastExpr IR 化）是完整样板：checkcast/instanceof 从「15+ 处字�
 |---|---|---|---|
 | L2-a | **A-4/T-2 接口载体进类型位置**：接口名不再擦成 `Object`，调用点 `it.hasNext()` | `_coerce_arg` 大半分支；擦除-恢复循环的发起端 | 既有 A-4（P2，建议随 downcast 链后提级） |
 | L2-b | **T-4 包装类走生成** | 手写包装边界（`Integer.valueOf` stub 族） | 既有 T-4（T-3 后） |
-| L2-c | **R-2 Deref 替代 From 继承链**：多层向上引用交给 deref coercion | `__into_super` 链 25 处发射 | 既有 R-2（R-1 已落地，可随时） |
+| L2-c | **R-2 Deref 替代 From 继承链**：多层向上引用交给 deref coercion | `__into_super` 链 25 处发射 | 既有 R-2（R-1 已落地，可随时） **（2026-09-24 定性：R-2 前提已过期、wrapper 模型下 Deref 不可行，关闭；「25 处」为 R-1/A-4/R-2 三域混合 grep 口径，真实类祖先上转 13 处——改立 R-2′：发射形态统一到 `render.upcast_expr`，见 `docs/reports/2026-09-24-r2-deref-survey.md`）** |
 
 ### L3 转换的表示——IR 节点化（A-3 样板推广）
 
