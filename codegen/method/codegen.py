@@ -430,13 +430,16 @@ def gen_method_body(
     # ── IR mutation 分析（渲染前）────────────────────────────────────
     ir_stmts = [item for _, item in entries if not isinstance(item, str)]
     _analyze_mutation(ir_stmts)
-    _hoist_loop_vars(entries, predeclared)
+    _hoist_loop_vars(entries, predeclared, sim._slot_decls)
     # _hoist_if_vars 每次只提升一层，循环直到收敛（处理多层嵌套 if-else）
-    # LocalVariableTable 里出现过的名字：其余变量是 javac 合成的无名槽
+    # LocalVariableTable 里出现过的名字：其余变量是 javac 合成的无名槽；
+    # 完整声明表（slot → [(start, end, name, ...)]）同步传入，供变量提升
+    # pass 做 LVT 区间驱动的变量身份判定
     from ..stack import _safe_name as _safe_local_name
     _lvt_names = frozenset(_safe_local_name(_d[2]) for _ds in sim._slot_decls.values() for _d in _ds)
     for _ in range(64):
-        if not _hoist_if_vars(entries, predeclared, sim._box_object, _lvt_names, registry):
+        if not _hoist_if_vars(entries, predeclared, sim._box_object, _lvt_names, registry,
+                              slot_decls=sim._slot_decls):
             break
     _promote_undeclared_assigns(entries, predeclared)
 
