@@ -108,108 +108,28 @@ def is_jdk(cls: str) -> bool:
 
 # 跨包同简单名的类：binary name → 带包限定的 Rust 类型名（由 configure_short_names 从 registry 算出）
 _QUALIFIED_SHORT_NAMES: dict[str, str] = {}
-# 本轮因遮蔽 prelude 保留名而限定的类（binary 有序列表，供触发点计数/日志）
-PRELUDE_SHADOW_HITS: list[str] = []
-
-# Rust std prelude 中被生成代码 / java_class! 宏展开以裸名引用的类型与值名。
-# Java 类短名与之相同时，`use <crate>::pkg::X;` 精确导入（或同文件 struct 定义）
-# 会遮蔽 glob 引入的 prelude 名（如 org/junit/runner/Result 遮蔽 `Result<T>` 别名 →
-# E0107），故该类一律以限定名发射。
-# 刻意不含 Iterator：java/util/Iterator 是 Java 自有类，生成层以其短名为 Java 身份
-# （同 String/Object 遮蔽 std 名的既定同构约定），生成代码不裸名引用 std Iterator。
-_STD_PRELUDE_RESERVED: frozenset[str] = frozenset({
-    'Option', 'Some', 'None', 'Result', 'Ok', 'Err', 'Box', 'Vec',
-    'Default', 'Clone', 'Copy', 'Send', 'Sync', 'Sized', 'Unpin', 'Drop',
-    'From', 'Into', 'TryFrom', 'TryInto', 'AsRef', 'AsMut',
-    'PartialEq', 'Eq', 'PartialOrd', 'Ord', 'Fn', 'FnMut', 'FnOnce',
-    'ToString', 'ToOwned', 'IntoIterator', 'Extend', 'FromIterator',
-})
-
-_RUNTIME_PRELUDE_CACHE: dict[str, str | None] | None = None
-
-
-def _runtime_prelude_names() -> dict[str, str | None]:
-    """解析 java_runtime `pub mod prelude` 的再导出名（唯一真源：runtime/java_runtime/src/lib.rs）。
-
-    返回 短名 → 所有者 binary：再导出路径落在 Java 命名空间（`super::java::lang::X`）
-    的名字归该 Java 类所有（它保留短名，同名他类限定）；其余（`Result`/`JArray`/
-    `Rc`/`RefCell`/`MonitorGuard` 等 runtime 基础设施名）所有者为 None——任何 Java 类
-    同名即限定。只取大写开头的名字（类型/值构造器位；小写函数名与类短名不同命名空间习惯）。
-    """
-    global _RUNTIME_PRELUDE_CACHE
-    if _RUNTIME_PRELUDE_CACHE is not None:
-        return _RUNTIME_PRELUDE_CACHE
-    import os
-    from .constants import RUNTIME_JAVA_RUNTIME
-    names: dict[str, str | None] = {}
-    try:
-        with open(os.path.join(RUNTIME_JAVA_RUNTIME, 'src', 'lib.rs'), encoding='utf-8') as f:
-            text = f.read()
-    except OSError:
-        text = ''
-    m = re.search(r'pub mod prelude\s*\{(.*?)\n\}', text, re.S)
-    for use in re.findall(r'pub use\s+([^;]+);', m.group(1) if m else ''):
-        use = ' '.join(use.split())
-        brace = re.match(r'(.*)::\{(.*)\}$', use)
-        if brace:
-            base, items = brace.group(1), [s.strip() for s in brace.group(2).split(',')]
-        else:
-            base, _, last = use.rpartition('::')
-            items = [last]
-        for item in items:
-            name = item.split(' as ')[-1].strip()
-            if not name[:1].isupper():
-                continue
-            segs = [s for s in base.split('::') if s not in ('super', 'crate')]
-            owner = '/'.join(segs + [name]) if segs[:1] == ['java'] else None
-            names[name] = owner
-    _RUNTIME_PRELUDE_CACHE = names
-    return names
-
-
-def prelude_reserved_owner(short: str) -> tuple[bool, str | None]:
-    """短名是否为 prelude 保留名；保留时返回 (True, 所有者 binary 或 None)。"""
-    rt = _runtime_prelude_names()
-    if short in rt:
-        return True, rt[short]
-    if short in _STD_PRELUDE_RESERVED:
-        return True, None
-    return False, None
 
 
 def configure_short_names(registry: dict | None) -> None:
-    """按 registry 计算 Rust 类型名的消歧表（短名冲突的唯一决策点）。
+    """按 registry 计算 Rust 类型名的消歧表。
 
-    Rust 类型名 = 类的简单名（`$` → `_`）。两类冲突触发限定——以完整 binary name
-    （`/`、`$` → `_`）为 Rust 类型名，结构体、vtable、`use` 导入、类型串 ↔ binary
-    反查全部经 short_cls 取同一名字：
-      ① 类间冲突：不同包的类简单名相同（Java 靠包名区分，Rust 侧类型名字符串是
-         类型身份的唯一载体，跨文件流动），同名组内按 binary name 字典序最小者
-         保留简单名，其余限定；
-      ② prelude 遮蔽：简单名 ∈ 生成文件 glob 引入的 prelude 名（runtime prelude
-         再导出 ∪ 生成层裸名引用的 std prelude 名）。所有者为 Java 类的保留名
-         （如 prelude 再导出的 java.lang 类）由所有者保留简单名；其余一律限定。
+    Rust 类型名 = 类的简单名（`$` → `_`）。不同包的类简单名相同时（Java 靠包名区分，
+    Rust 侧类型名字符串是类型身份的唯一载体，跨文件流动），同名组内按 binary name
+    字典序最小者保留简单名，其余以完整 binary name（`/`、`$` → `_`）为 Rust 类型名——
+    结构体、vtable、`use` 导入、类型串 ↔ binary 反查全部经 short_cls 取同一名字。
     """
     _QUALIFIED_SHORT_NAMES.clear()
     _SHORT_INDEX_CACHE.clear()
-    PRELUDE_SHADOW_HITS.clear()
     groups: dict[str, list[str]] = {}
     for binary in (registry or {}):
         if '/' not in binary:
             continue
         groups.setdefault(binary.rsplit('/', 1)[-1].replace('$', '_'), []).append(binary)
-    for short, members in groups.items():
-        reserved, owner = prelude_reserved_owner(short)
-        if reserved:
-            qualified = sorted(b for b in members if b != owner)
-            PRELUDE_SHADOW_HITS.extend(qualified)
-        elif len(members) < 2:
+    for members in groups.values():
+        if len(members) < 2:
             continue
-        else:
-            qualified = sorted(members)[1:]
-        for binary in qualified:
+        for binary in sorted(members)[1:]:
             _QUALIFIED_SHORT_NAMES[binary] = binary.replace('/', '_').replace('$', '_')
-    PRELUDE_SHADOW_HITS.sort()
 
 
 def short_cls(cls: str) -> str:
