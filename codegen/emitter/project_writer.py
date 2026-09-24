@@ -58,16 +58,12 @@ _WRITTEN_THIS_RUN: set[str] = set()
 # 共置手写 impl（K-3a/K-4）编译期硬引用的语料条件生成类：impl 文件名 → 同目录
 # 依赖文件元组。companion 声明以此为准——依赖不齐时 impl 整体不参与编译（其
 # 服务的原生方法回落 panic 存根），而不是产生无法解析的 mod 声明拖垮 scratch。
-# MemberName/MethodType 经 owner 的 Java 签名闭包通常恒在场，防御性列入；
-# 三 flavor 类只被 var_handle_impl 的 Rust import 引用（Java 闭包不可见），
-# 语料未触达 VarHandles 工厂时缺席是常态（如 TestStringEdge 只触达 VarHandle
-# 本体）。
+# MemberName/MethodType 经 owner 的 Java 签名闭包通常恒在场，防御性列入。
+# 登记须与 impl 的实际 import 同步：var_handle_impl.rs 曾硬引用三 flavor 类
+# （FieldInstanceReadOnly 三族 try_cast 目标），85e051d 改为按运行时类名路由后
+# 只 import VarHandle / Unsafe——过期登记在 JDK25（闭包不含 flavor 类）把整个
+# impl 排除，签名多态方法全部缺席（E0599 compareAndSet/getVolatile/…），已删除。
 _IMPL_FILE_DEPS: dict[str, tuple[str, ...]] = {
-    'var_handle_impl.rs': (
-        'var_handle_booleans_field_instance_read_only.rs',
-        'var_handle_ints_field_instance_read_only.rs',
-        'var_handle_longs_field_instance_read_only.rs',
-    ),
     'method_handle_natives_impl.rs': (
         'member_name.rs',
         'method_type.rs',
@@ -528,8 +524,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     # 依赖闭包不齐时跳过：impl 编译期硬引用的语料条件生成类（同目录
                     # sibling）缺席则该 impl 整体不参与编译——等价于该 impl 尚不存在，
                     # 其服务的原生方法回落 panic 存根——而不是让 mod 声明拖着无法
-                    # 解析的 import 拖垮整个 scratch。var_handle_impl 的三条 flavor
-                    # 硬 import（FieldInstanceReadOnly 三族 try_cast 目标）即此形态。
+                    # 解析的 import 拖垮整个 scratch（登记表见 _IMPL_FILE_DEPS）。
                     if not all(os.path.exists(os.path.join(dir_path, _dep))
                                for _dep in _IMPL_FILE_DEPS.get(_f, ())):
                         continue

@@ -8,7 +8,6 @@ use super::unix_file_system_provider::UnixFileSystemProvider;
 use super::unix_path::UnixPath;
 use crate::java::lang::String;
 use crate::java::nio::file::spi::FileSystemProvider;
-use crate::sun::security::action::GetPropertyAction;
 
 /// `Util.toBytes(String)` 等价：jnuEncoding（macOS/Linux 默认 UTF-8）编码。
 /// 档 A 以 UTF-8 直编码承载（JLA.getBytesNoRepl 同语；POSIX locale 下 jnu
@@ -22,7 +21,12 @@ impl super::unix_file_system::implref::UnixFileSystem {
     /// defaultDirectory = normalizeAndCheck(dir) 的 jnu 编码；必须以 '/' 开头；
     /// chdirAllowed（sun.nio.fs.chdirAllowed，缺省 false）为真或 cwd 与默认目录
     /// 不一致时 needToResolveAgainstDefaultDirectory = true；rootDirectory = "/"。
-    #[jvm_boundary]
+    ///
+    /// 属性查询走 `System.getProperty(String, String)`：JDK25 字节码即此形态
+    /// （JEP 486 移除 SecurityManager 后 `sun/security/action` 整包删除）；JDK21 的
+    /// `GetPropertyAction.privilegedGetProperty` 在无安全管理器时即 doPrivileged
+    /// 包裹同一查询——两版语义一致，手写层不依赖已删除的包。
+    #[jvm_boundary(upcalls = "java/lang/System.getProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")]
     pub fn new(provider: UnixFileSystemProvider, dir: String) -> Result<Self> {
         let normalized = UnixPath::normalizeAndCheck(Clone::clone(&dir))?;
         let default_dir = to_bytes(&normalized);
@@ -32,7 +36,7 @@ impl super::unix_file_system::implref::UnixFileSystem {
             )?));
         }
 
-        let prop_value = GetPropertyAction::privilegedGetProperty_str_str(
+        let prop_value = crate::java::lang::System::getProperty_str_str(
             String::from("sun.nio.fs.chdirAllowed"),
             String::from("false"),
         )?;

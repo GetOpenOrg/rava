@@ -126,6 +126,13 @@ fn _instance_ref_set(o: &Object, offset: i64, v: Object) -> bool {
 }
 
 impl Unsafe {
+    /// `isBigEndian()Z`（final）：宿主平台字节序。JDK25 的 StringUTF16 / 字节序
+    /// 敏感路径经本方法查询（JDK21 为 StringUTF16.isBigEndian native，同义）；
+    /// 小端平台（x86-64 / aarch64 Linux 与 macOS）为 false。
+    pub fn isBigEndian(&self) -> Result<bool> {
+        Ok(cfg!(target_endian = "big"))
+    }
+
     /// `loadFence()`：JVM 内存序（LoadLoad|LoadStore）——单线程原生二进制下
     /// 取 Acquire 栅栏即观测等价。
     pub fn loadFence(&self) -> Result<()> {
