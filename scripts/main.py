@@ -264,6 +264,11 @@ def main():
     # --deny fallback 升级。A 组 stub 兜底（九吞点）归 [cfg-audit] 的
     # stub_fallback 计数（位点分解），不与本行混同。
     print(FALLBACK_AUDIT.summary())
+    # 短名消歧审计（prelude 第二域）：Java 类短名遮蔽 Rust prelude 名而触发限定
+    # 改名的类清单——触发面应收敛在 junit 闭包等少数语料（163 语料零扰动）。
+    from codegen.type_map import _PRELUDE_DISAMBIGUATED as _PRELUDE_RENAMES
+    print(f"[shortname-audit] prelude-disambig={len(_PRELUDE_RENAMES)}"
+          + (f" ({', '.join(_PRELUDE_RENAMES)})" if _PRELUDE_RENAMES else ''))
     # Raw 发射与类型字符串手术仪表（收敛路线图 L5-b / 阶段 A）：
     # raw_expr/raw_stmt 为本次转译的构造事件数，type_surgery_sites 为源码静态位点数。
     # 终态全 0（Raw 全部类型化、类型查询全部经 TypeIR）；趋势只降不升。

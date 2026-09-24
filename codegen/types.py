@@ -140,6 +140,7 @@ class ClassInfo:
     is_interface:      bool = False
     is_abstract:       bool = False
     is_enum:           bool = False
+    is_record:         bool = False   # Record 属性在场（Class.isRecord 判据）
     generic_signature: str  = ''
     source_file:       str  = ''
     inner_classes:     list = None   # list[InnerClassInfo]
