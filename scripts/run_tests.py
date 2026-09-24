@@ -58,6 +58,15 @@ TESTS  = ROOT / "tests"
 E2E    = TESTS / "e2e"
 EXPECT = TESTS / "expected"
 OUT    = ROOT / "build"     # scratch 根（可被 --out-dir 覆盖）
+# JDK 版本层：双 JDK 交替时 scratch 与 target 按版本分目录（jdk21/jdk25）——
+# 混用会互相覆盖生成物且 target fingerprint 反复失效全量重编。None=版本未解析
+# （不加层，向后兼容旧 build/<test>/ 布局）。
+JDK_LAYER: "str | None" = None
+
+
+def _versioned(path: Path) -> Path:
+    return path / f"jdk{JDK_LAYER}" if JDK_LAYER else path
+
 SHARED_TARGET = OUT / "target"
 
 
@@ -74,7 +83,7 @@ RUN_TIMEOUT = 300
 # 构建档位目录（debug/release）：--release 开关切换，bin 路径与 build 命令统一读它
 PROFILE_DIR = "debug"
 # 失败现场日志目录：rustc 完整输出 / 运行期 panic+backtrace 落盘，行式输出只留摘要
-LOGS_DIR = OUT / "logs"
+LOGS_DIR = _versioned(OUT) / "logs"
 
 
 def _cargo_profile_args() -> list[str]:
@@ -341,8 +350,8 @@ def _print_env_header() -> None:
 
 
 def _test_workspace(bin_name: str) -> Path:
-    """每测试独立 scratch 工作区。"""
-    return OUT / bin_name
+    """每测试独立 scratch 工作区（JDK 版本层之下）。"""
+    return _versioned(OUT) / bin_name
 
 
 def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
@@ -751,7 +760,7 @@ def _update_expected(java_file: Path) -> tuple[str, str]:
 
     classes 目录按测试独立（build/expected-classes/<bin>），支持并行无覆盖。"""
     class_name = _class_name(java_file)
-    classes_dir = OUT / "expected-classes" / _to_bin_name(class_name)
+    classes_dir = _versioned(OUT) / "expected-classes" / _to_bin_name(class_name)
     classes_dir.mkdir(parents=True, exist_ok=True)
     r = _run([_jdk_tool("javac"), "-g", "-d", str(classes_dir), str(java_file)], cwd=ROOT)
     if r.returncode != 0:
@@ -1232,11 +1241,11 @@ def main():
     if args.failed and args.skip_failed:
         sys.exit("--failed 与 --skip-failed 互斥：前者只跑清单、后者跳过清单。")
 
+    global OUT, SHARED_TARGET, LOGS_DIR, JDK_LAYER
     if args.out_dir is not None:
         OUT = Path(args.out_dir)
         if not OUT.is_absolute():
             OUT = ROOT / OUT
-        SHARED_TARGET = OUT / "target"
 
     global PROFILE_DIR
     if args.release:
@@ -1244,6 +1253,11 @@ def main():
 
     if args.jdk is not None:
         apply_jdk_choice(args.jdk)
+
+    # JDK 版本层在 JAVA_HOME 解析后确定：scratch/target/logs 统一走 _versioned
+    JDK_LAYER = str(_current_jdk_major()) if _current_jdk_major() is not None else None
+    SHARED_TARGET = _versioned(OUT) / "target"
+    LOGS_DIR = _versioned(OUT) / "logs"
 
     jobs = args.jobs
     if jobs == 0:
