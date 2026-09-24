@@ -42,22 +42,22 @@
 
 | # | 任务 | 状态 | 证据 / 下一步 |
 |---|---|---|---|
-| 1 | 服务器 JDK21 收官轮 | ⏳ **待你执行** | 本分支预期仅剩 TestVirtualThread（挂线程模型）；TestAnnotations 已随 M3 分支转绿。服务器单 rustc 峰值 ~14G，需 `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only` |
-| 2 | JDK25 全量轮 | ⏳ **待你执行** | 三处失配已修（`f75598d`/`f30998d`）；首份干净基线，会给出 #16–18 的真实清单。本机只有 JDK21 |
+| 1 | 服务器 JDK21 收官轮 | ⏳ **用户执行中** | 本分支预期仅剩 TestVirtualThread（挂线程模型）；TestAnnotations 已随 M3 分支转绿。服务器单 rustc 峰值 ~14G，需 `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only` |
+| 2 | JDK25 全量轮 | ⏳ **用户执行**（建议 #16 修后再跑） | 三处失配已修（`f75598d`/`f30998d`）；首份干净基线，会给出 #16–18 的真实清单。本机只有 JDK21 |
 | 3 | M3 反射 L3（注解元数据 + Method.invoke 分派） | ✅ | `d3e02dc` + 本分支 M3 链（`82bd0d7` 等），`GOLDEN OK (m3)` |
 | 4 | 抽象槽位需求登记缺口 | ✅ | `f358124` |
 | 5 | TypeIR 余 10 处 | ✅ | `2f5d3c3`，type_surgery 10→0；扩大口径余 22 另记（见新增 N4） |
 | 6 | R-2 Deref（`__into_super` 25 处） | ✅ 关闭 / R-2′ 第一步 ✅ | `4d0b4c3`；第二步见新增 N3 |
 | 7 | 窗口 3（G-1/G-2 迁 rs_ir） | 🔨 **进行中** | 重写门槛②；先 ⑧⑨⑩ 结构步骤，再 G-1 本体，G-2 另评估 |
 | 8 | P-1 JDK 类名字面量清零 | ⬜ 待做 | 重写门槛③；排在 #7 之后 |
-| 9 | M-3 宏拆库试点 | ⬜ 待做 | 改宏（禁改域），需单独立项；与 TypeIR G4、R-2′ 方案 C 交织 |
+| 9 | M-3 宏拆库试点 | ⬜ 待做（**已授权**） | 2026-09-24 用户授权改 `runtime/java_rta_macros`，作为独立任务，**排在窗口 3（G-1/G-2）之后**；吸收 TypeIR G4、R-2′ 方案 C 的渲染权问题 |
 | 10 | Rust 重写 R0 启动 | ⛔ 阻塞 | 等 #7 + #8（门槛②③） |
 | 11 | JUnit M3 | ✅ | 同 #3，`GOLDEN OK (m3)` |
-| 12 | JUnit M4（timeout/join 边界） | ⛔ 挂决策 | 等 #14 线程模型 |
+| 12 | JUnit M4（timeout/join 边界） | ⬜ 待做 | #14 已定方案 A，随其实现解锁 |
 | 13 | JUnit M5（workspace 打包 + 跨 crate 分派链） | ⬜ 可开工 | M3 已过，前置解除 |
-| 14 | 线程模型终态（VT/Continuation） | ⛔ **挂决策（你拍板）** | roadmap §四-2 |
-| 15 | libc（posix 档 B） | ⛔ 挂决策 | 等真实需求 |
-| 16 | JDK25 第四失配（`sun/security/action` E0432）及后续 | ⬜ 待 #2 数据 | 需 JDK25 环境 |
+| 14 | 线程模型终态（VT/Continuation） | ⬜ **已定：方案 A**（2026-09-24 用户拍板） | 虚拟线程映射 OS 线程，Continuation 只保留必要接口，运行时手写层实现（不做用户态调度）；解锁 TestVirtualThread + JUnit M4。方案 B（真实栈切换协程）/ C（维持单线程）不采纳 |
+| 15 | libc（posix 档 B） | 📝 **已定：保持按需** | 真实用例触达目录遍历 / 文件属性 / socket 时逐 native 补，不全量手写 |
+| 16 | JDK25 第四失配（`sun/security/action` E0432）及后续 | 🔨 **下一个处理** | **用户 JDK25 全量 @4ccd3ff（09-25 05:09）：81/172 PASS**。compile 85：**81 例同一错误 `unresolved import crate::sun::security::action`**（全部为 76+1619 大闭包形态，单根因）；3 例 cargo 依赖拉取失败（parking_lot/proc-macro2/scopeguard，用户环境，重试）；TestAnnotations E0277（本分支已修）。run 5：`Unsafe.isBigEndian` stub ×3（ConstructorChain/InitOrder/StringCodePoints）、`sun/nio/cs/UTF_32BE.<init>` stub（HexFormat）、TestThreadJoin 待归类。本机装 JDK25 复现后修 |
 | 17 | JDK25 putDecimal 入口（ASB.append 链） | ⬜ 待 #2 数据 | 服务器实测确认触达后补 |
 | 18 | hashCodeOfUTF16（j25-edge 下一层） | ⬜ 待 #2 数据 | 同上 |
 | 19 | equiv 探针四件（identityHashCode/finalize/引用类型/clone） | ⬜ 待做（低优先） | 观察类，无依赖 |
@@ -73,9 +73,9 @@
 | N4 | TypeIR 扩大口径 22 处 + 完全体能力 G1–G5 | ⬜ 待做 | G1 RsType→JvmType 桥与窗口 3 同步；G4 归 M-3 |
 | N5 | invoke_virtual `this` 路径子类登记与第 4 项重复 | ⬜ 待做（清理） | 合并为定义侧单一来源 |
 | N6 | 手写 `_impl.rs` 构造的对象不进 RTA | ⬜ 待评估 | 实现体未入链时槽位落实现者 stub |
-| N7 | 第 4 项 macOS 侧验证 | ⏳ 待你本机 | macOS provider 链多一层（MacOSX→Bsd→Unix） |
+| N7 | 第 4 项 macOS 侧验证 | ⏳ 用户执行中 | macOS provider 链多一层（MacOSX→Bsd→Unix） |
 | N8 | 服务器编译资源约束 | 📝 已记录 | 单 rustc ~14G 内存；共享 target 每测试残留 0.5–1G，跑批间需清理（已写 `prune.sh`） |
-| N9 | 仓库清理：`stash@{0}` 与 /tmp/wt-* 残留 | ⬜ 待你确认 | stash 为被取代的旧修复；worktree 均为已合入分支 |
+| N9 | 仓库清理：`stash@{0}` 与 /tmp/wt-* 残留 | ✅ 服务器侧 stash 已删；用户本机 /tmp/wt-* 由用户清理（`git worktree prune` 后删目录） | worktree 均为已合入分支 |
 
 ---
 
