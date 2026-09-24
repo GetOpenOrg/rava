@@ -27,14 +27,19 @@ pub(crate) fn __field_filter(binary_name: &str) -> Option<Vec<std::string::Strin
 
 /// Rust 符号路径 → Java 声明类 binary name（斜线形态）。
 ///
-/// 翻译方法的符号形态（std Backtrace Display，TestAtomics scratch 实测）：
+/// 翻译方法的符号形态（std Backtrace Display，随 rustc 版本而异）：
 /// - 包裹体形态：`<java_runtime::jdk::internal::reflect::reflection::Reflection>::getCallerClass`
-///   （inherent 方法按类型的规范化路径符号化，`_impl.rs` 伴生方法亦然）；
-/// - 泛型尾巴形态：`...::AtomicReference::<Object>::__clinit` / `...::{closure#0}`。
+///   / `<Type as Trait>::m`（inherent / trait 方法的限定 Self 形态）；
+/// - 泛型形态两种：`...::AtomicReference::<Object>::__clinit`（rustc 1.98 实测）与
+///   `...::AtomicReference<V>::__clinit`（rustc 1.94 实测，泛型组紧贴类型段）；
+/// - 闭包尾巴：`...::{closure#0}`。
 /// 解析规则：
-/// - 取首个 `<` 到其后首个 `>` 的内部为路径体（泛型实参尾巴一并截断），
-///   无 `<` 按裸路径；旧的「剥首 `<` 剥尾 `>`」会把 `>` 留在类型段里
-///   （`Reflection>`）导致永不命中——本批修正；
+/// - 跨模块 impl 组 `<impl T>` / `<impl Tr for T>` 取实现类型（_impl_self_type），
+///   限定 Self 包裹体取 Self 类型（_unwrap_qualified_self），再删除全部成对
+///   尖括号泛型组（_strip_generic_groups）——与泛型打印形态无关。旧实现取
+///   「首个 `<` 到首个 `>`」，在 1.94 形态下取到泛型形参 `V`，泛型类帧全部
+///   解析失败 → getCallerClass 越过调用者返回 null → MethodHandles.lookup
+///   抛 IllegalCallerException（TestAtomics 服务器侧 EIIE 根因）；
 /// - 从右向左跳过方法/函数段（小写或下划线开头、空段），首个大写开头段 = 类型段；
 /// - 类型段的 `_` 是内部类 `$` 分隔（Java 类名不含下划线，宏对嵌套类即此命名）；
 /// - 包段末段的「类文件 stem」（snake(类简单名)，如 atomic_reference / reflection /
@@ -49,18 +54,9 @@ fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
         "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe",
         "use", "where", "while",
     ];
-    // 路径体：`<...>` 包裹体取内部（首个 `>` 前截断，泛型实参一并丢弃），
-    // 其后的 `::method` 段对类解析无意义；无包裹体按裸路径。
-    let path: &str = if let Some(open) = symbol.find('<') {
-        let rest = &symbol[open + 1..];
-        let end = rest.find('>').unwrap_or(rest.len());
-        &rest[..end]
-    } else {
-        symbol
-    };
+    let path = _strip_generic_groups(&_unwrap_qualified_self(&_impl_self_type(symbol)));
     let start = path.find("java_runtime::")?;
-    let path = path[start..].split('<').next()?;
-    let segs: Vec<&str> = path.split("::").collect();
+    let segs: Vec<&str> = path[start..].split("::").filter(|s| !s.is_empty()).collect();
     // 从右向左找类型段（首个大写开头段；小写/下划线开头为方法或辅助函数段）
     let mut idx = segs.len();
     while idx > 0 {
@@ -100,6 +96,90 @@ fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
         return None;
     }
     Some(format!("{}/{}", pkg.join("/"), type_name))
+}
+
+/// 跨模块 impl 形态 `mod::<impl Type<T>>::m` / `mod::<impl Trait for Type>::m`
+/// （`_impl.rs` 伴生方法与宏展开的 trait impl 即此形态，rustc 1.94 实测）→
+/// 实现类型的绝对路径 `Type<T>`：取深度 0 处 `<impl ` 组的内部，trait impl
+/// 取深度 1 的 ` for ` 之后。非此形态原样返回。
+fn _impl_self_type(symbol: &str) -> std::string::String {
+    let Some(open) = symbol.find("<impl ") else { return symbol.to_owned() };
+    // 须是深度 0 的组（泛型实参内部的 `<impl` 不是 Self 路径）
+    if symbol[..open].matches('<').count() != symbol[..open].matches('>').count() {
+        return symbol.to_owned();
+    }
+    let body = &symbol[open + 1..];
+    let mut depth = 1usize;
+    let mut end = body.len();
+    let mut for_at: Option<usize> = None;
+    let bytes = body.as_bytes();
+    for (i, c) in body.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' if i > 0 && bytes[i - 1] == b'-' => {}
+            '>' => {
+                depth -= 1;
+                if depth == 0 { end = i; break; }
+            }
+            _ if depth == 1 && for_at.is_none() && body[i..].starts_with(" for ") => for_at = Some(i + 5),
+            _ => {}
+        }
+    }
+    let inner = &body[..end];
+    match for_at {
+        Some(k) if k <= end => inner[k..].to_owned(),
+        _ => inner.trim_start_matches("impl ").to_owned(),
+    }
+}
+
+/// 限定 Self 包裹体 `<Type as Trait>::m` / `<Type>::m` → `Type`（成对尖括号
+/// 深度计数定位包裹体终点；` as ` 只在深度 1 处切分，泛型实参内的 ` as ` 不误切）。
+/// 非包裹形态原样返回。
+fn _unwrap_qualified_self(symbol: &str) -> std::string::String {
+    if !symbol.starts_with('<') {
+        return symbol.to_owned();
+    }
+    let mut depth = 0usize;
+    let mut out = std::string::String::new();
+    let bytes = symbol.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        match c {
+            '<' => { depth += 1; if depth > 1 { out.push(c); } }
+            // 函数指针类型的 `->` 不是尖括号
+            '>' if i > 0 && bytes[i - 1] == b'-' => out.push(c),
+            '>' => {
+                depth -= 1;
+                if depth == 0 { break; }
+                out.push(c);
+            }
+            _ if depth == 1 && symbol[i..].starts_with(" as ") => break,
+            _ => out.push(c),
+        }
+        i += 1;
+    }
+    out
+}
+
+/// 删除全部成对尖括号泛型组（含嵌套）：兼容 std Backtrace 的两种泛型打印——
+/// `Type<T>::m`（rustc 1.94 实测）与 `Type::<T>::m`（1.98 实测）；删后遗留的
+/// 空 `::` 段由调用方过滤。
+fn _strip_generic_groups(path: &str) -> std::string::String {
+    let mut depth = 0usize;
+    let mut out = std::string::String::new();
+    let mut prev = '\0';
+    for c in path.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' if prev == '-' => { if depth == 0 { out.push(c); } }
+            '>' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+        prev = c;
+    }
+    out
 }
 
 /// 捕获当前 Rust 栈的符号帧序列（std Backtrace Display 行 `   N: symbol`；

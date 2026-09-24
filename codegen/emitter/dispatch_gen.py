@@ -193,7 +193,9 @@ def _emit_for(class_bin: str, short: str, em) -> 'str | None':
             tail = f'Ok(Object::from(__r))'
             inner_body = f'let __r = {call_expr}; {tail}'
         elif is_static:
-            inner_body = f'Self::{rust_name}({call}); Ok(Object::default())' if inner == '()' \
+            # void 静态方法同样须 `?` 传播被调方法的异常（缺失即静默吞失——
+            # Method.invoke 的 InvocationTargetException 包装面拿不到异常）
+            inner_body = f'Self::{rust_name}({call})?; Ok(Object::default())' if inner == '()' \
                 else f'let __v = Self::{rust_name}({call})?; {ret_box}'
         else:
             this = f'recv.try_cast::<Self>("{class_bin}")?'
