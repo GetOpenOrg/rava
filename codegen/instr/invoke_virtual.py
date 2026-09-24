@@ -569,7 +569,10 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
             # 阶段类静默继承），叶类槽位为空会分派到声明类的 trait default（抽象 stub /
             # 声明体），丢失中间覆盖。为每个未自行声明该方法的闭包子类登记继承成员需求
             # （成员体转发到链上最近声明者，等价 JVM 子类 vtable 继承条目）。外部接收者
-            # 的调用按静态类型成员分派（sig-poly 站点已按子类分支登记），不在本登记范围。
+            # （typed 静态类型）的调用不在本登记范围——其子类填槽由定义侧按调用链槽位键
+            # 统一承担（class_writer._slot_demanded_on_chain，清单第 4 项：中间祖先实现
+            # + 叶子继承形态，如 FileSystemProvider.isSameFile → Unix 实现 → Linux 叶子）；
+            # 定义侧覆盖全部调用形态后本段与之重复，暂留（K-6b 口径已在此验证）。
             # private 方法 invokespecial 静态解析、final 方法不可覆盖，均跳过。
             if (obj_e in ('this', 'self') and not _ci_recv.is_interface
                     and _virtually_dispatched(_ci_recv, mname, _param_desc, registry)):

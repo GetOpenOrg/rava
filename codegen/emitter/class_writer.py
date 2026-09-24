@@ -797,6 +797,57 @@ def _emit_interface_special_members(ci, registry, call_chain, stub_bodies,
                 method_blocks.append(_sp_attr + '\n' + _sp_block)
 
 
+# call_chain 按类索引（{类 → {(方法名, 参数描述符部分)}}）：失效约定与
+# type_map._SHORT_INDEX_CACHE 一致——调用链身份 + 长度
+_CC_SLOT_INDEX: dict[int, tuple[int, dict]] = {}
+
+
+def _cc_slot_index(call_chain) -> dict:
+    cached = _CC_SLOT_INDEX.get(id(call_chain))
+    if cached is not None and cached[0] == len(call_chain):
+        return cached[1]
+    index: dict[str, set] = {}
+    for key in call_chain:
+        if isinstance(key, tuple) and len(key) == 3:
+            cls, mname, desc = key
+            index.setdefault(cls, set()).add((mname, desc.split(')', 1)[0] + ')'))
+    _CC_SLOT_INDEX.clear()
+    _CC_SLOT_INDEX[id(call_chain)] = (len(call_chain), index)
+    return index
+
+
+def _slot_demanded_on_chain(ci, vm, registry, call_chain) -> bool:
+    """槽位需求门控（清单第 4 项，定义侧单一决策点）：(vm 名, 参数描述符) 在 ci
+    整条超类链的任一声明层被调用链索要过，且该槽位可按 ci 逐子类登记。
+
+    调用链按**槽位键**记录需求——typed 调用 `provider.isSameFile(..)` 的常量池类
+    是抽象声明类 FileSystemProvider，入链键 = (FileSystemProvider, isSameFile)；
+    而实现来自中间祖先 UnixFileSystemProvider、叶子 LinuxFileSystemProvider 继承
+    （叶子由手写 DefaultFileSystemProvider 构造，不经 RTA 入链）。原门控只按
+    「实现者 / 本类」键查（(Linux|Unix, isSameFile) 均不在链），在账的槽位键不
+    被消费 → 叶子对 FileSystemProvider__VTable 的槽位落 abstract stub（具体声明
+    形态则静默走声明类体）。此处按需求被记录的键消费：链上任一类的
+    (m, 参数描述符) 在账即放行。
+
+    K-6b 过滤以**被索要的声明层**为起点（非实现者——实现者可为 final 覆盖，如
+    UnixFileSystemProvider.getFileSystem，final 实现正是在填上层槽位）：与调用侧
+    _virtually_dispatched 同口径（private/final 声明层、类型变量签名无 bridge
+    见证的子类不登记，避免继承成员擦除缺口的 E0053）。"""
+    if call_chain is None or not registry:
+        return False
+    from ..instr.invoke_virtual import _virtually_dispatched
+    index = _cc_slot_index(call_chain)
+    slot = (vm.name, vm.descriptor.split(')', 1)[0] + ')')
+    cur, seen = ci.super_class, set()
+    while cur and cur != _OBJECT_CLASS and cur in registry and cur not in seen:
+        seen.add(cur)
+        if slot in index.get(cur, ()):
+            return _virtually_dispatched(registry[cur], slot[0], slot[1], registry,
+                                         sub_bin=ci.name)
+        cur = registry[cur].super_class
+    return False
+
+
 def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                                          new_format_map, class_type_params,
                                          overloaded_names, visible_methods,
@@ -876,7 +927,8 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     (ci.name, _vm.name, _vm.descriptor) in call_chain or
                     (_vinh_super, _vm.name, _vm.descriptor) in call_chain
                 )
-                if not _vinh_is_user and not _vm_in_cc:
+                if not _vinh_is_user and not _vm_in_cc \
+                        and not _slot_demanded_on_chain(ci, _vm, registry, call_chain):
                     continue  # JDK 链：调用链未收录的祖先虚方法不登记（无体可转发，
                     # 留空槽位 = 声明类 trait default，与既有行为一致）
                 _vinh_existing.add((_vm.name, _vinh_param_part(_vm.descriptor)))

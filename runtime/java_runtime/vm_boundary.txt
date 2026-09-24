@@ -19,10 +19,12 @@ java/lang/ModuleLayer
 java/lang/Class
 
 # POSIX 原生族档 A（2026-09-23）：FileSystems.getDefault 的默认持有者链
-# （DefaultFileSystemHolder → $1 → getDefaultProvider → getFileSystem("file:///")）
-# 中，getFileSystem 为 UnixFileSystemProvider 的 final 声明——生成侧继承成员的
-# 需求登记不覆盖「静态类型接收者 + 抽象槽位」形态，平台 provider 子类（sun/ 存根）
-# 的 vtable 槽位缺失。类按边界惯例整体手写：getDefault 以
-# DefaultFileSystemProvider.theFileSystem() 等价承载（doPrivileged 在无安全管理器
-# 时透明，JDK 可观测行为一致）。其余成员保持 panic 存根。
+# （DefaultFileSystemHolder → $1 → getDefaultProvider → getFileSystem("file:///")）。
+# 收录理由 = 策略截断（2026-09-24 改写）：getDefaultProvider 的系统属性 /
+# ClassLoader 反射链会展开整个反射子系统（约 1000 类，bin −143M，见 d8c431c 合入
+# 说明）。原记录的「抽象槽位继承成员需求登记缺口」已在 codegen 侧根治（清单第 4
+# 项：class_writer._slot_demanded_on_chain 按调用链槽位键填子类槽），不再是收录
+# 理由。类按边界惯例整体手写：getDefault 以 DefaultFileSystemProvider.theFileSystem()
+# 等价承载（doPrivileged 在无安全管理器时透明，JDK 可观测行为一致）。其余成员保持
+# panic 存根。
 java/nio/file/FileSystems
