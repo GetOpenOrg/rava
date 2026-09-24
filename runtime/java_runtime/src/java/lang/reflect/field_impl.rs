@@ -145,6 +145,45 @@ impl Field {
         }
     }
 
+    /// 基本类型读取族的公共底座：经 `__impl_get` 取值盒（访问检查 / 接收者
+    /// 检查 / 元数据路由同源），按字段描述符做 JLS §5.1.2 拓宽到目标整型。
+    /// 描述符不在 `widen_from` 名单 → IllegalArgumentException（JDK
+    /// `UnsafeFieldAccessorImpl.newGetIllegalArgumentException` 同型）。
+    fn __get_widened_integral(&self, obj: Object, widen_from: &str, target: &str) -> Result<i64> {
+        let (descriptor, _, _, _) = self.__meta()?;
+        if descriptor.len() != 1 || !widen_from.contains(descriptor) {
+            return Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+                String::from(format!("Attempt to get {} field \"{}\" with illegal data type conversion to {}",
+                                     descriptor, self.__get_name(), target)))?));
+        }
+        let boxed = self.__impl_get(obj)?;
+        // 值盒的 toString 即十进制字面量（Character 盒按码点，Boolean 不在拓宽名单）
+        let text = boxed.0.__obj_str();
+        let v = if descriptor == "C" {
+            text.chars().next().map(|c| c as i64)
+        } else {
+            text.parse::<i64>().ok()
+        };
+        match v {
+            Some(v) => Ok(v),
+            None => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+                String::from(format!("Not an integral value for field {}", self.__get_name())))?)),
+        }
+    }
+
+    /// `Field.getLong(Object)`：long 及可拓宽到 long 的 int/short/byte/char 字段
+    /// （ObjectStreamClass.getDeclaredSUID 的 `serialVersionUID` 静态常量读取即此路径）。
+    #[jvm_native(upcalls = "java/lang/IllegalAccessException.<init>:(Ljava/lang/String;)V")]
+    pub fn __impl_getLong(&self, obj: Object) -> Result<i64> {
+        self.__get_widened_integral(obj, "JISBC", "long")
+    }
+
+    /// `Field.getInt(Object)`：int 及可拓宽到 int 的 short/byte/char 字段。
+    #[jvm_native(upcalls = "java/lang/IllegalAccessException.<init>:(Ljava/lang/String;)V")]
+    pub fn __impl_getInt(&self, obj: Object) -> Result<i32> {
+        Ok(self.__get_widened_integral(obj, "ISBC", "int")? as i32)
+    }
+
     /// `Field.set(Object, Object)`：接收者/访问检查与 get 同序；值按描述符拆箱
     /// （只接受站点装箱的基本值盒，包装类对象形态见文件头边界注记）。
     #[jvm_native(upcalls = "java/lang/IllegalAccessException.<init>:(Ljava/lang/String;)V")]
