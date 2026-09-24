@@ -4,7 +4,7 @@ invoke 指令生成器：invokespecial / invokestatic / invokevirtual / invokedy
 
 from ..type_map import short_cls as _short_cls_g
 import re
-from ..stack import StackSim
+from ..stack import StackSim, erased_base as _erased_base
 from ..rs_ir import (
     Lit, Var, RawExpr, RawStmt, NewPendingExpr, RsNamed,
 )
@@ -811,7 +811,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             from ..type_args import substitute_type_params as _subst_tp
             _sig_ret_s = _subst_tp(_sig_ret_s, _static_tbind)
         if (_static_anc_refined and _sig_ret_s in (None, rust_ret)
-                and rust_ret.split('<')[0].strip() == short_cls(_cp_cls_bin)):
+                and _erased_base(rust_ret) == short_cls(_cp_cls_bin)):
             # 擦除返回即被调类自身的擦除实例化（Enum<Object>）且方法级签名无法给出
             # 更具体类型（valueOf 的 <T> 是方法级变量）→ 与 turbofish 同步为祖先
             # 精化后的实例化（Enum<TestEnumBasic_Day>），否则局部标注与表达式 E0308

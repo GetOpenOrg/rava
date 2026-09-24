@@ -168,11 +168,15 @@ def render_cast(c: CastExpr) -> str:
             # 的 downcast 快路径恒命中（&Object 即 T），判定须由 is_instance_of 承担 →
             # 专用入口（null 通过 / 实现关系判定 / 幂等，失败 Err(class_cast) 可捕获，S-1）
             return f'{src}.try_cast_iface("{c.binary_name}")?'
-        if c.target.startswith('JArray<') and c.target.endswith('>'):
+        from .stack import is_jvm_array
+        from .type_args import split_rust_type_args
+        _targs = split_rust_type_args(c.target) if is_jvm_array(c.target) else []
+        if _targs:
             # 数组目标的 checkcast：元素类型驱动（try_cast_array，S-4/A-1 与
             # From<Object> for JArray<E> 的合流决策点）；目标整体类型在 Rust
             # 类型层取不出元素类型，故以剥一层的元素类型 turbofish 发射
-            _elem = c.target[len('JArray<'):-1]
+            # （形态探测 / 元素提取经 TypeIR 边界与语法拆分器，清单第 5 项 S9）
+            _elem = _targs[0]
             return f'{src}.try_cast_array::<{_elem}>("{c.binary_name}")?'
         return f'{src}.try_cast::<{c.target}>("{c.binary_name}")?'
     return f"<{c.target} as ::std::convert::From<Object>>::from({src})"

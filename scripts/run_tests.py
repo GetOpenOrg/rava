@@ -554,6 +554,8 @@ def _parse_raw(log: str) -> int:
             per += int(v)
         elif k == 'type_surgery_sites':
             _RAW_TOTALS['sites'] = int(v)   # 静态度量，取末值
+        elif k == 'type_surgery_ext':
+            _RAW_TOTALS['sites_ext'] = int(v)   # 扩大口径静态度量，取末值
     _RAW_TOTALS['runs'] = _RAW_TOTALS.get('runs', 0) + 1
     return per
 
@@ -567,7 +569,8 @@ def _summarize_raw() -> None:
     s = _RAW_TOTALS.get('raw_stmt', 0)
     print(f"\n[raw] raw_expr={e} raw_stmt={s}  "
           f"(合计 {e + s}，{_RAW_TOTALS['runs']} 次转译；"
-          f"type_surgery_sites={_RAW_TOTALS.get('sites', 0)} 为源码静态位点)"
+          f"type_surgery_sites={_RAW_TOTALS.get('sites', 0)} "
+          f"type_surgery_ext={_RAW_TOTALS.get('sites_ext', 0)} 为源码静态位点)"
           f"——终态全 0，趋势只降不升")
 
 

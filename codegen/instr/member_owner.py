@@ -503,7 +503,8 @@ def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: st
         _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
         _recv_targ_map = receiver_type_arg_map(_recv_ty, cls, registry)
     sig_params_v = None
-    _recv_base_v = _recv_ty.split('<')[0].strip()
+    from ..stack import erased_base as _erased_base_v
+    _recv_base_v = _erased_base_v(_recv_ty)
     if registry and _recv_base_v and _recv_base_v != cls and not _recv_is_this:
         # 接口方法经具体类接收者调用（`Map<Long,String> m = new HashMap<>(); m.put(k, v)`，
         # 局部变量的 Rust 类型是构造出的类实例化）：Rust 侧解析到类自身的方法，

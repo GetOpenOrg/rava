@@ -45,11 +45,10 @@ def _coerce_acmp_operand(expr_str: str, ty_node, registry=None, class_type_param
         return expr_str  # 基本类型不应出现在 acmp，原样保留
     # 引用类型或 self 引用：去掉 &，clone 后上转
     clean = expr_str[1:] if expr_str.startswith('&') else expr_str
-    if registry:
-        from ..type_map import _registry_short_index
-        if _registry_short_index(registry).get(ty.split('<')[0].strip()) is not None:
-            # Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）
-            return f"Object::from(Clone::clone(&{clean}))"
+    from ..stack import erased_class_of
+    if erased_class_of(ty, registry) is not None:
+        # Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）
+        return f"Object::from(Clone::clone(&{clean}))"
     from ..instr.coerce import _coerce_to_object
     return _coerce_to_object(clean, ty, registry, class_type_params)
 
@@ -269,8 +268,9 @@ def _forms_alignable(later_ty_s: str | None, hoisted_ty_s: str | None, registry=
         return True   # 无类型信息可判：维持并入（旧行为）
     if later_ty_s == hoisted_ty_s:
         return True
-    later_base = later_ty_s.split('<')[0].strip()
-    hoisted_base = hoisted_ty_s.split('<')[0].strip()
+    from ..stack import erased_base
+    later_base = erased_base(later_ty_s)
+    hoisted_base = erased_base(hoisted_ty_s)
     if later_base in _PRIMITIVE_TYPES or hoisted_base in _PRIMITIVE_TYPES:
         return False
     from ..instr.hierarchy import _is_subtype

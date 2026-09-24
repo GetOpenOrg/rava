@@ -96,14 +96,13 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
     src = f"Clone::clone(&{val_str})" if clone else val_str
     if ty in (class_type_params or ()):
         return f"Into::<Object>::into({src})"
-    if ty.startswith('JArray<'):
+    from ..stack import erased_class_of, is_jvm_array
+    if is_jvm_array(ty):
         # 数组是对象：Object 直接持有数组引用（元素类型具体化，可按 `T[]` 精确取回）
         return f"Object::from({src})"
-    if registry:
-        from ..type_map import _registry_short_index
-        _ci = _registry_short_index(registry).get(ty.split('<')[0].strip())
-        if _ci is not None:
-            return f"Object::from({src})"
+    if erased_class_of(ty, registry) is not None:
+        # registry 类 / 接口载体（擦除身份经 TypeIR 边界查询，清单第 5 项 S2）
+        return f"Object::from({src})"
     return f"Object::from_any({src})"
 
 

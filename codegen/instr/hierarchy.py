@@ -169,11 +169,9 @@ def _common_ref_type_widening(a_rust: str, b_rust: str, registry: dict | None) -
 
 def _is_interface(rust_short: str, registry: dict | None) -> bool:
     """Rust 短类名（去泛型实参）在 registry 中是否为接口。未知类型按非接口处理。"""
-    if not registry:
-        return False
-    from ..type_map import _registry_short_index
-    ci = _registry_short_index(registry).get(rust_short.split('<')[0].strip())
-    return ci is not None and ci.is_interface
+    from ..stack import erased_class_of
+    ref = erased_class_of(rust_short, registry)
+    return ref is not None and ref.is_interface
 
 
 def _super_path_to_class(from_cls: str, to_cls: str, registry: dict | None) -> str:
