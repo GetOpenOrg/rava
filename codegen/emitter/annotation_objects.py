@@ -323,11 +323,14 @@ def synthesize(emissions: dict, registry: dict) -> None:
                     entries.append(
                         f'    fn {em_m.rust_name}(&self) -> {rt}::error::Result<{cls_ty}> '
                         f'{{ Ok({cls_ty}::for_class(String::from("{iface_bin}"))) }}')
-            if entries:
-                lines.append(f'impl {jpath}__VTable for {proxy} {{')
-                lines.extend(entries)
-                lines.append('}')
-                lines.append('')
+            # 槽位已登记（__interface 应答 Rc<dyn Iface__VTable>）则 impl 块必须存在：
+            # 未承载的元素（enum 返回等形态）不生成条目，落到 trait 的缺省 panic
+            # 体（AbstractMethodError 语义，与 stub 发射口径一致）——空 impl 缺席
+            # 会让 __interface 的 `*s = Some(self)` 无处收窄（E0277）
+            lines.append(f'impl {jpath}__VTable for {proxy} {{')
+            lines.extend(entries)
+            lines.append('}')
+            lines.append('')
 
         em.text = em.text.rstrip('\n') + '\n\n' + '\n'.join(lines) + '\n'
         # 工厂登记路径（从用户 main 视角——user bin 依赖全部 lib crate 与

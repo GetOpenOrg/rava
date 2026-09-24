@@ -23,6 +23,7 @@ Java 子类天然拥有祖先的非私有实例方法；Rust wrapper 之间没�
      把祖先签名中的类型变量代入为接收者视角下的实参，填入接收者文本的插入位
 """
 
+import copy as _copy3
 import re
 import sys
 from dataclasses import dataclass, field
@@ -494,6 +495,7 @@ def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
     (方法名, 参数描述符) 给出（本类声明则为 None）。无 bridge / 真实方法不可解析
     → None（回落到普通继承路径）。
     """
+    from ..sig_types import emitted_method_sig_types
     from ..type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
 
     resolved = resolve_bridge_member(recv_ci, name, param_desc, registry, emissions, recv)
@@ -506,23 +508,47 @@ def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
     real_want = resolved['real_want']
     bridge = resolved['bridge']
 
-    # bridge 成员签名：按 bridge 描述符渲染（桥接位置即擦除静态类型）
-    param_tys = [jvm_to_rust(p, registry) for p in parse_descriptor_params(bridge.descriptor)]
+    # bridge 成员签名：K-6 单一来源（emitted_method_sig_types —— 覆盖方法的签名由
+    # 最远祖先声明按本类视角实参替换决定，方法定义侧与调用侧统一经此取签名）。
+    # bridge 自身无泛型签名，但祖先声明有（`TT;`）——代入接收者实参后得到替换视图
+    # （FrameworkField），比裸描述符的擦除形态（`FrameworkMember<Object>`）更强且
+    # 与 vtable_erasure 名单（同一来源计算）逐字一致；祖先声明也无签名 / 位数
+    # 不符 → 回退描述符形态（既有行为）。
+    _eff_params = effective_class_type_params(recv_ci, registry)
+    _sig_params, _sig_ret = emitted_method_sig_types(
+        recv_ci, bridge, _eff_params, registry)
+    param_tys = _sig_params or [jvm_to_rust(p, registry)
+                                for p in parse_descriptor_params(bridge.descriptor)]
     ret_desc = parse_descriptor_return(bridge.descriptor)
-    ret_ty = '()' if ret_desc == 'V' else jvm_to_rust(ret_desc, registry)
+    ret_ty = ('()' if ret_desc == 'V'
+              else (_sig_ret if _sig_ret and _sig_ret != '()'
+                    else jvm_to_rust(ret_desc, registry)))
     params = ', '.join(f'arg{i}: {t}' for i, t in enumerate(param_tys))
     signature = f"pub fn {member_name}(&self, {params}) -> Result<{ret_ty}>"
 
     # 转发体（翻译体词汇：`this` 接收者 + 对真实方法的调用，宏按 NeedsWrapper 路径
     # 落到 wrapper 的 `__impl_<m>`，`this.real(..)` 被重写为 vtable 分派——等价 Java
     # 桥接体的 invokevirtual）：实参从 bridge 静态类型经 From 还原到真实方法形参类型
-    # （等价桥接体的 checkcast），返回值经 Into 装箱回 bridge 静态类型（等价擦除返回）
+    # （等价桥接体的 checkcast），返回值经 Into 装箱回 bridge 静态类型（等价擦除返回）。
+    # checkcast 的全形态：bridge 静态类型是**有界类型参数的擦除**（`T extends
+    # FrameworkMember<T>` → 擦除为 FrameworkMember，渲染 `FrameworkMember<Object>`）
+    # 时，子类 wrapper 与擦除超类实例化之间没有直接 From——经 Object 往返
+    # （`From<X> for Object` 与 `From<Object> for X<A>` 对任意 wrapper 成立，
+    # 后者即宏 type_conversions 的 checkcast 语义：快路径 / 擦除重建 / CCE），
+    # 与 JVM 桥体「checkcast 真实形参类型 + invokevirtual」逐步等价。
     real_param_tys, real_ret = _sig_param_types(real_sig)
     call_args = []
     for i, (bridge_ty, real_ty) in enumerate(zip(param_tys, real_param_tys)):
         arg = f'arg{i}'
-        call_args.append(arg if bridge_ty == real_ty
-                         else f'<{real_ty} as ::std::convert::From<{bridge_ty}>>::from({arg})')
+        if bridge_ty == real_ty:
+            call_args.append(arg)
+        elif bridge_ty == 'Object':
+            call_args.append(
+                f'<{real_ty} as ::std::convert::From<Object>>::from({arg})')
+        else:
+            call_args.append(
+                f'<{real_ty} as ::std::convert::From<Object>>::from('
+                f'<Object as ::std::convert::From<{bridge_ty}>>::from({arg}))')
     call = f"this.{real_rust}({', '.join(call_args)})"
     real_inner = _result_inner(real_ret)
     if ret_desc == 'V':
@@ -542,6 +568,17 @@ def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
         parts.append('access = "protected"')
     if vt_short:
         parts.append(f'virtual_in = "{vt_short}"')
+        # 槽位 Object 位对齐（K-6b 同源）：声明类的 vtable 槽位按 A-1 存储层擦除把
+        # 自身类型形参位 Object 化，而 bridge 描述符的参数位可能是有界形参的擦除
+        # （`T extends FrameworkMember<T>` → `FrameworkMember<Object>`，非 Object）——
+        # 「桥签名即槽位签名」只对无界形参成立。这些位置经 vtable_erasure 名单交给
+        # 宏在 trait impl 条目上整体 Object 化（与 class_writer 用户链桥同源口径）。
+        from .class_writer import _override_vtable_erasure as _ovt_erasure
+        _bcopy = _copy3.copy(bridge)
+        _bcopy.virtual_in = vt_short
+        erasure = _ovt_erasure(_bcopy, recv_ci, registry)
+        if erasure:
+            parts.append(f'vtable_erasure = "{";".join(erasure)}"')
     decl = f"#[java_method({', '.join(parts)})]\n{signature} {{ {body} }}"
     return decl, decl, real_want
 
