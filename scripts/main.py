@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from codegen import transpile
 from codegen.cfg import STATS as CFG_AUDIT_STATS
 from codegen import equiv_audit as EQUIV_AUDIT
+from codegen import fallback_audit as FALLBACK_AUDIT
 from codegen.constants import (RUNTIME_JAVA_RUNTIME, RUNTIME_MACROS_CRATE,
                                scratch_pkg_version)
 from codegen.emitter import to_snake
@@ -219,8 +220,8 @@ def main():
     # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
     print(CFG_AUDIT_STATS.summary())
     if os.environ.get('JAVA_RTA_DEBUG'):
-        for method_id, reason in CFG_AUDIT_STATS.stub_fallbacks:
-            print(f"[cfg-audit] stub fallback: {method_id}: {reason}")
+        for method_id, site, reason in CFG_AUDIT_STATS.stub_fallbacks:
+            print(f"[cfg-audit] stub fallback ({site}): {method_id}: {reason}")
     # 可读性自检（V-3）：§16 禁止出现在可读层的调用形态计数，终态全 0。
     # 只统计生成文件（含 java_rta_macros::java_class 标记）：手写 *_impl.rs / *_ext.rs /
     # 基础设施（object.rs、error.rs 等）不计入，与 A-2 验收口径一致。
@@ -257,6 +258,12 @@ def main():
     # --deny 升级），不是全 0。monitor-mt 待 S-20（锁真实化）合入后补埋，
     # 详见 codegen/equiv_audit.py 模块注释。
     print(EQUIV_AUDIT.summary())
+    # 静默兜底审计（fallback-audit 方案 §4.3）：B 组 15 处非 stub 静默降级点
+    # 的触发计数（equiv_audit 同款模式）。2026-09-23 审计实证全语料零触发
+    # （死代码收窄零损失）——非零即极可能是真 bug（K-6b 型），runner 可经
+    # --deny fallback 升级。A 组 stub 兜底（九吞点）归 [cfg-audit] 的
+    # stub_fallback 计数（位点分解），不与本行混同。
+    print(FALLBACK_AUDIT.summary())
     # Raw 发射与类型字符串手术仪表（收敛路线图 L5-b / 阶段 A）：
     # raw_expr/raw_stmt 为本次转译的构造事件数，type_surgery_sites 为源码静态位点数。
     # 终态全 0（Raw 全部类型化、类型查询全部经 TypeIR）；趋势只降不升。

@@ -3,6 +3,7 @@
 """
 
 import re
+from .. import fallback_audit
 from ..render import render_stmt, render_expr, render_type
 from ..rs_ir import (
     RsNamed, RsPrimitive, RsType,
@@ -285,6 +286,11 @@ def _hoist_loop_vars(entries: list, predeclared: set[str]):
             try:
                 rendered.append(render_stmt(item))
             except Exception:
+                # B 组计数（fallback-audit §4.1）：render 失败必是 bug（空串会让
+                # 嵌套深度算错、提升判定错乱）——先可观测，strict 下穿透
+                if fallback_audit.STRICT:
+                    raise
+                fallback_audit.record('vars-render-loop')
                 rendered.append('')
 
     # 追踪每个条目的嵌套深度
@@ -404,6 +410,10 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
             try:
                 rendered.append(render_stmt(item))
             except Exception:
+                # B 组计数（fallback-audit §4.1）：同 _hoist_loop_vars Pass2
+                if fallback_audit.STRICT:
+                    raise
+                fallback_audit.record('vars-render-if')
                 rendered.append('')
 
     entry_nesting: list[int] = []
@@ -475,6 +485,10 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                     try:
                         ty_str = render_type(first_item.ty)
                     except Exception:
+                        # B 组计数：类型串 None → 对齐检查跳过（静默降级可观测化）
+                        if fallback_audit.STRICT:
+                            raise
+                        fallback_audit.record('vars-type-decl')
                         ty_str = None
                 vars_to_hoist[name] = (ty_str, decl_list, ref_idx, (decl_k, decl_nesting))
                 break
@@ -588,6 +602,10 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                     _t = _hoisted_let_type(outer_item)
                     _outer_ty_s = render_type(_t) if _t is not None else None
                 except Exception:
+                    # B 组计数：拆分判定跳过（G-3 槽位复用形态判定失真可观测化）
+                    if fallback_audit.STRICT:
+                        raise
+                    fallback_audit.record('vars-type-outer')
                     _outer_ty_s = None
                 # 类型不可对齐 → 同槽两个 JVM 变量（G-3 活跃区间分型）：
                 # 保留顶层后到 let 为独立绑定（词法作用域隔离），不降级、不并入
@@ -659,6 +677,10 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                     try:
                         _later_s = render_type(_later) if _later is not None else None
                     except Exception:
+                        # B 组计数：值侧对齐检查跳过（静默降级可观测化）
+                        if fallback_audit.STRICT:
+                            raise
+                        fallback_audit.record('vars-type-later')
                         _later_s = None
                     _hoisted_s = render_type(hoisted_type)
                     if (_later_s is not None and _later_s != _hoisted_s

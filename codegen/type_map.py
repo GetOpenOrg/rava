@@ -334,8 +334,11 @@ def parse_class_type_params(sig: str) -> list[str]:
                 i += 1  # 跳过 ':'
                 if i < len(sig) and sig[i] not in (':', '>'):
                     i = _skip_field_type_sig(sig, i)
-    except Exception:
-        pass  # 解析失败时返回已收集的部分
+    except (ValueError, IndexError):
+        # B 组收窄（fallback-audit 方案 §4.1）：只兜签名残缺形态并计数；
+        # 解析失败时返回已收集的部分（既有降级行为不变）
+        from . import fallback_audit
+        fallback_audit.record('type-map-params')
 
     return params
 

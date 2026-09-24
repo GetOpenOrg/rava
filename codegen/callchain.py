@@ -12,6 +12,7 @@ from collections import deque
 
 from .constants import (OBJECT_CLASS as _OBJECT_CLASS, CLASS_CLASS as _CLASS_CLASS,
                         RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME)
+from . import fallback_audit
 
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
@@ -350,7 +351,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             _data = resolver.resolve(name)
             try:
                 class_cache[name] = parse_class_bytes(_data, name) if _data is not None else None
-            except Exception:
+            except Exception as e:
+                # B 组计数+警告（fallback-audit §4.1）：类置 None = 静默移出层次
+                # 遍历（调用链缺口源），指名道姓记明细
+                fallback_audit.record('cc-load-class', f"{name}: {e!r}")
                 class_cache[name] = None
         return class_cache[name]
 
@@ -369,8 +373,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 _data = resolver.resolve(_OBJECT_CLASS)
                 if _data is not None:
                     _names = {m.name for m in parse_class_bytes(_data, _OBJECT_CLASS).methods}
-            except Exception:
-                pass
+            except Exception as e:
+                # B 组计数+警告：根方法名空 → 根继承判定全数落入 unresolved
+                fallback_audit.record('cc-root-names', repr(e))
             _root_method_names = frozenset(_names)
         return _root_method_names
 
@@ -592,8 +597,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             try:
                 for _rm in parse_class_bytes(_root_data, _OBJECT_CLASS).methods:
                     _enqueue_desc_types(_rm.descriptor)
-            except Exception:
-                pass
+            except Exception as e:
+                # B 组计数+警告：根描述符类型闭包丢边（全局类型依赖缺口）
+                fallback_audit.record('cc-root-desc', repr(e))
 
 
         _supertype_cache: dict[str, frozenset] = {}
@@ -824,8 +830,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                         and ci.super_class not in _stub_visited):
                     _stub_visited.add(ci.super_class)
                     _stub_queue.append(ci.super_class)
-            except Exception:
-                pass
+            except Exception as e:
+                # B 组计数+警告：stub 通道丢类（此前完全无信号）
+                fallback_audit.record('cc-stub-chan', f"{cls}: {e!r}")
 
         # 同样为 BFS 调用链中发现的类递归添加父类
         _parent_queue: deque[str] = deque()
@@ -847,8 +854,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                         and ci.super_class not in _JAVA_RUNTIME_CLASSES
                         and ci.super_class not in jdk_infos):
                     _parent_queue.append(ci.super_class)
-            except Exception:
-                pass
+            except Exception as e:
+                # B 组计数+警告：父类补全队列丢类（此前完全无信号）
+                fallback_audit.record('cc-parent-queue', f"{cls}: {e!r}")
 
         # 迟至静态边补扫（JDK25 StringLatin1.hashCode → ArraysSupport.hashCodeOfUnsigned
         # 实证）：以内部边界类为常量池类的**静态**方法引用（invokestatic）在
@@ -964,6 +972,15 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 _path.append(f"{_step[0]}.{_step[1]}:{_step[2]}")
                 _step = enqueued_from.get(_step)
             print("      [bfs-trace] " + "\n          <- ".join(_path))
+
+    # B 组 callchain 五点（fallback-audit §4.1）的警告清单：丢类此前完全无信号，
+    # 现逐条指名（封顶 20 行防爆屏；全量计数见 [fallback-audit] 行）
+    _fb_warns = fallback_audit.warnings()
+    for _w in _fb_warns[:20]:
+        print(f"[fallback-audit] 警告: {_w}")
+    if len(_fb_warns) > 20:
+        print(f"[fallback-audit] 警告: … 其余 {len(_fb_warns) - 20} 条见 "
+              f"JAVA_RTA_DEBUG=1 逐触发明细")
 
     return list(jdk_infos.values()), visited_methods, field_discover_classes
 

@@ -47,11 +47,13 @@ class AuditStats:
     consumed: int = 0
     by_kind: dict = field(default_factory=dict)
     dispatch_methods: int = 0
-    stub_fallbacks: list = field(default_factory=list)  # [(method_id, reason)]
+    stub_fallbacks: list = field(default_factory=list)  # [(method_id, site, reason)]
+    stub_exc: dict = field(default_factory=dict)        # 异常类型名 → 次数（随 stub_fallbacks 去重）
     try_regions: int = 0                                 # 结构化为 java_try! 的 try 区域数
     handler_methods: dict = field(default_factory=dict)  # method_id → 未进入结构化树的异常处理器个数（终态 0）
     instanceof_folds: int = 0                             # instanceof 静态折叠为编译期 false 的次数
     _seen: set = field(default_factory=set)
+    _stub_seen: set = field(default_factory=set)         # (method_id, site) 去重键
 
     def record(self, ledger: JumpLedger, used_dispatch: bool) -> None:
         if ledger.method_id in self._seen:
@@ -67,9 +69,19 @@ class AuditStats:
         if used_dispatch:
             self.dispatch_methods += 1
 
-    def record_stub_fallback(self, method_id: str, reason: str) -> None:
-        if all(m != method_id for m, _ in self.stub_fallbacks):
-            self.stub_fallbacks.append((method_id, reason))
+    def record_stub_fallback(self, method_id: str, reason: str, site: str = 'main',
+                             exc: str = '') -> None:
+        """stub 兜底记账。去重键 (method_id, site)：同一方法在多个吞点触发各计
+        一次（旧键 method_id 把多位点折叠成 1 并抹掉位点信息——审计报告 §一
+        附加缺陷）。site 为九吞点各一名（见 fallback_audit.stub_fallback）；
+        exc 为异常类型名，进 summary 的 exc. 分解。"""
+        key = (method_id, site)
+        if key in self._stub_seen:
+            return
+        self._stub_seen.add(key)
+        self.stub_fallbacks.append((method_id, site, reason))
+        if exc:
+            self.stub_exc[exc] = self.stub_exc.get(exc, 0) + 1
 
     def record_try_regions(self, method_id: str, count: int, untranslated_handlers: int) -> None:
         self.try_regions += count
@@ -88,13 +100,23 @@ class AuditStats:
 
     def summary(self) -> str:
         kinds = ' '.join(f"{k}={v}" for k, v in sorted(self.by_kind.items()))
+        stub = f"stub_fallback={len(self.stub_fallbacks)}"
+        if self.stub_fallbacks:
+            sites: dict[str, int] = {}
+            for _, site, _ in self.stub_fallbacks:
+                sites[site] = sites.get(site, 0) + 1
+            detail = ','.join(f"{s}={n}" for s, n in sorted(sites.items()))
+            if self.stub_exc:
+                detail += '|' + ','.join(
+                    f"exc.{k}={v}" for k, v in sorted(self.stub_exc.items()))
+            stub += f"({detail})"
         return (f"[cfg-audit] methods={self.methods} jumps={self.jumps} "
                 f"consumed={self.consumed} unconsumed={self.jumps - self.consumed} "
                 f"dispatch={self.dispatch_methods} "
                 f"try_regions={self.try_regions} "
                 f"handler_methods={len(self.handler_methods)} "
                 f"handler_jumps={self.by_kind.get('handler', 0)} "
-                f"stub_fallback={len(self.stub_fallbacks)} "
+                f"{stub} "
                 f"instanceof_fold={self.instanceof_folds} | {kinds}")
 
     def reset(self) -> None:
