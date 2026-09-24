@@ -1,0 +1,7 @@
+cls-present=true
+cls-value=3,name=cls
+m-present=true
+m-value=7,name=m1
+annotated-methods=1
+f-present=true
+f-default=1,n
