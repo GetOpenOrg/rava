@@ -12,6 +12,7 @@
 2. **架构完成前禁止全量测试**：定向验证（红线集 + 金丝雀）除外，全量 run_tests.py 只在架构节点合入后由主会话统一执行。
 3. **子代理串行执行**：一次只运行一个子代理（用户指定，内存约束）；前一个完成并合入验证后再启动下一个。
 4. **任务执行顺序（2026-09-23 同步）**：~~陈旧树筛→A-8/S-20/数组视图→downcast 链→S-19→A-5/A-4~~ **全部完成**。当前：ice 修复①② + `__unsafe_int_cell` 委托 + TestSealed `.0`（在途双开）→ K-6b 双侧一致（6 例）→ G-3 三重槽（窗口 3 前置）→ TypeIR 批次 3（invoke 域 9 处）→ M-3 试点 → 窗口 3 → P-1/Rust 重写 R0（三信号中"发现频率月级"仍差）。**子代理并行纪律：本机 ≤2（内存）+ 另一机 2；本地禁全量（定向 ≤10 例），全量归用户服务器**。
+5. **当前执行顺序（2026-09-24 晚，用户确认）**：清单 3/11（M3）→ 4+20 → 5（TypeIR）→ 6（R-2′）**均已完成** → **7 窗口 3（进行中）** → 8 P-1 → 10 R0（门槛②③达成后）；13 M5、19 equiv 探针、N 系列按依赖穿插。1/2 收官轮待你执行，数据回来后 16–18 插队。挂决策：12/14/15。
 
 ---
 
@@ -30,6 +31,51 @@
 - **streams 三测全绿（2026-09-21 午后，P-3 合入后主会话 --clean 6/6）**：TestStreamBasic / TestStreamAdvanced / TestStreamCollectors + TestStringBuilderOps 全 PASS，输出逐字一致。
 - 架构里程碑链：vtable 双指针多态 → CFG 支配树结构化（含 try/catch `java_try!`、`<clinit>` 语义、异常对象）→ println 字节码化 → K-6 槽位签名模型 → 擦除运行时身份阶段 1（非泛型 `I__VTable` + `__interface`）→ S-18 接口分派 BFS（fcb04ce）→ P-3 边界补全（7b64afa，join + DoubleToDecimal）。
 - 教训：**全量跑批必须 tee 落盘**（本轮 224 分钟 stdout-only，38 个 run 族无 stderr 只能二次定向）。
+
+---
+
+## 📋 开放项总表（2026-09-24 晚核对：原 20 项清单 + 本会话新增）
+
+> 分支 `claude/jolly-dijkstra-diftum`（未合 main）。「✅」项的完整记录见下方各自完成行；本表只列状态与下一步。
+
+### 原 20 项清单
+
+| # | 任务 | 状态 | 证据 / 下一步 |
+|---|---|---|---|
+| 1 | 服务器 JDK21 收官轮 | ⏳ **待你执行** | 本分支预期仅剩 TestVirtualThread（挂线程模型）；TestAnnotations 已随 M3 分支转绿。服务器单 rustc 峰值 ~14G，需 `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only` |
+| 2 | JDK25 全量轮 | ⏳ **待你执行** | 三处失配已修（`f75598d`/`f30998d`）；首份干净基线，会给出 #16–18 的真实清单。本机只有 JDK21 |
+| 3 | M3 反射 L3（注解元数据 + Method.invoke 分派） | ✅ | `d3e02dc` + 本分支 M3 链（`82bd0d7` 等），`GOLDEN OK (m3)` |
+| 4 | 抽象槽位需求登记缺口 | ✅ | `f358124` |
+| 5 | TypeIR 余 10 处 | ✅ | `2f5d3c3`，type_surgery 10→0；扩大口径余 22 另记（见新增 N4） |
+| 6 | R-2 Deref（`__into_super` 25 处） | ✅ 关闭 / R-2′ 第一步 ✅ | `4d0b4c3`；第二步见新增 N3 |
+| 7 | 窗口 3（G-1/G-2 迁 rs_ir） | 🔨 **进行中** | 重写门槛②；先 ⑧⑨⑩ 结构步骤，再 G-1 本体，G-2 另评估 |
+| 8 | P-1 JDK 类名字面量清零 | ⬜ 待做 | 重写门槛③；排在 #7 之后 |
+| 9 | M-3 宏拆库试点 | ⬜ 待做 | 改宏（禁改域），需单独立项；与 TypeIR G4、R-2′ 方案 C 交织 |
+| 10 | Rust 重写 R0 启动 | ⛔ 阻塞 | 等 #7 + #8（门槛②③） |
+| 11 | JUnit M3 | ✅ | 同 #3，`GOLDEN OK (m3)` |
+| 12 | JUnit M4（timeout/join 边界） | ⛔ 挂决策 | 等 #14 线程模型 |
+| 13 | JUnit M5（workspace 打包 + 跨 crate 分派链） | ⬜ 可开工 | M3 已过，前置解除 |
+| 14 | 线程模型终态（VT/Continuation） | ⛔ **挂决策（你拍板）** | roadmap §四-2 |
+| 15 | libc（posix 档 B） | ⛔ 挂决策 | 等真实需求 |
+| 16 | JDK25 第四失配（`sun/security/action` E0432）及后续 | ⬜ 待 #2 数据 | 需 JDK25 环境 |
+| 17 | JDK25 putDecimal 入口（ASB.append 链） | ⬜ 待 #2 数据 | 服务器实测确认触达后补 |
+| 18 | hashCodeOfUTF16（j25-edge 下一层） | ⬜ 待 #2 数据 | 同上 |
+| 19 | equiv 探针四件（identityHashCode/finalize/引用类型/clone） | ⬜ 待做（低优先） | 观察类，无依赖 |
+| 20 | 缺席直接接口宽化（原记「11 个」） | ✅ | `ce79244`（实测 20 个，已全部物化） |
+
+### 本会话新增 / 遗留
+
+| # | 任务 | 状态 | 说明 |
+|---|---|---|---|
+| N1 | Object 无参构造在反射里不可见 | ⬜ 待做 | 手写 Object 无方法表 `<init>` 行；补合成行会经 getConstructors 父类上溯改变全部类枚举，需反射面整体复核 |
+| N2 | 序列化构造器只返元数据 | ⬜ 观察 | 反序列化实例化语义未建模，待真实用例 |
+| N3 | R-2′ 第二步：上转形态统一 UFCS → `UpcastExpr` IR 节点 | ⬜ 待做 | 改 `render.upcast_expr` 一处，但大工作区约 277 行生成树变化，需全量对账 |
+| N4 | TypeIR 扩大口径 22 处 + 完全体能力 G1–G5 | ⬜ 待做 | G1 RsType→JvmType 桥与窗口 3 同步；G4 归 M-3 |
+| N5 | invoke_virtual `this` 路径子类登记与第 4 项重复 | ⬜ 待做（清理） | 合并为定义侧单一来源 |
+| N6 | 手写 `_impl.rs` 构造的对象不进 RTA | ⬜ 待评估 | 实现体未入链时槽位落实现者 stub |
+| N7 | 第 4 项 macOS 侧验证 | ⏳ 待你本机 | macOS provider 链多一层（MacOSX→Bsd→Unix） |
+| N8 | 服务器编译资源约束 | 📝 已记录 | 单 rustc ~14G 内存；共享 target 每测试残留 0.5–1G，跑批间需清理（已写 `prune.sh`） |
+| N9 | 仓库清理：`stash@{0}` 与 /tmp/wt-* 残留 | ⬜ 待你确认 | stash 为被取代的旧修复；worktree 均为已合入分支 |
 
 ---
 
@@ -88,16 +134,9 @@
 | **冲刺收官：JDK21 预期 168/169** | 2026-09-24 | 清单 8 例全部处理（CF/FilesApi/ZonedDateTime/DateTimeFormat 修复 + StringNewMethods/StreamMore/RecordPattern 出列 + VT 挂线程模型决策）。**服务器收官轮可跑**：pull 5171851 后 `--jdk 21` 全量（新版本化清单首次播种 failed_tests_jdk21.txt） |
 | ~~JDK25 编译墙双错（jdk25-wall 代理）~~ | **✅ 合入（`19373bb`+`ff291e0`，merge `f75598d`；JDK25 HelloWorld 端到端 PASS+JDK21 回归 4/4+双种子 0+审计恒等）** 代理修正主会话两处初判：E0407 真改名 uncheckedNewStringNoRepl（_nf_covered 实为空集——伴生是裸 fn 扫不出）→ 伴生 trait impl 签名提取+接口恒发声明+模型缺席方法补发；E0308=arrayBaseOffset I→J → `core_` 伴生核心约定。**JDK25 全量可重跑** |
 | 原 E0407 条目（已修） | JDK25 全量首炮 | `error[E0407]: method 'newStringNoRepl' is not a member of trait 'JavaLangAccess__VTable'`——**非接口方法集漂移**（javap 双侧确认两版接口均有该方法），真因**修正（本地复现定位）**：JDK25 对该族**改名演化**（newStringNoRepl→newStringUTF8NoRepl），新名有调用边进生成 trait、旧名没有；手写伴生实现旧名 → trait 缺成员。另有第二错 E0308（CHM.set_ABASE i32→i64，JDK25 的 ABASE 字段类型演化）。**修法定案**：class_writer:293 的 `_nf_covered` 命中对接口场景仍发 abstract 声明（trait 恒含伴生方法集）+ ABASE widening 按证据修。**JDK25 全量暂停等此修**（169×20 分钟全撞同一墙）；math 双件（已修）在此墙之后才可见 |
-| **在途（2026-09-23 深夜派发，派单前已核对本表+远端分支零在途）** | /tmp/wt-* 三 worktree 基 5828ef6 | ①**typeir-b3**（arch/typeir-batch3）：TypeIR 批次 3 invoke 域 9 处接入（invoke_sig×5+invoke_virtual×4）——语义零变化硬约束（生成树逐字节对账）+next3 的 148c6bc 行为保持；②**executors-fix**（fix/executors-family）：VT 解锁件三错（DelayedWorkQueue E0407/E0782+ForkJoinTask E0425），vm_boundary.txt 仅探针临时解除须还原；③**posix-survey**（纯分析）：sun/nio/fs 原生族手写前置盘点（FilesApi 解锁方案）。域互避：invoke 域/emitter 域/只读 |
-| **在途（2026-09-24 凌晨追加）** | /tmp/wt-j25wall 基 d3c02e9 | **jdk25-wall 代理**：JDK25 编译墙双错（E0407 伴生声明保留 + E0308 CHM ABASE widening）——主会话已复现定性定位，代理实施。验收=--jdk 25 HelloWorld 编译墙倒 + --jdk 21 回归绿（声明行增量为预期）。typeir-b3 仍在途（invoke 域） |
-| **JDK25 第三失配：BFS 静态边时序丢失（2026-09-24 实测）** | HelloWorld --jdk 25 复现 | 编译墙修复实证生效（E0407/E0308 消失，推进 run 层）；新卡点 `stub: ArraysSupport.hashCodeOfUnsigned:([BIII)I`。**证据链**：生成 string_latin1.rs:211 的调用边存在（发射侧正常）、JAVA_RTA_DEBUG 零 fallback 记录（=in_call_chain false 链外 stub，非翻译回退）→ **调用侧发射与 BFS 方法键入队不一致**（迟到的静态调用边未补扫——next3「迟至实现者」的静态边变体；ArraysSupport 经别的通道进闭包后，其方法键未被 StringLatin1.hashCode 的边补上）。排队 locale 之后，修法方向=callchain 边时序对齐（发射侧见到的方法引用与入队集合同源） |
+| ~~在途派发批次（2026-09-23 深夜 ~ 09-24，8 行）~~ | **✅ 全部收官（2026-09-24 核对：逐项有合入提交，无残留在途）** | ①typeir-b3 → `8c8ba84`（TypeIR 批次 3，169 生成树 diff=0）；②executors-fix → `d3c02e9`（VT 解锁三错）；③posix-survey → 报告 `2026-09-23-posix-survey.md`，实施 `d8c431c`（档 A）+`0f46fb8`（Linux 侧）；④jdk25-wall → `f75598d`（编译墙双错）；⑤vars-hoist（v1/v2/v3 三棒）→ `6da2a14`（CHM transfer 吞节点根因）；⑥fallback-narrow → `466f513`（兜底收窄 + [fallback-audit]）；⑦tzdb-embed → `b0964cc`（TestZonedDateTime 全绿）；⑧reflect-l3 → `d3e02dc`；⑨atomics-regression → `7495d3b`（真凶 _is_jnull 误用）；⑩jnull 批量修 → `4ccd3ff`（缺陷家族清零）。其下棒 JUnit M3 已收官（见 JUnit M3 行）。/tmp/wt-* worktree 均为已合入分支的残留，可删 |
+| ~~JDK25 第三失配：BFS 静态边时序丢失（2026-09-24 实测）~~ **✅ 已修（`f30998d`：非迟到窗口，而是 boundary 静态边被 _propagate_virtual_targets 确定性丢弃；迟至静态边补扫三道门，JDK25 HelloWorld PASS；下一层 hashCodeOfUTF16 并入 JDK25 边界 stubs 遗留）** | HelloWorld --jdk 25 复现 | 编译墙修复实证生效（E0407/E0308 消失，推进 run 层）；新卡点 `stub: ArraysSupport.hashCodeOfUnsigned:([BIII)I`。**证据链**：生成 string_latin1.rs:211 的调用边存在（发射侧正常）、JAVA_RTA_DEBUG 零 fallback 记录（=in_call_chain false 链外 stub，非翻译回退）→ **调用侧发射与 BFS 方法键入队不一致**（迟到的静态调用边未补扫——next3「迟至实现者」的静态边变体；ArraysSupport 经别的通道进闭包后，其方法键未被 StringLatin1.hashCode 的边补上）。排队 locale 之后，修法方向=callchain 边时序对齐（发射侧见到的方法引用与入队集合同源） |
 | **悬案结案：streams 族服务器-only compile error = OOM（2026-09-24 实证）** | 用户贴完整输出 | `rustc ... (signal: 9, SIGKILL: kill)` 无任何 error[E]——**内存不足被 OOM Killer 杀**，非代码缺陷（本地同树 PASS=mac 内存充裕）。服务器 1500+ 类大 crate 编译卡在内存阈值附近（Zoned 同量级过/StreamAdvanced 挂）；main.py 直接跑走 debug+incremental 更吃内存。**缓解：CARGO_INCREMENTAL=0 + 全量走 run_tests（release）+ WSL2 加 swap（.wslconfig memory/swap）**。25m/29m 慢=/mnt/d 慢 IO 叠加。main.py 的 `[codegen] 继承成员重名未声明` 日志=信息性（覆盖判定常规决策），可选降噪 |
-| **在途（2026-09-24 下午，串行续棒）** | /tmp/wt-jnull 基 7495d3b | **jnull 批量修**（唯一代理）：8 处 `_is_jnull(&wrapper)` 同型误用（atomics-regression 遗留清单）+全库扫尾清零该缺陷家族；口径=v.is_jvm_null()。Atomics 回归已合入（7495d3b，翻案=2c67aaa Properties 伴生 1 行修）——**服务器收官轮解锁（预期 168/169）**。下棒：M3 Result 短名消歧（**✅ 已收官，见下 JUnit M3 行**） |
-| **在途（2026-09-24 午后）** | /tmp/wt-atomics 基 d3e02dc | **atomics-regression 代理**（串行唯一）：TestAtomics 回归=vars-hoist-v3 漏网[reflect-l3 哨兵发现，0f46fb8 基线实证]，ExceptionInInitializerError@AtomicReference 链——排查=生成树 diff d5bb804 基线锁定嫌疑 clinit+身份证据链取证。验收含 TestHoistShadow/TestChmTransfer 不回退+**回归面含 Atomics 自身**（教训固化）。reflect-l3 已合入 d3e02dc（注解元数据全链+invoke 分派协议定稿+M3 三缺口实锤——Result 短名遮蔽为下一层首选） |
-| **在途（2026-09-24 午，阶段转进）** | /tmp/wt-rfl3 基 0f46fb8 | **reflect-l3 代理**（串行唯一）：段 1 注解元数据（build.rs RuntimeVisibleAnnotations 三挂载点+isAnnotationPresent/getAnnotation）→段 2 Method.invoke 分派协议（架构决策级：静态方法需静态分发表，与 A-4 合流的核心难点）→JUnit M3 golden（JUnitCore.runClasses 跑通 @Test 发现与调用）。验收含反射面回归+M1/M2 golden 不回退。三棒串行已收官（locale-regression/vars-hoist-v3/posix-linux 服务器侧） |
-| **在途（2026-09-24 上午更新）** | /tmp/wt-hoist2 基 466f513 | **vars-hoist-v2**（第二棒——第一棒内存中断 WIP 已归档于 fix/vars-hoist-chm 可参考）；fallback-narrow 已由主会话接管收官合入（466f513：兜底收窄+[fallback-audit] 审计线+注入实验实证）。**自主派发模式已授权启用**（代理完成→合入→自动取队列派发） |
-| **在途（2026-09-24 午追加）** | /tmp/wt-hoist + /tmp/wt-fallback 基 7f7ec74 | ①**vars-hoist**：vars.py 提升缺陷专项（CHM transfer 根因——let_decl_check 早退+span 无条件降级，槽位复用身份模型；前人败退于 Formatter 连环回归，任务书含 Formatter 防线纪律+身份模型方向[LVT 区间驱动]）；②**fallback-narrow**：兜底收窄实施（A 组白名单 CfgError+B 组计数收窄+[fallback-audit] 审计线+STRICT 分级；注入实验实证吞 bug 能力；三活例证含昨天 typeir-b3 的 V3 别名错） |
-| **在途（2026-09-24 晨追加）** | /tmp/wt-tzdb 基 f75598d | **tzdb-embed 代理**：tzdb.dat 编译期嵌入（include_bytes，JDK21 数据保证金本位）——StaticProperty.javaHome 先行→ZoneInfoFile 链路探明→资源重定向 vs 伴生手写按证据选——BFS 前沿推进法。目标 TestZonedDateTime |
 | **五项决策定案（2026-09-23 深夜，用户拍板按建议执行）** | — | ①**数据文件供给=编译期嵌入**（tzdb.dat/locale 数据 include 进 runtime，零依赖单二进制，golden 可比性最强）——解锁 ZonedDateTime（tzdb 先行）与 DateTimeFormat（locale 后）；②**libc 暂不破**（posix 档 B 缓做，档 A 纯 std 足够）；③VT 的 vm_boundary 策略等 executors-fix 结果再定；④**下一波排期修订**：E0407 修复（JDK25 通杀墙，域与 executors-fix 相邻故等其收工）→ **tzdb 嵌入**（ZonedDateTime，挟两例收益最高）→ FilesApi 档 A（posix-survey §6 切入序）→ locale 嵌入（DateTimeFormat）→ M3 反射 L3；⑤服务器 JDK21 全量等三代理合入后一次跑 |
 | ~~FilesApi 解锁（posix 档 A，posix-tier-a 代理）~~ | **✅ 合入（3 提交，merge `d8c431c`；TestFilesApi 收官全绿）** 手写 ~2345 行按 7 步切入序；BFS 前沿推进链含报告外坑（getBytesNoRepl/getModule/FileChannel clinit upcall/invoke.py makeConcat Z 参[JLS 5.1.11 布尔拼接]/implref 稳定别名[K-4 必要件——冲突改名类跨闭包恒定路径]）；FileSystems 边界收编（bin 反降 143M，削反射子系统 ~1000 类）；Linux 侧 cfg 双形态**待服务器轮验证**。**新立项线索**：①typed 调用对抽象槽位（静态类型接收者）的继承成员需求登记缺口（FileSystems 根因，codegen demand 登记扩展——**✅ 清单第 4 项 `f358124` 已根治**）②档 B 落差注释在案（R/W/X access/jnu 编码/socket 通道/UTF_8$Decoder 机器） |
 | 原 FilesApi 调查条目（已兑现） | 65 native 全集盘点（49 Unix+6 Linux+8 Bsd+1 Mac+1）；**用例面只需 4 native（open0/stat0/unlink0/strerror）+init**；先行依赖 StaticProperty.USER_DIR（10 行）。**档 A**（解锁 TestFilesApi 双平台）≈2300-2700 行/13 文件（含邻接 sun/nio/ch 的 FileChannelImpl/FileDispatcherImpl 700-800）；**档 B**（全集）≈5000-6000 行且需引入 **libc 依赖**（架构决策——runtime 目前零 libc）。7 步切入序见报告 §6，每步 BFS 前沿推进刷新 stub |
