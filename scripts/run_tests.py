@@ -71,6 +71,12 @@ def fmt_dur(sec: float) -> str:
 
 # 每测试运行阶段超时（秒）；编译阶段用更宽的上限捕获病态构建
 RUN_TIMEOUT = 300
+# 构建档位目录（debug/release）：--release 开关切换，bin 路径与 build 命令统一读它
+PROFILE_DIR = "debug"
+
+
+def _cargo_profile_args() -> list[str]:
+    return ["--release"] if PROFILE_DIR == "release" else []
 BUILD_TIMEOUT = 600
 
 
@@ -172,7 +178,7 @@ def _pline(name_w: int, status: str, name, tail: str = "", aux: str = "",
 
 def _bin_size_mb(bin_name: str) -> str:
     """构建产物大小（闭包膨胀观测列；TestTernary JDK25 1611 类 30MB 的教训）。"""
-    p = SHARED_TARGET / "debug" / bin_name
+    p = SHARED_TARGET / PROFILE_DIR / bin_name
     try:
         return f"{p.stat().st_size / 1048576:.1f}M"
     except OSError:
@@ -329,7 +335,7 @@ def _print_env_header() -> None:
     _flag_vars = ("PYTHONHASHSEED", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS",
                   "JAVA_RTA_DEBUG", "JAVA_RTA_STRICT", "JAVA_RTA_BFS_EDGE_AUDIT")
     _flags = " ".join(f"{k}={os.environ.get(k, '(unset)')}" for k in _flag_vars)
-    print(f"[meta] git {_git_desc()} | {_flags} | out={OUT}")
+    print(f"[meta] git {_git_desc()} | profile={PROFILE_DIR} | {_flags} | out={OUT}")
 
 
 def _test_workspace(bin_name: str) -> Path:
@@ -349,7 +355,7 @@ def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     """cargo build --bin <class>（共享 target 缓存）。返回 (ok, 首个 error 行)。"""
     bin_name = _to_bin_name(class_name)
     try:
-        r = _run(["cargo", "build", "--bin", bin_name], cwd=out_dir, env=_cargo_env())
+        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name], cwd=out_dir, env=_cargo_env())
     except subprocess.TimeoutExpired:
         return False, f"build timeout ({fmt_dur(BUILD_TIMEOUT)})"
     if r.returncode != 0:
@@ -561,7 +567,7 @@ RUN_SUBFAMILIES = ('stub-hit', 'native-hit', 's8-crash', 'runtime-panic')
 def _classify_run_failure(class_name: str) -> tuple[str, str]:
     """run 失败后直跑二进制抓 stderr 分类。返回 (子族, 摘要)；
     子族为空串表示无法分类（如重跑超时 / 无 panic 输出）。"""
-    bin_path = SHARED_TARGET / "debug" / _to_bin_name(class_name)
+    bin_path = SHARED_TARGET / PROFILE_DIR / _to_bin_name(class_name)
     if not bin_path.exists():
         return "", "binary missing on re-run"
     try:
@@ -672,7 +678,7 @@ def _apply_deny(deny: list[str],
 def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
     """直接执行 binary。返回 (状态, stdout)：状态 ∈ ok / timeout / error。"""
     bin_name = _to_bin_name(class_name)
-    bin_path = SHARED_TARGET / "debug" / bin_name
+    bin_path = SHARED_TARGET / PROFILE_DIR / bin_name
     try:
         r = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -685,7 +691,7 @@ def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
 def _run_binary(class_name: str) -> tuple[bool, str]:
     """直接执行已编译的 binary（共享 target 目录下，不经 cargo 避免锁竞争）。"""
     bin_name = _to_bin_name(class_name)
-    bin_path = SHARED_TARGET / "debug" / bin_name
+    bin_path = SHARED_TARGET / PROFILE_DIR / bin_name
     r = subprocess.run([str(bin_path)], capture_output=True, text=True)
     return r.returncode == 0, r.stdout
 
@@ -1002,7 +1008,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         ws = _test_workspace(bin_name)
         print(f"  [build] {bin_name}…", end=" ", flush=True)
         t0 = time.perf_counter()
-        r = _run(["cargo", "build", "--bin", bin_name], cwd=ws, env=_cargo_env())
+        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name], cwd=ws, env=_cargo_env())
         dur = time.perf_counter() - t0
         build_durations[bin_name] = dur
         if r.returncode == 0:
@@ -1178,6 +1184,7 @@ def main():
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     ap.add_argument("--jdk",             type=int, default=None, metavar="N",
                     help="指定 JDK 主版本（javac/java/翻译语料同源；默认沿用 JAVA_HOME 或自动发现）")
+    ap.add_argument("--release",         action="store_true", help="release 档位构建运行（LTO 慢编译/快运行；默认 dev）")
     ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
     ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")
     ap.add_argument("--failed-file",     metavar="PATH", default=None, help="失败清单路径（默认 build/failed_tests.txt）")
@@ -1198,6 +1205,10 @@ def main():
         if not OUT.is_absolute():
             OUT = ROOT / OUT
         SHARED_TARGET = OUT / "target"
+
+    global PROFILE_DIR
+    if args.release:
+        PROFILE_DIR = "release"
 
     if args.jdk is not None:
         apply_jdk_choice(args.jdk)
