@@ -28,7 +28,10 @@ impl<E: Clone + Default + 'static + From<Object> + Into<Object>> Enum<E> {
         if let Some(found) = lookup_constant(&cls_name, &format!("{}", name)) {
             return Ok(Enum::<E>::from(found));
         }
-        if _is_jnull(&name) {
+        // name 为 String wrapper：null 判定走 vtable 钩子（`_is_jnull` 只对
+        // `Object` 载体生效、对 wrapper 恒 false——原 NPE 检查死，null 名会
+        // 误走 IllegalArgumentException 分支）
+        if name.is_jvm_null() {
             return Err(JvmError::from(
                 NullPointerException::new_str(String::from("Name is null"))?));
         }

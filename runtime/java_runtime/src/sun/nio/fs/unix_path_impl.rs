@@ -237,10 +237,13 @@ impl UnixPath {
     }
 
     /// `toString()`：jnu 解码（normalizeJavaPath 恒等承载），惰性缓存。
+    /// 缓存值是 String wrapper：null 判定走 vtable 钩子 `is_jvm_null()`
+    /// （`_is_jnull` 只对 `Object` 载体生效、对 wrapper 恒 false——原判空死，
+    /// 每次调用都重解码，缓存失效）。
     #[jvm_boundary]
     pub fn __impl_toString(&self) -> Result<String> {
         let cached = self.__get_stringValue();
-        if !_is_jnull(&cached) {
+        if !cached.is_jvm_null() {
             return Ok(cached);
         }
         let s = String::from(jnu_decode(&to_u8(&self.__get_path())).as_str());

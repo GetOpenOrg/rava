@@ -62,6 +62,9 @@ impl UnixFileSystemProvider {
     }
 
     /// `checkUri(URI)`: file URI 形态校验（scheme/authority/path/query/fragment）。
+    /// 四个 URI 组件均为 String wrapper：null 判定走 vtable 钩子 `is_jvm_null()`
+    /// （`_is_jnull` 只对 `Object` 载体生效、对 wrapper 恒 false——原判定全死，
+    /// 组件判空形同虚设）。
     #[jvm_boundary(upcalls = "java/net/URI.getScheme:()Ljava/lang/String; java/net/URI.getRawAuthority:()Ljava/lang/String; java/net/URI.getPath:()Ljava/lang/String; java/net/URI.getRawQuery:()Ljava/lang/String; java/net/URI.getRawFragment:()Ljava/lang/String; java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
     pub fn checkUri(&self, uri: URI) -> Result<()> {
         let scheme_ok = uri.getScheme()?
@@ -74,7 +77,7 @@ impl UnixFileSystemProvider {
             ));
         }
         let authority = uri.getRawAuthority()?;
-        if !_is_jnull(&authority) {
+        if !authority.is_jvm_null() {
             return Err(JvmError::from(
                 crate::java::lang::IllegalArgumentException::new_str(String::from(
                     "Authority component present",
@@ -82,7 +85,7 @@ impl UnixFileSystemProvider {
             ));
         }
         let path = uri.getPath()?;
-        if _is_jnull(&path) {
+        if path.is_jvm_null() {
             return Err(JvmError::from(
                 crate::java::lang::IllegalArgumentException::new_str(String::from(
                     "Path component is undefined",
@@ -97,7 +100,7 @@ impl UnixFileSystemProvider {
             ));
         }
         let query = uri.getRawQuery()?;
-        if !_is_jnull(&query) {
+        if !query.is_jvm_null() {
             return Err(JvmError::from(
                 crate::java::lang::IllegalArgumentException::new_str(String::from(
                     "Query component present",
@@ -105,7 +108,7 @@ impl UnixFileSystemProvider {
             ));
         }
         let fragment = uri.getRawFragment()?;
-        if !_is_jnull(&fragment) {
+        if !fragment.is_jvm_null() {
             return Err(JvmError::from(
                 crate::java::lang::IllegalArgumentException::new_str(String::from(
                     "Fragment component present",
@@ -205,7 +208,9 @@ impl UnixFileSystemProvider {
         let file = UnixPath::toUnixPath(Clone::clone(&path))?;
         file.checkRead()?;
         let attrs = UnixFileAttributes::getIfExists(Clone::clone(&file))?;
-        if !_is_jnull(&attrs) {
+        // attrs 为 UnixFileAttributes wrapper：null 判定走 vtable 钩子
+        // （`_is_jnull` 对 wrapper 恒 false，不存在时会误返回非 null 载体）
+        if !attrs.is_jvm_null() {
             return Ok(Object::from(attrs));
         }
         Ok(Object::default())

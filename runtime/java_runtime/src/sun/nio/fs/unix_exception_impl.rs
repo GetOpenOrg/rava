@@ -43,10 +43,13 @@ impl UnixException {
     }
 
     /// `errorString()`：msg 优先，否则 strerror(errno)。
+    /// msg 的 null 判定用 String wrapper 的 vtable 钩子 `is_jvm_null()`（S-3.1
+    /// 唯一判定）；`_is_jnull` 只对 `Object` 载体生效（`downcast_ref::<Object>`），
+    /// 对 wrapper 恒 false——errno 形态的 null msg 会漏 strerror 映射。
     #[jvm_boundary]
     pub fn errorString(&self) -> Result<String> {
         let msg = self.__get_msg();
-        if !_is_jnull(&msg) {
+        if !msg.is_jvm_null() {
             return Ok(msg);
         }
         Ok(String::from(
@@ -66,7 +69,9 @@ impl UnixException {
     #[jvm_boundary(upcalls = "java/nio/file/AccessDeniedException.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V java/nio/file/NoSuchFileException.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V java/nio/file/FileAlreadyExistsException.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V java/nio/file/FileSystemException.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")]
     pub fn translateToIOException(&self, file: String, other: String) -> Result<IOException> {
         let msg = self.__get_msg();
-        if !_is_jnull(&msg) {
+        // msg 为 String wrapper：null 判定走 vtable 钩子（`_is_jnull` 对 wrapper 恒
+        // false，会把 null msg 泄入异常构造——与 errorString 同源缺陷）
+        if !msg.is_jvm_null() {
             return Ok(Clone::clone(&IOException::new_str(Clone::clone(&msg))?).into());
         }
         const EACCES: i32 = 13;
@@ -78,7 +83,7 @@ impl UnixException {
         const ELOOP: i32 = 40;
         let errno = self.__get_errno();
         let other_arg = |v: &String| -> String {
-            if _is_jnull(v) { String::from("") } else { Clone::clone(v) }
+            if v.is_jvm_null() { String::from("") } else { Clone::clone(v) }
         };
         match errno {
             EACCES => Ok(crate::java::nio::file::AccessDeniedException::new_str_str_str(
