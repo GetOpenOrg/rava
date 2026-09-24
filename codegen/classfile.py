@@ -1012,8 +1012,10 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
             cls_deprecated = True
         elif attr_name == 'Record':
             # JVMS §4.7.30：record 类的组件声明（isRecord 查询的唯一判据——
-            # JVM Class.isRecord = 有 Record 属性的类）。载荷（组件表）不消费。
+            # JVM Class.isRecord = 有 Record 属性的类）。载荷（组件表）不消费，
+            # 但必须跳过——否则后续属性读位错位（record 类解析崩溃）。
             cls_is_record = True
+            r.skip(attr_len)
         elif attr_name == 'EnclosingMethod':
             # JVMS §4.7.7：局部类 / 匿名类的直接外围类与外围方法
             # （method_index 为 0 → 位于初始化器 / 字段初始化表达式中）
