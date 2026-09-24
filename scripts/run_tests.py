@@ -299,7 +299,11 @@ def _apply_failed_filter(files: list, failed_set: set) -> list:
 
 
 def _print_env_header() -> None:
-    """环境头：跨机器日志可比性（OS/架构 + 工具链版本）。"""
+    """环境头：跨机器日志可比性（OS/架构 + 工具链版本 + 代码版本 + 影响
+    生成/编译行为的开关）。git 哈希与 dirty 标记让每份日志可追溯到确切树
+    （dirty=工作树有未提交改动，结果解释需注意）；PYTHONHASHSEED 未设时
+    每进程随机（双种子验证需显式固定）；CARGO_INCREMENTAL 影响编译内存
+    行为（服务器 OOM 缓解）。"""
     import platform
     try:
         cargo_v = subprocess.run(["cargo", "--version"], capture_output=True,
@@ -307,6 +311,25 @@ def _print_env_header() -> None:
     except Exception:
         cargo_v = "cargo ?"
     print(f"[env] {platform.platform()} | {cargo_v}")
+
+    def _git_desc() -> str:
+        try:
+            head = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                                  capture_output=True, text=True, timeout=10,
+                                  cwd=ROOT).stdout.strip()
+            dirty = subprocess.run(["git", "status", "--porcelain"],
+                                   capture_output=True, text=True, timeout=10,
+                                   cwd=ROOT)
+            if not head:
+                return "git ?"
+            return head + (" (dirty)" if dirty.stdout.strip() else "")
+        except Exception:
+            return "git ?"
+
+    _flag_vars = ("PYTHONHASHSEED", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS",
+                  "JAVA_RTA_DEBUG", "JAVA_RTA_STRICT", "JAVA_RTA_BFS_EDGE_AUDIT")
+    _flags = " ".join(f"{k}={os.environ.get(k, '(unset)')}" for k in _flag_vars)
+    print(f"[meta] git {_git_desc()} | {_flags} | out={OUT}")
 
 
 def _test_workspace(bin_name: str) -> Path:
