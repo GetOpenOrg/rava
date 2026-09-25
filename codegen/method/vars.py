@@ -186,7 +186,8 @@ _ROOT_TYPE = 'Object'
 
 
 def _is_default_value(value) -> bool:
-    return isinstance(value, RawExpr) and value.code == 'Default::default()'
+    """占位初值（无值的前置声明同视为无值可对齐，G-2）。"""
+    return value is None or (isinstance(value, RawExpr) and value.code == 'Default::default()')
 
 
 def _merged_slot_type(entries: list, name: str, start: int, end: int, registry=None):
@@ -403,7 +404,7 @@ def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
 
     JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 loop 内首次 let-声明，
     但在 loop 退出后被读取，Rust 报 E0425。
-    修复：在 loop 前插入 let mut NAME = Default::default();，loop 内改为赋值。
+    修复：在 loop 前插入无初值前置声明 let mut NAME: T;（G-2），loop 内改为赋值。
     slot_decls：LVT 声明表（slot → [(start, end, name, ...)]），驱动
     _same_jvm_var 的变量身份判定。
     """
@@ -472,7 +473,7 @@ def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
         return
 
     # Pass 3: 对需要提升的变量进行修改
-    # 先收集所有插入操作（在 loop 前插入 let mut NAME = Default::default();）
+    # 先收集所有插入操作（在 loop 前插入 let mut NAME: T;）
     # 用倒序插入，避免索引偏移
     # G-4 确定性：按名排序遍历——同一 loop 位置的多变量插入序否则随 set 迭代序
     # （PYTHONHASHSEED）漂移，生成物不可 diff
@@ -493,13 +494,13 @@ def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
             loop_indent = loop_entry_val[:len(loop_entry_val) - len(loop_entry_val.lstrip())]
         else:
             loop_indent = entries[loop_k][0]
-        # 从声明处取类型注解，生成 Default::default() 带类型注解（避免 E0282 类型推断失败）
+        # 从声明处取类型注解（无初值声明需类型标注或后续赋值推断，避免 E0282）
         inner_indent, inner_item = entries[decl_k]
         hoisted_type = _hoisted_let_type(inner_item)
         # 插入的提升声明继承被提升声明的 JVM 身份（槽位 / store 偏移）：
         # 后续轮次的 _same_jvm_var 身份判定据此把同变量的分段 let 并回本绑定
         insertions.append((loop_k, (loop_indent, LetStmt(
-            name, hoisted_type, True, RawExpr('Default::default()'),
+            name, hoisted_type, True, None,
             slot=getattr(inner_item, 'slot', None),
             bind_off=getattr(inner_item, 'bind_off', None)))))
         # 将 loop 内的 LetStmt 改为 AssignStmt
@@ -544,7 +545,7 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
 
     JVM 局部变量槽是函数级作用域，Rust 是块级。若变量在 if/else 内首次 let-声明，
     但在 if-else 结束后被读取，Rust 报 E0425。
-    修复：在 if 前插入 let mut NAME: TYPE = Default::default();，
+    修复：在 if 前插入无初值前置声明 let mut NAME: TYPE;（G-2），
     块内所有同名 LetStmt 改为 AssignStmt。
     slot_decls：LVT 声明表（slot → [(start, end, name, ...)]），驱动
     _same_jvm_var 的变量身份判定。
@@ -965,8 +966,9 @@ def _hoist_if_emit(h: "_HoistState") -> bool:
     # 获取类型注解节点（来自第一次声明）
     _, first_let = entries[first_decl_k]
     hoisted_type = _hoisted_let_type(first_let)
-    # 统一用 Default::default()，配合类型注解让 Rust 推断
-    default_val = RawExpr('Default::default()')
+    # G-2：前置声明不带占位初值——「未初始化即使用」由 Rust 确定赋值分析验证（与 JVM
+    # 校验器同语义），不再以 Default::default() 掩盖，亦不要求类型实现 Default
+    default_val = None
     # 将提升点所辖语句（block_k 开启的整条 if/else、match、loop 语句）内的同名 LetStmt
     # 改为 AssignStmt；语句之外的同名声明是别的 Java 变量，保持各自的 let
     span_end = len(entries)
