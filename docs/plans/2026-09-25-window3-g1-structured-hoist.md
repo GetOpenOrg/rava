@@ -39,10 +39,10 @@
 
 | 步 | 内容 | 验收 |
 |---|---|---|
-| **G1-a** | rs_ir 新增块节点 `BlockStmt(kind, head, arms)`（kind ∈ if / loop / labeled / match / try / dispatch；每臂 = (臂头文本, 语句列表)）；`TreeEmitter` 产出树，`flatten(tree)` 还原出**与现状逐项相同**的 entries；提升 pass 仍消费 flatten 结果 | entries 逐项相等（插桩双算）+ 生成树逐字节一致 |
-| **G1-b** | `_promote_undeclared_assigns` → `_hoist_loop_vars` → `_hoist_if_vars` 依次改为在树上工作（深度 / 块起点 / 插入点来自结构），flatten 移到提升之后 | 每迁一个 pass：生成树逐字节一致 + 双种子 diff 0 |
-| **G1-c** | 引用检测改 IR 遍历（Var 名收集），Raw 节点回落文本扫描并计数 `[hoist-audit] raw_ref_scan=N`；删除 `_brace_delta` 与结构文本判定 | 生成树逐字节一致；结构文本匹配点 = 0 |
-| G-2（另立） | 前置声明去 `Default::default()` 占位 → `let x: T;`（Rust 确定赋值分析） | **会改变生成树**：需用户全量对账（面板 #16） |
+| **G1-a** ✅ `cf457e3` | rs_ir 新增块节点 `BlockStmt(kind, segs)`；`TreeEmitter` 产出树，`flatten(tree)` 还原出与现状逐项相同的 entries；提升 pass 仍消费 flatten 结果 | 23 例生成树逐字节一致 |
+| **G1-b** ✅ `49692a0` | 块结构行 `StructLine(str)` 带 emitter 给出的 delta / tag；三个提升 pass 的嵌套深度与四类结构判定（loop 头 / 块起点 / else 行 / match 臂·try）改读标注，删除 `_brace_delta` 与文本特征判定 | 双算 27 例 330 万次 0 分歧（首轮「块起点」540 处分歧 = 旧判定缩进使 `} else {` / `} catch … {` 衔接行也计为块起点，照此复现）；23 例生成树逐字节一致 |
+| **G1-c**（改列行为变更批） | 引用检测改 IR 遍历（Var 名收集），Raw 节点回落文本扫描并计数 | **不可能逐字节不变**：旧检测是渲染整行上的 `\bname\b`，字段访问 `x.name` / 方法调用 `.name()` / 字面量中的同名词都被计为引用（假阳性）；IR 遍历消除假阳性即改变提升决策。与 G-2 合并为「提升语义修正批」，先插桩量化决策变化面，再实施，需用户全量对账 |
+| G-2（与 G1-c 合批） | 前置声明去 `Default::default()` 占位 → `let x: T;`（Rust 确定赋值分析） | **会改变生成树**：需用户全量对账（面板 #16） |
 
 ## 四、风险与约束
 
