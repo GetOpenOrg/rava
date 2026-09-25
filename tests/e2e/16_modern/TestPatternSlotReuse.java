@@ -5,7 +5,7 @@ import java.util.List;
  * 存放不同类型（int 分量 vs 记录本身；Rosetta RecordPatternsTest 揭出：两类型合并成
  * 一个提升声明 → E0308）。覆盖：switch 记录模式（基本分量 + 嵌套记录）、instanceof 记录
  * 模式 && 链、long/double/String 分量混合、when 守卫、同一方法内多个模式 switch、
- * 模式与 for-each / synchronized 合成槽并存。
+ * 模式与 for-each 合成槽并存（synchronized 内的模式 switch 属 CFG 缺口，见 TestSyncPatternSwitch / S-67）。
  */
 public class TestPatternSlotReuse {
     record Point(int x, int y) {}
@@ -58,15 +58,12 @@ public class TestPatternSlotReuse {
 
     static int withSyntheticLoops(List<Object> items) {
         int total = 0;
-        Object lock = new Object();
         for (Object it : items) {
-            synchronized (lock) {
-                total += switch (it) {
-                    case Point(int x, int y) -> x + y;
-                    case Mixed(long id, double w, String n) -> (int) id;
-                    default -> 0;
-                };
-            }
+            total += switch (it) {
+                case Point(int x, int y) -> x + y;
+                case Mixed(long id, double w, String n) -> (int) id;
+                default -> 0;
+            };
         }
         int[] arr = {1, 2, 3};
         for (int v : arr) {
