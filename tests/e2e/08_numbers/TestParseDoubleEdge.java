@@ -34,6 +34,7 @@ public class TestParseDoubleEdge {
             "0x1p0", "0x1.8p1", "-0x1.fffffffffffffp1023", "0x1.fffffffffffff8p1023", "0x1p-1074",
             "0x1p-1075", "0x1.8p-1075", "0x1.000001p0", "0x1.0000011p0", "0xAbC.dEfp-4f", "0x.8p1",
             "0xp1", "0x1", "1e", "1e+", "abc", ".", "+", "", "   ", "1.2.3", "1_000", "1.5x",
+            "..", "1..", ".1.", "1e5.3", "-1.2.3", "0x1.2.3p1",
         };
         for (String s : cases) {
             d(s);

@@ -123,6 +123,8 @@ enum Parsed {
     Hex { negative: bool, mantissa: u128, sticky: bool, exp2: i64 },
     NaN,
     Infinity(bool),
+    /// 数字 / 小数点段内出现第二个小数点：JDK 专门消息 "multiple points"
+    MultiplePoints,
 }
 
 /// JDK `FloatingDecimal.readJavaFormatString` 的语法：`String.trim()` 后
@@ -149,10 +151,18 @@ fn read_java_format_string(t: &str) -> Option<Parsed> {
     }
     let start = i;
     let mut digits = 0usize;
-    while i < b.len() && b[i].is_ascii_digit() { i += 1; digits += 1; }
-    if i < b.len() && b[i] == b'.' {
+    let mut dec_seen = false;
+    // 数字与小数点段：JDK 在此段内遇到第二个 '.' 立即抛 "multiple points"（先于位数检查）
+    while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
+        if b[i] == b'.' {
+            if dec_seen {
+                return Some(Parsed::MultiplePoints);
+            }
+            dec_seen = true;
+        } else {
+            digits += 1;
+        }
         i += 1;
-        while i < b.len() && b[i].is_ascii_digit() { i += 1; digits += 1; }
     }
     if digits == 0 {
         return None;
@@ -273,8 +283,11 @@ fn scale_pow2(mut v: f64, mut e: i64) -> f64 {
 }
 
 fn number_format_error(t: &str) -> JvmError {
-    match crate::java::lang::NumberFormatException::new_str(String::from(
-        if t.is_empty() { "empty String".to_owned() } else { format!("For input string: \"{}\"", t) })) {
+    number_format_message(if t.is_empty() { "empty String".to_owned() } else { format!("For input string: \"{}\"", t) })
+}
+
+fn number_format_message(msg: std::string::String) -> JvmError {
+    match crate::java::lang::NumberFormatException::new_str(String::from(msg)) {
         Ok(e) => JvmError::from(e),
         Err(e) => e,
     }
@@ -305,6 +318,7 @@ impl FloatingDecimal {
             }
             Some(Parsed::NaN) => Ok(f64::NAN),
             Some(Parsed::Infinity(neg)) => Ok(if neg { f64::NEG_INFINITY } else { f64::INFINITY }),
+            Some(Parsed::MultiplePoints) => Err(number_format_message("multiple points".to_owned())),
             None => Err(number_format_error(t)),
         }
     }
@@ -325,6 +339,7 @@ impl FloatingDecimal {
             }
             Some(Parsed::NaN) => Ok(f32::NAN),
             Some(Parsed::Infinity(neg)) => Ok(if neg { f32::NEG_INFINITY } else { f32::INFINITY }),
+            Some(Parsed::MultiplePoints) => Err(number_format_message("multiple points".to_owned())),
             None => Err(number_format_error(t)),
         }
     }

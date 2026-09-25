@@ -108,6 +108,18 @@ d[1_000] NFE For input string: "1_000"
 f[1_000] NFE For input string: "1_000"
 d[1.5x] NFE For input string: "1.5x"
 f[1.5x] NFE For input string: "1.5x"
+d[..] NFE multiple points
+f[..] NFE multiple points
+d[1..] NFE multiple points
+f[1..] NFE multiple points
+d[.1.] NFE multiple points
+f[.1.] NFE multiple points
+d[1e5.3] NFE For input string: "1e5.3"
+f[1e5.3] NFE For input string: "1e5.3"
+d[-1.2.3] NFE multiple points
+f[-1.2.3] NFE multiple points
+d[0x1.2.3p1] NFE For input string: "0x1.2.3p1"
+f[0x1.2.3p1] NFE For input string: "0x1.2.3p1"
 valueOf=6.02E23 -1.25
 null -> NPE
 sum=0.6000000000000001
