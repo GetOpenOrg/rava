@@ -19,7 +19,7 @@ impl LinuxFileSystemProvider {
     /// 增量（getMountEntries 读 /proc/self/mounts、top/usage 挂 statvfs、
     /// defaultDirectory 与 /proc 同设备的解析豁免）均在档 A 用例面（ASCII
     /// 路径 + exists/读写）之外。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "sun/nio/fs/LinuxFileSystemProvider.newFileSystem:(Ljava/lang/String;)Lsun/nio/fs/LinuxFileSystem;")]
     pub fn new() -> Result<Self> {
         let mut this = Self::default();
         this._init_not_null();
@@ -34,7 +34,7 @@ impl LinuxFileSystemProvider {
     /// `newFileSystem(String)`：Linux 平台覆写（返回 LinuxFileSystem）。
     /// 档 A 以基类 UnixFileSystem 承载（落差见 new 的注释）；静态类型沿声明
     /// 形态返回 Object（LinuxFileSystem 不在闭包）。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "sun/nio/fs/UnixFileSystem.<init>:(Lsun/nio/fs/UnixFileSystemProvider;Ljava/lang/String;)V")]
     pub fn newFileSystem_str(&self, dir: String) -> Result<Object> {
         let provider: super::unix_file_system_provider::UnixFileSystemProvider =
             Clone::clone(self).into();

@@ -106,6 +106,19 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// Latin-1 / UTF-8 两族：Latin-1 逐字节为 char（紧凑 LATIN1 coder，无错码
     /// 面）；UTF-8 严格解码（错码路径以 stub 文本报错——CharacterCodingException
     /// 不强制入闭包，K-2 编译面约束，语料无误码输入）。其余 charset 未消费。
+    /// `uncheckedGetBytesNoRepl(String, Charset)`：JDK25 对 getBytesNoRepl 的改名
+    /// （描述符与语义不变）。两版方法均在本 impl 提供——模型缺席的一方由生成侧
+    /// 「伴生 trait impl 签名提取 + 模型缺席方法补发」（f75598d）补入 trait 声明。
+    fn uncheckedGetBytesNoRepl(&self, arg0: String, arg1: Charset) -> Result<JArray<i8>> {
+        self.getBytesNoRepl(arg0, arg1)
+    }
+
+    /// `uncheckedNewStringNoRepl(byte[], Charset)`：JDK25 对 newStringNoRepl 的改名
+    /// （描述符与语义不变），同上。
+    fn uncheckedNewStringNoRepl(&self, arg0: JArray<i8>, arg1: Charset) -> Result<String> {
+        self.newStringNoRepl(arg0, arg1)
+    }
+
     fn newStringNoRepl(&self, arg0: JArray<i8>, arg1: Charset) -> Result<String> {
         let name = if arg1.is_jvm_null() {
             std::string::String::new()

@@ -39,7 +39,7 @@ impl UnixFileSystemProvider {
     /// 抽象基类——实际由平台薄层（macOS/Linux）构造，newFileSystem 虚分派
     /// 解析到平台覆写；本形态以基类 UnixFileSystem 承载（档 A 落差见
     /// mac_osx_file_system_provider_impl 的注释）。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "sun/nio/fs/UnixFileSystem.<init>:(Lsun/nio/fs/UnixFileSystemProvider;Ljava/lang/String;)V")]
     pub fn new() -> Result<Self> {
         let mut this = Self::default();
         this._init_not_null();

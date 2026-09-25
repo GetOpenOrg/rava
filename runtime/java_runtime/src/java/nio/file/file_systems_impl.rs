@@ -12,7 +12,7 @@ impl FileSystems {
     /// defaultFileSystem（doPrivileged 下 getDefaultProvider().getFileSystem(
     /// URI("file:///"))）——无安全管理器时特权动作透明，等价于直接返回平台
     /// provider 的 theFileSystem。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "sun/nio/fs/DefaultFileSystemProvider.theFileSystem:()Ljava/nio/file/FileSystem;")]
     pub fn getDefault() -> Result<FileSystem> {
         DefaultFileSystemProvider::theFileSystem()
     }

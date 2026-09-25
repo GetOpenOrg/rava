@@ -43,7 +43,7 @@ mod platform {
 impl DefaultFileSystemProvider {
     /// `instance()`: 平台默认 provider 单例（首次触达时构造，等价 clinit 恰一次）。
     #[cfg(target_os = "macos")]
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "sun/nio/fs/MacOSXFileSystemProvider.<init>:()V")]
     pub fn instance() -> Result<crate::sun::nio::fs::MacOSXFileSystemProvider> {
         platform::INSTANCE.with(|cell| {
             if std::cell::RefCell::borrow(cell).is_none() {
@@ -56,7 +56,7 @@ impl DefaultFileSystemProvider {
 
     /// `instance()`: Linux 形态（服务器轮验证）。
     #[cfg(target_os = "linux")]
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "sun/nio/fs/LinuxFileSystemProvider.<init>:()V")]
     pub fn instance() -> Result<crate::sun::nio::fs::LinuxFileSystemProvider> {
         platform::INSTANCE.with(|cell| {
             if std::cell::RefCell::borrow(cell).is_none() {
@@ -70,7 +70,7 @@ impl DefaultFileSystemProvider {
     /// `theFileSystem()`: 默认文件系统（JDK: INSTANCE.theFileSystem()）。
     /// 以 theFileSystem 字段访问器直取（macOS/Linux provider 未声明包装方法，
     /// 字段为 UnixFileSystemProvider 的继承平铺成员，子类 wrapper 可直访）。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "sun/nio/fs/DefaultFileSystemProvider.instance:()Lsun/nio/fs/LinuxFileSystemProvider;")]
     pub fn theFileSystem() -> Result<crate::java::nio::file::file_system::implref::FileSystem> {
         let provider = Self::instance()?;
         let fs = provider.__get_theFileSystem();
