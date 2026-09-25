@@ -21,6 +21,7 @@
 
 mod class_init;
 mod classify;
+mod desc_types;
 mod erasure;
 mod gen;
 mod generic_sig;
@@ -55,6 +56,8 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 /// 最终按 §1-§11 的原始顺序拼装（token 流与拆分前逐字节一致）。
 fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
     let meta = parse::ClassMeta::from_attrs(&input.attrs)?;
+    // M3-b 差分审计（环境变量开关，默认关；只写审计文件，不影响展开产物）
+    desc_types::audit_class(&meta.binary_name, &input.struct_ident.to_string(), &input.fns);
 
     // ── 泛型参数补齐 Clone + Default + 'static + From<Object> + Into<Object> ──────────────────────────────
     let generics = gen::context::augment_generic_bounds(&input.generics);

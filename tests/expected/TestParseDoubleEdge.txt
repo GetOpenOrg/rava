@@ -1,0 +1,113 @@
+d[2.5]=2.5 bits=4004000000000000
+f[2.5]=2.5 bits=40200000
+d[  2.5  ]=2.5 bits=4004000000000000
+f[  2.5  ]=2.5 bits=40200000
+d[	-3.25
+]=-3.25 bits=c00a000000000000
+f[	-3.25
+]=-3.25 bits=c0500000
+d[-0]=-0.0 bits=8000000000000000
+f[-0]=-0.0 bits=80000000
+d[+0.0]=0.0 bits=0
+f[+0.0]=0.0 bits=0
+d[1e10]=1.0E10 bits=4202a05f20000000
+f[1e10]=1.0E10 bits=501502f9
+d[1E-5]=1.0E-5 bits=3ee4f8b588e368f1
+f[1E-5]=1.0E-5 bits=3727c5ac
+d[.5]=0.5 bits=3fe0000000000000
+f[.5]=0.5 bits=3f000000
+d[5.]=5.0 bits=4014000000000000
+f[5.]=5.0 bits=40a00000
+d[1.5f]=1.5 bits=3ff8000000000000
+f[1.5f]=1.5 bits=3fc00000
+d[1.5D]=1.5 bits=3ff8000000000000
+f[1.5D]=1.5 bits=3fc00000
+d[NaN]=NaN bits=7ff8000000000000
+f[NaN]=NaN bits=7fc00000
+d[-NaN]=NaN bits=7ff8000000000000
+f[-NaN]=NaN bits=7fc00000
+d[+Infinity]=Infinity bits=7ff0000000000000
+f[+Infinity]=Infinity bits=7f800000
+d[-Infinity]=-Infinity bits=fff0000000000000
+f[-Infinity]=-Infinity bits=ff800000
+d[infinity] NFE For input string: "infinity"
+f[infinity] NFE For input string: "infinity"
+d[1e400]=Infinity bits=7ff0000000000000
+f[1e400]=Infinity bits=7f800000
+d[-1e400]=-Infinity bits=fff0000000000000
+f[-1e400]=-Infinity bits=ff800000
+d[1e-400]=0.0 bits=0
+f[1e-400]=0.0 bits=0
+d[4.9e-324]=4.9E-324 bits=1
+f[4.9e-324]=0.0 bits=0
+d[2.4703282292062327e-324]=0.0 bits=0
+f[2.4703282292062327e-324]=0.0 bits=0
+d[2.4703282292062328e-324]=4.9E-324 bits=1
+f[2.4703282292062328e-324]=0.0 bits=0
+d[1.7976931348623157e308]=1.7976931348623157E308 bits=7fefffffffffffff
+f[1.7976931348623157e308]=Infinity bits=7f800000
+d[1.7976931348623159e308]=Infinity bits=7ff0000000000000
+f[1.7976931348623159e308]=Infinity bits=7f800000
+d[0.1]=0.1 bits=3fb999999999999a
+f[0.1]=0.1 bits=3dcccccd
+d[123456789012345678901234567890]=1.2345678901234568E29 bits=45f8ee90ff6c373e
+f[123456789012345678901234567890]=1.2345679E29 bits=6fc77488
+d[3.4028235e38]=3.4028235E38 bits=47efffffe54daff8
+f[3.4028235e38]=3.4028235E38 bits=7f7fffff
+d[3.4028236e38]=3.4028236E38 bits=47effffff514a7bc
+f[3.4028236e38]=Infinity bits=7f800000
+d[1.4e-45]=1.4E-45 bits=369ff868bf4d956a
+f[1.4e-45]=1.4E-45 bits=1
+d[7.0e-46]=7.0E-46 bits=368ff868bf4d956a
+f[7.0e-46]=0.0 bits=0
+d[1.00000017881393432617187499]=1.0000001788139343 bits=3ff0000030000000
+f[1.00000017881393432617187499]=1.0000001 bits=3f800001
+d[0x1p0]=1.0 bits=3ff0000000000000
+f[0x1p0]=1.0 bits=3f800000
+d[0x1.8p1]=3.0 bits=4008000000000000
+f[0x1.8p1]=3.0 bits=40400000
+d[-0x1.fffffffffffffp1023]=-1.7976931348623157E308 bits=ffefffffffffffff
+f[-0x1.fffffffffffffp1023]=-Infinity bits=ff800000
+d[0x1.fffffffffffff8p1023]=Infinity bits=7ff0000000000000
+f[0x1.fffffffffffff8p1023]=Infinity bits=7f800000
+d[0x1p-1074]=4.9E-324 bits=1
+f[0x1p-1074]=0.0 bits=0
+d[0x1p-1075]=0.0 bits=0
+f[0x1p-1075]=0.0 bits=0
+d[0x1.8p-1075]=4.9E-324 bits=1
+f[0x1.8p-1075]=0.0 bits=0
+d[0x1.000001p0]=1.0000000596046448 bits=3ff0000010000000
+f[0x1.000001p0]=1.0 bits=3f800000
+d[0x1.0000011p0]=1.000000063329935 bits=3ff0000011000000
+f[0x1.0000011p0]=1.0000001 bits=3f800001
+d[0xAbC.dEfp-4f]=171.80442810058594 bits=406579bde0000000
+f[0xAbC.dEfp-4f]=171.80443 bits=432bcdef
+d[0x.8p1]=1.0 bits=3ff0000000000000
+f[0x.8p1]=1.0 bits=3f800000
+d[0xp1] NFE For input string: "0xp1"
+f[0xp1] NFE For input string: "0xp1"
+d[0x1] NFE For input string: "0x1"
+f[0x1] NFE For input string: "0x1"
+d[1e] NFE For input string: "1e"
+f[1e] NFE For input string: "1e"
+d[1e+] NFE For input string: "1e+"
+f[1e+] NFE For input string: "1e+"
+d[abc] NFE For input string: "abc"
+f[abc] NFE For input string: "abc"
+d[.] NFE For input string: "."
+f[.] NFE For input string: "."
+d[+] NFE For input string: "+"
+f[+] NFE For input string: "+"
+d[] NFE empty String
+f[] NFE empty String
+d[   ] NFE empty String
+f[   ] NFE empty String
+d[1.2.3] NFE multiple points
+f[1.2.3] NFE multiple points
+d[1_000] NFE For input string: "1_000"
+f[1_000] NFE For input string: "1_000"
+d[1.5x] NFE For input string: "1.5x"
+f[1.5x] NFE For input string: "1.5x"
+valueOf=6.02E23 -1.25
+null -> NPE
+sum=0.6000000000000001
