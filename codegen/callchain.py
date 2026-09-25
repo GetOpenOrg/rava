@@ -287,6 +287,12 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         for cls in f_classes:
             if cls not in _JAVA_RUNTIME_CLASSES:
                 field_discover_classes.add(cls)
+        if _CLASS_CLASS in f_classes:
+            # Class 对象由手写层构造（Class::for_class，ldc 类字面量 / getClass 等 native），
+            # 无 `new` 指令可见——不记为已实例化则根类虚方法（toString/hashCode/equals）
+            # 不传播到 Class 的覆盖版本，经 Object 视图调用落 vtable 默认体（Rosetta
+            # SumDataType：`"" + obj.getClass()` 输出 java/lang/Class，N6 同族）
+            instantiated_classes.add(_CLASS_CLASS)
         for key in method_refs:
             if key[0] == _OBJECT_CLASS and key[1] not in ('<init>', '<clinit>'):
                 # 根类虚方法（toString/hashCode/equals…）：实际目标是已实例化类的覆盖版本
@@ -701,8 +707,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             """
             _drain_iface_edges()
             def _ci_of(name: str):
-                """实例化类的 ClassInfo：用户类在 user_infos，JDK 类在 class_cache。"""
-                return user_infos.get(name) or class_cache.get(name)
+                """实例化类的 ClassInfo：用户类在 user_infos，JDK 类在 class_cache；未解析过的
+                按需解析（手写层构造的实例化类——如 Class——没有 <init> 入链，此前从未被加载，
+                会被静默滤出 RTA）。"""
+                return user_infos.get(name) or class_cache.get(name) or _load_class(name)
 
             instantiated = sorted(
                 x for x in instantiated_classes

@@ -1,0 +1,39 @@
+concat=class java.lang.String
+valueOf=class java.lang.String
+class java.lang.String
+objects=class java.lang.String name=java.lang.String
+concat=class java.lang.Integer
+valueOf=class java.lang.Integer
+class java.lang.Integer
+objects=class java.lang.Integer name=java.lang.Integer
+concat=class java.lang.Float
+valueOf=class java.lang.Float
+class java.lang.Float
+objects=class java.lang.Float name=java.lang.Float
+concat=class [I
+valueOf=class [I
+class [I
+objects=class [I name=[I
+concat=class [[Ljava.lang.String;
+valueOf=class [[Ljava.lang.String;
+class [[Ljava.lang.String;
+objects=class [[Ljava.lang.String; name=[[Ljava.lang.String;
+concat=class TestClassToString$Inner
+valueOf=class TestClassToString$Inner
+class TestClassToString$Inner
+objects=class TestClassToString$Inner name=TestClassToString$Inner
+concat=class TestClassToString$Color
+valueOf=class TestClassToString$Color
+class TestClassToString$Color
+objects=class TestClassToString$Color name=TestClassToString$Color
+concat=class TestClassToString$Pt
+valueOf=class TestClassToString$Pt
+class TestClassToString$Pt
+objects=class TestClassToString$Pt name=TestClassToString$Pt
+concat=class java.util.ArrayList
+valueOf=class java.util.ArrayList
+class java.util.ArrayList
+objects=class java.util.ArrayList name=java.util.ArrayList
+interface TestClassToString$Shape | int | void | class TestClassToString$Color
+[class java.lang.String, class java.lang.Integer, interface TestClassToString$Shape]
+true true
