@@ -570,6 +570,24 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
     return params, ret, rust_ret, _sig_owner, _sig_recv_ty, _recv, _root_routed
 
 
+def _chain_declares(obj_ty: str, mname: str, registry) -> bool:
+    """接收者静态类型的类链（本类及超类，registry 内）是否声明了实例方法 mname。
+    数组 / 手写类 / 未知类型 → False（调用解析到根类）。"""
+    if not registry:
+        return False
+    from ..jvm_type import from_rust_type, rust_head_name
+    head = rust_head_name(from_rust_type(obj_ty, registry).erasure())
+    cur = _rust_type_to_binary(head, registry) if head else None
+    seen: set = set()
+    while cur and cur in registry and cur not in seen:
+        seen.add(cur)
+        ci = registry[cur]
+        if any(m.name == mname and not m.is_static for m in ci.methods):
+            return True
+        cur = ci.super_class
+    return False
+
+
 def _build_call(mname_r, recv, args):
     return f"{recv}.{mname_r}({args})"
 
@@ -589,7 +607,11 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
         elif _root_routed:
             sim.emit(RawStmt(f"let {v}: {rust_ret} = {_build_call(rust_mname, _recv, arg_str)}?;"))
             sim.push(Var(v), RsNamed(rust_ret))
-        elif rust_mname == 'clone' and obj_ty not in ('Object', '()'):
+        elif (rust_mname == 'clone' and obj_ty not in ('Object', '()')
+              and not _chain_declares(obj_ty, mname, registry)):
+            # 仅当调用解析到根类 Object.clone（数组 / 类链无人声明 clone）：类链上有
+            # 声明（用户 / JDK 的 clone 覆盖、协变 clone + 桥）时走常规虚分派——
+            # 否则覆盖体（深拷贝逻辑）被绕过、经基类静态类型的虚调用丢失（#19 探针）。
             # invokevirtual Object.clone 调用在具体类型上（如数组）：Java 的 clone 是
             # 浅拷贝（新对象、字段 / 元素共享引用），不是 Rust 的引用克隆——
             # Object__clone_base 经接收者 vtable 的 __shallow_copy 派发（数组 →
