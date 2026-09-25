@@ -19,8 +19,19 @@ fn borrow_file(fd: i32) -> std::mem::ManuallyDrop<std::fs::File> {
     std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) })
 }
 
+/// OS 错误文案（JDK 的 strerror 形态：去掉 Rust Display 追加的 ` (os error N)`）。
+/// 与 file_output_stream_impl 同形——两文件各自按宿主类进闭包编译（K-2），不互相引用。
+fn os_error_text(e: &std::io::Error) -> std::string::String {
+    let s = format!("{}", e);
+    match s.find(" (os error ") {
+        Some(i) => s[..i].to_owned(),
+        None => s,
+    }
+}
+
 fn io_err(e: std::io::Error) -> JvmError {
-    JvmError::from(super::IOException::new_str(String::from(format!("{}", e))).unwrap())
+    JvmError::from(super::IOException::new_str(String::from(
+        os_error_text(&e))).unwrap())
 }
 
 impl FileInputStream {
@@ -47,7 +58,9 @@ impl FileInputStream {
                     self.__get_fd().__set_fd(raw);
                 }
                 Err(e) => {
-                    let msg = String::from(format!("{} ({})", path, e));
+                    // JDK 消息形态 `path (strerror)`（去 Rust 的 ` (os error N)` 后缀）
+                    let msg = String::from(format!("{} ({})", path,
+                        os_error_text(&e)));
                     return Err(JvmError::from(
                         super::FileNotFoundException::new_str(msg)?));
                 }

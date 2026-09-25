@@ -1,0 +1,8 @@
+[Hello, world!]
+[Hello, world! +append]
+[truncated]
+[0123456789]
+[0123456789|42\nab-7]
+FNF write: build/no_such_dir_xyz/out.txt (No such file or directory)
+FNF read: build/no_such_dir_xyz/in.txt (No such file or directory)
+closed: IOException Stream Closed
