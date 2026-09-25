@@ -80,6 +80,9 @@ def fmt_dur(sec: float) -> str:
 
 # 每测试运行阶段超时（秒）；编译阶段用更宽的上限捕获病态构建
 RUN_TIMEOUT = 300
+# 期望生成（--update-expected）的 java 参照运行超时（秒）：golden 语料应为秒级程序，
+# 120 足够且让挂起类用例快速出列；e2e 实跑沿用 RUN_TIMEOUT
+EXPECTED_GEN_TIMEOUT = 120
 # 构建档位目录（debug/release）：--release 开关切换，bin 路径与 build 命令统一读它
 PROFILE_DIR = "debug"
 # 失败现场日志目录：rustc 完整输出 / 运行期 panic+backtrace 落盘，行式输出只留摘要
@@ -768,9 +771,9 @@ def _update_expected(java_file: Path) -> tuple[str, str]:
         return "javac-fail", r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "javac error"
     try:
         r = subprocess.run([_jdk_tool("java"), "-cp", str(classes_dir), class_name],
-                           cwd=ROOT, capture_output=True, text=True, timeout=RUN_TIMEOUT)
+                           cwd=ROOT, capture_output=True, text=True, timeout=EXPECTED_GEN_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return "timeout", f"exceeded {fmt_dur(RUN_TIMEOUT)}"
+        return "timeout", f"exceeded {fmt_dur(EXPECTED_GEN_TIMEOUT)}"
     if r.returncode != 0:
         return "java-fail", (r.stderr.strip().splitlines() or ["java error"])[-1][:120]
     _expected_path(class_name).write_text(r.stdout)
