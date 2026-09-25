@@ -102,6 +102,12 @@ class Continue:
 # 结构化
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _exit_only_subtree(y: int, flow: FlowAnalysis) -> bool:
+    """y 支配的子图不流回子图之外（所有路径以 return / athrow 结束）。"""
+    sub = {n for n in flow.rpo if dominates(flow.idom, y, n)}
+    return all(s in sub for n in sub for s in flow.succs.get(n, ()))
+
+
 def structure(nodes: dict, flow: FlowAnalysis) -> list:
     """nodes: id → 具有 kind/cond/target/fallthrough/key/cases/default/stmts/decls 属性的块。"""
     if not flow.reducible:
@@ -143,6 +149,16 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
         if nodes[d].kind == 'try' and y in try_slots[d]:
             # try 体入口 / 处理器入口：恒内联为 Try 的 try 体 / catch 体
             lexical = ctx_of(d) | {nodes[d].group} if y == nodes[d].target else ctx_of(d)
+            if lexical != ctx_of(y) and y != nodes[d].target and ctx_of(y) < lexical \
+                    and _exit_only_subtree(y, flow):
+                # 处理器落在外层 try 区域之外、但只以退出（athrow / return）结束：javac 对
+                # synchronized 内的记录模式 switch 把 MatchException 处理器放在 monitor 区域
+                # 之后（异常表不覆盖它）。补齐外层 try 组、渲染在外层 try 之内——差别仅在该
+                # 异常路径上也经外层处理区（monitor 退出），单线程协作模型下无害（S-67）
+                missing = lexical - ctx_of(y)
+                for n in flow.rpo:
+                    if dominates(flow.idom, y, n):
+                        nodes[n].ctx = ctx_of(n) | missing
             if lexical != ctx_of(y):
                 raise CfgError(f"块 pc={nodes[y].start_pc} 的 try 区域与控制流不成嵌套结构")
             continue
