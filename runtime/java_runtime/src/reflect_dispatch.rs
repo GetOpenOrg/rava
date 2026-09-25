@@ -67,6 +67,11 @@ fn lookup(class_slash: &str) -> Option<ReflectDispatch> {
 pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
                       recv: Object, args: &JArray<Object>) -> Result<Object> {
     let is_ctor = name == "<init>";
+    // 手写根类 Object 无 codegen 分派闭包：其唯一构造器 `<init>()V`（build.rs
+    // 方法表补行，JLS §4.3.2）在此直接承载——新建一个独立身份的 Object 实例
+    if is_ctor && declaring_slash == "java/lang/Object" && descriptor == "()V" {
+        return Object::new();
+    }
     let is_virtual = !is_ctor
         && !is_static_descriptor(declaring_slash, name, descriptor);
     // static / 构造器：声明类直查；实例方法：receiver 运行类起沿直接父类上溯

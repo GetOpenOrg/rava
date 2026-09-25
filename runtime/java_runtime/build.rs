@@ -71,7 +71,7 @@ fn main() {
     write_hierarchy_table(&hierarchy);
     write_direct_super_table(&scan_direct_super(&meta_roots));
     write_field_table(&scan_class_fields(&meta_roots));
-    write_method_table(&scan_class_methods(&meta_roots));
+    write_method_table(&with_object_ctor_row(scan_class_methods(&meta_roots)));
     write_modifiers_table(&scan_class_modifiers(&meta_roots));
     write_record_table(&scan_record_classes(&meta_roots));
     write_annotation_table(&scan_annotations(&meta_roots));
@@ -596,6 +596,25 @@ fn scan_class_methods(roots: &[&Path]) -> BTreeMap<String, Vec<MethodMeta>> {
         }
     }
     result
+}
+
+/// 手写 `java/lang/Object`（object.rs，Arch-4 ObjectVTable 根，无 java_class! 块）
+/// 的方法表补行：JLS §4.3.2 / JVMS §2.9——Object 恰有一个 public 无参构造器，
+/// 反射面（getConstructors / getDeclaredConstructors / getConstructor()）须可见。
+/// 构造体由 reflect_dispatch 的 Object `<init>` 臂承载。只补构造器行：Object
+/// 的其余方法（hashCode / equals / toString …）的方法表行不在本补行范围。
+fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>>)
+    -> BTreeMap<String, Vec<MethodMeta>>
+{
+    let rows = methods.entry("java/lang/Object".to_owned()).or_default();
+    if !rows.iter().any(|m| m.name == "<init>" && m.descriptor == "()V") {
+        rows.insert(0, MethodMeta {
+            name: "<init>".to_owned(), descriptor: "()V".to_owned(),
+            modifiers: 0x0001, is_static: false, is_native: false, is_abstract: false,
+            exceptions: Vec::new(),
+        });
+    }
+    methods
 }
 
 fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {

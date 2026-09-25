@@ -445,29 +445,50 @@ impl Class {
         Ok(JArray::from(out))
     }
 
-    /// `getConstructors()`：public 构造器（含继承——JDK getConstructors0 沿
-    /// 父类链收集 public `<init>`；本实现沿直接父类表上溯，public 位过滤）。
+    /// `getConstructors()`：本类 public 构造器。构造器**不继承**（JLS §8.8：
+    /// 构造器不是成员）——JDK `privateGetDeclaredConstructors(publicOnly=true)`
+    /// 只取本类声明；父类构造器不经子类出现。接口无构造器行 → 空数组。
     pub fn getConstructors(&self) -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>> {
-        let mut out: Vec<crate::java::lang::reflect::Constructor<Object>> = Vec::new();
-        let mut cur = format!("{}", self.__get_name()).replace('.', "/");
-        let mut hops = 0usize;
-        loop {
-            if let Some(em) = self.constructor_rows(&cur) {
-                out.extend(em);
-            }
-            match __direct_super::CLASS_DIRECT_SUPER.iter().find(|(n, _)| *n == cur) {
-                Some((_, sup)) => {
-                    cur = (*sup).to_owned();
-                    hops += 1;
-                    if hops > 256 { break; }
-                }
-                None => break,
-            }
-        }
-        Ok(JArray::from(out))
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        Ok(JArray::from(self.constructor_rows(&cls_key).unwrap_or_default()))
     }
 
-    /// 内部：指定类的 public 构造器序列（getConstructors 的一跳）。
+    /// `getConstructor(Class...)`：本类 public 构造器按参数类型序列精确匹配
+    ///（JDK getConstructor0(parameterTypes, Member.PUBLIC)）；非 public 构造器
+    /// 与父类构造器均不可见；未命中 → NoSuchMethodException（消息形态同
+    /// getDeclaredConstructor：`pkg.Cls.<init>(p1, p2)`）。
+    #[jvm_boundary(upcalls = "java/lang/NoSuchMethodException.<init>:(Ljava/lang/String;)V")]
+    pub fn getConstructor(&self, parameterTypes: JArray<Class>)
+        -> Result<crate::java::lang::reflect::Constructor<Object>>
+    {
+        let mut want: Vec<std::string::String> = Vec::new();
+        let __n = if parameterTypes.is_jvm_null() { 0 } else { parameterTypes.len()? };
+        for i in 0..__n {
+            want.push(format!("{}", parameterTypes.get(i)?.__get_name()).replace('/', "."));
+        }
+        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
+        for c in self.constructor_rows(&cls_key).unwrap_or_default() {
+            let ps = c.__get_parameterTypes();
+            if ps.len()? as usize != want.len() {
+                continue;
+            }
+            let mut same = true;
+            for (j, w) in want.iter().enumerate() {
+                if format!("{}", ps.get(j as i32)?.__get_name()).replace('/', ".") != *w {
+                    same = false;
+                    break;
+                }
+            }
+            if same {
+                return Ok(c);
+            }
+        }
+        let owner = format!("{}", self.__get_name()).replace('/', ".");
+        Err(JvmError::from(crate::java::lang::NoSuchMethodException::new_str(
+            String::from(format!("{}.<init>({})", owner, want.join(", "))))?))
+    }
+
+    /// 内部：指定类的 public 构造器序列（getConstructors / getConstructor 共用）。
     fn constructor_rows(&self, cls_key: &str)
         -> Option<Vec<crate::java::lang::reflect::Constructor<Object>>> {
         let (_, ms) = __methods::CLASS_METHODS.iter().find(|(n, _)| *n == cls_key)?;
