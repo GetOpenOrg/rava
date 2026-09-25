@@ -563,25 +563,6 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
                             _sig_recv_ty = _bridge_owner_short + _owner_args_v
                     if _bridged_v is None or _bridged_v[0].name != _obj_jvm:
                         _inherited_calls.request(_obj_jvm, mname, _param_desc)
-            # `this.m(args)` 虚调用（wrapper 体由宏重写为 vtable UFCS 分派、vtable 体直呼
-            # trait 方法——均经 this.vtable 的运行时类槽位）：中间祖先覆盖了方法而叶类
-            # 未再声明时（AbstractPipeline.opIsStateful 抽象 → StatelessOp 覆盖 → 过滤器
-            # 阶段类静默继承），叶类槽位为空会分派到声明类的 trait default（抽象 stub /
-            # 声明体），丢失中间覆盖。为每个未自行声明该方法的闭包子类登记继承成员需求
-            # （成员体转发到链上最近声明者，等价 JVM 子类 vtable 继承条目）。外部接收者
-            # （typed 静态类型）的调用不在本登记范围——其子类填槽由定义侧按调用链槽位键
-            # 统一承担（class_writer._slot_demanded_on_chain，清单第 4 项：中间祖先实现
-            # + 叶子继承形态，如 FileSystemProvider.isSameFile → Unix 实现 → Linux 叶子）；
-            # 定义侧覆盖全部调用形态后本段与之重复，暂留（K-6b 口径已在此验证）。
-            # private 方法 invokespecial 静态解析、final 方法不可覆盖，均跳过。
-            if (obj_e in ('this', 'self') and not _ci_recv.is_interface
-                    and _virtually_dispatched(_ci_recv, mname, _param_desc, registry)):
-                for _sub_bin in _closure_subclasses(registry).get(_obj_jvm, ()):
-                    # K-6b：类型变量签名的方法逐子类判定（有 bridge 才登记）
-                    if not _virtually_dispatched(_ci_recv, mname, _param_desc, registry,
-                                                 sub_bin=_sub_bin):
-                        continue
-                    _inherited_calls.request(_sub_bin, mname, _param_desc)
     return params, ret, rust_ret, _sig_owner, _sig_recv_ty, _recv, _root_routed
 
 
