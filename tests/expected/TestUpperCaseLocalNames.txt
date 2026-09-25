@@ -1,0 +1,10 @@
+area=42
+mix=1000000000032
+acronym=123
+constants=6
+reassign=41
+lambdas=21
+catch1=ok:42
+catch2=bad:For input string: "x"
+loops=12
+describe=my-box/7

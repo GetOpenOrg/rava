@@ -271,7 +271,11 @@ def gen_method_body(
         rust_fn_name = safe_ident(method.name)
 
     def _param_name(slot: int, fallback: str) -> str:
-        return safe_ident(local_names.get(slot, fallback))
+        # 与方法体的局部变量引用同一命名入口（stack._safe_name）：Java 参数名大写开头
+        # （`int LineWidth`）时方法体引用经 camelCase 化，签名若只 safe_ident 则两侧名字
+        # 不一致 → E0425
+        from ..stack import _safe_name
+        return _safe_name(local_names.get(slot, fallback))
 
     # ── 函数签名 ──────────────────────────────────────────────────────
     # JVM wide 类型（J=long, D=double）各占 2 个 slot；签名生成需按实际 slot 查名字

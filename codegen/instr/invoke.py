@@ -94,7 +94,9 @@ def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None
             raw = _sv
         args.insert(0, raw)
 
-    tmpl_m = re.search(r' template:(.+)$', comment)
+    # 模板是常量池解码值，可含换行 / 首尾空白（`"\n" + w + " "`）：DOTALL + \Z，
+    # 否则 `.` 不跨换行 → 匹配失败落 fallback，模板常量段整段丢失
+    tmpl_m = re.search(r' template:(.*)\Z', comment, re.DOTALL)
     if tmpl_m:
         template = tmpl_m.group(1)
         parts = template.split('\x01')

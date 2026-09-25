@@ -1,0 +1,14 @@
+[\nword ]
+[word\n]
+[\nword]
+[a\nbwordc\nd]
+[\n\n42\n\n]
+[\r\nx\t]
+[  1.5  ]
+[\ttrue\nnull\n]
+[{word}\n]
+[\nword\]
+[word\n42\nx]
+
+word word
+end
