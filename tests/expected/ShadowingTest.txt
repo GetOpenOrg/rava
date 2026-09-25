@@ -1,5 +1,5 @@
 ShadowingTest.this.x = 23
-y = 3
 this.x = 23
 x = 30
 y = 530
+y = 3

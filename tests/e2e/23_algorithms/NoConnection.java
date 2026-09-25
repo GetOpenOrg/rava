@@ -21,7 +21,7 @@ public class NoConnection {
 
         List<Integer> vals = range(1, 9).mapToObj(i -> i).collect(toList());
         do {
-            Collections.shuffle(vals);
+            Collections.shuffle(vals, new Random(42)); // 固定种子，输出可复现
             for (int i = 0; i < pegs.length; i++)
                 pegs[i] = vals.get(i);
 

@@ -4,7 +4,3 @@ Id     Date    Trans  Sym    Qty  Price  Settled
 2  2006-03-28  BUY   IBM    1000  45.00  true
 3  2006-04-06  SELL  IBM     500  53.00  true
 4  2006-04-05  BUY   MSOFT  1000  72.00  false
-5  2006-01-05  BUY   RHAT    100  35.14  true
-6  2006-03-28  BUY   IBM    1000  45.00  true
-7  2006-04-06  SELL  IBM     500  53.00  true
-8  2006-04-05  BUY   MSOFT  1000  72.00  false

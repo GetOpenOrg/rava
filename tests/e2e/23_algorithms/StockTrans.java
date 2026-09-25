@@ -56,6 +56,8 @@ public class StockTrans implements Serializable {
         // 数据文件定点输出到 tests/expected，避免散落运行 cwd
         new File("tests/expected").mkdirs();
         String filename = "tests/expected/stocks.db";
+        // 重置累积数据文件——save 是追加式，不重置则输出随历史运行次数增长
+        new File(filename).delete();
         StockTrans[] transactions = {
             new StockTrans(0, "2006-01-05", "BUY", "RHAT", 100, 35.14f, true),
             new StockTrans(0, "2006-03-28", "BUY", "IBM", 1000, 45f, true),

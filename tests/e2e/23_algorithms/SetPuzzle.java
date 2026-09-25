@@ -83,7 +83,7 @@ public class SetPuzzle {
         Card[][] sets = new Card[target][3];
         int cnt;
         do {
-            Collections.shuffle(Arrays.asList(deck));
+            Collections.shuffle(Arrays.asList(deck), new Random(42)); // 固定种子，输出可复现
             cards = Arrays.copyOfRange(deck, 0, numCards);
             cnt = 0;
 

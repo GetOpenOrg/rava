@@ -3,6 +3,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.Stack;
 import java.util.function.BiFunction;
@@ -163,7 +164,7 @@ public class ChristofidesAlgorithm {
 			// Create a copy to prevent mutation of the argument 'oddVertices'
 		    List<Integer> currentOdd = new ArrayList<Integer>(oddVertices);
 		
-		    Collections.shuffle(currentOdd); // Shuffle for randomness
+		    Collections.shuffle(currentOdd, new Random(42)); // 固定种子，输出可复现
 		   		
 		    // Maintain a record of the visited indices in the shuffled 'currentOdd' list
 		    Set<Integer> visited = new HashSet<Integer>();

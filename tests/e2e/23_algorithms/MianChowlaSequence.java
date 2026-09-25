@@ -3,13 +3,10 @@ import java.util.Arrays;
 public class MianChowlaSequence {
 
     public static void main(String[] args) {
-        long start = System.currentTimeMillis();
         System.out.println("First 30 terms of the Mian–Chowla sequence.");
         mianChowla(1, 30);
         System.out.println("Terms 91 through 100 of the Mian–Chowla sequence.");
         mianChowla(91, 100);
-        long end = System.currentTimeMillis();
-        System.out.printf("Elapsed = %d ms%n", (end-start));
     }
 
     private static void mianChowla(int minIndex, int maxIndex) {

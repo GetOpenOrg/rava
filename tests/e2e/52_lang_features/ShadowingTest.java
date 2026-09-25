@@ -1,4 +1,4 @@
-// @ruva-ignore: 使用 Thread.start() 产生并发输出，测试结果不确定（F-THREAD）
+// 同步执行 lambda（t.run），规避 Thread.start 并发输出顺序不确定（F-THREAD）
 public class ShadowingTest {
 
 	int x = 23;
@@ -25,7 +25,7 @@ public class ShadowingTest {
 
 		// x = 116; // here also will gerenate a error because x must be final or effectively final (not modified)
 
-		t.start();
+		t.run(); // 同步执行，输出顺序确定
 		int y = 3; // so we can define another var with the same name
 		System.out.println("y = " + y);
 	}

@@ -1,6 +1,5 @@
 public class PrimeTriangle {
     public static void main(String[] args) {
-        long start = System.currentTimeMillis();
         for (int i = 2; i <= 20; ++i) {
             int[] a = new int[i];
             for (int j = 0; j < i; ++j)
@@ -19,8 +18,6 @@ public class PrimeTriangle {
             s.append(countRows(a, 0, i));
         }
         System.out.println(s);
-        long finish = System.currentTimeMillis();
-        System.out.printf("\nElapsed time: %d milliseconds\n", finish - start);
     }
 
     private static void printRow(int[] a) {

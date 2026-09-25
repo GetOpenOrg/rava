@@ -13,5 +13,3 @@ First 100 Ramanujan primes:
 The 1,000th Ramanujan prime is 19,403.
 The 10,000th Ramanujan prime is 242,057.
 The 100,000th Ramanujan prime is 2,916,539.
-
-Elapsed time: 90.2 milliseconds

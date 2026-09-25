@@ -2,7 +2,6 @@ import java.util.Arrays;
 
 public class RamanujanPrimes {
     public static void main(String[] args) {
-        long start = System.nanoTime();
         System.out.println("First 100 Ramanujan primes:");
         PrimeCounter pc = new PrimeCounter(1 + ramanujanMax(100000));
         for (int i = 1; i <= 100; ++i) {
@@ -14,8 +13,6 @@ public class RamanujanPrimes {
             int p = ramanujanPrime(pc, i);
             System.out.printf("The %,dth Ramanujan prime is %,d.\n", i, p);
         }
-        long end = System.nanoTime();
-        System.out.printf("\nElapsed time: %.1f milliseconds\n", (end - start) / 1e6);
     }
 
     private static int ramanujanMax(int n) {

@@ -1,6 +1,7 @@
 import static java.lang.Math.*;
 import static java.util.Arrays.stream;
 import java.util.Locale;
+import java.util.Random;
 import java.util.function.DoubleSupplier;
 import static java.util.stream.Collectors.joining;
 import java.util.stream.DoubleStream;
@@ -11,6 +12,7 @@ public class NormalDistribution implements DoubleSupplier {
     private double mu, sigma;
     private double[] state = new double[2];
     private int index = state.length;
+    private final Random rng = new Random(42); // 固定种子，输出可复现（原为 Math.random）
 
     NormalDistribution(double m, double s) {
         mu = m;
@@ -55,8 +57,8 @@ public class NormalDistribution implements DoubleSupplier {
     public double getAsDouble() {
         index++;
         if (index >= state.length) {
-            double r = sqrt(-2 * log(random())) * sigma;
-            double x = 2 * PI * random();
+            double r = sqrt(-2 * log(rng.nextDouble())) * sigma;
+            double x = 2 * PI * rng.nextDouble();
             state = new double[]{mu + r * sin(x), mu + r * cos(x)};
             index = 0;
         }

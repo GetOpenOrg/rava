@@ -2,11 +2,8 @@ import java.math.BigInteger;
 
 public class PartitionFunction {
     public static void main(String[] args) {
-        long start = System.currentTimeMillis();
         BigInteger result = partitions(6666);
-        long end = System.currentTimeMillis();
         System.out.println("P(6666) = " + result);
-        System.out.printf("elapsed time: %d milliseconds\n", end - start);
     }
 
     private static BigInteger partitions(int n) {
