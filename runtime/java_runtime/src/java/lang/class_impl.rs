@@ -733,6 +733,34 @@ impl Class {
         Ok(__record::RECORD_CLASSES.contains(&name.as_str()))
     }
 
+    /// native `Class.getRecordComponents0()`：record 分量反射（声明序）。数据源是
+    /// java_class! 块的 `record_components` 属性（classfile Record 属性：名字 /
+    /// 描述符 / 泛型签名），build.rs 汇总为 RECORD_COMPONENTS 表。查询即构造
+    /// RecordComponent：clazz=本类、type=描述符还原、accessor=同名无参声明方法、
+    /// signature=泛型签名（无则 null）。非 record（表中缺席）→ null（JDK 语义）。
+    /// 消费方：ObjectStreamClass 的 record 序列化（规范构造器 / 分量取值）。
+    /// upcalls：RecordComponent 由此处构造（无 `new` 指令可见）→ 声明其构造器使 BFS
+    /// 记为已实例化（toString 等覆盖经 Object 视图可达）；访问器经 getDeclaredMethod 查询。
+    #[jvm_native(upcalls = "java/lang/reflect/RecordComponent.<init>:()V java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;")]
+    pub fn getRecordComponents0(&self) -> Result<JArray<crate::java::lang::reflect::RecordComponent>> {
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        let Some((_, comps)) = __record::RECORD_COMPONENTS.iter().find(|(c, _)| *c == name) else {
+            return Ok(JArray::default());
+        };
+        let mut out: Vec<crate::java::lang::reflect::RecordComponent> = Vec::new();
+        for (n, d, g) in comps.iter() {
+            let mut rc = crate::java::lang::reflect::RecordComponent::default();
+            rc._init_not_null();
+            rc.__set_clazz(Clone::clone(self));
+            rc.__set_name(String::from(*n));
+            rc.__set_type_(class_for_descriptor(d));
+            rc.__set_accessor(self.getDeclaredMethod(String::from(*n), JArray::default())?);
+            rc.__set_signature(if g.is_empty() { String::default() } else { String::from(*g) });
+            out.push(rc);
+        }
+        Ok(JArray::from(out))
+    }
+
     /// `Class.isMemberClass()`：是否成员类（有具名外围类的嵌套类）。数据源
     /// 是 java_class! 块的 inner_classes 属性（build.rs 侧无表——本方法按
     /// 名字约定判：成员类的 binary name 以 `$` 分隔且非数组/基本类型；

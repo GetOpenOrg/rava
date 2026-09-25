@@ -308,6 +308,10 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         lines.append('#[is_enum           = true]')
     if ci.is_record:
         lines.append('#[is_record         = true]')
+        if ci.record_components:
+            # 组件表（名:描述符:Signature，| 分隔——描述符自带分号；build.rs 生成 RECORD_COMPONENTS 表）
+            _rc = '|'.join(f'{n}:{d}:{g}' for n, d, g in ci.record_components)
+            lines.append(f'#[record_components = "{_q(_rc)}"]')
     if ci.is_deprecated:
         lines.append('#[is_deprecated     = true]')
     if ci.source_file:

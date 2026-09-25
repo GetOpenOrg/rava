@@ -141,6 +141,7 @@ class ClassInfo:
     is_abstract:       bool = False
     is_enum:           bool = False
     is_record:         bool = False   # Record 属性在场（Class.isRecord 判据）
+    record_components: list = field(default_factory=list)  # [(名, 描述符, Signature)]（Record 属性组件表）
     generic_signature: str  = ''
     source_file:       str  = ''
     inner_classes:     list = None   # list[InnerClassInfo]

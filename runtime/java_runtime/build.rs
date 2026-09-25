@@ -79,7 +79,7 @@ fn main() {
     write_field_table(&scan_class_fields(&meta_roots));
     write_method_table(&with_object_ctor_row(scan_class_methods(&meta_roots)));
     write_modifiers_table(&scan_class_modifiers(&meta_roots));
-    write_record_table(&scan_record_classes(&meta_roots));
+    write_record_table(&scan_record_classes(&meta_roots), &scan_record_components(&meta_roots));
     write_annotation_table(&scan_annotations(&meta_roots));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
@@ -771,7 +771,29 @@ fn scan_record_classes(roots: &[&Path]) -> BTreeSet<String> {
     result
 }
 
-fn write_record_table(entries: &BTreeSet<String>) {
+/// record 组件表（record_components 属性：`名:描述符:Signature`，`|` 分隔，声明序）。
+fn scan_record_components(roots: &[&Path]) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+                continue;
+            }
+            if !current.is_empty() {
+                if let Some(v) = extract_attr_padded(trimmed, "record_components") {
+                    result.insert(current.clone(), v);
+                }
+            }
+        }
+    }
+    result
+}
+
+fn write_record_table(entries: &BTreeSet<String>, components: &BTreeMap<String, String>) {
     let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
     let mut out = String::from(
         "// 由 build.rs 自动生成：record 类集（binary name；Record 属性在场）。
@@ -786,6 +808,18 @@ fn write_record_table(entries: &BTreeSet<String>) {
     }
     out.push_str("];
 ");
+    // 组件表：(record 类, [(名, 描述符, Signature)])——Class.getRecordComponents0 数据源
+    out.push_str("\npub static RECORD_COMPONENTS: &[(&str, &[(&str, &str, &str)])] = &[\n");
+    for (cls, spec) in components {
+        out.push_str(&format!("    ({:?}, &[", cls));
+        for comp in spec.split('|').filter(|c| !c.is_empty()) {
+            let mut it = comp.splitn(3, ':');
+            let (n, d, g) = (it.next().unwrap_or(""), it.next().unwrap_or(""), it.next().unwrap_or(""));
+            out.push_str(&format!("({:?}, {:?}, {:?}), ", n, d, g));
+        }
+        out.push_str("]),\n");
+    }
+    out.push_str("];\n");
     let path = Path::new(&out_dir).join("record_table.rs");
     if let Err(e) = fs::write(&path, &out) {
         panic!("写 record_table.rs 失败: {e}");

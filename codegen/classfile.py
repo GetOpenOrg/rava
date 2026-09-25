@@ -1010,6 +1010,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
     cls_has_enclosing = False
     cls_annotations: list = []
     cls_is_record = False
+    cls_record_components: list = []
     cls_attr_count = r.u2()
     for _ in range(cls_attr_count):
         attr_name_idx = r.u2()
@@ -1030,10 +1031,23 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
             cls_deprecated = True
         elif attr_name == 'Record':
             # JVMS §4.7.30：record 类的组件声明（isRecord 查询的唯一判据——
-            # JVM Class.isRecord = 有 Record 属性的类）。载荷（组件表）不消费，
-            # 但必须跳过——否则后续属性读位错位（record 类解析崩溃）。
+            # JVM Class.isRecord = 有 Record 属性的类）。组件表（名 / 描述符 / Signature）
+            # 供 Class.getRecordComponents0（S-66 record 序列化链）；组件上的其余属性
+            #（注解等）跳过
             cls_is_record = True
-            r.skip(attr_len)
+            rec_r = _Reader(r.read(attr_len))
+            for _ in range(rec_r.u2()):
+                _rc_name = _utf8(pool, rec_r.u2())
+                _rc_desc = _utf8(pool, rec_r.u2())
+                _rc_sig = ''
+                for _ in range(rec_r.u2()):
+                    _an = _utf8(pool, rec_r.u2())
+                    _al = rec_r.u4()
+                    if _an == 'Signature':
+                        _rc_sig = _utf8(pool, rec_r.u2())
+                    else:
+                        rec_r.skip(_al)
+                cls_record_components.append((_rc_name, _rc_desc, _rc_sig))
         elif attr_name == 'EnclosingMethod':
             # JVMS §4.7.7：局部类 / 匿名类的直接外围类与外围方法
             # （method_index 为 0 → 位于初始化器 / 字段初始化表达式中）
@@ -1135,6 +1149,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         is_abstract=bool(access_flags & ACC_ABSTRACT),
         is_enum=bool(access_flags & ACC_ENUM),
         is_record=cls_is_record,
+        record_components=cls_record_components,
         generic_signature=_cls_sig,
         source_file=cls_source_file,
         inner_classes=cls_inner_classes,
