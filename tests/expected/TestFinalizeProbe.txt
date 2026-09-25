@@ -1,0 +1,5 @@
+single=R(a)
+chain=P(b)R(b)
+virtual=P(c)R(c)
+failing=finalize failed
+objectDefault=ok

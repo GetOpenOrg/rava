@@ -1,0 +1,14 @@
+weak.get=payload,true
+weak.refersTo=true,false
+weak.poll=true
+weak.cleared=null,true
+weak.enqueue=true,false
+queue.poll=true,true
+weak.noQueue.enqueue=false
+weak.null=null,true
+soft.get=true
+soft.cleared=null
+phantom.get=null,refersTo=true
+whm=2,10,2,false
+whm.remove=1,null
+strongAlive=payloadk1k2
