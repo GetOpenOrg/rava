@@ -147,6 +147,12 @@ impl Unsafe {
         Ok(())
     }
 
+    /// `storeStoreFence()`：StoreStore 栅栏——Release 栅栏覆盖。
+    pub fn storeStoreFence(&self) -> Result<()> {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
     /// 进程内唯一的 Unsafe 实例（对应静态字段 theUnsafe）。
     #[jvm_boundary]
     pub fn getUnsafe() -> Result<Unsafe> {
@@ -365,6 +371,74 @@ impl Unsafe {
         let old = cell.get();
         cell.set(old & mask);
         Ok(old)
+    }
+
+    /// `getAndBitwiseOrInt(Object o, long offset, int mask)`：按位或的读-改-写，
+    /// 返回旧值（AQS `Node.setStatus` 族的对偶面；同 getAndBitwiseAndInt 取舍）。
+    #[jvm_boundary]
+    pub fn getAndBitwiseOrInt(&self, o: Object, offset: i64, mask: i32) -> Result<i32> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getAndBitwiseOrInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        let old = cell.get();
+        cell.set(old | mask);
+        Ok(old)
+    }
+
+    /// `getAndSetInt(Object o, long offset, int x)`：原子交换，返回旧值。
+    #[jvm_boundary]
+    pub fn getAndSetInt(&self, o: Object, offset: i64, x: i32) -> Result<i32> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getAndSetInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        let old = cell.get();
+        cell.set(x);
+        Ok(old)
+    }
+
+    /// `putIntOpaque` / `putIntRelease`：访问序变体——单 OS 线程协作调度下与
+    /// plain 写同一存储单元（S-11 档位等价，见 VarHandle 伴生模块注释）。
+    #[jvm_boundary]
+    pub fn putIntOpaque(&self, o: Object, offset: i64, x: i32) -> Result<()> {
+        self.putInt_obj_l_i(o, offset, x)
+    }
+
+    #[jvm_boundary]
+    pub fn putIntRelease(&self, o: Object, offset: i64, x: i32) -> Result<()> {
+        self.putInt_obj_l_i(o, offset, x)
+    }
+
+    /// `weakCompareAndSetInt(o, offset, expected, x)`：无竞争下 weak 与强 CAS 同义
+    ///（无伪失败）。
+    #[jvm_boundary]
+    pub fn weakCompareAndSetInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<bool> {
+        self.compareAndSetInt(o, offset, expected, x)
+    }
+
+    /// `weakCompareAndSetReference(o, offset, expected, x)`：同上，引用形态。
+    /// 消费链：AQS 等待队列入队（`casTail` / `casNext`）。
+    #[jvm_boundary]
+    pub fn weakCompareAndSetReference(&self, o: Object, offset: i64, expected: Object, x: Object) -> Result<bool> {
+        self.compareAndSetReference(o, offset, expected, x)
+    }
+
+    /// `getAndSetReference(o, offset, x)`：引用原子交换，返回旧值（数组槽位 /
+    /// 实例字段两臂，与 compareAndSetReference 同一载体分派）。
+    #[jvm_boundary]
+    pub fn getAndSetReference(&self, o: Object, offset: i64, x: Object) -> Result<Object> {
+        if let Some(arr) = _erased_ref_array(&o) {
+            let i = _ref_array_index(offset);
+            let old = arr.get(i)?;
+            arr.set(i, x)?;
+            return Ok(old);
+        }
+        match _instance_ref_get(&o, offset) {
+            Some(old) => {
+                _instance_ref_set(&o, offset, x);
+                Ok(old)
+            }
+            None => panic!("jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object; (offset={} 无实例引用字段臂且非引用元素数组)", offset),
+        }
     }
 
     /// `getIntVolatile(Object o, long offset)`：实例字段 int volatile 读。
