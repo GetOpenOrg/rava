@@ -22,4 +22,29 @@ impl ThreadContainer {
     pub fn __init_on(this: Self, _shared: bool) -> Result<Self> {
         Ok(this)
     }
+
+    /// final `add(Thread)`：按字节码——pin/unpin（协作档位无 continuation，空操作）包裹
+    /// 虚调用 `onStart(thread)`（子类簿记钩子）。消费方：JDK 25 `Thread.start(ThreadContainer)`
+    ///（ForkJoinPool 工作线程经池容器启动）。
+    #[jvm_boundary(upcalls = "jdk/internal/vm/ThreadContainer.onStart:(Ljava/lang/Thread;)V")]
+    pub fn add(&self, thread: crate::java::lang::Thread) -> Result<()> {
+        self.onStart(thread)
+    }
+
+    /// final `remove(Thread)`：同上，虚调用 `onExit(thread)`（线程终结 / 启动失败回滚）。
+    #[jvm_boundary(upcalls = "jdk/internal/vm/ThreadContainer.onExit:(Ljava/lang/Thread;)V")]
+    pub fn remove(&self, thread: crate::java::lang::Thread) -> Result<()> {
+        self.onExit(thread)
+    }
+
+    /// `onStart(Thread)` / `onExit(Thread)`：JDK 基类默认空体（子类覆盖做成员簿记）。
+    #[jvm_boundary]
+    pub fn __impl_onStart(&self, _thread: crate::java::lang::Thread) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_boundary]
+    pub fn __impl_onExit(&self, _thread: crate::java::lang::Thread) -> Result<()> {
+        Ok(())
+    }
 }

@@ -33,4 +33,17 @@ impl SharedThreadContainer {
         }
         thread.start_threadcontainer(Clone::clone(self).into())
     }
+
+    /// `onStart(Thread)` / `onExit(Thread)`：JDK 以此维护成员线程集合（平台线程集 /
+    /// 虚拟线程计数），唯一消费方是 `threads()` 的 serviceability 枚举——与本文件
+    /// 「容器不参与调度、不引入注册表」同一取舍，簿记不建模（无可观察行为）。
+    #[jvm_boundary]
+    pub fn __impl_onStart(&self, _thread: crate::java::lang::Thread) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_boundary]
+    pub fn __impl_onExit(&self, _thread: crate::java::lang::Thread) -> Result<()> {
+        Ok(())
+    }
 }
