@@ -161,6 +161,20 @@ def _materialized_let_type(expr: RsExpr, ty: RsType):
     return None
 
 
+class _StoreState:
+    """_store_local 分阶段（窗口 3 ⑨）之间传递的局部状态：各阶段方法开头解包、
+    结尾写回，阶段体保持原函数体逐字不变。"""
+    __slots__ = ('expr', 'ty', 'decl', 'decl_name', 'hint', 'decl_ty', 'force_let_ty',
+                 'src_is_object', '_is_this', '_is_ref_ty', 'name')
+
+    def __init__(self, expr, ty):
+        self.expr, self.ty = expr, ty
+        self.decl = self.decl_name = self.hint = self.decl_ty = None
+        self.force_let_ty = False
+        self.src_is_object = self._is_this = self._is_ref_ty = None
+        self.name = None
+
+
 class StackSim:
     def __init__(self, param_rust_types: list[RsType], is_static: bool, class_name: str,
                  local_names: dict[int, str] | None = None,
@@ -384,6 +398,20 @@ class StackSim:
         # 前一变量生命周期内错误套用后继变量的类型，如 for-each 迭代器 slot）
         # 声明表按作用域区间查询：slot 复用时（如 for-each 迭代器 slot 被后续变量复用）
         # 每个偏移只会命中当时真正存活的那个 Java 变量，不会错误套用其他变量的名字/类型。
+        c = _StoreState(expr, ty)
+        self._store_prepare(slot, c)
+        self._store_align_decl(slot, c)
+        self._store_refine_hint(slot, c)
+        self._store_this_and_boxing(slot, c)
+        if self._store_rebind(slot, c):
+            return
+        if self._store_emit(slot, c):
+            return
+        self._store_rename_stack_copies(c)
+
+    def _store_prepare(self, slot: int, c: "_StoreState"):
+        """阶段 1：声明表查询（LVT 区间）、冻结栈上旧值、菱形构造的类型实参求解。"""
+        expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name = c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name
         decl = None if slot in self._param_slots else self._decl_at(slot, for_store=True)
         decl_name = _safe_name(decl[0]) if decl is not None else None
         hint = decl[1] if (decl is not None and decl[2]) else None
@@ -406,6 +434,11 @@ class StackSim:
                 else:
                     force_let_ty = True
                 ty = RsNamed(f"{_infer_m.group(1)}<{_solved_args}>")
+        c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name = expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name
+
+    def _store_align_decl(self, slot: int, c: "_StoreState"):
+        """阶段 2：值对齐到描述符声明类型（int 族收窄、接口载体 / Object / 子类上转、包装类 null）。"""
+        expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name = c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name
         _INT_FAMILY = ('i32', 'bool', 'u16', 'i8', 'i16')
         ty_name = getattr(ty, 'name', '')
         if ty_name in _INT_FAMILY:
@@ -471,6 +504,11 @@ class StackSim:
             expr = RawExpr('Default::default()')
             ty = decl_ty
             force_let_ty = True
+        c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name = expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name
+
+    def _store_refine_hint(self, slot: int, c: "_StoreState"):
+        """阶段 3：类型变量上界上转 + LVTT hint 精化（Object 取回、同族实例化、父类上转、Vec 重定向）。"""
+        expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name = c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name
         # 类型变量值赋给声明为其上界类型的局部（`Task<.., K> task = this; task = task.makeChild(..)`，
         # makeChild 返回 K）：Java 隐式上转 → 经 Object 的 checkcast 视图转换为上界类型
         _tv_bound = self.type_var_bounds.get(ty.name) if isinstance(ty, RsNamed) else None
@@ -569,6 +607,11 @@ class StackSim:
                     expr = CastExpr(expr.expr, hint.name,
                                     binary_name=expr.binary_name, checked=expr.checked)
                     ty = hint
+        c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name = expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name
+
+    def _store_this_and_boxing(self, slot: int, c: "_StoreState"):
+        """阶段 4：null → Default、this 克隆 / 监视对象装箱、Object 声明变量再赋具体值的装箱。"""
+        expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name = c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name
         # null（aconst_null）赋给非 Object 提示类型时：Object::default() → Default::default()
         # 让显式类型注解决定具体类型，避免类型不匹配
         if src_is_object and hint is not None and isinstance(expr, Lit) and expr.value == 'Object::default()':
@@ -608,6 +651,11 @@ class StackSim:
             # 不按值类型 let 阴影（阴影会让按 Object 生成的 dispatch 作用在具体 wrapper 上）
             expr = RawExpr(self._box_object(render_expr(_clone_moved_var(expr, ty)), render_type(ty)))
             ty = RsNamed('Object')
+        c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name = expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name
+
+    def _store_rebind(self, slot: int, c: "_StoreState") -> bool:
+        """阶段 5：槽位复用判定与形参重绑定（三类形参赋值直接发射 Assign）。返回 True = 已发射，调用方结束。"""
+        expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name = c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name
         if slot in self.locals and decl_name is not None and self.locals[slot][0] != decl_name:
             # slot 被另一个 Java 变量复用：按新变量的声明名重新 let 声明
             del self.locals[slot]
@@ -623,7 +671,7 @@ class StackSim:
             # let 阴影会把类型降级成 Object 且只在当前块内可见
             self.stmts.append(AssignStmt(Var(self.locals[slot][0]), RawExpr('Default::default()'),
                                          slot=slot, bind_off=self.current_offset))
-            return
+            return True
         if (slot in self._param_slots and slot in self.locals
                 and getattr(self.locals[slot][1], 'name', '') == 'Object'
                 and _is_ref_ty and not isinstance(ty, (RsPrimitive, RsRef, RsSlice, RsInfer))):
@@ -634,7 +682,7 @@ class StackSim:
             self.stmts.append(AssignStmt(Var(self.locals[slot][0]),
                                          RawExpr(self._box_object(_src, render_type(ty))),
                                          slot=slot, bind_off=self.current_offset))
-            return
+            return True
         if (slot in self._param_slots and slot in self.locals
                 and isinstance(self.locals[slot][1], RsNamed)
                 and self.locals[slot][1].name not in ('Object', '()')
@@ -655,7 +703,13 @@ class StackSim:
                 RawExpr(f'<{render_type(self.locals[slot][1])} as ::std::convert::From<Object>>'
                         f'::from(Object::from({_src}))'),
                 slot=slot, bind_off=self.current_offset))
-            return
+            return True
+        c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name = expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name
+        return False
+
+    def _store_emit(self, slot: int, c: "_StoreState") -> bool:
+        """阶段 6：发射 LetStmt / AssignStmt（同变量跨实例化漂移经 Object 边界落回原变量时返回 True，跳过栈清理）。"""
+        expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name = c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name
         if slot in self.locals:
             name, old_ty, _ = self.locals[slot]
             decl_depth = self._slot_decl_depth.get(slot, 0)
@@ -704,7 +758,7 @@ class StackSim:
                         RawExpr(f'<{render_type(old_ty)} as ::std::convert::From<Object>>'
                                 f'::from(Object::from({_src}))'),
                         slot=slot, bind_off=self.current_offset))
-                    return
+                    return True
                 if (decl is None and render_type(old_ty) != render_type(ty)
                         and any(_safe_name(_d[2]) == name and not (_d[0] <= self.current_offset < _d[1])
                                 for _d in self._slot_decls.get(slot, ()))):
@@ -750,7 +804,12 @@ class StackSim:
             value = _clone_moved_var(value, ty)
             self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value, value_ty=ty,
                                       slot=slot, bind_off=self.current_offset))
+        c.expr, c.ty, c.decl, c.decl_name, c.hint, c.decl_ty, c.force_let_ty, c.src_is_object, c._is_this, c._is_ref_ty, c.name = expr, ty, decl, decl_name, hint, decl_ty, force_let_ty, src_is_object, _is_this, _is_ref_ty, name
+        return False
 
+    def _store_rename_stack_copies(self, c: "_StoreState") -> None:
+        """阶段 7：dup 后 astore 的栈上同名 Var 残留改指目标变量（E0382 防护）。"""
+        expr, name = c.expr, c.name
         # dup 后 astore：同一个 Var("_tN") 可能还留在 stack 上，但 _tN 已被 move。
         # 把 stack 上残留的同名引用替换为目标变量名，防止 E0382 use-after-move。
         if isinstance(expr, Var) and expr.name != name:
