@@ -89,6 +89,72 @@ def _is_arm_or_try(text) -> bool:
     return isinstance(text, StructLine) and text.tag in ('arm', 'try')
 
 
+# ── 变量引用检测（窗口 3 G1-c）──────────────────────────────────────────────
+# 迁移前为渲染整行上的 \\bname\\b（字段名 / 方法名 / 字面量中的同名词亦命中）；
+# 改为 IR 收集后经 27 例 6.4 万次提升决策双算零差异（语料中假阳性从未落在决定位置）。
+_STR_LIT_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _ir_names(node, out: set) -> None:
+    from ..rs_ir import (Var, LetStmt, RawExpr, RawStmt, MacroExpr, Call, Lit,
+                         FieldAccess, MethodCall, StaticFieldRef, CastExpr)
+    if node is None or isinstance(node, (str, int, float, bool)):
+        return
+    if isinstance(node, list):
+        for x in node:
+            _ir_names(x, out)
+        return
+    if isinstance(node, Var):
+        out.add(node.name)
+        return
+    if isinstance(node, (RawExpr, RawStmt)):
+        out.update(re.findall(r'[A-Za-z_]\w*', node.code))
+        return
+    if isinstance(node, Lit):
+        out.update(re.findall(r'[A-Za-z_]\w*', _STR_LIT_RE.sub('', node.value)))
+        return
+    if isinstance(node, MacroExpr):
+        for a in node.args:
+            out.update(re.findall(r'[A-Za-z_]\w*', _STR_LIT_RE.sub('', a)))
+        return
+    if isinstance(node, Call):
+        out.update(re.findall(r'[A-Za-z_]\w*', node.func))
+        _ir_names(node.args, out)
+        return
+    if isinstance(node, FieldAccess):
+        _ir_names(node.recv, out)
+        return
+    if isinstance(node, MethodCall):
+        _ir_names(node.recv, out); _ir_names(node.args, out)
+        return
+    if isinstance(node, StaticFieldRef):
+        return
+    if isinstance(node, CastExpr):
+        _ir_names(node.expr, out)
+        return
+    if isinstance(node, LetStmt):
+        out.add(node.name); _ir_names(node.value, out)
+        return
+    if hasattr(node, '__dataclass_fields__'):
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            if hasattr(v, '__dataclass_fields__') or isinstance(v, list):
+                _ir_names(v, out)
+
+
+def _refs(item, text: str, name: str) -> tuple[bool, bool]:
+    """条目是否引用 name、是否为 name 的 let 声明（G1-c）：语句按 IR 收集变量名
+    （字段名 / 方法名 / 类型 / 字符串字面量不计，Raw 文本与宏参数仍扫描）；
+    结构行与非语句文本行按词边界扫描。"""
+    from ..rs_ir import LetStmt
+    if item is None or isinstance(item, str):
+        hit = re.search(r'\b' + re.escape(name) + r'\b', text) is not None
+        return hit, hit and re.search(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b', text) is not None
+    names: set = set()
+    _ir_names(item, names)
+    return name in names, isinstance(item, LetStmt) and item.name == name
+
+
 _REMOVED_ENTRY = ('', None)
 
 
@@ -394,12 +460,10 @@ def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
             continue
         # 检查 scope_close 之后是否有该变量名的引用
         # 若第一个匹配是另一个 let 声明（JVM slot reuse），不算跨作用域引用
-        word = re.compile(r'\b' + re.escape(name) + r'\b')
-        let_decl_check = re.compile(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b')
         for k2 in range(scope_close, len(rendered)):
-            ln = rendered[k2]
-            if word.search(ln):
-                if let_decl_check.search(ln):
+            hit, is_let = _refs(entries[k2][1], rendered[k2], name)
+            if hit:
+                if is_let:
                     break  # 另一个 let 声明，不是跨作用域读取
                 vars_to_hoist.add(name)
                 break
@@ -467,12 +531,11 @@ _HOIST_STATE_NAMES = ('_', '_dn', '_hoisted_s', '_later', '_later_s', '_outer_s'
     'decl_nesting', 'declared_at', 'default_val', 'delta', 'dk', 'entries',
     'entry_nesting', 'first_decl_k', 'first_decl_nesting', 'first_item', 'first_let', 'found',
     'found_decl', 'found_in_else', 'hoisted_type', 'indent', 'inner_indent', 'inner_item',
-    'ins_entry', 'ins_k', 'insertions', 'item', 'k', 'k2', 'k_else', 'k_ref', 'let_decl_check',
-    'let_decl_pat', 'ln', 'ln_ref', 'lvt_names', 'max_hoist', 'merged_type', 'moved', 'name',
+    'ins_entry', 'ins_k', 'insertions', 'item', 'k', 'k2', 'k_else', 'k_ref', 'lvt_names', 'max_hoist', 'merged_type', 'moved', 'name',
     'nesting', 'next_start', 'outer_bk', 'outer_decl_first_k', 'outer_decls', 'outer_item',
     'outer_k', 'parent_k', 'predeclared', 'ref_idx', 'ref_nesting', 'registry', 'rendered',
     'scope_close', 'slot_decls', 'span_end', 'text', 'ty_str', 'vars_to_hoist',
-    'word', 'word_cache', 'word_pat',)
+    )
 
 
 def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
@@ -583,17 +646,15 @@ def _hoist_if_render(h: "_HoistState"):
 def _hoist_if_select(h: "_HoistState"):
     """Pass 3：选出在声明块外（或 else 兄弟块）被引用、需要提升的变量。"""
     (_, decl_k, decl_list, decl_nesting, declared_at, entries, entry_nesting,
-     first_item, found, k2, k_else, k_ref, let_decl_check, ln, ln_ref, name, ref_idx,
-     rendered, scope_close, ty_str, vars_to_hoist, word, word_cache
+     first_item, found, k2, k_else, k_ref, name, ref_idx,
+     rendered, scope_close, ty_str, vars_to_hoist
     ) = (h._, h.decl_k, h.decl_list, h.decl_nesting, h.declared_at, h.entries,
-         h.entry_nesting, h.first_item, h.found, h.k2, h.k_else, h.k_ref, h.let_decl_check,
-         h.ln, h.ln_ref, h.name, h.ref_idx, h.rendered, h.scope_close, h.ty_str,
-         h.vars_to_hoist, h.word, h.word_cache
+         h.entry_nesting, h.first_item, h.found, h.k2, h.k_else, h.k_ref, h.name, h.ref_idx, h.rendered, h.scope_close, h.ty_str,
+         h.vars_to_hoist
     )
     # Pass 3: 找出需要提升的变量 - 在块外或 else 兄弟块中被引用
     # name → (type_str, decl_list, ref_idx)  ref_idx：触发 found=True 的外部引用位置（-1 表示来自 else 兄弟块）
     vars_to_hoist: dict[str, tuple[str | None, list[tuple[int, int]], int]] = {}
-    word_cache: dict[str, re.Pattern] = {}
     for name, decl_list in declared_at.items():
         # 对于每次声明，检查变量是否在其作用域关闭后或 else 兄弟块中被引用
         for decl_k, decl_nesting in decl_list:
@@ -604,20 +665,16 @@ def _hoist_if_select(h: "_HoistState"):
                     break
             if scope_close is None:
                 continue
-            if name not in word_cache:
-                word_cache[name] = re.compile(r'\b' + re.escape(name) + r'\b')
-            word = word_cache[name]
 
             found = False
             ref_idx = -1  # 触发 found=True 的外部引用索引（-1 表示 else 兄弟块引用）
             # 检查 1：作用域关闭后是否被引用（原有逻辑）
             # 若第一个匹配是另一个 let 声明（同名变量在另一分支的单独绑定），
             # 则不算跨作用域引用（JVM slot reuse：不同分支各有自己的 let）
-            let_decl_check = re.compile(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b')
             for k2 in range(scope_close, len(rendered)):
-                ln = rendered[k2]
-                if word.search(ln):
-                    if let_decl_check.search(ln):
+                hit, is_let = _refs(entries[k2][1], rendered[k2], name)
+                if hit:
+                    if is_let:
                         break  # 另一个 let 声明，不是跨作用域读取
                     found = True
                     ref_idx = k2
@@ -634,9 +691,9 @@ def _hoist_if_select(h: "_HoistState"):
                         for k_ref in range(k_else + 1, scope_close):
                             if entry_nesting[k_ref] < decl_nesting:
                                 break
-                            ln_ref = rendered[k_ref]
-                            if word.search(ln_ref):
-                                if let_decl_check.search(ln_ref):
+                            hit, is_let = _refs(entries[k_ref][1], rendered[k_ref], name)
+                            if hit:
+                                if is_let:
                                     break  # 另一个 let 声明，不是读取
                                 found = True
                                 break
@@ -660,11 +717,10 @@ def _hoist_if_select(h: "_HoistState"):
                 vars_to_hoist[name] = (ty_str, decl_list, ref_idx, (decl_k, decl_nesting))
                 break
     (h._, h.decl_k, h.decl_list, h.decl_nesting, h.first_item, h.found, h.k2,
-     h.k_else, h.k_ref, h.let_decl_check, h.ln, h.ln_ref, h.name, h.ref_idx, h.scope_close,
-     h.ty_str, h.vars_to_hoist, h.word, h.word_cache
+     h.k_else, h.k_ref, h.name, h.ref_idx, h.scope_close,
+     h.ty_str, h.vars_to_hoist
     ) = (_, decl_k, decl_list, decl_nesting, first_item, found, k2, k_else, k_ref,
-         let_decl_check, ln, ln_ref, name, ref_idx, scope_close, ty_str, vars_to_hoist, word,
-         word_cache
+         name, ref_idx, scope_close, ty_str, vars_to_hoist
     )
 
 
@@ -673,12 +729,12 @@ def _hoist_if_locate(h: "_HoistState") -> bool:
     上移；else 分支引用逐层外提）。返回 True = 无可用块，跳过该变量。"""
     (arm_nesting, bk, block_entry_indices, block_k, check_k, check_nesting, entries,
      entry_nesting, first_decl_k, first_decl_nesting, found_decl, found_in_else, k_else,
-     k_ref, let_decl_pat, ln, max_hoist, moved, name, next_start, outer_bk, parent_k,
-     rendered, word_cache, word_pat
+     k_ref, max_hoist, moved, name, next_start, outer_bk, parent_k,
+     rendered
     ) = (h.arm_nesting, h.bk, h.block_entry_indices, h.block_k, h.check_k, h.check_nesting,
          h.entries, h.entry_nesting, h.first_decl_k, h.first_decl_nesting, h.found_decl,
-         h.found_in_else, h.k_else, h.k_ref, h.let_decl_pat, h.ln, h.max_hoist, h.moved,
-         h.name, h.next_start, h.outer_bk, h.parent_k, h.rendered, h.word_cache, h.word_pat
+         h.found_in_else, h.k_else, h.k_ref, h.max_hoist, h.moved,
+         h.name, h.next_start, h.outer_bk, h.parent_k, h.rendered
     )
     first_decl_k, first_decl_nesting = found_decl
     # 找到包含第一次声明的最近的块起始索引
@@ -689,11 +745,10 @@ def _hoist_if_locate(h: "_HoistState") -> bool:
             break
     if block_k is None:
         (h.arm_nesting, h.bk, h.block_k, h.check_k, h.check_nesting, h.first_decl_k,
-         h.first_decl_nesting, h.found_in_else, h.k_else, h.k_ref, h.let_decl_pat, h.ln,
-         h.max_hoist, h.moved, h.next_start, h.outer_bk, h.parent_k, h.word_pat
+         h.first_decl_nesting, h.found_in_else, h.k_else, h.k_ref, h.max_hoist, h.moved, h.next_start, h.outer_bk, h.parent_k
         ) = (arm_nesting, bk, block_k, check_k, check_nesting, first_decl_k,
-             first_decl_nesting, found_in_else, k_else, k_ref, let_decl_pat, ln, max_hoist,
-             moved, next_start, outer_bk, parent_k, word_pat
+             first_decl_nesting, found_in_else, k_else, k_ref, max_hoist,
+             moved, next_start, outer_bk, parent_k
         )
         return True
     # 若 block_k 落在 match arm（含 =>）内，向上找到 match 语句本身，
@@ -713,8 +768,6 @@ def _hoist_if_locate(h: "_HoistState") -> bool:
     # 则需继续向上提升，否则变量在 else 分支中不可见（E0425）
     # 策略：从 block_k 向外逐层检查每个外层块的 else；找到需要提升的最近层级后
     # 将 block_k 提升至该层，然后重新检查（直到没有更多需要提升为止）
-    word_pat = word_cache.get(name) or re.compile(r'\b' + re.escape(name) + r'\b')
-    let_decl_pat = re.compile(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b')
     max_hoist = 10  # 防止无限循环
     # next_start: 下一次外层循环从哪个块开始检查（与 block_k 分开跟踪）
     next_start = block_k
@@ -735,9 +788,9 @@ def _hoist_if_locate(h: "_HoistState") -> bool:
                     for k_ref in range(k_else + 1, len(entries)):
                         if entry_nesting[k_ref] <= check_nesting:
                             break
-                        ln = rendered[k_ref]
-                        if word_pat.search(ln):
-                            if let_decl_pat.search(ln):
+                        hit, is_let = _refs(entries[k_ref][1], rendered[k_ref], name)
+                        if hit:
+                            if is_let:
                                 break
                             found_in_else = True
                             break
@@ -767,11 +820,10 @@ def _hoist_if_locate(h: "_HoistState") -> bool:
         if not moved or next_start is None:
             break
     (h.arm_nesting, h.bk, h.block_k, h.check_k, h.check_nesting, h.first_decl_k,
-     h.first_decl_nesting, h.found_in_else, h.k_else, h.k_ref, h.let_decl_pat, h.ln,
-     h.max_hoist, h.moved, h.next_start, h.outer_bk, h.parent_k, h.word_pat
+     h.first_decl_nesting, h.found_in_else, h.k_else, h.k_ref, h.max_hoist, h.moved, h.next_start, h.outer_bk, h.parent_k
     ) = (arm_nesting, bk, block_k, check_k, check_nesting, first_decl_k, first_decl_nesting,
-         found_in_else, k_else, k_ref, let_decl_pat, ln, max_hoist, moved, next_start,
-         outer_bk, parent_k, word_pat
+         found_in_else, k_else, k_ref, max_hoist, moved, next_start,
+         outer_bk, parent_k
     )
     return False
 
