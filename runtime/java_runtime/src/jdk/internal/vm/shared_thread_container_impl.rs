@@ -46,4 +46,12 @@ impl SharedThreadContainer {
     pub fn __impl_onExit(&self, _thread: crate::java::lang::Thread) -> Result<()> {
         Ok(())
     }
+
+    /// `owner()`：按字节码恒返回 null——共享容器无属主线程（区别于 structured
+    /// concurrency 的 owned 容器）。消费方：JDK 25 `Thread.start(ThreadContainer)`
+    /// 的属主校验（`container.owner() != null` 分支不进入）。
+    #[jvm_boundary]
+    pub fn __impl_owner(&self) -> Result<crate::java::lang::Thread> {
+        Ok(Default::default())
+    }
 }
