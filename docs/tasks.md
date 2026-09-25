@@ -74,7 +74,7 @@
 | N5 | invoke_virtual `this` 路径子类登记与第 4 项重复 | ⬜ 待做（清理） | 合并为定义侧单一来源 |
 | N6 | 手写 `_impl.rs` 构造的对象不进 RTA | ⬜ 待评估 | 实现体未入链时槽位落实现者 stub |
 | N7 | 第 4 项 macOS 侧验证 | ⏳ 用户执行中 | macOS provider 链多一层（MacOSX→Bsd→Unix） |
-| N8 | 服务器编译资源约束 | 📝 已记录 | 单 rustc ~14G 内存；共享 target 每测试残留 0.5–1G，跑批间需清理（已写 `prune.sh`） 。2026-09-25 本机（16G 容器）JDK25 TestVirtualThread（76+1699 类）debuginfo=2 下 rustc 峰值 13.8G 被 cgroup OOM 杀；`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 下通过（二进制 507M→270M） |
+| N8 | 服务器编译资源约束 | 📝 已记录 | 单 rustc ~14G 内存；共享 target 每测试残留 0.5–1G，跑批间需清理（`scripts/prune.sh`；后台跑批用 `scripts/run_bg.sh`，自带低内存编译环境）。2026-09-25 本机（16G 容器）JDK25 TestVirtualThread（76+1699 类）debuginfo=2 下 rustc 峰值 13.8G 被 cgroup OOM 杀；`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 下通过（二进制 507M→270M） |
 | N10 | Python 3.11 兼容 | ✅ 本提交 | `project_writer.py` 一处 f-string 内同种引号嵌套（3.12+ 语法）在 3.11 下 SyntaxError，改为字符串拼接；全仓 `ast.parse` 扫描仅此一处 |
 | N9 | 仓库清理：`stash@{0}` 与 /tmp/wt-* 残留 | ✅ 服务器侧 stash 已删；用户本机 /tmp/wt-* 由用户清理（`git worktree prune` 后删目录） | worktree 均为已合入分支 |
 

@@ -195,6 +195,11 @@ python3 scripts/run_tests.py                    # 全量 e2e（顺序）
 python3 scripts/run_tests.py -j 4               # 并行
 python3 scripts/run_tests.py --filter TestXxx   # 单测试
 # 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
+scripts/prune.sh                                # 清共享 target 过期产物（跑批间调用，防磁盘满）
+scripts/run_bg.sh <tag> <cmd...>                # 后台跑批：低内存编译环境 + prune + 落盘 build/logs/bg/
+scripts/gen_trees.sh <out> [Test...]            # 生成转译树（缺省=验收集 27 例）
+scripts/compare_trees.sh <base> <new>           # 生成树逐字节对照 + raw-audit 对照（重构验收）
+scripts/seed_check.sh <Test.java>               # 双种子确定性检查
 ```
 
 ---
