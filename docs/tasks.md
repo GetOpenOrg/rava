@@ -57,9 +57,9 @@
 | 13 | JUnit M5（workspace 打包 + 跨 crate 分派链） | ⬜ 可开工 | M3 已过，前置解除 |
 | 14 | 线程模型终态（VT/Continuation） | ⬜ **已定：方案 A**（2026-09-24 用户拍板） | 虚拟线程映射 OS 线程，Continuation 只保留必要接口，运行时手写层实现（不做用户态调度）；解锁 TestVirtualThread + JUnit M4。方案 B（真实栈切换协程）/ C（维持单线程）不采纳 |
 | 15 | libc（posix 档 B） | 📝 **已定：保持按需** | 真实用例触达目录遍历 / 文件属性 / socket 时逐 native 补，不全量手写 |
-| 16 | JDK25 第四失配（`sun/security/action` E0432）及后续 | 🔨 **下一个处理** | **用户 JDK25 全量 @4ccd3ff（09-25 05:09）：81/172 PASS**。compile 85：**81 例同一错误 `unresolved import crate::sun::security::action`**（全部为 76+1619 大闭包形态，单根因）；3 例 cargo 依赖拉取失败（parking_lot/proc-macro2/scopeguard，用户环境，重试）；TestAnnotations E0277（本分支已修）。run 5：`Unsafe.isBigEndian` stub ×3（ConstructorChain/InitOrder/StringCodePoints）、`sun/nio/cs/UTF_32BE.<init>` stub（HexFormat）、TestThreadJoin 待归类。本机装 JDK25 复现后修 |
-| 17 | JDK25 putDecimal 入口（ASB.append 链） | ⬜ 待 #2 数据 | 服务器实测确认触达后补 |
-| 18 | hashCodeOfUTF16（j25-edge 下一层） | ⬜ 待 #2 数据 | 同上 |
+| 16 | JDK25 第四失配（`sun/security/action` E0432）及后续 | ✅ **本机冒烟全绿，待用户 JDK25 全量确认** | 用户 JDK25 全量 @4ccd3ff：81/172（compile 85 中 81 例同一 E0432，run 5 例 stub）。本机装 OpenJDK 25.0.2 逐层推进，修复链：①E0432 = JEP 486 移除 SecurityManager 后 JDK25 整包删除 sun/security/action，手写 UnixFileSystem 改调 System.getProperty（`9df7959`）；②E0599 VarHandle 签名多态方法 = project_writer 对 var_handle_impl 的过期依赖登记（`9df7959`）；③stub：Unsafe.isBigEndian、ThreadSleepEvent.<init>+Event.isEnabled、UTF_32 三件套 <init>、Thread.sleepNanos0（sleep0 改名）、JavaLangAccess unchecked*（改名）、HexDigits.digitPair（`9df7959`/`5ec92fe`/`3a3312e`/本提交）；④9df7959 引入的 JDK21 TestFilesApi 回退已修（FileSystems 手写链逐跳 upcall，`3a3312e`）。**本机 JDK25 冒烟**：HelloWorld / TestTernary（81 例大闭包形态代表）/ TestConstructorChain / TestThreadJoin / TestHexFormat / TestFilesApi 全 PASS；JDK21 受影响回归（FilesApi/PrintStreamApi/ThreadJoin/StringEdge/Atomics/CompletableFuture/HexFormat/HelloWorld）全 PASS。3 例 cargo 依赖拉取失败属用户环境（已重试）。JDK 选择：未指定 --jdk 固定走 .jdk-version=21（`9439d46`+后续），JDK25 须显式 `--jdk 25` |
+| 17 | JDK25 putDecimal 入口（ASB.append 链） | ⬜ 待 #2 全量数据（本机冒烟未触达） | 服务器实测确认触达后补 |
+| 18 | hashCodeOfUTF16（j25-edge 下一层） | ⬜ 待 #2 全量数据（本机冒烟未触达） | 同上 |
 | 19 | equiv 探针四件（identityHashCode/finalize/引用类型/clone） | ⬜ 待做（低优先） | 观察类，无依赖 |
 | 20 | 缺席直接接口宽化（原记「11 个」） | ✅ | `ce79244`（实测 20 个，已全部物化） |
 
