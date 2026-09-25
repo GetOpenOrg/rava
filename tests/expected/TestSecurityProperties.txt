@@ -1,0 +1,11 @@
+security.provider.1 = SUN
+securerandom.source = file:/dev/random
+keystore.type = pkcs12
+networkaddress.cache.negative.ttl = 10
+login.configuration.provider = sun.security.provider.ConfigFile
+securerandom.strongAlgorithms = NativePRNGBlocking:SUN,DRBG:SUN
+jdk.serialFilter = null
+no.such.key = null
+override keystore.type = jks
+custom = [padded value]
+null key -> NPE
