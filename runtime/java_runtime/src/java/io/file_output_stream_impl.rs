@@ -58,9 +58,10 @@ impl FileOutputStream {
         }
     }
 
-    /// native write(int, boolean)：写单字节（取低 8 位）。
+    /// native write(int, boolean)：写单字节（取低 8 位）。重载改名形态 `write_i_z`（与生成侧
+    /// mangle 一致，否则不覆盖 native 存根）。
     #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
-    pub fn write(&self, b: i32, _append: bool) -> Result<()> {
+    pub fn write_i_z(&self, b: i32, _append: bool) -> Result<()> {
         self.write_all_fd(&[b as u8])
     }
 
