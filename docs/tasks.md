@@ -71,7 +71,7 @@
 |---|---|---|---|
 | N1 | Object 无参构造在反射里不可见 | ✅ 2026-09-25 | 根因是 `getConstructors` 错误地沿父类链上溯（构造器不继承，JLS §8.8）——修正为只取本类后，Object 补行不再影响其他类枚举。build.rs 给手写 Object 补 `<init>()V` public 行；reflect_dispatch 加 Object 构造臂；新增手写 `getConstructor(Class...)`（原经字节码落 native 存根）。验收：新增 e2e `TestCtorReflect`（构造器不继承 / 非 public 可见性 / 带参 newInstance / 抽象类 / 接口 / Object public+declared 面 / 未命中 NSME，19 行）PASS；反射回归 TestReflectProbe/TestAnnoReflect/TestAnnotations + JUnit m3 GOLDEN OK |
 | N2 | 序列化构造器只返元数据 | ⬜ 观察 | 反序列化实例化语义未建模，待真实用例 |
-| N3 | R-2′ 第二步：上转形态统一 UFCS → `UpcastExpr` IR 节点 | ⬜ 待做 | 改 `render.upcast_expr` 一处，但大工作区约 277 行生成树变化，需全量对账 |
+| N3 | R-2′ 第二步：上转 IR 化（方案 C `UpcastExpr` 节点） | ✅ 2026-09-25 | rs_ir 新增 `UpcastExpr(expr, wrap)`，render 分派到 `upcast_expr` 唯一形态决策点；IR 管线 4 处（stack 两个上转分支、vars 合并点 / 降级对齐）改直接构造节点，字符串管线 4 处随 L5 迁移。**形态决策**：保留 `.into()`、不做 UFCS 统一——`animal = dog.into()` 对 Java 开发者可读性优于 `<Animal as From<_>>::from(dog)`（CLAUDE.md 可读层目标），方案 C 的结构化收益不依赖形态。验收：27 例生成树**逐字节一致**，raw_expr 净降 698、无测试上升。顺带修复长期失效单测 test_cfg_structuring（81/81） |
 | N4 | TypeIR 扩大口径 22 处 + 完全体能力 G1–G5 | ⬜ 待做 | G1 RsType→JvmType 桥与窗口 3 同步；G4 归 M-3 |
 | N5 | invoke_virtual `this` 路径子类登记与第 4 项重复 | ✅ 2026-09-25 | 调用侧 this 路径删除，定义侧单一来源。**揭出并修复定义侧缺口**：JDK 链抽象槽位 + 本类桥（SpinedBuffer.OfInt/OfLong/OfDouble 的 arrayForEach/arrayLength/arrayForOne）此前只靠调用侧兜住，改为定义侧照登记。剩余生成树差异仅「最近声明者 == 槽位 trait」与接口 default 两类（行为等价）。**顺带修复**用户链叶子继承祖先桥时丢 vtable_name/vtable_erasure（E0407）。验收：新增 e2e `TestPrimitiveSpinedBuffer`（int/long/double × sorted/builder/toArray/iterator）+ `TestInheritedSlots`（用户层次四形态 + JDK 继承槽位面）PASS；**反证**：去掉修复后 TestPrimitiveSpinedBuffer 命中 `stub: SpinedBuffer$OfPrimitive.arrayLength`；定向回归 12/12 PASS |
 | N6 | 手写 `_impl.rs` 构造的对象不进 RTA | ⬜ 待评估 | 实现体未入链时槽位落实现者 stub |
