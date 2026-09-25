@@ -975,6 +975,17 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                 _vm2 = _copy3.copy(_vm)
                 _vm2.class_name = ci.name
                 _vm2.virtual_in = _vm_virt_in
+                if ((_vm.access_flags & 0x0040) and _vm_virt_in
+                        and _vm_virt_in != short_cls(ci.name)):
+                    # 祖先的桥方法被叶子整体继承（用户链重发射：StringBox 的
+                    # weigh(Object) 桥 → LabelBox）：与本类桥（_vb2 路径）同一槽位
+                    # 映射——Rust 名是 mangle 名（weigh_obj），须经 vtable_name 指回
+                    # 声明者槽位名、vtable_erasure 给出擦除参数视图，否则宏把 mangle
+                    # 名当 trait 成员（E0407）
+                    _slot_name_i = slot_member_rust_name(_vm2, ci, registry, new_format_map)
+                    if _slot_name_i and _slot_name_i != mangle_name(_vm.name, _vm.descriptor):
+                        _vm2.vtable_name = _slot_name_i
+                    _vm2.vtable_erasure = _override_vtable_erasure(_vm2, ci, registry)
                 _vm_attr = _java_method_attr(_vm2)
                 if _vm_bridge is not None and _vm_in_cc and not stub_bodies:
                     # 桥 wrapper 名：与可见方法同名即 mangle（可见方法与桥常仅返回位不同，
