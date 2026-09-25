@@ -428,6 +428,33 @@ def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
     _drop_removed(entries)
 
 
+class _HoistState:
+    """_hoist_if_vars 分阶段（窗口 3 ⑩）之间传递的局部状态：各阶段函数开头解包所用
+    名、结尾写回所赋名，阶段体保持原函数体逐字不变（循环体段去一级缩进，外层
+    continue 改为写回后 return True）。"""
+
+    def __init__(self, entries, predeclared, box_object, lvt_names, registry, slot_decls):
+        for _n in _HOIST_STATE_NAMES:
+            setattr(self, _n, None)
+        self.entries, self.predeclared, self.box_object = entries, predeclared, box_object
+        self.lvt_names, self.registry, self.slot_decls = lvt_names, registry, slot_decls
+
+
+_HOIST_STATE_NAMES = ('_', '_dn', '_hoisted_s', '_later', '_later_s', '_outer_s',
+    '_outer_split', '_outer_ty', '_outer_ty_s', '_t', 'arm_nesting', 'bk',
+    'block_entry_indices', 'block_indent', 'block_item', 'block_k', 'box_object', 'check_k',
+    'check_nesting', 'ck', 'ck_indent', 'ck_item', 'cur', 'd_item', 'decl_k', 'decl_list',
+    'decl_nesting', 'declared_at', 'default_val', 'delta', 'dk', 'else_text', 'entries',
+    'entry_nesting', 'first_decl_k', 'first_decl_nesting', 'first_item', 'first_let', 'found',
+    'found_decl', 'found_in_else', 'hoisted_type', 'indent', 'inner_indent', 'inner_item',
+    'ins_entry', 'ins_k', 'insertions', 'item', 'k', 'k2', 'k_else', 'k_ref', 'let_decl_check',
+    'let_decl_pat', 'ln', 'ln_ref', 'lvt_names', 'max_hoist', 'merged_type', 'moved', 'name',
+    'nesting', 'next_start', 'outer_bk', 'outer_decl_first_k', 'outer_decls', 'outer_item',
+    'outer_k', 'parent_k', 'predeclared', 'ref_idx', 'ref_nesting', 'registry', 'rendered',
+    'scope_close', 'slot_decls', 'span_end', 'stripped', 'text', 'ty_str', 'vars_to_hoist',
+    'word', 'word_cache', 'word_pat',)
+
+
 def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                    lvt_names: frozenset = frozenset(), registry=None, slot_decls=None) -> bool:
     """将在 if/else 块内 let-声明但在块外被读取的变量提升到块前。
@@ -441,6 +468,36 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
 
     返回 True 表示本次有提升，调用方可循环直到返回 False。
     """
+    h = _HoistState(entries, predeclared, box_object, lvt_names, registry, slot_decls)
+    _hoist_if_scan(h)
+    if not h.declared_at or not h.block_entry_indices:
+        return
+    _hoist_if_render(h)
+    _hoist_if_select(h)
+    if not h.vars_to_hoist:
+        return False
+    # Pass 4（逐变量）：定位提升块 → 顶层声明处理 → 插入提升声明并降级块内同名 let
+    h.insertions = []
+    for name, (ty_str, decl_list, ref_idx, found_decl) in h.vars_to_hoist.items():
+        h.name, h.ty_str, h.decl_list, h.ref_idx, h.found_decl = name, ty_str, decl_list, ref_idx, found_decl
+        if _hoist_if_locate(h):
+            continue
+        if _hoist_if_outer(h):
+            continue
+        _hoist_if_emit(h)
+    for ins_k, ins_entry in sorted(h.insertions, key=lambda x: -x[0]):
+        entries.insert(ins_k, ins_entry)
+    _drop_removed(entries)
+    return True
+
+
+def _hoist_if_scan(h: "_HoistState"):
+    """Pass 1：收集嵌套块内的 let 声明（位置 / 深度）、顶层声明与块起始索引。"""
+    (block_entry_indices, declared_at, delta, entries, indent, item, k, nesting,
+     outer_decl_first_k, outer_decls, predeclared, stripped
+    ) = (h.block_entry_indices, h.declared_at, h.delta, h.entries, h.indent, h.item, h.k,
+         h.nesting, h.outer_decl_first_k, h.outer_decls, h.predeclared, h.stripped
+    )
     # Pass 1: 收集所有在嵌套块中声明的变量及其位置、类型
     nesting = 0
     # name → list of (entry_index, nesting_depth)
@@ -466,10 +523,18 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                     outer_decl_first_k[item.name] = k
             elif nesting > 0 and item.name not in predeclared:
                 declared_at.setdefault(item.name, []).append((k, nesting))
+    (h.block_entry_indices, h.declared_at, h.delta, h.indent, h.item, h.k, h.nesting,
+     h.outer_decl_first_k, h.outer_decls, h.stripped
+    ) = (block_entry_indices, declared_at, delta, indent, item, k, nesting, outer_decl_first_k,
+         outer_decls, stripped
+    )
 
-    if not declared_at or not block_entry_indices:
-        return
 
+def _hoist_if_render(h: "_HoistState"):
+    """Pass 2：条目渲染为文本并逐条记录嵌套深度。"""
+    (_, cur, entries, entry_nesting, item, rendered, text
+    ) = (h._, h.cur, h.entries, h.entry_nesting, h.item, h.rendered, h.text
+    )
     # Pass 2: 渲染所有条目为字符串，追踪嵌套深度
     rendered: list[str] = []
     for _, item in entries:
@@ -491,6 +556,21 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
         entry_nesting.append(cur)
         cur += _brace_delta(text)
 
+    (h._, h.cur, h.entry_nesting, h.item, h.rendered, h.text
+    ) = (_, cur, entry_nesting, item, rendered, text
+    )
+
+
+def _hoist_if_select(h: "_HoistState"):
+    """Pass 3：选出在声明块外（或 else 兄弟块）被引用、需要提升的变量。"""
+    (_, decl_k, decl_list, decl_nesting, declared_at, else_text, entries, entry_nesting,
+     first_item, found, k2, k_else, k_ref, let_decl_check, ln, ln_ref, name, ref_idx,
+     rendered, scope_close, ty_str, vars_to_hoist, word, word_cache
+    ) = (h._, h.decl_k, h.decl_list, h.decl_nesting, h.declared_at, h.else_text, h.entries,
+         h.entry_nesting, h.first_item, h.found, h.k2, h.k_else, h.k_ref, h.let_decl_check,
+         h.ln, h.ln_ref, h.name, h.ref_idx, h.rendered, h.scope_close, h.ty_str,
+         h.vars_to_hoist, h.word, h.word_cache
+    )
     # Pass 3: 找出需要提升的变量 - 在块外或 else 兄弟块中被引用
     # name → (type_str, decl_list, ref_idx)  ref_idx：触发 found=True 的外部引用位置（-1 表示来自 else 兄弟块）
     vars_to_hoist: dict[str, tuple[str | None, list[tuple[int, int]], int]] = {}
@@ -561,229 +641,159 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                         ty_str = None
                 vars_to_hoist[name] = (ty_str, decl_list, ref_idx, (decl_k, decl_nesting))
                 break
+    (h._, h.decl_k, h.decl_list, h.decl_nesting, h.else_text, h.first_item, h.found, h.k2,
+     h.k_else, h.k_ref, h.let_decl_check, h.ln, h.ln_ref, h.name, h.ref_idx, h.scope_close,
+     h.ty_str, h.vars_to_hoist, h.word, h.word_cache
+    ) = (_, decl_k, decl_list, decl_nesting, else_text, first_item, found, k2, k_else, k_ref,
+         let_decl_check, ln, ln_ref, name, ref_idx, scope_close, ty_str, vars_to_hoist, word,
+         word_cache
+    )
 
-    if not vars_to_hoist:
-        return False
 
-    # Pass 4: 找到合适的插入位置（最内层包含第一次声明的块的开始处）
-    insertions: list[tuple[int, tuple]] = []
-    for name, (ty_str, decl_list, ref_idx, found_decl) in vars_to_hoist.items():
-        first_decl_k, first_decl_nesting = found_decl
-        # 找到包含第一次声明的最近的块起始索引
-        block_k = None
+def _hoist_if_locate(h: "_HoistState") -> bool:
+    """Pass 4a：定位提升块（最内层包含首次声明的块；match 臂 / try 块
+    上移；else 分支引用逐层外提）。返回 True = 无可用块，跳过该变量。"""
+    (arm_nesting, bk, block_entry_indices, block_k, check_k, check_nesting, entries,
+     entry_nesting, first_decl_k, first_decl_nesting, found_decl, found_in_else, k_else,
+     k_ref, let_decl_pat, ln, max_hoist, moved, name, next_start, outer_bk, parent_k,
+     rendered, word_cache, word_pat
+    ) = (h.arm_nesting, h.bk, h.block_entry_indices, h.block_k, h.check_k, h.check_nesting,
+         h.entries, h.entry_nesting, h.first_decl_k, h.first_decl_nesting, h.found_decl,
+         h.found_in_else, h.k_else, h.k_ref, h.let_decl_pat, h.ln, h.max_hoist, h.moved,
+         h.name, h.next_start, h.outer_bk, h.parent_k, h.rendered, h.word_cache, h.word_pat
+    )
+    first_decl_k, first_decl_nesting = found_decl
+    # 找到包含第一次声明的最近的块起始索引
+    block_k = None
+    for bk in reversed(block_entry_indices):
+        if bk < first_decl_k and entry_nesting[bk] < first_decl_nesting:
+            block_k = bk
+            break
+    if block_k is None:
+        (h.arm_nesting, h.bk, h.block_k, h.check_k, h.check_nesting, h.first_decl_k,
+         h.first_decl_nesting, h.found_in_else, h.k_else, h.k_ref, h.let_decl_pat, h.ln,
+         h.max_hoist, h.moved, h.next_start, h.outer_bk, h.parent_k, h.word_pat
+        ) = (arm_nesting, bk, block_k, check_k, check_nesting, first_decl_k,
+             first_decl_nesting, found_in_else, k_else, k_ref, let_decl_pat, ln, max_hoist,
+             moved, next_start, outer_bk, parent_k, word_pat
+        )
+        return True
+    # 若 block_k 落在 match arm（含 =>）内，向上找到 match 语句本身，
+    # 否则插入位置落在两个 arm 之间，产生"expected pattern, found 'let'"错误
+    # `try {`（java_try! 的内层块）同理：宏语法不允许在 `java_try! {` 与 `try {` 之间出现语句
+    while '=>' in rendered[block_k] or rendered[block_k].strip() == 'try {':
+        arm_nesting = entry_nesting[block_k]
+        parent_k = None
         for bk in reversed(block_entry_indices):
-            if bk < first_decl_k and entry_nesting[bk] < first_decl_nesting:
-                block_k = bk
+            if bk < block_k and entry_nesting[bk] < arm_nesting:
+                parent_k = bk
                 break
-        if block_k is None:
-            continue
-        # 若 block_k 落在 match arm（含 =>）内，向上找到 match 语句本身，
-        # 否则插入位置落在两个 arm 之间，产生"expected pattern, found 'let'"错误
-        # `try {`（java_try! 的内层块）同理：宏语法不允许在 `java_try! {` 与 `try {` 之间出现语句
-        while '=>' in rendered[block_k] or rendered[block_k].strip() == 'try {':
-            arm_nesting = entry_nesting[block_k]
-            parent_k = None
+        if parent_k is None:
+            break
+        block_k = parent_k
+    # 若 block_k 所在块或其任意外层块后有 "} else {" 且 else 分支中引用了该变量，
+    # 则需继续向上提升，否则变量在 else 分支中不可见（E0425）
+    # 策略：从 block_k 向外逐层检查每个外层块的 else；找到需要提升的最近层级后
+    # 将 block_k 提升至该层，然后重新检查（直到没有更多需要提升为止）
+    word_pat = word_cache.get(name) or re.compile(r'\b' + re.escape(name) + r'\b')
+    let_decl_pat = re.compile(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b')
+    max_hoist = 10  # 防止无限循环
+    # next_start: 下一次外层循环从哪个块开始检查（与 block_k 分开跟踪）
+    next_start = block_k
+    while max_hoist > 0:
+        max_hoist -= 1
+        moved = False
+        # 从 next_start 向外逐层检查每个块的 else 分支
+        check_k = next_start
+        check_nesting = entry_nesting[check_k]
+        while True:
+            # 检查 check_k 对应块的直接 } else {
+            for k_else in range(check_k + 1, len(entries)):
+                if entry_nesting[k_else] < check_nesting:
+                    break
+                if (entry_nesting[k_else] == check_nesting + 1
+                        and rendered[k_else].lstrip().startswith('} else')):
+                    found_in_else = False
+                    for k_ref in range(k_else + 1, len(entries)):
+                        if entry_nesting[k_ref] <= check_nesting:
+                            break
+                        ln = rendered[k_ref]
+                        if word_pat.search(ln):
+                            if let_decl_pat.search(ln):
+                                break
+                            found_in_else = True
+                            break
+                    if found_in_else:
+                        # 插入点是 check_k（在该 if-else 之前），而非其父块
+                        block_k = check_k
+                        # 下一轮从 check_k 的父块开始，避免重复检查同一 else
+                        next_start = None
+                        for bk in reversed(block_entry_indices):
+                            if bk < check_k and entry_nesting[bk] < check_nesting:
+                                next_start = bk
+                                break
+                        moved = True
+                    break  # 只看直接 else，结果无论如何都 break
+            if moved:
+                break
+            # 向上找外层块
+            outer_bk = None
             for bk in reversed(block_entry_indices):
-                if bk < block_k and entry_nesting[bk] < arm_nesting:
-                    parent_k = bk
+                if bk < check_k and entry_nesting[bk] < check_nesting:
+                    outer_bk = bk
                     break
-            if parent_k is None:
+            if outer_bk is None:
                 break
-            block_k = parent_k
-        # 若 block_k 所在块或其任意外层块后有 "} else {" 且 else 分支中引用了该变量，
-        # 则需继续向上提升，否则变量在 else 分支中不可见（E0425）
-        # 策略：从 block_k 向外逐层检查每个外层块的 else；找到需要提升的最近层级后
-        # 将 block_k 提升至该层，然后重新检查（直到没有更多需要提升为止）
-        word_pat = word_cache.get(name) or re.compile(r'\b' + re.escape(name) + r'\b')
-        let_decl_pat = re.compile(r'\blet\s+(?:mut\s+)?' + re.escape(name) + r'\b')
-        max_hoist = 10  # 防止无限循环
-        # next_start: 下一次外层循环从哪个块开始检查（与 block_k 分开跟踪）
-        next_start = block_k
-        while max_hoist > 0:
-            max_hoist -= 1
-            moved = False
-            # 从 next_start 向外逐层检查每个块的 else 分支
-            check_k = next_start
-            check_nesting = entry_nesting[check_k]
-            while True:
-                # 检查 check_k 对应块的直接 } else {
-                for k_else in range(check_k + 1, len(entries)):
-                    if entry_nesting[k_else] < check_nesting:
-                        break
-                    if (entry_nesting[k_else] == check_nesting + 1
-                            and rendered[k_else].lstrip().startswith('} else')):
-                        found_in_else = False
-                        for k_ref in range(k_else + 1, len(entries)):
-                            if entry_nesting[k_ref] <= check_nesting:
-                                break
-                            ln = rendered[k_ref]
-                            if word_pat.search(ln):
-                                if let_decl_pat.search(ln):
-                                    break
-                                found_in_else = True
-                                break
-                        if found_in_else:
-                            # 插入点是 check_k（在该 if-else 之前），而非其父块
-                            block_k = check_k
-                            # 下一轮从 check_k 的父块开始，避免重复检查同一 else
-                            next_start = None
-                            for bk in reversed(block_entry_indices):
-                                if bk < check_k and entry_nesting[bk] < check_nesting:
-                                    next_start = bk
-                                    break
-                            moved = True
-                        break  # 只看直接 else，结果无论如何都 break
-                if moved:
-                    break
-                # 向上找外层块
-                outer_bk = None
-                for bk in reversed(block_entry_indices):
-                    if bk < check_k and entry_nesting[bk] < check_nesting:
-                        outer_bk = bk
-                        break
-                if outer_bk is None:
-                    break
-                check_k = outer_bk
-                check_nesting = entry_nesting[outer_bk]
-            if not moved or next_start is None:
-                break
-        # 若变量已在函数体顶层声明（outer_decls），通常不再插入新 let（避免 shadow 类型冲突）。
-        # 例外：若顶层声明出现在 ref_idx 之后（即声明晚于引用），说明顶层声明本身也在错误位置，
-        # 仍需提升，并将该顶层声明一并转为 AssignStmt。
-        if name in outer_decls:
-            outer_k = outer_decl_first_k.get(name, -1)
-            if ref_idx < 0 or outer_k < 0 or outer_k <= ref_idx:
-                # 顶层声明在 ref 之前或没有外部 ref → 已可见，无需提升。
-                # 但同名分段 let（javac 按控制流把一个 JVM 变量的活跃区间拆成
-                # 多条 LVT 条目，兄弟分支各自的绑定；LVT 同槽同名区间证据，
-                # _same_jvm_var）会在自己的块内遮蔽顶层绑定吞掉分支内赋值
-                # （CHM.transfer 的 ln/hn：resize 丢节点）——降级为赋值并回
-                # 同一绑定。类型不可对齐的形态是同槽两个 JVM 变量（G-3 家族，
-                # 身份判定 False / 无证据 None），不在降级之列，保留各自 let。
-                outer_item = entries[outer_k][1]
-                for dk, _dn in decl_list:
-                    if dk <= outer_k:
-                        continue
-                    d_item = entries[dk][1] if dk < len(entries) else None
-                    if not (isinstance(d_item, LetStmt) and d_item.name == name):
-                        continue
-                    if _same_jvm_var(outer_item, d_item, slot_decls) is not True:
-                        continue
-                    _outer_ty = _hoisted_let_type(outer_item)
-                    if _outer_ty is not None:
-                        _later = _hoisted_let_type(d_item)
-                        try:
-                            _later_s = render_type(_later) if _later is not None else None
-                        except Exception:
-                            # B 组计数：值侧对齐检查跳过（静默降级可观测化）
-                            if fallback_audit.STRICT:
-                                raise
-                            fallback_audit.record('vars-type-later')
-                            _later_s = None
-                        _outer_s = render_type(_outer_ty)
-                        if (_later_s is not None and _later_s != _outer_s
-                                and _forms_alignable(_later_s, _outer_s, registry)
-                                and not _is_default_value(d_item.value)):
-                            _align_store_value(d_item, _outer_ty, _later_s, _outer_s)
-                    _demote_let(entries, dk)
-                continue
-            # 顶层声明在 ref 之后 → 需要提升；同时将该顶层声明也转为 AssignStmt
-            # （否则它会成为第二次声明，遮蔽提升后的 let，引发新的 E0425）。
-            # 例外（G-3 槽位复用，如 BufferedReader.read 的 slot 6）：顶层后到的
-            # let 是同槽另一个 JVM 变量（synchronized 监视对象 Object，活跃区间
-            # 与 try 结果暂存 i32/String 不相交，slot 不在 LVT）——类型不可对齐时
-            # 保留它自己的 let：词法作用域天然隔离两形态，且后续扫描的
-            # let_decl_check 以该 let 为界不再把形态 A 的声明再提升到 if 之外，
-            # 消除「单一绑定承载 i32 与 Object 两形态」的 E0308。
+            check_k = outer_bk
+            check_nesting = entry_nesting[outer_bk]
+        if not moved or next_start is None:
+            break
+    (h.arm_nesting, h.bk, h.block_k, h.check_k, h.check_nesting, h.first_decl_k,
+     h.first_decl_nesting, h.found_in_else, h.k_else, h.k_ref, h.let_decl_pat, h.ln,
+     h.max_hoist, h.moved, h.next_start, h.outer_bk, h.parent_k, h.word_pat
+    ) = (arm_nesting, bk, block_k, check_k, check_nesting, first_decl_k, first_decl_nesting,
+         found_in_else, k_else, k_ref, let_decl_pat, ln, max_hoist, moved, next_start,
+         outer_bk, parent_k, word_pat
+    )
+    return False
+
+
+def _hoist_if_outer(h: "_HoistState") -> bool:
+    """Pass 4b：顶层已有同名声明时的处理（已可见 → 分段 let 降级并回同一
+    绑定；晚于引用 → 顶层声明一并降级，或按 G-3 分型拆分保留）。返回 True = 已处理。"""
+    (_dn, _later, _later_s, _outer_s, _outer_split, _outer_ty, _outer_ty_s, _t, ck,
+     ck_indent, ck_item, d_item, decl_list, dk, entries, name, outer_decl_first_k,
+     outer_decls, outer_item, outer_k, ref_idx, registry, slot_decls, ty_str
+    ) = (h._dn, h._later, h._later_s, h._outer_s, h._outer_split, h._outer_ty, h._outer_ty_s,
+         h._t, h.ck, h.ck_indent, h.ck_item, h.d_item, h.decl_list, h.dk, h.entries, h.name,
+         h.outer_decl_first_k, h.outer_decls, h.outer_item, h.outer_k, h.ref_idx, h.registry,
+         h.slot_decls, h.ty_str
+    )
+    # 若变量已在函数体顶层声明（outer_decls），通常不再插入新 let（避免 shadow 类型冲突）。
+    # 例外：若顶层声明出现在 ref_idx 之后（即声明晚于引用），说明顶层声明本身也在错误位置，
+    # 仍需提升，并将该顶层声明一并转为 AssignStmt。
+    if name in outer_decls:
+        outer_k = outer_decl_first_k.get(name, -1)
+        if ref_idx < 0 or outer_k < 0 or outer_k <= ref_idx:
+            # 顶层声明在 ref 之前或没有外部 ref → 已可见，无需提升。
+            # 但同名分段 let（javac 按控制流把一个 JVM 变量的活跃区间拆成
+            # 多条 LVT 条目，兄弟分支各自的绑定；LVT 同槽同名区间证据，
+            # _same_jvm_var）会在自己的块内遮蔽顶层绑定吞掉分支内赋值
+            # （CHM.transfer 的 ln/hn：resize 丢节点）——降级为赋值并回
+            # 同一绑定。类型不可对齐的形态是同槽两个 JVM 变量（G-3 家族，
+            # 身份判定 False / 无证据 None），不在降级之列，保留各自 let。
             outer_item = entries[outer_k][1]
-            _outer_ty_s: str | None = None
-            _outer_split = False
-            if isinstance(outer_item, LetStmt):
-                try:
-                    _t = _hoisted_let_type(outer_item)
-                    _outer_ty_s = render_type(_t) if _t is not None else None
-                except Exception:
-                    # B 组计数：拆分判定跳过（G-3 槽位复用形态判定失真可观测化）
-                    if fallback_audit.STRICT:
-                        raise
-                    fallback_audit.record('vars-type-outer')
-                    _outer_ty_s = None
-                # 类型不可对齐 → 同槽两个 JVM 变量（G-3 活跃区间分型）：
-                # 保留顶层后到 let 为独立绑定（词法作用域隔离），不降级、不并入
-                _outer_split = (ty_str is not None
-                                and not _forms_alignable(_outer_ty_s, ty_str, registry))
-            if not _outer_split:
-                for ck in range(outer_k, len(entries)):
-                    ck_indent, ck_item = entries[ck]
-                    if isinstance(ck_item, LetStmt) and ck_item.name == name:
-                        if (_outer_ty_s is not None and ty_str is not None
-                                and _outer_ty_s != ty_str and not _is_default_value(ck_item.value)):
-                            _align_store_value(ck_item, _str_to_rs_type(ty_str),
-                                               _outer_ty_s, ty_str)
-                        _demote_let(entries, ck)
-
-        # ref_nesting 校验：声明插在 block_k 之前（与 block_k 同层），需保证引用在该层可见。
-        if ref_idx >= 0:
-            ref_nesting = entry_nesting[ref_idx]
-            while block_k is not None:
-                # 声明插在 block_k 之前（与 block_k 同层），作用域涵盖 block_k 处及之后所有同层/更深位置。
-                # 若引用 nesting >= entry_nesting[block_k]，声明对引用可见，停止上移。
-                if ref_nesting >= entry_nesting[block_k]:
-                    break
-                # 引用在 block_k 开启的块的外部，需向上找外层块
-                parent_k = None
-                for bk in reversed(block_entry_indices):
-                    if bk < block_k and entry_nesting[bk] < entry_nesting[block_k]:
-                        parent_k = bk
-                        break
-                if parent_k is None:
-                    break
-                block_k = parent_k
-
-        block_indent, block_item = entries[block_k]
-        if isinstance(block_item, str):      # 文本行的缩进写在文本里
-            block_indent = block_item[:len(block_item) - len(block_item.lstrip())]
-        # 获取类型注解节点（来自第一次声明）
-        _, first_let = entries[first_decl_k]
-        hoisted_type = _hoisted_let_type(first_let)
-        # 统一用 Default::default()，配合类型注解让 Rust 推断
-        default_val = RawExpr('Default::default()')
-        # 将提升点所辖语句（block_k 开启的整条 if/else、match、loop 语句）内的同名 LetStmt
-        # 改为 AssignStmt；语句之外的同名声明是别的 Java 变量，保持各自的 let
-        span_end = len(entries)
-        for k2 in range(block_k + 1, len(entries)):
-            if entry_nesting[k2] <= entry_nesting[block_k]:
-                span_end = k2
-                break
-        if box_object is not None and name not in lvt_names:
-            # 同槽异型（javac 合成槽，无声明类型）：按 JVM 合并点语义取公共祖先
-            # widening；无公共类祖先时回退根类装箱
-            merged_type = _merged_slot_type(entries, name, block_k, span_end, registry)
-            if merged_type is not None:
-                _widen_into_merged(entries, name, block_k, span_end, merged_type, box_object)
-                hoisted_type = merged_type
-        insertions.append((block_k, (block_indent, LetStmt(
-            name, hoisted_type, True, default_val,
-            slot=getattr(first_let, 'slot', None),
-            bind_off=getattr(first_let, 'bind_off', None)))))
-        for decl_k, _ in decl_list:
-            if not (block_k < decl_k < span_end):
-                continue
-            inner_indent, inner_item = entries[decl_k]
-            if isinstance(inner_item, LetStmt) and inner_item.name == name:
-                # 身份证据判定的异槽同名（LVT 证据 _same_jvm_var is False）：span 内
-                # 的同名声明是另一个 JVM 变量（slot 复用换主），不并入本提升绑定，
-                # 保留其自己的 let（词法作用域隔离，G-3 家族语义）；无证据（None，
-                # 合成槽 / 未标注）维持原有并入降级行为
-                if _same_jvm_var(first_let, inner_item, slot_decls) is False:
+            for dk, _dn in decl_list:
+                if dk <= outer_k:
                     continue
-                # 降级前值侧对齐到提升声明类型：兄弟分支同名不同形（javac 三元两臂
-                # 拆两条 LVT 区间，stack.py 按槽复用走 let 阴影——else 臂 HashSet 存入
-                # Set 声明槽），子类型经 `.into()` 上转（Files.newByteChannel 的 set /
-                # FileSystemProvider.newByteChannel 的 opts）。类型不可对齐的形态
-                #（基本 vs 引用）不在此路径——那类冲突由顶层后到 let 的保留拆分承载。
-                if hoisted_type is not None:
-                    _later = _hoisted_let_type(inner_item)
+                d_item = entries[dk][1] if dk < len(entries) else None
+                if not (isinstance(d_item, LetStmt) and d_item.name == name):
+                    continue
+                if _same_jvm_var(outer_item, d_item, slot_decls) is not True:
+                    continue
+                _outer_ty = _hoisted_let_type(outer_item)
+                if _outer_ty is not None:
+                    _later = _hoisted_let_type(d_item)
                     try:
                         _later_s = render_type(_later) if _later is not None else None
                     except Exception:
@@ -792,17 +802,161 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
                             raise
                         fallback_audit.record('vars-type-later')
                         _later_s = None
-                    _hoisted_s = render_type(hoisted_type)
-                    if (_later_s is not None and _later_s != _hoisted_s
-                            and _forms_alignable(_later_s, _hoisted_s, registry)
-                            and not _is_default_value(inner_item.value)):
-                        _align_store_value(inner_item, hoisted_type, _later_s, _hoisted_s)
-                _demote_let(entries, decl_k)
+                    _outer_s = render_type(_outer_ty)
+                    if (_later_s is not None and _later_s != _outer_s
+                            and _forms_alignable(_later_s, _outer_s, registry)
+                            and not _is_default_value(d_item.value)):
+                        _align_store_value(d_item, _outer_ty, _later_s, _outer_s)
+                _demote_let(entries, dk)
+            (h._dn, h._later, h._later_s, h._outer_s, h._outer_split, h._outer_ty,
+             h._outer_ty_s, h._t, h.ck, h.ck_indent, h.ck_item, h.d_item, h.dk,
+             h.outer_item, h.outer_k
+            ) = (_dn, _later, _later_s, _outer_s, _outer_split, _outer_ty, _outer_ty_s, _t, ck,
+                 ck_indent, ck_item, d_item, dk, outer_item, outer_k
+            )
+            return True
+        # 顶层声明在 ref 之后 → 需要提升；同时将该顶层声明也转为 AssignStmt
+        # （否则它会成为第二次声明，遮蔽提升后的 let，引发新的 E0425）。
+        # 例外（G-3 槽位复用，如 BufferedReader.read 的 slot 6）：顶层后到的
+        # let 是同槽另一个 JVM 变量（synchronized 监视对象 Object，活跃区间
+        # 与 try 结果暂存 i32/String 不相交，slot 不在 LVT）——类型不可对齐时
+        # 保留它自己的 let：词法作用域天然隔离两形态，且后续扫描的
+        # let_decl_check 以该 let 为界不再把形态 A 的声明再提升到 if 之外，
+        # 消除「单一绑定承载 i32 与 Object 两形态」的 E0308。
+        outer_item = entries[outer_k][1]
+        _outer_ty_s: str | None = None
+        _outer_split = False
+        if isinstance(outer_item, LetStmt):
+            try:
+                _t = _hoisted_let_type(outer_item)
+                _outer_ty_s = render_type(_t) if _t is not None else None
+            except Exception:
+                # B 组计数：拆分判定跳过（G-3 槽位复用形态判定失真可观测化）
+                if fallback_audit.STRICT:
+                    raise
+                fallback_audit.record('vars-type-outer')
+                _outer_ty_s = None
+            # 类型不可对齐 → 同槽两个 JVM 变量（G-3 活跃区间分型）：
+            # 保留顶层后到 let 为独立绑定（词法作用域隔离），不降级、不并入
+            _outer_split = (ty_str is not None
+                            and not _forms_alignable(_outer_ty_s, ty_str, registry))
+        if not _outer_split:
+            for ck in range(outer_k, len(entries)):
+                ck_indent, ck_item = entries[ck]
+                if isinstance(ck_item, LetStmt) and ck_item.name == name:
+                    if (_outer_ty_s is not None and ty_str is not None
+                            and _outer_ty_s != ty_str and not _is_default_value(ck_item.value)):
+                        _align_store_value(ck_item, _str_to_rs_type(ty_str),
+                                           _outer_ty_s, ty_str)
+                    _demote_let(entries, ck)
+    (h._dn, h._later, h._later_s, h._outer_s, h._outer_split, h._outer_ty, h._outer_ty_s,
+     h._t, h.ck, h.ck_indent, h.ck_item, h.d_item, h.dk, h.outer_item, h.outer_k
+    ) = (_dn, _later, _later_s, _outer_s, _outer_split, _outer_ty, _outer_ty_s, _t, ck,
+         ck_indent, ck_item, d_item, dk, outer_item, outer_k
+    )
+    return False
 
-    for ins_k, ins_entry in sorted(insertions, key=lambda x: -x[0]):
-        entries.insert(ins_k, ins_entry)
-    _drop_removed(entries)
-    return True
+
+def _hoist_if_emit(h: "_HoistState") -> bool:
+    """Pass 4c：引用可见性上移校验，登记提升声明插入点，块内同名 let 值侧
+    对齐后降级为赋值。"""
+    (_, _hoisted_s, _later, _later_s, bk, block_entry_indices, block_indent, block_item,
+     block_k, box_object, decl_k, decl_list, default_val, entries, entry_nesting,
+     first_decl_k, first_let, hoisted_type, inner_indent, inner_item, insertions, k2,
+     lvt_names, merged_type, name, parent_k, ref_idx, ref_nesting, registry, slot_decls,
+     span_end
+    ) = (h._, h._hoisted_s, h._later, h._later_s, h.bk, h.block_entry_indices, h.block_indent,
+         h.block_item, h.block_k, h.box_object, h.decl_k, h.decl_list, h.default_val,
+         h.entries, h.entry_nesting, h.first_decl_k, h.first_let, h.hoisted_type,
+         h.inner_indent, h.inner_item, h.insertions, h.k2, h.lvt_names, h.merged_type, h.name,
+         h.parent_k, h.ref_idx, h.ref_nesting, h.registry, h.slot_decls, h.span_end
+    )
+    # ref_nesting 校验：声明插在 block_k 之前（与 block_k 同层），需保证引用在该层可见。
+    if ref_idx >= 0:
+        ref_nesting = entry_nesting[ref_idx]
+        while block_k is not None:
+            # 声明插在 block_k 之前（与 block_k 同层），作用域涵盖 block_k 处及之后所有同层/更深位置。
+            # 若引用 nesting >= entry_nesting[block_k]，声明对引用可见，停止上移。
+            if ref_nesting >= entry_nesting[block_k]:
+                break
+            # 引用在 block_k 开启的块的外部，需向上找外层块
+            parent_k = None
+            for bk in reversed(block_entry_indices):
+                if bk < block_k and entry_nesting[bk] < entry_nesting[block_k]:
+                    parent_k = bk
+                    break
+            if parent_k is None:
+                break
+            block_k = parent_k
+
+    block_indent, block_item = entries[block_k]
+    if isinstance(block_item, str):      # 文本行的缩进写在文本里
+        block_indent = block_item[:len(block_item) - len(block_item.lstrip())]
+    # 获取类型注解节点（来自第一次声明）
+    _, first_let = entries[first_decl_k]
+    hoisted_type = _hoisted_let_type(first_let)
+    # 统一用 Default::default()，配合类型注解让 Rust 推断
+    default_val = RawExpr('Default::default()')
+    # 将提升点所辖语句（block_k 开启的整条 if/else、match、loop 语句）内的同名 LetStmt
+    # 改为 AssignStmt；语句之外的同名声明是别的 Java 变量，保持各自的 let
+    span_end = len(entries)
+    for k2 in range(block_k + 1, len(entries)):
+        if entry_nesting[k2] <= entry_nesting[block_k]:
+            span_end = k2
+            break
+    if box_object is not None and name not in lvt_names:
+        # 同槽异型（javac 合成槽，无声明类型）：按 JVM 合并点语义取公共祖先
+        # widening；无公共类祖先时回退根类装箱
+        merged_type = _merged_slot_type(entries, name, block_k, span_end, registry)
+        if merged_type is not None:
+            _widen_into_merged(entries, name, block_k, span_end, merged_type, box_object)
+            hoisted_type = merged_type
+    insertions.append((block_k, (block_indent, LetStmt(
+        name, hoisted_type, True, default_val,
+        slot=getattr(first_let, 'slot', None),
+        bind_off=getattr(first_let, 'bind_off', None)))))
+    for decl_k, _ in decl_list:
+        if not (block_k < decl_k < span_end):
+            continue
+        inner_indent, inner_item = entries[decl_k]
+        if isinstance(inner_item, LetStmt) and inner_item.name == name:
+            # 身份证据判定的异槽同名（LVT 证据 _same_jvm_var is False）：span 内
+            # 的同名声明是另一个 JVM 变量（slot 复用换主），不并入本提升绑定，
+            # 保留其自己的 let（词法作用域隔离，G-3 家族语义）；无证据（None，
+            # 合成槽 / 未标注）维持原有并入降级行为
+            if _same_jvm_var(first_let, inner_item, slot_decls) is False:
+                continue
+            # 降级前值侧对齐到提升声明类型：兄弟分支同名不同形（javac 三元两臂
+            # 拆两条 LVT 区间，stack.py 按槽复用走 let 阴影——else 臂 HashSet 存入
+            # Set 声明槽），子类型经 `.into()` 上转（Files.newByteChannel 的 set /
+            # FileSystemProvider.newByteChannel 的 opts）。类型不可对齐的形态
+            #（基本 vs 引用）不在此路径——那类冲突由顶层后到 let 的保留拆分承载。
+            if hoisted_type is not None:
+                _later = _hoisted_let_type(inner_item)
+                try:
+                    _later_s = render_type(_later) if _later is not None else None
+                except Exception:
+                    # B 组计数：值侧对齐检查跳过（静默降级可观测化）
+                    if fallback_audit.STRICT:
+                        raise
+                    fallback_audit.record('vars-type-later')
+                    _later_s = None
+                _hoisted_s = render_type(hoisted_type)
+                if (_later_s is not None and _later_s != _hoisted_s
+                        and _forms_alignable(_later_s, _hoisted_s, registry)
+                        and not _is_default_value(inner_item.value)):
+                    _align_store_value(inner_item, hoisted_type, _later_s, _hoisted_s)
+            _demote_let(entries, decl_k)
+    (h._, h._hoisted_s, h._later, h._later_s, h.bk, h.block_indent, h.block_item,
+     h.block_k, h.decl_k, h.default_val, h.first_let, h.hoisted_type, h.inner_indent,
+     h.inner_item, h.k2, h.merged_type, h.parent_k, h.ref_nesting, h.span_end
+    ) = (_, _hoisted_s, _later, _later_s, bk, block_indent, block_item, block_k, decl_k,
+         default_val, first_let, hoisted_type, inner_indent, inner_item, k2, merged_type,
+         parent_k, ref_nesting, span_end
+    )
+    return False
+
+
 
 
 def _promote_undeclared_assigns(entries: list, predeclared: set[str]):
