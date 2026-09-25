@@ -13,7 +13,7 @@ from .rs_ir import (
     # 表达式
     Lit, Var, BinOp, UnOp, Call, MethodCall, FieldAccess, Index,
     Cast, RefExpr, DerefExpr, BlockExpr, IfExpr, MacroExpr, RawExpr,
-    NewPendingExpr, StaticFieldRef, CastExpr, InstanceOfExpr,
+    NewPendingExpr, StaticFieldRef, CastExpr, UpcastExpr, InstanceOfExpr,
     # 语句
     LetStmt, AssignStmt, ExprStmt, ReturnStmt,
     BreakStmt, ContinueStmt, LoopStmt, IfStmt, RawStmt,
@@ -128,6 +128,12 @@ def render_expr(expr) -> str:
     if isinstance(expr, StaticFieldRef):
         simple_name = _short_cls_g(expr.class_name)
         return f'{simple_name}{expr.turbofish}::{expr.field_name}()?'
+    if isinstance(expr, UpcastExpr):
+        if expr.wrap == 'owned':
+            if isinstance(expr.expr, Var):
+                return upcast_expr(expr.expr.name, 'clone')
+            return upcast_expr(render_expr(expr.expr), 'paren')
+        return upcast_expr(render_expr(expr.expr), 'auto')
     if isinstance(expr, CastExpr):
         return render_cast(expr)
     if isinstance(expr, InstanceOfExpr):
@@ -337,8 +343,9 @@ def render_file(items: list, preamble: str = '') -> str:
 #   wrap='clone' —— src 是位置（变量 / 字段路径），先 Clone::clone(&src) 保所有权（E0382）
 #   wrap='paren' —— src 恒加括号（非变量的任意表达式）
 #   wrap='auto'  —— 原子表达式（is_atomic_rs）直接后缀，否则加括号
-# 形态变更（如统一为 `<T as From<_>>::from`）只改此处；后续 UpcastExpr IR 节点
-# 的 render 分派同样落在这里。
+# IR 管线的上转一律构造 rs_ir.UpcastExpr 节点（N3），render_expr 分派到这里；
+# 字符串管线（fields/arrays/returns/invoke_sig）直接调用本函数，随 L5 Raw 消除迁移。
+# 形态变更只改此处。
 
 def is_atomic_rs(expr_str: str) -> bool:
     """渲染后的 Rust 表达式是否原子（调用链 / 路径）：决定 `.into()` 前是否加括号。"""

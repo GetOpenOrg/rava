@@ -194,6 +194,21 @@ class StaticFieldRef:
 
 
 @dataclass
+class UpcastExpr:
+    """类祖先按值上转（R-2′ 方案 C / N3）：子类值 → 非接口、非 Object 的类祖先
+    类型。由宏 type_conversions §10 为每个祖先生成的 `From<Self> for Ancestor`
+    承担（vtable trait upcasting，保留运行时类）；形态唯一由
+    `render.upcast_expr` 决定（后缀 `.into()`，目标类型由左值 / 形参 / 返回位给定）。
+
+    - wrap='auto'：渲染后的 expr 原子则直接后缀，否则加括号；
+    - wrap='owned'：expr 是 Var（位置）→ `Clone::clone(&v)` 保所有权（E0382），
+      否则按任意表达式加括号。
+    """
+    expr: RsExpr
+    wrap: str = 'auto'
+
+
+@dataclass
 class CastExpr:
     """checkcast / 跨实例化转换（A-3 IR 化）：替代 `.downcast::<T>()` 与
     `is_instance_of("...")` 字面量的字符串拼接形态，所有消费方按本节点分派。

@@ -4,11 +4,11 @@
 
 import re
 from .. import fallback_audit
-from ..render import render_stmt, render_expr, render_type, upcast_expr
+from ..render import render_stmt, render_expr, render_type
 from ..rs_ir import (
     StructLine,
     RsNamed, RsPrimitive, RsType,
-    AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
+    AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt, UpcastExpr,
 )
 from ..constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_TYPES
 
@@ -253,8 +253,7 @@ def _widen_into_merged(entries: list, name: str, start: int, end: int,
                 item.value = RawExpr(box_object(render_expr(item.value), rendered))
             else:
                 # 公共祖先路径：值是该祖先的子类型，`.into()` 目标由汇合后的声明类型给出
-                _src = render_expr(item.value)
-                item.value = RawExpr(upcast_expr(_src, 'auto'))
+                item.value = UpcastExpr(item.value, 'auto')
         if isinstance(item, LetStmt):
             item.ty = merged if item.ty is not None else None
         item.value_ty = merged
@@ -358,8 +357,7 @@ def _align_store_value(item, hoisted_type, later_ty_s: str, hoisted_ty_s: str) -
         item.value_ty = hoisted_type
         return
     if later_ty_s != hoisted_ty_s:
-        _src = render_expr(item.value)
-        item.value = RawExpr(upcast_expr(_src, 'auto'))
+        item.value = UpcastExpr(item.value, 'auto')
     item.value_ty = hoisted_type
 
 
