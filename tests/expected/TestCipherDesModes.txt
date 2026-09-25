@@ -1,0 +1,10 @@
+DES block=8 provider=SunJCE a3c6e831ad654880167e47ec24f71d63ccf84c5b787c0b93
+ecb same=true
+ecb plain=The quick brown fox
+cbc 24d958742a32e965d6c33f23ba42387f6e6a1a67923e9eaa iv=0908070605040302
+cbc plain=The quick brown fox
+parts 0+8+16 same=true
+nopad fece28f58618b10a8ff120c76f8eff9a
+IBSE: Input length not multiple of 8 bytes
+BPE: Given final block not properly padded. Such issues can arise if a bad key is used during decryption.
+NSAE: Cannot find any provider supporting Blowfish2/ECB/NoPadding

@@ -1,0 +1,26 @@
+# JCA 服务注册（K-JCA，docs/plans/2026-09-25-jca-service-registry.md）
+# 原则 4：类名只在 runtime 清单出现。
+#
+#   provider <provider 名> <注册类>   该类全部方法字节码中 `ldc 类型; ldc 算法; ldc 实现类名`
+#                                     三连常量即一条服务（SunJCE.ps / SunEntries.add 同形态）
+#   release  <类 | 包/>               从边界前缀放行、按字节码翻译（算法实现是纯 Java 计算；
+#                                     包前缀以 `/` 结尾；类条目含其嵌套类）
+#   trigger  <类>.<成员>              调用链触达该成员（手写边界的服务查找入口）才补种服务实现类
+provider SunJCE com/sun/crypto/provider/SunJCE
+provider SUN    sun/security/provider/SunEntries
+release  com/sun/crypto/provider/
+release  sun/security/provider/
+release  java/security/MessageDigest
+release  java/security/MessageDigestSpi
+# 安全异常族（纯数据载体；服务查找失败 / 摘要参数错误时由手写边界或翻译字节码构造）
+release  java/security/GeneralSecurityException
+release  java/security/NoSuchAlgorithmException
+release  java/security/NoSuchProviderException
+release  java/security/DigestException
+release  java/security/ProviderException
+release  java/security/KeyException
+release  java/security/InvalidKeyException
+release  java/security/InvalidAlgorithmParameterException
+trigger  sun/security/jca/GetInstance.getInstance
+trigger  sun/security/jca/GetInstance.getServices
+trigger  sun/security/jca/GetInstance.getService

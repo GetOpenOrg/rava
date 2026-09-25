@@ -28,3 +28,10 @@ java/lang/Class
 # 等价承载（doPrivileged 在无安全管理器时透明，JDK 可观测行为一致）。其余成员保持
 # panic 存根。
 java/nio/file/FileSystems
+
+# K-JCA（2026-09-25，docs/plans/2026-09-25-jca-service-registry.md）：JCE 管辖策略。
+# JceSecurity.<clinit> 从 JDK 安装目录读 conf/security/policy/*.policy 并做 provider jar
+# 签名校验（ProviderVerifier / JarFile）——原生二进制无 JDK 安装目录，且 JDK 9+ 默认
+# 策略即 unlimited。类整体手写：canUseProvider 恒 true、isRestricted 恒 false
+# （Cipher 据此取 CryptoAllPermission，JDK 默认安装的可观测行为一致）。
+javax/crypto/JceSecurity

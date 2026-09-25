@@ -26,6 +26,13 @@ _JDK_PREFIXES = ('java/', 'javax/')
 # 前缀名单维护在 runtime/java_runtime/boundary_prefixes.txt（P-1：库知识不进生成器）
 _JDK_STUB_ONLY_PREFIXES: tuple[str, ...] = tuple(read_list('boundary_prefixes.txt'))
 
+# K-JCA 放行（codegen/jca_services.py，清单 jca_providers.txt 的 release 行）：算法实现包
+# （纯 Java 计算）与 engine / SPI 类从边界前缀放行、按字节码翻译。包前缀并入 _JDK_PREFIXES
+#（「展开并翻译」的包集合）；类条目在 java/ 下，天然属于 _JDK_PREFIXES，只需豁免边界判定。
+from .jca_services import load_manifest as _jca_manifest, released as _jca_released
+_JCA_MANIFEST = _jca_manifest()
+_JDK_PREFIXES = _JDK_PREFIXES + tuple(r for r in _JCA_MANIFEST.release if r.endswith('/'))
+
 
 
 # 手写 impl 文件内的类型引用：crate::pkg::path::Name 全路径 + 同包裸 CamelCase 名
@@ -99,6 +106,10 @@ _DATA_BUNDLE_LOADER: list = [None]
 #（runtime `data_bundles::register_data_bundles`）。每轮 BFS 起始清空。
 DATA_BUNDLE_SEEDS: list[str] = []
 
+# 本轮入选的 JCA 服务（jca_services.Service，已排序）：emitter 在生成 main 中登记构造闭包
+#（runtime `jca::register_services`）。每轮 BFS 起始清空。
+JCA_SEEDS: list = []
+
 
 def set_data_bundle_loader(load) -> None:
     """注册（或以 None 清除）结构判定用的类加载器 load(binary_name) → ClassInfo|None。"""
@@ -121,9 +132,9 @@ def _is_data_bundle(cls: str) -> bool:
 
 
 def _is_boundary_class(cls: str) -> bool:
-    """内部包（前缀）或 VM 耦合边界类（清单，含其嵌套类）；前缀内的纯数据资源束除外。"""
+    """内部包（前缀）或 VM 耦合边界类（清单，含其嵌套类）；前缀内的纯数据资源束与 K-JCA 放行类除外。"""
     if cls.startswith(_JDK_STUB_ONLY_PREFIXES):
-        return not _is_data_bundle(cls)
+        return not (_jca_released(cls, _JCA_MANIFEST) or _is_data_bundle(cls))
     return cls.split('$', 1)[0] in _VM_BOUNDARY_CLASSES
 
 
@@ -415,6 +426,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     # L-1：纯数据资源束的结构判定经同一类加载器（jdk.localedata 等全部 jmod 可解析）
     set_data_bundle_loader(_load_class)
     DATA_BUNDLE_SEEDS.clear()
+    JCA_SEEDS.clear()
 
     _sig_poly_native: set[tuple] = set()   # 精确匹配失败但链上有同名 ACC_NATIVE（签名多态边界，预期内）
     _root_inherited: set[tuple] = set()    # 声明者落到手写根类 Object（根 vtable 桥接承载，预期内）
@@ -830,6 +842,33 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             DATA_BUNDLE_SEEDS[:] = _names
             print(f"      locale 种子：{len(_locs)} 个 locale → {len(_names)} 个资源束", flush=True)
 
+        # K-JCA 服务种子：服务查找入口（jca_providers.txt 的 trigger）在调用链上时，按
+        # 「engine 类在链上 × 算法名在用户字符串常量中」入选实现类——构造器入队、记为
+        # 已实例化（engine 经 SPI 虚调用分派到实现类）。实现类经 Provider$Service.newInstance
+        # 按类名反射构造、无静态边。可多轮：新入链的 engine 类（Cipher.init 触达
+        # SecureRandom 等）在下一轮不动点补种。
+        _jca_services: list = []
+        _jca_algos: set = set()
+        _jca_seeded: set = set()
+
+        def _seed_jca_services() -> bool:
+            from .jca_services import extract_services, select_services, user_algorithm_strings
+            if not _jca_services:
+                _jca_services.extend(extract_services(_load_class, _JCA_MANIFEST) or [None])
+                _jca_algos.update(user_algorithm_strings(class_infos))
+            _live = {k[0].rsplit('/', 1)[-1] for k in visited_methods}
+            _new = [sv for sv in select_services([x for x in _jca_services if x], _jca_algos, _live)
+                    if sv not in _jca_seeded]
+            for sv in _new:
+                _jca_seeded.add(sv)
+                instantiated_classes.add(sv.impl)
+                _enqueue_method((sv.impl, '<init>', '()V'))
+            if _new:
+                JCA_SEEDS[:] = sorted(_jca_seeded)
+                print(f"      JCA 种子：{len(_jca_seeded)} 个服务 "
+                      f"({', '.join(f'{x.type}.{x.algorithm}' for x in JCA_SEEDS)})", flush=True)
+            return bool(_new)
+
         # 不动点：排空队列 → 传播虚调用目标 → 有新方法则继续
         while True:
             while queue:
@@ -839,6 +878,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     and any(t in seen_members for t in _ls_mf.triggers)):
                 _bundles_seeded = True
                 _seed_data_bundles()
+            if (not queue and any(t in seen_members for t in _JCA_MANIFEST.triggers)):
+                _seed_jca_services()
             if not queue:
                 break
 

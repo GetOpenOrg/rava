@@ -1,0 +1,24 @@
+//! `javax/crypto/JceSecurity` 手写伴生：VM 边界类（vm_boundary.txt），按调用链按需实现（K-2 规则）。
+//!
+//! K-JCA：JDK 的 JCE 管辖策略在 `<clinit>` 读 JDK 安装目录的 policy 文件、并校验 provider jar
+//! 签名。原生二进制等价于 JDK 9+ 默认安装（`crypto.policy=unlimited`，JDK 内建 provider 恒
+//! 可信）：`canUseProvider` 恒 true、`isRestricted` 恒 false（Cipher 据此取
+//! `CryptoAllPermission.INSTANCE`，密钥长度不设上限）。
+
+use crate::prelude::*;
+use super::jce_security::JceSecurity;
+use crate::java::security::Provider;
+
+impl JceSecurity {
+    /// `canUseProvider(Provider)`：内建 provider 恒可用（JDK 对签名 provider 的校验结果）。
+    #[jvm_boundary]
+    pub fn canUseProvider(_p: Provider) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// `isRestricted()`：默认 unlimited 策略 → false。
+    #[jvm_boundary]
+    pub fn isRestricted() -> Result<bool> {
+        Ok(false)
+    }
+}

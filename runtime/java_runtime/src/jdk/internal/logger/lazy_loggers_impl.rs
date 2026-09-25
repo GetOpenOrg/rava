@@ -5,11 +5,13 @@
 //! 提供者：返回**静默 Logger**——`isLoggable` 恒 false，调用方按 JDK 惯例先判定再记录，
 //! 不产生输出（与未配置日志级别的 JDK 默认观察一致：DEBUG/TRACE 级不输出）。
 //! 消费方：`ObjectInputFilter$Config.<clinit>` 的 `configLog`（序列化过滤器配置日志，
-//! S-66 对象序列化链首跳）。其余 log 重载保持接口 vtable 的精确存根，按需补全。
+//! S-66 对象序列化链首跳）；`ObjectInputStream.filterCheck` 不先判定、直接调
+//! `log(Level, String, Object...)`（Logger 内部自行判级）——各 log 重载均为空操作。
 
 use crate::prelude::*;
 use super::lazy_loggers::LazyLoggers;
-use crate::java::lang::{Module, System_Logger__VTable, System_Logger_Level};
+use crate::java::lang::{Module, System_Logger__VTable, System_Logger_Level, Throwable};
+use crate::java::util::ResourceBundle;
 use std::rc::Rc;
 
 /// 静默 Logger（`System.Logger` 接口实现对象，经 `ObjectVTable::__interface` 应答）。
@@ -24,6 +26,32 @@ impl System_Logger__VTable for SilentLogger {
 
     fn isLoggable(&self, _level: System_Logger_Level) -> Result<bool> {
         Ok(false)
+    }
+
+    fn log_system_logger_level_str(&self, _level: System_Logger_Level, _msg: String) -> Result<()> {
+        Ok(())
+    }
+
+    fn log_system_logger_level_str_throwable(&self, _level: System_Logger_Level, _msg: String,
+                                             _thrown: Throwable) -> Result<()> {
+        Ok(())
+    }
+
+    fn log_system_logger_level_str_arr_obj(&self, _level: System_Logger_Level, _format: String,
+                                           _params: JArray<Object>) -> Result<()> {
+        Ok(())
+    }
+
+    fn log_system_logger_level_resourcebundle_str_throwable(&self, _level: System_Logger_Level,
+                                                            _bundle: ResourceBundle, _msg: String,
+                                                            _thrown: Throwable) -> Result<()> {
+        Ok(())
+    }
+
+    fn log_system_logger_level_resourcebundle_str_arr_obj(&self, _level: System_Logger_Level,
+                                                          _bundle: ResourceBundle, _format: String,
+                                                          _params: JArray<Object>) -> Result<()> {
+        Ok(())
     }
 }
 

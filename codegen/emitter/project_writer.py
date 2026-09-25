@@ -748,6 +748,23 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         hook_block += ('    java_runtime::data_bundles::register_data_bundles(&[\n'
                        + '\n'.join(_bundle_lines) + '\n    ]);\n')
 
+    # K-JCA 服务登记：BFS 按「engine 类在链上 × 用户算法名」入选的服务实现类（翻译字节码）
+    # 的构造闭包，供手写边界 sun/security/jca 的服务查找构造（替代 Provider$Service.newInstance
+    # 的类名反射）。元组：(类型, 算法, 实现类 binary name, provider 名, 构造闭包)。
+    from ..callchain import JCA_SEEDS as _jca_seeds
+    if _jca_seeds:
+        _jca_lines = []
+        for _sv in _jca_seeds:
+            _jpath = '::'.join(['java_runtime',
+                                *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _sv.impl.split('/')[:-1]),
+                                short_cls(_sv.impl)])
+            _jca_lines.append(
+                f'        ("{_sv.type}", "{_sv.algorithm}", "{_sv.impl}", "{_sv.provider}", '
+                f'(|| Ok(java_runtime::java::lang::Object::from({_jpath}::new()?)))'
+                f' as java_runtime::jca::ServiceCtor),')
+        hook_block += ('    java_runtime::jca::register_services(&[\n'
+                       + '\n'.join(_jca_lines) + '\n    ]);\n')
+
     if batch_bin:
         # 批量模式：每个 bin 用 #[path] 独立包含自己的类文件，不共享 lib.rs。
         # 这样某个测试编译失败不会影响其他测试。
