@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# lib pilot golden 对账（M1/M2/M3，docs/plans/2026-09-23-junit-crate-pilot.md）
+# lib pilot golden 对账（M1–M4，docs/plans/2026-09-23-junit-crate-pilot.md）
 #
 # 用法：
 #   scripts/lib_pilot_golden.sh m1     # hamcrest crate：JVM 真 hamcrest vs 翻译 crate
 #   scripts/lib_pilot_golden.sh m2     # junit4 crate（Assert 子集）：同上
 #   scripts/lib_pilot_golden.sh m3     # junit4 crate（Runner 路径）：JUnitCore.runClasses
+#   scripts/lib_pilot_golden.sh m4     # junit4 crate（@Test(timeout=) 路径）：FailOnTimeout
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
 #
 # 前置：JDK 21（JAVA_HOME 未设时自动发现）；jar 资产在与本仓库同层的
@@ -22,7 +23,7 @@ LIBS="${PILOT_LIBS:-$REPO_ROOT/../pilot-deps/target/pilot-libs}"
 JAVA_HOME="$(python3 "$REPO_ROOT/scripts/jdk_select.py")" || { echo "未找到可用 JDK，请设置 JAVA_HOME 或 JAVA_RTA_JDK" >&2; exit 2; }
 export JAVA_HOME
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
-MODE="${1:?用法: $0 m1|m2|m3 [--no-transpile]}"
+MODE="${1:?用法: $0 m1|m2|m3|m4 [--no-transpile]}"
 TRANSPILE=1
 [[ "${2:-}" == "--no-transpile" ]] && TRANSPILE=0
 
@@ -45,6 +46,14 @@ m3)
     # Runner 路径：种子 = JUnitCore（runClasses 入口）+ Assert（用例断言面）+
     # Test 注解（@Test 发现）；Runner 族其余成员由可达性通道 BFS 拉入
     MAIN=JunitRunnerMain
+    CP="$LIBS/junit-4.13.2.jar:$LIBS/hamcrest-3.0.jar"
+    LIB_ARGS=(--lib "hamcrest=$LIBS/hamcrest-3.0.jar"
+              --lib "junit4=$LIBS/junit-4.13.2.jar:seed=org.junit.runner.JUnitCore,org.junit.Assert,org.junit.Test")
+    ;;
+m4)
+    # timeout 路径：@Test(timeout=) 经 FailOnTimeout（线程 + FutureTask.get 限时等待）；
+    # 种子同 m3，FailOnTimeout 族由可达性通道拉入
+    MAIN=JunitTimeoutMain
     CP="$LIBS/junit-4.13.2.jar:$LIBS/hamcrest-3.0.jar"
     LIB_ARGS=(--lib "hamcrest=$LIBS/hamcrest-3.0.jar"
               --lib "junit4=$LIBS/junit-4.13.2.jar:seed=org.junit.runner.JUnitCore,org.junit.Assert,org.junit.Test")
