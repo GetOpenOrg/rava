@@ -339,14 +339,18 @@ class StackSim:
         return None
 
     def _synth_slot_name(self, slot: int, ty: 'RsType | None') -> str:
-        """合成槽名：同一槽位上的合成临时变量按类型分名——javac 对 record 模式 / switch
+        """合成槽名：同一槽位上的合成临时变量按类型类别分名——javac 对 record 模式 / switch
         模式的合成临时变量在不同分支复用同一槽位存放不同类型（`int` 分量与 `ColoredPoint`
         记录本身，RecordPatternsTest 实证），同名会在分支提升时合并成一个声明（E0308）。
-        首个类型沿用 `local_N`（既有产物不变），其后每个新类型 `local_N_k`。ty=None → 首名。"""
+        首个类别沿用 `local_N`，其后每个新类别 `local_N_k`。ty=None → 首名。"""
         base = f"local_{slot}"
         if ty is None:
             return base
-        key = render_type(ty)
+        # 按类型**类别**分名：引用类型同属一类（引用间的异型由提升阶段的公共祖先合并承载，
+        # 且分名会随块模拟顺序漂移——异常处理块常先于主路径模拟）；基本类型各自一类。
+        # record 模式的冲突恰是基本 vs 引用（int 分量 vs 记录本身）
+        rendered = render_type(ty)
+        key = rendered if rendered in _SCALAR_TYPE_NAMES else 'ref'
         seen = self._synth_slot_types.setdefault(slot, [])
         if key not in seen:
             seen.append(key)
