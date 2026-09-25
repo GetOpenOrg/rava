@@ -1,11 +1,21 @@
 /**
  * 字符串拼接模板（invokedynamic makeConcatWithConstants）的常量段含换行 / 制表 /
- * 首尾空白 / 花括号 / 反斜杠（Rosetta 语料 WordWrap 揭出：模板含换行时常量段整段丢失）。
+ * 首尾空白 / 花括号 / 反斜杠 / 控制字符（Rosetta 语料 WordWrap 揭出：模板含换行时常量段整段
+ * 丢失；BWT 揭出：控制字符转义 （Rust 形态 u{..}） 被当作占位花括号双写）。
  * 每行输出用 [] 包裹，空白差异可见。
  */
 public class TestConcatTemplateWhitespace {
     static String show(String s) {
         return "[" + s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "]";
+    }
+
+    static String show2(String s) {
+        StringBuilder sb = new StringBuilder("[");
+        for (char ch : s.toCharArray()) {
+            if (ch < 0x20 || ch == 0x7f) sb.append("<").append((int) ch).append(">");
+            else sb.append(ch);
+        }
+        return sb.append("]").toString();
     }
 
     public static void main(String[] args) {
@@ -27,6 +37,9 @@ public class TestConcatTemplateWhitespace {
         System.out.println(show("{" + w + "}\n"));              // 花括号 + 换行
         System.out.println(show("\\n" + w + "\\"));             // 字面反斜杠（非换行）
         System.out.println(show(w + "\n" + n + "\n" + c));      // 三参数，常量段只有换行
+        System.out.println(show2("\u0002" + w + "\u0003"));     // BWT 原形态：STX/ETX 控制字符
+        System.out.println(show2("{\u0001}" + n + "\u001f{"));  // 控制字符紧邻花括号
+        System.out.println(show2("\u007f" + c + "\u0000"));    // DEL + NUL
         System.out.print("\n" + w + " ");                       // WordWrap 原形态（直接输出）
         System.out.print(w + "\n");
         System.out.println("end");

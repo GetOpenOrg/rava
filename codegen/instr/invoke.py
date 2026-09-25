@@ -102,10 +102,12 @@ def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None
         parts = template.split('\x01')
 
         def _tmpl_seg(p: str) -> str:
-            # 模板是常量池解码值：先按 Rust 字面量转义（反斜杠双写、控制字符），
-            # 再双写 format! 占位花括号。顺序不可反——_escape_str 不产生花括号，
-            # 反过来先双写会把 `{{` 里的 `\` 处理乱。与字面量同一解码值契约。
-            return _escape_str(p).replace('{', '{{').replace('}', '}}')
+            # 模板是常量池解码值：按**原文**的花括号切段，各段按 Rust 字面量转义
+            # （反斜杠双写、控制字符 → `\u{..}`），再以双写花括号拼回。不可对转义结果
+            # 整体双写——控制字符转义自带花括号（`\u{0002}` → `\u{{0002}}` 非法转义，
+            # Rosetta BWT 实证）。与字面量同一解码值契约。
+            return '}}'.join('{{'.join(_escape_str(x) for x in part.split('{'))
+                             for part in p.split('}'))
 
         if len(parts) == len(args) + 1:
             fmt_str = ''.join(
