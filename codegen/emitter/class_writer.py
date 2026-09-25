@@ -948,6 +948,14 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                         if not _vm.is_native or _hand_hit:
                             _inherited_calls.request(
                                 ci.name, _vm.name, _vm.descriptor.split(')', 1)[0] + ')')
+                    elif _vm_bridge is not None:
+                        # 抽象槽位 + 本类桥（ACC_BRIDGE 精确同签名）：桥是本类真实覆盖
+                        # 落擦除槽位的载体（SpinedBuffer.OfInt.arrayForEach(int[],..) 经桥
+                        # arrayForEach(Object,..) 填 SpinedBuffer.OfPrimitive 的抽象槽）——
+                        # 抽象声明无体可转发，但桥成员有真实体，照登记（inherited_gen 的
+                        # _bridge_override_member 生成）；缺登记则槽位回落抽象存根（N5）
+                        _inherited_calls.request(
+                            ci.name, _vm.name, _vm.descriptor.split(')', 1)[0] + ')')
                     continue
                 # 祖先虚方法自身的槽位归属同样经协变模型解析（K-6a：祖先的协变覆盖
                 # 在祖先文件里归父槽位，本类继承展开须填同一个槽）
