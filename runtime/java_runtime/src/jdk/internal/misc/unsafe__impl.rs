@@ -247,6 +247,49 @@ impl Unsafe {
         Ok(ARRAY_BASE_OFFSET)
     }
 
+    // ── 数组布局静态常量（ARRAY_<T>_BASE_OFFSET / ARRAY_<T>_INDEX_SCALE）──────
+    // Unsafe 为内部边界类，<clinit> 不翻译，常量值由此给出：与 arrayBaseOffset /
+    // arrayIndexScale 同一组常量（偏移解码自洽）。字段类型随 JDK 演化（BASE_OFFSET
+    // JDK21 `I` → JDK25 `J`），核心按 JDK25 形态书写，生成侧 clinit_extract 按当前
+    // 模型类型发 getter 转发（静态字段 core_ 适配）。消费方：JDK25 ArraysSupport
+    // 向量化 hashCode / mismatch（TestArraysUtil）。
+    pub fn core_ARRAY_BOOLEAN_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_BOOLEAN_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[Z").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+    pub fn core_ARRAY_BYTE_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_BYTE_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[B").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+    pub fn core_ARRAY_SHORT_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_SHORT_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[S").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+    pub fn core_ARRAY_CHAR_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_CHAR_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[C").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+    pub fn core_ARRAY_INT_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_INT_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[I").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+    pub fn core_ARRAY_LONG_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_LONG_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[J").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+    pub fn core_ARRAY_FLOAT_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_FLOAT_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[F").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+    pub fn core_ARRAY_DOUBLE_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_DOUBLE_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[D").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+    pub fn core_ARRAY_OBJECT_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
+    pub fn core_ARRAY_OBJECT_INDEX_SCALE() -> Result<i32> {
+        Ok(_array_index_scale_by_name("[Ljava/lang/Object;").unwrap_or(REF_INDEX_SCALE) as i32)
+    }
+
     /// `arrayIndexScale(Class)`：数组元素的寻址 stride（字节）。HotSpot 语义按
     /// 元素类型给出（引用元素为压缩指针 4）；消费方（CHM 的 ASHIFT 等）据此
     /// 构造偏移，访问器族用同一组常量反解下标。null 类按 JDK 抛 NPE。
@@ -277,6 +320,34 @@ impl Unsafe {
         } else {
             Ok(false)
         }
+    }
+
+    /// `compareAndExchangeLong(o, offset, expected, x)`：CAS 并返回**见证值**（交换前的
+    /// 当前值；等于 expected 即交换成功）。协作档位下读-比-写不可分割（与
+    /// compareAndSetLong 同一存储单元）。消费方：JDK25 ForkJoinPool.compareAndExchangeCtl
+    ///（signalWork 的 ctl 状态字）。native。
+    #[jvm_boundary]
+    pub fn compareAndExchangeLong(&self, o: Object, offset: i64, expected: i64, x: i64) -> Result<i64> {
+        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.compareAndExchangeLong:(Ljava/lang/Object;JJJ)J (实例字段 offset={} 无共享 long 单元)", offset)
+        });
+        let current = cell.get();
+        if current == expected {
+            cell.set(x);
+        }
+        Ok(current)
+    }
+
+    /// `getAndBitwiseOrLong(o, offset, mask)`：long 字段按位或的读-改-写，返回旧值
+    ///（ForkJoinPool.runState 置位）。
+    #[jvm_boundary]
+    pub fn getAndBitwiseOrLong(&self, o: Object, offset: i64, mask: i64) -> Result<i64> {
+        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getAndBitwiseOrLong:(Ljava/lang/Object;JJ)J (实例字段 offset={} 无共享 long 单元)", offset)
+        });
+        let old = cell.get();
+        cell.set(old | mask);
+        Ok(old)
     }
 
     /// `getLongVolatile(Object o, long offset)`：实例字段 volatile 读。
@@ -438,6 +509,54 @@ impl Unsafe {
                 Ok(old)
             }
             None => panic!("jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object; (offset={} 无实例引用字段臂且非引用元素数组)", offset),
+        }
+    }
+
+    /// `compareAndExchangeInt(o, offset, expected, x)`：int 形态的见证值 CAS
+    ///（compareAndExchangeLong 的同族对偶）。native。
+    #[jvm_boundary]
+    pub fn compareAndExchangeInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<i32> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.compareAndExchangeInt:(Ljava/lang/Object;JII)I (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        let current = cell.get();
+        if current == expected {
+            cell.set(x);
+        }
+        Ok(current)
+    }
+
+    /// `getIntAcquire(o, offset)`：acquire 读——单 OS 线程协作调度下与 volatile /
+    /// plain 读同一存储单元（ForkJoinPool.WorkQueue 的 top/base 读）。
+    #[jvm_boundary]
+    pub fn getIntAcquire(&self, o: Object, offset: i64) -> Result<i32> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getIntAcquire:(Ljava/lang/Object;J)I (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        Ok(cell.get())
+    }
+
+    /// `compareAndExchangeReference(o, offset, expected, x)`：引用见证值 CAS——
+    /// 数组槽位 / 实例字段两臂与 compareAndSetReference 同一载体分派，比较按
+    /// Java `==`（对象身份）。消费方：JDK25 ForkJoinTask 的 aux 等待链。native。
+    #[jvm_boundary]
+    pub fn compareAndExchangeReference(&self, o: Object, offset: i64, expected: Object, x: Object) -> Result<Object> {
+        if let Some(arr) = _erased_ref_array(&o) {
+            let i = _ref_array_index(offset);
+            let current = arr.get(i)?;
+            if current == expected {
+                arr.set(i, x)?;
+            }
+            return Ok(current);
+        }
+        match _instance_ref_get(&o, offset) {
+            Some(current) => {
+                if current == expected {
+                    _instance_ref_set(&o, offset, x);
+                }
+                Ok(current)
+            }
+            None => panic!("jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object; (offset={} 无实例引用字段臂且非引用元素数组)", offset),
         }
     }
 

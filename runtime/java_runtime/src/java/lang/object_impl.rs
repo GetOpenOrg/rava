@@ -37,6 +37,11 @@ impl Object {
     #[jvm_native]
     pub fn hashCode(&self) -> Result<i32> { Ok(self.0.hashCode()) }
 
+    /// `finalize()`（protected，方法体为空）：静态祖先链未覆盖 finalize 的类上
+    /// `this.finalize()` 经根路由落此（invoke_virtual 的 protected void 根方法分支）。
+    /// GC 触发的终结调用不建模（无 GC）。
+    pub fn finalize(&self) -> Result<()> { Ok(()) }
+
     #[jvm_native]
     pub fn equals(&self, other: Object) -> Result<bool> {
         if *self == other {

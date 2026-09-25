@@ -184,6 +184,16 @@ def _mangle_if_overloaded(cls_name: str, mname: str, comment: str, registry: dic
                 from ..sig_types import interface_member_local_name as _iface_local
                 _local = _iface_local(target_ci, mname, _call_desc_m.group(1), registry)
                 return _JAVA_RUST_RENAME.get(_local, _local)
+            else:
+                # 接口接收者、方法声明在超接口（Deque.toArray(IntFunction) 实为
+                # Collection 的 default）：类链解析对接口无效（父类恒 Object），须沿
+                # 超接口定位真实声明者——接口 wrapper 的继承成员按**声明接口**的重载
+                # 态命名（interface_gen），调用侧同视角，否则 Collection 上三重载的
+                # toArray 在 Deque 接收者处回落裸名、撞 toArray() 签名（E0061）
+                from .member_owner import _declaring_interface
+                _decl_iface = _declaring_interface(target_ci, mname, _call_desc_m.group(1), registry)
+                if _decl_iface and _decl_iface != target_ci.name and _decl_iface in registry:
+                    target_ci = registry[_decl_iface]
     # 按 (name, descriptor) 判定，单一权威 hierarchy_overloaded_names：
     #   - 类接收者：接收者视角（wrapper 上本类声明与继承成员同名——inherited_gen
     #     的 receiver_member_name 机制），声明者态可能因接收者新增同名重载而发散；

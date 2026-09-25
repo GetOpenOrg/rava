@@ -21,4 +21,29 @@ impl SharedThreadContainer {
         stc.__set_name(name);
         Ok(stc)
     }
+
+    /// `start(Thread)`：按字节码——已关闭抛 IllegalStateException，否则经
+    /// `JLA.start(thread, this)` 即 `Thread.start(ThreadContainer)` 启动（平台线程
+    /// 经 start0 入模拟线程就绪队列，线程模型方案 A）。消费方：JDK 25
+    /// ForkJoinPool.createWorker（工作线程经池容器启动；JDK 21 为 wt.start() 直调）。
+    #[jvm_boundary(upcalls = "java/lang/Thread.start:(Ljdk/internal/vm/ThreadContainer;)V java/lang/IllegalStateException.<init>:()V")]
+    pub fn __impl_start(&self, thread: crate::java::lang::Thread) -> Result<()> {
+        if self.__get_closed() {
+            return Err(JvmError::from(crate::java::lang::IllegalStateException::new()?));
+        }
+        thread.start_threadcontainer(Clone::clone(self).into())
+    }
+
+    /// `onStart(Thread)` / `onExit(Thread)`：JDK 以此维护成员线程集合（平台线程集 /
+    /// 虚拟线程计数），唯一消费方是 `threads()` 的 serviceability 枚举——与本文件
+    /// 「容器不参与调度、不引入注册表」同一取舍，簿记不建模（无可观察行为）。
+    #[jvm_boundary]
+    pub fn __impl_onStart(&self, _thread: crate::java::lang::Thread) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_boundary]
+    pub fn __impl_onExit(&self, _thread: crate::java::lang::Thread) -> Result<()> {
+        Ok(())
+    }
 }

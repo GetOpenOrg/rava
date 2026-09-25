@@ -17,13 +17,13 @@ from .coerce import _coerce_to_object, _render_cast
 from .hierarchy import _rust_type_to_binary
 from .member_owner import (
     parse_method_ref,
-    _resolve_method_owner, _root_virtual_methods,
+    _resolve_method_owner, _root_virtual_methods, _root_protected_void_methods,
     _declaring_interface, _close_open_type_args,
     _resolve_virtual_sig_params,
     private_interface_method_target as _private_iface_target,
 )
 from .member_naming import (
-    _mangle_if_overloaded, _resolve_bridge_target,
+    _mangle_if_overloaded, _resolve_bridge_target, _handwritten_root_api,
 )
 from ..type_args import ancestor_vtable_args_by_short as _ancestor_vtable_args_by_short
 from ..type_args import (ancestor_type_args as _ancestor_type_args,
@@ -533,7 +533,11 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
                     _sig_owner, _sig_recv_ty = _owner_bin_v, _owner_short_v + _owner_args_v
                     _inherited_calls.request(_obj_jvm, mname, _param_desc)
                 elif (not _owner_bin_v
-                        and (mname, _param_desc) in _root_virtual_methods()):
+                        and ((mname, _param_desc) in _root_virtual_methods()
+                             or ((mname, _param_desc) in _root_protected_void_methods()
+                                 and mname in _handwritten_root_api()))):
+                    # protected void 根方法（静态链未覆盖的 this.finalize()）同样落根类
+                    # API；限制：运行时子类的覆盖不经此路由生效（该方法不在 ObjectVTable）
                     # 整条祖先链未声明、由根类声明 → 装箱后走根 vtable。
                     # Object::from（非 from_any）：保持接收者的 vtable（运行时类名、
                     # is_instance_of、覆盖的 hashCode/equals/toString），JvmRef 装箱会丢这些
@@ -566,6 +570,24 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
     return params, ret, rust_ret, _sig_owner, _sig_recv_ty, _recv, _root_routed
 
 
+def _chain_declares(obj_ty: str, mname: str, registry) -> bool:
+    """接收者静态类型的类链（本类及超类，registry 内）是否声明了实例方法 mname。
+    数组 / 手写类 / 未知类型 → False（调用解析到根类）。"""
+    if not registry:
+        return False
+    from ..jvm_type import from_rust_type, rust_head_name
+    head = rust_head_name(from_rust_type(obj_ty, registry).erasure())
+    cur = _rust_type_to_binary(head, registry) if head else None
+    seen: set = set()
+    while cur and cur in registry and cur not in seen:
+        seen.add(cur)
+        ci = registry[cur]
+        if any(m.name == mname and not m.is_static for m in ci.methods):
+            return True
+        cur = ci.super_class
+    return False
+
+
 def _build_call(mname_r, recv, args):
     return f"{recv}.{mname_r}({args})"
 
@@ -585,7 +607,11 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
         elif _root_routed:
             sim.emit(RawStmt(f"let {v}: {rust_ret} = {_build_call(rust_mname, _recv, arg_str)}?;"))
             sim.push(Var(v), RsNamed(rust_ret))
-        elif rust_mname == 'clone' and obj_ty not in ('Object', '()'):
+        elif (rust_mname == 'clone' and obj_ty not in ('Object', '()')
+              and not _chain_declares(obj_ty, mname, registry)):
+            # 仅当调用解析到根类 Object.clone（数组 / 类链无人声明 clone）：类链上有
+            # 声明（用户 / JDK 的 clone 覆盖、协变 clone + 桥）时走常规虚分派——
+            # 否则覆盖体（深拷贝逻辑）被绕过、经基类静态类型的虚调用丢失（#19 探针）。
             # invokevirtual Object.clone 调用在具体类型上（如数组）：Java 的 clone 是
             # 浅拷贝（新对象、字段 / 元素共享引用），不是 Rust 的引用克隆——
             # Object__clone_base 经接收者 vtable 的 __shallow_copy 派发（数组 →

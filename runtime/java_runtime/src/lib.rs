@@ -164,6 +164,16 @@ fn java_float_repr(
 }
 
 /// Java `Double.toString(double)` 的输出格式（字符串拼接 / 装箱 toString 同语义）。
+/// 语料 JDK 的特性版本（21 / 25 …）：生成侧按本次转译使用的 JDK 写入
+/// scratch 的 jdk_feature.txt，build.rs 转为编译期环境变量。手写边界类中
+/// **随 JDK 版本变化的数据**（非签名——签名差异由 core_ 适配与模型缺席补发承担）
+/// 按此选择；未提供时按项目默认语料 21。
+pub fn jdk_feature() -> u32 {
+    option_env!("JAVA_RTA_JDK_FEATURE")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(21)
+}
+
 pub fn java_fmt_f64(v: f64) -> String {
     if v.is_nan() {
         return "NaN".to_string();

@@ -6,12 +6,27 @@ use super::*;
 // 与 JDK 的差异：不做软引用实例缓存（getInstance 每次构造新实例，equals/hashCode 按值比较，
 // 语义等价）。
 
-// JDK BaseLocale.<clinit> 中 constantBaseLocales 的内容，下标即 BaseLocale.ENGLISH..ROOT 常量
-const CONSTANTS: [(&str, &str); 19] = [
+// JDK BaseLocale.<clinit> 中 constantBaseLocales 的内容，下标即 Locale.createConstant(byte)
+// 的实参（Locale.<clinit> 翻译自字节码，按所在 JDK 的下标取用）。**下标顺序随 JDK 版本
+// 变化**（javap 实测）：JDK 21 以 ENGLISH=0 起、ROOT 居末；JDK 25 以 ROOT=0 起、US=2、
+// GERMANY=12。按语料版本（crate::jdk_feature()）选表——错表会让 Locale.US 拿到 de 的
+// 格式（TestFormatLocale 实证）。22–24 未取语料核对，按 25 的新顺序处理。
+const CONSTANTS_JDK21: [(&str, &str); 19] = [
     ("en", ""), ("fr", ""), ("de", ""), ("it", ""), ("ja", ""), ("ko", ""), ("zh", ""),
     ("zh", "CN"), ("zh", "TW"), ("fr", "FR"), ("de", "DE"), ("it", "IT"), ("ja", "JP"),
     ("ko", "KR"), ("en", "GB"), ("en", "US"), ("en", "CA"), ("fr", "CA"), ("", ""),
 ];
+
+// JDK 25：javap -c sun.util.locale.BaseLocale <clinit> 的 aastore 下标序
+const CONSTANTS_JDK25: [(&str, &str); 19] = [
+    ("", ""), ("en", ""), ("en", "US"), ("fr", ""), ("de", ""), ("it", ""), ("ja", ""),
+    ("ko", ""), ("zh", ""), ("zh", "CN"), ("zh", "TW"), ("fr", "FR"), ("de", "DE"),
+    ("it", "IT"), ("ja", "JP"), ("ko", "KR"), ("en", "GB"), ("en", "CA"), ("fr", "CA"),
+];
+
+fn constants() -> &'static [(&'static str, &'static str); 19] {
+    if crate::jdk_feature() >= 22 { &CONSTANTS_JDK25 } else { &CONSTANTS_JDK21 }
+}
 
 thread_local! {
     static CONSTANT_BASE_LOCALES: std::cell::OnceCell<JArray<BaseLocale>> = std::cell::OnceCell::new();
@@ -54,7 +69,7 @@ impl BaseLocale {
     pub fn constantBaseLocales() -> Result<JArray<BaseLocale>> {
         Ok(CONSTANT_BASE_LOCALES.with(|cell| {
             Clone::clone(cell.get_or_init(|| {
-                JArray::from(CONSTANTS.iter()
+                JArray::from(constants().iter()
                     .map(|(language, region)| make(language, "", region, ""))
                     .collect::<Vec<BaseLocale>>())
             }))

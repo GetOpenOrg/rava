@@ -28,6 +28,12 @@ fn main() {
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=../user/src/");
     println!("cargo:rerun-if-env=changed=JAVA_RTA_STRICT");
+    // 语料 JDK 特性版本（生成侧写入 jdk_feature.txt）→ 编译期环境变量，
+    // 手写层经 crate::jdk_feature() 读取（缺省 21）
+    println!("cargo:rerun-if-changed=jdk_feature.txt");
+    if let Ok(v) = fs::read_to_string("jdk_feature.txt") {
+        println!("cargo:rustc-env=JAVA_RTA_JDK_FEATURE={}", v.trim());
+    }
     // 类宇宙 = 运行时 crate 树 + 用户 crate 树（../user/src）+ lib crate 树
     //（jar 输入模式的兄弟 crate，如 junit4/hamcrest——2026-09-23 用户树扩展
     // 的延续，元数据表（层次/直接父类/字段/方法/注解）描述整个 workspace 的

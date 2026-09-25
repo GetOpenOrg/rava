@@ -45,7 +45,7 @@
 | # | 任务 | 状态 | 证据 / 下一步 |
 |---|---|---|---|
 | 1 | 服务器 JDK21 收官轮 | ⏳ **用户执行中** | 本分支预期仅剩 TestVirtualThread（挂线程模型）；TestAnnotations 已随 M3 分支转绿。服务器单 rustc 峰值 ~14G，需 `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only` |
-| 2 | JDK25 全量轮 | ⏳ **用户执行**（建议 #16 修后再跑） | 三处失配已修（`f75598d`/`f30998d`）；首份干净基线，会给出 #16–18 的真实清单。本机只有 JDK21 |
+| 2 | JDK25 全量轮 | ⏳ 用户 `--failed` 轮 @8bf6baf：**23/34 出列、余 11**（2026-09-25） | 余 11 例本机逐一复现并修复（`197dc82` + `bacf062`）：Unsafe 数组常量族（静态字段 core_ 适配）、JLA currentCarrierThread / uncheckedCountPositives、MhUtil 4 参、putDecimal（#17）、DateTimeHelper.formatTo、接口接收者超接口重载命名（E0061）、BaseLocale 常量表按版本（Locale US/DE 对调）、FJP 见证值 CAS 族。本机 JDK25 定向 14 例：12 PASS；TestCompletableFuture 推进至 FJP 层已修待复跑；TestLocaleConstants 余 fr/it 格式化（L-1 数据缺口）。**下轮 `--failed` 预期余 1（TestLocaleConstants）** |
 | 3 | M3 反射 L3（注解元数据 + Method.invoke 分派） | ✅ | `d3e02dc` + 本分支 M3 链（`82bd0d7` 等），`GOLDEN OK (m3)` |
 | 4 | 抽象槽位需求登记缺口 | ✅ | `f358124` |
 | 5 | TypeIR 余 10 处 | ✅ | `2f5d3c3`，type_surgery 10→0；扩大口径余 22 另记（见新增 N4） |
@@ -60,8 +60,8 @@
 | 14 | 线程模型终态（VT/Continuation） | ✅ **方案 A 已实现**（`4821738` + 本提交） | **口径更正**：原描述「虚拟线程映射 OS 线程」在 Rc 对象模型（非 Send/Sync）下不可行——落地为**虚拟线程 = 模拟平台线程**：与平台线程共用 `thread_impl.rs` 的单线程协作调度器（READY 队列 + join/wait/sleep 泵），Continuation 不建模（VirtualThread.start/run/joinNanos 手写直驱 `runWith(task)`）。真并发仍属对象模型 Send/Sync 化之后的远期档位。TestVirtualThread **JDK21 PASS（`4821738`）/ JDK25 PASS（本提交：MhUtil.findVarHandle、VerifyAccess.ensureTypeVisible、ReferencedKeySet.create 2 参、Wrapper.forPrimitiveType 四处 JDK25 改名/改签适配）**。方案 B / C 不采纳 |
 | 15 | libc（posix 档 B） | 📝 **已定：保持按需** | 真实用例触达目录遍历 / 文件属性 / socket 时逐 native 补，不全量手写 |
 | 16 | JDK25 第四失配（`sun/security/action` E0432）及后续 | ✅ **本机冒烟全绿，待用户 JDK25 全量确认** | 用户 JDK25 全量 @4ccd3ff：81/172（compile 85 中 81 例同一 E0432，run 5 例 stub）。本机装 OpenJDK 25.0.2 逐层推进，修复链：①E0432 = JEP 486 移除 SecurityManager 后 JDK25 整包删除 sun/security/action，手写 UnixFileSystem 改调 System.getProperty（`9df7959`）；②E0599 VarHandle 签名多态方法 = project_writer 对 var_handle_impl 的过期依赖登记（`9df7959`）；③stub：Unsafe.isBigEndian、ThreadSleepEvent.<init>+Event.isEnabled、UTF_32 三件套 <init>、Thread.sleepNanos0（sleep0 改名）、JavaLangAccess unchecked*（改名）、HexDigits.digitPair（`9df7959`/`5ec92fe`/`3a3312e`/本提交）；④9df7959 引入的 JDK21 TestFilesApi 回退已修（FileSystems 手写链逐跳 upcall，`3a3312e`）。**本机 JDK25 冒烟**：HelloWorld / TestTernary（81 例大闭包形态代表）/ TestConstructorChain / TestThreadJoin / TestHexFormat / TestFilesApi 全 PASS；JDK21 受影响回归（FilesApi/PrintStreamApi/ThreadJoin/StringEdge/Atomics/CompletableFuture/HexFormat/HelloWorld）全 PASS。3 例 cargo 依赖拉取失败属用户环境（已重试）。JDK 选择：未指定 --jdk 固定走 .jdk-version=21（`9439d46`+后续），JDK25 须显式 `--jdk 25` |
-| 17 | JDK25 putDecimal 入口（ASB.append 链） | ⬜ 待 #2 全量数据（本机冒烟未触达） | 服务器实测确认触达后补 |
-| 18 | hashCodeOfUTF16（j25-edge 下一层） | ⬜ 待 #2 全量数据（本机冒烟未触达） | 同上 |
+| 17 | JDK25 putDecimal 入口（ASB.append 链） | ✅ `197dc82` | 用户全量确认触达（TestStringBuilderOps）。DoubleToDecimal/FloatToDecimal 的 LATIN1/UTF16 单例 + putDecimal；新增 e2e TestAppendDecimal（Latin1/UTF16 × double/float × 常规/整数/科学计数/特殊值/极值 + StringBuffer/insert/valueOf）JDK25 PASS |
+| 18 | hashCodeOfUTF16（j25-edge 下一层） | 📝 用户全量未触达 | 34 例 `--failed` 轮与本机 14 例均未命中；按需原则不预实现，触达时补 |
 | 19 | equiv 探针四件（identityHashCode/finalize/引用类型/clone） | ⬜ 待做（低优先） | 观察类，无依赖 |
 | 20 | 缺席直接接口宽化（原记「11 个」） | ✅ | `ce79244`（实测 20 个，已全部物化） |
 
@@ -71,13 +71,15 @@
 |---|---|---|---|
 | N1 | Object 无参构造在反射里不可见 | ✅ 2026-09-25 | 根因是 `getConstructors` 错误地沿父类链上溯（构造器不继承，JLS §8.8）——修正为只取本类后，Object 补行不再影响其他类枚举。build.rs 给手写 Object 补 `<init>()V` public 行；reflect_dispatch 加 Object 构造臂；新增手写 `getConstructor(Class...)`（原经字节码落 native 存根）。验收：新增 e2e `TestCtorReflect`（构造器不继承 / 非 public 可见性 / 带参 newInstance / 抽象类 / 接口 / Object public+declared 面 / 未命中 NSME，19 行）PASS；反射回归 TestReflectProbe/TestAnnoReflect/TestAnnotations + JUnit m3 GOLDEN OK |
 | N2 | 序列化构造器只返元数据 | ⬜ 观察 | 反序列化实例化语义未建模，待真实用例 |
-| N3 | R-2′ 第二步：上转形态统一 UFCS → `UpcastExpr` IR 节点 | ⬜ 待做 | 改 `render.upcast_expr` 一处，但大工作区约 277 行生成树变化，需全量对账 |
+| N3 | R-2′ 第二步：上转 IR 化（方案 C `UpcastExpr` 节点） | ✅ 2026-09-25 | rs_ir 新增 `UpcastExpr(expr, wrap)`，render 分派到 `upcast_expr` 唯一形态决策点；IR 管线 4 处（stack 两个上转分支、vars 合并点 / 降级对齐）改直接构造节点，字符串管线 4 处随 L5 迁移。**形态决策**：保留 `.into()`、不做 UFCS 统一——`animal = dog.into()` 对 Java 开发者可读性优于 `<Animal as From<_>>::from(dog)`（CLAUDE.md 可读层目标），方案 C 的结构化收益不依赖形态。验收：27 例生成树**逐字节一致**，raw_expr 净降 698、无测试上升。顺带修复长期失效单测 test_cfg_structuring（81/81） |
 | N4 | TypeIR 扩大口径 22 处 + 完全体能力 G1–G5 | ⬜ 待做 | G1 RsType→JvmType 桥与窗口 3 同步；G4 归 M-3 |
 | N5 | invoke_virtual `this` 路径子类登记与第 4 项重复 | ✅ 2026-09-25 | 调用侧 this 路径删除，定义侧单一来源。**揭出并修复定义侧缺口**：JDK 链抽象槽位 + 本类桥（SpinedBuffer.OfInt/OfLong/OfDouble 的 arrayForEach/arrayLength/arrayForOne）此前只靠调用侧兜住，改为定义侧照登记。剩余生成树差异仅「最近声明者 == 槽位 trait」与接口 default 两类（行为等价）。**顺带修复**用户链叶子继承祖先桥时丢 vtable_name/vtable_erasure（E0407）。验收：新增 e2e `TestPrimitiveSpinedBuffer`（int/long/double × sorted/builder/toArray/iterator）+ `TestInheritedSlots`（用户层次四形态 + JDK 继承槽位面）PASS；**反证**：去掉修复后 TestPrimitiveSpinedBuffer 命中 `stub: SpinedBuffer$OfPrimitive.arrayLength`；定向回归 12/12 PASS |
 | N6 | 手写 `_impl.rs` 构造的对象不进 RTA | ⬜ 待评估 | 实现体未入链时槽位落实现者 stub |
 | N7 | 第 4 项 macOS 侧验证 | ⏳ 用户执行中 | macOS provider 链多一层（MacOSX→Bsd→Unix） |
 | N8 | 服务器编译资源约束 | 📝 已记录 | 单 rustc ~14G 内存；共享 target 每测试残留 0.5–1G，跑批间需清理（`scripts/prune.sh`；后台跑批用 `scripts/run_bg.sh`，自带低内存编译环境）。2026-09-25 本机（16G 容器）JDK25 TestVirtualThread（76+1699 类）debuginfo=2 下 rustc 峰值 13.8G 被 cgroup OOM 杀；`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 下通过（二进制 507M→270M） |
 | N10 | Python 3.11 兼容 | ✅ 本提交 | `project_writer.py` 一处 f-string 内同种引号嵌套（3.12+ 语法）在 3.11 下 SyntaxError，改为字符串拼接；全仓 `ast.parse` 扫描仅此一处 |
+| L-1 | **Locale 数据改由 CLDR 资源束字节码翻译供给** | ⬜ 待做（架构） | 现状：`DecimalFormatSymbols.getInstance(Locale)` 与 NumberFormatProvider 模式为手写 en/de 两套表，其余 locale 回退 ROOT（TestLocaleConstants：fr_FR / it_IT 格式化得美式）——**违反原则 1**。CLDR 数据在 JDK 中即字节码（`jdk.localedata` 的 `sun/text/resources/cldr/ext/FormatData_<lang>.class`，ListResourceBundle 纯数据类）。难点：位于 `sun/` → BFS 边界截断；需设计「纯数据资源束类放行」规则（getContents 只含常量数组，无深依赖），并接通 ResourceBundle 查找链替换手写表 |
+| C-1 | **类自带 clone 覆盖体被绕过**（#19 探针揭出） | ⏸ **待用户决定（涉宏禁改域）** | 现状：invokevirtual clone 调用点一律发射 `Object__clone_base(&recv)` 浅拷贝，不进入类自身声明的 clone——用户深拷贝覆盖不执行、经基类视角调用丢虚分派（TestObjectClone `deep.independent` / `deep.viaBase` 两行），JDK 类同样受影响（ArrayList.clone 应复制 elementData，现与原对象共享）。尝试改为虚分派（`44323f9`）引入回归：vtable 方法体内 `this` 为 `__inner`，宏只在 wrapper 层生成 `__shallow_copy`，类 clone 体内 `super.clone()` 一律 CloneNotSupportedException（JDK25 MemberName 实证）→ 已回退。**正确修复**：宏为 `__inner` 生成 `__shallow_copy`（按运行时类逐字段值拷贝、新建存储单元），之后调用点改虚分派即可。需授权改 `runtime/java_rta_macros` |
 | N9 | 仓库清理：`stash@{0}` 与 /tmp/wt-* 残留 | ✅ 服务器侧 stash 已删；用户本机 /tmp/wt-* 由用户清理（`git worktree prune` 后删目录） | worktree 均为已合入分支 |
 
 ---

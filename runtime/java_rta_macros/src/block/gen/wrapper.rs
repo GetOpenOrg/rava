@@ -426,6 +426,12 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     false
                 }
                 fn __shallow_copy(&self) -> ::std::option::Option<Object> {
+                    // 运行时类优先（C-1）：vtable 即运行时类 inner，其浅拷贝保留子类字段与
+                    // 类名（静态基类视图 Point 承载 Deep 对象时得 Deep 副本）；未应答时
+                    // 回退按本（静态）类逐字段拷贝
+                    if let ::std::option::Option::Some(__o) = ObjectVTable::__shallow_copy(&*self.vtable) {
+                        return ::std::option::Option::Some(__o);
+                    }
                     let __rc = ::std::rc::Rc::new(<#inner_ident as ::std::default::Default>::default());
                     // 类型标注：vtable 去形参后字面量的字段不再提及本类形参——全部字段
                     // 为具体类型的类（E 无从钉住）会触发 E0283；以 Self 钉住

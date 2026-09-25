@@ -354,6 +354,36 @@ def _root_virtual_methods() -> set[tuple[str, str]]:
     return _ROOT_VIRTUAL_METHODS
 
 
+_ROOT_PROTECTED_VOID: 'set[tuple[str, str]] | None' = None
+
+
+def _root_protected_void_methods() -> set[tuple[str, str]]:
+    """根类的 protected、void 返回实例方法集 {(name, '(params)')}（动态解析 JDK
+    Object.class，不写方法名字面量）。
+
+    子类上对它的调用（`this.m()`，整条静态祖先链未覆盖）语义即根类实现；经
+    手写 Object 的同名 API 承载（调用侧另需该名在手写 API 名面中）。仅 void：
+    有返回值的 protected 根方法（浅拷贝）由调用结果发射的专门形态承担。"""
+    global _ROOT_PROTECTED_VOID
+    if _ROOT_PROTECTED_VOID is None:
+        _ROOT_PROTECTED_VOID = set()
+        try:
+            from ..classfile import parse_class_bytes
+            from ..jdk_resolver import JdkResolver
+            with JdkResolver() as _res:
+                _data = _res.resolve(_OBJECT_CLASS)
+            if _data is not None:
+                for _m in parse_class_bytes(_data, _OBJECT_CLASS).methods:
+                    if (_m.is_static or _m.is_synthetic or _m.name.startswith('<')
+                            or not (_m.access_flags & 0x0004)     # ACC_PROTECTED
+                            or not _m.descriptor.endswith(')V')):
+                        continue
+                    _ROOT_PROTECTED_VOID.add((_m.name, _m.descriptor.split(')')[0] + ')'))
+        except RuntimeError:
+            pass
+    return _ROOT_PROTECTED_VOID
+
+
 _BRIDGE_CALL_RE = re.compile(r'^(?:Interface)?Method\s+([^.\s]+)\.([^:\s]+):(\(\S*\)\S+)')
 
 

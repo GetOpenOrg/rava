@@ -359,6 +359,32 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         }
     };
 
+    // Object.clone 的运行时类浅拷贝（C-1）：新 inner（新标识单元），每个字段新建存储
+    // 单元、值按 Java 语义拷贝（基本类型 Cell 拷贝值；引用 / 擦除 RefCell 拷贝引用——
+    // Box<T> 的 Clone 即 wrapper/Object 的引用克隆），再经本类 __as_Self 钩子包成运行时
+    // 类 wrapper。inner 即运行时类（vtable 方法体里的 `this`），类自带 clone 体内的
+    // super.clone() 经此得到运行时类副本（子类字段 / 类名完整保留）。
+    let shallow_copy_inits: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+        .map(|(name, ty)| (name, !ctx.is_erased(name) && ctx.inherited_is_basic(name, ty)))
+        .chain(ctx.fields.iter().map(|(name, ty)| (name, !ctx.is_erased(name) && is_basic(ty))))
+        .map(|(name, basic)| if basic {
+            quote! { #name: ::std::rc::Rc::new(::std::cell::Cell::new(self.#name.get())), }
+        } else {
+            quote! { #name: ::std::rc::Rc::new(::std::cell::RefCell::new(self.#name.borrow().clone())), }
+        })
+        .collect();
+    let as_self_hook = &ctx.as_self_hook;
+    let vtable_trait_ident = &ctx.vtable_trait_ident;
+    let inner_shallow_copy: TokenStream2 = quote! {
+        fn __shallow_copy(&self) -> ::std::option::Option<Object> {
+            let __c = #inner_ident {
+                #(#shallow_copy_inits)*
+                __identity: ::std::rc::Rc::new(()),
+            };
+            ::std::option::Option::Some(Object::from(#vtable_trait_ident::#as_self_hook(&__c)))
+        }
+    };
+
     // A-1 存储层擦除后，inner 的 ObjectVTable impl 只承载「按擦除类」的判定与桥接：
     // 视图重建（__view_as / __view_into）、逐字段浅拷贝（__shallow_copy）与擦除存储
     // 导出（__erased_state，已删除）都移到 wrapper 侧——Object 直接持有 wrapper
@@ -384,6 +410,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #inner_ref_get_query
                 #inner_ref_set_query
                 #to_string_inner_bridge
+                #inner_shallow_copy
             }
         }
     } else {
