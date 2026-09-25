@@ -39,6 +39,8 @@ SKIPS = {
     "ruva:algorithms/VersCheck.java": "打印 java.version，JDK 版本相关",
     "ruva:algorithms/ScriptName.java": "读 sun.java.command，调 java 与调 cargo run 输出必然不同",
     "ruva:basic/MultiFileDemo/Greeter.java": "无 main 支持类，并入 MultiFileDemo.java 单文件化",
+    "jnc:PackageTest.java": "package 声明使类落子包，run_tests 按裸类名加载必 CNFE——测试目标在本框架不可表达",
+    "ruva:algorithms/Narcissist.java": "从 stdin 读自身源码做 quine 校验，headless 下 readLine 永久阻塞至超时",
 }
 
 # ── package 声明剥离（22 个，其中 KnightsTour 已剔除，实际 21）────────────
