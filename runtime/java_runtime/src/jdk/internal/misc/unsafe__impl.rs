@@ -353,6 +353,20 @@ impl Unsafe {
         }
     }
 
+    /// `getAndBitwiseAndInt(Object o, long offset, int mask)`：实例字段 int 的
+    /// 原子按位与，返回旧值。JDK 原型是 CAS 重试循环；协作档位下读-改-写不被
+    /// 穿插即不可分割（与 getAndAddInt 同族）。消费链：AQS `Node.getAndUnsetStatus`
+    ///（CountDownLatch.countDown → releaseShared → signalNext）。
+    #[jvm_boundary]
+    pub fn getAndBitwiseAndInt(&self, o: Object, offset: i64, mask: i32) -> Result<i32> {
+        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
+            panic!("stub: jdk/internal/misc/Unsafe.getAndBitwiseAndInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
+        });
+        let old = cell.get();
+        cell.set(old & mask);
+        Ok(old)
+    }
+
     /// `getIntVolatile(Object o, long offset)`：实例字段 int volatile 读。
     #[jvm_boundary]
     pub fn getIntVolatile(&self, o: Object, offset: i64) -> Result<i32> {
