@@ -10,9 +10,11 @@ import os
 import re
 from collections import deque
 
+from .constants import MAIN_DESC
 from .constants import (OBJECT_CLASS as _OBJECT_CLASS, CLASS_CLASS as _CLASS_CLASS,
                         RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME)
 from . import fallback_audit
+from .runtime_manifest import read_list
 
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
@@ -21,8 +23,8 @@ _JDK_PREFIXES = ('java/', 'javax/')
 
 # 内部包边界：方法体全部为 panic! stub，不展开调用链
 # 这是内部边界截断策略的核心——sun/ 等包的实现细节不翻译，只生成类型占位符
-# java/security/ 是 JVM 安全服务层（JDK 21 的 SecurityManager 始终为 null），视为内部边界
-_JDK_STUB_ONLY_PREFIXES = ('sun/', 'jdk/', 'com/sun/', 'com/oracle/', 'java/security/')
+# 前缀名单维护在 runtime/java_runtime/boundary_prefixes.txt（P-1：库知识不进生成器）
+_JDK_STUB_ONLY_PREFIXES: tuple[str, ...] = tuple(read_list('boundary_prefixes.txt'))
 
 
 
@@ -75,12 +77,8 @@ def _impl_signature_type_refs(cls: str, runtime_src: str, resolver) -> list[str]
 
 
 def _read_manifest(name: str) -> list[str]:
-    """读取 runtime/java_runtime/ 下的 VM 清单文件（每行一项，`#` 注释）。"""
-    _path = os.path.join(_RUNTIME_JAVA_RUNTIME, name)
-    if not os.path.exists(_path):
-        return []
-    with open(_path, encoding='utf-8') as _f:
-        return [_l.strip() for _l in _f if _l.strip() and not _l.lstrip().startswith('#')]
+    """读取 runtime/java_runtime/ 下的 VM 清单文件（统一入口 runtime_manifest.read_list）。"""
+    return read_list(name)
 
 
 # VM 耦合边界类：公开包里由 JVM 自身引导 / 承载 VM 设施（模块系统、类加载、安全管理器等）的类。
@@ -322,7 +320,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             # 参数省略约定（method_gen：`pub fn main()`）会造出悬空引用
             #（JUnitCore.main→runMain(args) 实证）。可达性不受影响：有真实
             # 调用边时照常入链（此时按普通调用边语义发射）。
-            if m.is_static and m.name == 'main' and m.descriptor == '([Ljava/lang/String;)V':
+            if m.is_static and m.name == 'main' and m.descriptor == MAIN_DESC:
                 continue
             _enqueue_method((_seed, m.name, m.descriptor))
             enqueue_refs(m.instrs or [], m.exception_table)

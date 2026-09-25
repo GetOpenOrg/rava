@@ -1,0 +1,18 @@
+# 重载方法名后缀的类名缩写（codegen/type_map.descriptor_to_suffix 的数据源）：
+# 描述符参数里的类类型按「小写简单名」取后缀，命中本表时用缩写（name_str_str 等）。
+# 手写 _impl.rs 按此名面接线（getProperty_str_str / newFileSystem_str …），改表即改名面。
+object obj
+string str
+integer int
+long lng
+double dbl
+boolean bool
+charsequence seq
+stringbuilder sb
+comparable cmp
+iterable iter
+collection coll
+list list
+map map
+set set
+number num

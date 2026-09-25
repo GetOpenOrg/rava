@@ -6,6 +6,7 @@ from ..type_map import short_cls as _short_cls_g
 import os
 import re
 from ..types import ClassInfo, ParsedMethod
+from ..constants import MAIN_DESC, TO_STRING_DESC
 from ..constants import safe_ident
 
 
@@ -371,7 +372,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
     # （java_class 宏会在 vtable_impl 中调用 Self::toString / Self::hashCode，
     #  不能 panic，否则打印任何该类对象时都会崩溃）
     if not m.is_native and not m.is_abstract:
-        if m.name == 'toString' and m.descriptor == '()Ljava/lang/String;':
+        if m.name == 'toString' and m.descriptor == TO_STRING_DESC:
             body = 'Ok(String::from(Self::BINARY_NAME))'
         elif m.name == 'hashCode' and m.descriptor == '()I':
             # 结构化检测：拥有 value:[B 和 coder:B 字段的类（Java String 类型结构）
@@ -424,7 +425,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
         body = f'panic!("{label}: {ci.name}.{m.name}:{m.descriptor}")'
 
     # main(String[] args) 与 gen_method_body 保持一致：不生成参数
-    if m.is_static and m.name == 'main' and m.descriptor == '([Ljava/lang/String;)V':
+    if m.is_static and m.name == 'main' and m.descriptor == MAIN_DESC:
         return (
             f'pub fn main() -> Result<()> {{\n'
             f'    {body}\n'

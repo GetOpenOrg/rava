@@ -3,6 +3,7 @@ invoke 指令生成器：invokespecial / invokestatic / invokevirtual / invokedy
 """
 
 from ..type_map import short_cls as _short_cls_g
+from ..constants import STRING_CLASS, ref_desc
 import re
 from ..stack import StackSim, erased_base as _erased_base
 from ..rs_ir import (
@@ -61,7 +62,8 @@ def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None
     结果为 java.lang.String（通过 String::from(format!(...)) 转换）。
     """
     desc_m = re.search(r'makeConcatWithConstants:(\([^)]*\))', comment)
-    desc = desc_m.group(1) + 'Ljava/lang/String;' if desc_m else '(Ljava/lang/String;)Ljava/lang/String;'
+    _str_d = ref_desc(STRING_CLASS)
+    desc = desc_m.group(1) + _str_d if desc_m else f'({_str_d}){_str_d}'
     params = parse_descriptor_params(desc)
 
     args = []
@@ -81,7 +83,7 @@ def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None
             # 分支合并以 i32（1/0）流动，栈类型仍为 bool 时保持原样
             if render_type(e_ty) != 'bool':
                 raw = f'({raw} != 0)'
-        elif (p.startswith('L') or p.startswith('[')) and p != 'Ljava/lang/String;':
+        elif (p.startswith('L') or p.startswith('[')) and p != ref_desc(STRING_CLASS):
             # 引用类型参数：Java 语义是 String.valueOf(x)（虚 toString 分派，S-3.1
             # 后装箱值是翻译对象）。预物化为临时变量（toString 返回 Result，
             # format! 内不能传播 ?）；Object::toString 经 vtable __obj_str 桥接，

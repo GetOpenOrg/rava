@@ -16,6 +16,9 @@ type_args → sig_parse → 本模块；sig_types → type_args → sig_parse �
 from __future__ import annotations
 import re
 
+from .constants import OBJECT_CLASS, STRING_CLASS, ref_desc
+from .runtime_manifest import read_map
+
 
 # ── JVM descriptor → Rust 类型 ──────────────────────────────────
 # 注：String 是 java::lang::String（通过 prelude 引入），
@@ -23,7 +26,7 @@ import re
 JVM_RUST: dict[str, str] = {
     'I': 'i32', 'J': 'i64', 'F': 'f32', 'D': 'f64', 'Z': 'bool',
     'B': 'i8',  'S': 'i16', 'C': 'u16', 'V': '()',
-    'Ljava/lang/Object;':  'Object',
+    ref_desc(OBJECT_CLASS): 'Object',
     # 注：Ljava/lang/Class; 不做硬编码 —— 走 registry 泛型推导得到
     # Class<Object>（jvm_to_rust 的 registry 分支），与 generic_signature
     # 解析（_parse_one_type → Class<Object>）保持一致；registry 缺 Class
@@ -35,8 +38,8 @@ JVM_RUST: dict[str, str] = {
     '[F': 'JArray<f32>', '[D': 'JArray<f64>',
     '[B': 'JArray<i8>',  '[S': 'JArray<i16>',
     '[C': 'JArray<u16>', '[Z': 'JArray<bool>',
-    '[Ljava/lang/String;': 'JArray<String>',
-    '[Ljava/lang/Object;': 'JArray<Object>',
+    '[' + ref_desc(STRING_CLASS): 'JArray<String>',
+    '[' + ref_desc(OBJECT_CLASS): 'JArray<Object>',
 }
 
 # newarray 操作数 → (Rust 元素类型, 零值字面量)
@@ -137,8 +140,8 @@ _PRELUDE_CONFLICT_NAMES = frozenset({
 # prelude 名的 java/lang 本主：JVM_RUST 直映射（不经 short_cls），短名即
 # prelude 名本身，属「同一实体」而非冲突——改它们会让直映射与 struct 发射分叉。
 _PRELUDE_CANONICAL_OWNERS = {
-    'String': 'java/lang/String',
-    'Object': 'java/lang/Object',
+    'String': STRING_CLASS,
+    'Object': OBJECT_CLASS,
 }
 
 # 本轮因 prelude 冲突改名的 binary（审计可观测：触发面应收敛在 junit 闭包等
@@ -215,13 +218,9 @@ _PRIM_SUFFIX: dict[str, str] = {
     'I': 'i', 'J': 'l', 'Z': 'z', 'B': 'b',
     'S': 's', 'F': 'f', 'D': 'd', 'C': 'c',
 }
-_CLS_ABBREV: dict[str, str] = {
-    'object': 'obj',   'string': 'str',    'integer': 'int',
-    'long': 'lng',     'double': 'dbl',    'boolean': 'bool',
-    'charsequence': 'seq', 'stringbuilder': 'sb', 'comparable': 'cmp',
-    'iterable': 'iter', 'collection': 'coll', 'list': 'list',
-    'map': 'map',      'set': 'set',       'number': 'num',
-}
+# 重载后缀的类名缩写：按类名枚举的库知识（P-1），维护在 runtime/java_runtime/
+# overload_abbrev.txt（手写 _impl.rs 按该名面接线）
+_CLS_ABBREV: dict[str, str] = read_map('overload_abbrev.txt')
 
 
 def descriptor_to_suffix(descriptor: str) -> str:

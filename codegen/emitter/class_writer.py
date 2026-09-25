@@ -5,6 +5,7 @@
 import os
 import re as _re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
+from ..constants import RECORD_CLASS
 from ..method import gen_method_body, _indent
 from .. import equiv_audit
 from .. import fallback_audit as _fallback_audit
@@ -1041,7 +1042,7 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
     toString / hashCode / equals 为字段级实现。原 _gen_class_rs 内联段逐字
     搬移；原 method_blocks 重绑定改为返回新列表。"""
     # Record 类（super_class == java/lang/Record）：覆盖 invokedynamic 无法翻译的方法
-    if ci.super_class == 'java/lang/Record' and not ci.is_interface:
+    if ci.super_class == RECORD_CLASS and not ci.is_interface:
         record_fields = [f for f in ci.fields if not f.is_static]
         simple_name = ci.name.split('$')[-1].split('/')[-1]
         fmt_parts = [f'{f.name}={{}}' for f in record_fields]

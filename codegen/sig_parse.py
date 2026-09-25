@@ -10,7 +10,8 @@
 from __future__ import annotations
 import re
 
-from .constants import OBJECT_CLASS as _OBJECT_CLASS
+from .constants import OBJECT_CLASS as _OBJECT_CLASS, STRING_CLASS, CLASS_CLASS
+from .runtime_manifest import read_list
 from . import fallback_audit
 from .type_map import (_PRIMITIVE_MAP, effective_class_type_params, parse_class_type_params,
                        short_cls, _iface_full_path)
@@ -18,13 +19,15 @@ from .type_map import (_PRIMITIVE_MAP, effective_class_type_params, parse_class_
 
 # 已知类名 → Rust 类型映射
 _CLASSNAME_MAP: dict[str, str] = {
-    'java/lang/String':        'String',
+    STRING_CLASS:              'String',
     _OBJECT_CLASS:             'Object',
-    'java/lang/CharSequence':  'Object',
+    # 签名解析直接擦为 Object 的接口：库知识（P-1），见
+    # runtime/java_runtime/signature_erased_interfaces.txt
+    **{_b: 'Object' for _b in read_list('signature_erased_interfaces.txt')},
     # 特判：Class 非泛化（类型参数纯 phantom，类级签名已在 classfile.py
     # 置空）。mapped 分支忽略 type_args，使 Ljava/lang/Class<*>; → Class，
     # 与 jvm_to_rust 的 registry 分支（裸 Class）保持一致。
-    'java/lang/Class':         'Class',
+    CLASS_CLASS:               'Class',
     # S-3.1：装箱类型（Integer/Long/...）不再映射为原生值 —— 签名里的
     # Ljava/lang/Integer; 是引用类型，走 registry 分支得到翻译类
     # StringBuilder / StringBuffer 不在特判表（T29 时代的 'String' 别名已删）：

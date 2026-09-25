@@ -84,8 +84,48 @@ def type_surgery_ext_sites() -> int:
     return _scan(_SURGERY_EXT_PATTERNS, _EXT_PARSER_WHITELIST)
 
 
+# P-1 口径（jdk_literals）：codegen 字符串常量（AST，含 f-string 常量段；docstring 与
+# 注释不计）中的 JDK 类名——完整 binary 名、嵌入的字段描述符 `L…;`、二级及以上的
+# 包前缀。constants.py（JLS/JVMS 语言层类的唯一引用点）豁免；库知识在
+# runtime/java_runtime/*.txt 清单（runtime_manifest）。终态 = 0。
+_JDK_ROOTS = r'(?:java|javax|jdk|sun|com/sun|com/oracle)'
+_JDK_BINARY_RE = re.compile(r'^\[*L?' + _JDK_ROOTS + r'/(?:[a-z_][\w]*/)*[A-Z][\w$]*;?$')
+_JDK_DESC_RE = re.compile(r'L' + _JDK_ROOTS + r'/[\w/$]+;')
+_JDK_PKG_RE = re.compile(r'^(?:java|javax|jdk|sun)/[a-z_]\w*/(?:[a-z_]\w*/)*$')
+_P1_EXEMPT = frozenset({'constants.py', _SELF})
+
+
+def jdk_literal_hits() -> list[tuple[str, int, str]]:
+    """P-1 命中明细 (相对路径, 行号, 字面量)。"""
+    import ast
+    root = Path(__file__).parent
+    hits: list[tuple[str, int, str]] = []
+    for p in sorted(root.rglob('*.py')):
+        if '__pycache__' in p.parts or p.name in _P1_EXEMPT:
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        docs = {id(n.body[0].value) for n in ast.walk(tree)
+                if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and n.body and isinstance(n.body[0], ast.Expr)
+                and isinstance(n.body[0].value, ast.Constant)}
+        for n in ast.walk(tree):
+            if (isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs
+                    and (_JDK_BINARY_RE.match(n.value) or _JDK_DESC_RE.search(n.value)
+                         or _JDK_PKG_RE.match(n.value))):
+                hits.append((str(p.relative_to(root.parent)), n.lineno, n.value))
+    return hits
+
+
+def jdk_literal_sites() -> int:
+    return len(jdk_literal_hits())
+
+
 def summary() -> str:
     return (f"[raw-audit] raw_expr={_counts['raw_expr']} "
             f"raw_stmt={_counts['raw_stmt']} "
             f"type_surgery_sites={type_surgery_sites()} "
-            f"type_surgery_ext={type_surgery_ext_sites()}")
+            f"type_surgery_ext={type_surgery_ext_sites()} "
+            f"jdk_literals={jdk_literal_sites()}")

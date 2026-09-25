@@ -10,6 +10,7 @@ import re
 
 from ..type_map import short_cls as _short_cls_g
 from ..constants import safe_ident as _safe_field, JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES
+from ..constants import OBJECT_CLASS as _OBJECT_CLASS_MN, ref_desc
 from ..sig_types import hierarchy_overloaded_names
 from ..type_map import mangle_name
 from .member_owner import _resolve_method_owner, _resolve_bridge_target
@@ -33,7 +34,7 @@ def _parse_field_ref(comment: str) -> tuple[str, str, str]:
     if ':' in comment:
         ref_part, descriptor = comment.split(':', 1)
     else:
-        ref_part, descriptor = comment, 'Ljava/lang/Object;'
+        ref_part, descriptor = comment, ref_desc(_OBJECT_CLASS_MN)
     if '.' in ref_part:
         cls, field = ref_part.rsplit('.', 1)
     else:

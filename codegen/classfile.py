@@ -8,6 +8,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Optional
 from .types import ClassInfo, FieldInfo, ParsedMethod, Instr, InnerClassInfo
+from .constants import BOXED_CLASS_BY_DESC, CLASS_CLASS
 
 # ── 常量池 tag ───────────────────────────────────────────────────────────────
 TAG_UTF8               = 1
@@ -124,11 +125,7 @@ _NEWARRAY_TYPES = {4: 'boolean', 5: 'char', 6: 'float', 7: 'double',
 
 # S-17: typeSwitch 标签中 primitive type pattern 的 Class 常量名（primitive 描述符）
 # → wrapper 类二进制名（`case int x` 的运行时判定等价于 java/lang/Integer）
-_PRIM_CLASS_TO_WRAPPER = {
-    'B': 'java/lang/Byte', 'C': 'java/lang/Character', 'D': 'java/lang/Double',
-    'F': 'java/lang/Float', 'I': 'java/lang/Integer', 'J': 'java/lang/Long',
-    'S': 'java/lang/Short', 'Z': 'java/lang/Boolean',
-}
+_PRIM_CLASS_TO_WRAPPER = BOXED_CLASS_BY_DESC
 
 
 # ── 解析器主体 ───────────────────────────────────────────────────────────────
@@ -1103,7 +1100,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
     # 除形态）之间产生大量不可转换的 E0308 —— Java 语义中 Class<?> 接受任
     # 何 Class<T>，Rust 泛型则要求精确匹配。置空类级签名后，所有下游
     # （jvm_to_rust / parse_class_type_params / 宏展开）统一为裸 Class。
-    _cls_sig = '' if class_name == 'java/lang/Class' else cls_generic_sig
+    _cls_sig = '' if class_name == CLASS_CLASS else cls_generic_sig
 
     return ClassInfo(
         name=class_name,

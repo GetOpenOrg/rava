@@ -32,10 +32,11 @@ JDK 侧 `getAnnotation` 返回实现了注解接口的动态代理（AnnotationP
 """
 
 from ..type_map import jvm_to_rust, short_cls, parse_descriptor_return
+from ..constants import OBJECT_CLASS, ANNOTATION_IFACE
 
 _ACC_ANNOTATION = 0x2000
-_OBJECT_CLASS = 'java/lang/Object'
-_ANNOTATION_IFACE = 'java/lang/annotation/Annotation'
+_OBJECT_CLASS = OBJECT_CLASS
+_ANNOTATION_IFACE = ANNOTATION_IFACE
 
 # 已合成的注解类型（{iface_bin: 工厂登记行}）——project_writer 写 main 时经
 # registration_lines 消费。与 SAM_LEDGER 同生命周期（每轮 reset）。

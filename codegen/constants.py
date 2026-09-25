@@ -61,6 +61,33 @@ THROWABLE_CLASS = 'java/lang/Throwable'
 # 架构常量，A-5 函数式接口合成对象的 is_instance_of 静态名单使用）
 SERIALIZABLE_CLASS = 'java/io/Serializable'
 
+# ── JLS / JVMS 规定的语言层类（P-1）────────────────────────────────────────
+# CLAUDE.md 原则 4 禁止生成器出现 JDK 类名常量——指按类名枚举的**库知识**（已迁
+# runtime/java_runtime/*.txt 清单，见 runtime_manifest）。语言规范本身点名的类
+# （根类 / 字符串字面量 / 类字面量 / 装箱 / record / 注解 / 数组超类型）是语言语义
+# 的一部分，集中于此作唯一引用点；codegen 其余模块不得再写这些类名字面量。
+CLONEABLE_CLASS = 'java/lang/Cloneable'                 # JLS 4.10.3：数组的超类型
+RECORD_CLASS = 'java/lang/Record'                       # JLS 8.10：record 的直接超类
+ANNOTATION_IFACE = 'java/lang/annotation/Annotation'    # JLS 9.6：注解类型的超接口
+# JLS 5.1.7 装箱转换：基本类型描述符 → 包装类
+BOXED_CLASS_BY_DESC: dict[str, str] = {
+    'B': 'java/lang/Byte', 'C': 'java/lang/Character', 'D': 'java/lang/Double',
+    'F': 'java/lang/Float', 'I': 'java/lang/Integer', 'J': 'java/lang/Long',
+    'S': 'java/lang/Short', 'Z': 'java/lang/Boolean',
+}
+
+
+def ref_desc(binary: str) -> str:
+    """类的字段描述符形态 `L<binary>;`（JVMS 4.3.2）。"""
+    return f'L{binary};'
+
+
+# 语言层方法描述符：程序入口（JLS 12.1.4 `public static void main(String[])`）与根类
+# 的 toString / equals（JLS 4.3.2 Object 成员）
+MAIN_DESC = f'([{ref_desc(STRING_CLASS)})V'
+TO_STRING_DESC = f'(){ref_desc(STRING_CLASS)}'
+EQUALS_DESC = f'({ref_desc(OBJECT_CLASS)})Z'
+
 
 def scratch_pkg_version(out_dir: str) -> str:
     """为 scratch 工作区内的包生成唯一版本号。

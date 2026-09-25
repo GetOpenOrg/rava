@@ -1,0 +1,8 @@
+# 内部边界包前缀（codegen/callchain._JDK_STUB_ONLY_PREFIXES 的数据源）：BFS 在此截断，
+# 类整体手写 / 存根，不展开调用链（CLAUDE.md 规则 3b）。
+# java/security/：JVM 安全服务层（JDK 21 SecurityManager 恒 null；JDK 24+ JEP 486 移除）。
+sun/
+jdk/
+com/sun/
+com/oracle/
+java/security/

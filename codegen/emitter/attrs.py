@@ -8,6 +8,7 @@ import re
 from ..types import ClassInfo, FieldInfo, ParsedMethod
 from ..sig_types import instance_field_rust_name
 from ..type_args import ancestor_type_args, rust_type_with_args
+from ..constants import TO_STRING_DESC, EQUALS_DESC
 from ..constants import safe_ident, RUST_KEYWORDS as _RUST_KEYWORDS, OBJECT_CLASS as _OBJECT_CLASS
 
 # Access flags
@@ -211,9 +212,9 @@ def _compute_all_supertypes(ci: ClassInfo, registry: dict | None) -> list[str]:
     return sorted(supertypes)
 
 
-_TO_STRING_SIG = ('toString', '()Ljava/lang/String;')
+_TO_STRING_SIG = ('toString', TO_STRING_DESC)
 _HASH_CODE_SIG = ('hashCode', '()I')
-_EQUALS_SIG = ('equals', '(Ljava/lang/Object;)Z')
+_EQUALS_SIG = ('equals', EQUALS_DESC)
 
 
 def _root_method_vtable_owner(ci: ClassInfo, registry: 'dict | None',

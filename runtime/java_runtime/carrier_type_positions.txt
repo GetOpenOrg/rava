@@ -1,0 +1,60 @@
+# A-4 接口类型位置载体化的铺设名单（codegen/jvm_type.CARRIER_TYPE_POSITIONS 的数据源）。
+# 名单内接口进入类型位置时发射擦除载体 `I<Object, ..>`（方法经 __interface itable 分派）；
+# 名单外接口仍回落 Object。终态 = 全部接口（jvm_type 置 None，此文件删除）——前置
+# 「缺席直接接口物化」已由清单第 20 项（ce79244）落地，置 None 会改变生成树，需全量对账。
+# 批次史：3 Iterator 起步；4 集合族；5 函数式接口族 + 比较器（Spliterator 族暂缓：特化桥接
+# forEachRemaining(Object)↔(LongConsumer) 的名/型解析发散）；6 CharSequence/Appendable 字符族。
+java/lang/Appendable
+java/lang/CharSequence
+java/util/Collection
+java/util/Comparable
+java/util/Comparator
+java/util/Deque
+java/util/Iterator
+java/util/List
+java/util/ListIterator
+java/util/Map
+java/util/Map$Entry
+java/util/Queue
+java/util/Set
+java/util/function/BiConsumer
+java/util/function/BiFunction
+java/util/function/BiPredicate
+java/util/function/BinaryOperator
+java/util/function/BooleanSupplier
+java/util/function/Consumer
+java/util/function/DoubleBinaryOperator
+java/util/function/DoubleFunction
+java/util/function/DoublePredicate
+java/util/function/DoubleSupplier
+java/util/function/DoubleToIntFunction
+java/util/function/DoubleToLongFunction
+java/util/function/DoubleUnaryOperator
+java/util/function/Function
+java/util/function/IntBinaryOperator
+java/util/function/IntFunction
+java/util/function/IntPredicate
+java/util/function/IntSupplier
+java/util/function/IntToDoubleFunction
+java/util/function/IntToLongFunction
+java/util/function/IntUnaryOperator
+java/util/function/LongBinaryOperator
+java/util/function/LongFunction
+java/util/function/LongPredicate
+java/util/function/LongSupplier
+java/util/function/LongToDoubleFunction
+java/util/function/LongToIntFunction
+java/util/function/LongUnaryOperator
+java/util/function/ObjDoubleConsumer
+java/util/function/ObjIntConsumer
+java/util/function/ObjLongConsumer
+java/util/function/Predicate
+java/util/function/Supplier
+java/util/function/ToDoubleBiFunction
+java/util/function/ToDoubleFunction
+java/util/function/ToIntBiFunction
+java/util/function/ToIntFunction
+java/util/function/ToLongBiFunction
+java/util/function/ToLongFunction
+java/util/function/UnaryOperator
+java/util/stream/Collector

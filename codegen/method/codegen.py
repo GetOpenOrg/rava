@@ -18,6 +18,7 @@ from ..type_map import (
     jvm_to_rust, sig_type, rust_default, mangle_name, short_cls,
     parse_class_type_params,
 )
+from ..constants import MAIN_DESC
 from ..constants import safe_ident, PRIMITIVE_RUST_TYPES as _PRIM_TYPES
 from ..stack import StackSim
 from ..cfg import (
@@ -291,7 +292,7 @@ def gen_method_body(
         params = _params_with_slot(1, rust_param_types, use_sig_type=False)
         sig = f"pub fn {rust_fn_name}({', '.join(params)}) -> Result<Self>"
 
-    elif method.name == 'main' and method.descriptor == '([Ljava/lang/String;)V':
+    elif method.name == 'main' and method.descriptor == MAIN_DESC:
         sig = "pub fn main() -> Result<()>"
 
     elif is_static:
