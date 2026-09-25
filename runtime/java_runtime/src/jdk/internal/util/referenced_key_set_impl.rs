@@ -38,6 +38,13 @@ where
         Ok(s)
     }
 
+    /// static `create(isSoft, supplier)`：JDK25 去掉 `useNativeQueue` 参数后的
+    /// 2 参工厂（JDK21 形态见上），取舍同上。supplier 以泛型接收——JDK25 调用点
+    /// 传 `Supplier<Object>`，而 Supplier 不必在每个闭包里存在，本文件不点名它。
+    pub fn create<S>(isSoft: bool, _supplier: S) -> Result<Self> {
+        Self::create_z_z_supplier(isSoft, false, Object::default())
+    }
+
     /// `get(e)`：取同值规范实例；缺席 → null（T::default 的 jvm-null 形态）。
     pub fn get(&self, e: T) -> Result<T> {
         let key = (Rc::as_ptr(&self.vtable) as *const u8) as usize;

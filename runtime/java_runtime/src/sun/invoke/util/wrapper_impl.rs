@@ -98,6 +98,12 @@ impl Wrapper {
         }
     }
 
+    /// static `forPrimitiveType(Class)` 的 JDK25 名面：JDK25 删去 `forPrimitiveType(char)`
+    /// 重载后改编名不再带 `_class` 后缀——同一实现。
+    pub fn forPrimitiveType(type_: Class) -> Result<Wrapper> {
+        Self::forPrimitiveType_class(type_)
+    }
+
     /// static `forWrapperType(Class)`：包装类的 Class → 常量；其余抛 IAE。
     pub fn forWrapperType(type_: Class) -> Result<Wrapper> {
         let name = format!("{}", type_.__get_name());

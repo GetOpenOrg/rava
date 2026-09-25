@@ -9,6 +9,7 @@
 use crate::prelude::*;
 use super::verify_access::VerifyAccess;
 use crate::java::lang::Class;
+use crate::java::lang::invoke::MethodType;
 
 impl VerifyAccess {
     /// static `isClassAccessible(refc, lookupClass, prevLookupClass, allowedModes)`：
@@ -23,6 +24,19 @@ impl VerifyAccess {
     /// 类型位于同一个未命名模块（对所有人开放），类型恒可见。
     /// 消费链：MemberName.checkForTypeAlias（resolve 后的类型别名核对）。
     pub fn isTypeVisible_class_class(_type_: Class, _refc: Class) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// static `ensureTypeVisible(Class type, Class refc)`：JDK25 对
+    /// `isTypeVisible(Class, Class)` 的改名（语义不变）——未命名模块等价物同上，恒可见。
+    pub fn ensureTypeVisible_class_class(_type_: Class, _refc: Class) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// static `ensureTypeVisible(MethodType type, Class refc)`：JDK25 方法类型形态
+    /// （逐个参数 / 返回类型做 Class 形态检查）——各分量恒可见，故恒真。
+    /// 消费链：MemberName.ensureTypeVisible（MemberName$Factory.resolveOrFail）。
+    pub fn ensureTypeVisible_methodtype_class(_type_: MethodType, _refc: Class) -> Result<bool> {
         Ok(true)
     }
 

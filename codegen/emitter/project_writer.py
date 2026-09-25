@@ -809,7 +809,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     _members = ['java_runtime', *(lib_crate_classes or {}), 'user']
     _write(os.path.join(out_dir, 'Cargo.toml'), '\n'.join([
         '[workspace]',
-        f'members = {repr(_members).replace("'", '"')}',
+        'members = ' + repr(_members).replace("'", '"'),
         'resolver = "2"',
         '',
         '[profile.release]',
