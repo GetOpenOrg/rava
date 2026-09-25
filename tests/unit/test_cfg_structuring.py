@@ -72,11 +72,28 @@ def code(text: str) -> list:
     return [RawStmt(text)]
 
 
+def walk(tree):
+    """结构树先序遍历：列表逐项、节点经 dataclass 字段下探（body / then / else_ /
+    arms / catches 的列表与 (描述, body) 元组）。structure 模块不提供遍历器，
+    测试自带一份，只依赖节点的 dataclass 形态。"""
+    if isinstance(tree, (list, tuple)):
+        for x in tree:
+            yield from walk(x)
+        return
+    if not hasattr(tree, '__dataclass_fields__'):
+        return
+    yield tree
+    for f in tree.__dataclass_fields__:
+        v = getattr(tree, f)
+        if isinstance(v, (list, tuple)):
+            yield from walk(v)
+
+
 def render(nodes: dict) -> str:
     flow = analyze(0, {i: n.successors() for i, n in nodes.items()})
     assert flow.reducible
     tree = simplify(build_structure(nodes, flow))
-    blocks = [it.block for it in st.walk(tree) if isinstance(it, st.Code)]
+    blocks = [it.block for it in walk(tree) if isinstance(it, st.Code)]
     assert sorted(blocks) == sorted(flow.rpo), "每个块必须恰好输出一次"
     lines = []
     for indent, item in emit_tree(tree, nodes, indent=''):
@@ -104,11 +121,34 @@ class Structuring(unittest.TestCase):
             3: FakeNode(3, 'exit', stmts=code('return Ok(());')),
         }
         text = render(nodes)
-        self.assertIn('while i < n {', text)
+        # 出口块内联到条件跳转点：`loop { if i >= n { return } i += 1 }`（不识别 while 形态）
+        self.assertIn('loop {', text)
+        self.assertLess(text.index('if i >= n {'), text.index('return Ok(());'))
+        self.assertLess(text.index('return Ok(());'), text.index('i += 1;'))
         self.assertNotIn("'", text)
 
     def test_nested_break_uses_label(self):
-        # outer: loop { inner: loop { if found { break outer } if done { break inner } } step }
+        # outer: loop { if stop { break } inner: loop { if found { break outer } if done { break inner } } step }
+        # after 块有两个前驱（外层 stop、内层 found）→ 不内联，内层须带标签跳出外层
+        nodes = {
+            0: FakeNode(0, 'goto', target=1, stmts=code('init();')),
+            1: FakeNode(1, 'cond', target=5, fallthrough=2, cond=atom('stop'), stmts=code('outer_head();')),
+            2: FakeNode(2, 'cond', target=5, fallthrough=3, cond=atom('found'), stmts=code('inner_head();')),
+            3: FakeNode(3, 'cond', target=4, fallthrough=2, cond=atom('done'), stmts=code('inner_body();')),
+            4: FakeNode(4, 'goto', target=1, stmts=code('step();')),
+            5: FakeNode(5, 'goto', target=6, stmts=code('after();')),
+            6: FakeNode(6, 'exit', stmts=code('return Ok(());')),
+        }
+        text = render(nodes)
+        self.assertRegex(text, r"'l\d+: loop \{")
+        self.assertRegex(text, r"if found \{\s*break 'l\d+;")
+        self.assertRegex(text, r"if done \{\s*break;")
+        self.assertLess(text.rindex('}'), text.index('after();'))
+        for call in ('init();', 'outer_head();', 'inner_head();', 'inner_body();', 'step();', 'after();'):
+            self.assertEqual(text.count(call), 1)
+
+    def test_single_pred_exit_is_inlined(self):
+        # 出口块只有一个前驱：内联到跳转点，无需标签
         nodes = {
             0: FakeNode(0, 'goto', target=1, stmts=code('init();')),
             1: FakeNode(1, 'goto', target=2, stmts=code('outer_head();')),
@@ -118,8 +158,9 @@ class Structuring(unittest.TestCase):
             5: FakeNode(5, 'exit', stmts=code('return Ok(());')),
         }
         text = render(nodes)
-        self.assertRegex(text, r"'l\d+: loop \{")
-        self.assertRegex(text, r"break 'l\d+;")
+        self.assertNotIn("'", text)
+        self.assertLess(text.index('if found {'), text.index('return Ok(());'))
+        self.assertLess(text.index('return Ok(());'), text.index('inner_body();'))
         for call in ('init();', 'outer_head();', 'inner_head();', 'inner_body();', 'step();'):
             self.assertEqual(text.count(call), 1)
 
@@ -184,7 +225,10 @@ class TryRegions(unittest.TestCase):
         self.assertLess(text.index('java_try!'), text.index('thrown()'))
         self.assertLess(text.index('thrown()'), text.index('catch (e)'))
         self.assertLess(text.index('handle();'), text.index('tail();'))
-        self.assertLess(text.index('tail();'), text.index('return Ok(());'))
+        # 循环出口（!c → return）内联到循环头条件处；tail 仍在 try 之后、循环体内
+        self.assertLess(text.index('return Ok(());'), text.index('java_try!'))
+        self.assertEqual(text.count('return Ok(());'), 1)
+        self.assertEqual(text.count('tail();'), 1)
 
     def _returning_try(self, catch_end):
         # try { return v } catch { handle } after
