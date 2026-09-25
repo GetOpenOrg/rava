@@ -316,9 +316,22 @@ class RawStmt:
         raw_audit.record_raw('raw_stmt')
 
 
+@dataclass
+class BlockStmt:
+    """方法体结构块（窗口 3 G-1）：`method/emit.py` 的结构化产物。
+
+    kind ∈ block（带标签块）/ loop / if / match / try / dispatch。segs 按源码顺序
+    交替存放块的**结构行**（`(indent, str)`：块头、`} else {`、match 臂头、catch 头、
+    收尾 `}` 等）与**子语句序列**（`list`，元素同 entries：`(indent, RsStmt | str)`
+    或嵌套 `('', BlockStmt)`）。`method.emit.flatten` 按序展开即得旧扁平 entries，
+    变量提升在树上工作后同样经它渲染。"""
+    kind: str
+    segs: list = field(default_factory=list)
+
+
 RsStmt = Union[
     LetStmt, AssignStmt, ExprStmt, ReturnStmt,
-    BreakStmt, ContinueStmt, LoopStmt, IfStmt, RawStmt,
+    BreakStmt, ContinueStmt, LoopStmt, IfStmt, RawStmt, BlockStmt,
 ]
 
 
