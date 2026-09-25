@@ -1,0 +1,6 @@
+GZIP compress OK
+GZIP long compress OK
+BAOS size: 3
+BAOS content: ABC
+BAOS4 size: 11
+BAOS4 content: Hello World

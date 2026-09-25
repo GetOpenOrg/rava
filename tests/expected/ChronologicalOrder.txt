@@ -1,0 +1,18 @@
+Sorted Table 1:
+Dice              3000 BCE
+Magic Squares     2200 BCE
+Euclid's Elements 300  BCE
+Pi                250  BCE
+Kwarizmi          830  CE
+The Abacus        1200 CE
+Liber Abaci       1202 CE
+Euler's Number    1727 CE
+
+Sorted Table 2:
+Dice           3000 BCE
+Magic Squares  2200 BCE
+Pi             250  BCE
+Kwarizmi       830  CE
+The Abacus     1200 CE
+Liber Abaci    1202 CE
+Euler's Number 1727 CE

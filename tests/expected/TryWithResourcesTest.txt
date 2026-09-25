@@ -1,0 +1,6 @@
+Test 1: Write with TWR OK
+Test 2: Read = Hello TWR
+Test 3: Caught = test error
+Test 3: File content = Before exception
+Test 4: Multi = Multi resource
+Done

@@ -1,0 +1,16 @@
+sorted: [1, 2, 3, 4, 5]
+add duplicate: false
+size: 5
+first: 1
+last: 5
+contains 3: true
+contains 9: false
+removed 3: true
+after remove: [1, 2, 4, 5]
+strings: [apple, banana, cherry]
+pollFirst: apple
+pollLast: cherry
+remaining: [banana]
+isEmpty: false
+after clear isEmpty: true
+iterator: 10,20,30

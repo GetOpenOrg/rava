@@ -1,0 +1,7 @@
+1 -> one
+2 -> two
+3 -> three
+4 -> other
+val(0) = 100
+val(1) = 250
+val(2) = -1

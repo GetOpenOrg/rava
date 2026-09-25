@@ -1,0 +1,16 @@
+Wen Kory + Kory New = York New + New Kory 
+Wen Kory + Kory New = York New + New York 
+Wen Kory + Kory New = New Kory + New York 
+Wen Kory + York New = Kory New + New Kory 
+Wen Kory + York New = Kory New + New York 
+Wen Kory + York New = New Kory + New York 
+Wen Kory + New Kory = Kory New + York New 
+Wen Kory + New Kory = Kory New + New York 
+Wen Kory + New Kory = York New + New York 
+Wen Kory + New York = Kory New + York New 
+Wen Kory + New York = Kory New + New Kory 
+Wen Kory + New York = York New + New Kory 
+Kory New + York New = New Kory + New York 
+Kory New + New Kory = York New + New York 
+Kory New + New York = York New + New Kory 
+South Dakota + North Carolina  = North Dakota + South Carolina 

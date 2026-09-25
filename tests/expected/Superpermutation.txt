@@ -1,0 +1,12 @@
+superPerm( 0) len = 0
+superPerm( 1) len = 1
+superPerm( 2) len = 3
+superPerm( 3) len = 9
+superPerm( 4) len = 33
+superPerm( 5) len = 153
+superPerm( 6) len = 873
+superPerm( 7) len = 5913
+superPerm( 8) len = 46233
+superPerm( 9) len = 409113
+superPerm(10) len = 4037913
+superPerm(11) len = 43954713

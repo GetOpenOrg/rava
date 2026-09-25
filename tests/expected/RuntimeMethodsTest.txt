@@ -1,0 +1,19 @@
+replace: 1 -> 10
+replace_kv: true -> 20
+replace_kv_fail: false -> 20
+remove_kv_fail: false has_c: true
+remove_kv: true has_c: false
+or: fallback
+present: hello
+empty action
+opt.stream: [stream-val]
+empty.stream: []
+compareUnsigned: 1
+toUnsignedLong: 4294967295
+rotateLeft: 8
+highestOneBit: 8
+lowestOneBit: 4
+Long.compareUnsigned: 1
+Long.rotateLeft: 8
+Long.highestOneBit: 8
+Done.

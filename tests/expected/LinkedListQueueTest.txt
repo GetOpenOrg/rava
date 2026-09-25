@@ -1,0 +1,28 @@
+3
+A
+C
+Z
+W
+5
+10
+10
+20
+1
+true
+false
+2
+4
+false
+one,two,three
+3
+X
+X
+2
+3
+3
+2
+1
+false
+true
+FIFO: 1 2 3 
+LIFO: 3 2 1 

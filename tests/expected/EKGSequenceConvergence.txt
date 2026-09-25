@@ -1,0 +1,8 @@
+Calculate and show here the first 10 members of EKG[2], EKG[5], EKG[7], EKG[9] and EKG[10].
+EKG[2] = [1, 2, 4, 6, 3, 9, 12, 8, 10, 5]
+EKG[5] = [1, 5, 10, 2, 4, 6, 3, 9, 12, 8]
+EKG[7] = [1, 7, 14, 2, 4, 6, 3, 9, 12, 8]
+EKG[9] = [1, 9, 3, 6, 2, 4, 8, 10, 5, 15]
+EKG[10] = [1, 10, 2, 4, 6, 3, 9, 12, 8, 14]
+Calculate and show here at which term EKG[5] and EKG[7] converge.
+EKG[5](21) = EKG[7](21) = 24, and are identical from this term on

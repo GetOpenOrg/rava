@@ -1,0 +1,22 @@
+
+Itemized, please.
+Itemize, please.
+Italicized, please.
+Italicize, please.
+Iterated, please.
+Iterate, please.
+
+~/Downloads/*.jpg
+~/Downloads/*.gif
+~/Downloads/*.png
+~/Pictures/*.jpg
+~/Pictures/*.gif
+~/Pictures/*.png
+
+cowbell!
+more cowbell!
+gotta have more cowbell!
+gotta have\, again\, more cowbell!
+
+{}} some }{,{\\ edge \,}{ cases, {here} \\\\\}
+{}} some }{,{\\ edge \,}{ cases, {here} \\\\\}

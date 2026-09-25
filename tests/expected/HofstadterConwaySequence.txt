@@ -1,0 +1,20 @@
+Max ratio between 2^1 and 2^2 is 0.666667 at n = 3
+Max ratio between 2^2 and 2^3 is 0.666667 at n = 6
+Max ratio between 2^3 and 2^4 is 0.636364 at n = 11
+Max ratio between 2^4 and 2^5 is 0.608696 at n = 23
+Max ratio between 2^5 and 2^6 is 0.590909 at n = 44
+Max ratio between 2^6 and 2^7 is 0.576087 at n = 92
+Max ratio between 2^7 and 2^8 is 0.567416 at n = 178
+Max ratio between 2^8 and 2^9 is 0.559459 at n = 370
+Max ratio between 2^9 and 2^10 is 0.554937 at n = 719
+Max ratio between 2^10 and 2^11 is 0.550101 at n = 1,487
+Max ratio between 2^11 and 2^12 is 0.547463 at n = 2,897
+Max ratio between 2^12 and 2^13 is 0.544145 at n = 5,969
+Max ratio between 2^13 and 2^14 is 0.542443 at n = 11,651
+Max ratio between 2^14 and 2^15 is 0.540071 at n = 22,223
+Max ratio between 2^15 and 2^16 is 0.538784 at n = 45,083
+Max ratio between 2^16 and 2^17 is 0.537044 at n = 89,516
+Max ratio between 2^17 and 2^18 is 0.536020 at n = 181,385
+Max ratio between 2^18 and 2^19 is 0.534645 at n = 353,683
+Max ratio between 2^19 and 2^20 is 0.533779 at n = 722,589
+Mallow's number is 1489.

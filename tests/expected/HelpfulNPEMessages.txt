@@ -1,0 +1,6 @@
+=== Simple Object Attribute Access ===
+%n=== Attribute Access Inside Streams ===
+Val 2
+Val 4
+Val 6
+Val 8

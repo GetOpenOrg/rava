@@ -1,0 +1,16 @@
+=== Thread.sleep ===
+Sleep completed
+=== Thread(Runnable) ===
+Thread t1 running
+Thread t1 finished
+=== Thread with name ===
+Thread name: MyThread
+Named thread running
+Named thread finished
+=== Multiple threads ===
+Worker 0
+Worker 1
+Worker 2
+All workers done
+=== currentThread ===
+Current thread: main

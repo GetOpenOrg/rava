@@ -1,0 +1,23 @@
+optInt isPresent: true
+optInt getAsInt: 42
+optInt orElse: 42
+emptyInt isPresent: false
+emptyInt orElse: -1
+optLong isPresent: true
+optLong getAsLong: 123456789
+optLong orElse: 123456789
+emptyLong isPresent: false
+emptyLong orElse: -1
+optDbl isPresent: true
+optDbl getAsDouble: 3.14
+optDbl orElse: 3.14
+emptyDbl isPresent: false
+emptyDbl orElse: -1.0
+optInt toString: OptionalInt[42]
+emptyInt toString: OptionalInt.empty
+optLong toString: OptionalLong[123456789]
+optDbl toString: OptionalDouble[3.14]
+optInt equals of(42): true
+optInt equals of(0): false
+optInt equals empty: false
+emptyInt equals empty: true

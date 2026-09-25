@@ -1,0 +1,13 @@
+Summer
+SPRING
+0
+3
+4
+EARTH
+true
+true
+true
+AUTUMN
+Mild
+true
+Warm Warm Cool Cool 

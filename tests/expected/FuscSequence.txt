@@ -1,0 +1,10 @@
+Show the first 61 fusc numbers (starting at zero) in a horizontal format
+0 1 1 2 1 3 2 3 1 4 3 5 2 5 3 4 1 5 4 7 3 8 5 7 2 7 5 8 3 7 4 5 1 6 5 9 4 11 7 10 3 11 8 13 5 12 7 9 2 9 7 12 5 13 8 11 3 10 7 11 4 
+
+Show the fusc number (and its index) whose length is greater than any previous fusc number length.
+fusc[0] = 0
+fusc[37] = 11
+fusc[1,173] = 108
+fusc[35,499] = 1,076
+fusc[699,051] = 10,946
+fusc[19,573,419] = 103,682

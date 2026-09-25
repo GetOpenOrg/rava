@@ -1,0 +1,25 @@
+Rosetta Code
+....rocks
+........code
+........comparison
+........wiki
+....mocks
+........trolling
+
+0 Rosetta Code
+1 rocks
+2 code
+2 comparison
+2 wiki
+1 mocks
+2 trolling
+
+Rosetta Code
+....rocks
+........code
+........comparison
+........wiki
+....mocks
+........trolling
+
+initialNested = finalNested ? true

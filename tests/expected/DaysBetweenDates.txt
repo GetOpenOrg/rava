@@ -1,0 +1,1 @@
+Number of days between 2019-01-01 and 2019-10-19: 291

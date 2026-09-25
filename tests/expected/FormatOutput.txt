@@ -1,0 +1,3 @@
+count=42
+hello world
+list has 5 items

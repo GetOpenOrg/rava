@@ -1,0 +1,8 @@
+Names:
+  Alice
+  Bob
+  Charlie
+Doubled:
+  2
+  4
+  6

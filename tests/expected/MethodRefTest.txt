@@ -1,0 +1,7 @@
+Parsed 42: 42
+Parsed 100: 100
+Length of hello: 5
+Length of hi: 2
+one
+two
+three

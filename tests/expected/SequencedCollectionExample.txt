@@ -1,0 +1,21 @@
+=== List ===
+Collection: [elem]
+Sequenced: [elem]
+Collection: [First]
+Sequenced: [First, elem]
+Collection: [First, last]
+Sequenced: [First, elem, last]
+Collection: [last]
+Sequenced: [elem, last]
+Collection: []
+Sequenced: [elem]
+=== Set ===
+Collection: [elem]
+Sequenced: [elem]
+=== Map ===
+Map: {elem=v1}
+SequencedMap: {elem=v1}
+Map: {elem=v1, first=v2}
+SequencedMap: {first=v2, elem=v1}
+Map: {elem=v1, first=v2, last=v2}
+SequencedMap: {first=v2, elem=v1, last=v2}

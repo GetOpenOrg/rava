@@ -1,0 +1,4 @@
+"123456789" has length 9 and is the longest string
+"1234567" has length 7 and is neither the longest nor the shortest string
+"abcdef" has length 6 and is neither the longest nor the shortest string
+"abcd" has length 4 and is the shortest string

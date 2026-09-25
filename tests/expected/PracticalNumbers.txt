@@ -1,0 +1,8 @@
+Found 77 practical numbers between 1 and 333:
+1, 2, 4, 6, 8, 12, 16, 18, 20, 24, ..., 288, 294, 300, 304, 306, 308, 312, 320, 324, 330
+666 is a practical number.
+6666 is a practical number.
+66666 is not a practical number.
+672 is a practical number.
+720 is a practical number.
+222222 is a practical number.

@@ -1,0 +1,7 @@
+42
+NFE: For input string: "abc"
+-1
+20
+5
+ok: 5
+IAE: negative: -3

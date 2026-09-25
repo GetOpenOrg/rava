@@ -1,0 +1,5 @@
+Hello, World!
+World
+Good day, Sir.
+Hello, Alice!
+[LOG] test message

@@ -1,0 +1,27 @@
+int: 42
+float: 3.14
+string: hello
+char: A
+bool: true
+null bool: false
+hex: ff
+HEX: FF
+oct: 10
+sci: 1.23e+04
+SCI: 1.23E+04
+pct: 100%
+newline: a
+b
+[        42]
+[42        ]
+[0000000042]
+[        hi]
+[hi        ]
+[+42]
+[-42]
+[ 42]
+[0xff]
+[010]
+hello world
+score=95 (95.5%)
+Done.

@@ -1,0 +1,18 @@
+sorted: [1, 1, 2, 3, 4, 5, 6, 9]
+reversed: [9, 6, 5, 4, 3, 2, 1, 1]
+min: 1
+max: 9
+freq(3): 3
+singleton: [only]
+singleton size: 1
+emptyList size: 0
+swap: [d, b, c, a]
+fill: [filled, filled, filled]
+binarySearch(5): 2
+binarySearch(4) negative: true
+nCopies: [repeat, repeat, repeat]
+Arrays.equals same: true
+Arrays.equals diff: false
+Arrays.binarySearch(5): 2
+Arrays.binarySearch(4) negative: true
+Done.

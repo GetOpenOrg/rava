@@ -1,0 +1,6 @@
+Weekday
+Weekend
+Unknown
+3
+1
+0

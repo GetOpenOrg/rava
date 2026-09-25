@@ -1,0 +1,9 @@
+counter: 15
+label: initialized
+items: [alpha, beta, gamma]
+items size: 3
+lookup x: 1
+lookup y: 2
+lookup z: 3
+config: default-v42
+counter after: 115

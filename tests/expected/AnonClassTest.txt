@@ -1,0 +1,4 @@
+Hello, World!
+Hi, Java!
+3 + 4 = 7
+3 * 4 = 12

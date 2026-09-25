@@ -1,0 +1,136 @@
+0:
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+
+1:
+     xxxxxx    
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+
+20:
+     x         
+     x         
+     x         
+     x         
+xxxxxx         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+
+300:
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x    x    
+     x   x     
+     x  x      
+     x x       
+     xx        
+
+4000:
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+     x         
+    xx         
+   x x         
+  x  x         
+ x   x         
+x    x         
+
+5555:
+xxxxxxxxxxx    
+ x   x   x     
+  x  x  x      
+   x x x       
+    xxx        
+     x         
+     x         
+     x         
+     x         
+     x         
+    xxx        
+   x x x       
+  x  x  x      
+ x   x   x     
+xxxxxxxxxxx    
+
+6789:
+x    xxxxxx    
+x    x    x    
+x    x    x    
+x    x    x    
+xxxxxxxxxxx    
+     x         
+     x         
+     x         
+     x         
+     x         
+x    x    x    
+x    x    x    
+x    x    x    
+x    x    x    
+x    xxxxxx    
+
+9999:
+xxxxxxxxxxx    
+x    x    x    
+x    x    x    
+x    x    x    
+xxxxxxxxxxx    
+     x         
+     x         
+     x         
+     x         
+     x         
+xxxxxxxxxxx    
+x    x    x    
+x    x    x    
+x    x    x    
+xxxxxxxxxxx    
+

@@ -1,0 +1,9 @@
+GB82 WEST 1234 5698 7654 32 is valid.
+GB82 TEST 1234 5698 7654 32 is not valid.
+GB81 WEST 1234 5698 7654 32 is not valid.
+SA03 8000 0000 6080 1016 7519 is valid.
+CH93 0076 2011 6238 5295 7 is valid.
+XX00 0000 is not valid.
+ is not valid.
+DE is not valid.
+DE13 äöü_ 1234 1234 1234 12 is not valid.

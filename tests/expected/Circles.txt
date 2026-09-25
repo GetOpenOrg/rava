@@ -1,0 +1,15 @@
+For points (0.1234, 0.9876) and (0.8765, 0.2345) with radius 2.000000
+there are two circles with centers at (1.8631, 1.9742) and (-0.8632, -0.7521)
+
+For points (0.0000, 2.0000) and (0.0000, 0.0000) with radius 1.000000
+there is just one circle with center at (0.0000, 1.0000)
+
+For points (0.1234, 0.9876) and (0.1234, 0.9876) with radius 2.000000
+an infinite number of circles can be drawn
+
+For points (0.1234, 0.9876) and (0.8765, 0.2345) with radius 0.500000
+the points are too far apart to draw a circle
+
+For points (0.1234, 0.9876) and (0.1234, 0.9876) with radius 0.000000
+there is just one circle with center at (0.1234, 0.9876)
+

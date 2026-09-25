@@ -1,0 +1,8 @@
+Starting figures:
+  latitude = 28.3852, longitude = -81.5638
+
+Three word location is:
+  W18497 W11324 W01322
+
+After reversing the procedure:
+  latitude = 28.3852, longitude = -81.5638

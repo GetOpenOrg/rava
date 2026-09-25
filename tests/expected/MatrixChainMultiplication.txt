@@ -1,0 +1,12 @@
+Array Dimension  = [5, 6, 3, 1]
+Cost             = 48
+Optimal Multiply = (A * (B * C))
+
+Array Dimension  = [1, 5, 25, 30, 100, 70, 2, 1, 100, 250, 1, 1000, 2]
+Cost             = 38120
+Optimal Multiply = ((((((((A * B) * C) * D) * E) * F) * G) * (H * (I * J))) * (K * L))
+
+Array Dimension  = [1000, 1, 500, 12, 1, 700, 2500, 3, 2, 5, 14, 10]
+Cost             = 1773740
+Optimal Multiply = (A * ((((((B * C) * D) * (((E * F) * G) * H)) * I) * J) * K))
+

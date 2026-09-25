@@ -1,0 +1,10 @@
+String array length: 3
+String array[0]: Alice
+String array[2]: Charlie
+Int array length: 3
+Int array[1]: 20
+Object array length: 2
+Object array[0]: Hello
+Unboxed Integer: 42
+Cast String: hello
+All checkcast tests passed!

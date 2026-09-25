@@ -1,0 +1,12 @@
+The weights of the following 5 subsets add up to zero:
+
+(alliance, -624) (archbishop, -915) (balm, 397) (bonnet, 452) (brute, 870) (centipede, -658) (cobol, 362) (covariate, 590) (departure, 952) (deploy, 44) (diophantine, 645) (efferent, 54) (elysee, -326) (eradicate, 376) (escritoire, 856) (exorcism, -983) (fiat, 170) (filmy, -874) (flatworm, 503) (mincemeat, -880) (plugging, -266) (speakeasy, -745) 
+
+(alliance, -624) (archbishop, -915) (balm, 397) (bonnet, 452) (brute, 870) (centipede, -658) (cobol, 362) (covariate, 590) (departure, 952) (deploy, 44) (diophantine, 645) (efferent, 54) (elysee, -326) (eradicate, 376) (escritoire, 856) (exorcism, -983) (infra, -847) (isis, -982) (mincemeat, -880) (moresby, 756) (mycenae, 183) (smokescreen, 423) (speakeasy, -745) 
+
+(alliance, -624) (archbishop, -915) (balm, 397) (bonnet, 452) (brute, 870) (centipede, -658) (cobol, 362) (covariate, 590) (departure, 952) (deploy, 44) (diophantine, 645) (efferent, 54) (elysee, -326) (eradicate, 376) (escritoire, 856) (fiat, 170) (infra, -847) (isis, -982) (markham, 475) (mincemeat, -880) (plugging, -266) (speakeasy, -745) 
+
+(alliance, -624) (archbishop, -915) (balm, 397) (bonnet, 452) (brute, 870) (centipede, -658) (cobol, 362) (covariate, 590) (departure, 952) (deploy, 44) (diophantine, 645) (efferent, 54) (elysee, -326) (eradicate, 376) (exorcism, -983) (fiat, 170) (infra, -847) (isis, -982) (mincemeat, -880) (moresby, 756) (plugging, -266) (vein, 813) 
+
+(alliance, -624) (archbishop, -915) (balm, 397) (bonnet, 452) (brute, 870) (centipede, -658) (cobol, 362) (covariate, 590) (departure, 952) (deploy, 44) (diophantine, 645) (efferent, 54) (elysee, -326) (eradicate, 376) (exorcism, -983) (fiat, 170) (infra, -847) (isis, -982) (smokescreen, 423) 
+

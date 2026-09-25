@@ -1,0 +1,8 @@
+average-error :  3.000
+crowd-error   :  0.111
+diversity     :  2.889
+
+average-error : 14.500
+crowd-error   :  4.000
+diversity     : 10.500
+

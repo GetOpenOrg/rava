@@ -1,0 +1,14 @@
+Adler32 init: 1
+Adler32 after 1: 131074
+Adler32 Hello: 93061621
+Adler32 reset: 1
+CRC32 init: 0
+CRC32 after 1: 2768625435
+CRC32 Hello: 4157704578
+CRC32 reset: 0
+Adler32 fox: 1541148634
+CRC32 fox: 1095738169
+CRC32C init: 0
+CRC32C after 1: 2685849682
+CRC32C Hello: 2178485787
+CRC32C reset: 0

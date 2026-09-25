@@ -1,0 +1,6 @@
+Original input=2097152, encoded = [81, 80, 80, 00], decoded=2097152, OK
+Original input=2097151, encoded = [ff, ff, 7f], decoded=2097151, OK
+Original input=1, encoded = [01], decoded=1, OK
+Original input=127, encoded = [7f], decoded=127, OK
+Original input=128, encoded = [81, 00], decoded=128, OK
+Original input=589723405834, encoded = [91, 94, f2, 84, 9c, 0a], decoded=589723405834, OK

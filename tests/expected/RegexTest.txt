@@ -1,0 +1,15 @@
+--- find loop ---
+found: 123 at 3-6
+found: 456 at 9-12
+matches hello: true
+matches hello123: false
+static matches: true
+static no match: false
+group0: user@host
+group1: user
+group2: host
+groupCount: 2
+replaceAll: aXbXcX
+replaceFirst: aYb2c3
+pattern: ,
+toString: ,

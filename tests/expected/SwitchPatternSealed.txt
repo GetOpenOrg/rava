@@ -1,0 +1,5 @@
+42 is the answer
+negative number
+non-empty string
+empty string
+null value

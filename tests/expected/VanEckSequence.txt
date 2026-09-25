@@ -1,0 +1,23 @@
+First 10 terms of Van Eck's sequence:
+VanEck[1] = 0
+VanEck[2] = 0
+VanEck[3] = 1
+VanEck[4] = 0
+VanEck[5] = 2
+VanEck[6] = 0
+VanEck[7] = 2
+VanEck[8] = 2
+VanEck[9] = 1
+VanEck[10] = 6
+
+Terms 991 to 1000 of Van Eck's sequence:
+VanEck[991] = 4
+VanEck[992] = 7
+VanEck[993] = 30
+VanEck[994] = 25
+VanEck[995] = 67
+VanEck[996] = 225
+VanEck[997] = 488
+VanEck[998] = 0
+VanEck[999] = 10
+VanEck[1000] = 136

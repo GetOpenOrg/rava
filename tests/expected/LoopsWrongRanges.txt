@@ -1,0 +1,9 @@
+Normal                                        [-2, -1, 0, 1, 2]
+Zero increment                                [-2, -2, -2, -2, -2, -2, -2, -2, -2, -2] (loops forever)
+Increments away from stop value               [-2, -3, -4, -5, -6, -7, -8, -9, -10, -11] (loops forever)
+First increment is beyond stop value          [-2]
+Start more than stop: positive increment      []
+Start equal stop: positive increment          [2]
+Start equal stop: negative increment          [2, 1, 0, -1, -2, -3, -4, -5, -6, -7] (loops forever)
+Start equal stop: zero increment              [2, 2, 2, 2, 2, 2, 2, 2, 2, 2] (loops forever)
+Start equal stop equal zero: zero increment   [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (loops forever)

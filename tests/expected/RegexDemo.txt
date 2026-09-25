@@ -1,0 +1,13 @@
+true
+false
+found: 123
+found: 456
+found: 789
+date=2024-03-15 year=2024 month=03 day=15
+date=2024-03-16 year=2024 month=03 day=16
+hello NUM world NUM
+apple
+banana
+cherry
+date
+year=2024 month=03

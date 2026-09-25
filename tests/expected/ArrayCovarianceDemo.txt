@@ -1,0 +1,13 @@
+3
+a
+true
+String
+String
+String
+ArrayStoreException caught
+a
+1
+4
+true
+true
+done

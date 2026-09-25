@@ -1,0 +1,6 @@
+Char    Name                                        Unicode	UTF-8 encoded	Decoded
+A       LATIN CAPITAL LETTER A                      U+0041	41          	U+0041
+ö       LATIN SMALL LETTER O WITH DIAERESIS         U+00F6	C3 B6       	U+00F6
+Ж       CYRILLIC CAPITAL LETTER ZHE                 U+0416	D0 96       	U+0416
+€       EURO SIGN                                   U+20AC	E2 82 AC    	U+20AC
+𝄞      MUSICAL SYMBOL G CLEF                       U+1D11E	F0 9D 84 9E 	U+1D11E

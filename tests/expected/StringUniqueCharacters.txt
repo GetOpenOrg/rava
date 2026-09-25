@@ -1,0 +1,7 @@
+String                                    Length  All Unique  1st Diff  Hex  Positions
+------------------------                  ------  ----------  --------  ---  ---------
+                                          0       yes                             
+.                                         1       yes                             
+abcABC                                    6       yes                             
+XYZ ZYX                                   7       no          'Z'       5A   3 5  
+1234567890ABCDEFGHIJKLMN0PQRSTUVWXYZ      36      no          '0'       30   10 25

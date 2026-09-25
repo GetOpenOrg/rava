@@ -1,0 +1,12 @@
+evens: [2, 4, 6]
+odds: [1, 3, 5]
+counts: 1,2
+copies: [x, x, x]
+immutable: [10, 20, 30]
+merge: x=3 y=5
+prices: apple=200 banana=400
+removeAll: [1, 3, 5]
+retainAll: [2, 4]
+freq(3): 3
+set size: 3
+Done.

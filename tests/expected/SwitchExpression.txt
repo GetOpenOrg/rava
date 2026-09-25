@@ -1,0 +1,9 @@
+10
+20
+0
+small
+medium
+large
+2
+6
+5

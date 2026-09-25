@@ -1,0 +1,6 @@
+banana=2
+apple=1
+cherry=3
+size=3
+after remove size=2
+containsKey banana=true

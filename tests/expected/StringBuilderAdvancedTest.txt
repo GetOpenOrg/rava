@@ -1,0 +1,12 @@
+Hello World
+int=42 double=3.14 str=abc
+abc
+4
+Hello Java
+edcba
+Hello Java
+e
+2
+0,1,2,3,4
+World
+Hello

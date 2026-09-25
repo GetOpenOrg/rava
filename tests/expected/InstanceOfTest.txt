@@ -1,0 +1,3 @@
+circle is Shape: true
+shape is Circle: false
+circle is Circle: true

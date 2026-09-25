@@ -1,0 +1,14 @@
+3
+true
+false
+banana
+apple
+cherry
+2
+false
+5
+5 4 3 2 1 
+true
+false
+true
+done

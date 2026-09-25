@@ -1,0 +1,3 @@
+Sorted values: 11 21 82
+Sorted values: s11 s21 s82
+Sorted Boxes: 12Kg 143Kg 200Kg

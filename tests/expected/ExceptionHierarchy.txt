@@ -1,0 +1,5 @@
+caught-exception: rte
+no-throw
+illegal-arg: bad-arg
+runtime-fallback: general
+user-caught: user-exc

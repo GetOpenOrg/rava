@@ -1,0 +1,8 @@
+Compact constructor (10, 20)
+Creating a copy to be serialized: Compact constructor (11, 21)
+Finished
+Compact constructor (11, 21)
+Reading from serialized object - x: 11, y: 21
+Compact constructor (10, 20)
+Read: CustomSerializableRecord[x=10, y=20]
+Finished

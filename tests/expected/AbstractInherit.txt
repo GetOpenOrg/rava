@@ -1,0 +1,6 @@
+gasoline
+200
+4
+none
+40
+2

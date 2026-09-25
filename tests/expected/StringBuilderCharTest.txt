@@ -1,0 +1,5 @@
+Hello
+ABC
+val=42,ok
+dlroW
+true 3.14

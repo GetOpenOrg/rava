@@ -1,0 +1,13 @@
+computeIfAbsent absent: b_value
+map has b: b_value
+computeIfAbsent present: hello
+computeIfPresent present: x=ten
+map x: x=ten
+computeIfPresent absent: null
+compute present: a+old
+merge present: hello world
+merge absent: new
+replaceAll a: a=1
+replaceAll b: b=2
+replaceAll c: c=3
+All tests passed!

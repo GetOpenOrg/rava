@@ -1,0 +1,14 @@
+a: [1, 2, 3, 4, 5]
+b: [2, 3, 4, 5, 6, 8]
+c: [2, 3, 4]
+d: [2, 3, 4]
+2 in a: true
+6 in a: false
+a union b: [1, 2, 3, 4, 5, 6, 8]
+a - b: [1]
+c subset of a: true
+c = d: true
+d = c: true
+a intersect b: [2, 3, 4, 5]
+add 7 to a: true
+add 2 to a again: false

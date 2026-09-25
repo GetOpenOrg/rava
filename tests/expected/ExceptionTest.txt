@@ -1,0 +1,4 @@
+5
+Caught exception
+-1
+5

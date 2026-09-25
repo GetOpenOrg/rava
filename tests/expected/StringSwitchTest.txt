@@ -1,0 +1,5 @@
+Monday -> Weekday
+Wednesday -> Weekday
+Friday -> Weekday
+Sunday -> Weekend
+Unknown -> Unknown

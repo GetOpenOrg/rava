@@ -1,0 +1,10 @@
+00-01 Avalanche
+01-02 Red Wings
+02-03 Devils
+03-04 Lightning
+04-05 lockout
+05-06 Hurricanes
+06-07 Ducks
+07-08 Red Wings
+08-09 Penguins
+99-00 Devils

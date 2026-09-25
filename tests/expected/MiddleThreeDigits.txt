@@ -1,0 +1,21 @@
+middleThreeDigits(123): 123
+middleThreeDigits(12345): 234
+middleThreeDigits(1234567): 345
+middleThreeDigits(987654321): 654
+middleThreeDigits(10001): 000
+middleThreeDigits(-10001): 000
+middleThreeDigits(-123): 123
+middleThreeDigits(-100): 100
+middleThreeDigits(100): 100
+middleThreeDigits(-12345): 234
+middleThreeDigits(-9223372036854775808): 368
+middleThreeDigits(9223372036854775807): 368
+middleThreeDigits(1): Need odd and >= 3 digits
+middleThreeDigits(2): Need odd and >= 3 digits
+middleThreeDigits(-1): Need odd and >= 3 digits
+middleThreeDigits(-10): Need odd and >= 3 digits
+middleThreeDigits(2002): Need odd and >= 3 digits
+middleThreeDigits(-2002): Need odd and >= 3 digits
+middleThreeDigits(0): Need odd and >= 3 digits
+middleThreeDigits(-2147483648): Need odd and >= 3 digits
+middleThreeDigits(2147483647): Need odd and >= 3 digits

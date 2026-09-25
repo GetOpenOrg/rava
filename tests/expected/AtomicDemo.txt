@@ -1,0 +1,19 @@
+initial: 10
+getAndIncrement: 10
+after: 11
+incrementAndGet: 12
+getAndDecrement: 12
+after decrement: 11
+addAndGet(5): 16
+getAndAdd(3): 16
+after getAndAdd: 19
+CAS(19->100): true val=100
+CAS(0->999) failed: false val=100
+getAndSet(42): 100
+after getAndSet: 42
+long initial: 1000000000000
+long incrementAndGet: 1000000000001
+bool initial: false
+bool after set(true): true
+bool CAS(true->false): true
+bool after CAS: false

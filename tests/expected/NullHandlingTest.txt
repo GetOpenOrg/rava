@@ -1,0 +1,22 @@
+true
+false
+not null
+null
+world
+42
+3
+first
+true
+third
+false
+true
+value
+fallback
+only
+only
+alpha
+true
+default
+value1
+true
+2

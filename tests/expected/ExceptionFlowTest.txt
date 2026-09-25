@@ -1,0 +1,9 @@
+div: [-50, -100, ERR, 100, 50]
+chained: negative: 0
+fib(-1): error: n<0
+fib(7): 13
+flow: try catch finally
+op0: arith=/ by zero
+op1: arg=bad op
+op2: ok
+Done.

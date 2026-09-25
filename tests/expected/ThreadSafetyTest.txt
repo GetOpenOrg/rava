@@ -1,0 +1,17 @@
+=== Sequential threads ===
+Thread A running
+Thread B running
+Thread C running
+All threads done
+=== Thread naming ===
+Name: TestWorker
+Named thread executing
+=== Thread with sleep ===
+Before sleep
+After sleep
+Join complete
+=== currentThread ===
+Current thread: main
+=== Compute thread ===
+Sum: 4950
+Thread safety tests passed

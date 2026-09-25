@@ -1,0 +1,8 @@
+Circle with radius 5
+Circle area: 78.53981633974483
+Rectangle 3x4
+Rectangle area: 12
+c.kind = Circle
+r.kind = Rectangle
+c instanceof Circle: true
+r instanceof Rectangle: true

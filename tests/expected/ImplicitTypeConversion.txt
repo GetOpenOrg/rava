@@ -1,0 +1,10 @@
+Primitive conversions
+byte value    -1         to 3 integral types:  -1
+float value   0.1        to double:            0.10000000149011612
+int value     -1         to float and double:  -1.0
+int value     2147483647 to float and double:  2.147483648E9
+char value    'a'        to int and double:    97.0
+
+Boxing and unboxing
+int  value    -1         to Integer and int:   -1
+double value  0.1        to Double and double: 0.1

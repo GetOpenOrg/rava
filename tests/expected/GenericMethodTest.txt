@@ -1,0 +1,18 @@
+banana
+zoo
+10
+1
+hello
+Box[hello]
+world
+42
+cba
+3
+(age, 25)
+age
+25
+apple
+banana
+cherry
+inner
+Box[Box[inner]]

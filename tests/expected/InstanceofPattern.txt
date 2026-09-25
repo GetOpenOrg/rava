@@ -1,0 +1,7 @@
+String length: 5
+HELLO
+Integer: 42
+Unknown type
+String length: 5
+WORLD
+Unknown type

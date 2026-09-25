@@ -1,0 +1,7 @@
+US0378331005 is valid
+US0373831005 is not valid
+U50378331005 is not valid
+US03378331005 is not valid
+AU0000XVGZA3 is valid
+AU0000VXGZA3 is valid
+FR0000988040 is valid

@@ -1,0 +1,8 @@
+Dog(Rex,5)
+Cat(Whiskers)
+Shelter (3 animals):
+  Dog(Rex,5)
+  Dog(Spot,3)
+  Cat(Whiskers)
+d1 is Printable: true
+Done.

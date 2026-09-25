@@ -1,0 +1,14 @@
+fib(10): 55
+fib(20): 6765
+hanoi moves: 7
+first: A->C
+last: A->C
+perms of ABC: 6
+search 7: 3
+search 10: -1
+eval: 14
+gcd(12,8): 4
+lcm(12,8): 24
+pow(2,10): 1024
+pow(3,5): 243
+Done.

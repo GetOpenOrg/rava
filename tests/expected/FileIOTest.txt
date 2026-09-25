@@ -1,0 +1,7 @@
+Write OK
+Exists: true
+Is file: true
+Read: Hello from JNC!
+Read: Line two
+Read: Line three
+Deleted: true

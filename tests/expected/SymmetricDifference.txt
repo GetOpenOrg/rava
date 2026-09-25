@@ -1,0 +1,6 @@
+In set A: [Bob, John, Serena, Mary]
+In set B: [Bob, John, Jim, Mary]
+Not in set A: [Jim]
+Not in set B: [Serena]
+Symmetric Difference: [Serena, Jim]
+Symmetric Difference 2: [Serena, Jim]

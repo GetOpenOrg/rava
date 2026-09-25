@@ -1,0 +1,12 @@
+Circle: area=78.54 perimeter=31.42
+Rectangle: area=12.00 perimeter=14.00
+Triangle: area=6.00 perimeter=12.00
+78.54
+12.00
+6.00
+Dog says Woof
+Cat says Meow
+C1:5
+96.54
+Circle
+Rectangle

@@ -1,0 +1,4 @@
+DABDDB                   =>                 251 * 10^2
+DABDDBBDDBA              =>              167351 * 10^6
+ABRACADABRA              =>             7954170 * 10^4
+TOBEORNOTTOBEORTOBEORNOT => 1150764267498783364 * 10^15

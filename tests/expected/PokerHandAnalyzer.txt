@@ -1,0 +1,45 @@
+Regular hands:
+
+[2H, 2D, 2S, KS, QD] three-of-a-kind
+[2H, 5H, 7D, 8S, 9D] high-card
+[AH, 2D, 3S, 4S, 5S] straight
+[2H, 3H, 2D, 3S, 3D] full-house
+[2H, 7H, 2D, 3S, 3D] two-pair
+[2H, 7H, 7D, 7S, 7C] four-of-a-kind
+[TH, JH, QH, KH, AH] straight-flush
+[4H, 4C, KC, 5D, TC] one-pair
+[QC, TC, 7C, 6C, 4C] flush
+[QC, TC, 7C, 7C, TD] invalid hand: duplicates
+
+Hands with wildcards:
+
+[2H, 2D, 2S, KS, WW]
+[2H, 2D, 2S, KS, 2C] four-of-a-kind
+
+[2H, 5H, 7D, 8S, WW]
+[2H, 5H, 7D, 8S, 8H] one-pair
+
+[AH, 2D, 3S, 4S, WW]
+[AH, 2D, 3S, 4S, 5H] straight
+
+[2H, 3H, 2D, 3S, WW]
+[2H, 3H, 2D, 3S, 3D] full-house
+
+[2H, 7H, 2D, 3S, WW]
+[2H, 7H, 2D, 3S, 2S] three-of-a-kind
+
+[2H, 7H, 7D, WW, WW]
+[2H, 7H, 7D, 7S, 7C] four-of-a-kind
+
+[TH, JH, QH, WW, WW]
+[TH, JH, QH, AH, KH] straight-flush
+
+[4H, 4C, KC, WW, WW]
+[4H, 4C, KC, 4D, 4S] four-of-a-kind
+
+[QC, TC, 7C, WW, WW]
+[QC, TC, 7C, AC, KC] flush
+
+[QC, TC, 7H, WW, WW]
+[QC, TC, 7H, QH, QD] three-of-a-kind
+

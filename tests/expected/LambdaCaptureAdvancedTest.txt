@@ -1,0 +1,8 @@
+BiFunction capture: 20
+Multi capture: Hello World!
+Nested capture size: 4
+Nested capture sum: 50
+Capture array + param: 21
+Capture ref: B
+Chained: 101,104
+Tag: item1

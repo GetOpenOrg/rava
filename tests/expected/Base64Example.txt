@@ -1,0 +1,2 @@
+QmFzZTY0IGZpbmFsbHkgaW4gSmF2YSA4IQ==
+Base64 finally in Java 8!

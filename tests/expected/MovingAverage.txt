@@ -1,0 +1,22 @@
+Next number = 1.0, SMA = 1.0
+Next number = 2.0, SMA = 1.5
+Next number = 3.0, SMA = 2.0
+Next number = 4.0, SMA = 3.0
+Next number = 5.0, SMA = 4.0
+Next number = 5.0, SMA = 4.666666666666667
+Next number = 4.0, SMA = 4.666666666666667
+Next number = 3.0, SMA = 4.0
+Next number = 2.0, SMA = 3.0
+Next number = 1.0, SMA = 2.0
+
+Next number = 1.0, SMA = 1.0
+Next number = 2.0, SMA = 1.5
+Next number = 3.0, SMA = 2.0
+Next number = 4.0, SMA = 2.5
+Next number = 5.0, SMA = 3.0
+Next number = 5.0, SMA = 3.8
+Next number = 4.0, SMA = 4.2
+Next number = 3.0, SMA = 4.2
+Next number = 2.0, SMA = 3.8
+Next number = 1.0, SMA = 3.0
+

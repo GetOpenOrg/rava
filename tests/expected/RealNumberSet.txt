@@ -1,0 +1,18 @@
+(0, 1] ∪ [0, 2) contains 0 is true
+[0, 2) ∩ (1, 2] contains 0 is false
+[0, 3) − (0, 1) contains 0 is true
+[0, 3) − [0, 1] contains 0 is false
+
+(0, 1] ∪ [0, 2) contains 1 is true
+[0, 2) ∩ (1, 2] contains 1 is false
+[0, 3) − (0, 1) contains 1 is true
+[0, 3) − [0, 1] contains 1 is false
+
+(0, 1] ∪ [0, 2) contains 2 is false
+[0, 2) ∩ (1, 2] contains 2 is false
+[0, 3) − (0, 1) contains 2 is true
+[0, 3) − [0, 1] contains 2 is true
+
+[0, 0] is empty is false
+
+Approx length of A - B is 2.075870

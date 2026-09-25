@@ -1,0 +1,12 @@
+a,"b"
+"a","b""c"
+,a
+a,"
+ a , "b"
+"12",34
+a\tb, TAB
+a\\tb
+a\n\rb
+a\0b, NUL
+a\rb, RETURN
+a\\b

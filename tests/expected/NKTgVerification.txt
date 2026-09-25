@@ -1,0 +1,67 @@
+=== NKTg Planetary Mass Verification ===
+Mercury:
+  NASA mass        = 3.3010000000e+23 kg
+  Interpolated     = 3.3010000000e+23 kg
+  Delta m          = 0.0000000000e+00 kg
+
+Venus:
+  NASA mass        = 4.8670000000e+24 kg
+  Interpolated     = 4.8670000000e+24 kg
+  Delta m          = 0.0000000000e+00 kg
+
+Earth:
+  NASA mass        = 5.9720000000e+24 kg
+  Interpolated     = 5.9720000000e+24 kg
+  Delta m          = 0.0000000000e+00 kg
+
+Mars:
+  NASA mass        = 6.4170000000e+23 kg
+  Interpolated     = 6.4170000000e+23 kg
+  Delta m          = 0.0000000000e+00 kg
+
+Jupiter:
+  NASA mass        = 1.8980000000e+27 kg
+  Interpolated     = 1.8980000000e+27 kg
+  Delta m          = 0.0000000000e+00 kg
+
+Saturn:
+  NASA mass        = 5.6830000000e+26 kg
+  Interpolated     = 5.6830000000e+26 kg
+  Delta m          = -6.8719476736e+10 kg
+
+Uranus:
+  NASA mass        = 8.6810000000e+25 kg
+  Interpolated     = 8.6810000000e+25 kg
+  Delta m          = 0.0000000000e+00 kg
+
+Neptune:
+  NASA mass        = 1.0240000000e+26 kg
+  Interpolated     = 1.0240000000e+26 kg
+  Delta m          = 0.0000000000e+00 kg
+
+=== Earth 2024 Mass Interpolation (NKTg) ===
+20240101:
+  Interpolated     = 5.9798806646e+17 kg
+  NASA fixed mass  = 5.9722000000e+24 kg
+  Delta m          = 5.9721994020e+24 kg
+
+20240401:
+  Interpolated     = 6.0839898915e+17 kg
+  NASA fixed mass  = 5.9722000000e+24 kg
+  Delta m          = 5.9721993916e+24 kg
+
+20240701:
+  Interpolated     = 5.8870630596e+17 kg
+  NASA fixed mass  = 5.9722000000e+24 kg
+  Delta m          = 5.9721994113e+24 kg
+
+20241001:
+  Interpolated     = 5.9838805847e+17 kg
+  NASA fixed mass  = 5.9722000000e+24 kg
+  Delta m          = 5.9721994016e+24 kg
+
+20241231:
+  Interpolated     = 5.9798806646e+17 kg
+  NASA fixed mass  = 5.9722000000e+24 kg
+  Delta m          = 5.9721994020e+24 kg
+

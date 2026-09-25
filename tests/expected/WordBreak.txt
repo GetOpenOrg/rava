@@ -1,0 +1,28 @@
+String = aab, Dictionary = [a, aa, b, ab, aab].  Solutions = 4:
+ Word Break = [aab]
+ Word Break = [a, ab]
+ Word Break = [aa, b]
+ Word Break = [a, a, b]
+
+String = aa b, Dictionary = [a, aa, b, ab, aab].  Solutions = 0:
+
+String = abcd, Dictionary = [abc, a, ac, b, c, cb, d].  Solutions = 2:
+ Word Break = [abc, d]
+ Word Break = [a, b, c, d]
+
+String = abbc, Dictionary = [abc, a, ac, b, c, cb, d].  Solutions = 1:
+ Word Break = [a, b, b, c]
+
+String = abcbcd, Dictionary = [abc, a, ac, b, c, cb, d].  Solutions = 3:
+ Word Break = [abc, b, c, d]
+ Word Break = [a, b, cb, c, d]
+ Word Break = [a, b, c, b, c, d]
+
+String = acdbc, Dictionary = [abc, a, ac, b, c, cb, d].  Solutions = 2:
+ Word Break = [ac, d, b, c]
+ Word Break = [a, c, d, b, c]
+
+String = abcdd, Dictionary = [abc, a, ac, b, c, cb, d].  Solutions = 2:
+ Word Break = [abc, d, d]
+ Word Break = [a, b, c, d, d]
+

@@ -1,0 +1,2 @@
+Sum of odd numbers: 2450
+Sum of powed numbers: 328350

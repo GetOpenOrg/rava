@@ -1,0 +1,2 @@
+Inserting values 1 to 10
+Printing balance: 0 0 0 1 0 1 0 0 0 

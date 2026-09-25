@@ -1,0 +1,2 @@
+Values of d < 2200 where a, b, and c are non-zero and a^2 + b^2 + c^2 = d^2 has no solutions:
+[1, 2, 4, 5, 8, 10, 16, 20, 32, 40, 64, 80, 128, 160, 256, 320, 512, 640, 1024, 1280, 2048]

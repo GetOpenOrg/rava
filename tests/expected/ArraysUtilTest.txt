@@ -1,0 +1,10 @@
+sorted: [1, 2, 3, 4, 5]
+partial sorted: [9, 3, 5, 7, 1]
+copyOf longer: [10, 20, 30, 0, 0]
+copyOf shorter: [10, 20]
+copyOfRange: [20, 30]
+fill: [7, 7, 7, 7]
+equals same: true
+equals diff: false
+sorted doubles: [1.41, 2.72, 3.14]
+sorted names: [Alice, Bob, Charlie]

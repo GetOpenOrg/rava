@@ -1,0 +1,3 @@
+Hello, var!
+6
+var with concat: Hello, var!

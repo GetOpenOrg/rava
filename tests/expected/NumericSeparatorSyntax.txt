@@ -1,0 +1,7 @@
+Underscore allowed as seperator:  1000
+Multiple consecutive underscores allowed::  1000
+Many multiple consecutive underscores allowed::  100
+Underscores allowed in multiple positions:  144
+Underscores allowed in negative number:  -144
+Underscores allowed in floating point number:  0.0014400
+Underscores allowed in floating point exponent:  0.0000144

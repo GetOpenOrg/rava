@@ -1,0 +1,15 @@
+Traverse List:
+Element number 0 - Element value = 'Add First 5'
+Element number 1 - Element value = 'Add First 4'
+Element number 2 - Element value = 'Add First 3'
+Element number 3 - Element value = 'Add First 2'
+Element number 4 - Element value = 'Add First 1'
+
+Traverse List:
+Element number 0 - Element value = 'Add First 5'
+Element number 1 - Element value = 'Add First 4'
+Element number 2 - Element value = 'Add First 3'
+Element number 3 - Element value = 'Add New'
+Element number 4 - Element value = 'Add First 2'
+Element number 5 - Element value = 'Add First 1'
+

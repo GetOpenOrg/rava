@@ -1,0 +1,40 @@
+use: ' '
+old:   0 <<<>>>
+new:   0 <<<>>>
+
+use: '-'
+old:  72 <<<"If I were two-faced, would I be wearing this one?" --- Abraham Lincoln >>>
+new:  70 <<<"If I were two-faced, would I be wearing this one?" - Abraham Lincoln >>>
+
+use: '7'
+old:  72 <<<..1111111111111111111111111111111111111111111111111111111111111117777888>>>
+new:  69 <<<..1111111111111111111111111111111111111111111111111111111111111117888>>>
+
+use: '.'
+old:  72 <<<I never give 'em hell, I just tell the truth, and they think it's hell. >>>
+new:  72 <<<I never give 'em hell, I just tell the truth, and they think it's hell. >>>
+
+use: ' '
+old:  72 <<<                                                    --- Harry S Truman  >>>
+new:  20 <<< --- Harry S Truman >>>
+
+use: '-'
+old:  72 <<<                                                    --- Harry S Truman  >>>
+new:  70 <<<                                                    - Harry S Truman  >>>
+
+use: 'r'
+old:  72 <<<                                                    --- Harry S Truman  >>>
+new:  71 <<<                                                    --- Hary S Truman  >>>
+
+use: '5'
+old:  45 <<<122333444455555666666777777788888888999999999>>>
+new:  41 <<<12233344445666666777777788888888999999999>>>
+
+use: 'e'
+old:  80 <<<The better the 4-wheel drive, the further you'll be from help when ya get stuck!>>>
+new:  79 <<<The better the 4-whel drive, the further you'll be from help when ya get stuck!>>>
+
+use: 's'
+old:  16 <<<headmistressship>>>
+new:  14 <<<headmistreship>>>
+

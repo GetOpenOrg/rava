@@ -1,0 +1,7 @@
+caught as Business: order failed
+caught as Business: payment failed
+caught as Runtime: runtime catch
+caught as Exception: exception catch
+correctly fell through: not payment
+exact match: exact
+Done.

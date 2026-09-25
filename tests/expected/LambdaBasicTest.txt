@@ -1,0 +1,6 @@
+Double 5: 10
+Double 10: 20
+5 > 0: true
+-1 > 0: false
+Got: hello
+Got: world

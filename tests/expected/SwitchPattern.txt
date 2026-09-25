@@ -1,0 +1,4 @@
+Integer: 42
+String: hello
+null
+other

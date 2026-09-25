@@ -1,0 +1,11 @@
+int count: 3
+int avg: 10.0
+long sum: 3000000000
+long avg: 1.5E9
+dbl min: 1.1
+dbl max: 3.3
+equals sums: false
+equals same: false
+label: N/A
+intStats nonNull: true
+null isNull: true

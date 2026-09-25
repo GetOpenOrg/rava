@@ -1,0 +1,20 @@
+0 -> 0
+9 -> 0
+12 -> 21
+21 -> 0
+12,453 -> 12,534
+738,440 -> 740,348
+45,072,010 -> 45,072,100
+95,322,020 -> 95,322,200
+9,589,776,899,767,587,796,600 -> 9,589,776,899,767,587,900,667
+3,345,333 -> 3,353,334
+Test all permutations of:  12345
+    Order:  OK =  true
+    Last permutation:  Actual = 54321, Expected = 54321, OK = true
+    Permutations unique:  OK =  true
+    Permutation count:  Actual = 120, Expected = 120, OK = true
+Test all permutations of:  11122
+    Order:  OK =  true
+    Last permutation:  Actual = 22111, Expected = 22111, OK = true
+    Permutations unique:  OK =  true
+    Permutation count:  Actual = 10, Expected = 10, OK = true

@@ -1,0 +1,12 @@
+Generation 0:
+_#_
+_#_
+_#_
+Generation 1:
+___
+###
+___
+Generation 2:
+_#_
+_#_
+_#_

@@ -1,0 +1,8 @@
+Hello, Dog(Rex,Labrador)
+Hello, Cat(Whiskers,true)
+Shelter (2):
+  Dog(Rex,Labrador)
+  Cat(Whiskers,true)
+a is Dog2: true
+a is Animal2: true
+Done.

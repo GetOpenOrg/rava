@@ -1,0 +1,24 @@
+old:   0 <<<>>>
+new:   0 <<<>>>
+
+old:  72 <<<"If I were two-faced, would I be wearing this one?" --- Abraham Lincoln >>>
+new:  70 <<<"If I were two-faced, would I be wearing this one?" - Abraham Lincoln >>>
+
+old:  72 <<<..1111111111111111111111111111111111111111111111111111111111111117777888>>>
+new:   4 <<<.178>>>
+
+old:  72 <<<I never give 'em hell, I just tell the truth, and they think it's hell. >>>
+new:  69 <<<I never give 'em hel, I just tel the truth, and they think it's hel. >>>
+
+old:  72 <<<                                                    --- Harry S Truman  >>>
+new:  17 <<< - Hary S Truman >>>
+
+old:  45 <<<122333444455555666666777777788888888999999999>>>
+new:   9 <<<123456789>>>
+
+old:  80 <<<The better the 4-wheel drive, the further you'll be from help when ya get stuck!>>>
+new:  77 <<<The beter the 4-whel drive, the further you'l be from help when ya get stuck!>>>
+
+old:  16 <<<headmistressship>>>
+new:  14 <<<headmistreship>>>
+

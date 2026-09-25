@@ -1,0 +1,6 @@
+ERROR:  Unable to put new value.
+ERROR:  Unable to clear map.
+ERROR:  Unable to put if absent.
+key = Key 1, value = 34
+key = Key 2, value = 105
+key = Key 3, value = 144

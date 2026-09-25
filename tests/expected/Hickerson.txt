@@ -1,0 +1,17 @@
+ 1 is almost integer: true
+ 2 is almost integer: true
+ 3 is almost integer: true
+ 4 is almost integer: true
+ 5 is almost integer: true
+ 6 is almost integer: true
+ 7 is almost integer: true
+ 8 is almost integer: true
+ 9 is almost integer: true
+10 is almost integer: true
+11 is almost integer: true
+12 is almost integer: true
+13 is almost integer: true
+14 is almost integer: true
+15 is almost integer: true
+16 is almost integer: false
+17 is almost integer: false

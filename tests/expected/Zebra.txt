@@ -1,0 +1,11 @@
+After general rule set validation, remains 60 lines.
+After removing out of bound neighbors, remains 52 lines.
+After 1 recursive iteration, remains 17 lines
+After 2 recursive iteration, remains 6 lines
+After 3 recursive iteration, remains 5 lines
+-------------------------------------------
+1 - Norwegian - Yellow - Cats - Water - Dunhill
+2 - Danish - Blue - Horse - Tea - Blend
+3 - English - Red - Birds - Milk - Pall Mall
+4 - German - Green - Zebra - Coffee - Prince
+5 - Swedish - White - Dog - Beer - Blue Master

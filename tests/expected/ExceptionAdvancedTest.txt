@@ -1,0 +1,10 @@
+caught multi: bad arg
+caught multi: not supported
+caught arith: math error
+chained: wrapped: root cause
+flow: try catch finally
+valid: [100, 50, 33]
+inner finally
+outer catch: inner
+message: test message 123
+Done.

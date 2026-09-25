@@ -1,0 +1,13 @@
+Caught: / by zero
+try block
+finally block
+Caught: test error
+finally after catch
+Inner caught: inner
+Outer caught: rethrown
+Caught state: state error
+Custom: custom error
+Before: ok
+Method threw: negative: -1
+Sum: 0
+error 42

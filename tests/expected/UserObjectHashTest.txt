@@ -1,0 +1,10 @@
+points size: 2
+contains (1,2): true
+contains (5,6): false
+map size: 1
+map get: updated
+list contains (10,20): true
+list contains (50,60): false
+visited size: 2
+add duplicate ref: false
+visited size after dup: 2

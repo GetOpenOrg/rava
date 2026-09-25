@@ -1,0 +1,15 @@
+equals null,null: true
+equals hello,hello: true
+equals hello,world: false
+equals null,hello: false
+equals hello,null: false
+hashCode null: 0
+toString hello: hello
+toString null: null
+toString null,default: default
+isNull null: true
+isNull hello: false
+nonNull null: false
+nonNull hello: true
+requireNonNull: test
+caught NPE: must not be null

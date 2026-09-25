@@ -1,0 +1,19 @@
+TreeMap: {Alice=1, Bob=2, Charlie=3}
+firstKey: Alice
+lastKey: Charlie
+containsKey Bob: true
+size: 3
+entries: [Alice=1, Bob=2, Charlie=3]
+TreeSet size: 3
+TreeSet first: 10
+TreeSet last: 30
+TreeSet contains 20: true
+TreeSet items: [10, 20, 30]
+LinkedHashMap order: [first, second, third]
+get second: 2
+PQ peek: 10
+PQ poll: 10
+PQ poll: 20
+PQ poll: 30
+PQ empty: true
+Done.

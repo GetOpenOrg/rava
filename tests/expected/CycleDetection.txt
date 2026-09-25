@@ -1,0 +1,2 @@
+Cycle length: 6
+Cycle: 101 2 5 26 167 95 

@@ -1,0 +1,7 @@
+Original sequence: [2.0, 3.0, 5.0, 7.0, 11.0]
+
+After applying the Discrete Fourier Transform:
+[28.0, (-3.381966011250107 + i8.784022634946174), (-5.618033988749897 + i2.8001689857494747), (-5.618033988749892 + i-2.8001689857494814), (-3.381966011250096 + i-8.784022634946176)]
+
+After applying the Inverse Discrete Fourier Transform to the above transform:
+[2.0, 3.0, 5.0, 7.0, 11.0]

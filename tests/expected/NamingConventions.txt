@@ -1,0 +1,3 @@
+The diameter of the sun is approximately 1390000 km
+The planetary system comprises of:
+[MERCURY, VENUS, EARTH, MARS, JUPITER, SATURN, URANUS, NEPTUNE, PLUTO]

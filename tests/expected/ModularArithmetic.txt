@@ -1,0 +1,1 @@
+x ^ 100 + x + 1 for x = ModInt(10, 13) is ModInt(1, 13)

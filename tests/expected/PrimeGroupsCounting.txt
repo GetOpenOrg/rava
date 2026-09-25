@@ -1,0 +1,5 @@
+Enter a string: abcdef
+10
+
+Enter a string: abcdefg
+15

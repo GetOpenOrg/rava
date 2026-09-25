@@ -1,0 +1,12 @@
+       a,"b" => a<TAB>b
+  "a","b""c" => a<TAB>bc
+          ,a => <TAB>a
+         a," => a,"
+     a , "b" =>  a <TAB>b
+     "12",34 => 12<TAB>34
+  a\\tb, TAB => a\\tb<TAB> TAB
+     a\\\\tb => a\\\\tb
+    a\\n\\rb => a\\n\\rb
+  a\\0b, NUL => a\\0b<TAB> NUL
+a\\rb, RETURN => a\\rb<TAB> RETURN
+      a\\\\b => a\\\\b

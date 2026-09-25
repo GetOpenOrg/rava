@@ -1,0 +1,7 @@
+first
+second
+third
+Paris
+Tokyo
+3
+Done

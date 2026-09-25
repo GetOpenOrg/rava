@@ -1,0 +1,76 @@
+=== Student Rankings ===
+#1  Eve       avg=97.5  GPA=4.00  A+  [Honors]
+#2  Alice     avg=90.0  GPA=4.00  A-  [Honors]
+#3  Charlie   avg=88.0  GPA=3.80  B+  [Honors]
+#4  Bob       avg=78.8  GPA=2.88  C+  [Satisfactory]
+#5  Diana     avg=68.8  GPA=1.88  D  [Probation]
+
+=== Course Statistics ===
+CS        avg=84.6  min=68  max=99
+English   avg=85.6  min=72  max=97
+Math      avg=83.6  min=65  max=98
+Physics   avg=84.6  min=70  max=96
+
+=== Grade Distribution ===
+A range: 2
+B range: 1
+Below C: 1
+C range: 1
+
+=== Top Scorer per Course ===
+CS        Eve(99)
+English   Eve(97)
+Math      Eve(98)
+Physics   Eve(96)
+
+=== PriorityQueue (min-heap) ===
+Sorted: [68, 78, 85, 92, 99]
+
+=== Activity Summary ===
+[Eve:Research Lab, Eve:Science Bowl, Eve:Robotics, Alice:Chess Club, Alice:Math Olympiad, Charlie:Drama Club]
+
+=== Report (try-with-resources) ===
+Eve | avg=97.5 | best: CS(99)
+Alice | avg=90.0 | best: Math(95)
+Charlie | avg=88.0 | best: English(94)
+Bob | avg=78.8 | best: CS(85)
+Diana | avg=68.8 | best: English(72)
+=== Exception Handling ===
+Caught: Invalid score: 105.0 (must be 0-100)
+
+=== Pair & Optional ===
+Highest: (Eve, 97.5)
+Lowest:  (Diana, 68.75)
+Optional top: Eve
+
+=== Varargs & Math ===
+Alice total: 360
+Alice avg (math): 90
+sqrt(2): 1.4142
+log10(1000): 3
+
+=== BitSet (passing students) ===
+Students passing (avg>=70): 4
+
+=== Anonymous Comparator (by name) ===
+Alice, Bob, Charlie, Diana, Eve
+
+=== Stream + Functional Pipeline ===
+Honor roll: Eve=A+, Alice=A-, Charlie=B+
+
+=== TreeMap by ID ===
+ID 101: Alice/A-
+ID 102: Bob/C+
+ID 103: Charlie/B+
+ID 104: Diana/D
+ID 105: Eve/A+
+
+=== Pass/Fail Partition ===
+Pass: Eve, Alice, Charlie, Bob
+Fail: Diana
+
+=== Summary Statistics ===
+Total students: 5
+Above class avg: 3
+Class average: 84.60
+Done.
