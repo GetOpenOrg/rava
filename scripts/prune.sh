@@ -8,6 +8,13 @@
 # 用法：scripts/prune.sh          # 清 build/jdk*/target 与 build/target
 set -u
 BUILD="$(cd "$(dirname "$0")/.." && pwd)/build"
+# 有编译在进行时不清理：删除进行中的编译中间产物（deps 下 >50M 的 .o / .rlib）会让
+# 并行跑批的 cargo 报 "failed to build archive ... No such file"（run_bg 启动即 prune，
+# 排队任务会误伤正在编译的前一任务）
+if pgrep -x rustc >/dev/null 2>&1 || pgrep -x cargo >/dev/null 2>&1; then
+    echo "[prune] 检测到进行中的 cargo/rustc，跳过清理" >&2
+    exit 0
+fi
 [ -d "$BUILD" ] || exit 0
 for t in "$BUILD"/jdk*/target "$BUILD"/target; do
     [ -d "$t/debug" ] || continue
