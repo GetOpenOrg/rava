@@ -109,6 +109,14 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// `uncheckedGetBytesNoRepl(String, Charset)`：JDK25 对 getBytesNoRepl 的改名
     /// （描述符与语义不变）。两版方法均在本 impl 提供——模型缺席的一方由生成侧
     /// 「伴生 trait impl 签名提取 + 模型缺席方法补发」（f75598d）补入 trait 声明。
+    /// `start(Thread, ThreadContainer)`：JDK 转发 `thread.start(container)`（包内
+    /// 虚方法）。消费方：ThreadPerTaskExecutor.start → 虚拟线程经 VirtualThread 的
+    /// start(ThreadContainer) 覆盖入模拟线程就绪队列（线程模型方案 A）。
+    fn start(&self, arg0: crate::java::lang::Thread,
+             arg1: crate::jdk::internal::vm::ThreadContainer) -> Result<()> {
+        arg0.start_threadcontainer(arg1)
+    }
+
     fn uncheckedGetBytesNoRepl(&self, arg0: String, arg1: Charset) -> Result<JArray<i8>> {
         self.getBytesNoRepl(arg0, arg1)
     }

@@ -88,6 +88,25 @@ fn run_sim_thread(t: Thread) -> Result<()> {
     Ok(())
 }
 
+/// 模拟线程入就绪队列（start0 与 VirtualThread.start 共用）：虚拟线程在本档位与
+/// 平台线程同一调度器（线程模型方案 A：虚拟线程 = 模拟平台线程，Continuation 不建模）。
+pub(crate) fn enqueue_sim_thread(t: Thread) {
+    READY.with(|q| q.borrow_mut().push_back(t));
+    crate::monitor::set_cooperative_pump(pump);
+}
+
+/// 运行下一个就绪模拟线程至终结；无就绪线程 → false（VirtualThread.joinNanos 的推进点）。
+pub(crate) fn run_next_ready() -> Result<bool> {
+    let next = READY.with(|q| q.borrow_mut().pop_front());
+    match next {
+        Some(t) => {
+            run_sim_thread(t)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
 impl Thread {
     /// `Thread.registerNatives:()V`：JVM 内部的 JNI 方法注册钩子（HotSpot 在
     /// `<clinit>` 中调用）。转译运行时的 native 在编译期静态解析，注册动作无
@@ -109,8 +128,7 @@ impl Thread {
     pub fn start0(&self) -> Result<()> {
         self.__set_eetop(1);
         let _ = self.__get_holder().__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
-        READY.with(|q| q.borrow_mut().push_back(Clone::clone(self)));
-        crate::monitor::set_cooperative_pump(pump);
+        enqueue_sim_thread(Clone::clone(self));
         Ok(())
     }
 
