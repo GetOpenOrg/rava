@@ -316,6 +316,25 @@ class RawStmt:
         raw_audit.record_raw('raw_stmt')
 
 
+class StructLine(str):
+    """块结构行（窗口 3 G-1b）：文本即渲染结果，`delta` 为该行对块嵌套深度的净贡献，
+    由 emitter 按结构角色给出（开块 +1、`} else {` / `} catch … {` 等衔接行 0、收尾 −1），
+    替代对渲染文本数花括号。str 子类：下游文本处理与渲染不受影响。
+
+    tag：结构角色（替代文本特征判定）——'loop'（loop 关键字头：`loop {` /
+    `'lN: loop {` / 状态机 loop）、'else'（`} else {` / `} else if … {`）、'arm'（match
+    臂头与状态机臂头 `X => {`）、'try'（java_try! 内层 `try {`）、'catch'（`} catch … {`）；
+    其余为 ''。"""
+    delta: int
+    tag: str
+
+    def __new__(cls, text: str, delta: int, tag: str = ''):
+        obj = super().__new__(cls, text)
+        obj.delta = delta
+        obj.tag = tag
+        return obj
+
+
 @dataclass
 class BlockStmt:
     """方法体结构块（窗口 3 G-1）：`method/emit.py` 的结构化产物。

@@ -6,6 +6,7 @@ import re
 from .. import fallback_audit
 from ..render import render_stmt, render_expr, render_type, upcast_expr
 from ..rs_ir import (
+    StructLine,
     RsNamed, RsPrimitive, RsType,
     AssignStmt, LetStmt, Var, IfStmt, LoopStmt, RawExpr, RawStmt,
 )
@@ -60,13 +61,32 @@ def _str_to_rs_type(s: str) -> RsType:
     return RsNamed(s)
 
 
-_STRING_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)'")
+def _entry_delta(text) -> int:
+    """条目对块嵌套深度的净贡献（窗口 3 G-1b）：块结构行（StructLine）取 emitter
+    给出的 delta，其余文本行与语句恒为 0——替代对渲染文本数花括号（迁移前经
+    27 例 / 330 万次判定双算零分歧）。"""
+    return text.delta if isinstance(text, StructLine) else 0
 
 
-def _brace_delta(text: str) -> int:
-    """一行渲染文本的块嵌套净变化。字符串 / 字符字面量里的花括号不是块结构，先剔除。"""
-    code = _STRING_LITERAL_RE.sub('', text)
-    return code.count('{') - code.count('}')
+def _is_loop_head(text) -> bool:
+    """loop 关键字头（`loop {` / `'lN: loop {` / 状态机 loop；while 头不在内）。"""
+    return isinstance(text, StructLine) and text.tag == 'loop'
+
+
+def _is_block_open(text) -> bool:
+    """提升插入点候选：开块行，以及 `} else {` / `} else if … {` / `} catch … {`
+    衔接行（与迁移前的文本判定逐点一致，见 G1-b 双算记录）。"""
+    return isinstance(text, StructLine) and (text.delta == 1 or text.tag in ('else', 'catch'))
+
+
+def _is_else_line(text) -> bool:
+    """`} else {` / `} else if … {`。"""
+    return isinstance(text, StructLine) and text.tag == 'else'
+
+
+def _is_arm_or_try(text) -> bool:
+    """match / 状态机臂头，或 java_try! 内层 `try {`（语句不可插在其与外层之间）。"""
+    return isinstance(text, StructLine) and text.tag in ('arm', 'try')
 
 
 _REMOVED_ENTRY = ('', None)
@@ -328,9 +348,9 @@ def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
 
     for k, (indent, item) in enumerate(entries):
         if isinstance(item, str):
-            if item.rstrip().endswith('loop {'):
+            if _is_loop_head(item):
                 loop_entry_indices.append(k)
-            delta = _brace_delta(item)
+            delta = _entry_delta(item)
             nesting += delta
         elif isinstance(item, LetStmt):
             if nesting > 0 and item.name not in declared_at and item.name not in predeclared:
@@ -360,7 +380,7 @@ def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
     cur = 0
     for text in rendered:
         entry_nesting.append(cur)
-        cur += _brace_delta(text)
+        cur += _entry_delta(text)
 
     vars_to_hoist: set[str] = set()
     for name, (decl_k, decl_nesting) in declared_at.items():
@@ -444,14 +464,14 @@ _HOIST_STATE_NAMES = ('_', '_dn', '_hoisted_s', '_later', '_later_s', '_outer_s'
     '_outer_split', '_outer_ty', '_outer_ty_s', '_t', 'arm_nesting', 'bk',
     'block_entry_indices', 'block_indent', 'block_item', 'block_k', 'box_object', 'check_k',
     'check_nesting', 'ck', 'ck_indent', 'ck_item', 'cur', 'd_item', 'decl_k', 'decl_list',
-    'decl_nesting', 'declared_at', 'default_val', 'delta', 'dk', 'else_text', 'entries',
+    'decl_nesting', 'declared_at', 'default_val', 'delta', 'dk', 'entries',
     'entry_nesting', 'first_decl_k', 'first_decl_nesting', 'first_item', 'first_let', 'found',
     'found_decl', 'found_in_else', 'hoisted_type', 'indent', 'inner_indent', 'inner_item',
     'ins_entry', 'ins_k', 'insertions', 'item', 'k', 'k2', 'k_else', 'k_ref', 'let_decl_check',
     'let_decl_pat', 'ln', 'ln_ref', 'lvt_names', 'max_hoist', 'merged_type', 'moved', 'name',
     'nesting', 'next_start', 'outer_bk', 'outer_decl_first_k', 'outer_decls', 'outer_item',
     'outer_k', 'parent_k', 'predeclared', 'ref_idx', 'ref_nesting', 'registry', 'rendered',
-    'scope_close', 'slot_decls', 'span_end', 'stripped', 'text', 'ty_str', 'vars_to_hoist',
+    'scope_close', 'slot_decls', 'span_end', 'text', 'ty_str', 'vars_to_hoist',
     'word', 'word_cache', 'word_pat',)
 
 
@@ -494,9 +514,9 @@ def _hoist_if_vars(entries: list, predeclared: set[str], box_object=None,
 def _hoist_if_scan(h: "_HoistState"):
     """Pass 1：收集嵌套块内的 let 声明（位置 / 深度）、顶层声明与块起始索引。"""
     (block_entry_indices, declared_at, delta, entries, indent, item, k, nesting,
-     outer_decl_first_k, outer_decls, predeclared, stripped
+     outer_decl_first_k, outer_decls, predeclared
     ) = (h.block_entry_indices, h.declared_at, h.delta, h.entries, h.indent, h.item, h.k,
-         h.nesting, h.outer_decl_first_k, h.outer_decls, h.predeclared, h.stripped
+         h.nesting, h.outer_decl_first_k, h.outer_decls, h.predeclared
     )
     # Pass 1: 收集所有在嵌套块中声明的变量及其位置、类型
     nesting = 0
@@ -511,10 +531,9 @@ def _hoist_if_scan(h: "_HoistState"):
 
     for k, (indent, item) in enumerate(entries):
         if isinstance(item, str):
-            stripped = item.rstrip()
-            if stripped.endswith('{') and not stripped.startswith('}'):
+            if _is_block_open(item):
                 block_entry_indices.append(k)
-            delta = _brace_delta(item)
+            delta = _entry_delta(item)
             nesting += delta
         elif isinstance(item, LetStmt):
             if nesting == 0 and item.name not in predeclared:
@@ -524,9 +543,9 @@ def _hoist_if_scan(h: "_HoistState"):
             elif nesting > 0 and item.name not in predeclared:
                 declared_at.setdefault(item.name, []).append((k, nesting))
     (h.block_entry_indices, h.declared_at, h.delta, h.indent, h.item, h.k, h.nesting,
-     h.outer_decl_first_k, h.outer_decls, h.stripped
+     h.outer_decl_first_k, h.outer_decls
     ) = (block_entry_indices, declared_at, delta, indent, item, k, nesting, outer_decl_first_k,
-         outer_decls, stripped
+         outer_decls
     )
 
 
@@ -554,7 +573,7 @@ def _hoist_if_render(h: "_HoistState"):
     cur = 0
     for text in rendered:
         entry_nesting.append(cur)
-        cur += _brace_delta(text)
+        cur += _entry_delta(text)
 
     (h._, h.cur, h.entry_nesting, h.item, h.rendered, h.text
     ) = (_, cur, entry_nesting, item, rendered, text
@@ -563,10 +582,10 @@ def _hoist_if_render(h: "_HoistState"):
 
 def _hoist_if_select(h: "_HoistState"):
     """Pass 3：选出在声明块外（或 else 兄弟块）被引用、需要提升的变量。"""
-    (_, decl_k, decl_list, decl_nesting, declared_at, else_text, entries, entry_nesting,
+    (_, decl_k, decl_list, decl_nesting, declared_at, entries, entry_nesting,
      first_item, found, k2, k_else, k_ref, let_decl_check, ln, ln_ref, name, ref_idx,
      rendered, scope_close, ty_str, vars_to_hoist, word, word_cache
-    ) = (h._, h.decl_k, h.decl_list, h.decl_nesting, h.declared_at, h.else_text, h.entries,
+    ) = (h._, h.decl_k, h.decl_list, h.decl_nesting, h.declared_at, h.entries,
          h.entry_nesting, h.first_item, h.found, h.k2, h.k_else, h.k_ref, h.let_decl_check,
          h.ln, h.ln_ref, h.name, h.ref_idx, h.rendered, h.scope_close, h.ty_str,
          h.vars_to_hoist, h.word, h.word_cache
@@ -609,9 +628,8 @@ def _hoist_if_select(h: "_HoistState"):
                 # 当变量声明在 if-then 块内（nesting=N），而 "} else {" 也在 entry_nesting=N，
                 # 则 else 块是同一层 if-else 的兄弟块，该变量在 else 块中不可见（Rust 块作用域）
                 for k_else in range(decl_k + 1, scope_close):
-                    else_text = rendered[k_else].lstrip()
                     if (entry_nesting[k_else] == decl_nesting
-                            and else_text.startswith('} else')):
+                            and _is_else_line(rendered[k_else])):
                         # 在 else 块内搜索引用（直到 nesting < decl_nesting）
                         for k_ref in range(k_else + 1, scope_close):
                             if entry_nesting[k_ref] < decl_nesting:
@@ -641,10 +659,10 @@ def _hoist_if_select(h: "_HoistState"):
                         ty_str = None
                 vars_to_hoist[name] = (ty_str, decl_list, ref_idx, (decl_k, decl_nesting))
                 break
-    (h._, h.decl_k, h.decl_list, h.decl_nesting, h.else_text, h.first_item, h.found, h.k2,
+    (h._, h.decl_k, h.decl_list, h.decl_nesting, h.first_item, h.found, h.k2,
      h.k_else, h.k_ref, h.let_decl_check, h.ln, h.ln_ref, h.name, h.ref_idx, h.scope_close,
      h.ty_str, h.vars_to_hoist, h.word, h.word_cache
-    ) = (_, decl_k, decl_list, decl_nesting, else_text, first_item, found, k2, k_else, k_ref,
+    ) = (_, decl_k, decl_list, decl_nesting, first_item, found, k2, k_else, k_ref,
          let_decl_check, ln, ln_ref, name, ref_idx, scope_close, ty_str, vars_to_hoist, word,
          word_cache
     )
@@ -681,7 +699,7 @@ def _hoist_if_locate(h: "_HoistState") -> bool:
     # 若 block_k 落在 match arm（含 =>）内，向上找到 match 语句本身，
     # 否则插入位置落在两个 arm 之间，产生"expected pattern, found 'let'"错误
     # `try {`（java_try! 的内层块）同理：宏语法不允许在 `java_try! {` 与 `try {` 之间出现语句
-    while '=>' in rendered[block_k] or rendered[block_k].strip() == 'try {':
+    while _is_arm_or_try(rendered[block_k]):
         arm_nesting = entry_nesting[block_k]
         parent_k = None
         for bk in reversed(block_entry_indices):
@@ -712,7 +730,7 @@ def _hoist_if_locate(h: "_HoistState") -> bool:
                 if entry_nesting[k_else] < check_nesting:
                     break
                 if (entry_nesting[k_else] == check_nesting + 1
-                        and rendered[k_else].lstrip().startswith('} else')):
+                        and _is_else_line(rendered[k_else])):
                     found_in_else = False
                     for k_ref in range(k_else + 1, len(entries)):
                         if entry_nesting[k_ref] <= check_nesting:
@@ -971,7 +989,7 @@ def _promote_undeclared_assigns(entries: list, predeclared: set[str]):
 
     for k, (indent, item) in enumerate(entries):
         if isinstance(item, str):
-            delta = _brace_delta(item)
+            delta = _entry_delta(item)
             if delta < 0:
                 nesting += delta
                 # 移除在已退出作用域层声明的变量

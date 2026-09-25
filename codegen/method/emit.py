@@ -19,7 +19,7 @@ from ..cfg import render_cond, Dispatch, next_pc_lines, PC_VAR
 from ..cfg.structure import Code, Decl, Block, Loop, If, Switch, Try, Break, Continue
 from ..cfg.simplify import _significant
 from ..render import render_expr, render_type
-from ..rs_ir import BlockStmt, LetStmt, RawStmt
+from ..rs_ir import BlockStmt, LetStmt, RawStmt, StructLine as _SL
 from .try_catch import catch_head
 
 _STEP = '    '
@@ -102,31 +102,31 @@ class TreeEmitter:
                 body: list = []
                 self._seq(it.body, ind + _STEP, ctx + [('block', it.label)], body, used)
                 segs = self._block('block', out)
-                segs.append(('', f"{ind}{self.block_names[it.label]}: {{"))
+                segs.append(('', _SL(f"{ind}{self.block_names[it.label]}: {{", 1)))
                 segs.append(body)
-                segs.append(('', f"{ind}}}"))
+                segs.append(('', _SL(f"{ind}}}", -1)))
             elif isinstance(it, Loop):
                 body = []
                 self._seq(it.body, ind + _STEP, ctx + [('loop', it.header)], body, used)
                 label = f"{self.loop_names[it.header]}: " if ('loop', it.header) in used else ''
                 head = f"while {render_cond(it.while_cond)} {{" if it.while_cond is not None else "loop {"
                 segs = self._block('loop', out)
-                segs.append(('', f"{ind}{label}{head}"))
+                segs.append(('', _SL(f"{ind}{label}{head}", 1, 'loop' if it.while_cond is None else '')))
                 segs.append(body)
-                segs.append(('', f"{ind}}}"))
+                segs.append(('', _SL(f"{ind}}}", -1)))
             elif isinstance(it, If):
                 self._if(it, ind, ctx, out, used, prefix='')
             elif isinstance(it, Switch):
                 segs = self._block('match', out)
-                segs.append(('', f"{ind}match {it.key} {{"))
+                segs.append(('', _SL(f"{ind}match {it.key} {{", 1)))
                 for vals, body in it.arms:
                     pattern = '_' if vals is None else ' | '.join(str(v) for v in vals)
-                    segs.append(('', f"{ind}{_STEP}{pattern} => {{"))
+                    segs.append(('', _SL(f"{ind}{_STEP}{pattern} => {{", 1, 'arm')))
                     arm: list = []
                     self._seq(body, ind + _STEP * 2, ctx, arm, used)
                     segs.append(arm)
-                    segs.append(('', f"{ind}{_STEP}}}"))
-                segs.append(('', f"{ind}}}"))
+                    segs.append(('', _SL(f"{ind}{_STEP}}}", -1)))
+                segs.append(('', _SL(f"{ind}}}", -1)))
             elif isinstance(it, Try):
                 self._try(it, ind, ctx, out, used)
             elif isinstance(it, Dispatch):
@@ -145,7 +145,8 @@ class TreeEmitter:
             return
         if segs is None:
             segs = self._block('if', out)
-        segs.append(('', f"{ind}{prefix}if {render_cond(it.cond)} {{"))
+        segs.append(('', _SL(f"{ind}{prefix}if {render_cond(it.cond)} {{", 0 if prefix else 1,
+                                'else' if prefix else '')))
         then_body: list = []
         self._seq(it.then, ind + _STEP, ctx, then_body, used)
         segs.append(then_body)
@@ -154,18 +155,18 @@ class TreeEmitter:
                     and (_significant(else_sig[0].then) or _significant(else_sig[0].else_)):
                 self._if(else_sig[0], ind, ctx, out, used, prefix='} else ', segs=segs)
                 return
-            segs.append(('', f"{ind}}} else {{"))
+            segs.append(('', _SL(f"{ind}}} else {{", 0, 'else')))
             else_body: list = []
             self._seq(it.else_, ind + _STEP, ctx, else_body, used)
             segs.append(else_body)
-        segs.append(('', f"{ind}}}"))
+        segs.append(('', _SL(f"{ind}}}", -1)))
 
     def _try(self, it: Try, ind: str, ctx: list, out: list, used: set) -> None:
         inner_ctx = ctx + [('block', None)]      # try 边界：其内的 break / continue 必须带标签
         body_ind = ind + _STEP * 2
         segs = self._block('try', out)
-        segs.append(('', f"{ind}java_try! {{"))
-        segs.append(('', f"{ind}{_STEP}try {{"))
+        segs.append(('', _SL(f"{ind}java_try! {{", 1)))
+        segs.append(('', _SL(f"{ind}{_STEP}try {{", 1, 'try')))
         try_body: list = []
         self._seq(it.body, body_ind, inner_ctx, try_body, used)
         segs.append(try_body)
@@ -180,31 +181,31 @@ class TreeEmitter:
                         and render_type(first.ty) == bind_ty):
                     bind = first.name
                     del handler[0]
-            segs.append(('', f"{ind}{_STEP}}} {catch_head(clause, bind, bind_ty)} {{"))
+            segs.append(('', _SL(f"{ind}{_STEP}}} {catch_head(clause, bind, bind_ty)} {{", 0, 'catch')))
             segs.append(handler)
-        segs.append(('', f"{ind}{_STEP}}}"))
-        segs.append(('', f"{ind}}}"))
+        segs.append(('', _SL(f"{ind}{_STEP}}}", -1)))
+        segs.append(('', _SL(f"{ind}}}", -1)))
 
     def _dispatch(self, it: Dispatch, ind: str, out: list) -> None:
         # 状态机前导声明是块外语句行（与块同层），块节点从 loop 开始
         out.append(('', f"{ind}let mut {PC_VAR}: i32 = {it.entry};"))
         segs = self._block('dispatch', out)
-        segs.append(('', f"{ind}loop {{"))
-        segs.append(('', f"{ind}{_STEP}match {PC_VAR} {{"))
+        segs.append(('', _SL(f"{ind}loop {{", 1, 'loop')))
+        segs.append(('', _SL(f"{ind}{_STEP}match {PC_VAR} {{", 1)))
         arm_ind = ind + _STEP * 2
         for bid in it.blocks:
             node = self.nodes[bid]
-            segs.append(('', f"{arm_ind}{bid} => {{"))
+            segs.append(('', _SL(f"{arm_ind}{bid} => {{", 1, 'arm')))
             arm: list = []
             for stmt in node.stmts:
                 arm.append((arm_ind + _STEP, stmt))
             for line in next_pc_lines(node):
                 arm.append(('', f"{arm_ind}{_STEP}{line}"))
             segs.append(arm)
-            segs.append(('', f"{arm_ind}}}"))
-        segs.append(('', f"{arm_ind}_ => unreachable!(),"))
-        segs.append(('', f"{ind}{_STEP}}}"))
-        segs.append(('', f"{ind}}}"))
+            segs.append(('', _SL(f"{arm_ind}}}", -1)))
+        segs.append(('', _SL(f"{arm_ind}_ => unreachable!(),", 0)))
+        segs.append(('', _SL(f"{ind}{_STEP}}}", -1)))
+        segs.append(('', _SL(f"{ind}}}", -1)))
 
 
 def flatten(seq: list, out: 'list | None' = None) -> list:
