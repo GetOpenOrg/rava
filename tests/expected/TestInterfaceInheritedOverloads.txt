@@ -1,0 +1,12 @@
+deque.toArray()=[a, b, c]
+deque.toArray(T[])=[a, b, c]
+deque.toArray(IntFunction)=[a, b, c]
+reversed.toArray(IntFunction)=[c, b, a]
+reversed.toArray(T[])=[c, b, a]
+reversed.first=c,last=a
+queue.toArray(IntFunction)=[x, y]
+seq.reversed.toArray=[2, 1, 3]
+seqSet.reversed.toArray=[r, q, p]
+coll.removeIf=true,[a, c]
+deque.forEach=ac,stream=2
+user.describe()=shape square,describe(int)=3x square,sides=4

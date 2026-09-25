@@ -350,7 +350,81 @@ fn _chars_to_string(bytes: &JArray<i8>, n: i32) -> Result<String> {
     Ok(inst)
 }
 
+/// JDK 25 `putDecimal` 的两个编码单例（`ToDecimal.latin1` 标志的承载）：
+/// 内部边界类 <clinit> 不翻译，单例在此惰性构造——线程内唯一身份（JVM
+/// static final 语义），latin1 判定按对象身份比对 LATIN1 单例。
+thread_local! {
+    static __ENCODERS: (FloatToDecimal, FloatToDecimal) = {
+        let mut l = FloatToDecimal::default();
+        l._init_not_null();
+        let mut u = FloatToDecimal::default();
+        u._init_not_null();
+        (l, u)
+    };
+}
+
+fn __is_latin1(this: &FloatToDecimal) -> bool {
+    __ENCODERS.with(|(l, _)| {
+        Object::from(Clone::clone(this)).0.__identity()
+            == Object::from(Clone::clone(l)).0.__identity()
+    })
+}
+
+/// UTF16 编码写一个 char（`StringUTF16.putChar` 同一字节序约定：
+/// HI_BYTE_SHIFT = 大端 8 / 小端 0，与 Unsafe.isBigEndian 一致）。
+fn __put_char_utf16(bytes: &JArray<i8>, index: i32, c: u16) -> Result<()> {
+    let (hi, lo) = if cfg!(target_endian = "big") { (8, 0) } else { (0, 8) };
+    bytes.set(index * 2, (c >> hi) as u8 as i8)?;
+    bytes.set(index * 2 + 1, (c >> lo) as u8 as i8)?;
+    Ok(())
+}
+
 impl FloatToDecimal {
+    /// static `LATIN1` / `UTF16`：JDK 25 `AbstractStringBuilder.append(float)`
+    /// 按 builder coder 取用的编码单例（JDK 21 模型无此二字段，伴生多出的静态
+    /// 方法不参与其编译面）。
+    pub fn LATIN1() -> Result<FloatToDecimal> {
+        Ok(__ENCODERS.with(|(l, _)| Clone::clone(l)))
+    }
+
+    pub fn UTF16() -> Result<FloatToDecimal> {
+        Ok(__ENCODERS.with(|(_, u)| Clone::clone(u)))
+    }
+
+    /// `putDecimal(byte[] str, int index, float v)`：把 v 的最短往返十进制
+    /// 表示写入 builder 缓冲 `str` 的 `index` 处（UTF16 编码时 index 为 char
+    /// 下标），返回写入后的下标。按字节码：非特殊值写入 `m & 0xFF` 个字符；
+    /// 特殊值（±0 / ±Infinity / NaN，`m & 0xFF00`）经 putSpecial 写其文本。
+    /// Latin1 直接在目标缓冲上运行算法；UTF16 先落 Latin1 临时缓冲再逐字符
+    /// 按 2 字节写入（字符集全为 ASCII，两种写法的字符序列一致）。
+    #[jvm_boundary]
+    pub fn putDecimal(&self, str: JArray<i8>, index: i32, v: f32) -> Result<i32> {
+        let latin1 = __is_latin1(self);
+        let tmp = if latin1 { Clone::clone(&str) } else { JArray::new(MAX_CHARS) };
+        let start = if latin1 { index } else { 0 };
+        let m = _to_decimal(&tmp, start, v)?;
+        let text: Vec<u16> = if m & 0xFF00 == 0 {
+            if latin1 {
+                return Ok(index + (m & 0xFF));
+            }
+            let mut cs = Vec::with_capacity((m & 0xFF) as usize);
+            for i in 0..(m & 0xFF) {
+                cs.push(tmp.get(i)? as u8 as u16);
+            }
+            cs
+        } else {
+            _special(m).encode_utf16().collect()
+        };
+        for (i, c) in text.iter().enumerate() {
+            if latin1 {
+                str.set(index + i as i32, *c as u8 as i8)?;
+            } else {
+                __put_char_utf16(&str, index + i as i32, *c)?;
+            }
+        }
+        Ok(index + text.len() as i32)
+    }
+
     /// `toString(float)`：`Float.toString` 的底层例程（JDK 25 形态：
     /// 自包含分配 MAX_CHARS 缓冲，`m & 0xFF00`（ldc 65280）分流特殊值）
     #[jvm_boundary]

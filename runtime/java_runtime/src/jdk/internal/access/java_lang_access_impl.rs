@@ -117,6 +117,30 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
         arg0.start_threadcontainer(arg1)
     }
 
+    /// `currentCarrierThread()`：当前载体线程。线程模型方案 A 下虚拟线程即模拟
+    /// 平台线程、无载体/挂载区分——载体线程即 `Thread.currentThread()`。
+    /// 消费方：JDK25 BigInteger 等经 JLA 取线程局部缓存（TestBigInteger）。
+    fn currentCarrierThread(&self) -> Result<crate::java::lang::Thread> {
+        crate::java::lang::Thread::currentThread()
+    }
+
+    /// `countPositives(byte[] ba, int off, int len)`（JDK 21 名）/ `uncheckedCountPositives`
+    ///（JDK 25 改名，语义不变）：`StringCoding.countPositives`——自 off 起 len 字节内，
+    /// 首个负字节（非 ASCII）之前的字节数；全为非负则返回 len。消费方：JDK 25
+    /// 时区 / 格式化链的 ASCII 快路径判定（TestZonedDateTime）。
+    fn countPositives(&self, arg0: JArray<i8>, arg1: i32, arg2: i32) -> Result<i32> {
+        for i in 0..arg2 {
+            if arg0.get(arg1 + i)? < 0 {
+                return Ok(i);
+            }
+        }
+        Ok(arg2)
+    }
+
+    fn uncheckedCountPositives(&self, arg0: JArray<i8>, arg1: i32, arg2: i32) -> Result<i32> {
+        self.countPositives(arg0, arg1, arg2)
+    }
+
     fn uncheckedGetBytesNoRepl(&self, arg0: String, arg1: Charset) -> Result<JArray<i8>> {
         self.getBytesNoRepl(arg0, arg1)
     }

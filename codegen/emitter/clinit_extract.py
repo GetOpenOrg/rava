@@ -22,7 +22,7 @@ from .. import fallback_audit as _fallback_audit
 _FALLBACK_EXC = _fallback_audit.FALLBACK_EXC
 from ..type_map import jvm_to_rust
 from ..sig_parse import parse_field_type
-from ..constants import safe_ident
+from ..constants import safe_ident, PRIMITIVE_RUST_TYPES
 from .attrs import _java_field_attr, _java_method_attr
 from .field_gen import _validate_field_type
 
@@ -46,6 +46,7 @@ def _gen_static_field_blocks(ci, registry, class_type_params: list,
     static_fields = [f for f in ci.fields if f.is_static]
     existing_method_names: set[str] = {m.name for m in ci.methods}
     _nf_covered_sf = (_nf_entry or {}).get('methods', set())
+    _nf_cores = (_nf_entry or {}).get('method_cores', {}) or {}
     for sf in static_fields:
         safe_fname = _safe_field_name(sf.name)
         if sf.name in existing_method_names:
@@ -92,6 +93,26 @@ def _gen_static_field_blocks(ci, registry, class_type_params: list,
                 f'pub const {safe_fname}: {rust_ret} = {body};')
         elif _type_only:
             if safe_fname in _nf_covered_sf:
+                continue
+            _sf_core = _nf_cores.get(safe_fname)
+            if _sf_core is not None:
+                # 静态字段伴生核心（`core_<字段名>()`，无接收者）：内部边界类的常量
+                # 字段 <clinit> 不翻译，值由手写层给出；字段类型随 JDK 演化时
+                # （Unsafe.ARRAY_INT_BASE_OFFSET：JDK21 `I` → JDK25 `J`）核心按当前
+                # JDK 形态书写，此处按**当前模型类型**发 getter 转发并显式 as 还原宽度
+                #（与实例方法 core_ 适配同一约定）。setter 保持存根（final 常量）。
+                _core_name, _core_ret = _sf_core
+                _cm = _re.match(r'^Result<(.*)>$', _core_ret or '')
+                _cr = _cm.group(1) if _cm else None
+                _cast = (f' as {rust_ret}' if (_cr and _cr != rust_ret
+                         and _cr in PRIMITIVE_RUST_TYPES and rust_ret in PRIMITIVE_RUST_TYPES)
+                         else '')
+                blocks.append(
+                    f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'
+                    f'pub fn {safe_fname}() -> Result<{rust_ret}> {{\n'
+                    f'    Ok(Self::{_core_name}()?{_cast})\n}}\n'
+                    f'pub fn set_{safe_fname}(v: {rust_ret}) -> Result<()> {{\n'
+                    f'    panic!("stub-set: {ci.name}.{sf.name}:{sf.descriptor}")\n}}')
                 continue
             blocks.append(
                 f'{field_meta}\n// static field: {sf.name}:{sf.descriptor}\n'

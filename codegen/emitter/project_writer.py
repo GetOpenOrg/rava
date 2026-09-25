@@ -820,6 +820,14 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         '',
     ]))
 
+    # 语料 JDK 特性版本 → java_runtime/jdk_feature.txt（build.rs 转为编译期环境变量
+    # JAVA_RTA_JDK_FEATURE，手写层经 crate::jdk_feature() 读取）：手写边界类中
+    # 随 JDK 版本变化的数据按此选择。写入幂等（同版本内容不变，不触发重编译）。
+    from ..jdk_resolver import corpus_jdk_major
+    _jdk_major = corpus_jdk_major()
+    if _jdk_major:
+        _write(os.path.join(rt_dir, 'jdk_feature.txt'), f'{_jdk_major}\n')
+
     if jdk_class_infos:
         print(f'[codegen] JDK 翻译 → {len(jdk_class_infos)} 个类')
     for _lc_name, _lc_classes in (lib_crate_classes or {}).items():

@@ -38,6 +38,31 @@ _JDK_PREFIXES = (
 )
 
 
+# 本进程最近一次转译实际使用的语料 JDK home（JdkResolver 构造时记录）
+_CORPUS_HOME: Optional[Path] = None
+
+
+def corpus_jdk_major() -> Optional[int]:
+    """语料 JDK 的特性版本（`release` 文件 JAVA_VERSION 主版本号）。
+
+    供生成侧把「当前语料 JDK 版本」交给运行时（scratch 的 jdk_feature.txt →
+    build.rs → `crate::jdk_feature()`）：手写边界类中随 JDK 版本变化的**数据**
+    （如 BaseLocale 常量表的下标顺序）按此选择。未构造过解析器时按
+    find_java_home 解析；解析不到返回 None。"""
+    home = _CORPUS_HOME
+    if home is None:
+        try:
+            home = find_java_home()
+        except Exception:
+            return None
+    release = Path(home) / 'release'
+    if not release.exists():
+        return None
+    import re
+    m = re.search(r'JAVA_VERSION="(\d+)', release.read_text())
+    return int(m.group(1)) if m else None
+
+
 def _installed_jdks() -> list[tuple[int, Path]]:
     """本机已安装的 JDK（macOS brew + Linux /usr/lib/jvm）：
     (主版本, JAVA_HOME)，按版本升序。与 scripts/jdk_select.py 同源逻辑。"""
@@ -147,6 +172,8 @@ class JdkResolver:
         if java_home is None:
             java_home = find_java_home(prefer_major=prefer_major)
         self._home = Path(java_home)
+        global _CORPUS_HOME
+        _CORPUS_HOME = self._home
         self._jmods_dir = self._home / 'jmods'
         # jmod 文件名 → zipfile.ZipFile | None（None 表示打开失败）
         self._opened: dict[str, Optional[zipfile.ZipFile]] = {}
