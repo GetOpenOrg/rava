@@ -403,6 +403,11 @@ def _decode_bytecode(code: bytes, pool: list, bootstrap_methods: list[dict] | No
                     bsm = bsm_list[bsm_idx]
                     tmpl = bsm.get('template')
                     if tmpl is not None:
+                        # 常量位的值 JSON 编码置于模板之前（模板须居注释末尾：其正则取到 \\Z）
+                        _tc = bsm.get('template_consts')
+                        if _tc is not None:
+                            import json as _json
+                            comment += f' tconsts:{_json.dumps(_tc)}'
                         comment += f' template:{tmpl}'
                     else:
                         # Arch-3: lambda — 嵌入实现方法引用 + SAM 类型描述符
@@ -673,6 +678,21 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
             cp_entry = pool[arg_indices[0]] if arg_indices[0] < len(pool) else None
             if cp_entry and cp_entry[0] == 'String':
                 template = _utf8(pool, cp_entry[1])
+        # makeConcatWithConstants 配方：\u0001 = 动态实参位，\u0002 = 常量位（值为其后的静态实参，
+        # 按序）。javac 在字面量自身含 \u0001 / \u0002 时把该字面量移为常量实参——常量值里的
+        # \u0001 是普通字符，不能回填进配方（会被当作实参位），单独携带
+        template_consts = None
+        if template is not None and '\x02' in template:
+            template_consts = []
+            for _ci in arg_indices[1:]:
+                _ce = pool[_ci] if _ci < len(pool) else None
+                if _ce and _ce[0] == 'String':
+                    template_consts.append(_utf8(pool, _ce[1]))
+                elif _ce and _ce[0] in ('Integer', 'Long', 'Float', 'Double'):
+                    template_consts.append(str(_ce[1]))
+                else:
+                    template_consts = None
+                    break
         # Arch-3: 对 LambdaMetafactory 提取 SAM 类型 + 实现方法信息
         sam_type = None    # args[0]: SAM 方法类型描述符
         impl_method = None  # args[1]: 实现方法 ClassName.name:desc
@@ -713,6 +733,7 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
             'method_ref': method_ref,
             'arg_indices': arg_indices,
             'template': template,
+            'template_consts': template_consts,
             'sam_type': sam_type,
             'impl_method': impl_method,
             'switch_labels': switch_labels,

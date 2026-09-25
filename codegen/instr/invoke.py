@@ -99,6 +99,16 @@ def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None
     tmpl_m = re.search(r' template:(.*)\Z', comment, re.DOTALL)
     if tmpl_m:
         template = tmpl_m.group(1)
+        # 常量位（\x02）：值来自 tconsts（JSON，classfile 解析期携带）。以私用区占位
+        # 逐位替换为「已转义的常量段」——常量值内的 \x01 是普通字符，不参与实参位切分
+        _consts: list = []
+        _tc_i = comment.find(' tconsts:')
+        if '\x02' in template and _tc_i >= 0:
+            import json as _json
+            try:
+                _consts, _ = _json.JSONDecoder().raw_decode(comment, _tc_i + len(' tconsts:'))
+            except ValueError:
+                _consts = []
         parts = template.split('\x01')
 
         def _tmpl_seg(p: str) -> str:
@@ -108,6 +118,17 @@ def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None
             # Rosetta BWT 实证）。与字面量同一解码值契约。
             return '}}'.join('{{'.join(_escape_str(x) for x in part.split('{'))
                              for part in p.split('}'))
+
+        if _consts:
+            # 每个 \x02 按序替换为对应常量的已转义段（先整体按 \x02 切，再各段各自处理）
+            _it = iter(_consts)
+
+            def _tmpl_seg(p: str, _base=_tmpl_seg) -> str:
+                chunks = p.split('\x02')
+                out = _base(chunks[0])
+                for ch in chunks[1:]:
+                    out += _base(str(next(_it, ''))) + _base(ch)
+                return out
 
         if len(parts) == len(args) + 1:
             fmt_str = ''.join(
