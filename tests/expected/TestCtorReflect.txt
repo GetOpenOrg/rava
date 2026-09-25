@@ -1,0 +1,7 @@
+base.ctors=2
+child.ctors=1
+child.declared=2
+object.ctors=1
+object.params=0
+object.new=true,java.lang.Object
+child.new=Child
