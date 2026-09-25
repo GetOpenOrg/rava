@@ -446,7 +446,10 @@ impl FloatToDecimal {
     ///
     /// A-4 批次 6：形参/返回按接口载体形态书写（与 double 版同一约定，
     /// `append_seq` 的 CharSequence 实参按闭包形态推断定标）。
-    #[jvm_boundary]
+    // upcalls：本体经 Appendable 接口分派 append(C)（逐字符）与 append(CharSequence)
+    //（特殊值文本）——runtime→Java 调用边字节码不可见，须声明才入调用链；缺声明时
+    // 实现类（StringBuilder）的对应方法落存根（JDK21 TestAppendDecimal 的 NaN 路径实证）。
+    #[jvm_boundary(upcalls = "java/lang/Appendable.append:(C)Ljava/lang/Appendable; java/lang/Appendable.append:(Ljava/lang/CharSequence;)Ljava/lang/Appendable;")]
     pub fn appendTo(v: f32, arg1: Appendable) -> Result<Appendable> {
         let bytes = JArray::new(MAX_CHARS);
         let m = _to_decimal(&bytes, 0, v)?;
