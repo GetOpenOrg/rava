@@ -9,16 +9,17 @@
 #   scripts/lib_pilot_golden.sh m5     # 跨 crate 分派链：user 类实现 lib 类型并被 lib 回调
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
 #
-# 前置：JDK 21（JAVA_HOME 未设时自动发现）；jar 资产在与本仓库同层的
-# ../pilot-deps/target/pilot-libs/（pilot-deps/fetch.sh 导出；可经 PILOT_LIBS 覆盖）。
+# 前置：JDK 21（JAVA_HOME 未设时自动发现）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
+#（scripts/fetch_pilot_deps.sh --no-scan 导出；可经 PILOT_LIBS 覆盖）。
 # 流程：javac（-cp jars）→ java 真 jar 侧 golden → main.py --lib 转译 →
 # cargo run 翻译侧输出 → diff 逐字对账。golden 文本随仓库存档于
 # tests/lib_pilot/golden/（跑批可复现的对账凭据）。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# jar 资产默认按兄弟目录相对寻径（pilot-deps 与本仓库同层摆放，fetch.sh 导出位）
-LIBS="${PILOT_LIBS:-$REPO_ROOT/../pilot-deps/target/pilot-libs}"
+# jar 资产默认取仓库内导出位（依赖清单 tests/lib_pilot/deps/pom.xml）
+LIBS="${PILOT_LIBS:-$REPO_ROOT/tests/lib_pilot/deps/target/pilot-libs}"
+[ -f "$LIBS/junit-4.13.2.jar" ] || { echo "缺 jar：先跑 scripts/fetch_pilot_deps.sh --no-scan（或设 PILOT_LIBS）" >&2; exit 2; }
 # JDK 选择与 main.py / run_tests.py 同一入口（jdk_select）：JAVA_RTA_JDK > JAVA_HOME >
 # .jdk-version（21）> 最新已安装；macOS brew / Linux /usr/lib/jvm 通吃
 JAVA_HOME="$(python3 "$REPO_ROOT/scripts/jdk_select.py")" || { echo "未找到可用 JDK，请设置 JAVA_HOME 或 JAVA_RTA_JDK" >&2; exit 2; }

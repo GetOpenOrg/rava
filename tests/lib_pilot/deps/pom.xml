@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>local.java_rta</groupId>
+  <artifactId>pilot-deps</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+
+  <name>pilot-deps</name>
+  <description>java_rta 真实项目 pilot 语料取包器（远期路线图 §四-3 阶梯）——宿主侧用 Maven 解析依赖闭包，
+    与「构建工具不作为转译目标」的结论无关（用 Maven ≠ 翻译 Maven）。
+    用法：scripts/fetch_pilot_deps.sh → jar 落 tests/lib_pilot/deps/target/pilot-libs/（gitignore）并逐个跑 dep_scan 透视。</description>
+
+  <!-- ═══ pilot 阶梯依赖清单（版本钉死，改这里 = 改 pilot 语料） ═══
+       版本策略：钉死 > 追新。换版本前核两条：① jar 字节码版本 ≤ 语料 JDK（fetch.sh 输出可见，
+       2026-09-23 实测当前全部 ≤ Java 21）；② 透视结论复核（dep_scan 零 jdk-internal 优先）。 -->
+  <dependencies>
+    <!-- P0：验证地基。junit 4 终版即 4.13.2；hamcrest-core:3.0 是搬迁壳（真身在传递的
+         hamcrest-3.0.jar，108 类）——历史上 junit4 配 hamcrest-core 1.3，3.0 为现代配对，
+         API 兼容 junit4 引用面（Matcher/Description/StringDescription 稳定） -->
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.13.2</version>
+    </dependency>
+    <dependency>
+      <groupId>org.hamcrest</groupId>
+      <artifactId>hamcrest-core</artifactId>
+      <version>3.0</version>
+    </dependency>
+
+    <!-- P1：纯计算、API 面广（3.20.0 透视待跑；3.14.0 实测 403 类零内部零第三方） -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-lang3</artifactId>
+      <version>3.20.0</version>
+    </dependency>
+
+    <!-- P2：I/O 与流式解析（jackson-databind 传递带出 core+annotations） -->
+    <dependency>
+      <groupId>commons-io</groupId>
+      <artifactId>commons-io</artifactId>
+      <version>2.22.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.22.3</version>
+    </dependency>
+
+    <!-- P3：生态压测标杆（传递闭包含 checker-qual/error_prone/jsr305/j2objc/failureaccess，
+         均为注解级小 jar，无害；ListenableFuture → 线程模型决策实测输入） -->
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>33.7.1-jre</version>
+    </dependency>
+
+    <!-- P2 追加：纯计算 / 序列化 / 断言（gson 压反射 L3；assertj 压接口载体） -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-text</artifactId>
+      <version>1.15.0</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-codec</groupId>
+      <artifactId>commons-codec</artifactId>
+      <version>1.22.1</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.14.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <version>3.27.7</version>
+    </dependency>
+
+    <!-- P3 追加：数据结构 / 历史库 / 注解 CLI -->
+    <dependency>
+      <groupId>org.eclipse.collections</groupId>
+      <artifactId>eclipse-collections</artifactId>
+      <version>13.0.0</version>
+    </dependency>
+    <dependency>
+      <groupId>joda-time</groupId>
+      <artifactId>joda-time</artifactId>
+      <version>2.14.4</version>
+    </dependency>
+    <dependency>
+      <groupId>info.picocli</groupId>
+      <artifactId>picocli</artifactId>
+      <version>4.7.7</version>
+    </dependency>
+
+    <!-- Apache Commons 家族补齐（纯 JVM 计算/解析件；网络/邮件/JDBC/原生绑定不入：
+         commons-net、commons-email、commons-dbcp2、commons-dbutils、commons-daemon）。
+         注意 commons-cli 是遗留 groupId（commons-cli:commons-cli）。 -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-collections4</artifactId>
+      <version>4.6.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-math3</artifactId>
+      <version>3.6.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-csv</artifactId>
+      <version>1.14.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-compress</artifactId>
+      <version>1.28.0</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-cli</groupId>
+      <artifactId>commons-cli</artifactId>
+      <version>1.11.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-exec</artifactId>
+      <version>1.6.0</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-validator</groupId>
+      <artifactId>commons-validator</artifactId>
+      <version>1.11.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-configuration2</artifactId>
+      <version>2.15.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-pool2</artifactId>
+      <version>2.13.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-imaging</artifactId>
+      <version>1.0.0-alpha5</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-jexl3</artifactId>
+      <version>3.7.0</version>
+    </dependency>
+
+    <!-- 网络与绑定件（2026-09-23 用户拍板加入；运行期会撞 I/O/绑定墙——
+         撞墙本身是语料压力信号，扫描与翻译层面完全合法）：
+         net/dbutils/daemon 为遗留自名 groupId，email 新坐标在 org.apache.commons。
+         dbcp2 的 java.sql 由 JDK 自带（java.sql 模块），无外部 JDBC jar 依赖。 -->
+    <dependency>
+      <groupId>commons-net</groupId>
+      <artifactId>commons-net</artifactId>
+      <version>3.13.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-email</artifactId>
+      <version>1.6.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-dbcp2</artifactId>
+      <version>2.14.0</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-dbutils</groupId>
+      <artifactId>commons-dbutils</artifactId>
+      <version>1.8.1</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-daemon</groupId>
+      <artifactId>commons-daemon</artifactId>
+      <version>1.6.1</version>
+    </dependency>
+
+    <!-- HTTP 客户端两代（HttpComponents）：4.x 装机量最大（终版 4.5.x），5.x 现行。
+         JDK 自带的 java.net.http.HttpClient 走 jmods 语料，无需加 jar。 -->
+    <dependency>
+      <groupId>org.apache.httpcomponents</groupId>
+      <artifactId>httpclient</artifactId>
+      <version>4.5.14</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.httpcomponents.client5</groupId>
+      <artifactId>httpclient5</artifactId>
+      <version>5.6.4</version>
+    </dependency>
+
+    <!-- 反推荐（勿加）：mockito（Instrumentation agent）、spring（动态代理）、
+         netty（unsafe/NIO）、maven/gradle（类加载容器） -->
+
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- mvn package = 把依赖闭包（含传递）导出到 target/pilot-libs/ -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.7.1</version>
+        <executions>
+          <execution>
+            <id>copy-pilot-libs</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/pilot-libs</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

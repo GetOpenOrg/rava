@@ -200,6 +200,8 @@ scripts/run_bg.sh <tag> <cmd...>                # 后台跑批：低内存编译
 scripts/gen_trees.sh <out> [Test...]            # 生成转译树（缺省=验收集 27 例）
 scripts/compare_trees.sh <base> <new>           # 生成树逐字节对照 + raw-audit 对照（重构验收）
 scripts/seed_check.sh <Test.java>               # 双种子确定性检查
+scripts/fetch_pilot_deps.sh [--no-scan]         # lib pilot 语料取包（清单 tests/lib_pilot/deps/pom.xml）+ dep_scan 透视
+scripts/lib_pilot_golden.sh m1..m5              # JUnit/hamcrest crate golden 对账（前置：上一条）
 ```
 
 ---
