@@ -548,7 +548,10 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
                     _seen_imports.add(_bkey)
                     # __base 自由函数随声明者 crate 定向（lib 模式：junit4 的
                     # ComparisonFailure 转发 java/lang/AssertionError 的 base 函数）
-                    _bprefix = 'crate'
+                    # JDK 声明者（含手写根类 Object 的 Object__<m>_base）的 base 函数在
+                    # JDK crate：用户 crate 内经 _prefix（java_runtime）导入，JDK crate
+                    # 内 _prefix 即 crate（用户类 super.clone()/finalize() 的 E0433）
+                    _bprefix = _prefix if _is_jdk else 'crate'
                     if _is_jdk and crate_prefix_resolver is not None:
                         _bprefix = crate_prefix_resolver(_orig_cls)
                     cross_imports.append(f"use {_bprefix}::{_base_mod}::{_base_fn};")

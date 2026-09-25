@@ -17,13 +17,13 @@ from .coerce import _coerce_to_object, _render_cast
 from .hierarchy import _rust_type_to_binary
 from .member_owner import (
     parse_method_ref,
-    _resolve_method_owner, _root_virtual_methods,
+    _resolve_method_owner, _root_virtual_methods, _root_protected_void_methods,
     _declaring_interface, _close_open_type_args,
     _resolve_virtual_sig_params,
     private_interface_method_target as _private_iface_target,
 )
 from .member_naming import (
-    _mangle_if_overloaded, _resolve_bridge_target,
+    _mangle_if_overloaded, _resolve_bridge_target, _handwritten_root_api,
 )
 from ..type_args import ancestor_vtable_args_by_short as _ancestor_vtable_args_by_short
 from ..type_args import (ancestor_type_args as _ancestor_type_args,
@@ -533,7 +533,11 @@ def _resolve_direct_call_sig(sim, class_name, cls, mname, params, ret, rust_ret,
                     _sig_owner, _sig_recv_ty = _owner_bin_v, _owner_short_v + _owner_args_v
                     _inherited_calls.request(_obj_jvm, mname, _param_desc)
                 elif (not _owner_bin_v
-                        and (mname, _param_desc) in _root_virtual_methods()):
+                        and ((mname, _param_desc) in _root_virtual_methods()
+                             or ((mname, _param_desc) in _root_protected_void_methods()
+                                 and mname in _handwritten_root_api()))):
+                    # protected void 根方法（静态链未覆盖的 this.finalize()）同样落根类
+                    # API；限制：运行时子类的覆盖不经此路由生效（该方法不在 ObjectVTable）
                     # 整条祖先链未声明、由根类声明 → 装箱后走根 vtable。
                     # Object::from（非 from_any）：保持接收者的 vtable（运行时类名、
                     # is_instance_of、覆盖的 hashCode/equals/toString），JvmRef 装箱会丢这些

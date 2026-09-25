@@ -13,8 +13,10 @@ use std::rc::Rc;
 /// 接口类型（`is_interface = true`）不生成 ObjectVTable impl，
 /// 其运行时实例通过 `JvmRef` 包装存储在 Object 中。
 pub trait ObjectVTable: 'static {
-    /// java.lang.Object.hashCode()I 默认实现
-    fn hashCode(&self) -> i32 { 0 }
+    /// java.lang.Object.hashCode()I 默认实现：身份哈希（实例体地址）——与
+    /// `System.identityHashCode`、`Object__hashCode_base` 同一来源（`__identity`），
+    /// 未覆盖 hashCode 的类满足 `hashCode() == identityHashCode()`（JLS 契约，S-6）。
+    fn hashCode(&self) -> i32 { self.__identity() as usize as i32 }
 
     /// java.lang.Object.equals(Object)Z 的覆盖入口：引用相等已由调用方（`Object::equals`）判定，
     /// 此处只承载运行时类的覆盖实现；未覆盖的类 → false。
@@ -237,7 +239,14 @@ pub fn Object__clone_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::R
 /// Object.hashCode 是 ACC_NATIVE：身份哈希，取实例体的堆地址（与 `new Object()` 实例一致）。
 #[allow(non_snake_case)]
 pub fn Object__hashCode_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<i32> {
-    Ok(this as *const T as *const () as usize as i32)
+    Ok(this.__identity() as usize as i32)
+}
+
+/// `super.finalize()`（invokespecial java/lang/Object.finalize）的落点：Object.finalize
+/// 方法体为空（JDK 语义）。GC 触发的终结调用不建模（无 GC，见 compatibility.md）。
+#[allow(non_snake_case)]
+pub fn Object__finalize_base<T: ObjectVTable + ?Sized>(_this: &T) -> crate::error::Result<()> {
+    Ok(())
 }
 
 /// `super.equals(o)`（invokespecial java/lang/Object.equals）的落点：引用相等（`this == o`）。
