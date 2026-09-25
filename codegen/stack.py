@@ -17,7 +17,7 @@ from .rs_ir import (
 )
 from .render import render_type, render_expr
 from .type_map import short_cls as _short_cls, _registry_short_index
-from .constants import safe_ident, PRIMITIVE_RUST_TYPES as _SCALAR_TYPE_NAMES
+from .constants import safe_ident, PRIMITIVE_RUST_TYPES as _SCALAR_TYPE_NAMES, OBJECT_CLASS, ref_desc
 from .jvm_type import JvmType, ClassRef
 
 
@@ -328,14 +328,14 @@ class StackSim:
         if not entries:
             return None
         off = self.current_offset
-        for start, end, name, rty, from_sig, raw_sig in entries:
+        for start, end, name, rty, from_sig, raw_sig, *_desc in entries:
             if start <= off < end:
-                return (name, rty, from_sig, raw_sig)
+                return (name, rty, from_sig, raw_sig, _desc[0] if _desc else '')
         if for_store:
             nxt = self.next_offset
-            for start, end, name, rty, from_sig, raw_sig in entries:
+            for start, end, name, rty, from_sig, raw_sig, *_desc in entries:
                 if start == nxt or (nxt <= off and off < start <= off + 4):
-                    return (name, rty, from_sig, raw_sig)
+                    return (name, rty, from_sig, raw_sig, _desc[0] if _desc else '')
         return None
 
     def _synth_slot_name(self, slot: int, ty: 'RsType | None') -> str:
@@ -660,9 +660,18 @@ class StackSim:
                 # Clone::clone 而非 this.clone()：类的 Java clone() 方法会遮蔽 std Clone
                 expr = RawExpr("Clone::clone(this)")
 
-        if (slot in self.locals and not src_is_object and slot not in self._param_slots
-                and decl is not None and decl[1] is None and self.locals[slot][0] == decl_name
-                and getattr(self.locals[slot][1], 'name', '') == 'Object'
+        _decl_is_root = (decl is not None and decl[1] is None and len(decl) > 4
+                         and decl[4] == ref_desc(OBJECT_CLASS))
+        if (not src_is_object and slot not in self._param_slots
+                and decl is not None and decl[1] is None
+                and ((slot in self.locals and self.locals[slot][0] == decl_name
+                      and getattr(self.locals[slot][1], 'name', '') == 'Object')
+                     # 首次绑定：LVT 声明类型恰为根类（`Object result = "ok"`）——变量的
+                     # 静态类型以声明为准，不随首个值收窄（后续分支 / catch 存入其它类型
+                     # 时同一变量类型一致；JceSecurity$2 `result = e` 实证 E0308）。
+                     # 声明为接口者不在此列（保持具体类形态，分派面不变）
+                     or (_decl_is_root and getattr(ty, 'name', '') != 'Object'
+                         and (slot not in self.locals or self.locals[slot][0] != decl_name)))
                 and isinstance(ty, (RsNamed, RsGeneric))
                 and getattr(ty, 'name', '') not in _SCALAR_TYPE_NAMES):
             # 声明为 Object/接口的变量在同一作用域内再赋入具体类值：Java 隐式上转 → 装箱后赋值，

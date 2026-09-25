@@ -164,7 +164,7 @@ pub(crate) fn expand_interface(
         #(#static_storage)*
         #init_state
 
-        #[derive(Clone, Default)]
+        #[derive(::core::clone::Clone, ::core::default::Default)]
         pub struct #struct_ident #impl_g #where_c {
             __ref: Object,
             __phantom: ( #( ::std::marker::PhantomData<fn() -> #type_params>, )* ),

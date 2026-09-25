@@ -1,0 +1,5 @@
+[MON, WED, THU]
+[TUE]
+[MON, THU]
+[1, 2, 3, 10] 16.0
+THU:3 MON:0 TUE:1

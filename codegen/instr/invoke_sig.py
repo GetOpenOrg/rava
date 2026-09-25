@@ -705,6 +705,14 @@ def _coerce_arg(
         # javac 的 unchecked cast → 经宏为类型形参补的 From<Object> 取回（与 areturn 同规则）
         src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
         return f"From::from({src})"
+    if (expected in (sim.class_type_params or ()) and actual != expected
+            and actual not in _PRIMITIVE_RUST_TYPES and actual not in ('Object', '()')
+            and actual not in (sim.class_type_params or ())):
+        # 形参是类型变量、实参是具体引用类型：javac 对 `(E) x` 发射的 checkcast 目标是
+        # E 的擦除上界（`E extends Enum<E>` → checkcast Enum），栈值因此是上界类视图
+        #（EnumSet.copyOf 的 `result.add((E) i.next())`，E0308）。与上一分支同规则——经
+        # Object 边界按对象标识、由宏为类型形参补的 From<Object> 取回
+        return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
     if (actual in (sim.class_type_params or ()) and expected != actual
             and expected not in _PRIMITIVE_RUST_TYPES and expected not in ('Object', '()')
             and expected not in (sim.class_type_params or ())

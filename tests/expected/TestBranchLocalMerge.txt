@@ -1,0 +1,9 @@
+hosts:a platform:b
+HostsFile Platform
+hosts:h0
+platform:h1
+cached:h2
+4.0 3.0
+BigSquare(100.0) Square(9.0)
+LEFT RIGHT
+1099511627777 -6

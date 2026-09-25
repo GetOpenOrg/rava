@@ -322,7 +322,7 @@ def gen_method_body(
 
     # 从 LocalVariableTypeTable 预计算精确类型提示（slot → RsType）
     # 仅对引用类型（Object 类型擦除后变成 Object 的槽）有意义
-    # 局部变量声明表：slot → [(start_pc, end_pc, name, RsType|None, from_signature)]
+    # 局部变量声明表：slot → [(start_pc, end_pc, name, RsType|None, from_signature, 泛型签名, 描述符)]
     # 类型优先取 LocalVariableTypeTable 泛型签名（from_signature=True），
     # 否则取 LocalVariableTable 描述符；Object / 接口别名不构成有效的精确类型（None）。
     slot_decls: dict[int, list] = {}
@@ -339,7 +339,8 @@ def gen_method_body(
             if _desc_ty_name and _desc_ty_name != 'Object' and '::' not in _desc_ty_name:
                 _lv_ty = _str_to_rs_type(_desc_ty_name)
         slot_decls.setdefault(_lv_slot, []).append(
-            (_lv_start, _lv_start + _lv_len, _lv_name, _lv_ty, _lv_from_sig, _lv_sig or ''))
+            (_lv_start, _lv_start + _lv_len, _lv_name, _lv_ty, _lv_from_sig, _lv_sig or '',
+             _lv_desc or ''))
     for _lv_entries in slot_decls.values():
         _lv_entries.sort(key=lambda _e: _e[0])
 

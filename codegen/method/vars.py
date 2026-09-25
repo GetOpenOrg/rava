@@ -974,9 +974,12 @@ def _hoist_if_emit(h: "_HoistState") -> bool:
         if entry_nesting[k2] <= entry_nesting[block_k]:
             span_end = k2
             break
-    if box_object is not None and name not in lvt_names:
-        # 同槽异型（javac 合成槽，无声明类型）：按 JVM 合并点语义取公共祖先
-        # widening；无公共类祖先时回退根类装箱
+    if box_object is not None:
+        # 同名异型：按 JVM 合并点语义取公共祖先 widening；无公共类祖先时回退根类装箱。
+        # 合成槽（无声明类型）与 LVT 具名变量同规则——后者如声明为接口、兄弟分支存入
+        # 两个不同实现类（InetAddress.createBuiltinInetAddressResolver 的 theResolver：
+        # HostsFileResolver / PlatformResolver，E0308）。同型 / 含基本类型时返回 None，
+        # 不改变既有产物；子类型对齐的旧路径（公共祖先即提升类型）结果相同
         merged_type = _merged_slot_type(entries, name, block_k, span_end, registry)
         if merged_type is not None:
             _widen_into_merged(entries, name, block_k, span_end, merged_type, box_object)

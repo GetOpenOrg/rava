@@ -1,0 +1,10 @@
+String:ok
+Exception:boom
+String:text 3556653 true
+Integer:42
+int[]:3
+null
+String:late
+Integer:1;String:s0;Integer:11;String:s2;
+[x] 1
+14.0

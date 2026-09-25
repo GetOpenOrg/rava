@@ -54,7 +54,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
 
     let inner_struct = quote! {
         #[doc(hidden)]
-        #[derive(Clone, Default, PartialEq, Debug)]
+        #[derive(::core::clone::Clone, ::core::default::Default, ::core::cmp::PartialEq, ::core::fmt::Debug)]
         pub(crate) struct #inner_ident {
             #(#inner_field_tokens,)*
         }
