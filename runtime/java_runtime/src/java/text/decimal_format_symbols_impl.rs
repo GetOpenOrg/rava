@@ -1,88 +1,53 @@
 //! `java/text/DecimalFormatSymbols` 手写实现（仅当 `decimal_format_symbols.rs`
 //! 进入闭包生成时编译，见 K-2 规则）。
 //!
-//! JDK 的 `getInstance(Locale)` 经 `sun.util.locale.provider` SPI（CLDR 数据驱动的
-//! DecimalFormatSymbolsProvider）构造符号集。原生侧无 CLDR 资源束，按语料
-//! locale 常量表构造（见 `getInstance_locale`：ROOT/en_US + de_DE；Formatter 的
-//! %f/%e/%g 消费 zeroDigit 与 groupingSeparator，NumberFormat 链另消费小数点/
-//! 货币符号）。locale 字段如实记录传入 locale，保持 Formatter 的 DFS 缓存按
-//! locale 键控语义。
+//! L-1：`getInstance(Locale)` / 构造器 / `initialize(Locale)` 全部走翻译字节码——符号集
+//! 数据来自 `LocaleResources.getDecimalFormatSymbolsData()`（CLDR 资源束翻译字节码，
+//! 见 `sun/util/locale/provider/locale_resources_impl.rs`）。本文件只剩货币一项：
+//!
+//! `initializeCurrency(Locale)` 在 JDK 中经 `Currency.getInstance(locale)`（currency.data
+//! 二进制资源，非字节码语料）与 `Currency.getSymbol(locale)`（CurrencyNames 资源束）
+//! 取货币；Currency 数据层不在 L-1 范围，此处按地区码给出语料所及的货币代码 / 本地符号
+//! （JDK 21/25 实测核对），其余地区与无地区 locale 按 JDK 的无货币分支给 `XXX` / `¤`。
+//! `currency` 字段不建模（`getCurrency()` 为 null——compatibility.md 偏差入账）。
 
 use crate::prelude::*;
-use crate::java::util::{Locale, Locale_Category};
+use crate::java::util::Locale;
 use super::decimal_format_symbols::DecimalFormatSymbols;
 
-fn us_symbols(locale: Locale) -> Result<DecimalFormatSymbols> {
-    let mut dfs = DecimalFormatSymbols::default();
-    dfs._init_not_null();
-    dfs.__set_zeroDigit('0' as u16);
-    dfs.__set_groupingSeparator(',' as u16);
-    dfs.__set_decimalSeparator('.' as u16);
-    dfs.__set_perMill('\u{2030}' as u16);
-    dfs.__set_percent('%' as u16);
-    dfs.__set_digit('#' as u16);
-    dfs.__set_patternSeparator(';' as u16);
-    dfs.__set_infinity(String::from("\u{221E}"));
-    dfs.__set_NaN(String::from("NaN"));
-    dfs.__set_minusSign('-' as u16);
-    dfs.__set_currencySymbol(String::from("$"));
-    dfs.__set_intlCurrencySymbol(String::from("USD"));
-    dfs.__set_monetarySeparator('.' as u16);
-    dfs.__set_exponential('E' as u16);
-    dfs.__set_exponentialSeparator(String::from("E"));
-    dfs.__set_perMillText(String::from("\u{2030}"));
-    dfs.__set_percentText(String::from("%"));
-    dfs.__set_minusSignText(String::from("-"));
-    dfs.__set_monetaryGroupingSeparator(',' as u16);
-    dfs.__set_locale(locale);
-    dfs.__set_serialVersionOnStream(5);
-    Ok(dfs)
+/// 地区码 → (ISO 4217 代码, 按语言选择的本地符号)。
+fn currency_for(language: &str, region: &str) -> (&'static str, &'static str) {
+    match region {
+        "US" => ("USD", "$"),
+        "CA" => ("CAD", "$"),
+        "GB" => ("GBP", "\u{A3}"),
+        "DE" | "FR" | "IT" | "ES" | "NL" | "AT" | "BE" | "FI" | "IE" | "PT" | "GR" | "LU" =>
+            ("EUR", "\u{20AC}"),
+        "JP" => ("JPY", if language == "ja" { "\u{FFE5}" } else { "\u{A5}" }),
+        "CN" => ("CNY", if language == "zh" { "\u{A5}" } else { "CN\u{A5}" }),
+        "KR" => ("KRW", "\u{20A9}"),
+        "TW" => ("TWD", if language == "zh" { "$" } else { "NT$" }),
+        _ => ("XXX", "\u{A4}"),
+    }
 }
 
 impl DecimalFormatSymbols {
-    /// `getInstance()`：FORMAT 类别默认 locale（与 JDK 同源）。
-    pub fn getInstance() -> Result<DecimalFormatSymbols> {
-        let l = Locale::getDefault_locale_category(Locale_Category::FORMAT()?)?;
-        Self::getInstance_locale(l)
-    }
-
-    /// `initializeCurrency(Locale)`：JDK 按该 locale 的 `Currency`（currency.data
-    /// 资源束，非字节码语料）重导 currencySymbol/intlCurrencySymbol。本实现的
-    /// 符号集在构造时即按同一语料 locale 表填好（`getInstance_locale`），此处
-    /// 幂等——不引入 Currency 数据层，字段保持构造态（语料无 setCurrency
-    /// 修改面，`getCurrencySymbol`/`getInternationalCurrencySymbol` 观察一致）。
+    /// private `initializeCurrency(Locale)`：幂等（`currencyInitialized`），按地区填
+    /// `intlCurrencySymbol` / `currencySymbol`（见模块说明）。
     #[jvm_boundary]
     pub fn initializeCurrency(&self, locale: Locale) -> Result<()> {
-        let _ = locale;
-        Ok(())
-    }
-
-    /// `getInstance(Locale)`：sun/ SPI 的等价截断 —— 按语料 locale 表构造常量
-    /// 符号集（CLDR 42 数据，JDK 21.0.11 实测核对）。覆盖语料消费的 locale：
-    /// ROOT/en_US 系（`.` / `,` / `$` / `USD`）与 de_DE（`,` / `.` / `€` / `EUR`）；
-    /// 未覆盖 locale 回退 ROOT 集（JDK 的 locale 解析链终态同为 ROOT）。
-    pub fn getInstance_locale(mut locale: Locale) -> Result<DecimalFormatSymbols> {
-        if locale.is_jvm_null() {
-            return us_symbols(locale);
+        if self.__get_currencyInitialized() {
+            return Ok(());
         }
-        let base = locale.__get_baseLocale();
-        let language = if base.is_jvm_null() {
-            std::string::String::new()
-        } else {
-            format!("{}", base.__get_language())
+        let base = if locale.is_jvm_null() { None } else { Some(locale.__get_baseLocale()) };
+        let (language, region) = match base {
+            Some(b) if !b.is_jvm_null() => (format!("{}", b.__get_language()), format!("{}", b.__get_region())),
+            _ => Default::default(),
         };
-        match language.as_str() {
-            "de" => {
-                let mut dfs = us_symbols(locale)?;
-                dfs.__set_decimalSeparator(',' as u16);
-                dfs.__set_groupingSeparator('.' as u16);
-                dfs.__set_monetarySeparator(',' as u16);
-                dfs.__set_monetaryGroupingSeparator('.' as u16);
-                dfs.__set_currencySymbol(String::from("\u{20AC}"));
-                dfs.__set_intlCurrencySymbol(String::from("EUR"));
-                Ok(dfs)
-            }
-            _ => us_symbols(locale),
-        }
+        let (code, symbol) = currency_for(&language, &region);
+        self.__set_intlCurrencySymbol(String::from(code));
+        self.__set_currencySymbol(String::from(symbol));
+        self.__set_currencyInitialized(true);
+        Ok(())
     }
 }

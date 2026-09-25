@@ -98,3 +98,101 @@ def _add_ok_return(lines: list[str], rust_ret: str, always_returns: bool = False
 def _indent(block: str, n: int = 4) -> str:
     pad = ' ' * n
     return '\n'.join(pad + ln if ln.strip() else '' for ln in block.split('\n'))
+
+
+# ── 数组初始化器折叠（L-1 L1-d）────────────────────────────────────────────
+# javac 的数组初始化器 `new T[]{a, b, c}` 编译为 anewarray + (dup; 下标; 值; aastore)×n，
+# 逐元素翻译为 `let mut _arrK = JArray::try_new(n)?;` + n 条 `_arrK.set(i, v)?;`。
+# 折叠为单条 `JArray::from(vec![a, b, c])`——与 Java 源的初始化器同形，且大幅缩减
+# 资源束 getContents（数千元素字面量表）的语句数。
+#
+# 语义保持条件（不满足即原样保留）：
+#   - 声明长度为字面量 n，其后恰有下标 0..n-1 依序的 n 条 set；
+#   - 值均为纯表达式（字面量 / `Clone::clone(&字面量或变量)` / 其 `Object::from` 包装），
+#     无副作用、不读数组元素——求值时刻后移不改变结果；
+#   - 声明与最后一条 set 之间只允许其它 `_arr` 临时数组的声明 / set / 已折叠块
+#     （javac 嵌套初始化器的交错形态），不出现对本数组的其它引用、也无普通赋值；
+#   - 折叠结果落在最后一条 set 的位置（其引用的内层数组此时均已构造完毕）。
+_ARR_TMP = r'_arr\d+'
+_ARR_DECL_RE = re.compile(
+    r'^(\s*)let mut (' + _ARR_TMP + r'): JArray<(.+)> = JArray::<(.+)>::try_new\((\d+)i32\)\?;$')
+_ARR_SET_RE = re.compile(r'^(\s*)(' + _ARR_TMP + r')\.set\((\d+)i32, (.*)\)\?;$')
+_STR_LIT = r'String::from\("(?:[^"\\]|\\.)*"\)'
+_PURE_ATOM = (r'(?:' + _STR_LIT + r'|[A-Za-z_]\w*'
+              r'|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:i8|i16|i32|i64|u16|f32|f64)'
+              r'|true|false)')
+_PURE_VALUE_RE = re.compile(
+    r'^(?:' + _PURE_ATOM + r'|Clone::clone\(&' + _PURE_ATOM + r'\)'
+    r'|Object::from\(Clone::clone\(&' + _PURE_ATOM + r'\)\))$')
+_FOLDED_MARK = 'JArray::from(vec!['
+
+
+# 元素全为字符串字面量时的紧凑形态（静态切片，见 runtime array.rs from_strs）
+_STR_ELEM_RE = re.compile(r'^(?:Clone::clone\(&)?String::from\(("(?:[^"\\]|\\.)*")\)\)?$')
+_OBJ_STR_ELEM_RE = re.compile(
+    r'^Object::from\((?:Clone::clone\(&)?String::from\(("(?:[^"\\]|\\.)*")\)\)?\)$')
+_STRS_CTORS = {'String': ('from_strs', _STR_ELEM_RE), 'Object': ('objects_from_strs', _OBJ_STR_ELEM_RE)}
+
+
+def _folded_literal(ind: str, var: str, elem_t: str, values: list[str]) -> str:
+    """折叠结果：字符串字面量表 → `JArray::from_strs(&[..])`；其余 → `JArray::from(vec![..])`。"""
+    ctor = _STRS_CTORS.get(elem_t)
+    if ctor is not None:
+        lits = [ctor[1].match(v) for v in values]
+        if all(lits):
+            body = ', '.join(m.group(1) for m in lits)
+            return f'{ind}let mut {var}: JArray<{elem_t}> = JArray::{ctor[0]}(&[{body}]);'
+    return (f'{ind}let mut {var}: JArray<{elem_t}> = {_FOLDED_MARK}\n'
+            + '\n'.join(f'{ind}    {v},' for v in values)
+            + f'\n{ind}]);')
+
+
+def _is_arr_intermediate(stmt: str) -> bool:
+    if '\n' in stmt or 'JArray::from_strs(' in stmt or 'JArray::objects_from_strs(' in stmt:
+        # 已折叠块（多行 vec! 形态或单行字符串切片形态）
+        return bool(re.match(r'^\s*let mut ' + _ARR_TMP + r':', stmt)) and (
+            _FOLDED_MARK in stmt or '_from_strs(' in stmt or 'from_strs(' in stmt)
+    if _ARR_DECL_RE.match(stmt):
+        return True
+    m = _ARR_SET_RE.match(stmt)
+    return bool(m) and bool(_PURE_VALUE_RE.match(m.group(4)))
+
+
+def _fold_array_literals(lines: list[str]) -> list[str]:
+    """数组初始化器折叠（条件见上）。输入输出均为语句列表（折叠块为含换行的单元素）。"""
+    stmts = list(lines)
+    decls = [i for i, s in enumerate(stmts) if _ARR_DECL_RE.match(s)]
+    for i in reversed(decls):              # 内层（后声明）先折叠
+        m = _ARR_DECL_RE.match(stmts[i])
+        if not m or m.group(3) != m.group(4):
+            continue
+        ind, var, elem_t, n = m.group(1), m.group(2), m.group(3), int(m.group(5))
+        if n == 0:
+            continue
+        ref_re = re.compile(r'\b' + re.escape(var) + r'\b')
+        values: list[str] = []
+        set_pos: list[int] = []
+        j = i + 1
+        ok = True
+        while j < len(stmts) and len(values) < n:
+            s = stmts[j]
+            sm = _ARR_SET_RE.match(s)
+            if sm and sm.group(2) == var:
+                if int(sm.group(3)) != len(values) or not _PURE_VALUE_RE.match(sm.group(4)) \
+                        or ref_re.search(sm.group(4)):
+                    ok = False
+                    break
+                values.append(sm.group(4))
+                set_pos.append(j)
+            elif ref_re.search(s) or not _is_arr_intermediate(s):
+                ok = False
+                break
+            j += 1
+        if not ok or len(values) != n:
+            continue
+        folded = _folded_literal(ind, var, elem_t, values)
+        last = set_pos[-1]
+        drop = set(set_pos) | {i}
+        stmts = [s for k, s in enumerate(stmts[:last + 1]) if k not in drop] + [folded] + stmts[last + 1:]
+        # 下标已变动：后续（更外层 / 更早声明）的 decls 位置在 i 之前，不受影响
+    return stmts

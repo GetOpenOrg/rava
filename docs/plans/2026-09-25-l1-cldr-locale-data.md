@@ -78,3 +78,31 @@
   数据消费（NumberElements 解析）走翻译字节码。
 - **JDK 版本差异**：CLDR 版本随 JDK 升级（21：CLDR 42；25：CLDR 47），数据差异由字节码自然携带——
   这正是去掉手写表的收益（BaseLocale 常量表的版本坑不会再现）。
+
+## 六、L1-c 细化（2026-09-25，javap 实测 JDK21/25 同形）
+
+截断位置从「符号集整体手写」下移到「数据装载」一跳，符号集构造逻辑改走翻译字节码：
+
+```
+DecimalFormatSymbols.getInstance(Locale)            ← 翻译（删手写 getInstance_locale）
+ └ LocaleProviderAdapter.getAdapter(..).getDecimalFormatSymbolsProvider()   ← 手写适配器补此方法
+    └ provider.getInstance(locale) = new DecimalFormatSymbols(locale)       ← 翻译构造器
+       └ initialize(locale)                                                 ← 翻译
+          └ adapter.getLocaleResources(locale).getDecimalFormatSymbolsData()
+             └ LocaleResources（sun/，手写边界）：按字节码语义
+                  getNumberStrings(bundle, "NumberElements")：
+                    `<nu>.NumberElements` → `<DefaultNumberingSystem>.NumberElements` → `NumberElements`
+                  bundle = LocaleData.getNumberFormatData(locale)
+                    └ LocaleData（sun/，手写边界）：候选链（parent_chain + ROOT）经**生成注册表**
+                      实例化翻译束类并 setParent 串接（ResourceBundle 回退语义由翻译字节码承担：
+                      getObject → handleGetObject → ListResourceBundle.loadLookup → getContents）
+```
+
+- 注册表：codegen 为入选束在 main 生成段登记 `(binary name, 构造闭包)`（与 reflect_dispatch /
+  类初始化钩子同一登记模式），LocaleData 按名查表；
+- 手写边界对翻译层的回调（ResourceBundle.containsKey / getStringArray / getString / setParent）
+  经 `#[jvm_boundary(upcalls=…)]` 声明入链；
+- NumberFormatProvider 四族改为经 `LocaleResources.getNumberPatterns()` 取模式（同一束链），
+  删除手写 en/de 模式表；
+- 货币符号（Currency / CurrencyNames 束）不在本步范围：`initializeCurrency` 维持现状，
+  入账 compatibility 偏差（fr/it 的货币格式）。

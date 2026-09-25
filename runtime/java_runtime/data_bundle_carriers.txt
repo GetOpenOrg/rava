@@ -1,0 +1,5 @@
+# 纯数据资源束载体（L-1，docs/plans/2026-09-25-l1-cldr-locale-data.md）
+# 形如 <载体类>.<载体方法>:<描述符>。子类若只声明构造器 / 类初始化器 / 该载体方法，
+# 且载体方法体只含常量装载与数组构造（无方法调用），即判定为「纯数据类」——
+# 即便位于内部包（sun/ 等），也照常翻译字节码（数据不是实现细节）。
+java/util/ListResourceBundle.getContents:()[[Ljava/lang/Object;

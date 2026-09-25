@@ -64,7 +64,7 @@ def _jar_package_prefixes(registry: dict) -> tuple[str, ...]:
 
 
 def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
-              lib_specs: list[LibSpec] | None = None):
+              lib_specs: list[LibSpec] | None = None, locales: tuple[str, ...] = ()):
     for jf in java_files:
         if not os.path.exists(jf):
             sys.exit(f"File not found: {jf}")
@@ -172,7 +172,8 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
         runtime_src=os.path.join(out_dir, 'java_runtime', 'src'),
         lib_registries=_lib_registries,
         lib_prefixes=_lib_prefixes,
-        extra_seed_classes=_lib_seed_classes or None)
+        extra_seed_classes=_lib_seed_classes or None,
+        locales=tuple(locales))
 
     # jar 模式闭包拆分：BFS 发现集里归属 jar 的类拆到对应 lib crate（整包模式
     # 再并入 jar 全集——wholesale 语义），其余（java/ javax/ …）留在 java_runtime。

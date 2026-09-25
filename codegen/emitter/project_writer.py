@@ -733,6 +733,21 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         hook_block += ('    java_runtime::reflect_dispatch::register_method_dispatch(&[\n'
                        + '\n'.join(_disp_reg_lines) + '\n    ]);\n')
 
+    # L-1 资源束登记：BFS 按 locale 种子入选的 CLDR 束类（翻译字节码）的构造闭包，
+    # 供手写边界 LocaleResources 按候选链装载（替代 ResourceBundle.getBundle 的类名反射）
+    from ..callchain import DATA_BUNDLE_SEEDS as _bundle_seeds
+    if _bundle_seeds:
+        _bundle_lines = []
+        for _b in _bundle_seeds:
+            _bpath = '::'.join(['java_runtime',
+                                *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _b.split('/')[:-1]),
+                                short_cls(_b)])
+            _bundle_lines.append(
+                f'        ("{_b}", (|| Ok(java_runtime::java::lang::Object::from({_bpath}::new()?)))'
+                f' as java_runtime::data_bundles::BundleCtor),')
+        hook_block += ('    java_runtime::data_bundles::register_data_bundles(&[\n'
+                       + '\n'.join(_bundle_lines) + '\n    ]);\n')
+
     if batch_bin:
         # 批量模式：每个 bin 用 #[path] 独立包含自己的类文件，不共享 lib.rs。
         # 这样某个测试编译失败不会影响其他测试。

@@ -37,7 +37,7 @@ from ..instr.hierarchy import _is_subtype
 from .blocks import simulate_blocks
 from .emit import emit_tree
 from .vars import _str_to_rs_type, _analyze_mutation, _hoist_loop_vars, _hoist_if_vars, _promote_undeclared_assigns
-from .postprocess import _normalize_this_clone, _erase_boxed_ctor_type_args, _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
+from .postprocess import _normalize_this_clone, _erase_boxed_ctor_type_args, _fold_array_literals, _remove_trailing_return_ok, _fix_bool_returns, _add_ok_return, _indent
 
 
 def _split_disjoint_try_ranges(method, nodes: dict) -> None:
@@ -458,6 +458,7 @@ def gen_method_body(
             lines.append(indent + render_stmt(item).lstrip())
 
     lines = _erase_boxed_ctor_type_args(lines)
+    lines = _fold_array_literals(lines)
 
     # ── 构造器末尾返回 Ok(this) ────────────────────────────────────
     if is_ctor:

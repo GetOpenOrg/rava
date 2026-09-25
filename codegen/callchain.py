@@ -87,10 +87,43 @@ def _read_manifest(name: str) -> list[str]:
 _VM_BOUNDARY_CLASSES: frozenset[str] = frozenset(_read_manifest('vm_boundary.txt'))
 
 
+# 纯数据资源束豁免（L-1）：内部包（前缀）下经结构判定为纯数据类
+# （codegen/data_bundle.py）的类照常翻译。判定需要 ClassInfo，由 BFS 注册类加载器后
+# 惰性求值并缓存——所有边界决策点（BFS 入队、clinit 提取）经 _is_boundary_class
+# 同一入口，判定结果一致，与首次触达的先后无关。未注册加载器时不放行（纯前缀规则）。
+_DATA_BUNDLE_VERDICT: dict[str, bool] = {}
+_DATA_BUNDLE_LOADER: list = [None]
+
+
+# 本轮入选的资源束类（binary name，已排序）：emitter 在生成 main 中登记构造闭包
+#（runtime `data_bundles::register_data_bundles`）。每轮 BFS 起始清空。
+DATA_BUNDLE_SEEDS: list[str] = []
+
+
+def set_data_bundle_loader(load) -> None:
+    """注册（或以 None 清除）结构判定用的类加载器 load(binary_name) → ClassInfo|None。"""
+    _DATA_BUNDLE_LOADER[0] = load
+    _DATA_BUNDLE_VERDICT.clear()
+
+
+def _is_data_bundle(cls: str) -> bool:
+    if '[' in cls:
+        return False
+    verdict = _DATA_BUNDLE_VERDICT.get(cls)
+    if verdict is None:
+        load = _DATA_BUNDLE_LOADER[0]
+        if load is None:
+            return False
+        from .data_bundle import is_pure_data_bundle
+        verdict = is_pure_data_bundle(load(cls), load)
+        _DATA_BUNDLE_VERDICT[cls] = verdict
+    return verdict
+
+
 def _is_boundary_class(cls: str) -> bool:
-    """内部包（前缀）或 VM 耦合边界类（清单，含其嵌套类）。"""
+    """内部包（前缀）或 VM 耦合边界类（清单，含其嵌套类）；前缀内的纯数据资源束除外。"""
     if cls.startswith(_JDK_STUB_ONLY_PREFIXES):
-        return True
+        return not _is_data_bundle(cls)
     return cls.split('$', 1)[0] in _VM_BOUNDARY_CLASSES
 
 
@@ -108,7 +141,8 @@ def _desc_class_refs(desc: str) -> list[str]:
 def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | None = None, *,
                                        lib_registries: list | None = None,
                                        lib_prefixes: tuple[str, ...] = (),
-                                       extra_seed_classes: list[str] | None = None) -> list:
+                                       extra_seed_classes: list[str] | None = None,
+                                       locales: tuple[str, ...] = ()) -> list:
     """方法级调用链 BFS：只追踪实际被调用的方法，不展开未调用方法的依赖类。
 
     调用边的三个来源：
@@ -377,6 +411,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 fallback_audit.record('cc-load-class', f"{name}: {e!r}")
                 class_cache[name] = None
         return class_cache[name]
+
+    # L-1：纯数据资源束的结构判定经同一类加载器（jdk.localedata 等全部 jmod 可解析）
+    set_data_bundle_loader(_load_class)
+    DATA_BUNDLE_SEEDS.clear()
 
     _sig_poly_native: set[tuple] = set()   # 精确匹配失败但链上有同名 ACC_NATIVE（签名多态边界，预期内）
     _root_inherited: set[tuple] = set()    # 声明者落到手写根类 Object（根 vtable 桥接承载，预期内）
@@ -770,11 +808,37 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     if cls in _supertypes(x):
                         _enqueue_method((x, meth, desc))
 
+        # L-1 资源束种子：手写边界的数据消费入口（locale_seeds.txt 的 trigger）在调用链上
+        # 时，按用户字节码推出的 locale 集（含父链）入选 CLDR 束类——构造器 + 载体方法入队、
+        # 记为已实例化（ListResourceBundle.handleGetObject 等虚调用经 RTA 分派到束类）。
+        # 束经类名反射装载、无静态边，只能在不动点处按触达事实补种；只补一次。
+        from .locale_seed import load_manifest as _ls_manifest
+        _ls_mf = _ls_manifest()
+        _bundles_seeded = False
+
+        def _seed_data_bundles() -> None:
+            from .data_bundle import carrier_of
+            from .locale_seed import bundle_classes, collect_locales
+            _locs = collect_locales(class_infos, _load_class, extra=locales, manifest=_ls_mf)
+            _names = bundle_classes(_locs, _load_class, manifest=_ls_mf)
+            for _b in _names:
+                _carrier = carrier_of(_load_class(_b), _load_class)
+                instantiated_classes.add(_b)
+                _enqueue_method((_b, '<init>', '()V'))
+                if _carrier is not None:
+                    _enqueue_method((_b, _carrier[0], _carrier[1]))
+            DATA_BUNDLE_SEEDS[:] = _names
+            print(f"      locale 种子：{len(_locs)} 个 locale → {len(_names)} 个资源束", flush=True)
+
         # 不动点：排空队列 → 传播虚调用目标 → 有新方法则继续
         while True:
             while queue:
                 _process(*queue.popleft())
             _propagate_virtual_targets()
+            if (not queue and not _bundles_seeded
+                    and any(t in seen_members for t in _ls_mf.triggers)):
+                _bundles_seeded = True
+                _seed_data_bundles()
             if not queue:
                 break
 

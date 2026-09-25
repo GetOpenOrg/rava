@@ -3,16 +3,17 @@
 //!
 //! JDK 的适配器链（`getAdapterPreference` = [CLDR, FALLBACK] → `forType` 经
 //! `Class.forName` 实例化 `sun.util.cldr.CLDRLocaleProviderAdapter` →
-//! provider 经 `LocaleServiceProviderPool` 查询 `isSupportedLocale`）的本地化
-//! 数据全部来自 CLDR 资源束（jdk.localedata 模块，非字节码语料）。本文件按
-//! 内部边界类规则（3b）以手写数据承载该链的可观察行为：
-//! - 适配器为单例 `NativeLocaleAdapter`（运行时类名按 JDK 的 CLDR 适配器，
-//!   `getAdapter`/`forJRE`/`getResourceBundleBased`/`forType` 都返回它——
-//!   JDK 语义的退化态：唯一适配器即 FALLBACK 终态，locale 由符号/模式表
-//!   区分，不再逐 adapter 判定）；
-//! - `NumberFormatProvider` 四实例族按 CLDR 42 模式表（JDK 21.0.11 实测核对）
-//!   构造 `DecimalFormat`（翻译字节码），符号集来自
-//!   `DecimalFormatSymbols::getInstance_locale` 的语料 locale 表。
+//! provider 经 `LocaleServiceProviderPool` 查询 `isSupportedLocale`）按内部边界类规则
+//! （3b）截断为单例 `NativeLocaleAdapter`（运行时类名按 JDK 的 CLDR 适配器，
+//! `getAdapter`/`forJRE`/`getResourceBundleBased`/`forType` 都返回它——唯一适配器即
+//! FALLBACK 终态）。
+//!
+//! L-1：本地化**数据**不再手写——`getLocaleResources(locale)` 返回的
+//! `LocaleResources`（手写边界，`locale_resources_impl.rs`）按候选链装载 CLDR 资源束的
+//! 翻译字节码；`DecimalFormatSymbolsProvider.getInstance` 即 JDK 的
+//! `new DecimalFormatSymbols(locale)`（翻译构造器 → initialize → getDecimalFormatSymbolsData）；
+//! `NumberFormatProvider` 四族按 JDK `NumberFormatProviderImpl.getInstance` 语义取
+//! `getNumberPatterns()` 的模式构造 `DecimalFormat`（翻译字节码）。
 
 use crate::prelude::*;
 use super::locale_provider_adapter::{LocaleProviderAdapter, LocaleProviderAdapter__VTable};
@@ -20,55 +21,57 @@ use super::locale_provider_adapter_type::LocaleProviderAdapter_Type;
 use crate::java::lang::Class;
 use crate::java::text::spi::NumberFormatProvider;
 use crate::java::text::spi::NumberFormatProvider__VTable;
+use crate::java::text::spi::{DecimalFormatSymbolsProvider, DecimalFormatSymbolsProvider__VTable};
+use super::locale_resources::LocaleResources;
 use crate::java::util::spi::LocaleServiceProvider__VTable;
 use crate::java::text::{DecimalFormat, DecimalFormatSymbols, NumberFormat};
 use crate::java::util::Locale;
 use std::cell::RefCell;
 
 /// `java/text/spi/NumberFormatProvider` 的手写实现对象（JDK 的
-/// CLDRLocaleProviderAdapter 匿名 NumberFormatProvider）：按 CLDR 42 模式表
-/// 构造 DecimalFormat。模式与 JDK 21.0.11 实测一致：
-/// ROOT/en：number `#,##0.###`、currency `¤#,##0.00`、percent `#,##0%`、
-/// integer `#,##0`；de：number `#,##0.###`、currency `#,##0.00 ¤`、
-/// percent `#,##0 %`、integer `#,##0`。
+/// CLDRLocaleProviderAdapter 匿名 NumberFormatProvider → `NumberFormatProviderImpl`）：
+/// 模式取自 `LocaleResources.getNumberPatterns()`（CLDR 束翻译字节码），下标即 JDK
+/// `NumberFormat` 的样式常量（NUMBERSTYLE=0 / CURRENCYSTYLE=1 / PERCENTSTYLE=2；
+/// INTEGERSTYLE 取 NUMBERSTYLE 模式后收窄小数位）。
 struct NativeNumberFormatProvider;
 
-fn _de_locale(locale: &Locale) -> bool {
-    if locale.is_jvm_null() {
-        return false;
-    }
-    let base = locale.__get_baseLocale();
-    if base.is_jvm_null() {
-        return false;
-    }
-    format!("{}", base.__get_language()) == "de"
-}
+const NUMBERSTYLE: i32 = 0;
+const CURRENCYSTYLE: i32 = 1;
+const PERCENTSTYLE: i32 = 2;
 
 impl NativeNumberFormatProvider {
-    fn new_format(locale: Locale, pattern_root: &str, pattern_de: &str)
-                  -> Result<NumberFormat> {
-        let pattern = if _de_locale(&locale) { pattern_de } else { pattern_root };
-        let symbols = DecimalFormatSymbols::getInstance_locale(Clone::clone(&locale))?;
-        let df = DecimalFormat::new_str_decimalformatsymbols(String::from(pattern), symbols)?;
-        Ok(<NumberFormat as ::std::convert::From<DecimalFormat>>::from(df))
+    fn new_format(locale: Locale, entry: i32) -> Result<DecimalFormat> {
+        let patterns = LocaleResources::new(Object::default(), Clone::clone(&locale))?.getNumberPatterns()?;
+        let symbols = DecimalFormatSymbols::getInstance_locale(locale)?;
+        DecimalFormat::new_str_decimalformatsymbols(patterns.get(entry)?, symbols)
+    }
+
+    fn view(df: DecimalFormat) -> NumberFormat {
+        <NumberFormat as ::std::convert::From<DecimalFormat>>::from(df)
     }
 }
 
 impl NumberFormatProvider__VTable for NativeNumberFormatProvider {
     fn getNumberInstance(&self, arg0: Locale) -> Result<NumberFormat> {
-        Self::new_format(arg0, "#,##0.###", "#,##0.###")
+        Ok(Self::view(Self::new_format(arg0, NUMBERSTYLE)?))
     }
 
+    /// INTEGERSTYLE：NUMBERSTYLE 模式 + `setMaximumFractionDigits(0)` /
+    /// `setDecimalSeparatorAlwaysShown(false)` / `setParseIntegerOnly(true)`（JDK 同序）。
     fn getIntegerInstance(&self, arg0: Locale) -> Result<NumberFormat> {
-        Self::new_format(arg0, "#,##0", "#,##0")
+        let df = Self::new_format(arg0, NUMBERSTYLE)?;
+        df.setMaximumFractionDigits(0)?;
+        df.setDecimalSeparatorAlwaysShown(false)?;
+        df.setParseIntegerOnly(true)?;
+        Ok(Self::view(df))
     }
 
     fn getCurrencyInstance(&self, arg0: Locale) -> Result<NumberFormat> {
-        Self::new_format(arg0, "\u{A4}#,##0.00", "#,##0.00 \u{A4}")
+        Ok(Self::view(Self::new_format(arg0, CURRENCYSTYLE)?))
     }
 
     fn getPercentInstance(&self, arg0: Locale) -> Result<NumberFormat> {
-        Self::new_format(arg0, "#,##0%", "#,##0 %")
+        Ok(Self::view(Self::new_format(arg0, PERCENTSTYLE)?))
     }
 
     /// 祖先 wrapper 重建钩子（vtable trait 的必备条目，与宏为 __inner 生成的
@@ -104,12 +107,65 @@ impl ObjectVTable for NativeNumberFormatProvider {
     }
 }
 
+/// `java/text/spi/DecimalFormatSymbolsProvider` 的手写实现对象（JDK 的
+/// `DecimalFormatSymbolsProviderImpl`）：`getInstance(locale)` = `new DecimalFormatSymbols(locale)`
+/// ——符号集由翻译构造器按 CLDR 束数据初始化。
+struct NativeDecimalFormatSymbolsProvider;
+
+impl DecimalFormatSymbolsProvider__VTable for NativeDecimalFormatSymbolsProvider {
+    fn getInstance(&self, arg0: Locale) -> Result<DecimalFormatSymbols> {
+        DecimalFormatSymbols::new_locale(arg0)
+    }
+
+    fn __as_DecimalFormatSymbolsProvider(&self) -> DecimalFormatSymbolsProvider {
+        let rc = Rc::new(NativeDecimalFormatSymbolsProvider);
+        DecimalFormatSymbolsProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn DecimalFormatSymbolsProvider__VTable>,
+            rc as Rc<dyn std::any::Any>,
+            false,
+        )
+    }
+}
+
+impl LocaleServiceProvider__VTable for NativeDecimalFormatSymbolsProvider {
+    fn __as_LocaleServiceProvider(&self) -> crate::java::util::spi::LocaleServiceProvider {
+        let rc = Rc::new(NativeDecimalFormatSymbolsProvider);
+        crate::java::util::spi::LocaleServiceProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn LocaleServiceProvider__VTable>,
+            rc as Rc<dyn std::any::Any>,
+            false,
+        )
+    }
+}
+
+impl ObjectVTable for NativeDecimalFormatSymbolsProvider {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn __class_name(&self) -> &'static str { "sun/util/locale/provider/DecimalFormatSymbolsProviderImpl" }
+    fn __obj_str(&self) -> std::string::String {
+        "sun.util.locale.provider.DecimalFormatSymbolsProviderImpl".to_owned()
+    }
+}
+
 /// `LocaleProviderAdapter` 的手写实现对象（JDK 的 CLDR 适配器单例形态）。
 struct NativeLocaleAdapter;
 
 impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
     fn getNumberFormatProvider(&self) -> Result<NumberFormatProvider> {
         _provider_view()
+    }
+
+    fn getDecimalFormatSymbolsProvider(&self) -> Result<DecimalFormatSymbolsProvider> {
+        let rc = Rc::new(NativeDecimalFormatSymbolsProvider);
+        Ok(DecimalFormatSymbolsProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn DecimalFormatSymbolsProvider__VTable>,
+            rc as Rc<dyn std::any::Any>,
+            false,
+        ))
+    }
+
+    /// `getLocaleResources(locale)`：CLDR 束数据的装载截断点（见 locale_resources_impl.rs）。
+    fn getLocaleResources(&self, arg0: Locale) -> Result<LocaleResources> {
+        LocaleResources::new(Object::default(), arg0)
     }
 
     /// 祖先 wrapper 重建钩子（vtable trait 必备条目，与宏形态一致）：返回
@@ -165,7 +221,10 @@ impl LocaleProviderAdapter {
     /// `getAdapter(Class, Locale)`：JDK 按 adapterPreference 与 provider 的
     /// isSupportedLocale 逐级挑选，终态 FALLBACK。原生侧唯一数据适配器即终态
     /// ——直接返回（CLDR 子集数据在 provider/符号表层按 locale 区分）。
-    #[jvm_boundary]
+    ///
+    /// 回调边：DFS provider 的翻译构造器、LocaleResources 构造、NumberFormatProvider 的
+    /// INTEGERSTYLE 收窄（DecimalFormat 成员）。
+    #[jvm_boundary(upcalls = "java/text/DecimalFormatSymbols.<init>:(Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.<init>:(Lsun/util/locale/provider/ResourceBundleBasedAdapter;Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.getNumberPatterns:()[Ljava/lang/String; sun/util/locale/provider/LocaleResources.getDecimalFormatSymbolsData:()[Ljava/lang/Object; java/text/DecimalFormat.setMaximumFractionDigits:(I)V java/text/DecimalFormat.setDecimalSeparatorAlwaysShown:(Z)V java/text/NumberFormat.setParseIntegerOnly:(Z)V")]
     pub fn getAdapter(_providerClass: Class, _locale: Locale) -> Result<LocaleProviderAdapter> {
         Ok(_adapter_view())
     }

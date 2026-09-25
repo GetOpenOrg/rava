@@ -1,0 +1,23 @@
+# Locale 种子（L-1 L1-b，docs/plans/2026-09-25-l1-cldr-locale-data.md §3.2）
+# 资源束经类名反射装载、无静态调用边，入选 locale 由用户字节码中「静态可见」的 locale
+# 引用推出。生成器按下列清单识别（原则 4：类名只在 runtime 清单出现）：
+#
+#   const   <类>                       该类的 static 自类型常量字段（getstatic）→ 沿 <clinit>
+#                                      溯源到字符串字面量（语言, 地区, 变体）
+#   factory <类>.<方法>:<描述符>        实参全为字符串字面量的调用 → (语言, 地区, 变体)
+#   tag     <类>.<方法>:<描述符>        实参为字符串字面量的 BCP 47 语言标签
+#   bundle  <束基名>                   每个入选 locale 需要的资源束族（CLDR），候选类
+#                                      <包>/<基名>_<locale> 与 <包>/ext/<基名>_<locale>
+const   java/util/Locale
+factory java/util/Locale.of:(Ljava/lang/String;)Ljava/util/Locale;
+factory java/util/Locale.of:(Ljava/lang/String;Ljava/lang/String;)Ljava/util/Locale;
+factory java/util/Locale.of:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/util/Locale;
+factory java/util/Locale.<init>:(Ljava/lang/String;)V
+factory java/util/Locale.<init>:(Ljava/lang/String;Ljava/lang/String;)V
+factory java/util/Locale.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+tag     java/util/Locale.forLanguageTag:(Ljava/lang/String;)Ljava/util/Locale;
+bundle  sun/text/resources/cldr/FormatData
+#   trigger <类>.<成员>                 调用链触达该成员（手写边界的数据消费入口）才入选资源束——
+#                                      不消费本地化数据的程序不付束翻译的代码税
+trigger sun/util/locale/provider/LocaleResources.getDecimalFormatSymbolsData
+trigger sun/util/locale/provider/LocaleResources.getNumberPatterns

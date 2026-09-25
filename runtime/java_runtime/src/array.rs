@@ -285,6 +285,24 @@ impl<T> From<Vec<T>> for JArray<T> {
     }
 }
 
+impl JArray<crate::java::lang::String> {
+    /// 字符串字面量数组初始化器（`new String[]{"a", "b"}`）的紧凑形态：元素表为静态
+    /// 切片，逐元素建 Java String。与 `JArray::from(vec![String::from(..), ..])` 等价，
+    /// 但数千元素的资源束字面量表（CLDR getContents）不再展开为数千个表达式节点。
+    pub fn from_strs(v: &[&str]) -> Self {
+        JArray::from(v.iter().map(|s| crate::java::lang::String::from(*s)).collect::<Vec<_>>())
+    }
+}
+
+impl JArray<Object> {
+    /// `new Object[]{"k", "v"}`（元素全为字符串字面量）的紧凑形态，语义同上。
+    pub fn objects_from_strs(v: &[&str]) -> Self {
+        JArray::from(v.iter()
+            .map(|s| Object::from(crate::java::lang::String::from(*s)))
+            .collect::<Vec<_>>())
+    }
+}
+
 /// Java 数组是对象：可直接装入 Object（`Object o = arr;`）。
 /// null 数组装入后经 vtable 的 is_jvm_null 呈现 Java null 语义。
 impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::lang::ObjectVTable for JArray<T> {

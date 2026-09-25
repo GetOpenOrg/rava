@@ -186,6 +186,9 @@ def main():
     ap.add_argument('--lib', action='append', default=[], metavar='NAME=JAR[:seed=FQN]',
                     help='jar 输入模式：依赖库发射为 lib crate（可重复；无 seed=整包，'
                          '有 seed=只收种子类闭包）。顺序即 crate 依赖序')
+    ap.add_argument('--locales', default='', metavar='TAG[,TAG...]',
+                    help='额外编入的 locale（BCP 47 或下划线形式，逗号分隔；默认只含用户字节码'
+                         '静态可见的 locale + en + ROOT，见 codegen/locale_seed.py）')
     args = ap.parse_args()
 
     lib_specs = _parse_lib_specs(args.lib)
@@ -213,7 +216,8 @@ def main():
 
     # 2. codegen
     t0 = time.perf_counter()
-    transpile(java_files, out_dir, batch_bin=args.batch, lib_specs=lib_specs)
+    transpile(java_files, out_dir, batch_bin=args.batch, lib_specs=lib_specs,
+              locales=tuple(t for t in args.locales.split(',') if t.strip()))
     # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
     print(CFG_AUDIT_STATS.summary())
     if os.environ.get('JAVA_RTA_DEBUG'):
