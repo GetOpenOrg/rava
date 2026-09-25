@@ -1,0 +1,16 @@
+PASS even-pass
+FAIL even-fail :: 
+Expected: an even number
+     but: was <5>
+PASS prefix-pass
+FAIL prefix-fail :: 
+Expected: a string starting with "ru"
+     but: started with "j"
+PASS length-pass
+FAIL length-fail :: 
+Expected: length <3>
+     but: was "abcd"
+runner run=2 fail=1 ok=false
+runner failure: 
+Expected: length <3>
+     but: was "java-rta"
