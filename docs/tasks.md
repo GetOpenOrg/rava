@@ -69,7 +69,7 @@
 
 | # | 任务 | 状态 | 说明 |
 |---|---|---|---|
-| N1 | Object 无参构造在反射里不可见 | ⬜ 待做 | 手写 Object 无方法表 `<init>` 行；补合成行会经 getConstructors 父类上溯改变全部类枚举，需反射面整体复核 |
+| N1 | Object 无参构造在反射里不可见 | ✅ 2026-09-25 | 根因是 `getConstructors` 错误地沿父类链上溯（构造器不继承，JLS §8.8）——修正为只取本类后，Object 补行不再影响其他类枚举。build.rs 给手写 Object 补 `<init>()V` public 行；reflect_dispatch 加 Object 构造臂；新增手写 `getConstructor(Class...)`（原经字节码落 native 存根）。验收：新增 e2e `TestCtorReflect`（构造器不继承 / 非 public 可见性 / 带参 newInstance / 抽象类 / 接口 / Object public+declared 面 / 未命中 NSME，19 行）PASS；反射回归 TestReflectProbe/TestAnnoReflect/TestAnnotations + JUnit m3 GOLDEN OK |
 | N2 | 序列化构造器只返元数据 | ⬜ 观察 | 反序列化实例化语义未建模，待真实用例 |
 | N3 | R-2′ 第二步：上转形态统一 UFCS → `UpcastExpr` IR 节点 | ⬜ 待做 | 改 `render.upcast_expr` 一处，但大工作区约 277 行生成树变化，需全量对账 |
 | N4 | TypeIR 扩大口径 22 处 + 完全体能力 G1–G5 | ⬜ 待做 | G1 RsType→JvmType 桥与窗口 3 同步；G4 归 M-3 |
