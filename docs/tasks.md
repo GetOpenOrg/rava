@@ -73,7 +73,7 @@
 | N2 | 序列化构造器只返元数据 | ⬜ 观察 | 反序列化实例化语义未建模，待真实用例 |
 | N3 | R-2′ 第二步：上转形态统一 UFCS → `UpcastExpr` IR 节点 | ⬜ 待做 | 改 `render.upcast_expr` 一处，但大工作区约 277 行生成树变化，需全量对账 |
 | N4 | TypeIR 扩大口径 22 处 + 完全体能力 G1–G5 | ⬜ 待做 | G1 RsType→JvmType 桥与窗口 3 同步；G4 归 M-3 |
-| N5 | invoke_virtual `this` 路径子类登记与第 4 项重复 | ⬜ 待做（清理） | 合并为定义侧单一来源 |
+| N5 | invoke_virtual `this` 路径子类登记与第 4 项重复 | ✅ 2026-09-25 | 调用侧 this 路径删除，定义侧单一来源。**揭出并修复定义侧缺口**：JDK 链抽象槽位 + 本类桥（SpinedBuffer.OfInt/OfLong/OfDouble 的 arrayForEach/arrayLength/arrayForOne）此前只靠调用侧兜住，改为定义侧照登记。剩余生成树差异仅「最近声明者 == 槽位 trait」与接口 default 两类（行为等价）。**顺带修复**用户链叶子继承祖先桥时丢 vtable_name/vtable_erasure（E0407）。验收：新增 e2e `TestPrimitiveSpinedBuffer`（int/long/double × sorted/builder/toArray/iterator）+ `TestInheritedSlots`（用户层次四形态 + JDK 继承槽位面）PASS；**反证**：去掉修复后 TestPrimitiveSpinedBuffer 命中 `stub: SpinedBuffer$OfPrimitive.arrayLength`；定向回归 12/12 PASS |
 | N6 | 手写 `_impl.rs` 构造的对象不进 RTA | ⬜ 待评估 | 实现体未入链时槽位落实现者 stub |
 | N7 | 第 4 项 macOS 侧验证 | ⏳ 用户执行中 | macOS provider 链多一层（MacOSX→Bsd→Unix） |
 | N8 | 服务器编译资源约束 | 📝 已记录 | 单 rustc ~14G 内存；共享 target 每测试残留 0.5–1G，跑批间需清理（`scripts/prune.sh`；后台跑批用 `scripts/run_bg.sh`，自带低内存编译环境）。2026-09-25 本机（16G 容器）JDK25 TestVirtualThread（76+1699 类）debuginfo=2 下 rustc 峰值 13.8G 被 cgroup OOM 杀；`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 下通过（二进制 507M→270M） |
