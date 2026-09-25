@@ -43,6 +43,7 @@
 | 异常链 / CCE / ASE / NPE（引用接收者） | 行为等价 | TestExceptions / TestInheritance / TestCasting PASS | — |
 | `monitorenter` / `monitorexit` 互斥 | 条件等价 | 单线程/协作调度 PASS（TestSynchronized 全绿）；真并发待对象模型 Send/Sync 化 | S-11（monitor.rs 已真实化） |
 | **`Thread.start/join/sleep/isAlive` + wait/notify 协作调度** | 条件等价 | **确定性输出程序=语义等价**（TestSynchronized/TestThreadJoin/TestWaitNotify 全绿——`8eca47b`：start0 就绪队列登记、join/wait/sleep 嵌套泵推进）。边界：依赖真实 interleaving 的输出不可达；限时 wait 无到点自醒（JLS §17.3 虚假唤醒语义）；无通知源的无限 wait 忙转；InterruptedException 未实现（语料无中断等待）；sleep 不驻留 | S-11 线程档位（真并发待 Send/Sync 化） |
+| **虚拟线程 / 限时等待（`Thread.ofVirtual`、`FutureTask.get(timeout)`、JUnit `@Test(timeout=)`）** | 条件等价 | 线程模型方案 A：虚拟线程 = 模拟平台线程（同一协作调度器，Continuation 不建模）——TestVirtualThread JDK21/JDK25 PASS；JUnit M4 golden OK（FailOnTimeout：ThreadGroup + 线程 + CountDownLatch + FutureTask.get 限时）。**边界**：无抢占——被等待线程运行至完成，**真实超时不可达**（测试体死循环 → 挂起；sleep 超过限时 → 判为通过，JVM 判超时）；`test timed out after N milliseconds` 不产生 | 真抢占待对象模型 Send/Sync 化 |
 | `Object.wait` / `notify` / `notifyAll` | 行为等价（目标） | **未实现**（`Object` 无该方法，4 用例 E0599） | 待立项（runtime 小改） |
 | identity hash / 默认 `Object.hashCode` | 近似等价 | 未实测（166 无 identityHashCode 用例） | S-6 |
 | `String.intern` 同一性（`==`） | 语义等价 | **已实测**（TestStringCompare PASS：interned==lit=true、lit==heap=false——runtime 全局驻留表，字面量路径 `From<&str>` 与 `intern()` 同表取规范实例；拼接走 `from_owned` 不入表）。TestStringEdge 同机制行待复跑（invoke 域预存编译断，与本修无关） | ~~S-6 intern~~ 已修（identity-hash 同条目另一半仍未实测） |

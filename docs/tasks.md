@@ -53,7 +53,7 @@
 | 9 | M-3 宏拆库试点 | ⬜ 待做（**已授权**） | 2026-09-24 用户授权改 `runtime/java_rta_macros`，作为独立任务，**排在窗口 3（G-1/G-2）之后**；吸收 TypeIR G4、R-2′ 方案 C 的渲染权问题 |
 | 10 | Rust 重写 R0 启动 | ⏳ **门槛②③实施完成，待 G-2 全量对账确认** | 门槛③ P-1 ✅；门槛② 窗口 3 全部实施（⑧⑨⑩ + G1-a/b/c + G-2）；门槛① 口径见 roadmap §四-1。用户 JDK21 全量通过即可启动 |
 | 11 | JUnit M3 | ✅ | 同 #3，`GOLDEN OK (m3)` |
-| 12 | JUnit M4（timeout/join 边界） | ⬜ **可开工** | #14 方案 A 已实现（TestVirtualThread JDK21/JDK25 双绿），前置解除 |
+| 12 | JUnit M4（timeout/join 边界） | ✅ **GOLDEN OK (m4)**（2026-09-25） | `tests/lib_pilot/JunitTimeoutMain.java` + `lib_pilot_golden.sh m4`：@Test(timeout=) 经 FailOnTimeout（ThreadGroup + 模拟线程 + CountDownLatch + FutureTask.get 限时）逐字一致。补链：Unsafe 原子族 9 个（getAndBitwiseAnd/OrInt、getAndSetInt/Reference、weakCAS Int/Reference、putIntOpaque/Release、storeStoreFence）。边界：无抢占 → 真实超时不可达，已入 compatibility.md |
 | 13 | JUnit M5（workspace 打包 + 跨 crate 分派链） | ⬜ 可开工 | M3 已过，前置解除 |
 | 14 | 线程模型终态（VT/Continuation） | ✅ **方案 A 已实现**（`4821738` + 本提交） | **口径更正**：原描述「虚拟线程映射 OS 线程」在 Rc 对象模型（非 Send/Sync）下不可行——落地为**虚拟线程 = 模拟平台线程**：与平台线程共用 `thread_impl.rs` 的单线程协作调度器（READY 队列 + join/wait/sleep 泵），Continuation 不建模（VirtualThread.start/run/joinNanos 手写直驱 `runWith(task)`）。真并发仍属对象模型 Send/Sync 化之后的远期档位。TestVirtualThread **JDK21 PASS（`4821738`）/ JDK25 PASS（本提交：MhUtil.findVarHandle、VerifyAccess.ensureTypeVisible、ReferencedKeySet.create 2 参、Wrapper.forPrimitiveType 四处 JDK25 改名/改签适配）**。方案 B / C 不采纳 |
 | 15 | libc（posix 档 B） | 📝 **已定：保持按需** | 真实用例触达目录遍历 / 文件属性 / socket 时逐 native 补，不全量手写 |

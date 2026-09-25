@@ -1,0 +1,3 @@
+pass run=3 fail=0 ok=true
+fail run=1 fail=1 ok=false
+fail failure: expected:<7> but was:<6>

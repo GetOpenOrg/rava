@@ -55,7 +55,7 @@ JUnit 的 golden 面友好：`JUnitCore.runClasses` 输出确定性格式的结�
 | M1 | **hamcrest 先行成 crate**（108 类纯函数式） | 手写断言用例 main 消费该 crate，golden 逐字一致 | ①②（jar 输入 + lib 发射）|
 | M2 | junit 的 **Assert 子集**进 crate（Runner 不翻） | 断言类测试 golden 一致 | 无新增（M1 延续）|
 | M3 | **注解元数据 + 反射 L3** → Runner 路径 | `JUnitCore.runClasses` 跑通 `@Test` 发现与调用 | ④（主机器域，需协调）|
-| M4 | timeout/线程边界 | `join(ms)` 等价或 compatibility.md 显式标注 | ⑤（随线程模型决策）|
+| M4 ✅ | timeout/线程边界 | `join(ms)` 等价或 compatibility.md 显式标注 | ⑤（随线程模型决策）——**2026-09-25 GOLDEN OK (m4)**：JunitTimeoutMain（限时内通过/失败/sleep/混合）；真实超时不可达已入 compatibility.md |
 | M5 | **workspace 打包终态**：`java-runtime-core`+`hamcrest`+`junit4`+用户测试 path 依赖全链 | 一个 workspace 一键构建运行 | ③终态（可等重写 R9）|
 
 **结论**：①②⑥ 是本机/新代理可立即开工的纯增量工程；④ 是硬前置但在主机器既定队列；③终态与⑤挂在既有决策上且都有过渡形态绕行。**M1+M2 现在就能排任务书，不阻塞任何在途工作。**
