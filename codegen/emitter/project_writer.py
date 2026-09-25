@@ -154,7 +154,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
 
     lib_crate_classes（jar 输入模式的 --lib 发射）：{crate 名 → 类列表}。
     每个 lib crate 发射为 crate-type=["lib"] 的独立 crate（hamcrest / junit4）：
-    lib.rs 汇出模块树、Java 可见性映射（public→pub、其余→pub(crate) 近似，
+    lib.rs 汇出模块树、Java 可见性映射（public/protected→pub、其余→pub(crate) 近似，
     access_flags 驱动）、引用按目标 crate 定向（junit4→hamcrest→java_runtime）。
     依赖方向 = 字典插入序（后面的 crate path 依赖前面的）。
     """

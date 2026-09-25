@@ -1129,12 +1129,15 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
 def _java_member_vis(access_flags: int) -> str:
     """Java 可见性 → Rust 可见性（lib crate 发射模式，classfile access_flags 驱动）。
 
-    public → pub；package-private / protected / private → pub(crate) 近似
-    （Java 包可见性在 Rust 无对应；protected 的子类可见由继承成员转发承载，
-    crate 内可见是合法超集）。宏侧（java_rta_macros block/parse.rs）以 syn
-    Visibility 解析并透传，pub(crate) 是合法输入。
+    public / protected → pub；package-private / private → pub(crate) 近似
+    （Java 包可见性在 Rust 无对应，crate 内可见是合法超集）。protected 必须
+    跨 crate 可见：JLS §6.6.2 允许任意包中的子类访问——下游 crate 的用户类
+    继承 lib 抽象类时，其构造链调父类 protected `<init>`（`__init_on*`）、
+    覆盖模板方法（如 TypeSafeMatcher.matchesSafely）都经此可见性（JUnit M5）。
+    宏侧（java_rta_macros block/parse.rs）以 syn Visibility 解析并透传，
+    pub(crate) 是合法输入。
     """
-    return 'pub' if access_flags & 0x0001 else 'pub(crate)'
+    return 'pub' if access_flags & (0x0001 | 0x0004) else 'pub(crate)'
 
 
 _BLOCK_ATTR_ACCESS_RE = _re.compile(r'\baccess = "(public|protected|private|package)"')
@@ -1142,8 +1145,9 @@ _BLOCK_PUB_LINE_RE = _re.compile(r'^pub (fn|static|const) ', _re.M)
 
 
 def _downgrade_non_public_blocks(blocks: list[str]) -> None:
-    """可见性映射（lib crate）：块首 @java_* 属性行 access 非 public 的成员块，
-    行首 pub 声明整体降级为 pub(crate)（保留 fn/static/const 关键字）。
+    """可见性映射（lib crate）：块首 @java_* 属性行 access 为 private / package
+    的成员块，行首 pub 声明整体降级为 pub(crate)（保留 fn/static/const 关键字）；
+    public / protected 保持 pub（见 _java_member_vis）。
     就地改写，零猜测（属性值源自 classfile）。"""
     for i, block in enumerate(blocks):
         head = block.split('\n', 1)[0]
@@ -1151,7 +1155,7 @@ def _downgrade_non_public_blocks(blocks: list[str]) -> None:
                 and 'java_field(' not in head):
             continue
         m = _BLOCK_ATTR_ACCESS_RE.search(head)
-        if m is not None and m.group(1) == 'public':
+        if m is not None and m.group(1) in ('public', 'protected'):
             continue
         blocks[i] = _BLOCK_PUB_LINE_RE.sub(r'pub(crate) \1 ', block)
 
@@ -1183,7 +1187,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     - crate_prefix_resolver: 若提供（lib crate 发射模式），引用按目标类归属 crate
       逐个定向（'crate' / 'java_runtime' / lib crate 名），覆盖单一前缀语义
     - java_visibility: 若置位（lib crate 类），Java 可见性映射生效——公开面由
-      classfile access_flags 驱动（public→pub，其余→pub(crate) 近似）
+      classfile access_flags 驱动（public/protected→pub，其余→pub(crate) 近似）
     - emission: 若提供，记录本类实际生成的方法声明，并在文本中留出继承成员声明的
       两个插入位（use 区 / impl 块尾），由 inherited_gen.resolve_inherited_members 统一填充
     """
