@@ -226,6 +226,27 @@ def _merged_slot_type(entries: list, name: str, start: int, end: int, registry=N
     return RsNamed(common)
 
 
+def _all_alignable(entries: list, name: str, start: int, end: int, hoisted_type, registry) -> bool:
+    """span 内同名 let / 赋值的类型是否都能按旧路径对齐到提升类型（同型或 _forms_alignable）。"""
+    if hoisted_type is None:
+        return True
+    hoisted_s = render_type(hoisted_type)
+    for k in range(start + 1, end):
+        item = entries[k][1]
+        if isinstance(item, LetStmt) and item.name == name:
+            ty = _hoisted_let_type(item)
+        elif isinstance(item, AssignStmt) and isinstance(item.target, Var) and item.target.name == name:
+            ty = item.value_ty
+        else:
+            continue
+        if ty is None or _is_default_value(item.value):
+            continue
+        ty_s = render_type(ty)
+        if ty_s != hoisted_s and not _forms_alignable(ty_s, hoisted_s, registry):
+            return False
+    return True
+
+
 def _widen_into_merged(entries: list, name: str, start: int, end: int,
                        merged: RsNamed, box_object) -> None:
     """汇合类型为公共类祖先的槽：各次存入按 From 上转（`.into()`，保持对象标识）。
@@ -978,9 +999,14 @@ def _hoist_if_emit(h: "_HoistState") -> bool:
         # 同名异型：按 JVM 合并点语义取公共祖先 widening；无公共类祖先时回退根类装箱。
         # 合成槽（无声明类型）与 LVT 具名变量同规则——后者如声明为接口、兄弟分支存入
         # 两个不同实现类（InetAddress.createBuiltinInetAddressResolver 的 theResolver：
-        # HostsFileResolver / PlatformResolver，E0308）。同型 / 含基本类型时返回 None，
-        # 不改变既有产物；子类型对齐的旧路径（公共祖先即提升类型）结果相同
-        merged_type = _merged_slot_type(entries, name, block_k, span_end, registry)
+        # HostsFileResolver / PlatformResolver，E0308）。LVT 具名变量仅在存在「不可对齐」
+        # 的兄弟类型时合并（可对齐者——子类型 / 接口载体实现类——仍走下方的值侧对齐旧路径，
+        # 保留载体等精确类型）；同型 / 含基本类型时返回 None
+        merged_type = None
+        if name not in lvt_names or not _all_alignable(entries, name, block_k, span_end,
+                                                        _hoisted_let_type(entries[first_decl_k][1]),
+                                                        registry):
+            merged_type = _merged_slot_type(entries, name, block_k, span_end, registry)
         if merged_type is not None:
             _widen_into_merged(entries, name, block_k, span_end, merged_type, box_object)
             hoisted_type = merged_type
