@@ -209,6 +209,8 @@ class StackSim:
         # 接口不在宏的 all_superclasses 链上（无 From<Child> for Iface），需跳过
         self._is_interface = is_interface or (lambda _s: False)
         self._param_slots: set[int]                  = set()  # 方法参数占用的 slot（类型由签名决定）
+        # 合成槽（无 LVT 名的 local_N）按渲染类型分名：slot → [类型渲染, ...]（首个类型用 local_N）
+        self._synth_slot_types: dict[int, list[str]] = {}
         self.current_offset: int                     = 0    # 当前正在处理的字节码偏移
         self.next_offset: int                        = 0    # 下一条指令偏移（store 后变量作用域起点）
         self._current_depth: int                     = 0
@@ -336,14 +338,32 @@ class StackSim:
                     return (name, rty, from_sig, raw_sig)
         return None
 
-    def _undeclared_slot_name(self, slot: int) -> str:
+    def _synth_slot_name(self, slot: int, ty: 'RsType | None') -> str:
+        """合成槽名：同一槽位上的合成临时变量按类型分名——javac 对 record 模式 / switch
+        模式的合成临时变量在不同分支复用同一槽位存放不同类型（`int` 分量与 `ColoredPoint`
+        记录本身，RecordPatternsTest 实证），同名会在分支提升时合并成一个声明（E0308）。
+        首个类型沿用 `local_N`（既有产物不变），其后每个新类型 `local_N_k`。ty=None → 首名。"""
+        base = f"local_{slot}"
+        if ty is None:
+            return base
+        key = render_type(ty)
+        seen = self._synth_slot_types.setdefault(slot, [])
+        if key not in seen:
+            seen.append(key)
+        k = seen.index(key)
+        return base if k == 0 else f"{base}_{k}"
+
+    def _undeclared_slot_name(self, slot: int, ty: 'RsType | None' = None) -> str:
         """当前偏移没有声明条目覆盖的 slot 的变量名。
         slot 在别的偏移区间有声明（被 Java 变量复用）→ 此处是编译器合成的临时变量
         （for-each 迭代器、synchronized 锁对象），用 slot 编号命名；借用复用者的 Java 名字
-        会让两个不同类型的变量在分支提升时合并成同一个声明。"""
+        会让两个不同类型的变量在分支提升时合并成同一个声明。无 LVT 名的槽同样按槽位
+        命名，且按类型分名（见 _synth_slot_name）。"""
         if self._slot_decls.get(slot) and slot not in self._param_slots:
-            return f"local_{slot}"
-        return _safe_name(self._loc_names.get(slot, f"local_{slot}"))
+            return self._synth_slot_name(slot, ty)
+        if slot in self._loc_names:
+            return _safe_name(self._loc_names[slot])
+        return self._synth_slot_name(slot, ty)
 
     def pop_for_store(self) -> tuple[RsExpr, RsType]:
         """供 xstore 使用的弹栈：不物化 dup 副本——store_local 会把局部变量本身作为物化结果，
@@ -658,7 +678,7 @@ class StackSim:
             # slot 被另一个 Java 变量复用：按新变量的声明名重新 let 声明
             del self.locals[slot]
         elif (slot in self.locals and decl is None and slot not in self._param_slots
-                and self.locals[slot][0] != self._undeclared_slot_name(slot)):
+                and self.locals[slot][0] != self._undeclared_slot_name(slot, ty)):
             # slot 被编译器合成的临时变量复用：与此前的 Java 变量是两个变量
             del self.locals[slot]
         if (slot in self._param_slots and slot in self.locals
@@ -766,7 +786,7 @@ class StackSim:
                     # 名字匹配限定「区间不覆盖当前偏移」的声明条目：命中覆盖当前偏移的条目
                     # （如形参自身的 LVT 条目——恒覆盖整个方法体）会把形参重绑定误判成
                     # 合成变量改名，落死局部 local_N。
-                    name = f"local_{slot}"
+                    name = self._synth_slot_name(slot, ty)
                 self.locals[slot] = (name, ty, True)
                 self._slot_decl_depth[slot] = self._current_depth
                 self._slot_bind_pos[slot] = self.current_offset
@@ -789,7 +809,7 @@ class StackSim:
                 self.stmts.append(AssignStmt(Var(name), _clone_moved_var(expr, ty),
                                              slot=slot, bind_off=self.current_offset))
         else:
-            name = decl_name or self._undeclared_slot_name(slot)
+            name = decl_name or self._undeclared_slot_name(slot, ty)
             self.locals[slot] = (name, ty, True)
             self._slot_decl_depth[slot] = self._current_depth
             self._slot_bind_pos[slot] = self.current_offset
