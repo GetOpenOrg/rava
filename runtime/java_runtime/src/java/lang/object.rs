@@ -295,7 +295,7 @@ impl_vtable_primitive!(i64, "java/lang/Long");
 impl_vtable_primitive!(bool, "java/lang/Boolean");
 impl_vtable_primitive!(i8,  "java/lang/Byte");
 impl_vtable_primitive!(i16, "java/lang/Short");
-impl_vtable_primitive!(u16, "java/lang/Character");
+impl_vtable_primitive!(u16, "java/lang/Character", java_fmt_char);
 impl_vtable_primitive!(f32, "java/lang/Float", java_fmt_f32);
 impl_vtable_primitive!(f64, "java/lang/Double", java_fmt_f64);
 
@@ -330,7 +330,8 @@ impl<T: 'static> ObjectVTable for JvmRef<T> {
             ($t:ty) => { if let Some(x) = v.downcast_ref::<$t>() { return format!("{}", x); } };
         }
         try_fmt!(i32); try_fmt!(i64); try_fmt!(bool);
-        try_fmt!(f32); try_fmt!(f64); try_fmt!(i8); try_fmt!(i16); try_fmt!(u16);
+        try_fmt!(f32); try_fmt!(f64); try_fmt!(i8); try_fmt!(i16);
+        if let Some(x) = v.downcast_ref::<u16>() { return crate::java_fmt_char(*x); }
         std::any::type_name::<T>().to_owned()
     }
 }

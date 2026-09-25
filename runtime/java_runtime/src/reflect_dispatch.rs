@@ -121,17 +121,70 @@ fn is_static_descriptor(class_slash: &str, name: &str, descriptor: &str) -> bool
 
 // ── 实参/返回值的边界 marshalling（分派闭包发射侧共用）─────────────────────
 
+std::thread_local! {
+    /// 最近一次实参拆箱失败的标记：Method.invoke 据此区分「实参不符」（JDK 直接抛
+    /// IllegalArgumentException）与「目标方法抛出」（包装为 InvocationTargetException）。
+    static BAD_ARG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 实参拆箱失败：置标记并返回 IllegalArgumentException（分派闭包的 marshalling 失败出口）。
+pub fn bad_arg() -> crate::error::JvmError {
+    BAD_ARG.with(|b| b.set(true));
+    crate::error::JvmError::illegal_argument("argument type mismatch")
+}
+
+/// 取出并清除实参失败标记（Method.invoke 在分派返回错误时调用）。
+pub fn take_bad_arg() -> bool {
+    BAD_ARG.with(|b| b.replace(false))
+}
+
 /// 装箱 Object → i32（两形态：站点装箱原生盒 Rc<i32> / 翻译 Integer 包装——
 /// 与 field_impl 的 __unbox_int 同一双路径策略，此处作为协议公共面）。
+///
+/// JDK `Method.invoke` 的实参拆箱允许基本类型拓宽（JLS §5.1.2）：Byte / Short / Character
+/// 实参可传给 int 形参——两形态（原生盒 / 翻译包装类）同样接受。
 pub fn unbox_i32(v: &Object) -> Option<i32> {
     if v.0.is_jvm_null() {
         return None;
     }
-    if let Some(b) = v.0.as_any().downcast_ref::<i32>() {
+    let any = v.0.as_any();
+    if let Some(b) = any.downcast_ref::<i32>() {
         return Some(*b);
     }
-    if v.0.__class_name() == "java/lang/Integer" {
-        return v.0.__obj_str().parse::<i32>().ok();
+    if let Some(b) = any.downcast_ref::<i16>() {
+        return Some(*b as i32);
+    }
+    if let Some(b) = any.downcast_ref::<i8>() {
+        return Some(*b as i32);
+    }
+    if let Some(b) = any.downcast_ref::<u16>() {
+        return Some(*b as i32);
+    }
+    match v.0.__class_name() {
+        "java/lang/Integer" | "java/lang/Short" | "java/lang/Byte" => v.0.__obj_str().parse::<i32>().ok(),
+        "java/lang/Character" => unbox_char(v).map(|c| c as i32),
+        _ => None,
+    }
+}
+
+/// 装箱 Object → char（UTF-16 码元）：原生 u16 盒 / 翻译 Character 包装（toString 为该字符）。
+/// char 形参只接受 Character 实参（JDK：int 不窄化为 char）。
+pub fn unbox_char(v: &Object) -> Option<u16> {
+    if v.0.is_jvm_null() {
+        return None;
+    }
+    if let Some(b) = v.0.as_any().downcast_ref::<u16>() {
+        return Some(*b);
+    }
+    if v.0.__class_name() == "java/lang/Character" {
+        let mut buf = [0u16; 2];
+        let s = v.0.__obj_str();
+        let mut chars = s.chars();
+        let c = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+        return c.encode_utf16(&mut buf).first().copied();
     }
     None
 }

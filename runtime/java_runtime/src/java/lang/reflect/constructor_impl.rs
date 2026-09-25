@@ -58,6 +58,8 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object>> Constructor<T> 
         match crate::reflect_dispatch::reflect_invoke(
             &cls_key, "<init>", &desc, Object::default(), &initargs) {
             Ok(v) => Ok(<T as From<Object>>::from(v)),
+            // 实参拆箱失败 → IllegalArgumentException 直接抛出（不包装，JDK 同）
+            Err(e) if crate::reflect_dispatch::take_bad_arg() => Err(e),
             Err(e) => {
                 let ite = crate::java::lang::reflect::InvocationTargetException::new_throwable(
                     <crate::java::lang::Throwable as From<Object>>::from(

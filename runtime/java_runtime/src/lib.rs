@@ -190,6 +190,15 @@ pub fn java_fmt_f64(v: f64) -> String {
     )
 }
 
+/// Java `Character.toString(char)`：UTF-16 码元按字符输出（孤立代理项 → U+FFFD，
+/// 与 String 的 UTF-8 呈现同一替换策略）。原生 char 盒（`Object::from(u16)`）的 toString。
+pub fn java_fmt_char(v: u16) -> String {
+    char::decode_utf16([v]).next()
+        .map(|r| r.unwrap_or('\u{FFFD}'))
+        .map(|c| c.to_string())
+        .unwrap_or_default()
+}
+
 /// Java `Float.toString(float)` 的输出格式（规则同 Double，数字串按 f32 精度）。
 pub fn java_fmt_f32(v: f32) -> String {
     if v.is_nan() {

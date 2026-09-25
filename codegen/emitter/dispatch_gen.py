@@ -48,7 +48,7 @@ _PRIM_UNBOX = {
     'f32': ('unbox_f32', ''),
     'i16': ('unbox_i32', ' as i16'),
     'i8': ('unbox_i32', ' as i8'),
-    'u16': ('unbox_i32', ' as u16'),
+    'u16': ('unbox_char', ''),
 }
 
 
@@ -154,9 +154,11 @@ def _emit_for(class_bin: str, short: str, em) -> 'str | None':
                 # 语义（JDK 对包装类型不符的反射实参同型）
                 arg_exprs.append(
                     f'({disp}::{fn}(&args.get({idx})?)'
-                    f'.ok_or_else(|| JvmError::illegal_argument("bad boxed arg"))?{cast})')
-            elif ty.startswith('JArray'):
-                arg_exprs.append(None)
+                    f'.ok_or_else({disp}::bad_arg)?{cast})')
+            elif ty.startswith('JArray') or '<' in ty:
+                # 数组 / 泛型载体（接口 `List<E>` 等）：Object → 载体的 From 转换
+                # （数组元素类型、接口视图由运行时对象承载，与字节码 checkcast 同语义）
+                arg_exprs.append(f'<{ty} as ::std::convert::From<Object>>::from(args.get({idx})?)')
             else:
                 pbin = _param_bin(descriptor, idx)
                 if pbin and not pbin.startswith('['):
@@ -173,7 +175,8 @@ def _emit_for(class_bin: str, short: str, em) -> 'str | None':
             ret_box = 'Ok(__v)'
         elif inner in _PRIM_UNBOX or inner in ('String',):
             ret_box = 'Ok(Object::from(__v))'
-        elif inner and inner[0].isupper() and '<' not in inner and '&' not in inner:
+        elif inner and inner[0].isupper() and '&' not in inner:
+            # 类 / 接口载体（含泛型实参形态 `List<Object>`）：载体与 Object 双向互转
             ret_box = 'Ok(Object::from(__v))'
         elif inner and inner.startswith('JArray'):
             ret_box = 'Ok(Object::from(__v))'
