@@ -3,7 +3,9 @@ import java.util.*;
 
 public class CsvToTsv {
     public static void main(String[] args) {
-        String testfile = "test.tmp";
+        // 数据文件定点输出到 tests/expected，避免散落运行 cwd
+        new File("tests/expected").mkdirs();
+        String testfile = "tests/expected/test.tmp";
         String content =
             "a,\"b\"\n" +
             "\"a\",\"b\"\"c\"\n" +

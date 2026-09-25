@@ -53,7 +53,9 @@ public class StockTrans implements Serializable {
     }
 
     public static void main(String[] args) {
-        String filename = "stocks.db";
+        // 数据文件定点输出到 tests/expected，避免散落运行 cwd
+        new File("tests/expected").mkdirs();
+        String filename = "tests/expected/stocks.db";
         StockTrans[] transactions = {
             new StockTrans(0, "2006-01-05", "BUY", "RHAT", 100, 35.14f, true),
             new StockTrans(0, "2006-03-28", "BUY", "IBM", 1000, 45f, true),

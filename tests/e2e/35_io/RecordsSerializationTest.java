@@ -8,9 +8,11 @@ public class RecordsSerializationTest {
 	}
 
 	private static void write() {
+		// 数据文件定点输出到 tests/expected，避免散落运行 cwd
+		new File("tests/expected").mkdirs();
 		var point = new CustomSerializableRecord(10, 20);
 
-		try (FileOutputStream fos = new FileOutputStream("record_custom.data");
+		try (FileOutputStream fos = new FileOutputStream("tests/expected/record_custom.data");
 			ObjectOutputStream out = new ObjectOutputStream(fos)) {
 
 			out.writeObject(point);
@@ -23,7 +25,7 @@ public class RecordsSerializationTest {
 	}
 
 	private static void read() {
-		try (FileInputStream fis = new FileInputStream("record_custom.data");
+		try (FileInputStream fis = new FileInputStream("tests/expected/record_custom.data");
 			ObjectInputStream in = new ObjectInputStream(fis)) {
 
 			var readPoint = (CustomSerializableRecord) in.readObject();
