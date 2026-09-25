@@ -362,6 +362,7 @@ class BlockSimulator:
         idom_node = self.nodes.get(self.flow0.idom.get(node.id))
         for slot in list(locals_):
             name, ty, _ = locals_[slot]
+            _dom_used = False
             for p in preds[1:]:
                 other = p.exit_locals.get(slot)
                 if other is None or other[0] != name:
@@ -371,7 +372,49 @@ class BlockSimulator:
                     dom_entry = idom_node.exit_locals.get(slot)
                     if dom_entry is not None and dom_entry[0] == name:
                         locals_[slot] = dom_entry
+                        _dom_used = True
+            else:
+                if _dom_used:
+                    continue
+                # 汇合点各前驱给同名局部不同引用类型、支配者处尚无该绑定（兄弟分支各自首绑定，
+                # 如 switch 各臂存入同一接口的不同实现类）：按 JVM 校验器合并语义取公共祖先，
+                # 无公共类祖先回退根类——与变量提升阶段的合并类型（vars._merged_slot_type）一致，
+                # 汇合后的调用点按合并类型发射（此前沿用首前驱的具体类，提升后变量已是根类 →
+                # 方法调用 E0599，TestBranchLocalMerge 实证）
+                if slot in locals_:
+                    merged = self._join_ref_type(slot, preds)
+                    if merged is not None:
+                        locals_[slot] = (locals_[slot][0], merged, locals_[slot][2])
         node.entry_locals = locals_
+
+    def _join_ref_type(self, slot: int, preds: list):
+        """前驱出口同名局部的引用类型全等 → None（不变）；否则公共类祖先 / 根类。
+        任一侧为基本类型或无类型 → None（不在本规则内）。"""
+        from ..constants import PRIMITIVE_RUST_TYPES as _PRIM
+        from ..instr.hierarchy import _common_ref_type_widening
+        seen: list[str] = []
+        for p in preds:
+            ent = p.exit_locals.get(slot)
+            if ent is None or ent[1] is None:
+                return None
+            r = render_type(ent[1])
+            if r in _PRIM or r == '()':
+                return None
+            if r not in seen:
+                seen.append(r)
+        if len(seen) < 2:
+            return None
+        # 与提升阶段同一判据（vars._all_alignable）：其余类型均可按值侧对齐到首个类型
+        #（子类型 / 接口载体实现类）时维持首前驱类型，不退化为根类
+        from .vars import _forms_alignable
+        if all(_forms_alignable(t, seen[0], self.registry) for t in seen[1:]):
+            return None
+        common = seen[0]
+        for other in seen[1:]:
+            common = _common_ref_type_widening(common, other, self.registry)
+            if common is None:
+                return RsNamed('Object')
+        return RsNamed(common)
 
     # ── 归约 ────────────────────────────────────────────────────────────────
 
