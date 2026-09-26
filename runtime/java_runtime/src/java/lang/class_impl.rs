@@ -733,6 +733,25 @@ impl Class {
         Ok(__record::RECORD_CLASSES.contains(&name.as_str()))
     }
 
+    /// native `Class.forName0(name, initialize, loader, caller)`：按 binary name 取 Class 对象。
+    /// 原生镜像的「可加载类」= 生成闭包内的类（build.rs 修饰符表，含用户类）；数组名
+    /// （`[I` / `[Ljava.lang.String;`）直接构造。未知类名 → `ClassNotFoundException(name)`
+    /// （JDK 同消息）。initialize 不触发 `<clinit>`：原生类初始化在首次静态访问时由类
+    /// 初始化钩子兑现，与 JDK「首次主动使用前完成初始化」的可观测顺序一致。
+    #[jvm_native(upcalls = "java/lang/ClassNotFoundException.<init>:(Ljava/lang/String;)V")]
+    pub fn forName0(name: String, _initialize: bool, _loader: crate::java::lang::ClassLoader,
+                    _caller: Class) -> Result<Class> {
+        let dotted = format!("{}", name);
+        let slash = dotted.replace('.', "/");
+        let known = slash.starts_with('[')
+            || __modifiers::CLASS_MODIFIERS.iter().any(|(n, _)| *n == slash);
+        if !known {
+            let ex = crate::java::lang::ClassNotFoundException::new_str(String::from(dotted.as_str()))?;
+            return Err(ex.into());
+        }
+        Ok(Class::for_class(String::from(slash.as_str())))
+    }
+
     /// native `Class.getRecordComponents0()`：record 分量反射（声明序）。数据源是
     /// java_class! 块的 `record_components` 属性（classfile Record 属性：名字 /
     /// 描述符 / 泛型签名），build.rs 汇总为 RECORD_COMPONENTS 表。查询即构造

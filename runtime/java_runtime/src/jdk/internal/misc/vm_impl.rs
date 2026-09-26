@@ -46,4 +46,12 @@ impl VM {
     pub fn isModuleSystemInited() -> Result<bool> {
         Ok(true)
     }
+
+    /// `latestUserDefinedLoader()`：调用栈上最近的用户定义类加载器。原生二进制无类加载器
+    /// 层级（全部类静态链接进同一镜像）→ null（bootstrap 视图）；消费方
+    /// `ObjectInputStream.resolveClass` 据此以 `Class.forName(name, false, null)` 按名解析。
+    #[jvm_boundary]
+    pub fn latestUserDefinedLoader() -> Result<crate::java::lang::ClassLoader> {
+        Ok(Default::default())
+    }
 }

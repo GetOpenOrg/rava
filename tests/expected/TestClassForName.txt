@@ -1,0 +1,10 @@
+TestClassForName -> TestClassForName array=false
+TestClassForName$Inner -> TestClassForName$Inner array=false
+java.util.ArrayList -> java.util.ArrayList array=false
+java.lang.String -> java.lang.String array=false
+[I -> [I array=true
+[Ljava.lang.String; -> [Ljava.lang.String; array=true
+3-arg bootstrap=java.util.ArrayList same=true true
+CNFE no.such.Clazz
+CNFE int
+CNFE TestClassForName.Inner
