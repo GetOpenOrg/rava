@@ -12,6 +12,7 @@
     python3 scripts/run_tests.py --failed                    # 只跑失败清单（build/failed_tests.txt），PASS 自动出列
     python3 scripts/run_tests.py --skip-failed               # 跳过清单内已知失败（干净面快速迭代）
     python3 scripts/run_tests.py --record-passed             # PASS 即时落盘；中断续跑自动跳过已通过（删清单即从头）
+    python3 scripts/run_tests.py --batch 3/10                # 全量按发现序均分 10 批，跑第 3 批（可与 --record-passed 叠加）
     python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt（并行，-j 控制并发）
     python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比
     python3 scripts/run_tests.py --jdk 25                # 指定 JDK 主版本（javac/java/翻译语料同源）
@@ -139,6 +140,29 @@ def _discover(filter_str: list[str] | None) -> list[Path]:
     if filter_str:
         files = [f for f in files if any(s in str(f) for s in filter_str)]
     return files
+
+
+def _apply_batch(files: list, batch: str | None) -> list:
+    """--batch K/N：按发现序（sorted，跨机一致）均分 N 批取第 K 批（1-based）。
+
+    分批始终基于同一稳定序列——`--record-passed` 的通过集增长**不会**移动
+    批内容（批切分在通过清单过滤之前）；余量摊给前 r 批，len(files) ≥ N 时
+    不会出现空批。"""
+    if not batch:
+        return files
+    m = re.fullmatch(r"(\d+)\s*/\s*(\d+)", batch.strip())
+    if not m:
+        sys.exit(f"[batch] 参数格式应为 K/N（如 --batch 3/10），收到：{batch!r}")
+    k, n = int(m.group(1)), int(m.group(2))
+    if n < 1 or not (1 <= k <= n):
+        sys.exit(f"[batch] 需 1 ≤ K ≤ N，收到 {k}/{n}")
+    q, r = divmod(len(files), n)
+    start = (k - 1) * q + min(k - 1, r)
+    end = start + q + (1 if k <= r else 0)
+    sliced = files[start:end]
+    rng = (f"（{sliced[0].relative_to(E2E)} … {sliced[-1].relative_to(E2E)}）" if sliced else "（空）")
+    print(f"[batch] 第 {k}/{n} 批：共 {len(files)} 例均分，本批 {len(sliced)} 例  {rng}")
+    return sliced
 
 
 def _class_name(java_file: Path) -> str:
@@ -863,7 +887,8 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
                     skip_failed: bool = False,
                     jdk_major: 'int | None' = None,
                     record_passed: bool = False,
-                    passed_path: Path | None = None) -> int:
+                    passed_path: Path | None = None,
+                    batch: str | None = None) -> int:
     failed_path = failed_path or _failed_file_path(None, jdk_major)
     prev_failed = _load_failed(failed_path)
     files = _discover(filter_str)
@@ -876,6 +901,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     elif skip_failed:
         files = [f for f in files if str(f.relative_to(ROOT)) not in prev_failed]
         print(f"[skip-failed] 跳过清单内 {len(prev_failed)} 个已知失败，本次运行 {len(files)} 个")
+    files = _apply_batch(files, batch)
     pratchet = None
     if record_passed:
         prev_passed = _load_failed(passed_path)
@@ -1048,7 +1074,8 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                   skip_failed: bool = False,
                   jdk_major: 'int | None' = None,
                   record_passed: bool = False,
-                  passed_path: Path | None = None) -> int:
+                  passed_path: Path | None = None,
+                  batch: str | None = None) -> int:
     failed_path = failed_path or _failed_file_path(None, jdk_major)
     prev_failed = _load_failed(failed_path)
     files = _discover(filter_str)
@@ -1061,6 +1088,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     elif skip_failed:
         files = [f for f in files if str(f.relative_to(ROOT)) not in prev_failed]
         print(f"[skip-failed] 跳过清单内 {len(prev_failed)} 个已知失败，本次运行 {len(files)} 个")
+    files = _apply_batch(files, batch)
     pratchet = None
     if record_passed:
         prev_passed = _load_failed(passed_path)
@@ -1310,7 +1338,7 @@ def _update_expected_parallel(files: list[Path], jobs: int) -> int:
 def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool, jobs: int,
               deny: list[str], use_failed: bool = False,
               failed_file: str | None = None, skip_failed: bool = False,
-              record_passed: bool = False) -> int:
+              record_passed: bool = False, batch: str | None = None) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -1335,11 +1363,13 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
         return _run_parallel(filter_str, jobs, deny, use_failed=use_failed,
                              failed_path=failed_path,
                              skip_failed=skip_failed, jdk_major=jdk_major,
-                             record_passed=record_passed, passed_path=passed_path)
+                             record_passed=record_passed, passed_path=passed_path,
+                             batch=batch)
     return _run_sequential(filter_str, no_run, deny, use_failed=use_failed,
                            failed_path=failed_path,
                            skip_failed=skip_failed, jdk_major=jdk_major,
-                           record_passed=record_passed, passed_path=passed_path)
+                           record_passed=record_passed, passed_path=passed_path,
+                           batch=batch)
 
 
 def main():
@@ -1360,6 +1390,9 @@ def main():
     ap.add_argument("--record-passed",   action="store_true",
                     help="通过测试写穿记录到 build/passed_tests_jdkN.txt：PASS 即时落盘（中断不丢）、FAIL 即时出列；"
                          "重跑自动跳过已通过，删除清单文件即从头")
+    ap.add_argument("--batch",           metavar="K/N", default=None,
+                    help="批跑：按发现序均分 N 批取第 K 批（1-based，如 --batch 3/10）；"
+                         "分批基于稳定排序，与 --record-passed 叠加时批内容不随通过集增长漂移")
     ap.add_argument("--failed-file",     metavar="PATH", default=None, help="失败清单路径（默认 build/failed_tests.txt）")
     ap.add_argument("--deny",            action="append", default=[], metavar="SPEC",
                     help="拒绝升级（默认全放行，可叠加）：equiv = 任一等价发射点非零即整体失败；"
@@ -1401,7 +1434,8 @@ def main():
     try:
         sys.exit(run_tests(args.filter, args.no_run, args.update_expected, jobs, args.deny,
                            use_failed=args.failed, failed_file=args.failed_file,
-                           skip_failed=args.skip_failed, record_passed=args.record_passed))
+                           skip_failed=args.skip_failed, record_passed=args.record_passed,
+                           batch=args.batch))
     except KeyboardInterrupt:
         # Ctrl-C：失败清单是写穿棘轮（每测即落盘），已完成的结果已保住；
         # 子进程由 SIGINT 直接终止，这里只做安静退出，不打 traceback。
