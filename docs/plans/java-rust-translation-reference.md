@@ -890,7 +890,7 @@ codegen 侧：`aastore` / `astore` 赋值给 Object 类型变量时，生成 `.i
 | 机制 | 生态常规（serde/clap 模式） | 本项目 |
 |------|------------------------------|--------|
 | 派生宏 | 主力：已有 Rust 类型 + 一行注解 → impl | **生成代码 0 个**（唯一采用点 = R-3 `#[derive(Debug)]`，语义恰好兼容）；Clone/PartialEq 因 Java 对象模型语义冲突**不可用**（Clone 须共享存储保 `__identity`，非逐字段克隆） |
-| 过程宏 | 库作者深水区 | **主力**：`java_class!`（块宏，DSL→全套对象模型）、`java_try!`/`java_switch!`、`#[java_synchronized]`、标记三件套 `#[jvm_native]`/`#[jvm_boundary]`/`#[jvm_ext]`（零展开锚点，供 Python 扫描与审计口径） |
+| 过程宏 | 库作者深水区 | **主力**：`java_class!`（块宏，DSL→全套对象模型）、`java_try!`、标记三件套 `#[jvm_native]`/`#[jvm_boundary]`/`#[jvm_ext]`（零展开锚点，供 Python 扫描与审计口径） |
 | 声明式宏 | 内部小模板 | 手写层同构重复：`impl_vtable_primitive!`、`array_elem_exact!`/`array_elem_narrow!`、局部 `try_fmt!` 族 |
 
 ### 17.2 管线环节 × 机制映射（现状 / 已立项 / 新建议）

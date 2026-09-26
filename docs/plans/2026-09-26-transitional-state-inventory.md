@@ -195,7 +195,7 @@
 |---|---|---|---|---|
 | ~~FS-O1~~ ✅ | compatibility.md 多行状态过期（浮点、Object.wait、null 数组、record hashCode、NegativeArraySize、类初始化、泛型擦除身份） | 刷新 | 仅文档 | 新立 |
 | ~~FS-O2~~ ✅ | 注释失真（class_init「thread_local」、多处「协作档位」、monitor 中断「未实现」、thread_impl getState） | 刷新 | 仅文档 | 新立 |
-| FS-O3 | `#[java_synchronized]`（函数级静态 Mutex）、`java_switch!`（equals 链）自称过渡且 codegen 不调用，但 reference 仍列为主力 | 删除或修正文档 | 死代码 | 新立 |
+| ~~FS-O3~~ ✅ | `#[java_synchronized]`（函数级静态 Mutex）、`java_switch!`（equals 链）自称过渡且 codegen 不调用，但 reference 仍列为主力 | 删除或修正文档 | 死代码 | 新立 |
 | FS-O4 | 等价审计只计数，结构化 NearApprox 告警与每类等价等级报告未做 | 完成 compat §2 / §4 契约 | 近似场景静默编译通过 | compat §2 / §4 |
 | FS-O5 | System.Logger 返回静默 Logger | 默认 SimpleConsoleLogger | INFO 及以上日志不输出 | 新立 |
 | FS-O6 | JFR / PerfCounter / CDS / ClassFileDumper 是 no-op 占位 | — | JFR 不可用 | 新立 |

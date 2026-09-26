@@ -2,8 +2,6 @@ use proc_macro::TokenStream;
 
 mod block;
 mod native_attr;
-mod switch_macro;
-mod synchronized;
 mod try_macro;
 
 /// `java_class! { ... }` — 块级宏，封装单个 Java 类的全部 Rust 复杂度。
@@ -15,13 +13,6 @@ pub fn java_class(input: TokenStream) -> TokenStream {
     block::expand(input.into()).into()
 }
 
-/// `java_switch! { expr; arm => body, ... }` — 封装 Java switch 语义。
-/// 支持整数/enum（直接 match）、fallthrough（if-chain + __fall 标志）、String（equals 链）三种模式。
-#[proc_macro]
-pub fn java_switch(input: TokenStream) -> TokenStream {
-    switch_macro::expand(input.into()).into()
-}
-
 /// `java_try! { try { ... } catch (e: T) { ... } }` — 封装 Java try/catch：
 /// 按异常对象的运行时类（含子类）匹配 catch 子句，未匹配则继续向外传播。
 #[proc_macro]
@@ -29,11 +20,6 @@ pub fn java_try(input: TokenStream) -> TokenStream {
     try_macro::expand(input.into()).into()
 }
 
-/// `#[java_synchronized]` — 封装 Java `synchronized` 方法，函数级静态 Mutex 保证互斥。
-#[proc_macro_attribute]
-pub fn java_synchronized(attr: TokenStream, item: TokenStream) -> TokenStream {
-    synchronized::expand(attr.into(), item.into()).into()
-}
 
 /// 标记该方法实现了 Java 字节码中的 `ACC_NATIVE` 方法；静态 native 入口注入类初始化
 /// 触发点（JVMS §5.5，见 native_attr.rs）。
