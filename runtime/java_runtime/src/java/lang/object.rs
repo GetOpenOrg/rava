@@ -16,7 +16,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// java.lang.Object.hashCode()I 默认实现：身份哈希（实例体地址）——与
     /// `System.identityHashCode`、`Object__hashCode_base` 同一来源（`__identity`），
     /// 未覆盖 hashCode 的类满足 `hashCode() == identityHashCode()`（JLS 契约，S-6）。
-    fn hashCode(&self) -> i32 { self.__identity() as usize as i32 }
+    fn hashCode(&self) -> i32 { __identity_hash(self.__identity()) }
 
     /// java.lang.Object.equals(Object)Z 的覆盖入口：引用相等已由调用方（`Object::equals`）判定，
     /// 此处只承载运行时类的覆盖实现；未覆盖的类 → false。
@@ -233,6 +233,21 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
                            _f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> { None }
 }
 
+/// 身份哈希（`Object.hashCode` / `System.identityHashCode` 的唯一来源，FS-M5）：
+/// 实例体地址经 SplitMix64 混合取 31 位——非负、非零（HotSpot markWord 的 31 位 hash 域，
+/// 0 保留为「未计算」，取 0 时换 0xBAD），低位分布均匀（地址对齐使低位恒 0，直接截断
+/// 会让 HashMap 桶分布退化）。对同一实例恒定；实例存活期间地址唯一，故不同存活对象
+/// 的哈希只在混合碰撞时相同（与 HotSpot 随机哈希同等概率级别）。
+#[inline]
+pub fn __identity_hash(id: *const ()) -> i32 {
+    let mut z = (id as usize as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    let v = (z as u32) & 0x7FFF_FFFF;
+    (if v == 0 { 0xBAD } else { v }) as i32
+}
+
 /// `super.clone()`（invokespecial java/lang/Object.clone）的落点。
 /// Object.clone 是 ACC_NATIVE：运行时类未实现 Cloneable 时抛 CloneNotSupportedException，
 /// 否则返回逐字段浅拷贝。
@@ -251,7 +266,7 @@ pub fn Object__clone_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::R
 /// Object.hashCode 是 ACC_NATIVE：身份哈希，取实例体的堆地址（与 `new Object()` 实例一致）。
 #[allow(non_snake_case)]
 pub fn Object__hashCode_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<i32> {
-    Ok(this.__identity() as usize as i32)
+    Ok(__identity_hash(this.__identity()))
 }
 
 /// `super.finalize()`（invokespecial java/lang/Object.finalize）的落点：Object.finalize

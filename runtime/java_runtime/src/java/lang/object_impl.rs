@@ -8,9 +8,9 @@ struct Instance(#[allow(dead_code)] u8);
 impl super::object::ObjectVTable for Instance {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn is_instance_of(&self, type_id: &str) -> bool { type_id == "java/lang/Object" }
-    fn hashCode(&self) -> i32 { self as *const Instance as usize as i32 }
+    fn hashCode(&self) -> i32 { super::object::__identity_hash(self as *const Instance as *const ()) }
     fn __obj_str(&self) -> std::string::String {
-        format!("java.lang.Object@{:x}", self as *const Instance as usize as i32)
+        format!("java.lang.Object@{:x}", self.hashCode())
     }
 }
 
