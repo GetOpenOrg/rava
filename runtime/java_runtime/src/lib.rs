@@ -278,6 +278,28 @@ pub fn _is_jnull<T: 'static>(val: &T) -> bool {
     }
 }
 
+/// getfield / putfield 的接收者判空（JVMS §6.5：objectref 为 null 抛 NullPointerException，
+/// FS-M7）。生成器对非 `this` 接收者发射 `recv.__nn()?.__get_x()`——null 接收者以可捕获的
+/// `Err(NPE)` 完成，而不是读到 null 实例的默认字段值。实现对象为全部 `ObjectVTable`
+/// 载体（宏生成的 wrapper、手写边界类、数组）；`Object` 另有同名固有方法。
+pub trait __NonNull {
+    fn __nn(&self) -> Result<&Self>;
+}
+
+impl<T: crate::java::lang::ObjectVTable> __NonNull for T {
+    #[inline]
+    fn __nn(&self) -> Result<&Self> {
+        if self.is_jvm_null() { Err(JvmError::null_pointer()) } else { Ok(self) }
+    }
+}
+
+impl Object {
+    /// `Object` 接收者的判空（见 [`__NonNull`]）。
+    #[inline]
+    pub fn __nn(&self) -> Result<&Self> {
+        if self.0.is_jvm_null() { Err(JvmError::null_pointer()) } else { Ok(self) }
+    }
+}
 
 /// S-17: typeSwitch String 常量标签判定（SwitchBootstraps 语义 `label.equals(selector)`：
 /// selector 非 String 恒 false）。经运行时类判定 + `__obj_str` 内容比较，不依赖闭包内
@@ -413,6 +435,7 @@ pub mod prelude {
     pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
                          clinit_enter as __clinit_enter, clinit_exit as __clinit_exit};
     pub use super::_is_jnull;
+    pub use super::__NonNull;
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
