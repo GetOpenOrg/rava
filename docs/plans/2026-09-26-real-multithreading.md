@@ -6,7 +6,7 @@
 > - **第一档（§三-A，已实施）**：OS 线程 + 全局解释器锁（GIL）。真实线程、真实挂钟时间、
 >   真实阻塞与唤醒，语义与 JVM 等价；同一时刻只有一个线程执行 Java 代码（无并行加速）。
 >   协作调度与虚拟时钟随之删除。
-> - **第二档（§三-B，远期）**：对象模型 Arc + 原子单元，去掉 GIL 获得并行加速；可观察语义
+> - **第二档（§三-B，进行中）**：对象模型 Arc + 原子单元，去掉 GIL 获得并行加速；可观察语义
 >   不变，属性能档位。第 1 步抽象层（`__Shared` / `__PrimCell` / `__RefSlot` /
 >   `__process_static!`）两档共用。
 
@@ -56,12 +56,25 @@
 | GIL 启用 | 首次派生线程前不启用（单线程程序零开销：安全点仅一次 Relaxed 原子读） |
 
 等价性论证：JLS §17 不要求并行执行；交错只发生在安全点，是 JMM 合法执行集合的子集
-（绿色线程 JVM 同属合规实现）。已知差距：`wait` / `sleep` / `park` 的中断唤醒
-（InterruptedException）未实现；`getState` 在阻塞中仍报 RUNNABLE。
+（绿色线程 JVM 同属合规实现）。原列差距已补：`wait` / `sleep` / `park` 的中断唤醒
+（InterruptedException，`c9931b4`→`fed7032`）、阻塞中 `getState`（BLOCKED / WAITING /
+TIMED_WAITING，`fed7032`）。`availableProcessors` 返回真实核数（FS-T3，公共池按并行度运行）。
 
-验收 e2e：`tests/e2e/60_real_threads/`（7 例，期望由 JVM 生成）+ 既有线程族。
+验收 e2e：`tests/e2e/60_real_threads/`（10 例，期望由 JVM 生成）+ 既有线程族；本机 gil2 12/13
+（余 1 例为磁盘满中断，非语义问题）。
 
-## 三-B、第二档：同步模型抽象层 + 并行后端（远期）
+## 三-B、第二档：同步模型抽象层 + 并行后端（进行中）
+
+**进度（2026-09-26）**
+
+| 步 | 内容 | 状态 |
+|---|---|---|
+| 1 | 抽象层（`__Shared` / `__PrimCell` / `__RefSlot` / `__process_static!` / `__AnyRef` / `__DynFn!` / `__ThreadSafe`） | ✅ 单线程后端逐字节不变 |
+| 2 | 并行后端 feature `mt`：Arc、`AtomicU64` 位单元（SeqCst，`__cas` / `__fetch_update`）、parking_lot `RwLock` 引用槽、`OnceLock` 进程静态 | 🔄 编译错误 3169 → 408（余为泛型形参 / 祖先转换形参缺 `Send + Sync` 约束，`1ba3351` 已补，mtchk2 复核） |
+| 3 | 类初始化 JVMS §5.5 协议 | ✅ 随第一档实施（`gil.rs` clinit_enter / clinit_exit，两档共用） |
+| 4 | 线程 / 时间 / park / 中断 | ✅ 随第一档实施（与后端无关） |
+| 5 | `mt` 通过全量 e2e 后设为默认，删除 GIL | ⬜ `JAVA_RTA_MT=1` 切换脚本已就绪（`6e1cd73`） |
+
 
 **第 1 步：抽象层（行为零变化，已完成）。** 运行时新增 `sync_model` 模块，定义对象模型原语的类型
 别名与操作：`Shared<T>`（Rc / Arc）、`FieldPrim<T>`（Cell / 原子）、`FieldRef<T>`（RefCell /
