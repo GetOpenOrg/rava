@@ -179,3 +179,9 @@
 |---|---|---|---|
 | S-10 / #43 | 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | ✅ 本机 JDK21 dev1 实测 | `jvm_native` 属性宏向返回 Result 的静态 native 注入 `Self::__class_init()?`（`no_class_init` 豁免）；codegen `#[init_interfaces]`（JVMS §5.5 step 7）由宏消费（`ee3de51`）。ClinitOrder / StaticInitTest / TestInitOrder / TestInterfaceInitOrder / TestStaticInit PASS |
 | S-7 | record `hashCode` 恒为 `Ok(0)` | ✅ 本机 JDK21 dev1 实测 | 按 ObjectMethods 31 多项式生成（`1d2af2f`）；TestRecordHashCode / TestRecord / TestRecordAdvanced / TestRecordPattern PASS |
+
+## 2026-09-26 归档批次（五）
+
+| # | 任务 | 状态 | 证据 |
+|---|---|---|---|
+| N4（扩大口径） | TypeIR 扩大口径 type_surgery_ext 21→0 | ✅ 生成树逐字节验收 | `d6822f0`：调用点文本解剖收口到解析层 type_args（rust_type_head / rust_type_partition / rust_type_arg_text / is_array_carrier / is_vec_type，语义逐点相同）。验收集 27 例基线 `d6c7960` 对照逐字节一致、raw_expr/raw_stmt 逐测试相同、唯一差异 type_surgery_ext 21→0；单元测试 140/140 |
