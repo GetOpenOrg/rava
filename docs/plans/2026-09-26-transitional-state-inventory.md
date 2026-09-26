@@ -130,7 +130,7 @@
 | FS-C1 | 自定义 ClassLoader / Agent / 运行期生成类不支持 | 声明为不可等价 | — | compat §1 |
 | FS-C2 | ClassLoader 是恒等对象，资源查询恒缺席；`getClassLoader` 恒返回 null | 分层加载器 + classpath 资源 | `getResource` / `getResourceAsStream` 恒为 null | 部分 |
 | FS-C3 | 全局只有一个无名模块（JDK 类也在其中）；模块访问检查恒真 | — | `String.class.getModule().getName()` 为 null（JVM 给 "java.base"） | 新立 |
-| FS-C4 | 服务目录恒为空 | 静态服务表（含用户 `META-INF/services`） | ServiceLoader 找不到任何 provider | 新立 |
+| FS-C4 | 服务目录恒为空 | 静态服务表（含用户 `META-INF/services`），方案 `2026-09-26-service-loader-static-catalog.md` | ServiceLoader 找不到任何 provider | 新立（方案已出） |
 | ~~FS-C5~~ ✅ `6d885a2` | `forName(..., true)` 不立即初始化 | — | 初始化时机不同 | S-66 |
 
 ## 八、异常与栈回溯
