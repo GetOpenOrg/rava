@@ -95,7 +95,11 @@ LOGS_DIR = _versioned(OUT) / "logs"
 
 
 def _cargo_profile_args() -> list[str]:
-    return ["--release"] if PROFILE_DIR == "release" else []
+    args = ["--release"] if PROFILE_DIR == "release" else []
+    # JAVA_RTA_MT=1：并行后端（#42 最终态，java_runtime feature `mt`：Arc + 原子单元 + 读写锁，去 GIL）
+    if os.environ.get('JAVA_RTA_MT'):
+        args += ["--features", "java_runtime/mt"]
+    return args
 
 
 def _jdk_tool(name: str) -> str:
@@ -346,7 +350,7 @@ def _print_env_header() -> None:
             return "git ?"
 
     _flag_vars = ("PYTHONHASHSEED", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS",
-                  "JAVA_RTA_DEBUG", "JAVA_RTA_STRICT", "JAVA_RTA_BFS_EDGE_AUDIT")
+                  "JAVA_RTA_DEBUG", "JAVA_RTA_STRICT", "JAVA_RTA_BFS_EDGE_AUDIT", "JAVA_RTA_MT")
     _flags = " ".join(f"{k}={os.environ.get(k, '(unset)')}" for k in _flag_vars)
     print(f"[meta] git {_git_desc()} | profile={PROFILE_DIR} | {_flags} | out={OUT}")
 

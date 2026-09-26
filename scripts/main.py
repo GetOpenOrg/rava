@@ -288,7 +288,8 @@ def main():
         # CARGO_INCREMENTAL=0：宽闭包增量元数据是 OOM 压垮点（服务器 SIGKILL 实证）；scratch 每轮重生成，关闭无损失
         env = dict(os.environ, CARGO_TARGET_DIR=_SHARED_TARGET, CARGO_INCREMENTAL='0')
         t0 = time.perf_counter()
-        r = subprocess.run(['cargo', 'run', '--bin', bin_name],
+        r = subprocess.run(['cargo', 'run', '--bin', bin_name,
+                            *(['--features', 'java_runtime/mt'] if os.environ.get('JAVA_RTA_MT') else [])],
                            cwd=out_dir, env=env)
         t_run = time.perf_counter() - t0
         print(f"[time] cargo run   {fmt_dur(t_run)}")
