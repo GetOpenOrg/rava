@@ -83,6 +83,8 @@ def jump_condition(op: str, sim: StackSim, registry=None) -> Cond:
 
 _INT_TYPES = frozenset({'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64'})
 _SCALAR_TYPES = _INT_TYPES | {'bool', 'f32', 'f64'}
+# JVM 计算类型为 int 的 Rust 标量（byte / short / char / int）
+_JVM_INT_FAMILY = frozenset({'i8', 'i16', 'u16', 'i32'})
 _NULL_EXPRS = frozenset({'Object::default()', 'Clone::clone(&Object::default())'})
 
 
@@ -141,6 +143,15 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
         # 回落 from_any。
         from ..instr.coerce import _coerce_to_object
         ev = _coerce_to_object(ev, ety_str, registry, class_tparams, clone=False)
+    elif ty_str in _JVM_INT_FAMILY and ety_str in _JVM_INT_FAMILY:
+        # 两臂同属 JVM 计算类型 int（byte/short/char 局部加载到栈上即 int，JVMS §2.11.1）
+        # 而 Rust 类型不同：汇合值是 int——两臂拓宽到 i32。按首臂收窄会截断另一臂的
+        # int 运算结果（`b >= 0 ? b : b + 256`，b 为 byte → 256 偏移被 as i8 灭掉）。
+        if ty_str != 'i32':
+            tv = f"({tv} as i32)"
+        if ety_str != 'i32':
+            ev = f"({ev} as i32)"
+        ty = _str_to_rs_type('i32')
     elif ty_str in _SCALAR_TYPES or ety_str in _SCALAR_TYPES:
         ev = f"({ev} as {ty_str})"
     elif _common_ref_type(ty_str, ety_str, registry):

@@ -1,0 +1,7 @@
+hex 0 5 7f ff 80 a9 
+unsigned 254 9
+short 69995 12
+stored r narrowed 57
+arg [x] ret Mm
+concat qA
+arrays qs 997
