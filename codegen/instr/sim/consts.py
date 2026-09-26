@@ -27,8 +27,17 @@ def sim_consts(ins, sim, class_name, registry) -> bool:
             # comment 由 classfile._ldc_str 构造，值为常量池解码原样（无行尾
             # 换行附加）——不得 rstrip：尾部 \n 是常量内容（文本块尾行、
             # joining("\n") 等），剥掉会把 "\n" 常量发射成空串
-            lit = _escape_str(comment[7:])
-            sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
+            _val = comment[7:]
+            if any(0xD800 <= ord(ch) <= 0xDFFF for ch in _val):
+                # 含孤立代理项：Rust 字符串字面量无法表示（&str 必须是合法 UTF-8），
+                # 以 UTF-16 码元数组构造（同样经常量池驻留，JLS §3.10.5）
+                _b = _val.encode('utf-16-le', 'surrogatepass')
+                _units = ', '.join(f'0x{int.from_bytes(_b[k:k + 2], "little"):04X}'
+                                   for k in range(0, len(_b), 2))
+                sim.push(Lit(f'String::from_utf16_lit(&[{_units}])'), RsNamed('String'))
+            else:
+                lit = _escape_str(_val)
+                sim.push(Lit(f'String::from("{lit}")'), RsNamed('String'))
         elif comment.startswith('int '):    sim.push(Lit(comment[4:].strip() + 'i32'), I32)
         elif comment.startswith('float '): sim.push(Lit(_float_lit(comment[6:].strip(), 'f32')), F32)
         elif comment.startswith('long '):  sim.push(Lit(comment[5:].strip() + 'i64'), I64)

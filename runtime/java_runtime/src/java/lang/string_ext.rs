@@ -67,6 +67,30 @@ impl std::fmt::Display for String {
     }
 }
 
+impl String {
+    /// 字面量加载路径的 UTF-16 码元形态：常量含孤立代理项（`"\uD83D"`）时 codegen 发射本
+    /// 构造（Rust `&str` 无法表示孤立代理项）。与 `From<&str>` 同样经常量池驻留（JLS §3.10.5）。
+    pub fn from_utf16_lit(units: &[u16]) -> Self {
+        let mut inst = String::default();
+        inst._init_not_null();
+        if units.iter().all(|u| *u <= 0xFF) {
+            inst.__set_value(JArray::from(units.iter().map(|u| *u as u8 as i8).collect::<Vec<i8>>()));
+            inst.__set_coder(0i8);
+        } else {
+            let big_endian = cfg!(target_endian = "big");
+            let mut bytes: Vec<i8> = Vec::with_capacity(units.len() * 2);
+            for &u in units {
+                let (first, second) = if big_endian { ((u >> 8) as u8, u as u8) } else { (u as u8, (u >> 8) as u8) };
+                bytes.push(first as i8);
+                bytes.push(second as i8);
+            }
+            inst.__set_value(JArray::from(bytes));
+            inst.__set_coder(1i8);
+        }
+        inst.__interned()
+    }
+}
+
 impl From<&str> for String {
     /// 字面量加载路径（ldc 发射形态 `String::from("...")`，S-6）：Java 字符串
     /// 字面量属于常量池驻留项，故经全局驻留表取规范实例——相同内容的字面量

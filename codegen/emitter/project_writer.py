@@ -89,7 +89,11 @@ def _write(path: str, content: str) -> None:
         except Exception:
             pass
     _WRITTEN_THIS_RUN.add(path)
-    with open(path, 'w') as f:
+    # 孤立代理项（常量池解码保留）只允许经 String::from_utf16_lit 码元形态进入源码；
+    # 其余位置残留的一律替换为 U+FFFD 落盘（Rust 源文件必须是合法 UTF-8，防转译崩溃）
+    if any(0xD800 <= ord(ch) <= 0xDFFF for ch in content):
+        content = ''.join('\ufffd' if 0xD800 <= ord(ch) <= 0xDFFF else ch for ch in content)
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
 
 

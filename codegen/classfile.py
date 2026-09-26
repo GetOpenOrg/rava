@@ -184,9 +184,12 @@ def _decode_mutf8(b: bytes) -> str:
     `errors='replace'` 把 😀 的 6 字节吞成 6 个 U+FFFD——非 BMP 字面量
     在转译期即丢码点（S-19 #3）。
 
-    解码出 UTF-16 码元序列后把合法代理对合并为码点；孤立代理与残缺
-    序列按 UTF-8 惯例替换为 U+FFFD（javac 产出的常量池不会出现，防御
-    性兜底，同时保证产出可写入 UTF-8 文本的合法 str）。"""
+    解码出 UTF-16 码元序列后把合法代理对合并为码点；**孤立代理项原样保留**
+    为 Python 代理字符（Java 字面量 `"\\uD83D"` 合法，javac 原样编入常量池——
+    替换为 U+FFFD 会改变字符串内容，TestStreamEncoderCharsets 揭出）。发射
+    侧按需处理：ldc 字符串常量含孤立代理项时以 UTF-16 码元数组构造
+    （instr/sim/consts.py），落盘兜底替换（emitter/project_writer._write）。
+    残缺字节序列仍替换为 U+FFFD（非法常量池，防御性）。"""
     units: list[int] = []
     i, n = 0, len(b)
     while i < n:
@@ -212,7 +215,7 @@ def _decode_mutf8(b: bytes) -> str:
             out.append(chr(0x10000 + ((u - 0xD800) << 10) + (units[j + 1] - 0xDC00)))
             j += 2
         elif 0xD800 <= u <= 0xDFFF:
-            out.append('\ufffd')
+            out.append(chr(u))
             j += 1
         else:
             out.append(chr(u))
