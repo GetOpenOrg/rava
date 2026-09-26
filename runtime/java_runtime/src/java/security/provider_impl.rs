@@ -8,7 +8,7 @@ use crate::prelude::*;
 use super::provider::implref::Provider;
 use std::collections::HashMap;
 
-std::thread_local! {
+crate::__process_static! {
     static PROVIDERS: crate::sync_model::__RefSlot<HashMap<&'static str, Provider>> =
         crate::sync_model::__RefSlot::new(HashMap::new());
 }

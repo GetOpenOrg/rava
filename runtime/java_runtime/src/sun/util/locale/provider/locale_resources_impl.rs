@@ -19,7 +19,7 @@ use std::collections::HashMap;
 const FORMAT_DATA_BASE: &str = "sun/text/resources/cldr/FormatData";
 const FORMAT_DATA_EXT: &str = "sun/text/resources/cldr/ext/FormatData";
 
-std::thread_local! {
+crate::__process_static! {
     /// locale 候选键（`lang_Script_REGION_variant`）→ 已串好父链的最具体束。
     static NUMBER_FORMAT_DATA: crate::sync_model::__RefSlot<HashMap<std::string::String, ResourceBundle>> =
         crate::sync_model::__RefSlot::new(HashMap::new());

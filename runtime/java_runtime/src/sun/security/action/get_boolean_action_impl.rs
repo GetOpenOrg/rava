@@ -9,7 +9,7 @@ use crate::java::lang::Boolean;
 // 系统属性表：原生二进制未提供 -D 注入机制，默认为空 —— 任何属性都不存在，
 // getBoolean 恒为 false（这正是 java.util.Arrays.useLegacyMergeSort 关闭、
 // 排序走 TimSort 的默认语义）。后续 System.getProperty 手写时在此对接或迁移。
-thread_local! {
+crate::__process_static! {
     static SYSTEM_PROPERTIES: crate::sync_model::__RefSlot<
         std::collections::HashMap<std::string::String, std::string::String>
     > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());

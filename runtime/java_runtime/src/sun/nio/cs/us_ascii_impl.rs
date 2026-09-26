@@ -28,7 +28,7 @@ impl US_ASCII {
     /// static final INSTANCE：进程内唯一实例（JDK `<clinit>` 的 new 缓存）。
     #[jvm_boundary]
     pub fn INSTANCE() -> Result<US_ASCII> {
-        thread_local! {
+        crate::__process_static! {
             static INSTANCE: US_ASCII = US_ASCII::new().unwrap();
         }
         Ok(INSTANCE.with(Clone::clone))

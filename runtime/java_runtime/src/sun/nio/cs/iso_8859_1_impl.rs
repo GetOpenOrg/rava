@@ -26,7 +26,7 @@ impl ISO_8859_1 {
     /// static final INSTANCE：进程内唯一实例（JDK `<clinit>` 的 new 缓存）。
     #[jvm_boundary]
     pub fn INSTANCE() -> Result<ISO_8859_1> {
-        thread_local! {
+        crate::__process_static! {
             static INSTANCE: ISO_8859_1 = ISO_8859_1::new().unwrap();
         }
         Ok(INSTANCE.with(Clone::clone))

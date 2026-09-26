@@ -6,7 +6,7 @@
 //!   - `fn __clinit() -> Result<()>`   `<clinit>` 字节码的翻译
 //!
 //! 宏把它们展开为：
-//!   - 线程局部存储（`thread_local!` + `RefCell<Option<T>>`，无 `static mut` / unsafe）
+//!   - 进程级存储（`__process_static!`，单线程后端即 `thread_local!` + `RefCell<Option<T>>`，无 `static mut` / unsafe）
 //!   - `NAME()` / `set_NAME(v)` 访问器：入口先触发 `__class_init()`
 //!   - `__class_init()`：状态机保证 `<clinit>` 恰好执行一次；初始化进行中的同线程递归
 //!     访问立即返回（JVMS §5.5 步骤 3）；先初始化父类（步骤 7）；`<clinit>` 抛异常后类
@@ -87,7 +87,7 @@ pub(crate) fn expand_statics(
         let cell = format_ident!("__STATIC_{}_{}", struct_ident, name);
         let setter = format_ident!("set_{}", name);
         storage.push(quote! {
-            ::std::thread_local! {
+            __process_static! {
                 #[allow(non_upper_case_globals)]
                 static #cell: __RefSlot<::std::option::Option<#ty>> =
                     const { __RefSlot::new(::std::option::Option::None) };
@@ -135,7 +135,7 @@ pub(crate) fn expand_class_init(
 ) -> (TokenStream2, TokenStream2) {
     let state = format_ident!("__CLINIT_STATE_{}", struct_ident);
     let storage = quote! {
-        ::std::thread_local! {
+        __process_static! {
             #[allow(non_upper_case_globals)]
             static #state: __PrimCell<u8> = const { __PrimCell::new(0) };
         }

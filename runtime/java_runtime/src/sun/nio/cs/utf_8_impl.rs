@@ -18,7 +18,7 @@ impl UTF_8 {
     /// static final INSTANCE：进程内唯一的 UTF-8 charset 实例。
     #[jvm_boundary]
     pub fn INSTANCE() -> Result<UTF_8> {
-        thread_local! {
+        crate::__process_static! {
             static INSTANCE: UTF_8 = UTF_8::new().unwrap();
         }
         Ok(INSTANCE.with(Clone::clone))

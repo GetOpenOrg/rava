@@ -119,7 +119,7 @@ pub fn decode_value(text: &str) -> AnnotationValue {
 /// 注解工厂：元素值序列 → 注解实例（合成代理的 from_values）。
 pub type AnnotationFactory = Rc<dyn Fn(&[(String, AnnotationValue)]) -> Result<Object>>;
 
-std::thread_local! {
+crate::__process_static! {
     static FACTORIES: crate::sync_model::__RefSlot<HashMap<String, AnnotationFactory>> =
         crate::sync_model::__RefSlot::new(HashMap::new());
 }

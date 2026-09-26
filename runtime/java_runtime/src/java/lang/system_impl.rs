@@ -142,7 +142,7 @@ impl System {
         sun/nio/cs/UTF_8.INSTANCE:Lsun/nio/cs/UTF_8;
     ")]
     pub fn out() -> Result<PrintStream> {
-        thread_local! {
+        crate::__process_static! {
             static STDOUT: PrintStream = new_std_print_stream(1);
         }
         Ok(STDOUT.with(Clone::clone))
@@ -156,7 +156,7 @@ impl System {
         sun/nio/cs/UTF_8.INSTANCE:Lsun/nio/cs/UTF_8;
     ")]
     pub fn err() -> Result<PrintStream> {
-        thread_local! {
+        crate::__process_static! {
             static STDERR: PrintStream = new_std_print_stream(2);
         }
         Ok(STDERR.with(Clone::clone))

@@ -18,7 +18,7 @@ impl Class {
     /// 同模块恒真）。模块名/层级的完整语义不在档 A 面内。
     #[jvm_boundary]
     pub fn getModule(&self) -> Result<Module> {
-        thread_local! {
+        crate::__process_static! {
             static THE_MODULE: RefCell<Option<Module>> = const { RefCell::new(None) };
         }
         Ok(THE_MODULE.with(|cell| {
@@ -35,7 +35,7 @@ impl Class {
     /// （`Integer.TYPE == int.class` 的身份语义），首次请求时创建。
     #[jvm_native]
     pub fn getPrimitiveClass(name: String) -> Result<Class> {
-        thread_local! {
+        crate::__process_static! {
             static PRIMITIVES: RefCell<HashMap<std::string::String, Class>> = RefCell::new(HashMap::new());
         }
         let key = format!("{}", name);
@@ -58,7 +58,7 @@ impl Class {
     /// isAssignableFrom 的层次查询在运行时经 build.rs 生成的层次表进行，
     /// 此处不再携带/登记超类型数据。
     pub fn for_class(binary_name: String) -> Class {
-        thread_local! {
+        crate::__process_static! {
             static CLASSES: RefCell<HashMap<std::string::String, Class>> =
                 RefCell::new(HashMap::new());
         }

@@ -8,7 +8,7 @@ use crate::prelude::*;
 use super::jca_util::implref::JCAUtil;
 use crate::java::security::secure_random::implref::SecureRandom;
 
-std::thread_local! {
+crate::__process_static! {
     static DEF: crate::sync_model::__RefSlot<Option<SecureRandom>> = crate::sync_model::__RefSlot::new(None);
 }
 

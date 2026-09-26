@@ -294,7 +294,7 @@ impl PartialEq for MutexHolder {
 
 type ConstantGetter = crate::sync_model::__Shared<dyn Fn() -> Result<Object>>;
 
-std::thread_local! {
+crate::__process_static! {
     static CONSTANT_DIRECTORY: crate::sync_model::__RefSlot<
         std::collections::HashMap<std::string::String, Vec<(std::string::String, ConstantGetter)>>
     > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
@@ -344,7 +344,7 @@ pub fn constant_directory_universe(binary_name: &str) -> Option<Vec<Object>> {
 
 pub type ClassInitHook = crate::sync_model::__Shared<dyn Fn() -> Result<()>>;
 
-std::thread_local! {
+crate::__process_static! {
     static CLASS_INIT_HOOKS: crate::sync_model::__RefSlot<
         std::collections::HashMap<std::string::String, ClassInitHook>
     > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
@@ -384,6 +384,7 @@ pub mod prelude {
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
     pub use super::sync_model::{__PrimCell, __RefSlot, __Shared};
+    pub use crate::__process_static;
     pub use super::_is_jnull;
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;

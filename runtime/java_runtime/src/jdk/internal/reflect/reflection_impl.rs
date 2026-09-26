@@ -8,7 +8,7 @@ use crate::java::util::Set;
 use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 
-thread_local! {
+crate::__process_static! {
     /// 字段过滤登记表：声明类 binary name（斜线形态）→ 对反射字段枚举隐藏
     /// 的字段名集合。`registerFieldsToFilter` 写入；`Class.getDeclaredFields`
     /// （复数形态，class_impl.rs）消费——JDK 的 fieldFilterMap 协议：隐藏类

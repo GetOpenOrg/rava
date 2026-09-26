@@ -186,7 +186,7 @@ impl ObjectVTable for NativeLocaleAdapter {
 
 /// 适配器单例视图（线程内唯一——JDK 的 adapterInstances 缓存语义，身份稳定）。
 fn _adapter_view() -> LocaleProviderAdapter {
-    thread_local! {
+    crate::__process_static! {
         static ADAPTER: LocaleProviderAdapter = {
             let rc = Rc::new(NativeLocaleAdapter);
             LocaleProviderAdapter::__from_parts(
@@ -201,7 +201,7 @@ fn _adapter_view() -> LocaleProviderAdapter {
 
 /// NumberFormatProvider 单例视图（JDK 的 CLDR 适配器在基类构造时创建并缓存）。
 fn _provider_view() -> Result<NumberFormatProvider> {
-    thread_local! {
+    crate::__process_static! {
         static PROVIDER: RefCell<Option<NumberFormatProvider>> = const { RefCell::new(None) };
     }
     PROVIDER.with(|slot| {

@@ -16,7 +16,7 @@ impl Integer {
     /// 默认 [-128, 127]。
     #[jvm_native]
     pub fn valueOf_i(i: i32) -> Result<Integer> {
-        thread_local! {
+        crate::__process_static! {
             static CACHE: RefCell<Vec<Integer>> = RefCell::new(
                 (-128i32..=127i32).map(|v| {
                     let mut boxed = Integer::default();

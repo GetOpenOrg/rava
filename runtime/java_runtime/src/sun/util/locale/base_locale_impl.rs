@@ -28,7 +28,7 @@ fn constants() -> &'static [(&'static str, &'static str); 19] {
     if crate::jdk_feature() >= 22 { &CONSTANTS_JDK25 } else { &CONSTANTS_JDK21 }
 }
 
-thread_local! {
+crate::__process_static! {
     static CONSTANT_BASE_LOCALES: std::cell::OnceCell<JArray<BaseLocale>> = std::cell::OnceCell::new();
 }
 

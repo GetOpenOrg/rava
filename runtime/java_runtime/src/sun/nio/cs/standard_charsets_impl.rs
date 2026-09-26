@@ -11,7 +11,7 @@ use crate::prelude::*;
 use super::standard_charsets::implref::StandardCharsets;
 use crate::java::nio::charset::Charset;
 
-std::thread_local! {
+crate::__process_static! {
     static STANDARD: crate::sync_model::__RefSlot<Vec<Charset>> = crate::sync_model::__RefSlot::new(Vec::new());
 }
 

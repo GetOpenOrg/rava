@@ -24,7 +24,7 @@ pub struct ServiceEntry {
     pub ctor: ServiceCtor,
 }
 
-std::thread_local! {
+crate::__process_static! {
     static SERVICES: crate::sync_model::__RefSlot<Vec<ServiceEntry>> = crate::sync_model::__RefSlot::new(Vec::new());
 }
 

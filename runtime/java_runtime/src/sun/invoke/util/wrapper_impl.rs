@@ -27,7 +27,7 @@ const CONSTANTS: &[(&str, u16, &str, &str, &str, &str)] = &[
     ("VOID",    b'V' as u16, "void",    "java/lang/Void",    "Void",    "void"),
 ];
 
-thread_local! {
+crate::__process_static! {
     /// 常量单例池（与 CONSTANTS 同序）。
     static SINGLETONS: RefCell<Vec<Wrapper>> = const { RefCell::new(Vec::new()) };
 }

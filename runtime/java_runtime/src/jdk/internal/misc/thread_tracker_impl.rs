@@ -13,7 +13,7 @@ use crate::java::lang::Thread;
 use crate::sync_model::__RefSlot as RefCell;
 use std::collections::{HashMap, HashSet};
 
-std::thread_local! {
+crate::__process_static! {
     /// tracker 身份 → 已登记线程身份集合。
     static TRACKED: RefCell<HashMap<usize, HashSet<usize>>> = RefCell::new(HashMap::new());
 }

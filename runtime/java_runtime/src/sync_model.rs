@@ -15,3 +15,14 @@ pub type __PrimCell<T> = std::cell::Cell<T>;
 
 /// 引用字段 / 可变槽（单线程：`RefCell`；多线程：锁单元，同名 `borrow` / `borrow_mut` / `replace`）。
 pub type __RefSlot<T> = std::cell::RefCell<T>;
+
+/// 进程级存储（单线程：`thread_local!`；多线程：全局 `OnceLock` 单元，同名 `with` 访问）。
+///
+/// 语义为「全进程一份」：运行时登记表、类的静态字段与初始化状态、驻留表等。真正按线程
+/// 区分的状态（当前线程、监视器持有、InternalLock 守卫、拆箱失败标记）仍直写
+/// `thread_local!`，与本宏区分开来，第 2 步 mt 后端只替换本宏的展开。
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __process_static {
+    ($($t:tt)*) => { ::std::thread_local! { $($t)* } };
+}

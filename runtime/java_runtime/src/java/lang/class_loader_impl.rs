@@ -16,7 +16,7 @@ impl ClassLoader {
     /// 系统类加载器单例（JDK: ClassLoader.scl，initSystemClassLoader 填充）。
     #[jvm_boundary]
     pub fn getSystemClassLoader() -> Result<ClassLoader> {
-        thread_local! {
+        crate::__process_static! {
             static SCL: ClassLoader = build_system_class_loader();
         }
         Ok(SCL.with(Clone::clone))

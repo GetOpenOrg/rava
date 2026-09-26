@@ -108,7 +108,7 @@ impl StreamEncoder {
     /// UTF-16 编码器的 BOM 只在流首写出一次（JDK UnicodeEncoder 的 needsMark 状态）：
     /// 首次调用返回 true 并登记本编码器身份。
     fn take_bom(&self) -> bool {
-        std::thread_local! {
+        crate::__process_static! {
             static BOM_WRITTEN: crate::sync_model::__RefSlot<std::collections::HashSet<usize>> =
                 crate::sync_model::__RefSlot::new(std::collections::HashSet::new());
         }

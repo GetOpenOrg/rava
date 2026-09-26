@@ -31,7 +31,7 @@ impl ClassLoaders {
 /// 具名空加载器单例（identity 用途，name 恒定）。
 fn named_loader(name: &str) -> crate::java::lang::ClassLoader {
     use crate::sync_model::__RefSlot as RefCell;
-    thread_local! {
+    crate::__process_static! {
         static PLATFORM: RefCell<std::collections::HashMap<std::string::String, crate::java::lang::ClassLoader>> =
             RefCell::new(std::collections::HashMap::new());
     }

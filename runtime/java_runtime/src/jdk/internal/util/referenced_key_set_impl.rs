@@ -13,7 +13,7 @@ use super::referenced_key_set::ReferencedKeySet;
 use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 
-thread_local! {
+crate::__process_static! {
     /// 驻留名单：set 实例身份（Rc 指针）→ 已驻留元素（Object 形态）。
     static TABLES: RefCell<HashMap<usize, Vec<Object>>> = RefCell::new(HashMap::new());
 }

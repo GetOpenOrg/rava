@@ -17,7 +17,7 @@ use std::collections::HashMap;
 /// 束类构造闭包（调用翻译出的无参构造器）。
 pub type BundleCtor = fn() -> Result<Object>;
 
-std::thread_local! {
+crate::__process_static! {
     static BUNDLES: crate::sync_model::__RefSlot<HashMap<&'static str, BundleCtor>> =
         crate::sync_model::__RefSlot::new(HashMap::new());
 }

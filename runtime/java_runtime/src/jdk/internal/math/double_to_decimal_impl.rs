@@ -384,7 +384,7 @@ fn _chars_to_string(bytes: &JArray<i8>, n: i32) -> Result<String> {
 /// JDK 25 `putDecimal` 的两个编码单例（`ToDecimal.latin1` 标志的承载）：
 /// 内部边界类 <clinit> 不翻译，单例在此惰性构造——线程内唯一身份（JVM
 /// static final 语义），latin1 判定按对象身份比对 LATIN1 单例。
-thread_local! {
+crate::__process_static! {
     static __ENCODERS: (DoubleToDecimal, DoubleToDecimal) = {
         let mut l = DoubleToDecimal::default();
         l._init_not_null();

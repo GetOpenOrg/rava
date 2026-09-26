@@ -40,7 +40,7 @@ use crate::sync_model::__Shared as Rc;
 pub type ReflectDispatch =
     Rc<dyn Fn(&str, &str, Object, &JArray<Object>) -> Option<Result<Object>>>;
 
-std::thread_local! {
+crate::__process_static! {
     static DISPATCHERS: crate::sync_model::__RefSlot<HashMap<String, ReflectDispatch>> =
         crate::sync_model::__RefSlot::new(HashMap::new());
 }
@@ -60,7 +60,7 @@ pub fn register_method_dispatch(dispatchers: &[(&str, ReflectDispatch)]) {
 pub type FieldDispatch =
     Rc<dyn Fn(&str, Object, Option<Object>) -> Option<Result<Object>>>;
 
-std::thread_local! {
+crate::__process_static! {
     static FIELD_DISPATCHERS: crate::sync_model::__RefSlot<HashMap<String, FieldDispatch>> =
         crate::sync_model::__RefSlot::new(HashMap::new());
 }
@@ -90,7 +90,7 @@ pub fn final_field(name: &str) -> crate::error::JvmError {
     crate::error::JvmError::illegal_argument(&format!("Can not set final field {}", name))
 }
 
-std::thread_local! {
+crate::__process_static! {
     /// 序列化构造器登记（构造器对象身份 → 目标类 binary name，N2）：
     /// ReflectionFactory.newConstructorForSerialization 返回的构造器元数据属于首个不可序列化
     /// 超类 initCl，但 newInstance 须分配**目标类**实例（JDK generateConstructor 的访问器）。

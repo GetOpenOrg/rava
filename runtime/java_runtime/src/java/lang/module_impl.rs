@@ -10,7 +10,7 @@ use super::module_t::Module;
 
 /// 全二进制唯一的无名模块（ALL-UNNAMED 对应物）。
 pub fn unnamed_module() -> Module {
-    thread_local! {
+    crate::__process_static! {
         static UNNAMED: Module = {
             let mut m = Module::default();
             m._init_not_null();

@@ -24,7 +24,7 @@ impl VM {
     /// 「引导早期」与「机制就绪」）。原生二进制的引导顺序由 BFS 闭包静态
     /// 决定，标记照 JDK 语义置位/查询（线程内）。
     pub fn setJavaLangInvokeInited() -> Result<()> {
-        thread_local! {
+        crate::__process_static! {
             static INVOKE_INITED: crate::sync_model::__PrimCell<bool> = const { crate::sync_model::__PrimCell::new(false) };
         }
         INVOKE_INITED.with(|f| f.set(true));
@@ -32,7 +32,7 @@ impl VM {
     }
 
     pub fn isJavaLangInvokeInited() -> Result<bool> {
-        thread_local! {
+        crate::__process_static! {
             static INVOKE_INITED: crate::sync_model::__PrimCell<bool> = const { crate::sync_model::__PrimCell::new(false) };
         }
         Ok(INVOKE_INITED.with(|f| f.get()))

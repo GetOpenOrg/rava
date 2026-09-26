@@ -10,7 +10,7 @@ use crate::prelude::*;
 use super::security::Security;
 use std::collections::HashMap;
 
-std::thread_local! {
+crate::__process_static! {
     static OVERRIDES: crate::sync_model::__RefSlot<HashMap<std::string::String, std::string::String>> =
         crate::sync_model::__RefSlot::new(HashMap::new());
 }

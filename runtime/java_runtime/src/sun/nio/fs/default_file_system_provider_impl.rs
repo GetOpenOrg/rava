@@ -21,7 +21,7 @@ mod platform {
 
     /// 平台 provider 单例：macOS = MacOSXFileSystemProvider。
     /// 构造链语义见 mac_osx_file_system_provider_impl（theFileSystem 在 ctor 内建立）。
-    thread_local! {
+    crate::__process_static! {
         pub(crate) static INSTANCE: crate::sync_model::__RefSlot<std::option::Option<MacOSXFileSystemProvider>> =
             const { crate::sync_model::__RefSlot::new(std::option::Option::None) };
     }
@@ -34,7 +34,7 @@ mod platform {
 
     /// 平台 provider 单例：Linux = LinuxFileSystemProvider（直接继承
     /// UnixFileSystemProvider，构造链同源）。
-    thread_local! {
+    crate::__process_static! {
         pub(crate) static INSTANCE: crate::sync_model::__RefSlot<std::option::Option<LinuxFileSystemProvider>> =
             const { crate::sync_model::__RefSlot::new(std::option::Option::None) };
     }

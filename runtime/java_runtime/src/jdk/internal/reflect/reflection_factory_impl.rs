@@ -70,7 +70,7 @@ impl ReflectionFactory {
     /// 惰性落置——`thread_local` 持有底层 `Object`（运行时单线程模型，
     /// Object 非 Sync），跨调用同一对象身份（JVM `soleInstance` 的可观测语义）。
     pub fn getReflectionFactory() -> Result<ReflectionFactory> {
-        thread_local! {
+        crate::__process_static! {
             static SOLE_INSTANCE: RefCell<Option<Object>> = const { RefCell::new(None) };
         }
         let obj = SOLE_INSTANCE.with(|slot| {

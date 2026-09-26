@@ -54,7 +54,7 @@ fn _ref_array_index(offset: i64) -> i32 {
 /// 实例字段偏移登记表（线程本地）：正向 (声明类 binary name, 字段名) → id，
 /// 反向 id → 字段名。`objectFieldOffset` 两重载共用；id 消费见
 /// `_instance_long_cell`（实例字段 long 原子）与 `getAndAddInt`（计数器键）。
-thread_local! {
+crate::__process_static! {
     static FIELD_OFFSETS: RefCell<HashMap<(std::string::String, std::string::String), i64>> =
         RefCell::new(HashMap::new());
     static FIELD_OFFSET_NEXT: RefCell<i64> = const { RefCell::new(1) };
@@ -172,7 +172,7 @@ impl Unsafe {
     /// 进程内唯一的 Unsafe 实例（对应静态字段 theUnsafe）。
     #[jvm_boundary]
     pub fn getUnsafe() -> Result<Unsafe> {
-        thread_local! {
+        crate::__process_static! {
             static THE_UNSAFE: Unsafe = {
                 let mut u = Unsafe::default();
                 u._init_not_null();
@@ -769,7 +769,7 @@ impl Unsafe {
         }
         use crate::sync_model::__RefSlot as RefCell;
         use std::collections::HashMap;
-        thread_local! {
+        crate::__process_static! {
             static CELLS: RefCell<HashMap<i64, i64>> = RefCell::new(HashMap::new());
         }
         Ok(CELLS.with(|cells| {
@@ -796,7 +796,7 @@ impl Unsafe {
     pub fn staticFieldOffset(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
         let _ = f;
         use crate::sync_model::__RefSlot as RefCell;
-        thread_local! {
+        crate::__process_static! {
             static NEXT: RefCell<i64> = const { RefCell::new(1) };
         }
         Ok(NEXT.with(|n| {
@@ -826,7 +826,7 @@ impl Unsafe {
         }
         use crate::sync_model::__RefSlot as RefCell;
         use std::collections::HashMap;
-        thread_local! {
+        crate::__process_static! {
             static CELLS: RefCell<HashMap<(usize, i64), i32>> = RefCell::new(HashMap::new());
         }
         let identity = if base.0.is_jvm_null() { 0 } else { base.0.__identity() as usize };

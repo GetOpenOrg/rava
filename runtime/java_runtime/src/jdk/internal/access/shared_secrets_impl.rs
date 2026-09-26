@@ -6,7 +6,7 @@ use crate::sync_model::__RefSlot as RefCell;
 
 // SharedSecrets 的 static 槽位：各公开 API 类在自己的 <clinit> 里登记访问器实例。
 // 按调用链按需实现，其余槽位保持 stub。
-thread_local! {
+crate::__process_static! {
     static JAVA_IO_FILE_DESCRIPTOR_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_IO_PRINT_STREAM_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };

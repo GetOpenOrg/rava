@@ -372,7 +372,7 @@ impl From<Object> for () {
 ///（object_ext.rs，先于本 singleton 存在的第二道防线）语义一致。
 impl Default for Object {
     fn default() -> Self {
-        thread_local! {
+        crate::__process_static! {
             static JVM_NULL: Object = Object(Rc::new(()));
         }
         JVM_NULL.with(|null| null.clone())
