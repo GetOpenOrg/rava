@@ -43,9 +43,25 @@ def _signature_polymorphic_descriptor(comment: str, registry) -> str:
     return m.descriptor
 
 
+_CALLSITE_TYPED: 'frozenset[str] | None' = None
+
+
+def _callsite_typed(owner: str, mname: str) -> bool:
+    """该签名多态方法是否需要调用点类型（清单 sigpoly_callsite.txt，原则 4：库知识入清单）。"""
+    global _CALLSITE_TYPED
+    if _CALLSITE_TYPED is None:
+        from ...runtime_manifest import read_list
+        _CALLSITE_TYPED = frozenset(read_list('sigpoly_callsite.txt'))
+    return f'{owner}.{mname}' in _CALLSITE_TYPED
+
+
 def _gen_signature_polymorphic(sim, comment: str, decl_desc: str, class_name, registry, is_static: bool) -> None:
     """签名多态调用：实参按 Java 语义装进声明的 Object[] 形参，返回值按调用点描述符还原
-    （等价 `(R) mh.invokeBasic(new Object[]{a, b, c})`）。"""
+    （等价 `(R) mh.invokeBasic(new Object[]{a, b, c})`）。
+
+    清单登记的成员（需要调用点类型的 `invokeExact` / `invoke`）改发
+    `recv.<m>__site("<调用点描述符>", 实参数组)`：调用点 MethodType 只存在于字节码的
+    方法引用描述符里，运行时从实参值无法还原（基本类型 vs 包装、返回类型）。"""
     call_desc = _method_ref_descriptor(comment)
     call_params = parse_descriptor_params(call_desc)
     call_ret = parse_descriptor_return(call_desc)
@@ -67,6 +83,26 @@ def _gen_signature_polymorphic(sim, comment: str, decl_desc: str, class_name, re
     elem_ty = jvm_to_rust(parse_descriptor_params(decl_desc)[0], registry)
     arr = sim.fresh()
     sim.emit(RawStmt(f"let {arr}: {elem_ty} = JArray::from(vec![{', '.join(packed)}]);"))
+    _owner = _method_ref_binary_class(comment)
+    _mname = comment[comment.find('.') + 1:comment.find(':', comment.find('.'))]
+    if not is_static and _callsite_typed(_owner, _mname):
+        recv_expr, _recv_ty = sim.pop()
+        recv = render_expr(recv_expr)
+        recv = 'this' if recv == 'this' else recv
+        res = sim.fresh()
+        ret_ty = jvm_to_rust(parse_descriptor_return(decl_desc), registry)
+        sim.emit(RawStmt(f'let {res}: {ret_ty} = {recv}.{_mname}__site("{call_desc}", {arr})?;'))
+        r_expr, r_ty = Var(res), RsNamed(ret_ty)
+        if call_ret == 'V':
+            return
+        target = jvm_to_rust(call_ret, registry)
+        if target == ret_ty:
+            sim.push(r_expr, r_ty)
+            return
+        v = sim.fresh()
+        sim.emit(RawStmt(f"let {v}: {target} = <{target} as ::std::convert::From<Object>>::from({res});"))
+        sim.push(Var(v), RsNamed(target))
+        return
     sim.push(Var(arr), RsNamed(elem_ty))
     decl_comment = comment[:comment.find(':', comment.find('.')) + 1] + decl_desc
     if is_static:

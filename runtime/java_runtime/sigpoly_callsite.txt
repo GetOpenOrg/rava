@@ -1,0 +1,7 @@
+# 签名多态方法（JVMS §2.9.3）中需要调用点类型的成员：`类.方法`。
+# codegen 对这些调用发射 `recv.<方法>__site("<调用点描述符>", 实参数组)`，手写伴生据调用点
+# MethodType 做类型检查 / 适配（MH-native，docs/plans/2026-09-26-mh-native.md §二-6）：
+#   invokeExact：句柄类型 ≠ 调用点类型 → WrongMethodTypeException
+#   invoke：     句柄类型 ≠ 调用点类型 → asType(调用点类型) 后调用
+java/lang/invoke/MethodHandle.invokeExact
+java/lang/invoke/MethodHandle.invoke

@@ -59,6 +59,11 @@ fn member_descriptor(m: &MemberName) -> Result<std::string::String> {
     Ok(format!("{}", c.descriptorString()?))
 }
 
+/// 调用点描述符 → MethodType（类型经系统类加载器解析，与 javac 调用点的静态类型一致）。
+fn site_type(site: &str) -> Result<MethodType> {
+    MethodType::fromMethodDescriptorString(String::from(site), Default::default())
+}
+
 /// 解释执行句柄 `mh` 的 LambdaForm，`args` 为不含句柄自身的实参。
 pub(crate) fn interpret(mh: MethodHandle, args: Vec<Object>) -> Result<Object> {
     let form = mh.__get_form();
@@ -262,17 +267,43 @@ impl MethodHandle {
         interpret(Clone::clone(self), args.to_vec())
     }
 
-    /// native `invokeExact(Object...)`：调用点类型未传入时按 invokeBasic 执行
-    ///（调用点 MethodType 检查见 `invokeExact__site`）。
-    #[jvm_native]
+    /// native `invokeExact(Object...)`：无调用点类型的入口（翻译字节码内部调用）按 invokeBasic
+    /// 执行。用户调用点经 codegen 发 `invokeExact__site`（清单 sigpoly_callsite.txt）。
+    ///
+    /// upcalls：调用点类型检查 / 适配用到的 JDK 方法（运行时 → Java 调用边，字节码不可见）。
+    #[jvm_native(upcalls = "java/lang/invoke/MethodType.fromMethodDescriptorString:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.equals:(Ljava/lang/invoke/MethodType;)Z java/lang/invoke/MethodType.toString:()Ljava/lang/String; java/lang/invoke/MethodHandle.asType:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle; java/lang/invoke/WrongMethodTypeException.<init>:(Ljava/lang/String;)V")]
     pub fn invokeExact(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
 
-    /// native `invoke(Object...)`：同上（调用点 asType 适配见 `invoke__site`）。
+    /// native `invoke(Object...)`：同上（用户调用点经 `invoke__site`）。
     #[jvm_native]
     pub fn invoke(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
+    }
+
+    /// 调用点带类型的 `invokeExact`：句柄类型必须与调用点 MethodType 完全相同
+    ///（JVMS §5.4.3.4 / MethodHandle.invokeExact 规范），否则 WrongMethodTypeException。
+    pub fn invokeExact__site(&self, site: &str, args: JArray<Object>) -> Result<Object> {
+        let call_type = site_type(site)?;
+        let own = self.type_()?;
+        if !own.equals_methodtype(Clone::clone(&call_type))? {
+            return Err(JvmError::from(super::WrongMethodTypeException::new_str(String::from(
+                format!("handle's method type {} but found {}", own.toString()?, call_type.toString()?).as_str()))?));
+        }
+        interpret(Clone::clone(self), args.to_vec())
+    }
+
+    /// 调用点带类型的 `invoke`：类型不同 → `asType(调用点类型)` 的适配句柄（装拆箱 / 拓宽 /
+    /// 变参收集等全部由 JDK asType 字节码构造）。
+    pub fn invoke__site(&self, site: &str, args: JArray<Object>) -> Result<Object> {
+        let call_type = site_type(site)?;
+        let own = self.type_()?;
+        if own.equals_methodtype(Clone::clone(&call_type))? {
+            return interpret(Clone::clone(self), args.to_vec());
+        }
+        let adapted = self.asType(call_type)?;
+        interpret(adapted, args.to_vec())
     }
 
     #[jvm_native]
