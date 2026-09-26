@@ -20,15 +20,27 @@ impl System {
     /// TzdbZoneRulesProvider 默认分支）；UnixFileSystem.<init> →
     /// GetPropertyAction.privilegedGetProperties → file.separator /
     /// path.separator（缺席会 NPE）。
+    ///
+    /// FS-P1：版本族属性（java.version / java.runtime.* / java.specification.* /
+    /// java.vendor* / java.class.version）按 JDK initPhase1 同一来源——翻译的
+    /// `VersionProps.init(Map)`（常量即语料 JDK 构建时写入 VersionProps.class 的值）；
+    /// VM 族（java.vm.*）、平台族（os.version / sun.* / *.encoding）由本层按
+    /// HotSpot `Arguments` / `SystemProps.Raw` 的同名来源填充。
     #[jvm_native(upcalls = "
         java/util/concurrent/ConcurrentHashMap.<init>:()V
         java/util/concurrent/ConcurrentHashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+        java/lang/VersionProps.init:(Ljava/util/Map;)V
     ")]
     pub fn registerNatives() -> Result<()> {
         use crate::java::util::concurrent::ConcurrentHashMap;
         let map = ConcurrentHashMap::<Object, Object>::new()?;
         for (k, v) in vm_snapshot_properties() {
             map.put(Object::from(String::from(k)), Object::from(String::from(v)))?;
+        }
+        crate::java::lang::VersionProps::init(
+            Object::from(Clone::clone(&map)).try_cast("java/util/Map")?)?;
+        for (k, v) in vm_derived_properties(&map)? {
+            map.put(Object::from(String::from(k)), Object::from(String::from(v.as_str())))?;
         }
         let mut p = crate::java::util::Properties::default();
         p._init_not_null();
@@ -194,6 +206,23 @@ fn vm_snapshot_properties() -> Vec<(&'static str, std::string::String)> {
             else if cfg!(target_arch = "x86_64") { "amd64" }
             else { std::env::consts::ARCH })),
     ];
+    // 平台族（HotSpot SystemProps.Raw / os::）：
+    props.push(("os.version", os_release()));
+    props.push(("sun.arch.data.model", std::string::String::from(if cfg!(target_pointer_width = "64") { "64" } else { "32" })));
+    props.push(("sun.cpu.endian", std::string::String::from(if cfg!(target_endian = "little") { "little" } else { "big" })));
+    props.push(("sun.io.unicode.encoding", std::string::String::from(if cfg!(target_endian = "little") { "UnicodeLittle" } else { "UnicodeBig" })));
+    props.push(("java.class.path", std::string::String::new()));
+    props.push(("java.library.path", std::string::String::new()));
+    props.push(("sun.boot.library.path", format!("{}/lib", crate::jdk_resources::JAVA_RUNTIME_HOME)));
+    props.push(("jdk.debug", std::string::String::from("release")));
+    // 编码族（JDK 18+ JEP 400：file.encoding 缺省 UTF-8；native / jnu 编码取宿主区域
+    // 的 codeset；标准流按本运行时实际编码器（UTF-8，见 new_std_print_stream））
+    let native = native_encoding();
+    props.push(("file.encoding", std::string::String::from("UTF-8")));
+    props.push(("native.encoding", native.clone()));
+    props.push(("sun.jnu.encoding", native));
+    props.push(("stdout.encoding", std::string::String::from("UTF-8")));
+    props.push(("stderr.encoding", std::string::String::from("UTF-8")));
     // user.timezone：TZ 环境变量存在才设（JDK initPhase1 同款条件），
     // 缺席留给 TimeZone/ZoneId 惰性解析
     if let Ok(tz) = std::env::var("TZ") {
@@ -202,6 +231,58 @@ fn vm_snapshot_properties() -> Vec<(&'static str, std::string::String)> {
         }
     }
     props
+}
+
+/// VM 族属性（HotSpot `Arguments::init_system_properties` / `VM_Version`）：规范三项取
+/// 语料 JDK 的特性版本；实现侧如实标识本运行时（原生二进制，非 HotSpot），版本号与
+/// 供应商随 `java.runtime.version` / `java.vendor`（VersionProps 已写入 map）。
+fn vm_derived_properties(
+    map: &crate::java::util::concurrent::ConcurrentHashMap<Object, Object>,
+) -> Result<Vec<(&'static str, std::string::String)>> {
+    let get = |k: &str| -> Result<std::string::String> {
+        let v = map.get(Object::from(String::from(k)))?;
+        Ok(if v.0.is_jvm_null() { std::string::String::new() } else { format!("{}", v) })
+    };
+    let spec = get("java.specification.version")?;
+    Ok(vec![
+        ("java.vm.specification.name", std::string::String::from("Java Virtual Machine Specification")),
+        ("java.vm.specification.vendor", std::string::String::from("Oracle Corporation")),
+        ("java.vm.specification.version", spec),
+        ("java.vm.name", std::string::String::from("java_rta native runtime")),
+        ("java.vm.vendor", get("java.vendor")?),
+        ("java.vm.version", get("java.runtime.version")?),
+        ("java.vm.info", std::string::String::from("native image")),
+    ])
+}
+
+/// `os.version`：内核发行号（HotSpot 取 uname(2).release；/proc 为同一内核数据源）。
+fn os_release() -> std::string::String {
+    if let Ok(s) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+        return s.trim().to_owned();
+    }
+    std::process::Command::new("uname").arg("-r").output().ok()
+        .and_then(|o| std::string::String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// `native.encoding` / `sun.jnu.encoding`：宿主区域的 codeset（HotSpot 取
+/// nl_langinfo(CODESET)）。macOS 恒 UTF-8；Linux 按 LC_ALL / LC_CTYPE / LANG 的
+/// codeset 段，C / POSIX 区域为 glibc 的 `ANSI_X3.4-1968`。
+fn native_encoding() -> std::string::String {
+    if cfg!(target_os = "macos") {
+        return std::string::String::from("UTF-8");
+    }
+    let raw = ["LC_ALL", "LC_CTYPE", "LANG"].iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    let codeset = raw.split('@').next().unwrap_or("").split('.').nth(1).unwrap_or("");
+    match codeset.to_ascii_lowercase().replace('-', "").as_str() {
+        "" => std::string::String::from("ANSI_X3.4-1968"),
+        "utf8" => std::string::String::from("UTF-8"),
+        _ => codeset.to_owned(),
+    }
 }
 
 /// 标准流的构造（对应 System.newPrintStream(new FileOutputStream(fd), enc)，enc 固定为 UTF-8）。
