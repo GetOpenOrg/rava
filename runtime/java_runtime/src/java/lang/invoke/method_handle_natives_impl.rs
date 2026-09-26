@@ -26,6 +26,70 @@ impl MethodHandleNatives {
         Ok(())
     }
 
+    /// native `init(MemberName self, Object ref)`：以反射对象（Constructor / Method / Field）
+    /// 初始化 MemberName（`MemberName(Constructor|Method|Field)` 构造器的 VM 底座，
+    /// `Lookup.unreflect*` 消费——record 序列化的 canonicalRecordCtr 即此路径）。
+    ///
+    /// HotSpot 填 clazz / flags / vmtarget，name 与 type 由调用方或 expand 惰性补齐；此处
+    /// 直接读反射对象字段（与 JDK 反射对象同源的声明元数据）：
+    ///   - 构造器：clazz、flags = IS_CONSTRUCTOR | REF_newInvokeSpecial | 修饰位（name / type
+    ///     由 MemberName 构造器在 init 之后按 `<init>` 与参数类型补齐）；
+    ///   - 方法：clazz、name、type = `Object[]{返回类型, 参数类型[]}`（getMethodType 认可的
+    ///     惰性形态）、flags = IS_METHOD | refKind（static → invokeStatic；接口 → invokeInterface；
+    ///     private → invokeSpecial；其余 invokeVirtual）| 修饰位；
+    ///   - 字段：clazz、name、type = 字段类型、flags = IS_FIELD | refKind（getStatic / getField）| 修饰位。
+    #[jvm_native]
+    pub fn init(m: MemberName, reference: Object) -> Result<()> {
+        // 经 ObjectVTable 的按名字段协议读反射对象（不静态引用反射类型：本 impl 在
+        // MethodHandleNatives 生成时即参与编译，反射类未必在闭包内）
+        const ACC_STATIC: i32 = 0x0008;
+        const ACC_PRIVATE: i32 = 0x0002;
+        let stub = |what: &str| -> ! {
+            panic!("stub: java/lang/invoke/MethodHandleNatives.init:(Ljava/lang/invoke/MemberName;Ljava/lang/Object;)V（{}）", what)
+        };
+        let ref_field = |name: &str| -> Object {
+            reference.0.__unsafe_ref_get(name).unwrap_or_else(|| stub(name))
+        };
+        let mods = reference.0.__unsafe_int_cell("modifiers").map(|c| c.get()).unwrap_or_else(|| stub("modifiers"));
+        let clazz: Class = ref_field("clazz").try_cast::<Class>("java/lang/Class")?;
+        match reference.0.__class_name() {
+            "java/lang/reflect/Constructor" => {
+                m.__set_clazz(clazz);
+                m.__set_flags(MN_IS_CONSTRUCTOR | (8 << 24) | (mods & 0xFFFF));
+            }
+            "java/lang/reflect/Method" => {
+                let ref_kind = if mods & ACC_STATIC != 0 {
+                    6
+                } else if clazz.isInterface()? {
+                    9
+                } else if mods & ACC_PRIVATE != 0 {
+                    7
+                } else {
+                    5
+                };
+                let type_info: JArray<Object> =
+                    JArray::from(vec![ref_field("returnType"), ref_field("parameterTypes")]);
+                m.__set_clazz(clazz);
+                m.__set_name(ref_field("name").try_cast::<String>("java/lang/String")?);
+                m.__set_type_(Object::from(type_info));
+                m.__set_flags(MN_IS_METHOD | (ref_kind << 24) | (mods & 0xFFFF));
+            }
+            "java/lang/reflect/Field" => {
+                let ref_kind = if mods & ACC_STATIC != 0 { 2 } else { 1 };
+                m.__set_clazz(clazz);
+                m.__set_name(ref_field("name").try_cast::<String>("java/lang/String")?);
+                // Java 字段名 `type` 在 Rust 侧为关键字转义 `type_`（按名协议的臂取 Rust 标识符）
+                let ty = reference.0.__unsafe_ref_get("type_")
+                    .or_else(|| reference.0.__unsafe_ref_get("type"))
+                    .unwrap_or_else(|| stub("type"));
+                m.__set_type_(ty);
+                m.__set_flags(MN_IS_FIELD | (ref_kind << 24) | (mods & 0xFFFF));
+            }
+            other => stub(other),
+        }
+        Ok(())
+    }
+
     /// native `resolve(MemberName, Class lookupClass, int allowedModes, boolean
     /// speculativeResolve)`：MemberName 解析内核——把「符号引用」(声明类,
     /// 名字, 类型, refKind) 对到具体成员并回填修饰位。
