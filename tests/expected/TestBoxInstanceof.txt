@@ -1,0 +1,13 @@
+5 true,true,true,Integer
+5 true,true,true,Long
+2.5 true,true,true,Double
+2.5 true,true,true,Float
+3 true,true,true,Short
+4 true,true,true,Byte
+c false,true,true,Character
+true false,true,true,Boolean
+number 7 7.0 true
+cmp -1 1 1 1
+sorted [1, 2, 3]
+map int long 2
+switch D1.0
