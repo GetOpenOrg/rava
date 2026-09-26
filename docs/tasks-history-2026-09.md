@@ -185,3 +185,4 @@
 | # | 任务 | 状态 | 证据 |
 |---|---|---|---|
 | N4（扩大口径） | TypeIR 扩大口径 type_surgery_ext 21→0 | ✅ 生成树逐字节验收 | `d6822f0`：调用点文本解剖收口到解析层 type_args（rust_type_head / rust_type_partition / rust_type_arg_text / is_array_carrier / is_vec_type，语义逐点相同）。验收集 27 例基线 `d6c7960` 对照逐字节一致、raw_expr/raw_stmt 逐测试相同、唯一差异 type_surgery_ext 21→0；单元测试 140/140 |
+| N6 / #41 | 手写 `_impl.rs` 分配的对象不进 RTA | ✅ 本机 jcaN6 10/10 | `04999fe`：native_upcalls 识别手写分配并登记 RTA 已实例化。ListFields（Field.toString 字节码翻译）/ HelloWorld / TestArrayList / TestRecordComponents / TestReflectAccessCheck / TestClassToString / TestZonedDateTime / TestVirtualThread（真 OS 线程）/ DES / TestCipherDesModes PASS |
