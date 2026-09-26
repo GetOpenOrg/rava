@@ -33,7 +33,7 @@ use crate::error::Result;
 use crate::java::lang::Object;
 use crate::prelude::JArray;
 use std::collections::HashMap;
-use std::rc::Rc;
+use crate::sync_model::__Shared as Rc;
 
 /// 按名分派闭包：(方法名, 描述符, 接收者, 实参) → 处理结果。
 /// `None` = 本类未声明该方法（上溯继续）；`Some(r)` = 已处理（含错误传播）。
@@ -41,8 +41,8 @@ pub type ReflectDispatch =
     Rc<dyn Fn(&str, &str, Object, &JArray<Object>) -> Option<Result<Object>>>;
 
 std::thread_local! {
-    static DISPATCHERS: std::cell::RefCell<HashMap<String, ReflectDispatch>> =
-        std::cell::RefCell::new(HashMap::new());
+    static DISPATCHERS: crate::sync_model::__RefSlot<HashMap<String, ReflectDispatch>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
 /// 生成项目 main 启动时登记分派闭包（binary name 斜线形态；重登记幂等）。
@@ -61,8 +61,8 @@ pub type FieldDispatch =
     Rc<dyn Fn(&str, Object, Option<Object>) -> Option<Result<Object>>>;
 
 std::thread_local! {
-    static FIELD_DISPATCHERS: std::cell::RefCell<HashMap<String, FieldDispatch>> =
-        std::cell::RefCell::new(HashMap::new());
+    static FIELD_DISPATCHERS: crate::sync_model::__RefSlot<HashMap<String, FieldDispatch>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
 /// 生成项目 main 启动时登记字段闭包（`register_method_dispatch` 的字段镜像）。
@@ -159,7 +159,7 @@ fn is_static_descriptor(class_slash: &str, name: &str, descriptor: &str) -> bool
 std::thread_local! {
     /// 最近一次实参拆箱失败的标记：Method.invoke 据此区分「实参不符」（JDK 直接抛
     /// IllegalArgumentException）与「目标方法抛出」（包装为 InvocationTargetException）。
-    static BAD_ARG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static BAD_ARG: crate::sync_model::__PrimCell<bool> = const { crate::sync_model::__PrimCell::new(false) };
 }
 
 /// 实参拆箱失败：置标记并返回 IllegalArgumentException（分派闭包的 marshalling 失败出口）。

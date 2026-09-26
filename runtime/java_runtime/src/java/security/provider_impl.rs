@@ -9,8 +9,8 @@ use super::provider::implref::Provider;
 use std::collections::HashMap;
 
 std::thread_local! {
-    static PROVIDERS: std::cell::RefCell<HashMap<&'static str, Provider>> =
-        std::cell::RefCell::new(HashMap::new());
+    static PROVIDERS: crate::sync_model::__RefSlot<HashMap<&'static str, Provider>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
 impl Provider {

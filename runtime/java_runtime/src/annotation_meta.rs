@@ -21,7 +21,7 @@
 use crate::error::Result;
 use crate::java::lang::Object;
 use std::collections::HashMap;
-use std::rc::Rc;
+use crate::sync_model::__Shared as Rc;
 
 /// 注解元素值（JVMS element_value 的结构化形态；`X` = 未支持形态）。
 #[derive(Clone, Debug)]
@@ -120,8 +120,8 @@ pub fn decode_value(text: &str) -> AnnotationValue {
 pub type AnnotationFactory = Rc<dyn Fn(&[(String, AnnotationValue)]) -> Result<Object>>;
 
 std::thread_local! {
-    static FACTORIES: std::cell::RefCell<HashMap<String, AnnotationFactory>> =
-        std::cell::RefCell::new(HashMap::new());
+    static FACTORIES: crate::sync_model::__RefSlot<HashMap<String, AnnotationFactory>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
 /// 生成项目 main 启动时登记注解工厂（binary name 斜线形态；同名重登记幂等）。

@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use super::*;
 
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 use parking_lot::ReentrantMutex;
 
 // 全局可重入锁：单线程 JVM 模拟环境下所有 InternalLock 实例共享同一把锁

@@ -25,7 +25,7 @@ pub struct ServiceEntry {
 }
 
 std::thread_local! {
-    static SERVICES: std::cell::RefCell<Vec<ServiceEntry>> = std::cell::RefCell::new(Vec::new());
+    static SERVICES: crate::sync_model::__RefSlot<Vec<ServiceEntry>> = crate::sync_model::__RefSlot::new(Vec::new());
 }
 
 /// 生成项目 main 启动时登记入选服务（同 (类型, 算法, provider) 重登记幂等）。

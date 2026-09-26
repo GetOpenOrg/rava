@@ -2,8 +2,8 @@
 // get/set/len 隐藏 borrow_mut()，让生成代码保持 Java 语义可读性
 // 调用方只需 array.get(i)、array.set(i, v)、array.len()，无需接触 RefCell API
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use crate::sync_model::__RefSlot as RefCell;
+use crate::sync_model::__Shared as Rc;
 
 use crate::java::lang::Object;
 

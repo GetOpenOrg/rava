@@ -35,7 +35,7 @@
 use crate::prelude::*;
 use super::*;
 
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

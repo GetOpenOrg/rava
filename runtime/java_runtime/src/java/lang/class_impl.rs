@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use super::*;
 use super::reflect::Field;
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 
 impl Class {

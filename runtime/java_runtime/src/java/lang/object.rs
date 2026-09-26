@@ -1,7 +1,7 @@
 //! java.lang.Object — 所有 Java 类的根类型
 //! struct 定义永久手写（Rc<dyn ObjectVTable> 是 Rust-specific，无法从字节码生成）
 
-use std::rc::Rc;
+use crate::sync_model::__Shared as Rc;
 
 /// JVM Object vtable：方法名与 java.lang.Object 字节码方法一一对应。
 ///
@@ -191,18 +191,18 @@ pub trait ObjectVTable: 'static {
     /// Unsafe 经 Object 写入对直接字段读取（`__get_xxx`）可见，与 JVM 的字段
     /// 内存语义一致（Unsafe 与普通字段访问指向同一存储）。
     #[doc(hidden)]
-    fn __unsafe_long_cell(&self, _field: &str) -> Option<Rc<std::cell::Cell<i64>>> { None }
+    fn __unsafe_long_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i64>>> { None }
 
     /// Unsafe 实例字段 int 原子协议（`Unsafe.getInt`/`putInt`/`compareAndSetInt`/
     /// `getAndAddInt` 的实例字段形态）：`__unsafe_long_cell` 的 int 镜像，
     /// 按字段名取共享的 int 存储单元（`Rc<Cell<i32>>`）。
     #[doc(hidden)]
-    fn __unsafe_int_cell(&self, _field: &str) -> Option<Rc<std::cell::Cell<i32>>> { None }
+    fn __unsafe_int_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i32>>> { None }
 
     /// 实例字段 boolean 按名协议：`__unsafe_int_cell` 的 boolean 镜像（平铺的非擦除
     /// boolean 字段，`Rc<Cell<bool>>` 共享单元）。消费方：VarHandle 字节数组视图的字节序位。
     #[doc(hidden)]
-    fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<std::cell::Cell<bool>>> { None }
+    fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> { None }
 
     /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
     /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名读共享的
@@ -321,7 +321,7 @@ impl ObjectVTable for () {
 }
 
 /// 数组类型（Rc<RefCell<Vec<T>>>）自动装入 Object
-impl<T: 'static> ObjectVTable for Rc<std::cell::RefCell<Vec<T>>> {
+impl<T: 'static> ObjectVTable for Rc<crate::sync_model::__RefSlot<Vec<T>>> {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn __array_len(&self) -> Option<crate::error::Result<i32>> {
         Some(Ok(self.borrow().len() as i32))

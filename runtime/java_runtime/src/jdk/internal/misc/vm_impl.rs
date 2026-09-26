@@ -25,7 +25,7 @@ impl VM {
     /// 决定，标记照 JDK 语义置位/查询（线程内）。
     pub fn setJavaLangInvokeInited() -> Result<()> {
         thread_local! {
-            static INVOKE_INITED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            static INVOKE_INITED: crate::sync_model::__PrimCell<bool> = const { crate::sync_model::__PrimCell::new(false) };
         }
         INVOKE_INITED.with(|f| f.set(true));
         Ok(())
@@ -33,7 +33,7 @@ impl VM {
 
     pub fn isJavaLangInvokeInited() -> Result<bool> {
         thread_local! {
-            static INVOKE_INITED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            static INVOKE_INITED: crate::sync_model::__PrimCell<bool> = const { crate::sync_model::__PrimCell::new(false) };
         }
         Ok(INVOKE_INITED.with(|f| f.get()))
     }

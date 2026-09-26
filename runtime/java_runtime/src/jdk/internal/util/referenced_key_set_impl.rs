@@ -10,7 +10,7 @@
 
 use crate::prelude::*;
 use super::referenced_key_set::ReferencedKeySet;
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 
 thread_local! {

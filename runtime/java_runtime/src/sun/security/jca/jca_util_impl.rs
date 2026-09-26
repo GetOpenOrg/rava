@@ -9,7 +9,7 @@ use super::jca_util::implref::JCAUtil;
 use crate::java::security::secure_random::implref::SecureRandom;
 
 std::thread_local! {
-    static DEF: std::cell::RefCell<Option<SecureRandom>> = std::cell::RefCell::new(None);
+    static DEF: crate::sync_model::__RefSlot<Option<SecureRandom>> = crate::sync_model::__RefSlot::new(None);
 }
 
 impl JCAUtil {

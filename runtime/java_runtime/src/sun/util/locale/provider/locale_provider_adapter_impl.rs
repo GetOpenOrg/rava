@@ -26,7 +26,7 @@ use super::locale_resources::LocaleResources;
 use crate::java::util::spi::LocaleServiceProvider__VTable;
 use crate::java::text::{DecimalFormat, DecimalFormatSymbols, NumberFormat};
 use crate::java::util::Locale;
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 
 /// `java/text/spi/NumberFormatProvider` 的手写实现对象（JDK 的
 /// CLDRLocaleProviderAdapter 匿名 NumberFormatProvider → `NumberFormatProviderImpl`）：

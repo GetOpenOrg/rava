@@ -2,7 +2,7 @@ use crate::prelude::*;
 use super::shared_secrets::SharedSecrets;
 use super::java_lang_access_impl::SystemJavaLangAccess;
 use super::java_util_collection_access_impl::ImmutableCollectionsCollAccess;
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 
 // SharedSecrets 的 static 槽位：各公开 API 类在自己的 <clinit> 里登记访问器实例。
 // 按调用链按需实现，其余槽位保持 stub。

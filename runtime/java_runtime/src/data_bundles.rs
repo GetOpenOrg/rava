@@ -18,8 +18,8 @@ use std::collections::HashMap;
 pub type BundleCtor = fn() -> Result<Object>;
 
 std::thread_local! {
-    static BUNDLES: std::cell::RefCell<HashMap<&'static str, BundleCtor>> =
-        std::cell::RefCell::new(HashMap::new());
+    static BUNDLES: crate::sync_model::__RefSlot<HashMap<&'static str, BundleCtor>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
 /// 生成项目 main 启动时登记入选束（binary name 斜线形态；重登记幂等）。

@@ -10,7 +10,7 @@
 use crate::prelude::*;
 use super::wrapper::Wrapper;
 use crate::java::lang::Class;
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 
 /// 常量表条目：(getter 名, basicTypeChar, primitive 名, wrapper binary name,
 /// wrapperSimpleName, primitiveSimpleName)。JDK VALUES 顺序。

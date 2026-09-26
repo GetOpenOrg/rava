@@ -109,8 +109,8 @@ impl StreamEncoder {
     /// 首次调用返回 true 并登记本编码器身份。
     fn take_bom(&self) -> bool {
         std::thread_local! {
-            static BOM_WRITTEN: std::cell::RefCell<std::collections::HashSet<usize>> =
-                std::cell::RefCell::new(std::collections::HashSet::new());
+            static BOM_WRITTEN: crate::sync_model::__RefSlot<std::collections::HashSet<usize>> =
+                crate::sync_model::__RefSlot::new(std::collections::HashSet::new());
         }
         let id = Object::from(Clone::clone(self)).0.__identity() as usize;
         BOM_WRITTEN.with(|s| s.borrow_mut().insert(id))

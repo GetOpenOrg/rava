@@ -10,7 +10,7 @@
 use crate::prelude::*;
 use super::thread_tracker::implref::ThreadTracker;
 use crate::java::lang::Thread;
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 use std::collections::{HashMap, HashSet};
 
 std::thread_local! {

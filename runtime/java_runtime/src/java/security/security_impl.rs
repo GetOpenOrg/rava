@@ -11,8 +11,8 @@ use super::security::Security;
 use std::collections::HashMap;
 
 std::thread_local! {
-    static OVERRIDES: std::cell::RefCell<HashMap<std::string::String, std::string::String>> =
-        std::cell::RefCell::new(HashMap::new());
+    static OVERRIDES: crate::sync_model::__RefSlot<HashMap<std::string::String, std::string::String>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
 impl Security {

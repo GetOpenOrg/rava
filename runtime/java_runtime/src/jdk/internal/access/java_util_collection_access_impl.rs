@@ -12,7 +12,7 @@ use crate::prelude::*;
 use super::java_util_collection_access::JavaUtilCollectionAccess__VTable;
 use crate::java::util::ImmutableCollections;
 use crate::java::util::List;
-use std::rc::Rc;
+use crate::sync_model::__Shared as Rc;
 
 /// `java/util/ImmutableCollections$1` 的手写实现对象（JDK 的匿名访问器）。
 ///

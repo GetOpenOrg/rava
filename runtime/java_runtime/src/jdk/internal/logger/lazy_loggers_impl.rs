@@ -12,7 +12,7 @@ use crate::prelude::*;
 use super::lazy_loggers::LazyLoggers;
 use crate::java::lang::{Module, System_Logger__VTable, System_Logger_Level, Throwable};
 use crate::java::util::ResourceBundle;
-use std::rc::Rc;
+use crate::sync_model::__Shared as Rc;
 
 /// 静默 Logger（`System.Logger` 接口实现对象，经 `ObjectVTable::__interface` 应答）。
 struct SilentLogger {

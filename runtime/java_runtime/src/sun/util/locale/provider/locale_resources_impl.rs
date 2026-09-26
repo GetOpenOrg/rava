@@ -21,8 +21,8 @@ const FORMAT_DATA_EXT: &str = "sun/text/resources/cldr/ext/FormatData";
 
 std::thread_local! {
     /// locale 候选键（`lang_Script_REGION_variant`）→ 已串好父链的最具体束。
-    static NUMBER_FORMAT_DATA: std::cell::RefCell<HashMap<std::string::String, ResourceBundle>> =
-        std::cell::RefCell::new(HashMap::new());
+    static NUMBER_FORMAT_DATA: crate::sync_model::__RefSlot<HashMap<std::string::String, ResourceBundle>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
 /// ResourceBundle 候选后缀（由具体到一般，不含 ROOT）——与 `codegen/locale_seed.py`

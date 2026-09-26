@@ -10,9 +10,9 @@ use crate::java::lang::Boolean;
 // getBoolean 恒为 false（这正是 java.util.Arrays.useLegacyMergeSort 关闭、
 // 排序走 TimSort 的默认语义）。后续 System.getProperty 手写时在此对接或迁移。
 thread_local! {
-    static SYSTEM_PROPERTIES: std::cell::RefCell<
+    static SYSTEM_PROPERTIES: crate::sync_model::__RefSlot<
         std::collections::HashMap<std::string::String, std::string::String>
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
 }
 
 /// Boolean.getBoolean(name) 的取值：属性存在且值 equalsIgnoreCase("true") 才为 true。

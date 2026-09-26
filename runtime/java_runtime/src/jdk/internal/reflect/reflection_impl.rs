@@ -5,7 +5,7 @@ use crate::prelude::*;
 use super::reflection::Reflection;
 use crate::java::lang::Class;
 use crate::java::util::Set;
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 
 thread_local! {

@@ -79,10 +79,10 @@ impl System {
         // 流转的数组）：经 `__view_into` 构造 Object 级协变视图逐元素复制（S-4）——
         // 写入走源数组的 aastore 存储检查，元素类型不兼容抛 ArrayStoreException；
         // 同一数组的重叠区间按对象标识（视图委托源数组）识别，保持 memmove 语义。
-        let unused: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(());
+        let unused: crate::sync_model::__Shared<dyn std::any::Any> = crate::sync_model::__Shared::new(());
         let mut src_view: Option<JArray<Object>> = None;
         let mut dest_view: Option<JArray<Object>> = None;
-        src.0.__view_into(std::rc::Rc::clone(&unused), &mut src_view);
+        src.0.__view_into(crate::sync_model::__Shared::clone(&unused), &mut src_view);
         dest.0.__view_into(unused, &mut dest_view);
         if let (Some(s), Some(d)) = (src_view, dest_view) {
             let backward = s == d && dest_pos > src_pos;

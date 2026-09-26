@@ -73,7 +73,7 @@ impl JvmError {
         if let Some(same) = self.thrown.0.as_any().downcast_ref::<T>() {
             return Clone::clone(same);
         }
-        let unused: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(());
+        let unused: crate::sync_model::__Shared<dyn std::any::Any> = crate::sync_model::__Shared::new(());
         if let Some(v) = self.thrown.0.__view_as(unused, binary_name)
             .and_then(|boxed| boxed.downcast::<T>().ok())
         {

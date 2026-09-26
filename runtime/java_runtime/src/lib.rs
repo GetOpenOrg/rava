@@ -292,12 +292,12 @@ impl PartialEq for MutexHolder {
 // binary name（点分）取常量。登记只看结构形态，不感知枚举语义；非枚举类的
 // 同形态 static 字段一并登记，无副作用（目录仅被常量名查找消费）。
 
-type ConstantGetter = std::rc::Rc<dyn Fn() -> Result<Object>>;
+type ConstantGetter = crate::sync_model::__Shared<dyn Fn() -> Result<Object>>;
 
 std::thread_local! {
-    static CONSTANT_DIRECTORY: std::cell::RefCell<
+    static CONSTANT_DIRECTORY: crate::sync_model::__RefSlot<
         std::collections::HashMap<std::string::String, Vec<(std::string::String, ConstantGetter)>>
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
 }
 
 /// 登记一个类的常量目录项。`binary_name` 为 JVM binary name（斜线 / $ 形态），
@@ -342,12 +342,12 @@ pub fn constant_directory_universe(binary_name: &str) -> Option<Vec<Object>> {
 // `Class::for_class` 与用户类的 `__class_init` 之间没有通道——生成项目在 main
 // 启动时按语料登记钩子（枚举形态类，与常量目录同一结构谓词），运行时按名代调。
 
-pub type ClassInitHook = std::rc::Rc<dyn Fn() -> Result<()>>;
+pub type ClassInitHook = crate::sync_model::__Shared<dyn Fn() -> Result<()>>;
 
 std::thread_local! {
-    static CLASS_INIT_HOOKS: std::cell::RefCell<
+    static CLASS_INIT_HOOKS: crate::sync_model::__RefSlot<
         std::collections::HashMap<std::string::String, ClassInitHook>
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
 }
 
 /// 生成项目 main 启动时登记类初始化钩子。`binary_name` 归一规则与常量目录一致。
@@ -393,8 +393,8 @@ pub mod prelude {
     pub use super::java_fmt_f32;
     pub use super::{register_constant_directory, lookup_constant, constant_directory_universe};
     pub use super::monitor::{MonitorGuard, class_monitor};
-    pub use std::rc::Rc;
-    pub use std::cell::RefCell;
+    pub use crate::sync_model::__Shared as Rc;
+    pub use crate::sync_model::__RefSlot as RefCell;
     pub use super::MutexHolder;
     pub use java_rta_macros::{jvm_native, jvm_boundary, jvm_ext};
     pub use java_rta_macros::java_try;

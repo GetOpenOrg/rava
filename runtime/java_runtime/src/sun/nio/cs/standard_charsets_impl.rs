@@ -12,7 +12,7 @@ use super::standard_charsets::implref::StandardCharsets;
 use crate::java::nio::charset::Charset;
 
 std::thread_local! {
-    static STANDARD: std::cell::RefCell<Vec<Charset>> = std::cell::RefCell::new(Vec::new());
+    static STANDARD: crate::sync_model::__RefSlot<Vec<Charset>> = crate::sync_model::__RefSlot::new(Vec::new());
 }
 
 fn standard_charsets() -> Result<Vec<Charset>> {

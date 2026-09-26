@@ -22,8 +22,8 @@ mod platform {
     /// 平台 provider 单例：macOS = MacOSXFileSystemProvider。
     /// 构造链语义见 mac_osx_file_system_provider_impl（theFileSystem 在 ctor 内建立）。
     thread_local! {
-        pub(crate) static INSTANCE: std::cell::RefCell<std::option::Option<MacOSXFileSystemProvider>> =
-            const { std::cell::RefCell::new(std::option::Option::None) };
+        pub(crate) static INSTANCE: crate::sync_model::__RefSlot<std::option::Option<MacOSXFileSystemProvider>> =
+            const { crate::sync_model::__RefSlot::new(std::option::Option::None) };
     }
 }
 
@@ -35,8 +35,8 @@ mod platform {
     /// 平台 provider 单例：Linux = LinuxFileSystemProvider（直接继承
     /// UnixFileSystemProvider，构造链同源）。
     thread_local! {
-        pub(crate) static INSTANCE: std::cell::RefCell<std::option::Option<LinuxFileSystemProvider>> =
-            const { std::cell::RefCell::new(std::option::Option::None) };
+        pub(crate) static INSTANCE: crate::sync_model::__RefSlot<std::option::Option<LinuxFileSystemProvider>> =
+            const { crate::sync_model::__RefSlot::new(std::option::Option::None) };
     }
 }
 
@@ -46,7 +46,7 @@ impl DefaultFileSystemProvider {
     #[jvm_boundary(upcalls = "sun/nio/fs/MacOSXFileSystemProvider.<init>:()V")]
     pub fn instance() -> Result<crate::sun::nio::fs::MacOSXFileSystemProvider> {
         platform::INSTANCE.with(|cell| {
-            if std::cell::RefCell::borrow(cell).is_none() {
+            if crate::sync_model::__RefSlot::borrow(cell).is_none() {
                 let provider = crate::sun::nio::fs::MacOSXFileSystemProvider::new()?;
                 *cell.borrow_mut() = std::option::Option::Some(provider);
             }
@@ -59,7 +59,7 @@ impl DefaultFileSystemProvider {
     #[jvm_boundary(upcalls = "sun/nio/fs/LinuxFileSystemProvider.<init>:()V")]
     pub fn instance() -> Result<crate::sun::nio::fs::LinuxFileSystemProvider> {
         platform::INSTANCE.with(|cell| {
-            if std::cell::RefCell::borrow(cell).is_none() {
+            if crate::sync_model::__RefSlot::borrow(cell).is_none() {
                 let provider = crate::sun::nio::fs::LinuxFileSystemProvider::new()?;
                 *cell.borrow_mut() = std::option::Option::Some(provider);
             }

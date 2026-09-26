@@ -49,7 +49,7 @@
 //!   - 模拟线程的限时等待被唤醒后无法「到点自醒」（嵌套调用栈无法暂停再续）：
 //!     泵内就绪队列耗尽即返回。语料无此形态，见 compatibility.md 线程行。
 
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -294,7 +294,7 @@ static CLOCK_SKEW_NANOS: std::sync::atomic::AtomicI64 = std::sync::atomic::Atomi
 
 thread_local! {
     /// 已运行（至终结）的模拟线程计数：判定一次泵调用是否推进了任何线程。
-    static SIM_RUNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SIM_RUNS: crate::sync_model::__PrimCell<u64> = const { crate::sync_model::__PrimCell::new(0) };
 }
 
 /// 模拟线程运行登记（`thread_impl::run_sim_thread` 调用）。

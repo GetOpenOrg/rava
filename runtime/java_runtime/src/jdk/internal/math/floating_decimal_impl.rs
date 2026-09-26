@@ -13,7 +13,7 @@ use super::floating_decimal_binary_to_ascii_converter::FloatingDecimal_BinaryToA
 use super::double_to_decimal::DoubleToDecimal;
 use super::float_to_decimal::FloatToDecimal;
 use crate::java::lang::{Appendable, String};
-use std::rc::Rc;
+use crate::sync_model::__Shared as Rc;
 
 /// Schubfach 引擎包装的 `BinaryToASCIIConverter`（接口实现对象，经
 /// `ObjectVTable::__interface` 应答；与手写 access 对象同形态）。

@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use super::unsafe_::Unsafe;
 use crate::java::lang::Class;
-use std::cell::RefCell;
+use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 
 // 内部边界类 jdk.internal.misc.Unsafe：按调用链按需实现，其余保持 panic 存根。
@@ -105,13 +105,13 @@ fn _offset_field_name(offset: i64) -> Option<std::string::String> {
 
 /// 偏移 id → 实例字段的共享 long 存储单元（经 ObjectVTable 的字段名协议）。
 /// 未登记的 id 或运行时类无该平铺 long 字段 → None。
-fn _instance_long_cell(o: &Object, offset: i64) -> Option<Rc<std::cell::Cell<i64>>> {
+fn _instance_long_cell(o: &Object, offset: i64) -> Option<Rc<crate::sync_model::__PrimCell<i64>>> {
     let field = _offset_field_name(offset)?;
     o.0.__unsafe_long_cell(&field)
 }
 
 /// 偏移 id → 实例字段的共享 int 存储单元（`_instance_long_cell` 的 int 镜像）。
-fn _instance_int_cell(o: &Object, offset: i64) -> Option<Rc<std::cell::Cell<i32>>> {
+fn _instance_int_cell(o: &Object, offset: i64) -> Option<Rc<crate::sync_model::__PrimCell<i32>>> {
     let field = _offset_field_name(offset)?;
     o.0.__unsafe_int_cell(&field)
 }
@@ -767,7 +767,7 @@ impl Unsafe {
             cell.set(old.wrapping_add(delta));
             return Ok(old);
         }
-        use std::cell::RefCell;
+        use crate::sync_model::__RefSlot as RefCell;
         use std::collections::HashMap;
         thread_local! {
             static CELLS: RefCell<HashMap<i64, i64>> = RefCell::new(HashMap::new());
@@ -795,7 +795,7 @@ impl Unsafe {
     #[jvm_boundary]
     pub fn staticFieldOffset(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
         let _ = f;
-        use std::cell::RefCell;
+        use crate::sync_model::__RefSlot as RefCell;
         thread_local! {
             static NEXT: RefCell<i64> = const { RefCell::new(1) };
         }
@@ -824,7 +824,7 @@ impl Unsafe {
                 return Ok(old);
             }
         }
-        use std::cell::RefCell;
+        use crate::sync_model::__RefSlot as RefCell;
         use std::collections::HashMap;
         thread_local! {
             static CELLS: RefCell<HashMap<(usize, i64), i32>> = RefCell::new(HashMap::new());

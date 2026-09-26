@@ -17,7 +17,7 @@ impl super::object::ObjectVTable for Instance {
 impl Object {
     /// java.lang.Object.<init>()V（手写根类无 `__class_init`：Object 无 `<clinit>`）
     #[jvm_native(no_class_init)]
-    pub fn new() -> Result<Object> { Ok(Object(std::rc::Rc::new(Instance(0)))) }
+    pub fn new() -> Result<Object> { Ok(Object(crate::sync_model::__Shared::new(Instance(0)))) }
 
     #[jvm_native]
     pub fn lock(&self) -> Result<()> { Ok(()) }
