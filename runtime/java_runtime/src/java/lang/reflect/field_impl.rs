@@ -103,7 +103,8 @@ impl Field {
     pub fn __impl_get(&self, obj: Object) -> Result<Object> {
         let name = format!("{}", self.__get_name());
         let (descriptor, is_static, mods, constant) = self.__meta()?;
-        if !self.__get_override_() && (mods & 0x0001) == 0 {
+        let __decl = format!("{}", self.__get_clazz().__get_name()).replace('.', "/");
+        if !crate::reflect_dispatch::member_accessible(&__decl, mods, self.__get_override_()) {
             return Err(JvmError::from(crate::java::lang::IllegalAccessException::new_str(
                 String::from(format!("Class can not access a member with modifiers {}", mods)))?));
         }
@@ -190,7 +191,8 @@ impl Field {
     pub fn __impl_set(&self, obj: Object, value: Object) -> Result<()> {
         let name = format!("{}", self.__get_name());
         let (descriptor, is_static, mods, _constant) = self.__meta()?;
-        if !self.__get_override_() && (mods & 0x0001) == 0 {
+        let __decl = format!("{}", self.__get_clazz().__get_name()).replace('.', "/");
+        if !crate::reflect_dispatch::member_accessible(&__decl, mods, self.__get_override_()) {
             return Err(JvmError::from(crate::java::lang::IllegalAccessException::new_str(
                 String::from(format!("Class can not access a member with modifiers {}", mods)))?));
         }

@@ -72,13 +72,13 @@ impl Method {
     pub fn invoke_obj_arr_obj(&self, obj: Object, args: JArray<Object>) -> Result<Object> {
         let name = format!("{}", self.__get_name());
         let mods = self.__get_modifiers();
-        if !self.__get_override_() && (mods & 0x0001) == 0 {
-            return Err(JvmError::from(crate::java::lang::IllegalAccessException::new_str(
-                String::from(format!("Class can not access a member with modifiers {}", mods)))?));
-        }
         let Some((cls_key, _n, desc)) = __member_key(self) else {
             panic!("stub: Method.invoke 无声明键（非表构造的 Method）: {}", name);
         };
+        if !crate::reflect_dispatch::member_accessible(&cls_key, mods, self.__get_override_()) {
+            return Err(JvmError::from(crate::java::lang::IllegalAccessException::new_str(
+                String::from(format!("Class can not access a member with modifiers {}", mods)))?));
+        }
         let ret = crate::reflect_dispatch::reflect_invoke(
             &cls_key, &name, &desc, obj, &args);
         match ret {

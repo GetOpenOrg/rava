@@ -238,3 +238,15 @@ pub fn unbox_f32(v: &Object) -> Option<f32> {
     }
     None
 }
+
+/// 反射访问检查（Method.invoke / Field.get/set 共用）：JDK 按调用方判定
+/// （`Reflection.verifyMemberAccess`：同类 / 同包 / nestmate 可达非 public 成员）；原生侧
+/// 取不到调用方，近似为「用户类成员可达（调用方即同一程序的用户代码，与同包 / nestmate
+/// 的常见形态一致），JDK 类的非 public 成员须 setAccessible」——后者与 JDK 对 java.base
+/// 封装成员的可观测行为同型（未命名模块不可达）。
+pub fn member_accessible(declaring_slash: &str, modifiers: i32, override_: bool) -> bool {
+    const JDK_PREFIXES: [&str; 6] = ["java/", "javax/", "jdk/", "sun/", "com/sun/", "com/oracle/"];
+    override_ || (modifiers & 0x0001) != 0
+        || !JDK_PREFIXES.iter().any(|p| declaring_slash.starts_with(p))
+}
+
