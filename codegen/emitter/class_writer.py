@@ -866,6 +866,12 @@ def _slot_demanded_on_chain(ci, vm, registry, call_chain) -> bool:
     return False
 
 
+# 用户类的 JDK 祖先槽位填充所用的 JDK 调用链（project_writer 在生成用户类前设置）：用户类
+# 自身 call_chain 为 None（全量翻译，不按链门控），但继承自 JDK 中间祖先的实现（RecursiveTask.exec
+# 实现 ForkJoinTask 的抽象 exec）须按 JDK 链登记转发，否则槽位落到抽象存根。
+_JDK_INHERIT_CHAIN: 'set | None' = None
+
+
 def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                                          new_format_map, class_type_params,
                                          overloaded_names, visible_methods,
@@ -901,6 +907,8 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
     协变覆盖（get()Integer 覆盖 get()Object）经 vtable_erasure 已填父槽位，
     精确描述符匹配漏判 → 父方法重发射与真实覆盖重名（E0201）。"""
     _user_chain = bool(ci.super_class) and '/' not in ci.super_class
+    if call_chain is None and _JDK_INHERIT_CHAIN is not None and not _user_chain:
+        call_chain = _JDK_INHERIT_CHAIN   # 用户类直接继承 JDK 类：JDK 祖先段按 JDK 链填槽
     if not ci.is_interface and registry and ci.super_class and (_user_chain or call_chain is not None):
         import copy as _copy3
         from .. import inherited_calls as _inherited_calls

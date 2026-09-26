@@ -639,6 +639,8 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         _user_resolver = _user_resolve
         _user_gen_jdk = (_user_gen_jdk or set()) | _lib_generated_all
         user_pkg_paths = None
+    from . import class_writer as _cw_mod
+    _cw_mod._JDK_INHERIT_CHAIN = visited_methods   # 用户类的 JDK 祖先槽位填充（S-16）
     for ci in class_infos:
         file_path, _, _ = layout[ci.name]
         _em = ClassEmission(binary_name=ci.name, crate_prefix='java_runtime',
