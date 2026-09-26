@@ -22,6 +22,7 @@
     python3 scripts/run_tests.py --deny fallback         # 任一静默兜底点非零 → 整体失败（K-6b 防线）
     python3 scripts/run_tests.py --deny equiv --deny stub-hit   # 可叠加
     python3 scripts/run_tests.py --keep-artifacts               # 保留通过测试的生成物（缺省 PASS 即清理）
+    python3 scripts/run_tests.py --jdk 21 --prune-passed        # 只清理：通过清单测试的遗留生成物 + java_runtime 中间缓存
 
 工作区模型（见 docs/plans/2026-09-16-per-test-scratch-workspace.md）：
     build/<test>/   每测试独立 scratch（手写 overlay + 该测试的生成代码）
@@ -544,6 +545,56 @@ def _cleanup_passed(class_name: str) -> None:
                 t.unlink()
         except OSError:
             pass
+
+
+def _prune_passed(jdk_major: int | None) -> int:
+    """`--prune-passed`：清理历史遗留生成物（不跑测试，完成即退出）。
+
+    - 通过清单（passed_tests_jdkN.txt）中的测试：scratch、可执行文件（<bin> / <bin>.d /
+      deps/<bin>-*）、其指纹目录、残留失败日志——按名字精确归属；
+    - 每测试的 java_runtime 中间产物（deps/*java_runtime-* / build/java_runtime-* /
+      .fingerprint/java_runtime-*）：旧产物无 JSON 清单可归属，统一删除。它们只是编译缓存——
+      失败测试用于分析的 scratch 源码、可执行文件与日志全部保留，修复后本就需重新编译；
+    - 共享依赖（syn / quote / parking_lot / libc / java_rta_macros 等）不动。
+    勿与正在运行的跑批并发执行（会删掉进行中构建的 java_runtime 中间产物）。"""
+    import shutil
+    passed = _load_failed(_passed_file_path(jdk_major))
+    prof = SHARED_TARGET / PROFILE_DIR
+    freed = 0
+
+    def _rm(t: Path) -> None:
+        nonlocal freed
+        try:
+            if t.is_dir() and not t.is_symlink():
+                freed += sum(f.stat().st_size for f in t.rglob('*') if f.is_file())
+                shutil.rmtree(t, ignore_errors=True)
+            elif t.exists():
+                freed += t.stat().st_size
+                t.unlink()
+        except OSError:
+            pass
+
+    n_tests = 0
+    for rel in sorted(passed):
+        bin_name = _to_bin_name(_class_name(Path(rel)))
+        targets = [_test_workspace(bin_name), prof / bin_name, prof / f"{bin_name}.d",
+                   LOGS_DIR / f"{bin_name}.build.log", LOGS_DIR / f"{bin_name}.run.log"]
+        for d in (prof / "deps").glob(f"{bin_name}-*"):
+            targets.append(d)
+            h = d.name.split(".", 1)[0].rsplit("-", 1)[-1]
+            targets.extend((prof / ".fingerprint").glob(f"*-{h}"))
+        if any(t.exists() for t in targets):
+            n_tests += 1
+        for t in targets:
+            _rm(t)
+    for pat in ("deps/*java_runtime-*", "build/java_runtime-*", ".fingerprint/java_runtime-*",
+                "incremental/java_runtime-*"):
+        for t in prof.glob(pat):
+            _rm(t)
+    print(f"[prune-passed] 通过清单 {len(passed)} 例（其中 {n_tests} 例有遗留生成物已清理）；"
+          f"java_runtime 中间产物已清；共释放 {freed / (1 << 30):.2f} GiB")
+    print(f"[prune-passed] 失败测试的 scratch / 可执行文件 / 日志保留；共享依赖缓存保留（{prof}）")
+    return 0
 
 
 def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
@@ -1481,6 +1532,9 @@ def main():
     ap.add_argument("--record-passed",   action="store_true",
                     help="通过测试写穿记录到 build/passed_tests_jdkN.txt：PASS 即时落盘（中断不丢）、FAIL 即时出列；"
                          "重跑自动跳过已通过，删除清单文件即从头")
+    ap.add_argument("--prune-passed",    action="store_true",
+                    help="只清理不跑测试：删除通过清单中测试的遗留生成物（scratch / 可执行文件 / 日志）"
+                         "与全部 java_runtime 中间编译缓存；失败测试的生成物与共享依赖保留")
     ap.add_argument("--keep-artifacts",  action="store_true",
                     help="保留通过测试的生成物（缺省：PASS 即删除其 scratch 与独有编译产物，"
                          "失败测试的生成物始终保留）")
@@ -1521,6 +1575,9 @@ def main():
     JDK_LAYER = str(_current_jdk_major()) if _current_jdk_major() is not None else None
     SHARED_TARGET = _versioned(OUT) / "target"
     LOGS_DIR = _versioned(OUT) / "logs"
+
+    if args.prune_passed:
+        sys.exit(_prune_passed(_current_jdk_major()))
 
     jobs = args.jobs
     if jobs == 0:
