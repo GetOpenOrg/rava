@@ -178,9 +178,22 @@ impl MethodHandleNatives {
             };
             format!("{}", mt.toMethodDescriptorString()?)
         };
-        let Some((modifiers, _is_static, _is_native, _is_abstract)) =
-            m.__get_clazz().__declared_method_meta(&name, &descriptor)
-        else {
+        let clazz = m.__get_clazz();
+        let meta = clazz.__declared_method_meta(&name, &descriptor).or_else(|| {
+            // 签名多态方法（JVMS §2.9.3）：声明于 MethodHandle / VarHandle、唯一形参 Object[]、
+            // native（+ varargs）——invokeBasic / linkToStatic / linkToSpecial / VarHandle.get 等
+            // 按任意调用描述符解析（HotSpot 的 resolve 同样对其放行，调用经内建 linker 执行，
+            // 见 method_handle_ext.rs）。返回位按声明形态逐一匹配（Object / boolean / void）。
+            let owner = format!("{}", clazz.__get_name()).replace('.', "/");
+            if owner != "java/lang/invoke/MethodHandle" && owner != "java/lang/invoke/VarHandle" {
+                return None;
+            }
+            ["Ljava/lang/Object;", "Z", "V"].iter().find_map(|ret| {
+                clazz.__declared_method_meta(&name, &format!("([Ljava/lang/Object;){}", ret))
+                    .filter(|(_, _, is_native, _)| *is_native)
+            })
+        });
+        let Some((modifiers, _is_static, _is_native, _is_abstract)) = meta else {
             return not_found(&m);
         };
         // 类别位保留构造时的 MN_IS_METHOD / MN_IS_CONSTRUCTOR
