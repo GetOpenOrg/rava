@@ -1,0 +1,5 @@
+a=true b=false
+after set a=false b=true direct=false,true
+IAE on int value
+NPE on null receiver
+final a=false b=true

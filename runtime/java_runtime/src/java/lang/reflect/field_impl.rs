@@ -142,6 +142,11 @@ impl Field {
                 None => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
                     String::from(format!("Not a flat int field: {}", name)))?)),
             },
+            "Z" => match obj.0.__unsafe_bool_cell(&name) {
+                Some(cell) => Ok(Object::from(cell.get())),
+                None => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+                    String::from(format!("Not a flat boolean field: {}", name)))?)),
+            },
             _ => panic!("stub: Field.get 引用字段与其余基本类型无按名协议: {}", name),
         }
     }
@@ -222,6 +227,13 @@ impl Field {
                     String::from(format!("Not an int value for field {}", name)))?)),
                 (None, _) => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
                     String::from(format!("Not a flat int field: {}", name)))?)),
+            },
+            "Z" => match (obj.0.__unsafe_bool_cell(&name), crate::reflect_dispatch::unbox_bool(&value)) {
+                (Some(cell), Some(v)) => { cell.set(v); Ok(()) }
+                (_, None) => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+                    String::from(format!("Not a boolean value for field {}", name)))?)),
+                (None, _) => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+                    String::from(format!("Not a flat boolean field: {}", name)))?)),
             },
             _ => panic!("stub: Field.set 引用字段与其余基本类型无按名协议: {}", name),
         }
