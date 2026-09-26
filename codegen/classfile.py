@@ -438,11 +438,15 @@ def _decode_bytecode(code: bytes, pool: list, bootstrap_methods: list[dict] | No
             wide_op = code[pos]; pos += 1
             wide_name = _OPCODE_NAMES.get(wide_op, f'unknown_0x{wide_op:02x}')
             idx = struct.unpack_from('>H', code, pos)[0]; pos += 2
+            # wide 前缀只扩宽操作数（16 位局部槽 / 16 位 iinc 增量），语义与无前缀形态相同：
+            # 发出同名指令、同一操作数格式，下游模拟 / 槽位分析一视同仁（此前发出
+            # `wide_iinc` 等独立名字，模拟层落入 TODO 分支、增量被丢弃——FdLibm.Sqrt 的
+            # `m -= 1023` 丢失致 sqrt(2) 指数错为 2^512）。
             if wide_op == 0x84:  # iinc wide
                 const = struct.unpack_from('>h', code, pos)[0]; pos += 2
-                instrs.append(Instr(pc, f'wide_{wide_name}', f'{idx} {const}'))
+                instrs.append(Instr(pc, wide_name, f'{idx} {const}'))
                 continue
-            instrs.append(Instr(pc, f'wide_{wide_name}', str(idx)))
+            instrs.append(Instr(pc, wide_name, str(idx)))
             continue
         elif op == 0xc5:   # multianewarray
             idx = struct.unpack_from('>H', code, pos)[0]; pos += 2

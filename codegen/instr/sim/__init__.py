@@ -37,4 +37,6 @@ def sim_instr(ins, sim, class_name: str, registry=None):
     from ...rs_ir import RawStmt
     op      = ins.opcode
     operand = ins.operand or ''
-    sim.emit(RawStmt(f"/* TODO: {op} {operand} */"))
+    # 未支持的字节码不得静默丢弃（wide_iinc 曾被吞掉致 FdLibm.Sqrt 算术错误）：发射 panic
+    # 存根，运行时命中即精确报出指令（原则 2 的存根约定）
+    sim.emit(RawStmt(f'panic!("stub: unsupported bytecode {op} {operand}");'))
