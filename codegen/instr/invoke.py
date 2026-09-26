@@ -58,6 +58,36 @@ from ..type_args import rust_type_arg_text, rust_type_head
 
 
 
+
+_CALLER_SENSITIVE_ANNOS: 'frozenset | None' = None
+
+
+def _is_caller_sensitive(owner_bin: str, mname: str, desc: str, registry: dict | None) -> bool:
+    """被调方法（沿超类链解析声明处）是否标注 @CallerSensitive（注解名见 caller_sensitive.txt）。"""
+    global _CALLER_SENSITIVE_ANNOS
+    if _CALLER_SENSITIVE_ANNOS is None:
+        from ..runtime_manifest import read_list
+        _CALLER_SENSITIVE_ANNOS = frozenset(read_list('caller_sensitive.txt'))
+    if not registry or not _CALLER_SENSITIVE_ANNOS:
+        return False
+    cur, seen = owner_bin, set()
+    while cur and cur in registry and cur not in seen:
+        seen.add(cur)
+        ci = registry[cur]
+        for m in ci.methods:
+            if m.name == mname and m.descriptor == desc:
+                return any(a.type_bin in _CALLER_SENSITIVE_ANNOS for a in (m.runtime_annotations or []))
+        cur = ci.super_class
+    return False
+
+
+def caller_sensitive_wrap(call: str, owner_bin: str, mname: str, desc: str,
+                          caller_bin: str, registry: dict | None) -> str:
+    """@CallerSensitive 调用：`__caller_sensitive("调用处类", || call)`，其余原样。"""
+    if _is_caller_sensitive(owner_bin, mname, desc, registry):
+        return f'__caller_sensitive("{caller_bin}", || {call})'
+    return call
+
 def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None):
     """处理 invokedynamic makeConcatWithConstants 字符串拼接。
     结果为 java.lang.String（通过 String::from(format!(...)) 转换）。
@@ -818,6 +848,10 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         call = f"{_cls_path}{cls}{turbofish}::{rust_mname}({', '.join(args)})"
         needs_q = True
 
+    if needs_q:
+        call = caller_sensitive_wrap(call, _cp_cls_bin or class_name, mname,
+                                     '(' + comment.split(':(', 1)[1] if ':(' in comment else '',
+                                     class_name, registry)
     q = '?' if needs_q else ''
     rust_ret = jvm_to_rust(ret, registry)
     if rust_ret == '()':

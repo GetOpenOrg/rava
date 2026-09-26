@@ -400,6 +400,7 @@ pub mod prelude {
     pub use super::sync_model::__CellAtomicOps;
     pub use crate::__DynFn;
     pub use crate::__process_static;
+    pub use crate::reflect_dispatch::__caller_sensitive;
     pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
                          clinit_enter as __clinit_enter, clinit_exit as __clinit_exit};
     pub use super::_is_jnull;

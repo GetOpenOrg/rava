@@ -271,6 +271,10 @@ impl Reflection {
     /// （Charset.forName 未知名的扩展 provider 查找，macOS 实测揭出）。
     #[jvm_native]
     pub fn getCallerClass() -> Result<Class> {
+        // 生成器显式传入的调用者（@CallerSensitive 调用点压栈，平台无关）优先
+        if let Some(caller) = crate::reflect_dispatch::current_caller_sensitive() {
+            return Ok(Class::for_class(String::from(caller)));
+        }
         const SELF_CLASS: &str = "jdk/internal/reflect/Reflection";
         let fallback = || Class::for_class(String::from("java/lang/Object"));
         let frames = _capture_frame_classes();

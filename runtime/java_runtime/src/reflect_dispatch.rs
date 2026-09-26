@@ -323,3 +323,33 @@ pub fn member_accessible(declaring_slash: &str, modifiers: i32, override_: bool)
         || !JDK_PREFIXES.iter().any(|p| declaring_slash.starts_with(p))
 }
 
+
+// ── @CallerSensitive 的显式调用者（平台无关的 getCallerClass 数据面）────────────
+//
+// HotSpot 的 `Reflection.getCallerClass` 读取 Java 栈帧；原生二进制没有 Java 帧，Rust 符号
+// 解析随平台符号化形态而变（macOS / Linux 不一致）。生成器在调用标注 @CallerSensitive
+// 的方法处把「调用处所在类」显式压栈（`__caller_sensitive`），`getCallerClass` 优先读栈顶，
+// 与 JVM 语义逐点一致；栈空（手写运行时直接调用 caller-sensitive 方法）才回退帧解析。
+
+std::thread_local! {
+    static CS_CALLERS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct CallerFrameGuard;
+impl Drop for CallerFrameGuard {
+    fn drop(&mut self) {
+        CS_CALLERS.with(|s| { s.borrow_mut().pop(); });
+    }
+}
+
+/// 以 `caller`（调用处所在类的 binary name）为 @CallerSensitive 调用者执行 `f`。
+pub fn __caller_sensitive<R>(caller: &'static str, f: impl FnOnce() -> R) -> R {
+    CS_CALLERS.with(|s| s.borrow_mut().push(caller));
+    let _guard = CallerFrameGuard;
+    f()
+}
+
+/// 当前最内层 @CallerSensitive 调用的调用者类（生成器显式传入）；无 → None。
+pub fn current_caller_sensitive() -> Option<&'static str> {
+    CS_CALLERS.with(|s| s.borrow().last().copied())
+}

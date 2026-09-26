@@ -1,0 +1,4 @@
+# @CallerSensitive 注解（binary name）：调用标注此注解的方法时，生成器把调用处所在类显式传入
+# 运行时（reflect_dispatch::__caller_sensitive），Reflection.getCallerClass 据此返回——平台无关、
+# 与 JVM 栈帧语义逐点一致（原生二进制无 Java 栈帧可读）。
+jdk/internal/reflect/CallerSensitive
