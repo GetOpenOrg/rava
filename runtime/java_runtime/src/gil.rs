@@ -114,7 +114,11 @@ fn yield_slice(force: bool) {
     }
     HELD.with(|h| {
         if let Some(g) = h.borrow_mut().as_mut() {
+            // bump 交出锁后本线程重新排队等锁：计入等待者，使接手线程的安全点 / yield
+            // 能看到并在时间片用尽时交还（否则两线程互相自旋等待时接手方永不让出）
+            WAITERS.fetch_add(1, Ordering::SeqCst);
             MutexGuard::bump(g);
+            WAITERS.fetch_sub(1, Ordering::SeqCst);
         }
     });
     SLICE_START.with(|s| s.set(Some(Instant::now())));
