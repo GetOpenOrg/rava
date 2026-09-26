@@ -303,6 +303,34 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             enqueued_from[key] = origin[0]
             queue.append(key)
 
+    # 以边界类为常量池类、实际声明在其翻译祖先上的方法引用（JVMS §5.4.3.3 方法解析沿
+    # 超类链找声明者）：`secureRandom.nextInt()` 的常量池类是边界类 SecureRandom，声明在
+    # java/util/Random（翻译类）——不解析则 Random.nextInt 停在存根。种子阶段类加载器
+    # 未就绪 → 暂存，由不动点循环的 _drain_boundary_refs 解析入队。
+    _pending_boundary_refs: list = []
+    _boundary_refs_done: set = set()
+
+    def _drain_boundary_refs() -> None:
+        while _pending_boundary_refs:
+            key = _pending_boundary_refs.pop()
+            if key in _boundary_refs_done:
+                continue
+            _boundary_refs_done.add(key)
+            bcls, bmeth, bdesc = key
+            if bmeth in ('<init>', '<clinit>'):
+                continue
+            cur, seen = bcls, set()
+            while cur and cur not in seen:
+                seen.add(cur)
+                ci = _load_class(cur)
+                if ci is None:
+                    break
+                if any(m.name == bmeth and m.descriptor == bdesc for m in ci.methods):
+                    if cur != bcls and cur.startswith(_JDK_PREFIXES) and not _is_boundary_class(cur):
+                        _enqueue_method((cur, bmeth, bdesc))
+                    break
+                cur = ci.super_class
+
     def _enqueue_upcalls(cls: str, member: str) -> None:
         """被触达成员的手写实现声明的 Java 回调目标入队（native → Java 的调用边）。"""
         if upcalls is None or (cls, member) in seen_members:
@@ -335,6 +363,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
          static_refs) = _collect_method_refs(instrs, user_class_names=user_names,
                                              extra_prefixes=lib_prefixes)
         boundary_virtual_targets.update(boundary_refs)
+        _pending_boundary_refs.extend(boundary_refs)
         instantiated_classes.update(new_classes)
         pending_static_fields.extend(static_refs)
         # 异常表的 catch_type：catch 分派按类层次匹配，只需类型存根（不引入任何方法）
@@ -886,6 +915,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         while True:
             while queue:
                 _process(*queue.popleft())
+            _drain_boundary_refs()
+            if queue:
+                continue
             _propagate_virtual_targets()
             if (not queue and not _bundles_seeded
                     and any(t in seen_members for t in _ls_mf.triggers)):
