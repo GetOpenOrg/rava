@@ -46,7 +46,8 @@ pub(crate) fn __field_filter(binary_name: &str) -> Option<Vec<std::string::Strin
 ///   method_handles）不是 Java 包——codegen 每类一文件，类型自身模块名恰是 stem，
 ///   归一化比较（去 `_`/`$` 后小写相等）命中即剥掉；不命中（非 java_runtime 形态）保留；
 /// - 包段的单词式关键字转义（尾随一个 `_`，如 `unsafe_`）剥掉下划线。
-/// 解析不出（非 java_runtime 帧 / 形态不符）返回 None。
+/// - 用户 crate 帧（`<bin>::<包段…>::<stem>::Class::method`）同一规则解析（首段为 crate 根）。
+/// 解析不出（标准库 / 依赖帧、形态不符）返回 None。
 fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
     const KEYWORDS: &[&str] = &[
         "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false",
@@ -55,7 +56,25 @@ fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
         "use", "where", "while",
     ];
     let path = _strip_generic_groups(&_unwrap_qualified_self(&_impl_self_type(symbol)));
-    let start = path.find("java_runtime::")?;
+    // 翻译类所在 crate：JDK 类在 java_runtime，用户类在用户 crate（bin 名为 crate 根，
+    // 模块路径 = 包段 + 类文件 stem，与 java_runtime 同一布局）。Rust 标准库与第三方
+    // 依赖帧不是 Java 帧。
+    const NON_JAVA_CRATES: &[&str] = &[
+        "std", "core", "alloc", "parking_lot", "parking_lot_core", "lock_api", "backtrace",
+        "rustc_demangle", "gimli", "addr2line", "java_rta_macros",
+    ];
+    let in_runtime = path.contains("java_runtime::");
+    let start = match path.find("java_runtime::") {
+        Some(s) => s,
+        None => {
+            let first = path.split("::").next()?;
+            if first.is_empty() || !first.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                || NON_JAVA_CRATES.contains(&first) {
+                return None;
+            }
+            0
+        }
+    };
     let segs: Vec<&str> = path[start..].split("::").filter(|s| !s.is_empty()).collect();
     // 从右向左找类型段（首个大写开头段；小写/下划线开头为方法或辅助函数段）
     let mut idx = segs.len();
@@ -66,8 +85,8 @@ fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
             _ => idx -= 1,
         }
     }
-    if idx == 0 {
-        return None;
+    if idx < 2 {
+        return None; // 至少「crate 根 + 类型段」
     }
     let type_name = segs[idx - 1].replace('_', "$");
     let mut pkg: Vec<std::string::String> = Vec::new();
@@ -93,7 +112,8 @@ fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
         }
     }
     if pkg.is_empty() {
-        return None;
+        // 无名包：只对用户 crate 成立（JDK 类恒在具名包）
+        return if in_runtime { None } else { Some(type_name) };
     }
     Some(format!("{}/{}", pkg.join("/"), type_name))
 }
