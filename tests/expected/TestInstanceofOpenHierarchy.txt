@@ -1,0 +1,8 @@
+plain false/false/false
+impl true/true/false
+deeper true/true/false
+null false/false/false
+sub true/false/false
+other false/false/false
+implAsRunnable false/true/true
+lambda false/false/false

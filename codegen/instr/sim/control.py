@@ -186,6 +186,14 @@ def sim_control(ins, sim, class_name, registry) -> bool:
                 _boxed_inst = _coerce_to_object(val_s_inst, _obj_base, registry,
                                                 sim.class_type_params)
                 sim.push(InstanceOfExpr(RawExpr(_boxed_inst), comment), BOOL)
+            elif _open_hierarchy_instanceof(_obj_base, comment, registry):
+                # 一侧是接口、另一侧是非 final 类：子类可实现该接口（JLS §15.20.2 编译期
+                # 只否证 final 类不实现目标接口的情形）——`MessageDigestSpi 变量 instanceof
+                # Cloneable`（运行时对象 MD5 经 DigestBase 实现 Cloneable）→ 运行时判定
+                val_s_inst = render_expr(val_expr_inst)
+                _boxed_inst = _coerce_to_object(val_s_inst, _obj_base, registry,
+                                                sim.class_type_params)
+                sim.push(InstanceOfExpr(RawExpr(_boxed_inst), comment), BOOL)
             else:
                 from ...cfg import STATS as _STATS_INST
                 _STATS_INST.record_instanceof_fold()
@@ -197,3 +205,23 @@ def sim_control(ins, sim, class_name, registry) -> bool:
     else:
         return False
     return True
+
+
+def _open_hierarchy_instanceof(obj_base: str, target_bin: str, registry) -> bool:
+    """`obj instanceof T` 在两者互不为子类型时是否仍可能为真（JLS §5.5 可转换性）：
+    一侧是接口、另一侧是非 final 类 → 子类可同时实现该接口，不能编译期折叠为 false。
+    类型不可解析时保守视为可能（运行时判定，永不误折叠）。"""
+    if not registry or target_bin.startswith('['):
+        return False
+    tgt = registry.get(target_bin)
+    obj_bin = _rust_type_to_binary(obj_base, registry)
+    obj = registry.get(obj_bin) if obj_bin else None
+    if tgt is None or obj is None:
+        return True
+    _ACC_FINAL = 0x0010
+    if tgt.is_interface and not obj.is_interface:
+        return not (obj.access_flags & _ACC_FINAL)
+    if obj.is_interface and not tgt.is_interface:
+        return not (tgt.access_flags & _ACC_FINAL)
+    return False
+
