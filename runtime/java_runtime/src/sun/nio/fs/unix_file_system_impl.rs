@@ -1,7 +1,8 @@
 //! `sun/nio/fs/UnixFileSystem` 手写伴生：POSIX 原生族档 A（切入序 3）。
 //!
 //! 用例面：构造（默认目录快照 + 根目录）、provider()/getPath()（Path.of 链的
-//! vtable 槽位）。getSeparator/isOpen/isReadOnly 等保持 panic 存根。
+//! vtable 槽位）、supportedFileAttributeViews（临时文件链）。getSeparator/isOpen/isReadOnly
+//! 等保持 panic 存根。
 
 use crate::prelude::*;
 use super::unix_file_system_provider::UnixFileSystemProvider;
@@ -87,6 +88,24 @@ impl super::unix_file_system::implref::UnixFileSystem {
     #[jvm_boundary]
     pub fn __impl_provider(&self) -> Result<FileSystemProvider> {
         Ok(Clone::clone(&self.__get_provider()).into())
+    }
+
+    /// `supportedFileAttributeViews()`：平台子类（LinuxFileSystem / BsdFileSystem）的实现——
+    /// UnixFileSystem.standardFileAttributeViews（basic / posix / unix / owner）加平台扩展：
+    /// Linux 另有 dos / user，macOS 另有 user。消费方：TempFileHelper.<clinit> 的
+    /// isPosix 判定（Files.createTempFile / createTempDirectory 链）。
+    #[jvm_boundary(upcalls = "java/util/HashSet.<init>:()V java/util/HashSet.add:(Ljava/lang/Object;)Z")]
+    pub fn __impl_supportedFileAttributeViews(&self) -> Result<crate::java::util::Set<Object>> {
+        let set = crate::java::util::HashSet::<Object>::new()?;
+        let views: &[&str] = if cfg!(target_os = "linux") {
+            &["basic", "posix", "unix", "owner", "dos", "user"]
+        } else {
+            &["basic", "posix", "unix", "owner", "user"]
+        };
+        for v in views {
+            set.add(Object::from(String::from(*v)))?;
+        }
+        Object::from(set).try_cast("java/util/Set")
     }
 
     /// `getPath(String, String...)`：Path.of 的最终落点（同上 vtable 槽位形态）。
