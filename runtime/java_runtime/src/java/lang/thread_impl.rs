@@ -40,7 +40,6 @@ use std::time::Duration;
 const JVMTI_ALIVE: i32 = 0x1;
 const JVMTI_TERMINATED: i32 = 0x2;
 const JVMTI_RUNNABLE: i32 = 0x4;
-
 /// Java 线程的 OS 线程栈（翻译代码递归深度与 JVM 默认线程栈 + 解释帧开销对齐的保守取值；
 /// 仅保留虚拟地址，按需提交）。
 const JAVA_THREAD_STACK: usize = 256 << 20;
@@ -81,17 +80,6 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
         crate::gil::note_terminated(daemon);
         return Err(JvmError::out_of_memory("unable to create native thread"));
     }
-    Ok(())
-}
-
-/// 当前线程对象的身份（park / 中断 / wait 的每线程设施键）。
-pub(crate) fn current_thread_identity() -> Result<usize> {
-    Ok(Object::from(Thread::currentThread()?).0.__identity() as usize)
-}
-
-/// 清除当前线程的中断状态（Java 字段）：VM 抛出 InterruptedException 时调用。
-pub(crate) fn clear_current_interrupted() -> Result<()> {
-    Thread::currentThread()?.__set_interrupted(false);
     Ok(())
 }
 
@@ -142,9 +130,16 @@ impl Thread {
     /// （HotSpot JVM_Sleep 同语义）。
     #[jvm_native]
     pub fn sleep0(nanos: i64) -> Result<()> {
-        let me = current_thread_identity()?;
+        let me = crate::monitor::current_thread_identity()?;
         let t = Thread::currentThread()?;
-        if t.__get_interrupted() || crate::monitor::sleep_interruptibly(me, nanos) {
+        let interrupted = t.__get_interrupted() || {
+            crate::monitor::enter_blocking_status(
+                crate::monitor::STATE_WAITING_TIMED | crate::monitor::STATE_SLEEPING);
+            let hit = crate::monitor::sleep_interruptibly(me, nanos);
+            crate::monitor::leave_blocking_status();
+            hit
+        };
+        if interrupted {
             crate::monitor::clear_interrupt(me);
             t.__set_interrupted(false);
             return Err(JvmError::interrupted(Some("sleep interrupted")));
@@ -235,7 +230,7 @@ impl Thread {
     /// native `clearInterruptEvent()`：Java 侧清中断状态后同步清 VM 侧镜像。
     #[jvm_native]
     pub fn clearInterruptEvent() -> Result<()> {
-        crate::monitor::clear_interrupt(current_thread_identity()?);
+        crate::monitor::clear_interrupt(crate::monitor::current_thread_identity()?);
         Ok(())
     }
 
@@ -268,6 +263,7 @@ fn platform_main_thread() -> Thread {
         false,
     )
     .unwrap_or_else(|e| panic!("Thread$FieldHolder.<init> 构造失败: {:?}", e));
+    let _ = holder.__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
     t.__set_holder(holder);
     t
 }

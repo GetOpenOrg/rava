@@ -87,10 +87,17 @@ impl Monitor {
                 return;
             }
         }
+        if crate::gil::is_active() {
+            enter_blocking_status(
+                STATE_BLOCKED_ON_MONITOR_ENTER);
+        }
         crate::gil::blocking(|| {
             let mut st = self.state.lock();
             self.acquire_blocking(&mut st, me, 1);
         });
+        if crate::gil::is_active() {
+            leave_blocking_status();
+        }
     }
 
     /// 阻塞获取（调用方已释放 GIL）：竞争队列排队至监视器空闲，按 `count` 设重入计数。
@@ -152,6 +159,13 @@ impl Monitor {
             return Err(JvmError::interrupted(None));
         }
         let parker = parker_for(thread_identity);
+        enter_blocking_status(
+            STATE_IN_OBJECT_WAIT
+                | if millis == 0 && nanos == 0 {
+                    STATE_WAITING_INDEFINITELY
+                } else {
+                    STATE_WAITING_TIMED
+                });
         let interrupted = crate::gil::blocking(|| {
             let mut st = self.state.lock();
             st.owner = None;
@@ -181,6 +195,7 @@ impl Monitor {
             self.acquire_blocking(&mut st, me, saved);
             hit
         });
+        leave_blocking_status();
         if interrupted {
             return Err(JvmError::interrupted(None));
         }
@@ -212,6 +227,42 @@ impl Monitor {
         self.wait_q.notify_all();
         Ok(())
     }
+}
+
+// ── 当前线程设施（线程对象身份 / 中断字段 / 阻塞态位）─────────────────────────
+
+// JVMTI 线程状态编码（VM.toThreadState 映射为 RUNNABLE / WAITING / TIMED_WAITING / BLOCKED）。
+const JVMTI_ALIVE: i32 = 0x1;
+const JVMTI_RUNNABLE: i32 = 0x4;
+pub(crate) const STATE_WAITING_INDEFINITELY: i32 = 0x80 | 0x10;
+pub(crate) const STATE_WAITING_TIMED: i32 = 0x80 | 0x20;
+pub(crate) const STATE_SLEEPING: i32 = 0x40;
+pub(crate) const STATE_IN_OBJECT_WAIT: i32 = 0x100;
+pub(crate) const STATE_PARKED: i32 = 0x200;
+pub(crate) const STATE_BLOCKED_ON_MONITOR_ENTER: i32 = 0x400;
+
+/// 当前线程对象的身份（park / 中断 / wait 的每线程设施键）。
+pub(crate) fn current_thread_identity() -> Result<usize> {
+    Ok(Object::from(crate::java::lang::Thread::currentThread()?).0.__identity() as usize)
+}
+
+/// 清除当前线程的中断状态（Java 字段）：VM 抛出 InterruptedException 时调用。
+pub(crate) fn clear_current_interrupted() -> Result<()> {
+    crate::java::lang::Thread::currentThread()?.__set_interrupted(false);
+    Ok(())
+}
+
+/// 当前线程进入阻塞：threadStatus 置 ALIVE | `bits`（`getState` 可观察，JVM 同编码）。
+/// 持 GIL 调用；虚拟线程（holder 为 null）的状态由 VirtualThread.state 承载，此处静默。
+pub(crate) fn enter_blocking_status(bits: i32) {
+    if let Ok(t) = crate::java::lang::Thread::currentThread() {
+        let _ = t.__get_holder().__set_threadStatus(JVMTI_ALIVE | bits);
+    }
+}
+
+/// 当前线程离开阻塞：threadStatus 复原为 RUNNABLE。
+pub(crate) fn leave_blocking_status() {
+    enter_blocking_status(JVMTI_RUNNABLE);
 }
 
 // ── park / unpark / 中断（LockSupport 与 Thread.interrupt 的 VM 底座）─────────
@@ -263,6 +314,13 @@ pub fn park(thread_identity: usize, is_absolute: bool, time: i64) {
         p.state.lock().permit = false;
         return;
     }
+    enter_blocking_status(
+        STATE_PARKED
+            | if indefinite {
+                STATE_WAITING_INDEFINITELY
+            } else {
+                STATE_WAITING_TIMED
+            });
     crate::gil::blocking(|| {
         let mut st = p.state.lock();
         if !st.permit && !st.interrupted {
@@ -273,6 +331,7 @@ pub fn park(thread_identity: usize, is_absolute: bool, time: i64) {
         }
         st.permit = false;
     });
+    leave_blocking_status();
 }
 
 /// `Unsafe.unpark(thread)`：授予许可并唤醒（线程未 park 时许可留待下次 park 消费）。
@@ -360,12 +419,12 @@ pub fn wait_timeout(identity: usize, is_null: bool, millis: i64, nanos: i32) -> 
     if is_null {
         return Err(JvmError::null_pointer());
     }
-    let me = crate::java::lang::thread_impl::current_thread_identity()?;
+    let me = current_thread_identity()?;
     let result = monitor_for(identity).wait_timeout(me, millis, nanos);
     if let Err(e) = &result {
         if e.is_instance_of("java/lang/InterruptedException") {
             // VM 抛出 InterruptedException 时清除中断状态（Java 字段；镜像已清）
-            crate::java::lang::thread_impl::clear_current_interrupted()?;
+            clear_current_interrupted()?;
         }
     }
     result
