@@ -39,9 +39,9 @@ class-literal    S-5：类字面量（ldc ``class `` → Class::for_class）与
                  埋点：instr/sim/consts.py 的 ldc class 分支 +
                  invoke_virtual.py 按 mname == 'getClass' 匹配（含数组
                  getClass 的 Class::for_class 早路径）。
-record-hash      S-7：record hashCode 生成——当前发射 ``Ok(0)``（31 多项式
-                 未实现）。埋点：emitter/class_writer.py _patch_record_method_blocks
-                 的 hashCode 分支，每个 record 类计 1。
+record-hash      S-7：record hashCode 生成——已按 ObjectMethods 31 多项式等价实现
+                 （emitter/class_writer.py _patch_record_method_blocks），不再埋点，
+                 计数恒 0；ID 保留以兼容报告列。
 neg-array        S-8：newarray/anewarray/multianewarray 发射点中潜在负长度
                  路径——长度是运行期值，codegen 无法静态判定，**当前全部计数**；
                  S-8 修复（运行期抛 NegativeArraySizeException）后本计数转为

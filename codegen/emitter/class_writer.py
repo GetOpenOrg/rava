@@ -1096,13 +1096,38 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
                     new_blocks.append(attr +
                         f'pub fn toString(&self) -> Result<String> {{\n    let this = self;\n    Ok({fmtcall})\n}}')
                 elif 'pub fn hashCode(' in block:
-                    # [equiv-audit] record-hash（S-7）：record hashCode 发射
-                    # Ok(0)（ObjectMethods 的 31 多项式未实现）——每个 record
-                    # 类计 1，只计数不改发射
-                    equiv_audit.record('record-hash')
+                    # ObjectMethods.makeHashCode 语义：h = 0；逐分量（声明序）h = h * 31 + hash(c)。
+                    # 基本分量 hash = 包装类静态 hashCode（Long 高低位异或、Double/Float 取
+                    # 规范化 NaN 位形、Boolean 1231/1237、窄整型/char 按值）；引用分量
+                    # hash = Objects.hashCode（null → 0，否则虚分派 hashCode）。
                     attr = block[:block.index('pub fn hashCode(')]
+                    hash_lines = []
+                    for f in record_fields:
+                        _get = f'this.__get_{safe_ident(f.name)}()'
+                        _d = f.descriptor
+                        if _d in ('I', 'S', 'B', 'C'):
+                            _h = f'({_get} as i32)'
+                        elif _d == 'Z':
+                            _h = f'(if {_get} {{ 1231i32 }} else {{ 1237i32 }})'
+                        elif _d == 'J':
+                            _h = f'{{ let v = {_get}; (v ^ ((v as u64) >> 32) as i64) as i32 }}'
+                        elif _d == 'D':
+                            _h = (f'{{ let v = {_get}; let b = if v.is_nan() {{ 0x7ff8000000000000u64 }} '
+                                  f'else {{ v.to_bits() }}; (b ^ (b >> 32)) as i32 }}')
+                        elif _d == 'F':
+                            _h = (f'{{ let v = {_get}; (if v.is_nan() {{ 0x7fc00000u32 }} '
+                                  f'else {{ v.to_bits() }}) as i32 }}')
+                        else:
+                            _h = (f'{{ let c = Into::<Object>::into({_get}); '
+                                  f'if _is_jnull(&c) {{ 0i32 }} else {{ c.hashCode()? }} }}')
+                        hash_lines.append(f'    h = h.wrapping_mul(31).wrapping_add({_h});\n')
                     new_blocks.append(attr +
-                        f'pub fn hashCode(&self) -> Result<i32> {{\n    Ok(0)\n}}')
+                        f'pub fn hashCode(&self) -> Result<i32> {{\n'
+                        f'    let this = self;\n'
+                        f'    let mut h: i32 = 0;\n'
+                        + ''.join(hash_lines) +
+                        f'    Ok(h)\n'
+                        f'}}')
                 elif 'pub fn equals(' in block:
                     attr = block[:block.index('pub fn equals(')]
                     from ..jvm_type import Primitive as _JvmPrimitive, ClassRef as _JvmClassRef
