@@ -198,11 +198,6 @@ impl Thread {
         Ok(1)
     }
 
-    #[jvm_native]
-    pub fn isTerminated(&self) -> Result<bool> {
-        Ok(false)
-    }
-
     /// native `holdsLock(Object)`：当前线程是否持有 obj 的监视器（null → NPE）。
     #[jvm_native]
     pub fn holdsLock(obj: Object) -> Result<bool> {
@@ -210,14 +205,6 @@ impl Thread {
             return Err(JvmError::null_pointer());
         }
         Ok(crate::monitor::holds_lock(obj.0.__identity() as usize))
-    }
-
-    /// `interrupt()`：置中断状态并唤醒目标线程的 sleep / wait / park（`monitor::interrupt`）。
-    #[jvm_native]
-    pub fn interrupt(&self) -> Result<()> {
-        self.__set_interrupted(true);
-        crate::monitor::interrupt(Object::from(Clone::clone(self)).0.__identity() as usize);
-        Ok(())
     }
 
     /// native `interrupt0()`：JDK `interrupt()` 字节码置字段后通知 VM——唤醒同上。
@@ -234,12 +221,6 @@ impl Thread {
         Ok(())
     }
 
-    /// native `getThreadGroup()`：holder.group。JVM 在线程终结时会清组引用，
-    /// 语料不消费终结线程的组，本实现保持构造时值。
-    #[jvm_native]
-    pub fn getThreadGroup(&self) -> Result<ThreadGroup> {
-        Ok(self.__get_holder().__get_group())
-    }
 }
 
 /// 构造主线程平台对象（`currentThread` 的缓存初始化，见其注释）。
@@ -249,6 +230,9 @@ fn platform_main_thread() -> Thread {
     t.__set_eetop(1);
     t.__set_tid(1);
     t.__set_name(String::from("main"));
+    // 字段初始化器 `interruptLock = new Object()`：主线程不经构造器，补同一初值
+    // （跨线程 interrupt() 的字节码在其上 synchronized）。
+    t.__set_interruptLock(Object::new().unwrap_or_default());
     let mut group = ThreadGroup::default();
     group._init_not_null();
     group.__set_name(String::from("main"));

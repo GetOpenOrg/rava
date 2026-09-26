@@ -1,0 +1,17 @@
+37: 7 7 7 -1 -1
+66: -1 15 15 -1 -1
+5a: -1 -1 35 -1 -1
+ff13: 3 3 3 -1 -1
+663: 3 3 3 -1 -1
+966: 0 0 0 0 -1
+ff21: -1 10 10 -1 -1
+24: -1 -1 -1 -1 -1
+10ffff: -1 -1 -1 -1 -1
+digit(char) 5 parse 123
+before start group=true state=NEW
+after join group=null alive=false state=TERMINATED
+main interrupted: sleep interrupted flag=false
+self flag=true cleared=true now=false
+unstarted interrupted=true
+terminated interrupted=true
+atomic 42 0

@@ -17,6 +17,7 @@ impl ClassFileDumper {
     /// 禁用实例（JDK 属性缺席路径的等价物：`new ClassFileDumper(key, null)`，
     /// enabled=false）。同一 key 返回新实例即可（JDK 有 DUMPER_MAP 缓存，
     /// 消费方只存不比对，身份语义不进可观察输出）。
+    #[jvm_boundary(upcalls = "java/util/concurrent/atomic/AtomicInteger.<init>:(I)V")]
     pub fn getInstance(_key: String, _path: String) -> Result<ClassFileDumper> {
         let mut d = ClassFileDumper::default();
         d._init_not_null();
