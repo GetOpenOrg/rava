@@ -10,8 +10,9 @@ use super::crypto_algorithm_constraints::implref::CryptoAlgorithmConstraints;
 
 impl CryptoAlgorithmConstraints {
     /// `permits(String service, String algo)`：禁用集为空 → 恒允许。
+    /// 与继承的实例重载 `permits(Set, String, AlgorithmParameters)` 同名 → 按描述符改名。
     #[jvm_boundary]
-    pub fn permits(_service: String, _algo: String) -> Result<bool> {
+    pub fn permits_str_str(_service: String, _algo: String) -> Result<bool> {
         Ok(true)
     }
 }
