@@ -234,7 +234,8 @@ pub fn unbox_i64(v: &Object) -> Option<i64> {
     if v.0.__class_name() == "java/lang/Long" {
         return v.0.__obj_str().parse::<i64>().ok();
     }
-    None
+    // JLS §5.1.2 拓宽：byte / short / char / int → long（Method.invoke / Field.set 的实参转换）
+    unbox_i32(v).map(|x| x as i64)
 }
 
 pub fn unbox_bool(v: &Object) -> Option<bool> {
@@ -254,6 +255,8 @@ pub fn unbox_bool(v: &Object) -> Option<bool> {
     None
 }
 
+/// 装箱 Object → double：原生盒 / 翻译 Double、Float 包装（toString 文本——Rust 浮点解析
+/// 接受 Java 的 `NaN` / `Infinity` / `1.0E10` 形态）；JLS §5.1.2 拓宽接受全部数值类型。
 pub fn unbox_f64(v: &Object) -> Option<f64> {
     if v.0.is_jvm_null() {
         return None;
@@ -261,9 +264,13 @@ pub fn unbox_f64(v: &Object) -> Option<f64> {
     if let Some(b) = v.0.as_any().downcast_ref::<f64>() {
         return Some(*b);
     }
-    None
+    if v.0.__class_name() == "java/lang/Double" {
+        return v.0.__obj_str().parse::<f64>().ok();
+    }
+    unbox_f32(v).map(|x| x as f64)
 }
 
+/// 装箱 Object → float：原生盒 / 翻译 Float 包装；拓宽接受 byte / short / char / int / long。
 pub fn unbox_f32(v: &Object) -> Option<f32> {
     if v.0.is_jvm_null() {
         return None;
@@ -271,7 +278,10 @@ pub fn unbox_f32(v: &Object) -> Option<f32> {
     if let Some(b) = v.0.as_any().downcast_ref::<f32>() {
         return Some(*b);
     }
-    None
+    if v.0.__class_name() == "java/lang/Float" {
+        return v.0.__obj_str().parse::<f32>().ok();
+    }
+    unbox_i64(v).map(|x| x as f32)
 }
 
 /// 反射访问检查（Method.invoke / Field.get/set 共用）：JDK 按调用方判定
