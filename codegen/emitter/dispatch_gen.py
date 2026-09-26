@@ -54,6 +54,7 @@ _PRIM_UNBOX = {
 
 def reset() -> None:
     LEDGER.clear()
+    FIELD_LEDGER.clear()
 
 
 def _extract(window: str, key: str) -> 'str | None':
@@ -234,9 +235,97 @@ def _emit_for(class_bin: str, short: str, em) -> 'str | None':
     return '\n'.join(out)
 
 
+# java_field 属性之后的 Rust 声明行：实例字段 / 静态字段 / 常量
+_FIELD_DECL_RE = re.compile(
+    r'^\s*pub\s+(?:(static)\s+|(const)\s+)?(\w+)\s*:\s*([^=;,]+?)\s*(?:=[^;]*)?[;,]\s*$')
+_FIELD_ATTR_RE = re.compile(r'java_field\(')
+
+
+def _emit_fields_for(class_bin: str, short: str, em) -> 'str | None':
+    """类发射文本 → __reflect_field 实现（Field.get/set 与 MH 字段句柄的按名协议）。
+
+    臂形态：`("字段名", 值) =>`，值 None = 读、Some(v) = 写。实例字段经宏生成的
+    `__get_<f>()` / `__set_<f>(v)`（接收者 try_cast 为声明类视图），静态字段经
+    `Self::<f>()` / `Self::set_<f>(v)`，编译期常量只读。泛型类的实例字段不承载
+    （擦除视图还原未定案，与 __reflect_dispatch 同一边界）。"""
+    lines = em.text.split('\n')
+    generic = re.search(rf'pub struct {re.escape(short)}<', em.text) is not None
+    rt = 'crate' if getattr(em, 'crate_name', '') == 'java_runtime' else 'java_runtime'
+    disp = f'{rt}::reflect_dispatch'
+    arms: list[str] = []
+    for i, line in enumerate(lines):
+        if not _FIELD_ATTR_RE.search(line):
+            continue
+        fname = _extract(line, 'name')
+        fdesc = _extract(line, 'descriptor')
+        if not fname or not fdesc:
+            continue
+        decl = None
+        for j in range(i + 1, min(i + 4, len(lines))):
+            if lines[j].strip().startswith('//'):
+                continue
+            decl = _FIELD_DECL_RE.match(lines[j])
+            break
+        if decl is None:
+            continue
+        is_static_kw, is_const, rname, rty = decl.group(1), decl.group(2), decl.group(3), decl.group(4).strip()
+        is_static = bool(is_static_kw or is_const or _flag(line, 'is_static'))
+        if generic and not is_static:
+            continue
+        if is_const:
+            read = f'Object::from(Clone::clone(&Self::{rname}))'
+        elif is_static:
+            read = f'Object::from(Self::{rname}()?)'
+        else:
+            read = f'Object::from(recv.try_cast::<Self>("{class_bin}")?.__get_{rname}())'
+        if rty in _PRIM_UNBOX:
+            fn, cast = _PRIM_UNBOX[rty]
+            unbox = f'({disp}::{fn}(&v).ok_or_else({disp}::bad_arg)?{cast})'
+        elif rty == 'Object':
+            unbox = 'v'
+        else:
+            unbox = f'<{rty} as ::std::convert::From<Object>>::from(v)'
+        arms.append(f'            ("{fname}", None) => Some((|| {{ Ok({read}) }})()),')
+        if is_const:
+            arms.append(f'            ("{fname}", Some(_)) => Some(Err({disp}::final_field("{fname}"))),')
+        elif is_static:
+            arms.append(f'            ("{fname}", Some(v)) => Some((|| {{ Self::set_{rname}({unbox})?; Ok(Object::default()) }})()),')
+        else:
+            arms.append(f'            ("{fname}", Some(v)) => Some((|| {{ recv.try_cast::<Self>("{class_bin}")?.__set_{rname}({unbox}); Ok(Object::default()) }})()),')
+    if not arms:
+        return None
+    out = ['', '// ── L3 反射字段闭包（Field.get/set 与 MH 字段句柄的按名协议）──',
+           '#[allow(unused_variables, unreachable_patterns, unused_mut)]',
+           f'impl {short} {{',
+           '    pub fn __reflect_field(',
+           '        name: &str, recv: Object, value: Option<Object>,',
+           '    ) -> Option<Result<Object>> {',
+           '        match (name, value) {']
+    out.extend(arms)
+    out += ['            _ => None,', '        }', '    }', '}']
+    return '\n'.join(out)
+
+
+FIELD_LEDGER: dict[str, str] = {}
+
+
 def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]') -> None:
     """为用户树类发射分派闭包（追加在类文件尾部）并登记工厂路径。"""
     from .inherited_gen import class_use_path
+
+    for bin_name in sorted(user_bins):
+        # 字段闭包：用户树全部类（含接口——接口常量是 public static 字段）
+        em = emissions.get(bin_name)
+        if em is None or em.handwritten or registry.get(bin_name) is None:
+            continue
+        from ..type_map import short_cls
+        ftext = _emit_fields_for(bin_name, short_cls(bin_name), em)
+        if ftext is None:
+            continue
+        em.text = em.text.rstrip('\n') + '\n' + ftext + '\n'
+        fpath = class_use_path(bin_name, 'java_runtime', emissions, 'user')
+        FIELD_LEDGER[bin_name] = f'    ("{bin_name}", std::rc::Rc::new(' \
+            f'|n, r, v| {fpath}::__reflect_field(n, r, v))),'
 
     for bin_name in sorted(user_bins):
         em = emissions.get(bin_name)
@@ -258,3 +347,7 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]') -> None:
 
 def registration_lines() -> list:
     return [LEDGER[bin] for bin in sorted(LEDGER)]
+
+
+def field_registration_lines() -> list:
+    return [FIELD_LEDGER[bin] for bin in sorted(FIELD_LEDGER)]

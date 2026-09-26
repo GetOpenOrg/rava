@@ -109,6 +109,9 @@ impl Field {
                 String::from(format!("Class can not access a member with modifiers {}", mods)))?));
         }
         if is_static {
+            if let Some(r) = crate::reflect_dispatch::reflect_field(&__decl, &name, Object::default(), None) {
+                return r;
+            }
             return match (descriptor, constant) {
                 // ConstantValue 整型常量：值即 class 文件常量（按描述符装箱）
                 ("J", Some(v)) => Ok(Object::from(v)),
@@ -131,6 +134,9 @@ impl Field {
             return Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
                 String::from(format!("Not a field of class {}", cls_key.replace('/', "."))))?));
         }
+        if let Some(r) = crate::reflect_dispatch::reflect_field(&__decl, &name, Clone::clone(&obj), None) {
+            return r;
+        }
         match descriptor {
             "J" => match obj.0.__unsafe_long_cell(&name) {
                 Some(cell) => Ok(Object::from(cell.get())),
@@ -147,7 +153,12 @@ impl Field {
                 None => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
                     String::from(format!("Not a flat boolean field: {}", name)))?)),
             },
-            _ => panic!("stub: Field.get 引用字段与其余基本类型无按名协议: {}", name),
+            d if d.starts_with('L') || d.starts_with('[') => match obj.0.__unsafe_ref_get(&name) {
+                Some(v) => Ok(v),
+                None => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+                    String::from(format!("Not a reference field: {}", name)))?)),
+            },
+            _ => panic!("stub: Field.get 其余基本类型（S/B/C/F/D 实例字段）无按名协议: {}", name),
         }
     }
 
@@ -201,8 +212,28 @@ impl Field {
             return Err(JvmError::from(crate::java::lang::IllegalAccessException::new_str(
                 String::from(format!("Class can not access a member with modifiers {}", mods)))?));
         }
+        // final 字段：静态 final 恒不可写；实例 final 需 setAccessible(true)（JDK Field.set 语义）
+        if (mods & 0x0010) != 0 && (is_static || !self.__get_override_()) {
+            return Err(JvmError::from(crate::java::lang::IllegalAccessException::new_str(
+                String::from(format!("Can not set {}final field {}.{}",
+                                     if is_static { "static " } else { "" },
+                                     __decl.replace('/', "."), name)))?));
+        }
+        // 引用赋值兼容检查（JDK：值非 null 且不可赋给字段类型 → IllegalArgumentException）
+        if descriptor.starts_with('L') && !value.0.is_jvm_null() {
+            let want = &descriptor[1..descriptor.len() - 1];
+            if want != "java/lang/Object" && !value.0.is_instance_of(want) {
+                return Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+                    String::from(format!("Can not set {} field {}.{} to {}",
+                                         want.replace('/', "."), __decl.replace('/', "."), name,
+                                         value.0.__class_name().replace('/', "."))))?));
+            }
+        }
         if is_static {
-            panic!("stub: Field.set 静态字段无按名协议: {}", name);
+            if let Some(r) = crate::reflect_dispatch::reflect_field(&__decl, &name, Object::default(), Some(value)) {
+                return r.map(|_| ());
+            }
+            panic!("stub: Field.set 静态字段无按名协议（字段闭包缺席）: {}", name);
         }
         if obj.0.is_jvm_null() {
             return Err(JvmError::null_pointer());
@@ -212,6 +243,9 @@ impl Field {
         if !obj.0.is_instance_of(&cls_key) {
             return Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
                 String::from(format!("Not a field of class {}", cls_key.replace('/', "."))))?));
+        }
+        if let Some(r) = crate::reflect_dispatch::reflect_field(&__decl, &name, Clone::clone(&obj), Some(Clone::clone(&value))) {
+            return r.map(|_| ());
         }
         match descriptor {
             "J" => match (obj.0.__unsafe_long_cell(&name), __unbox_long(&value)) {
@@ -235,7 +269,15 @@ impl Field {
                 (None, _) => Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
                     String::from(format!("Not a flat boolean field: {}", name)))?)),
             },
-            _ => panic!("stub: Field.set 引用字段与其余基本类型无按名协议: {}", name),
+            d if d.starts_with('L') || d.starts_with('[') => {
+                if obj.0.__unsafe_ref_set(&name, value) {
+                    Ok(())
+                } else {
+                    Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+                        String::from(format!("Not a reference field: {}", name)))?))
+                }
+            }
+            _ => panic!("stub: Field.set 其余基本类型（S/B/C/F/D 实例字段）无按名协议: {}", name),
         }
     }
 }

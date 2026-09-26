@@ -732,6 +732,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     if _disp_reg_lines:
         hook_block += ('    java_runtime::reflect_dispatch::register_method_dispatch(&[\n'
                        + '\n'.join(_disp_reg_lines) + '\n    ]);\n')
+    _field_reg_lines = _dispatch_gen.field_registration_lines()
+    if _field_reg_lines:
+        hook_block += ('    java_runtime::reflect_dispatch::register_field_dispatch(&[\n'
+                       + '\n'.join(_field_reg_lines) + '\n    ]);\n')
 
     # L-1 资源束登记：BFS 按 locale 种子入选的 CLDR 束类（翻译字节码）的构造闭包，
     # 供手写边界 LocaleResources 按候选链装载（替代 ResourceBundle.getBundle 的类名反射）
