@@ -266,7 +266,11 @@ def _emit_fields_for(class_bin: str, short: str, em, only: 'set[str] | None' = N
     `Self::<f>()` / `Self::set_<f>(v)`，编译期常量只读。泛型类的实例字段不承载
     （擦除视图还原未定案，与 __reflect_dispatch 同一边界）。"""
     lines = em.text.split('\n')
-    generic = re.search(rf'pub struct {re.escape(short)}<', em.text) is not None
+    _gm = re.search(rf'pub struct {re.escape(short)}<([^>{{]*)>', em.text)
+    generic = _gm is not None
+    # 泛型类：闭包挂在 Object 实例化 `X<Object..>` 的固有 impl 上（静态字段与类型实参无关，
+    # JVM 擦除语义；形参上界由宏约束，Object 恒满足），登记处同样以 Object 实例化
+    gparams = [p.split(':')[0].strip() for p in _gm.group(1).split(',')] if generic else []
     rt = 'crate' if getattr(em, 'crate_name', '') == 'java_runtime' else 'java_runtime'
     disp = f'{rt}::reflect_dispatch'
     arms: list[str] = []
@@ -314,7 +318,7 @@ def _emit_fields_for(class_bin: str, short: str, em, only: 'set[str] | None' = N
         return None
     out = ['', '// ── L3 反射字段闭包（Field.get/set 与 MH 字段句柄的按名协议）──',
            '#[allow(unused_variables, unreachable_patterns, unused_mut)]',
-           f'impl {short} {{',
+           (f'impl {short}<{", ".join(["Object"] * len(gparams))}> {{' if gparams else f'impl {short} {{'),
            '    pub fn __reflect_field(',
            '        name: &str, recv: Object, value: Option<Object>,',
            '    ) -> Option<Result<Object>> {',
@@ -325,6 +329,15 @@ def _emit_fields_for(class_bin: str, short: str, em, only: 'set[str] | None' = N
 
 
 FIELD_LEDGER: dict[str, str] = {}
+
+
+def _object_turbofish(em, short: str) -> str:
+    """泛型类的登记路径实参：每个类型形参取 Object（静态字段 / 字段闭包与实参无关）。"""
+    m = re.search(rf'pub struct {re.escape(short)}<([^>{{]*)>', em.text)
+    if m is None:
+        return ''
+    n = len([p for p in m.group(1).split(',') if p.strip()])
+    return '::<' + ', '.join(['java_runtime::java::lang::Object'] * n) + '>'
 
 # 序列化协议规定经反射读取的静态成员名（见 synthesize 注释）
 _SERIAL_PROTOCOL_FIELDS = frozenset({'serialPersistentFields', 'serialVersionUID'})
@@ -350,7 +363,7 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]',
         em.text = em.text.rstrip('\n') + '\n' + ftext + '\n'
         fpath = class_use_path(bin_name, 'java_runtime', emissions, 'user')
         FIELD_LEDGER[bin_name] = f'    ("{bin_name}", java_runtime::sync_model::__Shared::new(' \
-            f'|n, r, v| {fpath}::__reflect_field(n, r, v))),'
+            f'|n, r, v| {fpath}{_object_turbofish(em, short_cls(bin_name))}::__reflect_field(n, r, v))),'
 
     # 序列化协议成员（Java Object Serialization Specification §4.6：ObjectStreamClass 经反射
     # 读取可序列化类声明的 `serialPersistentFields` / `serialVersionUID` 静态字段——类由运行时
@@ -371,7 +384,7 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]',
         em.text = em.text.rstrip('\n') + '\n' + ftext + '\n'
         fpath = class_use_path(bin_name, 'java_runtime', emissions, 'user')
         FIELD_LEDGER[bin_name] = f'    ("{bin_name}", java_runtime::sync_model::__Shared::new(' \
-            f'|n, r, v| {fpath}::__reflect_field(n, r, v))),'
+            f'|n, r, v| {fpath}{_object_turbofish(em, short_cls(bin_name))}::__reflect_field(n, r, v))),'
 
     targets = {b: None for b in user_bins}
     for b, names in (reflect_members or {}).items():
