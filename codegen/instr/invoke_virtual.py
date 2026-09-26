@@ -589,8 +589,18 @@ def _chain_declares(obj_ty: str, mname: str, registry) -> bool:
     return False
 
 
+# 当前 invokevirtual 的 @CallerSensitive 判定上下文（_gen_invokevirtual 入口设置）：
+# (声明类 binary, 方法名, 描述符, 调用处类 binary, registry)
+_CS_CTX: tuple | None = None
+
+
 def _build_call(mname_r, recv, args):
-    return f"{recv}.{mname_r}({args})"
+    call = f"{recv}.{mname_r}({args})"
+    if _CS_CTX is not None:
+        from .invoke import caller_sensitive_wrap
+        owner, mname, desc, caller, registry = _CS_CTX
+        call = caller_sensitive_wrap(call, owner, mname, desc, caller, registry)
+    return call
 
 
 def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_mname,
@@ -656,7 +666,20 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
 
 
 def _gen_invokevirtual(sim: StackSim, comment: str, class_name: str, registry: dict | None = None):
+    global _CS_CTX
     cls, mname, params, ret = parse_method_ref(comment)
+    # @CallerSensitive 虚调用（Field.get / Method.invoke / Constructor.newInstance 等）：
+    # 调用处类经 __caller_sensitive 显式传入（FS-R4，与 invokestatic 同一机制）
+    from .invoke import _method_ref_binary_class
+    _CS_CTX = (_method_ref_binary_class(comment), mname, f"({''.join(params)}){ret}",
+               class_name, registry)
+    try:
+        _gen_invokevirtual_body(sim, comment, class_name, registry, cls, mname, params, ret)
+    finally:
+        _CS_CTX = None
+
+
+def _gen_invokevirtual_body(sim, comment, class_name, registry, cls, mname, params, ret):
     # [equiv-audit] 按字节码常量池方法名匹配的近似等价形态（invokevirtual /
     # invokeinterface 共用本入口），只计数不改发射：
     # - intern-identity（S-6）：String.intern 调用点——intern 后 == 的同一性

@@ -312,15 +312,36 @@ pub fn unbox_f32(v: &Object) -> Option<f32> {
     unbox_i64(v).map(|x| x as f32)
 }
 
-/// 反射访问检查（Method.invoke / Field.get/set 共用）：JDK 按调用方判定
-/// （`Reflection.verifyMemberAccess`：同类 / 同包 / nestmate 可达非 public 成员）；原生侧
-/// 取不到调用方，近似为「用户类成员可达（调用方即同一程序的用户代码，与同包 / nestmate
-/// 的常见形态一致），JDK 类的非 public 成员须 setAccessible」——后者与 JDK 对 java.base
-/// 封装成员的可观测行为同型（未命名模块不可达）。
+/// 反射访问检查（Method.invoke / Field.get/set / Constructor.newInstance 共用，FS-R4）：
+/// 按 JDK `Reflection.verifyMemberAccess` 的规则对**调用方类**判定——调用方经生成器在
+/// @CallerSensitive 调用点显式传入（`__caller_sensitive`，虚调用与静态调用同一机制）：
+///   - setAccessible(true) 或 public 成员 → 可达（公开包；jdk/sun 内部包的非 public
+///     成员对未命名模块恒不可达，public 成员视为已导出）；
+///   - 调用方即声明类，或二者同属一个 nest（嵌套类共享顶层宿主，JEP 181）→ 可达；
+///   - 非 private：同包可达；protected 另对声明类的子类可达。
+/// 取不到调用方（手写运行时直接调用）时回落旧近似：用户类成员可达、JDK 非 public 不可达。
 pub fn member_accessible(declaring_slash: &str, modifiers: i32, override_: bool) -> bool {
     const JDK_PREFIXES: [&str; 6] = ["java/", "javax/", "jdk/", "sun/", "com/sun/", "com/oracle/"];
-    override_ || (modifiers & 0x0001) != 0
-        || !JDK_PREFIXES.iter().any(|p| declaring_slash.starts_with(p))
+    if override_ || (modifiers & 0x0001) != 0 {
+        return true;
+    }
+    let caller = match current_caller_sensitive() {
+        Some(c) => c.replace('.', "/"),
+        None => return !JDK_PREFIXES.iter().any(|p| declaring_slash.starts_with(p)),
+    };
+    if caller == declaring_slash {
+        return true;
+    }
+    let nest_host = |n: &str| n.split('$').next().unwrap_or(n).to_owned();
+    if (modifiers & 0x0002) != 0 {
+        return nest_host(&caller) == nest_host(declaring_slash);
+    }
+    let package = |n: &str| n.rsplit_once('/').map(|(p, _)| p.to_owned()).unwrap_or_default();
+    if package(&caller) == package(declaring_slash) {
+        return true;
+    }
+    (modifiers & 0x0004) != 0
+        && crate::java::lang::Class::__name_assignable(declaring_slash, &caller)
 }
 
 

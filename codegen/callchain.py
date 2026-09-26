@@ -312,6 +312,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
     seen_members: set[tuple[str, str]] = set()
     instantiated_classes: set[str] = set()   # RTA：调用链上被 new 出来的类
+    # 手写层分配的边界类实例（N6 候选中的边界类，如 sun/nio/cs/UTF_8）：自身方法手写，
+    # 但继承自翻译祖先的虚方法（Charset.toString）须随虚调用进入调用链
+    boundary_instantiated: set[str] = set()
     # 边界接口回调边（延迟解析：种子阶段 _load_class 尚未定义，收集后待
     # _propagate_virtual_targets 前 drain）
     _pending_iface_edges: list[tuple[str, str, str]] = []
@@ -363,6 +366,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     and _ab.startswith(_JDK_PREFIXES) and not _is_boundary_class(_ab)):
                 instantiated_classes.add(_ab)
                 field_discover_classes.add(_ab)
+            elif _ab and _ab.startswith(_JDK_PREFIXES) and _is_boundary_class(_ab):
+                boundary_instantiated.add(_ab)
 
     def _enqueue_upcalls(cls: str, member: str) -> None:
         """被触达成员的手写实现声明的 Java 回调目标入队（native → Java 的调用边）。"""
@@ -913,6 +918,27 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 for x in instantiated:
                     if cls in _supertypes(x):
                         _enqueue_method((x, meth, desc))
+            # 手写分配的边界类实例：虚调用解析到的最近声明者若是翻译祖先（非边界），入队该祖先
+            # 实现（Object 视图上的 toString / hashCode 等经 vtable 落到它）。边界类自身的声明
+            # 由手写承载，不拉入翻译。
+            _root_keys = sorted(root_virtual_targets)
+            for bx in sorted(boundary_instantiated):
+                bci = _ci_of(bx)
+                if bci is None:
+                    continue
+                keys = [(c, m, d) for (c, m, d) in sorted(visited_methods)
+                        if m not in ('<init>', '<clinit>') and (c == _OBJECT_CLASS or c in _supertypes(bx))]
+                keys += [(_OBJECT_CLASS, m, d) for (m, d) in _root_keys]
+                for _c, meth, desc in keys:
+                    cur = bci
+                    while cur is not None:
+                        if any(m.name == meth and m.descriptor == desc and not m.is_static
+                               for m in cur.methods):
+                            if (cur.name != _OBJECT_CLASS and cur.name.startswith(_JDK_PREFIXES)
+                                    and not _is_boundary_class(cur.name)):
+                                _enqueue_method((cur.name, meth, desc))
+                            break
+                        cur = _ci_of(cur.super_class) if cur.super_class else None
 
         # L-1 资源束种子：手写边界的数据消费入口（locale_seeds.txt 的 trigger）在调用链上
         # 时，按用户字节码推出的 locale 集（含父链）入选 CLDR 束类——构造器 + 载体方法入队、
