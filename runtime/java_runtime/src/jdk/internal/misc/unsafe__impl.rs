@@ -676,8 +676,8 @@ impl Unsafe {
     /// 重查消费面，虚假唤醒语义下观察面等价。blocker 字段（parkBlocker）由
     /// 上层 `putReferenceOpaque` 携带（栈轨迹消费面，golden 不可见）。
     #[jvm_boundary]
-    pub fn park(&self, _is_absolute: bool, _time: i64) -> Result<()> {
-        crate::monitor::cooperative_park()
+    pub fn park(&self, is_absolute: bool, time: i64) -> Result<()> {
+        crate::monitor::cooperative_park(is_absolute, time)
     }
 
     /// `unpark(Object thread)`：LockSupport.unpark 的 VM 底座。协作档位下

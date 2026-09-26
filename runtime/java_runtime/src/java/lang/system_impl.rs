@@ -101,14 +101,13 @@ impl System {
 
     #[jvm_native]
     pub fn currentTimeMillis() -> Result<i64> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        Ok(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
+        // 叠加协作调度的虚拟时钟偏移（monitor.rs「虚拟时钟」节）
+        Ok(crate::monitor::virtual_now_millis())
     }
 
     #[jvm_native]
     pub fn nanoTime() -> Result<i64> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        Ok(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64)
+        Ok(crate::monitor::virtual_now_nanos())
     }
 
     /// native `identityHashCode(Object)I`：对象身份哈希（与内容无关，

@@ -28,8 +28,9 @@
 //!
 //! - `wait` / `sleep` 的 `InterruptedException` 未实现：语料三例无中断等待
 //!   （TestWaitNotify 的 catch 分支不被触达），引入需构造异常链，暂不做。
-//! - `sleep0` 时长不驻留（无时钟模拟）：按「sleep 期间其他可运行线程得以
-//!   推进」兑现等价——泵运行就绪线程后立即返回。
+//! - `sleep0` 时长不驻留：按「sleep 期间其他可运行线程得以推进」兑现等价——
+//!   泵运行就绪线程后立即返回，时长以虚拟时钟前移兑现（`monitor.rs`「虚拟时钟」节，
+//!   `nanoTime` / `currentTimeMillis` 观测到的流逝时间 ≥ 时长）。
 
 use crate::prelude::*;
 use super::*;
@@ -75,6 +76,7 @@ fn run_sim_thread(t: Thread) -> Result<()> {
     // Runnable task 入口都在此一跳生效——与 JVM 以 virtual Thread.start 调
     // run() 同构。
     let result = Thread__VTable::run(&*t.vtable);
+    crate::monitor::note_sim_thread_run();
     // 终结：eetop 清零（isAlive/alive 的唯一判据）、状态位 TERMINATED、
     // 线程对象监视器 notifyAll 唤醒 join 等待者。
     t.__set_eetop(0);
@@ -132,13 +134,15 @@ impl Thread {
         Ok(())
     }
 
-    /// native `sleep0(J nanos)`：限时休眠。时长不驻留（无时钟模拟）；等价性按
+    /// native `sleep0(J nanos)`：限时休眠。时长不驻留（虚拟时钟前移）；等价性按
     /// 「sleep 期间其他可运行线程得以推进」兑现——泵运行就绪模拟线程后返回。
     /// 中断唤醒（InterruptedException）未实现，见模块注释取舍。
     #[jvm_native]
-    pub fn sleep0(_nanos: i64) -> Result<()> {
+    pub fn sleep0(nanos: i64) -> Result<()> {
         let ticket: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         pump(&ticket, 0)?;
+        // 时长以虚拟时钟兑现（monitor.rs「虚拟时钟」节）：sleep 返回时流逝时间 ≥ 时长
+        crate::monitor::advance_virtual_clock(nanos);
         Ok(())
     }
 

@@ -1,0 +1,7 @@
+parkNanos elapsed>=2s: true
+parkUntil reached deadline: true
+worker ran
+main saw worker: true
+wait(1200) elapsed>=1200ms: true
+sleep(800) nano>=800ms: true
+sleep(800) millis>=800: true

@@ -157,7 +157,12 @@ impl Monitor {
             let pump = pump.unwrap();
             let ticket: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
             self.wait_set.lock().push_back(Arc::clone(&ticket));
+            let before = sim_runs();
             let notified = pump(&ticket, millis)?;
+            if !notified && sim_runs() == before {
+                // 限时等待且无线程得以推进：只能超时结束 → 虚拟时钟跳过时限（见「虚拟时钟」节）
+                advance_virtual_clock(millis.saturating_mul(1_000_000).saturating_add(nanos as i64));
+            }
             if !notified {
                 // 超时/无通知源返回：ticket 出队（单 OS 线程，泵返回与出队之间
                 // 无并发 notify）。返回本身是 JLS §17.3 允许的虚假唤醒。
@@ -251,17 +256,76 @@ fn coop_pump() -> Option<CoopPump> {
     COOP_PUMP.with(|c| *c.borrow())
 }
 
-/// 协作档位的 park 底座（`Unsafe.park` 的消费面，与 `wait_timeout` 的泵路径
-/// 同型但无监视器簿记）：泵运行就绪模拟线程后返回——返回本身是 JLS §17.3
+/// 协作档位的 park 底座（`Unsafe.park(isAbsolute, time)` 的消费面，与 `wait_timeout` 的
+/// 泵路径同型但无监视器簿记）：泵运行就绪模拟线程后返回——返回本身是 JLS §17.3
 /// 允许的虚假唤醒形态，调用方（LockSupport.park / CF waitingGet）的条件
 /// 循环重查消费面兑现等价。未登记泵（从未有线程启动）→ 直接返回（无就绪
 /// 线程可推进，阻塞不可达的形态与 sleep0 同一取舍）。
-pub fn cooperative_park() -> Result<()> {
+///
+/// 限时 park 且泵内无任何模拟线程得以推进时，唯一可能的唤醒源是超时——虚拟时钟
+/// 跳至截止（见「虚拟时钟」节），使调用方的截止判定（FJP `awaitWork` 的 keepAlive）
+/// 立即成立，而非按真实时间空转。无限期 park（`time == 0` 且相对）不跳：Java 中即死锁。
+pub fn cooperative_park(is_absolute: bool, time: i64) -> Result<()> {
+    let before = sim_runs();
     if let Some(pump) = coop_pump() {
         let ticket: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         pump(&ticket, 0)?;
     }
+    if sim_runs() == before {
+        let wait_nanos = if is_absolute {
+            // 绝对截止：epoch 毫秒（与 virtual_now_millis 同一时基）
+            time.saturating_sub(virtual_now_millis()).saturating_mul(1_000_000)
+        } else {
+            time
+        };
+        advance_virtual_clock(wait_nanos);
+    }
     Ok(())
+}
+
+// ── 虚拟时钟 ─────────────────────────────────────────────────────────────────
+//
+// 单 OS 线程协作调度下，「限时等待且无任何其他线程可推进」时，Java 中该等待只能以
+// 超时结束——真实驻留这段时长不产生任何可观测差异，只拖慢运行。故以时钟偏移代替
+// 驻留：`System.nanoTime` / `currentTimeMillis` 叠加累计偏移，等待方看到的流逝时间
+// ≥ 其时限（与 JVM 的时限语义一致：超时返回时至少已过时限）。偏移单调不减。
+
+static CLOCK_SKEW_NANOS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+thread_local! {
+    /// 已运行（至终结）的模拟线程计数：判定一次泵调用是否推进了任何线程。
+    static SIM_RUNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// 模拟线程运行登记（`thread_impl::run_sim_thread` 调用）。
+pub fn note_sim_thread_run() {
+    SIM_RUNS.with(|c| c.set(c.get() + 1));
+}
+
+fn sim_runs() -> u64 {
+    SIM_RUNS.with(|c| c.get())
+}
+
+/// 时钟前移 `nanos`（≤ 0 忽略）。
+pub fn advance_virtual_clock(nanos: i64) {
+    if nanos > 0 {
+        CLOCK_SKEW_NANOS.fetch_add(nanos, Ordering::SeqCst);
+    }
+}
+
+fn real_epoch_nanos() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64
+}
+
+/// `System.nanoTime` 的时基：真实纳秒 + 虚拟偏移。
+pub fn virtual_now_nanos() -> i64 {
+    real_epoch_nanos().saturating_add(CLOCK_SKEW_NANOS.load(Ordering::SeqCst))
+}
+
+/// `System.currentTimeMillis` 的时基：与 `virtual_now_nanos` 同源。
+pub fn virtual_now_millis() -> i64 {
+    virtual_now_nanos() / 1_000_000
 }
 
 // ── 身份侧表 ─────────────────────────────────────────────────────────────────
