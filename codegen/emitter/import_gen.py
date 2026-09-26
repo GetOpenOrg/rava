@@ -474,10 +474,28 @@ def gen_cross_imports(ci, registry, jdk_crate_pkg_paths, call_chain,
         import re as _re2
         from ..instr.member_owner import parse_method_ref as _pmr
         from ..instr.member_naming import _method_ref_binary_class as _mrbc_imp
-        for _m in ci.methods:
+        # 扫描面：本类声明的方法 + 方法体被展开进本类的继承方法（沿父类链、未被更近
+        # 类覆盖的具体实例方法——super-inherit 路径把祖先方法体在子类上下文翻译，体内
+        # 的 super 调用落到祖先的 __base 函数，导入须随体进入本模块；SuperConstructor
+        # 的 Puppy 继承 Dog.describe 实证）
+        _scan_methods = [(ci.name, _m) for _m in ci.methods]
+        _declared_keys = {(_m.name, _m.descriptor) for _m in ci.methods}
+        _anc_bin = ci.super_class
+        while registry and _anc_bin and _anc_bin in registry:
+            _anc_ci_scan = registry[_anc_bin]
+            for _am in _anc_ci_scan.methods:
+                if _am.name.startswith('<') or _am.is_static or _am.is_abstract:
+                    continue
+                _ak = (_am.name, _am.descriptor)
+                if _ak in _declared_keys:
+                    continue
+                _declared_keys.add(_ak)
+                _scan_methods.append((_anc_bin, _am))
+            _anc_bin = _anc_ci_scan.super_class
+        for _m_owner, _m in _scan_methods:
             # 只为在调用链上（有实际方法体）的方法生成 __base 函数导入
             # stub 方法的字节码中有 invokespecial 但不会实际调用，不需要 cross-import
-            _m_in_chain = call_chain is None or (ci.name, _m.name, _m.descriptor) in call_chain
+            _m_in_chain = call_chain is None or (_m_owner, _m.name, _m.descriptor) in call_chain
             if not _m_in_chain:
                 continue
             for _ins in getattr(_m, 'instrs', []) or []:
