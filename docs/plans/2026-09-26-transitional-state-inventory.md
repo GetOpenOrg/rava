@@ -56,7 +56,7 @@
 | FS-T2 | 对象模型原语是单线程后端的类型别名；`__GilStatic` 靠 `unsafe impl Sync` | feature `mt`：Arc / 原子 / 读写锁 / OnceLock | 仅架构 | #42（进行中） |
 | ~~FS-T3~~ ✅ `18da936` | `Runtime.availableProcessors()` 恒返回 1（runtime_impl.rs，注释仍写「协作调度」） | 返回真实核数，ForkJoinPool commonPool 按并行度运行 | 返回值是 1；CompletableFuture 走 ThreadPerTaskExecutor；并行流退化 | 新立（随 #42 第二档） |
 | FS-T4 | 虚拟线程 = OS 线程，Continuation / 载体线程 / 容器登记都不建模 | Continuation 建模 | 无法创建海量虚拟线程（每条保留 256MiB 栈）；toString / 载体信息不同 | #42 / compat 虚拟线程行 |
-| ~~FS-T5~~ ✅ | InternalLock 所有实例共用一把全局可重入锁，unlock 不核对实例 | 按实例加锁（翻译 JDK 的 ReentrantLock 包装） | 不同流之间伪互斥（性能问题；理论上可能死锁） | S-11 |
+| ~~FS-T5~~ ✅ `3209e52` | InternalLock 所有实例共用一把全局可重入锁，unlock 不核对实例 | 按实例加锁（翻译 JDK 的 ReentrantLock 包装） | 不同流之间伪互斥（性能问题；理论上可能死锁） | S-11 |
 | ~~FS-T6~~ ✅ `8dba713` | Thread 的 `setPriority0`、`setNativeName`、`getThreads`、`dumpThreads`、`getStackTrace0`、`scopedValueCache` 等 native 缺失 | 实现 | `setPriority` / `getAllStackTraces` 等命中 panic 存根 | 新立（按需） |
 | FS-T7 | Unsafe / VarHandle 的 CAS 族以「GIL 下读-比-写不可分割」的普通单元承载 | 原子单元 / 引用槽写锁内的读-比-写 | 仅架构（GIL 下等价） | #42（**4fa1d48 已改为原子**，待验证） |
 
@@ -92,8 +92,8 @@
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| ~~FS-IO1~~ ✅ | POSIX 档 A：`access` 的 R/W/X 近似为 F_OK | 档 B：`faccessat` | isReadable 等会误报 | #15（按需） |
-| FS-IO2 | `checkAccess0` 宽容近似；`getSpace0` 恒 0；`getNameMax0` 恒 255 | 真实的 access / statvfs / pathconf | `canWrite` 误报；`getFreeSpace` 恒为 0 | 部分（#15） |
+| ~~FS-IO1~~ ✅ `9af1c05` | POSIX 档 A：`access` 的 R/W/X 近似为 F_OK | 档 B：`faccessat` | isReadable 等会误报 | #15（按需） |
+| ~~FS-IO2~~ ✅ `9af1c05` | `checkAccess0` 宽容近似；`getSpace0` 恒 0；`getNameMax0` 恒 255 | 真实的 access / statvfs / pathconf | `canWrite` 误报；`getFreeSpace` 恒为 0 | 部分（#15） |
 | FS-IO3 | UnixPath 的 macOS NFD 用恒等处理；relativize / toUri / 迭代器是存根 | 完整实现 | macOS 非 ASCII 路径比较不同；调用即 panic | #15 |
 | FS-IO4 | `FileSystems` 整类手写 | 翻译字节码 | 自定义 FileSystemProvider / zipfs 不可用 | 新立 |
 | FS-IO5 | FileChannel 直连 std；Unsafe 没有 allocateMemory | lock / map / off-heap | `allocateDirect` / `map` / `lock` 命中存根 | 新立 |
