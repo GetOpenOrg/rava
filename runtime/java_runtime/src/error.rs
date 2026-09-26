@@ -9,7 +9,7 @@
 //! `vm-upcalls` 行声明，转译 BFS 以此为种子——声明在使用处，与 `_impl.rs` 的
 //! upcalls 属性机制同一形态（原独立清单 vm_roots.txt 已并入此处）。
 
-// vm-upcalls: java/lang/NullPointerException.<init>:()V java/lang/ArrayIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/IndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/StringIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/NegativeArraySizeException.<init>:(Ljava/lang/String;)V java/lang/ArithmeticException.<init>:(Ljava/lang/String;)V java/lang/ClassCastException.<init>:(Ljava/lang/String;)V java/lang/ArrayStoreException.<init>:(Ljava/lang/String;)V java/lang/IllegalMonitorStateException.<init>:(Ljava/lang/String;)V java/lang/CloneNotSupportedException.<init>:(Ljava/lang/String;)V java/lang/OutOfMemoryError.<init>:(Ljava/lang/String;)V java/lang/NoClassDefFoundError.<init>:(Ljava/lang/String;)V java/lang/ExceptionInInitializerError.<init>:(Ljava/lang/Throwable;)V java/lang/Throwable.getMessage:()Ljava/lang/String; java/lang/NoSuchFieldException.<init>:(Ljava/lang/String;)V
+// vm-upcalls: java/lang/NullPointerException.<init>:()V java/lang/ArrayIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/IndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/StringIndexOutOfBoundsException.<init>:(Ljava/lang/String;)V java/lang/NegativeArraySizeException.<init>:(Ljava/lang/String;)V java/lang/ArithmeticException.<init>:(Ljava/lang/String;)V java/lang/ClassCastException.<init>:(Ljava/lang/String;)V java/lang/ArrayStoreException.<init>:(Ljava/lang/String;)V java/lang/IllegalMonitorStateException.<init>:(Ljava/lang/String;)V java/lang/CloneNotSupportedException.<init>:(Ljava/lang/String;)V java/lang/OutOfMemoryError.<init>:(Ljava/lang/String;)V java/lang/NoClassDefFoundError.<init>:(Ljava/lang/String;)V java/lang/ExceptionInInitializerError.<init>:(Ljava/lang/Throwable;)V java/lang/Throwable.getMessage:()Ljava/lang/String; java/lang/NoSuchFieldException.<init>:(Ljava/lang/String;)V java/lang/InterruptedException.<init>:()V java/lang/InterruptedException.<init>:(Ljava/lang/String;)V
 
 use crate::java::lang::{Object, ObjectVTable, String, Throwable};
 
@@ -143,6 +143,15 @@ impl JvmError {
     /// `Object.wait` 参数校验（HotSpot JVM_MonitorWait 同序：先于持有检查）。
     pub fn illegal_argument(message: &str) -> Self {
         vm_throw(crate::java::lang::IllegalArgumentException::new_str(String::from(message)))
+    }
+
+    /// 阻塞原语被中断（`Thread.sleep` / `Object.wait`，HotSpot 同消息：sleep 带
+    /// "sleep interrupted"，wait 无消息）。
+    pub fn interrupted(message: Option<&str>) -> Self {
+        match message {
+            Some(m) => vm_throw(crate::java::lang::InterruptedException::new_str(String::from(m))),
+            None => vm_throw(crate::java::lang::InterruptedException::new()),
+        }
     }
 
     pub fn out_of_memory(message: &str) -> Self {

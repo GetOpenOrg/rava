@@ -132,7 +132,7 @@ impl Monitor {
     /// 参数异常先于持有检查）→ 释放全部重入计数 → 释放 GIL 等待至 notify / 超时 /
     /// 虚假唤醒 → 按原计数重新获取监视器 → 重获取 GIL。`millis == 0 && nanos == 0`
     /// 为无限等待。调用方以条件循环消费虚假唤醒。
-    fn wait_timeout(&self, millis: i64, nanos: i32) -> Result<()> {
+    fn wait_timeout(self: &Arc<Self>, thread_identity: usize, millis: i64, nanos: i32) -> Result<()> {
         if millis < 0 {
             return Err(JvmError::illegal_argument("timeout value is negative"));
         }
@@ -147,21 +147,43 @@ impl Monitor {
                 _ => return Err(JvmError::illegal_monitor_state("current thread is not owner")),
             }
         };
-        crate::gil::blocking(|| {
+        // 进入等待前已中断：不释放监视器，直接抛出（HotSpot ObjectMonitor::wait 同判定）
+        if take_interrupt(thread_identity) {
+            return Err(JvmError::interrupted(None));
+        }
+        let parker = parker_for(thread_identity);
+        let interrupted = crate::gil::blocking(|| {
             let mut st = self.state.lock();
             st.owner = None;
             st.count = 0;
             self.acquire_q.notify_one(); // 让出监视器：唤醒竞争者
-            if millis == 0 && nanos == 0 {
-                self.wait_q.wait(&mut st);
-            } else {
-                let deadline = Instant::now()
-                    + Duration::from_millis(millis as u64)
-                    + Duration::from_nanos(nanos as u64);
-                self.wait_q.wait_until(&mut st, deadline);
+            // 在监视器状态锁下登记所等监视器并检查中断镜像（与 `interrupt` 的通知同锁，不丢唤醒）
+            let already = {
+                let mut ps = parker.state.lock();
+                ps.waiting_on = Some(Arc::clone(self));
+                ps.interrupted
+            };
+            if !already {
+                if millis == 0 && nanos == 0 {
+                    self.wait_q.wait(&mut st);
+                } else {
+                    let deadline = Instant::now()
+                        + Duration::from_millis(millis as u64)
+                        + Duration::from_nanos(nanos as u64);
+                    self.wait_q.wait_until(&mut st, deadline);
+                }
             }
+            let hit = {
+                let mut ps = parker.state.lock();
+                ps.waiting_on = None;
+                std::mem::replace(&mut ps.interrupted, false)
+            };
             self.acquire_blocking(&mut st, me, saved);
+            hit
         });
+        if interrupted {
+            return Err(JvmError::interrupted(None));
+        }
         Ok(())
     }
 
@@ -192,11 +214,19 @@ impl Monitor {
     }
 }
 
-// ── park / unpark（LockSupport 的 VM 底座）──────────────────────────────────
+// ── park / unpark / 中断（LockSupport 与 Thread.interrupt 的 VM 底座）─────────
 
-/// 每线程一张许可（permit 语义：unpark 授予、park 消费；多次 unpark 不累加）。
+/// 每线程一份：park 许可（permit 语义：unpark 授予、park 消费、不累加）+ 中断镜像
+/// （Java 字段 `Thread.interrupted` 的 Rust 侧副本，供释放 GIL 后的等待判断唤醒）+
+/// 当前所等监视器（中断时唤醒其等待队列）。
+struct ParkState {
+    permit: bool,
+    interrupted: bool,
+    waiting_on: Option<Arc<Monitor>>,
+}
+
 struct Parker {
-    permit: Mutex<bool>,
+    state: Mutex<ParkState>,
     cv: Condvar,
 }
 
@@ -204,14 +234,15 @@ fn parker_for(thread_identity: usize) -> Arc<Parker> {
     static PARKERS: OnceLock<Mutex<HashMap<usize, Arc<Parker>>>> = OnceLock::new();
     let mut table = PARKERS.get_or_init(|| Mutex::new(HashMap::new())).lock();
     Clone::clone(table.entry(thread_identity).or_insert_with(|| Arc::new(Parker {
-        permit: Mutex::new(false),
+        state: Mutex::new(ParkState { permit: false, interrupted: false, waiting_on: None }),
         cv: Condvar::new(),
     })))
 }
 
-/// `Unsafe.park(isAbsolute, time)`：消费许可；无许可时释放 GIL 阻塞至 unpark /
-/// 超时（相对纳秒；绝对为 epoch 毫秒截止）/ 虚假唤醒。`time == 0` 且相对为无限期；
-/// 相对 `time < 0` 或已过的绝对截止立即返回（HotSpot Parker::park 同判定）。
+/// `Unsafe.park(isAbsolute, time)`：消费许可；无许可且未中断时释放 GIL 阻塞至 unpark /
+/// 中断 / 超时（相对纳秒；绝对为 epoch 毫秒截止）/ 虚假唤醒。`time == 0` 且相对为无限期；
+/// 相对 `time < 0` 或已过的绝对截止立即返回（HotSpot Parker::park 同判定）。中断不消费
+/// （park 返回后中断状态保留，JDK LockSupport 语义）。
 pub fn park(thread_identity: usize, is_absolute: bool, time: i64) {
     let deadline = if is_absolute {
         let now_ms = std::time::SystemTime::now()
@@ -227,30 +258,71 @@ pub fn park(thread_identity: usize, is_absolute: bool, time: i64) {
         None
     };
     let indefinite = !is_absolute && time == 0;
+    let p = parker_for(thread_identity);
     if deadline.is_none() && !indefinite {
-        // 立即返回的形态仍消费已有许可
-        *parker_for(thread_identity).permit.lock() = false;
+        p.state.lock().permit = false;
         return;
     }
-    let p = parker_for(thread_identity);
     crate::gil::blocking(|| {
-        let mut permit = p.permit.lock();
-        if !*permit {
+        let mut st = p.state.lock();
+        if !st.permit && !st.interrupted {
             match deadline {
-                Some(d) => { p.cv.wait_until(&mut permit, d); }
-                None => { p.cv.wait(&mut permit); }
+                Some(d) => { p.cv.wait_until(&mut st, d); }
+                None => { p.cv.wait(&mut st); }
             }
         }
-        *permit = false;
+        st.permit = false;
     });
 }
 
 /// `Unsafe.unpark(thread)`：授予许可并唤醒（线程未 park 时许可留待下次 park 消费）。
 pub fn unpark(thread_identity: usize) {
     let p = parker_for(thread_identity);
-    let mut permit = p.permit.lock();
-    *permit = true;
-    p.cv.notify_one();
+    let mut st = p.state.lock();
+    st.permit = true;
+    p.cv.notify_all();
+}
+
+/// `Thread.interrupt` 的 VM 侧（HotSpot `JavaThread::interrupt`）：置中断镜像，唤醒该线程的
+/// park / sleep 等待与所等监视器的等待队列。Java 字段由调用方置位。
+pub fn interrupt(thread_identity: usize) {
+    let p = parker_for(thread_identity);
+    let monitor = {
+        let mut st = p.state.lock();
+        st.interrupted = true;
+        p.cv.notify_all();
+        st.waiting_on.clone()
+    };
+    if let Some(m) = monitor {
+        // 持监视器状态锁再通知：等待者在同一把锁下检查中断镜像后才入等待，通知不丢
+        let _st = m.state.lock();
+        m.wait_q.notify_all();
+    }
+}
+
+/// 清中断镜像（`Thread.clearInterruptEvent` / 抛出 InterruptedException 时）。
+pub fn clear_interrupt(thread_identity: usize) {
+    parker_for(thread_identity).state.lock().interrupted = false;
+}
+
+/// 读取并清除中断镜像。
+fn take_interrupt(thread_identity: usize) -> bool {
+    std::mem::replace(&mut parker_for(thread_identity).state.lock().interrupted, false)
+}
+
+/// `Thread.sleep0`：释放 GIL 按挂钟驻留，可被中断唤醒。返回 true = 被中断（镜像已清）。
+pub fn sleep_interruptibly(thread_identity: usize, nanos: i64) -> bool {
+    let p = parker_for(thread_identity);
+    let deadline = Instant::now() + Duration::from_nanos(nanos.max(0) as u64);
+    crate::gil::blocking(|| {
+        let mut st = p.state.lock();
+        while !st.interrupted {
+            if p.cv.wait_until(&mut st, deadline).timed_out() {
+                break;
+            }
+        }
+        std::mem::replace(&mut st.interrupted, false)
+    })
 }
 
 // ── 身份侧表 ─────────────────────────────────────────────────────────────────
@@ -288,7 +360,24 @@ pub fn wait_timeout(identity: usize, is_null: bool, millis: i64, nanos: i32) -> 
     if is_null {
         return Err(JvmError::null_pointer());
     }
-    monitor_for(identity).wait_timeout(millis, nanos)
+    let me = crate::java::lang::thread_impl::current_thread_identity()?;
+    let result = monitor_for(identity).wait_timeout(me, millis, nanos);
+    if let Err(e) = &result {
+        if e.is_instance_of("java/lang/InterruptedException") {
+            // VM 抛出 InterruptedException 时清除中断状态（Java 字段；镜像已清）
+            crate::java::lang::thread_impl::clear_current_interrupted()?;
+        }
+    }
+    result
+}
+
+/// `Thread.holdsLock(obj)`：当前线程是否持有 `identity` 对象的监视器。
+pub fn holds_lock(identity: usize) -> bool {
+    let table = side_table().lock();
+    match table.get(&identity) {
+        Some(m) => m.state.lock().owner == Some(std::thread::current().id()),
+        None => false,
+    }
 }
 
 /// `Object.notify()`。

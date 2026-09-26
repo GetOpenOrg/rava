@@ -25,8 +25,9 @@
 //!
 //! ## 取舍
 //!
-//! - `wait` / `sleep` / `park` 的中断唤醒（InterruptedException）未实现：`interrupt`
-//!   只置标记（`isInterrupted` / `interrupted` 可观察）。
+//! - 中断：`interrupt` 置 Java 字段 + VM 侧镜像并唤醒目标的 sleep / wait / park；sleep /
+//!   wait 抛 InterruptedException 并清中断状态，park 返回且保留状态（JVM 语义）。
+//! - `getState` 在阻塞中仍报 RUNNABLE（threadStatus 不随阻塞翻位）。
 
 use crate::prelude::*;
 use super::*;
@@ -83,6 +84,17 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
     Ok(())
 }
 
+/// 当前线程对象的身份（park / 中断 / wait 的每线程设施键）。
+pub(crate) fn current_thread_identity() -> Result<usize> {
+    Ok(Object::from(Thread::currentThread()?).0.__identity() as usize)
+}
+
+/// 清除当前线程的中断状态（Java 字段）：VM 抛出 InterruptedException 时调用。
+pub(crate) fn clear_current_interrupted() -> Result<()> {
+    Thread::currentThread()?.__set_interrupted(false);
+    Ok(())
+}
+
 /// 执行线程体并做 JVM thread-exit 簿记（见模块注释「线程生命周期」）。
 fn run_java_thread(t: &Thread) {
     // 虚分派（Thread__VTable::run）：子类覆盖（Worker.run）或 Thread.run 的
@@ -126,11 +138,17 @@ impl Thread {
     }
 
     /// native `sleep0(J nanos)`：释放 GIL 后按挂钟驻留 `nanos` 纳秒（其他线程期间运行）。
-    /// 中断唤醒（InterruptedException）未实现，见模块注释取舍。
+    /// 进入时或驻留中被中断：清中断状态并抛 `InterruptedException("sleep interrupted")`
+    /// （HotSpot JVM_Sleep 同语义）。
     #[jvm_native]
     pub fn sleep0(nanos: i64) -> Result<()> {
-        let d = Duration::from_nanos(nanos.max(0) as u64);
-        crate::gil::blocking(|| std::thread::sleep(d));
+        let me = current_thread_identity()?;
+        let t = Thread::currentThread()?;
+        if t.__get_interrupted() || crate::monitor::sleep_interruptibly(me, nanos) {
+            crate::monitor::clear_interrupt(me);
+            t.__set_interrupted(false);
+            return Err(JvmError::interrupted(Some("sleep interrupted")));
+        }
         Ok(())
     }
 
@@ -190,9 +208,34 @@ impl Thread {
         Ok(false)
     }
 
+    /// native `holdsLock(Object)`：当前线程是否持有 obj 的监视器（null → NPE）。
+    #[jvm_native]
+    pub fn holdsLock(obj: Object) -> Result<bool> {
+        if obj.0.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        Ok(crate::monitor::holds_lock(obj.0.__identity() as usize))
+    }
+
+    /// `interrupt()`：置中断状态并唤醒目标线程的 sleep / wait / park（`monitor::interrupt`）。
     #[jvm_native]
     pub fn interrupt(&self) -> Result<()> {
         self.__set_interrupted(true);
+        crate::monitor::interrupt(Object::from(Clone::clone(self)).0.__identity() as usize);
+        Ok(())
+    }
+
+    /// native `interrupt0()`：JDK `interrupt()` 字节码置字段后通知 VM——唤醒同上。
+    #[jvm_native]
+    pub fn interrupt0(&self) -> Result<()> {
+        crate::monitor::interrupt(Object::from(Clone::clone(self)).0.__identity() as usize);
+        Ok(())
+    }
+
+    /// native `clearInterruptEvent()`：Java 侧清中断状态后同步清 VM 侧镜像。
+    #[jvm_native]
+    pub fn clearInterruptEvent() -> Result<()> {
+        crate::monitor::clear_interrupt(current_thread_identity()?);
         Ok(())
     }
 
