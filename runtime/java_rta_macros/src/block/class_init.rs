@@ -89,8 +89,8 @@ pub(crate) fn expand_statics(
         storage.push(quote! {
             ::std::thread_local! {
                 #[allow(non_upper_case_globals)]
-                static #cell: ::std::cell::RefCell<::std::option::Option<#ty>> =
-                    const { ::std::cell::RefCell::new(::std::option::Option::None) };
+                static #cell: __RefSlot<::std::option::Option<#ty>> =
+                    const { __RefSlot::new(::std::option::Option::None) };
             }
         });
         if !getter_handwritten {
@@ -137,7 +137,7 @@ pub(crate) fn expand_class_init(
     let storage = quote! {
         ::std::thread_local! {
             #[allow(non_upper_case_globals)]
-            static #state: ::std::cell::Cell<u8> = const { ::std::cell::Cell::new(0) };
+            static #state: __PrimCell<u8> = const { __PrimCell::new(0) };
         }
     };
     let init_super = superclass.map(|sup| quote! { <#sup>::__class_init()?; });
@@ -209,7 +209,7 @@ pub(crate) fn constant_directory_registration(
         quote! {
             (
                 ::std::string::String::from(#lit),
-                ::std::rc::Rc::new(|| -> Result<Object> { Ok(Object::from(Self::#name()?)) })
+                __Shared::new(|| -> Result<Object> { Ok(Object::from(Self::#name()?)) })
             )
         }
     }).collect();
@@ -221,7 +221,7 @@ pub(crate) fn constant_directory_registration(
         {
             let __entries: ::std::vec::Vec<(
                 ::std::string::String,
-                ::std::rc::Rc<dyn Fn() -> Result<Object>>
+                __Shared<dyn Fn() -> Result<Object>>
             )> = ::std::vec![#(#entries),*];
             register_constant_directory(#dotted, __entries);
         }

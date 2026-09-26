@@ -18,7 +18,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // ══════════════════════════════════════════════════════════════════════════
 
     let erased_ref_cell: TokenStream2 =
-        quote! { ::std::rc::Rc<::std::cell::RefCell<::std::option::Option<::std::boxed::Box<Object>>>> };
+        quote! { __Shared<__RefSlot<::std::option::Option<::std::boxed::Box<Object>>>> };
     let mut inner_field_tokens: Vec<TokenStream2> = Vec::new();
 
     // 继承字段（平铺，不再有 _super）
@@ -30,9 +30,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         let cell_ty = if ctx.is_erased(name) {
             erased_ref_cell.clone()
         } else if ctx.inherited_is_basic(name, ty) {
-            quote! { ::std::rc::Rc<::std::cell::Cell<#ty>> }
+            quote! { __Shared<__PrimCell<#ty>> }
         } else {
-            quote! { ::std::rc::Rc<::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>>> }
+            quote! { __Shared<__RefSlot<::std::option::Option<::std::boxed::Box<#ty>>>> }
         };
         inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
     }
@@ -42,15 +42,15 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         let cell_ty = if ctx.is_erased(name) {
             erased_ref_cell.clone()
         } else if is_basic(ty) {
-            quote! { ::std::rc::Rc<::std::cell::Cell<#ty>> }
+            quote! { __Shared<__PrimCell<#ty>> }
         } else {
-            quote! { ::std::rc::Rc<::std::cell::RefCell<::std::option::Option<::std::boxed::Box<#ty>>>> }
+            quote! { __Shared<__RefSlot<::std::option::Option<::std::boxed::Box<#ty>>>> }
         };
         inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
     }
 
     // 对象标识单元：wrapper 钩子按值克隆 __inner 重建视图时随之共享，Default（新对象）各自新建
-    inner_field_tokens.push(quote! { pub(crate) __identity: ::std::rc::Rc<()> });
+    inner_field_tokens.push(quote! { pub(crate) __identity: __Shared<()> });
 
     let inner_struct = quote! {
         #[doc(hidden)]
@@ -118,9 +118,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         quote! {}
     } else {
         quote! {
-            fn __interface(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
+            fn __interface(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
                 #(
-                    if let Some(s) = slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #iface_vtable_idents>>>() {
+                    if let Some(s) = slot.downcast_mut::<::std::option::Option<__Shared<dyn #iface_vtable_idents>>>() {
                         *s = Some(self);
                         return;
                     }
@@ -155,22 +155,22 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         .map(|anc| format_ident!("{}__VTable", anc))
         .collect();
     let erased_vtable_query: TokenStream2 = quote! {
-        fn __erased_vtable(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
+        fn __erased_vtable(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
             if let ::std::option::Option::Some(s) =
-                slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #vtable_trait_ident>>>()
+                slot.downcast_mut::<::std::option::Option<__Shared<dyn #vtable_trait_ident>>>()
             {
                 *s = ::std::option::Option::Some(
-                    ::std::rc::Rc::clone(&self)
-                        as ::std::rc::Rc<dyn #vtable_trait_ident>);
+                    __Shared::clone(&self)
+                        as __Shared<dyn #vtable_trait_ident>);
                 return;
             }
             #(
                 if let ::std::option::Option::Some(s) =
-                    slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #ancestor_vtable_idents>>>()
+                    slot.downcast_mut::<::std::option::Option<__Shared<dyn #ancestor_vtable_idents>>>()
                 {
                     *s = ::std::option::Option::Some(
-                        ::std::rc::Rc::clone(&self)
-                            as ::std::rc::Rc<dyn #ancestor_vtable_idents>);
+                        __Shared::clone(&self)
+                            as __Shared<dyn #ancestor_vtable_idents>);
                     return;
                 }
             )*
@@ -191,7 +191,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             let field_str = name.to_string();
             quote! {
                 #field_str => ::std::option::Option::Some(
-                    ::std::rc::Rc::clone(&self.#name)),
+                    __Shared::clone(&self.#name)),
             }
         })
         .collect();
@@ -202,7 +202,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             let field_str = name.to_string();
             quote! {
                 #field_str => ::std::option::Option::Some(
-                    ::std::rc::Rc::clone(&self.#name)),
+                    __Shared::clone(&self.#name)),
             }
         })
         .collect();
@@ -213,7 +213,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             let field_str = name.to_string();
             quote! {
                 #field_str => ::std::option::Option::Some(
-                    ::std::rc::Rc::clone(&self.#name)),
+                    __Shared::clone(&self.#name)),
             }
         })
         .collect();
@@ -224,7 +224,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             fn __unsafe_bool_cell(
                 &self,
                 field: &str,
-            ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<bool>>> {
+            ) -> ::std::option::Option<__Shared<__PrimCell<bool>>> {
                 match field {
                     #(#inner_bool_cell_arms)*
                     _ => ::std::option::Option::None,
@@ -239,7 +239,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             fn __unsafe_long_cell(
                 &self,
                 field: &str,
-            ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<i64>>> {
+            ) -> ::std::option::Option<__Shared<__PrimCell<i64>>> {
                 match field {
                     #(#inner_long_cell_arms)*
                     _ => ::std::option::Option::None,
@@ -254,7 +254,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             fn __unsafe_int_cell(
                 &self,
                 field: &str,
-            ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<i32>>> {
+            ) -> ::std::option::Option<__Shared<__PrimCell<i32>>> {
                 match field {
                     #(#inner_int_cell_arms)*
                     _ => ::std::option::Option::None,
@@ -394,9 +394,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         .map(|(name, ty)| (name, !ctx.is_erased(name) && ctx.inherited_is_basic(name, ty)))
         .chain(ctx.fields.iter().map(|(name, ty)| (name, !ctx.is_erased(name) && is_basic(ty))))
         .map(|(name, basic)| if basic {
-            quote! { #name: ::std::rc::Rc::new(::std::cell::Cell::new(self.#name.get())), }
+            quote! { #name: __Shared::new(__PrimCell::new(self.#name.get())), }
         } else {
-            quote! { #name: ::std::rc::Rc::new(::std::cell::RefCell::new(self.#name.borrow().clone())), }
+            quote! { #name: __Shared::new(__RefSlot::new(self.#name.borrow().clone())), }
         })
         .collect();
     let as_self_hook = &ctx.as_self_hook;
@@ -405,7 +405,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         fn __shallow_copy(&self) -> ::std::option::Option<Object> {
             let __c = #inner_ident {
                 #(#shallow_copy_inits)*
-                __identity: ::std::rc::Rc::new(()),
+                __identity: __Shared::new(()),
             };
             ::std::option::Option::Some(Object::from(#vtable_trait_ident::#as_self_hook(&__c)))
         }
@@ -425,7 +425,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn __class_name(&self) -> &'static str { #binary_name }
                 fn __identity(&self) -> *const () {
-                    ::std::rc::Rc::as_ptr(&self.__identity) as *const ()
+                    __Shared::as_ptr(&self.__identity) as *const ()
                 }
                 #hash_code_inner_bridge
                 #equals_inner_bridge

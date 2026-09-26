@@ -236,10 +236,10 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         }
         own_accessor_impls.push(quote! {
             fn #as_self_hook(&self) -> #struct_ident #erased_ty_args {
-                let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                let __rc = __Shared::new(::std::clone::Clone::clone(self));
                 #struct_ident {
-                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident>,
-                    any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    vtable: __rc.clone() as __Shared<dyn #vtable_trait_ident>,
+                    any: __rc as __Shared<dyn ::std::any::Any>,
                     _jvm_null: false,
                     #phantom_init
                 }
@@ -488,10 +488,10 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
             };
             items.push(quote! {
                 fn #anc_hook(&self) -> #anc_ident #anc_erased_args {
-                    let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                    let __rc = __Shared::new(::std::clone::Clone::clone(self));
                     #anc_from_parts(
-                        __rc.clone() as ::std::rc::Rc<dyn #anc_vtable_ident>,
-                        __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                        __rc.clone() as __Shared<dyn #anc_vtable_ident>,
+                        __rc as __Shared<dyn ::std::any::Any>,
                         false,
                     )
                 }
@@ -524,10 +524,10 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         }
         own_accessor_impls.push(quote! {
             fn #as_self_hook(&self) -> #struct_ident #erased_ty_args {
-                let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                let __rc = __Shared::new(::std::clone::Clone::clone(self));
                 #struct_ident {
-                    vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident>,
-                    any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    vtable: __rc.clone() as __Shared<dyn #vtable_trait_ident>,
+                    any: __rc as __Shared<dyn ::std::any::Any>,
                     _jvm_null: false,
                     #phantom_init
                 }

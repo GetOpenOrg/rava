@@ -41,8 +41,8 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     let wrapper_struct = quote! {
         #[allow(non_camel_case_types)]
         pub struct #struct_ident #impl_g #where_c {
-            pub(crate) vtable: ::std::rc::Rc<dyn #vtable_trait_ident>,
-            pub(crate) any: ::std::rc::Rc<dyn ::std::any::Any>,
+            pub(crate) vtable: __Shared<dyn #vtable_trait_ident>,
+            pub(crate) any: __Shared<dyn ::std::any::Any>,
             /// JVM null 标志：Default::default() = true（null），构造后调用 _init_not_null() = false
             pub _jvm_null: bool,
             #phantom_field
@@ -55,8 +55,8 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
         impl #impl_g #struct_ident #ty_g #where_c {
             #[doc(hidden)]
             pub fn __from_parts(
-                vtable: ::std::rc::Rc<dyn #vtable_trait_ident>,
-                any: ::std::rc::Rc<dyn ::std::any::Any>,
+                vtable: __Shared<dyn #vtable_trait_ident>,
+                any: __Shared<dyn ::std::any::Any>,
                 is_null: bool,
             ) -> Self {
                 #struct_ident { vtable, any, _jvm_null: is_null, #phantom_init }
@@ -70,12 +70,12 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
             #[doc(hidden)]
             pub fn __virtual_view(obj: &Object) -> ::std::option::Option<Self> {
                 let mut __vt: ::std::option::Option<
-                    ::std::rc::Rc<dyn #vtable_trait_ident>> = ::std::option::Option::None;
-                ObjectVTable::__erased_vtable(::std::rc::Rc::clone(&obj.0), &mut __vt);
+                    __Shared<dyn #vtable_trait_ident>> = ::std::option::Option::None;
+                ObjectVTable::__erased_vtable(__Shared::clone(&obj.0), &mut __vt);
                 let __vt = __vt?;
                 let mut __store: ::std::option::Option<
-                    ::std::rc::Rc<dyn ::std::any::Any>> = ::std::option::Option::None;
-                ObjectVTable::__erased_inner(::std::rc::Rc::clone(&obj.0), &mut __store);
+                    __Shared<dyn ::std::any::Any>> = ::std::option::Option::None;
+                ObjectVTable::__erased_inner(__Shared::clone(&obj.0), &mut __store);
                 Some(#struct_ident {
                     vtable: __vt,
                     any: __store?,
@@ -89,10 +89,10 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     let wrapper_default = quote! {
         impl #impl_g ::std::default::Default for #struct_ident #ty_g #where_c {
             fn default() -> Self {
-                let rc = ::std::rc::Rc::new(<#inner_ident as ::std::default::Default>::default());
+                let rc = __Shared::new(<#inner_ident as ::std::default::Default>::default());
                 #struct_ident {
-                    vtable: ::std::rc::Rc::clone(&rc) as ::std::rc::Rc<dyn #vtable_trait_ident>,
-                    any: rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    vtable: __Shared::clone(&rc) as __Shared<dyn #vtable_trait_ident>,
+                    any: rc as __Shared<dyn ::std::any::Any>,
                     _jvm_null: true,
                     #phantom_init
                 }
@@ -104,8 +104,8 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
         impl #impl_g ::std::clone::Clone for #struct_ident #ty_g #where_c {
             fn clone(&self) -> Self {
                 #struct_ident {
-                    vtable: ::std::rc::Rc::clone(&self.vtable),
-                    any: ::std::rc::Rc::clone(&self.any),
+                    vtable: __Shared::clone(&self.vtable),
+                    any: __Shared::clone(&self.any),
                     _jvm_null: self._jvm_null,
                     #phantom_init
                 }
@@ -242,7 +242,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 let field_str = name.to_string();
                 quote! {
                     (::std::option::Option::Some(i), #field_str) =>
-                        ::std::option::Option::Some(::std::rc::Rc::clone(&i.#name)),
+                        ::std::option::Option::Some(__Shared::clone(&i.#name)),
                 }
             })
             .collect();
@@ -254,7 +254,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 let field_str = name.to_string();
                 quote! {
                     (::std::option::Option::Some(i), #field_str) =>
-                        ::std::option::Option::Some(::std::rc::Rc::clone(&i.#name)),
+                        ::std::option::Option::Some(__Shared::clone(&i.#name)),
                 }
             })
             .collect();
@@ -267,7 +267,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 let field_str = name.to_string();
                 quote! {
                     (::std::option::Option::Some(i), #field_str) =>
-                        ::std::option::Option::Some(::std::rc::Rc::clone(&i.#name)),
+                        ::std::option::Option::Some(__Shared::clone(&i.#name)),
                 }
             })
             .collect();
@@ -376,38 +376,38 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn is_jvm_null(&self) -> bool { self._jvm_null }
-                fn __interface(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
-                    ObjectVTable::__interface(::std::rc::Rc::clone(&self.vtable), slot)
+                fn __interface(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
+                    ObjectVTable::__interface(__Shared::clone(&self.vtable), slot)
                 }
                 fn __class_name(&self) -> &'static str { self.vtable.__class_name() }
                 fn __identity(&self) -> *const () { self.vtable.__identity() }
                 /// 擦除存储导出（A-1）：wrapper 持有的非泛型 `Rc<X__inner>`。
                 /// `From<Object> for X<A>` 的擦除路径据此对任意类型实参重建视图。
-                fn __erased_inner(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
+                fn __erased_inner(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
                     if let ::std::option::Option::Some(s) =
-                        slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn ::std::any::Any>>>()
+                        slot.downcast_mut::<::std::option::Option<__Shared<dyn ::std::any::Any>>>()
                     {
-                        *s = ::std::option::Option::Some(::std::rc::Rc::clone(&self.any));
+                        *s = ::std::option::Option::Some(__Shared::clone(&self.any));
                     }
                 }
                 /// 擦除 vtable 导出（A-1 部件形态）：按调用方 slot 的（擦除）类 vtable
                 /// 类型把自身 vtable 填入——自身槽位直取；祖先类槽位经 supertrait 上转
                 /// （类 vtable trait 非泛型，与类型实参无关）。与 `__erased_inner` 配对，
                 /// 供 `From<Object> for X<A>` 重建「运行时类是本类或其子类」的任意实例化视图。
-                fn __erased_vtable(self: ::std::rc::Rc<Self>, slot: &mut dyn ::std::any::Any) {
+                fn __erased_vtable(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
                     if let ::std::option::Option::Some(s) =
-                        slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #vtable_trait_ident>>>()
+                        slot.downcast_mut::<::std::option::Option<__Shared<dyn #vtable_trait_ident>>>()
                     {
-                        *s = ::std::option::Option::Some(::std::rc::Rc::clone(&self.vtable));
+                        *s = ::std::option::Option::Some(__Shared::clone(&self.vtable));
                         return;
                     }
                     #(
                         if let ::std::option::Option::Some(s) =
-                            slot.downcast_mut::<::std::option::Option<::std::rc::Rc<dyn #ancestor_vtable_idents>>>()
+                            slot.downcast_mut::<::std::option::Option<__Shared<dyn #ancestor_vtable_idents>>>()
                         {
                             *s = ::std::option::Option::Some(
-                                ::std::rc::Rc::clone(&self.vtable)
-                                    as ::std::rc::Rc<dyn #ancestor_vtable_idents>);
+                                __Shared::clone(&self.vtable)
+                                    as __Shared<dyn #ancestor_vtable_idents>);
                             return;
                         }
                     )*
@@ -417,14 +417,14 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     // catch T < 运行时 R）catch_as 的擦除重建 Path A。vtable trait 链根部
                     // 超 trait 即 ObjectVTable，上转恒可到达 inner 侧的覆盖。
                     ObjectVTable::__erased_vtable(
-                        ::std::rc::Rc::clone(&self.vtable)
-                            as ::std::rc::Rc<dyn ObjectVTable>,
+                        __Shared::clone(&self.vtable)
+                            as __Shared<dyn ObjectVTable>,
                         slot,
                     );
                 }
                 fn __view_as(
                     &self,
-                    _any: ::std::rc::Rc<dyn ::std::any::Any>,
+                    _any: __Shared<dyn ::std::any::Any>,
                     type_id: &str,
                 ) -> ::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>> {
                     #(#view_as_arms)*
@@ -432,7 +432,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 }
                 fn __view_into(
                     &self,
-                    _any: ::std::rc::Rc<dyn ::std::any::Any>,
+                    _any: __Shared<dyn ::std::any::Any>,
                     slot: &mut dyn ::std::any::Any,
                 ) -> bool {
                     #(#view_into_arms)*
@@ -445,12 +445,12 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     if let ::std::option::Option::Some(__o) = ObjectVTable::__shallow_copy(&*self.vtable) {
                         return ::std::option::Option::Some(__o);
                     }
-                    let __rc = ::std::rc::Rc::new(<#inner_ident as ::std::default::Default>::default());
+                    let __rc = __Shared::new(<#inner_ident as ::std::default::Default>::default());
                     // 类型标注：vtable 去形参后字面量的字段不再提及本类形参——全部字段
                     // 为具体类型的类（E 无从钉住）会触发 E0283；以 Self 钉住
                     let __copy: Self = #struct_ident {
-                        vtable: ::std::rc::Rc::clone(&__rc) as ::std::rc::Rc<dyn #vtable_trait_ident>,
-                        any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                        vtable: __Shared::clone(&__rc) as __Shared<dyn #vtable_trait_ident>,
+                        any: __rc as __Shared<dyn ::std::any::Any>,
                         _jvm_null: false,
                         #phantom_init
                     };
@@ -467,7 +467,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 fn __unsafe_long_cell(
                     &self,
                     field: &str,
-                ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<i64>>> {
+                ) -> ::std::option::Option<__Shared<__PrimCell<i64>>> {
                     match (self.any.downcast_ref::<#inner_ident>(), field) {
                         #(#long_cell_arms)*
                         _ => ObjectVTable::__unsafe_long_cell(&*self.vtable, field),
@@ -478,7 +478,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 fn __unsafe_int_cell(
                     &self,
                     field: &str,
-                ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<i32>>> {
+                ) -> ::std::option::Option<__Shared<__PrimCell<i32>>> {
                     match (self.any.downcast_ref::<#inner_ident>(), field) {
                         #(#int_cell_arms)*
                         _ => ObjectVTable::__unsafe_int_cell(&*self.vtable, field),
@@ -488,7 +488,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 fn __unsafe_bool_cell(
                     &self,
                     field: &str,
-                ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<bool>>> {
+                ) -> ::std::option::Option<__Shared<__PrimCell<bool>>> {
                     match (self.any.downcast_ref::<#inner_ident>(), field) {
                         #(#bool_cell_arms)*
                         _ => ObjectVTable::__unsafe_bool_cell(&*self.vtable, field),

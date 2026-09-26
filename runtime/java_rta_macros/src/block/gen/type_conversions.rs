@@ -57,16 +57,16 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             fn from(obj: #obj) -> Self {
                 if obj.0.is_jvm_null() { return Self::default(); }
                 let mut __slot: ::std::option::Option<Self> = ::std::option::Option::None;
-                if obj.0.__view_into(::std::rc::Rc::new(()), &mut __slot) {
+                if obj.0.__view_into(__Shared::new(()), &mut __slot) {
                     if let ::std::option::Option::Some(v) = __slot { return v; }
                 }
                 if obj.0.is_instance_of(#binary_name) {
                     let mut __vt: ::std::option::Option<
-                        ::std::rc::Rc<dyn #vtable_trait_ident>> = ::std::option::Option::None;
-                    ObjectVTable::__erased_vtable(::std::rc::Rc::clone(&obj.0), &mut __vt);
+                        __Shared<dyn #vtable_trait_ident>> = ::std::option::Option::None;
+                    ObjectVTable::__erased_vtable(__Shared::clone(&obj.0), &mut __vt);
                     let mut __erased: ::std::option::Option<
-                        ::std::rc::Rc<dyn ::std::any::Any>> = ::std::option::Option::None;
-                    ObjectVTable::__erased_inner(::std::rc::Rc::clone(&obj.0), &mut __erased);
+                        __Shared<dyn ::std::any::Any>> = ::std::option::Option::None;
+                    ObjectVTable::__erased_inner(__Shared::clone(&obj.0), &mut __erased);
                     if let ::std::option::Option::Some(__any) = __erased {
                         if let ::std::option::Option::Some(__vt) = __vt {
                             // 部件路径 A（子类值）：wrapper 的 vtable 经超类 vtable supertrait
@@ -84,9 +84,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                             __any.downcast::<#inner_ident>().ok()
                         {
                             return #struct_ident {
-                                vtable: ::std::rc::Rc::clone(&__rc)
-                                    as ::std::rc::Rc<dyn #vtable_trait_ident>,
-                                any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                                vtable: __Shared::clone(&__rc)
+                                    as __Shared<dyn #vtable_trait_ident>,
+                                any: __rc as __Shared<dyn ::std::any::Any>,
                                 _jvm_null: false,
                                 #phantom_init
                             };
@@ -127,7 +127,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                     impl #impl_g From<#struct_ident #ty_g> for #anc_ident #where_c {
                         fn from(child: #struct_ident #ty_g) -> #anc_ident {
                             #anc_ident::__from_parts(
-                                child.vtable as ::std::rc::Rc<dyn #anc_vtable>,
+                                child.vtable as __Shared<dyn #anc_vtable>,
                                 child.any,
                                 child._jvm_null,
                             )
@@ -162,7 +162,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 {
                     fn from(child: #struct_ident #ty_g) -> #anc_ident #anc_ty_args {
                         #anc_ident::#anc_ty_args::__from_parts(
-                            child.vtable as ::std::rc::Rc<dyn #anc_vtable>,
+                            child.vtable as __Shared<dyn #anc_vtable>,
                             child.any,
                             child._jvm_null,
                         )

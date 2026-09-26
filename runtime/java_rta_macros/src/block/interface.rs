@@ -135,8 +135,8 @@ pub(crate) fn expand_interface(
             #default_method
             #(#keep_attrs)*
             pub #sig {
-                let mut __vt: ::std::option::Option<::std::rc::Rc<dyn #vtable_ident>> = None;
-                ObjectVTable::__interface(::std::rc::Rc::clone(&self.__ref.0), &mut __vt);
+                let mut __vt: ::std::option::Option<__Shared<dyn #vtable_ident>> = None;
+                ObjectVTable::__interface(__Shared::clone(&self.__ref.0), &mut __vt);
                 if let Some(__vt) = __vt {
                     return Ok(::std::convert::From::from(
                         <dyn #vtable_ident>::#mname(&*__vt #(, ::std::convert::Into::into(#args))*)?));
@@ -254,10 +254,10 @@ pub(crate) fn expand_interface_impl(
         };
         quote! {
             #sig {
-                let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+                let __rc = __Shared::new(::std::clone::Clone::clone(self));
                 let __wrapper: #struct_ident #erased_ty_args = #struct_ident {
-                    vtable: __rc.clone() as ::std::rc::Rc<#erased_vt>,
-                    any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+                    vtable: __rc.clone() as __Shared<#erased_vt>,
+                    any: __rc as __Shared<dyn ::std::any::Any>,
                     _jvm_null: false,
                     #phantom_init
                 };
@@ -358,10 +358,10 @@ pub(crate) fn erased_wrapper_call(
 ) -> TokenStream2 {
     let call = erased_impl_call(sig, impl_name, type_param_names, erasure);
     quote! {
-        let __rc = ::std::rc::Rc::new(::std::clone::Clone::clone(self));
+        let __rc = __Shared::new(::std::clone::Clone::clone(self));
         let __w: #struct_ident #erased_ty_args = #struct_ident {
-            vtable: __rc.clone() as ::std::rc::Rc<dyn #vtable_trait_ident>,
-            any: __rc as ::std::rc::Rc<dyn ::std::any::Any>,
+            vtable: __rc.clone() as __Shared<dyn #vtable_trait_ident>,
+            any: __rc as __Shared<dyn ::std::any::Any>,
             _jvm_null: false,
             #phantom_init
         };

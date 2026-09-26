@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 pub mod annotation_meta;
 pub mod array;
+pub mod sync_model;
 pub mod data_bundles;
 pub mod jca;
 pub mod reflect_dispatch;
@@ -382,6 +383,7 @@ pub mod prelude {
     pub use super::java::lang::ObjectVTable;
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
+    pub use super::sync_model::{__PrimCell, __RefSlot, __Shared};
     pub use super::_is_jnull;
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
