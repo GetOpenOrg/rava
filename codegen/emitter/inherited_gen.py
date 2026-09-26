@@ -357,7 +357,8 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
 
 
 def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
-                          emissions: dict, recv: 'ClassEmission | None' = None) -> 'dict | None':
+                          emissions: dict, recv: 'ClassEmission | None' = None,
+                          allow_covariant: bool = False) -> 'dict | None':
     """(name, param_desc) 的 synthetic 桥接解析核心（JVM 方法解析顺序：桥接优先）。
 
     _bridge_override_member（生成声明）与接口 impl 的 target 预测（interface_gen）
@@ -397,7 +398,17 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
     # 处理；返回类型不同 + 形参擦除的组合（ClassSpecializer.newSpeciesData）其桥接
     # 返回是声明类的擦除类型变量位置，槽位签名需按 owner vtable 擦除渲染，本路径
     # 的描述符渲染不覆盖，回落普通继承。
-    if real_param == param_desc or real_desc.split(')', 1)[1] != bridge.descriptor.split(')', 1)[1]:
+    covariant = (real_param == param_desc
+                 and real_desc.split(')', 1)[1] != bridge.descriptor.split(')', 1)[1])
+    if covariant:
+        # 协变返回桥（形参相同、仅返回收窄）：仅生成侧（_bridge_override_member）在
+        # 祖先槽位存在时承接（见下方同名分支）；接口 target 预测保持既有回落。
+        # 只承接接收者类**自身**声明的桥——祖先类的桥由祖先自己的文件落槽，子类
+        # 继承展开再补会与普通继承成员重复（E0201，BufferedWriter.append_c 实证）
+        if not allow_covariant or cur is not recv_ci or real_owner_ci is not recv_ci:
+            return None  # 真实协变覆盖也须本类声明（DirectMethodHandle$Accessor 的桥转发到
+            #              父类 internalProperties，不属本形态）
+    elif real_param == param_desc or real_desc.split(')', 1)[1] != bridge.descriptor.split(')', 1)[1]:
         return None
 
     # 真实方法的签名与 Rust 名（接收者视角）：本类声明直接取；祖先声明代入接收者实参
@@ -436,6 +447,7 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
     # 沿 anc_args 定位）同一语义，此处按 registry 链迭代到不动点。
     vt_short = ''
     member_name = ''
+    slot_bin = ''
     cur = recv_ci.super_class
     seen = set()
     while cur and cur != _OBJECT_CLASS and cur in registry and cur not in seen:
@@ -464,18 +476,51 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
                         break  # 根声明者不可读（手写 / 未生成）→ 维持最近声明者归属
                     slot_cur, slot_m = nxt, up_found
                 vt_short = short_cls(slot_cur)
+                slot_bin = slot_cur
                 member_name = slot_m.vtable_name or slot_m.rust_name
                 break
         cur = registry[cur].super_class
     if not member_name:
         member_name = interface_member_local_name(recv_ci, name, bridge.descriptor, registry)
+    vtable_name = ''
+    if covariant and not vt_short:
+        return None  # 协变桥无祖先槽位（纯接口）：交回普通继承路径
     if member_name == real_rust:
-        return None  # 转发到自身（同名）：交回普通继承路径
+        if not covariant:
+            return None  # 转发到自身（同名）：交回普通继承路径
+        # 协变返回桥（同名同参、仅返回不同，无参方法的 mangle 无法区分）：真实方法
+        # 自开槽位（具体返回槽不能经 Object 化对齐，_covariant_virtual_owner 第 3 条），
+        # 祖先槽位只能由桥填——wrapper 取唯一名（与 class_writer 用户链桥同一约定
+        # interface_special_member_name），槽位名经 vtable_name 指回声明者。缺此路径
+        # 则祖先槽位回落抽象存根（VarHandleByteArrayAsInts$ArrayHandle
+        # .withInvokeExactBehavior()VarHandle，ByteArrayAccess.LE.<clinit> 实证）。
+        from ..instr.member_owner import interface_special_member_name
+        vtable_name = member_name
+        from ..constants import safe_ident as _safe_ident
+        member_name = _safe_ident(interface_special_member_name(
+            slot_bin, name, bridge.descriptor, registry))
+        if member_name == real_rust:
+            return None
     return {
         'member_name': member_name, 'vt_short': vt_short,
         'real_sig': real_sig, 'real_rust': real_rust,
         'real_want': real_want, 'bridge': bridge,
+        'vtable_name': vtable_name,
     }
+
+
+def _covariant_bridge_pending(recv_ci, recv_bin: str, own, name: str, param_desc: str) -> bool:
+    """本类已有 (name, param_desc) 的声明，但它是协变返回覆盖且自开槽位（virtual_in =
+    本类），同参异返回的 ACC_BRIDGE 桥承担祖先槽位——祖先槽位仍待桥成员填充。"""
+    if own.virtual_in != short_cls(recv_bin):
+        return False
+    own_desc = getattr(own, 'descriptor', '') or ''
+    if not any(not m.is_synthetic and m.name == name and m.descriptor == own_desc
+               for m in recv_ci.methods):
+        return False  # 本类无该名的真实声明（own 是继承 / 注入成员）
+    return any((m.access_flags & 0x0040) and m.name == name and not m.is_static
+               and m.descriptor.startswith(param_desc) and m.descriptor != own_desc
+               for m in recv_ci.methods)
 
 
 def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
@@ -498,7 +543,8 @@ def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
     from ..sig_types import emitted_method_sig_types
     from ..type_map import jvm_to_rust, parse_descriptor_params, parse_descriptor_return
 
-    resolved = resolve_bridge_member(recv_ci, name, param_desc, registry, emissions, recv)
+    resolved = resolve_bridge_member(recv_ci, name, param_desc, registry, emissions, recv,
+                                     allow_covariant=True)
     if resolved is None:
         return None
     member_name = resolved['member_name']
@@ -568,6 +614,8 @@ def _bridge_override_member(name: str, param_desc: str, recv: ClassEmission,
         parts.append('access = "protected"')
     if vt_short:
         parts.append(f'virtual_in = "{vt_short}"')
+        if resolved.get('vtable_name'):
+            parts.append(f'vtable_name = "{resolved["vtable_name"]}"')
         # 槽位 Object 位对齐（K-6b 同源）：声明类的 vtable 槽位按 A-1 存储层擦除把
         # 自身类型形参位 Object 化，而 bridge 描述符的参数位可能是有界形参的擦除
         # （`T extends FrameworkMember<T>` → `FrameworkMember<Object>`，非 Object）——
@@ -760,7 +808,9 @@ def resolve_inherited_members(emissions: 'dict[str, ClassEmission]', registry: d
             return '', None
 
         for name, param_desc in sorted(wanted):
-            if recv.find(name, param_desc) is not None:
+            _own = recv.find(name, param_desc)
+            if _own is not None and not _covariant_bridge_pending(recv_ci, recv_bin, _own,
+                                                                  name, param_desc):
                 continue  # 本类已有（自身声明 / 注入的接口 default 方法）
 
             # 本类（或超类链）的 synthetic bridge：bridge 是对该签名的本类声明，其转发
