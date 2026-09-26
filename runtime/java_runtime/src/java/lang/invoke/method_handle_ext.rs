@@ -252,7 +252,7 @@ impl MethodHandle {
     /// 执行。用户调用点经 codegen 发 `invokeExact__site`（清单 sigpoly_callsite.txt）。
     ///
     /// upcalls：调用点类型检查 / 适配用到的 JDK 方法（运行时 → Java 调用边，字节码不可见）。
-    #[jvm_native(upcalls = "java/lang/invoke/MethodType.fromMethodDescriptorString:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.equals:(Ljava/lang/invoke/MethodType;)Z java/lang/invoke/MethodType.toString:()Ljava/lang/String; java/lang/invoke/MethodHandle.asType:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle; java/lang/invoke/WrongMethodTypeException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native(upcalls = "java/lang/invoke/MethodType.fromMethodDescriptorString:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.equals:(Ljava/lang/invoke/MethodType;)Z java/lang/invoke/MethodType.toString:()Ljava/lang/String; java/lang/invoke/MethodHandle.asType:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle; java/lang/invoke/WrongMethodTypeException.<init>:(Ljava/lang/String;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String;")]
     pub fn invokeExact(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }

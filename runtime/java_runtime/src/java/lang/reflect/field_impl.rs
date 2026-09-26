@@ -203,7 +203,7 @@ impl Field {
 
     /// `Field.set(Object, Object)`：接收者/访问检查与 get 同序；值按描述符拆箱
     /// （只接受站点装箱的基本值盒，包装类对象形态见文件头边界注记）。
-    #[jvm_native(upcalls = "java/lang/IllegalAccessException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native(upcalls = "java/lang/IllegalAccessException.<init>:(Ljava/lang/String;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String;")]
     pub fn __impl_set(&self, obj: Object, value: Object) -> Result<()> {
         let name = format!("{}", self.__get_name());
         let (descriptor, is_static, mods, _constant) = self.__meta()?;

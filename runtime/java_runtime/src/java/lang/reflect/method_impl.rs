@@ -68,7 +68,7 @@ impl Method {
     /// InvocationTargetException（cause = 原异常——JUnit 的 ReflectiveCallable
     /// 捕获后 getTargetException 解包）；访问检查近似（override_ 或 public
     /// 之外 → IllegalAccessException，与 Field.get 同一策略）。
-    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V")]
+    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String;")]
     pub fn invoke_obj_arr_obj(&self, obj: Object, args: JArray<Object>) -> Result<Object> {
         let name = format!("{}", self.__get_name());
         let mods = self.__get_modifiers();
@@ -108,7 +108,7 @@ impl Method {
     /// upcalls 说明：本文件同体的 invoke_obj_arr_obj 需要
     /// InvocationTargetException 构造器在闭包内（JDK invoke 契约的包装异常）；
     /// 注解查询是本文件最早被 BFS 触达的成员，在此声明种子。
-    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V")]
+    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String;")]
     pub fn getAnnotation(&self, annotationClass: Class) -> Result<Object> {
         let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
         let Some(hit) = crate::annotation_meta::find_annotation(self.__anno_entries(), &anno)

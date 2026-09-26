@@ -79,7 +79,7 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object>> Constructor<T> 
 
     /// `getAnnotation(Class)`（AccessibleObject 继承 API 的 final 类固有承载）。
     /// upcalls：同体 newInstance 的包装异常种子（method_impl.rs 同一模式）。
-    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V")]
+    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String;")]
     pub fn getAnnotation(&self, annotationClass: Class) -> Result<Object> {
         let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
         let Some(hit) = crate::annotation_meta::find_annotation(self.__anno_entries(), &anno)
