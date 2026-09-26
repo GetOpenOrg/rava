@@ -19,4 +19,15 @@ impl BootLoader {
     pub fn hasClassPath() -> Result<bool> {
         Ok(false)
     }
+
+    /// `loadClassOrNull(String name)`：boot 层按名加载，未找到 → null。原生单二进制的类宇宙
+    /// 编译期定死，经 `Class.forName0` 同一元数据表判定存在性（ClassNotFoundException → null）。
+    /// 消费方：ClassSpecializer 按类名先查预生成的 BMH 物种类（MH-native）。
+    #[jvm_boundary(upcalls = "java/lang/ClassNotFoundException.<init>:(Ljava/lang/String;)V")]
+    pub fn loadClassOrNull(name: String) -> Result<crate::java::lang::Class> {
+        match crate::java::lang::Class::forName0(name, false, Default::default(), Default::default()) {
+            Ok(c) => Ok(c),
+            Err(_) => Ok(Default::default()),
+        }
+    }
 }

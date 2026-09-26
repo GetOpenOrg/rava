@@ -54,4 +54,11 @@ impl VM {
     pub fn latestUserDefinedLoader() -> Result<crate::java::lang::ClassLoader> {
         Ok(Default::default())
     }
+
+    /// `isSystemDomainLoader(ClassLoader)`：boot / platform 加载器判定。原生单二进制只有一层
+    /// 类宇宙（全部等价于系统域）→ 恒真。消费方：MethodType 的缓存保活判定（MH-native）。
+    #[jvm_boundary]
+    pub fn isSystemDomainLoader(_loader: crate::java::lang::ClassLoader) -> Result<bool> {
+        Ok(true)
+    }
 }

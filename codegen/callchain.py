@@ -37,6 +37,24 @@ _JDK_PREFIXES = _JDK_PREFIXES + tuple(
     r for r in _JCA_MANIFEST.release
     if r.endswith('/') or not r.startswith(('java/', 'javax/')))
 
+# 通用边界放行（清单 boundary_release.txt，与 JCA release 行同一语义）：内部前缀下的纯 Java
+# 类 / 包按字节码翻译（MH-native：sun/invoke/util 的类型转换工具）。并入 _JDK_PREFIXES 使其
+# 方法引用进调用链；_is_boundary_class 据 _released_general 放行。
+_BOUNDARY_RELEASE: tuple[str, ...] = tuple(read_list('boundary_release.txt'))
+_JDK_PREFIXES = _JDK_PREFIXES + tuple(
+    r for r in _BOUNDARY_RELEASE if r.endswith('/') or not r.startswith(('java/', 'javax/')))
+
+
+def _released_general(cls: str) -> bool:
+    """类是否在通用边界放行清单内（包前缀 / 类及其嵌套类）。"""
+    for r in _BOUNDARY_RELEASE:
+        if r.endswith('/'):
+            if cls.startswith(r):
+                return True
+        elif cls == r or cls.startswith(r + '$'):
+            return True
+    return False
+
 
 
 # 手写 impl 文件内的类型引用：crate::pkg::path::Name 全路径 + 同包裸 CamelCase 名
@@ -151,7 +169,8 @@ def _is_data_bundle(cls: str) -> bool:
 def _is_boundary_class(cls: str) -> bool:
     """内部包（前缀）或 VM 耦合边界类（清单，含其嵌套类）；前缀内的纯数据资源束与 K-JCA 放行类除外。"""
     if cls.startswith(_JDK_STUB_ONLY_PREFIXES):
-        return not (_jca_released(cls, _JCA_MANIFEST) or _is_data_bundle(cls))
+        return not (_jca_released(cls, _JCA_MANIFEST) or _released_general(cls)
+                    or _is_data_bundle(cls))
     return cls.split('$', 1)[0] in _VM_BOUNDARY_CLASSES
 
 

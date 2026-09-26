@@ -1,0 +1,8 @@
+# 边界放行清单：内部边界前缀（boundary_prefixes.txt）下按字节码翻译的纯 Java 类 / 包。
+# 类条目作前缀匹配同时覆盖其嵌套类；包条目以 / 结尾。与 jca_providers.txt 的 release 行同一语义。
+#
+# MH-native（docs/plans/2026-09-26-mh-native.md）：asType / 组合子的类型转换与名字工具。
+# 纯 Java（装拆箱 / 拓宽句柄经 IMPL_LOOKUP 按名查找本类静态方法——常量反射引用扫描入链）。
+sun/invoke/util/ValueConversions
+sun/invoke/util/BytecodeName
+sun/invoke/util/VerifyType
