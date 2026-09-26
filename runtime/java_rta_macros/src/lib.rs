@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 
 mod block;
+mod native_attr;
 mod switch_macro;
 mod synchronized;
 mod try_macro;
@@ -34,9 +35,12 @@ pub fn java_synchronized(attr: TokenStream, item: TokenStream) -> TokenStream {
     synchronized::expand(attr.into(), item.into()).into()
 }
 
-/// 标记该方法实现了 Java 字节码中的 `ACC_NATIVE` 方法。
+/// 标记该方法实现了 Java 字节码中的 `ACC_NATIVE` 方法；静态 native 入口注入类初始化
+/// 触发点（JVMS §5.5，见 native_attr.rs）。
 #[proc_macro_attribute]
-pub fn jvm_native(_attr: TokenStream, item: TokenStream) -> TokenStream { item }
+pub fn jvm_native(attr: TokenStream, item: TokenStream) -> TokenStream {
+    native_attr::expand(attr.into(), item.into()).into()
+}
 
 /// 标记该方法属于内部边界类（`jdk/internal/`、`sun/`），BFS 截断后整体手写。
 #[proc_macro_attribute]

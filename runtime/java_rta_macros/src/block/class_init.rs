@@ -129,6 +129,7 @@ pub(crate) fn expand_class_init(
     struct_ident: &Ident,
     binary_name: &str,
     superclass: Option<&Type>,
+    init_interfaces: &[Type],
     has_clinit: bool,
     register: TokenStream2,
 ) -> (TokenStream2, TokenStream2) {
@@ -140,6 +141,8 @@ pub(crate) fn expand_class_init(
         }
     };
     let init_super = superclass.map(|sup| quote! { <#sup>::__class_init()?; });
+    // JVMS §5.5 步骤 7：父类之后、本类 `<clinit>` 之前，初始化带 default 方法的超接口
+    let init_ifaces = init_interfaces.iter().map(|t| quote! { <#t>::__class_init()?; });
     let clinit_ident = format_ident!("{}", CLINIT_FN);
     // 带 `?;` 的语句形态（不再作为尾表达式）：常量目录登记语句要追加在
     // `<clinit>` 之后；无 `<clinit>` 时不生成该语句（独立的 `Ok(())?;`
@@ -162,6 +165,7 @@ pub(crate) fn expand_class_init(
             }
             let run = || -> Result<()> {
                 #init_super
+                #(#init_ifaces)*
                 #run_clinit
                 #register
                 Ok(())

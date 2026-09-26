@@ -181,6 +181,9 @@ pub(crate) fn split_type_name_args(ty: &Type) -> (String, proc_macro2::TokenStre
 pub(crate) struct ClassMeta {
     pub binary_name: String,
     pub superclass: Option<Type>,
+    /// JVMS §5.5 步骤 7：类初始化时随之初始化的超接口（带 default 方法且有 `<clinit>`，
+    /// 初始化序；codegen `init_interfaces` 属性）。
+    pub init_interfaces: Vec<Type>,
     pub superclass_fields: Vec<(Ident, Type)>,
     /// 祖先按类型变量声明、本类视角代入为基本类型的继承字段：存储与访问器按引用字段处理
     pub superclass_reference_fields: std::collections::HashSet<String>,
@@ -219,6 +222,11 @@ impl ClassMeta {
                 let s = lit_str(attr)?;
                 if !s.is_empty() && s != "Object" {
                     m.superclass = Some(syn::parse_str::<Type>(&s)?);
+                }
+            } else if path.is_ident("init_interfaces") {
+                let s = lit_str(attr)?;
+                for t in s.split(';').filter(|t| !t.trim().is_empty()) {
+                    m.init_interfaces.push(syn::parse_str::<Type>(t.trim())?);
                 }
             } else if path.is_ident("all_superclasses") {
                 let s = lit_str(attr)?;

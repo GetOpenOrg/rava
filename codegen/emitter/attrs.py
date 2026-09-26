@@ -252,6 +252,40 @@ def _to_string_vtable_owner(ci: ClassInfo, registry: 'dict | None',
     return _root_method_vtable_owner(ci, registry, handwritten_methods, _TO_STRING_SIG)
 
 
+def _default_init_interfaces(ci: ClassInfo, registry: dict | None) -> list[str]:
+    """JVMS §5.5 步骤 7：类初始化时随之初始化的超接口（Rust 类型，初始化序）。
+
+    范围：直接与间接超接口中**声明了非抽象非静态方法（default 方法）**的接口，按
+    「逐个直接接口递归其超接口、后序返回自身」枚举（接口数组序）。只收有 `<clinit>`
+    的接口——无 `<clinit>` 的接口初始化无可观测效果，不发射触发（控制发射面）。
+    接口类不适用（接口初始化不触发超接口初始化）。泛型接口类型实参取 Object。"""
+    if ci.is_interface or not registry:
+        return []
+    from ..type_map import parse_class_type_params as _ctp
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def visit(iname: str) -> None:
+        if iname in seen:
+            return
+        seen.add(iname)
+        ici = registry.get(iname)
+        if ici is None:
+            return
+        for sup in (ici.interfaces or []):
+            visit(sup)
+        has_default = any(not m.is_abstract and not m.is_static
+                          and m.name not in ('<init>', '<clinit>') for m in ici.methods)
+        has_clinit = any(m.name == '<clinit>' for m in ici.methods)
+        if has_default and has_clinit:
+            tps = _ctp(ici.generic_signature) if ici.generic_signature else []
+            out.append(rust_type_with_args(_bin_to_rust_short(iname), ['Object'] * len(tps)))
+
+    for i in (ci.interfaces or []):
+        visit(i)
+    return out
+
+
 def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
                            superclass_rust: str = "",
                            superclass_fields: list[tuple[str, str]] | None = None,
@@ -335,6 +369,9 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         lines.append('#[is_interface      = true]')
     if superclass_rust:
         lines.append(f'#[superclass        = "{superclass_rust}"]')
+    _init_ifaces = _default_init_interfaces(ci, registry)
+    if _init_ifaces:
+        lines.append(f'#[init_interfaces   = "{";".join(_init_ifaces)}"]')
     if superclass_fields:
         items = ', '.join(f'{n}: {t}' for n, t in superclass_fields)
         lines.append(f'#[superclass_fields({items})]')

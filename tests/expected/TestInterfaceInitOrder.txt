@@ -1,0 +1,11 @@
+main start
+OwnDefault init
+Base init
+WithDefault init
+Impl init
+after new
+hello 4
+NoDefault init
+B=1
+SubDefault init
+C=1

@@ -15,8 +15,8 @@ impl super::object::ObjectVTable for Instance {
 }
 
 impl Object {
-    /// java.lang.Object.<init>()V
-    #[jvm_native]
+    /// java.lang.Object.<init>()V（手写根类无 `__class_init`：Object 无 `<clinit>`）
+    #[jvm_native(no_class_init)]
     pub fn new() -> Result<Object> { Ok(Object(std::rc::Rc::new(Instance(0)))) }
 
     #[jvm_native]

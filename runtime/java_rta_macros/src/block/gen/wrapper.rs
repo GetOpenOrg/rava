@@ -764,7 +764,8 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     let constant_register = class_init::constant_directory_registration(
         &ctx.struct_ident, binary_name, &ctx.statics);
     let (init_state, class_init_fn) = class_init::expand_class_init(
-        &ctx.struct_ident, &ctx.meta.binary_name, ctx.meta.superclass.as_ref(), has_clinit,
+        &ctx.struct_ident, &ctx.meta.binary_name, ctx.meta.superclass.as_ref(),
+        &ctx.meta.init_interfaces, has_clinit,
         constant_register);
 
     let wrapper_impl = quote! {

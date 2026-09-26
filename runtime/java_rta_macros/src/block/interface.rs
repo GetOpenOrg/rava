@@ -153,7 +153,7 @@ pub(crate) fn expand_interface(
     let has_clinit = fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
     // 接口初始化不触发父接口初始化（JVMS §5.5）；接口无实例形态，不登记常量目录
     let (init_state, class_init_fn) =
-        class_init::expand_class_init(struct_ident, binary_name, None, has_clinit, quote! {});
+        class_init::expand_class_init(struct_ident, binary_name, None, &[], has_clinit, quote! {});
 
     quote! {
         #[allow(non_camel_case_types)]
