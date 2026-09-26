@@ -1,0 +1,6 @@
+PATH present: true
+missing var: null
+map has PATH: true consistent: true
+env map unmodifiable
+before exit
+hook on exit

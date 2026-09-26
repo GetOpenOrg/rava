@@ -182,15 +182,24 @@ pub fn main_args() -> crate::array::JArray<crate::java::lang::String> {
             .collect::<Vec<_>>())
 }
 
-/// 主线程 `main` 返回后的 VM 收尾（JVM `DestroyJavaVM`）：先等待全部非守护平台线程
-/// 终结，再按主线程结果退出——未捕获异常报告后退出码 1。
+/// 主线程 `main` 返回后的 VM 收尾（JVM `DestroyJavaVM` 同序）：报告主线程未捕获异常 → 等待
+/// 全部非守护平台线程终结 → 运行 shutdown hook（`Shutdown.shutdown`）→ 退出（异常时码 1）。
 pub fn destroy_java_vm(result: crate::error::Result<()>) {
-    if let Err(e) = result {
-        e.report_uncaught_in("main");
-        gil::await_non_daemon_threads();
+    let failed = match result {
+        Err(e) => {
+            e.report_uncaught_in("main");
+            true
+        }
+        Ok(()) => false,
+    };
+    gil::await_non_daemon_threads();
+    // JVM DestroyJavaVM：非守护线程全部结束后运行 shutdown hook（Shutdown.shutdown 翻译体）
+    if let Err(e) = crate::java::lang::Shutdown::shutdown() {
+        e.report_uncaught_in("DestroyJavaVM");
+    }
+    if failed {
         std::process::exit(1);
     }
-    gil::await_non_daemon_threads();
 }
 
 pub fn jdk_feature() -> u32 {

@@ -2,11 +2,27 @@ use crate::prelude::*;
 use super::vm::VM;
 use crate::java::lang::String;
 
+/// 停机标记（进程级）。
+static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 impl VM {
     /// 原生二进制进入 main 时运行时已完成初始化（对应 initLevel == SYSTEM_BOOTED）。
     #[jvm_boundary]
     pub fn isBooted() -> Result<bool> {
         Ok(true)
+    }
+
+    /// `shutdown()` / `isShutdown()`：停机标记（JDK 语义为 initLevel 置 SYSTEM_SHUTDOWN）。
+    /// Shutdown.runHooks 据此保证 hook 只运行一次（System.exit 与 DestroyJavaVM 并发时）。
+    #[jvm_boundary]
+    pub fn shutdown() -> Result<()> {
+        SHUTDOWN.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[jvm_boundary]
+    pub fn isShutdown() -> Result<bool> {
+        Ok(SHUTDOWN.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     /// `VM.getSavedProperty(key)`：启动时保存的 JVM 内部属性。
