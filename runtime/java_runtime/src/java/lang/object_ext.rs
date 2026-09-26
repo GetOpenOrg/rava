@@ -403,8 +403,15 @@ impl PartialEq for Object {
         }
         try_eq!(());  // null == null
         try_eq!(i32); try_eq!(i64); try_eq!(bool);
-        try_eq!(f32); try_eq!(f64); try_eq!(i8);
-        try_eq!(i16); try_eq!(u16);
+        try_eq!(i8); try_eq!(i16); try_eq!(u16);
+        // 浮点原生值盒按位比较：值盒无对象身份，同一性以值位承载——0.0 与 -0.0 不同一、
+        // NaN 盒与自身同一（Rust `==` 的 IEEE 比较两者皆反，致 Double.equals 捷径误判）
+        if let (Some(a), Some(b)) = (self.0.as_any().downcast_ref::<f32>(), other.0.as_any().downcast_ref::<f32>()) {
+            return a.to_bits() == b.to_bits();
+        }
+        if let (Some(a), Some(b)) = (self.0.as_any().downcast_ref::<f64>(), other.0.as_any().downcast_ref::<f64>()) {
+            return a.to_bits() == b.to_bits();
+        }
         match (self.0.is_jvm_null(), other.0.is_jvm_null()) {
             (true, true) => true,
             (false, false) => self.0.__identity() == other.0.__identity(),
