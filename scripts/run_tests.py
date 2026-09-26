@@ -11,6 +11,7 @@
     python3 scripts/run_tests.py --filter 01 02 03           # 多个 filter（任意匹配）
     python3 scripts/run_tests.py --failed                    # 只跑失败清单（build/failed_tests.txt），PASS 自动出列
     python3 scripts/run_tests.py --skip-failed               # 跳过清单内已知失败（干净面快速迭代）
+    python3 scripts/run_tests.py --record-passed             # PASS 即时落盘；中断续跑自动跳过已通过（删清单即从头）
     python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt（并行，-j 控制并发）
     python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比
     python3 scripts/run_tests.py --jdk 25                # 指定 JDK 主版本（javac/java/翻译语料同源）
@@ -241,6 +242,13 @@ def _failed_file_path(cli_path: str | None, jdk_major: int | None = None) -> Pat
     return OUT / "failed_tests.txt"
 
 
+def _passed_file_path(jdk_major: int | None = None) -> Path:
+    # 与失败清单同理按 JDK 分文件：不同版本的通过集不可比
+    if jdk_major is not None:
+        return OUT / f"passed_tests_jdk{jdk_major}.txt"
+    return OUT / "passed_tests.txt"
+
+
 
 def _load_failed(path: Path) -> set:
     if not path.exists():
@@ -315,6 +323,63 @@ class _FailedRatchet:
             shown = str(self.path)
         print(f"[failed-file] {shown}：保留 {len(self.failed)}"
               f"（本次出列 {self.removed}、进列 {self.added}）—— `--failed` 按此回归")
+
+
+def _passed_header() -> str:
+    return ("# run_tests.py 通过清单（--record-passed 自动维护，勿手编）：\n"
+            "# - 任何一次跑批：PASS 进列 / FAIL 出列 / 未跑的不动\n"
+            "# - 重跑自动跳过清单内已通过；删除本文件即从头\n")
+
+
+def _save_passed(path: Path, names: set, jdk_major: 'int | None' = None) -> None:
+    """原子写（同 _save_failed：临时文件 + os.replace），头部附 jdk 身份行。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(_passed_header() + f"# jdk: {jdk_major}\n"
+                   + "".join(f"{n}\n" for n in sorted(names)), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+class _PassedRatchet:
+    """通过清单写穿棘轮（--record-passed）：PASS **立即**落盘（中断不丢），
+    FAIL 即时出列（旧通过记录不掩盖新回归）；重跑自动跳过清单内已通过，
+    删除清单文件即从头。并发安全与 _FailedRatchet 同构（flock 内「重读 →
+    合并 → 原子写」）。"""
+
+    def __init__(self, path: Path, prev: set, jdk_major: 'int | None' = None):
+        self.path = path
+        self.passed = set(prev)
+        self.jdk_major = jdk_major
+        self.added = self.removed = 0
+        self._lock = threading.Lock()
+
+    def record(self, name: str, ok: bool) -> None:
+        with self._lock:
+            lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+            with open(lock_path, "w") as lf:
+                fcntl.flock(lf, fcntl.LOCK_EX)
+                try:
+                    current = _load_failed(self.path)   # 重读：吸收其他进程的写入
+                    if ok:
+                        if name not in current:
+                            self.added += 1
+                        current.add(name)
+                    else:
+                        if name in current:
+                            current.discard(name)
+                            self.removed += 1
+                    self.passed = current
+                    _save_passed(self.path, current, self.jdk_major)
+                finally:
+                    fcntl.flock(lf, fcntl.LOCK_UN)
+
+    def summary(self) -> None:
+        try:
+            shown = str(self.path.relative_to(ROOT))
+        except ValueError:
+            shown = str(self.path)
+        print(f"[passed-file] {shown}：累计 {len(self.passed)}"
+              f"（本次 +{self.added}/-{self.removed}）——重跑自动跳过已通过，删除该文件即从头")
 
 
 def _apply_failed_filter(files: list, failed_set: set) -> list:
@@ -796,7 +861,9 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
                     deny: list[str], use_failed: bool = False,
                     failed_path: Path | None = None,
                     skip_failed: bool = False,
-                    jdk_major: 'int | None' = None) -> int:
+                    jdk_major: 'int | None' = None,
+                    record_passed: bool = False,
+                    passed_path: Path | None = None) -> int:
     failed_path = failed_path or _failed_file_path(None, jdk_major)
     prev_failed = _load_failed(failed_path)
     files = _discover(filter_str)
@@ -809,7 +876,19 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     elif skip_failed:
         files = [f for f in files if str(f.relative_to(ROOT)) not in prev_failed]
         print(f"[skip-failed] 跳过清单内 {len(prev_failed)} 个已知失败，本次运行 {len(files)} 个")
+    pratchet = None
+    if record_passed:
+        prev_passed = _load_failed(passed_path)
+        done_here = {str(f.relative_to(ROOT)) for f in files} & prev_passed
+        files = [f for f in files if str(f.relative_to(ROOT)) not in prev_passed]
+        print(f"[record-passed] 清单 {passed_path.name}：跳过已通过 {len(done_here)} 个，"
+              f"本次运行 {len(files)} 个——可随时中断续跑，删除清单文件即从头")
+        pratchet = _PassedRatchet(passed_path, prev_passed, jdk_major)
     if not files:
+        if pratchet is not None:
+            print(f"[record-passed] 无可运行测试——全部已在通过清单，或 filter 无匹配；"
+                  f"删除 {passed_path.name} 可从头重跑。")
+            return 0
         print(f"No test files found (filter={filter_str!r})")
         return 1
 
@@ -835,6 +914,8 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         failed += 1
         fail_categories.setdefault(cat, []).append(rel_str)
         ratchet.record(rel_str, False)
+        if pratchet is not None:
+            pratchet.record(rel_str, False)
 
     total_files = len(files)
     for idx, java_file in enumerate(files, 1):
@@ -933,6 +1014,8 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
                    aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, bin_name, _eta), prog=prog)
             passed += 1
             ratchet.record(str(rel), True)
+            if pratchet is not None:
+                pratchet.record(str(rel), True)
 
     total = passed + failed + skipped
     elapsed = time.perf_counter() - t_all
@@ -947,6 +1030,8 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
           f" run {fmt_dur(t_run_total)})")
     print(f"[end] {time.strftime('%Y-%m-%d %H:%M:%S')}")
     ratchet.summary()
+    if pratchet is not None:
+        pratchet.summary()
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
     _print_fallback_summary(fallback_counts)
@@ -961,7 +1046,9 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                   deny: list[str], use_failed: bool = False,
                   failed_path: Path | None = None,
                   skip_failed: bool = False,
-                  jdk_major: 'int | None' = None) -> int:
+                  jdk_major: 'int | None' = None,
+                  record_passed: bool = False,
+                  passed_path: Path | None = None) -> int:
     failed_path = failed_path or _failed_file_path(None, jdk_major)
     prev_failed = _load_failed(failed_path)
     files = _discover(filter_str)
@@ -974,7 +1061,19 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     elif skip_failed:
         files = [f for f in files if str(f.relative_to(ROOT)) not in prev_failed]
         print(f"[skip-failed] 跳过清单内 {len(prev_failed)} 个已知失败，本次运行 {len(files)} 个")
+    pratchet = None
+    if record_passed:
+        prev_passed = _load_failed(passed_path)
+        done_here = {str(f.relative_to(ROOT)) for f in files} & prev_passed
+        files = [f for f in files if str(f.relative_to(ROOT)) not in prev_passed]
+        print(f"[record-passed] 清单 {passed_path.name}：跳过已通过 {len(done_here)} 个，"
+              f"本次运行 {len(files)} 个——可随时中断续跑，删除清单文件即从头")
+        pratchet = _PassedRatchet(passed_path, prev_passed, jdk_major)
     if not files:
+        if pratchet is not None:
+            print(f"[record-passed] 无可运行测试——全部已在通过清单，或 filter 无匹配；"
+                  f"删除 {passed_path.name} 可从头重跑。")
+            return 0
         print(f"No test files found (filter={filter_str!r})")
         return 1
 
@@ -1092,6 +1191,8 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         _pline(name_w, "FAIL", java_file.relative_to(E2E), "— compile error",
                aux=_aux_full(_a[0], _a[2], _a[1]))
         ratchet.record(str(java_file.relative_to(ROOT)), False)
+        if pratchet is not None:
+            pratchet.record(str(java_file.relative_to(ROOT)), False)
         failed += 1
 
     def _run_one(java_file: Path) -> tuple[Path, bool, str, list[str]]:
@@ -1117,6 +1218,8 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
             if not ok and err_msg:
                 _pline(name_w, "FAIL", java_file.relative_to(E2E), f"— {err_msg}", aux=_aux)
                 ratchet.record(str(java_file.relative_to(ROOT)), False)
+                if pratchet is not None:
+                    pratchet.record(str(java_file.relative_to(ROOT)), False)
                 failed += 1
             elif diff:
                 _n_diff = sum(1 for l in diff if l[:1] in "+-" and not l.startswith(("+++", "---")))
@@ -1126,15 +1229,21 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                 if len(diff) > 40:
                     print(f"  … ({len(diff) - 40} more lines)")
                 ratchet.record(str(java_file.relative_to(ROOT)), False)
+                if pratchet is not None:
+                    pratchet.record(str(java_file.relative_to(ROOT)), False)
                 failed += 1
             else:
                 _pline(name_w, "PASS", java_file.relative_to(E2E), aux=_aux)
                 ratchet.record(str(java_file.relative_to(ROOT)), True)
+                if pratchet is not None:
+                    pratchet.record(str(java_file.relative_to(ROOT)), True)
                 passed += 1
 
     for java_file in transpile_fail:
         _pline(name_w, "FAIL", java_file.relative_to(E2E), "— transpile error")
         ratchet.record(str(java_file.relative_to(ROOT)), False)
+        if pratchet is not None:
+            pratchet.record(str(java_file.relative_to(ROOT)), False)
         failed += 1
 
     total = passed + failed + skipped
@@ -1147,6 +1256,8 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
           f" run {fmt_dur(time.perf_counter() - t_run_start)})")
     print(f"[end] {time.strftime('%Y-%m-%d %H:%M:%S')}")
     ratchet.summary()
+    if pratchet is not None:
+        pratchet.summary()
     _print_readability_summary(readability_counts)
     _print_equiv_summary(equiv_counts)
     _print_fallback_summary(fallback_counts)
@@ -1198,7 +1309,8 @@ def _update_expected_parallel(files: list[Path], jobs: int) -> int:
 
 def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool, jobs: int,
               deny: list[str], use_failed: bool = False,
-              failed_file: str | None = None, skip_failed: bool = False) -> int:
+              failed_file: str | None = None, skip_failed: bool = False,
+              record_passed: bool = False) -> int:
     files = _discover(filter_str)
     if not files:
         print(f"No test files found (filter={filter_str!r})")
@@ -1212,6 +1324,7 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
     # HelloWorld 混入 JDK21 清单）。旧无版本清单一次性迁移（视为 21）。
     jdk_major = _current_jdk_major()
     failed_path = _failed_file_path(failed_file, jdk_major)
+    passed_path = _passed_file_path(jdk_major)
     listed_jdk = _failed_jdk_of(failed_path)
     if (listed_jdk is not None and jdk_major is not None and listed_jdk != jdk_major):
         sys.exit(f"[failed-file] 清单 {failed_path} 是 JDK{listed_jdk} 的失败集，"
@@ -1221,10 +1334,12 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
     if jobs > 1:
         return _run_parallel(filter_str, jobs, deny, use_failed=use_failed,
                              failed_path=failed_path,
-                             skip_failed=skip_failed, jdk_major=jdk_major)
+                             skip_failed=skip_failed, jdk_major=jdk_major,
+                             record_passed=record_passed, passed_path=passed_path)
     return _run_sequential(filter_str, no_run, deny, use_failed=use_failed,
                            failed_path=failed_path,
-                           skip_failed=skip_failed, jdk_major=jdk_major)
+                           skip_failed=skip_failed, jdk_major=jdk_major,
+                           record_passed=record_passed, passed_path=passed_path)
 
 
 def main():
@@ -1242,6 +1357,9 @@ def main():
     ap.add_argument("--release",         action="store_true", help="release 档位构建运行（LTO 慢编译/快运行；默认 dev）")
     ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
     ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")
+    ap.add_argument("--record-passed",   action="store_true",
+                    help="通过测试写穿记录到 build/passed_tests_jdkN.txt：PASS 即时落盘（中断不丢）、FAIL 即时出列；"
+                         "重跑自动跳过已通过，删除清单文件即从头")
     ap.add_argument("--failed-file",     metavar="PATH", default=None, help="失败清单路径（默认 build/failed_tests.txt）")
     ap.add_argument("--deny",            action="append", default=[], metavar="SPEC",
                     help="拒绝升级（默认全放行，可叠加）：equiv = 任一等价发射点非零即整体失败；"
@@ -1283,11 +1401,13 @@ def main():
     try:
         sys.exit(run_tests(args.filter, args.no_run, args.update_expected, jobs, args.deny,
                            use_failed=args.failed, failed_file=args.failed_file,
-                           skip_failed=args.skip_failed))
+                           skip_failed=args.skip_failed, record_passed=args.record_passed))
     except KeyboardInterrupt:
         # Ctrl-C：失败清单是写穿棘轮（每测即落盘），已完成的结果已保住；
         # 子进程由 SIGINT 直接终止，这里只做安静退出，不打 traceback。
         print(f"\n[interrupt] 用户中断——已完成测试的结果已写入失败清单与日志。")
+        if args.record_passed:
+            print("[record-passed] 已通过测试已即时写入通过清单——重跑（同参数）自动跳过；删除清单文件即从头。")
         sys.exit(130)
 
 
