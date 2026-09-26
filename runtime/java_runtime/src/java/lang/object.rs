@@ -291,13 +291,31 @@ macro_rules! impl_vtable_primitive {
             fn as_any(&self) -> &dyn std::any::Any { self }
             fn hashCode(&self) -> i32 { ($hash)(*self) }
             fn equals(&self, other: Object) -> crate::error::Result<bool> {
-                Ok(!other.0.is_jvm_null()
-                    && other.0.__class_name() == $bin
-                    && other.0.__obj_str() == ($fmt)(*self))
+                if other.0.is_jvm_null() || other.0.__class_name() != $bin {
+                    return Ok(false);
+                }
+                // 同为原生值盒：按值位比较（浮点经规范化位：NaN 自等、0.0 与 -0.0 不等）
+                if let Some(o) = other.0.as_any().downcast_ref::<$t>() {
+                    return Ok(__prim_bits_eq(self, o));
+                }
+                Ok(other.0.__obj_str() == ($fmt)(*self))
             }
         }
     };
 }
+
+/// 原生值盒的值位相等（`Double.equals` / `Float.equals` 的 `doubleToLongBits` 比较；
+/// 整型等价 `==`）。
+fn __prim_bits_eq<T: __PrimBits>(a: &T, b: &T) -> bool { a.__bits() == b.__bits() }
+trait __PrimBits { fn __bits(&self) -> u64; }
+impl __PrimBits for i32 { fn __bits(&self) -> u64 { *self as u32 as u64 } }
+impl __PrimBits for i64 { fn __bits(&self) -> u64 { *self as u64 } }
+impl __PrimBits for bool { fn __bits(&self) -> u64 { *self as u64 } }
+impl __PrimBits for i8 { fn __bits(&self) -> u64 { *self as u8 as u64 } }
+impl __PrimBits for i16 { fn __bits(&self) -> u64 { *self as u16 as u64 } }
+impl __PrimBits for u16 { fn __bits(&self) -> u64 { *self as u64 } }
+impl __PrimBits for f32 { fn __bits(&self) -> u64 { __canon_f32_bits(*self) as u64 } }
+impl __PrimBits for f64 { fn __bits(&self) -> u64 { __canon_f64_bits(*self) } }
 fn __canon_f64_bits(v: f64) -> u64 { if v.is_nan() { 0x7ff8000000000000 } else { v.to_bits() } }
 fn __canon_f32_bits(v: f32) -> u32 { if v.is_nan() { 0x7fc00000 } else { v.to_bits() } }
 impl_vtable_primitive!(i32, "java/lang/Integer", |v: i32| format!("{}", v), |v: i32| v);
