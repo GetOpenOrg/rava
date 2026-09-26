@@ -65,13 +65,14 @@
 
 | # | 任务 | 状态 | 说明 |
 |---|---|---|---|
-| FS-H0 | 手写覆盖只许 ACC_NATIVE（审计线 + 越界覆盖清零） | 🔄 进行中（审计 98 处，逐组清除） | 审计线 `_audit_override`（`[raw-audit] non_native_overrides=` + `[override-audit]` 明细，同名 fn 与 `__impl_` 虚方法两路同口径，`efe13ac`）；VM 内建准入 `intrinsics.txt`。已删：Math/StrictMath 全部、Character.digit、Thread.interrupt / isTerminated / getThreadGroup、AtomicInteger(int)（改 upcalls）、Integer.valueOf / toString()（`00984cf`，验证排队 math2 / fsh0）。余项按根因分组见过渡态清单 §〇 |
-| FS-N1..N5 | Math 手写覆盖删除（`random` 恒 0.5、`IEEEremainder` 用 round、`pow` NaN 规格、libm ulp、双下划线死代码） | 🔄 已删除，验证中（math2） | 全走 StrictMath / FdLibm 字节码链；`wide iinc` 解码修复（8242bbe）是前提；StrictMath.sqrt 入内建清单（debug 构建下 FdLibm 纯软件 sqrt 百万级调用超时）。e2e TestMathSpec |
-| FS-H1 / H4 / H6 | `Character.digit` 非 ASCII、`Arrays.copyOf` 组件类型、`Properties` defaults 链 | 🔄 H1 已删除覆盖（验证中 fsh0）；H4 / H6 待做 | Character.digit 走 CharacterData 族；e2e TestThreadOverridesSpec 含全角 / 阿拉伯-印度数字 |
-| FS-T3 | `availableProcessors` 恒 1 | ✅ `18da936`（验证 v1） | 宿主真实并行度；公共池 / 并行流 / CompletableFuture 按并行度运行。e2e TestCommonPool（ActiveProcessorCount=1/4/16 对拍一致） |
-| FS-E3 / M7 / M8 | 不可捕获 panic（checkcast / NPE / toString 路径）、null 接收者字段访问不抛 NPE、`_is_jnull` 非 Object 载体恒假 | 🔄 M7 ✅ `0442777`（`recv.__nn()?`，HelloWorld 编译通过）；E3 toString 路径实测已等价（e2e TestToStringThrows）；M8 待做 | M8：类型变量操作数的 ifnull 走 `Into<Object>` 判空 |
-| FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | 🔄 P1 ✅ `b938ea5`（VersionProps.init 翻译 + VM / 平台 / 编码族）；P2 / P3 ✅ `098d5e9`；C4 待做（无语料用例，优先级低） | e2e TestSystemPropsSpec / TestShutdownHooks / TestSystemExitEnv |
-| FS-M5 / C5 / T6 | 身份哈希截断、forName 不立即初始化、Thread native 缺失 | ✅ `b443134` / `6d885a2` / `8dba713`（验证 v2） | e2e TestIdentityHashSpec / TestForNameInit / TestThreadNatives |
+| FS-H0 | 手写覆盖只许 ACC_NATIVE（审计线 + 越界覆盖清零） | 🔄 进行中：已删 Math / Character.digit / Thread 族 / AtomicInteger / Integer / Properties / Arrays.copyOf / Double.toString（⏳ 待用户验证）；余约 93 处（反射元数据 / java.security / InvokerBytecodeGenerator 等架构组） | 审计线 `_audit_override`（同名 fn 与 `__impl_` 两路同口径）；VM 内建准入 `intrinsics.txt`。验证：TestThreadOverridesSpec ✅ TestIntegerCacheSpec ✅ AtomicDemo TestAtomics StringUniqueCharacters TestThreadInterrupt TestDoubleToStringSpec |
+| FS-N1..N5 | Math 手写覆盖删除（`random` 恒 0.5、`IEEEremainder` 用 round、`pow` NaN 规格、libm ulp、双下划线死代码） | ✅ `54358ed`（⏳ 待用户验证） | 全走 StrictMath / FdLibm 字节码链（`wide iinc` 修复 `8242bbe` 为前提；StrictMath.sqrt 入内建清单）。验证：TestMathSpec TestMathExact TestMathRound MathEnhancedTest Heron ComprehensiveTest |
+| FS-H1 / H4 / H6 | `Character.digit` 非 ASCII、`Arrays.copyOf` 组件类型、`Properties` defaults 链 | ✅ `43bfa1f` / `5b980a3` / `803aa05`（⏳ 待用户验证） | 验证：TestThreadOverridesSpec ✅ TestArrayComponentType TestCollectionFactory TestArrayList TestPropertiesDefaults |
+| FS-T3 | `availableProcessors` 恒 1 | ✅ `18da936` + `2f64669`（⏳ 待用户验证） | 宿主真实并行度；公共池工作线程所需安全类边界实现。验证：TestCommonPool TestCompletableFuture |
+| FS-E3 / M7 / M8 | 不可捕获 panic（checkcast / NPE / toString 路径）、null 接收者字段访问不抛 NPE、`_is_jnull` 非 Object 载体恒假 | ✅ M7 `0442777`（TestFieldNullReceiver ✅）；E3 `2f64669`、M8 `5bf2286`（⏳ 待用户验证） | 验证：TestToStringThrows TestGenericNullCheck |
+| FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ✅ P1 `b938ea5`+`83a4ac2`、P2/P3 `098d5e9`（⏳ 待用户验证）；C4 方案已出未实施 | 验证：TestSystemPropsSpec TestShutdownHooks TestSystemExitEnv |
+| FS-M5 / C5 / T6 | 身份哈希截断、forName 不立即初始化、Thread native 缺失 | ✅ `b443134` / `6d885a2`+`c6933ca` / `8dba713` | 验证：TestIdentityHashSpec ✅ TestThreadNatives ✅ TestForNameInit（⏳ 待用户验证）TestThreadStates（⏳ 待用户验证） |
+| FS-T5 / R4 / IO1 / IO2 / M4 / L11 | InternalLock 按实例、反射访问检查按调用方、access / statvfs、装箱 instanceof 与 UTF16 hash 回归测试 | ✅ `3209e52` / `0d79cd1`+`625ba4a` / `9af1c05` / `ebbf6f8` / `619bd59`（⏳ 待用户验证；L11 ✅） | 验证：TestThreadCounters TestWaitNotifyQueue TestJucSync / TestReflectAccessCheck TestMethodHandleDirect / TestFileAccessSpace TestFilesApi / TestBoxInstanceof |
 | FS-O1..O3 | compatibility.md 过期行、失真注释、过渡宏（java_synchronized / java_switch!）文档 | ✅ `1e670f0` / `24e8c81` | 文档真实性 |
 
 ## 🔴 活跃任务
