@@ -1,22 +1,17 @@
 //! `java/lang/VirtualThread` 手写伴生（vm_boundary 边界类，按调用链按需实现）。
 //!
-//! ## 线程模型方案 A（2026-09-24 用户拍板）
+//! ## 线程模型方案 A（2026-09-24 用户拍板；#42 起为真实 OS 线程）
 //!
-//! 生成代码的对象模型是 `Rc`（非 Send/Sync），真 OS 线程被禁用（见 thread_impl
-//! 模块注释）；平台线程在本档位是单线程协作调度的**模拟线程**。虚拟线程直接
-//! 映射为同一调度器上的模拟线程：
+//! 虚拟线程映射为平台线程（`thread_impl::spawn_java_thread`，GIL 模型）：
 //!
 //!   - 不建模 Continuation / mount / unmount / 载体线程（VirtualThread 仍留
 //!     vm_boundary，BFS 不进入 ContinuationScope 等 VM 深耦合实现）；
-//!   - `start` → 入就绪队列（与 `Thread.start0` 同一队列、FIFO 同序）；
-//!   - 调度器以 vtable 分派 `run()` → 本类覆盖体：经 `Thread.runWith(bindings,
+//!   - `start` → 派生 OS 线程，不计入 DestroyJavaVM 等待集（虚拟线程恒为守护线程）；
+//!   - 新线程以 vtable 分派 `run()` → 本类覆盖体：经 `Thread.runWith(bindings,
 //!     task)` 执行任务（与 JDK `VirtualThread.run(Runnable)` 同一入口）；
-//!   - `join` → `joinNanos`：推进就绪线程直至本线程终结。
+//!   - `joinNanos` → 在线程对象监视器上等待至 TERMINATED（线程终结簿记 notifyAll）。
 //!
-//! 对输出确定的程序（join 后读结果、Future.get 汇总），与 JVM 可观察行为一致；
-//! 依赖真实交错 / 载体线程身份的语义不可达（与平台线程同一档位，compatibility
-//! 如实分档）。状态值取 JDK 21 VirtualThread 常量（NEW=0 / STARTED=1 /
-//! RUNNING=2 / TERMINATED=99）。
+//! 状态值取 JDK 21 VirtualThread 常量（NEW=0 / STARTED=1 / RUNNING=2 / TERMINATED=99）。
 
 use crate::prelude::*;
 use super::virtual_thread::VirtualThread;
@@ -41,12 +36,11 @@ impl VirtualThread {
         Ok(this)
     }
 
-    /// `start()`：NEW → STARTED，入模拟线程就绪队列。
+    /// `start()`：NEW → STARTED，派生 OS 线程（守护：不计入 DestroyJavaVM 等待集）。
     #[jvm_boundary]
     pub fn __impl_start(&self) -> Result<()> {
         self.__set_state(STARTED);
-        super::thread_impl::enqueue_sim_thread(Clone::clone(self).into());
-        Ok(())
+        super::thread_impl::spawn_java_thread(Clone::clone(self).into(), true)
     }
 
     /// `start(ThreadContainer)`：容器登记不建模（ThreadPerTaskExecutor 的线程
@@ -81,15 +75,57 @@ impl VirtualThread {
         Ok(self.__get_state() == TERMINATED)
     }
 
-    /// `joinNanos(long)`：推进就绪模拟线程直至本线程终结（时长不驻留，与
-    /// sleep0 同一取舍）；返回是否已终结。
+    /// `joinNanos(long)`：在线程对象监视器上等待至 TERMINATED（`nanos == 0` 为无限期），
+    /// 返回是否已终结。
     #[jvm_boundary]
-    pub fn __impl_joinNanos(&self, _nanos: i64) -> Result<bool> {
+    pub fn __impl_joinNanos(&self, nanos: i64) -> Result<bool> {
+        let obj = Object::from(Clone::clone(self));
+        let identity = obj.0.__identity() as usize;
+        let deadline = (nanos > 0).then(|| std::time::Instant::now()
+            + std::time::Duration::from_nanos(nanos as u64));
+        let guard = crate::monitor::MonitorGuard::acquire(&obj)?;
         while self.__get_state() != TERMINATED {
-            if !super::thread_impl::run_next_ready()? {
-                break;
-            }
+            let (ms, ns) = match deadline {
+                None => (0, 0),
+                Some(d) => {
+                    let left = d.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    let ms = left.as_millis() as i64;
+                    let ns = (left.as_nanos() % 1_000_000) as i32;
+                    if ms == 0 && ns == 0 { (0, 1) } else { (ms, ns) }
+                }
+            };
+            crate::monitor::wait_timeout(identity, false, ms, ns)?;
         }
+        drop(guard);
         Ok(self.__get_state() == TERMINATED)
+    }
+
+    /// `park()`：LockSupport.park 在虚拟线程上的入口（JLA.parkVirtualThread）——虚拟线程
+    /// 即 OS 线程，与平台线程同一许可设施（`monitor::park`，按线程对象身份）。
+    #[jvm_boundary]
+    pub fn __impl_park(&self) -> Result<()> {
+        let identity = Object::from(Clone::clone(self)).0.__identity() as usize;
+        crate::monitor::park(identity, false, 0);
+        Ok(())
+    }
+
+    /// `parkNanos(long)`：限时 park（`nanos <= 0` 立即返回）。
+    #[jvm_boundary]
+    pub fn __impl_parkNanos(&self, nanos: i64) -> Result<()> {
+        if nanos > 0 {
+            let identity = Object::from(Clone::clone(self)).0.__identity() as usize;
+            crate::monitor::park(identity, false, nanos);
+        }
+        Ok(())
+    }
+
+    /// `unpark()`：授予许可（JLA.unparkVirtualThread）。
+    #[jvm_boundary]
+    pub fn __impl_unpark(&self) -> Result<()> {
+        crate::monitor::unpark(Object::from(Clone::clone(self)).0.__identity() as usize);
+        Ok(())
     }
 }

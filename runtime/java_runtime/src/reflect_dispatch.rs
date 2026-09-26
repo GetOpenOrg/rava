@@ -94,8 +94,8 @@ crate::__process_static! {
     /// 序列化构造器登记（构造器对象身份 → 目标类 binary name，N2）：
     /// ReflectionFactory.newConstructorForSerialization 返回的构造器元数据属于首个不可序列化
     /// 超类 initCl，但 newInstance 须分配**目标类**实例（JDK generateConstructor 的访问器）。
-    static SERIAL_CTORS: std::cell::RefCell<HashMap<usize, String>> =
-        std::cell::RefCell::new(HashMap::new());
+    static SERIAL_CTORS: crate::sync_model::__RefSlot<HashMap<usize, String>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
 /// 登记序列化构造器（身份 → 目标类）。

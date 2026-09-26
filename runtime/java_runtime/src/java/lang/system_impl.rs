@@ -101,13 +101,22 @@ impl System {
 
     #[jvm_native]
     pub fn currentTimeMillis() -> Result<i64> {
-        // 叠加协作调度的虚拟时钟偏移（monitor.rs「虚拟时钟」节）
-        Ok(crate::monitor::virtual_now_millis())
+        // 挂钟（epoch 毫秒）
+        Ok(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
     }
 
+    /// native `nanoTime()`：单调时钟（起点任意，JVM 同语义）。以进程首次调用为基准、
+    /// 叠加 epoch 纳秒起点，数值量级与 JVM 相近且严格单调不减。
     #[jvm_native]
     pub fn nanoTime() -> Result<i64> {
-        Ok(crate::monitor::virtual_now_nanos())
+        static ORIGIN: std::sync::OnceLock<(std::time::Instant, i64)> = std::sync::OnceLock::new();
+        let (base, epoch) = *ORIGIN.get_or_init(|| (
+            std::time::Instant::now(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as i64,
+        ));
+        Ok(epoch.saturating_add(base.elapsed().as_nanos() as i64))
     }
 
     /// native `identityHashCode(Object)I`：对象身份哈希（与内容无关，

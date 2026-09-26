@@ -22,22 +22,12 @@
 //! 其字段是翻译出的 Java 对象（Rc 载体），承载不了跨线程互斥；对象监视器是 VM 级
 //! 原语，落在本模块的 Rust 原生锁上。S-11 的终态（真线程模型）另行收敛。
 //!
-//! ## 线程层档位（单线程协作调度，S-11 线程层）
+//! ## 与 GIL 的关系（#42，`crate::gil`）
 //!
-//! 生成代码的对象模型是 `Rc`（非 Send/Sync），真 OS 线程被禁用：全部模拟线程
-//! 在唯一 OS 线程上以嵌套 Rust 调用运行。`wait` 因此不能真正阻塞在 OS 条件变量
-//! 上（唯一线程阻塞即死锁）——首个 `Thread.start0` 之后（协作泵登记，
-//! `java/lang/thread_impl.rs`），`wait_timeout` 改走协作路径：
-//!
-//!   - 等待者领取一张 ticket 登记进本监视器的 `wait_set`，随后**泵**运行就绪
-//!     模拟线程（`Thread.run`），直到 ticket 被 `notify` 置位或无就绪线程；
-//!   - `notify` / `notifyAll` 优先消费 `wait_set`（置位 ticket），无 ticket 时
-//!     落回 OS 条件变量（协作档位下无 OS 等待者，等价 no-op）；
-//!   - 泵返回时全部泵内栈帧已退（各 RAII 守卫释放了持有的监视器），等待者
-//!     直接恢复原重入计数；未被唤醒而返回属 JLS §17.3 允许的虚假唤醒语义。
-//!
-//! `start0` 之前（从未有线程启动）保持 OS 路径：限时等待按时限自醒，无限等待
-//! 阻塞——与 Java 在无 notifier 时的行为一致。
+//! Java 线程是真实 OS 线程，执行 Java 代码须持有 GIL。监视器的一切阻塞（竞争中的
+//! enter、`wait`、wait 结束后的重获取）都在**释放 GIL 之后**进行，醒来后先拿到监视器
+//! 再重获取 GIL——任何线程都不会持有 GIL 去等监视器，因此两把锁之间无环。
+//! 监视器内部状态锁（`state`）只在极短临界区内持有，且从不跨越 GIL 的获取。
 //!
 //! ## 遗留（随线程模型一并收敛）
 //!
@@ -46,12 +36,8 @@
 //!   - 侧表条目不回收（对象回收后指针身份可能复用）：监视器按身份惰性创建且
 //!     数量以「曾被同步块锁定的对象」为界，测试负载下无泄漏压力；引入弱键
 //!     回收需对象生命周期钩子，随对象模型收敛。
-//!   - 模拟线程的限时等待被唤醒后无法「到点自醒」（嵌套调用栈无法暂停再续）：
-//!     泵内就绪队列耗尽即返回。语料无此形态，见 compatibility.md 线程行。
 
-use crate::sync_model::__RefSlot as RefCell;
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -74,9 +60,6 @@ struct Monitor {
     acquire_q: Condvar,
     /// Object.wait 等待队列（notify / notifyAll 的目标）
     wait_q: Condvar,
-    /// 协作档位（单线程模拟线程层）的等待票据：notify 置位 ticket 而非唤醒 OS
-    /// 线程（见模块注释「线程层档位」）。
-    wait_set: Mutex<VecDeque<Arc<AtomicBool>>>,
 }
 
 impl Monitor {
@@ -85,15 +68,15 @@ impl Monitor {
             state: Mutex::new(MonitorState { owner: None, count: 0 }),
             acquire_q: Condvar::new(),
             wait_q: Condvar::new(),
-            wait_set: Mutex::new(VecDeque::new()),
         }
     }
 
-    /// 进入监视器（可重入；被他线程持有时阻塞在竞争队列上）。
+    /// 进入监视器（可重入）。被他线程持有时释放 GIL 后阻塞在竞争队列上。
     fn enter(&self) {
+        crate::gil::safepoint();
         let me = std::thread::current().id();
-        let mut st = self.state.lock();
-        loop {
+        {
+            let mut st = self.state.lock();
             if st.owner.is_none() {
                 st.owner = Some(me);
                 st.count = 1;
@@ -103,7 +86,27 @@ impl Monitor {
                 st.count += 1;
                 return;
             }
-            self.acquire_q.wait(&mut st);
+        }
+        crate::gil::blocking(|| {
+            let mut st = self.state.lock();
+            self.acquire_blocking(&mut st, me, 1);
+        });
+    }
+
+    /// 阻塞获取（调用方已释放 GIL）：竞争队列排队至监视器空闲，按 `count` 设重入计数。
+    fn acquire_blocking(&self, st: &mut parking_lot::MutexGuard<'_, MonitorState>,
+                        me: std::thread::ThreadId, count: u32) {
+        loop {
+            if st.owner.is_none() {
+                st.owner = Some(me);
+                st.count = count;
+                return;
+            }
+            if st.owner == Some(me) {
+                st.count += count;
+                return;
+            }
+            self.acquire_q.wait(st);
         }
     }
 
@@ -126,13 +129,9 @@ impl Monitor {
     }
 
     /// `Object.wait(millis, nanos)`：校验参数（HotSpot JVM_MonitorWait 同序：
-    /// 参数异常先于持有检查）→ 释放全部重入计数 → 等待至 notify / 超时 /
-    /// 虚假唤醒 → 按原计数重新获取监视器。`millis == 0 && nanos == 0` 为无限
-    /// 等待。调用方以条件循环消费虚假唤醒。
-    ///
-    /// 首个 `Thread.start0` 后进入协作档位（模块注释「线程层档位」）：ticket
-    /// 登记进 `wait_set`，泵运行就绪模拟线程直至被置位或无进展；此前保持 OS
-    /// 条件变量路径。
+    /// 参数异常先于持有检查）→ 释放全部重入计数 → 释放 GIL 等待至 notify / 超时 /
+    /// 虚假唤醒 → 按原计数重新获取监视器 → 重获取 GIL。`millis == 0 && nanos == 0`
+    /// 为无限等待。调用方以条件循环消费虚假唤醒。
     fn wait_timeout(&self, millis: i64, nanos: i32) -> Result<()> {
         if millis < 0 {
             return Err(JvmError::illegal_argument("timeout value is negative"));
@@ -141,67 +140,32 @@ impl Monitor {
             return Err(JvmError::illegal_argument("nanosecond timeout value out of range"));
         }
         let me = std::thread::current().id();
-        let mut st = self.state.lock();
-        match st.owner {
-            Some(o) if o == me => {}
-            _ => return Err(JvmError::illegal_monitor_state("current thread is not owner")),
-        }
-        let saved = st.count;
-        let pump = coop_pump();
-        if pump.is_some() {
-            // 协作档位：先放 state 锁再入泵——泵内模拟线程会重入本监视器
+        let saved = {
+            let st = self.state.lock();
+            match st.owner {
+                Some(o) if o == me => st.count,
+                _ => return Err(JvmError::illegal_monitor_state("current thread is not owner")),
+            }
+        };
+        crate::gil::blocking(|| {
+            let mut st = self.state.lock();
             st.owner = None;
             st.count = 0;
-            drop(st);
-            self.acquire_q.notify_one(); // 让出监视器：唤醒 OS 竞争者（无 OS 等待者时 no-op）
-            let pump = pump.unwrap();
-            let ticket: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-            self.wait_set.lock().push_back(Arc::clone(&ticket));
-            let before = sim_runs();
-            let notified = pump(&ticket, millis)?;
-            if !notified && sim_runs() == before {
-                // 限时等待且无线程得以推进：只能超时结束 → 虚拟时钟跳过时限（见「虚拟时钟」节）
-                advance_virtual_clock(millis.saturating_mul(1_000_000).saturating_add(nanos as i64));
+            self.acquire_q.notify_one(); // 让出监视器：唤醒竞争者
+            if millis == 0 && nanos == 0 {
+                self.wait_q.wait(&mut st);
+            } else {
+                let deadline = Instant::now()
+                    + Duration::from_millis(millis as u64)
+                    + Duration::from_nanos(nanos as u64);
+                self.wait_q.wait_until(&mut st, deadline);
             }
-            if !notified {
-                // 超时/无通知源返回：ticket 出队（单 OS 线程，泵返回与出队之间
-                // 无并发 notify）。返回本身是 JLS §17.3 允许的虚假唤醒。
-                self.wait_set.lock().retain(|t| !Arc::ptr_eq(t, &ticket));
-            }
-            // 泵内栈帧已全部退回：本监视器空闲，直接恢复原重入计数
-            let mut st = self.state.lock();
-            st.owner = Some(me);
-            st.count = saved;
-            return Ok(());
-        }
-        st.owner = None;
-        st.count = 0;
-        self.acquire_q.notify_one(); // 让出监视器：唤醒竞争者
-        if millis == 0 && nanos == 0 {
-            self.wait_q.wait(&mut st);
-        } else {
-            let deadline = Instant::now()
-                + Duration::from_millis(millis as u64)
-                + Duration::from_nanos(nanos as u64);
-            self.wait_q.wait_until(&mut st, deadline);
-        }
-        // 重获取（竞争队列排队），成功后恢复重入计数
-        loop {
-            if st.owner.is_none() {
-                st.owner = Some(me);
-                st.count = saved;
-                return Ok(());
-            }
-            if st.owner == Some(me) {
-                st.count += saved;
-                return Ok(());
-            }
-            self.acquire_q.wait(&mut st);
-        }
+            self.acquire_blocking(&mut st, me, saved);
+        });
+        Ok(())
     }
 
     /// `Object.notify`：唤醒等待队列上的一个线程（无等待者时静默，与 JLS §17.2 一致）。
-    /// 协作档位优先消费 `wait_set`（置位一张 ticket）。
     fn notify_one(&self) -> Result<()> {
         let me = std::thread::current().id();
         {
@@ -210,16 +174,11 @@ impl Monitor {
                 return Err(JvmError::illegal_monitor_state("current thread is not owner"));
             }
         }
-        if let Some(ticket) = self.wait_set.lock().pop_front() {
-            ticket.store(true, Ordering::SeqCst);
-            return Ok(());
-        }
         self.wait_q.notify_one();
         Ok(())
     }
 
     /// `Object.notifyAll`：唤醒等待队列上的全部线程。
-    /// 协作档位置位 `wait_set` 内全部 ticket。
     fn notify_waiters(&self) -> Result<()> {
         let me = std::thread::current().id();
         {
@@ -228,104 +187,70 @@ impl Monitor {
                 return Err(JvmError::illegal_monitor_state("current thread is not owner"));
             }
         }
-        let tickets: Vec<_> = self.wait_set.lock().drain(..).collect();
-        for ticket in tickets {
-            ticket.store(true, Ordering::SeqCst);
-        }
         self.wait_q.notify_all();
         Ok(())
     }
 }
 
-// ── 协作调度泵（线程层档位的 wait 侧入口）──────────────────────────────────
+// ── park / unpark（LockSupport 的 VM 底座）──────────────────────────────────
 
-/// 泵签名：运行就绪模拟线程直至 `ticket` 被置位（返回 true）或无就绪线程
-/// （返回 false）。由 `java/lang/thread_impl.rs` 在首个 `start0` 时登记。
-pub type CoopPump = fn(&Arc<AtomicBool>, i64) -> Result<bool>;
-
-thread_local! {
-    static COOP_PUMP: RefCell<Option<CoopPump>> = RefCell::new(None);
+/// 每线程一张许可（permit 语义：unpark 授予、park 消费；多次 unpark 不累加）。
+struct Parker {
+    permit: Mutex<bool>,
+    cv: Condvar,
 }
 
-/// 登记协作泵（`Thread.start0` 首次启动时调用；幂等）。
-pub fn set_cooperative_pump(pump: CoopPump) {
-    COOP_PUMP.with(|c| *c.borrow_mut() = Some(pump));
+fn parker_for(thread_identity: usize) -> Arc<Parker> {
+    static PARKERS: OnceLock<Mutex<HashMap<usize, Arc<Parker>>>> = OnceLock::new();
+    let mut table = PARKERS.get_or_init(|| Mutex::new(HashMap::new())).lock();
+    Clone::clone(table.entry(thread_identity).or_insert_with(|| Arc::new(Parker {
+        permit: Mutex::new(false),
+        cv: Condvar::new(),
+    })))
 }
 
-fn coop_pump() -> Option<CoopPump> {
-    COOP_PUMP.with(|c| *c.borrow())
-}
-
-/// 协作档位的 park 底座（`Unsafe.park(isAbsolute, time)` 的消费面，与 `wait_timeout` 的
-/// 泵路径同型但无监视器簿记）：泵运行就绪模拟线程后返回——返回本身是 JLS §17.3
-/// 允许的虚假唤醒形态，调用方（LockSupport.park / CF waitingGet）的条件
-/// 循环重查消费面兑现等价。未登记泵（从未有线程启动）→ 直接返回（无就绪
-/// 线程可推进，阻塞不可达的形态与 sleep0 同一取舍）。
-///
-/// 限时 park 且泵内无任何模拟线程得以推进时，唯一可能的唤醒源是超时——虚拟时钟
-/// 跳至截止（见「虚拟时钟」节），使调用方的截止判定（FJP `awaitWork` 的 keepAlive）
-/// 立即成立，而非按真实时间空转。无限期 park（`time == 0` 且相对）不跳：Java 中即死锁。
-pub fn cooperative_park(is_absolute: bool, time: i64) -> Result<()> {
-    let before = sim_runs();
-    if let Some(pump) = coop_pump() {
-        let ticket: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-        pump(&ticket, 0)?;
-    }
-    if sim_runs() == before {
-        let wait_nanos = if is_absolute {
-            // 绝对截止：epoch 毫秒（与 virtual_now_millis 同一时基）
-            time.saturating_sub(virtual_now_millis()).saturating_mul(1_000_000)
+/// `Unsafe.park(isAbsolute, time)`：消费许可；无许可时释放 GIL 阻塞至 unpark /
+/// 超时（相对纳秒；绝对为 epoch 毫秒截止）/ 虚假唤醒。`time == 0` 且相对为无限期；
+/// 相对 `time < 0` 或已过的绝对截止立即返回（HotSpot Parker::park 同判定）。
+pub fn park(thread_identity: usize, is_absolute: bool, time: i64) {
+    let deadline = if is_absolute {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+        if time <= now_ms {
+            None
         } else {
-            time
-        };
-        advance_virtual_clock(wait_nanos);
+            Some(Instant::now() + Duration::from_millis((time - now_ms) as u64))
+        }
+    } else if time > 0 {
+        Some(Instant::now() + Duration::from_nanos(time as u64))
+    } else {
+        None
+    };
+    let indefinite = !is_absolute && time == 0;
+    if deadline.is_none() && !indefinite {
+        // 立即返回的形态仍消费已有许可
+        *parker_for(thread_identity).permit.lock() = false;
+        return;
     }
-    Ok(())
+    let p = parker_for(thread_identity);
+    crate::gil::blocking(|| {
+        let mut permit = p.permit.lock();
+        if !*permit {
+            match deadline {
+                Some(d) => { p.cv.wait_until(&mut permit, d); }
+                None => { p.cv.wait(&mut permit); }
+            }
+        }
+        *permit = false;
+    });
 }
 
-// ── 虚拟时钟 ─────────────────────────────────────────────────────────────────
-//
-// 单 OS 线程协作调度下，「限时等待且无任何其他线程可推进」时，Java 中该等待只能以
-// 超时结束——真实驻留这段时长不产生任何可观测差异，只拖慢运行。故以时钟偏移代替
-// 驻留：`System.nanoTime` / `currentTimeMillis` 叠加累计偏移，等待方看到的流逝时间
-// ≥ 其时限（与 JVM 的时限语义一致：超时返回时至少已过时限）。偏移单调不减。
-
-static CLOCK_SKEW_NANOS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-
-thread_local! {
-    /// 已运行（至终结）的模拟线程计数：判定一次泵调用是否推进了任何线程。
-    static SIM_RUNS: crate::sync_model::__PrimCell<u64> = const { crate::sync_model::__PrimCell::new(0) };
-}
-
-/// 模拟线程运行登记（`thread_impl::run_sim_thread` 调用）。
-pub fn note_sim_thread_run() {
-    SIM_RUNS.with(|c| c.set(c.get() + 1));
-}
-
-fn sim_runs() -> u64 {
-    SIM_RUNS.with(|c| c.get())
-}
-
-/// 时钟前移 `nanos`（≤ 0 忽略）。
-pub fn advance_virtual_clock(nanos: i64) {
-    if nanos > 0 {
-        CLOCK_SKEW_NANOS.fetch_add(nanos, Ordering::SeqCst);
-    }
-}
-
-fn real_epoch_nanos() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64
-}
-
-/// `System.nanoTime` 的时基：真实纳秒 + 虚拟偏移。
-pub fn virtual_now_nanos() -> i64 {
-    real_epoch_nanos().saturating_add(CLOCK_SKEW_NANOS.load(Ordering::SeqCst))
-}
-
-/// `System.currentTimeMillis` 的时基：与 `virtual_now_nanos` 同源。
-pub fn virtual_now_millis() -> i64 {
-    virtual_now_nanos() / 1_000_000
+/// `Unsafe.unpark(thread)`：授予许可并唤醒（线程未 park 时许可留待下次 park 消费）。
+pub fn unpark(thread_identity: usize) {
+    let p = parker_for(thread_identity);
+    let mut permit = p.permit.lock();
+    *permit = true;
+    p.cv.notify_one();
 }
 
 // ── 身份侧表 ─────────────────────────────────────────────────────────────────

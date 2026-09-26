@@ -111,7 +111,7 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// 「伴生 trait impl 签名提取 + 模型缺席方法补发」（f75598d）补入 trait 声明。
     /// `start(Thread, ThreadContainer)`：JDK 转发 `thread.start(container)`（包内
     /// 虚方法）。消费方：ThreadPerTaskExecutor.start → 虚拟线程经 VirtualThread 的
-    /// start(ThreadContainer) 覆盖入模拟线程就绪队列（线程模型方案 A）。
+    /// start(ThreadContainer) 覆盖派生 OS 线程（线程模型方案 A）。
     fn start(&self, arg0: crate::java::lang::Thread,
              arg1: crate::jdk::internal::vm::ThreadContainer) -> Result<()> {
         arg0.start_threadcontainer(arg1)

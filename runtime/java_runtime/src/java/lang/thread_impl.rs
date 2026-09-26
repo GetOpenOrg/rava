@@ -1,21 +1,20 @@
-//! `java.lang.Thread` 的 native 层 + 单线程协作调度器（线程层语义档位）。
+//! `java.lang.Thread` 的 native 层：真实 OS 线程（#42 第一档，GIL 模型，见 `crate::gil`）。
 //!
-//! ## 语义档位：单线程模拟
+//! ## 线程生命周期
 //!
-//! 生成代码的对象模型是 `Rc`（非 Send/Sync）——把翻译出的 `run()` 放上真实
-//! OS 线程会跨线程移动 Rc，属未定义行为，禁用。「线程」在此档位是**调度簿记**：
+//!   - `start0`：`NEW→RUNNABLE`（eetop / threadStatus 翻位），启用 GIL（首次），派生 OS
+//!     线程；新线程取得 GIL 后以 vtable 分派执行 `run()`；
+//!   - 终结（JVM thread-exit 同序）：未捕获异常报告（`Exception in thread "<name>"`，
+//!     只终结本线程）→ eetop 清零（`isAlive` 翻 false）、threadStatus → TERMINATED →
+//!     持有线程对象监视器 `notifyAll`（唤醒 `join` 的 `while (isAlive()) wait(0)`）；
+//!   - 主线程 `main` 返回后等待全部非守护平台线程（`destroy_java_vm`）。
 //!
-//!   - `start0`：`NEW→RUNNABLE`（eetop / threadStatus 翻位），Thread 引用入
-//!     就绪队列，**不**立即执行；
-//!   - 推进点（`pump`）：`Thread.join`（经 `isAlive → wait(0)` 条件循环）、
-//!     `Object.wait`、`Thread.sleep0` 进入等待时，泵按 FIFO 运行就绪模拟线程
-//!     的 `run()` 至完成、或该线程自身 `wait` 让出（嵌套泵）；
-//!   - 终结：`eetop` 清零（`isAlive` 翻 false）、threadStatus → TERMINATED、
-//!     线程对象监视器 `notifyAll`（唤醒 join 等待者，与 JVM thread-exit 一致）。
+//! 虚拟线程（`VirtualThread.start`）同样派生 OS 线程（线程模型方案 A：虚拟线程 =
+//! 平台线程，Continuation 不建模），不计入 DestroyJavaVM 的等待集（JVM 语义）。
 //!
-//! 对**确定性输出**的程序（语料三例：join 后读结果 / 排序后打印），模拟序与
-//! Java 的可重放序一致；依赖真实 interleaving 的程序语义不可达（真并发属对象
-//! 模型 Send/Sync 化之后的远期档位，compatibility.md 线程行如实分档）。
+//! ## 时间
+//!
+//! `sleep0` 释放 GIL 后真实驻留（挂钟）；其他线程在此期间运行。
 //!
 //! ## 字段消费清单（golden 反推，不铺全量）
 //!
@@ -26,19 +25,14 @@
 //!
 //! ## 取舍
 //!
-//! - `wait` / `sleep` 的 `InterruptedException` 未实现：语料三例无中断等待
-//!   （TestWaitNotify 的 catch 分支不被触达），引入需构造异常链，暂不做。
-//! - `sleep0` 时长不驻留：按「sleep 期间其他可运行线程得以推进」兑现等价——
-//!   泵运行就绪线程后立即返回，时长以虚拟时钟前移兑现（`monitor.rs`「虚拟时钟」节，
-//!   `nanoTime` / `currentTimeMillis` 观测到的流逝时间 ≥ 时长）。
+//! - `wait` / `sleep` / `park` 的中断唤醒（InterruptedException）未实现：`interrupt`
+//!   只置标记（`isInterrupted` / `interrupted` 可观察）。
 
 use crate::prelude::*;
 use super::*;
 
-use crate::sync_model::__RefSlot as RefCell;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::time::Duration;
 
 // JVMTI 线程状态位（jdk.internal.misc.VM.toThreadState 的编码，getState 消费）：
 // ALIVE = 0x1，TERMINATED = 0x2，RUNNABLE = 0x4。
@@ -46,66 +40,64 @@ const JVMTI_ALIVE: i32 = 0x1;
 const JVMTI_TERMINATED: i32 = 0x2;
 const JVMTI_RUNNABLE: i32 = 0x4;
 
-// ── 单线程协作调度器 ─────────────────────────────────────────────────────────
+/// Java 线程的 OS 线程栈（翻译代码递归深度与 JVM 默认线程栈 + 解释帧开销对齐的保守取值；
+/// 仅保留虚拟地址，按需提交）。
+const JAVA_THREAD_STACK: usize = 256 << 20;
 
-thread_local! {
-    /// 就绪队列（FIFO = start 序）：已启动未终结的模拟线程。
-    static READY: RefCell<VecDeque<Thread>> = RefCell::new(VecDeque::new());
+std::thread_local! {
+    /// 当前 OS 线程对应的 Java 线程对象（派生时设定；主线程首次 currentThread 时构造）。
+    static CURRENT: RefCell<Option<Thread>> = const { RefCell::new(None) };
 }
 
-/// 泵：按 FIFO 运行就绪模拟线程，直至 `ticket` 被唤醒（notify 置位，true）
-/// 或无就绪线程（false）。经 `monitor::set_cooperative_pump` 挂到所有
-/// `Object.wait` / join 的等待路径上。
-fn pump(ticket: &Arc<AtomicBool>, _millis: i64) -> Result<bool> {
-    loop {
-        if ticket.load(Ordering::SeqCst) {
-            return Ok(true);
-        }
-        let next = READY.with(|q| q.borrow_mut().pop_front());
-        match next {
-            Some(t) => run_sim_thread(t)?,
-            None => return Ok(false),
-        }
-    }
-}
-
-/// 运行一个模拟线程至其 `run()` 返回（或经 `wait` 让出后由嵌套泵推进至终结），
-/// 随后做 JVM thread-exit 簿记。
-fn run_sim_thread(t: Thread) -> Result<()> {
-    // 虚分派（Thread__VTable::run）：子类覆盖（Worker.run）或 Thread.run 的
-    // Runnable task 入口都在此一跳生效——与 JVM 以 virtual Thread.start 调
-    // run() 同构。
-    let result = Thread__VTable::run(&*t.vtable);
-    crate::monitor::note_sim_thread_run();
-    // 终结：eetop 清零（isAlive/alive 的唯一判据）、状态位 TERMINATED、
-    // 线程对象监视器 notifyAll 唤醒 join 等待者。
-    t.__set_eetop(0);
-    let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);
-    let identity = Object::from(Clone::clone(&t)).0.__identity() as usize;
-    let _ = crate::monitor::notify_all(identity, false);
-    if let Err(e) = result {
-        // 未捕获异常只终结本线程（JVM 语义），报告到 stderr；golden 只比对 stdout。
-        e.report_uncaught();
+/// 派生 OS 线程执行 `t.run()`。`daemon` 为 true 的线程不计入 DestroyJavaVM 等待集。
+pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
+    crate::gil::activate();
+    crate::gil::note_started(daemon);
+    let name = format!("{}", t.__get_name());
+    let handoff = crate::gil::Handoff(t);
+    let spawned = std::thread::Builder::new()
+        .name(name)
+        .stack_size(JAVA_THREAD_STACK)
+        .spawn(move || {
+            let handoff = handoff;
+            crate::gil::acquire();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let t = handoff.0;
+                CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&t)));
+                run_java_thread(&t);
+                // 线程局部与栈上的对象引用在持有 GIL 时释放（Rc 计数只在锁内修改）
+                CURRENT.with(|c| c.borrow_mut().take());
+                drop(t);
+            }));
+            if outcome.is_err() {
+                // Rust panic（未覆盖存根等致命缺口）：与主线程 panic 同样终止进程
+                std::process::exit(101);
+            }
+            crate::gil::note_terminated(daemon);
+            crate::gil::release();
+        });
+    if spawned.is_err() {
+        crate::gil::note_terminated(daemon);
+        return Err(JvmError::out_of_memory("unable to create native thread"));
     }
     Ok(())
 }
 
-/// 模拟线程入就绪队列（start0 与 VirtualThread.start 共用）：虚拟线程在本档位与
-/// 平台线程同一调度器（线程模型方案 A：虚拟线程 = 模拟平台线程，Continuation 不建模）。
-pub(crate) fn enqueue_sim_thread(t: Thread) {
-    READY.with(|q| q.borrow_mut().push_back(t));
-    crate::monitor::set_cooperative_pump(pump);
-}
-
-/// 运行下一个就绪模拟线程至终结；无就绪线程 → false（VirtualThread.joinNanos 的推进点）。
-pub(crate) fn run_next_ready() -> Result<bool> {
-    let next = READY.with(|q| q.borrow_mut().pop_front());
-    match next {
-        Some(t) => {
-            run_sim_thread(t)?;
-            Ok(true)
-        }
-        None => Ok(false),
+/// 执行线程体并做 JVM thread-exit 簿记（见模块注释「线程生命周期」）。
+fn run_java_thread(t: &Thread) {
+    // 虚分派（Thread__VTable::run）：子类覆盖（Worker.run）或 Thread.run 的
+    // Runnable task 入口都在此一跳生效——与 JVM 以 virtual Thread.start 调
+    // run() 同构。
+    let result = Thread__VTable::run(&*t.vtable);
+    if let Err(e) = result {
+        e.report_uncaught_in(&format!("{}", t.__get_name()));
+    }
+    t.__set_eetop(0);
+    let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);
+    let obj = Object::from(Clone::clone(t));
+    if let Ok(guard) = crate::monitor::MonitorGuard::acquire(&obj) {
+        let _ = crate::monitor::notify_all(obj.0.__identity() as usize, false);
+        drop(guard);
     }
 }
 
@@ -118,31 +110,34 @@ impl Thread {
         Ok(())
     }
 
-    /// native `start0`：`NEW→RUNNABLE`。真 OS 线程被对象模型禁用（Rc 非
-    /// Send）——Thread 引用入就绪队列，`run()` 的实际执行发生在 join / wait /
-    /// sleep 的协作泵（本模块 `pump`）。eetop 取非零（JVM 中为 native 线程
-    /// 句柄，仅以非零承载 alive 语义）。
+    /// native `start0`：`NEW→RUNNABLE`，派生 OS 线程执行 `run()`（模块注释「线程生命周期」）。
+    /// eetop 取非零（JVM 中为 native 线程句柄，仅以非零承载 alive 语义）。
     ///
-    /// upcalls：调度器以 vtable 分派调用 `Thread.run()`——这条 runtime→Java
-    /// 调用边不在任何字节码里，经 upcalls 声明使 BFS 翻译 run() 的方法体
-    /// （Runnable task 的转发入口）而非停留在存根。
+    /// upcalls：新线程以 vtable 分派调用 `Thread.run()`——这条 runtime→Java 调用边
+    /// 不在任何字节码里，经 upcalls 声明使 BFS 翻译 run() 的方法体（Runnable task 的
+    /// 转发入口）而非停留在存根。
     #[jvm_native(upcalls = "java/lang/Thread.run:()V")]
     pub fn start0(&self) -> Result<()> {
         self.__set_eetop(1);
-        let _ = self.__get_holder().__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
-        enqueue_sim_thread(Clone::clone(self));
-        Ok(())
+        let holder = self.__get_holder();
+        let _ = holder.__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
+        let daemon = holder.__get_daemon();
+        spawn_java_thread(Clone::clone(self), daemon)
     }
 
-    /// native `sleep0(J nanos)`：限时休眠。时长不驻留（虚拟时钟前移）；等价性按
-    /// 「sleep 期间其他可运行线程得以推进」兑现——泵运行就绪模拟线程后返回。
+    /// native `sleep0(J nanos)`：释放 GIL 后按挂钟驻留 `nanos` 纳秒（其他线程期间运行）。
     /// 中断唤醒（InterruptedException）未实现，见模块注释取舍。
     #[jvm_native]
     pub fn sleep0(nanos: i64) -> Result<()> {
-        let ticket: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-        pump(&ticket, 0)?;
-        // 时长以虚拟时钟兑现（monitor.rs「虚拟时钟」节）：sleep 返回时流逝时间 ≥ 时长
-        crate::monitor::advance_virtual_clock(nanos);
+        let d = Duration::from_nanos(nanos.max(0) as u64);
+        crate::gil::blocking(|| std::thread::sleep(d));
+        Ok(())
+    }
+
+    /// native `yield0()`：让出 GIL 给等待中的线程（无等待者时 OS 级让出）。
+    #[jvm_native]
+    pub fn yield0() -> Result<()> {
+        crate::gil::yield_now();
         Ok(())
     }
 
@@ -153,8 +148,8 @@ impl Thread {
         Self::sleep0(nanos)
     }
 
-    /// native `currentThread()`：返回当前（唯一）OS 线程的平台线程对象。
-    /// 首次调用构造一次并缓存——与 JVM 平台线程对象线程内唯一一致；字段按
+    /// native `currentThread()`：返回当前 OS 线程对应的 Java 线程对象。派生线程在入口
+    /// 设定；主线程首次调用构造一次并缓存——与 JVM 平台线程对象线程内唯一一致；字段按
     /// 语料消费清单填充（模块注释），构造路径绕开 `Thread.<init>` 的安全
     /// 管制分支（JVM 的主线程对象同样由 VM 原生构造，不经 Java 构造器）。
     ///
@@ -165,10 +160,12 @@ impl Thread {
     /// holder 访问在任意闭包形态下可编译。
     #[jvm_native(upcalls = "java/lang/Thread$FieldHolder.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;JIZ)V")]
     pub fn currentThread() -> Result<Thread> {
-        thread_local! {
-            static CURRENT: Thread = platform_main_thread();
+        if let Some(t) = CURRENT.with(|c| c.borrow().as_ref().map(Clone::clone)) {
+            return Ok(t);
         }
-        Ok(CURRENT.with(Clone::clone))
+        let main = platform_main_thread();
+        CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&main)));
+        Ok(main)
     }
 
     /// native `ensureMaterializedForStackWalk(Object bindings)`：JVM 在

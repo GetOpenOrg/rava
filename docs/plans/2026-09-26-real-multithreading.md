@@ -1,10 +1,16 @@
 # 真多线程：OS 线程 + JVM 等价的时间 / 同步语义（#42）
 
 > 2026-09-26 用户决策：虚拟时钟（N12，`a8c027e`）偏离 JVM 真实时间语义，须建立任务——
-> **支持真实多线程，行为上与 JVM 等价**。本文是方案，分阶段实施；协作调度 + 虚拟时钟在
-> 新模型通过全量回归前保留为默认档，之后删除。
+> **支持真实多线程，行为上与 JVM 等价**。本文是方案，分两档实施：
+>
+> - **第一档（§三-A，已实施）**：OS 线程 + 全局解释器锁（GIL）。真实线程、真实挂钟时间、
+>   真实阻塞与唤醒，语义与 JVM 等价；同一时刻只有一个线程执行 Java 代码（无并行加速）。
+>   协作调度与虚拟时钟随之删除。
+> - **第二档（§三-B，远期）**：对象模型 Arc + 原子单元，去掉 GIL 获得并行加速；可观察语义
+>   不变，属性能档位。第 1 步抽象层（`__Shared` / `__PrimCell` / `__RefSlot` /
+>   `__process_static!`）两档共用。
 
-## 一、现状：单 OS 线程协作调度
+## 一、原状（第一档实施前）：单 OS 线程协作调度
 
 | 层 | 现状 | 单线程依赖 |
 |---|---|---|
@@ -32,9 +38,32 @@
    其余线程阻塞至完成；同线程递归立即返回；初始化失败后续访问 `NoClassDefFoundError`。
 5. 静态字段全进程一份。
 
-## 三、方案：同步模型抽象层 + 双后端，逐层切换
+## 三-A、第一档：OS 线程 + GIL（已实施）
 
-**第 1 步：抽象层（行为零变化）。** 运行时新增 `sync_model` 模块，定义对象模型原语的类型
+运行时 `gil.rs`（模块注释为权威说明）：
+
+| 机制 | 实现 |
+|---|---|
+| 线程 | `Thread.start0` / `VirtualThread.start` → `std::thread::spawn`（栈 256 MiB 虚拟保留）；`Rc` 对象图经 `gil::Handoff` 移交，新线程取得 GIL 后解包 |
+| 互斥 | 全局 `parking_lot::Mutex<()>`；执行 Java 代码须持锁。锁的获取/释放建立 happens-before：`Rc` 计数、`RefCell` 借用标记、volatile / CAS 的可见性与原子性平凡成立 |
+| 阻塞 | `sleep` / `wait` / `park` / 竞争中的 `monitorenter` / `InternalLock` / 类初始化等待：**先释放 GIL 再阻塞**（`gil::blocking`），醒来先取业务锁再取 GIL——任何线程不持 GIL 等其他锁，锁序无环 |
+| 抢占 | 安全点 `gil::safepoint()`：字段读取（wrapper getter、静态字段 getter）、数组元素读取、监视器 enter；有等待者且时间片（2ms）用尽时 `MutexGuard::bump` 公平让出。自旋读他线程写入的程序因此推进 |
+| 进程级存储 | `__process_static!` 展开为全局 `__GilStatic<T>`（惰性初始化，`unsafe impl Sync`，只在持 GIL 时访问）；真正按线程的状态（当前线程、GIL 持有、InternalLock 守卫、拆箱失败标记）保留 `thread_local!` |
+| 类初始化 | JVMS §5.5：状态 0/1/2/3（未初始化 / 初始化中 / erroneous / 完成）+ 持有线程登记；他线程释放 GIL 等待广播，同线程递归立即返回，失败后 `NoClassDefFoundError` |
+| 线程终结 | 未捕获异常报告（只终结本线程）→ eetop 清零、TERMINATED → 持线程对象监视器 `notifyAll`（join 唤醒） |
+| 进程退出 | `main` 返回后 `destroy_java_vm` 等待全部非守护平台线程（虚拟线程恒为守护） |
+| 时间 | `nanoTime` 单调时钟、`currentTimeMillis` 挂钟；`park` 每线程许可（permit 语义，绝对 / 相对截止） |
+| GIL 启用 | 首次派生线程前不启用（单线程程序零开销：安全点仅一次 Relaxed 原子读） |
+
+等价性论证：JLS §17 不要求并行执行；交错只发生在安全点，是 JMM 合法执行集合的子集
+（绿色线程 JVM 同属合规实现）。已知差距：`wait` / `sleep` / `park` 的中断唤醒
+（InterruptedException）未实现；`getState` 在阻塞中仍报 RUNNABLE。
+
+验收 e2e：`tests/e2e/60_real_threads/`（7 例，期望由 JVM 生成）+ 既有线程族。
+
+## 三-B、第二档：同步模型抽象层 + 并行后端（远期）
+
+**第 1 步：抽象层（行为零变化，已完成）。** 运行时新增 `sync_model` 模块，定义对象模型原语的类型
 别名与操作：`Shared<T>`（Rc / Arc）、`FieldPrim<T>`（Cell / 原子）、`FieldRef<T>`（RefCell /
 Mutex）、`ArrayRepr<T>`、`ProcessStatic<T>`（thread_local / 全局 OnceLock）。宏与运行时
 全部改经别名；单线程后端即现有实现——生成树与行为逐字节不变（compare_trees 验收）。

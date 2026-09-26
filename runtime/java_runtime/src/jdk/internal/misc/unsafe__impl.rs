@@ -683,24 +683,23 @@ impl Unsafe {
         self.putReference(o, offset, x)
     }
 
-    /// `park(boolean isAbsolute, long time)`：LockSupport.park 的 VM 底座
-    /// （permit 语义的阻塞）。单线程协作档位（S-11）与 `Thread.sleep0` 同一
-    /// 承载：被「阻塞」的当前模拟线程泵运行就绪模拟线程（CompletableFuture
-    /// 的 ThreadPerTaskExecutor 异步任务在此推进——完成后 `waitingGet` 的
-    /// 重查循环即返回），泵尽返回（JLS §17.3 允许的虚假唤醒形态）。permit
-    /// 簿记不驻留：调用方（LockSupport.park/CF waitingGet）均为条件循环 +
-    /// 重查消费面，虚假唤醒语义下观察面等价。blocker 字段（parkBlocker）由
-    /// 上层 `putReferenceOpaque` 携带（栈轨迹消费面，golden 不可见）。
+    /// `park(boolean isAbsolute, long time)`：LockSupport.park 的 VM 底座（permit 语义的
+    /// 阻塞，释放 GIL 后驻留，`monitor::park`）。许可按当前线程对象身份登记。blocker 字段
+    /// （parkBlocker）由上层 `putReferenceOpaque` 携带。
     #[jvm_boundary]
     pub fn park(&self, is_absolute: bool, time: i64) -> Result<()> {
-        crate::monitor::cooperative_park(is_absolute, time)
+        let me = Object::from(crate::java::lang::Thread::currentThread()?);
+        crate::monitor::park(me.0.__identity() as usize, is_absolute, time);
+        Ok(())
     }
 
-    /// `unpark(Object thread)`：LockSupport.unpark 的 VM 底座。协作档位下
-    /// 唤醒动作发生在泵内（被 park 的线程不在 OS 等待上）——permit 授予后
-    /// 的重新调度由泵的 FIFO 与调用方重查循环兑现 → no-op。
+    /// `unpark(Object thread)`：LockSupport.unpark 的 VM 底座——授予目标线程许可并唤醒。
+    /// null 线程静默（HotSpot Unsafe_Unpark 同判定）。
     #[jvm_boundary]
-    pub fn unpark(&self, _thread: Object) -> Result<()> {
+    pub fn unpark(&self, thread: Object) -> Result<()> {
+        if !thread.0.is_jvm_null() {
+            crate::monitor::unpark(thread.0.__identity() as usize);
+        }
         Ok(())
     }
 

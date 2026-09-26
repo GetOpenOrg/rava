@@ -1,10 +1,11 @@
 use crate::prelude::*;
 use super::*;
 
-use crate::sync_model::__RefSlot as RefCell;
+use std::cell::RefCell;
 use parking_lot::ReentrantMutex;
 
-// 全局可重入锁：单线程 JVM 模拟环境下所有 InternalLock 实例共享同一把锁
+// 全局可重入锁：所有 InternalLock 实例共享同一把锁（粒度粗于 JDK 的每实例锁，互斥
+// 语义成立）。竞争时先释放 GIL 再阻塞（`crate::gil` 锁序：不持 GIL 等锁）。
 static GLOBAL: ReentrantMutex<()> = ReentrantMutex::new(());
 
 thread_local! {
@@ -33,7 +34,10 @@ impl InternalLock {
             std::mem::transmute::<
                 parking_lot::ReentrantMutexGuard<'_, ()>,
                 parking_lot::ReentrantMutexGuard<'static, ()>,
-            >(GLOBAL.lock())
+            >(match GLOBAL.try_lock() {
+                Some(g) => g,
+                None => crate::gil::blocking(|| GLOBAL.lock()),
+            })
         };
         GUARDS.with(|g| g.borrow_mut().push(guard));
         Ok(())

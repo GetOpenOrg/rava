@@ -535,7 +535,8 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
         pub fn _init_not_null(&mut self) { self._jvm_null = false; }
     });
 
-    // 字段访问器委托（own + 继承字段）。vtable 访问器签名已 Object 化（A-1 去形参）：
+    // 字段访问器委托（own + 继承字段）。读取处是 GIL 安全点（`gil::safepoint`：自旋等待
+    // 他线程写入的循环借此让出）。vtable 访问器签名已 Object 化（A-1 去形参）：
     // 擦除字段的类型化转换（From<Object> / Into<Object>）发生在 wrapper 委托边界 ——
     // 等价 javac 在字段访问处插入的 checkcast。
     let wrapper_delegate_items = |name: &syn::Ident, ty: &Type| -> TokenStream2 {
@@ -545,6 +546,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
             quote! {
                 #[doc(hidden)] #[inline]
                 pub fn #get(&self) -> #ty {
+                    __safepoint();
                     <#ty as ::std::convert::From<Object>>::from(self.vtable.#get())
                 }
                 #[doc(hidden)] #[inline]
@@ -555,7 +557,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
         } else {
             quote! {
                 #[doc(hidden)] #[inline]
-                pub fn #get(&self) -> #ty { self.vtable.#get() }
+                pub fn #get(&self) -> #ty { __safepoint(); self.vtable.#get() }
                 #[doc(hidden)] #[inline]
                 pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
             }

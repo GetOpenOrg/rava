@@ -99,6 +99,7 @@ pub(crate) fn expand_statics(
                 #[allow(non_snake_case)]
                 #vis fn #name() -> Result<#ty> {
                     Self::__class_init()?;
+                    __safepoint();
                     Ok(#cell.with(|c| ::std::clone::Clone::clone(&*c.borrow())).unwrap_or_default())
                 }
             });
@@ -119,8 +120,8 @@ pub(crate) fn expand_statics(
 
 /// 生成 `__class_init()`。返回 (模块级状态项, impl 块成员)。
 ///
-/// 状态：0 = 未初始化；1 = 初始化中 / 已完成（同线程递归与后续访问都立即返回）；
-///       2 = erroneous（`<clinit>` 曾抛出异常）。
+/// 状态：0 = 未初始化；1 = 初始化中；2 = erroneous（`<clinit>` 曾抛出异常）；3 = 已完成。
+/// 多线程协议（他线程等待 / 同线程递归返回）由运行时 `gil::clinit_enter/exit` 承载。
 ///
 /// `register` 为初始化成功后追加执行的语句（常量目录登记，见
 /// `constant_directory_registration`），在 `<clinit>` 之后执行——此时 static
@@ -155,13 +156,14 @@ pub(crate) fn expand_class_init(
     let member = quote! {
         #[doc(hidden)]
         pub fn __class_init() -> Result<()> {
-            match #state.with(|s| s.replace(1)) {
-                0 => {}
-                2 => {
-                    #state.with(|s| s.set(2));
-                    return Err(JvmError::no_class_def_found(#binary_name));
-                }
-                _ => return Ok(()),
+            if #state.with(|s| s.get()) == 3 {
+                return Ok(());
+            }
+            // JVMS §5.5：他线程初始化中则等待；同线程递归立即返回；失败后 NoClassDefFoundError
+            match __clinit_enter(#binary_name, || #state.with(|s| s.get()), |v| #state.with(|s| s.set(v))) {
+                __ClinitEnter::Run => {}
+                __ClinitEnter::Done => return Ok(()),
+                __ClinitEnter::Erroneous => return Err(JvmError::no_class_def_found(#binary_name)),
             }
             let run = || -> Result<()> {
                 #init_super
@@ -170,13 +172,9 @@ pub(crate) fn expand_class_init(
                 #register
                 Ok(())
             };
-            match run() {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    #state.with(|s| s.set(2));
-                    Err(JvmError::in_initializer(e))
-                }
-            }
+            let result = run();
+            __clinit_exit(#binary_name, result.is_ok(), |v| #state.with(|s| s.set(v)));
+            result.map_err(JvmError::in_initializer)
         }
     };
     (storage, member)

@@ -2,6 +2,7 @@
 pub mod annotation_meta;
 pub mod array;
 pub mod sync_model;
+pub mod gil;
 pub mod data_bundles;
 pub mod jca;
 pub mod reflect_dispatch;
@@ -179,6 +180,17 @@ pub fn main_args() -> crate::array::JArray<crate::java::lang::String> {
         std::env::args().skip(1)
             .map(|a| crate::java::lang::String::from(a.as_str()))
             .collect::<Vec<_>>())
+}
+
+/// 主线程 `main` 返回后的 VM 收尾（JVM `DestroyJavaVM`）：先等待全部非守护平台线程
+/// 终结，再按主线程结果退出——未捕获异常报告后退出码 1。
+pub fn destroy_java_vm(result: crate::error::Result<()>) {
+    if let Err(e) = result {
+        e.report_uncaught_in("main");
+        gil::await_non_daemon_threads();
+        std::process::exit(1);
+    }
+    gil::await_non_daemon_threads();
 }
 
 pub fn jdk_feature() -> u32 {
@@ -385,6 +397,8 @@ pub mod prelude {
     pub use super::java::lang::String;
     pub use super::sync_model::{__PrimCell, __RefSlot, __Shared};
     pub use crate::__process_static;
+    pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
+                         clinit_enter as __clinit_enter, clinit_exit as __clinit_exit};
     pub use super::_is_jnull;
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
