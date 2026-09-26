@@ -177,7 +177,7 @@ impl StreamDecoder {
     }
 
     /// `read()`：read0 语义——leftover 优先；否则 2 char 读 + 拆分。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "java/io/InputStream.read:([BII)I")]
     pub fn __impl_read(&self) -> Result<i32> {
         if self.__get_haveLeftoverChar() {
             self.__set_haveLeftoverChar(false);
@@ -199,7 +199,7 @@ impl StreamDecoder {
 
     /// `read(char[], int, int)`：lockedRead 语义——leftover 回填、len==1 走
     /// read0、其余 implRead（≥2 char，代理对安全）。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "java/io/InputStream.read:([BII)I")]
     pub fn __impl_read_arr_c_i_i(
         &self,
         cbuf: JArray<u16>,
@@ -310,7 +310,7 @@ impl StreamDecoder {
     }
 
     /// `close()`：幂等；in.close()（ChannelInputStream → FileChannelImpl）。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "java/io/InputStream.close:()V")]
     pub fn __impl_close(&self) -> Result<()> {
         if self.__get_closed() {
             return Ok(());
