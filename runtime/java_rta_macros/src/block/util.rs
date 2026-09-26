@@ -37,6 +37,18 @@ pub(crate) fn type_is_long(ty: &Type) -> bool {
     false
 }
 
+/// 字段类型是否为裸 `bool`（Java `boolean` 的非擦除形态）——实例字段 boolean 按名协议
+/// （`__unsafe_bool_cell`）的臂生成条件。
+pub(crate) fn type_is_bool(ty: &Type) -> bool {
+    if let Type::Path(tp) = ty {
+        if tp.qself.is_none() && tp.path.segments.len() == 1 {
+            let seg = &tp.path.segments[0];
+            return seg.arguments.is_empty() && seg.ident == "bool";
+        }
+    }
+    false
+}
+
 /// 字段类型是否为裸 `i32`（Java `int` 的非擦除形态）——Unsafe 实例字段
 /// int 原子协议（`__unsafe_int_cell`）的臂生成条件。
 pub(crate) fn type_is_int(ty: &Type) -> bool {

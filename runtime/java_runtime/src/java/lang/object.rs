@@ -199,6 +199,11 @@ pub trait ObjectVTable: 'static {
     #[doc(hidden)]
     fn __unsafe_int_cell(&self, _field: &str) -> Option<Rc<std::cell::Cell<i32>>> { None }
 
+    /// 实例字段 boolean 按名协议：`__unsafe_int_cell` 的 boolean 镜像（平铺的非擦除
+    /// boolean 字段，`Rc<Cell<bool>>` 共享单元）。消费方：VarHandle 字节数组视图的字节序位。
+    #[doc(hidden)]
+    fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<std::cell::Cell<bool>>> { None }
+
     /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
     /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名读共享的
     /// 引用存储单元。引用字段（含擦除字段）的存储是

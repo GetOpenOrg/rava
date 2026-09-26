@@ -4,7 +4,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::Ident;
 
-use super::super::util::{is_basic, type_is_int, type_is_long};
+use super::super::util::{is_basic, type_is_int, type_is_bool, type_is_long};
 use super::context::GenContext;
 
 /// Inner struct（平铺字段：superclass_fields + own fields，非泛型——A-1 存储层擦除）
@@ -206,6 +206,32 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             }
         })
         .collect();
+    let inner_bool_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+        .chain(ctx.fields.iter())
+        .filter(|(name, ty)| !ctx.is_erased(name) && type_is_bool(ty))
+        .map(|(name, _)| {
+            let field_str = name.to_string();
+            quote! {
+                #field_str => ::std::option::Option::Some(
+                    ::std::rc::Rc::clone(&self.#name)),
+            }
+        })
+        .collect();
+    let inner_bool_cell_query: TokenStream2 = if inner_bool_cell_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __unsafe_bool_cell(
+                &self,
+                field: &str,
+            ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<bool>>> {
+                match field {
+                    #(#inner_bool_cell_arms)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+        }
+    };
     let inner_long_cell_query: TokenStream2 = if inner_long_cell_arms.is_empty() {
         quote! {}
     } else {
@@ -407,6 +433,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #erased_vtable_query
                 #inner_long_cell_query
                 #inner_int_cell_query
+                #inner_bool_cell_query
                 #inner_ref_get_query
                 #inner_ref_set_query
                 #to_string_inner_bridge

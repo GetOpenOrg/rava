@@ -18,7 +18,7 @@ use super::super::parse::split_type_name_args;
 use super::super::rewrite::{
     rewrite_base_calls_for_wrapper, rewrite_block, rewrite_virtual_calls_for_wrapper,
 };
-use super::super::util::{attr_str, is_basic, strip_meta_attrs, type_is_int, type_is_long};
+use super::super::util::{attr_str, is_basic, strip_meta_attrs, type_is_int, type_is_bool, type_is_long};
 use super::context::GenContext;
 
 /// §5-§7 Wrapper struct + Default/Clone/PartialEq/Debug + impl ObjectVTable for Wrapper
@@ -258,6 +258,19 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 }
             })
             .collect();
+        // 同一协议的 boolean 镜像（`__unsafe_bool_cell`）：平铺的非擦除 `boolean` 字段
+        // （VarHandle 字节数组视图的 `be` 字节序位等只读形态消费）。
+        let bool_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+            .chain(ctx.fields.iter())
+            .filter(|(name, ty)| !ctx.is_erased(name) && type_is_bool(ty))
+            .map(|(name, _)| {
+                let field_str = name.to_string();
+                quote! {
+                    (::std::option::Option::Some(i), #field_str) =>
+                        ::std::option::Option::Some(::std::rc::Rc::clone(&i.#name)),
+                }
+            })
+            .collect();
         // Unsafe/VarHandle 实例字段引用原子协议（`__unsafe_ref_get`/`__unsafe_ref_set`）：
         // 平铺字段里非基本的引用字段（含擦除——载体即 `RefCell<Option<Box<Object>>>`）。
         // 臂内直接 cell 访问（i: &__inner），边界转换与 inner 侧同式；静态类臂未命中
@@ -469,6 +482,16 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     match (self.any.downcast_ref::<#inner_ident>(), field) {
                         #(#int_cell_arms)*
                         _ => ObjectVTable::__unsafe_int_cell(&*self.vtable, field),
+                    }
+                }
+                /// 实例字段 boolean 按名协议：`__unsafe_int_cell` 的 boolean 镜像。
+                fn __unsafe_bool_cell(
+                    &self,
+                    field: &str,
+                ) -> ::std::option::Option<::std::rc::Rc<::std::cell::Cell<bool>>> {
+                    match (self.any.downcast_ref::<#inner_ident>(), field) {
+                        #(#bool_cell_arms)*
+                        _ => ObjectVTable::__unsafe_bool_cell(&*self.vtable, field),
                     }
                 }
                 /// Unsafe/VarHandle 实例字段引用原子协议（读形态）：平铺的引用字段

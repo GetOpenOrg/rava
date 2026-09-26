@@ -224,7 +224,91 @@ fn _field_exchange(u: &Unsafe, carrier: _Carrier, holder: &Object, offset: i64, 
 
 // ── Array 家族（args = [数组, 下标, 值...]）──────────────────────────────────
 
+// ── 字节数组视图族（MethodHandles.byteArrayViewVarHandle：VarHandleByteArrayAs*$ArrayHandle）──
+// args = [byte[], 字节偏移, 值...]：在 byte[] 上按视图元素宽度、以 flavor 的 `be` 字段
+// 给定的字节序读写一个 short/char/int/long/float/double（JDK 语义：越界检查
+// `Preconditions.checkIndex(index, length - (width - 1))` → ArrayIndexOutOfBoundsException）。
+// 消费方：sun.security.provider.ByteArrayAccess.LE/BE（MD5 / SHA 的字与字节块转换）。
+
+#[derive(Clone, Copy)]
+enum _ViewKind { Short, Char, Int, Long, Float, Double }
+
+fn _byte_view(vh: &VarHandle) -> Option<(_ViewKind, usize, bool)> {
+    let o = Object::from(Clone::clone(vh));
+    let cn = o.0.__class_name();
+    if !cn.contains("VarHandleByteArrayAs") || !cn.ends_with("$ArrayHandle") {
+        return None;
+    }
+    let (kind, width) = if cn.contains("AsShorts") { (_ViewKind::Short, 2) }
+        else if cn.contains("AsChars") { (_ViewKind::Char, 2) }
+        else if cn.contains("AsInts") { (_ViewKind::Int, 4) }
+        else if cn.contains("AsLongs") { (_ViewKind::Long, 8) }
+        else if cn.contains("AsFloats") { (_ViewKind::Float, 4) }
+        else if cn.contains("AsDoubles") { (_ViewKind::Double, 8) }
+        else { return None };
+    let be = o.0.__unsafe_bool_cell("be").map(|c| c.get()).unwrap_or(true);
+    Some((kind, width, be))
+}
+
+/// 字节数组 + 偏移（越界 → AIOOBE，长度按 JDK 口径 `length - (width - 1)`）。
+fn _view_target(args: &JArray<Object>, width: usize) -> Result<(JArray<i8>, usize)> {
+    let ba = Clone::clone(&args.get(0)?).try_cast_array::<i8>("[B")?;
+    let off = _arg_i32(args, 1, "bad byte array view index form")?;
+    let limit = ba.len()? - (width as i32 - 1);
+    if off < 0 || off >= limit {
+        return Err(JvmError::array_index_out_of_bounds(off, limit.max(0)));
+    }
+    Ok((ba, off as usize))
+}
+
+fn _view_get(vh: &VarHandle, args: &JArray<Object>) -> Option<Result<Object>> {
+    let (kind, width, be) = _byte_view(vh)?;
+    Some((|| {
+        let (ba, off) = _view_target(args, width)?;
+        let mut bits: u64 = 0;
+        for k in 0..width {
+            let i = if be { k } else { width - 1 - k };
+            bits = (bits << 8) | (ba.get((off + i) as i32)? as u8 as u64);
+        }
+        Ok(match kind {
+            _ViewKind::Short => Object::from(bits as u16 as i16),
+            _ViewKind::Char => Object::from(bits as u16),
+            _ViewKind::Int => Object::from(bits as u32 as i32),
+            _ViewKind::Long => Object::from(bits as i64),
+            _ViewKind::Float => Object::from(f32::from_bits(bits as u32)),
+            _ViewKind::Double => Object::from(f64::from_bits(bits)),
+        })
+    })())
+}
+
+fn _view_set(vh: &VarHandle, args: &JArray<Object>) -> Option<Result<()>> {
+    let (kind, width, be) = _byte_view(vh)?;
+    Some((|| {
+        let (ba, off) = _view_target(args, width)?;
+        let v = args.get(2)?;
+        let bad = || _bad_arg("bad byte array view element form");
+        let bits: u64 = match kind {
+            _ViewKind::Short => crate::reflect_dispatch::unbox_i32(&v).ok_or_else(bad)? as u16 as u64,
+            _ViewKind::Char => crate::reflect_dispatch::unbox_char(&v).ok_or_else(bad)? as u64,
+            _ViewKind::Int => crate::reflect_dispatch::unbox_i32(&v).ok_or_else(bad)? as u32 as u64,
+            _ViewKind::Long => crate::reflect_dispatch::unbox_i64(&v).ok_or_else(bad)? as u64,
+            _ViewKind::Float => crate::reflect_dispatch::unbox_f32(&v).ok_or_else(bad)?.to_bits() as u64,
+            _ViewKind::Double => crate::reflect_dispatch::unbox_f64(&v).ok_or_else(bad)?.to_bits(),
+        };
+        for k in 0..width {
+            let shift = 8 * (width - 1 - k);
+            let i = if be { k } else { width - 1 - k };
+            ba.set((off + i) as i32, (bits >> shift) as u8 as i8)?;
+        }
+        Ok(())
+    })())
+}
+
+
 fn _array_get(vh: &VarHandle, args: &JArray<Object>) -> Result<Object> {
+    if let Some(r) = _view_get(vh, args) {
+        return r;
+    }
     let carrier = _carrier(vh);
     let idx = _arg_i32(args, 1, "bad array index form")?;
     match carrier {
@@ -244,6 +328,9 @@ fn _array_get(vh: &VarHandle, args: &JArray<Object>) -> Result<Object> {
 }
 
 fn _array_set(vh: &VarHandle, args: &JArray<Object>) -> Result<()> {
+    if let Some(r) = _view_set(vh, args) {
+        return r;
+    }
     let carrier = _carrier(vh);
     let idx = _arg_i32(args, 1, "bad array index form")?;
     match carrier {
