@@ -1,0 +1,15 @@
+copyOf [Ljava.lang.String; len=4 tail=null same=true
+copyOf Object[] [Ljava.lang.Object; true
+copyOf CharSequence[] [Ljava.lang.CharSequence; x
+toArray [Ljava.lang.Integer; [3, 1, 2]
+toArray fill same=true [p, q, null, z, z]
+newInstance [Ljava.lang.String; String[]=true Object[]=true CharSequence[]=true Integer[]=false Cloneable=true
+ASE java.lang.Integer
+CCE caught
+back ok null identity=true
+nested [[I true true
+ASE java.lang.Double
+clone [Ljava.lang.String; ok
+Object[] newInstance [Ljava.lang.Object;
+int newInstance [I 4
+TreeSet toArray [Ljava.lang.String; a,b,c

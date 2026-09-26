@@ -303,6 +303,37 @@ impl Class {
             .unwrap_or(false))
     }
 
+    /// 按 binary name（斜线形态；数组为描述符形态 `[I`、`[Ljava/lang/String;`）判定
+    /// 「source 类型的值可赋给 target 类型」（JLS §5.2 引用赋值、§4.10.3 数组协变）：
+    /// 同名；数组对数组按组件递归（基本组件须相同）；数组可赋给 Object / Cloneable /
+    /// Serializable；类经层次表（build.rs 生成的超类型闭包）。数组运行时类判定
+    /// （反射创建数组的组件标签，FS-R6）与 `isAssignableFrom` 同一真源。
+    pub fn __name_assignable(target: &str, source: &str) -> bool {
+        if target == source || target == "java/lang/Object" {
+            return true;
+        }
+        if let Some(src_elem) = source.strip_prefix('[') {
+            let Some(tgt_elem) = target.strip_prefix('[') else {
+                return matches!(target, "java/lang/Cloneable" | "java/io/Serializable");
+            };
+            let unwrap = |d: &str| -> Option<std::string::String> {
+                if d.starts_with('[') {
+                    Some(d.to_string())
+                } else {
+                    d.strip_prefix('L').and_then(|x| x.strip_suffix(';')).map(|x| x.to_string())
+                }
+            };
+            return match (unwrap(tgt_elem), unwrap(src_elem)) {
+                (Some(t), Some(s)) => Self::__name_assignable(&t, &s),
+                _ => tgt_elem == src_elem, // 基本组件：描述符字符相同
+            };
+        }
+        __hierarchy::CLASS_HIERARCHY.iter()
+            .find(|(n, _)| *n == source)
+            .map(|(_, supers)| supers.iter().any(|s| *s == target))
+            .unwrap_or(false)
+    }
+
     /// `Class.getName()`：返回类对象的二进制名（Java 形式，点分隔）。
     ///
     /// `java/lang/Class` 只作为类型存根进入闭包，字节码版的 `getName()` 是 stub，

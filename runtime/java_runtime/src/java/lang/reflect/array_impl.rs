@@ -10,10 +10,10 @@ impl Array {
     /// "按运行时类型新建数组" 分支）。
     ///
     /// 原生二进制没有按运行时 Class 动态选定 Rust 元素类型的机制；反射创建的
-    /// 引用数组以擦除元素形态（`JArray<Object>`，元素初值 null）承载——与
-    /// javac 对 `T[]` 擦除后的运行时形态一致，arraycopy 存入具体元素后，调用
-    /// 侧经既有擦除还原（array.rs `try_array_view` 的逐元素兼容）恢复具体数组
-    /// 类型。基本类型 componentType（消费链：`ObjectInputStream.readArray` 按流中
+    /// 引用数组以擦除载体（`JArray<Object>`，元素初值 null）+ 组件类型标签承载
+    /// （FS-R6）：getClass 为 `[L<component>;`，checkcast / instanceof 按组件类型
+    /// 可赋值精确判定，aastore 按标签做存储检查（ArrayStoreException）。
+    /// 基本类型 componentType（消费链：`ObjectInputStream.readArray` 按流中
     /// 描述符 `Array.newInstance(int.class, n)` 后 `(int[]) array` 批量读入）按
     /// `getPrimitiveClass` 名字分派到对应的基本元素载体（`[I` 等真实数组，
     /// 零初值）；`void` → IllegalArgumentException（JDK 同）。null componentType
@@ -40,6 +40,8 @@ impl Array {
                 _ => return Err(JvmError::illegal_argument("")),
             });
         }
-        Ok(Object::from(JArray::<Object>::new(length)))
+        // 引用组件：擦除载体 + 组件类型标签（FS-R6），运行时数组类即 `[L<component>;`
+        let component = format!("{}", componentType.__get_name()).replace('.', "/");
+        Ok(Object::from(JArray::<Object>::__new_component_tagged(length, &component)))
     }
 }

@@ -23,7 +23,12 @@ use crate::java::lang::Object;
 pub struct JArray<T>(Rc<Repr<T>>);
 
 enum Repr<T> {
-    Own(RefCell<Vec<T>>),
+    /// 自有存储。第二域为反射创建数组的组件类型标签（FS-R6）：
+    /// `Array.newInstance(String.class, n)` 在原生侧只有擦除载体 `JArray<Object>`，
+    /// 标签记录运行时组件类型的 binary name（`java/lang/String`、`[I`），
+    /// 使 getClass / instanceof / checkcast / aastore 检查按 JVM 的真实数组类判定。
+    /// 静态类型数组（newarray / anewarray 翻译）元素类型即载体类型，恒为 None。
+    Own(RefCell<Vec<T>>, Option<Rc<str>>),
     Covariant(CovariantView),
     Null,
 }
@@ -87,7 +92,7 @@ impl<T: 'static> PartialEq for JArray<T> {
 impl<T: 'static> JArray<T> {
     fn identity(&self) -> *const () {
         match &*self.0 {
-            Repr::Own(_) => Rc::as_ptr(&self.0) as *const (),
+            Repr::Own(..) => Rc::as_ptr(&self.0) as *const (),
             Repr::Covariant(view) => view.origin.0.__identity(),
             Repr::Null => std::ptr::null(),
         }
@@ -175,7 +180,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     pub fn get(&self, i: i32) -> crate::error::Result<T> {
         crate::gil::safepoint(); // GIL 安全点（自旋读他线程写入的元素时让出）
         match &*self.0 {
-            Repr::Own(cells) => {
+            Repr::Own(cells, _) => {
                 let data = cells.borrow();
                 if i < 0 || i as usize >= data.len() {
                     return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
@@ -192,7 +197,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// 经转换闭包访问）退化为读后写。
     pub fn __update(&self, i: i32, f: &mut dyn FnMut(T) -> Option<T>) -> crate::error::Result<T> {
         match &*self.0 {
-            Repr::Own(cells) => {
+            Repr::Own(cells, _) => {
                 let mut data = cells.borrow_mut();
                 if i < 0 || i as usize >= data.len() {
                     return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
@@ -219,7 +224,14 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// null 引用抛 `NullPointerException`。
     pub fn set(&self, i: i32, v: T) -> crate::error::Result<()> {
         match &*self.0 {
-            Repr::Own(cells) => {
+            Repr::Own(cells, tag) => {
+                if let Some(tag) = tag {
+                    // 反射创建数组的 aastore 存储检查（JVMS §6.5 aastore）
+                    let o: Object = Clone::clone(&v).into();
+                    if !o.0.is_jvm_null() && !o.0.is_instance_of(tag) {
+                        return Err(crate::error::JvmError::array_store(o.0.__class_name()));
+                    }
+                }
                 let mut data = cells.borrow_mut();
                 if i < 0 || i as usize >= data.len() {
                     return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
@@ -241,7 +253,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         &self, f: impl FnOnce(&mut [T]) -> R,
     ) -> crate::error::Result<R> {
         match &*self.0 {
-            Repr::Own(cells) => {
+            Repr::Own(cells, _) => {
                 let mut data = cells.borrow_mut();
                 Ok(f(&mut data))
             }
@@ -256,7 +268,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
 
     pub fn to_vec(&self) -> Vec<T> {
         match &*self.0 {
-            Repr::Own(cells) => cells.borrow().clone(),
+            Repr::Own(cells, _) => cells.borrow().clone(),
             Repr::Covariant(view) => (0..(view.len)())
                 .map(|i| T::from((view.get)(i).expect("index within length")))
                 .collect(),
@@ -268,7 +280,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// （JVMS §6.5 arraylength：objectref 为 null 时抛 NPE）。
     pub fn len(&self) -> crate::error::Result<i32> {
         match &*self.0 {
-            Repr::Own(cells) => Ok(cells.borrow().len() as i32),
+            Repr::Own(cells, _) => Ok(cells.borrow().len() as i32),
             Repr::Covariant(view) => Ok((view.len)()),
             Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
@@ -284,7 +296,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     fn covariant_view(&self) -> CovariantView {
         match &*self.0 {
             Repr::Covariant(view) => Clone::clone(view),
-            Repr::Own(_) => {
+            Repr::Own(..) => {
                 let (for_len, for_get, for_set) = (Clone::clone(self), Clone::clone(self), Clone::clone(self));
                 // 存储检查的元素类型名：源元素类型的 null 探针经 vtable 取 binary name
                 //（名单与元素值无关，null 探针等价于任意元素）
@@ -309,7 +321,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
 impl<T> From<Vec<T>> for JArray<T> {
     /// 从 Vec<T> 构造，用于字面量数组初始化（对应 Java 数组初始化器）
     fn from(v: Vec<T>) -> Self {
-        JArray(Rc::new(Repr::Own(RefCell::new(v))))
+        JArray(Rc::new(Repr::Own(RefCell::new(v), None)))
     }
 }
 
@@ -323,6 +335,21 @@ impl JArray<crate::java::lang::String> {
 }
 
 impl JArray<Object> {
+    /// 反射创建的引用数组（`Array.newInstance(componentType, len)`，FS-R6）：擦除载体
+    /// + 组件类型标签（binary name，斜线形态：`java/lang/String`、`[I`）。元素初值 null。
+    pub fn __new_component_tagged(len: i32, component: &str) -> Self {
+        let tag: Option<Rc<str>> = if component == "java/lang/Object" { None } else { Some(Rc::from(component)) };
+        JArray(Rc::new(Repr::Own(RefCell::new(vec![Object::default(); len.max(0) as usize]), tag)))
+    }
+
+    /// 组件类型标签（仅反射创建的引用数组；静态类型数组与视图为 None）。
+    pub(crate) fn __component_tag(&self) -> Option<std::string::String> {
+        match &*self.0 {
+            Repr::Own(_, Some(tag)) => Some(tag.to_string()),
+            _ => None,
+        }
+    }
+
     /// `new Object[]{"k", "v"}`（元素全为字符串字面量）的紧凑形态，语义同上。
     pub fn objects_from_strs(v: &[&str]) -> Self {
         JArray::from(v.iter()
@@ -355,6 +382,11 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         if let Some(d) = Self::primitive_elem_descriptor() {
             return Ok(crate::java::lang::Class::for_class(
                 crate::java::lang::String::from(format!("[{}", d).as_str())));
+        }
+        if let Repr::Own(_, Some(tag)) = &*self.0 {
+            let binary = if tag.starts_with('[') { format!("[{}", tag) } else { format!("[L{};", tag) };
+            return Ok(crate::java::lang::Class::for_class(
+                crate::java::lang::String::from(binary.as_str())));
         }
         let elem_name = format!("{}", Into::<Object>::into(T::default())
             .0.getClass()?
@@ -399,9 +431,10 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         if target == "[Ljava/lang/Object;" {
             return true;
         }
-        // 引用元素 / 嵌套数组：与 getClass 的描述符形态比对
+        // 引用元素 / 嵌套数组：按数组协变（JLS §4.10.3，组件类型可赋值）判定
         match self.getClass() {
-            Ok(c) => format!("{}", c.__get_name()).replace('.', "/") == target,
+            Ok(c) => crate::java::lang::Class::__name_assignable(
+                &target, &format!("{}", c.__get_name()).replace('.', "/")),
             Err(_) => false,
         }
     }
@@ -412,9 +445,9 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// clone 不改变数组的具体类型）。
     fn __shallow_copy(&self) -> Option<Object> {
         match &*self.0 {
-            Repr::Own(cells) => {
+            Repr::Own(cells, tag) => {
                 let data = cells.borrow();
-                Some(Object::from(JArray::from(data.clone())))
+                Some(Object::from(JArray(Rc::new(Repr::Own(RefCell::new(data.clone()), tag.clone())))))
             }
             Repr::Covariant(view) => view.origin.0.__shallow_copy(),
             Repr::Null => Some(Object::from(Clone::clone(self))),
@@ -461,7 +494,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         }
         match &*self.0 {
             Repr::Covariant(view) => view.origin.0.__array_elem_assignable(slot),
-            Repr::Own(_) => {
+            Repr::Own(..) => {
                 let probe: Object = Into::<Object>::into(T::default());
                 let unused: crate::sync_model::__AnyRef = Rc::new(());
                 probe.0.__view_into(unused, slot)
@@ -515,6 +548,17 @@ pub(crate) fn try_array_view<T: Clone + Default + From<Object> + Into<Object> + 
     }
     if let Some(same) = obj.try_checkcast::<JArray<T>>() {
         return Some(same);
+    }
+    // 反射创建的引用数组（FS-R6）：运行时数组类由组件标签确定，按 JVM checkcast
+    // 精确判定（组件类型可赋值 → 视图；否则 ClassCastException），不走逐元素兼容。
+    if let Some(tag) = obj.try_checkcast::<JArray<Object>>().and_then(|a| a.__component_tag()) {
+        let target = format!("{}", Into::<Object>::into(T::default()).0.getClass().ok()?.__get_name())
+            .replace('.', "/");
+        return if crate::java::lang::Class::__name_assignable(&target, &tag) {
+            Some(erased_object_view(Clone::clone(obj)))
+        } else {
+            None
+        };
     }
     let mut elem_slot: Option<T> = None;
     if obj.0.__array_elem_assignable(&mut elem_slot) && elem_slot.is_some() {
