@@ -130,6 +130,20 @@ impl MethodHandleNatives {
     /// 与 Unsafe.objectFieldOffset(Class, String) / (Field) 共用同一登记表
     /// （JDK 三路径对同一字段同值；VarHandle 的访问器与 Unsafe 原子族因
     /// 此对同一存储单元达成一致）。
+    /// native `staticFieldBase(MemberName)`：静态字段基址——声明类 Class 对象（与
+    /// Unsafe.staticFieldBase 同约定；MH 解释器据 Class 基址识别静态访问）。
+    #[jvm_native]
+    pub fn staticFieldBase(m: MemberName) -> Result<Object> {
+        Ok(Object::from(m.__get_clazz()))
+    }
+
+    /// native `staticFieldOffset(MemberName)`：静态字段偏移——与实例字段共用
+    /// (声明类, 字段名) 登记表（不透明 id，反查得字段身份）。
+    #[jvm_native]
+    pub fn staticFieldOffset(m: MemberName) -> Result<i64> {
+        Self::objectFieldOffset(m)
+    }
+
     #[jvm_native]
     pub fn objectFieldOffset(m: MemberName) -> Result<i64> {
         crate::jdk::internal::misc::Unsafe::getUnsafe()?

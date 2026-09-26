@@ -166,49 +166,21 @@ pub(crate) fn invoke_member(m: &MemberName, argv: Vec<Object>) -> Result<Object>
     }
 }
 
-/// 字段 refKind：经 Unsafe 偏移登记表访问（与 VarHandle / Field 同一存储单元协议）。
+/// 字段 refKind：按名字段协议（reflect_field，与 Field.get/set 同一闭包）。
 fn invoke_field(m: &MemberName, ref_kind: i32, argv: Vec<Object>) -> Result<Object> {
-    let u = crate::jdk::internal::misc::Unsafe::getUnsafe()?;
-    let clazz = m.__get_clazz();
-    let off = u.objectFieldOffset_class_str(Clone::clone(&clazz), Clone::clone(&m.__get_name()))?;
+    let cls = slash(&m.__get_clazz());
+    let name = format!("{}", m.__get_name());
     let is_static = ref_kind == REF_GET_STATIC || ref_kind == REF_PUT_STATIC;
     let mut it = argv.into_iter();
-    let base = if is_static { Object::from(clazz) } else { it.next().unwrap_or_default() };
-    if !is_static && _is_jnull(&base) {
+    let recv = if is_static { Object::default() } else { it.next().unwrap_or_default() };
+    if !is_static && _is_jnull(&recv) {
         return Err(JvmError::null_pointer());
     }
-    let desc = member_descriptor(m)?;
-    if ref_kind == REF_GET_FIELD || ref_kind == REF_GET_STATIC {
-        return match desc.as_str() {
-            "I" | "S" | "B" | "C" | "Z" => {
-                let v = u.getInt_obj_l(base, off)?;
-                Ok(match desc.as_str() {
-                    "Z" => Object::from(v != 0),
-                    "S" => Object::from(v as i16),
-                    "B" => Object::from(v as i8),
-                    "C" => Object::from(v as u16),
-                    _ => Object::from(v),
-                })
-            }
-            "J" => Ok(Object::from(u.getLong_obj_l(base, off)?)),
-            _ => u.getReference(base, off),
-        };
+    let value = if ref_kind == REF_PUT_FIELD || ref_kind == REF_PUT_STATIC { Some(it.next().unwrap_or_default()) } else { None };
+    match crate::reflect_dispatch::reflect_field(&cls, &name, recv, value) {
+        Some(r) => r,
+        None => panic!("stub: MH-native 字段句柄未覆盖 {}.{}（字段闭包缺席）", cls, name),
     }
-    let v = it.next().unwrap_or_default();
-    match desc.as_str() {
-        "I" | "S" | "B" | "C" | "Z" => {
-            let iv = crate::reflect_dispatch::unbox_i32(&v)
-                .or_else(|| crate::reflect_dispatch::unbox_bool(&v).map(|b| b as i32))
-                .ok_or_else(crate::reflect_dispatch::bad_arg)?;
-            u.putInt_obj_l_i(base, off, iv)?;
-        }
-        "J" => {
-            let lv = crate::reflect_dispatch::unbox_i64(&v).ok_or_else(crate::reflect_dispatch::bad_arg)?;
-            u.putLong_obj_l_l(base, off, lv)?;
-        }
-        _ => u.putReference(base, off, v)?,
-    }
-    Ok(Object::default())
 }
 
 /// LambdaForm 里的 Unsafe 访问器成员（DMH 字段访问形态：`UNSAFE.getInt(base, offset)` 等）。
@@ -222,6 +194,15 @@ fn invoke_unsafe(name: &str, argv: Vec<Object>) -> Result<Object> {
     let off = crate::reflect_dispatch::unbox_i64(&it.next().unwrap_or_default())
         .ok_or_else(crate::reflect_dispatch::bad_arg)?;
     let val = it.next();
+    // 字段身份可还原（objectFieldOffset / staticFieldOffset 登记表）→ 按名字段协议
+    if let Some((cls, fname)) = crate::jdk::internal::misc::Unsafe::__field_of_offset(off) {
+        let is_static = !_is_jnull(&base) && base.0.is_instance_of("java/lang/Class");
+        let recv = if is_static { Object::default() } else { Clone::clone(&base) };
+        let value = if name.starts_with("put") { Some(Clone::clone(val.as_ref().unwrap_or(&Object::default()))) } else { None };
+        if let Some(r) = crate::reflect_dispatch::reflect_field(&cls, &fname, recv, value) {
+            return r;
+        }
+    }
     let get_int = |u: &crate::jdk::internal::misc::Unsafe| u.getInt_obj_l(Clone::clone(&base), off);
     match name {
         "getInt" | "getIntVolatile" | "getIntAcquire" | "getIntOpaque" => Ok(Object::from(get_int(&u)?)),

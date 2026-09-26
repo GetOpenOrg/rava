@@ -88,6 +88,16 @@ fn _object_field_offset_id(clazz_name: std::string::String, field_name: std::str
     })
 }
 
+/// 偏移 id → (声明类 binary name, 字段名)：MethodHandle 字段访问形态（DMH Accessor 的
+/// `UNSAFE.getX(base, offset)`）经此还原字段身份，走按名字段协议（reflect_field）。
+fn field_of_offset(offset: i64) -> Option<(std::string::String, std::string::String)> {
+    FIELD_OFFSETS.with(|offsets| {
+        offsets.borrow().iter()
+            .find(|(_, id)| **id == offset)
+            .map(|((c, f), _)| (c.replace('.', "/"), Clone::clone(f)))
+    })
+}
+
 /// 偏移 id → 字段名（实例字段登记表的反查；静态字偏移 / 哨兵不在表内 → None）。
 fn _offset_field_name(offset: i64) -> Option<std::string::String> {
     FIELD_OFFSET_BY_ID.with(|by_id| by_id.borrow().get(&offset).cloned())
@@ -126,6 +136,12 @@ fn _instance_ref_set(o: &Object, offset: i64, v: Object) -> bool {
 }
 
 impl Unsafe {
+    /// 偏移 id → (声明类, 字段名)（`field_of_offset` 的类型挂载入口：本伴生文件以私有 mod
+    /// 挂入，自由函数对包外不可见）。MH-native 解释器的 Unsafe 字段访问形态消费。
+    pub fn __field_of_offset(off: i64) -> Option<(std::string::String, std::string::String)> {
+        field_of_offset(off)
+    }
+
     /// `isBigEndian()Z`（final）：宿主平台字节序。JDK25 的 StringUTF16 / 字节序
     /// 敏感路径经本方法查询（JDK21 为 StringUTF16.isBigEndian native，同义）；
     /// 小端平台（x86-64 / aarch64 Linux 与 macOS）为 false。
