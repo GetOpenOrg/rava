@@ -47,6 +47,12 @@ def _uses_jvm_null_method(ty: str, type_params=()) -> bool:
     return True
 
 
+def _is_type_var(ty: str, type_params=()) -> bool:
+    """类型变量（类级形参或方法级短名形参，如 T / K / V / E1）。"""
+    return ty in type_params or bool(
+        ty and len(ty) <= 2 and ty[0].isupper() and ty.rstrip('0123456789').isalpha())
+
+
 def _is_bool(ty) -> bool:
     return str(ty) == 'bool' or getattr(ty, 'name', '') == 'bool'
 
@@ -69,8 +75,12 @@ def jump_condition(op: str, sim: StackSim, registry=None) -> Cond:
         return base if op == 'ifne' else negate(base)
     a_s = render_expr(a_e)
     if op in ('ifnull', 'ifnonnull'):
-        if _uses_jvm_null_method(render_type(a_t), sim.class_type_params or ()):
+        _ty = render_type(a_t)
+        if _uses_jvm_null_method(_ty, sim.class_type_params or ()):
             is_null = atom(f'{a_s}.is_jvm_null()', f'!{a_s}.is_jvm_null()')
+        elif _is_type_var(_ty, sim.class_type_params or ()):
+            # FS-M8：类型变量实例化为任意引用载体，经 Into<Object> 统一判空
+            is_null = atom(f'_is_jnull_ref(&{a_s})', f'!_is_jnull_ref(&{a_s})')
         else:
             is_null = atom(f'_is_jnull(&{a_s})', f'!_is_jnull(&{a_s})')
         return is_null if op == 'ifnull' else negate(is_null)

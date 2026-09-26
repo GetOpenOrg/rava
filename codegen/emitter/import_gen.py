@@ -653,7 +653,7 @@ def scan_supplementary_iface_imports(supp_blocks: list[str],
     _PRELUDE_NAMES = frozenset({
         'JArray', 'JvmError', 'Result', 'Object', 'ObjectVTable', 'String',
         'Rc', '__Shared', 'RefCell', 'Vec', 'Box', 'Option', 'MonitorGuard',
-        'Object__clone_base', '_is_jnull',
+        'Object__clone_base', '_is_jnull', '_is_jnull_ref',
     })
     _BUILTIN_NAMES = frozenset({
         'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64', 'usize',

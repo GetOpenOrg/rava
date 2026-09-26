@@ -278,6 +278,14 @@ pub fn _is_jnull<T: 'static>(val: &T) -> bool {
     }
 }
 
+/// 类型变量操作数的 null 判定（ifnull / ifnonnull，FS-M8）：`T` 实例化为任意引用载体
+/// （wrapper / 数组 / 接口载体 / Object）时都经 `Into<Object>` 落到 vtable 的 `is_jvm_null`
+/// 唯一判定。`_is_jnull` 只识别 `Object` 载体，对 `T = String` 等实例化恒假。
+#[inline]
+pub fn _is_jnull_ref<T: Clone + Into<Object>>(val: &T) -> bool {
+    Into::<Object>::into(Clone::clone(val)).0.is_jvm_null()
+}
+
 /// getfield / putfield 的接收者判空（JVMS §6.5：objectref 为 null 抛 NullPointerException，
 /// FS-M7）。生成器对非 `this` 接收者发射 `recv.__nn()?.__get_x()`——null 接收者以可捕获的
 /// `Err(NPE)` 完成，而不是读到 null 实例的默认字段值。实现对象为全部 `ObjectVTable`
@@ -435,6 +443,7 @@ pub mod prelude {
     pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
                          clinit_enter as __clinit_enter, clinit_exit as __clinit_exit};
     pub use super::_is_jnull;
+    pub use super::_is_jnull_ref;
     pub use super::__NonNull;
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
