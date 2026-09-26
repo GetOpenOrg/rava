@@ -31,8 +31,14 @@ fn main() {
     // 语料 JDK 特性版本（生成侧写入 jdk_feature.txt）→ 编译期环境变量，
     // 手写层经 crate::jdk_feature() 读取（缺省 21）
     println!("cargo:rerun-if-changed=jdk_feature.txt");
+    // 编译期 cfg `jdk_ge_25`：手写边界类中**签名**随 JDK 版本变化的成员按此分叉
+    //（运行期数据差异用 crate::jdk_feature()；类型差异只能编译期选择）
+    println!("cargo::rustc-check-cfg=cfg(jdk_ge_25)");
     if let Ok(v) = fs::read_to_string("jdk_feature.txt") {
         println!("cargo:rustc-env=JAVA_RTA_JDK_FEATURE={}", v.trim());
+        if v.trim().parse::<u32>().map(|n| n >= 25).unwrap_or(false) {
+            println!("cargo:rustc-cfg=jdk_ge_25");
+        }
     }
     // 类宇宙 = 运行时 crate 树 + 用户 crate 树（../user/src）+ lib crate 树
     //（jar 输入模式的兄弟 crate，如 junit4/hamcrest——2026-09-23 用户树扩展

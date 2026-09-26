@@ -51,8 +51,20 @@ impl GetInstance {
     /// `getServices(List<ServiceId>)`：按候选序（transformation 由具体到一般）收集已登记服务；
     /// 无匹配 → 空表（Cipher 据此抛 `NoSuchAlgorithmException("Cannot find any provider
     /// supporting ..")`，走翻译字节码）。
+    #[cfg(not(jdk_ge_25))]
     #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object;")]
     pub fn getServices_list(ids: Object) -> Result<List<Object>> {
+        Self::services_for(ids)
+    }
+
+    /// JDK 25：`getServices(List<ServiceId>)` 返回类型改为 `Iterator<Service>`（同一候选序）。
+    #[cfg(jdk_ge_25)]
+    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object; java/util/List.iterator:()Ljava/util/Iterator;")]
+    pub fn getServices_list(ids: Object) -> Result<crate::java::util::Iterator<Object>> {
+        Self::services_for(ids)?.iterator()
+    }
+
+    fn services_for(ids: Object) -> Result<List<Object>> {
         // 调用侧按边界方法的接口形参擦除传 Object（载体策略），此处还原 List 视图
         let ids = <List<Object> as ::std::convert::From<Object>>::from(ids);
         let out = ArrayList::<Object>::new()?;
