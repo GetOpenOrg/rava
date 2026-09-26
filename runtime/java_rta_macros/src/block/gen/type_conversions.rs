@@ -65,7 +65,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                         __Shared<dyn #vtable_trait_ident>> = ::std::option::Option::None;
                     ObjectVTable::__erased_vtable(__Shared::clone(&obj.0), &mut __vt);
                     let mut __erased: ::std::option::Option<
-                        __Shared<dyn ::std::any::Any>> = ::std::option::Option::None;
+                        __AnyRef> = ::std::option::Option::None;
                     ObjectVTable::__erased_inner(__Shared::clone(&obj.0), &mut __erased);
                     if let ::std::option::Option::Some(__any) = __erased {
                         if let ::std::option::Option::Some(__vt) = __vt {
@@ -86,7 +86,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                             return #struct_ident {
                                 vtable: __Shared::clone(&__rc)
                                     as __Shared<dyn #vtable_trait_ident>,
-                                any: __rc as __Shared<dyn ::std::any::Any>,
+                                any: __rc as __AnyRef,
                                 _jvm_null: false,
                                 #phantom_init
                             };

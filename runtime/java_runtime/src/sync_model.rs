@@ -56,6 +56,13 @@ pub type __RefSlot<T> = std::cell::RefCell<T>;
 
 #[cfg(feature = "mt")]
 pub type __Shared<T> = std::sync::Arc<T>;
+
+/// 对象存储的类型擦除句柄（wrapper 的 `any` 字段、擦除视图导出）：单线程 `Rc<dyn Any>`，
+/// 并行 `Arc<dyn Any + Send + Sync>`（`downcast` 同名可用）。
+#[cfg(not(feature = "mt"))]
+pub type __AnyRef = std::rc::Rc<dyn std::any::Any>;
+#[cfg(feature = "mt")]
+pub type __AnyRef = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 #[cfg(feature = "mt")]
 pub use self::mt::{__AtomicRepr, __PrimCell, __RefSlot};
 

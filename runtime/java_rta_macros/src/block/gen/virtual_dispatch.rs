@@ -239,7 +239,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 let __rc = __Shared::new(::std::clone::Clone::clone(self));
                 #struct_ident {
                     vtable: __rc.clone() as __Shared<dyn #vtable_trait_ident>,
-                    any: __rc as __Shared<dyn ::std::any::Any>,
+                    any: __rc as __AnyRef,
                     _jvm_null: false,
                     #phantom_init
                 }
@@ -491,7 +491,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     let __rc = __Shared::new(::std::clone::Clone::clone(self));
                     #anc_from_parts(
                         __rc.clone() as __Shared<dyn #anc_vtable_ident>,
-                        __rc as __Shared<dyn ::std::any::Any>,
+                        __rc as __AnyRef,
                         false,
                     )
                 }
@@ -527,7 +527,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 let __rc = __Shared::new(::std::clone::Clone::clone(self));
                 #struct_ident {
                     vtable: __rc.clone() as __Shared<dyn #vtable_trait_ident>,
-                    any: __rc as __Shared<dyn ::std::any::Any>,
+                    any: __rc as __AnyRef,
                     _jvm_null: false,
                     #phantom_init
                 }

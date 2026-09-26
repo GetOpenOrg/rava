@@ -56,7 +56,7 @@ impl Object {
             return Clone::clone(same);
         }
         // 运行时类是 T 的子类（引用以祖先 / 子类的静态类型流转）：按运行时类重建 T 视图
-        let unused: crate::sync_model::__Shared<dyn std::any::Any> = crate::sync_model::__Shared::new(());
+        let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
         let mut slot: Option<T> = None;
         if self.0.__view_into(unused, &mut slot) {
             if let Some(view) = slot {
@@ -76,7 +76,7 @@ impl Object {
         if let Some(same) = self.0.as_any().downcast_ref::<T>() {
             return Some(Clone::clone(same));
         }
-        let unused: crate::sync_model::__Shared<dyn std::any::Any> = crate::sync_model::__Shared::new(());
+        let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
         let mut slot: Option<T> = None;
         self.0.__view_into(unused, &mut slot);
         slot
@@ -93,7 +93,7 @@ impl Object {
         if let Some(same) = self.0.as_any().downcast_ref::<T>() {
             return Clone::clone(same);
         }
-        let unused: crate::sync_model::__Shared<dyn std::any::Any> = crate::sync_model::__Shared::new(());
+        let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
         match self.0.__view_as(unused, binary_name).and_then(|boxed| boxed.downcast::<T>().ok()) {
             Some(view) => *view,
             None => panic!("ClassCastException: {} cannot be cast to {}", self.0.__class_name(), binary_name),
@@ -234,7 +234,7 @@ impl Object {
     #[jvm_ext]
     pub fn array_load_object(&self, idx: i32) -> Result<Object> {
         self.array_npe_check()?;
-        let unused: crate::sync_model::__Shared<dyn std::any::Any> = crate::sync_model::__Shared::new(());
+        let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
         let mut slot: Option<JArray<Object>> = None;
         self.0.__view_into(unused, &mut slot);
         if let Some(view) = slot {
@@ -257,7 +257,7 @@ impl Object {
     #[jvm_ext]
     pub fn array_store_object(&self, idx: i32, val: Object) -> Result<()> {
         self.array_npe_check()?;
-        let unused: crate::sync_model::__Shared<dyn std::any::Any> = crate::sync_model::__Shared::new(());
+        let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
         let mut slot: Option<JArray<Object>> = None;
         self.0.__view_into(unused, &mut slot);
         if let Some(view) = slot {

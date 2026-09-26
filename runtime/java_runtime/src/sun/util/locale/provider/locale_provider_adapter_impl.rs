@@ -80,7 +80,7 @@ impl NumberFormatProvider__VTable for NativeNumberFormatProvider {
         let rc = Rc::new(NativeNumberFormatProvider);
         NumberFormatProvider::__from_parts(
             Rc::clone(&rc) as Rc<dyn NumberFormatProvider__VTable>,
-            rc as Rc<dyn std::any::Any>,
+            rc as crate::sync_model::__AnyRef,
             false,
         )
     }
@@ -93,7 +93,7 @@ impl LocaleServiceProvider__VTable for NativeNumberFormatProvider {
         let rc = Rc::new(NativeNumberFormatProvider);
         crate::java::util::spi::LocaleServiceProvider::__from_parts(
             Rc::clone(&rc) as Rc<dyn LocaleServiceProvider__VTable>,
-            rc as Rc<dyn std::any::Any>,
+            rc as crate::sync_model::__AnyRef,
             false,
         )
     }
@@ -121,7 +121,7 @@ impl DecimalFormatSymbolsProvider__VTable for NativeDecimalFormatSymbolsProvider
         let rc = Rc::new(NativeDecimalFormatSymbolsProvider);
         DecimalFormatSymbolsProvider::__from_parts(
             Rc::clone(&rc) as Rc<dyn DecimalFormatSymbolsProvider__VTable>,
-            rc as Rc<dyn std::any::Any>,
+            rc as crate::sync_model::__AnyRef,
             false,
         )
     }
@@ -132,7 +132,7 @@ impl LocaleServiceProvider__VTable for NativeDecimalFormatSymbolsProvider {
         let rc = Rc::new(NativeDecimalFormatSymbolsProvider);
         crate::java::util::spi::LocaleServiceProvider::__from_parts(
             Rc::clone(&rc) as Rc<dyn LocaleServiceProvider__VTable>,
-            rc as Rc<dyn std::any::Any>,
+            rc as crate::sync_model::__AnyRef,
             false,
         )
     }
@@ -158,7 +158,7 @@ impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
         let rc = Rc::new(NativeDecimalFormatSymbolsProvider);
         Ok(DecimalFormatSymbolsProvider::__from_parts(
             Rc::clone(&rc) as Rc<dyn DecimalFormatSymbolsProvider__VTable>,
-            rc as Rc<dyn std::any::Any>,
+            rc as crate::sync_model::__AnyRef,
             false,
         ))
     }
@@ -191,7 +191,7 @@ fn _adapter_view() -> LocaleProviderAdapter {
             let rc = Rc::new(NativeLocaleAdapter);
             LocaleProviderAdapter::__from_parts(
                 Rc::clone(&rc) as Rc<dyn LocaleProviderAdapter__VTable>,
-                rc as Rc<dyn std::any::Any>,
+                rc as crate::sync_model::__AnyRef,
                 false,
             )
         };
@@ -209,7 +209,7 @@ fn _provider_view() -> Result<NumberFormatProvider> {
             let rc = Rc::new(NativeNumberFormatProvider);
             *slot.borrow_mut() = Some(NumberFormatProvider::__from_parts(
                 Rc::clone(&rc) as Rc<dyn NumberFormatProvider__VTable>,
-                rc as Rc<dyn std::any::Any>,
+                rc as crate::sync_model::__AnyRef,
                 false,
             ));
         }

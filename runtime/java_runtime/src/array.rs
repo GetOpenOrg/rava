@@ -50,7 +50,7 @@ fn aastore_storable<T: Clone + From<Object> + 'static>(v: &Object, elem_name: &s
         return true;
     }
     let mut slot: Option<T> = None;
-    let unused: Rc<dyn std::any::Any> = Rc::new(());
+    let unused: crate::sync_model::__AnyRef = Rc::new(());
     if v.0.__view_into(unused, &mut slot) && slot.is_some() {
         return true;
     }
@@ -425,7 +425,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
     /// 引用类型数组 → `Object[]`：协变视图。其余目标元素类型由
     /// `From<Object> for JArray<T>`（知道目标元素类型）经 `__array_elem_assignable`
     /// 判定。null 通过任意引用类型的 checkcast（JVMS §6.5 checkcast）。
-    fn __view_into(&self, any: Rc<dyn std::any::Any>, slot: &mut dyn std::any::Any) -> bool {
+    fn __view_into(&self, any: crate::sync_model::__AnyRef, slot: &mut dyn std::any::Any) -> bool {
         if let Some(same) = slot.downcast_mut::<Option<Self>>() {
             *same = Some(Clone::clone(self));
             return true;
@@ -463,7 +463,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
             Repr::Covariant(view) => view.origin.0.__array_elem_assignable(slot),
             Repr::Own(_) => {
                 let probe: Object = Into::<Object>::into(T::default());
-                let unused: Rc<dyn std::any::Any> = Rc::new(());
+                let unused: crate::sync_model::__AnyRef = Rc::new(());
                 probe.0.__view_into(unused, slot)
             }
             Repr::Null => true,
@@ -484,7 +484,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::la
 /// `is_instance_of`（覆盖未经 javac 装箱、以原生值盒（`Rc<i32>` 带 Integer
 /// vtable）流入 Object 槽位的元素）。
 pub(crate) fn erased_array_compatible<T: Clone + Default + Into<Object> + 'static>(obj: &Object) -> bool {
-    let unused: Rc<dyn std::any::Any> = Rc::new(());
+    let unused: crate::sync_model::__AnyRef = Rc::new(());
     let mut erased: Option<JArray<Object>> = None;
     obj.0.__view_into(unused, &mut erased);
     if let Some(view) = erased {

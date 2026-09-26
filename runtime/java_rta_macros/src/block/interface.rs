@@ -257,7 +257,7 @@ pub(crate) fn expand_interface_impl(
                 let __rc = __Shared::new(::std::clone::Clone::clone(self));
                 let __wrapper: #struct_ident #erased_ty_args = #struct_ident {
                     vtable: __rc.clone() as __Shared<#erased_vt>,
-                    any: __rc as __Shared<dyn ::std::any::Any>,
+                    any: __rc as __AnyRef,
                     _jvm_null: false,
                     #phantom_init
                 };
@@ -361,7 +361,7 @@ pub(crate) fn erased_wrapper_call(
         let __rc = __Shared::new(::std::clone::Clone::clone(self));
         let __w: #struct_ident #erased_ty_args = #struct_ident {
             vtable: __rc.clone() as __Shared<dyn #vtable_trait_ident>,
-            any: __rc as __Shared<dyn ::std::any::Any>,
+            any: __rc as __AnyRef,
             _jvm_null: false,
             #phantom_init
         };

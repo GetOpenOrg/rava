@@ -128,10 +128,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
 
     /// 按运行时类重建 `type_id`（本类或任一祖先类的 binary name）类型的引用视图。
     /// 对象常以静态类型（如 `Throwable`）流转，catch 需要按运行时类还原为 catch 声明类型。
-    /// `any` 是对象存储的 `Rc<dyn Any>`；wrapper 侧 override 传入自身存储并委托 vtable。
+    /// `any` 是对象存储的 `crate::sync_model::__AnyRef`；wrapper 侧 override 传入自身存储并委托 vtable。
     fn __view_as(
         &self,
-        _any: Rc<dyn std::any::Any>,
+        _any: crate::sync_model::__AnyRef,
         _type_id: &str,
     ) -> Option<Box<dyn std::any::Any>> { None }
 
@@ -146,7 +146,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     #[doc(hidden)]
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { None }
 
-    /// 擦除存储导出（A-1 存储层擦除）：`slot` 是 `Option<Rc<dyn Any>>`，类 wrapper 填入
+    /// 擦除存储导出（A-1 存储层擦除）：`slot` 是 `Option<crate::sync_model::__AnyRef>`，类 wrapper 填入
     /// 自身持有的非泛型 `Rc<X__inner>`（其 TypeId 与类型实参无关）。`From<Object> for X<A>`
     /// 的擦除路径据此对任意类型实参重建视图（Java 泛型运行时本就擦除）。
     /// 其余对象（基本类型、闭包等）不填 `slot`。
@@ -175,7 +175,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 按运行时类重建该视图写入 `slot` 并返回 true（保留运行时类的覆盖实现）；否则返回 false。
     fn __view_into(
         &self,
-        _any: Rc<dyn std::any::Any>,
+        _any: crate::sync_model::__AnyRef,
         _slot: &mut dyn std::any::Any,
     ) -> bool { false }
 

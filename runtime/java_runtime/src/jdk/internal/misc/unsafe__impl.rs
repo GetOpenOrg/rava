@@ -36,7 +36,7 @@ fn _array_index_scale_by_name(name: &str) -> Option<i64> {
 /// 元素数组还原为 `JArray<Object>`（get/set 委托源数组存储），供 Unsafe 的
 /// 引用访问器族按下标读写。基本元素数组 / 非数组对象返回 None。
 fn _erased_ref_array(o: &Object) -> Option<JArray<Object>> {
-    let unused: Rc<dyn std::any::Any> = Rc::new(());
+    let unused: crate::sync_model::__AnyRef = Rc::new(());
     let mut slot: Option<JArray<Object>> = None;
     if o.0.__view_into(unused, &mut slot) {
         slot

@@ -42,7 +42,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
         #[allow(non_camel_case_types)]
         pub struct #struct_ident #impl_g #where_c {
             pub(crate) vtable: __Shared<dyn #vtable_trait_ident>,
-            pub(crate) any: __Shared<dyn ::std::any::Any>,
+            pub(crate) any: __AnyRef,
             /// JVM null 标志：Default::default() = true（null），构造后调用 _init_not_null() = false
             pub _jvm_null: bool,
             #phantom_field
@@ -56,7 +56,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
             #[doc(hidden)]
             pub fn __from_parts(
                 vtable: __Shared<dyn #vtable_trait_ident>,
-                any: __Shared<dyn ::std::any::Any>,
+                any: __AnyRef,
                 is_null: bool,
             ) -> Self {
                 #struct_ident { vtable, any, _jvm_null: is_null, #phantom_init }
@@ -74,7 +74,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 ObjectVTable::__erased_vtable(__Shared::clone(&obj.0), &mut __vt);
                 let __vt = __vt?;
                 let mut __store: ::std::option::Option<
-                    __Shared<dyn ::std::any::Any>> = ::std::option::Option::None;
+                    __AnyRef> = ::std::option::Option::None;
                 ObjectVTable::__erased_inner(__Shared::clone(&obj.0), &mut __store);
                 Some(#struct_ident {
                     vtable: __vt,
@@ -92,7 +92,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 let rc = __Shared::new(<#inner_ident as ::std::default::Default>::default());
                 #struct_ident {
                     vtable: __Shared::clone(&rc) as __Shared<dyn #vtable_trait_ident>,
-                    any: rc as __Shared<dyn ::std::any::Any>,
+                    any: rc as __AnyRef,
                     _jvm_null: true,
                     #phantom_init
                 }
@@ -415,7 +415,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 /// `From<Object> for X<A>` 的擦除路径据此对任意类型实参重建视图。
                 fn __erased_inner(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
                     if let ::std::option::Option::Some(s) =
-                        slot.downcast_mut::<::std::option::Option<__Shared<dyn ::std::any::Any>>>()
+                        slot.downcast_mut::<::std::option::Option<__AnyRef>>()
                     {
                         *s = ::std::option::Option::Some(__Shared::clone(&self.any));
                     }
@@ -454,7 +454,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 }
                 fn __view_as(
                     &self,
-                    _any: __Shared<dyn ::std::any::Any>,
+                    _any: __AnyRef,
                     type_id: &str,
                 ) -> ::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>> {
                     #(#view_as_arms)*
@@ -462,7 +462,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 }
                 fn __view_into(
                     &self,
-                    _any: __Shared<dyn ::std::any::Any>,
+                    _any: __AnyRef,
                     slot: &mut dyn ::std::any::Any,
                 ) -> bool {
                     #(#view_into_arms)*
@@ -480,7 +480,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     // 为具体类型的类（E 无从钉住）会触发 E0283；以 Self 钉住
                     let __copy: Self = #struct_ident {
                         vtable: __Shared::clone(&__rc) as __Shared<dyn #vtable_trait_ident>,
-                        any: __rc as __Shared<dyn ::std::any::Any>,
+                        any: __rc as __AnyRef,
                         _jvm_null: false,
                         #phantom_init
                     };
