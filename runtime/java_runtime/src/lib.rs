@@ -170,6 +170,16 @@ fn java_float_repr(
 /// scratch 的 jdk_feature.txt，build.rs 转为编译期环境变量。手写边界类中
 /// **随 JDK 版本变化的数据**（非签名——签名差异由 core_ 适配与模型缺席补发承担）
 /// 按此选择；未提供时按项目默认语料 21。
+/// `main(String[] args)` 的实参：进程命令行参数（不含程序名），与 `java Main a b` 的
+/// `args` 同义。生成的 `pub fn main()` 省略形参（Rust 入口签名固定），方法体引用
+/// `args` 时由 codegen 在入口以本函数取值。
+pub fn main_args() -> crate::array::JArray<crate::java::lang::String> {
+    crate::array::JArray::from(
+        std::env::args().skip(1)
+            .map(|a| crate::java::lang::String::from(a.as_str()))
+            .collect::<Vec<_>>())
+}
+
 pub fn jdk_feature() -> u32 {
     option_env!("JAVA_RTA_JDK_FEATURE")
         .and_then(|v| v.parse().ok())

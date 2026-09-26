@@ -10,6 +10,7 @@
 - return e; → return Ok(e);
 """
 
+import re
 from ..types import ParsedMethod, ClassInfo
 from .. import equiv_audit
 from ..sig_parse import parse_field_type, parse_method_param_types
@@ -520,4 +521,11 @@ def gen_method_body(
         init_on_fn = f"#[doc(hidden)]\n{_init_on_sig} {{\n{body}\n}}"
         return new_fn + "\n\n" + init_on_fn
 
+    if method.name == 'main' and method.descriptor == MAIN_DESC:
+        # main 的 Rust 签名不带形参；方法体引用 args（局部变量表 slot 0 的名字）时在入口
+        # 取进程命令行参数（JVM 语义：java Main a b → args = {"a", "b"}）
+        _args_name = next((lv[3] for lv in (method.local_vars or []) if lv[0] == 0), 'args')
+        if re.search(rf'\b{re.escape(_args_name)}\b', body):
+            body = (f"    let mut {_args_name}: JArray<String> = java_runtime::main_args();\n"
+                    + body)
     return f"{prefix}{sig} {{\n{body}\n}}"
