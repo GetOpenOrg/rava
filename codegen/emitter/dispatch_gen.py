@@ -33,6 +33,7 @@ panic stub——如实定性）。生成 main 启动时登记（register_method_
 """
 
 import re
+from ..type_args import is_array_carrier
 
 # 已发射分派闭包的类（{binary: 登记行}）。与 SAM_LEDGER 同生命周期（每轮 reset）。
 LEDGER: dict[str, str] = {}
@@ -160,7 +161,7 @@ def _emit_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) ->
                 arg_exprs.append(
                     f'({disp}::{fn}(&args.get({idx})?)'
                     f'.ok_or_else({disp}::bad_arg)?{cast})')
-            elif ty.startswith('JArray') or '<' in ty:
+            elif is_array_carrier(ty) or '<' in ty:
                 # 数组 / 泛型载体（接口 `List<E>` 等）：Object → 载体的 From 转换
                 # （数组元素类型、接口视图由运行时对象承载，与字节码 checkcast 同语义）
                 arg_exprs.append(f'<{ty} as ::std::convert::From<Object>>::from(args.get({idx})?)')
@@ -183,7 +184,7 @@ def _emit_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) ->
         elif inner and inner[0].isupper() and '&' not in inner:
             # 类 / 接口载体（含泛型实参形态 `List<Object>`）：载体与 Object 双向互转
             ret_box = 'Ok(Object::from(__v))'
-        elif inner and inner.startswith('JArray'):
+        elif inner and is_array_carrier(inner):
             ret_box = 'Ok(Object::from(__v))'
         else:
             ret_box = None

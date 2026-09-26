@@ -33,6 +33,7 @@ from ..type_map import effective_class_type_params, short_cls
 from .inherited_gen import (ClassEmission, EmittedMethod, IMPORTS_SLOT, MEMBERS_SLOT,
                             _imports_for, _USE_RE, class_use_path, type_arg_uses,
                             resolve_bridge_member)
+from ..type_args import rust_type_head
 
 # 类文本中的插入位（整行，位于 java_class! 块内、impl 块之后）
 IMPLS_SLOT = '//@@java_rta:interface-impls@@'
@@ -104,7 +105,7 @@ def _result_reinstantiated(erased: str, member: 'EmittedMethod | None') -> bool:
         return False
     want, got = em.group(3).strip(), mm.group(3).strip()
     return ('<' in want and '<' in got and want != got
-            and want.split('<', 1)[0] == got.split('<', 1)[0])
+            and rust_type_head(want) == rust_type_head(got))
 
 
 def _all_interfaces(ci, registry: dict) -> list[str]:

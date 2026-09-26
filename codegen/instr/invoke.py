@@ -53,6 +53,7 @@ from .invoke_sig import (
     _substitute_tvars, _coerce_arg, receiver_type_arg_map,
 )
 from .invoke_virtual import _gen_invokevirtual
+from ..type_args import rust_type_arg_text, rust_type_head
 
 
 
@@ -174,9 +175,9 @@ def _bind_type_args(sig_types: list, arg_tys: list[str], tparams) -> dict[str, s
             if bound.setdefault(sig_t, arg_t) != arg_t:
                 bound[sig_t] = 'Object'
             return
-        if '<' in sig_t and '<' in arg_t and sig_t.split('<', 1)[0] == arg_t.split('<', 1)[0]:
-            s_args = _split_type_args(sig_t[sig_t.index('<') + 1:sig_t.rfind('>')])
-            a_args = _split_type_args(arg_t[arg_t.index('<') + 1:arg_t.rfind('>')])
+        if '<' in sig_t and '<' in arg_t and rust_type_head(sig_t) == rust_type_head(arg_t):
+            s_args = _split_type_args(rust_type_arg_text(sig_t))
+            a_args = _split_type_args(rust_type_arg_text(arg_t))
             if len(s_args) == len(a_args):
                 for _s, _a in zip(s_args, a_args):
                     _unify(_s, _a, True)
@@ -260,7 +261,7 @@ def _ctor_outer_ref_base(cls_short: str | None, params: list[str], registry: dic
     if not outer_bin or params[0] != f'L{outer_bin};':
         return ''
     outer = outer_instance_rust_type(outer_bin, effective_class_type_params(ci, registry), registry)
-    return outer.split('<', 1)[0] if outer else ''
+    return rust_type_head(outer) if outer else ''
 
 
 def _super_ctor_view_args(class_name: str, comment: str, registry: dict | None) -> list[str]:
@@ -482,7 +483,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         _sig_t_c = sig_params_ctor[_pi_c] if sig_params_ctor and _pi_c < len(sig_params_ctor) else None
         expected = _sig_t_c if _sig_t_c is not None else jvm_to_rust(param_jvm, registry)
         ty = render_type(e_ty_node)
-        if (_pi_c == 0 and _outer_ref_base and ty.split('<', 1)[0] == _outer_ref_base
+        if (_pi_c == 0 and _outer_ref_base and rust_type_head(ty) == _outer_ref_base
                 and any(_tp not in (_ctor_targ_map or {})
                         for _tp in re.findall(r'[A-Za-z_]\w*', expected) if _tp in _ctor_eff_all)):
             # 外部实例形参里还有未确定的内部类类型变量：其实例化由实参决定（Rust 从实参推断）。

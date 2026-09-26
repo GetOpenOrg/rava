@@ -367,3 +367,33 @@ def interface_signature_views(ci, registry) -> 'dict[str, dict[str, str]]':
             # 祖先以原始类型出现：其类型变量不可代入（None 标记沿链传播）
             queue.append((sup_ci, sup_map if (sup_map or not params) else None))
     return views
+
+
+# ── 类型串头部 / 实参查询（TypeIR 扩大口径 N4：调用点的文本解剖统一收口于此）──────
+#
+# 语义与原调用点的切分逐点相同（生成树逐字节不变）：头部 = 首个 `<` 之前的原文（含
+# 路径前缀与空白，不做标识符提取——与 stack.erased_base 的区别即在此）。
+
+def rust_type_head(rust_ty: str) -> str:
+    """`a::B<X, Y>` → `a::B`；无实参原样返回。JVM 泛型名 `java/util/List<*>` 同理。"""
+    return rust_ty.split('<', 1)[0]
+
+
+def rust_type_partition(rust_ty: str) -> tuple[str, str, str]:
+    """`B<X, Y>` → (`B`, `<`, `X, Y>`)：首个 `<` 处切分，尾部保留原始收尾 `>`。"""
+    return rust_ty.partition('<')
+
+
+def rust_type_arg_text(rust_ty: str) -> str:
+    """`B<X, C<Y>>` → `X, C<Y>`：首个 `<` 与末个 `>` 之间的原文（调用方保证含 `<`）。"""
+    return rust_ty[rust_ty.index('<') + 1:rust_ty.rfind('>')]
+
+
+def is_array_carrier(rust_ty: str) -> bool:
+    """以 `JArray` 起头的载体形态（含无实参的裸 `JArray` 前缀探测）。"""
+    return rust_ty.startswith('JArray')
+
+
+def is_vec_type(rust_ty: str) -> bool:
+    """Rust 侧 `Vec<..>` 容器形态（非 JVM 数组概念）。"""
+    return rust_ty.startswith('Vec<')

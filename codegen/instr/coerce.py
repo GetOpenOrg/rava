@@ -135,9 +135,10 @@ def _same_generic_family(actual: str, expected: str) -> bool:
     基名相同且类型实参不同 → 经 Object 边界重建目标实例化视图（CastExpr 的
     擦除路径）。实参含推断占位 `_`（new X<>() 菱形）时由 Rust 类型推断对齐，
     不算跨实例化。"""
+    from ..type_args import rust_type_head
     if '<' not in actual or '<' not in expected or actual == expected:
         return False
-    if actual.split('<', 1)[0] != expected.split('<', 1)[0]:
+    if rust_type_head(actual) != rust_type_head(expected):
         return False
     import re as _re_infer
     return not _re_infer.search(r'(?<![\w])_(?![\w])', actual)

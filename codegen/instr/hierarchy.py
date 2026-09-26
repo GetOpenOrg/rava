@@ -7,6 +7,7 @@
 
 from ..type_map import short_cls as _short_cls_g
 from ..constants import OBJECT_CLASS as _OBJECT_CLASS
+from ..type_args import rust_type_partition
 
 
 def _rust_type_to_binary(rust_short: str, registry: dict | None) -> str:
@@ -144,7 +145,7 @@ def _common_ref_type_widening(a_rust: str, b_rust: str, registry: dict | None) -
     返回的类祖先保证双方都是其子类型，宏按 all_superclasses 生成 From<Child> for Ancestor，
     存入侧可用 `.into()` 上转（保持对象标识与运行时类）。"""
     def _split(t: str) -> tuple[str, str]:
-        base, _, args = t.partition('<')
+        base, _, args = rust_type_partition(t)
         args = args.strip()
         # partition 在首个 '<' 切分：args 带原始收尾 '>'（`Node<K, V>` → 'K, V>'；
         # 嵌套实参 `Entry<String, JArray<Object>>` → 'String, JArray<Object>>'）。

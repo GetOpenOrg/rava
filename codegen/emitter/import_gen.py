@@ -22,6 +22,7 @@ from ..constants import (OBJECT_CLASS as _OBJECT_CLASS,
                          CLASS_CLASS as _CLASS_CLASS,
                          RUST_KEYWORDS as _RUST_KEYWORDS)
 from .attrs import to_snake
+from ..type_args import rust_type_head
 
 
 # 模块级 regex，避免在每次调用时重复编译
@@ -34,8 +35,7 @@ _CLASS_OPERAND_OPCODES = frozenset({'new', 'anewarray', 'checkcast', 'instanceof
 def _strip_generic(cls: str) -> str:
     """去掉 JVM 类名中的泛型参数（<...>），返回裸 binary name。
     例：java/util/Collection<*> → java/util/Collection"""
-    idx = cls.find('<')
-    return cls[:idx] if idx >= 0 else cls
+    return rust_type_head(cls)
 
 
 def _add_desc_refs(text: str, _referenced: set[str]) -> None:

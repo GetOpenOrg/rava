@@ -11,6 +11,7 @@ from ..coerce import _to_i32, _coerce_to_object
 from ..hierarchy import _is_subtype
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 from ... import equiv_audit
+from ...type_args import is_vec_type
 
 # 数组创建指令（neg-array 口径：S-8 修复后创建点全部经 JArray::try_new/try_new_with
 # 的负长度检查（NegativeArraySizeException，Err 形态可被 java_try 捕获），本计数转为
@@ -40,7 +41,7 @@ def _is_object_receiver(arr_ty) -> bool:
     数组引用等）。是 → 走 Object 的数组访问 API（array_load_*/array_store_*/array_length，
     元素类型由指令操作码决定）；JArray/Vec 接收者保持类型化 get/set/len 快路径。"""
     t = render_type(arr_ty)
-    return not (is_jvm_array(t) or t.startswith('Vec<'))
+    return not (is_jvm_array(t) or is_vec_type(t))
 
 
 def sim_arrays(ins, sim, class_name, registry) -> bool:
@@ -143,7 +144,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         _m_aa = _re.match(r'JArray<(.+)>$', arr_ty_str)
         if _m_aa:
             elem_ty = _m_aa.group(1)
-        elif arr_ty_str.startswith('Vec<') and arr_ty_str.endswith('>'):
+        elif is_vec_type(arr_ty_str) and arr_ty_str.endswith('>'):
             elem_ty = arr_ty_str[4:-1]
         else:
             elem_ty = 'Object'
@@ -248,7 +249,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         _m = _re.match(r'JArray<(.+)>$', arr_ty_str)
         if _m:
             elem_ty_str = _m.group(1)
-        elif arr_ty_str.startswith('Vec<'):
+        elif is_vec_type(arr_ty_str):
             elem_ty_str = arr_ty_str[4:-1]
         else:
             elem_ty_str = 'Object'

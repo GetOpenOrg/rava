@@ -16,6 +16,7 @@ from ..rs_ir import RawExpr, RsNamed
 from ..render import render_expr, render_type, upcast_expr
 from ..constants import JAVA_RUNTIME_SHORT_NAMES as _JAVA_RUNTIME_SHORT_NAMES
 from .hierarchy import _rust_type_to_binary
+from ..type_args import rust_type_head
 
 def type_var_receiver_bound_view(sim, obj_expr, obj_ty):
     """有类上界的类型变量接收者（o: E，E extends B<E>）→ 上界类型视图 (expr, type)。
@@ -263,7 +264,7 @@ def _iface_view_targ_map(recv_ty: str, iface_ci, registry: dict | None) -> 'dict
         return None
     from ..type_args import (implemented_interface_views, split_rust_type_args,
                              substitute_type_params)
-    recv_base = recv_ty.split('<', 1)[0].strip()
+    recv_base = rust_type_head(recv_ty).strip()
     recv_ci = registry.get(_rust_type_to_binary(recv_base, registry) or '')
     if recv_ci is None:
         return None
@@ -289,7 +290,7 @@ def receiver_type_arg_map(recv_ty: str, owner_short: str | None, registry: dict 
     if not registry or not owner_short or not recv_ty:
         return None
     from ..type_args import ancestor_type_args, split_rust_type_args
-    recv_base = recv_ty.split('<', 1)[0].strip()
+    recv_base = rust_type_head(recv_ty).strip()
     recv_ci = registry.get(_rust_type_to_binary(recv_base, registry) or '')
     owner_ci = registry.get(_rust_type_to_binary(owner_short, registry) or '')
     if recv_ci is None or owner_ci is None:
@@ -365,7 +366,7 @@ def _is_generated_concrete_class(actual: str, sim: 'StackSim', registry: dict | 
     """actual 是否为 registry 中由字节码生成的具体（非接口）类的 Rust 类型。"""
     if not registry or not actual:
         return False
-    _head = actual.split('<', 1)[0].rsplit('::', 1)[-1].strip()
+    _head = rust_type_head(actual).rsplit('::', 1)[-1].strip()
     if not _head or _head in (sim.class_type_params or ()):
         return False
     return _head in _generated_concrete_shorts(registry)
