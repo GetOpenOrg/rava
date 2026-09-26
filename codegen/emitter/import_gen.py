@@ -16,6 +16,8 @@
 
 import re as _re
 
+from ..constants import BOXED_CLASS_BY_DESC
+
 from ..type_map import short_cls as _short_cls_g
 from ..type_args import class_type_param_bounds
 from ..constants import (OBJECT_CLASS as _OBJECT_CLASS,
@@ -191,7 +193,14 @@ def collect_referenced(ci, registry, generated_classes) -> set[str]:
                         _referenced.add(_impl_ref[:_impl_dot])
                     _impl_colon = _impl_ref.find(':')
                     if _impl_colon > 0:
-                        _add_desc_refs(_impl_ref[_impl_colon + 1:], _referenced)
+                        _impl_desc = _impl_ref[_impl_colon + 1:]
+                        _add_desc_refs(_impl_desc, _referenced)
+                        # 装箱适配（实现方法基本类型形参 / 返回 ↔ SAM 擦除引用）：闭包体经
+                        # 包装类工厂装箱（`Integer::valueOf_i`）/ 拆箱方法，包装类须在作用域内
+                        # （不在闭包内的包装类由 generated_classes 过滤，不产生 use）
+                        for _tok in _re.findall(r'\[*(?:L[^;]+;|[BCDFIJSZV])', _impl_desc):
+                            if _tok in BOXED_CLASS_BY_DESC:
+                                _referenced.add(BOXED_CLASS_BY_DESC[_tok])
             elif _instr.opcode in _CLASS_OPERAND_OPCODES:
                 # new / anewarray / checkcast / instanceof / multianewarray：
                 # comment 为裸 binary name 或数组描述符（[Lpkg/Cls;）
