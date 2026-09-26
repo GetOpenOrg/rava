@@ -83,7 +83,13 @@ def _is_caller_sensitive(owner_bin: str, mname: str, desc: str, registry: dict |
 
 def caller_sensitive_wrap(call: str, owner_bin: str, mname: str, desc: str,
                           caller_bin: str, registry: dict | None) -> str:
-    """@CallerSensitive 调用：`__caller_sensitive("调用处类", || call)`，其余原样。"""
+    """@CallerSensitive 调用：`__caller_sensitive("调用处类", || call)`，其余原样。
+
+    例外：`Reflection.getCallerClass()` 自身不包装——它返回的是「调用它的 CS 方法」的调用方
+    （JVM 跳过 CS 方法帧），即外层调用点已压入的栈顶；若在 CS 方法体内再压入所在类，
+    `MethodHandles.lookup()` 等会把 lookup 类解析成 MethodHandles 自己（私有成员访问失败）。"""
+    if mname == 'getCallerClass' and owner_bin.endswith('/Reflection'):
+        return call
     if _is_caller_sensitive(owner_bin, mname, desc, registry):
         return f'__caller_sensitive("{caller_bin}", || {call})'
     return call
