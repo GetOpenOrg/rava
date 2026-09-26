@@ -54,10 +54,10 @@
 |---|---|---|---|---|
 | FS-T1 | 第一档 OS 线程 + GIL：同一时刻只有一个线程执行 Java，线程交错只落在安全点 | 第二档：Arc + 原子单元，去掉 GIL，真并行 | 没有并行加速；交错是 JMM 合法执行的一个子集 | #42 第二档（**进行中**，4fa1d48 起） |
 | FS-T2 | 对象模型原语是单线程后端的类型别名；`__GilStatic` 靠 `unsafe impl Sync` | feature `mt`：Arc / 原子 / 读写锁 / OnceLock | 仅架构 | #42（进行中） |
-| FS-T3 | `Runtime.availableProcessors()` 恒返回 1（runtime_impl.rs，注释仍写「协作调度」） | 返回真实核数，ForkJoinPool commonPool 按并行度运行 | 返回值是 1；CompletableFuture 走 ThreadPerTaskExecutor；并行流退化 | 新立（随 #42 第二档） |
+| ~~FS-T3~~ ✅ `18da936` | `Runtime.availableProcessors()` 恒返回 1（runtime_impl.rs，注释仍写「协作调度」） | 返回真实核数，ForkJoinPool commonPool 按并行度运行 | 返回值是 1；CompletableFuture 走 ThreadPerTaskExecutor；并行流退化 | 新立（随 #42 第二档） |
 | FS-T4 | 虚拟线程 = OS 线程，Continuation / 载体线程 / 容器登记都不建模 | Continuation 建模 | 无法创建海量虚拟线程（每条保留 256MiB 栈）；toString / 载体信息不同 | #42 / compat 虚拟线程行 |
 | FS-T5 | InternalLock 所有实例共用一把全局可重入锁，unlock 不核对实例 | 按实例加锁（翻译 JDK 的 ReentrantLock 包装） | 不同流之间伪互斥（性能问题；理论上可能死锁） | S-11 |
-| FS-T6 | Thread 的 `setPriority0`、`setNativeName`、`getThreads`、`dumpThreads`、`getStackTrace0`、`scopedValueCache` 等 native 缺失 | 实现 | `setPriority` / `getAllStackTraces` 等命中 panic 存根 | 新立（按需） |
+| ~~FS-T6~~ ✅ `8dba713` | Thread 的 `setPriority0`、`setNativeName`、`getThreads`、`dumpThreads`、`getStackTrace0`、`scopedValueCache` 等 native 缺失 | 实现 | `setPriority` / `getAllStackTraces` 等命中 panic 存根 | 新立（按需） |
 | FS-T7 | Unsafe / VarHandle 的 CAS 族以「GIL 下读-比-写不可分割」的普通单元承载 | 原子单元 / 引用槽写锁内的读-比-写 | 仅架构（GIL 下等价） | #42（**4fa1d48 已改为原子**，待验证） |
 
 ## 二、对象模型与内存
@@ -68,9 +68,9 @@
 | FS-M2 | 接口载体化按名单铺设（Spliterator 族暂缓）；`signature_erased_interfaces.txt` 让 CharSequence 仍擦成 Object | 名单置 None，删除两个文件 | 仅架构 | A-4 / T-2 |
 | FS-M3 | 抽象类、枚举、手写类没有 `__interface` | 全部由宏生成 | 接口查询抛 AbstractMethodError | A-6 |
 | FS-M4 | 原生值盒进 Object，`is_instance_of` 只认精确包装类；`JvmRef` 是 Arch-1 之前的过渡物 | 只保留翻译出的包装类对象，删除 JvmRef | 原生盒 `instanceof Number / Comparable` 为 false；不走 IntegerCache | S-3 / T-4（instanceof 缺口新立） |
-| FS-M5 | identity hash 取实例地址截断成 i32 | 31 位非负伪随机 hash（HotSpot 语义） | `hashCode()` 可能为负；低位恒为 0，分布差 | 新立 |
+| ~~FS-M5~~ ✅ `b443134` | identity hash 取实例地址截断成 i32 | 31 位非负伪随机 hash（HotSpot 语义） | `hashCode()` 可能为负；低位恒为 0，分布差 | 新立 |
 | FS-M6 | `Object.equals` 保留 String 内容比较的捷径 | 纯引用比较 | 仅架构 | S-6 / P-2 |
-| FS-M7 | 对 null 接收者 getfield / putfield 不抛 NPE（宏访问器没有 null 检查） | 抛可捕获的 NPE | 读 null 对象字段得到默认值 | S-9 |
+| ~~FS-M7~~ ✅ `0442777` | 对 null 接收者 getfield / putfield 不抛 NPE（宏访问器没有 null 检查） | 抛可捕获的 NPE | 读 null 对象字段得到默认值 | S-9 |
 | FS-M8 | `_is_jnull` 对非 Object 载体恒为 false；codegen 用类型名启发式；手写层多处踩坑 | 统一经 `is_jvm_null` 钩子 | 类型变量实例化后 null 判定为假，走错分支 | 新立 |
 
 ## 三、反射 / MethodHandle / Lambda
@@ -82,7 +82,7 @@
 | FS-R3 | `getFields` 中接口常量按超类型闭包顺序枚举 | 按直接超接口递归 | 返回顺序不同 | S-66 |
 | FS-R4 | 反射访问检查拿不到调用方，近似为「用户类成员一律可达」（925bd5b 已让 getCallerClass 能识别用户帧，可以接上了） | 按调用方判定（同类 / 同包 / nestmate） | 跨类访问 private 不抛 IllegalAccessException | 新立 |
 | FS-R5 | `Field.get/set` 对 S/B/C/F/D 实例字段与无 ConstantValue 的静态字段是存根；非表构造的 Method / Constructor 是存根 | 全形态实现 | panic | 部分（remaining-issues 反射族） |
-| FS-R6 | `reflect.Array` 只有 `newArray`，引用数组恒为 `Object[]`，基本类型分支与 get / set / getLength / multiNewArray 缺失 | 按运行时组件类型建数组 | `Array.newInstance(String.class,n).getClass()` 为 `Object[]` | 新立 |
+| ~~FS-R6~~ ✅ `5b980a3` | `reflect.Array` 只有 `newArray`，引用数组恒为 `Object[]`，基本类型分支与 get / set / getLength / multiNewArray 缺失 | 按运行时组件类型建数组 | `Array.newInstance(String.class,n).getClass()` 为 `Object[]` | 新立 |
 | FS-R7 | MethodHandle 靠 LambdaForm 解释器执行；字段句柄与 Unsafe 成员有缺口时 panic | 组合子全集 + record 序列化 | 预生成物种外不可达 | N11 / #40 |
 | FS-R8 | Lambda 对象的 `__class_name` 报接口 binary name | `Outer$$Lambda/...` 这类隐藏类身份 | `getClass().getName()` / toString 不同 | 新立 |
 | FS-R9 | 注解实例是最小合成物；Proxy 不支持 | — | Proxy 不可用 | compat §1（声明为不可等价） |
@@ -131,7 +131,7 @@
 | FS-C2 | ClassLoader 是恒等对象，资源查询恒缺席；`getClassLoader` 恒返回 null | 分层加载器 + classpath 资源 | `getResource` / `getResourceAsStream` 恒为 null | 部分 |
 | FS-C3 | 全局只有一个无名模块（JDK 类也在其中）；模块访问检查恒真 | — | `String.class.getModule().getName()` 为 null（JVM 给 "java.base"） | 新立 |
 | FS-C4 | 服务目录恒为空 | 静态服务表（含用户 `META-INF/services`） | ServiceLoader 找不到任何 provider | 新立 |
-| FS-C5 | `forName(..., true)` 不立即初始化 | — | 初始化时机不同 | S-66 |
+| ~~FS-C5~~ ✅ `6d885a2` | `forName(..., true)` 不立即初始化 | — | 初始化时机不同 | S-66 |
 
 ## 八、异常与栈回溯
 
@@ -145,11 +145,11 @@
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| **FS-N1** | **`Math.random()` 恒返回 0.5**（math_impl.rs:26；Math 没有 native，这是覆盖字节码） | 删除手写，走翻译链 | 所有随机逻辑的结果恒定 | 新立 |
-| FS-N2 | `IEEEremainder` 用 `round`（应为 rint） | 删除手写 | `IEEEremainder(5,2)` 得 -1.0（JVM 为 1.0） | 新立 |
-| FS-N3 | `pow` 走 Rust 的 `powf` | 翻译 StrictMath / FdLibm | `pow(1,NaN)`、`pow(-1,±∞)` 得 1.0（Java 为 NaN） | 新立 |
-| FS-N4 | sin/cos/tan/exp/log/… 走 Rust libm | 走 FdLibm 字节码链（S-19 已按此处理 rint / expm1） | 末位可能差 1ulp | 新立 |
-| FS-N5 | 双下划线命名的重载（`round__f`、`nextUp__d` 等）与 mangle 规则不符，是死代码且本身有误 | 删除 | 仅架构 | 新立 |
+| ~~FS-N1~~ ✅ `54358ed` | **`Math.random()` 恒返回 0.5**（math_impl.rs:26；Math 没有 native，这是覆盖字节码） | 删除手写，走翻译链 | 所有随机逻辑的结果恒定 | 新立 |
+| ~~FS-N2~~ ✅ `54358ed` | `IEEEremainder` 用 `round`（应为 rint） | 删除手写 | `IEEEremainder(5,2)` 得 -1.0（JVM 为 1.0） | 新立 |
+| ~~FS-N3~~ ✅ `54358ed` | `pow` 走 Rust 的 `powf` | 翻译 StrictMath / FdLibm | `pow(1,NaN)`、`pow(-1,±∞)` 得 1.0（Java 为 NaN） | 新立 |
+| ~~FS-N4~~ ✅ `54358ed` | sin/cos/tan/exp/log/… 走 Rust libm | 走 FdLibm 字节码链（S-19 已按此处理 rint / expm1） | 末位可能差 1ulp | 新立 |
+| ~~FS-N5~~ ✅ `54358ed` | 双下划线命名的重载（`round__f`、`nextUp__d` 等）与 mangle 规则不符，是死代码且本身有误 | 删除 | 仅架构 | 新立 |
 | FS-N6 | `Double/Float.toString` 手写重排 Rust 格式化结果 | 翻译 DoubleToDecimal | 仅架构（已对拍） | 部分（S-19 #4 / T-4） |
 
 ## 十、GC / 弱引用 / Finalization
@@ -188,12 +188,12 @@
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| FS-H1 | `Character.digit` 只认 ASCII | 翻译 CharacterData | `Character.digit('٣',10)` 得 -1；`parseInt("１２３")` 抛 NumberFormatException | 新立 |
+| ~~FS-H1~~ ✅ `43bfa1f` | `Character.digit` 只认 ASCII | 翻译 CharacterData | `Character.digit('٣',10)` 得 -1；`parseInt("１２３")` 抛 NumberFormatException | 新立 |
 | FS-H2 | `Integer.valueOf(int)` / toString 手写 | 走生成 | 仅架构 | T-4 |
 | FS-H3 | ArrayList 的私有助手手写 | 翻译 | 仅架构 | 新立 |
-| FS-H4 | `Arrays.copyOf(T[],int)` 手写，结果恒为 `Object[]` | 翻译 | 结果 `getClass()` 为 `Object[]`；存异类元素不抛 ArrayStoreException | 新立 |
+| ~~FS-H4~~ ✅ `5b980a3` | `Arrays.copyOf(T[],int)` 手写，结果恒为 `Object[]` | 翻译 | 结果 `getClass()` 为 `Object[]`；存异类元素不抛 ArrayStoreException | 新立 |
 | FS-H5 | `ConcurrentHashMap()` 初始容量设为 1024，用来避开扩容路径的生成缺口 | 修好 vars 提升缺口，删除伴生 | 条目超过 768 后进入有缺陷的扩容路径 | 新立 |
-| FS-H6 | `Properties.getProperty` 手写，忽略 defaults 链 | 翻译 | `new Properties(defaults).getProperty(k)` 不回落 | 新立 |
+| ~~FS-H6~~ ✅ `803aa05` | `Properties.getProperty` 手写，忽略 defaults 链 | 翻译 | `new Properties(defaults).getProperty(k)` 不回落 | 新立 |
 | FS-H7 | `AtomicInteger(int)` 构造器手写 | 翻译 | 仅架构 | 新立 |
 | FS-H8 | `Enum.valueOf` 靠常量目录手写 | — | 泛型上下文可能抛 CCE | S-15 / A-1 |
 | FS-H9 | Thread 的 getThreadGroup / interrupt / isTerminated 这些非 native 方法手写 | 翻译 | 仅架构 | 新立 |
@@ -206,9 +206,9 @@
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| FS-P1 | 系统属性只有约 10 个键，不能用 `-D` 注入 | 完整的 initPhase1 属性集 | `java.version` / `os.version` / `java.class.path` 等返回 null | 新立 |
-| FS-P2 | `Shutdown.halt0` 等未实现 | 实现 | `System.exit` / `Runtime.halt` 命中存根 | 新立 |
-| FS-P3 | `ProcessEnvironment.environ` 未实现 | 实现 | `System.getenv` 命中存根 | 新立 |
+| ~~FS-P1~~ ✅ `b938ea5` | 系统属性只有约 10 个键，不能用 `-D` 注入 | 完整的 initPhase1 属性集 | `java.version` / `os.version` / `java.class.path` 等返回 null | 新立 |
+| ~~FS-P2~~ ✅ `098d5e9` | `Shutdown.halt0` 等未实现 | 实现 | `System.exit` / `Runtime.halt` 命中存根 | 新立 |
+| ~~FS-P3~~ ✅ `098d5e9` | `ProcessEnvironment.environ` 未实现 | 实现 | `System.getenv` 命中存根 | 新立 |
 | FS-P4 | `forkAndExec` 未实现 | 实现 | 无法启动子进程 | 部分 |
 | FS-P5 | `desiredAssertionStatus` 恒为 false，没有 `-ea` | 支持断言开关 | assert 永不执行 | 新立 |
 

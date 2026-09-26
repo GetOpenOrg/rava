@@ -68,9 +68,10 @@
 | FS-H0 | 手写覆盖只许 ACC_NATIVE（审计线 + 越界覆盖清零） | 🔄 进行中（审计 98 处，逐组清除） | 审计线 `_audit_override`（`[raw-audit] non_native_overrides=` + `[override-audit]` 明细，同名 fn 与 `__impl_` 虚方法两路同口径，`efe13ac`）；VM 内建准入 `intrinsics.txt`。已删：Math/StrictMath 全部、Character.digit、Thread.interrupt / isTerminated / getThreadGroup、AtomicInteger(int)（改 upcalls）、Integer.valueOf / toString()（`00984cf`，验证排队 math2 / fsh0）。余项按根因分组见过渡态清单 §〇 |
 | FS-N1..N5 | Math 手写覆盖删除（`random` 恒 0.5、`IEEEremainder` 用 round、`pow` NaN 规格、libm ulp、双下划线死代码） | 🔄 已删除，验证中（math2） | 全走 StrictMath / FdLibm 字节码链；`wide iinc` 解码修复（8242bbe）是前提；StrictMath.sqrt 入内建清单（debug 构建下 FdLibm 纯软件 sqrt 百万级调用超时）。e2e TestMathSpec |
 | FS-H1 / H4 / H6 | `Character.digit` 非 ASCII、`Arrays.copyOf` 组件类型、`Properties` defaults 链 | 🔄 H1 已删除覆盖（验证中 fsh0）；H4 / H6 待做 | Character.digit 走 CharacterData 族；e2e TestThreadOverridesSpec 含全角 / 阿拉伯-印度数字 |
-| FS-T3 | `availableProcessors` 恒 1 | ⬜ 待做 | 随 #42 第二档 |
-| FS-E3 / M7 / M8 | 不可捕获 panic（checkcast / NPE / toString 路径）、null 接收者字段访问不抛 NPE、`_is_jnull` 非 Object 载体恒假 | ⬜ 待做 | 异常语义等价 |
-| FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ⬜ 待做 | 进程 / 环境层 |
+| FS-T3 | `availableProcessors` 恒 1 | ✅ `18da936`（验证 v1） | 宿主真实并行度；公共池 / 并行流 / CompletableFuture 按并行度运行。e2e TestCommonPool（ActiveProcessorCount=1/4/16 对拍一致） |
+| FS-E3 / M7 / M8 | 不可捕获 panic（checkcast / NPE / toString 路径）、null 接收者字段访问不抛 NPE、`_is_jnull` 非 Object 载体恒假 | 🔄 M7 ✅ `0442777`（`recv.__nn()?`，HelloWorld 编译通过）；E3 toString 路径实测已等价（e2e TestToStringThrows）；M8 待做 | M8：类型变量操作数的 ifnull 走 `Into<Object>` 判空 |
+| FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | 🔄 P1 ✅ `b938ea5`（VersionProps.init 翻译 + VM / 平台 / 编码族）；P2 / P3 ✅ `098d5e9`；C4 待做（无语料用例，优先级低） | e2e TestSystemPropsSpec / TestShutdownHooks / TestSystemExitEnv |
+| FS-M5 / C5 / T6 | 身份哈希截断、forName 不立即初始化、Thread native 缺失 | ✅ `b443134` / `6d885a2` / `8dba713`（验证 v2） | e2e TestIdentityHashSpec / TestForNameInit / TestThreadNatives |
 | FS-O1..O3 | compatibility.md 过期行、失真注释、过渡宏（java_synchronized / java_switch!）文档 | ⬜ 待做 | 文档真实性 |
 
 ## 🔴 活跃任务
