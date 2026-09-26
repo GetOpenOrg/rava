@@ -1,0 +1,14 @@
+start
+Eager <clinit>
+after forName Eager: Eager
+after passive forName: Passive
+Passive <clinit>
+Passive.v=2
+Parent <clinit>
+Child <clinit>
+after Child
+second forName no re-init
+EIIE cause java.lang.IllegalStateException: bad init
+NCDFE
+CNFE TestForNameInit$Missing
+array [I

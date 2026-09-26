@@ -810,10 +810,12 @@ impl Class {
     /// native `Class.forName0(name, initialize, loader, caller)`：按 binary name 取 Class 对象。
     /// 原生镜像的「可加载类」= 生成闭包内的类（build.rs 修饰符表，含用户类）；数组名
     /// （`[I` / `[Ljava.lang.String;`）直接构造。未知类名 → `ClassNotFoundException(name)`
-    /// （JDK 同消息）。initialize 不触发 `<clinit>`：原生类初始化在首次静态访问时由类
-    /// 初始化钩子兑现，与 JDK「首次主动使用前完成初始化」的可观测顺序一致。
+    /// （JDK 同消息）。initialize=true（`Class.forName(String)` 的缺省）立即执行类初始化
+    /// （JLS §12.4.1 / FS-C5）：经 main 启动时登记的类初始化钩子（有 `<clinit>` 的用户类）
+    /// 按名代调 `__class_init`，初始化异常按状态机语义传播（ExceptionInInitializerError /
+    /// 其后 NoClassDefFoundError）；initialize=false 只取 Class 对象（init-passive）。
     #[jvm_native(upcalls = "java/lang/ClassNotFoundException.<init>:(Ljava/lang/String;)V")]
-    pub fn forName0(name: String, _initialize: bool, _loader: crate::java::lang::ClassLoader,
+    pub fn forName0(name: String, initialize: bool, _loader: crate::java::lang::ClassLoader,
                     _caller: Class) -> Result<Class> {
         let dotted = format!("{}", name);
         let slash = dotted.replace('.', "/");
@@ -822,6 +824,9 @@ impl Class {
         if !known {
             let ex = crate::java::lang::ClassNotFoundException::new_str(String::from(dotted.as_str()))?;
             return Err(ex.into());
+        }
+        if initialize && !slash.starts_with('[') {
+            crate::ensure_class_initialized(&slash)?;
         }
         Ok(Class::for_class(String::from(slash.as_str())))
     }

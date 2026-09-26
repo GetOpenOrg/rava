@@ -714,9 +714,13 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # （getEnumConstantsShared / Enum.valueOf）经 ensure_class_initialized 强制
     # 目标类初始化（JVM 反射路径语义；ldc 类字面量保持 init-passive）。
     # 仅用户类：JDK 生成枚举冷反射语料不存在，手写边界类无 __class_init。
+    # FS-C5：有 `<clinit>` 的用户类同样登记——`Class.forName(name)`（initialize=true）
+    # 经 forName0 → ensure_class_initialized 立即执行静态初始化（JLS §12.4.1）。
     hook_lines: list[str] = []
     for ci in class_infos:
-        if not any(f.is_static and f.descriptor == f'L{ci.name};' for f in ci.fields):
+        _enum_shaped = any(f.is_static and f.descriptor == f'L{ci.name};' for f in ci.fields)
+        _has_clinit = any(m.name == '<clinit>' for m in ci.methods)
+        if not (_enum_shaped or _has_clinit):
             continue
         _, _pkg, _mod = layout[ci.name]
         hook_path = '::'.join(['crate', *_pkg, _mod, short_cls(ci.name)])
