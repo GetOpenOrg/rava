@@ -258,7 +258,7 @@ _FIELD_DECL_RE = re.compile(
 _FIELD_ATTR_RE = re.compile(r'java_field\(')
 
 
-def _emit_fields_for(class_bin: str, short: str, em) -> 'str | None':
+def _emit_fields_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) -> 'str | None':
     """类发射文本 → __reflect_field 实现（Field.get/set 与 MH 字段句柄的按名协议）。
 
     臂形态：`("字段名", 值) =>`，值 None = 读、Some(v) = 写。实例字段经宏生成的
@@ -276,6 +276,8 @@ def _emit_fields_for(class_bin: str, short: str, em) -> 'str | None':
         fname = _extract(line, 'name')
         fdesc = _extract(line, 'descriptor')
         if not fname or not fdesc:
+            continue
+        if only is not None and fname not in only:
             continue
         decl = None
         for j in range(i + 1, min(i + 4, len(lines))):
@@ -324,6 +326,9 @@ def _emit_fields_for(class_bin: str, short: str, em) -> 'str | None':
 
 FIELD_LEDGER: dict[str, str] = {}
 
+# 序列化协议规定经反射读取的静态成员名（见 synthesize 注释）
+_SERIAL_PROTOCOL_FIELDS = frozenset({'serialPersistentFields', 'serialVersionUID'})
+
 
 def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]',
                reflect_members: 'dict[str, set[str]] | None' = None) -> None:
@@ -340,6 +345,27 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]',
             continue
         from ..type_map import short_cls
         ftext = _emit_fields_for(bin_name, short_cls(bin_name), em)
+        if ftext is None:
+            continue
+        em.text = em.text.rstrip('\n') + '\n' + ftext + '\n'
+        fpath = class_use_path(bin_name, 'java_runtime', emissions, 'user')
+        FIELD_LEDGER[bin_name] = f'    ("{bin_name}", java_runtime::sync_model::__Shared::new(' \
+            f'|n, r, v| {fpath}::__reflect_field(n, r, v))),'
+
+    # 序列化协议成员（Java Object Serialization Specification §4.6：ObjectStreamClass 经反射
+    # 读取可序列化类声明的 `serialPersistentFields` / `serialVersionUID` 静态字段——类由运行时
+    # 对象决定，无常量反射引用可播种）：任一生成类（含 JDK 类）声明了这些静态字段即只为其
+    # 发射字段臂。按协议字段名判定，不涉类名（原则 4）。
+    for bin_name in sorted(emissions):
+        if bin_name in user_bins or bin_name in FIELD_LEDGER:
+            continue
+        em = emissions.get(bin_name)
+        if em is None or em.handwritten or registry.get(bin_name) is None:
+            continue
+        if not any(f'name = "{n}"' in em.text for n in _SERIAL_PROTOCOL_FIELDS):
+            continue
+        from ..type_map import short_cls
+        ftext = _emit_fields_for(bin_name, short_cls(bin_name), em, only=_SERIAL_PROTOCOL_FIELDS)
         if ftext is None:
             continue
         em.text = em.text.rstrip('\n') + '\n' + ftext + '\n'
