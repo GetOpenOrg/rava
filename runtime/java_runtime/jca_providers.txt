@@ -12,6 +12,9 @@ release  com/sun/crypto/provider/
 release  sun/security/provider/
 release  java/security/MessageDigest
 release  java/security/MessageDigestSpi
+# 算法实现共用的纯 Java 工具类（分组长度 / 边界校验、字节序翻转；仅依赖 ProviderException
+# 与 Preconditions）：CipherCore / ElectronicCodeBook 等的 doFinal 路径直接调用
+release  sun/security/util/ArrayUtil
 # 安全异常族（纯数据载体；服务查找失败 / 摘要参数错误时由手写边界或翻译字节码构造）
 release  java/security/GeneralSecurityException
 release  java/security/NoSuchAlgorithmException
