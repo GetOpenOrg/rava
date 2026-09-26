@@ -45,7 +45,7 @@ impl MethodHandleNatives {
     /// ——Factory 的 catch (LinkageError) 捕获后挂到 resolution 再返回，
     /// resolveOrFail 经 makeAccessException 还原 NoSuchField(/Method)
     /// Exception（与 JDK 解析失败同型）；speculative → Ok(null MemberName)。
-    #[jvm_native]
+    #[jvm_native(upcalls = "java/lang/NoSuchFieldError.<init>:(Ljava/lang/String;)V java/lang/NoSuchMethodError.<init>:(Ljava/lang/String;)V")]
     pub fn resolve(m: MemberName, _lookupClass: Class, _allowedModes: i32, speculativeResolve: bool) -> Result<MemberName> {
         let flags = m.__get_flags();
         let ref_kind: i8 = (((flags >> 24) & 15) as i8);
