@@ -47,6 +47,21 @@ const JAVA_THREAD_STACK: usize = 256 << 20;
 std::thread_local! {
     /// 当前 OS 线程对应的 Java 线程对象（派生时设定；主线程首次 currentThread 时构造）。
     static CURRENT: RefCell<Option<Thread>> = const { RefCell::new(None) };
+    /// `Thread.scopedValueCache` / `setScopedValueCache`：每线程的 ScopedValue 查找缓存
+    /// （HotSpot 存于 JavaThread 的 _scopedValueCache 槽，天然按线程）。
+    static SCOPED_VALUE_CACHE: RefCell<Option<JArray<Object>>> = const { RefCell::new(None) };
+}
+
+crate::__process_static! {
+    /// 存活平台线程表（HotSpot `Threads` 列表的对应物）：start0 登记、线程终结摘除，
+    /// 主线程在首次 currentThread 构造时登记。消费方：`getThreads`（Thread.getAllThreads →
+    /// getAllStackTraces / ThreadGroup.activeCount / enumerate）。
+    static LIVE_THREADS: crate::sync_model::__RefSlot<Vec<Thread>> =
+        crate::sync_model::__RefSlot::new(Vec::new());
+}
+
+fn thread_identity(t: &Thread) -> usize {
+    Object::from(Clone::clone(t)).0.__identity() as usize
 }
 
 /// 派生 OS 线程执行 `t.run()`。`daemon` 为 true 的线程不计入 DestroyJavaVM 等待集。
@@ -94,6 +109,8 @@ fn run_java_thread(t: &Thread) {
     }
     t.__set_eetop(0);
     let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);
+    let id = thread_identity(t);
+    LIVE_THREADS.with(|v| v.borrow_mut().retain(|x| thread_identity(x) != id));
     let obj = Object::from(Clone::clone(t));
     if let Ok(guard) = crate::monitor::MonitorGuard::acquire(&obj) {
         let _ = crate::monitor::notify_all(obj.0.__identity() as usize, false);
@@ -122,6 +139,7 @@ impl Thread {
         let holder = self.__get_holder();
         let _ = holder.__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
         let daemon = holder.__get_daemon();
+        LIVE_THREADS.with(|v| v.borrow_mut().push(Clone::clone(self)));
         spawn_java_thread(Clone::clone(self), daemon)
     }
 
@@ -178,7 +196,83 @@ impl Thread {
         }
         let main = platform_main_thread();
         CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&main)));
+        LIVE_THREADS.with(|v| v.borrow_mut().insert(0, Clone::clone(&main)));
         Ok(main)
+    }
+
+    /// native `setPriority0(int)`：OS 线程优先级提示。优先级值本身由 `setPriority`
+    /// 字节码写入 holder（getPriority 读取）；HotSpot 在 Linux 缺省策略
+    /// （ThreadPriorityPolicy=0）下同样不改变调度，无可观察行为。
+    #[jvm_native]
+    pub fn setPriority0(&self, _newPriority: i32) -> Result<()> {
+        Ok(())
+    }
+
+    /// native `setNativeName(String)`：设置 OS 层线程名（调试器 / top 可见），Java 侧
+    /// 名字已由 `setName` 字节码写入 name 字段；OS 线程名在派生时已按创建时名设定。
+    #[jvm_native]
+    pub fn setNativeName(&self, _name: String) -> Result<()> {
+        Ok(())
+    }
+
+    /// native `getThreads()`：全部存活平台线程（Thread.getAllThreads 的数据源）。
+    #[jvm_native]
+    pub fn getThreads() -> Result<JArray<Thread>> {
+        Ok(JArray::from(LIVE_THREADS.with(|v| v.borrow().iter()
+            .filter(|t| t.__get_eetop() != 0)
+            .map(Clone::clone)
+            .collect::<Vec<_>>())))
+    }
+
+    /// native `getStackTrace0()`：他线程的栈快照。Java 帧元数据不随原生栈保留（FS-E1），
+    /// 返回 null——`getStackTrace` 按 JDK 语义给出空数组（与目标线程已终结同形）。
+    #[jvm_native]
+    pub fn getStackTrace0(&self) -> Result<Object> {
+        Ok(Object::default())
+    }
+
+    /// native `dumpThreads(Thread[])`：getAllStackTraces 的批量快照，同上每线程为空栈
+    /// （StackTraceElement 由共置手写层保证恒在闭包内）。
+    #[jvm_native]
+    pub fn dumpThreads(threads: JArray<Thread>) -> Result<JArray<JArray<crate::java::lang::StackTraceElement>>> {
+        let n = threads.len()?;
+        Ok(JArray::new_with(n, || JArray::new(0)))
+    }
+
+    /// native `currentCarrierThread()`：当前载体线程。虚拟线程由独立 OS 线程承载（FS-T4），
+    /// 载体即当前线程对象本身。
+    #[jvm_native]
+    pub fn currentCarrierThread() -> Result<Thread> {
+        Thread::currentThread()
+    }
+
+    /// native `setCurrentThread(Thread)`：VirtualThread 挂载 / 卸载时切换本 OS 线程的
+    /// 「当前线程」对象（HotSpot JavaThread::_vthread）。
+    #[jvm_native]
+    pub fn setCurrentThread(&self, thread: Thread) -> Result<()> {
+        CURRENT.with(|c| *c.borrow_mut() = Some(thread));
+        Ok(())
+    }
+
+    /// native `findScopedValueBindings()`：栈上 `runWith` 帧携带的绑定快照。绑定经
+    /// `Thread.scopedValueBindings` 字段随 `ScopedValue.Carrier` 设置 / 恢复；只有线程
+    /// 处于初始哨兵态（新线程、从未进入 runWith）时才走本查找，此时栈上无 runWith 帧，
+    /// 返回 null（调用方回落 `Snapshot.EMPTY_SNAPSHOT`）。
+    #[jvm_native]
+    pub fn findScopedValueBindings() -> Result<Object> {
+        Ok(Object::default())
+    }
+
+    /// native `scopedValueCache()` / `setScopedValueCache(Object[])`：每线程缓存槽。
+    #[jvm_native]
+    pub fn scopedValueCache() -> Result<JArray<Object>> {
+        Ok(SCOPED_VALUE_CACHE.with(|c| c.borrow().as_ref().map(Clone::clone)).unwrap_or_default())
+    }
+
+    #[jvm_native]
+    pub fn setScopedValueCache(cache: JArray<Object>) -> Result<()> {
+        SCOPED_VALUE_CACHE.with(|c| *c.borrow_mut() = if cache.is_jvm_null() { None } else { Some(cache) });
+        Ok(())
     }
 
     /// native `ensureMaterializedForStackWalk(Object bindings)`：JVM 在
