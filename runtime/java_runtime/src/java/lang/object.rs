@@ -27,6 +27,13 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         std::any::type_name::<Self>().to_owned()
     }
 
+    /// `Object.toString()` 的虚分派入口（可失败形态，FS-E3）：覆盖 toString 的类由宏桥接到
+    /// 翻译体，toString 抛出的异常以 `Err` 传播（可被 catch）；未覆盖的类回落 `__obj_str`。
+    /// `__obj_str` 只服务 Rust 侧 Display / Debug（不可失败）。
+    fn __to_string(&self) -> crate::error::Result<std::string::String> {
+        Ok(self.__obj_str())
+    }
+
     /// instanceof 运行时检查（java_class 宏从 all_supertypes 静态展开 matches! 模式）
     fn is_instance_of(&self, _type_id: &str) -> bool { false }
 

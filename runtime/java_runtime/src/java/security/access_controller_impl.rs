@@ -38,6 +38,14 @@ impl AccessController {
     /// 双局部声明载体 E0308 / 基类调用载体实参装箱 E0308）已由 fix/unify-fourth
     /// 清偿——unify_pair 泛型 widening 第五增量、_store_local 绑定点区间判定、
     /// invokespecial 基类调用实参重建。
+    /// `doPrivileged(PrivilegedAction, AccessControlContext)`：上下文在 SecurityManager 恒 null
+    /// 时不参与任何检查（HotSpot executePrivileged 同样直通），等价单参版本。消费方：
+    /// ForkJoinPool 工作线程工厂（newRegularWithACC / newCommonWithACC）。
+    #[jvm_boundary(upcalls = "java/security/PrivilegedAction.run:()Ljava/lang/Object;")]
+    pub fn doPrivileged_privilegedaction_accesscontrolcontext(action: Object, _context: AccessControlContext) -> Result<Object> {
+        Self::doPrivileged_privilegedaction(action)
+    }
+
     #[jvm_boundary(upcalls = "java/security/PrivilegedAction.run:()Ljava/lang/Object;")]
     pub fn doPrivileged_privilegedaction(action: Object) -> Result<Object> {
         if action.0.is_jvm_null() {

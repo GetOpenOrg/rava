@@ -124,6 +124,13 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
         crate::java::lang::Thread::currentThread()
     }
 
+    /// `allowSecurityManager()`：`System.allowSecurityManager()`——JDK 18+ 缺省
+    /// `java.security.manager` 未设即 disallow（JDK 24+ 恒 false），原生二进制无 -D 注入 → false。
+    /// 消费方：ForkJoinPool 公共池工作线程工厂（InnocuousForkJoinWorkerThread 分支判定）。
+    fn allowSecurityManager(&self) -> Result<bool> {
+        Ok(false)
+    }
+
     /// `countPositives(byte[] ba, int off, int len)`（JDK 21 名）/ `uncheckedCountPositives`
     ///（JDK 25 改名，语义不变）：`StringCoding.countPositives`——自 off 起 len 字节内，
     /// 首个负字节（非 ASCII）之前的字节数；全为非负则返回 len。消费方：JDK 25

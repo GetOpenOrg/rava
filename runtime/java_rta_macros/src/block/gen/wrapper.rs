@@ -146,6 +146,9 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
             fn __obj_str(&self) -> ::std::string::String {
                 ObjectVTable::__obj_str(&*self.vtable)
             }
+            fn __to_string(&self) -> Result<::std::string::String> {
+                ObjectVTable::__to_string(&*self.vtable)
+            }
         };
         let hash_code_fwd: TokenStream2 = quote! {
             fn hashCode(&self) -> i32 { ObjectVTable::hashCode(&*self.vtable) }

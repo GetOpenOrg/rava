@@ -57,7 +57,7 @@ impl Object {
     }
 
     #[jvm_native]
-    pub fn toString(&self) -> Result<String> { Ok(String::from(self.0.__obj_str())) }
+    pub fn toString(&self) -> Result<String> { Ok(String::from(self.0.__to_string()?.as_str())) }
 
     // ── Object 监视器方法（S-20）：bare-Object 接收者的调用落点 ─────────────
     //

@@ -134,6 +134,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         Some(owner) => {
             let path = bridge_path(owner);
             quote! {
+                fn __to_string(&self) -> Result<::std::string::String> {
+                    #path::toString(self).map(|s| ::std::string::ToString::to_string(&s))
+                }
                 fn __obj_str(&self) -> ::std::string::String {
                     match #path::toString(self) {
                         Ok(s) => ::std::string::ToString::to_string(&s),
