@@ -36,6 +36,17 @@ _BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', '__Shared', 'V
 
 
 
+
+def _spill_pending_reads(sim, marker: str) -> None:
+    """写字段前物化栈上仍在读取同一字段的待求值表达式（JVM 操作数栈求值顺序）。
+
+    模拟栈以惰性表达式保存 getfield / getstatic；`new X(from, from = from + k, 0)` 这类
+    字节码（getfield from 先压栈，随后 dup_x1 + putfield from）若不先物化，读取会在写入
+    之后才求值，得到新值（RangeLongSpliterator.trySplit 左半段变空 → 并行流丢数据）。"""
+    for i, (e, t) in enumerate(sim.stack):
+        if marker in render_expr(e):
+            sim.stack[i] = (sim.fresh_let('_t', e, t), t)
+
 def _null_checked_receiver(recv: str) -> str:
     """getfield / putfield 接收者判空（JVMS §6.5，FS-M7）：null objectref 抛可捕获的 NPE。
 
@@ -340,6 +351,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             # 字段写入 → 宏生成的 `__set_xxx` 访问器（方案 §7）。
             # 继承字段同样由转发访问器承接，无需 `_super` 前缀路径（§16）。
             _slot = _instance_field_rust_name(cls_owner or class_name, fname, registry)
+            _spill_pending_reads(sim, f".__get_{_slot}()")
             sim.emit(RawStmt(f"{_null_checked_receiver(render_expr(obj_expr))}.__set_{_slot}({val_str});"))
         else:
             sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))
@@ -372,6 +384,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             else:
                 val_str = _coerce_stored_value(val_expr, val_ty, _sf_ty, registry,
                                                class_type_params=sim.class_type_params)
+            _spill_pending_reads(sim, f"::{rust_fname}()")
             # static 写入 → 宏生成的 set_xxx 访问器（入口触发类初始化，JVMS §5.5）
             sim.emit(RawStmt(f"{raw_cls}{_turbofish}::set_{rust_fname}({val_str})?;"))
         else:
