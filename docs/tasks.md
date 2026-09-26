@@ -65,8 +65,6 @@
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| JDK25 语料适配（原 8 例 E0308 的硬阻塞） | 数组视图族判定 | **调查报告已入档（`2026-09-23-jdk25-corpus-survey.md`，双 JDK 实测 javap 对比）**：主因=JDK22 引入 ToDecimal 抽象基类重构（实例字段→显式传参）——math 双件手写 overlay 失配（访问器 9+6 处）；DecimalDigits 迁 jdk.internal.util 全新静态类（需新增手写）；**Random 零字节码差异（此前 E0432 归因误判，需重定位）**；LVT 间隙 1 处。方案定案 **L1 兼容改写**（显式传参形态天然双版本兼容，G 表零动，~300-430 行）+ decimal_digits 新增手写（~150-250 行）；L2 版本分治否决、L3 对 DoubleToDecimal 否决（会拖 JLA 大接口）。工作量与 JDK25 全量 tee 落盘待实测清单见报告 §五 |
-| **异常兜底收窄（观察项→正式，审计报告已入档 `2026-09-23-fallback-audit.md`）** | K-6b 教训跟进 | 43 吞点三分组：A 组九大 stub 吞点（实测全部触发=CfgError，固定两方法 `AbstractMap.equals`/`OIS$BlockDataInputStream.readBlockHeader`——**语义限制伪装的质量缺口活案例，建议单独跟进**）；B 组 15 处静默吞点（**全部样本零触发=死代码，收窄零损失**，未来触发必是 bug）；C 组合法保留。方案：A 组只 catch CfgError+并入 cfg-audit 位点标记、B 组新增 [fallback-audit] 审计线、JAVA_RTA_STRICT 分级（复用 build.rs 钩子）。注入实验复现 K-6b（ImportError→exit=0+stub） |
 
 ---
 

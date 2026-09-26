@@ -162,3 +162,5 @@
 | # | 任务 | 状态 | 证据 |
 |---|---|---|---|
 | N7 | 第 4 项 macOS 侧验证 | ✅ 用户 macOS（arm64，JDK21.0.11）@2f8ba87 实测 | TestFilesApi / TestFileOutputStream PASS（provider 链 MacOSX→Bsd→Unix 通）；TestCharsetForName 揭出 getCallerClass 帧不可解析退回 null → `ServiceConfigurationError: no caller to check`，已修（退回可信类 Object） |
+| — | JDK25 语料适配（原 8 例 E0308 硬阻塞，L1 兼容改写 + decimal_digits 手写） | ✅ 已合入（2026-09-26 核对活跃表时发现过期） | `08ddbf7`+`7caefcc`+`ddb1672`（merge `a63df7c`），见本文 JDK25 L1 math 双件行 |
+| — | 异常兜底收窄（A 组只兜 CfgError、B 组 [fallback-audit]、JAVA_RTA_STRICT 分级） | ✅ 已合入（2026-09-26 核对活跃表时发现过期） | `466f513`；`codegen/fallback_audit.py`，转译输出 `[fallback-audit]` 行 |
