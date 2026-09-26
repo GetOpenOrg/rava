@@ -145,11 +145,11 @@
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| ~~FS-N1~~ ✅ `54358ed` | **`Math.random()` 恒返回 0.5**（math_impl.rs:26；Math 没有 native，这是覆盖字节码） | 删除手写，走翻译链 | 所有随机逻辑的结果恒定 | 新立 |
-| ~~FS-N2~~ ✅ `54358ed` | `IEEEremainder` 用 `round`（应为 rint） | 删除手写 | `IEEEremainder(5,2)` 得 -1.0（JVM 为 1.0） | 新立 |
-| ~~FS-N3~~ ✅ `54358ed` | `pow` 走 Rust 的 `powf` | 翻译 StrictMath / FdLibm | `pow(1,NaN)`、`pow(-1,±∞)` 得 1.0（Java 为 NaN） | 新立 |
-| ~~FS-N4~~ ✅ `54358ed` | sin/cos/tan/exp/log/… 走 Rust libm | 走 FdLibm 字节码链（S-19 已按此处理 rint / expm1） | 末位可能差 1ulp | 新立 |
-| ~~FS-N5~~ ✅ `54358ed` | 双下划线命名的重载（`round__f`、`nextUp__d` 等）与 mangle 规则不符，是死代码且本身有误 | 删除 | 仅架构 | 新立 |
+| ~~FS-N1~~ ✅ `5c30b8c` | **`Math.random()` 恒返回 0.5**（math_impl.rs:26；Math 没有 native，这是覆盖字节码） | 删除手写，走翻译链 | 所有随机逻辑的结果恒定 | 新立 |
+| ~~FS-N2~~ ✅ `5c30b8c` | `IEEEremainder` 用 `round`（应为 rint） | 删除手写 | `IEEEremainder(5,2)` 得 -1.0（JVM 为 1.0） | 新立 |
+| ~~FS-N3~~ ✅ `5c30b8c` | `pow` 走 Rust 的 `powf` | 翻译 StrictMath / FdLibm | `pow(1,NaN)`、`pow(-1,±∞)` 得 1.0（Java 为 NaN） | 新立 |
+| ~~FS-N4~~ ✅ `5c30b8c` | sin/cos/tan/exp/log/… 走 Rust libm | 走 FdLibm 字节码链（S-19 已按此处理 rint / expm1） | 末位可能差 1ulp | 新立 |
+| ~~FS-N5~~ ✅ `5c30b8c` | 双下划线命名的重载（`round__f`、`nextUp__d` 等）与 mangle 规则不符，是死代码且本身有误 | 删除 | 仅架构 | 新立 |
 | FS-N6 | `Double/Float.toString` 手写重排 Rust 格式化结果 | 翻译 DoubleToDecimal | 仅架构（已对拍） | 部分（S-19 #4 / T-4） |
 
 ## 十、GC / 弱引用 / Finalization
@@ -188,7 +188,7 @@
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| ~~FS-H1~~ ✅ `43bfa1f` | `Character.digit` 只认 ASCII | 翻译 CharacterData | `Character.digit('٣',10)` 得 -1；`parseInt("１２３")` 抛 NumberFormatException | 新立 |
+| ~~FS-H1~~ ✅ `936c6a9` | `Character.digit` 只认 ASCII | 翻译 CharacterData | `Character.digit('٣',10)` 得 -1；`parseInt("１２３")` 抛 NumberFormatException | 新立 |
 | FS-H2 | `Integer.valueOf(int)` / toString 手写 | 走生成 | 仅架构 | T-4 |
 | FS-H3 | ArrayList 的私有助手手写 | 翻译 | 仅架构 | 新立 |
 | ~~FS-H4~~ ✅ `5b980a3` | `Arrays.copyOf(T[],int)` 手写，结果恒为 `Object[]` | 翻译 | 结果 `getClass()` 为 `Object[]`；存异类元素不抛 ArrayStoreException | 新立 |

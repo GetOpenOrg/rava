@@ -66,8 +66,8 @@
 | # | 任务 | 状态 | 说明 |
 |---|---|---|---|
 | FS-H0 | 手写覆盖只许 ACC_NATIVE（审计线 + 越界覆盖清零） | 🔄 进行中：已删 Math / Character.digit / Thread 族 / AtomicInteger / Integer / Properties / Arrays.copyOf / Double.toString（⏳ 待用户验证）；余约 93 处（反射元数据 / java.security / InvokerBytecodeGenerator 等架构组） | 审计线 `_audit_override`（同名 fn 与 `__impl_` 两路同口径）；VM 内建准入 `intrinsics.txt`。验证：TestThreadOverridesSpec ✅ TestIntegerCacheSpec ✅ AtomicDemo TestAtomics StringUniqueCharacters TestThreadInterrupt TestDoubleToStringSpec |
-| FS-N1..N5 | Math 手写覆盖删除（`random` 恒 0.5、`IEEEremainder` 用 round、`pow` NaN 规格、libm ulp、双下划线死代码） | ✅ `54358ed`（⏳ 待用户验证） | 全走 StrictMath / FdLibm 字节码链（`wide iinc` 修复 `8242bbe` 为前提；StrictMath.sqrt 入内建清单）。验证：TestMathSpec TestMathExact TestMathRound MathEnhancedTest Heron ComprehensiveTest |
-| FS-H1 / H4 / H6 | `Character.digit` 非 ASCII、`Arrays.copyOf` 组件类型、`Properties` defaults 链 | ✅ `43bfa1f` / `5b980a3` / `803aa05`（⏳ 待用户验证） | 验证：TestThreadOverridesSpec ✅ TestArrayComponentType TestCollectionFactory TestArrayList TestPropertiesDefaults |
+| FS-N1..N5 | Math 手写覆盖删除（`random` 恒 0.5、`IEEEremainder` 用 round、`pow` NaN 规格、libm ulp、双下划线死代码） | ✅ `5c30b8c`（⏳ 待用户验证） | 全走 StrictMath / FdLibm 字节码链（`wide iinc` 修复 `8242bbe` 为前提；StrictMath.sqrt 入内建清单）。验证：TestMathSpec TestMathExact TestMathRound MathEnhancedTest Heron ComprehensiveTest |
+| FS-H1 / H4 / H6 | `Character.digit` 非 ASCII、`Arrays.copyOf` 组件类型、`Properties` defaults 链 | ✅ `936c6a9` / `5b980a3` / `803aa05`（⏳ 待用户验证） | 验证：TestThreadOverridesSpec ✅ TestArrayComponentType TestCollectionFactory TestArrayList TestPropertiesDefaults |
 | FS-T3 | `availableProcessors` 恒 1 | ✅ `18da936` + `2f64669`（⏳ 待用户验证） | 宿主真实并行度；公共池工作线程所需安全类边界实现。验证：TestCommonPool TestCompletableFuture |
 | FS-E3 / M7 / M8 | 不可捕获 panic（checkcast / NPE / toString 路径）、null 接收者字段访问不抛 NPE、`_is_jnull` 非 Object 载体恒假 | ✅ M7 `0442777`（TestFieldNullReceiver ✅）；E3 `2f64669`、M8 `5bf2286`（⏳ 待用户验证） | 验证：TestToStringThrows TestGenericNullCheck |
 | FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ✅ P1 `b938ea5`+`83a4ac2`、P2/P3 `098d5e9`（⏳ 待用户验证）；C4 方案已出未实施 | 验证：TestSystemPropsSpec TestShutdownHooks TestSystemExitEnv |
