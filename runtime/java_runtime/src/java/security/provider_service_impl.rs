@@ -7,8 +7,8 @@
 //! 仍尝试该服务；`supportsParameter` 恒 true（JDK：无 SupportedKeyClasses/Formats 属性时同值）。
 
 use crate::prelude::*;
-use super::provider_service::Provider_Service;
-use super::provider::Provider;
+use super::provider_service::implref::Provider_Service;
+use super::provider::implref::Provider;
 
 impl Provider_Service {
     /// 按注册表条目构造服务描述对象。

@@ -8,7 +8,7 @@
 //! 消费方：`Charset.forName` / `lookup2`（`new PrintStream(out, autoFlush, "UTF-8")` 等）。
 
 use crate::prelude::*;
-use super::standard_charsets::StandardCharsets;
+use super::standard_charsets::implref::StandardCharsets;
 use crate::java::nio::charset::Charset;
 
 std::thread_local! {

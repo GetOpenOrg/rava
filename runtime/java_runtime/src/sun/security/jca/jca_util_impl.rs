@@ -5,8 +5,8 @@
 //! （见 `java/security/secure_random_impl.rs`）。
 
 use crate::prelude::*;
-use super::jca_util::JCAUtil;
-use crate::java::security::SecureRandom;
+use super::jca_util::implref::JCAUtil;
+use crate::java::security::secure_random::implref::SecureRandom;
 
 std::thread_local! {
     static DEF: std::cell::RefCell<Option<SecureRandom>> = std::cell::RefCell::new(None);
@@ -16,11 +16,11 @@ impl JCAUtil {
     /// `getDefSecureRandom()`：见模块说明。
     #[jvm_boundary]
     pub fn getDefSecureRandom() -> Result<SecureRandom> {
-        if let Some(r) = DEF.with(|d| d.borrow().clone()) {
+        if let Some(r) = DEF.with(|d| d.borrow().as_ref().map(Clone::clone)) {
             return Ok(r);
         }
         let r = SecureRandom::new()?;
-        DEF.with(|d| *d.borrow_mut() = Some(r.clone()));
+        DEF.with(|d| *d.borrow_mut() = Some(Clone::clone(&r)));
         Ok(r)
     }
 }

@@ -5,7 +5,7 @@
 //! provider 实例唯一，`==` 比较成立）。服务表来自 `crate::jca`（生成注册表）。
 
 use crate::prelude::*;
-use super::provider::Provider;
+use super::provider::implref::Provider;
 use std::collections::HashMap;
 
 std::thread_local! {
@@ -17,12 +17,14 @@ impl Provider {
     /// provider 名 → 线程内唯一的 Provider 对象（首次取用时构造，仅设 name 字段）。
     pub fn __for_name(name: &'static str) -> Provider {
         PROVIDERS.with(|p| {
-            p.borrow_mut().entry(name).or_insert_with(|| {
+            let mut p = p.borrow_mut();
+            let prov = p.entry(name).or_insert_with(|| {
                 let mut prov = Provider::default();
                 prov._init_not_null();
                 prov.__set_name(String::from(name));
                 prov
-            }).clone()
+            });
+            Clone::clone(&*prov)
         })
     }
 

@@ -9,8 +9,8 @@
 //! 对内核熵源无影响（JDK NativePRNG 同样不因 setSeed 变为确定序列）。
 
 use crate::prelude::*;
-use super::secure_random::SecureRandom;
-use super::provider::Provider;
+use super::secure_random::implref::SecureRandom;
+use super::provider::implref::Provider;
 use std::io::Read;
 
 /// 以操作系统熵源填满缓冲；读失败 → `ProviderException("nextBytes() failed")`

@@ -71,16 +71,29 @@ def _impl_signature_type_refs(cls: str, runtime_src: str, resolver) -> list[str]
             continue
         for m in _IMPL_FULL_PATH_RE.finditer(content):
             pkg_path = m.group(1).replace('::', '/').replace('r#', '')
-            cand = f'{pkg_path}/{m.group(2)}'
-            if resolver.resolve(cand) is not None:
+            cand = _resolve_impl_ref(f'{pkg_path}/{m.group(2)}', resolver)
+            if cand:
                 out.append(cand)
         for m in _IMPL_BARE_NAME_RE.finditer(content):
             if not pkg:
                 continue
-            cand = '/'.join(pkg + [m.group(1)])
-            if resolver.resolve(cand) is not None:
+            cand = _resolve_impl_ref('/'.join(pkg + [m.group(1)]), resolver)
+            if cand:
                 out.append(cand)
     return out
+
+
+def _resolve_impl_ref(cand: str, resolver) -> 'str | None':
+    """手写 impl 中的类型名 → 可解析的 binary name。嵌套类的 Rust 名以 `_` 连接
+    （`Provider$Service` → `Provider_Service`）：直译不中时按 `_` → `$` 还原再试。"""
+    if resolver.resolve(cand) is not None:
+        return cand
+    head, _, simple = cand.rpartition('/')
+    if '_' in simple:
+        nested = f'{head}/{simple.replace("_", "$")}' if head else simple.replace('_', '$')
+        if resolver.resolve(nested) is not None:
+            return nested
+    return None
 
 
 def _read_manifest(name: str) -> list[str]:

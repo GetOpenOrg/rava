@@ -6,11 +6,14 @@
 //! 构造即调用翻译出的无参构造器；实现类的全部算法逻辑走翻译字节码。
 
 use crate::prelude::*;
-use super::get_instance::GetInstance;
-use super::get_instance_instance::GetInstance_Instance;
-use super::service_id::ServiceId;
-use crate::java::security::{Provider, Provider_Service};
-use crate::java::util::{ArrayList, List};
+use super::get_instance::implref::GetInstance;
+use super::get_instance_instance::implref::GetInstance_Instance;
+use super::service_id::implref::ServiceId;
+use crate::java::security::Provider;
+use crate::java::security::Provider_Service;
+use crate::java::lang::Class;
+use crate::java::util::ArrayList;
+use crate::java::util::List;
 
 /// JDK 未找到服务时的异常：`NoSuchAlgorithmException(algorithm + " " + type + " not available")`
 ///（GetInstance.getInstance / getService 同一消息形态）。
@@ -49,7 +52,9 @@ impl GetInstance {
     /// 无匹配 → 空表（Cipher 据此抛 `NoSuchAlgorithmException("Cannot find any provider
     /// supporting ..")`，走翻译字节码）。
     #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object;")]
-    pub fn getServices_list(ids: List<Object>) -> Result<List<Object>> {
+    pub fn getServices_list(ids: Object) -> Result<List<Object>> {
+        // 调用侧按边界方法的接口形参擦除传 Object（载体策略），此处还原 List 视图
+        let ids = <List<Object> as ::std::convert::From<Object>>::from(ids);
         let out = ArrayList::<Object>::new()?;
         let n = ids.size()?;
         for i in 0..n {
