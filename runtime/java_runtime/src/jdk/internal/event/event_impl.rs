@@ -12,4 +12,33 @@ impl Event {
     pub fn __impl_isEnabled(&self) -> Result<bool> {
         Ok(false)
     }
+
+    /// `shouldCommit()Z`：事件未启用 → false。`ObjectInputStream.filterCheck` 的
+    /// DeserializationEvent 等据此跳过字段赋值与 commit（SerializableDemo 揭出）。
+    #[jvm_boundary]
+    pub fn __impl_shouldCommit(&self) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// `begin()V` / `end()V` / `commit()V`：计时与提交在未启用事件上是空操作（JDK 占位层同义）。
+    #[jvm_boundary]
+    pub fn __impl_begin(&self) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_boundary]
+    pub fn __impl_end(&self) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_boundary]
+    pub fn __impl_commit(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// `set(int, Object)V`：按下标写字段（JFR 生成子类覆盖）；占位层空操作。
+    #[jvm_boundary]
+    pub fn __impl_set(&self, _index: i32, _value: Object) -> Result<()> {
+        Ok(())
+    }
 }
