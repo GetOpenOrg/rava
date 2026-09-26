@@ -141,7 +141,17 @@ def _split_disjoint_try_ranges(method, nodes: dict) -> None:
         t = try_of_group[gid]
         for start_pc, _end in g.ranges[1:]:
             entry = by_start_pc.get(start_pc)
-            if entry is None or entry.kind == 'try':
+            if entry is None:
+                # 区间首块是纯跳转（`goto` 回边）时已被折叠进前驱边：取区间内起点最小的
+                # 存活块作体入口；区间内无存活块（只覆盖纯跳转——跳转不抛异常）→ 该区间
+                # 不装 try 节点（JDK25 Charset.lookupViaProviders 的 try-finally 拆分区间
+                # [64,69) 首条即 `goto 22` 实证）
+                _in_range = [n for pc, n in by_start_pc.items()
+                             if start_pc <= pc < _end and n.kind != 'try']
+                if not _in_range:
+                    continue
+                entry = min(_in_range, key=lambda n: n.start_pc)
+            if entry.kind == 'try':
                 raise CfgError(f"try 区间 pc={start_pc} 缺少可作体入口的块")
             tj = Node(id=_fresh_id(), start_pc=start_pc, kind='try',
                       target=entry.id,
