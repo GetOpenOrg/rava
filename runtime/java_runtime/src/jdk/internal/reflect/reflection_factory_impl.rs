@@ -25,9 +25,9 @@ impl ReflectionFactory {
     ///
     /// JDK 的 generateConstructor 返回 constructorToCall 的副本（声明类仍为
     /// initCl）并挂「分配 cl 实例 + 运行 initCl 构造体」的序列化访问器。此处
-    /// 返回同一元数据副本；序列化访问器语义（反序列化实例化）未建模——调用它
-    /// 的 ObjectInputStream.readObject 链不在翻译面上（M3 路径只到
-    /// ObjectStreamClass 元数据：Result.<clinit> 的 lookup(...).getFields()）。
+    /// 返回元数据副本并登记目标类（reflect_dispatch 序列化构造器表）——
+    /// Constructor.newInstance 据此经分派闭包 `<alloc>` 分配 cl 实例、`<init_on>`
+    /// 运行 initCl 构造体（N2）。
     /// JDK 的 superHasAccessibleConstructor 逐级检查简并为对 initCl 构造的
     /// 可见性检查（非 null 返回的判定面一致：链上中间类均可序列化）。
     pub fn newConstructorForSerialization_class(&self, cl: Class)
@@ -58,6 +58,10 @@ impl ReflectionFactory {
         {
             return Ok(Default::default());
         }
+        // 序列化访问器语义：newInstance 分配 cl 实例并运行 initCl 的无参构造体（登记目标类）
+        let id = Object::from(Clone::clone(&ctor)).0.__identity() as usize;
+        crate::reflect_dispatch::register_serialization_ctor(
+            id, &format!("{}", cl.__get_name()).replace('.', "/"));
         Ok(ctor)
     }
 

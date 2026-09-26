@@ -391,11 +391,11 @@ impl Unsafe {
     /// 消费方：`ThreadLocalRandom.localInit` 对 Thread.threadLocalRandomSeed。
     #[jvm_boundary]
     pub fn putLong_obj_l_l(&self, o: Object, offset: i64, x: i64) -> Result<()> {
-        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.putLong:(Ljava/lang/Object;JJ)V (实例字段 offset={} 无共享 long 单元)", offset)
-        });
-        cell.set(x);
-        Ok(())
+        if let Some(cell) = _instance_long_cell(&o, offset) {
+            cell.set(x);
+            return Ok(());
+        }
+        _field_put(&o, offset, Object::from(x), "Long")
     }
 
     /// `getLong(Object o, long offset)`：实例字段 long 读（plain 形态，与
@@ -404,30 +404,30 @@ impl Unsafe {
     /// （读改写种子的读半边；localInit 的写半边是 putLong_obj_l_l）。
     #[jvm_boundary]
     pub fn getLong_obj_l(&self, o: Object, offset: i64) -> Result<i64> {
-        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getLong:(Ljava/lang/Object;J)J (实例字段 offset={} 无共享 long 单元)", offset)
-        });
-        Ok(cell.get())
+        if let Some(cell) = _instance_long_cell(&o, offset) {
+            return Ok(cell.get());
+        }
+        crate::reflect_dispatch::unbox_i64(&_field_get(&o, offset, "long")?).ok_or_else(|| _bad("long"))
     }
 
     /// `getInt(Object o, long offset)`：实例字段 int 读（plain 形态）。
     /// 消费方：`ThreadLocalRandom.current` 对 Thread.threadLocalRandomProbe。
     #[jvm_boundary]
     pub fn getInt_obj_l(&self, o: Object, offset: i64) -> Result<i32> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getInt:(Ljava/lang/Object;J)I (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.get())
+        if let Some(cell) = _instance_int_cell(&o, offset) {
+            return Ok(cell.get());
+        }
+        crate::reflect_dispatch::unbox_i32(&_field_get(&o, offset, "int")?).ok_or_else(|| _bad("int"))
     }
 
     /// `putInt(Object o, long offset, int x)`：实例字段 int 写（plain 形态）。
     #[jvm_boundary]
     pub fn putInt_obj_l_i(&self, o: Object, offset: i64, x: i32) -> Result<()> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.putInt:(Ljava/lang/Object;JI)V (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        cell.set(x);
-        Ok(())
+        if let Some(cell) = _instance_int_cell(&o, offset) {
+            cell.set(x);
+            return Ok(());
+        }
+        _field_put(&o, offset, Object::from(x), "Int")
     }
 
     /// `compareAndSetInt(Object o, long offset, int expected, int x)`：实例字段
@@ -859,5 +859,96 @@ impl Unsafe {
             "double" => Object::from(JArray::<f64>::new(n)),
             _ => return Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(String::from("Component type is not primitive"))?)),
         })
+    }
+}
+
+// ── 按名字段协议承载的基本类型读写（N2 反序列化字段回填 / 序列化字段读取）──────────
+//
+// ObjectStreamClass.FieldReflector 以 (对象, objectFieldOffset) 读写全部基本类型字段。偏移经
+// 登记表反查 (声明类, 字段名)，走 codegen 字段闭包（reflect_dispatch::reflect_field，与
+// Field.get/set 同一协议）——覆盖 boolean / byte / short / char / float / double（int / long
+// 另有共享单元协议）。字段闭包缺席（非用户类）→ 如实报缺口。
+
+fn _field_get(o: &Object, offset: i64, what: &str) -> Result<Object> {
+    if let Some((cls, name)) = field_of_offset(offset) {
+        if let Some(r) = crate::reflect_dispatch::reflect_field(&cls, &name, Clone::clone(o), None) {
+            return r;
+        }
+    }
+    panic!("stub: jdk/internal/misc/Unsafe.get{}:(Ljava/lang/Object;J) (offset={} 无字段闭包)", what, offset)
+}
+
+fn _field_put(o: &Object, offset: i64, v: Object, what: &str) -> Result<()> {
+    if let Some((cls, name)) = field_of_offset(offset) {
+        if let Some(r) = crate::reflect_dispatch::reflect_field(&cls, &name, Clone::clone(o), Some(v)) {
+            return r.map(|_| ());
+        }
+    }
+    panic!("stub: jdk/internal/misc/Unsafe.put{}:(Ljava/lang/Object;J…) (offset={} 无字段闭包)", what, offset)
+}
+
+fn _bad(what: &str) -> crate::error::JvmError {
+    crate::error::JvmError::illegal_argument(&format!("Unsafe.get{}: field value type mismatch", what))
+}
+
+impl Unsafe {
+    #[jvm_boundary]
+    pub fn getBoolean(&self, o: Object, offset: i64) -> Result<bool> {
+        crate::reflect_dispatch::unbox_bool(&_field_get(&o, offset, "Boolean")?).ok_or_else(|| _bad("Boolean"))
+    }
+
+    #[jvm_boundary]
+    pub fn putBoolean(&self, o: Object, offset: i64, x: bool) -> Result<()> {
+        _field_put(&o, offset, Object::from(x), "Boolean")
+    }
+
+    #[jvm_boundary]
+    pub fn getByte_obj_l(&self, o: Object, offset: i64) -> Result<i8> {
+        crate::reflect_dispatch::unbox_i32(&_field_get(&o, offset, "Byte")?).map(|v| v as i8).ok_or_else(|| _bad("Byte"))
+    }
+
+    #[jvm_boundary]
+    pub fn putByte_obj_l_b(&self, o: Object, offset: i64, x: i8) -> Result<()> {
+        _field_put(&o, offset, Object::from(x), "Byte")
+    }
+
+    #[jvm_boundary]
+    pub fn getShort_obj_l(&self, o: Object, offset: i64) -> Result<i16> {
+        crate::reflect_dispatch::unbox_i32(&_field_get(&o, offset, "Short")?).map(|v| v as i16).ok_or_else(|| _bad("Short"))
+    }
+
+    #[jvm_boundary]
+    pub fn putShort_obj_l_s(&self, o: Object, offset: i64, x: i16) -> Result<()> {
+        _field_put(&o, offset, Object::from(x), "Short")
+    }
+
+    #[jvm_boundary]
+    pub fn getChar_obj_l(&self, o: Object, offset: i64) -> Result<u16> {
+        crate::reflect_dispatch::unbox_char(&_field_get(&o, offset, "Char")?).ok_or_else(|| _bad("Char"))
+    }
+
+    #[jvm_boundary]
+    pub fn putChar_obj_l_c(&self, o: Object, offset: i64, x: u16) -> Result<()> {
+        _field_put(&o, offset, Object::from(x), "Char")
+    }
+
+    #[jvm_boundary]
+    pub fn getFloat_obj_l(&self, o: Object, offset: i64) -> Result<f32> {
+        crate::reflect_dispatch::unbox_f32(&_field_get(&o, offset, "Float")?).ok_or_else(|| _bad("Float"))
+    }
+
+    #[jvm_boundary]
+    pub fn putFloat_obj_l_f(&self, o: Object, offset: i64, x: f32) -> Result<()> {
+        _field_put(&o, offset, Object::from(x), "Float")
+    }
+
+    #[jvm_boundary]
+    pub fn getDouble_obj_l(&self, o: Object, offset: i64) -> Result<f64> {
+        crate::reflect_dispatch::unbox_f64(&_field_get(&o, offset, "Double")?).ok_or_else(|| _bad("Double"))
+    }
+
+    #[jvm_boundary]
+    pub fn putDouble_obj_l_d(&self, o: Object, offset: i64, x: f64) -> Result<()> {
+        _field_put(&o, offset, Object::from(x), "Double")
     }
 }

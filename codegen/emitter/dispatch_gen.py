@@ -200,6 +200,13 @@ def _emit_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) ->
             call_expr = f'Self::{rust_name}({call})?'
             tail = f'Ok(Object::from(__r))'
             inner_body = f'let __r = {call_expr}; {tail}'
+            if descriptor == '()V' and rust_name.startswith('new') and only is None:
+                # 序列化构造器的「在已分配实例上运行构造体」入口（JDK generateConstructor
+                # 的访问器语义：分配 cl 实例后运行首个不可序列化超类的无参构造体）
+                _init_on = '__init_on' + rust_name[3:]
+                arms.append(f'        ("<init_on>", "()V") => Some((|| {{ '
+                            f'Self::{_init_on}(recv.try_cast::<Self>("{class_bin}")?)?; '
+                            f'Ok(Object::default()) }})()),')
         elif is_static:
             # void 静态方法同样须 `?` 传播被调方法的异常（缺失即静默吞失——
             # Method.invoke 的 InvocationTargetException 包装面拿不到异常）
@@ -218,6 +225,11 @@ def _emit_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) ->
         arms.append(f'        ("{mname}", "{descriptor}") => '
                     f'Some((|| {{ {inner_body} }})()),')
 
+    if only is None and 'is_abstract       = true' not in em.text:
+        # 无构造分配（序列化构造器：分配目标类实例、不运行其构造器——JDK
+        # ReflectionFactory.newConstructorForSerialization 的实例化语义，N2）
+        arms.append('        ("<alloc>", "()V") => Some((|| { let mut __o = Self::default(); '
+                    '__o._init_not_null(); Ok(Object::from(__o)) })()),')
     if not arms:
         return None
     out = []

@@ -90,6 +90,24 @@ pub fn final_field(name: &str) -> crate::error::JvmError {
     crate::error::JvmError::illegal_argument(&format!("Can not set final field {}", name))
 }
 
+std::thread_local! {
+    /// 序列化构造器登记（构造器对象身份 → 目标类 binary name，N2）：
+    /// ReflectionFactory.newConstructorForSerialization 返回的构造器元数据属于首个不可序列化
+    /// 超类 initCl，但 newInstance 须分配**目标类**实例（JDK generateConstructor 的访问器）。
+    static SERIAL_CTORS: std::cell::RefCell<HashMap<usize, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// 登记序列化构造器（身份 → 目标类）。
+pub fn register_serialization_ctor(ctor_identity: usize, target_slash: &str) {
+    SERIAL_CTORS.with(|m| { m.borrow_mut().insert(ctor_identity, target_slash.to_owned()); });
+}
+
+/// 构造器是否为序列化构造器 → 目标类。
+pub fn serialization_target(ctor_identity: usize) -> Option<String> {
+    SERIAL_CTORS.with(|m| m.borrow().get(&ctor_identity).cloned())
+}
+
 fn lookup(class_slash: &str) -> Option<ReflectDispatch> {
     DISPATCHERS.with(|d| d.borrow().get(class_slash).map(Clone::clone))
 }
@@ -107,7 +125,17 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     if is_ctor && declaring_slash == "java/lang/Object" && descriptor == "()V" {
         return Object::new();
     }
-    let is_virtual = !is_ctor
+    // 序列化构造器伪成员（N2，codegen 分派闭包发射）：`<alloc>` 无构造分配、`<init_on>` 在已
+    // 分配实例上运行无参构造体。按声明类直查（不经虚分派），接收者原样传入。根类 Object 手写
+    // 无闭包：`<alloc>` 即新建实例，`<init_on>` 构造体为空。
+    let is_pseudo = name.starts_with('<') && !is_ctor;
+    if is_pseudo && declaring_slash == "java/lang/Object" {
+        return match name {
+            "<alloc>" => Object::new(),
+            _ => Ok(Object::default()),
+        };
+    }
+    let is_virtual = !is_ctor && !is_pseudo
         && !is_static_descriptor(declaring_slash, name, descriptor);
     // static / 构造器：声明类直查；实例方法：receiver 运行类起沿直接父类上溯
     //（隐式 null 检查：实例方法的 null receiver → NPE，与 JVM invoke0 一致）

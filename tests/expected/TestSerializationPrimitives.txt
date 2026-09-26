@@ -1,0 +1,7 @@
+Base() ran
+All() ran
+written true
+Base() ran
+baseVal 5 t 0
+prims true -8 1234 Q -99999 1099511627776 2.5 -0.125
+refs text 3:314 shared shared true copy true

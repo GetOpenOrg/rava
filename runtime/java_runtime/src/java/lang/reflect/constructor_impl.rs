@@ -55,6 +55,17 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object>> Constructor<T> 
         let Some((cls_key, desc)) = __member_key(self) else {
             panic!("stub: Constructor.newInstance 无声明键（非表构造形态）");
         };
+        // 序列化构造器（ReflectionFactory 登记，N2）：分配目标类实例（不运行其构造器），
+        // 再在该实例上运行本构造器（首个不可序列化超类 initCl 的无参构造体）
+        let __self_id = Object::from(Clone::clone(self)).0.__identity() as usize;
+        if let Some(target) = crate::reflect_dispatch::serialization_target(__self_id) {
+            let empty: JArray<Object> = JArray::from(Vec::<Object>::new());
+            let obj = crate::reflect_dispatch::reflect_invoke(
+                &target, "<alloc>", "()V", Object::default(), &empty)?;
+            crate::reflect_dispatch::reflect_invoke(
+                &cls_key, "<init_on>", "()V", Clone::clone(&obj), &empty)?;
+            return Ok(<T as From<Object>>::from(obj));
+        }
         match crate::reflect_dispatch::reflect_invoke(
             &cls_key, "<init>", &desc, Object::default(), &initargs) {
             Ok(v) => Ok(<T as From<Object>>::from(v)),
