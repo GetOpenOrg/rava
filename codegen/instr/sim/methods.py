@@ -50,10 +50,16 @@ def _gen_signature_polymorphic(sim, comment: str, decl_desc: str, class_name, re
     call_params = parse_descriptor_params(call_desc)
     call_ret = parse_descriptor_return(call_desc)
     packed: list[str] = []
-    for _ in call_params:
+    for p in reversed(call_params):
         e_expr, e_ty = sim.pop()
         ty = render_type(e_ty)
         e = render_expr(e_expr)
+        # 子 int 基本类型（C/S/B/Z）在操作数栈上是 int：按调用点描述符收窄后再装箱，
+        # 使 Object[] 元素的装箱类型与 Java 自动装箱一致（char → Character 而非 Integer）。
+        p_ty = jvm_to_rust(p, registry) if p in ('C', 'S', 'B', 'Z') else ty
+        if p_ty != ty:
+            e = f"({e} != 0)" if p == 'Z' else f"({e} as {p_ty})"
+            ty = p_ty
         if ty == 'Object':
             packed.insert(0, 'Clone::clone(this)' if e == 'this' else f'Clone::clone(&{e})')
         else:
