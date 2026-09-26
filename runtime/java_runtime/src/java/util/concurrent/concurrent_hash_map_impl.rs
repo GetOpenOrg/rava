@@ -15,8 +15,8 @@ use super::concurrent_hash_map::ConcurrentHashMap;
 // Provider.load 实测 604 region）。缺口修复后本容量策略不变、仍然成立。
 impl<K, V> ConcurrentHashMap<K, V>
 where
-    K: Clone + Default + 'static + From<Object> + Into<Object>,
-    V: Clone + Default + 'static + From<Object> + Into<Object>,
+    K: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
+    V: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
 {
     #[jvm_boundary]
     pub fn new() -> Result<Self> {

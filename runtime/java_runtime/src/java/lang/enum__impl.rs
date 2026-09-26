@@ -3,7 +3,7 @@
 use crate::prelude::*;
 use super::*;
 
-impl<E: Clone + Default + 'static + From<Object> + Into<Object>> Enum<E> {
+impl<E: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> Enum<E> {
     /// `Enum.valueOf(Class&lt;T&gt;, String)`（javac 为每个 enum 合成的 `valueOf` 的落点）。
     ///
     /// JDK 字节码经 `Class.enumConstantDirectory()` 的反射目录按名查找；原生侧由

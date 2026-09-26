@@ -9,7 +9,7 @@
 use crate::prelude::*;
 use super::reference::Reference;
 
-impl<T: Clone + Default + 'static + From<Object> + Into<Object>> Reference<T> {
+impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> Reference<T> {
     /// native `refersTo0(Object)`：referent 引用身份比较（Object `==` 即 acmp 语义）。
     /// 消费方：ClassCache 的软引用缓存槽（ObjectStreamClass.lookup 链）。
     #[jvm_native]

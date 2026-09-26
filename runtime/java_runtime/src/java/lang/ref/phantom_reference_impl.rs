@@ -7,7 +7,7 @@
 use crate::prelude::*;
 use super::phantom_reference::PhantomReference;
 
-impl<T: Clone + Default + 'static + From<Object> + Into<Object>> PhantomReference<T> {
+impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> PhantomReference<T> {
     /// native `refersTo0(Object)`：referent 引用身份比较（acmp 语义，null 同样成立）。
     /// 消费方：Reference.refersTo 经 refersToImpl 虚分派到本覆盖（TestReferenceTypes）。
     #[jvm_native]

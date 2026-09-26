@@ -148,6 +148,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 let p: syn::TypeParam = syn::parse_quote! {
                     #pid : Clone + Default + 'static
                         + ::std::convert::From<Object> + ::std::convert::Into<Object>
+                        + __ThreadSafe
                 };
                 gamma_gen.params.push(syn::GenericParam::Type(p));
             }

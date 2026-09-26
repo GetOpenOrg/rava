@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use super::array_list::ArrayList;
 
-impl<E: Clone + Default + 'static + From<Object> + Into<Object>> ArrayList<E> {
+impl<E: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> ArrayList<E> {
     #[jvm_native]
     pub fn add_obj_arr_obj_i(&self, e: E, elementData_arg: JArray<Object>, s: i32) -> Result<()> {
         let this = self;

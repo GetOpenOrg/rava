@@ -24,7 +24,7 @@ fn _with_table<R>(key: usize, f: impl FnOnce(&mut Vec<Object>) -> R) -> R {
 
 impl<T> ReferencedKeySet<T>
 where
-    T: Clone + Default + 'static + From<Object> + Into<Object>,
+    T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
 {
     /// static `create(isSoft, useNativeQueue, supplier)`：工厂——弱引用参数与
     /// 后备 Map 供应商在强引用名单形态下无意义（不驱逐、无并发扩容钩子），

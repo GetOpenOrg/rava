@@ -29,7 +29,7 @@ fn __type_desc(class_name: &str) -> std::string::String {
 }
 
 /// 接收者的构造器挂载键（声明类斜线名, "<init>", 完整描述符——返回段 V）。
-fn __member_key<T: Clone + Default + 'static + From<Object> + Into<Object>>(
+fn __member_key<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe>(
     c: &Constructor<T>) -> Option<(std::string::String, std::string::String)> {
     let clazz = c.__get_clazz();
     if Object::from(Clone::clone(&clazz)).0.is_jvm_null() {
@@ -46,7 +46,7 @@ fn __member_key<T: Clone + Default + 'static + From<Object> + Into<Object>>(
     Some((cls_key, desc))
 }
 
-impl<T: Clone + Default + 'static + From<Object> + Into<Object>> Constructor<T> {
+impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> Constructor<T> {
     /// `newInstance(Object[])`：L3 分派的构造器路径（`<init>` 臂 → Self::new
     /// 系列 typed 构造）。目标构造器抛出的异常包装为
     /// InvocationTargetException（JDK Constructor.newInstance 契约），返回值

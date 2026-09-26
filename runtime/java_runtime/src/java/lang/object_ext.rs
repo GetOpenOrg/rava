@@ -9,7 +9,7 @@ impl Object {
     /// 不需要 `from_any`。
     /// `from_any` 主要用于：泛型参数 E、接口存根、工具方法中的类型擦除场景。
     #[jvm_ext]
-    pub fn from_any<T: 'static>(v: T) -> Self {
+    pub fn from_any<T: 'static + crate::sync_model::__ThreadSafe>(v: T) -> Self {
         // 若 T 已经是 Object，直接 clone 避免双层包装（Object::from_any(Object) 幂等）
         let any_val: &dyn std::any::Any = &v;
         if let Some(obj) = any_val.downcast_ref::<Object>() {
