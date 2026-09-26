@@ -54,6 +54,11 @@ impl SecureRandom {
         Ok(self.__get_algorithm())
     }
 
+    /// `getProvider()`：构造时绑定的 provider（SUN）。
+    pub fn __impl_getProvider(&self) -> Result<Provider> {
+        Ok(self.__get_provider())
+    }
+
     /// `nextBytes(byte[])`：操作系统熵源。
     #[jvm_boundary(upcalls = "java/security/ProviderException.<init>:(Ljava/lang/String;)V")]
     pub fn __impl_nextBytes_arr_b(&self, bytes: JArray<i8>) -> Result<()> {
