@@ -164,3 +164,11 @@
 | N7 | 第 4 项 macOS 侧验证 | ✅ 用户 macOS（arm64，JDK21.0.11）@2f8ba87 实测 | TestFilesApi / TestFileOutputStream PASS（provider 链 MacOSX→Bsd→Unix 通）；TestCharsetForName 揭出 getCallerClass 帧不可解析退回 null → `ServiceConfigurationError: no caller to check`，已修（退回可信类 Object） |
 | — | JDK25 语料适配（原 8 例 E0308 硬阻塞，L1 兼容改写 + decimal_digits 手写） | ✅ 已合入（2026-09-26 核对活跃表时发现过期） | `08ddbf7`+`7caefcc`+`ddb1672`（merge `a63df7c`），见本文 JDK25 L1 math 双件行 |
 | — | 异常兜底收窄（A 组只兜 CfgError、B 组 [fallback-audit]、JAVA_RTA_STRICT 分级） | ✅ 已合入（2026-09-26 核对活跃表时发现过期） | `466f513`；`codegen/fallback_audit.py`，转译输出 `[fallback-audit]` 行 |
+
+## 2026-09-26 归档批次（三）
+
+| # | 任务 | 状态 | 证据 |
+|---|---|---|---|
+| N12 / #38 | JDK25 TestCompletableFuture 运行 4 分钟（JDK21 0.3s） | ✅ 本机 JDK25 实测 **0.36s**（j25a，`5b54dd5`） | 根因：协作调度下限时 park 立即返回，FJP awaitWork 空转至 keepAlive 真实截止。修复：虚拟时钟 `a8c027e`（限时 park / wait / sleep 无线程可推进时时钟跳至截止）；e2e TestVirtualClockPark JDK21 / JDK25 PASS、TestWaitNotify / TestCompletableFuture JDK21 PASS。**真实时间语义的终态由 #42 真多线程取代**（用户决策 2026-09-26，方案 `docs/plans/2026-09-26-real-multithreading.md`） |
+| K-JCA / #39 | JCA 服务注册（算法实现类字节码翻译 + 静态服务表） | ✅ 本机 JDK21 + JDK25 实测 | JDK21（tgt21）：Digester / TestCipherDesModes / TestMessageDigestApi / TestSecureRandomApi / SecurityDemo PASS，DES 经三元合并修复 `e7fbbab` PASS（mh2）；JDK25（j25a）：DES / Digester / TestCipherDesModes PASS。收尾修复：CryptoAlgorithmConstraints.permits（新版 JDK21 / JDK25，`1e9da59`+`1425bec` 重载名）、JDK25 GetInstance.getServices 返回 Iterator（编译期 cfg `jdk_ge_25`，`5b54dd5`）、athrow 克隆（`180ab8c`，MH 播种揭出的 E0382） |
+
