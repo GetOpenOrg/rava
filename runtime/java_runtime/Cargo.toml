@@ -13,6 +13,8 @@ mt = []
 
 [dependencies]
 parking_lot = "0.12"
+# POSIX 系统调用（access / statvfs / pathconf：std 无等价，FS-IO1 / IO2）
+libc = "0.2"
 java_rta_macros = { path = "../java_rta_macros" }
 
 [lints.rust]

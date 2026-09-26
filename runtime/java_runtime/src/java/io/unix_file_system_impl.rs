@@ -45,22 +45,11 @@ impl UnixFileSystem {
         Ok(attrs)
     }
 
-    /// native checkAccess0(File, access)：ACCESS_EXECUTE(1)/WRITE(2)/READ(4)。
+    /// native checkAccess0(File, access)：ACCESS_EXECUTE(1)/WRITE(2)/READ(4) 与 access(2) 的
+    /// X_OK/W_OK/R_OK 同值——按有效用户权限精确判定（root 对只读文件可写等 JDK 同语义）。
     #[jvm_native]
     pub fn checkAccess0(&self, f: File, access: i32) -> Result<bool> {
-        use std::os::unix::fs::PermissionsExt;
-        let Ok(md) = std::fs::metadata(file_path(&f)) else { return Ok(false) };
-        let mode = md.permissions().mode();
-        let mask = if access == FileSystem::ACCESS_READ()? {
-            0o444
-        } else if access == FileSystem::ACCESS_WRITE()? {
-            0o222
-        } else if access == FileSystem::ACCESS_EXECUTE()? {
-            0o111
-        } else {
-            return Ok(false);
-        };
-        Ok(mode & mask != 0)
+        Ok(crate::posix::access(std::path::Path::new(&file_path(&f)), access) == 0)
     }
 
     /// native getLastModifiedTime0(File)：epoch 毫秒；不存在返回 0。
@@ -204,17 +193,15 @@ impl UnixFileSystem {
         Ok(file.set_times(FileTimes::new().set_modified(t)).is_ok())
     }
 
-    /// native getNameMax0(String)：NAME_MAX（pathconf 无 std 等价，
-    /// 255 为 APFS/HFS+/ext4 通用值）。
+    /// native getNameMax0(String)：pathconf(_PC_NAME_MAX)。
     #[jvm_native]
-    pub fn getNameMax0(&self, _path: String) -> Result<i64> {
-        Ok(255)
+    pub fn getNameMax0(&self, path: String) -> Result<i64> {
+        Ok(crate::posix::name_max(std::path::Path::new(&format!("{}", path))))
     }
 
-    /// native getSpace0(File, t)：statvfs 无 std 等价，返回 0
-    ///（SPACE_TOTAL/FREE/USABLE 查询，语料内无消费方）。
+    /// native getSpace0(File, t)：statvfs——SPACE_TOTAL(0) / SPACE_FREE(1) / SPACE_USABLE(2)。
     #[jvm_native]
-    pub fn getSpace0(&self, _f: File, _t: i32) -> Result<i64> {
-        Ok(0)
+    pub fn getSpace0(&self, f: File, t: i32) -> Result<i64> {
+        Ok(crate::posix::space(std::path::Path::new(&file_path(&f)), t))
     }
 }

@@ -1,0 +1,7 @@
+file r=true w=true x=false
+nio r=true x=false
+setExecutable true x=true nio x=true
+dir x=true r=true
+missing r=false w=false x=false nio=false
+space total>0 true free<=total true usable<=free true missing total 0
+cleanup true

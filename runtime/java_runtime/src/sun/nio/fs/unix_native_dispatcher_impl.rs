@@ -174,18 +174,12 @@ impl UnixNativeDispatcher {
         std::fs::remove_dir(&p).map_err(|e| JvmError::from(as_unix_exception(&e)))
     }
 
-    /// `access(UnixPath, int amode)`：access(2) 的 errno 返回形态（0=允许）。
-    /// F_OK 以 metadata 精确承载；R_OK/W_OK/X_OK 无 std 等价（faccessat 需
-    /// libc——档 B），档 A 以存在性近似（用例面 only 走 F_OK：exists 链；
-    /// isReadable/isWritable/isExecutable 未被需求登记，保持存根不受影响）。
+    /// `access(UnixPath, int amode)`：access(2) 的 errno 返回形态（0=允许），F_OK / R_OK /
+    /// W_OK / X_OK 均按有效用户权限精确判定（FS-IO1）。
     #[jvm_native]
     pub fn access(path: UnixPath, amode: i32) -> Result<i32> {
-        let _ = amode; // 见上：R/W/X 近似为 F_OK 语义
         let p = sys_path(&path)?;
-        match std::fs::metadata(&p) {
-            Ok(_) => Ok(0),
-            Err(e) => Ok(e.raw_os_error().unwrap_or(consts::errno::ENOENT)),
-        }
+        Ok(crate::posix::access(std::path::Path::new(&p), amode))
     }
 
     /// `strerror(int)`：平台错误字符串（jnu 编码字节）。

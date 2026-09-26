@@ -92,7 +92,7 @@
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| FS-IO1 | POSIX 档 A：`access` 的 R/W/X 近似为 F_OK | 档 B：`faccessat` | isReadable 等会误报 | #15（按需） |
+| ~~FS-IO1~~ ✅ | POSIX 档 A：`access` 的 R/W/X 近似为 F_OK | 档 B：`faccessat` | isReadable 等会误报 | #15（按需） |
 | FS-IO2 | `checkAccess0` 宽容近似；`getSpace0` 恒 0；`getNameMax0` 恒 255 | 真实的 access / statvfs / pathconf | `canWrite` 误报；`getFreeSpace` 恒为 0 | 部分（#15） |
 | FS-IO3 | UnixPath 的 macOS NFD 用恒等处理；relativize / toUri / 迭代器是存根 | 完整实现 | macOS 非 ASCII 路径比较不同；调用即 panic | #15 |
 | FS-IO4 | `FileSystems` 整类手写 | 翻译字节码 | 自定义 FileSystemProvider / zipfs 不可用 | 新立 |
