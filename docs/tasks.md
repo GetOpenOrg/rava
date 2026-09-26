@@ -58,7 +58,7 @@
 | S-66 | Java 对象序列化（ObjectOutputStream / ObjectInputStream，含 record） | 🔄 进行中 | SerializableDemo 已推进至反序列化 resolveClass（forName0 已补，待复跑）；**record 路径阻塞于 N11 MH-native**（写侧 canonicalRecordCtr → unreflectConstructor，读侧 MethodHandle 组合子） |
 | N8 | 服务器编译资源约束 | 📝 已记录 | 单 rustc ~14G 内存；共享 target 每测试残留 0.5–1G，跑批间需清理（`scripts/prune.sh`；后台跑批用 `scripts/run_bg.sh`，自带低内存编译环境）。2026-09-25 本机（16G 容器）JDK25 TestVirtualThread（76+1699 类）debuginfo=2 下 rustc 峰值 13.8G 被 cgroup OOM 杀；`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 下通过（二进制 507M→270M） |
 | N11 / #40 | MH-native：MethodHandle 原生调用模型 | 🔄 主体完成，验证排队 fld1 | 方案 `docs/plans/2026-09-26-mh-native.md`：InvokerBytecodeGenerator 入 vm_boundary、invokeBasic 原生 LambdaForm 解释器、linkTo*/成员调用经 reflect_invoke、常量反射引用播种、签名多态调用点 `__site`、字段句柄经 reflect_field。e2e TestMethodHandleDirect / TestMethodHandleCombinators（`tests/e2e/59_method_handles/`）。后续：组合子全集 + RecordsSerializationTest |
-| #42 | 真多线程（OS 线程 + JVM 等价时间 / 同步语义） | 🔄 第 1 步抽象层已推送（`f0b9a45`/`c6e5980`） | 用户决策 2026-09-26：虚拟时钟偏离 JVM 真实时间语义，须真实多线程、行为等价。方案 `docs/plans/2026-09-26-real-multithreading.md`；下一步：codegen 产出的 Rc 迁移 → 第 2 步 `mt` 后端 |
+| #42 | 真多线程（OS 线程 + JVM 等价时间 / 同步语义） | 🔄 第一档（GIL）已实施，验证中（gil1） | 用户决策 2026-09-26：虚拟时钟偏离 JVM 真实时间语义，须真实多线程、行为等价。第一档 OS 线程 + 全局解释器锁（`a5476f3`+`cca3e92`）：真实线程 / 挂钟 / 阻塞，协作调度与虚拟时钟已删除；方案 `docs/plans/2026-09-26-real-multithreading.md` §三-A。e2e `tests/e2e/60_real_threads/` 7 例（本机 TestThreadCounters / TestSpinVolatile 与 JVM 一致）。遗留：阻塞原语的中断唤醒、阻塞中 getState。第二档（Arc + 原子单元，并行加速）远期 |
 
 ## 🔴 活跃任务
 
