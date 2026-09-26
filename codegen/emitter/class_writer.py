@@ -49,6 +49,21 @@ _ACC_FINAL   = 0x0010
 _ACC_STATIC  = 0x0008
 
 
+
+def _audit_override(ci, m) -> None:
+    """FS-H0 审计：公开 API 类的非 native 方法被手写覆盖（跳过字节码翻译）。
+
+    两条覆盖路径同口径登记：同名 fn（静态 / 非虚）与虚方法的 `__impl_<m>` 手写体。
+    VM 内建函数（intrinsics.txt 准入）单独计数，不算越界。"""
+    if m.is_native or m.is_abstract or not ci.name.startswith(('java/', 'javax/')):
+        return
+    from .. import raw_audit as _ra
+    _member = f'{ci.name}.{m.name}:{m.descriptor}'
+    if _member in _ra.intrinsics():
+        _ra.record_intrinsic(_member)
+    else:
+        _ra.record_override(_member)
+
 def _adapt_interface_method(method, ci, iface_bin: str, views: dict):
     """接口方法体展开到实现类 ci：所属类换成 ci，泛型签名（方法 / 局部变量）里的接口类型变量
     换成 ci 视角下的类型实参。"""
@@ -361,15 +376,7 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
         _nf_covered = (_nf_entry or {}).get('methods', set())
         fn_name_check = safe_ident(rust_name or m.name)
         if fn_name_check in _nf_covered:
-            # FS-H0 审计：公开 API 类的非 native 方法被手写覆盖（跳过字节码翻译）
-            if (not m.is_native and not m.is_abstract
-                    and ci.name.startswith(('java/', 'javax/'))):
-                from .. import raw_audit as _ra
-                _member = f'{ci.name}.{m.name}:{m.descriptor}'
-                if _member in _ra.intrinsics():
-                    _ra.record_intrinsic(_member)   # VM 内建（intrinsics.txt 准入），非越界覆盖
-                else:
-                    _ra.record_override(_member)
+            _audit_override(ci, m)
             # 手写共置文件按同一 mangle 规则提供实现 → 定义名仍记为计算名（G-10 账本）
             LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
             # 接口例外（伴生隐含契约）：接口实例方法的伴生实现落在 `Iface__VTable`
@@ -475,6 +482,7 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
         # 虚方法的方法体由共置 `_impl.rs` 手写为 `__impl_<method>`：声明留在宏块内（进 vtable、
         # 参与覆盖与根类方法桥接），宏经 wrapper 钩子执行手写体
         if m.virtual_in and ('__impl_' + fn_name_check) in _nf_covered:
+            _audit_override(ci, m)
             m.handwritten_body = True
             _decl = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry,
                                      class_type_params=class_type_params)

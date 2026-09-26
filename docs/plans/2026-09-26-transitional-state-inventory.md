@@ -27,25 +27,26 @@
 
 ### FS-H0 进度与余项明细（`[override-audit]`，2026-09-26）
 
-审计线（fb4141a）：`class_writer.py` 登记每处非 native 方法的手写覆盖，`[raw-audit] non_native_overrides=N` 汇总、`[override-audit]` 逐位点输出（`scripts/main.py`）。VM 内建函数经 `runtime/java_runtime/intrinsics.txt` 准入，单独计 `intrinsics=`，不算违例。
+审计线（fb4141a）：`class_writer.py` 的 `_audit_override` 登记每处非 native 方法的手写覆盖，`[raw-audit] non_native_overrides=N` 汇总、`[override-audit]` 逐位点输出（`scripts/main.py`）。两条覆盖路径同口径：同名 fn（静态 / 非虚）与虚方法的 `__impl_<m>` 手写体（后者审计起初漏计，补上后计数由 60 修正为 98）。VM 内建函数经 `runtime/java_runtime/intrinsics.txt` 准入，单独计 `intrinsics=`，不算违例。
 
-| 批次 | 内容 | 计数 |
-|---|---|---|
-| fb4141a | 删除 Math / StrictMath 全部越界覆盖（FS-N1..N5）；StrictMath.sqrt 入内建清单（1c7c5e1） | → 65 |
-| f675869 | 删除 Character.digit、Thread.interrupt / isTerminated / getThreadGroup；AtomicInteger(int) 改为调用点 upcalls 声明 | 65 → 60 |
+| 批次 | 内容 |
+|---|---|
+| fb4141a | 删除 Math / StrictMath 全部越界覆盖（FS-N1..N5）；StrictMath.sqrt 入内建清单（1c7c5e1） |
+| f675869 | 删除 Character.digit、Thread.interrupt / isTerminated / getThreadGroup；AtomicInteger(int) 改为调用点 upcalls 声明（−5） |
+| 审计补漏 | `__impl_` 虚方法路径计入：ComprehensiveTest 口径 **98** 处 |
 
-余 60 处（ComprehensiveTest / TestMathSpec 调用链口径），按根因分组：
+余 98 处按根因分组：
 
-| 组 | 覆盖点 | 根因 / 去除路径 | 对应项 |
+| 组 | 覆盖点（数） | 根因 / 去除路径 | 对应项 |
 |---|---|---|---|
-| 反射元数据 | `Class.` cast / descriptorString / getAnnotation(s) / isAnnotationPresent / getClassLoader / getConstructor(s) / getDeclaredConstructor(s) / getDeclaredField(s) / getDeclaredMethod(s) / getFields / getMethod / getModule / getPackageName / isMemberClass / isRecord（21）；`Constructor.` getAnnotation / newInstance，`Field.` getAnnotation / getDeclaredAnnotations，`Method.` getAnnotation / getDeclaredAnnotations / invoke（7） | JDK 字节码经 ReflectionFactory / 注解解析器读 class 文件字节；原生二进制无常量池——需「反射元数据表」生成后以 native（getDeclaredFields0 等）承载，公开方法回到字节码 | FS-R 组 |
-| 类加载器 / 模块 | `ClassLoader.` getParent / getResource(s) / getSystemClassLoader / getSystemResource(s)（6）；`Module.` canUse / isNamed（2） | 需内建类加载器对象图（BuiltinClassLoader 边界类）+ 静态资源表 | FS-C 组 |
-| 运行时字节码生成 | `InvokerBytecodeGenerator.` generateCustomizedCode / generateLambdaFormInterpreterEntryPoint / isStaticallyInvocable×3 / lookupPregenerated（6） | 原生二进制不能在运行时定义类；最终态为「LambdaForm 解释执行」路径（等价于 HotSpot 关闭编译时的解释入口），届时这组改为内建清单并注明理由 | FS-M 组 |
-| 安全框架 | `AccessController.` doPrivileged / getContext，`Permission.<init>`、`BasicPermission.<init>`，`SecureRandom.<init>`×2（6） | 前四个可直接回到字节码（SecurityManager 恒 null）；SecureRandom 需 Provider 服务表（FS-C4） | FS-C4 |
-| I/O | `FileCleanable.` register / unregister，`FileSystems.getDefault`（3） | Cleaner 线程（FS-G 组）与 DefaultFileSystemProvider 边界类 | FS-G / FS-I |
-| 数值 | `Double.toString`（FS-N6，DoubleToDecimal）、`Integer.valueOf`（IntegerCache.<clinit> 链） | 回到字节码 | FS-N6 |
-| 集合 | `ArrayList.` add(E,Object[],int) / elementData / get，`Arrays.copyOf(T[],int)`，`ConcurrentHashMap.<init>()` | ArrayList：泛型 E 载体与 checkcast；copyOf：组件类型（FS-R6）；CHM：transfer 的变量提升缺口（codegen/method/vars.py hoist） | FS-R6 / 新立 |
-| 其他 | `Enum.valueOf`（enumConstantDirectory 反射链）、`VirtualThread.<init>`（FS-T4）、`DecimalFormatSymbols.initializeCurrency`（Currency 数据文件） | 各随所属项 | FS-T4 等 |
+| 反射元数据 | `Class` 24；`Field` get / getInt / getLong / set / getAnnotation / getDeclaredAnnotations 6；`Method` 3；`Constructor` 2 | JDK 字节码经 ReflectionFactory / 注解解析器读 class 文件字节；原生二进制无常量池——需「反射元数据表」生成后以 native（getDeclaredFields0 等）承载，公开方法回到字节码 | FS-R 组 |
+| 虚拟线程 | `VirtualThread` <init> / start×2 / run / park / parkNanos / unpark / joinNanos / alive / isTerminated 10 | Continuation 未建模，虚拟线程由 OS 线程承载 | FS-T4 |
+| 安全 / 提供者 | `SecureRandom` 9、`Provider$Service` 7、`Provider` 1、`AccessController` 2、`Permission` 2、`BasicPermission` 1 | `java/security/` 整包是边界（boundary_prefixes.txt）；去掉边界后 AccessController / Permission 可直接回到字节码，SecureRandom / Provider 需服务表 | FS-K7 / FS-C4 |
+| 类加载器 / 模块 | `ClassLoader` 6、`Module` 2 | 需内建类加载器对象图（BuiltinClassLoader 边界类）+ 静态资源表 | FS-C 组 |
+| 运行时字节码生成 | `InvokerBytecodeGenerator` 6 | 原生二进制不能在运行时定义类；最终态走「LambdaForm 解释执行」路径（等价 HotSpot 的解释入口），届时这组改入内建清单并注明理由 | FS-M 组 |
+| 数值 / 文本 | `Double.toString` ×2（FS-N6，DoubleToDecimal）、`Integer.toString()` / `Integer.valueOf`（IntegerCache.<clinit> 链）、`StackTraceElement.computeFormat`、`DecimalFormatSymbols.initializeCurrency` | 回到字节码；后两者依赖模块 / Currency 数据 | FS-N6 等 |
+| 集合 / 属性 | `ArrayList` add / elementData / get、`Arrays.copyOf(T[],int)`、`ConcurrentHashMap.<init>()`、`Properties.getProperty` ×2 | ArrayList：泛型 E 载体与 checkcast；copyOf：组件类型（FS-R6）；CHM：transfer 的变量提升缺口（codegen/method/vars.py hoist）；Properties：defaults 链 | FS-R6 / FS-H 组 |
+| I/O / 其他 | `FileCleanable` ×2、`FileSystems.getDefault`、`Enum.valueOf` | Cleaner 线程（FS-G 组）、DefaultFileSystemProvider 边界类、enumConstantDirectory 反射链 | FS-G / FS-R |
 
 ## 一、线程 / 并发
 
