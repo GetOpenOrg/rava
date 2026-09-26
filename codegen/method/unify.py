@@ -40,7 +40,7 @@ def _uses_jvm_null_method(ty: str, type_params=()) -> bool:
     JArray 的 null 是 Repr::Null（S-3.1：null 数组引用与空数组严格区分），由固有方法承载。"""
     if ty in ('Object', '()', '') or ty in _PRIM_TYPES or ty in type_params:
         return False
-    if ty.startswith(('Rc<', 'Vec<', 'Box<', 'std::')):
+    if ty.startswith(('Rc<', '__Shared<', 'Vec<', 'Box<', 'std::')):
         return False
     if len(ty) <= 2 and ty[0].isupper() and ty.rstrip('0123456789').isalpha():
         return False

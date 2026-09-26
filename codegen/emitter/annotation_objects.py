@@ -277,7 +277,7 @@ def synthesize(emissions: dict, registry: dict) -> None:
         lines.append('    fn is_instance_of(&self, type_id: &str) -> bool {')
         lines.append('        matches!(type_id, ' + ' | '.join(f'"{p}"' for p in patterns) + ')')
         lines.append('    }')
-        lines.append('    fn __interface(self: std::rc::Rc<Self>, slot: &mut dyn std::any::Any) {')
+        lines.append('    fn __interface(self: __Shared<Self>, slot: &mut dyn std::any::Any) {')
         impl_targets: list[tuple[str, str]] = []
         for jbin in closure:
             jci2 = registry.get(jbin)
@@ -286,7 +286,7 @@ def synthesize(emissions: dict, registry: dict) -> None:
             jpath = class_use_path(jbin, em.crate_prefix, emissions,
                                    getattr(em, 'crate_name', ''))
             lines.append('        if let Some(s) = slot.downcast_mut::'
-                         f'<Option<std::rc::Rc<dyn {jpath}__VTable>>>() {{ *s = Some(self); return; }}')
+                         f'<Option<__Shared<dyn {jpath}__VTable>>>() {{ *s = Some(self); return; }}')
             impl_targets.append((jbin, jpath))
         lines.append('    }')
         lines.append('}')
@@ -337,7 +337,7 @@ def synthesize(emissions: dict, registry: dict) -> None:
         # 工厂登记路径（从用户 main 视角——user bin 依赖全部 lib crate 与
         # java_runtime；同 class_use_path 的 user 接收者语义）
         path = class_use_path(iface_bin, 'java_runtime', emissions, 'user')
-        LEDGER[iface_bin] = f'    ("{iface_bin}", std::rc::Rc::new(' \
+        LEDGER[iface_bin] = f'    ("{iface_bin}", java_runtime::sync_model::__Shared::new(' \
             f'|v| {path}__AnnotationProxy::from_values(v))),'
 
 

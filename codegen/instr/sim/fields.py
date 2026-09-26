@@ -33,7 +33,7 @@ from ... import equiv_audit
 # Rust 内建容器与已知类型短名（用于泛型类型可见性校验）
 # 基本类型名也必须视为可见：装箱类型实参映射为 Rust 基本类型（X<Boolean> → X<bool>），
 # 否则此类字段的声明类型恢复被整体拒绝，读取侧退化为擦除形态
-_BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', 'Vec', 'RefCell', 'JArray'}) | _PRIMITIVE_RUST_TYPES
+_BUILTIN_G: frozenset[str] = frozenset({'Object', 'String', 'Rc', '__Shared', 'Vec', 'RefCell', 'JArray'}) | _PRIMITIVE_RUST_TYPES
 
 
 def _static_field_decl_class(cls: str, comment: str, registry: dict | None) -> str:
@@ -233,7 +233,7 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
         # 先 Clone::clone(&val) 再 .into()，避免 into() 转移所有权后变量失效（E0382）
         val_str = upcast_expr(val_str_raw, 'clone')
     elif (val_ty_name == 'Object' and ftype not in _PRIMITIVE_RUST_TYPES
-          and ftype not in ('Object', '()') and not ftype.startswith('Rc<')):
+          and ftype not in ('Object', '()') and not ftype.startswith(('Rc<', '__Shared<'))):
         # 值经擦除边界（泛型静态方法 <T> T f(T) 等）退化为 Object，
         # 字段声明为具体类/类型参数：checkcast 还原（Java 侧此处是隐式 checkcast）。
         # 统一经 From<Object>（A-1 存储层擦除后对任意类型实参成立，共享存储与

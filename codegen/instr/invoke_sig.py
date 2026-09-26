@@ -355,7 +355,7 @@ def _downcast_target_valid(expected: str, sim: 'StackSim', registry: dict | None
     if not _names:
         return False
     _ok = set(sim.class_type_params or ()) | set(_concrete_class_shorts(registry))
-    _ok |= {'Object', 'String', 'Class', 'Rc', 'Vec', 'RefCell', 'Option'}
+    _ok |= {'Object', 'String', 'Class', 'Rc', '__Shared', 'Vec', 'RefCell', 'Option'}
     # 基本类型实参（`AbstractPipeline<Object, i32, Object>`：包装类按基本类型建模）
     _ok |= set(_PRIMITIVE_TYPE_NAMES)
     return all(_n in _ok for _n in _names)
@@ -436,7 +436,7 @@ def _lookup_method_sig_ret(
             from ..type_args import split_rust_type_args as _split_args_s2
             _builtin = frozenset({
                 'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
-                'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
+                'i8', 'i16', 'u32', 'u64', '()', 'Rc', '__Shared', 'Vec', 'RefCell', 'usize', 'u8',
                 'JArray',  # Rust 端数组包装，不对应 Java 类
             })
             _reg_shorts = {_short_cls_g(k) for k in registry}

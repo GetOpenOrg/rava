@@ -321,7 +321,7 @@ def method_sig_types(ci, m, class_type_params: list[str], registry=None) -> tupl
 
 _SIG_TYPE_BUILTIN = frozenset({
     'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
-    'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell', 'usize', 'u8',
+    'i8', 'i16', 'u32', 'u64', '()', 'Rc', '__Shared', 'Vec', 'RefCell', 'usize', 'u8',
     'JArray',  # Rust 端数组包装，不对应 Java 类
 })
 

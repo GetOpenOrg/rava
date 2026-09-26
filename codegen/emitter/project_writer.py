@@ -721,7 +721,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         _, _pkg, _mod = layout[ci.name]
         hook_path = '::'.join(['crate', *_pkg, _mod, short_cls(ci.name)])
         hook_lines.append(
-            f'    ("{ci.name}", std::rc::Rc::new(|| {hook_path}::__class_init())),')
+            f'    ("{ci.name}", java_runtime::sync_model::__Shared::new(|| {hook_path}::__class_init())),')
     hook_block = ''
     if hook_lines:
         hook_block = ('    java_runtime::register_class_init_hooks(&[\n'

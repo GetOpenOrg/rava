@@ -343,7 +343,7 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]',
             continue
         em.text = em.text.rstrip('\n') + '\n' + ftext + '\n'
         fpath = class_use_path(bin_name, 'java_runtime', emissions, 'user')
-        FIELD_LEDGER[bin_name] = f'    ("{bin_name}", std::rc::Rc::new(' \
+        FIELD_LEDGER[bin_name] = f'    ("{bin_name}", java_runtime::sync_model::__Shared::new(' \
             f'|n, r, v| {fpath}::__reflect_field(n, r, v))),'
 
     targets = {b: None for b in user_bins}
@@ -365,7 +365,7 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]',
         em.text = em.text.rstrip('\n') + '\n' + text + '\n'
         path = class_use_path(bin_name, 'java_runtime', emissions, 'user')
         short = short_cls(bin_name)
-        LEDGER[bin_name] = f'    ("{bin_name}", std::rc::Rc::new(' \
+        LEDGER[bin_name] = f'    ("{bin_name}", java_runtime::sync_model::__Shared::new(' \
             f'|n, d, r, a| {path}::__reflect_dispatch(n, d, r, a))),'
 
 

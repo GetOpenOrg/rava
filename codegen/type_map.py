@@ -131,7 +131,7 @@ _QUALIFIED_SHORT_NAMES: dict[str, str] = {}
 _PRELUDE_CONFLICT_NAMES = frozenset({
     # java_runtime::prelude 再导出（类型 / 别名）
     'JArray', 'JvmError', 'Result', 'Object', 'ObjectVTable', 'String',
-    'MonitorGuard', 'Rc', 'RefCell',
+    'MonitorGuard', 'Rc', '__Shared', 'RefCell',
     # std::prelude::v1（发射面裸引用：Ok( / Err( / Some( / None / Option< /
     # Vec< / 泛型 bounds 文本 Clone + Default）
     'Option', 'Some', 'None', 'Ok', 'Err', 'Vec', 'Clone', 'Default',

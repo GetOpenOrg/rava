@@ -106,7 +106,7 @@ def _maybe_downcast(expr: RsExpr, ty: RsType) -> RsExpr:
     # 目标为任意非 Object 引用类型（含裸类型参数 V/K 与非泛型类）都需要还原：
     # 源值的静态类型是 Object，直接 `let v: V = _t0` 必然 E0308。
     if (isinstance(expr, Var) and isinstance(ty, RsNamed)
-            and ty.name != 'Object' and not ty.name.startswith('Rc<')
+            and ty.name != 'Object' and not ty.name.startswith(('Rc<', '__Shared<'))
             and not ty.name.startswith('&') and ty.name != '()'):
         return CastExpr(expr, ty.name)
     return expr

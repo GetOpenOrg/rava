@@ -242,7 +242,7 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _sam_anames = [f'_la{i}' for i in range(len(_sam_ptypes))]
                     # Fn 类型签名（Result 用裸名：user crate 里 crate::error 是 E0433，两边均经 prelude 引入）
                     _fn_params_sig = ', '.join(f'{_a}: {_t}' for _a, _t in zip(_sam_anames, _sam_ptypes))
-                    _fn_type = f'std::rc::Rc<dyn Fn({", ".join(_sam_ptypes)}) -> Result<{_sam_rtype}>>'
+                    _fn_type = f'__Shared<dyn Fn({", ".join(_sam_ptypes)}) -> Result<{_sam_rtype}>>'
                     # 调用实现方法的参数列表（捕获变量 + SAM 参数）
                     # Clone::clone 而非 .clone()：捕获值可能是带 Java clone() 的类
                     # 实例实现方法（捕获 this 的 lambda / 绑定接收者的方法引用）：
@@ -467,11 +467,11 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                                  if _sam_iface_bin else None)
                     if _sam_ctor is not None:
                         record_site(_sam_iface_bin, _sam_type_desc, class_name)
-                        _lam_box_expr = (f'Object::from({_sam_ctor}(std::rc::Rc::new('
+                        _lam_box_expr = (f'Object::from({_sam_ctor}(__Shared::new('
                                          f'move |{_fn_params_sig}| -> Result<{_sam_rtype}> '
                                          f'{{ {_closure_body} }})))')
                     else:
-                        _lam_box_expr = (f'Object::from_any(std::rc::Rc::new('
+                        _lam_box_expr = (f'Object::from_any(__Shared::new('
                                          f'move |{_fn_params_sig}| -> Result<{_sam_rtype}> '
                                          f'{{ {_closure_body} }}) as {_fn_type})')
                     sim.emit(LetStmt(_lam_varname, RsNamed('Object'), False, RawExpr(

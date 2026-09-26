@@ -23,7 +23,7 @@ from ..type_args import outer_ref_field_type
 # JArray 是 Rust 端数组包装类型，不对应 Java 类，须手动加入
 _BUILTIN_TYPES = frozenset({
     'Object', 'String', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16',
-    'i8', 'i16', 'u32', 'u64', '()', 'Rc', 'Vec', 'RefCell',
+    'i8', 'i16', 'u32', 'u64', '()', 'Rc', '__Shared', 'Vec', 'RefCell',
     'usize', 'u8', 'JArray',
 })
 # Rust 结构符号，不是类型名，跳过校验
