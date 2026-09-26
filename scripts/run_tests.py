@@ -1263,6 +1263,10 @@ def main():
 
     apply_jdk_choice(args.jdk)
 
+    if args.filter:
+        # filter 去重保序——发现逻辑按文件去重不会重复执行，但起始行显示与语义应干净
+        args.filter = list(dict.fromkeys(args.filter))
+
     # JDK 版本层在 JAVA_HOME 解析后确定：scratch/target/logs 统一走 _versioned
     JDK_LAYER = str(_current_jdk_major()) if _current_jdk_major() is not None else None
     SHARED_TARGET = _versioned(OUT) / "target"
