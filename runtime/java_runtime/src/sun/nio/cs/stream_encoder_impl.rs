@@ -47,6 +47,23 @@ impl StreamEncoder {
     pub fn flush(&self) -> Result<()> {
         self.__get_out().flush()
     }
+
+    /// `close()`：JDK `implClose` 语义——残留的孤立高代理项按编码器替换字节（`?`）写出，
+    /// 再关闭底层 OutputStream；重复关闭无操作（closed 位）。
+    /// 消费方：`PrintStream(out, autoFlush, charsetName).close()` → BufferedWriter →
+    /// OutputStreamWriter → 本类。
+    #[jvm_boundary(upcalls = "java/io/OutputStream.close:()V java/io/OutputStream.write:([BII)V")]
+    pub fn close(&self) -> Result<()> {
+        if self.__get_closed() {
+            return Ok(());
+        }
+        if self.__get_haveLeftoverChar() {
+            self.__set_haveLeftoverChar(false);
+            self.__get_out().write_arr_b_i_i(JArray::from(vec![b'?' as i8]), 0, 1)?;
+        }
+        self.__set_closed(true);
+        self.__get_out().close()
+    }
 }
 
 impl StreamEncoder {
