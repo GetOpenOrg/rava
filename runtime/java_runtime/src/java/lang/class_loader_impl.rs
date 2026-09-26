@@ -22,6 +22,17 @@ impl ClassLoader {
         Ok(SCL.with(Clone::clone))
     }
 
+    /// static `getClassLoader(Class)`：类的定义加载器（`Class.forName(String)` 按调用方类
+    /// 取加载器）。与 `Class.getClassLoader` 同源（FS-C2 分层加载器落地前恒为 null，即
+    /// boot 形态）；forName0 不按加载器分派，结果与 JDK 一致。
+    #[jvm_boundary]
+    pub fn getClassLoader(caller: super::Class) -> Result<ClassLoader> {
+        if Object::from(Clone::clone(&caller)).0.is_jvm_null() {
+            return Ok(ClassLoader::default());
+        }
+        caller.getClassLoader()
+    }
+
     /// 父加载器（JDK 层级 app → platform → null）。app 单例的 parent 在
     /// 组装时挂 platform；其余实例（platform/boot 身份对象）parent 为 null
     ///（层级到顶，getParent 返回 null 的 JDK 语义）。
