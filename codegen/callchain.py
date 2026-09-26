@@ -353,12 +353,27 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                         _enqueue_method((cur, bmeth, bdesc))
                     break
                 cur = ci.super_class
+    _pending_allocs: list[str] = []
+
+    def _drain_allocs() -> None:
+        """N6 分配候选 → RTA 已实例化（只登记翻译类，见 _enqueue_upcalls 注释）。"""
+        while _pending_allocs:
+            _ab = _resolve_impl_ref(_pending_allocs.pop(0), resolver)
+            if (_ab and _ab not in instantiated_classes and _ab not in _JAVA_RUNTIME_CLASSES
+                    and _ab.startswith(_JDK_PREFIXES) and not _is_boundary_class(_ab)):
+                instantiated_classes.add(_ab)
+                field_discover_classes.add(_ab)
 
     def _enqueue_upcalls(cls: str, member: str) -> None:
         """被触达成员的手写实现声明的 Java 回调目标入队（native → Java 的调用边）。"""
         if upcalls is None or (cls, member) in seen_members:
             return
         seen_members.add((cls, member))
+        # N6：手写体分配的 Java 对象（`T::default()` + `_init_not_null()`）无 `new` 指令可见，
+        # 按成员登记为 RTA 已实例化——经 Object / 基类视图的虚调用据此传播到其覆盖版本。
+        # 只登记翻译类：边界类的虚方法本就手写，登记会把其字节码拉进翻译。
+        # 种子阶段 resolver 尚未就绪 → 候选暂存，由不动点循环的 _drain_allocs 解析登记。
+        _pending_allocs.extend(sorted(upcalls.allocated(cls, member)))
         for tcls, tmeth, tdesc in upcalls.lookup(cls, member):
             # 回调目标自身也是被触达的成员：其手写实现可继续声明回调
             _enqueue_upcalls(tcls, tmeth)
@@ -980,6 +995,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 continue
             if queue:
                 continue
+            _drain_allocs()
             _propagate_virtual_targets()
             if (not queue and not _bundles_seeded
                     and any(t in seen_members for t in _ls_mf.triggers)):

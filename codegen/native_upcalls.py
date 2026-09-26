@@ -24,6 +24,16 @@ _UPCALL_ATTR_RE = re.compile(
     re.S,
 )
 _PUB_FN_RE = re.compile(r'\bpub fn\s+(\w+)\s*[(<]')
+# N6：手写体里分配的 Java 对象（`let mut x = T::default(); x._init_not_null();`——单独的
+# `T::default()` 是 Java null，不计）。BFS 看不到这类构造的 `new` 指令，须登记为 RTA
+# 已实例化，否则经 Object / 基类视图的虚调用落不到其覆盖版本（Class.toString、
+# RecordComponent.toString 先例）。
+_FN_START_RE = re.compile(r'\bfn\s+(\w+)\s*[(<]')
+_ALLOC_RE = re.compile(
+    r'let\s+mut\s+(\w+)\s*(?::[^=;]+)?=\s*((?:\w+::)*\w+)(?:::<[^;]*?>)?::default\(\)\s*;')
+_CALL_RE = re.compile(r'\b(\w+)\s*\(')
+_USE_RE = re.compile(r'^\s*use\s+([\w:]+)::(\w+)\s*;', re.M)
+_USE_GROUP_RE = re.compile(r'^\s*use\s+([\w:]+)::\{([^}]*)\}\s*;', re.M)
 _CTOR_RUST_NAME = 'new'
 _VIRTUAL_BODY_PREFIX = '__impl_'
 
@@ -42,6 +52,8 @@ class NativeUpcalls:
     def __init__(self, runtime_src: str):
         self._src = runtime_src
         self._cache: dict[str, dict[str, list]] = {}
+        # N6：fn 名 → 该 fn（含同文件被调 fn 的传递闭包）分配的类型（binary name 候选）
+        self._allocs: dict[str, dict[str, set]] = {}
         # 共置手写文件的全部 pub fn 名（成员覆盖判定用，见 provides）
         self._fns: dict[str, set[str]] = {}
 
@@ -65,12 +77,86 @@ class NativeUpcalls:
             if 'java_rta_macros::java_class' in content:
                 continue
             fns.update(_PUB_FN_RE.findall(content))
+            self._scan_allocs(cls, content)
             for m in _UPCALL_ATTR_RE.finditer(content):
                 targets = [t for t in (_parse_target(x) for x in m.group(1).split()) if t]
                 table.setdefault(m.group(2), []).extend(targets)
         self._cache[cls] = table
         self._fns[cls] = fns
         return table
+
+    def _scan_allocs(self, cls: str, content: str) -> None:
+        """按 fn 切分手写文件，收集各 fn 分配的类型，并沿同文件调用关系传递。"""
+        *pkg, _simple = cls.split('/')
+        uses: dict[str, str] = {}
+        for m in _USE_RE.finditer(content):
+            uses[m.group(2)] = m.group(1)
+        for m in _USE_GROUP_RE.finditer(content):
+            for name in (x.strip() for x in m.group(2).split(',')):
+                if name and name.isidentifier():
+                    uses[name] = m.group(1)
+
+        def resolve(expr: str) -> 'str | None':
+            segs = expr.split('::')
+            if segs == ['Self']:
+                return cls
+            ty = segs[-1]
+            if len(segs) == 1:
+                path = uses.get(ty)
+                if path is None:
+                    return '/'.join(pkg + [ty])
+                segs = path.split('::') + [ty]
+            # impl 文件是包模块的子模块：`super::` 即包本身，其后是包内子模块 / 类文件模块
+            base = list(pkg) if segs[0] == 'super' else []
+            if segs[0] in ('super', 'crate'):
+                segs = segs[1:]
+            mods = [x.removeprefix('r#') for x in segs[:-1]
+                    if x not in ('implref', 'self') and x != to_snake(ty)]
+            full = base + mods
+            return '/'.join((full or list(pkg)) + [ty])
+
+        # 注释不参与（fn 切分段尾部带着下一个 fn 的文档注释，其中的 `name()` 不是调用）
+        content = re.sub(r'//[^\n]*', '', content)
+        starts = [(m.start(), m.group(1)) for m in _FN_START_RE.finditer(content)]
+        own: dict[str, set] = {}
+        calls: dict[str, set] = {}
+        names = {n for _, n in starts}
+        for i, (pos, name) in enumerate(starts):
+            body = content[pos:starts[i + 1][0] if i + 1 < len(starts) else len(content)]
+            got = own.setdefault(name, set())
+            for m in _ALLOC_RE.finditer(body):
+                var, expr = m.group(1), m.group(2)
+                if re.search(rf'\b{re.escape(var)}\._init_not_null\(\)', body):
+                    b = resolve(expr)
+                    if b:
+                        got.add(b)
+            calls.setdefault(name, set()).update(
+                c for c in _CALL_RE.findall(body[len(name) + 3:]) if c in names and c != name)
+        closed: dict[str, set] = {}
+        for name in own:
+            seen, stack, acc = {name}, [name], set()
+            while stack:
+                n = stack.pop()
+                acc |= own.get(n, set())
+                for c in calls.get(n, ()):
+                    if c not in seen:
+                        seen.add(c)
+                        stack.append(c)
+            if acc:
+                closed[name] = acc
+        self._allocs.setdefault(cls, {}).update(closed)
+
+    def allocated(self, cls: str, member: str) -> set:
+        """成员 member 的手写 fn（同 lookup 的名字匹配）分配的类型 binary name 候选（N6）。"""
+        self._load(cls)
+        table = self._allocs.get(cls) or {}
+        rust = _CTOR_RUST_NAME if member == '<init>' else member
+        out: set = set()
+        for fn_name, types in table.items():
+            base = fn_name.removeprefix(_VIRTUAL_BODY_PREFIX)
+            if base == rust or base.startswith(rust + '_'):
+                out |= types
+        return out
 
     def lookup(self, cls: str, member: str) -> list:
         """成员 member（Java 名；构造器为 <init>）对应的手写 fn 声明的全部回调目标。
