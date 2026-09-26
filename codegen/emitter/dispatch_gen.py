@@ -276,9 +276,8 @@ def _emit_fields_for(class_bin: str, short: str, em) -> 'str | None':
         is_static = bool(is_static_kw or is_const or _flag(line, 'is_static'))
         if generic and not is_static:
             continue
-        if is_const:
-            read = f'Object::from(Clone::clone(&Self::{rname}))'
-        elif is_static:
+        # 编译期常量与 static 字段同为宏展开的访问器 `NAME()`（常量访问器不触发类初始化）
+        if is_const or is_static:
             read = f'Object::from(Self::{rname}()?)'
         else:
             read = f'Object::from(recv.try_cast::<Self>("{class_bin}")?.__get_{rname}())'
