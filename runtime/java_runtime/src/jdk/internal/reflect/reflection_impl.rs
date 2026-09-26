@@ -244,20 +244,24 @@ impl Reflection {
     ///      ——同一 Java 方法的多个 Rust 帧（含解析不出类的辅助帧）按类名
     ///      聚合，整组跳过；
     ///   3. 首个声明类不同的帧即调用者的调用者，返回其 Class。
-    /// 无可用帧（main 之下 / 形态不符）返回 null Class——调用方按 JDK 语义
-    /// 处理（MethodHandles.lookup 抛 IllegalCallerException("no caller frame")）。
+    /// 帧不可解析（匿名类 / PrivilegedAction 转发帧等符号形态不符，或平台符号化不全）时
+    /// 退回 `java.lang.Object`：JDK 中仅 JNI 附着线程无 Java 调用者，Java 代码调用恒有；
+    /// 原生单镜像内全部代码同属可信调用者（getModule 同一无名模块），退回可信类与 JDK
+    /// 默认安装的可观测行为一致——`ServiceLoader.checkCaller` 不再误报 "no caller to check"
+    /// （Charset.forName 未知名的扩展 provider 查找，macOS 实测揭出）。
     #[jvm_native]
     pub fn getCallerClass() -> Result<Class> {
         const SELF_CLASS: &str = "jdk/internal/reflect/Reflection";
+        let fallback = || Class::for_class(String::from("java/lang/Object"));
         let frames = _capture_frame_classes();
         // 1. 定位本方法帧
         let Some(mut i) = frames.iter().position(|c| c.as_deref() == Some(SELF_CLASS)) else {
-            return Ok(Class::default());
+            return Ok(fallback());
         };
         // 2. 调用者帧组的类（@CallerSensitive 声明者）
         i += 1;
         let Some(caller) = frames.get(i).and_then(|c| c.clone()) else {
-            return Ok(Class::default());
+            return Ok(fallback());
         };
         // 3. 跳过同类（与解析失败跟随前帧）的帧，取首个异类帧
         i += 1;
@@ -269,7 +273,7 @@ impl Reflection {
                 _ => i += 1,
             }
         }
-        Ok(Class::default())
+        Ok(fallback())
     }
 
     /// static synchronized `registerFieldsToFilter(Class, Set)`：登记对

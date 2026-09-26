@@ -157,3 +157,8 @@
 | `Charset.forName`（sun/nio/cs/StandardCharsets 边界）+ `BootLoader.hasClassPath` | ✅ 代码完成，验证排队 | `40779ab` + `73584f4`；e2e TestCharsetForName |
 | `StreamEncoder.close`、SilentLogger log 重载、`SecureRandom.getProvider` | ✅ 代码完成，验证排队 | `d267714` / `9ec606c` / `070e779` |
 
+## 2026-09-26 归档批次（二）
+
+| # | 任务 | 状态 | 证据 |
+|---|---|---|---|
+| N7 | 第 4 项 macOS 侧验证 | ✅ 用户 macOS（arm64，JDK21.0.11）@2f8ba87 实测 | TestFilesApi / TestFileOutputStream PASS（provider 链 MacOSX→Bsd→Unix 通）；TestCharsetForName 揭出 getCallerClass 帧不可解析退回 null → `ServiceConfigurationError: no caller to check`，已修（退回可信类 Object） |
