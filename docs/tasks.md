@@ -65,9 +65,9 @@
 
 | # | 任务 | 状态 | 说明 |
 |---|---|---|---|
-| FS-H0 | 手写覆盖只许 ACC_NATIVE（审计线 + 越界覆盖清零） | ⬜ 待做（最高优先） | `class_writer._nf_covered` 无约束，公开 API 非 native 方法被 `_impl.rs` 静默替换；FS-N1..N5 / FS-H1..H9 同根 |
-| FS-N1..N5 | Math 手写覆盖删除（`random` 恒 0.5、`IEEEremainder` 用 round、`pow` NaN 规格、libm ulp、双下划线死代码） | ⬜ 待做 | 随 FS-H0，改走 StrictMath / FdLibm 字节码链；e2e 由 JVM 生成期望（random 以分布性质断言） |
-| FS-H1 / H4 / H6 | `Character.digit` 非 ASCII、`Arrays.copyOf` 组件类型、`Properties` defaults 链 | ⬜ 待做 | 随 FS-H0 删除手写覆盖 |
+| FS-H0 | 手写覆盖只许 ACC_NATIVE（审计线 + 越界覆盖清零） | 🔄 进行中（审计 98 处，逐组清除） | 审计线 `_audit_override`（`[raw-audit] non_native_overrides=` + `[override-audit]` 明细，同名 fn 与 `__impl_` 虚方法两路同口径，`efe13ac`）；VM 内建准入 `intrinsics.txt`。已删：Math/StrictMath 全部、Character.digit、Thread.interrupt / isTerminated / getThreadGroup、AtomicInteger(int)（改 upcalls）、Integer.valueOf / toString()（`00984cf`，验证排队 math2 / fsh0）。余项按根因分组见过渡态清单 §〇 |
+| FS-N1..N5 | Math 手写覆盖删除（`random` 恒 0.5、`IEEEremainder` 用 round、`pow` NaN 规格、libm ulp、双下划线死代码） | 🔄 已删除，验证中（math2） | 全走 StrictMath / FdLibm 字节码链；`wide iinc` 解码修复（8242bbe）是前提；StrictMath.sqrt 入内建清单（debug 构建下 FdLibm 纯软件 sqrt 百万级调用超时）。e2e TestMathSpec |
+| FS-H1 / H4 / H6 | `Character.digit` 非 ASCII、`Arrays.copyOf` 组件类型、`Properties` defaults 链 | 🔄 H1 已删除覆盖（验证中 fsh0）；H4 / H6 待做 | Character.digit 走 CharacterData 族；e2e TestThreadOverridesSpec 含全角 / 阿拉伯-印度数字 |
 | FS-T3 | `availableProcessors` 恒 1 | ⬜ 待做 | 随 #42 第二档 |
 | FS-E3 / M7 / M8 | 不可捕获 panic（checkcast / NPE / toString 路径）、null 接收者字段访问不抛 NPE、`_is_jnull` 非 Object 载体恒假 | ⬜ 待做 | 异常语义等价 |
 | FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ⬜ 待做 | 进程 / 环境层 |
