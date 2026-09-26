@@ -1,2 +1,8 @@
 [build]
 incremental = false
+
+# 大闭包（1500+ 类）全量 debuginfo 会让 rustc 内存峰值超限（Ubuntu 实证 27 分钟爬行），
+# line-tables-only 保留行号与符号名（栈帧输出不变，golden 逐字一致实证），二进制 507M→270M。
+# 临时要全量调试信息时用环境变量逃生：CARGO_PROFILE_DEV_DEBUG=2（env 层高于本文件）。
+[profile.dev]
+debug = "line-tables-only"

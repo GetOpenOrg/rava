@@ -78,10 +78,15 @@ def fmt_dur(sec: float) -> str:
     return f"{int(m)}m{s:04.1f}s"
 
 
-# 每测试运行阶段超时（秒）；编译阶段用更宽的上限捕获病态构建
+# —— 四段超时各自独立常量，勿共用（各阶段正常耗时与病态形态不同）——
+# 运行段（cargo run）超时（秒）
 RUN_TIMEOUT = 300
+# 转译段（main.py：javap 全闭包 + 代码生成）超时（秒）
+TRANSPILE_TIMEOUT = 600
+# 构建段（cargo build 单测试 crate）超时（秒）
+BUILD_TIMEOUT = 600
 # 期望生成（--update-expected）的 java 参照运行超时（秒）：golden 语料应为秒级程序，
-# 120 足够且让挂起类用例快速出列；e2e 实跑沿用 RUN_TIMEOUT
+# 120 足够且让挂起类用例快速出列
 EXPECTED_GEN_TIMEOUT = 120
 # 构建档位目录（debug/release）：--release 开关切换，bin 路径与 build 命令统一读它
 PROFILE_DIR = "debug"
@@ -91,7 +96,6 @@ LOGS_DIR = _versioned(OUT) / "logs"
 
 def _cargo_profile_args() -> list[str]:
     return ["--release"] if PROFILE_DIR == "release" else []
-BUILD_TIMEOUT = 600
 
 
 def _jdk_tool(name: str) -> str:
@@ -121,8 +125,8 @@ def _cargo_env() -> dict:
 
 
 def _run(cmd: list[str], cwd: Path, capture: bool = True,
-         env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True, env=env)
+         env: dict | None = None, timeout: float | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True, env=env, timeout=timeout)
 
 
 def _discover(filter_str: list[str] | None) -> list[Path]:
@@ -356,7 +360,8 @@ def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
     """运行转译器：overlay 手写代码 + 生成该测试的 Rust 代码。"""
     args = [sys.executable, str(ROOT / "scripts" / "main.py"), str(java_file),
             "--no-run", "--out", str(out_dir)]
-    r = _run(args, cwd=ROOT)
+    # 此前无超时——大闭包在慢环境下爬行会无限等
+    r = _run(args, cwd=ROOT, timeout=TRANSPILE_TIMEOUT)
     return r.returncode == 0, (r.stdout + r.stderr)
 
 
@@ -364,7 +369,8 @@ def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     """cargo build --bin <class>（共享 target 缓存）。返回 (ok, 首个 error 行)。"""
     bin_name = _to_bin_name(class_name)
     try:
-        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name], cwd=out_dir, env=_cargo_env())
+        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name], cwd=out_dir, env=_cargo_env(),
+                 timeout=BUILD_TIMEOUT)
     except subprocess.TimeoutExpired:
         return False, f"build timeout ({fmt_dur(BUILD_TIMEOUT)})"
     if r.returncode != 0:
