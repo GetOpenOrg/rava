@@ -369,6 +369,36 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     }
                 }))
             .collect();
+        // 引用原子协议的读-改-写形态（`__unsafe_ref_update`）：在同一引用槽的写锁内读出
+        // 当前值、由 `f` 决定是否写入新值，返回旧值——CAS / compareAndExchange / getAndSet
+        // 在并行后端真正原子（单线程后端 RefCell 独占借用同样不可分割）。
+        let ref_update_arm = |name: &syn::Ident, ty: &Type, erased: bool| -> TokenStream2 {
+            let field_str = name.to_string();
+            let (read, write) = if erased {
+                (quote! { __g.as_deref().map(::std::clone::Clone::clone) },
+                 quote! { ::std::boxed::Box::new(__n) })
+            } else {
+                (quote! { __g.as_deref().map(|__b| Object::from(::std::clone::Clone::clone(__b))) },
+                 quote! { ::std::boxed::Box::new(<#ty as ::std::convert::From<Object>>::from(__n)) })
+            };
+            quote! {
+                (::std::option::Option::Some(i), #field_str) => {
+                    let mut __g = i.#name.borrow_mut();
+                    let __cur: Object = ::std::option::Option::unwrap_or_default(#read);
+                    if let ::std::option::Option::Some(__n) = f(::std::clone::Clone::clone(&__cur)) {
+                        *__g = ::std::option::Option::Some(#write);
+                    }
+                    ::std::option::Option::Some(__cur)
+                }
+            }
+        };
+        let ref_update_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+            .filter(|(name, ty)| ctx.is_erased(name) || !ctx.inherited_is_basic(name, ty))
+            .map(|(name, ty)| ref_update_arm(name, ty, ctx.is_erased(name)))
+            .chain(ctx.fields.iter()
+                .filter(|(name, ty)| ctx.is_erased(name) || !is_basic(ty))
+                .map(|(name, ty)| ref_update_arm(name, ty, ctx.is_erased(name))))
+            .collect();
         quote! {
             impl #impl_g ObjectVTable for #struct_ident #ty_g #where_c {
                 fn is_instance_of(&self, type_id: &str) -> bool {
@@ -513,6 +543,16 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     match (self.any.downcast_ref::<#inner_ident>(), field) {
                         #(#ref_set_arms)*
                         _ => ObjectVTable::__unsafe_ref_set(&*self.vtable, field, v),
+                    }
+                }
+                /// 引用原子协议的读-改-写形态（见 ObjectVTable::__unsafe_ref_update）。
+                fn __unsafe_ref_update(
+                    &self, field: &str,
+                    f: &mut dyn FnMut(Object) -> ::std::option::Option<Object>,
+                ) -> ::std::option::Option<Object> {
+                    match (self.any.downcast_ref::<#inner_ident>(), field) {
+                        #(#ref_update_arms)*
+                        _ => ObjectVTable::__unsafe_ref_update(&*self.vtable, field, f),
                     }
                 }
                 #to_string_fwd

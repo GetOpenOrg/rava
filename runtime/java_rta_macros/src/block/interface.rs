@@ -157,7 +157,7 @@ pub(crate) fn expand_interface(
 
     quote! {
         #[allow(non_camel_case_types)]
-        pub trait #vtable_ident: 'static {
+        pub trait #vtable_ident: 'static + __ThreadSafe {
             #(#vtable_methods)*
         }
 

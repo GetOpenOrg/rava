@@ -181,45 +181,52 @@ fn _field_write(u: &Unsafe, carrier: _Carrier, holder: &Object, offset: i64, v: 
 /// 读-比-写（单 OS 线程协作调度下不可分割）。引用比较按 Java `==`（null 与
 /// 对象身份，`PartialEq for Object`）；数值族经 Unsafe 的 int/long CAS。
 fn _field_cas(u: &Unsafe, carrier: _Carrier, holder: &Object, offset: i64, expected: &Object, new: &Object) -> Result<bool> {
-    match carrier {
-        _Carrier::Ref => {
-            let cur = match u.__vh_ref_get(holder, offset) {
-                Some(v) => v,
-                None => return Err(_state_err()),
-            };
-            if cur == Clone::clone(expected) {
-                _field_write(u, carrier, holder, offset, new, true)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        }
-        _Carrier::Long => Ok(u.compareAndSetLong(
-            Clone::clone(holder),
-            offset,
-            _unbox_i64(expected).ok_or_else(|| _bad_arg("bad expected form"))?,
-            _unbox_i64(new).ok_or_else(|| _bad_arg("bad value form"))?,
-        )?),
-        _Carrier::Int => Ok(u.compareAndSetInt(
-            Clone::clone(holder),
-            offset,
-            _unbox_i32(expected).ok_or_else(|| _bad_arg("bad expected form"))?,
-            _unbox_i32(new).ok_or_else(|| _bad_arg("bad value form"))?,
-        )?),
-    }
+    let witness = _field_exchange(u, carrier, holder, offset, Some(expected), new)?;
+    Ok(match carrier {
+        _Carrier::Ref => witness == Clone::clone(expected),
+        _Carrier::Long => _unbox_i64(&witness) == _unbox_i64(expected),
+        _Carrier::Int => _unbox_i32(&witness) == _unbox_i32(expected),
+    })
 }
 
 /// 交换语义（getAndSet / compareAndExchange 共用）：读旧值，可选比较
 /// （Some：不符则不写并返回当前值——exchange 的见证形态；None：无条件换），
 /// 写新值，返回旧值。
 fn _field_exchange(u: &Unsafe, carrier: _Carrier, holder: &Object, offset: i64, expected: Option<&Object>, new: &Object) -> Result<Object> {
-    let old = _field_read(u, carrier, holder, offset, true)?;
-    match expected {
-        Some(e) if old != Clone::clone(e) => return Ok(old),
-        _ => {}
+    // 读-比-写在字段存储单元内原子完成（引用槽写锁 / 原子单元），返回旧值（见证）。
+    match carrier {
+        _Carrier::Ref => {
+            let mut nv = Some(Clone::clone(new));
+            u.__vh_ref_update(holder, offset, &mut |cur| match expected {
+                Some(e) if cur != Clone::clone(e) => None,
+                _ => nv.take(),
+            }).ok_or_else(_state_err)
+        }
+        _Carrier::Long => {
+            let v = _unbox_i64(new).ok_or_else(|| _bad_arg("bad value form"))?;
+            let e = match expected {
+                Some(e) => Some(_unbox_i64(e).ok_or_else(|| _bad_arg("bad expected form"))?),
+                None => None,
+            };
+            let old = u.__vh_long_update(holder, offset, |cur| match e {
+                Some(e) if cur != e => cur,
+                _ => v,
+            }).ok_or_else(_state_err)?;
+            Ok(Object::from(old))
+        }
+        _Carrier::Int => {
+            let v = _unbox_i32(new).ok_or_else(|| _bad_arg("bad value form"))?;
+            let e = match expected {
+                Some(e) => Some(_unbox_i32(e).ok_or_else(|| _bad_arg("bad expected form"))?),
+                None => None,
+            };
+            let old = u.__vh_int_update(holder, offset, |cur| match e {
+                Some(e) if cur != e => cur,
+                _ => v,
+            }).ok_or_else(_state_err)?;
+            Ok(Object::from(old))
+        }
     }
-    _field_write(u, carrier, holder, offset, new, true)?;
-    Ok(old)
 }
 
 // ── Array 家族（args = [数组, 下标, 值...]）──────────────────────────────────
@@ -352,81 +359,47 @@ fn _array_set(vh: &VarHandle, args: &JArray<Object>) -> Result<()> {
 }
 
 fn _array_cas(vh: &VarHandle, args: &JArray<Object>) -> Result<bool> {
-    let carrier = _carrier(vh);
-    let idx = _arg_i32(args, 1, "bad array index form")?;
-    match carrier {
-        _Carrier::Ref => {
-            let arr = Clone::clone(&args.get(0)?).try_cast_array::<Object>("[Ljava/lang/Object;")?;
-            let cur = arr.get(idx)?;
-            if cur == args.get(2)? {
-                arr.set(idx, args.get(3)?)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        }
-        _Carrier::Long => {
-            let arr = Clone::clone(&args.get(0)?).try_cast_array::<i64>("[J")?;
-            let expected = _arg_i64(args, 2, "bad array element form")?;
-            let v = _arg_i64(args, 3, "bad array element form")?;
-            if arr.get(idx)? == expected {
-                arr.set(idx, v)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        }
-        _Carrier::Int => {
-            let arr = Clone::clone(&args.get(0)?).try_cast_array::<i32>("[I")?;
-            let expected = _arg_i32(args, 2, "bad array element form")?;
-            let v = _arg_i32(args, 3, "bad array element form")?;
-            if arr.get(idx)? == expected {
-                arr.set(idx, v)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        }
-    }
+    let witness = _array_exchange(vh, args, true)?;
+    Ok(match _carrier(vh) {
+        _Carrier::Ref => witness == args.get(2)?,
+        _Carrier::Long => _unbox_i64(&witness) == Some(_arg_i64(args, 2, "bad array element form")?),
+        _Carrier::Int => _unbox_i32(&witness) == Some(_arg_i32(args, 2, "bad array element form")?),
+    })
 }
 
 fn _array_exchange(vh: &VarHandle, args: &JArray<Object>, expected: bool) -> Result<Object> {
+    // 元素的读-比-写在数组存储写锁内原子完成（JArray::__update），返回旧值（见证）。
     let carrier = _carrier(vh);
     let idx = _arg_i32(args, 1, "bad array index form")?;
+    let vi = if expected { 3 } else { 2 };
     match carrier {
         _Carrier::Ref => {
             let arr = Clone::clone(&args.get(0)?).try_cast_array::<Object>("[Ljava/lang/Object;")?;
-            let old = arr.get(idx)?;
-            let should_write = !expected || old == args.get(2)?;
-            if should_write {
-                arr.set(idx, args.get(if expected { 3 } else { 2 })?)?;
-            }
-            Ok(old)
+            let e = if expected { Some(args.get(2)?) } else { None };
+            let mut nv = Some(args.get(vi)?);
+            arr.__update(idx, &mut |cur| match &e {
+                Some(e) if cur != Clone::clone(e) => None,
+                _ => nv.take(),
+            })
         }
         _Carrier::Long => {
             let arr = Clone::clone(&args.get(0)?).try_cast_array::<i64>("[J")?;
-            let old = arr.get(idx)?;
-            let (expected_v, v) = if expected {
-                (_arg_i64(args, 2, "bad array element form")?, _arg_i64(args, 3, "bad array element form")?)
-            } else {
-                (old, _arg_i64(args, 2, "bad array element form")?)
-            };
-            if old == expected_v {
-                arr.set(idx, v)?;
-            }
+            let e = if expected { Some(_arg_i64(args, 2, "bad array element form")?) } else { None };
+            let v = _arg_i64(args, vi, "bad array element form")?;
+            let old = arr.__update(idx, &mut |cur| match e {
+                Some(e) if cur != e => None,
+                _ => Some(v),
+            })?;
             Ok(Object::from(old))
         }
         _Carrier::Int => {
             let arr = Clone::clone(&args.get(0)?).try_cast_array::<i32>("[I")?;
-            let old = arr.get(idx)?;
-            let (expected_v, v) = if expected {
-                (_arg_i32(args, 2, "bad array element form")?, _arg_i32(args, 3, "bad array element form")?)
-            } else {
-                (old, _arg_i32(args, 2, "bad array element form")?)
-            };
-            if old == expected_v {
-                arr.set(idx, v)?;
-            }
+            let e = if expected { Some(_arg_i32(args, 2, "bad array element form")?) } else { None };
+            let v = _arg_i32(args, vi, "bad array element form")?;
+            let old = arr.__update(idx, &mut |cur| match e {
+                Some(e) if cur != e => None,
+                _ => Some(v),
+            })?;
             Ok(Object::from(old))
         }
     }
@@ -493,8 +466,8 @@ impl VarHandle {
         self.setVolatile(args)
     }
 
-    /// native `compareAndSet(Object...)`：CAS（args = [holder, expected, new]）。
-    /// 单 OS 线程协作调度下读-比-写不可分割。
+    /// native `compareAndSet(Object...)`：CAS（args = [holder, expected, new]），读-比-写在
+    /// 存储单元内原子完成。
     pub fn compareAndSet(&self, args: JArray<Object>) -> Result<bool> {
         if _is_array_flavor(self) {
             return _array_cas(self, &args);
@@ -545,8 +518,6 @@ impl VarHandle {
     }
 
     /// native `getAndSet(Object...)`：原子交换（旧值返回）。
-    /// 单线程 Rc 运行时下 volatile 读 + volatile 写与原子交换观察面等价
-    /// （无并发线程穿插；与 Unsafe.getAndAddInt 同族语义承载）。
     pub fn getAndSet(&self, args: JArray<Object>) -> Result<Object> {
         if _is_array_flavor(self) {
             return _array_exchange(self, &args, false);

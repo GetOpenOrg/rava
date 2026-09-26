@@ -51,16 +51,21 @@ pub fn is_active() -> bool {
     ACTIVE.load(Ordering::Acquire)
 }
 
-/// 启用 GIL（主线程在首次派生线程前调用；幂等）。
+/// 启用 GIL（主线程在首次派生线程前调用；幂等）。并行后端（feature `mt`）不启用：
+/// 对象模型自身线程安全，GIL 的全部入口退化为 no-op。
 pub fn activate() {
+    #[cfg(not(feature = "mt"))]
     if !ACTIVE.load(Ordering::Acquire) {
-        acquire();
         ACTIVE.store(true, Ordering::Release);
+        acquire();
     }
 }
 
-/// 当前线程取得 GIL（阻塞）。派生线程入口与 `blocking` 结束时调用。
+/// 当前线程取得 GIL（阻塞）。派生线程入口与 `blocking` 结束时调用。GIL 未启用时 no-op。
 pub fn acquire() {
+    if !is_active() {
+        return;
+    }
     WAITERS.fetch_add(1, Ordering::SeqCst);
     let guard = GIL.lock();
     WAITERS.fetch_sub(1, Ordering::SeqCst);
@@ -70,6 +75,9 @@ pub fn acquire() {
 
 /// 当前线程释放 GIL（派生线程出口与 `blocking` 开始时调用）。
 pub fn release() {
+    if !is_active() {
+        return;
+    }
     let guard = HELD.with(|h| h.borrow_mut().take());
     drop(guard);
 }
@@ -97,12 +105,10 @@ pub fn safepoint() {
 
 /// `Thread.yield`：有等待者即让出（不看时间片）。
 pub fn yield_now() {
-    if is_active() {
-        if WAITERS.load(Ordering::SeqCst) > 0 {
-            yield_slice(true);
-        } else {
-            std::thread::yield_now();
-        }
+    if is_active() && WAITERS.load(Ordering::SeqCst) > 0 {
+        yield_slice(true);
+    } else {
+        std::thread::yield_now();
     }
 }
 
@@ -181,40 +187,46 @@ static CLINIT_CV: Condvar = Condvar::new();
 /// 进入类初始化（`get` / `set` 读写该类的状态单元，GIL 下调用）。
 pub fn clinit_enter(class: &'static str, get: impl Fn() -> u8, set: impl Fn(u8)) -> ClinitEnter {
     // 持有者登记在单线程阶段同样进行：初始化期间才启用 GIL（<clinit> 内启动线程）时，
-    // 新线程据此等待而非越过未完成的初始化。
+    // 新线程据此等待而非越过未完成的初始化。状态转换在 CLINIT_OWNERS 锁内完成（并行后端
+    // 两线程同时读到 0 时只有一个进入 <clinit>——JVMS §5.5 的 LC 锁）。
     let me = std::thread::current().id();
     loop {
-        match get() {
-            0 => {
-                set(1);
-                CLINIT_OWNERS.lock().push((class, me));
-                return ClinitEnter::Run;
-            }
-            2 => return ClinitEnter::Erroneous,
-            3 => return ClinitEnter::Done,
-            _ => {
-                let owner = CLINIT_OWNERS.lock().iter().find(|(c, _)| *c == class).map(|(_, t)| *t);
-                if owner.map_or(true, |t| t == me) {
-                    return ClinitEnter::Done;
+        {
+            let mut owners = CLINIT_OWNERS.lock();
+            match get() {
+                0 => {
+                    set(1);
+                    owners.push((class, me));
+                    return ClinitEnter::Run;
                 }
-                // 他线程初始化中：释放 GIL 等待任一类初始化结束的广播，再重查
-                let mut gen = CLINIT_GEN.lock();
-                let seen = *gen;
-                release();
-                while *gen == seen {
-                    CLINIT_CV.wait(&mut gen);
+                2 => return ClinitEnter::Erroneous,
+                3 => return ClinitEnter::Done,
+                _ => {
+                    let owner = owners.iter().find(|(c, _)| *c == class).map(|(_, t)| *t);
+                    if owner.map_or(true, |t| t == me) {
+                        return ClinitEnter::Done;
+                    }
                 }
-                drop(gen);
-                acquire();
             }
+        }
+        // 他线程初始化中：在广播锁下复查后等待（clinit_exit 先改状态再取广播锁通知，不丢唤醒）
+        let mut gen = CLINIT_GEN.lock();
+        if get() == 1 {
+            release();
+            CLINIT_CV.wait(&mut gen);
+            drop(gen);
+            acquire();
         }
     }
 }
 
 /// 结束类初始化：`ok` → 已完成（3），否则 erroneous（2）；唤醒等待者。
 pub fn clinit_exit(class: &'static str, ok: bool, set: impl Fn(u8)) {
-    set(if ok { 3 } else { 2 });
-    CLINIT_OWNERS.lock().retain(|(c, _)| *c != class);
+    {
+        let mut owners = CLINIT_OWNERS.lock();
+        set(if ok { 3 } else { 2 });
+        owners.retain(|(c, _)| *c != class);
+    }
     let mut gen = CLINIT_GEN.lock();
     *gen += 1;
     CLINIT_CV.notify_all();

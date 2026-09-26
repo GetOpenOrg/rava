@@ -219,7 +219,7 @@ pub(crate) fn constant_directory_registration(
         {
             let __entries: ::std::vec::Vec<(
                 ::std::string::String,
-                __Shared<dyn Fn() -> Result<Object>>
+                __Shared<__DynFn!(() -> Result<Object>)>
             )> = ::std::vec![#(#entries),*];
             register_constant_directory(#dotted, __entries);
         }

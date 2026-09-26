@@ -304,7 +304,7 @@ impl PartialEq for MutexHolder {
 // binary name（点分）取常量。登记只看结构形态，不感知枚举语义；非枚举类的
 // 同形态 static 字段一并登记，无副作用（目录仅被常量名查找消费）。
 
-type ConstantGetter = crate::sync_model::__Shared<dyn Fn() -> Result<Object>>;
+type ConstantGetter = crate::sync_model::__Shared<crate::__DynFn!(() -> Result<Object>)>;
 
 crate::__process_static! {
     static CONSTANT_DIRECTORY: crate::sync_model::__RefSlot<
@@ -354,7 +354,7 @@ pub fn constant_directory_universe(binary_name: &str) -> Option<Vec<Object>> {
 // `Class::for_class` 与用户类的 `__class_init` 之间没有通道——生成项目在 main
 // 启动时按语料登记钩子（枚举形态类，与常量目录同一结构谓词），运行时按名代调。
 
-pub type ClassInitHook = crate::sync_model::__Shared<dyn Fn() -> Result<()>>;
+pub type ClassInitHook = crate::sync_model::__Shared<crate::__DynFn!(() -> Result<()>)>;
 
 crate::__process_static! {
     static CLASS_INIT_HOOKS: crate::sync_model::__RefSlot<
@@ -395,7 +395,10 @@ pub mod prelude {
     pub use super::java::lang::ObjectVTable;
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
-    pub use super::sync_model::{__PrimCell, __RefSlot, __Shared};
+    pub use super::sync_model::{__PrimCell, __RefSlot, __Shared, __ThreadSafe};
+    #[cfg(not(feature = "mt"))]
+    pub use super::sync_model::__CellAtomicOps;
+    pub use crate::__DynFn;
     pub use crate::__process_static;
     pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
                          clinit_enter as __clinit_enter, clinit_exit as __clinit_exit};

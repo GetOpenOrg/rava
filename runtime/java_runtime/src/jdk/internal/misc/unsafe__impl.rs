@@ -135,6 +135,27 @@ fn _instance_ref_set(o: &Object, offset: i64, v: Object) -> bool {
     }
 }
 
+/// 偏移 id → 实例引用字段的原子读-改-写（ObjectVTable::__unsafe_ref_update）：返回旧值；
+/// 未登记 / 无臂 → None。
+fn _instance_ref_update(o: &Object, offset: i64,
+                        f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> {
+    let field = _offset_field_name(offset)?;
+    o.0.__unsafe_ref_update(&field, f)
+}
+
+/// 引用 CAS 族的统一实现：引用元素数组按下标、实例字段按偏移 id，均在对应存储的写锁内
+/// 完成「读出 → 比较（引用相等）→ 条件写入」，返回旧值。
+fn _ref_rmw(o: &Object, offset: i64, what: &str,
+            f: &mut dyn FnMut(Object) -> Option<Object>) -> Result<Object> {
+    if let Some(arr) = _erased_ref_array(o) {
+        return arr.__update(_ref_array_index(offset), f);
+    }
+    match _instance_ref_update(o, offset, f) {
+        Some(old) => Ok(old),
+        None => panic!("jdk/internal/misc/Unsafe.{} (offset={} 无实例引用字段臂且非引用元素数组)", what, offset),
+    }
+}
+
 impl Unsafe {
     /// 偏移 id → (声明类, 字段名)（`field_of_offset` 的类型挂载入口：本伴生文件以私有 mod
     /// 挂入，自由函数对包外不可见）。MH-native 解释器的 Unsafe 字段访问形态消费。
@@ -237,6 +258,23 @@ impl Unsafe {
         _instance_ref_set(o, offset, v)
     }
 
+    /// 偏移 id → 实例引用字段的原子读-改-写（VarHandle 引用族 CAS / 交换）：返回旧值；
+    /// 未登记 / 运行时类无该引用字段 → None。
+    pub(crate) fn __vh_ref_update(&self, o: &Object, offset: i64,
+                                  f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> {
+        _instance_ref_update(o, offset, f)
+    }
+
+    /// 偏移 id → 实例 long 字段的原子读-改-写（`f` 返回新值），返回旧值；无单元 → None。
+    pub(crate) fn __vh_long_update(&self, o: &Object, offset: i64, f: impl Fn(i64) -> i64) -> Option<i64> {
+        Some(_instance_long_cell(o, offset)?.__fetch_update(f))
+    }
+
+    /// 偏移 id → 实例 int 字段的原子读-改-写（`f` 返回新值），返回旧值；无单元 → None。
+    pub(crate) fn __vh_int_update(&self, o: &Object, offset: i64, f: impl Fn(i32) -> i32) -> Option<i32> {
+        Some(_instance_int_cell(o, offset)?.__fetch_update(f))
+    }
+
     /// `arrayBaseOffset(Class)` 的实现核心（`core_` 约定）：数组存储里首个
     /// 元素前的头部长度。HotSpot 64 位（压缩 oops）对所有数组类返回 16；原生
     /// 二进制无 C 布局，该值与访问器族的偏移解码共用常量（自洽即可，不进可
@@ -329,13 +367,7 @@ impl Unsafe {
         let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
             panic!("stub: jdk/internal/misc/Unsafe.compareAndSetLong:(Ljava/lang/Object;JJJ)Z (实例字段 offset={} 无共享 long 单元)", offset)
         });
-        let current = cell.get();
-        if current == expected {
-            cell.set(x);
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        Ok(cell.__cas(expected, x))
     }
 
     /// `compareAndExchangeLong(o, offset, expected, x)`：CAS 并返回**见证值**（交换前的
@@ -347,11 +379,7 @@ impl Unsafe {
         let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
             panic!("stub: jdk/internal/misc/Unsafe.compareAndExchangeLong:(Ljava/lang/Object;JJJ)J (实例字段 offset={} 无共享 long 单元)", offset)
         });
-        let current = cell.get();
-        if current == expected {
-            cell.set(x);
-        }
-        Ok(current)
+        Ok(cell.__fetch_update(|c| if c == expected { x } else { c }))
     }
 
     /// `getAndBitwiseOrLong(o, offset, mask)`：long 字段按位或的读-改-写，返回旧值
@@ -361,9 +389,7 @@ impl Unsafe {
         let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
             panic!("stub: jdk/internal/misc/Unsafe.getAndBitwiseOrLong:(Ljava/lang/Object;JJ)J (实例字段 offset={} 无共享 long 单元)", offset)
         });
-        let old = cell.get();
-        cell.set(old | mask);
-        Ok(old)
+        Ok(cell.__fetch_update(|old| old | mask))
     }
 
     /// `getLongVolatile(Object o, long offset)`：实例字段 volatile 读。
@@ -437,13 +463,7 @@ impl Unsafe {
         let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
             panic!("stub: jdk/internal/misc/Unsafe.compareAndSetInt:(Ljava/lang/Object;JII)Z (实例字段 offset={} 无共享 int 单元)", offset)
         });
-        let current = cell.get();
-        if current == expected {
-            cell.set(x);
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        Ok(cell.__cas(expected, x))
     }
 
     /// `getAndBitwiseAndInt(Object o, long offset, int mask)`：实例字段 int 的
@@ -455,9 +475,7 @@ impl Unsafe {
         let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
             panic!("stub: jdk/internal/misc/Unsafe.getAndBitwiseAndInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
         });
-        let old = cell.get();
-        cell.set(old & mask);
-        Ok(old)
+        Ok(cell.__fetch_update(|old| old & mask))
     }
 
     /// `getAndBitwiseOrInt(Object o, long offset, int mask)`：按位或的读-改-写，
@@ -467,9 +485,7 @@ impl Unsafe {
         let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
             panic!("stub: jdk/internal/misc/Unsafe.getAndBitwiseOrInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
         });
-        let old = cell.get();
-        cell.set(old | mask);
-        Ok(old)
+        Ok(cell.__fetch_update(|old| old | mask))
     }
 
     /// `getAndSetInt(Object o, long offset, int x)`：原子交换，返回旧值。
@@ -478,9 +494,7 @@ impl Unsafe {
         let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
             panic!("stub: jdk/internal/misc/Unsafe.getAndSetInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
         });
-        let old = cell.get();
-        cell.set(x);
-        Ok(old)
+        Ok(cell.__fetch_update(|old| x))
     }
 
     /// `putIntOpaque` / `putIntRelease`：访问序变体——单 OS 线程协作调度下与
@@ -513,19 +527,10 @@ impl Unsafe {
     /// 实例字段两臂，与 compareAndSetReference 同一载体分派）。
     #[jvm_boundary]
     pub fn getAndSetReference(&self, o: Object, offset: i64, x: Object) -> Result<Object> {
-        if let Some(arr) = _erased_ref_array(&o) {
-            let i = _ref_array_index(offset);
-            let old = arr.get(i)?;
-            arr.set(i, x)?;
-            return Ok(old);
-        }
-        match _instance_ref_get(&o, offset) {
-            Some(old) => {
-                _instance_ref_set(&o, offset, x);
-                Ok(old)
-            }
-            None => panic!("jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object; (offset={} 无实例引用字段臂且非引用元素数组)", offset),
-        }
+        let mut x = Some(x);
+        _ref_rmw(&o, offset,
+            "getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;",
+            &mut |_| x.take())
     }
 
     /// `compareAndExchangeInt(o, offset, expected, x)`：int 形态的见证值 CAS
@@ -535,11 +540,7 @@ impl Unsafe {
         let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
             panic!("stub: jdk/internal/misc/Unsafe.compareAndExchangeInt:(Ljava/lang/Object;JII)I (实例字段 offset={} 无共享 int 单元)", offset)
         });
-        let current = cell.get();
-        if current == expected {
-            cell.set(x);
-        }
-        Ok(current)
+        Ok(cell.__fetch_update(|c| if c == expected { x } else { c }))
     }
 
     /// `getIntAcquire(o, offset)`：acquire 读——单 OS 线程协作调度下与 volatile /
@@ -557,23 +558,10 @@ impl Unsafe {
     /// Java `==`（对象身份）。消费方：JDK25 ForkJoinTask 的 aux 等待链。native。
     #[jvm_boundary]
     pub fn compareAndExchangeReference(&self, o: Object, offset: i64, expected: Object, x: Object) -> Result<Object> {
-        if let Some(arr) = _erased_ref_array(&o) {
-            let i = _ref_array_index(offset);
-            let current = arr.get(i)?;
-            if current == expected {
-                arr.set(i, x)?;
-            }
-            return Ok(current);
-        }
-        match _instance_ref_get(&o, offset) {
-            Some(current) => {
-                if current == expected {
-                    _instance_ref_set(&o, offset, x);
-                }
-                Ok(current)
-            }
-            None => panic!("jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object; (offset={} 无实例引用字段臂且非引用元素数组)", offset),
-        }
+        let mut x = Some(x);
+        _ref_rmw(&o, offset,
+            "compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+            &mut |cur| if cur == expected { x.take() } else { None })
     }
 
     /// `getIntVolatile(Object o, long offset)`：实例字段 int volatile 读。
@@ -722,28 +710,14 @@ impl Unsafe {
     /// 槽位/字段 CAS。载体驱动分派：引用元素数组（CHM `casTabAt`）按偏移
     /// 反解；实例字段（BufferedInputStream.close 的 buf 清空）走登记表反查
     /// + 引用原子协议。比较按 Java `==`（对象身份，`PartialEq for Object`）；
-    /// 单 OS 线程协作调度下读-比-写不可分割。
+    /// 读-比-写在存储写锁内完成（`_ref_rmw`），并行后端下真正原子。
     #[jvm_boundary]
     pub fn compareAndSetReference(&self, o: Object, offset: i64, expected: Object, x: Object) -> Result<bool> {
-        let (current, swap): (Object, Box<dyn FnOnce() -> Result<bool>>) =
-            if let Some(arr) = _erased_ref_array(&o) {
-                let i = _ref_array_index(offset);
-                let cur = arr.get(i)?;
-                let arr2 = arr;
-                (cur, Box::new(move || arr2.set(i, x).map(|_| true)))
-            } else {
-                match _instance_ref_get(&o, offset) {
-                    Some(cur) => {
-                        let holder = o;
-                        (cur, Box::new(move || Ok(_instance_ref_set(&holder, offset, x))))
-                    }
-                    None => panic!("jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z (offset={} 无实例引用字段臂且非引用元素数组)", offset),
-                }
-            };
-        if current == expected {
-            return swap();
-        }
-        Ok(false)
+        let mut x = Some(x);
+        let old = _ref_rmw(&o, offset,
+            "compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z",
+            &mut |cur| if cur == expected { x.take() } else { None })?;
+        Ok(old == expected)
     }
 
     /// `getAndAddLong(Object o, long offset, long delta)`：原子读取并加 delta，
@@ -762,9 +736,7 @@ impl Unsafe {
             let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
                 panic!("stub: jdk/internal/misc/Unsafe.getAndAddLong:(Ljava/lang/Object;JJ)J (实例字段 offset={} 无共享 long 单元)", offset)
             });
-            let old = cell.get();
-            cell.set(old.wrapping_add(delta));
-            return Ok(old);
+            return Ok(cell.__fetch_update(|old| old.wrapping_add(delta)));
         }
         use crate::sync_model::__RefSlot as RefCell;
         use std::collections::HashMap;
@@ -818,9 +790,7 @@ impl Unsafe {
     pub fn getAndAddInt(&self, base: Object, offset: i64, delta: i32) -> Result<i32> {
         if !base.0.is_jvm_null() {
             if let Some(cell) = _instance_int_cell(&base, offset) {
-                let old = cell.get();
-                cell.set(old.wrapping_add(delta));
-                return Ok(old);
+                return Ok(cell.__fetch_update(|old| old.wrapping_add(delta)));
             }
         }
         use crate::sync_model::__RefSlot as RefCell;

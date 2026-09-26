@@ -38,7 +38,7 @@ use crate::sync_model::__Shared as Rc;
 /// 按名分派闭包：(方法名, 描述符, 接收者, 实参) → 处理结果。
 /// `None` = 本类未声明该方法（上溯继续）；`Some(r)` = 已处理（含错误传播）。
 pub type ReflectDispatch =
-    Rc<dyn Fn(&str, &str, Object, &JArray<Object>) -> Option<Result<Object>>>;
+    Rc<crate::__DynFn!((&str, &str, Object, &JArray<Object>) -> Option<Result<Object>>)>;
 
 crate::__process_static! {
     static DISPATCHERS: crate::sync_model::__RefSlot<HashMap<String, ReflectDispatch>> =
@@ -58,7 +58,7 @@ pub fn register_method_dispatch(dispatchers: &[(&str, ReflectDispatch)]) {
 /// 按名字段闭包：(字段名, 接收者, 写入值) → 处理结果。`value` None = 读（返回装箱值），
 /// Some(v) = 写（返回 null）。`None` = 本类未声明该字段。静态字段忽略接收者。
 pub type FieldDispatch =
-    Rc<dyn Fn(&str, Object, Option<Object>) -> Option<Result<Object>>>;
+    Rc<crate::__DynFn!((&str, Object, Option<Object>) -> Option<Result<Object>>)>;
 
 crate::__process_static! {
     static FIELD_DISPATCHERS: crate::sync_model::__RefSlot<HashMap<String, FieldDispatch>> =

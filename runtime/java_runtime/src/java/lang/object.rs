@@ -12,7 +12,7 @@ use crate::sync_model::__Shared as Rc;
 ///
 /// 接口类型（`is_interface = true`）不生成 ObjectVTable impl，
 /// 其运行时实例通过 `JvmRef` 包装存储在 Object 中。
-pub trait ObjectVTable: 'static {
+pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// java.lang.Object.hashCode()I 默认实现：身份哈希（实例体地址）——与
     /// `System.identityHashCode`、`Object__hashCode_base` 同一来源（`__identity`），
     /// 未覆盖 hashCode 的类满足 `hashCode() == identityHashCode()`（JLS 契约，S-6）。
@@ -224,6 +224,13 @@ pub trait ObjectVTable: 'static {
     /// 类型不符按 checkcast 语义处理——与 Java 字段存储检查同型）。
     #[doc(hidden)]
     fn __unsafe_ref_set(&self, _field: &str, _v: Object) -> bool { false }
+
+    /// 引用原子协议的读-改-写形态：命中字段名单则在该引用槽的写锁内读出当前值 `cur`，
+    /// `f(cur)` 返回 `Some(new)` 时写入，返回 `Some(cur)`；未命中 → None。Unsafe /
+    /// VarHandle 的 compareAndSet / compareAndExchange / getAndSet 引用族经此真正原子。
+    #[doc(hidden)]
+    fn __unsafe_ref_update(&self, _field: &str,
+                           _f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> { None }
 }
 
 /// `super.clone()`（invokespecial java/lang/Object.clone）的落点。

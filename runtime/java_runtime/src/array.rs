@@ -32,9 +32,9 @@ enum Repr<T> {
 #[derive(Clone)]
 struct CovariantView {
     origin: Object,
-    len: Rc<dyn Fn() -> i32>,
-    get: Rc<dyn Fn(i32) -> crate::error::Result<Object>>,
-    set: Rc<dyn Fn(i32, Object) -> crate::error::Result<()>>,
+    len: Rc<crate::__DynFn!(() -> i32)>,
+    get: Rc<crate::__DynFn!((i32) -> crate::error::Result<Object>)>,
+    set: Rc<crate::__DynFn!((i32, Object) -> crate::error::Result<()>)>,
 }
 
 /// aastore 存储检查（JLS §10.5 / JVMS §6.5 aastore）：值与源元素类型赋值兼容才能写入，
@@ -183,6 +183,33 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static> JArray<T> {
                 Ok(data[i as usize].clone())
             }
             Repr::Covariant(view) => Ok(T::from((view.get)(i)?)),
+            Repr::Null => Err(crate::error::JvmError::null_pointer()),
+        }
+    }
+
+    /// 元素的原子读-改-写（Unsafe / VarHandle 数组元素 CAS 族）：在元素存储的写锁内读出
+    /// `cur`，`f(cur)` 返回 `Some(new)` 时写入，返回 `cur`。协变视图（元素存储在底层数组、
+    /// 经转换闭包访问）退化为读后写。
+    pub fn __update(&self, i: i32, f: &mut dyn FnMut(T) -> Option<T>) -> crate::error::Result<T> {
+        match &*self.0 {
+            Repr::Own(cells) => {
+                let mut data = cells.borrow_mut();
+                if i < 0 || i as usize >= data.len() {
+                    return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
+                }
+                let cur = data[i as usize].clone();
+                if let Some(n) = f(cur.clone()) {
+                    data[i as usize] = n;
+                }
+                Ok(cur)
+            }
+            Repr::Covariant(_) => {
+                let cur = self.get(i)?;
+                if let Some(n) = f(cur.clone()) {
+                    self.set(i, n)?;
+                }
+                Ok(cur)
+            }
             Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
     }

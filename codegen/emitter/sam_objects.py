@@ -5,7 +5,7 @@ lambda 不再以 `Rc<dyn Fn>` 闭包装箱（`Object::from_any` + 调用点
 每个被 invokedynamic 站点用作 samtype 的函数式接口 `I` 在其翻译文件内生成
 
     #[derive(Clone)]
-    pub struct I__Lambda(pub __Shared<dyn Fn(擦除形参) -> Result<擦除返回>>);
+    pub struct I__Lambda(pub __Shared<__DynFn!((擦除形参) -> Result<擦除返回>)>);
 
 - 实现 `ObjectVTable`：`is_instance_of`（I + 超接口闭包 + 根类 / Serializable，
   与 LambdaMetafactory 的实现集一致）、`__interface`（对 I 及每个有契约方法的
@@ -435,7 +435,7 @@ def synthesize(emissions: dict, registry: dict) -> None:
         short = short_cls(iface_bin)
         lam = f'{short}__Lambda'
         param_names = [f'__a{i}' for i in range(len(spec.erased_params))]
-        fn_ty = f'__Shared<dyn Fn({", ".join(spec.erased_params)}) -> Result<{spec.erased_ret}>>'
+        fn_ty = f'__Shared<__DynFn!(({", ".join(spec.erased_params)}) -> Result<{spec.erased_ret}>)>'
 
         lines: list[str] = []
         lines.append('// ── A-5 函数式接口合成对象（LambdaMetafactory 产物的同构物）──')

@@ -360,6 +360,49 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 }
             }))
         .collect();
+    // 引用原子协议的读-改-写形态（inner 侧，与 wrapper 侧同构；见 ObjectVTable::__unsafe_ref_update）
+    let inner_ref_update_arm = |name: &syn::Ident, ty: &syn::Type, erased: bool| -> TokenStream2 {
+        let field_str = name.to_string();
+        let (read, write) = if erased {
+            (quote! { __g.as_deref().map(::std::clone::Clone::clone) },
+             quote! { ::std::boxed::Box::new(__n) })
+        } else {
+            (quote! { __g.as_deref().map(|__b| Object::from(::std::clone::Clone::clone(__b))) },
+             quote! { ::std::boxed::Box::new(<#ty as ::std::convert::From<Object>>::from(__n)) })
+        };
+        quote! {
+            #field_str => {
+                let mut __g = self.#name.borrow_mut();
+                let __cur: Object = ::std::option::Option::unwrap_or_default(#read);
+                if let ::std::option::Option::Some(__n) = f(::std::clone::Clone::clone(&__cur)) {
+                    *__g = ::std::option::Option::Some(#write);
+                }
+                ::std::option::Option::Some(__cur)
+            }
+        }
+    };
+    let inner_ref_update_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+        .filter(|(name, ty)| ctx.is_erased(name) || !ctx.inherited_is_basic(name, ty))
+        .map(|(name, ty)| inner_ref_update_arm(name, ty, ctx.is_erased(name)))
+        .chain(ctx.fields.iter()
+            .filter(|(name, ty)| ctx.is_erased(name) || !is_basic(ty))
+            .map(|(name, ty)| inner_ref_update_arm(name, ty, ctx.is_erased(name))))
+        .collect();
+    let inner_ref_update_query: TokenStream2 = if inner_ref_update_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __unsafe_ref_update(
+                &self, field: &str,
+                f: &mut dyn FnMut(Object) -> ::std::option::Option<Object>,
+            ) -> ::std::option::Option<Object> {
+                match field {
+                    #(#inner_ref_update_arms)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+        }
+    };
     let inner_ref_get_query: TokenStream2 = if inner_ref_get_arms.is_empty() {
         quote! {}
     } else {
@@ -436,6 +479,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #inner_bool_cell_query
                 #inner_ref_get_query
                 #inner_ref_set_query
+                #inner_ref_update_query
                 #to_string_inner_bridge
                 #inner_shallow_copy
             }
