@@ -366,8 +366,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     and _ab.startswith(_JDK_PREFIXES) and not _is_boundary_class(_ab)):
                 instantiated_classes.add(_ab)
                 field_discover_classes.add(_ab)
-            elif _ab and _ab.startswith(_JDK_PREFIXES) and _is_boundary_class(_ab):
-                boundary_instantiated.add(_ab)
+            elif _ab and _ab not in _JAVA_RUNTIME_CLASSES and _is_boundary_class(_ab):
+                boundary_instantiated.add(_ab)   # 边界包（sun/ 等）不在 _JDK_PREFIXES 内
 
     def _enqueue_upcalls(cls: str, member: str) -> None:
         """被触达成员的手写实现声明的 Java 回调目标入队（native → Java 的调用边）。"""
