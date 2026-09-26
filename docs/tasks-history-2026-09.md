@@ -172,3 +172,10 @@
 | N12 / #38 | JDK25 TestCompletableFuture 运行 4 分钟（JDK21 0.3s） | ✅ 本机 JDK25 实测 **0.36s**（j25a，`5b54dd5`） | 根因：协作调度下限时 park 立即返回，FJP awaitWork 空转至 keepAlive 真实截止。修复：虚拟时钟 `a8c027e`（限时 park / wait / sleep 无线程可推进时时钟跳至截止）；e2e TestVirtualClockPark JDK21 / JDK25 PASS、TestWaitNotify / TestCompletableFuture JDK21 PASS。**真实时间语义的终态由 #42 真多线程取代**（用户决策 2026-09-26，方案 `docs/plans/2026-09-26-real-multithreading.md`） |
 | K-JCA / #39 | JCA 服务注册（算法实现类字节码翻译 + 静态服务表） | ✅ 本机 JDK21 + JDK25 实测 | JDK21（tgt21）：Digester / TestCipherDesModes / TestMessageDigestApi / TestSecureRandomApi / SecurityDemo PASS，DES 经三元合并修复 `e7fbbab` PASS（mh2）；JDK25（j25a）：DES / Digester / TestCipherDesModes PASS。收尾修复：CryptoAlgorithmConstraints.permits（新版 JDK21 / JDK25，`1e9da59`+`1425bec` 重载名）、JDK25 GetInstance.getServices 返回 Iterator（编译期 cfg `jdk_ge_25`，`5b54dd5`）、athrow 克隆（`180ab8c`，MH 播种揭出的 E0382） |
 
+
+## 2026-09-26 归档批次（四）
+
+| # | 任务 | 状态 | 证据 |
+|---|---|---|---|
+| S-10 / #43 | 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | ✅ 本机 JDK21 dev1 实测 | `jvm_native` 属性宏向返回 Result 的静态 native 注入 `Self::__class_init()?`（`no_class_init` 豁免）；codegen `#[init_interfaces]`（JVMS §5.5 step 7）由宏消费（`ee3de51`）。ClinitOrder / StaticInitTest / TestInitOrder / TestInterfaceInitOrder / TestStaticInit PASS |
+| S-7 | record `hashCode` 恒为 `Ok(0)` | ✅ 本机 JDK21 dev1 实测 | 按 ObjectMethods 31 多项式生成（`1d2af2f`）；TestRecordHashCode / TestRecord / TestRecordAdvanced / TestRecordPattern PASS |

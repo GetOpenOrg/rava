@@ -51,13 +51,14 @@
 
 | # | 任务 | 状态 | 说明 |
 |---|---|---|---|
-| N2 | 序列化构造器只返元数据 | ⬜ 观察 | 反序列化实例化语义未建模，待真实用例 |
+| N2 | 反序列化实例化语义 | 🔄 实现完成（`f71f288`），验证排队 ser1 | 分派伪成员 `<alloc>` / `<init_on>` + 序列化构造器旁表 + Unsafe 基本类型 get/put 经 reflect_field；e2e TestSerializationPrimitives / SerializableDemo |
 | N4 | TypeIR 扩大口径 22 处 + 完全体能力 G1–G5 | ⬜ 待做 | G1 RsType→JvmType 桥与窗口 3 同步；G4 归 M-3 |
 | N6 | 手写 `_impl.rs` 分配的对象不进 RTA | 🔄 实现完成（本地 `wip/n6`，未推送），编译验证排队 jcaN6 | native_upcalls 按 fn 识别 `T::default()`+`_init_not_null()` 分配（同文件辅助 fn 传递、use/super/crate 路径解析），触达成员时登记 RTA 已实例化（仅翻译类）；生成树对照：TestArrayList +5 文件（Thread 覆盖方法，正是缺口本体） |
 | S-65 | **新语料 65 例分层抽样（JDK21）：51/65**（2026-09-25） | 🔄 修复已推送，复跑排队 | 14 例失败全部归因：拼接模板含 `\n`（WordWrap/SwitchExpressionTests/PatternMatchingForInstanceOf，`cd2cf2c`）、模板含控制字符（BWT，`6e7dae3`）、大写开头参数名（WordWrap，`cd2cf2c`）、`FloatingDecimal.parseDouble` 存根（IntegerMethodsDemo/TypeCastingTest/RPN，`afe7481`）、合成槽跨分支异型（RecordPatternsTest，`3e61885`+`798c78c`）、大闭包四族（DataEncryptionStandard：兄弟分支合并 / 类型变量形参 / Object 声明首绑定 / derive(Debug) 遮蔽，`6b76885`+`e87e9b5`）、Class 未入 RTA（SumDataType，`079b9e7`，N6 同族）、环境（ExceptionPropagation OOM / NicePrimes 磁盘满 → prune.sh `8a70bc4`）、对象序列化（RecordsSerializationTest/SerializableDemo：FileOutputStream 原生层 `e5f5ba0`，本体见 S-66）。每类配 e2e（TestUpperCaseLocalNames、TestConcatTemplateWhitespace、TestParseDoubleEdge、TestPatternSlotReuse、TestBranchLocalMerge、TestObjectLocalWidening、TestTypeVarBoundArg、TestClassToString、TestFileOutputStream） |
 | S-66 | Java 对象序列化（ObjectOutputStream / ObjectInputStream，含 record） | 🔄 进行中 | SerializableDemo 已推进至反序列化 resolveClass（forName0 已补，待复跑）；**record 路径阻塞于 N11 MH-native**（写侧 canonicalRecordCtr → unreflectConstructor，读侧 MethodHandle 组合子） |
 | N8 | 服务器编译资源约束 | 📝 已记录 | 单 rustc ~14G 内存；共享 target 每测试残留 0.5–1G，跑批间需清理（`scripts/prune.sh`；后台跑批用 `scripts/run_bg.sh`，自带低内存编译环境）。2026-09-25 本机（16G 容器）JDK25 TestVirtualThread（76+1699 类）debuginfo=2 下 rustc 峰值 13.8G 被 cgroup OOM 杀；`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 下通过（二进制 507M→270M） |
-| N11 | MH-native：MethodHandle 原生调用模型 | ⬜ 暂缓（覆盖面仅 1 例） | record 序列化前置。全部跑批日志仅 RecordsSerializationTest 需要；JDK 组合子靠 ClassSpecializer 运行期生成字节码不可翻译，须原生化。窄切口：RecordSupport 入 vm_boundary + 直接句柄经 reflect_invoke |
+| N11 / #40 | MH-native：MethodHandle 原生调用模型 | 🔄 主体完成，验证排队 fld1 | 方案 `docs/plans/2026-09-26-mh-native.md`：InvokerBytecodeGenerator 入 vm_boundary、invokeBasic 原生 LambdaForm 解释器、linkTo*/成员调用经 reflect_invoke、常量反射引用播种、签名多态调用点 `__site`、字段句柄经 reflect_field。e2e TestMethodHandleDirect / TestMethodHandleCombinators（`tests/e2e/59_method_handles/`）。后续：组合子全集 + RecordsSerializationTest |
+| #42 | 真多线程（OS 线程 + JVM 等价时间 / 同步语义） | 🔄 第 1 步抽象层已推送（`f0b9a45`/`c6e5980`） | 用户决策 2026-09-26：虚拟时钟偏离 JVM 真实时间语义，须真实多线程、行为等价。方案 `docs/plans/2026-09-26-real-multithreading.md`；下一步：codegen 产出的 Rc 迁移 → 第 2 步 `mt` 后端 |
 
 ## 🔴 活跃任务
 
@@ -70,8 +71,6 @@
 
 | 任务 | 来源 | 说明 |
 |------|------|------|
-| record `hashCode` 恒为 `Ok(0)` | R5 遗留 | `toString`/`equals` 已真实化，`hashCode` 未实现（S-7） |
-| 手写静态 native 不触发类初始化；带 default 方法的接口自身不初始化 | S-10 剩余 | 见 remaining-issues S-10 |
 | JDK25 边界 stubs 遗留 | P-3 轮 | `DoubleToDecimal.split`（Formatter `%f/%e/%g`）、`FloatToDecimal`、`Random__nextInt_i_base`（E0432）——随 JDK25 用例按需补 |
 
 ## P2 · 翻译质量
