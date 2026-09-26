@@ -346,7 +346,7 @@ impl ObjectVTable for () {
 }
 
 /// 数组类型（Rc<RefCell<Vec<T>>>）自动装入 Object
-impl<T: 'static> ObjectVTable for Rc<crate::sync_model::__RefSlot<Vec<T>>> {
+impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for Rc<crate::sync_model::__RefSlot<Vec<T>>> {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn __array_len(&self) -> Option<crate::error::Result<i32>> {
         Some(Ok(self.borrow().len() as i32))
@@ -361,7 +361,7 @@ impl<T: 'static> ObjectVTable for Rc<crate::sync_model::__RefSlot<Vec<T>>> {
 ///
 /// `downcast::<T>()` 会同时检查直接路径（T implements ObjectVTable）和 JvmRef 包装路径。
 pub struct JvmRef<T: 'static>(pub T);
-impl<T: 'static> ObjectVTable for JvmRef<T> {
+impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for JvmRef<T> {
     fn as_any(&self) -> &dyn std::any::Any { &self.0 }
     fn __obj_str(&self) -> std::string::String {
         let v: &dyn std::any::Any = &self.0;

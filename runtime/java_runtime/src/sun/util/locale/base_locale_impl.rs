@@ -29,7 +29,7 @@ fn constants() -> &'static [(&'static str, &'static str); 19] {
 }
 
 crate::__process_static! {
-    static CONSTANT_BASE_LOCALES: std::cell::OnceCell<JArray<BaseLocale>> = std::cell::OnceCell::new();
+    static CONSTANT_BASE_LOCALES: std::sync::OnceLock<JArray<BaseLocale>> = std::sync::OnceLock::new();
 }
 
 fn make(language: &str, script: &str, region: &str, variant: &str) -> BaseLocale {

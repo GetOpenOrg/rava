@@ -168,7 +168,7 @@ impl<T: Clone + Default + 'static> JArray<T> {
     }
 }
 
-impl<T: Clone + Default + From<Object> + Into<Object> + 'static> JArray<T> {
+impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> JArray<T> {
     /// 读取下标 i 的元素（对应 Java iaload/aaload 等）。
     /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *aload）；
     /// null 引用抛 `NullPointerException`。
@@ -333,7 +333,7 @@ impl JArray<Object> {
 
 /// Java 数组是对象：可直接装入 Object（`Object o = arr;`）。
 /// null 数组装入后经 vtable 的 is_jvm_null 呈现 Java null 语义。
-impl<T: Clone + Default + From<Object> + Into<Object> + 'static> crate::java::lang::ObjectVTable for JArray<T> {
+impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> crate::java::lang::ObjectVTable for JArray<T> {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn __identity(&self) -> *const () { self.identity() }
     fn is_jvm_null(&self) -> bool { JArray::is_jvm_null(self) }
@@ -538,7 +538,7 @@ pub(crate) fn try_array_view<T: Clone + Default + From<Object> + Into<Object> + 
 /// 赋值兼容，或空数组 / 全 null）。两条路径都以源数组的 Object 级协变视图（存储擦除）
 /// 重建 `JArray<T>`——读出按 T 重建视图、写入按源元素类型做存储检查。判定失败抛
 /// ClassCastException（JVMS §6.5 checkcast）。
-impl<T: Clone + Default + From<Object> + Into<Object> + 'static> From<Object> for JArray<T> {
+impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> From<Object> for JArray<T> {
     fn from(obj: Object) -> Self {
         try_array_view::<T>(&obj).unwrap_or_else(|| {
             panic!("ClassCastException: {} cannot be cast to {}",

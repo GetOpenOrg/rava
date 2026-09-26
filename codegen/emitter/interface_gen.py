@@ -48,7 +48,7 @@ _SIG_RE = re.compile(r'^pub fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*->\s*Resu
 
 # 协变 upcast impl 的类型形参约束 —— 与宏 block/mod.rs 为类类型形参注入的约束集
 # 保持一致（wrapper 的 ObjectVTable impl 带这套约束，`Object::from(v)` 依赖它）。
-_PARAM_BOUNDS = "Clone + Default + 'static + From<Object> + Into<Object>"
+_PARAM_BOUNDS = "Clone + Default + 'static + From<Object> + Into<Object> + __ThreadSafe"
 
 
 def _bounded_generics(params: list[str]) -> str:

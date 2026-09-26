@@ -187,7 +187,7 @@ fn is_static_descriptor(class_slash: &str, name: &str, descriptor: &str) -> bool
 std::thread_local! {
     /// 最近一次实参拆箱失败的标记：Method.invoke 据此区分「实参不符」（JDK 直接抛
     /// IllegalArgumentException）与「目标方法抛出」（包装为 InvocationTargetException）。
-    static BAD_ARG: crate::sync_model::__PrimCell<bool> = const { crate::sync_model::__PrimCell::new(false) };
+    static BAD_ARG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// 实参拆箱失败：置标记并返回 IllegalArgumentException（分派闭包的 marshalling 失败出口）。

@@ -16,7 +16,7 @@ use super::super::parse::{ClassInput, ClassMeta, FnItem, InterfaceImpl, StaticIt
 use super::super::rewrite::VDispatchSig;
 use super::super::util::{classify_method, is_basic, MethodKind};
 
-/// 泛型参数补齐 Clone + Default + 'static + From<Object> + Into<Object>
+/// 泛型参数补齐 Clone + Default + 'static + From<Object> + Into<Object> + __ThreadSafe
 /// （接口路径与类路径共用；Java 类型实参恒为引用类型：与 Object 双向可转）。
 pub(crate) fn augment_generic_bounds(generics: &syn::Generics) -> syn::Generics {
     let mut gen = generics.clone();
@@ -27,6 +27,7 @@ pub(crate) fn augment_generic_bounds(generics: &syn::Generics) -> syn::Generics 
             let mut has_static = false;
             let mut has_from_object = false;
             let mut has_into_object = false;
+            let mut has_thread_safe = false;
             for b in &tp.bounds {
                 match b {
                     syn::TypeParamBound::Trait(t) => {
@@ -39,6 +40,8 @@ pub(crate) fn augment_generic_bounds(generics: &syn::Generics) -> syn::Generics 
                                 has_from_object = true;
                             } else if s.ident == "Into" {
                                 has_into_object = true;
+                            } else if s.ident == "__ThreadSafe" {
+                                has_thread_safe = true;
                             }
                         }
                     }
@@ -66,6 +69,10 @@ pub(crate) fn augment_generic_bounds(generics: &syn::Generics) -> syn::Generics 
             }
             if !has_into_object {
                 tp.bounds.push(syn::parse_quote!(::std::convert::Into<Object>));
+            }
+            // 并行后端：类型实参是 Java 引用（Arc 对象）→ Send + Sync；单线程后端为空约束
+            if !has_thread_safe {
+                tp.bounds.push(syn::parse_quote!(__ThreadSafe));
             }
         }
     }
