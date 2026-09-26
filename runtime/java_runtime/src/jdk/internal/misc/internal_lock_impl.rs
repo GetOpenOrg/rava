@@ -1,18 +1,9 @@
 use crate::prelude::*;
 use super::*;
 
-use std::cell::RefCell;
-use parking_lot::ReentrantMutex;
-
-// 全局可重入锁：所有 InternalLock 实例共享同一把锁（粒度粗于 JDK 的每实例锁，互斥
-// 语义成立）。竞争时先释放 GIL 再阻塞（`crate::gil` 锁序：不持 GIL 等锁）。
-static GLOBAL: ReentrantMutex<()> = ReentrantMutex::new(());
-
-thread_local! {
-    // guard 栈支持同线程重入：lock/unlock 可跨方法调用配对
-    static GUARDS: RefCell<Vec<parking_lot::ReentrantMutexGuard<'static, ()>>>
-        = RefCell::new(Vec::new());
-}
+// 每实例可重入锁（FS-T5）：以实例身份键入监视器表（`crate::monitor::enter` / `exit`，
+// 与 synchronized 同一实现：可重入、竞争时先释放 GIL 再阻塞、按线程计数），lock / unlock
+// 可跨方法调用配对（JDK InternalLock 包装的 ReentrantLock 语义）。
 
 impl InternalLock {
     /// 对应 -Djdk.io.useMonitors=true 的取值：返回 null，
@@ -30,22 +21,15 @@ impl InternalLock {
 
     #[jvm_boundary]
     pub fn lock(&self) -> Result<()> {
-        let guard = unsafe {
-            std::mem::transmute::<
-                parking_lot::ReentrantMutexGuard<'_, ()>,
-                parking_lot::ReentrantMutexGuard<'static, ()>,
-            >(match GLOBAL.try_lock() {
-                Some(g) => g,
-                None => crate::gil::blocking(|| GLOBAL.lock()),
-            })
-        };
-        GUARDS.with(|g| g.borrow_mut().push(guard));
-        Ok(())
+        crate::monitor::enter(self.__lock_identity(), false)
     }
 
     #[jvm_boundary]
     pub fn unlock(&self) -> Result<()> {
-        GUARDS.with(|g| { g.borrow_mut().pop(); });
-        Ok(())
+        crate::monitor::exit(self.__lock_identity())
+    }
+
+    fn __lock_identity(&self) -> usize {
+        Object::from(Clone::clone(self)).0.__identity() as usize
     }
 }

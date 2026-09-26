@@ -56,7 +56,7 @@
 | FS-T2 | 对象模型原语是单线程后端的类型别名；`__GilStatic` 靠 `unsafe impl Sync` | feature `mt`：Arc / 原子 / 读写锁 / OnceLock | 仅架构 | #42（进行中） |
 | ~~FS-T3~~ ✅ `18da936` | `Runtime.availableProcessors()` 恒返回 1（runtime_impl.rs，注释仍写「协作调度」） | 返回真实核数，ForkJoinPool commonPool 按并行度运行 | 返回值是 1；CompletableFuture 走 ThreadPerTaskExecutor；并行流退化 | 新立（随 #42 第二档） |
 | FS-T4 | 虚拟线程 = OS 线程，Continuation / 载体线程 / 容器登记都不建模 | Continuation 建模 | 无法创建海量虚拟线程（每条保留 256MiB 栈）；toString / 载体信息不同 | #42 / compat 虚拟线程行 |
-| FS-T5 | InternalLock 所有实例共用一把全局可重入锁，unlock 不核对实例 | 按实例加锁（翻译 JDK 的 ReentrantLock 包装） | 不同流之间伪互斥（性能问题；理论上可能死锁） | S-11 |
+| ~~FS-T5~~ ✅ | InternalLock 所有实例共用一把全局可重入锁，unlock 不核对实例 | 按实例加锁（翻译 JDK 的 ReentrantLock 包装） | 不同流之间伪互斥（性能问题；理论上可能死锁） | S-11 |
 | ~~FS-T6~~ ✅ `8dba713` | Thread 的 `setPriority0`、`setNativeName`、`getThreads`、`dumpThreads`、`getStackTrace0`、`scopedValueCache` 等 native 缺失 | 实现 | `setPriority` / `getAllStackTraces` 等命中 panic 存根 | 新立（按需） |
 | FS-T7 | Unsafe / VarHandle 的 CAS 族以「GIL 下读-比-写不可分割」的普通单元承载 | 原子单元 / 引用槽写锁内的读-比-写 | 仅架构（GIL 下等价） | #42（**4fa1d48 已改为原子**，待验证） |
 
