@@ -60,6 +60,20 @@
 | N11 / #40 | MH-native：MethodHandle 原生调用模型 | 🔄 主体完成，验证排队 fld1 | 方案 `docs/plans/2026-09-26-mh-native.md`：InvokerBytecodeGenerator 入 vm_boundary、invokeBasic 原生 LambdaForm 解释器、linkTo*/成员调用经 reflect_invoke、常量反射引用播种、签名多态调用点 `__site`、字段句柄经 reflect_field。e2e TestMethodHandleDirect / TestMethodHandleCombinators（`tests/e2e/59_method_handles/`）。后续：组合子全集 + RecordsSerializationTest |
 | #42 | 真多线程（OS 线程 + JVM 等价时间 / 同步语义） | 🔄 第一档（GIL）已实施，验证中（gil1） | 用户决策 2026-09-26：虚拟时钟偏离 JVM 真实时间语义，须真实多线程、行为等价。第一档 OS 线程 + 全局解释器锁（`a5476f3`+`cca3e92`）：真实线程 / 挂钟 / 阻塞，协作调度与虚拟时钟已删除；方案 `docs/plans/2026-09-26-real-multithreading.md` §三-A。e2e `tests/e2e/60_real_threads/` 9 例（本机 TestThreadCounters / TestSpinVolatile 与 JVM 一致）。中断语义（`c9931b4`）与阻塞中 getState（`fed7032`）已补，TestThreadInterrupt 本机与 JVM 一致；全族复跑排队 gil2。第二档（Arc + 原子单元，并行加速）远期 |
 
+### 过渡态 → 最终态（2026-09-26 用户要求建立记录）
+
+> 全量清单 117 项（无记录 51 项）见 **`docs/plans/2026-09-26-transitional-state-inventory.md`**（编号 FS-xx）。下表只列优先项；其余按清单推进，完成即在清单中划除。
+
+| # | 任务 | 状态 | 说明 |
+|---|---|---|---|
+| FS-H0 | 手写覆盖只许 ACC_NATIVE（审计线 + 越界覆盖清零） | ⬜ 待做（最高优先） | `class_writer._nf_covered` 无约束，公开 API 非 native 方法被 `_impl.rs` 静默替换；FS-N1..N5 / FS-H1..H9 同根 |
+| FS-N1..N5 | Math 手写覆盖删除（`random` 恒 0.5、`IEEEremainder` 用 round、`pow` NaN 规格、libm ulp、双下划线死代码） | ⬜ 待做 | 随 FS-H0，改走 StrictMath / FdLibm 字节码链；e2e 由 JVM 生成期望（random 以分布性质断言） |
+| FS-H1 / H4 / H6 | `Character.digit` 非 ASCII、`Arrays.copyOf` 组件类型、`Properties` defaults 链 | ⬜ 待做 | 随 FS-H0 删除手写覆盖 |
+| FS-T3 | `availableProcessors` 恒 1 | ⬜ 待做 | 随 #42 第二档 |
+| FS-E3 / M7 / M8 | 不可捕获 panic（checkcast / NPE / toString 路径）、null 接收者字段访问不抛 NPE、`_is_jnull` 非 Object 载体恒假 | ⬜ 待做 | 异常语义等价 |
+| FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ⬜ 待做 | 进程 / 环境层 |
+| FS-O1..O3 | compatibility.md 过期行、失真注释、过渡宏（java_synchronized / java_switch!）文档 | ⬜ 待做 | 文档真实性 |
+
 ## 🔴 活跃任务
 
 | 任务 | 状态 | 目标 / 说明 |
