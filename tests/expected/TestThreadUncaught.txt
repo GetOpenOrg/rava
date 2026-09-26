@@ -1,0 +1,3 @@
+bad alive=false state=TERMINATED
+good ran
+daemon=true main exits without waiting

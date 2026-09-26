@@ -1,0 +1,6 @@
+latch work=6 count=0
+latch timed await on zero: true
+latch timed await timeout: false
+barrier trips=2
+queue sum=5050 poll timeout=null
+condition state=7 held=true

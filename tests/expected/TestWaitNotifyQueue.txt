@@ -1,0 +1,4 @@
+count=1000 sum=500500 left=0
+timed wait >= 120ms: true
+waiter woke
+done

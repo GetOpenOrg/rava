@@ -1,0 +1,7 @@
+sync=8000 atomic=8000 static=8000
+counter-0 alive=false state=TERMINATED
+counter-1 alive=false state=TERMINATED
+counter-2 alive=false state=TERMINATED
+counter-3 alive=false state=TERMINATED
+main done
+tail thread done after main
