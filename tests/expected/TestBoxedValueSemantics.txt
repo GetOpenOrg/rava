@@ -1,0 +1,7 @@
+hash i=7 l=-2045923536 z=1231 S=-3 B=100 C=90
+i eq same true eq Integer true eq 8 false eq Long false eq null false
+l eq true z eq true z eq false false
+S eq true B eq true C eq true C eq Integer false
+hash d=1074397184 nan=2146959360 -0.0=-2147483648 f=1069547520 fnan=2143289344
+nan eq nan true 0.0 eq -0.0 false d eq Double true f eq Double false
+set size 2

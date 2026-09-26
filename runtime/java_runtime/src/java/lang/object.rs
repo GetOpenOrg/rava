@@ -277,32 +277,41 @@ pub fn Object__toString_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error
 // 此时基本类型盒自身承载对应包装类的 binary name —— getClass()、instanceof、
 // 异常消息对这些值给出与 JVM 一致的答案。这与翻译类路径（wrapper 的 vtable）
 // 互不冲突：Rc<i32> 与 Rc<Integer> 的 TypeId 不同，downcast 各自精确命中。
+/// 基本类型装箱（Integer / Long / ... 的原生值盒，反射 / VarHandle 等运行时路径产出）：
+/// `hashCode` / `equals` 按包装类语义——值哈希（`Integer.hashCode` 等静态形态）；值等要求
+/// 同一包装类且值文本相同（对方可为原生值盒或翻译出的包装类实例，二者的 `__obj_str` 均为
+/// Java `toString` 文本，与 `reflect_dispatch::unbox_*` 同一识别约定）。浮点的 `toString`
+/// 文本相等 ⇔ `doubleToLongBits` 相等（NaN 自等、0.0 与 -0.0 不等），与 `Double.equals` 一致。
 macro_rules! impl_vtable_primitive {
-    ($t:ty, $bin:literal) => {
+    ($t:ty, $bin:literal, $fmt:expr, $hash:expr) => {
         impl ObjectVTable for $t {
-            fn __obj_str(&self) -> std::string::String { format!("{}", self) }
+            fn __obj_str(&self) -> std::string::String { ($fmt)(*self) }
             fn __class_name(&self) -> &'static str { $bin }
             fn is_instance_of(&self, type_id: &str) -> bool { type_id == $bin }
             fn as_any(&self) -> &dyn std::any::Any { self }
-        }
-    };
-    ($t:ty, $bin:literal, $fmt:ident) => {
-        impl ObjectVTable for $t {
-            fn __obj_str(&self) -> std::string::String { crate::$fmt(*self) }
-            fn __class_name(&self) -> &'static str { $bin }
-            fn is_instance_of(&self, type_id: &str) -> bool { type_id == $bin }
-            fn as_any(&self) -> &dyn std::any::Any { self }
+            fn hashCode(&self) -> i32 { ($hash)(*self) }
+            fn equals(&self, other: Object) -> crate::error::Result<bool> {
+                Ok(!other.0.is_jvm_null()
+                    && other.0.__class_name() == $bin
+                    && other.0.__obj_str() == ($fmt)(*self))
+            }
         }
     };
 }
-impl_vtable_primitive!(i32, "java/lang/Integer");
-impl_vtable_primitive!(i64, "java/lang/Long");
-impl_vtable_primitive!(bool, "java/lang/Boolean");
-impl_vtable_primitive!(i8,  "java/lang/Byte");
-impl_vtable_primitive!(i16, "java/lang/Short");
-impl_vtable_primitive!(u16, "java/lang/Character", java_fmt_char);
-impl_vtable_primitive!(f32, "java/lang/Float", java_fmt_f32);
-impl_vtable_primitive!(f64, "java/lang/Double", java_fmt_f64);
+fn __canon_f64_bits(v: f64) -> u64 { if v.is_nan() { 0x7ff8000000000000 } else { v.to_bits() } }
+fn __canon_f32_bits(v: f32) -> u32 { if v.is_nan() { 0x7fc00000 } else { v.to_bits() } }
+impl_vtable_primitive!(i32, "java/lang/Integer", |v: i32| format!("{}", v), |v: i32| v);
+impl_vtable_primitive!(i64, "java/lang/Long", |v: i64| format!("{}", v),
+    |v: i64| (v ^ ((v as u64) >> 32) as i64) as i32);
+impl_vtable_primitive!(bool, "java/lang/Boolean", |v: bool| format!("{}", v),
+    |v: bool| if v { 1231 } else { 1237 });
+impl_vtable_primitive!(i8,  "java/lang/Byte", |v: i8| format!("{}", v), |v: i8| v as i32);
+impl_vtable_primitive!(i16, "java/lang/Short", |v: i16| format!("{}", v), |v: i16| v as i32);
+impl_vtable_primitive!(u16, "java/lang/Character", crate::java_fmt_char, |v: u16| v as i32);
+impl_vtable_primitive!(f32, "java/lang/Float", crate::java_fmt_f32,
+    |v: f32| __canon_f32_bits(v) as i32);
+impl_vtable_primitive!(f64, "java/lang/Double", crate::java_fmt_f64,
+    |v: f64| { let b = __canon_f64_bits(v); (b ^ (b >> 32)) as i32 });
 
 /// null/default 值：存储 () 表示 Java null
 impl ObjectVTable for () {
