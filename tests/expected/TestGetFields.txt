@@ -1,0 +1,5 @@
+Leaf.getFields [BIG=1099511627776, LIMIT=10, TAG=t, baseVisible=1, leafValue=2.5, midName=mid]
+Leaf.getDeclaredFields [leafPkg=4, leafValue=2.5]
+Base.getFields [LIMIT=10, TAG=t, baseVisible=1]
+Empty.getFields 0
+Consts.getFields [LIMIT=10, TAG=t]

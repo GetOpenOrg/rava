@@ -418,6 +418,49 @@ impl Class {
         Ok(JArray::from(out))
     }
 
+    /// `getFields()`：本类及其超类型的全部 public 字段（JDK `privateGetPublicFields` 语义：
+    /// 本类 public 字段 → 超接口字段 → 超类递归，按字段身份去重）。走反射族静态注册表路线，
+    /// 截断 JDK 的 ReflectionData / SoftReference 缓存链（其 `ReflectionData.<init>` 等为存根）。
+    /// **偏差**：无直接超接口表——接口常量取超类型闭包中的接口（按闭包表顺序），与 JDK
+    /// 「直接超接口递归」的枚举顺序可能不同（字段集合一致）。
+    pub fn getFields(&self) -> Result<JArray<Field>> {
+        let mut out: Vec<Field> = Vec::new();
+        let mut seen: std::collections::HashSet<(std::string::String, std::string::String)> =
+            std::collections::HashSet::new();
+        let push_public = |cls: &Class, out: &mut Vec<Field>,
+                           seen: &mut std::collections::HashSet<(std::string::String, std::string::String)>|
+         -> Result<()> {
+            let owner = format!("{}", cls.__get_name()).replace('.', "/");
+            let fs = cls.getDeclaredFields()?;
+            for i in 0..fs.len()? {
+                let f = fs.get(i)?;
+                if f.__get_modifiers() & 0x0001 != 0
+                    && seen.insert((owner.clone(), format!("{}", f.__get_name()))) {
+                    out.push(f);
+                }
+            }
+            Ok(())
+        };
+        let mut cur = Clone::clone(self);
+        let mut guard = 0;
+        while !Object::from(Clone::clone(&cur)).0.is_jvm_null() && guard < 64 {
+            guard += 1;
+            push_public(&cur, &mut out, &mut seen)?;
+            let name = format!("{}", cur.__get_name()).replace('.', "/");
+            if let Some((_, supers)) = __hierarchy::CLASS_HIERARCHY.iter().find(|(n, _)| *n == name) {
+                for s in supers.iter().filter(|s| **s != name) {
+                    let is_iface = __modifiers::CLASS_MODIFIERS.iter()
+                        .any(|(n, m)| n == s && (*m & 0x0200) != 0);
+                    if is_iface {
+                        push_public(&Class::for_class(String::from(*s)), &mut out, &mut seen)?;
+                    }
+                }
+            }
+            cur = cur.getSuperclass()?;
+        }
+        Ok(JArray::from(out))
+    }
+
     /// `getDeclaredConstructors()`：本类全部声明构造器（方法表 `<init>` 行；
     /// 构造器身份键 = (类, 描述符)——参数还原同 __method_from_meta）。
     pub fn getDeclaredConstructors(&self) -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>> {
