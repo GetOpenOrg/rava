@@ -27,11 +27,15 @@ _JDK_PREFIXES = ('java/', 'javax/')
 _JDK_STUB_ONLY_PREFIXES: tuple[str, ...] = tuple(read_list('boundary_prefixes.txt'))
 
 # K-JCA 放行（codegen/jca_services.py，清单 jca_providers.txt 的 release 行）：算法实现包
-# （纯 Java 计算）与 engine / SPI 类从边界前缀放行、按字节码翻译。包前缀并入 _JDK_PREFIXES
-#（「展开并翻译」的包集合）；类条目在 java/ 下，天然属于 _JDK_PREFIXES，只需豁免边界判定。
+# （纯 Java 计算）与 engine / SPI / 工具类从边界前缀放行、按字节码翻译。放行项并入
+# _JDK_PREFIXES（「展开并翻译」的集合）：包前缀原样；类条目在 java/ javax/ 下天然属于该集合，
+# 其余前缀下的类条目（sun/security/util/ArrayUtil）须显式并入——否则其方法引用不进调用链，
+# 调用点落 `stub: ArrayUtil.blockSizeCheck`（DES doFinal 实证）。类条目作前缀匹配同时覆盖其嵌套类。
 from .jca_services import load_manifest as _jca_manifest, released as _jca_released
 _JCA_MANIFEST = _jca_manifest()
-_JDK_PREFIXES = _JDK_PREFIXES + tuple(r for r in _JCA_MANIFEST.release if r.endswith('/'))
+_JDK_PREFIXES = _JDK_PREFIXES + tuple(
+    r for r in _JCA_MANIFEST.release
+    if r.endswith('/') or not r.startswith(('java/', 'javax/')))
 
 
 
