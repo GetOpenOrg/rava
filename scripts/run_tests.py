@@ -21,6 +21,7 @@
     python3 scripts/run_tests.py --deny stub-hit         # run 失败的 stub 子族 → 整体失败
     python3 scripts/run_tests.py --deny fallback         # 任一静默兜底点非零 → 整体失败（K-6b 防线）
     python3 scripts/run_tests.py --deny equiv --deny stub-hit   # 可叠加
+    python3 scripts/run_tests.py --keep-artifacts               # 保留通过测试的生成物（缺省 PASS 即清理）
 
 工作区模型（见 docs/plans/2026-09-16-per-test-scratch-workspace.md）：
     build/<test>/   每测试独立 scratch（手写 overlay + 该测试的生成代码）
@@ -458,14 +459,103 @@ def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
     return r.returncode == 0, (r.stdout + r.stderr)
 
 
+# ── 通过测试的生成物清理（默认开启，--keep-artifacts 关闭）──────────────────────
+#
+# 每个测试的生成物：scratch 工作区 build/jdkN/<bin>/；共享 target 里本测试独有的编译产物
+# （可执行文件、该测试的 java_runtime 库、build.rs 编译 / 输出目录、指纹、.d / .rcgu.o）；
+# 以往失败留下的 logs/<bin>.build.log / .run.log。共享依赖（syn / quote / parking_lot /
+# libc / java_rta_macros 等）跨测试复用，不属于任何单个测试，永不清理。
+#
+# 归属判定不靠文件名猜测：cargo 的 JSON 产物清单（compiler-artifact / build-script-executed）
+# 带 manifest_path，只收 manifest 位于本测试 scratch 内的包（java_runtime / 用户 bin crate /
+# lib crate），再按 `<crate>-<hash>` 扩展到同哈希的 .d / .rcgu.o 与 .fingerprint 目录。
+# 失败测试（转译 / 编译 / 运行 / 输出不一致）不清理，全部生成物保留供分析。
+
+KEEP_ARTIFACTS = False
+_BUILD_ARTIFACTS: dict[str, set] = {}
+
+
+def _record_build_artifacts(bin_name: str, out_dir: Path, json_stdout: str) -> None:
+    import json as _json
+    scratch = str(Path(out_dir).resolve())
+    paths: set = set()
+    for ln in json_stdout.splitlines():
+        if not ln.startswith("{"):
+            continue
+        try:
+            msg = _json.loads(ln)
+        except ValueError:
+            continue
+        manifest = str(msg.get("manifest_path") or "")
+        if not manifest.startswith(scratch):
+            # build-script-executed 无 manifest_path，按 package_id 的 path+file 前缀判定
+            pid = str(msg.get("package_id") or "")
+            if scratch not in pid:
+                continue
+        reason = msg.get("reason")
+        if reason == "compiler-artifact":
+            for f in msg.get("filenames") or []:
+                paths.add(Path(f))
+            if msg.get("executable"):
+                paths.add(Path(msg["executable"]))
+        elif reason == "build-script-executed" and msg.get("out_dir"):
+            paths.add(Path(msg["out_dir"]).parent)       # build/<crate>-<hash>/（含 out/ output）
+    _BUILD_ARTIFACTS[bin_name] = paths
+
+
+def _expand_artifact(p: Path) -> list[Path]:
+    """产物文件 → 同 `<crate>-<hash>` 前缀的兄弟文件与指纹目录。"""
+    out = [p]
+    name = p.name
+    if name.startswith("lib"):
+        name = name[3:]
+    stem = name.split(".", 1)[0]                      # <crate>-<hash>
+    if "-" in stem and p.parent.name == "deps":
+        out.extend(p.parent.glob(stem + "*"))         # .d / .rcgu.o 等同哈希兄弟文件
+        # 指纹目录按「包名-哈希」命名（bin crate 的包名可与 bin 名不同）→ 按哈希匹配
+        out.extend((p.parent.parent / ".fingerprint").glob("*-" + stem.rsplit("-", 1)[1]))
+    elif p.parent.parent.name == "build":             # build/<crate>-<hash>/build-script-build
+        out.append(p.parent)
+        out.extend((p.parent.parent.parent / ".fingerprint").glob(
+            "*-" + p.parent.name.rsplit("-", 1)[1]))
+    elif p.parent.name == "build" and "-" in p.name:   # build/<crate>-<hash>/（build.rs 执行输出）
+        out.extend((p.parent.parent / ".fingerprint").glob("*-" + p.name.rsplit("-", 1)[1]))
+    elif p.parent.name == PROFILE_DIR:                 # target/debug/<bin>（deps 内原件的硬链接）
+        out.append(p.with_name(p.name + ".d"))
+    return out
+
+
+def _cleanup_passed(class_name: str) -> None:
+    """通过测试：删除其 scratch、独有编译产物与残留失败日志（KEEP_ARTIFACTS 时跳过）。"""
+    if KEEP_ARTIFACTS:
+        return
+    import shutil
+    bin_name = _to_bin_name(class_name)
+    targets: list[Path] = [_test_workspace(bin_name),
+                           LOGS_DIR / f"{bin_name}.build.log",
+                           LOGS_DIR / f"{bin_name}.run.log"]
+    for a in _BUILD_ARTIFACTS.pop(bin_name, set()):
+        targets.extend(_expand_artifact(a))
+    for t in targets:
+        try:
+            if t.is_dir() and not t.is_symlink():
+                shutil.rmtree(t, ignore_errors=True)
+            elif t.exists() or t.is_symlink():
+                t.unlink()
+        except OSError:
+            pass
+
+
 def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     """cargo build --bin <class>（共享 target 缓存）。返回 (ok, 首个 error 行)。"""
     bin_name = _to_bin_name(class_name)
     try:
-        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name], cwd=out_dir, env=_cargo_env(),
+        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name,
+                  "--message-format=json-render-diagnostics"], cwd=out_dir, env=_cargo_env(),
                  timeout=BUILD_TIMEOUT)
     except subprocess.TimeoutExpired:
         return False, f"build timeout ({fmt_dur(BUILD_TIMEOUT)})"
+    _record_build_artifacts(bin_name, out_dir, r.stdout or "")
     if r.returncode != 0:
         if r.returncode < 0:
             sig = -r.returncode
@@ -1262,6 +1352,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                 failed += 1
             else:
                 _pline(name_w, "PASS", java_file.relative_to(E2E), aux=_aux)
+                _cleanup_passed(_class_name(java_file))
                 ratchet.record(str(java_file.relative_to(ROOT)), True)
                 if pratchet is not None:
                     pratchet.record(str(java_file.relative_to(ROOT)), True)
@@ -1390,6 +1481,9 @@ def main():
     ap.add_argument("--record-passed",   action="store_true",
                     help="通过测试写穿记录到 build/passed_tests_jdkN.txt：PASS 即时落盘（中断不丢）、FAIL 即时出列；"
                          "重跑自动跳过已通过，删除清单文件即从头")
+    ap.add_argument("--keep-artifacts",  action="store_true",
+                    help="保留通过测试的生成物（缺省：PASS 即删除其 scratch 与独有编译产物，"
+                         "失败测试的生成物始终保留）")
     ap.add_argument("--batch",           metavar="K/N", default=None,
                     help="批跑：按发现序均分 N 批取第 K 批（1-based，如 --batch 3/10）；"
                          "分批基于稳定排序，与 --record-passed 叠加时批内容不随通过集增长漂移")
@@ -1406,7 +1500,8 @@ def main():
     if args.failed and args.skip_failed:
         sys.exit("--failed 与 --skip-failed 互斥：前者只跑清单、后者跳过清单。")
 
-    global OUT, SHARED_TARGET, LOGS_DIR, JDK_LAYER
+    global OUT, SHARED_TARGET, LOGS_DIR, JDK_LAYER, KEEP_ARTIFACTS
+    KEEP_ARTIFACTS = args.keep_artifacts
     if args.out_dir is not None:
         OUT = Path(args.out_dir)
         if not OUT.is_absolute():
