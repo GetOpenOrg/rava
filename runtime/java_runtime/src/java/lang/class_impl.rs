@@ -744,8 +744,11 @@ impl Class {
     #[jvm_native(upcalls = "java/lang/reflect/RecordComponent.<init>:()V java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;")]
     pub fn getRecordComponents0(&self) -> Result<JArray<crate::java::lang::reflect::RecordComponent>> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
-        let Some((_, comps)) = __record::RECORD_COMPONENTS.iter().find(|(c, _)| *c == name) else {
-            return Ok(JArray::default());
+        let comps: &[(&str, &str, &str)] = match __record::RECORD_COMPONENTS.iter().find(|(c, _)| *c == name) {
+            Some((_, comps)) => comps,
+            // 无分量的 record（`record Empty()`）不产生 record_components 属性 → 空数组
+            None if __record::RECORD_CLASSES.contains(&name.as_str()) => &[],
+            None => return Ok(JArray::default()),
         };
         let mut out: Vec<crate::java::lang::reflect::RecordComponent> = Vec::new();
         for (n, d, g) in comps.iter() {
