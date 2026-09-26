@@ -57,6 +57,7 @@ def reset() -> None:
     """清零（与 equiv_audit.reset 同约定，供复用进程的场景）。"""
     for k in _counts:
         _counts[k] = 0
+    _overrides.clear()
 
 
 def _scan(patterns, exempt: frozenset) -> int:
@@ -123,9 +124,26 @@ def jdk_literal_sites() -> int:
     return len(jdk_literal_hits())
 
 
+# 手写覆盖审计（FS-H0，过渡态清单根因项）：公开 API 类（java/、javax/）的非 native 方法被
+# 共置 `_impl.rs` 同名 fn 覆盖、从而跳过字节码翻译的位点。最终态为 0（原则 0 / 1：公开 API
+# 的 `_impl.rs` 只承载 ACC_NATIVE 方法）。
+_overrides: set = set()
+
+
+def record_override(member: str) -> None:
+    """登记一处非 native 方法的手写覆盖（`Class.name:descriptor`）。"""
+    _overrides.add(member)
+
+
+def override_lines() -> list:
+    """逐位点明细（排序，确定性）。"""
+    return sorted(_overrides)
+
+
 def summary() -> str:
     return (f"[raw-audit] raw_expr={_counts['raw_expr']} "
             f"raw_stmt={_counts['raw_stmt']} "
             f"type_surgery_sites={type_surgery_sites()} "
             f"type_surgery_ext={type_surgery_ext_sites()} "
-            f"jdk_literals={jdk_literal_sites()}")
+            f"jdk_literals={jdk_literal_sites()} "
+            f"non_native_overrides={len(_overrides)}")

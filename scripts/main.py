@@ -275,6 +275,10 @@ def main():
     # 终态全 0（Raw 全部类型化、类型查询全部经 TypeIR）；趋势只降不升。
     from codegen import raw_audit as _RAW_AUDIT
     print(_RAW_AUDIT.summary())
+    _ov = _RAW_AUDIT.override_lines()
+    if _ov:
+        # FS-H0：公开 API 非 native 方法的手写覆盖明细（最终态为 0）
+        print('[override-audit] ' + ' '.join(_ov))
     t_codegen = time.perf_counter() - t0
     print(f"[time] transpile   {fmt_dur(t_codegen)}")
 

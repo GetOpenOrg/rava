@@ -361,6 +361,11 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
         _nf_covered = (_nf_entry or {}).get('methods', set())
         fn_name_check = safe_ident(rust_name or m.name)
         if fn_name_check in _nf_covered:
+            # FS-H0 审计：公开 API 类的非 native 方法被手写覆盖（跳过字节码翻译）
+            if (not m.is_native and not m.is_abstract
+                    and ci.name.startswith(('java/', 'javax/'))):
+                from .. import raw_audit as _ra
+                _ra.record_override(f'{ci.name}.{m.name}:{m.descriptor}')
             # 手写共置文件按同一 mangle 规则提供实现 → 定义名仍记为计算名（G-10 账本）
             LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
             # 接口例外（伴生隐含契约）：接口实例方法的伴生实现落在 `Iface__VTable`
