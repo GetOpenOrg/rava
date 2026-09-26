@@ -1,0 +1,297 @@
+//! `java/lang/invoke/MethodHandle` 的 ACC_NATIVE 调用内核（MH-native，
+//! docs/plans/2026-09-26-mh-native.md §二-3/4）。文件名取 `_ext`：`method_handle_impl.rs`
+//! 被生成类 `MethodHandleImpl` 占用。
+//!
+//! ## 模型
+//!
+//! 句柄的语义完整编码在其 `LambdaForm`（`names[]` 表达式图）里——组合子（bindTo /
+//! insertArguments / filterReturnValue / asType …）全部是 JDK 字节码构造的 LambdaForm，
+//! 本文件不手写任何组合子。HotSpot 把 LambdaForm 编译为字节码后经 `vmentry` 执行；原生
+//! 二进制不能定义类（`InvokerBytecodeGenerator` 为边界，vmentry 恒 null），改为**解释执行**：
+//!
+//! ```text
+//! values = [mh, a1 … a(arity-1), 空 …]
+//! for i in arity..names.len():  values[i] = eval(names[i])
+//! return values[form.result]      // VOID_RESULT(-1) → null
+//! ```
+//!
+//! `eval(name)` 按 `name.function`：
+//! - member 为 `MethodHandle.invokeBasic` → 递归解释目标句柄；
+//! - member 为 `MethodHandle.linkTo*` → 末参 MemberName 按 refKind 调用成员；
+//! - 其他 member（JDK 辅助函数 / Unsafe 访问器 / 目标方法）→ 按 refKind 调用成员；
+//! - 无 member → 解释其 `resolvedHandle`。
+//!
+//! 实参与返回值一律以 `Object` 流动（基本类型为装箱值）；成员调用经反射分派注册表
+//! （`reflect_dispatch::reflect_invoke`，与 `Method.invoke` 同一协议）按描述符拆装箱。
+
+use crate::prelude::*;
+use super::method_handle::implref::MethodHandle;
+use super::{LambdaForm_Name, LambdaForm_NamedFunction, MemberName, MethodType};
+use crate::java::lang::Class;
+
+// MethodHandleNatives.Constants 的 reference kind（JVMS §5.4.3.5）
+const REF_GET_FIELD: i32 = 1;
+const REF_GET_STATIC: i32 = 2;
+const REF_PUT_FIELD: i32 = 3;
+const REF_PUT_STATIC: i32 = 4;
+const REF_NEW_INVOKE_SPECIAL: i32 = 8;
+
+const MH_CLASS: &str = "java/lang/invoke/MethodHandle";
+const NAME_CLASS: &str = "java/lang/invoke/LambdaForm$Name";
+const UNSAFE_CLASS: &str = "jdk/internal/misc/Unsafe";
+
+fn slash(cls: &Class) -> std::string::String {
+    format!("{}", cls.__get_name()).replace('.', "/")
+}
+
+/// MemberName 的方法描述符（MethodType → toMethodDescriptorString；字段为类型描述符）。
+fn member_descriptor(m: &MemberName) -> Result<std::string::String> {
+    let t = m.__get_type_();
+    if _is_jnull(&t) {
+        return Ok(std::string::String::from("()V"));
+    }
+    if t.0.is_instance_of("java/lang/invoke/MethodType") {
+        let mt = Clone::clone(&t).try_cast::<MethodType>("java/lang/invoke/MethodType")?;
+        return Ok(format!("{}", mt.toMethodDescriptorString()?));
+    }
+    // 字段成员：type 为 Class
+    let c = Clone::clone(&t).try_cast::<Class>("java/lang/Class")?;
+    Ok(format!("{}", c.descriptorString()?))
+}
+
+/// 解释执行句柄 `mh` 的 LambdaForm，`args` 为不含句柄自身的实参。
+pub(crate) fn interpret(mh: MethodHandle, args: Vec<Object>) -> Result<Object> {
+    let form = mh.__get_form();
+    let names = form.__get_names();
+    let n = names.len()? as usize;
+    let arity = form.__get_arity() as usize;
+    let mut values: Vec<Object> = vec![Object::default(); n.max(arity)];
+    values[0] = Object::from(Clone::clone(&mh));
+    for (i, a) in args.into_iter().enumerate() {
+        if i + 1 < values.len() {
+            values[i + 1] = a;
+        }
+    }
+    for i in arity..n {
+        let name = names.get(i as i32)?;
+        let raw = name.__get_arguments();
+        let mut argv: Vec<Object> = Vec::with_capacity(raw.len()? as usize);
+        for k in 0..raw.len()? {
+            let a = raw.get(k)?;
+            if !_is_jnull(&a) && a.0.is_instance_of(NAME_CLASS) {
+                let an = Clone::clone(&a).try_cast::<LambdaForm_Name>(NAME_CLASS)?;
+                argv.push(Clone::clone(&values[an.__get_index() as usize]));
+            } else {
+                argv.push(a);
+            }
+        }
+        values[i] = eval_function(&name.__get_function(), argv)?;
+    }
+    let result = form.__get_result();
+    if result < 0 {
+        return Ok(Object::default());
+    }
+    Ok(Clone::clone(&values[result as usize]))
+}
+
+fn eval_function(f: &LambdaForm_NamedFunction, argv: Vec<Object>) -> Result<Object> {
+    let member = f.__get_member();
+    if !_is_jnull(&Object::from(Clone::clone(&member))) {
+        let cls = slash(&member.__get_clazz());
+        let name = format!("{}", member.__get_name());
+        if cls == MH_CLASS {
+            match name.as_str() {
+                "invokeBasic" | "invokeExact" | "invoke" => {
+                    let mut it = argv.into_iter();
+                    let target = it.next().unwrap_or_default()
+                        .try_cast::<MethodHandle>(MH_CLASS)?;
+                    return interpret(target, it.collect());
+                }
+                "linkToStatic" | "linkToVirtual" | "linkToSpecial" | "linkToInterface" => {
+                    return link_to(argv);
+                }
+                _ => {}
+            }
+        }
+        return invoke_member(&member, argv);
+    }
+    let mut h = f.__get_resolvedHandle();
+    if _is_jnull(&Object::from(Clone::clone(&h))) {
+        h = f.resolvedHandle()?;
+    }
+    interpret(h, argv)
+}
+
+/// `linkTo*(a1 … an, MemberName)`：末参为目标成员。
+fn link_to(mut argv: Vec<Object>) -> Result<Object> {
+    let last = argv.pop().unwrap_or_default();
+    let member = last.try_cast::<MemberName>("java/lang/invoke/MemberName")?;
+    invoke_member(&member, argv)
+}
+
+/// 按 MemberName 的 refKind 调用成员：字段访问 / 静态 / 虚 / 特殊 / 构造。
+pub(crate) fn invoke_member(m: &MemberName, argv: Vec<Object>) -> Result<Object> {
+    let cls = slash(&m.__get_clazz());
+    let name = format!("{}", m.__get_name());
+    let ref_kind = (m.__get_flags() >> 24) & 15;
+    if cls == UNSAFE_CLASS {
+        return invoke_unsafe(&name, argv);
+    }
+    let descriptor = member_descriptor(m)?;
+    match ref_kind {
+        REF_GET_FIELD | REF_GET_STATIC | REF_PUT_FIELD | REF_PUT_STATIC => {
+            invoke_field(m, ref_kind, argv)
+        }
+        REF_NEW_INVOKE_SPECIAL => {
+            let arr = JArray::from(argv);
+            crate::reflect_dispatch::reflect_invoke(&cls, "<init>", &descriptor, Object::default(), &arr)
+        }
+        _ => {
+            // static（6）：实参全体；virtual / interface / special（5/9/7）：首参为接收者
+            let is_static = ref_kind == 6;
+            let (recv, rest) = if is_static {
+                (Object::default(), argv)
+            } else {
+                let mut it = argv.into_iter();
+                (it.next().unwrap_or_default(), it.collect())
+            };
+            let arr = JArray::from(rest);
+            crate::reflect_dispatch::reflect_invoke(&cls, &name, &descriptor, recv, &arr)
+        }
+    }
+}
+
+/// 字段 refKind：经 Unsafe 偏移登记表访问（与 VarHandle / Field 同一存储单元协议）。
+fn invoke_field(m: &MemberName, ref_kind: i32, argv: Vec<Object>) -> Result<Object> {
+    let u = crate::jdk::internal::misc::Unsafe::getUnsafe()?;
+    let clazz = m.__get_clazz();
+    let off = u.objectFieldOffset_class_str(Clone::clone(&clazz), Clone::clone(&m.__get_name()))?;
+    let is_static = ref_kind == REF_GET_STATIC || ref_kind == REF_PUT_STATIC;
+    let mut it = argv.into_iter();
+    let base = if is_static { Object::from(clazz) } else { it.next().unwrap_or_default() };
+    if !is_static && _is_jnull(&base) {
+        return Err(JvmError::null_pointer());
+    }
+    let desc = member_descriptor(m)?;
+    if ref_kind == REF_GET_FIELD || ref_kind == REF_GET_STATIC {
+        return match desc.as_str() {
+            "I" | "S" | "B" | "C" | "Z" => {
+                let v = u.getInt_obj_l(base, off)?;
+                Ok(match desc.as_str() {
+                    "Z" => Object::from(v != 0),
+                    "S" => Object::from(v as i16),
+                    "B" => Object::from(v as i8),
+                    "C" => Object::from(v as u16),
+                    _ => Object::from(v),
+                })
+            }
+            "J" => Ok(Object::from(u.getLong_obj_l(base, off)?)),
+            _ => u.getReference(base, off),
+        };
+    }
+    let v = it.next().unwrap_or_default();
+    match desc.as_str() {
+        "I" | "S" | "B" | "C" | "Z" => {
+            let iv = crate::reflect_dispatch::unbox_i32(&v)
+                .or_else(|| crate::reflect_dispatch::unbox_bool(&v).map(|b| b as i32))
+                .ok_or_else(crate::reflect_dispatch::bad_arg)?;
+            u.putInt_obj_l_i(base, off, iv)?;
+        }
+        "J" => {
+            let lv = crate::reflect_dispatch::unbox_i64(&v).ok_or_else(crate::reflect_dispatch::bad_arg)?;
+            u.putLong_obj_l_l(base, off, lv)?;
+        }
+        _ => u.putReference(base, off, v)?,
+    }
+    Ok(Object::default())
+}
+
+/// LambdaForm 里的 Unsafe 访问器成员（DMH 字段访问形态：`UNSAFE.getInt(base, offset)` 等）。
+/// Unsafe 为手写边界类，无生成分派臂——在此按名直连手写实现。
+fn invoke_unsafe(name: &str, argv: Vec<Object>) -> Result<Object> {
+    let u = crate::jdk::internal::misc::Unsafe::getUnsafe()?;
+    let mut it = argv.into_iter();
+    // 虚成员：首参是 Unsafe 实例自身
+    let _self = it.next();
+    let base = it.next().unwrap_or_default();
+    let off = crate::reflect_dispatch::unbox_i64(&it.next().unwrap_or_default())
+        .ok_or_else(crate::reflect_dispatch::bad_arg)?;
+    let val = it.next();
+    let get_int = |u: &crate::jdk::internal::misc::Unsafe| u.getInt_obj_l(Clone::clone(&base), off);
+    match name {
+        "getInt" | "getIntVolatile" | "getIntAcquire" | "getIntOpaque" => Ok(Object::from(get_int(&u)?)),
+        "getBoolean" | "getBooleanVolatile" => Ok(Object::from(get_int(&u)? != 0)),
+        "getShort" | "getShortVolatile" => Ok(Object::from(get_int(&u)? as i16)),
+        "getByte" | "getByteVolatile" => Ok(Object::from(get_int(&u)? as i8)),
+        "getChar" | "getCharVolatile" => Ok(Object::from(get_int(&u)? as u16)),
+        "getLong" | "getLongVolatile" | "getLongAcquire" | "getLongOpaque" => {
+            Ok(Object::from(u.getLong_obj_l(base, off)?))
+        }
+        "getReference" | "getReferenceVolatile" | "getReferenceAcquire" | "getReferenceOpaque" => {
+            u.getReference(base, off)
+        }
+        "putInt" | "putIntVolatile" | "putIntRelease" | "putIntOpaque"
+        | "putBoolean" | "putBooleanVolatile" | "putShort" | "putShortVolatile"
+        | "putByte" | "putByteVolatile" | "putChar" | "putCharVolatile" => {
+            let v = val.unwrap_or_default();
+            let iv = crate::reflect_dispatch::unbox_i32(&v)
+                .or_else(|| crate::reflect_dispatch::unbox_bool(&v).map(|b| b as i32))
+                .ok_or_else(crate::reflect_dispatch::bad_arg)?;
+            u.putInt_obj_l_i(base, off, iv)?;
+            Ok(Object::default())
+        }
+        "putLong" | "putLongVolatile" | "putLongRelease" | "putLongOpaque" => {
+            let lv = crate::reflect_dispatch::unbox_i64(&val.unwrap_or_default())
+                .ok_or_else(crate::reflect_dispatch::bad_arg)?;
+            u.putLong_obj_l_l(base, off, lv)?;
+            Ok(Object::default())
+        }
+        "putReference" | "putReferenceVolatile" | "putReferenceRelease" | "putReferenceOpaque" => {
+            u.putReference(base, off, val.unwrap_or_default())?;
+            Ok(Object::default())
+        }
+        _ => panic!("stub: MH-native 解释器未承载的 Unsafe 成员 {}", name),
+    }
+}
+
+impl MethodHandle {
+    /// native `invokeBasic(Object...)`：解释执行本句柄的 LambdaForm（无类型检查——
+    /// 调用方保证基本类型形态一致，JDK 语义）。
+    #[jvm_native]
+    pub fn invokeBasic(&self, args: JArray<Object>) -> Result<Object> {
+        interpret(Clone::clone(self), args.to_vec())
+    }
+
+    /// native `invokeExact(Object...)`：调用点类型未传入时按 invokeBasic 执行
+    ///（调用点 MethodType 检查见 `invokeExact__site`）。
+    #[jvm_native]
+    pub fn invokeExact(&self, args: JArray<Object>) -> Result<Object> {
+        interpret(Clone::clone(self), args.to_vec())
+    }
+
+    /// native `invoke(Object...)`：同上（调用点 asType 适配见 `invoke__site`）。
+    #[jvm_native]
+    pub fn invoke(&self, args: JArray<Object>) -> Result<Object> {
+        interpret(Clone::clone(self), args.to_vec())
+    }
+
+    #[jvm_native]
+    pub fn linkToStatic(args: JArray<Object>) -> Result<Object> {
+        link_to(args.to_vec())
+    }
+
+    #[jvm_native]
+    pub fn linkToVirtual(args: JArray<Object>) -> Result<Object> {
+        link_to(args.to_vec())
+    }
+
+    #[jvm_native]
+    pub fn linkToSpecial(args: JArray<Object>) -> Result<Object> {
+        link_to(args.to_vec())
+    }
+
+    #[jvm_native]
+    pub fn linkToInterface(args: JArray<Object>) -> Result<Object> {
+        link_to(args.to_vec())
+    }
+}

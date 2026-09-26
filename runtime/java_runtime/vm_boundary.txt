@@ -35,3 +35,8 @@ java/nio/file/FileSystems
 # 策略即 unlimited。类整体手写：canUseProvider 恒 true、isRestricted 恒 false
 # （Cipher 据此取 CryptoAllPermission，JDK 默认安装的可观测行为一致）。
 javax/crypto/JceSecurity
+
+# MH-native（2026-09-26，docs/plans/2026-09-26-mh-native.md）：LambdaForm 运行期字节码生成器。
+# 原生二进制不能定义隐藏类；句柄调用由 MethodHandle.invokeBasic 的原生 LambdaForm 解释器承载，
+# 编译入口返回 null vmentry。整类手写，截断 ASM 生成链。
+java/lang/invoke/InvokerBytecodeGenerator

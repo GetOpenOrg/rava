@@ -97,8 +97,10 @@ def _split_params(sig_params: str) -> list:
     return parts
 
 
-def _emit_for(class_bin: str, short: str, em) -> 'str | None':
-    """类发射文本 → __reflect_dispatch 实现（无方法 / 泛型 / 接口 → None）。"""
+def _emit_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) -> 'str | None':
+    """类发射文本 → __reflect_dispatch 实现（无方法 / 泛型 / 接口 → None）。
+
+    only：只发射这些方法名的臂（JDK 类的常量反射引用面，MH-native）；None = 全部。"""
     lines = em.text.split('\n')
     # 泛型类不承载（try_cast::<Self> 的擦除视图还原未定案）
     if re.search(rf'pub struct {re.escape(short)}<', em.text):
@@ -130,6 +132,8 @@ def _emit_for(class_bin: str, short: str, em) -> 'str | None':
         mname = _extract(line, 'name')
         descriptor = _extract(line, 'descriptor')
         if not mname or not descriptor:
+            continue
+        if only is not None and mname not in only:
             continue
         is_static = _flag(line, 'is_static')
         rust_name, params, ret = fn_m.group(1), fn_m.group(2), fn_m.group(3) or '()'
@@ -309,8 +313,12 @@ def _emit_fields_for(class_bin: str, short: str, em) -> 'str | None':
 FIELD_LEDGER: dict[str, str] = {}
 
 
-def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]') -> None:
-    """为用户树类发射分派闭包（追加在类文件尾部）并登记工厂路径。"""
+def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]',
+               reflect_members: 'dict[str, set[str]] | None' = None) -> None:
+    """为用户树类发射分派闭包（追加在类文件尾部）并登记工厂路径。
+
+    reflect_members：JDK / 库类的常量反射引用面（callchain.REFLECT_CONSTS，MH-native）
+    ——只为被指名的方法发射臂（无反射调用边的成员不付代码税）。"""
     from .inherited_gen import class_use_path
 
     for bin_name in sorted(user_bins):
@@ -327,7 +335,12 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]') -> None:
         FIELD_LEDGER[bin_name] = f'    ("{bin_name}", std::rc::Rc::new(' \
             f'|n, r, v| {fpath}::__reflect_field(n, r, v))),'
 
-    for bin_name in sorted(user_bins):
+    targets = {b: None for b in user_bins}
+    for b, names in (reflect_members or {}).items():
+        if b not in targets:
+            targets[b] = set(names)
+    for bin_name in sorted(targets):
+        only = targets[bin_name]
         em = emissions.get(bin_name)
         if em is None or em.handwritten:
             continue
@@ -335,7 +348,7 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]') -> None:
         if ci is None or getattr(ci, 'is_interface', False):
             continue
         from ..type_map import short_cls
-        text = _emit_for(bin_name, short_cls(bin_name), em)
+        text = _emit_for(bin_name, short_cls(bin_name), em, only)
         if text is None:
             continue
         em.text = em.text.rstrip('\n') + '\n' + text + '\n'

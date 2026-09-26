@@ -362,6 +362,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     instantiated_classes.add(tcls)   # 手写实现构造的 Java 对象
             _enqueue_desc_types(tdesc)
 
+    _pending_reflect_consts: list = []
+    _reflect_seen: set = set()
+    REFLECT_CONSTS.clear()
+
     def enqueue_refs(instrs, exception_table=()):
         (method_refs, f_classes, member_refs, boundary_refs, new_classes,
          static_refs) = _collect_method_refs(instrs, user_class_names=user_names,
@@ -391,6 +395,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             _enqueue_method(key)
         for cls, member in member_refs:
             _enqueue_upcalls(cls, member)
+        _pending_reflect_consts.extend(_scan_reflect_consts(instrs))
 
     # 初始种子：用户类所有方法的引用（既有 .java 路径行为，不变）
     for ci in class_infos:
@@ -684,6 +689,15 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             if m.name == meth and m.descriptor == desc:
                 _declared = True
                 enqueue_refs(m.instrs or [], m.exception_table)
+                # 常量反射引用的隐式本类形态：`getNamedFunction("name", type)` 一类按名
+                # 查找以所在类为宿主，只有名字常量（MH-native §二-5）
+                _own = {x.name for x in ci.methods}
+                for _ins in (m.instrs or []):
+                    _c = _ins.comment or ''
+                    if _ins.opcode.startswith('ldc') and _c.startswith('String '):
+                        _nm = _c[len('String '):]
+                        if _nm in _own and _nm != meth:
+                            _pending_reflect_consts.append((cls, _nm))
                 # T88：被调方法的描述符参数/返回类型也是类型依赖
                 # （abstract/native 方法无 instrs，签名引用的接口类型
                 # 如 iterator()Ljava/util/Iterator; 仍需进闭包生成）
@@ -915,11 +929,36 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                       f"({', '.join(f'{x.type}.{x.algorithm}' for x in JCA_SEEDS)})", flush=True)
             return bool(_new)
 
+        def _drain_reflect_consts() -> None:
+            """常量反射引用 → 被指名方法（全部同名重载）入链并登记分派发射面。
+            用户类全量翻译、分派全量发射，只需 JDK / 库类；边界类（手写）不入。"""
+            while _pending_reflect_consts:
+                pair = _pending_reflect_consts.pop()
+                if pair in _reflect_seen:
+                    continue
+                _reflect_seen.add(pair)
+                cls, name = pair
+                if cls in user_names or _is_boundary_class(cls) \
+                        or not cls.startswith(_JDK_PREFIXES + tuple(lib_prefixes)):
+                    continue
+                ci = _load_class(cls)
+                if ci is None:
+                    continue
+                hits = [m for m in ci.methods if m.name == name and not m.name.startswith('<')]
+                if not hits:
+                    continue
+                REFLECT_CONSTS.setdefault(cls, set()).add(name)
+                for m in hits:
+                    _enqueue_method((cls, m.name, m.descriptor))
+
         # 不动点：排空队列 → 传播虚调用目标 → 有新方法则继续
         while True:
             while queue:
                 _process(*queue.popleft())
             _drain_boundary_refs()
+            _drain_reflect_consts()
+            if queue:
+                continue
             if queue:
                 continue
             _propagate_virtual_targets()
@@ -1179,6 +1218,38 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
               f"JAVA_RTA_DEBUG=1 逐触发明细")
 
     return list(jdk_infos.values()), visited_methods, field_discover_classes
+
+
+# MH-native（docs/plans/2026-09-26-mh-native.md §二-5）：常量反射引用。
+# {类 binary: 成员名集合}——闭包内方法字节码以 `ldc class C` + `ldc String s` 常量组
+# 指名的 C 的方法（MethodHandles.Lookup.findStatic/findVirtual、new MemberName(C, "s", …)
+# 等按名查找）。这些方法经 BFS 入链翻译，并由 dispatch_gen 为 JDK 类发射按名分派臂
+# （句柄 linkTo* / LambdaForm 成员调用经 reflect_invoke 落到它们）。每轮转译重建。
+REFLECT_CONSTS: dict[str, set[str]] = {}
+
+# 类常量之后在该窗口内出现的首个字符串常量视为成员名（javac 对
+# `find*(C.class, "name", MethodType.methodType(...))` 的发射：两常量相邻）。
+_REFLECT_WINDOW = 3
+
+
+def _scan_reflect_consts(instrs) -> list[tuple[str, str]]:
+    """指令序列中的 (类常量, 随后的字符串常量) 对（按名反射查找的常量形态）。"""
+    out: list[tuple[str, str]] = []
+    seq = [i for i in (instrs or []) if i.comment]
+    for k, ins in enumerate(seq):
+        c = ins.comment
+        if not (ins.opcode.startswith('ldc') and c.startswith('class ')):
+            continue
+        cls = c[6:].split()[0] if c[6:].split() else ''
+        if not cls or cls.startswith("["):
+            continue
+        for nxt in seq[k + 1:k + 1 + _REFLECT_WINDOW]:
+            if nxt.opcode.startswith('ldc') and nxt.comment.startswith('String '):
+                name = nxt.comment[len('String '):]
+                if name and ' ' not in name:
+                    out.append((cls, name))
+                break
+    return out
 
 
 def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset(),

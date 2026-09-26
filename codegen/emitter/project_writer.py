@@ -674,8 +674,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 反射 L3 段 2 收尾：用户类分派闭包（Method.invoke / Constructor.
     # newInstance 的按名协议，java_runtime::reflect_dispatch 头注定稿）。
     # 登记行由 main 生成段经 _dispatch_gen.registration_lines() 消费。
+    from ..callchain import REFLECT_CONSTS as _reflect_consts
     _dispatch_gen.synthesize(emissions, registry,
-                             user_bins={ci.name for ci in class_infos})
+                             user_bins={ci.name for ci in class_infos},
+                             reflect_members=_reflect_consts)
     for _em in emissions.values():
         _write(_em.path, _em.text)
     _write_jdk_mod_tree()
