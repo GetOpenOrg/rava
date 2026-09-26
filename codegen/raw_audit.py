@@ -58,6 +58,7 @@ def reset() -> None:
     for k in _counts:
         _counts[k] = 0
     _overrides.clear()
+    _intrinsic_hits.clear()
 
 
 def _scan(patterns, exempt: frozenset) -> int:
@@ -130,6 +131,24 @@ def jdk_literal_sites() -> int:
 _overrides: set = set()
 
 
+_intrinsic_hits: set = set()
+_INTRINSICS: 'frozenset | None' = None
+
+
+def intrinsics() -> frozenset:
+    """VM 内建函数准入清单（runtime/java_runtime/intrinsics.txt，`Class.m:desc` 取行首字段）。"""
+    global _INTRINSICS
+    if _INTRINSICS is None:
+        from .runtime_manifest import read_list
+        _INTRINSICS = frozenset(ln.split()[0] for ln in read_list('intrinsics.txt'))
+    return _INTRINSICS
+
+
+def record_intrinsic(member: str) -> None:
+    """登记一处 VM 内建函数的原生实现（准入清单内，不计越界覆盖）。"""
+    _intrinsic_hits.add(member)
+
+
 def record_override(member: str) -> None:
     """登记一处非 native 方法的手写覆盖（`Class.name:descriptor`）。"""
     _overrides.add(member)
@@ -146,4 +165,5 @@ def summary() -> str:
             f"type_surgery_sites={type_surgery_sites()} "
             f"type_surgery_ext={type_surgery_ext_sites()} "
             f"jdk_literals={jdk_literal_sites()} "
-            f"non_native_overrides={len(_overrides)}")
+            f"non_native_overrides={len(_overrides)} "
+            f"intrinsics={len(_intrinsic_hits)}")

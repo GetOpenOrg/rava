@@ -365,7 +365,11 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
             if (not m.is_native and not m.is_abstract
                     and ci.name.startswith(('java/', 'javax/'))):
                 from .. import raw_audit as _ra
-                _ra.record_override(f'{ci.name}.{m.name}:{m.descriptor}')
+                _member = f'{ci.name}.{m.name}:{m.descriptor}'
+                if _member in _ra.intrinsics():
+                    _ra.record_intrinsic(_member)   # VM 内建（intrinsics.txt 准入），非越界覆盖
+                else:
+                    _ra.record_override(_member)
             # 手写共置文件按同一 mangle 规则提供实现 → 定义名仍记为计算名（G-10 账本）
             LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
             # 接口例外（伴生隐含契约）：接口实例方法的伴生实现落在 `Iface__VTable`

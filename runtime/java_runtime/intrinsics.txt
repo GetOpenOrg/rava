@@ -1,0 +1,10 @@
+# VM 内建函数（intrinsic）清单：公开 API 中标注 @IntrinsicCandidate、且 Java 规范规定唯一
+# 精确结果的方法，允许在共置 `_impl.rs` 以等价原生运算实现（HotSpot 同样不执行其 Java 体）。
+# 准入条件（全部满足）：
+#   1. JDK 源码标注 @IntrinsicCandidate；
+#   2. 规范给出唯一结果（IEEE 754 正确舍入 / 精确运算），Rust 原生运算逐位相同；
+#   3. 在此列出并注明规范依据。
+# 与「手写覆盖」（FS-H0 审计线，最终态 0）分开计数：intrinsic 是最终态的一部分。
+#
+# 格式：binary_name.method:descriptor    # 规范依据
+java/lang/StrictMath.sqrt:(D)D           # JLS / StrictMath.sqrt：IEEE 754 squareRoot 正确舍入；f64::sqrt 同为正确舍入
