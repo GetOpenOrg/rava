@@ -27,6 +27,23 @@ impl VerifyAccess {
         Ok(true)
     }
 
+    /// static `isTypeVisible(MethodType type, Class refc)`：JDK21 方法类型形态（返回类型与
+    /// 各参数逐个做 Class 形态检查；JDK25 改名 ensureTypeVisible）——各分量恒可见，恒真。
+    /// 消费链：MemberName.checkForTypeAlias（Lookup.findStatic 等 resolveOrFail，MH-native 揭出）。
+    pub fn isTypeVisible_methodtype_class(_type_: MethodType, _refc: Class) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// static `isSameModule(Class, Class)`：全部类型同属未命名模块 → 恒真。
+    pub fn isSameModule(_class1: Class, _class2: Class) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// static `isModuleAccessible(Class refc, Module m1, Module m2)`：未命名模块对所有人开放 → 恒真。
+    pub fn isModuleAccessible(_refc: Class, _m1: crate::java::lang::Module, _m2: crate::java::lang::Module) -> Result<bool> {
+        Ok(true)
+    }
+
     /// static `ensureTypeVisible(Class type, Class refc)`：JDK25 对
     /// `isTypeVisible(Class, Class)` 的改名（语义不变）——未命名模块等价物同上，恒可见。
     pub fn ensureTypeVisible_class_class(_type_: Class, _refc: Class) -> Result<bool> {
