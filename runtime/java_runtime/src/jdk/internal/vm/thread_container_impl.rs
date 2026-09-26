@@ -3,7 +3,7 @@
 //! 消费方：`ThreadPerTaskExecutor.<init>` 的 `super(true)`（Executors.newVirtualThread-
 //! PerTaskExecutor 链）。JDK 构造体仅 `StackableScope(shared)`：共享容器不记录 owner
 //! 线程（StackableScope 栈只服务 structured concurrency 的嵌套校验）。本档位线程层
-//! 为单线程协作调度（thread_impl），容器不参与调度，构造即簿记对象。
+//! 为OS 线程 + GIL（thread_impl，#42），容器不参与调度，构造即簿记对象。
 
 use crate::prelude::*;
 use super::thread_container::ThreadContainer;
@@ -23,7 +23,7 @@ impl ThreadContainer {
         Ok(this)
     }
 
-    /// final `add(Thread)`：按字节码——pin/unpin（协作档位无 continuation，空操作）包裹
+    /// final `add(Thread)`：按字节码——pin/unpin（虚拟线程即 OS 线程、无 continuation，空操作）包裹
     /// 虚调用 `onStart(thread)`（子类簿记钩子）。消费方：JDK 25 `Thread.start(ThreadContainer)`
     ///（ForkJoinPool 工作线程经池容器启动）。
     #[jvm_boundary(upcalls = "jdk/internal/vm/ThreadContainer.onStart:(Ljava/lang/Thread;)V")]

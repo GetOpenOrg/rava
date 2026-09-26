@@ -19,8 +19,8 @@
 //! 元素装箱形态：翻译层的 `i32/bool → Object` 装箱（Integer/Boolean 包装），
 //! 回收按 toString 解析（数值/布尔字面量即十进制文本，解析无损）。
 //!
-//! volatile / acquire / release / opaque 与 plain 的访问序差异在单 OS 线程
-//! 协作调度下无跨线程可见性区别——同一存储单元（S-11 档位等价）；CAS 族
+//! volatile / acquire / release / opaque 与 plain 的访问序差异在
+//! GIL 下无跨线程可见性区别——同一存储单元，锁的获取 / 释放建立 happens-before（#42）；CAS 族
 //! （compareAndSet/weakCompareAndSet/compareAndExchange/getAndSet）为
 //! 读-比-写三步，无并发穿插即不可分割（与 Unsafe.getAndAddInt、
 //! compareAndSetReference 的语义承载同族）。weak 与非 weak 在无竞争下同义。
@@ -178,7 +178,7 @@ fn _field_write(u: &Unsafe, carrier: _Carrier, holder: &Object, offset: i64, v: 
     }
 }
 
-/// 读-比-写（单 OS 线程协作调度下不可分割）。引用比较按 Java `==`（null 与
+/// 读-比-写（GIL 下（持锁线程独占执行，#42）不可分割）。引用比较按 Java `==`（null 与
 /// 对象身份，`PartialEq for Object`）；数值族经 Unsafe 的 int/long CAS。
 fn _field_cas(u: &Unsafe, carrier: _Carrier, holder: &Object, offset: i64, expected: &Object, new: &Object) -> Result<bool> {
     let witness = _field_exchange(u, carrier, holder, offset, Some(expected), new)?;

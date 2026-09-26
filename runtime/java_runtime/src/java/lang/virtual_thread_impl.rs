@@ -50,7 +50,7 @@ impl VirtualThread {
         self.__impl_start()
     }
 
-    /// `run()`：调度器运行本模拟线程时的入口——RUNNING → 执行任务 → TERMINATED。
+    /// `run()`：新 OS 线程执行本虚拟线程时的入口——RUNNING → 执行任务 → TERMINATED。
     /// upcalls：runWith / scopedValueBindings 为 runtime→Java 调用边（字节码不可见）。
     #[jvm_boundary(upcalls = "java/lang/Thread.runWith:(Ljava/lang/Object;Ljava/lang/Runnable;)V java/lang/Thread.scopedValueBindings:()Ljava/lang/Object;")]
     pub fn __impl_run(&self) -> Result<()> {

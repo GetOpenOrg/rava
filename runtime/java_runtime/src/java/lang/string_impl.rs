@@ -34,7 +34,7 @@ fn __intern_key(s: &String) -> Vec<u16> {
 /// ldc 发射形态 `String::from("...")`）与本表同源；`from_owned`（拼接结果等
 /// 非字面量构造）不入表——Java 中拼接产生新对象，不入常量池。
 ///
-/// `String` 含 `Rc` 非 `Send`，且对象模型单线程协作调度（S-11），故 thread_local。
+/// `String` 含 `Rc` 非 `Send`，且进程级存储经 __process_static!（#42 GIL 模型）。
 crate::__process_static! {
     static __STRING_INTERN_TABLE: RefCell<std::collections::HashMap<Vec<u16>, String>> =
         RefCell::new(std::collections::HashMap::new());

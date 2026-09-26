@@ -52,7 +52,7 @@ fn heap_view(bb: &ByteBuffer) -> Result<HeapView> {
 
 impl FileChannelImpl {
     /// `<init>(FileDescriptor, String, boolean, boolean, boolean, Closeable)`：
-    /// 档 A 落差：threads/positionLock（单线程协作调度无中断语义）、alignment
+    /// 档 A 落差：threads/positionLock（GIL 模型，中断见 #42）、alignment
     /// （direct 恒 false）、closer（无 Cleaner 池——fd 由 close 显式回收）不承载。
     #[jvm_boundary]
     pub fn new(

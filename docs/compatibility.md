@@ -26,7 +26,7 @@
 | **行为等价** | 外部可观测行为一致（副作用、异常、执行顺序） | `JvmError`/真实 Throwable 异常链、CCE/ArrayStoreException、`java_try!`、try-finally、vtable 双指针虚分派、`InternalLock`（ReentrantMutex） |
 | **语义等价** | 输入输出与异常一致，内部机制允许不同 | 集合为 Rust 实现、稳定排序、String 走字节码翻译保留 compact strings |
 | **条件等价** | 等价性取决于运行时条件，**分档承诺** | `monitorenter`：单线程 = 行为等价；多线程互斥待 InternalLock 接入（S-11） |
-| **近似等价** | 已知、可列举的偏差场景；**不允许静默**（告警契约 §5） | identity hash、null 数组、`getClass` 终态、record `hashCode`、栈回溯（详见 §3；intern 同一性已修出列） |
+| **近似等价** | 已知、可列举的偏差场景；**不允许静默**（告警契约 §5） | identity hash、`getClass` 终态、栈回溯（详见 §3；intern 同一性已修出列） |
 | **不可等价** | 无法在此架构下承诺；转译期报错或可见 stub | ClassLoader 动态加载、Agent、运行时生成类 |
 
 **传递性规则**：类的有效等价等级 = min(自身声明等级, 全部依赖成员的等级)。用户类调用到近似等价的 JDK 方法时整体降级，不得静默宣称更高等级。终态：codegen 输出每类有效等价等级报告（待立项，规格来源即本节）。
@@ -39,12 +39,12 @@
 | 特性 / API | 等级 | 实测状态（2026-09-21） | 条目 |
 |---|---|---|---|
 | 整数 wrapping / 位运算 / 窄化截断 | 规格等价 | TestArithmetic / TestOverflow / TestIntOverflow / TestUnsignedInt PASS | — |
-| 浮点算术（IEEE 754） | 规格等价 | TestDouble PASS；**NaN 判定、`Math.rint`、小数值科学计数格式当前破坏规格——属缺陷非边界** | 待立项（归类文档 §新发现） |
+| 浮点算术（IEEE 754） | 规格等价 | TestDouble / TestNaN / TestMathRound / TestMathExact PASS：S-19 六项（rint HALF_EVEN、NaN 比较、增补字符字面量、Double.toString 科学计数、栈帧、expm1）已修；Math/StrictMath 全走 FdLibm 字节码链（FS-H0，sqrt 为规范精确的 VM 内建） | S-19 ✅ |
 | 异常链 / CCE / ASE / NPE（引用接收者） | 行为等价 | TestExceptions / TestInheritance / TestCasting PASS | — |
 | `monitorenter` / `monitorexit` 互斥 | 等价（验证中） | #42 第一档：OS 线程 + GIL，监视器竞争释放 GIL 后真实阻塞；TestSynchronized / TestThreadCounters | `docs/plans/2026-09-26-real-multithreading.md` §三-A |
 | **线程：`Thread.start/join/sleep/interrupt/getState` + wait/notify + park** | 等价（验证中） | #42 第一档：每个 Java 线程是真实 OS 线程，GIL 串行执行 Java 代码（安全点 2ms 时间片让出）；sleep / wait(ms) / parkNanos 真实挂钟驻留；interrupt 唤醒并抛 InterruptedException（park 保留状态）；阻塞中 getState 与 JVM 同编码；并发 `<clinit>` 按 JVMS §5.5；main 结束等待非守护线程。e2e `tests/e2e/60_real_threads/` 9 例（期望由 JVM 生成）。**边界**：无并行加速（第二档 Arc + 原子单元远期）；交错只发生在安全点（JMM 合法执行的子集） | `docs/plans/2026-09-26-real-multithreading.md` |
 | **虚拟线程 / 限时等待（`Thread.ofVirtual`、`FutureTask.get(timeout)`、JUnit `@Test(timeout=)`）** | 等价（验证中） | 线程模型方案 A：虚拟线程 = OS 线程（Continuation 不建模，不计入 DestroyJavaVM 等待集）；限时等待按挂钟超时——真实超时可达 | #42 第一档 |
-| `Object.wait` / `notify` / `notifyAll` | 行为等价（目标） | **未实现**（`Object` 无该方法，4 用例 E0599） | 待立项（runtime 小改） |
+| `Object.wait` / `notify` / `notifyAll` | 行为等价 | 已实现（S-20 `23fe881`；#42 真线程下 wait 释放 GIL 真实阻塞、可被 interrupt 唤醒）：TestWaitNotify / TestWaitNotifyQueue / TestThreadInterrupt | S-20 ✅ / #42 |
 | identity hash / 默认 `Object.hashCode` | **语义等价**（2026-09-25） | **已实测**（TestIdentityHash PASS：稳定性 / null=0 / 未覆盖类 hashCode==identityHashCode / 覆盖不影响 identity / HashSet·HashMap·IdentityHashMap 语义）。修复：ObjectVTable 默认 hashCode 原恒 0，改为实例地址，与 System.identityHashCode 同源。迭代序：未覆盖 hashCode 的对象在哈希容器中的迭代序随地址变化（JVM 同样不确定） | ~~S-6~~ 已修 |
 | 本地化数字格式（`String.format(Locale, ..)` / `NumberFormat` / `DecimalFormatSymbols`） | **语义等价**（2026-09-25，L-1） | 符号集与模式来自 CLDR 资源束**翻译字节码**（JDK 版本自带的 CLDR 数据，21 / 25 各自一致）；入选 locale = 用户字节码静态可见的 locale 引用 + 父链（另可 `--locales` 追加）。TestLocaleConstants fr_FR / it_IT 逐字一致。**偏差**：①运行时构造、字节码不可见的 locale（如从配置读取标签）未入选时回退父链上已入选的束（最终 ROOT）——用 `--locales` 显式追加；②货币：`Currency` / `CurrencyNames` 数据层未建模，`initializeCurrency` 按地区表给代码与本地符号（US/CA/GB/欧元区/JP/CN/KR/TW），其余地区 `XXX` / `¤`，`getCurrency()` 为 null | L-1 |
 | `Object.clone`（浅拷贝 / Cloneable 契约 / 数组 clone / 覆盖体） | **语义等价**（2026-09-25） | TestObjectClone PASS：浅拷贝、非 Cloneable 抛 CloneNotSupportedException、数组 clone 五形态、类自身 clone 覆盖体（深拷贝）、经基类视角虚分派、覆盖体内 `super.clone()` 按运行时类浅拷贝 | ~~C-1~~ 已修 |
@@ -54,14 +54,14 @@
 | `finalize` | 近似等价 | TestFinalizeProbe PASS：覆盖 + 显式调用、super.finalize 链、虚分派、异常传播、Object.finalize 空体。**不建模**：GC 触发的终结调用（无 GC）；静态链未覆盖、运行时子类覆盖时 `this.finalize()` 落 Object 空体 | — |
 | 弱 / 软 / 虚引用 | 近似等价 | TestReferenceTypes PASS：强可达期间 get / clear / refersTo / enqueue / 队列 poll / PhantomReference.get 恒 null / WeakHashMap。**不建模**：GC 回收与自动入队（无 GC，referent 仅经 clear 置空） | — |
 | `String.intern` 同一性（`==`） | 语义等价 | **已实测**（TestStringCompare PASS：interned==lit=true、lit==heap=false——runtime 全局驻留表，字面量路径 `From<&str>` 与 `intern()` 同表取规范实例；拼接走 `from_owned` 不入表）。TestStringEdge 同机制行待复跑（invoke 域预存编译断，与本修无关） | ~~S-6 intern~~ 已修（identity-hash 同条目另一半仍未实测） |
-| null 数组表示 / 数组 NPE | 近似等价 | 未实测 | S-2.1 |
+| null 数组表示 / 数组 NPE | 行为等价（待专项 e2e） | 已实现：`JArray` 的 `Repr::Null` 承载 null 数组，get/set/length 抛可捕获 NPE；专项 e2e 未补 | S-2.1 |
 | `getClass` / 类字面量同一性 | 近似等价（完整终态后为语义等价） | 基础路径 PASS（TestClassLiteral）；**数组 getClass 已实测**（TestArrayCovariance PASS：`arr.getClass()` 动态分派——JArray 协变视图委托源数组取运行时元素类型，`getSimpleName` 按 JDK 数组形态命名（`String[]`/`int[][]`）；Class 一律经 for_class 缓存，`== X[].class` 身份成立）；非数组类字面量同一性未实测 | S-5（数组臂已修） |
-| record `hashCode`（31 多项式） | 近似等价 | 未实测（TestRecord 基础路径 PASS） | S-7 |
+| record `hashCode`（31 多项式） | 行为等价 | 已实现（`1d2af2f`）：TestRecordHashCode / TestRecord / TestRecordAdvanced PASS | S-7 ✅ |
 | 栈回溯 / stack frames | 近似等价（档位：帧数真实、内容近似） | **已实测**（S-19 #5，TestCustomException PASS；探针首四帧与 JDK 21 同名同序，帧内容为 Rust 栈符号属声明边界） | ~~S-19 #5~~ 已修 |
-| 数组负长度 `NegativeArraySizeException` | 近似等价 | 未实测 | S-8 |
+| 数组负长度 `NegativeArraySizeException` | 行为等价 | 已实现：newarray / anewarray / multianewarray 负长度抛可捕获异常（`array.rs`，error.rs vm-upcalls） | S-8 ✅ |
 | null 接收者 `getfield`/`putfield` NPE | 近似等价 | 未实测 | S-9 |
-| 类初始化触发点全集（JVMS §5.5） | 近似等价 | 部分（手写 static native、接口自身初始化未触发） | S-10 |
-| 泛型擦除运行时身份 | 近似等价（A-1 完成后升语义等价） | 通配符/跨实例化 CCE 场景已知 | A-1 |
+| 类初始化触发点全集（JVMS §5.5） | 行为等价 | 已实现：手写 static native 注入初始化、带 default 方法的接口初始化（`ee3de51`）；#42 起并发首次初始化按 §5.5 加锁（TestConcurrentClinit） | S-10 ✅ |
+| 泛型擦除运行时身份 | 语义等价 | A-1 存储层擦除已闭环（2026-09-20/21） | A-1 ✅ |
 | ClassLoader / Agent / 运行时生成类 | 不可等价 | 不在语料 | — |
 
 ## 4. 告警契约（设计态，待 `[equiv-audit]` 立项）
@@ -92,10 +92,10 @@
 | `null-array` | JArray null 表示 / null 数组访问 | 近似等价 | S-2.1 |
 | `boxed-null` | 装箱类型 null 路径 | 近似等价 | S-3 |
 | `class-literal` | `getClass`/类字面量同一性 | 近似等价（数组 getClass 臂已动态化，S-5 数组侧已修；计数维持发射点口径） | S-5 |
-| `record-hash` | record `hashCode` | 近似等价 | S-7 |
-| `neg-array` | `NegativeArraySizeException` | 近似等价 | S-8 |
+| `record-hash` | record `hashCode` | 行为等价（S-7 ✅，审计 ID 保留作回归观测） | S-7 |
+| `neg-array` | `NegativeArraySizeException` | 行为等价（S-8 ✅，审计 ID 保留作回归观测） | S-8 |
 | `field-npe` | null 接收者 `getfield`/`putfield` | 近似等价 | S-9 |
-| `monitor-mt` | `monitorenter` 多线程互斥 | 条件等价 | S-11 / tasks.md P1 |
+| `monitor-mt` | `monitorenter` 多线程互斥 | 行为等价（#42 真线程：竞争释放 GIL 后真实阻塞） | #42 |
 | `stacktrace` | `fillInStackTrace` / 栈帧 | 近似等价 | S-19 #5（已修；无 codegen 发射点维持不埋点） |
 | `class-init` | JVMS §5.5 未覆盖触发点 | 近似等价 | S-10 |
 

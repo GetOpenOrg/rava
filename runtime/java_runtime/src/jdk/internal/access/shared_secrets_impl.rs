@@ -58,7 +58,7 @@ impl SharedSecrets {
     }
 
     /// `ForkJoinPool.<clinit>` 登记的 FJP 访问器（容器/配置查询，供
-    /// serviceability 与虚拟线程层消费）。单线程协作档位下闭包内无读取方
+    /// serviceability 与虚拟线程层消费）。GIL 模型下闭包内无读取方
     /// （getJavaUtilConcurrentFJPAccess 未被触达）——按 JDK 形态存储即可。
     #[jvm_boundary]
     pub fn setJavaUtilConcurrentFJPAccess(a: Object) -> Result<()> {

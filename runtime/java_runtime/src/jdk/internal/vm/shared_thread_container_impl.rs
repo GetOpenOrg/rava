@@ -3,8 +3,8 @@ use super::shared_thread_container::SharedThreadContainer;
 use crate::java::lang::String;
 
 // jdk.internal.vm.SharedThreadContainer：线程容器的簿记对象（名称 + 关闭位 +
-// 注册键），服务真实 OS 线程的分层容器体系。本运行时线程层是单线程协作调度
-// （S-11，java/lang/thread_impl.rs），容器不承担调度——工厂方法构造簿记对象
+// 注册键），服务真实 OS 线程的分层容器体系。本运行时线程由 OS 线程 + GIL 承载
+// （#42，java/lang/thread_impl.rs），容器不承担调度——工厂方法构造簿记对象
 // 即可，父容器注册（ThreadContainers.registerContainer）的唯一用途是
 // serviceability 工具枚举容器，无可观察行为，不引入注册表。
 
@@ -24,7 +24,7 @@ impl SharedThreadContainer {
 
     /// `start(Thread)`：按字节码——已关闭抛 IllegalStateException，否则经
     /// `JLA.start(thread, this)` 即 `Thread.start(ThreadContainer)` 启动（平台线程
-    /// 经 start0 入模拟线程就绪队列，线程模型方案 A）。消费方：JDK 25
+    /// 经 start0 派生 OS 线程，线程模型方案 A）。消费方：JDK 25
     /// ForkJoinPool.createWorker（工作线程经池容器启动；JDK 21 为 wt.start() 直调）。
     #[jvm_boundary(upcalls = "java/lang/Thread.start:(Ljdk/internal/vm/ThreadContainer;)V java/lang/IllegalStateException.<init>:()V")]
     pub fn __impl_start(&self, thread: crate::java::lang::Thread) -> Result<()> {
