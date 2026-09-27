@@ -327,6 +327,29 @@ impl UnixFileSystemProvider {
         }
     }
 
+    /// `isReadable(Path)` / `isWritable(Path)` / `isExecutable(Path)`（Files.isReadable 等经
+    /// AbstractFileSystemProvider 分派到此）：access(2) 按有效用户权限判定，0 = 可访问
+    /// （JDK UnixFileSystemProvider 同实现；SecurityManager 恒 null，check* 为 no-op）。
+    #[jvm_boundary]
+    pub fn __impl_isReadable(&self, path: Object) -> Result<bool> {
+        let file = UnixPath::toUnixPath(path)?;
+        file.checkRead()?;
+        Ok(UnixNativeDispatcher::access(file, consts::errno::R_OK)? == 0)
+    }
+
+    #[jvm_boundary]
+    pub fn __impl_isWritable(&self, path: Object) -> Result<bool> {
+        let file = UnixPath::toUnixPath(path)?;
+        file.checkWrite()?;
+        Ok(UnixNativeDispatcher::access(file, consts::errno::W_OK)? == 0)
+    }
+
+    #[jvm_boundary]
+    pub fn __impl_isExecutable(&self, path: Object) -> Result<bool> {
+        let file = UnixPath::toUnixPath(path)?;
+        Ok(UnixNativeDispatcher::access(file, consts::errno::X_OK)? == 0)
+    }
+
     /// `createDirectory(Path, FileAttribute...)`：toUnixPath → checkWrite → mode =
     /// UnixFileModeAttribute.toUnixMode(ALL_PERMISSIONS 0777, attrs) → mkdir(2)
     /// （umask 由宿主施加）；EISDIR → FileAlreadyExistsException，其余经 UnixException
