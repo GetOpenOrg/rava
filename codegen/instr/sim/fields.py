@@ -270,7 +270,11 @@ def _coerce_stored_value(val_expr, val_ty, ftype: str, registry, _obj_str: str =
             and not isinstance(val_expr, CastExpr)):
         if val_str == 'this' and 'this' in _obj_str:
             val_str = 'Clone::clone(&this)'
-        elif val_str != 'this':
+        elif val_str == 'this':
+            # 写入他对象的字段（`res.root = this`，Field.copy）：与其余值位置同一约定
+            #（dynamic / returns / invoke_sig 的 `Clone::clone(this)`）
+            val_str = 'Clone::clone(this)'
+        else:
             val_str = f'Clone::clone(&{val_str})'
     return val_str
 
