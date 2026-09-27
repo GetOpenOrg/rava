@@ -63,14 +63,22 @@ impl Class {
                 RefCell::new(HashMap::new());
         }
         let key = format!("{}", binary_name);
-        CLASSES.with(|cache| {
-            Clone::clone(cache.borrow_mut().entry(key.clone()).or_insert_with(|| {
-                let mut c = Class::default();
-                c._init_not_null();
-                c.__set_name(String::from(key.replace('/', ".").as_str()));
-                c
-            }))
-        })
+        if let Some(c) = CLASSES.with(|cache| cache.borrow().get(&key).cloned()) {
+            return c;
+        }
+        let mut c = Class::default();
+        c._init_not_null();
+        c.__set_name(String::from(key.replace('/', ".").as_str()));
+        // 数组类的 componentType 字段由 VM 在建镜像时填充（HotSpot set_component_mirror）：
+        // 字节码翻译的 `componentType()` / `arrayType` 链直接读该字段（MethodHandleImpl
+        // .makeCollector 的 nCopies(n, arrayType.componentType())）。元素 Class 经 for_class
+        // 解析——须在缓存借用之外（递归入本函数）
+        if key.starts_with('[') {
+            if let Ok(comp) = c.__impl_getComponentType() {
+                c.__set_componentType(comp);
+            }
+        }
+        CLASSES.with(|cache| Clone::clone(cache.borrow_mut().entry(key).or_insert(c)))
     }
 
     /// `getDeclaredField(String)`：按名取本类声明字段（反射族静态注册表路线）。
