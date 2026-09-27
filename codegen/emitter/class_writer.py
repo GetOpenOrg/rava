@@ -1003,7 +1003,14 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     (ci.name, _vm.name, _vm.descriptor) in call_chain or
                     (_vinh_super, _vm.name, _vm.descriptor) in call_chain
                 )
-                if not _vinh_is_user and not _vm_in_cc \
+                # 边界祖先的手写覆盖（`__impl_<m>`）是该槽位最近的真实实现：边界类方法体
+                # 不经 BFS 入链，按链收录判定会跳过它、转而落到更远祖先的存根
+                #（MacOSXFileSystemProvider → Unix 的 isReadable 被 Abstract 存根遮蔽）
+                _anc_hw = ((new_format_map or {}).get(_vinh_super) or {}).get('methods', ())
+                _hw_override = (not _vm.is_abstract and (
+                    '__impl_' + safe_ident(_vm.name) in _anc_hw
+                    or '__impl_' + safe_ident(mangle_name(_vm.name, _vm.descriptor)) in _anc_hw))
+                if not _vinh_is_user and not _vm_in_cc and not _hw_override \
                         and not _slot_demanded_on_chain(ci, _vm, registry, call_chain):
                     continue  # JDK 链：调用链未收录的祖先虚方法不登记（无体可转发，
                     # 留空槽位 = 声明类 trait default，与既有行为一致）
@@ -1019,7 +1026,8 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     if not _vm.is_abstract:
                         _anc_hand = ((new_format_map or {}).get(_vinh_super) or {}).get('methods', ())
                         _hand_hit = (safe_ident(_vm.name) in _anc_hand
-                                     or safe_ident(mangle_name(_vm.name, _vm.descriptor)) in _anc_hand)
+                                     or safe_ident(mangle_name(_vm.name, _vm.descriptor)) in _anc_hand
+                                     or _hw_override)
                         if not _vm.is_native or _hand_hit:
                             _inherited_calls.request(
                                 ci.name, _vm.name, _vm.descriptor.split(')', 1)[0] + ')')
