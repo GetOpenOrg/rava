@@ -15,8 +15,8 @@ use crate::java::util::Map_Entry;
 
 impl<K, V> NullableKeyValueHolder<K, V>
 where
-    K: Clone + Default + From<Object> + Into<Object> + 'static,
-    V: Clone + Default + From<Object> + Into<Object> + 'static,
+    K: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe,
+    V: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe,
 {
     /// `<init>(K, V)`：直存两引用（可为 null 载体）。
     #[jvm_boundary]
