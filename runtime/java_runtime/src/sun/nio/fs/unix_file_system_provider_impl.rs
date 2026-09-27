@@ -326,4 +326,75 @@ impl UnixFileSystemProvider {
             }
         }
     }
+
+    /// `createDirectory(Path, FileAttribute...)`：toUnixPath → checkWrite → mode =
+    /// UnixFileModeAttribute.toUnixMode(ALL_PERMISSIONS 0777, attrs) → mkdir(2)
+    /// （umask 由宿主施加）；EISDIR → FileAlreadyExistsException，其余经 UnixException
+    /// 翻译抛出（EEXIST → FileAlreadyExistsException 同路）。
+    #[jvm_boundary(upcalls = "java/nio/file/attribute/FileAttribute.name:()Ljava/lang/String; java/nio/file/attribute/FileAttribute.value:()Ljava/lang/Object; java/nio/file/FileAlreadyExistsException.<init>:(Ljava/lang/String;)V java/lang/UnsupportedOperationException.<init>:(Ljava/lang/String;)V")]
+    pub fn __impl_createDirectory(&self, obj: Object, attrs: JArray<Object>) -> Result<()> {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = UnixPath::toUnixPath(Clone::clone(&obj))?;
+        dir.checkWrite()?;
+        const ALL_PERMISSIONS: u32 = 0o777;
+        let mode = to_unix_mode(ALL_PERMISSIONS, &attrs)?;
+        let p = super::unix_native_dispatcher_impl::sys_path(&dir)?;
+        match std::fs::DirBuilder::new().mode(mode).create(&p) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let errno = e.raw_os_error().unwrap_or(consts::errno::ENOENT);
+                if errno == consts::errno::EISDIR {
+                    return Err(JvmError::from(
+                        crate::java::nio::file::FileAlreadyExistsException::new_str(
+                            dir.getPathForExceptionMessage()?,
+                        )?,
+                    ));
+                }
+                UnixException::new_i(errno)?.rethrowAsIOException_unixpath(&dir)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+/// `UnixFileModeAttribute.toUnixMode(int, FileAttribute...)`：只接受
+/// `posix:permissions` / `unix:permissions`（值为 `Set<PosixFilePermission>`），其余
+/// UnsupportedOperationException（JDK 同消息）；多个属性后者覆盖前者。
+fn to_unix_mode(default_mode: u32, attrs: &JArray<Object>) -> Result<u32> {
+    use crate::java::nio::file::attribute::FileAttribute;
+    let mut mode = default_mode;
+    if attrs.is_jvm_null() {
+        return Ok(mode);
+    }
+    for i in 0..attrs.len()? {
+        let attr = <FileAttribute<Object> as ::std::convert::From<Object>>::from(attrs.get(i)?);
+        let name = format!("{}", attr.name()?);
+        if name != "posix:permissions" && name != "unix:permissions" {
+            return Err(JvmError::from(crate::java::lang::UnsupportedOperationException::new_str(
+                String::from(format!("'{}' not supported as initial attribute", name)))?));
+        }
+        let perms = <Set<Object> as ::std::convert::From<Object>>::from(attr.value()?);
+        let mut m: u32 = 0;
+        let it = perms.iterator()?;
+        while it.hasNext()? {
+            let perm = it.next()?;
+            if _is_jnull(&perm) {
+                return Err(JvmError::null_pointer());
+            }
+            m |= match format!("{}", perm).as_str() {
+                "OWNER_READ" => 0o400,
+                "OWNER_WRITE" => 0o200,
+                "OWNER_EXECUTE" => 0o100,
+                "GROUP_READ" => 0o040,
+                "GROUP_WRITE" => 0o020,
+                "GROUP_EXECUTE" => 0o010,
+                "OTHERS_READ" => 0o004,
+                "OTHERS_WRITE" => 0o002,
+                "OTHERS_EXECUTE" => 0o001,
+                _ => 0,
+            };
+        }
+        mode = m;
+    }
+    Ok(mode)
 }
