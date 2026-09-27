@@ -404,6 +404,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     _pending_reflect_consts: list = []
     _reflect_seen: set = set()
     REFLECT_CONSTS.clear()
+    REFLECT_FIELD_NAMES.clear()
 
     def enqueue_refs(instrs, exception_table=()):
         (method_refs, f_classes, member_refs, boundary_refs, new_classes,
@@ -738,6 +739,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     _c = _ins.comment or ''
                     if _ins.opcode.startswith('ldc') and _c.startswith('String '):
                         _nm = _c[len('String '):]
+                        if _nm and _nm.isidentifier():
+                            REFLECT_FIELD_NAMES.add(_nm)
                         if _nm in _own and _nm != meth:
                             _pending_reflect_consts.append((cls, _nm))
                 # T88：被调方法的描述符参数/返回类型也是类型依赖
@@ -1295,6 +1298,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 # 等按名查找）。这些方法经 BFS 入链翻译，并由 dispatch_gen 为 JDK 类发射按名分派臂
 # （句柄 linkTo* / LambdaForm 成员调用经 reflect_invoke 落到它们）。每轮转译重建。
 REFLECT_CONSTS: dict[str, set[str]] = {}
+# 调用链上出现的全部 ldc 字符串常量：按名反射 / Unsafe 静态字段访问的字段名候选
+#（ClassSpecializer 的 sdFieldName "BMH_SPECIES" 经构造实参传入、再对运行期 species 类
+# getDeclaredField——无类常量配对，只能按「字符串常量 ∩ 生成类静态字段名」发射字段臂）
+REFLECT_FIELD_NAMES: set[str] = set()
 
 # 类常量之后在该窗口内出现的首个字符串常量视为成员名（javac 对
 # `find*(C.class, "name", MethodType.methodType(...))` 的发射：两常量相邻）。

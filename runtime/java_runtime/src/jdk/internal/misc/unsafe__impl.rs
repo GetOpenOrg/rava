@@ -135,6 +135,58 @@ fn _instance_ref_set(o: &Object, offset: i64, v: Object) -> bool {
     }
 }
 
+// ── 静态字段偏移登记（staticFieldOffset ↔ 引用访问器的静态臂）─────────────────
+
+const _STATIC_ID_BASE: i64 = 1 << 40;
+
+crate::__process_static! {
+    static STATIC_FIELD_IDS: crate::sync_model::__RefSlot<
+        std::collections::HashMap<(std::string::String, std::string::String), i64>> =
+        crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
+    static STATIC_FIELD_BY_ID: crate::sync_model::__RefSlot<
+        std::collections::HashMap<i64, (std::string::String, std::string::String)>> =
+        crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
+}
+
+/// (声明类, 字段名) → 稳定静态偏移 id（首次登记分配）。
+fn _static_field_id(decl: std::string::String, name: std::string::String) -> i64 {
+    let key = (decl, name);
+    if let Some(id) = STATIC_FIELD_IDS.with(|m| m.borrow().get(&key).copied()) {
+        return id;
+    }
+    let id = STATIC_FIELD_IDS.with(|m| {
+        let mut m = m.borrow_mut();
+        let next = _STATIC_ID_BASE + m.len() as i64;
+        *m.entry(key.clone()).or_insert(next)
+    });
+    STATIC_FIELD_BY_ID.with(|m| { m.borrow_mut().insert(id, key); });
+    id
+}
+
+/// 静态偏移 id → (声明类, 字段名)；非静态登记 id → None。
+fn _static_field_of(offset: i64) -> Option<(std::string::String, std::string::String)> {
+    if offset < _STATIC_ID_BASE {
+        return None;
+    }
+    STATIC_FIELD_BY_ID.with(|m| m.borrow().get(&offset).cloned())
+}
+
+/// 静态引用字段读：经声明类的字段闭包（与 Field.get 静态臂同一存储）。
+/// 非静态 id → None；字段闭包缺席 → 如实报缺口。
+fn _static_ref_get(offset: i64) -> Option<Result<Object>> {
+    let (decl, name) = _static_field_of(offset)?;
+    Some(crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), None)
+        .unwrap_or_else(|| panic!("stub: Unsafe 静态引用读：{}.{} 无字段闭包", decl, name)))
+}
+
+/// 静态引用字段写（`_static_ref_get` 的镜像）。
+fn _static_ref_set(offset: i64, v: Object) -> Option<Result<()>> {
+    let (decl, name) = _static_field_of(offset)?;
+    Some(crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), Some(v))
+        .unwrap_or_else(|| panic!("stub: Unsafe 静态引用写：{}.{} 无字段闭包", decl, name))
+        .map(|_| ()))
+}
+
 /// 偏移 id → 实例引用字段的原子读-改-写（ObjectVTable::__unsafe_ref_update）：返回旧值；
 /// 未登记 / 无臂 → None。
 fn _instance_ref_update(o: &Object, offset: i64,
@@ -602,6 +654,9 @@ impl Unsafe {
     ///（登记表反查 + 引用原子协议）与 getReference 同一存储单元（S-11）。
     #[jvm_boundary]
     pub fn getReferenceAcquire(&self, o: Object, offset: i64) -> Result<Object> {
+        if let Some(r) = _static_ref_get(offset) {
+            return r;
+        }
         if let Some(arr) = _erased_ref_array(&o) {
             return arr.get(_ref_array_index(offset));
         }
@@ -624,6 +679,9 @@ impl Unsafe {
     /// `getReference(Object o, long offset)`：引用读（plain）。
     #[jvm_boundary]
     pub fn getReference(&self, o: Object, offset: i64) -> Result<Object> {
+        if let Some(r) = _static_ref_get(offset) {
+            return r;
+        }
         if let Some(arr) = _erased_ref_array(&o) {
             return arr.get(_ref_array_index(offset));
         }
@@ -636,6 +694,9 @@ impl Unsafe {
     /// `putReference(Object o, long offset, Object x)`：引用写（plain）。
     #[jvm_boundary]
     pub fn putReference(&self, o: Object, offset: i64, x: Object) -> Result<()> {
+        if let Some(r) = _static_ref_set(offset, Clone::clone(&x)) {
+            return r;
+        }
         if let Some(arr) = _erased_ref_array(&o) {
             return arr.set(_ref_array_index(offset), x);
         }
@@ -697,6 +758,9 @@ impl Unsafe {
     /// 同一存储单元，S-11）。
     #[jvm_boundary]
     pub fn putReferenceRelease(&self, o: Object, offset: i64, x: Object) -> Result<()> {
+        if let Some(r) = _static_ref_set(offset, Clone::clone(&x)) {
+            return r;
+        }
         if let Some(arr) = _erased_ref_array(&o) {
             return arr.set(_ref_array_index(offset), x);
         }
@@ -760,21 +824,15 @@ impl Unsafe {
         Ok(Object::from(f.__get_clazz()))
     }
 
-    /// `staticFieldOffset(Field)`：静态字偏移量。与 objectFieldOffset 同约定：
-    /// 无原始内存布局，偏移只作不透明标识（线程内递增、同一字段经调用方
-    /// 静态存储恒等复用）。
+    /// `staticFieldOffset(Field)`：静态字偏移量。无原始内存布局，偏移是按
+    /// (声明类, 字段名) 登记的稳定不透明 id（同一字段恒同一 id，JDK 语义），取值区间
+    /// 与 objectFieldOffset 的实例字段 id 不相交（`_STATIC_ID_BASE` 起）：引用访问器
+    /// 据此把 (staticFieldBase, 偏移) 路由到声明类的静态存储（`_static_ref_get/set`）。
     #[jvm_boundary]
     pub fn staticFieldOffset(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
-        let _ = f;
-        use crate::sync_model::__RefSlot as RefCell;
-        crate::__process_static! {
-            static NEXT: RefCell<i64> = const { RefCell::new(1) };
-        }
-        Ok(NEXT.with(|n| {
-            let v = *n.borrow();
-            *n.borrow_mut() += 1;
-            v
-        }))
+        let decl = format!("{}", f.__get_clazz().__get_name()).replace('.', "/");
+        let name = format!("{}", f.__get_name());
+        Ok(_static_field_id(decl, name))
     }
 
     /// `getAndAddInt(Object base, long offset, int delta)`：原子读取并加 delta，
