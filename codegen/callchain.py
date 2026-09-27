@@ -756,6 +756,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 and sum(1 for _m in ci.methods if _m.name == meth) == 1
                 and upcalls.provides(cls, meth)):
             _enqueue_upcalls(cls, meth)
+            # 调用点语义不因手写接管而变：签名类型依赖、invokestatic 触发类初始化
+            _enqueue_desc_types(desc)
+            if any(_m.name == meth and _m.is_static for _m in ci.methods):
+                _enqueue_class_init(cls)
             return
 
         # 追踪该方法的指令引用（精确匹配名字+描述符，避免重载方法误展开）
