@@ -186,8 +186,6 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     LAMBDA_NAME_LEDGER.reset()
     from . import sam_objects as _sam_objects
     _sam_objects.reset()
-    from . import annotation_objects as _anno_objects
-    _anno_objects.reset()
     from . import dispatch_gen as _dispatch_gen
     _dispatch_gen.reset()
     _WRITTEN_THIS_RUN.clear()
@@ -673,10 +671,6 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # A-5 收尾：函数式接口合成对象（接口文件尾部的伴生段；条目签名 / default
     # 体有无取此刻的发射记录，与落盘内容同源）
     _sam_objects.synthesize(emissions, registry)
-    # 反射 L3 段 1 收尾：注解代理合成（getAnnotation 的实例形态——JDK 动态
-    # 代理的翻译期同构物；条目签名同取发射记录）。必须在落盘前；工厂登记行
-    # 由 main 生成段经 _anno_objects.registration_lines() 消费。
-    _anno_objects.synthesize(emissions, registry)
     # 反射 L3 段 2 收尾：用户类分派闭包（Method.invoke / Constructor.
     # newInstance 的按名协议，java_runtime::reflect_dispatch 头注定稿）。
     # 登记行由 main 生成段经 _dispatch_gen.registration_lines() 消费。
@@ -728,17 +722,22 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         hook_path = '::'.join(['crate', *_pkg, _mod, short_cls(ci.name)])
         hook_lines.append(
             f'    ("{ci.name}", java_runtime::sync_model::__Shared::new(|| {hook_path}::__class_init())),')
+    # FS-R R4b：注解元素经 Enum.valueOf 取常量的 JDK 枚举（callchain 注解种子）——同样登记
+    # 钩子（JDK 枚举无冷反射语料之外的按名初始化入口，注解解析是其唯一消费方）
+    from ..callchain import ANNOTATION_ENUM_SEEDS as _anno_enums
+    _jdk_names_h = {jci.name for jci in (jdk_class_infos or [])}
+    for _en in _anno_enums:
+        if _en not in _jdk_names_h:
+            continue
+        _ep = '::'.join(['java_runtime',
+                         *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _en.split('/')[:-1]),
+                         short_cls(_en)])
+        hook_lines.append(
+            f'    ("{_en}", java_runtime::sync_model::__Shared::new(|| {_ep}::__class_init())),')
     hook_block = ''
     if hook_lines:
         hook_block = ('    java_runtime::register_class_init_hooks(&[\n'
                       + '\n'.join(hook_lines) + '\n    ]);\n')
-    # 注解工厂登记（反射 L3 段 1）：全部合成注解代理的 from_values 工厂
-    #（用户树 + lib crate + java_runtime 三域——user bin 是唯一能看到全部
-    # crate 的发射点；与类初始化钩子同一登记模式）
-    _anno_reg_lines = _anno_objects.registration_lines()
-    if _anno_reg_lines:
-        hook_block += ('    java_runtime::annotation_meta::register_annotation_factories(&[\n'
-                       + '\n'.join(_anno_reg_lines) + '\n    ]);\n')
     # L3 分派闭包登记（反射段 2）：用户类 __reflect_dispatch 注册表
     _disp_reg_lines = _dispatch_gen.registration_lines()
     if _disp_reg_lines:

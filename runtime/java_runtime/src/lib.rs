@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-pub mod annotation_meta;
+pub mod anno_pool;
 pub mod array;
 pub mod sync_model;
 pub mod gil;

@@ -142,6 +142,15 @@ _DATA_BUNDLE_LOADER: list = [None]
 #（runtime `data_bundles::register_data_bundles`）。每轮 BFS 起始清空。
 DATA_BUNDLE_SEEDS: list[str] = []
 
+# 本轮经注解种子入闭包的枚举类（binary name，已排序）：emitter 在生成 main 中登记类初始化
+# 钩子（Enum.valueOf → 常量目录前强制初始化，FS-R R4b）。每轮 BFS 起始清空。
+ANNOTATION_ENUM_SEEDS: list[str] = []
+
+# 注解种子触发成员（annotation_seeds.txt `trigger <类>.<成员>`）
+_ANNO_TRIGGERS: frozenset = frozenset(
+    tuple(ln.split(None, 1)[1].rsplit('.', 1))
+    for ln in read_list('annotation_seeds.txt') if ln.startswith('trigger '))
+
 # 本轮入选的 JCA 服务（jca_services.Service，已排序）：emitter 在生成 main 中登记构造闭包
 #（runtime `jca::register_services`）。每轮 BFS 起始清空。
 JCA_SEEDS: list = []
@@ -524,6 +533,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     # L-1：纯数据资源束的结构判定经同一类加载器（jdk.localedata 等全部 jmod 可解析）
     set_data_bundle_loader(_load_class)
     DATA_BUNDLE_SEEDS.clear()
+    ANNOTATION_ENUM_SEEDS.clear()
     JCA_SEEDS.clear()
 
     _sig_poly_native: set[tuple] = set()   # 精确匹配失败但链上有同名 ACC_NATIVE（签名多态边界，预期内）
@@ -1140,6 +1150,86 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 added = True
             return added
 
+        # 注解类型种子（FS-R R4b）：注解解析入口（annotation_seeds.txt trigger）在调用链上时，
+        # 按用户类（类 / 字段 / 方法挂载点）的 RuntimeVisibleAnnotations 传递收集：注解类型
+        # （及其元注解）的方法入链——AnnotationType 反射其方法即元素面；枚举元素类型 <clinit>
+        # 入链（Enum.valueOf 的常量目录）；Class 元素类型入类型通道。无静态边，结构判定。
+        _anno_seen: set[str] = set()
+
+        def _anno_value_types(tag: str, payload: str, enums: set, types: set, annos: list) -> None:
+            from .classfile import _anno_unesc
+            if tag == 'e':
+                types_bin = _anno_unesc(payload).split('#', 1)[0]
+                enums.add(types_bin)
+            elif tag == 'c':
+                _d = _anno_unesc(payload).lstrip('[')
+                if _d.startswith('L') and _d.endswith(';'):
+                    types.add(_d[1:-1])
+            elif tag == '[':
+                for _part in _anno_unesc(payload).split(';'):
+                    if ':' in _part:
+                        _t, _v = _part.split(':', 1)
+                        _anno_value_types(_t, _v, enums, types, annos)
+            elif tag == '@':
+                _segs = _anno_unesc(payload).split('#')
+                annos.append(_anno_unesc(_segs[0]))
+                for _seg in _segs[1:]:
+                    _rest = _seg.partition('=')[2]
+                    _t, _, _v = _rest.partition(':')
+                    _anno_value_types(_t, _v, enums, types, annos)
+
+        def _seed_annotation_types() -> bool:
+            _pending: list = []
+            def _collect(ci) -> None:
+                for _a in (ci.runtime_annotations or []):
+                    _pending.append(_a)
+                for _f in (ci.fields or []):
+                    _pending.extend(_f.runtime_annotations or [])
+                for _m in (ci.methods or []):
+                    _pending.extend(_m.runtime_annotations or [])
+            for _uci in class_infos:
+                _collect(_uci)
+            added = False
+            _enums: set = set()
+            _types: set = set()
+            while _pending:
+                _a = _pending.pop()
+                _nested: list = []
+                for _e in (_a.elements or []):
+                    _anno_value_types(_e.tag, _e.value, _enums, _types, _nested)
+                for _t in [_a.type_bin] + _nested:
+                    if _t in _anno_seen:
+                        continue
+                    _anno_seen.add(_t)
+                    _aci = _load_class(_t)
+                    if _aci is None:
+                        continue
+                    _collect(_aci)   # 元注解传递
+                    if _t in user_names:
+                        continue
+                    field_discover_classes.add(_t)
+                    for _m in _aci.methods:
+                        if not _m.name.startswith('<'):
+                            _enqueue_method((_t, _m.name, _m.descriptor))
+                    added = True
+            for _en in sorted(_enums):
+                if _en in _anno_seen:
+                    continue
+                _anno_seen.add(_en)
+                if _en in user_names or _load_class(_en) is None:
+                    continue
+                field_discover_classes.add(_en)
+                _enqueue_class_init(_en)
+                if _en not in ANNOTATION_ENUM_SEEDS:
+                    ANNOTATION_ENUM_SEEDS.append(_en)
+                added = True
+            for _ty in sorted(_types):
+                if _ty not in _anno_seen and _ty not in user_names:
+                    _anno_seen.add(_ty)
+                    field_discover_classes.add(_ty)
+            ANNOTATION_ENUM_SEEDS.sort()
+            return added
+
         # 不动点：排空队列 → 传播虚调用目标 → 有新方法则继续
         while True:
             while queue:
@@ -1159,6 +1249,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 _seed_data_bundles()
             if (not queue and any(t in seen_members for t in _JCA_MANIFEST.triggers)):
                 _seed_jca_services()
+            if not queue and any(t in seen_members for t in _ANNO_TRIGGERS):
+                _seed_annotation_types()
             if not queue:
                 _seed_image_subclasses()
             if not queue:

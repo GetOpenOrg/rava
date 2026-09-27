@@ -21,3 +21,9 @@ java/lang/Class$AnnotationData
 #（Reflection.getCallerClass 等）仍由共置 _impl.rs 手写；运行期字节码生成点
 #（generateConstructor / generateMethodAccessor）按 intrinsics.txt 准入（R3）。
 jdk/internal/reflect/
+
+# FS-R R4b：注解解析族（JDK 21 Class/Field/Method.getAnnotation → AnnotationParser 按原始字节解析，
+# 实例经 Proxy.newProxyInstance + AnnotationInvocationHandler）。纯 Java；class 字面量元素的签名
+# 解析经 sun/reflect/generics（SignatureParser + CoreReflectionFactory → Class.forName）。
+sun/reflect/annotation/
+sun/reflect/generics/

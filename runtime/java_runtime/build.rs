@@ -88,7 +88,7 @@ fn main() {
     write_record_table(&scan_record_classes(&meta_roots), &scan_record_components(&meta_roots));
     write_nest_table(&scan_nest_meta(&meta_roots));
     write_interfaces_table(&scan_class_interfaces(&meta_roots));
-    write_annotation_table(&scan_annotations(&meta_roots));
+    write_class_anno_table(&scan_class_annos(&meta_roots));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
@@ -171,6 +171,32 @@ fn extract_attr_padded(s: &str, key: &str) -> Option<String> {
     let rest = rest.strip_prefix('"')?;
     let end = rest.find('"')?;
     Some(rest[..end].to_owned())
+}
+
+/// 键名精确匹配的属性取值（`raw_annotations` 不被 `annotations` 等后缀键误配）：
+/// 键前一字符须非标识符字符。
+fn extract_key(s: &str, key: &str) -> Option<String> {
+    let pattern = format!("{} = \"", key);
+    let mut from = 0usize;
+    while let Some(off) = s[from..].find(&pattern) {
+        let at = from + off;
+        let prev_ok = at == 0 || {
+            let c = s[..at].chars().last().unwrap_or(' ');
+            !(c.is_ascii_alphanumeric() || c == '_')
+        };
+        if prev_ok {
+            let start = at + pattern.len();
+            let end = s[start..].find('"')? + start;
+            return Some(s[start..end].to_owned());
+        }
+        from = at + pattern.len();
+    }
+    None
+}
+
+/// 十六进制文本 → 字节（注解原始属性体，FS-R R4b）。
+fn hex_bytes(s: &str) -> Vec<u8> {
+    (0..s.len() / 2).filter_map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()).collect()
 }
 
 fn extract_attr(s: &str, key: &str) -> Option<String> {
@@ -256,6 +282,7 @@ struct FieldMeta {
     modifiers:  i32,
     is_static:  bool,
     constant:   Option<i64>,
+    annotations: Vec<u8>,
 }
 
 /// 字段元数据扫描：java_class! 块内 java_field 属性行（每字段独立成行，
@@ -290,8 +317,9 @@ fn scan_class_fields(roots: &[&Path]) -> BTreeMap<String, Vec<FieldMeta>> {
                 .unwrap_or_else(|| modifiers.split_whitespace().any(|t| t == "static"));
             let constant = extract_attr(window, "constant_value")
                 .and_then(|v| v.strip_suffix('L').unwrap_or(&v).parse::<i64>().ok());
+            let annotations = extract_key(window, "raw_annotations").map(|h| hex_bytes(&h)).unwrap_or_default();
             result.entry(current.clone()).or_default().push(FieldMeta {
-                name, descriptor, modifiers: bits, is_static, constant,
+                name, descriptor, modifiers: bits, is_static, constant, annotations,
             });
         }
     }
@@ -314,155 +342,6 @@ fn discover_lib_crate_roots() -> Vec<PathBuf> {
         .collect();
     roots.sort();
     roots
-}
-
-/// 单条注解记录（RuntimeVisibleAnnotations 的 annotation 结构）。
-/// elements 的值保持「tag:载荷」编码文本透传（编码在 codegen/classfile，
-/// 解码在 java_runtime::annotation——build.rs 不解释载荷）。
-struct AnnoEntry {
-    anno:     String,
-    elements: Vec<(String, String)>,
-}
-
-/// 切分（载荷内保留字符已百分号编码——分隔符只以分隔身份出现）。
-fn anno_split(s: &str, sep: char) -> Vec<&str> {
-    s.split(sep).collect()
-}
-
-/// 注解载荷文本（`bin#name=tag:载荷#...;...`）→ 条目序列。
-fn parse_anno_entries(text: &str) -> Vec<AnnoEntry> {
-    let mut out = Vec::new();
-    for entry in anno_split(text, ';') {
-        if entry.is_empty() { continue; }
-        let segs = anno_split(entry, '#');
-        if segs.is_empty() { continue; }
-        let mut e = AnnoEntry { anno: segs[0].to_owned(), elements: Vec::new() };
-        for seg in &segs[1..] {
-            let Some(eq) = seg.find('=') else { continue };
-            e.elements.push((seg[..eq].to_owned(), seg[eq + 1..].to_owned()));
-        }
-        out.push(e);
-    }
-    out
-}
-
-/// 三挂载点注解扫描（反射 L3 段 1）：
-///   - 类级：java_class! 块内 `#[annotations = "..."]` 属性行（binary_name 上下文）；
-///   - 方法级：java_method / java_native 属性行的 `annotations = "..."` 键
-///     （键 = (类, 方法名, 描述符)——与 method_table 同一身份键）；
-///   - 字段级：java_field 属性行的 `annotations = "..."` 键（键 = (类, 字段名)）。
-/// 消费方：Class/Method/Field 的 isAnnotationPresent / getAnnotation /
-/// getAnnotations（class_impl.rs / method_impl.rs / field_impl.rs）。
-fn scan_annotations(roots: &[&Path]) -> AnnotationTables {
-    let mut tables = AnnotationTables::default();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
-        let mut current = String::new();
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
-                current = name;
-            }
-            if current.is_empty() { continue; }
-            // 类级属性行
-            if let Some(text) = extract_attr_padded(trimmed, "annotations") {
-                tables.classes.entry(current.clone()).or_default()
-                    .extend(parse_anno_entries(&text));
-                continue;
-            }
-            // 方法/字段属性行：窗口内提取
-            let Some(open) = trimmed.find("java_method(").or_else(|| trimmed.find("java_native("))
-                .or_else(|| trimmed.find("java_field(")) else { continue };
-            let window = &trimmed[open..];
-            let Some(text) = extract_attr(window, "annotations") else { continue };
-            let entries = parse_anno_entries(&text);
-            if entries.is_empty() { continue; }
-            if window.starts_with("java_field(") {
-                if let Some(fname) = extract_attr(window, "name") {
-                    tables.fields.entry((current.clone(), fname)).or_default().extend(entries);
-                }
-            } else if let (Some(mname), Some(desc)) =
-                (extract_attr(window, "name"), extract_attr(window, "descriptor"))
-            {
-                tables.methods.entry((current.clone(), mname, desc)).or_default().extend(entries);
-            }
-        }
-    }
-    tables
-}
-
-#[derive(Default)]
-struct AnnotationTables {
-    classes:  BTreeMap<String, Vec<AnnoEntry>>,
-    methods:  BTreeMap<(String, String, String), Vec<AnnoEntry>>,
-    fields:   BTreeMap<(String, String), Vec<AnnoEntry>>,
-}
-
-fn write_annotation_table(t: &AnnotationTables) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
-    let mut out = String::from(
-        "// 由 build.rs 自动生成：注解元数据表（反射 L3 段 1）。
-         // 数据源：java_class! 块的 annotations 属性（类级）与 java_method /
-         // java_native / java_field 属性行的 annotations 键——文本来自
-         // codegen 对 RuntimeVisibleAnnotations 的解析编码，元素值保持
-         // 「tag:载荷」编码透传，解码在 java_runtime::annotation。
-         // 消费方：Class/Method/Field 的 isAnnotationPresent / getAnnotation /
-         // getAnnotations。请勿手改。
-
-         pub struct AnnotationEntry {
-             pub anno:     &'static str,
-             pub elements: &'static [(&'static str, &'static str)],
-         }
-
-         pub static CLASS_ANNOTATIONS: &[(&str, &[AnnotationEntry])] = &[
-         ",
-    );
-    for (class, entries) in &t.classes {
-        if entries.is_empty() { continue; }
-        out.push_str(&format!("    ({:?}, &[\n", class));
-        out.push_str(&anno_entries_text(entries));
-        out.push_str("    ]),\n");
-    }
-    out.push_str("];
-
-pub static METHOD_ANNOTATIONS: &[(&str, &str, &str, &[AnnotationEntry])] = &[
-");
-    for ((class, name, desc), entries) in &t.methods {
-        if entries.is_empty() { continue; }
-        out.push_str(&format!("    ({:?}, {:?}, {:?}, &[\n", class, name, desc));
-        out.push_str(&anno_entries_text(entries));
-        out.push_str("    ]),\n");
-    }
-    out.push_str("];
-
-pub static FIELD_ANNOTATIONS: &[(&str, &str, &[AnnotationEntry])] = &[
-");
-    for ((class, name), entries) in &t.fields {
-        if entries.is_empty() { continue; }
-        out.push_str(&format!("    ({:?}, {:?}, &[\n", class, name));
-        out.push_str(&anno_entries_text(entries));
-        out.push_str("    ]),\n");
-    }
-    out.push_str("];
-");
-    let path = Path::new(&out_dir).join("annotation_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 annotation_table.rs 失败: {e}");
-    }
-}
-
-fn anno_entries_text(entries: &[AnnoEntry]) -> String {
-    let mut out = String::new();
-    for e in entries {
-        let elems: Vec<String> = e.elements.iter()
-            .map(|(n, v)| format!("({:?}, {:?})", n, v))
-            .collect();
-        out.push_str(&format!(
-            "        AnnotationEntry {{ anno: {:?}, elements: &[{}] }},\n",
-            e.anno, elems.join(", "),
-        ));
-    }
-    out
 }
 
 /// 访问标志 / 修饰符词串 → java.lang.reflect.Modifier 位集。
@@ -523,6 +402,7 @@ fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {    let Ok(out
              pub modifiers:  i32,
              pub is_static:  bool,
              pub constant:   Option<i64>,
+             pub annotations: &'static [u8],
          }
 
          pub static CLASS_FIELDS: &[(&str, &[FieldMeta])] = &[
@@ -533,9 +413,10 @@ fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {    let Ok(out
         out.push_str(&format!("    ({:?}, &[\n", class));
         for f in fields {
             out.push_str(&format!(
-                "        FieldMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, constant: {} }},\n",
+                "        FieldMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, constant: {}, annotations: &{:?} }},\n",
                 f.name, f.descriptor, f.modifiers, f.is_static,
                 match f.constant { Some(v) => format!("Some({}i64)", v), None => "None".to_owned() },
+                f.annotations,
             ));
         }
         out.push_str("    ]),\n");
@@ -563,6 +444,10 @@ struct MethodMeta {
     is_native:  bool,
     is_abstract: bool,
     exceptions: Vec<String>,
+    /// FS-R R4b：RuntimeVisibleAnnotations / RuntimeVisibleParameterAnnotations / AnnotationDefault 原始属性体
+    annotations: Vec<u8>,
+    param_annotations: Vec<u8>,
+    annotation_default: Vec<u8>,
 }
 
 /// 方法元数据扫描：java_class! 块内 java_method / java_native 属性行。
@@ -604,8 +489,12 @@ fn scan_class_methods(roots: &[&Path]) -> BTreeMap<String, Vec<MethodMeta>> {
             let exceptions = extract_attr(window, "exceptions")
                 .map(|s| s.split(',').filter(|t| !t.is_empty()).map(str::to_owned).collect())
                 .unwrap_or_default();
+            let raw = |k: &str| extract_key(window, k).map(|h| hex_bytes(&h)).unwrap_or_default();
             result.entry(current.clone()).or_default().push(MethodMeta {
                 name, descriptor, modifiers: bits, is_static, is_native, is_abstract, exceptions,
+                annotations: raw("raw_annotations"),
+                param_annotations: raw("raw_param_annotations"),
+                annotation_default: raw("raw_annotation_default"),
             });
         }
     }
@@ -647,6 +536,7 @@ fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>>)
             name: (*name).to_owned(), descriptor: (*desc).to_owned(),
             modifiers: *mods, is_static: false, is_native: *native, is_abstract: false,
             exceptions: throws.iter().map(|e| (*e).to_owned()).collect(),
+            annotations: Vec::new(), param_annotations: Vec::new(), annotation_default: Vec::new(),
         });
     }
     methods
@@ -669,6 +559,9 @@ fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
              pub is_native:   bool,
              pub is_abstract: bool,
              pub exceptions:  &'static [&'static str],
+             pub annotations: &'static [u8],
+             pub param_annotations: &'static [u8],
+             pub annotation_default: &'static [u8],
          }
 
          pub static CLASS_METHODS: &[(&str, &[MethodMeta])] = &[
@@ -680,9 +573,9 @@ fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
         for m in methods {
             let excs: Vec<String> = m.exceptions.iter().map(|e| format!("{:?}", e)).collect();
             out.push_str(&format!(
-                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}] }},\n",
+                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}], annotations: &{:?}, param_annotations: &{:?}, annotation_default: &{:?} }},\n",
                 m.name, m.descriptor, m.modifiers, m.is_static, m.is_native, m.is_abstract,
-                excs.join(", "),
+                excs.join(", "), m.annotations, m.param_annotations, m.annotation_default,
             ));
         }
         out.push_str("    ]),\n");
@@ -904,6 +797,69 @@ fn write_interfaces_table(entries: &BTreeMap<String, Vec<String>>) {
     let path = Path::new(&out_dir).join("interfaces_table.rs");
     if let Err(e) = fs::write(&path, &out) {
         panic!("写 interfaces_table.rs 失败: {e}");
+    }
+}
+
+/// 类级注解原始字节 + 稀疏常量池（FS-R R4b）：数据源 `raw_annotations` / `anno_cpool`
+/// 类属性（classfile.encode_anno_cpool 编码）。消费方：Class.getRawAnnotations /
+/// ConstantPool natives（getUTF8At0 / getIntAt0 …，按原常量池索引）。
+fn scan_class_annos(roots: &[&Path]) -> BTreeMap<String, (Vec<u8>, String)> {
+    let mut result: BTreeMap<String, (Vec<u8>, String)> = BTreeMap::new();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+                continue;
+            }
+            if current.is_empty() || !trimmed.starts_with("#[") { continue; }
+            if let Some(h) = extract_attr_padded(trimmed, "raw_annotations") {
+                if trimmed.starts_with("#[raw_annotations") {
+                    result.entry(current.clone()).or_default().0 = hex_bytes(&h);
+                }
+            }
+            if let Some(cp) = extract_attr_padded(trimmed, "anno_cpool") {
+                result.entry(current.clone()).or_default().1 = cp;
+            }
+        }
+    }
+    result
+}
+
+fn write_class_anno_table(entries: &BTreeMap<String, (Vec<u8>, String)>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：类级注解原始字节 + 注解引用的稀疏常量池（FS-R R4b）。
+         // 消费方：Class.getRawAnnotations、ConstantPool natives。请勿手改。
+
+         pub enum CpVal { U(&'static str), I(i32), J(i64), F(f32), D(f64) }
+
+         pub static CLASS_ANNO: &[(&str, &[u8], &[(i32, CpVal)])] = &[
+",
+    );
+    for (name, (raw, cp)) in entries {
+        let mut ents: Vec<String> = Vec::new();
+        for e in cp.split(';').filter(|x| !x.is_empty()) {
+            let mut it = e.splitn(3, ':');
+            let (Some(idx), Some(k), Some(v)) = (it.next(), it.next(), it.next()) else { continue };
+            let val = match k {
+                "U" => format!("CpVal::U({:?})", std::string::String::from_utf8_lossy(&hex_bytes(v))),
+                "I" => format!("CpVal::I({}i32)", v),
+                "J" => format!("CpVal::J({}i64)", v),
+                "F" => format!("CpVal::F(f32::from_bits(0x{}))", v),
+                "D" => format!("CpVal::D(f64::from_bits(0x{}))", v),
+                _ => continue,
+            };
+            ents.push(format!("({}, {})", idx, val));
+        }
+        out.push_str(&format!("    ({:?}, &{:?}, &[{}]),\n", name, raw, ents.join(", ")));
+    }
+    out.push_str("];\n");
+    let path = Path::new(&out_dir).join("class_anno_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 class_anno_table.rs 失败: {e}");
     }
 }
 

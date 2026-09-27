@@ -360,11 +360,12 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         # EnclosingMethod 属性（局部 / 匿名类）：Class.getEnclosingMethod0 的数据源（FS-R R1）
         _em = ci.enclosing_method or ('', '')
         lines.append(f'#[enclosing_method  = "{_q(ci.enclosing_class)}:{_q(_em[0])}:{_q(_em[1])}"]')
-    if ci.runtime_annotations:
-        # 反射 L3 段 1：类挂载点注解（编码见 classfile.encode_annotations；
-        # 载荷自带转义，此处不再过 _q——build.rs 按原文透传，运行时侧解码）
-        from ..classfile import encode_annotations as _enc_annos
-        lines.append(f'#[annotations       = "{_enc_annos(ci.runtime_annotations)}"]')
+    if getattr(ci, 'raw_annotations', b''):
+        # FS-R R4b：原始 RuntimeVisibleAnnotations 属性体（Class.getRawAnnotations）
+        lines.append(f'#[raw_annotations   = "{ci.raw_annotations.hex()}"]')
+    if getattr(ci, 'anno_cpool', ''):
+        # 注解属性体引用的稀疏常量池（ConstantPool.getUTF8At / getIntAt …，原索引）
+        lines.append(f'#[anno_cpool        = "{ci.anno_cpool}"]')
 
     # ── 段 2：宏展开输入（缺省即 Default）─────────────────────────────────
     lines.append('')
@@ -458,9 +459,8 @@ def _java_field_attr(f: FieldInfo) -> str:
         parts.append(f'constant_value = "{f.constant_value}"')
     if f.is_deprecated:
         parts.append('is_deprecated = true')
-    if f.runtime_annotations:
-        from ..classfile import encode_annotations as _enc_annos
-        parts.append(f'annotations = "{_enc_annos(f.runtime_annotations)}"')
+    if getattr(f, 'raw_annotations', b''):
+        parts.append(f'raw_annotations = "{f.raw_annotations.hex()}"')
     return '#[cfg_attr(any(), java_field(' + ', '.join(parts) + '))]'
 
 
@@ -521,9 +521,13 @@ def _java_method_attr(m: ParsedMethod) -> str:
     if m.method_parameters:
         mp_str = ';'.join(f'{n}:{a}' for n, a in m.method_parameters).replace('"', '\\"')
         parts.append(f'method_parameters = "{mp_str}"')
-    if m.runtime_annotations:
-        from ..classfile import encode_annotations as _enc_annos
-        parts.append(f'annotations = "{_enc_annos(m.runtime_annotations)}"')
+    # FS-R R4b：原始注解属性体（Method / Constructor 构造时带入，AnnotationParser 按字节解析）
+    if getattr(m, 'raw_annotations', b''):
+        parts.append(f'raw_annotations = "{m.raw_annotations.hex()}"')
+    if getattr(m, 'raw_param_annotations', b''):
+        parts.append(f'raw_param_annotations = "{m.raw_param_annotations.hex()}"')
+    if getattr(m, 'raw_annotation_default', b''):
+        parts.append(f'raw_annotation_default = "{m.raw_annotation_default.hex()}"')
     # native 需要显式标记（宏靠「无方法体」也认，但显式标记让文件读者一眼看出
     # 这是 native 声明）
     if m.is_native:

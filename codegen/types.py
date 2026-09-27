@@ -59,6 +59,7 @@ class FieldInfo:
     constant_value:    str  = ''   # static final 字段的字面量（ConstantValue attribute）
     is_deprecated:     bool = False
     runtime_annotations: list = None   # list[AnnoInfo]（RuntimeVisibleAnnotations）
+    raw_annotations:   bytes = b''     # RuntimeVisibleAnnotations 原始属性体（FS-R R4b）
 
 
 @dataclass
@@ -86,6 +87,11 @@ class ParsedMethod:
     method_parameters:  list = None   # list of (name: str, access_flags: int)
     runtime_annotations: list = None  # list[AnnoInfo]（RuntimeVisibleAnnotations）
     annotation_default: tuple = None  # (tag, 编码载荷)（AnnotationDefault，仅注解类型方法）
+    # 原始属性体（FS-R R4b）：RuntimeVisibleAnnotations / RuntimeVisibleParameterAnnotations /
+    # AnnotationDefault，JDK AnnotationParser 按字节解析
+    raw_annotations:       bytes = b''
+    raw_param_annotations: bytes = b''
+    raw_annotation_default: bytes = b''
     # vtable 归属：空串=非虚方法; 等于 class_rust_name=新虚方法定义; 其他=覆盖哪个祖先类的 vtable
     virtual_in:         str  = ''
     # 槽位名解耦（覆盖条目 wrapper 名 ≠ 祖先 vtable trait 槽位名时）：trait 成员名，
@@ -152,6 +158,8 @@ class ClassInfo:
     enclosing_class:   str  = ''
     enclosing_method:  tuple = None
     runtime_annotations: list = None   # list[AnnoInfo]（RuntimeVisibleAnnotations）
+    raw_annotations:   bytes = b''     # 类级 RuntimeVisibleAnnotations 原始属性体（FS-R R4b）
+    anno_cpool:        str  = ''       # 注解属性引用的稀疏常量池（classfile.encode_anno_cpool）
 
     def __post_init__(self):
         if self.interfaces is None:

@@ -210,6 +210,40 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// 在此还原：coder = 各部 coder 按位或，长度以 char 计后 `<< coder` 折算字节，
     /// 分段写入（Latin1 段写入 UTF16 目标时按 getBytes 展宽），溢出抛
     /// OutOfMemoryError（与 JDK 一致）。
+    // ── 注解族（FS-R R4b）：JDK System$2 同名转发到 Class 的包私有方法 ──────────────
+    // 入链种子挂在 Class.getRawAnnotations（native，只有注解流程触达）上。
+
+    fn getConstantPool(&self, klass: Class) -> Result<crate::jdk::internal::reflect::ConstantPool> {
+        klass.getConstantPool()
+    }
+
+    fn casAnnotationType(&self, klass: Class,
+                         old_type: crate::sun::reflect::annotation::AnnotationType,
+                         new_type: crate::sun::reflect::annotation::AnnotationType) -> Result<bool> {
+        klass.casAnnotationType(old_type, new_type)
+    }
+
+    fn getAnnotationType(&self, klass: Class) -> Result<crate::sun::reflect::annotation::AnnotationType> {
+        klass.getAnnotationType()
+    }
+
+    fn getDeclaredAnnotationMap(&self, klass: Class) -> Result<crate::java::util::Map<Object, Object>> {
+        Ok(From::from(Object::from(klass.declaredAnnotations()?)))
+    }
+
+    fn getRawClassAnnotations(&self, klass: Class) -> Result<JArray<i8>> {
+        klass.getRawAnnotations()
+    }
+
+    fn getRawClassTypeAnnotations(&self, klass: Class) -> Result<JArray<i8>> {
+        klass.getRawTypeAnnotations()
+    }
+
+    /// 类型注解不携带（RuntimeVisibleTypeAnnotations 缺席）→ null。
+    fn getRawExecutableTypeAnnotations(&self, _ex: crate::java::lang::reflect::Executable) -> Result<JArray<i8>> {
+        Ok(JArray::default())
+    }
+
     /// `layers(ClassLoader)`：加载器可见的模块层序列（ModuleLayer.layers）。
     /// 单二进制无模块层——恒空 Stream（消费方 ServiceLoader 的
     /// ModuleServicesLookupIterator 迭代即终止，无附加 provider）。

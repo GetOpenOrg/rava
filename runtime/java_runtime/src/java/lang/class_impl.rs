@@ -194,6 +194,9 @@ impl Class {
         m.__set_returnType(ret);
         m.__set_parameterTypes(JArray::from(params));
         m.__set_exceptionTypes(JArray::from(excs));
+        m.__set_annotations(__anno_bytes(meta.annotations));
+        m.__set_parameterAnnotations(__anno_bytes(meta.param_annotations));
+        m.__set_annotationDefault(__anno_bytes(meta.annotation_default));
         m
     }
 
@@ -311,6 +314,7 @@ impl Class {
                 f.__set_modifiers(meta.modifiers);
                 f.__set_slot(slot as i32);
                 f.__set_type_(class_for_descriptor(meta.descriptor));
+                f.__set_annotations(__anno_bytes(meta.annotations));
                 out.push(f);
             }
         }
@@ -340,6 +344,8 @@ impl Class {
                 let excs: Vec<Class> = meta.exceptions.iter()
                     .map(|e| Class::for_class(String::from(*e))).collect();
                 c.__set_exceptionTypes(JArray::from(excs));
+                c.__set_annotations(__anno_bytes(meta.annotations));
+                c.__set_parameterAnnotations(__anno_bytes(meta.param_annotations));
                 out.push(c);
             }
         }
@@ -348,42 +354,34 @@ impl Class {
 
 
 
-    /// `Class.isAnnotationPresent(Class)`：类挂载点注解存在性（反射 L3 段 1）。
-    /// 注解元数据表经 build.rs 从 java_class! 块的 annotations 属性生成；
-    /// 按名匹配（纯存在性——不构造实例，无需注解工厂）。未登记类（闭包外
-    /// / 数组 / 基本类型）→ false。
-    pub fn isAnnotationPresent(&self, annotationClass: Class) -> Result<bool> {
+    /// native `getRawAnnotations()`：类级 RuntimeVisibleAnnotations 原始属性体（FS-R R4b，
+    /// HotSpot 同源：class 文件属性字节）；无注解 → null。消费方：Class.createAnnotationData →
+    /// AnnotationParser.parseAnnotations（字节码翻译）。
+    ///
+    /// upcalls：JavaLangAccess 注解族转发的 Class 包私有目标（AnnotationType 缓存 CAS /
+    /// 读取、declaredAnnotations），BFS 在 JavaLangAccess 接口截断看不见这些边。
+    #[jvm_native(upcalls = "java/lang/Class.casAnnotationType:(Lsun/reflect/annotation/AnnotationType;Lsun/reflect/annotation/AnnotationType;)Z java/lang/Class.getAnnotationType:()Lsun/reflect/annotation/AnnotationType; java/lang/Class.declaredAnnotations:()Ljava/util/Map;")]
+    pub fn getRawAnnotations(&self) -> Result<JArray<i8>> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
-        Ok(crate::annotation_meta::has_annotation(
-            crate::annotation_meta::class_annotation_entries(&cls_key), &anno))
+        Ok(__anno_bytes(crate::anno_pool::class_annotations(&cls_key)))
     }
 
-    /// `Class.getAnnotation(Class)`：类挂载点注解实例（返回注解接口的载体
-    /// 视图——调用侧 checkcast 后经载体调用元素方法）。实例经注解工厂构造
-    ///（翻译期合成的最小注解实例，见 annotation_meta 模块头注）；未命中 →
-    /// null（JDK 语义）。
-    pub fn getAnnotation(&self, annotationClass: Class) -> Result<Object> {
-        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
-        let Some(hit) = crate::annotation_meta::find_annotation(
-            crate::annotation_meta::class_annotation_entries(&cls_key), &anno) else {
-            return Ok(Object::default());
-        };
-        crate::annotation_meta::annotation_instance(hit.anno, hit.elements)
+    /// native `getRawTypeAnnotations()`：类型注解（RuntimeVisibleTypeAnnotations）不携带 → null。
+    #[jvm_native]
+    pub fn getRawTypeAnnotations(&self) -> Result<JArray<i8>> {
+        Ok(JArray::default())
     }
 
-    /// `Class.getAnnotations()`：类挂载点全部注解实例（声明序）。@Inherited
-    /// 语义（父类注解继承）不承载——语料消费方（Description 等）只读声明面。
-    pub fn getAnnotations(&self) -> Result<JArray<Object>> {
-        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        let entries = crate::annotation_meta::class_annotation_entries(&cls_key);
-        let mut out: Vec<Object> = Vec::new();
-        for e in entries {
-            out.push(crate::annotation_meta::annotation_instance(e.anno, e.elements)?);
-        }
-        Ok(JArray::from(out))
+    /// native `getConstantPool()`：本类常量池视图（HotSpot 返回持 constantPoolOop 的
+    /// ConstantPool）。原生二进制的常量池是注解属性引用的稀疏表，以本 Class 作为
+    /// constantPoolOop，ConstantPool natives 按类名查表（constant_pool_impl.rs）。
+    #[jvm_native(upcalls = "jdk/internal/reflect/ConstantPool.<init>:()V")]
+    pub fn getConstantPool(&self) -> Result<crate::jdk::internal::reflect::ConstantPool> {
+        let cp = crate::jdk::internal::reflect::ConstantPool::new()?;
+        cp.__set_constantPoolOop(Object::from(Clone::clone(self)));
+        Ok(cp)
     }
+
 
     /// `Class.isRecord()`：record 类判定（JVMS §4.7.30 Record 属性在场；
     /// 发射侧 is_record 属性 → build.rs record 表）。数组 / 基本类型类恒 false。
@@ -615,6 +613,14 @@ mod __modifiers {
 /// build.rs 生成的 record 类集（OUT_DIR/record_table.rs）。
 mod __record {
     include!(concat!(env!("OUT_DIR"), "/record_table.rs"));
+}
+
+/// 注解原始属性体 → Java byte[]（空 = 属性缺席 → null，与 HotSpot 同）。
+fn __anno_bytes(raw: &'static [u8]) -> JArray<i8> {
+    if raw.is_empty() {
+        return JArray::default();
+    }
+    JArray::from(raw.iter().map(|b| *b as i8).collect::<Vec<i8>>())
 }
 
 /// build.rs 生成的直接超接口表（OUT_DIR/interfaces_table.rs）。

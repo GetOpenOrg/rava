@@ -1,9 +1,6 @@
-//! `java/lang/reflect/Constructor` 手写伴生：newInstance（L3 反射分派的
-//! 构造器路径）+ 注解元数据查询（反射 L3 段 1，与 method_impl.rs 同构）。
-//!
-//! Constructor 是 final 类，调用侧接收者静态类型恒为 Constructor wrapper，
-//! 查询族以 wrapper 固有方法承载（impl_methods 协议）。挂载键：
-//! (clazz, "<init>", 描述符)——描述符参数段从 parameterTypes 还原。
+//! `java/lang/reflect/Constructor` 手写伴生：L3 分派键（NativeAccessor.newInstance0 按键经
+//! reflect_invoke 构造，FS-R R2）。newInstance 与注解查询族已回到 JDK 字节码（FS-R R2 / R4b）。
+//! 挂载键：(clazz, 描述符)——描述符参数段从 parameterTypes 还原。
 
 use crate::prelude::*;
 use super::Constructor;
@@ -50,39 +47,5 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_mo
     /// 反射族内部：本构造器的 L3 分派键 (声明类斜线名, 描述符)。
     pub(crate) fn __reflect_key(&self) -> Option<(std::string::String, std::string::String)> {
         __member_key(self)
-    }
-
-
-    /// 本构造器挂载点的注解条目。
-    fn __anno_entries(&self) -> &'static [crate::annotation_meta::__anno_table::AnnotationEntry] {
-        match __member_key(self) {
-            Some((c, d)) => crate::annotation_meta::method_annotation_entries(&c, "<init>", &d),
-            None => &[],
-        }
-    }
-
-    /// `getAnnotation(Class)`（AccessibleObject 继承 API 的 final 类固有承载）。
-    /// upcalls：同体 newInstance 的包装异常种子（method_impl.rs 同一模式）。
-    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String;")]
-    pub fn getAnnotation(&self, annotationClass: Class) -> Result<Object> {
-        let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
-        let Some(hit) = crate::annotation_meta::find_annotation(self.__anno_entries(), &anno)
-        else { return Ok(Object::default()) };
-        crate::annotation_meta::annotation_instance(hit.anno, hit.elements)
-    }
-
-    /// `isAnnotationPresent(Class)`：纯名匹配。
-    pub fn isAnnotationPresent(&self, annotationClass: Class) -> Result<bool> {
-        let anno = format!("{}", annotationClass.__get_name()).replace('.', "/");
-        Ok(crate::annotation_meta::has_annotation(self.__anno_entries(), &anno))
-    }
-
-    /// `getAnnotations()`。
-    pub fn getAnnotations(&self) -> Result<JArray<Object>> {
-        let mut out: Vec<Object> = Vec::new();
-        for e in self.__anno_entries() {
-            out.push(crate::annotation_meta::annotation_instance(e.anno, e.elements)?);
-        }
-        Ok(JArray::from(out))
     }
 }
