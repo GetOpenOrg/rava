@@ -2,7 +2,7 @@ use crate::prelude::*;
 use super::*;
 
 // 每实例可重入锁（FS-T5）：以实例身份键入监视器表（`crate::monitor::enter` / `exit`，
-// 与 synchronized 同一实现：可重入、竞争时先释放 GIL 再阻塞、按线程计数），lock / unlock
+// 与 synchronized 同一实现：可重入、竞争时阻塞、按线程计数），lock / unlock
 // 可跨方法调用配对（JDK InternalLock 包装的 ReentrantLock 语义）。
 
 impl InternalLock {

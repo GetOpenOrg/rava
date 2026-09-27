@@ -2,7 +2,7 @@
 //!
 //! ## 线程模型方案 A（2026-09-24 用户拍板；#42 起为真实 OS 线程）
 //!
-//! 虚拟线程映射为平台线程（`thread_impl::spawn_java_thread`，GIL 模型）：
+//! 虚拟线程映射为平台线程（`thread_impl::spawn_java_thread`，OS 线程并行执行，#42）：
 //!
 //!   - 不建模 Continuation / mount / unmount / 载体线程（VirtualThread 仍留
 //!     vm_boundary，BFS 不进入 ContinuationScope 等 VM 深耦合实现）；

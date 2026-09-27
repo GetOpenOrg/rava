@@ -22,12 +22,12 @@
 //! 其字段是翻译出的 Java 对象（Rc 载体），承载不了跨线程互斥；对象监视器是 VM 级
 //! 原语，落在本模块的 Rust 原生锁上。S-11 的终态（真线程模型）另行收敛。
 //!
-//! ## 与 GIL 的关系（#42，`crate::gil`）
+//! ## 线程模型（#42 并行后端）
 //!
-//! Java 线程是真实 OS 线程，执行 Java 代码须持有 GIL。监视器的一切阻塞（竞争中的
-//! enter、`wait`、wait 结束后的重获取）都在**释放 GIL 之后**进行，醒来后先拿到监视器
-//! 再重获取 GIL——任何线程都不会持有 GIL 去等监视器，因此两把锁之间无环。
-//! 监视器内部状态锁（`state`）只在极短临界区内持有，且从不跨越 GIL 的获取。
+//! Java 线程是真实 OS 线程，并行执行 Java 代码（GIL 已移除，`crate::gil` 只保留线程
+//! 存活登记与类初始化协议）。监视器的阻塞（竞争中的 enter、`wait`、wait 结束后的
+//! 重获取）直接阻塞在本模块的原生锁 / 条件变量上。监视器内部状态锁（`state`）只在
+//! 极短临界区内持有，且从不跨越其他锁的获取。
 //!
 //! ## 遗留（随线程模型一并收敛）
 //!
@@ -71,7 +71,7 @@ impl Monitor {
         }
     }
 
-    /// 进入监视器（可重入）。被他线程持有时释放 GIL 后阻塞在竞争队列上。
+    /// 进入监视器（可重入）。被他线程持有时阻塞在竞争队列上。
     fn enter(&self) {
         crate::gil::safepoint();
         let me = std::thread::current().id();
@@ -97,7 +97,7 @@ impl Monitor {
         leave_blocking_status();
     }
 
-    /// 阻塞获取（调用方已释放 GIL）：竞争队列排队至监视器空闲，按 `count` 设重入计数。
+    /// 阻塞获取：竞争队列排队至监视器空闲，按 `count` 设重入计数。
     fn acquire_blocking(&self, st: &mut parking_lot::MutexGuard<'_, MonitorState>,
                         me: std::thread::ThreadId, count: u32) {
         loop {
@@ -133,8 +133,8 @@ impl Monitor {
     }
 
     /// `Object.wait(millis, nanos)`：校验参数（HotSpot JVM_MonitorWait 同序：
-    /// 参数异常先于持有检查）→ 释放全部重入计数 → 释放 GIL 等待至 notify / 超时 /
-    /// 虚假唤醒 → 按原计数重新获取监视器 → 重获取 GIL。`millis == 0 && nanos == 0`
+    /// 参数异常先于持有检查）→ 释放全部重入计数 → 等待至 notify / 超时 /
+    /// 虚假唤醒 → 按原计数重新获取监视器。`millis == 0 && nanos == 0`
     /// 为无限等待。调用方以条件循环消费虚假唤醒。
     fn wait_timeout(self: &Arc<Self>, thread_identity: usize, millis: i64, nanos: i32) -> Result<()> {
         if millis < 0 {
@@ -250,7 +250,7 @@ pub(crate) fn clear_current_interrupted() -> Result<()> {
 }
 
 /// 当前线程进入阻塞：threadStatus 置 ALIVE | `bits`（`getState` 可观察，JVM 同编码）。
-/// 持 GIL 调用；虚拟线程（holder 为 null）的状态由 VirtualThread.state 承载，此处静默。
+/// 虚拟线程（holder 为 null）的状态由 VirtualThread.state 承载，此处静默。
 pub(crate) fn enter_blocking_status(bits: i32) {
     if let Ok(t) = crate::java::lang::Thread::currentThread() {
         let _ = t.__get_holder().__set_threadStatus(JVMTI_ALIVE | bits);
@@ -265,7 +265,7 @@ pub(crate) fn leave_blocking_status() {
 // ── park / unpark / 中断（LockSupport 与 Thread.interrupt 的 VM 底座）─────────
 
 /// 每线程一份：park 许可（permit 语义：unpark 授予、park 消费、不累加）+ 中断镜像
-/// （Java 字段 `Thread.interrupted` 的 Rust 侧副本，供释放 GIL 后的等待判断唤醒）+
+/// （Java 字段 `Thread.interrupted` 的 Rust 侧副本，供阻塞等待判断唤醒）+
 /// 当前所等监视器（中断时唤醒其等待队列）。
 struct ParkState {
     permit: bool,
@@ -287,7 +287,7 @@ fn parker_for(thread_identity: usize) -> Arc<Parker> {
     })))
 }
 
-/// `Unsafe.park(isAbsolute, time)`：消费许可；无许可且未中断时释放 GIL 阻塞至 unpark /
+/// `Unsafe.park(isAbsolute, time)`：消费许可；无许可且未中断时阻塞至 unpark /
 /// 中断 / 超时（相对纳秒；绝对为 epoch 毫秒截止）/ 虚假唤醒。`time == 0` 且相对为无限期；
 /// 相对 `time < 0` 或已过的绝对截止立即返回（HotSpot Parker::park 同判定）。中断不消费
 /// （park 返回后中断状态保留，JDK LockSupport 语义）。
@@ -366,7 +366,7 @@ fn take_interrupt(thread_identity: usize) -> bool {
     std::mem::replace(&mut parker_for(thread_identity).state.lock().interrupted, false)
 }
 
-/// `Thread.sleep0`：释放 GIL 按挂钟驻留，可被中断唤醒。返回 true = 被中断（镜像已清）。
+/// `Thread.sleep0`：按挂钟驻留，可被中断唤醒。返回 true = 被中断（镜像已清）。
 pub fn sleep_interruptibly(thread_identity: usize, nanos: i64) -> bool {
     let p = parker_for(thread_identity);
     let deadline = Instant::now() + Duration::from_nanos(nanos.max(0) as u64);

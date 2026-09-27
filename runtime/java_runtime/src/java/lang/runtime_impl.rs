@@ -8,7 +8,7 @@ impl Runtime {
     /// 读取 CPU 亲和集 / cgroup 配额同一来源）。消费面：ForkJoinPool 公共池并行度
     /// （`ncpu - 1`）、CompletableFuture 的 `USE_COMMON_POOL`（> 1 时异步任务走公共池）、
     /// 并行流拆分、ConcurrentHashMap / Striped64 的 NCPU 阈值。线程是真实 OS 线程
-    /// （#42），第一档 GIL 下公共池工作线程轮流执行，第二档并行后端下真并行。
+    /// （#42），公共池工作线程为 OS 线程真并行执行。
     #[jvm_native]
     pub fn availableProcessors(&self) -> Result<i32> {
         Ok(std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(1))

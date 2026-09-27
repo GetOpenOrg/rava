@@ -3,7 +3,7 @@ use super::shared_thread_container::SharedThreadContainer;
 use crate::java::lang::String;
 
 // jdk.internal.vm.SharedThreadContainer：线程容器的簿记对象（名称 + 关闭位 +
-// 注册键），服务真实 OS 线程的分层容器体系。本运行时线程由 OS 线程 + GIL 承载
+// 注册键），服务真实 OS 线程的分层容器体系。本运行时线程由 OS 线程承载（#42 并行后端）
 // （#42，java/lang/thread_impl.rs），容器不承担调度——工厂方法构造簿记对象
 // 即可，父容器注册（ThreadContainers.registerContainer）的唯一用途是
 // serviceability 工具枚举容器，无可观察行为，不引入注册表。

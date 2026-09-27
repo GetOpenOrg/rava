@@ -3,7 +3,7 @@
 //! 消费方：`ThreadPerTaskExecutor.<init>` 的 `super(true)`（Executors.newVirtualThread-
 //! PerTaskExecutor 链）。JDK 构造体仅 `StackableScope(shared)`：共享容器不记录 owner
 //! 线程（StackableScope 栈只服务 structured concurrency 的嵌套校验）。本档位线程层
-//! 为OS 线程 + GIL（thread_impl，#42），容器不参与调度，构造即簿记对象。
+//! 为 OS 线程（thread_impl，#42 并行后端），容器不参与调度，构造即簿记对象。
 
 use crate::prelude::*;
 use super::thread_container::ThreadContainer;

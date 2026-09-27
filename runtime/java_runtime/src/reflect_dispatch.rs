@@ -94,24 +94,6 @@ pub fn final_field(name: &str) -> crate::error::JvmError {
     crate::error::JvmError::illegal_argument(&format!("Can not set final field {}", name))
 }
 
-crate::__process_static! {
-    /// 序列化构造器登记（构造器对象身份 → 目标类 binary name，N2）：
-    /// ReflectionFactory.newConstructorForSerialization 返回的构造器元数据属于首个不可序列化
-    /// 超类 initCl，但 newInstance 须分配**目标类**实例（JDK generateConstructor 的访问器）。
-    static SERIAL_CTORS: crate::sync_model::__RefSlot<HashMap<usize, String>> =
-        crate::sync_model::__RefSlot::new(HashMap::new());
-}
-
-/// 登记序列化构造器（身份 → 目标类）。
-pub fn register_serialization_ctor(ctor_identity: usize, target_slash: &str) {
-    SERIAL_CTORS.with(|m| { m.borrow_mut().insert(ctor_identity, target_slash.to_owned()); });
-}
-
-/// 构造器是否为序列化构造器 → 目标类。
-pub fn serialization_target(ctor_identity: usize) -> Option<String> {
-    SERIAL_CTORS.with(|m| m.borrow().get(&ctor_identity).cloned())
-}
-
 fn lookup(class_slash: &str) -> Option<ReflectDispatch> {
     DISPATCHERS.with(|d| d.borrow().get(class_slash).map(Clone::clone))
 }
@@ -326,39 +308,6 @@ pub fn unbox_f32(v: &Object) -> Option<f32> {
     }
     unbox_i64(v).map(|x| x as f32)
 }
-
-/// 反射访问检查（Method.invoke / Field.get/set / Constructor.newInstance 共用，FS-R4）：
-/// 按 JDK `Reflection.verifyMemberAccess` 的规则对**调用方类**判定——调用方经生成器在
-/// @CallerSensitive 调用点显式传入（`__caller_sensitive`，虚调用与静态调用同一机制）：
-///   - setAccessible(true) 或 public 成员 → 可达（公开包；jdk/sun 内部包的非 public
-///     成员对未命名模块恒不可达，public 成员视为已导出）；
-///   - 调用方即声明类，或二者同属一个 nest（嵌套类共享顶层宿主，JEP 181）→ 可达；
-///   - 非 private：同包可达；protected 另对声明类的子类可达。
-/// 取不到调用方（手写运行时直接调用）时回落旧近似：用户类成员可达、JDK 非 public 不可达。
-pub fn member_accessible(declaring_slash: &str, modifiers: i32, override_: bool) -> bool {
-    const JDK_PREFIXES: [&str; 6] = ["java/", "javax/", "jdk/", "sun/", "com/sun/", "com/oracle/"];
-    if override_ || (modifiers & 0x0001) != 0 {
-        return true;
-    }
-    let caller = match current_caller_sensitive() {
-        Some(c) => c.replace('.', "/"),
-        None => return !JDK_PREFIXES.iter().any(|p| declaring_slash.starts_with(p)),
-    };
-    if caller == declaring_slash {
-        return true;
-    }
-    let nest_host = |n: &str| n.split('$').next().unwrap_or(n).to_owned();
-    if (modifiers & 0x0002) != 0 {
-        return nest_host(&caller) == nest_host(declaring_slash);
-    }
-    let package = |n: &str| n.rsplit_once('/').map(|(p, _)| p.to_owned()).unwrap_or_default();
-    if package(&caller) == package(declaring_slash) {
-        return true;
-    }
-    (modifiers & 0x0004) != 0
-        && crate::java::lang::Class::__name_assignable(declaring_slash, &caller)
-}
-
 
 // ── @CallerSensitive 的显式调用者（平台无关的 getCallerClass 数据面）────────────
 //

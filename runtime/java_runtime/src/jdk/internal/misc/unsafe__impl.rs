@@ -399,7 +399,7 @@ impl Unsafe {
 
     /// `compareAndSetLong(Object o, long offset, long expected, long x)`：实例字段
     /// long 的 CAS——经 `__unsafe_long_cell` 取共享存储单元（与直接字段读取同一
-    /// 存储，JVM 字段内存语义）。GIL 下（持锁线程独占执行，#42）读-比-写不可分割。
+    /// 存储，JVM 字段内存语义）。读-比-写经原子单元 `__cas` 完成（#42 并行后端）。
     #[jvm_boundary]
     pub fn compareAndSetLong(&self, o: Object, offset: i64, expected: i64, x: i64) -> Result<bool> {
         let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
@@ -409,7 +409,7 @@ impl Unsafe {
     }
 
     /// `compareAndExchangeLong(o, offset, expected, x)`：CAS 并返回**见证值**（交换前的
-    /// 当前值；等于 expected 即交换成功）。GIL 下读-比-写不可分割（与
+    /// 当前值；等于 expected 即交换成功）。读-比-写经原子单元 `__fetch_update` 完成（与
     /// compareAndSetLong 同一存储单元）。消费方：JDK25 ForkJoinPool.compareAndExchangeCtl
     ///（signalWork 的 ctl 状态字）。native。
     #[jvm_boundary]
@@ -451,7 +451,7 @@ impl Unsafe {
     }
 
     /// `putLong(Object o, long offset, long x)`：实例字段 plain 写（与
-    /// putLongVolatile 同一存储单元；GIL 下（持锁线程独占执行，#42）无可见性差异）。
+    /// putLongVolatile 同一存储单元；原子单元，plain 写不弱于 volatile 写）。
     /// 消费方：`ThreadLocalRandom.localInit` 对 Thread.threadLocalRandomSeed。
     #[jvm_boundary]
     pub fn putLong_obj_l_l(&self, o: Object, offset: i64, x: i64) -> Result<()> {
@@ -505,8 +505,8 @@ impl Unsafe {
     }
 
     /// `getAndBitwiseAndInt(Object o, long offset, int mask)`：实例字段 int 的
-    /// 原子按位与，返回旧值。JDK 原型是 CAS 重试循环；GIL 下读-改-写不被
-    /// 穿插即不可分割（与 getAndAddInt 同族）。消费链：AQS `Node.getAndUnsetStatus`
+    /// 原子按位与，返回旧值。JDK 原型是 CAS 重试循环；此处经原子单元
+    /// `__fetch_update` 一次完成（与 getAndAddInt 同族）。消费链：AQS `Node.getAndUnsetStatus`
     ///（CountDownLatch.countDown → releaseShared → signalNext）。
     #[jvm_boundary]
     pub fn getAndBitwiseAndInt(&self, o: Object, offset: i64, mask: i32) -> Result<i32> {
@@ -535,7 +535,7 @@ impl Unsafe {
         Ok(cell.__fetch_update(|old| x))
     }
 
-    /// `putIntOpaque` / `putIntRelease`：访问序变体——GIL 下（持锁线程独占执行，#42）与
+    /// `putIntOpaque` / `putIntRelease`：访问序变体——原子单元 SeqCst 存取（#42）不弱于
     /// plain 写同一存储单元（S-11 档位等价，见 VarHandle 伴生模块注释）。
     #[jvm_boundary]
     pub fn putIntOpaque(&self, o: Object, offset: i64, x: i32) -> Result<()> {
@@ -581,7 +581,7 @@ impl Unsafe {
         Ok(cell.__fetch_update(|c| if c == expected { x } else { c }))
     }
 
-    /// `getIntAcquire(o, offset)`：acquire 读——GIL 下（持锁线程独占执行，#42）与 volatile /
+    /// `getIntAcquire(o, offset)`：acquire 读——原子单元 SeqCst 读（#42）不弱于 volatile /
     /// plain 读同一存储单元（ForkJoinPool.WorkQueue 的 top/base 读）。
     #[jvm_boundary]
     pub fn getIntAcquire(&self, o: Object, offset: i64) -> Result<i32> {
@@ -613,7 +613,7 @@ impl Unsafe {
 
     /// `getIntOpaque(Object o, long offset)`：实例字段 int opaque 读
     /// （JDK 9+ `Unsafe.getIntOpaque`，VarHandle getOpaque 的底层形态）。
-    /// GIL 模型（#42）无跨线程重排可见性差异——与 plain/volatile
+    /// 原子单元 SeqCst 存取（#42）不弱于各访问序——与 plain/volatile
     /// 读同一存储单元。消费方：ForkJoinPool.getParallelismOpaque
     /// （CompletableFuture 公共池并行度 → USE_COMMON_POOL 判定链）。
     #[jvm_boundary]
@@ -657,7 +657,7 @@ impl Unsafe {
     // 载体驱动分派：holder 是引用元素数组 → 数组形态（协变视图 + 偏移反解，
     // 与 acquire/release 形态同一套常量）；否则实例字段形态（偏移经登记表
     // 反查字段名 + ObjectVTable 引用原子协议——与直接字段读取同一存储单元，
-    // JVM 字段内存语义）。GIL 下（持锁线程独占执行，#42）三种访问序无可见性区别
+    // JVM 字段内存语义）。原子单元 SeqCst 存取（#42）不弱于三种访问序
     // （同一单元，S-11）。消费面：LockSupport.setBlocker（Thread.parkBlocker）、
     // AQS Node.prev、ThreadLocalRandom 的 Thread.threadLocals 清理、
     // ClassSpecializer 的 speciesData 槽等。
@@ -719,7 +719,7 @@ impl Unsafe {
     }
 
     /// `park(boolean isAbsolute, long time)`：LockSupport.park 的 VM 底座（permit 语义的
-    /// 阻塞，释放 GIL 后驻留，`monitor::park`）。许可按当前线程对象身份登记。blocker 字段
+    /// 阻塞驻留，`monitor::park`）。许可按当前线程对象身份登记。blocker 字段
     /// （parkBlocker）由上层 `putReferenceOpaque` 携带。
     #[jvm_boundary]
     pub fn park(&self, is_absolute: bool, time: i64) -> Result<()> {

@@ -296,12 +296,6 @@ impl Class {
             .unwrap_or(0x0001 | 0x0010 | 0x0400))
     }
 
-    /// Class 值的 null 判定（生成 wrapper 不是 Object 元组——经 From<Object>
-    /// 协议装箱后判；查询族共用）。
-    fn __class_arg_is_null(c: &Class) -> bool {
-        Object::from(Clone::clone(c)).0.is_jvm_null()
-    }
-
     /// `getDeclaredFields()`：本类全部声明字段的构造序列（字段表驱动，
     /// getDeclaredField 的复数形态——同一张 build.rs 字段表循环输出）。
     pub(crate) fn __table_declared_fields(&self) -> Result<JArray<Field>> {
@@ -352,29 +346,6 @@ impl Class {
         Ok(JArray::from(out))
     }
 
-
-
-    /// 内部：指定类的 public 构造器序列（getConstructors / getConstructor 共用）。
-    fn constructor_rows(&self, cls_key: &str)
-        -> Option<Vec<crate::java::lang::reflect::Constructor<Object>>> {
-        let (_, ms) = __methods::CLASS_METHODS.iter().find(|(n, _)| *n == cls_key)?;
-        let mut out = Vec::new();
-        for (slot, meta) in ms.iter().enumerate() {
-            if meta.name != "<init>" || (meta.modifiers & 0x0001) == 0 {
-                continue;
-            }
-            let mut c = crate::java::lang::reflect::Constructor::<Object>::default();
-            c._init_not_null();
-            c.__set_clazz(Class::for_class(String::from(cls_key)));
-            c.__set_modifiers(meta.modifiers);
-            c.__set_slot(slot as i32);
-            let params: Vec<Class> = descriptor_params(meta.descriptor).into_iter()
-                .map(|p| class_for_descriptor(&p)).collect();
-            c.__set_parameterTypes(JArray::from(params));
-            out.push(c);
-        }
-        Some(out)
-    }
 
 
     /// `Class.isAnnotationPresent(Class)`：类挂载点注解存在性（反射 L3 段 1）。

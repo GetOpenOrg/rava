@@ -1,6 +1,6 @@
 # FS-R：反射元数据表（Class / Field / Method / Constructor 回到字节码）
 
-> 状态：方案（2026-09-27）。属 FS-H0「反射元数据」组（过渡态清单 §〇 第一行，33 处越界覆盖）。
+> 状态：R1 / R2 / R3 完成（2026-09-27，3892415 起）；R4 进行中。属 FS-H0「反射元数据」组（过渡态清单 §〇 第一行，33 处越界覆盖）。
 > 前置：MH-native 管线（N11 / S-66：MH Direct / Records / BmhDynamicSpecies PASS）。
 
 ## 一、现状
@@ -88,6 +88,17 @@ getRawAnnotations(), getConstantPool(), cls)` → `annotationForMap` → **`Prox
 | R4c 删除 | Class / Field / Method / Constructor 的注解查询族越界覆盖、`annotation_meta` / `anno_objects` 翻译期注解代理合成 |
 
 验收：新增 TestDynamicProxy（多接口、default 方法、equals/hashCode/toString、异常透传 / UndeclaredThrowableException）与 TestAnnoReflect 回归。
+
+### 2.7 R2 / R3 实施补记（2026-09-27）
+
+| 项 | 落点 |
+|---|---|
+| 访问器族放行 | `jdk/internal/reflect/` 整包 + `java/lang/Class$ReflectionData` 等嵌套辅助类（boundary_release.txt） |
+| `useNativeAccessor` 分支 | `DirectMethod/ConstructorHandleAccessor$NativeAccessor.invoke0 / newInstance0` native：按 Method / Constructor 声明键经 L3 分派 |
+| 实参不符 vs 目标抛出 | `AccessorUtils.isIllegalArgument` 读栈帧——intrinsics.txt 第三类准入「栈帧查询点」：L3 分派登记经用户成员逃逸的异常身份（java.base 帧继续、用户帧判 ITE 的等价物） |
+| 引导期时序 | `vm_boot_init.txt`（HotSpot initPhase1 对应物）：`AccessibleObject` 先于应用代码初始化，避免 `ReflectionFactory.<clinit>` 反向触发时重入读到 null 单例 |
+| 元数据补齐 | 修饰符表补手写根类 Object 行；直接超接口表 + `getInterfaces0`；`SharedSecrets.getJavaLangInvokeAccess` 槽位 |
+| 删除 | Class 成员查询 / 命名族覆盖、Field.get/set、Method.invoke、Constructor.newInstance、序列化构造器登记表、`member_accessible`、`constructor_rows` |
 
 ## 三、不做什么
 
