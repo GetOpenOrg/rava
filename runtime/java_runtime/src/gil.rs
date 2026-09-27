@@ -1,133 +1,34 @@
-//! 真多线程第一档：OS 线程 + 全局解释器锁（GIL）（#42，
-//! `docs/plans/2026-09-26-real-multithreading.md` §三-A）。
+//! 线程运行时支撑（#42 真多线程，`docs/plans/2026-09-26-real-multithreading.md`）。
 //!
-//! ## 模型
+//! ## 模型（并行后端，最终态）
 //!
-//! 每个 Java 线程（平台 / 虚拟）是一条真实 OS 线程；执行 Java 代码（翻译体、运行时
-//! 手写层）前必须持有全局锁 `GIL`。对象模型仍为 `Rc` / `Cell` / `RefCell`——同一时刻
-//! 只有持锁线程触碰对象图，锁的获取 / 释放建立 happens-before，因此：
+//! 每个 Java 线程（平台 / 虚拟）是一条真实 OS 线程，并行执行。对象模型自身线程安全
+//! （`sync_model`：`Arc` + 原子字段单元 + 读写锁引用槽），不再有全局解释器锁（GIL）——
+//! 第一档的单线程 + GIL 后端已移除。本模块保留与锁无关的线程运行时协议：
 //!
-//!   - 无数据竞争（`Rc` 引用计数、`RefCell` 借用标记均在锁内修改）；
-//!   - `volatile` / 原子类 / CAS 的可见性与原子性平凡成立（强于 JMM 要求）；
-//!   - 进程级存储（`__process_static!`）是全进程一份的全局量，经锁串行访问。
+//!   - `safepoint` / `blocking` / `yield_now`：生成代码与阻塞原语的调用点（安全点与阻塞
+//!     包裹在并行后端下无需让锁，前者为空、后者直通；保留为钩子供将来的安全点语义使用）；
+//!   - 非守护线程存活登记（DestroyJavaVM 等待）；
+//!   - 类初始化协议（JVMS §5.5，跨线程 `<clinit>` 互斥与等待）。
 //!
-//! 阻塞原语（`sleep` / `wait` / `park` / 竞争中的 `monitorenter` / `join` / 类初始化
-//! 等待）一律**先释放 GIL 再阻塞**，醒来后重获取（`blocking`）——真实挂钟驻留，其他
-//! 线程在此期间运行。持锁线程在安全点（字段 / 数组元素读取、监视器操作、`Thread.yield`）
-//! 检查是否有线程在等锁，时间片（`SLICE`）用尽则公平让出（`MutexGuard::bump`），
-//! 自旋等待另一线程写入的程序（`while (!flag) {}`）因此能推进。
-//!
-//! 这与 JLS §17 的线程语义等价（JLS 不要求并行执行；绿色线程 JVM 同属合规实现）：
-//! 交错只发生在安全点，是合法执行集合的子集。并行加速属第二档（Arc + 原子单元，
-//! 方案 §三-B），不改变可观察语义。
-//!
-//! ## 激活
-//!
-//! 首个 `Thread.start` 之前进程只有主线程，GIL 不启用（零开销：安全点仅一次 Relaxed
-//! 原子读）。`activate` 在首次派生线程前由主线程调用：主线程取得 GIL 后再派生。
+//! 模块名沿用 `gil`（生成代码经 prelude 引用其入口），后续随调用点收敛再更名。
 
-use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use parking_lot::{Condvar, Mutex};
 
-use parking_lot::{Condvar, Mutex, MutexGuard};
-
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-static GIL: Mutex<()> = Mutex::new(());
-/// 正在等待 GIL 的线程数（安全点据此决定是否让出）。
-static WAITERS: AtomicUsize = AtomicUsize::new(0);
-
-/// 时间片：持锁超过该时长且有等待者时，安全点让出。
-const SLICE: Duration = Duration::from_millis(2);
-
-std::thread_local! {
-    static HELD: RefCell<Option<MutexGuard<'static, ()>>> = const { RefCell::new(None) };
-    static SLICE_START: Cell<Option<Instant>> = const { Cell::new(None) };
-}
-
-/// GIL 是否已启用（进程内曾派生过 Java 线程）。
+/// 在阻塞状态下执行 `f`（sleep / wait / park / 竞争 monitorenter / join / 类初始化等待）。
+/// 并行后端无全局锁可让，直接执行。
 #[inline]
-pub fn is_active() -> bool {
-    ACTIVE.load(Ordering::Acquire)
-}
-
-/// 启用 GIL（主线程在首次派生线程前调用；幂等）。并行后端（feature `mt`）不启用：
-/// 对象模型自身线程安全，GIL 的全部入口退化为 no-op。
-pub fn activate() {
-    #[cfg(not(feature = "mt"))]
-    if !ACTIVE.load(Ordering::Acquire) {
-        ACTIVE.store(true, Ordering::Release);
-        acquire();
-    }
-}
-
-/// 当前线程取得 GIL（阻塞）。派生线程入口与 `blocking` 结束时调用。GIL 未启用时 no-op。
-pub fn acquire() {
-    if !is_active() {
-        return;
-    }
-    WAITERS.fetch_add(1, Ordering::SeqCst);
-    let guard = GIL.lock();
-    WAITERS.fetch_sub(1, Ordering::SeqCst);
-    HELD.with(|h| *h.borrow_mut() = Some(guard));
-    SLICE_START.with(|s| s.set(Some(Instant::now())));
-}
-
-/// 当前线程释放 GIL（派生线程出口与 `blocking` 开始时调用）。
-pub fn release() {
-    if !is_active() {
-        return;
-    }
-    let guard = HELD.with(|h| h.borrow_mut().take());
-    drop(guard);
-}
-
-/// 在释放 GIL 的状态下执行阻塞动作 `f`，返回前重获取 GIL。
-///
-/// `f` 内**不得**触碰 Java 对象图与进程级存储（只做 OS 级等待）；GIL 未启用时直接执行。
 pub fn blocking<R>(f: impl FnOnce() -> R) -> R {
-    if !is_active() {
-        return f();
-    }
-    release();
-    let r = f();
-    acquire();
-    r
+    f()
 }
 
-/// 安全点：有线程等待 GIL 且本线程时间片用尽时公平让出。
+/// 安全点（字段 / 数组元素读取、监视器操作处的生成代码调用点）：并行后端无需让出。
 #[inline]
-pub fn safepoint() {
-    if ACTIVE.load(Ordering::Relaxed) && WAITERS.load(Ordering::Relaxed) > 0 {
-        yield_slice(false);
-    }
-}
+pub fn safepoint() {}
 
-/// `Thread.yield`：有等待者即让出（不看时间片）。
+/// `Thread.yield`：让出当前 OS 线程时间片。
 pub fn yield_now() {
-    if is_active() && WAITERS.load(Ordering::SeqCst) > 0 {
-        yield_slice(true);
-    } else {
-        std::thread::yield_now();
-    }
-}
-
-#[cold]
-fn yield_slice(force: bool) {
-    let due = force || SLICE_START.with(|s| s.get().map_or(true, |t| t.elapsed() >= SLICE));
-    if !due {
-        return;
-    }
-    HELD.with(|h| {
-        if let Some(g) = h.borrow_mut().as_mut() {
-            // bump 交出锁后本线程重新排队等锁：计入等待者，使接手线程的安全点 / yield
-            // 能看到并在时间片用尽时交还（否则两线程互相自旋等待时接手方永不让出）
-            WAITERS.fetch_add(1, Ordering::SeqCst);
-            MutexGuard::bump(g);
-            WAITERS.fetch_sub(1, Ordering::SeqCst);
-        }
-    });
-    SLICE_START.with(|s| s.set(Some(Instant::now())));
+    std::thread::yield_now();
 }
 
 // ── 存活线程登记（DestroyJavaVM：主线程结束后等待全部非守护平台线程）─────────
@@ -234,7 +135,6 @@ pub fn clinit_exit(class: &'static str, ok: bool, set: impl Fn(u8)) {
 
 // ── 跨线程移交（仅 GIL 下成立）──────────────────────────────────────────────
 
-/// 把 `Rc` 对象图移交给新 OS 线程的载体。安全性：移交方在持有 GIL 时构造，接收方
-/// 取得 GIL 后才解包使用，对象图在任意时刻只被持锁线程触碰。
+/// 把线程对象移交给新 OS 线程的载体（对象模型为 `Arc` + 线程安全单元，移交安全）。
 pub struct Handoff<T>(pub T);
 unsafe impl<T> Send for Handoff<T> {}

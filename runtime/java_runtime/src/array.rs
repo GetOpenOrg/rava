@@ -183,7 +183,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *aload）；
     /// null 引用抛 `NullPointerException`。
     pub fn get(&self, i: i32) -> crate::error::Result<T> {
-        crate::gil::safepoint(); // GIL 安全点（自旋读他线程写入的元素时让出）
+        crate::gil::safepoint(); // 安全点钩子（并行后端为空）
         match &*self.0 {
             Repr::Own(cells, _) => {
                 let data = cells.borrow();

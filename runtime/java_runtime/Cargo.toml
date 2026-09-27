@@ -7,10 +7,6 @@ edition = "2021"
 name = "java_runtime"
 path = "src/lib.rs"
 
-[features]
-# 并行后端（#42 最终态）：Arc 对象模型 + 原子字段单元 + 读写锁引用槽，去 GIL。
-mt = []
-
 [dependencies]
 parking_lot = "0.12"
 # POSIX 系统调用（access / statvfs / pathconf：std 无等价，FS-IO1 / IO2）

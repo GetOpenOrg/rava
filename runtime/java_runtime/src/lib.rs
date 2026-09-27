@@ -437,8 +437,6 @@ pub mod prelude {
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
     pub use super::sync_model::{__AnyRef, __PrimCell, __RefSlot, __Shared, __ThreadSafe};
-    #[cfg(not(feature = "mt"))]
-    pub use super::sync_model::__CellAtomicOps;
     pub use crate::__DynFn;
     pub use crate::__process_static;
     pub use crate::reflect_dispatch::__caller_sensitive;

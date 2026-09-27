@@ -1,9 +1,9 @@
-//! `java.lang.Thread` 的 native 层：真实 OS 线程（#42 第一档，GIL 模型，见 `crate::gil`）。
+//! `java.lang.Thread` 的 native 层：真实 OS 线程，并行执行（#42 并行后端，见 `crate::sync_model`）。
 //!
 //! ## 线程生命周期
 //!
-//!   - `start0`：`NEW→RUNNABLE`（eetop / threadStatus 翻位），启用 GIL（首次），派生 OS
-//!     线程；新线程取得 GIL 后以 vtable 分派执行 `run()`；
+//!   - `start0`：`NEW→RUNNABLE`（eetop / threadStatus 翻位），派生 OS 线程；新线程以
+//!     vtable 分派执行 `run()`；
 //!   - 终结（JVM thread-exit 同序）：未捕获异常报告（`Exception in thread "<name>"`，
 //!     只终结本线程）→ eetop 清零（`isAlive` 翻 false）、threadStatus → TERMINATED →
 //!     持有线程对象监视器 `notifyAll`（唤醒 `join` 的 `while (isAlive()) wait(0)`）；
@@ -14,7 +14,7 @@
 //!
 //! ## 时间
 //!
-//! `sleep0` 释放 GIL 后真实驻留（挂钟）；其他线程在此期间运行。
+//! `sleep0` 真实驻留（挂钟）；其他线程并行运行。
 //!
 //! ## 字段消费清单（golden 反推，不铺全量）
 //!
@@ -66,7 +66,6 @@ fn thread_identity(t: &Thread) -> usize {
 
 /// 派生 OS 线程执行 `t.run()`。`daemon` 为 true 的线程不计入 DestroyJavaVM 等待集。
 pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
-    crate::gil::activate();
     crate::gil::note_started(daemon);
     let name = format!("{}", t.__get_name());
     let handoff = crate::gil::Handoff(t);
@@ -75,12 +74,10 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
         .stack_size(JAVA_THREAD_STACK)
         .spawn(move || {
             let handoff = handoff;
-            crate::gil::acquire();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let t = handoff.0;
                 CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&t)));
                 run_java_thread(&t);
-                // 线程局部与栈上的对象引用在持有 GIL 时释放（Rc 计数只在锁内修改）
                 CURRENT.with(|c| c.borrow_mut().take());
                 drop(t);
             }));
@@ -89,7 +86,6 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
                 std::process::exit(101);
             }
             crate::gil::note_terminated(daemon);
-            crate::gil::release();
         });
     if spawned.is_err() {
         crate::gil::note_terminated(daemon);
@@ -143,7 +139,7 @@ impl Thread {
         spawn_java_thread(Clone::clone(self), daemon)
     }
 
-    /// native `sleep0(J nanos)`：释放 GIL 后按挂钟驻留 `nanos` 纳秒（其他线程期间运行）。
+    /// native `sleep0(J nanos)`：按挂钟驻留 `nanos` 纳秒。
     /// 进入时或驻留中被中断：清中断状态并抛 `InterruptedException("sleep interrupted")`
     /// （HotSpot JVM_Sleep 同语义）。
     #[jvm_native]
@@ -165,7 +161,7 @@ impl Thread {
         Ok(())
     }
 
-    /// native `yield0()`：让出 GIL 给等待中的线程（无等待者时 OS 级让出）。
+    /// native `yield0()`：OS 级让出当前线程时间片。
     #[jvm_native]
     pub fn yield0() -> Result<()> {
         crate::gil::yield_now();

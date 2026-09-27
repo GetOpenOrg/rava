@@ -87,9 +87,8 @@ impl Monitor {
                 return;
             }
         }
-        // 走到这里即监视器被他线程持有（进程内必有已派生的 Java 线程）：两种后端都
-        // 标记 BLOCKED_ON_MONITOR_ENTER（Thread.getState() == BLOCKED）。并行后端
-        // （feature `mt`）不启用 GIL，不能以 gil::is_active() 作守卫。
+        // 走到这里即监视器被他线程持有（进程内必有已派生的 Java 线程）：
+        // 标记 BLOCKED_ON_MONITOR_ENTER（Thread.getState() == BLOCKED）。
         enter_blocking_status(STATE_BLOCKED_ON_MONITOR_ENTER);
         crate::gil::blocking(|| {
             let mut st = self.state.lock();

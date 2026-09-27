@@ -2,71 +2,38 @@
 //!
 //! 对象模型的共享、字段单元、引用槽、进程级存储四种原语在此集中定义；java_class! 宏展开、
 //! 生成代码与手写层一律经这些名字引用，不直接写 `Rc` / `Cell` / `RefCell` / `thread_local!`。
-//! 两个后端同名同方法集：
+//! 并行后端（#42 最终态，默认且唯一；单线程 + GIL 后端已移除）：
 //!
-//! | 原语 | 单线程 + GIL（默认） | 并行（cargo feature `mt`，最终态） |
-//! |---|---|---|
-//! | `__Shared<T>` | `Rc<T>` | `Arc<T>` |
-//! | `__PrimCell<T>` | `Cell<T>` | 原子单元（SeqCst，64 位位形；long/double 无撕裂） |
-//! | `__RefSlot<T>` | `RefCell<T>` | 读写锁（`borrow` = 可重入读、`borrow_mut` = 写） |
-//! | `__process_static!` | GIL 下全局单元 | 全局 `OnceLock` 单元 |
-//! | `__ThreadSafe` | 空约束 | `Send + Sync` |
-//! | `__DynFn!` | `dyn Fn(..) -> R` | `dyn Fn(..) -> R + Send + Sync` |
+//! | 原语 | 实现 |
+//! |---|---|
+//! | `__Shared<T>` | `Arc<T>` |
+//! | `__PrimCell<T>` | 原子单元（SeqCst，64 位位形；long/double 无撕裂） |
+//! | `__RefSlot<T>` | 读写锁（`borrow` = 可重入读、`borrow_mut` = 写） |
+//! | `__process_static!` | 全局 `OnceLock` 单元 |
+//! | `__ThreadSafe` | `Send + Sync` |
+//! | `__DynFn!` | `dyn Fn(..) -> R + Send + Sync` |
 //!
 //! 命名以 `__` 起始：对象模型的实现细节，不出现在可读层（方法体）。
 
-/// 线程安全约束：`ObjectVTable` 与接口 vtable trait 的超 trait，使 `dyn` 对象在并行后端
-/// 为 `Send + Sync`（单线程后端为空约束）。
-#[cfg(not(feature = "mt"))]
-pub trait __ThreadSafe {}
-#[cfg(not(feature = "mt"))]
-impl<T: ?Sized> __ThreadSafe for T {}
-#[cfg(feature = "mt")]
+/// 线程安全约束：`ObjectVTable` 与接口 vtable trait 的超 trait，使 `dyn` 对象为 `Send + Sync`。
 pub trait __ThreadSafe: Send + Sync {}
-#[cfg(feature = "mt")]
 impl<T: ?Sized + Send + Sync> __ThreadSafe for T {}
 
 /// 闭包对象类型（lambda / 方法引用载体、登记表回调）：`__DynFn!((A, B) -> R)`。
-#[cfg(not(feature = "mt"))]
-#[macro_export]
-#[doc(hidden)]
-macro_rules! __DynFn {
-    ($($t:tt)*) => { dyn Fn $($t)* };
-}
-#[cfg(feature = "mt")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __DynFn {
     ($($t:tt)*) => { dyn Fn $($t)* + Send + Sync };
 }
 
-// ── 单线程 + GIL 后端 ──────────────────────────────────────────────────────────
-
 /// 对象 / 字段单元的共享所有权。
-#[cfg(not(feature = "mt"))]
-pub type __Shared<T> = std::rc::Rc<T>;
-/// 基本类型字段单元。
-#[cfg(not(feature = "mt"))]
-pub type __PrimCell<T> = std::cell::Cell<T>;
-/// 引用字段 / 可变槽。
-#[cfg(not(feature = "mt"))]
-pub type __RefSlot<T> = std::cell::RefCell<T>;
-
-// ── 并行后端（最终态）──────────────────────────────────────────────────────────
-
-#[cfg(feature = "mt")]
 pub type __Shared<T> = std::sync::Arc<T>;
 
-/// 对象存储的类型擦除句柄（wrapper 的 `any` 字段、擦除视图导出）：单线程 `Rc<dyn Any>`，
-/// 并行 `Arc<dyn Any + Send + Sync>`（`downcast` 同名可用）。
-#[cfg(not(feature = "mt"))]
-pub type __AnyRef = std::rc::Rc<dyn std::any::Any>;
-#[cfg(feature = "mt")]
+/// 对象存储的类型擦除句柄（wrapper 的 `any` 字段、擦除视图导出）：`Arc<dyn Any + Send + Sync>`
+/// （`downcast` 同名可用）。
 pub type __AnyRef = std::sync::Arc<dyn std::any::Any + Send + Sync>;
-#[cfg(feature = "mt")]
 pub use self::mt::{__AtomicRepr, __PrimCell, __RefSlot};
 
-#[cfg(feature = "mt")]
 mod mt {
     use std::marker::PhantomData;
     use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
@@ -209,46 +176,10 @@ mod mt {
     }
 }
 
-// 单线程后端的原子读-改-写同名方法（GIL 下读-改-写之间无安全点，不可分割）。
-#[cfg(not(feature = "mt"))]
-pub trait __CellAtomicOps<T: Copy> {
-    fn __cas(&self, expected: T, new: T) -> bool;
-    fn __fetch_update(&self, f: impl Fn(T) -> T) -> T;
-}
-#[cfg(not(feature = "mt"))]
-impl<T: Copy + __BitEq> __CellAtomicOps<T> for std::cell::Cell<T> {
-    #[inline]
-    fn __cas(&self, expected: T, new: T) -> bool {
-        if self.get().__bit_eq(expected) {
-            self.set(new);
-            true
-        } else {
-            false
-        }
-    }
-    #[inline]
-    fn __fetch_update(&self, f: impl Fn(T) -> T) -> T {
-        let old = self.get();
-        self.set(f(old));
-        old
-    }
-}
-/// 按位相等（CAS 的比较语义：浮点按位形，与 Unsafe.compareAndSet 一致）。
-#[cfg(not(feature = "mt"))]
-pub trait __BitEq: Copy { fn __bit_eq(self, o: Self) -> bool; }
-#[cfg(not(feature = "mt"))]
-macro_rules! bit_eq_int { ($($t:ty),*) => {$( impl __BitEq for $t { #[inline] fn __bit_eq(self, o: Self) -> bool { self == o } } )*}; }
-#[cfg(not(feature = "mt"))]
-bit_eq_int!(i8, u8, i16, u16, i32, u32, i64, u64, isize, usize, bool, char);
-#[cfg(not(feature = "mt"))]
-impl __BitEq for f32 { #[inline] fn __bit_eq(self, o: Self) -> bool { self.to_bits() == o.to_bits() } }
-#[cfg(not(feature = "mt"))]
-impl __BitEq for f64 { #[inline] fn __bit_eq(self, o: Self) -> bool { self.to_bits() == o.to_bits() } }
-
-/// 进程级存储：全进程一份，经 GIL 串行访问（`crate::gil` 模块注释）。
+/// 进程级存储：全进程一份，内容为线程安全单元（原子 / 读写锁）。
 ///
 /// 语义为「全进程一份」：运行时登记表、驻留表、类的静态字段与初始化状态等。真正按线程
-/// 区分的状态（当前线程、GIL 持有、InternalLock 守卫、拆箱失败标记）直写 `thread_local!`。
+/// 区分的状态（当前线程、InternalLock 守卫、拆箱失败标记）直写 `thread_local!`。
 ///
 /// 语法与 `thread_local!` 相同（`static NAME: T = const { e };` / `= e;`，可带属性与可见性），
 /// 访问面同 `LocalKey`：`with`，以及 `Cell` / `RefCell` 单元的 `get` / `set` / `take` /
@@ -271,26 +202,15 @@ macro_rules! __process_static {
 
 /// `__process_static!` 的存储单元：首次访问时惰性初始化的全局量。
 ///
-/// 单线程 + GIL 后端：Java 代码与运行时手写层只在持有 GIL 时执行（GIL 启用前进程只有
-/// 主线程），任一时刻至多一个线程访问单元内容，`Sync` 由此成立。并行后端：`OnceLock`
-/// 惰性初始化，内容自身为线程安全单元（原子 / 读写锁），`Sync` 由类型系统保证。
+/// `OnceLock` 惰性初始化，内容自身为线程安全单元（原子 / 读写锁），`Sync` 由类型系统保证。
 pub struct __GilStatic<T> {
     init: fn() -> T,
-    #[cfg(not(feature = "mt"))]
-    cell: std::cell::OnceCell<T>,
-    #[cfg(feature = "mt")]
     cell: std::sync::OnceLock<T>,
 }
 
-#[cfg(not(feature = "mt"))]
-unsafe impl<T> Sync for __GilStatic<T> {}
-
 impl<T> __GilStatic<T> {
     pub const fn new(init: fn() -> T) -> Self {
-        #[cfg(not(feature = "mt"))]
-        return __GilStatic { init, cell: std::cell::OnceCell::new() };
-        #[cfg(feature = "mt")]
-        return __GilStatic { init, cell: std::sync::OnceLock::new() };
+        __GilStatic { init, cell: std::sync::OnceLock::new() }
     }
 
     #[inline]
@@ -299,16 +219,6 @@ impl<T> __GilStatic<T> {
     }
 }
 
-#[cfg(not(feature = "mt"))]
-impl<T: Copy> __GilStatic<__PrimCell<T>> {
-    #[inline]
-    pub fn get(&'static self) -> T { self.with(|c| c.get()) }
-    #[inline]
-    pub fn set(&'static self, v: T) { self.with(|c| c.set(v)) }
-    #[inline]
-    pub fn replace(&'static self, v: T) -> T { self.with(|c| c.replace(v)) }
-}
-#[cfg(feature = "mt")]
 impl<T: __AtomicRepr> __GilStatic<__PrimCell<T>> {
     #[inline]
     pub fn get(&'static self) -> T { self.with(|c| c.get()) }

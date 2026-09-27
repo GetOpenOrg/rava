@@ -73,7 +73,7 @@ TIMED_WAITING，`fed7032`）。`availableProcessors` 返回真实核数（FS-T3�
 | 2 | 并行后端 feature `mt`：Arc、`AtomicU64` 位单元（SeqCst，`__cas` / `__fetch_update`）、parking_lot `RwLock` 引用槽、`OnceLock` 进程静态 | 🔄 编译错误 3169 → 408（余为泛型形参 / 祖先转换形参缺 `Send + Sync` 约束，`1ba3351` 已补，mtchk2 复核） |
 | 3 | 类初始化 JVMS §5.5 协议 | ✅ 随第一档实施（`gil.rs` clinit_enter / clinit_exit，两档共用） |
 | 4 | 线程 / 时间 / park / 中断 | ✅ 随第一档实施（与后端无关） |
-| 5 | `mt` 通过全量 e2e 后设为默认，删除 GIL | ⬜ `JAVA_RTA_MT=1` 切换脚本已就绪（`6e1cd73`） |
+| 5 | `mt` 设为默认，删除 GIL | ✅ 2026-09-27：并行后端为唯一后端（`mt` feature 与单线程 + GIL 分支删除，`JAVA_RTA_MT` 无作用）；全量回归由用户侧测试滚动覆盖，不作阻塞 |
 
 
 **第 1 步：抽象层（行为零变化，已完成）。** 运行时新增 `sync_model` 模块，定义对象模型原语的类型
