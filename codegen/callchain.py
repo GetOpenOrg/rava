@@ -405,6 +405,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     _reflect_seen: set = set()
     REFLECT_CONSTS.clear()
     REFLECT_FIELD_NAMES.clear()
+    REFLECT_ALL_MEMBERS.clear()
 
     def enqueue_refs(instrs, exception_table=()):
         (method_refs, f_classes, member_refs, boundary_refs, new_classes,
@@ -1022,6 +1023,36 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 for m in hits:
                     _enqueue_method((cls, m.name, m.descriptor))
 
+        # jlink 预生成类种子（N11）：运行时镜像独有的类（jmod 中不存在，JDK 运行期按类名
+        # 加载——BootLoader.loadClassOrNull 取物种类，取不到才 ASM 现场生成）。原生二进制
+        # 类宇宙生成期定死（GraalVM 同构）：父类已在闭包内的镜像独有类整体入闭包——登记
+        # 实例化、全部方法入队、全量反射面（方法 + 字段臂）。按「镜像独有 × 父类在闭包」
+        # 结构判定，不涉类名（原则 4）。
+        _image_seeded: set[str] = set()
+
+        def _seed_image_subclasses() -> bool:
+            _only = getattr(resolver, 'image_only_classes', None)
+            if _only is None:
+                return False
+            added = False
+            for _x in sorted(_only()):
+                if _x in _image_seeded:
+                    continue
+                _xci = _load_class(_x)
+                if _xci is None or _xci.is_interface:
+                    continue
+                _sup = _xci.super_class
+                if not _sup or _sup == _OBJECT_CLASS or _sup not in jdk_infos:
+                    continue
+                _image_seeded.add(_x)
+                instantiated_classes.add(_x)
+                REFLECT_ALL_MEMBERS.add(_x)
+                for _m in _xci.methods:
+                    REFLECT_CONSTS.setdefault(_x, set()).add(_m.name)
+                    _enqueue_method((_x, _m.name, _m.descriptor))
+                added = True
+            return added
+
         # 不动点：排空队列 → 传播虚调用目标 → 有新方法则继续
         while True:
             while queue:
@@ -1040,6 +1071,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 _seed_data_bundles()
             if (not queue and any(t in seen_members for t in _JCA_MANIFEST.triggers)):
                 _seed_jca_services()
+            if not queue:
+                _seed_image_subclasses()
             if not queue:
                 break
 
@@ -1302,6 +1335,9 @@ REFLECT_CONSTS: dict[str, set[str]] = {}
 #（ClassSpecializer 的 sdFieldName "BMH_SPECIES" 经构造实参传入、再对运行期 species 类
 # getDeclaredField——无类常量配对，只能按「字符串常量 ∩ 生成类静态字段名」发射字段臂）
 REFLECT_FIELD_NAMES: set[str] = set()
+# 全量反射面的类（方法臂 + 字段臂全发射）：运行时镜像独有、按类名加载的 jlink 预生成类
+#（BoundMethodHandle 物种类：构造器 / make / argL* getter 经 Lookup 按名解析）
+REFLECT_ALL_MEMBERS: set[str] = set()
 
 # 类常量之后在该窗口内出现的首个字符串常量视为成员名（javac 对
 # `find*(C.class, "name", MethodType.methodType(...))` 的发射：两常量相邻）。

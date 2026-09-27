@@ -235,7 +235,93 @@ class JdkResolver:
             except KeyError:
                 continue
 
-        return None
+        return self._resolve_from_image(binary_name)
+
+    # ── 运行时镜像（lib/modules）回落：jlink 链接期生成的类 ─────────────────────
+    #
+    # jlink 插件（generate-jli-classes 等）在链接期把预生成类写进运行时镜像，jmod 中不存在：
+    # BoundMethodHandle 的物种类、SystemModules$*。JDK 运行期按类名加载它们
+    # （BootLoader.loadClassOrNull），取不到才回落 ASM 现场生成。原生二进制的类宇宙在生成期
+    # 静态确定（GraalVM native-image 同构），故解析器把这些类视为 JDK 的一部分：jmod 未命中时
+    # 经 `jimage extract` 一次性提取到缓存目录后按名读取。jimage 缺席（非标准 JDK 布局）→ 空集。
+
+    def _jimage_tool(self) -> Optional[Path]:
+        tool = self._home / 'bin' / ('jimage.exe' if os.name == 'nt' else 'jimage')
+        image = self._home / 'lib' / 'modules'
+        return tool if tool.exists() and image.exists() else None
+
+    def image_only_classes(self) -> frozenset:
+        """运行时镜像中存在、jmod 中不存在的类（binary name）——jlink 生成物。"""
+        cached = getattr(self, '_image_only', None)
+        if cached is not None:
+            return cached
+        self._image_only = frozenset()
+        self._image_modules = {}
+        tool = self._jimage_tool()
+        if tool is None:
+            return self._image_only
+        try:
+            out = subprocess.run([str(tool), 'list', str(self._home / 'lib' / 'modules')],
+                                 capture_output=True, text=True, timeout=120).stdout
+        except (OSError, subprocess.SubprocessError):
+            return self._image_only
+        image: dict[str, str] = {}
+        module = ''
+        for ln in out.splitlines():
+            t = ln.strip()
+            if t.startswith('Module: '):
+                module = t[len('Module: '):]
+            elif t.endswith('.class') and module and not t.startswith(('META-INF/', 'module-info')):
+                image[t[:-len('.class')]] = module
+        in_jmods: set[str] = set()
+        for jmod in self._available_jmods():
+            zf = self._open_jmod(jmod)
+            if zf is None:
+                continue
+            in_jmods.update(n[len('classes/'):-len('.class')] for n in zf.namelist()
+                            if n.startswith('classes/') and n.endswith('.class'))
+        if not in_jmods:
+            # 无 jmod 的 JDK 布局：镜像即唯一来源，不区分「镜像独有」
+            return self._image_only
+        self._image_modules = image
+        self._image_only = frozenset(n for n in image if n not in in_jmods)
+        return self._image_only
+
+    def _image_cache_dir(self) -> Path:
+        import hashlib
+        image = self._home / 'lib' / 'modules'
+        st = image.stat()
+        key = f'{self._home.resolve()}:{st.st_mtime_ns}:{st.st_size}'
+        digest = hashlib.sha1(key.encode()).hexdigest()[:16]
+        base = Path(os.environ.get('XDG_CACHE_HOME') or (Path.home() / '.cache'))
+        return base / 'java_rta' / 'jimage' / digest
+
+    def _resolve_from_image(self, binary_name: str) -> Optional[bytes]:
+        if binary_name not in self.image_only_classes():
+            return None
+        module = self._image_modules.get(binary_name)
+        cache = self._image_cache_dir()
+        path = cache / module / (binary_name + '.class')
+        if not path.exists():
+            tool = self._jimage_tool()
+            if tool is None:
+                return None
+            cache.mkdir(parents=True, exist_ok=True)
+            # 一次提取全部镜像独有类（数量级十余个），后续按名直读
+            import re as _re
+            pattern = 'regex:' + '|'.join(
+                _re.escape('/' + self._image_modules[n] + '/' + n + '.class')
+                for n in sorted(self.image_only_classes()))
+            try:
+                subprocess.run([str(tool), 'extract', '--dir', str(cache), '--include', pattern,
+                                str(self._home / 'lib' / 'modules')],
+                               capture_output=True, timeout=300, check=False)
+            except (OSError, subprocess.SubprocessError):
+                return None
+        try:
+            return path.read_bytes()
+        except OSError:
+            return None
 
     def is_jdk_class(self, binary_name: str) -> bool:
         """判断 binary_name 是否属于 JDK 内置类（无需解析字节码判断）。"""

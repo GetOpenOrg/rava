@@ -377,11 +377,12 @@ def synthesize(emissions: dict, registry: dict, user_bins: 'set[str]',
             continue
         # 调用链字符串常量命名的静态字段（按名反射 / Unsafe staticFieldBase+Offset 访问面，
         # 见 callchain.REFLECT_FIELD_NAMES）与序列化协议字段同一通道发射
-        from ..callchain import REFLECT_FIELD_NAMES as _rf_names
+        from ..callchain import REFLECT_FIELD_NAMES as _rf_names, REFLECT_ALL_MEMBERS as _rf_all
         _named_static = {f.name for f in (registry[bin_name].fields or [])
                          if f.is_static and f.name in _rf_names}
-        _only = set(_SERIAL_PROTOCOL_FIELDS) | _named_static
-        if not any(f'name = "{n}"' in em.text for n in _only):
+        # 全量反射面的类（jlink 预生成物种类：argL* getter 经 Lookup.findGetter 按名解析）
+        _only = None if bin_name in _rf_all else (set(_SERIAL_PROTOCOL_FIELDS) | _named_static)
+        if _only is not None and not any(f'name = "{n}"' in em.text for n in _only):
             continue
         from ..type_map import short_cls
         ftext = _emit_fields_for(bin_name, short_cls(bin_name), em, only=_only)
