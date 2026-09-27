@@ -357,10 +357,7 @@ impl Class {
     /// native `getRawAnnotations()`：类级 RuntimeVisibleAnnotations 原始属性体（FS-R R4b，
     /// HotSpot 同源：class 文件属性字节）；无注解 → null。消费方：Class.createAnnotationData →
     /// AnnotationParser.parseAnnotations（字节码翻译）。
-    ///
-    /// upcalls：JavaLangAccess 注解族转发的 Class 包私有目标（AnnotationType 缓存 CAS /
-    /// 读取、declaredAnnotations），BFS 在 JavaLangAccess 接口截断看不见这些边。
-    #[jvm_native(upcalls = "java/lang/Class.casAnnotationType:(Lsun/reflect/annotation/AnnotationType;Lsun/reflect/annotation/AnnotationType;)Z java/lang/Class.getAnnotationType:()Lsun/reflect/annotation/AnnotationType; java/lang/Class.getDeclaredAnnotationMap:()Ljava/util/Map;")]
+    #[jvm_native]
     pub fn getRawAnnotations(&self) -> Result<JArray<i8>> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         Ok(__anno_bytes(crate::anno_pool::class_annotations(&cls_key)))

@@ -210,25 +210,34 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// 在此还原：coder = 各部 coder 按位或，长度以 char 计后 `<< coder` 折算字节，
     /// 分段写入（Latin1 段写入 UTF16 目标时按 getBytes 展宽），溢出抛
     /// OutOfMemoryError（与 JDK 一致）。
-    // ── 注解族（FS-R R4b）：JDK System$2 同名转发到 Class 的包私有方法 ──────────────
-    // 入链种子挂在 Class.getRawAnnotations（native，只有注解流程触达）上。
+    // ── 注解族（FS-R R4b）：JDK System$2 转发到 Class 的包私有方法；此处直接按其方法体
+    //   操作 Class 字段（annotationType 缓存 / annotationData().declaredAnnotations），与 JDK
+    //   逐句同义，且不依赖 VM 边界类 Class 的包私有方法入链。
 
     fn getConstantPool(&self, klass: Class) -> Result<crate::jdk::internal::reflect::ConstantPool> {
         klass.getConstantPool()
     }
 
+    /// `Class.casAnnotationType(old, new)`：`Atomic.casAnnotationType`（CAS 语义，身份比较）。
     fn casAnnotationType(&self, klass: Class,
                          old_type: crate::sun::reflect::annotation::AnnotationType,
                          new_type: crate::sun::reflect::annotation::AnnotationType) -> Result<bool> {
-        klass.casAnnotationType(old_type, new_type)
+        let _guard = MonitorGuard::acquire(&Object::from(Clone::clone(&klass)))?;
+        if Object::from(klass.__get_annotationType()) != Object::from(old_type) {
+            return Ok(false);
+        }
+        klass.__set_annotationType(new_type);
+        Ok(true)
     }
 
+    /// `Class.getAnnotationType()`：`return annotationType;`
     fn getAnnotationType(&self, klass: Class) -> Result<crate::sun::reflect::annotation::AnnotationType> {
-        klass.getAnnotationType()
+        Ok(klass.__get_annotationType())
     }
 
+    /// `Class.getDeclaredAnnotationMap()`：`return annotationData().declaredAnnotations;`
     fn getDeclaredAnnotationMap(&self, klass: Class) -> Result<crate::java::util::Map<Object, Object>> {
-        Ok(From::from(Object::from(klass.getDeclaredAnnotationMap()?)))
+        Ok(From::from(Object::from(klass.annotationData()?.__get_declaredAnnotations())))
     }
 
     fn getRawClassAnnotations(&self, klass: Class) -> Result<JArray<i8>> {
