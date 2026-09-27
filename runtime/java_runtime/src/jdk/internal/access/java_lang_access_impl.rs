@@ -235,9 +235,10 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
         Ok(klass.__get_annotationType())
     }
 
-    /// `Class.getDeclaredAnnotationMap()`：`return annotationData().declaredAnnotations;`
+    /// `Class.getDeclaredAnnotationMap()`（该方法在注解解析入口触达时经 annotation_seeds.txt
+    /// 的 seed 行入链翻译；本 impl 对全部闭包编译，只引用签名恒在的 Class 方法）。
     fn getDeclaredAnnotationMap(&self, klass: Class) -> Result<crate::java::util::Map<Object, Object>> {
-        Ok(From::from(Object::from(klass.annotationData()?.__get_declaredAnnotations())))
+        Ok(From::from(Object::from(klass.getDeclaredAnnotationMap()?)))
     }
 
     fn getRawClassAnnotations(&self, klass: Class) -> Result<JArray<i8>> {

@@ -150,6 +150,10 @@ ANNOTATION_ENUM_SEEDS: list[str] = []
 _ANNO_TRIGGERS: frozenset = frozenset(
     tuple(ln.split(None, 1)[1].rsplit('.', 1))
     for ln in read_list('annotation_seeds.txt') if ln.startswith('trigger '))
+# 注解种子一并入链的成员（annotation_seeds.txt `seed <类>.<成员>:<描述符>`）
+_ANNO_SEED_MEMBERS: tuple = tuple(
+    (lambda o, d: (o.rsplit('.', 1)[0], o.rsplit('.', 1)[1], d))(*ln.split(None, 1)[1].split(':', 1))
+    for ln in read_list('annotation_seeds.txt') if ln.startswith('seed '))
 
 # 本轮入选的 JCA 服务（jca_services.Service，已排序）：emitter 在生成 main 中登记构造闭包
 #（runtime `jca::register_services`）。每轮 BFS 起始清空。
@@ -1190,6 +1194,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     _anno_value_types(_t, _v, enums, types, annos)
 
         def _seed_annotation_types() -> bool:
+            for _sm in _ANNO_SEED_MEMBERS:
+                _enqueue_method(_sm)
             _pending: list = []
             def _collect(ci) -> None:
                 for _a in (ci.runtime_annotations or []):

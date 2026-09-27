@@ -5,6 +5,8 @@
 # 传递收集这些类型入闭包：注解类型的方法入链（方法表 = 元素面），枚举元素类型的 <clinit>
 # 入链并登记类初始化钩子（Enum.valueOf → 常量目录）。原则 4：类名只在本清单出现。
 #
-# 格式：trigger <类>.<成员>
+# 格式：trigger <类>.<成员>          触发成员
+#       seed    <类>.<成员>:<描述符>  触发后一并入链的成员（手写层经其转发、无字节码调用边）
 trigger java/lang/Class.getRawAnnotations
 trigger jdk/internal/access/JavaLangAccess.getConstantPool
+seed java/lang/Class.getDeclaredAnnotationMap:()Ljava/util/Map;
