@@ -21,7 +21,10 @@ impl Object {
     /// instanceof 运行时检查：委托给 ObjectVTable::is_instance_of（Arch-2）
     #[jvm_ext]
     pub fn is_instance_of(&self, type_id: &str) -> bool {
-        self.0.is_instance_of(type_id)
+        // JVMS instanceof：null 恒 false。null 引用以「类型化空载体」形态存在（`Object::from(
+        // <null String>)` 保留 String 载体），其 vtable 的类型判定不看空性，须在此先判空
+        //（`"true".equals(null)` → String.equals 的 instanceof 分支误入 → NPE）。
+        !self.0.is_jvm_null() && self.0.is_instance_of(type_id)
     }
 
     /// 从 Object 中取出 T（JVM checkcast/downcasting），类型不符则 panic（ClassCastException）
