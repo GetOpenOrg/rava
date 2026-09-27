@@ -15,7 +15,7 @@ fn join(parts: Vec<std::string::String>) -> String {
     String::from(format!("{{{}}}", parts.join(", ")).as_str())
 }
 
-fn each<T: Clone + Default + 'static>(arr: &JArray<T>, mut f: impl FnMut(T) -> Result<std::string::String>)
+fn each<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe>(arr: &JArray<T>, mut f: impl FnMut(T) -> Result<std::string::String>)
     -> Result<Vec<std::string::String>> {
     let mut out = Vec::new();
     for i in 0..arr.len()? {
