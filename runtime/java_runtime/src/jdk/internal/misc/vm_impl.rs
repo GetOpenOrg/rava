@@ -35,23 +35,17 @@ impl VM {
         Ok(String::default())
     }
 
-    /// `setJavaLangInvokeInited()` / `isJavaLangInvokeInited()`：java.lang.invoke
-    /// 初始化完成标记（MethodHandleNatives.<clinit> 尾声置位；读者用它区分
-    /// 「引导早期」与「机制就绪」）。原生二进制的引导顺序由 BFS 闭包静态
-    /// 决定，标记照 JDK 语义置位/查询（线程内）。
+    /// `setJavaLangInvokeInited()` / `isJavaLangInvokeInited()`：java.lang.invoke 初始化完成标记。
+    /// HotSpot 在 create_vm 期间即初始化 JSR 292 核心类（initialize_jsr292_core_classes：
+    /// MethodHandle / MemberName / MethodHandleNatives …，后者 <clinit> 尾声置位），用户代码运行时
+    /// 恒已置位。原生二进制进入 main 前处于同一「引导完成」档位（同 isModuleSystemInited）：
+    /// 查询恒真，置位为 no-op。消费方：MethodHandleAccessorFactory（反射访问器，FS-R R2a）。
     pub fn setJavaLangInvokeInited() -> Result<()> {
-        crate::__process_static! {
-            static INVOKE_INITED: crate::sync_model::__PrimCell<bool> = const { crate::sync_model::__PrimCell::new(false) };
-        }
-        INVOKE_INITED.with(|f| f.set(true));
         Ok(())
     }
 
     pub fn isJavaLangInvokeInited() -> Result<bool> {
-        crate::__process_static! {
-            static INVOKE_INITED: crate::sync_model::__PrimCell<bool> = const { crate::sync_model::__PrimCell::new(false) };
-        }
-        Ok(INVOKE_INITED.with(|f| f.get()))
+        Ok(true)
     }
 
     /// `VM.isModuleSystemInited()`：模块系统初始化完成标记。原生二进制的
