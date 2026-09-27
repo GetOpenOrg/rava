@@ -471,6 +471,15 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
     # 槽位（E0407），wrapper 的 UFCS 分派 `Trait::member` 随之把 trait 名解析到
     # 类型位（E0782 级联）。与 _member_declaration 的 vt_bin 解析（method.virtual_in
     # 沿 anc_args 定位）同一语义，此处按 registry 链迭代到不动点。
+    # 协变桥按桥的完整描述符定位槽位：按参数匹配会命中中间祖先的协变声明（BMH 的
+    # copyWith()BoundMethodHandle）——那是本类真实覆盖已填的槽位，桥再填即 E0201。
+    def _find_slot(em):
+        if covariant:
+            return next((m for m in em.methods
+                         if m.name == name and getattr(m, 'descriptor', '') == bridge.descriptor),
+                        None)
+        return em.find(name, param_desc)
+
     vt_short = ''
     member_name = ''
     slot_bin = ''
@@ -480,7 +489,7 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
         seen.add(cur)
         anc_em = emissions.get(cur)
         if anc_em is not None and not anc_em.handwritten:
-            found = anc_em.find(name, param_desc)
+            found = _find_slot(anc_em)
             if found is not None:
                 slot_cur, slot_m = cur, found
                 while slot_m.virtual_in and slot_m.virtual_in != short_cls(slot_cur):
@@ -496,7 +505,7 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
                     if nxt is None:
                         break
                     up_em = emissions.get(nxt)
-                    up_found = (up_em.find(name, param_desc)
+                    up_found = (_find_slot(up_em)
                                 if up_em is not None and not up_em.handwritten else None)
                     if up_found is None:
                         break  # 根声明者不可读（手写 / 未生成）→ 维持最近声明者归属
