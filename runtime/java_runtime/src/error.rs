@@ -210,7 +210,7 @@ impl JvmError {
             for _ in 0..16 {
                 let next = cur.__get_cause();
                 let next_obj = Object::from(Clone::clone(&next));
-                if next_obj.is_jvm_null() || next_obj == Object::from(Clone::clone(&cur)) {
+                if next_obj.0.is_jvm_null() || next_obj == Object::from(Clone::clone(&cur)) {
                     break;
                 }
                 eprintln!("Caused by: {}", JvmError::from(Clone::clone(&next)).describe());
