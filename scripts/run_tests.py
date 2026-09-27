@@ -88,7 +88,7 @@ RUN_TIMEOUT = 300
 # 转译段（main.py：javap 全闭包 + 代码生成）超时（秒）
 TRANSPILE_TIMEOUT = 600
 # 构建段（cargo build 单测试 crate）超时（秒）
-BUILD_TIMEOUT = 600
+BUILD_TIMEOUT = int(os.environ.get("JAVA_RTA_BUILD_TIMEOUT", "600"))   # 低内存单作业编译可调大
 # 期望生成（--update-expected）的 java 参照运行超时（秒）：golden 语料应为秒级程序，
 # 120 足够且让挂起类用例快速出列
 EXPECTED_GEN_TIMEOUT = 120
