@@ -1543,7 +1543,13 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset(),
                     desc = rest[colon+1:]
                     if '[' not in cls:
                         member_refs.append((cls, meth))
-                    if _is_boundary_class(cls) and '[' not in cls:
+                    if (_is_boundary_class(cls) and '[' not in cls
+                            and meth.startswith('lambda$') and cls.startswith(_JDK_PREFIXES)):
+                        # 边界类自身被翻译的方法体里的 lambda（javac 合成体 `lambda$m$n`，与 indy 点
+                        # 同类，如 Class.methodToString）：合成体是该方法体的一部分，随之入链
+                        field_classes.append(cls)
+                        method_refs.append((cls, meth, desc))
+                    elif _is_boundary_class(cls) and '[' not in cls:
                         field_classes.append(cls)
                     elif (cls.startswith(_JDK_PREFIXES)
                           or cls.startswith(extra_prefixes)) and '[' not in cls:
