@@ -185,9 +185,23 @@ def _forward_body(method: EmittedMethod, owner_bin: str, owner_args: list[str]) 
         turbo = ', '.join([*owner_args, 'Self'])
         call = f"self, {', '.join(args)}" if args else 'self'
         return f"{owner_short}__{method.rust_name}_base::<{turbo}>({call})"
-    hook_trait = f"{owner_short}__VTable" + (f"<{', '.join(owner_args)}>" if owner_args else '')
-    return (f"<Self as {hook_trait}>::__as_{owner_short}(self)"
+    # VTable trait 不带类型参数；钩子返回擦除视图 `Owner<Object, …>`。泛型 owner 的
+    # 实参 / 返回因此在「本类代入视角」与「擦除视角」之间经 Object 往返转换
+    # （与字节码体中 checkcast 的 From/Into 同口径；基本类型不涉泛型、原样传递）。
+    if owner_args:
+        ptypes, ret = _sig_param_types(method.signature)
+        args = [a if ty in _RUST_PRIMS else f"From::from(Into::<Object>::into({a}))"
+                for a, ty in zip(args, ptypes)] + args[len(ptypes):]
+    call = (f"<Self as {owner_short}__VTable>::__as_{owner_short}(self)"
             f".__impl_{method.rust_name}({', '.join(args)})")
+    if owner_args:
+        inner = _result_inner(ret)
+        if inner and inner not in _RUST_PRIMS and inner != '()':
+            call += ".map(|__r| From::from(Into::<Object>::into(__r)))"
+    return call
+
+
+_RUST_PRIMS = frozenset({'i8', 'i16', 'i32', 'i64', 'f32', 'f64', 'bool', 'u16', 'char', '()'})
 
 
 def _sig_param_types(signature: str) -> 'tuple[list[str], str]':
