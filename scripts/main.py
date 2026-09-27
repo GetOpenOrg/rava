@@ -105,6 +105,31 @@ def _copy_if_changed(src: str, dst: str) -> None:
             _copy_fresh(src_file, dst_file)
 
 
+def _prune_stale_handwritten(rt_src: str, dst_src: str) -> None:
+    """删除 runtime/ 已移除的手写文件在 scratch 中的残留。
+
+    overlay 只增改不删：手写文件从 runtime/ 删除（越界覆盖回到字节码）后，scratch 旧副本
+    继续被 codegen 当作手写实现扫描并编译——覆盖不消失（FS-R R2b 的 ReflectionFactory 伴生）。
+    手写文件的识别与 codegen 同口径：无 `java_rta_macros::java_class` 生成标记；生成的包
+    `mod.rs` 同样无标记，按文件名排除（每轮由 codegen 重写）。"""
+    for root, _dirs, files in os.walk(dst_src):
+        rel_root = os.path.relpath(root, dst_src)
+        for fname in files:
+            if not fname.endswith('.rs') or fname == 'mod.rs':
+                continue
+            rel = os.path.normpath(os.path.join(rel_root, fname))
+            if os.path.exists(os.path.join(rt_src, rel)):
+                continue
+            path = os.path.join(root, fname)
+            try:
+                with open(path, encoding='utf-8', errors='replace') as f:
+                    if 'java_rta_macros::java_class' in f.read():
+                        continue
+            except OSError:
+                continue
+            os.remove(path)
+
+
 def prepare_scratch(out_dir: str, clean: bool = False) -> None:
     """将 runtime/ 手写代码 overlay 进 scratch 工作区。
 
@@ -127,6 +152,7 @@ def prepare_scratch(out_dir: str, clean: bool = False) -> None:
     rt_src = os.path.join(RUNTIME_JAVA_RUNTIME, 'src')
     dst_src = os.path.join(out_dir, 'java_runtime', 'src')
     _copy_if_changed(rt_src, dst_src)
+    _prune_stale_handwritten(rt_src, dst_src)
 
     _copy_if_changed_file(os.path.join(RUNTIME_JAVA_RUNTIME, 'build.rs'),
                           os.path.join(out_dir, 'java_runtime', 'build.rs'))
