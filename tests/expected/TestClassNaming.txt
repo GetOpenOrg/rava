@@ -1,0 +1,31 @@
+TestClassNaming | simple=TestClassNaming | pkg= | member=false local=false anon=false record=false | desc=LTestClassNaming;
+  declaring=null enclosing=null
+TestClassNaming$Member | simple=Member | pkg= | member=true local=false anon=false record=false | desc=LTestClassNaming$Member;
+  declaring=TestClassNaming enclosing=TestClassNaming
+TestClassNaming$Inner | simple=Inner | pkg= | member=true local=false anon=false record=false | desc=LTestClassNaming$Inner;
+  declaring=TestClassNaming enclosing=TestClassNaming
+TestClassNaming$Point | simple=Point | pkg= | member=true local=false anon=false record=true | desc=LTestClassNaming$Point;
+  declaring=TestClassNaming enclosing=TestClassNaming
+TestClassNaming$Shape | simple=Shape | pkg= | member=true local=false anon=false record=false | desc=LTestClassNaming$Shape;
+  declaring=TestClassNaming enclosing=TestClassNaming
+TestClassNaming$Color | simple=Color | pkg= | member=true local=false anon=false record=false | desc=LTestClassNaming$Color;
+  declaring=TestClassNaming enclosing=TestClassNaming
+TestClassNaming$1Local | simple=Local | pkg= | member=false local=true anon=false record=false | desc=LTestClassNaming$1Local;
+  declaring=null enclosing=TestClassNaming
+TestClassNaming$1 | simple= | pkg= | member=false local=false anon=true record=false | desc=LTestClassNaming$1;
+  declaring=null enclosing=TestClassNaming
+int | simple=int | pkg=java.lang | member=false local=false anon=false record=false | desc=I
+  declaring=null enclosing=null
+[Ljava.lang.String; | simple=String[] | pkg=java.lang | member=false local=false anon=false record=false | desc=[Ljava/lang/String;
+  declaring=null enclosing=null
+[[I | simple=int[][] | pkg=java.lang | member=false local=false anon=false record=false | desc=[[I
+  declaring=null enclosing=null
+[LTestClassNaming$Member; | simple=Member[] | pkg= | member=false local=false anon=false record=false | desc=[LTestClassNaming$Member;
+  declaring=null enclosing=null
+java.lang.String | simple=String | pkg=java.lang | member=false local=false anon=false record=false | desc=Ljava/lang/String;
+  declaring=null enclosing=null
+java.util.Map$Entry | simple=Entry | pkg=java.util | member=true local=false anon=false record=false | desc=Ljava/util/Map$Entry;
+  declaring=java.util.Map enclosing=java.util.Map
+cast=text
+CCE Cannot cast java.lang.String to java.lang.Integer
+castNull=null
