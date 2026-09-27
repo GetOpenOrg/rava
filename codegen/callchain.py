@@ -404,6 +404,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
     _pending_reflect_consts: list = []
     _reflect_seen: set = set()
+    # 巢内拼接名前缀（{顶层类: {前缀}}）：名字常量经方法返回再拼接（ArrayAccess.opName()
+    # "getElement" + basicTypeChar → ArrayAccessor.getElementL），常量与目标方法同巢异类
+    _nest_prefixes: dict[str, set[str]] = {}
+    _nest_prefix_done: set = set()
     REFLECT_CONSTS.clear()
     REFLECT_FIELD_NAMES.clear()
     REFLECT_ALL_MEMBERS.clear()
@@ -746,6 +750,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                             REFLECT_FIELD_NAMES.add(_nm)
                         if _nm in _own and _nm != meth:
                             _pending_reflect_consts.append((cls, _nm))
+                        if len(_nm) >= 5 and _nm.isidentifier():
+                            _nest_prefixes.setdefault(cls.split('$', 1)[0], set()).add(_nm)
                         # 拼接名的构建器形态（java.base 以 StringBuilder 链编译拼接，非 indy）：
                         # 名字常量紧随「宿主类型上的流式追加」`Owner.m:(String)LOwner;`——
                         # 常量是拼接前缀，本类以其起名的方法全部登记（同下方 indy 形态）
@@ -1028,6 +1034,26 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                       f"({', '.join(f'{x.type}.{x.algorithm}' for x in JCA_SEEDS)})", flush=True)
             return bool(_new)
 
+        def _drain_nest_prefixes() -> None:
+            """巢内拼接名前缀 → 同巢已入闭包类中以前缀 + 驼峰词界起名的方法入反射面
+            （前缀后首字符大写：getElement → getElementL / getElementI；不跨巢，不涉类名）。"""
+            for _jc in list(jdk_infos.keys()):
+                _pres = _nest_prefixes.get(_jc.split('$', 1)[0])
+                if not _pres:
+                    continue
+                _jci = jdk_infos.get(_jc)
+                if _jci is None:
+                    continue
+                for _pre in sorted(_pres):
+                    if (_jc, _pre) in _nest_prefix_done:
+                        continue
+                    _nest_prefix_done.add((_jc, _pre))
+                    for _jm in _jci.methods:
+                        _n = _jm.name
+                        if (_n.startswith(_pre) and len(_n) > len(_pre)
+                                and _n[len(_pre)].isupper()):
+                            _pending_reflect_consts.append((_jc, _n))
+
         def _drain_reflect_consts() -> None:
             """常量反射引用 → 被指名方法（全部同名重载）入链并登记分派发射面。
             用户类全量翻译、分派全量发射，只需 JDK / 库类。边界类（`findStatic(ByteArray.class,
@@ -1095,6 +1121,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             while queue:
                 _process(*queue.popleft())
             _drain_boundary_refs()
+            _drain_nest_prefixes()
             _drain_reflect_consts()
             if queue:
                 continue
