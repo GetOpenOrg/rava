@@ -40,6 +40,11 @@ struct CovariantView {
     len: Rc<crate::__DynFn!(() -> i32)>,
     get: Rc<crate::__DynFn!((i32) -> crate::error::Result<Object>)>,
     set: Rc<crate::__DynFn!((i32, Object) -> crate::error::Result<()>)>,
+    /// 元素原子读-改-写：委托源数组的 `__update`，在源存储写锁内完成「读 → 判定 → 写」
+    /// （Unsafe / VarHandle 数组元素 CAS 经擦除协变视图到达：ForkJoinPool.WorkQueue 的
+    /// `ForkJoinTask[]`、ConcurrentHashMap 的 `Node[]`）。读后写两步在并行后端会丢更新 /
+    /// 重复取任务。
+    update: Rc<crate::__DynFn!((i32, &mut dyn FnMut(Object) -> Option<Object>) -> crate::error::Result<Object>)>,
 }
 
 /// aastore 存储检查（JLS §10.5 / JVMS §6.5 aastore）：值与源元素类型赋值兼容才能写入，
@@ -193,8 +198,8 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     }
 
     /// 元素的原子读-改-写（Unsafe / VarHandle 数组元素 CAS 族）：在元素存储的写锁内读出
-    /// `cur`，`f(cur)` 返回 `Some(new)` 时写入，返回 `cur`。协变视图（元素存储在底层数组、
-    /// 经转换闭包访问）退化为读后写。
+    /// `cur`，`f(cur)` 返回 `Some(new)` 时写入，返回 `cur`。协变视图经 `update` 闭包委托
+    /// 源数组的 `__update`，同样在源存储写锁内完成（并行后端原子）。
     pub fn __update(&self, i: i32, f: &mut dyn FnMut(T) -> Option<T>) -> crate::error::Result<T> {
         match &*self.0 {
             Repr::Own(cells, _) => {
@@ -208,12 +213,9 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
                 }
                 Ok(cur)
             }
-            Repr::Covariant(_) => {
-                let cur = self.get(i)?;
-                if let Some(n) = f(cur.clone()) {
-                    self.set(i, n)?;
-                }
-                Ok(cur)
+            Repr::Covariant(view) => {
+                let old = (view.update)(i, &mut |cur: Object| f(T::from(cur)).map(Into::into))?;
+                Ok(T::from(old))
             }
             Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
@@ -297,7 +299,8 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         match &*self.0 {
             Repr::Covariant(view) => Clone::clone(view),
             Repr::Own(..) => {
-                let (for_len, for_get, for_set) = (Clone::clone(self), Clone::clone(self), Clone::clone(self));
+                let (for_len, for_get, for_set, for_update) =
+                    (Clone::clone(self), Clone::clone(self), Clone::clone(self), Clone::clone(self));
                 // 存储检查的元素类型名：源元素类型的 null 探针经 vtable 取 binary name
                 //（名单与元素值无关，null 探针等价于任意元素）
                 let elem_name = Into::<Object>::into(T::default()).0.__class_name();
@@ -310,6 +313,23 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
                             return Err(crate::error::JvmError::array_store(v.0.__class_name()));
                         }
                         for_set.set(i, T::from(v))
+                    }),
+                    update: Rc::new(move |i, f| {
+                        // 存储检查在写锁内对候选新值执行（CAS 的新值同样是 aastore）；
+                        // 检查失败时不写入，错误在锁外抛出
+                        let mut store_err: Option<Object> = None;
+                        let old = for_update.__update(i, &mut |cur: T| {
+                            let n = f(cur.into())?;
+                            if !aastore_storable::<T>(&n, elem_name) {
+                                store_err = Some(n);
+                                return None;
+                            }
+                            Some(T::from(n))
+                        })?;
+                        if let Some(v) = store_err {
+                            return Err(crate::error::JvmError::array_store(v.0.__class_name()));
+                        }
+                        Ok(old.into())
                     }),
                 }
             }
@@ -596,14 +616,26 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
 /// 边界按 T 重建（wrapper 经擦除路径，保持运行时类），写入在源数组的协变视图闭包
 /// 做存储检查（ArrayStoreException）。对象标识与源数组相同。
 fn erased_object_view<T: 'static>(origin: Object) -> JArray<T> {
-    let (for_len, for_get, for_set) =
-        (Clone::clone(&origin), Clone::clone(&origin), Clone::clone(&origin));
+    let (for_len, for_get, for_set, for_update) =
+        (Clone::clone(&origin), Clone::clone(&origin), Clone::clone(&origin), Clone::clone(&origin));
     JArray(Rc::new(Repr::Covariant(CovariantView {
         len: Rc::new(move || {
             for_len.array_length().expect("covariant view of non-null array")
         }),
         get: Rc::new(move |i| for_get.array_load_object(i)),
         set: Rc::new(move |i, v| for_set.array_store_object(i, v)),
+        // 原子读-改-写：源数组的 Object 元素视图（`__view_into` → 源 Own 存储的协变视图，
+        // 其 update 在源存储写锁内完成）
+        update: Rc::new(move |i, f| {
+            let unused: crate::sync_model::__AnyRef = Rc::new(());
+            let mut slot: Option<JArray<Object>> = None;
+            for_update.0.__view_into(unused, &mut slot);
+            match slot {
+                Some(view) => view.__update(i, f),
+                None => Err(crate::error::JvmError::class_cast(format!(
+                    "{} 不是引用元素数组", for_update.0.__class_name()))),
+            }
+        }),
         origin,
     })))
 }
