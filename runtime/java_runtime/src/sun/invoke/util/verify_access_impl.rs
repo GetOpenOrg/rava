@@ -63,7 +63,7 @@ impl VerifyAccess {
     ///   - defc == lookupClass → 恒真（同类私有访问，含嵌套类共享）；
     ///   - public → isClassAccessible（未命名模块恒真）；
     ///   - protected → 同包 或 lookupClass 是 defc 的子类（层次表）；
-    ///   - private → 假（非同类，前面的 defc == lookupClass 已拦截同类形态）；
+    ///   - private → lookup 具 PRIVATE 模式且互为 nestmate（同顶层类的巢）；
     ///   - 包私有 → 同包（binary name 前缀）。
     /// prevLookupClass 恒 null（无跨模块 lookup），allowedModes == 0 已吊销。
     pub fn isMemberAccessible(_refc: Class, defc: Class, mods: i32, lookupClass: Class, _prevLookupClass: Class, allowedModes: i32) -> Result<bool> {
@@ -89,8 +89,11 @@ impl VerifyAccess {
             return defc.isAssignableFrom(Clone::clone(&lookupClass));
         }
         if mods & 0x0002 != 0 {
-            // private：非同类（同类已在前拦截）
-            return Ok(false);
+            // private：lookup 具 PRIVATE 模式且两类互为 nestmate（JDK 11+
+            // `Reflection.areNestMates`）。javac 的 NestHost 恒为最外层封闭类，
+            // 以 binary name 首个 `$` 前的顶层类名为巢主判定
+            let nest_host = |n: &str| n.split('$').next().unwrap_or(n).to_string();
+            return Ok(allowedModes & 0x0002 != 0 && nest_host(&defc_name) == nest_host(&lookup_name));
         }
         // 包私有：同包
         Ok(same_package)

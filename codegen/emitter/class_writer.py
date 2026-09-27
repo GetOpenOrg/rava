@@ -1002,8 +1002,16 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                                            if (b.access_flags & 0x0040) and not b.is_static
                                            and b.name == _vm.name
                                            and b.descriptor == _vm.descriptor), None)
+                # 祖先自身的桥（BoundMethodHandle.copyWith()MethodHandle）且本类无精确同描述符
+                # 声明：本类同参协变覆盖（ASM 预生成物种 Species_LLLL 无自身桥）只填中间祖先
+                # 槽位，桥承担的远祖槽位仍须登记（inherited_gen 祖先桥路径以本类覆盖重建）
+                _anc_bridge_slot = (
+                    _vm_bridge is None and not _vinh_is_user
+                    and bool(_vm.access_flags & 0x0040) and not _vm.is_static
+                    and not any(m.name == _vm.name and m.descriptor == _vm.descriptor
+                                for m in visible_methods))
                 if (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_existing \
-                        and (_vm_bridge is None
+                        and ((_vm_bridge is None and not _anc_bridge_slot)
                              or (_vm.name, _vinh_param_part(_vm.descriptor)) in _vinh_done):
                     continue
                 if _vm.is_static or _vm.is_constructor or _vm.name in ('<init>', '<clinit>'):
