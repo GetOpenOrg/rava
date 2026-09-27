@@ -35,6 +35,10 @@ impl<T: Into<Object>> From<T> for JvmError {
 
 /// VM 构造异常对象：构造器自身失败时，传播构造过程中抛出的异常（与 JVM 行为一致）。
 fn vm_throw<T: Into<Object>>(built: Result<T>) -> JvmError {
+    // 诊断开关：VM 抛出点（NPE / 越界 / CCE …）的 Rust 回溯（定位翻译体内的抛出位置）
+    if std::env::var_os("JAVA_RTA_THROW_BT").is_some() {
+        eprintln!("[vm-throw]\n{}", std::backtrace::Backtrace::force_capture());
+    }
     match built {
         Ok(exception) => JvmError { thrown: exception.into() },
         Err(nested) => nested,
