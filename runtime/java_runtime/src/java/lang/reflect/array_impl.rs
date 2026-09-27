@@ -44,4 +44,18 @@ impl Array {
         let component = format!("{}", componentType.__get_name()).replace('.', "/");
         Ok(Object::from(JArray::<Object>::__new_component_tagged(length, &component)))
     }
+
+    /// native `Array.getLength(Object)`：任意元素类型数组的长度（与 arraylength 同源，
+    /// 经 vtable 钩子 `__array_len`，与元素类型无关）。null → NPE；非数组 →
+    /// IllegalArgumentException("Argument is not an array")（HotSpot Reflection::array_get_length 同）。
+    #[jvm_native]
+    pub fn getLength(array: Object) -> Result<i32> {
+        if array.0.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        match array.0.__array_len() {
+            Some(len) => len,
+            None => Err(JvmError::illegal_argument("Argument is not an array")),
+        }
+    }
 }

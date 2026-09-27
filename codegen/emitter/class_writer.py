@@ -64,6 +64,48 @@ def _audit_override(ci, m) -> None:
     else:
         _ra.record_override(_member)
 
+def _handwritten_inherited_overrides(ci, registry, nf_entry, visible_methods) -> list:
+    """边界类手写覆盖继承虚方法：共置 `_impl.rs` 提供 `__impl_<m>`，而本类字节码未声明 m
+    （声明在祖先，常为 abstract；JDK 中实现位于平台子类，如 LinuxFileSystem 的
+    supportedFileAttributeViews，边界形态以基类承载）。
+
+    按祖先声明合成本类的覆盖声明（去 abstract），走 `handwritten_body` 路径进 vtable
+    ——否则槽位落回声明类 trait default（抽象 = stub panic），手写体永不可达。
+    仅限内部边界类（`java/` `javax/` 公开 API 的手写只许 native，FS-H0）；按名唯一
+    匹配（祖先链上同名非静态方法恰一个），重载歧义不合成。"""
+    if not nf_entry or ci.is_interface or not registry \
+            or ci.name.startswith(('java/', 'javax/')):
+        return []
+    declared = {m.name for m in visible_methods}
+    wanted = sorted(n[len('__impl_'):] for n in nf_entry.get('methods', set())
+                    if n.startswith('__impl_') and n[len('__impl_'):] not in declared)
+    if not wanted:
+        return []
+    import copy as _copy_hw
+    out = []
+    for name in wanted:
+        found = []
+        sup = ci.super_class
+        while sup and sup in registry:
+            sci = registry.get(sup)
+            if sci is None:
+                break
+            found += [m for m in sci.methods
+                      if m.name == name and not m.is_static and not m.is_synthetic
+                      and not (m.access_flags & 0x0002)]   # private 不参与覆盖
+            if found:
+                break
+            sup = sci.super_class
+        if len(found) != 1:
+            continue
+        m = _copy_hw.copy(found[0])
+        m.class_name = ci.name
+        m.is_abstract = False
+        m.access_flags &= ~0x0400
+        out.append(m)
+    return out
+
+
 def _adapt_interface_method(method, ci, iface_bin: str, views: dict):
     """接口方法体展开到实现类 ci：所属类换成 ci，泛型签名（方法 / 局部变量）里的接口类型变量
     换成 ci 视角下的类型实参。"""
@@ -1427,6 +1469,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
+    visible_methods += _handwritten_inherited_overrides(ci, registry, _nf_entry, visible_methods)
     # 重载判定在整条父类链上进行（与调用侧 _mangle_if_overloaded 共用同一函数），
     # 保证子类方法名不会按名字遮蔽父类的同名异参方法。
     overloaded_names: set[str] = hierarchy_overloaded_names(ci, registry)
