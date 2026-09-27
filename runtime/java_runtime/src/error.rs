@@ -204,6 +204,19 @@ impl JvmError {
     /// 线程 `thread` 的未捕获异常报告（不退出进程：JVM 中只终结该线程）。
     pub fn report_uncaught_in(&self, thread: &str) {
         eprintln!("Exception in thread \"{}\" {}", thread, self.describe());
+        // JVM printStackTrace 的 `Caused by:` 链（无栈帧行；cause == this 为未设置哨兵）
+        if self.is_instance_of("java/lang/Throwable") {
+            let mut cur: Throwable = self.catch_as::<Throwable>("java/lang/Throwable");
+            for _ in 0..16 {
+                let next = cur.__get_cause();
+                let next_obj = Object::from(Clone::clone(&next));
+                if next_obj.is_jvm_null() || next_obj == Object::from(Clone::clone(&cur)) {
+                    break;
+                }
+                eprintln!("Caused by: {}", JvmError::from(Clone::clone(&next)).describe());
+                cur = next;
+            }
+        }
         if std::env::var_os("JAVA_RTA_UNCAUGHT_BT").is_some() {
             eprintln!("{}", std::backtrace::Backtrace::force_capture());
         }

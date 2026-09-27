@@ -159,6 +159,13 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     loop {
         if let Some(f) = lookup(&cur) {
             if let Some(r) = f(name, descriptor, Clone::clone(&recv), args) {
+                // 目标方法体抛出（非分派臂实参 marshalling 失败）：登记为「目标抛出」，
+                // 供 AccessorUtils.isIllegalArgument 的栈帧判定（见 mark_target_thrown）
+                if let Err(e) = &r {
+                    if !BAD_ARG.with(|b| b.get()) {
+                        mark_target_thrown(e.thrown());
+                    }
+                }
                 return r;
             }
         }
@@ -417,4 +424,34 @@ pub fn static_field_of(offset: i64) -> Option<(std::string::String, std::string:
         return None;
     }
     STATIC_FIELD_BY_ID.with(|m| m.borrow().get(&offset).cloned())
+}
+
+// ── 反射目标抛出登记（栈帧判定的 VM 等价物）───────────────────────────────────
+// JDK 的 DirectMethodHandleAccessor / DirectConstructorHandleAccessor 捕获 ClassCastException /
+// NullPointerException / WrongMethodTypeException 后，经 AccessorUtils.isIllegalArgument 翻看
+// 异常栈帧：抛出点在访问器 / 句柄适配层（实参转换）→ IllegalArgumentException，在目标方法内 →
+// InvocationTargetException。原生二进制无 Java 栈帧；L3 分派是「进入目标方法」的唯一入口，
+// 在此登记从目标方法体逃逸的异常身份，判定按「是否经目标逃逸」等价应答。
+
+std::thread_local! {
+    /// 最近从反射目标逃逸的异常（身份比较；有界，嵌套反射足够）。
+    static TARGET_THROWN: std::cell::RefCell<Vec<Object>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn mark_target_thrown(e: &Object) {
+    TARGET_THROWN.with(|v| {
+        let mut v = v.borrow_mut();
+        if v.iter().any(|x| x == e) {
+            return;
+        }
+        if v.len() >= 8 {
+            v.remove(0);
+        }
+        v.push(Clone::clone(e));
+    });
+}
+
+/// 异常 `e` 是否从反射目标方法体逃逸（AccessorUtils.isIllegalArgument 的 VM 应答）。
+pub fn thrown_by_target(e: &Object) -> bool {
+    TARGET_THROWN.with(|v| v.borrow().iter().any(|x| x == e))
 }
