@@ -56,14 +56,24 @@ def fmt_dur(sec: float) -> str:
     return f"{int(m)}m{s:04.1f}s"
 
 
+def _copy_fresh(src: str, dst: str) -> None:
+    """内容变更的复制：mtime 取当前时间（不沿用源文件 mtime）。
+
+    沿用源 mtime（copy2）时，若上一轮构建产物晚于源文件的修改时刻（源文件在上一轮
+    overlay 之后、编译完成之前被编辑），cargo 按 mtime 判「未变」而跳过重编——
+    build.rs 新增的表文件缺席即此竞态（nest_table.rs，2026-09-27）。"""
+    shutil.copyfile(src, dst)
+    shutil.copymode(src, dst)
+
+
 def _copy_if_changed_file(src: str, dst: str) -> None:
-    """复制单个文件，内容相同则跳过（保留 mtime）。"""
+    """复制单个文件，内容相同则跳过（保留 mtime），变更则以当前时间落盘。"""
     os.makedirs(os.path.dirname(dst) or '.', exist_ok=True)
     if os.path.exists(dst):
         with open(src, 'rb') as f1, open(dst, 'rb') as f2:
             if f1.read() == f2.read():
                 return
-    shutil.copy2(src, dst)
+    _copy_fresh(src, dst)
 
 
 def _write_if_changed(path: str, content: str) -> None:
@@ -92,7 +102,7 @@ def _copy_if_changed(src: str, dst: str) -> None:
                 with open(src_file, 'rb') as f1, open(dst_file, 'rb') as f2:
                     if f1.read() == f2.read():
                         continue
-            shutil.copy2(src_file, dst_file)
+            _copy_fresh(src_file, dst_file)
 
 
 def prepare_scratch(out_dir: str, clean: bool = False) -> None:
