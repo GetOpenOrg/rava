@@ -87,17 +87,15 @@ impl Monitor {
                 return;
             }
         }
-        if crate::gil::is_active() {
-            enter_blocking_status(
-                STATE_BLOCKED_ON_MONITOR_ENTER);
-        }
+        // 走到这里即监视器被他线程持有（进程内必有已派生的 Java 线程）：两种后端都
+        // 标记 BLOCKED_ON_MONITOR_ENTER（Thread.getState() == BLOCKED）。并行后端
+        // （feature `mt`）不启用 GIL，不能以 gil::is_active() 作守卫。
+        enter_blocking_status(STATE_BLOCKED_ON_MONITOR_ENTER);
         crate::gil::blocking(|| {
             let mut st = self.state.lock();
             self.acquire_blocking(&mut st, me, 1);
         });
-        if crate::gil::is_active() {
-            leave_blocking_status();
-        }
+        leave_blocking_status();
     }
 
     /// 阻塞获取（调用方已释放 GIL）：竞争队列排队至监视器空闲，按 `count` 设重入计数。
