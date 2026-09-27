@@ -2,7 +2,8 @@
 //!
 //! 用例面：构造与编码（jnuEncoding=UTF-8 直编码，档 A 形态）、系统调用字节取用
 //! （getByteArrayForSysCalls）、Path 接口槽位（getFileSystem/toString/equals/
-//! hashCode——`__impl_` 形态保声明进 vtable）、安全管理器检查（JDK21 恒 null，
+//! hashCode / getRoot / getFileName / getParent / resolve(Path)——`__impl_` 形态保声明
+//! 进 vtable）、安全管理器检查（JDK21 恒 null，
 //! no-op）。其余成员（子路径/relativize/toUri/迭代器等）保持 panic 存根。
 
 use crate::prelude::*;
@@ -275,4 +276,71 @@ impl UnixPath {
         }
         Ok(h)
     }
+
+    // ── 名称元素（initOffsets 等价：元素起点表；空路径视为一个空元素，JDK 同）────
+
+    /// 元素起点：规范化路径（无重复 / 尾部 '/'）中每个名称元素的首字节下标。
+    fn __name_offsets(p: &[u8]) -> Vec<usize> {
+        if p.is_empty() {
+            return vec![0];
+        }
+        (0..p.len()).filter(|&i| p[i] != b'/' && (i == 0 || p[i - 1] == b'/')).collect()
+    }
+
+    /// `getRoot()`：绝对路径 → 文件系统根目录；相对路径 → null。
+    #[jvm_boundary]
+    pub fn __impl_getRoot(&self) -> Result<UnixPath> {
+        let p = to_u8(&self.__get_path());
+        if !p.is_empty() && p[0] == b'/' {
+            Ok(self.__get_fs().__get_rootDirectory())
+        } else {
+            Ok(Default::default())
+        }
+    }
+
+    /// `getFileName()`：最后一个名称元素（无元素 → null；单元素相对路径 → this）。
+    #[jvm_boundary]
+    pub fn __impl_getFileName(&self) -> Result<UnixPath> {
+        let p = to_u8(&self.__get_path());
+        let offs = Self::__name_offsets(&p);
+        if offs.is_empty() {
+            return Ok(Default::default());
+        }
+        if offs.len() == 1 && !p.is_empty() && p[0] != b'/' {
+            return Ok(Clone::clone(self));
+        }
+        let last = offs[offs.len() - 1];
+        Self::new_unixfilesystem_arr_b(self.__get_fs(), bytes_to_jarray(&p[last..]))
+    }
+
+    /// `getParent()`：去掉最后一个名称元素（无元素 → null；只剩根 → getRoot()）。
+    #[jvm_boundary]
+    pub fn __impl_getParent(&self) -> Result<UnixPath> {
+        let p = to_u8(&self.__get_path());
+        let offs = Self::__name_offsets(&p);
+        if offs.is_empty() {
+            return Ok(Default::default());
+        }
+        let len = offs[offs.len() - 1] as i64 - 1;
+        if len <= 0 {
+            return self.__impl_getRoot();
+        }
+        Self::new_unixfilesystem_arr_b(self.__get_fs(), bytes_to_jarray(&p[..len as usize]))
+    }
+
+    /// `resolve(Path)`：other 为绝对路径 → other 本身；否则按 resolve(byte[], byte[]) 连接。
+    #[jvm_boundary]
+    pub fn __impl_resolve_path(&self, obj: Object) -> Result<UnixPath> {
+        let other = Self::toUnixPath(obj)?;
+        let ob = to_u8(&other.__get_path());
+        if !ob.is_empty() && ob[0] == b'/' {
+            return Ok(other);
+        }
+        let result = Self::resolve_arr_b_arr_b(self.__get_path(), other.__get_path())?;
+        Self::new_unixfilesystem_arr_b(self.__get_fs(), result)
+    }
+}
+
+fn bytes_to_jarray(b: &[u8]) -> JArray<i8> {
+    JArray::from(b.iter().map(|&x| x as i8).collect::<Vec<i8>>())
 }
