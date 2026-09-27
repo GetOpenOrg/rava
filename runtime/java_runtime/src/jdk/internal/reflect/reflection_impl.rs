@@ -8,23 +8,6 @@ use crate::java::util::Set;
 use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 
-crate::__process_static! {
-    /// 字段过滤登记表：声明类 binary name（斜线形态）→ 对反射字段枚举隐藏
-    /// 的字段名集合。`registerFieldsToFilter` 写入；`Class.getDeclaredFields`
-    /// （复数形态，class_impl.rs）消费——JDK 的 fieldFilterMap 协议：隐藏类
-    /// 实现细节字段（如 MethodHandles$Lookup 的 lookupClass / allowedModes），
-    /// 对单字段查询（getDeclaredField）不生效。运行时对象为 Rc 单线程形态，
-    /// 登记表随之线程内（与 unsafe__impl 的字段偏移登记表同族）。
-    static FIELD_FILTERS: RefCell<HashMap<std::string::String, Vec<std::string::String>>> =
-        RefCell::new(HashMap::new());
-}
-
-/// 反射族内部：binary name 的登记过滤字段名集（未登记 → None）。消费方：
-/// Class.getDeclaredFields（复数形态，按名过滤）。
-pub(crate) fn __field_filter(binary_name: &str) -> Option<Vec<std::string::String>> {
-    FIELD_FILTERS.with(|t| t.borrow().get(binary_name).cloned())
-}
-
 /// Rust 符号路径 → Java 声明类 binary name（斜线形态）。
 ///
 /// 翻译方法的符号形态（std Backtrace Display，随 rustc 版本而异）：
@@ -220,37 +203,6 @@ fn _capture_frame_classes() -> Vec<Option<std::string::String>> {
 }
 
 impl Reflection {
-    /// static `verifyMemberAccess(currentClass, memberClass, targetClass,
-    /// modifiers)`：成员可访问性判定（JLS §6.6 精简全形态）。
-    /// caller 为 null（测试场景）→ true；同类 → true；成员 public 且声明类
-    /// public → true；非 public 成员按同包判定（binary name 前缀）——同包
-    /// 的 package-private/protected 可达，private 仅同类（已排除）不可达。
-    /// protected + targetClass 的实例归属检查：语料调用面（ServiceLoader
-    /// checkCaller / getConstructor）的 targetClass 恒 null，不触发。
-    pub fn verifyMemberAccess(currentClass: Class, memberClass: Class, targetClass: Class,
-                              modifiers: i32) -> Result<bool> {
-        let _ = targetClass;
-        if currentClass.is_jvm_null() {
-            return Ok(true);
-        }
-        if currentClass == memberClass {
-            return Ok(true);
-        }
-        let member_public = modifiers & 0x0001 != 0;
-        if member_public {
-            let decl_mods = memberClass.getModifiers()?;
-            return Ok(decl_mods & 0x0001 != 0);
-        }
-        // 非 public 成员：同包判定（斜线 binary name 的包前缀相等）
-        let pkg_of = |c: &Class| -> std::string::String {
-            let name = format!("{}", c.__get_name()).replace('.', "/");
-            match name.rfind('/') {
-                Some(i) => name[..i].to_owned(),
-                None => std::string::String::new(),
-            }
-        };
-        Ok(pkg_of(&currentClass) == pkg_of(&memberClass))
-    }
 
     /// native `getCallerClass()`：`@CallerSensitive`——返回「调用 getCallerClass
     /// 的方法」的调用者声明类（JDK javadoc：ignoring frames associated with
@@ -300,29 +252,26 @@ impl Reflection {
         Ok(fallback())
     }
 
-    /// static synchronized `registerFieldsToFilter(Class, Set)`：登记对
-    /// `getDeclaredFields`（复数形态）隐藏的字段名（JDK 用途：内部实现字段
-    /// 不进反射枚举）。参数形态取擦除 Object（调用点 codegen 的泛型擦除
-    /// 传参形态），内部还原 Set；元素按 String 收敛（协议消费方全部传
-    /// String 名单），非 String 元素忽略（JDK 泛型签名即 Set<String>）。
-    /// 重复登记取后者（JDK newMap.put 语义）。null 类按 JDK 抛 NPE。
-    pub fn registerFieldsToFilter(containingClass: Class, fieldNames: Object) -> Result<()> {
-        if containingClass.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let key = format!("{}", containingClass.__get_name()).replace('.', "/");
-        let set: Set<Object> = Set::<Object>::from(Clone::clone(&fieldNames));
-        let mut names: Vec<std::string::String> = Vec::new();
-        let mut it = set.iterator()?;
-        while it.hasNext()? {
-            let e = it.next()?;
-            if let Ok(s) = Object::from(e).try_cast::<crate::java::lang::String>("java/lang/String") {
-                names.push(format!("{}", s));
-            }
-        }
-        FIELD_FILTERS.with(|t| {
-            t.borrow_mut().insert(key, names);
-        });
-        Ok(())
+    /// native `getClassAccessFlags(Class)`：class 文件的类访问标志（非 InnerClasses 的内部标志）。
+    /// javac 对嵌套类在 class 文件中的写法：protected → ACC_PUBLIC，private → 包可见，static
+    /// 不入类标志——由 Modifier 位集（含 InnerClasses 语义）还原。消费方：verifyMemberAccess 的
+    /// 「非 public 类 → 同包判定」（FS-R R2a 字节码路径）。
+    #[jvm_native]
+    pub fn getClassAccessFlags(c: Class) -> Result<i32> {
+        let mods = c.getModifiers()?;
+        let public = if mods & (0x0001 | 0x0004) != 0 { 0x0001 } else { 0 };
+        // 保留 final / interface / abstract / annotation / enum 等类级位，去掉成员级的 private / protected / static
+        Ok((mods & !(0x0001 | 0x0002 | 0x0004 | 0x0008)) | public)
+    }
+
+    /// native `areNestMates(Class, Class)`：javac 的 NestHost 恒为最外层封闭类（binary name
+    /// 首个 `$` 前），同巢即互为 nestmate（private 成员可达，JDK 11+）。
+    #[jvm_native]
+    pub fn areNestMates(current: Class, member: Class) -> Result<bool> {
+        let host = |c: &Class| {
+            let n = format!("{}", c.__get_name()).replace('.', "/");
+            n.split('$').next().unwrap_or("").to_owned()
+        };
+        Ok(host(&current) == host(&member))
     }
 }
