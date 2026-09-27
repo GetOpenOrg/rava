@@ -408,8 +408,16 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
         if not allow_covariant or cur is not recv_ci or real_owner_ci is not recv_ci:
             return None  # 真实协变覆盖也须本类声明（DirectMethodHandle$Accessor 的桥转发到
             #              父类 internalProperties，不属本形态）
-    elif real_param == param_desc or real_desc.split(')', 1)[1] != bridge.descriptor.split(')', 1)[1]:
+    elif real_param == param_desc:
         return None
+    elif real_desc.split(')', 1)[1] != bridge.descriptor.split(')', 1)[1]:
+        # 形参擦除 + 返回收窄（ClassSpecializer.newSpeciesData(K)S ← Specializer 的
+        # newSpeciesData(String)SpeciesData）：抽象祖先槽位只能经本类桥落真实体，否则
+        # 回落普通继承 = 转发到抽象存根。签名走 emitted_method_sig_types（祖先声明代入
+        # 接收者实参，与 vtable_erasure 同源），返回经 Into 回到槽位类型。只承接本类
+        # 自身声明的桥与本类真实方法（同协变分支）；接口 target 预测保持回落。
+        if not allow_covariant or cur is not recv_ci or real_owner_ci is not recv_ci:
+            return None
 
     # 真实方法的签名与 Rust 名（接收者视角）：本类声明直接取；祖先声明代入接收者实参
     real_m = recv.find(name, real_param) if recv is not None else None
