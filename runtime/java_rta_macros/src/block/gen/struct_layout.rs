@@ -462,12 +462,31 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 导出（__erased_state，已删除）都移到 wrapper 侧——Object 直接持有 wrapper
     // （blanket From<T: ObjectVTable>），只有 wrapper 的 impl 知道类型实参；
     // inner 的 Rc 可经 __erased_inner 取回（From<Object> 的擦除路径据此重建任意实例化视图）。
+    // 代理载体（FS-R R4a）：手写层提供 `__vm_proxy_invoke` / `__vm_proxy_implements`
+    // 的类——instanceof 另按实例的接口列表应答，接口载体分派回退经其转发。
+    let is_proxy_carrier = ctx.meta.impl_methods.iter().any(|m| m == "__vm_proxy_invoke");
+    let proxy_instance_check = if is_proxy_carrier {
+        quote! { || #vtable_trait_ident::#as_self_hook(self).__vm_proxy_implements(type_id) }
+    } else {
+        quote! {}
+    };
+    let proxy_invoke_hook = if is_proxy_carrier {
+        quote! {
+            fn __proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: ::std::vec::Vec<Object>)
+                -> ::std::option::Option<Result<Object>> {
+                ::std::option::Option::Some(#vtable_trait_ident::#as_self_hook(self).__vm_proxy_invoke(iface, name, desc, args))
+            }
+        }
+    } else {
+        quote! {}
+    };
     let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
             impl ObjectVTable for #inner_ident {
                 fn is_instance_of(&self, type_id: &str) -> bool {
-                    matches!(type_id, #(#patterns)|*)
+                    matches!(type_id, #(#patterns)|*) #proxy_instance_check
                 }
+                #proxy_invoke_hook
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn __class_name(&self) -> &'static str { #binary_name }
                 fn __identity(&self) -> *const () {

@@ -127,6 +127,28 @@ pub(crate) fn expand_interface(
         let keep_attrs = strip_meta_attrs(&f.attrs);
         let sig = without_param_mut(&f.sig);
         let missing_msg = format!("AbstractMethodError: {}.{}:{}", binary_name, mname, desc);
+        // 动态代理（FS-R R4a）：vtable 未命中时询问接收者的代理钩子（先于 default 体——
+        // JDK 代理对 default 方法同样转发 InvocationHandler）。实参按 JVM 装箱，返回值按
+        // 生成体的 checkcast + 拆箱还原（基本类型 / void 经 __ProxyRet，引用经 From<Object>）。
+        let mname_str = mname.to_string();
+        let ret_ty = match &f.sig.output {
+            syn::ReturnType::Type(_, t) => result_inner_ty(t).cloned(),
+            syn::ReturnType::Default => None,
+        };
+        let proxy_ret = match &ret_ty {
+            Some(t) if matches!(flat_type_tokens(t).as_str(),
+                "()" | "i32" | "i64" | "bool" | "f64" | "f32" | "u16" | "i16" | "i8") =>
+                quote! { <#t as __ProxyRet>::__from_proxy(__pv) },
+            _ => quote! { Ok(::std::convert::From::from(__pv)) },
+        };
+        let proxy_fallback = quote! {
+            if let ::std::option::Option::Some(__pr) = ObjectVTable::__proxy_invoke(
+                &*self.__ref.0, #binary_name, #mname_str, #desc,
+                ::std::vec![#(::std::convert::Into::<Object>::into(::std::clone::Clone::clone(&#args))),*]) {
+                let __pv: Object = __pr?;
+                return #proxy_ret;
+            }
+        };
         // default 方法体（codegen 以载体为接收者翻译一份落到接口块内）：载体分派的
         // 最终回退 —— vtable 未命中（lambda / 闭包接收者不实现 `Iface__VTable`）
         // 且非 SAM 直调时执行 default 体，对应 JVM 对函数式接口实例调用 default
@@ -141,6 +163,7 @@ pub(crate) fn expand_interface(
                     return Ok(::std::convert::From::from(
                         <dyn #vtable_ident>::#mname(&*__vt #(, ::std::convert::Into::into(#args))*)?));
                 }
+                #proxy_fallback
                 #default_fallback
                 panic!("{} (receiver: {})", #missing_msg, ObjectVTable::__obj_str(&*self.__ref.0))
             }

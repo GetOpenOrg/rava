@@ -34,6 +34,13 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         Ok(self.__obj_str())
     }
 
+    /// 动态代理钩子（FS-R R4a）：接口载体分派 vtable 未命中时询问接收者。代理载体类
+    /// （手写层提供 `__vm_proxy_invoke` 的类，宏据 impl_methods 识别）应答 `Some`——按
+    /// (声明接口, 方法名, 描述符) 转发 InvocationHandler；其余对象 `None`（回落 default 体 /
+    /// AbstractMethodError）。实参已按 JVM 装箱（基本类型 → 包装对象）。
+    fn __proxy_invoke(&self, _iface: &str, _name: &str, _desc: &str, _args: Vec<Object>)
+        -> Option<crate::error::Result<Object>> { None }
+
     /// instanceof 运行时检查（java_class 宏从 all_supertypes 静态展开 matches! 模式）
     fn is_instance_of(&self, _type_id: &str) -> bool { false }
 

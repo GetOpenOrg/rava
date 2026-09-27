@@ -412,6 +412,10 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 fn __interface(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
                     ObjectVTable::__interface(__Shared::clone(&self.vtable), slot)
                 }
+                fn __proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: ::std::vec::Vec<Object>)
+                    -> ::std::option::Option<Result<Object>> {
+                    self.vtable.__proxy_invoke(iface, name, desc, args)
+                }
                 fn __class_name(&self) -> &'static str { self.vtable.__class_name() }
                 fn __identity(&self) -> *const () { self.vtable.__identity() }
                 /// 擦除存储导出（A-1）：wrapper 持有的非泛型 `Rc<X__inner>`。

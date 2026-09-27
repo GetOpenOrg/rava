@@ -766,6 +766,18 @@ impl Class {
 }
 
 impl Class {
+    /// 本类按 (名字, 描述符) 声明的方法（VM 直取反射对象：动态代理的接口方法对象，
+    /// HotSpot 同样经方法元数据构造）。未声明 → null。
+    pub(crate) fn __table_method(&self, name: &str, descriptor: &str) -> Result<crate::java::lang::reflect::Method> {
+        crate::java::lang::reflect::Method::__class_init()?;
+        for (slot, meta) in self.__declared_method_rows().iter().enumerate() {
+            if meta.name == name && meta.descriptor == descriptor {
+                return Ok(Self::__method_from_meta(Clone::clone(self), meta, slot as i32));
+            }
+        }
+        Ok(crate::java::lang::reflect::Method::default())
+    }
+
     /// 本类声明的无参方法（record 组件访问器）：元数据表直构，不经公开查询族
     /// （getRecordComponents0 是 native，JDK 侧同样由 VM 直接取方法对象）。
     pub(crate) fn __table_method_noargs(&self, name: &str) -> Result<crate::java::lang::reflect::Method> {

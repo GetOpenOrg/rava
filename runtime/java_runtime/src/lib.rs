@@ -13,6 +13,7 @@ pub mod jdk_resources;
 pub mod monitor;
 pub mod posix;
 pub mod species_dyn;
+pub mod proxy_dyn;
 pub mod sun;
 
 pub use array::JArray;
@@ -452,6 +453,7 @@ pub mod prelude {
     pub use crate::__DynFn;
     pub use crate::__process_static;
     pub use crate::reflect_dispatch::__caller_sensitive;
+    pub use crate::proxy_dyn::__ProxyRet;
     pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
                          clinit_enter as __clinit_enter, clinit_exit as __clinit_exit};
     pub use super::_is_jnull;

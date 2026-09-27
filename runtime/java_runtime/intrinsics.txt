@@ -18,3 +18,5 @@ jdk/internal/reflect/MethodAccessorGenerator.generateSerializationConstructor:(L
 #    JDK 以栈帧判定异常抛出位置的方法由 VM 以等价的运行期登记应答。
 #    准入条件：方法体的唯一可观察效果是「按抛出位置作布尔判定」，VM 登记与栈帧判定逐例同解。
 jdk/internal/reflect/AccessorUtils.isIllegalArgument:(Ljava/lang/Class;Ljava/lang/RuntimeException;)Z   # 栈帧规则「途经 java.base 帧继续、遇用户帧判目标抛出」由 L3 分派登记等价（reflect_dispatch::thrown_by_target：仅经用户成员逃逸者登记）
+java/lang/reflect/Proxy.newProxyInstance:(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;   # 运行期类定义点：动态代理类统一由 VM 支持类 Proxy$Dyn 承载（docs/plans/2026-09-27-reflection-metadata-table.md §2.6）
+java/lang/reflect/Proxy$ProxyBuilder.isProxyClass:(Ljava/lang/Class;)Z   # 运行期类定义点的对偶查询：代理类即 Proxy$Dyn（不经 defineProxyClass 登记 reverseProxyCache）

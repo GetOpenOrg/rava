@@ -615,17 +615,38 @@ fn scan_class_methods(roots: &[&Path]) -> BTreeMap<String, Vec<MethodMeta>> {
 /// 手写 `java/lang/Object`（object.rs，Arch-4 ObjectVTable 根，无 java_class! 块）
 /// 的方法表补行：JLS §4.3.2 / JVMS §2.9——Object 恰有一个 public 无参构造器，
 /// 反射面（getConstructors / getDeclaredConstructors / getConstructor()）须可见。
-/// 构造体由 reflect_dispatch 的 Object `<init>` 臂承载。只补构造器行：Object
-/// 的其余方法（hashCode / equals / toString …）的方法表行不在本补行范围。
+/// 构造体由 reflect_dispatch 的 Object `<init>` 臂承载。其余成员（JLS §4.3.2 的
+/// hashCode / equals / toString / getClass / clone / notify* / wait* / finalize）按
+/// JDK 21 声明（修饰符 / 描述符 / throws）补行：`Object.class.getMethod` 与
+/// getMethods() 的继承面（动态代理的 Object 方法转发、反射列举）由此可见。
 fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>>)
     -> BTreeMap<String, Vec<MethodMeta>>
 {
     let rows = methods.entry("java/lang/Object".to_owned()).or_default();
-    if !rows.iter().any(|m| m.name == "<init>" && m.descriptor == "()V") {
-        rows.insert(0, MethodMeta {
-            name: "<init>".to_owned(), descriptor: "()V".to_owned(),
-            modifiers: 0x0001, is_static: false, is_native: false, is_abstract: false,
-            exceptions: Vec::new(),
+    // (name, descriptor, modifiers, is_native, throws)：PUBLIC 0x1 / PROTECTED 0x4 /
+    // FINAL 0x10 / NATIVE 0x100（JDK 21 java.lang.Object 声明序）
+    const OBJECT_MEMBERS: &[(&str, &str, i32, bool, &[&str])] = &[
+        ("<init>", "()V", 0x0001, false, &[]),
+        ("getClass", "()Ljava/lang/Class;", 0x0111, true, &[]),
+        ("hashCode", "()I", 0x0101, true, &[]),
+        ("equals", "(Ljava/lang/Object;)Z", 0x0001, false, &[]),
+        ("clone", "()Ljava/lang/Object;", 0x0104, true, &["java/lang/CloneNotSupportedException"]),
+        ("toString", "()Ljava/lang/String;", 0x0001, false, &[]),
+        ("notify", "()V", 0x0111, true, &[]),
+        ("notifyAll", "()V", 0x0111, true, &[]),
+        ("wait", "()V", 0x0011, false, &["java/lang/InterruptedException"]),
+        ("wait", "(J)V", 0x0011, false, &["java/lang/InterruptedException"]),
+        ("wait", "(JI)V", 0x0011, false, &["java/lang/InterruptedException"]),
+        ("finalize", "()V", 0x0004, false, &["java/lang/Throwable"]),
+    ];
+    for (i, (name, desc, mods, native, throws)) in OBJECT_MEMBERS.iter().enumerate() {
+        if rows.iter().any(|m| m.name == *name && m.descriptor == *desc) {
+            continue;
+        }
+        rows.insert(i.min(rows.len()), MethodMeta {
+            name: (*name).to_owned(), descriptor: (*desc).to_owned(),
+            modifiers: *mods, is_static: false, is_native: *native, is_abstract: false,
+            exceptions: throws.iter().map(|e| (*e).to_owned()).collect(),
         });
     }
     methods
