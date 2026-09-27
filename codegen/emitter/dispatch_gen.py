@@ -120,7 +120,8 @@ def _emit_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) ->
         j = i + 1
         fn_m = None
         while j < len(lines) and j <= i + 4:
-            fn_m = _FN_RE.match(lines[j])
+            # 手写体方法的签名以 `// [meta] pub fn …;` 注释行承载（class_writer 覆盖路径）
+            fn_m = _FN_RE.match(lines[j].replace('// [meta] ', '', 1))
             if fn_m:
                 break
             if _ATTR_RE.search(lines[j]):

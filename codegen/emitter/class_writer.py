@@ -439,9 +439,19 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
                 # java_native 属性行 → CLASS_METHODS）仍须有该行：反射 getDeclaredMethod、
                 # MethodHandleNatives.resolve（linkToStatic 等签名多态方法）按表解析。
                 # 以注释行承载——宏输入的注释被词法剥除，不影响展开。
-                method_blocks.append('\n'.join(
-                    '// [meta] ' + ln for ln in _java_method_attr(m).split('\n')
-                    if 'java_method(' in ln or 'java_native(' in ln))
+                # 签名同以注释行随附（与接口路径同源 _gen_native_stub）：反射分派闭包
+                # （dispatch_gen）按「属性行 + 其后 pub fn 签名行」协议为按名反射 /
+                # MethodHandle 目标发射臂，手写体按同名 fn 落位（如 findStatic 边界类方法）。
+                _decl = _gen_native_stub(m, ci, rust_name=rust_name, registry=registry,
+                                         class_type_params=class_type_params)
+                _decl_sig = next((ln.strip() for ln in _decl.split('\n')
+                                  if ln.lstrip().startswith('pub fn ')), None)
+                _meta = ['// [meta] ' + ln for ln in _java_method_attr(m).split('\n')
+                         if 'java_method(' in ln or 'java_native(' in ln]
+                if _decl_sig and m.name != '<init>':
+                    _decl_sig = _decl_sig[:-1].rstrip() if _decl_sig.endswith('{') else _decl_sig
+                    _meta.append('// [meta] ' + _decl_sig.rstrip(';') + ';')
+                method_blocks.append('\n'.join(_meta))
             continue
         # G-10 账本：定义侧登记最终 Rust 名（stub / 翻译体 / 接口声明各路径统一在此登记）
         LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)

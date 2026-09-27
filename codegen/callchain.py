@@ -744,6 +744,16 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                             REFLECT_FIELD_NAMES.add(_nm)
                         if _nm in _own and _nm != meth:
                             _pending_reflect_consts.append((cls, _nm))
+                    # 拼接名形态：`findStatic(THIS_CLASS, "unbox" + w.wrapperSimpleName(), …)`——
+                    # 拼接模板恰为「标识符前缀 + 单个实参位」（整串即成员名）时，本类以该前缀
+                    # 起名的方法全部登记（名字后缀由运行期值决定，前缀是唯一的静态面）
+                    elif 'makeConcatWithConstants' in _c:
+                        _tm = re.search(r' template:(.*)\Z', _c, re.DOTALL)
+                        _pre = _tm.group(1)[:-1] if _tm and _tm.group(1).endswith('\x01') else ''
+                        if len(_pre) >= 3 and _pre.isidentifier() and '\x01' not in _pre:
+                            for _nm in sorted(_own):
+                                if _nm.startswith(_pre) and _nm != _pre and _nm != meth:
+                                    _pending_reflect_consts.append((cls, _nm))
                 # T88：被调方法的描述符参数/返回类型也是类型依赖
                 # （abstract/native 方法无 instrs，签名引用的接口类型
                 # 如 iterator()Ljava/util/Iterator; 仍需进闭包生成）
@@ -1003,15 +1013,17 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
 
         def _drain_reflect_consts() -> None:
             """常量反射引用 → 被指名方法（全部同名重载）入链并登记分派发射面。
-            用户类全量翻译、分派全量发射，只需 JDK / 库类；边界类（手写）不入。"""
+            用户类全量翻译、分派全量发射，只需 JDK / 库类。边界类（`findStatic(ByteArray.class,
+            "getInt", …)` 等 MethodHandle 目标）只登记分派面、不入字节码翻译：臂落到手写体
+            （共置 _impl.rs 同名 fn），未手写即存根——与直接调用边界方法同一口径；手写体声明
+            的回调照常入链。"""
             while _pending_reflect_consts:
                 pair = _pending_reflect_consts.pop()
                 if pair in _reflect_seen:
                     continue
                 _reflect_seen.add(pair)
                 cls, name = pair
-                if cls in user_names or _is_boundary_class(cls) \
-                        or not cls.startswith(_JDK_PREFIXES + tuple(lib_prefixes)):
+                if cls in user_names or not cls.startswith(_JDK_PREFIXES + tuple(lib_prefixes)):
                     continue
                 ci = _load_class(cls)
                 if ci is None:
@@ -1020,6 +1032,11 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 if not hits:
                     continue
                 REFLECT_CONSTS.setdefault(cls, set()).add(name)
+                if _is_boundary_class(cls):
+                    if cls not in _JAVA_RUNTIME_CLASSES:
+                        field_discover_classes.add(cls)
+                    _enqueue_upcalls(cls, name)
+                    continue
                 for m in hits:
                     _enqueue_method((cls, m.name, m.descriptor))
 
