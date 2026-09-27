@@ -1116,6 +1116,29 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 added = True
             return added
 
+        # 物种族播种：与镜像独有 / VM 支持种子类同直接父类的闭包类（JDK 源码自带的
+        # BoundMethodHandle.Species_L 与 jlink 预生成物种同族）取同一全量反射面——
+        # ClassSpecializer 对任一物种类都经运行期拼名 `arg<T><i>` findGetter、
+        # `make` findStatic（speciesCode 为运行期值，无类常量可配对）。
+        # 按「同父类 × 种子类」结构判定，不涉类名（原则 4）。
+        _family_seeded: set[str] = set()
+
+        def _seed_species_family() -> bool:
+            _supers = {_ci.super_class for _x in _image_seeded
+                       if (_ci := _load_class(_x)) is not None and _ci.super_class}
+            added = False
+            for _cls, _cci in sorted(jdk_infos.items()):
+                if (_cls in _family_seeded or _cls in _image_seeded or _cci is None
+                        or _cci.is_interface or _cci.super_class not in _supers):
+                    continue
+                _family_seeded.add(_cls)
+                REFLECT_ALL_MEMBERS.add(_cls)
+                for _m in _cci.methods:
+                    REFLECT_CONSTS.setdefault(_cls, set()).add(_m.name)
+                    _enqueue_method((_cls, _m.name, _m.descriptor))
+                added = True
+            return added
+
         # 不动点：排空队列 → 传播虚调用目标 → 有新方法则继续
         while True:
             while queue:
@@ -1138,18 +1161,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             if not queue:
                 _seed_image_subclasses()
             if not queue:
+                _seed_species_family()
+            if not queue:
                 break
-
-        # 物种族的全量字段反射面：与镜像独有 / VM 支持种子类同直接父类的闭包类（JDK 源码
-        # 自带的 BoundMethodHandle.Species_L 与 jlink 预生成物种同族）——ClassSpecializer
-        # 对任一物种类都经运行期拼出的 `arg<T><i>` 名 findGetter，无名字常量可播种。
-        # 按「同父类 × 种子类」结构判定，不涉类名（原则 4）。
-        _family_supers = {_ci.super_class for _x in _image_seeded
-                          if (_ci := _load_class(_x)) is not None and _ci.super_class}
-        for _cls, _cci in list(jdk_infos.items()):
-            if (_cci is not None and not _cci.is_interface
-                    and _cci.super_class in _family_supers):
-                REFLECT_ALL_MEMBERS.add(_cls)
 
         # 签名多态 / 未解析调用的可观测性（与 JAVA_RTA_BFS_TRACE 溯源互补）
         if _sig_poly_native or _unresolved_calls or _root_inherited:
