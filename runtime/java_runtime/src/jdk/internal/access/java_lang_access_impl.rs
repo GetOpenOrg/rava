@@ -228,7 +228,7 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     }
 
     fn getDeclaredAnnotationMap(&self, klass: Class) -> Result<crate::java::util::Map<Object, Object>> {
-        Ok(From::from(Object::from(klass.declaredAnnotations()?)))
+        Ok(From::from(Object::from(klass.getDeclaredAnnotationMap()?)))
     }
 
     fn getRawClassAnnotations(&self, klass: Class) -> Result<JArray<i8>> {

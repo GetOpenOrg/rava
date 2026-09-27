@@ -360,7 +360,7 @@ impl Class {
     ///
     /// upcalls：JavaLangAccess 注解族转发的 Class 包私有目标（AnnotationType 缓存 CAS /
     /// 读取、declaredAnnotations），BFS 在 JavaLangAccess 接口截断看不见这些边。
-    #[jvm_native(upcalls = "java/lang/Class.casAnnotationType:(Lsun/reflect/annotation/AnnotationType;Lsun/reflect/annotation/AnnotationType;)Z java/lang/Class.getAnnotationType:()Lsun/reflect/annotation/AnnotationType; java/lang/Class.declaredAnnotations:()Ljava/util/Map;")]
+    #[jvm_native(upcalls = "java/lang/Class.casAnnotationType:(Lsun/reflect/annotation/AnnotationType;Lsun/reflect/annotation/AnnotationType;)Z java/lang/Class.getAnnotationType:()Lsun/reflect/annotation/AnnotationType; java/lang/Class.getDeclaredAnnotationMap:()Ljava/util/Map;")]
     pub fn getRawAnnotations(&self) -> Result<JArray<i8>> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         Ok(__anno_bytes(crate::anno_pool::class_annotations(&cls_key)))
