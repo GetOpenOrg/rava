@@ -34,6 +34,19 @@ impl VerifyAccess {
         Ok(true)
     }
 
+    /// static `isSamePackage(Class, Class)`：同类恒真；否则比较运行时包名（JDK 另比类加载器——
+    /// 启动类与用户类的包名空间本就不相交，按包名判定等价）。消费方：
+    /// DirectMethodHandle.shouldBeInitialized（静态目标的类初始化屏障判定）。
+    pub fn isSamePackage(class1: Class, class2: Class) -> Result<bool> {
+        let n1 = format!("{}", class1.__get_name()).replace('/', ".");
+        let n2 = format!("{}", class2.__get_name()).replace('/', ".");
+        if n1 == n2 {
+            return Ok(true);
+        }
+        let pkg = |n: &str| n.rsplit_once('.').map(|(p, _)| p.to_owned()).unwrap_or_default();
+        Ok(pkg(&n1) == pkg(&n2))
+    }
+
     /// static `isSameModule(Class, Class)`：全部类型同属未命名模块 → 恒真。
     pub fn isSameModule(_class1: Class, _class2: Class) -> Result<bool> {
         Ok(true)
