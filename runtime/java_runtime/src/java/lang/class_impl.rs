@@ -81,40 +81,6 @@ impl Class {
         CLASSES.with(|cache| Clone::clone(cache.borrow_mut().entry(key).or_insert(c)))
     }
 
-    /// `getDeclaredField(String)`：按名取本类声明字段（反射族静态注册表路线）。
-    ///
-    /// 字段元数据表由 build.rs 从 `java_class!` 块的 java_field 属性生成
-    /// （OUT_DIR/field_table.rs，与层次表同源——字段声明元数据只在 Rust 侧
-    /// 表达一份，规则四）。命中 → 构造 Field 携带完整声明元数据：clazz=本类、
-    /// name、modifiers=声明修饰位、slot=声明序（getDeclaredFields0 语义）、
-    /// type=描述符对应 Class。对象身份按「查询即构造」（Unsafe 族按
-    /// (声明类, 字段名) 消费，见 unsafe__impl 的不透明 id 协议）。
-    /// 未命中（含类不在表内：闭包外类、数组、基本类型）→ 抛
-    /// NoSuchFieldException（真实异常对象、消息=字段名，与 JDK
-    /// Class.getDeclaredField0 行为一致），可被 java_try 捕获。
-    #[jvm_boundary(upcalls = "java/lang/NoSuchFieldException.<init>:(Ljava/lang/String;)V")]
-    pub fn getDeclaredField(&self, name: String) -> Result<Field> {
-        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        let query = format!("{}", name);
-        let hit = __fields::CLASS_FIELDS.iter()
-            .find(|(n, _)| *n == cls_key)
-            .and_then(|(_, fs)| fs.iter().enumerate().find(|(_, f)| f.name == query));
-        let Some((slot, meta)) = hit else {
-            return match crate::java::lang::NoSuchFieldException::new_str(Clone::clone(&name)) {
-                Ok(ex) => Err(ex.into()),
-                // 构造器自身失败（<clinit> 等）时传播嵌套异常（与 vm_throw 同序）
-                Err(nested) => Err(nested),
-            };
-        };
-        let mut f = Field::default();
-        f._init_not_null();
-        f.__set_clazz(Clone::clone(self));
-        f.__set_name(Clone::clone(&name));
-        f.__set_modifiers(meta.modifiers);
-        f.__set_slot(slot as i32);
-        f.__set_type_(class_for_descriptor(&meta.descriptor));
-        Ok(f)
-    }
 
     /// native `Class.isArray()`：数组类判定。数组类的名字是 JVM 描述符形态
     /// （`[I`、`[Ljava.lang.String;`——for_class 的存储形态），首字符 `[`
@@ -189,66 +155,10 @@ impl Class {
             .unwrap_or(&[])
     }
 
-    /// `getDeclaredMethod(String, Class<?>...)`：按名 + 参数类型取本类声明
-    /// 方法（反射族静态注册表路线，与 getDeclaredField 同构）。
-    ///
-    /// 命中判定：JDK 语义不比较返回类型（重载只按参数区分）——表键是含
-    /// 返回类型的完整描述符，匹配按「描述符参数段 == 查询参数类型序列」。
-    /// 命中 → 查询即构造 Method（clazz/name/modifiers/slot=声明序/returnType
-    /// =描述符返回段还原/parameterTypes=参数段还原/exceptionTypes=throws
-    /// 子句 binary name 列表还原）。未命中 → NoSuchMethodException（真实
-    /// 异常对象、消息=方法名，可被 java_try 捕获）。
-    #[jvm_boundary(upcalls = "java/lang/NoSuchMethodException.<init>:(Ljava/lang/String;)V")]
-    pub fn getDeclaredMethod(&self, name: String, parameterTypes: JArray<Class>) -> Result<crate::java::lang::reflect::Method> {
-        let query = format!("{}", name);
-        let rows = self.__declared_method_rows();
-        // 查询参数类型序列（binary name 斜线形态；数组类名是描述符形态
-        // `[I` / `[Ljava/lang/String;——与参数描述符的归一名直接可比）
-        let mut qparams: Vec<std::string::String> = Vec::new();
-        // null 参数类型数组 ≡ 空数组（JDK arrayContentsEq(null, []) 为真；
-        // ObjectStreamClass.getPrivateMethod(cl, "readObjectNoData", null, ..) 即此形态）
-        let __n = if parameterTypes.is_jvm_null() { 0 } else { parameterTypes.len()? };
-        for i in 0..__n {
-            let p = parameterTypes.get(i)?;
-            qparams.push(format!("{}", p.__get_name()).replace('.', "/"));
-        }
-        // 参数描述符归一：基本类型描述符字符 → 类型名；`L<类>;` → `<类>`；
-        // 数组描述符原样（数组类名即描述符形态）
-        let norm = |d: &str| -> std::string::String {
-            let mapped = match d {
-                "Z" => "boolean", "B" => "byte", "C" => "char", "S" => "short",
-                "I" => "int", "J" => "long", "F" => "float", "D" => "double",
-                other => other.strip_prefix('L')
-                    .and_then(|s| s.strip_suffix(';'))
-                    .unwrap_or(other),
-            };
-            mapped.to_owned()
-        };
-        let hit = rows.iter().enumerate()
-            .filter(|(_, m)| m.name == query)
-            .find(|(_, m)| {
-                descriptor_params(m.descriptor).iter().map(|d| norm(d)).collect::<Vec<_>>() == qparams
-            });
-        let Some((slot, meta)) = hit else {
-            // JDK 消息形态：`声明类点形态.方法名(参数类型名, ...)`（数组类名
-            // 保持描述符形态，与 Class.getName 一致）
-            let detail = format!(
-                "{}.{}({})",
-                self.__get_name(),
-                query,
-                qparams.iter().map(|p| p.replace('/', ".")).collect::<Vec<_>>().join(",")
-            );
-            return match crate::java::lang::NoSuchMethodException::new_str(String::from(detail.as_str())) {
-                Ok(ex) => Err(ex.into()),
-                Err(nested) => Err(nested),
-            };
-        };
-        Ok(Self::__method_from_meta(Clone::clone(self), meta, slot as i32))
-    }
 
     /// `getDeclaredMethods()`：本类全部声明方法的构造序列（声明序；JDK 语义
     /// 不含构造器与类初始化器——`<init>`/`<clinit>` 行过滤）。
-    pub fn getDeclaredMethods(&self) -> Result<JArray<crate::java::lang::reflect::Method>> {
+    pub(crate) fn __table_declared_methods(&self) -> Result<JArray<crate::java::lang::reflect::Method>> {
         let mut out: Vec<crate::java::lang::reflect::Method> = Vec::new();
         for (slot, meta) in self.__declared_method_rows().iter().enumerate() {
             if meta.name == "<init>" || meta.name == "<clinit>" {
@@ -391,7 +301,7 @@ impl Class {
 
     /// `getDeclaredFields()`：本类全部声明字段的构造序列（字段表驱动，
     /// getDeclaredField 的复数形态——同一张 build.rs 字段表循环输出）。
-    pub fn getDeclaredFields(&self) -> Result<JArray<Field>> {
+    pub(crate) fn __table_declared_fields(&self) -> Result<JArray<Field>> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         let mut out: Vec<Field> = Vec::new();
         if let Some((_, fs)) = __fields::CLASS_FIELDS.iter().find(|(n, _)| *n == cls_key) {
@@ -409,52 +319,10 @@ impl Class {
         Ok(JArray::from(out))
     }
 
-    /// `getFields()`：本类及其超类型的全部 public 字段（JDK `privateGetPublicFields` 语义：
-    /// 本类 public 字段 → 超接口字段 → 超类递归，按字段身份去重）。走反射族静态注册表路线，
-    /// 截断 JDK 的 ReflectionData / SoftReference 缓存链（其 `ReflectionData.<init>` 等为存根）。
-    /// **偏差**：无直接超接口表——接口常量取超类型闭包中的接口（按闭包表顺序），与 JDK
-    /// 「直接超接口递归」的枚举顺序可能不同（字段集合一致）。
-    pub fn getFields(&self) -> Result<JArray<Field>> {
-        let mut out: Vec<Field> = Vec::new();
-        let mut seen: std::collections::HashSet<(std::string::String, std::string::String)> =
-            std::collections::HashSet::new();
-        let push_public = |cls: &Class, out: &mut Vec<Field>,
-                           seen: &mut std::collections::HashSet<(std::string::String, std::string::String)>|
-         -> Result<()> {
-            let owner = format!("{}", cls.__get_name()).replace('.', "/");
-            let fs = cls.getDeclaredFields()?;
-            for i in 0..fs.len()? {
-                let f = fs.get(i)?;
-                if f.__get_modifiers() & 0x0001 != 0
-                    && seen.insert((owner.clone(), format!("{}", f.__get_name()))) {
-                    out.push(f);
-                }
-            }
-            Ok(())
-        };
-        let mut cur = Clone::clone(self);
-        let mut guard = 0;
-        while !Object::from(Clone::clone(&cur)).0.is_jvm_null() && guard < 64 {
-            guard += 1;
-            push_public(&cur, &mut out, &mut seen)?;
-            let name = format!("{}", cur.__get_name()).replace('.', "/");
-            if let Some((_, supers)) = __hierarchy::CLASS_HIERARCHY.iter().find(|(n, _)| *n == name) {
-                for s in supers.iter().filter(|s| **s != name) {
-                    let is_iface = __modifiers::CLASS_MODIFIERS.iter()
-                        .any(|(n, m)| n == s && (*m & 0x0200) != 0);
-                    if is_iface {
-                        push_public(&Class::for_class(String::from(*s)), &mut out, &mut seen)?;
-                    }
-                }
-            }
-            cur = cur.getSuperclass()?;
-        }
-        Ok(JArray::from(out))
-    }
 
     /// `getDeclaredConstructors()`：本类全部声明构造器（方法表 `<init>` 行；
     /// 构造器身份键 = (类, 描述符)——参数还原同 __method_from_meta）。
-    pub fn getDeclaredConstructors(&self) -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>> {
+    pub(crate) fn __table_declared_ctors(&self) -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         let mut out: Vec<crate::java::lang::reflect::Constructor<Object>> = Vec::new();
         if let Some((_, ms)) = __methods::CLASS_METHODS.iter().find(|(n, _)| *n == cls_key) {
@@ -479,48 +347,7 @@ impl Class {
         Ok(JArray::from(out))
     }
 
-    /// `getConstructors()`：本类 public 构造器。构造器**不继承**（JLS §8.8：
-    /// 构造器不是成员）——JDK `privateGetDeclaredConstructors(publicOnly=true)`
-    /// 只取本类声明；父类构造器不经子类出现。接口无构造器行 → 空数组。
-    pub fn getConstructors(&self) -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>> {
-        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        Ok(JArray::from(self.constructor_rows(&cls_key).unwrap_or_default()))
-    }
 
-    /// `getConstructor(Class...)`：本类 public 构造器按参数类型序列精确匹配
-    ///（JDK getConstructor0(parameterTypes, Member.PUBLIC)）；非 public 构造器
-    /// 与父类构造器均不可见；未命中 → NoSuchMethodException（消息形态同
-    /// getDeclaredConstructor：`pkg.Cls.<init>(p1, p2)`）。
-    #[jvm_boundary(upcalls = "java/lang/NoSuchMethodException.<init>:(Ljava/lang/String;)V")]
-    pub fn getConstructor(&self, parameterTypes: JArray<Class>)
-        -> Result<crate::java::lang::reflect::Constructor<Object>>
-    {
-        let mut want: Vec<std::string::String> = Vec::new();
-        let __n = if parameterTypes.is_jvm_null() { 0 } else { parameterTypes.len()? };
-        for i in 0..__n {
-            want.push(format!("{}", parameterTypes.get(i)?.__get_name()).replace('/', "."));
-        }
-        let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        for c in self.constructor_rows(&cls_key).unwrap_or_default() {
-            let ps = c.__get_parameterTypes();
-            if ps.len()? as usize != want.len() {
-                continue;
-            }
-            let mut same = true;
-            for (j, w) in want.iter().enumerate() {
-                if format!("{}", ps.get(j as i32)?.__get_name()).replace('/', ".") != *w {
-                    same = false;
-                    break;
-                }
-            }
-            if same {
-                return Ok(c);
-            }
-        }
-        let owner = format!("{}", self.__get_name()).replace('/', ".");
-        Err(JvmError::from(crate::java::lang::NoSuchMethodException::new_str(
-            String::from(format!("{}.<init>({})", owner, want.join(", "))))?))
-    }
 
     /// 内部：指定类的 public 构造器序列（getConstructors / getConstructor 共用）。
     fn constructor_rows(&self, cls_key: &str)
@@ -544,65 +371,6 @@ impl Class {
         Some(out)
     }
 
-    /// `getMethod(String, Class...)`：按名 + 参数类型取 public 方法（含继承，
-    /// JDK 语义：沿父类链 + 接口默认——本实现沿直接父类链，public 过滤；
-    /// 未命中 → NoSuchMethodException，消息形态与 getDeclaredMethod 同族）。
-    #[jvm_boundary(upcalls = "java/lang/NoSuchMethodException.<init>:(Ljava/lang/String;)V")]
-    pub fn getMethod(&self, name: String, parameterTypes: JArray<Class>) -> Result<crate::java::lang::reflect::Method> {
-        let query = format!("{}", name);
-        let mut qparams: Vec<std::string::String> = Vec::new();
-        // null 参数类型数组 ≡ 空数组（JDK arrayContentsEq(null, []) 为真；
-        // ObjectStreamClass.getPrivateMethod(cl, "readObjectNoData", null, ..) 即此形态）
-        let __n = if parameterTypes.is_jvm_null() { 0 } else { parameterTypes.len()? };
-        for i in 0..__n {
-            let p = parameterTypes.get(i)?;
-            qparams.push(format!("{}", p.__get_name()).replace('.', "/"));
-        }
-        let norm = |d: &str| -> std::string::String {
-            let mapped = match d {
-                "Z" => "boolean", "B" => "byte", "C" => "char", "S" => "short",
-                "I" => "int", "J" => "long", "F" => "float", "D" => "double",
-                other => other.strip_prefix('L')
-                    .and_then(|s| s.strip_suffix(';'))
-                    .unwrap_or(other),
-            };
-            mapped.to_owned()
-        };
-        let mut cur = format!("{}", self.__get_name()).replace('.', "/");
-        let mut hops = 0usize;
-        loop {
-            let rows = __methods::CLASS_METHODS.iter()
-                .find(|(n, _)| *n == cur)
-                .map(|(_, ms)| *ms)
-                .unwrap_or(&[]);
-            let hit = rows.iter().enumerate()
-                .filter(|(_, m)| m.name == query && (m.modifiers & 0x0001) != 0)
-                .find(|(_, m)| {
-                    descriptor_params(m.descriptor).iter().map(|d| norm(d)).collect::<Vec<_>>() == qparams
-                });
-            if let Some((slot, meta)) = hit {
-                let owner = Class::for_class(String::from(cur.as_str()));
-                return Ok(Self::__method_from_meta(owner, meta, slot as i32));
-            }
-            match __direct_super::CLASS_DIRECT_SUPER.iter().find(|(n, _)| *n == cur) {
-                Some((_, sup)) => {
-                    cur = (*sup).to_owned();
-                    hops += 1;
-                    if hops > 256 { break; }
-                }
-                None => break,
-            }
-        }
-        let detail = format!(
-            "{}.{}({})",
-            self.__get_name(), query,
-            qparams.iter().map(|p| p.replace('/', ".")).collect::<Vec<_>>().join(",")
-        );
-        match crate::java::lang::NoSuchMethodException::new_str(String::from(detail.as_str())) {
-            Ok(ex) => Err(ex.into()),
-            Err(nested) => Err(nested),
-        }
-    }
 
     /// `Class.isAnnotationPresent(Class)`：类挂载点注解存在性（反射 L3 段 1）。
     /// 注解元数据表经 build.rs 从 java_class! 块的 annotations 属性生成；
@@ -665,43 +433,6 @@ impl Class {
         Ok(obj.0.is_instance_of(&key))
     }
 
-    /// `Class.getDeclaredConstructor(Class...)`：在 getDeclaredConstructors
-    /// （build.rs 方法表的 `<init>` 行）中按参数类型序列精确匹配；未命中 →
-    /// NoSuchMethodException（消息形态 `pkg.Cls.<init>(p1, p2)`，JDK
-    /// methodToString 同型）。消费方：ReflectionFactory.
-    /// newConstructorForSerialization 的首个不可序列化超类无参构造查找。
-    pub fn getDeclaredConstructor(&self, parameterTypes: JArray<Class>)
-        -> Result<crate::java::lang::reflect::Constructor<Object>>
-    {
-        let mut want: Vec<std::string::String> = Vec::new();
-        // null 参数类型数组 ≡ 空数组（JDK arrayContentsEq(null, []) 为真；
-        // ObjectStreamClass.getPrivateMethod(cl, "readObjectNoData", null, ..) 即此形态）
-        let __n = if parameterTypes.is_jvm_null() { 0 } else { parameterTypes.len()? };
-        for i in 0..__n {
-            want.push(format!("{}", parameterTypes.get(i)?.__get_name()).replace('/', "."));
-        }
-        let ctors = self.getDeclaredConstructors()?;
-        for i in 0..ctors.len()? {
-            let c = ctors.get(i)?;
-            let ps = c.__get_parameterTypes();
-            if ps.len()? as usize != want.len() {
-                continue;
-            }
-            let mut same = true;
-            for (j, w) in want.iter().enumerate() {
-                if format!("{}", ps.get(j as i32)?.__get_name()).replace('/', ".") != *w {
-                    same = false;
-                    break;
-                }
-            }
-            if same {
-                return Ok(c);
-            }
-        }
-        let owner = format!("{}", self.__get_name()).replace('/', ".");
-        Err(JvmError::from(crate::java::lang::NoSuchMethodException::new_str(
-            String::from(format!("{}.<init>({})", owner, want.join(", "))))?))
-    }
 
 
     /// native `Class.isInterface()`：接口（含注解类型）判定，读 build.rs 修饰符表的
@@ -769,7 +500,7 @@ impl Class {
             rc.__set_clazz(Clone::clone(self));
             rc.__set_name(String::from(*n));
             rc.__set_type_(class_for_descriptor(d));
-            rc.__set_accessor(self.getDeclaredMethod(String::from(*n), JArray::default())?);
+            rc.__set_accessor(self.__table_method_noargs(n)?);
             rc.__set_signature(if g.is_empty() { String::default() } else { String::from(*g) });
             out.push(rc);
         }
@@ -981,7 +712,7 @@ impl Class {
     /// trustedFinal 与 HotSpot 同判定：static final，或 record 类的 final 实例字段。
     #[jvm_native]
     pub fn getDeclaredFields0(&self, public_only: bool) -> Result<JArray<Field>> {
-        let all = self.getDeclaredFields()?;
+        let all = self.__table_declared_fields()?;
         let is_record = self.isRecord0()?;
         let mut out: Vec<Field> = Vec::new();
         for i in 0..all.len()? {
@@ -1000,7 +731,7 @@ impl Class {
     /// native `getDeclaredMethods0(boolean publicOnly)`：本类声明方法（不含 `<init>` / `<clinit>`）。
     #[jvm_native]
     pub fn getDeclaredMethods0(&self, public_only: bool) -> Result<JArray<crate::java::lang::reflect::Method>> {
-        let all = self.getDeclaredMethods()?;
+        let all = self.__table_declared_methods()?;
         let mut out = Vec::new();
         for i in 0..all.len()? {
             let m = all.get(i)?;
@@ -1016,7 +747,7 @@ impl Class {
     pub fn getDeclaredConstructors0(&self, public_only: bool)
         -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>>
     {
-        let all = self.getDeclaredConstructors()?;
+        let all = self.__table_declared_ctors()?;
         let mut out = Vec::new();
         for i in 0..all.len()? {
             let c = all.get(i)?;
@@ -1025,5 +756,20 @@ impl Class {
             }
         }
         Ok(JArray::from(out))
+    }
+}
+
+impl Class {
+    /// 本类声明的无参方法（record 组件访问器）：元数据表直构，不经公开查询族
+    /// （getRecordComponents0 是 native，JDK 侧同样由 VM 直接取方法对象）。
+    pub(crate) fn __table_method_noargs(&self, name: &str) -> Result<crate::java::lang::reflect::Method> {
+        let all = self.__table_declared_methods()?;
+        for i in 0..all.len()? {
+            let m = all.get(i)?;
+            if format!("{}", m.__get_name()) == name && m.__get_parameterTypes().len()? == 0 {
+                return Ok(m);
+            }
+        }
+        Ok(crate::java::lang::reflect::Method::default())
     }
 }

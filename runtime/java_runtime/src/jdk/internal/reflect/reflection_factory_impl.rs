@@ -1,23 +1,16 @@
-//! `jdk/internal/reflect/ReflectionFactory` 手写伴生：JUnit Runner 路径的
-//! `AccessibleObject` 类初始化触达（`setAccessible` → clinit 的
-//! `doPrivileged(GetReflectionFactoryAction)` 链）。
+//! `jdk/internal/reflect/ReflectionFactory` 手写伴生（FS-R 过渡）：只余序列化构造器。
 //!
-//! JDK 21 语义面：`<init>()V` 为私有空体；`soleInstance` 由 clinit 内联初始化的
-//! 单例；`getReflectionFactory()` 即返回该单例。本伴生按需实现这三点——
-//! `newMethodAccessor` / `newFieldAccessor` 等 accessor 工厂族不在翻译侧
-//! 反射协议（L3 `__reflect_dispatch`）的路径上，保持 panic 存根。
+//! 包 `jdk/internal/reflect/` 已按字节码翻译（boundary_release，FS-R R2a）：构造器
+//! （`langReflectAccess = SharedSecrets.getJavaLangReflectAccess()`）、`soleInstance` 单例、
+//! 访问器工厂族均走 JDK 字节码。`newConstructorForSerialization` 的 JDK 实现经
+//! `generateConstructor` 运行期生成字节码，R3 改为 VM 内建后删除本伴生
+//!（docs/plans/2026-09-27-reflection-metadata-table.md §2.4）。
 
 use crate::prelude::*;
 use super::reflection_factory::ReflectionFactory;
 use crate::java::lang::Class;
 
 impl ReflectionFactory {
-    /// `<init>()V`：私有空构造（JDK 21 `private ReflectionFactory() {}`）。
-    pub fn new() -> Result<Self> {
-        let mut this = Self::default();
-        this._init_not_null();
-        Ok(this)
-    }
 
     /// `newConstructorForSerialization(Class)`：序列化构造器——沿超类链找首个
     /// 不可序列化超类 initCl，取其无参构造（private / 跨包包可见 → null，
@@ -43,13 +36,18 @@ impl ReflectionFactory {
             }
             init_cl = sup;
         }
-        let ctor = match init_cl.getDeclaredConstructor(JArray::from(Vec::<Class>::new())) {
-            Ok(c) => c,
-            // NoSuchMethodException → null（JDK catch 同型）；其余异常传播
-            Err(e) if e.is_instance_of("java/lang/NoSuchMethodException") => {
-                return Ok(Default::default());
+        // initCl 的无参构造器（元数据表直查；缺席 → null，与 JDK 捕获 NoSuchMethodException 同型）
+        let ctors = init_cl.__table_declared_ctors()?;
+        let mut found = None;
+        for i in 0..ctors.len()? {
+            let c = ctors.get(i)?;
+            if c.__get_parameterTypes().len()? == 0 {
+                found = Some(c);
+                break;
             }
-            Err(e) => return Err(e),
+        }
+        let Some(ctor) = found else {
+            return Ok(Default::default());
         };
         let mods = ctor.__get_modifiers();
         let package_private = (mods & (0x0001 | 0x0004)) == 0;
@@ -66,25 +64,4 @@ impl ReflectionFactory {
         Ok(ctor)
     }
 
-    /// static `getReflectionFactory()`：返回 clinit 单例 `soleInstance`。
-    /// 生成侧 clinit 不在本闭包调用链上（静态字段初始化未发射），单例在此
-    /// 惰性落置——`thread_local` 持有底层 `Object`（运行时单线程模型，
-    /// Object 非 Sync），跨调用同一对象身份（JVM `soleInstance` 的可观测语义）。
-    pub fn getReflectionFactory() -> Result<ReflectionFactory> {
-        crate::__process_static! {
-            static SOLE_INSTANCE: RefCell<Option<Object>> = const { RefCell::new(None) };
-        }
-        let obj = SOLE_INSTANCE.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            slot.get_or_insert_with(|| {
-                // 构造为空体（不可失败）；Err 分支退回 null 单例仅为闭合类型
-                match ReflectionFactory::new() {
-                    Ok(rf) => Object::from(rf),
-                    Err(_) => Object::default(),
-                }
-            })
-            .clone()
-        });
-        Ok(ReflectionFactory::from(obj))
-    }
 }
