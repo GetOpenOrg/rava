@@ -974,3 +974,56 @@ impl Class {
         Ok(self.__get_name())
     }
 }
+
+// ── FS-R R2：成员查询 native（元数据表构造 Field / Method / Constructor，JDK 查询族回到字节码）──
+impl Class {
+    /// native `getDeclaredFields0(boolean publicOnly)`：本类声明字段（声明序 = slot）。
+    /// trustedFinal 与 HotSpot 同判定：static final，或 record 类的 final 实例字段。
+    #[jvm_native]
+    pub fn getDeclaredFields0(&self, public_only: bool) -> Result<JArray<Field>> {
+        let all = self.getDeclaredFields()?;
+        let is_record = self.isRecord0()?;
+        let mut out: Vec<Field> = Vec::new();
+        for i in 0..all.len()? {
+            let mut f = all.get(i)?;
+            let mods = f.__get_modifiers();
+            if public_only && mods & 0x0001 == 0 {
+                continue;
+            }
+            let fin = mods & 0x0010 != 0;
+            f.__set_trustedFinal(fin && (mods & 0x0008 != 0 || is_record));
+            out.push(f);
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// native `getDeclaredMethods0(boolean publicOnly)`：本类声明方法（不含 `<init>` / `<clinit>`）。
+    #[jvm_native]
+    pub fn getDeclaredMethods0(&self, public_only: bool) -> Result<JArray<crate::java::lang::reflect::Method>> {
+        let all = self.getDeclaredMethods()?;
+        let mut out = Vec::new();
+        for i in 0..all.len()? {
+            let m = all.get(i)?;
+            if !public_only || m.__get_modifiers() & 0x0001 != 0 {
+                out.push(m);
+            }
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// native `getDeclaredConstructors0(boolean publicOnly)`：本类声明构造器。
+    #[jvm_native]
+    pub fn getDeclaredConstructors0(&self, public_only: bool)
+        -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>>
+    {
+        let all = self.getDeclaredConstructors()?;
+        let mut out = Vec::new();
+        for i in 0..all.len()? {
+            let c = all.get(i)?;
+            if !public_only || c.__get_modifiers() & 0x0001 != 0 {
+                out.push(c);
+            }
+        }
+        Ok(JArray::from(out))
+    }
+}
