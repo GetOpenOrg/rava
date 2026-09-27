@@ -37,9 +37,14 @@ fn _constant(idx: usize) -> Wrapper {
     SINGLETONS.with(|s| {
         if s.borrow().len() < CONSTANTS.len() {
             let mut v = s.borrow_mut();
-            for (_, ch, prim, wrap, wsn, psn) in CONSTANTS {
+            for (ordinal, (getter, ch, prim, wrap, wsn, psn)) in CONSTANTS.iter().enumerate() {
                 let mut w = Wrapper::default();
                 w._init_not_null();
+                // java/lang/Enum 的 name / ordinal（JDK 枚举常量构造器 super(name, ordinal)）：
+                // switch-on-enum 的 $SwitchMap 以 ordinal() 为下标、toString 返回 name——缺省 0/null
+                // 会把全部常量归到同一分支（ValueConversions.unbox → "unbox null"）
+                w.__set_name(String::from(*getter));
+                w.__set_ordinal(ordinal as i32);
                 w.__set_basicTypeChar(*ch);
                 w.__set_basicTypeString(String::from(
                     char::from_u32(*ch as u32).unwrap_or('?').to_string().as_str()));
