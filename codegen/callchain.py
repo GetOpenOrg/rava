@@ -743,6 +743,17 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 _enqueue_iface_stub(cls)
         origin[0] = (cls, meth, desc)
 
+        # 手写层接管的翻译类方法（共置 `_impl.rs` 提供同名 fn、类内无重载歧义）：真实方法体是
+        # 手写体，字节码不在调用链上——不展开其指令引用，改沿手写体声明的回调（upcalls）入链，
+        # 与边界类同一口径（原则 2：只分析调用链上的方法内部依赖）。有重载时 provides 的名字
+        # 前缀近似可能误判其它重载，保守照常展开。
+        if (upcalls is not None and meth not in ('<init>', '<clinit>')
+                and cls.startswith(_JDK_PREFIXES)
+                and sum(1 for _m in ci.methods if _m.name == meth) == 1
+                and upcalls.provides(cls, meth)):
+            _enqueue_upcalls(cls, meth)
+            return
+
         # 追踪该方法的指令引用（精确匹配名字+描述符，避免重载方法误展开）
         _declared = False
         for m in ci.methods:
