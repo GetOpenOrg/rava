@@ -47,38 +47,6 @@ fn __member_key<T: Clone + Default + 'static + From<Object> + Into<Object> + cra
 }
 
 impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> Constructor<T> {
-    /// `newInstance(Object[])`：L3 分派的构造器路径（`<init>` 臂 → Self::new
-    /// 系列 typed 构造）。目标构造器抛出的异常包装为
-    /// InvocationTargetException（JDK Constructor.newInstance 契约），返回值
-    /// 经 `<T as From<Object>>` 还原为构造类的擦除视图。
-    pub fn newInstance(&self, initargs: JArray<Object>) -> Result<T> {
-        let Some((cls_key, desc)) = __member_key(self) else {
-            panic!("stub: Constructor.newInstance 无声明键（非表构造形态）");
-        };
-        // 序列化构造器（ReflectionFactory 登记，N2）：分配目标类实例（不运行其构造器），
-        // 再在该实例上运行本构造器（首个不可序列化超类 initCl 的无参构造体）
-        let __self_id = Object::from(Clone::clone(self)).0.__identity() as usize;
-        if let Some(target) = crate::reflect_dispatch::serialization_target(__self_id) {
-            let empty: JArray<Object> = JArray::from(Vec::<Object>::new());
-            let obj = crate::reflect_dispatch::reflect_invoke(
-                &target, "<alloc>", "()V", Object::default(), &empty)?;
-            crate::reflect_dispatch::reflect_invoke(
-                &cls_key, "<init_on>", "()V", Clone::clone(&obj), &empty)?;
-            return Ok(<T as From<Object>>::from(obj));
-        }
-        match crate::reflect_dispatch::reflect_invoke(
-            &cls_key, "<init>", &desc, Object::default(), &initargs) {
-            Ok(v) => Ok(<T as From<Object>>::from(v)),
-            // 实参拆箱失败 → IllegalArgumentException 直接抛出（不包装，JDK 同）
-            Err(e) if crate::reflect_dispatch::take_bad_arg() => Err(e),
-            Err(e) => {
-                let ite = crate::java::lang::reflect::InvocationTargetException::new_throwable(
-                    <crate::java::lang::Throwable as From<Object>>::from(
-                        Clone::clone(e.thrown())))?;
-                Err(JvmError::from(ite))
-            }
-        }
-    }
 
     /// 本构造器挂载点的注解条目。
     fn __anno_entries(&self) -> &'static [crate::annotation_meta::__anno_table::AnnotationEntry] {

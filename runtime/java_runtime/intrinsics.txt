@@ -13,3 +13,4 @@ java/lang/StrictMath.sqrt:(D)D           # JLS / StrictMath.sqrt：IEEE 754 squa
 #    JDK 在此处生成字节码并定义新类的方法由 VM 承载（HotSpot 的等价物是类加载子系统本身）。
 #    准入条件：方法体的唯一可观察效果是「定义并返回一个类」，VM 以类宇宙中的静态类等价承载。
 java/lang/invoke/ClassSpecializer$Factory.generateConcreteSpeciesCode:(Ljava/lang/String;Ljava/lang/invoke/ClassSpecializer$SpeciesData;)Ljava/lang/Class;   # 动态物种统一由 VM 支持类 BoundMethodHandle$Species_Dyn 承载（docs/plans/2026-09-27-bmh-dynamic-species.md）
+jdk/internal/reflect/MethodAccessorGenerator.generateSerializationConstructor:(Ljava/lang/Class;[Ljava/lang/Class;ILjava/lang/Class;)Ljdk/internal/reflect/SerializationConstructorAccessorImpl;   # 序列化构造器访问器统一由 VM 支持类 SerializationConstructorAccessorDyn 承载（docs/plans/2026-09-27-reflection-metadata-table.md §2.4）
