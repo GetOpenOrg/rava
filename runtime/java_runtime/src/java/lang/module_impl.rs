@@ -36,4 +36,30 @@ impl Module {
     pub fn canUse(&self, _service: crate::java::lang::Class) -> Result<bool> {
         Ok(true)
     }
+
+    /// `isExported(String pn, Module other)`：无名模块向全部模块导出其全部包（JLS §7.7.5 /
+    /// Module 规范：unnamed module exports all packages）。消费方：反射访问检查
+    /// Reflection.verifyModuleAccess（FS-R R2a 字节码路径）。
+    #[jvm_boundary]
+    pub fn isExported_str_module(&self, _pn: String, _other: Module) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// `isExported(String pn)`：无条件导出（同上）。
+    #[jvm_boundary]
+    pub fn isExported_str(&self, _pn: String) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// `isOpen(String pn, Module other)`：无名模块向全部模块开放其全部包（深反射可达）。
+    #[jvm_boundary]
+    pub fn isOpen_str_module(&self, _pn: String, _other: Module) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// `isOpen(String pn)`：无条件开放（同上）。
+    #[jvm_boundary]
+    pub fn isOpen_str(&self, _pn: String) -> Result<bool> {
+        Ok(true)
+    }
 }
