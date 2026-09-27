@@ -1305,6 +1305,13 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # ── Step 1+2: 引用收集与精确 cross_imports（import_gen）─────────────────
     _referenced = collect_referenced(ci, registry, generated_classes)
+    # 边界类手写覆盖的继承虚方法：合成声明的签名类型同样出现在本文件（E0425）
+    from .import_gen import _add_desc_refs as _add_hw_refs
+    for _hw_m in _handwritten_inherited_overrides(
+            ci, registry, (new_format_map or {}).get(ci.name),
+            [m for m in ci.methods if not m.is_synthetic]):
+        _add_hw_refs(_hw_m.descriptor, _referenced)
+        _add_hw_refs(_hw_m.generic_signature, _referenced)
     cross_imports = gen_cross_imports(
         ci, registry, jdk_crate_pkg_paths, call_chain, generated_classes,
         conflict_map, skipped_classes, user_sibling_imports,
