@@ -1023,7 +1023,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 for m in hits:
                     _enqueue_method((cls, m.name, m.descriptor))
 
-        # jlink 预生成类种子（N11）：运行时镜像独有的类（jmod 中不存在，JDK 运行期按类名
+        # jlink 预生成类 / VM 支持类种子（N11）：运行时镜像独有的类（jmod 中不存在，JDK 运行期按类名
         # 加载——BootLoader.loadClassOrNull 取物种类，取不到才 ASM 现场生成）。原生二进制
         # 类宇宙生成期定死（GraalVM 同构）：父类已在闭包内的镜像独有类整体入闭包——登记
         # 实例化、全部方法入队、全量反射面（方法 + 字段臂）。按「镜像独有 × 父类在闭包」
@@ -1034,8 +1034,10 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             _only = getattr(resolver, 'image_only_classes', None)
             if _only is None:
                 return False
+            _support = getattr(resolver, 'vm_support_classes', None)
+            _cands = set(_only()) | (set(_support()) if _support else set())
             added = False
-            for _x in sorted(_only()):
+            for _x in sorted(_cands):
                 if _x in _image_seeded:
                     continue
                 _xci = _load_class(_x)

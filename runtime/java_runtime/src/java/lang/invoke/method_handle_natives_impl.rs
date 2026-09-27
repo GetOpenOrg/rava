@@ -132,8 +132,12 @@ impl MethodHandleNatives {
             Err(JvmError::from(NoSuchFieldError::new_str(Clone::clone(&m.__get_name()))?))
         };
         let name = format!("{}", m.__get_name());
+        let owner = format!("{}", m.__get_clazz().__get_name()).replace('.', "/");
+        // BoundMethodHandle 动态物种的 key 形态字段 arg<T><i>（N11，species_dyn）
+        let dyn_meta = crate::species_dyn::field_meta(&owner, &name)
+            .map(|(d, st, mods)| (d, st, mods, None::<i64>));
         let Some((descriptor, is_static, modifiers, _)) =
-            m.__get_clazz().__declared_field_meta(&name)
+            dyn_meta.or_else(|| m.__get_clazz().__declared_field_meta(&name))
         else {
             return not_found(&m);
         };
@@ -185,6 +189,10 @@ impl MethodHandleNatives {
             // 按任意调用描述符解析（HotSpot 的 resolve 同样对其放行，调用经内建 linker 执行，
             // 见 method_handle_ext.rs）。返回位按声明形态逐一匹配（Object / boolean / void）。
             let owner = format!("{}", clazz.__get_name()).replace('.', "/");
+            // BoundMethodHandle 动态物种的 key 形态工厂 make(MethodType, LambdaForm, T0..)（N11）
+            if let Some(meta) = crate::species_dyn::method_meta(&owner, &name, &descriptor) {
+                return Some(meta);
+            }
             if owner != "java/lang/invoke/MethodHandle" && owner != "java/lang/invoke/VarHandle" {
                 return None;
             }

@@ -235,7 +235,10 @@ class JdkResolver:
             except KeyError:
                 continue
 
-        return self._resolve_from_image(binary_name)
+        data = self._resolve_from_image(binary_name)
+        if data is not None:
+            return data
+        return self._resolve_vm_support(binary_name)
 
     # ── 运行时镜像（lib/modules）回落：jlink 链接期生成的类 ─────────────────────
     #
@@ -320,6 +323,67 @@ class JdkResolver:
                 return None
         try:
             return path.read_bytes()
+        except OSError:
+            return None
+
+    # ── VM 支持类（runtime/java_support/<module>/…java）────────────────────────────
+    #
+    # 原生二进制承载 JDK 运行期类定义点所需的 Java 源码支持类（如 BoundMethodHandle 的
+    # 动态物种载体 Species_Dyn，docs/plans/2026-09-27-bmh-dynamic-species.md）：以当前 JDK
+    # 的 javac `--patch-module <module>=<源码目录>` 编入对应包（可访问包私有成员），按 JDK
+    # 类同一身份参与解析与字节码翻译。按「JDK 路径 + 源码内容」指纹缓存编译产物。
+
+    _SUPPORT_ROOT = Path(__file__).resolve().parents[1] / 'runtime' / 'java_support'
+
+    def vm_support_classes(self) -> frozenset:
+        """VM 支持类的 binary name 集合（编译失败 / 无源码 → 空集）。"""
+        cached = getattr(self, '_vm_support', None)
+        if cached is not None:
+            return cached
+        self._vm_support = frozenset()
+        self._vm_support_dir: dict[str, Path] = {}
+        root = self._SUPPORT_ROOT
+        if not root.is_dir():
+            return self._vm_support
+        javac = self._home / 'bin' / ('javac.exe' if os.name == 'nt' else 'javac')
+        if not javac.exists():
+            return self._vm_support
+        import hashlib
+        names: set[str] = set()
+        for mod_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            sources = sorted(mod_dir.rglob('*.java'))
+            if not sources:
+                continue
+            h = hashlib.sha1(str(self._home.resolve()).encode())
+            for src in sources:
+                h.update(str(src.relative_to(mod_dir)).encode())
+                h.update(src.read_bytes())
+            base = Path(os.environ.get('XDG_CACHE_HOME') or (Path.home() / '.cache'))
+            out = base / 'java_rta' / 'vmsupport' / h.hexdigest()[:16] / mod_dir.name
+            if not out.is_dir() or not any(out.rglob('*.class')):
+                out.mkdir(parents=True, exist_ok=True)
+                try:
+                    r = subprocess.run([str(javac), '--patch-module', f'{mod_dir.name}={mod_dir}',
+                                        '-nowarn', '-d', str(out), *map(str, sources)],
+                                       capture_output=True, text=True, timeout=300)
+                except (OSError, subprocess.SubprocessError) as e:
+                    print(f"      警告：VM 支持类编译失败（{mod_dir.name}）：{e}")
+                    continue
+                if r.returncode != 0:
+                    print(f"      警告：VM 支持类编译失败（{mod_dir.name}）：{r.stderr.strip()[:400]}")
+                    continue
+            for cls in out.rglob('*.class'):
+                name = str(cls.relative_to(out))[:-len('.class')].replace(os.sep, '/')
+                names.add(name)
+                self._vm_support_dir[name] = out
+        self._vm_support = frozenset(names)
+        return self._vm_support
+
+    def _resolve_vm_support(self, binary_name: str) -> Optional[bytes]:
+        if binary_name not in self.vm_support_classes():
+            return None
+        try:
+            return (self._vm_support_dir[binary_name] / (binary_name + '.class')).read_bytes()
         except OSError:
             return None
 

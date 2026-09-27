@@ -1,0 +1,11 @@
+LI  f(a,1)
+LII g(b,2,3)
+LJL h(c,4,d)
+LFD k(e,1.5,2.25)
+chain s:7:8:9.5
+chain s:7:8:10.5
+again g(r0,0,0)
+again g(r1,1,1)
+again g(r2,2,4)
+asType g(t,5,6)
+type (int)String

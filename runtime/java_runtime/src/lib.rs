@@ -12,6 +12,7 @@ pub mod jdk;
 pub mod jdk_resources;
 pub mod monitor;
 pub mod posix;
+pub mod species_dyn;
 pub mod sun;
 
 pub use array::JArray;
