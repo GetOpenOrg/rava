@@ -45,7 +45,7 @@
 | 类加载器 / 模块 | `ClassLoader` 6、`Module` 2 | 需内建类加载器对象图（BuiltinClassLoader 边界类）+ 静态资源表 | FS-C 组 |
 | 运行时字节码生成 | `InvokerBytecodeGenerator` 6 | 原生二进制不能在运行时定义类；最终态走「LambdaForm 解释执行」路径（等价 HotSpot 的解释入口），届时这组改入内建清单并注明理由 | FS-M 组 |
 | 数值 / 文本 | `Double.toString` ×2（FS-N6，DoubleToDecimal）、`Integer.toString()` / `Integer.valueOf`（IntegerCache.<clinit> 链）、`StackTraceElement.computeFormat`、`DecimalFormatSymbols.initializeCurrency` | 回到字节码；后两者依赖模块 / Currency 数据 | FS-N6 等 |
-| 集合 / 属性 | `ArrayList` add / elementData / get、`Arrays.copyOf(T[],int)`、`ConcurrentHashMap.<init>()`、`Properties.getProperty` ×2 | ArrayList：泛型 E 载体与 checkcast；copyOf：组件类型（FS-R6）；CHM：transfer 的变量提升缺口（codegen/method/vars.py hoist）；Properties：defaults 链 | FS-R6 / FS-H 组 |
+| 集合 / 属性 | `ArrayList` add / elementData / get、`Arrays.copyOf(T[],int)`、`Properties.getProperty` ×2（CHM.<init>() 已删，生成侧 transfer 变量提升已正确） | ArrayList：泛型 E 载体与 checkcast；copyOf：组件类型（FS-R6）；CHM：transfer 的变量提升缺口（codegen/method/vars.py hoist）；Properties：defaults 链 | FS-R6 / FS-H 组 |
 | I/O / 其他 | `FileCleanable` ×2、`FileSystems.getDefault`、`Enum.valueOf` | Cleaner 线程（FS-G 组）、DefaultFileSystemProvider 边界类、enumConstantDirectory 反射链 | FS-G / FS-R |
 
 ## 一、线程 / 并发
