@@ -374,3 +374,39 @@ pub fn __caller_sensitive<R>(caller: &'static str, f: impl FnOnce() -> R) -> R {
 pub fn current_caller_sensitive() -> Option<&'static str> {
     CS_CALLERS.with(|s| s.borrow().last().copied())
 }
+
+// ── 静态字段偏移登记（Unsafe.staticFieldOffset / MethodHandleNatives.staticFieldOffset 共用）─────────────────
+
+pub const STATIC_FIELD_ID_BASE: i64 = 1 << 40;
+
+crate::__process_static! {
+    static STATIC_FIELD_IDS: crate::sync_model::__RefSlot<
+        std::collections::HashMap<(std::string::String, std::string::String), i64>> =
+        crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
+    static STATIC_FIELD_BY_ID: crate::sync_model::__RefSlot<
+        std::collections::HashMap<i64, (std::string::String, std::string::String)>> =
+        crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
+}
+
+/// (声明类, 字段名) → 稳定静态偏移 id（首次登记分配）。
+pub fn static_field_id(decl: std::string::String, name: std::string::String) -> i64 {
+    let key = (decl, name);
+    if let Some(id) = STATIC_FIELD_IDS.with(|m| m.borrow().get(&key).copied()) {
+        return id;
+    }
+    let id = STATIC_FIELD_IDS.with(|m| {
+        let mut m = m.borrow_mut();
+        let next = STATIC_FIELD_ID_BASE + m.len() as i64;
+        *m.entry(key.clone()).or_insert(next)
+    });
+    STATIC_FIELD_BY_ID.with(|m| { m.borrow_mut().insert(id, key); });
+    id
+}
+
+/// 静态偏移 id → (声明类, 字段名)；非静态登记 id → None。
+pub fn static_field_of(offset: i64) -> Option<(std::string::String, std::string::String)> {
+    if offset < STATIC_FIELD_ID_BASE {
+        return None;
+    }
+    STATIC_FIELD_BY_ID.with(|m| m.borrow().get(&offset).cloned())
+}

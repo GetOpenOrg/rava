@@ -135,40 +135,15 @@ fn _instance_ref_set(o: &Object, offset: i64, v: Object) -> bool {
     }
 }
 
-// ── 静态字段偏移登记（staticFieldOffset ↔ 引用访问器的静态臂）─────────────────
+// ── 静态字段偏移（staticFieldOffset ↔ 引用访问器的静态臂）：登记表在
+//    reflect_dispatch（与 MethodHandleNatives.staticFieldOffset 共用同一 id 空间）──────
 
-const _STATIC_ID_BASE: i64 = 1 << 40;
-
-crate::__process_static! {
-    static STATIC_FIELD_IDS: crate::sync_model::__RefSlot<
-        std::collections::HashMap<(std::string::String, std::string::String), i64>> =
-        crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
-    static STATIC_FIELD_BY_ID: crate::sync_model::__RefSlot<
-        std::collections::HashMap<i64, (std::string::String, std::string::String)>> =
-        crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
-}
-
-/// (声明类, 字段名) → 稳定静态偏移 id（首次登记分配）。
 fn _static_field_id(decl: std::string::String, name: std::string::String) -> i64 {
-    let key = (decl, name);
-    if let Some(id) = STATIC_FIELD_IDS.with(|m| m.borrow().get(&key).copied()) {
-        return id;
-    }
-    let id = STATIC_FIELD_IDS.with(|m| {
-        let mut m = m.borrow_mut();
-        let next = _STATIC_ID_BASE + m.len() as i64;
-        *m.entry(key.clone()).or_insert(next)
-    });
-    STATIC_FIELD_BY_ID.with(|m| { m.borrow_mut().insert(id, key); });
-    id
+    crate::reflect_dispatch::static_field_id(decl, name)
 }
 
-/// 静态偏移 id → (声明类, 字段名)；非静态登记 id → None。
 fn _static_field_of(offset: i64) -> Option<(std::string::String, std::string::String)> {
-    if offset < _STATIC_ID_BASE {
-        return None;
-    }
-    STATIC_FIELD_BY_ID.with(|m| m.borrow().get(&offset).cloned())
+    crate::reflect_dispatch::static_field_of(offset)
 }
 
 /// 静态引用字段读：经声明类的字段闭包（与 Field.get 静态臂同一存储）。
@@ -826,7 +801,7 @@ impl Unsafe {
 
     /// `staticFieldOffset(Field)`：静态字偏移量。无原始内存布局，偏移是按
     /// (声明类, 字段名) 登记的稳定不透明 id（同一字段恒同一 id，JDK 语义），取值区间
-    /// 与 objectFieldOffset 的实例字段 id 不相交（`_STATIC_ID_BASE` 起）：引用访问器
+    /// 与 objectFieldOffset 的实例字段 id 不相交（`reflect_dispatch::STATIC_FIELD_ID_BASE` 起）：引用访问器
     /// 据此把 (staticFieldBase, 偏移) 路由到声明类的静态存储（`_static_ref_get/set`）。
     #[jvm_boundary]
     pub fn staticFieldOffset(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {

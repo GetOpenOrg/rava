@@ -214,11 +214,14 @@ impl MethodHandleNatives {
         Ok(Object::from(m.__get_clazz()))
     }
 
-    /// native `staticFieldOffset(MemberName)`：静态字段偏移——与实例字段共用
-    /// (声明类, 字段名) 登记表（不透明 id，反查得字段身份）。
+    /// native `staticFieldOffset(MemberName)`：静态字段偏移——与 Unsafe.staticFieldOffset
+    /// 共用 (声明类, 字段名) 静态登记表（reflect_dispatch::static_field_id，id 区间与实例
+    /// 字段不相交）：Unsafe 引用访问器据此路由到声明类的静态存储（ClassSpecializer$Factory
+    /// .linkCodeToSpeciesData 写 species 类 BMH_SPECIES 的消费路径）。
     #[jvm_native]
     pub fn staticFieldOffset(m: MemberName) -> Result<i64> {
-        Self::objectFieldOffset(m)
+        let decl = format!("{}", m.__get_clazz().__get_name()).replace('.', "/");
+        Ok(crate::reflect_dispatch::static_field_id(decl, format!("{}", m.__get_name())))
     }
 
     #[jvm_native]
