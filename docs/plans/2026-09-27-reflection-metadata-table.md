@@ -1,6 +1,6 @@
 # FS-R：反射元数据表（Class / Field / Method / Constructor 回到字节码）
 
-> 状态：R1 / R2 / R3 完成（2026-09-27，3892415 起）；R4 进行中。属 FS-H0「反射元数据」组（过渡态清单 §〇 第一行，33 处越界覆盖）。
+> 状态：R1 / R2 / R3 完成（2026-09-27，3892415 起）；R4a 动态代理完成（c252358）；R4b / R4c 注解回到字节码（TestAnnoReflect 本机 PASS，TestAnnoValues 验证中）。属 FS-H0「反射元数据」组（过渡态清单 §〇 第一行，33 处越界覆盖）。
 > 前置：MH-native 管线（N11 / S-66：MH Direct / Records / BmhDynamicSpecies PASS）。
 
 ## 一、现状
@@ -99,6 +99,33 @@ getRawAnnotations(), getConstantPool(), cls)` → `annotationForMap` → **`Prox
 | 引导期时序 | `vm_boot_init.txt`（HotSpot initPhase1 对应物）：`AccessibleObject` 先于应用代码初始化，避免 `ReflectionFactory.<clinit>` 反向触发时重入读到 null 单例 |
 | 元数据补齐 | 修饰符表补手写根类 Object 行；直接超接口表 + `getInterfaces0`；`SharedSecrets.getJavaLangInvokeAccess` 槽位 |
 | 删除 | Class 成员查询 / 命名族覆盖、Field.get/set、Method.invoke、Constructor.newInstance、序列化构造器登记表、`member_accessible`、`constructor_rows` |
+
+### 2.8 R4 实施补记（2026-09-27）
+
+**R4a 动态代理**（TestDynamicProxy 与 JVM 一致）
+
+| 项 | 落点 |
+|---|---|
+| 代理载体 | VM 支持类 `java/lang/reflect/Proxy$Dyn`（字节码翻译）：接口列表、`dispatch`（声明异常透传 / UndeclaredThrowableException）、Object 三方法转发 |
+| 宏 | `ObjectVTable::__proxy_invoke`；接口载体 vtable 未命中先询问（先于 default 体）；实参装箱、返回值经 `__ProxyRet` checkcast + 拆箱；手写层提供 `__vm_proxy_invoke` 的类即代理载体（`is_instance_of` 按实例接口列表） |
+| 内建 | `Proxy.newProxyInstance`、`ProxyBuilder.isProxyClass`（intrinsics.txt 运行期类定义点） |
+| 附带修正 | Object 方法表补 JLS §4.3.2 全部成员；`ObjectVTable::equals` 默认体 = 身份比较（去掉 `Object::equals` 的引用相等捷径） |
+
+**R4b / R4c 注解**
+
+| 项 | 落点 |
+|---|---|
+| 数据 | classfile 保留 RuntimeVisible(Parameter)Annotations / AnnotationDefault 原始字节 + 引用到的稀疏常量池；build.rs：FieldMeta / MethodMeta 注解列、`class_anno_table`；运行时 `anno_pool` |
+| natives | `Class.getRawAnnotations / getRawTypeAnnotations / getConstantPool`、`ConstantPool.getUTF8At0 / getIntAt0 / getLongAt0 / getFloatAt0 / getDoubleAt0`；反射对象构造带入注解字节 |
+| 放行 | `sun/reflect/annotation/`（AnnotationParser / AnnotationType / AnnotationInvocationHandler 按字节码翻译） |
+| 手写（内部边界） | `AnnotationParser.parseSig`（注解签名恒为描述符 → Class，免放行 sun/reflect/generics）；`AnnotationInvocationHandler.memberValueToString`（逐元素拼接，免 Double/Int/LongStream 流水线）；`ScopedMemoryAccess`（堆 byte[] get*Unaligned）；`Preconditions.outOfBoundsExceptionFormatter`；JavaLangAccess 注解族 |
+| 入链 | callchain 注解类型种子（annotation_seeds.txt trigger）：注解类型 / 元注解方法入链、枚举元素 `<clinit>` + main 类初始化钩子 |
+| 修正 | `Class::__name_assignable` 沿直接超接口表传递（接口块无 all_supertypes） |
+| 删除 | annotation_meta.rs、annotation_objects.py、Class / Field / Method / Constructor 注解查询覆盖、旧 annotation_table |
+
+编译内存：注解闭包（~1680 类）的 java_runtime 本机编译峰值约 13GB，15G 机器需 `CARGO_BUILD_JOBS=1`
+（run_tests 构建超时经 `JAVA_RTA_BUILD_TIMEOUT` 调大）。放行 sun/reflect/generics 与三族基本类型流水线
+会使峰值越过 15G，故以上两处手写。
 
 ## 三、不做什么
 
