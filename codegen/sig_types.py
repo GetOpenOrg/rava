@@ -68,7 +68,9 @@ def hierarchy_overloaded_names(ci, registry: dict | None) -> frozenset:
       3. ci 声明了该名字的实例方法，且与祖先链上的同名实例方法合计 ≥2 种参数列表
          （Buffer.position() / ByteBuffer.position(int) → ByteBuffer 用 position_i，
          不遮蔽 Buffer.position()）
-    static 方法按路径调用（不经 Deref），不参与跨类判定；<init> 不继承，只看规则 1。
+      4. ci 声明了该名字的 static 方法（无同名实例方法），且与祖先链上的同名实例方法
+         参数列表不同（继承转发声明与 static 同处本类固有命名空间）
+    <init> 不继承，只看规则 1。
     判定只向上看：祖先总在 registry 中，结果不随翻译范围变化。接口自身只用规则 1。"""
     cache_key = (id(registry), len(registry) if registry else 0, ci.name)
     cached = _OVERLOAD_CACHE.get(cache_key)
@@ -90,6 +92,13 @@ def hierarchy_overloaded_names(ci, registry: dict | None) -> frozenset:
                 inherited.setdefault(n, set()).update(ps)
             anc = registry.get(anc.super_class) if anc.super_class else None
         result |= {n for n, ps in own_inst.items() if len(ps | inherited.get(n, set())) > 1}
+        # 规则 4：本类 static 方法与祖先实例方法同名异参——两者同处本类 impl 块的固有
+        # 命名空间（继承成员填槽 S-16 把祖先实例方法的转发声明发射进本类）→ E0592。
+        # ProcessEnvironment$StringEnvironment 的 static toString(Value) 与
+        # AbstractMap.toString() 转发声明相撞即此形态。
+        result |= {n for n, ps in own_all.items()
+                   if n not in own_inst and n != '<init>' and n in inherited
+                   and len(ps | inherited[n]) > 1}
     frozen = frozenset(result)
     _OVERLOAD_CACHE[cache_key] = frozen
     return frozen
