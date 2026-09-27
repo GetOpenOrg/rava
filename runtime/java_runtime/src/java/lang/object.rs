@@ -18,9 +18,11 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 未覆盖 hashCode 的类满足 `hashCode() == identityHashCode()`（JLS 契约，S-6）。
     fn hashCode(&self) -> i32 { __identity_hash(self.__identity()) }
 
-    /// java.lang.Object.equals(Object)Z 的覆盖入口：引用相等已由调用方（`Object::equals`）判定，
-    /// 此处只承载运行时类的覆盖实现；未覆盖的类 → false。
-    fn equals(&self, _other: Object) -> crate::error::Result<bool> { Ok(false) }
+    /// java.lang.Object.equals(Object)Z 的虚分派入口：覆盖的类由宏桥接到翻译体；未覆盖的类
+    /// 即 `Object.equals` 本体——引用相等（`this == obj`，身份比较）。
+    fn equals(&self, other: Object) -> crate::error::Result<bool> {
+        Ok(!other.0.is_jvm_null() && self.__identity() == other.0.__identity())
+    }
 
     /// 用于 Display/Debug 的 Rust 字符串（内部用途，避免与 Java toString() -> Result<String> 冲突）
     fn __obj_str(&self) -> std::string::String {

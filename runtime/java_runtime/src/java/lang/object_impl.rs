@@ -44,9 +44,8 @@ impl Object {
 
     #[jvm_native]
     pub fn equals(&self, other: Object) -> Result<bool> {
-        if *self == other {
-            return Ok(true);
-        }
+        // 不做引用相等捷径：equals 是虚方法，覆盖者（如动态代理转发 InvocationHandler）对
+        // 自身同样须执行覆盖体；未覆盖类的身份比较由 ObjectVTable::equals 默认体承载。
         // String 内容比较：通过 Display impl（string_ext.rs 中使用字节数组解码）
         let s1 = self.0.as_any().downcast_ref::<JvmString>();
         let s2 = other.0.as_any().downcast_ref::<JvmString>();
