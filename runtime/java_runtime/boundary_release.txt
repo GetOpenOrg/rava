@@ -15,3 +15,9 @@ java/lang/Class$ReflectionData
 java/lang/Class$EnclosingMethodInfo
 java/lang/Class$Atomic
 java/lang/Class$AnnotationData
+
+# FS-R R2a：反射访问器族（JDK 21 的 Field.get / Method.invoke 经 ReflectionFactory →
+# MethodHandleAccessorFactory → DirectMethodHandle，与 MH-native 同一管线）。包内 native
+#（Reflection.getCallerClass 等）仍由共置 _impl.rs 手写；运行期字节码生成点
+#（generateConstructor / generateMethodAccessor）按 intrinsics.txt 准入（R3）。
+jdk/internal/reflect/
