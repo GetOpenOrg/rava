@@ -1096,6 +1096,17 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             if not queue:
                 break
 
+        # 物种族的全量字段反射面：与镜像独有 / VM 支持种子类同直接父类的闭包类（JDK 源码
+        # 自带的 BoundMethodHandle.Species_L 与 jlink 预生成物种同族）——ClassSpecializer
+        # 对任一物种类都经运行期拼出的 `arg<T><i>` 名 findGetter，无名字常量可播种。
+        # 按「同父类 × 种子类」结构判定，不涉类名（原则 4）。
+        _family_supers = {_ci.super_class for _x in _image_seeded
+                          if (_ci := _load_class(_x)) is not None and _ci.super_class}
+        for _cls, _cci in list(jdk_infos.items()):
+            if (_cci is not None and not _cci.is_interface
+                    and _cci.super_class in _family_supers):
+                REFLECT_ALL_MEMBERS.add(_cls)
+
         # 签名多态 / 未解析调用的可观测性（与 JAVA_RTA_BFS_TRACE 溯源互补）
         if _sig_poly_native or _unresolved_calls or _root_inherited:
             print(f"[bfs-audit] sig-poly-native={len(_sig_poly_native)} "
