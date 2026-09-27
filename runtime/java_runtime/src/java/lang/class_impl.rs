@@ -444,6 +444,27 @@ impl Class {
 
 
 
+    /// native `getInterfaces0()`：直接超接口（class 文件 interfaces 项，声明序）。数组类 →
+    /// Cloneable / Serializable（JLS §10.8）；基本类型类 / 无接口 → 空数组。
+    #[jvm_native]
+    pub fn getInterfaces0(&self) -> Result<JArray<Class>> {
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        let list: Vec<&str> = if name.starts_with('[') {
+            vec!["java/lang/Cloneable", "java/io/Serializable"]
+        } else if self.isPrimitive()? {
+            Vec::new()
+        } else {
+            __interfaces::CLASS_INTERFACES.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, l)| l.to_vec())
+                .unwrap_or_default()
+        };
+        let out: Vec<Class> = list.into_iter()
+            .map(|i| Class::for_class(String::from(i)))
+            .collect();
+        Ok(JArray::from(out))
+    }
+
     /// native `Class.isInterface()`：接口（含注解类型）判定，读 build.rs 修饰符表的
     /// INTERFACE 位（与 getModifiers 同源）。数组类 / 基本类型类 → false
     /// （JLS：数组类型与基本类型都不是接口）；闭包外类（表中缺席）→ false。
@@ -623,6 +644,11 @@ mod __modifiers {
 /// build.rs 生成的 record 类集（OUT_DIR/record_table.rs）。
 mod __record {
     include!(concat!(env!("OUT_DIR"), "/record_table.rs"));
+}
+
+/// build.rs 生成的直接超接口表（OUT_DIR/interfaces_table.rs）。
+mod __interfaces {
+    include!(concat!(env!("OUT_DIR"), "/interfaces_table.rs"));
 }
 
 /// build.rs 生成的嵌套元数据表（OUT_DIR/nest_table.rs，FS-R R1）。

@@ -403,6 +403,18 @@ crate::__process_static! {
     > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
 }
 
+/// VM 引导期类初始化（HotSpot `initPhase1` 等对应物，清单 `vm_boot_init.txt`）：JDK 依赖
+/// 某些类先于任何应用代码完成初始化（例：AccessibleObject 登记 ReflectAccess 并缓存
+/// ReflectionFactory——若由 ReflectionFactory.<clinit> 反向触发，重入读到 null 单例）。
+/// 生成项目 main 按清单顺序传入闭包内在场的类；初始化失败即 VM 启动失败。
+pub fn vm_boot_init(inits: &[(&str, fn() -> Result<()>)]) {
+    for (_name, init) in inits {
+        if let Err(e) = init() {
+            e.report_uncaught();
+        }
+    }
+}
+
 /// 生成项目 main 启动时登记类初始化钩子。`binary_name` 归一规则与常量目录一致。
 pub fn register_class_init_hooks(hooks: &[(&str, ClassInitHook)]) {
     CLASS_INIT_HOOKS.with(|h| {

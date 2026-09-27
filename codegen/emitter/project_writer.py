@@ -781,6 +781,23 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         hook_block += ('    java_runtime::jca::register_services(&[\n'
                        + '\n'.join(_jca_lines) + '\n    ]);\n')
 
+    # VM 引导期类初始化（HotSpot initPhase1 对应物）：清单 vm_boot_init.txt 中在闭包内
+    # 翻译在场的类，main 启动时按清单顺序初始化（runtime vm_boot_init）
+    from ..runtime_manifest import read_list as _read_list
+    _jdk_names = {jci.name for jci in (jdk_class_infos or [])}
+    _boot_lines = []
+    for _bn in _read_list('vm_boot_init.txt'):
+        _bn = _bn.split()[0]
+        if _bn not in _jdk_names:
+            continue
+        _bp = '::'.join(['java_runtime',
+                         *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _bn.split('/')[:-1]),
+                         short_cls(_bn)])
+        _boot_lines.append(f'        ("{_bn}", {_bp}::__class_init as fn() -> java_runtime::error::Result<()>),')
+    if _boot_lines:
+        hook_block += ('    java_runtime::vm_boot_init(&[\n'
+                       + '\n'.join(_boot_lines) + '\n    ]);\n')
+
     if batch_bin:
         # 批量模式：每个 bin 用 #[path] 独立包含自己的类文件，不共享 lib.rs。
         # 这样某个测试编译失败不会影响其他测试。

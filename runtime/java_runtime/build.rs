@@ -87,6 +87,7 @@ fn main() {
     write_modifiers_table(&scan_class_modifiers(&meta_roots));
     write_record_table(&scan_record_classes(&meta_roots), &scan_record_components(&meta_roots));
     write_nest_table(&scan_nest_meta(&meta_roots));
+    write_interfaces_table(&scan_class_interfaces(&meta_roots));
     write_annotation_table(&scan_annotations(&meta_roots));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
@@ -723,6 +724,10 @@ fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
                     | modifier_bits(&mods_str));
         }
     }
+    // 手写根类 java/lang/Object（object.rs，无 java_class! 块）：`public class Object`
+    //（与方法表补行同源；缺行时 getModifiers 落 PUBLIC|FINAL|ABSTRACT 缺省，
+    // ReflectionFactory 据 ABSTRACT 位走 InstantiationException 访问器）
+    result.entry("java/lang/Object".to_owned()).or_insert(0x0001);
     result
 }
 
@@ -834,6 +839,50 @@ fn write_nest_table(entries: &BTreeMap<String, NestMeta>) {
     let path = Path::new(&out_dir).join("nest_table.rs");
     if let Err(e) = fs::write(&path, &out) {
         panic!("写 nest_table.rs 失败: {e}");
+    }
+}
+
+/// 直接超接口表（class 文件 interfaces 项，声明序）：数据源 `interfaces` 属性。
+/// 消费方：Class.getInterfaces0（HotSpot 同源）。
+fn scan_class_interfaces(roots: &[&Path]) -> BTreeMap<String, Vec<String>> {
+    let mut result: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+                continue;
+            }
+            if current.is_empty() { continue; }
+            if let Some(v) = extract_attr_padded(trimmed, "interfaces") {
+                let list: Vec<String> = v.split(',').map(str::trim)
+                    .filter(|x| !x.is_empty()).map(str::to_owned).collect();
+                if !list.is_empty() {
+                    result.insert(current.clone(), list);
+                }
+            }
+        }
+    }
+    result
+}
+
+fn write_interfaces_table(entries: &BTreeMap<String, Vec<String>>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：直接超接口表（声明序）。消费方：Class.getInterfaces0。请勿手改。
+
+         pub static CLASS_INTERFACES: &[(&str, &[&str])] = &[
+",
+    );
+    for (name, list) in entries {
+        out.push_str(&format!("    ({:?}, &{:?}),\n", name, list));
+    }
+    out.push_str("];\n");
+    let path = Path::new(&out_dir).join("interfaces_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 interfaces_table.rs 失败: {e}");
     }
 }
 

@@ -1,0 +1,6 @@
+# VM 引导期类初始化清单（HotSpot 在执行应用代码前完成初始化的类，initPhase1 等）。
+# 生成项目 main 启动时按本文件顺序初始化其中「在闭包内翻译在场」的类（runtime vm_boot_init）。
+# 准入：JDK 代码显式依赖「该类已在引导期初始化」的时序（惰性初始化下会重入读到未就绪状态）。
+#
+# 格式：binary_name    # 依据
+java/lang/reflect/AccessibleObject   # JDK 注释 "AccessibleObject is initialized early in initPhase1"：<clinit> 登记 ReflectAccess 并缓存 ReflectionFactory 单例；由 ReflectionFactory.<clinit> 反向触发时 GetReflectionFactoryAction 重入读到 null
