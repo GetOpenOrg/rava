@@ -1,6 +1,6 @@
 # FS-R：反射元数据表（Class / Field / Method / Constructor 回到字节码）
 
-> 状态：R1 / R2 / R3 完成（2026-09-27，3892415 起）；R4a 动态代理完成（c252358）；R4b / R4c 注解回到字节码（TestAnnoReflect 本机 PASS，TestAnnoValues 验证中）。属 FS-H0「反射元数据」组（过渡态清单 §〇 第一行，33 处越界覆盖）。
+> 状态：R1 / R2 / R3 完成（2026-09-27，3892415 起）；R4a 动态代理完成（c252358）；R4b / R4c 注解回到字节码（TestAnnoReflect / TestAnnoValues 本机 PASS）。属 FS-H0「反射元数据」组（过渡态清单 §〇 第一行，33 处越界覆盖）。
 > 前置：MH-native 管线（N11 / S-66：MH Direct / Records / BmhDynamicSpecies PASS）。
 
 ## 一、现状
@@ -120,7 +120,7 @@ getRawAnnotations(), getConstantPool(), cls)` → `annotationForMap` → **`Prox
 | 放行 | `sun/reflect/annotation/`（AnnotationParser / AnnotationType / AnnotationInvocationHandler 按字节码翻译） |
 | 手写（内部边界） | `AnnotationParser.parseSig`（注解签名恒为描述符 → Class，免放行 sun/reflect/generics）；`AnnotationInvocationHandler.memberValueToString`（逐元素拼接，免 Double/Int/LongStream 流水线）；`ScopedMemoryAccess`（堆 byte[] get*Unaligned）；`Preconditions.outOfBoundsExceptionFormatter`；JavaLangAccess 注解族 |
 | 入链 | callchain 注解类型种子（annotation_seeds.txt trigger）：注解类型 / 元注解方法入链、枚举元素 `<clinit>` + main 类初始化钩子 |
-| 修正 | `Class::__name_assignable` 沿直接超接口表传递（接口块无 all_supertypes） |
+| 修正 | `Class::__name_assignable` 沿直接超接口表传递（接口块无 all_supertypes）；方法表 `inherited` 标记（getDeclaredMethods 不含展平的继承成员，MethodHandle resolve 仍用全部行）；代理转发按 Java 方法名（关键字转义 `type → type_`） |
 | 删除 | annotation_meta.rs、annotation_objects.py、Class / Field / Method / Constructor 注解查询覆盖、旧 annotation_table |
 
 编译内存：注解闭包（~1680 类）的 java_runtime 本机编译峰值约 13GB，15G 机器需 `CARGO_BUILD_JOBS=1`
