@@ -227,11 +227,13 @@ impl Wrapper {
     }
 
     /// 实例 `convert(Object, Class<T>)`：`convert(x, type, true)`（宽松转换：null → 零值）。
+    #[jvm_boundary(upcalls = "java/lang/Class.cast:(Ljava/lang/Object;)Ljava/lang/Object;")]
     pub fn convert_obj_class(&self, x: Object, type_: Class) -> Result<Object> {
         self.convert_obj_class_z(x, type_, true)
     }
 
     /// 实例 `cast(Object, Class<T>)`：`convert(x, type, false)`（严格：源包装须可转换，否则 CCE）。
+    #[jvm_boundary(upcalls = "java/lang/Class.cast:(Ljava/lang/Object;)Ljava/lang/Object;")]
     pub fn cast(&self, x: Object, type_: Class) -> Result<Object> {
         self.convert_obj_class_z(x, type_, false)
     }
@@ -241,6 +243,7 @@ impl Wrapper {
     /// !isCast 时源值的包装须 isConvertibleFrom，否则 ClassCastException；isCast 且 x 为
     /// null → zero()；其余经 `wrap`：数值化（Number / Character → int / Boolean → 0|1）后按
     /// 本类型窄化 / 拓宽装箱（JLS §5.1.2 / §5.1.3 的 Java 转换语义）。
+    #[jvm_boundary(upcalls = "java/lang/Class.cast:(Ljava/lang/Object;)Ljava/lang/Object;")]
     pub fn convert_obj_class_z(&self, x: Object, type_: Class, is_cast: bool) -> Result<Object> {
         let tc = self.__get_basicTypeChar() as u8;
         if tc == b'L' {

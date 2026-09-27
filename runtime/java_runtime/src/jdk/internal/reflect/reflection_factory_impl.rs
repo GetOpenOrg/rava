@@ -30,6 +30,7 @@ impl ReflectionFactory {
     /// 运行 initCl 构造体（N2）。
     /// JDK 的 superHasAccessibleConstructor 逐级检查简并为对 initCl 构造的
     /// 可见性检查（非 null 返回的判定面一致：链上中间类均可序列化）。
+    #[jvm_boundary(upcalls = "java/lang/Class.getPackageName:()Ljava/lang/String;")]
     pub fn newConstructorForSerialization_class(&self, cl: Class)
         -> Result<crate::java::lang::reflect::Constructor<Object>>
     {

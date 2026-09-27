@@ -356,6 +356,10 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
             for ic in ci.inner_classes
         )
         lines.append(f'#[inner_classes     = "{_q(ic_strs)}"]')
+    if getattr(ci, 'enclosing_class', ''):
+        # EnclosingMethod 属性（局部 / 匿名类）：Class.getEnclosingMethod0 的数据源（FS-R R1）
+        _em = ci.enclosing_method or ('', '')
+        lines.append(f'#[enclosing_method  = "{_q(ci.enclosing_class)}:{_q(_em[0])}:{_q(_em[1])}"]')
     if ci.runtime_annotations:
         # 反射 L3 段 1：类挂载点注解（编码见 classfile.encode_annotations；
         # 载荷自带转义，此处不再过 _q——build.rs 按原文透传，运行时侧解码）

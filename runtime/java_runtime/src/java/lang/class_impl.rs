@@ -342,14 +342,6 @@ impl Class {
             .unwrap_or(false)
     }
 
-    /// `Class.getName()`：返回类对象的二进制名（Java 形式，点分隔）。
-    ///
-    /// `java/lang/Class` 只作为类型存根进入闭包，字节码版的 `getName()` 是 stub，
-    /// 故在此手写。名字来源有二：类字面量经 `for_class` 写入、基本类型经
-    /// `getPrimitiveClass` 写入（二者落到同一个 private name 字段）。
-    pub fn __impl_getName(&self) -> Result<String> {
-        Ok(Clone::clone(&self.__get_name()))
-    }
 
     /// native `Class.getSuperclass()`：直接父类的 Class 对象。
     ///
@@ -367,47 +359,7 @@ impl Class {
         }
     }
 
-    /// `Class.getSimpleName()`：简单名。顶层类取最后一个 `.` 之后的段，
-    /// 嵌套类再取最后一个 `$` 之后的段（JDK getSimpleBinaryName 的常见形态）。
-    /// 数组类（名字是 JVM 描述符形态，`for_class` 的存储形态）取元素类型的
-    /// 简单名再按维度补 `[]`（JDK 语义：`[Ljava.lang.String;` → `String[]`、
-    /// `[[I` → `int[][]`，getArrayName 逐维展开）。
-    pub fn __impl_getSimpleName(&self) -> Result<String> {
-        let full = format!("{}", self.__get_name());
-        if full.starts_with('[') {
-            let dims = full.chars().take_while(|c| *c == '[').count();
-            let comp = &full[dims..];
-            let comp_simple = if let Some(inner) =
-                comp.strip_prefix('L').and_then(|s| s.strip_suffix(';'))
-            {
-                let s = inner.rsplit('.').next().unwrap_or("");
-                s.rsplit('$').next().unwrap_or("").to_owned()
-            } else {
-                match comp {
-                    "Z" => "boolean", "B" => "byte", "C" => "char", "S" => "short",
-                    "I" => "int", "J" => "long", "F" => "float", "D" => "double",
-                    other => other,
-                }.to_owned()
-            };
-            let mut simple = comp_simple;
-            for _ in 0..dims {
-                simple.push_str("[]");
-            }
-            return Ok(String::from(simple.as_str()));
-        }
-        let simple = full.rsplit('.').next().unwrap_or("");
-        let simple = simple.rsplit('$').next().unwrap_or("");
-        Ok(String::from(simple))
-    }
 
-    /// `Class.desiredAssertionStatus()`：该类的断言是否启用。
-    ///
-    /// 原生二进制没有 `-ea` / `-da` 开关，断言恒为禁用（即 JVM 的默认行为），
-    /// 故恒返回 false。JDK 大量类的 `<clinit>` 用 `!X.class.desiredAssertionStatus()`
-    /// 初始化 `$assertionsDisabled`，此方法是那条路径的必经之地。
-    pub fn __impl_desiredAssertionStatus(&self) -> Result<bool> {
-        Ok(false)
-    }
 
     /// `Class.getModule()`：类所属模块。单二进制无模块层——全类集归属
     /// 无名模块单例（module_impl::unnamed_module，isNamed 恒 false）。
@@ -700,26 +652,6 @@ impl Class {
         Ok(crate::java::lang::ClassLoader::default())
     }
 
-    /// `Class.getPackageName()`：数组类取最内层元素类型的包；基本类型类（含
-    /// void）为 "java.lang"；其余取 binary name 最后一个 `.` 之前的部分，无包
-    /// 为 ""（JDK 21 语义）。消费方：ObjectStreamClass.packageEquals（包可见
-    /// 成员判定）。
-    pub fn getPackageName(&self) -> Result<String> {
-        let name = format!("{}", self.__get_name()).replace('/', ".");
-        let elem = name.trim_start_matches('[');
-        let pkg = if elem.len() != name.len() {
-            // 数组：元素描述符 `Lpkg.Cls;` 或基本类型字符
-            match elem.strip_prefix('L').and_then(|s| s.strip_suffix(';')) {
-                Some(cls) => cls.rsplit_once('.').map(|(p, _)| p.to_owned()).unwrap_or_default(),
-                None => "java.lang".to_owned(),
-            }
-        } else if self.isPrimitive()? || name == "void" {
-            "java.lang".to_owned()
-        } else {
-            name.rsplit_once('.').map(|(p, _)| p.to_owned()).unwrap_or_default()
-        };
-        Ok(String::from(pkg))
-    }
 
     /// native `Class.isInstance(Object)`：null → false；否则按运行时类的
     /// is_instance_of（vtable 按 binary name 斜线形态应答，含超类与接口闭包）。
@@ -771,25 +703,6 @@ impl Class {
             String::from(format!("{}.<init>({})", owner, want.join(", "))))?))
     }
 
-    /// `Class.descriptorString()`（JVMS §4.3.2 字段描述符）：基本类型 → 单字母
-    /// （void → `V`）；数组类名即描述符形态（for_class 存储 `[I` /
-    /// `[Ljava.lang.String;`，点换斜线即 JDK 结果）；其余 → `L<binary>;`。
-    /// 隐藏类的 `.` 分隔形态不在翻译语料内。
-    /// 消费方：ObjectStreamField 构造（字段签名 `signature` 计算）。
-    pub fn descriptorString(&self) -> Result<String> {
-        let name = format!("{}", self.__get_name());
-        let prim = match name.as_str() {
-            "boolean" => Some("Z"), "byte" => Some("B"), "char" => Some("C"),
-            "short" => Some("S"), "int" => Some("I"), "long" => Some("J"),
-            "float" => Some("F"), "double" => Some("D"), "void" => Some("V"),
-            _ => None,
-        };
-        Ok(String::from(match prim {
-            Some(p) => p.to_string(),
-            None if name.starts_with('[') => name.replace('.', "/"),
-            None => format!("L{};", name.replace('.', "/")),
-        }))
-    }
 
     /// native `Class.isInterface()`：接口（含注解类型）判定，读 build.rs 修饰符表的
     /// INTERFACE 位（与 getModifiers 同源）。数组类 / 基本类型类 → false
@@ -807,13 +720,6 @@ impl Class {
             .unwrap_or(false))
     }
 
-    pub fn isRecord(&self) -> Result<bool> {
-        let name = format!("{}", self.__get_name()).replace('.', "/");
-        if name.starts_with('[') {
-            return Ok(false);
-        }
-        Ok(__record::RECORD_CLASSES.contains(&name.as_str()))
-    }
 
     /// native `Class.forName0(name, initialize, loader, caller)`：按 binary name 取 Class 对象。
     /// 原生镜像的「可加载类」= 生成闭包内的类（build.rs 修饰符表，含用户类）；数组名
@@ -870,33 +776,7 @@ impl Class {
         Ok(JArray::from(out))
     }
 
-    /// `Class.isMemberClass()`：是否成员类（有具名外围类的嵌套类）。数据源
-    /// 是 java_class! 块的 inner_classes 属性（build.rs 侧无表——本方法按
-    /// 名字约定判：成员类的 binary name 以 `$` 分隔且非数组/基本类型；
-    /// 数组类名以 `[` 开头恒 false，无 `$` 的顶层类 false）。
-    pub fn isMemberClass(&self) -> Result<bool> {
-        let name = format!("{}", self.__get_name());
-        if name.starts_with('[') {
-            return Ok(false);
-        }
-        Ok(name.contains('$'))
-    }
 
-    /// `Class.cast(Object)`：运行时类型转换（JDK 语义：isInstance 通过返回
-    /// 原对象，否则 ClassCastException；null 通过返回 null）。
-    pub fn cast(&self, obj: Object) -> Result<Object> {
-        if obj.0.is_jvm_null() {
-            return Ok(obj);
-        }
-        let self_key = format!("{}", self.__get_name()).replace('.', "/");
-        if obj.0.is_instance_of(&self_key) {
-            return Ok(obj);
-        }
-        let ex = crate::java::lang::ClassCastException::new_str(String::from(format!(
-            "class {} cannot be cast to class {}",
-            obj.0.__class_name().replace('/', "."), self_key.replace('/', "."))))?;
-        Err(JvmError::from(ex))
-    }
 }
 
 /// 描述符 → Class 对象（getDeclaredField 的 type 填充与 getComponentType 的
@@ -1003,4 +883,94 @@ mod __modifiers {
 /// build.rs 生成的 record 类集（OUT_DIR/record_table.rs）。
 mod __record {
     include!(concat!(env!("OUT_DIR"), "/record_table.rs"));
+}
+
+/// build.rs 生成的嵌套元数据表（OUT_DIR/nest_table.rs，FS-R R1）。
+mod __nest {
+    include!(concat!(env!("OUT_DIR"), "/nest_table.rs"));
+}
+
+// ── FS-R R1：类级 native（数据源 = 元数据表，JDK 公开方法体回到字节码）────────────
+//
+// HotSpot 从 class 文件的 InnerClasses / EnclosingMethod / Record 属性取值；原生二进制
+// 以 build.rs 表承载同一数据（docs/plans/2026-09-27-reflection-metadata-table.md）。
+impl Class {
+    fn __slash_name(&self) -> std::string::String {
+        format!("{}", self.__get_name()).replace('.', "/")
+    }
+
+    fn __nest(&self) -> Option<&'static __nest::NestMeta> {
+        let key = self.__slash_name();
+        __nest::CLASS_NEST.iter().find(|(n, _)| *n == key).map(|(_, m)| m)
+    }
+
+    /// native `getDeclaringClass0()`：本类 InnerClasses 条目的 outer_class（成员类）；
+    /// 顶层 / 局部 / 匿名类（outer 为空）与数组、基本类型 → null。
+    #[jvm_native]
+    pub fn getDeclaringClass0(&self) -> Result<Class> {
+        Ok(match self.__nest() {
+            Some(m) if m.self_entry && !m.outer.is_empty() => Class::for_class(String::from(m.outer)),
+            _ => Class::default(),
+        })
+    }
+
+    /// native `getSimpleBinaryName0()`：本类 InnerClasses 条目的 inner_name（匿名类为 null）；
+    /// 无本类条目（顶层类）→ null。
+    #[jvm_native]
+    pub fn getSimpleBinaryName0(&self) -> Result<String> {
+        Ok(match self.__nest() {
+            Some(m) if m.self_entry && !m.simple.is_empty() => String::from(m.simple),
+            _ => String::default(),
+        })
+    }
+
+    /// native `getEnclosingMethod0()`：EnclosingMethod 属性 → `{封闭类, 方法名, 描述符}`
+    /// （方法名 / 描述符在类初始化器或字段初始化器内声明时为 null）；无属性 → null。
+    #[jvm_native]
+    pub fn getEnclosingMethod0(&self) -> Result<JArray<Object>> {
+        let Some((cls, name, desc)) = self.__nest().and_then(|m| m.enclosing) else {
+            return Ok(JArray::default());
+        };
+        let opt = |s: &str| if s.is_empty() { Object::default() } else { Object::from(String::from(s)) };
+        Ok(JArray::from(vec![
+            Object::from(Class::for_class(String::from(cls))),
+            opt(name),
+            opt(desc),
+        ]))
+    }
+
+    /// native `isRecord0()`：Record 属性在场（record 类集表）。
+    #[jvm_native]
+    pub fn isRecord0(&self) -> Result<bool> {
+        let key = self.__slash_name();
+        Ok(!key.starts_with('[') && __record::RECORD_CLASSES.contains(&key.as_str()))
+    }
+
+    /// static native `desiredAssertionStatus0(Class)`：断言恒关（`-ea` 缺省，JVM 同）。
+    #[jvm_native]
+    pub fn desiredAssertionStatus0(_c: Class) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// native `isHidden()`：原生二进制无运行期定义的隐藏类（lambda 代理为编译期合成类）。
+    #[jvm_native]
+    pub fn isHidden(&self) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// native `getNestHost0()`：javac 的 NestHost 恒为最外层封闭类（binary name 首个 `$` 前）。
+    #[jvm_native]
+    pub fn getNestHost0(&self) -> Result<Class> {
+        let key = self.__slash_name();
+        if key.starts_with('[') || !key.contains('/') && !key.contains('$') {
+            return Ok(Clone::clone(self));
+        }
+        Ok(Class::for_class(String::from(key.split('$').next().unwrap_or(&key))))
+    }
+
+    /// native `initClassName()`：镜像名在 for_class 建镜像时写入，直接返回。
+    #[jvm_native]
+    pub fn initClassName(&self) -> Result<String> {
+        Ok(self.__get_name())
+    }
 }

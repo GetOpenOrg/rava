@@ -86,6 +86,7 @@ fn main() {
     write_method_table(&with_object_ctor_row(scan_class_methods(&meta_roots)));
     write_modifiers_table(&scan_class_modifiers(&meta_roots));
     write_record_table(&scan_record_classes(&meta_roots), &scan_record_components(&meta_roots));
+    write_nest_table(&scan_nest_meta(&meta_roots));
     write_annotation_table(&scan_annotations(&meta_roots));
 
     let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
@@ -751,6 +752,88 @@ fn write_modifiers_table(entries: &BTreeMap<String, i32>) {
     let path = Path::new(&out_dir).join("modifiers_table.rs");
     if let Err(e) = fs::write(&path, &out) {
         panic!("写 modifiers_table.rs 失败: {e}");
+    }
+}
+
+/// 嵌套元数据（FS-R R1）：类 → (外层类, 简单名, 本类 InnerClasses 条目在场, 封闭方法三元组)。
+/// 数据源：`inner_classes`（本类自身条目：`inner:outer:simple:flags`）与 `enclosing_method`
+/// （`class:name:desc`）属性。消费方：Class.getDeclaringClass0 / getSimpleBinaryName0 /
+/// getEnclosingMethod0（HotSpot 同源：InnerClasses / EnclosingMethod 属性）。
+struct NestMeta {
+    outer: String,
+    simple: String,
+    self_entry: bool,
+    enclosing: Option<(String, String, String)>,
+}
+
+fn scan_nest_meta(roots: &[&Path]) -> BTreeMap<String, NestMeta> {
+    let mut result: BTreeMap<String, NestMeta> = BTreeMap::new();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+                continue;
+            }
+            if current.is_empty() { continue; }
+            if let Some(v) = extract_attr_padded(trimmed, "inner_classes") {
+                for ent in v.split(';') {
+                    let parts: Vec<&str> = ent.split(':').collect();
+                    if parts.len() >= 3 && parts[0] == current {
+                        let e = result.entry(current.clone()).or_insert(NestMeta {
+                            outer: String::new(), simple: String::new(), self_entry: false, enclosing: None,
+                        });
+                        e.outer = parts[1].to_owned();
+                        e.simple = parts[2].to_owned();
+                        e.self_entry = true;
+                    }
+                }
+            }
+            if let Some(v) = extract_attr_padded(trimmed, "enclosing_method") {
+                let parts: Vec<&str> = v.splitn(3, ':').collect();
+                if parts.len() == 3 {
+                    let e = result.entry(current.clone()).or_insert(NestMeta {
+                        outer: String::new(), simple: String::new(), self_entry: false, enclosing: None,
+                    });
+                    e.enclosing = Some((parts[0].to_owned(), parts[1].to_owned(), parts[2].to_owned()));
+                }
+            }
+        }
+    }
+    result
+}
+
+fn write_nest_table(entries: &BTreeMap<String, NestMeta>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：嵌套元数据表（InnerClasses 本类条目 + EnclosingMethod）。
+         // 消费方：Class.getDeclaringClass0 / getSimpleBinaryName0 / getEnclosingMethod0。请勿手改。
+
+         pub struct NestMeta {
+             pub outer:      &'static str,
+             pub simple:     &'static str,
+             pub self_entry: bool,
+             pub enclosing:  Option<(&'static str, &'static str, &'static str)>,
+         }
+
+         pub static CLASS_NEST: &[(&str, NestMeta)] = &[
+",
+    );
+    for (name, m) in entries {
+        let enc = match &m.enclosing {
+            Some((c, n, d)) => format!("Some(({:?}, {:?}, {:?}))", c, n, d),
+            None => "None".to_owned(),
+        };
+        out.push_str(&format!(
+            "    ({:?}, NestMeta {{ outer: {:?}, simple: {:?}, self_entry: {}, enclosing: {} }}),\n",
+            name, m.outer, m.simple, m.self_entry, enc));
+    }
+    out.push_str("];\n");
+    let path = Path::new(&out_dir).join("nest_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 nest_table.rs 失败: {e}");
     }
 }
 

@@ -50,13 +50,13 @@ fn split_method_descriptor(desc: &str) -> Option<Vec<std::string::String>> {
 
 impl BytecodeDescriptor {
     /// `unparse(Class)`：类型描述符（`I` / `Ljava/lang/String;` / `[J` …）。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
     pub fn unparse_class(type_: Class) -> Result<String> {
         type_.descriptorString()
     }
 
     /// `unparse(Object)`：Class → 描述符；MethodType → 方法描述符；其余（String）原样。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
     pub fn unparse_obj(type_: Object) -> Result<String> {
         if type_.0.is_instance_of("java/lang/Class") {
             return Clone::clone(&type_).try_cast::<Class>("java/lang/Class")?.descriptorString();
@@ -70,7 +70,7 @@ impl BytecodeDescriptor {
     }
 
     /// `unparseMethod(Class rtype, Class[] ptypes)`：`(P…)R`。
-    #[jvm_boundary]
+    #[jvm_boundary(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
     pub fn unparseMethod_class_arr_class(rtype: Class, ptypes: JArray<Class>) -> Result<String> {
         let mut s = std::string::String::from("(");
         for i in 0..ptypes.len()? {
