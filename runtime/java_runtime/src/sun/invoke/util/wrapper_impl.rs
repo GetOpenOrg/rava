@@ -178,6 +178,36 @@ impl Wrapper {
         Ok(other(t) || CONSTANTS[s].1 == b'C' as u16)
     }
 
+    /// 实例 `wrapperSimpleName()`：包装类简单名（ValueConversions 按 "unbox" + 名查找转换方法）。
+    pub fn wrapperSimpleName(&self) -> Result<String> {
+        Ok(Clone::clone(&self.__get_wrapperSimpleName()))
+    }
+
+    /// 实例 `primitiveSimpleName()`：基本类型简单名（OBJECT → "Object"）。
+    pub fn primitiveSimpleName(&self) -> Result<String> {
+        Ok(Clone::clone(&self.__get_primitiveSimpleName()))
+    }
+
+    /// 实例 `basicTypeString()`：basicTypeChar 的单字符串形态。
+    pub fn basicTypeString(&self) -> Result<String> {
+        Ok(Clone::clone(&self.__get_basicTypeString()))
+    }
+
+    /// 实例 `zero()`：该类型的零值装箱（JDK Wrapper.zero 的包装对象；OBJECT / VOID → null）。
+    pub fn zero(&self) -> Result<Object> {
+        Ok(match self.__get_basicTypeChar() as u8 {
+            b'Z' => Object::from(false),
+            b'B' => Object::from(0i8),
+            b'S' => Object::from(0i16),
+            b'C' => Object::from(0u16),
+            b'I' => Object::from(0i32),
+            b'J' => Object::from(0i64),
+            b'F' => Object::from(0f32),
+            b'D' => Object::from(0f64),
+            _ => Object::default(),
+        })
+    }
+
     /// 实例 `basicTypeChar()`。
     pub fn basicTypeChar(&self) -> Result<u16> {
         Ok(self.__get_basicTypeChar())
