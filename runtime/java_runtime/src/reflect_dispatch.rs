@@ -162,7 +162,7 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
                 // 目标方法体抛出（非分派臂实参 marshalling 失败）：登记为「目标抛出」，
                 // 供 AccessorUtils.isIllegalArgument 的栈帧判定（见 mark_target_thrown）
                 if let Err(e) = &r {
-                    if !BAD_ARG.with(|b| b.get()) && !is_adapter_member(declaring_slash, name) {
+                    if !BAD_ARG.with(|b| b.get()) && !is_platform_member(declaring_slash) {
                         mark_target_thrown(e.thrown());
                     }
                 }
@@ -438,13 +438,11 @@ std::thread_local! {
     static TARGET_THROWN: std::cell::RefCell<Vec<Object>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// 句柄适配层成员（AccessorUtils.isIllegalArgument 栈帧规则中被跳过的帧）：顶帧
-/// `Class.cast` / `Objects.requireNonNull`（实参转换），以及 java.lang.invoke 的
-/// LambdaForm / DirectMethodHandle / BoundMethodHandle 实现层。经它们逃逸的异常不算目标抛出。
-fn is_adapter_member(declaring_slash: &str, name: &str) -> bool {
-    declaring_slash.starts_with("java/lang/invoke/")
-        || (declaring_slash == "java/lang/Class" && name == "cast")
-        || (declaring_slash == "java/util/Objects" && name.starts_with("requireNonNull"))
+/// 平台（java.base 等 JDK 模块）成员：AccessorUtils.isIllegalArgument 的栈帧规则自抛出点
+/// 向下，途经 java.base 帧继续、抵达访问器类判实参不符（IAE），遇非 java.base 帧（用户代码）
+/// 判目标抛出（ITE）。经平台成员逃逸的异常因此不登记——只有逃逸出用户成员才算目标抛出。
+fn is_platform_member(declaring_slash: &str) -> bool {
+    ["java/", "javax/", "jdk/", "sun/"].iter().any(|p| declaring_slash.starts_with(p))
 }
 
 fn mark_target_thrown(e: &Object) {

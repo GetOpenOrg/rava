@@ -17,4 +17,4 @@ jdk/internal/reflect/MethodAccessorGenerator.generateSerializationConstructor:(L
 # ── 栈帧查询点（第三类准入）：原生二进制无 Java 栈帧（Throwable.getStackTrace 为空）。
 #    JDK 以栈帧判定异常抛出位置的方法由 VM 以等价的运行期登记应答。
 #    准入条件：方法体的唯一可观察效果是「按抛出位置作布尔判定」，VM 登记与栈帧判定逐例同解。
-jdk/internal/reflect/AccessorUtils.isIllegalArgument:(Ljava/lang/Class;Ljava/lang/RuntimeException;)Z   # 反射目标抛出由 L3 分派登记（reflect_dispatch::thrown_by_target）；未经目标逃逸 = 实参转换失败
+jdk/internal/reflect/AccessorUtils.isIllegalArgument:(Ljava/lang/Class;Ljava/lang/RuntimeException;)Z   # 栈帧规则「途经 java.base 帧继续、遇用户帧判目标抛出」由 L3 分派登记等价（reflect_dispatch::thrown_by_target：仅经用户成员逃逸者登记）
