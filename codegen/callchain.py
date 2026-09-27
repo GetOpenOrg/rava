@@ -586,6 +586,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 # JVMS §5.4.3.3 步骤 2：实际执行的是最近祖先类声明的方法 → 该方法入队
                 if _is_boundary_class(_anc.name):
                     field_discover_classes.add(_anc.name)
+                    # 边界祖先的手写体（`__impl_<m>` / 同名 fn）即实际执行者：其声明的
+                    # Java 回调同样被触达（createDirectory → FileAttribute.value 实证）
+                    _enqueue_upcalls(_anc.name, meth)
                 else:
                     _enqueue_method((_anc.name, meth, desc))
                 return True
@@ -932,6 +935,11 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 for _c, meth, desc in keys:
                     cur = bci
                     while cur is not None:
+                        if _is_boundary_class(cur.name):
+                            # 边界类的手写覆盖（含字节码未声明、仅手写 `__impl_<m>` 填继承槽
+                            # 的形态，如 UnixFileSystem.supportedFileAttributeViews）经 vtable
+                            # 执行：其 upcalls 回调入链（幂等，无手写 fn 时为空操作）
+                            _enqueue_upcalls(cur.name, meth)
                         if any(m.name == meth and m.descriptor == desc and not m.is_static
                                for m in cur.methods):
                             if (cur.name != _OBJECT_CLASS and cur.name.startswith(_JDK_PREFIXES)
