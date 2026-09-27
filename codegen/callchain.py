@@ -751,10 +751,15 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                         # 常量是拼接前缀，本类以其起名的方法全部登记（同下方 indy 形态）
                         _nx = (_mins[_k + 1].comment or '') if _k + 1 < len(_mins) else ''
                         _fm = _FLUENT_STR_APPEND_RE.match(_nx)
-                        if (_fm and _fm.group(1) == _fm.group(2) and len(_nm) >= 3
+                        # 中缀片段（`src + "To" + Dst` → intToLong）：大写起首的片段按驼峰
+                        # 词界匹配本类方法名内部；前缀片段（"unbox" + W）按起首匹配
+                        if (_fm and _fm.group(1) == _fm.group(2) and len(_nm) >= 2
                                 and _nm.isidentifier()):
                             for _pn in sorted(_own):
-                                if _pn.startswith(_nm) and _pn != _nm and _pn != meth:
+                                if _pn == _nm or _pn == meth:
+                                    continue
+                                if ((len(_nm) >= 3 and _pn.startswith(_nm))
+                                        or (_nm[0].isupper() and _nm in _pn[1:])):
                                     _pending_reflect_consts.append((cls, _pn))
                     # 拼接名形态：`findStatic(THIS_CLASS, "unbox" + w.wrapperSimpleName(), …)`——
                     # 拼接模板恰为「标识符前缀 + 单个实参位」（整串即成员名）时，本类以该前缀

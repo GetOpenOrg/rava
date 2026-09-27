@@ -202,6 +202,14 @@ def _emit_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) ->
             call_expr = f'Self::{rust_name}({call})?'
             tail = f'Ok(Object::from(__r))'
             inner_body = f'let __r = {call_expr}; {tail}'
+            # 已分配接收者上的构造（MH newInvokeSpecial：DirectMethodHandle.allocateInstance
+            # 分配 → invokeSpecial <init>(obj, ..) 就地初始化 → 返回 obj，record 反序列化的
+            # 规范构造器路径）：接收者非 null 时在其上运行构造体，而非另建实例
+            _init_on_ctor = '__init_on' + rust_name[3:] if rust_name.startswith('new') else ''
+            if _init_on_ctor and re.search(rf'\bfn {re.escape(_init_on_ctor)}\s*\(', em.text):
+                _on_args = f'recv.try_cast::<Self>("{class_bin}")?' + (f', {call}' if call else '')
+                inner_body = (f'let __r = if {rt}::_is_jnull(&recv) {{ {call_expr} }} '
+                              f'else {{ Self::{_init_on_ctor}({_on_args})? }}; {tail}')
             if descriptor == '()V' and rust_name.startswith('new') and only is None:
                 # 序列化构造器的「在已分配实例上运行构造体」入口（JDK generateConstructor
                 # 的访问器语义：分配 cl 实例后运行首个不可序列化超类的无参构造体）
