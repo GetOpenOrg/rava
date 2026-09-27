@@ -130,7 +130,8 @@ pub(crate) fn expand_interface(
         // 动态代理（FS-R R4a）：vtable 未命中时询问接收者的代理钩子（先于 default 体——
         // JDK 代理对 default 方法同样转发 InvocationHandler）。实参按 JVM 装箱，返回值按
         // 生成体的 checkcast + 拆箱还原（基本类型 / void 经 __ProxyRet，引用经 From<Object>）。
-        let mname_str = mname.to_string();
+        // Java 方法名（java_method 的 name 属性）：Rust 标识符可能经关键字转义（type → type_）
+        let mname_str = attr_str(&f.attrs, "name").unwrap_or_else(|| mname.to_string());
         let ret_ty = match &f.sig.output {
             syn::ReturnType::Type(_, t) => result_inner_ty(t).cloned(),
             syn::ReturnType::Default => None,
