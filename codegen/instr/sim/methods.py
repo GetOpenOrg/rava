@@ -17,7 +17,7 @@ _ACC_NATIVE = 0x0100
 def _signature_polymorphic_descriptor(comment: str, registry) -> str:
     """调用目标是签名多态方法（JVMS §2.9.3）时返回其声明描述符，否则 ''。
 
-    判定完全来自类文件：常量池类上没有与调用点描述符精确匹配的方法，而同名方法唯一、
+    判定完全来自类文件：常量池类上同名方法唯一、
     带 ACC_VARARGS | ACC_NATIVE、形参恰为一个引用数组。调用点描述符由 javac 按实参
     静态类型合成，与声明描述符无关。"""
     if not registry:
@@ -30,9 +30,10 @@ def _signature_polymorphic_descriptor(comment: str, registry) -> str:
     if dot < 0 or colon < 0:
         return ''
     mname = comment[dot + 1:colon]
-    call_desc = _method_ref_descriptor(comment)
     named = [m for m in ci.methods if m.name == mname]
-    if len(named) != 1 or named[0].descriptor == call_desc:
+    # 签名多态由声明决定（JVMS §2.9.3），与调用点描述符无关：调用点恰为 `([Object)Object`
+    # （`mh.invoke(new Object[]{..})`）时实参是**一个**数组值，不得按声明的可变参数组平铺
+    if len(named) != 1:
         return ''
     m = named[0]
     if (m.access_flags & (_ACC_VARARGS | _ACC_NATIVE)) != (_ACC_VARARGS | _ACC_NATIVE):
