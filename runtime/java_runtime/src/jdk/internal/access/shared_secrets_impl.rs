@@ -11,6 +11,7 @@ crate::__process_static! {
     static JAVA_IO_PRINT_STREAM_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_REF_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JAVA_LANG_REFLECT_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_UTIL_COLLECTION_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_UTIL_CONCURRENT_FJP_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
 }
@@ -46,6 +47,25 @@ impl SharedSecrets {
     pub fn setJavaLangAccess(jla: Object) -> Result<()> {
         JAVA_LANG_ACCESS.with(|slot| *slot.borrow_mut() = Some(jla));
         Ok(())
+    }
+
+    /// `AccessibleObject.<clinit>` 登记的 `ReflectAccess`（反射对象复制 / 访问器槽位，
+    /// ReflectionFactory 构造时取用）。
+    #[jvm_boundary]
+    pub fn setJavaLangReflectAccess(a: Object) -> Result<()> {
+        JAVA_LANG_REFLECT_ACCESS.with(|slot| *slot.borrow_mut() = Some(a));
+        Ok(())
+    }
+
+    /// HotSpot 在 VM 引导期即初始化 AccessibleObject（登记 ReflectAccess），JDK 的取用方
+    ///（ReflectionFactory 构造器）依赖该时序；惰性类初始化下槽位为空时先触发其 <clinit>
+    ///（与 getJavaIOFileDescriptorAccess 同一约定）。
+    #[jvm_boundary(upcalls = "java/lang/reflect/ReflectAccess.<init>:()V")]
+    pub fn getJavaLangReflectAccess() -> Result<Object> {
+        if JAVA_LANG_REFLECT_ACCESS.with(|slot| slot.borrow().is_none()) {
+            crate::java::lang::reflect::AccessibleObject::__class_init()?;
+        }
+        Ok(JAVA_LANG_REFLECT_ACCESS.with(|slot| slot.borrow().clone()).unwrap_or_default())
     }
 
     /// `Reference.<clinit>` 登记的引用处理访问器（waitForReferenceProcessing 等）。
