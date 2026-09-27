@@ -402,6 +402,15 @@ def resolve_bridge_member(recv_ci, name: str, param_desc: str, registry: dict,
     if bridge is None:
         return None
     target = _resolve_bridge_target(recv_ci, name, bridge.descriptor, registry)
+    if cur is not recv_ci and allow_covariant:
+        # 桥在祖先：桥体 invokevirtual 按接收者运行类分派——本类同参异返回的真实声明
+        # （协变覆盖，Species_LLLL.copyWith()BMH）即实际目标，而非桥声明类视角的抽象声明
+        _own_real = next((m for m in recv_ci.methods
+                          if not m.is_synthetic and not m.is_static and m.name == name
+                          and m.descriptor.startswith(param_desc)
+                          and m.descriptor != bridge.descriptor), None)
+        if _own_real is not None:
+            target = (recv_ci, _own_real.descriptor)
     if target is None:
         return None
     real_owner_ci, real_desc = target

@@ -883,6 +883,11 @@ impl Unsafe {
 // 另有共享单元协议）。字段闭包缺席（非用户类）→ 如实报缺口。
 
 fn _field_get(o: &Object, offset: i64, what: &str) -> Result<Object> {
+    // 静态字段 id（staticFieldBase + staticFieldOffset，MH 静态字段句柄 / VarHandle 静态形态）：
+    // 声明类字段闭包的静态臂（接收者无关）——与 `_static_ref_get` 同一存储
+    if let Some(r) = _static_ref_get(offset) {
+        return r;
+    }
     if let Some((cls, name)) = field_of_offset(offset) {
         if let Some(r) = crate::reflect_dispatch::reflect_field(&cls, &name, Clone::clone(o), None) {
             return r;
@@ -892,6 +897,9 @@ fn _field_get(o: &Object, offset: i64, what: &str) -> Result<Object> {
 }
 
 fn _field_put(o: &Object, offset: i64, v: Object, what: &str) -> Result<()> {
+    if let Some(r) = _static_ref_set(offset, Clone::clone(&v)) {
+        return r;
+    }
     if let Some((cls, name)) = field_of_offset(offset) {
         if let Some(r) = crate::reflect_dispatch::reflect_field(&cls, &name, Clone::clone(o), Some(v)) {
             return r.map(|_| ());
