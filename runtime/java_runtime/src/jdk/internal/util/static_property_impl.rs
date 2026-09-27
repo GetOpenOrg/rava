@@ -108,4 +108,27 @@ impl StaticProperty {
         let cwd = std::env::current_dir().unwrap_or_default();
         Ok(String::from(cwd.to_str().unwrap_or("")))
     }
+
+    // ── 编码族快照（System.initPhase1 → StaticProperty.<clinit>；边界类 <clinit> 不翻译，
+    //   静态字段由同名访问器承载，取值与 System 属性 native.encoding / sun.jnu.encoding /
+    //   file.encoding 同源：posix::native_encoding）────────────────────────
+
+    /// `sun.jnu.encoding`：文件名 / 环境变量 / 命令行的平台编码（ProcessImpl.JNU_CHARSET、
+    /// ProcessEnvironment 的消费方）。
+    #[jvm_boundary]
+    pub fn SUN_JNU_ENCODING() -> Result<String> {
+        Ok(String::from(crate::posix::native_encoding().as_str()))
+    }
+
+    /// `native.encoding`：宿主区域 codeset（JEP 400）。
+    #[jvm_boundary]
+    pub fn NATIVE_ENCODING() -> Result<String> {
+        Self::SUN_JNU_ENCODING()
+    }
+
+    /// `file.encoding`：JDK 18+ 缺省 UTF-8（JEP 400）。
+    #[jvm_boundary]
+    pub fn FILE_ENCODING() -> Result<String> {
+        Ok(String::from("UTF-8"))
+    }
 }

@@ -217,7 +217,7 @@ fn vm_snapshot_properties() -> Vec<(&'static str, std::string::String)> {
     props.push(("jdk.debug", std::string::String::from("release")));
     // 编码族（JDK 18+ JEP 400：file.encoding 缺省 UTF-8；native / jnu 编码取宿主区域
     // 的 codeset；标准流按本运行时实际编码器（UTF-8，见 new_std_print_stream））
-    let native = native_encoding();
+    let native = crate::posix::native_encoding();
     props.push(("file.encoding", std::string::String::from("UTF-8")));
     props.push(("native.encoding", native.clone()));
     props.push(("sun.jnu.encoding", native));
@@ -264,25 +264,6 @@ fn os_release() -> std::string::String {
         .and_then(|o| std::string::String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_owned())
         .unwrap_or_default()
-}
-
-/// `native.encoding` / `sun.jnu.encoding`：宿主区域的 codeset（HotSpot 取
-/// nl_langinfo(CODESET)）。macOS 恒 UTF-8；Linux 按 LC_ALL / LC_CTYPE / LANG 的
-/// codeset 段，C / POSIX 区域为 glibc 的 `ANSI_X3.4-1968`。
-fn native_encoding() -> std::string::String {
-    if cfg!(target_os = "macos") {
-        return std::string::String::from("UTF-8");
-    }
-    let raw = ["LC_ALL", "LC_CTYPE", "LANG"].iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .find(|value| !value.is_empty())
-        .unwrap_or_default();
-    let codeset = raw.split('@').next().unwrap_or("").split('.').nth(1).unwrap_or("");
-    match codeset.to_ascii_lowercase().replace('-', "").as_str() {
-        "" => std::string::String::from("ANSI_X3.4-1968"),
-        "utf8" => std::string::String::from("UTF-8"),
-        _ => codeset.to_owned(),
-    }
 }
 
 /// 标准流的构造（对应 System.newPrintStream(new FileOutputStream(fd), enc)，enc 固定为 UTF-8）。

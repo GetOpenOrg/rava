@@ -44,3 +44,22 @@ pub fn name_max(path: &Path) -> i64 {
     let v = unsafe { libc::pathconf(c.as_ptr(), libc::_PC_NAME_MAX) };
     if v <= 0 { 255 } else { v as i64 }
 }
+
+/// `native.encoding` / `sun.jnu.encoding`：宿主区域的 codeset（HotSpot 取
+/// nl_langinfo(CODESET)）。macOS 恒 UTF-8；Linux 按 LC_ALL / LC_CTYPE / LANG 的
+/// codeset 段，C / POSIX 区域为 glibc 的 `ANSI_X3.4-1968`。
+pub fn native_encoding() -> std::string::String {
+    if cfg!(target_os = "macos") {
+        return std::string::String::from("UTF-8");
+    }
+    let raw = ["LC_ALL", "LC_CTYPE", "LANG"].iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    let codeset = raw.split('@').next().unwrap_or("").split('.').nth(1).unwrap_or("");
+    match codeset.to_ascii_lowercase().replace('-', "").as_str() {
+        "" => std::string::String::from("ANSI_X3.4-1968"),
+        "utf8" => std::string::String::from("UTF-8"),
+        _ => codeset.to_owned(),
+    }
+}
