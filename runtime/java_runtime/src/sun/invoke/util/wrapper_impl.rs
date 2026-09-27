@@ -60,6 +60,11 @@ fn _idx_of(getter: &str) -> Option<usize> {
     CONSTANTS.iter().position(|(g, ..)| *g == getter)
 }
 
+/// basicTypeChar → 常量下标（VALUES 序位）。
+fn _idx_of_char(ch: u16) -> Option<usize> {
+    CONSTANTS.iter().position(|(_, c, ..)| *c == ch)
+}
+
 /// 类型名（getPrimitiveClass 的点形态 / for_class 的点形态）→ 常量下标。
 /// 覆盖 primitive 名与 wrapper binary 名两形态（JDK forPrimitiveType /
 /// forWrapperType 共用的归一查询面）。
@@ -137,6 +142,35 @@ impl Wrapper {
     /// 实例 `primitiveType()`。
     pub fn primitiveType(&self) -> Result<Class> {
         Ok(Clone::clone(&self.__get_primitiveType()))
+    }
+
+    /// 实例 `wrapperType()`：包装类（OBJECT → Object、VOID → Void）。消费方：
+    /// MethodType.canConvert（asType 的可转换判定）。
+    pub fn wrapperType(&self) -> Result<Class> {
+        Ok(Clone::clone(&self.__get_wrapperType()))
+    }
+
+    /// 实例 `isConvertibleFrom(Wrapper)`：source → this 的基本类型可转换性（JDK Wrapper 的
+    /// Format 位判定逐条等价）：同一常量 → true；序位（VALUES 顺序）this < source → false；
+    /// 两者均为 SIGNED 格式（byte/short/int/long/float/double）→ true（加宽）；否则 this 为
+    /// OTHER（Object / void）或 source 为 char → true，其余 false。
+    pub fn isConvertibleFrom(&self, source: Wrapper) -> Result<bool> {
+        let (Some(t), Some(s)) = (_idx_of_char(self.__get_basicTypeChar()),
+                                  _idx_of_char(source.__get_basicTypeChar())) else {
+            return Ok(false);
+        };
+        if t == s {
+            return Ok(true);
+        }
+        if t < s {
+            return Ok(false);
+        }
+        let signed = |i: usize| matches!(CONSTANTS[i].1 as u8, b'B' | b'S' | b'I' | b'J' | b'F' | b'D');
+        if signed(t) && signed(s) {
+            return Ok(true);
+        }
+        let other = |i: usize| matches!(CONSTANTS[i].1 as u8, b'L' | b'V');
+        Ok(other(t) || CONSTANTS[s].1 == b'C' as u16)
     }
 
     /// 实例 `basicTypeChar()`。
