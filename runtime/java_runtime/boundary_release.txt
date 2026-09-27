@@ -33,9 +33,12 @@ sun/reflect/annotation/
 # access_controller_impl.rs）。SecurityManager 恒 null，doPrivileged 直通 action.run()。
 java/security/AccessController
 java/security/AccessControlContext
-# 权限与保护域（纯 Java；前缀覆盖 Permission / PermissionCollection / Permissions / PermissionsHash、
-# BasicPermission / BasicPermissionCollection、ProtectionDomain 及其嵌套类）。消费方：ForkJoinPool 工作
-# 线程 ACC、ThreadPerTaskExecutor.<clinit>、JCA CryptoPermission。
+# 权限与保护域（纯 Java；类条目覆盖自身与 `$` 嵌套类，逐类列出）。消费方：ForkJoinPool 工作
+# 线程 ACC（contextWithPermissions）、ThreadPerTaskExecutor.<clinit>、JCA CryptoPermission。
 java/security/Permission
+java/security/PermissionCollection
+java/security/Permissions
+java/security/PermissionsHash
 java/security/BasicPermission
+java/security/BasicPermissionCollection
 java/security/ProtectionDomain
