@@ -513,6 +513,25 @@ impl Class {
 /// 元素解析共用）：`L<类>;` / `[<描述符>` 经 for_class（斜线键与 ldc 类字面量
 /// 同一缓存条目，身份一致）；基本类型描述符经 getPrimitiveClass 的唯一实例。
 /// 点形式（Class 名存储形态）先归一为斜线。无法识别 → null Class。
+impl Class {
+    /// 字段描述符（含 `V`）→ Class，引用类型须在类宇宙内（修饰符表有行），否则
+    /// TypeNotPresentException（JDK 经 Class.forName 失败时的同一异常）。消费方：
+    /// AnnotationParser.parseSig（注解签名恒为描述符形态，FS-R R4b）。
+    pub(crate) fn __from_descriptor_checked(desc: &str) -> Result<Class> {
+        let elem = desc.trim_start_matches('[');
+        if let Some(name) = elem.strip_prefix('L').and_then(|x| x.strip_suffix(';')) {
+            let known = __modifiers::CLASS_MODIFIERS.iter().any(|(n, _)| *n == name)
+                || name == "java/lang/Object";
+            if !known {
+                let ex = crate::java::lang::TypeNotPresentException::new(
+                    String::from(name.replace('/', ".").as_str()), Default::default())?;
+                return Err(crate::error::JvmError::from(ex));
+            }
+        }
+        Ok(class_for_descriptor(desc))
+    }
+}
+
 fn class_for_descriptor(desc: &str) -> Class {
     let slashes: std::string::String = desc.replace('.', "/");
     let prim = |java_name: &str| {

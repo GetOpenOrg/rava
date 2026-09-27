@@ -23,7 +23,8 @@ java/lang/Class$AnnotationData
 jdk/internal/reflect/
 
 # FS-R R4b：注解解析族（JDK 21 Class/Field/Method.getAnnotation → AnnotationParser 按原始字节解析，
-# 实例经 Proxy.newProxyInstance + AnnotationInvocationHandler）。纯 Java；class 字面量元素的签名
-# 解析经 sun/reflect/generics（SignatureParser + CoreReflectionFactory → Class.forName）。
+# 实例经 Proxy.newProxyInstance + AnnotationInvocationHandler）。纯 Java。唯一例外 parseSig
+# （sun/reflect/generics 签名解析 + Class.forName）手写：注解签名恒为描述符形态，结果即
+# 描述符 → Class（annotation_parser_impl.rs）——generics 包不放行（其泛型 visitor 体系使
+# java_runtime 编译峰值内存越过 15G）。
 sun/reflect/annotation/
-sun/reflect/generics/
