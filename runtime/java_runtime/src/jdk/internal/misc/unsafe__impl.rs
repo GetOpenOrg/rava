@@ -250,6 +250,17 @@ impl Unsafe {
         Ok(false)
     }
 
+    /// `allocateInstance(Class)`：分配实例、不运行构造器（MH `newInvokeSpecial` 的
+    /// 分配步：DirectMethodHandle.allocateInstance → 随后 invokeSpecial `<init>`）。
+    /// 与序列化构造器的无构造分配同一协议——L3 分派闭包的 `<alloc>` 伪成员
+    /// （字段置默认值 + 非空初始化，等价 JVM 的零初始化对象）。
+    #[jvm_boundary]
+    pub fn allocateInstance(&self, cls: Class) -> Result<Object> {
+        let binary = format!("{}", cls.__get_name()).replace('.', "/");
+        let empty: crate::JArray<Object> = crate::JArray::from(Vec::<Object>::new());
+        crate::reflect_dispatch::reflect_invoke(&binary, "<alloc>", "()V", Object::default(), &empty)
+    }
+
 
     /// 字段偏移量：HotSpot 返回对象布局的真实偏移；原生二进制没有 C 布局对象，
     /// 字段经名字访问，偏移量只作不透明标识使用（AtomicLong 等把它存进 long 字段
