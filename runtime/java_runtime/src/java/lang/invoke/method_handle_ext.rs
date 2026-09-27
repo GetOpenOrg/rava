@@ -143,6 +143,8 @@ pub(crate) fn invoke_member(m: &MemberName, argv: Vec<Object>) -> Result<Object>
         return invoke_unsafe(&name, argv);
     }
     let descriptor = member_descriptor(m)?;
+    let argv = narrow_subword_args(&descriptor, argv, ref_kind != 6 && ref_kind != REF_NEW_INVOKE_SPECIAL
+        && !matches!(ref_kind, REF_GET_FIELD | REF_GET_STATIC | REF_PUT_FIELD | REF_PUT_STATIC));
     match ref_kind {
         REF_GET_FIELD | REF_GET_STATIC | REF_PUT_FIELD | REF_PUT_STATIC => {
             invoke_field(m, ref_kind, argv)
@@ -164,6 +166,44 @@ pub(crate) fn invoke_member(m: &MemberName, argv: Vec<Object>) -> Result<Object>
             crate::reflect_dispatch::reflect_invoke(&cls, &name, &descriptor, recv, &arr)
         }
     }
+}
+
+/// LambdaForm 基本类型 → 目标形参的 subword 窄化：LambdaForm.BasicType 把 boolean / byte /
+/// short / char 归并为 I，绑定值与解释器中间值以 Integer 流动；调用真实成员前按目标描述符
+/// 窄化回原类型（JVM 在 LF → 真实签名边界的同一转换）。只作用于 MH 调用路径——反射
+/// Method.invoke 的严格实参检查（int 不得传给 boolean 形参）不经此处。
+fn narrow_subword_args(descriptor: &str, mut argv: Vec<Object>, has_recv: bool) -> Vec<Object> {
+    use crate::reflect_dispatch::{unbox_bool, unbox_char, unbox_i32};
+    let params = descriptor.strip_prefix('(').and_then(|d| d.split_once(')')).map(|(p, _)| p).unwrap_or("");
+    let b = params.as_bytes();
+    let (mut i, mut idx) = (0usize, if has_recv { 1usize } else { 0usize });
+    while i < b.len() {
+        let kind = b[i];
+        // 跳过本形参（数组 / 引用形态整体跨越）
+        while i < b.len() && b[i] == b'[' {
+            i += 1;
+        }
+        if i < b.len() && b[i] == b'L' {
+            while i < b.len() && b[i] != b';' {
+                i += 1;
+            }
+        }
+        i += 1;
+        if let Some(v) = argv.get(idx) {
+            let narrowed = match kind {
+                b'Z' if unbox_bool(v).is_none() => unbox_i32(v).map(|x| Object::from(x & 1 != 0)),
+                b'C' if unbox_char(v).is_none() => unbox_i32(v).map(|x| Object::from(x as u16)),
+                b'B' if v.0.__class_name() != "java/lang/Byte" => unbox_i32(v).map(|x| Object::from(x as i8)),
+                b'S' if v.0.__class_name() != "java/lang/Short" => unbox_i32(v).map(|x| Object::from(x as i16)),
+                _ => None,
+            };
+            if let Some(n) = narrowed {
+                argv[idx] = n;
+            }
+        }
+        idx += 1;
+    }
+    argv
 }
 
 /// 字段 refKind：按名字段协议（reflect_field，与 Field.get/set 同一闭包）。
