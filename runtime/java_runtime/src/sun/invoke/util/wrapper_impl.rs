@@ -65,6 +65,24 @@ fn _idx_of(getter: &str) -> Option<usize> {
     CONSTANTS.iter().position(|(g, ..)| *g == getter)
 }
 
+/// 装箱值的基本类型字符（原生值盒 / 翻译包装类两形态；非包装 → None）。
+fn _box_char_of(x: &Object) -> Option<u8> {
+    if x.0.is_jvm_null() {
+        return None;
+    }
+    let any = x.0.as_any();
+    if any.is::<i32>() { return Some(b'I'); }
+    if any.is::<i64>() { return Some(b'J'); }
+    if any.is::<f32>() { return Some(b'F'); }
+    if any.is::<f64>() { return Some(b'D'); }
+    if any.is::<i16>() { return Some(b'S'); }
+    if any.is::<i8>() { return Some(b'B'); }
+    if any.is::<u16>() { return Some(b'C'); }
+    if any.is::<bool>() { return Some(b'Z'); }
+    let name = x.0.__class_name();
+    CONSTANTS[..8].iter().find(|(_, _, _, wrap, ..)| *wrap == name).map(|(_, c, ..)| *c as u8)
+}
+
 /// basicTypeChar → 常量下标（VALUES 序位）。
 fn _idx_of_char(ch: u16) -> Option<usize> {
     CONSTANTS.iter().position(|(_, c, ..)| *c == ch)
@@ -204,6 +222,86 @@ impl Wrapper {
             b'J' => Object::from(0i64),
             b'F' => Object::from(0f32),
             b'D' => Object::from(0f64),
+            _ => Object::default(),
+        })
+    }
+
+    /// 实例 `convert(Object, Class<T>)`：`convert(x, type, true)`（宽松转换：null → 零值）。
+    pub fn convert_obj_class(&self, x: Object, type_: Class) -> Result<Object> {
+        self.convert_obj_class_z(x, type_, true)
+    }
+
+    /// 实例 `cast(Object, Class<T>)`：`convert(x, type, false)`（严格：源包装须可转换，否则 CCE）。
+    pub fn cast(&self, x: Object, type_: Class) -> Result<Object> {
+        self.convert_obj_class_z(x, type_, false)
+    }
+
+    /// 私有 `convert(Object, Class<T>, boolean isCast)`，与 JDK 逐条等价：
+    /// OBJECT → type.cast（接口不检查）后原样返回；x 已是本包装类 → 原样；
+    /// !isCast 时源值的包装须 isConvertibleFrom，否则 ClassCastException；isCast 且 x 为
+    /// null → zero()；其余经 `wrap`：数值化（Number / Character → int / Boolean → 0|1）后按
+    /// 本类型窄化 / 拓宽装箱（JLS §5.1.2 / §5.1.3 的 Java 转换语义）。
+    pub fn convert_obj_class_z(&self, x: Object, type_: Class, is_cast: bool) -> Result<Object> {
+        let tc = self.__get_basicTypeChar() as u8;
+        if tc == b'L' {
+            if !type_.isInterface()? {
+                type_.cast(Clone::clone(&x))?;
+            }
+            return Ok(x);
+        }
+        let wrap_bin = CONSTANTS[_idx_of_char(self.__get_basicTypeChar()).unwrap_or(8)].3;
+        if !x.0.is_jvm_null() && _box_char_of(&x) == Some(tc) {
+            return Ok(x);
+        }
+        if !is_cast {
+            let convertible = match _box_char_of(&x).and_then(|c| _idx_of_char(c as u16)) {
+                Some(si) => self.isConvertibleFrom(_constant(si))?,
+                None => false,
+            };
+            if !convertible {
+                return Err(JvmError::class_cast(format!(
+                    "Cannot cast {} to {}",
+                    if x.0.is_jvm_null() { "null".to_owned() } else { x.0.__class_name().replace('/', ".") },
+                    wrap_bin.replace('/', "."))));
+            }
+        } else if x.0.is_jvm_null() {
+            return self.zero();
+        }
+        self.wrap_obj(x)
+    }
+
+    /// `wrap(Object)`（重载名 wrap_obj）：数值化后按本类型装箱（'L' 原样、'V' → null）。
+    pub fn wrap_obj(&self, x: Object) -> Result<Object> {
+        use crate::reflect_dispatch as rd;
+        let tc = self.__get_basicTypeChar() as u8;
+        match tc {
+            b'L' => return Ok(x),
+            b'V' => return Ok(Object::default()),
+            _ => {}
+        }
+        // numberValue：浮点源保留 f64，其余整型化为 i64（Character → 码元、Boolean → 0/1）
+        let (fv, iv, floating) = if let Some(b) = rd::unbox_bool(&x) {
+            (0.0, b as i64, false)
+        } else if let Some(c) = rd::unbox_char(&x) {
+            (0.0, c as i64, false)
+        } else if matches!(_box_char_of(&x), Some(b'F') | Some(b'D')) {
+            (rd::unbox_f64(&x).unwrap_or(0.0), 0, true)
+        } else if let Some(v) = rd::unbox_i64(&x) {
+            (0.0, v, false)
+        } else {
+            return Err(JvmError::class_cast(format!(
+                "Cannot cast {} to java.lang.Number", x.0.__class_name().replace('/', "."))));
+        };
+        let int_value = || -> i32 { if floating { fv as i32 } else { iv as i32 } };
+        Ok(match tc {
+            b'I' => Object::from(int_value()),
+            b'J' => Object::from(if floating { fv as i64 } else { iv }),
+            b'F' => Object::from(if floating { fv as f32 } else { iv as f32 }),
+            b'D' => Object::from(if floating { fv } else { iv as f64 }),
+            b'S' => Object::from(int_value() as i16),
+            b'B' => Object::from(int_value() as i8),
+            b'C' => Object::from(int_value() as u16),
+            b'Z' => Object::from(((int_value() as i8) & 1) != 0),
             _ => Object::default(),
         })
     }
