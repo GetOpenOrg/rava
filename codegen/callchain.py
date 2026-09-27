@@ -11,6 +11,7 @@ import re
 from collections import deque
 
 from .constants import MAIN_DESC
+from .constants import STRING_CLASS as _STRING_CLASS_C
 from .constants import (OBJECT_CLASS as _OBJECT_CLASS, CLASS_CLASS as _CLASS_CLASS,
                         RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME)
 from . import fallback_audit
@@ -736,7 +737,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 # 常量反射引用的隐式本类形态：`getNamedFunction("name", type)` 一类按名
                 # 查找以所在类为宿主，只有名字常量（MH-native §二-5）
                 _own = {x.name for x in ci.methods}
-                for _ins in (m.instrs or []):
+                _mins = m.instrs or []
+                for _k, _ins in enumerate(_mins):
                     _c = _ins.comment or ''
                     if _ins.opcode.startswith('ldc') and _c.startswith('String '):
                         _nm = _c[len('String '):]
@@ -744,6 +746,16 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                             REFLECT_FIELD_NAMES.add(_nm)
                         if _nm in _own and _nm != meth:
                             _pending_reflect_consts.append((cls, _nm))
+                        # 拼接名的构建器形态（java.base 以 StringBuilder 链编译拼接，非 indy）：
+                        # 名字常量紧随「宿主类型上的流式追加」`Owner.m:(String)LOwner;`——
+                        # 常量是拼接前缀，本类以其起名的方法全部登记（同下方 indy 形态）
+                        _nx = (_mins[_k + 1].comment or '') if _k + 1 < len(_mins) else ''
+                        _fm = _FLUENT_STR_APPEND_RE.match(_nx)
+                        if (_fm and _fm.group(1) == _fm.group(2) and len(_nm) >= 3
+                                and _nm.isidentifier()):
+                            for _pn in sorted(_own):
+                                if _pn.startswith(_nm) and _pn != _nm and _pn != meth:
+                                    _pending_reflect_consts.append((cls, _pn))
                     # 拼接名形态：`findStatic(THIS_CLASS, "unbox" + w.wrapperSimpleName(), …)`——
                     # 拼接模板恰为「标识符前缀 + 单个实参位」（整串即成员名）时，本类以该前缀
                     # 起名的方法全部登记（名字后缀由运行期值决定，前缀是唯一的静态面）
@@ -1373,6 +1385,11 @@ REFLECT_ALL_MEMBERS: set[str] = set()
 # 类常量之后在该窗口内出现的首个字符串常量视为成员名（javac 对
 # `find*(C.class, "name", MethodType.methodType(...))` 的发射：两常量相邻）。
 _REFLECT_WINDOW = 3
+
+
+# 流式字符串追加 `Method Owner.m:(Ljava/lang/String;)LOwner;`（拼接构建器形态，结构判定不涉类名）
+_FLUENT_STR_APPEND_RE = re.compile(
+    r'^Method ([\w/$]+)\.\w+:\(' + re.escape(f'L{_STRING_CLASS_C};') + r'\)L([\w/$]+);$')
 
 
 def _scan_reflect_consts(instrs) -> list[tuple[str, str]]:
