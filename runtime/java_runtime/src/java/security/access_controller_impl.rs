@@ -2,6 +2,9 @@ use crate::prelude::*;
 use super::AccessController;
 use super::AccessControlContext;
 use super::PrivilegedAction__VTable;
+use super::PrivilegedExceptionAction;
+use super::PrivilegedExceptionAction__VTable;
+use super::PrivilegedActionException;
 
 // 内部边界类 java.security.AccessController（java/security/ 属 VM 安全服务层，BFS 截断）。
 // 按调用链按需实现（doPrivileged：Arrays$LegacyMergeSort；getContext：Thread.<init>），
@@ -59,6 +62,34 @@ impl AccessController {
                 "stub: java/security/AccessController.doPrivileged:(Ljava/security/PrivilegedAction;)Ljava/lang/Object; \
                  (receiver 未实现 PrivilegedAction)"
             ),
+        }
+    }
+
+    /// `doPrivileged(PrivilegedExceptionAction<T>)T`：直呼 action 的 `run()`（SecurityManager
+    /// 恒 null，同单参 PrivilegedAction 版的直通语义）。异常面与 JDK
+    /// `executePrivileged` 一致：RuntimeException / Error 原样传播，其余受检异常包装为
+    /// `PrivilegedActionException(e)`。消费方：ObjectStreamClass$RecordSupport.deserializationCtr。
+    #[jvm_boundary(upcalls = "java/security/PrivilegedExceptionAction.run:()Ljava/lang/Object; java/security/PrivilegedActionException.<init>:(Ljava/lang/Exception;)V")]
+    pub fn doPrivileged_privilegedexceptionaction(action: Object) -> Result<Object> {
+        if action.0.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let mut slot: Option<Rc<dyn PrivilegedExceptionAction__VTable>> = None;
+        ObjectVTable::__interface(Rc::clone(&action.0), &mut slot);
+        let Some(vt) = slot else {
+            panic!(
+                "stub: java/security/AccessController.doPrivileged:(Ljava/security/PrivilegedExceptionAction;)Ljava/lang/Object; \
+                 (receiver 未实现 {})", std::any::type_name::<PrivilegedExceptionAction<Object>>()
+            );
+        };
+        match <dyn PrivilegedExceptionAction__VTable>::run(&*vt) {
+            Ok(v) => Ok(v),
+            Err(e) if e.is_instance_of("java/lang/RuntimeException")
+                || !e.is_instance_of("java/lang/Exception") => Err(e),
+            Err(e) => {
+                let ex = e.catch_as::<crate::java::lang::Exception>("java/lang/Exception");
+                Err(JvmError::from(PrivilegedActionException::new(ex)?))
+            }
         }
     }
 }
