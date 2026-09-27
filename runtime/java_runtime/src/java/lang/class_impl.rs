@@ -252,10 +252,31 @@ impl Class {
                 _ => tgt_elem == src_elem, // 基本组件：描述符字符相同
             };
         }
-        __hierarchy::CLASS_HIERARCHY.iter()
+        if __hierarchy::CLASS_HIERARCHY.iter()
             .find(|(n, _)| *n == source)
             .map(|(_, supers)| supers.iter().any(|s| *s == target))
             .unwrap_or(false)
+        {
+            return true;
+        }
+        // 接口块不携带 all_supertypes（层次表无行）：沿直接超接口表（class 文件 interfaces
+        // 项）传递查找——接口 → 超接口（注解类型 → Annotation 等）
+        let mut stack: Vec<&str> = vec![source];
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        while let Some(cur) = stack.pop() {
+            if !seen.insert(cur) {
+                continue;
+            }
+            if let Some((_, ifaces)) = __interfaces::CLASS_INTERFACES.iter().find(|(n, _)| *n == cur) {
+                for i in ifaces.iter() {
+                    if *i == target {
+                        return true;
+                    }
+                    stack.push(i);
+                }
+            }
+        }
+        false
     }
 
 
