@@ -113,10 +113,7 @@ pub fn clinit_enter(class: &'static str, get: impl Fn() -> u8, set: impl Fn(u8))
         // 他线程初始化中：在广播锁下复查后等待（clinit_exit 先改状态再取广播锁通知，不丢唤醒）
         let mut gen = CLINIT_GEN.lock();
         if get() == 1 {
-            release();
             CLINIT_CV.wait(&mut gen);
-            drop(gen);
-            acquire();
         }
     }
 }
