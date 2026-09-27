@@ -28,3 +28,8 @@ jdk/internal/reflect/
 # 描述符 → Class（annotation_parser_impl.rs）——generics 包不放行（其泛型 visitor 体系使
 # java_runtime 编译峰值内存越过 15G）。
 sun/reflect/annotation/
+
+# FS-H0 安全组：特权执行与访问控制上下文（纯 Java；native 仅栈上上下文 / 保护域 / 栈遍历物化，
+# access_controller_impl.rs）。SecurityManager 恒 null，doPrivileged 直通 action.run()。
+java/security/AccessController
+java/security/AccessControlContext

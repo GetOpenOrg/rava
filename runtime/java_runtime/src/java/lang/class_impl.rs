@@ -73,10 +73,8 @@ impl Class {
         // 字节码翻译的 `componentType()` / `arrayType` 链直接读该字段（MethodHandleImpl
         // .makeCollector 的 nCopies(n, arrayType.componentType())）。元素 Class 经 for_class
         // 解析——须在缓存借用之外（递归入本函数）
-        if key.starts_with('[') {
-            if let Ok(comp) = c.__impl_getComponentType() {
-                c.__set_componentType(comp);
-            }
+        if let Some(rest) = key.strip_prefix('[') {
+            c.__set_componentType(class_for_descriptor(rest));
         }
         CLASSES.with(|cache| Clone::clone(cache.borrow_mut().entry(key).or_insert(c)))
     }
@@ -101,24 +99,6 @@ impl Class {
         let name = format!("{}", self.__get_name());
         Ok(matches!(name.as_str(),
             "boolean" | "byte" | "char" | "short" | "int" | "long" | "float" | "double" | "void"))
-    }
-
-    /// native `Class.getComponentType()`：数组类返回元素 Class，非数组返回 null。
-    ///
-    /// 数组类的名字是 JVM 描述符形态（`[I`、`[Ljava.lang.String;`、`[[I`——
-    /// for_class 的存储形态，内层点分隔）。解析：剥一层 `[` 后按首字符分派
-    /// ——`L` → 引用类、`[` → 元素仍是数组（描述符形态递归）、基本类型字符 →
-    /// getPrimitiveClass 的唯一实例（`int.class` 身份语义）。非数组（闭包外类
-    /// / 接口 / 基本类型自身）→ null（JLS：componentType 只对数组类非 null）。
-    /// 消费方：`Arrays.copyOf(orig, len, newType)` 链（`Array.newInstance(
-    /// newType.getComponentType(), n)`，TestCollectionFactory 的 toArray 卡点）、
-    /// MethodHandles 的数组访问器构造。
-    pub fn __impl_getComponentType(&self) -> Result<Class> {
-        let name = format!("{}", self.__get_name());
-        let Some(rest) = name.strip_prefix('[') else {
-            return Ok(Class::default());
-        };
-        Ok(class_for_descriptor(rest))
     }
 
     /// 反射族内部：按字段名查本类声明元数据（描述符 / static 标志 / 修饰位 /
@@ -403,16 +383,6 @@ impl Class {
 
     /// `Class.isRecord()`：record 类判定（JVMS §4.7.30 Record 属性在场；
     /// 发射侧 is_record 属性 → build.rs record 表）。数组 / 基本类型类恒 false。
-    /// `Class.getClassLoader()`：类加载器不建模（单一静态链接映像，无运行期
-    /// 加载），一律返回 null——即 JDK 对引导类的返回形态。消费方以「null 或
-    /// 安全管理器缺席」短路（ObjectStreamClass.getProtectionDomains：
-    /// `cl.getClassLoader() != null && System.getSecurityManager() != null`，
-    /// JDK 21 安全管理器恒 null，两种返回可观测等价）。
-    pub fn getClassLoader(&self) -> Result<crate::java::lang::ClassLoader> {
-        Ok(crate::java::lang::ClassLoader::default())
-    }
-
-
     /// native `Class.isInstance(Object)`：null → false；否则按运行时类的
     /// is_instance_of（vtable 按 binary name 斜线形态应答，含超类与接口闭包）。
     /// 基本类型类恒 false（JLS：无值是基本类型 Class 的实例）。

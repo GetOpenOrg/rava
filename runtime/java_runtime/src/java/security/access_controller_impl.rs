@@ -1,95 +1,38 @@
+//! `java/security/AccessController` 的 native 方法（FS-H0：doPrivileged / getContext 回到 JDK
+//! 字节码，boundary_release.txt 放行本类与 AccessControlContext）。
+//!
+//! 原生二进制无安全管理器（JDK 21 的 SecurityManager 恒 null）且无 Java 栈帧：
+//! 栈上 / 继承的访问控制上下文恒为 null，保护域不建模（启动类同 HotSpot 返回 null），
+//! 栈遍历物化是 JIT 协作点——均为 HotSpot 在未安装 SM 时的等价应答。
+
 use crate::prelude::*;
 use super::AccessController;
 use super::AccessControlContext;
-use super::PrivilegedAction__VTable;
-use super::PrivilegedExceptionAction;
-use super::PrivilegedExceptionAction__VTable;
-use super::PrivilegedActionException;
-
-// 内部边界类 java.security.AccessController（java/security/ 属 VM 安全服务层，BFS 截断）。
-// 按调用链按需实现（doPrivileged：Arrays$LegacyMergeSort；getContext：Thread.<init>），
-// 其余方法保持 panic 存根。
+use super::ProtectionDomain;
+use crate::java::lang::Class;
 
 impl AccessController {
-    /// `AccessControlContext getContext()`：返回当前访问控制上下文
-    /// （`Thread.<init>` 的 acc==null 分支消费）。
-    ///
-    /// 原生二进制无安全管制（SecurityManager 恒 null、访问控制上下文从不
-    /// 安装）：HotSpot 在未安装 SM 时该上下文为空且从不被检查。返回 null
-    /// 载体——消费点仅写入 `Thread.inheritedAccessControlContext` 字段，
-    /// 读取侧（checkPermission 路径）在 SM==null 下全短路。
-    #[jvm_boundary]
-    pub fn getContext() -> Result<AccessControlContext> {
+    /// 调用栈上的特权上下文：无 SM / 无 Java 栈帧 → null（JDK getContext 据此构造空上下文）。
+    #[jvm_native]
+    pub fn getStackAccessControlContext() -> Result<AccessControlContext> {
         Ok(AccessControlContext::default())
     }
-    /// `doPrivileged(PrivilegedAction<T>)T`：直呼 action 的 `run()` 并返回其结果。
-    ///
-    /// 原生单线程二进制没有安全管制（JDK 21 的 SecurityManager 恒为 null、
-    /// AccessControlContext 从不安装），「特权提升」无从谈起——所有代码本就全权限，
-    /// 与 HotSpot 在未安装 SM 时 executePrivileged 的直通行为一致。
-    ///
-    /// action 是已擦除的 `Object`：经 `__interface` 分派（等价 JVM itable 查找）
-    /// 取 `PrivilegedAction__VTable` 视图后调用擦除签名的 `run()`。
-    /// action 为 null 时按 JVM 语义抛 NullPointerException。
-    ///
-    /// upcalls（接口级回调边，已激活）：声明 `java/security/PrivilegedAction.run`
-    /// ——upcall 目标在边界接口上，callchain 的 `_pending_iface_edges` 把接口方法键
-    /// 入队，`_propagate_virtual_targets` 接口分支自动翻译闭包内全部实现类
-    /// （FileSystems$DefaultFileSystemHolder$1 / ZoneRulesProvider$1 两族 stub 消除，
-    /// 零实现类枚举）。此前休眠在枚举形态（GetBooleanAction.run 单实现者）：
-    /// 激活暴露的 blocks.py unify 三族编译缺口（三目合并退化接收者 E0599 /
-    /// 双局部声明载体 E0308 / 基类调用载体实参装箱 E0308）已由 fix/unify-fourth
-    /// 清偿——unify_pair 泛型 widening 第五增量、_store_local 绑定点区间判定、
-    /// invokespecial 基类调用实参重建。
-    /// `doPrivileged(PrivilegedAction, AccessControlContext)`：上下文在 SecurityManager 恒 null
-    /// 时不参与任何检查（HotSpot executePrivileged 同样直通），等价单参版本。消费方：
-    /// ForkJoinPool 工作线程工厂（newRegularWithACC / newCommonWithACC）。
-    #[jvm_boundary(upcalls = "java/security/PrivilegedAction.run:()Ljava/lang/Object;")]
-    pub fn doPrivileged_privilegedaction_accesscontrolcontext(action: Object, _context: AccessControlContext) -> Result<Object> {
-        Self::doPrivileged_privilegedaction(action)
+
+    /// 线程继承的上下文：同上 → null。
+    #[jvm_native]
+    pub fn getInheritedAccessControlContext() -> Result<AccessControlContext> {
+        Ok(AccessControlContext::default())
     }
 
-    #[jvm_boundary(upcalls = "java/security/PrivilegedAction.run:()Ljava/lang/Object;")]
-    pub fn doPrivileged_privilegedaction(action: Object) -> Result<Object> {
-        if action.0.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let mut slot: Option<Rc<dyn PrivilegedAction__VTable>> = None;
-        ObjectVTable::__interface(Rc::clone(&action.0), &mut slot);
-        match slot {
-            Some(vt) => <dyn PrivilegedAction__VTable>::run(&*vt),
-            None => panic!(
-                "stub: java/security/AccessController.doPrivileged:(Ljava/security/PrivilegedAction;)Ljava/lang/Object; \
-                 (receiver 未实现 PrivilegedAction)"
-            ),
-        }
+    /// 类的保护域：原生二进制不建模类加载器 / 代码源 → null（HotSpot 对启动类同此）。
+    #[jvm_native]
+    pub fn getProtectionDomain(_caller: Class) -> Result<ProtectionDomain> {
+        Ok(ProtectionDomain::default())
     }
 
-    /// `doPrivileged(PrivilegedExceptionAction<T>)T`：直呼 action 的 `run()`（SecurityManager
-    /// 恒 null，同单参 PrivilegedAction 版的直通语义）。异常面与 JDK
-    /// `executePrivileged` 一致：RuntimeException / Error 原样传播，其余受检异常包装为
-    /// `PrivilegedActionException(e)`。消费方：ObjectStreamClass$RecordSupport.deserializationCtr。
-    #[jvm_boundary(upcalls = "java/security/PrivilegedExceptionAction.run:()Ljava/lang/Object; java/security/PrivilegedActionException.<init>:(Ljava/lang/Exception;)V")]
-    pub fn doPrivileged_privilegedexceptionaction(action: Object) -> Result<Object> {
-        if action.0.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let mut slot: Option<Rc<dyn PrivilegedExceptionAction__VTable>> = None;
-        ObjectVTable::__interface(Rc::clone(&action.0), &mut slot);
-        let Some(vt) = slot else {
-            panic!(
-                "stub: java/security/AccessController.doPrivileged:(Ljava/security/PrivilegedExceptionAction;)Ljava/lang/Object; \
-                 (receiver 未实现 {})", std::any::type_name::<PrivilegedExceptionAction<Object>>()
-            );
-        };
-        match <dyn PrivilegedExceptionAction__VTable>::run(&*vt) {
-            Ok(v) => Ok(v),
-            Err(e) if e.is_instance_of("java/lang/RuntimeException")
-                || !e.is_instance_of("java/lang/Exception") => Err(e),
-            Err(e) => {
-                let ex = e.catch_as::<crate::java::lang::Exception>("java/lang/Exception");
-                Err(JvmError::from(PrivilegedActionException::new(ex)?))
-            }
-        }
+    /// 栈遍历物化（保证 JIT 不消去实参）：原生二进制无栈遍历 → 空操作。
+    #[jvm_native]
+    pub fn ensureMaterializedForStackWalk(_o: Object) -> Result<()> {
+        Ok(())
     }
 }
