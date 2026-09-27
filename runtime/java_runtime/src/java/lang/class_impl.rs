@@ -435,6 +435,10 @@ impl Class {
             return Ok(false);
         }
         let key = format!("{}", self.__get_name()).replace('.', "/");
+        // JLS §4.10：任意引用（含数组，其 is_instance_of 有意不按 Object 匹配）都是 Object 实例
+        if key == "java/lang/Object" {
+            return Ok(true);
+        }
         Ok(obj.0.is_instance_of(&key))
     }
 
