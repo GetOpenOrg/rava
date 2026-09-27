@@ -172,7 +172,8 @@ def _is_boundary_class(cls: str) -> bool:
     if cls.startswith(_JDK_STUB_ONLY_PREFIXES):
         return not (_jca_released(cls, _JCA_MANIFEST) or _released_general(cls)
                     or _is_data_bundle(cls))
-    return cls.split('$', 1)[0] in _VM_BOUNDARY_CLASSES
+    # VM 耦合边界类的纯 Java 嵌套辅助类（Class$ReflectionData 等）同样按放行清单翻译
+    return cls.split('$', 1)[0] in _VM_BOUNDARY_CLASSES and not _released_general(cls)
 
 
 # java_runtime 已手写实现的类：这些类不再由 jdk_classes 翻译，避免重复定义和命名冲突
