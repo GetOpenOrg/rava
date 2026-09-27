@@ -434,6 +434,14 @@ def _emit_method_blocks(ci, registry, call_chain, stub_bodies, new_format_map,
                                  if ln.lstrip().startswith('pub fn '))
                 _decl_sig = _decl_sig[:-1].rstrip() if _decl_sig.endswith('{') else _decl_sig
                 method_blocks.append(_java_method_attr(m) + '\n' + _decl_sig + ';')
+            else:
+                # 声明跳过（体在 _impl.rs），但方法元数据表（build.rs 扫描 java_method /
+                # java_native 属性行 → CLASS_METHODS）仍须有该行：反射 getDeclaredMethod、
+                # MethodHandleNatives.resolve（linkToStatic 等签名多态方法）按表解析。
+                # 以注释行承载——宏输入的注释被词法剥除，不影响展开。
+                method_blocks.append('\n'.join(
+                    '// [meta] ' + ln for ln in _java_method_attr(m).split('\n')
+                    if 'java_method(' in ln or 'java_native(' in ln))
             continue
         # G-10 账本：定义侧登记最终 Rust 名（stub / 翻译体 / 接口声明各路径统一在此登记）
         LAMBDA_NAME_LEDGER.record_definition(ci.name, m.name, fn_name_check)
