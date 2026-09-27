@@ -234,8 +234,11 @@ class StackSim:
 
         if is_static:
             slot = 0
-            for rt in param_rust_types:
-                name = _safe_name(self._loc_names.get(slot, f"arg_{slot}"))
+            # 无调试信息时的缺省名按形参序号（与签名侧 _params_with_slot 的 `arg_{k}`、实例方法
+            # 分支同一口径）；按槽位命名在 long / double 形参之后错位（jlink 生成的物种类
+            # Species_DL.make(MethodType, LambdaForm, double, Object)：签名 arg_3、体内 arg_4 → E0425）
+            for idx, rt in enumerate(param_rust_types):
+                name = _safe_name(self._loc_names.get(slot, f"arg_{idx}"))
                 self.locals[slot] = (name, rt, False)
                 self._slot_decl_depth[slot] = 0
                 self._param_slots.add(slot)
