@@ -1,0 +1,33 @@
+hi bob;
+twice(al)
+5
+42
+true false
+7
+true false
+ProxyObj
+instanceof Greeter=true Counter=true Runnable=false
+isProxyClass=true plain=false
+handler same=true
+IOException io
+ISE ise
+UTE checked-undeclared
+NPE for null primitive return
+void null ok
+CCE for wrong return type
+sorted=[d, c, b, a]
+Greeter.greet[bob]
+Greeter.twice[al]
+Counter.add[2, 3]
+Counter.total[]
+Counter.reset[]
+Counter.flag[y, 2.5]
+Counter.flag[n, 2.5]
+Object.hashCode[]
+Object.toString[]
+Object.equals[ProxyObj]
+Object.equals[x]
+Object.toString[]
+Risky.checked[]
+Risky.unchecked[]
+Risky.undeclared[]
