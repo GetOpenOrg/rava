@@ -3,9 +3,14 @@ c=q b=7 s=9 z=true
 str=hello color=BLUE type=String
 ints=[3, 1, 2] names=[x] colors=[RED, BLUE]
 inner=deep annotationType=Rich
-toString=@TestAnnoValues.Rich(b=(byte)0x07, c='q', d=-0.25, color=BLUE, f=2.5f, i=42, type=java.lang.String.class, l=1099511627776L, inner=@TestAnnoValues.Inner(tag="deep"), colors={RED, BLUE}, str="hello", s=9, names={"x"}, ints={3, 1, 2}, z=true)
+inner toString=@TestAnnoValues.Inner(tag="deep")
+@TestAnnoValues.Tags({"p", "q"})
+@TestAnnoValues.Nums({1L, -2L})
+@TestAnnoValues.Kinds({int.class, java.lang.String[].class})
+@TestAnnoValues.Shades({BLUE})
+@TestAnnoValues.Letters({'a', '\n'})
 defaults: i=1 str=def color=GREEN type=Object names=[a, b] inner=in
-default toString=@TestAnnoValues.Rich(b=(byte)0x07, c='x', d=1.5, color=GREEN, f=2.5f, i=1, type=java.lang.Object.class, l=2L, inner=@TestAnnoValues.Inner(tag="in"), colors={}, str="def", s=9, names={"a", "b"}, ints={}, z=true)
+default inner toString=@TestAnnoValues.Inner(tag="in")
 equals self=true equals other=false hash stable=true
 child inherited Rich=true child Mark=false declared on child=0
 base annotations=2 isPresent Mark=true

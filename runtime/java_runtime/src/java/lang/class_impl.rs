@@ -164,7 +164,7 @@ impl Class {
         crate::java::lang::reflect::Method::__class_init()?;
         let mut out: Vec<crate::java::lang::reflect::Method> = Vec::new();
         for (slot, meta) in self.__declared_method_rows().iter().enumerate() {
-            if meta.name == "<init>" || meta.name == "<clinit>" {
+            if meta.name == "<init>" || meta.name == "<clinit>" || meta.inherited {
                 continue;
             }
             out.push(Self::__method_from_meta(Clone::clone(self), meta, slot as i32));
@@ -814,7 +814,7 @@ impl Class {
     pub(crate) fn __table_method(&self, name: &str, descriptor: &str) -> Result<crate::java::lang::reflect::Method> {
         crate::java::lang::reflect::Method::__class_init()?;
         for (slot, meta) in self.__declared_method_rows().iter().enumerate() {
-            if meta.name == name && meta.descriptor == descriptor {
+            if meta.name == name && meta.descriptor == descriptor && !meta.inherited {
                 return Ok(Self::__method_from_meta(Clone::clone(self), meta, slot as i32));
             }
         }

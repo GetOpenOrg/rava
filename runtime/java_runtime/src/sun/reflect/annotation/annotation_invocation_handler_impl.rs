@@ -28,7 +28,8 @@ impl H {
     #[jvm_boundary(upcalls = "sun/reflect/annotation/AnnotationInvocationHandler.toSourceString:(Ljava/lang/Class;)Ljava/lang/String; sun/reflect/annotation/AnnotationInvocationHandler.toSourceString:(F)Ljava/lang/String; sun/reflect/annotation/AnnotationInvocationHandler.toSourceString:(D)Ljava/lang/String; sun/reflect/annotation/AnnotationInvocationHandler.toSourceString:(C)Ljava/lang/String; sun/reflect/annotation/AnnotationInvocationHandler.toSourceString:(B)Ljava/lang/String; sun/reflect/annotation/AnnotationInvocationHandler.toSourceString:(J)Ljava/lang/String; sun/reflect/annotation/AnnotationInvocationHandler.toSourceString:(Ljava/lang/Enum;)Ljava/lang/String; sun/reflect/annotation/AnnotationInvocationHandler.toSourceString:(Ljava/lang/String;)Ljava/lang/String;")]
     pub fn memberValueToString(value: Object) -> Result<String> {
         let s = |x: String| -> std::string::String { format!("{}", x) };
-        let kind = value.0.__class_name();
+        let kind_owned = format!("{}", value.getClass()?.__get_name()).replace('.', "/");
+        let kind = kind_owned.as_str();
         if !kind.starts_with('[') {
             return match kind {
                 "java/lang/Class" => H::toSourceString_class(<Class as From<Object>>::from(value)),

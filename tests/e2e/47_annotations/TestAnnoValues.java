@@ -44,6 +44,28 @@ public class TestAnnoValues {
     @interface Mark {
     }
 
+    // 单成员注解：toString 文本与成员迭代序无关（多成员注解的成员序取决于 getDeclaredMethods
+    // 的 VM 实现序，不作逐字比较）
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface Tags { String[] value(); }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface Nums { long[] value(); }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface Kinds { Class<?>[] value(); }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface Shades { Color[] value(); }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface Letters { char[] value(); }
+
+    @Tags({"p", "q"}) @Nums({1L, -2L}) @Kinds({int.class, String[].class}) @Shades({Color.BLUE})
+    @Letters({'a', '\n'})
+    static class Holder {
+    }
+
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.PARAMETER)
     @interface Param {
@@ -70,14 +92,19 @@ public class TestAnnoValues {
         System.out.println("ints=" + Arrays.toString(r.ints()) + " names=" + Arrays.toString(r.names())
                 + " colors=" + Arrays.toString(r.colors()));
         System.out.println("inner=" + r.inner().tag() + " annotationType=" + r.annotationType().getSimpleName());
-        System.out.println("toString=" + r);
+        System.out.println("inner toString=" + r.inner());
+        System.out.println(Holder.class.getAnnotation(Tags.class));
+        System.out.println(Holder.class.getAnnotation(Nums.class));
+        System.out.println(Holder.class.getAnnotation(Kinds.class));
+        System.out.println(Holder.class.getAnnotation(Shades.class));
+        System.out.println(Holder.class.getAnnotation(Letters.class));
 
         Method m = Base.class.getMethod("plain", int.class, int.class, String.class);
         Rich dr = m.getAnnotation(Rich.class);
         System.out.println("defaults: i=" + dr.i() + " str=" + dr.str() + " color=" + dr.color()
                 + " type=" + dr.type().getSimpleName() + " names=" + Arrays.toString(dr.names())
                 + " inner=" + dr.inner().tag());
-        System.out.println("default toString=" + dr);
+        System.out.println("default inner toString=" + dr.inner());
 
         Rich again = Base.class.getAnnotation(Rich.class);
         System.out.println("equals self=" + r.equals(again) + " equals other=" + r.equals(dr)
