@@ -47,6 +47,11 @@ fn __member_key<T: Clone + Default + 'static + From<Object> + Into<Object> + cra
 }
 
 impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe> Constructor<T> {
+    /// 反射族内部：本构造器的 L3 分派键 (声明类斜线名, 描述符)。
+    pub(crate) fn __reflect_key(&self) -> Option<(std::string::String, std::string::String)> {
+        __member_key(self)
+    }
+
 
     /// 本构造器挂载点的注解条目。
     fn __anno_entries(&self) -> &'static [crate::annotation_meta::__anno_table::AnnotationEntry] {

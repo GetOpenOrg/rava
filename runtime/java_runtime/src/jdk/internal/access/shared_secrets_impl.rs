@@ -10,6 +10,7 @@ crate::__process_static! {
     static JAVA_IO_FILE_DESCRIPTOR_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_IO_PRINT_STREAM_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JAVA_LANG_INVOKE_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_REF_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_REFLECT_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_UTIL_COLLECTION_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
@@ -47,6 +48,23 @@ impl SharedSecrets {
     pub fn setJavaLangAccess(jla: Object) -> Result<()> {
         JAVA_LANG_ACCESS.with(|slot| *slot.borrow_mut() = Some(jla));
         Ok(())
+    }
+
+    /// `MethodHandleImpl.<clinit>` 登记的 `JavaLangInvokeAccess`（MethodHandleImpl$1）。
+    #[jvm_boundary]
+    pub fn setJavaLangInvokeAccess(a: Object) -> Result<()> {
+        JAVA_LANG_INVOKE_ACCESS.with(|slot| *slot.borrow_mut() = Some(a));
+        Ok(())
+    }
+
+    /// JDK：槽位为空时 `Class.forName("java.lang.invoke.MethodHandleImpl", true, null)` 触发其
+    /// <clinit> 登记。消费方 `MethodHandleAccessorFactory$LazyStaticHolder.<clinit>`（反射访问器族）。
+    #[jvm_boundary(upcalls = "java/lang/invoke/MethodHandleImpl.<clinit>:()V")]
+    pub fn getJavaLangInvokeAccess() -> Result<Object> {
+        if JAVA_LANG_INVOKE_ACCESS.with(|slot| slot.borrow().is_none()) {
+            crate::java::lang::invoke::MethodHandleImpl::__class_init()?;
+        }
+        Ok(JAVA_LANG_INVOKE_ACCESS.with(|slot| slot.borrow().clone()).unwrap_or_default())
     }
 
     /// `AccessibleObject.<clinit>` 登记的 `ReflectAccess`（反射对象复制 / 访问器槽位，

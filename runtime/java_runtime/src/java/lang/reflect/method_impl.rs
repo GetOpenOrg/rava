@@ -63,6 +63,11 @@ fn __member_key(m: &Method) -> Option<(std::string::String, std::string::String,
 }
 
 impl Method {
+    /// 反射族内部：本方法的 L3 分派键 (声明类斜线名, 方法名, 完整描述符)。
+    pub(crate) fn __reflect_key(&self) -> Option<(std::string::String, std::string::String, std::string::String)> {
+        __member_key(self)
+    }
+
 
     /// 本方法挂载点的注解条目（空 = 无注解 / 非表构造形态）。
     fn __anno_entries(&self) -> &'static [crate::annotation_meta::__anno_table::AnnotationEntry] {
