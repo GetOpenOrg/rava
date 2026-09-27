@@ -31,6 +31,15 @@ impl Preconditions {
         Ok(Object::from(FORMATTER_IOOBE))
     }
 
+    /// `outOfBoundsExceptionFormatter(Function<String, X>)`：由异常工厂派生的格式化器。
+    /// 手写层以异常种类标记承载（check* 按标记构造异常）；消费方 Buffer.<clinit> 的
+    /// IOOBE_FORMATTER（工厂 IndexOutOfBoundsException::new）→ IOOBE 标记。
+    #[jvm_boundary]
+    pub fn outOfBoundsExceptionFormatter(_f: crate::java::util::function::Function<Object, Object>)
+        -> Result<crate::java::util::function::BiFunction<Object, Object, Object>> {
+        Ok(From::from(Object::from(FORMATTER_IOOBE)))
+    }
+
     #[jvm_boundary]
     pub fn checkIndex_i_i_bifunction(index: i32, length: i32, oobef: Object) -> Result<i32> {
         if index < 0 || index >= length {
