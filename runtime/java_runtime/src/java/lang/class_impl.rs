@@ -159,6 +159,9 @@ impl Class {
     /// `getDeclaredMethods()`：本类全部声明方法的构造序列（声明序；JDK 语义
     /// 不含构造器与类初始化器——`<init>`/`<clinit>` 行过滤）。
     pub(crate) fn __table_declared_methods(&self) -> Result<JArray<crate::java::lang::reflect::Method>> {
+        // VM 创建反射对象前类已初始化（HotSpot Reflection::new_method 同）：超类 AccessibleObject 的
+        // <clinit> 先于 ReflectionFactory 运行（登记 ReflectAccess、取 soleInstance）
+        crate::java::lang::reflect::Method::__class_init()?;
         let mut out: Vec<crate::java::lang::reflect::Method> = Vec::new();
         for (slot, meta) in self.__declared_method_rows().iter().enumerate() {
             if meta.name == "<init>" || meta.name == "<clinit>" {
@@ -302,6 +305,7 @@ impl Class {
     /// `getDeclaredFields()`：本类全部声明字段的构造序列（字段表驱动，
     /// getDeclaredField 的复数形态——同一张 build.rs 字段表循环输出）。
     pub(crate) fn __table_declared_fields(&self) -> Result<JArray<Field>> {
+        Field::__class_init()?;
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         let mut out: Vec<Field> = Vec::new();
         if let Some((_, fs)) = __fields::CLASS_FIELDS.iter().find(|(n, _)| *n == cls_key) {
@@ -323,6 +327,7 @@ impl Class {
     /// `getDeclaredConstructors()`：本类全部声明构造器（方法表 `<init>` 行；
     /// 构造器身份键 = (类, 描述符)——参数还原同 __method_from_meta）。
     pub(crate) fn __table_declared_ctors(&self) -> Result<JArray<crate::java::lang::reflect::Constructor<Object>>> {
+        crate::java::lang::reflect::Constructor::<Object>::__class_init()?;
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         let mut out: Vec<crate::java::lang::reflect::Constructor<Object>> = Vec::new();
         if let Some((_, ms)) = __methods::CLASS_METHODS.iter().find(|(n, _)| *n == cls_key) {
