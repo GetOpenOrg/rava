@@ -1023,7 +1023,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     continue
                 _reflect_seen.add(pair)
                 cls, name = pair
-                if cls in user_names or not cls.startswith(_JDK_PREFIXES + tuple(lib_prefixes)):
+                if cls in user_names or not cls.startswith(
+                        _JDK_PREFIXES + _JDK_STUB_ONLY_PREFIXES + tuple(lib_prefixes)):
                     continue
                 ci = _load_class(cls)
                 if ci is None:
