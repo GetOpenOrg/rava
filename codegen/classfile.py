@@ -900,6 +900,11 @@ def _parse_code_attribute(r: _Reader, pool: list, class_name: str,
     is_static = bool(access_flags & ACC_STATIC)
     args_size = len(params) + (0 if is_static else 1)
 
+    # VM 常量守卫的死分支剪除（vm_intrinsics.toml [vm_constants]）：调用链与生成代码共用
+    # 同一份规范化后的指令序列
+    from .vm_constants import prune_dead_guards
+    instrs = prune_dead_guards(instrs, exception_table)
+
     return ParsedMethod(
         class_name=class_name,
         name=method_name,
