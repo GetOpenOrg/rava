@@ -599,7 +599,7 @@ def _upcast_to_ancestor_instantiation(src: str, actual: str, expected: str,
     return None
 
 
-def _coerce_arg(
+def _coerce_arg_str(
     e: str,
     e_ty_node: object,
     expected: str,
@@ -744,3 +744,171 @@ def _coerce_arg(
             return f"Clone::clone({e})"
         return f"Clone::clone(&{e})"
     return e
+
+
+def coerce_arg_node(
+    E,
+    e_ty_node: object,
+    expected: str,
+    actual: str,
+    sim: 'StackSim',
+    registry: dict | None,
+) -> str:
+    """统一参数强制转换逻辑（替代各 _gen_invoke* 中的重复 elif 链）。
+
+    expected: 期望类型（来自 generic_signature 或 descriptor）
+    actual:   实际栈顶类型字符串
+    """
+    # FS-Q1 Q1-b：节点版——控制流与判定同字符串版（e 为渲染串，只用于判定），返回值构造为节点
+    from ..rs_ir import Call as _C, RefExpr as _Ref, Var as _V, Cast as _Cast, RsPrimitive as _Prim, RawExpr as _Raw
+    from .coerce import coerce_to_object_node as _cton, cast_node as _castn
+    e = render_expr(E)
+    _E_CAST = _Raw('this') if e == 'this' else E   # 'this' 转换叶子保持字符串管线形态
+    from ..render import render_type as _rt
+    from ..constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
+    from .coerce import (
+        _coerce_from_null, _coerce_to_object, _coerce_value,
+        _render_cast, _same_generic_family,
+    )
+    from ..jvm_type import (Array, ClassRef, TypeVar, carrier_type_for_ident,
+                            from_rust_type, rust_head_name,
+                            strict_erased_subtype)
+    # 类型形参判定（N4 G2）：作用域类型形参经类型对象（TypeVar）识别，替代字符串成员判定
+    _tparams = frozenset(sim.class_type_params or ())
+    _act_tv = isinstance(from_rust_type(actual, registry, _tparams), TypeVar)
+    _exp_tv = isinstance(from_rust_type(expected, registry, _tparams), TypeVar)
+    null_coerce = _coerce_from_null(e, expected)
+    if null_coerce is not None:
+        return _C('Default::default', []) if null_coerce == 'Default::default()' else _V(null_coerce)
+    _carrier_expected = carrier_type_for_ident(expected, registry)
+    if _carrier_expected is not None and _carrier_expected == expected:
+        # A-4 批次 3+：形参是已铺设的接口载体。实参 → 载体的边界转换：
+        #   - 实参已是同载体：Clone 保持 move 语义（与尾部兜底同形）；
+        #   - 具体实现类：协变 upcast（interface_gen 的 From<C> for I<Object>，
+        #     任意类实例化上转到擦除载体是同一视图，保持对象身份）；
+        #   - Object / 其余静态类型：经 From<Object> 的非受检载体包装（javac
+        #     unchecked 语义——接口视图按运行时类成立，载体只持 Object 引用）。
+        #     From<_> 的 UFCS 形态不可被接口自带的 Java 静态 from 工厂遮蔽。
+        if actual == expected and actual not in _PRIMITIVE_RUST_TYPES:
+            if e == 'this':
+                return _C('Clone::clone', [E])
+            return _C('Clone::clone', [_Ref(E)])
+        if actual == 'Object':
+            return _C(f'<{expected} as ::std::convert::From<_>>::from', [_C('Clone::clone', [_Ref(E)])])
+        _src_c = _C('Clone::clone', [E]) if e == 'this' else _C('Clone::clone', [_Ref(E)])
+        return _C(f'<{expected} as ::std::convert::From<_>>::from',
+                  [_cton(_src_c, actual, registry, sim.class_type_params, clone=False)])
+    if expected == 'Object' and actual not in ('Object', '()'):
+        # 泛型参数值（如 K: Clone + Default + 'static）传给 Object 参数：
+        # Rust 无隐式子类型化，K 类型的值不能直接当 Object 用 → 装箱为
+        # Object(Rc<JvmRef<K>>)，callee 内按类型形参的 From<Object> bound 可还原。
+        if _act_tv:
+            return _cton(E, actual, registry, sim.class_type_params)
+        if e == 'this':
+            # 构造器（fn new）里没有 self 关键字，统一用局部变量 this
+            # （实例方法里 let this = self;，两者均可见）
+            if _is_generated_concrete_class(actual, sim, registry):
+                return _C('Object::from', [_C('Clone::clone', [E])])
+            # 接口载体（default 方法体落到接口自身块时的 this）等其余形态经
+            # _coerce_to_object：载体走 `Object::from`（From 解包 __ref，保持接收者
+            # 身份）；from_any 双重包装会使接口查询 / SAM 闭包直调失联。
+            return _cton(E, actual, registry, sim.class_type_params)
+        return _cton(E, actual, registry, sim.class_type_params)
+    if expected in ('bool', 'i8', 'i16', 'u16') and actual != expected:
+        return _V(_coerce_value(e, e_ty_node, expected))
+    if expected == 'i32' and actual in ('i8', 'i16', 'u16', 'bool'):
+        return _Cast(E, _Prim('i32'))
+    # 同一泛型类的不同实例化（raw type / 通配符形参接收精确实例化的实参）：
+    # CastExpr 的擦除路径（A-3，替代已删除的 _reinstantiate_generic 字符串发射）
+    if _downcast_target_valid(expected, sim, registry):
+        if _same_generic_family(actual, expected):
+            return _castn(_E_CAST, expected, box_first=True)
+    # TypeIR 批次 3（S5）：实参 → 形参的子类上转判定走类型对象
+    # （strict_erased_subtype：erasure 基名严格子类型，语义与 _is_subtype
+    # 适配层逐点一致），替代 actual/expected 基名的 split('<')[0] 文本解剖
+    _act_t = from_rust_type(actual, registry)
+    _exp_t = from_rust_type(expected, registry)
+    if (expected not in _PRIMITIVE_RUST_TYPES and actual not in _PRIMITIVE_RUST_TYPES
+            and expected not in ('Object', '()', actual)
+            and strict_erased_subtype(_act_t, _exp_t, registry)):
+        # 子类实参传给类祖先形参：按值上转（宏 From<Self> for Ancestor，R-2′ 统一形态）
+        src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
+        # 宏只为「祖先的精确实例化」生成 From（Child<A> → Parent<f(A)>）。形参是同一祖先的
+        # 另一实例化（raw type / 通配符形参）时：先向上转换到精确祖先，再经 Object 边界重新实例化。
+        _reinst_anc = _upcast_to_ancestor_instantiation(src, actual, expected, sim, registry)
+        if _reinst_anc is not None:
+            return _V(_reinst_anc)
+        return _V(upcast_expr(src))
+    # Fix 18：actual 是 Object（运行时多态值）而 expected 是具体引用类型 ——
+    # Java 调用点隐式 checkcast 语义（A-3：CastExpr checked 形态，失败返回
+    # Err(JvmError::class_cast) 可被 java_try 捕获，S-1）。
+    # 覆盖「callee 签名参数是精确泛型形态而调用方局部变量被擦除为 Object」
+    # 的场景（如 rotateLeft(root: TreeNode<K,V>) 传入 Object 局部变量）。
+    # 目标类型须为具体类（非接口别名）/ 类级类型参数 / 内建容器，接口名
+    # （List<..>、Consumer<T>）与方法级类型变量不是合法 checkcast 目标。
+    if (expected not in _PRIMITIVE_RUST_TYPES and actual == 'Object'
+            and expected not in ('Object', '()')
+            and not _exp_tv
+            and _downcast_target_valid(expected, sim, registry)):
+        # TypeIR 批次 3（S4a）：checkcast 目标 binary 经类型对象（ClassRef.binary，
+        # 域内解析；域外 / 数组 / 基本类型 → ''，与 _rust_type_to_binary 同口径）
+        _bin18 = (_exp_t.binary if isinstance(_exp_t, ClassRef) and registry
+                  and _exp_t.binary in registry else '')
+        if _bin18:
+            return _castn(_E_CAST, expected, binary_name=_bin18, checked=True)
+        return _castn(_E_CAST, expected)
+    if actual == 'Object' and _exp_tv:
+        # 形参是类型变量而实参经擦除边界（方法级类型变量、Object 局部变量）退化为 Object：
+        # javac 的 unchecked cast → 经宏为类型形参补的 From<Object> 取回（与 areturn 同规则）
+        return _C('From::from', [_C('Clone::clone', [E]) if e == 'this' else _C('Clone::clone', [_Ref(E)])])
+    if (_exp_tv and actual != expected
+            and actual not in _PRIMITIVE_RUST_TYPES and actual not in ('Object', '()')
+            and not _act_tv):
+        # 形参是类型变量、实参是具体引用类型：javac 对 `(E) x` 发射的 checkcast 目标是
+        # E 的擦除上界（`E extends Enum<E>` → checkcast Enum），栈值因此是上界类视图
+        #（EnumSet.copyOf 的 `result.add((E) i.next())`，E0308）。与上一分支同规则——经
+        # Object 边界按对象标识、由宏为类型形参补的 From<Object> 取回
+        return _C('From::from', [_cton(E, actual, registry, sim.class_type_params)])
+    if (_act_tv and expected != actual
+            and expected not in _PRIMITIVE_RUST_TYPES and expected not in ('Object', '()')
+            and not _exp_tv
+            and _downcast_target_valid(expected, sim, registry)):
+        # 实参静态类型是类型变量（`S extends SpeciesData`），形参是其上界类：Java 的隐式
+        # 子类型转换 → 经 Object 边界按对象标识取回上界类视图
+        return _C('From::from', [_cton(E, actual, registry, sim.class_type_params)])
+    # TypeIR 批次 3（S4b）：数组形态判定走类型对象（Array 变体），
+    # 替代 actual/expected 的数组前缀文本形态探测
+    _act_is_arr = isinstance(_act_t, Array)
+    _exp_is_arr = isinstance(_exp_t, Array)
+    if actual == 'Object' and _exp_is_arr:
+        # 擦除为 Object 的数组值流入类型化数组形参（`Object o = intArr; f((int[]) o)`
+        # 的实参位；checkcast 被验证器省略或已在上游消费）：经 `From<Object> for
+        # JArray<T>` 的数组视图机制取回（R9 协变视图 / S-4 探针，checkcast 语义）
+        return _C('From::from', [_C('Clone::clone', [_Ref(E)])])
+    if _act_is_arr and _exp_is_arr and actual != expected:
+        # 数组协变（`T[]` 擦除为 Object[] 的引用传给元素类型具体化的形参）：Java 数组在运行时
+        # 按元素类型具体化，同一数组对象经 Object 边界按形参的元素类型取回（checkcast 语义）
+        return _C('From::from', [_cton(E, actual, registry, sim.class_type_params)])
+    if actual not in _PRIMITIVE_RUST_TYPES:
+        # `this` 在 Rust 中是 &Self 引用，Clone::clone(this) 得到 Self，无需多余 &
+        if e == 'this':
+            return _C('Clone::clone', [E])
+        return _C('Clone::clone', [_Ref(E)])
+    return E
+
+
+import os as _os_q1
+_Q1_AUDIT = _os_q1.environ.get('JAVA_RTA_Q1_AUDIT')
+
+
+def _coerce_arg(e: str, e_ty_node: object, expected: str, actual: str,
+                sim: 'StackSim', registry: dict | None) -> str:
+    """实参强制转换的字符串入口（FS-Q1 Q1-b 双算期：输出沿用字符串版，插桩开启时对照节点版）。"""
+    out = _coerce_arg_str(e, e_ty_node, expected, actual, sim, registry)
+    if _Q1_AUDIT:
+        from ..rs_ir import Var as _VQ
+        _n = render_expr(coerce_arg_node(_VQ(e), e_ty_node, expected, actual, sim, registry))
+        if _n != out:
+            with open(_Q1_AUDIT, 'a', encoding='utf-8') as _f:
+                _f.write(f'coerce_arg\t{e!r}\t{expected!r}\t{actual!r}\t{out!r}\t{_n!r}\n')
+    return out
