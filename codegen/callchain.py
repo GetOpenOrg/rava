@@ -1050,10 +1050,20 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             _live = {k[0].rsplit('/', 1)[-1] for k in visited_methods}
             _new = [sv for sv in select_services([x for x in _jca_services if x], _jca_algos, _live)
                     if sv not in _jca_seeded]
+            from .jca_services import provider_class
             for sv in _new:
                 _jca_seeded.add(sv)
                 instantiated_classes.add(sv.impl)
                 _enqueue_method((sv.impl, '<init>', '()V'))
+                # 实现类由 Provider$Service.newInstance 经反射构造（Class.forName →
+                # getConstructor().newInstance()）：无参构造器登记按名分派面
+                REFLECT_CONSTS.setdefault(sv.impl, set()).add('<init>')
+                # provider 对象由手写边界按需构造（JDK ProviderConfig 对内建 provider 直接 new）
+                _pcls = provider_class(sv.provider, _JCA_MANIFEST)
+                if _pcls and _pcls not in instantiated_classes:
+                    instantiated_classes.add(_pcls)
+                    _enqueue_method((_pcls, '<init>', '()V'))
+                    _enqueue_class_init(_pcls)
             if _new:
                 JCA_SEEDS[:] = sorted(_jca_seeded)
                 print(f"      JCA 种子：{len(_jca_seeded)} 个服务 "

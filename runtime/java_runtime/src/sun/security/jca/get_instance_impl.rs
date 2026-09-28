@@ -1,9 +1,10 @@
 //! `sun/security/jca/GetInstance` 手写伴生：内部边界类，按调用链按需实现（K-2 规则）。
 //!
-//! K-JCA（`docs/plans/2026-09-25-jca-service-registry.md`）：JDK 在此遍历 ProviderList、
-//! 经 `Provider$Service.newInstance` 按类名反射构造实现类。原生侧改查生成注册表
-//! （`crate::jca`，codegen 按「engine 类在链上 × 用户算法名」入选服务并翻译实现类字节码），
-//! 构造即调用翻译出的无参构造器；实现类的全部算法逻辑走翻译字节码。
+//! K-JCA（`docs/plans/2026-09-28-jca-faithful-provider.md`）：JDK 在此遍历 ProviderList
+//!（运行期按配置装载 provider）。原生侧的 provider 列表 = 生成服务表中登记了该 (类型, 算法)
+//! 的 provider（`crate::jca`，登记序即优先序），provider 对象按需构造一次；其后与 JDK 逐步
+//! 同构：`Provider.getService` 取服务描述、`Provider$Service.newInstance` 反射构造实现类、
+//! `new Instance(provider, impl)`——全部走翻译字节码。
 
 use crate::prelude::*;
 use super::get_instance::implref::GetInstance;
@@ -25,56 +26,102 @@ fn not_available(type_: &str, algorithm: &str) -> crate::error::JvmError {
     }
 }
 
-fn instance_of(type_: &str, algorithm: &str) -> Result<GetInstance_Instance> {
-    let Some(entry) = crate::jca::find(type_, algorithm) else {
-        return Err(not_available(type_, algorithm));
-    };
-    let impl_ = (entry.ctor)()?;
+/// `ProviderList.getServices(type, algorithm)` 的等价物：按 provider 优先序，各 provider 的
+/// `getService(type, algorithm)`（翻译字节码）非 null 者。
+fn services(type_: &str, algorithm: &str) -> Result<Vec<Provider_Service>> {
+    let mut out = Vec::new();
+    for name in crate::jca::providers_for(type_, algorithm) {
+        let Some(p) = crate::jca::provider(name)? else { continue };
+        let p = <Provider as ::std::convert::From<Object>>::from(p);
+        let s = p.getService(String::from(type_), String::from(algorithm))?;
+        if !s.is_jvm_null() {
+            out.push(s);
+        }
+    }
+    Ok(out)
+}
+
+/// `GetInstance.getInstance(Service, Class)`：`s.newInstance(null)` 构造实现类（翻译字节码的
+/// 反射路径），包成 `Instance(provider, impl)`。SPI 超类核对（checkSuperClass）由类型系统
+/// 保证（服务表只含该类型实现类）。
+fn instance_of(s: &Provider_Service) -> Result<GetInstance_Instance> {
+    let impl_ = s.newInstance(Object::default())?;
     let mut inst = GetInstance_Instance::default();
     inst._init_not_null();
-    inst.__set_provider(Provider::__for_name(entry.provider));
+    inst.__set_provider(s.getProvider()?);
     inst.__set_impl_(impl_);
     Ok(inst)
 }
 
 impl GetInstance {
-    /// `getInstance(String type, Class<?> clazz, String algorithm)`：首个登记该 (类型, 算法)
-    /// 的服务 → 实例。clazz（SPI 基类）的超类核对由类型系统保证（登记表只含该类型实现类）。
-    #[jvm_boundary(upcalls = "java/security/NoSuchAlgorithmException.<init>:(Ljava/lang/String;)V")]
+    /// `getInstance(String type, Class<?> clazz, String algorithm)`：JDK 同序——首个服务构造
+    /// 失败（NoSuchAlgorithmException）时依次尝试其余服务，全部失败抛最后一个失败。
+    #[jvm_boundary(upcalls = "java/security/NoSuchAlgorithmException.<init>:(Ljava/lang/String;)V java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service; java/security/Provider$Service.newInstance:(Ljava/lang/Object;)Ljava/lang/Object; java/security/Provider$Service.getProvider:()Ljava/security/Provider;")]
     pub fn getInstance_str_class_str(type_: String, _clazz: Class, algorithm: String) -> Result<GetInstance_Instance> {
+        let type_ = format!("{}", type_);
         if algorithm.is_jvm_null() {
-            return Err(not_available(&format!("{}", type_), "null"));
+            return Err(not_available(&type_, "null"));
         }
-        instance_of(&format!("{}", type_), &format!("{}", algorithm))
+        let algorithm = format!("{}", algorithm);
+        let list = services(&type_, &algorithm)?;
+        if list.is_empty() {
+            return Err(not_available(&type_, &algorithm));
+        }
+        let mut failure = None;
+        for s in &list {
+            match instance_of(s) {
+                Ok(inst) => return Ok(inst),
+                Err(e) if e.is_instance_of("java/security/NoSuchAlgorithmException") => failure = Some(e),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(failure.expect("非空服务列表"))
     }
 
     /// `getServices(List<ServiceId>)`：按候选序（transformation 由具体到一般）收集已登记服务；
     /// 无匹配 → 空表（Cipher 据此抛 `NoSuchAlgorithmException("Cannot find any provider
     /// supporting ..")`，走翻译字节码）。
     #[cfg(not(jdk_ge_25))]
-    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object;")]
+    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object; java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;")]
     pub fn getServices_list(ids: Object) -> Result<List<Object>> {
         Self::services_for(ids)
     }
 
     /// JDK 25：`getServices(List<ServiceId>)` 返回类型改为 `Iterator<Service>`（同一候选序）。
     #[cfg(jdk_ge_25)]
-    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object; java/util/List.iterator:()Ljava/util/Iterator;")]
+    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object; java/util/List.iterator:()Ljava/util/Iterator; java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;")]
     pub fn getServices_list(ids: Object) -> Result<crate::java::util::Iterator<Object>> {
         Self::services_for(ids)?.iterator()
     }
 
+    /// JDK `ProviderList$ServiceList` 同序：provider 在外层、候选 id 在内层（每个 provider
+    /// 依次对全部 id 调 `getService`，非 null 者收入）。
     fn services_for(ids: Object) -> Result<List<Object>> {
         // 调用侧按边界方法的接口形参擦除传 Object（载体策略），此处还原 List 视图
         let ids = <List<Object> as ::std::convert::From<Object>>::from(ids);
-        let out = ArrayList::<Object>::new()?;
         let n = ids.size()?;
+        let mut keys: Vec<(String, String)> = Vec::new();
         for i in 0..n {
             let id = <ServiceId as ::std::convert::From<Object>>::from(ids.get(i)?);
-            let type_ = format!("{}", id.__get_type_());
-            let algo = format!("{}", id.__get_algorithm());
-            if let Some(entry) = crate::jca::find(&type_, &algo) {
-                out.add_obj(Object::from(Provider_Service::__from_entry(&entry)))?;
+            keys.push((format!("{}", id.__get_type_()), format!("{}", id.__get_algorithm())));
+        }
+        let mut names: Vec<&'static str> = Vec::new();
+        for (t, a) in &keys {
+            for name in crate::jca::providers_for(t, a) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        let out = ArrayList::<Object>::new()?;
+        for name in names {
+            let Some(p) = crate::jca::provider(name)? else { continue };
+            let p = <Provider as ::std::convert::From<Object>>::from(p);
+            for (t, a) in &keys {
+                let s = p.getService(String::from(t.as_str()), String::from(a.as_str()))?;
+                if !s.is_jvm_null() {
+                    out.add_obj(Object::from(s))?;
+                }
             }
         }
         Ok(<List<Object> as ::std::convert::From<_>>::from(Object::from(out)))

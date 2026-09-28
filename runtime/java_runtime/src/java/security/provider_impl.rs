@@ -1,8 +1,10 @@
-//! `java/security/Provider` 手写伴生：边界类（java/security/ 前缀），按调用链按需实现（K-2 规则）。
+//! `java/security/Provider` 手写伴生（Provider 本体按字节码翻译，本文件只有过渡辅助）。
 //!
-//! K-JCA：provider 对象只承担「身份」——名字（`getName`）与服务查找（`getService`，见
-//! `provider_service_impl.rs`）。每个 provider 名对应线程内唯一对象（JDK ProviderList 中
-//! provider 实例唯一，`==` 比较成立）。服务表来自 `crate::jca`（生成注册表）。
+//! Provider 按字节码翻译（seeds.toml [jca] release_classes）；JCA 服务查找的 provider 对象由
+//! `crate::jca::provider` 经翻译的 Provider 子类构造器创建（docs/plans/2026-09-28-jca-faithful-provider.md）。
+//!
+//! 过渡：`__for_name` 只供 SecureRandom 手写伴生报告缺省 provider（SUN）身份，随 SecureRandom
+//! 回到字节码（缺省 PRNG 经 provider 列表选取）删除。
 
 use crate::prelude::*;
 use super::provider::implref::Provider;
@@ -14,7 +16,7 @@ crate::__process_static! {
 }
 
 impl Provider {
-    /// provider 名 → 线程内唯一的 Provider 对象（首次取用时构造，仅设 name 字段）。
+    /// provider 名 → 进程内唯一的身份对象（首次取用时构造，仅设 name 字段）。
     pub fn __for_name(name: &'static str) -> Provider {
         PROVIDERS.with(|p| {
             let mut p = p.borrow_mut();
@@ -26,10 +28,5 @@ impl Provider {
             });
             Clone::clone(&*prov)
         })
-    }
-
-    /// `getName()`：provider 名。
-    pub fn __impl_getName(&self) -> Result<String> {
-        Ok(self.__get_name())
     }
 }

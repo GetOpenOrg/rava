@@ -763,22 +763,31 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         hook_block += ('    java_runtime::data_bundles::register_data_bundles(&[\n'
                        + '\n'.join(_bundle_lines) + '\n    ]);\n')
 
-    # K-JCA 服务登记：BFS 按「engine 类在链上 × 用户算法名」入选的服务实现类（翻译字节码）
-    # 的构造闭包，供手写边界 sun/security/jca 的服务查找构造（替代 Provider$Service.newInstance
-    # 的类名反射）。元组：(类型, 算法, 实现类 binary name, provider 名, 构造闭包)。
+    # K-JCA 服务登记：BFS 按「engine 类在链上 × 用户算法名」入选的服务（实现类翻译字节码，
+    # 构造走 Provider$Service.newInstance 的反射路径）与其 provider 的构造闭包（JDK
+    # ProviderConfig 对内建 provider 直接 new）。手写边界 sun/security/jca 按服务表选 provider、
+    # 经翻译的 Provider.getService 取服务描述。
     from ..callchain import JCA_SEEDS as _jca_seeds
     if _jca_seeds:
-        _jca_lines = []
-        for _sv in _jca_seeds:
-            _jpath = '::'.join(['java_runtime',
-                                *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _sv.impl.split('/')[:-1]),
-                                short_cls(_sv.impl)])
-            _jca_lines.append(
-                f'        ("{_sv.type}", "{_sv.algorithm}", "{_sv.impl}", "{_sv.provider}", '
-                f'(|| Ok(java_runtime::java::lang::Object::from({_jpath}::new()?)))'
-                f' as java_runtime::jca::ServiceCtor),')
+        from ..jca_services import provider_class as _provider_class
+
+        def _jca_path(_bin: str) -> str:
+            return '::'.join(['java_runtime',
+                              *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _bin.split('/')[:-1]),
+                              short_cls(_bin)])
+        _jca_lines = [f'        ("{_sv.type}", "{_sv.algorithm}", "{_sv.impl}", "{_sv.provider}"),'
+                      for _sv in _jca_seeds]
+        _prov_lines = []
+        for _pn in sorted({_sv.provider for _sv in _jca_seeds}):
+            _pc = _provider_class(_pn)
+            if _pc:
+                _prov_lines.append(
+                    f'        ("{_pn}", (|| Ok(java_runtime::java::lang::Object::from({_jca_path(_pc)}::new()?)))'
+                    f' as java_runtime::jca::ProviderCtor),')
         hook_block += ('    java_runtime::jca::register_services(&[\n'
                        + '\n'.join(_jca_lines) + '\n    ]);\n')
+        hook_block += ('    java_runtime::jca::register_providers(&[\n'
+                       + '\n'.join(_prov_lines) + '\n    ]);\n')
 
     # VM 引导期类初始化（HotSpot initPhase1 对应物）：清单 seeds.toml [boot_init] 中在闭包内
     # 翻译在场的类，main 启动时按清单顺序初始化（runtime vm_boot_init）

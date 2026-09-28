@@ -21,7 +21,7 @@ from .runtime_manifest import seed_section, jca_release_entries
 
 @dataclass(frozen=True)
 class JcaManifest:
-    providers: tuple = ()          # (provider 名, 注册类)
+    providers: tuple = ()          # (provider 名, 注册类, Provider 子类)
     release: tuple = ()            # 放行的类 / 包前缀（`/` 结尾为包）
     triggers: frozenset = frozenset()   # (类, 成员名)
 
@@ -37,7 +37,7 @@ class Service:
 def load_manifest() -> JcaManifest:
     """seeds.toml [jca]：provider 注册类、放行条目、服务查找触发成员。"""
     sec = seed_section('jca')
-    provs = tuple((p['name'], p['class']) for p in sec.get('providers', []))
+    provs = tuple((p['name'], p['class'], p['provider']) for p in sec.get('providers', []))
     triggers = frozenset(tuple(t.rsplit('.', 1)) for t in sec.get('triggers', []))
     return JcaManifest(provs, tuple(jca_release_entries()), triggers)
 
@@ -55,7 +55,7 @@ def extract_services(load, manifest: JcaManifest | None = None) -> list:
     """全部 provider 注册类的服务三元组（去重、排序）。load(binary_name) → ClassInfo|None。"""
     mf = manifest or load_manifest()
     out: set = set()
-    for prov, cls in mf.providers:
+    for prov, cls, _pcls in mf.providers:
         ci = load(cls)
         for m in (ci.methods if ci else ()):
             ins = m.instrs or []
@@ -68,6 +68,15 @@ def extract_services(load, manifest: JcaManifest | None = None) -> list:
                     continue
                 out.add(Service(a, b, impl, prov))
     return sorted(out)
+
+
+def provider_class(name: str, manifest: JcaManifest | None = None) -> str | None:
+    """provider 名 → Provider 子类 binary name（清单 providers.provider）。"""
+    mf = manifest or load_manifest()
+    for prov, _cls, pcls in mf.providers:
+        if prov == name:
+            return pcls
+    return None
 
 
 def _algorithm_key(s: str) -> str:

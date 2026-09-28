@@ -52,21 +52,27 @@ triggers = [
 ]
 
 # ── JCA 服务注册（K-JCA，docs/plans/2026-09-25-jca-service-registry.md）────────────────────
-#   providers        注册类全部方法字节码中 `ldc 类型; ldc 算法; ldc 实现类名` 三连常量即一条服务
-#                    （SunJCE.ps / SunEntries.add 同形态）
+#   providers        name = provider 名；class = 注册类（全部方法字节码中 `ldc 类型; ldc 算法;
+#                    ldc 实现类名` 三连常量即一条服务，SunJCE.ps / SunEntries.add 同形态）；
+#                    provider = Provider 子类（JDK ProviderConfig 对内建 provider 直接 `new`：
+#                    服务查找时按需构造一次，服务描述 / 属性 / newInstance 全走翻译字节码）
 #   release_packages / release_classes
 #                    从边界前缀放行、按字节码翻译（算法实现是纯 Java 计算；形态同 closure.toml [release]）
 #   triggers         调用链触达该成员（手写边界的服务查找入口）才补种服务实现类
 [jca]
 providers = [
-    { name = "SunJCE", class = "com/sun/crypto/provider/SunJCE" },
-    { name = "SUN", class = "sun/security/provider/SunEntries" },
+    { name = "SunJCE", class = "com/sun/crypto/provider/SunJCE", provider = "com/sun/crypto/provider/SunJCE" },
+    { name = "SUN", class = "sun/security/provider/SunEntries", provider = "sun/security/provider/Sun" },
 ]
 release_packages = [
     "com/sun/crypto/provider/",
     "sun/security/provider/",
 ]
 release_classes = [
+    # 服务描述层（纯 Java）：Provider（Properties 子类，服务表 + 旧式属性映射）及其嵌套类
+    # Service / ServiceKey / EngineDescription / UString。
+    "java/security/Provider",
+    "java/security/InvalidParameterException",
     "java/security/MessageDigest",
     "java/security/MessageDigestSpi",
     # 算法实现共用的纯 Java 工具类（分组长度 / 边界校验、字节序翻转；仅依赖 ProviderException 与
