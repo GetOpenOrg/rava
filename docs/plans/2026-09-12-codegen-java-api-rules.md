@@ -53,9 +53,9 @@ let s: JString = JString::from("hello");  // 不用 J 前缀
 let list: Vec<String> = Vec::new();        // 不用 Rust 标准库类型
 ```
 
-### R-05：运行时由 `java_rta` 自己生成，不依赖外部项目
+### R-05：运行时由 `rava` 自己生成，不依赖外部项目
 
-`java_rta` 生成的 Rust 项目包含两层：
+`rava` 生成的 Rust 项目包含两层：
 
 1. **运行时层**（`src/java_runtime/`）：由转译器生成，提供 `String`、`ArrayList`、`Field`、`System` 等类型。此层可以在内部使用 Rust 标准库（`Rc<RefCell<>>`、`Vec` 等）实现细节，对外只暴露公共 API。
 2. **业务层**（如 `src/hello_world.rs`）：由转译器从 Java 字节码翻译生成，只通过 `use crate::java_runtime::prelude::*;` 使用运行时层的公共 API。

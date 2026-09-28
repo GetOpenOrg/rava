@@ -16,7 +16,7 @@
 | 指标 | 现状 | 终态 |
 |---|---|---|
 | 生成器实现语言 | Python ~24.3k 行（codegen/ + scripts/，其中 trace 脚本 ~5k 不移植） | Rust；**Python 归零**（`codegen/`、`scripts/`、`pyproject.toml`、`uv.lock`、`.python-version` 全部删除） |
-| 分发形态 | `python3` + `.venv` 环境依赖 | **单二进制**（`java-rta`，子命令覆盖生成/运行/测试编排） |
+| 分发形态 | `python3` + `.venv` 环境依赖 | **单二进制**（`rava`，子命令覆盖生成/运行/测试编排） |
 | 宏展开实现 | `java_rta_macros` proc-macro 内 ~3.3k 行，不可单测 | `java_rta_gen` 库 crate 承载全部 expand 逻辑；宏壳 ≤100 行；**生成器与手写层共用同一 expand** |
 | IR | rs_ir 已强类型，但 coerce/vars/blocks 边界存在字符串往返 | **IR 是唯一货币**：模块边界 API 零 String 表达式往返（类型系统强制） |
 | regex 依赖 | 111 处使用点 | 热路径改真 parser；其余经 `regex` crate 原样移植并由 golden 覆盖 |
@@ -32,7 +32,7 @@
 ### 2.1 crate 布局
 
 ```
-generator/                    # 新 workspace 成员：Rust 生成器（终态单二进制 java-rta）
+generator/                    # 新 workspace 成员：Rust 生成器（终态单二进制 rava）
 ├── crates/
 │   ├── classfile/           # .class 解析（← classfile.py：_Reader/pool/decode/attributes）
 │   ├── jvm_sig/             # 泛型签名递归下降（← sig_parse.py）
@@ -44,7 +44,7 @@ generator/                    # 新 workspace 成员：Rust 生成器（终态�
 │   ├── instr/               # 指令翻译（← sim/ 十个子模块 + invoke 家族 + coerce 值强转）
 │   ├── emit/                # 产物发射（← class_writer 收尾形态 + attrs/vtable_util/struct_gen/…/project_writer）
 │   └── driver/              # CallChainDiscovery BFS + 编排 + cargo 调用 + lint（← transpile/callchain + scripts/main.py）
-│       └── src/bin/         # java-rta：generate / run / test / lint 子命令
+│       └── src/bin/         # rava：generate / run / test / lint 子命令
 runtime/java_rta_gen/         # 从 java_rta_macros 拆出：expand 全逻辑 + GenContext（库）
 runtime/java_rta_macros/      # 薄 proc-macro 壳：parse → java_rta_gen::expand（≤100 行）
 ```

@@ -29,7 +29,7 @@
 ## 3 目标布局
 
 ```
-java_rta/
+rava/
   codegen/                      # 提交：转译器
   scripts/                      # 提交：main.py / run_tests.py
   tests/e2e/                    # 提交：测试源

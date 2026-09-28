@@ -1,4 +1,4 @@
-# java_rta 项目指南
+# rava 项目指南
 
 ## 项目定位
 
@@ -22,7 +22,7 @@ Java → Rust 转译器。将 Java `.class` 字节码翻译为等价的 Rust 源
 > 详细的 Java → Rust 对照规则见 **[`docs/plans/java-rust-translation-reference.md`](docs/plans/java-rust-translation-reference.md)**。  
 > 产品定位与市场策略见 **[`docs/plans/2026-09-18-product-vision.md`](docs/plans/2026-09-18-product-vision.md)**。
 
-**核心目标**：java_rta 是 Java 语言的新编译后端，不是迁移工具。开发者继续写 Java，构建流程自动生成原生二进制。生成的 Rust 是可读的中间层——Java 开发者能直接对应原始逻辑，无需学习 Rust 的所有权/生命周期/trait dispatch。
+**核心目标**：rava 是 Java 语言的新编译后端，不是迁移工具。开发者继续写 Java，构建流程自动生成原生二进制。生成的 Rust 是可读的中间层——Java 开发者能直接对应原始逻辑，无需学习 Rust 的所有权/生命周期/trait dispatch。
 
 ```java
 // Java（开发者写的）

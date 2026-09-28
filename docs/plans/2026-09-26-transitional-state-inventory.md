@@ -243,7 +243,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | FS-O5 | System.Logger 返回静默 Logger | 默认 SimpleConsoleLogger | INFO 及以上日志不输出 | 新立 |
 | FS-O6 | JFR / PerfCounter / CDS / ClassFileDumper 是 no-op 占位 | — | JFR 不可用 | 新立 |
 | FS-O7 | JUnit crate 的 workspace path 依赖 | 版本化的 `java-runtime-core` | 仅架构 | M5 / R9 |
-| FS-O8 | 生成器仍是 Python | 单二进制 `java-rta` | 仅架构 | #10 / R0 |
+| FS-O8 | 生成器仍是 Python | 单二进制 `rava` | 仅架构 | #10 / R0 |
 | FS-O9 | 手写 `_impl` 分配的对象不进 RTA | — | 覆盖方法可能是存根 | N6（待推送） |
 | FS-O10 | 对象序列化：record 路径 / 反序列化实例化 | — | — | S-66 / N2 |
 | FS-O11 | 跨包同简单名类撞名 | — | — | S-14 |

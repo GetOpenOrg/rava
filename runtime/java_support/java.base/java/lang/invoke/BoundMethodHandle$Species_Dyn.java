@@ -1,5 +1,5 @@
 /*
- * VM 支持类（java_rta）：非预生成 key 的 BoundMethodHandle 物种通用载体。
+ * VM 支持类（rava）：非预生成 key 的 BoundMethodHandle 物种通用载体。
  *
  * JDK 的 ClassSpecializer 对 jlink 未预生成的物种 key 用 ASM 现场生成专用类
  * （字段 arg<T><i> + make 工厂 + copyWith*）。原生二进制不能在运行期定义类，

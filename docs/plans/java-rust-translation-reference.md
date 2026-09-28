@@ -1,6 +1,6 @@
 # Java → Rust 转译对照规则
 
-> 本文档定义 java_rta 转译器在各类 Java 语言构造上的 Rust 等价形式。  
+> 本文档定义 rava 转译器在各类 Java 语言构造上的 Rust 等价形式。  
 > 目标：让 Java 开发者能够直接通过生成的 Rust 源码还原 Java 语义，所有 Rust 实现复杂度由 `java_class!` 宏和 codegen 管线封装，对读者不可见。  
 > 关联文档：[`2026-09-17-java-rust-type-1to1.md`](2026-09-17-java-rust-type-1to1.md)（类型 1:1 对应任务跟踪）
 

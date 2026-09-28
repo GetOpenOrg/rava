@@ -248,7 +248,7 @@ fn vm_derived_properties(
         ("java.vm.specification.name", std::string::String::from("Java Virtual Machine Specification")),
         ("java.vm.specification.vendor", std::string::String::from("Oracle Corporation")),
         ("java.vm.specification.version", spec),
-        ("java.vm.name", std::string::String::from("java_rta native runtime")),
+        ("java.vm.name", std::string::String::from("rava native runtime")),
         ("java.vm.vendor", get("java.vendor")?),
         ("java.vm.version", get("java.runtime.version")?),
         ("java.vm.info", std::string::String::from("native image")),

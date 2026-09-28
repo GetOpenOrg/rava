@@ -485,7 +485,7 @@ pub fn arraycopy(...) -> Result<()> {
 **Phase D 前的 JDK 元数据存根（仅含属性，无实现）：**
 
 ```rust
-// 此文件由 java_rta 自动生成，仅供 build.rs 扫描。不参与 Rust 模块编译。
+// 此文件由 rava 自动生成，仅供 build.rs 扫描。不参与 Rust 模块编译。
 
 #[java_class(
     binary_name = "java/util/ArrayList",

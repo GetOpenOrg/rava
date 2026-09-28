@@ -2035,7 +2035,7 @@ false_label: iconst_0     ; push 0（false）
 end_label: istore <slot>
 ```
 
-当前 java_rta 将这个模式直接翻译为：
+当前 rava 将这个模式直接翻译为：
 ```rust
 let mut v5: i32 = if v1 > v2 { 1i32 } else { 0i32 };
 ```
@@ -2178,9 +2178,9 @@ def registry_get(registry, key):
 **状态**：`[ ]`（部分完成：field stub 已计数（transpile.py）；指令级语义桩统一标记与计数未做）  
 **文件**：`codegen/instr.py`、`codegen/emitter.py`、`scripts/main.py`  
 **优先级**：P2  
-**来源**：ruva 计划 §5.4 + java_rta 改进计划 §5.1
+**来源**：ruva 计划 §5.4 + rava 改进计划 §5.1
 
-**背景**："语义桩"是指以看似合理但实际语义错误的代码替代未实现功能，而非显式 `todo!()` 或编译错误。java_rta 当前已知的语义桩：
+**背景**："语义桩"是指以看似合理但实际语义错误的代码替代未实现功能，而非显式 `todo!()` 或编译错误。rava 当前已知的语义桩：
 
 | 指令 | 当前行为 | 正确行为 |
 |------|---------|---------|
@@ -2285,7 +2285,7 @@ T72 (语义桩追踪)   ─ 独立，可立即开始；Step 1-3 不改变生成�
 >
 > 这三份文档是 JNC（Java→Rust transpiler v2）和 ruva（Ruby→Rust transpiler）的任务历史。
 > 它们已经历了完整的开发周期，踩过大量坑并修复。
-> 以下任务是在 java_rta 中**提前规避**这些已知问题的行动项。
+> 以下任务是在 rava 中**提前规避**这些已知问题的行动项。
 
 ---
 
@@ -2301,7 +2301,7 @@ T72 (语义桩追踪)   ─ 独立，可立即开始；Step 1-3 不改变生成�
 Java 的整数运算（`int`、`long`）语义是 **wrap-around（模 2^32/2^64）**，溢出时回绕，不会报错。  
 Rust 在 **debug 模式**下整数溢出会 **panic**；release 模式下虽然回绕，但行为与 debug 不一致。
 
-当前 java_rta 生成形如：
+当前 rava 生成形如：
 ```rust
 let _v3 = _v1 + _v2;
 ```
@@ -2442,7 +2442,7 @@ for field in cls.fields:
 
 **背景**：
 
-当前 java_rta 将所有生成的 Java 方法签名包装为 `Result<T, JvmError>`，并在方法体内统一使用 `?` 运算符传播错误。  
+当前 rava 将所有生成的 Java 方法签名包装为 `Result<T, JvmError>`，并在方法体内统一使用 `?` 运算符传播错误。  
 但 Java 的 checked exception 机制允许区分：
 - 有 `throws` 声明的方法 → 可抛 checked exception，翻译为 `Result<T, JvmError>` 合理
 - 无 `throws` 声明（且方法体不抛 checked exception）的方法 → 不需要 `Result` 包装
@@ -2492,7 +2492,7 @@ def method_return_type(method: ParsedMethod, base_ty: str) -> str:
 > 来源：ruva `task-history.md`（CFG-F1/F2/F4）、`task.md`（F-RECORD-2、CFG-ARCH-1a）
 >
 > 以下 bug 是 ruva 在实现 CFG 结构恢复时实际遇到并修复的。  
-> java_rta 实现 T56（CFG 支配树）和 T62（异常表建模）时，应**提前规避**这些问题，而不是等到出现再修复。
+> rava 实现 T56（CFG 支配树）和 T62（异常表建模）时，应**提前规避**这些问题，而不是等到出现再修复。
 
 **CFG-F1：嵌套 try-catch 内层 catch 丢失**
 

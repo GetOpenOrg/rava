@@ -1516,7 +1516,7 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
 
 def main():
     global OUT, SHARED_TARGET
-    ap = argparse.ArgumentParser(description="java_rta 端到端测试框架")
+    ap = argparse.ArgumentParser(description="rava 端到端测试框架")
     ap.add_argument("--filter",          metavar="STR", nargs="+", help="只测试路径中包含任意指定字符串的文件（可传多个）")
     ap.add_argument("--no-run",          action="store_true", help="只生成 Rust，不执行对比（仅顺序模式）")
     ap.add_argument("--update-expected", action="store_true", help="重新生成 expected/*.txt（用 java 运行）")

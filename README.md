@@ -1,4 +1,4 @@
-# java-rta
+# rava
 
 Java 字节码 → Rust 源码转译器。
 
@@ -100,7 +100,7 @@ impl HelloWorld {
 ## 项目结构
 
 ```
-java-rta/
+rava/
 ├── scripts/
 │   ├── main.py                  # CLI 入口
 │   ├── java_rta.py              # RTA 可达性分析

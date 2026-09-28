@@ -1,4 +1,4 @@
-# java_rta/codegen 改进计划
+# rava/codegen 改进计划
 
 > 创建日期：2026-09-14  
 > 范围：`codegen/` 全部模块
@@ -376,13 +376,13 @@ def find_loops_cfg(bbs: list[BasicBlock]) -> list[LoopNode]:
 
 ## 五、应规避的架构陷阱
 
-本节记录同类代码生成器项目中已经发生的、代价高昂的设计失误，供 java_rta 在演进时主动规避。
+本节记录同类代码生成器项目中已经发生的、代价高昂的设计失误，供 rava 在演进时主动规避。
 
 ### 5.1 语义桩伪装成合理实现
 
 **陷阱**：将"尚未实现"的功能以看似合理但语义错误的桩代码形式混入生成结果，而非显式 `panic!` 或编译期错误。调用方在运行时遭遇难以追踪的逻辑错误，而不是在生成阶段就被明确告知。
 
-**java_rta 当前已有此问题**：`instanceof` 指令硬编码返回 `true`，`switch` 指令只弹栈不生成分支。任何依赖这两个指令结果的程序都会静默产生错误行为，且无任何编译期警告。
+**rava 当前已有此问题**：`instanceof` 指令硬编码返回 `true`，`switch` 指令只弹栈不生成分支。任何依赖这两个指令结果的程序都会静默产生错误行为，且无任何编译期警告。
 
 **规避原则**：
 - 未实现的指令/功能，一律生成 `todo!("opcode: {}")` 或 `unimplemented!(...)` 形式的 panic，永远不生成伪造的合理返回值
@@ -414,7 +414,7 @@ if rt.startswith('Rc<RefCell<Vec<'):  # 脆弱：格式稍变即失效
 
 **陷阱**：`RawExpr` / `RawStmt` 逃生舱在短期内方便快捷，但每增加一处，后续的 mutation 分析、优化 pass、测试验证就多一块"暗区"。积累到一定规模后，整个 IR 层形同虚设——所有有趣的内容都在 raw 字符串里，无法被程序分析。
 
-**java_rta 当前状态**：`instr.py` 中大量使用 `RawExpr(f"...")`，`method.py` 中也有 `RawStmt` 用于复杂情况。当前 `_analyze_mutation` pass 对 `RawStmt` 只能保守处理，无法判断其中是否有赋值。
+**rava 当前状态**：`instr.py` 中大量使用 `RawExpr(f"...")`，`method.py` 中也有 `RawStmt` 用于复杂情况。当前 `_analyze_mutation` pass 对 `RawStmt` 只能保守处理，无法判断其中是否有赋值。
 
 **规避原则**：
 - 每次新增 `RawExpr`/`RawStmt` 时必须同时提 issue，描述"如何 IR 化"
@@ -449,7 +449,7 @@ if rt.startswith('Rc<RefCell<Vec<'):  # 脆弱：格式稍变即失效
 
 **陷阱**：代码生成器支持多种输出模式（如"生成 JDK 类"vs"只生成用户类"、"带调用链剪枝"vs"全量生成"），但测试只覆盖最常见的单一模式。特殊模式下的代码路径在大规模生成后才发现问题，此时错误数量庞大，根因分散，修复困难。
 
-**java_rta 当前状态**：`transpile.py` 支持方法级调用链剪枝（`visited_methods`）和全量生成两种模式，但测试覆盖以全量模式为主。
+**rava 当前状态**：`transpile.py` 支持方法级调用链剪枝（`visited_methods`）和全量生成两种模式，但测试覆盖以全量模式为主。
 
 **规避原则**：
 - 每种 CLI 模式 / 主要参数组合都有独立的最小 e2e 测试（HelloWorld 级别）

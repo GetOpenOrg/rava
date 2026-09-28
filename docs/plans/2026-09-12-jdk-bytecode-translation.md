@@ -31,7 +31,7 @@
 ### 1.2 目录结构（目标态）
 
 ```
-java_rta/
+rava/
 ├── scripts/
 │   ├── main.py
 │   └── codegen/

@@ -1,5 +1,5 @@
 /*
- * VM 支持类（java_rta）：动态代理的通用载体（FS-R R4a）。
+ * VM 支持类（rava）：动态代理的通用载体（FS-R R4a）。
  *
  * JDK 的 Proxy.newProxyInstance 经 ProxyBuilder.defineProxyClass → ProxyGenerator 在运行期
  * 生成并定义 $ProxyN 类（每个接口方法体为 h.invoke(this, m, args) + 异常 / 返回值转换）。

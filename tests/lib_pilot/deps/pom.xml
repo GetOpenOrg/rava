@@ -4,13 +4,13 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>local.java_rta</groupId>
+  <groupId>local.rava</groupId>
   <artifactId>pilot-deps</artifactId>
   <version>1.0.0</version>
   <packaging>pom</packaging>
 
   <name>pilot-deps</name>
-  <description>java_rta 真实项目 pilot 语料取包器（远期路线图 §四-3 阶梯）——宿主侧用 Maven 解析依赖闭包，
+  <description>rava 真实项目 pilot 语料取包器（远期路线图 §四-3 阶梯）——宿主侧用 Maven 解析依赖闭包，
     与「构建工具不作为转译目标」的结论无关（用 Maven ≠ 翻译 Maven）。
     用法：scripts/fetch_pilot_deps.sh → jar 落 tests/lib_pilot/deps/target/pilot-libs/（gitignore）并逐个跑 dep_scan 透视。</description>
 

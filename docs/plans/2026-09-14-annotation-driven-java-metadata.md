@@ -104,7 +104,7 @@ FileNotFoundException（super_class=IOException, interfaces=Serializable）
 
 ### 2.3 _super 字段语义
 
-当前 java_rta 的对象模型是**值语义**：struct 持有 `JField<T>`（`Box<RefCell<T>>`），
+当前 rava 的对象模型是**值语义**：struct 持有 `JField<T>`（`Box<RefCell<T>>`），
 对象以值方式传递或 clone，**没有 JRef/JRc 堆引用层**。
 因此 `_super: IOException`（值嵌套）是可行的，不存在引用层冲突。
 
