@@ -333,6 +333,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     # 边界接口回调边（延迟解析：种子阶段 _load_class 尚未定义，收集后待
     # _propagate_virtual_targets 前 drain）
     _pending_iface_edges: list[tuple[str, str, str]] = []
+    # 手写 fn 声明的回调目标（#[jvm_native/jvm_boundary(upcalls = ..)]）：解析失败即手写层
+    # 描述符写错（如泛型参数按 Object 而非上界擦除），默认输出，不依赖 JAVA_RTA_DEBUG
+    _upcall_targets: set[tuple[str, str, str]] = set()
     # 已确认接口形态的回调边键（迟至 stub/父类通道的实现者清扫用，见函数尾注）
     _drained_iface_keys: list[tuple[str, str, str]] = []
 
@@ -395,6 +398,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         # 种子阶段 resolver 尚未就绪 → 候选暂存，由不动点循环的 _drain_allocs 解析登记。
         _pending_allocs.extend(sorted(upcalls.allocated(cls, member)))
         for tcls, tmeth, tdesc in upcalls.lookup(cls, member):
+            _upcall_targets.add((tcls, tmeth, tdesc))
             # 回调目标自身也是被触达的成员：其手写实现可继续声明回调
             _enqueue_upcalls(tcls, tmeth)
             if tcls == _OBJECT_CLASS:
@@ -1330,6 +1334,9 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             if os.environ.get('JAVA_RTA_DEBUG'):
                 for _k in sorted(_unresolved_calls):
                     print(f"[bfs-audit] unresolved: {_k[0]}.{_k[1]}:{_k[2]}")
+        for _k in sorted(_unresolved_calls & _upcall_targets):
+            print(f"[upcall-audit] 警告: 手写回调目标未解析（描述符与声明不符）："
+                  f"{_k[0]}.{_k[1]}:{_k[2]}")
 
         # field_discover_classes + T76 父类链：BFS 处理，递归包含所有父类
         # T76 生成 pub _super: ParentType，需要父类类型存在于 jdk_infos
