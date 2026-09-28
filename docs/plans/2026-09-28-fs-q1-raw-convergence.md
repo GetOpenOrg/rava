@@ -32,10 +32,10 @@
 | 批 | 内容 | 验收 |
 |---|---|---|
 | Q1-a ✅ | IR 补 `TryExpr(inner)`（渲染 `inner?`）；单测 | 单测 |
-| Q1-b | 强制转换层节点化：每个转换函数补「节点入 → 节点出」版本（`Call('Object::from', [..])` / `UpcastExpr` / `CastExpr` 等），渲染与旧字符串**逐字符一致**；旧字符串版本改为「节点版 + render_expr」薄封装 | 生成树逐字节一致 |
-| Q1-c | 调用族实参以节点携带：`_pop_receiver_and_args` → 强制转换节点版 → `MethodCall` / `Call` 节点；caller-sensitive 包装节点化 | 生成树逐字节一致（语句层仍渲染为同一文本） |
-| Q1-d | 语句层类型化：`LetStmt(v, value=TryExpr(..))` / `ExprStmt(TryExpr(..))` 替代 RawStmt（进入变量提升 / 可变性分析） | 编译 + 定向 e2e（≤10 例，`CARGO_BUILD_JOBS=1`）；`[raw-audit]` 与位点剖面按位点下降 |
-| Q1-e | getfield / putfield、数组存取、returns、`_clone_moved_var` 同构推进 | 同 Q1-c / Q1-d |
+| Q1-b ✅ | 强制转换层节点化：每个转换函数补「节点入 → 节点出」版本（`Call('Object::from', [..])` / `UpcastExpr` / `CastExpr` 等），渲染与旧字符串**逐字符一致**；旧字符串版本改为「节点版 + render_expr」薄封装 | 生成树逐字节一致 |
+| Q1-c ✅ | 调用族实参以节点携带：`_pop_receiver_and_args` → 强制转换节点版 → `MethodCall` / `Call` 节点；caller-sensitive 包装节点化 | 生成树逐字节一致（语句层仍渲染为同一文本） |
+| Q1-d ✅ | 语句层类型化：`LetStmt(v, value=TryExpr(..))` / `ExprStmt(TryExpr(..))` 替代 RawStmt（进入变量提升 / 可变性分析） | 编译 + 定向 e2e（≤10 例，`CARGO_BUILD_JOBS=1`）；`[raw-audit]` 与位点剖面按位点下降 |
+| Q1-e 🔄 | getfield / putfield、数组存取、returns、`_clone_moved_var` 同构推进 | 同 Q1-c / Q1-d |
 
 每批：`main.py --raw-sites` 位点剖面前后对照，趋势只降不升。
 
@@ -45,3 +45,24 @@
   与提升决策——这正是结构化的目的，但需逐批以编译 + 运行验收，而非逐字节对照。
 - `_build_call` 的 caller-sensitive 包装（`reflect_dispatch::__caller_sensitive`）需节点化，保持调用处
   类名传入语义。
+
+## 五、进度（2026-09-28）
+
+| 提交 | 内容 | 验收 |
+|---|---|---|
+| `cd7621e` | Q1-c/d：invokevirtual 实参节点携带 + 调用结果 LetStmt / ExprStmt | 编译 + e2e |
+| `a4bb653` | getfield 读取、aastore 三条发射路径 | 4 例生成树逐字节一致 |
+| `c80ba28` | invokestatic、returns（ReturnStmt） | 4 例逐字节一致 |
+| `6c3c5d5` | `_clone_moved_var`（Call + RefExpr） | 4 例逐字节一致 |
+| `11e5a4d` | invokespecial 构造调用 | 唯一差异为变量提升假阳性消除（字符串字面量曾被 Raw 文本扫描误计为变量引用） |
+| `7881b66` | putfield / putstatic | TestFieldEvalOrder 逐字节一致 |
+
+编译验证（Q1-c..e invokespecial 为止）：TestArrayList / TestCustomException / TestEnumAdvanced /
+TestStreamBasic / TestHashMapOps 全 PASS。
+
+`[raw-audit]`（TestFieldEvalOrder，每次转译）：起点 raw_expr≈45.1K / raw_stmt≈56.6K →
+raw_expr≈25.2K / raw_stmt≈18.7K（合计 −57%）。
+
+保持 Raw 的形态（逐字节一致约束下暂不动）：经强制转换的值叶子（`_coerce_value` / `_coerce_stored_value`
+字符串实现）、Object 装箱的 let、@CallerSensitive 包装调用、未知类存根。下一批：invokevirtual 接收者叶子、
+基本类型数组存取、invokedynamic、局部变量存储（locals）、算术（arith）。
