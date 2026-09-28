@@ -56,13 +56,19 @@
 | `6c3c5d5` | `_clone_moved_var`（Call + RefExpr） | 4 例逐字节一致 |
 | `11e5a4d` | invokespecial 构造调用 | 唯一差异为变量提升假阳性消除（字符串字面量曾被 Raw 文本扫描误计为变量引用） |
 | `7881b66` | putfield / putstatic | TestFieldEvalOrder 逐字节一致 |
+| `673ab28` | invokevirtual 接收者节点携带 | 4 例逐字节一致 |
+| `d1f32e6` | 基本类型数组存储、newarray / anewarray | 4 例逐字节一致 |
+| `6f8396d` | iinc（AssignStmt）、athrow（ReturnStmt Err） | 4 例逐字节一致 |
+| `ffafad2` | 算术 wrapping 族；let 省略标注改为白名单判定 | 4 例逐字节一致 |
+| `43ec8e7` | `_coerce_value` 节点版（构造后与字符串实现比对、不一致回落 Raw）；实参文本叶子不再以 Var 承载复合文本 | 4 例逐字节一致 |
 
-编译验证（Q1-c..e invokespecial 为止）：TestArrayList / TestCustomException / TestEnumAdvanced /
-TestStreamBasic / TestHashMapOps 全 PASS。
+编译验证（逐批串行）：TestArrayList / TestCustomException / TestEnumAdvanced / TestEnumBasic /
+TestStreamBasic / TestHashMapOps / TestFieldEvalOrder / TestStringBuilder / TestStringBuilderOps 全 PASS。
 
 `[raw-audit]`（TestFieldEvalOrder，每次转译）：起点 raw_expr≈45.1K / raw_stmt≈56.6K →
-raw_expr≈25.2K / raw_stmt≈18.7K（合计 −57%）。
+raw_expr≈15.8K / raw_stmt≈7.8K（合计 −77%）；run_tests 口径单测试 raw 102.6K → 23.6K。
 
 保持 Raw 的形态（逐字节一致约束下暂不动）：经强制转换的值叶子（`_coerce_value` / `_coerce_stored_value`
-字符串实现）、Object 装箱的 let、@CallerSensitive 包装调用、未知类存根。下一批：invokevirtual 接收者叶子、
-基本类型数组存取、invokedynamic、局部变量存储（locals）、算术（arith）。
+字符串实现）、Object 装箱的 let、@CallerSensitive 包装调用、未知类存根。下一批：`_coerce_stored_value` /
+`_coerce_to_object` 值叶子（字段写入、areturn）、基本块合并（blocks._merge_entry）、三元融合（fusion._ternary_value）、
+移位 / 位运算（原文无空格，BinOp 渲染带空格，需按「构造后比对」模式处理）、invokedynamic。
