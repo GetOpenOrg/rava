@@ -243,6 +243,13 @@ class Null(JvmType):
     pass
 
 
+@dataclass(frozen=True)
+class HostPrim(JvmType):
+    """Rust 宿主基本类型（``u8`` / ``u32`` / ``u64`` / ``usize``）：生成代码内部的索引 / 字节值，
+    无 JVM 对应物（N4 G3）。与 Primitive 同为值类型、非引用；不在 registry 域内、无类身份。"""
+    name: str
+
+
 # ── 构造入口：描述符 / 泛型签名 ─────────────────────────────────
 
 # Rust 基本类型拼写 → JVM 基本类型名（from_rust_type 的反向映射；
@@ -254,6 +261,9 @@ _RUST_PRIM: dict[str, str] = {
 }
 
 _PRIM_TO_RUST: dict[str, str] = {v: k for k, v in _RUST_PRIM.items()}
+
+# Rust 宿主基本类型拼写（constants.PRIMITIVE_RUST_TYPES 中无 JVM 对应物者）→ HostPrim
+_RUST_HOST_PRIM: frozenset[str] = frozenset({'u8', 'u32', 'u64', 'usize'})
 
 # (id(registry), len(registry), rust_ty) → 解析结果。失效约定同 _CLOSURE_CACHE。
 _RUST_PARSE_CACHE: dict[tuple, JvmType] = {}
@@ -271,7 +281,8 @@ def from_rust_type(rust_ty: str, registry: 'dict | None' = None,
     文法：``'&'? head ('<' arg (',' arg)* '>')?``，head = 标识符或 ``'()'``，
     arg 递归同文法且可为 ``'?'``（通配符）。映射：
 
-    - ``i32`` 等 Rust 基本类型拼写（``'()'`` → void）→ ``Primitive``；
+    - ``i32`` 等 Rust 基本类型拼写（``'()'`` → void）→ ``Primitive``；``u8`` / ``u32`` / ``u64`` /
+      ``usize``（无 JVM 对应物）→ ``HostPrim``（N4 G3）；
     - ``JArray<E>`` → ``Array``（裸 ``JArray`` 无实参时按占位 ClassRef 处理）；
     - ``Object`` → ``ClassRef(java/lang/Object)``；
     - 其余 head 经 ``_registry_short_index`` 反查 binary（is_interface 同步补全；
@@ -315,6 +326,8 @@ def _parse_rust_type(s: str, registry: 'dict | None', tparams: 'frozenset[str]' 
     prim = _RUST_PRIM.get(head)
     if prim is not None:
         return Primitive(prim)
+    if head in _RUST_HOST_PRIM:
+        return HostPrim(head)
     if args is None and head in tparams:
         return TypeVar(head)
     if head == 'JArray':
@@ -393,6 +406,8 @@ def _scan_rust_one(s: str, i: int, registry: 'dict | None', tparams: 'frozenset[
     prim = _RUST_PRIM.get(head)
     if prim is not None:
         return Primitive(prim), j
+    if head in _RUST_HOST_PRIM:
+        return HostPrim(head), j
     return from_rust_type(head, registry, tparams), j
 
 
@@ -404,7 +419,7 @@ def rust_head_name(ty: JvmType) -> str:
       ——短名 → binary 单射的逆；域外占位的 binary 即短名本身）；
     - ``Array`` → ``'JArray'``（数组包装族名，裸名口径与旧文本解剖一致）；
     - ``Primitive`` → Rust 拼写（void → ``'()'``）；
-    - ``TypeVar`` → 变量名；``Wildcard`` → ``'?'``；``Null`` → ``''``。"""
+    - ``TypeVar`` → 变量名；``HostPrim`` → Rust 拼写；``Wildcard`` → ``'?'``；``Null`` → ``''``。"""
     if isinstance(ty, ClassRef):
         return short_cls(ty.binary)
     if isinstance(ty, Array):
@@ -412,6 +427,8 @@ def rust_head_name(ty: JvmType) -> str:
     if isinstance(ty, Primitive):
         return _PRIM_TO_RUST.get(ty.kind, ty.kind)
     if isinstance(ty, TypeVar):
+        return ty.name
+    if isinstance(ty, HostPrim):
         return ty.name
     if isinstance(ty, Wildcard):
         return '?'

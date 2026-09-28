@@ -362,13 +362,14 @@ def _forms_alignable(later_ty_s: str | None, hoisted_ty_s: str | None, registry=
         return True   # 无类型信息可判：维持并入（旧行为）
     if later_ty_s == hoisted_ty_s:
         return True
-    from ..stack import erased_base
-    later_base = erased_base(later_ty_s)
-    hoisted_base = erased_base(hoisted_ty_s)
-    if later_base in _PRIMITIVE_TYPES or hoisted_base in _PRIMITIVE_TYPES:
+    # 值类型（JVM 基本类型 / Rust 宿主基本类型）与任何其它形态都不可对齐（N4 G3：类型对象判定）
+    from ..jvm_type import from_rust_type, Primitive, HostPrim, rust_head_name
+    later_t = from_rust_type(later_ty_s, registry)
+    hoisted_t = from_rust_type(hoisted_ty_s, registry)
+    if isinstance(later_t, (Primitive, HostPrim)) or isinstance(hoisted_t, (Primitive, HostPrim)):
         return False
     from ..instr.hierarchy import _is_subtype
-    return _is_subtype(later_base, hoisted_base, registry)
+    return _is_subtype(rust_head_name(later_t) or later_ty_s, rust_head_name(hoisted_t) or hoisted_ty_s, registry)
 
 
 def _align_store_value(item, hoisted_type, later_ty_s: str, hoisted_ty_s: str) -> None:
