@@ -100,7 +100,7 @@ impl GetInstance {
         // 调用侧按边界方法的接口形参擦除传 Object（载体策略），此处还原 List 视图
         let ids = <List<Object> as ::std::convert::From<Object>>::from(ids);
         let n = ids.size()?;
-        let mut keys: Vec<(String, String)> = Vec::new();
+        let mut keys: Vec<(std::string::String, std::string::String)> = Vec::new();
         for i in 0..n {
             let id = <ServiceId as ::std::convert::From<Object>>::from(ids.get(i)?);
             keys.push((format!("{}", id.__get_type_()), format!("{}", id.__get_algorithm())));
