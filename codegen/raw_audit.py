@@ -48,10 +48,9 @@ _SELF = 'raw_audit.py'
 _EXT_PARSER_WHITELIST = frozenset({'sig_types.py', 'type_args.py', 'jvm_type.py', 'stack.py'})
 
 
-# 位点剖面（RAVA_RAW_SITES=<文件>）：按构造调用位点（文件:行:函数）累计，进程退出时落盘，
-# 供 FS-Q1 Raw 逃生舱收敛按热点排序（缺省关闭，不影响发射）
-import os as _os_rs
-_RAW_SITES_OUT = _os_rs.environ.get('RAVA_RAW_SITES')
+# 位点剖面（main.py --raw-sites <文件> → enable_raw_sites）：按构造调用位点（文件:行:函数）
+# 累计，进程退出时落盘，供 FS-Q1 Raw 逃生舱收敛按热点排序（缺省关闭，不影响发射）
+_RAW_SITES_OUT = ''
 _raw_sites: dict = {}
 
 
@@ -61,9 +60,13 @@ def _dump_raw_sites() -> None:
             _f.write(f'{n}\t{kind}\t{site}\n')
 
 
-if _RAW_SITES_OUT:
-    import atexit as _atexit_rs
-    _atexit_rs.register(_dump_raw_sites)
+def enable_raw_sites(path: str) -> None:
+    """开启位点剖面（进程退出时追加写入 path）。"""
+    global _RAW_SITES_OUT
+    if path and not _RAW_SITES_OUT:
+        _RAW_SITES_OUT = path
+        import atexit as _atexit_rs
+        _atexit_rs.register(_dump_raw_sites)
 
 
 def record_raw(kind: str, n: int = 1) -> None:

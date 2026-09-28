@@ -205,10 +205,13 @@ pub fn destroy_java_vm(result: crate::error::Result<()>) {
     }
 }
 
+mod jdk_feature_gen {
+    include!(concat!(env!("OUT_DIR"), "/jdk_feature.rs"));
+}
+
+/// 语料 JDK 特性版本（build.rs 由生成侧的 jdk_feature.txt 生成，缺省 21）。
 pub fn jdk_feature() -> u32 {
-    option_env!("RAVA_JDK_FEATURE")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(21)
+    jdk_feature_gen::JDK_FEATURE
 }
 
 pub fn java_fmt_f64(v: f64) -> String {

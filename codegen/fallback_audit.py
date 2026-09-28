@@ -9,7 +9,7 @@
   （含并入该家族的栈下溢），``CfgAuditError`` 与 ImportError / AttributeError /
   NameError / TypeError / KeyError 等代码 bug 全部穿透硬失败。本模块提供
   九点统一的埋点形态（:func:`stub_fallback`——位点标记 + 异常类型 +
-  RAVA_DEBUG 全点 traceback）。
+  --debug 全点 traceback）。
 - **B 组（15 处非 stub 静默降级）新增 [fallback-audit]**：语义是「非 stub
   质量降级」（类型回退描述符 / 渲染空串 / 类解析失败静默丢类），塞进
   cfg-audit 会混淆既有契约，按 equiv_audit 同款 record/summary/reset 模式
@@ -28,7 +28,7 @@ type-map-params     type_map.parse_class_type_params：类级 Signature 形参�
                     解析失败 → 返回部分形参表。同上收窄。
 vars-render-loop    vars.py _hoist_loop_vars Pass2：render_stmt 失败 → 空串
                     （提升判定的嵌套深度会算错）。保留 except Exception +
-                    计数（render 失败必是 bug；RAVA_STRICT=1 下穿透）。
+                    计数（render 失败必是 bug；--strict 下穿透）。
 vars-render-if      vars.py _hoist_if_vars Pass2：同上。
 vars-type-decl      vars.py _hoist_if_vars 提升类型 render_type 失败 → None
                     （对齐检查跳过）。
@@ -54,19 +54,24 @@ from __future__ import annotations
 import os
 
 from .cfg import CfgError, STATS
+from . import options
 
-# RAVA_STRICT 分级（fallback-audit 方案 §4.2，复用 build.rs 既有钩子语义——
-# build.rs:30,72 已消费该变量把 needed-native 从 warning 升 cargo::error）：
+# 分级（fallback-audit 方案 §4.2；选项由 main.py 命令行写入 codegen.options）：
 #   默认          A 组白名单兜底（CfgError → stub）+ B 组计数
-#   STRICT=1      A 组九点全穿（无 stub 兜底）+ B 组 vars 渲染失败穿透
-#   DEBUG=1       默认之上：九点全打 traceback + B 组逐触发明细
-# env 读取只在本模块一处（单点），转译器各吞点经 FALLBACK_EXC / STRICT 消费
-STRICT = os.environ.get('RAVA_STRICT', '') == '1'
+#   --strict      A 组九点全穿（无 stub 兜底）+ B 组 vars 渲染失败穿透
+#   --debug       默认之上：九点全打 traceback + B 组逐触发明细
+# 转译器各吞点经 fallback_exc() / strict() 消费（调用时读取，不在导入期固化）
 
-# A 组九吞点的兜底异常白名单：默认 (CfgError,)——全语料唯一合法降级流是 CfgError
-# （含并入该家族的栈下溢），需要兜底的「可选数据缺失」在源头显式 raise CfgError，
-# 不搭便车于偶发 KeyError；strict 下为空元组（全部穿透硬失败，catch 不到任何东西）
-FALLBACK_EXC: tuple[type[BaseException], ...] = () if STRICT else (CfgError,)
+
+def strict() -> bool:
+    return options.STRICT
+
+
+def fallback_exc() -> tuple[type[BaseException], ...]:
+    """A 组九吞点的兜底异常白名单：默认 (CfgError,)——全语料唯一合法降级流是 CfgError
+    （含并入该家族的栈下溢），需要兜底的「可选数据缺失」在源头显式 raise CfgError，
+    不搭便车于偶发 KeyError；strict 下为空元组（全部穿透硬失败，catch 不到任何东西）。"""
+    return () if options.STRICT else (CfgError,)
 
 # B 组静默兜底点的 ID 全集（口径表见模块头）
 IDS: tuple[str, ...] = (
@@ -86,12 +91,12 @@ def record(site_id: str, detail: str = '') -> None:
     """B 组某静默兜底点触发 +1（只计数与明细，不改变降级行为本身）。
 
     detail 非空时进警告清单（callchain 丢类需指名道姓——哪个类被静默移出
-    遍历，光有计数无法排查调用链缺口）；RAVA_DEBUG=1 时逐触发打印明细
+    遍历，光有计数无法排查调用链缺口）；--debug 时逐触发打印明细
     （报告 §4.2：DEBUG=默认之上 + B 组计数明细）。"""
     _counts[site_id] = _counts.get(site_id, 0) + 1
     if detail:
         _warnings.append(f"{site_id}: {detail}")
-    if os.environ.get('RAVA_DEBUG'):
+    if options.DEBUG:
         import sys
         print(f"[fallback-audit] {site_id} {detail}".rstrip(), file=sys.stderr)
 
@@ -125,11 +130,11 @@ def stub_fallback(method_id: str, site: str, e: BaseException) -> None:
       AuditStats 去重键为 ``(method_id, site)``——同一方法在多个位点触发各计一次。
     - 异常类型 ``type(e).__name__`` 进 summary 的 ``exc.`` 分解（收窄后默认只有
       CfgError 可达，其余形态出现即白名单漏网，一眼可辨）。
-    - ``RAVA_DEBUG=1``：九点全部打印 traceback（此前仅主循环与 <clinit>
+    - ``--debug``：九点全部打印 traceback（此前仅主循环与 <clinit>
       两点有，其余六点无堆栈——审计报告 §二缺口③）。
     """
     STATS.record_stub_fallback(method_id, repr(e), site=site, exc=type(e).__name__)
-    if os.environ.get('RAVA_DEBUG'):
+    if options.DEBUG:
         import sys
         import traceback
         print(f"[DEBUG] stub fallback ({site}) {method_id}: {e}", file=sys.stderr)

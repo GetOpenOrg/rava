@@ -459,7 +459,7 @@ def _hoist_loop_vars(entries: list, predeclared: set[str], slot_decls=None):
             except Exception:
                 # B 组计数（fallback-audit §4.1）：render 失败必是 bug（空串会让
                 # 嵌套深度算错、提升判定错乱）——先可观测，strict 下穿透
-                if fallback_audit.STRICT:
+                if fallback_audit.strict():
                     raise
                 fallback_audit.record('vars-render-loop')
                 rendered.append('')
@@ -650,7 +650,7 @@ def _hoist_if_render(h: "_HoistState"):
                 rendered.append(render_stmt(item))
             except Exception:
                 # B 组计数（fallback-audit §4.1）：同 _hoist_loop_vars Pass2
-                if fallback_audit.STRICT:
+                if fallback_audit.strict():
                     raise
                 fallback_audit.record('vars-render-if')
                 rendered.append('')
@@ -733,7 +733,7 @@ def _hoist_if_select(h: "_HoistState"):
                         ty_str = render_type(first_item.ty)
                     except Exception:
                         # B 组计数：类型串 None → 对齐检查跳过（静默降级可观测化）
-                        if fallback_audit.STRICT:
+                        if fallback_audit.strict():
                             raise
                         fallback_audit.record('vars-type-decl')
                         ty_str = None
@@ -891,7 +891,7 @@ def _hoist_if_outer(h: "_HoistState") -> bool:
                         _later_s = render_type(_later) if _later is not None else None
                     except Exception:
                         # B 组计数：值侧对齐检查跳过（静默降级可观测化）
-                        if fallback_audit.STRICT:
+                        if fallback_audit.strict():
                             raise
                         fallback_audit.record('vars-type-later')
                         _later_s = None
@@ -925,7 +925,7 @@ def _hoist_if_outer(h: "_HoistState") -> bool:
                 _outer_ty_s = render_type(_t) if _t is not None else None
             except Exception:
                 # B 组计数：拆分判定跳过（G-3 槽位复用形态判定失真可观测化）
-                if fallback_audit.STRICT:
+                if fallback_audit.strict():
                     raise
                 fallback_audit.record('vars-type-outer')
                 _outer_ty_s = None
@@ -1039,7 +1039,7 @@ def _hoist_if_emit(h: "_HoistState") -> bool:
                     _later_s = render_type(_later) if _later is not None else None
                 except Exception:
                     # B 组计数：值侧对齐检查跳过（静默降级可观测化）
-                    if fallback_audit.STRICT:
+                    if fallback_audit.strict():
                         raise
                     fallback_audit.record('vars-type-later')
                     _later_s = None

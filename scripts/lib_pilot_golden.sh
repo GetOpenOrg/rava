@@ -20,9 +20,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # jar 资产默认取仓库内导出位（依赖清单 tests/lib_pilot/deps/pom.xml）
 LIBS="${PILOT_LIBS:-$REPO_ROOT/tests/lib_pilot/deps/target/pilot-libs}"
 [ -f "$LIBS/junit-4.13.2.jar" ] || { echo "缺 jar：先跑 scripts/fetch_pilot_deps.sh --no-scan（或设 PILOT_LIBS）" >&2; exit 2; }
-# JDK 选择与 main.py / run_tests.py 同一入口（jdk_select）：RAVA_JDK > JAVA_HOME >
+# JDK 选择与 main.py / run_tests.py 同一入口（jdk_select）：JAVA_HOME >
 # .jdk-version（21）> 最新已安装；macOS brew / Linux /usr/lib/jvm 通吃
-JAVA_HOME="$(python3 "$REPO_ROOT/scripts/jdk_select.py")" || { echo "未找到可用 JDK，请设置 JAVA_HOME 或 RAVA_JDK" >&2; exit 2; }
+JAVA_HOME="$(python3 "$REPO_ROOT/scripts/jdk_select.py")" || { echo "未找到可用 JDK，请设置 JAVA_HOME" >&2; exit 2; }
 export JAVA_HOME
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
 MODE="${1:?用法: $0 m1|m2|m3|m4|m5 [--no-transpile]}"

@@ -6,8 +6,8 @@
 import os
 from pathlib import Path
 
-# 生成类文件数阈值（带 java_class 生成标记的 .rs；可经 RAVA_HEAVY_CLASSES 覆盖）
-HEAVY_CLASSES = int(os.environ.get('RAVA_HEAVY_CLASSES', '1700'))
+# 生成类文件数阈值（带 java_class 生成标记的 .rs）；显式设置 CARGO_BUILD_JOBS 即可覆盖自动判定
+HEAVY_CLASSES = 1700
 _GEN_MARKER = b'rava_macros::java_class'
 
 
@@ -26,6 +26,11 @@ def generated_class_count(ws: Path) -> int:
             except OSError:
                 pass
     return n
+
+
+def is_heavy(ws: Path) -> bool:
+    """重型工作区：生成类数 ≥ 阈值。"""
+    return generated_class_count(ws) >= HEAVY_CLASSES
 
 
 def with_heavy_jobs(env: dict, ws: Path) -> dict:

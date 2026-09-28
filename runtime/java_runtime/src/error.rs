@@ -35,8 +35,9 @@ impl<T: Into<Object>> From<T> for JvmError {
 
 /// VM 构造异常对象：构造器自身失败时，传播构造过程中抛出的异常（与 JVM 行为一致）。
 fn vm_throw<T: Into<Object>>(built: Result<T>) -> JvmError {
-    // 诊断开关：VM 抛出点（NPE / 越界 / CCE …）的 Rust 回溯（定位翻译体内的抛出位置）
-    if std::env::var_os("RAVA_THROW_BT").is_some() {
+    // 诊断：RUST_BACKTRACE=full 时打印 VM 抛出点（NPE / 越界 / CCE …）的 Rust 回溯
+    // （定位翻译体内的抛出位置）
+    if std::env::var("RUST_BACKTRACE").map(|v| v == "full").unwrap_or(false) {
         eprintln!("[vm-throw]\n{}", std::backtrace::Backtrace::force_capture());
     }
     match built {
@@ -199,7 +200,7 @@ impl JvmError {
     }
 
     /// main 线程未捕获异常出口：按 Java 格式输出到 stderr，进程退出码 1。
-    /// `RAVA_UNCAUGHT_BT=1` 时附打印时 Rust backtrace（定位抛出点的诊断开关）。
+    /// `RUST_BACKTRACE` 设为非 `0` 时附打印 Rust backtrace（定位抛出点）。
     pub fn report_uncaught(&self) -> ! {
         self.report_uncaught_in("main");
         std::process::exit(1)
@@ -221,7 +222,7 @@ impl JvmError {
                 cur = next;
             }
         }
-        if std::env::var_os("RAVA_UNCAUGHT_BT").is_some() {
+        if std::env::var("RUST_BACKTRACE").map(|v| v != "0").unwrap_or(false) {
             eprintln!("{}", std::backtrace::Backtrace::force_capture());
         }
     }

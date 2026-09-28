@@ -18,8 +18,6 @@ import re as _re
 from ..method import gen_method_body
 from .. import fallback_audit as _fallback_audit
 
-# A 组九吞点之一（<clinit>）：兜底白名单同 class_writer（单点定义见 fallback_audit）
-_FALLBACK_EXC = _fallback_audit.FALLBACK_EXC
 from ..type_map import jvm_to_rust
 from ..sig_parse import parse_field_type
 from ..constants import safe_ident, PRIMITIVE_RUST_TYPES
@@ -163,7 +161,7 @@ def _gen_clinit_block(m, ci, registry: dict | None, class_type_params: list,
             rust_name=_CLINIT_FN,
         )
         return attr_line + '\n' + clinit_body
-    except _FALLBACK_EXC as e:
+    except _fallback_audit.fallback_exc() as e:
         # A 组白名单兜底（fallback-audit 方案 §4.1）九点之一：只兜 CfgError
         # 家族，代码 bug（CfgAuditError / ImportError / NameError / …）穿透
         _fallback_audit.stub_fallback(

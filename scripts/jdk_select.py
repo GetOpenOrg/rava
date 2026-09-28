@@ -16,10 +16,9 @@
     多 JDK 并存时**不随系统默认 java 或「最新已安装」漂移**——装上 JDK25 不改变
     未指定版本的跑批。优先级：
       1. 显式 --jdk N
-      2. 环境变量 RAVA_JDK=N
-      3. 已设置且有效的 JAVA_HOME（用户显式环境）
-      4. 仓库根 .jdk-version 固定的默认主版本（语料基线版本，当前 21）
-      5. 已安装的最新版（以上都不可用时的兜底）
+      2. 已设置且有效的 JAVA_HOME（用户显式环境）
+      3. 仓库根 .jdk-version 固定的默认主版本（语料基线版本，当前 21）
+      4. 已安装的最新版（以上都不可用时的兜底）
     选中后写入 JAVA_HOME 并打印来源；javac / java / jmods 语料全部经它取得。
 """
 
@@ -142,9 +141,6 @@ def choose_jdk(explicit: int | None = None) -> tuple[int | None, Path, str]:
 
     if explicit is not None:
         return _need(explicit, '--jdk')
-    env_major = os.environ.get('RAVA_JDK', '').strip()
-    if env_major.isdigit():
-        return _need(int(env_major), 'RAVA_JDK')
     env_home = os.environ.get('JAVA_HOME', '').strip()
     if env_home and (Path(env_home) / 'jmods').is_dir():
         return _major_of(Path(env_home)), Path(env_home), 'JAVA_HOME'

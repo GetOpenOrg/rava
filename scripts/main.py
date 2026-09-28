@@ -218,20 +218,32 @@ def main():
     ap.add_argument('--no-run', action='store_true', help='只生成 Rust 代码，不编译运行')
     ap.add_argument('--batch', action='store_true', help='批量模式：写 src/bin/<class>.rs（供并行测试用）')
     ap.add_argument('--jdk', type=int, default=None, metavar='N',
-                    help='指定 JDK 主版本（javac 与翻译语料同源；默认 RAVA_JDK > JAVA_HOME > .jdk-version）')
+                    help='指定 JDK 主版本（javac 与翻译语料同源；默认 JAVA_HOME > .jdk-version）')
     ap.add_argument('--lib', action='append', default=[], metavar='NAME=JAR[:seed=FQN]',
                     help='jar 输入模式：依赖库发射为 lib crate（可重复；无 seed=整包，'
                          '有 seed=只收种子类闭包）。顺序即 crate 依赖序')
     ap.add_argument('--locales', default='', metavar='TAG[,TAG...]',
                     help='额外编入的 locale（BCP 47 或下划线形式，逗号分隔；默认只含用户字节码'
                          '静态可见的 locale + en + ROOT，见 codegen/locale_seed.py）')
+    ap.add_argument('--debug', action='store_true',
+                    help='诊断明细：兜底 / 未解析调用 / 迟到 static 边 / cfg 结构化判定逐条输出')
+    ap.add_argument('--strict', action='store_true',
+                    help='严格模式：转译兜底改为硬失败，缺手写实现的 native 方法编译报错')
+    ap.add_argument('--trace-class', default='', metavar='CLASS',
+                    help='打印该类（斜线形态 binary name，如 java/net/InetAddress）各方法的入链路径')
+    ap.add_argument('--raw-sites', default='', metavar='FILE',
+                    help='Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序）')
     args = ap.parse_args()
+
+    from codegen import options as _options, raw_audit as _raw_audit_opt
+    _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
+    _raw_audit_opt.enable_raw_sites(args.raw_sites)
 
     lib_specs = _parse_lib_specs(args.lib)
     if lib_specs and args.batch:
         sys.exit('jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）')
 
-    # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > RAVA_JDK > JAVA_HOME >
+    # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > JAVA_HOME >
     # .jdk-version > 最新已安装——多 JDK 并存时不随系统默认 java 漂移。run_tests 子进程
     # 已继承父进程选定的 JAVA_HOME，此处静默沿用
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -256,7 +268,7 @@ def main():
               locales=tuple(t for t in args.locales.split(',') if t.strip()))
     # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
     print(CFG_AUDIT_STATS.summary())
-    if os.environ.get('RAVA_DEBUG'):
+    if args.debug:
         for method_id, site, reason in CFG_AUDIT_STATS.stub_fallbacks:
             print(f"[cfg-audit] stub fallback ({site}): {method_id}: {reason}")
     # 可读性自检（V-3）：§16 禁止出现在可读层的调用形态计数，终态全 0。

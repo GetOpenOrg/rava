@@ -50,7 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from jdk_select import apply_jdk, _major_of
-from cargo_env import with_heavy_jobs
+from cargo_env import with_heavy_jobs, is_heavy
 
 
 def _current_jdk_major() -> 'int | None':
@@ -89,7 +89,11 @@ RUN_TIMEOUT = 300
 # 转译段（main.py：javap 全闭包 + 代码生成）超时（秒）
 TRANSPILE_TIMEOUT = 600
 # 构建段（cargo build 单测试 crate）超时（秒）
-BUILD_TIMEOUT = int(os.environ.get("RAVA_BUILD_TIMEOUT", "600"))   # 低内存单作业编译可调大
+BUILD_TIMEOUT: "int | None" = None   # --build-timeout 显式值；未给时按闭包规模自动（见 _build_timeout）
+_DEFAULT_BUILD_TIMEOUT = 600
+_HEAVY_BUILD_TIMEOUT = 3000           # 重型闭包单作业编译（cargo_env.is_heavy）
+# 透传给 main.py 的转译选项（--debug / --strict）
+MAIN_FLAGS: list[str] = []
 # 期望生成（--update-expected）的 java 参照运行超时（秒）：golden 语料应为秒级程序，
 # 120 足够且让挂起类用例快速出列
 EXPECTED_GEN_TIMEOUT = 120
@@ -116,7 +120,7 @@ def _jdk_tool(name: str) -> str:
 
 def apply_jdk_choice(major: 'int | None') -> None:
     """JDK 选择（jdk_select.apply_jdk 唯一入口，javac/java/翻译语料全部同源）：
-    --jdk > RAVA_JDK > JAVA_HOME > .jdk-version > 最新已安装。"""
+    --jdk > JAVA_HOME > .jdk-version > 最新已安装。"""
     apply_jdk(major)
 
 
@@ -438,9 +442,9 @@ def _print_env_header() -> None:
         except Exception:
             return "git ?"
 
-    _flag_vars = ("PYTHONHASHSEED", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS",
-                  "RAVA_DEBUG", "RAVA_STRICT", "RAVA_BFS_EDGE_AUDIT")
+    _flag_vars = ("PYTHONHASHSEED", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS")
     _flags = " ".join(f"{k}={os.environ.get(k, '(unset)')}" for k in _flag_vars)
+    _flags += f" options={' '.join(MAIN_FLAGS) or '(none)'}"
     print(f"[meta] git {_git_desc()} | profile={PROFILE_DIR} | {_flags} | out={OUT}")
 
 
@@ -452,7 +456,7 @@ def _test_workspace(bin_name: str) -> Path:
 def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
     """运行转译器：overlay 手写代码 + 生成该测试的 Rust 代码。"""
     args = [sys.executable, str(ROOT / "scripts" / "main.py"), str(java_file),
-            "--no-run", "--out", str(out_dir)]
+            "--no-run", "--out", str(out_dir), *MAIN_FLAGS]
     # 此前无超时——大闭包在慢环境下爬行会无限等
     r = _run(args, cwd=ROOT, timeout=TRANSPILE_TIMEOUT)
     return r.returncode == 0, (r.stdout + r.stderr)
@@ -595,16 +599,24 @@ def _prune_passed(jdk_major: int | None) -> int:
     return 0
 
 
+def _build_timeout(ws: Path) -> int:
+    """构建超时：--build-timeout 显式值优先；否则重型闭包（单作业编译）3000 秒，其余 600 秒。"""
+    if BUILD_TIMEOUT is not None:
+        return BUILD_TIMEOUT
+    return _HEAVY_BUILD_TIMEOUT if is_heavy(ws) else _DEFAULT_BUILD_TIMEOUT
+
+
 def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     """cargo build --bin <class>（共享 target 缓存）。返回 (ok, 首个 error 行)。"""
     bin_name = _to_bin_name(class_name)
+    timeout = _build_timeout(out_dir)
     try:
         r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name,
                   "--message-format=json-render-diagnostics"], cwd=out_dir,
                  env=with_heavy_jobs(_cargo_env(), out_dir),
-                 timeout=BUILD_TIMEOUT)
+                 timeout=timeout)
     except subprocess.TimeoutExpired:
-        return False, f"build timeout ({fmt_dur(BUILD_TIMEOUT)})"
+        return False, f"build timeout ({fmt_dur(timeout)})"
     _record_build_artifacts(bin_name, out_dir, r.stdout or "")
     if r.returncode != 0:
         if r.returncode < 0:
@@ -1525,7 +1537,7 @@ def main():
     ap.add_argument("--jobs", "-j",      type=int, default=1, metavar="N",
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     ap.add_argument("--jdk",             type=int, default=None, metavar="N",
-                    help="指定 JDK 主版本（javac/java/翻译语料同源；默认 RAVA_JDK > JAVA_HOME > .jdk-version）")
+                    help="指定 JDK 主版本（javac/java/翻译语料同源；默认 JAVA_HOME > .jdk-version）")
     ap.add_argument("--release",         action="store_true", help="release 档位构建运行（LTO 慢编译/快运行；默认 dev）")
     ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
     ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")
@@ -1548,7 +1560,16 @@ def main():
                          "fallback / fallback::<id> = 静默兜底点非零（id 见 [fallback-audit] 行，"
                          "收窄后非零极可能是真 bug）；"
                          "stub-hit = run 失败的 stub 子族（二进制 stderr 含 `stub: `）")
+    ap.add_argument("--build-timeout",   type=int, default=None, metavar="SEC",
+                    help="单测试 cargo 构建超时秒数（默认按闭包规模自动：重型 3000，其余 600）")
+    ap.add_argument("--debug",           action="store_true", help="透传 main.py --debug（转译诊断明细）")
+    ap.add_argument("--strict",          action="store_true",
+                    help="透传 main.py --strict（兜底硬失败 + 缺手写 native 编译报错）")
     args = ap.parse_args()
+
+    global BUILD_TIMEOUT, MAIN_FLAGS
+    BUILD_TIMEOUT = args.build_timeout
+    MAIN_FLAGS = [f for f, on in (("--debug", args.debug), ("--strict", args.strict)) if on]
 
     _validate_deny(args.deny)
     if args.failed and args.skip_failed:

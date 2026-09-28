@@ -27,18 +27,23 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=../user/src/");
-    println!("cargo:rerun-if-env-changed=RAVA_STRICT");
-    // 语料 JDK 特性版本（生成侧写入 jdk_feature.txt）→ 编译期环境变量，
+    // 严格模式标记（生成侧按 main.py --strict 写入 strict.txt：1 / 0）
+    println!("cargo:rerun-if-changed=strict.txt");
+    // 语料 JDK 特性版本（生成侧写入 jdk_feature.txt）→ OUT_DIR/jdk_feature.rs 常量，
     // 手写层经 crate::jdk_feature() 读取（缺省 21）
     println!("cargo:rerun-if-changed=jdk_feature.txt");
     // 编译期 cfg `jdk_ge_25`：手写边界类中**签名**随 JDK 版本变化的成员按此分叉
     //（运行期数据差异用 crate::jdk_feature()；类型差异只能编译期选择）
     println!("cargo::rustc-check-cfg=cfg(jdk_ge_25)");
-    if let Ok(v) = fs::read_to_string("jdk_feature.txt") {
-        println!("cargo:rustc-env=RAVA_JDK_FEATURE={}", v.trim());
-        if v.trim().parse::<u32>().map(|n| n >= 25).unwrap_or(false) {
-            println!("cargo:rustc-cfg=jdk_ge_25");
-        }
+    let jdk_feature: u32 = fs::read_to_string("jdk_feature.txt").ok()
+        .and_then(|v| v.trim().parse().ok()).unwrap_or(21);
+    if jdk_feature >= 25 {
+        println!("cargo:rustc-cfg=jdk_ge_25");
+    }
+    let feature_rs = Path::new(&std::env::var("OUT_DIR").unwrap()).join("jdk_feature.rs");
+    let feature_src = format!("pub const JDK_FEATURE: u32 = {jdk_feature};\n");
+    if fs::read_to_string(&feature_rs).ok().as_deref() != Some(feature_src.as_str()) {
+        fs::write(&feature_rs, feature_src).unwrap();
     }
     // 类宇宙 = 运行时 crate 树 + 用户 crate 树（../user/src）+ lib crate 树
     //（jar 输入模式的兄弟 crate，如 junit4/hamcrest——2026-09-23 用户树扩展
@@ -90,7 +95,7 @@ fn main() {
     write_interfaces_table(&scan_class_interfaces(&meta_roots));
     write_class_anno_table(&scan_class_annos(&meta_roots));
 
-    let strict = std::env::var("RAVA_STRICT").unwrap_or_default() == "1";
+    let strict = fs::read_to_string("strict.txt").map(|v| v.trim() == "1").unwrap_or(false);
     let needed: Vec<_> = new_status.iter()
         .flat_map(|(cls, methods)| {
             methods.iter()

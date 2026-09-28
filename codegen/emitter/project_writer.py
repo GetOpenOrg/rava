@@ -920,9 +920,12 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         '',
     ]))
 
-    # 语料 JDK 特性版本 → java_runtime/jdk_feature.txt（build.rs 转为编译期环境变量
-    # RAVA_JDK_FEATURE，手写层经 crate::jdk_feature() 读取）：手写边界类中
-    # 随 JDK 版本变化的数据按此选择。写入幂等（同版本内容不变，不触发重编译）。
+    # 语料 JDK 特性版本 → java_runtime/jdk_feature.txt（build.rs 转为 OUT_DIR 常量，
+    # 手写层经 crate::jdk_feature() 读取）：手写边界类中随 JDK 版本变化的数据按此选择。
+    # 严格模式 → java_runtime/strict.txt（build.rs 据此把缺手写实现的 native 升级为 error）。
+    # 写入幂等（内容不变不触发重编译）。
+    from .. import options as _options
+    _write(os.path.join(rt_dir, 'strict.txt'), '1\n' if _options.STRICT else '0\n')
     from ..jdk_resolver import corpus_jdk_major
     _jdk_major = corpus_jdk_major()
     if _jdk_major:
