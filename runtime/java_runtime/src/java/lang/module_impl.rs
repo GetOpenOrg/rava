@@ -23,6 +23,13 @@ pub fn unnamed_module() -> Module {
 }
 
 impl Module {
+    /// `getLayer()`：命名模块所在的层；无名模块不属于任何层 → null（JDK 语义；本运行时只有
+    /// 无名模块）。消费方：`StackTraceElement.isHashedInJavaBase`（`ModuleLayer.boot() == m.getLayer()`）。
+    #[jvm_boundary]
+    pub fn getLayer(&self) -> Result<crate::java::lang::ModuleLayer> {
+        Ok(Default::default())
+    }
+
     /// 无名模块恒未命名（name 为 null → isNamed false，JDK 语义）。
     #[jvm_boundary]
     pub fn isNamed(&self) -> Result<bool> {
