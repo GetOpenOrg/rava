@@ -50,6 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from jdk_select import apply_jdk, _major_of
+from cargo_env import with_heavy_jobs
 
 
 def _current_jdk_major() -> 'int | None':
@@ -599,7 +600,8 @@ def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     bin_name = _to_bin_name(class_name)
     try:
         r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name,
-                  "--message-format=json-render-diagnostics"], cwd=out_dir, env=_cargo_env(),
+                  "--message-format=json-render-diagnostics"], cwd=out_dir,
+                 env=with_heavy_jobs(_cargo_env(), out_dir),
                  timeout=BUILD_TIMEOUT)
     except subprocess.TimeoutExpired:
         return False, f"build timeout ({fmt_dur(BUILD_TIMEOUT)})"
@@ -1328,7 +1330,8 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         ws = _test_workspace(bin_name)
         print(f"  [build] {bin_name}…", end=" ", flush=True)
         t0 = time.perf_counter()
-        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name], cwd=ws, env=_cargo_env())
+        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name], cwd=ws,
+                 env=with_heavy_jobs(_cargo_env(), ws))
         dur = time.perf_counter() - t0
         build_durations[bin_name] = dur
         if r.returncode == 0:

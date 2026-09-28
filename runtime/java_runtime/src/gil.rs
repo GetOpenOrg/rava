@@ -85,11 +85,10 @@ static CLINIT_OWNERS: Mutex<Vec<(&'static str, std::thread::ThreadId)>> = Mutex:
 static CLINIT_GEN: Mutex<u64> = Mutex::new(0);
 static CLINIT_CV: Condvar = Condvar::new();
 
-/// 进入类初始化（`get` / `set` 读写该类的状态单元，GIL 下调用）。
+/// 进入类初始化（`get` / `set` 读写该类的状态单元）。
 pub fn clinit_enter(class: &'static str, get: impl Fn() -> u8, set: impl Fn(u8)) -> ClinitEnter {
-    // 持有者登记在单线程阶段同样进行：初始化期间才启用 GIL（<clinit> 内启动线程）时，
-    // 新线程据此等待而非越过未完成的初始化。状态转换在 CLINIT_OWNERS 锁内完成（并行后端
-    // 两线程同时读到 0 时只有一个进入 <clinit>——JVMS §5.5 的 LC 锁）。
+    // 持有者登记：<clinit> 内启动的线程据此等待而非越过未完成的初始化。状态转换在
+    // CLINIT_OWNERS 锁内完成（两线程同时读到 0 时只有一个进入 <clinit>——JVMS §5.5 的 LC 锁）。
     let me = std::thread::current().id();
     loop {
         {
@@ -130,7 +129,7 @@ pub fn clinit_exit(class: &'static str, ok: bool, set: impl Fn(u8)) {
     CLINIT_CV.notify_all();
 }
 
-// ── 跨线程移交（仅 GIL 下成立）──────────────────────────────────────────────
+// ── 跨线程移交 ──────────────────────────────────────────────────────────────
 
 /// 把线程对象移交给新 OS 线程的载体（对象模型为 `Arc` + 线程安全单元，移交安全）。
 pub struct Handoff<T>(pub T);
