@@ -509,6 +509,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         receiver_targ_map=_ctor_targ_map,
     )
     args = []
+    arg_nodes = []   # FS-Q1 Q1-e：构造实参以节点携带（与 args 字符串逐位对应、渲染一致）
     arg_tys = []
     _outer_ref_base = _ctor_outer_ref_base(cls, params, registry)
     _ctor_eff_all = _effective_class_type_params(_ctor_ci, registry) if _ctor_ci is not None else []
@@ -525,11 +526,13 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             # 外部实例形参里还有未确定的内部类类型变量：其实例化由实参决定（Rust 从实参推断）。
             # 形参不含类型变量（内部类自带形参、不继承外层变量 → Outer<Object, ..>）时按常规转换
             expected = ty
-        e = _coerce_arg(e, e_ty_node, expected, ty, sim, registry)
-        args.insert(0, e)
+        _node_c = coerce_arg_node(e_expr, e_ty_node, expected, ty, sim, registry)
+        arg_nodes.insert(0, _node_c)
+        args.insert(0, render_expr(_node_c))
         arg_tys.insert(0, ty)
     obj_expr, obj_ty_node = sim.pop()
 
+    init_func = None
     if isinstance(obj_expr, NewPendingExpr):
         full_cls = obj_expr.class_name          # e.g. 'java/util/ArrayList'
         raw_cls = short_cls(full_cls) or full_cls.rsplit('/', 1)[-1]
@@ -591,6 +594,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                                     and _ctor_tparams[_tidx2] not in ('Object', '_')):
                                 # 形参是类型变量且实参已具体化：撤销向 Object 的上转，保留 Clone::clone(&x)
                                 args[_si2] = args[_si2][len(_box_pfx):-1]
+                                arg_nodes[_si2] = RawExpr(args[_si2])
                 type_params_str = ('<' + ', '.join(_ctor_tparams) + '>') if _ctor_tparams else ''
                 rust_ty = raw_cls + type_params_str
                 rust_ty_node = RsNamed(rust_ty)
@@ -599,6 +603,7 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 ctor_name = _safe_field(_init_mangled.replace('<init>', 'new'))
                 turbofish = '::' + type_params_str
                 init_expr = f"{raw_cls}{turbofish}::{ctor_name}({', '.join(args)})?"
+                init_func = f"{raw_cls}{turbofish}::{ctor_name}"
             else:
                 type_params_str = ''
                 rust_ty = raw_cls
@@ -606,10 +611,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
                 # 重载构造器：用 '<init>' 查重载再替换为 'new'，以匹配 method.py 生成的定义
                 _init_mangled = _mangle_if_overloaded(full_cls, '<init>', comment, registry)
                 ctor_name = _safe_field(_init_mangled.replace('<init>', 'new'))
-                if args:
-                    init_expr = f"{raw_cls}::{ctor_name}({', '.join(args)})?"
-                else:
-                    init_expr = f"{raw_cls}::{ctor_name}()?"
+                init_func = f"{raw_cls}::{ctor_name}"
+                init_expr = f"{init_func}({', '.join(args)})?"
         elif raw_cls and '/' not in raw_cls:
             # 用户类：new()? 返回 Result<Self>，同样 mangle 重载构造器。
             # 泛型类与 JDK 分支同规则给出 turbofish（A-3）：钻石实例化由
@@ -628,7 +631,8 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             # 重载构造器：用 '<init>' 查重载再替换为 'new'，以匹配 method.py 生成的定义
             _init_mangled2 = _mangle_if_overloaded(raw_cls, '<init>', comment, registry)
             ctor_name    = _safe_field(_init_mangled2.replace('<init>', 'new'))
-            init_expr    = f"{raw_cls}{('::' + type_params_str_u) if type_params_str_u else ''}::{ctor_name}({', '.join(args)})?"
+            init_func    = f"{raw_cls}{('::' + type_params_str_u) if type_params_str_u else ''}::{ctor_name}"
+            init_expr    = f"{init_func}({', '.join(args)})?"
             rust_ty      = raw_cls + type_params_str_u
             rust_ty_node = RsNamed(rust_ty)
         else:
@@ -636,11 +640,15 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
             rust_ty      = raw_cls
             rust_ty_node = RsNamed(rust_ty)
 
+        # 构造调用节点（FS-Q1 Q1-e）：`C::<T>::new(args)?`；装箱构造直用值等无调用形态保持 Raw
+        _init_n = (TryExpr(Call(init_func, list(arg_nodes)))
+                   if init_func is not None and init_expr == f"{init_func}({', '.join(args)})?" else None)
         if sim.stack and isinstance(sim.stack[-1][0], NewPendingExpr):
-            sim.stack[-1] = (RawExpr(init_expr), rust_ty_node)
+            sim.stack[-1] = (_init_n if _init_n is not None else RawExpr(init_expr), rust_ty_node)
         else:
             v = sim.fresh('_obj')
-            sim.emit(RawStmt(f"let mut {v}: {rust_ty} = {init_expr};"))
+            sim.emit(LetStmt(v, ty=rust_ty_node, mutable=True, value=_init_n) if _init_n is not None
+                     else RawStmt(f"let mut {v}: {rust_ty} = {init_expr};"))
             sim.push(Var(v), rust_ty_node)
     else:
         obj_e = render_expr(obj_expr)

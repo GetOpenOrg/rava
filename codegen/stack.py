@@ -10,7 +10,7 @@ from typing import get_args
 
 from .rs_ir import (
     RsExpr, RsStmt, RsType,
-    Var, Lit, RawExpr, NewPendingExpr, CastExpr, UpcastExpr, MethodCall, Call, RefExpr,
+    Var, Lit, RawExpr, NewPendingExpr, CastExpr, UpcastExpr, MethodCall, Call, RefExpr, TryExpr,
     LetStmt, AssignStmt,
     RsGeneric, RsPrimitive, RsNamed, RsRef, RsSlice, RsInfer,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
@@ -144,6 +144,9 @@ def _opaque_let_value(value) -> bool:
     if isinstance(value, RawExpr):
         return True
     if isinstance(value, MethodCall) and value.method.startswith('__get_') and not value.args:
+        return True
+    # 构造调用 `C::new(..)?`（invokespecial 节点形态，节点化前为 Raw）
+    if isinstance(value, TryExpr) and isinstance(value.inner, Call):
         return True
     return is_clone_of_var(value)
 

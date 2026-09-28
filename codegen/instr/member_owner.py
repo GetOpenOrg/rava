@@ -493,9 +493,17 @@ def _close_open_type_args(sim, stack_idx: int) -> None:
     closed_args = _re_open.sub(_open, 'Object', args[:-1])
     for stmt in reversed(sim.stmts):
         if isinstance(stmt, _LetStmt) and stmt.name == expr.name:
-            if not (isinstance(stmt.value, _RawExpr) and stmt.value.code.startswith(open_tf)):
+            from ..rs_ir import TryExpr as _TryExpr, Call as _Call
+            if isinstance(stmt.value, _RawExpr) and stmt.value.code.startswith(open_tf):
+                stmt.value = _RawExpr(f"{base}::<{closed_args}>::" + stmt.value.code[len(open_tf):])
+            elif (isinstance(stmt.value, _TryExpr) and isinstance(stmt.value.inner, _Call)
+                  and stmt.value.inner.func.startswith(open_tf)):
+                # 构造调用节点（FS-Q1 Q1-e）：闭合路径中的 turbofish
+                _c = stmt.value.inner
+                stmt.value = _TryExpr(_Call(f"{base}::<{closed_args}>::" + _c.func[len(open_tf):],
+                                            _c.args))
+            else:
                 return
-            stmt.value = _RawExpr(f"{base}::<{closed_args}>::" + stmt.value.code[len(open_tf):])
             closed_ty = _RsNamed(f"{base}<{closed_args}>")
             if stmt.ty is not None:
                 stmt.ty = closed_ty
