@@ -330,17 +330,20 @@ pub(crate) fn erased_impl_call(
                     erase_type(&pt.ty, type_param_names)
                 };
                 if same_type_tokens(&obj_ty, &erased_ty) {
-                    Some(quote! { #ident })
+                    Some(quote! { ::std::convert::Into::into(#ident) })
                 } else {
                     Some(quote! { <#obj_ty as ::std::convert::From<Object>>::from(#ident) })
                 }
             } else {
-                Some(quote! { #ident })
+                // 未经擦除转换的实参经 Into 适配（T-2）：手写 `__impl_<m>` 按 Object 身份承接接口
+                // 实参，而声明签名在接口载体化后是载体类型（Path 等）；同型时为恒等转换
+                Some(quote! { ::std::convert::Into::into(#ident) })
             }
         }
         _ => None,
     }).collect();
     let mut call = quote! { __w.#impl_name(#(#conv_args),*) };
+    let mut ret_converted = false;
     if let syn::ReturnType::Type(_, ty) = &sig.output {
         if let Some(inner) = result_inner_ty(ty) {
             let mentions = mentions_any(inner, type_param_names);
@@ -361,7 +364,12 @@ pub(crate) fn erased_impl_call(
                     call = quote! {
                         #call.map(|__v| <#erased_inner as ::std::convert::From<#obj_inner>>::from(__v))
                     };
+                    ret_converted = true;
                 }
+            }
+            if !ret_converted {
+                // 返回同实参（T-2）：手写体返回 Object、声明返回接口载体时经 From<Object> 适配
+                call = quote! { #call.map(::std::convert::Into::into) };
             }
         }
     }

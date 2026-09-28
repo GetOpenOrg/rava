@@ -67,3 +67,5 @@ jdk/internal/access/JavaLangRefAccess
 jdk/internal/access/JavaLangReflectAccess
 jdk/internal/access/JavaUtilCollectionAccess
 jdk/internal/access/JavaUtilConcurrentFJPAccess
+# 批次 7b（T-2）：Path（手写 __impl_ 转发经 Into 适配，inherited_gen._forward_body）
+java/nio/file/Path

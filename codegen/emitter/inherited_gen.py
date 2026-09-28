@@ -188,16 +188,21 @@ def _forward_body(method: EmittedMethod, owner_bin: str, owner_args: list[str]) 
     # VTable trait 不带类型参数；钩子返回擦除视图 `Owner<Object, …>`。泛型 owner 的
     # 实参 / 返回因此在「本类代入视角」与「擦除视角」之间经 Object 往返转换
     # （与字节码体中 checkcast 的 From/Into 同口径；基本类型不涉泛型、原样传递）。
+    ptypes, ret = _sig_param_types(method.signature)
     if owner_args:
-        ptypes, ret = _sig_param_types(method.signature)
         args = [a if ty in _RUST_PRIMS else f"From::from(Into::<Object>::into({a}))"
+                for a, ty in zip(args, ptypes)] + args[len(ptypes):]
+    else:
+        # 手写体按 Object 身份承接接口实参（T-2：接口载体化后本类视角是载体 `Path` 等，
+        # 手写 `__impl_<m>` 仍收 Object）：非基本类型实参经 Into 适配——同型时为恒等转换
+        args = [a if ty in _RUST_PRIMS else f"Into::into({a})"
                 for a, ty in zip(args, ptypes)] + args[len(ptypes):]
     call = (f"<Self as {owner_short}__VTable>::__as_{owner_short}(self)"
             f".__impl_{method.rust_name}({', '.join(args)})")
-    if owner_args:
-        inner = _result_inner(ret)
-        if inner and inner not in _RUST_PRIMS and inner != '()':
-            call += ".map(|__r| From::from(Into::<Object>::into(__r)))"
+    inner = _result_inner(ret)
+    if inner and inner not in _RUST_PRIMS and inner != '()':
+        call += (".map(|__r| From::from(Into::<Object>::into(__r)))" if owner_args
+                 else ".map(Into::into)")
     return call
 
 
