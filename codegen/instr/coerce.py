@@ -87,13 +87,7 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
     - 其余（闭包等无运行时类的值）：`Object::from_any(..)` 不透明装箱
 
     注意 Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）。"""
-    # 双算期：沿用旧判定输出，插桩开启时对照新分类（零差异后切换）
-    kind = _object_coercion_kind_old(ty, registry, class_type_params)
-    if _G2_AUDIT:
-        _new = _object_coercion_kind(ty, registry, class_type_params)
-        if _new != kind:
-            with open(_G2_AUDIT, 'a', encoding='utf-8') as _f:
-                _f.write(f'coerce\t{ty!r}\t{kind}\t{_new}\n')
+    kind = _object_coercion_kind(ty, registry, class_type_params)
     if kind == 'prim':
         # G-12：负数字面量补外层括号——方法调用优先级高于一元负号，
         # `-1i32.into()` 解析为 `-(1i32.into())`，目标类型推断失败（E0282）
@@ -109,10 +103,6 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
     return f"Object::from_any({src})"
 
 
-import os as _os_g2
-_G2_AUDIT = _os_g2.environ.get('JAVA_RTA_G2_AUDIT')
-
-
 def _object_coercion_kind(ty: str, registry, class_type_params) -> str:
     """装箱分类（N4 G2：类型对象查询）：'prim' JVM 基本类型（void 除外）/ 'tvar' 作用域类型形参 /
     'ref' 数组或 registry 域内类 / 'opaque' 其余（闭包等无运行时类的值）。"""
@@ -125,18 +115,6 @@ def _object_coercion_kind(ty: str, registry, class_type_params) -> str:
     if isinstance(t, Array):
         return 'ref'
     if isinstance(t, ClassRef) and registry and t.binary in registry:
-        return 'ref'
-    return 'opaque'
-
-
-def _object_coercion_kind_old(ty: str, registry, class_type_params) -> str:
-    """G2 迁移前的字符串判定（双算插桩对照用）。"""
-    if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
-        return 'prim'
-    if ty in (class_type_params or ()):
-        return 'tvar'
-    from ..stack import erased_class_of, is_jvm_array
-    if is_jvm_array(ty) or erased_class_of(ty, registry) is not None:
         return 'ref'
     return 'opaque'
 
