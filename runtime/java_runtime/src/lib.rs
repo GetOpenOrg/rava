@@ -374,6 +374,18 @@ pub fn lookup_constant(binary_name: &str, constant_name: &str) -> Option<Object>
     })
 }
 
+/// 按类名取（常量名, 常量）全表（JDK `Class.enumConstantDirectory` 的数据面），登记序。
+/// 类未登记 → None；任一常量取值失败 → None。
+pub fn constant_directory_entries(binary_name: &str) -> Option<Vec<(std::string::String, Object)>> {
+    CONSTANT_DIRECTORY.with(|dir| {
+        let dir = dir.borrow();
+        dir.get(binary_name)?
+            .iter()
+            .map(|(name, get)| get().ok().map(|v| (name.clone(), v)))
+            .collect::<Option<Vec<_>>>()
+    })
+}
+
 /// 按类名取常量宇宙（JDK `JavaLangAccess.getEnumConstantsShared` 的数据面）：
 /// 返回该类登记的全部常量，登记序 == 字段声明序（枚举常量即 ordinal 序）。
 /// 类未登记 → None；任一常量取值失败 → None。取值闭包经访问器触发类初始化，
