@@ -8,7 +8,9 @@ use super::class_loader::ClassLoader;
 //   - getSystemClassLoader 返回进程唯一实例（name "app"，与 JDK
 //     AppClassLoader 同名；构造不经 JDK 构造器链——ctor 的 parent 解析
 //     会回调 getSystemClassLoader 成环，按擦除字段协议直接组装）；
-//   - 资源族（getResource/getResources 及 static 形态）恒缺席——
+//   - 模块资源（jmod 内数据文件，如 java/util/currency.data）由编译期嵌入表承载：
+//     getResourceAsStream 族返回其字节流（jdk_resources::module_resources）；
+//   - 其余资源族（getResource/getResources 及 static 形态）恒缺席——
 //     ServiceLoader 的 LazyClassPathLookupIterator 据此枚举为空，
 //     外部 provider 发现终止（TzdbZoneRulesProvider 已由 ZoneRulesProvider
 //     <clinit> 的默认分支直接注册，正是 JDK 对无发现环境的回退设计）。
@@ -62,6 +64,19 @@ impl ClassLoader {
         Ok(Default::default())
     }
 
+    /// `getResourceAsStream(String)`：模块资源 → 嵌入字节的 ByteArrayInputStream；其余 → null
+    ///（单二进制无 classpath 资源）。name 为 null → NPE（JDK `Objects.requireNonNull`）。
+    #[jvm_boundary(upcalls = "java/io/ByteArrayInputStream.<init>:([B)V")]
+    pub fn getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
+        module_resource_stream(name)
+    }
+
+    /// static `getSystemResourceAsStream(String)`：委托系统加载器（同实例形态）。
+    #[jvm_boundary(upcalls = "java/io/ByteArrayInputStream.<init>:([B)V")]
+    pub fn getSystemResourceAsStream(name: String) -> Result<crate::java::io::InputStream> {
+        module_resource_stream(name)
+    }
+
     /// static getSystemResources：委托实例形态（恒空枚举）。
     #[jvm_boundary(upcalls = "java/util/Collections.emptyEnumeration:()Ljava/util/Enumeration;")]
     pub fn getSystemResources(name: String) -> Result<Object> {
@@ -77,4 +92,18 @@ fn build_system_class_loader() -> ClassLoader {
     scl.__set_parent(crate::jdk::internal::loader::ClassLoaders::platformClassLoader()
         .unwrap_or_default());
     scl
+}
+
+/// 模块资源名 → 字节流（未命中 → null）。
+fn module_resource_stream(name: String) -> Result<crate::java::io::InputStream> {
+    if name.is_jvm_null() {
+        return Err(JvmError::null_pointer());
+    }
+    let key = format!("{}", name);
+    let Some(bytes) = crate::jdk_resources::module_resources::lookup(&key) else {
+        return Ok(Default::default());
+    };
+    let arr = JArray::from(bytes.iter().map(|b| *b as i8).collect::<Vec<i8>>());
+    let stream = crate::java::io::ByteArrayInputStream::new_arr_b(arr)?;
+    Ok(<crate::java::io::InputStream as ::std::convert::From<Object>>::from(Object::from(stream)))
 }

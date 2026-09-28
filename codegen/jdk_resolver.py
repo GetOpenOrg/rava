@@ -240,6 +240,20 @@ class JdkResolver:
             return data
         return self._resolve_vm_support(binary_name)
 
+    def resolve_resource(self, path: str) -> Optional[bytes]:
+        """模块资源（非 .class，如 `java/util/currency.data`）的字节；按 jmod 优先级查找。
+        JDK 以 `Class.getResourceAsStream("/" + path)` 读取的模块内数据文件。"""
+        entry = 'classes/' + path
+        for jmod_name in self._available_jmods():
+            zf = self._open_jmod(jmod_name)
+            if zf is None:
+                continue
+            try:
+                return zf.read(entry)
+            except KeyError:
+                continue
+        return None
+
     # ── 运行时镜像（lib/modules）回落：jlink 链接期生成的类 ─────────────────────
     #
     # jlink 插件（generate-jli-classes 等）在链接期把预生成类写进运行时镜像，jmod 中不存在：

@@ -763,6 +763,31 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         hook_block += ('    java_runtime::data_bundles::register_data_bundles(&[\n'
                        + '\n'.join(_bundle_lines) + '\n    ]);\n')
 
+    # 模块资源嵌入表（seeds.toml [module_resources]）：字节写入 scratch 的
+    # jdk_resources/module/<路径>，生成 jdk_resources/module_resources.rs（include_bytes! 表）。
+    # 恒生成（资源缺席时为空表）——手写 jdk_resources/mod.rs 无条件声明该模块。
+    from ..callchain import MODULE_RESOURCES as _module_resources
+    _res_dir = os.path.join(jdk_src, 'jdk_resources')
+    _res_arms = []
+    for _rp, _rb in sorted(_module_resources.items()):
+        _rf = os.path.join(_res_dir, 'module', *_rp.split('/'))
+        os.makedirs(os.path.dirname(_rf), exist_ok=True)
+        _old = None
+        if os.path.exists(_rf):
+            with open(_rf, 'rb') as _fh:
+                _old = _fh.read()
+        if _old != _rb:
+            with open(_rf, 'wb') as _fh:
+                _fh.write(_rb)
+        _res_arms.append(f'        "{_rp}" => Some(include_bytes!("module/{_rp}")),')
+    _write(os.path.join(_res_dir, 'module_resources.rs'),
+           '//! 生成：模块资源嵌入表（seeds.toml [module_resources]；字节取自本轮所用 JDK 的 jmod）。\n'
+           '//! 键为 jmod `classes/` 下的相对路径（`Class.getResourceAsStream("/" + 路径)` 的资源名）。\n\n'
+           'pub fn lookup(name: &str) -> Option<&\'static [u8]> {\n'
+           '    match name.trim_start_matches(\'/\') {\n'
+           + ''.join(a + '\n' for a in _res_arms)
+           + '        _ => None,\n    }\n}\n')
+
     # K-JCA 服务登记：BFS 按「engine 类在链上 × 用户算法名」入选的服务（实现类翻译字节码，
     # 构造走 Provider$Service.newInstance 的反射路径）与其 provider 的构造闭包（JDK
     # ProviderConfig 对内建 provider 直接 new）。手写边界 sun/security/jca 按服务表选 provider、

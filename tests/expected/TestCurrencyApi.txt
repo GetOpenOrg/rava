@@ -1,0 +1,8 @@
+USD 2 $
+JPY 0 ￥ ¥
+€ € 978
+GBP £ true
+USD $ USD
+$1,234.50
+￥1,234
+IAE

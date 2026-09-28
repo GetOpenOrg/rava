@@ -86,6 +86,8 @@ classes = [
     # file: 协议 URL 处理器（纯 Java 的 URLStreamHandler 子类；URL$DefaultFactory 对 file 协议直接
     # new）。消费方：NativePRNG.getEgdUrl 的 `new URL("file:/dev/random")`（SUN provider 初始化）。
     "sun/net/www/protocol/file/Handler",
+    # CLDR 货币名束的基类（纯 Java：getContents 数组 → 惰性 HashMap 查表 + 父链回退；L-2）
+    "sun/util/resources/OpenListResourceBundle",
     # URL 解析的纯 Java 工具（主机串校验、延迟解析开关 $MASKS.DELAY_URL_PARSING_SP_VALUE）
     "sun/net/util/IPAddressUtil",
 

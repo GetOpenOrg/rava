@@ -19,6 +19,16 @@ use std::collections::HashMap;
 const FORMAT_DATA_BASE: &str = "sun/text/resources/cldr/FormatData";
 const FORMAT_DATA_EXT: &str = "sun/text/resources/cldr/ext/FormatData";
 
+/// CLDR 货币名束（L-2）：ROOT 位于 java.base，其余 locale 束位于 jdk.localedata 的 ext 子包。
+const CURRENCY_NAMES_BASE: &str = "sun/util/resources/cldr/CurrencyNames";
+const CURRENCY_NAMES_EXT: &str = "sun/util/resources/cldr/ext/CurrencyNames";
+
+crate::__process_static! {
+    /// locale 候选键 → 已串好父链的最具体 CurrencyNames 束。
+    static CURRENCY_NAMES: crate::sync_model::__RefSlot<HashMap<std::string::String, ResourceBundle>> =
+        crate::sync_model::__RefSlot::new(HashMap::new());
+}
+
 crate::__process_static! {
     /// locale 候选键（`lang_Script_REGION_variant`）→ 已串好父链的最具体束。
     static NUMBER_FORMAT_DATA: crate::sync_model::__RefSlot<HashMap<std::string::String, ResourceBundle>> =
@@ -82,6 +92,15 @@ impl LocaleResources {
     /// 以 `setParent` 由具体到一般串接（ROOT 恒为链尾），返回最具体束。
     #[doc(hidden)]
     pub fn __number_format_data(&self) -> Result<ResourceBundle> {
+        self.__bundle_chain(FORMAT_DATA_BASE, FORMAT_DATA_EXT, &NUMBER_FORMAT_DATA)
+    }
+
+    /// 候选链上已登记的 `<base>_<后缀>` / `<ext>_<后缀>` 束逐个实例化，以 `setParent` 由具体到
+    /// 一般串接（ROOT 束 `<base>` 恒为链尾），按 locale 候选键缓存，返回最具体束
+    ///（`LocaleData.getBundle` 的截断点；键查找与父链回退走翻译字节码）。
+    fn __bundle_chain(&self, base_name: &str, ext_name: &str,
+                      cache: &'static crate::sync_model::__GilStatic<crate::sync_model::__RefSlot<HashMap<std::string::String, ResourceBundle>>>)
+                      -> Result<ResourceBundle> {
         let base = self.__get_locale().__get_baseLocale();
         let (lang, script, region, variant) = if base.is_jvm_null() {
             Default::default()
@@ -90,27 +109,27 @@ impl LocaleResources {
              format!("{}", base.__get_region()), format!("{}", base.__get_variant()))
         };
         let key = format!("{lang}_{script}_{region}_{variant}");
-        if let Some(rb) = NUMBER_FORMAT_DATA.with(|c| c.borrow().get(&key).map(Clone::clone)) {
+        if let Some(rb) = cache.with(|c| c.borrow().get(&key).map(Clone::clone)) {
             return Ok(rb);
         }
         let mut chain: Vec<ResourceBundle> = Vec::new();
         for suffix in parent_chain(&lang, &script, &region, &variant) {
-            for pkg in [FORMAT_DATA_BASE, FORMAT_DATA_EXT] {
+            for pkg in [base_name, ext_name] {
                 if let Some(rb) = instantiate(&format!("{pkg}_{suffix}"))? {
                     chain.push(rb);
                     break;
                 }
             }
         }
-        match instantiate(FORMAT_DATA_BASE)? {
+        match instantiate(base_name)? {
             Some(root) => chain.push(root),
-            None => panic!("stub: data bundle {FORMAT_DATA_BASE} not registered (locale seeds)"),
+            None => panic!("stub: data bundle {base_name} not registered (locale seeds)"),
         }
         for i in 0..chain.len() - 1 {
             chain[i].setParent(Clone::clone(&chain[i + 1]))?;
         }
         let rb = Clone::clone(&chain[0]);
-        NUMBER_FORMAT_DATA.with(|c| c.borrow_mut().insert(key, Clone::clone(&rb)));
+        cache.with(|c| c.borrow_mut().insert(key, Clone::clone(&rb)));
         Ok(rb)
     }
 
@@ -146,6 +165,18 @@ impl LocaleResources {
         let data: JArray<Object> = JArray::new(3);
         data.set(0, Object::from(self.getNumberStrings(rb, String::from("NumberElements"))?))?;
         Ok(data)
+    }
+
+    /// `getCurrencyName(String key)`（L-2）：CurrencyNames 束链上 `containsKey(key)` 则取值，否则
+    /// null——键为大写货币代码（符号）或小写货币代码（显示名），与 JDK `CurrencyNameProviderImpl`
+    /// 的取键约定一致。束链串接同 `getNumberFormatData`，查表 / 父链回退走翻译字节码。
+    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getString:(Ljava/lang/String;)Ljava/lang/String;")]
+    pub fn __impl_getCurrencyName(&self, key: String) -> Result<String> {
+        let rb = self.__bundle_chain(CURRENCY_NAMES_BASE, CURRENCY_NAMES_EXT, &CURRENCY_NAMES)?;
+        if rb.containsKey(Clone::clone(&key))? {
+            return rb.getString(key);
+        }
+        Ok(String::default())
     }
 
     /// `getNumberPatterns()`：NumberPatterns（number / currency / percent / accounting）。

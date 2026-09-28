@@ -25,7 +25,8 @@ seeds = [
 #   consts    该类的 static 自类型常量字段（getstatic）→ 沿 <clinit> 溯源到字符串字面量（语言, 地区, 变体）
 #   factories 实参全为字符串字面量的调用 → (语言, 地区, 变体)
 #   tags      实参为字符串字面量的 BCP 47 语言标签
-#   bundles   每个入选 locale 需要的资源束族（CLDR），候选类 <包>/<基名>_<locale> 与 <包>/ext/<基名>_<locale>
+#   bundles   每个入选 locale 需要的资源束族（CLDR），候选类 <包>/<基名>_<locale> 与 <包>/ext/<基名>_<locale>；
+#             条目为字符串（受下方全局 triggers 控制）或 { base, triggers }（族自带触发成员）
 #   triggers  调用链触达该成员（手写边界的数据消费入口）才入选资源束——不消费本地化数据的程序
 #             不付束翻译的代码税
 [locale]
@@ -45,6 +46,11 @@ tags = [
 ]
 bundles = [
     "sun/text/resources/cldr/FormatData",
+    # 货币名 / 符号（L-2）：族自带触发成员——只有货币符号查询触达时才入选，数字格式用例不付
+    # CurrencyNames（ROOT 束约 300 种货币）的代码税
+    { base = "sun/util/resources/cldr/CurrencyNames", triggers = [
+        "sun/util/locale/provider/LocaleResources.getCurrencyName",
+    ] },
 ]
 triggers = [
     "sun/util/locale/provider/LocaleResources.getDecimalFormatSymbolsData",
@@ -124,6 +130,8 @@ triggers = [
 [data_bundle]
 carriers = [
     "java/util/ListResourceBundle.getContents:()[[Ljava/lang/Object;",
+    # CLDR 货币名束（sun.util.resources.cldr[.ext].CurrencyNames*）的基类
+    "sun/util/resources/OpenListResourceBundle.getContents:()[[Ljava/lang/Object;",
 ]
 
 # ── VM 引导期类初始化（HotSpot 在执行应用代码前完成初始化的类，initPhase1 等）───────────────
@@ -135,4 +143,14 @@ classes = [
     # 缓存 ReflectionFactory 单例；由 ReflectionFactory.<clinit> 反向触发时 GetReflectionFactoryAction
     # 重入读到 null。
     "java/lang/reflect/AccessibleObject",
+]
+
+# ── 模块资源（java.base 等 jmod 内的非类数据文件）─────────────────────────────────────
+# JDK 以 `Class.getResourceAsStream("/<路径>")` 读取的模块内数据文件。生成器从当前所用 JDK 的
+# jmod 提取（数据与所用 JDK 版本同源，生成物不提交）并以 include_bytes! 嵌入；运行时由 VM 边界类
+# ClassLoader 的资源查询承载（jdk_resources::module_resources）。
+[module_resources]
+paths = [
+    # Currency.<clinit>：ISO 4217 国家 → 货币表（L-2，docs/plans/2026-09-28-l2-currency-data.md）
+    "java/util/currency.data",
 ]

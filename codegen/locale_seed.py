@@ -31,7 +31,7 @@ class LocaleSeeds:
     const_classes: frozenset
     factories: frozenset          # "类.方法:描述符"
     tags: frozenset
-    bundle_bases: tuple
+    bundle_bases: tuple                 # ((束基名, 族触发成员 frozenset | None), ..)；None = 全局 triggers
     triggers: frozenset = frozenset()   # (类, 成员名)
 
 
@@ -39,8 +39,23 @@ def load_manifest() -> LocaleSeeds:
     """seeds.toml [locale]。"""
     sec = seed_section('locale')
     triggers = frozenset(tuple(t.rsplit('.', 1)) for t in sec.get('triggers', []))
+    bases = []
+    for b in sec.get('bundles', []):
+        if isinstance(b, str):
+            bases.append((b, None))
+        else:
+            bases.append((b['base'], frozenset(tuple(t.rsplit('.', 1)) for t in b.get('triggers', []))))
     return LocaleSeeds(frozenset(sec.get('consts', [])), frozenset(sec.get('factories', [])),
-                       frozenset(sec.get('tags', [])), tuple(sec.get('bundles', [])), triggers)
+                       frozenset(sec.get('tags', [])), tuple(bases), triggers)
+
+
+def triggered_bases(manifest: LocaleSeeds, seen: set) -> list[str]:
+    """触发成员已在调用链上的束族基名（族自带触发成员，否则用全局 triggers）。"""
+    out = []
+    for base, trig in manifest.bundle_bases:
+        if any(t in seen for t in (manifest.triggers if trig is None else trig)):
+            out.append(base)
+    return out
 
 
 # ── 字面量识别 ──────────────────────────────────────────────────────────────
@@ -305,15 +320,16 @@ def collect_locales(user_infos, load, extra=(), manifest: LocaleSeeds | None = N
     return sorted(found)
 
 
-def bundle_classes(locales, load, manifest: LocaleSeeds | None = None) -> list[str]:
-    """入选 locale（含父链）对应的、可解析且通过纯数据判定的资源束类（已排序）。"""
+def bundle_classes(locales, load, manifest: LocaleSeeds | None = None, bases=None) -> list[str]:
+    """入选 locale（含父链）对应的、可解析且通过纯数据判定的资源束类（已排序）。
+    bases：只取这些束族（缺省 = 清单全部族）。"""
     from .data_bundle import is_pure_data_bundle
     mf = manifest or load_manifest()
     suffixes = set()
     for loc in locales:
         suffixes.update(parent_chain(loc))
     out = set()
-    for base in mf.bundle_bases:
+    for base in (bases if bases is not None else [b for b, _ in mf.bundle_bases]):
         pkg, _, simple = base.rpartition('/')
         names = [base]
         for suf in sorted(suffixes):

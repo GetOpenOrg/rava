@@ -114,6 +114,11 @@ def jca_release_entries() -> list[str]:
             + _classes(sec, 'release_classes', 'jca'))
 
 
+def module_resource_paths() -> list[str]:
+    """模块资源路径（seeds.toml [module_resources]，jmod `classes/` 下的相对路径）。"""
+    return list(seed_section('module_resources').get('paths', []))
+
+
 def boot_init_classes() -> list[str]:
     return _classes(seed_section('boot_init'), 'classes', 'boot_init')
 

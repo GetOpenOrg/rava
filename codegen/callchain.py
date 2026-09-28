@@ -151,6 +151,10 @@ ANNOTATION_ENUM_SEEDS: list[str] = []
 _ANNO_TRIGGERS: frozenset = annotation_triggers()
 _ANNO_SEED_MEMBERS: tuple = annotation_seed_members()
 
+# 模块资源（seeds.toml [module_resources]）：{jmod 内相对路径: 字节}，从本轮所用 JDK 的 jmod 提取，
+# emitter 写入 scratch 并生成 include_bytes! 嵌入表（数据与所用 JDK 版本同源）
+MODULE_RESOURCES: dict = {}
+
 # 本轮入选的 JCA 服务（jca_services.Service，已排序）：emitter 在生成 main 中登记构造闭包
 #（runtime `jca::register_services`）。每轮 BFS 起始清空。
 JCA_SEEDS: list = []
@@ -501,6 +505,13 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     except RuntimeError as e:
         print(f"      警告：{e}，跳过 JDK 元数据生成")
         return [], set(), set()
+
+    MODULE_RESOURCES.clear()
+    from .runtime_manifest import module_resource_paths as _module_resource_paths
+    for _rp in _module_resource_paths():
+        _rb = resolver.resolve_resource(_rp)
+        if _rb is not None:
+            MODULE_RESOURCES[_rp] = _rb
 
     def _load_class(name: str):
         """按需解析类（不加入生成范围，仅供方法解析沿继承层次查找）。
@@ -1017,21 +1028,22 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         # 束经类名反射装载、无静态边，只能在不动点处按触达事实补种；只补一次。
         from .locale_seed import load_manifest as _ls_manifest
         _ls_mf = _ls_manifest()
-        _bundles_seeded = False
+        _bundle_families_seeded: set = set()
 
-        def _seed_data_bundles() -> None:
+        def _seed_data_bundles(bases) -> None:
             from .data_bundle import carrier_of
             from .locale_seed import bundle_classes, collect_locales
             _locs = collect_locales(class_infos, _load_class, extra=locales, manifest=_ls_mf)
-            _names = bundle_classes(_locs, _load_class, manifest=_ls_mf)
+            _names = bundle_classes(_locs, _load_class, manifest=_ls_mf, bases=bases)
             for _b in _names:
                 _carrier = carrier_of(_load_class(_b), _load_class)
                 instantiated_classes.add(_b)
                 _enqueue_method((_b, '<init>', '()V'))
                 if _carrier is not None:
                     _enqueue_method((_b, _carrier[0], _carrier[1]))
-            DATA_BUNDLE_SEEDS[:] = _names
-            print(f"      locale 种子：{len(_locs)} 个 locale → {len(_names)} 个资源束", flush=True)
+            DATA_BUNDLE_SEEDS[:] = sorted(set(DATA_BUNDLE_SEEDS) | set(_names))
+            print(f"      locale 种子：{len(_locs)} 个 locale → {len(_names)} 个资源束"
+                  f"（{', '.join(b.rsplit('/', 1)[-1] for b in bases)}）", flush=True)
 
         # K-JCA 服务种子：服务查找入口（seeds.toml [jca] triggers）在调用链上时，按
         # 「engine 类在链上 × 算法名在用户字符串常量中」入选实现类——构造器入队、记为
@@ -1291,10 +1303,13 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 continue
             _drain_allocs()
             _propagate_virtual_targets()
-            if (not queue and not _bundles_seeded
-                    and any(t in seen_members for t in _ls_mf.triggers)):
-                _bundles_seeded = True
-                _seed_data_bundles()
+            if not queue:
+                from .locale_seed import triggered_bases as _triggered_bases
+                _new_bases = [b for b in _triggered_bases(_ls_mf, seen_members)
+                              if b not in _bundle_families_seeded]
+                if _new_bases:
+                    _bundle_families_seeded.update(_new_bases)
+                    _seed_data_bundles(_new_bases)
             if (not queue and any(t in seen_members for t in _JCA_MANIFEST.triggers)
                     or not queue and any(d[0] in seen_members for d in _JCA_MANIFEST.defaults)):
                 _seed_jca_services()
