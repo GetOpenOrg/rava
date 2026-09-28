@@ -38,6 +38,7 @@ python3 scripts/main.py tests/e2e/01_basics/BubbleSort.java --strict
 `scripts/cargo_env.py` 统计工作区内带生成标记的类文件数，≥ 1700 视为重型闭包（16G 机器上单 rustc 峰值约 14G，
 双作业会被 OOM 杀）：
 
+- 所有编译缺省 `CARGO_PROFILE_DEV_DEBUG=line-tables-only`（调试信息减量，rustc 内存明显下降）；
 - 自动加 `CARGO_BUILD_JOBS=1`，打印 `[cargo-env]` 一行；显式设置 `CARGO_BUILD_JOBS` 时尊重显式值；
 - `run_tests.py` 构建超时自动放宽到 3000 秒（`--build-timeout` 显式值优先）。
 
@@ -63,7 +64,7 @@ RUST_BACKTRACE=1 python3 scripts/main.py Foo.java
 | `RUST_BACKTRACE` | 生成程序 | 见第二节 |
 | `CARGO_TARGET_DIR` | 脚本自动设置 | 共享编译缓存（`run_tests.py` 为 `build/jdk<N>/target`，`main.py` 为 `build/target`），无需手动设置 |
 | `CARGO_INCREMENTAL` | 脚本自动设为 `0` | 关闭增量编译：宽闭包下增量元数据是 OOM 的主要诱因 |
-| `CARGO_PROFILE_DEV_DEBUG` | `run_bg.sh` 设为 `line-tables-only` | 减少调试信息（二进制约减半，rustc 内存下降） |
+| `CARGO_PROFILE_DEV_DEBUG` | 脚本缺省 `line-tables-only`（`cargo_env.py`，显式设置时尊重） | 减少调试信息：debuginfo=2 下大闭包 rustc 峰值约 13.8G 会被 OOM 杀；减量后二进制约减半、保留行号回溯 |
 | `LANG` / `LC_ALL` | `run_bg.sh` 设为 `C.UTF-8` | 保证非 ASCII 输出一致 |
 | `PYTHONHASHSEED` | `seed_check.sh` | 双种子确定性检查（1 / 2 各转译一次，生成树必须一致） |
 | `XDG_CACHE_HOME` | `jdk_resolver.py` | JDK 解包缓存根目录（缺省 `~/.cache`，缓存在 `<根>/rava/`） |

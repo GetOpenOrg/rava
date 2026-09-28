@@ -33,8 +33,17 @@ def is_heavy(ws: Path) -> bool:
     return generated_class_count(ws) >= HEAVY_CLASSES
 
 
+# 调试信息减量：debuginfo=2 下大闭包 rustc 峰值 13.8G 被 OOM 杀（2026-09-25 实测），
+# line-tables-only 通过且二进制约减半；行号回溯保留。调用方显式设置时尊重调用方
+_LOW_MEM_DEFAULTS = {'CARGO_PROFILE_DEV_DEBUG': 'line-tables-only'}
+
+
 def with_heavy_jobs(env: dict, ws: Path) -> dict:
-    """重型工作区（生成类数 ≥ 阈值）且未显式设置时追加 CARGO_BUILD_JOBS=1。"""
+    """编译环境：低内存缺省（调试信息减量）+ 重型工作区（生成类数 ≥ 阈值）且未显式设置时
+    追加 CARGO_BUILD_JOBS=1。"""
+    missing = {k: v for k, v in _LOW_MEM_DEFAULTS.items() if k not in env}
+    if missing:
+        env = dict(env, **missing)
     if 'CARGO_BUILD_JOBS' in env:
         return env
     n = generated_class_count(ws)
