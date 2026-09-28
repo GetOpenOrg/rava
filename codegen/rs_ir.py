@@ -248,6 +248,12 @@ class InstanceOfExpr:
 
 
 @dataclass
+class Paren:
+    """显式括号：`(inner)`（一元负号字面量作方法接收者等优先级场景）。"""
+    inner: 'RsExpr'
+
+
+@dataclass
 class TryExpr:
     """`?` 错误传播：`inner?`（Java 异常经 Result 传播的调用点形态；FS-Q1 Raw 收敛）。"""
     inner: 'RsExpr'
@@ -257,7 +263,7 @@ RsExpr = Union[
     Lit, Var, BinOp, UnOp, Call, MethodCall,
     FieldAccess, Index, Cast, RefExpr, DerefExpr,
     BlockExpr, IfExpr, MacroExpr, RawExpr,
-    NewPendingExpr, StaticFieldRef, CastExpr, InstanceOfExpr, TryExpr,
+    NewPendingExpr, StaticFieldRef, CastExpr, InstanceOfExpr, TryExpr, Paren,
 ]
 
 

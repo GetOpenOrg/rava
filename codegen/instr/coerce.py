@@ -87,20 +87,30 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
     - 其余（闭包等无运行时类的值）：`Object::from_any(..)` 不透明装箱
 
     注意 Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）。"""
+    # 字符串入口（FS-Q1 Q1-b 过渡）：叶子以 Var 承载原串、构造后立即渲染（节点不进 IR）
+    from ..rs_ir import Var
+    from ..render import render_expr
+    return render_expr(coerce_to_object_node(Var(val_str), ty, registry, class_type_params, clone))
+
+
+def coerce_to_object_node(val, ty: str, registry: dict | None = None,
+                          class_type_params=(), clone: bool = True):
+    """`_coerce_to_object` 的节点版（FS-Q1 Q1-b）：值节点 → Object 上转节点，渲染与字符串版逐字符一致。"""
+    from ..rs_ir import Call, MethodCall, RefExpr, Paren
+    from ..render import render_expr
     kind = _object_coercion_kind(ty, registry, class_type_params)
     if kind == 'prim':
         # G-12：负数字面量补外层括号——方法调用优先级高于一元负号，
         # `-1i32.into()` 解析为 `-(1i32.into())`，目标类型推断失败（E0282）
-        if val_str.lstrip().startswith('-'):
-            return f"({val_str}).into()"
-        return f"{val_str}.into()"
-    src = f"Clone::clone(&{val_str})" if clone else val_str
+        recv = Paren(val) if render_expr(val).lstrip().startswith('-') else val
+        return MethodCall(recv, 'into', [])
+    src = Call('Clone::clone', [RefExpr(val)]) if clone else val
     if kind == 'tvar':
-        return f"Into::<Object>::into({src})"
+        return Call('Into::<Object>::into', [src])
     if kind == 'ref':
         # 数组 / registry 类 / 接口载体：Object 直接持有该引用（对象身份保持）
-        return f"Object::from({src})"
-    return f"Object::from_any({src})"
+        return Call('Object::from', [src])
+    return Call('Object::from_any', [src])
 
 
 def _object_coercion_kind(ty: str, registry, class_type_params) -> str:
