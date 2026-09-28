@@ -74,6 +74,10 @@ classes = [
     "sun/invoke/util/BytecodeName",
     "sun/invoke/util/VerifyType",
 
+    # file: 协议 URL 处理器（纯 Java 的 URLStreamHandler 子类；URL$DefaultFactory 对 file 协议直接
+    # new）。消费方：NativePRNG.getEgdUrl 的 `new URL("file:/dev/random")`（SUN provider 初始化）。
+    "sun/net/www/protocol/file/Handler",
+
     # FS-R：VM 边界类 java/lang/Class 的纯 Java 嵌套辅助类（0 个 ACC_NATIVE）：reflectionData()
     # 缓存、EnclosingMethodInfo（isLocalClass / isAnonymousClass / getEnclosingClass）、Atomic
     # （reflectionData / annotationData 的 CAS）、AnnotationData。

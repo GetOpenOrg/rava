@@ -235,9 +235,11 @@ def _emit_for(class_bin: str, short: str, em, only: 'set[str] | None' = None) ->
         arms.append(f'        ("{mname}", "{descriptor}") => '
                     f'Some((|| {{ {inner_body} }})()),')
 
-    if only is None and 'is_abstract       = true' not in em.text:
+    if (only is None or '<init>' in only) and 'is_abstract       = true' not in em.text:
         # 无构造分配（序列化构造器：分配目标类实例、不运行其构造器——JDK
-        # ReflectionFactory.newConstructorForSerialization 的实例化语义，N2）
+        # ReflectionFactory.newConstructorForSerialization 的实例化语义，N2）。
+        # 反射构造面（only ∋ <init>）同样需要：Constructor.newInstance 经 DirectMethodHandle
+        # newInvokeSpecial = allocateInstance（<alloc>）→ 已分配接收者上运行 <init>
         arms.append('        ("<alloc>", "()V") => Some((|| { let mut __o = Self::default(); '
                     '__o._init_not_null(); Ok(Object::from(__o)) })()),')
     if not arms:
