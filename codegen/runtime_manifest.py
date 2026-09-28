@@ -16,7 +16,14 @@ from __future__ import annotations
 
 import functools
 import os
-import tomllib
+try:
+    import tomllib                      # Python 3.11+
+except ModuleNotFoundError:             # Python 3.10 及更早：同接口的 tomli（pip install tomli）
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        raise SystemExit('运行时清单（*.toml）解析需要 Python 3.11+，或在旧版 Python 上 '
+                         '`pip install tomli`（当前：' + __import__('sys').version.split()[0] + '）')
 
 from .constants import RUNTIME_JAVA_RUNTIME
 
