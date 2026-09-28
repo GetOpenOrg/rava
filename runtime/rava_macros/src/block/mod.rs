@@ -34,6 +34,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use gen::GenContext;
+/// 类型参数约束补齐（`iface_upcasts!` 与类路径同源复用）
+pub(crate) use gen::context::augment_generic_bounds;
 use interface::expand_interface;
 use parse::ClassInput;
 

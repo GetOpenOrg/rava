@@ -46,14 +46,9 @@ _IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\b')
 _SIG_RE = re.compile(r'^pub fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*->\s*Result<(.*)>\s*$')
 
 
-# 协变 upcast impl 的类型形参约束 —— 与宏 block/mod.rs 为类类型形参注入的约束集
-# 保持一致（wrapper 的 ObjectVTable impl 带这套约束，`Object::from(v)` 依赖它）。
-_PARAM_BOUNDS = "Clone + Default + 'static + From<Object> + Into<Object> + __ThreadSafe"
-
-
-def _bounded_generics(params: list[str]) -> str:
-    """upcast impl 的泛型头：每个类型形参带宏注入约束。"""
-    return f"<{', '.join(f'{p}: {_PARAM_BOUNDS}' for p in params)}>" if params else ''
+def _bare_generics(params: list[str]) -> str:
+    """upcast 的泛型头：只写裸参数名，约束由 `iface_upcasts!` 与 `java_class!` 同源补齐（T-1）。"""
+    return f"<{', '.join(params)}>" if params else ''
 
 
 def _split_top_level(text: str) -> list[str]:
@@ -311,14 +306,8 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                 # （如 ChronoLocalDate.from），`Iface::from(..)` 路径解析会被固有方法遮蔽，
                 # 错调工厂方法（返回 Result）而非 From trait。
                 # 接口接收者的 impl 头不带泛型（载体源/目标都是擦除实例化，具体类型）。
-                _up_g = '' if _recv_is_iface else _bounded_generics(recv_params)
-                upcasts.append(
-                    f"impl{_up_g} From<{_up_src}> for {erased_iface_ty} {{\n"
-                    f"    fn from(v: {_up_src}) -> Self {{\n"
-                    f"        <{erased_iface_ty} as ::std::convert::From<Object>>::from(\n"
-                    f"            <Object as ::std::convert::From<{_up_src}>>::from(v))\n"
-                    f"    }}\n"
-                    f"}}")
+                _up_g = '' if _recv_is_iface else _bare_generics(recv_params)
+                upcasts.append((_up_g, _up_src, erased_iface_ty))
 
         if blocks:
             text = '\n\n'.join(blocks)
@@ -329,8 +318,13 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                            recv.text, flags=re.M)
         # 协变 upcast impl（宏块外，顶格书写；无 upcast 时移除占位注释行）
         if upcasts:
+            # 同一 (泛型头, 源类型) 归并为一次宏调用；约束与 impl 体由 iface_upcasts! 展开
+            _groups: dict[tuple[str, str], list[str]] = {}
+            for _g, _src, _tgt in upcasts:
+                _groups.setdefault((_g, _src), []).append(_tgt)
             upcast_text = ('// 协变 upcast：类实例 → 擦除接口载体视图（A-4，接口类型实参在运行时不存在）\n'
-                           + '\n'.join(upcasts) + '\n')
+                           + ''.join(f"rava_macros::iface_upcasts! {{ impl{_g} {_src} => {', '.join(_tgts)} }}\n"
+                                     for (_g, _src), _tgts in _groups.items()))
         else:
             upcast_text = ''
         recv.text = re.sub(r'^[ \t]*' + re.escape(UPCASTS_SLOT) + r'\n', lambda _m: upcast_text,
