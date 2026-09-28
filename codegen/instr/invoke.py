@@ -7,7 +7,7 @@ from ..constants import STRING_CLASS, ref_desc
 import re
 from ..stack import StackSim, erased_base as _erased_base
 from ..rs_ir import (
-    Lit, Var, RawExpr, RawStmt, NewPendingExpr, RsNamed,
+    Lit, Var, RawExpr, RawStmt, NewPendingExpr, RsNamed, Call, LetStmt, ExprStmt, TryExpr,
 )
 from ..render import render_expr, render_type
 from ..sig_parse import parse_method_param_types as _parse_method_param_types
@@ -50,7 +50,7 @@ from .member_naming import (
 from .invoke_sig import (
     _registry_iface_shorts, _concrete_class_shorts, _downcast_target_valid,
     _lookup_method_sig_params, _lookup_method_sig_ret, _split_type_args, _erased_ret_is_type_var,
-    _substitute_tvars, _coerce_arg, receiver_type_arg_map,
+    _substitute_tvars, _coerce_arg, receiver_type_arg_map, coerce_arg_node,
 )
 from .invoke_virtual import _gen_invokevirtual
 from ..type_args import rust_type_arg_text, rust_type_head
@@ -809,6 +809,7 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
             _same_sig, _ = _method_sig_types(_static_ci, _same_m, _same_tps, registry)
             _peek_same = [render_type(t) for _, t in sim.stack[len(sim.stack) - len(params):]]
             _static_tbind.update(_bind_type_args(_same_sig or [], _peek_same, _same_tps))
+    arg_nodes = []   # FS-Q1 Q1-e：实参以节点携带（渲染与字符串形态逐字符一致）
     for _idx_s, param_jvm in enumerate(reversed(params)):
         e_expr, ty_node = sim.pop()
         e = render_expr(e_expr)
@@ -819,10 +820,12 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
         if (expected in (sim.class_type_params or ()) and ty != expected
                 and ty not in _PRIMITIVE_RUST_TYPES and ty != '()'):
             _static_tbind.setdefault(expected, ty)
-        e = _coerce_arg(e, ty_node, expected, ty, sim, registry)
-        args.insert(0, e)
+        _node = coerce_arg_node(e_expr, ty_node, expected, ty, sim, registry)
+        arg_nodes.insert(0, _node)
+        args.insert(0, render_expr(_node))
 
-    needs_q = False  # 是否加 ?（用户类方法返回 Result）
+    needs_q = False
+    call_func = None   # 调用节点的路径（`Self::m` / `C::<T>::m`）；None = 无节点形态  # 是否加 ?（用户类方法返回 Result）
     turbofish_bound = False  # turbofish 是否采用了 _static_tbind 的实参绑定
 
     # 目标类不在 registry（被截断的内部类如 jdk.internal.*）→ 生成 panic 存根
@@ -839,7 +842,8 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
 
     if cls is None or cls == class_name:
         rust_mname = _safe_field(_mangle_if_overloaded(class_name, mname, comment, registry))
-        call = f"Self::{rust_mname}({', '.join(args)})"
+        call_func = f"Self::{rust_mname}"
+        call = f"{call_func}({', '.join(args)})"
         needs_q = True
     elif cls and '/' in cls:
         call = f"/* {cls}.{mname}({', '.join(args)}) */"
@@ -851,17 +855,24 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
                      else _static_call_turbofish(cls, class_name, sim, registry, _static_tbind))
         # 同类静态调用的 turbofish 采用了实参绑定 → 返回类型同步替换
         turbofish_bound = bool(turbofish) and _rust_type_to_binary(cls, registry) == class_name and bool(sim.class_type_params)
-        call = f"{_cls_path}{cls}{turbofish}::{rust_mname}({', '.join(args)})"
+        call_func = f"{_cls_path}{cls}{turbofish}::{rust_mname}"
+        call = f"{call_func}({', '.join(args)})"
         needs_q = True
 
     if needs_q:
-        call = caller_sensitive_wrap(call, _cp_cls_bin or class_name, mname,
-                                     '(' + comment.split(':(', 1)[1] if ':(' in comment else '',
-                                     class_name, registry)
+        _wrapped = caller_sensitive_wrap(call, _cp_cls_bin or class_name, mname,
+                                         '(' + comment.split(':(', 1)[1] if ':(' in comment else '',
+                                         class_name, registry)
+        if _wrapped != call:
+            call_func = None   # @CallerSensitive 包装生效：沿用字符串形态
+        call = _wrapped
     q = '?' if needs_q else ''
+    # 调用节点：`path(args)?`（语句层类型化，FS-Q1 Q1-e）
+    _call_n = (TryExpr(Call(call_func, list(arg_nodes)))
+               if (needs_q and call_func is not None) else None)
     rust_ret = jvm_to_rust(ret, registry)
     if rust_ret == '()':
-        sim.emit(RawStmt(f"{call}{q};"))
+        sim.emit(ExprStmt(_call_n) if _call_n is not None else RawStmt(f"{call}{q};"))
     else:
         v = sim.fresh()
         # 签名真实返回（generic_signature）与擦除映射不一致时的对齐：
@@ -891,14 +902,17 @@ def _gen_invokestatic(sim: StackSim, comment: str, class_name: str, registry: di
                 # 类型变量走 Into；仅未知形态才 from_any 不透明包装
                 sim.emit(RawStmt(f"let {v} = {_coerce_to_object(f'{call}{q}', _sig_ret_s, registry, sim.class_type_params)};"))
             else:
-                sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
+                sim.emit(LetStmt(v, ty=RsNamed(rust_ret), value=_call_n) if _call_n is not None
+                         else RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
             sim.push(Var(v), RsNamed(rust_ret))
         elif (_sig_ret_s is not None and _sig_ret_s != rust_ret
                 and rust_ret not in _PRIMITIVE_RUST_TYPES):
-            sim.emit(RawStmt(f"let {v} = {call}{q};"))
+            sim.emit(LetStmt(v, value=_call_n) if _call_n is not None
+                     else RawStmt(f"let {v} = {call}{q};"))
             sim.push(Var(v), RsNamed(_sig_ret_s))
         else:
-            sim.emit(RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
+            sim.emit(LetStmt(v, ty=RsNamed(rust_ret), value=_call_n) if _call_n is not None
+                     else RawStmt(f"let {v}: {rust_ret} = {call}{q};"))
             sim.push(Var(v), RsNamed(rust_ret))
 
 

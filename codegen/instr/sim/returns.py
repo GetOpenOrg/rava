@@ -1,6 +1,6 @@
 # 从 codegen/instr/sim.py 中拆出
 
-from ...rs_ir import RawStmt
+from ...rs_ir import RawStmt, RawExpr, ReturnStmt, Call, Var, Lit
 from ...render import render_expr, render_type, upcast_expr
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ...stack import erased_base, erased_class_of, is_jvm_array
@@ -11,6 +11,12 @@ import re as _re_ret
 from .control import _erased_shape
 
 
+def _return_ok(e_expr, expr_s: str):
+    """`return Ok(v);`（FS-Q1 Q1-e）：值未经转换时直接携带栈上节点，经转换的值暂为 Raw 叶子。"""
+    val = e_expr if render_expr(e_expr) == expr_s else RawExpr(expr_s)
+    return ReturnStmt(Call('Ok', [val]))
+
+
 def sim_returns(ins, sim, class_name, registry) -> bool:
     op      = ins.opcode
     operand = ins.operand or ''
@@ -19,9 +25,9 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
     if op == 'return':
         # 构造函数 return 指令：返回 Ok(this) 而非 Ok(())
         if sim.is_constructor:
-            sim.emit(RawStmt('return Ok(this);'))
+            sim.emit(ReturnStmt(Call('Ok', [Var('this')])))
         else:
-            sim.emit(RawStmt('return Ok(());'))
+            sim.emit(ReturnStmt(Call('Ok', [Lit('()')])))
     elif op in ('ireturn', 'lreturn', 'freturn', 'dreturn'):
         e_expr, e_ty = sim.pop()
         expr_s = render_expr(e_expr)
@@ -30,7 +36,7 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         actual_ty = render_type(e_ty)
         if actual_ty != ret_ty and ret_ty in ('i8', 'i16', 'u16', 'bool', 'i32'):
             expr_s = _coerce_value(expr_s, e_ty, ret_ty)
-        sim.emit(RawStmt(f"return Ok({expr_s});"))
+        sim.emit(_return_ok(e_expr, expr_s))
     elif op == 'areturn':
         e_expr, e_ty = sim.pop()
         expr_s = render_expr(e_expr)
@@ -118,7 +124,7 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
             # 静态类型互不为子类型（交叉转型 `(Comparator<T> & Serializable)`、同一泛型类的另一实例化）：
             # javac 在此处的转换是运行时校验 → 经 Object 边界按声明的返回类型取回
             expr_s = f"From::from({_coerce_to_object(expr_s, actual_ty, registry, _ctparams)})"
-        sim.emit(RawStmt(f"return Ok({expr_s});"))
+        sim.emit(_return_ok(e_expr, expr_s))
     else:
         return False
     return True
