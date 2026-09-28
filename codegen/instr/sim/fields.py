@@ -4,7 +4,8 @@ from ...type_map import short_cls as _short_cls_g
 import re as _re_g
 
 from ...stack import BOOL, _clone_moved_var, erased_base, erased_class_of
-from ...rs_ir import CastExpr, Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed, MethodCall, TryExpr
+from ...rs_ir import (CastExpr, Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed, MethodCall,
+                      TryExpr, ExprStmt, Call)
 from ...render import render_expr, render_type, upcast_expr
 from ...sig_parse import parse_field_type as _parse_field_type
 from ...sig_types import instance_field_rust_name as _instance_field_rust_name
@@ -61,6 +62,11 @@ def _null_checked_receiver_node(recv):
     if render_expr(recv) in ('this', 'self'):
         return recv
     return TryExpr(MethodCall(recv, '__nn', []))
+
+def _value_node(val_expr, val_str: str):
+    """存储值节点（FS-Q1 Q1-e）：未经转换时直接携带栈上节点，经转换的值暂为 Raw 叶子。"""
+    return val_expr if render_expr(val_expr) == val_str else RawExpr(val_str)
+
 
 def _static_field_decl_class(cls: str, comment: str, registry: dict | None) -> str:
     """getstatic/putstatic 常量池类 → static 字段的真实声明类（解析失败保持原类）。"""
@@ -362,7 +368,8 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             # 继承字段同样由转发访问器承接，无需 `_super` 前缀路径（§16）。
             _slot = _instance_field_rust_name(cls_owner or class_name, fname, registry)
             _spill_pending_reads(sim, f".__get_{_slot}()")
-            sim.emit(RawStmt(f"{_null_checked_receiver(render_expr(obj_expr))}.__set_{_slot}({val_str});"))
+            sim.emit(ExprStmt(MethodCall(_null_checked_receiver_node(obj_expr), f'__set_{_slot}',
+                                         [_value_node(val_expr, val_str)])))
         else:
             sim.emit(RawStmt(f"/* putfield {render_expr(val_expr)} */"))
 
@@ -396,7 +403,8 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
                                                class_type_params=sim.class_type_params)
             _spill_pending_reads(sim, f"::{rust_fname}()")
             # static 写入 → 宏生成的 set_xxx 访问器（入口触发类初始化，JVMS §5.5）
-            sim.emit(RawStmt(f"{raw_cls}{_turbofish}::set_{rust_fname}({val_str})?;"))
+            sim.emit(ExprStmt(TryExpr(Call(f"{raw_cls}{_turbofish}::set_{rust_fname}",
+                                           [_value_node(val_expr, val_str)]))))
         else:
             sim.emit(RawStmt(f"/* putstatic {cls}.{field_name} = {render_expr(val_expr)} */"))
 
