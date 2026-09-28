@@ -618,9 +618,13 @@ def _coerce_arg(
         _coerce_from_null, _coerce_to_object, _coerce_value,
         _render_cast, _same_generic_family,
     )
-    from ..jvm_type import (Array, ClassRef, carrier_type_for_ident,
+    from ..jvm_type import (Array, ClassRef, TypeVar, carrier_type_for_ident,
                             from_rust_type, rust_head_name,
                             strict_erased_subtype)
+    # 类型形参判定（N4 G2）：作用域类型形参经类型对象（TypeVar）识别，替代字符串成员判定
+    _tparams = frozenset(sim.class_type_params or ())
+    _act_tv = isinstance(from_rust_type(actual, registry, _tparams), TypeVar)
+    _exp_tv = isinstance(from_rust_type(expected, registry, _tparams), TypeVar)
     null_coerce = _coerce_from_null(e, expected)
     if null_coerce is not None:
         return null_coerce
@@ -646,7 +650,7 @@ def _coerce_arg(
         # 泛型参数值（如 K: Clone + Default + 'static）传给 Object 参数：
         # Rust 无隐式子类型化，K 类型的值不能直接当 Object 用 → 装箱为
         # Object(Rc<JvmRef<K>>)，callee 内按类型形参的 From<Object> bound 可还原。
-        if actual in sim.class_type_params:
+        if _act_tv:
             return _coerce_to_object(e, actual, registry, sim.class_type_params)
         if e == 'this':
             # 构造器（fn new）里没有 self 关键字，统一用局部变量 this
@@ -692,7 +696,7 @@ def _coerce_arg(
     # （List<..>、Consumer<T>）与方法级类型变量不是合法 checkcast 目标。
     if (expected not in _PRIMITIVE_RUST_TYPES and actual == 'Object'
             and expected not in ('Object', '()')
-            and expected not in (sim.class_type_params or ())
+            and not _exp_tv
             and _downcast_target_valid(expected, sim, registry)):
         # TypeIR 批次 3（S4a）：checkcast 目标 binary 经类型对象（ClassRef.binary，
         # 域内解析；域外 / 数组 / 基本类型 → ''，与 _rust_type_to_binary 同口径）
@@ -701,22 +705,22 @@ def _coerce_arg(
         if _bin18:
             return _render_cast(e, expected, binary_name=_bin18, checked=True)
         return _render_cast(e, expected)
-    if actual == 'Object' and expected in (sim.class_type_params or ()):
+    if actual == 'Object' and _exp_tv:
         # 形参是类型变量而实参经擦除边界（方法级类型变量、Object 局部变量）退化为 Object：
         # javac 的 unchecked cast → 经宏为类型形参补的 From<Object> 取回（与 areturn 同规则）
         src = 'Clone::clone(this)' if e == 'this' else f"Clone::clone(&{e})"
         return f"From::from({src})"
-    if (expected in (sim.class_type_params or ()) and actual != expected
+    if (_exp_tv and actual != expected
             and actual not in _PRIMITIVE_RUST_TYPES and actual not in ('Object', '()')
-            and actual not in (sim.class_type_params or ())):
+            and not _act_tv):
         # 形参是类型变量、实参是具体引用类型：javac 对 `(E) x` 发射的 checkcast 目标是
         # E 的擦除上界（`E extends Enum<E>` → checkcast Enum），栈值因此是上界类视图
         #（EnumSet.copyOf 的 `result.add((E) i.next())`，E0308）。与上一分支同规则——经
         # Object 边界按对象标识、由宏为类型形参补的 From<Object> 取回
         return f"From::from({_coerce_to_object(e, actual, registry, sim.class_type_params)})"
-    if (actual in (sim.class_type_params or ()) and expected != actual
+    if (_act_tv and expected != actual
             and expected not in _PRIMITIVE_RUST_TYPES and expected not in ('Object', '()')
-            and expected not in (sim.class_type_params or ())
+            and not _exp_tv
             and _downcast_target_valid(expected, sim, registry)):
         # 实参静态类型是类型变量（`S extends SpeciesData`），形参是其上界类：Java 的隐式
         # 子类型转换 → 经 Object 边界按对象标识取回上界类视图
