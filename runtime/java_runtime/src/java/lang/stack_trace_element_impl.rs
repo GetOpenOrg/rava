@@ -6,11 +6,9 @@
 //! 边界）。数组本身（长度 = depth）由 Java 侧 `StackTraceElement.of` 分配，
 //! 本 native 只填字段。
 //!
-//! `__impl_computeFormat`（翻译体手写覆盖）：Java 体经 `declaringClassObject`
-//! 查询 class-loader / module 元数据（`Class.getClassLoader0` / `getModule`），
-//! 该元数据面在原生二进制不存在；观测效果（format 省略位）在此等价于
-//! loader 非 Builtin、module 非 java.base-hashed——format = 0，无可见差
-//!（本侧 classLoaderName / moduleName / moduleVersion 本就保持 null）。
+//! 与 HotSpot `java_lang_StackTraceElement::fill_in` 同：一并填 `declaringClassObject`，
+//! 供翻译体 `computeFormat` 查询 class-loader / module（`Class.getClassLoader0` /
+//! `getModule`：无名模块、不在 boot layer → format 省略位与 JVM 对用户类的判定一致）。
 
 use crate::prelude::*;
 use super::*;
@@ -33,6 +31,11 @@ impl StackTraceElement {
             .cloned();
         for i in 0..depth {
             let mut element = stack_trace.get(i)?;
+            // VM 恒填声明类对象（computeFormat 据此查询；帧数据缺失时以占位名承载）
+            let decl = frames.as_ref().and_then(|f| f.entries.get(i as usize))
+                .map(|e| e.declaring_class.replace('.', "/"))
+                .unwrap_or_else(|| "<unknown>".to_owned());
+            element.__set_declaringClassObject(super::Class::for_class(String::from(decl.as_str())));
             if let Some(entry) = frames.as_ref().and_then(|f| f.entries.get(i as usize)) {
                 element.__set_declaringClass(String::from(entry.declaring_class.as_str()));
                 element.__set_methodName(String::from(entry.method_name.as_str()));
@@ -43,15 +46,6 @@ impl StackTraceElement {
             }
             stack_trace.set(i, element)?;
         }
-        Ok(())
-    }
-
-    /// computeFormat 翻译体的手写覆盖（`__impl_` 机制）：format = 0、清
-    /// declaringClassObject，与 Java 体在无 class-loader/module 元数据下的
-    /// 可观测行为等价。
-    pub fn __impl_computeFormat(&self) -> Result<()> {
-        self.__set_format(0);
-        self.__set_declaringClassObject(Default::default());
         Ok(())
     }
 }
