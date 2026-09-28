@@ -3,11 +3,12 @@
 import re as _re
 
 from ...stack import I32, I64, F32, F64, erased_base, is_jvm_array
-from ...rs_ir import Var, RawExpr, RawStmt, RsNamed, RsGeneric
+from ...rs_ir import (Var, RawExpr, RawStmt, RsNamed, RsGeneric, ExprStmt, TryExpr, MethodCall,
+                      Call, RefExpr, UpcastExpr)
 from ...render import render_expr, render_type, upcast_expr
 from ...type_map import jvm_to_rust, NEWARRAY_TYPES
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
-from ..coerce import _to_i32, _coerce_to_object
+from ..coerce import _to_i32, _coerce_to_object, coerce_to_object_node
 from ..hierarchy import _is_subtype
 from ...constants import OBJECT_CLASS as _OBJECT_CLASS
 from ... import equiv_audit
@@ -134,12 +135,11 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         if _is_object_receiver(arr_ty):
             # 擦除为 Object 的数组接收者：元素类型未知，值统一装箱为 Object 后经
             # Object::array_store_object 转发（协变视图按源元素类型做存储检查）
-            val_str = render_expr(val_expr)
+            val_node = val_expr
             val_ty_str = render_type(val_ty)
             if val_ty_str not in ('Object', '()'):
-                val_str = _coerce_to_object(val_str, val_ty_str, registry, sim.class_type_params)
-            sim.emit(RawStmt(
-                f"{render_expr(arr_expr)}.array_store_object({render_expr(idx_expr)}, {val_str})?;"))
+                val_node = coerce_to_object_node(val_node, val_ty_str, registry, sim.class_type_params)
+            sim.emit(ExprStmt(TryExpr(MethodCall(arr_expr, 'array_store_object', [idx_expr, val_node]))))
             return True
         _m_aa = _re.match(r'JArray<(.+)>$', arr_ty_str)
         if _m_aa:
@@ -164,29 +164,31 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
                         + _st.code[len(_fresh_decl):])
                     val_ty_str = elem_ty
                     break
+        # 值节点（FS-Q1 Q1-e）：各分支渲染与原字符串形态逐字符一致
+        val_node = val_expr
         if elem_ty == 'Object' and val_ty_str not in ('Object', '()'):
-            val_str = _coerce_to_object(val_str, val_ty_str, registry, sim.class_type_params)
+            val_node = coerce_to_object_node(val_node, val_ty_str, registry, sim.class_type_params)
         elif elem_ty != 'Object' and val_ty_str == 'Object':
             # 元素静态类型比值更具体（checkcast 被验证器省略的位置）：按对象标识还原
-            val_str = f"From::from(Clone::clone(&{val_str}))"
+            val_node = Call('From::from', [Call('Clone::clone', [RefExpr(val_node)])])
         elif val_ty_str not in _PRIMITIVE_RUST_TYPES:
             if (elem_ty != val_ty_str
                     and _is_subtype(erased_base(val_ty_str), erased_base(elem_ty), registry)):
-                val_str = upcast_expr(val_str, 'clone')
+                val_node = (UpcastExpr(val_node, 'owned') if isinstance(val_node, Var)
+                            else MethodCall(Call('Clone::clone', [RefExpr(val_node)]), 'into', []))
             elif elem_ty != val_ty_str:
                 # 值静态类型与元素类型无子型关系（`Number[] n = intArr; n[0] = 3.14;`
                 # ——元素类型来自值流推断，比 javac 的声明元素类型更精确）：Java 侧按
                 # 声明元素类型静态合法，运行时按运行时元素类型检查 → 经 Object 边界
                 # 走 aastore 存储检查路径（不满足抛 ArrayStoreException，S-4）
-                _val_obj = _coerce_to_object(val_str, val_ty_str, registry,
-                                             sim.class_type_params)
-                sim.emit(RawStmt(
-                    f"Object::from(Clone::clone(&{render_expr(arr_expr)}))"
-                    f".array_store_object({render_expr(idx_expr)}, {_val_obj})?;"))
+                _val_obj = coerce_to_object_node(val_node, val_ty_str, registry,
+                                                 sim.class_type_params)
+                _arr_obj = Call('Object::from', [Call('Clone::clone', [RefExpr(arr_expr)])])
+                sim.emit(ExprStmt(TryExpr(MethodCall(_arr_obj, 'array_store_object', [idx_expr, _val_obj]))))
                 return True
             else:
-                val_str = f"Clone::clone(&{val_str})"
-        sim.emit(RawStmt(f"{render_expr(arr_expr)}.set({render_expr(idx_expr)}, {val_str})?;"))
+                val_node = Call('Clone::clone', [RefExpr(val_node)])
+        sim.emit(ExprStmt(TryExpr(MethodCall(arr_expr, 'set', [idx_expr, val_node]))))
     elif op == 'bastore':
         val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)

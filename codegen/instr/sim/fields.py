@@ -4,7 +4,7 @@ from ...type_map import short_cls as _short_cls_g
 import re as _re_g
 
 from ...stack import BOOL, _clone_moved_var, erased_base, erased_class_of
-from ...rs_ir import CastExpr, Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed
+from ...rs_ir import CastExpr, Lit, RawExpr, RawStmt, NewPendingExpr, StaticFieldRef, RsNamed, MethodCall, TryExpr
 from ...render import render_expr, render_type, upcast_expr
 from ...sig_parse import parse_field_type as _parse_field_type
 from ...sig_types import instance_field_rust_name as _instance_field_rust_name
@@ -55,6 +55,12 @@ def _null_checked_receiver(recv: str) -> str:
     if recv in ('this', 'self'):
         return recv
     return f"{recv}.__nn()?"
+
+def _null_checked_receiver_node(recv):
+    """`_null_checked_receiver` 的节点版（渲染逐字符一致）。"""
+    if render_expr(recv) in ('this', 'self'):
+        return recv
+    return TryExpr(MethodCall(recv, '__nn', []))
 
 def _static_field_decl_class(cls: str, comment: str, registry: dict | None) -> str:
     """getstatic/putstatic 常量池类 → static 字段的真实声明类（解析失败保持原类）。"""
@@ -329,7 +335,7 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             # 所以不再需要按接收者静态类型拼 `_super._super.` 路径——
             # 那层复杂度已收拢进宏（见方案 §16：_super 语义边界）。
             _slot = _instance_field_rust_name(f_owner or class_name, fname, registry)
-            sim.push(RawExpr(f"{_null_checked_receiver(render_expr(obj_expr))}.__get_{_slot}()"), RsNamed(ftype))
+            sim.push(MethodCall(_null_checked_receiver_node(obj_expr), f'__get_{_slot}', []), RsNamed(ftype))
         else:
             sim.push(RawExpr(f"{render_expr(obj_expr)}.field"), RsNamed('i32'))
 

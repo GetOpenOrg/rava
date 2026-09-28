@@ -10,7 +10,7 @@ from typing import get_args
 
 from .rs_ir import (
     RsExpr, RsStmt, RsType,
-    Var, Lit, RawExpr, NewPendingExpr, CastExpr, UpcastExpr,
+    Var, Lit, RawExpr, NewPendingExpr, CastExpr, UpcastExpr, MethodCall,
     LetStmt, AssignStmt,
     RsGeneric, RsPrimitive, RsNamed, RsRef, RsSlice, RsInfer,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
@@ -136,6 +136,16 @@ def _clone_moved_var(expr: RsExpr, ty: RsType) -> RsExpr:
 
 
 _TRIVIAL_RAW_RE = None
+
+
+def _opaque_let_value(value) -> bool:
+    """let 省略类型标注的值：Raw 文本与字段访问器调用（FS-Q1 Q1-e 节点化前即 Raw）——
+    实际类型由访问器 / 文本自身决定，模拟类型只作推断参考，标注反而有 E0308 风险。"""
+    if isinstance(value, RawExpr):
+        return True
+    if isinstance(value, MethodCall) and value.method.startswith('__get_') and not value.args:
+        return True
+    return False
 
 
 def _is_trivial_expr(expr: RsExpr) -> bool:
@@ -808,7 +818,7 @@ class StackSim:
                 self._slot_bind_pos[slot] = self.current_offset
                 value = _maybe_downcast(expr, ty) if src_is_object else expr
                 _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
-                let_ty = ty if (_is_default or force_let_ty) else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
+                let_ty = ty if (_is_default or force_let_ty) else (None if _opaque_let_value(value) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
                 # Java 局部变量间赋值在 Rust 中是 move，包 Clone 保活源变量（E0382）
                 value = _clone_moved_var(value, ty)
                 self.stmts.append(LetStmt(name, let_ty, mutable=True, value=value, value_ty=ty,
@@ -832,7 +842,7 @@ class StackSim:
             value = _maybe_downcast(expr, ty) if src_is_object else expr
             # downcast 时让 Rust 推断类型；Default::default() 需保留类型注解；RsGeneric 也让 Rust 推断
             _is_default = isinstance(value, RawExpr) and value.code == 'Default::default()'
-            let_ty = ty if (_is_default or force_let_ty) else (None if isinstance(value, RawExpr) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
+            let_ty = ty if (_is_default or force_let_ty) else (None if _opaque_let_value(value) else (None if isinstance(expr, Var) and isinstance(ty, RsGeneric) else ty))
             # Java 局部变量间赋值（aload src; astore dst）在 Rust 中是 move，
             # 源变量后续仍会被使用，包 Clone::clone 保活（E0382 use-after-move）
             value = _clone_moved_var(value, ty)
