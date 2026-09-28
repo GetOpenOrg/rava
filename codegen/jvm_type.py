@@ -259,7 +259,8 @@ _PRIM_TO_RUST: dict[str, str] = {v: k for k, v in _RUST_PRIM.items()}
 _RUST_PARSE_CACHE: dict[tuple, JvmType] = {}
 
 
-def from_rust_type(rust_ty: str, registry: 'dict | None' = None) -> JvmType:
+def from_rust_type(rust_ty: str, registry: 'dict | None' = None,
+                   tparams: 'frozenset[str]' = frozenset()) -> JvmType:
     """Rust 类型串（codegen 表面语言，如 ``ArrayList<String>`` / ``JArray<i32>`` /
     ``Object`` / ``K``）→ JvmType——发射侧 jvm_to_rust 的反向边界解析器（查询侧）。
 
@@ -276,24 +277,26 @@ def from_rust_type(rust_ty: str, registry: 'dict | None' = None) -> JvmType:
     - 其余 head 经 ``_registry_short_index`` 反查 binary（is_interface 同步补全；
       configure_short_names 保证短名 → binary 单射）；反查不到 → ``ClassRef(head)``
       占位（binary = 短名，registry 域外身份，同 _is_subtype 的父类占位口径）；
+    - 头标识符是作用域内类型形参（``tparams``，N4 G2）且无实参 → ``TypeVar``（先于 registry
+      反查：形参名遮蔽同名短类名，与 Java 作用域规则一致）；
     - ``'?'`` → ``Wildcard('*')``；空串 / 无前导标识符 → ``Null()``（全函数哨兵，
       消费点按「无类身份」处理，与旧头部解剖对空串的行为一致）。
 
     宽容性：取最长有效前缀——head 后无 ``'<'`` 即裸形态；实参段畸形（未闭合 /
     尾随残片）时降级为裸 head 占位（旧路径对畸形输入同样只取头部文本，无更严格
     语义可失去）。幂等可缓存。"""
-    key = (id(registry), len(registry) if registry else 0, rust_ty)
+    key = (id(registry), len(registry) if registry else 0, rust_ty, tparams)
     hit = _RUST_PARSE_CACHE.get(key)
     if hit is not None:
         return hit
-    ty = _parse_rust_type(rust_ty, registry)
+    ty = _parse_rust_type(rust_ty, registry, tparams)
     if len(_RUST_PARSE_CACHE) > 8192:  # 防御性上限（正常转译远小于此）
         _RUST_PARSE_CACHE.clear()
     _RUST_PARSE_CACHE[key] = ty
     return ty
 
 
-def _parse_rust_type(s: str, registry: 'dict | None') -> JvmType:
+def _parse_rust_type(s: str, registry: 'dict | None', tparams: 'frozenset[str]' = frozenset()) -> JvmType:
     s = s.strip()
     while s.startswith('&'):
         s = s[1:].lstrip()
@@ -308,10 +311,12 @@ def _parse_rust_type(s: str, registry: 'dict | None') -> JvmType:
     rest = s[m.end():].lstrip()
     args: 'tuple[JvmType, ...] | None' = None
     if rest.startswith('<'):
-        args = _parse_rust_args(rest, registry)
+        args = _parse_rust_args(rest, registry, tparams)
     prim = _RUST_PRIM.get(head)
     if prim is not None:
         return Primitive(prim)
+    if args is None and head in tparams:
+        return TypeVar(head)
     if head == 'JArray':
         if args is not None and len(args) == 1:
             return Array(args[0])
@@ -330,7 +335,7 @@ def _parse_rust_type(s: str, registry: 'dict | None') -> JvmType:
     return ClassRef(binary, args, is_iface)
 
 
-def _parse_rust_args(s: str, registry: 'dict | None') -> 'tuple[JvmType, ...] | None':
+def _parse_rust_args(s: str, registry: 'dict | None', tparams: 'frozenset[str]' = frozenset()) -> 'tuple[JvmType, ...] | None':
     """解析 ``<A, B, ...>`` 实参段（s 以 '<' 开头）。畸形（未闭合）→ None。"""
     args: list[JvmType] = []
     i = 1
@@ -338,7 +343,7 @@ def _parse_rust_args(s: str, registry: 'dict | None') -> 'tuple[JvmType, ...] | 
         if s[i] == '>':
             return tuple(args)
         # 逐个实参：递归取一个类型后应见 ',' 或 '>'
-        one, j = _scan_rust_one(s, i, registry)
+        one, j = _scan_rust_one(s, i, registry, tparams)
         if one is None:
             return None
         args.append(one)
@@ -355,7 +360,7 @@ def _parse_rust_args(s: str, registry: 'dict | None') -> 'tuple[JvmType, ...] | 
     return None
 
 
-def _scan_rust_one(s: str, i: int, registry: 'dict | None') -> 'tuple[JvmType, int] | None':
+def _scan_rust_one(s: str, i: int, registry: 'dict | None', tparams: 'frozenset[str]' = frozenset()) -> 'tuple[JvmType, int] | None':
     """从 i 起扫描一个完整类型（含嵌套实参段），返回 (类型, 结束位置)。"""
     n = len(s)
     while i < n and s[i] in ' \t':
@@ -383,12 +388,12 @@ def _scan_rust_one(s: str, i: int, registry: 'dict | None') -> 'tuple[JvmType, i
             k += 1
         if k >= n:
             return None
-        inner_t = _parse_rust_type(s[i:k + 1], registry)
+        inner_t = _parse_rust_type(s[i:k + 1], registry, tparams)
         return inner_t, k + 1
     prim = _RUST_PRIM.get(head)
     if prim is not None:
         return Primitive(prim), j
-    return from_rust_type(head, registry), j
+    return from_rust_type(head, registry, tparams), j
 
 
 def rust_head_name(ty: JvmType) -> str:

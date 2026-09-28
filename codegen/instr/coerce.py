@@ -87,23 +87,58 @@ def _coerce_to_object(val_str: str, ty: str, registry: dict | None = None,
     - 其余（闭包等无运行时类的值）：`Object::from_any(..)` 不透明装箱
 
     注意 Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）。"""
-    if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
+    # 双算期：沿用旧判定输出，插桩开启时对照新分类（零差异后切换）
+    kind = _object_coercion_kind_old(ty, registry, class_type_params)
+    if _G2_AUDIT:
+        _new = _object_coercion_kind(ty, registry, class_type_params)
+        if _new != kind:
+            with open(_G2_AUDIT, 'a', encoding='utf-8') as _f:
+                _f.write(f'coerce\t{ty!r}\t{kind}\t{_new}\n')
+    if kind == 'prim':
         # G-12：负数字面量补外层括号——方法调用优先级高于一元负号，
         # `-1i32.into()` 解析为 `-(1i32.into())`，目标类型推断失败（E0282）
         if val_str.lstrip().startswith('-'):
             return f"({val_str}).into()"
         return f"{val_str}.into()"
     src = f"Clone::clone(&{val_str})" if clone else val_str
-    if ty in (class_type_params or ()):
+    if kind == 'tvar':
         return f"Into::<Object>::into({src})"
-    from ..stack import erased_class_of, is_jvm_array
-    if is_jvm_array(ty):
-        # 数组是对象：Object 直接持有数组引用（元素类型具体化，可按 `T[]` 精确取回）
-        return f"Object::from({src})"
-    if erased_class_of(ty, registry) is not None:
-        # registry 类 / 接口载体（擦除身份经 TypeIR 边界查询，清单第 5 项 S2）
+    if kind == 'ref':
+        # 数组 / registry 类 / 接口载体：Object 直接持有该引用（对象身份保持）
         return f"Object::from({src})"
     return f"Object::from_any({src})"
+
+
+import os as _os_g2
+_G2_AUDIT = _os_g2.environ.get('JAVA_RTA_G2_AUDIT')
+
+
+def _object_coercion_kind(ty: str, registry, class_type_params) -> str:
+    """装箱分类（N4 G2：类型对象查询）：'prim' JVM 基本类型（void 除外）/ 'tvar' 作用域类型形参 /
+    'ref' 数组或 registry 域内类 / 'opaque' 其余（闭包等无运行时类的值）。"""
+    from ..jvm_type import from_rust_type, Primitive, TypeVar, Array, ClassRef
+    t = from_rust_type(ty, registry, frozenset(class_type_params or ()))
+    if isinstance(t, Primitive):
+        return 'prim' if t.kind != 'void' else 'opaque'
+    if isinstance(t, TypeVar):
+        return 'tvar'
+    if isinstance(t, Array):
+        return 'ref'
+    if isinstance(t, ClassRef) and registry and t.binary in registry:
+        return 'ref'
+    return 'opaque'
+
+
+def _object_coercion_kind_old(ty: str, registry, class_type_params) -> str:
+    """G2 迁移前的字符串判定（双算插桩对照用）。"""
+    if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16'):
+        return 'prim'
+    if ty in (class_type_params or ()):
+        return 'tvar'
+    from ..stack import erased_class_of, is_jvm_array
+    if is_jvm_array(ty) or erased_class_of(ty, registry) is not None:
+        return 'ref'
+    return 'opaque'
 
 
 _NULL_OBJECT_EXPRS = frozenset({'Object::default()', 'Object::default().clone()'})
