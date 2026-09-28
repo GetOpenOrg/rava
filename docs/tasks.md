@@ -14,7 +14,7 @@
 4. **任务执行顺序（2026-09-23 同步）**：~~陈旧树筛→A-8/S-20/数组视图→downcast 链→S-19→A-5/A-4~~ **全部完成**。当前：ice 修复①② + `__unsafe_int_cell` 委托 + TestSealed `.0`（在途双开）→ K-6b 双侧一致（6 例）→ G-3 三重槽（窗口 3 前置）→ TypeIR 批次 3（invoke 域 9 处）→ M-3 试点 → 窗口 3 → P-1/Rust 重写 R0（三信号中"发现频率月级"仍差）。**子代理并行纪律：本机 ≤2（内存）+ 另一机 2；本地禁全量（定向 ≤10 例），全量归用户服务器**。
 5. **当前执行顺序（2026-09-24 晚，用户确认）**：清单 3/11（M3）→ 4+20 → 5（TypeIR）→ 6（R-2′）**均已完成** → **7 窗口 3（进行中）** → 8 P-1 → 10 R0（门槛②③达成后）；13 M5、19 equiv 探针、N 系列按依赖穿插。1/2 收官轮待你执行，数据回来后 16–18 插队。挂决策：12/14/15。
 
-7. **当前执行顺序（2026-09-27 刷新）**：#42 ✅ 并行后端已设为默认并删除 GIL（用户测试滚动回归，反馈即修、不作阻塞）；N11 ✅（Records / BmhDynamicSpecies / MH Direct / Combinators 全 PASS）；**FS-R 反射元数据表（R1 / R2 / R3 ✅，反射调用 / 字段 / 构造 / 访问检查 / 序列化 7 测试全 PASS；R4a 动态代理 ✅；R4b/R4c 注解回到 JDK 字节码 ✅——TestAnnoReflect / TestAnnoValues / TestDynamicProxy 本机 PASS）**；#7 G-2 全量对账（用户测试滚动）→ #10 R0 启动；N4 TypeIR G1–G5 与 IR 结构化收敛；T-1 → T-2 / FS-M 组。
+7. **当前执行顺序（2026-09-28 刷新）**：#42 ✅；N11 ✅；FS-R ✅（R1–R4）；N12 运行时清单整合 ✅；**FS-H0 ✅（`non_native_overrides=0`：JCA J1/J2、Enum.valueOf、StackTraceElement.computeFormat、FileCleanable、L-2 货币数据层；边界类手写方法单独计数 `vm_boundary_methods`）**；N4 TypeIR 🔄（G1/G2/G3/G5 ✅，G4 归 M-3）→ FS-Q1 Raw 逃生舱收敛（兼降 rustc 峰值内存，N8）；T-1 → T-2 / FS-M 组；#7 G-2 全量对账（用户测试滚动）→ #10 R0 启动。
 
 6. **任务验收 = 端到端 Java 测试（2026-09-25 用户确认）**：每个任务以对应的 e2e Java 测试跑通为判定依据——已有测试直接用；没有就补（`tests/e2e/<类别>/TestXxx.java` + `tests/expected/TestXxx.txt` 由 JVM 生成）。构造测试须覆盖该任务涉及的**全部逻辑分支**，一个测试覆盖不全就拆成多个。定向测试跑通即视为正确、继续推进，**不等用户全量结果**；用户全量有问题反馈再处理。
 
