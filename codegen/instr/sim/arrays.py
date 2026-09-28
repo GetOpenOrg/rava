@@ -4,8 +4,15 @@ import re as _re
 
 from ...stack import I32, I64, F32, F64, erased_base, is_jvm_array
 from ...rs_ir import (Var, RawExpr, RawStmt, RsNamed, RsGeneric, ExprStmt, TryExpr, MethodCall,
-                      Call, RefExpr, UpcastExpr)
-from ...render import render_expr, render_type, upcast_expr
+                      Call, RefExpr, UpcastExpr, LetStmt)
+
+
+def _new_array_let(v: str, elem_t: str, count_expr):
+    """`let mut v: JArray<E> = JArray::<E>::try_new(n)?;`（FS-Q1 Q1-e 节点形态；try_new 负长度抛
+    NegativeArraySizeException，S-8）。"""
+    return LetStmt(v, ty=RsNamed(f'JArray<{elem_t}>'), mutable=True,
+                   value=TryExpr(Call(f'JArray::<{elem_t}>::try_new', [count_expr])))
+from ...render import render_expr, render_type, upcast_expr, render_stmt
 from ...type_map import jvm_to_rust, NEWARRAY_TYPES
 from ...constants import PRIMITIVE_RUST_TYPES as _PRIMITIVE_RUST_TYPES
 from ..coerce import _to_i32, _coerce_to_object, coerce_to_object_node
@@ -62,7 +69,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         elem_t, _zero = NEWARRAY_TYPES.get(operand.strip(), ('i32', '0i32'))
         v = sim.fresh('_arr')
         # try_new：负长度抛 NegativeArraySizeException（S-8，Err 形态随方法体 Result 传播）
-        sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::try_new({render_expr(count_expr)})?;"))
+        sim.emit(_new_array_let(v, elem_t, count_expr))
         sim.push(Var(v), RsNamed(f'JArray<{elem_t}>'))
     elif op == 'anewarray':
         count_expr = _pop_index(sim)
@@ -90,7 +97,7 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
             elem_t = 'Object'
         v = sim.fresh('_arr')
         # try_new：负长度抛 NegativeArraySizeException（S-8）
-        sim.emit(RawStmt(f"let mut {v}: JArray<{elem_t}> = JArray::<{elem_t}>::try_new({render_expr(count_expr)})?;"))
+        sim.emit(_new_array_let(v, elem_t, count_expr))
         sim.push(Var(v), RsNamed(f'JArray<{elem_t}>'))
     elif op == 'multianewarray':
         dims_str = operand.split()[-1] if operand else '2'
@@ -123,12 +130,13 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
         if _val_prim in _PRIMITIVE_RUST_TYPES and _val_prim != _elem_prim:
             val_s = f"(({val_s}) as {_elem_prim})"
         _arr_s = render_expr(arr_expr)
+        _val_n = val_expr if render_expr(val_expr) == val_s else RawExpr(val_s)
         if _is_object_receiver(arr_ty):
             _api = {'iastore': 'array_store_int', 'lastore': 'array_store_long',
                     'fastore': 'array_store_float', 'dastore': 'array_store_double'}[op]
-            sim.emit(RawStmt(f"{_arr_s}.{_api}({render_expr(idx_expr)}, {val_s})?;"))
+            sim.emit(ExprStmt(TryExpr(MethodCall(arr_expr, _api, [idx_expr, _val_n]))))
         else:
-            sim.emit(RawStmt(f"{_arr_s}.set({render_expr(idx_expr)}, {val_s})?;"))
+            sim.emit(ExprStmt(TryExpr(MethodCall(arr_expr, 'set', [idx_expr, _val_n]))))
     elif op == 'aastore':
         val_expr, val_ty = sim.pop(); idx_expr = _pop_index(sim); arr_expr, arr_ty = sim.pop()
         arr_ty_str = render_type(arr_ty)
@@ -157,6 +165,14 @@ def sim_arrays(ins, sim, class_name, registry) -> bool:
             _fresh_decl = f"let mut {val_str}: JArray<Object> = JArray::<Object>::try_new("
             for _si in range(len(sim.stmts) - 1, -1, -1):
                 _st = sim.stmts[_si]
+                if (isinstance(_st, LetStmt) and _st.name == val_str
+                        and render_stmt(_st).startswith(_fresh_decl)):
+                    # 创建处节点形态（FS-Q1 Q1-e）：元素类型改为槽位元素类型
+                    _inner_t = elem_ty[len('JArray<'):-1]
+                    _cnt = _st.value.inner.args[0]
+                    sim.stmts[_si] = _new_array_let(val_str, _inner_t, _cnt)
+                    val_ty_str = elem_ty
+                    break
                 if isinstance(_st, RawStmt) and _st.code.startswith(_fresh_decl):
                     _inner_t = elem_ty[len('JArray<'):-1]
                     sim.stmts[_si] = RawStmt(
