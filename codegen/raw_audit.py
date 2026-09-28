@@ -59,6 +59,7 @@ def reset() -> None:
         _counts[k] = 0
     _overrides.clear()
     _intrinsic_hits.clear()
+    _vm_boundary_hits.clear()
 
 
 def _scan(patterns, exempt: frozenset) -> int:
@@ -134,6 +135,10 @@ _overrides: set = set()
 _intrinsic_hits: set = set()
 _INTRINSICS: 'frozenset | None' = None
 
+# VM 耦合边界类（closure.toml [vm_boundary]，逐类写明截断依据）的手写方法：与内部包边界类同
+# 规则整类手写、按调用链按需实现——是策略边界而非越界覆盖，单独计数（与 intrinsics 同理）。
+_vm_boundary_hits: set = set()
+
 
 def intrinsics() -> frozenset:
     """VM 内建函数准入清单（runtime/java_runtime/vm_intrinsics.toml [[intrinsic]] member）。"""
@@ -154,6 +159,15 @@ def record_override(member: str) -> None:
     _overrides.add(member)
 
 
+def record_vm_boundary(member: str) -> None:
+    """登记一处 VM 耦合边界类的手写方法（不计越界覆盖）。"""
+    _vm_boundary_hits.add(member)
+
+
+def vm_boundary_lines() -> list:
+    return sorted(_vm_boundary_hits)
+
+
 def override_lines() -> list:
     """逐位点明细（排序，确定性）。"""
     return sorted(_overrides)
@@ -166,4 +180,5 @@ def summary() -> str:
             f"type_surgery_ext={type_surgery_ext_sites()} "
             f"jdk_literals={jdk_literal_sites()} "
             f"non_native_overrides={len(_overrides)} "
-            f"intrinsics={len(_intrinsic_hits)}")
+            f"intrinsics={len(_intrinsic_hits)} "
+            f"vm_boundary_methods={len(_vm_boundary_hits)}")

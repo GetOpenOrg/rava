@@ -315,6 +315,10 @@ def main():
     if _ov:
         # FS-H0：公开 API 非 native 方法的手写覆盖明细（最终态为 0）
         print('[override-audit] ' + ' '.join(_ov))
+    _vb = _RAW_AUDIT.vm_boundary_lines()
+    if _vb:
+        # VM 耦合边界类的手写方法（策略边界，单独计数；随对应子系统落地逐类复核）
+        print('[vm-boundary-audit] ' + ' '.join(_vb))
     t_codegen = time.perf_counter() - t0
     print(f"[time] transpile   {fmt_dur(t_codegen)}")
 

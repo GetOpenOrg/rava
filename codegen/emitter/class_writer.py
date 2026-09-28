@@ -54,12 +54,16 @@ def _audit_override(ci, m) -> None:
     """FS-H0 审计：公开 API 类的非 native 方法被手写覆盖（跳过字节码翻译）。
 
     两条覆盖路径同口径登记：同名 fn（静态 / 非虚）与虚方法的 `__impl_<m>` 手写体。
-    VM 内建函数（vm_intrinsics.toml 准入）单独计数，不算越界。"""
+    VM 内建函数（vm_intrinsics.toml 准入）与 VM 耦合边界类（closure.toml [vm_boundary]，
+    整类手写的策略边界）单独计数，不算越界。"""
     if m.is_native or m.is_abstract or not ci.name.startswith(('java/', 'javax/')):
         return
     from .. import raw_audit as _ra
+    from ..runtime_manifest import vm_boundary_classes
     _member = f'{ci.name}.{m.name}:{m.descriptor}'
-    if _member in _ra.intrinsics():
+    if ci.name.split('$', 1)[0] in vm_boundary_classes():
+        _ra.record_vm_boundary(_member)
+    elif _member in _ra.intrinsics():
         _ra.record_intrinsic(_member)
     else:
         _ra.record_override(_member)
