@@ -66,8 +66,34 @@ impl NumberFormatProvider__VTable for NativeNumberFormatProvider {
         Ok(Self::view(df))
     }
 
+    /// CURRENCYSTYLE：模式构造后按货币默认小数位调整（JDK `NumberFormatProviderImpl.
+    /// adjustForCurrencyDefaultFractionDigits` 同序：符号集的货币 → 缺席时按国际货币代码取；
+    /// 小数位 ≠ -1 时，原最小 == 最大则两者都置为该值，否则最小取 min、最大置为该值）。
     fn getCurrencyInstance(&self, arg0: Locale) -> Result<NumberFormat> {
-        Ok(Self::view(Self::new_format(arg0, CURRENCYSTYLE)?))
+        let df = Self::new_format(arg0, CURRENCYSTYLE)?;
+        let symbols = df.getDecimalFormatSymbols()?;
+        let mut currency = symbols.getCurrency()?;
+        if currency.is_jvm_null() {
+            match crate::java::util::Currency::getInstance_str(symbols.getInternationalCurrencySymbol()?) {
+                Ok(c) => currency = c,
+                Err(e) if e.is_instance_of("java/lang/IllegalArgumentException") => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if !currency.is_jvm_null() {
+            let digits = currency.getDefaultFractionDigits()?;
+            if digits != -1 {
+                let old_min = df.getMinimumFractionDigits()?;
+                if old_min == df.getMaximumFractionDigits()? {
+                    df.setMinimumFractionDigits(digits)?;
+                    df.setMaximumFractionDigits(digits)?;
+                } else {
+                    df.setMinimumFractionDigits(old_min.min(digits))?;
+                    df.setMaximumFractionDigits(digits)?;
+                }
+            }
+        }
+        Ok(Self::view(df))
     }
 
     fn getPercentInstance(&self, arg0: Locale) -> Result<NumberFormat> {
@@ -224,7 +250,7 @@ impl LocaleProviderAdapter {
     ///
     /// 回调边：DFS provider 的翻译构造器、LocaleResources 构造、NumberFormatProvider 的
     /// INTEGERSTYLE 收窄（DecimalFormat 成员）。
-    #[jvm_boundary(upcalls = "java/text/DecimalFormatSymbols.<init>:(Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.<init>:(Lsun/util/locale/provider/ResourceBundleBasedAdapter;Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.getNumberPatterns:()[Ljava/lang/String; sun/util/locale/provider/LocaleResources.getDecimalFormatSymbolsData:()[Ljava/lang/Object; java/text/DecimalFormat.setMaximumFractionDigits:(I)V java/text/DecimalFormat.setDecimalSeparatorAlwaysShown:(Z)V java/text/NumberFormat.setParseIntegerOnly:(Z)V")]
+    #[jvm_boundary(upcalls = "java/text/DecimalFormatSymbols.<init>:(Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.<init>:(Lsun/util/locale/provider/ResourceBundleBasedAdapter;Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.getNumberPatterns:()[Ljava/lang/String; sun/util/locale/provider/LocaleResources.getDecimalFormatSymbolsData:()[Ljava/lang/Object; java/text/DecimalFormat.setMaximumFractionDigits:(I)V java/text/DecimalFormat.setDecimalSeparatorAlwaysShown:(Z)V java/text/NumberFormat.setParseIntegerOnly:(Z)V java/text/DecimalFormat.getDecimalFormatSymbols:()Ljava/text/DecimalFormatSymbols; java/text/DecimalFormatSymbols.getCurrency:()Ljava/util/Currency; java/text/DecimalFormatSymbols.getInternationalCurrencySymbol:()Ljava/lang/String; java/util/Currency.getInstance:(Ljava/lang/String;)Ljava/util/Currency; java/util/Currency.getDefaultFractionDigits:()I java/text/DecimalFormat.getMinimumFractionDigits:()I java/text/DecimalFormat.getMaximumFractionDigits:()I java/text/DecimalFormat.setMinimumFractionDigits:(I)V")]
     pub fn getAdapter(_providerClass: Class, _locale: Locale) -> Result<LocaleProviderAdapter> {
         Ok(_adapter_view())
     }
