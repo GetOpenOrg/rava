@@ -411,6 +411,34 @@ def _scan_rust_one(s: str, i: int, registry: 'dict | None', tparams: 'frozenset[
     return from_rust_type(head, registry, tparams), j
 
 
+def from_rs_type(node, registry: 'dict | None' = None,
+                 tparams: 'frozenset[str]' = frozenset()) -> JvmType:
+    """RsType 节点 → JvmType（N4 G1 桥）：替代「render_type(节点) → 串 → from_rust_type」的绕行。
+
+    结构化节点按结构转换——``RsRef`` 剥引用、``RsPrimitive`` 按拼写（JVM 基本类型 /
+    宿主基本类型 / void）、``RsGeneric('JArray', [E])`` → ``Array``、其余 ``RsGeneric`` →
+    头名解析后带实参；``RsNamed`` 的 name 常为完整类型串（``ArrayList<T>``），交由
+    ``from_rust_type``；其余节点（切片 / 元组 / 推断占位等 Rust 侧形态）经渲染串解析。
+    与渲染串解析逐点同值（渲染串再解析即同一文法）。"""
+    from .rs_ir import RsRef, RsPrimitive, RsNamed, RsGeneric
+    if isinstance(node, RsRef):
+        return from_rs_type(node.inner, registry, tparams)
+    if isinstance(node, RsPrimitive):
+        return from_rust_type(node.name, registry, tparams)
+    if isinstance(node, RsNamed):
+        return from_rust_type(node.name, registry, tparams)
+    if isinstance(node, RsGeneric) and node.params:
+        args = tuple(from_rs_type(p, registry, tparams) for p in node.params)
+        if node.outer == 'JArray' and len(args) == 1:
+            return Array(args[0])
+        head = from_rust_type(node.outer, registry, tparams)
+        if isinstance(head, ClassRef):
+            return ClassRef(head.binary, args, head.is_interface)
+        return head
+    from .render import render_type
+    return from_rust_type(render_type(node), registry, tparams)
+
+
 def rust_head_name(ty: JvmType) -> str:
     """类型对象的 Rust 基名（去实参的头标识符）——被替代位点
     ``split('<')[0]`` 文本解剖的类型对象等价物：

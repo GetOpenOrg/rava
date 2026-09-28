@@ -42,12 +42,14 @@ def _coerce_acmp_operand(expr_str: str, ty_node, registry=None, class_type_param
     ty = render_type(ty_node)
     if ty == 'Object':
         return expr_str
-    if ty in ('i32', 'i64', 'f32', 'f64', 'bool', 'i8', 'i16', 'u16', 'usize', '()'):
-        return expr_str  # 基本类型不应出现在 acmp，原样保留
+    # N4 G1：类型身份直接由节点取得（不经渲染串再解析）
+    from ..jvm_type import from_rs_type, Primitive, HostPrim, ClassRef
+    ty_t = from_rs_type(ty_node, registry)
+    if isinstance(ty_t, (Primitive, HostPrim)):
+        return expr_str  # 值类型不应出现在 acmp，原样保留
     # 引用类型或 self 引用：去掉 &，clone 后上转
     clean = expr_str[1:] if expr_str.startswith('&') else expr_str
-    from ..stack import erased_class_of
-    if erased_class_of(ty, registry) is not None:
+    if isinstance(ty_t, ClassRef) and registry and ty_t.binary in registry:
         # Clone::clone 而非 .clone()：值可能是带 Java clone() 的类（Enum_/HashMap 等）
         return f"Object::from(Clone::clone(&{clean}))"
     from ..instr.coerce import _coerce_to_object
