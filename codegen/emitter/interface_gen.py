@@ -263,8 +263,14 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                             # 顺序一致：桥接优先（JVM 方法解析顺序），其余按接收者
                             # 重载态命名（与调用侧一致——跨分支重载发散时与声明者
                             # 名不同）。预测错名 → 接口分派体调用不存在的成员（E0599）
+                            # 与生成侧（_bridge_override_member）同一判定：本类声明的
+                            # 「形参擦除 + 返回收窄」桥由生成侧以槽位名承接，预测须同名
+                            # （2532b19 起生成侧承接而此处仍回落 → ProcessEnvironment$
+                            # StringEnvironment 的 Map.put target 指向未生成的 put_obj_obj）。
+                            # 协变桥（形参相同）在此不可达：真实方法同参本类声明，已由 own 分支命中
                             bridge = resolve_bridge_member(
-                                recv_ci, im.name, param_desc, registry, emissions, recv)
+                                recv_ci, im.name, param_desc, registry, emissions, recv,
+                                allow_covariant=True)
                             recv_target = (bridge['member_name'] if bridge is not None
                                            else receiver_member_name(
                                                method.name, method.descriptor, recv_ci, registry))
