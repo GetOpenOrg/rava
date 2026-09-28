@@ -1,7 +1,7 @@
 # 从 codegen/instr/sim.py 中拆出
 
 from ...stack import I32, I64, F32, F64, BOOL
-from ...rs_ir import RawExpr, Cast
+from ...rs_ir import RawExpr, Cast, MethodCall, Paren
 from ...render import render_expr, render_type
 from ..coerce import _to_i32
 
@@ -21,6 +21,17 @@ def _int_division(opcode: str, operator: str, dividend: str, divisor: str) -> st
         return f"({dividend}{operator}{divisor})"
     return f"{opcode}({dividend}, {divisor})?"
 
+def _leaf(node, text: str):
+    """操作数节点（FS-Q1 Q1-e）：文本与节点渲染一致时携带节点，经转换（`as i32` 等）时为 Raw 叶子。"""
+    return node if render_expr(node) == text else RawExpr(text)
+
+
+def _wrapping(a_node, a_text: str, method: str, b_node=None, b_text: str | None = None):
+    """`(a).wrapping_<op>(b)` 调用节点——渲染与原字符串形态逐字符一致。"""
+    args = [] if b_text is None else [_leaf(b_node, b_text)]
+    return MethodCall(Paren(_leaf(a_node, a_text)), method, args)
+
+
 def sim_arith(ins, sim, class_name, registry) -> bool:
     op      = ins.opcode
     operand = ins.operand or ''
@@ -29,13 +40,13 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
     # ── 整数算术 ──
     if op == 'iadd':
         b, bt = sim.pop(); a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_add({_to_i32(render_expr(b), bt)})"), I32)
+        sim.push(_wrapping(a, _to_i32(render_expr(a), at), 'wrapping_add', b, _to_i32(render_expr(b), bt)), I32)
     elif op == 'isub':
         b, bt = sim.pop(); a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_sub({_to_i32(render_expr(b), bt)})"), I32)
+        sim.push(_wrapping(a, _to_i32(render_expr(a), at), 'wrapping_sub', b, _to_i32(render_expr(b), bt)), I32)
     elif op == 'imul':
         b, bt = sim.pop(); a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_mul({_to_i32(render_expr(b), bt)})"), I32)
+        sim.push(_wrapping(a, _to_i32(render_expr(a), at), 'wrapping_mul', b, _to_i32(render_expr(b), bt)), I32)
     elif op == 'idiv':
         b, bt = sim.pop(); a, at = sim.pop()
         sim.push(RawExpr(_int_division('idiv', '/', _to_i32(render_expr(a), at), _to_i32(render_expr(b), bt))), I32)
@@ -44,7 +55,7 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
         sim.push(RawExpr(_int_division('irem', '%', _to_i32(render_expr(a), at), _to_i32(render_expr(b), bt))), I32)
     elif op == 'ineg':
         a, at = sim.pop()
-        sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}).wrapping_neg()"), I32)
+        sim.push(_wrapping(a, _to_i32(render_expr(a), at), 'wrapping_neg'), I32)
     elif op == 'ishl':
         b, bt = sim.pop(); a, at = sim.pop()
         sim.push(RawExpr(f"({_to_i32(render_expr(a), at)}<<({_to_i32(render_expr(b), bt)}&0x1f))"), I32)
@@ -81,19 +92,19 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
         a_s = render_expr(a); b_s = render_expr(b)
         if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
         if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
-        sim.push(RawExpr(f"({a_s}).wrapping_add({b_s})"), I64)
+        sim.push(_wrapping(a, a_s, 'wrapping_add', b, b_s), I64)
     elif op == 'lsub':
         b, b_ty = sim.pop(); a, a_ty = sim.pop()
         a_s = render_expr(a); b_s = render_expr(b)
         if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
         if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
-        sim.push(RawExpr(f"({a_s}).wrapping_sub({b_s})"), I64)
+        sim.push(_wrapping(a, a_s, 'wrapping_sub', b, b_s), I64)
     elif op == 'lmul':
         b, b_ty = sim.pop(); a, a_ty = sim.pop()
         a_s = render_expr(a); b_s = render_expr(b)
         if render_type(a_ty) != 'i64': a_s = f"({a_s} as i64)"
         if render_type(b_ty) != 'i64': b_s = f"({b_s} as i64)"
-        sim.push(RawExpr(f"({a_s}).wrapping_mul({b_s})"), I64)
+        sim.push(_wrapping(a, a_s, 'wrapping_mul', b, b_s), I64)
     elif op == 'ldiv':
         b, b_ty = sim.pop(); a, a_ty = sim.pop()
         a_s = render_expr(a); b_s = render_expr(b)
@@ -134,7 +145,7 @@ def sim_arith(ins, sim, class_name, registry) -> bool:
         sim.push(RawExpr(_int_division('lrem', '%', a_s, b_s)), I64)
     elif op == 'lneg':
         a, _ = sim.pop()
-        sim.push(RawExpr(f"({render_expr(a)}).wrapping_neg()"), I64)
+        sim.push(_wrapping(a, render_expr(a), 'wrapping_neg'), I64)
     elif op == 'land':
         b, b_ty = sim.pop(); a, a_ty = sim.pop()
         a_s = render_expr(a); b_s = render_expr(b)

@@ -11,6 +11,7 @@ from typing import get_args
 from .rs_ir import (
     RsExpr, RsStmt, RsType,
     Var, Lit, RawExpr, NewPendingExpr, CastExpr, UpcastExpr, MethodCall, Call, RefExpr, TryExpr,
+    Cast, InstanceOfExpr, StaticFieldRef,
     LetStmt, AssignStmt,
     RsGeneric, RsPrimitive, RsNamed, RsRef, RsSlice, RsInfer,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
@@ -139,16 +140,14 @@ _TRIVIAL_RAW_RE = None
 
 
 def _opaque_let_value(value) -> bool:
-    """let 省略类型标注的值：Raw 文本与字段访问器调用（FS-Q1 Q1-e 节点化前即 Raw）——
-    实际类型由访问器 / 文本自身决定，模拟类型只作推断参考，标注反而有 E0308 风险。"""
-    if isinstance(value, RawExpr):
-        return True
-    if isinstance(value, MethodCall) and value.method.startswith('__get_') and not value.args:
-        return True
-    # 构造调用 `C::new(..)?`（invokespecial 节点形态，节点化前为 Raw）
-    if isinstance(value, TryExpr) and isinstance(value.inner, Call):
-        return True
-    return is_clone_of_var(value)
+    """let 省略类型标注的值：除「类型自明的既有类型化节点」之外的全部表达式。
+
+    节点化之前（FS-Q1）只有 Var / Lit / Cast / CastExpr / UpcastExpr / InstanceOfExpr /
+    StaticFieldRef / NewPendingExpr 以类型化节点进入模拟栈，其余一律是 Raw 文本——Raw 的实际
+    类型由文本自身决定，模拟类型只作推断参考，标注反而有 E0308 风险，故省略。节点化后的调用 /
+    运算 / 访问器节点沿用同一规则（逐字节一致），由白名单统一判定，不再逐形态列举。"""
+    return not isinstance(value, (Var, Lit, Cast, CastExpr, UpcastExpr, InstanceOfExpr,
+                                  StaticFieldRef, NewPendingExpr))
 
 
 def is_clone_of_var(expr) -> bool:
