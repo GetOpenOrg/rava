@@ -469,7 +469,13 @@ def gen_method_body(
             lines.append(indent + render_stmt(item).lstrip())
 
     lines = _erase_boxed_ctor_type_args(lines)
-    lines = _fold_array_literals(lines)
+    # 本类静态字段 getter（`本类::字段()?`）：数组初始化器中读本类静态字段无副作用、重复读同值，
+    # 可参与折叠 / 去重（UnicodeScript.<clinit> 的 1657 元素脚本表只读约 160 个常量）
+    _own_short = short_cls(method.class_name)
+    _static_getters = frozenset(f'{_own_short}::{safe_ident(f.name)}'
+                                for f in (getattr(class_info, 'fields', None) or ())
+                                if getattr(f, 'is_static', False))
+    lines = _fold_array_literals(lines, _static_getters)
 
     # ── 构造器末尾返回 Ok(this) ────────────────────────────────────
     if is_ctor:

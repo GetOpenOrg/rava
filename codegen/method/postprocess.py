@@ -134,32 +134,70 @@ _OBJ_STR_ELEM_RE = re.compile(
 _STRS_CTORS = {'String': ('from_strs', _STR_ELEM_RE), 'Object': ('objects_from_strs', _OBJ_STR_ELEM_RE)}
 
 
+# 去重折叠阈值：元素数 ≥ 32 且不同值不超过一半时，发射「去重值表 + 下标常量数组」
+_DEDUP_MIN_LEN = 32
+_DEDUP_MARK = 'const __IDX: ['
+
+
 def _folded_literal(ind: str, var: str, elem_t: str, values: list[str]) -> str:
-    """折叠结果：字符串字面量表 → `JArray::from_strs(&[..])`；其余 → `JArray::from(vec![..])`。"""
+    """折叠结果：字符串字面量表 → `JArray::from_strs(&[..])`；重复率高的表 → 去重值表 +
+    下标常量数组（不同值按首次出现序求值一次；读本类静态字段 / 纯值重复求值同值）；其余 →
+    `JArray::from(vec![..])`。"""
     ctor = _STRS_CTORS.get(elem_t)
     if ctor is not None:
         lits = [ctor[1].match(v) for v in values]
         if all(lits):
             body = ', '.join(m.group(1) for m in lits)
             return f'{ind}let mut {var}: JArray<{elem_t}> = JArray::{ctor[0]}(&[{body}]);'
+    distinct: list[str] = []
+    index: dict[str, int] = {}
+    for v in values:
+        if v not in index:
+            index[v] = len(distinct)
+            distinct.append(v)
+    if len(values) >= _DEDUP_MIN_LEN and len(distinct) * 2 <= len(values) and len(distinct) <= 65535:
+        idx = ', '.join(str(index[v]) for v in values)
+        return (f'{ind}let mut {var}: JArray<{elem_t}> = {{\n'
+                f'{ind}    let __vals: [{elem_t}; {len(distinct)}] = [\n'
+                + '\n'.join(f'{ind}        {v},' for v in distinct)
+                + f'\n{ind}    ];\n'
+                f'{ind}    {_DEDUP_MARK}u16; {len(values)}] = [{idx}];\n'
+                f'{ind}    JArray::from(__IDX.iter().map(|&k| Clone::clone(&__vals[k as usize])).collect::<Vec<{elem_t}>>())\n'
+                f'{ind}}};')
     return (f'{ind}let mut {var}: JArray<{elem_t}> = {_FOLDED_MARK}\n'
             + '\n'.join(f'{ind}    {v},' for v in values)
             + f'\n{ind}]);')
 
 
-def _is_arr_intermediate(stmt: str) -> bool:
+def _getter_value_re(static_getters: frozenset):
+    """本类静态字段 getter 值形态：`X::f()?` / `Clone::clone(&X::f()?)` / 其 `Object::from` 包装。"""
+    if not static_getters:
+        return None
+    alts = '|'.join(re.escape(g) for g in sorted(static_getters))
+    call = r'(?:' + alts + r')\(\)\?'
+    return re.compile(r'^(?:' + call + r'|Clone::clone\(&' + call + r'\)'
+                      r'|Object::from\(Clone::clone\(&' + call + r'\)\))$')
+
+
+def _is_arr_intermediate(stmt: str, getter_re=None) -> bool:
     if '\n' in stmt or 'JArray::from_strs(' in stmt or 'JArray::objects_from_strs(' in stmt:
-        # 已折叠块（多行 vec! 形态或单行字符串切片形态）
+        # 已折叠块（多行 vec! / 去重表形态或单行字符串切片形态）
         return bool(re.match(r'^\s*let mut ' + _ARR_TMP + r':', stmt)) and (
-            _FOLDED_MARK in stmt or '_from_strs(' in stmt or 'from_strs(' in stmt)
+            _FOLDED_MARK in stmt or _DEDUP_MARK in stmt or '_from_strs(' in stmt or 'from_strs(' in stmt)
     if _ARR_DECL_RE.match(stmt):
         return True
     m = _ARR_SET_RE.match(stmt)
-    return bool(m) and bool(_PURE_VALUE_RE.match(m.group(4)))
+    return bool(m) and _foldable_value(m.group(4), getter_re)
 
 
-def _fold_array_literals(lines: list[str]) -> list[str]:
-    """数组初始化器折叠（条件见上）。输入输出均为语句列表（折叠块为含换行的单元素）。"""
+def _foldable_value(v: str, getter_re) -> bool:
+    return bool(_PURE_VALUE_RE.match(v)) or bool(getter_re is not None and getter_re.match(v))
+
+
+def _fold_array_literals(lines: list[str], static_getters: frozenset = frozenset()) -> list[str]:
+    """数组初始化器折叠（条件见上；static_getters 为本类静态字段 getter 路径 `X::f`，其读取
+    视同纯值）。输入输出均为语句列表（折叠块为含换行的单元素）。"""
+    getter_re = _getter_value_re(static_getters)
     stmts = list(lines)
     decls = [i for i, s in enumerate(stmts) if _ARR_DECL_RE.match(s)]
     for i in reversed(decls):              # 内层（后声明）先折叠
@@ -178,13 +216,13 @@ def _fold_array_literals(lines: list[str]) -> list[str]:
             s = stmts[j]
             sm = _ARR_SET_RE.match(s)
             if sm and sm.group(2) == var:
-                if int(sm.group(3)) != len(values) or not _PURE_VALUE_RE.match(sm.group(4)) \
+                if int(sm.group(3)) != len(values) or not _foldable_value(sm.group(4), getter_re) \
                         or ref_re.search(sm.group(4)):
                     ok = False
                     break
                 values.append(sm.group(4))
                 set_pos.append(j)
-            elif ref_re.search(s) or not _is_arr_intermediate(s):
+            elif ref_re.search(s) or not _is_arr_intermediate(s, getter_re):
                 ok = False
                 break
             j += 1
