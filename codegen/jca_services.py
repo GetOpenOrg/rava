@@ -24,6 +24,8 @@ class JcaManifest:
     providers: tuple = ()          # (provider 名, 注册类, Provider 子类)
     release: tuple = ()            # 放行的类 / 包前缀（`/` 结尾为包）
     triggers: frozenset = frozenset()   # (类, 成员名)
+    defaults: tuple = ()           # ((触发类, 成员名), 类型, 算法)：运行期配置决定的缺省服务
+    alias_sources: tuple = ()      # 算法同义名源类（类初始化器中每个构造调用的字符串实参组）
 
 
 @dataclass(frozen=True, order=True)
@@ -39,7 +41,10 @@ def load_manifest() -> JcaManifest:
     sec = seed_section('jca')
     provs = tuple((p['name'], p['class'], p['provider']) for p in sec.get('providers', []))
     triggers = frozenset(tuple(t.rsplit('.', 1)) for t in sec.get('triggers', []))
-    return JcaManifest(provs, tuple(jca_release_entries()), triggers)
+    defaults = tuple((tuple(d['trigger'].rsplit('.', 1)), *d['service'].split('.', 1))
+                     for d in sec.get('defaults', []))
+    return JcaManifest(provs, tuple(jca_release_entries()), triggers, defaults,
+                       tuple(sec.get('alias_sources', [])))
 
 
 def _str_lit(ins):
@@ -95,10 +100,75 @@ def user_algorithm_strings(user_infos) -> set:
     return out
 
 
-def select_services(services, algorithms: set, live_types: set) -> list:
-    """入选服务：类型的 engine 类在调用链上 且 算法名在用户字符串常量中。"""
+def alias_groups(load, manifest: JcaManifest | None = None) -> dict:
+    """算法同义名表：小写名 → 同组全部小写名。
+
+    数据源是清单 alias_sources 的类初始化器：每个构造调用（`invokespecial <init>`）之前、
+    自上一个构造调用 / 静态写起累积的字符串常量即一组同义名（KnownOIDs 枚举常量：
+    `SHA_1("1.3.14.3.2.26", "SHA-1", "SHA", "SHA1")`——常量名 / OID / 标准名 / 别名）。
+    组内含非算法串（常量名、OID）只会让同组名多一个等价入口，不影响选择精度。"""
+    mf = manifest or load_manifest()
+    out: dict = {}
+    for cls in mf.alias_sources:
+        ci = load(cls)
+        for m in (ci.methods if ci else ()):
+            if m.name != '<clinit>':
+                continue
+            group: list = []
+            for ins in (m.instrs or []):
+                v = _str_lit(ins)
+                if v:
+                    group.append(v.lower())
+                    continue
+                op = ins.opcode or ''
+                if op == 'invokespecial' and '<init>' in (ins.comment or ''):
+                    names = set(group)
+                    for n in names:
+                        out.setdefault(n, set()).update(names)
+                    group = []
+                elif op == 'putstatic':
+                    group = []
+    return out
+
+
+# engine 调用参数窗口：`ldc 算法; [ldc provider;] invokestatic <Engine>.getInstance`
+_ENGINE_ARG_WINDOW = 3
+
+
+def engine_call_strings(instrs, types: set) -> set:
+    """方法体中紧邻 `<engine 类>.getInstance` 静态调用之前的字符串常量（算法名 / provider 名）。
+    engine 类按 JCA 约定：简单名 == 服务类型。"""
+    out: set = set()
+    seq = [x for x in (instrs or []) if x.opcode]
+    for k, ins in enumerate(seq):
+        if ins.opcode != 'invokestatic':
+            continue
+        c = ins.comment or ''
+        if not c.startswith('Method '):
+            continue
+        owner_member = c[len('Method '):].split(':', 1)[0]
+        owner, _, member = owner_member.rpartition('.')
+        if member != 'getInstance' or owner.rsplit('/', 1)[-1] not in types:
+            continue
+        for prev in seq[max(0, k - _ENGINE_ARG_WINDOW):k]:
+            v = _str_lit(prev)
+            if v:
+                out.add(_algorithm_key(v))
+    return out
+
+
+def select_services(services, algorithms: set, live_types: set, aliases: dict | None = None,
+                    forced: set | None = None) -> list:
+    """入选服务：类型的 engine 类在调用链上 且 算法名（或其同义名）在候选算法串中；
+    forced 为 (类型, 算法) 缺省服务（触发成员在链上即入选）。"""
+    aliases = aliases or {}
+    forced = forced or set()
+
+    def _hit(s) -> bool:
+        a = s.algorithm.lower()
+        return a in algorithms or bool(aliases.get(a, set()) & algorithms)
     return [s for s in services
-            if s.type in live_types and s.algorithm.lower() in algorithms]
+            if (s.type, s.algorithm) in forced or (s.type in live_types and _hit(s))]
 
 
 def released(cls: str, manifest: JcaManifest) -> bool:

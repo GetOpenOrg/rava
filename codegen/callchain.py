@@ -1041,14 +1041,30 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         _jca_services: list = []
         _jca_algos: set = set()
         _jca_seeded: set = set()
+        _jca_aliases: dict = {}
+        _jca_scanned: set = set()
 
         def _seed_jca_services() -> bool:
-            from .jca_services import extract_services, select_services, user_algorithm_strings
+            from .jca_services import (extract_services, select_services, user_algorithm_strings,
+                                       alias_groups, engine_call_strings)
             if not _jca_services:
                 _jca_services.extend(extract_services(_load_class, _JCA_MANIFEST) or [None])
                 _jca_algos.update(user_algorithm_strings(class_infos))
+                _jca_aliases.update(alias_groups(_load_class, _JCA_MANIFEST))
+            _types = {x.type for x in _jca_services if x}
+            # 链上 JDK 方法里 engine getInstance 调用的字符串实参（JDK 自身按名取服务）
+            for _k in list(visited_methods):
+                if _k in _jca_scanned or _k[0] in user_names:
+                    continue
+                _jca_scanned.add(_k)
+                _kci = jdk_infos.get(_k[0])
+                for _m in (_kci.methods if _kci else ()):
+                    if _m.name == _k[1] and _m.descriptor == _k[2]:
+                        _jca_algos.update(engine_call_strings(_m.instrs, _types))
+            _forced = {(t, a) for (trig, t, a) in _JCA_MANIFEST.defaults if trig in seen_members}
             _live = {k[0].rsplit('/', 1)[-1] for k in visited_methods}
-            _new = [sv for sv in select_services([x for x in _jca_services if x], _jca_algos, _live)
+            _new = [sv for sv in select_services([x for x in _jca_services if x], _jca_algos, _live,
+                                                 _jca_aliases, _forced)
                     if sv not in _jca_seeded]
             from .jca_services import provider_class
             for sv in _new:
@@ -1274,7 +1290,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     and any(t in seen_members for t in _ls_mf.triggers)):
                 _bundles_seeded = True
                 _seed_data_bundles()
-            if (not queue and any(t in seen_members for t in _JCA_MANIFEST.triggers)):
+            if (not queue and any(t in seen_members for t in _JCA_MANIFEST.triggers)
+                    or not queue and any(d[0] in seen_members for d in _JCA_MANIFEST.defaults)):
                 _seed_jca_services()
             if not queue and any(t in seen_members for t in _ANNO_TRIGGERS):
                 _seed_annotation_types()

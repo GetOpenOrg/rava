@@ -100,3 +100,15 @@ pub fn provider(name: &str) -> Result<Option<Object>> {
         made
     })))
 }
+
+/// 全部已登记 provider（登记序 = 优先序，逐个按需构造）——`ProviderList.providers()` 的等价物。
+pub fn all_providers() -> Result<Vec<Object>> {
+    let names: Vec<&'static str> = PROVIDER_CTORS.with(|c| c.borrow().iter().map(|(n, _)| *n).collect());
+    let mut out = Vec::new();
+    for n in names {
+        if let Some(p) = provider(n)? {
+            out.push(p);
+        }
+    }
+    Ok(out)
+}

@@ -778,7 +778,10 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         _jca_lines = [f'        ("{_sv.type}", "{_sv.algorithm}", "{_sv.impl}", "{_sv.provider}"),'
                       for _sv in _jca_seeds]
         _prov_lines = []
-        for _pn in sorted({_sv.provider for _sv in _jca_seeds}):
+        from ..jca_services import load_manifest as _jca_mf
+        _seeded_provs = {_sv.provider for _sv in _jca_seeds}
+        # 清单序 = provider 优先序（JDK security.provider.N）
+        for _pn in [p[0] for p in _jca_mf().providers if p[0] in _seeded_provs]:
             _pc = _provider_class(_pn)
             if _pc:
                 _prov_lines.append(

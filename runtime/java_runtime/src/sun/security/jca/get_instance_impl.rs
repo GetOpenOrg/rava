@@ -78,6 +78,33 @@ impl GetInstance {
         Err(failure.expect("非空服务列表"))
     }
 
+    /// `getInstance(String type, Class<?> clazz, String algorithm, String provider)`：JDK
+    /// `getService(type, algorithm, provider)` 同一校验与异常形态——provider 名空 →
+    /// IllegalArgumentException("missing provider")；未登记 → NoSuchProviderException("no such
+    /// provider: " + provider)；该 provider 无此服务 → NoSuchAlgorithmException("no such
+    /// algorithm: " + algorithm + " for provider " + provider)。
+    #[jvm_boundary(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V java/security/NoSuchProviderException.<init>:(Ljava/lang/String;)V java/security/NoSuchAlgorithmException.<init>:(Ljava/lang/String;)V java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service; java/security/Provider$Service.newInstance:(Ljava/lang/Object;)Ljava/lang/Object; java/security/Provider$Service.getProvider:()Ljava/security/Provider;")]
+    pub fn getInstance_str_class_str_str(type_: String, _clazz: Class, algorithm: String, provider: String) -> Result<GetInstance_Instance> {
+        if provider.is_jvm_null() || provider.length()? == 0 {
+            let ex = crate::java::lang::IllegalArgumentException::new_str(String::from("missing provider"))?;
+            return Err(ex.into());
+        }
+        let pname = format!("{}", provider);
+        let Some(p) = crate::jca::provider(&pname)? else {
+            let ex = crate::java::security::NoSuchProviderException::new_str(
+                String::from(format!("no such provider: {}", pname).as_str()))?;
+            return Err(ex.into());
+        };
+        let p = <Provider as ::std::convert::From<Object>>::from(p);
+        let s = p.getService(type_, Clone::clone(&algorithm))?;
+        if s.is_jvm_null() {
+            let ex = crate::java::security::NoSuchAlgorithmException::new_str(
+                String::from(format!("no such algorithm: {} for provider {}", algorithm, pname).as_str()))?;
+            return Err(ex.into());
+        }
+        instance_of(&s)
+    }
+
     /// `getServices(List<ServiceId>)`：按候选序（transformation 由具体到一般）收集已登记服务；
     /// 无匹配 → 空表（Cipher 据此抛 `NoSuchAlgorithmException("Cannot find any provider
     /// supporting ..")`，走翻译字节码）。

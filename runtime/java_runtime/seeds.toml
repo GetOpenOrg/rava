@@ -58,11 +58,18 @@ triggers = [
 #                    服务查找时按需构造一次，服务描述 / 属性 / newInstance 全走翻译字节码）
 #   release_packages / release_classes
 #                    从边界前缀放行、按字节码翻译（算法实现是纯 Java 计算；形态同 closure.toml [release]）
-#   triggers         调用链触达该成员（手写边界的服务查找入口）才补种服务实现类
+#                    列表序即 provider 优先序（JDK java.security 的 security.provider.N 次序：SUN 在先）
+#   triggers         调用链触达该成员（手写边界的服务查找入口）才补种服务实现类；候选算法名 =
+#                    用户类字符串常量 ∪ 链上 JDK 方法里 `<engine>.getInstance` 调用前的字符串实参
+#                    （sun.security.provider.SecureRandom 的 `MessageDigest.getInstance("SHA", "SUN")`）
+#   defaults         算法名由 JDK 运行期配置得出、不出现在任何字符串常量中的缺省服务：触发成员在
+#                    调用链上即入选（`类型.算法`）
+#   alias_sources    算法同义名源（类初始化器中每个构造调用的字符串实参组 = 一组同义名）：用户写
+#                    别名（"SHA" / "SHA1"）时按标准名（"SHA-1"）入选服务
 [jca]
 providers = [
-    { name = "SunJCE", class = "com/sun/crypto/provider/SunJCE", provider = "com/sun/crypto/provider/SunJCE" },
     { name = "SUN", class = "sun/security/provider/SunEntries", provider = "sun/security/provider/Sun" },
+    { name = "SunJCE", class = "com/sun/crypto/provider/SunJCE", provider = "com/sun/crypto/provider/SunJCE" },
 ]
 release_packages = [
     "com/sun/crypto/provider/",
@@ -91,6 +98,14 @@ release_classes = [
     "java/security/KeyException",
     "java/security/InvalidKeyException",
     "java/security/InvalidAlgorithmParameterException",
+]
+defaults = [
+    # SecureRandom 缺省 PRNG：SunEntries.DEF_SECURE_RANDOM_ALGO 由 securerandom.source（JDK 默认
+    # file:/dev/random）与 NativePRNG.isAvailable() 运行期得出——Linux 上即 NativePRNG
+    { trigger = "java/security/SecureRandom.getDefaultPRNG", service = "SecureRandom.NativePRNG" },
+]
+alias_sources = [
+    "sun/security/util/KnownOIDs",
 ]
 triggers = [
     "sun/security/jca/GetInstance.getInstance",
