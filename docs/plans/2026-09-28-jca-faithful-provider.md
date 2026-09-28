@@ -42,11 +42,23 @@ FS-H0 审计线余项里 JCA 组 17 处越界覆盖：
 
 ## 三、分步
 
-| 步 | 内容 | 覆盖 |
-|----|------|------|
-| J1 | Provider / Service 回到字节码（本文二） | −8 |
-| J2 | SecureRandom：`new SecureRandom()` 经 `getDefaultPRNG` → provider 列表（SUN 的 NativePRNG，翻译字节码读 `/dev/urandom`），删 9 处覆盖与 `Provider.__for_name` 过渡辅助 | −9 |
-| J3 | `JceSecurity`（VM 边界类，6 处）：评估策略文件读取面，保持「JDK 默认安装 = unlimited」可观测等价 | 待评估 |
+| 步 | 内容 | 覆盖 | 状态 |
+|----|------|------|------|
+| J1 | Provider / Service 回到字节码（本文二）；补 `SecurityConstants.PROVIDER_VER`、放行 `SecurityProviderConstants` / `KnownOIDs` / file 协议 `Handler` / `IPAddressUtil`；反射构造面补发 `<alloc>` 臂 | −8 | ✅ TestCipherDesModes / Digester PASS |
+| J2 | SecureRandom 回到字节码：`getDefaultPRNG` 经手写边界 `Providers` / `ProviderList`（登记序 = 优先序，SUN 在先）取 SUN 的 NativePRNG；删 `secure_random_impl.rs` / `provider_impl.rs`；`GetInstance` 按 provider 名重载 | −9 | ✅ SecurityDemo / TestSecureRandomApi PASS |
+| J3 | `JceSecurity`：VM 耦合边界类（closure.toml [vm_boundary]），手写方法改入 `vm_boundary_methods` 单独计数 | 移出越界计数 | ✅ |
+
+J2 的种子补充（`codegen/jca_services.py`）：
+
+- `defaults`：算法名由 JDK 运行期配置得出的缺省服务（`SecureRandom.getDefaultPRNG` → `SecureRandom.NativePRNG`）；
+- `alias_sources`：`KnownOIDs.<clinit>` 每个构造调用的字符串实参组 = 一组同义名（"SHA" / "SHA1" → "SHA-1"）；
+- 链上 JDK 方法里 `<engine>.getInstance` 调用前的字符串实参（`sun.security.provider.SecureRandom.init` 的
+  `MessageDigest.getInstance("SHA", "SUN")`）；
+- 入选实现类的**全部**构造器入链：`newInstance` 按服务类型的 `EngineDescription.constructorParameterClass`
+  选构造器（SecureRandom 为 `(SecureRandomParameters)`）。
+
+代价：`Cipher.init(opmode, key)` 经 `JCAUtil.getDefSecureRandom()` 真实构造 SecureRandom（JDK 同），
+Cipher 类测试的闭包随之含 SUN provider 与 NativePRNG；SecurityDemo 等需 `CARGO_BUILD_JOBS=1` 编译。
 
 ## 四、验收
 
