@@ -2,7 +2,7 @@
 
 > 关联：过渡态清单 FS-Q1、N4 TypeIR（G1 `from_rs_type` 已就绪）、N8（rustc 峰值内存）、R0（`ir` crate 规格）。
 
-## 一、现状（2026-09-28，`JAVA_RTA_RAW_SITES` 位点剖面，TestArrayList）
+## 一、现状（2026-09-28，`RAVA_RAW_SITES` 位点剖面，TestArrayList）
 
 `raw_stmt=76629`、`raw_expr=40830`。高度集中：
 
@@ -37,7 +37,7 @@
 | Q1-d | 语句层类型化：`LetStmt(v, value=TryExpr(..))` / `ExprStmt(TryExpr(..))` 替代 RawStmt（进入变量提升 / 可变性分析） | 编译 + 定向 e2e（≤10 例，`CARGO_BUILD_JOBS=1`）；`[raw-audit]` 与位点剖面按位点下降 |
 | Q1-e | getfield / putfield、数组存取、returns、`_clone_moved_var` 同构推进 | 同 Q1-c / Q1-d |
 
-每批：`JAVA_RTA_RAW_SITES` 位点剖面前后对照，趋势只降不升。
+每批：`RAVA_RAW_SITES` 位点剖面前后对照，趋势只降不升。
 
 ## 四、风险
 

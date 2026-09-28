@@ -62,7 +62,7 @@
 | **S2 invoke 域收敛** | TypeIR 批次 3 → M-3 试点 → T-1 | type_surgery 27→个位数；M-3 试点结论入档（成败两案都写） | 待启 |
 | **S3 窗口 3 + 语义按需件** | G-1/G-2/G-3 迁 rs_ir；S 族按需收口；JDK25 适配轮 | 窗口 3 终态指标（拆分方案 §五）；G-2 让「未初始化即使用」从静默 `Default::default()` 变编译错误 | 待启 |
 | **S4 重写预备** | P-1 清零（三张表→动态解析）+ 纯核提取 + **三信号评估拍板** | R0 门槛全部满足，重写决策正式生效 | 待启 |
-| **重写期 R0–R10** | 按既有方案逐 crate 移植（golden corpus → java_rta_gen 拆库 → classfile→ty→resolve→ir→sim→cfg→instr→emit→driver → 双跑切默认删 Python） | 每阶段 golden diff 归零；差异清单归零 = Python 退役条件 | 方案定稿未开工 |
+| **重写期 R0–R10** | 按既有方案逐 crate 移植（golden corpus → rava_gen 拆库 → classfile→ty→resolve→ir→sim→cfg→instr→emit→driver → 双跑切默认删 Python） | 每阶段 golden diff 归零；差异清单归零 = Python 退役条件 | 方案定稿未开工 |
 
 **关键提醒——行为冻结的机会成本**：重写期语义 bug 只修 Python 侧（真相源规则），冻结窗口内做不了语义特性。**想做的语义特性（尤其线程模型方向）应在 S1–S3 前置消化**，能显著缩短冻结期。
 

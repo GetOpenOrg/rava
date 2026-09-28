@@ -43,7 +43,7 @@ rava/
         java/util/array_list_impl.rs           # companion 手写
         java/util/function/{bi_consumer,binary_operator,function,supplier}.rs
         jdk/internal/.../*.rs                  # internal_lock_impl 等
-    java_rta_macros/             # 提交：整个 crate（lib.rs + block.rs + Cargo.toml）
+    rava_macros/             # 提交：整个 crate（lib.rs + block.rs + Cargo.toml）
   build/                         # 不提交（gitignore）— scratch 根
     target/                      # 共享编译缓存（CARGO_TARGET_DIR）
     <test_name>/                 # 每测试独立工作区
@@ -62,7 +62,7 @@ rava/
    ★ 必须在 codegen 之前：codegen 的 _scan_impl_files 扫描 _impl.rs 生成
      new_format_map（决定哪些方法跳过存根），手写不就位则扫描结果错误
 3. codegen 生成：类文件 + mod.rs + user/src + Cargo.toml
-   （java_rta_macros 不复制，Cargo.toml 里用 path 依赖指向 runtime/java_rta_macros，
+   （rava_macros 不复制，Cargo.toml 里用 path 依赖指向 runtime/rava_macros，
      避免两份副本漂移）
 4. CARGO_TARGET_DIR=build/target cargo run --bin <test>
 ```
@@ -86,7 +86,7 @@ rava/
 
 - 新增 `--scratch <dir>`（缺省 `build/<主类snake名>`）
 - 转译前执行 overlay（`shutil.copytree(..., dirs_exist_ok=True)`）
-- 生成 workspace `Cargo.toml`：`java_rta_macros = { path = "<repo>/runtime/java_rta_macros" }`
+- 生成 workspace `Cargo.toml`：`rava_macros = { path = "<repo>/runtime/rava_macros" }`
 
 ### 5.3 `scripts/run_tests.py`
 
@@ -111,10 +111,10 @@ rava/
 | Arch-1 接口存根 | `java/util/function/{bi_consumer,binary_operator,function,supplier}.rs` |
 | companion `_impl` | `java/lang/{object_impl,string_ext,system_impl,double_impl,throwable_impl,thread_impl,math_impl,float_impl,null_pointer_exception_impl}.rs`、`java/util/array_list_impl.rs`、`java/io/print_stream_impl.rs`、`jdk/internal/misc/internal_lock_impl.rs`、`jdk/internal/util/{arrays_support_impl,preconditions_impl}.rs` |
 | companion `_ext` | `java/lang/object_ext.rs` |
-| 宏 crate | `java_rta_macros/`（Cargo.toml + lib.rs + block.rs） |
+| 宏 crate | `rava_macros/`（Cargo.toml + lib.rs + block.rs） |
 | 构建文件 | 根 Cargo.toml（模板化）、java_runtime/Cargo.toml |
 
-判别规则（迁移脚本用）：`.rs` 且不含 `java_rta_macros::java_class` 标记 且非 `mod.rs`。
+判别规则（迁移脚本用）：`.rs` 且不含 `rava_macros::java_class` 标记 且非 `mod.rs`。
 
 ## 7 收益
 

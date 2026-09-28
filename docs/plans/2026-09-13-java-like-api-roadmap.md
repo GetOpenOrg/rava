@@ -178,7 +178,7 @@ pub fn get_typed<E: Clone + Into<Object> + From<Object> + 'static>(
 
 字节码翻译生成的代码调用 `_obj` 后缀版本，用户代码调用干净版本。
 
-### 3.3 proc-macro crate `java_rta_macros`
+### 3.3 proc-macro crate `rava_macros`
 
 新建 proc-macro crate，替换 `cfg_attr(any(), java_class(...))` 为真正激活的 attribute macro。
 
@@ -244,7 +244,7 @@ impl<E: Clone + Into<Object> + From<Object> + 'static> ArrayList<E> {
 用户只需写这些，宏生成其余所有样板：
 
 ```rust
-use java_rta_macros::java_class;
+use rava_macros::java_class;
 use java_runtime::prelude::*;
 
 #[java_class(binary_name = "com/example/Person")]
@@ -395,7 +395,7 @@ System::out().println(list.size()?)?;          // ← Java: System.out.println(l
 
 ### Phase C：proc-macro crate（架构性改造）
 
-**C-1：新建 `java_rta_macros` crate**  
+**C-1：新建 `rava_macros` crate**  
 - 新建 proc-macro crate，加入 workspace
 - 复杂度：低（框架搭建）
 
@@ -436,7 +436,7 @@ C-1~C-4 (proc-macro)  → 架构完善，中长期目标
 use jdk_classes::java::util::*;
 use jdk_classes::java::lang::*;
 use java_runtime::prelude::*;
-use java_rta_macros::java_class;
+use rava_macros::java_class;
 
 #[java_class(binary_name = "com/example/Person")]
 #[derive(Clone, Default)]

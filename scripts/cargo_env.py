@@ -6,9 +6,9 @@
 import os
 from pathlib import Path
 
-# 生成类文件数阈值（带 java_class 生成标记的 .rs；可经 JAVA_RTA_HEAVY_CLASSES 覆盖）
-HEAVY_CLASSES = int(os.environ.get('JAVA_RTA_HEAVY_CLASSES', '1700'))
-_GEN_MARKER = b'java_rta_macros::java_class'
+# 生成类文件数阈值（带 java_class 生成标记的 .rs；可经 RAVA_HEAVY_CLASSES 覆盖）
+HEAVY_CLASSES = int(os.environ.get('RAVA_HEAVY_CLASSES', '1700'))
+_GEN_MARKER = b'rava_macros::java_class'
 
 
 def generated_class_count(ws: Path) -> int:

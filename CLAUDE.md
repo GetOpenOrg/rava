@@ -158,7 +158,7 @@ BFS 调用链分析规则：
 ```
 runtime/                            # 提交到 git：手写代码唯一真源
 ├── java_runtime/
-│   ├── Cargo.toml                  # 宏依赖为 path = "<repo>/runtime/java_rta_macros"
+│   ├── Cargo.toml                  # 宏依赖为 path = "<repo>/runtime/rava_macros"
 │   ├── build.rs                    # 维护 native_status.toml
 │   └── src/
 │       ├── lib.rs / error.rs       # VM 基础设施（java/jdk/sun 顶层 mod 声明）
@@ -169,7 +169,7 @@ runtime/                            # 提交到 git：手写代码唯一真源
 │       │   └── ...
 │       ├── java/util/function/     # Arch-1 接口存根（4 个）
 │       └── jdk/internal/...        # 内部边界类（完整手写）
-└── java_rta_macros/                # proc-macro crate（java_class! 块级宏）
+└── rava_macros/                # proc-macro crate（java_class! 块级宏）
 
 build/                              # gitignore：每测试一次性 scratch
 ├── target/                         # 共享编译缓存（CARGO_TARGET_DIR）
@@ -182,8 +182,8 @@ build/                              # gitignore：每测试一次性 scratch
 **规则**：
 - 生成代码**永不提交**；仓库里只有 `runtime/` 手写真源
 - 每次转译（`scripts/main.py`）流程：清空或复用 scratch → overlay `runtime/` → codegen → cargo
-- 手写文件靠「无 `java_rta_macros::java_class` 生成标记」识别，codegen 不会覆盖它们
-- `java_rta_macros` 不复制进 scratch，以绝对 path 依赖参与编译（共享 target 下缓存命中）
+- 手写文件靠「无 `rava_macros::java_class` 生成标记」识别，codegen 不会覆盖它们
+- `rava_macros` 不复制进 scratch，以绝对 path 依赖参与编译（共享 target 下缓存命中）
 
 ## 常用命令
 

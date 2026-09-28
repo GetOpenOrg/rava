@@ -469,7 +469,7 @@ def _java_method_attr(m: ParsedMethod) -> str:
 
     方法一律写在 `java_class! { impl ... }` 块内，必须用单段路径
     `#[java_method(...)]` / `#[java_native(...)]`——块级宏按 ident 匹配并剥离这些
-    元数据属性，不会把它们透传给方法（两段路径 `java_rta_macros::java_method`
+    元数据属性，不会把它们透传给方法（两段路径 `rava_macros::java_method`
     匹配不上，会被当作真实属性宏重新施加在方法上，而同名 proc-macro 已删除）。
 
     注意：这两个标签是纯文本，同名 proc-macro 不存在；build.rs 按文本前缀

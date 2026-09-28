@@ -212,8 +212,8 @@ def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple
                 continue
 
             # 自动生成的类文件碰巧以 _impl.rs 结尾时（如 Collectors$CollectorImpl），跳过。
-            # 真正的手写共置文件不包含 java_rta_macros::java_class 宏标注。
-            if 'java_rta_macros::java_class' in content:
+            # 真正的手写共置文件不包含 rava_macros::java_class 宏标注。
+            if 'rava_macros::java_class' in content:
                 continue
 
             # 扫描 pub fn 名字（确定已手写哪些方法，codegen 跳过对应 stub）

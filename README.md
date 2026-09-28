@@ -103,7 +103,7 @@ impl HelloWorld {
 rava/
 ├── scripts/
 │   ├── main.py                  # CLI 入口
-│   ├── java_rta.py              # RTA 可达性分析
+│   ├── rta.py              # RTA 可达性分析
 │   └── codegen/
 │       ├── classfile.py         # .class 二进制解析
 │       ├── cfg.py               # 控制流图 + 循环检测
@@ -114,7 +114,7 @@ rava/
 │       ├── type_map.py          # Java → Rust 类型映射
 │       └── runtime.py           # 运行时类型定义（java_runtime/）
 ├── tests/                       # 测试用 Java 源文件
-├── runtime/                     # 手写代码唯一真源（java_runtime + java_rta_macros，提交 git）
+├── runtime/                     # 手写代码唯一真源（java_runtime + rava_macros，提交 git）
 ├── docs/
 │   ├── tasks.md                 # 任务管理（当前活跃，只含开放项）
 │   ├── tasks-history.md         # 任务历史文档（T01-T81，已归档）

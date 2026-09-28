@@ -1,7 +1,7 @@
 # 转译器异常兜底过宽审计报告（纯审计，未修改任何文件）
 
 > 2026-09-23，纯审计代理交付（主会话入档）。方法：全量 grep + 逐点读码分类；
-> 7 次语料 transpile（`--no-run`，scratch 与日志全部落 `/tmp/java_rta_audit/`，
+> 7 次语料 transpile（`--no-run`，scratch 与日志全部落 `/tmp/rava_audit/`，
 > 其中 4 次带进程内 monkeypatch 仪表计数「异常逃逸点」）+ 1 次 K-6b 注入模拟
 > 实验，共 8 次转译调用。副作用说明：transpile 会重写
 > `docs/reports/jdk-scan-<Test>.md`（既有机制，内容同源覆写）。
@@ -17,12 +17,12 @@
 | 1 | class_writer.py:232 | `_emit_method_blocks` 接口 lambda 体（G-10） | stub | cfg-audit 计数，**无位点标记、无 traceback** |
 | 2 | class_writer.py:267 | 接口私有实例方法 | stub | 标记 `(iface-private)`，无 traceback |
 | 3 | class_writer.py:363 | 接口 default 载体体 | 降为 None→纯声明 | 标记 `(iface-default)`，无 traceback |
-| 4 | class_writer.py:427 | **主循环普通方法体** | stub | 无标记；JAVA_RTA_DEBUG 有 traceback |
+| 4 | class_writer.py:427 | **主循环普通方法体** | stub | 无标记；RAVA_DEBUG 有 traceback |
 | 5 | class_writer.py:584 | `_emit_interface_default_inheritance` | stub | 无标记 |
 | 6 | class_writer.py:657 | `_emit_interface_special_members`（Iface.super.m） | stub | 无标记 |
 | 7 | class_writer.py:825 | 超类虚继承 **bridge 体** | 跳过或 stub | 标记 `(bridge)` |
 | 8 | class_writer.py:848 | 超类虚继承普通体 | stub | 无标记 |
-| 9 | clinit_extract.py:129 | `<clinit>` → `__clinit` | stub | 无标记；JAVA_RTA_DEBUG 有 traceback |
+| 9 | clinit_extract.py:129 | `<clinit>` → `__clinit` | stub | 无标记；RAVA_DEBUG 有 traceback |
 
 附加缺陷：`audit.py:71 record_stub_fallback` 按 method_id 去重——同一方法在多个位点触发只计 1 次，且抹掉位点信息。
 
@@ -78,7 +78,7 @@ gen_method_body (method/codegen.py:228) 内部：
  └─ 主渲染 render_stmt (codegen.py:447)：异常上浮（正确）
 ```
 
-**JAVA_RTA_DEBUG=1 现状**：① class_writer.py:431 主路径 traceback；② clinit_extract.py:132 traceback；③ main.py:175-177 stub_fallback 全列（method_id+repr）；④ callchain.py:638 unresolved 调用列。**缺口**：其余 6 吞点无 traceback；`run_tests.py` 汇总只解析 readability/equiv/raw，**stub_fallback 计数未进 runner 聚合与 --deny 体系**；B 组零计数。
+**RAVA_DEBUG=1 现状**：① class_writer.py:431 主路径 traceback；② clinit_extract.py:132 traceback；③ main.py:175-177 stub_fallback 全列（method_id+repr）；④ callchain.py:638 unresolved 调用列。**缺口**：其余 6 吞点无 traceback；`run_tests.py` 汇总只解析 readability/equiv/raw，**stub_fallback 计数未进 runner 聚合与 --deny 体系**；B 组零计数。
 
 ## 三、量化抽样（7 语料 + 1 注入实验）
 
@@ -105,10 +105,10 @@ gen_method_body (method/codegen.py:228) 内部：
 - **B 组**：sig_parse/type_map 三点收窄为 `(ValueError, IndexError)`；vars.py 五点先加计数（render 失败必是 bug，strict 下直接穿透）；sam_objects 两点收窄为 `(ValueError, IndexError)`；callchain 五点 parse 失败改计数+警告清单。
 - **C 组**：保留不动。
 
-### 4.2 JAVA_RTA_STRICT 分级（复用 build.rs 既有钩子）
-build.rs 已消费 `JAVA_RTA_STRICT`（build.rs:30,72：needed-native 从 warning 升 cargo::error）。扩展到转译器：`strict=1` 九点全穿（无 stub 兜底）+ B 组白名单化；**默认**=白名单兜底+计数；`JAVA_RTA_DEBUG=1`=默认之上九点全打 traceback + B 组计数明细。落点：class_writer/clinit_extract 顶部单点读 env 决定 `_FALLBACK_EXC = tuple()` 或 `(CfgError,)`，main.py 零改动。
+### 4.2 RAVA_STRICT 分级（复用 build.rs 既有钩子）
+build.rs 已消费 `RAVA_STRICT`（build.rs:30,72：needed-native 从 warning 升 cargo::error）。扩展到转译器：`strict=1` 九点全穿（无 stub 兜底）+ B 组白名单化；**默认**=白名单兜底+计数；`RAVA_DEBUG=1`=默认之上九点全打 traceback + B 组计数明细。落点：class_writer/clinit_extract 顶部单点读 env 决定 `_FALLBACK_EXC = tuple()` 或 `(CfgError,)`，main.py 零改动。
 
 ### 4.3 审计线归属
 **A 组并入 [cfg-audit]**（同生命周期、同 AuditStats、与 stub 语义同族）：summary 扩为 `stub_fallback=N(main=a,clinit=b,lambda=c,…|exc.CfgError=x,exc.TypeError=y)`，九点统一加位点标记（现只有 3 个标记）；`record_stub_fallback` 去重键改 `(method_id, site)`。**B 组新增 [fallback-audit]**（equiv_audit 同款 record/summary/reset 模式，run_tests 加解析+汇总+`--deny fallback` 升级）——因其语义是「非 stub 质量降级」，塞进 cfg-audit 会混淆既有契约。
 
-**关键文件**：`codegen/emitter/class_writer.py`、`codegen/emitter/clinit_extract.py`、`codegen/cfg/audit.py`、`codegen/method/codegen.py`、`codegen/method/vars.py`、`codegen/sig_parse.py`、`codegen/callchain.py`、`scripts/main.py`、`scripts/run_tests.py`、`runtime/java_runtime/build.rs`。抽样日志：`/tmp/java_rta_audit/logs/`，仪表脚本：`/tmp/java_rta_audit/instr_run.py`。
+**关键文件**：`codegen/emitter/class_writer.py`、`codegen/emitter/clinit_extract.py`、`codegen/cfg/audit.py`、`codegen/method/codegen.py`、`codegen/method/vars.py`、`codegen/sig_parse.py`、`codegen/callchain.py`、`scripts/main.py`、`scripts/run_tests.py`、`runtime/java_runtime/build.rs`。抽样日志：`/tmp/rava_audit/logs/`，仪表脚本：`/tmp/rava_audit/instr_run.py`。

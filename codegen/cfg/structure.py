@@ -142,7 +142,7 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
         if y == flow.entry:
             continue
         d = flow.idom[y]
-        if os.environ.get('JAVA_RTA_CFG_DEBUG'):
+        if os.environ.get('RAVA_CFG_DEBUG'):
             print(f"[cfg-dbg] y={y} pc={nodes[y].start_pc} kind={nodes[y].kind} d={d} "
                   f"ctx_y={sorted(ctx_of(y))} ctx_d={sorted(ctx_of(d))} "
                   f"in_try_slots={y in {s for sl in try_slots.values() for s in sl}}")
@@ -230,7 +230,7 @@ def structure(nodes: dict, flow: FlowAnalysis) -> list:
         if lexical != ctx_of(y):
             raise CfgError(f"块 pc={nodes[y].start_pc} 的 try 区域与控制流不成嵌套结构"
                            f"（kind={nodes[y].kind} 词法={sorted(lexical)} 实际={sorted(ctx_of(y))}）")
-        if os.environ.get('JAVA_RTA_CFG_DEBUG'):
+        if os.environ.get('RAVA_CFG_DEBUG'):
             _which = ('try_follower' if parent_try is not None else
                       'loop_follower' if parent_loop is not None else
                       'in_follower' if y in follower_set else 'inline')

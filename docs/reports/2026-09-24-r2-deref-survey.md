@@ -18,10 +18,10 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| `__into_super()` 方法 | **不存在**：宏不生成，Python 不发射，`build/jdk21/*` 生成物 0 处 | `grep -rn into_super runtime/java_rta_macros/src` 为空；生成物 grep 为空 |
+| `__into_super()` 方法 | **不存在**：宏不生成，Python 不发射，`build/jdk21/*` 生成物 0 处 | `grep -rn into_super runtime/rava_macros/src` 为空；生成物 grep 为空 |
 | `__super()` 方法 | **不存在**：`_super` 嵌套已被「平铺字段」取代（`struct_layout.rs:24`「继承字段（平铺，不再有 _super）」） | `codegen/instr/hierarchy.py:234` `_super_prefix_to_expr` 在 `invoke.py:33` 被 import，但**没有调用点，是死代码** |
 | `class_writer.py` 的 From 链（T55） | 已删除，只剩注释 `class_writer.py:1287-1293`，而且注释内容写错了（说「由 `__into_super()` 链替代」「宏生成 Deref」，两者都不成立） | — |
-| **实际的 From 链** | **宏** `runtime/java_rta_macros/src/block/gen/type_conversions.rs:111-172`（§10）：对 `all_superclasses` 里的每个祖先生成 `impl From<Self> for Ancestor`（非泛型祖先直接生成；泛型祖先走 A-1 γ' 形态，对祖先的任意实参都成立），实现为 `Ancestor::__from_parts(child.vtable as Rc<dyn Ancestor__VTable>, child.any, child._jvm_null)` | 禁改域 |
+| **实际的 From 链** | **宏** `runtime/rava_macros/src/block/gen/type_conversions.rs:111-172`（§10）：对 `all_superclasses` 里的每个祖先生成 `impl From<Self> for Ancestor`（非泛型祖先直接生成；泛型祖先走 A-1 γ' 形态，对祖先的任意实参都成立），实现为 `Ancestor::__from_parts(child.vtable as Rc<dyn Ancestor__VTable>, child.any, child._jvm_null)` | 禁改域 |
 | 宏内部的其他消费方 | `wrapper.rs:163-200`：`__view_as` / `__view_into` 的祖先臂复用 `<Anc as From<Self>>::from`（catch 按运行时类还原、`Object::downcast::<T>` 都要用） | 禁改域 |
 | 已有的 Deref | 只有接口载体一处：`interface.rs:199` `Deref<Target = Object>`（A-4 载体） | 与类继承无关 |
 | `_into_super_chain` | `hierarchy.py:248-252` 是 1 行存根，**固定返回 `'.into()'`**，参数全部没用上 | — |
@@ -114,7 +114,7 @@
 | A3 | 删死代码 `_super_prefix_to_expr` 与 import，修正 4 处过期注释 | −15 |
 | A4 | 文档：reference §5 按「平铺字段 + 宏 `From<Self> for Ancestor` + wrapper 继承转发」重写；tasks.md 的 R-2 行改为「已被取代」加 R-2′；其余 5 份文档加过期标注 | 文档约 80 行 |
 
-- **预估 Python 净改动 40–80 行**，不碰 `runtime/java_rta_macros/`，不碰手写运行时。
+- **预估 Python 净改动 40–80 行**，不碰 `runtime/rava_macros/`，不碰手写运行时。
 - **生成代码形态变化**：第一步严格保持形态（`.into()` 不变），硬约束是**生成树逐字节零 diff**，所以 163 语料的扰动面为 0。若第二步把形态统一成 UFCS，受影响的是 #6–#9 的 `.into()` 行（每个 j.u.c 大工作区约 277 处）。这些是纯表达式替换，类型推断反而更明确（`From<_>` 的目标由左值给定），风险低，但会改变全部 TestAtomics 级别的生成树，需要全量对账一次。
 - **风险**：
   - ① #12（super 构造视图）与 #10/#11（合并点）已经用 UFCS，#2 用 turbofish，统一时注意 `<T as From<_>>` 在 `T` 带 `_` 实参时的推断差异，泛型父子臂需要保留 `_`；

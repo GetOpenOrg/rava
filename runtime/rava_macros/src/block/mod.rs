@@ -56,7 +56,7 @@ fn expand_inner(input: ClassInput) -> TokenStream2 {
 /// 最终按 §1-§11 的原始顺序拼装（token 流与拆分前逐字节一致）。
 fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
     let meta = parse::ClassMeta::from_attrs(&input.attrs)?;
-    // M3-c 纯位类型一致性断言（默认常开，失配 → compile_error；JAVA_RTA_M3_AUDIT 另写审计文件）
+    // M3-c 纯位类型一致性断言（默认常开，失配 → compile_error；RAVA_M3_AUDIT 另写审计文件）
     desc_types::audit_class(&meta.binary_name, &input.struct_ident.to_string(), &input.fns)
         .map_err(|msg| syn::Error::new(input.struct_ident.span(), msg))?;
 

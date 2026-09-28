@@ -1,7 +1,7 @@
 # block.rs 重构方案
 
 > 日期：2026-09-18  
-> 背景：`runtime/java_rta_macros/src/block.rs` 当前 2016 行，单文件承担全部 proc-macro 逻辑，所有改动集中于此。本文档记录分析结论与推荐重构路径。
+> 背景：`runtime/rava_macros/src/block.rs` 当前 2016 行，单文件承担全部 proc-macro 逻辑，所有改动集中于此。本文档记录分析结论与推荐重构路径。
 
 ---
 
@@ -91,7 +91,7 @@ gen/type_conversions.rs   ← Java 类型转换（From<Object>, From<Child> for 
 ## 三、目标文件结构
 
 ```
-runtime/java_rta_macros/src/
+runtime/rava_macros/src/
 ├── lib.rs                   # 只保留 #[proc_macro] 入口，~5 行
 ├── block.rs                 # expand() + expand_inner() 调用序列，~80 行
 ├── parse.rs                 # FnItem, ClassInput, ClassMeta, parse_impl_fns

@@ -104,7 +104,7 @@
 ├── 第 5 层：用户自定义类集成（T40）
 │   │       目标：用户自定义 Rust struct 加 #[java_class] 后可放入 ArrayList<MyStruct>
 │   │
-│   ├── 🔜 java_rta_macros proc-macro crate
+│   ├── 🔜 rava_macros proc-macro crate
 │   │       展开内容：impl Into<Object> + From<Object> + Display + Debug
 │   │
 │   ├── 🔜 替换 cfg_attr(any(), java_class(...)) → #[java_class(...)]
@@ -168,7 +168,7 @@
   T37-b  add__obj → add 去 mangle（emitter overloaded_names 最短版本保留原名）
 
 长期（依赖 T37 全部完成）：
-  T40    java_rta_macros proc-macro crate
+  T40    rava_macros proc-macro crate
 
 独立修复（可随时做）：
   T42    for-each 增强循环 slot 复用 bug（instr.py / method.py 局部变量重声明逻辑）

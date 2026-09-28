@@ -1,7 +1,7 @@
 # 两固定 CfgError stub 方法的形态定性报告（纯调查，零修改）
 
 > 2026-09-23，纯调查代理交付（主会话入档）。证据链三方闭合：javap 字节码 ×
-> 代码逻辑推演 × 既有仪表日志（fallback-audit 的 /tmp/java_rta_audit 抽样产物）。
+> 代码逻辑推演 × 既有仪表日志（fallback-audit 的 /tmp/rava_audit 抽样产物）。
 
 ## 一、两方法的异常表形态（JDK21 javap 实测）
 
@@ -74,4 +74,4 @@ Exception table:  from   to  target  type
 - `codegen/method/try_catch.py:62-140`（聚合与 `_merge_ranges`，方案 C 落点）
 - `codegen/method/blocks.py:445-516`（try 节点安装，仅首区间）、`:520-534`（`_adopt_bare_returns`）、`:536-564`（`_thread_jumps` trampoline，根因第 3 步）
 - `codegen/cfg/structure.py:167-200`（parent_try 支配链最深规则，B 方案关联）
-- 证据：`/tmp/java_rta_probe_{abstractmap,ois,recpat}.txt`、`/tmp/java_rta_audit/logs/*_instr.log`、`/tmp/java_rta_audit/i_teststreamadvanced/.../abstract_map.rs:373`
+- 证据：`/tmp/rava_probe_{abstractmap,ois,recpat}.txt`、`/tmp/rava_audit/logs/*_instr.log`、`/tmp/rava_audit/i_teststreamadvanced/.../abstract_map.rs:373`

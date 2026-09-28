@@ -37,7 +37,7 @@ import os as _os
 REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 RUNTIME_DIR = _os.path.join(REPO_ROOT, 'runtime')
 RUNTIME_JAVA_RUNTIME = _os.path.join(RUNTIME_DIR, 'java_runtime')
-RUNTIME_MACROS_CRATE = _os.path.join(RUNTIME_DIR, 'java_rta_macros')
+RUNTIME_MACROS_CRATE = _os.path.join(RUNTIME_DIR, 'rava_macros')
 
 
 # java_runtime 手写实现的短类名：这些类的方法名不经过 mangle（hand-written API 已定好名称）

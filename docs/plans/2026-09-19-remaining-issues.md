@@ -4,7 +4,7 @@
 > 基线：分支 `integrate-tsb` @ `8910fa5`（CFG 结构化重写 + 擦除运行时身份阶段 1 + `<clinit>`/异常对象 + PrintStream 字节码翻译 + R5-A/B/C/D 四个错误族清零）
 > 关联计划：[`2026-09-18-erased-runtime-identity.md`](2026-09-18-erased-runtime-identity.md)、[`2026-09-18-cfg-structuring-rewrite.md`](2026-09-18-cfg-structuring-rewrite.md)、[`2026-09-18-clinit-and-athrow.md`](2026-09-18-clinit-and-athrow.md)、[`2026-09-18-printstream-bytecode.md`](2026-09-18-printstream-bytecode.md)、[`2026-09-15-e2e-unresolved-issues.md`](2026-09-15-e2e-unresolved-issues.md)、[`java-rust-translation-reference.md`](java-rust-translation-reference.md)、[`2026-09-21-codegen-type-convergence.md`](2026-09-21-codegen-type-convergence.md)（**生成器类型系统收敛路线图**：擦除-恢复/字符串手术/特例 if 链三形态的统一诊断与五层调整清单，A/T/G/M 条目的架构总线）
 
-本文记录当前已知的**全部**遗留问题：架构缺口、JVM 语义缺口、生成器内部质量、项目原则违规、验证覆盖缺口、仓库事务。每一条给出现状、根因、终态目标（量化）。所有条目的解法只允许落在生成器（`codegen/`）、宏（`runtime/java_rta_macros/`）、手写层（`runtime/java_runtime/` 的 native `*_impl.rs` 与内部边界类）；禁止修改 `build/` 下的生成文件。
+本文记录当前已知的**全部**遗留问题：架构缺口、JVM 语义缺口、生成器内部质量、项目原则违规、验证覆盖缺口、仓库事务。每一条给出现状、根因、终态目标（量化）。所有条目的解法只允许落在生成器（`codegen/`）、宏（`runtime/rava_macros/`）、手写层（`runtime/java_runtime/` 的 native `*_impl.rs` 与内部边界类）；禁止修改 `build/` 下的生成文件。
 
 ---
 
@@ -515,7 +515,7 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 > 注：本条为「仓库类」R 编号，与清单第 6 项「R-2 Deref 替换 From 继承链」（已关闭，改立 R-2′）无关。
 - 已合入、可删：R5 四个代理（`agent-a7c86c6c…`、`a91c2200…`、`ada7cb15…`、`a8a7063b…`）与上一轮四个代理（`agent-a404cfb…`、`a3e0755…`、`afae540…`、`a78105d…`）的 worktree 和分支。
 - 来源不明、未合入：`worktree-agent-a4015d0b860f76189`（`481b73e`「refactor: 常量统一管理…」）。
-- 备份：`backup/main-wip-2026-09-18`、`backup/main-wip-2026-09-18-b`、`java_rta_test`。
+- 备份：`backup/main-wip-2026-09-18`、`backup/main-wip-2026-09-18-b`、`rava_test`。
 - `integrate-tsb` worktree：`main` 更新后可删。
 - 临时目录：`/tmp/cfg_base_src/`、`/tmp/era_base`、`/tmp/era_*`、`/tmp/r5*`–`/tmp/r8*` 日志。
 
@@ -529,7 +529,7 @@ A-2 的禁用调用计数目前靠手工 `grep`。终态：`scripts/main.py` 在
 > **现行队列（2026-09-21 同步）**：以 `docs/tasks.md` 执行约束为准——陈旧树筛复验 → A-8 / S-20 / 数组视图 coerce 族快速收益 → downcast 链清零（方案 §6 步骤 4）→ S-19 五件 → A-5/A-6/A-4 收口 A-2 → 窗口 3（G-1/G-2/G-3，间歇期）。A-1/K-5/K-6/A-3/A-7/S-17/S-18/G-11/G-12 均已闭环。以下为 R6 期历史记录。
 
 > **R6 轮记录（本日，已完成）**：R5 集成后的全量基线（32/65）中约 20 个失败是两个基础设施假回归，已修复：
-> - **R6-a 陈旧生成文件复活**：复用 scratch 时，上一轮幸存的生成 `.rs`（带 `java_rta_macros::java_class` 标记、本轮未写入）被 mod 树的磁盘扫描重新挂进编译，与手写 companion 撞名（`E0592 getUnsafe` 重复，波及 6 个测试）或污染闭包（`E0433 Class`，波及 14 个测试）。修复：`project_writer._write_jdk_mod_tree` 落盘前清除此类文件（`_WRITTEN_THIS_RUN` 集合区分本轮产物）。
+> - **R6-a 陈旧生成文件复活**：复用 scratch 时，上一轮幸存的生成 `.rs`（带 `rava_macros::java_class` 标记、本轮未写入）被 mod 树的磁盘扫描重新挂进编译，与手写 companion 撞名（`E0592 getUnsafe` 重复，波及 6 个测试）或污染闭包（`E0433 Class`，波及 14 个测试）。修复：`project_writer._write_jdk_mod_tree` 落盘前清除此类文件（`_WRITTEN_THIS_RUN` 集合区分本轮产物）。
 > - **R6-b ldc 类字面量的 `Class` 导入缺失**：`Class::for_class(..)` 发射点（`sim/consts.py`）不在 import 扫描来源里。修复：`class_writer` 指令扫描新增 `class ` 注释分支 → 引用 `java/lang/Class`（常量收敛到 `constants.CLASS_CLASS`）。顺带完成 `Class.isAssignableFrom`（生成器在类字面量处静态推导超类型闭包传入 `for_class`，运行时侧表查询），TestClassLiteral 全通过。
 > - **教训（记入验证口径）**：复用 scratch 的测试结果在生成器变更后不可信，milestone 验证一律 `--clean`。
 

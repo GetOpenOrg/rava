@@ -124,7 +124,7 @@ getRawAnnotations(), getConstantPool(), cls)` → `annotationForMap` → **`Prox
 | 删除 | annotation_meta.rs、annotation_objects.py、Class / Field / Method / Constructor 注解查询覆盖、旧 annotation_table |
 
 编译内存：注解闭包（~1680 类）的 java_runtime 本机编译峰值约 13GB，15G 机器需 `CARGO_BUILD_JOBS=1`
-（run_tests 构建超时经 `JAVA_RTA_BUILD_TIMEOUT` 调大）。放行 sun/reflect/generics 与三族基本类型流水线
+（run_tests 构建超时经 `RAVA_BUILD_TIMEOUT` 调大）。放行 sun/reflect/generics 与三族基本类型流水线
 会使峰值越过 15G，故以上两处手写。
 
 ## 三、不做什么

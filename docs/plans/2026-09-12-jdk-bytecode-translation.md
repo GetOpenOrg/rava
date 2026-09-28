@@ -574,7 +574,7 @@ HelloWorld.java
   │ javac -g
   ▼
 HelloWorld.class
-  │ RTA（java_rta.py）
+  │ RTA（rta.py）
   ▼
 可达集合：{HelloWorld, java/lang/System, java/util/ArrayList, ...}
   │

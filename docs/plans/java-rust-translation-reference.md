@@ -359,7 +359,7 @@ codegen Python 侧根据字节码 access flags 标注，`java_class!` 宏据此�
 ### 6.5 当前状态
 
 > ⚠️（2026-09-24 注）本节原「规划阶段 / `__into_super()` 向上转型 + 静态绑定」描述已过期：vtable 双指针多态已实现，向上转型见 §5.2（`.into()`，保留运行时类）。  
-> 涉及改动：`java_rta_macros/src/block.rs`（生成 vtable trait）+ `codegen/method/codegen.py`（标注 `is_virtual`）。
+> 涉及改动：`rava_macros/src/block.rs`（生成 vtable trait）+ `codegen/method/codegen.py`（标注 `is_virtual`）。
 
 ---
 
@@ -446,7 +446,7 @@ matrix[1i32][2i32] = 99i32;    // 宏两次重写：get(1)+set(2)
 |------|---------|-----------|
 | **Step 1** 定义 `Array<T>` | `java_runtime/src/java/lang/array.rs` | 类型注解从 `Rc<RefCell<Vec<T>>>` → `Array<T>` |
 | **Step 2** codegen 改用 `Array` API | `codegen/instr/sim.py`（数组指令分支） | `borrow()`/`borrow_mut()` 从方法体消失 |
-| **Step 3** `java_class!` 支持 `arr[i]` 重写 | `java_rta_macros/src/block.rs`（`VisitMut` 扩展） | 方法体内 `arr[i]` 语法与 Java 完全 1:1 |
+| **Step 3** `java_class!` 支持 `arr[i]` 重写 | `rava_macros/src/block.rs`（`VisitMut` 扩展） | 方法体内 `arr[i]` 语法与 Java 完全 1:1 |
 
 > ⚠️ **当前状态**：Step 1–3 均未实现，生成代码中 `Rc<RefCell<Vec<T>>>` 和 `borrow()` 调用对读者可见，待修复。
 
@@ -883,7 +883,7 @@ codegen 侧：`aastore` / `astore` 赋值给 Object 类型变量时，生成 `.i
 ## 17 宏机制分工与 Java API 处理管线映射
 
 > 日期：2026-09-21。回答「Java API 处理管线各环节分别适合哪种宏机制（声明式 / 过程 / 派生 / attribute）」。
-> 关联：收敛路线图 [`2026-09-21-codegen-type-convergence.md`](2026-09-21-codegen-type-convergence.md)（宏扩展面是 L1/L2 层的执行手段）；重写方案 R1（`java_rta_gen` 拆库）。
+> 关联：收敛路线图 [`2026-09-21-codegen-type-convergence.md`](2026-09-21-codegen-type-convergence.md)（宏扩展面是 L1/L2 层的执行手段）；重写方案 R1（`rava_gen` 拆库）。
 
 ### 17.1 三机制在本项目的实际比例（与生态常规倒置，原因见 17.3）
 
@@ -926,7 +926,7 @@ codegen 侧：`aastore` / `astore` 赋值给 Object 类型变量时，生成 `.i
 
 | 机制 | 实现位置 |
 |------|---------|
-| `java_class!` 宏展开 | `runtime/java_rta_macros/src/block.rs` |
+| `java_class!` 宏展开 | `runtime/rava_macros/src/block.rs` |
 | 字段 RefCell/Cell 包裹 | `block.rs` §字段存储类型 |
 | per-class vtable trait 生成（规划中） | `block.rs` + `codegen/method/codegen.py` |
 | 类祖先向上转型 | 宏 `type_conversions.rs` §10（`From<Self> for Ancestor`）+ `codegen/render.py::upcast_expr`（R-2′） |

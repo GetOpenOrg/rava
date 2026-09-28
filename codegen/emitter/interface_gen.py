@@ -36,9 +36,9 @@ from .inherited_gen import (ClassEmission, EmittedMethod, IMPORTS_SLOT, MEMBERS_
 from ..type_args import rust_type_head
 
 # 类文本中的插入位（整行，位于 java_class! 块内、impl 块之后）
-IMPLS_SLOT = '//@@java_rta:interface-impls@@'
+IMPLS_SLOT = '//@@rava:interface-impls@@'
 # 协变 upcast impl 的插入位（整行，位于 java_class! 块之外 —— 载体构造不是宏输入）
-UPCASTS_SLOT = '//@@java_rta:interface-upcasts@@'
+UPCASTS_SLOT = '//@@rava:interface-upcasts@@'
 
 _ACC_ABSTRACT = 0x0400
 _ACC_BRIDGE = 0x0040

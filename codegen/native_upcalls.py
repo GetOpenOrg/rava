@@ -74,7 +74,7 @@ class NativeUpcalls:
             # 自动生成的类文件碰巧以 _impl.rs 结尾（如 Collectors$CollectorImpl，
             # 与 _scan_impl_files 同判据）：scratch 复用模式下上一轮的生成残留
             # 会伪装成手写 impl，污染 has_impls / provides 的成员覆盖判定。
-            if 'java_rta_macros::java_class' in content:
+            if 'rava_macros::java_class' in content:
                 continue
             fns.update(_PUB_FN_RE.findall(content))
             self._scan_allocs(cls, content)

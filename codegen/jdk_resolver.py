@@ -311,7 +311,7 @@ class JdkResolver:
         key = f'{self._home.resolve()}:{st.st_mtime_ns}:{st.st_size}'
         digest = hashlib.sha1(key.encode()).hexdigest()[:16]
         base = Path(os.environ.get('XDG_CACHE_HOME') or (Path.home() / '.cache'))
-        return base / 'java_rta' / 'jimage' / digest
+        return base / 'rava' / 'jimage' / digest
 
     def _resolve_from_image(self, binary_name: str) -> Optional[bytes]:
         if binary_name not in self.image_only_classes():
@@ -373,7 +373,7 @@ class JdkResolver:
                 h.update(str(src.relative_to(mod_dir)).encode())
                 h.update(src.read_bytes())
             base = Path(os.environ.get('XDG_CACHE_HOME') or (Path.home() / '.cache'))
-            out = base / 'java_rta' / 'vmsupport' / h.hexdigest()[:16] / mod_dir.name
+            out = base / 'rava' / 'vmsupport' / h.hexdigest()[:16] / mod_dir.name
             if not out.is_dir() or not any(out.rglob('*.class')):
                 out.mkdir(parents=True, exist_ok=True)
                 try:

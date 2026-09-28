@@ -313,8 +313,8 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 **完成**（2026-09-16 第二次）：
 
 **实现内容**：
-1. `java_rta_macros/src/lib.rs`：注册 `java_method`、`java_native` 为真实 `#[proc_macro_attribute]`（identity passthrough）
-2. `codegen/emitter/attrs.py`：非 native 方法改用 `#[java_rta_macros::java_method(...)]`；native 方法保留 `cfg_attr(any(), java_native(...))`（由 `_impl.rs` 手写处理）
+1. `rava_macros/src/lib.rs`：注册 `java_method`、`java_native` 为真实 `#[proc_macro_attribute]`（identity passthrough）
+2. `codegen/emitter/attrs.py`：非 native 方法改用 `#[rava_macros::java_method(...)]`；native 方法保留 `cfg_attr(any(), java_native(...))`（由 `_impl.rs` 手写处理）
 3. `java_class` 宏新增 `has_to_string_method`/`has_hash_code_method` 参数，有条件地生成 `ObjectVTable::toString`/`hashCode` 转发
 4. `codegen/emitter/method_gen.py`：非 native `toString`/`hashCode` 存根改为返回 `Ok(String::from(Self::BINARY_NAME))`/`Ok(0)` 智能默认值（不再 panic）
 5. `codegen/emitter/attrs.py`：检测类自身是否声明 `toString`/`hashCode`，动态设置转发标志（避免 `Self::toString` 解析到 vtable 自身造成无限递归）
@@ -322,7 +322,7 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 **效果**：编译错误从 247+ 降至 4（仅剩 N-1 的 4 处手写 `java_runtime` 遗留）
 
 **后续演变**（2026-09-16 第三次，commit `c44ea10`）——proc-macro 再次删除：
-块级宏统一（`java_class!` 方案）后，所有方法都写在 `java_class! { impl ... }` 块内，必须用单段路径 `#[java_method(...)]`（块级宏按 ident 匹配并剥离），两段路径 `java_rta_macros::java_method` 成为死分支。因此：
+块级宏统一（`java_class!` 方案）后，所有方法都写在 `java_class! { impl ... }` 块内，必须用单段路径 `#[java_method(...)]`（块级宏按 ident 匹配并剥离），两段路径 `rava_macros::java_method` 成为死分支。因此：
 - `java_method` / `java_native` 两个零调用 proc-macro 已从 lib.rs 删除（`jvm_native`/`jvm_boundary`/`jvm_ext` 保留，有真实调用）；
 - `attrs.py` 的 `_java_method_attr` 收敛为仅 in_block 路径；
 - 块内 `#[java_native(...)]` 保留为纯文本标签：block.rs 剥离 + build.rs 按文本前缀扫描维护 native_status.toml，不依赖 proc-macro 存在。
@@ -439,12 +439,12 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 | 2026-09-15 | E-1 native_impl 重复 | 删除 native_impl 重复方法 | 手写清理 |
 | 2026-09-15 | `aaload` primitive 数组 clone | `sim.py` primitive 直接取值 | codegen |
 | 2026-09-15 | `invokevirtual Object.clone` 非 Object 接收者 | `invoke.py` 特判 clone + 非 Object，发射 `Object::from_any` | codegen |
-| 2026-09-16 | Arch-1 接口 = Object 类型别名 | `type_map.py` + `class_writer.py` + `java_rta_macros` | arch |
-| 2026-09-16 | Arch-2 instanceof via ObjectVTable | `java_rta_macros` `is_instance_of` + `BINARY_NAME` | arch(宏) |
-| 2026-09-16 | Arch-4 Object = Rc<dyn ObjectVTable> | `object.rs` + `java_rta_macros` ObjectVTable impl | arch(宏) |
+| 2026-09-16 | Arch-1 接口 = Object 类型别名 | `type_map.py` + `class_writer.py` + `rava_macros` | arch |
+| 2026-09-16 | Arch-2 instanceof via ObjectVTable | `rava_macros` `is_instance_of` + `BINARY_NAME` | arch(宏) |
+| 2026-09-16 | Arch-4 Object = Rc<dyn ObjectVTable> | `object.rs` + `rava_macros` ObjectVTable impl | arch(宏) |
 | 2026-09-16 | Arch-4 downcast 路径修复（as_any） | `invoke.py` `downcast_ref` → `as_any().downcast_ref` | codegen |
 | 2026-09-16 | Arch-5 T55b From impl 删除 | `class_writer.py` T55b 整块删除 | arch |
-| 2026-09-16 | Arch-6 BINARY_NAME 常量 | `java_rta_macros` 生成 `BINARY_NAME const` | arch(宏) |
+| 2026-09-16 | Arch-6 BINARY_NAME 常量 | `rava_macros` 生成 `BINARY_NAME const` | arch(宏) |
 | 2026-09-16 | Arch-7 RsType 化 sig_parser 删除 | `type_map.py` 整合；`_is_generic_type_param` 删除 | arch |
 | 2026-09-16 | Arch-8 CFG unreachable!() 消除 | `cfg/basic_blocks.py` `function_always_returns` | arch |
 | 2026-09-16 | I-2 `_is_direct_subtype` 统一为 `_is_subtype` | `coerce.py` 删除 `_is_direct_subtype` | codegen |
@@ -459,7 +459,7 @@ fn equalsRange(&self, other: List<Object>, ..)       // E0107
 | 2026-09-16 | Arch-3 dispatch 缺失修复（interface hint） | `type_map.py parse_field_type(registry)` | codegen |
 | 2026-09-16 | A-3/A-4 接口参数类型不匹配 | 架构消解（Arch-1 副产品） | arch |
 | 2026-09-16 | B-1 From impl 丢弃数据 | 架构消解（Arch-5 副产品） | arch |
-| 2026-09-16（第二次） | N-2 java_method/java_native proc-macro 激活 | `java_rta_macros` 注册 passthrough attribute | arch(宏) |
+| 2026-09-16（第二次） | N-2 java_method/java_native proc-macro 激活 | `rava_macros` 注册 passthrough attribute | arch(宏) |
 | 2026-09-16（第二次） | N-2 toString/hashCode vtable 条件转发 | `java_class` 宏 + `has_to_string_method` 标志 | arch(宏) |
 | 2026-09-16（第二次） | N-2 toString/hashCode 存根智能默认值 | `method_gen.py` 非 panic 默认实现 | codegen |
 | 2026-09-16（第二次） | N-1 143→4 E0107（大量手写类被 codegen 接管） | codegen 重新生成 java_runtime | codegen |

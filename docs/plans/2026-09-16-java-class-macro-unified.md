@@ -579,7 +579,7 @@ Step 7  删除 JField<T>
 - Step 7 之后：属性宏废弃，仅保留块级宏
 
 **现状（2026-09-16 晚）**：`java_class_attr` 属性宏已从
-`runtime/java_rta_macros/src/lib.rs` 删除（Step 7 后全量重生成确认零调用者，
+`runtime/rava_macros/src/lib.rs` 删除（Step 7 后全量重生成确认零调用者，
 属死代码约 170 行；删除后 HelloWorld 冒烟通过）。crate 现存导出：
 `java_class!`（块级宏）+ 五个透传属性宏（`jvm_native` / `jvm_boundary` /
 `jvm_ext` / `java_method` / `java_native`，均无展开逻辑，仅元数据标记）。

@@ -78,7 +78,7 @@
 | 15 | `18_arrays_advanced` | `TestArrayCovariance.java` | `Object[] r = new String[]{}` 的数组协变 + `ArrayStoreException`（runtime 已有 `fix/s4-array-covariance` 分支，正好需要一个回归用例锁住） |
 | 16 | `34_concurrency`（新） | `TestSynchronized.java` | `synchronized` 块/方法 + 静态同步；**单线程即可验证语义**（计数器一致性），输出确定，不需要多线程 |
 
-> 第 16 个支撑依据：`runtime/java_runtime/src/java/lang/thread_impl.rs` 与 `runtime/java_rta_macros/src/synchronized.rs` 已实现，但 `tests/e2e` 下**没有并发专题**，属于「runtime 已发力、测试零覆盖」。
+> 第 16 个支撑依据：`runtime/java_runtime/src/java/lang/thread_impl.rs` 与 `runtime/rava_macros/src/synchronized.rs` 已实现，但 `tests/e2e` 下**没有并发专题**，属于「runtime 已发力、测试零覆盖」。
 
 ---
 

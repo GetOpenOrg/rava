@@ -2,7 +2,7 @@
 
 > 日期：2026-09-21（分支 `fix/a4-carrier-type-positions`，基于 main @ 74f70dd）
 > 方法：44 个测试 build（任务验收集 25 例 + 补充重载例 19 例）`--no-run --clean` 转译后，
-> 对带 `java_rta_macros` 标记的生成文件做 occurrence 级分类（脚本 `/tmp/a4/classify.py`，
+> 对带 `rava_macros` 标记的生成文件做 occurrence 级分类（脚本 `/tmp/a4/classify.py`，
 > 按发射点代码指纹：`_mergedN =` → blocks.py:208；`let _tN =` → invoke*.py 返回对齐；其余 →
 > 实参/回退位），JDK 21。
 

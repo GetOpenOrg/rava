@@ -91,7 +91,7 @@ def _impl_signature_type_refs(cls: str, runtime_src: str, resolver) -> list[str]
         # TestCollectionsUtil 实证 365→369）。与 native_upcalls._load 同判据跳过：
         # 生成类文件恒含限定宏调用，手写 impl 恒不含（含裸 `java_class!` 的
         # doc 注释不误伤）。
-        if 'java_rta_macros::java_class' in content:
+        if 'rava_macros::java_class' in content:
             continue
         for m in _IMPL_FULL_PATH_RE.finditer(content):
             pkg_path = m.group(1).replace('::', '/').replace('r#', '')
@@ -321,7 +321,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     # static 字段访问触发点：(常量池类, 字段名)，待 resolver 可用后解析到声明类
     pending_static_fields: deque[tuple[str, str]] = deque()
 
-    # 调用链溯源：每个入队方法记录其来源方法（JAVA_RTA_BFS_TRACE=<类 binary name> 时输出入链路径）
+    # 调用链溯源：每个入队方法记录其来源方法（RAVA_BFS_TRACE=<类 binary name> 时输出入链路径）
     enqueued_from: dict[tuple[str, str, str], tuple[str, str, str] | None] = {}
     origin: list = [None]
 
@@ -334,7 +334,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
     # _propagate_virtual_targets 前 drain）
     _pending_iface_edges: list[tuple[str, str, str]] = []
     # 手写 fn 声明的回调目标（#[jvm_native/jvm_boundary(upcalls = ..)]）：解析失败即手写层
-    # 描述符写错（如泛型参数按 Object 而非上界擦除），默认输出，不依赖 JAVA_RTA_DEBUG
+    # 描述符写错（如泛型参数按 Object 而非上界擦除），默认输出，不依赖 RAVA_DEBUG
     _upcall_targets: set[tuple[str, str, str]] = set()
     # 已确认接口形态的回调边键（迟至 stub/父类通道的实现者清扫用，见函数尾注）
     _drained_iface_keys: list[tuple[str, str, str]] = []
@@ -1326,12 +1326,12 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             if not queue:
                 break
 
-        # 签名多态 / 未解析调用的可观测性（与 JAVA_RTA_BFS_TRACE 溯源互补）
+        # 签名多态 / 未解析调用的可观测性（与 RAVA_BFS_TRACE 溯源互补）
         if _sig_poly_native or _unresolved_calls or _root_inherited:
             print(f"[bfs-audit] sig-poly-native={len(_sig_poly_native)} "
                   f"root-inherited={len(_root_inherited)} "
                   f"unresolved={len(_unresolved_calls)}")
-            if os.environ.get('JAVA_RTA_DEBUG'):
+            if os.environ.get('RAVA_DEBUG'):
                 for _k in sorted(_unresolved_calls):
                     print(f"[bfs-audit] unresolved: {_k[0]}.{_k[1]}:{_k[2]}")
         for _k in sorted(_unresolved_calls & _upcall_targets):
@@ -1505,7 +1505,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                         break
                 if not _refs_ok:
                     continue
-                if os.environ.get('JAVA_RTA_BFS_EDGE_AUDIT'):
+                if os.environ.get('RAVA_BFS_EDGE_AUDIT'):
                     print(f"[bfs-audit] late-static-edge: {_scls}.{_smeth}:{_sdesc}")
                 _enqueue_method((_scls, _smeth, _sdesc))
                 _added = True
@@ -1556,7 +1556,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 continue
             jdk_infos[_iname] = _ici
 
-    _trace_cls = os.environ.get('JAVA_RTA_BFS_TRACE')
+    _trace_cls = os.environ.get('RAVA_BFS_TRACE')
     if _trace_cls:
         for _key in sorted(k for k in visited_methods if k[0] == _trace_cls):
             _path = []
@@ -1573,7 +1573,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         print(f"[fallback-audit] 警告: {_w}")
     if len(_fb_warns) > 20:
         print(f"[fallback-audit] 警告: … 其余 {len(_fb_warns) - 20} 条见 "
-              f"JAVA_RTA_DEBUG=1 逐触发明细")
+              f"RAVA_DEBUG=1 逐触发明细")
 
     return list(jdk_infos.values()), visited_methods, field_discover_classes
 

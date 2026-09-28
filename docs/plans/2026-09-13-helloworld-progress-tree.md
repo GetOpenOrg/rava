@@ -195,7 +195,7 @@
 │   │       java_runtime::types::Field → JField，删除 emitter is_named_field 特判
 │   ├── ✅ 废弃脚本清理
 │   │       删除：scripts/javalang/（旧 AST 解析器）、classify.py（无调用方）
-│   │             gen_manifest.py、gen_stubs.py、java_rta.py、javap.py
+│   │             gen_manifest.py、gen_stubs.py、rta.py、javap.py
 │   │             analyze_callchain.py（验证完成）
 │   └── ✅ Python 代码中 JDK 类名字面量清零
 │           删除 _COLL_IR_TYPES、StringBuilder 特判、Math 特判

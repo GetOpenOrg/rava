@@ -43,7 +43,7 @@
 #### 登记账本与消费
 
 - 账本：`codegen/inherited_calls.py`，形如 `{接收者 binary → {(方法名, 参数描述符)}}`。
-- 消费端：`codegen/emitter/inherited_gen.py:733`（`resolve_inherited_members`）。它在接收者的 java_class! 块里补出带转发体的继承成员；宏在 `runtime/java_rta_macros/src/block/gen/virtual_dispatch.rs:440-475`（「继承成员填槽（S-16）」）用这个转发体去填本类对 `vtable_owner` 的 vtable impl。**不登记就不会填槽**：Rust 的 trait impl 没有继承，叶子类对祖先 `X__VTable` 的 impl 里，没填的槽就是 trait default（abstract 声明就是 `panic!("stub: …")`）。
+- 消费端：`codegen/emitter/inherited_gen.py:733`（`resolve_inherited_members`）。它在接收者的 java_class! 块里补出带转发体的继承成员；宏在 `runtime/rava_macros/src/block/gen/virtual_dispatch.rs:440-475`（「继承成员填槽（S-16）」）用这个转发体去填本类对 `vtable_owner` 的 vtable impl。**不登记就不会填槽**：Rust 的 trait impl 没有继承，叶子类对祖先 `X__VTable` 的 impl 里，没填的槽就是 trait default（abstract 声明就是 `panic!("stub: …")`）。
 
 #### 四个登记入口的覆盖面
 

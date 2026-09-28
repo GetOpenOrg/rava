@@ -32,7 +32,7 @@ def _is_handwritten(path: str) -> bool:
     `runtime/java_runtime/src/**` 复制进 scratch，**同相对路径是否存在于
     runtime/java_runtime/src/** 才是手写的充要条件**。
 
-    旧实现按「文件内容是否含 `java_rta_macros::java_class` 标记」判定，有致命缺陷：
+    旧实现按「文件内容是否含 `rava_macros::java_class` 标记」判定，有致命缺陷：
     历史版本生成的存根文件（如 PhantomData struct 形态的 `Function`）不含该标记，
     会被永久误判为手写文件 → codegen 永不刷新它们。这些文件停留在旧形态（缺
     `From<Object>` / `Into<Object>` 等转换 impl），编译期表现为大面积
@@ -124,7 +124,7 @@ def _append_cargo_bin(user_dir: str, bin_name: str, bin_src: str) -> None:
         f'version = "{_scratch_pkg_version(user_dir)}"', 'edition = "2021"', '',
         '[dependencies]',
         'java_runtime    = { path = "../java_runtime" }',
-        f'java_rta_macros = {{ path = "{_MACROS_CRATE}" }}',
+        f'rava_macros = {{ path = "{_MACROS_CRATE}" }}',
         '',
     ])
     new_bin = f'\n[[bin]]\nname = "{bin_name}"\npath = "{bin_src}"\n'
@@ -177,7 +177,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     #   - 旧的 _PERMANENT 硬编码集合、git ls-files 探测、生成标记判别、
     #     非 batch 清理分支已全部删除
     #   - 手写文件不被生成内容覆盖的保证由 _write() 的标记检查提供
-    #     （scratch 里手写文件无 java_rta_macros::java_class 标记 → 跳过写入）
+    #     （scratch 里手写文件无 rava_macros::java_class 标记 → 跳过写入）
     #   - scratch 的清空/复用策略由脚本层决定（main.py --clean）
 
     # 两阶段生成：先生成全部类文本（期间调用点登记继承成员需求），
@@ -374,7 +374,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             _write(os.path.join(_lc_src, 'lib.rs'), '\n'.join(_lib_rs) + '\n')
             # Cargo.toml：crate-type=["lib"]，依赖前面的 lib crate（插入序）
             _lc_deps = ['java_runtime    = { path = "../java_runtime" }',
-                        f'java_rta_macros = {{ path = "{_MACROS_CRATE}" }}']
+                        f'rava_macros = {{ path = "{_MACROS_CRATE}" }}']
             for _prev in lib_crate_classes:
                 if _prev == _lc_name:
                     break
@@ -425,7 +425,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         src_root 参数化（lib crate 的 src 复用同一逻辑：陈旧清扫 / 磁盘重建 /
         companion 声明 / glob 再导出），默认 java_runtime/src（既有行为不变）。"""
         _src_root = jdk_src if src_root is None else src_root
-        # 陈旧生成文件清除：带生成标记（java_rta_macros::java_class）、但本轮未写入的
+        # 陈旧生成文件清除：带生成标记（rava_macros::java_class）、但本轮未写入的
         # .rs 是同 scratch 上次运行的幸存者。若不清除，下方的磁盘扫描会把它们的模块
         # 声明重新挂进 mod.rs，与手写 companion（E0592，如 unsafe_.rs + unsafe__impl.rs）
         # 或本轮闭包冲突。手写文件无生成标记，不受影响。
@@ -438,7 +438,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     continue
                 try:
                     with open(_fpath_sweep, encoding='utf-8') as _fs_sweep:
-                        if 'java_rta_macros::java_class' in _fs_sweep.read():
+                        if 'rava_macros::java_class' in _fs_sweep.read():
                             os.remove(_fpath_sweep)
                 except Exception:
                     pass  # 读取失败时保守保留，交由 mod 树扫描处理
@@ -464,7 +464,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                         _fpath_scan = os.path.join(root, fname)
                         try:
                             with open(_fpath_scan, encoding='utf-8') as _fs:
-                                if 'java_rta_macros::java_class' not in _fs.read():
+                                if 'rava_macros::java_class' not in _fs.read():
                                     continue  # 真正手写共置文件，由 companion_mods 声明
                         except Exception:
                             continue  # 读取失败时保守视为手写
@@ -868,7 +868,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         _write(os.path.join(user_src, 'main.rs'), '\n'.join(main_lines))
         _user_dep_lines = [
             'java_runtime    = { path = "../java_runtime" }',
-            f'java_rta_macros = {{ path = "{_MACROS_CRATE}" }}',
+            f'rava_macros = {{ path = "{_MACROS_CRATE}" }}',
         ]
         # lib 模式：用户 bin crate 消费全部 lib crate（jar 输入的交付形态）
         for _lc_dep in (lib_crate_classes or {}):
@@ -904,7 +904,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         _write(os.path.join(user_dir, 'Cargo.toml'), '\n'.join(cargo_toml_lines))
 
     # 5. scratch workspace 根 Cargo.toml（幂等，每次覆写相同内容）
-    #    java_rta_macros 不复制进 scratch，作为 runtime/ 的 path 依赖参与编译
+    #    rava_macros 不复制进 scratch，作为 runtime/ 的 path 依赖参与编译
     #    （绝对路径稳定 → 共享 CARGO_TARGET_DIR 下指纹不变，宏与 syn/quote 缓存命中）
     _members = ['java_runtime', *(lib_crate_classes or {}), 'user']
     _write(os.path.join(out_dir, 'Cargo.toml'), '\n'.join([
@@ -921,7 +921,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     ]))
 
     # 语料 JDK 特性版本 → java_runtime/jdk_feature.txt（build.rs 转为编译期环境变量
-    # JAVA_RTA_JDK_FEATURE，手写层经 crate::jdk_feature() 读取）：手写边界类中
+    # RAVA_JDK_FEATURE，手写层经 crate::jdk_feature() 读取）：手写边界类中
     # 随 JDK 版本变化的数据按此选择。写入幂等（同版本内容不变，不触发重编译）。
     from ..jdk_resolver import corpus_jdk_major
     _jdk_major = corpus_jdk_major()

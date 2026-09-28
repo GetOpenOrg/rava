@@ -110,9 +110,9 @@ mod tests {
 // M3-b 差分审计：纯位上「生成器已发射类型」vs「描述符推导类型」
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// 审计开关：环境变量 `JAVA_RTA_M3_AUDIT=<输出文件>`（展开期读取；未设置 = 不审计，
+/// 审计开关：环境变量 `RAVA_M3_AUDIT=<输出文件>`（展开期读取；未设置 = 不审计，
 /// 零产物变化）。每个被审计方法追加一行：`OK|MISMATCH <类> <方法><描述符> …`。
-pub(crate) const AUDIT_ENV: &str = "JAVA_RTA_M3_AUDIT";
+pub(crate) const AUDIT_ENV: &str = "RAVA_M3_AUDIT";
 
 /// `Result<T>` → `T` 的 token 文本；非 Result → 原样。
 fn result_inner(ty: &syn::Type) -> String {
@@ -179,8 +179,8 @@ pub(crate) fn audit_fn(f: &super::parse::FnItem, self_name: &str) -> Option<(usi
     Some((checked, diffs))
 }
 
-/// 断言开关：环境变量 `JAVA_RTA_M3_ASSERT=off` 关闭一致性断言（应急逃生口，默认常开）。
-pub(crate) const ASSERT_ENV: &str = "JAVA_RTA_M3_ASSERT";
+/// 断言开关：环境变量 `RAVA_M3_ASSERT=off` 关闭一致性断言（应急逃生口，默认常开）。
+pub(crate) const ASSERT_ENV: &str = "RAVA_M3_ASSERT";
 
 /// M3-c（方案 1，2026-09-26 用户决策）：纯位类型的一致性断言 + 可选审计文件。
 ///
@@ -188,7 +188,7 @@ pub(crate) const ASSERT_ENV: &str = "JAVA_RTA_M3_ASSERT";
 /// 优先于 `_` 占位；宏持有纯位映射规格（`pure_rust_type`），逐方法核对已发射类型与描述符
 /// 推导一致，失配即 `compile_error!`（生成器映射漂移在编译期暴露，不静默产出错误签名）。
 /// 映射的最终归属随 Rust 重写（R0）落地：届时生成器直接复用本模块映射。
-/// `JAVA_RTA_M3_AUDIT=<文件>` 另追加统计行（按类汇总 + 每个失配一行），与断言独立。
+/// `RAVA_M3_AUDIT=<文件>` 另追加统计行（按类汇总 + 每个失配一行），与断言独立。
 pub(crate) fn audit_class(binary_name: &str, self_name: &str, fns: &[super::parse::FnItem])
     -> Result<(), String> {
     let audit_path = std::env::var(AUDIT_ENV).ok();

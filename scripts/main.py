@@ -110,7 +110,7 @@ def _prune_stale_handwritten(rt_src: str, dst_src: str) -> None:
 
     overlay 只增改不删：手写文件从 runtime/ 删除（越界覆盖回到字节码）后，scratch 旧副本
     继续被 codegen 当作手写实现扫描并编译——覆盖不消失（FS-R R2b 的 ReflectionFactory 伴生）。
-    手写文件的识别与 codegen 同口径：无 `java_rta_macros::java_class` 生成标记；生成的包
+    手写文件的识别与 codegen 同口径：无 `rava_macros::java_class` 生成标记；生成的包
     `mod.rs` 同样无标记，按文件名排除（每轮由 codegen 重写）。"""
     for root, _dirs, files in os.walk(dst_src):
         rel_root = os.path.relpath(root, dst_src)
@@ -123,7 +123,7 @@ def _prune_stale_handwritten(rt_src: str, dst_src: str) -> None:
             path = os.path.join(root, fname)
             try:
                 with open(path, encoding='utf-8', errors='replace') as f:
-                    if 'java_rta_macros::java_class' in f.read():
+                    if 'rava_macros::java_class' in f.read():
                         continue
             except OSError:
                 continue
@@ -160,7 +160,7 @@ def prepare_scratch(out_dir: str, clean: bool = False) -> None:
     cargo_toml = open(os.path.join(RUNTIME_JAVA_RUNTIME, 'Cargo.toml'),
                       encoding='utf-8').read()
     cargo_toml = cargo_toml.replace(
-        'path = "../java_rta_macros"',
+        'path = "../rava_macros"',
         f'path = "{RUNTIME_MACROS_CRATE}"')
     # 包版本唯一化：共享 CARGO_TARGET_DIR 下避免与其他 scratch 的同名包
     # 元数据哈希碰撞（陈旧 artifact 跨工作区复用）
@@ -218,7 +218,7 @@ def main():
     ap.add_argument('--no-run', action='store_true', help='只生成 Rust 代码，不编译运行')
     ap.add_argument('--batch', action='store_true', help='批量模式：写 src/bin/<class>.rs（供并行测试用）')
     ap.add_argument('--jdk', type=int, default=None, metavar='N',
-                    help='指定 JDK 主版本（javac 与翻译语料同源；默认 JAVA_RTA_JDK > JAVA_HOME > .jdk-version）')
+                    help='指定 JDK 主版本（javac 与翻译语料同源；默认 RAVA_JDK > JAVA_HOME > .jdk-version）')
     ap.add_argument('--lib', action='append', default=[], metavar='NAME=JAR[:seed=FQN]',
                     help='jar 输入模式：依赖库发射为 lib crate（可重复；无 seed=整包，'
                          '有 seed=只收种子类闭包）。顺序即 crate 依赖序')
@@ -231,7 +231,7 @@ def main():
     if lib_specs and args.batch:
         sys.exit('jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）')
 
-    # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > JAVA_RTA_JDK > JAVA_HOME >
+    # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > RAVA_JDK > JAVA_HOME >
     # .jdk-version > 最新已安装——多 JDK 并存时不随系统默认 java 漂移。run_tests 子进程
     # 已继承父进程选定的 JAVA_HOME，此处静默沿用
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -256,11 +256,11 @@ def main():
               locales=tuple(t for t in args.locales.split(',') if t.strip()))
     # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
     print(CFG_AUDIT_STATS.summary())
-    if os.environ.get('JAVA_RTA_DEBUG'):
+    if os.environ.get('RAVA_DEBUG'):
         for method_id, site, reason in CFG_AUDIT_STATS.stub_fallbacks:
             print(f"[cfg-audit] stub fallback ({site}): {method_id}: {reason}")
     # 可读性自检（V-3）：§16 禁止出现在可读层的调用形态计数，终态全 0。
-    # 只统计生成文件（含 java_rta_macros::java_class 标记）：手写 *_impl.rs / *_ext.rs /
+    # 只统计生成文件（含 rava_macros::java_class 标记）：手写 *_impl.rs / *_ext.rs /
     # 基础设施（object.rs、error.rs 等）不计入，与 A-2 验收口径一致。
     _READABILITY_PATTERNS = (
         ('from_any', 'Object::from_any'),
@@ -285,7 +285,7 @@ def main():
                         _text = _rf.read()
                 except Exception:
                     continue
-                if 'java_rta_macros::java_class' not in _text:
+                if 'rava_macros::java_class' not in _text:
                     continue  # 手写 / 基础设施文件
                 for _label, _pat in _READABILITY_PATTERNS:
                     _counts[_label] += _text.count(_pat)

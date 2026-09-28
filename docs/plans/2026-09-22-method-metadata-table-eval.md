@@ -107,5 +107,5 @@ FAIL→PASS）。method_table 完成后，`Class.getDeclaredFields/getDeclaredCo
 
 - 不改 `_java_method_attr` 的发射格式（含其 4 空格对齐）——数据已够用，
   格式是 A-4 域的活物；
-- 不在 A-4 合入前动 `runtime/java_rta_macros`（vtable 臂生成）；
+- 不在 A-4 合入前动 `runtime/rava_macros`（vtable 臂生成）；
 - 不提前物化 MemberName（无消费者的手写文件违反规则 3b 的按需节奏）。

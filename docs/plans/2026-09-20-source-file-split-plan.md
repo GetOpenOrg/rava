@@ -12,7 +12,7 @@
 
 | 文件 | 行数 | 状态 |
 |------|------|------|
-| `runtime/java_rta_macros/src/block/mod.rs` | 2139 | Phase 1 已拆出（parse/util/rewrite/classify/generic_sig/class_init），**Phase 2（gen/）未执行**，`expand_inner` 仍为 ~1600 行单函数 |
+| `runtime/rava_macros/src/block/mod.rs` | 2139 | Phase 1 已拆出（parse/util/rewrite/classify/generic_sig/class_init），**Phase 2（gen/）未执行**，`expand_inner` 仍为 ~1600 行单函数 |
 | `codegen/type_map.py` | 1563 | 从未拆过，5 类职责混居 |
 | `codegen/emitter/class_writer.py` | 1400 | p0 计划**部分执行**（struct_gen/method_gen/field_gen 等已拆出），`import_gen`/`clinit_extract` 未拆，`_gen_class_rs` 仍 ~1300 行含 8 个嵌套函数 |
 | `codegen/instr/coerce.py` | 1010 | `_coerce_arg` 已并入（按计划），但混入了 ~800 行与"值强转"无关的层次/成员解析函数 |
@@ -26,7 +26,7 @@
 | `codegen/emitter/project_writer.py` | 561 | — |
 | `codegen/cfg/structure.py` | 538 | 前半是结构树构建，后半 ~270 行是独立的 simplify 化简通道 |
 | `codegen/instr/invoke_sig.py` | 503 | p0 计划执行完毕的产物 |
-| `runtime/java_rta_macros/src/try_macro.rs` | 502 | — |
+| `runtime/rava_macros/src/try_macro.rs` | 502 | — |
 
 `codegen/instr/sim/` 的拆分（sim.py 841 → 2 行 dispatch + 10 个子模块，全部 ≤350 行）已完成且 e2e 稳定，是本方案的可行性先例。
 
@@ -117,7 +117,7 @@
 
 | 文件 | 行数 | 理由 |
 |------|------|------|
-| `runtime/java_rta_macros/src/try_macro.rs` | 502 | 单一职责（try/catch/loop-exit 宏展开），结构清晰（parse → rewriter → expander），贴线即止 |
+| `runtime/rava_macros/src/try_macro.rs` | 502 | 单一职责（try/catch/loop-exit 宏展开），结构清晰（parse → rewriter → expander），贴线即止 |
 | `codegen/instr/invoke_sig.py` | 503 | p0 拆分的稳态产物，纯函数签名查询层 |
 | `codegen/instr/invoke.py` | 662 | p0 拆分后的 dispatch 层，最大函数 `_gen_invokespecial` 267 行；观察项：若再增长，按 ctor/super 两路分解 |
 | `codegen/classfile.py` | 866 | **唯一行数豁免**。JVM 二进制格式解析器，与 JVMS 规范章节一一对应是它的内聚性所在；低改动率，按格式段拆会打散规范对应关系 |

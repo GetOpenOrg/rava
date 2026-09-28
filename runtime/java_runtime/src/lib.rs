@@ -206,7 +206,7 @@ pub fn destroy_java_vm(result: crate::error::Result<()>) {
 }
 
 pub fn jdk_feature() -> u32 {
-    option_env!("JAVA_RTA_JDK_FEATURE")
+    option_env!("RAVA_JDK_FEATURE")
         .and_then(|v| v.parse().ok())
         .unwrap_or(21)
 }
@@ -482,6 +482,6 @@ pub mod prelude {
     pub use crate::sync_model::__Shared as Rc;
     pub use crate::sync_model::__RefSlot as RefCell;
     pub use super::MutexHolder;
-    pub use java_rta_macros::{jvm_native, jvm_boundary, jvm_ext};
-    pub use java_rta_macros::java_try;
+    pub use rava_macros::{jvm_native, jvm_boundary, jvm_ext};
+    pub use rava_macros::java_try;
 }

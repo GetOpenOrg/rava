@@ -11,7 +11,7 @@ path = "src/lib.rs"
 parking_lot = "0.12"
 # POSIX 系统调用（access / statvfs / pathconf：std 无等价，FS-IO1 / IO2）
 libc = "0.2"
-java_rta_macros = { path = "../java_rta_macros" }
+rava_macros = { path = "../rava_macros" }
 
 [lints.rust]
 # 生成代码的固有形态不做告警（括号防御性包裹 / 未触达存根 / JVM 槽位复用赋值 /

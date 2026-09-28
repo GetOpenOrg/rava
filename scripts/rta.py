@@ -1,5 +1,5 @@
 """
-java_rta.py  ——  TeaVM 风格 Java 可达性分析器
+rta.py  ——  TeaVM 风格 Java 可达性分析器
 
 原理：模拟 TeaVM Dependency Checker 的核心算法
   1. 解析 Java 源码 AST（javalang）
@@ -10,9 +10,9 @@ java_rta.py  ——  TeaVM 风格 Java 可达性分析器
   5. 打印调用链树
 
 用法：
-    python3 java_rta.py HelloWorld.java
-    python3 java_rta.py HelloWorld.java --json      # 输出 JSON 供前端使用
-    python3 java_rta.py HelloWorld.java --entry MyClass.myMethod  # 自定义入口
+    python3 rta.py HelloWorld.java
+    python3 rta.py HelloWorld.java --json      # 输出 JSON 供前端使用
+    python3 rta.py HelloWorld.java --entry MyClass.myMethod  # 自定义入口
 """
 
 import sys

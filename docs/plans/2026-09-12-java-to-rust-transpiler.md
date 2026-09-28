@@ -15,7 +15,7 @@
   │  javap -verbose / ClassFileParser
   ▼
 JVM 栈式 IR（指令序列 + 常量池）
-  │  RTA 裁剪（java_rta.py 已实现）
+  │  RTA 裁剪（rta.py 已实现）
   ▼
 可达方法集合（classes + methods + instantiated）
   │  Stack → SSA 转换
@@ -546,7 +546,7 @@ strip     = "symbols"   # 去除符号表，缩小二进制
 javac TestMath.java
 
 # RTA 分析
-uv run python java_rta.py TestMath.java --json > rta.json
+uv run python rta.py TestMath.java --json > rta.json
 
 # 生成 Rust（待实现）
 uv run python codegen.py rta.json > src/main.rs

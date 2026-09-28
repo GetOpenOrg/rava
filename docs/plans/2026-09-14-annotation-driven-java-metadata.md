@@ -115,7 +115,7 @@ FileNotFoundException（super_class=IOException, interfaces=Serializable）
 ### 3.1 类注解（`#[java_class(...)]`）
 
 ```rust
-#[java_rta_macros::java_class(
+#[rava_macros::java_class(
     binary_name = "java/util/LinkedHashMap",
     super_class  = "java/util/HashMap",
     interfaces   = "java/util/Map,java/util/SequencedMap",
@@ -132,7 +132,7 @@ pub struct LinkedHashMap<K, V> {
 多接口示例：
 
 ```rust
-#[java_rta_macros::java_class(
+#[rava_macros::java_class(
     binary_name = "java/util/ArrayList",
     super_class  = "java/util/AbstractList",
     interfaces   = "java/util/List,java/util/RandomAccess,java/lang/Cloneable,java/io/Serializable",
@@ -150,7 +150,7 @@ pub struct ArrayList<E> {
 无父类（Object 本身）：
 
 ```rust
-#[java_rta_macros::java_class(
+#[rava_macros::java_class(
     binary_name = "java/lang/Object",
     super_class  = "",
     interfaces   = "",
@@ -163,7 +163,7 @@ pub struct Object { ... }
 接口生成为 Rust trait：
 
 ```rust
-#[java_rta_macros::java_interface(
+#[rava_macros::java_interface(
     binary_name      = "java/io/Serializable",
     super_interfaces = "",
     access           = "public",

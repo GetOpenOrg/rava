@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A-4 批次 3+ 测量仪表（口径对齐 docs/reports/2026-09-21-a4-phase0-evidence.md §5/§7）。
 
-对每个测试 `--no-run --clean` 转译后，在带 `java_rta_macros::java_class` 标记的生成文件上计数：
+对每个测试 `--no-run --clean` 转译后，在带 `rava_macros::java_class` 标记的生成文件上计数：
 
   from_any      Object::from_any 总数（分段：merge-box `_mergedN =` / let-align `let _tN =`
                 / inline 其余——阶段 0 §1 的分类口径）
@@ -63,7 +63,7 @@ def _collect(build_dir: Path) -> dict:
                 text = p.read_text(encoding='utf-8')
             except Exception:
                 continue
-            if 'java_rta_macros::java_class' not in text:
+            if 'rava_macros::java_class' not in text:
                 continue
             files.append((p, text))
             if _IFACE_RE.search(text):

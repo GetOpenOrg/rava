@@ -21,7 +21,7 @@
 //! 候选 (a)（vtable 追加 `__method_invoke` 臂）对**实例方法**是自然的，但
 //! static/构造器不走 vtable，仍需静态分发表——两套机制并存正是评估文档要
 //! 避免的。本协议以「注册表 + typed 闭包」统一承载三类成员，发射面只在
-//! codegen（用户类文件尾部），不触碰 java_rta_macros 的 vtable 生成核心
+//! codegen（用户类文件尾部），不触碰 rava_macros 的 vtable 生成核心
 //!（禁改域）；闭包内的 `try_cast` 视图本身经既有 vtable 分派，虚方法语义
 //! 仍然只走一套 vtable。JDK/lib 闭包类不发射分派闭包（无反射调用边的类不
 //! 付代码税）——语料出现该缺口时按同一协议扩发射面，协议不变。

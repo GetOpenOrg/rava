@@ -5,7 +5,7 @@ public class TestSystemExitEnv {
     public static void main(String[] args) {
         String path = System.getenv("PATH");
         System.out.println("PATH present: " + (path != null && !path.isEmpty()));
-        System.out.println("missing var: " + System.getenv("JAVA_RTA_SURELY_MISSING_VAR_42"));
+        System.out.println("missing var: " + System.getenv("RAVA_SURELY_MISSING_VAR_42"));
         Map<String, String> env = System.getenv();
         System.out.println("map has PATH: " + env.containsKey("PATH") + " consistent: " + env.get("PATH").equals(path));
         try {

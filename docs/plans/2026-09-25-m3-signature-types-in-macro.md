@@ -1,6 +1,6 @@
 # M-3：方法签名类型决策进宏——试点方案
 
-> 2026-09-25 · 关联：tasks.md #9（M-3，已授权改 `runtime/java_rta_macros`）、
+> 2026-09-25 · 关联：tasks.md #9（M-3，已授权改 `runtime/rava_macros`）、
 > `docs/plans/2026-09-21-codegen-type-convergence.md` L1-b
 
 ## 一、现状（调研结论，路径相对仓库根）
@@ -80,5 +80,5 @@ Java 开发者阅读的中间层，`pub fn f(a: _) -> Result<_>` 比显式类型
 不做源文本占位。
 
 **已执行（2026-09-26）**：`desc_types::audit_class` 常开断言——纯位失配返回 `syn::Error`（列前 5 处：类 / 方法 /
-位置 / 期望 / 实际），`JAVA_RTA_M3_ASSERT=off` 为应急逃生口；`JAVA_RTA_M3_AUDIT=<文件>` 统计输出保留。
+位置 / 期望 / 实际），`RAVA_M3_ASSERT=off` 为应急逃生口；`RAVA_M3_AUDIT=<文件>` 统计输出保留。
 Python 映射代码不删，由宏断言守护；R0 时生成器直接复用宏侧映射。

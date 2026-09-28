@@ -187,7 +187,7 @@ Rust bounds 仅在宏展开产物中出现，对读者不可见。
 
 #### 实现方案
 
-**宏侧（`runtime/java_rta_macros/src/block.rs`）**：
+**宏侧（`runtime/rava_macros/src/block.rs`）**：
 - 解析 `pub struct Foo<E>` 时记录类型参数名列表（如 `['E']`）
 - 展开时为每个类型参数附加 `Clone + Default + 'static`
 - 同样处理 `impl Foo<E>` —— 宏添加 bounds，生成 `impl<E: Clone + Default + 'static> Foo<E>`

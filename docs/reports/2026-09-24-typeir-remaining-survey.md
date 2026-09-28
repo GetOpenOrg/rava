@@ -17,7 +17,7 @@
 ## 结论摘要
 
 1. `type_surgery_sites=10` 由 `codegen/raw_audit.py:43` 计算：扫描 `codegen/**/*.py` 的全文，匹配两个正则。**其中 1 处是误报**（`raw_audit.py:10` 模块 docstring 里写着 `startswith('JArray<')`），**真实位点 9 处**，分布在 6 个文件：coerce 2、vars 3、hierarchy 1、invoke 1、member_owner 1、render 1。
-2. 9 处中有 8 处可以直接用现有 TypeIR API 替换，语义不变。可用的 API 有 `from_rust_type` / `rust_head_name` / `strict_erased_subtype`（批次 3 新增），以及 `stack.erased_class_of` / `is_jvm_array`（批次 2 新增）。`render.py:171` 有两种做法：最小改法可以直接换；要彻底收口，得先把 `CastExpr.target` 从字符串改成类型对象（IR 结构改动，和 M-3 有交集）。**宏侧（java_rta_macros）不需要改任何地方**，9 处只是使用宏生成的 `From<X> for Object` 和 `.into()` 上转链这些已有约定。
+2. 9 处中有 8 处可以直接用现有 TypeIR API 替换，语义不变。可用的 API 有 `from_rust_type` / `rust_head_name` / `strict_erased_subtype`（批次 3 新增），以及 `stack.erased_class_of` / `is_jvm_array`（批次 2 新增）。`render.py:171` 有两种做法：最小改法可以直接换；要彻底收口，得先把 `CastExpr.target` 从字符串改成类型对象（IR 结构改动，和 M-3 有交集）。**宏侧（rava_macros）不需要改任何地方**，9 处只是使用宏生成的 `From<X> for Object` 和 `.into()` 上转链这些已有约定。
 3. 建议按三批做：A 批是 Object 边界族 4 处（coerce×2 + vars:50 + hierarchy:175）；B 批是 invoke 残余 2 处（invoke:814 + member_owner:506）；C 批是 G-3 两处（vars:272/273），**在窗口 3 开工前做，或者直接作为窗口 3 的第 0 步**。render:171 单独做成 D 批，排在 CastExpr 升维或 M-3 试点里。四批合计大约 +60/−15 行，外加单测。
 4. **计数口径有盲区**：还有约 25 处同类文本解剖没被计进去，包括 `split('<', 1)[0]`、`partition('<')`、`startswith('JArray')`（不带 `<`）、`startswith('Vec<'/'Rc<')`、`find/index('<')`。其中 invoke_sig 3 处、invoke 4 处还在批次 3 已经"收口"的 invoke 域里。9 处清零后计数会是 0（修掉误报后），但 L1 其实还没做完，需要扩大计数口径。
 5. 依赖关系：C 批和窗口 3（第 7 项）的 vars.py 写入面重叠，必须先后串行；D 批和 M-3 或 CastExpr 升维交织；和 P-1（第 8 项）只是同文件，没有硬依赖；R0（第 10 项）的门槛里没有 type_surgery=0，但 jvm_type 是 Rust `ty` crate 的规格本体，建议在 R0 前清零（按扩大后的口径）。另外，S2 的退出判据"27→个位数"按真实口径（9）**已经达到**。
@@ -125,7 +125,7 @@ def type_surgery_sites() -> int:   # rglob codegen/*.py 全文（含注释 / doc
 |---|---|---|
 | **可以直接替换**（现有 API 足够，语义不变） | S1 S2 S3 S6 S7 S8 S4 S5 | 8 处。S4/S5 虽然可以直接替换，但它们在窗口 3 的写入面里，排期要协调（见 §五） |
 | **最小改法可直接替换，彻底收口需要先升维 IR 或 TypeIR** | S9 | 需要 CastExpr 的类型载荷升维；和 M-3 有交集（JvmType→Rust 串的渲染权归谁） |
-| **牵涉宏侧（禁改域）** | 无 | 9 处都只是**使用**宏已有的约定：`From<Wrapper> for Object`（`java_rta_macros/src/block/interface.rs:179`、`gen/type_conversions.rs`）和 `.into()` 上转链。语义不变的前提下宏侧零改动。只要 S1/S2/S3 的装箱分支真的发生变化（例如 `&` 形态从 `from_any` 翻到 `Object::from`），就会触碰宏的 From 约定；这属于**必须由双算拦截的分歧**，不在本工作的合法范围内 |
+| **牵涉宏侧（禁改域）** | 无 | 9 处都只是**使用**宏已有的约定：`From<Wrapper> for Object`（`rava_macros/src/block/interface.rs:179`、`gen/type_conversions.rs`）和 `.into()` 上转链。语义不变的前提下宏侧零改动。只要 S1/S2/S3 的装箱分支真的发生变化（例如 `&` 形态从 `from_any` 翻到 `Object::from`），就会触碰宏的 From 约定；这属于**必须由双算拦截的分歧**，不在本工作的合法范围内 |
 
 **TypeIR 能力缺口（都不阻塞 9 处的最小替换，是"完全体"要补的）**：
 

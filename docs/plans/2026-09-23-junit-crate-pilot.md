@@ -73,7 +73,7 @@ JUnit 4 = EPL 1.0、hamcrest = BSD-3：翻译产物属衍生作品，内部 pilo
 
 ## 附录：M1/M2 任务书草稿（供派发，两件合一单）
 
-> 域 = `scripts/main.py` 入口层 + `codegen/callchain.py` 种子/BFS 侧 + `codegen/emitter/project_writer.py` lib 发射。与主机器在途（G-3 收尾 / VarHandle 引用族 / VirtualThread 调查）零重叠；**不动** build.rs 元数据表（反射 L3 主机器域）、`runtime/java_rta_macros`、`var_handle*`、`jdk/internal/reflect`。
+> 域 = `scripts/main.py` 入口层 + `codegen/callchain.py` 种子/BFS 侧 + `codegen/emitter/project_writer.py` lib 发射。与主机器在途（G-3 收尾 / VarHandle 引用族 / VirtualThread 调查）零重叠；**不动** build.rs 元数据表（反射 L3 主机器域）、`runtime/rava_macros`、`var_handle*`、`jdk/internal/reflect`。
 
 **第 0 步**：worktree `git worktree add /tmp/wt-libpilot -b feat/jar-input-lib-emit`（基于最新 main）。
 

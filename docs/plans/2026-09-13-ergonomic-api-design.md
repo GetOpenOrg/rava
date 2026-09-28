@@ -82,9 +82,9 @@ impl ArrayList<E> {
 
 ## 三、技术方案
 
-### 3.1 方案 A：proc-macro crate `java_rta_macros`
+### 3.1 方案 A：proc-macro crate `rava_macros`
 
-**新增 crate**：`output/java_rta_macros/`（proc-macro crate，加入 workspace）
+**新增 crate**：`output/rava_macros/`（proc-macro crate，加入 workspace）
 
 将 `cfg_attr(any(), java_class(...))` 变为真正激活的 `#[java_class(...)]` 属性宏，在编译期展开生成 ergonomic 代码。
 
@@ -137,7 +137,7 @@ pub size: JField<i32>,
 用户可以直接用宏定义自己的 Java 兼容类，参与 JDK API 调用：
 
 ```rust
-use java_rta_macros::java_class;
+use rava_macros::java_class;
 use java_runtime::prelude::*;
 
 // 用户定义一个"Java 风格"的 Rust 结构
@@ -266,7 +266,7 @@ for item in list.iter() {
 use jdk_classes::java::util::*;
 use jdk_classes::java::lang::*;
 use java_runtime::prelude::*;
-use java_rta_macros::java_class;  // 新增
+use rava_macros::java_class;  // 新增
 
 // 用户自己的 Java 兼容类
 #[java_class(binary_name = "com/example/Person")]
@@ -359,9 +359,9 @@ fn main_example() -> Result<()> {
 
 ---
 
-### T38 · proc-macro crate `java_rta_macros`（方案 A）
+### T38 · proc-macro crate `rava_macros`（方案 A）
 
-**范围**：新建 `output/java_rta_macros/` proc-macro crate
+**范围**：新建 `output/rava_macros/` proc-macro crate
 
 **功能**：
 1. `#[java_class(...)]` — 生成 `Into<Object>`, `From<Object>`, `Display`, `Debug`

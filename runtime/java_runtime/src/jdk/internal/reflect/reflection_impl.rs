@@ -44,7 +44,7 @@ fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
     // 依赖帧不是 Java 帧。
     const NON_JAVA_CRATES: &[&str] = &[
         "std", "core", "alloc", "parking_lot", "parking_lot_core", "lock_api", "backtrace",
-        "rustc_demangle", "gimli", "addr2line", "java_rta_macros",
+        "rustc_demangle", "gimli", "addr2line", "rava_macros",
     ];
     let in_runtime = path.contains("java_runtime::");
     let start = match path.find("java_runtime::") {

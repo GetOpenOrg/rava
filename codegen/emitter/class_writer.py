@@ -41,7 +41,7 @@ from ..instr.member_naming import lambda_impl_rust_name, LAMBDA_NAME_LEDGER
 _safe_field_name = safe_ident
 
 # A 组九吞点的兜底异常白名单（fallback-audit 方案 §4.2）：默认 (CfgError,)，
-# JAVA_RTA_STRICT=1 时为空元组（九点全穿，无 stub 兜底）。单点定义见
+# RAVA_STRICT=1 时为空元组（九点全穿，无 stub 兜底）。单点定义见
 # fallback_audit 模块（env 只在那里读一次）
 _FALLBACK_EXC = _fallback_audit.FALLBACK_EXC
 
@@ -1285,7 +1285,7 @@ def _java_member_vis(access_flags: int) -> str:
     跨 crate 可见：JLS §6.6.2 允许任意包中的子类访问——下游 crate 的用户类
     继承 lib 抽象类时，其构造链调父类 protected `<init>`（`__init_on*`）、
     覆盖模板方法（如 TypeSafeMatcher.matchesSafely）都经此可见性（JUnit M5）。
-    宏侧（java_rta_macros block/parse.rs）以 syn Visibility 解析并透传，
+    宏侧（rava_macros block/parse.rs）以 syn Visibility 解析并透传，
     pub(crate) 是合法输入。
     """
     return 'pub' if access_flags & (0x0001 | 0x0004) else 'pub(crate)'
@@ -1613,7 +1613,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
         if emission is not None and not _is_iface:
             block.append(_INTERFACE_IMPLS_SLOT)
 
-        parts.append("java_rta_macros::java_class! {")
+        parts.append("rava_macros::java_class! {")
         for line in block:
             parts.append(_indent(line) if line else '')
         parts.append("}")

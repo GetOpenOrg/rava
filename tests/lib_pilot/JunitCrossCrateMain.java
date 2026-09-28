@@ -89,7 +89,7 @@ public class JunitCrossCrateMain {
 
         @Before
         public void setUp() {
-            subject = "java-rta";
+            subject = "rava";
         }
 
         @Test

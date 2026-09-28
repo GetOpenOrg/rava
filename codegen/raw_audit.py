@@ -48,10 +48,10 @@ _SELF = 'raw_audit.py'
 _EXT_PARSER_WHITELIST = frozenset({'sig_types.py', 'type_args.py', 'jvm_type.py', 'stack.py'})
 
 
-# 位点剖面（JAVA_RTA_RAW_SITES=<文件>）：按构造调用位点（文件:行:函数）累计，进程退出时落盘，
+# 位点剖面（RAVA_RAW_SITES=<文件>）：按构造调用位点（文件:行:函数）累计，进程退出时落盘，
 # 供 FS-Q1 Raw 逃生舱收敛按热点排序（缺省关闭，不影响发射）
 import os as _os_rs
-_RAW_SITES_OUT = _os_rs.environ.get('JAVA_RTA_RAW_SITES')
+_RAW_SITES_OUT = _os_rs.environ.get('RAVA_RAW_SITES')
 _raw_sites: dict = {}
 
 

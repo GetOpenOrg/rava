@@ -89,7 +89,7 @@ RUN_TIMEOUT = 300
 # 转译段（main.py：javap 全闭包 + 代码生成）超时（秒）
 TRANSPILE_TIMEOUT = 600
 # 构建段（cargo build 单测试 crate）超时（秒）
-BUILD_TIMEOUT = int(os.environ.get("JAVA_RTA_BUILD_TIMEOUT", "600"))   # 低内存单作业编译可调大
+BUILD_TIMEOUT = int(os.environ.get("RAVA_BUILD_TIMEOUT", "600"))   # 低内存单作业编译可调大
 # 期望生成（--update-expected）的 java 参照运行超时（秒）：golden 语料应为秒级程序，
 # 120 足够且让挂起类用例快速出列
 EXPECTED_GEN_TIMEOUT = 120
@@ -100,7 +100,7 @@ LOGS_DIR = _versioned(OUT) / "logs"
 
 
 def _cargo_profile_args() -> list[str]:
-    # 并行后端为默认且唯一后端（#42：Arc + 原子单元 + 读写锁，无 GIL）；JAVA_RTA_MT 已无作用
+    # 并行后端为默认且唯一后端（#42：Arc + 原子单元 + 读写锁，无 GIL）；RAVA_MT 已无作用
     return ["--release"] if PROFILE_DIR == "release" else []
 
 
@@ -116,7 +116,7 @@ def _jdk_tool(name: str) -> str:
 
 def apply_jdk_choice(major: 'int | None') -> None:
     """JDK 选择（jdk_select.apply_jdk 唯一入口，javac/java/翻译语料全部同源）：
-    --jdk > JAVA_RTA_JDK > JAVA_HOME > .jdk-version > 最新已安装。"""
+    --jdk > RAVA_JDK > JAVA_HOME > .jdk-version > 最新已安装。"""
     apply_jdk(major)
 
 
@@ -439,7 +439,7 @@ def _print_env_header() -> None:
             return "git ?"
 
     _flag_vars = ("PYTHONHASHSEED", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS",
-                  "JAVA_RTA_DEBUG", "JAVA_RTA_STRICT", "JAVA_RTA_BFS_EDGE_AUDIT")
+                  "RAVA_DEBUG", "RAVA_STRICT", "RAVA_BFS_EDGE_AUDIT")
     _flags = " ".join(f"{k}={os.environ.get(k, '(unset)')}" for k in _flag_vars)
     print(f"[meta] git {_git_desc()} | profile={PROFILE_DIR} | {_flags} | out={OUT}")
 
@@ -463,7 +463,7 @@ def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
 # 每个测试的生成物：scratch 工作区 build/jdkN/<bin>/；共享 target 里本测试独有的编译产物
 # （可执行文件、该测试的 java_runtime 库、build.rs 编译 / 输出目录、指纹、.d / .rcgu.o）；
 # 以往失败留下的 logs/<bin>.build.log / .run.log。共享依赖（syn / quote / parking_lot /
-# libc / java_rta_macros 等）跨测试复用，不属于任何单个测试，永不清理。
+# libc / rava_macros 等）跨测试复用，不属于任何单个测试，永不清理。
 #
 # 归属判定不靠文件名猜测：cargo 的 JSON 产物清单（compiler-artifact / build-script-executed）
 # 带 manifest_path，只收 manifest 位于本测试 scratch 内的包（java_runtime / 用户 bin crate /
@@ -553,7 +553,7 @@ def _prune_passed(jdk_major: int | None) -> int:
     - 每测试的 java_runtime 中间产物（deps/*java_runtime-* / build/java_runtime-* /
       .fingerprint/java_runtime-*）：旧产物无 JSON 清单可归属，统一删除。它们只是编译缓存——
       失败测试用于分析的 scratch 源码、可执行文件与日志全部保留，修复后本就需重新编译；
-    - 共享依赖（syn / quote / parking_lot / libc / java_rta_macros 等）不动。
+    - 共享依赖（syn / quote / parking_lot / libc / rava_macros 等）不动。
     勿与正在运行的跑批并发执行（会删掉进行中构建的 java_runtime 中间产物）。"""
     import shutil
     passed = _load_failed(_passed_file_path(jdk_major))
@@ -1525,7 +1525,7 @@ def main():
     ap.add_argument("--jobs", "-j",      type=int, default=1, metavar="N",
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     ap.add_argument("--jdk",             type=int, default=None, metavar="N",
-                    help="指定 JDK 主版本（javac/java/翻译语料同源；默认 JAVA_RTA_JDK > JAVA_HOME > .jdk-version）")
+                    help="指定 JDK 主版本（javac/java/翻译语料同源；默认 RAVA_JDK > JAVA_HOME > .jdk-version）")
     ap.add_argument("--release",         action="store_true", help="release 档位构建运行（LTO 慢编译/快运行；默认 dev）")
     ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
     ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")

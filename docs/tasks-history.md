@@ -201,7 +201,7 @@ sim.emit(Let(v, None, False, BinOp("+", a, b)))
 
 ### T08 · RTA 改进：`<clinit>` 隔离 + cutoff 截断
 **状态**：`[x]`  
-**文件**：`scripts/java_rta.py`（修改），新增 `config/cutoff.toml`
+**文件**：`scripts/rta.py`（修改），新增 `config/cutoff.toml`
 
 **目标**：
 - `<clinit>` 方法只在类被 `new` 实例化时才跟随，不无条件追踪
@@ -741,7 +741,7 @@ T29 (构建阻断)        ─ 依赖 T27
 **状态**：`[x]` 关闭（架构决策取代：多 crate workspace + per-test scratch 已定型，单 crate 无收益）  
 **文件**：`output/Cargo.toml`、`scripts/codegen/emitter.py`
 
-**背景**：当前 workspace 有 `java_runtime`、`java_rta_macros`、`jdk_classes`、`user` 四个 crate，目标态是合并为单 crate（只保留 `user`）。
+**背景**：当前 workspace 有 `java_runtime`、`rava_macros`、`jdk_classes`、`user` 四个 crate，目标态是合并为单 crate（只保留 `user`）。
 
 **真正的前置条件**：`java_runtime/src/java/` 中的手写 String/ArrayList/System 等实现必须先被字节码翻译替换（T46 系列）。在此之前做 T33 只是搬移手写代码，没有实质收益。推迟到 `java_runtime/java/` 目录可以删除之后再做。
 
@@ -749,8 +749,8 @@ T29 (构建阻断)        ─ 依赖 T27
 - `jdk_classes` 内容内联到 `user/src/java/`
 - `java_runtime` 的 `error.rs`、`types.rs` 内联到 `user/src/`（永久保留的 VM 基础设施）
 - `java_runtime/src/java/` 临时手写层由字节码翻译替换后删除
-- `java_rta_macros` 保留为独立 crate（proc-macro 必须独立编译）
-- Cargo.toml 只剩 `user` + `java_rta_macros` 两个成员
+- `rava_macros` 保留为独立 crate（proc-macro 必须独立编译）
+- Cargo.toml 只剩 `user` + `rava_macros` 两个成员
 
 **验收**：`output/` 下无 `jdk_classes`、`java_runtime` 子目录；`cargo run` 仍输出正确结果。
 
@@ -857,9 +857,9 @@ T29 (构建阻断)        ─ 依赖 T27
 
 ---
 
-### T40 · `java_rta_macros` proc-macro crate
+### T40 · `rava_macros` proc-macro crate
 **状态**：`[x]` 完成  
-**文件**：新建 `java_rta_macros/` crate
+**文件**：新建 `rava_macros/` crate
 
 **目标**：将 `cfg_attr(any(), java_class(...))` 中的死属性变为真实激活的 proc-macro，自动为所有 java class 生成：`Into<Object>`、`From<Object>`、`Display`、`Debug`；用户自定义 struct 也可使用 `#[java_class]`
 
@@ -2649,7 +2649,7 @@ def _method_modifiers_str(flags: int) -> str:
 ### T76 · 继承基础：`_super` 字段 + proc-macro Deref/From
 
 **状态**：`[x]` 关闭（被块级宏方案取代：superclass/superclass_fields + __into_super，方案 §16）  
-**文件**：`codegen/emitter.py`（struct 生成段 + upcast 方法生成）、`java_rta_macros/src/lib.rs`（直接父类 From impl）  
+**文件**：`codegen/emitter.py`（struct 生成段 + upcast 方法生成）、`rava_macros/src/lib.rs`（直接父类 From impl）  
 **优先级**：**P0（架构级，高于所有其他任务）**  
 **依赖**：T78（注解完整化先完成）  
 **方案文档**：`docs/plans/2026-09-14-annotation-driven-java-metadata.md`

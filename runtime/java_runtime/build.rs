@@ -27,7 +27,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=../user/src/");
-    println!("cargo:rerun-if-env=changed=JAVA_RTA_STRICT");
+    println!("cargo:rerun-if-env=changed=RAVA_STRICT");
     // 语料 JDK 特性版本（生成侧写入 jdk_feature.txt）→ 编译期环境变量，
     // 手写层经 crate::jdk_feature() 读取（缺省 21）
     println!("cargo:rerun-if-changed=jdk_feature.txt");
@@ -35,7 +35,7 @@ fn main() {
     //（运行期数据差异用 crate::jdk_feature()；类型差异只能编译期选择）
     println!("cargo::rustc-check-cfg=cfg(jdk_ge_25)");
     if let Ok(v) = fs::read_to_string("jdk_feature.txt") {
-        println!("cargo:rustc-env=JAVA_RTA_JDK_FEATURE={}", v.trim());
+        println!("cargo:rustc-env=RAVA_JDK_FEATURE={}", v.trim());
         if v.trim().parse::<u32>().map(|n| n >= 25).unwrap_or(false) {
             println!("cargo:rustc-cfg=jdk_ge_25");
         }
@@ -90,7 +90,7 @@ fn main() {
     write_interfaces_table(&scan_class_interfaces(&meta_roots));
     write_class_anno_table(&scan_class_annos(&meta_roots));
 
-    let strict = std::env::var("JAVA_RTA_STRICT").unwrap_or_default() == "1";
+    let strict = std::env::var("RAVA_STRICT").unwrap_or_default() == "1";
     let needed: Vec<_> = new_status.iter()
         .flat_map(|(cls, methods)| {
             methods.iter()

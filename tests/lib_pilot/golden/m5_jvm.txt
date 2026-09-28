@@ -13,4 +13,4 @@ Expected: length <3>
 runner run=2 fail=1 ok=false
 runner failure: 
 Expected: length <3>
-     but: was "java-rta"
+     but: was "rava"

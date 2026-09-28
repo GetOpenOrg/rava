@@ -17,7 +17,7 @@
 |---|---|---|
 | 生成器实现语言 | Python ~24.3k 行（codegen/ + scripts/，其中 trace 脚本 ~5k 不移植） | Rust；**Python 归零**（`codegen/`、`scripts/`、`pyproject.toml`、`uv.lock`、`.python-version` 全部删除） |
 | 分发形态 | `python3` + `.venv` 环境依赖 | **单二进制**（`rava`，子命令覆盖生成/运行/测试编排） |
-| 宏展开实现 | `java_rta_macros` proc-macro 内 ~3.3k 行，不可单测 | `java_rta_gen` 库 crate 承载全部 expand 逻辑；宏壳 ≤100 行；**生成器与手写层共用同一 expand** |
+| 宏展开实现 | `rava_macros` proc-macro 内 ~3.3k 行，不可单测 | `rava_gen` 库 crate 承载全部 expand 逻辑；宏壳 ≤100 行；**生成器与手写层共用同一 expand** |
 | IR | rs_ir 已强类型，但 coerce/vars/blocks 边界存在字符串往返 | **IR 是唯一货币**：模块边界 API 零 String 表达式往返（类型系统强制） |
 | regex 依赖 | 111 处使用点 | 热路径改真 parser；其余经 `regex` crate 原样移植并由 golden 覆盖 |
 | 隐式默认语义 | 61 处 `setdefault`/`defaultdict` | 逐点显式化为结构体字段/带默认构造 |
@@ -45,16 +45,16 @@ generator/                    # 新 workspace 成员：Rust 生成器（终态�
 │   ├── emit/                # 产物发射（← class_writer 收尾形态 + attrs/vtable_util/struct_gen/…/project_writer）
 │   └── driver/              # CallChainDiscovery BFS + 编排 + cargo 调用 + lint（← transpile/callchain + scripts/main.py）
 │       └── src/bin/         # rava：generate / run / test / lint 子命令
-runtime/java_rta_gen/         # 从 java_rta_macros 拆出：expand 全逻辑 + GenContext（库）
-runtime/java_rta_macros/      # 薄 proc-macro 壳：parse → java_rta_gen::expand（≤100 行）
+runtime/rava_gen/         # 从 rava_macros 拆出：expand 全逻辑 + GenContext（库）
+runtime/rava_macros/      # 薄 proc-macro 壳：parse → rava_gen::expand（≤100 行）
 ```
 
-- 拆库的硬约束：**proc-macro crate 技术上只能导出过程宏**，要让 expand 可被生成器调用、可被单测，必须拆出 `java_rta_gen` 库——这不是偏好，是语言限制。
-- scratch 工作区的 path 依赖由一个变两个（`java_rta_gen` + `java_rta_macros`），绝对 path + 共享 `CARGO_TARGET_DIR` 缓存语义不变。
+- 拆库的硬约束：**proc-macro crate 技术上只能导出过程宏**，要让 expand 可被生成器调用、可被单测，必须拆出 `rava_gen` 库——这不是偏好，是语言限制。
+- scratch 工作区的 path 依赖由一个变两个（`rava_gen` + `rava_macros`），绝对 path + 共享 `CARGO_TARGET_DIR` 缓存语义不变。
 
 ### 2.2 展开路径决策：保持宏编译期展开（单一展开路径）
 
-**决策**：生成器继续产出 `java_class!` 块，展开仍发生在 cargo 编译期（薄宏壳 → `java_rta_gen`）；库化只为可测性与复用，不改为生成期预展开。
+**决策**：生成器继续产出 `java_class!` 块，展开仍发生在 cargo 编译期（薄宏壳 → `rava_gen`）；库化只为可测性与复用，不改为生成期预展开。
 
 - 理由 ①：可读层是产品目标（CLAUDE.md：vtable dispatch、`Rc<dyn Trait>`、borrow 不出现在生成文件里）。预展开会把 vtable 机械写进 .rs，违反定位。
 - 理由 ②：手写 `runtime/` 与生成代码走**同一条**展开路径，零分叉、零一致性维护。
@@ -96,7 +96,7 @@ runtime/java_rta_macros/      # 薄 proc-macro 壳：parse → java_rta_gen::exp
 | 阶段 | Python 源（拆分后） | Rust 目标 | 验收 |
 |---|---|---|---|
 | R0 | — | golden corpus + diff 工具 + Python 管线 profile | corpus 固化；耗时分布存日志 |
-| R1 | `java_rta_macros` | `java_rta_gen` 拆库 + 薄宏壳 | 宏展开快照 golden；`cargo check`；行为零变化 |
+| R1 | `rava_macros` | `rava_gen` 拆库 + 薄宏壳 | 宏展开快照 golden；`cargo check`；行为零变化 |
 | R2 | `classfile.py` | `classfile` | corpus diff 归零（纯解析层） |
 | R3 | `sig_parse` / `type_map` / `type_args` / `sig_types` | `jvm_sig` + `ty` | diff 归零 |
 | R4 | `hierarchy` / `member_owner` / `member_naming` / `invoke_sig` | `resolve` | diff 归零 |
@@ -148,6 +148,6 @@ R10 双跑期间默认仍是 Python；切换后观察一个全量周期（含至
 ## 六、与既有文档的关系
 
 - [2026-09-20-source-file-split-plan.md](2026-09-20-source-file-split-plan.md)：其窗口 0–3 完成是本方案前置条件；其模块边界 = 本方案移植单元；本方案落地后该文档的产物随 Python 一起退役（拆分成果以"语义边界确认"的形式沉淀进 Rust crate 边界）。
-- [2026-09-18-block-rs-refactor.md](2026-09-18-block-rs-refactor.md)：Phase 2/3 的 GenContext + gen/ 设计直接成为 `java_rta_gen` 的 API 与本方案 R1 的实现蓝图。
+- [2026-09-18-block-rs-refactor.md](2026-09-18-block-rs-refactor.md)：Phase 2/3 的 GenContext + gen/ 设计直接成为 `rava_gen` 的 API 与本方案 R1 的实现蓝图。
 - [2026-09-18-p0-python-refactor.md](2026-09-18-p0-python-refactor.md)：其收尾（窗口 1 ④）完成即使命达；不再有后续 Python 投资。
 - [2026-09-13-target-architecture.md](2026-09-13-target-architecture.md)：调用链 BFS、存根化、native 共置三原则在 `driver`/`emit` 中原样继承；其中 `native_impls/` 布局已被 CLAUDE.md 规则 3 的共置方案取代，以 CLAUDE.md 为准。

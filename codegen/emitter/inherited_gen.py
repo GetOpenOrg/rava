@@ -37,8 +37,8 @@ from ..type_map import effective_class_type_params, short_cls
 from .attrs import to_snake
 
 # 类文本中的两个插入位（整行），由 resolve_inherited_members 统一替换
-IMPORTS_SLOT = '//@@java_rta:inherited-imports@@'
-MEMBERS_SLOT = '//@@java_rta:inherited-members@@'
+IMPORTS_SLOT = '//@@rava:inherited-imports@@'
+MEMBERS_SLOT = '//@@rava:inherited-members@@'
 
 _ATTR_RE = re.compile(r'#\[java_(?:method|native)\(name = "((?:[^"\\]|\\.)*)", descriptor = "((?:[^"\\]|\\.)*)"([^\n]*)')
 _ACCESS_RE = re.compile(r'\baccess = "([^"]*)"')
@@ -812,7 +812,7 @@ def _imports_for(signature: str, owner: ClassEmission, recv: ClassEmission,
         m = _USE_RE.match(ln)
         if m:
             owner_uses.setdefault(m.group(2), ln.strip())
-        elif ln.startswith('java_rta_macros::java_class!'):
+        elif ln.startswith('rava_macros::java_class!'):
             break
     # 祖先文件不 use 自身：签名引用声明类自身（`fork() -> ForkJoinTask<V>`）时按其包路径导入
     if '/' in owner.binary_name:

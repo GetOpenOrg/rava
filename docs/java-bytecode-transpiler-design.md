@@ -798,7 +798,7 @@ dependencies = []
 ```
 scripts/
   main.py               ← CLI 入口：python scripts/main.py <file.java>
-  java_rta.py           ← RTA 分析器（基于 javalang 源码 AST）✅ 已实现
+  rta.py           ← RTA 分析器（基于 javalang 源码 AST）✅ 已实现
   codegen/              ← Java → Rust 转译器包 ✅ P0–P3 已实现
     __init__.py         ←   对外暴露 transpile()
     types.py            ←   数据结构（Instr/FieldInfo/ParsedMethod/ClassInfo）
@@ -888,7 +888,7 @@ cd output && cargo run --release -p user
 
 ```bash
 # RTA 可达性分析（基于源码 AST）
-uv run python scripts/java_rta.py tests/TestP1.java
+uv run python scripts/rta.py tests/TestP1.java
 
 # Java → Rust 转译（基于字节码）
 uv run python scripts/main.py tests/TestP0.java

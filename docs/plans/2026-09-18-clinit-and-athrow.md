@@ -1,7 +1,7 @@
 # `<clinit>` 类初始化语义与 athrow 异常对象（终态方案）
 
 > 日期：2026-09-18
-> 范围：`codegen/`（异常表解析、try 区域规划、BFS）、`runtime/java_rta_macros`（`java_class!` 类初始化状态机、`java_try!`）、`runtime/java_runtime`（`JvmError`、VM 抛出的异常）
+> 范围：`codegen/`（异常表解析、try 区域规划、BFS）、`runtime/rava_macros`（`java_class!` 类初始化状态机、`java_try!`）、`runtime/java_runtime`（`JvmError`、VM 抛出的异常）
 > 相关：`java-rust-translation-reference.md` §8 / §14 / §16；`2026-09-18-cfg-structuring-rewrite.md`（控制流结构化，另一任务）
 
 ## 1 目标
@@ -112,7 +112,7 @@ impl<T: Into<Object>> From<T> for JvmError      // athrow：return Err(JvmError:
    （Python 中不出现 JDK 类名字面量）。
 6. 循环与 try 同起点时：处理器全部落在循环内 → try 属于循环体，先开循环。
 
-### 4.3 `java_try!`（`runtime/java_rta_macros/src/try_macro.rs`）
+### 4.3 `java_try!`（`runtime/rava_macros/src/try_macro.rs`）
 
 ```rust
 {
