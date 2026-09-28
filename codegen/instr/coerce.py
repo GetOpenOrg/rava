@@ -146,11 +146,21 @@ def _render_cast(e, target: str, binary_name: str = '', checked: bool = False,
       （跨实例化擦除路径，A-1：From<Object> for X<A> 对任意 A 成立）；
     - box_first=True：e 是具体 wrapper（非 Object）时先装箱（保持对象标识）。
     """
-    from ..rs_ir import CastExpr, RawExpr
+    from ..rs_ir import RawExpr, Var
     from ..render import render_cast
-    child = e if isinstance(e, RawExpr) else RawExpr(e)
-    return render_cast(CastExpr(child, target, binary_name=binary_name,
-                                checked=checked, box_first=box_first))
+    if isinstance(e, str):
+        # 字符串入口（FS-Q1 Q1-b 过渡）：叶子以 Var 承载原串、立即渲染（不进 IR，不计 raw）。
+        # 'this' 保持 RawExpr 叶子：render 的 _clone_src 对 Var('this') 另有 `Clone::clone(this)`
+        # 形态，字符串管线历来发射 `Clone::clone(&this)`——保持逐字节一致
+        e = RawExpr(e) if e == 'this' else Var(e)
+    return render_cast(cast_node(e, target, binary_name, checked, box_first))
+
+
+def cast_node(e, target: str, binary_name: str = '', checked: bool = False,
+              box_first: bool = False):
+    """`_render_cast` 的节点版（FS-Q1 Q1-b）：值节点 → CastExpr 节点（IR 管线直接入栈 / 嵌套）。"""
+    from ..rs_ir import CastExpr
+    return CastExpr(e, target, binary_name=binary_name, checked=checked, box_first=box_first)
 
 
 def _same_generic_family(actual: str, expected: str) -> bool:
