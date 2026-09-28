@@ -30,7 +30,7 @@
 
 | 批次 | 状态 |
 |---|---|
-| 7a | 🔄 |
+| 7a | ✅ `409966f` + 名单 8 个访问器接口（TestStreamBasic / TestArrayList PASS） |
 | 7b | ⬜ |
 | 7c | ⬜ |
 | 7d | ⬜ |

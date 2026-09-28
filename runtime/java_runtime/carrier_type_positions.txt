@@ -58,3 +58,12 @@ java/util/function/ToLongBiFunction
 java/util/function/ToLongFunction
 java/util/function/UnaryOperator
 java/util/stream/Collector
+# 批次 7a（T-2，2026-09-28）：jdk/internal/access 访问器接口（SharedSecrets 存取签名改为对接口类型泛型）
+jdk/internal/access/JavaIOFileDescriptorAccess
+jdk/internal/access/JavaIOPrintStreamAccess
+jdk/internal/access/JavaLangAccess
+jdk/internal/access/JavaLangInvokeAccess
+jdk/internal/access/JavaLangRefAccess
+jdk/internal/access/JavaLangReflectAccess
+jdk/internal/access/JavaUtilCollectionAccess
+jdk/internal/access/JavaUtilConcurrentFJPAccess
