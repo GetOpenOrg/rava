@@ -1,7 +1,7 @@
 # 代码生成架构规则
 
 **日期**：2026-09-12  
-**适用范围**：`scripts/codegen/` 目录下的所有代码生成模块  
+**适用范围**：`codegen/` 目录下的所有代码生成模块（原 `scripts/codegen/`，已迁至仓库根）  
 **来源**：架构审计与重新设计讨论（参见 `docs/plans/2026-09-12-architecture-redesign.md`）
 
 ---
@@ -44,7 +44,7 @@ elif op == 'getstatic':
 
 ## 规则二：最终态 Python 代码中不包含任何 JDK 类名
 
-**规则**：`scripts/codegen/` 下的最终态代码中，不得出现任何 JDK 类名字符串常量（如 `'ArrayList'`、`'java/util/HashMap'`、`'PrintStream'` 等）。
+**规则**：`codegen/` 下的最终态代码中，不得出现任何 JDK 类名字符串常量（如 `'ArrayList'`、`'java/util/HashMap'`、`'PrintStream'` 等）。
 
 **例外（仅在过渡期 Phase B-C 有效）**：`jdk_dispatch.py` 中的 `JDK_INTERFACE_GROUPS`，仅保存接口名（非实现类名），且该文件在 Phase D 完成后整个删除。
 

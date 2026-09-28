@@ -144,3 +144,13 @@ def caller_sensitive_annotations() -> frozenset:
 
 def sigpoly_callsite_typed() -> frozenset:
     return frozenset(_toml('vm_intrinsics.toml').get('sigpoly', {}).get('callsite_typed', []))
+
+
+def vm_constant_null_returns() -> frozenset:
+    """恒返回 null 的 VM 边界方法（vm_intrinsics.toml [vm_constants] null_returns，`类.方法:描述符`）。"""
+    return frozenset(_toml('vm_intrinsics.toml').get('vm_constants', {}).get('null_returns', []))
+
+
+def vm_constant_null_to_false() -> frozenset:
+    """null 实参 → false 的纯函数（vm_intrinsics.toml [vm_constants] null_to_false）。"""
+    return frozenset(_toml('vm_intrinsics.toml').get('vm_constants', {}).get('null_to_false', []))

@@ -1,136 +1,121 @@
 # rava
 
-Java 字节码 → Rust 源码转译器。
+**Java 语言的新编译后端**：把 Java `.class` 字节码翻译为等价、可读的 Rust 源码，生成可直接 `cargo build`
+的 workspace，产出原生二进制。开发者继续写 Java，构建流程自动得到原生程序——rava 不是一次性迁移工具。
 
-通过 RTA（Rapid Type Analysis）可达性分析，从 Java `.class` 文件精确提取最小可达方法集合，将其转译为符合 Java 命名空间同构的 Rust 代码，并生成可直接编译运行的 Cargo 项目。
+- 产品定位：[`docs/plans/2026-09-18-product-vision.md`](docs/plans/2026-09-18-product-vision.md)
+- Java → Rust 对照规则：[`docs/plans/java-rust-translation-reference.md`](docs/plans/java-rust-translation-reference.md)
+- 语义等价性现状：[`docs/compatibility.md`](docs/compatibility.md)
+
+```java
+// Java（开发者写的）
+Animal animal = new Dog();
+animal.speak();
+```
+```rust
+// 生成的 Rust（可读的中间层；vtable 分派、所有权细节由生成器与宏封装）
+let animal: Animal = Dog::new()?;
+animal.speak()?;
+```
 
 ---
 
-## 核心特性
+## 核心思路
 
-- **基于字节码**：直接解析 `.class` 二进制，无需 JDK 工具链介入转译环节
-- **RTA 裁剪**：只转译可达方法，避免将 5000+ 类的 JDK 全部拉入
-- **命名空间同构**：Java 包路径与 Rust 模块路径一一对应（`com.example.Foo` → `src/com/example/foo.rs`）
-- **Java 语义保留**：生成代码使用 Java 风格 API（`String`、`ArrayList<T>`、`System::out().println()`），不直接暴露 Rust 标准库
-- **可读可改**：生成代码与手工翻译代码完全等价，开发者可直接阅读和修改
+- **JDK 也来自字节码翻译**：`String`、`ArrayList`、`System.out` 等的 Rust 实现由 JDK 自身的 `.class`
+  翻译得到，而不是手写近似。手写只限两类：公开 API 的 `ACC_NATIVE` 方法（`*_impl.rs`）与 VM 边界类。
+- **调用链闭包**：从 `main` 出发做 BFS，只翻译调用链上的方法；链外方法生成
+  `panic!("stub: 类.方法:描述符")` 存根，命中即精确报出缺口。
+- **边界截断**：调用链进入 `jdk/internal/`、`sun/` 等内部包即停止展开，由手写边界类承接；
+  边界与放行清单集中在 `runtime/java_runtime/closure.toml`。
+- **宏承载对象模型**：生成代码以 `java_class!` 块级宏描述类，由 proc-macro crate `rava_macros`
+  展开为 struct、vtable、字段访问器、类型转换与反射元数据。
+- **VM 语义对齐**：真多线程（OS 线程 + 原子 / 读写锁对象模型）、异常与栈回溯、反射 / 注解 /
+  动态代理 / MethodHandle、类初始化时序、本地化与货币数据均按 JVM 行为实现，并有 e2e 对照。
 
-## 转译流水线
+## 流水线
 
 ```
-.java 源文件
-    │  javac -g
-    ▼
-.class 字节码
-    │  classfile.py（二进制解析 + BootstrapMethods + LocalVariableTable）
-    ▼
-ParsedClass / ParsedMethod（指令序列 + 常量池 + 变量名）
-    │  RTA 可达性分析
-    ▼
-可达方法集合
-    │  cfg.py（循环检测）+ stack.py（栈模拟）+ instr.py（指令翻译）
-    ▼
-Rust IR（具名变量 + 结构化控制流）
-    │  method.py（后处理：别名合并、mut 裁剪、格式简化）
-    ▼
-.rs 源文件  +  java_runtime/（运行时类型层）
-    │  cargo build
-    ▼
-native binary
+.java ──javac──▶ .class（用户类）      JDK jmods（所选 JDK 版本的类库）
+                      │                        │
+                      └──────────┬─────────────┘
+                                 ▼
+             classfile.py   二进制解析（常量池 / BootstrapMethods / LVT / 注解 / 异常表）
+                                 ▼
+             callchain.py   调用链 BFS：闭包 = 可达方法 + 类初始化 + 虚分派目标
+                            （closure.toml 边界 / seeds.toml 补种 / vm_intrinsics.toml VM 承载）
+                                 ▼
+             cfg/           控制流结构化（循环 / try 区域 / 条件）
+             instr/ stack   操作数栈模拟 → rs_ir（Rust IR）
+             method/        变量提升 / 可变性 / 融合 / 后处理 → render.py 渲染
+                                 ▼
+             emitter/       java_class! 宏块、模块树、Cargo workspace、main 引导
+                                 ▼
+             build/<测试>/   scratch workspace（runtime/ 手写 overlay + 生成代码）
+                                 ▼  cargo build（rava_macros 展开）
+                            原生二进制
 ```
 
 ## 快速开始
 
-**环境要求**：Python 3.12+、JDK 17+、Rust 工具链（stable）
+**环境要求**：Python 3.11+、JDK 21（语料基线；JDK 25 同样支持）、Rust stable。
+大闭包单个 rustc 峰值约 14G 内存，16G 机器上重型用例自动单作业编译。
 
 ```bash
-# 转译单个文件（scratch 自动建在 build/<测试名>/，含手写代码 overlay）
+# 转译 + 编译 + 运行（scratch = build/<主类 snake 名>）
 python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java
 
-# 只生成不运行
-python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java --no-run
+python3 scripts/main.py Foo.java --no-run          # 只生成
+python3 scripts/main.py Foo.java --clean           # 清空 scratch 重建
+python3 scripts/main.py Foo.java --jdk 25          # 指定 JDK
 
-# 清空 scratch 重建
-python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java --clean
-
-# 运行全量 e2e 测试
-python3 scripts/run_tests.py
+# e2e 测试（期望输出由 JVM 生成，逐字比对）
+python3 scripts/run_tests.py                       # 全量
+python3 scripts/run_tests.py --filter TestXxx      # 单测试
+scripts/run_bg.sh <tag> python3 scripts/run_tests.py --filter TestXxx   # 后台低内存跑批
 ```
 
-**示例**：`tests/HelloWorld.java` 经转译后生成：
+诊断与构建选项（`--debug` / `--strict` / `--trace-class` / `--raw-sites` / `--build-timeout`）见
+[`docs/environment-variables.md`](docs/environment-variables.md)。项目不设自有环境变量。
 
-```rust
-// build/hello_world/user/src/hello_world.rs
-use crate::java_runtime::prelude::*;
-
-pub struct HelloWorld { ... }
-
-impl HelloWorld {
-    pub fn new(message: String) -> Result<Self> { ... }
-
-    pub fn greet(&self) -> Result<()> {
-        System::out().println(format!("Hello, {}", self.message.get()))?;
-        Ok(())
-    }
-
-    pub fn repeat(s: String, times: i32) -> Result<String> {
-        let mut sb = StringBuilder::new()?;
-        let mut i = 0i32;
-        loop {
-            if i >= times { break; }
-            sb.append(&s)?;
-            i += 1;
-        }
-        Ok(sb.to_string()?)
-    }
-
-    pub fn main() -> Result<()> {
-        let hw = HelloWorld::new(String::from("World"))?;
-        hw.greet()?;
-        let r = Self::repeat(String::from("ha"), 3)?;
-        System::out().println(r)?;
-        let items = ArrayList::<String>::new()?;
-        items.add(String::from("foo"))?;
-        items.add(String::from("bar"))?;
-        System::out().println(items.size())?;
-        Ok(())
-    }
-}
-```
-
-## 项目结构
+## 目录结构
 
 ```
 rava/
-├── scripts/
-│   ├── main.py                  # CLI 入口
-│   ├── rta.py              # RTA 可达性分析
-│   └── codegen/
-│       ├── classfile.py         # .class 二进制解析
-│       ├── cfg.py               # 控制流图 + 循环检测
-│       ├── stack.py             # JVM 操作数栈模拟
-│       ├── instr.py             # 字节码指令翻译
-│       ├── method.py            # 方法体生成 + 后处理
-│       ├── emitter.py           # Cargo 项目生成
-│       ├── type_map.py          # Java → Rust 类型映射
-│       └── runtime.py           # 运行时类型定义（java_runtime/）
-├── tests/                       # 测试用 Java 源文件
-├── runtime/                     # 手写代码唯一真源（java_runtime + rava_macros，提交 git）
-├── docs/
-│   ├── tasks.md                 # 任务管理（当前活跃，只含开放项）
-│   ├── tasks-history.md         # 任务历史文档（T01-T81，已归档）
-│   └── plans/                   # 设计文档
-│       ├── 2026-09-12-java-to-rust-transpiler.md
-│       └── 2026-09-12-codegen-java-api-rules.md
-└── build/                       # 每测试一次性 scratch（.gitignore，生成代码不提交）
+├── codegen/                       # 生成器（Python）
+│   ├── classfile.py               # .class 解析
+│   ├── callchain.py               # 调用链 BFS 闭包
+│   ├── vm_constants.py            # VM 常量守卫的死分支剪除
+│   ├── cfg/                       # 控制流结构化
+│   ├── instr/                     # 指令模拟（调用 / 字段 / 数组 / 强制转换）
+│   ├── method/                    # 方法体生成与后处理
+│   ├── emitter/                   # 类 / 模块 / workspace 发射
+│   ├── rs_ir.py / render.py       # Rust IR 与渲染
+│   ├── jvm_type.py                # 类型 IR（TypeIR）
+│   ├── runtime_manifest.py        # 运行时清单读取
+│   └── *_audit.py                 # 审计线（raw / equiv / fallback）
+├── runtime/                       # 手写代码唯一真源（提交 git）
+│   ├── java_runtime/              # 运行时 crate：native 方法 *_impl.rs、VM 边界类、build.rs
+│   │   ├── closure.toml           # 调用链边界 / VM 边界类 / 放行清单
+│   │   ├── seeds.toml             # 补种（注解 / locale 资源束 / JCA 服务 / 模块资源 / 引导初始化）
+│   │   └── vm_intrinsics.toml     # VM 承载方法、调用点特判、VM 常量
+│   ├── java_support/              # VM 支持类的 Java 源（动态代理、BMH 物种等载体）
+│   └── rava_macros/               # proc-macro crate（java_class! 块级宏）
+├── scripts/                       # main.py / run_tests.py / 跑批与对照工具
+├── tests/
+│   ├── e2e/                       # e2e 语料（61 个类别，1066 例）
+│   ├── expected/                  # JVM 生成的期望输出
+│   ├── unit/                      # 生成器单元测试（python3 -m unittest tests.unit.<模块>）
+│   └── lib_pilot/                 # jar 输入模式（JUnit / hamcrest crate）试点
+├── docs/                          # 任务、兼容性、方案与报告
+└── build/                         # 每测试一次性 scratch 与共享编译缓存（gitignore）
 ```
 
-## 代码生成规范
+## 项目状态
 
-生成代码遵循以下原则（详见 [`docs/plans/2026-09-12-codegen-java-api-rules.md`](docs/plans/2026-09-12-codegen-java-api-rules.md)）：
-
-- 命名空间与 Java 完全同构，包路径对应 Rust 模块路径
-- 类型名称与 Java 一致（`String`、`ArrayList<T>`），不使用 Rust 标准库类型
-- 所有方法返回 `Result<T>`，调用处加 `?`
-- 实例字段通过 `Field<T>` 封装，外部通过 `.get()` / `.set()` 访问
-- 输出语句使用 `System::out().println()`
-- 运行时基础设施（`Rc<RefCell<>>`、`Vec` 等）封装在 `java_runtime/` 内，业务代码不可见
+- 任务与进展：[`docs/tasks.md`](docs/tasks.md)（只列开放项），完成项归档在 `docs/tasks-history-2026-09.md`
+- 过渡态总清单（距最终态的全部差距，编号 FS-xx）：
+  [`docs/plans/2026-09-26-transitional-state-inventory.md`](docs/plans/2026-09-26-transitional-state-inventory.md)
+- 长期路线（含 Python 生成器 → Rust 单二进制重写 R0）：
+  [`docs/plans/2026-09-23-long-term-roadmap.md`](docs/plans/2026-09-23-long-term-roadmap.md)
+- 开发约定（架构原则、手写层规则、命名原则）：[`CLAUDE.md`](CLAUDE.md)

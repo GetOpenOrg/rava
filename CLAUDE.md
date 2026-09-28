@@ -56,9 +56,9 @@ animal.speak();
 
 ### 1. HelloWorld 必须运行在 JDK 字节码翻译出的 Rust 代码上
 
-`System.out.println`、`String`、`ArrayList` 等的 Rust 实现必须来自对 JDK `.class` 文件的字节码翻译，**不得**来自手写 Rust 字符串（如 `runtime.py` / `java_runtime` crate 中的硬编码实现）。
+`System.out.println`、`String`、`ArrayList` 等的 Rust 实现必须来自对 JDK `.class` 文件的字节码翻译，**不得**来自手写 Rust 近似实现。
 
-`runtime.py` 中的手写 Rust 内容以及 `java_runtime` crate 中的 `String`/`ArrayList`/`System` 等实现是**临时绕行方案**，新功能不得依赖这些手写实现，已有的应逐步用字节码翻译替换。
+公开 API 类（`java/`、`javax/`）的手写只允许 `ACC_NATIVE` 方法；越界的手写覆盖由审计线计数（`[raw-audit] non_native_overrides`，2026-09-28 已清零，新增即回归）。
 
 ### 2. 只分析调用链上的方法内部依赖
 
@@ -133,17 +133,18 @@ impl InternalLock {
 
 BFS 调用链分析规则：
 
-| 调用目标所在包 | 处理方式 |
+| 调用目标 | 处理方式 |
 |--------------|---------|
 | `java/`、`javax/`（公开 API） | 继续 BFS，翻译字节码 |
-| `jdk/internal/`、`sun/`（内部包） | 停止 BFS，视为内部边界类，整体手写 |
+| `closure.toml [boundary]` 内部包前缀（`jdk/`、`sun/`、`com/sun/` 等） | 停止 BFS，视为内部边界类，整体手写 |
+| `closure.toml [vm_boundary]`（公开包中由 VM 本地代码驱动的类，如 `Class`、`ClassLoader`、`Module`） | 同内部边界类，手写方法单独计数（`vm_boundary_methods`） |
+| `closure.toml [release]` / `seeds.toml [jca]` 放行条目 | 边界前缀内按字节码翻译（纯 Java 逻辑的内部类） |
+
+**清单即边界**：边界、放行、补种、VM 承载全部集中在 `runtime/java_runtime/` 下三个 TOML
+（`closure.toml` / `seeds.toml` / `vm_intrinsics.toml`，读取入口 `codegen/runtime_manifest.py`），
+生成器代码里不写类名特判。
 
 **截断的意义**：报告数据（`docs/reports/2026-09-14-impl-strategy.md`）显示，跟随内部包调用链会使类数从 111 膨胀到 635（+470%）。边界截断将翻译规模压缩 83%，是策略性收益而非渐进优化。
-
-**实现优先级**（按被引用次数，阶段 1 叶子层先做）：
-- `jdk/internal/misc/InternalLock`：184 次引用，0 个 ACC_NATIVE，手写 7 个方法
-- `jdk/internal/util/Preconditions`：537 次引用，0 个 ACC_NATIVE，手写 15 个方法
-- `jdk/internal/misc/Unsafe`：1379 次引用，84 个 ACC_NATIVE，阶段 2 实现
 
 ### 4. Python 代码中不得出现任何 JDK 类名常量
 
@@ -159,7 +160,10 @@ BFS 调用链分析规则：
 runtime/                            # 提交到 git：手写代码唯一真源
 ├── java_runtime/
 │   ├── Cargo.toml                  # 宏依赖为 path = "<repo>/runtime/rava_macros"
-│   ├── build.rs                    # 维护 native_status.toml
+│   ├── build.rs                    # 维护 native_status.toml；反射 / 注解元数据表
+│   ├── closure.toml                # 调用链边界 / VM 边界类 / 放行清单
+│   ├── seeds.toml                  # 补种（注解 / locale / JCA / 模块资源 / 引导初始化）
+│   ├── vm_intrinsics.toml          # VM 承载方法、调用点特判、VM 常量
 │   └── src/
 │       ├── lib.rs / error.rs       # VM 基础设施（java/jdk/sun 顶层 mod 声明）
 │       ├── java/lang/
@@ -169,7 +173,8 @@ runtime/                            # 提交到 git：手写代码唯一真源
 │       │   └── ...
 │       ├── java/util/function/     # Arch-1 接口存根（4 个）
 │       └── jdk/internal/...        # 内部边界类（完整手写）
-└── rava_macros/                # proc-macro crate（java_class! 块级宏）
+├── java_support/                   # VM 支持类的 Java 源（Proxy$Dyn、BMH Species_Dyn 等）
+└── rava_macros/                    # proc-macro crate（java_class! 块级宏）
 
 build/                              # gitignore：每测试一次性 scratch
 ├── target/                         # 共享编译缓存（CARGO_TARGET_DIR）
@@ -194,6 +199,8 @@ python3 scripts/main.py <Test.java> --clean     # 清空 scratch 重建
 python3 scripts/run_tests.py                    # 全量 e2e（顺序）
 python3 scripts/run_tests.py -j 4               # 并行
 python3 scripts/run_tests.py --filter TestXxx   # 单测试
+python3 scripts/main.py <Test.java> --no-run --trace-class <类>   # 查某类为何入闭包（另有 --debug / --strict / --raw-sites）
+python3 -m unittest tests.unit.<模块>            # 生成器单元测试
 # 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
 scripts/prune.sh                                # 清共享 target 过期产物（跑批间调用，防磁盘满）
 scripts/run_bg.sh <tag> <cmd...>                # 后台跑批：低内存编译环境 + prune + 落盘 build/logs/bg/

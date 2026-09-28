@@ -93,3 +93,21 @@ callsite_typed = [
     "java/lang/invoke/MethodHandle.invokeExact",
     "java/lang/invoke/MethodHandle.invoke",
 ]
+
+# ── VM 常量（死分支剪除）──────────────────────────────────────────────────────────────
+# 手写边界方法在原生二进制中返回恒定值（无启动选项可改变），其守卫的分支静态可判。
+# 字节码规范化阶段（codegen/vm_constants.py，classfile 解码后单点执行）剪除恒不执行的分支体：
+# 调用链不再经它拉入类，生成代码也不含该分支——与 JVM 在同一配置下的执行路径一致。
+#   null_returns   恒返回 null 的方法（`类.方法:描述符`）
+#   null_to_false  纯函数：null 实参 → false（JDK 规范语义）
+# 识别形态：`<null_returns 调用> [astore k; aload k] ifnull L` 与
+#           `<null_returns 调用> [astore k; aload k] <null_to_false 调用> ifeq L`——恒跳转，
+#           剪除 (分支, L) 之间的直线段（段内无外部跳入 / 异常表端点时才剪）。
+[vm_constants]
+null_returns = [
+    # VM 保存属性仅来自 -XX: / 归档选项；原生二进制无启动选项（vm_impl.rs getSavedProperty 恒 null）
+    "jdk/internal/misc/VM.getSavedProperty:(Ljava/lang/String;)Ljava/lang/String;",
+]
+null_to_false = [
+    "java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z",
+]
