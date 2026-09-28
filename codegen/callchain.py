@@ -1070,9 +1070,14 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             for sv in _new:
                 _jca_seeded.add(sv)
                 instantiated_classes.add(sv.impl)
-                _enqueue_method((sv.impl, '<init>', '()V'))
                 # 实现类由 Provider$Service.newInstance 经反射构造（Class.forName →
-                # getConstructor().newInstance()）：无参构造器登记按名分派面
+                # getConstructor(ctrParamClz).newInstance(..)）：构造器形参由服务类型的
+                # EngineDescription 决定（SecureRandom 为 SecureRandomParameters），故全部
+                # 构造器入链并登记按名分派面
+                _ici = _load_class(sv.impl)
+                for _cm in (_ici.methods if _ici else ()):
+                    if _cm.name == '<init>':
+                        _enqueue_method((sv.impl, '<init>', _cm.descriptor))
                 REFLECT_CONSTS.setdefault(sv.impl, set()).add('<init>')
                 # provider 对象由手写边界按需构造（JDK ProviderConfig 对内建 provider 直接 new）
                 _pcls = provider_class(sv.provider, _JCA_MANIFEST)
