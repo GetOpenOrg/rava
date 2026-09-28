@@ -48,9 +48,33 @@ _SELF = 'raw_audit.py'
 _EXT_PARSER_WHITELIST = frozenset({'sig_types.py', 'type_args.py', 'jvm_type.py', 'stack.py'})
 
 
+# 位点剖面（JAVA_RTA_RAW_SITES=<文件>）：按构造调用位点（文件:行:函数）累计，进程退出时落盘，
+# 供 FS-Q1 Raw 逃生舱收敛按热点排序（缺省关闭，不影响发射）
+import os as _os_rs
+_RAW_SITES_OUT = _os_rs.environ.get('JAVA_RTA_RAW_SITES')
+_raw_sites: dict = {}
+
+
+def _dump_raw_sites() -> None:
+    with open(_RAW_SITES_OUT, 'a', encoding='utf-8') as _f:
+        for (kind, site), n in sorted(_raw_sites.items(), key=lambda kv: -kv[1]):
+            _f.write(f'{n}\t{kind}\t{site}\n')
+
+
+if _RAW_SITES_OUT:
+    import atexit as _atexit_rs
+    _atexit_rs.register(_dump_raw_sites)
+
+
 def record_raw(kind: str, n: int = 1) -> None:
     """RawExpr/RawStmt 构造事件计数（只读计数，不影响发射内容）。"""
     _counts[kind] = _counts.get(kind, 0) + n
+    if _RAW_SITES_OUT:
+        import sys as _sys_rs
+        # 帧：record_raw ← __post_init__ ← dataclass __init__ ← 构造位点
+        _fr = _sys_rs._getframe(3)
+        _site = f'{Path(_fr.f_code.co_filename).name}:{_fr.f_lineno}:{_fr.f_code.co_name}'
+        _raw_sites[(kind, _site)] = _raw_sites.get((kind, _site), 0) + n
 
 
 def reset() -> None:
