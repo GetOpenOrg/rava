@@ -34,7 +34,10 @@
 | JCA J2 | `SecureRandom` 回到字节码（缺省 PRNG 经 provider 列表取 SUN.NativePRNG） | −9 |
 | 审计口径 | VM 耦合边界类（closure.toml [vm_boundary]：Class / ClassLoader / Module / VirtualThread / JceSecurity / FileSystems 等）的手写方法改记 `vm_boundary_methods` / `[vm-boundary-audit]`——策略边界（逐类写明截断依据），与 intrinsics 同理不计越界（用户 2026-09-28 决定） | 约 31 处移出越界计数 |
 
-**越界余项（约 5 处）**：`Enum.valueOf`（FS-H8，改为字节码 + VM 边界类 `Class.enumConstantDirectory` 手写，进行中）、
+**2026-09-28 收尾 ✅ `non_native_overrides=0`**：以下余项全部回到字节码并验证（TestEnumBasic / TestEnumAdvanced /
+TestCustomException / FileIOTest / TestFilesApi / TestFormatLocale / TestCurrencyApi PASS）。
+
+**（历史）越界余项（约 5 处）**：`Enum.valueOf`（FS-H8，改为字节码 + VM 边界类 `Class.enumConstantDirectory` 手写，进行中）、
 `FileCleanable.register / unregister`（FS-G4：no-op 语义下沉到内部边界 PhantomCleanable / CleanerFactory）、
 `StackTraceElement.computeFormat`（需 initStackTraceElements 填 declaringClassObject）、
 `DecimalFormatSymbols.initializeCurrency`（FS-L2：Currency 数据层）。
@@ -121,7 +124,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
 | FS-L1 | 只有静态可见的 locale 入选 | — | 运行期拼出的 locale 回落 ROOT | L-1 |
-| FS-L2 | Currency 数据层没建模，手写地区表 | 翻译 CLDR 货币数据 | 其余地区给 `XXX` / `¤`；`getCurrency()` 为 null | L-1 |
+| FS-L2 | ~~Currency 数据层没建模，手写地区表~~ | — | — | ✅ 2026-09-28 L-2：currency.data 模块资源嵌入 + Currency 字节码 + CLDR CurrencyNames 束（`2026-09-28-l2-currency-data.md`，TestCurrencyApi PASS） |
 | FS-L3 | CalendarDataUtility 是手写数据表，非 en 语言回落 ROOT | 翻译 FormatData 束 | de/fr/ja/zh 的月份、星期名为英文 | 新立 |
 | FS-L4 | LocaleProviderAdapter 单适配器 | — | `java.locale.providers` 无效 | 新立 |
 | FS-L5 | 只有 9 个标准 charset，全部手写 | 翻译 `sun.nio.cs.*` | windows-1252 等抛 UnsupportedCharsetException | 新立 |
@@ -176,7 +179,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | FS-G1 | 没有 GC（Rc 循环永不释放，驻留表只增不减）；`Runtime.gc/freeMemory/totalMemory/maxMemory` 缺失 | 回收机制 + 内存查询 | 内存持续增长；调用即 panic | 部分（compat「无 GC」） |
 | FS-G2 | 弱 / 软 / 虚引用不清除、不入队 | — | WeakHashMap 条目不消失 | compat 近似行 |
 | FS-G3 | finalize 不触发 | — | finalize 不执行 | compat |
-| FS-G4 | Cleaner / `FileCleanable.register` 是 no-op | — | 未 close 的 fd 泄漏；Cleaner 动作不执行 | 新立 |
+| FS-G4 | Cleaner / `FileCleanable.register` 是 no-op | — | 未 close 的 fd 泄漏；Cleaner 动作不执行 | 新立；2026-09-28 FileCleanable 回到字节码，no-op 语义下沉内部边界 PhantomCleanable / CleanerFactory（语义不变：仍无 GC 驱动清理） |
 | FS-G5 | 监视器 / park 侧表条目不回收，地址键可能被复用 | 对象头或弱键 | 内存增长；理论上身份冲突 | 新立 |
 
 ## 十一、生成器质量
@@ -212,7 +215,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | FS-H5 | `ConcurrentHashMap()` 初始容量设为 1024，用来避开扩容路径的生成缺口 | 修好 vars 提升缺口，删除伴生 | 条目超过 768 后进入有缺陷的扩容路径 | 新立 |
 | ~~FS-H6~~ ✅ `803aa05` | `Properties.getProperty` 手写，忽略 defaults 链 | 翻译 | `new Properties(defaults).getProperty(k)` 不回落 | 新立 |
 | FS-H7 | `AtomicInteger(int)` 构造器手写 | 翻译 | 仅架构 | 新立 |
-| FS-H8 | `Enum.valueOf` 靠常量目录手写 | 字节码 + VM 边界类 `Class.enumConstantDirectory` 手写 | 泛型上下文可能抛 CCE；嵌套枚举的错误消息用 binary name（JDK 用 canonical name） | S-15 / A-1（🔄 2026-09-28 进行中） |
+| FS-H8 | ~~`Enum.valueOf` 靠常量目录手写~~ | — | — | ✅ 2026-09-28：字节码 + VM 边界类 `Class.enumConstantDirectory` 手写（TestEnumBasic / TestEnumAdvanced PASS） |
 | FS-H9 | Thread 的 getThreadGroup / interrupt / isTerminated 这些非 native 方法手写 | 翻译 | 仅架构 | 新立 |
 | FS-H10 | Object / ObjectVTable 整类手写 | vtable 从 `Object.class` 翻译 | 仅架构 | Arch-4 |
 | FS-H11 | `string_ext.rs`、驻留表手写 | 由字节码承载 | 仅架构 | P-2 |

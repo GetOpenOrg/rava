@@ -23,12 +23,18 @@ DecimalFormatSymbols.initializeCurrency(locale)
 
 | 步 | 内容 |
 |----|------|
-| C1 | `currency.data` 以 `include_bytes!` 进 `jdk_resources`（与 tzdb.dat 同一机制，按 JDK 版本各一份，golden 同源）；`Class.getResourceAsStream`（VM 边界类 Class）对 java.base 模块资源名返回嵌入字节的 ByteArrayInputStream |
+| C1 | seeds.toml `[module_resources]` 登记 `java/util/currency.data`；生成器从**本轮所用 JDK 的 jmod** 提取（数据与 JDK 版本同源，生成物不提交），写入 scratch 并生成 `jdk_resources/module_resources.rs`（include_bytes! 表）；`Class.getResourceAsStream` 走字节码（无名模块 → `ClassLoader.getSystemResourceAsStream`），VM 边界类 ClassLoader 的资源查询对模块资源返回 ByteArrayInputStream |
 | C2 | `Currency` 走翻译字节码（`java/util/` 公开包，本就在 BFS 内）；`getInstance(Locale)` / `getCurrencyCode` / `getDefaultFractionDigits` 全部字节码 |
 | C3 | 符号：seeds.toml `[locale] bundles` 增 CLDR `CurrencyNames` 族（按入选 locale 补种，L-1 同机制）；内部边界 `LocaleServiceProviderPool.getLocalizedObject` 对 CurrencyNameProvider 转 `LocaleResources.getCurrencyName`（资源束查表，回落链同 L-1） |
 | C4 | 删除 `initializeCurrency` 手写覆盖；`getCurrency()` 回到 JDK 语义 |
 
-## 四、验收
+## 四、状态
+
+✅ 2026-09-28 完成：C1–C4 全部落地；TestCurrencyApi / TestFormatLocale PASS，`non_native_overrides=0`（FS-H0 收尾）。
+实施中追加：资源束族支持独立触发成员（seeds.toml `[locale] bundles` 表形态）、`NumberFormatProvider` 货币样式按
+`adjustForCurrencyDefaultFractionDigits` 调整小数位、`[upcall-audit]` 手写回调目标未解析告警。
+
+## 五、验收
 
 - e2e：现有 DecimalFormat 货币格式用例（`NumberFormat.getCurrencyInstance`）期望输出不变；新增 `TestCurrencyApi`
   （`Currency.getInstance(Locale.US/JAPAN/GERMANY)`、`getSymbol`、`getDefaultFractionDigits`、`DecimalFormatSymbols.getCurrency`），
