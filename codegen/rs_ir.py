@@ -247,11 +247,17 @@ class InstanceOfExpr:
     binary_name: str      # 目标 JVM binary 名（如 "java/lang/String"）
 
 
+@dataclass
+class TryExpr:
+    """`?` 错误传播：`inner?`（Java 异常经 Result 传播的调用点形态；FS-Q1 Raw 收敛）。"""
+    inner: 'RsExpr'
+
+
 RsExpr = Union[
     Lit, Var, BinOp, UnOp, Call, MethodCall,
     FieldAccess, Index, Cast, RefExpr, DerefExpr,
     BlockExpr, IfExpr, MacroExpr, RawExpr,
-    NewPendingExpr, StaticFieldRef, CastExpr, InstanceOfExpr,
+    NewPendingExpr, StaticFieldRef, CastExpr, InstanceOfExpr, TryExpr,
 ]
 
 

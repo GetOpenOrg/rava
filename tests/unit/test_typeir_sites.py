@@ -64,14 +64,23 @@ class HeadEquivalence(unittest.TestCase):
                 self.assertEqual(erased_base(ty), _old_head(ty), ty)
 
     def test_non_identifier_heads_resolve_alike(self):
-        # 非标识符开头（`&X` / `()` / 空串）：文本可不同，但两者都不命中
-        # registry 短名索引、都不等于任何类短名——消费面判定一致
+        # 非标识符开头（`()` / 空串）：两者都不命中 registry 短名索引——消费面判定一致
         reg = _registry()
         configure_short_names(reg)
         idx = _registry_short_index(reg)
-        for ty in ('&ArrayList', '&JArray<i32>', '()', ''):
+        for ty in ('()', ''):
             self.assertIsNone(idx.get(erased_base(ty)), ty)
             self.assertIsNone(idx.get(_old_head(ty)), ty)
+
+    def test_reference_forms_follow_jvm_type(self):
+        # N4 G5：stack 查询改为 jvm_type 薄转发后，`&X` 按 jvm_type 语义剥引用（旧正则实现
+        # 视为无类身份）；转译实测调用点未出现此形态（双算零差异），语义以类型对象为准
+        reg = _registry()
+        configure_short_names(reg)
+        idx = _registry_short_index(reg)
+        self.assertIsNotNone(idx.get(erased_base('&ArrayList')))
+        self.assertEqual(erased_base('&JArray<i32>'), 'JArray')
+        self.assertTrue(is_jvm_array('&JArray<i32>'))
 
 
 class RegistryMembership(unittest.TestCase):
@@ -83,6 +92,8 @@ class RegistryMembership(unittest.TestCase):
         configure_short_names(reg)
         idx = _registry_short_index(reg)
         for ty in FORMS:
+            if ty.startswith('&'):
+                continue  # 引用形态按 jvm_type 语义（见 test_reference_forms_follow_jvm_type）
             old = idx.get(_old_head(ty)) is not None
             new = erased_class_of(ty, reg) is not None
             self.assertEqual(old, new, ty)
@@ -108,7 +119,7 @@ class ArrayForm(unittest.TestCase):
 
     def test_array_probe_equivalent(self):
         for ty in FORMS:
-            self.assertEqual(is_jvm_array(ty), ty.startswith('JArray<'), ty)
+            self.assertEqual(is_jvm_array(ty), ty.lstrip('&').startswith('JArray<'), ty)
 
     def test_element_extraction_equivalent(self):
         for ty in FORMS:

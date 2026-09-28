@@ -13,7 +13,7 @@ from .rs_ir import (
     # 表达式
     Lit, Var, BinOp, UnOp, Call, MethodCall, FieldAccess, Index,
     Cast, RefExpr, DerefExpr, BlockExpr, IfExpr, MacroExpr, RawExpr,
-    NewPendingExpr, StaticFieldRef, CastExpr, UpcastExpr, InstanceOfExpr,
+    NewPendingExpr, StaticFieldRef, CastExpr, UpcastExpr, InstanceOfExpr, TryExpr,
     # 语句
     LetStmt, AssignStmt, ExprStmt, ReturnStmt,
     BreakStmt, ContinueStmt, LoopStmt, IfStmt, RawStmt,
@@ -102,6 +102,8 @@ def render_expr(expr) -> str:
         recv = render_expr(expr.recv)
         args = ', '.join(render_expr(a) for a in expr.args)
         return f'{recv}.{expr.method}({args})'
+    if isinstance(expr, TryExpr):
+        return f'{render_expr(expr.inner)}?'
     if isinstance(expr, FieldAccess):
         return f'{render_expr(expr.recv)}.{expr.field_name}'
     if isinstance(expr, Index):

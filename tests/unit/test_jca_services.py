@@ -54,7 +54,7 @@ class Extract(unittest.TestCase):
                         M(S('MessageDigest'), S('MD5'), S('p.impl.Md5'), name='other')),
             'p/impl/DesCipher': C(), 'p/impl/Md5': C(), 'p/impl/Hmac': C(), 'p/impl/DesKeyGen': C(),
         }
-        self.mf = JcaManifest(providers=(('P', 'p/Prov'), ('Q', 'p/Missing')))
+        self.mf = JcaManifest(providers=(('P', 'p/Prov', 'p/Prov'), ('Q', 'p/Missing', 'p/Missing')))
 
     def test_triples(self):
         got = extract_services(self.classes.get, self.mf)

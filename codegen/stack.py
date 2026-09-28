@@ -88,7 +88,7 @@ def erased_class_of(rust_ty: str, registry: 'dict | None' = None) -> 'ClassRef |
         return None
     from .jvm_type import from_rust_type
     ty = from_rust_type(rust_ty, registry)
-    return ty if isinstance(ty, ClassRef) and ty.binary in registry else None
+    return ty.erasure() if isinstance(ty, ClassRef) and ty.binary in registry else None
 
 
 def is_jvm_array(rust_ty: str) -> bool:
