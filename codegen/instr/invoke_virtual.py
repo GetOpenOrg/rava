@@ -66,7 +66,7 @@ def _pop_receiver_and_args(sim, params, sig_params_v, registry):
         obj_ty = f"{_infer_m.group(1)}<{_erased_args}>"
         obj_expr = RawExpr(obj_e)
         obj_ty_node = RsNamed(obj_ty)
-    return args, obj_e, obj_ty, arg_nodes
+    return args, obj_e, obj_ty, arg_nodes, obj_expr
 
 
 def _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
@@ -606,7 +606,7 @@ def _build_call(mname_r, recv, args):
     return call
 
 
-def _call_node(rust_mname, recv: str, arg_nodes):
+def _call_node(rust_mname, recv: str, arg_nodes, recv_node=None):
     """调用节点（FS-Q1 Q1-c/d）：`recv.m(args)`——实参为强制转换节点；caller-sensitive 包装生效时
     返回 None（沿用字符串形态）。接收者串为标识符时以 Var 承载，否则暂为 RawExpr 叶子。"""
     if arg_nodes is None:
@@ -618,18 +618,25 @@ def _call_node(rust_mname, recv: str, arg_nodes):
             return None   # @CallerSensitive 包装生效：沿用字符串形态
     import re as _re_cn
     from ..rs_ir import MethodCall, RawExpr as _RawCN
-    recv_node = Var(recv) if _re_cn.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', recv) else _RawCN(recv)
-    return MethodCall(recv_node, rust_mname, list(arg_nodes))
+    # 接收者：标识符 → Var；与栈上节点渲染一致（未经视图 / 装箱改写）→ 直接携带该节点（Q1-e）；
+    # 其余暂为 Raw 叶子
+    if _re_cn.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', recv):
+        _rn = Var(recv)
+    elif recv_node is not None and render_expr(recv_node) == recv:
+        _rn = recv_node
+    else:
+        _rn = _RawCN(recv)
+    return MethodCall(_rn, rust_mname, list(arg_nodes))
 
 
 def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_mname,
                       arg_str, obj_e, obj_ty, obj_is_bare, _sig_owner,
-                      _sig_recv_ty, _recv, _root_routed, registry, arg_nodes=None):
+                      _sig_recv_ty, _recv, _root_routed, registry, arg_nodes=None, recv_node=None):
     """调用发射与结果记录：void 直发 / 根路由 / clone 特例 / 签名真实返回类型
     与擦除类型的对齐（S-3.1 装箱、精确形态记录、幂等 from_any）。"""
     if rust_ret == '()':
         if not obj_is_bare:
-            _cn = _call_node(rust_mname, _recv, arg_nodes)
+            _cn = _call_node(rust_mname, _recv, arg_nodes, recv_node)
             if _cn is not None:
                 sim.emit(ExprStmt(TryExpr(_cn)))
             else:
@@ -675,7 +682,7 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
                 sim.push(Var(v), RsNamed(rust_ret))
             elif (_sig_ret_v is not None and _sig_ret_v != rust_ret
                     and rust_ret not in _PRIMITIVE_RUST_TYPES):
-                _cn = _call_node(rust_mname, _recv, arg_nodes)
+                _cn = _call_node(rust_mname, _recv, arg_nodes, recv_node)
                 sim.emit(LetStmt(v, value=TryExpr(_cn)) if _cn is not None
                          else RawStmt(f"let {v} = {_call_str}?;"))
                 sim.push(Var(v), RsNamed(_sig_ret_v))
@@ -686,7 +693,7 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
                 sim.emit(RawStmt(f"let {v} = Object::from_any({_call_str}?);"))
                 sim.push(Var(v), RsNamed(rust_ret))
             else:
-                _cn = _call_node(rust_mname, _recv, arg_nodes)
+                _cn = _call_node(rust_mname, _recv, arg_nodes, recv_node)
                 sim.emit(LetStmt(v, value=TryExpr(_cn)) if _cn is not None
                          else RawStmt(f"let {v} = {_call_str}?;"))
                 sim.push(Var(v), RsNamed(rust_ret))
@@ -719,7 +726,7 @@ def _gen_invokevirtual_body(sim, comment, class_name, registry, cls, mname, para
         equiv_audit.record('class-literal')
     sig_params_v = _resolve_virtual_sig_params(sim, cls, mname, params, ret,
                                               class_name, registry)
-    args, obj_e, obj_ty, arg_nodes = _pop_receiver_and_args(sim, params, sig_params_v, registry)
+    args, obj_e, obj_ty, arg_nodes, obj_node = _pop_receiver_and_args(sim, params, sig_params_v, registry)
     # Fix 16：泛型参数接收者（如 k.equals(pk) 中 k: K）——inherent 方法不在
     # 类型参数上可见（E0599）。装箱为 Object 后：Object 自身的方法
     # （equals/hashCode/toString）直接调用 java_runtime 手写实现，避免
@@ -802,4 +809,4 @@ def _gen_invokevirtual_body(sim, comment, class_name, registry, cls, mname, para
         sim, class_name, cls, mname, params, ret, rust_ret, obj_base, obj_e, obj_ty, registry)
     _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_mname,
                       arg_str, obj_e, obj_ty, obj_is_bare, _sig_owner, _sig_recv_ty,
-                      _recv, _root_routed, registry, arg_nodes=arg_nodes)
+                      _recv, _root_routed, registry, arg_nodes=arg_nodes, recv_node=obj_node)
