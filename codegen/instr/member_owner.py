@@ -533,13 +533,19 @@ def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: st
         _recv_ty = render_type(sim.stack[-(_recv_stack_idx + 1)][1])
         _recv_targ_map = receiver_type_arg_map(_recv_ty, cls, registry)
     sig_params_v = None
-    from ..stack import erased_base as _erased_base_v
-    _recv_base_v = _erased_base_v(_recv_ty)
+    # N4 G1：接收者身份直接由栈上类型节点取得（不经渲染串再解析）；binary 取 ClassRef 域内身份，
+    # 替代两次短名 → binary 字符串反查（_rust_type_to_binary，同一短名索引，逐输入同值）
+    from ..jvm_type import from_rs_type as _from_rs_type_v, rust_head_name as _head_v, ClassRef as _ClassRefV
+    _recv_t = (_from_rs_type_v(sim.stack[-(_recv_stack_idx + 1)][1], registry)
+               if _recv_ty else None)
+    _recv_base_v = (_head_v(_recv_t) or _recv_ty) if _recv_t is not None else _recv_ty
+    _recv_bin_v = (_recv_t.binary if isinstance(_recv_t, _ClassRefV) and registry
+                   and _recv_t.binary in registry else '')
     if registry and _recv_base_v and _recv_base_v != cls and not _recv_is_this:
         # 接口方法经具体类接收者调用（`Map<Long,String> m = new HashMap<>(); m.put(k, v)`，
         # 局部变量的 Rust 类型是构造出的类实例化）：Rust 侧解析到类自身的方法，
         # 形参类型按类的声明签名 + 接收者实参确定，而非接口的擦除载体形态
-        _recv_cls_ci = registry.get(_rust_type_to_binary(_recv_base_v, registry) or '')
+        _recv_cls_ci = registry.get(_recv_bin_v)
         _call_cls_ci = registry.get(_rust_type_to_binary(cls, registry) or '')
         if (_recv_cls_ci is not None and not _recv_cls_ci.is_interface
                 and _call_cls_ci is not None and _call_cls_ci.is_interface):
@@ -556,7 +562,7 @@ def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: st
         # 声明先于接口桥接——`AbstractIntSpliterator.tryAdvance(Consumer)` 是真声明，
         # 不得走 OfInt 的桥接解析拿 IntConsumer 形参）
         _br_recv_bin = (class_name if _recv_is_this
-                        else _rust_type_to_binary(_recv_base_v, registry)) if (_recv_is_this or _recv_base_v) else ''
+                        else _recv_bin_v) if (_recv_is_this or _recv_base_v) else ''
         _br_recv_ci = registry.get(_br_recv_bin or '')
         _br_desc_full = '(' + ''.join(params) + ')' + ret
         _br_has_real = False
