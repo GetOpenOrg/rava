@@ -208,6 +208,10 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
                            if any(ci.name == cls for cls in field_stubs))
     bfs_count = len(jdk_class_infos) - field_stub_count
     print(f"完成，{bfs_count} 个调用链类 + {field_stub_count} 个 field stub = {len(jdk_class_infos)} 个")
+    # 闭包分类（按角色 / 来源 / 包细分）：控制台汇总，全表写入 jdk-scan 报告
+    from .closure_report import classify as _classify_closure, print_summary as _print_closure
+    _closure_rows = _classify_closure(jdk_class_infos, visited_methods)
+    _print_closure(len(class_infos), _closure_rows)
 
     # 写 JDK 扫描报告
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -215,7 +219,7 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
     os.makedirs(reports_dir, exist_ok=True)
     stem0 = os.path.splitext(os.path.basename(java_files[0]))[0]
     report_path = os.path.join(reports_dir, f"jdk-scan-{stem0}.md")
-    _write_jdk_scan_report(report_path, jdk_class_infos, field_stubs)
+    _write_jdk_scan_report(report_path, jdk_class_infos, field_stubs, _closure_rows)
     print(f"      JDK 扫描报告 → {report_path}")
 
     # 4. 生成 Rust（jar 模式附 lib_crate_classes：lib crate 发射）
@@ -226,8 +230,8 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
     print(f"\n✓ 完成。运行方式：\n  cd {out_dir} && cargo run --release")
 
 
-def _write_jdk_scan_report(path: str, jdk_class_infos: list, field_stubs: set):
-    """将 JDK 扫描结果写成 Markdown 报告。"""
+def _write_jdk_scan_report(path: str, jdk_class_infos: list, field_stubs: set, closure_rows=None):
+    """将 JDK 扫描结果写成 Markdown 报告（闭包分类：按角色 / 按包全表 / 按角色类清单）。"""
     from datetime import date
     field_stub_names = {ci.name for ci in jdk_class_infos if ci.name in field_stubs}
     callchain_infos = [ci for ci in jdk_class_infos if ci.name not in field_stubs]
@@ -238,6 +242,10 @@ def _write_jdk_scan_report(path: str, jdk_class_infos: list, field_stubs: set):
         f.write(f"| 调用链 BFS | {len(callchain_infos)} |\n")
         f.write(f"| Field-only stub | {len(field_stub_names)} |\n")
         f.write(f"| 合计 | {len(jdk_class_infos)} |\n\n")
+        if closure_rows is not None:
+            from .closure_report import write_report_sections
+            write_report_sections(f, closure_rows)
+            f.write("\n")
         f.write("## 调用链 BFS 发现的类\n\n")
         f.write("| 类名 | 方法数 | native 数 |\n|------|-------:|----------:|\n")
         for ci in sorted(callchain_infos, key=lambda c: c.name):
