@@ -69,13 +69,13 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| FS-T1 | 第一档 OS 线程 + GIL：同一时刻只有一个线程执行 Java，线程交错只落在安全点 | 第二档：Arc + 原子单元，去掉 GIL，真并行 | 没有并行加速；交错是 JMM 合法执行的一个子集 | #42 第二档（**进行中**，4fa1d48 起） |
-| FS-T2 | 对象模型原语是单线程后端的类型别名；`__GilStatic` 靠 `unsafe impl Sync` | feature `mt`：Arc / 原子 / 读写锁 / OnceLock | 仅架构 | #42（进行中） |
+| FS-T1 | 第一档 OS 线程 + GIL：同一时刻只有一个线程执行 Java，线程交错只落在安全点 | 第二档：Arc + 原子单元，去掉 GIL，真并行 | 没有并行加速；交错是 JMM 合法执行的一个子集 | ✅ #42：并行后端为默认且唯一、GIL 已删除（`fb4d7bf`，2026-09-27） |
+| FS-T2 | 对象模型原语是单线程后端的类型别名；`__GilStatic` 靠 `unsafe impl Sync` | feature `mt`：Arc / 原子 / 读写锁 / OnceLock | 仅架构 | ✅ #42（`mt` 后端即唯一后端，`fb4d7bf`） |
 | ~~FS-T3~~ ✅ `18da936` | `Runtime.availableProcessors()` 恒返回 1（runtime_impl.rs，注释仍写「协作调度」） | 返回真实核数，ForkJoinPool commonPool 按并行度运行 | 返回值是 1；CompletableFuture 走 ThreadPerTaskExecutor；并行流退化 | 新立（随 #42 第二档） |
 | FS-T4 | 虚拟线程 = OS 线程，Continuation / 载体线程 / 容器登记都不建模 | Continuation 建模 | 无法创建海量虚拟线程（每条保留 256MiB 栈）；toString / 载体信息不同 | #42 / compat 虚拟线程行 |
 | ~~FS-T5~~ ✅ `3209e52` | InternalLock 所有实例共用一把全局可重入锁，unlock 不核对实例 | 按实例加锁（翻译 JDK 的 ReentrantLock 包装） | 不同流之间伪互斥（性能问题；理论上可能死锁） | S-11 |
 | ~~FS-T6~~ ✅ `8dba713` | Thread 的 `setPriority0`、`setNativeName`、`getThreads`、`dumpThreads`、`getStackTrace0`、`scopedValueCache` 等 native 缺失 | 实现 | `setPriority` / `getAllStackTraces` 等命中 panic 存根 | 新立（按需） |
-| FS-T7 | Unsafe / VarHandle 的 CAS 族以「GIL 下读-比-写不可分割」的普通单元承载 | 原子单元 / 引用槽写锁内的读-比-写 | 仅架构（GIL 下等价） | #42（**4fa1d48 已改为原子**，待验证） |
+| FS-T7 | Unsafe / VarHandle 的 CAS 族以「GIL 下读-比-写不可分割」的普通单元承载 | 原子单元 / 引用槽写锁内的读-比-写 | 仅架构（GIL 下等价） | ✅ #42（`4fa1d48` 原子单元；GIL 删除后为唯一实现） |
 
 ## 二、对象模型与内存
 
@@ -102,7 +102,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | ~~FS-R6~~ ✅ `5b980a3` | `reflect.Array` 只有 `newArray`，引用数组恒为 `Object[]`，基本类型分支与 get / set / getLength / multiNewArray 缺失 | 按运行时组件类型建数组 | `Array.newInstance(String.class,n).getClass()` 为 `Object[]` | 新立 |
 | FS-R7 | MethodHandle 靠 LambdaForm 解释器执行；字段句柄与 Unsafe 成员有缺口时 panic | 组合子全集 + record 序列化 | 预生成物种外不可达 | N11 / #40 |
 | FS-R8 | Lambda 对象的 `__class_name` 报接口 binary name | `Outer$$Lambda/...` 这类隐藏类身份 | `getClass().getName()` / toString 不同 | 新立 |
-| FS-R9 | 注解实例是最小合成物；Proxy 不支持 | — | Proxy 不可用 | compat §1（声明为不可等价） |
+| FS-R9 | ~~注解实例是最小合成物；Proxy 不支持~~ | — | — | ✅ FS-R R4：动态代理（`Proxy$Dyn` VM 支持类）+ 注解经 JDK AnnotationParser 字节码解析（`9986e38`） |
 | FS-R10 | 非数组类字面量 / getClass 的同一性未实测 | 每类唯一的 Class | — | S-5 |
 
 ## 四、I/O 与文件系统
@@ -136,8 +136,8 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| FS-K1..K6 | 算法按静态可见入选；别名 / 服务属性未登记；JCE 策略恒 unlimited；`SecureRandom.getInstance(算法)` 是存根；不支持第三方 provider | — | 见 compat JCA 行 | K-JCA |
-| FS-K7 | `java/security/` 整包是边界，Permission 不建模 | — | 仅架构（JDK24+ 已删除 SecurityManager） | 新立 |
+| FS-K1..K6 | 算法按静态可见入选；JCE 策略恒 unlimited；不支持第三方 provider。~~别名 / 服务属性未登记；SecureRandom 手写~~（2026-09-28 J1/J2 ✅：KnownOIDs 同义名组、服务属性走翻译字节码、SecureRandom 经 provider 列表取 NativePRNG） | — | 见 compat JCA 行 | K-JCA / `2026-09-28-jca-faithful-provider.md` |
+| FS-K7 | ~~`java/security/` 整包是边界，Permission 不建模~~ | — | — | ✅ FS-H0 安全组：AccessController / Permission 族 / ProtectionDomain / Provider / SecureRandom 按 closure.toml [release] / seeds.toml [jca] 放行翻译 |
 | FS-K8 | 没有 `java.security` 配置层：Debug 恒 null，`CryptoAlgorithmConstraints.permits` 恒 true | 读取配置 | `disabledAlgorithms` 等不生效 | 新立 |
 
 ## 七、类加载 / 模块 / 服务
@@ -212,11 +212,11 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | FS-H5 | `ConcurrentHashMap()` 初始容量设为 1024，用来避开扩容路径的生成缺口 | 修好 vars 提升缺口，删除伴生 | 条目超过 768 后进入有缺陷的扩容路径 | 新立 |
 | ~~FS-H6~~ ✅ `803aa05` | `Properties.getProperty` 手写，忽略 defaults 链 | 翻译 | `new Properties(defaults).getProperty(k)` 不回落 | 新立 |
 | FS-H7 | `AtomicInteger(int)` 构造器手写 | 翻译 | 仅架构 | 新立 |
-| FS-H8 | `Enum.valueOf` 靠常量目录手写 | — | 泛型上下文可能抛 CCE | S-15 / A-1 |
+| FS-H8 | `Enum.valueOf` 靠常量目录手写 | 字节码 + VM 边界类 `Class.enumConstantDirectory` 手写 | 泛型上下文可能抛 CCE；嵌套枚举的错误消息用 binary name（JDK 用 canonical name） | S-15 / A-1（🔄 2026-09-28 进行中） |
 | FS-H9 | Thread 的 getThreadGroup / interrupt / isTerminated 这些非 native 方法手写 | 翻译 | 仅架构 | 新立 |
 | FS-H10 | Object / ObjectVTable 整类手写 | vtable 从 `Object.class` 翻译 | 仅架构 | Arch-4 |
 | FS-H11 | `string_ext.rs`、驻留表手写 | 由字节码承载 | 仅架构 | P-2 |
-| FS-H12 | vm_boundary 里的公开包类整类手写：Class / ClassLoader / Module / ModuleLayer / VirtualThread / SecurityManager / FileSystems / JceSecurity / InvokerBytecodeGenerator | 缩小到只手写 native | 见 FS-R1 / C2 / C3 / IO4 | 新立 |
+| FS-H12 | vm_boundary 里的公开包类整类手写：Class / ClassLoader / Module / ModuleLayer / VirtualThread / SecurityManager / FileSystems / JceSecurity / InvokerBytecodeGenerator | 缩小到只手写 native | 见 FS-R1 / C2 / C3 / IO4 | 新立；2026-09-28 起审计单独计数（`vm_boundary_methods`），随对应子系统逐类复核 |
 | FS-H13 | jdk/internal 纯 Java 类整类重写：DoubleToDecimal / FloatToDecimal / FloatingDecimal / DecimalDigits / Preconditions 等 | 经 `closure.toml [release]` 放行翻译 | 基本仅架构 | P-3 |
 
 ## 十三、进程 / 环境 / 系统属性
