@@ -25,7 +25,24 @@
 |---|---|---|---|---|
 | **FS-H0** | 公开 API 类的 `_impl.rs` 覆盖机制没有「只许 ACC_NATIVE」的约束。`codegen/emitter/class_writer.py` 的 `_nf_covered`：只要同名 fn 存在就跳过字节码翻译，非 native 方法被悄悄替换，且没有审计计数 | 公开包 `_impl.rs` 只许 native，违例计数为 0 且进入 `[raw-audit]` | FS-N1..N5、FS-H1..H9 都源于此 | 新立 |
 
-### FS-H0 进度与余项明细（`[override-audit]`，2026-09-26）
+### FS-H0 进度（2026-09-28 刷新）
+
+| 批次 | 内容 | 覆盖变化 |
+|---|---|---|
+| FS-R R1–R4（`9986e38` 前后） | 反射元数据表、访问器族、动态代理、注解解析回到 JDK 字节码 | Field / Method / Constructor / AccessController / Permission 组清零 |
+| JCA J1（`docs/plans/2026-09-28-jca-faithful-provider.md`） | `Provider` / `Provider$Service` 回到字节码，provider 由真实构造器创建 | −8 |
+| JCA J2 | `SecureRandom` 回到字节码（缺省 PRNG 经 provider 列表取 SUN.NativePRNG） | −9 |
+| 审计口径 | VM 耦合边界类（closure.toml [vm_boundary]：Class / ClassLoader / Module / VirtualThread / JceSecurity / FileSystems 等）的手写方法改记 `vm_boundary_methods` / `[vm-boundary-audit]`——策略边界（逐类写明截断依据），与 intrinsics 同理不计越界（用户 2026-09-28 决定） | 约 31 处移出越界计数 |
+
+**越界余项（约 5 处）**：`Enum.valueOf`（FS-H8，改为字节码 + VM 边界类 `Class.enumConstantDirectory` 手写，进行中）、
+`FileCleanable.register / unregister`（FS-G4：no-op 语义下沉到内部边界 PhantomCleanable / CleanerFactory）、
+`StackTraceElement.computeFormat`（需 initStackTraceElements 填 declaringClassObject）、
+`DecimalFormatSymbols.initializeCurrency`（FS-L2：Currency 数据层）。
+
+VM 边界类的手写方法随对应子系统落地逐类复核（VirtualThread ↔ FS-T4 Continuation、ClassLoader / Module ↔ FS-C 组、
+FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
+
+### FS-H0 进度与余项明细（`[override-audit]`，2026-09-26，历史）
 
 审计线（fb4141a）：`class_writer.py` 的 `_audit_override` 登记每处非 native 方法的手写覆盖，`[raw-audit] non_native_overrides=N` 汇总、`[override-audit]` 逐位点输出（`scripts/main.py`）。两条覆盖路径同口径：同名 fn（静态 / 非虚）与虚方法的 `__impl_<m>` 手写体（后者审计起初漏计，补上后计数由 60 修正为 98）。VM 内建函数经 `runtime/java_runtime/vm_intrinsics.toml` 准入，单独计 `intrinsics=`，不算违例。
 

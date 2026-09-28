@@ -2,6 +2,11 @@
 
 > 2026-09-25 · 关联：tasks.md S-66 同批语料（DataEncryptionStandard、Digester、SecurityDemo）、
 > L-1 纯数据资源束（`docs/plans/2026-09-25-l1-cldr-locale-data.md`，同构的「边界放行 + 种子 + 注册表」三段式）
+>
+> **2026-09-28 更新**：「服务查找 → 构造」一段已由 `2026-09-28-jca-faithful-provider.md`（FS-H0 JCA 组
+> J1/J2）取代——provider 对象改由真实 Provider 子类构造、`Provider` / `Provider$Service` / `SecureRandom`
+> 回到翻译字节码，注册表只保留 (类型, 算法, 实现类, provider) 作 provider 选择依据（不再有构造闭包），
+> `Provider$Service` / `SecureRandom` 手写伴生已删除。服务表抽取、engine × 算法名种子、边界放行三段仍按本文。
 
 ## 一、问题
 
