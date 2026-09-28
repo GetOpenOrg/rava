@@ -65,7 +65,7 @@
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
 | FS-M1 | 可读层的禁用调用还没清零：`from_any` 残余、`Into::<I>::into` 约 1.7 万处、闭包 `Rc::new`；translation-reference §16.3 状态表过期 | 全部为 0 | 仅架构（可读性） | A-2 / A-4 |
-| FS-M2 | 接口载体化按名单铺设（Spliterator 族暂缓）；`signature_erased_interfaces.txt` 让 CharSequence 仍擦成 Object | 名单置 None，删除两个文件 | 仅架构 | A-4 / T-2 |
+| FS-M2 | 接口载体化按名单铺设（Spliterator 族暂缓）；`signature_erased_interfaces.txt` 让 CharSequence 仍擦成 Object；`carrier_type_positions.txt` 按名单决定载体类型位置 | 名单置 None，删除 `carrier_type_positions.txt` / `signature_erased_interfaces.txt` 两个文件（清单整合时决定不迁移进 TOML，随 T-2 收尾直接删） | 仅架构 | A-4 / T-2 |
 | FS-M3 | 抽象类、枚举、手写类没有 `__interface` | 全部由宏生成 | 接口查询抛 AbstractMethodError | A-6 |
 | FS-M4 | 原生值盒进 Object，`is_instance_of` 只认精确包装类；`JvmRef` 是 Arch-1 之前的过渡物 | 只保留翻译出的包装类对象，删除 JvmRef | 原生盒 `instanceof Number / Comparable` 为 false；不走 IntegerCache | S-3 / T-4（instanceof 缺口新立） |
 | ~~FS-M5~~ ✅ `b443134` | identity hash 取实例地址截断成 i32 | 31 位非负伪随机 hash（HotSpot 语义） | `hashCode()` 可能为负；低位恒为 0，分布差 | 新立 |
