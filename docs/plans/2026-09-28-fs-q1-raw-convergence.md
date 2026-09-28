@@ -23,18 +23,21 @@
 一个 Raw。单把外层语句换成 `LetStmt` 只是 raw_stmt → raw_expr 平移；实参节点必须从栈模拟一路
 以 `RsExpr` 携带到发射点，Raw 才真正消失。
 
-## 三、分批
+## 三、分批（2026-09-28 修订：自底向上）
+
+实地勘查：`_pop_receiver_and_args` 从栈上取到的是节点，但强制转换层（`coerce._coerce_to_object`、
+`invoke_sig._coerce_arg`、`_render_cast` 等约 22 个 f-string 返回点）立刻把它们变成字符串；只把外层语句
+换成 `LetStmt` 只会让 raw_stmt 平移成 raw_expr。因此改为自底向上：
 
 | 批 | 内容 | 验收 |
 |---|---|---|
-| Q1-a | IR 补 `TryExpr(inner)`（渲染 `inner?`）与 `CallerSensitive` 包装节点；`render` 单测 | 单测 |
-| Q1-b | invokevirtual / invokeinterface：实参以 `list[RsExpr]` 携带，`_build_call` 产出 `MethodCall` 节点；`_emit_call_result` 发射 `LetStmt(v, value=TryExpr(..))` / `ExprStmt(TryExpr(..))` | 生成树差异仅限 `let` 可变性标注等预期形态；定向 e2e 10 例 PASS |
-| Q1-c | invokestatic / invokespecial 同构 | 同上 |
-| Q1-d | getfield / putfield、数组存取：`MethodCall(recv, "__get_x")` / `MethodCall(arr, "set", [i, v])` | 同上 |
-| Q1-e | returns / `_clone_moved_var`：`ReturnStmt(Ok(..))`、`Call("Clone::clone", [RefExpr])` | 同上 |
+| Q1-a ✅ | IR 补 `TryExpr(inner)`（渲染 `inner?`）；单测 | 单测 |
+| Q1-b | 强制转换层节点化：每个转换函数补「节点入 → 节点出」版本（`Call('Object::from', [..])` / `UpcastExpr` / `CastExpr` 等），渲染与旧字符串**逐字符一致**；旧字符串版本改为「节点版 + render_expr」薄封装 | 生成树逐字节一致 |
+| Q1-c | 调用族实参以节点携带：`_pop_receiver_and_args` → 强制转换节点版 → `MethodCall` / `Call` 节点；caller-sensitive 包装节点化 | 生成树逐字节一致（语句层仍渲染为同一文本） |
+| Q1-d | 语句层类型化：`LetStmt(v, value=TryExpr(..))` / `ExprStmt(TryExpr(..))` 替代 RawStmt（进入变量提升 / 可变性分析） | 编译 + 定向 e2e（≤10 例，`CARGO_BUILD_JOBS=1`）；`[raw-audit]` 与位点剖面按位点下降 |
+| Q1-e | getfield / putfield、数组存取、returns、`_clone_moved_var` 同构推进 | 同 Q1-c / Q1-d |
 
-每批：位点剖面前后对照（raw 事件数按位点下降）、定向 e2e（`CARGO_BUILD_JOBS=1`，≤10 例）、
-`[raw-audit]` 趋势只降不升。
+每批：`JAVA_RTA_RAW_SITES` 位点剖面前后对照，趋势只降不升。
 
 ## 四、风险
 
