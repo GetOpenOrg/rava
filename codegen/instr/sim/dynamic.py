@@ -508,13 +508,16 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
         # 被抛出的就是栈顶对象本身：JvmError 携带该对象，异常表匹配 / getMessage /
         # 未捕获报告都基于它的运行时类（参考文档 §8.3）
         e_expr, _ = sim.pop()
-        _thrown = render_expr(e_expr)
         # 局部变量被抛出：按值克隆（Java 引用无 move 语义）。java_try! 的 catch 体改写
         # return 的控制流后，借用检查不再视 `return Err(from(t))` 为路径终点——同一 catch
         # 体中之后对 t 的使用会报 E0382（MethodHandleImpl.guardWithCatch 实证）
+        from ...rs_ir import ReturnStmt, Call, RefExpr
+        _thrown_n = e_expr
         if isinstance(e_expr, Var):
-            _thrown = 'Clone::clone(this)' if _thrown == 'this' else f'Clone::clone(&{_thrown})'
-        sim.emit(RawStmt(f'return Err(JvmError::from({_thrown}));'))
+            _thrown_n = (Call('Clone::clone', [e_expr]) if e_expr.name == 'this'
+                         else Call('Clone::clone', [RefExpr(e_expr)]))
+        # FS-Q1 Q1-e：`return Err(JvmError::from(t));` 以 ReturnStmt 节点发射
+        sim.emit(ReturnStmt(Call('Err', [Call('JvmError::from', [_thrown_n])])))
     else:
         return False
     return True

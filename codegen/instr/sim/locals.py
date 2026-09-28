@@ -73,8 +73,10 @@ def sim_locals(ins, sim, class_name, registry) -> bool:
             elif _refs_local(render_expr(sv_expr), name):
                 held = sim.fresh_let(f'_{name}_held', sv_expr, sv_ty)
                 sim.stack[j] = (held, sv_ty)
-        if delta >= 0: sim.emit(RawStmt(f"{name} = {name}.wrapping_add({delta}i32);"))
-        else:          sim.emit(RawStmt(f"{name} = {name}.wrapping_sub({-delta}i32);"))
+        # FS-Q1 Q1-e：`x = x.wrapping_add(k)` 以 AssignStmt 节点发射（变量提升 / 可变性分析可见）
+        from ...rs_ir import AssignStmt, MethodCall, Lit
+        _op_i, _k_i = ('wrapping_add', delta) if delta >= 0 else ('wrapping_sub', -delta)
+        sim.emit(AssignStmt(Var(name), MethodCall(Var(name), _op_i, [Lit(f'{_k_i}i32')])))
     else:
         return False
     return True
