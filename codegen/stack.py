@@ -10,7 +10,7 @@ from typing import get_args
 
 from .rs_ir import (
     RsExpr, RsStmt, RsType,
-    Var, Lit, RawExpr, NewPendingExpr, CastExpr, UpcastExpr, MethodCall,
+    Var, Lit, RawExpr, NewPendingExpr, CastExpr, UpcastExpr, MethodCall, Call, RefExpr,
     LetStmt, AssignStmt,
     RsGeneric, RsPrimitive, RsNamed, RsRef, RsSlice, RsInfer,
     I32 as _I32, I64 as _I64, F32 as _F32, F64 as _F64,
@@ -130,7 +130,7 @@ def _clone_moved_var(expr: RsExpr, ty: RsType) -> RsExpr:
         'f32', 'f64', 'bool', 'char', '()', 'usize',
     ):
         return expr
-    return RawExpr(f"Clone::clone(&{expr.name})")
+    return Call('Clone::clone', [RefExpr(expr)])
 
 
 
@@ -145,13 +145,20 @@ def _opaque_let_value(value) -> bool:
         return True
     if isinstance(value, MethodCall) and value.method.startswith('__get_') and not value.args:
         return True
-    return False
+    return is_clone_of_var(value)
+
+
+def is_clone_of_var(expr) -> bool:
+    """`Clone::clone(&v)`（_clone_moved_var 的节点形态，FS-Q1 Q1-e；节点化前为 Raw 文本）。"""
+    return (isinstance(expr, Call) and expr.func == 'Clone::clone' and len(expr.args) == 1
+            and isinstance(expr.args[0], RefExpr) and not expr.args[0].mutable
+            and isinstance(expr.args[0].expr, Var))
 
 
 def _is_trivial_expr(expr: RsExpr) -> bool:
     """重复求值无副作用且无开销的表达式：变量、字面量、待定 new、默认值、对变量的 Clone。"""
     global _TRIVIAL_RAW_RE
-    if isinstance(expr, (Var, Lit, NewPendingExpr)):
+    if isinstance(expr, (Var, Lit, NewPendingExpr)) or is_clone_of_var(expr):
         return True
     if isinstance(expr, RawExpr):
         if _TRIVIAL_RAW_RE is None:
