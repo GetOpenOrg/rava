@@ -4,6 +4,16 @@
 > 基线：`630c6f3`（分支 claude/jolly-dijkstra-diftum，含 `8c8ba84` TypeIR 批次 3 合入）
 > 关联：[收敛路线图](../plans/2026-09-21-codegen-type-convergence.md) §二/§三 L1-a、[远期路线图](../plans/2026-09-23-long-term-roadmap.md) §三 S2/S3/S4、[tasks.md](../tasks.md) 第 14/45/47/81/90 行
 
+## 2026-09-28 进展（N4 能力缺口 G1–G5）
+
+| 缺口 | 状态 | 落地 |
+|---|---|---|
+| G5 双查询面合一 | ✅ | `stack.erased_base / erased_class_of / is_jvm_array` 改为 `jvm_type` 薄转发（双算插桩 6 例全部调用点零差异） |
+| G2 作用域类型变量 | ✅ | `from_rust_type(.., tparams=)` 产出 `TypeVar`；`coerce._coerce_to_object` 装箱分类（双算 5 例 39 调用点零差异）、`invoke_sig._coerce_arg` 7 处形参成员判定改为 TypeVar 查询（生成树逐字节一致） |
+| G3 宿主基本类型 | ✅ | `HostPrim` 变体（u8/u32/u64/usize）；S4/S5 `vars._forms_alignable` 改为 Primitive / HostPrim 判定（3 例逐字节一致） |
+| G1 RsType → JvmType 桥 | ✅（S3 / S8 已迁） | `from_rs_type(node, registry, tparams)`；S3 `_coerce_acmp_operand`、S8 `member_owner._resolve_virtual_sig_params`（接收者 binary 取 ClassRef 域内身份，替代两次短名反查）；其余「render_type → 串 → 解析」位点随 FS-Q1 逐步迁 |
+| G4 带实参回渲染 | ⬜ 归 M-3 | 按本文 §三建议不在 Python 侧新建渲染器 |
+
 ## 结论摘要
 
 1. `type_surgery_sites=10` 由 `codegen/raw_audit.py:43` 计算：扫描 `codegen/**/*.py` 的全文，匹配两个正则。**其中 1 处是误报**（`raw_audit.py:10` 模块 docstring 里写着 `startswith('JArray<')`），**真实位点 9 处**，分布在 6 个文件：coerce 2、vars 3、hierarchy 1、invoke 1、member_owner 1、render 1。

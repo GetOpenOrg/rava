@@ -189,8 +189,8 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | FS-Q1 | RawExpr/RawStmt 逃生舱：静态构造点 193 处 | 0，全部类型化 IR | 仅架构 | P2 IR 结构化收敛 |
 | FS-Q2 | Python 侧 JVM→Rust 类型映射 | 宏自行决策 | 仅架构 | M-3 |
 | FS-Q3 | 泛型 bounds 由 Python 计算 | 进宏 | 仅架构 | T-1 |
-| FS-Q4 | 方法级类型变量擦成上界或 Object；turbofish 推断失败以 Object 兜底（违反命名原则 3） | 生成 Rust 泛型参数 | 仅架构 | N4 G2 |
-| FS-Q5 | TypeIR 的 G1 / G3 / G4 / G5 能力缺口 | 完全体 | 仅架构 | N4 |
+| FS-Q4 | 方法级类型变量擦成上界或 Object；turbofish 推断失败以 Object 兜底（违反命名原则 3） | 生成 Rust 泛型参数 | 仅架构 | N4 G2；2026-09-28 G2 查询面就绪（`from_rust_type(tparams=)` → TypeVar，coerce / `_coerce_arg` 已迁），发射侧生成 Rust 泛型参数仍待做 |
+| FS-Q5 | TypeIR 的 G1 / G3 / G4 / G5 能力缺口 | 完全体 | 仅架构 | N4（2026-09-28：G1 / G3 / G5 ✅，G4 归 M-3） |
 | FS-Q6 | fallback B 组 15 处静默降级；A 组 CfgError 转 panic 存根 | 默认 STRICT，零兜底 | 丢类后运行期命中存根 | fallback-audit 报告 |
 | FS-Q7 | 不可归约 CFG 的状态机兜底从未实战 | 补单元测试 | — | S-13 |
 | FS-Q8 | 无调试信息时 try 区域布局偏差 | — | 仅代码形状 | S-12 |
