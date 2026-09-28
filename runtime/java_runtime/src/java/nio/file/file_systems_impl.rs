@@ -1,4 +1,4 @@
-//! `java/nio/file/FileSystems` 手写伴生：POSIX 原生族档 A（见 vm_boundary.txt
+//! `java/nio/file/FileSystems` 手写伴生：POSIX 原生族档 A（见 closure.toml [vm_boundary]
 //! 的收录理由）。按用例面实现 getDefault（Path.of 的入口），其余成员保持
 //! panic 存根。
 

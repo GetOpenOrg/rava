@@ -3,7 +3,7 @@
 //!
 //! JDK 在此以字节码汇编器生成序列化构造器访问器类。原生二进制无运行期类定义：全部
 //! 序列化构造器共用 VM 支持类 `SerializationConstructorAccessorDyn`（字节码翻译），实例
-//! 携带 (待实例化类, 首个不可序列化超类)。intrinsics.txt「运行期类定义点」登记。
+//! 携带 (待实例化类, 首个不可序列化超类)。vm_intrinsics.toml「运行期类定义点」登记。
 
 use crate::prelude::*;
 use super::method_accessor_generator::MethodAccessorGenerator;

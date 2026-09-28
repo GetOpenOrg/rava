@@ -1,4 +1,4 @@
-//! `java/lang/reflect/Proxy` 的运行期类定义点（FS-R R4a，intrinsics.txt「运行期类定义点」）。
+//! `java/lang/reflect/Proxy` 的运行期类定义点（FS-R R4a，vm_intrinsics.toml「运行期类定义点」）。
 //!
 //! JDK 的 `newProxyInstance` 经 ProxyBuilder（动态模块映射）→ `defineProxyClass`（ProxyGenerator
 //! 生成字节码 + JavaLangAccess.defineClass）定义 `$ProxyN` 后反射构造实例。原生二进制无运行期

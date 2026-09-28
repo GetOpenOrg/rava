@@ -1,4 +1,4 @@
-//! `javax/crypto/JceSecurity` 手写伴生：VM 边界类（vm_boundary.txt），按调用链按需实现（K-2 规则）。
+//! `javax/crypto/JceSecurity` 手写伴生：VM 边界类（closure.toml [vm_boundary]），按调用链按需实现（K-2 规则）。
 //!
 //! K-JCA：JDK 的 JCE 管辖策略在 `<clinit>` 读 JDK 安装目录的 policy 文件、并校验 provider jar
 //! 签名。原生二进制等价于 JDK 9+ 默认安装（`crypto.policy=unlimited`，JDK 内建 provider 恒

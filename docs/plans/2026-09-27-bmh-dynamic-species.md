@@ -50,7 +50,7 @@ final class BoundMethodHandle$Species_Dyn extends BoundMethodHandle {
 
 ### 3.2 合成物种类（Class 对象）
 
-`generateConcreteSpeciesCode(className, speciesData)` 是 ClassSpecializer 中唯一不可翻译的点（ASM + defineClass），改由 VM 内建承载（intrinsics.txt 准入，理由：原生二进制无运行期类定义）：
+`generateConcreteSpeciesCode(className, speciesData)` 是 ClassSpecializer 中唯一不可翻译的点（ASM + defineClass），改由 VM 内建承载（vm_intrinsics.toml 准入，理由：原生二进制无运行期类定义）：
 
 - 返回名为 `BoundMethodHandle$Species_<key>` 的**合成 Class**：运行时类表登记为「Species_Dyn 的 key 视图」。`forName0` / `isInstance` / `asSubclass(BoundMethodHandle)` 均按 Species_Dyn 判定；
 - 合成类的**成员面**由 VM 按 key 应答（二节契约）：

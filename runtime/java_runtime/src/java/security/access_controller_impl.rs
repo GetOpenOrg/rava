@@ -1,5 +1,5 @@
 //! `java/security/AccessController` 的 native 方法（FS-H0：doPrivileged / getContext 回到 JDK
-//! 字节码，boundary_release.txt 放行本类与 AccessControlContext）。
+//! 字节码，closure.toml [release] 放行本类与 AccessControlContext）。
 //!
 //! 原生二进制无安全管理器（JDK 21 的 SecurityManager 恒 null）且无 Java 栈帧：
 //! 栈上 / 继承的访问控制上下文恒为 null，保护域不建模（启动类同 HotSpot 返回 null），

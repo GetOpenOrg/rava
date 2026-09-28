@@ -51,7 +51,7 @@
 ### 2.4 BFS
 
 - 任一类进入调用链时，其 `<clinit>` 及父类链上各类的 `<clinit>` 一并入队。
-- 边界截断：`jdk/internal/`、`sun/` 以及 `runtime/java_runtime/vm_boundary.txt` 登记的类
+- 边界截断：`jdk/internal/`、`sun/` 以及 `runtime/java_runtime/closure.toml [vm_boundary]` 登记的类
   （由 VM 自举、不可能由字节码自洽初始化的公开包类）视为手写边界类，按需实现。
 - `runtime/java_runtime/vm_roots.txt`：手写 VM 层直接调用的已翻译方法（VM 抛出的异常的构造器、
   `Throwable.getMessage`），作为 BFS 种子，相当于 HotSpot 的 well-known classes。

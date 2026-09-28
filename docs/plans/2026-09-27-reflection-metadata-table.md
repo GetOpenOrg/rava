@@ -45,7 +45,7 @@ JDK 的公开方法体可以翻译，被挡住的是它们下方的三件事：
 - `getDeclaringClass0` / `getSimpleBinaryName0` / `isRecord0` / `getRecordComponents0` / `getEnclosingMethod0` / `getGenericSignature0` / `getModifiers`：查 `CLASS_META`。
 - VM 填充的镜像字段在 `for_class` 建镜像时写入：`componentType`（已完成，`192b9e1`）、`classLoader`（启动类为 null，用户类在 FS-C 组）、`module`（FS-C 组）。
 
-### 2.3 访问器工厂放行（boundary_release.txt）
+### 2.3 访问器工厂放行（closure.toml [release]）
 
 放行 `jdk/internal/reflect/` 的纯 Java 访问器族，按字节码翻译：
 - `MethodHandleAccessorFactory`
@@ -58,7 +58,7 @@ JDK 的公开方法体可以翻译，被挡住的是它们下方的三件事：
 
 由此，`Field.get` → `MethodHandle` getter → `reflect_field`，`Method.invoke` → `DirectMethodHandle` → `reflect_invoke`，与 MH Direct 同一管线。
 
-### 2.4 序列化构造器（intrinsics.txt 第二类准入）
+### 2.4 序列化构造器（vm_intrinsics.toml 第二类准入）
 
 `ReflectionFactory.generateConstructor` 是运行期类定义点，改由 VM 内建承载，返回的访问器落到现有 `<alloc>` + `<init_on>` 协议（N2）。这与 N11 的 `generateConcreteSpeciesCode` 同一准入类别。
 
@@ -93,10 +93,10 @@ getRawAnnotations(), getConstantPool(), cls)` → `annotationForMap` → **`Prox
 
 | 项 | 落点 |
 |---|---|
-| 访问器族放行 | `jdk/internal/reflect/` 整包 + `java/lang/Class$ReflectionData` 等嵌套辅助类（boundary_release.txt） |
+| 访问器族放行 | `jdk/internal/reflect/` 整包 + `java/lang/Class$ReflectionData` 等嵌套辅助类（closure.toml [release]） |
 | `useNativeAccessor` 分支 | `DirectMethod/ConstructorHandleAccessor$NativeAccessor.invoke0 / newInstance0` native：按 Method / Constructor 声明键经 L3 分派 |
-| 实参不符 vs 目标抛出 | `AccessorUtils.isIllegalArgument` 读栈帧——intrinsics.txt 第三类准入「栈帧查询点」：L3 分派登记经用户成员逃逸的异常身份（java.base 帧继续、用户帧判 ITE 的等价物） |
-| 引导期时序 | `vm_boot_init.txt`（HotSpot initPhase1 对应物）：`AccessibleObject` 先于应用代码初始化，避免 `ReflectionFactory.<clinit>` 反向触发时重入读到 null 单例 |
+| 实参不符 vs 目标抛出 | `AccessorUtils.isIllegalArgument` 读栈帧——vm_intrinsics.toml 第三类准入「栈帧查询点」：L3 分派登记经用户成员逃逸的异常身份（java.base 帧继续、用户帧判 ITE 的等价物） |
+| 引导期时序 | `seeds.toml [boot_init]`（HotSpot initPhase1 对应物）：`AccessibleObject` 先于应用代码初始化，避免 `ReflectionFactory.<clinit>` 反向触发时重入读到 null 单例 |
 | 元数据补齐 | 修饰符表补手写根类 Object 行；直接超接口表 + `getInterfaces0`；`SharedSecrets.getJavaLangInvokeAccess` 槽位 |
 | 删除 | Class 成员查询 / 命名族覆盖、Field.get/set、Method.invoke、Constructor.newInstance、序列化构造器登记表、`member_accessible`、`constructor_rows` |
 
@@ -108,7 +108,7 @@ getRawAnnotations(), getConstantPool(), cls)` → `annotationForMap` → **`Prox
 |---|---|
 | 代理载体 | VM 支持类 `java/lang/reflect/Proxy$Dyn`（字节码翻译）：接口列表、`dispatch`（声明异常透传 / UndeclaredThrowableException）、Object 三方法转发 |
 | 宏 | `ObjectVTable::__proxy_invoke`；接口载体 vtable 未命中先询问（先于 default 体）；实参装箱、返回值经 `__ProxyRet` checkcast + 拆箱；手写层提供 `__vm_proxy_invoke` 的类即代理载体（`is_instance_of` 按实例接口列表） |
-| 内建 | `Proxy.newProxyInstance`、`ProxyBuilder.isProxyClass`（intrinsics.txt 运行期类定义点） |
+| 内建 | `Proxy.newProxyInstance`、`ProxyBuilder.isProxyClass`（vm_intrinsics.toml 运行期类定义点） |
 | 附带修正 | Object 方法表补 JLS §4.3.2 全部成员；`ObjectVTable::equals` 默认体 = 身份比较（去掉 `Object::equals` 的引用相等捷径） |
 
 **R4b / R4c 注解**
@@ -119,7 +119,7 @@ getRawAnnotations(), getConstantPool(), cls)` → `annotationForMap` → **`Prox
 | natives | `Class.getRawAnnotations / getRawTypeAnnotations / getConstantPool`、`ConstantPool.getUTF8At0 / getIntAt0 / getLongAt0 / getFloatAt0 / getDoubleAt0`；反射对象构造带入注解字节 |
 | 放行 | `sun/reflect/annotation/`（AnnotationParser / AnnotationType / AnnotationInvocationHandler 按字节码翻译） |
 | 手写（内部边界） | `AnnotationParser.parseSig`（注解签名恒为描述符 → Class，免放行 sun/reflect/generics）；`AnnotationInvocationHandler.memberValueToString`（逐元素拼接，免 Double/Int/LongStream 流水线）；`ScopedMemoryAccess`（堆 byte[] get*Unaligned）；`Preconditions.outOfBoundsExceptionFormatter`；JavaLangAccess 注解族 |
-| 入链 | callchain 注解类型种子（annotation_seeds.txt trigger）：注解类型 / 元注解方法入链、枚举元素 `<clinit>` + main 类初始化钩子 |
+| 入链 | callchain 注解类型种子（seeds.toml [annotation] trigger）：注解类型 / 元注解方法入链、枚举元素 `<clinit>` + main 类初始化钩子 |
 | 修正 | `Class::__name_assignable` 沿直接超接口表传递（接口块无 all_supertypes）；方法表 `inherited` 标记（getDeclaredMethods 不含展平的继承成员，MethodHandle resolve 仍用全部行）；代理转发按 Java 方法名（关键字转义 `type → type_`） |
 | 删除 | annotation_meta.rs、annotation_objects.py、Class / Field / Method / Constructor 注解查询覆盖、旧 annotation_table |
 

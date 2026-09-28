@@ -780,13 +780,12 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         hook_block += ('    java_runtime::jca::register_services(&[\n'
                        + '\n'.join(_jca_lines) + '\n    ]);\n')
 
-    # VM 引导期类初始化（HotSpot initPhase1 对应物）：清单 vm_boot_init.txt 中在闭包内
+    # VM 引导期类初始化（HotSpot initPhase1 对应物）：清单 seeds.toml [boot_init] 中在闭包内
     # 翻译在场的类，main 启动时按清单顺序初始化（runtime vm_boot_init）
-    from ..runtime_manifest import read_list as _read_list
+    from ..runtime_manifest import boot_init_classes as _boot_init_classes
     _jdk_names = {jci.name for jci in (jdk_class_infos or [])}
     _boot_lines = []
-    for _bn in _read_list('vm_boot_init.txt'):
-        _bn = _bn.split()[0]
+    for _bn in _boot_init_classes():
         if _bn not in _jdk_names:
             continue
         _bp = '::'.join(['java_runtime',

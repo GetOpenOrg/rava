@@ -15,7 +15,8 @@ from .constants import STRING_CLASS as _STRING_CLASS_C
 from .constants import (OBJECT_CLASS as _OBJECT_CLASS, CLASS_CLASS as _CLASS_CLASS,
                         RUNTIME_JAVA_RUNTIME as _RUNTIME_JAVA_RUNTIME)
 from . import fallback_audit
-from .runtime_manifest import read_list
+from .runtime_manifest import (read_list, boundary_packages, vm_boundary_classes, release_entries,
+                               annotation_triggers, annotation_seed_members)
 
 
 # JDK 包前缀（binary name 斜线分隔）- 这些类的方法会被 BFS 展开并翻译
@@ -24,10 +25,10 @@ _JDK_PREFIXES = ('java/', 'javax/')
 
 # 内部包边界：方法体全部为 panic! stub，不展开调用链
 # 这是内部边界截断策略的核心——sun/ 等包的实现细节不翻译，只生成类型占位符
-# 前缀名单维护在 runtime/java_runtime/boundary_prefixes.txt（P-1：库知识不进生成器）
-_JDK_STUB_ONLY_PREFIXES: tuple[str, ...] = tuple(read_list('boundary_prefixes.txt'))
+# 前缀名单维护在 runtime/java_runtime/closure.toml [boundary]（P-1：库知识不进生成器）
+_JDK_STUB_ONLY_PREFIXES: tuple[str, ...] = tuple(boundary_packages())
 
-# K-JCA 放行（codegen/jca_services.py，清单 jca_providers.txt 的 release 行）：算法实现包
+# K-JCA 放行（codegen/jca_services.py，清单 seeds.toml [jca] 的 release_packages / release_classes）：算法实现包
 # （纯 Java 计算）与 engine / SPI / 工具类从边界前缀放行、按字节码翻译。放行项并入
 # _JDK_PREFIXES（「展开并翻译」的集合）：包前缀原样；类条目在 java/ javax/ 下天然属于该集合，
 # 其余前缀下的类条目（sun/security/util/ArrayUtil）须显式并入——否则其方法引用不进调用链，
@@ -38,10 +39,10 @@ _JDK_PREFIXES = _JDK_PREFIXES + tuple(
     r for r in _JCA_MANIFEST.release
     if r.endswith('/') or not r.startswith(('java/', 'javax/')))
 
-# 通用边界放行（清单 boundary_release.txt，与 JCA release 行同一语义）：内部前缀下的纯 Java
+# 通用边界放行（清单 closure.toml [release]，与 JCA 放行同一语义）：内部前缀下的纯 Java
 # 类 / 包按字节码翻译（MH-native：sun/invoke/util 的类型转换工具）。并入 _JDK_PREFIXES 使其
 # 方法引用进调用链；_is_boundary_class 据 _released_general 放行。
-_BOUNDARY_RELEASE: tuple[str, ...] = tuple(read_list('boundary_release.txt'))
+_BOUNDARY_RELEASE: tuple[str, ...] = tuple(release_entries())
 _JDK_PREFIXES = _JDK_PREFIXES + tuple(
     r for r in _BOUNDARY_RELEASE if r.endswith('/') or not r.startswith(('java/', 'javax/')))
 
@@ -127,7 +128,7 @@ def _read_manifest(name: str) -> list[str]:
 # VM 耦合边界类：公开包里由 JVM 自身引导 / 承载 VM 设施（模块系统、类加载、安全管理器等）的类。
 # 它们在原生二进制里没有字节码层面的对应物，与内部包同规则：BFS 在此截断，整体手写、按需实现。
 # 清单在 runtime/（手写层真源）维护，生成器不出现任何 JDK 类名。
-_VM_BOUNDARY_CLASSES: frozenset[str] = frozenset(_read_manifest('vm_boundary.txt'))
+_VM_BOUNDARY_CLASSES: frozenset[str] = frozenset(vm_boundary_classes())
 
 
 # 纯数据资源束豁免（L-1）：内部包（前缀）下经结构判定为纯数据类
@@ -146,14 +147,9 @@ DATA_BUNDLE_SEEDS: list[str] = []
 # 钩子（Enum.valueOf → 常量目录前强制初始化，FS-R R4b）。每轮 BFS 起始清空。
 ANNOTATION_ENUM_SEEDS: list[str] = []
 
-# 注解种子触发成员（annotation_seeds.txt `trigger <类>.<成员>`）
-_ANNO_TRIGGERS: frozenset = frozenset(
-    tuple(ln.split(None, 1)[1].rsplit('.', 1))
-    for ln in read_list('annotation_seeds.txt') if ln.startswith('trigger '))
-# 注解种子一并入链的成员（annotation_seeds.txt `seed <类>.<成员>:<描述符>`）
-_ANNO_SEED_MEMBERS: tuple = tuple(
-    (lambda o, d: (o.rsplit('.', 1)[0], o.rsplit('.', 1)[1], d))(*ln.split(None, 1)[1].split(':', 1))
-    for ln in read_list('annotation_seeds.txt') if ln.startswith('seed '))
+# 注解种子触发成员 / 一并入链成员（seeds.toml [annotation]）
+_ANNO_TRIGGERS: frozenset = annotation_triggers()
+_ANNO_SEED_MEMBERS: tuple = annotation_seed_members()
 
 # 本轮入选的 JCA 服务（jca_services.Service，已排序）：emitter 在生成 main 中登记构造闭包
 #（runtime `jca::register_services`）。每轮 BFS 起始清空。
@@ -1015,7 +1011,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                             break
                         cur = _ci_of(cur.super_class) if cur.super_class else None
 
-        # L-1 资源束种子：手写边界的数据消费入口（locale_seeds.txt 的 trigger）在调用链上
+        # L-1 资源束种子：手写边界的数据消费入口（seeds.toml [locale] triggers）在调用链上
         # 时，按用户字节码推出的 locale 集（含父链）入选 CLDR 束类——构造器 + 载体方法入队、
         # 记为已实例化（ListResourceBundle.handleGetObject 等虚调用经 RTA 分派到束类）。
         # 束经类名反射装载、无静态边，只能在不动点处按触达事实补种；只补一次。
@@ -1037,7 +1033,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             DATA_BUNDLE_SEEDS[:] = _names
             print(f"      locale 种子：{len(_locs)} 个 locale → {len(_names)} 个资源束", flush=True)
 
-        # K-JCA 服务种子：服务查找入口（jca_providers.txt 的 trigger）在调用链上时，按
+        # K-JCA 服务种子：服务查找入口（seeds.toml [jca] triggers）在调用链上时，按
         # 「engine 类在链上 × 算法名在用户字符串常量中」入选实现类——构造器入队、记为
         # 已实例化（engine 经 SPI 虚调用分派到实现类）。实现类经 Provider$Service.newInstance
         # 按类名反射构造、无静态边。可多轮：新入链的 engine 类（Cipher.init 触达
@@ -1169,7 +1165,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                 added = True
             return added
 
-        # 注解类型种子（FS-R R4b）：注解解析入口（annotation_seeds.txt trigger）在调用链上时，
+        # 注解类型种子（FS-R R4b）：注解解析入口（seeds.toml [annotation] triggers）在调用链上时，
         # 按用户类（类 / 字段 / 方法挂载点）的 RuntimeVisibleAnnotations 传递收集：注解类型
         # （及其元注解）的方法入链——AnnotationType 反射其方法即元素面；枚举元素类型 <clinit>
         # 入链（Enum.valueOf 的常量目录）；Class 元素类型入类型通道。无静态边，结构判定。

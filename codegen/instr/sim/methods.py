@@ -48,11 +48,11 @@ _CALLSITE_TYPED: 'frozenset[str] | None' = None
 
 
 def _callsite_typed(owner: str, mname: str) -> bool:
-    """该签名多态方法是否需要调用点类型（清单 sigpoly_callsite.txt，原则 4：库知识入清单）。"""
+    """该签名多态方法是否需要调用点类型（清单 vm_intrinsics.toml [sigpoly]，原则 4：库知识入清单）。"""
     global _CALLSITE_TYPED
     if _CALLSITE_TYPED is None:
-        from ...runtime_manifest import read_list
-        _CALLSITE_TYPED = frozenset(read_list('sigpoly_callsite.txt'))
+        from ...runtime_manifest import sigpoly_callsite_typed
+        _CALLSITE_TYPED = sigpoly_callsite_typed()
     return f'{owner}.{mname}' in _CALLSITE_TYPED
 
 

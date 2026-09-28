@@ -1,4 +1,4 @@
-//! `jdk/internal/reflect/AccessorUtils` 的栈帧依赖判定（intrinsics.txt 第三类准入：栈帧查询点）。
+//! `jdk/internal/reflect/AccessorUtils` 的栈帧依赖判定（vm_intrinsics.toml 第三类准入：栈帧查询点）。
 //!
 //! JDK 体经 `Throwable.getStackTrace` 判断 CCE / NPE / WMTE 的抛出点是否在访问器类或
 //! java.base 句柄适配层（实参转换失败 → IllegalArgumentException）。原生二进制无 Java 栈帧，

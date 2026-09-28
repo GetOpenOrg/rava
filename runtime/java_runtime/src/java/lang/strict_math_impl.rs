@@ -1,4 +1,4 @@
-//! `java/lang/StrictMath` 的 VM 内建函数（intrinsic，准入清单 `intrinsics.txt`）。
+//! `java/lang/StrictMath` 的 VM 内建函数（intrinsic，准入清单 `vm_intrinsics.toml`）。
 //!
 //! 只收录规范给出唯一精确结果的 @IntrinsicCandidate 方法：原生运算与 Java 体逐位相同，
 //! 与 HotSpot 以硬件指令内建同一处置。其余方法全部按字节码翻译（FdLibm 链）。

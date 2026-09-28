@@ -136,11 +136,11 @@ _INTRINSICS: 'frozenset | None' = None
 
 
 def intrinsics() -> frozenset:
-    """VM 内建函数准入清单（runtime/java_runtime/intrinsics.txt，`Class.m:desc` 取行首字段）。"""
+    """VM 内建函数准入清单（runtime/java_runtime/vm_intrinsics.toml [[intrinsic]] member）。"""
     global _INTRINSICS
     if _INTRINSICS is None:
-        from .runtime_manifest import read_list
-        _INTRINSICS = frozenset(ln.split()[0] for ln in read_list('intrinsics.txt'))
+        from .runtime_manifest import intrinsic_members
+        _INTRINSICS = intrinsic_members()
     return _INTRINSICS
 
 

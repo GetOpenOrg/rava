@@ -23,9 +23,9 @@ engine 类（javax/crypto/Cipher、java/security/MessageDigest）
 
 | 段 | 内容 | 落点 |
 |---|---|---|
-| K-JCA-a 服务表 | 从 provider 注册方法字节码抽取 `(type, algorithm, implClass)` 三元组：连续三条 String 常量 ldc、第三条是可加载类名（点形态）。provider 清单在 `runtime/java_runtime/jca_providers.txt`（Python 不出现 JDK 类名，规则 4） | `codegen/jca_services.py` |
+| K-JCA-a 服务表 | 从 provider 注册方法字节码抽取 `(type, algorithm, implClass)` 三元组：连续三条 String 常量 ldc、第三条是可加载类名（点形态）。provider 清单在 `runtime/java_runtime/seeds.toml [jca]`（Python 不出现 JDK 类名，规则 4） | `codegen/jca_services.py` |
 | K-JCA-b 种子 | BFS 不动点处：服务类型 ∈ 已达方法的 String 常量（engine 类 `getInstance` 自带 ldc "Cipher"/"MessageDigest"）且 算法名 ∈ 用户类 String 常量（大小写不敏感；transformation `DES/ECB/PKCS5Padding` 取首段）→ 实现类 `<init>` 入队、记为已实例化；触发条件：`GetInstance` 成员被触达（清单 trigger 行） | `callchain._seed_jca_services` |
-| K-JCA-c 放行 | 被种子选中的实现类所在**包**（`com/sun/crypto/provider/`、`sun/security/provider/`）内的类，以及 `boundary_release.txt` 列出的 engine/SPI 类（`java/security/MessageDigest`、`MessageDigestSpi`）从边界前缀放行，按字节码翻译；它们对其余内部类（`sun/security/util/*`、`sun/security/jca/*`）的调用仍在边界截断 | `callchain._is_boundary_class` |
+| K-JCA-c 放行 | 被种子选中的实现类所在**包**（`com/sun/crypto/provider/`、`sun/security/provider/`）内的类，以及 `closure.toml [release]` 列出的 engine/SPI 类（`java/security/MessageDigest`、`MessageDigestSpi`）从边界前缀放行，按字节码翻译；它们对其余内部类（`sun/security/util/*`、`sun/security/jca/*`）的调用仍在边界截断 | `callchain._is_boundary_class` |
 | K-JCA-d 注册表 | codegen 发射 `register_jca_services(&[("Cipher", "DES", "SunJCE", ctor), ..])`；手写边界 `sun/security/jca/{GetInstance, ServiceId, ProviderList, JCAUtil}`、`java/security/Provider$Service` 查表构造 | `runtime/java_runtime/src/jca.rs` + 边界手写 |
 
 ## 三、不做 / 偏差

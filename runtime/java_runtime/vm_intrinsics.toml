@@ -1,0 +1,95 @@
+# VM 承载清单：公开 API 中由 VM（手写层）承载、不执行其 Java 体的方法，以及生成器对调用点的特判。
+#
+# 读取入口：codegen/runtime_manifest.py。内建与「手写覆盖」（FS-H0 审计线，最终态 0）分开计数：
+# 内建是最终态的一部分，`[raw-audit] intrinsics=` 单独统计。
+#
+# 内建准入类别（kind）——每条须写明依据（reason）：
+#   exact             精确运算：JDK 源码标注 @IntrinsicCandidate，规范给出唯一结果（IEEE 754 正确舍入 /
+#                     精确运算），Rust 原生运算逐位相同
+#   class_definition  运行期类定义点：原生二进制无运行期类定义（defineClass / 隐藏类），方法体的唯一
+#                     可观察效果是「定义并返回一个类」（或其对偶查询），VM 以类宇宙中的静态类等价承载
+#   stack_frame       栈帧查询点：原生二进制无 Java 栈帧，方法体的唯一可观察效果是「按抛出位置作布尔
+#                     判定」，VM 的运行期登记与栈帧判定逐例同解
+#   bytecode_generator 字节码生成器内部判定：只为「生成的字节码」服务，生成链截断后无语义消费方
+
+[[intrinsic]]
+member = "java/lang/StrictMath.sqrt:(D)D"
+kind = "exact"
+reason = "JLS / StrictMath.sqrt：IEEE 754 squareRoot 正确舍入；f64::sqrt 同为正确舍入"
+
+[[intrinsic]]
+member = "java/lang/invoke/ClassSpecializer$Factory.generateConcreteSpeciesCode:(Ljava/lang/String;Ljava/lang/invoke/ClassSpecializer$SpeciesData;)Ljava/lang/Class;"
+kind = "class_definition"
+reason = "动态物种统一由 VM 支持类 BoundMethodHandle$Species_Dyn 承载（docs/plans/2026-09-27-bmh-dynamic-species.md）"
+
+[[intrinsic]]
+member = "jdk/internal/reflect/MethodAccessorGenerator.generateSerializationConstructor:(Ljava/lang/Class;[Ljava/lang/Class;ILjava/lang/Class;)Ljdk/internal/reflect/SerializationConstructorAccessorImpl;"
+kind = "class_definition"
+reason = "序列化构造器访问器统一由 VM 支持类 SerializationConstructorAccessorDyn 承载（docs/plans/2026-09-27-reflection-metadata-table.md §2.4）"
+
+[[intrinsic]]
+member = "java/lang/reflect/Proxy.newProxyInstance:(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;"
+kind = "class_definition"
+reason = "动态代理类统一由 VM 支持类 Proxy$Dyn 承载（docs/plans/2026-09-27-reflection-metadata-table.md §2.6）"
+
+[[intrinsic]]
+member = "java/lang/reflect/Proxy$ProxyBuilder.isProxyClass:(Ljava/lang/Class;)Z"
+kind = "class_definition"
+reason = "类定义点的对偶查询：代理类即 Proxy$Dyn（不经 defineProxyClass 登记 reverseProxyCache）"
+
+# LambdaForm 编译：JDK 把 LambdaForm 编译为隐藏类字节码（ASM + defineHiddenClass），原生二进制以原生
+# LambdaForm 解释器承载全部句柄调用（MH-native，docs/plans/2026-09-26-mh-native.md §二-2）；编译入口
+# 返回解释入口 MemberName（HotSpot interpret_<sig> 的等价物，「已就绪」判据）。
+[[intrinsic]]
+member = "java/lang/invoke/InvokerBytecodeGenerator.generateCustomizedCode:(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;"
+kind = "class_definition"
+reason = "生成 LambdaForm 隐藏类 → 解释入口"
+
+[[intrinsic]]
+member = "java/lang/invoke/InvokerBytecodeGenerator.generateLambdaFormInterpreterEntryPoint:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;"
+kind = "class_definition"
+reason = "生成解释入口隐藏类 → 解释入口"
+
+[[intrinsic]]
+member = "java/lang/invoke/InvokerBytecodeGenerator.lookupPregenerated:(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;"
+kind = "class_definition"
+reason = "查 jlink 预生成 LambdaForm Holder 类（运行期按名加载）→ null，走解释"
+
+[[intrinsic]]
+member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:([Ljava/lang/invoke/LambdaForm$NamedFunction;)Z"
+kind = "bytecode_generator"
+reason = "「生成的字节码能否直接 invokestatic 成员」；生成链截断后仅断言消费，解释器对全部成员可调 → 恒 true"
+
+[[intrinsic]]
+member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:(Ljava/lang/invoke/LambdaForm$Name;)Z"
+kind = "bytecode_generator"
+reason = "同上"
+
+[[intrinsic]]
+member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:(Ljava/lang/invoke/MemberName;)Z"
+kind = "bytecode_generator"
+reason = "同上"
+
+[[intrinsic]]
+member = "jdk/internal/reflect/AccessorUtils.isIllegalArgument:(Ljava/lang/Class;Ljava/lang/RuntimeException;)Z"
+kind = "stack_frame"
+reason = "栈帧规则「途经 java.base 帧继续、遇用户帧判目标抛出」由 L3 分派登记等价（reflect_dispatch::thrown_by_target：仅经用户成员逃逸者登记）"
+
+# ── @CallerSensitive 注解（binary name）──────────────────────────────────────────────
+# 调用标注此注解的方法时，生成器把调用处所在类显式传入运行时（reflect_dispatch::__caller_sensitive），
+# Reflection.getCallerClass 据此返回——平台无关、与 JVM 栈帧语义逐点一致（原生二进制无 Java 栈帧可读）。
+[caller_sensitive]
+annotations = [
+    "jdk/internal/reflect/CallerSensitive",
+]
+
+# ── 签名多态方法（JVMS §2.9.3）中需要调用点类型的成员：`类.方法` ─────────────────────────
+# codegen 对这些调用发射 `recv.<方法>__site("<调用点描述符>", 实参数组)`，手写伴生据调用点 MethodType
+# 做类型检查 / 适配（MH-native，docs/plans/2026-09-26-mh-native.md §二-6）：
+#   invokeExact：句柄类型 ≠ 调用点类型 → WrongMethodTypeException
+#   invoke：     句柄类型 ≠ 调用点类型 → asType(调用点类型) 后调用
+[sigpoly]
+callsite_typed = [
+    "java/lang/invoke/MethodHandle.invokeExact",
+    "java/lang/invoke/MethodHandle.invoke",
+]

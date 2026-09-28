@@ -10,13 +10,13 @@
   `DES/ECB/PKCS5Padding` 取首段；
 - 放行：清单 `release` 行（算法实现包 + engine / SPI 类）从边界前缀放行，按字节码翻译。
 
-类名全部来自 runtime 清单 `jca_providers.txt`（原则 4）。
+类名全部来自 runtime 清单 `seeds.toml` [jca]（原则 4）。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .runtime_manifest import read_list
+from .runtime_manifest import seed_section, jca_release_entries
 
 
 @dataclass(frozen=True)
@@ -35,19 +35,11 @@ class Service:
 
 
 def load_manifest() -> JcaManifest:
-    provs, release, triggers = [], [], set()
-    for ln in read_list('jca_providers.txt'):
-        kind, val = ln.split(None, 1)
-        val = val.strip()
-        if kind == 'provider':
-            name, cls = val.split()
-            provs.append((name, cls))
-        elif kind == 'release':
-            release.append(val)
-        elif kind == 'trigger':
-            cls, _, member = val.rpartition('.')
-            triggers.add((cls, member))
-    return JcaManifest(tuple(provs), tuple(release), frozenset(triggers))
+    """seeds.toml [jca]：provider 注册类、放行条目、服务查找触发成员。"""
+    sec = seed_section('jca')
+    provs = tuple((p['name'], p['class']) for p in sec.get('providers', []))
+    triggers = frozenset(tuple(t.rsplit('.', 1)) for t in sec.get('triggers', []))
+    return JcaManifest(provs, tuple(jca_release_entries()), triggers)
 
 
 def _str_lit(ins):

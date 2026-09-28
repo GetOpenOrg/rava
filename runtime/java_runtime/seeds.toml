@@ -1,0 +1,109 @@
+# 入链种子清单：无静态调用边、由生成器按「触发成员 + 结构证据」补入闭包的类 / 成员，以及 VM
+# 引导期初始化。
+#
+# 读取入口：codegen/runtime_manifest.py（原则 4：类名只在本清单出现）。
+# 公共写法：成员引用 `类.成员`（触发）或 `类.成员:描述符`（精确方法）；类为斜线形态 binary name。
+
+# ── 注解类型种子（FS-R R4b，docs/plans/2026-09-27-reflection-metadata-table.md §2.6）──────────
+# 注解实例由 JDK AnnotationParser 按原始字节解析：注解类型（AnnotationType 反射其方法 = 元素）、
+# 元注解（Retention / Inherited）与枚举 / Class 元素类型只出现在注解属性体里，无静态调用边。
+# triggers 中任一成员在调用链上时（注解解析入口被触达），生成器按用户类的 RuntimeVisibleAnnotations
+# 传递收集这些类型入闭包：注解类型的方法入链（方法表 = 元素面），枚举元素类型的 <clinit> 入链并
+# 登记类初始化钩子（Enum.valueOf → 常量目录）。seeds 为触发后一并入链的成员（手写层经其转发、
+# 无字节码调用边）。
+[annotation]
+triggers = [
+    "java/lang/Class.getRawAnnotations",
+    "jdk/internal/access/JavaLangAccess.getConstantPool",
+]
+seeds = [
+    "java/lang/Class.getDeclaredAnnotationMap:()Ljava/util/Map;",
+]
+
+# ── Locale 种子（L-1 L1-b，docs/plans/2026-09-25-l1-cldr-locale-data.md §3.2）─────────────
+# 资源束经类名反射装载、无静态调用边，入选 locale 由用户字节码中「静态可见」的 locale 引用推出：
+#   consts    该类的 static 自类型常量字段（getstatic）→ 沿 <clinit> 溯源到字符串字面量（语言, 地区, 变体）
+#   factories 实参全为字符串字面量的调用 → (语言, 地区, 变体)
+#   tags      实参为字符串字面量的 BCP 47 语言标签
+#   bundles   每个入选 locale 需要的资源束族（CLDR），候选类 <包>/<基名>_<locale> 与 <包>/ext/<基名>_<locale>
+#   triggers  调用链触达该成员（手写边界的数据消费入口）才入选资源束——不消费本地化数据的程序
+#             不付束翻译的代码税
+[locale]
+consts = [
+    "java/util/Locale",
+]
+factories = [
+    "java/util/Locale.of:(Ljava/lang/String;)Ljava/util/Locale;",
+    "java/util/Locale.of:(Ljava/lang/String;Ljava/lang/String;)Ljava/util/Locale;",
+    "java/util/Locale.of:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/util/Locale;",
+    "java/util/Locale.<init>:(Ljava/lang/String;)V",
+    "java/util/Locale.<init>:(Ljava/lang/String;Ljava/lang/String;)V",
+    "java/util/Locale.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+]
+tags = [
+    "java/util/Locale.forLanguageTag:(Ljava/lang/String;)Ljava/util/Locale;",
+]
+bundles = [
+    "sun/text/resources/cldr/FormatData",
+]
+triggers = [
+    "sun/util/locale/provider/LocaleResources.getDecimalFormatSymbolsData",
+    "sun/util/locale/provider/LocaleResources.getNumberPatterns",
+]
+
+# ── JCA 服务注册（K-JCA，docs/plans/2026-09-25-jca-service-registry.md）────────────────────
+#   providers        注册类全部方法字节码中 `ldc 类型; ldc 算法; ldc 实现类名` 三连常量即一条服务
+#                    （SunJCE.ps / SunEntries.add 同形态）
+#   release_packages / release_classes
+#                    从边界前缀放行、按字节码翻译（算法实现是纯 Java 计算；形态同 closure.toml [release]）
+#   triggers         调用链触达该成员（手写边界的服务查找入口）才补种服务实现类
+[jca]
+providers = [
+    { name = "SunJCE", class = "com/sun/crypto/provider/SunJCE" },
+    { name = "SUN", class = "sun/security/provider/SunEntries" },
+]
+release_packages = [
+    "com/sun/crypto/provider/",
+    "sun/security/provider/",
+]
+release_classes = [
+    "java/security/MessageDigest",
+    "java/security/MessageDigestSpi",
+    # 算法实现共用的纯 Java 工具类（分组长度 / 边界校验、字节序翻转；仅依赖 ProviderException 与
+    # Preconditions）：CipherCore / ElectronicCodeBook 等的 doFinal 路径直接调用
+    "sun/security/util/ArrayUtil",
+    # 安全异常族（纯数据载体；服务查找失败 / 摘要参数错误时由手写边界或翻译字节码构造）
+    "java/security/GeneralSecurityException",
+    "java/security/NoSuchAlgorithmException",
+    "java/security/NoSuchProviderException",
+    "java/security/DigestException",
+    "java/security/ProviderException",
+    "java/security/KeyException",
+    "java/security/InvalidKeyException",
+    "java/security/InvalidAlgorithmParameterException",
+]
+triggers = [
+    "sun/security/jca/GetInstance.getInstance",
+    "sun/security/jca/GetInstance.getServices",
+    "sun/security/jca/GetInstance.getService",
+]
+
+# ── 纯数据资源束载体（L-1，docs/plans/2026-09-25-l1-cldr-locale-data.md）──────────────────
+# `载体类.载体方法:描述符`。子类若只声明构造器 / 类初始化器 / 该载体方法，且载体方法体只含常量
+# 装载与数组构造（无方法调用），即判定为「纯数据类」——即便位于内部包（sun/ 等），也照常翻译
+# 字节码（数据不是实现细节）。
+[data_bundle]
+carriers = [
+    "java/util/ListResourceBundle.getContents:()[[Ljava/lang/Object;",
+]
+
+# ── VM 引导期类初始化（HotSpot 在执行应用代码前完成初始化的类，initPhase1 等）───────────────
+# 生成项目 main 启动时按本表顺序初始化其中「在闭包内翻译在场」的类（runtime vm_boot_init）。
+# 准入：JDK 代码显式依赖「该类已在引导期初始化」的时序（惰性初始化下会重入读到未就绪状态）。
+[boot_init]
+classes = [
+    # JDK 注释 "AccessibleObject is initialized early in initPhase1"：<clinit> 登记 ReflectAccess 并
+    # 缓存 ReflectionFactory 单例；由 ReflectionFactory.<clinit> 反向触发时 GetReflectionFactoryAction
+    # 重入读到 null。
+    "java/lang/reflect/AccessibleObject",
+]

@@ -63,11 +63,11 @@ _CALLER_SENSITIVE_ANNOS: 'frozenset | None' = None
 
 
 def _is_caller_sensitive(owner_bin: str, mname: str, desc: str, registry: dict | None) -> bool:
-    """被调方法（沿超类链解析声明处）是否标注 @CallerSensitive（注解名见 caller_sensitive.txt）。"""
+    """被调方法（沿超类链解析声明处）是否标注 @CallerSensitive（注解名见 vm_intrinsics.toml [caller_sensitive]）。"""
     global _CALLER_SENSITIVE_ANNOS
     if _CALLER_SENSITIVE_ANNOS is None:
-        from ..runtime_manifest import read_list
-        _CALLER_SENSITIVE_ANNOS = frozenset(read_list('caller_sensitive.txt'))
+        from ..runtime_manifest import caller_sensitive_annotations
+        _CALLER_SENSITIVE_ANNOS = caller_sensitive_annotations()
     if not registry or not _CALLER_SENSITIVE_ANNOS:
         return False
     cur, seen = owner_bin, set()

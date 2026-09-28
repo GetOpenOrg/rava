@@ -1,4 +1,4 @@
-//! `java/lang/invoke/InvokerBytecodeGenerator` 手写伴生：VM 边界类（vm_boundary.txt），
+//! `java/lang/invoke/InvokerBytecodeGenerator` 手写伴生：VM 边界类（closure.toml [vm_boundary]），
 //! MH-native（docs/plans/2026-09-26-mh-native.md §二-2）。
 //!
 //! JDK 在 `LambdaForm.compileToBytecode` / `prepare` 里经本类把 LambdaForm 编译成隐藏类字节码

@@ -476,7 +476,7 @@ java.base.jmod
 
 ### 9.2 主流程有、本文工具未实现/不必关心的机制
 
-- **内部包边界截断**：`sun/`、`jdk/`、`com/sun/`、`com/oracle/`、`java/security/` 以及 `runtime/java_runtime/vm_boundary.txt` 清单内的类，
+- **内部包边界截断**：`sun/`、`jdk/`、`com/sun/`、`com/oracle/`、`java/security/` 以及 `runtime/java_runtime/closure.toml [vm_boundary]` 清单内的类，
   只生成类型占位符、方法体为 `panic!` stub，BFS 在此截断。**这是策略取舍，不是缺陷**（脚本侧的同名机制是 `bfs_internal_boundary` 分析模式）。
 - **native upcall 反向边**：手写 runtime 的 `_impl.rs` 可声明「native 方法回调 Java」的目标，反向注入调用链。
 - **VM 根方法清单**：`runtime/java_runtime/vm_roots.txt` 声明手写运行时直接调用的已翻译方法，作为 BFS 的额外种子。

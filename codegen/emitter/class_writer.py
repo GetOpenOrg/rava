@@ -54,7 +54,7 @@ def _audit_override(ci, m) -> None:
     """FS-H0 审计：公开 API 类的非 native 方法被手写覆盖（跳过字节码翻译）。
 
     两条覆盖路径同口径登记：同名 fn（静态 / 非虚）与虚方法的 `__impl_<m>` 手写体。
-    VM 内建函数（intrinsics.txt 准入）单独计数，不算越界。"""
+    VM 内建函数（vm_intrinsics.toml 准入）单独计数，不算越界。"""
     if m.is_native or m.is_abstract or not ci.name.startswith(('java/', 'javax/')):
         return
     from .. import raw_audit as _ra

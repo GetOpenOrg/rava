@@ -4,7 +4,7 @@
 //! JDK 在此以 ASM 生成物种类字节码并 `Lookup.defineClass`。原生二进制无运行期类定义：
 //! 全部未预生成的物种 key 共用 VM 支持类 `BoundMethodHandle$Species_Dyn`（字节码翻译），
 //! 此处登记 key → SpeciesData 并返回该类；随后 ClassSpecializer 按 key 形态查找的
-//! `make` / `arg<T><i>` 由 `crate::species_dyn` 应答。intrinsics.txt「运行期类定义点」登记。
+//! `make` / `arg<T><i>` 由 `crate::species_dyn` 应答。vm_intrinsics.toml「运行期类定义点」登记。
 
 use crate::prelude::*;
 use super::class_specializer_factory::ClassSpecializer_Factory;

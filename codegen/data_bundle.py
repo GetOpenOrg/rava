@@ -6,11 +6,11 @@ ListResourceBundle 子类，只有构造器与 `getContents()`，后者是纯字
 内部包也照常翻译——数据不是实现细节，手写复刻反而违反原则 1。
 
 判定按**结构**而非类名（原则 4）：载体（类 + 方法签名）来自 runtime 清单
-`data_bundle_carriers.txt`；类本身的方法集与载体方法体的操作码白名单在此检查。
+`seeds.toml` [data_bundle]；类本身的方法集与载体方法体的操作码白名单在此检查。
 """
 from __future__ import annotations
 
-from .runtime_manifest import read_list
+from .runtime_manifest import data_bundle_carriers
 
 # 载体方法体允许的操作码：常量装载、数组构造与元素存储、局部变量存取、返回
 _DATA_OPCODES = frozenset({
@@ -32,9 +32,7 @@ def _carriers() -> dict[str, tuple[str, str]]:
     global _CARRIERS
     if _CARRIERS is None:
         _CARRIERS = {}
-        for line in read_list('data_bundle_carriers.txt'):
-            cls_m, desc = line.split(':', 1)
-            cls, mname = cls_m.rsplit('.', 1)
+        for cls, mname, desc in data_bundle_carriers():
             _CARRIERS[cls] = (mname, desc)
     return _CARRIERS
 

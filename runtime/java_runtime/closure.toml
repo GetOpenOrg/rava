@@ -1,0 +1,99 @@
+# 闭包边界清单：调用链 BFS 在哪里截断（手写边界）、哪里放行（按字节码翻译）。
+#
+# 读取入口：codegen/runtime_manifest.py（生成器不出现 JDK 类名——原则 4，类名只在本清单）。
+# 条目形态：`packages` 为包前缀（必须以 `/` 结尾）；`classes` 为类 binary name（覆盖自身与其
+# `$` 嵌套类，不作字符串前缀匹配——`java/security/Permission` 不覆盖 `Permissions`）。
+# 加载器校验两种形态不混用。
+
+# ── 内部边界包 ─────────────────────────────────────────────────────────────────────
+# BFS 在此截断，类整体手写 / 存根，不展开调用链（CLAUDE.md 规则 3b）。
+[boundary]
+packages = [
+    "sun/",
+    "jdk/",
+    "com/sun/",
+    "com/oracle/",
+    # JVM 安全服务层（JDK 21 SecurityManager 恒 null；JDK 24+ JEP 486 移除）。
+    "java/security/",
+]
+
+# ── VM 耦合边界类 ──────────────────────────────────────────────────────────────────
+# 公开包（java/）里由 JVM 自身引导、承载 VM 设施的类。它们在 HotSpot 中由 VM 本地代码直接
+# 创建 / 驱动（initPhase1~3、模块系统引导、类加载、安全管理器），在原生二进制里没有字节码层面
+# 的对应物。与内部包同规则处理：BFS 在此截断，类整体视为手写边界类，被调用到的方法在 runtime/
+# 对应目录按需手写，未实现的方法保持 panic!("stub: ...")。
+#
+# 引入动机：类初始化（JVMS §5.5）进入调用链后，<clinit> 的静态可达闭包会沿安全管理器 → 模块层
+# 引导 → 虚拟线程调度器一路展开到整个并发 / 模块 / 反射子系统，而这些路径在运行时永不执行。
+[vm_boundary]
+classes = [
+    "java/lang/SecurityManager",
+    "java/lang/VirtualThread",
+    "java/lang/ClassLoader",
+    "java/lang/Module",
+    "java/lang/ModuleLayer",
+    "java/lang/Class",
+
+    # POSIX 原生族档 A（2026-09-23）：FileSystems.getDefault 的默认持有者链
+    # （DefaultFileSystemHolder → $1 → getDefaultProvider → getFileSystem("file:///")）。收录理由 =
+    # 策略截断：getDefaultProvider 的系统属性 / ClassLoader 反射链会展开整个反射子系统（约 1000 类，
+    # bin −143M，见 d8c431c）。getDefault 以 DefaultFileSystemProvider.theFileSystem() 等价承载
+    # （doPrivileged 在无安全管理器时透明，JDK 可观测行为一致），其余成员保持 panic 存根。
+    "java/nio/file/FileSystems",
+
+    # K-JCA（docs/plans/2026-09-25-jca-service-registry.md）：JCE 管辖策略。JceSecurity.<clinit> 从
+    # JDK 安装目录读 conf/security/policy/*.policy 并做 provider jar 签名校验——原生二进制无 JDK
+    # 安装目录，且 JDK 9+ 默认策略即 unlimited。整类手写：canUseProvider 恒 true、isRestricted 恒
+    # false（Cipher 据此取 CryptoAllPermission，JDK 默认安装的可观测行为一致）。
+    "javax/crypto/JceSecurity",
+
+    # MH-native（docs/plans/2026-09-26-mh-native.md）：LambdaForm 运行期字节码生成器。原生二进制
+    # 不能定义隐藏类；句柄调用由原生 LambdaForm 解释器承载，编译入口返回解释入口（vm_intrinsics.toml）。
+    "java/lang/invoke/InvokerBytecodeGenerator",
+]
+
+# ── 边界放行：内部边界前缀下按字节码翻译的纯 Java 类 / 包 ─────────────────────────────
+# JCA 服务实现族的放行在 seeds.toml [jca]（与服务种子同一消费面）。
+[release]
+packages = [
+    # FS-R R2a（docs/plans/2026-09-27-reflection-metadata-table.md）：反射访问器族（JDK 21 的
+    # Field.get / Method.invoke 经 ReflectionFactory → MethodHandleAccessorFactory → DirectMethodHandle，
+    # 与 MH-native 同一管线）。包内 native（Reflection.getCallerClass 等）由共置 _impl.rs 手写；运行期
+    # 字节码生成点（generateSerializationConstructor）按 vm_intrinsics.toml 准入（R3）。
+    "jdk/internal/reflect/",
+    # FS-R R4b：注解解析族（Class/Field/Method.getAnnotation → AnnotationParser 按原始字节解析，
+    # 实例经 Proxy.newProxyInstance + AnnotationInvocationHandler）。唯一例外 parseSig 手写：注解签名
+    # 恒为描述符形态，结果即描述符 → Class（annotation_parser_impl.rs）——sun/reflect/generics 不放行
+    # （其泛型 visitor 体系使 java_runtime 编译峰值内存越过 15G）。
+    "sun/reflect/annotation/",
+]
+classes = [
+    # MH-native：asType / 组合子的类型转换与名字工具。纯 Java（装拆箱 / 拓宽句柄经 IMPL_LOOKUP
+    # 按名查找本类静态方法——常量反射引用扫描入链）。
+    "sun/invoke/util/ValueConversions",
+    "sun/invoke/util/BytecodeName",
+    "sun/invoke/util/VerifyType",
+
+    # FS-R：VM 边界类 java/lang/Class 的纯 Java 嵌套辅助类（0 个 ACC_NATIVE）：reflectionData()
+    # 缓存、EnclosingMethodInfo（isLocalClass / isAnonymousClass / getEnclosingClass）、Atomic
+    # （reflectionData / annotationData 的 CAS）、AnnotationData。
+    "java/lang/Class$ReflectionData",
+    "java/lang/Class$EnclosingMethodInfo",
+    "java/lang/Class$Atomic",
+    "java/lang/Class$AnnotationData",
+
+    # FS-H0 安全组：特权执行与访问控制上下文（纯 Java；native 仅栈上上下文 / 保护域 / 栈遍历物化，
+    # access_controller_impl.rs）。SecurityManager 恒 null，doPrivileged 直通 action.run()。
+    "java/security/AccessController",
+    "java/security/AccessControlContext",
+
+    # 权限与保护域（纯 Java）。消费方：ForkJoinPool 工作线程 ACC（contextWithPermissions）、
+    # ThreadPerTaskExecutor.<clinit>、JCA CryptoPermission。
+    "java/security/Permission",
+    "java/security/PermissionCollection",
+    "java/security/Permissions",
+    "java/security/PermissionsHash",
+    "java/security/BasicPermission",
+    "java/security/BasicPermissionCollection",
+    "java/security/ProtectionDomain",
+]

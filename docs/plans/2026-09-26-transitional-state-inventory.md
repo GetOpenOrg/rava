@@ -27,7 +27,7 @@
 
 ### FS-H0 进度与余项明细（`[override-audit]`，2026-09-26）
 
-审计线（fb4141a）：`class_writer.py` 的 `_audit_override` 登记每处非 native 方法的手写覆盖，`[raw-audit] non_native_overrides=N` 汇总、`[override-audit]` 逐位点输出（`scripts/main.py`）。两条覆盖路径同口径：同名 fn（静态 / 非虚）与虚方法的 `__impl_<m>` 手写体（后者审计起初漏计，补上后计数由 60 修正为 98）。VM 内建函数经 `runtime/java_runtime/intrinsics.txt` 准入，单独计 `intrinsics=`，不算违例。
+审计线（fb4141a）：`class_writer.py` 的 `_audit_override` 登记每处非 native 方法的手写覆盖，`[raw-audit] non_native_overrides=N` 汇总、`[override-audit]` 逐位点输出（`scripts/main.py`）。两条覆盖路径同口径：同名 fn（静态 / 非虚）与虚方法的 `__impl_<m>` 手写体（后者审计起初漏计，补上后计数由 60 修正为 98）。VM 内建函数经 `runtime/java_runtime/vm_intrinsics.toml` 准入，单独计 `intrinsics=`，不算违例。
 
 | 批次 | 内容 |
 |---|---|
@@ -41,7 +41,7 @@
 |---|---|---|---|
 | 反射元数据 | `Class` 24；`Field` get / getInt / getLong / set / getAnnotation / getDeclaredAnnotations 6；`Method` 3；`Constructor` 2 | JDK 字节码经 ReflectionFactory / 注解解析器读 class 文件字节；原生二进制无常量池——需「反射元数据表」生成后以 native（getDeclaredFields0 等）承载，公开方法回到字节码 | FS-R 组 |
 | 虚拟线程 | `VirtualThread` <init> / start×2 / run / park / parkNanos / unpark / joinNanos / alive / isTerminated 10 | Continuation 未建模，虚拟线程由 OS 线程承载 | FS-T4 |
-| 安全 / 提供者 | `SecureRandom` 9、`Provider$Service` 7、`Provider` 1、`AccessController` 2、`Permission` 2、`BasicPermission` 1 | `java/security/` 整包是边界（boundary_prefixes.txt）；去掉边界后 AccessController / Permission 可直接回到字节码，SecureRandom / Provider 需服务表 | FS-K7 / FS-C4 |
+| 安全 / 提供者 | `SecureRandom` 9、`Provider$Service` 7、`Provider` 1、`AccessController` 2、`Permission` 2、`BasicPermission` 1 | `java/security/` 整包是边界（closure.toml [boundary]）；去掉边界后 AccessController / Permission 可直接回到字节码，SecureRandom / Provider 需服务表 | FS-K7 / FS-C4 |
 | 类加载器 / 模块 | `ClassLoader` 6、`Module` 2 | 需内建类加载器对象图（BuiltinClassLoader 边界类）+ 静态资源表 | FS-C 组 |
 | 运行时字节码生成 | `InvokerBytecodeGenerator` 6 | 原生二进制不能在运行时定义类；最终态走「LambdaForm 解释执行」路径（等价 HotSpot 的解释入口），届时这组改入内建清单并注明理由 | FS-M 组 |
 | 数值 / 文本 | `Double.toString` ×2（FS-N6，DoubleToDecimal）、`Integer.toString()` / `Integer.valueOf`（IntegerCache.<clinit> 链）、`StackTraceElement.computeFormat`、`DecimalFormatSymbols.initializeCurrency` | 回到字节码；后两者依赖模块 / Currency 数据 | FS-N6 等 |
@@ -200,7 +200,7 @@
 | FS-H10 | Object / ObjectVTable 整类手写 | vtable 从 `Object.class` 翻译 | 仅架构 | Arch-4 |
 | FS-H11 | `string_ext.rs`、驻留表手写 | 由字节码承载 | 仅架构 | P-2 |
 | FS-H12 | vm_boundary 里的公开包类整类手写：Class / ClassLoader / Module / ModuleLayer / VirtualThread / SecurityManager / FileSystems / JceSecurity / InvokerBytecodeGenerator | 缩小到只手写 native | 见 FS-R1 / C2 / C3 / IO4 | 新立 |
-| FS-H13 | jdk/internal 纯 Java 类整类重写：DoubleToDecimal / FloatToDecimal / FloatingDecimal / DecimalDigits / Preconditions 等 | 经 `boundary_release.txt` 放行翻译 | 基本仅架构 | P-3 |
+| FS-H13 | jdk/internal 纯 Java 类整类重写：DoubleToDecimal / FloatToDecimal / FloatingDecimal / DecimalDigits / Preconditions 等 | 经 `closure.toml [release]` 放行翻译 | 基本仅架构 | P-3 |
 
 ## 十三、进程 / 环境 / 系统属性
 

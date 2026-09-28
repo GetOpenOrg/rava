@@ -14,13 +14,13 @@ GraalVM native-image `-H:IncludeLocales`，入选 locale =
 - 显式配置 `--locales fr,it_IT,zh-Hant-TW`。
 
 每个 locale 连同父链（fr_FR → fr → ROOT）入闭包——ResourceBundle 回退语义所需。
-类名全部来自 runtime 清单 `locale_seeds.txt`（原则 4）。
+类名全部来自 runtime 清单 `seeds.toml` [locale]（原则 4）。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .runtime_manifest import read_list
+from .runtime_manifest import seed_section
 
 _INT_CONSTS = {'iconst_m1': -1, 'iconst_0': 0, 'iconst_1': 1, 'iconst_2': 2,
                'iconst_3': 3, 'iconst_4': 4, 'iconst_5': 5}
@@ -36,23 +36,11 @@ class LocaleSeeds:
 
 
 def load_manifest() -> LocaleSeeds:
-    consts, facts, tags, bundles, triggers = set(), set(), set(), [], set()
-    for ln in read_list('locale_seeds.txt'):
-        kind, val = ln.split(None, 1)
-        val = val.strip()
-        if kind == 'const':
-            consts.add(val)
-        elif kind == 'factory':
-            facts.add(val)
-        elif kind == 'tag':
-            tags.add(val)
-        elif kind == 'bundle':
-            bundles.append(val)
-        elif kind == 'trigger':
-            cls, _, member = val.rpartition('.')
-            triggers.add((cls, member))
-    return LocaleSeeds(frozenset(consts), frozenset(facts), frozenset(tags), tuple(bundles),
-                       frozenset(triggers))
+    """seeds.toml [locale]。"""
+    sec = seed_section('locale')
+    triggers = frozenset(tuple(t.rsplit('.', 1)) for t in sec.get('triggers', []))
+    return LocaleSeeds(frozenset(sec.get('consts', [])), frozenset(sec.get('factories', [])),
+                       frozenset(sec.get('tags', [])), tuple(sec.get('bundles', [])), triggers)
 
 
 # ── 字面量识别 ──────────────────────────────────────────────────────────────
