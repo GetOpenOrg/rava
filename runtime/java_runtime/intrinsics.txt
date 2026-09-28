@@ -20,3 +20,14 @@ jdk/internal/reflect/MethodAccessorGenerator.generateSerializationConstructor:(L
 jdk/internal/reflect/AccessorUtils.isIllegalArgument:(Ljava/lang/Class;Ljava/lang/RuntimeException;)Z   # 栈帧规则「途经 java.base 帧继续、遇用户帧判目标抛出」由 L3 分派登记等价（reflect_dispatch::thrown_by_target：仅经用户成员逃逸者登记）
 java/lang/reflect/Proxy.newProxyInstance:(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;   # 运行期类定义点：动态代理类统一由 VM 支持类 Proxy$Dyn 承载（docs/plans/2026-09-27-reflection-metadata-table.md §2.6）
 java/lang/reflect/Proxy$ProxyBuilder.isProxyClass:(Ljava/lang/Class;)Z   # 运行期类定义点的对偶查询：代理类即 Proxy$Dyn（不经 defineProxyClass 登记 reverseProxyCache）
+# LambdaForm 编译（运行期类定义点）：JDK 把 LambdaForm 编译为隐藏类字节码（ASM + defineHiddenClass），
+# 原生二进制以原生 LambdaForm 解释器承载全部句柄调用（MH-native，docs/plans/2026-09-26-mh-native.md §二-2）；
+# 编译入口返回解释入口 MemberName（HotSpot interpret_<sig> 的等价物，「已就绪」判据）。
+java/lang/invoke/InvokerBytecodeGenerator.generateCustomizedCode:(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;   # 生成 LambdaForm 隐藏类 → 解释入口
+java/lang/invoke/InvokerBytecodeGenerator.generateLambdaFormInterpreterEntryPoint:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;   # 生成解释入口隐藏类 → 解释入口
+java/lang/invoke/InvokerBytecodeGenerator.lookupPregenerated:(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;   # 查 jlink 预生成 LambdaForm Holder 类（运行期按名加载）→ null，走解释
+# 字节码生成器的静态可调用判定：只为「生成的字节码能否直接 invokestatic 成员」服务；生成链截断后
+# 仅断言消费，解释器对全部成员可调 → 恒 true。
+java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:([Ljava/lang/invoke/LambdaForm$NamedFunction;)Z   # 生成器内部判定（见上）
+java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:(Ljava/lang/invoke/LambdaForm$Name;)Z   # 生成器内部判定（见上）
+java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:(Ljava/lang/invoke/MemberName;)Z   # 生成器内部判定（见上）
