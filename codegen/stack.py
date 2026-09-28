@@ -68,7 +68,26 @@ _STMT_CLASSES = tuple(get_args(RsStmt))
 #   erased_class_of(rust_ty, reg) → 擦除 ClassRef（registry 域内补 is_interface）
 #   is_jvm_array(rust_ty)         → 引用数组形态（JvmType Array 变体的发射形态）
 
+# G5 双算插桩（JAVA_RTA_G5_AUDIT=<文件>）：stack 旧查询与 jvm_type 查询面逐次对照，差异追加落盘
+import os as _os_g5
+_G5_AUDIT = _os_g5.environ.get('JAVA_RTA_G5_AUDIT')
+
+
+def _g5_log(kind: str, arg: str, old, new) -> None:
+    if _G5_AUDIT and old != new:
+        with open(_G5_AUDIT, 'a', encoding='utf-8') as _f:
+            _f.write(f'{kind}\t{arg!r}\t{old!r}\t{new!r}\n')
+
+
 def erased_base(rust_ty: str) -> str:
+    _r = _erased_base_old(rust_ty)
+    if _G5_AUDIT:
+        from .jvm_type import from_rust_type, rust_head_name
+        _g5_log('erased_base', rust_ty, _r, rust_head_name(from_rust_type(rust_ty, None)))
+    return _r
+
+
+def _erased_base_old(rust_ty: str) -> str:
     """Rust 类型串的擦除基名（`ArrayList<T>` → `ArrayList`、`JArray<Entry<K, V>>`
     → `JArray`）：JvmType.erasure() 在字符串边界的投影——泛型实参不参与裸名判定。
     首标识符提取与 jvm_type.carrier_type_for_ident 同型；非标识符开头（`()`
@@ -78,6 +97,16 @@ def erased_base(rust_ty: str) -> str:
 
 
 def erased_class_of(rust_ty: str, registry: 'dict | None' = None) -> 'ClassRef | None':
+    _r = _erased_class_of_old(rust_ty, registry)
+    if _G5_AUDIT:
+        from .jvm_type import from_rust_type, Array as _Arr
+        _t = from_rust_type(rust_ty, registry)
+        _n = _t if isinstance(_t, ClassRef) and registry and _t.binary in registry else None
+        _g5_log('erased_class_of', rust_ty, _r and _r.binary, _n and _n.binary)
+    return _r
+
+
+def _erased_class_of_old(rust_ty: str, registry: 'dict | None' = None) -> 'ClassRef | None':
     """Rust 类型串 → 擦除 ClassRef：基名经 registry 短名索引解析为 binary 身份
     （JvmType.class_of 补全 is_interface）。域外短名 / registry 缺失 / 非标识符
     形态 → None（调用方回退既有擦除路径，与 _rust_type_to_binary 的空串约定
@@ -92,6 +121,14 @@ def erased_class_of(rust_ty: str, registry: 'dict | None' = None) -> 'ClassRef |
 
 
 def is_jvm_array(rust_ty: str) -> bool:
+    _r = _is_jvm_array_old(rust_ty)
+    if _G5_AUDIT:
+        from .jvm_type import from_rust_type, Array as _Arr
+        _g5_log('is_jvm_array', rust_ty, _r, isinstance(from_rust_type(rust_ty, None), _Arr))
+    return _r
+
+
+def _is_jvm_array_old(rust_ty: str) -> bool:
     """Rust 类型串是否为引用数组形态 `JArray<..>`（jvm_type Array 变体的发射
     形态探测）。Vec<..> 是 Rust 侧容器、非 JVM 数组概念，不在本查询域内。"""
     return _re_stack.match(r'JArray<', rust_ty) is not None
