@@ -27,7 +27,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=../user/src/");
-    println!("cargo:rerun-if-env=changed=RAVA_STRICT");
+    println!("cargo:rerun-if-env-changed=RAVA_STRICT");
     // 语料 JDK 特性版本（生成侧写入 jdk_feature.txt）→ 编译期环境变量，
     // 手写层经 crate::jdk_feature() 读取（缺省 21）
     println!("cargo:rerun-if-changed=jdk_feature.txt");

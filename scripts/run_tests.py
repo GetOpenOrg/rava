@@ -100,7 +100,7 @@ LOGS_DIR = _versioned(OUT) / "logs"
 
 
 def _cargo_profile_args() -> list[str]:
-    # 并行后端为默认且唯一后端（#42：Arc + 原子单元 + 读写锁，无 GIL）；RAVA_MT 已无作用
+    # 并行后端为默认且唯一后端（#42：Arc + 原子单元 + 读写锁，无 GIL）
     return ["--release"] if PROFILE_DIR == "release" else []
 
 

@@ -204,6 +204,8 @@ scripts/fetch_pilot_deps.sh [--no-scan]         # lib pilot 语料取包（清�
 scripts/lib_pilot_golden.sh m1..m5              # JUnit/hamcrest crate golden 对账（前置：上一条）
 ```
 
+环境变量（`RAVA_*` 诊断 / 构建开关及标准变量）的用途与用法见 **[`docs/environment-variables.md`](docs/environment-variables.md)**。
+
 ---
 
 ## 代码生成命名原则
