@@ -215,5 +215,25 @@ def _coerce_value(val_str: str, val_ty: 'RsType', target: str) -> str:
     return val_str
 
 
+def coerce_value_node(val, val_ty: 'RsType', target: str):
+    """`_coerce_value` 的节点版（FS-Q1 Q1-e）：值节点 → 窄 / 宽整型与 bool 转换节点。
+
+    构造后与字符串实现的输出逐字符比对，不一致回落 Raw 叶子——逐字节一致由构造保证。"""
+    from ..rs_ir import Cast, Paren, BinOp, Lit, RawExpr, RsNamed
+    from ..render import render_expr
+    text = _coerce_value(render_expr(val), val_ty, target)
+    src = getattr(val_ty, 'name', '')
+    node = val
+    if target != src:
+        if target == 'i32' and src in ('bool', 'u16', 'i8', 'i16'):
+            node = Cast(Paren(val), RsNamed('i32'), outer=False)
+        elif target == 'bool' and src != 'bool':
+            node = Paren(BinOp('!=', val, Lit('0i32')))
+        elif target in ('i8', 'i16', 'u16'):
+            inner = val if src == 'i32' else Cast(val, RsNamed('i32'))
+            node = Cast(Paren(inner), RsNamed(target))
+    return node if render_expr(node) == text else RawExpr(text)
+
+
 # Java 中任何对象都可以传递给 Object 参数（引用协变），Rust 需要显式 Into<Object> 转换
 # _PRIMITIVE_RUST_TYPES 已统一到 codegen/constants.py 的 PRIMITIVE_RUST_TYPES

@@ -613,7 +613,13 @@ def coerce_arg_node(
     actual:   实际栈顶类型字符串
     """
     # FS-Q1 Q1-b：节点版——控制流与判定同字符串版（e 为渲染串，只用于判定），返回值构造为节点
-    from ..rs_ir import Call as _C, RefExpr as _Ref, Var as _V, Cast as _Cast, RsPrimitive as _Prim, RawExpr as _Raw
+    from ..rs_ir import Call as _C, RefExpr as _Ref, Var as _Var_n, Cast as _Cast, RsPrimitive as _Prim, RawExpr as _Raw
+    import re as _re_leaf
+
+    def _V(text: str):
+        # 文本叶子：标识符 → Var；其余 → Raw（实参节点自 Q1-c 起进入 IR，变量提升按 IR 收集
+        # 变量引用——整段文本作 Var 名会漏收其中的变量）
+        return _Var_n(text) if _re_leaf.fullmatch(r'[A-Za-z_]\w*', text) else _Raw(text)
     from .coerce import coerce_to_object_node as _cton, cast_node as _castn
     e = render_expr(E)
     _E_CAST = _Raw('this') if e == 'this' else E   # 'this' 转换叶子保持字符串管线形态
@@ -668,7 +674,8 @@ def coerce_arg_node(
             return _cton(E, actual, registry, sim.class_type_params)
         return _cton(E, actual, registry, sim.class_type_params)
     if expected in ('bool', 'i8', 'i16', 'u16') and actual != expected:
-        return _V(_coerce_value(e, e_ty_node, expected))
+        from .coerce import coerce_value_node
+        return coerce_value_node(E, e_ty_node, expected)
     if expected == 'i32' and actual in ('i8', 'i16', 'u16', 'bool'):
         return _Cast(E, _Prim('i32'))
     # 同一泛型类的不同实例化（raw type / 通配符形参接收精确实例化的实参）：

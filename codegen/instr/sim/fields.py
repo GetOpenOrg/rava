@@ -397,14 +397,18 @@ def sim_fields(ins, sim, class_name, registry) -> bool:
             raw_cls = _short_cls_g(cls)
             if _sf_ty in _PRIMITIVE_RUST_TYPES:
                 # JVM 操作数栈上 boolean/byte/char/short 都是 int，写入字段时按字段描述符还原
-                val_str = _coerce_value(render_expr(val_expr), val_ty, _sf_ty)
+                from ..coerce import coerce_value_node
+                _pv_node = coerce_value_node(val_expr, val_ty, _sf_ty)
+                val_str = render_expr(_pv_node)
             else:
+                _pv_node = None
                 val_str = _coerce_stored_value(val_expr, val_ty, _sf_ty, registry,
                                                class_type_params=sim.class_type_params)
             _spill_pending_reads(sim, f"::{rust_fname}()")
             # static 写入 → 宏生成的 set_xxx 访问器（入口触发类初始化，JVMS §5.5）
             sim.emit(ExprStmt(TryExpr(Call(f"{raw_cls}{_turbofish}::set_{rust_fname}",
-                                           [_value_node(val_expr, val_str)]))))
+                                           [_pv_node if _pv_node is not None
+                                            else _value_node(val_expr, val_str)]))))
         else:
             sim.emit(RawStmt(f"/* putstatic {cls}.{field_name} = {render_expr(val_expr)} */"))
 

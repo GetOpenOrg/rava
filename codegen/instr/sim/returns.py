@@ -35,8 +35,10 @@ def sim_returns(ins, sim, class_name, registry) -> bool:
         ret_ty = getattr(sim, 'return_type', 'i32')
         actual_ty = render_type(e_ty)
         if actual_ty != ret_ty and ret_ty in ('i8', 'i16', 'u16', 'bool', 'i32'):
-            expr_s = _coerce_value(expr_s, e_ty, ret_ty)
-        sim.emit(_return_ok(e_expr, expr_s))
+            from ..coerce import coerce_value_node
+            sim.emit(ReturnStmt(Call('Ok', [coerce_value_node(e_expr, e_ty, ret_ty)])))
+        else:
+            sim.emit(_return_ok(e_expr, expr_s))
     elif op == 'areturn':
         e_expr, e_ty = sim.pop()
         expr_s = render_expr(e_expr)

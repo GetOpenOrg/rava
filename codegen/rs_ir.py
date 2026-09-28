@@ -130,6 +130,8 @@ class Index:
 class Cast:
     expr: RsExpr
     ty: RsType
+    # 外层括号：True → `(x as T)`（既有形态）；False → `x as T`（由外层上下文定界）
+    outer: bool = True
 
 
 @dataclass

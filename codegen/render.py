@@ -111,6 +111,8 @@ def render_expr(expr) -> str:
     if isinstance(expr, Index):
         return f'{render_expr(expr.recv)}[{render_expr(expr.idx)}]'
     if isinstance(expr, Cast):
+        if not expr.outer:
+            return f'{render_expr(expr.expr)} as {render_type(expr.ty)}'
         return f'({render_expr(expr.expr)} as {render_type(expr.ty)})'
     if isinstance(expr, RefExpr):
         mut = 'mut ' if expr.mutable else ''
