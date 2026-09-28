@@ -3,7 +3,7 @@
 from ..type_map import short_cls as _short_cls_g
 from ..stack import StackSim
 from .. import inherited_calls as _inherited_calls
-from ..rs_ir import Lit, Var, RawExpr, RawStmt, RsNamed
+from ..rs_ir import Lit, Var, RawExpr, RawStmt, RsNamed, LetStmt, ExprStmt, TryExpr
 from ..render import render_expr, render_type
 from ..type_map import jvm_to_rust, short_cls
 from ..constants import safe_ident as _safe_field
@@ -38,15 +38,18 @@ def _pop_receiver_and_args(sim, params, sig_params_v, registry):
     """弹出并 coerce 全部实参与接收者；构造结果直接作接收者时，待推断的 `_`
     类型实参按擦除语义闭合（接收者位置不提供推断上下文，E0283）。"""
     args = []
+    arg_nodes = []
+    from .invoke_sig import coerce_arg_node
     for _idx_v, param_jvm in enumerate(reversed(params)):
         e_expr, e_ty_node = sim.pop()
-        e_str = render_expr(e_expr)
         _pi_v = len(params) - 1 - _idx_v
         _sig_t_v = sig_params_v[_pi_v] if sig_params_v and _pi_v < len(sig_params_v) else None
         expected_rust = _sig_t_v if _sig_t_v is not None else jvm_to_rust(param_jvm, registry)
         actual_rust = render_type(e_ty_node)
-        e_str = _coerce_arg(e_str, e_ty_node, expected_rust, actual_rust, sim, registry)
-        args.insert(0, e_str)
+        # FS-Q1 Q1-c：实参以节点携带（叶子即栈上节点），字符串形态按渲染同步保留给其余消费方
+        _node = coerce_arg_node(e_expr, e_ty_node, expected_rust, actual_rust, sim, registry)
+        arg_nodes.insert(0, _node)
+        args.insert(0, render_expr(_node))
     obj_expr, obj_ty_node = sim.pop()
     obj_e = render_expr(obj_expr)
     obj_ty = render_type(obj_ty_node)
@@ -63,7 +66,7 @@ def _pop_receiver_and_args(sim, params, sig_params_v, registry):
         obj_ty = f"{_infer_m.group(1)}<{_erased_args}>"
         obj_expr = RawExpr(obj_e)
         obj_ty_node = RsNamed(obj_ty)
-    return args, obj_e, obj_ty
+    return args, obj_e, obj_ty, arg_nodes
 
 
 def _try_early_receiver_paths(sim, _obj_is_typevar, mname, args, obj_e, obj_ty,
@@ -603,14 +606,34 @@ def _build_call(mname_r, recv, args):
     return call
 
 
+def _call_node(rust_mname, recv: str, arg_nodes):
+    """调用节点（FS-Q1 Q1-c/d）：`recv.m(args)`——实参为强制转换节点；caller-sensitive 包装生效时
+    返回 None（沿用字符串形态）。接收者串为标识符时以 Var 承载，否则暂为 RawExpr 叶子。"""
+    if arg_nodes is None:
+        return None
+    if _CS_CTX is not None:
+        from .invoke import caller_sensitive_wrap
+        owner, mname, desc, caller, registry = _CS_CTX
+        if caller_sensitive_wrap('\0', owner, mname, desc, caller, registry) != '\0':
+            return None   # @CallerSensitive 包装生效：沿用字符串形态
+    import re as _re_cn
+    from ..rs_ir import MethodCall, RawExpr as _RawCN
+    recv_node = Var(recv) if _re_cn.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', recv) else _RawCN(recv)
+    return MethodCall(recv_node, rust_mname, list(arg_nodes))
+
+
 def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_mname,
                       arg_str, obj_e, obj_ty, obj_is_bare, _sig_owner,
-                      _sig_recv_ty, _recv, _root_routed, registry):
+                      _sig_recv_ty, _recv, _root_routed, registry, arg_nodes=None):
     """调用发射与结果记录：void 直发 / 根路由 / clone 特例 / 签名真实返回类型
     与擦除类型的对齐（S-3.1 装箱、精确形态记录、幂等 from_any）。"""
     if rust_ret == '()':
         if not obj_is_bare:
-            sim.emit(RawStmt(f"{_build_call(rust_mname, _recv, arg_str)}?;"))
+            _cn = _call_node(rust_mname, _recv, arg_nodes)
+            if _cn is not None:
+                sim.emit(ExprStmt(TryExpr(_cn)))
+            else:
+                sim.emit(RawStmt(f"{_build_call(rust_mname, _recv, arg_str)}?;"))
     else:
         v = sim.fresh()
         if obj_is_bare and rust_ret not in ('Object', '()') and rust_ret not in _PRIMITIVE_RUST_TYPES:
@@ -652,7 +675,9 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
                 sim.push(Var(v), RsNamed(rust_ret))
             elif (_sig_ret_v is not None and _sig_ret_v != rust_ret
                     and rust_ret not in _PRIMITIVE_RUST_TYPES):
-                sim.emit(RawStmt(f"let {v} = {_call_str}?;"))
+                _cn = _call_node(rust_mname, _recv, arg_nodes)
+                sim.emit(LetStmt(v, value=TryExpr(_cn)) if _cn is not None
+                         else RawStmt(f"let {v} = {_call_str}?;"))
                 sim.push(Var(v), RsNamed(_sig_ret_v))
             elif (rust_ret == 'Object' and _sig_ret_v is None
                     and _erased_ret_is_type_var(cls, mname, params, ret, registry)):
@@ -661,7 +686,9 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
                 sim.emit(RawStmt(f"let {v} = Object::from_any({_call_str}?);"))
                 sim.push(Var(v), RsNamed(rust_ret))
             else:
-                sim.emit(RawStmt(f"let {v} = {_call_str}?;"))
+                _cn = _call_node(rust_mname, _recv, arg_nodes)
+                sim.emit(LetStmt(v, value=TryExpr(_cn)) if _cn is not None
+                         else RawStmt(f"let {v} = {_call_str}?;"))
                 sim.push(Var(v), RsNamed(rust_ret))
 
 
@@ -692,7 +719,7 @@ def _gen_invokevirtual_body(sim, comment, class_name, registry, cls, mname, para
         equiv_audit.record('class-literal')
     sig_params_v = _resolve_virtual_sig_params(sim, cls, mname, params, ret,
                                               class_name, registry)
-    args, obj_e, obj_ty = _pop_receiver_and_args(sim, params, sig_params_v, registry)
+    args, obj_e, obj_ty, arg_nodes = _pop_receiver_and_args(sim, params, sig_params_v, registry)
     # Fix 16：泛型参数接收者（如 k.equals(pk) 中 k: K）——inherent 方法不在
     # 类型参数上可见（E0599）。装箱为 Object 后：Object 自身的方法
     # （equals/hashCode/toString）直接调用 java_runtime 手写实现，避免
@@ -775,4 +802,4 @@ def _gen_invokevirtual_body(sim, comment, class_name, registry, cls, mname, para
         sim, class_name, cls, mname, params, ret, rust_ret, obj_base, obj_e, obj_ty, registry)
     _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_mname,
                       arg_str, obj_e, obj_ty, obj_is_bare, _sig_owner, _sig_recv_ty,
-                      _recv, _root_routed, registry)
+                      _recv, _root_routed, registry, arg_nodes=arg_nodes)

@@ -17,8 +17,8 @@ from ..cfg import (
 )
 from ..constants import PRIMITIVE_RUST_TYPES as _PRIM_TYPES
 from ..instr.hierarchy import _common_ref_type, _common_ref_type_widening
-from ..render import render_expr, render_type
-from ..rs_ir import RawExpr, RawStmt, Var
+from ..render import render_expr, render_type, render_stmt
+from ..rs_ir import RawExpr, RawStmt, Var, LetStmt
 from ..stack import StackSim, _clone_moved_var, erased_base
 from .vars import _coerce_icmp_operand, _coerce_acmp_operand, _str_to_rs_type
 
@@ -273,10 +273,15 @@ _NO_INLINE_MARKERS = ('Default::default()', '.into()', 'panic!', '\n')
 
 
 def _parse_temp_let(stmt):
-    """RawStmt 形式的临时变量声明 → (name, mutable, ty_text | None, value_text)；否则 None。"""
-    if not isinstance(stmt, RawStmt):
+    """临时变量声明 → (name, mutable, ty_text | None, value_text)；否则 None。
+    RawStmt 按文本识别；类型化 LetStmt（FS-Q1 Q1-d）按其渲染文本同一规则识别（渲染与 Raw 形态逐字符一致）。"""
+    if isinstance(stmt, LetStmt):
+        text = render_stmt(stmt)
+    elif isinstance(stmt, RawStmt):
+        text = stmt.code
+    else:
         return None
-    m = _TEMP_LET_RE.match(stmt.code.strip())
+    m = _TEMP_LET_RE.match(text.strip())
     if not m:
         return None
     return m.group(2), bool(m.group(1)), m.group(3), m.group(4)
