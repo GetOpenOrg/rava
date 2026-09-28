@@ -79,6 +79,10 @@ release_classes = [
     # 服务描述层（纯 Java）：Provider（Properties 子类，服务表 + 旧式属性映射）及其嵌套类
     # Service / ServiceKey / EngineDescription / UString。
     "java/security/Provider",
+    # 随机源 engine 族（纯 Java）：缺省 PRNG 经 provider 列表取实现（NativePRNG）
+    "java/security/SecureRandom",
+    "java/security/SecureRandomSpi",
+    "java/security/SecureRandomParameters",
     "java/security/InvalidParameterException",
     "java/security/MessageDigest",
     "java/security/MessageDigestSpi",
