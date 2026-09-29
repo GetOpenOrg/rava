@@ -693,7 +693,34 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     visited_methods.add(_key)
                     enqueued_from[_key] = origin[0]
                     queue.append(_key)
+            if not _ci.is_interface:
+                _enqueue_default_iface_inits(_ci)
             _cur = _ci.super_class
+
+    def _enqueue_default_iface_inits(ci) -> None:
+        """JVMS §5.5 步骤 7：类初始化随之初始化声明了 default 方法、且有 `<clinit>` 的
+        直接 / 间接超接口（与 emitter attrs._default_init_interfaces 的 `init_interfaces`
+        宏属性同一判定——宏在 `__class_init` 里调用这些接口的 `__class_init`，其
+        `<clinit>` 必须入链，否则落 panic 存根；Adler32 → Checksum.<clinit> 实证）。"""
+        _seen_if: set[str] = set()
+        _stack = list(ci.interfaces or [])
+        while _stack:
+            _iname = _stack.pop()
+            if _iname in _seen_if or not _translatable(_iname):
+                continue
+            _seen_if.add(_iname)
+            _ici = _load_class(_iname)
+            if _ici is None:
+                continue
+            _stack.extend(_ici.interfaces or [])
+            _has_default = any(not m.is_abstract and not m.is_static
+                               and m.name not in ('<init>', '<clinit>') for m in _ici.methods)
+            if _has_default and any(m.name == '<clinit>' for m in _ici.methods):
+                _key = (_iname, '<clinit>', '()V')
+                if _key not in visited_methods:
+                    visited_methods.add(_key)
+                    enqueued_from[_key] = origin[0]
+                    queue.append(_key)
 
     def _static_field_owner(name: str, field: str) -> str:
         """JVMS §5.4.3.2 字段解析：本类 → 父接口 → 父类，返回声明类。"""
