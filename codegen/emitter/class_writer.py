@@ -57,11 +57,11 @@ def _audit_override(ci, m) -> None:
     if m.is_native or m.is_abstract or not ci.name.startswith(('java/', 'javax/')):
         return
     from .. import raw_audit as _ra
-    from ..callchain import _is_boundary_class
+    from ..callchain import _is_boundary_class, _is_vm_boundary_class
     _member = f'{ci.name}.{m.name}:{m.descriptor}'
-    if _is_boundary_class(ci.name):
-        # 边界类（closure.toml [vm_boundary] 的 VM 耦合类，与 [boundary] 包内未放行的公开包类，
-        # 如 java/security/Security）：整类手写的策略边界，单独计数
+    if _is_boundary_class(ci.name) or _is_vm_boundary_class(ci.name):
+        # 边界类（closure.toml [vm_boundary] 的 VM 耦合类——按方法划分，手写提供的方法；与
+        # [boundary] 包内未放行的公开包类，如 java/security/Security）：策略边界，单独计数
         _ra.record_vm_boundary(_member)
     elif _member in _ra.intrinsics():
         _ra.record_intrinsic(_member)

@@ -17,6 +17,7 @@ from .constants import (OBJECT_CLASS as _OBJECT_CLASS, CLASS_CLASS as _CLASS_CLA
 from . import fallback_audit
 from . import options as _options
 from .runtime_manifest import (read_list, boundary_packages, vm_boundary_classes, release_entries,
+                               vm_boundary_whole_class,
                                annotation_triggers, annotation_seed_members)
 
 
@@ -130,6 +131,7 @@ def _read_manifest(name: str) -> list[str]:
 # 它们在原生二进制里没有字节码层面的对应物，与内部包同规则：BFS 在此截断，整体手写、按需实现。
 # 清单在 runtime/（手写层真源）维护，生成器不出现任何 JDK 类名。
 _VM_BOUNDARY_CLASSES: frozenset[str] = frozenset(vm_boundary_classes())
+_VM_BOUNDARY_WHOLE: frozenset[str] = frozenset(vm_boundary_whole_class())
 
 
 # 纯数据资源束豁免（L-1）：内部包（前缀）下经结构判定为纯数据类
@@ -182,12 +184,25 @@ def _is_data_bundle(cls: str) -> bool:
 
 
 def _is_boundary_class(cls: str) -> bool:
-    """内部包（前缀）或 VM 耦合边界类（清单，含其嵌套类）；前缀内的纯数据资源束与 K-JCA 放行类除外。"""
+    """内部包（前缀）边界类：BFS 截断、整类手写；前缀内的纯数据资源束与 K-JCA 放行类除外。
+
+    VM 耦合边界类（closure.toml [vm_boundary]）按方法划分（见 _is_vm_boundary_class），不在此列；
+    其中 whole_class 子清单（规模驱动的策略截断）仍整类截断。"""
     if cls.startswith(_JDK_STUB_ONLY_PREFIXES):
         return not (_jca_released(cls, _JCA_MANIFEST) or _released_general(cls)
                     or _is_data_bundle(cls))
-    # VM 耦合边界类的纯 Java 嵌套辅助类（Class$ReflectionData 等）同样按放行清单翻译
-    return cls.split('$', 1)[0] in _VM_BOUNDARY_CLASSES and not _released_general(cls)
+    return cls.split('$', 1)[0] in _VM_BOUNDARY_WHOLE and not _released_general(cls)
+
+
+def _is_vm_boundary_class(cls: str) -> bool:
+    """VM 耦合边界类（closure.toml [vm_boundary]，含其嵌套类；放行清单中的嵌套辅助类除外）。
+
+    按方法划分（与 Rust 闭包分析器同口径）：native / VM 内建 / 共置手写体提供的方法取手写，
+    其余被调用到的方法按字节码翻译；`<clinit>` 不翻译（类的静态状态由 VM / 手写层承载——
+    HotSpot 中这些类由 VM 引导初始化，其 `<clinit>` 会展开安全管理器 / 模块层 / 类加载子系统）。"""
+    outer = cls.split('$', 1)[0]
+    return (outer in _VM_BOUNDARY_CLASSES and outer not in _VM_BOUNDARY_WHOLE
+            and not _released_general(cls))
 
 
 # 编译前预检（转译期可判定的必然存根）：BFS 结束时填充，scripts/main.py 打印 [precheck]
@@ -696,7 +711,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             _ci = _load_class(_cur)
             if _ci is None:
                 return
-            if any(m.name == '<clinit>' for m in _ci.methods):
+            # VM 耦合边界类的 <clinit> 不翻译（_is_vm_boundary_class），父类链照常
+            if any(m.name == '<clinit>' for m in _ci.methods) and not _is_vm_boundary_class(_cur):
                 _key = (_cur, '<clinit>', '()V')
                 if _key not in visited_methods:
                     visited_methods.add(_key)
@@ -1548,6 +1564,20 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     if _rcls != _scls and not upcalls.provides(_rcls, _rmeth):
                         _refs_ok = False
                         break
+                # 门 3（字段臂）：读写不在闭包内的其它边界类的字段（PerfCounter.getFindClasses
+                # → getstatic PerfCounter$CoreCounters.lc 实证：持有者类不入闭包，补译体
+                # 引用未生成的类型，E0433）说明需要展开新的边界机制，保持存根
+                if _refs_ok:
+                    for _fins in _sdecl.instrs or ():
+                        if _fins.opcode not in ('getstatic', 'putstatic', 'getfield', 'putfield'):
+                            continue
+                        _fref = (_fins.comment or '').partition(' ')[2].partition(':')[0]
+                        _fowner = _fref.rpartition('.')[0] or _scls
+                        if (_fowner != _scls and _is_boundary_class(_fowner)
+                                and _fowner not in jdk_infos
+                                and _fowner not in field_discover_classes):
+                            _refs_ok = False
+                            break
                 if not _refs_ok:
                     continue
                 if _options.DEBUG:

@@ -96,6 +96,17 @@ def vm_boundary_classes() -> list[str]:
     return _classes(_toml('closure.toml').get('vm_boundary', {}), 'classes', 'vm_boundary')
 
 
+def vm_boundary_whole_class() -> list[str]:
+    """[vm_boundary] 中整类截断的策略边界（closure.toml [vm_boundary].whole_class）：Python BFS
+    （过近似）对其不按方法划分；每项必须同时列在 [vm_boundary].classes。"""
+    sec = _toml('closure.toml').get('vm_boundary', {})
+    vals = _classes(sec, 'whole_class', 'vm_boundary')
+    missing = sorted(set(vals) - set(_classes(sec, 'classes', 'vm_boundary')))
+    if missing:
+        raise ValueError(f'vm_boundary.whole_class：未列在 vm_boundary.classes：{missing}')
+    return vals
+
+
 def release_entries() -> list[str]:
     """边界放行条目（closure.toml [release]）：包前缀（`/` 结尾）在前、类（含 `$` 嵌套类）在后。"""
     sec = _toml('closure.toml').get('release', {})

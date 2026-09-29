@@ -451,8 +451,7 @@ impl Class {
                     _caller: Class) -> Result<Class> {
         let dotted = format!("{}", name);
         let slash = dotted.replace('.', "/");
-        let known = slash.starts_with('[')
-            || __modifiers::CLASS_MODIFIERS.iter().any(|(n, _)| *n == slash);
+        let known = Class::__is_known_class(&slash);
         if !known {
             let ex = crate::java::lang::ClassNotFoundException::new_str(String::from(dotted.as_str()))?;
             return Err(ex.into());
@@ -461,6 +460,14 @@ impl Class {
             crate::ensure_class_initialized(&slash)?;
         }
         Ok(Class::for_class(String::from(slash.as_str())))
+    }
+
+    /// 原生镜像中「可加载」的类：生成闭包内的类（build.rs 修饰符表，含用户类）与数组类名。
+    /// 供 `forName0` 与 `ClassLoader.findBootstrapClass` 共用。
+    #[doc(hidden)]
+    pub fn __is_known_class(slash_name: &str) -> bool {
+        slash_name.starts_with('[')
+            || __modifiers::CLASS_MODIFIERS.iter().any(|(n, _)| *n == slash_name)
     }
 
     /// native `Class.getRecordComponents0()`：record 分量反射（声明序）。数据源是

@@ -134,6 +134,11 @@ def _gen_clinit_block(m, ci, registry: dict | None, class_type_params: list,
     返回 None 表示跳过不生成；返回 str 为待追加的方法块（含 @java_method 属性行）。"""
     if _type_only:
         return None
+    from ..callchain import _is_vm_boundary_class
+    if _is_vm_boundary_class(ci.name):
+        # VM 耦合边界类的 <clinit> 不翻译（按方法划分的类初始化口径：静态状态由 VM / 手写层
+        # 承载）；不生成 → 宏 has_clinit=false → __class_init() 为 no-op，与整类手写时一致
+        return None
     attr_line = _java_method_attr(m)
     _clinit_stub = (f'pub fn {_CLINIT_FN}() -> Result<()> {{\n'
                     f'    panic!("stub: {ci.name}.<clinit>:()V")\n}}')

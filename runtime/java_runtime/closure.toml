@@ -63,6 +63,18 @@ classes = [
     # 不能定义隐藏类；句柄调用由原生 LambdaForm 解释器承载，编译入口返回解释入口（vm_intrinsics.toml）。
     "java/lang/invoke/InvokerBytecodeGenerator",
 ]
+# 整类截断的策略边界（上面 classes 的子集）：Python 生成器的调用链 BFS 是过近似口径，对这些类
+# 仍整类截断（未手写成员为 panic 存根、不展开字节码）；其余 [vm_boundary] 类按方法划分——手写
+# 提供的方法取手写，被调用到的其余方法按字节码翻译，<clinit> 不翻译。收录理由见各条注释：
+# 它们是规模 / 内存驱动的策略截断，而不是 VM 驱动的类（按方法划分会让过近似 BFS 重新展开
+# 名字服务 / 默认文件系统 / JCE 策略 / 字节码生成链）。Rust 闭包分析器（精确口径）不读本键。
+# Python 生成器改为消费 closure.json 的闭包后，本键随 C1d 删除。
+whole_class = [
+    "java/nio/file/FileSystems",
+    "java/net/InetAddress",
+    "javax/crypto/JceSecurity",
+    "java/lang/invoke/InvokerBytecodeGenerator",
+]
 
 # ── 边界放行：内部边界前缀下按字节码翻译的纯 Java 类 / 包 ─────────────────────────────
 # JCA 服务实现族的放行在 seeds.toml [jca]（与服务种子同一消费面）。

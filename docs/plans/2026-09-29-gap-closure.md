@@ -42,3 +42,21 @@ gap_scan 在转译后（cargo 之前）按生成产物列出调用链上**全部
 - 每批：新增 / 相关 e2e（期望输出由 JVM 生成）；手写层编译以 `cargo check` 在本机验证
   （16G 本机完整构建贴 OOM 线，见 N8 / N14），运行期回归由用户机器批量验证。
 - 每批合入后重跑 `gap_scan.py api …`，缺口数只降不升。
+
+## 五、VM 耦合边界类按方法划分（Python 生成器侧，2026-09-29）
+
+与 Rust 闭包分析器（C1c 第 2 步）及 CLAUDE.md 新口径对齐：`closure.toml [vm_boundary]` 类
+（Class / ClassLoader / Module / ModuleLayer / SecurityManager / VirtualThread）不再整类截断——
+
+- native / VM 内建 / 共置手写体提供的方法取手写；其余被调用到的方法按字节码翻译（BFS 照常展开）；
+- `<clinit>` 不翻译（类初始化入链跳过，发射层不生成 `__clinit`，`__class_init()` 为 no-op，
+  与整类手写时一致）；手写成员照旧计入 `vm_boundary_methods`。
+- `[vm_boundary].whole_class`：规模驱动的策略截断（FileSystems / InetAddress / JceSecurity /
+  InvokerBytecodeGenerator）——Python BFS 是过近似口径，按方法划分会重新展开名字服务 / JCE 策略等
+  子系统，仍整类截断；Python 改为消费 closure.json 后随 C1d 删除。Rust 分析器不读此键。
+- 随之暴露并补齐：`ClassLoader.findBootstrapClass` / `findLoadedClass0`（native）、
+  `PerfCounter` 计数器取值族（jvmstat 占位）；迟至静态边补扫的门 3 增加字段臂（读写不在闭包内的
+  其它边界类字段的方法保持存根）。
+- 规模（JDK 21）：HelloWorld 2145 → 2198 个生成文件（+2.5%），TestProcessBuilder 2210 → 2263；
+  `ClassLoader.loadClass` 族、`Class.isEnum` / `isAnnotation`、注解数据链等由存根变为字节码翻译。
+

@@ -20,6 +20,39 @@ impl PerfCounter {
         Self::newPerfCounter(name)
     }
 
+    /// 核心计数器取值族（JDK 经嵌套持有者 `CoreCounters` / `ZipFileCounters` 惰性创建）：
+    /// 无 jvmstat 时统计不可观测，返回占位计数器（其递增 / 累加为空操作）。消费方：
+    /// `ClassLoader.loadClass` 的委派 / findClass 计时、`ZipFile` 的打开计数。
+    #[jvm_boundary]
+    pub fn getFindClasses() -> Result<PerfCounter> {
+        Self::newPerfCounter(String::default())
+    }
+
+    #[jvm_boundary]
+    pub fn getFindClassTime() -> Result<PerfCounter> {
+        Self::newPerfCounter(String::default())
+    }
+
+    #[jvm_boundary]
+    pub fn getReadClassBytesTime() -> Result<PerfCounter> {
+        Self::newPerfCounter(String::default())
+    }
+
+    #[jvm_boundary]
+    pub fn getParentDelegationTime() -> Result<PerfCounter> {
+        Self::newPerfCounter(String::default())
+    }
+
+    #[jvm_boundary]
+    pub fn getZipFileCount() -> Result<PerfCounter> {
+        Self::newPerfCounter(String::default())
+    }
+
+    #[jvm_boundary]
+    pub fn getZipFileOpenTime() -> Result<PerfCounter> {
+        Self::newPerfCounter(String::default())
+    }
+
     #[jvm_boundary]
     pub fn __impl_get(&self) -> Result<i64> {
         Ok(0)
