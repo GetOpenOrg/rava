@@ -19,9 +19,9 @@ mod platform {
     use crate::prelude::*;
     use crate::sun::nio::fs::MacOSXFileSystemProvider;
 
-    /// 平台 provider 单例：macOS = MacOSXFileSystemProvider。
-    /// 构造链语义见 mac_osx_file_system_provider_impl（theFileSystem 在 ctor 内建立）。
     crate::__process_static! {
+        /// 平台 provider 单例：macOS = MacOSXFileSystemProvider。
+        /// 构造链语义见 mac_osx_file_system_provider_impl（theFileSystem 在 ctor 内建立）。
         pub(crate) static INSTANCE: crate::sync_model::__RefSlot<std::option::Option<MacOSXFileSystemProvider>> =
             const { crate::sync_model::__RefSlot::new(std::option::Option::None) };
     }
@@ -32,9 +32,9 @@ mod platform {
     use crate::prelude::*;
     use crate::sun::nio::fs::LinuxFileSystemProvider;
 
-    /// 平台 provider 单例：Linux = LinuxFileSystemProvider（直接继承
-    /// UnixFileSystemProvider，构造链同源）。
     crate::__process_static! {
+        /// 平台 provider 单例：Linux = LinuxFileSystemProvider（直接继承
+        /// UnixFileSystemProvider，构造链同源）。
         pub(crate) static INSTANCE: crate::sync_model::__RefSlot<std::option::Option<LinuxFileSystemProvider>> =
             const { crate::sync_model::__RefSlot::new(std::option::Option::None) };
     }

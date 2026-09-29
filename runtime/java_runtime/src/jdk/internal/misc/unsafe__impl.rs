@@ -51,10 +51,10 @@ fn _ref_array_index(offset: i64) -> i32 {
     ((offset - ARRAY_BASE_OFFSET) / REF_INDEX_SCALE) as i32
 }
 
-/// 实例字段偏移登记表（线程本地）：正向 (声明类 binary name, 字段名) → id，
-/// 反向 id → 字段名。`objectFieldOffset` 两重载共用；id 消费见
-/// `_instance_long_cell`（实例字段 long 原子）与 `getAndAddInt`（计数器键）。
 crate::__process_static! {
+    /// 实例字段偏移登记表（线程本地）：正向 (声明类 binary name, 字段名) → id，
+    /// 反向 id → 字段名。`objectFieldOffset` 两重载共用；id 消费见
+    /// `_instance_long_cell`（实例字段 long 原子）与 `getAndAddInt`（计数器键）。
     static FIELD_OFFSETS: RefCell<HashMap<(std::string::String, std::string::String), i64>> =
         RefCell::new(HashMap::new());
     static FIELD_OFFSET_NEXT: RefCell<i64> = const { RefCell::new(1) };

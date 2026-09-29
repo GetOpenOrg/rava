@@ -368,7 +368,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                                    for ci in _lc_classes if '/' in ci.name})
             _lib_rs = ['#![allow(unused_variables, unused_mut, dead_code, '
                        'non_snake_case, unused_imports, non_camel_case_types, '
-                       'non_upper_case_globals, static_mut_refs, ambiguous_glob_reexports)]']
+                       'non_upper_case_globals, static_mut_refs, ambiguous_glob_reexports, unused_comparisons)]']
             _lib_rs += [f'pub mod {"r#" + p if p in _RUST_KEYWORDS else p};'
                         for p in _lc_top_pkgs]
             _write(os.path.join(_lc_src, 'lib.rs'), '\n'.join(_lib_rs) + '\n')

@@ -27,15 +27,15 @@ fn __intern_key(s: &String) -> Vec<u16> {
     }
 }
 
-/// 全局字符串驻留表（S-6）：内容（UTF-16 code units）→ 规范实例。
-///
-/// Java 语义（JLS §3.10.5 / JVMS §5.1 常量池解析）：相同内容的字符串字面量与
-/// `intern()` 结果是同一对象（`==` 为 true）。字面量加载路径（`From<&str>`，
-/// ldc 发射形态 `String::from("...")`）与本表同源；`from_owned`（拼接结果等
-/// 非字面量构造）不入表——Java 中拼接产生新对象，不入常量池。
-///
-/// `String` 含 `Rc` 非 `Send`，且进程级存储经 __process_static!（#42 并行后端）。
 crate::__process_static! {
+    /// 全局字符串驻留表（S-6）：内容（UTF-16 code units）→ 规范实例。
+    ///
+    /// Java 语义（JLS §3.10.5 / JVMS §5.1 常量池解析）：相同内容的字符串字面量与
+    /// `intern()` 结果是同一对象（`==` 为 true）。字面量加载路径（`From<&str>`，
+    /// ldc 发射形态 `String::from("...")`）与本表同源；`from_owned`（拼接结果等
+    /// 非字面量构造）不入表——Java 中拼接产生新对象，不入常量池。
+    ///
+    /// `String` 含 `Rc` 非 `Send`，且进程级存储经 __process_static!（#42 并行后端）。
     static __STRING_INTERN_TABLE: RefCell<std::collections::HashMap<Vec<u16>, String>> =
         RefCell::new(std::collections::HashMap::new());
 }

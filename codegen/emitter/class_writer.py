@@ -1370,7 +1370,7 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
     _is_iface = bool(ci.is_interface)
 
     parts: list[str] = [
-        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs)]",
+        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs, unused_comparisons)]",
         f"use {user_crate_prefix or 'crate'}::prelude::*;",
         *cross_imports,
         *([_INHERITED_IMPORTS_SLOT] if emission is not None else []),
