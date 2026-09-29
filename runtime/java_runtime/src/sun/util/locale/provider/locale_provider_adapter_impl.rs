@@ -250,6 +250,51 @@ impl ObjectVTable for NativeDateFormatProvider {
     }
 }
 
+/// `sun/util/spi/CalendarProvider` 的手写实现对象（JDK 的 `CalendarProviderImpl`）：
+/// `new Calendar.Builder().setLocale(locale).setTimeZone(zone).setInstant(now).build()`
+/// ——历法选择（gregory / buddhist / japanese）与字段计算全部走翻译的 Calendar.Builder。
+struct NativeCalendarProvider;
+
+impl crate::sun::util::spi::CalendarProvider__VTable for NativeCalendarProvider {
+    fn getInstance(&self, arg0: crate::java::util::TimeZone, arg1: Locale) -> Result<crate::java::util::Calendar> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+        crate::java::util::Calendar_Builder::new()?
+            .setLocale(arg1)?
+            .setTimeZone(arg0)?
+            .setInstant_l(now)?
+            .build()
+    }
+
+    fn __as_CalendarProvider(&self) -> crate::sun::util::spi::CalendarProvider {
+        let rc = Rc::new(NativeCalendarProvider);
+        crate::sun::util::spi::CalendarProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn crate::sun::util::spi::CalendarProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        )
+    }
+}
+
+impl LocaleServiceProvider__VTable for NativeCalendarProvider {
+    fn __as_LocaleServiceProvider(&self) -> crate::java::util::spi::LocaleServiceProvider {
+        let rc = Rc::new(NativeCalendarProvider);
+        crate::java::util::spi::LocaleServiceProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn LocaleServiceProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        )
+    }
+}
+
+impl ObjectVTable for NativeCalendarProvider {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn __class_name(&self) -> &'static str { "sun/util/locale/provider/CalendarProviderImpl" }
+    fn __obj_str(&self) -> std::string::String {
+        "sun.util.locale.provider.CalendarProviderImpl".to_owned()
+    }
+}
+
 /// `LocaleProviderAdapter` 的手写实现对象（JDK 的 CLDR 适配器单例形态）。
 struct NativeLocaleAdapter;
 
@@ -275,6 +320,18 @@ impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
         let rc = Rc::new(NativeDateFormatProvider);
         Ok(DateFormatProvider::__from_parts(
             Rc::clone(&rc) as Rc<dyn DateFormatProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        ))
+    }
+
+    /// `getCalendarProvider()`：Calendar.getInstance(locale) 的服务入口（回调边挂在本方法上，
+    /// 只有用到 Calendar 工厂的程序才带入 Calendar.Builder）。
+    #[jvm_boundary(upcalls = "java/util/Calendar$Builder.<init>:()V java/util/Calendar$Builder.setLocale:(Ljava/util/Locale;)Ljava/util/Calendar$Builder; java/util/Calendar$Builder.setTimeZone:(Ljava/util/TimeZone;)Ljava/util/Calendar$Builder; java/util/Calendar$Builder.setInstant:(J)Ljava/util/Calendar$Builder; java/util/Calendar$Builder.build:()Ljava/util/Calendar;")]
+    fn getCalendarProvider(&self) -> Result<crate::sun::util::spi::CalendarProvider> {
+        let rc = Rc::new(NativeCalendarProvider);
+        Ok(crate::sun::util::spi::CalendarProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn crate::sun::util::spi::CalendarProvider__VTable>,
             rc as crate::sync_model::__AnyRef,
             false,
         ))
