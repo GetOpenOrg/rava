@@ -21,6 +21,12 @@
 | 7c | 流的基本类型特化族（`Int/Long/DoubleConsumer`、`Spliterator$OfPrimitive`、`Node`） | ~20 | 生成器：特化桥接 `forEachRemaining(Object)↔(LongConsumer)` 的名 / 型解析（批次 5 暂缓原因） |
 | 7d | 零散：`Runnable`、`InvocationHandler`、`Enumeration`、`System$Logger`、`Temporal`、通道 | ~10 | 各手写边界（thread / proxy / class_loader / virtual_thread） |
 
+## 二之二、7a/7b 之后的全量复测（2026-09-29，TestStreamBasic）
+
+91 → 40：标记接口（Serializable）缺 upcast 9（已修，见标记接口 upcast 提交）；流的基本类型特化族
+（Node / SpinedBuffer / Spliterator$OfPrimitive）约 14（7c）；手写边界零散接口约 13（7d：Enumeration、
+Runnable、InvocationHandler、通道、JavaLangAccess.layers 的 Stream）；sun/nio/fs trait bound 4（待查）。
+
 ## 三、推进方式
 
 逐批：名单加入该族 → 修手写边界签名 / 生成器 → 定向编译（≤3 例，`scripts/run_bg.sh`）→ 提交。
