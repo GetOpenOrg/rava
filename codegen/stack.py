@@ -568,8 +568,12 @@ class StackSim:
         src_is_object = isinstance(ty, RsNamed) and ty.name == 'Object'
         if hint is not None:
             if src_is_object:
+                # 值节点：Var 由下游 _maybe_downcast 还原；null 字面量不转换。其余一切表达式
+                # 节点（FS-Q1 后 getfield 为 MethodCall、调用为 Call / TryExpr 等，早期仅
+                # RawExpr / CastExpr）同规则——ThreadLocal.get 的 `T result = (T) e.value`
+                # 曾因 MethodCall 未命中而记录 T、实际推断 Object（E0308）
                 if (getattr(hint, 'name', '') in self.class_type_params
-                        and isinstance(expr, (RawExpr, CastExpr))
+                        and not isinstance(expr, (Var, Lit, NewPendingExpr))
                         and render_expr(expr) != 'Default::default()'):
                     # `E v = (E) es[i]`：擦除后无 checkcast，Object 值直接存入声明为类型变量的
                     # 局部 → 经宏补的 From<Object> bound 按对象标识取回类型变量视图。
