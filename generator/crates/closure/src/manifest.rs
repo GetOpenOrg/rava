@@ -26,6 +26,19 @@ pub enum IndyKind {
     Native,
 }
 
+/// 手写方法写入实参数组的元素（`[facts.array_writes]`；形参序号按描述符，不含接收者）
+#[derive(Debug, Clone, Default)]
+pub struct ArrayWrite {
+    /// 被写入元素的数组形参；None = 不写任何实参数组
+    pub dst: Option<usize>,
+    /// 写入值取自这些形参的值
+    pub values: Vec<usize>,
+    /// 写入值取自这些形参数组的元素
+    pub elements: Vec<usize>,
+    /// 写入值含手写体产出
+    pub produced: bool,
+}
+
 /// 方法返回值事实（[vm_constants] / [facts]）
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fact {
@@ -44,6 +57,7 @@ pub struct Manifest {
     receiver_returns: HashSet<String>,
     field_enumerators: HashSet<String>,
     deserializers: HashSet<String>,
+    array_writes: HashMap<String, ArrayWrite>,
     pub boot_init: Vec<String>,
     indy: HashMap<String, IndyKind>,
 }
@@ -115,6 +129,27 @@ impl Manifest {
                 .unwrap_or_default()
         };
 
+        let mut array_writes = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("array_writes")).and_then(|v| v.as_table()) {
+            let idx = |v: Option<&toml::Value>| -> Vec<usize> {
+                v.and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_integer()).map(|x| x as usize).collect()).unwrap_or_default()
+            };
+            for (k, v) in t {
+                let Some(e) = v.as_table() else {
+                    return Err(format!("vm_intrinsics.toml [facts.array_writes]：{k} 的值须为表"));
+                };
+                array_writes.insert(
+                    k.clone(),
+                    ArrayWrite {
+                        dst: e.get("dst").and_then(|x| x.as_integer()).map(|x| x as usize),
+                        values: idx(e.get("values")),
+                        elements: idx(e.get("elements")),
+                        produced: e.get("produced").and_then(|x| x.as_bool()).unwrap_or(false),
+                    },
+                );
+            }
+        }
+
         let mut indy = HashMap::new();
         for (key, kind) in [("lambda", IndyKind::Lambda), ("concat", IndyKind::Concat), ("native", IndyKind::Native)] {
             for m in strings(&vm, "indy", key) {
@@ -133,6 +168,7 @@ impl Manifest {
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             field_enumerators: field_writes("enumerators").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
+            array_writes,
             boot_init: strings(&seeds, "boot_init", "classes"),
             indy,
         })
@@ -192,6 +228,11 @@ impl Manifest {
     /// 返回值是接收者的浅拷贝（类型集 = 接收者类型集；数组共享元素节点）
     pub fn returns_receiver(&self, member: &str) -> bool {
         self.receiver_returns.contains(member)
+    }
+
+    /// 手写方法写入实参数组元素的声明（未声明 = 按手写体是否取得数组视图保守处理）
+    pub fn array_writes(&self, member: &str) -> Option<&ArrayWrite> {
+        self.array_writes.get(member)
     }
 
     /// 返回字段句柄数组的反射枚举（字段常量折叠的写入来源）

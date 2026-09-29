@@ -74,8 +74,8 @@ const TO_STRING: (&str, &str) = ("toString", "()Ljava/lang/String;");
 const CATCH: u32 = 1 << 31;
 /// 站点键：手写方法的值池
 const POOL: u32 = u32::MAX;
-/// 站点键：手写方法的数组元素池（实参数组之间的元素互通，如 arraycopy）
-const ELEM: u32 = u32::MAX - 1;
+/// 站点键：手写体产出的值（分配 / 构造 / 字段读取 / 回调返回值），汇入值池
+const PROD: u32 = u32::MAX - 1;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
 /// 方法克隆的上下文：无（按声明类型 / open 接收者进入的方法本体）
@@ -336,6 +336,10 @@ enum Node {
     E(u32, u8),
     /// 写入未知数组（open / 保守分析）的元素：流入每个数组分配点
     Array,
+    /// 手写方法调用点（`hw_sites` 序号）的第 i 个实参（含接收者）
+    A(u32, u16),
+    /// 手写方法调用点写入第 j 个实参数组的元素来源
+    W(u32, u16),
 }
 
 /// 值的类型来源：节点，或直接给定的类型集（字面量 / 未知值的 open）
@@ -343,6 +347,17 @@ enum Node {
 enum Feed {
     N(Node),
     S(TypeSet),
+}
+
+/// 手写方法写入某个形参数组的值来源（形参序号含接收者）
+#[derive(Clone, Debug)]
+struct HwWrite {
+    /// 这些形参的值本身
+    values: Vec<usize>,
+    /// 这些形参里数组的元素
+    elements: Vec<usize>,
+    /// 手写体产出（分配 / 字段读取 / 回调返回值）
+    produced: bool,
 }
 
 /// 按声明形参位置的实参来源（基本类型为 None）
@@ -783,6 +798,10 @@ pub struct Engine<'a> {
     cur_site: Option<(usize, u32)>,
     /// 字节码调用点已分派过的接收者（方法 → (偏移, 接收者)）；同一分析结果下分派是确定的，重跑站点只处理新增接收者
     dispatched: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 手写方法调用点（调用方, 偏移, 被调方法）→ 序号；数组写入按调用点建模
+    hw_site_ids: HashMap<(usize, u32, usize), u32>,
+    hw_sites: Vec<(usize, u32, usize)>,
+    hw_writes: HashMap<usize, Rc<[Option<HwWrite>]>>,
     fwork: VecDeque<Node>,
     in_fwork: HashSet<Node>,
     /// 按 open 在 G 上展开过接收者的方法（G 增长时重处理）
@@ -857,6 +876,9 @@ impl<'a> Engine<'a> {
             in_swork: HashSet::default(),
             cur_site: None,
             dispatched: HashMap::default(),
+            hw_site_ids: HashMap::default(),
+            hw_sites: Vec::new(),
+            hw_writes: HashMap::default(),
             fwork: VecDeque::new(),
             in_fwork: HashSet::default(),
             open_methods: BTreeSet::new(),
@@ -1046,7 +1068,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 容器形态类（按字节码判定，不列类名）：翻译域的类（含超类）持有实例字段，其泛型签名引用类型变量、
-    /// 或擦除为 `Object[]`，或声明类型本身是容器形态类（内部类的 `this$0`、`HashSet.map` 等）
+    /// 或（泛型类链中）擦除为 `Object[]`，或声明类型本身是容器形态类（内部类的 `this$0`、`HashSet.map` 等）
     fn container(&mut self, cls: &str) -> bool {
         let id = self.id(cls);
         if let Some(&c) = self.containers.get(&id) {
@@ -1068,9 +1090,19 @@ impl<'a> Engine<'a> {
             chain.push(cf);
         }
         let inst = |cf: &Rc<ClassFile>| cf.fields.iter().filter(|f| !f.is_static()).cloned().collect::<Vec<_>>();
-        // 先看自身形态，再按字段声明类型递归（成环时结果与查询顺序无关）
-        if chain.iter().any(|cf| inst(cf).iter().any(|f| f.desc == obj_arr || f.signature.as_deref().is_some_and(has_type_var))) {
+        // 先看自身形态，再按字段声明类型递归（成环时结果与查询顺序无关）。
+        // 字段签名直接引用类型变量即元素存储；擦除为 `Object[]` 的字段、容器形态的字段类型只在泛型类链
+        // （类签名引用类型变量，含外部类的）里才算——非泛型类的 `Object[]` 是异构记录（表达式节点的实参表），
+        // 非泛型类持有的容器是固定元素类型的缓存（`SoftReference<MethodHandle>`），按对象分开不带来元素类型精度
+        let generic = chain.iter().any(|cf| cf.signature.as_deref().is_some_and(has_type_var));
+        if chain
+            .iter()
+            .any(|cf| inst(cf).iter().any(|f| generic && f.desc == obj_arr || f.signature.as_deref().is_some_and(has_type_var)))
+        {
             return true;
+        }
+        if !generic {
+            return false;
         }
         for cf in &chain {
             for f in inst(cf) {
@@ -1088,8 +1120,11 @@ impl<'a> Engine<'a> {
         let b = self.mbase[&self.methods[m].key];
         let mut chain = format!("@{b}:{off}");
         let ctx = self.methods[m].ctx;
-        if ctx != NOCTX {
-            for seg in self.obj_chain[&ctx].split('#').take(HEAP_DEPTH - 1) {
+        // 递归结构（同类对象在自身方法里分配同类，如链表节点 / 表达式树）：堆上下文不再延长，
+        // 否则分配点两两组合成 O(站点²) 个抽象对象而不带来任何分派精度
+        let recursive = ctx != NOCTX && self.objs.get(&ctx).is_some_and(|&t| &*self.names[t as usize] == cls);
+        if ctx != NOCTX && !recursive {
+            for seg in self.obj_chain.get(&ctx).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).take(HEAP_DEPTH - 1) {
                 chain.push('#');
                 chain.push_str(seg);
             }
@@ -1265,11 +1300,11 @@ impl<'a> Engine<'a> {
             return;
         }
         cur.add_all(&delta);
-        // 手写体只有「实参数组元素互通」依赖形参集合：形参新增数组分配点时重处理；
-        // 字节码方法只重跑读过该节点的站点
-        if let Node::P(m, _) = n {
-            if self.methods[m].kind != Kind::Bytecode && delta.classes.iter().any(|x| self.arrays.contains_key(x)) {
-                self.push_m(m);
+        // 手写方法调用点的实参新增数组分配点：接上该数组的元素读写
+        if let Node::A(s, i) = n {
+            let ys: Vec<u32> = delta.classes.iter().copied().filter(|x| self.arrays.contains_key(x)).collect();
+            if !ys.is_empty() {
+                self.hw_site_arrays(s, i, &ys);
             }
         }
         if let Some(ws) = self.watch.get(&n) {
@@ -1927,7 +1962,9 @@ impl<'a> Engine<'a> {
             op::INVOKESTATIC => {
                 // 静态调用继承调用方的克隆上下文（容器方法里的静态辅助方法随容器对象分开）
                 self.init(&resolved.owner, via.clone());
-                let t = self.method_ctx(resolved, self.methods[m].ctx, via);
+                // 只有返回引用的辅助方法随上下文克隆（返回值按容器对象分开）；返回基本类型 / void 的静态方法克隆收益可忽略，按本体共享
+                let ctx = if md.ret.as_ref().is_some_and(|r| r.is_reference()) { self.methods[m].ctx } else { NOCTX };
+                let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &a, ret, res);
             }
             op::INVOKESPECIAL => {
@@ -2039,6 +2076,9 @@ impl<'a> Engine<'a> {
             if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(base + j)) {
                 self.feed(fs, Node::P(t, (base + j) as u16), *pt);
             }
+        }
+        if matches!(self.methods[t].kind, Kind::Handwritten(_)) {
+            self.hw_site(m, off, t, recv_fs.as_deref(), a);
         }
         if let (Some(rt), Some(res)) = (ret, res) {
             if self.man.returns_receiver(&self.methods[t].key.to_string()) {
@@ -2287,6 +2327,107 @@ impl<'a> Engine<'a> {
 
     // ── 手写节点 ────────────────────────────────────────────────────────────
 
+    /// 手写方法的数组写入（arraycopy、Unsafe 引用写入等）按调用点建模：写入目标是本调用点实参里的数组，
+    /// 写入值按 `hw_writes` 给出的来源（实参值 / 实参数组的元素 / 手写体产出）逐调用点接入。
+    /// 不经被调方法的形参汇合：arraycopy 等被全程序共享，汇合会把所有数组的元素并成同一个集合
+    fn hw_site(&mut self, m: usize, off: u32, t: usize, recv: Option<&[Feed]>, a: &[Option<Vec<Feed>>]) {
+        let ws = self.hw_writes(t);
+        if ws.iter().all(Option::is_none) || self.hw_site_ids.contains_key(&(m, off, t)) {
+            return;
+        }
+        let s = self.hw_sites.len() as u32;
+        self.hw_site_ids.insert((m, off, t), s);
+        self.hw_sites.push((m, off, t));
+        let base = usize::from(!self.methods[t].is_static);
+        let ptypes = self.methods[t].ptypes.clone();
+        let obj = self.id(OBJECT);
+        let feeds: Vec<Option<&[Feed]>> = (0..ptypes.len()).map(|i| if i < base { recv } else { a.get(i - base).and_then(|f| f.as_deref()) }).collect();
+        let mut watched: BTreeSet<usize> = BTreeSet::new();
+        for (j, w) in ws.iter().enumerate() {
+            let Some(w) = w else { continue };
+            let wn = Node::W(s, j as u16);
+            if w.produced {
+                self.flow(Node::S(t, PROD), wn, obj);
+            }
+            for &i in &w.values {
+                if let (Some(Some(pi)), Some(Some(fs))) = (ptypes.get(i), feeds.get(i)) {
+                    self.feed(fs, wn, *pi);
+                }
+            }
+            watched.insert(j);
+            watched.extend(w.elements.iter().copied());
+        }
+        // 实参节点最后接入：新增数组经 add_to 钩子接上元素读写
+        for i in watched {
+            if let (Some(Some(pi)), Some(Some(fs))) = (ptypes.get(i), feeds.get(i)) {
+                self.feed(fs, Node::A(s, i as u16), *pi);
+            }
+        }
+    }
+
+    /// 手写方法按形参（含接收者序号）的数组写入来源。`[facts.array_writes]` 声明的按声明；
+    /// 其余取得数组视图的手写体保守处理：每个非接收者引用形参都可被写入，来源为其它形参的值、
+    /// 全部实参数组的元素与手写体产出。数组只有 Object 的方法，没有一个改写元素，接收者不是写入目标
+    fn hw_writes(&mut self, t: usize) -> Rc<[Option<HwWrite>]> {
+        if let Some(w) = self.hw_writes.get(&t) {
+            return w.clone();
+        }
+        let base = usize::from(!self.methods[t].is_static);
+        let key = self.methods[t].key.clone();
+        let ptypes = self.methods[t].ptypes.clone();
+        let refs: Vec<usize> = (0..ptypes.len()).filter(|&i| ptypes[i].is_some()).collect();
+        let w: Rc<[Option<HwWrite>]> = match self.man.array_writes(&key.to_string()) {
+            Some(d) => (0..ptypes.len())
+                .map(|j| {
+                    (d.dst.map(|x| x + base) == Some(j)).then(|| HwWrite {
+                        values: d.values.iter().map(|x| x + base).collect(),
+                        elements: d.elements.iter().map(|x| x + base).collect(),
+                        produced: d.produced,
+                    })
+                })
+                .collect(),
+            None => {
+                let access = self.h.class(&key.owner).is_some_and(|cf| self.hw_member(&cf, &key.name, &key.desc).array_access);
+                (0..ptypes.len())
+                    .map(|j| {
+                        (access && j >= base && ptypes[j].is_some()).then(|| HwWrite {
+                            values: refs.iter().copied().filter(|&i| i != j).collect(),
+                            elements: refs.clone(),
+                            produced: true,
+                        })
+                    })
+                    .collect()
+            }
+        };
+        self.hw_writes.insert(t, w.clone());
+        w
+    }
+
+    /// 调用点 s 的第 i 个实参新增数组 ys：元素来源含 i 的写入目标接上其元素；i 是写入目标则接收写入
+    fn hw_site_arrays(&mut self, s: u32, i: u16, ys: &[u32]) {
+        let (_, _, t) = self.hw_sites[s as usize];
+        let ws = self.hw_writes(t);
+        let obj = self.id(OBJECT);
+        for &y in ys {
+            for (j, w) in ws.iter().enumerate() {
+                if w.as_ref().is_some_and(|w| w.elements.contains(&(i as usize))) {
+                    for p in PARITIES {
+                        self.flow(Node::E(y, p), Node::W(s, j as u16), obj);
+                    }
+                }
+            }
+            if ws.get(i as usize).is_none_or(Option::is_none) {
+                continue;
+            }
+            let t = self.arrays[&y];
+            let Some(c) = absint::component(&self.names[t as usize].clone()).filter(|c| c.len() > 1) else { continue };
+            let cid = self.id(&c);
+            for p in PARITIES {
+                self.flow(Node::W(s, i), Node::E(y, p), cid);
+            }
+        }
+    }
+
     fn process_handwritten(&mut self, m: usize) {
         let key = self.methods[m].key.clone();
         let via = Via::method("handwritten", m, None);
@@ -2299,29 +2440,15 @@ impl<'a> Engine<'a> {
         if key.name == "<clinit>" {
             return;
         }
-        // 形参汇入值池（回调实参取自值池）
+        // 形参与手写体产出汇入值池（回调实参取自值池）
         let pts = self.methods[m].ptypes.clone();
         for (i, pt) in pts.iter().enumerate() {
             if let Some(pt) = pt {
                 self.flow(Node::P(m, i as u16), Node::S(m, POOL), *pt);
             }
         }
-        // 实参数组的元素经元素池互通（arraycopy 等），手写层产出的值也可能写入实参数组
         let obj = self.id(OBJECT);
-        self.flow(Node::S(m, POOL), Node::S(m, ELEM), obj);
-        for i in 0..pts.len() {
-            let s = self.set_of(Node::P(m, i as u16));
-            for x in s.classes {
-                if let Some(&t) = self.arrays.get(&x) {
-                    let Some(c) = absint::component(&self.names[t as usize].clone()).filter(|c| c.len() > 1) else { continue };
-                    let cid = self.id(&c);
-                    for p in PARITIES {
-                        self.flow(Node::E(x, p), Node::S(m, ELEM), obj);
-                        self.flow(Node::S(m, ELEM), Node::E(x, p), cid);
-                    }
-                }
-            }
-        }
+        self.flow(Node::S(m, PROD), Node::S(m, POOL), obj);
         let Some(cf) = self.h.class(&key.owner) else { return };
         let mh = self.hw_member(&cf, &key.name, &key.desc);
         if self.methods[m].hw_fns.is_empty() {
@@ -2358,6 +2485,7 @@ impl<'a> Engine<'a> {
             out.calls.extend(i.calls.iter().cloned());
             out.opaque.extend(i.opaque.iter().cloned());
             out.fields.extend(i.fields.iter().cloned());
+            out.array_access |= i.array_access;
         }
         out.fns = exact;
         out
@@ -2467,6 +2595,7 @@ impl<'a> Engine<'a> {
     /// 接收者推不出 → 所有同名字段按 open 处理（安全回退）
     fn hw_fields(&mut self, m: usize, host: &str, fields: &[FieldAccess]) {
         let pool = Node::S(m, POOL);
+        let prod = Node::S(m, PROD);
         for fa in fields {
             let site = fa.recv.as_ref().and_then(|r| self.stype_class(host, r)).and_then(|c| self.field_by_name(&c, &fa.field));
             let Some((decl, desc)) = site else {
@@ -2476,7 +2605,7 @@ impl<'a> Engine<'a> {
                 let fresh = if fa.write {
                     self.hw_written_names.insert(fa.field.clone())
                 } else {
-                    self.hw_read_names.entry(fa.field.clone()).or_default().insert(pool)
+                    self.hw_read_names.entry(fa.field.clone()).or_default().insert(prod)
                 };
                 if !fresh {
                     continue;
@@ -2493,7 +2622,7 @@ impl<'a> Engine<'a> {
                     if fa.write {
                         self.add_to(Node::U(i), &TypeSet::open(tid));
                     } else {
-                        self.flow(Node::F(i), pool, tid);
+                        self.flow(Node::F(i), prod, tid);
                     }
                 }
                 continue;
@@ -2513,21 +2642,21 @@ impl<'a> Engine<'a> {
                 };
                 self.feed(&fs, Node::U(fi), tid);
             } else {
-                self.flow(Node::F(fi), pool, tid);
+                self.flow(Node::F(fi), prod, tid);
             }
         }
     }
 
     /// 手写体效果：分配 / 构造 / 回调。实参按手写体调用点的语法推断精确接入，推断不出的经方法 m 的值池流转
     fn apply_hw(&mut self, m: usize, host: &str, mh: &MemberHw, via: &Via) {
-        let pool = Node::S(m, POOL);
+        let prod = Node::S(m, PROD);
         self.hw_fields(m, host, &mh.fields);
         for t in &mh.allocs {
             if let Some(c) = self.resolve_tref(host, t) {
                 self.instantiate(&c, via.clone());
                 self.init(&c, via.clone());
                 let id = self.id(&c);
-                self.add_to(pool, &TypeSet::exact(id));
+                self.add_to(prod, &TypeSet::exact(id));
             }
         }
         for (t, ctor) in &mh.ctors {
@@ -2545,7 +2674,7 @@ impl<'a> Engine<'a> {
             self.instantiate(&c, via.clone());
             self.init(&c, via.clone());
             let id = self.id(&c);
-            self.add_to(pool, &TypeSet::exact(id));
+            self.add_to(prod, &TypeSet::exact(id));
             for d in inits {
                 let n = parse_method(&d).map_or(0, |md| md.params.len());
                 let sites = Self::hw_sites(mh, |x| x.name == *ctor && x.path_ty.as_ref() == Some(t), "<init>", n);
@@ -2558,7 +2687,7 @@ impl<'a> Engine<'a> {
             match u {
                 Upcall::Field(f) => {
                     let f = f.clone();
-                    self.field(m, 0, classfile::op::GETSTATIC, &f, None, None, pool);
+                    self.field(m, 0, classfile::op::GETSTATIC, &f, None, None, prod);
                 }
                 Upcall::Method(k) => {
                     let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, self.h.is_interface(&k.owner)) else {
@@ -2576,7 +2705,7 @@ impl<'a> Engine<'a> {
                     if k.name == "<init>" {
                         self.instantiate(&k.owner, via.clone());
                         self.init(&k.owner, via.clone());
-                        self.add_to(pool, &TypeSet::exact(owner));
+                        self.add_to(prod, &TypeSet::exact(owner));
                         let t = self.method(resolved, via.clone());
                         self.edge(m, 0, t, Recv::Exact(owner), &a, None, None);
                         continue;
@@ -2598,12 +2727,12 @@ impl<'a> Engine<'a> {
                     if rm.is_static() || rm.is_private() {
                         self.init(&resolved.owner, via.clone());
                         let t = self.method(resolved, via.clone());
-                        self.edge(m, 0, t, Recv::Feeds(vec![Feed::S(recv)]), &a, ret, Some(pool));
+                        self.edge(m, 0, t, Recv::Feeds(vec![Feed::S(recv)]), &a, ret, Some(prod));
                     } else {
                         // JNI Call<T>Method：按接收者实际类型分派
                         let rs = self.receivers(m, &recv, owner);
                         for r in rs {
-                            self.dispatch_one(m, 0, r, &site, &a, ret, Some(pool));
+                            self.dispatch_one(m, 0, r, &site, &a, ret, Some(prod));
                         }
                     }
                 }
@@ -2675,7 +2804,7 @@ impl<'a> Engine<'a> {
             Node::P(m, i) => format!("P{i} {}", self.ctx_label(m)),
             Node::R(m) => format!("R {}", self.ctx_label(m)),
             Node::S(m, o) if o == POOL => format!("pool {}", self.ctx_label(m)),
-            Node::S(m, o) if o == ELEM => format!("elem {}", self.ctx_label(m)),
+            Node::S(m, o) if o == PROD => format!("prod {}", self.ctx_label(m)),
             Node::S(m, o) if o & CATCH != 0 => format!("catch@{} {}", o & !CATCH, self.ctx_label(m)),
             Node::S(m, o) => format!("@{o} {}", self.ctx_label(m)),
             Node::F(f) => format!("field {}", self.field_label(f)),
@@ -2683,6 +2812,11 @@ impl<'a> Engine<'a> {
             Node::O(o, f) => format!("field {} of {}", self.field_label(f), self.names[o as usize]),
             Node::E(x, p) => format!("elements[{}] {}", if p == 0 { "偶" } else { "奇" }, self.names[x as usize]),
             Node::Array => "array".into(),
+            Node::A(s, i) | Node::W(s, i) => {
+                let (m, off, t) = self.hw_sites[s as usize];
+                let k = if matches!(n, Node::A(..)) { "实参" } else { "写入" };
+                format!("{k}{i} {}@{off} → {}", self.ctx_label(m), self.methods[t].key)
+            }
         }
     }
 

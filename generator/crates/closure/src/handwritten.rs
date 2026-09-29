@@ -105,6 +105,9 @@ pub struct FnInfo {
     pub ctors: BTreeSet<(TypeRef, String)>,
     /// 字段访问器调用，同样传递闭包
     pub fields: Vec<FieldAccess>,
+    /// 取得数组视图（`JArray` 类型、`__view_into`、`array_store_*` 等，含宏内与同文件被调 fn）：
+    /// 没有数组视图的手写体不可能改写实参数组的元素
+    pub array_access: bool,
 }
 
 /// 一个类的共置手写文件汇总
@@ -125,6 +128,7 @@ pub struct MemberHw {
     pub calls: Vec<TypedCall>,
     pub opaque: HashSet<String>,
     pub fields: Vec<FieldAccess>,
+    pub array_access: bool,
     /// 命中的 fn 名（溯源）
     pub fns: Vec<String>,
 }
@@ -242,6 +246,7 @@ impl Handwritten {
             out.calls.extend(f.calls.iter().cloned());
             out.opaque.extend(f.opaque.iter().cloned());
             out.fields.extend(f.fields.iter().cloned());
+            out.array_access |= f.array_access;
             out.fns.push(n.clone());
         }
         out
@@ -712,6 +717,19 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
 }
 
+/// 手写体取得数组视图的标识符：数组类型本身、协变视图、Object 上的数组存取 / 转换
+fn is_array_ident(s: &str) -> bool {
+    s == "JArray" || s == "__view_into" || s == "try_cast_array" || s.starts_with("array_store")
+}
+
+struct ArrayIdents(bool);
+
+impl<'ast> Visit<'ast> for ArrayIdents {
+    fn visit_ident(&mut self, i: &'ast proc_macro2::Ident) {
+        self.0 |= is_array_ident(&i.to_string());
+    }
+}
+
 fn strip_type(p: &syn::Pat) -> &syn::Pat {
     match p {
         syn::Pat::Type(t) => &t.pat,
@@ -776,6 +794,10 @@ impl FileScan<'_> {
             });
         }
         info.opaque = cs.opaque;
+        let mut ids = ArrayIdents(false);
+        ids.visit_signature(sig);
+        ids.visit_block(block);
+        info.array_access = ids.0 || info.opaque.iter().any(|i| is_array_ident(i));
         for (ty, ctor) in b.ctors {
             info.ctors.insert((TypeRef(expand(self.uses, ty)), ctor));
         }
@@ -884,6 +906,7 @@ fn scan_file(
         e.calls.extend(raw.info.calls);
         e.opaque.extend(raw.info.opaque);
         e.fields.extend(raw.info.fields);
+        e.array_access |= raw.info.array_access;
     }
 }
 
@@ -896,8 +919,10 @@ fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, H
         let mut stack = vec![n.as_str()];
         let (mut allocs, mut ctors) = (BTreeSet::new(), BTreeSet::new());
         let (mut tcalls, mut opaque, mut fields) = (Vec::new(), HashSet::new(), Vec::new());
+        let mut arr = false;
         while let Some(x) = stack.pop() {
             if let Some(f) = fns.get(x) {
+                arr |= f.array_access;
                 allocs.extend(f.allocs.iter().cloned());
                 ctors.extend(f.ctors.iter().cloned());
                 tcalls.extend(f.calls.iter().cloned());
@@ -910,15 +935,16 @@ fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, H
                 }
             }
         }
-        closed.push((n.clone(), allocs, ctors, tcalls, opaque, fields));
+        closed.push((n.clone(), allocs, ctors, tcalls, opaque, fields, arr));
     }
-    for (n, a, c, t, o, fl) in closed {
+    for (n, a, c, t, o, fl, arr) in closed {
         let f = fns.get_mut(&n).expect("fn 名来自同一表");
         f.allocs = a;
         f.ctors = c;
         f.calls = t;
         f.opaque = o;
         f.fields = fl;
+        f.array_access = arr;
     }
 }
 

@@ -147,6 +147,38 @@ deserializers = [
     "java/io/ObjectInputStream.readUnshared:()Ljava/lang/Object;",
 ]
 
+[facts.array_writes]
+# 手写方法对实参数组元素的写入（闭包分析，generator `rava closure` 读取）。分析器按调用点把写入值
+# 接到该调用点实参数组的元素上；形参序号按描述符（0 起，不含接收者）：
+#   dst       被写入元素的数组形参（省略 = 不写任何实参数组）
+#   values    写入值取自这些形参的值
+#   elements  写入值取自这些形参数组的元素
+#   produced  写入值含手写体自身产出的对象
+# 未列出、且手写体取得数组视图（JArray / __view_into / array_store_*）的方法按保守规则：
+# 每个非接收者引用形参都可被写入，来源为其它形参、全部实参数组的元素与手写体产出。
+# 准入：JVM 规范 / JDK 文档给出的写入语义，与手写实现一致（注明实现位置）。
+# System.arraycopy：dest[destPos..] ← src[srcPos..]（system_impl.rs）
+"java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V" = { dst = 2, elements = [0] }
+# Unsafe 引用写入：o 为引用元素数组时写入 x（unsafe__impl.rs `_erased_ref_array` 臂）
+"jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2] }
+"jdk/internal/misc/Unsafe.putReferenceVolatile:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2] }
+"jdk/internal/misc/Unsafe.putReferenceOpaque:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2] }
+"jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2] }
+"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [2] }
+"jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3] }
+"jdk/internal/misc/Unsafe.weakCompareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3] }
+"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [3] }
+# 只读：引用读取、调用器（实参数组原样转交目标方法，目标方法的写入按其自身建模）、栈帧填充（写元素对象的字段）
+"jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
+"jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
+"jdk/internal/misc/Unsafe.getReferenceOpaque:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
+"jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
+"java/lang/invoke/MethodHandle.invokeExact:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/StackTraceElement.initStackTraceElements:([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V" = {}
+
 # ── invokedynamic 引导方法分类（闭包分析，generator `rava closure` 读取）──────────────────
 # 生成器原生承载这些引导方法的链接语义，分析器不展开其 Java 体，按分类建模调用点：
 #   lambda  LambdaMetafactory：调用点产出实现 SAM 接口的合成类，SAM 调用分派到实现方法句柄
