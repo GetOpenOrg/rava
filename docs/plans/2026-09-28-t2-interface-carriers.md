@@ -31,7 +31,7 @@
 | 批次 | 状态 |
 |---|---|
 | 7a | ✅ `409966f` + 名单 8 个访问器接口（TestStreamBasic / TestArrayList PASS） |
-| 7b | ⬜ |
+| 7b | ✅ `5b67a8f`：Path 进名单；宏 erased_impl_call 与 inherited_gen 转发体对手写 `__impl_` 经 Into 适配（FileIOTest / TestFilesApi PASS） |
 | 7c | ⬜ |
 | 7d | ⬜ |
 | 置 None + 删 txt | ⬜ |
