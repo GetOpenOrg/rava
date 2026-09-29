@@ -1,0 +1,11 @@
+length=22 pos=22
+int=1020304
+long=-2
+utf=héllo
+b=8,7 eof=-1
+n=3 buf=0,3,4,-1
+after setLength: length=6 pos=5
+sparse length=11
+IOOBE
+ro length=11 first=1
+FNFE

@@ -103,4 +103,128 @@ impl ArraysSupport {
         }
         Ok(result)
     }
+
+    // ── 其余基本类型的 mismatch 族（gap_scan 缺口批次 1）：JDK 以 vectorizedMismatch 向量化，
+    //    可观察结果即逐元素比较；浮点按 floatToIntBits / doubleToLongBits（NaN 规范化，±0 区分）
+
+    /// mismatch([C I [C I I)：两段 char 区间首个不等元素的相对下标，全等返回 -1。
+    #[jvm_boundary]
+    pub fn mismatch_arr_c_i_arr_c_i_i(a: JArray<u16>, a_from_index: i32, b: JArray<u16>,
+                                      b_from_index: i32, length: i32) -> Result<i32> {
+        for i in 0..length {
+            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            if x != y {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+    /// mismatch([C [C I)：同上，两数组均自下标 0 起。
+    #[jvm_boundary]
+    pub fn mismatch_arr_c_arr_c_i(a: JArray<u16>, b: JArray<u16>, length: i32) -> Result<i32> {
+        Self::mismatch_arr_c_i_arr_c_i_i(a, 0, b, 0, length)
+    }
+    /// mismatch([S I [S I I)：两段 short 区间首个不等元素的相对下标，全等返回 -1。
+    #[jvm_boundary]
+    pub fn mismatch_arr_s_i_arr_s_i_i(a: JArray<i16>, a_from_index: i32, b: JArray<i16>,
+                                      b_from_index: i32, length: i32) -> Result<i32> {
+        for i in 0..length {
+            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            if x != y {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+    /// mismatch([S [S I)：同上，两数组均自下标 0 起。
+    #[jvm_boundary]
+    pub fn mismatch_arr_s_arr_s_i(a: JArray<i16>, b: JArray<i16>, length: i32) -> Result<i32> {
+        Self::mismatch_arr_s_i_arr_s_i_i(a, 0, b, 0, length)
+    }
+    /// mismatch([L I [L I I)：两段 long 区间首个不等元素的相对下标，全等返回 -1。
+    #[jvm_boundary]
+    pub fn mismatch_arr_l_i_arr_l_i_i(a: JArray<i64>, a_from_index: i32, b: JArray<i64>,
+                                      b_from_index: i32, length: i32) -> Result<i32> {
+        for i in 0..length {
+            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            if x != y {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+    /// mismatch([L [L I)：同上，两数组均自下标 0 起。
+    #[jvm_boundary]
+    pub fn mismatch_arr_l_arr_l_i(a: JArray<i64>, b: JArray<i64>, length: i32) -> Result<i32> {
+        Self::mismatch_arr_l_i_arr_l_i_i(a, 0, b, 0, length)
+    }
+    /// mismatch([Z I [Z I I)：两段 boolean 区间首个不等元素的相对下标，全等返回 -1。
+    #[jvm_boundary]
+    pub fn mismatch_arr_z_i_arr_z_i_i(a: JArray<bool>, a_from_index: i32, b: JArray<bool>,
+                                      b_from_index: i32, length: i32) -> Result<i32> {
+        for i in 0..length {
+            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            if x != y {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+    /// mismatch([Z [Z I)：同上，两数组均自下标 0 起。
+    #[jvm_boundary]
+    pub fn mismatch_arr_z_arr_z_i(a: JArray<bool>, b: JArray<bool>, length: i32) -> Result<i32> {
+        Self::mismatch_arr_z_i_arr_z_i_i(a, 0, b, 0, length)
+    }
+    /// mismatch([I I [I I I)：两段 int 区间首个不等元素的相对下标，全等返回 -1。
+    #[jvm_boundary]
+    pub fn mismatch_arr_i_i_arr_i_i_i(a: JArray<i32>, a_from_index: i32, b: JArray<i32>,
+                                      b_from_index: i32, length: i32) -> Result<i32> {
+        for i in 0..length {
+            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            if x != y {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+    /// mismatch([F I [F I I)：两段 float 区间首个不等元素的相对下标，全等返回 -1。
+    #[jvm_boundary]
+    pub fn mismatch_arr_f_i_arr_f_i_i(a: JArray<f32>, a_from_index: i32, b: JArray<f32>,
+                                      b_from_index: i32, length: i32) -> Result<i32> {
+        for i in 0..length {
+            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            if fkey(x) != fkey(y) {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+    /// mismatch([F [F I)：同上，两数组均自下标 0 起。
+    #[jvm_boundary]
+    pub fn mismatch_arr_f_arr_f_i(a: JArray<f32>, b: JArray<f32>, length: i32) -> Result<i32> {
+        Self::mismatch_arr_f_i_arr_f_i_i(a, 0, b, 0, length)
+    }
+    /// mismatch([D I [D I I)：两段 double 区间首个不等元素的相对下标，全等返回 -1。
+    #[jvm_boundary]
+    pub fn mismatch_arr_d_i_arr_d_i_i(a: JArray<f64>, a_from_index: i32, b: JArray<f64>,
+                                      b_from_index: i32, length: i32) -> Result<i32> {
+        for i in 0..length {
+            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            if dkey(x) != dkey(y) {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+    /// mismatch([D [D I)：同上，两数组均自下标 0 起。
+    #[jvm_boundary]
+    pub fn mismatch_arr_d_arr_d_i(a: JArray<f64>, b: JArray<f64>, length: i32) -> Result<i32> {
+        Self::mismatch_arr_d_i_arr_d_i_i(a, 0, b, 0, length)
+    }
 }
+
+/// `Float.floatToIntBits`：NaN 规范化为 0x7fc00000，其余按位。
+fn fkey(v: f32) -> u32 { if v.is_nan() { 0x7fc0_0000 } else { v.to_bits() } }
+
+/// `Double.doubleToLongBits`：NaN 规范化为 0x7ff8000000000000，其余按位。
+fn dkey(v: f64) -> u64 { if v.is_nan() { 0x7ff8_0000_0000_0000 } else { v.to_bits() } }
