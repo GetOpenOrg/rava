@@ -363,7 +363,17 @@ C1b 引入的机制（全部通用，无类名特判）：
 5. **确定性**：`folds` 按 method 排序，`consts` 按 pc 排序，同输入逐字节相同。
 6. **版本**：顶层 `folds_version` 当前为 1。Python 遇到不认识的版本时忽略 folds、按原样翻译、不报错，两边可以各自先合入。
 
-原有的 `dead_branches` 输出整体由 `folds` 取代。Python 只消费这份数据，不另写判定；消费侧（C3）由用户实现，验收用 `compare_trees.sh`：
+原有的 `dead_branches` 输出整体由 `folds` 取代。Python 只消费这份数据，不另写判定。
+
+**消费侧已就绪**（`codegen/closure_folds.py`，`main.py --closure-json <closure.json>`）：在 classfile 解码后、
+VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成代码共用）。
+- 条件跳转恒直通改写为 `pop`，恒跳转改写为 `pop` + `goto`；switch 的死目标改指向活目标，只剩一个活目标时改写为 `pop` + `goto`。偏移沿用原指令字节。
+- getstatic 折叠为装载指令；getfield / invoke 折叠为合成指令 `fold_const`，先弹出 receiver 和实参（有副作用的保留求值），再压入常量。
+- 异常表：删掉 dead_handlers 的表项，以及受保护区间已全死的表项；其余区间端点收拢到活指令起点。
+- 违约输入直接报 `FoldError`：端点不在指令起点、活的非跳转指令顺序落入死区、const 的 kind 与指令不符、Z 不是布尔值、handler 在死区但未列入 dead_handlers。
+- 单元测试 `tests/unit/test_closure_folds.py`（19 项）；手工 closure.json 的端到端探针（静态字段 / 实例字段 / 调用三类折叠 + 死分支）生成体符合预期。
+
+验收用 `compare_trees.sh`：
 - 不带 folds 时，生成树逐字节不变；
 - 带 folds 时，只有预期的方法体变化，并且生成代码引用的类都在闭包之内。
 

@@ -235,12 +235,17 @@ def main():
                     help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
     ap.add_argument('--raw-sites', default='', metavar='FILE',
                     help='Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序）')
+    ap.add_argument('--closure-json', default='', metavar='FILE',
+                    help='Rust 闭包分析器的 closure.json：消费其 folds（v1）剪除不可达代码、折叠常量读取点')
     args = ap.parse_args()
 
     from codegen import options as _options, raw_audit as _raw_audit_opt
     _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
     _options.PRECHECK_ONLY = args.precheck_only
     _raw_audit_opt.enable_raw_sites(args.raw_sites)
+    if args.closure_json:
+        from codegen import closure_folds as _folds
+        print(f"[folds] {args.closure_json}：{_folds.load(args.closure_json)} 个方法带折叠")
 
     lib_specs = _parse_lib_specs(args.lib)
     if lib_specs and args.batch:

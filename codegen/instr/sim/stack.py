@@ -78,6 +78,17 @@ def sim_stack(ins, sim, class_name, registry) -> bool:
             # 只有在弹出的是有副作用的表达式时才发出 let _ = ...
             if any(c in e for c in ['(', 'push', 'insert']):
                 sim.emit(RawStmt(f"let _ = {e};"))
+    elif op == 'fold_const':
+        # closure.json 折叠点（closure_folds）：弹出 receiver / 实参，有副作用的按求值序保留，
+        # 再压入常量（装载指令走 sim_consts 的既有发射路径）
+        from ...closure_folds import decode_fold_const
+        from .consts import sim_consts
+        npop, push = decode_fold_const(ins)
+        popped = [render_expr(sim.pop()[0]) for _ in range(min(npop, len(sim.stack)))]
+        for e in reversed(popped):
+            if any(c in e for c in ['(', 'push', 'insert']):
+                sim.emit(RawStmt(f"let _ = {e};"))
+        sim_consts(push, sim, class_name, registry)
     elif op == 'pop2':
         # category-2 栈顶只弹一项；两个 category-1 弹两项
         if sim.stack:
