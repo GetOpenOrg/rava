@@ -174,7 +174,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 |
 | C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 |
 | C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 |
-| C1c | 字段常量折叠（可达 putfield 值集单一 → getfield 折叠，乐观假设 + 失效重处理）+ 选择性调用点敏感（小型高阶 / 汇点方法按调用点克隆） | 7.3 所列 lambda / 流 / 反射测试达标；动态对照翻译域漏覆盖 = 0 |
+| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 选择性上下文敏感（CPA）；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） |
 | C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 |
@@ -272,18 +272,61 @@ C1b 引入的机制（全部通用，无类名特判）：
    `hashCode` / `equals` 汇点（`HashMap.hash`、`Objects.hashCode`、`probe`）同理，各派发 106 个目标。
    反射返回值（`Method.invoke` → open(Object)）进入同一汇点，也会触发全量派发。
 
-**对策（C1c）**：
+**对策（C1c）**，按以下顺序实施：
 
-- **字段常量折叠**：对每个字段收集可达 `putfield` / `putstatic` 写入的抽象值集，加上分配时的默认值。值集单一时，
-  `getfield` 折叠为常量，absint 的死分支剪枝随之生效。采用乐观假设：出现新的写入值时，让读该字段的方法失效并重处理（单调）。
-  手写层可写字段按 open 处理，不折叠。
-- **选择性调用点敏感**：对小型方法（指令数有上限、形参含引用、形参值流向虚调用接收者或返回值）按调用点克隆上下文，
-  克隆链深度 ≤ 2。`append(Object)`、`valueOf(Object)`、`Objects.hashCode`、`HashMap.hash`、`doPrivileged` 这类包装方法
-  由此按实际调用方的实参派发。判定完全来自字节码形状，不列类名。
-- **反射返回值**：C2 的 `[reflect_sinks]` / 反射数据流按字节码给出反射目标的返回类型，替代 open(Object)。
+0. **手写层写字段识别**（前置，也修 C1b 的潜在漏边）：手写体中的 `recv.__set_<字段>(v)`（现有 259 处）
+   按接收者推断出的类型定位字段，把 `v` 的类型接进字段节点，并把该字段标记为「有非字节码写入」。
+   接收者类型推不出时，同名字段在所有已知声明类里都按 open 处理（安全回退）。
+   现行兜底是「类自身有手写函数 → 引用字段 open」（`field_handwritten`），它盖不住跨文件写入，
+   例如 `monitor.rs` 写 `Thread$FieldHolder.threadStatus`。
+1. **字段常量折叠**：每个字段维护一个写入值集，由以下几部分组成：
+   - 初值：实例字段取默认值；`static final` 取 `ConstantValue`，否则取默认值。
+   - 可达 `putfield` / `putstatic` 写入的抽象值，以及可达构造器 / `<clinit>` 中的写入。
 
-**C1c 验收**：7.3 中的 lambda / 流 / 反射测试总类 ≤ 400，translate ∩ code ≤ 250，单测试耗时 ≤ 3s；
-HelloWorld 指标不回退；动态对照翻译域漏覆盖 = 0。
+   值集只含单一常量时，`getfield` / `getstatic` 在 absint 中视为该常量，死分支剪枝随之生效。
+   采用乐观假设：值集长出新值时，读该字段的方法失效并重处理（单调，终止性由值集有限高度保证）。
+   以下写入来源让字段直接变为 open（不折叠），判定只看字节码形状 / 手写体语法，不列类名：
+   - 手写层 `__set_<字段>`（第 0 步），以及边界类 / 手写类的全部字段。
+   - 以字符串常量点名字段的反射式写入：`objectFieldOffset(Class, "名")`、`findVarHandle(…, "名", …)`、
+     `findStaticVarHandle`、`getDeclaredField("名")`、`AtomicXxxFieldUpdater.newUpdater(…, "名")`。
+     字段所属类取同一调用的 Class 实参（ldc 类字面量），取不到时同名字段全部 open。
+   - 反序列化：闭包中出现 `ObjectInputStream.readObject` 可达时，所有已实例化、实现 `Serializable`
+     的类的非 static、非 transient 字段 open。
+2. **容器对象按分配点区分**：数组分配点模型扩展到「容器形态类」的对象，按 `new` 的位置分开追踪其元素字段的类型。
+   容器形态按字节码判定：类持有 `Object[]` / 引用数组字段，或持有引用字段且其方法对该字段值做虚调用。
+   只做一层对象敏感：`HashMap` 的 `table` / `Node.key`、`ImmutableCollections` 的元素数组等按分配点分离。
+   `HashMap.put(K,V)` 这类大方法无法靠调用点克隆切断，由对象敏感解决。
+3. **选择性上下文敏感（CPA）**：对小型方法按「实参类型集合」做上下文键克隆（Cartesian Product 思路），不按调用点编号。
+   多个传入相同类型集合的调用点共用一份克隆，深度不做硬性上限，由类型集合的有限性保证终止。
+   选中条件：指令数有上限，且形参值流向虚调用接收者、返回值，或字符串拼接 indy 的实参（拼接对实参调用 toString）。
+   `append(Object)` → `valueOf(Object)` → `toString()`、`Objects.hashCode`、`doPrivileged`、`Set12.<init>` 的
+   `"duplicate element: " + e0` 由此按实际实参派发。
+4. **反射返回值**：C2 的 `[reflect_sinks]` / 反射数据流按字节码给出反射目标的返回类型，替代 open(Object)。
+
+第 1 步完成后单独测一次 TestStreamBasic，量出并行流路径（ForkJoin / VarHandles）占多少类，再定第 2、3 步做多深。
+
+**折叠点导出（C3 / C4 的衔接，格式在 C1c 定型）**：Rust 闭包剪掉的分支，Python 生成器必须同样不翻译，
+否则生成代码会引用闭包外的类，编译失败。closure.json 为每个存在不可达代码的方法导出：
+
+```json
+"folds": [{
+  "method": "java/util/stream/AbstractPipeline.evaluate:(Ljava/util/stream/TerminalOp;)Ljava/lang/Object;",
+  "dead_pcs": [[65, 80]],
+  "consts": [{"pc": 12, "value": false}]
+}]
+```
+
+- `dead_pcs`：不可达指令的 pc 半开区间，由 absint 的可达性直接合并得到。Python 在结构化控制流之前按区间剔除基本块。
+- `consts`：被折叠的读字段 / 条件的 pc 与常量值，供生成器发射常量。
+
+Python 只消费这份数据，不另写判定。原有的 `dead_branches` 输出由 `folds` 取代。Python 侧的剔除由用户实现。
+
+**C1c 验收**：
+- HelloWorld、TestSwitchString、PatternSwitchTest、TestRecordComponents、TestStreamBasic、CollectorsDemo、
+  ChineseRemainderTheorem 7 个用例：总类 ≤ 400，translate ∩ code ≤ 250，单测试耗时 ≤ 3s。
+- HelloWorld 指标不回退（200 / 115 / 466）。
+- 上述 7 个用例以及 FileIOTest（手写层写字段密集，检验写入来源是否收全）的动态对照，翻译域漏覆盖 = 0。
+- closure.json 输出 `folds`，结果确定。
 
 ## 八、风险与对策
 
