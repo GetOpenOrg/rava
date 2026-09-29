@@ -231,12 +231,15 @@ def main():
                     help='严格模式：转译兜底改为硬失败，缺手写实现的 native 方法编译报错')
     ap.add_argument('--trace-class', default='', metavar='CLASS',
                     help='打印该类（斜线形态 binary name，如 java/net/InetAddress）各方法的入链路径')
+    ap.add_argument('--precheck-only', action='store_true',
+                    help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
     ap.add_argument('--raw-sites', default='', metavar='FILE',
                     help='Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序）')
     args = ap.parse_args()
 
     from codegen import options as _options, raw_audit as _raw_audit_opt
     _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
+    _options.PRECHECK_ONLY = args.precheck_only
     _raw_audit_opt.enable_raw_sites(args.raw_sites)
 
     lib_specs = _parse_lib_specs(args.lib)
@@ -266,6 +269,8 @@ def main():
     t0 = time.perf_counter()
     transpile(java_files, out_dir, batch_bin=args.batch, lib_specs=lib_specs,
               locales=tuple(t for t in args.locales.split(',') if t.strip()))
+    if args.precheck_only:
+        return
     # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
     print(CFG_AUDIT_STATS.summary())
     if args.debug:

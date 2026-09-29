@@ -190,6 +190,14 @@ def _is_boundary_class(cls: str) -> bool:
     return cls.split('$', 1)[0] in _VM_BOUNDARY_CLASSES and not _released_general(cls)
 
 
+# 编译前预检（转译期可判定的必然存根）：BFS 结束时填充，scripts/main.py 打印 [precheck]
+# 并据此决定是否跳过 cargo。两类：
+#   native_missing  调用链上的 native 方法，生成体为 panic!("native: …")（缺手写实现）
+#   boundary_stub   调用链上 / 触达的方法，生成体为 panic!("stub: …")（缺手写或未补译）
+PRECHECK: dict[str, list[str]] = {'native_missing': [], 'boundary_stub': []}
+PRECHECK_CHAIN: dict[str, set] = {'visited': set(), 'touched': set()}
+
+
 # java_runtime 已手写实现的类：这些类不再由 jdk_classes 翻译，避免重复定义和命名冲突
 _JAVA_RUNTIME_CLASSES: frozenset[str] = frozenset({
     _OBJECT_CLASS,
@@ -205,7 +213,8 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                                        lib_registries: list | None = None,
                                        lib_prefixes: tuple[str, ...] = (),
                                        extra_seed_classes: list[str] | None = None,
-                                       locales: tuple[str, ...] = ()) -> list:
+                                       locales: tuple[str, ...] = (),
+                                       jdk_seed_methods: list | None = None) -> list:
     """方法级调用链 BFS：只追踪实际被调用的方法，不展开未调用方法的依赖类。
 
     调用边的三个来源：
@@ -1322,6 +1331,14 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
             ANNOTATION_ENUM_SEEDS.sort()
             return added
 
+        # 缺口扫描种子（scripts/gap_scan.py 的 API 模式）：JDK 方法直接作为调用链入口，
+        # 等价于「某个用户程序调用了它」——类初始化与构造器实例化同调用边语义
+        for _sk in (jdk_seed_methods or ()):
+            _enqueue_method(_sk)
+            _enqueue_class_init(_sk[0])
+            if _sk[1] == '<init>':
+                instantiated_classes.add(_sk[0])
+
         # 不动点：排空队列 → 传播虚调用目标 → 有新方法则继续
         while True:
             while queue:
@@ -1603,6 +1620,17 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
         print(f"[fallback-audit] 警告: … 其余 {len(_fb_warns) - 20} 条见 "
               f"--debug 逐触发明细")
 
+    def _may_execute(cls: str, ci, decl) -> bool:
+        """成员在运行期可能被直接执行：非抽象；实例方法（构造器除外）须有已实例化的
+        本类或子类（RTA——从未实例化的类的实例方法只能经 null 接收者到达，恒不执行）。"""
+        if decl is None or decl.is_abstract:
+            return False
+        if decl.is_static or decl.name == '<init>':
+            return True
+        return any(x == cls or cls in _supertypes(x) for x in instantiated_classes)
+
+    _fill_precheck(visited_methods, seen_members, class_cache, user_infos, upcalls,
+                   resolver, _may_execute)
     return list(jdk_infos.values()), visited_methods, field_discover_classes
 
 
@@ -1803,3 +1831,86 @@ def _collect_method_refs(instrs, user_class_names: frozenset[str] = frozenset(),
             # 通道（不进 jdk_infos，user crate 整体生成）。
             new_classes.append(c.split()[0])
     return method_refs, field_classes, member_refs, boundary_refs, new_classes, static_field_refs
+
+
+def _fill_precheck(visited_methods, seen_members, class_cache, user_infos, upcalls, resolver,
+                   may_execute=None) -> None:
+    """BFS 结束时记录调用链事实（已入链方法 + 触达的边界成员）；缺口判定在代码生成后
+    由 precheck_from_tree 按生成产物完成（边界类的补译缺口、手写覆盖、签名多态调用点改写
+    等发射期决策只有产物可见）。"""
+    from .classfile import parse_class_bytes
+    # 签名多态方法（JVMS §2.9.3：native + ACC_VARARGS + 唯一形参 Object[]）由调用点改写承载
+    # （__site / invokeBasic 解释器），其 native 体永不被直接调用——不计缺口
+    _sigpoly = set()
+    for c, m, d in visited_methods:
+        _ci = class_cache.get(c)
+        _decl = next((x for x in _ci.methods if x.name == m and x.descriptor == d), None) if _ci else None
+        if (_decl is not None and _decl.is_native and _decl.access_flags & 0x0080
+                and d.startswith('([Ljava/lang/Object;)')):
+            _sigpoly.add(f"{c}.{m}:{d}")
+    def _decl_of(c, m, d=None):
+        _ci = class_cache.get(c)
+        if _ci is None:
+            try:
+                _data = resolver.resolve(c)
+                _ci = parse_class_bytes(_data, c) if _data is not None else None
+            except Exception:
+                _ci = None
+        if _ci is None:
+            return None, []
+        return _ci, [x for x in _ci.methods if x.name == m and (d is None or x.descriptor == d)]
+
+    _vis = set()
+    for c, m, d in visited_methods:
+        _ci, _ds = _decl_of(c, m, d)
+        if may_execute is None or (_ds and may_execute(c, _ci, _ds[0])):
+            _vis.add(f"{c}.{m}:{d}")
+    PRECHECK_CHAIN['visited'] = _vis - _sigpoly
+    # 边界类成员由翻译代码经成员引用触达（BFS 在边界截断，不按描述符入链）：按名匹配
+    _tch = set()
+    for c, m in seen_members:
+        if m == '<clinit>' or not _is_boundary_class(c):
+            continue
+        _ci, _ds = _decl_of(c, m)
+        if may_execute is None or any(may_execute(c, _ci, x) for x in _ds):
+            _tch.add(f"{c}.{m}")
+    PRECHECK_CHAIN['touched'] = _tch
+
+
+_PANIC_STUB_RE = re.compile(r'panic!\("(stub|native): ([^"]+)"\)')
+
+
+def precheck_from_tree(runtime_src: str) -> None:
+    """扫描生成的 java_runtime 源码：方法体为 `panic!("stub: …")` / `panic!("native: …")`
+    且在调用链上（已入链方法，或触达的边界成员）者即编译前可知的缺口，写入 PRECHECK。"""
+    import os as _os
+    visited, touched = PRECHECK_CHAIN['visited'], PRECHECK_CHAIN['touched']
+    natives, stubs = set(), set()
+    for _dir, _subdirs, _files in _os.walk(runtime_src):
+        for _fn in _files:
+            if not _fn.endswith('.rs'):
+                continue
+            try:
+                _text = open(_os.path.join(_dir, _fn), encoding='utf-8').read()
+            except OSError:
+                continue
+            if 'rava_macros::java_class' not in _text or 'panic!("' not in _text:
+                continue
+            for _kind, _sig in _PANIC_STUB_RE.findall(_text):
+                _name = _sig.split(':', 1)[0]
+                if _sig in visited or _name in touched:
+                    (natives if _kind == 'native' else stubs).add(_sig)
+    PRECHECK['native_missing'] = sorted(natives)
+    PRECHECK['boundary_stub'] = sorted(stubs)
+
+
+def print_precheck(limit: int = 40) -> None:
+    """[precheck] 汇总行 + 逐条明细（每类封顶 limit 行）。"""
+    _n, _b = PRECHECK['native_missing'], PRECHECK['boundary_stub']
+    print(f"[precheck] native-missing={len(_n)} boundary-stub={len(_b)}")
+    for _kind, _items in (('native-missing', _n), ('boundary-stub', _b)):
+        for _it in _items[:limit]:
+            print(f"[precheck] {_kind}: {_it}")
+        if len(_items) > limit:
+            print(f"[precheck] {_kind}: … 其余 {len(_items) - limit} 条")
+

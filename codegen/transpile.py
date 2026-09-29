@@ -227,6 +227,11 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
     write_cargo_project(out_dir, class_infos, jdk_class_infos, java_files,
                         batch_bin=batch_bin, visited_methods=visited_methods,
                         lib_crate_classes=_lib_crate_classes or None)
+    # 编译前预检：生成产物中调用链上的 panic 存根 / 缺失 native（见 callchain.PRECHECK）
+    from .callchain import precheck_from_tree as _pc_tree, print_precheck as _print_precheck
+    from . import options as _options_pc
+    _pc_tree(os.path.join(out_dir, 'java_runtime', 'src'))
+    _print_precheck(limit=100000 if _options_pc.PRECHECK_ONLY else 40)
     print(f"\n✓ 完成。运行方式：\n  cd {out_dir} && cargo run --release")
 
 
