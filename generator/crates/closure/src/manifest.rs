@@ -41,6 +41,7 @@ pub struct Manifest {
     intrinsics: HashSet<String>,
     null_to_false: HashSet<String>,
     returns: HashMap<String, Fact>,
+    receiver_returns: HashSet<String>,
     pub boot_init: Vec<String>,
     indy: HashMap<String, IndyKind>,
 }
@@ -118,6 +119,7 @@ impl Manifest {
             intrinsics,
             null_to_false: strings(&vm, "vm_constants", "null_to_false").into_iter().collect(),
             returns,
+            receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
             indy,
         })
@@ -167,6 +169,11 @@ impl Manifest {
     /// 方法返回值事实（`类.方法:描述符`）
     pub fn return_fact(&self, member: &str) -> Option<&Fact> {
         self.returns.get(member)
+    }
+
+    /// 返回值是接收者的浅拷贝（类型集 = 接收者类型集；数组共享元素节点）
+    pub fn returns_receiver(&self, member: &str) -> bool {
+        self.receiver_returns.contains(member)
     }
 
     /// 纯函数：null 实参 → false
