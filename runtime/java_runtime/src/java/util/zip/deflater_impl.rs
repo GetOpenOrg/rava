@@ -53,7 +53,7 @@ impl Deflater {
 
     /// native `setDictionary(long, byte[], int, int)`：deflateSetDictionary。
     #[jvm_native(upcalls = "java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
-    pub fn setDictionary(addr: i64, b: JArray<i8>, off: i32, len: i32) -> Result<()> {
+    pub fn setDictionary_l_arr_b_i_i(addr: i64, b: JArray<i8>, off: i32, len: i32) -> Result<()> {
         let z = lib()?;
         let dict = copy_in(&b, off, len)?;
         // SAFETY: addr 为活动流
@@ -113,14 +113,14 @@ impl Deflater {
 
     /// native `getAdler(long)`：当前 adler32 / crc32 校验值。
     #[jvm_native]
-    pub fn getAdler(addr: i64) -> Result<i32> {
+    pub fn getAdler_l(addr: i64) -> Result<i32> {
         // SAFETY: addr 为活动流
         Ok(unsafe { (*zlib::stream(addr)).adler } as i32)
     }
 
     /// native `reset(long)`：deflateReset。
     #[jvm_native(upcalls = "java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
-    pub fn reset(addr: i64) -> Result<()> {
+    pub fn reset_l(addr: i64) -> Result<()> {
         let z = lib()?;
         // SAFETY: addr 为活动流
         if unsafe { (z.deflate_reset)(zlib::stream(addr)) } != zlib::Z_OK {
@@ -131,7 +131,7 @@ impl Deflater {
 
     /// native `end(long)`：deflateEnd 并释放流。
     #[jvm_native(upcalls = "java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
-    pub fn end(addr: i64) -> Result<()> {
+    pub fn end_l(addr: i64) -> Result<()> {
         let z = lib()?;
         // SAFETY: addr 为活动流，end 之后 Java 侧不再使用该地址
         let ret = unsafe { (z.deflate_end)(zlib::stream(addr)) };
