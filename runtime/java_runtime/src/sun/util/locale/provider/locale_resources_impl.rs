@@ -185,4 +185,30 @@ impl LocaleResources {
         let rb = self.__number_format_data()?;
         self.getNumberStrings(rb, String::from("NumberPatterns"))
     }
+
+    /// `getCNPatterns(NumberFormat.Style)`：`<short|long>.CompactNumberPatterns`（FormatData 束链，
+    /// 字节码语义：LONG → "long"，其余 → "short"；键经 getObject 取 String[]）。
+    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.getStringArray:(Ljava/lang/String;)[Ljava/lang/String; java/lang/Enum.name:()Ljava/lang/String;")]
+    pub fn __impl_getCNPatterns(&self, style: crate::java::text::NumberFormat_Style) -> Result<JArray<String>> {
+        let prefix = if format!("{}", style.name()?) == "LONG" { "long" } else { "short" };
+        let rb = self.__number_format_data()?;
+        rb.getStringArray(String::from_owned(format!("{prefix}.CompactNumberPatterns")))
+    }
+
+    /// `getRules()`：`String[2]` = [PluralRules, DayPeriodRules]（FormatData 束链——CLDR 的
+    /// DateFormatData 与 NumberFormatData 同为 FormatData 束；键缺席取空串，字节码语义）。
+    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getString:(Ljava/lang/String;)Ljava/lang/String;")]
+    pub fn __impl_getRules(&self) -> Result<JArray<String>> {
+        let rb = self.__number_format_data()?;
+        let rules: JArray<String> = JArray::new(2);
+        for (i, key) in ["PluralRules", "DayPeriodRules"].into_iter().enumerate() {
+            let v = if rb.containsKey(String::from(key))? {
+                rb.getString(String::from(key))?
+            } else {
+                String::from("")
+            };
+            rules.set(i as i32, v)?;
+        }
+        Ok(rules)
+    }
 }

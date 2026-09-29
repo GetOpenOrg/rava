@@ -100,6 +100,20 @@ impl NumberFormatProvider__VTable for NativeNumberFormatProvider {
         Ok(Self::view(Self::new_format(arg0, PERCENTSTYLE)?))
     }
 
+    /// COMPACT（JDK `NumberFormatProviderImpl.getCompactNumberInstance` 同序）：
+    /// `new CompactNumberFormat(numberPatterns[0], symbols, getCNPatterns(style), getRules()[0])`。
+    /// 区域覆盖（`-u-rg`）不建模：CLDR 数据按 locale 自身候选链装载。
+    fn getCompactNumberInstance(&self, arg0: Locale, arg1: crate::java::text::NumberFormat_Style) -> Result<NumberFormat> {
+        let res = LocaleResources::new(Object::default(), Clone::clone(&arg0))?;
+        let patterns = res.getNumberPatterns()?;
+        let symbols = DecimalFormatSymbols::getInstance_locale(arg0)?;
+        let cn_patterns = res.getCNPatterns(arg1)?;
+        let rules = res.getRules()?;
+        let cnf = crate::java::text::CompactNumberFormat::new_str_decimalformatsymbols_arr_str_str(
+            patterns.get(0)?, symbols, cn_patterns, rules.get(0)?)?;
+        Ok(<NumberFormat as ::std::convert::From<crate::java::text::CompactNumberFormat>>::from(cnf))
+    }
+
     /// 祖先 wrapper 重建钩子（vtable trait 的必备条目，与宏为 __inner 生成的
     /// 形态一致）：以自身部件重建 NumberFormatProvider 视图。
     fn __as_NumberFormatProvider(&self) -> NumberFormatProvider {

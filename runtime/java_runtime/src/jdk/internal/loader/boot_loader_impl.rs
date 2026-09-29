@@ -6,6 +6,14 @@ use super::boot_loader::BootLoader;
 // ServiceLoader.ModuleServicesLookupIterator.iteratorFor 对 null 目录退空
 // provider 列表）。
 impl BootLoader {
+    /// `loadLibrary(String)`：JDK 以 System.loadLibrary 加载 libzip / libnio 等本地库。
+    /// 原生二进制的 native 方法全部静态链接在 java_runtime 内（`*_impl.rs`），无动态库
+    /// 可加载——no-op。消费方：ZipUtils.loadLibrary（Adler32 / CRC32 的 <clinit>）。
+    #[jvm_boundary]
+    pub fn loadLibrary(_name: String) -> Result<()> {
+        Ok(())
+    }
+
     #[jvm_boundary]
     pub fn getServicesCatalog() -> Result<crate::jdk::internal::module::ServicesCatalog> {
         Ok(Default::default())

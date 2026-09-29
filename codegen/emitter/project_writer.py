@@ -704,6 +704,12 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     top_user_mods = sorted(user_mod_tree.get(user_src, set()))
     use_path = '::'.join(pkg_parts + [main_class]) if pkg_parts else f'{mod_name}::{main_class}'
     bin_name = to_snake(main_class.split('/')[-1])   # snake_case，如 TestArrayList → test_array_list
+    # 主类自身是泛型类（`class Currier<ARG1, ARG2, RET>`）：静态 main 的路径表达式无推断
+    # 上下文（E0283），类型实参按擦除取 Object——与生成代码里泛型类静态调用的擦除实例化同形
+    from ..type_map import effective_class_type_params as _eff_tps
+    _main_tps = _eff_tps(class_infos[0], registry) if class_infos else []
+    main_call = (f"{main_class}::<{', '.join('java_runtime::prelude::Object' for _ in _main_tps)}>::main()"
+                 if _main_tps else f"{main_class}::main()")
 
     # 枚举形态类（自身类型 static 字段——与宏侧常量目录登记同一结构谓词）的
     # class-init 钩子登记：main 启动时登记，运行时反射按名消费方
@@ -846,7 +852,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '',
             'fn main() {',
             *([hook_block] if hook_block else []),
-            f'    java_runtime::destroy_java_vm({main_class}::main());',
+            f'    java_runtime::destroy_java_vm({main_call});',
             '}',
             '',
         ]
@@ -861,7 +867,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '',
             'fn main() {',
             *([hook_block] if hook_block else []),
-            f'    java_runtime::destroy_java_vm({main_class}::main());',
+            f'    java_runtime::destroy_java_vm({main_call});',
             '}',
             '',
         ]

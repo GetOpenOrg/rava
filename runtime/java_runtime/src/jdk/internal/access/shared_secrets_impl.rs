@@ -10,6 +10,7 @@ use crate::sync_model::__RefSlot as RefCell;
 // 按调用链按需实现，其余槽位保持 stub。
 crate::__process_static! {
     static JAVA_IO_FILE_DESCRIPTOR_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JAVA_IO_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_IO_PRINT_STREAM_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_LANG_INVOKE_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
@@ -33,6 +34,23 @@ impl SharedSecrets {
             crate::java::io::FileDescriptor::__class_init()?;
         }
         Ok(T::from(JAVA_IO_FILE_DESCRIPTOR_ACCESS.with(|slot| slot.borrow().clone()).unwrap_or_default()))
+    }
+
+    /// `Console.<clinit>` 登记的 `JavaIOAccess`（Console$1：console() / charset()）。
+    #[jvm_boundary]
+    pub fn setJavaIOAccess(jia: impl Into<Object>) -> Result<()> {
+        JAVA_IO_ACCESS.with(|slot| *slot.borrow_mut() = Some(jia.into()));
+        Ok(())
+    }
+
+    /// 槽位为空时先触发 Console 的类初始化（JDK：ensureClassInitialized(Console.class)），
+    /// 由其 <clinit> 登记。消费方：System.console()。
+    #[jvm_boundary(upcalls = "java/io/Console.<clinit>:()V")]
+    pub fn getJavaIOAccess<T: From<Object>>() -> Result<T> {
+        if JAVA_IO_ACCESS.with(|slot| slot.borrow().is_none()) {
+            crate::java::io::Console::__class_init()?;
+        }
+        Ok(T::from(JAVA_IO_ACCESS.with(|slot| slot.borrow().clone()).unwrap_or_default()))
     }
 
     #[jvm_boundary]
