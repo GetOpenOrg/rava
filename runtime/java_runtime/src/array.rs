@@ -508,6 +508,10 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// view_into 该 slot——wrapper 的祖先名单是静态生成的（与元素值无关），填充成功
     /// ⇔ 目标元素类型是源元素类型自身或其祖先（JLS §4.10.3 数组子类型条件）。
     /// 已是视图的数组按其源数组（运行时元素类型）判定；基本元素数组无协变视图。
+    fn __array_accepts(&self, candidate: &Object) -> bool {
+        try_array_view::<T>(candidate).is_some()
+    }
+
     fn __array_elem_assignable(&self, slot: &mut dyn std::any::Any) -> bool {
         if Self::has_primitive_elements() {
             return false;
@@ -541,11 +545,14 @@ pub(crate) fn erased_array_compatible<T: Clone + Default + Into<Object> + 'stati
     let mut erased: Option<JArray<Object>> = None;
     obj.0.__view_into(unused, &mut erased);
     if let Some(view) = erased {
-        let t_name = Into::<Object>::into(T::default()).0.__class_name();
+        let probe: Object = Into::<Object>::into(T::default());
+        let t_name = probe.0.__class_name();
         let len = view.len().unwrap_or(0);
         return (0..len).all(|i| match view.get(i) {
             Ok(e) => e.0.is_jvm_null()
                 || e.try_checkcast::<T>().is_some()
+                // T 自身是数组：元素（内层数组）按 T 的数组视图规则递归判定
+                || probe.0.__array_accepts(&e)
                 || (t_name != "java/lang/Object" && e.0.is_instance_of(t_name)),
             Err(_) => false,
         });

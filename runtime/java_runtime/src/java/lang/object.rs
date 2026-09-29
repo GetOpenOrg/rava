@@ -187,6 +187,14 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     #[doc(hidden)]
     fn __array_elem_assignable(&self, _slot: &mut dyn std::any::Any) -> bool { false }
 
+    /// 多维数组的元素级 checkcast 探针：receiver 是**目标**数组类型 `JArray<U>` 的 null 探针
+    /// （`T::default()`），`candidate` 是源数组的一个元素。数组探针按 `try_array_view::<U>`
+    /// 判定（与 `From<Object> for JArray<U>` 同一决策点，递归覆盖任意维数与协变上转——
+    /// `Set<String>[][] t = new HashSet[n][n]` 的内层 `HashSet[]` → `Set[]`）。
+    /// 非数组探针不响应（默认 false，元素兼容由其余臂判定）。
+    #[doc(hidden)]
+    fn __array_accepts(&self, _candidate: &Object) -> bool { false }
+
     /// checkcast 的类型驱动形式：`slot` 是 `Option<T>`，`T` 为本类或任一祖先类的 wrapper 类型时
     /// 按运行时类重建该视图写入 `slot` 并返回 true（保留运行时类的覆盖实现）；否则返回 false。
     fn __view_into(
