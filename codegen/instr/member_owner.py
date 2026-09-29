@@ -549,7 +549,12 @@ def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: st
     _recv_base_v = (_head_v(_recv_t) or _recv_ty) if _recv_t is not None else _recv_ty
     _recv_bin_v = (_recv_t.binary if isinstance(_recv_t, _ClassRefV) and registry
                    and _recv_t.binary in registry else '')
-    if registry and _recv_base_v and _recv_base_v != cls and not _recv_is_this:
+    # this 调用且当前类是类（非接口）：Rust 侧 `this.m(..)` 绑定到本类 wrapper 的成员（继承自类祖先时
+    # 形参按代入签名发射，如 Nodes$EmptyNode$OfLong 的 forEach_obj(LongConsumer)），常量池类是接口
+    # （Node$OfLong）时同样按接收者类解析——否则落到接口声明、形参回落 Object（T-2 7c）
+    _cur_cls_ci = registry.get(class_name) if registry else None
+    _this_in_class = (_recv_is_this and _cur_cls_ci is not None and not _cur_cls_ci.is_interface)
+    if registry and _recv_base_v and _recv_base_v != cls and (not _recv_is_this or _this_in_class):
         # 接口方法经具体类接收者调用（`Map<Long,String> m = new HashMap<>(); m.put(k, v)`，
         # 局部变量的 Rust 类型是构造出的类实例化）：Rust 侧解析到类自身的方法，
         # 形参类型按类的声明签名 + 接收者实参确定，而非接口的擦除载体形态
