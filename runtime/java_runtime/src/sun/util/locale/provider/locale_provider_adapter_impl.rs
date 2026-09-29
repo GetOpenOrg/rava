@@ -23,6 +23,7 @@ use crate::java::text::spi::NumberFormatProvider;
 use crate::java::text::spi::NumberFormatProvider__VTable;
 use crate::java::text::spi::{DecimalFormatSymbolsProvider, DecimalFormatSymbolsProvider__VTable};
 use super::locale_resources::LocaleResources;
+use super::resource_bundle_based_adapter::ResourceBundleBasedAdapter__VTable;
 use crate::java::util::spi::LocaleServiceProvider__VTable;
 use crate::java::text::{DecimalFormat, DecimalFormatSymbols, NumberFormat};
 use crate::java::util::Locale;
@@ -216,11 +217,38 @@ impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
     }
 }
 
+/// CLDR 适配器实现 `ResourceBundleBasedAdapter`（JDK：CLDRLocaleProviderAdapter extends
+/// JRELocaleProviderAdapter implements ResourceBundleBasedAdapter）。
+/// 消费方：DateFormatSymbols.initializeData 的 `((ResourceBundleBasedAdapter) adapter).getLocaleData()`。
+impl ResourceBundleBasedAdapter__VTable for NativeLocaleAdapter {
+    fn getLocaleData(&self) -> Result<crate::sun::util::resources::LocaleData> {
+        crate::__process_static! {
+            /// 适配器持有的 LocaleData 单例（JDK：JRELocaleProviderAdapter.localeData 惰性字段）。
+            static LOCALE_DATA: crate::sun::util::resources::LocaleData = {
+                let mut ld = crate::sun::util::resources::LocaleData::default();
+                ld._init_not_null();
+                ld
+            };
+        }
+        Ok(LOCALE_DATA.with(Clone::clone))
+    }
+
+    fn getCandidateLocales(&self, _arg0: String, _arg1: Locale) -> Result<crate::java::util::List<Object>> {
+        panic!("stub: sun/util/locale/provider/ResourceBundleBasedAdapter.getCandidateLocales:(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/List;")
+    }
+}
+
 impl ObjectVTable for NativeLocaleAdapter {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn __class_name(&self) -> &'static str { "sun/util/cldr/CLDRLocaleProviderAdapter" }
     fn __obj_str(&self) -> std::string::String {
         "sun.util.cldr.CLDRLocaleProviderAdapter".to_owned()
+    }
+    /// 接口视图查询（invokeinterface 的运行时入口）。
+    fn __interface(self: Rc<Self>, slot: &mut dyn std::any::Any) {
+        if let Some(s) = slot.downcast_mut::<Option<Rc<dyn ResourceBundleBasedAdapter__VTable>>>() {
+            *s = Some(self);
+        }
     }
 }
 
