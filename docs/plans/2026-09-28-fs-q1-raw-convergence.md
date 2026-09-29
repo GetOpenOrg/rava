@@ -46,7 +46,7 @@
 - `_build_call` 的 caller-sensitive 包装（`reflect_dispatch::__caller_sensitive`）需节点化，保持调用处
   类名传入语义。
 
-## 五、进度（2026-09-28）
+## 五、进度（2026-09-28 / 29）
 
 | 提交 | 内容 | 验收 |
 |---|---|---|
@@ -61,6 +61,7 @@
 | `6f8396d` | iinc（AssignStmt）、athrow（ReturnStmt Err） | 4 例逐字节一致 |
 | `ffafad2` | 算术 wrapping 族；let 省略标注改为白名单判定 | 4 例逐字节一致 |
 | `43ec8e7` | `_coerce_value` 节点版（构造后与字符串实现比对、不一致回落 Raw）；实参文本叶子不再以 Var 承载复合文本 | 4 例逐字节一致 |
+| `99fe24a` | 基本块汇合赋值 AssignStmt（`_merged = v;`） | 4 例逐字节一致；raw_stmt 7.8K → 6.2K |
 
 编译验证（逐批串行）：TestArrayList / TestCustomException / TestEnumAdvanced / TestEnumBasic /
 TestStreamBasic / TestHashMapOps / TestFieldEvalOrder / TestStringBuilder / TestStringBuilderOps 全 PASS。

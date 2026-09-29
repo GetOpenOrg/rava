@@ -85,7 +85,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
 | FS-M1 | 可读层的禁用调用还没清零：`from_any` 残余、`Into::<I>::into` 约 1.7 万处、闭包 `Rc::new`；translation-reference §16.3 状态表过期 | 全部为 0 | 仅架构（可读性） | A-2 / A-4 |
-| FS-M2 | 接口载体化按名单铺设（Spliterator 族暂缓）；`signature_erased_interfaces.txt` 让 CharSequence 仍擦成 Object；`carrier_type_positions.txt` 按名单决定载体类型位置 | 名单置 None，删除 `carrier_type_positions.txt` / `signature_erased_interfaces.txt` 两个文件（清单整合时决定不迁移进 TOML，随 T-2 收尾直接删） | 仅架构 | A-4 / T-2 |
+| FS-M2 | 接口载体化按名单铺设（Spliterator 族暂缓）；`signature_erased_interfaces.txt` 让 CharSequence 仍擦成 Object；`carrier_type_positions.txt` 按名单决定载体类型位置 | 名单置 None，删除 `carrier_type_positions.txt` / `signature_erased_interfaces.txt` 两个文件（清单整合时决定不迁移进 TOML，随 T-2 收尾直接删） | 仅架构 | A-4 / T-2（2026-09-29：T-2 推进中——7a / 7b / 标记接口 / 7d 兼容部分 ✅，见 `2026-09-28-t2-interface-carriers.md`） |
 | FS-M3 | 抽象类、枚举、手写类没有 `__interface` | 全部由宏生成 | 接口查询抛 AbstractMethodError | A-6 |
 | FS-M4 | 原生值盒进 Object，`is_instance_of` 只认精确包装类；`JvmRef` 是 Arch-1 之前的过渡物 | 只保留翻译出的包装类对象，删除 JvmRef | 原生盒 `instanceof Number / Comparable` 为 false；不走 IntegerCache | S-3 / T-4（instanceof 缺口新立）（2026-09-28 核对：装箱 instanceof 缺口 ✅ `ebbf6f8`，TestBoxInstanceof PASS；原生值主体随 T-4 待办） |
 | ~~FS-M5~~ ✅ `b443134` | identity hash 取实例地址截断成 i32 | 31 位非负伪随机 hash（HotSpot 语义） | `hashCode()` 可能为负；低位恒为 0，分布差 | 新立 |
@@ -186,7 +186,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| FS-Q1 | RawExpr/RawStmt 逃生舱：静态构造点 193 处 | 0，全部类型化 IR | 仅架构 | P2 IR 结构化收敛 |
+| FS-Q1 | RawExpr/RawStmt 逃生舱：静态构造点 193 处 | 0，全部类型化 IR | 仅架构 | P2 IR 结构化收敛（2026-09-29：Q1-a..d ✅、Q1-e 十余批，单测试 raw 102.6K → 23.4K，见 `2026-09-28-fs-q1-raw-convergence.md`） |
 | FS-Q2 | Python 侧 JVM→Rust 类型映射 | 宏自行决策 | 仅架构 | M-3 |
 | FS-Q3 | 泛型 bounds 由 Python 计算 | 进宏 | 仅架构 | T-1 |
 | FS-Q4 | 方法级类型变量擦成上界或 Object；turbofish 推断失败以 Object 兜底（违反命名原则 3） | 生成 Rust 泛型参数 | 仅架构 | N4 G2；2026-09-28 G2 查询面就绪（`from_rust_type(tparams=)` → TypeVar，coerce / `_coerce_arg` 已迁），发射侧生成 Rust 泛型参数仍待做 |
