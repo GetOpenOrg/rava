@@ -1,0 +1,15 @@
+stdout=out1|out2|
+stderr=err1|
+exit=3
+exitValue=3 alive=false
+merged=a|b|c|
+errAfterMerge=-1
+exit2=0
+v=hello-env| exit3=0
+pwd=/| exit4=0
+got:line-one|got:line-two| exit5=0
+killed=137
+IOException: Cannot run program "rava-no-such-program-xyz": Exec failed, error: 2 (No such file or directory) 
+printf=a b;c| exit8=0
+inherited-line
+exit9=0

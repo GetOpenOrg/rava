@@ -1,8 +1,8 @@
 //! `java/lang/ProcessHandleImpl` 的 native 方法（与生成的 process_handle_impl.rs 共置）。
 //!
 //! 对标 HotSpot ProcessHandleImpl_unix.c / ProcessHandleImpl_linux.c：pid 查询、存活探测
-//! （kill(pid, 0)）、父进程（/proc/<pid>/stat 第 4 列）、信号终止。子进程等待与进程枚举
-//! 依赖进程派生（ProcessImpl.forkAndExec），随其一并实现，当前保持存根。
+//! （kill(pid, 0)）、父进程（/proc/<pid>/stat 第 4 列）、信号终止、子进程等待（waitpid /
+//! waitid）。进程枚举（getProcessPids0）与进程信息（Info.info0）保持存根。
 
 use crate::prelude::*;
 use super::process_handle_impl::ProcessHandleImpl;
@@ -12,6 +12,32 @@ fn proc_parent(pid: i64) -> Option<i64> {
     let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
     let rest = &stat[stat.rfind(')')? + 1..];
     rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// waitid(WNOWAIT)：观察子进程退出而不回收（ProcessHandle.onExit 对非本进程直接子进程的等待）。
+#[cfg(target_os = "linux")]
+fn wait_no_reap(pid: i64) -> Result<i32> {
+    // SAFETY: siginfo_t 全零为合法初值；waitid 只写入该结构
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    loop {
+        let r = unsafe {
+            libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT)
+        };
+        if r >= 0 {
+            break;
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            return Ok(0);
+        }
+    }
+    // SAFETY: waitid 成功后 si_code / si_status 有效
+    let (code, st) = unsafe { (info.si_code, info.si_status()) };
+    Ok(if code == libc::CLD_KILLED || code == libc::CLD_DUMPED { 0x80 + st } else { st })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wait_no_reap(_pid: i64) -> Result<i32> {
+    unreachable!("非 Linux 平台按回收等待")
 }
 
 impl ProcessHandleImpl {
@@ -48,6 +74,36 @@ impl ProcessHandleImpl {
             return Ok(unsafe { libc::getppid() } as i64);
         }
         Ok(proc_parent(pid).unwrap_or(-1))
+    }
+
+    /// native `waitForProcessExit0(long pid, boolean reap)`：阻塞等待子进程退出。
+    /// 正常退出返回退出码，被信号终止返回 `0x80 + 信号号`（shell 约定，JDK 同形）；
+    /// reap=false 时用 waitid(WNOWAIT) 只观察不回收。非本进程子进程（ECHILD）等错误返回 0。
+    #[jvm_native]
+    pub fn waitForProcessExit0(pid: i64, reap: bool) -> Result<i32> {
+        const SIGNAL_BASE: i32 = 0x80;
+        // waitid(WNOWAIT) 的 siginfo 访问器仅 Linux 可移植；其余平台按回收等待
+        if reap || !cfg!(target_os = "linux") {
+            let mut status = 0;
+            loop {
+                // SAFETY: 等待指定子进程，状态写入本地变量
+                if unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) } >= 0 {
+                    break;
+                }
+                if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    return Ok(0);
+                }
+            }
+            if libc::WIFEXITED(status) {
+                Ok(libc::WEXITSTATUS(status))
+            } else if libc::WIFSIGNALED(status) {
+                Ok(SIGNAL_BASE + libc::WTERMSIG(status))
+            } else {
+                Ok(status)
+            }
+        } else {
+            wait_no_reap(pid)
+        }
     }
 
     /// native `destroy0(long pid, long startTime, boolean forcibly)`：SIGKILL / SIGTERM；

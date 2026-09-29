@@ -1,68 +1,41 @@
 # 编译前缺口扫描（API 模式）
 
 - 入口包：java/lang, java/util（不含子包），261 个 public 类 / 3630 个 public·protected 方法
-- BFS 耗时 9.2 分钟
-- native-missing 49 个，boundary-stub 207 个
+- BFS 耗时 15.1 分钟
+- native-missing 23 个，boundary-stub 193 个
 
-## native-missing（49）
+## native-missing（23）
 
 | 类 | 成员 |
 |----|------|
 | `java/io/ObjectStreamClass` | `hasStaticInitializer:(Ljava/lang/Class;)Z` |
 | `java/lang/Class` | `getGenericSignature0:()Ljava/lang/String;` |
 | `java/lang/Class` | `getPermittedSubclasses0:()[Ljava/lang/Class;` |
-| `java/lang/Class` | `getProtectionDomain0:()Ljava/security/ProtectionDomain;` |
-| `java/lang/Class` | `getSigners:()[Ljava/lang/Object;` |
-| `java/lang/ProcessHandleImpl` | `destroy0:(JJZ)Z` |
-| `java/lang/ProcessHandleImpl` | `getCurrentPid0:()J` |
 | `java/lang/ProcessHandleImpl` | `getProcessPids0:(J[J[J[J)I` |
-| `java/lang/ProcessHandleImpl` | `initNative:()V` |
-| `java/lang/ProcessHandleImpl` | `isAlive0:(J)J` |
-| `java/lang/ProcessHandleImpl` | `parent0:(JJ)J` |
 | `java/lang/ProcessHandleImpl` | `waitForProcessExit0:(JZ)I` |
 | `java/lang/ProcessHandleImpl$Info` | `info0:(J)V` |
 | `java/lang/ProcessHandleImpl$Info` | `initIDs:()V` |
 | `java/lang/ProcessImpl` | `forkAndExec:(I[B[B[BI[BI[B[IZ)I` |
-| `java/lang/Runtime` | `freeMemory:()J` |
-| `java/lang/Runtime` | `gc:()V` |
-| `java/lang/Runtime` | `maxMemory:()J` |
-| `java/lang/Runtime` | `totalMemory:()J` |
 | `java/lang/StackStreamFactory` | `checkStackWalkModes:()Z` |
 | `java/lang/StackStreamFactory$AbstractStackWalker` | `callStackWalk:(JILjdk/internal/vm/ContinuationScope;Ljdk/internal/vm/Continuation;II[Ljava/lang/Object;)Ljava/lang/Object;` |
 | `java/lang/StackStreamFactory$AbstractStackWalker` | `fetchStackFrames:(JJII[Ljava/lang/Object;)I` |
 | `java/lang/StackStreamFactory$AbstractStackWalker` | `setContinuation:(J[Ljava/lang/Object;Ljdk/internal/vm/Continuation;)V` |
 | `java/lang/StackTraceElement` | `initStackTraceElement:(Ljava/lang/StackTraceElement;Ljava/lang/StackFrameInfo;)V` |
-| `java/lang/System` | `mapLibraryName:(Ljava/lang/String;)Ljava/lang/String;` |
-| `java/lang/System` | `setErr0:(Ljava/io/PrintStream;)V` |
-| `java/lang/System` | `setIn0:(Ljava/io/InputStream;)V` |
-| `java/lang/System` | `setOut0:(Ljava/io/PrintStream;)V` |
-| `java/lang/VirtualThread` | `registerNatives:()V` |
 | `java/lang/invoke/MethodHandleNatives` | `expand:(Ljava/lang/invoke/MemberName;)V` |
 | `java/lang/invoke/MethodHandleNatives` | `getMemberVMInfo:(Ljava/lang/invoke/MemberName;)Ljava/lang/Object;` |
 | `java/lang/invoke/MethodHandleNatives` | `getNamedCon:(I[Ljava/lang/Object;)I` |
-| `java/lang/ref/Finalizer` | `isFinalizationEnabled:()Z` |
-| `java/lang/ref/Finalizer` | `reportComplete:(Ljava/lang/Object;)V` |
-| `java/lang/reflect/Array` | `multiNewArray:(Ljava/lang/Class;[I)Ljava/lang/Object;` |
 | `java/net/NetworkInterface` | `getAll:()[Ljava/net/NetworkInterface;` |
 | `java/net/NetworkInterface` | `getMacAddr0:([BLjava/lang/String;I)[B` |
 | `java/net/NetworkInterface` | `init:()V` |
 | `java/net/NetworkInterface` | `isLoopback0:(Ljava/lang/String;I)Z` |
-| `java/util/zip/Inflater` | `end:(J)V` |
 | `java/util/zip/Inflater` | `inflateBufferBytes:(JJI[BII)J` |
-| `java/util/zip/Inflater` | `inflateBytesBytes:(J[BII[BII)J` |
-| `java/util/zip/Inflater` | `init:(Z)J` |
-| `java/util/zip/Inflater` | `initIDs:()V` |
-| `java/util/zip/Inflater` | `reset:(J)V` |
-| `jdk/internal/loader/BootLoader` | `getSystemPackageNames:()[Ljava/lang/String;` |
-| `jdk/internal/misc/CDS` | `logLambdaFormInvoker:(Ljava/lang/String;)V` |
 | `jdk/internal/reflect/NativeConstructorAccessorImpl` | `newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;` |
 | `jdk/internal/reflect/NativeMethodAccessorImpl` | `invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;` |
 
-## boundary-stub（207）
+## boundary-stub（193）
 
 | 类 | 成员 |
 |----|------|
-| `java/lang/Class$1` | `<init>:(Ljava/lang/Class;Ljava/lang/reflect/Constructor;)V` |
 | `java/lang/ClassLoader` | `<init>:()V` |
 | `java/lang/ClassLoader` | `<init>:(Ljava/lang/ClassLoader;)V` |
 | `java/lang/ClassLoader` | `<init>:(Ljava/lang/String;Ljava/lang/ClassLoader;)V` |
@@ -143,19 +116,6 @@
 | `jdk/internal/ref/CleanerImpl$PhantomCleanableRef` | `<init>:(Ljava/lang/Object;Ljava/lang/ref/Cleaner;Ljava/lang/Runnable;)V` |
 | `jdk/internal/ref/PhantomCleanable` | `<init>:()V` |
 | `jdk/internal/ref/PhantomCleanable` | `clean:()V` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([CI[CII)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([C[CI)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([DI[DII)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([D[DI)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([FI[FII)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([F[FI)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([II[III)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([JI[JII)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([J[JI)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([SI[SII)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([S[SI)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([ZI[ZII)I` |
-| `jdk/internal/util/ArraysSupport` | `mismatch:([Z[ZI)I` |
 | `jdk/internal/util/OperatingSystem` | `current:()Ljdk/internal/util/OperatingSystem;` |
 | `jdk/internal/util/OperatingSystem` | `isWindows:()Z` |
 | `jdk/internal/util/OperatingSystem` | `values:()[Ljdk/internal/util/OperatingSystem;` |
