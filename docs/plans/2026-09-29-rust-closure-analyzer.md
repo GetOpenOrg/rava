@@ -173,6 +173,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 |---|---|---|
 | C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 |
 | C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 |
+| C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） |
 | C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 |
@@ -196,6 +197,33 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 
 上限依据：trace Internal Boundary 模式（同样有边界截断，只用单程分析）为 174 类 / 388 方法；现行机制额外承担的 VM 初始化（`vm-upcalls` 根、System 初始化链、手写层回调）预留约 40% 余量。
 C1 完成后以实测替换这些上限，并写回本节（只允许下调）。
+
+### 7.1 C1 实测（2026-09-29，JDK 21，HelloWorld）
+
+| 指标 | Python 现状 | C1 实测 | 终态 | 状态 |
+|---|---:|---:|---:|---|
+| 总类 | 1854 | 255（type 55 / init 30 / alloc 15 / code 155） | ≤ 250 | 未达标 |
+| 翻译方法体类（translate ∩ code） | 1358 | 154 | ≤ 120 | 未达标 |
+| 入链方法 | 20851 | 883（bytecode 753 / 边界手写 97 / native 27 / root 6） | ≤ 1500 | 达标 |
+| 无 provenance 节点 | 不可观测 | 0 | 0 | 达标 |
+| 闭包耗时 | 数十秒 | ≈ 170 ms | ≤ 3s | 达标 |
+| missing / unresolved | — | 0 / 0 | 0 | 达标 |
+
+**动态对照**：`java -Xshare:off -Xlog:class+load` 中，HelloWorld 之后 JVM 加载了 90 个类，其中 84 个不在静态闭包内，已全部归因，翻译域没有漏边：
+
+| 类别 | 数量 | 归因 |
+|---|---:|---|
+| `java/lang/invoke` LambdaForm / BMH / ASM / `sun/invoke/util` / `ReferencedKey*` | 72 | JVM 的 indy 链接基础设施；rava 在分析层原生建模 indy（`[indy]` 清单段），不经 MH 链接 |
+| launcher 反射找 main（MainMethodFinder、PublicMethods、Class$ReflectionData 等） | 8 | 启动器路径，rava 的入口直接调 main |
+| CharBuffer / HeapCharBuffer / CoderResult / Readable | 4 | 边界类 `StreamEncoder` 由 `stream_encoder_impl.rs` 手写完成编码，不走 JDK CharsetEncoder |
+
+**未达标根因**：按方法粒度的 XTA 类型集不区分上下文。公共汇点（`String.valueOf(Object)`、`Helpers.objectToString`、
+`ConcurrentHashMap.putVal` / `hashCode`、`ImmutableCollections.probe`）的形参集合被所有调用方的实参并集污染，
+单个站点派发到 23–25 个目标（例：`println(String)` → `valueOf` → `ProtectionDomain.toString` → `Permissions`，
+`Thread.toString` → `Thread$Constants` → `ProtectionDomain`）。
+**对策（C1b）**：absint 的引用值携带来源（形参 i / 调用返回 / 字段 / new 精确类 / 数组 / catch），
+引擎按「形参级 + 返回值级」维护类型集，派发只看实参值来源集合的并集。
+这样得到方法内流敏感、方法间按形参区分的 VTA 精度。验收：上两项指标达标，动态对照翻译域漏覆盖仍为 0。
 
 ## 八、风险与对策
 

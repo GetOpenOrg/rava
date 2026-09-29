@@ -1,14 +1,12 @@
 [package]
-name = "driver"
+name = "closure"
 version.workspace = true
 edition.workspace = true
-
-[[bin]]
-name = "rava"
-path = "src/main.rs"
 
 [dependencies]
 classfile.workspace = true
 resolve.workspace = true
 serde_json.workspace = true
-closure.workspace = true
+indexmap.workspace = true
+toml.workspace = true
+syn.workspace = true

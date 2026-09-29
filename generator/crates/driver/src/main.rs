@@ -1,6 +1,8 @@
 //! rava：Rust 生成器入口。当前子命令：
 //! - `dump-classes`：按 golden 归一形态输出类解析结果（与 scripts/classfile_golden.py 对照）
+//! - `closure`：精确闭包分析（XTA + 抽象解释 + 手写层 syn 扫描），输出 closure.json / 溯源 / 报告
 
+mod closure_cmd;
 mod dump;
 
 use std::path::PathBuf;
@@ -8,7 +10,7 @@ use std::process::ExitCode;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "用法：\n  rava dump-classes [--jdk <主版本> | --java-home <路径>] [--module <jmod 名>] [--prefix <包前缀>]"
+        "用法：\n  rava dump-classes [--jdk <主版本> | --java-home <路径>] [--module <jmod 名>] [--prefix <包前缀>]\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>]"
     );
     ExitCode::from(2)
 }
@@ -38,6 +40,7 @@ fn main() -> ExitCode {
     let args = Args { rest: argv.collect() };
     let r = match cmd.as_str() {
         "dump-classes" => dump::run(&args),
+        "closure" => closure_cmd::run(&args),
         _ => return usage(),
     };
     match r {

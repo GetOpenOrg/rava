@@ -111,3 +111,34 @@ null_returns = [
 null_to_false = [
     "java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z",
 ]
+
+# ── VM 事实（闭包分析的常量条件，generator `rava closure` 读取）─────────────────────────
+# 手写层承载的方法在原生二进制中返回恒定值；分析器据此做常量传播与死分支剪枝（计划
+# docs/plans/2026-09-29-rust-closure-analyzer.md §3.2）。值：null / 整数 / true / false。
+# 准入：值由手写实现无条件给出（注明实现位置），与 JVM 缺省配置的可观测行为一致。
+# [vm_constants] null_returns 同为事实来源（分析器一并读取）。
+[facts.returns]
+# 断言恒关（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false；javac 的
+# `$assertionsDisabled = !desiredAssertionStatus()` 由此成为常量，assert 语句体整片不可达
+"java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = false
+"java/lang/Class.desiredAssertionStatus:()Z" = false
+
+# ── invokedynamic 引导方法分类（闭包分析，generator `rava closure` 读取）──────────────────
+# 生成器原生承载这些引导方法的链接语义，分析器不展开其 Java 体，按分类建模调用点：
+#   lambda  LambdaMetafactory：调用点产出实现 SAM 接口的合成类，SAM 调用分派到实现方法句柄
+#   concat  StringConcatFactory：动态实参按 String.valueOf 语义调用 toString
+#   native  其余原生承载的引导方法：只沿静态实参里的方法句柄入链
+# 未列出的引导方法按普通静态调用分析其 Java 体（安全方向）。
+[indy]
+lambda = [
+    "java/lang/invoke/LambdaMetafactory.metafactory",
+    "java/lang/invoke/LambdaMetafactory.altMetafactory",
+]
+concat = [
+    "java/lang/invoke/StringConcatFactory.makeConcatWithConstants",
+    "java/lang/invoke/StringConcatFactory.makeConcat",
+]
+native = [
+    "java/lang/runtime/SwitchBootstraps.typeSwitch",
+    "java/lang/runtime/ObjectMethods.bootstrap",
+]
