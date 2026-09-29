@@ -38,4 +38,12 @@ impl BootLoader {
             Err(_) => Ok(Default::default()),
         }
     }
+
+    /// native `getSystemPackageNames()`：boot 层已定义包名（Package.getPackages / ClassLoader
+    /// .getPackages 的 boot 部分）。单二进制无模块层包登记——空数组（BootLoader.packages()
+    /// 的其余部分由 Java 侧按已加载类补齐）。
+    #[jvm_native]
+    pub fn getSystemPackageNames() -> Result<JArray<String>> {
+        Ok(JArray::new(0))
+    }
 }

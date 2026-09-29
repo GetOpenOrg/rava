@@ -495,6 +495,19 @@ impl Class {
     }
 
 
+
+    /// native `getProtectionDomain0()`：原生二进制无代码源 / 类加载器保护域——null
+    /// （JDK 对 bootstrap 类同样返回 null，调用方回落 allPermDomain）。
+    #[jvm_native]
+    pub fn getProtectionDomain0(&self) -> Result<crate::java::security::ProtectionDomain> {
+        Ok(Default::default())
+    }
+
+    /// native `getSigners()`：无 jar 签名者——null（未签名类的 JDK 返回值）。
+    #[jvm_native]
+    pub fn getSigners(&self) -> Result<JArray<Object>> {
+        Ok(Default::default())
+    }
 }
 
 /// 描述符 → Class 对象（getDeclaredField 的 type 填充与 getComponentType 的

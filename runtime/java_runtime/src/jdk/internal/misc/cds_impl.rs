@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use super::cds::CDS;
 use crate::java::lang::Class;
+use crate::java::lang::String;
 
 // 内部边界类 jdk.internal.misc.CDS：按调用链按需实现，其余保持 panic 存根。
 
@@ -23,5 +24,12 @@ impl CDS {
     #[jvm_native]
     pub fn getRandomSeedForDumping() -> Result<i64> {
         Ok(0)
+    }
+
+    /// native `logLambdaFormInvoker(String)`：CDS 归档转储时记录 LambdaForm 调用器（-Xshare:dump
+    /// 专用）；原生二进制无 CDS 归档——no-op。
+    #[jvm_native]
+    pub fn logLambdaFormInvoker(_line: String) -> Result<()> {
+        Ok(())
     }
 }

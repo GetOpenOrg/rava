@@ -71,4 +71,19 @@ impl VM {
     pub fn isSystemDomainLoader(_loader: crate::java::lang::ClassLoader) -> Result<bool> {
         Ok(true)
     }
+
+    /// native `getNanoTimeAdjustment(long offsetInSeconds)`（Instant.now / Clock.systemUTC 的时基）：
+    /// 当前 CLOCK_REALTIME 相对 offset 的纳秒差；秒差超出 ±2^32 返回 -1（HotSpot
+    /// JVM_GetNanoTimeAdjustment 同阈值，调用方据此重取 offset）。
+    #[jvm_native]
+    pub fn getNanoTimeAdjustment(offset_in_seconds: i64) -> Result<i64> {
+        const MAX_DIFF: i64 = 0x1_0000_0000;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let diff = now.as_secs() as i64 - offset_in_seconds;
+        if diff >= MAX_DIFF || diff <= -MAX_DIFF {
+            return Ok(-1);
+        }
+        Ok(diff * 1_000_000_000 + now.subsec_nanos() as i64)
+    }
 }

@@ -58,4 +58,51 @@ impl Array {
             None => Err(JvmError::illegal_argument("Argument is not an array")),
         }
     }
+
+    /// native `multiNewArray(Class componentType, int[] dimensions)`：多维数组（JVMS multianewarray
+    /// 语义）。componentType 为最内层元素类型；外层逐维建 `[..[L<component>;` 标签的引用数组，
+    /// 最内一维按 newArray 建元素数组（基本类型载体或带组件标签的引用数组）。
+    /// 维度为空 / 超过 255 → IllegalArgumentException，任一维为负 → NegativeArraySizeException。
+    #[jvm_native]
+    pub fn multiNewArray(componentType: Class, dimensions: JArray<i32>) -> Result<Object> {
+        if Object::from(Clone::clone(&componentType)).0.is_jvm_null() || dimensions.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let n = dimensions.len()?;
+        if n == 0 || n > 255 {
+            return Err(JvmError::illegal_argument("Wrong number of dimensions"));
+        }
+        let mut dims = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let d = dimensions.get(i)?;
+            if d < 0 {
+                return Err(JvmError::negative_array_size(d));
+            }
+            dims.push(d);
+        }
+        Self::__multi_new(&componentType, &dims)
+    }
+
+    fn __multi_new(component: &Class, dims: &[i32]) -> Result<Object> {
+        if dims.len() == 1 {
+            return Self::newArray(Clone::clone(component), dims[0]);
+        }
+        // 外层元素类型描述符：(dims.len()-1) 层 '[' + 最内层组件描述符
+        let inner = format!("{}", component.__get_name()).replace('.', "/");
+        let leaf = if component.isPrimitive()? {
+            match inner.as_str() {
+                "int" => "I", "long" => "J", "short" => "S", "byte" => "B", "char" => "C",
+                "float" => "F", "double" => "D", "boolean" => "Z",
+                _ => return Err(JvmError::illegal_argument("")),
+            }.to_owned()
+        } else {
+            format!("L{};", inner)
+        };
+        let elem_tag = format!("{}{}", "[".repeat(dims.len() - 1), leaf);
+        let outer = JArray::<Object>::__new_component_tagged(dims[0], &elem_tag);
+        for i in 0..dims[0] {
+            outer.set(i, Self::__multi_new(component, &dims[1..])?)?;
+        }
+        Ok(Object::from(outer))
+    }
 }

@@ -182,6 +182,17 @@ impl System {
         }
         Ok(STDERR.with(Clone::clone))
     }
+
+    /// native `mapLibraryName(String)`：平台本地库文件名（Linux `lib<name>.so`，
+    /// macOS `lib<name>.dylib`）；null → NPE（JDK 同）。
+    #[jvm_native]
+    pub fn mapLibraryName(libname: String) -> Result<String> {
+        if libname.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let suffix = if cfg!(target_os = "macos") { "dylib" } else { "so" };
+        Ok(String::from_owned(format!("lib{}.{}", libname, suffix)))
+    }
 }
 
 /// VM 快照属性子集（initPhase1 对应物）：键集 = 库代码在类初始化/常规路径

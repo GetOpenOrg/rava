@@ -128,4 +128,10 @@ impl VirtualThread {
         crate::monitor::unpark(Object::from(Clone::clone(self)).0.__identity() as usize);
         Ok(())
     }
+
+    /// native `registerNatives()`：JNI 注册（notifyJvmti* 等 JVMTI 通知）；无 JVMTI——no-op。
+    #[jvm_native]
+    pub fn registerNatives() -> Result<()> {
+        Ok(())
+    }
 }
