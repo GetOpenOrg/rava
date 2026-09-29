@@ -188,11 +188,13 @@ def _lookup_method_sig_params(
                     # 描述符擦除头与形参头同一（erasure binary 相等 ⇔ 旧短名相等）
                     _same_head = (_frt_s1(_desc_rust, registry).erasure()
                                   == _frt_s1(t, registry).erasure())
-                    # receiver_is_this（接口 default 方法体内 this.xxx）：发射侧
-                    # （virtual_in 语境的存根）按描述符擦除，调用侧不得按接收者
-                    # 实参映射发射载体——否则与存根签名发散
+                    # receiver_is_this 且声明者是接口（接口 default 方法体内 this.xxx）：发射侧
+                    # （virtual_in 语境的存根）按描述符擦除，调用侧不得按接收者实参映射发射载体——
+                    # 否则与存根签名发散。声明者是类（SpinedBuffer$OfLong 内 this.forEach 落到
+                    # OfPrimitive.forEach(T_CONS)）时定义侧按代入签名发射载体（forEach_obj(LongConsumer)），
+                    # 调用侧须同样代入（T-2 7c）
                     if ((_carrier_keep(t, registry) == t and _ri in subst_pos
-                            and not receiver_is_this)
+                            and not (receiver_is_this and ci.is_interface))
                             or _same_head):
                         final_resolved.append(t)
                     else:
