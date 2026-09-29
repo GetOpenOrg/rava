@@ -1,0 +1,20 @@
+# rava 生成器 workspace（Rust 实现；计划见 docs/plans/2026-09-20-rust-generator-rewrite.md、
+# docs/plans/2026-09-29-rust-closure-analyzer.md）
+[workspace]
+resolver = "2"
+members = ["crates/classfile", "crates/resolve", "crates/driver"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+classfile = { path = "crates/classfile" }
+resolve = { path = "crates/resolve" }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+indexmap = "2"
+
+[profile.release]
+debug = 1

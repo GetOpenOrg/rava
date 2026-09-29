@@ -1,0 +1,7 @@
+[package]
+name = "classfile"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zip.workspace = true
