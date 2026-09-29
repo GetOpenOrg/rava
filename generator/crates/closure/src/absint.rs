@@ -91,7 +91,7 @@ impl V {
     }
 
     /// 引用值的来源集合（Null 无来源）
-    fn srcs(&self) -> Srcs {
+    pub fn srcs(&self) -> Srcs {
         match self {
             V::Ref { src, .. } => src.clone(),
             V::Str(_) => src1(Src::Str),
@@ -200,12 +200,13 @@ pub enum Event {
     Invoke { opcode: u8, mref: MemberRef, iface: bool, args: Vec<V> },
     Indy { bsm: u16, name: String, desc: String, args: Vec<V> },
     New(String),
-    /// 数组分配（数组类型描述符）
-    NewArray(String),
+    /// 数组分配（数组类型描述符；长度恒为 0）
+    NewArray(String, bool),
     /// 字段访问；`recv` 为实例字段的接收者（static 为 None），`value` 为写入值
     Field { opcode: u8, mref: MemberRef, recv: Option<V>, value: Option<V> },
     Ldc(Const),
-    CheckCast(String),
+    /// 引用类型转换；非数组目标带输入值（结果以本偏移为来源，引擎按目标类型收窄）
+    CheckCast(String, Option<V>),
     InstanceOf(String),
     ArrayLoad { array: V, index: V },
     ArrayStore { array: V, index: V, value: V },
@@ -763,7 +764,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 self.ev(off, Event::New(c.clone()));
             }
             op::NEWARRAY | op::ANEWARRAY => {
-                pop(s)?;
+                let empty = pop(s)? == V::Int(0);
                 let ty = match &ins.operand {
                     Operand::NewArray(t) => {
                         let c = b"ZCFDBSIJ".get((*t as usize).wrapping_sub(4)).ok_or(())?;
@@ -774,7 +775,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     _ => return Err(()),
                 };
                 s.stack.push(site_ref(&ty, true, off));
-                self.ev(off, Event::NewArray(ty));
+                self.ev(off, Event::NewArray(ty, empty));
             }
             0xbe => {
                 pop(s)?;
@@ -788,15 +789,18 @@ impl<'a, O: Oracle> Interp<'a, O> {
             op::CHECKCAST => {
                 let Operand::Class(c) = &ins.operand else { return Err(()) };
                 let v = pop(s)?;
-                let out = match v {
-                    V::Null => V::Null,
-                    V::Str(_) | V::Class(_) => v,
-                    V::Ref { nonnull, src, .. } => V::Ref { ty: Some(Rc::from(c.as_str())), nonnull, src },
+                let (out, input) = match v {
+                    V::Null => (V::Null, None),
+                    V::Str(_) | V::Class(_) => (v, None),
+                    // 数组目标：来源不变（数组类型不参与收窄）
+                    V::Ref { nonnull, src, .. } if c.starts_with('[') => (V::Ref { ty: Some(Rc::from(c.as_str())), nonnull, src }, None),
+                    // 类目标：结果以本偏移为来源，跨汇合点仍保留按来源的收窄
+                    V::Ref { nonnull, .. } => (V::Ref { ty: Some(Rc::from(c.as_str())), nonnull, src: src1(Src::Site(off)) }, Some(v)),
                     // 未知值（保守）：来源仍未知
-                    other => other,
+                    other => (other, None),
                 };
                 s.stack.push(out);
-                self.ev(off, Event::CheckCast(c.clone()));
+                self.ev(off, Event::CheckCast(c.clone(), input));
             }
             op::INSTANCEOF => {
                 let Operand::Class(c) = &ins.operand else { return Err(()) };
@@ -809,7 +813,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let Operand::MultiANewArray(c, dims) = &ins.operand else { return Err(()) };
                 popn(s, *dims as usize)?;
                 s.stack.push(site_ref(c, true, off));
-                self.ev(off, Event::NewArray(c.clone()));
+                self.ev(off, Event::NewArray(c.clone(), false));
             }
             op::IFNULL | op::IFNONNULL => {
                 let a = pop(s)?;
@@ -863,10 +867,10 @@ fn conservative(code: &Code) -> Analysis {
                 Some(Event::Field { opcode: o, mref: f.clone(), recv, value: None })
             }
             (Operand::Class(c), op::NEW) => Some(Event::New(c.clone())),
-            (Operand::Class(c), op::ANEWARRAY) => Some(Event::NewArray(format!("[L{c};"))),
-            (Operand::Class(c), op::CHECKCAST) => Some(Event::CheckCast(c.clone())),
+            (Operand::Class(c), op::ANEWARRAY) => Some(Event::NewArray(format!("[L{c};"), false)),
+            (Operand::Class(c), op::CHECKCAST) => Some(Event::CheckCast(c.clone(), None)),
             (Operand::Class(c), op::INSTANCEOF) => Some(Event::InstanceOf(c.clone())),
-            (Operand::MultiANewArray(c, _), _) => Some(Event::NewArray(c.clone())),
+            (Operand::MultiANewArray(c, _), _) => Some(Event::NewArray(c.clone(), false)),
             (Operand::Ldc(c), _) => Some(Event::Ldc(c.clone())),
             (_, 0x32) => Some(Event::ArrayLoad { array: V::Top, index: V::Top }),
             (_, 0x53) => Some(Event::ArrayStore { array: V::Top, index: V::Top, value: V::Top }),

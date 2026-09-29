@@ -769,11 +769,16 @@ pub struct Engine<'a> {
     lambdas: HashMap<u32, Lambda>,
     /// 数组分配点（抽象对象 id）→ 数组类型 id
     arrays: HashMap<u32, u32>,
+    /// 长度恒为 0 的数组分配点：任何元素读写都抛异常，元素节点不接收值；
+    /// 值按元素节点暂存，分配点长度不再恒为 0 时补回
+    empty_arrays: HashMap<u32, HashMap<Node, TypeSet>>,
     /// 容器抽象对象 id → 类型 id；分配点链（`@方法:偏移#…`，堆上下文）
     pub objs: HashMap<u32, u32>,
     obj_chain: HashMap<u32, Rc<str>>,
     /// 容器形态判定缓存（类型 id）
     containers: HashMap<u32, bool>,
+    /// 新鲜工厂方法判定缓存（按成员）
+    factories: HashMap<MemberRef, bool>,
     pub inited: IndexMap<String, Via>,
 
     flows: HashMap<Node, Vec<(Node, u32)>>,
@@ -858,9 +863,11 @@ impl<'a> Engine<'a> {
             g: BTreeSet::new(),
             lambdas: HashMap::default(),
             arrays: HashMap::default(),
+            empty_arrays: HashMap::default(),
             objs: HashMap::default(),
             obj_chain: HashMap::default(),
             containers: HashMap::default(),
+            factories: HashMap::default(),
             inited: IndexMap::new(),
             flows: HashMap::default(),
             flow_seen: HashSet::default(),
@@ -943,7 +950,15 @@ impl<'a> Engine<'a> {
         for &o in &s.open {
             if self.sub(o, t) {
                 out.open.insert(o);
-            } else if self.sub(t, o) || self.is_iface(o) || self.is_iface(t) {
+            } else if self.sub(t, o) {
+                out.open.insert(t);
+            } else if !self.is_iface(o) && self.is_iface(t) {
+                // 类 × 接口：交集是「o 的子类中实现 t 者」。保留 open(o)——展开时按接收者类型再求交；
+                // final 类没有子类，不实现 t 即为空
+                if !self.h.class(&self.names[o as usize]).is_some_and(|c| c.access & 0x0010 != 0) {
+                    out.open.insert(o);
+                }
+            } else if self.is_iface(o) {
                 out.open.insert(t);
             }
         }
@@ -1027,15 +1042,21 @@ impl<'a> Engine<'a> {
     // ── 实例化 / 初始化 ────────────────────────────────────────────────────
 
     /// 数组分配点：独立的抽象对象（元素节点 `E(id)`），类型为数组类型
-    fn array_site(&mut self, m: usize, off: u32, t: &str, via: Via) -> u32 {
+    fn array_site(&mut self, m: usize, off: u32, t: &str, empty: bool, via: Via) -> u32 {
         let name = format!("{t}@{m}:{off}");
         if let Some(&id) = self.ids.get(name.as_str()) {
+            if !empty {
+                self.array_sized(id);
+            }
             return id;
         }
         self.touch(t, Level::Type, via);
         let tid = self.id(t);
         let id = self.id(&name);
         self.arrays.insert(id, tid);
+        if empty {
+            self.empty_arrays.insert(id, HashMap::default());
+        }
         // 多维数组的内层数组来自同一条指令：按 open(分量类型) 处理
         if let Some(c) = absint::component(t) {
             if c.starts_with('[') {
@@ -1055,6 +1076,17 @@ impl<'a> Engine<'a> {
             self.on_g_grow(id);
         }
         id
+    }
+
+    /// 数组分配点出现非 0 长度：不再按空数组处理，补回暂存的元素值
+    fn array_sized(&mut self, id: u32) {
+        if let Some(held) = self.empty_arrays.remove(&id) {
+            let mut v: Vec<(Node, TypeSet)> = held.into_iter().collect();
+            v.sort_by_key(|(n, _)| format!("{n:?}"));
+            for (n, s) in v {
+                self.add_to(n, &s);
+            }
+        }
     }
 
     fn instantiate(&mut self, cls: &str, via: Via) {
@@ -1104,15 +1136,36 @@ impl<'a> Engine<'a> {
         if !generic {
             return false;
         }
+        // 泛型类链中持有函数式接口字段的对象（流水线的 sink 链、捕获 lambda / 局部值的匿名类）：
+        // 字段值决定其方法把元素交给谁，按对象分开才能让各条流水线的元素互不汇合
         for cf in &chain {
             for f in inst(cf) {
                 let Some(c) = f.desc.strip_prefix('L').and_then(|d| d.strip_suffix(';')) else { continue };
-                if !self.h.is_interface(c) && self.container(c) {
+                if if self.h.is_interface(c) { self.functional(c) } else { self.container(c) } {
                     return true;
                 }
             }
         }
         false
+    }
+
+    /// 函数式接口（JLS §9.8）：自身与超接口合计恰有一个抽象方法（不计 `Object` 的公开方法；被默认方法覆盖的不计）
+    fn functional(&self, iface: &str) -> bool {
+        let Some(cf) = self.h.class(iface) else { return false };
+        let mut all = self.h.all_superinterfaces(&cf);
+        all.push(cf);
+        let obj = self.h.class(OBJECT);
+        let mut abs = HashSet::<(&str, &str)>::default();
+        let mut dflt = HashSet::<(&str, &str)>::default();
+        for i in &all {
+            for m in i.methods.iter().filter(|m| !m.is_static() && !m.is_private()) {
+                if obj.as_ref().is_some_and(|o| o.method(&m.name, &m.desc).is_some_and(|om| om.access & 0x0001 != 0)) {
+                    continue;
+                }
+                if m.is_abstract() { abs.insert((&m.name, &m.desc)) } else { dflt.insert((&m.name, &m.desc)) };
+            }
+        }
+        abs.iter().filter(|k| !dflt.contains(*k)).count() == 1
     }
 
     /// 方法 m 偏移 off 处分配的容器抽象对象：分配点 + 堆上下文（分配方法的接收者对象的分配点链，截断到 HEAP_DEPTH）
@@ -1138,6 +1191,78 @@ impl<'a> Engine<'a> {
         self.objs.insert(id, tid);
         self.obj_chain.insert(id, Rc::from(chain));
         id
+    }
+
+    /// 调用点上下文：以调用点命名的堆上下文（不是对象，不进入值集），克隆体内的容器分配以它为链首
+    fn site_ctx(&mut self, m: usize, off: u32) -> u32 {
+        let chain = format!("@{}:{off}", self.mbase[&self.methods[m].key]);
+        if let Some(&id) = self.ids.get(chain.as_str()) {
+            return id;
+        }
+        let id = self.id(&chain);
+        self.obj_chain.insert(id, Rc::from(chain));
+        id
+    }
+
+    /// 新鲜工厂：有引用形参的静态字节码方法，返回值来自本方法分配的容器对象 / 引用数组，或来自另一个新鲜工厂
+    fn fresh_factory(&mut self, key: &MemberRef) -> bool {
+        if let Some(&r) = self.factories.get(key) {
+            return r;
+        }
+        // 递归保护：成环部分取最小不动点
+        self.factories.insert(key.clone(), false);
+        let r = self.fresh_factory_uncached(key);
+        self.factories.insert(key.clone(), r);
+        r
+    }
+
+    fn fresh_factory_uncached(&mut self, key: &MemberRef) -> bool {
+        let Some(cf) = self.h.class(&key.owner) else { return false };
+        let Some(meth) = cf.method(&key.name, &key.desc) else { return false };
+        if !meth.is_static() || self.kind_of(&cf, meth) != Kind::Bytecode {
+            return false;
+        }
+        if !parse_method(&key.desc).is_some_and(|md| md.params.iter().any(|p| p.is_reference())) {
+            return false;
+        }
+        let Some(code) = meth.code.as_ref() else { return false };
+        let live = |_: &str| true;
+        let a = absint::analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![] });
+        if a.conservative {
+            return false;
+        }
+        let sites: BTreeSet<u32> = a
+            .events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::Return(v @ V::Ref { .. }) => Some(v.srcs()),
+                _ => None,
+            })
+            .flat_map(|ss| ss.iter().filter_map(|s| if let &Src::Site(o) = s { Some(o) } else { None }).collect::<Vec<_>>())
+            .collect();
+        for (off, e) in &a.events {
+            if !sites.contains(off) {
+                continue;
+            }
+            let fresh = match e {
+                Event::New(c) => self.container(c),
+                Event::NewArray(t, _) => t.starts_with("[L") || t.starts_with("[["),
+                Event::Invoke { opcode: classfile::insn::op::INVOKESTATIC, mref, iface, .. } => {
+                    match self.h.resolve_method(&mref.owner, &mref.name, &mref.desc, *iface) {
+                        Some(site) => {
+                            let (o, n, d) = site.key();
+                            self.fresh_factory(&MemberRef { owner: o, name: n, desc: d })
+                        }
+                        None => false,
+                    }
+                }
+                _ => false,
+            };
+            if fresh {
+                return true;
+            }
+        }
+        false
     }
 
     /// 接收者对应的克隆上下文
@@ -1290,6 +1415,12 @@ impl<'a> Engine<'a> {
     fn add_to(&mut self, n: Node, s: &TypeSet) {
         if s.is_empty() {
             return;
+        }
+        if let Node::E(x, _) = n {
+            if let Some(held) = self.empty_arrays.get_mut(&x) {
+                held.entry(n).or_default().add_all(s);
+                return;
+            }
         }
         let cur = self.sets.entry(n).or_default();
         let delta = TypeSet {
@@ -1627,13 +1758,19 @@ impl<'a> Engine<'a> {
                     let id = if self.container(c) { self.obj_at(m, off, c) } else { self.id(c) };
                     self.add_to(Node::S(m, off), &TypeSet::exact(id));
                 }
-                Event::NewArray(t) => {
-                    let id = self.array_site(m, off, t, via("newarray"));
+                Event::NewArray(t, empty) => {
+                    let id = self.array_site(m, off, t, *empty, via("newarray"));
                     self.add_to(Node::S(m, off), &TypeSet::exact(id));
                 }
                 Event::Ldc(c) => self.ldc(m, off, c),
-                Event::CheckCast(c) => {
+                Event::CheckCast(c, v) => {
                     self.touch(c, Level::Type, via("checkcast"));
+                    // 转换结果是独立来源：只收输入中 ⊂ 目标类型的部分（转换失败的值到不了后继）
+                    if let Some(v) = v {
+                        let cid = self.id(c);
+                        let fs = self.feeds(m, v, cid);
+                        self.feed(&fs, Node::S(m, off), cid);
+                    }
                 }
                 Event::InstanceOf(c) => {
                     self.touch(c, Level::Type, via("instanceof"));
@@ -1963,7 +2100,14 @@ impl<'a> Engine<'a> {
                 // 静态调用继承调用方的克隆上下文（容器方法里的静态辅助方法随容器对象分开）
                 self.init(&resolved.owner, via.clone());
                 // 只有返回引用的辅助方法随上下文克隆（返回值按容器对象分开）；返回基本类型 / void 的静态方法克隆收益可忽略，按本体共享
-                let ctx = if md.ret.as_ref().is_some_and(|r| r.is_reference()) { self.methods[m].ctx } else { NOCTX };
+                // 上下文无关的调用方调用新鲜工厂（返回本方法新分配的容器 / 引用数组）：按调用点克隆，
+                // 否则各调用点的实参元素经同一个返回对象汇合（`Arrays.copyOf` 的副本数组）
+                let caller_ctx = self.methods[m].ctx;
+                let ctx = match caller_ctx {
+                    _ if !md.ret.as_ref().is_some_and(|r| r.is_reference()) => NOCTX,
+                    NOCTX if self.fresh_factory(&resolved) => self.site_ctx(m, off),
+                    c => c,
+                };
                 let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &a, ret, res);
             }
@@ -2082,8 +2226,10 @@ impl<'a> Engine<'a> {
         }
         if let (Some(rt), Some(res)) = (ret, res) {
             if self.man.returns_receiver(&self.methods[t].key.to_string()) {
-                // 浅拷贝：返回值 = 接收者本身的类型集（数组共享元素节点）
-                self.flow(Node::P(t, 0), res, rt);
+                // 浅拷贝：返回值 = 本调用点的接收者类型集（数组共享元素节点；逐调用点，不经被调方形参汇合）
+                if let Some(fs) = &recv_fs {
+                    self.feed(fs, res, rt);
+                }
             } else if let Some(ps) = self.passthrough(t) {
                 // 透传方法：结果 = 本调用点对应实参（逐调用点，不经 R 汇合）
                 for i in ps {
@@ -2648,14 +2794,22 @@ impl<'a> Engine<'a> {
     }
 
     /// 手写体效果：分配 / 构造 / 回调。实参按手写体调用点的语法推断精确接入，推断不出的经方法 m 的值池流转
+    /// 手写体第 k 个分配点的值：容器类取抽象对象（伪偏移自 u32::MAX 递减，不与字节码偏移相撞），其余取类本身。
+    /// 手写分配若只取类本身，其字段写入落到 U(f) 并流向该类全部对象，污染所有同类容器
+    fn hw_obj(&mut self, m: usize, k: &mut u32, cls: &str) -> u32 {
+        *k += 1;
+        if self.container(cls) { self.obj_at(m, u32::MAX - *k, cls) } else { self.id(cls) }
+    }
+
     fn apply_hw(&mut self, m: usize, host: &str, mh: &MemberHw, via: &Via) {
         let prod = Node::S(m, PROD);
         self.hw_fields(m, host, &mh.fields);
+        let mut k = 0u32;
         for t in &mh.allocs {
             if let Some(c) = self.resolve_tref(host, t) {
                 self.instantiate(&c, via.clone());
                 self.init(&c, via.clone());
-                let id = self.id(&c);
+                let id = self.hw_obj(m, &mut k, &c);
                 self.add_to(prod, &TypeSet::exact(id));
             }
         }
@@ -2673,7 +2827,7 @@ impl<'a> Engine<'a> {
             }
             self.instantiate(&c, via.clone());
             self.init(&c, via.clone());
-            let id = self.id(&c);
+            let id = self.hw_obj(m, &mut k, &c);
             self.add_to(prod, &TypeSet::exact(id));
             for d in inits {
                 let n = parse_method(&d).map_or(0, |md| md.params.len());
@@ -2689,25 +2843,26 @@ impl<'a> Engine<'a> {
                     let f = f.clone();
                     self.field(m, 0, classfile::op::GETSTATIC, &f, None, None, prod);
                 }
-                Upcall::Method(k) => {
-                    let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, self.h.is_interface(&k.owner)) else {
-                        self.unresolved.insert(k.to_string());
+                Upcall::Method(u) => {
+                    let Some(site) = self.h.resolve_method(&u.owner, &u.name, &u.desc, self.h.is_interface(&u.owner)) else {
+                        self.unresolved.insert(u.to_string());
                         continue;
                     };
-                    let n = parse_method(&k.desc).map_or(0, |md| md.params.len());
-                    let sites = Self::hw_sites(mh, |x| member_matches(&x.name, &k.name), &k.name, n);
-                    let a = self.hw_args(m, host, &k.desc, &sites);
-                    let ret = parse_method(&k.desc).and_then(|d| d.ret).and_then(|r| self.ptype(&r));
+                    let n = parse_method(&u.desc).map_or(0, |md| md.params.len());
+                    let sites = Self::hw_sites(mh, |x| member_matches(&x.name, &u.name), &u.name, n);
+                    let a = self.hw_args(m, host, &u.desc, &sites);
+                    let ret = parse_method(&u.desc).and_then(|d| d.ret).and_then(|r| self.ptype(&r));
                     let (o, nm, d) = site.key();
                     let resolved = MemberRef { owner: o, name: nm, desc: d };
                     let rm = site.method();
-                    let owner = self.id(&k.owner);
-                    if k.name == "<init>" {
-                        self.instantiate(&k.owner, via.clone());
-                        self.init(&k.owner, via.clone());
-                        self.add_to(prod, &TypeSet::exact(owner));
+                    let owner = self.id(&u.owner);
+                    if u.name == "<init>" {
+                        self.instantiate(&u.owner, via.clone());
+                        self.init(&u.owner, via.clone());
+                        let obj = self.hw_obj(m, &mut k, &u.owner);
+                        self.add_to(prod, &TypeSet::exact(obj));
                         let t = self.method(resolved, via.clone());
-                        self.edge(m, 0, t, Recv::Exact(owner), &a, None, None);
+                        self.edge(m, 0, t, Recv::Exact(obj), &a, None, None);
                         continue;
                     }
                     // 接收者：各方法调用点都推断出具体类型 → 精确；否则来自手写层的 open(引用类)
@@ -2840,7 +2995,144 @@ impl<'a> Engine<'a> {
             }
             return out;
         }
+        // 污染路径诊断：`@path:<节点子串>|<类名>`——从匹配节点沿流边反向，经含该类的节点走到源头（最短路径）
+        if let Some((np, cls)) = pat.strip_prefix("@path:").and_then(|v| v.split_once('|')) {
+            let (open, cls) = match cls.strip_prefix("open:") {
+                Some(c) => (true, c),
+                None => (false, cls),
+            };
+            let Some(&cid) = self.ids.get(cls) else { return vec![format!("无此类：{cls}")] };
+            let has = |x: &Node| self.sets.get(x).is_some_and(|s| if open { s.open.contains(&cid) } else { s.classes.contains(&cid) });
+            let mut rev: HashMap<Node, Vec<Node>> = HashMap::default();
+            for (src, edges) in &self.flows {
+                for (dst, _) in edges {
+                    rev.entry(*dst).or_default().push(*src);
+                }
+            }
+            let starts: Vec<Node> = self.sets.keys().filter(|n| has(n) && self.node_str(**n).contains(np)).copied().collect();
+            let mut prev: HashMap<Node, Option<Node>> = HashMap::default();
+            let mut q: VecDeque<Node> = VecDeque::new();
+            for n in starts.into_iter().take(1) {
+                prev.insert(n, None);
+                q.push_back(n);
+            }
+            let mut last = None;
+            while let Some(n) = q.pop_front() {
+                last = Some(n);
+                let mut ps: Vec<Node> = rev.get(&n).map(|v| v.iter().filter(|p| has(p) && !prev.contains_key(*p)).copied().collect()).unwrap_or_default();
+                ps.sort_by_key(|p| format!("{p:?}"));
+                for p in ps {
+                    prev.insert(p, Some(n));
+                    q.push_back(p);
+                }
+            }
+            // 最远的源头往回打印到起点
+            let mut cur = last;
+            while let Some(n) = cur {
+                let sz = self.sets.get(&n).map_or(0, |s| s.classes.len());
+                out.push(format!("  {} (|{sz}|)", self.node_str(n)));
+                cur = prev.get(&n).copied().flatten();
+            }
+            return out;
+        }
+        // open 统计诊断：`@openstat`——各 open 类型：含它的节点数、引入点数、按 G 展开的类数
+        if pat == "@openstat" {
+            let mut fed: HashSet<(Node, u32)> = HashSet::default();
+            for (src, edges) in &self.flows {
+                if let Some(ss) = self.sets.get(src) {
+                    for &o in &ss.open {
+                        for (dst, _) in edges {
+                            fed.insert((*dst, o));
+                        }
+                    }
+                }
+            }
+            let mut stat: HashMap<u32, (usize, Vec<String>)> = HashMap::default();
+            for (n, ss) in &self.sets {
+                for &o in &ss.open {
+                    let e = stat.entry(o).or_default();
+                    e.0 += 1;
+                    if !fed.contains(&(*n, o)) {
+                        e.1.push(self.node_str(*n));
+                    }
+                }
+            }
+            let g: Vec<u32> = self.g.iter().copied().collect();
+            let mut v: Vec<(usize, String)> = Vec::new();
+            for (o, (cnt, intro)) in stat {
+                let on = &self.names[o as usize];
+                let exp = g.iter().filter(|&&x| &*self.names[x as usize] == &**on || self.h.is_subtype(&self.names[x as usize], on)).count();
+                let mut intro = intro;
+                intro.sort();
+                let head: Vec<String> = intro.iter().take(4).map(|x| x.chars().take(140).collect()).collect();
+                v.push((exp * cnt, format!("  {} 节点 {cnt} 展开 {exp} 引入 {}：{}", self.names[o as usize], intro.len(), head.join(" ｜ "))));
+            }
+            v.sort_by(|a, b| b.0.cmp(&a.0));
+            return v.into_iter().take(40).map(|x| x.1).collect();
+        }
+        // open 源头诊断：`@opens:<类型>`——含 open(类型)、但没有任何含同一 open 的前驱的节点（open 的引入点）
+        if let Some(q) = pat.strip_prefix("@opens:") {
+            let Some(&cid) = self.ids.get(q) else { return vec![format!("无此类：{q}")] };
+            let has = |x: &Node| self.sets.get(x).is_some_and(|s| s.open.contains(&cid));
+            let mut fed: HashSet<Node> = HashSet::default();
+            for (src, edges) in &self.flows {
+                if has(src) {
+                    for (dst, _) in edges {
+                        fed.insert(*dst);
+                    }
+                }
+            }
+            let mut v: Vec<String> = self.sets.keys().filter(|n| has(n) && !fed.contains(*n)).map(|n| format!("  {}", self.node_str(*n))).collect();
+            v.sort();
+            return v;
+        }
+        // 方法节点序号诊断：`@m:<序号>`（数组分配点名里的方法序号）
+        if let Some(i) = pat.strip_prefix("@m:").and_then(|v| v.parse::<usize>().ok()) {
+            return vec![format!("  {i} = {}", self.ctx_label(i))];
+        }
+        // 调用方诊断：`@callers:<方法子串>`——列出 NOCTX 方法本体的全部调用点
+        if let Some(q) = pat.strip_prefix("@callers:") {
+            let mut v: Vec<String> = Vec::new();
+            for (&(m, off), ts) in &self.dispatch {
+                for &t in ts.iter() {
+                    if self.methods[t].ctx == NOCTX && self.method_label(t).contains(q) {
+                        v.push(format!("  {} ← {} @{off}", self.method_label(t), self.ctx_label(m)));
+                    }
+                }
+            }
+            v.sort();
+            return v;
+        }
+        // 汇合点诊断：值集 ≥ N 的节点中，由小值集（< N）来源直接汇入的类最多者（污染的起始汇点）
+        if let Some(n) = pat.strip_prefix("@merge:").and_then(|v| v.parse::<usize>().ok()) {
+            let size = |x: &Node| self.sets.get(x).map_or(0, |s| s.classes.len());
+            let mut inc: HashMap<Node, (IdSet, usize)> = HashMap::default();
+            for (src, edges) in &self.flows {
+                if size(src) >= n {
+                    continue;
+                }
+                for (dst, _) in edges {
+                    if size(dst) >= n {
+                        let e = inc.entry(*dst).or_default();
+                        e.1 += 1;
+                        if let Some(s) = self.sets.get(src) {
+                            for c in s.classes.iter() {
+                                e.0.insert(*c);
+                            }
+                        }
+                    }
+                }
+            }
+            let mut v: Vec<_> = inc.into_iter().collect();
+            v.sort_by_key(|(k, (c, _))| (std::cmp::Reverse(c.len()), format!("{k:?}")));
+            for (k, (c, k2)) in v.into_iter().take(40) {
+                out.push(format!("  {} 类 / {} 来源 → {} (|{}|)", c.len(), k2, self.node_str(k), size(&k)));
+            }
+            return out;
+        }
         if pat == "@array" {
+            let s = self.sets.get(&Node::Array).cloned().unwrap_or_default();
+            out.push(format!("  array = {{{}}}", self.set_str(&s)));
             for (src, edges) in &self.flows {
                 if edges.iter().any(|(d, _)| *d == Node::Array) {
                     let s = self.sets.get(src).cloned().unwrap_or_default();

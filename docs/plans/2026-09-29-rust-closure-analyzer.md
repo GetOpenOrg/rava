@@ -178,7 +178,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 | ✅ 已完成（679cd5d3） |
 | C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 | ✅ 已完成（41dc1d6d；手写层 syn 扫描随本阶段落地） |
 | C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 | ✅ 已完成（8596056b） |
-| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | 🔄 进行中：第 0 步 ✅ bfcb75d7、第 1 步 ✅ 32a789c6、第 2 步 ✅、第 3 步 ✅（CPA 实测否决，改为手写数组写入模型）、第 3b / 4 步 ⏳ |
+| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | 🔄 进行中：第 0 步 ✅ bfcb75d7、第 1 步 ✅ 32a789c6、第 2 步 ✅、第 3 步 ✅（CPA 实测否决，改为手写数组写入模型）、第 3b 步 ✅、第 4 步 ⏳ |
 | C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | ⏳ 未开始（2026-09-29 用户确认方向，C1c 之后实施） |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ⏳ 未开始（syn 解析手写层已在 C1 / C1c 第 0 步先行落地） |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 进行中（用户负责；folds v1 消费侧在 `claude/jolly-dijkstra-diftum`） |
@@ -470,13 +470,52 @@ C1b 引入的机制（全部通用，无类名特判）：
    - 基线再订正：HelloWorld 212 / 119 / 533 → 223 / 130 / 606，增量全部来自 gap 批次 4（BCP 47 语言标签放行翻译）：
      `Character` / `CharacterData*` 码点分表 10 类（`CharacterData.of(int)` 按码点选表，静态不可判定）与 `RandomSupport`。
 
-3b. ⏳ **流水线 / 捕获闭包对象敏感 + 类型测试折叠**（CollectorsDemo 的剩余膨胀）。
+3b. ✅ **流水线 / 捕获闭包对象敏感 + 类型收窄**（CollectorsDemo 的剩余膨胀）。
    - 根因二：`ReduceOps$3ReducingSink@makeSink` 只有一个抽象对象。`ReduceOps$3` 的捕获字段不是类型变量类型，
      不满足容器形态判定，`makeSink` 不按 `ReduceOp` 实例克隆；所有 spliterator 的 `forEachRemaining` / `tryAdvance`
      都喂给同一个 `accept`，流元素集膨胀到 1372 类。
-   - 方向：容器形态判定扩到「持有函数式接口 / 捕获值字段的流水线对象」（sink、`ReduceOp`、`Collector` 实现），
-     让其方法按接收者对象克隆；`instanceof` / `checkcast` 按接收者类型集折叠（类型集与测试类型不相交的分支标死）。
-   - `Collectors.duplicateKeyException` → `String.format` → `Formatter` / `java.time` / regex 是可行路径，不属膨胀。
+   - 已实施：
+     - **容器形态扩到函数式接口字段**：字段类型是函数式接口（JLS §9.8：去掉 `Object` 公有方法与被 default 覆盖者后恰一个抽象方法）
+       的类按容器处理——sink、`ReduceOp`、`Collector` 实现、捕获型匿名类的方法按接收者对象克隆。
+     - **新鲜工厂调用点上下文**：有引用形参、返回值来自本方法分配的容器 / 引用数组（或另一个新鲜工厂）的静态字节码方法，
+       在无上下文的调用方里按调用点克隆（`@方法:偏移` 作堆上下文链首，不进入值集），`Collectors.toList()` 等每个调用点各得一个对象。
+     - **`clone` 按调用点接回接收者**：`returns_receiver` 的方法在调用点把接收者来源直接接到结果，不经上下文无关的形参节点汇合。
+     - **零长数组**：常量长度 0 的 `newarray` / `anewarray` 分配点暂存元素写入；同一分配点出现非 0 长度时补回。
+     - **checkcast 成为独立来源**：类目标的 checkcast 结果以本偏移为来源，引擎按目标类型收窄输入；
+       原先转换类型只记在值的静态类型上，控制流汇合（类型不同）即丢失。
+     - **open 交集**：open(类 C) 经接口 I 过滤保留 open(C)（展开时再与接收者类型求交），C 为 final 且不实现 I 时为空；
+       原先放宽为 open(I)，`open(LambdaForm$Name)` 经 `Serializable` 过滤即展开到 819 类。
+     - **手写分配的容器取抽象对象**：手写体的分配 / 构造 / `<init>` 回调按伪偏移（自 `u32::MAX` 递减）建抽象对象，
+       字段写入不再落到「未知接收者」节点再流向该类全部对象。
+     - 诊断：`--flows` 增加 `@path:<节点>|[open:]<类>`（逆向最短来源链）、`@merge:N`、`@callers:<方法>`、`@m:<序号>`、
+       `@opens:<类>`（open 引入点）、`@openstat`（各 open 类型的节点数 × 展开类数排名）、`@array`。
+   - 实测（JDK 21；总类 / translate∩code / 方法 / 上下文 / 抽象对象 / 耗时）：
+
+     | 用例 | 总类 | translate∩code | 方法 | 上下文 | 抽象对象 | 耗时 |
+     |---|---:|---:|---:|---:|---:|---:|
+     | HelloWorld | 223 | 130 | 606 | 712 | 35 | 91 ms |
+     | TestSwitchString | 223 | 130 | 599 | 695 | 34 | 75 ms |
+     | PatternSwitchTest | 225 | 131 | 612 | 708 | 34 | 79 ms |
+     | FileIOTest | 265 | 153 | 778 | 883 | 37 | 94 ms |
+     | ChineseRemainderTheorem | 267 | 160 | 715 | 814 | 37 | 83 ms |
+     | TestStreamBasic | 351 | 242 | 1312 | 1992 | 134 | 0.2 s |
+     | TestRecordComponents | 557 | 390 | 2927 | 5668 | 332 | 0.9 s |
+     | CollectorsDemo | 1196 | 936 | 7498 | 19332 | 1076 | 23 s |
+
+   - 动态对照：相对 `.base.json` 各例漏报数均下降，新增漏报仍只有 launcher 的 `DirectMethodHandleAccessor`；翻译域漏覆盖 = 0。
+     folds 自检违约全部为 0，fold_check 全部通过；两次运行输出逐字节相同。
+   - 否决的方向（实测）：堆上下文深度 2 → 3，CollectorsDemo 不变，TestStreamBasic 242 → 259。
+     同一个源列表上的多次 `collect` 共用同一个 `ReferencePipeline$Head` 对象，按接收者对象的敏感性切不开不同 Collector 的流水线；
+     要切开须对 `collect` / `makeRef` 按实参敏感，即第 3 步已否决的 CPA 代价。
+   - 剩余膨胀的归因（诊断实验，结果不健全，只用于定位）：
+     - 丢弃全部 open 值：CollectorsDemo 936 → 522，TestRecordComponents 390 → 162（低于运行时下限，说明 open 承载了真实路径）；
+       只丢弃 open(Object)：936 → 908、390 → 353；只丢弃手写方法返回的 open(Object)：936 → 913。
+       主要来源是手写 / VM 层产出的 open(声明类型)——边界手写方法按擦除后的声明类型返回 open，
+       经 `Object` 形参的 `toString` / `equals` / `hashCode` 分派扩散到全部已实例化类。
+     - TestRecordComponents 的 136 个超出类分散在异常路径（`printStackTrace`、`parseInt` 异常）、反射访问器的备选分支
+       （`MethodAccessorGenerator`、`NativeMethodAccessorImpl`）等静态可行、运行时未走的路径，没有单一污染点。
+     - `Collectors.duplicateKeyException` → `String.format` → `Formatter` / `java.time` / regex 是可行路径，不属膨胀。
+   - 两例的 ×1.3 由第 4 步（反射返回值）与 C1d（边界手写改为字节码翻译，手写层的 open 产出随之变为精确数据流）承接。
 
 4. ⏳ **反射返回值**：C2 的 `[reflect_sinks]` / 反射数据流按字节码给出反射目标的返回类型，替代 open(Object)。
 
@@ -547,11 +586,11 @@ VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成
   | PatternSwitchTest | 104 | 131 | 1.26 |
   | FileIOTest | 126 | 153 | 1.21 |
   | ChineseRemainderTheorem | 131 | 160 | 1.22 |
-  | TestStreamBasic | 199 | 259 | 1.30 |
+  | TestStreamBasic | 199 | 242 | 1.22 |
   | TestRecordComponents | 254 | 390 | 1.54 |
-  | CollectorsDemo | 300 | 948 | 3.16 |
+  | CollectorsDemo | 300 | 936 | 3.12 |
 
-  未达标两例由第 3b、4 步解决。
+  （现值为第 3b 步后。）未达标两例由第 4 步与 C1d 解决，归因见第 3b 步。
 - 上述 7 个用例以及 FileIOTest（手写层写字段密集，检验写入来源是否收全）的动态对照，翻译域漏覆盖 = 0。
 - closure.json 输出 `folds_version: 1` 与 `folds`（格式如上），结果确定；`dead_branches` 删除。
 
