@@ -260,7 +260,7 @@ def _result_inner(ty: str) -> 'str | None':
     return m.group(1) if m else None
 
 
-def _owner_erasure_entries(owner_sig: str, substituted_sig: str, owner_params: list[str]) -> list[str]:
+def _owner_erasure_entries(owner_sig: str, substituted_sig: str, owner_params: list[str]) -> list[tuple]:
     """owner（声明类）签名中提及自身类型形参的位置 → 接收者视角下代入后的类型串。
 
     声明方的 vtable 方法签名在这些位置已是 Object（A-1 擦除按声明类判定）；接收者的
@@ -271,24 +271,24 @@ def _owner_erasure_entries(owner_sig: str, substituted_sig: str, owner_params: l
     subst_types, subst_ret = _sig_param_types(substituted_sig)
     def mentions(ty: str) -> bool:
         return any(re.search(r'\b' + re.escape(p) + r'\b', ty) for p in owner_params)
-    out: list[str] = []
+    out: list[tuple] = []
     for i, ty in enumerate(owner_types):
         if mentions(ty) and i < len(subst_types):
-            out.append(subst_types[i])
+            out.append((i, subst_types[i]))
     if owner_ret:
         inner = _result_inner(owner_ret)
         if inner is not None:
             if mentions(inner):
                 s_inner = _result_inner(subst_ret) if subst_ret else None
                 if s_inner is not None:
-                    out.append(s_inner)
+                    out.append(('r', s_inner))
         elif mentions(owner_ret):
-            out.append(subst_ret)
-    return [t for t in dict.fromkeys(out) if t and t != 'Object']
+            out.append(('r', subst_ret))
+    return [(p, t) for p, t in out if t and t != 'Object']
 
 
 def _slot_erasure_entries(vt_bin: str, method: 'EmittedMethod',
-                          substituted_sig: str, registry: dict) -> list[str]:
+                          substituted_sig: str, registry: dict) -> list[tuple]:
     """继承成员的槽位擦除名单（K-6）：名单按**槽位声明**（vtable_owner 的声明，
     非中间声明者 inherited_from）计算。
 
@@ -316,17 +316,37 @@ def _slot_erasure_entries(vt_bin: str, method: 'EmittedMethod',
             return True
         return any(re.search(r'\b' + re.escape(p) + r'\b', ty) for p in vt_params)
 
-    out: list[str] = []
+    out: list[tuple] = []
     for i, slot_ty in enumerate(slot_types):
         if _slot_is_object(slot_ty) and i < len(subst_types) \
                 and subst_types[i] and subst_types[i] != 'Object':
-            out.append(subst_types[i])
+            out.append((i, subst_types[i]))
     slot_inner = _result_inner(slot_ret)
     target = slot_inner if slot_inner is not None else slot_ret
     if target and _slot_is_object(target) and subst_inner \
             and subst_inner not in ('Object', '()'):
-        out.append(subst_inner)
+        out.append(('r', subst_inner))
     return out
+
+
+def _erasure_attr(entries: list[tuple], substituted_sig: str) -> str:
+    """擦除条目（位置, 代入后类型串）→ `vtable_erasure` 属性值。
+
+    缺省按类型串名集输出（宏按 token 全等匹配）。当某个**不擦除**的位置的类型串与名集
+    条目同形时，名集会误擦该位置（V = BiFunction<..> 时 HashMap.compute 的 BiFunction
+    形参，E0053 实证）——此时改用位置标记 `@i` / `@r`（宏 erasure_hits_param / _ret）。"""
+    if not entries:
+        return ''
+    names = list(dict.fromkeys(t for _p, t in entries))
+    erased_pos = {p for p, _t in entries}
+    subst_types, subst_ret = _sig_param_types(substituted_sig)
+    subst_inner = (_result_inner(subst_ret) or subst_ret) if subst_ret else ''
+    kept = [t for i, t in enumerate(subst_types) if i not in erased_pos]
+    if 'r' not in erased_pos and subst_inner:
+        kept.append(subst_inner)
+    if not any(t in names for t in kept):
+        return ';'.join(names)
+    return ';'.join(f'@{p}' for p, _t in entries)
 
 
 def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry: dict) -> str:
@@ -369,8 +389,9 @@ def _member_declaration(method: EmittedMethod, owner_bin: str, recv_ci, registry
     erasure = _slot_erasure_entries(vt_bin, method, signature, registry)
     if not erasure:
         erasure = _owner_erasure_entries(method.signature, signature, owner_params)
-    if erasure:
-        parts.append(f'vtable_erasure = "{";".join(erasure)}"')
+    _erasure_val = _erasure_attr(erasure, signature)
+    if _erasure_val:
+        parts.append(f'vtable_erasure = "{_erasure_val}"')
     body = _forward_body(method, owner_bin, owner_args)
     return f"#[java_method({', '.join(parts)})]\n{signature} {{ {body} }}"
 

@@ -44,7 +44,9 @@ def _coerce_acmp_operand(expr_str: str, ty_node, registry=None, class_type_param
         return expr_str
     # N4 G1：类型身份直接由节点取得（不经渲染串再解析）
     from ..jvm_type import from_rs_type, Primitive, HostPrim, ClassRef
-    ty_t = from_rs_type(ty_node, registry)
+    # 作用域类型形参优先于同名类：用户类可与 JDK 泛型类的形参同名（class S / ClassSpecializer<T,K,S>，
+    # PolymorphicCopy 实证）——不带形参集解析会把形参 S 认成用户类 S，发射 Object::from（E0277）
+    ty_t = from_rs_type(ty_node, registry, frozenset(class_type_params or ()))
     if isinstance(ty_t, (Primitive, HostPrim)):
         return expr_str  # 值类型不应出现在 acmp，原样保留
     # 引用类型或 self 引用：去掉 &，clone 后上转

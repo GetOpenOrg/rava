@@ -213,14 +213,14 @@ pub(crate) fn erased_call_args_with(
     type_param_names: &HashSet<String>,
     exact: &HashSet<String>,
 ) -> Vec<TokenStream2> {
-    sig.inputs.iter().filter_map(|a| match a {
+    sig.inputs.iter().filter(|a| matches!(a, syn::FnArg::Typed(_))).enumerate().filter_map(|(i, a)| match a {
         syn::FnArg::Typed(pt) => {
             let ident = match &*pt.pat {
                 syn::Pat::Ident(pi) => pi.ident.clone(),
                 _ => return None,
             };
             let hit = mentions_any(&pt.ty, type_param_names)
-                || (!exact.is_empty() && exact.contains(&flat_type_tokens(&pt.ty)));
+                || erasure_hits_param(exact, i, &pt.ty);
             if hit {
                 Some(quote! { ::std::convert::Into::<Object>::into(#ident) })
             } else {
@@ -250,7 +250,7 @@ pub(crate) fn erased_call_ret_conv_with(
     if let syn::ReturnType::Type(_, ty) = &sig.output {
         if let Some(inner) = result_inner_ty(ty) {
             let hit = mentions_any(inner, type_param_names)
-                || (!exact.is_empty() && exact.contains(&flat_type_tokens(inner)));
+                || erasure_hits_ret(exact, inner);
             if hit {
                 // null 容忍：null 经由擦除 vtable 往返后在值位置还原（Java 丢弃返回值 /
                 // 引用位置 null）——primitive 位置取 Default（与类型化直连时代码的
@@ -381,30 +381,44 @@ pub(crate) fn erase_signature_with(
     type_params: &HashSet<String>,
     exact: &HashSet<String>,
 ) -> syn::Signature {
-    let ty_erased = |ty: &Type| -> Type {
-        if !exact.is_empty() && exact.contains(&flat_type_tokens(ty)) {
+    let ty_erased = |i: usize, ty: &Type| -> Type {
+        if erasure_hits_param(exact, i, ty) {
             return syn::parse_quote!(Object);
         }
         erase_type(ty, type_params)
     };
     let ret_erased = |ty: &Type| -> Type {
         if let Some(inner) = result_inner_ty(ty) {
-            if !exact.is_empty() && exact.contains(&flat_type_tokens(inner)) {
+            if erasure_hits_ret(exact, inner) {
                 return syn::parse_quote!(Result<Object>);
             }
         }
         erase_type(ty, type_params)
     };
     let mut out = without_param_mut(sig);
+    let mut i = 0usize;
     for arg in out.inputs.iter_mut() {
         if let syn::FnArg::Typed(pt) = arg {
-            *pt.ty = ty_erased(&pt.ty);
+            *pt.ty = ty_erased(i, &pt.ty);
+            i += 1;
         }
     }
     if let syn::ReturnType::Type(_, ty) = &mut out.output {
         **ty = ret_erased(&ty);
     }
     out
+}
+
+/// 擦除名集在形参位置 `i`（不含 self 的第 i 个类型化形参）命中：类型扁平串全等，或位置标记
+/// `@i`。位置标记由 Python 侧在「代入后类型串与非擦除位置同形」（名集按类型匹配会误擦，
+/// 如 V=BiFunction 与 compute 的 BiFunction 形参）时改用，见 inherited_gen._erasure_attr。
+pub(crate) fn erasure_hits_param(set: &HashSet<String>, i: usize, ty: &Type) -> bool {
+    !set.is_empty() && (set.contains(&flat_type_tokens(ty)) || set.contains(&format!("@{i}")))
+}
+
+/// 擦除名集在返回位（`Result<T>` 的 T）命中：类型扁平串全等，或位置标记 `@r`。
+pub(crate) fn erasure_hits_ret(set: &HashSet<String>, inner: &Type) -> bool {
+    !set.is_empty() && (set.contains(&flat_type_tokens(inner)) || set.contains("@r"))
 }
 
 /// 方法条目的擦除名集：本类类型形参 ∪ `vtable_erasure` 属性携带的「owner 类型形参
@@ -452,8 +466,7 @@ pub(crate) fn forward_conv_spec(
     };
     for (i, (o, e)) in orig_params.iter().zip(erased_params.iter()).enumerate() {
         let mentions_own = mentions_any(o, type_param_names);
-        let hits_erasure = !erasure.is_empty()
-            && erasure.contains(&flat_type_tokens(o));
+        let hits_erasure = erasure_hits_param(erasure, i, o);
         if !(mentions_own || hits_erasure) {
             continue;
         }
@@ -483,8 +496,7 @@ pub(crate) fn forward_conv_spec(
     if let (syn::ReturnType::Type(_, o), syn::ReturnType::Type(_, e)) = (&orig.output, &erased.output) {
         if let (Some(oi), Some(ei)) = (result_inner_ty(o), result_inner_ty(e)) {
             let mentions_own = mentions_any(oi, type_param_names);
-            let hits_erasure = !erasure.is_empty()
-                && erasure.contains(&flat_type_tokens(oi));
+            let hits_erasure = erasure_hits_ret(erasure, oi);
             if (mentions_own || hits_erasure) && !(mentions_own && !hits_erasure && is_bare_ident(oi)) {
                 let obj_inner: Type = if mentions_any(oi, type_param_names) {
                     objectize_type(oi, type_param_names)

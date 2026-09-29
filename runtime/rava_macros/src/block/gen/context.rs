@@ -11,7 +11,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{GenericParam, Ident, Type};
 
-use super::super::erasure::{erasure_set_of, flat_type_tokens, mentions_any, result_inner_ty};
+use super::super::erasure::{erasure_hits_param, erasure_hits_ret, erasure_set_of, mentions_any, result_inner_ty};
 use super::super::parse::{ClassInput, ClassMeta, FnItem, InterfaceImpl, StaticItem};
 use super::super::rewrite::VDispatchSig;
 use super::super::util::{classify_method, is_basic, MethodKind};
@@ -286,18 +286,18 @@ impl<'a> GenContext<'a> {
             .filter(|(.., vo, _)| vo.is_some())
             .map(|(f, ..)| {
                 let erasure = erasure_set_of(f, &type_param_names);
-                let box_args: Vec<bool> = f.sig.inputs.iter().filter_map(|a| match a {
-                    syn::FnArg::Typed(pt) => Some(
-                        mentions_any(&pt.ty, &type_param_names)
-                        || (!erasure.is_empty()
-                            && erasure.contains(&flat_type_tokens(&pt.ty)))),
-                    _ => None,
-                }).collect();
+                let box_args: Vec<bool> = f.sig.inputs.iter()
+                    .filter(|a| matches!(a, syn::FnArg::Typed(_))).enumerate()
+                    .filter_map(|(i, a)| match a {
+                        syn::FnArg::Typed(pt) => Some(
+                            mentions_any(&pt.ty, &type_param_names)
+                            || erasure_hits_param(&erasure, i, &pt.ty)),
+                        _ => None,
+                    }).collect();
                 let ret_conv: Option<Type> = match &f.sig.output {
                     syn::ReturnType::Type(_, ty) => result_inner_ty(ty).and_then(|inner| {
                         let hit = mentions_any(inner, &type_param_names)
-                            || (!erasure.is_empty()
-                                && erasure.contains(&flat_type_tokens(inner)));
+                            || erasure_hits_ret(&erasure, inner);
                         if hit { Some(inner.clone()) } else { None }
                     }),
                     syn::ReturnType::Default => None,

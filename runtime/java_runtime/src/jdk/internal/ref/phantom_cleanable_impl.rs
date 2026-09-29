@@ -23,6 +23,20 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_mo
         Ok(this)
     }
 
+    /// `clean()`（Cleanable 接口，final）：从链表摘除后执行一次 `performCleanup`（虚分派到子类，
+    /// 如 CleanerImpl$PhantomCleanableRef 运行登记的动作）。显式清理是本运行时唯一的触发途径
+    ///（Deflater.end / Inflater.end → zsRef.clean() 释放 zlib 流）。「至多一次」沿用 JDK remove()
+    /// 的摘除标记：摘除后 `prev == this`（未入链表时 prev 为 null）。
+    #[jvm_boundary]
+    pub fn __impl_clean(&self) -> Result<()> {
+        let me = Object::from(Clone::clone(self));
+        if Object::from(self.__get_prev()) == me {
+            return Ok(());
+        }
+        self.__set_prev(<PhantomCleanable<Object> as From<Object>>::from(me));
+        self.performCleanup()
+    }
+
     /// `clear()`：从链表摘除并清 referent——未入链表、无 referent 追踪，无操作。
     #[jvm_boundary]
     pub fn __impl_clear(&self) -> Result<()> {
