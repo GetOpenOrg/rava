@@ -224,12 +224,13 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                 if short_cls(iface_bin) not in imported:
                     imported.add(short_cls(iface_bin))
                     uses.append(f"use {class_use_path(iface_bin, recv.crate_prefix, emissions, getattr(recv, 'crate_name', ''))};")
-                if not iface.methods:
-                    continue  # 标记接口：无成员可落地，无 impl/upcast 关系（原语义）
+                # 标记接口（Serializable 等）：无成员可落地、无 impl 块，但载体化后调用点会把实例
+                # 上转为标记接口载体（`Into::<Serializable>::into(v)`，T-2）→ 仍发射协变 upcast
+                _marker = not iface.methods
                 iface_params = effective_class_type_params(iface_ci, registry)
                 type_params = set(iface_params)
                 decls: list[str] = []
-                for im in (iface.methods if not (_recv_abstract or _recv_is_iface) else ()):
+                for im in (iface.methods if not (_recv_abstract or _recv_is_iface or _marker) else ()):
                     erased = erased_declaration(im, type_params)
                     if erased is None:
                         continue
@@ -282,7 +283,7 @@ def resolve_interface_impls(emissions: 'dict[str, ClassEmission]', registry: dic
                     attr = f"#[java_method({', '.join(attr_parts)})]\n" if attr_parts else ''
                     decls.append(attr + erased + ';')
                     uses.extend(_imports_for(erased, iface, recv, imported, emissions=emissions))
-                if not decls and not (_recv_abstract or _recv_is_iface):
+                if not decls and not (_recv_abstract or _recv_is_iface or _marker):
                     continue  # 具体类：无可落地的成员即无 impl 关系（原语义）
                 if decls:
                     vt_name = short_cls(iface_bin) + '__VTable'
