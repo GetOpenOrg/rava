@@ -174,6 +174,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 |
 | C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 |
 | C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 |
+| C1c | 字段常量折叠（可达 putfield 值集单一 → getfield 折叠，乐观假设 + 失效重处理）+ 选择性调用点敏感（小型高阶 / 汇点方法按调用点克隆） | 7.3 所列 lambda / 流 / 反射测试达标；动态对照翻译域漏覆盖 = 0 |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） |
 | C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 |
@@ -224,6 +225,65 @@ C1 完成后以实测替换这些上限，并写回本节（只允许下调）�
 **对策（C1b）**：absint 的引用值携带来源（形参 i / 调用返回 / 字段 / new 精确类 / 数组 / catch），
 引擎按「形参级 + 返回值级」维护类型集，派发只看实参值来源集合的并集。
 这样得到方法内流敏感、方法间按形参区分的 VTA 精度。验收：上两项指标达标，动态对照翻译域漏覆盖仍为 0。
+
+### 7.2 C1b 实测（2026-09-29，JDK 21，HelloWorld）
+
+| 阶段 | 总类 | translate ∩ code | 入链方法 | 耗时 |
+|---|---:|---:|---:|---:|
+| C1（方法级 XTA） | 255 | 154 | 883 | ≈ 170 ms |
+| 值级 VTA（形参 / 返回 / 站点节点） | 255 | 155 | 830 | — |
+| 数组按分配点建模 + `Object.clone` 返回接收者（`[facts] receiver_returns`） | 221 | 134 | 619 | — |
+| 手写体 syn 调用点实参类型推断（回调实参不再取值池） | 210 | 123 | 540 | — |
+| 数组下标奇偶敏感 + 透传方法逐调用点接回（`requireNonNull` 等） | **200** | **115** | **466** | ≈ 45 ms |
+
+7.1 的两项未达标指标均已达标（总类 200 ≤ 250；翻译方法体类 115 ≤ 120），missing / unresolved = 0 / 0，
+两次运行输出逐字节一致。动态对照：HelloWorld 之后 JVM 加载 90 类，85 个不在静态闭包内，归因类别与 7.1 相同，翻译域漏覆盖 = 0。
+
+C1b 引入的机制（全部通用，无类名特判）：
+
+| 机制 | 作用 |
+|---|---|
+| 值级类型流节点 `P(m,i)` / `R(m)` / `S(m,off)` / `F` / `E(site, 奇偶)` | 实参按来源接到被调形参；虚调用接收者只取接收者值本身的类型集 |
+| 数组分配点抽象对象 | 元素类型按分配点分离；写入按分配点实际分量类型收窄；只有目标未知（Top）的写入进入全局数组汇点 |
+| 下标奇偶域（absint `V::Par`） | 键值交错数组（`Map.of` → `MapN(Object...)`）的键、值分开，`probe` 不再派发到值类型 |
+| 透传摘要（`Analysis::returned_params`） | 返回值只来自形参的方法，结果逐调用点取实参，不经 `R` 汇合 |
+| `[facts] receiver_returns` | native 浅拷贝（`Object.clone`）结果 = 接收者类型集 |
+| 手写体 syn 调用点类型推断 | 手写回调实参按局部变量 / 分配 / 恒等转换推出具体类型，推不出才退回值池 |
+| 差分传播 + lambda 重入保护 | 流边只推新增类型；绑定方法引用接收者为 lambda 自身时不再无限递归 |
+| `--flows <方法 \| elem:<数组> \| @array>` | 类型流诊断：节点类型集及其来源边 |
+
+### 7.3 C1b 冒烟：lambda / 流 / 反射测试
+
+| 测试 | 总类 | translate ∩ code | 入链方法 | 耗时 |
+|---|---:|---:|---:|---:|
+| HelloWorld / TestSwitchString / PatternSwitchTest | 200 / 200 / 202 | 115 / 115 / 116 | 466 / 463 / 477 | < 60 ms |
+| TestRecordComponents | 1340 | 1059 | 8286 | ≈ 20 s |
+| TestStreamBasic | 1373 | 1099 | 8554 | ≈ 21 s |
+| ChineseRemainderTheorem / CollectorsDemo | 1334 / 1334 | 1059 / 1059 | 8271 / 8268 | ≈ 20 s |
+
+凡含 lambda / 流的测试都收敛到同一个约 1330 类的吸引子。根因有两处，都是上下文无关分析的固有缺陷：
+
+1. **字段恒值未折叠**：`AbstractPipeline.evaluate` 按 `isParallel()` 分支，`parallel` 字段只在 `parallel()` 中写 true。
+   程序不调 `parallel()` 时它恒为 false，但分析未折叠这个分支，于是 `evaluateParallel` → `ForEachOrderedTask` →
+   `VarHandles` / ForkJoin 整条并行路径都进了闭包。
+2. **公共汇点形参上下文无关**：`StringBuilder.append(Object)` → `String.valueOf(Object)` → `toString()` 的形参集合是
+   全部调用方实参的并集。例：`Set12.<init>` 的重复元素异常消息 `"duplicate element: " + e0` 把所有 `Set.of` 元素灌进去，
+   单个站点于是派发 163 个 `toString`（`SpeciesData` / `Formatter` / `Currency` / `SimpleDateFormat` …）；
+   `hashCode` / `equals` 汇点（`HashMap.hash`、`Objects.hashCode`、`probe`）同理，各派发 106 个目标。
+   反射返回值（`Method.invoke` → open(Object)）进入同一汇点，也会触发全量派发。
+
+**对策（C1c）**：
+
+- **字段常量折叠**：对每个字段收集可达 `putfield` / `putstatic` 写入的抽象值集，加上分配时的默认值。值集单一时，
+  `getfield` 折叠为常量，absint 的死分支剪枝随之生效。采用乐观假设：出现新的写入值时，让读该字段的方法失效并重处理（单调）。
+  手写层可写字段按 open 处理，不折叠。
+- **选择性调用点敏感**：对小型方法（指令数有上限、形参含引用、形参值流向虚调用接收者或返回值）按调用点克隆上下文，
+  克隆链深度 ≤ 2。`append(Object)`、`valueOf(Object)`、`Objects.hashCode`、`HashMap.hash`、`doPrivileged` 这类包装方法
+  由此按实际调用方的实参派发。判定完全来自字节码形状，不列类名。
+- **反射返回值**：C2 的 `[reflect_sinks]` / 反射数据流按字节码给出反射目标的返回类型，替代 open(Object)。
+
+**C1c 验收**：7.3 中的 lambda / 流 / 反射测试总类 ≤ 400，translate ∩ code ≤ 250，单测试耗时 ≤ 3s；
+HelloWorld 指标不回退；动态对照翻译域漏覆盖 = 0。
 
 ## 八、风险与对策
 

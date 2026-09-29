@@ -27,6 +27,7 @@ version = "0.1.0"
 dependencies = [
  "classfile",
  "indexmap",
+ "proc-macro2",
  "resolve",
  "serde_json",
  "syn 2.0.119",

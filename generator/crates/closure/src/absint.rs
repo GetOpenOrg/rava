@@ -8,12 +8,44 @@
 //! 两阶段：先做数据流到不动点（只记状态），再对每个可达基本块用最终入口状态走一遍产出事件——
 //! 事件里的实参抽象值是不动点值（反射常量数据流等下游据此读取常量）。
 //! 遇到 jsr / ret、栈失衡等无法建模的形态 → 保守模式：全部指令可达、全部值 Top。
+//!
+//! 引用值携带来源集合（[`Src`]：形参序号 / 产生该值的指令偏移 / 异常处理器 / 字面量），
+//! 引擎据此把实参、返回值、字段写入、数组写入精确连到各自的类型节点（值级 VTA），
+//! 而不是整个方法共用一个类型集。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
 use classfile::descriptor::{parse_field, parse_method, FieldType};
 use classfile::{op, Code, Const, Insn, MemberRef, Operand};
+
+/// 引用值来源
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Src {
+    /// 形参序号（实例方法 0 = this）
+    Param(u16),
+    /// 产生该值的指令偏移（new / 调用返回 / 字段读 / 数组读 / indy / ldc 句柄等）
+    Site(u32),
+    /// 异常处理器入口（处理器偏移）
+    Catch(u32),
+    /// 字符串字面量（与其它值合流后）
+    Str,
+    /// 类字面量（与其它值合流后）
+    Class,
+}
+
+pub type Srcs = Rc<[Src]>;
+
+fn src1(s: Src) -> Srcs {
+    Rc::from([s].as_slice())
+}
+
+fn src_union(a: &[Src], b: &[Src]) -> Srcs {
+    let mut v: Vec<Src> = a.iter().chain(b.iter()).copied().collect();
+    v.sort();
+    v.dedup();
+    Rc::from(v)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum V {
@@ -21,10 +53,12 @@ pub enum V {
     /// long / double 的第二槽
     Hi,
     Int(i32),
+    /// 奇偶已知的 int（true = 奇）：数组下标奇偶敏感（键值交错数组等）
+    Par(bool),
     Long(i64),
     Null,
-    /// 引用：静态类型（binary name 或数组描述符）+ 是否确定非空
-    Ref { ty: Option<Rc<str>>, nonnull: bool },
+    /// 引用：静态类型（binary name 或数组描述符）+ 是否确定非空 + 来源集合
+    Ref { ty: Option<Rc<str>>, nonnull: bool, src: Srcs },
     Str(Rc<str>),
     /// 类字面量（ldc class）：值是 Class 对象，携带所指类
     Class(Rc<str>),
@@ -56,6 +90,25 @@ impl V {
         matches!(self, V::Null | V::Ref { .. } | V::Str(_) | V::Class(_))
     }
 
+    /// 引用值的来源集合（Null 无来源）
+    fn srcs(&self) -> Srcs {
+        match self {
+            V::Ref { src, .. } => src.clone(),
+            V::Str(_) => src1(Src::Str),
+            V::Class(_) => src1(Src::Class),
+            _ => Rc::from([].as_slice()),
+        }
+    }
+
+    /// int 值的奇偶（true = 奇）
+    pub fn parity(&self) -> Option<bool> {
+        match self {
+            V::Int(x) => Some(x & 1 != 0),
+            V::Par(p) => Some(*p),
+            _ => None,
+        }
+    }
+
     fn join(&self, o: &V) -> V {
         if self == o {
             return self.clone();
@@ -69,9 +122,12 @@ impl V {
                 _ => None,
             };
             let nonnull = self.nonnull() == Some(true) && o.nonnull() == Some(true);
-            return V::Ref { ty: ty.map(Rc::from), nonnull };
+            return V::Ref { ty: ty.map(Rc::from), nonnull, src: src_union(&self.srcs(), &o.srcs()) };
         }
-        V::Top
+        match (self.parity(), o.parity()) {
+            (Some(a), Some(b)) if a == b => V::Par(a),
+            _ => V::Top,
+        }
     }
 }
 
@@ -82,13 +138,17 @@ fn ft_name(ft: &FieldType) -> Rc<str> {
     }
 }
 
-/// 描述符类型的抽象值（引用 → 带类型的可空引用；基本类型 → Top）
-fn value_of(ft: &FieldType) -> V {
+/// 描述符类型的抽象值（引用 → 带类型、来源为 s 的可空引用；基本类型 → Top）
+fn value_of(ft: &FieldType, s: Src) -> V {
     if ft.is_reference() {
-        V::Ref { ty: Some(ft_name(ft)), nonnull: false }
+        V::Ref { ty: Some(ft_name(ft)), nonnull: false, src: src1(s) }
     } else {
         V::Top
     }
+}
+
+fn site_ref(ty: &str, nonnull: bool, off: u32) -> V {
+    V::Ref { ty: Some(Rc::from(ty)), nonnull, src: src1(Src::Site(off)) }
 }
 
 fn push_typed(stack: &mut Vec<V>, ft: &FieldType, v: V) {
@@ -132,9 +192,11 @@ pub enum Event {
     Ldc(Const),
     CheckCast(String),
     InstanceOf(String),
-    ArrayLoad { array: V },
-    ArrayStore { array: V, value: V },
+    ArrayLoad { array: V, index: V },
+    ArrayStore { array: V, index: V, value: V },
     Throw(V),
+    /// areturn 的返回值
+    Return(V),
     /// 进入的异常处理器的 catch 类型（None = finally）
     Catch(Option<String>),
     /// 条件恒定而剪掉的一侧（分支指令偏移, 被剪的目标偏移）
@@ -150,6 +212,33 @@ pub struct Analysis {
     pub pending_catch: Vec<String>,
     /// 无法建模、按全部可达保守处理
     pub conservative: bool,
+}
+
+impl Analysis {
+    /// 返回值只来自形参（恒等 / 透传方法，如 requireNonNull）：返回这些形参序号。
+    /// 调用点据此把实参直接接到结果，不经上下文无关的返回节点汇合
+    pub fn returned_params(&self) -> Option<Vec<u16>> {
+        if self.conservative {
+            return None;
+        }
+        let mut ps: BTreeSet<u16> = BTreeSet::new();
+        let mut any = false;
+        for (_, e) in &self.events {
+            let Event::Return(v) = e else { continue };
+            any = true;
+            match v {
+                V::Null => {}
+                V::Ref { .. } => {
+                    for s in v.srcs().iter() {
+                        let Src::Param(i) = s else { return None };
+                        ps.insert(*i);
+                    }
+                }
+                _ => return None,
+            }
+        }
+        any.then(|| ps.into_iter().collect())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,6 +324,35 @@ fn int_bin(opc: u8, a: i32, b: i32) -> Option<i32> {
     })
 }
 
+/// 至少一侧非常量时的结果奇偶
+fn int_bin_parity(opc: u8, a: &V, b: &V) -> Option<bool> {
+    let (pa, pb) = (a.parity(), b.parity());
+    match opc {
+        0x60 | 0x64 | 0x82 => Some(pa? ^ pb?),
+        0x68 => match (pa, pb) {
+            (Some(false), _) | (_, Some(false)) => Some(false),
+            (Some(true), Some(true)) => Some(true),
+            _ => None,
+        },
+        0x78 => match b {
+            V::Int(k) if k & 31 != 0 => Some(false),
+            V::Int(_) => pa,
+            _ => None,
+        },
+        0x7e => match (pa, pb) {
+            (Some(false), _) | (_, Some(false)) => Some(false),
+            (Some(true), Some(true)) => Some(true),
+            _ => None,
+        },
+        0x80 => match (pa, pb) {
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn cond(opc: u8, a: i32, b: i32) -> bool {
     match opc {
         0x99 | 0x9f => a == b,
@@ -289,15 +407,11 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     }
                     Const::String(x) => s.stack.push(V::Str(Rc::from(x.as_str()))),
                     Const::Class(x) => s.stack.push(V::Class(Rc::from(x.as_str()))),
-                    Const::MethodType(_) => {
-                        s.stack.push(V::Ref { ty: Some(Rc::from("java/lang/invoke/MethodType")), nonnull: true })
-                    }
-                    Const::MethodHandle(_) => {
-                        s.stack.push(V::Ref { ty: Some(Rc::from("java/lang/invoke/MethodHandle")), nonnull: true })
-                    }
+                    Const::MethodType(_) => s.stack.push(site_ref("java/lang/invoke/MethodType", true, off)),
+                    Const::MethodHandle(_) => s.stack.push(site_ref("java/lang/invoke/MethodHandle", true, off)),
                     Const::Dynamic(_, _, d) => {
                         let ft = parse_field(d).ok_or(())?;
-                        push_typed(&mut s.stack, &ft, value_of(&ft));
+                        push_typed(&mut s.stack, &ft, value_of(&ft, Src::Site(off)));
                     }
                 }
                 if matches!(c, Const::String(_) | Const::Class(_) | Const::MethodType(_) | Const::MethodHandle(_) | Const::Dynamic(..)) {
@@ -328,11 +442,11 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 s.stack.push(V::Hi);
             }
             0x32 => {
-                pop(s)?;
+                let index = pop(s)?;
                 let arr = pop(s)?;
                 let ty = arr.static_type().and_then(component);
-                self.ev(off, Event::ArrayLoad { array: arr });
-                s.stack.push(V::Ref { ty, nonnull: false });
+                self.ev(off, Event::ArrayLoad { array: arr, index });
+                s.stack.push(V::Ref { ty, nonnull: false, src: src1(Src::Site(off)) });
             }
             // xstore
             0x36..=0x3a | 0x3b..=0x4e => {
@@ -360,9 +474,9 @@ impl<'a, O: Oracle> Interp<'a, O> {
             0x50 | 0x52 => popn(s, 4)?,
             0x53 => {
                 let value = pop(s)?;
-                pop(s)?;
+                let index = pop(s)?;
                 let array = pop(s)?;
-                self.ev(off, Event::ArrayStore { array, value });
+                self.ev(off, Event::ArrayStore { array, index, value });
             }
             0x57 => popn(s, 1)?,
             0x58 => popn(s, 2)?,
@@ -396,7 +510,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let a = pop(s)?;
                 s.stack.push(match (a, b) {
                     (V::Int(a), V::Int(b)) => int_bin(opc, a, b).map_or(V::Top, V::Int),
-                    _ => V::Top,
+                    (a, b) => int_bin_parity(opc, &a, &b).map_or(V::Top, V::Par),
                 });
             }
             // long 二元（含移位：long, int）
@@ -423,7 +537,11 @@ impl<'a, O: Oracle> Interp<'a, O> {
             }
             0x74 => {
                 let a = pop(s)?;
-                s.stack.push(if let V::Int(a) = a { V::Int(a.wrapping_neg()) } else { V::Top });
+                s.stack.push(match a {
+                    V::Int(a) => V::Int(a.wrapping_neg()),
+                    V::Par(p) => V::Par(p),
+                    _ => V::Top,
+                });
             }
             0x75 | 0x77 => {
                 popn(s, 2)?;
@@ -437,7 +555,11 @@ impl<'a, O: Oracle> Interp<'a, O> {
             op::IINC => {
                 let Operand::Iinc { index, delta } = ins.operand else { return Err(()) };
                 let slot = s.locals.get_mut(index as usize).ok_or(())?;
-                *slot = if let V::Int(v) = slot { V::Int(v.wrapping_add(delta as i32)) } else { V::Top };
+                *slot = match slot {
+                    V::Int(v) => V::Int(v.wrapping_add(delta as i32)),
+                    V::Par(p) => V::Par(*p ^ (delta & 1 != 0)),
+                    _ => V::Top,
+                };
             }
             // 类型转换：(弹出槽数, 压入槽数)
             0x85..=0x93 => {
@@ -533,7 +655,12 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 }
                 return Ok(Flow::Switch(all, vec![]));
             }
-            0xac | 0xae | 0xb0 => {
+            0xb0 => {
+                let v = pop(s)?;
+                self.ev(off, Event::Return(v));
+                return Ok(Flow::End);
+            }
+            0xac | 0xae => {
                 pop(s)?;
                 return Ok(Flow::End);
             }
@@ -548,7 +675,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let mut value = None;
                 match opc {
                     op::GETSTATIC => {
-                        let v = self.oracle.static_field(f).unwrap_or_else(|| value_of(&ft));
+                        let v = self.oracle.static_field(f).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
                     op::PUTSTATIC => {
@@ -559,7 +686,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     }
                     op::GETFIELD => {
                         pop(s)?;
-                        push_typed(&mut s.stack, &ft, value_of(&ft));
+                        push_typed(&mut s.stack, &ft, value_of(&ft, Src::Site(off)));
                     }
                     _ => {
                         if ft.slots() == 2 {
@@ -580,7 +707,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     args.insert(0, recv);
                 }
                 if let Some(ret) = &md.ret {
-                    let v = self.oracle.invoke_result(m, &args).unwrap_or_else(|| value_of(ret));
+                    let v = self.oracle.invoke_result(m, &args).unwrap_or_else(|| value_of(ret, Src::Site(off)));
                     push_typed(&mut s.stack, ret, v);
                 }
                 self.ev(off, Event::Invoke { opcode: opc, mref: m.clone(), iface: *iface, args });
@@ -590,18 +717,13 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let md = parse_method(desc).ok_or(())?;
                 let args = pop_args(s, &md.params)?;
                 if let Some(ret) = &md.ret {
-                    let v = if ret.is_reference() {
-                        V::Ref { ty: Some(ft_name(ret)), nonnull: false }
-                    } else {
-                        V::Top
-                    };
-                    push_typed(&mut s.stack, ret, v);
+                    push_typed(&mut s.stack, ret, value_of(ret, Src::Site(off)));
                 }
                 self.ev(off, Event::Indy { bsm: *bsm, name: name.clone(), desc: desc.clone(), args });
             }
             op::NEW => {
                 let Operand::Class(c) = &ins.operand else { return Err(()) };
-                s.stack.push(V::Ref { ty: Some(Rc::from(c.as_str())), nonnull: true });
+                s.stack.push(site_ref(c, true, off));
                 self.ev(off, Event::New(c.clone()));
             }
             op::NEWARRAY | op::ANEWARRAY => {
@@ -615,7 +737,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     Operand::Class(c) => format!("[L{c};"),
                     _ => return Err(()),
                 };
-                s.stack.push(V::Ref { ty: Some(Rc::from(ty.as_str())), nonnull: true });
+                s.stack.push(site_ref(&ty, true, off));
                 self.ev(off, Event::NewArray(ty));
             }
             0xbe => {
@@ -633,7 +755,9 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let out = match v {
                     V::Null => V::Null,
                     V::Str(_) | V::Class(_) => v,
-                    other => V::Ref { ty: Some(Rc::from(c.as_str())), nonnull: other.nonnull() == Some(true) },
+                    V::Ref { nonnull, src, .. } => V::Ref { ty: Some(Rc::from(c.as_str())), nonnull, src },
+                    // 未知值（保守）：来源仍未知
+                    other => other,
                 };
                 s.stack.push(out);
                 self.ev(off, Event::CheckCast(c.clone()));
@@ -648,7 +772,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
             op::MULTIANEWARRAY => {
                 let Operand::MultiANewArray(c, dims) = &ins.operand else { return Err(()) };
                 popn(s, *dims as usize)?;
-                s.stack.push(V::Ref { ty: Some(Rc::from(c.as_str())), nonnull: true });
+                s.stack.push(site_ref(c, true, off));
                 self.ev(off, Event::NewArray(c.clone()));
             }
             op::IFNULL | op::IFNONNULL => {
@@ -663,15 +787,16 @@ impl<'a, O: Oracle> Interp<'a, O> {
     }
 }
 
-/// 方法入口状态：this + 形参（按描述符类型）
+/// 方法入口状态：this + 形参（按描述符类型，来源 = 形参序号）
 fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16) -> Option<State> {
     let md = parse_method(desc)?;
     let mut locals = Vec::with_capacity(max_locals as usize);
     if !is_static {
-        locals.push(V::Ref { ty: Some(Rc::from(owner)), nonnull: true });
+        locals.push(V::Ref { ty: Some(Rc::from(owner)), nonnull: true, src: src1(Src::Param(0)) });
     }
-    for p in &md.params {
-        locals.push(value_of(p));
+    let base = u16::from(!is_static);
+    for (i, p) in md.params.iter().enumerate() {
+        locals.push(value_of(p, Src::Param(base + i as u16)));
         if p.slots() == 2 {
             locals.push(V::Hi);
         }
@@ -703,9 +828,10 @@ fn conservative(code: &Code) -> Analysis {
             (Operand::Class(c), op::INSTANCEOF) => Some(Event::InstanceOf(c.clone())),
             (Operand::MultiANewArray(c, _), _) => Some(Event::NewArray(c.clone())),
             (Operand::Ldc(c), _) => Some(Event::Ldc(c.clone())),
-            (_, 0x32) => Some(Event::ArrayLoad { array: V::Top }),
-            (_, 0x53) => Some(Event::ArrayStore { array: V::Top, value: V::Top }),
+            (_, 0x32) => Some(Event::ArrayLoad { array: V::Top, index: V::Top }),
+            (_, 0x53) => Some(Event::ArrayStore { array: V::Top, index: V::Top, value: V::Top }),
             (_, op::ATHROW) => Some(Event::Throw(V::Top)),
+            (_, 0xb0) => Some(Event::Return(V::Top)),
             _ => None,
         };
         if let Some(e) = e {
@@ -761,6 +887,19 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
     let mut work: Vec<usize> = vec![0];
     let mut reachable = vec![false; n];
     let mut handler_on = vec![false; code.exception_table.len()];
+    // 各指令所在的 try 区间（处理器下标）；处理器入口局部变量 = 区间内各指令前状态的并集
+    let cover: Vec<Vec<usize>> = insns
+        .iter()
+        .map(|x| {
+            code.exception_table
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| x.offset >= h.start && x.offset < h.end)
+                .map(|(hi, _)| hi)
+                .collect()
+        })
+        .collect();
+    let mut hlocals: Vec<Option<Vec<V>>> = vec![None; code.exception_table.len()];
     let mut interp = Interp { oracle, emit: None };
 
     let merge = |entry: &mut BTreeMap<usize, State>, work: &mut Vec<usize>, i: usize, st: &State| -> Option<()> {
@@ -784,6 +923,16 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
             let mut i = l;
             loop {
                 reachable[i] = true;
+                for &hi in &cover[i] {
+                    match &mut hlocals[hi] {
+                        Some(hl) => {
+                            for (a, b) in hl.iter_mut().zip(st.locals.iter()) {
+                                *a = a.join(b);
+                            }
+                        }
+                        slot => *slot = Some(st.locals.clone()),
+                    }
+                }
                 let ins = &insns[i];
                 match interp.step(&mut st, ins).ok()? {
                     Flow::Next => {
@@ -822,31 +971,26 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                 }
             }
         }
-        // 异常处理器：try 区间有可达指令且 catch 类型存活 → 进入（局部变量 Top，栈 = 异常对象）
-        let mut more = false;
+        // 异常处理器：try 区间有可达指令且 catch 类型存活 → 进入（局部变量 = 区间内前状态并集，
+        // 栈 = 异常对象）；已进入的处理器随区间状态增长重新合并
         for (hi, h) in code.exception_table.iter().enumerate() {
-            if handler_on[hi] {
-                continue;
-            }
-            let live_range = insns.iter().enumerate().any(|(i, x)| reachable[i] && x.offset >= h.start && x.offset < h.end);
-            if !live_range {
-                continue;
-            }
-            if let Some(ct) = &h.catch_type {
-                if !oracle.catch_live(ct) {
-                    continue;
+            let Some(hl) = &hlocals[hi] else { continue };
+            if !handler_on[hi] {
+                if let Some(ct) = &h.catch_type {
+                    if !oracle.catch_live(ct) {
+                        continue;
+                    }
                 }
+                handler_on[hi] = true;
             }
-            handler_on[hi] = true;
             let ty: Rc<str> = Rc::from(h.catch_type.as_deref().unwrap_or("java/lang/Throwable"));
             let st = State {
-                locals: vec![V::Top; code.max_locals as usize],
-                stack: vec![V::Ref { ty: Some(ty), nonnull: true }],
+                locals: hl.clone(),
+                stack: vec![V::Ref { ty: Some(ty), nonnull: true, src: src1(Src::Catch(h.handler)) }],
             };
             merge(&mut entry, &mut work, at(h.handler)?, &st)?;
-            more = true;
         }
-        if !more {
+        if work.is_empty() {
             break;
         }
     }

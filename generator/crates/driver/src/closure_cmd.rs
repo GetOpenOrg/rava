@@ -1,7 +1,7 @@
 //! `rava closure <Test.java | 类目录>`：精确闭包分析（计划 docs/plans/2026-09-29-rust-closure-analyzer.md）。
 //!
 //! 选项：`--jdk N | --java-home P`、`--runtime <runtime/java_runtime>`、`--main <类>`、
-//! `-o <closure.json>`、`--why <类 | 类.方法:描述符>`（可多次）、`--report <报告.md>`。
+//! `-o <closure.json>`、`--why <类 | 类.方法:描述符>`（可多次）、`--flows <方法标签片段>`（类型流诊断，可多次）、`--report <报告.md>`。
 
 use std::path::{Path, PathBuf};
 
@@ -100,15 +100,17 @@ pub fn run(args: &Args) -> Result<(), String> {
     if let Some(r) = args.opt("--report") {
         std::fs::write(&r, c.report_md(&main)).map_err(|e| format!("{r}：{e}"))?;
     }
-    let whys: Vec<&String> = args
-        .rest
-        .iter()
-        .zip(args.rest.iter().skip(1))
-        .filter(|(a, _)| *a == "--why")
-        .map(|(_, v)| v)
-        .collect();
-    for w in whys {
+    let multi = |flag: &str| -> Vec<&String> {
+        args.rest.iter().zip(args.rest.iter().skip(1)).filter(|(a, _)| *a == flag).map(|(_, v)| v).collect()
+    };
+    for w in multi("--why") {
         for line in c.why(w) {
+            println!("{line}");
+        }
+        println!();
+    }
+    for w in multi("--flows") {
+        for line in c.flows(w) {
             println!("{line}");
         }
         println!();

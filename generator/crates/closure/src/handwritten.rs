@@ -5,7 +5,9 @@
 //! - `pub fn` 名（成员由手写体提供的判定）；
 //! - 手写体分配：`let mut x = T::default(); x._init_not_null();`（单独的 `T::default()` 是 Java null）
 //!   与构造调用 `T::new*(…)`；沿同文件 fn 调用传递闭包；
-//! - `error.rs` 头部 `// vm-upcalls:` 行（VM 基础设施的无条件种子）。
+//! - `error.rs` 头部 `// vm-upcalls:` 行（VM 基础设施的无条件种子）；
+//! - 调用表达式的实参 / 接收者类型（语法推断，见 [`TypedCall`]）：回调边的实参按调用点精确接入，
+//!   推断不出时由引擎退回手写方法的值池。
 //!
 //! 成员匹配：Rust fn 名 = Java 名或 `名_<重载后缀>`；虚方法体前缀 `__impl_`；构造器 `<init>` ↔ `new`。
 
@@ -20,6 +22,9 @@ use syn::visit::Visit;
 const GENERATED_MARK: &str = "rava_macros::java_class";
 const SUFFIXES: [&str; 2] = ["_impl.rs", "_ext.rs"];
 const CTOR_RUST: &str = "new";
+/// prelude 导出的 Java 根类型的 Rust 名（`Object::from(x)` 是保持身份的上转；字符串字面量产出 String）
+const OBJECT_RUST: &str = "Object";
+const STRING_RUST: &str = "String";
 const VIRTUAL_PREFIX: &str = "__impl_";
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
@@ -49,10 +54,29 @@ pub fn parse_upcall(tok: &str) -> Option<Upcall> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeRef(pub Vec<String>);
 
+/// 手写体里的一次调用：`recv.name(args)` 或 `Path::name(args)`。
+///
+/// 实参类型只从保持对象身份的形态推断——分配根（`T::new*` / `T::from(非 Java 值)` / 字符串字面量 /
+/// `T::default()` + `_init_not_null`）经 `Object::from`、`clone`、`?`、`try_cast`、`into`、局部 `let`
+/// 传递；其余一律 None（未知），由引擎退回值池。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypedCall {
+    pub name: String,
+    /// 路径调用的类型段（`T::new` 的 `T`）
+    pub path_ty: Option<TypeRef>,
+    /// 方法调用的接收者类型：外层 None = 路径调用；内层 None = 未知
+    pub recv: Option<Option<TypeRef>>,
+    pub args: Vec<Option<TypeRef>>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct FnInfo {
     pub is_pub: bool,
     pub upcalls: Vec<Upcall>,
+    /// 调用点（含同文件被调 fn 的传递闭包）
+    pub calls: Vec<TypedCall>,
+    /// 宏调用内出现的标识符（syn 不展开宏：同名回调可能藏在宏里 → 按未知处理）
+    pub opaque: HashSet<String>,
     /// 分配的类型（含同文件被调 fn 的传递闭包）
     pub allocs: BTreeSet<TypeRef>,
     /// 构造调用（类型, Rust 构造器名 `new` / `new_<后缀>`），同样传递闭包
@@ -74,12 +98,16 @@ pub struct MemberHw {
     pub upcalls: Vec<Upcall>,
     pub allocs: BTreeSet<TypeRef>,
     pub ctors: BTreeSet<(TypeRef, String)>,
+    pub calls: Vec<TypedCall>,
+    pub opaque: HashSet<String>,
     /// 命中的 fn 名（溯源）
     pub fns: Vec<String>,
 }
 
 pub struct Handwritten {
     src: PathBuf,
+    /// `lib.rs` 的 `mod prelude` 导出（手写文件 `use crate::prelude::*` 引入）
+    prelude: HashMap<String, Vec<String>>,
     cache: RefCell<HashMap<String, Rc<ClassHw>>>,
     abbrev: HashMap<String, String>,
     pub errors: RefCell<Vec<String>>,
@@ -108,7 +136,7 @@ pub fn to_snake(name: &str) -> String {
     }
 }
 
-fn member_matches(fn_name: &str, member: &str) -> bool {
+pub fn member_matches(fn_name: &str, member: &str) -> bool {
     let rust = if member == "<init>" { CTOR_RUST } else { member };
     let f = fn_name.strip_prefix(VIRTUAL_PREFIX).unwrap_or(fn_name);
     f == rust || f.strip_prefix(rust).is_some_and(|r| r.starts_with('_'))
@@ -130,8 +158,14 @@ impl Handwritten {
                 }
             }
         }
+        let prelude = std::fs::read_to_string(runtime_dir.join("src/lib.rs"))
+            .ok()
+            .and_then(|c| syn::parse_file(&c).ok())
+            .map(|f| prelude_uses(&f))
+            .unwrap_or_default();
         Handwritten {
             src: runtime_dir.join("src"),
+            prelude,
             cache: RefCell::new(HashMap::new()),
             abbrev,
             errors: RefCell::new(Vec::new()),
@@ -159,7 +193,7 @@ impl Handwritten {
                 continue;
             }
             match syn::parse_file(&content) {
-                Ok(file) => scan_file(&file, &mut hw.fns, &mut calls),
+                Ok(file) => scan_file(&file, &self.prelude, &mut hw.fns, &mut calls),
                 Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
             }
             hw.files.push(path);
@@ -180,6 +214,8 @@ impl Handwritten {
             out.upcalls.extend(f.upcalls.iter().cloned());
             out.allocs.extend(f.allocs.iter().cloned());
             out.ctors.extend(f.ctors.iter().cloned());
+            out.calls.extend(f.calls.iter().cloned());
+            out.opaque.extend(f.opaque.iter().cloned());
             out.fns.push(n.clone());
         }
         out
@@ -349,6 +385,8 @@ fn expand(uses: &HashMap<String, Vec<String>>, segs: Vec<String>) -> Vec<String>
 
 #[derive(Default)]
 struct BodyScan {
+    /// let 绑定 → 推断类型（重复绑定且类型不一致 → None）
+    locals: HashMap<String, Option<Vec<String>>>,
     /// let mut 变量 → T::default() 的类型路径
     defaults: HashMap<String, Vec<String>>,
     inited: HashSet<String>,
@@ -359,6 +397,16 @@ struct BodyScan {
 impl<'ast> Visit<'ast> for BodyScan {
     fn visit_local(&mut self, l: &'ast syn::Local) {
         if let syn::Pat::Ident(pi) = strip_type(&l.pat) {
+            let t = l.init.as_ref().and_then(|i| infer(&i.expr, &self.locals));
+            let name = pi.ident.to_string();
+            match self.locals.get(&name) {
+                Some(old) if *old != t => {
+                    self.locals.insert(name, None);
+                }
+                _ => {
+                    self.locals.insert(name, t);
+                }
+            }
             if pi.mutability.is_some() {
                 if let Some(init) = &l.init {
                     if let syn::Expr::Call(c) = &*init.expr {
@@ -407,6 +455,90 @@ impl<'ast> Visit<'ast> for BodyScan {
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
 }
 
+/// 表达式的对象类型（语法推断；见 [`TypedCall`]）
+fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>) -> Option<Vec<String>> {
+    use syn::Expr;
+    match e {
+        Expr::Paren(p) => infer(&p.expr, locals),
+        Expr::Group(g) => infer(&g.expr, locals),
+        Expr::Reference(r) => infer(&r.expr, locals),
+        Expr::Try(t) => infer(&t.expr, locals),
+        Expr::Lit(l) if matches!(l.lit, syn::Lit::Str(_)) => Some(vec![STRING_RUST.to_string()]),
+        Expr::Path(p) => p.path.get_ident().and_then(|i| locals.get(&i.to_string()).cloned().flatten()),
+        Expr::Call(c) => {
+            let Expr::Path(p) = &*c.func else { return None };
+            let segs = path_segs(&p.path);
+            let (last, head) = segs.split_last()?;
+            let arg0 = || c.args.first().and_then(|a| infer(a, locals));
+            if head.last().is_some_and(|h| h == OBJECT_RUST) && last == "from" {
+                return arg0();
+            }
+            if head == ["Clone"] && last == "clone" {
+                return arg0();
+            }
+            let head_is_type = head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase()));
+            if head_is_type && (last == CTOR_RUST || last.starts_with("new_")) {
+                return Some(head.to_vec());
+            }
+            if head_is_type && last == "from" {
+                // 上转保持动态类型；非 Java 值（Rust 字符串等）→ 转换产出的 T
+                return arg0().or_else(|| Some(head.to_vec()));
+            }
+            None
+        }
+        Expr::MethodCall(m) => match m.method.to_string().as_str() {
+            "clone" | "try_cast" | "into" | "unwrap" | "expect" => infer(&m.receiver, locals),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// 第二遍：按第一遍的 let 绑定推断调用点实参
+struct CallScan<'a> {
+    locals: &'a HashMap<String, Option<Vec<String>>>,
+    calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>)>,
+    opaque: HashSet<String>,
+}
+
+fn macro_idents(ts: proc_macro2::TokenStream, out: &mut HashSet<String>) {
+    for t in ts {
+        match t {
+            proc_macro2::TokenTree::Ident(i) => {
+                out.insert(i.to_string());
+            }
+            proc_macro2::TokenTree::Group(g) => macro_idents(g.stream(), out),
+            _ => {}
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for CallScan<'_> {
+    fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+        let args = m.args.iter().map(|a| infer(a, self.locals)).collect();
+        self.calls.push((m.method.to_string(), None, Some(infer(&m.receiver, self.locals)), args));
+        syn::visit::visit_expr_method_call(self, m);
+    }
+
+    fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(p) = &*c.func {
+            let segs = path_segs(&p.path);
+            if let Some((last, head)) = segs.split_last() {
+                let args = c.args.iter().map(|a| infer(a, self.locals)).collect();
+                let ty = (!head.is_empty()).then(|| head.to_vec());
+                self.calls.push((last.clone(), ty, None, args));
+            }
+        }
+        syn::visit::visit_expr_call(self, c);
+    }
+
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        macro_idents(m.tokens.clone(), &mut self.opaque);
+    }
+
+    fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
+}
+
 fn strip_type(p: &syn::Pat) -> &syn::Pat {
     match p {
         syn::Pat::Type(t) => &t.pat,
@@ -432,8 +564,21 @@ impl FileScan<'_> {
         for (var, ty) in &b.defaults {
             if b.inited.contains(var) {
                 info.allocs.insert(TypeRef(expand(self.uses, ty.clone())));
+                b.locals.insert(var.clone(), Some(ty.clone()));
             }
         }
+        let mut cs = CallScan { locals: &b.locals, calls: Vec::new(), opaque: HashSet::new() };
+        cs.visit_block(block);
+        let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
+        for (name, ty, recv, args) in cs.calls {
+            info.calls.push(TypedCall {
+                name,
+                path_ty: tr(ty),
+                recv: recv.map(tr),
+                args: args.into_iter().map(tr).collect(),
+            });
+        }
+        info.opaque = cs.opaque;
         for (ty, ctor) in b.ctors {
             info.ctors.insert((TypeRef(expand(self.uses, ty)), ctor));
         }
@@ -489,8 +634,37 @@ impl<'ast> Visit<'ast> for UseScan {
     }
 }
 
-fn scan_file(file: &syn::File, fns: &mut HashMap<String, FnInfo>, calls: &mut HashMap<String, HashSet<String>>) {
+/// `mod prelude { pub use super::… }` → 名字 → `crate::…` 路径
+fn prelude_uses(file: &syn::File) -> HashMap<String, Vec<String>> {
     let mut us = UseScan(HashMap::new());
+    for item in &file.items {
+        if let syn::Item::Mod(m) = item {
+            if m.ident == "prelude" {
+                if let Some((_, items)) = &m.content {
+                    for i in items {
+                        us.visit_item(i);
+                    }
+                }
+            }
+        }
+    }
+    us.0.into_iter()
+        .map(|(k, mut v)| {
+            if v.first().is_some_and(|f| f == "super") {
+                v[0] = "crate".into();
+            }
+            (k, v)
+        })
+        .collect()
+}
+
+fn scan_file(
+    file: &syn::File,
+    prelude: &HashMap<String, Vec<String>>,
+    fns: &mut HashMap<String, FnInfo>,
+    calls: &mut HashMap<String, HashSet<String>>,
+) {
+    let mut us = UseScan(prelude.clone());
     us.visit_file(file);
     let mut fs = FileScan { uses: &us.0, fns: Vec::new() };
     fs.visit_file(file);
@@ -501,6 +675,8 @@ fn scan_file(file: &syn::File, fns: &mut HashMap<String, FnInfo>, calls: &mut Ha
         e.upcalls.extend(raw.info.upcalls);
         e.allocs.extend(raw.info.allocs);
         e.ctors.extend(raw.info.ctors);
+        e.calls.extend(raw.info.calls);
+        e.opaque.extend(raw.info.opaque);
     }
 }
 
@@ -512,10 +688,13 @@ fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, H
         let mut seen: HashSet<&str> = HashSet::from([n.as_str()]);
         let mut stack = vec![n.as_str()];
         let (mut allocs, mut ctors) = (BTreeSet::new(), BTreeSet::new());
+        let (mut tcalls, mut opaque) = (Vec::new(), HashSet::new());
         while let Some(x) = stack.pop() {
             if let Some(f) = fns.get(x) {
                 allocs.extend(f.allocs.iter().cloned());
                 ctors.extend(f.ctors.iter().cloned());
+                tcalls.extend(f.calls.iter().cloned());
+                opaque.extend(f.opaque.iter().cloned());
             }
             for c in calls.get(x).into_iter().flatten() {
                 if fns.contains_key(c) && seen.insert(c.as_str()) {
@@ -523,11 +702,13 @@ fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, H
                 }
             }
         }
-        closed.push((n.clone(), allocs, ctors));
+        closed.push((n.clone(), allocs, ctors, tcalls, opaque));
     }
-    for (n, a, c) in closed {
+    for (n, a, c, t, o) in closed {
         let f = fns.get_mut(&n).expect("fn 名来自同一表");
         f.allocs = a;
         f.ctors = c;
+        f.calls = t;
+        f.opaque = o;
     }
 }

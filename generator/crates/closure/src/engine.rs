@@ -1,12 +1,15 @@
-//! 闭包引擎：XTA 类型集传播 + 虚分派 + 类初始化触发 + 手写节点 + 溯源（计划 §3.1 / §3.3 / §3.5）。
+//! 闭包引擎：值级类型流（VTA）+ 虚分派 + 类初始化触发 + 手写节点 + 溯源（计划 §3.1 / §3.3 / §3.5）。
 //!
-//! 节点：方法（字节码 / 手写 / 抽象）、字段、全局数组元素。每个节点持有类型集
-//! `TypeSet { classes, open }`：`classes` 是确定流入的已实例化类型；`open(T)` 表示
-//! 「任意已实例化的 T 子类型」——手写返回值、手写可写字段、异常处理器入口等无法在字节码层
-//! 追踪的来源一律按 open 处理（安全回退）。流边按形参 / 返回 / 字段声明类型过滤。
+//! 类型节点：方法形参 `P(m, i)`（实例方法 0 = this）、返回值 `R(m)`、方法内产生值的站点
+//! `S(m, off)`（new / 调用返回 / 字段读 / 数组读 / indy / catch）、字段、全局数组元素。
+//! 每个节点持有类型集 `TypeSet { classes, open }`：`classes` 是确定流入的已实例化类型；
+//! `open(T)` 表示「任意已实例化的 T 子类型」——手写返回值、手写可写字段、异常处理器入口等
+//! 无法在字节码层追踪的来源一律按 open 处理（安全回退）。流边按形参 / 返回 / 字段声明类型过滤。
 //!
-//! 虚调用的接收者 = 调用方类型集里 ⊂ 引用类的类型；open 部分按全局已实例化集 G 展开。
-//! G 增长时，持有 open 的方法与等待 catch 类型的方法重新处理——单调不动点。
+//! absint 给每个引用值标出来源（形参 / 站点），引擎按来源把实参接到被调形参、把返回值接回
+//! 调用站点——虚调用的接收者只取接收者值本身的类型集，被分派方法的 this 精确注入实际接收者。
+//! 手写方法没有字节码可追踪：其形参、分配、回调返回汇入一个 pool 站点，回调实参取自 pool。
+//! G（全局已实例化）增长时，按 open 展开过接收者的方法与等待 catch 类型的方法重新处理——单调不动点。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
@@ -16,13 +19,31 @@ use classfile::{acc, ClassFile, Const, MemberRef, MethodHandle};
 use indexmap::IndexMap;
 use resolve::{ClassPath, Hierarchy, Origin};
 
-use crate::absint::{self, Analysis, Event, Oracle, V};
-use crate::handwritten::{Handwritten, TypeRef, Upcall};
+use crate::absint::{self, Analysis, Event, Oracle, Src, V};
+use crate::handwritten::{member_matches, Handwritten, MemberHw, TypedCall, TypeRef, Upcall};
 use crate::manifest::{Domain, Fact, IndyKind, Manifest};
 
 const OBJECT: &str = "java/lang/Object";
+const STRING: &str = "java/lang/String";
+const CLASS: &str = "java/lang/Class";
 const THROWABLE: &str = "java/lang/Throwable";
 const TO_STRING: (&str, &str) = ("toString", "()Ljava/lang/String;");
+/// 站点键：异常处理器入口
+const CATCH: u32 = 1 << 31;
+/// 站点键：手写方法的值池
+const POOL: u32 = u32::MAX;
+/// 站点键：手写方法的数组元素池（实参数组之间的元素互通，如 arraycopy）
+const ELEM: u32 = u32::MAX - 1;
+/// 数组元素节点的下标奇偶槽
+const PARITIES: [u8; 2] = [0, 1];
+
+/// 下标值可能落入的奇偶槽：奇偶已知 → 一个，否则两个
+fn slots(index: &V) -> Vec<u8> {
+    match index.parity() {
+        Some(p) => vec![p as u8],
+        None => PARITIES.to_vec(),
+    }
+}
 
 // ── 溯源 ────────────────────────────────────────────────────────────────────
 
@@ -83,6 +104,7 @@ pub enum Kind {
     Missing,
 }
 
+
 // ── 类型集 ──────────────────────────────────────────────────────────────────
 
 #[derive(Default, Clone, Debug)]
@@ -92,6 +114,12 @@ pub struct TypeSet {
 }
 
 impl TypeSet {
+    fn exact(id: u32) -> TypeSet {
+        TypeSet { classes: [id].into(), open: BTreeSet::new() }
+    }
+    fn open(id: u32) -> TypeSet {
+        TypeSet { classes: BTreeSet::new(), open: [id].into() }
+    }
     fn add_all(&mut self, o: &TypeSet) -> bool {
         let n = self.classes.len() + self.open.len();
         self.classes.extend(o.classes.iter().copied());
@@ -107,7 +135,11 @@ pub struct MNode {
     pub key: MemberRef,
     pub kind: Kind,
     pub via: Via,
-    pub set: TypeSet,
+    pub is_static: bool,
+    /// 形参类型（实例方法 0 = 声明类；基本类型为 None）
+    ptypes: Vec<Option<u32>>,
+    /// 返回类型（引用）
+    rtype: Option<u32>,
     analysis: Option<Rc<Analysis>>,
     /// 手写体命中的 fn 名（溯源）
     pub hw_fns: Vec<String>,
@@ -115,16 +147,56 @@ pub struct MNode {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Node {
-    M(usize),
+    /// 形参（方法, 序号）
+    P(usize, u16),
+    /// 返回值
+    R(usize),
+    /// 方法内站点（方法, 偏移 | CATCH | POOL）
+    S(usize, u32),
     F(usize),
+    /// 数组分配点的元素（分配点, 下标奇偶 0 偶 / 1 奇）：键值交错数组的键、值分开
+    E(u32, u8),
+    /// 写入未知数组（open / 保守分析）的元素：流入每个数组分配点
     Array,
 }
 
+impl Node {
+    /// 节点变化时需要重新处理的方法
+    fn owner(self) -> Option<usize> {
+        match self {
+            Node::P(m, _) | Node::S(m, _) => Some(m),
+            _ => None,
+        }
+    }
+}
+
+/// 值的类型来源：节点，或直接给定的类型集（字面量 / 未知值的 open）
+#[derive(Clone, Debug)]
+enum Feed {
+    N(Node),
+    S(TypeSet),
+}
+
+/// 按声明形参位置的实参来源（基本类型为 None）
+type Args = Vec<Option<Vec<Feed>>>;
+
+/// 被调方法的接收者
+enum Recv {
+    None,
+    Exact(u32),
+    Feeds(Vec<Feed>),
+}
+
+#[derive(Clone)]
 struct Lambda {
     iface: String,
     sam: String,
     imh: MethodHandle,
+    /// 捕获实参来源（按 indy 描述符形参位置）
+    cap: Args,
 }
+
+// ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
 
 // ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
 
@@ -233,16 +305,18 @@ pub struct Engine<'a> {
     pub classes: IndexMap<String, ClassNode>,
     pub missing: BTreeMap<String, Via>,
     pub methods: IndexMap<MemberRef, MNode>,
-    fields: IndexMap<MemberRef, TypeSet>,
-    arrays: TypeSet,
+    fields: IndexMap<MemberRef, ()>,
+    sets: HashMap<Node, TypeSet>,
 
     /// G：全局已实例化（类型 id）
     g: BTreeSet<u32>,
     lambdas: HashMap<u32, Lambda>,
+    /// 数组分配点（抽象对象 id）→ 数组类型 id
+    arrays: HashMap<u32, u32>,
     pub inited: IndexMap<String, Via>,
 
-    flows: HashMap<Node, Vec<(Node, Rc<[u32]>)>>,
-    flow_seen: HashSet<(Node, Node, Rc<[u32]>)>,
+    flows: HashMap<Node, Vec<(Node, u32)>>,
+    flow_seen: HashSet<(Node, Node, u32)>,
     /// 调用点分派结果：(方法, 偏移) → 目标方法
     pub dispatch: BTreeMap<(usize, u32), BTreeSet<usize>>,
     /// 死分支（方法 → 剪掉的目标偏移）
@@ -253,8 +327,13 @@ pub struct Engine<'a> {
     in_mwork: HashSet<usize>,
     fwork: VecDeque<Node>,
     in_fwork: HashSet<Node>,
+    /// 按 open 在 G 上展开过接收者的方法（G 增长时重处理）
     open_methods: BTreeSet<usize>,
     pending_catch: BTreeMap<usize, Vec<String>>,
+    /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
+    lambda_stack: HashSet<(u32, String)>,
+    /// 待沿流边推送的新增类型（差分传播）
+    fdelta: HashMap<Node, TypeSet>,
 }
 
 impl<'a> Engine<'a> {
@@ -277,9 +356,10 @@ impl<'a> Engine<'a> {
             missing: BTreeMap::new(),
             methods: IndexMap::new(),
             fields: IndexMap::new(),
-            arrays: TypeSet::default(),
+            sets: HashMap::new(),
             g: BTreeSet::new(),
             lambdas: HashMap::new(),
+            arrays: HashMap::new(),
             inited: IndexMap::new(),
             flows: HashMap::new(),
             flow_seen: HashSet::new(),
@@ -292,6 +372,8 @@ impl<'a> Engine<'a> {
             in_fwork: HashSet::new(),
             open_methods: BTreeSet::new(),
             pending_catch: BTreeMap::new(),
+            lambda_stack: HashSet::new(),
+            fdelta: HashMap::new(),
         }
     }
 
@@ -319,7 +401,9 @@ impl<'a> Engine<'a> {
             return *r;
         }
         let fname = self.names[f as usize].clone();
-        let r = if let Some(l) = self.lambdas.get(&x) {
+        let r = if let Some(&t) = self.arrays.get(&x) {
+            self.sub(t, f)
+        } else if let Some(l) = self.lambdas.get(&x) {
             &*fname == OBJECT || self.h.is_subtype(&l.iface, &fname)
         } else {
             let xname = self.names[x as usize].clone();
@@ -333,28 +417,26 @@ impl<'a> Engine<'a> {
         !self.lambdas.contains_key(&id) && self.h.is_interface(&self.names[id as usize])
     }
 
-    /// 类型集按过滤类型（任一）收窄
-    fn filter(&mut self, s: &TypeSet, f: &[u32]) -> TypeSet {
+    /// 类型集按过滤类型收窄
+    fn filter(&mut self, s: &TypeSet, t: u32) -> TypeSet {
         let mut out = TypeSet::default();
         for &x in &s.classes {
-            if f.iter().any(|&t| self.sub(x, t)) {
+            if self.sub(x, t) {
                 out.classes.insert(x);
             }
         }
         for &o in &s.open {
-            for &t in f {
-                if self.sub(o, t) {
-                    out.open.insert(o);
-                } else if self.sub(t, o) || self.is_iface(o) || self.is_iface(t) {
-                    out.open.insert(t);
-                }
+            if self.sub(o, t) {
+                out.open.insert(o);
+            } else if self.sub(t, o) || self.is_iface(o) || self.is_iface(t) {
+                out.open.insert(t);
             }
         }
         out
     }
 
-    /// 类型集里 ⊂ owner 的具体接收者（open 按 G 展开）
-    fn receivers(&mut self, s: &TypeSet, owner: u32) -> BTreeSet<u32> {
+    /// 类型集里 ⊂ owner 的具体接收者（open 按 G 展开；展开过的方法 m 在 G 增长时重处理）
+    fn receivers(&mut self, m: usize, s: &TypeSet, owner: u32) -> BTreeSet<u32> {
         let mut out = BTreeSet::new();
         for &x in &s.classes {
             if self.sub(x, owner) {
@@ -362,12 +444,13 @@ impl<'a> Engine<'a> {
             }
         }
         if !s.open.is_empty() {
+            self.open_methods.insert(m);
             let g: Vec<u32> = self.g.iter().copied().collect();
+            let opens: Vec<u32> = s.open.iter().copied().collect();
             for x in g {
                 if out.contains(&x) || !self.sub(x, owner) {
                     continue;
                 }
-                let opens: Vec<u32> = s.open.iter().copied().collect();
                 if opens.iter().any(|&o| self.sub(x, o)) {
                     out.insert(x);
                 }
@@ -421,15 +504,41 @@ impl<'a> Engine<'a> {
 
     // ── 实例化 / 初始化 ────────────────────────────────────────────────────
 
-    fn instantiate(&mut self, cls: &str, via: Via, into: Option<usize>) {
-        let id = self.id(cls);
-        if !cls.starts_with('[') && self.touch(cls, Level::Alloc, via.clone()).is_none() {
-            return;
+    /// 数组分配点：独立的抽象对象（元素节点 `E(id)`），类型为数组类型
+    fn array_site(&mut self, m: usize, off: u32, t: &str, via: Via) -> u32 {
+        let name = format!("{t}@{m}:{off}");
+        if let Some(&id) = self.ids.get(name.as_str()) {
+            return id;
         }
-        if let Some(m) = into {
-            let mut s = TypeSet::default();
-            s.classes.insert(id);
-            self.add_to(Node::M(m), &s);
+        self.touch(t, Level::Type, via);
+        let tid = self.id(t);
+        let id = self.id(&name);
+        self.arrays.insert(id, tid);
+        // 多维数组的内层数组来自同一条指令：按 open(分量类型) 处理
+        if let Some(c) = absint::component(t) {
+            if c.starts_with('[') {
+                let cid = self.id(&c);
+                for p in PARITIES {
+                    self.add_to(Node::E(id, p), &TypeSet::open(cid));
+                }
+            }
+        }
+        let cid = absint::component(t).filter(|c| c.len() > 1).map(|c| self.id(&c));
+        if let Some(cid) = cid {
+            for p in PARITIES {
+                self.flow(Node::Array, Node::E(id, p), cid);
+            }
+        }
+        if self.g.insert(id) {
+            self.on_g_grow(id);
+        }
+        id
+    }
+
+    fn instantiate(&mut self, cls: &str, via: Via) {
+        let id = self.id(cls);
+        if !cls.starts_with('[') && self.touch(cls, Level::Alloc, via).is_none() {
+            return;
         }
         if self.g.insert(id) {
             self.on_g_grow(id);
@@ -524,22 +633,46 @@ impl<'a> Engine<'a> {
         (if overloaded { None } else { Some(base.to_string()) }, mangled)
     }
 
+    fn ptype(&mut self, t: &FieldType) -> Option<u32> {
+        match t {
+            FieldType::Object(c) => Some(self.id(c)),
+            other if other.is_reference() => {
+                let d = other.descriptor();
+                Some(self.id(&d))
+            }
+            _ => None,
+        }
+    }
+
     /// 方法节点（按声明类 + 名字 + 描述符）；首次登记入队
     fn method(&mut self, key: MemberRef, via: Via) -> usize {
         if let Some(i) = self.methods.get_index_of(&key) {
             return i;
         }
-        let (kind, cf) = match self.h.class(&key.owner) {
+        let (kind, cf, is_static) = match self.h.class(&key.owner) {
             Some(cf) => match cf.method(&key.name, &key.desc) {
-                Some(m) => (self.kind_of(&cf, m), Some(cf.clone())),
-                None => (Kind::Missing, None),
+                Some(m) => (self.kind_of(&cf, m), Some(cf.clone()), m.is_static()),
+                None => (Kind::Missing, None, false),
             },
-            None => (Kind::Missing, None),
+            None => (Kind::Missing, None, false),
         };
+        let mut ptypes = Vec::new();
+        if !is_static {
+            ptypes.push(Some(self.id(&key.owner)));
+        }
+        let md = parse_method(&key.desc);
+        let mut rtype = None;
+        if let Some(md) = &md {
+            for p in &md.params {
+                let t = self.ptype(p);
+                ptypes.push(t);
+            }
+            rtype = md.ret.as_ref().and_then(|r| self.ptype(r));
+        }
         let idx = self.methods.len();
         self.methods.insert(
             key.clone(),
-            MNode { key: key.clone(), kind, via: via.clone(), set: TypeSet::default(), analysis: None, hw_fns: vec![] },
+            MNode { key: key.clone(), kind, via: via.clone(), is_static, ptypes, rtype, analysis: None, hw_fns: vec![] },
         );
         let lvl = if kind == Kind::Bytecode { Level::Code } else { Level::Type };
         self.touch(&key.owner, lvl, Via::method("member", idx, None));
@@ -561,97 +694,132 @@ impl<'a> Engine<'a> {
 
     // ── 类型流 ──────────────────────────────────────────────────────────────
 
-    fn set_of(&self, n: Node) -> &TypeSet {
-        match n {
-            Node::M(i) => &self.methods[i].set,
-            Node::F(i) => &self.fields[i],
-            Node::Array => &self.arrays,
-        }
+    fn set_of(&self, n: Node) -> TypeSet {
+        self.sets.get(&n).cloned().unwrap_or_default()
     }
 
     fn add_to(&mut self, n: Node, s: &TypeSet) {
         if s.is_empty() {
             return;
         }
-        let changed = match n {
-            Node::M(i) => self.methods[i].set.add_all(s),
-            Node::F(i) => self.fields[i].add_all(s),
-            Node::Array => self.arrays.add_all(s),
+        let cur = self.sets.entry(n).or_default();
+        let delta = TypeSet {
+            classes: s.classes.difference(&cur.classes).copied().collect(),
+            open: s.open.difference(&cur.open).copied().collect(),
         };
-        if changed {
-            if let Node::M(i) = n {
-                if !self.methods[i].set.open.is_empty() {
-                    self.open_methods.insert(i);
-                }
-                self.push_m(i);
-            }
-            if self.in_fwork.insert(n) {
-                self.fwork.push_back(n);
-            }
+        if delta.is_empty() {
+            return;
+        }
+        cur.add_all(&delta);
+        if let Some(m) = n.owner() {
+            self.push_m(m);
+        }
+        // 只沿流边推送新增部分（差分传播）
+        self.fdelta.entry(n).or_default().add_all(&delta);
+        if self.in_fwork.insert(n) {
+            self.fwork.push_back(n);
         }
     }
 
     /// 流边 src → dst（按 filter 收窄）；立即按当前集合推一次
-    fn flow(&mut self, src: Node, dst: Node, filter: Vec<u32>) {
-        if filter.is_empty() {
+    fn flow(&mut self, src: Node, dst: Node, filter: u32) {
+        if !self.flow_seen.insert((src, dst, filter)) {
             return;
         }
-        let f: Rc<[u32]> = Rc::from(filter);
-        if !self.flow_seen.insert((src, dst, f.clone())) {
-            return;
-        }
-        self.flows.entry(src).or_default().push((dst, f.clone()));
-        let s = self.set_of(src).clone();
-        let out = self.filter(&s, &f);
+        self.flows.entry(src).or_default().push((dst, filter));
+        let s = self.set_of(src);
+        let out = self.filter(&s, filter);
         self.add_to(dst, &out);
     }
 
     fn drain_flows(&mut self) {
         while let Some(n) = self.fwork.pop_front() {
             self.in_fwork.remove(&n);
-            let s = self.set_of(n).clone();
+            let Some(s) = self.fdelta.remove(&n) else { continue };
             let edges = self.flows.get(&n).cloned().unwrap_or_default();
             for (dst, f) in edges {
-                let out = self.filter(&s, &f);
+                let out = self.filter(&s, f);
                 self.add_to(dst, &out);
             }
         }
     }
 
-    fn ref_ids(&mut self, types: &[FieldType]) -> Vec<u32> {
-        types
-            .iter()
-            .filter(|t| t.is_reference())
-            .map(|t| match t {
-                FieldType::Object(c) => self.id(c),
-                other => {
-                    let d = other.descriptor();
-                    self.id(&d)
+    /// 方法 m 内抽象值 v 的类型来源；未知值按声明类型 open
+    fn feeds(&mut self, m: usize, v: &V, decl: u32) -> Vec<Feed> {
+        match v {
+            V::Str(_) => vec![Feed::S(TypeSet::exact(self.id(STRING)))],
+            V::Class(_) => vec![Feed::S(TypeSet::exact(self.id(CLASS)))],
+            V::Top => vec![Feed::S(TypeSet::open(decl))],
+            V::Ref { src, .. } => src
+                .iter()
+                .map(|s| match *s {
+                    Src::Param(i) => Feed::N(Node::P(m, i)),
+                    Src::Site(o) => Feed::N(Node::S(m, o)),
+                    Src::Catch(o) => Feed::N(Node::S(m, CATCH | o)),
+                    Src::Str => Feed::S(TypeSet::exact(self.id(STRING))),
+                    Src::Class => Feed::S(TypeSet::exact(self.id(CLASS))),
+                })
+                .collect(),
+            _ => vec![],
+        }
+    }
+
+    fn feed(&mut self, fs: &[Feed], dst: Node, filter: u32) {
+        for f in fs {
+            match f {
+                Feed::N(n) => self.flow(*n, dst, filter),
+                Feed::S(s) => {
+                    let out = self.filter(s, filter);
+                    self.add_to(dst, &out);
                 }
-            })
-            .collect()
+            }
+        }
+    }
+
+    fn value_set(&self, fs: &[Feed]) -> TypeSet {
+        let mut out = TypeSet::default();
+        for f in fs {
+            match f {
+                Feed::N(n) => {
+                    if let Some(s) = self.sets.get(n) {
+                        out.add_all(s);
+                    }
+                }
+                Feed::S(s) => {
+                    out.add_all(s);
+                }
+            }
+        }
+        out
+    }
+
+    /// 形参类型列表 → 全部取自同一来源的实参
+    fn args_from(&mut self, desc: &str, f: impl Fn(u32) -> Vec<Feed>) -> Args {
+        let Some(md) = parse_method(desc) else { return vec![] };
+        md.params.iter().map(|p| self.ptype(p).map(&f)).collect()
     }
 
     fn field_node(&mut self, key: MemberRef) -> usize {
-        if let Some(i) = self.fields.get_index_of(&key) {
-            return i;
-        }
-        self.fields.insert(key, TypeSet::default());
-        self.fields.len() - 1
+        self.fields.insert_full(key, ()).0
     }
 
     // ── 主循环 ──────────────────────────────────────────────────────────────
 
+    /// 入口形参来自 VM / 手写层：按声明类型 open
+    fn open_params(&mut self, t: usize) {
+        let pts = self.methods[t].ptypes.clone();
+        for (i, pt) in pts.iter().enumerate() {
+            if let Some(pt) = pt {
+                self.add_to(Node::P(t, i as u16), &TypeSet::open(*pt));
+            }
+        }
+    }
+
     pub fn root(&mut self, key: MemberRef, kind: &'static str) {
         let via = Via::root(kind, &key.to_string());
         self.init(&key.owner.clone(), via.clone());
-        let m = self.method(key.clone(), via);
-        // 入口形参（String[] args 等）来自 VM：按声明类型 open
-        if let Some(md) = parse_method(&key.desc) {
-            let ids = self.ref_ids(&md.params);
-            let s = TypeSet { classes: BTreeSet::new(), open: ids.into_iter().collect() };
-            self.add_to(Node::M(m), &s);
-        }
+        let m = self.method(key, via);
+        self.open_params(m);
     }
 
     pub fn root_upcall(&mut self, u: &Upcall, kind: &'static str) {
@@ -659,12 +827,13 @@ impl<'a> Engine<'a> {
             Upcall::Method(k) => {
                 let via = Via::root(kind, &k.to_string());
                 if k.name == "<init>" {
-                    self.instantiate(&k.owner, via.clone(), None);
+                    self.instantiate(&k.owner, via.clone());
                 }
                 self.init(&k.owner, via.clone());
                 if let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, false) {
                     let (o, n, d) = site.key();
-                    self.method(MemberRef { owner: o, name: n, desc: d }, via);
+                    let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
+                    self.open_params(t);
                 } else {
                     self.unresolved.insert(k.to_string());
                 }
@@ -725,18 +894,21 @@ impl<'a> Engine<'a> {
         let Some(a) = self.analysis(m) else { return };
         let owner = self.methods[m].key.owner.clone();
         let cf = self.h.class(&owner);
+        let obj = self.id(OBJECT);
         let mut dead = Vec::new();
         for (off, e) in a.events.iter() {
             let off = *off;
             let via = |k: &'static str| Via::method(k, m, Some(off));
             match e {
                 Event::New(c) => {
-                    self.instantiate(c, via("new"), Some(m));
+                    self.instantiate(c, via("new"));
                     self.init(c, via("new"));
+                    let id = self.id(c);
+                    self.add_to(Node::S(m, off), &TypeSet::exact(id));
                 }
                 Event::NewArray(t) => {
-                    self.touch(t, Level::Type, via("newarray"));
-                    self.instantiate(t, via("newarray"), Some(m));
+                    let id = self.array_site(m, off, t, via("newarray"));
+                    self.add_to(Node::S(m, off), &TypeSet::exact(id));
                 }
                 Event::Ldc(c) => self.ldc(m, off, c),
                 Event::CheckCast(c) => {
@@ -749,25 +921,34 @@ impl<'a> Engine<'a> {
                     let t = ct.clone().unwrap_or_else(|| THROWABLE.to_string());
                     self.touch(&t, Level::Type, via("catch"));
                     let id = self.id(&t);
-                    let s = TypeSet { classes: BTreeSet::new(), open: [id].into() };
-                    self.add_to(Node::M(m), &s);
+                    self.add_to(Node::S(m, CATCH | off), &TypeSet::open(id));
                 }
-                Event::Field { opcode, mref, .. } => self.field(m, off, *opcode, mref),
+                Event::Field { opcode, mref, value } => self.field(m, off, *opcode, mref, value.as_ref(), Node::S(m, off)),
                 Event::Invoke { opcode, mref, iface, args } => self.invoke(m, off, *opcode, mref, *iface, args),
                 Event::Indy { bsm, name, desc, args } => {
                     if let Some(cf) = &cf {
                         self.indy(m, off, cf, *bsm, name, desc, args);
                     }
                 }
-                Event::ArrayLoad { array } => {
-                    let comp = array.static_type().and_then(absint::component);
-                    let t = comp.as_deref().unwrap_or(OBJECT).to_string();
-                    let tid = self.id(&t);
-                    self.flow(Node::Array, Node::M(m), vec![tid]);
-                    // open 数组（手写层产出）的元素同样 open
-                    let opens: Vec<u32> = self.methods[m].set.open.iter().copied().collect();
+                Event::ArrayLoad { array, index } => {
+                    let aty = array.static_type().map(str::to_string);
+                    let comp = aty.as_deref().and_then(absint::component);
+                    let tid = self.id(comp.as_deref().unwrap_or(OBJECT));
+                    let aid = aty.map(|t| self.id(&t)).unwrap_or(obj);
+                    let fs = self.feeds(m, array, aid);
+                    let s = self.value_set(&fs);
                     let mut add = TypeSet::default();
-                    for o in opens {
+                    for &x in &s.classes {
+                        if self.arrays.contains_key(&x) {
+                            for p in slots(index) {
+                                self.flow(Node::E(x, p), Node::S(m, off), tid);
+                            }
+                        } else {
+                            add.open.insert(tid);
+                        }
+                    }
+                    // open 数组（手写层 / VM 产出）的元素同样 open
+                    for &o in &s.open {
                         if let Some(c) = absint::component(&self.names[o as usize].clone()) {
                             let cid = self.id(&c);
                             if self.sub(cid, tid) {
@@ -775,14 +956,40 @@ impl<'a> Engine<'a> {
                             } else if self.sub(tid, cid) {
                                 add.open.insert(tid);
                             }
+                        } else if o == obj {
+                            add.open.insert(tid);
                         }
                     }
-                    self.add_to(Node::M(m), &add);
+                    self.add_to(Node::S(m, off), &add);
                 }
-                Event::ArrayStore { array, .. } => {
-                    let comp = array.static_type().and_then(absint::component);
+                Event::ArrayStore { array, index, value } => {
+                    let aty = array.static_type().map(str::to_string);
+                    let comp = aty.as_deref().and_then(absint::component);
                     let tid = self.id(comp.as_deref().unwrap_or(OBJECT));
-                    self.flow(Node::M(m), Node::Array, vec![tid]);
+                    let aid = aty.map(|t| self.id(&t)).unwrap_or(obj);
+                    let fs = self.feeds(m, value, tid);
+                    let afs = self.feeds(m, array, aid);
+                    let s = self.value_set(&afs);
+                    for &x in &s.classes {
+                        // 按分配点的实际分量类型收窄（静态类型可能更宽，如经 Object[] 视角写入 Class[]）
+                        let Some(&at) = self.arrays.get(&x) else { continue };
+                        let Some(c) = absint::component(&self.names[at as usize].clone()).filter(|c| c.len() > 1) else { continue };
+                        let cx = self.id(&c);
+                        for p in slots(index) {
+                            self.feed(&fs, Node::E(x, p), cx);
+                        }
+                    }
+                    // 数组值未知（保守分析）：可能是任一分配点数组。open 数组来自手写层 / VM，
+                    // 其读取已按 open(分量) 处理，写入无需回灌分配点
+                    if matches!(array, V::Top) {
+                        self.feed(&fs, Node::Array, tid);
+                    }
+                }
+                Event::Return(v) => {
+                    if let Some(rt) = self.methods[m].rtype {
+                        let fs = self.feeds(m, v, rt);
+                        self.feed(&fs, Node::R(m), rt);
+                    }
                 }
                 Event::Throw(_) => {}
                 Event::DeadBranch(t) => dead.push((off, *t)),
@@ -797,27 +1004,31 @@ impl<'a> Engine<'a> {
         let via = Via::method("ldc", m, Some(off));
         match c {
             Const::String(_) => {
-                self.instantiate("java/lang/String", via, Some(m));
+                self.instantiate(STRING, via);
             }
             Const::Class(n) => {
                 self.touch(n, Level::Type, via.clone());
-                self.instantiate("java/lang/Class", via, Some(m));
+                self.instantiate(CLASS, via);
             }
             Const::MethodType(d) => self.touch_desc(d, &via),
             Const::MethodHandle(mh) => {
                 let mh = mh.clone();
-                self.invoke_mh(m, off, &mh, None);
+                self.invoke_mh(m, off, &mh);
             }
             Const::Dynamic(bsm, _, d) => {
                 self.touch_desc(d, &via);
+                // 动态常量的值由引导方法产出：按声明类型 open
+                if let Some(t) = parse_field(d).and_then(|ft| self.ptype(&ft)) {
+                    self.add_to(Node::S(m, off), &TypeSet::open(t));
+                }
                 let owner = self.methods[m].key.owner.clone();
                 if let Some(cf) = self.h.class(&owner) {
                     if let Some(b) = cf.bootstrap_methods.get(*bsm as usize) {
                         let h = b.handle.clone();
-                        self.invoke_mh(m, off, &h, None);
+                        self.invoke_mh(m, off, &h);
                         for a in b.args.clone() {
                             if let Const::MethodHandle(x) = a {
-                                self.invoke_mh(m, off, &x, None);
+                                self.invoke_mh(m, off, &x);
                             }
                         }
                     }
@@ -827,7 +1038,8 @@ impl<'a> Engine<'a> {
         }
     }
 
-    fn field(&mut self, m: usize, off: u32, opcode: u8, f: &MemberRef) {
+    /// 字段访问：写入值来源 → 字段节点；读 → 结果节点 `res`
+    fn field(&mut self, m: usize, off: u32, opcode: u8, f: &MemberRef, value: Option<&V>, res: Node) {
         use classfile::op;
         let via = Via::method("field", m, Some(off));
         let Some(site) = self.h.resolve_field(&f.owner, &f.name, &f.desc) else {
@@ -842,18 +1054,21 @@ impl<'a> Engine<'a> {
             self.init(&decl, via.clone());
         }
         let Some(ft) = parse_field(&f.desc) else { return };
-        if !ft.is_reference() {
+        let Some(tid) = self.ptype(&ft) else {
             // 手写字段访问器仍需沿其回调入链
             self.field_handwritten(m, &decl, &f.name, &via, None);
             return;
-        }
-        let tid = self.ref_ids(std::slice::from_ref(&ft))[0];
+        };
         let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
         let fi = self.field_node(key);
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
-            self.flow(Node::M(m), Node::F(fi), vec![tid]);
+            let fs = match value {
+                Some(v) => self.feeds(m, v, tid),
+                None => vec![Feed::S(TypeSet::open(tid))],
+            };
+            self.feed(&fs, Node::F(fi), tid);
         } else {
-            self.flow(Node::F(fi), Node::M(m), vec![tid]);
+            self.flow(Node::F(fi), res, tid);
             self.field_handwritten(m, &decl, &f.name, &via, Some((fi, tid)));
         }
     }
@@ -865,8 +1080,7 @@ impl<'a> Engine<'a> {
         let boundary = matches!(self.domain(decl), Domain::Boundary | Domain::Root);
         if let Some((fi, tid)) = node {
             if boundary || !hwc.fns.is_empty() {
-                let s = TypeSet { classes: BTreeSet::new(), open: [tid].into() };
-                self.add_to(Node::F(fi), &s);
+                self.add_to(Node::F(fi), &TypeSet::open(tid));
             }
         }
         if hwc.fns.is_empty() {
@@ -876,10 +1090,10 @@ impl<'a> Engine<'a> {
         if mh.fns.is_empty() {
             return;
         }
-        self.apply_hw(m, decl, &mh.upcalls, &mh.allocs, &mh.ctors, via);
+        self.apply_hw(m, decl, &mh, via);
     }
 
-    fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, _args: &[V]) {
+    fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
         use classfile::op;
         let via = Via::method("invoke", m, Some(off));
         self.touch(&mref.owner, Level::Type, via.clone());
@@ -889,61 +1103,76 @@ impl<'a> Engine<'a> {
         };
         let (o, n, d) = site.key();
         let resolved = MemberRef { owner: o, name: n, desc: d };
-        let md = parse_method(&mref.desc);
-        let params = md.as_ref().map(|d| self.ref_ids(&d.params)).unwrap_or_default();
-        let ret = md.as_ref().and_then(|d| d.ret.as_ref()).map(|r| self.ref_ids(std::slice::from_ref(r))).unwrap_or_default();
+        let Some(md) = parse_method(&mref.desc) else { return };
+        let owner = self.id(&mref.owner);
+        let is_static = opcode == op::INVOKESTATIC;
+        let recv_v = if is_static { None } else { args.first() };
+        let pargs = if is_static { args } else { args.get(1..).unwrap_or(&[]) };
+        let mut a: Args = Vec::with_capacity(md.params.len());
+        for (p, v) in md.params.iter().zip(pargs.iter()) {
+            let f = self.ptype(p).map(|t| self.feeds(m, v, t));
+            a.push(f);
+        }
+        let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
+        let res = Some(Node::S(m, off));
+        let recv_feeds = |e: &mut Self| match recv_v {
+            Some(v) => e.feeds(m, v, owner),
+            None => vec![Feed::S(TypeSet::open(owner))],
+        };
         match opcode {
             op::INVOKESTATIC => {
                 self.init(&resolved.owner, via.clone());
                 let t = self.method(resolved, via);
-                self.edge(m, off, t, &params, &ret, None);
+                self.edge(m, off, t, Recv::None, &a, ret, res);
             }
             op::INVOKESPECIAL => {
                 let t = self.method(resolved, via);
-                self.edge(m, off, t, &params, &ret, None);
+                let r = recv_feeds(self);
+                self.edge(m, off, t, Recv::Feeds(r), &a, ret, res);
             }
             _ => {
                 let rm = site.method();
                 if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() {
-                    // 非虚：直接到已解析方法（仍需接收者存在才有意义，此处不收窄）
+                    // 非虚：直接到已解析方法，接收者值流入 this
                     let t = self.method(resolved, via);
-                    self.edge(m, off, t, &params, &ret, None);
+                    let r = recv_feeds(self);
+                    self.edge(m, off, t, Recv::Feeds(r), &a, ret, res);
                     return;
                 }
-                let owner = self.id(&mref.owner);
-                let s = self.methods[m].set.clone();
-                let recv = self.receivers(&s, owner);
+                let r = recv_feeds(self);
+                let s = self.value_set(&r);
+                let recv = self.receivers(m, &s, owner);
                 for r in recv {
-                    self.dispatch_one(m, off, r, &site, &params, &ret);
+                    self.dispatch_one(m, off, r, &site, &a, ret, res);
                 }
             }
         }
     }
 
     /// 接收者 r 上分派已解析方法
-    fn dispatch_one(&mut self, m: usize, off: u32, r: u32, site: &resolve::MethodSite, params: &[u32], ret: &[u32]) {
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_one(&mut self, m: usize, off: u32, r: u32, site: &resolve::MethodSite, a: &Args, ret: Option<u32>, res: Option<Node>) {
         let via = Via::method("dispatch", m, Some(off));
         if let Some(l) = self.lambdas.get(&r) {
-            let rm = site.method();
-            if rm.name == l.sam {
-                let imh = l.imh.clone();
-                self.invoke_mh(m, off, &imh, Some(params));
+            if site.method().name == l.sam {
+                self.invoke_lambda(m, off, r, a, ret, res);
                 return;
             }
             let iface = l.iface.clone();
             if let Some(sel) = self.h.select(&iface, site) {
                 let (o, n, d) = sel.key();
                 let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
-                self.edge(m, off, t, params, ret, None);
+                self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             return;
         }
-        let rname = self.names[r as usize].to_string();
+        let rt = self.arrays.get(&r).copied().unwrap_or(r);
+        let rname = self.names[rt as usize].to_string();
         match self.h.select(&rname, site) {
             Some(sel) => {
                 let (o, n, d) = sel.key();
                 let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
-                self.edge(m, off, t, params, ret, Some(r));
+                self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             None => {
                 self.unresolved.insert(format!("select {rname} {}", site.method().name));
@@ -951,19 +1180,114 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 调用边：实参流入（形参类型过滤）、返回值流回；接收者单独注入
-    fn edge(&mut self, m: usize, off: u32, t: usize, params: &[u32], ret: &[u32], recv: Option<u32>) {
+    /// 调用边：接收者注入 this、实参按位置流入形参（被调声明类型过滤）、返回值流回结果节点
+    #[allow(clippy::too_many_arguments)]
+    fn edge(&mut self, m: usize, off: u32, t: usize, recv: Recv, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         self.dispatch.entry((m, off)).or_default().insert(t);
-        self.flow(Node::M(m), Node::M(t), params.to_vec());
-        self.flow(Node::M(t), Node::M(m), ret.to_vec());
-        if let Some(r) = recv {
-            let s = TypeSet { classes: [r].into(), open: BTreeSet::new() };
-            self.add_to(Node::M(t), &s);
+        let is_static = self.methods[t].is_static;
+        let ptypes = self.methods[t].ptypes.clone();
+        let base = usize::from(!is_static);
+        let mut recv_fs: Option<Vec<Feed>> = None;
+        if !is_static {
+            match (recv, ptypes.first().copied().flatten()) {
+                (Recv::Exact(r), _) => {
+                    self.add_to(Node::P(t, 0), &TypeSet::exact(r));
+                    recv_fs = Some(vec![Feed::S(TypeSet::exact(r))]);
+                }
+                (Recv::Feeds(fs), Some(pt)) => {
+                    self.feed(&fs, Node::P(t, 0), pt);
+                    recv_fs = Some(fs);
+                }
+                _ => {}
+            }
+        }
+        for (j, f) in a.iter().enumerate() {
+            if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(base + j)) {
+                self.feed(fs, Node::P(t, (base + j) as u16), *pt);
+            }
+        }
+        if let (Some(rt), Some(res)) = (ret, res) {
+            if self.man.returns_receiver(&self.methods[t].key.to_string()) {
+                // 浅拷贝：返回值 = 接收者本身的类型集（数组共享元素节点）
+                self.flow(Node::P(t, 0), res, rt);
+            } else if let Some(ps) = self.passthrough(t) {
+                // 透传方法：结果 = 本调用点对应实参（逐调用点，不经 R 汇合）
+                for i in ps {
+                    let fs = if !is_static && i == 0 { recv_fs.clone() } else { a.get(i as usize - base).cloned().flatten() };
+                    if let Some(fs) = fs {
+                        self.feed(&fs, res, rt);
+                    }
+                }
+            } else {
+                self.flow(Node::R(t), res, rt);
+            }
         }
     }
 
-    /// 方法句柄调用（ldc MH / lambda 实现 / 引导方法静态实参）
-    fn invoke_mh(&mut self, m: usize, off: u32, mh: &MethodHandle, sam_params: Option<&[u32]>) {
+    /// 字节码方法的返回值只来自形参时，返回这些形参序号
+    fn passthrough(&mut self, t: usize) -> Option<Vec<u16>> {
+        if self.methods[t].kind != Kind::Bytecode {
+            return None;
+        }
+        self.analysis(t)?.returned_params()
+    }
+
+    /// lambda 的 SAM 调用：捕获实参 ++ SAM 实参 → 实现方法
+    fn invoke_lambda(&mut self, m: usize, off: u32, lid: u32, a: &Args, ret: Option<u32>, res: Option<Node>) {
+        // 同一 lambda 以相同实参重入：外层调用已接上全部流边
+        let key = (lid, format!("{a:?}|{ret:?}|{res:?}"));
+        if !self.lambda_stack.insert(key.clone()) {
+            return;
+        }
+        self.invoke_lambda_body(m, off, lid, a, ret, res);
+        self.lambda_stack.remove(&key);
+    }
+
+    fn invoke_lambda_body(&mut self, m: usize, off: u32, lid: u32, a: &Args, ret: Option<u32>, res: Option<Node>) {
+        let l = self.lambdas[&lid].clone();
+        let k = &l.imh.member;
+        let via = Via::method("lambda", m, Some(off));
+        let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, l.imh.interface) else {
+            self.unresolved.insert(k.to_string());
+            return;
+        };
+        let (o, n, d) = site.key();
+        let resolved = MemberRef { owner: o, name: n, desc: d };
+        let mut all: Args = l.cap.clone();
+        all.extend(a.iter().cloned());
+        let first = || all.first().cloned().flatten().unwrap_or_default();
+        let rest = all.get(1..).unwrap_or(&[]).to_vec();
+        match l.imh.kind {
+            6 => {
+                let t = self.method(resolved, via);
+                self.edge(m, off, t, Recv::None, &all, ret, res);
+            }
+            7 => {
+                let t = self.method(resolved, via);
+                self.edge(m, off, t, Recv::Feeds(first()), &rest, ret, res);
+            }
+            8 => {
+                let oid = self.id(&k.owner);
+                let t = self.method(resolved, via);
+                self.edge(m, off, t, Recv::Exact(oid), &all, None, None);
+                if let (Some(res), Some(rt)) = (res, ret) {
+                    let s = self.filter(&TypeSet::exact(oid), rt);
+                    self.add_to(res, &s);
+                }
+            }
+            _ => {
+                let owner = self.id(&k.owner);
+                let s = self.value_set(&first());
+                let recv = self.receivers(m, &s, owner);
+                for r in recv {
+                    self.dispatch_one(m, off, r, &site, &rest, ret, res);
+                }
+            }
+        }
+    }
+
+    /// 方法句柄（ldc MH / 引导方法及其静态实参）：由 VM / 库内部调用，实参按声明类型 open
+    fn invoke_mh(&mut self, m: usize, off: u32, mh: &MethodHandle) {
         let k = &mh.member;
         let via = Via::method("method-handle", m, Some(off));
         self.touch(&k.owner, Level::Type, via.clone());
@@ -972,7 +1296,7 @@ impl<'a> Engine<'a> {
             1..=4 => {
                 let opc = [0, classfile::op::GETFIELD, classfile::op::GETSTATIC, classfile::op::PUTFIELD, classfile::op::PUTSTATIC]
                     [mh.kind as usize];
-                self.field(m, off, opc, k);
+                self.field(m, off, opc, k, None, Node::S(m, off));
             }
             _ => {
                 let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, mh.interface) else {
@@ -981,36 +1305,28 @@ impl<'a> Engine<'a> {
                 };
                 let (o, n, d) = site.key();
                 let resolved = MemberRef { owner: o, name: n, desc: d };
-                let md = parse_method(&k.desc);
-                let mut params = md.as_ref().map(|d| self.ref_ids(&d.params)).unwrap_or_default();
-                if let Some(sp) = sam_params {
-                    params.extend_from_slice(sp);
-                }
-                let ret = md.as_ref().and_then(|d| d.ret.as_ref()).map(|r| self.ref_ids(std::slice::from_ref(r))).unwrap_or_default();
+                let a = self.args_from(&k.desc, |t| vec![Feed::S(TypeSet::open(t))]);
+                let owner = self.id(&k.owner);
                 match mh.kind {
                     6 => {
                         self.init(&resolved.owner, via.clone());
                         let t = self.method(resolved, via);
-                        self.edge(m, off, t, &params, &ret, None);
+                        self.edge(m, off, t, Recv::None, &a, None, None);
                     }
                     7 => {
                         let t = self.method(resolved, via);
-                        self.edge(m, off, t, &params, &ret, None);
+                        self.edge(m, off, t, Recv::Feeds(vec![Feed::S(TypeSet::open(owner))]), &a, None, None);
                     }
                     8 => {
-                        self.instantiate(&k.owner, via.clone(), Some(m));
+                        self.instantiate(&k.owner, via.clone());
                         self.init(&k.owner, via.clone());
                         let t = self.method(resolved, via);
-                        self.edge(m, off, t, &params, &ret, None);
+                        self.edge(m, off, t, Recv::Exact(owner), &a, None, None);
                     }
                     _ => {
-                        // 虚句柄：接收者 = 调用方类型集 ∪ open(声明类)（绑定 / 非绑定接收者都可能来自调用方外）
-                        let owner = self.id(&k.owner);
-                        let mut s = self.methods[m].set.clone();
-                        s.open.insert(owner);
-                        let recv = self.receivers(&s, owner);
+                        let recv = self.receivers(m, &TypeSet::open(owner), owner);
                         for r in recv {
-                            self.dispatch_one(m, off, r, &site, &params, &ret);
+                            self.dispatch_one(m, off, r, &site, &a, None, None);
                         }
                     }
                 }
@@ -1023,77 +1339,86 @@ impl<'a> Engine<'a> {
         let via = Via::method("indy", m, Some(off));
         self.touch_desc(desc, &via);
         let Some(b) = cf.bootstrap_methods.get(bsm as usize).cloned() else { return };
+        let Some(md) = parse_method(desc) else { return };
+        let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
         let bkey = format!("{}.{}", b.handle.member.owner, b.handle.member.name);
         match self.man.indy_kind(&bkey) {
             Some(IndyKind::Lambda) => {
-                let (Some(Const::MethodHandle(imh)), Some(ret)) =
-                    (b.args.get(1), parse_method(desc).and_then(|d| d.ret).and_then(|r| r.class_ref().map(String::from)))
+                let (Some(Const::MethodHandle(imh)), Some(iface)) =
+                    (b.args.get(1), md.ret.as_ref().and_then(|r| r.class_ref().map(String::from)))
                 else {
                     return;
                 };
+                let mut cap: Args = Vec::with_capacity(md.params.len());
+                for (p, v) in md.params.iter().zip(args.iter()) {
+                    let f = self.ptype(p).map(|t| self.feeds(m, v, t));
+                    cap.push(f);
+                }
                 let lname = format!("{}$$Lambda@{}:{}", cf.name, m, off);
                 let lid = self.id(&lname);
-                self.lambdas.insert(lid, Lambda { iface: ret.clone(), sam: name.to_string(), imh: imh.clone() });
-                self.touch(&ret, Level::Alloc, via.clone());
+                self.lambdas.insert(lid, Lambda { iface: iface.clone(), sam: name.to_string(), imh: imh.clone(), cap });
+                self.touch(&iface, Level::Alloc, via.clone());
                 for a in &b.args {
                     if let Const::MethodType(d) = a {
                         self.touch_desc(d, &via);
                     }
                 }
-                let s = TypeSet { classes: [lid].into(), open: BTreeSet::new() };
-                self.add_to(Node::M(m), &s);
+                self.add_to(Node::S(m, off), &TypeSet::exact(lid));
                 if self.g.insert(lid) {
                     self.on_g_grow(lid);
                 }
-                // 捕获实参流入实现方法（实现方法随 SAM 调用分派入链；静态 / 构造实现在此即入链，捕获值随之流入）
-                if matches!(imh.kind, 6 | 7 | 8) {
-                    let imh = imh.clone();
-                    self.invoke_mh(m, off, &imh, None);
+                // 静态 / 私有 / 构造实现在创建点即入链（实参随 SAM 调用接入）
+                let k = &imh.member;
+                if matches!(imh.kind, 6..=8) {
+                    if let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, imh.interface) {
+                        let (o, n, d) = site.key();
+                        if imh.kind == 6 {
+                            self.init(&o, via.clone());
+                        }
+                        if imh.kind == 8 {
+                            self.instantiate(&k.owner, via.clone());
+                            self.init(&k.owner, via.clone());
+                        }
+                        self.method(MemberRef { owner: o, name: n, desc: d }, via);
+                    } else {
+                        self.unresolved.insert(k.to_string());
+                    }
                 }
             }
             Some(IndyKind::Concat) => {
-                self.instantiate("java/lang/String", via.clone(), Some(m));
-                let obj = self.id(OBJECT);
+                self.instantiate(STRING, via.clone());
+                let sid = self.id(STRING);
+                self.add_to(Node::S(m, off), &TypeSet::exact(sid));
                 let Some(site) = self.h.resolve_method(OBJECT, TO_STRING.0, TO_STRING.1, false) else { return };
-                let s = self.methods[m].set.clone();
-                for a in args {
-                    if !matches!(a, V::Ref { .. } | V::Str(_) | V::Class(_)) {
-                        continue;
-                    }
-                    let ty = a.static_type().map(|t| t.to_string());
-                    let tid = ty.map(|t| self.id(&t)).unwrap_or(obj);
-                    let mut s2 = self.filter(&s, &[tid]);
-                    if matches!(a, V::Ref { .. }) && s2.is_empty() {
-                        // 实参类型集为空：值来自调用方外（形参未流入），保持安全
-                        s2.open.insert(tid);
-                    }
-                    let recv = self.receivers(&s2, tid);
+                for (p, v) in md.params.iter().zip(args.iter()) {
+                    let Some(t) = self.ptype(p) else { continue };
+                    let fs = self.feeds(m, v, t);
+                    let s = self.value_set(&fs);
+                    let recv = self.receivers(m, &s, t);
                     for r in recv {
-                        self.dispatch_one(m, off, r, &site, &[], &[]);
+                        self.dispatch_one(m, off, r, &site, &vec![], None, None);
                     }
                 }
             }
-            Some(IndyKind::Native) => {
+            kind => {
+                // 引导方法产出的调用点：结果按声明类型 open
+                if let Some(rt) = ret {
+                    self.add_to(Node::S(m, off), &TypeSet::open(rt));
+                }
+                if kind.is_none() {
+                    let h = b.handle.clone();
+                    self.invoke_mh(m, off, &h);
+                }
                 for a in &b.args {
                     match a {
                         Const::MethodHandle(x) => {
                             let x = x.clone();
-                            self.invoke_mh(m, off, &x, None);
+                            self.invoke_mh(m, off, &x);
                         }
                         Const::Class(c) => {
                             self.touch(c, Level::Type, via.clone());
                         }
                         _ => {}
-                    }
-                }
-            }
-            None => {
-                let h = b.handle.clone();
-                self.invoke_mh(m, off, &h, None);
-                for a in &b.args {
-                    if let Const::MethodHandle(x) = a {
-                        let x = x.clone();
-                        self.invoke_mh(m, off, &x, None);
                     }
                 }
             }
@@ -1106,15 +1431,36 @@ impl<'a> Engine<'a> {
         let key = self.methods[m].key.clone();
         let via = Via::method("handwritten", m, None);
         // 手写返回值：open(返回类型)
-        if let Some(r) = parse_method(&key.desc).and_then(|d| d.ret) {
-            if r.is_reference() {
-                let ids = self.ref_ids(std::slice::from_ref(&r));
-                let s = TypeSet { classes: BTreeSet::new(), open: ids.into_iter().collect() };
-                self.add_to(Node::M(m), &s);
+        if let Some(rt) = self.methods[m].rtype {
+            if !self.man.returns_receiver(&key.to_string()) {
+                self.add_to(Node::R(m), &TypeSet::open(rt));
             }
         }
         if key.name == "<clinit>" {
             return;
+        }
+        // 形参汇入值池（回调实参取自值池）
+        let pts = self.methods[m].ptypes.clone();
+        for (i, pt) in pts.iter().enumerate() {
+            if let Some(pt) = pt {
+                self.flow(Node::P(m, i as u16), Node::S(m, POOL), *pt);
+            }
+        }
+        // 实参数组的元素经元素池互通（arraycopy 等），手写层产出的值也可能写入实参数组
+        let obj = self.id(OBJECT);
+        self.flow(Node::S(m, POOL), Node::S(m, ELEM), obj);
+        for i in 0..pts.len() {
+            let s = self.set_of(Node::P(m, i as u16));
+            for x in s.classes {
+                if let Some(&t) = self.arrays.get(&x) {
+                    let Some(c) = absint::component(&self.names[t as usize].clone()).filter(|c| c.len() > 1) else { continue };
+                    let cid = self.id(&c);
+                    for p in PARITIES {
+                        self.flow(Node::E(x, p), Node::S(m, ELEM), obj);
+                        self.flow(Node::S(m, ELEM), Node::E(x, p), cid);
+                    }
+                }
+            }
         }
         let Some(cf) = self.h.class(&key.owner) else { return };
         let mh = self.hw_member(&cf, &key.name, &key.desc);
@@ -1122,7 +1468,7 @@ impl<'a> Engine<'a> {
             self.methods[m].hw_fns = mh.fns.clone();
         }
         let owner = key.owner.clone();
-        self.apply_hw(m, &owner, &mh.upcalls, &mh.allocs, &mh.ctors, &via);
+        self.apply_hw(m, &owner, &mh, &via);
     }
 
     /// 精确匹配（mangle 名 / 无重载裸名）优先，否则按名字前缀（安全过近似）
@@ -1149,6 +1495,8 @@ impl<'a> Engine<'a> {
             out.upcalls.extend(i.upcalls.iter().cloned());
             out.allocs.extend(i.allocs.iter().cloned());
             out.ctors.extend(i.ctors.iter().cloned());
+            out.calls.extend(i.calls.iter().cloned());
+            out.opaque.extend(i.opaque.iter().cloned());
         }
         out.fns = exact;
         out
@@ -1158,14 +1506,66 @@ impl<'a> Engine<'a> {
         self.hw.resolve_type(host, t).into_iter().find(|c| self.cp.contains(c))
     }
 
-    fn apply_hw(&mut self, m: usize, host: &str, upcalls: &[Upcall], allocs: &BTreeSet<TypeRef>, ctors: &BTreeSet<(TypeRef, String)>, via: &Via) {
-        for t in allocs {
+    /// 手写体调用点推断出的具体类型（须是可实例化的类）
+    fn hw_type(&mut self, host: &str, t: &Option<TypeRef>) -> Option<u32> {
+        let c = self.resolve_tref(host, t.as_ref()?)?;
+        let cf = self.h.class(&c)?;
+        if cf.is_interface() || cf.access & acc::ABSTRACT != 0 {
+            return None;
+        }
+        Some(self.id(&c))
+    }
+
+    /// 回调 / 构造在手写体里的调用点：同名（Rust 名规则）、实参个数一致；
+    /// 同名标识符出现在宏内（syn 不展开）或找不到调用点 → None（退回值池）
+    fn hw_sites<'b>(mh: &'b MemberHw, matches: impl Fn(&TypedCall) -> bool, java_name: &str, nargs: usize) -> Option<Vec<&'b TypedCall>> {
+        if mh.opaque.iter().any(|i| member_matches(i, java_name)) {
+            return None;
+        }
+        let v: Vec<&TypedCall> = mh.calls.iter().filter(|c| c.args.len() == nargs && matches(c)).collect();
+        (!v.is_empty()).then_some(v)
+    }
+
+    /// 实参来源：各调用点该位置都推断出具体类型 → 精确类型集；否则值池
+    fn hw_args(&mut self, m: usize, host: &str, desc: &str, sites: &Option<Vec<&TypedCall>>) -> Args {
+        let pool = Node::S(m, POOL);
+        let Some(md) = parse_method(desc) else { return vec![] };
+        let mut out = Vec::with_capacity(md.params.len());
+        for (j, p) in md.params.iter().enumerate() {
+            if self.ptype(p).is_none() {
+                out.push(None);
+                continue;
+            }
+            let mut set = TypeSet::default();
+            let mut ok = sites.is_some();
+            for c in sites.iter().flatten() {
+                match self.hw_type(host, &c.args[j]) {
+                    Some(id) => {
+                        set.classes.insert(id);
+                    }
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            out.push(Some(if ok { vec![Feed::S(set)] } else { vec![Feed::N(pool)] }));
+        }
+        out
+    }
+
+    /// 手写体效果：分配 / 构造 / 回调。实参按手写体调用点的语法推断精确接入，推断不出的经方法 m 的值池流转
+    fn apply_hw(&mut self, m: usize, host: &str, mh: &MemberHw, via: &Via) {
+        let pool = Node::S(m, POOL);
+        for t in &mh.allocs {
             if let Some(c) = self.resolve_tref(host, t) {
-                self.instantiate(&c, via.clone(), Some(m));
+                self.instantiate(&c, via.clone());
                 self.init(&c, via.clone());
+                let id = self.id(&c);
+                self.add_to(pool, &TypeSet::exact(id));
             }
         }
-        for (t, ctor) in ctors {
+        for (t, ctor) in &mh.ctors {
             let Some(c) = self.resolve_tref(host, t) else { continue };
             let Some(cf) = self.h.class(&c) else { continue };
             let inits: Vec<String> = cf
@@ -1177,47 +1577,68 @@ impl<'a> Engine<'a> {
             if inits.is_empty() {
                 continue;
             }
-            self.instantiate(&c, via.clone(), Some(m));
+            self.instantiate(&c, via.clone());
             self.init(&c, via.clone());
+            let id = self.id(&c);
+            self.add_to(pool, &TypeSet::exact(id));
             for d in inits {
+                let n = parse_method(&d).map_or(0, |md| md.params.len());
+                let sites = Self::hw_sites(mh, |x| x.name == *ctor && x.path_ty.as_ref() == Some(t), "<init>", n);
+                let a = self.hw_args(m, host, &d, &sites);
                 let t = self.method(MemberRef { owner: c.clone(), name: "<init>".into(), desc: d }, via.clone());
-                self.edge(m, 0, t, &[], &[], None);
+                self.edge(m, 0, t, Recv::Exact(id), &a, None, None);
             }
         }
-        for u in upcalls {
+        for u in &mh.upcalls {
             match u {
                 Upcall::Field(f) => {
                     let f = f.clone();
-                    self.field(m, 0, classfile::op::GETSTATIC, &f);
+                    self.field(m, 0, classfile::op::GETSTATIC, &f, None, pool);
                 }
                 Upcall::Method(k) => {
                     let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, self.h.is_interface(&k.owner)) else {
                         self.unresolved.insert(k.to_string());
                         continue;
                     };
-                    let md = parse_method(&k.desc);
-                    let params = md.as_ref().map(|d| self.ref_ids(&d.params)).unwrap_or_default();
-                    let ret = md.as_ref().and_then(|d| d.ret.as_ref()).map(|r| self.ref_ids(std::slice::from_ref(r))).unwrap_or_default();
-                    let (o, n, d) = site.key();
-                    let resolved = MemberRef { owner: o, name: n, desc: d };
+                    let n = parse_method(&k.desc).map_or(0, |md| md.params.len());
+                    let sites = Self::hw_sites(mh, |x| member_matches(&x.name, &k.name), &k.name, n);
+                    let a = self.hw_args(m, host, &k.desc, &sites);
+                    let ret = parse_method(&k.desc).and_then(|d| d.ret).and_then(|r| self.ptype(&r));
+                    let (o, nm, d) = site.key();
+                    let resolved = MemberRef { owner: o, name: nm, desc: d };
                     let rm = site.method();
+                    let owner = self.id(&k.owner);
                     if k.name == "<init>" {
-                        self.instantiate(&k.owner, via.clone(), Some(m));
+                        self.instantiate(&k.owner, via.clone());
                         self.init(&k.owner, via.clone());
+                        self.add_to(pool, &TypeSet::exact(owner));
                         let t = self.method(resolved, via.clone());
-                        self.edge(m, 0, t, &params, &ret, None);
-                    } else if rm.is_static() || rm.is_private() {
+                        self.edge(m, 0, t, Recv::Exact(owner), &a, None, None);
+                        continue;
+                    }
+                    // 接收者：各方法调用点都推断出具体类型 → 精确；否则来自手写层的 open(引用类)
+                    let mut recv = TypeSet::default();
+                    let mut typed = sites.as_ref().is_some_and(|v| v.iter().all(|c| c.recv.is_some()));
+                    for c in sites.iter().flatten() {
+                        match c.recv.as_ref().and_then(|r| self.hw_type(host, r)) {
+                            Some(id) => {
+                                recv.classes.insert(id);
+                            }
+                            None => typed = false,
+                        }
+                    }
+                    if !typed {
+                        recv = TypeSet::open(owner);
+                    }
+                    if rm.is_static() || rm.is_private() {
                         self.init(&resolved.owner, via.clone());
                         let t = self.method(resolved, via.clone());
-                        self.edge(m, 0, t, &params, &ret, None);
+                        self.edge(m, 0, t, Recv::Feeds(vec![Feed::S(recv)]), &a, ret, Some(pool));
                     } else {
-                        // JNI Call<T>Method：按接收者实际类型分派；接收者来自手写层 → open(引用类)
-                        let owner = self.id(&k.owner);
-                        let mut s = self.methods[m].set.clone();
-                        s.open.insert(owner);
-                        let recv = self.receivers(&s, owner);
-                        for r in recv {
-                            self.dispatch_one(m, 0, r, &site, &params, &ret);
+                        // JNI Call<T>Method：按接收者实际类型分派
+                        let rs = self.receivers(m, &recv, owner);
+                        for r in rs {
+                            self.dispatch_one(m, 0, r, &site, &a, ret, Some(pool));
                         }
                     }
                 }
@@ -1241,6 +1662,95 @@ impl<'a> Engine<'a> {
 
     pub fn lambda_count(&self) -> usize {
         self.lambdas.len()
+    }
+
+    fn set_str(&self, s: &TypeSet) -> String {
+        let mut v: Vec<String> = if s.classes.len() > 6 {
+            vec![format!("{} 个类", s.classes.len())]
+        } else {
+            s.classes.iter().map(|i| self.names[*i as usize].to_string()).collect()
+        };
+        v.extend(s.open.iter().map(|i| format!("open({})", self.names[*i as usize])));
+        v.join(", ")
+    }
+
+    fn node_str(&self, n: Node) -> String {
+        match n {
+            Node::P(m, i) => format!("P{i} {}", self.method_label(m)),
+            Node::R(m) => format!("R {}", self.method_label(m)),
+            Node::S(m, o) if o == POOL => format!("pool {}", self.method_label(m)),
+            Node::S(m, o) if o == ELEM => format!("elem {}", self.method_label(m)),
+            Node::S(m, o) if o & CATCH != 0 => format!("catch@{} {}", o & !CATCH, self.method_label(m)),
+            Node::S(m, o) => format!("@{o} {}", self.method_label(m)),
+            Node::F(f) => format!("field {}", self.fields.get_index(f).map(|(k, _)| k.to_string()).unwrap_or_default()),
+            Node::E(x, p) => format!("elements[{}] {}", if p == 0 { "偶" } else { "奇" }, self.names[x as usize]),
+            Node::Array => "array".into(),
+        }
+    }
+
+    /// 类型流诊断：方法（标签含 `pat`）的形参 / 返回节点的类型集，以及流入它们的来源节点
+    pub fn flows_of(&self, pat: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(q) = pat.strip_prefix("elem:") {
+            let mut es: Vec<Node> = self.sets.keys().filter(|n| matches!(n, Node::E(x, _) if self.names[*x as usize].contains(q))).copied().collect();
+            es.sort_by_key(|n| format!("{n:?}"));
+            for n in es {
+                let s = self.sets.get(&n).cloned().unwrap_or_default();
+                out.push(format!("  {} = {{{}}}", self.node_str(n), self.set_str(&s)));
+                for (src, edges) in &self.flows {
+                    for (dst, f) in edges {
+                        if *dst == n {
+                            let s = self.sets.get(src).cloned().unwrap_or_default();
+                            out.push(format!("    ← {} [{}] {{{}}}", self.node_str(*src), self.names[*f as usize], self.set_str(&s)));
+                        }
+                    }
+                }
+            }
+            return out;
+        }
+        if pat == "@array" {
+            for (src, edges) in &self.flows {
+                if edges.iter().any(|(d, _)| *d == Node::Array) {
+                    let s = self.sets.get(src).cloned().unwrap_or_default();
+                    out.push(format!("  array ← {} {{{}}}", self.node_str(*src), self.set_str(&s)));
+                }
+            }
+            return out;
+        }
+        for (i, mn) in self.methods.values().enumerate() {
+            if !mn.key.to_string().contains(pat) {
+                continue;
+            }
+            out.push(self.method_label(i));
+            let mut nodes: Vec<Node> = (0..mn.ptypes.len()).map(|j| Node::P(i, j as u16)).collect();
+            nodes.push(Node::R(i));
+            // 站点与该方法分配的数组元素
+            let mut extra: Vec<Node> = self
+                .sets
+                .keys()
+                .filter(|n| match **n {
+                    Node::S(j, _) => j == i,
+                    Node::E(x, _) => self.names[x as usize].contains(&format!("@{i}:")),
+                    _ => false,
+                })
+                .copied()
+                .collect();
+            extra.sort_by_key(|n| format!("{n:?}"));
+            nodes.extend(extra);
+            for n in nodes {
+                let Some(s) = self.sets.get(&n) else { continue };
+                out.push(format!("  {} = {{{}}}", self.node_str(n), self.set_str(s)));
+                for (src, edges) in &self.flows {
+                    for (dst, f) in edges {
+                        if *dst == n {
+                            let s = self.sets.get(src).cloned().unwrap_or_default();
+                            out.push(format!("    ← {} [{}] {{{}}}", self.node_str(*src), self.names[*f as usize], self.set_str(&s)));
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     pub fn method_label(&self, i: usize) -> String {

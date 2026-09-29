@@ -187,6 +187,11 @@ impl Closure<'_> {
         }
     }
 
+    /// 类型流诊断（`--flows <方法标签片段>`）
+    pub fn flows(&self, pat: &str) -> Vec<String> {
+        self.engine.flows_of(pat)
+    }
+
     /// 溯源链：类名（`a/b/C`）或方法（`a/b/C.m:(..)V`）
     pub fn why(&self, target: &str) -> Vec<String> {
         let e = &self.engine;

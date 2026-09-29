@@ -117,6 +117,13 @@ null_to_false = [
 # docs/plans/2026-09-29-rust-closure-analyzer.md §3.2）。值：null / 整数 / true / false。
 # 准入：值由手写实现无条件给出（注明实现位置），与 JVM 缺省配置的可观测行为一致。
 # [vm_constants] null_returns 同为事实来源（分析器一并读取）。
+[facts]
+# 返回值是接收者的浅拷贝（JVMS clone 语义：同类型、数组元素逐个复制）：分析器把接收者的
+# 类型集接到返回值，数组副本与原数组共享元素类型节点（替代手写返回的 open(返回类型)）
+receiver_returns = [
+    "java/lang/Object.clone:()Ljava/lang/Object;",
+]
+
 [facts.returns]
 # 断言恒关（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false；javac 的
 # `$assertionsDisabled = !desiredAssertionStatus()` 由此成为常量，assert 语句体整片不可达
