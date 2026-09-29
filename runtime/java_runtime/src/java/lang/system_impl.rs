@@ -163,10 +163,7 @@ impl System {
         sun/nio/cs/UTF_8.INSTANCE:Lsun/nio/cs/UTF_8;
     ")]
     pub fn out() -> Result<PrintStream> {
-        crate::__process_static! {
-            static STDOUT: PrintStream = new_std_print_stream(1);
-        }
-        Ok(STDOUT.with(Clone::clone))
+        Ok(std_stream(&STDOUT, 1))
     }
 
     #[jvm_native(upcalls = "
@@ -177,10 +174,27 @@ impl System {
         sun/nio/cs/UTF_8.INSTANCE:Lsun/nio/cs/UTF_8;
     ")]
     pub fn err() -> Result<PrintStream> {
-        crate::__process_static! {
-            static STDERR: PrintStream = new_std_print_stream(2);
-        }
-        Ok(STDERR.with(Clone::clone))
+        Ok(std_stream(&STDERR, 2))
+    }
+
+    /// native `setOut0(PrintStream)`：System.setOut 的写入步（字段 final，JDK 经 native 改写）。
+    #[jvm_native]
+    pub fn setOut0(out: PrintStream) -> Result<()> {
+        STDOUT.with(|slot| *slot.borrow_mut() = Some(out));
+        Ok(())
+    }
+
+    /// native `setErr0(PrintStream)`：System.setErr 的写入步。
+    #[jvm_native]
+    pub fn setErr0(err: PrintStream) -> Result<()> {
+        STDERR.with(|slot| *slot.borrow_mut() = Some(err));
+        Ok(())
+    }
+
+    /// native `setIn0(InputStream)`：System.setIn 的写入步（改写 static final 字段 in）。
+    #[jvm_native]
+    pub fn setIn0(input: crate::java::io::InputStream) -> Result<()> {
+        System::set_in_(input)
     }
 
     /// native `mapLibraryName(String)`：平台本地库文件名（Linux `lib<name>.so`，
@@ -278,6 +292,27 @@ fn os_release() -> std::string::String {
 }
 
 /// 标准流的构造（对应 System.newPrintStream(new FileOutputStream(fd), enc)，enc 固定为 UTF-8）。
+crate::__process_static! {
+    /// System.out / System.err 的当前流：首次读取时建标准流（fd 1 / 2），setOut0 / setErr0 改写。
+    static STDOUT: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
+    static STDERR: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
+}
+
+fn std_stream(
+    slot: &'static crate::sync_model::__GilStatic<crate::sync_model::__RefSlot<Option<PrintStream>>>,
+    fd: i32,
+) -> PrintStream {
+    if let Some(ps) = slot.with(|s| s.borrow().as_ref().map(Clone::clone)) {
+        return ps;
+    }
+    let ps = new_std_print_stream(fd);
+    slot.with(|s| {
+        let mut b = s.borrow_mut();
+        // 并发首次读取：先写入者胜出，保持单一流身份
+        Clone::clone(b.get_or_insert(ps))
+    })
+}
+
 fn new_std_print_stream(fd: i32) -> PrintStream {
     let build = || -> Result<PrintStream> {
         let fdo = FileDescriptor::new_i(fd)?;

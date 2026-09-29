@@ -1,0 +1,4 @@
+restored; captured=[captured line 1|n=42|]
+same-original=true
+err captured=to-err
+in: 7 hello / second line
