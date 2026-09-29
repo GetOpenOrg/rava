@@ -42,6 +42,8 @@ pub struct Manifest {
     null_to_false: HashSet<String>,
     returns: HashMap<String, Fact>,
     receiver_returns: HashSet<String>,
+    field_enumerators: HashSet<String>,
+    deserializers: HashSet<String>,
     pub boot_init: Vec<String>,
     indy: HashMap<String, IndyKind>,
 }
@@ -104,6 +106,15 @@ impl Manifest {
             }
         }
 
+        let field_writes = |key: &str| -> Vec<String> {
+            vm.get("facts")
+                .and_then(|s| s.get("field_writes"))
+                .and_then(|t| t.get(key))
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default()
+        };
+
         let mut indy = HashMap::new();
         for (key, kind) in [("lambda", IndyKind::Lambda), ("concat", IndyKind::Concat), ("native", IndyKind::Native)] {
             for m in strings(&vm, "indy", key) {
@@ -120,6 +131,8 @@ impl Manifest {
             null_to_false: strings(&vm, "vm_constants", "null_to_false").into_iter().collect(),
             returns,
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
+            field_enumerators: field_writes("enumerators").into_iter().collect(),
+            deserializers: field_writes("deserializers").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
             indy,
         })
@@ -174,6 +187,16 @@ impl Manifest {
     /// 返回值是接收者的浅拷贝（类型集 = 接收者类型集；数组共享元素节点）
     pub fn returns_receiver(&self, member: &str) -> bool {
         self.receiver_returns.contains(member)
+    }
+
+    /// 返回字段句柄数组的反射枚举（字段常量折叠的写入来源）
+    pub fn is_field_enumerator(&self, member: &str) -> bool {
+        self.field_enumerators.contains(member)
+    }
+
+    /// 反序列化入口（可达即非 static、非 transient 字段不折叠）
+    pub fn is_deserializer(&self, member: &str) -> bool {
+        self.deserializers.contains(member)
     }
 
     /// 纯函数：null 实参 → false

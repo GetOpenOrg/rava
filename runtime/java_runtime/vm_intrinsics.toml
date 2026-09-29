@@ -130,6 +130,23 @@ receiver_returns = [
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = false
 "java/lang/Class.desiredAssertionStatus:()Z" = false
 
+[facts.field_writes]
+# 字段常量折叠的反射式写入来源（计划 C1c 第 1 步）。分析器按「全部写入来源」求字段值集，
+# 只有一个常量时把读取折叠掉；以下调用可达时相关字段不折叠。
+# 按名写入（objectFieldOffset(Class, "名") / findVarHandle / newUpdater / getDeclaredField("名")）
+# 按字节码形状识别（同一调用含 Class 实参 / 接收者 + 字符串常量），不在此列。
+# enumerators：返回字段句柄数组，经 Field.set* / Unsafe 可写任意字段。接收者是类字面量时
+#   只放开该类及其超类的字段，否则全部字段不折叠
+enumerators = [
+    "java/lang/Class.getDeclaredFields:()[Ljava/lang/reflect/Field;",
+    "java/lang/Class.getFields:()[Ljava/lang/reflect/Field;",
+]
+# deserializers：可达即全部非 static、非 transient 字段不折叠
+deserializers = [
+    "java/io/ObjectInputStream.readObject:()Ljava/lang/Object;",
+    "java/io/ObjectInputStream.readUnshared:()Ljava/lang/Object;",
+]
+
 # ── invokedynamic 引导方法分类（闭包分析，generator `rava closure` 读取）──────────────────
 # 生成器原生承载这些引导方法的链接语义，分析器不展开其 Java 体，按分类建模调用点：
 #   lambda  LambdaMetafactory：调用点产出实现 SAM 接口的合成类，SAM 调用分派到实现方法句柄
