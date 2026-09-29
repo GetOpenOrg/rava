@@ -31,7 +31,7 @@ impl VirtualThread {
         this._init_not_null();
         this.__set_scheduler(scheduler.into());
         this.__set_name(name);
-        this.__set_runContinuation(task);
+        this.__set_runContinuation(task.into());
         this.__set_state(NEW);
         Ok(this)
     }
