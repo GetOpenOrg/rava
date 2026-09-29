@@ -167,13 +167,15 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
 
     # 3. 方法级调用链 BFS 发现 JDK 类（jar 类注册表优先于 jmods 解析）
     print(f"[3/4] 扫描 JDK 类引用...", end=' ', flush=True)
+    from . import options as _options_seed
     jdk_class_infos, visited_methods, field_stubs = _discover_jdk_classes_method_level(
         class_infos,
         runtime_src=os.path.join(out_dir, 'java_runtime', 'src'),
         lib_registries=_lib_registries,
         lib_prefixes=_lib_prefixes,
         extra_seed_classes=_lib_seed_classes or None,
-        locales=tuple(locales))
+        locales=tuple(locales),
+        jdk_seed_methods=_options_seed.JDK_SEEDS or None)
 
     # jar 模式闭包拆分：BFS 发现集里归属 jar 的类拆到对应 lib crate（整包模式
     # 再并入 jar 全集——wholesale 语义），其余（java/ javax/ …）留在 java_runtime。

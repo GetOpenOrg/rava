@@ -141,7 +141,7 @@ def run_api(ns) -> None:
     seeds: list[tuple[str, str, str]] = []
     n_cls = 0
     for jmod in ns.modules:
-        for name in resolver.list_module(jmod):
+        for name in resolver.list_module(jmod if jmod.endswith('.jmod') else jmod + '.jmod'):
             if not name.startswith(pkgs) or name.endswith(('module-info', 'package-info')):
                 continue
             # 子包按 --recursive 决定是否纳入
@@ -161,14 +161,17 @@ def run_api(ns) -> None:
     print(f"API 模式：{', '.join(ns.packages)} → {n_cls} 个 public 类，{len(seeds)} 个入口方法")
     t0 = time.perf_counter()
     from main import prepare_scratch
-    from codegen.emitter.project_writer import write_cargo_project
-    out_dir = str(ROOT / 'build' / 'gap_scan' / ('api-' + '-'.join(p.replace('/', '.') for p in ns.packages)))
+    from codegen import options as _opts
+    from codegen.transpile import transpile
+    scan_dir = ROOT / 'build' / 'gap_scan'
+    entry_dir = scan_dir / 'entry'
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    entry = entry_dir / 'GapScanEntry.java'
+    entry.write_text('public class GapScanEntry { public static void main(String[] a) {} }\n')
+    out_dir = str(scan_dir / ('api-' + '-'.join(p.replace('/', '.') for p in ns.packages)))
     prepare_scratch(out_dir, clean=True)
-    jdk_infos, visited, _stubs = cc._discover_jdk_classes_method_level(
-        [], runtime_src=os.path.join(out_dir, 'java_runtime', 'src'), jdk_seed_methods=seeds)
-    print(f"BFS 完成：{len(jdk_infos)} 个类，{len(visited)} 个入链方法；生成代码 → {out_dir}")
-    write_cargo_project(out_dir, [], jdk_infos, [], visited_methods=visited)
-    cc.precheck_from_tree(os.path.join(out_dir, 'java_runtime', 'src'))
+    _opts.JDK_SEEDS, _opts.PRECHECK_ONLY = seeds, True
+    transpile([str(entry)], out_dir)
     dt = time.perf_counter() - t0
     hits = {k: {m: {'api'} for m in cc.PRECHECK[k.replace('-', '_')]} for k in _KINDS}
     meta = [f"入口包：{', '.join(ns.packages)}（{'含' if ns.recursive else '不含'}子包），"
