@@ -449,6 +449,11 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                         # _coerce_to_object 对载体发射 Object::from（解包 __ref 装箱）
                         _impl_ret_rust = jvm_to_rust(_impl_ret, registry)
                         _closure_body = (f'Ok({_coerce_to_object(f"{_closure_body}?", _impl_ret_rust, registry, sim.class_type_params)})')
+                    # 闭包声明返回是接口载体（T-2：SAM 返回接口类型，如 TemporalAdjuster.adjustInto → Temporal）
+                    # 而上方按擦除装箱成 Object：经 From<Object> 还原为载体（未载体化时 _sam_rtype 即 Object，不变）
+                    if (_sam_ret != 'V' and _is_erased_ref(_sam_ret) and _sam_rtype != 'Object'
+                            and _closure_body.startswith('Ok(Object::')):
+                        _closure_body = f'Ok(From::from({_closure_body[3:-1]}))'
                     _lam_varname = f'__lam_{_lam_idx}'
                     # A-5 lambda 对象化：samtype 是函数式接口（且可合成，预扫描定案）时，
                     # 闭包经合成对象装箱——`Object::from(I__Lambda::new(Rc::new(closure)))`。

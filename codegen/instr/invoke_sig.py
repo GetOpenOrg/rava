@@ -138,8 +138,10 @@ def _lookup_method_sig_params(
                         # 只是命名巧合，接口方法形参一律是擦除形态。
                         # 例外：接收者是 this（default 方法体被继承进实现类），形参即本类形参；
                         # 接收者静态类型是具体泛型类（Set<String> s = new LinkedHashSet<>()）时
-                        # 按接收者实参解析
-                        resolved.append(None)
+                        # 按接收者实参解析。接口载体的成员声明把类型变量擦除为 Object
+                        # （erased_declaration）——回落 Object 而非描述符上界：上界是接口时
+                        # 载体化后描述符映射为载体，与声明发散（AccumulatingSink.combine(K)，T-2）
+                        resolved.append('Object')
                     elif receiver_targ_map and t in receiver_targ_map:
                         resolved.append(receiver_targ_map[t])
                         subst_pos.add(_ti)
