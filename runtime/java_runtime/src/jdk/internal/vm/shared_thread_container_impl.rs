@@ -54,4 +54,14 @@ impl SharedThreadContainer {
     pub fn __impl_owner(&self) -> Result<crate::java::lang::Thread> {
         Ok(Default::default())
     }
+
+    /// `close()`：按字节码——首次关闭（CAS closed false→true）后向
+    /// `ThreadContainers.deregisterContainer(key)` 注销；本运行时不建容器注册表
+    /// （见文件头），注销无可观察行为，只置关闭位（此后 start 抛 IllegalStateException）。
+    /// 消费方：ThreadPoolExecutor.tryTerminate（`container.close()`，executor 关闭时）。
+    #[jvm_boundary]
+    pub fn __impl_close(&self) -> Result<()> {
+        self.__set_closed(true);
+        Ok(())
+    }
 }

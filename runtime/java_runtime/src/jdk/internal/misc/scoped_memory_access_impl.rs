@@ -3,7 +3,8 @@
 //! JDK 的 nio 堆缓冲（HeapByteBuffer.getShort / getInt …）经本类按 (base, offset) 读多字节值，
 //! session 为 null（堆缓冲无内存段作用域）。原生二进制只承载堆 byte[]：offset 为
 //! Unsafe.ARRAY_BYTE_BASE_OFFSET + 下标（与 unsafe__impl 同一约定），按 bigEndian 组装。
-//! 消费方：AnnotationParser 经 ByteBuffer.wrap 解析注解原始字节（FS-R R4b）。其余方法保持存根。
+//! 消费方：AnnotationParser 经 ByteBuffer.wrap 解析注解原始字节（FS-R R4b）；
+//! 写入族（putInt / putLong … 经 put*Unaligned）：用户代码的 ByteBuffer.putInt 等。其余方法保持存根。
 
 use crate::prelude::*;
 use super::scoped_memory_access::ScopedMemoryAccess;
@@ -20,6 +21,17 @@ fn read_bytes(base: &Object, offset: i64, n: usize) -> Result<Vec<u8>> {
         out.push(arr.get(start + i)? as u8);
     }
     Ok(out)
+}
+
+fn write_bytes(base: &Object, offset: i64, v: u64, n: usize, big_endian: bool) -> Result<()> {
+    let arr = <JArray<i8> as From<Object>>::from(Clone::clone(base));
+    let start = (offset - ARRAY_BASE_OFFSET) as i32;
+    for i in 0..n {
+        // 大端：最高字节在前；小端：最低字节在前
+        let shift = if big_endian { 8 * (n - 1 - i) } else { 8 * i };
+        arr.set(start + i as i32, (v >> shift) as u8 as i8)?;
+    }
+    Ok(())
 }
 
 fn compose(bytes: &[u8], big_endian: bool) -> u64 {
@@ -69,5 +81,30 @@ impl ScopedMemoryAccess {
     #[jvm_boundary]
     pub fn getLongUnaligned(&self, _session: MemorySessionImpl, base: Object, offset: i64, big_endian: bool) -> Result<i64> {
         Ok(compose(&read_bytes(&base, offset, 8)?, big_endian) as i64)
+    }
+
+    #[jvm_boundary]
+    pub fn putByte(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: i8) -> Result<()> {
+        write_bytes(&base, offset, value as u8 as u64, 1, true)
+    }
+
+    #[jvm_boundary]
+    pub fn putShortUnaligned(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: i16, big_endian: bool) -> Result<()> {
+        write_bytes(&base, offset, value as u16 as u64, 2, big_endian)
+    }
+
+    #[jvm_boundary]
+    pub fn putCharUnaligned(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: u16, big_endian: bool) -> Result<()> {
+        write_bytes(&base, offset, value as u64, 2, big_endian)
+    }
+
+    #[jvm_boundary]
+    pub fn putIntUnaligned(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: i32, big_endian: bool) -> Result<()> {
+        write_bytes(&base, offset, value as u32 as u64, 4, big_endian)
+    }
+
+    #[jvm_boundary]
+    pub fn putLongUnaligned(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: i64, big_endian: bool) -> Result<()> {
+        write_bytes(&base, offset, value as u64, 8, big_endian)
     }
 }
