@@ -130,7 +130,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | FS-L5 | 只有 9 个标准 charset，全部手写 | 翻译 `sun.nio.cs.*` | windows-1252 等抛 UnsupportedCharsetException | 新立 |
 | FS-L6 | StreamEncoder / Decoder 手写，出错动作固定为 REPLACE；`newStringNoRepl` 遇非 UTF-8 输入 panic | 翻译编解码器 | REPORT 语义丢失；panic | 新立 |
 | FS-L7 | System.out / err 编码固定 UTF-8 | 跟随 `stdout.encoding` | C/POSIX locale 下输出字节不同 | 新立 |
-| FS-L8 | FloatingDecimal 用近似判定，`digitsRoundedUp` 恒为 false | 精确语义 | DecimalFormat 舍入边界可能不同 | 🔄 `3020d8c` 放行字节码翻译（FloatingDecimal + FDBigInteger），待验证 |
+| FS-L8 | FloatingDecimal 用近似判定，`digitsRoundedUp` 恒为 false | 精确语义 | DecimalFormat 舍入边界可能不同 | ✅ `3020d8c` 放行字节码翻译（FloatingDecimal + FDBigInteger）+ `0049b7c`（ThreadLocal.get 取回）；AnglesNormalizationAndConversion PASS |
 | FS-L9 | JDK25 下 `DoubleToDecimal.split` / FloatToDecimal 是存根 | 实现 | JDK25 下 `%f/%e/%g` panic | tasks P1 |
 | FS-L10 | `hashCodeOfUTF16` 未实现 | — | JDK25 路径 | #18 |
 | ~~FS-L11~~ | String.hashCode 的 UTF16 分支硬编码大端 | 按平台字节序 | 非 Latin1 字符串 hash 不同 | S-21；✅ `619bd59`（UTF16 hash 回归测试） |
