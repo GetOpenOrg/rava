@@ -404,6 +404,30 @@ impl Class {
     /// native `getInterfaces0()`：直接超接口（class 文件 interfaces 项，声明序）。数组类 →
     /// Cloneable / Serializable（JLS §10.8）；基本类型类 / 无接口 → 空数组。
     #[jvm_native]
+    /// native `getPermittedSubclasses0()`：sealed 类 / 接口的许可子类型（PermittedSubclasses 属性，
+    /// 声明序）；非 sealed → null（JVM_GetPermittedSubclasses 同形）。数据源为 build.rs 的
+    /// PERMITTED_SUBCLASSES 表；许可子类型不在生成闭包内时跳过（JVM 对无法加载的条目同样跳过）。
+    #[jvm_native]
+    pub fn getPermittedSubclasses0(&self) -> Result<JArray<Class>> {
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        let Some((_, subs)) = __class_meta::PERMITTED_SUBCLASSES.iter().find(|(n, _)| *n == name) else {
+            return Ok(JArray::default());
+        };
+        let out: Vec<Class> = subs.iter()
+            .filter(|s| Class::__is_known_class(s))
+            .map(|s| Class::for_class(String::from(*s)))
+            .collect();
+        Ok(JArray::from(out))
+    }
+
+    /// 类文件是否声明了 `<clinit>`（build.rs 的 CLINIT_CLASSES 表；VM 注入的类信息）。
+    /// 供 `ObjectStreamClass.hasStaticInitializer`（默认 serialVersionUID 计算）。
+    #[doc(hidden)]
+    pub fn __has_static_initializer(&self) -> bool {
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        __class_meta::CLINIT_CLASSES.contains(&name.as_str())
+    }
+
     pub fn getInterfaces0(&self) -> Result<JArray<Class>> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
         let list: Vec<&str> = if name.starts_with('[') {
@@ -635,6 +659,11 @@ mod __methods {
 /// build.rs 生成的类修饰符表（OUT_DIR/modifiers_table.rs）。
 mod __modifiers {
     include!(concat!(env!("OUT_DIR"), "/modifiers_table.rs"));
+}
+
+/// build.rs 生成的类文件级元数据（OUT_DIR/class_meta_table.rs：<clinit> 类集、sealed 许可子类型）。
+mod __class_meta {
+    include!(concat!(env!("OUT_DIR"), "/class_meta_table.rs"));
 }
 
 /// build.rs 生成的 record 类集（OUT_DIR/record_table.rs）。

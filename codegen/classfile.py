@@ -1103,6 +1103,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
     cls_raw_annos: bytes = b''
     cls_is_record = False
     cls_record_components: list = []
+    cls_permitted: list = []
     cls_attr_count = r.u2()
     for _ in range(cls_attr_count):
         attr_name_idx = r.u2()
@@ -1142,6 +1143,12 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
                     else:
                         rec_r.skip(_al)
                 cls_record_components.append((_rc_name, _rc_desc, _rc_sig))
+        elif attr_name == 'PermittedSubclasses':
+            # JVMS §4.7.31：sealed 类 / 接口的许可子类型（Class.getPermittedSubclasses0 数据源）
+            ps_r = _Reader(r.read(attr_len))
+            for _ in range(ps_r.u2()):
+                _ps_idx = ps_r.u2()
+                cls_permitted.append(_utf8(pool, pool[_ps_idx][1]))
         elif attr_name == 'EnclosingMethod':
             # JVMS §4.7.7：局部类 / 匿名类的直接外围类与外围方法
             # （method_index 为 0 → 位于初始化器 / 字段初始化表达式中）
@@ -1251,6 +1258,7 @@ def parse_class_bytes(data: bytes, source_path: str = '<bytes>') -> ClassInfo:
         is_enum=bool(access_flags & ACC_ENUM),
         is_record=cls_is_record,
         record_components=cls_record_components,
+        permitted_subclasses=cls_permitted,
         generic_signature=_cls_sig,
         source_file=cls_source_file,
         inner_classes=cls_inner_classes,

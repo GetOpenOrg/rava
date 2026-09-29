@@ -134,4 +134,32 @@ impl VirtualThread {
     pub fn registerNatives() -> Result<()> {
         Ok(())
     }
+
+    // JVMTI 虚拟线程事件通知（mount / unmount / start / end / 隐藏帧）：原生二进制无 JVMTI
+    // 代理，事件无接收方——no-op（HotSpot 在无 JVMTI 环境下同为空操作）。
+
+    #[jvm_native]
+    pub fn notifyJvmtiStart(&self) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_native]
+    pub fn notifyJvmtiEnd(&self) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_native]
+    pub fn notifyJvmtiMount(&self, _hide: bool) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_native]
+    pub fn notifyJvmtiUnmount(&self, _hide: bool) -> Result<()> {
+        Ok(())
+    }
+
+    #[jvm_native]
+    pub fn notifyJvmtiHideFrames(&self, _hide: bool) -> Result<()> {
+        Ok(())
+    }
 }
