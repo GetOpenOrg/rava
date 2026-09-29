@@ -257,7 +257,7 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// `layers(ClassLoader)`：加载器可见的模块层序列（ModuleLayer.layers）。
     /// 单二进制无模块层——恒空 Stream（消费方 ServiceLoader 的
     /// ModuleServicesLookupIterator 迭代即终止，无附加 provider）。
-    fn layers_classloader(&self, _arg0: crate::java::lang::ClassLoader) -> Result<Object> {
+    fn layers_classloader(&self, _arg0: crate::java::lang::ClassLoader) -> Result<crate::java::util::stream::Stream<Object>> {
         crate::java::util::stream::Stream::<Object>::empty()
     }
 

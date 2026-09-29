@@ -41,4 +41,4 @@ Runnable、InvocationHandler、通道、JavaLangAccess.layers 的 Stream）；su
 | 7c | 🔄 `814bc1f`：invoke_sig「this 调用不代入载体」规则收窄到声明者为接口（桥方法 forEach_obj(LongConsumer) 调用侧回落 Object 的根因）；回归 TestStreamBasic / TestFieldEvalOrder PASS；其余特化族错误待名单置 None 后复测 |
 | 7d | 🔄 兼容部分 ✅ `ec6a448`（接口字段写入 / 实参 / 返回经 Into，Default::default，LazyLoggers 泛型返回）；只能按终态书写的两处（JavaLangAccess.layers_classloader 返回 Stream、newByteChannel 的 FileAttribute 数组形参）随置 None 一并修改 |
 | 标记接口 upcast | ✅ `25c0002`（TestStreamBasic / TestArrayList PASS） |
-| 置 None + 删 txt | ⬜ |
+| 置 None + 删 txt | 🔄 全接口载体下 TestStreamBasic 编译错误 91 → 0（2026-09-29）：①桥方法——接收者类链首个声明是 synthetic 桥时，形参按被桥接的真实方法解析（`tryAdvance(Object)` → `tryAdvance_intconsumer(IntConsumer)`）；②接口签名返回裸类型变量（`T_SPLITR spliterator()`）、描述符为接口载体：经 Object 边界取回（bare Object 接收者接口分派与通用调用结果两处）；③手写终态签名：`layers_classloader` 返回 `Stream<Object>`，`newByteChannel` / `createDirectory` 形参 `JArray<FileAttribute<Object>>`。内存：同闭包（1773 类）rustc 峰值基线 13.83G 通过、全载体 13.93G 在 16G 机器被 OOM 杀——T-2 增量约 0.1G，瓶颈是闭包规模（N14）。`signature_erased_interfaces.txt`（CharSequence）另步删除 |

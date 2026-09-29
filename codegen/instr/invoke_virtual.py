@@ -29,6 +29,7 @@ from ..type_args import ancestor_vtable_args_by_short as _ancestor_vtable_args_b
 from ..type_args import (ancestor_type_args as _ancestor_type_args,
                          substitute_type_params as _substitute_type_params)
 from ..type_map import effective_class_type_params as _effective_class_type_params
+from ..jvm_type import carrier_type_for_ident as _carrier_type_for_ident
 from .invoke_sig import (_lookup_method_sig_ret, _erased_ret_is_type_var,
                          _coerce_arg)
 from ..type_args import rust_type_head
@@ -206,6 +207,16 @@ def _dispatch_bare_object(sim, obj_e, cls, mname, comment, params, ret,
                 if rust_ret == 'Object' and _sig_ret_v is not None and _sig_ret_v != 'Object':
                     sim.emit(RawStmt(
                         f"let {v}: {rust_ret} = {_coerce_to_object(_iface_call, _sig_ret_v, registry, sim.class_type_params)};"))
+                elif (rust_ret not in _PRIMITIVE_RUST_TYPES and rust_ret != 'Object'
+                        and (_sig_ret_v == 'Object'
+                             or (_sig_ret_v is None and _erased_ret_is_type_var(
+                                 short_cls(_decl_bin), mname, params, ret, registry)))):
+                    # T-2：接口签名返回裸类型变量（`T_SPLITR spliterator()`），擦除载体接收者上
+                    # 实参为 Object → Rust 方法返回 Object，描述符返回是接口载体：经 Object 边界
+                    # 取回描述符类型（unchecked，与字节码擦除返回 + 调用方 checkcast 同义）
+                    sim.emit(RawStmt(
+                        f"let {v}: {rust_ret} = <{rust_ret} as ::std::convert::From<Object>>"
+                        f"::from(::std::convert::Into::<Object>::into({_iface_call}));"))
                 else:
                     sim.emit(RawStmt(f"let {v}: {rust_ret} = {_iface_call};"))
                 sim.push(Var(v), RsNamed(rust_ret))
@@ -686,6 +697,16 @@ def _emit_call_result(sim, class_name, cls, mname, params, ret, rust_ret, rust_m
                 sim.emit(LetStmt(v, value=TryExpr(_cn)) if _cn is not None
                          else RawStmt(f"let {v} = {_call_str}?;"))
                 sim.push(Var(v), RsNamed(_sig_ret_v))
+            elif (_sig_ret_v is None and rust_ret not in _PRIMITIVE_RUST_TYPES
+                    and rust_ret != 'Object'
+                    and _carrier_type_for_ident(rust_ret, registry) == rust_ret
+                    and _erased_ret_is_type_var(cls, mname, params, ret, registry)):
+                # T-2：返回裸类型变量（`T_SPLITR spliterator()`），描述符擦除为接口载体。
+                # Rust 侧真实返回类型随接收者实例化（擦除载体接收者 → Object），调用点无法
+                # 静态确定：经 Object 边界（Object 自身 / 载体均 Into<Object>）再取回描述符载体
+                sim.emit(RawStmt(f"let {v}: {rust_ret} = <{rust_ret} as ::std::convert::From<Object>>"
+                                 f"::from(::std::convert::Into::<Object>::into({_call_str}?));"))
+                sim.push(Var(v), RsNamed(rust_ret))
             elif (rust_ret == 'Object' and _sig_ret_v is None
                     and _erased_ret_is_type_var(cls, mname, params, ret, registry)):
                 # 返回裸类型变量且无法按接收者实例化（接口 default 方法内联、跨类擦除接收者）：

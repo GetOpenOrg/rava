@@ -311,7 +311,7 @@ impl UnixFileSystemProvider {
         &self,
         obj: Object,
         options: Set<Object>,
-        _attrs: JArray<Object>,
+        _attrs: JArray<crate::java::nio::file::attribute::FileAttribute<Object>>,
     ) -> Result<Object> {
         let file = UnixPath::toUnixPath(Clone::clone(&obj))?;
         const ALL_READWRITE: i32 = 0o666;
@@ -355,7 +355,7 @@ impl UnixFileSystemProvider {
     /// （umask 由宿主施加）；EISDIR → FileAlreadyExistsException，其余经 UnixException
     /// 翻译抛出（EEXIST → FileAlreadyExistsException 同路）。
     #[jvm_boundary(upcalls = "java/nio/file/attribute/FileAttribute.name:()Ljava/lang/String; java/nio/file/attribute/FileAttribute.value:()Ljava/lang/Object; java/nio/file/FileAlreadyExistsException.<init>:(Ljava/lang/String;)V java/lang/UnsupportedOperationException.<init>:(Ljava/lang/String;)V")]
-    pub fn __impl_createDirectory(&self, obj: Object, attrs: JArray<Object>) -> Result<()> {
+    pub fn __impl_createDirectory(&self, obj: Object, attrs: JArray<crate::java::nio::file::attribute::FileAttribute<Object>>) -> Result<()> {
         use std::os::unix::fs::DirBuilderExt;
         let dir = UnixPath::toUnixPath(Clone::clone(&obj))?;
         dir.checkWrite()?;
@@ -383,14 +383,14 @@ impl UnixFileSystemProvider {
 /// `UnixFileModeAttribute.toUnixMode(int, FileAttribute...)`：只接受
 /// `posix:permissions` / `unix:permissions`（值为 `Set<PosixFilePermission>`），其余
 /// UnsupportedOperationException（JDK 同消息）；多个属性后者覆盖前者。
-fn to_unix_mode(default_mode: u32, attrs: &JArray<Object>) -> Result<u32> {
+fn to_unix_mode(default_mode: u32, attrs: &JArray<crate::java::nio::file::attribute::FileAttribute<Object>>) -> Result<u32> {
     use crate::java::nio::file::attribute::FileAttribute;
     let mut mode = default_mode;
     if attrs.is_jvm_null() {
         return Ok(mode);
     }
     for i in 0..attrs.len()? {
-        let attr = <FileAttribute<Object> as ::std::convert::From<Object>>::from(attrs.get(i)?);
+        let attr: FileAttribute<Object> = attrs.get(i)?;
         let name = format!("{}", attr.name()?);
         if name != "posix:permissions" && name != "unix:permissions" {
             return Err(JvmError::from(crate::java::lang::UnsupportedOperationException::new_str(

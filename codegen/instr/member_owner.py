@@ -513,6 +513,22 @@ def _close_open_type_args(sim, stack_idx: int) -> None:
             return
 
 
+def _first_decl_is_bridge(ci, mname: str, desc: str, registry: dict) -> bool:
+    """接收者类链上 (mname, desc) 的首个声明是否为 synthetic 桥方法。
+
+    是桥方法时 Rust 侧只生成被桥接的真实方法（名字按真实描述符改名），形参类型须由
+    下方桥接解析分支按真实方法确定——按桥方法自身的擦除签名取形参会与改名后的
+    被调方法不一致（T-2：`tryAdvance(Object)` 桥 → `tryAdvance_intconsumer(IntConsumer)`）。"""
+    walk, seen = ci, set()
+    while walk is not None and walk.name not in seen:
+        seen.add(walk.name)
+        for m in walk.methods:
+            if m.name == mname and m.descriptor == desc:
+                return bool(m.is_synthetic)
+        walk = registry.get(walk.super_class) if walk.super_class else None
+    return False
+
+
 def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: str,
                                 class_name: str, registry: dict | None):
     """接收者解析与泛型实参映射（§3.7 从 _gen_invokevirtual 上移）：
@@ -561,7 +577,9 @@ def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: st
         _recv_cls_ci = registry.get(_recv_bin_v)
         _call_cls_ci = registry.get(_rust_type_to_binary(cls, registry) or '')
         if (_recv_cls_ci is not None and not _recv_cls_ci.is_interface
-                and _call_cls_ci is not None and _call_cls_ci.is_interface):
+                and _call_cls_ci is not None and _call_cls_ci.is_interface
+                and not _first_decl_is_bridge(_recv_cls_ci, mname,
+                                              '(' + ''.join(params) + ')' + ret, registry)):
             sig_params_v = _lookup_method_sig_params(
                 _recv_base_v, mname, params, ret, registry, sim.class_type_params,
                 receiver_targ_map=receiver_type_arg_map(_recv_ty, _recv_base_v, registry),

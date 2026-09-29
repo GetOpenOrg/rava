@@ -42,7 +42,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .constants import OBJECT_CLASS, CLONEABLE_CLASS, SERIALIZABLE_CLASS
-from .runtime_manifest import read_list
 from .type_map import short_cls
 
 # 数组类型固定实现的接口（JLS 4.10.3）：数组 <: 这三个 + Object
@@ -659,27 +658,16 @@ def _contained(actual: JvmType, formal: JvmType, registry: 'dict | None') -> boo
 #   carrier_type(binary, registry)          binary → 载体串（未启用 → None）
 #   carrier_type_for_ident(rust_ty, registry) Rust 类型串首标识符 → 载体串
 #
-# 铺设控制：CARRIER_TYPE_POSITIONS 列出已启用接口的 binary name；
-# None = 全部接口（终态）。批次逐批宽化，全部批次落地后置 None。
-
-# 铺设名单是按类名枚举的库知识（P-1）：维护在 runtime/java_runtime/
-# carrier_type_positions.txt（批次史与终态说明见该文件）
-CARRIER_TYPE_POSITIONS: 'frozenset[str] | None' = frozenset(read_list('carrier_type_positions.txt'))
-
-
-def iface_carrier_enabled(binary: str) -> bool:
-    """接口是否已进入类型位置载体化铺设。"""
-    gate = CARRIER_TYPE_POSITIONS
-    return gate is None or binary in gate
+# T-2（2026-09-29）：全部接口进入类型位置载体化（铺设名单 carrier_type_positions.txt 已删除）。
 
 
 def carrier_type(binary: str, registry: 'dict | None') -> 'str | None':
-    """启用接口 → 擦除载体 Rust 类型串 `Short<Object, ..>`；否则 None。
+    """接口 → 擦除载体 Rust 类型串 `Short<Object, ..>`；否则 None。
 
-    非接口 / 不在 registry（闭包外）/ 未启用 → None，调用方回退既有擦除路径
+    非接口 / 不在 registry（闭包外）→ None，调用方回退既有擦除路径
     （jvm_to_rust 接口分支的 Object 化）。形参数取 effective_class_type_params
     （含内部类从外围继承的形参——与 jvm_to_rust 的类泛型分支同一口径）。"""
-    if not registry or not iface_carrier_enabled(binary):
+    if not registry:
         return None
     ci = registry.get(binary)
     if ci is None or not getattr(ci, 'is_interface', False):

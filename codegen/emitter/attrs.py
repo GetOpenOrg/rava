@@ -403,8 +403,8 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
         # 按此判定（此前接口不在祖先名单——父类链臂只覆盖超类，接口位一律 false，
         # 详见 array.rs __array_elem_assignable / erased_array_compatible）。
         # 闭包过滤是硬前提：闭包外接口无 Rust 载体类型，臂引用将 E0433。
-        # 铺设门（CARRIER_TYPE_POSITIONS）无关：未铺设接口的载体类型同样存在，
-        # 臂为死代码（槽位形态是 Object，永不匹配），门宽化后自动激活。
+        # 与载体化范围无关（T-2 后全部接口均载体化）：接口的载体类型恒存在，
+        # 臂随接口载体化生效。
         from ..type_map import effective_class_type_params
         _iface_views: list[str] = []
         for st in supertypes:
