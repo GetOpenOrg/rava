@@ -331,7 +331,7 @@ fn platform_main_thread() -> Thread {
     group.__set_maxPriority(Thread::MAX_PRIORITY().unwrap_or(10));
     let holder = Thread_FieldHolder::new(
         group,
-        Object::default(), // task：主线程无 Runnable
+        Default::default(), // task：主线程无 Runnable（Object 或 Runnable 载体，T-2 两形态兼容）
         0,
         Thread::NORM_PRIORITY().unwrap_or(5),
         false,

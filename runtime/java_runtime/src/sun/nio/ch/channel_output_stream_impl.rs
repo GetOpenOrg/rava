@@ -13,7 +13,7 @@ impl ChannelOutputStream {
     pub fn new(ch: Object) -> Result<Self> {
         let mut this = Self::default();
         this._init_not_null();
-        this.__set_ch(ch);
+        this.__set_ch(ch.into());
         Ok(this)
     }
 

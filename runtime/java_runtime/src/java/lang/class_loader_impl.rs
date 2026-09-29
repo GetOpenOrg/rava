@@ -54,7 +54,7 @@ impl ClassLoader {
     #[jvm_boundary(upcalls = "java/util/Collections.emptyEnumeration:()Ljava/util/Enumeration;")]
     pub fn getResources(&self, name: String) -> Result<Object> {
         let _ = name;
-        crate::java::util::Collections::emptyEnumeration()
+        crate::java::util::Collections::emptyEnumeration().map(Into::into)
     }
 
     /// static getSystemResource：委托实例形态（恒 null）。
@@ -80,7 +80,7 @@ impl ClassLoader {
     /// static getSystemResources：委托实例形态（恒空枚举）。
     #[jvm_boundary(upcalls = "java/util/Collections.emptyEnumeration:()Ljava/util/Enumeration;")]
     pub fn getSystemResources(name: String) -> Result<Object> {
-        crate::java::util::Collections::emptyEnumeration()
+        crate::java::util::Collections::emptyEnumeration().map(Into::into)
     }
 }
 

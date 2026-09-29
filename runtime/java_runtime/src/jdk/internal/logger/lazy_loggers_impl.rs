@@ -72,7 +72,8 @@ impl ObjectVTable for SilentLogger {
 impl LazyLoggers {
     /// `getLogger(String, Module)`：静默 Logger（见模块说明）。
     #[jvm_boundary]
-    pub fn getLogger(name: String, _module: Module) -> Result<Object> {
-        Ok(Object::from(SilentLogger { name }))
+    pub fn getLogger<T: From<Object>>(name: String, _module: Module) -> Result<T> {
+        // 返回对 Logger 接口类型泛型（T-2）：调用方以 System$Logger 载体或 Object 承接
+        Ok(T::from(Object::from(SilentLogger { name })))
     }
 }

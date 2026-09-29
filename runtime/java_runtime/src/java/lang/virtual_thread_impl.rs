@@ -29,7 +29,7 @@ impl VirtualThread {
     pub fn new(scheduler: Object, name: String, _characteristics: i32, task: Object) -> Result<Self> {
         let mut this = Self::default();
         this._init_not_null();
-        this.__set_scheduler(scheduler);
+        this.__set_scheduler(scheduler.into());
         this.__set_name(name);
         this.__set_runContinuation(task);
         this.__set_state(NEW);

@@ -16,6 +16,6 @@ impl Proxy {
     #[jvm_native(upcalls = "java/lang/reflect/Proxy$Dyn.create:([Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object; java/lang/reflect/Proxy$Dyn.dispatch:(Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object; java/lang/reflect/Proxy$Dyn.hashCode:()I java/lang/reflect/Proxy$Dyn.equals:(Ljava/lang/Object;)Z java/lang/reflect/Proxy$Dyn.toString:()Ljava/lang/String;")]
     pub fn newProxyInstance_classloader_arr_class_invocationhandler(
         _loader: ClassLoader, interfaces: JArray<Class>, h: Object) -> Result<Object> {
-        Proxy_Dyn::create(interfaces, h)
+        Proxy_Dyn::create(interfaces, h.into())
     }
 }
