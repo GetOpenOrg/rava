@@ -848,7 +848,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                     # 拼接名形态：`findStatic(THIS_CLASS, "unbox" + w.wrapperSimpleName(), …)`——
                     # 拼接模板恰为「标识符前缀 + 单个实参位」（整串即成员名）时，本类以该前缀
                     # 起名的方法全部登记（名字后缀由运行期值决定，前缀是唯一的静态面）
-                    elif 'makeConcatWithConstants' in _c:
+                    elif ' indy:concat' in _c:
                         _tm = re.search(r' template:(.*)\Z', _c, re.DOTALL)
                         _pre = _tm.group(1)[:-1] if _tm and _tm.group(1).endswith('\x01') else ''
                         if len(_pre) >= 3 and _pre.isidentifier() and '\x01' not in _pre:

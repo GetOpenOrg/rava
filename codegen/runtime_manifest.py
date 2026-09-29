@@ -153,6 +153,28 @@ def sigpoly_callsite_typed() -> frozenset:
     return frozenset(_toml('vm_intrinsics.toml').get('sigpoly', {}).get('callsite_typed', []))
 
 
+def indy_kind(bsm: str) -> 'str | None':
+    """invokedynamic 引导方法（`类.方法`）的分类（vm_intrinsics.toml [indy]）：
+    lambda / concat / type_switch / native；未列出返回 None（按普通静态调用处理）。
+    type_switch 是 native 的细分，同时出现时取 type_switch。"""
+    return _indy_kinds().get(bsm)
+
+
+_INDY_KINDS: 'dict | None' = None
+
+
+def _indy_kinds() -> dict:
+    global _INDY_KINDS
+    if _INDY_KINDS is None:
+        sec = _toml('vm_intrinsics.toml').get('indy', {})
+        kinds: dict = {}
+        for k in ('native', 'lambda', 'concat', 'type_switch'):
+            for m in sec.get(k, []):
+                kinds[m] = k
+        _INDY_KINDS = kinds
+    return _INDY_KINDS
+
+
 def vm_constant_null_returns() -> frozenset:
     """恒返回 null 的 VM 边界方法（vm_intrinsics.toml [vm_constants] null_returns，`类.方法:描述符`）。"""
     return frozenset(_toml('vm_intrinsics.toml').get('vm_constants', {}).get('null_returns', []))

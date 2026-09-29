@@ -142,3 +142,9 @@ native = [
     "java/lang/runtime/SwitchBootstraps.typeSwitch",
     "java/lang/runtime/ObjectMethods.bootstrap",
 ]
+# native 的细分（Python 生成器读取；Rust 分析器按上方 native 条目建模）：
+#   type_switch  模式匹配 switch：静态实参即 case 标签序列（Class / String / 整数常量），
+#                生成器据此发射运行时标签判定链（S-17）
+type_switch = [
+    "java/lang/runtime/SwitchBootstraps.typeSwitch",
+]

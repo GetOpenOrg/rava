@@ -173,9 +173,9 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
 
     # ── invokedynamic ──
     if op == 'invokedynamic':
-        if comment and 'makeConcatWithConstants' in comment:
+        if comment and ' indy:concat' in comment:
             _gen_string_concat(sim, comment, registry)
-        elif comment and 'tslabels:' in comment:
+        elif comment and ' indy:type_switch' in comment:
             _gen_type_switch(sim, comment, registry)
         else:
             # 解析 comment 格式：

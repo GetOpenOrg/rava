@@ -400,10 +400,12 @@ def _decode_bytecode(code: bytes, pool: list, bootstrap_methods: list[dict] | No
                 mname_dyn = _utf8(pool, nat[1])
                 mdesc_dyn = _utf8(pool, nat[2])
                 comment = f'InvokeDynamic {mname_dyn}:{mdesc_dyn}'
-                # 嵌入 makeConcatWithConstants 模板 或 Arch-3 lambda 信息
+                # 分类令牌 indy:<kind>（[indy] 清单）+ 拼接配方 / lambda 信息 / case 标签
                 bsm_list = bootstrap_methods or []
                 if bsm_list and bsm_idx < len(bsm_list):
                     bsm = bsm_list[bsm_idx]
+                    if bsm.get('kind'):
+                        comment += f" indy:{bsm['kind']}"
                     tmpl = bsm.get('template')
                     if tmpl is not None:
                         # 常量位的值 JSON 编码置于模板之前（模板须居注释末尾：其正则取到 \\Z）
@@ -729,9 +731,15 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
         method_ref = r.u2()
         num_args = r.u2()
         arg_indices = [r.u2() for _ in range(num_args)]
-        # 对 makeConcatWithConstants 提取第一个 String 参数作为模板
+        # 引导方法分类（vm_intrinsics.toml [indy]，生成器不写类名）：各类的静态实参形态不同，
+        # 只在对应类别下提取——拼接配方（concat）/ SAM 与实现方法（lambda）/ case 标签（type_switch）
+        from .runtime_manifest import indy_kind as _indy_kind
+        _bsm_entry0 = pool[method_ref] if method_ref < len(pool) else None
+        bsm_kind = (_indy_kind(_ref_to_str(pool, _bsm_entry0[2]).split(':', 1)[0])
+                    if _bsm_entry0 and _bsm_entry0[0] == 'MethodHandle' else None)
+        # 拼接配方：首个 String 静态实参
         template = None
-        if arg_indices:
+        if arg_indices and bsm_kind == 'concat':
             cp_entry = pool[arg_indices[0]] if arg_indices[0] < len(pool) else None
             if cp_entry and cp_entry[0] == 'String':
                 template = _utf8(pool, cp_entry[1])
@@ -758,10 +766,8 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
         # 描述符已归一化为 wrapper 类），'s' = String 常量，'i' = Integer 常量，
         # '?' = 其余形态（EnumDesc 的 CONSTANT_Dynamic 等，翻译侧归类不支持）
         switch_labels = None
-        bsm_entry = pool[method_ref] if method_ref < len(pool) else None
-        if bsm_entry and bsm_entry[0] == 'MethodHandle':
-            bsm_ref_str = _ref_to_str(pool, bsm_entry[2])
-            if 'LambdaMetafactory' in bsm_ref_str and len(arg_indices) >= 2:
+        if bsm_kind is not None:
+            if bsm_kind == 'lambda' and len(arg_indices) >= 2:
                 # arg[0] = samMethodType（MethodType）
                 arg0 = pool[arg_indices[0]] if arg_indices[0] < len(pool) else None
                 if arg0 and arg0[0] == 'MethodType':
@@ -770,7 +776,7 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
                 arg1 = pool[arg_indices[1]] if arg_indices[1] < len(pool) else None
                 if arg1 and arg1[0] == 'MethodHandle':
                     impl_method = _ref_to_str(pool, arg1[2])
-            elif 'SwitchBootstraps' in bsm_ref_str and 'typeSwitch' in bsm_ref_str:
+            elif bsm_kind == 'type_switch':
                 switch_labels = []
                 for ai in arg_indices:
                     ent = pool[ai] if ai < len(pool) else None
@@ -794,6 +800,7 @@ def _parse_bootstrap_methods(data: bytes, pool: list) -> list[dict]:
             'sam_type': sam_type,
             'impl_method': impl_method,
             'switch_labels': switch_labels,
+            'kind': bsm_kind,
         })
     return result
 

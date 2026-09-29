@@ -95,10 +95,10 @@ def caller_sensitive_wrap(call: str, owner_bin: str, mname: str, desc: str,
     return call
 
 def _gen_string_concat(sim: StackSim, comment: str, registry: dict | None = None):
-    """处理 invokedynamic makeConcatWithConstants 字符串拼接。
+    """处理字符串拼接 invokedynamic（[indy] concat 类引导方法）。
     结果为 java.lang.String（通过 String::from(format!(...)) 转换）。
     """
-    desc_m = re.search(r'makeConcatWithConstants:(\([^)]*\))', comment)
+    desc_m = re.search(r'^InvokeDynamic [^: ]+:(\([^)]*\))', comment)
     _str_d = ref_desc(STRING_CLASS)
     desc = desc_m.group(1) + _str_d if desc_m else f'({_str_d}){_str_d}'
     params = parse_descriptor_params(desc)
