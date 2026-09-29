@@ -116,6 +116,8 @@ impl Closure<'_> {
             "missing_classes": e.missing.len(),
             "unresolved": e.unresolved.len(),
             "dead_branch_methods": e.dead.len(),
+            "hw_written_fields": e.hw_written.len(),
+            "hw_written_names": e.hw_written_names,
             "elapsed_ms": self.elapsed_ms,
         })
     }

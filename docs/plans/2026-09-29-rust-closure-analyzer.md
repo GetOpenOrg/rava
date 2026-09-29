@@ -144,11 +144,13 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
   "dispatch": { "java/lang/Object.toString:()Ljava/lang/String;": ["java/lang/String"] },
   "reflect":  { "surfaces": { "…": ["…"] }, "gaps": [] },
   "seeds":    { "locale": [], "jca": [], "annotation_enums": [], "data_bundles": [], "module_resources": [] },
-  "folds":    { "instanceof_false": [["方法", 17]], "dead_branches": [["方法", 30]] }
+  "folds_version": 1,
+  "folds":    [{ "method": "…", "dead_pcs": [[65, 80]], "dead_handlers": [90], "consts": [{ "pc": 12, "kind": "getfield", "value": false, "type": "Z" }] }]
 }
 ```
 
 `dispatch` 与 `folds` 交给发射层使用：vtable 只发射实际存在分派目标的槽；折叠点直接生成常量。
+`folds` 的格式约定见 §7.3「折叠点导出」。
 
 ## 五、可以移除的现行机制
 
@@ -279,6 +281,31 @@ C1b 引入的机制（全部通用，无类名特判）：
    接收者类型推不出时，同名字段在所有已知声明类里都按 open 处理（安全回退）。
    现行兜底是「类自身有手写函数 → 引用字段 open」（`field_handwritten`），它盖不住跨文件写入，
    例如 `monitor.rs` 写 `Thread$FieldHolder.threadStatus`。
+
+   **已完成（2026-09-29）**：
+   - 扫描：`handwritten.rs` 按源码顺序维护带块作用域的静态类型环境。
+     - 来源：impl 块 self 类型、形参注解、`let` 注解 / 初值。
+     - 遮蔽：for / while / if / match / 闭包的模式绑定都会遮蔽同名变量。
+   - 接收者静态类型 `SType` 有三种形态：
+     - 具名类型；
+     - `T::m(…)` 的返回：按 Rust 名匹配方法，且返回类型唯一；
+     - `x.__get_f()` 的字段类型。
+   - 关键字字段名：访问器带 `_` 后缀的（`__set_in_`）还原为 Java 名。
+   - 引擎：
+     - 写入值接进字段节点，读出值汇入手写方法的值池。
+     - 接收者推不出时按字段名回退：写入使同名字段 open，读取让同名字段流入值池。
+     - `field_handwritten` 收紧为只对边界类字段 open。
+     - 顺带修正 `resolve_type`：末段模块与类型同名（`charset::Charset`）时两种前缀都尝试。
+   - 实测：
+
+     | 用例 | 类 | translate∩code | 方法 | 手写写入字段 | 按名回退 |
+     |---|---|---|---|---|---|
+     | HelloWorld | 200 | 115 | 457（原 466） | 16 | 0 |
+     | FileIOTest | 247 | 141 | 673 | 20 | 0 |
+
+   - 动态对照：两者翻译域漏覆盖 = 0。
+     - HelloWorld 的缺失清单与 C1b 基线逐项相同。
+     - FileIOTest 另缺 3 类：`Long$LongCache` 在 StringConcatFactory 引导中加载；`CharsetDecoder` 和 `UTF_8$Decoder` 走 JDK StreamDecoder 路径，而 rava 手写的 StreamDecoder 用 Charset 重载直连解码，不经过它们。三类都在手写边界之外。
 1. **字段常量折叠**：每个字段维护一个写入值集，由以下几部分组成：
    - 初值：实例字段取默认值；`static final` 取 `ConstantValue`，否则取默认值。
    - 可达 `putfield` / `putstatic` 写入的抽象值，以及可达构造器 / `<clinit>` 中的写入。
@@ -305,28 +332,47 @@ C1b 引入的机制（全部通用，无类名特判）：
 
 第 1 步完成后单独测一次 TestStreamBasic，量出并行流路径（ForkJoin / VarHandles）占多少类，再定第 2、3 步做多深。
 
-**折叠点导出（C3 / C4 的衔接，格式在 C1c 定型）**：Rust 闭包剪掉的分支，Python 生成器必须同样不翻译，
-否则生成代码会引用闭包外的类，编译失败。closure.json 为每个存在不可达代码的方法导出：
+**折叠点导出（C3 / C4 的衔接，格式 v1 已定）**：Rust 闭包剪掉的分支，Python 生成器必须同样不翻译，
+否则生成代码会引用闭包外的类，编译失败。closure.json 为每个存在不可达代码或常量折叠点的方法导出：
 
 ```json
+"folds_version": 1,
 "folds": [{
   "method": "java/util/stream/AbstractPipeline.evaluate:(Ljava/util/stream/TerminalOp;)Ljava/lang/Object;",
   "dead_pcs": [[65, 80]],
-  "consts": [{"pc": 12, "value": false}]
+  "dead_handlers": [90],
+  "consts": [{"pc": 12, "kind": "getfield", "value": false, "type": "Z"}]
 }]
 ```
 
-- `dead_pcs`：不可达指令的 pc 半开区间，由 absint 的可达性直接合并得到。Python 在结构化控制流之前按区间剔除基本块。
-- `consts`：被折叠的读字段 / 条件的 pc 与常量值，供生成器发射常量。
+1. **`dead_pcs`**：不可达指令的半开区间 `[start, end)`。
+   - 两端都落在指令起点上。
+   - 按 start 排序，互不重叠，相邻区间合并。
+   - 条件跳转被常量裁掉的一侧就体现在这里。Python 在 CFG 结构化之前把只剩一个活后继的条件跳转改写成 goto 或直通，不另设分支字段。
+2. **`dead_handlers`**：起点不可达的异常处理器 pc，Python 据此删除对应的异常表项。
+   - 只要某 try 区间内还有可达指令，引用它的 handler 就不会进 `dead_pcs` / `dead_handlers`。
+   - 不输出「try 区间部分删除，却保留引用它的 handler」的组合。
+3. **`consts`**：被折叠成常量的读取点。`kind` 取 `getfield` / `getstatic` / `invoke` 三种，栈效应如下：
+   - `getfield`：替换后弹出 receiver。
+   - `invoke`：替换后弹出全部实参，有 receiver 也一并弹出。
+   - 实参 / receiver 表达式的副作用由 Python 保留求值、丢弃结果，JSON 只给 pc。
+4. **`value` 与 `type`**：`type` 是 JVM 描述符（`Z/B/C/S/I/J/F/D`、`Ljava/lang/String;`）。
+   - null 写成 `"value": null`，`type` 给声明类型。
+   - `J` / `D` 的值用字符串编码（`"9007199254740993"`），避免 JSON 数值丢精度。
+   - `Z` 用 JSON 布尔值，其余整型用 JSON 整数。
+5. **确定性**：`folds` 按 method 排序，`consts` 按 pc 排序，同输入逐字节相同。
+6. **版本**：顶层 `folds_version` 当前为 1。Python 遇到不认识的版本时忽略 folds、按原样翻译、不报错，两边可以各自先合入。
 
-Python 只消费这份数据，不另写判定。原有的 `dead_branches` 输出由 `folds` 取代。Python 侧的剔除由用户实现。
+原有的 `dead_branches` 输出整体由 `folds` 取代。Python 只消费这份数据，不另写判定；消费侧（C3）由用户实现，验收用 `compare_trees.sh`：
+- 不带 folds 时，生成树逐字节不变；
+- 带 folds 时，只有预期的方法体变化，并且生成代码引用的类都在闭包之内。
 
 **C1c 验收**：
 - HelloWorld、TestSwitchString、PatternSwitchTest、TestRecordComponents、TestStreamBasic、CollectorsDemo、
   ChineseRemainderTheorem 7 个用例：总类 ≤ 400，translate ∩ code ≤ 250，单测试耗时 ≤ 3s。
-- HelloWorld 指标不回退（200 / 115 / 466）。
+- HelloWorld 指标不回退（第 0 步后 200 / 115 / 457）。
 - 上述 7 个用例以及 FileIOTest（手写层写字段密集，检验写入来源是否收全）的动态对照，翻译域漏覆盖 = 0。
-- closure.json 输出 `folds`，结果确定。
+- closure.json 输出 `folds_version: 1` 与 `folds`（格式如上），结果确定；`dead_branches` 删除。
 
 ## 八、风险与对策
 

@@ -20,7 +20,7 @@ use indexmap::IndexMap;
 use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Oracle, Src, V};
-use crate::handwritten::{member_matches, Handwritten, MemberHw, TypedCall, TypeRef, Upcall};
+use crate::handwritten::{member_matches, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
 use crate::manifest::{Domain, Fact, IndyKind, Manifest};
 
 const OBJECT: &str = "java/lang/Object";
@@ -145,7 +145,7 @@ pub struct MNode {
     pub hw_fns: Vec<String>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 enum Node {
     /// 形参（方法, 序号）
     P(usize, u16),
@@ -334,6 +334,12 @@ pub struct Engine<'a> {
     lambda_stack: HashSet<(u32, String)>,
     /// 待沿流边推送的新增类型（差分传播）
     fdelta: HashMap<Node, TypeSet>,
+    /// 手写层写入的字段（`__set_` 接收者类型已定位）
+    pub hw_written: BTreeSet<MemberRef>,
+    /// 手写层写入但接收者类型推不出的字段名：所有同名字段按有手写写入处理
+    pub hw_written_names: BTreeSet<String>,
+    /// 手写层读取但接收者类型推不出的字段名 → 读出值汇入的值池：所有同名字段流入
+    hw_read_names: BTreeMap<String, BTreeSet<Node>>,
 }
 
 impl<'a> Engine<'a> {
@@ -373,6 +379,9 @@ impl<'a> Engine<'a> {
             open_methods: BTreeSet::new(),
             pending_catch: BTreeMap::new(),
             lambda_stack: HashSet::new(),
+            hw_written: BTreeSet::new(),
+            hw_written_names: BTreeSet::new(),
+            hw_read_names: BTreeMap::new(),
             fdelta: HashMap::new(),
         }
     }
@@ -1061,6 +1070,12 @@ impl<'a> Engine<'a> {
         };
         let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
         let fi = self.field_node(key);
+        if self.hw_written_names.contains(&f.name) {
+            self.add_to(Node::F(fi), &TypeSet::open(tid));
+        }
+        for p in self.hw_read_names.get(&f.name).cloned().unwrap_or_default() {
+            self.flow(Node::F(fi), p, tid);
+        }
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
             let fs = match value {
                 Some(v) => self.feeds(m, v, tid),
@@ -1073,13 +1088,13 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 字段读：声明类是边界类或有共置手写文件 → 手写层可能写入，按 open 处理；
-    /// 手写静态访问器（如标准流）声明的回调入链
+    /// 字段读：声明类是边界类 → struct 与字段整体手写，按 open 处理（公开 API 类的手写写入经
+    /// `__set_` 在 [`Self::hw_fields`] 精确接入）；手写静态访问器（如标准流）声明的回调入链
     fn field_handwritten(&mut self, m: usize, decl: &str, name: &str, via: &Via, node: Option<(usize, u32)>) {
         let hwc = self.hw.class(decl);
         let boundary = matches!(self.domain(decl), Domain::Boundary | Domain::Root);
         if let Some((fi, tid)) = node {
-            if boundary || !hwc.fns.is_empty() {
+            if boundary {
                 self.add_to(Node::F(fi), &TypeSet::open(tid));
             }
         }
@@ -1554,9 +1569,109 @@ impl<'a> Engine<'a> {
         out
     }
 
+    /// 类（含超类 / 超接口）中按名字找字段 → (声明类, 描述符)
+    fn field_by_name(&self, cls: &str, name: &str) -> Option<(String, String)> {
+        let c = self.h.class(cls)?;
+        if let Some(f) = c.fields.iter().find(|f| f.name == name) {
+            return Some((c.name.clone(), f.desc.clone()));
+        }
+        c.super_name
+            .iter()
+            .chain(c.interfaces.iter())
+            .find_map(|s| self.field_by_name(s, name))
+    }
+
+    /// 手写体接收者静态类型 → 类名（引用类型；推不出为 None）
+    fn stype_class(&self, host: &str, s: &SType) -> Option<String> {
+        let of_desc = |d: &str| match parse_field(d)? {
+            FieldType::Object(c) => Some(c),
+            _ => None,
+        };
+        match s {
+            SType::Named(t) => self.resolve_tref(host, t),
+            SType::Field(b, f) => {
+                let c = self.stype_class(host, b)?;
+                of_desc(&self.field_by_name(&c, f)?.1)
+            }
+            SType::Ret(t, m) => {
+                let mut cur = self.resolve_tref(host, t);
+                // 自类起沿超类找 Rust 名匹配的方法，返回类型须唯一
+                while let Some(c) = cur {
+                    let cf = self.h.class(&c)?;
+                    let rets: BTreeSet<String> = cf
+                        .methods
+                        .iter()
+                        .filter(|x| {
+                            let (plain, mangled) = self.rust_names(&cf, &x.name, &x.desc);
+                            plain.as_deref() == Some(m.as_str()) || mangled == *m
+                        })
+                        .filter_map(|x| parse_method(&x.desc).and_then(|d| d.ret).map(|r| r.descriptor()))
+                        .collect();
+                    if !rets.is_empty() {
+                        return if rets.len() == 1 { of_desc(rets.first()?) } else { None };
+                    }
+                    cur = cf.super_name.clone();
+                }
+                None
+            }
+        }
+    }
+
+    /// 手写体字段访问器：写入值接进字段节点并登记「有手写写入」；读出值汇入值池。
+    /// 接收者推不出 → 所有同名字段按 open 处理（安全回退）
+    fn hw_fields(&mut self, m: usize, host: &str, fields: &[FieldAccess]) {
+        let pool = Node::S(m, POOL);
+        for fa in fields {
+            let site = fa.recv.as_ref().and_then(|r| self.stype_class(host, r)).and_then(|c| self.field_by_name(&c, &fa.field));
+            let Some((decl, desc)) = site else {
+                let fresh = if fa.write {
+                    self.hw_written_names.insert(fa.field.clone())
+                } else {
+                    self.hw_read_names.entry(fa.field.clone()).or_default().insert(pool)
+                };
+                if !fresh {
+                    continue;
+                }
+                let hit: Vec<(usize, String)> = self
+                    .fields
+                    .keys()
+                    .enumerate()
+                    .filter(|(_, k)| k.name == fa.field)
+                    .map(|(i, k)| (i, k.desc.clone()))
+                    .collect();
+                for (i, d) in hit {
+                    let Some(tid) = parse_field(&d).and_then(|t| self.ptype(&t)) else { continue };
+                    if fa.write {
+                        self.add_to(Node::F(i), &TypeSet::open(tid));
+                    } else {
+                        self.flow(Node::F(i), pool, tid);
+                    }
+                }
+                continue;
+            };
+            let key = MemberRef { owner: decl, name: fa.field.clone(), desc };
+            let tid = parse_field(&key.desc).and_then(|t| self.ptype(&t));
+            if fa.write {
+                self.hw_written.insert(key.clone());
+            }
+            let Some(tid) = tid else { continue };
+            let fi = self.field_node(key);
+            if fa.write {
+                let fs = match self.hw_type(host, &fa.value) {
+                    Some(id) => vec![Feed::S(TypeSet::exact(id))],
+                    None => vec![Feed::N(pool)],
+                };
+                self.feed(&fs, Node::F(fi), tid);
+            } else {
+                self.flow(Node::F(fi), pool, tid);
+            }
+        }
+    }
+
     /// 手写体效果：分配 / 构造 / 回调。实参按手写体调用点的语法推断精确接入，推断不出的经方法 m 的值池流转
     fn apply_hw(&mut self, m: usize, host: &str, mh: &MemberHw, via: &Via) {
         let pool = Node::S(m, POOL);
+        self.hw_fields(m, host, &mh.fields);
         for t in &mh.allocs {
             if let Some(c) = self.resolve_tref(host, t) {
                 self.instantiate(&c, via.clone());

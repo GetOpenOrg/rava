@@ -26,6 +26,9 @@ const CTOR_RUST: &str = "new";
 const OBJECT_RUST: &str = "Object";
 const STRING_RUST: &str = "String";
 const VIRTUAL_PREFIX: &str = "__impl_";
+/// 字段访问器前缀（rava_macros 生成）
+const SET_PREFIX: &str = "__set_";
+const GET_PREFIX: &str = "__get_";
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
     "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self",
@@ -69,6 +72,25 @@ pub struct TypedCall {
     pub args: Vec<Option<TypeRef>>,
 }
 
+/// 接收者的静态类型（语法推断）：具名类型 / `T::m(…)` 的返回类型 / `x.__get_f()` 的字段类型
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SType {
+    Named(TypeRef),
+    Ret(TypeRef, String),
+    Field(Box<SType>, String),
+}
+
+/// 手写体里的字段访问器调用：`recv.__set_<字段>(v)` / `recv.__get_<字段>()`（字段名即 Java 名）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FieldAccess {
+    pub field: String,
+    pub write: bool,
+    /// 接收者静态类型；推断不出为 None（引擎按字段名在所有声明类上保守处理）
+    pub recv: Option<SType>,
+    /// 写入值的动态类型（同 [`TypedCall`] 实参规则）
+    pub value: Option<TypeRef>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct FnInfo {
     pub is_pub: bool,
@@ -81,6 +103,8 @@ pub struct FnInfo {
     pub allocs: BTreeSet<TypeRef>,
     /// 构造调用（类型, Rust 构造器名 `new` / `new_<后缀>`），同样传递闭包
     pub ctors: BTreeSet<(TypeRef, String)>,
+    /// 字段访问器调用，同样传递闭包
+    pub fields: Vec<FieldAccess>,
 }
 
 /// 一个类的共置手写文件汇总
@@ -100,6 +124,7 @@ pub struct MemberHw {
     pub ctors: BTreeSet<(TypeRef, String)>,
     pub calls: Vec<TypedCall>,
     pub opaque: HashSet<String>,
+    pub fields: Vec<FieldAccess>,
     /// 命中的 fn 名（溯源）
     pub fns: Vec<String>,
 }
@@ -216,6 +241,7 @@ impl Handwritten {
             out.ctors.extend(f.ctors.iter().cloned());
             out.calls.extend(f.calls.iter().cloned());
             out.opaque.extend(f.opaque.iter().cloned());
+            out.fields.extend(f.fields.iter().cloned());
             out.fns.push(n.clone());
         }
         out
@@ -317,18 +343,26 @@ impl Handwritten {
         let mut full = base;
         for m in &rest[..rest.len().saturating_sub(1)] {
             let m = m.strip_prefix("r#").unwrap_or(m);
-            if m != "implref" && m != "self" && m != snake {
+            if m != "implref" && m != "self" {
                 full.push(m.to_string());
             }
         }
-        if full.is_empty() {
-            full = pkg.iter().map(|s| s.to_string()).collect();
+        // 末段模块与类型同名：可能是类文件模块（`stream_decoder::StreamDecoder`），也可能是包
+        // （`charset::Charset`）——两种前缀都给出
+        let mut prefixes = vec![full.clone()];
+        if full.last() == Some(&snake) {
+            full.pop();
+            prefixes.insert(0, full);
         }
-        let prefix = full.join("/");
-        dollar_variants(&ty)
-            .into_iter()
-            .map(|v| if prefix.is_empty() { v } else { format!("{prefix}/{v}") })
-            .collect()
+        let mut out = Vec::new();
+        for mut p in prefixes {
+            if p.is_empty() {
+                p = pkg.iter().map(|s| s.to_string()).collect();
+            }
+            let prefix = p.join("/");
+            out.extend(dollar_variants(&ty).into_iter().map(|v| if prefix.is_empty() { v } else { format!("{prefix}/{v}") }));
+        }
+        out
     }
 }
 
@@ -398,15 +432,7 @@ impl<'ast> Visit<'ast> for BodyScan {
     fn visit_local(&mut self, l: &'ast syn::Local) {
         if let syn::Pat::Ident(pi) = strip_type(&l.pat) {
             let t = l.init.as_ref().and_then(|i| infer(&i.expr, &self.locals));
-            let name = pi.ident.to_string();
-            match self.locals.get(&name) {
-                Some(old) if *old != t => {
-                    self.locals.insert(name, None);
-                }
-                _ => {
-                    self.locals.insert(name, t);
-                }
-            }
+            bind(&mut self.locals, pi.ident.to_string(), t);
             if pi.mutability.is_some() {
                 if let Some(init) = &l.init {
                     if let syn::Expr::Call(c) = &*init.expr {
@@ -455,6 +481,83 @@ impl<'ast> Visit<'ast> for BodyScan {
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
 }
 
+/// 同名重复绑定且类型不一致 → None
+fn bind<T: PartialEq>(env: &mut HashMap<String, Option<T>>, name: String, t: Option<T>) {
+    match env.get(&name) {
+        Some(old) if *old != t => {
+            env.insert(name, None);
+        }
+        _ => {
+            env.insert(name, t);
+        }
+    }
+}
+
+/// 类型注解的路径（剥引用 / 括号；`Self` 原样保留，由解析时换成宿主类）
+fn type_path(t: &syn::Type) -> Option<Vec<String>> {
+    match t {
+        syn::Type::Reference(r) => type_path(&r.elem),
+        syn::Type::Paren(p) => type_path(&p.elem),
+        syn::Type::Group(g) => type_path(&g.elem),
+        syn::Type::Path(p) if p.qself.is_none() => Some(path_segs(&p.path)),
+        _ => None,
+    }
+}
+
+/// 表达式的静态类型：形参 / let 注解、`T::default()` / `T::new*`、`T::m(…)` 的返回、`x.__get_f()` 的字段；
+/// 其余退回动态类型推断
+fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, locals: &HashMap<String, Option<Vec<String>>>) -> Option<SType> {
+    use syn::Expr;
+    let direct = match e {
+        Expr::Paren(p) => stype(&p.expr, statics, locals),
+        Expr::Group(g) => stype(&g.expr, statics, locals),
+        Expr::Reference(r) => stype(&r.expr, statics, locals),
+        Expr::Try(t) => stype(&t.expr, statics, locals),
+        Expr::Path(p) => p.path.get_ident().and_then(|i| statics.get(&i.to_string()).cloned().flatten()),
+        Expr::MethodCall(m) => {
+            let name = m.method.to_string();
+            match name.strip_prefix(GET_PREFIX) {
+                Some(f) if m.args.is_empty() => stype(&m.receiver, statics, locals).map(|r| SType::Field(Box::new(r), f.to_string())),
+                _ if matches!(name.as_str(), "clone" | "unwrap" | "expect" | "unwrap_or_else" | "unwrap_or") => {
+                    stype(&m.receiver, statics, locals)
+                }
+                _ => None,
+            }
+        }
+        Expr::Call(c) => match &*c.func {
+            Expr::Path(p) => {
+                let segs = path_segs(&p.path);
+                match segs.split_last() {
+                    Some((last, head)) if head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase())) => {
+                        let t = TypeRef(head.to_vec());
+                        Some(if last == "default" || last == CTOR_RUST || last.starts_with("new_") {
+                            SType::Named(t)
+                        } else {
+                            SType::Ret(t, last.clone())
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    direct.or_else(|| infer(e, locals).map(|t| SType::Named(TypeRef(t))))
+}
+
+fn expand_s(uses: &HashMap<String, Vec<String>>, s: SType, self_ty: &Option<Vec<String>>) -> SType {
+    let tr = |t: TypeRef| match (t.0.as_slice(), self_ty) {
+        ([one], Some(st)) if one == "Self" => TypeRef(expand(uses, st.clone())),
+        _ => TypeRef(expand(uses, t.0)),
+    };
+    match s {
+        SType::Named(t) => SType::Named(tr(t)),
+        SType::Ret(t, m) => SType::Ret(tr(t), m),
+        SType::Field(b, f) => SType::Field(Box::new(expand_s(uses, *b, self_ty)), f),
+    }
+}
+
 /// 表达式的对象类型（语法推断；见 [`TypedCall`]）
 fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>) -> Option<Vec<String>> {
     use syn::Expr;
@@ -494,10 +597,14 @@ fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>) -> Option
     }
 }
 
-/// 第二遍：按第一遍的 let 绑定推断调用点实参
+/// 第二遍：按第一遍的 let 绑定推断调用点实参；按源码顺序维护静态类型作用域
 struct CallScan<'a> {
     locals: &'a HashMap<String, Option<Vec<String>>>,
+    /// 形参 / self / let 绑定 → 静态类型（块作用域；其余模式绑定遮蔽为 None）
+    scope: HashMap<String, Option<SType>>,
     calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>)>,
+    /// (字段, 写, 接收者静态类型, 写入值类型)
+    fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>)>,
     opaque: HashSet<String>,
 }
 
@@ -515,8 +622,20 @@ fn macro_idents(ts: proc_macro2::TokenStream, out: &mut HashSet<String>) {
 
 impl<'ast> Visit<'ast> for CallScan<'_> {
     fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+        let name = m.method.to_string();
+        let access = match (name.strip_prefix(SET_PREFIX), name.strip_prefix(GET_PREFIX)) {
+            (Some(f), _) if m.args.len() == 1 => Some((f, true)),
+            (_, Some(f)) if m.args.is_empty() => Some((f, false)),
+            _ => None,
+        };
+        if let Some((f, write)) = access {
+            // Java 字段名是 Rust 关键字时访问器带 `_` 后缀（`in` → `__set_in_`）
+            let f = f.strip_suffix('_').filter(|k| RUST_KEYWORDS.contains(k)).unwrap_or(f);
+            let value = m.args.first().and_then(|a| infer(a, self.locals));
+            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value));
+        }
         let args = m.args.iter().map(|a| infer(a, self.locals)).collect();
-        self.calls.push((m.method.to_string(), None, Some(infer(&m.receiver, self.locals)), args));
+        self.calls.push((name, None, Some(infer(&m.receiver, self.locals)), args));
         syn::visit::visit_expr_method_call(self, m);
     }
 
@@ -534,6 +653,60 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
 
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
         macro_idents(m.tokens.clone(), &mut self.opaque);
+    }
+
+    fn visit_block(&mut self, b: &'ast syn::Block) {
+        let outer = self.scope.clone();
+        syn::visit::visit_block(self, b);
+        self.scope = outer;
+    }
+
+    fn visit_expr_closure(&mut self, c: &'ast syn::ExprClosure) {
+        let outer = self.scope.clone();
+        syn::visit::visit_expr_closure(self, c);
+        self.scope = outer;
+    }
+
+    // for / while let / if let / match 分支的模式绑定只在其内有效
+    fn visit_expr_for_loop(&mut self, e: &'ast syn::ExprForLoop) {
+        let outer = self.scope.clone();
+        syn::visit::visit_expr_for_loop(self, e);
+        self.scope = outer;
+    }
+
+    fn visit_expr_while(&mut self, e: &'ast syn::ExprWhile) {
+        let outer = self.scope.clone();
+        syn::visit::visit_expr_while(self, e);
+        self.scope = outer;
+    }
+
+    fn visit_expr_if(&mut self, e: &'ast syn::ExprIf) {
+        let outer = self.scope.clone();
+        syn::visit::visit_expr_if(self, e);
+        self.scope = outer;
+    }
+
+    fn visit_arm(&mut self, a: &'ast syn::Arm) {
+        let outer = self.scope.clone();
+        syn::visit::visit_arm(self, a);
+        self.scope = outer;
+    }
+
+    fn visit_local(&mut self, l: &'ast syn::Local) {
+        syn::visit::visit_local(self, l);
+        if let syn::Pat::Ident(pi) = strip_type(&l.pat) {
+            let st = match &l.pat {
+                syn::Pat::Type(pt) => type_path(&pt.ty).map(|p| SType::Named(TypeRef(p))),
+                _ => l.init.as_ref().and_then(|i| stype(&i.expr, &self.scope, self.locals)),
+            };
+            self.scope.insert(pi.ident.to_string(), st);
+        }
+    }
+
+    // 模式绑定（闭包形参 / match / if let / for）遮蔽同名变量
+    fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+        self.scope.insert(p.ident.to_string(), None);
+        syn::visit::visit_pat_ident(self, p);
     }
 
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
@@ -554,12 +727,28 @@ struct RawFn {
 struct FileScan<'a> {
     uses: &'a HashMap<String, Vec<String>>,
     fns: Vec<(String, RawFn)>,
+    /// 当前 impl 块的 self 类型
+    self_ty: Option<Vec<String>>,
 }
 
 impl FileScan<'_> {
-    fn add(&mut self, name: String, is_pub: bool, attrs: &[syn::Attribute], block: &syn::Block) {
+    fn add(&mut self, sig: &syn::Signature, is_pub: bool, attrs: &[syn::Attribute], block: &syn::Block) {
+        let name = sig.ident.to_string();
         let mut b = BodyScan::default();
         b.visit_block(block);
+        let mut scope = HashMap::new();
+        for a in &sig.inputs {
+            match a {
+                syn::FnArg::Receiver(_) => {
+                    scope.insert("self".to_string(), Some(SType::Named(TypeRef(vec!["Self".into()]))));
+                }
+                syn::FnArg::Typed(pt) => {
+                    if let syn::Pat::Ident(pi) = &*pt.pat {
+                        scope.insert(pi.ident.to_string(), type_path(&pt.ty).map(|p| SType::Named(TypeRef(p))));
+                    }
+                }
+            }
+        }
         let mut info = FnInfo { is_pub, upcalls: upcalls_of(attrs), ..Default::default() };
         for (var, ty) in &b.defaults {
             if b.inited.contains(var) {
@@ -567,8 +756,16 @@ impl FileScan<'_> {
                 b.locals.insert(var.clone(), Some(ty.clone()));
             }
         }
-        let mut cs = CallScan { locals: &b.locals, calls: Vec::new(), opaque: HashSet::new() };
+        let mut cs = CallScan { locals: &b.locals, scope, calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new() };
         cs.visit_block(block);
+        for (field, write, recv, value) in cs.fields {
+            info.fields.push(FieldAccess {
+                field,
+                write,
+                recv: recv.map(|r| expand_s(self.uses, r, &self.self_ty)),
+                value: value.map(|v| TypeRef(expand(self.uses, v))),
+            });
+        }
         let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
         for (name, ty, recv, args) in cs.calls {
             info.calls.push(TypedCall {
@@ -589,13 +786,22 @@ impl FileScan<'_> {
 impl<'ast> Visit<'ast> for FileScan<'_> {
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
         let is_pub = matches!(f.vis, syn::Visibility::Public(_));
-        self.add(f.sig.ident.to_string(), is_pub, &f.attrs, &f.block);
+        // 自由 fn 内的 Self 无意义：暂离 impl 上下文
+        let outer = self.self_ty.take();
+        self.add(&f.sig, is_pub, &f.attrs, &f.block);
         syn::visit::visit_item_fn(self, f);
+        self.self_ty = outer;
+    }
+
+    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
+        let outer = std::mem::replace(&mut self.self_ty, type_path(&i.self_ty));
+        syn::visit::visit_item_impl(self, i);
+        self.self_ty = outer;
     }
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
         let is_pub = matches!(f.vis, syn::Visibility::Public(_));
-        self.add(f.sig.ident.to_string(), is_pub, &f.attrs, &f.block);
+        self.add(&f.sig, is_pub, &f.attrs, &f.block);
         syn::visit::visit_impl_item_fn(self, f);
     }
 }
@@ -666,7 +872,7 @@ fn scan_file(
 ) {
     let mut us = UseScan(prelude.clone());
     us.visit_file(file);
-    let mut fs = FileScan { uses: &us.0, fns: Vec::new() };
+    let mut fs = FileScan { uses: &us.0, fns: Vec::new(), self_ty: None };
     fs.visit_file(file);
     for (name, raw) in fs.fns {
         calls.entry(name.clone()).or_default().extend(raw.calls);
@@ -677,6 +883,7 @@ fn scan_file(
         e.ctors.extend(raw.info.ctors);
         e.calls.extend(raw.info.calls);
         e.opaque.extend(raw.info.opaque);
+        e.fields.extend(raw.info.fields);
     }
 }
 
@@ -688,13 +895,14 @@ fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, H
         let mut seen: HashSet<&str> = HashSet::from([n.as_str()]);
         let mut stack = vec![n.as_str()];
         let (mut allocs, mut ctors) = (BTreeSet::new(), BTreeSet::new());
-        let (mut tcalls, mut opaque) = (Vec::new(), HashSet::new());
+        let (mut tcalls, mut opaque, mut fields) = (Vec::new(), HashSet::new(), Vec::new());
         while let Some(x) = stack.pop() {
             if let Some(f) = fns.get(x) {
                 allocs.extend(f.allocs.iter().cloned());
                 ctors.extend(f.ctors.iter().cloned());
                 tcalls.extend(f.calls.iter().cloned());
                 opaque.extend(f.opaque.iter().cloned());
+                fields.extend(f.fields.iter().cloned());
             }
             for c in calls.get(x).into_iter().flatten() {
                 if fns.contains_key(c) && seen.insert(c.as_str()) {
@@ -702,13 +910,63 @@ fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, H
                 }
             }
         }
-        closed.push((n.clone(), allocs, ctors, tcalls, opaque));
+        closed.push((n.clone(), allocs, ctors, tcalls, opaque, fields));
     }
-    for (n, a, c, t, o) in closed {
+    for (n, a, c, t, o, fl) in closed {
         let f = fns.get_mut(&n).expect("fn 名来自同一表");
         f.allocs = a;
         f.ctors = c;
         f.calls = t;
         f.opaque = o;
+        f.fields = fl;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fields_of(src: &str, f: &str) -> Vec<FieldAccess> {
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let (mut fns, mut calls) = (HashMap::new(), HashMap::new());
+        scan_file(&file, &HashMap::new(), &mut fns, &mut calls);
+        fns.remove(f).map(|i| i.fields).unwrap_or_default()
+    }
+
+    fn named(p: &[&str]) -> SType {
+        SType::Named(TypeRef(p.iter().map(|s| s.to_string()).collect()))
+    }
+
+    #[test]
+    fn field_access_receivers() {
+        let src = r#"
+            impl Decoder {
+                pub fn open(&self, x: &Stream) {
+                    self.__set_in_(Stream::new());
+                    self.__get_fd().__set_fd(1);
+                    let h = Holder::new(1).unwrap_or_else(|e| panic!());
+                    h.__set_status(2);
+                    { let h = other(); h.__set_status(3); }
+                    h.__set_status(4);
+                    for x in xs { x.__set_a(0); }
+                    x.__set_b(0);
+                    let v = x.__get_c();
+                }
+            }
+        "#;
+        let fs = fields_of(src, "open");
+        let get = |i: usize| (fs[i].field.as_str(), fs[i].write, fs[i].recv.clone());
+        assert_eq!(get(0), ("in", true, Some(named(&["Decoder"]))));
+        assert_eq!(fs[0].value, Some(TypeRef(vec!["Stream".into()])));
+        // 外层访问器先登记，再进接收者
+        assert_eq!(get(1), ("fd", true, Some(SType::Field(Box::new(named(&["Decoder"])), "fd".into()))));
+        assert_eq!(get(2), ("fd", false, Some(named(&["Decoder"]))));
+        assert_eq!(get(3), ("status", true, Some(named(&["Holder"]))));
+        assert_eq!(get(4), ("status", true, None));
+        assert_eq!(get(5), ("status", true, Some(named(&["Holder"]))));
+        // for 模式遮蔽形参 x；块外恢复
+        assert_eq!(get(6), ("a", true, None));
+        assert_eq!(get(7), ("b", true, Some(named(&["Stream"]))));
+        assert_eq!(get(8), ("c", false, Some(named(&["Stream"]))));
     }
 }
