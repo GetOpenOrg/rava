@@ -171,11 +171,25 @@ pub fn component(arr: &str) -> Option<Rc<str>> {
 }
 
 /// 分析所需的外部查询（事实、常量静态字段、catch 类型存活）
+/// 调用结果
+pub enum Ret {
+    /// 值未知
+    Unknown,
+    /// 恒为该常量
+    Value(V),
+    /// 尚无返回路径（乐观假设：被调方法还没算出返回值，调用之后暂不可达）
+    Never,
+}
+
 pub trait Oracle {
-    /// 调用结果的已知值（返回值事实 / null→false 纯函数）
-    fn invoke_result(&self, m: &MemberRef, args: &[V]) -> Option<V>;
-    /// 常量静态字段（ConstantValue 或 `<clinit>` 唯一常量赋值的 static final）
-    fn static_field(&self, f: &MemberRef) -> Option<V>;
+    /// 调用结果（返回值事实 / null→false 纯函数 / 被调方法的返回常量）
+    fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret;
+    /// 字段读（getstatic / getfield）的常量值
+    fn field(&self, opcode: u8, f: &MemberRef) -> Option<V>;
+    /// 形参的常量值（全部调用点传入同一常量；序号含实例方法的 this 槽）
+    fn param(&self, _i: u16) -> Option<V> {
+        None
+    }
     /// catch 类型是否可能被抛出（有已实例化的子类型）
     fn catch_live(&self, ty: &str) -> bool;
 }
@@ -195,12 +209,13 @@ pub enum Event {
     ArrayLoad { array: V, index: V },
     ArrayStore { array: V, index: V, value: V },
     Throw(V),
-    /// areturn 的返回值
+    /// 返回指令及返回值（ireturn / lreturn / areturn 取栈顶值；freturn / dreturn / void return 为 Top）。
+    /// void return 也发：「有可达的返回点」是乐观阶段判定被调方法会返回的依据
     Return(V),
     /// 进入的异常处理器的 catch 类型（None = finally）
     Catch(Option<String>),
-    /// 条件恒定而剪掉的一侧（分支指令偏移, 被剪的目标偏移）
-    DeadBranch(u32),
+    /// 读取点（getfield / getstatic / invoke 指令）的结果被折叠为常量
+    Const { opcode: u8, value: V },
 }
 
 pub struct Analysis {
@@ -270,8 +285,8 @@ enum Flow {
     /// 条件分支：(目标, 恒走目标 Some(true) / 恒落空 Some(false) / 不定 None)
     Cond(u32, Option<bool>),
     Goto(u32),
-    /// switch：(可能的目标列表, 被剪掉的目标列表)
-    Switch(Vec<u32>, Vec<u32>),
+    /// switch：可能的目标列表
+    Switch(Vec<u32>),
     End,
 }
 
@@ -369,6 +384,13 @@ impl<'a, O: Oracle> Interp<'a, O> {
         if let Some(out) = self.emit.as_deref_mut() {
             out.push((off, e));
         }
+    }
+
+    /// 读取点折叠出的常量：登记折叠事件，原样返回
+    fn folded(&mut self, opcode: u8, off: u32, v: Option<V>) -> Option<V> {
+        let v = v?;
+        self.ev(off, Event::Const { opcode, value: v.clone() });
+        Some(v)
     }
 
     fn step(&mut self, st: &mut State, ins: &Insn) -> Step {
@@ -650,10 +672,9 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 all.dedup();
                 if let V::Int(k) = key {
                     let t = cases.iter().find(|c| c.0 == k).map_or(default, |c| c.1);
-                    let dead = all.iter().copied().filter(|x| *x != t).collect();
-                    return Ok(Flow::Switch(vec![t], dead));
+                    return Ok(Flow::Switch(vec![t]));
                 }
-                return Ok(Flow::Switch(all, vec![]));
+                return Ok(Flow::Switch(all));
             }
             0xb0 => {
                 let v = pop(s)?;
@@ -661,21 +682,27 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 return Ok(Flow::End);
             }
             0xac | 0xae => {
-                pop(s)?;
+                let v = pop(s)?;
+                self.ev(off, Event::Return(if opc == 0xac { v } else { V::Top }));
                 return Ok(Flow::End);
             }
             0xad | 0xaf => {
-                popn(s, 2)?;
+                pop(s)?;
+                let v = pop(s)?;
+                self.ev(off, Event::Return(if opc == 0xad { v } else { V::Top }));
                 return Ok(Flow::End);
             }
-            op::RETURN => return Ok(Flow::End),
+            op::RETURN => {
+                self.ev(off, Event::Return(V::Top));
+                return Ok(Flow::End);
+            }
             op::GETSTATIC | op::PUTSTATIC | op::GETFIELD | op::PUTFIELD => {
                 let Operand::Field(f) = &ins.operand else { return Err(()) };
                 let ft = parse_field(&f.desc).ok_or(())?;
                 let mut value = None;
                 match opc {
                     op::GETSTATIC => {
-                        let v = self.oracle.static_field(f).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
+                        let v = self.folded(opc, off, self.oracle.field(opc, f)).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
                     op::PUTSTATIC => {
@@ -686,7 +713,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     }
                     op::GETFIELD => {
                         pop(s)?;
-                        push_typed(&mut s.stack, &ft, value_of(&ft, Src::Site(off)));
+                        let v = self.folded(opc, off, self.oracle.field(opc, f)).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
+                        push_typed(&mut s.stack, &ft, v);
                     }
                     _ => {
                         if ft.slots() == 2 {
@@ -706,11 +734,17 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     let recv = pop(s)?;
                     args.insert(0, recv);
                 }
+                let r = self.oracle.invoke_result(opc, m, *iface, &args);
+                self.ev(off, Event::Invoke { opcode: opc, mref: m.clone(), iface: *iface, args });
+                let v = match r {
+                    Ret::Never => return Ok(Flow::End),
+                    Ret::Value(v) => Some(v),
+                    Ret::Unknown => None,
+                };
                 if let Some(ret) = &md.ret {
-                    let v = self.oracle.invoke_result(m, &args).unwrap_or_else(|| value_of(ret, Src::Site(off)));
+                    let v = self.folded(opc, off, v).unwrap_or_else(|| value_of(ret, Src::Site(off)));
                     push_typed(&mut s.stack, ret, v);
                 }
-                self.ev(off, Event::Invoke { opcode: opc, mref: m.clone(), iface: *iface, args });
             }
             op::INVOKEDYNAMIC => {
                 let Operand::InvokeDynamic { bsm, name, desc } = &ins.operand else { return Err(()) };
@@ -788,7 +822,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
 }
 
 /// 方法入口状态：this + 形参（按描述符类型，来源 = 形参序号）
-fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16) -> Option<State> {
+fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16, param: impl Fn(u16) -> Option<V>) -> Option<State> {
     let md = parse_method(desc)?;
     let mut locals = Vec::with_capacity(max_locals as usize);
     if !is_static {
@@ -796,7 +830,8 @@ fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16) -> Opt
     }
     let base = u16::from(!is_static);
     for (i, p) in md.params.iter().enumerate() {
-        locals.push(value_of(p, Src::Param(base + i as u16)));
+        let k = base + i as u16;
+        locals.push(param(k).unwrap_or_else(|| value_of(p, Src::Param(k))));
         if p.slots() == 2 {
             locals.push(V::Hi);
         }
@@ -831,7 +866,7 @@ fn conservative(code: &Code) -> Analysis {
             (_, 0x32) => Some(Event::ArrayLoad { array: V::Top, index: V::Top }),
             (_, 0x53) => Some(Event::ArrayStore { array: V::Top, index: V::Top, value: V::Top }),
             (_, op::ATHROW) => Some(Event::Throw(V::Top)),
-            (_, 0xb0) => Some(Event::Return(V::Top)),
+            (_, 0xac..=0xb1) => Some(Event::Return(V::Top)),
             _ => None,
         };
         if let Some(e) = e {
@@ -883,7 +918,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
     }
 
     let mut entry: BTreeMap<usize, State> = BTreeMap::new();
-    entry.insert(0, entry_state(owner, desc, is_static, code.max_locals)?);
+    entry.insert(0, entry_state(owner, desc, is_static, code.max_locals, |i| oracle.param(i))?);
     let mut work: Vec<usize> = vec![0];
     let mut reachable = vec![false; n];
     let mut handler_on = vec![false; code.exception_table.len()];
@@ -961,7 +996,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                         merge(&mut entry, &mut work, at(t)?, &st)?;
                         break;
                     }
-                    Flow::Switch(ts, _) => {
+                    Flow::Switch(ts) => {
                         for t in ts {
                             merge(&mut entry, &mut work, at(t)?, &st)?;
                         }
@@ -1003,26 +1038,13 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         let mut i = l;
         loop {
             let ins = &insns[i];
-            let flow = interp.step(&mut st, ins).ok()?;
-            match flow {
+            match interp.step(&mut st, ins).ok()? {
                 Flow::Next if i + 1 < n && !leader[i + 1] => {
                     i += 1;
                     continue;
                 }
-                Flow::Cond(t, Some(taken)) => {
-                    let dead = if taken { insns.get(i + 1).map(|x| x.offset) } else { Some(t) };
-                    if let (Some(d), Some(e)) = (dead, interp.emit.as_deref_mut()) {
-                        e.push((ins.offset, Event::DeadBranch(d)));
-                    }
-                }
-                Flow::Switch(_, dead) => {
-                    if let Some(e) = interp.emit.as_deref_mut() {
-                        e.extend(dead.into_iter().map(|d| (ins.offset, Event::DeadBranch(d))));
-                    }
-                }
-                _ => {}
+                _ => break,
             }
-            break;
         }
     }
     let mut pending_catch = Vec::new();

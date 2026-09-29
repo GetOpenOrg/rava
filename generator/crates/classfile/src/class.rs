@@ -14,6 +14,8 @@ pub mod acc {
     pub const SUPER: u16 = 0x0020;
     pub const BRIDGE: u16 = 0x0040;
     pub const VARARGS: u16 = 0x0080;
+    /// 字段：不参与序列化（与方法的 VARARGS 同位）
+    pub const TRANSIENT: u16 = 0x0080;
     pub const NATIVE: u16 = 0x0100;
     pub const INTERFACE: u16 = 0x0200;
     pub const ABSTRACT: u16 = 0x0400;
@@ -35,6 +37,8 @@ pub struct ExceptionEntry {
 pub struct Code {
     pub max_stack: u16,
     pub max_locals: u16,
+    /// 字节码长度（最后一条指令的结束偏移）
+    pub code_len: u32,
     pub insns: Vec<Insn>,
     pub exception_table: Vec<ExceptionEntry>,
 }
@@ -368,7 +372,7 @@ fn code(r: &mut Reader, pool: &ConstantPool) -> Result<Code, Error> {
         });
     }
     // Code 的子属性（行号表、局部变量表、StackMapTable）闭包分析不需要
-    Ok(Code { max_stack, max_locals, insns, exception_table })
+    Ok(Code { max_stack, max_locals, code_len: len as u32, insns, exception_table })
 }
 
 fn annotations(r: &mut Reader, pool: &ConstantPool) -> Result<Vec<Annotation>, Error> {

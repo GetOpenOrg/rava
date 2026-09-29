@@ -11,6 +11,7 @@
 //! 手写方法没有字节码可追踪：其形参、分配、回调返回汇入一个 pool 站点，回调实参取自 pool。
 //! G（全局已实例化）增长时，按 open 展开过接收者的方法与等待 catch 类型的方法重新处理——单调不动点。
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
@@ -19,7 +20,7 @@ use classfile::{acc, ClassFile, Const, MemberRef, MethodHandle};
 use indexmap::IndexMap;
 use resolve::{ClassPath, Hierarchy, Origin};
 
-use crate::absint::{self, Analysis, Event, Oracle, Src, V};
+use crate::absint::{self, Analysis, Event, Oracle, Ret, Src, V};
 use crate::handwritten::{member_matches, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
 use crate::manifest::{Domain, Fact, IndyKind, Manifest};
 
@@ -200,17 +201,83 @@ struct Lambda {
 
 // ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
 
+/// 常量格上的值：缺席（⊥，尚无值）→ 单一常量 → Top
+#[derive(Clone, Debug, PartialEq)]
+enum PV {
+    Const(V),
+    Top,
+}
+
+impl PV {
+    /// 抽象值 → 常量格（只折叠 int / long / null / 字符串常量）
+    fn of(v: &V) -> PV {
+        match v {
+            V::Int(_) | V::Long(_) | V::Null | V::Str(_) => PV::Const(v.clone()),
+            _ => PV::Top,
+        }
+    }
+    fn join(a: Option<&PV>, b: &PV) -> PV {
+        match (a, b) {
+            (None, x) => x.clone(),
+            (Some(PV::Const(x)), PV::Const(y)) if x == y => PV::Const(x.clone()),
+            _ => PV::Top,
+        }
+    }
+    fn value(&self) -> Option<V> {
+        match self {
+            PV::Const(v) => Some(v.clone()),
+            PV::Top => None,
+        }
+    }
+}
+
+/// 字段初值（默认值）；float / double 不折叠
+fn default_pv(desc: &str) -> PV {
+    match desc.as_bytes().first() {
+        Some(b'B' | b'C' | b'I' | b'S' | b'Z') => PV::Const(V::Int(0)),
+        Some(b'J') => PV::Const(V::Long(0)),
+        Some(b'L' | b'[') => PV::Const(V::Null),
+        _ => PV::Top,
+    }
+}
+
 struct Ctx<'a> {
     h: &'a Hierarchy<'a>,
+    cp: &'a ClassPath,
     man: &'a Manifest,
+    hw: &'a Handwritten,
     /// static final 字段常量缓存（None = 非常量）
-    consts: std::cell::RefCell<HashMap<MemberRef, Option<V>>>,
-    in_progress: std::cell::RefCell<HashSet<String>>,
+    consts: RefCell<HashMap<MemberRef, Option<V>>>,
+    in_progress: RefCell<HashSet<String>>,
+    /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
+    fvals: RefCell<HashMap<MemberRef, PV>>,
+    /// 字节码方法的返回常量（缺席 = 尚无返回路径）
+    rvals: RefCell<HashMap<MemberRef, PV>>,
+    /// 不折叠的字段：手写写入、反射按名写入
+    fopen: RefCell<HashSet<MemberRef>>,
+    /// 不折叠的字段名（手写写入 / 反射写入推不出所属类）
+    fopen_names: RefCell<HashSet<String>>,
+    /// 反射枚举式写入推不出所属类：全部字段不折叠
+    fopen_all: Cell<bool>,
+    /// 反序列化可达：非 static、非 transient 字段不折叠
+    deser: Cell<bool>,
+    /// 字段 → 读取过它的方法（值集变化时失效重算）
+    fdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
+    /// 被调方法 → 查询过其返回常量的方法
+    rdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
+    /// 乐观阶段：被调方法尚无返回路径时，调用之后按不可达处理
+    optimistic: Cell<bool>,
+    /// 乐观阶段得到过「尚无返回」答复的方法（收尾时按值未知重算）
+    never: RefCell<BTreeSet<usize>>,
 }
 
 struct Facts<'c, 'a> {
     ctx: &'c Ctx<'a>,
     live: &'c dyn Fn(&str) -> bool,
+    /// 被分析的方法（None = 静态常量求值用的 `<clinit>` 分析：只用清单事实与 static final 常量）
+    m: Option<usize>,
+    /// 形参常量（按形参槽序号）
+    params: Vec<Option<V>>,
 }
 
 fn const_value(c: &Const) -> Option<V> {
@@ -223,27 +290,112 @@ fn const_value(c: &Const) -> Option<V> {
 }
 
 impl Ctx<'_> {
-    fn static_const(&self, f: &MemberRef) -> Option<V> {
+    fn kind_of(&self, cf: &ClassFile, m: &classfile::Method) -> Kind {
+        let member = format!("{}.{}:{}", cf.name, m.name, m.desc);
+        match self.domain(&cf.name) {
+            Domain::Boundary => return Kind::Handwritten("boundary"),
+            Domain::Root => return Kind::Handwritten("root"),
+            _ => {}
+        }
+        if m.is_native() {
+            return Kind::Handwritten("native");
+        }
+        if self.man.is_intrinsic(&member) {
+            return Kind::Handwritten("intrinsic");
+        }
+        if m.name != "<clinit>" && self.provided(cf, &m.name, &m.desc) {
+            return Kind::Handwritten("provides");
+        }
+        if m.code.is_none() {
+            return Kind::Abstract;
+        }
+        Kind::Bytecode
+    }
+
+    /// 共置手写体按精确 Rust 名提供该成员（与发射侧 `_nf_covered` 同口径：mangle 名，或类内无重载时的裸名）
+    fn provided(&self, cf: &ClassFile, name: &str, desc: &str) -> bool {
+        let hw = self.hw.class(&cf.name);
+        if hw.fns.is_empty() {
+            return false;
+        }
+        let (rust, mangled) = self.rust_names(cf, name, desc);
+        hw.fns.iter().any(|(f, i)| {
+            let f = f.strip_prefix("__impl_").unwrap_or(f);
+            i.is_pub && (f == mangled || rust.as_deref() == Some(f))
+        })
+    }
+
+    /// (类内无重载时的裸名, mangle 名)
+    fn rust_names(&self, cf: &ClassFile, name: &str, desc: &str) -> (Option<String>, String) {
+        let base = if name == "<init>" { "new" } else { name };
+        let suffix = self.hw.descriptor_suffix(desc);
+        let mangled = if suffix.is_empty() { base.to_string() } else { format!("{base}_{suffix}") };
+        let overloaded = cf.methods.iter().filter(|m| m.name == name).count() > 1;
+        (if overloaded { None } else { Some(base.to_string()) }, mangled)
+    }
+
+    fn domain(&self, cls: &str) -> Domain {
+        self.man.domain(cls, self.cp.origin(cls) == Some(Origin::User))
+    }
+
+    /// 字段的写入来源超出字节码（手写 / 边界类 / 反射 / 反序列化）：不折叠
+    fn field_open(&self, key: &MemberRef, access: u16) -> bool {
+        matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
+            || !self.hw.member(&key.owner, &key.name).fns.is_empty()
+            || self.fopen_all.get()
+            || self.fopen.borrow().contains(key)
+            || self.fopen_names.borrow().contains(&key.name)
+            || self.deser.get() && access & (acc::STATIC | acc::TRANSIENT) == 0
+    }
+
+    /// 字段读的常量值；方法 m 登记为该字段的读者
+    fn field_value(&self, m: Option<usize>, f: &MemberRef) -> Option<V> {
         let site = self.h.resolve_field(&f.owner, &f.name, &f.desc)?;
         let fd = site.field();
-        if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 {
+        let key = MemberRef { owner: site.class.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
+        if let Some(m) = m {
+            self.fdeps.borrow_mut().entry(key.clone()).or_default().insert(m);
+        }
+        if self.field_open(&key, fd.access) {
             return None;
         }
-        if let Some(c) = &fd.constant_value {
+        if fd.access & acc::STATIC != 0 && fd.access & acc::FINAL != 0 {
+            return self.static_const(&key, fd.constant_value.as_ref());
+        }
+        m?;
+        self.fvals.borrow().get(&key).cloned().unwrap_or_else(|| default_pv(&key.desc)).value()
+    }
+
+    /// 调用的唯一目标（静态 / 构造 / 私有 / final 方法 / final 类）
+    fn exact_target(&self, opcode: u8, m: &MemberRef, iface: bool) -> Option<(Rc<ClassFile>, MemberRef)> {
+        use classfile::op;
+        let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, iface)?;
+        let rm = site.method();
+        let exact = matches!(opcode, op::INVOKESTATIC | op::INVOKESPECIAL)
+            || rm.is_private()
+            || rm.is_static()
+            || rm.is_final()
+            || site.class.access & acc::FINAL != 0 && !site.class.is_interface();
+        let (o, n, d) = site.key();
+        exact.then(|| (site.class.clone(), MemberRef { owner: o, name: n, desc: d }))
+    }
+
+    /// static final 字段：ConstantValue，或 `<clinit>` 唯一一次常量赋值
+    fn static_const(&self, key: &MemberRef, cv: Option<&Const>) -> Option<V> {
+        if let Some(c) = cv {
             return const_value(c);
         }
-        let key = MemberRef { owner: site.class.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
-        if let Some(v) = self.consts.borrow().get(&key) {
+        if let Some(v) = self.consts.borrow().get(key) {
             return v.clone();
         }
         // `<clinit>` 唯一一次常量赋值（递归保护：分析中的类不再展开）
-        let cls = site.class.clone();
+        let cls = self.h.class(&key.owner)?;
         if !self.in_progress.borrow_mut().insert(cls.name.clone()) {
             return None;
         }
         let v = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).and_then(|code| {
             let live = |_: &str| true;
-            let a = absint::analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live });
+            let a = absint::analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![] });
             let puts: Vec<&Option<V>> = a
                 .events
                 .iter()
@@ -262,31 +414,114 @@ impl Ctx<'_> {
             }
         });
         self.in_progress.borrow_mut().remove(&cls.name);
-        self.consts.borrow_mut().insert(key, v.clone());
+        self.consts.borrow_mut().insert(key.clone(), v.clone());
         v
     }
 }
 
 impl Oracle for Facts<'_, '_> {
-    fn invoke_result(&self, m: &MemberRef, args: &[V]) -> Option<V> {
+    fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
         let k = m.to_string();
         if let Some(f) = self.ctx.man.return_fact(&k) {
-            return Some(match f {
+            return Ret::Value(match f {
                 Fact::Null => V::Null,
                 Fact::Int(i) => V::Int(*i),
             });
         }
-        if self.ctx.man.is_null_to_false(&k) && args.iter().any(|a| *a == V::Null) {
-            return Some(V::Int(0));
+        if self.ctx.man.is_null_to_false(&k) && args.contains(&V::Null) {
+            return Ret::Value(V::Int(0));
         }
-        None
+        let Some(me) = self.m else { return Ret::Unknown };
+        // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）
+        let Some((cf, t)) = self.ctx.exact_target(opcode, m, iface) else { return Ret::Unknown };
+        let Some(tm) = cf.method(&t.name, &t.desc) else { return Ret::Unknown };
+        if self.ctx.kind_of(&cf, tm) != Kind::Bytecode {
+            return Ret::Unknown;
+        }
+        let r = self.ctx.rvals.borrow().get(&t).cloned();
+        self.ctx.rdeps.borrow_mut().entry(t).or_default().insert(me);
+        match r {
+            Some(PV::Const(v)) => Ret::Value(v),
+            Some(PV::Top) => Ret::Unknown,
+            None if self.ctx.optimistic.get() => {
+                self.ctx.never.borrow_mut().insert(me);
+                Ret::Never
+            }
+            None => Ret::Unknown,
+        }
     }
-    fn static_field(&self, f: &MemberRef) -> Option<V> {
-        self.ctx.static_const(f)
+    fn field(&self, _opcode: u8, f: &MemberRef) -> Option<V> {
+        self.ctx.field_value(self.m, f)
+    }
+    fn param(&self, i: u16) -> Option<V> {
+        self.params.get(i as usize).cloned().flatten()
     }
     fn catch_live(&self, ty: &str) -> bool {
         (self.live)(ty)
     }
+}
+
+// ── 折叠点（folds v1）────────────────────────────────────────────────────────
+
+/// 一个方法的折叠点（计划 §7.3「折叠点导出」）
+pub struct Fold {
+    pub method: String,
+    /// 不可达指令的半开区间 [start, end)，两端落在指令起点（或代码末尾），有序、不重叠、相邻合并
+    pub dead_pcs: Vec<(u32, u32)>,
+    /// 不进入的异常处理器（起点 pc）：try 区间全部不可达，或 catch 类型从不被实例化
+    pub dead_handlers: Vec<u32>,
+    /// (pc, 指令, 常量值, 类型描述符)
+    pub consts: Vec<(u32, u8, V, String)>,
+    /// 违反「活的非跳转指令落到死区」约定的 pc（应恒为空）
+    pub violations: Vec<u32>,
+}
+
+fn fold_of(method: String, code: &classfile::Code, a: &Analysis) -> Fold {
+    use classfile::insn::Operand;
+    use classfile::op;
+    let insns = &code.insns;
+    let mut dead_pcs: Vec<(u32, u32)> = Vec::new();
+    for (i, x) in insns.iter().enumerate() {
+        if a.reachable[i] {
+            continue;
+        }
+        let end = insns.get(i + 1).map_or(code.code_len, |n| n.offset);
+        match dead_pcs.last_mut() {
+            Some(last) if last.1 == x.offset => last.1 = end,
+            _ => dead_pcs.push((x.offset, end)),
+        }
+    }
+    let live_at = |pc: u32| insns.iter().position(|x| x.offset == pc).is_some_and(|i| a.reachable[i]);
+    let mut dead_handlers: Vec<u32> = code.exception_table.iter().map(|h| h.handler).filter(|&h| !live_at(h)).collect();
+    dead_handlers.sort();
+    dead_handlers.dedup();
+    let mut violations = Vec::new();
+    for (i, x) in insns.iter().enumerate() {
+        // 跳转（含条件跳转 / ifnull / ifnonnull / goto_w / jsr）、switch、return、athrow 之后允许是死区
+        let falls = !matches!(x.opcode, 0x99..=0xab | 0xc6..=0xc9 | op::ATHROW) && !(op::IRETURN..=op::RETURN).contains(&x.opcode);
+        if a.reachable[i] && falls && insns.get(i + 1).is_some_and(|_| !a.reachable[i + 1]) {
+            violations.push(x.offset);
+        }
+    }
+    let mut consts: Vec<(u32, u8, V, String)> = Vec::new();
+    for (pc, e) in &a.events {
+        let Event::Const { opcode, value } = e else { continue };
+        let Some(ins) = insns.iter().find(|x| x.offset == *pc) else { continue };
+        let ty = match &ins.operand {
+            Operand::Field(f) => f.desc.clone(),
+            Operand::Method(m, _) => match m.desc.rfind(')') {
+                Some(p) => m.desc[p + 1..].to_string(),
+                None => continue,
+            },
+            _ => continue,
+        };
+        if consts.iter().any(|c| c.0 == *pc) {
+            continue;
+        }
+        consts.push((*pc, *opcode, value.clone(), ty));
+    }
+    consts.sort_by_key(|c| c.0);
+    Fold { method, dead_pcs, dead_handlers, consts, violations }
 }
 
 // ── 引擎 ────────────────────────────────────────────────────────────────────
@@ -319,8 +554,12 @@ pub struct Engine<'a> {
     flow_seen: HashSet<(Node, Node, u32)>,
     /// 调用点分派结果：(方法, 偏移) → 目标方法
     pub dispatch: BTreeMap<(usize, u32), BTreeSet<usize>>,
-    /// 死分支（方法 → 剪掉的目标偏移）
-    pub dead: BTreeMap<usize, Vec<(u32, u32)>>,
+    /// 形参常量（方法 → 按形参槽；缺席 = 尚无调用点）
+    pvals: HashMap<usize, Vec<PV>>,
+    /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）
+    callers: HashMap<usize, BTreeSet<usize>>,
+    /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
+    call_vals: Option<Rc<[V]>>,
     pub unresolved: BTreeSet<String>,
 
     mwork: VecDeque<usize>,
@@ -347,9 +586,21 @@ impl<'a> Engine<'a> {
         Engine {
             ctx: Ctx {
                 h,
+                cp,
                 man,
+                hw,
                 consts: Default::default(),
                 in_progress: Default::default(),
+                fvals: Default::default(),
+                rvals: Default::default(),
+                fopen: Default::default(),
+                fopen_names: Default::default(),
+                fopen_all: Cell::new(false),
+                deser: Cell::new(false),
+                fdeps: Default::default(),
+                rdeps: Default::default(),
+                optimistic: Cell::new(true),
+                never: Default::default(),
             },
             h,
             cp,
@@ -370,7 +621,9 @@ impl<'a> Engine<'a> {
             flows: HashMap::new(),
             flow_seen: HashSet::new(),
             dispatch: BTreeMap::new(),
-            dead: BTreeMap::new(),
+            pvals: HashMap::new(),
+            callers: HashMap::new(),
+            call_vals: None,
             unresolved: BTreeSet::new(),
             mwork: VecDeque::new(),
             in_mwork: HashSet::new(),
@@ -471,7 +724,7 @@ impl<'a> Engine<'a> {
     // ── 类登记 ──────────────────────────────────────────────────────────────
 
     fn domain(&self, cls: &str) -> Domain {
-        self.man.domain(cls, self.cp.origin(cls) == Some(Origin::User))
+        self.ctx.domain(cls)
     }
 
     /// 登记类（及其超类型，作为类型层级）；返回类文件
@@ -599,47 +852,12 @@ impl<'a> Engine<'a> {
     // ── 方法节点 ────────────────────────────────────────────────────────────
 
     fn kind_of(&self, cf: &ClassFile, m: &classfile::Method) -> Kind {
-        let member = format!("{}.{}:{}", cf.name, m.name, m.desc);
-        match self.domain(&cf.name) {
-            Domain::Boundary => return Kind::Handwritten("boundary"),
-            Domain::Root => return Kind::Handwritten("root"),
-            _ => {}
-        }
-        if m.is_native() {
-            return Kind::Handwritten("native");
-        }
-        if self.man.is_intrinsic(&member) {
-            return Kind::Handwritten("intrinsic");
-        }
-        if m.name != "<clinit>" && self.provided(cf, &m.name, &m.desc) {
-            return Kind::Handwritten("provides");
-        }
-        if m.code.is_none() {
-            return Kind::Abstract;
-        }
-        Kind::Bytecode
-    }
-
-    /// 共置手写体按精确 Rust 名提供该成员（与发射侧 `_nf_covered` 同口径：mangle 名，或类内无重载时的裸名）
-    fn provided(&self, cf: &ClassFile, name: &str, desc: &str) -> bool {
-        let hw = self.hw.class(&cf.name);
-        if hw.fns.is_empty() {
-            return false;
-        }
-        let (rust, mangled) = self.rust_names(cf, name, desc);
-        hw.fns.iter().any(|(f, i)| {
-            let f = f.strip_prefix("__impl_").unwrap_or(f);
-            i.is_pub && (f == mangled || rust.as_deref() == Some(f))
-        })
+        self.ctx.kind_of(cf, m)
     }
 
     /// (类内无重载时的裸名, mangle 名)
     fn rust_names(&self, cf: &ClassFile, name: &str, desc: &str) -> (Option<String>, String) {
-        let base = if name == "<init>" { "new" } else { name };
-        let suffix = self.hw.descriptor_suffix(desc);
-        let mangled = if suffix.is_empty() { base.to_string() } else { format!("{base}_{suffix}") };
-        let overloaded = cf.methods.iter().filter(|m| m.name == name).count() > 1;
-        (if overloaded { None } else { Some(base.to_string()) }, mangled)
+        self.ctx.rust_names(cf, name, desc)
     }
 
     fn ptype(&mut self, t: &FieldType) -> Option<u32> {
@@ -858,10 +1076,72 @@ impl<'a> Engine<'a> {
     pub fn run(&mut self) {
         loop {
             self.drain_flows();
-            let Some(m) = self.mwork.pop_front() else { break };
+            let Some(m) = self.mwork.pop_front() else {
+                // 乐观阶段收敛：仍「尚无返回」的被调方法确实不返回。关掉乐观假设，把得到过该答复的
+                // 方法按值未知重算——导出的不可达代码只从跳转 / switch / return / athrow 之后开始
+                if !self.ctx.optimistic.replace(false) {
+                    break;
+                }
+                let never: Vec<usize> = std::mem::take(&mut *self.ctx.never.borrow_mut()).into_iter().collect();
+                for m in never {
+                    self.invalidate(m);
+                }
+                continue;
+            };
             self.in_mwork.remove(&m);
             self.process(m);
         }
+    }
+
+    /// 方法的分析结果失效：重分析，调用方重处理
+    fn invalidate(&mut self, m: usize) {
+        if self.methods[m].analysis.take().is_none() && self.in_mwork.contains(&m) {
+            return;
+        }
+        self.push_m(m);
+        for c in self.callers.get(&m).cloned().unwrap_or_default() {
+            self.push_m(c);
+        }
+    }
+
+    fn invalidate_all(&mut self, ms: Option<BTreeSet<usize>>) {
+        for m in ms.unwrap_or_default() {
+            self.invalidate(m);
+        }
+    }
+
+    /// 字段写入值并入值集；变化时读者失效
+    fn field_put(&mut self, key: &MemberRef, v: PV) {
+        let cur = self.ctx.fvals.borrow().get(key).cloned().unwrap_or_else(|| default_pv(&key.desc));
+        let new = PV::join(Some(&cur), &v);
+        if new == cur {
+            return;
+        }
+        self.ctx.fvals.borrow_mut().insert(key.clone(), new);
+        let deps = self.ctx.fdeps.borrow().get(key).cloned();
+        self.invalidate_all(deps);
+    }
+
+    /// 字段的写入来源超出字节码：不折叠，读者失效
+    fn open_field(&mut self, key: MemberRef) {
+        if self.ctx.fopen.borrow_mut().insert(key.clone()) {
+            let deps = self.ctx.fdeps.borrow().get(&key).cloned();
+            self.invalidate_all(deps);
+        }
+    }
+
+    fn open_field_name(&mut self, name: &str) {
+        if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
+            let deps: BTreeSet<usize> =
+                self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()).collect();
+            self.invalidate_all(Some(deps));
+        }
+    }
+
+    /// 全局开关（反射枚举 / 反序列化）打开：所有读过字段的方法失效
+    fn open_fields_all(&mut self) {
+        let deps: BTreeSet<usize> = self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()).collect();
+        self.invalidate_all(Some(deps));
     }
 
     fn process(&mut self, m: usize) {
@@ -891,7 +1171,12 @@ impl<'a> Engine<'a> {
             }
         }
         let live = |t: &str| live_cache.get(t).copied().unwrap_or(true);
-        let a = Rc::new(absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live }));
+        // 尚无调用点记录的入口（根 / 手写 / VM）：形参值未知，并固定为 Top 保证单调
+        let n = self.methods[m].ptypes.len();
+        let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
+        let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
+        let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params };
+        let a = Rc::new(absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts));
         if !a.pending_catch.is_empty() {
             self.pending_catch.insert(m, a.pending_catch.clone());
         }
@@ -904,7 +1189,7 @@ impl<'a> Engine<'a> {
         let owner = self.methods[m].key.owner.clone();
         let cf = self.h.class(&owner);
         let obj = self.id(OBJECT);
-        let mut dead = Vec::new();
+        self.returns(m, &a);
         for (off, e) in a.events.iter() {
             let off = *off;
             let via = |k: &'static str| Via::method(k, m, Some(off));
@@ -1000,13 +1285,29 @@ impl<'a> Engine<'a> {
                         self.feed(&fs, Node::R(m), rt);
                     }
                 }
-                Event::Throw(_) => {}
-                Event::DeadBranch(t) => dead.push((off, *t)),
+                Event::Throw(_) | Event::Const { .. } => {}
             }
         }
-        if !dead.is_empty() {
-            self.dead.insert(m, dead);
+    }
+
+    /// 返回常量 = 各返回路径值的并；变化时查询过它的调用方失效
+    fn returns(&mut self, m: usize, a: &Analysis) {
+        let mut r: Option<PV> = None;
+        for (_, e) in &a.events {
+            if let Event::Return(v) = e {
+                r = Some(PV::join(r.as_ref(), &PV::of(v)));
+            }
         }
+        let Some(r) = r else { return };
+        let key = self.methods[m].key.clone();
+        let cur = self.ctx.rvals.borrow().get(&key).cloned();
+        let new = PV::join(cur.as_ref(), &r);
+        if cur.as_ref() == Some(&new) {
+            return;
+        }
+        self.ctx.rvals.borrow_mut().insert(key.clone(), new);
+        let deps = self.ctx.rdeps.borrow().get(&key).cloned();
+        self.invalidate_all(deps);
     }
 
     fn ldc(&mut self, m: usize, off: u32, c: &Const) {
@@ -1062,6 +1363,14 @@ impl<'a> Engine<'a> {
         if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
             self.init(&decl, via.clone());
         }
+        if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
+            let fd = site.field();
+            // static final 由 `<clinit>` 常量求值（Ctx::static_const），其余字段并入值集
+            if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 {
+                let key = MemberRef { owner: decl.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
+                self.field_put(&key, value.map_or(PV::Top, PV::of));
+            }
+        }
         let Some(ft) = parse_field(&f.desc) else { return };
         let Some(tid) = self.ptype(&ft) else {
             // 手写字段访问器仍需沿其回调入链
@@ -1088,20 +1397,17 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 字段读：声明类是边界类 → struct 与字段整体手写，按 open 处理（公开 API 类的手写写入经
-    /// `__set_` 在 [`Self::hw_fields`] 精确接入）；手写静态访问器（如标准流）声明的回调入链
+    /// 字段读：声明类是边界类（struct 与字段整体手写）或字段有手写访问器 → 按 open 处理（公开 API 类的
+    /// 手写写入经 `__set_` 在 [`Self::hw_fields`] 精确接入）；手写访问器声明的回调入链
     fn field_handwritten(&mut self, m: usize, decl: &str, name: &str, via: &Via, node: Option<(usize, u32)>) {
-        let hwc = self.hw.class(decl);
         let boundary = matches!(self.domain(decl), Domain::Boundary | Domain::Root);
+        let mh = self.hw.member(decl, name);
         if let Some((fi, tid)) = node {
-            if boundary {
+            // 边界类字段，或值由手写访问器提供（如标准流 `System::out()`）：按 open 处理
+            if boundary || !mh.fns.is_empty() {
                 self.add_to(Node::F(fi), &TypeSet::open(tid));
             }
         }
-        if hwc.fns.is_empty() {
-            return;
-        }
-        let mh = self.hw.member(decl, name);
         if mh.fns.is_empty() {
             return;
         }
@@ -1109,6 +1415,70 @@ impl<'a> Engine<'a> {
     }
 
     fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
+        self.reflective_writes(mref, opcode, args);
+        let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
+        self.call_vals = Some(Rc::from(pargs));
+        self.invoke_inner(m, off, opcode, mref, iface, args);
+        self.call_vals = None;
+    }
+
+    /// 反射式字段写入（按字节码形状）：
+    /// - 同一调用里有字符串常量，且形参含 Class 或接收者是 Class：点名字段不折叠
+    ///   （所属类取 Class 常量实参 / 接收者，取不到时同名字段全部不折叠）；
+    /// - 清单 `[facts.field_writes] enumerators`（返回字段句柄数组）：接收者类的全部字段不折叠，推不出时全部字段；
+    /// - 清单 `deserializers` 可达：非 static、非 transient 字段全部不折叠
+    fn reflective_writes(&mut self, mref: &MemberRef, opcode: u8, args: &[V]) {
+        let class_param = parse_method(&mref.desc)
+            .is_some_and(|md| md.params.iter().any(|p| matches!(p, FieldType::Object(c) if c == CLASS)));
+        let class_recv = opcode != classfile::op::INVOKESTATIC && mref.owner == CLASS;
+        let classes: Vec<String> = args
+            .iter()
+            .filter_map(|a| match a {
+                V::Class(c) => Some(c.to_string()),
+                _ => None,
+            })
+            .collect();
+        if class_param || class_recv {
+            for a in args {
+                let V::Str(name) = a else { continue };
+                let mut hit = false;
+                for c in &classes {
+                    if let Some((decl, desc)) = self.field_by_name(c, name) {
+                        self.open_field(MemberRef { owner: decl, name: name.to_string(), desc });
+                        hit = true;
+                    }
+                }
+                if !hit {
+                    self.open_field_name(name);
+                }
+            }
+        }
+        let k = mref.to_string();
+        if self.man.is_field_enumerator(&k) {
+            match args.first() {
+                Some(V::Class(c)) => {
+                    let mut cur = Some(c.to_string());
+                    while let Some(cls) = cur {
+                        let Some(cf) = self.h.class(&cls) else { break };
+                        for f in &cf.fields {
+                            self.open_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
+                        }
+                        cur = cf.super_name.clone();
+                    }
+                }
+                _ => {
+                    if !self.ctx.fopen_all.replace(true) {
+                        self.open_fields_all();
+                    }
+                }
+            }
+        }
+        if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
+            self.open_fields_all();
+        }
+    }
+
+    fn invoke_inner(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
         use classfile::op;
         let via = Via::method("invoke", m, Some(off));
         self.touch(&mref.owner, Level::Type, via.clone());
@@ -1170,7 +1540,10 @@ impl<'a> Engine<'a> {
         let via = Via::method("dispatch", m, Some(off));
         if let Some(l) = self.lambdas.get(&r) {
             if site.method().name == l.sam {
+                // SAM 实参经捕获拼接后才到实现方法：形参值未知
+                let vals = self.call_vals.take();
                 self.invoke_lambda(m, off, r, a, ret, res);
+                self.call_vals = vals;
                 return;
             }
             let iface = l.iface.clone();
@@ -1199,9 +1572,11 @@ impl<'a> Engine<'a> {
     #[allow(clippy::too_many_arguments)]
     fn edge(&mut self, m: usize, off: u32, t: usize, recv: Recv, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         self.dispatch.entry((m, off)).or_default().insert(t);
+        self.callers.entry(t).or_default().insert(m);
         let is_static = self.methods[t].is_static;
         let ptypes = self.methods[t].ptypes.clone();
         let base = usize::from(!is_static);
+        self.bind_params(t, base, ptypes.len());
         let mut recv_fs: Option<Vec<Feed>> = None;
         if !is_static {
             match (recv, ptypes.first().copied().flatten()) {
@@ -1236,6 +1611,28 @@ impl<'a> Engine<'a> {
             } else {
                 self.flow(Node::R(t), res, rt);
             }
+        }
+    }
+
+    /// 形参常量：并入本调用点的实参值（非字节码调用点 = Top）；变化时被调方法失效
+    fn bind_params(&mut self, t: usize, base: usize, n: usize) {
+        let vals = self.call_vals.clone();
+        let cur = self.pvals.get(&t).cloned();
+        let new: Vec<PV> = (0..n)
+            .map(|i| {
+                let v = match (&vals, i.checked_sub(base)) {
+                    (Some(vs), Some(j)) => vs.get(j).map_or(PV::Top, PV::of),
+                    _ => PV::Top,
+                };
+                PV::join(cur.as_ref().and_then(|c| c.get(i)), &v)
+            })
+            .collect();
+        if cur.as_ref() == Some(&new) {
+            return;
+        }
+        self.pvals.insert(t, new);
+        if cur.is_some() {
+            self.invalidate(t);
         }
     }
 
@@ -1624,6 +2021,9 @@ impl<'a> Engine<'a> {
         for fa in fields {
             let site = fa.recv.as_ref().and_then(|r| self.stype_class(host, r)).and_then(|c| self.field_by_name(&c, &fa.field));
             let Some((decl, desc)) = site else {
+                if fa.write {
+                    self.open_field_name(&fa.field);
+                }
                 let fresh = if fa.write {
                     self.hw_written_names.insert(fa.field.clone())
                 } else {
@@ -1653,6 +2053,7 @@ impl<'a> Engine<'a> {
             let tid = parse_field(&key.desc).and_then(|t| self.ptype(&t));
             if fa.write {
                 self.hw_written.insert(key.clone());
+                self.open_field(key.clone());
             }
             let Some(tid) = tid else { continue };
             let fi = self.field_node(key);
@@ -1762,6 +2163,33 @@ impl<'a> Engine<'a> {
     }
 
     // ── 结果查询 ────────────────────────────────────────────────────────────
+
+    /// 折叠点导出（folds v1）：不可达指令区间、不进入的异常处理器、折叠为常量的读取点。
+    /// 按方法标签排序；只含有折叠内容的字节码方法
+    pub fn folds(&self) -> Vec<Fold> {
+        let mut out = Vec::new();
+        for mn in self.methods.values() {
+            if mn.kind != Kind::Bytecode {
+                continue;
+            }
+            let Some(a) = &mn.analysis else { continue };
+            if a.conservative {
+                continue;
+            }
+            let Some(cf) = self.h.class(&mn.key.owner) else { continue };
+            let Some(code) = cf.method(&mn.key.name, &mn.key.desc).and_then(|x| x.code.as_ref()) else { continue };
+            let f = fold_of(mn.key.to_string(), code, a);
+            // 自检：活指令顺序落入 dead_pcs（v1 规则禁止），出现即分析缺陷
+            if !f.violations.is_empty() {
+                eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
+            }
+            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.consts.is_empty() {
+                out.push(f);
+            }
+        }
+        out.sort_by(|a, b| a.method.cmp(&b.method));
+        out
+    }
 
     pub fn instantiated(&self) -> Vec<String> {
         let mut v: Vec<String> = self

@@ -319,6 +319,51 @@ C1b 引入的机制（全部通用，无类名特判）：
      字段所属类取同一调用的 Class 实参（ldc 类字面量），取不到时同名字段全部 open。
    - 反序列化：闭包中出现 `ObjectInputStream.readObject` 可达时，所有已实例化、实现 `Serializable`
      的类的非 static、非 transient 字段 open。
+
+   **已完成（2026-09-29）**：
+   - 常量格：`PV { Const(V), Top }`，缺席即 ⊥；只折叠 int 系 / long / null / 字符串常量，float / double 恒为 Top。
+   - 三类值表，都单调增长，长出新值时读者失效重算：
+     - 字段值集 `fvals`：初值 ∪ 可达写入；`static final` 仍按 `<clinit>` 唯一写入求常量。
+     - 形参值集 `pvals`：各字节码调用点实参的并。根 / 手写 / VM 入口 / lambda SAM 入口固定为 Top。
+     - 返回值集 `rvals`：只对唯一目标（static / special / private / final 方法 / final 类）的字节码方法使用。
+   - 「不返回」按乐观假设处理：被调方法还没有任何可达返回点时，按不返回处理，调用点之后不可达。
+     - void `return` 同样记作返回点。漏记会让乐观阶段在几十个方法处提前收敛，实测 TestStreamBasic 因此多出 240 类。
+     - 队列排空时关掉乐观假设，把得到过「不返回」答复的方法按「值未知」重算。
+     - 所以导出的不可达代码只从跳转、switch、return、athrow 之后开始（见下文 v1 规则 7）。
+   - 字段 open 的判定：
+     - 边界类 / 根域字段，或有手写访问器的字段（`__get_` / `__set_` 所在类，例如 `System.out` 由 `System::out()` 提供）。
+     - 手写 `__set_`（第 0 步）。
+     - 反射点名写入，按字节码形状判定：同一调用里有字符串常量实参，且形参含 `Class` 或接收者是 `Class`。
+     - 清单 `vm_intrinsics.toml [facts.field_writes]`：
+       - `enumerators`：返回字段句柄数组，接收者类的全部字段 open，推不出时全部字段 open；
+       - `deserializers`：可达即非 static、非 transient 字段全部 open。
+   - 实测（JDK 21；括号内为第 0 步提交 bfcb75d 的同口径数据）：
+
+     | 用例 | 总类 | translate∩code | 方法 | 折叠方法 / 常量点 | 耗时 |
+     |---|---:|---:|---:|---:|---:|
+     | HelloWorld | 186（200） | 105（115） | 419（457） | 49 / 57 | 55 ms |
+     | TestSwitchString | 186（200） | 105（115） | 411（454） | 48 / 56 | 58 ms |
+     | PatternSwitchTest | 189（202） | 107（116） | 452（468） | 46 / 45 | 65 ms |
+     | FileIOTest | 233（247） | 131（141） | 629（673） | 66 / 64 | 84 ms |
+     | ChineseRemainderTheorem | 232（1334） | 138（1059） | 536（8268） | 59 / 74 | 73 ms |
+     | TestStreamBasic | 361（1373） | 249（1099） | 1354（8551） | 111 / 176 | 0.6 s |
+     | TestRecordComponents | 537（1340） | 384（1059） | 2787（8283） | 383 / 547 | 2.7 s |
+     | CollectorsDemo | 1338（1334） | 1061（1059） | 8391（8265） | 283 / 191 | 36 s |
+
+   - 全部用例 folds 自检违约 = 0，两次运行输出逐字节相同。
+   - TestStreamBasic 的并行路径整体剪掉：`evaluate` 的 `isParallel()` 折叠为 false，ForkJoin / `VarHandles` 不再入闭包。
+     这部分约 1000 类，所以第 2、3 步按原计划全量实施。
+   - CollectorsDemo 仍在吸引子中：`toMap` 重复键消息里的 `String.format` 让 `Locale` 常量表被带进来，
+     HashMap 键集合在全局汇合，`compareComparables` 于是派发到 `BigDecimal.compareTo`，一路引到 `BigInteger` / ForkJoin。
+     这属于第 2 步（容器对象敏感）要解决的问题。它的 36 s 是在吸引子规模上多轮失效重算的代价，靠第 2 步收缩规模消除。
+   - 动态对照：8 个用例在翻译域的漏覆盖均为 0。「运行时加载了、第 0 步有、现在没有」的类只有以下几种，
+     都在翻译域之外或属于第 0 步的过近似：
+     - JVM 的 indy / lambda 引导（`java/lang/invoke`、`sun/invoke`、asm），rava 用自己的 lambda 模型替代；
+     - launcher 反射调用 main（`MethodHandleAccessorFactory` 等）；
+     - 手写边界 `sun/nio/cs` 的编码路径（`CharBuffer` / `CoderResult` / `Readable`）；
+     - VM native `ObjectMethods.bootstrap` 内部的流 / `subList`。
+   - 基线订正：第 0 步的 HelloWorld 200 / 115 / 457 缺了 `println`。原因是 `System.out` 由手写访问器提供，字段节点类型集为空。
+     本步已按「手写访问器字段 = open」修正，下文验收中的 HelloWorld 基线改为本步数据 186 / 105 / 419。
 2. **容器对象按分配点区分**：数组分配点模型扩展到「容器形态类」的对象，按 `new` 的位置分开追踪其元素字段的类型。
    容器形态按字节码判定：类持有 `Object[]` / 引用数组字段，或持有引用字段且其方法对该字段值做虚调用。
    只做一层对象敏感：`HashMap` 的 `table` / `Node.key`、`ImmutableCollections` 的元素数组等按分配点分离。
@@ -349,9 +394,10 @@ C1b 引入的机制（全部通用，无类名特判）：
    - 两端都落在指令起点上。
    - 按 start 排序，互不重叠，相邻区间合并。
    - 条件跳转被常量裁掉的一侧就体现在这里。Python 在 CFG 结构化之前把只剩一个活后继的条件跳转改写成 goto 或直通，不另设分支字段。
-2. **`dead_handlers`**：起点不可达的异常处理器 pc，Python 据此删除对应的异常表项。
-   - 只要某 try 区间内还有可达指令，引用它的 handler 就不会进 `dead_pcs` / `dead_handlers`。
-   - 不输出「try 区间部分删除，却保留引用它的 handler」的组合。
+2. **`dead_handlers`**：起点不可达的异常处理器 pc，Python 据此删除对应的异常表项。以下两种情况 handler 都会进这里：
+   - try 区间内没有可达指令；
+   - catch 类型在闭包里从未实例化（没有子类型被 new，也没有被 VM / 手写层抛出）。
+   不输出「try 区间部分删除，却保留引用它的 handler」的组合。
 3. **`consts`**：被折叠成常量的读取点。`kind` 取 `getfield` / `getstatic` / `invoke` 三种，栈效应如下：
    - `getfield`：替换后弹出 receiver。
    - `invoke`：替换后弹出全部实参，有 receiver 也一并弹出。
@@ -362,6 +408,10 @@ C1b 引入的机制（全部通用，无类名特判）：
    - `Z` 用 JSON 布尔值，其余整型用 JSON 整数。
 5. **确定性**：`folds` 按 method 排序，`consts` 按 pc 排序，同输入逐字节相同。
 6. **版本**：顶层 `folds_version` 当前为 1。Python 遇到不认识的版本时忽略 folds、按原样翻译、不报错，两边可以各自先合入。
+7. **不可达的起点**：活指令的顺序后继落入 `dead_pcs`，只允许出现在跳转、switch、return、athrow 之后。
+   例如调用一个永不返回的方法，其后的代码不标死。Rust 侧导出前自检，Python 侧违反即报 `FoldError`。
+8. **`invoke` 的范围**：`kind: "invoke"` 只出现在 invokevirtual / invokespecial / invokestatic / invokeinterface 上，
+   invokedynamic 不折叠。
 
 原有的 `dead_branches` 输出整体由 `folds` 取代。Python 只消费这份数据，不另写判定。
 
@@ -380,7 +430,7 @@ VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成
 **C1c 验收**：
 - HelloWorld、TestSwitchString、PatternSwitchTest、TestRecordComponents、TestStreamBasic、CollectorsDemo、
   ChineseRemainderTheorem 7 个用例：总类 ≤ 400，translate ∩ code ≤ 250，单测试耗时 ≤ 3s。
-- HelloWorld 指标不回退（第 0 步后 200 / 115 / 457）。
+- HelloWorld 指标不回退（第 1 步订正后 186 / 105 / 419）。
 - 上述 7 个用例以及 FileIOTest（手写层写字段密集，检验写入来源是否收全）的动态对照，翻译域漏覆盖 = 0。
 - closure.json 输出 `folds_version: 1` 与 `folds`（格式如上），结果确定；`dead_branches` 删除。
 

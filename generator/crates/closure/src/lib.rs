@@ -13,7 +13,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use classfile::MemberRef;
-use engine::{Engine, From, Kind, Level, Via};
+use absint::V;
+use engine::{Engine, Fold, From, Kind, Level, Via};
 use handwritten::Handwritten;
 use manifest::{Domain, Manifest};
 use resolve::{ClassPath, Hierarchy};
@@ -47,6 +48,34 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     e.run();
     Closure { engine: e, elapsed_ms: t0.elapsed().as_millis() }
+}
+
+/// closure.json 折叠点格式版本（计划 §7.3「折叠点导出」）
+pub const FOLDS_VERSION: u32 = 1;
+
+/// 常量值按 v1 约定编码：Z → 布尔；B/C/S/I → 整数；J → 字符串；null → null；字符串常量 → 字符串
+fn const_json(v: &V, ty: &str) -> Value {
+    match v {
+        V::Int(i) if ty == "Z" => json!(*i != 0),
+        V::Int(i) => json!(i),
+        V::Long(l) => json!(l.to_string()),
+        V::Str(s) => json!(s.as_ref()),
+        _ => Value::Null,
+    }
+}
+
+fn fold_json(f: &Fold) -> Value {
+    let kind = |op: u8| match op {
+        classfile::op::GETFIELD => "getfield",
+        classfile::op::GETSTATIC => "getstatic",
+        _ => "invoke",
+    };
+    json!({
+        "method": f.method,
+        "dead_pcs": f.dead_pcs.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
+        "dead_handlers": f.dead_handlers,
+        "consts": f.consts.iter().map(|(pc, op, v, ty)| json!({"pc": pc, "kind": kind(*op), "value": const_json(v, ty), "type": ty})).collect::<Vec<_>>(),
+    })
 }
 
 fn domain_str(d: Domain) -> &'static str {
@@ -88,6 +117,7 @@ impl Closure<'_> {
 
     pub fn summary(&self) -> Value {
         let e = &self.engine;
+        let folds = e.folds();
         let mut by_level: BTreeMap<&str, usize> = BTreeMap::new();
         let mut by_domain: BTreeMap<&str, usize> = BTreeMap::new();
         for c in e.classes.values() {
@@ -115,7 +145,9 @@ impl Closure<'_> {
             "clinit": e.inited.len(),
             "missing_classes": e.missing.len(),
             "unresolved": e.unresolved.len(),
-            "dead_branch_methods": e.dead.len(),
+            "fold_methods": folds.len(),
+            "fold_consts": folds.iter().map(|f| f.consts.len()).sum::<usize>(),
+            "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
             "hw_written_fields": e.hw_written.len(),
             "hw_written_names": e.hw_written_names,
             "elapsed_ms": self.elapsed_ms,
@@ -151,11 +183,7 @@ impl Closure<'_> {
                        "targets": t.iter().map(|x| e.method_label(*x)).collect::<Vec<_>>()})
             })
             .collect();
-        let dead: Vec<Value> = e
-            .dead
-            .iter()
-            .map(|(m, v)| json!({"method": e.method_label(*m), "branches": v}))
-            .collect();
+        let folds: Vec<Value> = e.folds().iter().map(fold_json).collect();
         json!({
             "summary": self.summary(),
             "classes": classes,
@@ -165,7 +193,8 @@ impl Closure<'_> {
             "missing": e.missing.iter().map(|(n, v)| json!({"name": n, "via": self.via_json(v)})).collect::<Vec<_>>(),
             "unresolved": e.unresolved,
             "dispatch": dispatch,
-            "dead_branches": dead,
+            "folds_version": FOLDS_VERSION,
+            "folds": folds,
         })
     }
 
