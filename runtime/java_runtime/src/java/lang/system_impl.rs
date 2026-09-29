@@ -291,7 +291,6 @@ fn os_release() -> std::string::String {
         .unwrap_or_default()
 }
 
-/// 标准流的构造（对应 System.newPrintStream(new FileOutputStream(fd), enc)，enc 固定为 UTF-8）。
 crate::__process_static! {
     /// System.out / System.err 的当前流：首次读取时建标准流（fd 1 / 2），setOut0 / setErr0 改写。
     static STDOUT: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
@@ -313,6 +312,7 @@ fn std_stream(
     })
 }
 
+/// 标准流的构造（对应 System.newPrintStream(new FileOutputStream(fd), enc)，enc 固定为 UTF-8）。
 fn new_std_print_stream(fd: i32) -> PrintStream {
     let build = || -> Result<PrintStream> {
         let fdo = FileDescriptor::new_i(fd)?;

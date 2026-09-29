@@ -166,10 +166,12 @@ def unify_pair(tv: str, ty, ev: str, ety, class_tparams, registry):
         ev = f"({ev} as {ty_str})"
     elif _common_ref_type(ty_str, ety_str, registry):
         common = _common_ref_type(ty_str, ety_str, registry)
+        # 全限定 From：公共父类可能声明名为 from 的 Java 静态方法（GregorianCalendar
+        # .from(ZonedDateTime)），裸 `Cls::from(..)` 会解析到它（Calendar$Builder.build 实证）
         if ty_str != common:
-            tv = f"{common}::from({tv})"
+            tv = f"<{common} as ::std::convert::From<_>>::from({tv})"
         if ety_str != common:
-            ev = f"{common}::from({ev})"
+            ev = f"<{common} as ::std::convert::From<_>>::from({ev})"
         ty = _str_to_rs_type(common)
     elif _common_ref_type_widening(ty_str, ety_str, registry):
         # 泛型父子类臂（类型实参一致）：TreeNode<K, V> 臂并入 Node<K, V> 臂——基名走

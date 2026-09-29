@@ -102,6 +102,9 @@ classes = [
     "java/lang/Class$EnclosingMethodInfo",
     "java/lang/Class$Atomic",
     "java/lang/Class$AnnotationData",
+    # Class.newInstance 的特权块（匿名 PrivilegedAction：构造器 setAccessible(true)，纯 Java）。
+    # 消费方：CalendarSystem.forName（JulianCalendar 按类名反射实例化）等 Class.newInstance 调用。
+    "java/lang/Class$1",
 
     # FS-H0 安全组：特权执行与访问控制上下文（纯 Java；native 仅栈上上下文 / 保护域 / 栈遍历物化，
     # access_controller_impl.rs）。SecurityManager 恒 null，doPrivileged 直通 action.run()。
