@@ -1,0 +1,25 @@
+en-US
+und
+zh-CN
+en-US-POSIX
+he-IL
+ja-JP-u-ca-japanese-x-lvariant-JP
+zh-Hant-TW -> [zh|Hant|TW|] zh_TW_#Hant -> zh-Hant-TW
+en-US -> [en||US|] en_US -> en-US
+sr-Latn-RS -> [sr|Latn|RS|] sr_RS_#Latn -> sr-Latn-RS
+de-CH-1996 -> [de||CH|1996] de_CH_1996 -> de-CH-1996
+EN-gb -> [en||GB|] en_GB -> en-GB
+x-private -> [|||]  -> x-private
+en-US-u-ca-japanese -> [en||US|] en_US_#u-ca-japanese -> en-US-u-ca-japanese
+und -> [|||]  -> und
+i-klingon -> [tlh|||] tlh -> tlh
+abc-def-ghijklmnop -> [def|||] def -> def
+builder [fr|Latn|CA|POSIX] fr_CA_POSIX_#Latn fr-Latn-CA-POSIX
+ext th-TH-u-nu-thai nu=thai keys=[nu] hasExt=true
+IllformedLocaleException: Ill-formed language: toolonglanguage [at index 0]
+range de w=1.0
+range en-gb w=0.9
+range fr w=0.8
+lookup=null
+filter=[de_DE, fr_FR]
+stripExt=th-TH

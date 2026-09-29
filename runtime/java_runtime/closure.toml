@@ -127,4 +127,26 @@ classes = [
     # 手写近似无法逐位一致，故整体按字节码翻译。FDBigInteger 为其大数运算依赖。
     "jdk/internal/math/FloatingDecimal",
     "jdk/internal/math/FDBigInteger",
+
+    # gap 批次 4：随机数流（纯 Java；含嵌套 $AbstractSpliteratorGenerator / $Random*Spliterator /
+    # $AbstractSplittableGenerator 等）。Random / SplittableRandom 的 ints / longs / doubles 流、
+    # 有界随机数核心（boundedNextInt 等）、mix 函数。唯一手写例外 initialSeed：其 secureRandomSeed
+    # 分支经 SecureRandom.getSeed 拉入整条 JCA 链（random_support_impl.rs）。
+    "jdk/internal/util/random/RandomSupport",
+
+    # gap 批次 4：BCP 47 语言标签与区域匹配（纯 Java）。Locale.forLanguageTag / toLanguageTag /
+    # Builder / 扩展（u- / x-）/ LanguageRange / lookup / filter，以及 Locale 实例缓存
+    # （Locale$Cache 的基类 LocaleObjectCache）。BaseLocale 仍手写（常量表下标随 JDK 版本变化）。
+    "sun/util/locale/LanguageTag",
+    "sun/util/locale/InternalLocaleBuilder",
+    "sun/util/locale/LocaleExtensions",
+    "sun/util/locale/Extension",
+    "sun/util/locale/UnicodeLocaleExtension",
+    "sun/util/locale/LocaleSyntaxException",
+    "sun/util/locale/ParseStatus",
+    "sun/util/locale/StringTokenIterator",
+    "sun/util/locale/LocaleMatcher",
+    "sun/util/locale/LocaleEquivalentMaps",
+    "sun/util/locale/LocaleObjectCache",
+    "sun/util/locale/LocaleUtils",
 ]

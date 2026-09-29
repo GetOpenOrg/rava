@@ -3,6 +3,33 @@ use super::stream_encoder::StreamEncoder;
 use crate::java::io::OutputStream;
 use crate::java::nio::charset::Charset;
 
+/// `encodingName()`：HistoricallyNamedCharset 的历史名（九个标准字符集中 UTF-16 / UTF-32 族
+/// 历史名即规范名），其余取规范名——JVM 实测对照。
+fn historical_name(cs: &Charset) -> String {
+    let name = format!("{}", cs.__get_name());
+    String::from(match name.as_str() {
+        "UTF-8" => "UTF8",
+        "ISO-8859-1" => "ISO8859_1",
+        "US-ASCII" => "ASCII",
+        "UTF-16BE" => "UnicodeBigUnmarked",
+        "UTF-16LE" => "UnicodeLittleUnmarked",
+        other => other,
+    })
+}
+
+/// `Charset.forName(name)`；IllegalCharsetNameException / UnsupportedCharsetException →
+/// `UnsupportedEncodingException(name)`（按字符集名构造的前置，JDK 同形）。
+fn charset_for_name(name: String) -> Result<Charset> {
+    match Charset::forName_str(Clone::clone(&name)) {
+        Err(e) if e.is_instance_of("java/nio/charset/IllegalCharsetNameException")
+            || e.is_instance_of("java/nio/charset/UnsupportedCharsetException") =>
+        {
+            Err(JvmError::from(crate::java::io::UnsupportedEncodingException::new_str(name)?))
+        }
+        r => r,
+    }
+}
+
 /// 内部边界类 sun.nio.cs.StreamEncoder：UTF-16 码元按构造时的 charset 编码后写入下游
 /// OutputStream（九个标准 charset，名字取自各 charset 构造器登记的规范名——与
 /// StandardCharsets 边界同一真源）。编码结果不在本层缓冲（直接写下游），flushBuffer 无待写数据。
@@ -18,6 +45,23 @@ impl StreamEncoder {
         se.__set_out(out);
         se.__set_cs(cs);
         Ok(se)
+    }
+
+    /// `getEncoding()`：打开时返回字符集历史名，关闭后 null（JDK：`isOpen() ? encodingName() : null`）。
+    #[jvm_boundary]
+    pub fn getEncoding(&self) -> Result<String> {
+        if self.__get_closed() {
+            return Ok(String::default());
+        }
+        Ok(historical_name(&self.__get_cs()))
+    }
+
+    /// `forOutputStreamWriter(OutputStream, Object, String)`：按字符集名查找，名字非法 / 不支持 →
+    /// `UnsupportedEncodingException(charsetName)`（JDK 同形）。
+    #[jvm_boundary(upcalls = "java/nio/charset/Charset.forName:(Ljava/lang/String;)Ljava/nio/charset/Charset; java/io/UnsupportedEncodingException.<init>:(Ljava/lang/String;)V")]
+    pub fn forOutputStreamWriter_outputstream_obj_str(out: OutputStream, lock: Object, charset_name: String) -> Result<StreamEncoder> {
+        let cs = charset_for_name(charset_name)?;
+        Self::forOutputStreamWriter_outputstream_obj_charset(out, lock, cs)
     }
 
     #[jvm_boundary(upcalls = "java/io/OutputStream.write:([BII)V")]

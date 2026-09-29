@@ -140,6 +140,33 @@ fn decode_step(fam: &Family, pend: &mut Vec<u8>, out: &mut Vec<u16>, out_cap: us
     }
 }
 
+/// `encodingName()`：HistoricallyNamedCharset 的历史名（九个标准字符集中 UTF-16 / UTF-32 族
+/// 历史名即规范名），其余取规范名——JVM 实测对照。
+fn historical_name(cs: &Charset) -> String {
+    let name = format!("{}", cs.__get_name());
+    String::from(match name.as_str() {
+        "UTF-8" => "UTF8",
+        "ISO-8859-1" => "ISO8859_1",
+        "US-ASCII" => "ASCII",
+        "UTF-16BE" => "UnicodeBigUnmarked",
+        "UTF-16LE" => "UnicodeLittleUnmarked",
+        other => other,
+    })
+}
+
+/// `Charset.forName(name)`；IllegalCharsetNameException / UnsupportedCharsetException →
+/// `UnsupportedEncodingException(name)`（按字符集名构造的前置，JDK 同形）。
+fn charset_for_name(name: String) -> Result<Charset> {
+    match Charset::forName_str(Clone::clone(&name)) {
+        Err(e) if e.is_instance_of("java/nio/charset/IllegalCharsetNameException")
+            || e.is_instance_of("java/nio/charset/UnsupportedCharsetException") =>
+        {
+            Err(JvmError::from(crate::java::io::UnsupportedEncodingException::new_str(name)?))
+        }
+        r => r,
+    }
+}
+
 impl StreamDecoder {
     /// `forInputStreamReader(InputStream, Object, Charset)`。
     #[jvm_boundary]
@@ -155,6 +182,27 @@ impl StreamDecoder {
         sd.__set_cs(cs);
         sd.__set_bb(empty_heap_bb());
         Ok(sd)
+    }
+
+    /// `getEncoding()`：打开时返回字符集历史名，关闭后 null（JDK：`isOpen() ? encodingName() : null`）。
+    #[jvm_boundary]
+    pub fn getEncoding(&self) -> Result<String> {
+        if self.__get_closed() {
+            return Ok(String::default());
+        }
+        Ok(historical_name(&self.__get_cs()))
+    }
+
+    /// `forInputStreamReader(InputStream, Object, String)`：按字符集名查找（`Charset.forName`），
+    /// 名字非法 / 不支持 → `UnsupportedEncodingException(charsetName)`（JDK 同形）。
+    #[jvm_boundary(upcalls = "java/nio/charset/Charset.forName:(Ljava/lang/String;)Ljava/nio/charset/Charset; java/io/UnsupportedEncodingException.<init>:(Ljava/lang/String;)V")]
+    pub fn forInputStreamReader_inputstream_obj_str(
+        in_: InputStream,
+        lock: Object,
+        charset_name: String,
+    ) -> Result<StreamDecoder> {
+        let cs = charset_for_name(charset_name)?;
+        Self::forInputStreamReader_inputstream_obj_charset(in_, lock, cs)
     }
 
     /// `forInputStreamReader(InputStream, Object, CharsetDecoder)`：

@@ -11,6 +11,32 @@ use crate::java::lang::String;
 use crate::java::util::Properties;
 
 impl GetPropertyAction {
+    /// `<init>(String theProp)`：记录属性名（无默认值）。
+    #[jvm_boundary]
+    pub fn new_str(theProp: String) -> Result<Self> {
+        let mut this = Self::default();
+        this._init_not_null();
+        this.__set_theProp(theProp);
+        Ok(this)
+    }
+
+    /// `<init>(String theProp, String defaultVal)`：记录属性名与缺席时的默认值。
+    #[jvm_boundary]
+    pub fn new_str_str(theProp: String, defaultVal: String) -> Result<Self> {
+        let mut this = Self::default();
+        this._init_not_null();
+        this.__set_theProp(theProp);
+        this.__set_defaultVal(defaultVal);
+        Ok(this)
+    }
+
+    /// `run()`（虚方法，经 wrapper 钩子 `__impl_run` 执行）：`System.getProperty(theProp)`，
+    /// 缺席时取 defaultVal（JDK 语义：`value == null ? defaultVal : value`）。
+    #[jvm_boundary(upcalls = "java/util/Properties.getProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")]
+    pub fn __impl_run(&self) -> Result<String> {
+        crate::java::lang::System::props()?.getProperty_str_str(self.__get_theProp(), self.__get_defaultVal())
+    }
+
     /// static `privilegedGetProperties()`：全量系统属性快照——返回
     /// `System.props`（VM 快照子集；无安全器，无需副本）。
     #[jvm_boundary(upcalls = "java/util/Properties.getProperty:(Ljava/lang/String;)Ljava/lang/String;")]
