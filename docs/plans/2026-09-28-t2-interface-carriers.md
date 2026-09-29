@@ -38,7 +38,7 @@ Runnable、InvocationHandler、通道、JavaLangAccess.layers 的 Stream）；su
 |---|---|
 | 7a | ✅ `409966f` + 名单 8 个访问器接口（TestStreamBasic / TestArrayList PASS） |
 | 7b | ✅ `5b67a8f`：Path 进名单；宏 erased_impl_call 与 inherited_gen 转发体对手写 `__impl_` 经 Into 适配（FileIOTest / TestFilesApi PASS） |
-| 7c | 🔄 `814bc1f`：invoke_sig「this 调用不代入载体」规则收窄到声明者为接口（桥方法 forEach_obj(LongConsumer) 调用侧回落 Object 的根因）；回归验证中，其余特化族错误待名单置 None 后复测 |
+| 7c | 🔄 `814bc1f`：invoke_sig「this 调用不代入载体」规则收窄到声明者为接口（桥方法 forEach_obj(LongConsumer) 调用侧回落 Object 的根因）；回归 TestStreamBasic / TestFieldEvalOrder PASS；其余特化族错误待名单置 None 后复测 |
 | 7d | 🔄 兼容部分 ✅ `ec6a448`（接口字段写入 / 实参 / 返回经 Into，Default::default，LazyLoggers 泛型返回）；只能按终态书写的两处（JavaLangAccess.layers_classloader 返回 Stream、newByteChannel 的 FileAttribute 数组形参）随置 None 一并修改 |
 | 标记接口 upcast | ✅ `25c0002`（TestStreamBasic / TestArrayList PASS） |
 | 置 None + 删 txt | ⬜ |
