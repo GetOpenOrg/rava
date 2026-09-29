@@ -171,18 +171,40 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 
 ## 六、实施阶段
 
-| 阶段 | 内容 | 验收 |
-|---|---|---|
-| C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 |
-| C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 |
-| C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 |
-| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 选择性上下文敏感（CPA）；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 |
-| C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 |
-| C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） |
-| C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 |
-| C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 |
+状态标记：✅ 已完成（附提交）· 🔄 进行中 · ⏳ 未开始。
+
+| 阶段 | 内容 | 验收 | 状态 |
+|---|---|---|---|
+| C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 | ✅ 已完成（679cd5d3） |
+| C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 | ✅ 已完成（41dc1d6d；手写层 syn 扫描随本阶段落地） |
+| C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 | ✅ 已完成（8596056b） |
+| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 选择性上下文敏感（CPA）；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | 🔄 进行中：第 0 步 ✅ bfcb75d7、第 1 步 ✅ 32a789c6、第 2 步 🔄、第 3 / 4 步 ⏳ |
+| C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | ⏳ 未开始（2026-09-29 用户确认方向，C1c 之后实施） |
+| C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ⏳ 未开始（syn 解析手写层已在 C1 / C1c 第 0 步先行落地） |
+| C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 进行中（用户负责；folds v1 消费侧在 `claude/jolly-dijkstra-diftum`） |
+| C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 | ⏳ 未开始（删除 Python 机制须逐项确认） |
+| C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ⏳ 未开始 |
 
 各阶段独立 worktree、独立提交；C4 之前 Python 管线保持不变，Rust 分析器只做旁路输出与对照。
+
+### 6.1 手写与字节码翻译的分工（2026-09-29 用户确认）
+
+**默认字节码翻译，手写只留字节码表达不了的「VM 契约层」**（同 GraalVM native-image：只对 VM 层做 `@Substitute`，其余分析并编译原字节码）。
+
+- 内部包按前缀截断的原始理由是规模（跟随内部包调用链 111 → 635 类），而这个膨胀来自 Python BFS 的过近似（第二节 M1–M9），
+  不是这些代码本身必须手写。精确分析落地后，截断的收益需要重新实测。
+- 手写的代价：语义要逐个复刻 JDK；对分析不可见（需要 syn 推断 `__set_` 接收者、人工声明 upcalls，
+  TestRecordComponents 的 `getAccessor` 漏报即出于此）；JDK 升级要逐个核对；未手写即 panic 存根。
+- 手写终态范围（VM 契约层）：
+  1. `ACC_NATIVE` 方法（`Unsafe`、`Class` 元数据、`Thread` / monitor、文件与系统调用）；
+  2. VM 注入的状态与对象（类元数据表、反射对象构造，如 `getRecordComponents0`）；
+  3. 运行模型替换（lambda / indy 引导、MethodHandle）。
+- 分析器口径（C1c 起执行）：`[vm_boundary]` 公开包类**按方法划分**：共置手写体按精确名提供的方法、native、VM 内建
+  取手写效果，其余被调用到的方法按字节码建模（发射层同样翻译）。内部包前缀边界在 C1d 之前保持截断语义。
+- C1d 做法：在精确分析下把内部包边界前缀逐包放行（`sun/nio/cs`、`jdk/internal/util`、`sun/util` 等），量出每个包放行后
+  闭包实际增加的类数与方法数。增量小的包改为字节码翻译，并删除对应手写代码（删除逐项经用户确认）；
+  真正依赖 VM 的包（`jdk/internal/misc`、`jdk/internal/vm`、`jdk/internal/reflect` 的访问器生成）保留手写。
+  最终 `closure.toml [boundary]` 从「按包前缀截断」收窄为「只列 VM 契约类」。
 
 ## 七、终态目标（量化）
 
@@ -276,7 +298,7 @@ C1b 引入的机制（全部通用，无类名特判）：
 
 **对策（C1c）**，按以下顺序实施：
 
-0. **手写层写字段识别**（前置，也修 C1b 的潜在漏边）：手写体中的 `recv.__set_<字段>(v)`（现有 259 处）
+0. ✅ **手写层写字段识别**（前置，也修 C1b 的潜在漏边）：手写体中的 `recv.__set_<字段>(v)`（现有 259 处）
    按接收者推断出的类型定位字段，把 `v` 的类型接进字段节点，并把该字段标记为「有非字节码写入」。
    接收者类型推不出时，同名字段在所有已知声明类里都按 open 处理（安全回退）。
    现行兜底是「类自身有手写函数 → 引用字段 open」（`field_handwritten`），它盖不住跨文件写入，
@@ -306,7 +328,7 @@ C1b 引入的机制（全部通用，无类名特判）：
    - 动态对照：两者翻译域漏覆盖 = 0。
      - HelloWorld 的缺失清单与 C1b 基线逐项相同。
      - FileIOTest 另缺 3 类：`Long$LongCache` 在 StringConcatFactory 引导中加载；`CharsetDecoder` 和 `UTF_8$Decoder` 走 JDK StreamDecoder 路径，而 rava 手写的 StreamDecoder 用 Charset 重载直连解码，不经过它们。三类都在手写边界之外。
-1. **字段常量折叠**：每个字段维护一个写入值集，由以下几部分组成：
+1. ✅ **字段常量折叠**：每个字段维护一个写入值集，由以下几部分组成：
    - 初值：实例字段取默认值；`static final` 取 `ConstantValue`，否则取默认值。
    - 可达 `putfield` / `putstatic` 写入的抽象值，以及可达构造器 / `<clinit>` 中的写入。
 
@@ -364,16 +386,57 @@ C1b 引入的机制（全部通用，无类名特判）：
      - VM native `ObjectMethods.bootstrap` 内部的流 / `subList`。
    - 基线订正：第 0 步的 HelloWorld 200 / 115 / 457 缺了 `println`。原因是 `System.out` 由手写访问器提供，字段节点类型集为空。
      本步已按「手写访问器字段 = open」修正，下文验收中的 HelloWorld 基线改为本步数据 186 / 105 / 419。
-2. **容器对象按分配点区分**：数组分配点模型扩展到「容器形态类」的对象，按 `new` 的位置分开追踪其元素字段的类型。
+2. 🔄 **容器对象按分配点区分**（进行中）：数组分配点模型扩展到「容器形态类」的对象，按 `new` 的位置分开追踪其元素字段的类型。
    容器形态按字节码判定：类持有 `Object[]` / 引用数组字段，或持有引用字段且其方法对该字段值做虚调用。
    只做一层对象敏感：`HashMap` 的 `table` / `Node.key`、`ImmutableCollections` 的元素数组等按分配点分离。
    `HashMap.put(K,V)` 这类大方法无法靠调用点克隆切断，由对象敏感解决。
-3. **选择性上下文敏感（CPA）**：对小型方法按「实参类型集合」做上下文键克隆（Cartesian Product 思路），不按调用点编号。
+   **阶段性落地（2026-09-29，验收未达，由第 3、4 步收尾）**：
+   - 对象敏感：
+     - 方法节点键为 `(MemberRef, ctx)`，`NOCTX` 为上下文无关版本；容器形态按字节码判定：
+       类型变量泛型签名、`Object[]` / 引用数组字段、容器类型字段。
+     - 抽象对象按分配点命名（`类@方法:偏移`），分配链深度 `HEAP_DEPTH = 2`。
+     - 字段节点三种：`O(对象, 字段)` 对象级、`U(字段)` 接收者未知的写入、`F(字段)` 字段总汇。
+     - folds 按方法合并各克隆后导出，格式仍为 v1。
+   - 性能架构（CollectorsDemo 274 s → 39 s，TestStreamBasic 2.6 s → 0.5 s，修漏报之前的口径）：
+     - 站点级监听：值集节点登记读取它的 `(方法, 偏移)`，节点增长只重跑这些站点的事件，不再整方法重处理；
+     - 分派备忘：字节码方法每个 `(偏移, 接收者类)` 只接一次边，被调方透传摘要变化时清空调用方备忘；
+     - 开放接收者站点集：类型层级增长时只重排登记过的站点；
+     - `IdSet`（有序小 Vec）替代 B 树集合，FxHash 替代 SipHash；
+     - 接收者按被调方法声明类过滤，字段读写按字段所属类过滤。
+   - 两个漏报修复：
+     - `hw_member` 精确匹配分支漏拷手写体的字段访问（`fields`）。
+     - **`[vm_boundary]` 按方法划分**（§6.1）：此前 `Class` 等类的全部方法都按手写处理，没有同名手写 fn 的方法
+       （如 `Class.getRecordComponents`）效果为空，其体内对 native `getRecordComponents0` 的调用、以及后者经手写体写入的
+       `RecordComponent.accessor` 从分析中消失。结果 `getAccessor()` 被折叠为常量 null，`Method.invoke` 漏出闭包。
+       现在未手写提供的方法按字节码建模，与发射层实际翻译一致。
+   - 实测（JDK 21，全部修复后）：
+
+     | 用例 | 总类 | translate∩code | 方法 | 上下文 | 抽象对象 | 耗时 |
+     |---|---:|---:|---:|---:|---:|---:|
+     | HelloWorld | 212 | 119 | 533 | 634 | 30 | 83 ms |
+     | TestSwitchString | 212 | 119 | 526 | 615 | 29 | 64 ms |
+     | PatternSwitchTest | 214 | 120 | 539 | 628 | 29 | 69 ms |
+     | FileIOTest | 256 | 143 | 715 | 824 | 32 | 87 ms |
+     | ChineseRemainderTheorem | 266 | 159 | 702 | 792 | 30 | 80 ms |
+     | TestStreamBasic | 381 | 258 | 1455 | 2573 | 152 | 0.5 s |
+     | TestRecordComponents | 557 | 389 | 2928 | 36409 | 1114 | 381 s |
+     | CollectorsDemo | — | — | — | — | — | > 900 s（超时） |
+
+   - 动态对照：前 7 例相对第 1 步基线的新增漏报 = 0（TestRecordComponents 的 `Method.invoke` 漏报已消除）；
+     folds 自检违约 = 0；两次运行输出一致。
+   - 基线再订正：第 1 步的 HelloWorld 186 / 105 / 419 没有建模 `Class` 未手写方法的字节码（`Throwable.<clinit>` →
+     `Class.desiredAssertionStatus`、`Random.<clinit>` → `getDeclaredField` 等运行时真实路径），偏小且不安全。
+     验收基线改为本步数据 212 / 119 / 533。
+   - 未达标原因：`Method.invoke` 入闭包后返回 open(Object)，与 `String.format` 实参（所有调用方的并集）一起进入公共汇点，
+     派发面扩到反射 / 格式化 / 数值整条链。由第 3 步（CPA，按实参对象克隆，拆开可变参数数组）与
+     第 4 步（反射返回值按反射目标给出类型）解决。
+
+3. ⏳ **选择性上下文敏感（CPA）**：对小型方法按「实参类型集合」做上下文键克隆（Cartesian Product 思路），不按调用点编号。
    多个传入相同类型集合的调用点共用一份克隆，深度不做硬性上限，由类型集合的有限性保证终止。
    选中条件：指令数有上限，且形参值流向虚调用接收者、返回值，或字符串拼接 indy 的实参（拼接对实参调用 toString）。
    `append(Object)` → `valueOf(Object)` → `toString()`、`Objects.hashCode`、`doPrivileged`、`Set12.<init>` 的
    `"duplicate element: " + e0` 由此按实际实参派发。
-4. **反射返回值**：C2 的 `[reflect_sinks]` / 反射数据流按字节码给出反射目标的返回类型，替代 open(Object)。
+4. ⏳ **反射返回值**：C2 的 `[reflect_sinks]` / 反射数据流按字节码给出反射目标的返回类型，替代 open(Object)。
 
 第 1 步完成后单独测一次 TestStreamBasic，量出并行流路径（ForkJoin / VarHandles）占多少类，再定第 2、3 步做多深。
 
@@ -430,7 +493,7 @@ VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成
 **C1c 验收**：
 - HelloWorld、TestSwitchString、PatternSwitchTest、TestRecordComponents、TestStreamBasic、CollectorsDemo、
   ChineseRemainderTheorem 7 个用例：总类 ≤ 400，translate ∩ code ≤ 250，单测试耗时 ≤ 3s。
-- HelloWorld 指标不回退（第 1 步订正后 186 / 105 / 419）。
+- HelloWorld 指标不回退（第 2 步再订正后 212 / 119 / 533，见上文）。
 - 上述 7 个用例以及 FileIOTest（手写层写字段密集，检验写入来源是否收全）的动态对照，翻译域漏覆盖 = 0。
 - closure.json 输出 `folds_version: 1` 与 `folds`（格式如上），结果确定；`dead_branches` 删除。
 

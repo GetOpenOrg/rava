@@ -125,7 +125,7 @@ impl Closure<'_> {
             *by_domain.entry(domain_str(c.domain)).or_default() += 1;
         }
         let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
-        for m in e.methods.values() {
+        for m in e.method_nodes() {
             *by_kind.entry(kind_str(m.kind)).or_default() += 1;
         }
         let code_translate = e
@@ -138,7 +138,9 @@ impl Closure<'_> {
             "classes_by_level": by_level,
             "classes_by_domain": by_domain,
             "translate_code_classes": code_translate,
-            "methods": e.methods.len(),
+            "methods": e.method_count(),
+            "method_contexts": e.methods.len(),
+            "context_objects": e.objs.len(),
             "methods_by_kind": by_kind,
             "instantiated": e.instantiated().len(),
             "lambdas": e.lambda_count(),
@@ -164,8 +166,7 @@ impl Closure<'_> {
             })
             .collect();
         let methods: Vec<Value> = e
-            .methods
-            .values()
+            .method_nodes()
             .map(|m| {
                 let mut v = json!({"id": m.key.to_string(), "kind": kind_str(m.kind), "via": self.via_json(&m.via)});
                 if !m.hw_fns.is_empty() {
@@ -175,13 +176,10 @@ impl Closure<'_> {
             })
             .collect();
         let dispatch: Vec<Value> = e
-            .dispatch
-            .iter()
+            .dispatch_sites()
+            .into_iter()
             .filter(|(_, t)| t.len() > 1)
-            .map(|((m, off), t)| {
-                json!({"site": format!("{}@{off}", e.method_label(*m)),
-                       "targets": t.iter().map(|x| e.method_label(*x)).collect::<Vec<_>>()})
-            })
+            .map(|((m, off), t)| json!({"site": format!("{m}@{off}"), "targets": t}))
             .collect();
         let folds: Vec<Value> = e.folds().iter().map(fold_json).collect();
         json!({
@@ -236,7 +234,7 @@ impl Closure<'_> {
             }
             out.extend(lines);
             Some(c.level_via.values().next_back().cloned().unwrap_or_else(|| c.via.clone()))
-        } else if let Some(m) = e.methods.values().find(|m| m.key.to_string() == target) {
+        } else if let Some(m) = e.method_nodes().find(|m| m.key.to_string() == target) {
             out.push(format!("{target}（{}）", kind_str(m.kind)));
             Some(m.via.clone())
         } else {

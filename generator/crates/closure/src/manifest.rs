@@ -174,6 +174,11 @@ impl Manifest {
         }
     }
 
+    /// VM 耦合边界类（`[vm_boundary]`，含嵌套类）
+    pub fn is_vm_boundary(&self, cls: &str) -> bool {
+        self.vm_boundary.contains(cls.split('$').next().unwrap_or(cls))
+    }
+
     /// VM 内建（手写承载、不分析 Java 体）
     pub fn is_intrinsic(&self, member: &str) -> bool {
         self.intrinsics.contains(member)

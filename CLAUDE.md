@@ -46,7 +46,7 @@ animal.speak();
 
 **能通过字节码翻译、codegen、或 proc-macro 宏实现的功能，禁止通过手写覆盖生成 Rust 文件解决。**
 
-- 手写代码仅限两类：① native 方法（`*_impl.rs`）；② 内部边界类（`jdk/internal/`、`sun/`）整体手写
+- 手写代码只留 **VM 契约层**：① `ACC_NATIVE` 方法（`*_impl.rs`）；② VM 注入的状态与对象（类元数据表、反射对象构造等）；③ 运行模型替换（lambda / indy 引导、MethodHandle）。其余一律字节码翻译（同 GraalVM native-image 只对 VM 层 `@Substitute`；2026-09-29 用户确认，见 [`docs/plans/2026-09-29-boundary-narrowing.md`](docs/plans/2026-09-29-boundary-narrowing.md)）
 - 遇到编译错误，优先修复生成器逻辑或宏实现，而非给生成文件打补丁
 - 生成器 + 宏建好后，编译错误自然消解；先打补丁会造成技术债务积累
 
@@ -99,6 +99,8 @@ output/src/java/lang/
 
 #### 3b. 内部边界类（完整手写，BFS 在此截断）
 
+> **终态**：内部包前缀截断由 C1d「边界收窄」取消，`[boundary]` 收窄为逐类的 VM 契约清单，按方法划分（见下表 `[vm_boundary]` 行与 [`2026-09-29-boundary-narrowing.md`](docs/plans/2026-09-29-boundary-narrowing.md)）。本节描述的是 C1d 完成前清单中前缀条目的处理方式。
+
 当调用链从公开 API 进入 `jdk/internal/` 或 `sun/` 包时，**停止 BFS 展开**，该类视为「内部边界类」：
 
 - **struct 和全部方法由手写文件完整定义**，codegen 不生成任何 struct
@@ -137,14 +139,14 @@ BFS 调用链分析规则：
 |--------------|---------|
 | `java/`、`javax/`（公开 API） | 继续 BFS，翻译字节码 |
 | `closure.toml [boundary]` 内部包前缀（`jdk/`、`sun/`、`com/sun/` 等） | 停止 BFS，视为内部边界类，整体手写 |
-| `closure.toml [vm_boundary]`（公开包中由 VM 本地代码驱动的类，如 `Class`、`ClassLoader`、`Module`） | 同内部边界类，手写方法单独计数（`vm_boundary_methods`） |
+| `closure.toml [vm_boundary]`（公开包中由 VM 本地代码驱动的类，如 `Class`、`ClassLoader`、`Module`） | **按方法划分**：native / VM 内建 / 共置手写体按精确名提供的方法取手写（单独计数 `vm_boundary_methods`），其余被调用到的方法按字节码翻译（运行时执行的就是其字节码；闭包分析同口径建模） |
 | `closure.toml [release]` / `seeds.toml [jca]` 放行条目 | 边界前缀内按字节码翻译（纯 Java 逻辑的内部类） |
 
 **清单即边界**：边界、放行、补种、VM 承载全部集中在 `runtime/java_runtime/` 下三个 TOML
 （`closure.toml` / `seeds.toml` / `vm_intrinsics.toml`，读取入口 `codegen/runtime_manifest.py`），
 生成器代码里不写类名特判。
 
-**截断的意义**：报告数据（`docs/reports/2026-09-14-impl-strategy.md`）显示，跟随内部包调用链会使类数从 111 膨胀到 635（+470%）。边界截断将翻译规模压缩 83%，是策略性收益而非渐进优化。
+**截断的意义**：报告数据（`docs/reports/2026-09-14-impl-strategy.md`）显示，跟随内部包调用链会使类数从 111 膨胀到 635（+470%）。边界截断将翻译规模压缩 83%，是策略性收益而非渐进优化。该数据是 Python BFS 过近似口径；精确闭包分析（`rava closure`）落地后按包重测，增量小的包放行为字节码翻译（C1d）。
 
 ### 4. Python 代码中不得出现任何 JDK 类名常量
 

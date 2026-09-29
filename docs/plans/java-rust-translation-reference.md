@@ -735,7 +735,7 @@ Counter::set_counter(v)?;   // putstatic
 
 触发点由宏注入在静态访问器与无接收者方法（静态方法、构造器）的入口，可读层保持 `X::f()?` / `X::m()?` / `X::new()?`。
 用户类与 JDK 类走同一机制；转译 BFS 把被引用类的 `<clinit>` 及其父类链的 `<clinit>` 一并入队。
-调用链进入 `jdk/internal/`、`sun/` 以及 `closure.toml [vm_boundary]` 登记的 VM 自举类时截断为手写边界类。
+调用链进入 `jdk/internal/`、`sun/` 等内部包前缀时截断为手写边界类；`closure.toml [vm_boundary]` 登记的 VM 自举类按方法划分：手写提供的方法取手写，其余按字节码翻译。终态只手写 VM 契约层（native、VM 注入状态、运行模型替换），内部包前缀截断由 C1d 取消（`docs/plans/2026-09-29-boundary-narrowing.md`）。
 
 ---
 

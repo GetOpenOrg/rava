@@ -202,7 +202,8 @@ pub enum Event {
     New(String),
     /// 数组分配（数组类型描述符）
     NewArray(String),
-    Field { opcode: u8, mref: MemberRef, value: Option<V> },
+    /// 字段访问；`recv` 为实例字段的接收者（static 为 None），`value` 为写入值
+    Field { opcode: u8, mref: MemberRef, recv: Option<V>, value: Option<V> },
     Ldc(Const),
     CheckCast(String),
     InstanceOf(String),
@@ -700,6 +701,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let Operand::Field(f) = &ins.operand else { return Err(()) };
                 let ft = parse_field(&f.desc).ok_or(())?;
                 let mut value = None;
+                let mut recv = None;
                 match opc {
                     op::GETSTATIC => {
                         let v = self.folded(opc, off, self.oracle.field(opc, f)).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
@@ -712,7 +714,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         value = Some(pop(s)?);
                     }
                     op::GETFIELD => {
-                        pop(s)?;
+                        recv = Some(pop(s)?);
                         let v = self.folded(opc, off, self.oracle.field(opc, f)).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
@@ -721,10 +723,10 @@ impl<'a, O: Oracle> Interp<'a, O> {
                             pop(s)?;
                         }
                         value = Some(pop(s)?);
-                        pop(s)?;
+                        recv = Some(pop(s)?);
                     }
                 }
-                self.ev(off, Event::Field { opcode: opc, mref: f.clone(), value });
+                self.ev(off, Event::Field { opcode: opc, mref: f.clone(), recv, value });
             }
             op::INVOKEVIRTUAL | op::INVOKESPECIAL | op::INVOKESTATIC | op::INVOKEINTERFACE => {
                 let Operand::Method(m, iface) = &ins.operand else { return Err(()) };
@@ -856,7 +858,10 @@ fn conservative(code: &Code) -> Analysis {
                 let n = parse_method(desc).map_or(0, |d| d.params.len());
                 Some(Event::Indy { bsm: *bsm, name: name.clone(), desc: desc.clone(), args: vec![V::Top; n] })
             }
-            (Operand::Field(f), o) => Some(Event::Field { opcode: o, mref: f.clone(), value: None }),
+            (Operand::Field(f), o) => {
+                let recv = matches!(o, op::GETFIELD | op::PUTFIELD).then_some(V::Top);
+                Some(Event::Field { opcode: o, mref: f.clone(), recv, value: None })
+            }
             (Operand::Class(c), op::NEW) => Some(Event::New(c.clone())),
             (Operand::Class(c), op::ANEWARRAY) => Some(Event::NewArray(format!("[L{c};"))),
             (Operand::Class(c), op::CHECKCAST) => Some(Event::CheckCast(c.clone())),
@@ -876,6 +881,7 @@ fn conservative(code: &Code) -> Analysis {
     for h in &code.exception_table {
         events.push((h.handler, Event::Catch(h.catch_type.clone())));
     }
+    events.sort_by_key(|e| e.0);
     Analysis { reachable: vec![true; code.insns.len()], events, pending_catch: vec![], conservative: true }
 }
 

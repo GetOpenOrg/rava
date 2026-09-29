@@ -219,7 +219,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | FS-H9 | Thread 的 getThreadGroup / interrupt / isTerminated 这些非 native 方法手写 | 翻译 | 仅架构 | 新立 |
 | FS-H10 | Object / ObjectVTable 整类手写 | vtable 从 `Object.class` 翻译 | 仅架构 | Arch-4 |
 | FS-H11 | `string_ext.rs`、驻留表手写 | 由字节码承载 | 仅架构 | P-2 |
-| FS-H12 | vm_boundary 里的公开包类整类手写：Class / ClassLoader / Module / ModuleLayer / VirtualThread / SecurityManager / FileSystems / JceSecurity / InvokerBytecodeGenerator | 缩小到只手写 native | 见 FS-R1 / C2 / C3 / IO4 | 新立；2026-09-28 起审计单独计数（`vm_boundary_methods`），随对应子系统逐类复核 |
+| FS-H12 | vm_boundary 里的公开包类整类手写：Class / ClassLoader / Module / ModuleLayer / VirtualThread / SecurityManager / FileSystems / JceSecurity / InvokerBytecodeGenerator | 缩小到只手写 native | 见 FS-R1 / C2 / C3 / IO4 | 新立；2026-09-28 起审计单独计数（`vm_boundary_methods`），随对应子系统逐类复核；2026-09-29 口径定为按方法划分（手写提供者取手写，其余字节码），并入 C1d 边界收窄（`2026-09-29-boundary-narrowing.md`），终态连同内部包前缀截断一起收窄为 VM 契约清单 |
 | FS-H13 | jdk/internal 纯 Java 类整类重写：DoubleToDecimal / FloatToDecimal / FloatingDecimal / DecimalDigits / Preconditions 等 | 经 `closure.toml [release]` 放行翻译 | 基本仅架构 | P-3 |
 
 ## 十三、进程 / 环境 / 系统属性
