@@ -239,9 +239,8 @@ def _scan_impl_files(workspace_root: str, registry: dict | None = None) -> tuple
                     core_name, core_sig[1])
 
             # 接口 vtable 伴生实现：`impl <X>__VTable for <T>` 的方法集登记到
-            # **trait 标识对应的接口**条目（X 是接口的 Rust 短名——嵌套接口伴生
-            # 文件如 floating_decimal_impl.rs 实现的是 FloatingDecimal$Binary
-            # ASCIIConverter 的 vtable，而非文件名映射的外围类）。生成 trait 恒含
+            # **trait 标识对应的接口**条目（X 是接口的 Rust 短名——外围类的伴生
+            # 文件可实现其嵌套接口 Outer$Iface 的 vtable，而非文件名映射的外围类）。生成 trait 恒含
             # 该方法集（伴生隐含契约）：类模型缺席（JDK 版本演化改名）时由
             # class_writer 补发声明，任何语料 / JDK 版本下 E0407 消失。
             _vt_sigs = _scan_vtable_impl_sigs(content)

@@ -113,4 +113,11 @@ classes = [
     "java/security/BasicPermission",
     "java/security/BasicPermissionCollection",
     "java/security/ProtectionDomain",
+
+    # FS-L8 / FS-H13：dtoa 转换器（纯 Java；含嵌套 $BinaryToASCIIBuffer / $ASCIIToBinaryBuffer 等）。
+    # DecimalFormat 的 HALF_EVEN 舍入依赖 BinaryToASCIIConverter 的 decimalDigitsExact /
+    # digitsRoundedUp——这是 dtoa 算法本身的产物（如 2.675 → 2.67 而 0.05625 → 0.0563），
+    # 手写近似无法逐位一致，故整体按字节码翻译。FDBigInteger 为其大数运算依赖。
+    "jdk/internal/math/FloatingDecimal",
+    "jdk/internal/math/FDBigInteger",
 ]
