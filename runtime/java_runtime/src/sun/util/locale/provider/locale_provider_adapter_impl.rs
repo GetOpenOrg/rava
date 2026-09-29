@@ -22,6 +22,7 @@ use crate::java::lang::Class;
 use crate::java::text::spi::NumberFormatProvider;
 use crate::java::text::spi::NumberFormatProvider__VTable;
 use crate::java::text::spi::{DecimalFormatSymbolsProvider, DecimalFormatSymbolsProvider__VTable};
+use crate::java::text::spi::{DateFormatProvider, DateFormatProvider__VTable};
 use super::locale_resources::LocaleResources;
 use super::resource_bundle_based_adapter::ResourceBundleBasedAdapter__VTable;
 use crate::java::util::spi::LocaleServiceProvider__VTable;
@@ -187,6 +188,68 @@ impl ObjectVTable for NativeDecimalFormatSymbolsProvider {
     }
 }
 
+/// `java/text/spi/DateFormatProvider` 的手写实现对象（JDK 的 `DateFormatProviderImpl`）：
+/// `new SimpleDateFormat("", locale)` 后按 `LocaleResources.getDateTimePattern(timeStyle,
+/// dateStyle, calendar)` 套用模式（翻译字节码的 SimpleDateFormat 完成格式化）；模式缺席
+/// 回落 `M/d/yy h:mm a`（JDK MissingResourceException 分支同值）。`-u-tz` 扩展不建模。
+struct NativeDateFormatProvider;
+
+impl NativeDateFormatProvider {
+    fn instance(date_style: i32, time_style: i32, locale: Locale) -> Result<crate::java::text::DateFormat> {
+        use crate::java::text::{DateFormat, SimpleDateFormat};
+        let sdf = SimpleDateFormat::new_str_locale(String::from(""), Clone::clone(&locale))?;
+        let cal = <DateFormat as ::std::convert::From<SimpleDateFormat>>::from(Clone::clone(&sdf)).getCalendar()?;
+        let cal_type = format!("{}", cal.getCalendarType()?);
+        let pattern = LocaleResources::new(Object::default(), locale)?
+            .__date_time_pattern(time_style, date_style, &cal_type)?
+            .unwrap_or_else(|| "M/d/yy h:mm a".to_owned());
+        sdf.applyPattern(String::from_owned(pattern))?;
+        Ok(<DateFormat as ::std::convert::From<SimpleDateFormat>>::from(sdf))
+    }
+}
+
+impl DateFormatProvider__VTable for NativeDateFormatProvider {
+    fn getTimeInstance(&self, arg0: i32, arg1: Locale) -> Result<crate::java::text::DateFormat> {
+        Self::instance(-1, arg0, arg1)
+    }
+
+    fn getDateInstance(&self, arg0: i32, arg1: Locale) -> Result<crate::java::text::DateFormat> {
+        Self::instance(arg0, -1, arg1)
+    }
+
+    fn getDateTimeInstance(&self, arg0: i32, arg1: i32, arg2: Locale) -> Result<crate::java::text::DateFormat> {
+        Self::instance(arg0, arg1, arg2)
+    }
+
+    fn __as_DateFormatProvider(&self) -> DateFormatProvider {
+        let rc = Rc::new(NativeDateFormatProvider);
+        DateFormatProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn DateFormatProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        )
+    }
+}
+
+impl LocaleServiceProvider__VTable for NativeDateFormatProvider {
+    fn __as_LocaleServiceProvider(&self) -> crate::java::util::spi::LocaleServiceProvider {
+        let rc = Rc::new(NativeDateFormatProvider);
+        crate::java::util::spi::LocaleServiceProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn LocaleServiceProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        )
+    }
+}
+
+impl ObjectVTable for NativeDateFormatProvider {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn __class_name(&self) -> &'static str { "sun/util/locale/provider/DateFormatProviderImpl" }
+    fn __obj_str(&self) -> std::string::String {
+        "sun.util.locale.provider.DateFormatProviderImpl".to_owned()
+    }
+}
+
 /// `LocaleProviderAdapter` 的手写实现对象（JDK 的 CLDR 适配器单例形态）。
 struct NativeLocaleAdapter;
 
@@ -199,6 +262,19 @@ impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
         let rc = Rc::new(NativeDecimalFormatSymbolsProvider);
         Ok(DecimalFormatSymbolsProvider::__from_parts(
             Rc::clone(&rc) as Rc<dyn DecimalFormatSymbolsProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        ))
+    }
+
+    /// `getDateFormatProvider()`：DateFormat.getXxxInstance 的服务入口。回调边挂在本方法上
+    /// （BFS 触达 LocaleProviderAdapter.getDateFormatProvider 才入链），只用数字格式的程序
+    /// 不带入 SimpleDateFormat。
+    #[jvm_boundary(upcalls = "java/text/SimpleDateFormat.<init>:(Ljava/lang/String;Ljava/util/Locale;)V java/text/DateFormat.getCalendar:()Ljava/util/Calendar; java/util/Calendar.getCalendarType:()Ljava/lang/String; java/text/SimpleDateFormat.applyPattern:(Ljava/lang/String;)V java/text/SimpleDateFormat.format:(Ljava/util/Date;Ljava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer; java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getStringArray:(Ljava/lang/String;)[Ljava/lang/String;")]
+    fn getDateFormatProvider(&self) -> Result<DateFormatProvider> {
+        let rc = Rc::new(NativeDateFormatProvider);
+        Ok(DateFormatProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn DateFormatProvider__VTable>,
             rc as crate::sync_model::__AnyRef,
             false,
         ))

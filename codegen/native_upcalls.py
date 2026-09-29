@@ -8,7 +8,9 @@ JVM 里 native 方法经 JNI 回调 Java（`CallVoidMethod` / `NewObject`）；�
 
 `upcalls` 为空白分隔的 `类.方法:描述符` 列表（与字节码常量池方法引用同一写法）。
 BFS 触达该成员（方法引用或静态字段引用）时，把声明的回调目标入队，
-使其字节码被翻译而不是停留在 panic! 存根。
+使其字节码被翻译而不是停留在 panic! 存根。手写实现对象的 trait 方法（无 `pub`，
+如适配器的 `fn getDateFormatProvider`）同样可声明：键为所在 `_impl.rs` 的类 + 方法名，
+BFS 触达该类的同名成员即入队——回调边只在真正用到该服务时进入闭包。
 
 本模块只做「类 binary name → 共置 `_impl.rs` → {fn 名: [回调目标]}」的解析，
 不含任何类名常量。
@@ -20,7 +22,7 @@ from .emitter.attrs import to_snake
 
 _UPCALL_ATTR_RE = re.compile(
     r'#\[\s*jvm_(?:native|boundary|ext)\s*\(\s*upcalls\s*=\s*"([^"]*)"\s*\)\s*\]'
-    r'\s*(?:#\[[^\]]*\]\s*)*pub\s+fn\s+(\w+)',
+    r'\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?fn\s+(\w+)',
     re.S,
 )
 _PUB_FN_RE = re.compile(r'\bpub fn\s+(\w+)\s*[(<]')

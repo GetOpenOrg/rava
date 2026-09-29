@@ -211,4 +211,62 @@ impl LocaleResources {
         }
         Ok(rules)
     }
+
+    /// `getDateTimePattern(int timeStyle, int dateStyle, Calendar cal)`（字节码语义）：
+    /// 历法类型取 `cal.getCalendarType()`，按 TimePatterns / DatePatterns / DateTimePatterns
+    /// 组装；模式缺席返回 null。
+    #[jvm_boundary(upcalls = "java/util/Calendar.getCalendarType:()Ljava/lang/String; java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getStringArray:(Ljava/lang/String;)[Ljava/lang/String;")]
+    pub fn __impl_getDateTimePattern_i_i_calendar(&self, time_style: i32, date_style: i32,
+                                                  cal: crate::java::util::Calendar) -> Result<String> {
+        let cal_type = format!("{}", cal.getCalendarType()?);
+        Ok(match self.__date_time_pattern(time_style, date_style, &cal_type)? {
+            Some(p) => String::from_owned(p),
+            None => String::default(),
+        })
+    }
+
+    /// private `getDateTimePattern(String prefix=null, int, int, String calType)`：
+    /// 时间 / 日期模式各取样式下标；二者皆有时按 DateTimePatterns[max(dateStyle, timeStyle)]
+    /// 组合——`{1} {0}` / `{0} {1}` 直接拼接，其余经 MessageFormat（引号加倍后格式化，
+    /// 等价于在原模式上以 {0}=时间、{1}=日期 原样替换）。
+    #[doc(hidden)]
+    pub fn __date_time_pattern(&self, time_style: i32, date_style: i32, cal_type: &str)
+                               -> Result<Option<std::string::String>> {
+        let time = if time_style >= 0 { self.__dtp_entry("TimePatterns", time_style, cal_type)? } else { None };
+        let date = if date_style >= 0 { self.__dtp_entry("DatePatterns", date_style, cal_type)? } else { None };
+        if time_style >= 0 {
+            if date_style >= 0 {
+                let dtp = self.__dtp_entry("DateTimePatterns", date_style.max(time_style), cal_type)?
+                    .ok_or_else(JvmError::null_pointer)?;
+                let (t, d) = (time.unwrap_or_else(|| "null".into()), date.unwrap_or_else(|| "null".into()));
+                return Ok(Some(match dtp.as_str() {
+                    "{1} {0}" => format!("{d} {t}"),
+                    "{0} {1}" => format!("{t} {d}"),
+                    _ => dtp.replace("{0}", "\u{0}").replace("{1}", &d).replace("\u{0}", &t),
+                }));
+            }
+            return Ok(time);
+        }
+        if date_style >= 0 {
+            return Ok(date);
+        }
+        Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(
+            String::from("No date or time style specified"))?))
+    }
+
+    /// private `getDateTimePattern(prefix, key, styleIndex, calendarType)`：非 gregory 历法键加
+    /// `<calType>.` 前缀、缺席回落裸键；数组长度 > 1 取下标，否则取 [0]。
+    fn __dtp_entry(&self, key: &str, style_index: i32, cal_type: &str) -> Result<Option<std::string::String>> {
+        let rb = self.__number_format_data()?;
+        let resource_key = if cal_type == "gregory" { key.to_owned() } else { format!("{cal_type}.{key}") };
+        let patterns = if rb.containsKey(String::from(resource_key.as_str()))? {
+            rb.getStringArray(String::from(resource_key.as_str()))?
+        } else if rb.containsKey(String::from(key))? {
+            rb.getStringArray(String::from(key))?
+        } else {
+            return Ok(None);
+        };
+        let idx = if patterns.len()? > 1 { style_index } else { 0 };
+        Ok(Some(format!("{}", patterns.get(idx)?)))
+    }
 }
