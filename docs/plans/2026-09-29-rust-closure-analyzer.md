@@ -178,7 +178,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 | ✅ 已完成（679cd5d3） |
 | C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 | ✅ 已完成（41dc1d6d；手写层 syn 扫描随本阶段落地） |
 | C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 | ✅ 已完成（8596056b） |
-| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | 🔄 进行中：第 0 步 ✅ bfcb75d7、第 1 步 ✅ 32a789c6、第 2 步 ✅、第 3 步 ✅（CPA 实测否决，改为手写数组写入模型）、第 3b 步 ✅、第 4 步 ⏳ |
+| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | 🔄 进行中：第 0 步 ✅ bfcb75d7、第 1 步 ✅ 32a789c6、第 2 步 ✅、第 3 步 ✅（CPA 实测否决，改为手写数组写入模型）、第 3b 步 ✅、第 4 步 ✅（反射目标可靠性）、耗时 ⏳ |
 | C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | ⏳ 未开始（2026-09-29 用户确认方向，C1c 之后实施） |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ⏳ 未开始（syn 解析手写层已在 C1 / C1c 第 0 步先行落地） |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 进行中（用户负责；folds v1 消费侧在 `claude/jolly-dijkstra-diftum`） |
@@ -517,7 +517,48 @@ C1b 引入的机制（全部通用，无类名特判）：
      - `Collectors.duplicateKeyException` → `String.format` → `Formatter` / `java.time` / regex 是可行路径，不属膨胀。
    - 两例的 ×1.3 由第 4 步（反射返回值）与 C1d（边界手写改为字节码翻译，手写层的 open 产出随之变为精确数据流）承接。
 
-4. ⏳ **反射返回值**：C2 的 `[reflect_sinks]` / 反射数据流按字节码给出反射目标的返回类型，替代 open(Object)。
+4. ✅ **反射目标的可靠性**（原题「反射返回值」，实测后改向）。
+   - 改向原因：诊断实验把反射调用的返回值改为精确类型（丢弃 `Method.invoke` 的 open(Object) 返回），
+     8 例 translate∩code 全部不变。第 3b 步归因里的膨胀来自边界手写的 open 产出，不在反射返回值上；
+     反而反射**目标**缺少建模：`Method.invoke` / `Constructor.newInstance` / MH 按名查找的被调方法不入闭包，是漏报来源。
+   - 模型（清单 `vm_intrinsics.toml [facts.reflect]`，生成器无类名）：
+     - 类镜像：`Class` 值按所指类区分为抽象对象 `java/lang/Class#<类>`（类型仍是 `Class`，不做上下文克隆与字段拆分）。
+       来源是类字面量（ldc）与 `mirror_of_receiver`（`Object.getClass`，逐调用点把接收者类集换成镜像集）。
+     - 成员枚举（`methods` / `constructors` / `record_accessors`，手写 native）：接收者镜像所指类的对应成员成为反射对象；
+       接收者推不出所指类（open(Class) 或非字面量来源）记为反射缺口，导出 `closure.json reflect.gaps`，不做模糊扩展。
+     - 按名查找（`method_lookups`：`Class.getMethod` / `getDeclaredMethod`、`Lookup.findStatic` / `findVirtual` /
+       `findSpecial` / `resolveOrFail` / `resolveOrNull`）：同一调用里的类字面量 + 方法名常量点名反射目标。
+       字段查找（`objectFieldOffset(Class, String)` 等）不在此列——初版按「含 Class 形参 + 字符串常量」的形状登记，
+       把 `Class.annotationData` / `reflectionData` 等同名字段误当成方法，CollectorsDemo 多出 19 个类。
+     - 反射调用（`method_invokers` / `constructor_invokers`：`NativeAccessor.invoke0` / `newInstance0`、
+       `MethodHandle.invokeExact` / `invokeBasic`）可达后，成员入链：用户类被枚举即全部方法 / 构造器入链；
+       非用户类只有按名查找点到的方法入链，构造器不入链（非用户类的反射构造只经清单补种，C2）。
+       入链成员形参按声明类型 open（同 VM 入口），构造器同时实例化其类。
+   - 实测（2026-09-30，JDK 21）：
+
+     | 用例 | 总类 | translate∩code | 方法 | 上下文 | 对象 | 耗时 |
+     |---|---:|---:|---:|---:|---:|---:|
+     | HelloWorld | 223 | 130 | 606 | 712 | 35 | 87 ms |
+     | TestSwitchString | 223 | 130 | 599 | 695 | 34 | 73 ms |
+     | PatternSwitchTest | 225 | 131 | 612 | 708 | 34 | 78 ms |
+     | FileIOTest | 265 | 153 | 778 | 883 | 37 | 94 ms |
+     | ChineseRemainderTheorem | 267 | 160 | 715 | 814 | 37 | 84 ms |
+     | TestStreamBasic | 351 | 242 | 1312 | 1992 | 134 | 0.2 s |
+     | TestRecordComponents | 557 | 391 | 2962 | 5703 | 332 | 1.1 s |
+     | CollectorsDemo | 1208 | 947 | 7588 | 19536 | 1082 | 28 s |
+
+   - 动态对照：7 例漏报数相对 `.base.json` 均下降 2–5 个。新增漏报只有 CollectorsDemo 的 `DirectMethodHandleAccessor`：
+     JVM 在 `EnumMap` 构造时经 `Class.getEnumConstantsShared` 反射调用 `values()` 加载它；rava 该方法由手写按运行时常量目录重建
+     （`class_impl.rs`），不走 `Method.invoke`，运行时不执行，不属翻译域漏覆盖。基线里它来自 `AccessibleObject.<clinit>` 经
+     `Currency` → `SimpleDateFormat` → `ObjectInputStream` 的不可行路径，本步收窄后不再出现。
+     folds 自检违约 = 0，fold_check 全部通过；两次运行输出一致。
+   - 反射缺口：TestRecordComponents 1 个（`getDeclaredMethods0 <- Class`），CollectorsDemo 3 个
+     （`getDeclaredMethods0` / `getDeclaredConstructors0` 的 open(Class) 接收者）；均来自 JDK 内部按非字面量 Class 的反射，由 C2 补种核对。
+   - CollectorsDemo 936 → 947：新增的 11 个类都是 MH 基础设施按名查找的真实目标（`MethodHandleImpl.loop` / `tryFinally` /
+     `tableSwitch`、`BoundMethodHandle.copyWith*` 等），查找点所在方法本身已在闭包内，按可靠性口径保留。
+     这些查找点是否运行时可达，由 C1d 对 MH / LambdaForm（VM 契约第 3 类，运行模型替换）的建模决定。
+   - 两例的 ×1.3 与 CollectorsDemo 的耗时（28 s，验收要求 ≤ 3 s）仍未达标：×1.3 由 C1d 承接；
+     耗时在 C1d 放行实测前单独处理（C1d 每包 × 8 例实测，单例 30 s 不可接受）。
 
 第 1 步完成后单独测一次 TestStreamBasic，量出并行流路径（ForkJoin / VarHandles）占多少类，再定第 2、3 步做多深。
 
@@ -587,10 +628,10 @@ VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成
   | FileIOTest | 126 | 153 | 1.21 |
   | ChineseRemainderTheorem | 131 | 160 | 1.22 |
   | TestStreamBasic | 199 | 242 | 1.22 |
-  | TestRecordComponents | 254 | 390 | 1.54 |
-  | CollectorsDemo | 300 | 936 | 3.12 |
+  | TestRecordComponents | 254 | 391 | 1.54 |
+  | CollectorsDemo | 300 | 947 | 3.16 |
 
-  （现值为第 3b 步后。）未达标两例由第 4 步与 C1d 解决，归因见第 3b 步。
+  （现值为第 4 步后。）未达标两例由 C1d 解决，归因见第 3b、4 步。
 - 上述 7 个用例以及 FileIOTest（手写层写字段密集，检验写入来源是否收全）的动态对照，翻译域漏覆盖 = 0。
 - closure.json 输出 `folds_version: 1` 与 `folds`（格式如上），结果确定；`dead_branches` 删除。
 

@@ -16,7 +16,7 @@ use classfile::MemberRef;
 use absint::V;
 use engine::{Engine, Fold, From, Kind, Level, Via};
 use handwritten::Handwritten;
-use manifest::{Domain, Manifest};
+use manifest::{Domain, Manifest, Members};
 use resolve::{ClassPath, Hierarchy};
 use serde_json::{json, Value};
 
@@ -87,6 +87,14 @@ fn domain_str(d: Domain) -> &'static str {
     }
 }
 
+fn members_str(k: Members) -> &'static str {
+    match k {
+        Members::Methods => "method",
+        Members::Constructors => "constructor",
+        Members::RecordAccessors => "record_accessor",
+    }
+}
+
 fn level_str(l: Level) -> &'static str {
     match l {
         Level::Type => "type",
@@ -150,6 +158,8 @@ impl Closure<'_> {
             "fold_methods": folds.len(),
             "fold_consts": folds.iter().map(|f| f.consts.len()).sum::<usize>(),
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
+            "reflect_members": e.reflect_members.len(),
+            "reflect_gaps": e.reflect_gaps.len(),
             "hw_written_fields": e.hw_written.len(),
             "hw_written_names": e.hw_written_names,
             "elapsed_ms": self.elapsed_ms,
@@ -193,6 +203,10 @@ impl Closure<'_> {
             "dispatch": dispatch,
             "folds_version": FOLDS_VERSION,
             "folds": folds,
+            "reflect": {
+                "members": e.reflect_members.iter().map(|(k, m)| json!({"kind": members_str(*k), "member": m.to_string()})).collect::<Vec<_>>(),
+                "gaps": e.reflect_gaps,
+            },
         })
     }
 

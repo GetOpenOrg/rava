@@ -30,8 +30,6 @@ pub enum Src {
     Catch(u32),
     /// 字符串字面量（与其它值合流后）
     Str,
-    /// 类字面量（与其它值合流后）
-    Class,
 }
 
 pub type Srcs = Rc<[Src]>;
@@ -60,8 +58,8 @@ pub enum V {
     /// 引用：静态类型（binary name 或数组描述符）+ 是否确定非空 + 来源集合
     Ref { ty: Option<Rc<str>>, nonnull: bool, src: Srcs },
     Str(Rc<str>),
-    /// 类字面量（ldc class）：值是 Class 对象，携带所指类
-    Class(Rc<str>),
+    /// 类字面量（ldc class）：值是 Class 对象，携带所指类与 ldc 偏移（合流后以该偏移为来源，引擎在此处给出类镜像）
+    Class(Rc<str>, u32),
 }
 
 pub const STRING: &str = "java/lang/String";
@@ -71,7 +69,7 @@ impl V {
     fn nonnull(&self) -> Option<bool> {
         match self {
             V::Null => Some(false),
-            V::Ref { nonnull: true, .. } | V::Str(_) | V::Class(_) => Some(true),
+            V::Ref { nonnull: true, .. } | V::Str(_) | V::Class(..) => Some(true),
             _ => None,
         }
     }
@@ -81,13 +79,13 @@ impl V {
         match self {
             V::Ref { ty, .. } => ty.as_deref(),
             V::Str(_) => Some(STRING),
-            V::Class(_) => Some(CLASS),
+            V::Class(..) => Some(CLASS),
             _ => None,
         }
     }
 
     fn is_ref(&self) -> bool {
-        matches!(self, V::Null | V::Ref { .. } | V::Str(_) | V::Class(_))
+        matches!(self, V::Null | V::Ref { .. } | V::Str(_) | V::Class(..))
     }
 
     /// 引用值的来源集合（Null 无来源）
@@ -95,7 +93,7 @@ impl V {
         match self {
             V::Ref { src, .. } => src.clone(),
             V::Str(_) => src1(Src::Str),
-            V::Class(_) => src1(Src::Class),
+            V::Class(_, off) => src1(Src::Site(*off)),
             _ => Rc::from([].as_slice()),
         }
     }
@@ -430,7 +428,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         s.stack.push(V::Hi);
                     }
                     Const::String(x) => s.stack.push(V::Str(Rc::from(x.as_str()))),
-                    Const::Class(x) => s.stack.push(V::Class(Rc::from(x.as_str()))),
+                    Const::Class(x) => s.stack.push(V::Class(Rc::from(x.as_str()), off)),
                     Const::MethodType(_) => s.stack.push(site_ref("java/lang/invoke/MethodType", true, off)),
                     Const::MethodHandle(_) => s.stack.push(site_ref("java/lang/invoke/MethodHandle", true, off)),
                     Const::Dynamic(_, _, d) => {
@@ -791,7 +789,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let v = pop(s)?;
                 let (out, input) = match v {
                     V::Null => (V::Null, None),
-                    V::Str(_) | V::Class(_) => (v, None),
+                    V::Str(_) | V::Class(..) => (v, None),
                     // 数组目标：来源不变（数组类型不参与收窄）
                     V::Ref { nonnull, src, .. } if c.starts_with('[') => (V::Ref { ty: Some(Rc::from(c.as_str())), nonnull, src }, None),
                     // 类目标：结果以本偏移为来源，跨汇合点仍保留按来源的收窄

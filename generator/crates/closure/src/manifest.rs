@@ -39,6 +39,17 @@ pub struct ArrayWrite {
     pub produced: bool,
 }
 
+/// 反射成员对象所表示的成员类别（`[facts.reflect]`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Members {
+    /// 声明方法（不含构造器 / 类初始化）
+    Methods,
+    /// 声明构造器
+    Constructors,
+    /// record 组件的访问器方法
+    RecordAccessors,
+}
+
 /// 方法返回值事实（[vm_constants] / [facts]）
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fact {
@@ -58,6 +69,10 @@ pub struct Manifest {
     field_enumerators: HashSet<String>,
     deserializers: HashSet<String>,
     array_writes: HashMap<String, ArrayWrite>,
+    mirror_returns: HashSet<String>,
+    member_enumerators: HashMap<String, Members>,
+    member_invokers: HashMap<String, Vec<Members>>,
+    method_lookups: HashSet<String>,
     pub boot_init: Vec<String>,
     indy: HashMap<String, IndyKind>,
 }
@@ -120,9 +135,9 @@ impl Manifest {
             }
         }
 
-        let field_writes = |key: &str| -> Vec<String> {
+        let facts = |sec: &str, key: &str| -> Vec<String> {
             vm.get("facts")
-                .and_then(|s| s.get("field_writes"))
+                .and_then(|s| s.get(sec))
                 .and_then(|t| t.get(key))
                 .and_then(|v| v.as_array())
                 .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
@@ -150,6 +165,21 @@ impl Manifest {
             }
         }
 
+        let field_writes = |key: &str| facts("field_writes", key);
+        let reflect = |key: &str| facts("reflect", key);
+        let mut member_enumerators = HashMap::new();
+        for (key, kind) in [("methods", Members::Methods), ("constructors", Members::Constructors), ("record_accessors", Members::RecordAccessors)] {
+            for m in reflect(key) {
+                member_enumerators.insert(m, kind);
+            }
+        }
+        let mut member_invokers: HashMap<String, Vec<Members>> = HashMap::new();
+        for (key, kind) in [("method_invokers", Members::Methods), ("constructor_invokers", Members::Constructors)] {
+            for m in reflect(key) {
+                member_invokers.entry(m).or_default().push(kind);
+            }
+        }
+
         let mut indy = HashMap::new();
         for (key, kind) in [("lambda", IndyKind::Lambda), ("concat", IndyKind::Concat), ("native", IndyKind::Native)] {
             for m in strings(&vm, "indy", key) {
@@ -169,6 +199,10 @@ impl Manifest {
             field_enumerators: field_writes("enumerators").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
             array_writes,
+            mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
+            member_enumerators,
+            member_invokers,
+            method_lookups: reflect("method_lookups").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
             indy,
         })
@@ -243,6 +277,26 @@ impl Manifest {
     /// 反序列化入口（可达即非 static、非 transient 字段不折叠）
     pub fn is_deserializer(&self, member: &str) -> bool {
         self.deserializers.contains(member)
+    }
+
+    /// 返回接收者的类镜像（`Object.getClass` 语义）
+    pub fn returns_mirror(&self, member: &str) -> bool {
+        self.mirror_returns.contains(member)
+    }
+
+    /// 反射成员枚举：接收者类镜像所指类的哪类成员成为反射对象
+    pub fn member_enumerator(&self, member: &str) -> Option<Members> {
+        self.member_enumerators.get(member).copied()
+    }
+
+    /// 反射调用：调用哪类成员（Method / Constructor 对象所表示的成员）
+    pub fn member_invoker(&self, member: &str) -> &[Members] {
+        self.member_invokers.get(member).map_or(&[], |v| v.as_slice())
+    }
+
+    /// 按名查找方法（类 + 方法名常量点名反射目标）
+    pub fn is_method_lookup(&self, member: &str) -> bool {
+        self.method_lookups.contains(member)
     }
 
     /// 纯函数：null 实参 → false
