@@ -1,0 +1,316 @@
+//! 手写文件的 syn 扫描：逐 fn 收集回调、调用、分配、字段访问，同文件 fn 调用的传递闭包，use 表与 prelude。
+
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+use syn::visit::Visit;
+
+use super::syntax::*;
+use super::*;
+
+pub(super) fn upcalls_of(attrs: &[syn::Attribute]) -> Vec<Upcall> {
+    let mut out = Vec::new();
+    for a in attrs {
+        let Some(id) = a.path().get_ident() else { continue };
+        if !matches!(id.to_string().as_str(), "jvm_native" | "jvm_boundary" | "jvm_ext") {
+            continue;
+        }
+        let _ = a.parse_nested_meta(|meta| {
+            if meta.path.is_ident("upcalls") {
+                let s: syn::LitStr = meta.value()?.parse()?;
+                out.extend(s.value().split_whitespace().filter_map(parse_upcall));
+            }
+            Ok(())
+        });
+    }
+    out
+}
+
+pub(super) struct RawFn {
+    pub(super) info: FnInfo,
+    pub(super) calls: HashSet<String>,
+}
+
+pub(super) struct FileScan<'a> {
+    pub(super) uses: &'a HashMap<String, Vec<String>>,
+    pub(super) fns: Vec<(String, RawFn)>,
+    /// 当前 impl 块的 self 类型
+    pub(super) self_ty: Option<Vec<String>>,
+}
+
+impl FileScan<'_> {
+    fn add(&mut self, sig: &syn::Signature, is_pub: bool, attrs: &[syn::Attribute], block: &syn::Block) {
+        let name = sig.ident.to_string();
+        let mut b = BodyScan::default();
+        b.visit_block(block);
+        let mut scope = HashMap::new();
+        for a in &sig.inputs {
+            match a {
+                syn::FnArg::Receiver(_) => {
+                    scope.insert("self".to_string(), Some(SType::Named(TypeRef(vec!["Self".into()]))));
+                }
+                syn::FnArg::Typed(pt) => {
+                    if let syn::Pat::Ident(pi) = &*pt.pat {
+                        scope.insert(pi.ident.to_string(), type_path(&pt.ty).map(|p| SType::Named(TypeRef(p))));
+                    }
+                }
+            }
+        }
+        let mut info = FnInfo { is_pub, upcalls: upcalls_of(attrs), ..Default::default() };
+        for (var, ty) in &b.defaults {
+            if b.inited.contains(var) {
+                info.allocs.insert(TypeRef(expand(self.uses, ty.clone())));
+                b.locals.insert(var.clone(), Some(ty.clone()));
+            }
+        }
+        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new() };
+        cs.visit_block(block);
+        for (field, write, recv, value, on_self) in cs.fields {
+            info.fields.push(FieldAccess {
+                on_self,
+                field,
+                write,
+                recv: recv.map(|r| expand_s(self.uses, r, &self.self_ty)),
+                value: value.map(|v| TypeRef(expand(self.uses, v))),
+            });
+        }
+        let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
+        for (name, ty, recv, args, fresh, srecv) in cs.calls {
+            info.calls.push(TypedCall {
+                name,
+                path_ty: tr(ty),
+                recv: recv.map(tr),
+                args: args.into_iter().map(tr).collect(),
+                fresh: tr(fresh),
+                srecv: srecv.map(|r| expand_s(self.uses, r, &self.self_ty)),
+            });
+        }
+        info.opaque = cs.opaque;
+        let mut ids = ArrayIdents(false);
+        ids.visit_signature(sig);
+        ids.visit_block(block);
+        info.array_access = ids.0 || info.opaque.iter().any(|i| is_array_ident(i));
+        for (ty, ctor) in b.ctors {
+            info.ctors.insert((TypeRef(expand(self.uses, ty)), ctor));
+        }
+        self.fns.push((name, RawFn { info, calls: b.calls }));
+    }
+}
+
+impl<'ast> Visit<'ast> for FileScan<'_> {
+    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+        let is_pub = matches!(f.vis, syn::Visibility::Public(_));
+        // 自由 fn 内的 Self 无意义：暂离 impl 上下文
+        let outer = self.self_ty.take();
+        self.add(&f.sig, is_pub, &f.attrs, &f.block);
+        syn::visit::visit_item_fn(self, f);
+        self.self_ty = outer;
+    }
+
+    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
+        let outer = std::mem::replace(&mut self.self_ty, type_path(&i.self_ty));
+        syn::visit::visit_item_impl(self, i);
+        self.self_ty = outer;
+    }
+
+    fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
+        let is_pub = matches!(f.vis, syn::Visibility::Public(_));
+        self.add(&f.sig, is_pub, &f.attrs, &f.block);
+        syn::visit::visit_impl_item_fn(self, f);
+    }
+}
+
+pub(super) fn collect_uses(tree: &syn::UseTree, prefix: &mut Vec<String>, out: &mut HashMap<String, Vec<String>>) {
+    match tree {
+        syn::UseTree::Path(p) => {
+            prefix.push(p.ident.to_string());
+            collect_uses(&p.tree, prefix, out);
+            prefix.pop();
+        }
+        syn::UseTree::Name(n) => {
+            let mut full = prefix.clone();
+            full.push(n.ident.to_string());
+            out.insert(n.ident.to_string(), full);
+        }
+        syn::UseTree::Rename(r) => {
+            let mut full = prefix.clone();
+            full.push(r.ident.to_string());
+            out.insert(r.rename.to_string(), full);
+        }
+        syn::UseTree::Group(g) => {
+            for t in &g.items {
+                collect_uses(t, prefix, out);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
+pub(super) struct UseScan(pub(super) HashMap<String, Vec<String>>);
+
+impl<'ast> Visit<'ast> for UseScan {
+    fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
+        collect_uses(&u.tree, &mut Vec::new(), &mut self.0);
+    }
+}
+
+/// `mod prelude { pub use super::… }` → 名字 → `crate::…` 路径
+pub(super) fn prelude_uses(file: &syn::File) -> HashMap<String, Vec<String>> {
+    let mut us = UseScan(HashMap::new());
+    for item in &file.items {
+        if let syn::Item::Mod(m) = item {
+            if m.ident == "prelude" {
+                if let Some((_, items)) = &m.content {
+                    for i in items {
+                        us.visit_item(i);
+                    }
+                }
+            }
+        }
+    }
+    us.0.into_iter()
+        .map(|(k, mut v)| {
+            if v.first().is_some_and(|f| f == "super") {
+                v[0] = "crate".into();
+            }
+            (k, v)
+        })
+        .collect()
+}
+
+pub(super) fn scan_file(
+    file: &syn::File,
+    prelude: &HashMap<String, Vec<String>>,
+    fns: &mut HashMap<String, FnInfo>,
+    calls: &mut HashMap<String, HashSet<String>>,
+) {
+    let mut us = UseScan(prelude.clone());
+    us.visit_file(file);
+    let mut fs = FileScan { uses: &us.0, fns: Vec::new(), self_ty: None };
+    fs.visit_file(file);
+    for (name, raw) in fs.fns {
+        calls.entry(name.clone()).or_default().extend(raw.calls);
+        let e = fns.entry(name).or_default();
+        e.is_pub |= raw.info.is_pub;
+        e.upcalls.extend(raw.info.upcalls);
+        e.allocs.extend(raw.info.allocs);
+        e.ctors.extend(raw.info.ctors);
+        e.calls.extend(raw.info.calls);
+        e.opaque.extend(raw.info.opaque);
+        e.fields.extend(raw.info.fields);
+        e.array_access |= raw.info.array_access;
+    }
+}
+
+/// 分配 / 构造沿同文件 fn 调用传递（被调 fn 名须在同类手写文件内）
+pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, HashSet<String>>) {
+    let names: Vec<String> = fns.keys().cloned().collect();
+    let mut closed = Vec::new();
+    for n in &names {
+        let mut seen: HashSet<&str> = HashSet::from([n.as_str()]);
+        let mut stack = vec![n.as_str()];
+        let (mut allocs, mut ctors) = (BTreeSet::new(), BTreeSet::new());
+        let (mut tcalls, mut opaque, mut fields) = (Vec::new(), HashSet::new(), Vec::new());
+        let mut arr = false;
+        while let Some(x) = stack.pop() {
+            if let Some(f) = fns.get(x) {
+                arr |= f.array_access;
+                allocs.extend(f.allocs.iter().cloned());
+                ctors.extend(f.ctors.iter().cloned());
+                tcalls.extend(f.calls.iter().cloned());
+                opaque.extend(f.opaque.iter().cloned());
+                // 被调 fn 的 self 不一定是本方法的接收者
+                let own = x == n.as_str();
+                fields.extend(f.fields.iter().map(|fa| FieldAccess { on_self: fa.on_self && own, ..fa.clone() }));
+            }
+            for c in calls.get(x).into_iter().flatten() {
+                if fns.contains_key(c) && seen.insert(c.as_str()) {
+                    stack.push(c.as_str());
+                }
+            }
+        }
+        closed.push((n.clone(), allocs, ctors, tcalls, opaque, fields, arr));
+    }
+    for (n, a, c, t, o, fl, arr) in closed {
+        let f = fns.get_mut(&n).expect("fn 名来自同一表");
+        f.allocs = a;
+        f.ctors = c;
+        f.calls = t;
+        f.opaque = o;
+        f.fields = fl;
+        f.array_access = arr;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fields_of(src: &str, f: &str) -> Vec<FieldAccess> {
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let (mut fns, mut calls) = (HashMap::new(), HashMap::new());
+        scan_file(&file, &HashMap::new(), &mut fns, &mut calls);
+        fns.remove(f).map(|i| i.fields).unwrap_or_default()
+    }
+
+    fn named(p: &[&str]) -> SType {
+        SType::Named(TypeRef(p.iter().map(|s| s.to_string()).collect()))
+    }
+
+    #[test]
+    fn field_access_receivers() {
+        let src = r#"
+            impl Decoder {
+                pub fn open(&self, x: &Stream) {
+                    self.__set_in_(Stream::new());
+                    self.__get_fd().__set_fd(1);
+                    let h = Holder::new(1).unwrap_or_else(|e| panic!());
+                    h.__set_status(2);
+                    { let h = other(); h.__set_status(3); }
+                    h.__set_status(4);
+                    for x in xs { x.__set_a(0); }
+                    x.__set_b(0);
+                    let v = x.__get_c();
+                }
+            }
+        "#;
+        let fs = fields_of(src, "open");
+        let get = |i: usize| (fs[i].field.as_str(), fs[i].write, fs[i].recv.clone());
+        assert_eq!(get(0), ("in", true, Some(named(&["Decoder"]))));
+        assert_eq!(fs[0].value, Some(TypeRef(vec!["Stream".into()])));
+        // 外层访问器先登记，再进接收者
+        assert_eq!(get(1), ("fd", true, Some(SType::Field(Box::new(named(&["Decoder"])), "fd".into()))));
+        assert_eq!(get(2), ("fd", false, Some(named(&["Decoder"]))));
+        assert_eq!(get(3), ("status", true, Some(named(&["Holder"]))));
+        assert_eq!(get(4), ("status", true, None));
+        assert_eq!(get(5), ("status", true, Some(named(&["Holder"]))));
+        // for 模式遮蔽形参 x；块外恢复
+        assert_eq!(get(6), ("a", true, None));
+        assert_eq!(get(7), ("b", true, Some(named(&["Stream"]))));
+        assert_eq!(get(8), ("c", false, Some(named(&["Stream"]))));
+    }
+
+    #[test]
+    fn call_receivers() {
+        let src = r#"
+            impl Factory {
+                pub fn open(options: Set<Object>) {
+                    let it = options.iterator()?;
+                    while it.hasNext()? { let o = it.next()?; }
+                    Factory::make(1, 2);
+                }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let (mut fns, mut calls) = (HashMap::new(), HashMap::new());
+        scan_file(&file, &HashMap::new(), &mut fns, &mut calls);
+        let cs = fns.remove("open").map(|i| i.calls).unwrap_or_default();
+        let site = |n: &str| cs.iter().find(|c| c.name == n).expect("调用点已登记");
+        let set = named(&["Set"]);
+        let iter = SType::Call(Box::new(set.clone()), "iterator".into());
+        assert_eq!(site("iterator").srecv, Some(set));
+        assert_eq!(site("hasNext").srecv, Some(iter.clone()));
+        assert_eq!(site("next").srecv, Some(iter));
+        let make = site("make");
+        assert_eq!((make.path_ty.clone(), make.args.len(), make.srecv.clone()), (Some(TypeRef(vec!["Factory".into()])), 2, None));
+    }
+}
