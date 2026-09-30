@@ -215,7 +215,7 @@ fn image_dirs_lists_existing_class_dirs() {
 /// `--api-package`：包内公开 API 为入口，`--precheck-only` 出预检明细（gap_scan.py api 模式）
 #[test]
 fn api_package_precheck() {
-    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only"]) else {
+    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only", "--closure-json"]) else {
         return;
     };
     let line = stdout.lines().find(|l| l.starts_with("[api] java/util/function（不含子包）→ ")).unwrap_or_else(|| panic!("{stdout}"));

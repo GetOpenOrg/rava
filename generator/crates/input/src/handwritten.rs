@@ -15,6 +15,7 @@ use std::path::Path;
 use closure::handwritten::{GENERATED_MARK, MODULE_SUFFIXES};
 use ty::Registry;
 
+use crate::par::par_map;
 use crate::scan_text::{balanced, is_word, match_fn_head, skip_ws, starts_word, strip_self};
 
 /// ObjectVTable 协议成员（不是 Java 契约方法）
@@ -253,49 +254,71 @@ fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// 单个手写文件的文本提取结果（与注册表无关的部分）
+struct FileFacts {
+    class_binary: String,
+    file_pkg: String,
+    names: BTreeSet<String>,
+    cores: Vec<(String, (String, String))>,
+    vtables: BTreeMap<String, BTreeMap<String, (String, String)>>,
+}
+
+/// 读取并提取一个手写文件；非手写模块文件、不可读或含生成标记的文件返回 `None`
+fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> Option<FileFacts> {
+    let fname = path.file_name().and_then(|f| f.to_str())?;
+    let base = MODULE_SUFFIXES.iter().find_map(|s| fname.strip_suffix(&format!("{s}.rs")))?;
+    let rel = path.parent().unwrap_or(src_dir).strip_prefix(src_dir).ok()?;
+    let pkg: Vec<String> = rel.iter().map(|s| s.to_string_lossy().into_owned()).collect();
+    let with_pkg = |leaf: String| if pkg.is_empty() { leaf } else { format!("{}/{leaf}", pkg.join("/")) };
+    let base_stem = with_pkg(base.to_string());
+    let class_binary = match snake.get(&base_stem) {
+        Some(b) => b.clone(),
+        None => head_binary_name(&path.with_file_name(format!("{base}.rs")))
+            .unwrap_or_else(|| with_pkg(base.split('_').map(capitalize).collect())),
+    };
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.contains(GENERATED_MARK) {
+        return None;
+    }
+    Some(FileFacts {
+        class_binary,
+        file_pkg: pkg.join("/"),
+        names: pub_fns(&content),
+        cores: method_cores(&content),
+        vtables: vtable_sigs(&content),
+    })
+}
+
 impl HandwrittenMap {
-    /// 扫描 `src_dir`（= runtime/java_runtime/src）；`reg` 用于文件 → 类与 vtable 标识 → 接口的解析
-    pub fn scan(src_dir: &Path, reg: &Registry) -> HandwrittenMap {
+    /// 扫描 `src_dir`（= runtime/java_runtime/src）；`reg` 用于文件 → 类与 vtable 标识 → 接口的解析。
+    ///
+    /// 逐文件读取与文本提取并行（`jobs`：0 = 可用核数），归并按文件遍历序串行进行，
+    /// 结果与并行度无关。
+    pub fn scan(src_dir: &Path, reg: &Registry, jobs: usize) -> HandwrittenMap {
         let mut map = HandwrittenMap::default();
         let snake = snake_index(reg);
         let idents = vtable_ident_index(reg);
         let mut files = Vec::new();
         walk(src_dir, &mut files);
-        for path in files {
-            let Some(fname) = path.file_name().and_then(|f| f.to_str()) else { continue };
-            let Some(base) = MODULE_SUFFIXES.iter().find_map(|s| fname.strip_suffix(&format!("{s}.rs"))) else {
-                continue;
-            };
-            let Ok(rel) = path.parent().unwrap_or(src_dir).strip_prefix(src_dir) else { continue };
-            let pkg: Vec<String> = rel.iter().map(|s| s.to_string_lossy().into_owned()).collect();
-            let with_pkg = |leaf: String| if pkg.is_empty() { leaf } else { format!("{}/{leaf}", pkg.join("/")) };
-            let base_stem = with_pkg(base.to_string());
-            let class_binary = match snake.get(&base_stem) {
-                Some(b) => b.clone(),
-                None => head_binary_name(&path.with_file_name(format!("{base}.rs")))
-                    .unwrap_or_else(|| with_pkg(base.split('_').map(capitalize).collect())),
-            };
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
-            if content.contains(GENERATED_MARK) {
-                continue;
-            }
-            map.absorb(&content, &class_binary, &pkg.join("/"), reg, &idents);
+        let facts = par_map(jobs, &files, |path| file_facts(src_dir, path, &snake));
+        for f in facts.into_iter().flatten() {
+            map.absorb(f, reg, &idents);
         }
         map
     }
 
-    fn absorb(&mut self, content: &str, class_binary: &str, file_pkg: &str, reg: &Registry, idents: &BTreeMap<String, Vec<&str>>) {
-        let names = pub_fns(content);
+    fn absorb(&mut self, f: FileFacts, reg: &Registry, idents: &BTreeMap<String, Vec<&str>>) {
+        let FileFacts { class_binary, file_pkg, names, cores, vtables } = f;
         if !names.is_empty() {
-            self.classes.entry(class_binary.to_string()).or_default().methods.extend(names);
+            self.classes.entry(class_binary.clone()).or_default().methods.extend(names);
         }
-        for (name, core) in method_cores(content) {
-            self.classes.entry(class_binary.to_string()).or_default().method_cores.insert(name, core);
+        for (name, core) in cores {
+            self.classes.entry(class_binary.clone()).or_default().method_cores.insert(name, core);
         }
-        for (ident, methods) in vtable_sigs(content) {
+        for (ident, methods) in vtables {
             let cands: &[&str] = idents.get(&ident).map_or(&[], Vec::as_slice);
-            let same_pkg = cands.iter().find(|c| c.rsplit_once('/').is_some_and(|(p, _)| p == file_pkg));
-            let target = same_pkg.or(cands.first()).copied().unwrap_or(class_binary);
+            let same_pkg = cands.iter().find(|c| c.rsplit_once('/').is_some_and(|(p, _)| *p == file_pkg));
+            let target = same_pkg.or(cands.first()).copied().unwrap_or(&class_binary);
             if reg.get(target).is_some_and(|ci| !ci.is_interface()) {
                 continue;
             }

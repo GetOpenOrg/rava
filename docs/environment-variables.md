@@ -15,6 +15,7 @@
 | `--debug` | 诊断明细：兜底点 traceback 与逐条触发、闭包分析未解析调用、cfg 结构化逐块判定 |
 | `--strict` | 严格模式：转译兜底改为硬失败；缺手写实现的 native 方法编译报错（写入 scratch 的 `java_runtime/strict.txt`，`build.rs` 读取） |
 | `--trace-class CLASS` | 打印该类或方法（斜线形态，如 `java/net/InetAddress`、`类.方法:描述符`）入闭包的最短 provenance 链，回答“为什么被拉进闭包”（转交 `rava closure --why`） |
+| `--closure-json` | Rust 生成器另写出 `<scratch>/closure_input/closure.json`，并校验由它解析的闭包事实与进程内直传的逐字节一致（不一致即转译失败）。缺省不写：闭包结果只在内存中交给发射层。`run_tests.py` 开动态对照时自动加上，`gen_trees.sh` / `emit_bench.sh` 也会加 |
 | `--raw-sites FILE` | Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序），不影响生成代码。行格式 `{次数}\t{种类}\t{位点}`，次数降序；`python` 位点为 Python 调用栈，`rust` 位点为构造调用处 `文件:行:列`（`#[track_caller]`），种类 `raw_expr` / `raw_stmt` / `raw_item` |
 | `--generator {python,rust}` | 生成器实现：`python` = `codegen/`；`rust` = `generator/` 的 `rava build --no-run`（只替换转译段，overlay 与 cargo 流程共用）。缺省取 `RAVA_GENERATOR`，再缺省 `rust`（2026-10-01 起；缺省值唯一定义在 `scripts/generator_select.py`）。两路径支持同一组选项（`rust` 下原样转交 `rava build`）；`python` 保留为对照基线 |
 
@@ -47,13 +48,13 @@ python3 scripts/main.py tests/e2e/01_basics/BubbleSort.java --strict
 ### `rava build` / `rava emit`（Rust 生成器外壳，`generator/crates/driver`）
 
 ```bash
-cd generator && cargo run --release -q -- build ../tests/e2e/01_basics/HelloWorld.java --jdk 21 --no-run
+cd generator && cargo run --release -q -- build ../tests/e2e/01_basics/HelloWorld.java --jdk 21 --no-run --closure-json
 cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json --jdk 21 --java ../tests/e2e/01_basics/HelloWorld.java
 ```
 
 | 选项 | 用途 |
 |---|---|
-| `build <A.java>…` | javac（`-g`，JDK ≥ 14 加 `--enable-preview --release N`）→ 闭包分析（同 `rava closure`）→ 发射 scratch →（缺省）`cargo run --bin <入口 snake 名>`（`CARGO_TARGET_DIR=<仓库>/build/target`、`CARGO_INCREMENTAL=0`）。用户类与 `closure.json` 落 `<scratch>/closure_input/` |
+| `build <A.java>…` | javac（`-g`，JDK ≥ 14 加 `--enable-preview --release N`）→ 闭包分析（同 `rava closure`）→ 闭包事实进程内直传 → 发射 scratch →（缺省）`cargo run --bin <入口 snake 名>`（`CARGO_TARGET_DIR=<仓库>/build/target`、`CARGO_INCREMENTAL=0`）。用户类落 `<scratch>/closure_input/`；`closure.json` 只在 `--closure-json` 时写出 |
 | `emit <closure.json>` | 由既有 `closure.json` 与用户类目录重建输入后发射（不编译运行）。`--classes DIR` 缺省 `closure.json` 同目录的 `classes/`；`--java A.java`（可多次）给出源文件，决定用户类包布局与入口序 |
 | `--jdk N` / `--java-home P` | JDK 选择（互斥；缺省同 `rava closure`：`JAVA_HOME` → 已安装最新版） |
 | `--runtime R` | 手写层真源 `runtime/java_runtime`（缺省自当前目录向上查找） |
@@ -70,6 +71,7 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--precheck-only` | 发射后只输出完整预检明细（`[precheck]` 不截断），不出审计行、不编译运行。缺省时预检每类明细封顶 40 行 |
 | `--api-package P` / `--api-recursive` | 仅 build：以公开 API 包为调用链入口（包内 public 类的 public / protected 方法，边界域包跳过；可多次）。`--api-recursive` 含子包，须配合 `--api-package`。输出 `[api] …` 行（`scripts/gap_scan.py api` 使用） |
 | `--raw-sites FILE` | 同 `main.py --raw-sites`（位点为构造调用处 `文件:行:列`） |
+| `--closure-json` | 仅 build：另写出 `<scratch>/closure_input/closure.json`（`rava emit` 与动态对照的输入），并校验 `ClosureFacts::from_json` 与 `ClosureFacts::from_closure` 的结果逐字节一致（`Debug` 文本）。缺省不写，同时删除该处上轮遗留的 closure.json |
 | `--emit-jobs N` | 按类并行发射的线程数（缺省 0 = 可用核数；1 = 串行）。输出与串行逐字节一致 |
 | `--perf` | 输出 `[perf]` 分阶段耗时、峰值 RSS 与逐类 / 逐方法耗时 Top-N |
 

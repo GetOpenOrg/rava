@@ -47,7 +47,7 @@ for n in $TESTS; do
     f="$REPO/$f"
     S="$OUT/$n"
     if [ -z "${SKIP_BUILD:-}" ]; then
-        /usr/bin/time -l "$RAVA" build "$f" $COMMON --out "$S" --clean --no-run > "$OUT/$n.build.log" 2> "$OUT/$n.build.time" \
+        /usr/bin/time -l "$RAVA" build "$f" $COMMON --out "$S" --clean --no-run --closure-json > "$OUT/$n.build.log" 2> "$OUT/$n.build.time" \
             || { echo "BUILD-FAIL $n"; continue; }
         row "$n" build "$OUT/$n.build.log" "$OUT/$n.build.time"
     fi

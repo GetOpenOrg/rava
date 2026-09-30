@@ -1,7 +1,8 @@
 //! `rava build` / `rava emit`：P0 转译外壳（计划 docs/plans/2026-09-20-rust-generator-rewrite.md P0 / P5a）。
 //!
-//! build：javac → 闭包分析（同 `rava closure`，closure.json 落 `<scratch>/closure_input/`）→
+//! build：javac → 闭包分析（同 `rava closure`）→ 闭包事实进程内直传 →
 //! [`EmitInput`](input::EmitInput) → overlay → 发射层写 scratch →（缺省）`cargo run`。
+//! `--closure-json` 时另把 closure.json 落 `<scratch>/closure_input/`，并校验由它解析的事实与直传的一致。
 //! emit：从既有 closure.json + 用户类目录重建输入后同样发射（不编译运行）。
 //!
 //! 方法体由 [`MethodBodies`]（`method` crate）生成。
@@ -145,9 +146,16 @@ pub fn user_order(cp: &ClassPath, java_files: &[PathBuf], main: Option<&str>) ->
     Ok(out)
 }
 
-/// 闭包分析（同 `rava closure`；lib 种子类同 `--seed-class`）；closure.json 写入 `json_path`。
-/// `--trace-class` 打印 provenance 链（`[why]`），`--debug` 列未解析调用
-fn analyze(
+/// 闭包分析（同 `rava closure`；lib 种子类同 `--seed-class`）。`--closure-json` 时向 `json_path` 写出 closure.json，
+/// 并校验两条路径（进程内 [`ClosureFacts::from_closure`] 与 closure.json 经 [`ClosureFacts::from_json`]）
+/// 产出的事实逐字节一致（`Debug` 文本）；否则删除该处上轮遗留的 closure.json，免得与本轮不符。
+/// `--trace-class` 打印 provenance 链（`[why]`），`--debug` 列未解析调用。
+///
+/// 事实交给 `then`（发射）在作用域线程里执行，本线程同时析构闭包结构（数百万个小分配，
+/// Digester 约 60 ms、DeepCopy 数百 ms）：闭包借用非 `Sync` 的手写层，只能在创建它的线程析构，
+/// 所以挪走的是发射。发射线程栈同发射工作线程（方法体生成有深递归）
+#[allow(clippy::too_many_arguments)]
+fn analyze<R: Send>(
     cp: &ClassPath,
     rt: &Path,
     main: &str,
@@ -155,7 +163,8 @@ fn analyze(
     seed_classes: &[String],
     json_path: &Path,
     perf: &mut Perf,
-) -> Result<ClosureFacts, String> {
+    then: impl FnOnce(&ClosureFacts, &mut Perf) -> Result<R, String> + Send,
+) -> Result<R, String> {
     let man = Manifest::load(rt)?;
     let hw = Handwritten::new(rt);
     let h = Hierarchy::new(cp);
@@ -193,20 +202,37 @@ fn analyze(
         }
     }
     perf.mark("closure");
-    let v = c.to_json();
-    perf.mark("closure_json.value");
-    let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
-    perf.mark("closure_json.text");
-    std::fs::write(json_path, s).map_err(|e| format!("{}：{e}", json_path.display()))?;
-    perf.mark("closure_json");
     let facts = ClosureFacts::from_closure(&c);
     perf.mark("closure_facts");
+    let p = json_path;
+    if o.closure_json {
+        let v = c.to_json();
+        let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+        std::fs::write(p, s).map_err(|e| format!("{}：{e}", p.display()))?;
+        let parsed = ClosureFacts::from_json(&v).map_err(|e| format!("{}：{e}", p.display()))?;
+        if format!("{parsed:#?}") != format!("{facts:#?}") {
+            return Err(format!("{}：由 closure.json 解析的闭包事实与进程内直传的不一致", p.display()));
+        }
+        perf.mark("closure_json");
+    } else if p.exists() {
+        std::fs::remove_file(p).map_err(|e| format!("{}：{e}", p.display()))?;
+    }
     if o.debug {
         for u in &facts.unresolved {
             println!("[closure] unresolved: {u}");
         }
     }
-    Ok(facts)
+    std::thread::scope(|s| {
+        let t = std::thread::Builder::new()
+            .stack_size(emit::par::WORKER_STACK)
+            .spawn_scoped(s, || then(&facts, perf))
+            .map_err(|e| format!("创建发射线程：{e}"))?;
+        drop(c);
+        match t.join() {
+            Ok(r) => r,
+            Err(p) => std::panic::resume_unwind(p),
+        }
+    })
 }
 
 /// 一次发射所需的全部输入
@@ -229,7 +255,7 @@ const PERF_TOP: usize = 15;
 fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
     let manifest = RuntimeManifest::load(j.rt).map_err(|e| e.to_string())?;
     let runtime_src = j.rt.join("src");
-    let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: j.libs, runtime_src: &runtime_src }
+    let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: j.libs, runtime_src: &runtime_src, jobs: j.o.emit_jobs }
         .build()
         .map_err(|e| format!("构建发射层输入：{e}"))?;
     for &(name, d) in &inp.timings {
@@ -340,10 +366,11 @@ pub fn run_build(args: &Args) -> Result<(), String> {
     let cp = class_path(&classes, &jars, &home, &image_dirs(&o, &home, &rt))?;
     let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
     perf.mark("classpath");
-    let facts = analyze(&cp, &rt, &user[0], &o, &seed_classes, &cin.join("closure.json"), &mut perf)?;
-    let java_files = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &crates, o: &o };
-    let (r, timings) = emit_scratch(&job, &mut perf)?;
+    let java_files: Vec<PathBuf> = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
+    let (r, timings) = analyze(&cp, &rt, &user[0], &o, &seed_classes, &cin.join("closure.json"), &mut perf, |facts, perf| {
+        let job = EmitJob { cp: &cp, facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &crates, o: &o };
+        emit_scratch(&job, perf)
+    })?;
     print_perf(o.perf, &perf, &timings);
     if o.precheck_only {
         return Ok(());
