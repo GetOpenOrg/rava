@@ -254,7 +254,11 @@ impl Engine<'_> {
         if !ends.is_empty() {
             f.noreturn_dead_pcs = cut_after(code, &reachable, &ends);
         }
-        f.noreturn_calls = stops;
+        // 落入截断区间的终点本身已不可达（被前一终点截断）：不再列出
+        let cut = &f.noreturn_dead_pcs;
+        let live = |pc: &u32| !cut.iter().any(|&(s, e)| s <= *pc && *pc < e);
+        f.null_recv.retain(live);
+        f.noreturn_calls = stops.into_iter().filter(live).collect();
     }
 
     /// 调用结果由清单派生规则给出（值相等 / 字符串运算 / 系统属性读取）：不按被调字节码判定
