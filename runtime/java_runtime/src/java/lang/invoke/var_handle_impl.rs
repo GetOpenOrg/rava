@@ -405,6 +405,16 @@ fn _array_exchange(vh: &VarHandle, args: &JArray<Object>, expected: bool) -> Res
     }
 }
 
+/// getAndAdd 的新值：当前值 + args[delta_at]（int / long 族按 Java 溢出回绕）。
+fn _add(carrier: _Carrier, cur: &Object, args: &JArray<Object>, delta_at: i32) -> Result<Object> {
+    Ok(match carrier {
+        _Carrier::Long => Object::from(_unbox_i64(cur).ok_or_else(|| _bad_arg("bad long value"))?
+            .wrapping_add(_arg_i64(args, delta_at, "bad long delta")?)),
+        _ => Object::from(_unbox_i32(cur).ok_or_else(|| _bad_arg("bad int value"))?
+            .wrapping_add(_arg_i32(args, delta_at, "bad int delta")?)),
+    })
+}
+
 impl VarHandle {
     /// native `get(Object...)`：plain 读（单线程下与 volatile 同一存储单元）。
     pub fn get(&self, args: JArray<Object>) -> Result<Object> {
@@ -535,5 +545,50 @@ impl VarHandle {
     /// native `getAndSetRelease(Object...)`：release 交换。
     pub fn getAndSetRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndSet(args)
+    }
+
+    /// native `getAndAdd(Object...)`：原子加（args = [holder, delta] / [array, index, delta]），
+    /// 返回旧值。数值族（int / long）经读-CAS 循环：无竞争下一轮完成，有竞争时重读重试
+    /// （与 Unsafe.getAndAddInt 的字节码语义同）。引用族无此操作。
+    pub fn getAndAdd(&self, args: JArray<Object>) -> Result<Object> {
+        let carrier = _carrier(self);
+        if carrier == _Carrier::Ref {
+            // JDK 抛 UnsupportedOperationException；此处以访问模式不符报错（UOE 类不一定在闭包内）
+            return Err(_bad_arg("getAndAdd on a reference VarHandle"));
+        }
+        let array = _is_array_flavor(self);
+        let n = args.len()?;
+        let delta_at = n - 1;
+        loop {
+            let (old, new) = if array {
+                let cur = _array_get(self, &JArray::from(vec![args.get(0)?, args.get(1)?]))?;
+                (Clone::clone(&cur), _add(carrier, &cur, &args, delta_at)?)
+            } else {
+                let holder = args.get(0)?;
+                let offset = _field_offset(self).ok_or_else(_state_err)?;
+                let cur = _field_read(&Unsafe::getUnsafe()?, carrier, &holder, offset, true)?;
+                (Clone::clone(&cur), _add(carrier, &cur, &args, delta_at)?)
+            };
+            let done = if array {
+                _array_cas(self, &JArray::from(vec![args.get(0)?, args.get(1)?, Clone::clone(&old), new]))?
+            } else {
+                let holder = args.get(0)?;
+                let offset = _field_offset(self).ok_or_else(_state_err)?;
+                _field_cas(&Unsafe::getUnsafe()?, carrier, &holder, offset, &old, &new)?
+            };
+            if done {
+                return Ok(old);
+            }
+        }
+    }
+
+    /// native `getAndAddAcquire(Object...)`：acquire 档位（单元内同 getAndAdd）。
+    pub fn getAndAddAcquire(&self, args: JArray<Object>) -> Result<Object> {
+        self.getAndAdd(args)
+    }
+
+    /// native `getAndAddRelease(Object...)`：release 档位。
+    pub fn getAndAddRelease(&self, args: JArray<Object>) -> Result<Object> {
+        self.getAndAdd(args)
     }
 }

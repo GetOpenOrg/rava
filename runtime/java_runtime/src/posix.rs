@@ -63,3 +63,28 @@ pub fn native_encoding() -> std::string::String {
         _ => codeset.to_owned(),
     }
 }
+
+/// `os.name`（HotSpot SystemProps 的平台名）。
+pub fn os_name() -> &'static str {
+    if cfg!(target_os = "macos") { "Mac OS X" }
+    else if cfg!(target_os = "linux") { "Linux" }
+    else { std::env::consts::OS }
+}
+
+/// `os.arch`（HotSpot 的架构名：x86_64 → amd64）。
+pub fn os_arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") { "aarch64" }
+    else if cfg!(target_arch = "x86_64") { "amd64" }
+    else { std::env::consts::ARCH }
+}
+
+/// `os.version`：内核发行号（HotSpot 取 uname(2).release；/proc 为同一内核数据源）。
+pub fn os_release() -> std::string::String {
+    if let Ok(s) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+        return s.trim().to_owned();
+    }
+    std::process::Command::new("uname").arg("-r").output().ok()
+        .and_then(|o| std::string::String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}

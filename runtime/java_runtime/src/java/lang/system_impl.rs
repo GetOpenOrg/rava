@@ -224,15 +224,11 @@ fn vm_snapshot_properties() -> Vec<(&'static str, std::string::String)> {
             .or_else(|_| std::env::var("LOGNAME"))
             .unwrap_or_default()),
         ("java.io.tmpdir", std::env::var("TMPDIR").unwrap_or_else(|_| std::string::String::from("/tmp"))),
-        ("os.name", std::string::String::from(if cfg!(target_os = "macos") { "Mac OS X" }
-            else if cfg!(target_os = "linux") { "Linux" }
-            else { std::env::consts::OS })),
-        ("os.arch", std::string::String::from(if cfg!(target_arch = "aarch64") { "aarch64" }
-            else if cfg!(target_arch = "x86_64") { "amd64" }
-            else { std::env::consts::ARCH })),
+        ("os.name", crate::posix::os_name().to_owned()),
+        ("os.arch", crate::posix::os_arch().to_owned()),
     ];
     // 平台族（HotSpot SystemProps.Raw / os::）：
-    props.push(("os.version", os_release()));
+    props.push(("os.version", crate::posix::os_release()));
     props.push(("sun.arch.data.model", std::string::String::from(if cfg!(target_pointer_width = "64") { "64" } else { "32" })));
     props.push(("sun.cpu.endian", std::string::String::from(if cfg!(target_endian = "little") { "little" } else { "big" })));
     props.push(("sun.io.unicode.encoding", std::string::String::from(if cfg!(target_endian = "little") { "UnicodeLittle" } else { "UnicodeBig" })));
@@ -278,17 +274,6 @@ fn vm_derived_properties(
         ("java.vm.version", get("java.runtime.version")?),
         ("java.vm.info", std::string::String::from("native image")),
     ])
-}
-
-/// `os.version`：内核发行号（HotSpot 取 uname(2).release；/proc 为同一内核数据源）。
-fn os_release() -> std::string::String {
-    if let Ok(s) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
-        return s.trim().to_owned();
-    }
-    std::process::Command::new("uname").arg("-r").output().ok()
-        .and_then(|o| std::string::String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_owned())
-        .unwrap_or_default()
 }
 
 crate::__process_static! {
