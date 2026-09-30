@@ -454,7 +454,8 @@ pub struct Engine<'a> {
     /// 类（含超类）的引用实例字段节点（内存读取的对象分量）
     ref_fields: HashMap<u32, Rc<[(usize, u32)]>>,
     hw_writes: HashMap<usize, Rc<[Option<HwWrite>]>>,
-    /// 签名多态写入调用点的写入值节点（静态字段句柄无 holder 坐标：写入值接到按名打开的静态字段）
+    /// 目标可能是任一按名打开的静态字段的写入值节点：签名多态写入调用点（静态字段句柄无 holder 坐标）、
+    /// 以所指未知的类镜像为静态字段基址的按偏移写入
     poly_writes: Vec<Node>,
     /// 按名打开（反射 / VarHandle / Unsafe 按名写入）的静态引用字段
     open_statics: Vec<(usize, u32)>,
