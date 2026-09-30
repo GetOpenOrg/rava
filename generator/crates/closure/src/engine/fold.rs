@@ -1,8 +1,8 @@
-//! 折叠点（folds v1）：不可达区间、死处理器与常量折叠的导出。
+//! 折叠点（folds v2）：不可达区间、死处理器、死 catch 表项与常量折叠的导出。
 
 use super::*;
 
-// ── 折叠点（folds v1）────────────────────────────────────────────────────────
+// ── 折叠点（folds v2）────────────────────────────────────────────────────────
 
 /// 一个方法的折叠点（计划 §7.3「折叠点导出」）
 pub struct Fold {
@@ -11,6 +11,9 @@ pub struct Fold {
     pub dead_pcs: Vec<(u32, u32)>,
     /// 不进入的异常处理器（起点 pc）：try 区间全部不可达，或 catch 类型从不被实例化
     pub dead_handlers: Vec<u32>,
+    /// 删除的异常表项：catch 类型不在闭包类集合内（从不被加载，处理器不经它进入）；
+    /// 处理器本身仍活（另有活表项），全部表项都死的处理器并入 dead_handlers、不在此列
+    pub dead_catches: Vec<DeadCatch>,
     /// (pc, 指令, 常量值, 类型描述符)
     pub consts: Vec<(u32, u8, V, String)>,
     /// 接收者恒为 null 的活虚调用点（invokevirtual / invokeinterface）：全部克隆里接收者值集都没有对象，
@@ -20,6 +23,15 @@ pub struct Fold {
     pub props: Vec<u32>,
     /// 违反「活的非跳转指令落到死区」约定的 pc（应恒为空）
     pub violations: Vec<u32>,
+}
+
+/// 死 catch 表项（按异常表原值，消费方逐字段匹配删除）
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DeadCatch {
+    pub start: u32,
+    pub end: u32,
+    pub handler: u32,
+    pub catch_type: String,
 }
 
 pub(super) fn fold_of(method: String, code: &classfile::Code, all: &[Rc<Analysis>]) -> Fold {
@@ -87,7 +99,7 @@ pub(super) fn fold_of(method: String, code: &classfile::Code, all: &[Rc<Analysis
         consts.push((*pc, *opcode, value.clone(), ty));
     }
     consts.sort_by_key(|c| c.0);
-    Fold { method, dead_pcs, dead_handlers, consts, null_recv: Vec::new(), props: Vec::new(), violations }
+    Fold { method, dead_pcs, dead_handlers, dead_catches: Vec::new(), consts, null_recv: Vec::new(), props: Vec::new(), violations }
 }
 
 impl Engine<'_> {
@@ -108,6 +120,28 @@ impl Engine<'_> {
                 false
             })
         })
+    }
+
+    /// 死 catch 表项：catch 类型不在闭包类集合内。catch-any 从不算死；
+    /// 处理器的全部表项都死 → 处理器并入 dead_handlers（此时不再逐项列出）
+    pub(super) fn dead_catches(&self, code: &classfile::Code, f: &mut Fold) {
+        let dead = |t: &Option<String>| t.as_ref().is_some_and(|c| !self.classes.contains_key(c.as_str()));
+        let mut by_handler: BTreeMap<u32, bool> = BTreeMap::new();
+        for h in &code.exception_table {
+            *by_handler.entry(h.handler).or_insert(true) &= dead(&h.catch_type);
+        }
+        for (h, all_dead) in by_handler {
+            if all_dead && !f.dead_handlers.contains(&h) {
+                f.dead_handlers.push(h);
+            }
+        }
+        f.dead_handlers.sort();
+        for h in &code.exception_table {
+            if dead(&h.catch_type) && f.dead_handlers.binary_search(&h.handler).is_err() {
+                let catch_type = h.catch_type.clone().unwrap_or_default();
+                f.dead_catches.push(DeadCatch { start: h.start, end: h.end, handler: h.handler, catch_type });
+            }
+        }
     }
 
     /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者即不算

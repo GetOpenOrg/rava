@@ -1,19 +1,21 @@
-"""closure.json 折叠点（folds v1）的消费：字节码规范化，classfile 解码后单点执行。
+"""closure.json 折叠点（folds v2）的消费：字节码规范化，classfile 解码后单点执行。
 
 Rust 闭包分析器（generator/crates/closure）剪掉的不可达代码与常量读取点，Python 生成器必须
 同样不翻译，否则生成代码会引用闭包外的类。本模块只消费数据、不另做判定；格式约定见
 docs/plans/2026-09-29-rust-closure-analyzer.md §7.3「折叠点导出」：
 
-  "folds_version": 1,
+  "folds_version": 2,
   "folds": [{"method": "类.方法:描述符", "dead_pcs": [[start, end), ...],
              "dead_handlers": [pc, ...],
+             "dead_catches": [{"start": s, "end": e, "handler": h, "catch_type": "类"}, ...],
              "consts": [{"pc": 12, "kind": "getfield", "value": false, "type": "Z"}]}]
 
 规范化动作（均在 CFG 结构化之前，生成代码的唯一指令序列）：
   1. dead_pcs 内的指令删除；
   2. 条件跳转只剩一个活后继 → 弹出操作数（`pop`）+ `goto`（或直通），偏移沿用原指令字节；
      switch 的死目标改指向一个活目标，只剩一个活目标时同样改写为 `pop` + `goto`；
-  3. dead_handlers 与受保护区间已全死的异常表项删除，其余区间端点收拢到活指令起点；
+  3. dead_handlers、dead_catches 列出的表项（按原值逐字段匹配；catch 类型不在闭包内）与受保护区间
+     已全死的异常表项删除，其余区间端点收拢到活指令起点；
   4. consts 读取点改写为常量装载：getstatic 直接替换为装载指令；getfield 替换为合成指令
      `fold_const`（operand = 弹出条目数、comment = 装载指令），由 instr/sim/stack.py 弹出 receiver
      （有副作用的保留求值）再压常量；invoke 保留原指令（opcode / operand / comment 不变，所有按
@@ -30,7 +32,7 @@ from dataclasses import dataclass, field
 
 from .types import Instr
 
-FOLDS_VERSION = 1
+FOLDS_VERSION = 2
 
 _ONE_OPERAND_BRANCH = frozenset({
     'ifeq', 'ifne', 'iflt', 'ifge', 'ifgt', 'ifle', 'ifnull', 'ifnonnull',
@@ -49,13 +51,14 @@ _INVOKES = frozenset({'invokevirtual', 'invokespecial', 'invokestatic', 'invokei
 
 
 class FoldError(ValueError):
-    """closure.json 的 folds 违反 v1 格式约定。"""
+    """closure.json 的 folds 违反格式约定。"""
 
 
 @dataclass
 class MethodFold:
     dead_pcs: list = field(default_factory=list)       # [(start, end)]，半开区间
     dead_handlers: frozenset = frozenset()
+    dead_catches: frozenset = frozenset()              # {(start, end, handler, catch_type)}
     consts: dict = field(default_factory=dict)         # pc → {"kind", "value", "type"}
 
 
@@ -78,6 +81,8 @@ def load(path: str) -> int:
         _FOLDS[key] = MethodFold(
             dead_pcs=[(int(s), int(e)) for s, e in ent.get('dead_pcs') or ()],
             dead_handlers=frozenset(int(h) for h in ent.get('dead_handlers') or ()),
+            dead_catches=frozenset((int(c['start']), int(c['end']), int(c['handler']), c['catch_type'])
+                                   for c in ent.get('dead_catches') or ()),
             consts={int(c['pc']): c for c in ent.get('consts') or ()},
         )
     return len(_FOLDS)
@@ -248,7 +253,7 @@ def apply(method_key: str, instrs: list[Instr], exception_table: list,
             continue
         out.extend(_rewrite_branch(ins, next_dead, is_dead, where))
 
-    # 异常表：删 dead_handlers 与受保护区间全死的表项，端点收拢到活指令起点
+    # 异常表：删 dead_handlers、dead_catches 与受保护区间全死的表项，端点收拢到活指令起点
     live_offs = sorted(x.offset for k, x in enumerate(instrs) if k not in dead_idx)
 
     def first_live_at_or_after(pc: int) -> int | None:
@@ -259,7 +264,7 @@ def apply(method_key: str, instrs: list[Instr], exception_table: list,
 
     new_table = []
     for s, e, h, t in exception_table or ():
-        if h in fold.dead_handlers:
+        if h in fold.dead_handlers or (s, e, h, t) in fold.dead_catches:
             continue
         if is_dead(h):
             raise FoldError(f"{where}: handler {h} 在 dead_pcs 内但未列入 dead_handlers")

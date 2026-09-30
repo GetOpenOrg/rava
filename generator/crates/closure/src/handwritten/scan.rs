@@ -435,4 +435,35 @@ mod tests {
         let make = site("make");
         assert_eq!((make.path_ty.clone(), make.args.len(), make.srecv.clone()), (Some(TypeRef(vec!["Factory".into()])), 2, None));
     }
+
+    #[test]
+    fn turbofish_casts() {
+        let src = r#"
+            impl Natives {
+                pub fn resolve(type_: Object, e: Object) {
+                    let Ok(mt) = Clone::clone(&type_).try_cast::<MethodType>("m") else { return; };
+                    mt.toDesc()?;
+                    if let Ok(c) = e.try_cast::<Class>("c") { c.getName()?; }
+                    match e.try_cast::<Path>("p") { Ok(p) => { p.toUri()?; } Err(_) => {} }
+                    let t: Throwable = e.catch_as::<Throwable>("t");
+                    t.getCause()?;
+                    e.try_cast::<Str>("s")?.length()?;
+                    let name = format!("{}", mt.toMethodDescriptorString()?);
+                }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let cs = out.fns.remove("resolve").map(|i| i.calls).unwrap_or_default();
+        let site = |n: &str| cs.iter().find(|c| c.name == n).expect("调用点已登记");
+        let ty = |n: &str| Some(TypeRef(vec![n.to_string()]));
+        assert_eq!(site("toDesc").recv, Some(ty("MethodType")));
+        assert_eq!(site("toDesc").srecv, Some(named(&["MethodType"])));
+        assert_eq!(site("getName").srecv, Some(named(&["Class"])));
+        assert_eq!(site("toUri").srecv, Some(named(&["Path"])));
+        assert_eq!(site("getCause").srecv, Some(named(&["Throwable"])));
+        assert_eq!(site("length").recv, Some(ty("Str")));
+        assert_eq!(site("toMethodDescriptorString").srecv, Some(named(&["MethodType"])));
+    }
 }

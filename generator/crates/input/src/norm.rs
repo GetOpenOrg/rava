@@ -1,11 +1,11 @@
-//! 字节码规范化：折叠点（folds v1）应用（`codegen/closure_folds.py` 的移植）。
+//! 字节码规范化：折叠点（folds v2）应用（`codegen/closure_folds.py` 的移植）。
 //!
 //! 闭包分析器剪掉的不可达代码与常量读取点，发射层同样不翻译。规范化在 CFG 结构化之前
 //! 单点执行，产出 [`NormCode`]：
 //! 1. dead_pcs 内的指令删除；
 //! 2. 条件跳转只剩一个活后继 → `pop`（×操作数个数）+ `goto`（或直通），偏移沿用原指令字节；
 //!    switch 死目标改指向回退活目标，只剩一个活目标时改写为 `pop` + `goto`；
-//! 3. dead_handlers 与受保护区间全死的异常表项删除，其余端点收拢到活指令起点；
+//! 3. dead_handlers、dead_catches 列出的表项与受保护区间全死的表项删除，其余端点收拢到活指令起点；
 //! 4. 常量读取点：getstatic 直接替换为装载指令；getfield 替换为 [`NInsn::FoldField`]
 //!    （弹出 receiver 后压入常量）；invoke 替换为 [`NInsn::FoldCall`]：调用照常执行（被调方
 //!    副作用保留），只丢弃返回值、改压常量。
@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use classfile::{op, Code, Const, ExceptionEntry, Insn, Operand};
 use ty::consts;
 
-use crate::facts::{FoldConst, FoldValue, MethodFold, ReadKind};
+use crate::facts::{DeadCatch, FoldConst, FoldValue, MethodFold, ReadKind};
 use crate::InputError;
 
 pub const ACONST_NULL: u8 = 0x01;
@@ -254,6 +254,12 @@ fn validate(fold: &MethodFold, code: &Code, is_dead: &dyn Fn(u32) -> bool, where
     Ok(())
 }
 
+/// 表项列入 dead_catches（catch-any 从不列入）
+fn is_dead_catch(fold: &MethodFold, ent: &ExceptionEntry) -> bool {
+    let Some(ct) = &ent.catch_type else { return false };
+    fold.dead_catches.contains(&DeadCatch { start: ent.start, end: ent.end, handler: ent.handler, catch_type: ct.clone() })
+}
+
 /// 按折叠点规范化一个方法体（`method_key` = `类.方法:描述符`，只用于报错定位）
 pub fn apply_fold(method_key: &str, code: &Code, fold: &MethodFold) -> Result<NormCode, InputError> {
     let where_ = method_key;
@@ -280,7 +286,7 @@ pub fn apply_fold(method_key: &str, code: &Code, fold: &MethodFold) -> Result<No
     let first_live = |pc: u32| live_offs.iter().copied().find(|o| *o >= pc);
     let mut table = Vec::new();
     for ent in &code.exception_table {
-        if fold.dead_handlers.contains(&ent.handler) {
+        if fold.dead_handlers.contains(&ent.handler) || is_dead_catch(fold, ent) {
             continue;
         }
         if is_dead(ent.handler) {
