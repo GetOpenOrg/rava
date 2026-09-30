@@ -246,6 +246,8 @@ impl<'a> Engine<'a> {
             "lcall_reruns": s.lcall_reruns,
             "flow_edges": self.graph.seen.len(),
             "adds": self.graph.adds,
+            // 环合并：检测次数 / 合并掉的节点数 / 检测耗时 ms（scc.rs）
+            "scc": self.graph.scc_stats,
             "edges_by_kind": self.edge_kinds(),
             "top_out_degree": self.top_degree(top, false),
             "top_in_degree": self.top_degree(top, true),

@@ -14,7 +14,7 @@ impl<'a> Engine<'a> {
         self.add_to_id(i, s);
     }
 
-    /// 节点（序号）并入类型集；新增部分登记待沿流边推送
+    /// 节点（序号）并入类型集；新增部分登记待沿流边推送。类型集存于所属代表（见 `scc.rs`）
     fn add_to_id(&mut self, i: u32, s: &TypeSet) {
         let direct = !std::mem::take(&mut self.via_flow);
         self.graph.adds[0] += 1;
@@ -27,13 +27,15 @@ impl<'a> Engine<'a> {
             return;
         }
         let n = self.graph.node(i);
+        // 空数组元素节点不参与合并（`scc.rs`），恒为自身代表
         if let Node::E(x, _) = n {
             if let Some(held) = self.empty_arrays.get_mut(&x) {
                 held.entry(n).or_default().add_all(s);
                 return;
             }
         }
-        let cur = self.graph.set_mut(i);
+        let r = self.graph.rep(i);
+        let cur = self.graph.set_mut(r);
         let delta = TypeSet {
             classes: s.classes.minus(&cur.classes),
             open: s.open.minus(&cur.open),
@@ -47,11 +49,40 @@ impl<'a> Engine<'a> {
         if direct && !delta.open.is_empty() {
             self.open_inj.entry(n).or_default().extend(delta.open.iter());
         }
+        self.grown(r, &delta);
+        // 只沿流边推送新增部分（差分传播）
+        self.queue_delta(r, &delta);
+    }
+
+    /// 代表 r 登记待推增量
+    pub(super) fn queue_delta(&mut self, r: u32, delta: &TypeSet) {
+        let ix = r as usize;
+        self.graph.delta[ix].add_all(delta);
+        if !self.graph.queued[ix] {
+            self.graph.queued[ix] = true;
+            self.fwork.push_back(r);
+        }
+    }
+
+    /// 代表 r 的类型集新增 delta：逐成员触发节点钩子（逃逸、自身字段、成员枚举、手写调用点实参、读者重跑）
+    pub(super) fn grown(&mut self, r: u32, delta: &TypeSet) {
+        match self.graph.members.get(&r) {
+            None => self.node_grown(self.graph.node(r), delta),
+            Some(ms) => {
+                let ms = ms.clone();
+                for m in ms {
+                    self.node_grown(self.graph.node(m), delta);
+                }
+            }
+        }
+    }
+
+    pub(super) fn node_grown(&mut self, n: Node, delta: &TypeSet) {
         if n == Node::Esc {
             self.escape(&delta.classes);
         }
         if self.self_fields.contains_key(&n) {
-            self.self_field_objs(n, &delta);
+            self.self_field_objs(n, delta);
         }
         if let Some(&(k, e)) = self.enum_recv.get(&n) {
             self.rpending.push((k, e, delta.clone()));
@@ -62,9 +93,9 @@ impl<'a> Engine<'a> {
             if !ys.is_empty() {
                 self.hw_site_arrays(s, i, &ys);
             }
-            self.hw_site_fields(s, i, &delta);
+            self.hw_site_fields(s, i, delta);
             if self.hw_reads.get(&s).is_some_and(|r| r.0 == i) {
-                self.memory_read(s, &delta);
+                self.memory_read(s, delta);
             }
         }
         if let Some(ws) = self.watch.get(&n) {
@@ -81,43 +112,48 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        // 只沿流边推送新增部分（差分传播）
-        let ix = i as usize;
-        self.graph.delta[ix].add_all(&delta);
-        if !self.graph.queued[ix] {
-            self.graph.queued[ix] = true;
-            self.fwork.push_back(i);
-        }
     }
 
-    /// 流边 src → dst（按 filter 收窄）；立即按当前集合推一次
+    /// 流边 src → dst（按 filter 收窄）；立即按当前集合推一次。边接在两端的代表之间；
+    /// 同一代表内的 Object 边是空操作（合并只经 Object 边，见 `scc.rs`）
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
         let (si, di) = (self.graph.id(src), self.graph.id(dst));
-        if !self.graph.seen.insert((si, di, filter)) {
+        let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
+        let objf = self.names[filter as usize].as_ref() == OBJECT;
+        if rs == rd && objf {
             return;
         }
-        self.graph.edges[si as usize].push((di, filter));
-        if self.graph.set(si).is_empty() {
+        if !self.graph.seen.insert((rs, rd, filter)) {
+            return;
+        }
+        self.graph.edges[rs as usize].push((rd, filter));
+        self.graph.edges_since += 1;
+        if self.graph.set(rs).is_empty() {
             return;
         }
         // Object 过滤且目标已含源集合：推送必为无增量，免去整集合克隆（大集合新接边的常态）
-        if self.graph.set(si).is_subset_of(self.graph.set(di)) && self.names[filter as usize].as_ref() == OBJECT {
+        if objf && self.graph.set(rs).is_subset_of(self.graph.set(rd)) {
             return;
         }
-        let s = std::mem::take(self.graph.set_mut(si));
+        let s = std::mem::take(self.graph.own_set_mut(rs));
         let out = self.filter(&s, filter);
-        *self.graph.set_mut(si) = s;
+        *self.graph.own_set_mut(rs) = s;
         self.via_flow = true;
         self.add_to_id(di, &out);
     }
 
     pub(super) fn drain_flows(&mut self) {
         let obj = self.ids.get(OBJECT).copied();
-        while let Some(i) = self.fwork.pop_front() {
+        loop {
+            if self.scc_due() {
+                self.collapse_cycles();
+            }
+            let Some(i) = self.fwork.pop_front() else { break };
             let ix = i as usize;
             self.graph.queued[ix] = false;
             let s = std::mem::take(&mut self.graph.delta[ix]);
-            if s.is_empty() {
+            // 已并入其它代表的节点：增量已随合并转交
+            if s.is_empty() || self.graph.rep(i) != i {
                 continue;
             }
             // 边表借出（推送中新接的边已由 `flow` 按当前集合推过，归还时并在后面）；
@@ -148,11 +184,14 @@ impl<'a> Engine<'a> {
                 let added = std::mem::replace(slot, edges);
                 slot.extend(added);
             }
-            let n = self.graph.node(i);
-            if let Some(ds) = self.mflows.get(&n).cloned() {
-                let k = self.mirror_set(&s);
-                for d in ds {
-                    self.add_to(d, &k);
+            let ms = self.graph.members.get(&i).cloned().unwrap_or_else(|| vec![i]);
+            for m in ms {
+                let n = self.graph.node(m);
+                if let Some(ds) = self.mflows.get(&n).cloned() {
+                    let k = self.mirror_set(&s);
+                    for d in ds {
+                        self.add_to(d, &k);
+                    }
                 }
             }
         }

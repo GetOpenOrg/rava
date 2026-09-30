@@ -55,6 +55,7 @@ mod methods;
 mod worklist;
 mod stats;
 mod graph;
+mod scc;
 
 use graph::FlowGraph;
 use stats::{Phase, Why};
