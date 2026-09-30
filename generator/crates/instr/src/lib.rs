@@ -1,5 +1,5 @@
 //! 指令翻译层（← Python `codegen/instr/`）：把一条规范化 JVM 指令（[`input::NInsn`]）在
-//! [`sim::StackSim`] 上归约为 [`ir`] 语句 / 表达式。不含 CFG 结构化（`cfg` crate）与
+//! [`::sim::StackSim`] 上归约为 [`ir`] 语句 / 表达式。不含 CFG 结构化（`cfg` crate）与
 //! 方法体组装（P4c）；公开接口不以字符串往返表达式或类型。
 //!
 //! # P4c 公开 API
@@ -10,9 +10,13 @@
 //!    runtime_src_dir)`——根类虚方法集、手写根类 API 名面、闭包子类表、手写 `_impl.rs`
 //!    的 `fn` 名缓存。
 //! 2. **上下文**：[`InstrCtx::new`]`(ty_ctx, runtime_manifest, &facts, &hooks, class_name)`；
-//!    `hooks` 实现 [`InstrHooks`]（instr 需要但归方法 / 类生成层所有的查询，如 SAM 构造器
-//!    路径），无需时用 [`NoHooks`]。
-//! 3. **模拟环境**：[`InstrEnv::new`]`(ctx, class_type_params)`，它实现 [`sim::SimEnv`]
+//!    继承展开（祖先 / 接口 default 方法体发射进子类）时再以
+//!    [`InstrCtx::with_code_owner`]`(字节码所属类)` 指定指令出处类（invokedynamic 的 bootstrap
+//!    表与常量池下标属于它）。`hooks` 实现 [`InstrHooks`]（instr 需要但归方法 / 类生成层所有的
+//!    查询）：`sam_ctor_path`（SAM 合成对象构造路径）与 `indy_cp_index`（invokedynamic 常量池
+//!    下标——classfile 指令操作数不携带；缺省 None 时 lambda 站点报未移植），无需时用 [`NoHooks`]。
+//!    `root_object_classfile` 取类路径上的 JDK 根类类文件（根类手写、不在注册表）。
+//! 3. **模拟环境**：[`InstrEnv::new`]`(ctx, class_type_params)`，它实现 [`::sim::SimEnv`]
 //!    （短名、严格子类型、接口判定、接口载体、Object 装箱、菱形实参求解——与 Python
 //!    `method/codegen.py` 注入 `StackSim` 的回调同一语义）；以 `StackSim::new(cfg, &env)`
 //!    构造模拟器。
