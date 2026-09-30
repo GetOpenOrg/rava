@@ -26,6 +26,21 @@ impl<'a> Engine<'a> {
         id
     }
 
+    /// 类型序号 t 的类镜像（按类型序号记忆）
+    fn mirror_id(&mut self, t: u32) -> u32 {
+        if let Some(&k) = self.mirror_of.get(t as usize).filter(|&&k| k != u32::MAX) {
+            return k;
+        }
+        let n = self.names[t as usize].clone();
+        let k = self.mirror(&n);
+        let ti = t as usize;
+        if self.mirror_of.len() <= ti {
+            self.mirror_of.resize(ti + 1, u32::MAX);
+        }
+        self.mirror_of[ti] = k;
+        k
+    }
+
     /// 值集中各值的类镜像；类型推不出（open、lambda 合成类、手写实现对象）为所指未知的 Class
     pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
         let mut out = TypeSet::default();
@@ -35,8 +50,7 @@ impl<'a> Engine<'a> {
                 self.id(CLASS)
             } else {
                 let t = self.ty(x);
-                let n = self.names[t as usize].clone();
-                self.mirror(&n)
+                self.mirror_id(t)
             };
             out.classes.insert(k);
         }

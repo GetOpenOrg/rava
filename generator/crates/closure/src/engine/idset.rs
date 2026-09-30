@@ -102,6 +102,10 @@ impl IdSet {
         }
         self.v.binary_search(x).is_ok()
     }
+    /// 堆占用字节（估算，用于记忆表的内存预算）
+    pub(super) fn heap_bytes(&self) -> usize {
+        self.v.capacity() * 4 + (self.words.capacity() + self.sum.capacity()) * 8
+    }
     #[inline]
     pub fn len(&self) -> usize {
         if self.dense() {

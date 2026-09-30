@@ -408,8 +408,9 @@ impl Manifest {
     }
 
     /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）
-    pub fn is_field_handle_writer(&self, member: &str) -> bool {
-        self.field_handle_writers.contains(member)
+    /// 按成员引用逐项比对，不格式化（方法登记热路径，清单只有几项）
+    pub fn is_field_handle_writer(&self, key: &classfile::constant::MemberRef) -> bool {
+        self.field_handle_writers.iter().any(|s| member_is(s, key))
     }
 
     /// 句柄桥：在其内调用 handle_writers 不算写入入口（句柄只经 Field.set* 的访问器使用）
@@ -536,4 +537,11 @@ mod tests {
         assert_eq!(m.string_op("a/S.x:()I"), None);
         assert!(with_vm("[facts.string_ops]\n\"a/S.f:()I\" = \"upper\"\n").is_err());
     }
+}
+
+/// `s` 是否恰为 `key` 的「类.名:描述符」形式（与 `MemberRef` 的 Display 同式，免分配）
+fn member_is(s: &str, key: &classfile::constant::MemberRef) -> bool {
+    let rest = s.strip_prefix(key.owner.as_str()).and_then(|r| r.strip_prefix('.'));
+    let rest = rest.and_then(|r| r.strip_prefix(key.name.as_str())).and_then(|r| r.strip_prefix(':'));
+    rest == Some(key.desc.as_str())
 }

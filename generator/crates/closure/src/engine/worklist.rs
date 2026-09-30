@@ -255,6 +255,12 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.hub_linked.get_mut(&m) {
             d.retain(|k| !offs.contains(&k.0));
         }
+        if let Some(d) = self.hub_lsent.get_mut(&m) {
+            d.retain(|k| !offs.contains(&k.0));
+        }
+        if let Some(d) = self.hub_ssent.get_mut(&m) {
+            d.retain(|k, _| !offs.contains(&k.0));
+        }
         if let Some(d) = self.recv_done.get_mut(&m) {
             d.retain(|k| !offs.contains(&k.0));
         }
@@ -271,6 +277,8 @@ impl<'a> Engine<'a> {
     pub(super) fn reset_sites(&mut self, m: usize) {
         self.dispatched.remove(&m);
         self.hub_linked.remove(&m);
+        self.hub_lsent.remove(&m);
+        self.hub_ssent.remove(&m);
         self.recv_done.remove(&m);
         for (_, at) in self.lambda_done.remove(&m).unwrap_or_default() {
             for (_, id) in at {
