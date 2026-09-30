@@ -104,6 +104,7 @@ impl<'a> Engine<'a> {
             pending_catch: BTreeMap::new(),
             lambda_stack: HashSet::default(),
             mirrors: HashMap::default(),
+            mirror_of: Vec::new(),
             mflows: HashMap::default(),
             mflow_seen: HashSet::default(),
             enum_recv: HashMap::default(),
