@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态：P0 ✅（见 §四）；P1 / P2 进行中（`closure-perf` 分支）。原排期：排期：闭包精度线手上的回归（DeepCopy / DES / Digester / TestFileAccessSpace 一组）修完后接手；与精度线同改 `closure` crate，**不并行**，由同一执行者串行推进或精度线收尾后交接。
+> 状态：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）；P2 进行中（`closure-perf` 分支）。原排期：排期：闭包精度线手上的回归（DeepCopy / DES / Digester / TestFileAccessSpace 一组）修完后接手；与精度线同改 `closure` crate，**不并行**，由同一执行者串行推进或精度线收尾后交接。
 
 ---
 
@@ -91,6 +91,18 @@
 
 - **输出依赖处理顺序**：closure.json 的 `classes` / `methods` 按首次发现顺序（IndexMap 插入序）并带 `via`，上下文标签内嵌方法序号（`@10772:0`）。凡改变处理顺序的结构性改造（E↔W 改汇聚节点、调用图 SCC 逆拓扑序、失效合并批处理）都会改变 `via` / 顺序，与「逐字节一致」不变量冲突。P1 / P2 只做**保序**优化；结构性改造（E↔W 汇聚节点化、SCC 排序）需要把不变量放宽为「集合一致 + via 可变」，由决策方拍板后作为独立步骤。
 - 据此 P1 调整为「**图节点驻留**」（Node → 稠密 `u32`，`sets` / `fdelta` / `flows` 改 `Vec` 索引、`flow_seen` 紧凑键），MemberRef 驻留不做（无收益）；P2 调整为「空传播 / 空重跑削减」（保序）。
+
+### 4.4 进展实测（release，`scripts/closure_bench.sh`；逐字节对照 `--diff` 全部 SAME）
+
+| 步骤 | 提交 | HelloWorld | Digester 墙钟 / RSS | CollectorsDemo 墙钟 / RSS | DeepCopy 墙钟（user）/ RSS | DeepCopy flows / sites ms |
+|---|---|---:|---:|---:|---:|---:|
+| 基线 b3ccb0e9 | — | 0.80 s | 6.10 s / 1124 MB | 4.55 s / 764 MB | 454 s（351 s）/ 4074 MB ¹ | 352 k–443 k / 68 k–151 k |
+| P1 图节点驻留 | 见 git log | 0.72 s | 5.43 s / 954 MB | 4.17 s / 710 MB | 256 s（231 s）/ 3606 MB ² | 170 k / 59 k |
+
+¹ 与主会话 e2e 批次并行、内存压力下测得（计划 §一 的 173.6 s 为无压力值，基线二进制未在无压力下复测）；比较以 user 时间为准。
+² P1 首版（图节点驻留，未含 open 收窄缓存 / 原地归并）测得；Digester / CollectorsDemo 列为 P1 完整版。
+
+**P1 调整说明**：按 §4.2 数据，`MemberRef` 驻留收益 < 1 %，改为驻留类型流图节点——`engine/graph.rs::FlowGraph`：`Node` → 稠密 `u32`，类型集 / 出边 / 待推增量 / 入队标记改为按序号索引的 `Vec`，流边去重键从 40 字节降到 12 字节，`drain_flows` 逐边只做数组索引，Object 过滤判定由逐边字符串比较改为 id 比较；另加 open 收窄结果按 (o, t) 缓存（去掉逐次 `ClassPath::get` 的 SipHash）、`IdSet` 小并大改为原地自尾归并（一次搬移）。
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 

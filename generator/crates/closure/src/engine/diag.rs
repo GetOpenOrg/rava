@@ -50,16 +50,16 @@ impl Engine<'_> {
             let n = &self.names[o as usize];
             o == cid || self.h.is_subtype(n, &q_name) || self.h.is_subtype(&q_name, n)
         };
-        let has = |x: &Node| self.sets.get(x).is_some_and(|s| s.open.iter().any(|&o| related(o)));
+        let has = |x: &Node| self.graph.get(x).is_some_and(|s| s.open.iter().any(|&o| related(o)));
         let mut rev: HashMap<Node, Vec<Node>> = HashMap::default();
-        for (src, edges) in &self.flows {
+        for (src, edges) in &self.graph.flow_list() {
             if has(src) {
                 for (dst, _) in edges {
                     rev.entry(*dst).or_default().push(*src);
                 }
             }
         }
-        let mut seen: HashSet<Node> = self.sets.keys().filter(|n| has(n) && self.node_str(**n).contains(np)).copied().collect();
+        let mut seen: HashSet<Node> = self.graph.keys().filter(|n| has(n) && self.node_str(**n).contains(np)).copied().collect();
         let mut q: VecDeque<Node> = seen.iter().copied().collect();
         // 注入点 → 到起点的最短距离
         let mut hits: Vec<(Node, usize)> = Vec::new();

@@ -48,6 +48,28 @@ impl<'a> Engine<'a> {
         !self.lambdas.contains_key(&id) && self.h.is_interface(&self.names[id as usize])
     }
 
+    /// open(o) 按过滤类型 t 收窄的结果（None = 空），按 (o, t) 缓存
+    fn open_narrow(&mut self, o: u32, t: u32) -> Option<u32> {
+        if let Some(&r) = self.narrow_cache.get(&(o, t)) {
+            return (r != u32::MAX).then_some(r);
+        }
+        let r = if self.sub(o, t) {
+            Some(o)
+        } else if self.sub(t, o) {
+            Some(t)
+        } else if !self.is_iface(o) && self.is_iface(t) {
+            // 类 × 接口：交集是「o 的子类中实现 t 者」。保留 open(o)——展开时按接收者类型再求交；
+            // final 类没有子类，不实现 t 即为空
+            (!self.h.class(&self.names[o as usize]).is_some_and(|c| c.access & 0x0010 != 0)).then_some(o)
+        } else if self.is_iface(o) {
+            Some(t)
+        } else {
+            None
+        };
+        self.narrow_cache.insert((o, t), r.unwrap_or(u32::MAX));
+        r
+    }
+
     /// 类型集按过滤类型收窄
     pub(super) fn filter(&mut self, s: &TypeSet, t: u32) -> TypeSet {
         if self.names[t as usize].as_ref() == OBJECT {
@@ -82,18 +104,8 @@ impl<'a> Engine<'a> {
         }
         self.sub_rows[ti] = row;
         for &o in &s.open {
-            if self.sub(o, t) {
-                out.open.insert(o);
-            } else if self.sub(t, o) {
-                out.open.insert(t);
-            } else if !self.is_iface(o) && self.is_iface(t) {
-                // 类 × 接口：交集是「o 的子类中实现 t 者」。保留 open(o)——展开时按接收者类型再求交；
-                // final 类没有子类，不实现 t 即为空
-                if !self.h.class(&self.names[o as usize]).is_some_and(|c| c.access & 0x0010 != 0) {
-                    out.open.insert(o);
-                }
-            } else if self.is_iface(o) {
-                out.open.insert(t);
+            if let Some(r) = self.open_narrow(o, t) {
+                out.open.insert(r);
             }
         }
         out

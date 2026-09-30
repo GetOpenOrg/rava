@@ -190,8 +190,35 @@ impl IdSet {
             return;
         }
         if o.len() * 16 < self.len() {
-            for &x in &o.0 {
-                self.insert(x);
+            // 小集合并入大集合：先挑出新元素，再原地自尾向前归并（一次搬移，不逐个 insert）
+            let fresh: Vec<u32> = o.0.iter().copied().filter(|x| !self.contains(x)).collect();
+            match fresh.len() {
+                0 => {}
+                1 => {
+                    self.insert(fresh[0]);
+                }
+                k => {
+                    let n = self.0.len();
+                    self.0.resize(n + k, 0);
+                    let (mut i, mut j, mut w) = (n, k, n + k);
+                    while j > 0 {
+                        if i > 0 && self.0[i - 1] > fresh[j - 1] {
+                            self.0[w - 1] = self.0[i - 1];
+                            i -= 1;
+                        } else {
+                            self.0[w - 1] = fresh[j - 1];
+                            j -= 1;
+                        }
+                        w -= 1;
+                    }
+                    if self.1.is_empty() {
+                        self.reindex();
+                    } else {
+                        for &x in &fresh {
+                            self.set_bit(x);
+                        }
+                    }
+                }
             }
             return;
         }
@@ -274,5 +301,44 @@ impl TypeSet {
     }
     pub(super) fn is_empty(&self) -> bool {
         self.classes.is_empty() && self.open.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn naive(a: &[u32], b: &[u32]) -> Vec<u32> {
+        let mut v: Vec<u32> = a.iter().chain(b).copied().collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// 并集 / 差集与朴素实现一致（覆盖稀疏 / 位图、小并大原地归并、有序归并各路径）
+    #[test]
+    fn union_minus_match_naive() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = |m: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % u64::from(m)) as u32
+        };
+        for round in 0..400 {
+            let (na, nb, span) = (rnd(300) as usize, rnd(if round % 2 == 0 { 12 } else { 300 }) as usize, 50 + rnd(2000));
+            let a: IdSet = (0..na).map(|_| rnd(span)).collect();
+            let b: IdSet = (0..nb).map(|_| rnd(span)).collect();
+            let mut u = a.clone();
+            u.union_with(&b);
+            let want = naive(&a.0, &b.0);
+            assert_eq!(u.0, want);
+            assert!(want.iter().all(|x| u.contains(x)));
+            assert_eq!(u, IdSet::from_sorted(want.clone()));
+            assert_eq!(u.1.is_empty(), u.len() < DENSE_AT);
+            let d = b.minus(&a);
+            let dw: Vec<u32> = b.0.iter().copied().filter(|x| !a.0.contains(x)).collect();
+            assert_eq!(d.0, dw);
+        }
     }
 }

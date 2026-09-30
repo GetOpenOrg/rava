@@ -97,10 +97,6 @@ pub(super) struct Stats {
     pub(super) site_reruns: u64,
     pub(super) lcall_reruns: u64,
     pub(super) aux_analyses: u64,
-    /// add_to 调用次数 / 有增量的次数 / 并入的元素数
-    pub(super) adds: u64,
-    pub(super) adds_grew: u64,
-    pub(super) added_elems: u64,
     /// 各阶段结束时的峰值 RSS（MB）
     rss_marks: Vec<(&'static str, u64)>,
 }
@@ -122,9 +118,6 @@ impl Default for Stats {
             site_reruns: 0,
             lcall_reruns: 0,
             aux_analyses: 0,
-            adds: 0,
-            adds_grew: 0,
-            added_elems: 0,
             rss_marks: Vec::new(),
         }
     }
@@ -251,12 +244,12 @@ impl<'a> Engine<'a> {
             "reprocess_same_analysis": s.reprocess,
             "site_reruns": s.site_reruns,
             "lcall_reruns": s.lcall_reruns,
-            "flow_edges": self.flow_seen.len(),
-            "adds": [s.adds, s.adds_grew, s.added_elems],
+            "flow_edges": self.graph.seen.len(),
+            "adds": self.graph.adds,
             "edges_by_kind": self.edge_kinds(),
             "top_out_degree": self.top_degree(top, false),
             "top_in_degree": self.top_degree(top, true),
-            "type_nodes": self.sets.len(),
+            "type_nodes": self.graph.len(),
             "top_contexts": by_ctx.iter().take(top).map(|&(m, c)| json!([self.ctx_label(m), c])).collect::<Vec<_>>(),
             "top_members": members.iter().take(top).map(|(k, (c, n))| json!([k, c, n])).collect::<Vec<_>>(),
         })
@@ -300,7 +293,7 @@ impl<'a> Engine<'a> {
     /// 流边按（源类别 → 目标类别）计数
     fn edge_kinds(&self) -> serde_json::Value {
         let mut m: BTreeMap<String, u64> = BTreeMap::new();
-        for (src, es) in &self.flows {
+        for (src, es) in &self.graph.flow_list() {
             for (dst, _) in es {
                 *m.entry(format!("{}->{}", node_kind(src), node_kind(dst))).or_default() += 1;
             }
@@ -325,7 +318,7 @@ impl<'a> Engine<'a> {
     /// 出度 / 入度最大的节点
     fn top_degree(&self, top: usize, incoming: bool) -> serde_json::Value {
         let mut deg: HashMap<Node, u64> = HashMap::default();
-        for (src, es) in &self.flows {
+        for (src, es) in &self.graph.flow_list() {
             if incoming {
                 for (dst, _) in es {
                     *deg.entry(*dst).or_default() += 1;

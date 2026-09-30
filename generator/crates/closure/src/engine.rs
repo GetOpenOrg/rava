@@ -51,7 +51,9 @@ mod new;
 mod methods;
 mod worklist;
 mod stats;
+mod graph;
 
+use graph::FlowGraph;
 use stats::{Phase, Why};
 pub use stats::peak_rss_mb;
 
@@ -359,6 +361,8 @@ pub struct Engine<'a> {
     names: Vec<Rc<str>>,
     ids: HashMap<Rc<str>, u32>,
     sub_cache: HashMap<(u32, u32), bool>,
+    /// open(o) 按过滤类型 t 收窄的结果缓存（`u32::MAX` = 空）
+    narrow_cache: HashMap<(u32, u32), u32>,
     /// 按过滤类型 f 的子类型判定行（下标为类型 id；0 未判定、1 否、2 是）：类型集收窄逐元素只做一次数组索引
     sub_rows: Vec<Vec<u8>>,
 
@@ -369,7 +373,8 @@ pub struct Engine<'a> {
     /// 成员 → 首个方法节点（输出按成员去重）
     mbase: HashMap<MemberRef, usize>,
     fields: IndexMap<MemberRef, ()>,
-    sets: HashMap<Node, TypeSet>,
+    /// 类型流图：节点类型集 / 流边 / 待推增量（节点驻留为序号）
+    graph: FlowGraph,
 
     /// G：全局已实例化（类型 id）
     g: BTreeSet<u32>,
@@ -401,8 +406,6 @@ pub struct Engine<'a> {
     forwarders: HashMap<MemberRef, u64>,
     pub inited: IndexMap<String, Via>,
 
-    flows: HashMap<Node, Vec<(Node, u32)>>,
-    flow_seen: HashSet<(Node, Node, u32)>,
     /// 调用点分派结果：(方法, 偏移) → 目标方法
     pub dispatch: BTreeMap<(usize, u32), BTreeSet<usize>>,
     /// 有接收者到达过的虚调用点（含选不出目标的）：接收者恒为 null 的判定（folds `null_recv`）
@@ -467,8 +470,8 @@ pub struct Engine<'a> {
     poly_writes: Vec<Node>,
     /// 按名打开（反射 / VarHandle / Unsafe 按名写入）的静态引用字段
     open_statics: Vec<(usize, u32)>,
-    fwork: VecDeque<Node>,
-    in_fwork: HashSet<Node>,
+    /// 待沿流边推送增量的节点序号
+    fwork: VecDeque<u32>,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理
     open_methods: BTreeMap<(u32, u32), BTreeSet<usize>>,
     /// 按 open 在 G 上展开过接收者的字节码站点，索引同上（只重跑这些站点）
@@ -476,8 +479,6 @@ pub struct Engine<'a> {
     pending_catch: BTreeMap<usize, Vec<String>>,
     /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
     lambda_stack: HashSet<LambdaCall>,
-    /// 待沿流边推送的新增类型（差分传播）
-    fdelta: HashMap<Node, TypeSet>,
     /// 下一次 `add_to` 来自流边推送（诊断：区分 open 的直接注入点）
     via_flow: bool,
     /// open 的直接注入点：节点 → 注入的 open 类型（诊断 `@openorig`）
