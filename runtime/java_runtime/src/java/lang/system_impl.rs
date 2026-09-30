@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use super::*;
-use crate::java::io::{BufferedOutputStream, FileDescriptor, FileOutputStream, PrintStream};
+use crate::java::io::{BufferedInputStream, BufferedOutputStream, FileDescriptor, FileInputStream, FileOutputStream, InputStream, PrintStream};
 use crate::sun::nio::cs::UTF_8;
 
 impl System {
@@ -191,10 +191,33 @@ impl System {
         Ok(())
     }
 
-    /// native `setIn0(InputStream)`：System.setIn 的写入步（改写 static final 字段 in）。
+    /// System.in：HotSpot 在 initPhase1 经 native setIn0 写入的静态字段（`<clinit>` 只写 null），
+    /// 故与 out / err 同样由手写层提供。对象图与 JDK initPhase1 一致：
+    /// `BufferedInputStream(FileInputStream(FileDescriptor.in))`，两个流类都是字节码翻译版本；
+    /// 本函数只负责「native 写入静态字段」这一步（首次读取时建立，setIn0 改写）。
+    #[jvm_native(upcalls = "
+        java/io/FileDescriptor.in:Ljava/io/FileDescriptor;
+        java/io/FileInputStream.<init>:(Ljava/io/FileDescriptor;)V
+        java/io/BufferedInputStream.<init>:(Ljava/io/InputStream;)V
+    ")]
+    pub fn in_() -> Result<InputStream> {
+        if let Some(s) = STDIN.with(|s| s.borrow().as_ref().map(Clone::clone)) {
+            return Ok(s);
+        }
+        let fis = FileInputStream::new_filedescriptor(FileDescriptor::in_()?)?;
+        let bis: InputStream = BufferedInputStream::new_inputstream(fis.into())?.into();
+        Ok(STDIN.with(|s| {
+            let mut b = s.borrow_mut();
+            // 并发首次读取：先写入者胜出，保持单一流身份
+            Clone::clone(b.get_or_insert(bis))
+        }))
+    }
+
+    /// native `setIn0(InputStream)`：System.setIn 的写入步（字段 final，JDK 经 native 改写）。
     #[jvm_native]
-    pub fn setIn0(input: crate::java::io::InputStream) -> Result<()> {
-        System::set_in_(input)
+    pub fn setIn0(input: InputStream) -> Result<()> {
+        STDIN.with(|slot| *slot.borrow_mut() = Some(input));
+        Ok(())
     }
 
     /// native `mapLibraryName(String)`：平台本地库文件名（Linux `lib<name>.so`，
@@ -286,6 +309,8 @@ crate::__process_static! {
     /// System.out / System.err 的当前流：首次读取时建标准流（fd 1 / 2），setOut0 / setErr0 改写。
     static STDOUT: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
     static STDERR: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
+    /// System.in 的当前流：首次读取时建标准输入流（fd 0），setIn0 改写。
+    static STDIN: crate::sync_model::__RefSlot<Option<InputStream>> = const { crate::sync_model::__RefSlot::new(None) };
 }
 
 fn std_stream(
