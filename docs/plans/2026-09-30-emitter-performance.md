@@ -286,7 +286,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 | N3 | 冷写出 DeepCopy ≤ 2 s | ✅ N1 落地后达成（1.08 s）。剩余串行段见 §5.1 N6 |
 | N4 | 剩余 mono 热点（步 1–3 后） | `drop`（逐 T 的 Weak / Arc 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
 | N5 | 按类并行发射（N1）的实施时机 | 协调决定：等 closure-perf2 合入主线后，本线先合主线，再把 `resolve` 的 `Rc` 改为 `Arc`，改完闭包 4 例集合必须一致 |
-| N6 | 并行后剩余串行段 | DeepCopy 冷写出 1.08 s 中：输入重建约 100 ms、跨类导入裁决约 120 ms、phase2 约 240 ms 仍串行。跨类导入是「先引入者得短名」语义，必须按发射序；终态可改为并行收集各类候选短名、再按序一次裁决（纯计算约数十 ms）。phase2 按 crate 分片可并行。输入重建并入 N2 |
+| N6 | 并行后剩余串行段 | 跨类导入、phase2 已做，见 §5.2；输入重建见 §5.2 分项。原记录：DeepCopy 冷写出 1.08 s 中：输入重建约 100 ms、跨类导入裁决约 120 ms、phase2 约 240 ms 仍串行。跨类导入是「先引入者得短名」语义，必须按发射序；终态可改为并行收集各类候选短名、再按序一次裁决（纯计算约数十 ms）。phase2 按 crate 分片可并行。输入重建并入 N2 |
 
 
 ### 5.1 N1 按类并行发射（emitter-perf2，提交 2a800b4b）
@@ -321,6 +321,57 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 | Digester | 峰值 RSS | 287 MB | 364 MB | — |
 
 类阶段三项依次为 prep / imports / text。RSS 增加约 80 MB，来自各工作线程并存的类体缓冲与线程栈，仍低于 500 MB 目标。总指令数增加约 2%，为锁与合并开销。
+
+### 5.2 N6 剩余串行段并行化（emitter-perf2）
+
+**跨类导入：并行收集候选、串行只裁决**
+- `seen_simples` 是「先引入者得短名」，值一经写入不再改变。所以每类的候选（键 `包::简单名`、短名、use 行）只依赖本类，可在 `class_prep` 里并行算出，类内按键首现去重。
+- 串行段 `CrossPlan::resolve` 只做查表：短名已被别的键占用就跳过，否则登记并输出 use 行；之后追加与顺序无关的 `__VTable` / `__base` / 同包尾部。候选键与尾部键（`__VTable`、`crate::…`）不相交，所以拆分前后输出相同。
+
+**phase2**
+- `resolve_inherited_members`：按接收者分组并行计算成员声明与 use 行，按原序并入；最后逐类回填也并行。计算只读 `ems`，回填在最后，与原串行等价。
+- `dispatch::synthesize`：三轮（用户类字段闭包、JDK 字段闭包、方法派发目标）都改为逐类并行。每类的闭包只由本类文本推出，账本行按原序插入。
+- `resolve_interface_impls`：原串行按发射序逐类回写。类之间唯一的读写交叠是：接口处理时会在自己的文件头插入 use 行，排在它之后的具体类经 `imports_for` 读取该接口文件头。改为两轮并行，结果与串行逐字节相同：
+  1. 接口：非具体类不生成 impl 声明，也不读别的类文件头，彼此独立；
+  2. 其余类：保留第 1 轮回写前的接口记录副本；接口排在本类之前就取回写后的记录，排在之后就取回写前的记录（`IfaceView`）；继承成员需求按发射序并入账本。
+- `use_index` 缓存按文件头文本区分版本，每个 owner 最多存 4 版，避免上述两版交替使用时反复重建。
+- `resolve_interface_inherited_members` 仍串行：同一轮里超接口的文件头会被先处理者修改；实测它和 sam 合计 < 1 ms，不值得改。
+- 新增 `--perf` 分项：`phase2.impls` / `phase2.inherited` / `phase2.sam` / `phase2.dispatch`；输入重建分项：`input.closure` / `input.registry` / `input.normalize` / `input.reflect` / `input.handwritten`。
+
+**验证**
+- 27 例生成树与基线 f6d80103 对照 0 差异，raw-audit 一致。
+- DeepCopy / Digester 冷写出目录与基线逐文件一致；唯一不同是 `Cargo.toml` 的 `version = 0.0.<crc32(scratch 绝对路径)>`，因为输出目录不同。
+
+**实测**（`emit_bench.sh`，共享机负载 4–6；ms 为 `--perf` 分阶段）
+
+| 用例 | 指标 | 基线 f6d80103 | N6 |
+|---|---|---:|---:|
+| DeepCopy | 冷写出墙钟 | 1.13 s | **1.02 s** |
+| DeepCopy | 热写出墙钟 | 1.00 s | **0.83 s** |
+| DeepCopy | 跨类导入裁决（classes.imports） | 122 ms | **18 ms** |
+| DeepCopy | phase2 | 259 ms | **87 ms**（26 + 49 + 0 + 12） |
+| DeepCopy | 指令数（冷） | 27.0 G | 27.1 G |
+| DeepCopy | 峰值 RSS（冷） | 396 MB | 413 MB |
+| Digester | 冷写出墙钟 | 0.99 s | **0.88 s** |
+| Digester | 热写出墙钟 | 0.93 s | **0.70 s** |
+| Digester | 跨类导入裁决 | 101 ms | **16 ms** |
+| Digester | phase2 | 222 ms | **88 ms** |
+
+- 候选收集挪进并行的 prep 段，prep 从 49 ms 升到 76 ms。
+- 指令数基本不变，说明省下的是串行墙钟而不是计算量。
+
+**输入重建分项**（DeepCopy 冷写出，约 98 ms）
+
+| 分项 | 耗时 |
+|---|---:|
+| `input.closure` | 60 ms |
+| `input.normalize` | 20 ms |
+| `input.reflect` | 9 ms |
+| `input.handwritten` | 7 ms |
+| `input.registry` | 0.7 ms |
+
+- `input.closure` 是闭包类的首次装载（class 文件解析），走 `ClassPath::get`，目前串行。
+- 手写层扫描原先对每个 vtable 标识遍历整个 registry，复杂度 O(标识 × 类)。现改为一次性建「标识 → 类」索引，候选序不变。
 
 ## 六、需要主会话 e2e 抽查的用例
 

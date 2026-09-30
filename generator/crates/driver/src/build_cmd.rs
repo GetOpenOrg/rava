@@ -174,6 +174,9 @@ fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<
     let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: &[], runtime_src: &runtime_src }
         .build()
         .map_err(|e| format!("构建发射层输入：{e}"))?;
+    for &(name, d) in &inp.timings {
+        perf.mark_sub(name, d);
+    }
     perf.mark("input");
     let names = ShortNames::build(&inp.registry);
     let opts = EmitOptions { strict: j.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone(), jobs: j.emit_jobs };

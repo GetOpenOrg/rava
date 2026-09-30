@@ -108,6 +108,8 @@ pub struct EmitInput {
     pub warnings: Vec<String>,
     /// 规范化后与原字节码不同的方法体
     normalized: BTreeMap<MethodKey, NormCode>,
+    /// 构建各步耗时（观测用，`--perf` 报告；不影响输出）
+    pub timings: Vec<(&'static str, std::time::Duration)>,
 }
 
 impl EmitInput {
@@ -333,12 +335,22 @@ impl<'a> BuildInput<'a> {
     /// 构建发射层输入
     pub fn build(&self) -> Result<EmitInput, InputError> {
         let f = self.facts;
+        let mut timings = Vec::new();
+        let mut since = std::time::Instant::now();
+        let mut lap = |name: &'static str| {
+            let now = std::time::Instant::now();
+            timings.push((name, now - since));
+            since = now;
+        };
         let mut warnings = Vec::new();
         let (closure, field_stubs) = closure_classes(self, &mut warnings);
         let visited = visited_of(self);
+        lap("input.closure");
         let (lib_crates, jdk_classes) = self.lib_split(&closure)?;
         let registry = self.registry(&lib_crates, &jdk_classes)?;
+        lap("input.registry");
         let normalized = self.normalize(&registry)?;
+        lap("input.normalize");
         let reflect = self.reflect(&closure, &visited, &normalized);
         let module_resources = self
             .manifest
@@ -348,7 +360,9 @@ impl<'a> BuildInput<'a> {
             .collect();
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
+        lap("input.reflect");
         let handwritten = HandwrittenMap::scan(self.runtime_src, &registry);
+        lap("input.handwritten");
         Ok(EmitInput {
             user_classes: self.user_classes.to_vec(),
             lib_crates,
@@ -365,6 +379,7 @@ impl<'a> BuildInput<'a> {
             warnings,
             normalized,
             registry,
+            timings,
         })
     }
 }

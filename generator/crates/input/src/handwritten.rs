@@ -94,6 +94,17 @@ fn snake_index(reg: &Registry) -> BTreeMap<String, String> {
 }
 
 /// `binary_name\s*=\s*"([^"]+)"`（文件头 2000 字符内）
+/// vtable 标识（简单名，`$` → `_`）→ 有包名的 registry 类（registry 序）
+fn vtable_ident_index(reg: &Registry) -> BTreeMap<String, Vec<&str>> {
+    let mut out: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for bn in reg.iter().map(|ci| ci.name()) {
+        if let Some((_, s)) = bn.rsplit_once('/') {
+            out.entry(s.replace('$', "_")).or_default().push(bn);
+        }
+    }
+    out
+}
+
 fn head_binary_name(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let head: String = text.chars().take(HEAD_CHARS).collect();
@@ -247,6 +258,7 @@ impl HandwrittenMap {
     pub fn scan(src_dir: &Path, reg: &Registry) -> HandwrittenMap {
         let mut map = HandwrittenMap::default();
         let snake = snake_index(reg);
+        let idents = vtable_ident_index(reg);
         let mut files = Vec::new();
         walk(src_dir, &mut files);
         for path in files {
@@ -267,12 +279,12 @@ impl HandwrittenMap {
             if content.contains(GENERATED_MARK) {
                 continue;
             }
-            map.absorb(&content, &class_binary, &pkg.join("/"), reg);
+            map.absorb(&content, &class_binary, &pkg.join("/"), reg, &idents);
         }
         map
     }
 
-    fn absorb(&mut self, content: &str, class_binary: &str, file_pkg: &str, reg: &Registry) {
+    fn absorb(&mut self, content: &str, class_binary: &str, file_pkg: &str, reg: &Registry, idents: &BTreeMap<String, Vec<&str>>) {
         let names = pub_fns(content);
         if !names.is_empty() {
             self.classes.entry(class_binary.to_string()).or_default().methods.extend(names);
@@ -281,11 +293,7 @@ impl HandwrittenMap {
             self.classes.entry(class_binary.to_string()).or_default().method_cores.insert(name, core);
         }
         for (ident, methods) in vtable_sigs(content) {
-            let cands: Vec<&str> = reg
-                .iter()
-                .map(|ci| ci.name())
-                .filter(|bn| bn.rsplit_once('/').is_some_and(|(_, s)| s.replace('$', "_") == ident))
-                .collect();
+            let cands: &[&str] = idents.get(&ident).map_or(&[], Vec::as_slice);
             let same_pkg = cands.iter().find(|c| c.rsplit_once('/').is_some_and(|(p, _)| p == file_pkg));
             let target = same_pkg.or(cands.first()).copied().unwrap_or(class_binary);
             if reg.get(target).is_some_and(|ci| !ci.is_interface()) {
