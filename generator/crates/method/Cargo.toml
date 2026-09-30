@@ -1,0 +1,18 @@
+[package]
+name = "method"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+classfile.workspace = true
+ty.workspace = true
+ir.workspace = true
+sim.workspace = true
+cfg.workspace = true
+instr.workspace = true
+input.workspace = true
+regex = "1"
+
+[dev-dependencies]
+resolve.workspace = true
+serde_json.workspace = true
