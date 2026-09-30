@@ -194,6 +194,11 @@ def _is_default_value(value) -> bool:
     return value is None or (isinstance(value, RawExpr) and value.code == 'Default::default()')
 
 
+def _is_null_value(value) -> bool:
+    """空引用字面量（aconst_null）：不携带类型信息，不参与汇合类型计算。"""
+    return render_expr(value) == 'Object::default()' if value is not None else False
+
+
 def _merged_slot_type(entries: list, name: str, start: int, end: int, registry=None):
     """(start, end) 内同名声明 / 降级赋值的引用类型不一致时，返回汇合类型；否则 None。
 
@@ -201,8 +206,12 @@ def _merged_slot_type(entries: list, name: str, start: int, end: int, registry=N
     （JVM 局部变量的静态类型是其声明类型）：汇合类型取继承链上最近的公共类祖先
     （`TreeNode<K,V>` 与 `Node<K,V>` → `Node<K,V>`，各存入侧经 From 上转，保持
     对象标识与运行时类）；无公共类祖先（接口 / 不同实例化 / 互不相干类）时回退
-    根类，存入侧按装箱上转（try-finally 暂存槽等只以 Object 形态流动的合成槽）。"""
+    根类，存入侧按装箱上转（try-finally 暂存槽等只以 Object 形态流动的合成槽）。
+    null 存入（aconst_null，栈类型为根类）不携带类型：不参与汇合，只有 null 与唯一
+    引用类型时汇合为该类型（try-with-resources 的返回值暂存槽：结果 / null 两路，
+    DomainName$Rules.createRules），null 侧由 _widen_into_merged 改写为默认值。"""
     seen: list[str] = []
+    had_null = False
     for k in range(start + 1, end):
         item = entries[k][1]
         if isinstance(item, LetStmt) and item.name == name:
@@ -214,11 +223,16 @@ def _merged_slot_type(entries: list, name: str, start: int, end: int, registry=N
             continue
         if ty is None:
             continue
+        if _is_null_value(item.value):
+            had_null = True
+            continue
         rendered = render_type(ty)
         if rendered in _PRIMITIVE_TYPES or rendered == '()':
             return None
         if rendered not in seen:
             seen.append(rendered)
+    if len(seen) == 1 and had_null and seen[0] != _ROOT_TYPE:
+        return RsNamed(seen[0])
     if len(seen) < 2:
         return None
     from ..instr.hierarchy import _common_ref_type_widening
@@ -273,7 +287,10 @@ def _widen_into_merged(entries: list, name: str, start: int, end: int,
                 item.value_ty = merged
             continue
         rendered = render_type(ty)
-        if rendered != render_type(merged):
+        if _is_null_value(item.value) and not _is_root:
+            # null 存入具体汇合类型：默认值即该类型的空引用
+            item.value = RawExpr('Default::default()')
+        elif rendered != render_type(merged):
             if _is_root:
                 item.value = RawExpr(box_object(render_expr(item.value), rendered))
             else:

@@ -177,6 +177,19 @@ def collect_referenced(ci, registry, generated_classes) -> set[str]:
                 _dot = _rest.find('.')
                 if _dot > 0:
                     _referenced.add(_rest[:_dot])
+                    # 常量池类是子类、static 成员声明在祖先（`sun/net/www/URLConnection.setFileNameMap`
+                    # 实为 java/net/URLConnection 的方法）：调用点按声明类发射，声明类须在作用域内
+                    if _instr.opcode in ('invokestatic', 'getstatic', 'putstatic') and registry:
+                        from ..instr.member_owner import (
+                            _resolve_static_method_owner as _rsmo_ref,
+                            _resolve_static_field_owner as _rsfo_ref)
+                        _m_colon = _rest.find(':')
+                        _m_name = _rest[_dot + 1:_m_colon] if _m_colon > _dot else _rest[_dot + 1:]
+                        _decl = (_rsmo_ref(_rest[:_dot], _m_name, _rest[_m_colon + 1:], registry)
+                                 if _instr.opcode == 'invokestatic'
+                                 else _rsfo_ref(_rest[:_dot], _m_name, registry))
+                        if _decl:
+                            _referenced.add(_decl)
                 # 被调方法的参数/返回类型、被访问字段的类型：
                 # 方法体中以 `let _tN: RetType = ...` / downcast::<ParamType>() 形式出现
                 _colon = _rest.find(':')

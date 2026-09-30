@@ -43,7 +43,9 @@ def _safe_name(name: str) -> str:
     # 单字母大写前缀：直接小写
     if i > 1 and rest:
         return run[:-1].lower() + run[-1] + rest
-    return run.lower() + rest
+    out = run.lower() + rest
+    # 小写化撞上接收者名（ICU Trie2 的局部变量 `This`）：`this` 在生成代码中专指接收者
+    return out + '_' if out == 'this' else out
 
 # ── 类型常量（供外部导入使用）────────────────────────────────────────────────
 I32  = _I32
@@ -228,8 +230,9 @@ class StackSim:
         # 接口不在宏的 all_superclasses 链上（无 From<Child> for Iface），需跳过
         self._is_interface = is_interface or (lambda _s: False)
         self._param_slots: set[int]                  = set()  # 方法参数占用的 slot（类型由签名决定）
-        # 合成槽（无 LVT 名的 local_N）按渲染类型分名：slot → [类型渲染, ...]（首个类型用 local_N）
-        self._synth_slot_types: dict[int, list[str]] = {}
+        # 合成槽（无 LVT 名的 local_N）按类型类别分名：slot → [类别, ...]（首个类别用 local_N；
+        # 基本类型类别为其渲染串，引用类别为互相关联的引用类型渲染列表，见 _synth_slot_kind）
+        self._synth_slot_types: dict[int, list] = {}
         self.current_offset: int                     = 0    # 当前正在处理的字节码偏移
         self.next_offset: int                        = 0    # 下一条指令偏移（store 后变量作用域起点）
         self._current_depth: int                     = 0
@@ -361,22 +364,16 @@ class StackSim:
         return None
 
     def _synth_slot_name(self, slot: int, ty: 'RsType | None') -> str:
-        """合成槽名：同一槽位上的合成临时变量按类型类别分名——javac 对 record 模式 / switch
-        模式的合成临时变量在不同分支复用同一槽位存放不同类型（`int` 分量与 `ColoredPoint`
-        记录本身，RecordPatternsTest 实证），同名会在分支提升时合并成一个声明（E0308）。
+        """合成槽名：同一槽位上的合成临时变量按类型类别分名——javac 在不同用途间复用同一
+        合成槽存放不同类型（record / switch 模式的 `int` 分量与记录本身，RecordPatternsTest；
+        for-each 迭代器与 try-finally 的返回值暂存，NativeLibraries.loadLibrary 的
+        Iterator 与 NativeLibrary），同名会在分支提升时合并成一个根类声明（E0308 / E0599）。
         首个类别沿用 `local_N`，其后每个新类别 `local_N_k`。ty=None → 首名。"""
         base = f"local_{slot}"
         if ty is None:
             return base
-        # 按类型**类别**分名：引用类型同属一类（引用间的异型由提升阶段的公共祖先合并承载，
-        # 且分名会随块模拟顺序漂移——异常处理块常先于主路径模拟）；基本类型各自一类。
-        # record 模式的冲突恰是基本 vs 引用（int 分量 vs 记录本身）
-        rendered = render_type(ty)
-        key = rendered if rendered in _SCALAR_TYPE_NAMES else 'ref'
-        seen = self._synth_slot_types.setdefault(slot, [])
-        if key not in seen:
-            seen.append(key)
-        k = seen.index(key)
+        k = _synth_slot_kind(self._synth_slot_types.setdefault(slot, []),
+                             render_type(ty), self._is_subtype)
         return base if k == 0 else f"{base}_{k}"
 
     def _undeclared_slot_name(self, slot: int, ty: 'RsType | None' = None) -> str:
@@ -525,6 +522,9 @@ class StackSim:
                     if _is_null:
                         expr = RawExpr('Default::default()')
                     else:
+                        if ty.name in self.class_type_params:
+                            # 类型变量值（`L extends System.Logger`）无到载体的直接 From：经 Object 边界
+                            _src = f"Into::<Object>::into({_src})"
                         expr = RawExpr(
                             f"<{_carrier_decl} as ::std::convert::From<_>>::from({_src})")
                     force_let_ty = True
@@ -901,3 +901,30 @@ class StackSim:
         name = self.fresh(prefix)
         self.stmts.append(LetStmt(name, ty, mutable=False, value=value_expr))
         return Var(name)
+
+
+_ROOT_RUST_TYPE = 'Object'
+
+
+def _synth_slot_kind(kinds: list, rendered: str, is_subtype) -> int:
+    """合成槽类别下标（登记新类别）。基本类型各自一类；引用类型与已有引用类别中任一
+    成员同擦除基名或存在子类型关系（任一方向）即同类——同一 JVM 变量的实例化漂移、
+    兄弟分支存入子类值，由提升阶段的公共祖先合并承载；互不相干的引用类型（迭代器
+    与返回值暂存）是 javac 复用槽位的不同变量，另起一类。根类（含 null 字面量）不带
+    区分信息，并入首个引用类别。"""
+    if rendered in _SCALAR_TYPE_NAMES:
+        if rendered not in kinds:
+            kinds.append(rendered)
+        return kinds.index(rendered)
+    base = erased_base(rendered)
+    for k, kind in enumerate(kinds):
+        if not isinstance(kind, list):
+            continue
+        members = [erased_base(m) for m in kind if m != _ROOT_RUST_TYPE]
+        if (rendered == _ROOT_RUST_TYPE or not members
+                or any(m == base or is_subtype(base, m) or is_subtype(m, base) for m in members)):
+            if rendered not in kind:
+                kind.append(rendered)
+            return k
+    kinds.append([rendered])
+    return len(kinds) - 1

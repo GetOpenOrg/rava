@@ -56,7 +56,11 @@ impl StackSim<'_> {
         if let Some(carrier) = carrier.filter(|k| type_text(k, env) == type_text(decl_ty, env)) {
             // 局部声明类型是接口载体：值 → 载体经 Object 边界的非受检包装（Clone 保活）
             if type_text(&c.ty, env) != type_text(&carrier, env) {
-                let src = clone_moved_var(c.expr.clone(), &c.ty)?;
+                let mut src = clone_moved_var(c.expr.clone(), &c.ty)?;
+                if self.is_class_tparam(&c.ty) {
+                    // 类型变量值（`L extends System.Logger`）无到载体的直接 From：经 Object 边界
+                    src = into_call(object_type()?, src)?;
+                }
                 c.expr = if null { default_value()? } else { qualified_from(to_ir_type(&carrier, env)?, Type::Infer, src)? };
                 c.force_let_ty = true;
             }

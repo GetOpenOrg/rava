@@ -300,6 +300,13 @@ pub fn Object__finalize_base<T: ObjectVTable + ?Sized>(_this: &T) -> crate::erro
     Ok(())
 }
 
+/// `invokespecial java/lang/Object.getClass` 的落点（javac 对 `super.getClass()` 发射）：
+/// Object.getClass 是 final ACC_NATIVE，非虚入口与虚入口同义——取运行时类。
+#[allow(non_snake_case)]
+pub fn Object__getClass_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<crate::java::lang::Class> {
+    this.getClass()
+}
+
 /// `super.equals(o)`（invokespecial java/lang/Object.equals）的落点：引用相等（`this == o`）。
 /// `this` 是实例体引用，`other` 的 Rc 数据指针指向同一实例体时为同一对象。
 #[allow(non_snake_case)]

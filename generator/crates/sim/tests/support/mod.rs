@@ -5,7 +5,7 @@ use crate::ir_golden::convert::Conv;
 use crate::ir_golden::parse::parse_expr;
 use ir::{Expr, Raw, Renderer, ShortNames, Stmt};
 use serde_json::Value;
-use sim::{erased_base, exprs::is_trivial, type_text, Local, SimConfig, SimEnv, SimError, SimResult, SimState, SlotDecl, StackEntry};
+use sim::{erased_base, exprs::is_trivial, type_text, Local, SimConfig, SimEnv, SimError, SimResult, SimState, SlotDecl, StackEntry, SynthKind};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use ty::{Prim, RsType};
@@ -264,7 +264,17 @@ pub fn state(env: &ReplayEnv, conv: &mut Conv, cfg: &Value, pre: &Value) -> R<Si
     })?;
     st.counter = u(&pre["ctr"])? as u32;
     st.synth_slot_kinds = slot_map(&pre["synth"], |v| {
-        Ok(v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default())
+        let mut kinds = Vec::new();
+        for x in v.as_array().into_iter().flatten() {
+            match (x.as_str(), x.as_array()) {
+                (Some(s), _) => kinds.push(SynthKind::Scalar(s.to_string())),
+                (_, Some(members)) => kinds.push(SynthKind::Ref(
+                    members.iter().filter_map(Value::as_str).map(|m| env.ty(m)).collect::<R<Vec<_>>>()?,
+                )),
+                _ => {}
+            }
+        }
+        Ok(kinds)
     })?;
     st.current_offset = u(&pre["cur"])? as u32;
     st.next_offset = u(&pre["next"])? as u32;
@@ -343,7 +353,15 @@ pub fn snapshot_rs(st: &SimState, env: &ReplayEnv) -> Vec<String> {
     }
     let num = |m: &BTreeMap<u16, u32>| format!("{:?}", m.iter().map(|(k, v)| (*k, v.to_string())).collect::<Vec<_>>());
     out.push(format!("ctr {}", st.counter));
-    let synth: Vec<(u16, String)> = st.synth_slot_kinds.iter().map(|(k, v)| (*k, format!("[{}]", v.join(",")))).collect();
+    let kind_text = |k: &SynthKind| match k {
+        SynthKind::Scalar(s) => s.clone(),
+        SynthKind::Ref(ms) => format!("[{}]", ms.iter().map(|m| type_text(m, env)).collect::<Vec<_>>().join(",")),
+    };
+    let synth: Vec<(u16, String)> = st
+        .synth_slot_kinds
+        .iter()
+        .map(|(k, v)| (*k, format!("[{}]", v.iter().map(kind_text).collect::<Vec<_>>().join(","))))
+        .collect();
     out.push(format!("synth {}", format!("{synth:?}").replace('"', "")));
     out.push(format!("depth {} decl_depth {} bind_pos {}", st.depth, num(&st.slot_decl_depth), num(&st.slot_bind_pos)));
     out.push(format!("underflow {}", st.underflow));

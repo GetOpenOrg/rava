@@ -17,7 +17,13 @@ use crate::types::{forms_alignable, from_rust_text, ir_type_of};
 const PRIMITIVE_RUST_TYPES: [&str; 13] =
     ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "usize", "()"];
 
-/// (start, end) 内同名声明 / 降级赋值的引用类型不一致时的汇合类型；否则 None
+/// 空引用字面量存入（aconst_null）：不携带类型信息，不参与汇合（← `_is_null_value`）
+fn is_null_store(v: Option<&Expr>) -> bool {
+    v.is_some_and(|e| matches!(e, Expr::Lit(ir::Lit::Null)) || matches!(e, Expr::Raw(r) if r.0 == "Object::default()"))
+}
+
+/// (start, end) 内同名声明 / 降级赋值的引用类型不一致时的汇合类型；否则 None。
+/// null 存入不参与；只有 null 与唯一引用类型时汇合为该类型（null 侧改写为默认值）
 pub(super) fn merged_slot_type(
     cx: &VarsCtx,
     entries: &[Entry],
@@ -26,8 +32,13 @@ pub(super) fn merged_slot_type(
     end: usize,
 ) -> MethodResult<Option<Type>> {
     let mut seen: Vec<String> = Vec::new();
+    let mut had_null = false;
     for e in &entries[start + 1..end] {
         let Some(Some(t)) = store_type(e, name) else { continue };
+        if is_null_store(store_value(e)) {
+            had_null = true;
+            continue;
+        }
         let r = render_type(&t);
         if PRIMITIVE_RUST_TYPES.contains(&r.as_str()) {
             return Ok(None);
@@ -35,6 +46,9 @@ pub(super) fn merged_slot_type(
         if !seen.contains(&r) {
             seen.push(r);
         }
+    }
+    if seen.len() == 1 && had_null && seen[0] != OBJECT {
+        return ir_type_of(&seen[0]).map(Some);
     }
     if seen.len() < 2 {
         return Ok(None);
@@ -81,7 +95,10 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
     let is_root = merged_s == OBJECT;
     for e in &mut entries[start + 1..end] {
         let Some(t) = store_type(e, name) else { continue };
+        // null 存入具体汇合类型：默认值即该类型的空引用
+        let null_to_default = !is_root && is_null_store(store_value(e));
         let convert = match t {
+            _ if null_to_default => None,
             Some(t) if !is_default_value(store_value(e)) => {
                 let rendered = render_type(&t);
                 (rendered != merged_s).then_some(rendered)
@@ -91,6 +108,9 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
         let Item::Stmt(s) = &mut e.item else { continue };
         match &mut **s {
             Stmt::Let(l) => {
+                if null_to_default {
+                    l.value = Some(default_value());
+                }
                 if let (Some(rendered), Some(v)) = (convert, l.value.take()) {
                     l.value = Some(widen_value(cx, v, &rendered, is_root));
                 }
@@ -100,6 +120,9 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
                 l.origin.value_ty = Some(merged.clone());
             }
             Stmt::Assign(a) => {
+                if null_to_default {
+                    a.value = default_value();
+                }
                 if let Some(rendered) = convert {
                     let v = std::mem::replace(&mut a.value, Expr::Raw(Raw(String::new())));
                     a.value = widen_value(cx, v, &rendered, is_root);
@@ -109,6 +132,10 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
             _ => {}
         }
     }
+}
+
+fn default_value() -> Expr {
+    Expr::Raw(Raw("Default::default()".to_string()))
 }
 
 /// 存入值上转到汇合类型：根类装箱，公共祖先 `.into()`（目标由汇合后的声明类型给出）
