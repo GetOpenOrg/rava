@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// 缺省流传播批量（`Engine::flow_batch`）
+pub(super) const FLOW_BATCH: usize = 64;
+
 impl<'a> Engine<'a> {
     // ── 主循环 ──────────────────────────────────────────────────────────────
 
@@ -68,10 +71,18 @@ impl<'a> Engine<'a> {
         let obj = self.id(OBJECT);
         self.flow(Node::Array, Node::Esc, obj);
         self.ctx.stats.borrow_mut().mark_rss("setup");
+        let mut batch = 0usize;
         loop {
-            self.stat_enter(Phase::Flows);
-            self.drain_flows();
-            self.stat_leave();
+            // 流传播按批：连续处理若干方法 / 站点后再排空，各处的零碎增量在源头汇齐后一次推下去。
+            // 不动点单调，先处理的单元读到的是较小的集合，增长后经读者登记重跑——终态集合与逐个排空相同
+            let idle = self.mwork.is_empty() && self.swork.is_empty() && self.cwork.is_empty();
+            if idle || batch >= self.flow_batch {
+                batch = 0;
+                self.stat_enter(Phase::Flows);
+                self.drain_flows();
+                self.stat_leave();
+            }
+            batch += 1;
             if let Some((k, e, s)) = self.rpending.pop() {
                 self.stat_enter(Phase::Enumerate);
                 self.enumerate(k, e, &s);

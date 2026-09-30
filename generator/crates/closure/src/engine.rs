@@ -490,6 +490,8 @@ pub struct Engine<'a> {
     lookup_top: HashSet<(usize, u32)>,
     /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
     lookup_partial: bool,
+    /// 两次排空流传播之间最多处理的方法 / 站点数（`worklist.rs::run`；环境变量 `RAVA_FLOW_BATCH` 可改，1 = 逐个排空）
+    flow_batch: usize,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理
     open_methods: BTreeMap<(u32, u32), BTreeSet<usize>>,
     /// 按 open 在 G 上展开过接收者的字节码站点，索引同上（只重跑这些站点）

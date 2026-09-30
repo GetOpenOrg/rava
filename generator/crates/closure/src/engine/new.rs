@@ -103,6 +103,7 @@ impl<'a> Engine<'a> {
             xreaders: HashMap::default(),
             lookup_top: HashSet::default(),
             lookup_partial: false,
+            flow_batch: std::env::var("RAVA_FLOW_BATCH").ok().and_then(|v| v.parse().ok()).filter(|&n: &usize| n > 0).unwrap_or(super::worklist::FLOW_BATCH),
             open_methods: BTreeMap::new(),
             open_sites: BTreeMap::new(),
             pending_catch: BTreeMap::new(),
