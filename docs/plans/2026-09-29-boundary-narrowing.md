@@ -902,6 +902,36 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
   `BootLoader.hasClassPath` 为手写，`LazyClassPathLookupIterator` 走空枚举）。因此 `mmiss` 暂作诊断输出、不作门槛；cut 调用方的条目
   是高信号子集，e2e 命中存根时先查它。耗时：methods 模式 HelloWorld + TestCharsetForName 两例（含闭包分析）合计 3.3 s。
 
+**TestStreamEncoderCharsets：跨写入拆开的代理对输出 U+FFFD（归属：Rust 生成器，非闭包精度）**。主干 c7a9d7b4 同样失败（协调方对照）。
+闭包侧排查：`StreamEncoder` 的写入 / 关闭全部为手写（`stream_encoder_impl.rs::encode_units` 按 `haveLeftoverChar` / `leftoverChar` 跨写入
+配对），翻译体 `CharsetEncoder.encode` 的折叠（`dead_pcs [8,9]`、`replacement` null）不在本例执行路径上。决定性证据是 UTF-8 行：手写层对
+孤立代理项输出 `?`，而实测输出 `ef bf bd`（U+FFFD 的正常编码），说明进入 `StreamEncoder` 的码元已经是 U+FFFD——字面量 `"a\uD83D"` 在
+生成器里被替换。根因：`classfile::reader::decode_mutf8` 解码到 Rust `String`，孤立代理项按 `from_utf16_lossy` 变成 U+FFFD
+（`instr/GOLDEN_DIFF.md` 已知差异 1；Python 侧保值发射 UTF-16 码元数组，故 Python 基线通过）。修复：
+- `decode_mutf8` 在含孤立代理项时另携无损码元（`CpEntry::Utf8(text, Option<units>)`），常量池字符串常量产出 `Const::StringUtf16(units)`；
+  文本侧（成员名 / 类名匹配）不变。
+- 生成器：ldc 发射 `Lit::JStringUtf16`（`String::from_utf16_lit`，驻留语义同 `String::from`）；ConstantValue 字段常量同形。
+- 闭包分析：`StringUtf16` 按非空 String 站点值入栈（不进常量格），ldc 事件照常实例化 String。
+- 单测：`classfile reader::mutf8_tests::lone_surrogate_keeps_units`、`instr sim::consts::tests::lone_surrogate_string_keeps_units`、
+  `emit class_writer::fields::tests::names_and_literals`。单例验证 `scripts/main.py` 输出三行 split 与 JVM 一致。
+- 已知局限：字符串拼接（indy 配方经 `format!` 构造 Rust 文本）对孤立代理项仍不保值——配方常量、`char` 实参（`char::from_u32(..).unwrap_or('?')`）、
+  String 实参的 Display 同一口径；注解元素的字符串常量亦按文本。终态需把拼接改为 UTF-16 码元级构造，另列。
+
+**TestNetworkInterface：命中 `UnixNativeDispatcher.openatSupported:()Z` 存根（归属：边界截断 + 手写层缺口，非精度改动；主干同样失败）**。
+`dyn_compare --methods` 的 cut 条目直接给出链：`SHA1PRNG` → `SeedGenerator$1.run`（JCA 放行，翻译体）列举临时目录 →
+`Files.newDirectoryStream` → `UnixFileSystemProvider.newDirectoryStream`（`sun/` 边界类，无手写承载 → `cut`：发射层翻译其体，分析器不展开）
+→ 体内的 `toUnixPath` / `checkRead` / `openatSupported` / `opendir` / `UnixDirectoryStream.<init>` 5 条 mmiss 均标 `caller_cut`；
+其后 `UnixDirectoryStream.iterator` / `hasNext` / `next` / `close` 由翻译体 `SeedGenerator$1.run` 调用，同样不在闭包（返回值来自截断体，类型集为空）。
+- 方案 A（分析器把全部边界截断体按字节码展开，与发射层一致）实测不可行：HelloWorld 605 → 19292 方法、3226 类，DeepCopy 9669 → 22614
+  （截断体 `ClassRepository.make` 等经 `sun/reflect/generics` 展开全族），已撤回。
+- 方案 B（清单放行 `sun/nio/fs/`，按字节码建模该执行线）实测增量小：TestFilesApi 866 → 889 方法、FileIODemo 935 → 957、
+  TestFileAccessSpace 6939 → 7099、TestNetworkInterface 6820 → 6989，HelloWorld / FileIOTest 不变；`openatSupported` / `opendir` /
+  `readdir` / `UnixDirectoryStream` 族入闭包。但放行后 `UnixNativeDispatcher.<clinit>` 转为翻译体，需要的 native 在手写层缺 6 个
+  （`close0` / `closedir` / `dup` / `fdopendir` / `opendir0` / `readdir0`），且现有手写 `init(int[])` 与 JDK 21 的 `init()I` 签名不符——
+  属 POSIX 原生族档 B 的手写层工作，放行须与这批 native 同批落地并跑 `TestFilesApi` / `TestFileAccessSpace` / `FileIODemo` 回归。未提交，待排期。
+- 边界截断体（`cut`）整体仍是分析与发射不一致的来源：各例 cut 数 HelloWorld 3、FileIOTest 4、CollectorsDemo 34、Digester 62、
+  MH 59、DeepCopy 106、TestNetworkInterface 78。终态随 `[boundary]` 前缀清零消解；过渡期 e2e 命中存根先查 `mmiss … cut`。
+
 ## 七、验收
 
 - §一 终态表各项达标。
