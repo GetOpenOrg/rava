@@ -229,6 +229,13 @@ handle_writers = [
     "sun/misc/Unsafe.staticFieldOffset:(Ljava/lang/reflect/Field;)J",
     "sun/misc/Unsafe.staticFieldBase:(Ljava/lang/reflect/Field;)Ljava/lang/Object;",
 ]
+# handle_bridges：在其内调用 handle_writers 不算写入入口。JavaLangInvokeAccess.unreflectField 的实现，
+#   JDK 内唯一调用者是 MethodHandleAccessorFactory.newFieldAccessor：Field.get* / set* 首次取访问器时
+#   一并建 setter 句柄（isReadOnly 取决于运行期修饰符，恒可达），句柄只存于 FieldAccessor、
+#   只经 Field.set* 调用，写入已由上面的 Field.set* 计入
+handle_bridges = [
+    "java/lang/invoke/MethodHandleImpl$1.unreflectField:(Ljava/lang/reflect/Field;Z)Ljava/lang/invoke/MethodHandle;",
+]
 # deserializers：可达即全部非 static、非 transient 字段不折叠
 deserializers = [
     "java/io/ObjectInputStream.readObject:()Ljava/lang/Object;",

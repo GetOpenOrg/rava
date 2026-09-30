@@ -91,6 +91,20 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 调用边到达字段句柄写入口：调用者是句柄桥（取得的句柄只经 Field.set* 的访问器使用，
+    /// 写入由 Field.set* 计入）时不算；每条边都判（首个调用者是桥不代表后续调用者也是）
+    pub(super) fn handle_writer_edge(&mut self, key: &MemberRef, via: &Via) {
+        if !self.man.is_field_handle_writer(&key.to_string()) {
+            return;
+        }
+        if let From::Method(c) = via.from {
+            if self.man.is_field_handle_bridge(&self.methods[c].key.to_string()) {
+                return;
+            }
+        }
+        self.field_writer_live();
+    }
+
     /// 按字段句柄写字段的入口可达：挂起的字段枚举生效
     pub(super) fn field_writer_live(&mut self) {
         if std::mem::replace(&mut self.fwriter_live, true) {

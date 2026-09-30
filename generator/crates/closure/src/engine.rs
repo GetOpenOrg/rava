@@ -752,6 +752,9 @@ impl<'a> Engine<'a> {
 
     /// 方法节点（按声明类 + 名字 + 描述符 + 克隆上下文）；首次登记入队。只有字节码方法按上下文克隆
     fn method_ctx(&mut self, key: MemberRef, ctx: u32, via: Via) -> usize {
+        if !self.fwriter_live {
+            self.handle_writer_edge(&key, &via);
+        }
         let k = (key, ctx);
         if let Some(i) = self.methods.get_index_of(&k) {
             return i;
@@ -784,9 +787,6 @@ impl<'a> Engine<'a> {
             rtype = md.ret.as_ref().and_then(|r| self.ptype(r));
         }
         let ks = key.to_string();
-        if self.man.is_field_handle_writer(&ks) {
-            self.field_writer_live();
-        }
         let ret_model = if self.man.returns_mirror(&ks) {
             RetModel::Mirror
         } else if self.man.returns_receiver(&ks) {

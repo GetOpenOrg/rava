@@ -77,6 +77,7 @@ pub struct Manifest {
     receiver_returns: HashSet<String>,
     field_enumerators: HashSet<String>,
     field_handle_writers: HashSet<String>,
+    field_handle_bridges: HashSet<String>,
     deserializers: HashSet<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
@@ -246,6 +247,7 @@ impl Manifest {
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             field_enumerators: field_writes("enumerators").into_iter().collect(),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
+            field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
             array_writes,
             memory_reads,
@@ -354,6 +356,11 @@ impl Manifest {
     /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）
     pub fn is_field_handle_writer(&self, member: &str) -> bool {
         self.field_handle_writers.contains(member)
+    }
+
+    /// 句柄桥：在其内调用 handle_writers 不算写入入口（句柄只经 Field.set* 的访问器使用）
+    pub fn is_field_handle_bridge(&self, member: &str) -> bool {
+        self.field_handle_bridges.contains(member)
     }
 
     /// 反序列化入口（可达即非 static、非 transient 字段不折叠）
