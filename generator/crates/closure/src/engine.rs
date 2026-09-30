@@ -46,6 +46,7 @@ mod hwobj;
 mod report;
 mod diag;
 mod seeds;
+mod class_lookup;
 
 pub use seeds::SeedState;
 
@@ -488,6 +489,8 @@ pub struct Engine<'a> {
     invokable: BTreeSet<Members>,
     /// 反射点名：类型 id → 在以 Class 为接收者 / 实参的调用里与之同现的字符串常量（按名取成员）
     reflect_names: HashMap<u32, BTreeSet<String>>,
+    /// 按名取类（常量名解析）取到的类：其构造器随构造器枚举进入反射面
+    named_ctors: BTreeSet<u32>,
     /// 反射缺口：接收者镜像推不出的成员枚举
     pub reflect_gaps: BTreeSet<String>,
     /// 反射成员面：（类别, 成员）
@@ -619,6 +622,7 @@ impl<'a> Engine<'a> {
             rpending: Vec::new(),
             enumerated: BTreeSet::new(),
             reflect_names: HashMap::default(),
+            named_ctors: BTreeSet::new(),
             invokable: BTreeSet::new(),
             reflect_gaps: BTreeSet::new(),
             reflect_members: BTreeSet::new(),

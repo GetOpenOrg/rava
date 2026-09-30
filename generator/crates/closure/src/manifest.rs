@@ -55,6 +55,8 @@ pub enum Members {
 }
 
 mod sysprops;
+mod names;
+pub use names::NameFacts;
 pub use sysprops::{PropRead, PropValue, SysProps};
 
 /// 方法返回值事实（[vm_constants] / [facts]）
@@ -94,6 +96,8 @@ pub struct Manifest {
     value_equals: HashSet<String>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
+    /// 按名取类与字符串拼接
+    pub names: NameFacts,
 }
 
 const OBJECT: &str = "java/lang/Object";
@@ -261,6 +265,7 @@ impl Manifest {
             indy,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
+            names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
         })
     }
 

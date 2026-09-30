@@ -295,6 +295,37 @@ constructor_invokers = [
     "java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;",
 ]
 
+# 按名取类（静态方法，第 0 个实参是 `.` 分隔的类名，返回该类镜像）：名字是字符串常量，或「常量前缀 + 常量表取值」
+# 的线性拼接（[facts.string_concat]）时，分析器解析出所指类集，结果只含这些类的镜像；结果唯一地经 instantiators
+# 实例化、再唯一地 checkcast 到 T 时只保留 T 的子类型。解析出的类初始化，其构造器随构造器枚举进入反射面
+class_lookups = [
+    "java/lang/Class.forName:(Ljava/lang/String;)Ljava/lang/Class;",
+    "java/lang/Class.forName:(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;",
+]
+# 实例化：接收者镜像所指类的无参构造
+instantiators = [
+    "java/lang/Class.newInstance:()Ljava/lang/Object;",
+]
+
+# 常量表：基类的具体子类是生成的不可变映射，内容即子类自身代码里的字符串常量；readers 为读取入口（名字:描述符）
+[facts.reflect.constant_tables."sun/util/PreHashedMap"]
+readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
+
+[facts.string_concat]
+# 字符串拼接链：新建构建器（可带初始内容）→ 逐段追加（返回接收者本身）→ 取结果
+builders = [
+    "java/lang/StringBuilder.<init>:()V",
+    "java/lang/StringBuilder.<init>:(Ljava/lang/String;)V",
+]
+appends = [
+    "java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;",
+]
+results = [
+    "java/lang/StringBuilder.toString:()Ljava/lang/String;",
+]
+
 [facts.array_writes]
 # 手写方法对实参数组元素的写入（闭包分析，generator `rava closure` 读取）。分析器按调用点把写入值
 # 接到该调用点实参数组的元素上；形参序号按描述符（0 起，不含接收者）：
