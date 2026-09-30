@@ -299,7 +299,7 @@ pub struct TempLet {
 }
 
 /// `_[A-Za-z]\w*?\d+`：下划线 + 字母开头、以数字结尾的单词
-fn is_temp_name(s: &str) -> bool {
+pub(crate) fn is_temp_name(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() >= 3
         && b[0] == b'_'
