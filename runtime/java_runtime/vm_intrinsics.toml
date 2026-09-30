@@ -273,6 +273,9 @@ method_lookups = [
     "java/lang/invoke/MethodHandles$Lookup.findSpecial:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
     "java/lang/invoke/MethodHandles$Lookup.resolveOrFail:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;",
     "java/lang/invoke/MethodHandles$Lookup.resolveOrNull:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;",
+    # 按名构造方法 MemberName：名字由手写 MethodHandleNatives.resolve 解析（DMH / Invokers 的 LambdaForm 具名函数，
+    # 名字经 getNamedFunction 形参传入——分析器取各调用点在该形参上的字符串常量）
+    "java/lang/invoke/MemberName.<init>:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;B)V",
 ]
 method_invokers = [
     "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",

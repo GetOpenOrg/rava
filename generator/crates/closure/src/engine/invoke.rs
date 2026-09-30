@@ -5,7 +5,7 @@ use super::*;
 impl<'a> Engine<'a> {
     pub(super) fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
         self.refs.insert(mref.to_string());
-        self.reflective_writes(mref, opcode, args);
+        self.reflective_writes(m, off, mref, opcode, args);
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
         self.invoke_inner(m, off, opcode, mref, iface, args);
@@ -17,9 +17,10 @@ impl<'a> Engine<'a> {
     ///   （所属类取 Class 常量实参 / 接收者，取不到时同名字段全部不折叠）；
     /// - 清单 `[facts.field_writes] enumerators`（返回字段句柄数组）：句柄写入口（`handle_writers`）也可达时
     ///   接收者类的全部字段不折叠，推不出时全部字段；
-    /// - 清单 `[facts.reflect] method_lookups`：字符串常量登记为 Class 常量所指类的方法点名；
+    /// - 清单 `[facts.reflect] method_lookups`：字符串常量登记为 Class 常量所指类的方法点名；名字是本方法形参时
+    ///   取各调用点在该形参上的字符串常量（如按名构造 MemberName 的辅助方法），常量集增长时本站点重跑；
     /// - 清单 `deserializers` 可达：非 static、非 transient 字段全部不折叠
-    pub(super) fn reflective_writes(&mut self, mref: &MemberRef, opcode: u8, args: &[V]) {
+    pub(super) fn reflective_writes(&mut self, m: usize, off: u32, mref: &MemberRef, opcode: u8, args: &[V]) {
         let class_param = parse_method(&mref.desc)
             .is_some_and(|md| md.params.iter().any(|p| matches!(p, FieldType::Object(c) if c == CLASS)));
         let class_recv = opcode != classfile::op::INVOKESTATIC && mref.owner == CLASS;
@@ -31,9 +32,18 @@ impl<'a> Engine<'a> {
             })
             .collect();
         let k = mref.to_string();
-        if self.man.is_method_lookup(&k) {
+        if self.man.is_method_lookup(&k) && !classes.is_empty() {
+            let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
             for a in args {
-                let V::Str(name) = a else { continue };
+                match a {
+                    V::Str(name) => {
+                        names.insert(name.clone());
+                    }
+                    V::Ref { .. } => names.extend(self.param_strs(m, off, a)),
+                    _ => {}
+                }
+            }
+            for name in &names {
                 for c in &classes {
                     self.reflect_name(c, name);
                 }
@@ -342,8 +352,37 @@ impl<'a> Engine<'a> {
         self.bind_pvs(t, base, n, vals.as_deref());
     }
 
+    /// 值来自本方法形参时，各调用点在该形参上的字符串常量；登记 (m, off) 为读者
+    fn param_strs(&mut self, m: usize, off: u32, v: &V) -> Vec<Rc<str>> {
+        let mut out = Vec::new();
+        for s in v.srcs().iter() {
+            let Src::Param(i) = s else { continue };
+            let slot = (m, *i as usize);
+            self.pstr_sites.entry(slot).or_default().insert(off);
+            out.extend(self.pstrs.get(&slot).into_iter().flatten().cloned());
+        }
+        out
+    }
+
+    /// 形参上的字符串常量并入；增长时重跑读过它的按名查找站点
+    fn bind_pstrs(&mut self, t: usize, base: usize, vals: &[PV]) {
+        for (j, v) in vals.iter().enumerate() {
+            let PV::Const(V::Str(s)) = v else { continue };
+            let slot = (t, base + j);
+            if !self.pstrs.entry(slot).or_default().insert(s.clone()) {
+                continue;
+            }
+            for off in self.pstr_sites.get(&slot).cloned().unwrap_or_default() {
+                self.rerun_site(t, off);
+            }
+        }
+    }
+
     /// 形参常量并入（vals 不含接收者；None = 实参值未知）
     pub(super) fn bind_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
+        if let Some(vs) = vals {
+            self.bind_pstrs(t, base, vs);
+        }
         let cur = self.pvals.get(&t).cloned();
         let new: Vec<PV> = (0..n)
             .map(|i| {
