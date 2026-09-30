@@ -113,7 +113,7 @@ fn parent_rust(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> String {
 fn inherited_segments<'c>(
     ctx: &EmitCtx<'c>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     ci: &'c ClassInfo,
     tps: &[String],
     visible: &[&'c classfile::Method],
@@ -137,14 +137,15 @@ pub struct ClassText {
     pub methods: Vec<crate::emission::EmittedMethod>,
 }
 
-/// 生成单类文件文本
-pub fn gen_class_rs(
-    ctx: &EmitCtx<'_>,
-    state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
-    ci: &ClassInfo,
-    site: &ClassSite<'_>,
-) -> Result<ClassText> {
+/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本、引用集
+pub struct ClassPrep<'c> {
+    visible: Vec<&'c classfile::Method>,
+    overrides: Vec<hw_overrides::HwOverride<'c>>,
+    referenced: BTreeSet<String>,
+}
+
+/// 前置事实：引用集（含手写覆盖副本的签名引用）
+pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>) -> ClassPrep<'c> {
     let cross = site.cross_input();
     let mut referenced = collect_referenced(ctx, ci, cross.generated);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
@@ -153,7 +154,45 @@ pub fn gen_class_rs(
         add_desc_refs(&o.method.desc, &mut referenced);
         add_desc_refs(o.method.signature.as_deref().unwrap_or(""), &mut referenced);
     }
-    let cross_imports = gen_cross_imports(ctx, state, ci, &cross, &referenced)?;
+    ClassPrep { visible, overrides, referenced }
+}
+
+/// 跨类导入行：`seen_simples`（跨包同名冲突守卫）跨类累积，必须按发射序串行调用
+pub fn class_cross_imports(
+    ctx: &EmitCtx<'_>,
+    state: &mut ProjectState,
+    ci: &ClassInfo,
+    site: &ClassSite<'_>,
+    prep: &ClassPrep<'_>,
+) -> Result<Vec<String>> {
+    gen_cross_imports(ctx, state, ci, &site.cross_input(), &prep.referenced)
+}
+
+/// 生成单类文件文本（串行形态：前置 → 跨类导入 → 类体）
+pub fn gen_class_rs(
+    ctx: &EmitCtx<'_>,
+    state: &mut ProjectState,
+    bodies: &dyn MethodBodyEmitter,
+    ci: &ClassInfo,
+    site: &ClassSite<'_>,
+) -> Result<ClassText> {
+    let prep = class_prep(ctx, ci, site);
+    let cross_imports = class_cross_imports(ctx, state, ci, site, &prep)?;
+    class_text(ctx, state, bodies, ci, site, &prep, cross_imports)
+}
+
+/// 类体文本：除跨类导入外只读共享上下文、只向 `state` 追加账本（可按类并行，
+/// `state` 为本类增量，由调用方按发射序并入）
+pub fn class_text(
+    ctx: &EmitCtx<'_>,
+    state: &mut ProjectState,
+    bodies: &dyn MethodBodyEmitter,
+    ci: &ClassInfo,
+    site: &ClassSite<'_>,
+    prep: &ClassPrep<'_>,
+    cross_imports: Vec<String>,
+) -> Result<ClassText> {
+    let (visible, overrides) = (&prep.visible, &prep.overrides);
     let is_iface = ci.is_interface();
     let mut parts: Vec<String> = vec![FILE_ALLOW.to_string(), format!("use {}::prelude::*;", site.prefix())];
     parts.extend(cross_imports.iter().cloned());
@@ -174,10 +213,10 @@ pub fn gen_class_rs(
     // G-10 账本：本类方法由本轮生成
     state.generated_classes.insert(ci.name().to_string());
     let mut method_blocks = fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site));
-    let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps, &overrides)?;
+    let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps, overrides)?;
     method_blocks.extend(mb.method_blocks);
     let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
-    inherited_segments(ctx, state, bodies, ci, &tps, &visible, &overrides, &mut method_blocks)?;
+    inherited_segments(ctx, state, bodies, ci, &tps, visible, overrides, &mut method_blocks)?;
     let method_blocks = record::patch_record_method_blocks(ctx, ci, &format!("{sname}{struct_generic}"), method_blocks);
     let methods = crate::emission::record_methods(&method_blocks);
 

@@ -61,9 +61,9 @@ fn header_of(text: &str) -> &str {
 }
 
 /// owner 的 use 行索引（缓存；头部文本变化——继承 use 插入位填充后——即重建）
-fn use_index(ctx: &EmitCtx<'_>, owner: &ClassEmission) -> std::rc::Rc<UseIndex> {
+fn use_index(ctx: &EmitCtx<'_>, owner: &ClassEmission) -> std::sync::Arc<UseIndex> {
     let header = header_of(&owner.text);
-    if let Some(ix) = ctx.use_index.borrow().get(&owner.binary_name).filter(|ix| ix.header == header) {
+    if let Some(ix) = ctx.use_index.lock().unwrap_or_else(|e| e.into_inner()).get(&owner.binary_name).filter(|ix| ix.header == header) {
         return ix.clone();
     }
     let mut map = BTreeMap::new();
@@ -72,8 +72,8 @@ fn use_index(ctx: &EmitCtx<'_>, owner: &ClassEmission) -> std::rc::Rc<UseIndex> 
             map.entry(name.to_string()).or_insert_with(|| ln.trim().to_string());
         }
     }
-    let ix = std::rc::Rc::new(UseIndex { header: header.to_string(), map });
-    ctx.use_index.borrow_mut().insert(owner.binary_name.clone(), ix.clone());
+    let ix = std::sync::Arc::new(UseIndex { header: header.to_string(), map });
+    ctx.use_index.lock().unwrap_or_else(|e| e.into_inner()).insert(owner.binary_name.clone(), ix.clone());
     ix
 }
 

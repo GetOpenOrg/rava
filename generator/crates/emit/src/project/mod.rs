@@ -12,14 +12,15 @@ pub mod overlay;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
+use ty::ClassInfo;
 
 pub use overlay::prepare_scratch;
 
 use crate::body::MethodBodyEmitter;
-use crate::class_writer::{gen_class_rs, ClassSite};
+use crate::class_writer::{class_cross_imports, class_prep, class_text, ClassSite};
 use crate::ctx::{EmitCtx, HwAudit, ProjectState};
 use crate::emission::ClassEmission;
 use crate::error::{EmitError, Result};
@@ -39,61 +40,92 @@ pub struct ProjectReport {
     pub emissions: Vec<ClassEmission>,
     /// FS-H0 手写审计（发射序）
     pub hw_audit: Vec<(HwAudit, String)>,
+    /// 方法体生成日志（发射序）
+    pub body_log: crate::body::BodyLog,
     /// 分阶段耗时与逐类耗时
     pub perf: Perf,
 }
 
-/// 逐类生成文本（尚未落盘）
+/// 一个待发射类
+struct ClassJob<'c> {
+    binary: &'c str,
+    ci: &'c ClassInfo,
+    path: PathBuf,
+    user: bool,
+}
+
+/// 逐类生成文本（尚未落盘）。三段：
+/// 1. 并行：引用集 / 手写覆盖副本（只读）；
+/// 2. 串行（发射序）：跨类导入——`seen_simples` 首个引入者胜出，结果依赖发射序；
+/// 3. 并行：类体（方法体生成占绝大部分耗时），每类账本写入独立增量，按发射序并入 `state`。
+///
+/// 除 2 外各类只读共享上下文（缓存为纯函数记忆化），故输出与串行发射逐字节一致
 fn emit_classes(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     w: &Writer,
     jdk: &JdkLayout,
     user: &UserLayout,
     perf: &mut Perf,
 ) -> Result<IndexMap<String, ClassEmission>> {
-    let mut ems = IndexMap::new();
+    let mut jobs: Vec<ClassJob<'_>> = Vec::new();
     for (c, path) in &jdk.files {
-        let Some(ci) = ctx.class(c) else { continue };
-        let t0 = std::time::Instant::now();
-        let ct = gen_class_rs(ctx, state, bodies, ci, &ClassSite { jdk, user_sibling_imports: None })?;
-        let em = ClassEmission {
-            binary_name: c.clone(),
-            crate_prefix: "crate".into(),
-            path: path.clone(),
-            handwritten: w.is_handwritten(path),
-            crate_name: "java_runtime".into(),
-            text: ct.text,
-            methods: ct.methods,
-        };
-        perf.classes.push((c.clone(), t0.elapsed()));
-        ems.insert(c.clone(), em);
+        if let Some(ci) = ctx.class(c) {
+            jobs.push(ClassJob { binary: c, ci, path: path.clone(), user: false });
+        }
     }
     for (c, e) in &user.entries {
-        let Some(ci) = ctx.class(c) else { continue };
-        let t0 = std::time::Instant::now();
-        // 兄弟类导入按未过滤引用集（生成集过滤只作用于 JDK 导入）
-        let referenced = collect_referenced(ctx, ci, None);
-        let site = ClassSite { jdk, user_sibling_imports: Some(user.sibling_imports(ctx, c, &referenced)) };
-        let ct = gen_class_rs(ctx, state, bodies, ci, &site)?;
+        if let Some(ci) = ctx.class(c) {
+            jobs.push(ClassJob { binary: c, ci, path: e.path.clone(), user: true });
+        }
+    }
+    let threads = crate::par::resolve_jobs(ctx.opts.jobs);
+    let site_of = |j: &ClassJob<'_>| {
+        // 用户类兄弟导入按未过滤引用集（生成集过滤只作用于 JDK 导入）
+        let sib = j.user.then(|| user.sibling_imports(ctx, j.binary, &collect_referenced(ctx, j.ci, None)));
+        ClassSite { jdk, user_sibling_imports: sib }
+    };
+    let preps = crate::par::par_map(threads, &jobs, |j| {
+        let t = std::time::Instant::now();
+        let site = site_of(j);
+        let prep = class_prep(ctx, j.ci, &site);
+        (site, prep, t.elapsed())
+    });
+    perf.mark("classes.prep");
+    let mut cross = Vec::with_capacity(jobs.len());
+    for (j, (site, prep, _)) in jobs.iter().zip(&preps) {
+        cross.push(class_cross_imports(ctx, state, j.ci, site, prep)?);
+    }
+    perf.mark("classes.imports");
+    let work: Vec<_> = jobs.iter().zip(preps).zip(cross).collect();
+    let texts = crate::par::par_map(threads, &work, |((j, (site, prep, _)), imports)| {
+        let t = std::time::Instant::now();
+        let mut delta = ProjectState::default();
+        let ct = class_text(ctx, &mut delta, bodies, j.ci, site, prep, imports.clone());
+        (ct, delta, t.elapsed())
+    });
+    let mut ems = IndexMap::new();
+    for (((j, (_, _, t_prep)), _), (ct, delta, t_text)) in work.iter().zip(texts) {
+        let ct = ct?;
+        state.merge(delta);
         let em = ClassEmission {
-            binary_name: c.clone(),
-            crate_prefix: "java_runtime".into(),
-            path: e.path.clone(),
-            handwritten: false,
-            crate_name: "user".into(),
+            binary_name: j.binary.to_string(),
+            crate_prefix: if j.user { "java_runtime" } else { "crate" }.into(),
+            path: j.path.clone(),
+            handwritten: !j.user && w.is_handwritten(&j.path),
+            crate_name: if j.user { "user" } else { "java_runtime" }.into(),
             text: ct.text,
             methods: ct.methods,
         };
-        perf.classes.push((c.clone(), t0.elapsed()));
-        ems.insert(c.clone(), em);
+        perf.classes.push((j.binary.to_string(), *t_prep + t_text));
+        ems.insert(j.binary.to_string(), em);
     }
     Ok(ems)
 }
 
 /// 发射完整 scratch workspace（overlay 需先完成：mod 树按磁盘实际内容重建）
-pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &mut dyn MethodBodyEmitter) -> Result<ProjectReport> {
+pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitter) -> Result<ProjectReport> {
     if !ctx.input.lib_crates.is_empty() {
         return Err(EmitError::Unported("lib crate 模式（jar 输入）未移植".into()));
     }
@@ -128,6 +160,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &mut dyn MethodB
         bin_name: bin,
         emissions: ems.into_values().collect(),
         hw_audit: std::mem::take(&mut state.hw_audit),
+        body_log: std::mem::take(&mut state.body_log),
         perf,
     })
 }

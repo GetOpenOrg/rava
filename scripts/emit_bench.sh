@@ -7,7 +7,8 @@
 #
 # 用法：scripts/emit_bench.sh <out_dir> [Test ...]   缺省 HelloWorld Digester DeepCopy CollectorsDemo TestCompletableFuture
 # 环境变量：RAVA（二进制，缺省 build/analyzer-target/release/rava）、JDK（缺省 21）、
-#           SKIP_BUILD=1（跳过 ①，复用 <out_dir>/<Test>/closure_input）
+#           SKIP_BUILD=1（跳过 ①，复用 <out_dir>/<Test>/closure_input）、
+#           EMIT_ARGS（追加给 build / emit 的参数，如 `--emit-jobs 1` 测串行发射）
 # 同一时间只跑一个 rava 进程（串行），不跑 cargo。
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
@@ -21,7 +22,7 @@ IMAGES=$(python3 -c "
 import sys; sys.path.insert(0, '.')
 from codegen.jdk_resolver import JdkResolver
 print(' '.join('--image ' + d for d in JdkResolver(prefer_major=$JDKV).image_class_dirs()))")
-COMMON="--java-home $HOME_J --runtime $REPO/runtime/java_runtime $IMAGES --perf"
+COMMON="--java-home $HOME_J --runtime $REPO/runtime/java_runtime $IMAGES --perf ${EMIT_ARGS:-}"
 
 # /usr/bin/time -l 输出 → "墙钟 user sys RSS_MB 指令G 周期G"（指令数不受机器负载影响，作 A/B 主指标）
 tm() {
@@ -34,12 +35,12 @@ ph() { grep "\[perf\] 阶段 $2 " "$1" | awk '{printf "%.0f", $4}'; }
 
 TABLE="$OUT/bench.md"
 {
-echo "| 用例 | 模式 | 墙钟 s | user s | sys s | 峰值 RSS MB | 指令 G | 周期 G | closure | input | names+ctx | overlay | classes | phase2 | write | mod+entry |"
-echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+echo "| 用例 | 模式 | 墙钟 s | user s | sys s | 峰值 RSS MB | 指令 G | 周期 G | closure | input | names+ctx | overlay | classes.prep | classes.imports | classes | phase2 | write | mod+entry |"
+echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 } > "$TABLE"
 row() { # 用例 模式 log timefile
     read -r w u s r i c <<< "$(tm "$4")"
-    echo "| $1 | $2 | $w | $u | $s | $r | $i | $c | $(ph "$3" closure) | $(ph "$3" input) | $(ph "$3" names+ctx) | $(ph "$3" overlay) | $(ph "$3" classes) | $(ph "$3" phase2) | $(ph "$3" write) | $(ph "$3" mod_tree+entry) |" >> "$TABLE"
+    echo "| $1 | $2 | $w | $u | $s | $r | $i | $c | $(ph "$3" closure) | $(ph "$3" input) | $(ph "$3" names+ctx) | $(ph "$3" overlay) | $(ph "$3" classes.prep) | $(ph "$3" classes.imports) | $(ph "$3" classes) | $(ph "$3" phase2) | $(ph "$3" write) | $(ph "$3" mod_tree+entry) |" >> "$TABLE"
 }
 for n in $TESTS; do
     f=$(find tests/e2e -name "$n.java" | head -1)

@@ -41,11 +41,11 @@ fn root_overload_name(ctx: &InstrCtx, mname: &str, desc: &str) -> Option<String>
 pub fn mangle_if_overloaded(ctx: &InstrCtx, cls: &str, mname: &str, desc: Option<&str>) -> InstrResult<String> {
     // 结果只取决于注册表与全局事实（整次生成不变），按调用目标缓存
     let key = format!("{cls}\0{mname}\0{}", desc.unwrap_or("\u{1}"));
-    if let Some(hit) = ctx.facts.mangle_cache.borrow().get(&key) {
+    if let Some(hit) = ctx.facts.mangle_cache.read().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return Ok(hit.clone());
     }
     let name = mangle_uncached(ctx, cls, mname, desc)?;
-    ctx.facts.mangle_cache.borrow_mut().insert(key, name.clone());
+    ctx.facts.mangle_cache.write().unwrap_or_else(|e| e.into_inner()).insert(key, name.clone());
     Ok(name)
 }
 

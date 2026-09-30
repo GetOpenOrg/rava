@@ -6,7 +6,7 @@
 //!
 //! 纯数据资源束判定复用闭包分析器的 [`Carriers`]（同一结构判据），结果按类缓存在实例上。
 
-use std::cell::RefCell;
+use std::sync::RwLock;
 use std::collections::BTreeMap;
 
 use closure::seeds::data_bundle::Carriers;
@@ -40,7 +40,7 @@ pub struct Boundary<'a> {
     manifest: &'a RuntimeManifest,
     cp: &'a ClassPath,
     carriers: Carriers,
-    bundle_cache: RefCell<BTreeMap<String, bool>>,
+    bundle_cache: RwLock<BTreeMap<String, bool>>,
 }
 
 impl<'a> Boundary<'a> {
@@ -49,12 +49,12 @@ impl<'a> Boundary<'a> {
             manifest,
             cp,
             carriers: Carriers::new(&manifest.data_bundle_carriers),
-            bundle_cache: RefCell::new(BTreeMap::new()),
+            bundle_cache: RwLock::new(BTreeMap::new()),
         }
     }
 
     /// 发射层可装载的类（用户档案除外：用户类只来自本编译单元）
-    fn loadable(&self, cls: &str) -> Option<std::rc::Rc<classfile::ClassFile>> {
+    fn loadable(&self, cls: &str) -> Option<std::sync::Arc<classfile::ClassFile>> {
         if self.cp.origin(cls) == Some(Origin::User) {
             return None;
         }
@@ -65,13 +65,13 @@ impl<'a> Boundary<'a> {
         if cls.contains('[') {
             return false;
         }
-        if let Some(v) = self.bundle_cache.borrow().get(cls) {
+        if let Some(v) = self.bundle_cache.read().unwrap_or_else(|e| e.into_inner()).get(cls) {
             return *v;
         }
         let v = self
             .loadable(cls)
             .is_some_and(|cf| self.carriers.is_pure_data_bundle(self.cp, &cf));
-        self.bundle_cache.borrow_mut().insert(cls.to_string(), v);
+        self.bundle_cache.write().unwrap_or_else(|e| e.into_inner()).insert(cls.to_string(), v);
         v
     }
 

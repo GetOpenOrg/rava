@@ -5,7 +5,7 @@
 //! binary name 即身份。可观察差异仅在「目标是短名占位 / 与域外祖先同短名」时出现。
 
 use std::collections::{BTreeSet, VecDeque};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::{JvmType, WildKind};
 use crate::consts;
@@ -13,8 +13,8 @@ use crate::registry::Registry;
 
 /// binary 的全部祖先 binary（含自身）：super_class 链 + interfaces 闭包（BFS）；
 /// 未注册节点是叶子。按注册表实例缓存
-pub fn super_closure(binary: &str, reg: &Registry) -> Rc<BTreeSet<String>> {
-    if let Some(hit) = reg.caches.super_closure.borrow().get(binary) {
+pub fn super_closure(binary: &str, reg: &Registry) -> Arc<BTreeSet<String>> {
+    if let Some(hit) = reg.caches.super_closure.get(binary) {
         return hit.clone();
     }
     let mut seen = BTreeSet::from([binary.to_string()]);
@@ -33,11 +33,10 @@ pub fn super_closure(binary: &str, reg: &Registry) -> Rc<BTreeSet<String>> {
             }
         }
     }
-    let result = Rc::new(seen);
+    let result = Arc::new(seen);
     reg.caches
         .super_closure
-        .borrow_mut()
-        .insert(binary.to_string(), result.clone());
+        .insert(binary, result.clone());
     result
 }
 

@@ -15,8 +15,8 @@ use closure::handwritten::Handwritten;
 use closure::manifest::Manifest;
 use emit::audit::audit_lines;
 use emit::body::PlaceholderBodies;
-use emit::method_bodies::MethodBodies;
 use emit::ctx::{EmitCtx, EmitOptions};
+use emit::method_bodies::{BodyAudit, MethodBodies};
 use emit::perf::{report_lines, Perf};
 use emit::project::{prepare_scratch, write_project, ProjectReport};
 use input::{BuildInput, ClosureFacts, RuntimeManifest};
@@ -160,6 +160,7 @@ struct EmitJob<'a> {
     out: &'a Path,
     skeleton_only: bool,
     strict: bool,
+    emit_jobs: usize,
 }
 
 /// `--perf` 报告的 Top-N 条数
@@ -174,25 +175,26 @@ fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<
         .map_err(|e| format!("构建发射层输入：{e}"))?;
     perf.mark("input");
     let names = ShortNames::build(&inp.registry);
-    let opts = EmitOptions { strict: j.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone() };
+    let opts = EmitOptions { strict: j.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone(), jobs: j.emit_jobs };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     perf.mark("names+ctx");
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
     perf.mark("overlay");
     if j.skeleton_only {
-        let mut r = write_project(&ctx, j.out, &mut PlaceholderBodies).map_err(|e| format!("发射：{e}"))?;
+        let mut r = write_project(&ctx, j.out, &PlaceholderBodies).map_err(|e| format!("发射：{e}"))?;
         perf.absorb(std::mem::take(&mut r.perf));
         return Ok((r, Vec::new()));
     }
-    let mut bodies = MethodBodies::new(&ctx);
+    let bodies = MethodBodies::new(&ctx);
     perf.mark("body_facts");
-    let mut r = write_project(&ctx, j.out, &mut bodies).map_err(|e| format!("发射：{e}"))?;
+    let mut r = write_project(&ctx, j.out, &bodies).map_err(|e| format!("发射：{e}"))?;
     perf.absorb(std::mem::take(&mut r.perf));
-    for line in audit_lines(&bodies.audit, &r.hw_audit) {
+    for line in audit_lines(&BodyAudit::from_log(&r.body_log), &r.hw_audit) {
         println!("{line}");
     }
     perf.mark("audit");
-    Ok((r, std::mem::take(&mut bodies.timings)))
+    let timings = std::mem::take(&mut r.body_log.timings);
+    Ok((r, timings))
 }
 
 fn report(r: &ProjectReport, out: &Path) {
@@ -250,7 +252,7 @@ pub fn run_build(args: &Args) -> Result<(), String> {
     perf.mark("classpath");
     let facts = analyze(&cp, &rt, &user[0], &o, &cin.join("closure.json"), &mut perf)?;
     let java_files = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict };
+    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict, emit_jobs: o.emit_jobs };
     let (r, timings) = emit_scratch(&job, &mut perf)?;
     report(&r, &out);
     print_perf(o.perf, &perf, &timings);
@@ -282,7 +284,7 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     let user = user_order(&cp, o.java_files(Mode::Emit), None)?;
     perf.mark("classpath");
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict };
+    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict, emit_jobs: o.emit_jobs };
     let (r, timings) = emit_scratch(&job, &mut perf)?;
     report(&r, &out);
     print_perf(o.perf, &perf, &timings);

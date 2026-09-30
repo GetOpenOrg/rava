@@ -2,7 +2,7 @@
 //! `outer_instance_class` / `enclosing_method_info` / `effective_class_type_params`）。
 
 use std::collections::BTreeSet;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use classfile::Method;
 
@@ -140,21 +140,20 @@ impl<'a> TyCtx<'a> {
     }
 
     /// 类在 Rust 侧的有效类型形参 = 外围作用域的类型变量（被自身同名形参遮蔽者除外）+ 自身形参
-    pub fn effective_class_type_params(&self, ci: &ClassInfo) -> Rc<Vec<String>> {
+    pub fn effective_class_type_params(&self, ci: &ClassInfo) -> Arc<Vec<String>> {
         let cacheable = self.reg.get(ci.name()).is_some_and(|r| std::ptr::eq(r, ci));
         if cacheable {
-            if let Some(hit) = self.reg.caches.effective_params.borrow().get(ci.name()) {
+            if let Some(hit) = self.reg.caches.effective_params.get(ci.name()) {
                 return hit.clone();
             }
         }
         let mut visiting = BTreeSet::new();
-        let result = Rc::new(self.effective_params_uncached(ci, &mut visiting));
+        let result = Arc::new(self.effective_params_uncached(ci, &mut visiting));
         if cacheable {
             self.reg
                 .caches
                 .effective_params
-                .borrow_mut()
-                .insert(ci.name().to_string(), result.clone());
+                .insert(ci.name(), result.clone());
         }
         result
     }

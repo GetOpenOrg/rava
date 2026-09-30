@@ -95,7 +95,7 @@ pub fn extract_services(cfg: &JcaCfg, cp: &ClassPath) -> BTreeSet<Service> {
 }
 
 /// 用户类全部字符串常量（算法键）
-pub fn user_algorithms(users: &[std::rc::Rc<ClassFile>]) -> HashSet<String> {
+pub fn user_algorithms(users: &[std::sync::Arc<ClassFile>]) -> HashSet<String> {
     let mut out = HashSet::new();
     for cf in users {
         for m in &cf.methods {

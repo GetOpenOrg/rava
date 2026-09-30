@@ -108,7 +108,7 @@ struct Anc<'c> {
 pub(super) fn superclass_virtual_inheritance(
     cx: &Cx<'_, '_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     visible: &[&Method],
     out: &mut Vec<String>,
 ) -> Result<()> {
@@ -178,7 +178,7 @@ pub(super) fn superclass_virtual_inheritance(
 fn user_ancestor_block(
     cx: &Cx<'_, '_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     visible: &[&Method],
     a: &Anc<'_>,
     bridge: Option<usize>,

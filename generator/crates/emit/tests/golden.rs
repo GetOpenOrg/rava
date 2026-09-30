@@ -12,8 +12,10 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
-use emit::body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter};
+use emit::body::{BodyEffects, BodyError, BodyLog, BodyOutput, BodyRequest, MethodBodyEmitter};
 use emit::method_bodies::MethodBodies;
 use emit::text::scratch_pkg_version;
 use emit::ctx::{EmitCtx, EmitOptions};
@@ -157,22 +159,25 @@ fn split_body(text: &str) -> Option<(&str, &str, &str)> {
 
 /// 真实方法体生成 + 逐次对照 Python 记录；返回文本按采集脚本同形包裹哨兵行，
 /// 落盘后替换为 `/*BODY key*/` 与占位 golden 做全文对照
+/// （生成器跨线程共享；对照用 `jobs = 1` 串行发射，失配明细保持发射序）
 struct Checked {
     real: MethodBodies,
-    expected: HashMap<CallKey, VecDeque<Expected>>,
+    expected: Mutex<HashMap<CallKey, VecDeque<Expected>>>,
     /// 方法体级失配明细
-    mismatches: Vec<String>,
-    calls: usize,
+    mismatches: Mutex<Vec<String>>,
+    calls: AtomicUsize,
 }
 
 impl MethodBodyEmitter for Checked {
-    fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
-        self.calls += 1;
+    fn emit_body(&self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, log: &mut BodyLog) -> Result<BodyOutput, BodyError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
         let key = format!("{}.{}:{}", req.class.name(), req.method.name, req.method.desc);
         let rk = (key.clone(), req.rust_name.map(str::to_string), req.in_vtable_body);
-        let got = self.real.emit_body(ctx, req);
-        match self.expected.get_mut(&rk).and_then(VecDeque::pop_front) {
-            None => self.mismatches.push(format!("=== EXTRA {rk:?}（Python 无此请求）")),
+        let got = self.real.emit_body(ctx, req, log);
+        let want = self.expected.lock().unwrap().get_mut(&rk).and_then(VecDeque::pop_front);
+        let mut mismatches = self.mismatches.lock().unwrap();
+        match want {
+            None => mismatches.push(format!("=== EXTRA {rk:?}（Python 无此请求）")),
             Some((want, fx)) => {
                 let got_text = match &got {
                     Ok(o) => Ok(o.text.clone()),
@@ -184,10 +189,10 @@ impl MethodBodyEmitter for Checked {
                     _ => false,
                 };
                 if !text_ok {
-                    self.mismatches.push(format!("=== TEXT {rk:?}\n--- py\n{want:?}\n--- rs\n{got_text:?}\n"));
+                    mismatches.push(format!("=== TEXT {rk:?}\n--- py\n{want:?}\n--- rs\n{got_text:?}\n"));
                 } else if let Ok(o) = &got {
                     if o.effects != fx {
-                        self.mismatches.push(format!("=== FX {rk:?}\n--- py\n{fx:?}\n--- rs\n{:?}\n", o.effects));
+                        mismatches.push(format!("=== FX {rk:?}\n--- py\n{fx:?}\n--- rs\n{:?}\n", o.effects));
                     }
                 }
             }
@@ -256,28 +261,35 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
         strict: false,
         jdk_major: jdk_major(meta["java_home"].as_str().unwrap_or_default()),
         java_files: str_list(&meta["java_files"]).into_iter().map(PathBuf::from).collect(),
+        jobs: 1,
     };
     let ctx = EmitCtx::new(&inp, &names, &manifest, &cp, &runtime, opts).expect("发射上下文");
     let out = root.join("build/golden/emit").join(format!("{stem}.rs-out"));
     prepare_scratch(&out, &runtime, &ctx.macros_crate, true).expect("scratch overlay");
     let mut diffs = BTreeMap::new();
-    let mut checked =
-        Checked { real: MethodBodies::new(&ctx), expected: load_expected(&gdir.join("bodies.jsonl")), mismatches: Vec::new(), calls: 0 };
-    let written = write_project(&ctx, &out, &mut checked);
+    let checked = Checked {
+        real: MethodBodies::new(&ctx),
+        expected: Mutex::new(load_expected(&gdir.join("bodies.jsonl"))),
+        mismatches: Mutex::new(Vec::new()),
+        calls: AtomicUsize::new(0),
+    };
+    let written = write_project(&ctx, &out, &checked);
+    let Checked { expected, mismatches, calls, .. } = checked;
+    let (expected, mismatches, calls) = (expected.into_inner().unwrap(), mismatches.into_inner().unwrap(), calls.into_inner());
     let report = root.join("build/golden/emit").join(format!("{stem}.bodies.diff.txt"));
-    std::fs::write(&report, checked.mismatches.join("\n")).expect("写方法体失配明细");
-    eprintln!("{stem}: 方法体生成 {} 次，失配 {}（明细 {}）", checked.calls, checked.mismatches.len(), report.display());
+    std::fs::write(&report, mismatches.join("\n")).expect("写方法体失配明细");
+    eprintln!("{stem}: 方法体生成 {} 次，失配 {}（明细 {}）", calls, mismatches.len(), report.display());
     if let Err(e) = written {
         diffs.insert("<write_project>".to_string(), e.to_string());
         return (0, diffs);
     }
-    if !checked.mismatches.is_empty() {
-        diffs.insert("<bodies>".to_string(), format!("{} 次方法体生成与 Python 失配", checked.mismatches.len()));
+    if !mismatches.is_empty() {
+        diffs.insert("<bodies>".to_string(), format!("{} 次方法体生成与 Python 失配", mismatches.len()));
     }
-    let unused: usize = checked.expected.values().map(VecDeque::len).sum();
+    let unused: usize = expected.values().map(VecDeque::len).sum();
     if unused > 0 {
         let sample: Vec<String> =
-            checked.expected.iter().filter(|(_, q)| !q.is_empty()).take(5).map(|(k, _)| format!("{k:?}")).collect();
+            expected.iter().filter(|(_, q)| !q.is_empty()).take(5).map(|(k, _)| format!("{k:?}")).collect();
         diffs.insert("<bodies.jsonl>".to_string(), format!("{unused} 条方法体记录未被请求，例：{}", sample.join(" / ")));
     }
     // 包版本由 crate 目录路径派生：rs 输出目录不同，按 py 输出目录的同一派生归一

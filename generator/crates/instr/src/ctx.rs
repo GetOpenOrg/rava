@@ -4,9 +4,9 @@
 //! `_closure_subclasses` 的 lru_cache、`_CS_CTX`）与发射层全局账（`sam_objects.SAM_LEDGER`）；
 //! 这里一律显式传入，由调用方（方法体生成 P4c）持有。
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use classfile::ClassFile;
 use input::RuntimeManifest;
@@ -49,10 +49,10 @@ pub struct InstrFacts {
     /// runtime 手写源码根（`runtime/java_runtime/src`）
     runtime_src: PathBuf,
     /// `_impl.rs` 伴生文件的 `fn` 名缓存（相对路径 → 名集合；文件缺失 → 空集）
-    impl_fn_cache: RefCell<BTreeMap<String, BTreeSet<String>>>,
+    impl_fn_cache: RwLock<BTreeMap<String, BTreeSet<String>>>,
     /// 调用目标 Rust 名缓存（[`crate::naming::mangle_if_overloaded`] 的纯函数结果；
     /// 键 `cls \0 mname \0 desc`，desc 缺省记 `\u{1}`）
-    pub(crate) mangle_cache: RefCell<HashMap<String, String>>,
+    pub(crate) mangle_cache: RwLock<HashMap<String, String>>,
 }
 
 impl InstrFacts {
@@ -86,8 +86,8 @@ impl InstrFacts {
             root_api,
             subclasses: closure_subclasses(reg),
             runtime_src: runtime_src.to_path_buf(),
-            impl_fn_cache: RefCell::new(BTreeMap::new()),
-            mangle_cache: RefCell::new(HashMap::new()),
+            impl_fn_cache: RwLock::new(BTreeMap::new()),
+            mangle_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -105,14 +105,14 @@ impl InstrFacts {
     }
 
     fn impl_fns_contain(&self, rel: &str, rust_name: &str) -> bool {
-        if let Some(hit) = self.impl_fn_cache.borrow().get(rel) {
+        if let Some(hit) = self.impl_fn_cache.read().unwrap_or_else(|e| e.into_inner()).get(rel) {
             return hit.contains(rust_name);
         }
         let names = std::fs::read_to_string(self.runtime_src.join(rel))
             .map(|t| scan_fn_names(&t, false))
             .unwrap_or_default();
         let hit = names.contains(rust_name);
-        self.impl_fn_cache.borrow_mut().insert(rel.to_string(), names);
+        self.impl_fn_cache.write().unwrap_or_else(|e| e.into_inner()).insert(rel.to_string(), names);
         hit
     }
 }

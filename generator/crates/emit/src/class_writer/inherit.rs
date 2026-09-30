@@ -96,7 +96,7 @@ fn is_inheritable_default(m: &Method) -> bool {
 pub(super) fn interface_default_inheritance<'c>(
     cx: &Cx<'_, 'c>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     visible: &[&Method],
     out: &mut Vec<String>,
 ) -> Result<Vec<(&'c ClassInfo, &'c Method)>> {
@@ -223,7 +223,7 @@ fn special_refs(ctx: &EmitCtx<'_>, owner: &ClassInfo, m: &Method) -> Vec<(String
 pub(super) fn interface_special_members<'c>(
     cx: &Cx<'_, 'c>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     visible: &[(&'c ClassInfo, &Method)],
     translated: Vec<(&'c ClassInfo, &'c Method)>,
     out: &mut Vec<String>,

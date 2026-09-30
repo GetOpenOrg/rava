@@ -19,7 +19,7 @@ use instr::{Audit, Effect, InstrCtx, InstrEnv, InstrFacts, InstrHooks};
 use method::{gen_method_body, MethodError, MethodRequest, MethodSink};
 use ty::sig_parse::substitute_signature_type_vars;
 
-use crate::body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter};
+use crate::body::{BodyEffects, BodyError, BodyEvent, BodyLog, BodyOutput, BodyRequest, MethodBodyEmitter};
 use crate::ctx::EmitCtx;
 
 /// 方法体生成的审计汇总（等价性审计计数 + 控制流审计）
@@ -34,34 +34,57 @@ pub struct BodyAudit {
 /// 存根兜底的位点名：发射层不区分 Python 的九吞点（iface-lambda / main / clinit …），统一记为方法体
 const FALLBACK_SITE: &str = "body";
 
-/// `method` crate 驱动的方法体生成器
+impl BodyAudit {
+    /// 按发射序重放方法体日志（同一方法的控制流审计只记首次、存根兜底按 (方法, 位点) 去重，
+    /// 与逐次记账同序同值）
+    pub fn from_log(log: &BodyLog) -> BodyAudit {
+        let mut audit = BodyAudit::default();
+        for e in &log.events {
+            match e {
+                BodyEvent::Method { equiv, instanceof_folds, cfg } => {
+                    for a in equiv {
+                        *audit.equiv.entry(*a).or_default() += 1;
+                    }
+                    audit.cfg.instanceof_folds += instanceof_folds;
+                    if let Some(c) = cfg {
+                        c.record(&mut audit.cfg);
+                    }
+                }
+                BodyEvent::StubFallback { key, reason } => {
+                    audit.cfg.record_stub_fallback(key, reason, FALLBACK_SITE, "CfgError");
+                }
+            }
+        }
+        audit
+    }
+}
+
+/// `method` crate 驱动的方法体生成器（不可变：并行发射下跨线程共享）
 pub struct MethodBodies {
     facts: InstrFacts,
     strict: bool,
-    pub audit: BodyAudit,
-    /// 逐方法体生成耗时（`类.名:描述符`，生成序；性能观测用）
-    pub timings: Vec<(String, std::time::Duration)>,
 }
 
 impl MethodBodies {
     pub fn new(ctx: &EmitCtx<'_>) -> MethodBodies {
         let root = ctx.cp.get(ty::consts::OBJECT);
         let facts = InstrFacts::build(ctx.ty.reg, root.as_deref(), &ctx.runtime_src());
-        MethodBodies { facts, strict: ctx.opts.strict, audit: BodyAudit::default(), timings: Vec::new() }
+        MethodBodies { facts, strict: ctx.opts.strict }
     }
+}
 
-    fn absorb_audit(&mut self, sink: &MethodSink) {
-        for e in &sink.log.effects {
-            match e {
-                Effect::Audit(a) => *self.audit.equiv.entry(*a).or_default() += 1,
-                Effect::InstanceofFold => self.audit.cfg.instanceof_folds += 1,
-                _ => {}
-            }
-        }
-        if let Some(c) = &sink.cfg {
-            c.record(&mut self.audit.cfg);
+/// 一次生成的审计事实
+fn audit_event(sink: MethodSink) -> BodyEvent {
+    let mut equiv = Vec::new();
+    let mut instanceof_folds = 0;
+    for e in &sink.log.effects {
+        match e {
+            Effect::Audit(a) => equiv.push(*a),
+            Effect::InstanceofFold => instanceof_folds += 1,
+            _ => {}
         }
     }
+    BodyEvent::Method { equiv, instanceof_folds, cfg: sink.cfg }
 }
 
 /// 指令层回调：SAM 合成对象构造路径
@@ -110,7 +133,7 @@ fn local_vars(ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, index: Option<usize>) ->
 }
 
 impl MethodBodyEmitter for MethodBodies {
-    fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
+    fn emit_body(&self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, log: &mut BodyLog) -> Result<BodyOutput, BodyError> {
         let t0 = std::time::Instant::now();
         let (name, desc) = (&req.method.name, &req.method.desc);
         let key = format!("{}.{name}:{desc}", req.class.name());
@@ -134,13 +157,14 @@ impl MethodBodyEmitter for MethodBodies {
         };
         let mut sink = MethodSink::default();
         let res = gen_method_body(&env, &mreq, &mut sink);
-        self.absorb_audit(&sink);
-        self.timings.push((key.clone(), t0.elapsed()));
+        let effects = effects_of(&sink);
+        log.events.push(audit_event(sink));
+        log.timings.push((key.clone(), t0.elapsed()));
         match res {
-            Ok(text) => Ok(BodyOutput { text, effects: effects_of(&sink) }),
+            Ok(text) => Ok(BodyOutput { text, effects }),
             Err(MethodError::Cfg(msg)) if !self.strict => {
                 let text = format!("CfgError: {msg}");
-                self.audit.cfg.record_stub_fallback(&key, &text, FALLBACK_SITE, "CfgError");
+                log.events.push(BodyEvent::StubFallback { key, reason: text.clone() });
                 Err(BodyError::Fallback(text))
             }
             Err(e) => Err(BodyError::Fatal(format!("{key}：{e}"))),
