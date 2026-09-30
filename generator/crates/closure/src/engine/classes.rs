@@ -314,6 +314,29 @@ impl<'a> Engine<'a> {
         id
     }
 
+    /// 清单声明元素类型的手写返回数组（`[facts.array_returns]`）：返回值取该方法的一个数组分配点，
+    /// 元素为所列类型的 open（VM 写入的对象来自非建模代码），替代 open(返回类型) 的「元素为任意分量子类型」
+    pub(super) fn array_return(&mut self, m: usize, rt: u32, elems: &[String]) {
+        let t = self.names[rt as usize].to_string();
+        let via = Via::method("array-return", m, None);
+        let id = self.array_site(m, ARRAY_RET, &t, false, via.clone());
+        for e in elems {
+            let v = self.name_at(e, &via);
+            for p in PARITIES {
+                self.add_to(Node::E(id, p), &TypeSet::open(v));
+            }
+        }
+        self.add_to(Node::R(m), &TypeSet::exact(id));
+    }
+
+    /// 清单中的类型名（binary name 或数组描述符）→ 类型 id，并登记为类型层级
+    fn name_at(&mut self, t: &str, via: &Via) -> u32 {
+        if !t.starts_with('[') {
+            self.touch(t, Level::Type, via.clone());
+        }
+        self.id(t)
+    }
+
     /// 数组分配点出现非 0 长度：不再按空数组处理，补回暂存的元素值
     pub(super) fn array_sized(&mut self, id: u32) {
         if let Some(held) = self.empty_arrays.remove(&id) {

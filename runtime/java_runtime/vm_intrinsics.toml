@@ -250,6 +250,15 @@ constructor_invokers = [
 "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/StackTraceElement.initStackTraceElements:([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V" = {}
 
+[facts.array_returns]
+# 手写方法返回新分配的引用数组，VM 只写入所列类型的元素（闭包分析，generator `rava closure` 读取）。
+# 分析器把返回值建模为该方法的一个数组分配点、元素为所列类型的 open，替代 open(返回类型)——
+# `Object[]` 的 open 元素是 open(Object)，会经读取方对全部逃逸对象分派（计划 boundary-narrowing §6.2 G3）。
+#   elements  元素可能的类型（binary name / 数组描述符），不分下标
+# 准入：JVM 规范 / JDK 源码注释给出的元素构成，与手写实现一致（注明实现位置）。
+# EnclosingMethod 属性 → {封闭类, 方法名, 描述符}（class_impl.rs getEnclosingMethod0；Class.java `getEnclosingMethod0` 注释）
+"java/lang/Class.getEnclosingMethod0:()[Ljava/lang/Object;" = { elements = ["java/lang/Class", "java/lang/String"] }
+
 [facts.memory_reads]
 # 手写方法的返回值按 VM 语义读自形参 src 所指对象（形参序号按描述符，0 起，不含接收者）：
 # 数组取其元素，对象取其引用实例字段（偏移只能指向这些位置）。分析器按调用点接入，替代手写返回的

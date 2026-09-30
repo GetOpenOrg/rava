@@ -28,6 +28,7 @@ use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members};
 mod sets;
 mod facts;
 mod fold;
+mod forward;
 mod classes;
 mod reflect;
 mod flow;
@@ -65,6 +66,8 @@ const CATCH: u32 = 1 << 31;
 const POOL: u32 = u32::MAX;
 /// 站点键：手写体产出的值（分配 / 构造 / 字段读取 / 回调返回值），汇入值池
 const PROD: u32 = u32::MAX - 1;
+/// 站点键：清单声明元素类型的手写返回数组（`[facts.array_returns]`）的分配点
+const ARRAY_RET: u32 = u32::MAX - 2;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
 /// 方法克隆的上下文：无（按声明类型 / open 接收者进入的方法本体）
@@ -376,6 +379,8 @@ pub struct Engine<'a> {
     containers: HashMap<u32, bool>,
     /// 新鲜工厂方法判定缓存（按成员）
     factories: HashMap<MemberRef, bool>,
+    /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward`）
+    forwarders: HashMap<MemberRef, u64>,
     pub inited: IndexMap<String, Via>,
 
     flows: HashMap<Node, Vec<(Node, u32)>>,
@@ -528,6 +533,7 @@ impl<'a> Engine<'a> {
             obj_chain: HashMap::default(),
             containers: HashMap::default(),
             factories: HashMap::default(),
+            forwarders: HashMap::default(),
             inited: IndexMap::new(),
             flows: HashMap::default(),
             flow_seen: HashSet::default(),

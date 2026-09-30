@@ -250,8 +250,11 @@ impl<'a> Engine<'a> {
         let via = Via::method("handwritten", m, None);
         // 手写返回值：open(返回类型)
         let reads = self.man.memory_read(&key.to_string()).is_some();
+        let array_ret = self.man.array_return(&key.to_string()).map(<[String]>::to_vec);
         if let Some(rt) = self.methods[m].rtype {
-            if !self.man.returns_receiver(&key.to_string()) && !reads {
+            if let Some(es) = &array_ret {
+                self.array_return(m, rt, es);
+            } else if !self.man.returns_receiver(&key.to_string()) && !reads {
                 self.add_to(Node::R(m), &TypeSet::open(rt));
             }
         }
@@ -294,7 +297,7 @@ impl<'a> Engine<'a> {
         self.touch_truncated_body(m, &cf, &key, &via);
         let mh = self.hw_member(&cf, &key.name, &key.desc);
         // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像）时不经 open 返回值交出
-        let modeled = reads || self.man.returns_receiver(&ks) || self.man.returns_mirror(&ks);
+        let modeled = reads || array_ret.is_some() || self.man.returns_receiver(&ks) || self.man.returns_mirror(&ks);
         let rt = self.methods[m].rtype.filter(|_| !modeled);
         let is_static = self.methods[m].is_static;
         for t in self.hw_exports(&key.owner, &mh, rt, is_static) {
