@@ -176,8 +176,60 @@ impl<'a> Engine<'a> {
             for up in cf.super_name.iter().chain(cf.interfaces.iter()).cloned().collect::<Vec<_>>() {
                 self.touch(&up, Level::Type, Via::class("supertype", cls));
             }
+            self.touch_hw_types(cls);
         }
         Some(cf)
+    }
+
+    /// 类入生成范围即编译其手写文件：文件里出现的每个类型路径与共置手写模块要求对应类存在（L1）
+    fn touch_hw_types(&mut self, cls: &str) {
+        let hw = self.hw.class(cls);
+        for t in &hw.type_refs {
+            let found = match t.0.last().and_then(|l| MODULE_SUFFIXES.iter().find_map(|x| l.strip_suffix(x))) {
+                Some(snake) => self.class_of_module(cls, &t.0, snake).into_iter().collect::<Vec<_>>(),
+                None => self.resolve_hw_type(cls, t),
+            };
+            for c in found {
+                self.touch(&c, Level::Type, Via::class("hw-type", cls));
+            }
+        }
+    }
+
+    /// 类型路径 → 存在的类；按路径找不到时去掉类型前的模块段重试（`module_t::Module` 这类改名的类文件模块）
+    fn resolve_hw_type(&self, host: &str, t: &TypeRef) -> Vec<String> {
+        let hit = |t: &TypeRef| self.hw.resolve_type(host, t).into_iter().find(|c| self.cp.contains(c));
+        if let Some(c) = hit(t) {
+            return vec![c];
+        }
+        let n = t.0.len();
+        if n >= 2 && !matches!(t.0[n - 2].as_str(), "super" | "crate" | "self") {
+            let mut s = t.0.clone();
+            s.remove(n - 2);
+            return hit(&TypeRef(s)).into_iter().collect();
+        }
+        vec![]
+    }
+
+    /// 共置手写模块路径（`super::x_impl` / `crate::a::b::x_impl`）→ 其宿主类
+    fn class_of_module(&mut self, host: &str, segs: &[String], snake: &str) -> Option<String> {
+        let host_pkg = host.rsplit_once('/').map_or("", |(p, _)| p);
+        let dirs: Vec<&str> = segs[..segs.len() - 1].iter().map(String::as_str).filter(|s| *s != "self").collect();
+        let pkg = match dirs.first() {
+            Some(&"super") | None => host_pkg.to_string(),
+            Some(&"crate") => dirs[1..].join("/"),
+            _ => dirs.join("/"),
+        };
+        if self.snake_index.is_none() {
+            let mut idx = HashMap::default();
+            for o in [Origin::Jdk, Origin::Lib, Origin::Image] {
+                for n in self.cp.names_of(o) {
+                    let (p, simple) = n.rsplit_once('/').unwrap_or(("", n.as_str()));
+                    idx.entry(format!("{p}/{}", to_snake(simple))).or_insert_with(|| n.clone());
+                }
+            }
+            self.snake_index = Some(idx);
+        }
+        self.snake_index.as_ref().unwrap().get(&format!("{pkg}/{snake}")).cloned()
     }
 
     pub(super) fn touch_desc(&mut self, desc: &str, via: &Via) {

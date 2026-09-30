@@ -16,10 +16,7 @@ from collections import deque
 from .classfile import parse_class, parse_class_bytes
 from .emitter import write_cargo_project
 from .constants import CLASS_CLASS as _CLASS_CLASS
-from .callchain import (_JDK_PREFIXES, _JDK_STUB_ONLY_PREFIXES,
-                        _read_manifest, _is_boundary_class,
-                        _JAVA_RUNTIME_CLASSES, _desc_class_refs,
-                        _discover_jdk_classes_method_level)
+from .closure_input import discover as _discover_closure
 
 _ACC_PUBLIC = 0x0001
 
@@ -106,6 +103,7 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
     #    唯一数据源）。classes/ 目录按 feature 目录共享，历史运行会混入其他编译
     #    单元的 .class，不能整目录收编，必须按 SourceFile 过滤。
     class_infos = []
+    _class_files: list[tuple[str, str]] = []   # (binary name, .class 路径)：闭包分析器的用户类输入
     _seen_class_files: set[str] = set()
     for jf in java_files:
         source_name = os.path.basename(jf)
@@ -117,6 +115,7 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
         print(f"      字段: {[f.name for f in ci.fields]}")
         print(f"      方法: {[m.name for m in ci.methods]}")
         class_infos.append(ci)
+        _class_files.append((ci.name, class_file))
         _seen_class_files.add(class_file)
 
         # 同编译单元类发现：SourceFile 属性与源文件一致的全部 .class
@@ -134,6 +133,7 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
                 continue
             _seen_class_files.add(unit_file)
             class_infos.append(unit_ci)
+            _class_files.append((unit_ci.name, unit_file))
             print(f"      同文件类: {unit_ci.name} "
                   f"(字段: {[f.name for f in unit_ci.fields]}, "
                   f"方法: {[m.name for m in unit_ci.methods]})")
@@ -165,15 +165,14 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
             _lib_seed_classes.extend(spec.seed_classes)
     _lib_prefixes = tuple(sorted(set(_lib_prefixes)))
 
-    # 3. 方法级调用链 BFS 发现 JDK 类（jar 类注册表优先于 jmods 解析）
-    print(f"[3/4] 扫描 JDK 类引用...", end=' ', flush=True)
+    # 3. 精确闭包分析（rava closure）发现 JDK / 库类
+    print(f"[3/4] 闭包分析...", flush=True)
     from . import options as _options_seed
-    jdk_class_infos, visited_methods, field_stubs = _discover_jdk_classes_method_level(
-        class_infos,
-        runtime_src=os.path.join(out_dir, 'java_runtime', 'src'),
+    jdk_class_infos, visited_methods, field_stubs = _discover_closure(
+        class_infos, _class_files, out_dir,
+        lib_jars=[spec.jar_path for spec in lib_specs],
         lib_registries=_lib_registries,
-        lib_prefixes=_lib_prefixes,
-        extra_seed_classes=_lib_seed_classes or None,
+        lib_seed_classes=_lib_seed_classes or None,
         locales=tuple(locales),
         jdk_seed_methods=_options_seed.JDK_SEEDS or None)
 

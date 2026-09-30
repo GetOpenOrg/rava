@@ -200,6 +200,7 @@ impl Closure<'_> {
             "clinit": e.inited.keys().collect::<Vec<_>>(),
             "missing": e.missing.iter().map(|(n, v)| json!({"name": n, "via": self.via_json(v)})).collect::<Vec<_>>(),
             "unresolved": e.unresolved,
+            "refs": e.refs,
             "dispatch": dispatch,
             "folds_version": FOLDS_VERSION,
             "folds": folds,

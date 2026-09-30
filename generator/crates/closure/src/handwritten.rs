@@ -19,6 +19,9 @@ use std::rc::Rc;
 use classfile::MemberRef;
 use syn::visit::Visit;
 
+mod type_refs;
+pub use type_refs::MODULE_SUFFIXES;
+
 const GENERATED_MARK: &str = "rava_macros::java_class";
 const SUFFIXES: [&str; 2] = ["_impl.rs", "_ext.rs"];
 const CTOR_RUST: &str = "new";
@@ -121,6 +124,8 @@ pub struct ClassHw {
     pub files: Vec<PathBuf>,
     /// fn 名 → 信息（同名 fn 合并）
     pub fns: HashMap<String, FnInfo>,
+    /// 手写文件（共置 `_impl` / `_ext` 与整体手写 `<snake>.rs`）的编译期类型路径
+    pub type_refs: BTreeSet<TypeRef>,
 }
 
 /// 成员（Java 名）对应的手写体汇总
@@ -231,6 +236,14 @@ impl Handwritten {
                 Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
             }
             hw.files.push(path);
+        }
+        for suf in SUFFIXES.iter().chain([".rs"].iter()) {
+            let path = self.src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            match type_refs::scan(&content, &self.prelude) {
+                Ok(t) => hw.type_refs.extend(t),
+                Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
+            }
         }
         close_transitive(&mut hw.fns, &calls);
         hw
