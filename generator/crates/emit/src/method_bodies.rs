@@ -15,23 +15,24 @@ use std::collections::BTreeMap;
 
 use cfg::AuditStats;
 use classfile::extras::LocalVar;
-use instr::{Effect, InstrCtx, InstrEnv, InstrFacts, InstrHooks};
+use instr::{Audit, Effect, InstrCtx, InstrEnv, InstrFacts, InstrHooks};
 use method::{gen_method_body, MethodError, MethodRequest, MethodSink};
 use ty::sig_parse::substitute_signature_type_vars;
 
 use crate::body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter};
 use crate::ctx::EmitCtx;
 
-/// 方法体生成的审计汇总（等价性审计计数 + 控制流审计 + 兜底明细）
+/// 方法体生成的审计汇总（等价性审计计数 + 控制流审计）
 #[derive(Debug, Default)]
 pub struct BodyAudit {
     /// 等价性审计：审计项 → 次数
-    pub equiv: BTreeMap<&'static str, usize>,
-    /// 控制流审计（跳转消费、状态机、try 区域、instanceof 折叠）
+    pub equiv: BTreeMap<Audit, usize>,
+    /// 控制流审计（跳转消费、状态机、try 区域、instanceof 折叠、存根兜底）
     pub cfg: AuditStats,
-    /// 退化为存根的方法：(方法键, 错误文本)
-    pub fallbacks: Vec<(String, String)>,
 }
+
+/// 存根兜底的位点名：发射层不区分 Python 的九吞点（iface-lambda / main / clinit …），统一记为方法体
+const FALLBACK_SITE: &str = "body";
 
 /// `method` crate 驱动的方法体生成器
 pub struct MethodBodies {
@@ -50,7 +51,7 @@ impl MethodBodies {
     fn absorb_audit(&mut self, sink: &MethodSink) {
         for e in &sink.log.effects {
             match e {
-                Effect::Audit(a) => *self.audit.equiv.entry(a.as_str()).or_default() += 1,
+                Effect::Audit(a) => *self.audit.equiv.entry(*a).or_default() += 1,
                 Effect::InstanceofFold => self.audit.cfg.instanceof_folds += 1,
                 _ => {}
             }
@@ -135,7 +136,7 @@ impl MethodBodyEmitter for MethodBodies {
             Ok(text) => Ok(BodyOutput { text, effects: effects_of(&sink) }),
             Err(MethodError::Cfg(msg)) if !self.strict => {
                 let text = format!("CfgError: {msg}");
-                self.audit.fallbacks.push((key, text.clone()));
+                self.audit.cfg.record_stub_fallback(&key, &text, FALLBACK_SITE, "CfgError");
                 Err(BodyError::Fallback(text))
             }
             Err(e) => Err(BodyError::Fatal(format!("{key}：{e}"))),

@@ -19,6 +19,7 @@
 //! - **folds**：方法体侧消费（`EmitInput::code` 已给出折叠后的规范化方法体）；发射层只在
 //!   `<clinit>` 静态字段初值提取处消费常量折叠结果。
 
+pub mod audit;
 pub mod body;
 pub mod class_writer;
 pub mod ctx;
