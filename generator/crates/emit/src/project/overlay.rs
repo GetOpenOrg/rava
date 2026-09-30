@@ -4,7 +4,7 @@
 //! - 根 `lib.rs` 不在此复制：由 [`super::mod_tree::complete_lib_rs`] 写出（手写真源 + 顶层包补全）；
 //! - scratch 中 runtime/ 已删除的手写文件在 mod 树阶段清扫（[`super::mod_tree`] `sweep_stale`：
 //!   须在本轮写出之后判定，否则本轮生成的无标记文件会被先删后写）；
-//! - `build.rs` 原样复制；`Cargo.toml` 宏依赖改绝对路径、包版本唯一化；
+//! - 构建脚本（crate 根的 `build.rs` 及其子文件 `build_*.rs`）原样复制；`Cargo.toml` 宏依赖改绝对路径、包版本唯一化；
 //! - `java/ jdk/ sun/` 顶层目录兜底占位 mod.rs。
 
 use std::path::Path;
@@ -54,7 +54,17 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
         }
     }
     let jrt = out_dir.join("java_runtime");
-    copy_if_changed(&runtime_dir.join("build.rs"), &jrt.join("build.rs"))?;
+    // 构建脚本：crate 根的全部 .rs（build.rs 及其 `mod` 子文件，如 build_closure.rs）
+    let root_rs = std::fs::read_dir(runtime_dir).map_err(|e| io_err(&runtime_dir.display().to_string(), e))?;
+    let mut scripts: Vec<std::path::PathBuf> = root_rs
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    scripts.sort();
+    for p in scripts {
+        let name = p.file_name().unwrap_or_default();
+        copy_if_changed(&p, &jrt.join(name))?;
+    }
     let cargo_src = runtime_dir.join("Cargo.toml");
     let cargo = std::fs::read_to_string(&cargo_src).map_err(|e| io_err(&cargo_src.display().to_string(), e))?;
     let cargo = cargo
