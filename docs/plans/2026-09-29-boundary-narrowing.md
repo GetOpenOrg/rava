@@ -575,6 +575,16 @@ Digester / CollectorsDemo 的 `AbstractPipeline.evaluate` 并行分支（`dead_p
 这只有对常量正则执行解析才能得知。结论：G6 并入项 3 第 1 部分（构建期类初始化：`Formatter.<clinit>` 在分析期执行，`Pattern` 对象图成为快照事实，
 解析器与 `CANON_EQ` 分支整体不入链）。`UCharacter` 另经手写 `sun/text/Normalizer.getCombiningClass`（`String.toUpperCase(Locale)` → `ConditionalSpecialCasing`）
 以 type 级入闭包，与 G6 无关，属手写层对分析不透明（规范 §六），随该手写按字节码翻译消失。
+**G6 修订目标（2026-10-01 用户决策：按实测修订，不删项）**。原目标「流不敏感可能置位掩码使 `jdk/internal/icu` 增量归零」不可达的原因：
+① `addFlag` 的 `flags0 |= 128` 由解析器对内联标志 `(?c)` 执行，任何正则解析都可达，掩码必含 `CANON_EQ`；② 即便流敏感，`sequence` / `atom` 在解析中途
+再查标志，是否置位取决于正则文本本身——这是「对常量输入执行解析器」才能回答的问题，任何不执行代码的抽象域都给不出。
+修订后的量化目标（两段，均以 `--why` 与 dyn 对照验收）：
+- **G6-a（C3 构建期初始化落地时达成）**：常量正则（`ldc` 字符串直接传入 `Pattern.compile`，且位于构建期执行的 `<clinit>` 内）经 `Pattern.has(CANON_EQ)`
+  入链的类 = **0**；9 例中经 `Pattern.normalize` 入链的 `jdk/internal/icu` 类由现 2 类（`NormalizerBase`、`$Mode`）降到 **0**。依赖项 3 的 `build_time_init`
+  快照（`Pattern` 对象图成为事实，解析器不入链）。
+- **G6-b（手写层随 C1d 翻译）**：`UCharacter` 经手写 `sun/text/Normalizer.getCombiningClass` 的 type 级入口 = **0**（该手写按字节码翻译后其依赖可见，
+  不再以不透明方式引入）。
+- 分析器侧本期不再为 G6 增加抽象域：成本与收益均为零（两段目标都不由分析器规则达成）。
 
 **项 6 SystemJavaLangAccess 选择失败——分析器侧已无缺口，残余随 C1d 删除手写消失，无需新规则**。原记录的 FileIOTest 3 条
 （`decodeASCII` / `encodeASCII` / `inflateBytesToChars`）在本期基线已为 0。残余 unresolved 全部是 `hwobj_target` 在手写对象上找不到方法：
