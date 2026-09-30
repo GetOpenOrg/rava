@@ -193,6 +193,19 @@ fn more_specific_default_overrides_ancestor_injected_slot() {
     std::fs::remove_dir_all(&out).ok();
 }
 
+/// 视图派发的接收者为 null（字段类型无实例、读作 null）：先判空抛 NullPointerException，
+/// 视图落空（生成器缺陷）以类名 + 方法名 + 描述符精确 panic，不得静默给默认值
+#[test]
+fn virtual_view_null_receiver_throws_npe() {
+    let Some((_, out)) = build("NullView.java", "null-view", &[]) else { return };
+    let rs = std::fs::read_to_string(out.join("user/src/null_view_holder.rs")).unwrap();
+    let line = rs.lines().find(|l| l.contains("__virtual_view(")).expect("h.name() 走视图派发");
+    assert!(line.contains(".__nn()?)"), "接收者先判空：{line}");
+    assert!(line.contains("panic!(\"vtable-view-miss: NullView$Handler.name:()Ljava/lang/String;\")"), "{line}");
+    assert!(!line.contains("Default::default()"), "{line}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
 /// `rava image-dirs`：每行一个已存在的类目录；VM 支持类按模块给出（与 `build` 缺省派生同源）
 #[test]
 fn image_dirs_lists_existing_class_dirs() {
