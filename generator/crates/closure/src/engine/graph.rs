@@ -30,6 +30,13 @@ pub(super) struct FlowGraph {
     pub(super) edges_since: usize,
     /// 观测：环检测次数 / 合并掉的节点数 / 检测耗时 ms
     pub(super) scc_stats: [u64; 3],
+    /// 新接边整集合收窄的记忆：(源代表, 过滤类型) → (源集合元素数, 收窄结果)。
+    /// 类型集只增不减，元素数相同即集合相同，故元素数即版本号（只记大集合，见 `flow.rs::flow`）
+    pub(super) fmemo: HashMap<(u32, u32), (usize, TypeSet)>,
+    /// 收窄记忆的堆占用（估算字节）；超预算整表清空
+    pub(super) fmemo_bytes: usize,
+    /// 观测：收窄记忆命中 / 未命中 / 超预算清空次数
+    pub(super) fmemo_stats: [u64; 3],
 }
 
 impl FlowGraph {

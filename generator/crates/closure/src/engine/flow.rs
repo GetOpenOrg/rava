@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// 新接边整集合收窄走记忆的源集合元素数下限
+const FILTER_MEMO_AT: usize = 64;
+/// 收窄记忆的内存预算（字节）；超出整表清空（只影响速度，不影响结果）
+const FILTER_MEMO_BUDGET: usize = 64 << 20;
+
+fn memo_bytes(s: &TypeSet) -> usize {
+    s.classes.heap_bytes() + s.open.heap_bytes() + 64
+}
+
 impl<'a> Engine<'a> {
     // ── 类型流 ──────────────────────────────────────────────────────────────
 
@@ -135,11 +144,46 @@ impl<'a> Engine<'a> {
         if objf && self.graph.set(rs).is_subset_of(self.graph.set(rd)) {
             return;
         }
-        let s = std::mem::take(self.graph.own_set_mut(rs));
-        let out = self.filter(&s, filter);
-        *self.graph.own_set_mut(rs) = s;
+        let n = {
+            let s = self.graph.set(rs);
+            s.classes.len() + s.open.len()
+        };
+        if objf || n < FILTER_MEMO_AT {
+            let s = std::mem::take(self.graph.own_set_mut(rs));
+            let out = self.filter(&s, filter);
+            *self.graph.own_set_mut(rs) = s;
+            self.via_flow = true;
+            self.add_to_id(di, &out);
+            return;
+        }
+        // 大集合经同一过滤类型接出多条新边（手写调用点写入槽 → 各数组元素）：收窄结果按集合版本记忆
+        let hit = self.graph.fmemo.remove(&(rs, filter));
+        if let Some((_, o)) = &hit {
+            self.graph.fmemo_bytes -= memo_bytes(o);
+        }
+        let out = match hit {
+            Some((len, out)) if len == n => {
+                self.graph.fmemo_stats[0] += 1;
+                out
+            }
+            _ => {
+                self.graph.fmemo_stats[1] += 1;
+                let s = std::mem::take(self.graph.own_set_mut(rs));
+                let out = self.filter(&s, filter);
+                *self.graph.own_set_mut(rs) = s;
+                out
+            }
+        };
         self.via_flow = true;
         self.add_to_id(di, &out);
+        let b = memo_bytes(&out);
+        if self.graph.fmemo_bytes + b > FILTER_MEMO_BUDGET {
+            self.graph.fmemo.clear();
+            self.graph.fmemo_bytes = 0;
+            self.graph.fmemo_stats[2] += 1;
+        }
+        self.graph.fmemo_bytes += b;
+        self.graph.fmemo.insert((rs, filter), (n, out));
     }
 
     pub(super) fn drain_flows(&mut self) {

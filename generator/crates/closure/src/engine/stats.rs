@@ -248,6 +248,8 @@ impl<'a> Engine<'a> {
             "adds": self.graph.adds,
             // 环合并：检测次数 / 合并掉的节点数 / 检测耗时 ms（scc.rs）
             "scc": self.graph.scc_stats,
+            // 新接边收窄记忆：命中 / 未命中（flow.rs）
+            "fmemo": self.graph.fmemo_stats,
             "edges_by_kind": self.edge_kinds(),
             "top_out_degree": self.top_degree(top, false),
             "top_in_degree": self.top_degree(top, true),

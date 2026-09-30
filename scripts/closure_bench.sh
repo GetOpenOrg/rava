@@ -101,8 +101,8 @@ from codegen.jdk_resolver import JdkResolver
 print(' '.join('--image ' + d for d in JdkResolver(prefer_major=$JDKV).image_class_dirs()))")
 
 TABLE="$OUT/bench.md"
-echo "| 用例 | 墙钟 s | user s | sys s | 峰值 RSS MB | 类 | 方法 | 上下文 | 分析次数 |" > "$TABLE"
-echo "|---|---:|---:|---:|---:|---:|---:|---:|---:|" >> "$TABLE"
+echo "| 用例 | 墙钟 s | user s | sys s | 峰值 RSS MB | 峰值 footprint MB | 类 | 方法 | 上下文 | 分析次数 |" > "$TABLE"
+echo "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|" >> "$TABLE"
 for n in $TESTS; do
     f=$(find tests/e2e -name "$n.java" | head -1)
     [ -n "$f" ] || { echo "NOT-FOUND $n"; continue; }
@@ -123,9 +123,12 @@ t = open(sys.argv[1], encoding='utf-8', errors='replace').read()
 g = lambda p: float(re.search(p, t).group(1))
 real, user, sys_ = g(r'([\d.]+) real'), g(r'([\d.]+) user'), g(r'([\d.]+) sys')
 rss = g(r'(\d+)\s+maximum resident set size') / 2**20
+# 内存压力下 RSS 会因页压缩 / 换出偏低；footprint 含压缩页，作内存目标的口径
+fp = re.search(r'(\d+)\s+peak memory footprint', t)
+fp = f"{int(fp.group(1)) / 2**20:.0f}" if fp else '—'
 s = json.load(open(sys.argv[2], encoding='utf-8'))['summary']
 an = s.get('perf', {}).get('analyses', '—')
-print(f"| {sys.argv[3]} | {real:.2f} | {user:.2f} | {sys_:.2f} | {rss:.0f} | {s['classes']} | {s['methods']} | {s['method_contexts']} | {an} |")
+print(f"| {sys.argv[3]} | {real:.2f} | {user:.2f} | {sys_:.2f} | {rss:.0f} | {fp} | {s['classes']} | {s['methods']} | {s['method_contexts']} | {an} |")
 EOF
 )
     echo "$row" | tee -a "$TABLE"
