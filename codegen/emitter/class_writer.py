@@ -57,11 +57,11 @@ def _audit_override(ci, m) -> None:
     if m.is_native or m.is_abstract or not ci.name.startswith(('java/', 'javax/')):
         return
     from .. import raw_audit as _ra
-    from ..callchain import _is_boundary_class
+    from ..callchain import _is_boundary_class, _is_vm_boundary_class
     _member = f'{ci.name}.{m.name}:{m.descriptor}'
-    if _is_boundary_class(ci.name):
-        # 边界类（closure.toml [vm_boundary] 的 VM 耦合类，与 [boundary] 包内未放行的公开包类，
-        # 如 java/security/Security）：整类手写的策略边界，单独计数
+    if _is_boundary_class(ci.name) or _is_vm_boundary_class(ci.name):
+        # 边界类（closure.toml [vm_boundary] 的 VM 耦合类——按方法划分，手写提供的方法；与
+        # [boundary] 包内未放行的公开包类，如 java/security/Security）：策略边界，单独计数
         _ra.record_vm_boundary(_member)
     elif _member in _ra.intrinsics():
         _ra.record_intrinsic(_member)
@@ -1097,7 +1097,12 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     # 重载判定可能漏计桥自身）；同名同参（仅返回不同，参数位 mangle 无法
                     # 区分）→ 沿 Iface_super_m 命名约定取唯一名，槽位名经 vtable_name 传递
                     _vb_base = _vm_bridge.name
-                    if any(m.name == _vm_bridge.name for m in visible_methods):
+                    # 被桥接的真实方法（_vm）本身也重发射进本类（祖先声明、本类未覆盖——
+                    # HuffmanTree.compareTo(HuffmanTree) → HuffmanLeaf）时同样占用裸名：
+                    # 与本类可见方法同名一并视为重名（E0201 实证）
+                    _reemitted_same = (_vm.name == _vm_bridge.name
+                                       and _vm.descriptor != _vm_bridge.descriptor)
+                    if _reemitted_same or any(m.name == _vm_bridge.name for m in visible_methods):
                         _same_params = any(
                             m.name == _vm_bridge.name
                             and _vinh_param_part(m.descriptor) == _vinh_param_part(_vm_bridge.descriptor)

@@ -258,10 +258,10 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// 单二进制无模块层——恒空 Stream（消费方 ServiceLoader 的
     /// ModuleServicesLookupIterator 迭代即终止，无附加 provider）。
     /// `getServicesCatalog(ModuleLayer)`：层内服务目录。boot 层无命名模块、无 provides 声明——
-    /// null（ServiceLoader.LayerLookupIterator 对 null 目录退空 provider 列表，与
-    /// BootLoader.getServicesCatalog 同口径）。
+    /// 空目录（非 null：ServiceLoader.LayerLookupIterator.providers 不判空，直接 findServices；
+    /// Console.<clinit> 的 JdkConsoleProvider 查找经此路径）。
     fn getServicesCatalog(&self, _arg0: crate::java::lang::ModuleLayer) -> Result<crate::jdk::internal::module::ServicesCatalog> {
-        Ok(Default::default())
+        Ok(crate::jdk::internal::module::ServicesCatalog::__empty_layer_catalog())
     }
 
     fn layers_classloader(&self, _arg0: crate::java::lang::ClassLoader) -> Result<crate::java::util::stream::Stream<Object>> {

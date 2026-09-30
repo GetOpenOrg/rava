@@ -25,6 +25,15 @@ _RUNTIME_JRT_SRC = os.path.join(_RUNTIME_JAVA_RUNTIME, 'src')
 _JRT_SRC_SEP = 'java_runtime' + os.sep + 'src' + os.sep
 
 
+
+def _user_mod_decl(parent_dir: str, name: str, vis: str) -> str:
+    """模块声明行。模块名含非 ASCII 字符（类名如 MöbiusFunction）时 rustc 拒绝按名推导文件
+    路径（E0754），补 `#[path]` 显式指明（文件 / 子包目录两种形态）；ASCII 名照常。"""
+    if name.isascii():
+        return f'{vis}mod {name};'
+    target = f'{name}/mod.rs' if os.path.isdir(os.path.join(parent_dir, name)) else f'{name}.rs'
+    return f'#[path = "{target}"]\n{vis}mod {name};'
+
 def _is_handwritten(path: str) -> bool:
     """java_runtime/src/ 下的 .rs 是否为手写文件。
 
@@ -448,8 +457,21 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         # 用作用域内的 mod 树直接写 mod.rs 会抹掉其余文件的声明（E0432/E0433）。
         # 扫描收集全部 .rs，自底向上传播目录，只声明有文件的目录（避免 E0583）。
         jdk_mod_tree: dict[str, set[str]] = {}
+        # 手写模块目录（runtime/ 真源提供 mod.rs，如 jdk_resources/）：模块结构由手写 mod.rs
+        # 自行声明，不属 Java 包 mod 树——跳过其整棵子树。否则复用 scratch 时，目录内上一轮
+        # 生成的文件（module_resources.rs）会让本处把手写 mod.rs 覆写成只声明该文件的版本
+        # （E0425 virtual_close / JAVA_RUNTIME_HOME 实证：首轮 --clean 正常、复跑失败）。
+        from ..constants import RUNTIME_JAVA_RUNTIME as _RT_DIR
+
+        def _handwritten_mod_dir(_d: str) -> bool:
+            _rel = os.path.relpath(_d, _src_root)
+            return (src_root is None and _rel != '.'
+                    and os.path.isfile(os.path.join(_RT_DIR, 'src', _rel, 'mod.rs')))
         if os.path.isdir(_src_root):
             for root, _dirs, files in os.walk(_src_root):
+                if _handwritten_mod_dir(root):
+                    _dirs[:] = []
+                    continue
                 for fname in files:
                     if not fname.endswith('.rs') or fname in ('lib.rs', 'mod.rs'):
                         continue
@@ -693,7 +715,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     for dir_path, children in user_mod_tree.items():
         if dir_path == user_src:
             continue
-        mod_lines = [f'pub mod {c};' for c in sorted(children)]
+        mod_lines = [_user_mod_decl(dir_path, c, 'pub ') for c in sorted(children)]
         for mod_name, cls_name in sorted(user_reexport.get(dir_path, set())):
             mod_lines.append(f'pub use {mod_name}::{cls_name};')
         _write(os.path.join(dir_path, 'mod.rs'), '\n'.join(mod_lines) + '\n')
@@ -862,7 +884,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         # 单测试模式（默认）：写 src/main.rs + 覆写 Cargo.toml
         main_lines = [
             '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
-            *[f'mod {m};' for m in top_user_mods],
+            *[_user_mod_decl(user_src, m, '') for m in top_user_mods],
             f'use {use_path};',
             '',
             'fn main() {',

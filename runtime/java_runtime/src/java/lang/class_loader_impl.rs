@@ -15,6 +15,26 @@ use super::class_loader::ClassLoader;
 //     外部 provider 发现终止（TzdbZoneRulesProvider 已由 ZoneRulesProvider
 //     <clinit> 的默认分支直接注册，正是 JDK 对无发现环境的回退设计）。
 impl ClassLoader {
+    /// native `findBootstrapClass(String name)`：引导加载器按 binary name（点分）查找已定义类，
+    /// 找不到返回 null。原生镜像的类全集编译期定死、全部由引导形态承载（`Class.getClassLoader`
+    /// 恒 null），故「引导加载器可见」即闭包内的类（与 `Class.forName0` 同一判定）。
+    #[jvm_native]
+    pub fn findBootstrapClass(name: String) -> Result<super::Class> {
+        let slash = format!("{}", name).replace('.', "/");
+        if slash.starts_with('[') || !super::Class::__is_known_class(&slash) {
+            return Ok(super::Class::default());
+        }
+        Ok(super::Class::for_class(String::from(slash.as_str())))
+    }
+
+    /// native `findLoadedClass0(String name)`：本加载器作为初始加载器记录过的类。原生镜像中
+    /// 全部类由引导形态定义，非引导加载器从未成为任何类的初始加载器 → 恒 null
+    /// （`loadClass` 随即委派父加载器 / findBootstrapClassOrNull，与 JDK 委派模型一致）。
+    #[jvm_native]
+    pub fn findLoadedClass0(&self, _name: String) -> Result<super::Class> {
+        Ok(super::Class::default())
+    }
+
     /// 系统类加载器单例（JDK: ClassLoader.scl，initSystemClassLoader 填充）。
     #[jvm_boundary]
     pub fn getSystemClassLoader() -> Result<ClassLoader> {

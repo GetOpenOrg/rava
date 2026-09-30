@@ -346,6 +346,13 @@ def _java_class_block_head(ci: ClassInfo, registry: dict | None = None,
             # 组件表（名:描述符:Signature，| 分隔——描述符自带分号；build.rs 生成 RECORD_COMPONENTS 表）
             _rc = '|'.join(f'{n}:{d}:{g}' for n, d, g in ci.record_components)
             lines.append(f'#[record_components = "{_q(_rc)}"]')
+    if ci.permitted_subclasses:
+        # sealed 许可子类型（build.rs 生成 PERMITTED_SUBCLASSES 表 → Class.getPermittedSubclasses0）
+        lines.append(f'#[permitted_subclasses = "{_q(",".join(ci.permitted_subclasses))}"]')
+    if any(m.name == '<clinit>' for m in ci.methods):
+        # 类文件声明了 <clinit>（与是否翻译无关；build.rs 生成 CLINIT_CLASSES 表 →
+        # ObjectStreamClass.hasStaticInitializer，默认 serialVersionUID 计算的输入）
+        lines.append('#[has_clinit        = true]')
     if ci.is_deprecated:
         lines.append('#[is_deprecated     = true]')
     if ci.source_file:

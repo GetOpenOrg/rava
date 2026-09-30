@@ -23,6 +23,7 @@ use crate::java::text::spi::NumberFormatProvider;
 use crate::java::text::spi::NumberFormatProvider__VTable;
 use crate::java::text::spi::{DecimalFormatSymbolsProvider, DecimalFormatSymbolsProvider__VTable};
 use crate::java::text::spi::{DateFormatProvider, DateFormatProvider__VTable};
+use crate::java::text::spi::{DateFormatSymbolsProvider, DateFormatSymbolsProvider__VTable};
 use super::locale_resources::LocaleResources;
 use super::resource_bundle_based_adapter::ResourceBundleBasedAdapter__VTable;
 use crate::java::util::spi::LocaleServiceProvider__VTable;
@@ -147,6 +148,9 @@ impl ObjectVTable for NativeNumberFormatProvider {
     fn __obj_str(&self) -> std::string::String {
         "sun.util.cldr.CLDRLocaleProviderAdapter$1".to_owned()
     }
+    fn is_instance_of(&self, type_id: &str) -> bool {
+        _is_one_of(type_id, &["sun/util/cldr/CLDRLocaleProviderAdapter$1", "java/text/spi/NumberFormatProvider", "java/util/spi/LocaleServiceProvider"])
+    }
 }
 
 /// `java/text/spi/DecimalFormatSymbolsProvider` 的手写实现对象（JDK 的
@@ -185,6 +189,9 @@ impl ObjectVTable for NativeDecimalFormatSymbolsProvider {
     fn __class_name(&self) -> &'static str { "sun/util/locale/provider/DecimalFormatSymbolsProviderImpl" }
     fn __obj_str(&self) -> std::string::String {
         "sun.util.locale.provider.DecimalFormatSymbolsProviderImpl".to_owned()
+    }
+    fn is_instance_of(&self, type_id: &str) -> bool {
+        _is_one_of(type_id, &["sun/util/locale/provider/DecimalFormatSymbolsProviderImpl", "java/text/spi/DecimalFormatSymbolsProvider", "java/util/spi/LocaleServiceProvider"])
     }
 }
 
@@ -248,6 +255,52 @@ impl ObjectVTable for NativeDateFormatProvider {
     fn __obj_str(&self) -> std::string::String {
         "sun.util.locale.provider.DateFormatProviderImpl".to_owned()
     }
+    fn is_instance_of(&self, type_id: &str) -> bool {
+        _is_one_of(type_id, &["sun/util/locale/provider/DateFormatProviderImpl", "java/text/spi/DateFormatProvider", "java/util/spi/LocaleServiceProvider"])
+    }
+}
+
+/// `java/text/spi/DateFormatSymbolsProvider` 的手写实现对象（JDK 的
+/// `DateFormatSymbolsProviderImpl`）：`getInstance(locale)` = `new DateFormatSymbols(locale)`
+/// ——月份 / 星期 / 纪元名由翻译构造器（initializeData）按 CLDR 束数据初始化。
+struct NativeDateFormatSymbolsProvider;
+
+impl DateFormatSymbolsProvider__VTable for NativeDateFormatSymbolsProvider {
+    fn getInstance(&self, arg0: Locale) -> Result<crate::java::text::DateFormatSymbols> {
+        crate::java::text::DateFormatSymbols::new_locale(arg0)
+    }
+
+    fn __as_DateFormatSymbolsProvider(&self) -> DateFormatSymbolsProvider {
+        let rc = Rc::new(NativeDateFormatSymbolsProvider);
+        DateFormatSymbolsProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn DateFormatSymbolsProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        )
+    }
+}
+
+impl LocaleServiceProvider__VTable for NativeDateFormatSymbolsProvider {
+    fn __as_LocaleServiceProvider(&self) -> crate::java::util::spi::LocaleServiceProvider {
+        let rc = Rc::new(NativeDateFormatSymbolsProvider);
+        crate::java::util::spi::LocaleServiceProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn LocaleServiceProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        )
+    }
+}
+
+impl ObjectVTable for NativeDateFormatSymbolsProvider {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn __class_name(&self) -> &'static str { "sun/util/locale/provider/DateFormatSymbolsProviderImpl" }
+    fn __obj_str(&self) -> std::string::String {
+        "sun.util.locale.provider.DateFormatSymbolsProviderImpl".to_owned()
+    }
+    fn is_instance_of(&self, type_id: &str) -> bool {
+        _is_one_of(type_id, &["sun/util/locale/provider/DateFormatSymbolsProviderImpl",
+            "java/text/spi/DateFormatSymbolsProvider", "java/util/spi/LocaleServiceProvider"])
+    }
 }
 
 /// `sun/util/spi/CalendarProvider` 的手写实现对象（JDK 的 `CalendarProviderImpl`）：
@@ -293,6 +346,9 @@ impl ObjectVTable for NativeCalendarProvider {
     fn __obj_str(&self) -> std::string::String {
         "sun.util.locale.provider.CalendarProviderImpl".to_owned()
     }
+    fn is_instance_of(&self, type_id: &str) -> bool {
+        _is_one_of(type_id, &["sun/util/locale/provider/CalendarProviderImpl", "sun/util/spi/CalendarProvider", "java/util/spi/LocaleServiceProvider"])
+    }
 }
 
 /// `LocaleProviderAdapter` 的手写实现对象（JDK 的 CLDR 适配器单例形态）。
@@ -320,6 +376,18 @@ impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
         let rc = Rc::new(NativeDateFormatProvider);
         Ok(DateFormatProvider::__from_parts(
             Rc::clone(&rc) as Rc<dyn DateFormatProvider__VTable>,
+            rc as crate::sync_model::__AnyRef,
+            false,
+        ))
+    }
+
+    /// `getDateFormatSymbolsProvider()`：DateFormatSymbols.getInstance(locale) 的服务入口
+    /// （回调边挂在本方法上，只有用到日期格式符号的程序才带入其构造器）。
+    #[jvm_boundary(upcalls = "java/text/DateFormatSymbols.<init>:(Ljava/util/Locale;)V")]
+    fn getDateFormatSymbolsProvider(&self) -> Result<DateFormatSymbolsProvider> {
+        let rc = Rc::new(NativeDateFormatSymbolsProvider);
+        Ok(DateFormatSymbolsProvider::__from_parts(
+            Rc::clone(&rc) as Rc<dyn DateFormatSymbolsProvider__VTable>,
             rc as crate::sync_model::__AnyRef,
             false,
         ))
@@ -376,6 +444,15 @@ impl ObjectVTable for NativeLocaleAdapter {
     fn __class_name(&self) -> &'static str { "sun/util/cldr/CLDRLocaleProviderAdapter" }
     fn __obj_str(&self) -> std::string::String {
         "sun.util.cldr.CLDRLocaleProviderAdapter".to_owned()
+    }
+    /// 超类型闭包（JDK：CLDRLocaleProviderAdapter extends JRELocaleProviderAdapter
+    /// implements ResourceBundleBasedAdapter；JRE 适配器 extends LocaleProviderAdapter）——
+    /// checkcast / instanceof 的判据（`(ResourceBundleBasedAdapter) adapter` 等）。
+    fn is_instance_of(&self, type_id: &str) -> bool {
+        _is_one_of(type_id, &["sun/util/cldr/CLDRLocaleProviderAdapter",
+            "sun/util/locale/provider/JRELocaleProviderAdapter",
+            "sun/util/locale/provider/LocaleProviderAdapter",
+            "sun/util/locale/provider/ResourceBundleBasedAdapter"])
     }
     /// 接口视图查询（invokeinterface 的运行时入口）。
     fn __interface(self: Rc<Self>, slot: &mut dyn std::any::Any) {
@@ -450,4 +527,9 @@ impl LocaleProviderAdapter {
         let _ = _type;
         Ok(_adapter_view())
     }
+}
+
+/// 手写对象的超类型判定（含 java/lang/Object）。
+fn _is_one_of(type_id: &str, supers: &[&str]) -> bool {
+    type_id == "java/lang/Object" || supers.contains(&type_id)
 }

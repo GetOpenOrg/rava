@@ -17,6 +17,13 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_mo
         Ok(Into::<Object>::into(self.__get_referent()) == obj)
     }
 
+    /// native `hasReferencePendingList()`：GC 发现的待处理引用链表是否非空。无 GC → 引用从不被
+    /// 发现 / 入 pending 链表，恒 false（消费方：`Reference.waitForReferenceProcessing` 的快速路径）。
+    #[jvm_native]
+    pub fn hasReferencePendingList() -> Result<bool> {
+        Ok(false)
+    }
+
     /// native `clear0()`：清除 referent（此后 get() 返回 null；不入队——JDK
     /// clear 同样不触发入队）。消费方：ClassValue/ClassCache 缓存条目替换路径。
     #[jvm_native]

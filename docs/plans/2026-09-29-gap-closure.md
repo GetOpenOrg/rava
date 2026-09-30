@@ -34,6 +34,7 @@ gap_scan 在转译后（cargo 之前）按生成产物列出调用链上**全部
 | 4 | 纯 Java 内部类：RandomSupport 族（35）、sun/util/locale（LanguageTag / LocaleMatcher / LocaleUtils / LocaleObjectCache / InternalLocaleBuilder / LocaleExtensions / ParseStatus，约 22）、ICU 规范化 / 双向（NormalizerBase / BidiBase / NormalizerImpl，约 16）、sun/text（约 6）、sun/invoke/util（约 5）、jdk/internal/module Checks / Resources（4） | 优先 closure.toml [release] 放行翻译（「能生成的都走生成器」）；逐包评估闭包增量（N14 内存上限） | 🔄 RandomSupport 族 + sun/util/locale（LanguageTag / InternalLocaleBuilder / LocaleExtensions / Extension / UnicodeLocaleExtension / LocaleSyntaxException / ParseStatus / StringTokenIterator / LocaleMatcher / LocaleEquivalentMaps / LocaleObjectCache / LocaleUtils）已放行（RandomSupport.initialSeed 与 BaseLocale 保持手写），e2e TestRandomStreams / TestLocaleLanguageTag；ICU / sun/text / sun/invoke/util / module Checks 待续 |
 | 5 | VM 耦合手写：ClassLoader（16）、BootLoader（6）、Modules（5）、InnocuousThread / VirtualThreads（8）、sun/security/jca/GetInstance（6）、TimeZoneNameUtility（5）、StreamDecoder / StreamEncoder（6，指定字符集名的 Reader / Writer）、System.setOut0 / setErr0 / setIn0 | 手写边界方法 | 🔄 StreamDecoder / StreamEncoder 按字符集名构造 + getEncoding（历史名）、GetPropertyAction 构造器 / run ✅（e2e TestCharsetNamedStreams）；System.setOut0 / setErr0 / setIn0 ✅（批次 2）；其余待续 |
 | 6a | 进程派生：ProcessImpl.forkAndExec（fork + execve，PATH 搜索、管道 / 继承 / 文件重定向、合并错误流、错误管道回传 errno，JDK 21 posix_spawn 模式的异常文案）、ProcessHandleImpl.waitForProcessExit0（waitpid / waitid WNOWAIT）、InnocuousThread.newSystemThread / newThread（进程回收线程工厂）、ProcessStartEvent.<init>（JFR 占位） | 手写 native / 边界方法 + e2e（TestProcessBuilder） | ✅（cargo check 零错误；运行期待用户机器验证） |
+| 6b | VM 注入的类元数据：ObjectStreamClass.hasStaticInitializer（默认 serialVersionUID 计算）、Class.getPermittedSubclasses0（sealed 反射）——生成器从 classfile 读 `<clinit>` 在场 / PermittedSubclasses 属性写入类级属性 `has_clinit` / `permitted_subclasses`，build.rs 汇总为 class_meta_table；VirtualThread.notifyJvmti*（无 JVMTI → no-op）、Reference.hasReferencePendingList（无 GC → false） | 生成器 + build.rs + 手写 native，e2e TestSerialDefaultSuid | ✅（cargo check 零错误；运行期待用户验证） |
 | 6 | 运行期结构：StackWalker（StackStreamFactory 4 + StackTraceElement 1）、ProcessImpl.forkAndExec + waitForProcessExit0 / getProcessPids0 / Info.info0、NetworkInterface（4）、反射本地访问器 invoke0 / newInstance0、MethodHandleNatives expand / getMemberVMInfo / getNamedCon、Class.getGenericSignature0（需类泛型签名元数据表）、ObjectStreamClass.hasStaticInitializer（需 `<clinit>` 元数据） | 各自方案 | ⬜ |
 | — | 字节码生成链（asm ClassWriter / Type / Label、InvokerBytecodeGenerator）、安全管理器链（Policy、FilePermCompat、ReflectUtil.checkProxyPackageAccess）、JFR 事件 | 生成链截断 / SecurityManager 恒 null——设计上不执行，维持存根 | — |
 
@@ -42,3 +43,35 @@ gap_scan 在转译后（cargo 之前）按生成产物列出调用链上**全部
 - 每批：新增 / 相关 e2e（期望输出由 JVM 生成）；手写层编译以 `cargo check` 在本机验证
   （16G 本机完整构建贴 OOM 线，见 N8 / N14），运行期回归由用户机器批量验证。
 - 每批合入后重跑 `gap_scan.py api …`，缺口数只降不升。
+
+## 五、VM 耦合边界类按方法划分（Python 生成器侧，2026-09-29）
+
+与 Rust 闭包分析器（C1c 第 2 步）及 CLAUDE.md 新口径对齐：`closure.toml [vm_boundary]` 类
+（Class / ClassLoader / Module / ModuleLayer / SecurityManager / VirtualThread）不再整类截断——
+
+- native / VM 内建 / 共置手写体提供的方法取手写；其余被调用到的方法按字节码翻译（BFS 照常展开）；
+- `<clinit>` 不翻译（类初始化入链跳过，发射层不生成 `__clinit`，`__class_init()` 为 no-op，
+  与整类手写时一致）；手写成员照旧计入 `vm_boundary_methods`。
+- `[vm_boundary].whole_class`：规模驱动的策略截断（FileSystems / InetAddress / JceSecurity /
+  InvokerBytecodeGenerator）——Python BFS 是过近似口径，按方法划分会重新展开名字服务 / JCE 策略等
+  子系统，仍整类截断；Python 改为消费 closure.json 后随 C1d 删除。Rust 分析器不读此键。
+- 随之暴露并补齐：`ClassLoader.findBootstrapClass` / `findLoadedClass0`（native）、
+  `PerfCounter` 计数器取值族（jvmstat 占位）；迟至静态边补扫的门 3 增加字段臂（读写不在闭包内的
+  其它边界类字段的方法保持存根）。
+- 规模（JDK 21）：HelloWorld 2145 → 2198 个生成文件（+2.5%），TestProcessBuilder 2210 → 2263；
+  `ClassLoader.loadClass` 族、`Class.isEnum` / `isAnnotation`、注解数据链等由存根变为字节码翻译。
+
+## 六、剩余缺口的去向（2026-09-29 复扫后）
+
+复扫：java.lang + java.util native 49 → 23、存根 207 → 193；java.text 等 14 包 native 60 → 33、存根 186 → 155。
+
+| 缺口 | 去向 | 理由 |
+|---|---|---|
+| TimeZoneNameUtility（Date.toString / 格式串 `z` 的时区名）、ICU 规范化 / 双向（Normalizer / Bidi / Collator 链的 sun/text） | C1d 放行 `sun/util/locale/provider`、`jdk/internal/icu`、`sun/text` | 纯 Java 逻辑（CLDR metazone 映射、ICU 数据表）；按「手写只留 VM 契约层」不手写复刻，待精确闭包下实测放行增量 |
+| zip 直接缓冲区族（Adler32 / CRC32 / Deflater / Inflater 的 ByteBuffer 版，10 个） | 随直接内存（Unsafe.allocateMemory）一并实现 | rava 尚无直接内存，这些 native 运行期不可达 |
+| NativeMethodAccessorImpl.invoke0 / NativeConstructorAccessorImpl.newInstance0 | 不做 | JDK 21 反射调用 native 方法走 DirectMethodHandleAccessor$NativeAccessor（已手写）；旧式访问器仅在关闭 useDirectMethodHandle 时使用 |
+| StackWalker（StackStreamFactory 4 + StackTraceElement.initStackTraceElement） | 暂缓 | 需要真实 Java 帧（方法名 / 调用方类）；rava 栈回溯为 Rust 栈近似，输出难与 JVM 一致 |
+| Class.getGenericSignature0 | 随 C1d 放行 sun/reflect/generics | native 本身简单（类级 generic_signature 属性已在），但消费方泛型 visitor 体系未放行（曾使 java_runtime 编译峰值越过 15G） |
+| MethodHandleNatives expand / getMemberVMInfo / getNamedCon | 不做 | MH-native 模型替代；getNamedCon 只在断言校验路径 |
+| NetworkInterface | 暂缓 | 语料无网络接口枚举 |
+

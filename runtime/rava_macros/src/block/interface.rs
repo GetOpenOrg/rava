@@ -14,7 +14,7 @@ use syn::{GenericParam, Ident, Type};
 
 use super::class_init;
 use super::erasure::{
-    erase_signature, erase_type, expand_non_virtual_fn, flat_type_tokens,
+    erase_signature, erase_type, erasure_hits_param, erasure_hits_ret, expand_non_virtual_fn, flat_type_tokens,
     mentions_any, objectize_type, param_idents, result_inner_ty, same_type_tokens,
     without_param_mut,
 };
@@ -308,15 +308,15 @@ pub(crate) fn erased_impl_call(
     type_param_names: &HashSet<String>,
     erasure: &HashSet<String>,
 ) -> TokenStream2 {
-    let conv_args: Vec<TokenStream2> = sig.inputs.iter().filter_map(|a| match a {
+    let conv_args: Vec<TokenStream2> = sig.inputs.iter()
+        .filter(|a| matches!(a, syn::FnArg::Typed(_))).enumerate().filter_map(|(i, a)| match a {
         syn::FnArg::Typed(pt) => {
             let ident = match &*pt.pat {
                 syn::Pat::Ident(pi) => pi.ident.clone(),
                 _ => return None,
             };
             let mentions = mentions_any(&pt.ty, type_param_names);
-            let hits = !erasure.is_empty()
-                && erasure.contains(&flat_type_tokens(&pt.ty));
+            let hits = erasure_hits_param(erasure, i, &pt.ty);
             if mentions || hits {
                 let obj_ty = if mentions {
                     objectize_type(&pt.ty, type_param_names)
@@ -347,8 +347,7 @@ pub(crate) fn erased_impl_call(
     if let syn::ReturnType::Type(_, ty) = &sig.output {
         if let Some(inner) = result_inner_ty(ty) {
             let mentions = mentions_any(inner, type_param_names);
-            let hits = !erasure.is_empty()
-                && erasure.contains(&flat_type_tokens(inner));
+            let hits = erasure_hits_ret(erasure, inner);
             if mentions || hits {
                 let obj_inner = if mentions {
                     objectize_type(inner, type_param_names)

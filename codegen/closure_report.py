@@ -4,7 +4,8 @@
   翻译方法体        调用链上至少一个方法入链，方法体由字节码翻译
   仅类型存根        只作为类型 / 字段 / 签名被引用，无方法入链（方法全部为 panic 存根）
   手写边界·内部包   closure.toml [boundary] 前缀内、未放行的类（jdk/ sun/ …），整体手写
-  手写边界·VM 耦合  closure.toml [vm_boundary] 的公开包类（Class / ClassLoader …），整体手写
+  手写边界·VM 耦合  closure.toml [vm_boundary] 的公开包类（Class / ClassLoader …），按方法划分
+                    （手写提供的取手写，其余入链方法按字节码翻译）
 
 来源标注（与角色正交，只标边界前缀内按字节码翻译的类为何被放行）：
   JCA 服务          seeds.toml [jca] 放行的 provider / 算法实现族
@@ -42,9 +43,11 @@ def classify(jdk_class_infos, visited_methods) -> list[dict]:
     for ci in jdk_class_infos:
         name = ci.name
         n = per_cls.get(name, 0)
-        if cc._is_boundary_class(name):
-            role = (ROLE_BOUNDARY_VM if name.split('$', 1)[0] in cc._VM_BOUNDARY_CLASSES
-                    else ROLE_BOUNDARY_INTERNAL)
+        if cc._is_vm_boundary_class(name) or (cc._is_boundary_class(name)
+                                               and name.split('$', 1)[0] in cc._VM_BOUNDARY_CLASSES):
+            role = ROLE_BOUNDARY_VM
+        elif cc._is_boundary_class(name):
+            role = ROLE_BOUNDARY_INTERNAL
         else:
             role = ROLE_TRANSLATED if n else ROLE_STUB
         source = ''

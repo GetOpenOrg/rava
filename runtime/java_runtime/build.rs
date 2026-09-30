@@ -91,6 +91,7 @@ fn main() {
     write_method_table(&with_object_ctor_row(scan_class_methods(&meta_roots)));
     write_modifiers_table(&scan_class_modifiers(&meta_roots));
     write_record_table(&scan_record_classes(&meta_roots), &scan_record_components(&meta_roots));
+    write_class_meta_table(&scan_clinit_classes(&meta_roots), &scan_permitted_subclasses(&meta_roots));
     write_nest_table(&scan_nest_meta(&meta_roots));
     write_interfaces_table(&scan_class_interfaces(&meta_roots));
     write_class_anno_table(&scan_class_annos(&meta_roots));
@@ -521,21 +522,25 @@ fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>>)
     -> BTreeMap<String, Vec<MethodMeta>>
 {
     let rows = methods.entry("java/lang/Object".to_owned()).or_default();
-    // (name, descriptor, modifiers, is_native, throws)：PUBLIC 0x1 / PROTECTED 0x4 /
-    // FINAL 0x10 / NATIVE 0x100（JDK 21 java.lang.Object 声明序）
+    // (name, descriptor, modifiers, is_native, throws)：PUBLIC 0x1 / PRIVATE 0x2 / PROTECTED 0x4 /
+    // FINAL 0x10 / NATIVE 0x100。顺序 = HotSpot 方法表序（JDK 21 `Object.class.getDeclaredMethods()`
+    // 实测：finalize, wait0, equals, toString, hashCode, getClass, clone, notify, notifyAll,
+    // wait(J), wait(JI), wait()）——getMethods / getDeclaredMethods 的输出顺序与 JVM 一致
+    //（ListMethods 实证）；构造器不在方法序列中，置首位不影响方法序
     const OBJECT_MEMBERS: &[(&str, &str, i32, bool, &[&str])] = &[
         ("<init>", "()V", 0x0001, false, &[]),
-        ("getClass", "()Ljava/lang/Class;", 0x0111, true, &[]),
-        ("hashCode", "()I", 0x0101, true, &[]),
+        ("finalize", "()V", 0x0004, false, &["java/lang/Throwable"]),
+        ("wait0", "(J)V", 0x0112, true, &["java/lang/InterruptedException"]),
         ("equals", "(Ljava/lang/Object;)Z", 0x0001, false, &[]),
-        ("clone", "()Ljava/lang/Object;", 0x0104, true, &["java/lang/CloneNotSupportedException"]),
         ("toString", "()Ljava/lang/String;", 0x0001, false, &[]),
+        ("hashCode", "()I", 0x0101, true, &[]),
+        ("getClass", "()Ljava/lang/Class;", 0x0111, true, &[]),
+        ("clone", "()Ljava/lang/Object;", 0x0104, true, &["java/lang/CloneNotSupportedException"]),
         ("notify", "()V", 0x0111, true, &[]),
         ("notifyAll", "()V", 0x0111, true, &[]),
-        ("wait", "()V", 0x0011, false, &["java/lang/InterruptedException"]),
         ("wait", "(J)V", 0x0011, false, &["java/lang/InterruptedException"]),
         ("wait", "(JI)V", 0x0011, false, &["java/lang/InterruptedException"]),
-        ("finalize", "()V", 0x0004, false, &["java/lang/Throwable"]),
+        ("wait", "()V", 0x0011, false, &["java/lang/InterruptedException"]),
     ];
     for (i, (name, desc, mods, native, throws)) in OBJECT_MEMBERS.iter().enumerate() {
         if rows.iter().any(|m| m.name == *name && m.descriptor == *desc) {
@@ -917,6 +922,76 @@ fn scan_record_components(roots: &[&Path]) -> BTreeMap<String, String> {
         }
     }
     result
+}
+
+/// 声明了 `<clinit>` 的类集（has_clinit 属性在场）。
+fn scan_clinit_classes(roots: &[&Path]) -> BTreeSet<String> {
+    let mut result = BTreeSet::new();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+                continue;
+            }
+            if !current.is_empty() && trimmed.starts_with("#[has_clinit") && trimmed.contains("true") {
+                result.insert(current.clone());
+            }
+        }
+    }
+    result
+}
+
+/// sealed 许可子类型表（permitted_subclasses 属性：binary name，`,` 分隔，声明序）。
+fn scan_permitted_subclasses(roots: &[&Path]) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let mut current = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
+                current = name;
+                continue;
+            }
+            if !current.is_empty() {
+                if let Some(v) = extract_attr_padded(trimmed, "permitted_subclasses") {
+                    result.insert(current.clone(), v);
+                }
+            }
+        }
+    }
+    result
+}
+
+fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTreeMap<String, String>) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+    let mut out = String::from(
+        "// 由 build.rs 自动生成：类文件级元数据（VM 注入的类信息）。请勿手改。
+         // CLINIT_CLASSES：声明了 <clinit> 的类（has_clinit 属性）——ObjectStreamClass.hasStaticInitializer。
+         // PERMITTED_SUBCLASSES：sealed 类的许可子类型（permitted_subclasses 属性）——Class.getPermittedSubclasses0。
+
+         pub static CLINIT_CLASSES: &[&str] = &[
+",
+    );
+    for name in clinit {
+        out.push_str(&format!("    {:?},\n", name));
+    }
+    out.push_str("];\n\npub static PERMITTED_SUBCLASSES: &[(&str, &[&str])] = &[\n");
+    for (cls, list) in permitted {
+        out.push_str(&format!("    ({:?}, &[", cls));
+        for sub in list.split(',').filter(|c| !c.is_empty()) {
+            out.push_str(&format!("{:?}, ", sub));
+        }
+        out.push_str("]),\n");
+    }
+    out.push_str("];\n");
+    let path = Path::new(&out_dir).join("class_meta_table.rs");
+    if let Err(e) = fs::write(&path, &out) {
+        panic!("写 class_meta_table.rs 失败: {e}");
+    }
 }
 
 fn write_record_table(entries: &BTreeSet<String>, components: &BTreeMap<String, String>) {

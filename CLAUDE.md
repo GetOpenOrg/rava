@@ -139,7 +139,7 @@ BFS 调用链分析规则：
 |--------------|---------|
 | `java/`、`javax/`（公开 API） | 继续 BFS，翻译字节码 |
 | `closure.toml [boundary]` 内部包前缀（`jdk/`、`sun/`、`com/sun/` 等） | 停止 BFS，视为内部边界类，整体手写 |
-| `closure.toml [vm_boundary]`（公开包中由 VM 本地代码驱动的类，如 `Class`、`ClassLoader`、`Module`） | **按方法划分**：native / VM 内建 / 共置手写体按精确名提供的方法取手写（单独计数 `vm_boundary_methods`），其余被调用到的方法按字节码翻译（运行时执行的就是其字节码；闭包分析同口径建模） |
+| `closure.toml [vm_boundary]`（公开包中由 VM 本地代码驱动的类，如 `Class`、`ClassLoader`、`Module`） | **按方法划分**：native / VM 内建 / 共置手写体按精确名提供的方法取手写（单独计数 `vm_boundary_methods`），其余被调用到的方法按字节码翻译（运行时执行的就是其字节码；闭包分析同口径建模），`<clinit>` 不翻译；`whole_class` 子清单（规模驱动的策略截断，如 `InetAddress`）在 Python 生成器中仍整类截断 |
 | `closure.toml [release]` / `seeds.toml [jca]` 放行条目 | 边界前缀内按字节码翻译（纯 Java 逻辑的内部类） |
 
 **清单即边界**：边界、放行、补种、VM 承载全部集中在 `runtime/java_runtime/` 下三个 TOML
