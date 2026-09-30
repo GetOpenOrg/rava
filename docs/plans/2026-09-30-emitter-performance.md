@@ -449,7 +449,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 
 改前热点（按 size_est）：
 - `Weak::drop` 832 份、`Arc::drop_slow` 832 份、`Arc::drop` 834 份，合计约 5 万。按类型实参分：`dyn X__VTable` 244、`X__inner` 202、wrapper 约 238，其余是数组与存储单元。
-- `ObjectVTable` 的 `wait` / `wait_l` / `wait_l_i` / `notify` / `notify_all` / `monitor_enter` `monitor_exit` 各 454 份，前六项每项 size_est 4,086。
+- `ObjectVTable` 的 `wait` / `wait_l` / `wait_l_i` / `notify` / `notify_all` / `monitor_enter`、`monitor_exit` 各 454 份，前六项每项 size_est 4,086。
 
 来源：
 - `Arc<X__inner>` 与 `Arc<wrapper>` 的析构来自 `ObjectVTable` 上三个按值接收 `__Shared<Self>` 的钩子：`__interface`、`__erased_inner`、`__erased_vtable`。未把 self 移交出去的路径（含 trait 默认的空体）在函数末尾析构 self，每个实现类型各实例化一份 `Arc<Self>` 析构链。
