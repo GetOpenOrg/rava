@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态（2026-09-30）：🔄 第 1 步完成（`--release` 实测，§六）；逐包删除（§6.8）包 1–5 已提交、包 6 待抽查合入、包 7–9 未开始；精度项 G2′ 完成，G4–G6 未开始。
+> 状态（2026-09-30 深夜）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec），闭包对照 / cargo check / e2e 抽查中；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），G4–G6 未开始（G6 仅设计）。
 
 ## 一、目标
 

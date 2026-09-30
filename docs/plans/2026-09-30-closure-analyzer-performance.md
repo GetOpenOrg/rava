@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态：⏳ 未开始。排期：闭包精度线手上的回归（DeepCopy / DES / Digester / TestFileAccessSpace 一组）修完后接手；与精度线同改 `closure` crate，**不并行**，由同一执行者串行推进或精度线收尾后交接。
+> 状态（2026-09-30 深夜）：🔄 P0 → P1 → P2 进行中（执行者分支 `closure-perf`，自 rust-closure-analyzer b3ccb0e9）。精度线（`closure-precision`）已于 d0bd81be 收尾合入；精度二期（`closure-prec2`，lambda 装箱适配 / record ObjectMethods / 按名方法查找）只改 lambda / indy 相关文件，与本线并行，合入时由本线解决 `engine` 冲突。
 
 ---
 
