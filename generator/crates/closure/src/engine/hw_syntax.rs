@@ -143,7 +143,7 @@ impl<'a> Engine<'a> {
                 };
                 let recv = Node::P(m, 0);
                 self.self_fields.entry(recv).or_default().push((fi, tid, fa.write, fs, prod));
-                let cur = self.sets.get(&recv).cloned().unwrap_or_default();
+                let cur = self.graph.get(&recv).cloned().unwrap_or_default();
                 self.self_field_objs(recv, &cur);
                 continue;
             }
@@ -166,8 +166,8 @@ impl<'a> Engine<'a> {
     /// 手写体访问接收者自身字段：抽象对象接其字段节点，非抽象接收者（类本身 / open）经未知接收者视图
     pub(super) fn self_field_objs(&mut self, recv: Node, delta: &TypeSet) {
         let Some(acc) = self.self_fields.get(&recv).cloned() else { return };
-        let raw = !delta.open.is_empty() || delta.classes.iter().any(|x| !self.objs.contains_key(x));
-        let objs: Vec<u32> = delta.classes.iter().copied().filter(|x| self.objs.contains_key(x)).collect();
+        let raw = !delta.open.is_empty() || delta.classes.iter().any(|x| !self.objs.contains_key(&x));
+        let objs: Vec<u32> = delta.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
         for (fi, tid, write, fs, prod) in acc.iter() {
             let (fi, tid) = (*fi, *tid);
             for &o in &objs {

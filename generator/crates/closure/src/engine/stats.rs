@@ -1,0 +1,334 @@
+//! 引擎：性能观测（计划 2026-09-30-closure-analyzer-performance.md P0）——分阶段自耗时、
+//! 抽象解释次数与失效原因、峰值内存。只进 `summary.perf`，不影响其余输出。
+
+use std::time::{Duration, Instant};
+
+use super::*;
+
+/// 计时类别（自耗时：进入内层类别时外层暂停）
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Phase {
+    /// 根 / 种子登记（run 之前）
+    Setup,
+    /// 流边差分传播
+    Flows,
+    /// 反射成员枚举
+    Enumerate,
+    /// 方法处理（执行事件、手写体），不含抽象解释
+    Process,
+    /// 方法体抽象解释（`analysis`）
+    Analyze,
+    /// 辅助抽象解释（`<clinit>` 常量、构造器摘要、转发 / 属性判定等）
+    AuxAnalyze,
+    /// 读者站点重跑
+    Sites,
+    /// lambda 调用重跑
+    Lcalls,
+    /// 清单补种轮
+    Seeds,
+}
+
+const PHASES: [(Phase, &str); 9] = [
+    (Phase::Setup, "setup"),
+    (Phase::Flows, "flows"),
+    (Phase::Enumerate, "enumerate"),
+    (Phase::Process, "process"),
+    (Phase::Analyze, "analyze"),
+    (Phase::AuxAnalyze, "aux_analyze"),
+    (Phase::Sites, "sites"),
+    (Phase::Lcalls, "lcalls"),
+    (Phase::Seeds, "seeds"),
+];
+
+/// 方法重分析的原因（首次分析 = First）
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Why {
+    First,
+    /// 字段值集变化（`field_put`）
+    FieldPut,
+    /// 字段放开（`open_field`）
+    FieldOpen,
+    /// 同名字段放开（`open_field_name`）
+    FieldOpenName,
+    /// 全部字段放开（反射枚举 / 反序列化）
+    FieldsAll,
+    /// 系统属性不折叠集合增长
+    Sysprops,
+    /// 被调方返回常量变化
+    RetConst,
+    /// 形参常量变化
+    ParamConst,
+    /// 乐观阶段收尾（「尚无返回」的答复作废）
+    Never,
+    /// catch 类型变为存活
+    Catch,
+}
+
+const WHYS: [(Why, &str); 10] = [
+    (Why::First, "first"),
+    (Why::FieldPut, "field_put"),
+    (Why::FieldOpen, "field_open"),
+    (Why::FieldOpenName, "field_open_name"),
+    (Why::FieldsAll, "fields_all"),
+    (Why::Sysprops, "sysprops"),
+    (Why::RetConst, "ret_const"),
+    (Why::ParamConst, "param_const"),
+    (Why::Never, "never"),
+    (Why::Catch, "catch"),
+];
+
+pub(super) struct Stats {
+    cur: Phase,
+    since: Instant,
+    stack: Vec<Phase>,
+    acc: [Duration; PHASES.len()],
+    /// 方法体抽象解释次数（按方法节点）
+    pub(super) per_method: Vec<u32>,
+    /// 方法节点待重分析的原因（首个失效原因）
+    pending: HashMap<usize, Why>,
+    /// 按原因：失效请求 / 实际导致重分析 / 重分析结果与已执行的事件完全相同
+    requested: [u64; WHYS.len()],
+    analyses: [u64; WHYS.len()],
+    unchanged: [u64; WHYS.len()],
+    /// 被调方透传摘要变化引起的调用方整方法重接
+    pub(super) reapply: u64,
+    /// 同一分析结果的整方法重处理（open 展开的 G 增长等）
+    pub(super) reprocess: u64,
+    pub(super) site_reruns: u64,
+    pub(super) lcall_reruns: u64,
+    pub(super) aux_analyses: u64,
+    /// 各阶段结束时的峰值 RSS（MB）
+    rss_marks: Vec<(&'static str, u64)>,
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Stats {
+            cur: Phase::Setup,
+            since: Instant::now(),
+            stack: Vec::new(),
+            acc: Default::default(),
+            per_method: Vec::new(),
+            pending: HashMap::default(),
+            requested: Default::default(),
+            analyses: Default::default(),
+            unchanged: Default::default(),
+            reapply: 0,
+            reprocess: 0,
+            site_reruns: 0,
+            lcall_reruns: 0,
+            aux_analyses: 0,
+            rss_marks: Vec::new(),
+        }
+    }
+}
+
+fn phase_index(p: Phase) -> usize {
+    PHASES.iter().position(|x| x.0 == p).unwrap_or(0)
+}
+
+fn why_index(w: Why) -> usize {
+    WHYS.iter().position(|x| x.0 == w).unwrap_or(0)
+}
+
+/// 进程峰值 RSS（MB）：getrusage；macOS 以字节计，Linux 以 KB 计
+pub fn peak_rss_mb() -> u64 {
+    #[repr(C)]
+    struct Rusage {
+        utime: [i64; 2],
+        stime: [i64; 2],
+        maxrss: i64,
+        rest: [i64; 13],
+    }
+    extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+    }
+    let mut r = Rusage { utime: [0; 2], stime: [0; 2], maxrss: 0, rest: [0; 13] };
+    // SAFETY：RUSAGE_SELF = 0；结构体布局与 64 位 macOS / Linux 的 struct rusage 一致
+    if unsafe { getrusage(0, &mut r) } != 0 {
+        return 0;
+    }
+    let bytes = if cfg!(target_os = "macos") { r.maxrss as u64 } else { r.maxrss as u64 * 1024 };
+    bytes >> 20
+}
+
+impl Stats {
+    pub(super) fn enter(&mut self, p: Phase) {
+        let now = Instant::now();
+        self.acc[phase_index(self.cur)] += now - self.since;
+        self.stack.push(self.cur);
+        self.cur = p;
+        self.since = now;
+    }
+
+    pub(super) fn leave(&mut self) {
+        let now = Instant::now();
+        self.acc[phase_index(self.cur)] += now - self.since;
+        self.cur = self.stack.pop().unwrap_or(Phase::Setup);
+        self.since = now;
+    }
+
+    pub(super) fn mark_rss(&mut self, at: &'static str) {
+        self.rss_marks.push((at, peak_rss_mb()));
+    }
+
+    /// 失效请求；`effective` = 该方法确有分析结果被丢弃（随后必重分析）
+    pub(super) fn invalidated(&mut self, m: usize, why: Why, effective: bool) {
+        self.requested[why_index(why)] += 1;
+        if effective {
+            self.pending.entry(m).or_insert(why);
+        }
+    }
+
+    /// 一次方法体抽象解释完成；`unchanged` = 事件与已执行的分析完全相同
+    pub(super) fn analyzed(&mut self, m: usize, unchanged: bool) {
+        if self.per_method.len() <= m {
+            self.per_method.resize(m + 1, 0);
+        }
+        let first = self.per_method[m] == 0;
+        self.per_method[m] += 1;
+        let why = self.pending.remove(&m).unwrap_or(if first { Why::First } else { Why::Catch });
+        self.analyses[why_index(why)] += 1;
+        if unchanged {
+            self.unchanged[why_index(why)] += 1;
+        }
+    }
+}
+
+impl<'a> Engine<'a> {
+    pub(super) fn stat_enter(&self, p: Phase) {
+        self.ctx.stats.borrow_mut().enter(p);
+    }
+
+    pub(super) fn stat_leave(&self) {
+        self.ctx.stats.borrow_mut().leave();
+    }
+
+    /// `summary.perf`：分阶段自耗时、峰值内存、重分析分布与失效原因
+    pub fn perf_json(&self, top: usize) -> serde_json::Value {
+        use serde_json::json;
+        let s = self.ctx.stats.borrow();
+        let ms = |d: Duration| d.as_millis() as u64;
+        let phases: serde_json::Map<String, serde_json::Value> =
+            PHASES.iter().map(|(p, n)| (n.to_string(), json!(ms(s.acc[phase_index(*p)])))).collect();
+        let reasons: serde_json::Map<String, serde_json::Value> = WHYS
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| s.requested[*i] + s.analyses[*i] > 0)
+            .map(|(i, (_, n))| {
+                (n.to_string(), json!({"requested": s.requested[i], "analyses": s.analyses[i], "unchanged": s.unchanged[i]}))
+            })
+            .collect();
+        let total: u64 = s.per_method.iter().map(|&c| u64::from(c)).sum();
+        let mut by_ctx: Vec<(usize, u32)> = s.per_method.iter().copied().enumerate().filter(|x| x.1 > 1).collect();
+        by_ctx.sort_by_key(|&(m, c)| (std::cmp::Reverse(c), m));
+        let mut by_member: BTreeMap<String, (u32, u32)> = BTreeMap::new();
+        for (m, &c) in s.per_method.iter().enumerate() {
+            if c > 0 {
+                let e = by_member.entry(self.method_label(m)).or_default();
+                e.0 += c;
+                e.1 += 1;
+            }
+        }
+        let mut members: Vec<(String, (u32, u32))> = by_member.into_iter().collect();
+        members.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(&b.0)));
+        json!({
+            "phases_ms": phases,
+            "peak_rss_mb": peak_rss_mb(),
+            "rss_marks_mb": s.rss_marks.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
+            "analyses": total,
+            "analyzed_contexts": s.per_method.iter().filter(|&&c| c > 0).count(),
+            "aux_analyses": s.aux_analyses,
+            "reasons": reasons,
+            "reapply_callee_summary": s.reapply,
+            "reprocess_same_analysis": s.reprocess,
+            "site_reruns": s.site_reruns,
+            "lcall_reruns": s.lcall_reruns,
+            "flow_edges": self.graph.seen.len(),
+            "adds": self.graph.adds,
+            "edges_by_kind": self.edge_kinds(),
+            "top_out_degree": self.top_degree(top, false),
+            "top_in_degree": self.top_degree(top, true),
+            "type_nodes": self.graph.len(),
+            "top_contexts": by_ctx.iter().take(top).map(|&(m, c)| json!([self.ctx_label(m), c])).collect::<Vec<_>>(),
+            "top_members": members.iter().take(top).map(|(k, (c, n))| json!([k, c, n])).collect::<Vec<_>>(),
+        })
+    }
+}
+
+impl Ctx<'_> {
+    /// 辅助抽象解释（不登记为方法体分析），计入 `aux_analyze`
+    pub(super) fn aux_analyze(&self, owner: &str, desc: &str, is_static: bool, code: &classfile::Code, facts: &Facts) -> Analysis {
+        self.stats.borrow_mut().enter(Phase::AuxAnalyze);
+        let a = absint::analyze(owner, desc, is_static, code, facts);
+        let mut s = self.stats.borrow_mut();
+        s.aux_analyses += 1;
+        s.leave();
+        a
+    }
+}
+
+/// 节点类别名（诊断）
+fn node_kind(n: &Node) -> &'static str {
+    match n {
+        Node::P(..) => "P",
+        Node::R(..) => "R",
+        Node::S(_, o) if *o == POOL || *o == PROD || *o == ARRAY_RET => "Spool",
+        Node::S(_, o) if o & CATCH != 0 => "Scatch",
+        Node::S(..) => "S",
+        Node::F(..) => "F",
+        Node::U(..) => "U",
+        Node::O(..) => "O",
+        Node::E(..) => "E",
+        Node::Array => "Array",
+        Node::A(..) => "A",
+        Node::W(..) => "W",
+        Node::HP(..) => "HP",
+        Node::HR(..) => "HR",
+        Node::Esc => "Esc",
+    }
+}
+
+impl<'a> Engine<'a> {
+    /// 流边按（源类别 → 目标类别）计数
+    fn edge_kinds(&self) -> serde_json::Value {
+        let mut m: BTreeMap<String, u64> = BTreeMap::new();
+        for (src, es) in &self.graph.flow_list() {
+            for (dst, _) in es {
+                *m.entry(format!("{}->{}", node_kind(src), node_kind(dst))).or_default() += 1;
+            }
+        }
+        let mut v: Vec<(String, u64)> = m.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        serde_json::json!(v.into_iter().take(30).collect::<Vec<_>>())
+    }
+
+    fn node_label(&self, n: &Node) -> String {
+        match *n {
+            Node::P(m, i) => format!("P{i} {}", self.ctx_label(m)),
+            Node::R(m) => format!("R {}", self.ctx_label(m)),
+            Node::S(m, o) => format!("S{o} {}", self.ctx_label(m)),
+            Node::F(f) | Node::U(f) => format!("{} {}", node_kind(n), self.fields.get_index(f).map(|x| x.0.to_string()).unwrap_or_default()),
+            Node::O(o, f) => format!("O {} {}", self.names[o as usize], self.fields.get_index(f).map(|x| x.0.to_string()).unwrap_or_default()),
+            Node::E(o, p) => format!("E{p} {}", self.names[o as usize]),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// 出度 / 入度最大的节点
+    fn top_degree(&self, top: usize, incoming: bool) -> serde_json::Value {
+        let mut deg: HashMap<Node, u64> = HashMap::default();
+        for (src, es) in &self.graph.flow_list() {
+            if incoming {
+                for (dst, _) in es {
+                    *deg.entry(*dst).or_default() += 1;
+                }
+            } else {
+                *deg.entry(*src).or_default() += es.len() as u64;
+            }
+        }
+        let mut v: Vec<(Node, u64)> = deg.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        serde_json::json!(v.into_iter().take(top).map(|(n, d)| serde_json::json!([self.node_label(&n), d])).collect::<Vec<_>>())
+    }
+}

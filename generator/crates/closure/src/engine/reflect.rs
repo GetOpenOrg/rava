@@ -29,7 +29,7 @@ impl<'a> Engine<'a> {
     /// 值集中各值的类镜像；类型推不出（open、lambda 合成类、手写实现对象）为所指未知的 Class
     pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
         let mut out = TypeSet::default();
-        let xs: Vec<u32> = s.classes.iter().copied().collect();
+        let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
             let k = if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
                 self.id(CLASS)
@@ -56,7 +56,7 @@ impl<'a> Engine<'a> {
 
     /// 成员枚举 e（手写方法）的接收者新增值 s：镜像所指类的该类成员进入反射面；推不出所指类记为缺口
     pub(super) fn enumerate(&mut self, k: Members, e: usize, s: &TypeSet) {
-        let xs: Vec<u32> = s.classes.iter().copied().collect();
+        let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
             match self.mirrors.get(&x).copied() {
                 Some(c) => {
@@ -70,7 +70,7 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        for &o in &s.open {
+        for o in &s.open {
             self.reflect_gaps.insert(format!("{} <- open({})", self.methods[e].key, self.names[o as usize]));
         }
     }

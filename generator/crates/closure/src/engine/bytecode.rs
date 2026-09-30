@@ -18,7 +18,10 @@ impl<'a> Engine<'a> {
                 None
             }
             // 同一分析重处理（open 展开的 G 增长）：站点去重记录仍成立
-            Some(o) if Rc::ptr_eq(&o, &a) => None,
+            Some(o) if Rc::ptr_eq(&o, &a) => {
+                self.ctx.stats.borrow_mut().reprocess += 1;
+                None
+            }
             Some(o) => Some(o),
         };
         let Some(old) = old else {
@@ -123,7 +126,7 @@ impl<'a> Engine<'a> {
                     let fs = self.feeds(m, array, aid);
                     let s = self.value_set(&fs);
                     let mut add = TypeSet::default();
-                    for &x in &s.classes {
+                    for x in &s.classes {
                         if self.arrays.contains_key(&x) {
                             for p in slots(index) {
                                 self.flow(Node::E(x, p), Node::S(m, off), tid);
@@ -133,7 +136,7 @@ impl<'a> Engine<'a> {
                         }
                     }
                     // open 数组（手写层 / VM 产出）的元素同样 open
-                    for &o in &s.open {
+                    for o in &s.open {
                         if let Some(c) = absint::component(&self.names[o as usize].clone()) {
                             let cid = self.id(&c);
                             if self.sub(cid, tid) {
@@ -155,7 +158,7 @@ impl<'a> Engine<'a> {
                     let fs = self.feeds(m, value, tid);
                     let afs = self.feeds(m, array, aid);
                     let s = self.value_set(&afs);
-                    for &x in &s.classes {
+                    for x in &s.classes {
                         // 按分配点的实际分量类型收窄（静态类型可能更宽，如经 Object[] 视角写入 Class[]）
                         let Some(&at) = self.arrays.get(&x) else { continue };
                         let Some(c) = absint::component(&self.names[at as usize].clone()).filter(|c| c.len() > 1) else { continue };
@@ -199,7 +202,7 @@ impl<'a> Engine<'a> {
         }
         self.ctx.rvals.borrow_mut().insert(key.clone(), new);
         let deps = self.ctx.rdeps.borrow().get(&key).cloned();
-        self.invalidate_all(deps);
+        self.invalidate_all(deps, Why::RetConst);
     }
 
     pub(super) fn ldc(&mut self, m: usize, off: u32, c: &Const) {
@@ -290,7 +293,7 @@ impl<'a> Engine<'a> {
                 let fs = self.feeds(m, v, oid);
                 let s = self.value_set(&fs);
                 let s = self.filter(&s, oid);
-                let objs: Vec<u32> = s.classes.iter().copied().filter(|x| self.objs.contains_key(x)).collect();
+                let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
                 (objs.clone(), !s.open.is_empty() || s.classes.len() > objs.len())
             }
             None => (vec![], true),

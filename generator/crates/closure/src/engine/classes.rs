@@ -48,6 +48,28 @@ impl<'a> Engine<'a> {
         !self.lambdas.contains_key(&id) && self.h.is_interface(&self.names[id as usize])
     }
 
+    /// open(o) 按过滤类型 t 收窄的结果（None = 空），按 (o, t) 缓存
+    fn open_narrow(&mut self, o: u32, t: u32) -> Option<u32> {
+        if let Some(&r) = self.narrow_cache.get(&(o, t)) {
+            return (r != u32::MAX).then_some(r);
+        }
+        let r = if self.sub(o, t) {
+            Some(o)
+        } else if self.sub(t, o) {
+            Some(t)
+        } else if !self.is_iface(o) && self.is_iface(t) {
+            // 类 × 接口：交集是「o 的子类中实现 t 者」。保留 open(o)——展开时按接收者类型再求交；
+            // final 类没有子类，不实现 t 即为空
+            (!self.h.class(&self.names[o as usize]).is_some_and(|c| c.access & 0x0010 != 0)).then_some(o)
+        } else if self.is_iface(o) {
+            Some(t)
+        } else {
+            None
+        };
+        self.narrow_cache.insert((o, t), r.unwrap_or(u32::MAX));
+        r
+    }
+
     /// 类型集按过滤类型收窄
     pub(super) fn filter(&mut self, s: &TypeSet, t: u32) -> TypeSet {
         if self.names[t as usize].as_ref() == OBJECT {
@@ -59,7 +81,8 @@ impl<'a> Engine<'a> {
             self.sub_rows.resize_with(ti + 1, Vec::new);
         }
         let mut row = std::mem::take(&mut self.sub_rows[ti]);
-        for (k, &x) in s.classes.iter().enumerate() {
+        let mut kept: Vec<u32> = Vec::new();
+        for (k, x) in s.classes.iter().enumerate() {
             let i = x as usize;
             let v = match row.get(i) {
                 Some(&v) if v != 0 => v,
@@ -74,26 +97,17 @@ impl<'a> Engine<'a> {
             };
             if v == 2 {
                 // 输入有序，输出按序追加（首个命中时按剩余输入一次预留）
-                if out.classes.0.capacity() == 0 {
-                    out.classes.0.reserve(s.classes.len() - k);
+                if kept.capacity() == 0 {
+                    kept.reserve(s.classes.len() - k);
                 }
-                out.classes.push_max(x);
+                kept.push(x);
             }
         }
+        out.classes = IdSet::from_sorted(kept);
         self.sub_rows[ti] = row;
-        for &o in &s.open {
-            if self.sub(o, t) {
-                out.open.insert(o);
-            } else if self.sub(t, o) {
-                out.open.insert(t);
-            } else if !self.is_iface(o) && self.is_iface(t) {
-                // 类 × 接口：交集是「o 的子类中实现 t 者」。保留 open(o)——展开时按接收者类型再求交；
-                // final 类没有子类，不实现 t 即为空
-                if !self.h.class(&self.names[o as usize]).is_some_and(|c| c.access & 0x0010 != 0) {
-                    out.open.insert(o);
-                }
-            } else if self.is_iface(o) {
-                out.open.insert(t);
+        for o in &s.open {
+            if let Some(r) = self.open_narrow(o, t) {
+                out.open.insert(r);
             }
         }
         out
@@ -110,15 +124,20 @@ impl<'a> Engine<'a> {
     }
 
     /// 类型集里 ⊂ owner 的具体接收者（open 按 G 展开；展开过的方法 m 在 G 增长时重处理）
-    pub(super) fn receivers(&mut self, m: usize, s: &TypeSet, owner: u32) -> BTreeSet<u32> {
-        let mut out = BTreeSet::new();
-        for &x in &s.classes {
+    /// 接收者集合（升序）：精确部分 ⊂ owner 者，open 部分按 G 展开
+    pub(super) fn receivers(&mut self, m: usize, s: &TypeSet, owner: u32) -> Vec<u32> {
+        let mut exact = Vec::new();
+        for x in &s.classes {
             if self.sub(x, owner) {
-                out.insert(x);
+                exact.push(x);
             }
         }
-        if !s.open.is_empty() {
-            for &o in s.open.iter() {
+        if s.open.is_empty() {
+            return exact;
+        }
+        let mut out = IdSet::from_sorted(exact);
+        {
+            for o in s.open.iter() {
                 match (self.cur_call, self.cur_site) {
                     (Some(c), _) => {
                         self.open_calls.entry((o, owner)).or_default().insert(c);
@@ -142,7 +161,7 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        out
+        out.iter().collect()
     }
 
     // ── 类登记 ──────────────────────────────────────────────────────────────
@@ -488,7 +507,7 @@ impl<'a> Engine<'a> {
         }
         let Some(code) = meth.code.as_ref() else { return false };
         let live = |_: &str| true;
-        let a = absint::analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![] });
+        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![] });
         if a.conservative {
             return false;
         }
