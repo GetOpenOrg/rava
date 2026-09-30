@@ -98,6 +98,9 @@ pub struct EmitInput {
     pub reflect: ReflectFacts,
     pub data_bundle_seeds: Vec<String>,
     pub annotation_enum_seeds: Vec<String>,
+    /// 按名初始化（`ensure_class_initialized`）可能命中的类：分析器 class_init 事实的目标；
+    /// 目标不可定论（`unknown`）→ 链上全部有 `<clinit>` 的类
+    pub class_init_targets: Vec<String>,
     pub jca_seeds: Vec<JcaService>,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
@@ -358,6 +361,7 @@ impl<'a> BuildInput<'a> {
             reflect,
             data_bundle_seeds: f.seeds.data_bundles.clone(),
             annotation_enum_seeds: f.seeds.annotation_enums.clone(),
+            class_init_targets: if f.class_init.unknown { f.clinit.clone() } else { f.class_init.targets.clone() },
             jca_seeds: f.seeds.jca.clone(),
             module_resources,
             precheck_visited: f.methods.iter().map(|m| m.id.to_string()).collect(),

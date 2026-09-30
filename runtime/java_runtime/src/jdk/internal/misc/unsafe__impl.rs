@@ -231,20 +231,20 @@ impl Unsafe {
     }
 
     /// `ensureClassInitialized(Class)`：确保类初始化完成（HotSpot 走 VM 类初始化）。
-    /// 本运行的类初始化由翻译层的 `__class_init` 惰性协议承载（首次主动使用
-    /// 即初始化）——无需（也无法）从手写层按 Class 对象强制触发，no-op 即
-    /// 与惰性协议一致（初始化只是推迟到真实首次使用）。
+    /// 按名查类初始化钩子表执行该类的 `__class_init`（状态机保证恰好一次、先父类）。
+    /// 钩子表由生成器按闭包分析的 class_init 事实登记（本方法调用点的目标类；目标
+    /// 不可定论时为链上全部有 `<clinit>` 的类）；未登记的类不会经此初始化，查表落空即 no-op。
     /// 消费链：VarHandle.<clinit>（VarHandleGuards 的预初始化）、
     /// VarHandles.makeFieldHandle 的静态字段分支。
     #[jvm_boundary]
-    pub fn ensureClassInitialized(&self, _c: Class) -> Result<()> {
-        Ok(())
+    pub fn ensureClassInitialized(&self, c: Class) -> Result<()> {
+        crate::ensure_class_initialized(&format!("{}", c.__get_name()))
     }
 
     /// `shouldBeInitialized(Class)`：类是否已初始化。惰性 `__class_init` 协议
     /// 下「未初始化」只在首次主动使用前可观察——对查询方恒「已初始化」
-    /// （false）等价于把初始化时机推迟到真实首次使用，与 ensureClassInitialized
-    /// 的 no-op 语义自洽。
+    /// （false）等价于把初始化时机推迟到真实首次使用（静态字段访问器入口自带
+    /// `__class_init` 触发）。
     #[jvm_boundary]
     pub fn shouldBeInitialized(&self, _c: Class) -> Result<bool> {
         Ok(false)
