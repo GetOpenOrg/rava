@@ -103,6 +103,27 @@ HelloWorld 只做一次 `println`，却有 `java/util/stream` 169 个翻译类�
 - 判据：动态集合中属于翻译域的类，必须 100% 被静态闭包覆盖（否则说明静态分析漏边）；静态有而动态没有的类，每一个都要能用 provenance 解释。
 - 动态轨迹不参与闭包计算（运行期路径依赖输入），只作为验收时的对照。
 
+#### 3.8.1 落地（C5，2026-09-30）
+
+- 一次 java 运行：`-Xshare:off -agentpath:load_trace=<轨迹> -Xlog:class+load,class+init`。`-Xlog` 给加载全集（静态多出的判据）
+  与「程序期」加载序列（主类 `Initializing` 之后，排除启动器 / 反射找 main）；原生 JVMTI agent 给每次加载的 Java 调用栈。
+  java.lang.instrument agent 已实测否决：其装载提前加载整套 MethodHandle 基础设施，每例 42–56 个类失去调用栈。
+- 噪声排除全部按规则（无类名特判）：隐藏类（lambda 代理 / LambdaForm）只计数；边界域类单列；翻译域类按调用栈自栈底上溯，
+  途经手写 / native 方法 → `handwritten`，边界域帧 → `boundary-code`，经边界接口虚派发进入其翻译域实现（帧签名与闭包 refs
+  中的边界域方法一致）→ `boundary-dispatch`，`closure.toml [dynamic] vm_upcall_classes`（JVM 链接期直接调用的入口）→ `vm-upcall`，
+  栈底即不在闭包（VM 自启线程）→ `vm-entry`；其余一律计漏覆盖。
+- 实测（JDK 21，5 例）：
+
+| 测试 | 漏覆盖 | 静态多出 | provenance | 未归因 | 归因（handwritten / boundary-dispatch / vm-upcall / vm-entry / 边界域） |
+|---|---:|---:|---:|---:|---|
+| TestArrayList | 0 | 80 | 100% | 0 | 4 / 0 / 0 / 0 / 0 |
+| TestHashMapOps | 0 | 60 | 100% | 0 | 4 / 0 / 66 / 0 / 31（+ boundary-code 1） |
+| TestStreamBasic | 0 | 95 | 100% | 0 | 4 / 42 / 13 / 0 / 32（+ boundary-code 1） |
+| TestFilesApi | 0 | 71 | 100% | 0 | 23 / 0 / 46 / 2 / 72 |
+| TestSynchronized | 0 | 66 | 100% | 0 | 4 / 0 / 47 / 0 / 30 |
+
+  耗时：每例 java 运行约 0.1 秒（转译 4–6 秒），因此缺省开启。
+
 ## 四、Rust 实现架构
 
 沿用重写计划的 crate 布局，本计划落地其中三个 crate，外加一个分析 crate：
@@ -188,7 +209,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ⏳ 未开始（syn 解析手写层已在 C1 / C1c 第 0 步先行落地） |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 进行中（用户负责；folds v1 消费侧在 `claude/jolly-dijkstra-diftum`） |
 | C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 | ⏳ 未开始（删除 Python 机制须逐项确认） |
-| C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ⏳ 未开始 |
+| C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ✅ 已完成：`scripts/dyn_compare.py` + JVMTI agent `scripts/dyn_agent/load_trace.c`，run_tests 缺省开（`--no-dyn` 关），明细 `logs/dyn/<test>.json`；实测见 §3.8.1 |
 
 各阶段独立 worktree、独立提交；C4 之前 Python 管线保持不变，Rust 分析器只做旁路输出与对照。
 
