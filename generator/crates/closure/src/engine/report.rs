@@ -97,6 +97,9 @@ impl<'a> Engine<'a> {
 
     /// 类型流诊断：方法（标签含 `pat`）的形参 / 返回节点的类型集，以及流入它们的来源节点
     pub fn flows_of(&self, pat: &str) -> Vec<String> {
+        if let Some(r) = self.diag_open(pat) {
+            return r;
+        }
         let mut out = Vec::new();
         if let Some(q) = pat.strip_prefix("elem:") {
             let mut es: Vec<Node> = self.sets.keys().filter(|n| matches!(n, Node::E(x, _) if self.names[*x as usize].contains(q))).copied().collect();

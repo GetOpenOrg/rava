@@ -41,6 +41,7 @@ mod hw_mem;
 mod hw_syntax;
 mod hw_infer;
 mod report;
+mod diag;
 mod seeds;
 
 pub use seeds::SeedState;
@@ -455,6 +456,10 @@ pub struct Engine<'a> {
     lambda_stack: HashSet<LambdaCall>,
     /// 待沿流边推送的新增类型（差分传播）
     fdelta: HashMap<Node, TypeSet>,
+    /// 下一次 `add_to` 来自流边推送（诊断：区分 open 的直接注入点）
+    via_flow: bool,
+    /// open 的直接注入点：节点 → 注入的 open 类型（诊断 `@openorig`）
+    open_inj: HashMap<Node, BTreeSet<u32>>,
     /// 类镜像（Class 对象按所指类区分）：镜像 id → 所指类型 id。镜像的类型是 Class，不做克隆上下文
     mirrors: HashMap<u32, u32>,
     /// 流边上的镜像变换 src → dst：src 中每个值的类镜像流入 dst（`getClass` 逐调用点）
@@ -595,6 +600,8 @@ impl<'a> Engine<'a> {
             snake_index: None,
             seeds: SeedState::default(),
             fdelta: HashMap::default(),
+            via_flow: false,
+            open_inj: HashMap::default(),
         }
     }
 
