@@ -158,6 +158,7 @@ impl<'a> Engine<'a> {
     /// 接收者 r 上分派已解析方法
     #[allow(clippy::too_many_arguments)]
     pub(super) fn dispatch_one(&mut self, m: usize, off: u32, r: u32, site: &resolve::MethodSite, a: &Args, ret: Option<u32>, res: Option<Node>, via_lambda: u32) {
+        self.recv_sites.insert((m, off));
         // lambda 接收者不在此去重：同一调用的去重与增量由 `invoke_lambda` 负责
         let lambda = self.lambdas.contains_key(&r);
         if !lambda && self.methods[m].kind == Kind::Bytecode && !self.dispatched.entry(m).or_default().insert((off, r, via_lambda)) {
@@ -176,6 +177,12 @@ impl<'a> Engine<'a> {
             if let Some(sel) = self.h.select(&iface, site) {
                 let (o, n, d) = sel.key();
                 let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
+                self.edge(m, off, t, Recv::Exact(r), a, ret, res);
+            }
+            return;
+        }
+        if self.hwobjs.contains_key(&r) {
+            if let Some(t) = self.hwobj_target(r, site, via) {
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             return;

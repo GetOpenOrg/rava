@@ -34,6 +34,8 @@ impl<'a> Engine<'a> {
             self.sub(c, f)
         } else if let Some(l) = self.lambdas.get(&x) {
             &*fname == OBJECT || self.h.is_subtype(&l.iface, &fname)
+        } else if let Some(r) = self.hwobj_sub(x, &fname) {
+            r
         } else {
             let xname = self.names[x as usize].clone();
             self.h.is_subtype(&xname, &fname)
@@ -211,7 +213,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 共置手写模块路径（`super::x_impl` / `crate::a::b::x_impl`）→ 其宿主类
-    fn class_of_module(&mut self, host: &str, segs: &[String], snake: &str) -> Option<String> {
+    pub(super) fn class_of_module(&mut self, host: &str, segs: &[String], snake: &str) -> Option<String> {
         let host_pkg = host.rsplit_once('/').map_or("", |(p, _)| p);
         let dirs: Vec<&str> = segs[..segs.len() - 1].iter().map(String::as_str).filter(|s| *s != "self").collect();
         let supers = dirs.iter().take_while(|s| **s == "super").count();

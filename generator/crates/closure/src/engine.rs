@@ -37,8 +37,12 @@ mod invoke;
 mod hub;
 mod lambda;
 mod hw;
+mod hw_mem;
+mod hw_syntax;
 mod hw_infer;
+mod hwobj;
 mod report;
+mod diag;
 mod seeds;
 
 pub use seeds::SeedState;
@@ -47,6 +51,7 @@ pub use fold::Fold;
 use facts::*;
 use fold::*;
 pub use sets::*;
+use hwobj::{HwObj, HWOBJ_KIND};
 
 
 /// 精确接收者达到此数时经集合枢纽派发
@@ -304,7 +309,7 @@ struct Hub {
     recvs: BTreeSet<u32>,
     /// 经枢纽中转的目标
     plain: BTreeSet<usize>,
-    /// 逐调用点派发的 lambda 接收者（含父枢纽的）
+    /// 逐调用点派发的 lambda / 手写实现对象接收者（含父枢纽的）
     lambdas: Vec<u32>,
     /// 按调用点建模的目标 → 其接收者（含父枢纽的）：逐调用点接边，同目标的接收者合成一条
     special: BTreeMap<usize, Vec<u32>>,
@@ -361,6 +366,8 @@ pub struct Engine<'a> {
     /// open 展开与 catch 存活判定因此与 |G| 无关
     g_sub: HashMap<u32, Vec<u32>>,
     lambdas: HashMap<u32, Lambda>,
+    /// 手写实现对象（伪类型 id → 对象）
+    hwobjs: HashMap<u32, HwObj>,
     /// 数组分配点（抽象对象 id）→ 数组类型 id
     arrays: HashMap<u32, u32>,
     /// 长度恒为 0 的数组分配点：任何元素读写都抛异常，元素节点不接收值；
@@ -387,6 +394,8 @@ pub struct Engine<'a> {
     flow_seen: HashSet<(Node, Node, u32)>,
     /// 调用点分派结果：(方法, 偏移) → 目标方法
     pub dispatch: BTreeMap<(usize, u32), BTreeSet<usize>>,
+    /// 有接收者到达过的虚调用点（含选不出目标的）：接收者恒为 null 的判定（folds `null_recv`）
+    recv_sites: HashSet<(usize, u32)>,
     /// 形参常量（方法 → 按形参槽；缺席 = 尚无调用点）
     pvals: HashMap<usize, Vec<PV>>,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
@@ -453,6 +462,10 @@ pub struct Engine<'a> {
     lambda_stack: HashSet<LambdaCall>,
     /// 待沿流边推送的新增类型（差分传播）
     fdelta: HashMap<Node, TypeSet>,
+    /// 下一次 `add_to` 来自流边推送（诊断：区分 open 的直接注入点）
+    via_flow: bool,
+    /// open 的直接注入点：节点 → 注入的 open 类型（诊断 `@openorig`）
+    open_inj: HashMap<Node, BTreeSet<u32>>,
     /// 类镜像（Class 对象按所指类区分）：镜像 id → 所指类型 id。镜像的类型是 Class，不做克隆上下文
     mirrors: HashMap<u32, u32>,
     /// 流边上的镜像变换 src → dst：src 中每个值的类镜像流入 dst（`getClass` 逐调用点）
@@ -524,6 +537,7 @@ impl<'a> Engine<'a> {
             g: BTreeSet::new(),
             g_sub: HashMap::default(),
             lambdas: HashMap::default(),
+            hwobjs: HashMap::default(),
             arrays: HashMap::default(),
             empty_arrays: HashMap::default(),
             escaped: HashSet::default(),
@@ -538,6 +552,7 @@ impl<'a> Engine<'a> {
             flows: HashMap::default(),
             flow_seen: HashSet::default(),
             dispatch: BTreeMap::new(),
+            recv_sites: HashSet::default(),
             pvals: HashMap::default(),
             hubs: Vec::new(),
             hub_ids: HashMap::default(),
@@ -593,6 +608,8 @@ impl<'a> Engine<'a> {
             snake_index: None,
             seeds: SeedState::default(),
             fdelta: HashMap::default(),
+            via_flow: false,
+            open_inj: HashMap::default(),
         }
     }
 
@@ -948,6 +965,7 @@ impl<'a> Engine<'a> {
     fn process(&mut self, m: usize) {
         match self.methods[m].kind {
             Kind::Bytecode => self.process_bytecode(m),
+            Kind::Handwritten(HWOBJ_KIND) => self.process_hwobj_method(m),
             Kind::Handwritten(_) => self.process_handwritten(m),
             Kind::Abstract | Kind::Missing => {}
         }

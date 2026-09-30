@@ -182,7 +182,8 @@ impl<'a> Engine<'a> {
         let site = self.hubs[h as usize].site.clone();
         let links: Vec<_> = self.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect();
         let ret = self.hubs[h as usize].ret;
-        if self.lambdas.contains_key(&r) {
+        // lambda 与手写实现对象不是 Java 类：逐调用点派发（dispatch_one 按其 SAM / trait impl 选目标）
+        if self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r) {
             self.hubs[h as usize].lambdas.push(r);
             let saved = self.call_vals.take();
             for ((m, off), (a, res, cv)) in links {

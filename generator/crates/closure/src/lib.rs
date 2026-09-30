@@ -84,6 +84,7 @@ fn fold_json(f: &Fold) -> Value {
         "dead_pcs": f.dead_pcs.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
         "dead_handlers": f.dead_handlers,
         "consts": f.consts.iter().map(|(pc, op, v, ty)| json!({"pc": pc, "kind": kind(*op), "value": const_json(v, ty), "type": ty})).collect::<Vec<_>>(),
+        "null_recv": f.null_recv,
     })
 }
 
@@ -167,6 +168,7 @@ impl Closure<'_> {
             "fold_methods": folds.len(),
             "fold_consts": folds.iter().map(|f| f.consts.len()).sum::<usize>(),
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
+            "fold_null_recv": folds.iter().map(|f| f.null_recv.len()).sum::<usize>(),
             "reflect_members": e.reflect_members.len(),
             "reflect_gaps": e.reflect_gaps.len(),
             "hw_written_fields": e.hw_written.len(),

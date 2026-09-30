@@ -10,6 +10,7 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn add_to(&mut self, n: Node, s: &TypeSet) {
+        let direct = !std::mem::take(&mut self.via_flow);
         if s.is_empty() {
             return;
         }
@@ -28,6 +29,9 @@ impl<'a> Engine<'a> {
             return;
         }
         cur.add_all(&delta);
+        if direct && !delta.open.is_empty() {
+            self.open_inj.entry(n).or_default().extend(delta.open.iter().copied());
+        }
         if n == Node::Esc {
             self.escape(&delta.classes);
         }
@@ -78,6 +82,7 @@ impl<'a> Engine<'a> {
         let Some(s) = self.sets.remove(&src) else { return };
         let out = self.filter(&s, filter);
         self.sets.insert(src, s);
+        self.via_flow = true;
         self.add_to(dst, &out);
     }
 
@@ -91,6 +96,7 @@ impl<'a> Engine<'a> {
             let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
             for &(dst, f) in &edges {
                 if self.names[f as usize].as_ref() == OBJECT {
+                    self.via_flow = true;
                     self.add_to(dst, &s);
                     continue;
                 }
@@ -103,6 +109,7 @@ impl<'a> Engine<'a> {
                     }
                 };
                 let out = std::mem::take(&mut narrowed[i].1);
+                self.via_flow = true;
                 self.add_to(dst, &out);
                 narrowed[i].1 = out;
             }
