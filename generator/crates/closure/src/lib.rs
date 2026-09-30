@@ -234,6 +234,11 @@ impl Closure<'_> {
                 "jca": e.seeds.jca.iter().map(|s| json!({"type": s.ty, "algorithm": s.algorithm, "impl": s.imp, "provider": s.provider})).collect::<Vec<_>>(),
                 "reflect_names": e.seeds.reflect_names,
                 "reflect_all": e.seeds.reflect_all,
+                "services": e.seeds.services.selected.iter().map(|(s, ps)| json!({
+                    "service": s,
+                    "providers": ps.iter().map(|p| json!({"module": p.module, "class": p.class})).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+                "services_unknown": e.seeds.services.unknown,
             },
         })
     }

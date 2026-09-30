@@ -49,6 +49,7 @@ mod hwobj;
 mod report;
 mod diag;
 mod seeds;
+mod services;
 mod class_lookup;
 mod method_lookup;
 mod new;

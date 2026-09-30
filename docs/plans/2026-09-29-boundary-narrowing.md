@@ -586,6 +586,45 @@ TestMethodHandleCombinators 2 条（`defineClass` / `protectionDomain`）；另 
 `setJavaLangAccess(new System$2)` 字节码），Digester / TestMethodHandleCombinators / CollectorsDemo / FileIOTest / HelloWorld 的 unresolved 全部为 0
 （类数 471 / 725 / 518 / 228 / 194，含 c1d-final 清单收窄的影响，不与本表直接对照）。终态：c1d-final 合入即清零，分析器不改。
 
+**项 5 ServiceLoader：模块 `provides` / 类路径服务文件作为事实**。原先 `ServiceLoader` 的 provider 构造（`ProviderImpl.newInstance` 反射构造、
+`findStaticProviderMethod` 反射调用）在闭包里只有 open 反射，provider 类本身不入链；TestCharsetForName 动态对照漏 1 = `CopyOnWriteArrayList$COWIterator`
+（JVM 引导层为 `CharsetProvider` 绑定了 jdk.charsets 的 `ExtendedCharsets`，`Charset$ExtendedProviderHolder` 迭代 provider 时加载）。
+修法（分析层通用规则 + 清单锚点，无类名）：
+- `classfile/module.rs` 解析 `module-info.class`（`Module` / `ModuleResolution` 属性：requires（去 `requires static`）、无限定 exports 有无、uses、provides、
+  `DO_NOT_RESOLVE_BY_DEFAULT`），`resolve::ClassPath::module_views` 给出各档案的模块描述符与 `META-INF/services/*`（单测 `module_info_parse`）。
+- `seeds/services.rs::catalog`：与 JVM 默认启动（类路径应用、无 `--add-modules`）同构的引导层——根 = 有无限定 exports 且未标 `DO_NOT_RESOLVE_BY_DEFAULT`
+  的系统模块，沿运行期 requires 闭包，再按已解析模块的 `uses` 绑定 provider 模块到不动点（JDK 21 实测 69 个 jmod 解析 62 个，与
+  `java --show-module-resolution` 一致）；模块 provider 在前，其后是用户 / 库档案的 `META-INF/services` 条目（单测 `boot_layer_binds_used_services` /
+  `service_file_lines`）。
+- 清单 `seeds.toml [services]`：`lookups` = `ServiceLoader` 三个构造器及服务 Class 形参序号；`population` = 模块服务目录的装填方法
+  （`ServicesCatalog.create` / `addProvider`）。`engine/services.rs::service_lookup`：lookups 调用点上服务 Class 实参值集里的类镜像即被查找的服务
+  （值集增长时站点重跑）；含所指未知的 Class 时按全部服务处理（健全回退，`services_unknown = true`）。入选 provider 按 `ServiceLoader.loadProvider`
+  的构造途径入链：命名模块中声明了 `public static provider()` 的取该方法，否则实例化 + 公开无参构造器（类初始化、反射名登记、形参 open、返回交 VM）。
+  有模块 provider 入选时 `population` 作根。
+
+结果（类 / 方法 / 上下文，漏；「无本项」= 同分析器、清单去掉 `[services]`）：
+
+| 测试 | 无本项 | 本项后 | 查找到的服务 |
+|---|---|---|---|
+| HelloWorld / FileIOTest / CollectorsDemo / TestMethodHandleCombinators / TestMethodHandleDirect / TestStreamBasic | 同上表「本项后」列 | 不变，漏 0 | 无 |
+| Digester / DeepCopy | 1165 / 6630 / 17271、1623 / 10845 / 39770 | 不变，漏 0 | `InetAddressResolverProvider` / `URLStreamHandlerProvider`，引导层无 provider |
+| TestCharsetForName | 1157 / 7293 / 16810，**漏 1** | **429 / 1492 / 2405，漏 0**（多 127） | `CharsetProvider` → jdk.charsets `ExtendedCharsets` |
+
+TestCharsetForName 新增 12 类（`ExtendedCharsets`、`AbstractCharsetProvider`、`CopyOnWriteArrayList` / `$COWIterator`、`WeakPairMap*` 等），漏覆盖清零。
+同时移出 740 类不是本项的直接效果：调试确认「无本项」一侧 `ReflectionFactory.loadConfig` 的系统属性读取未折（`fold_props = 0`），
+`jdk.reflect.useNativeAccessorOnly = "true"`（清单事实）没有生效，反射构造走进 `MethodHandleAccessorFactory → unreflectConstructor` 与
+`String.format → Formatter → regex`。原因是乐观阶段收尾后的顺序敏感：第一次排空时（1445 个方法节点）乐观假设关闭，其后新入链的
+`GetPropertyAction.privilegedGetProperties` 先于其被调方法 `System.getProperties` 分析，被调方法「尚无返回」按值未知答复，返回常量格记为 Top；
+被调方法随后给出带属性表标签的常量，并入 Top 仍为 Top → 系统属性全部转不稳定。本项改变了补种时机，该方法恰好在被调方法之后分析，所以没有触发。
+这是引擎缺口，记为项 9-b 修复（见下），修复后重测本项的净效果。
+
+**给 C3 的接口（项 5）**：`closure.json` `seeds.services: [{service, providers: [{module, class}]}]`（`module = null` 为类路径 provider）与 `seeds.services_unknown`。
+生成器 / 运行时需要：① 引导期按事实建立模块服务目录——对每个模块 provider 以 `ServicesCatalog.create` + `addProvider(模块, 服务, provider 类)`
+装填所属加载器的目录（模块 → 加载器按 JDK 模块加载器映射：jdk.charsets 等在平台加载器），`BootLoader.getServicesCatalog` / `ClassLoader` 的
+`ServicesCatalog` 返回它；现行手写 `ServicesCatalog.findServices` 恒返回空、`BootLoader.getServicesCatalog` 返回 null，与 JVM 行为不一致
+（运行时拿不到 `ExtendedCharsets`，`Charset.forName` 的扩展字符集查不到），属手写层终态待改项；② 顺序按事实给出的顺序（模块声明序）；
+③ 类路径 provider 需要把 `META-INF/services/<服务>` 作为资源嵌入，`ClassLoader.getResources` 可读，provider 类名已登记在 `reflect` 按名表中。
+
 ## 七、验收
 
 - §一 终态表各项达标。

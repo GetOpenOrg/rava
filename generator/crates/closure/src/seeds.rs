@@ -5,11 +5,13 @@ pub mod annotation;
 pub mod data_bundle;
 pub mod jca;
 pub mod locale;
+pub mod services;
 
 use annotation::AnnoCfg;
 use data_bundle::Carriers;
 use jca::JcaCfg;
 use locale::LocaleCfg;
+use services::ServicesCfg;
 
 #[derive(Debug, Default)]
 pub struct SeedCfg {
@@ -17,6 +19,7 @@ pub struct SeedCfg {
     pub locale: LocaleCfg,
     pub jca: JcaCfg,
     pub carriers: Carriers,
+    pub services: ServicesCfg,
 }
 
 impl SeedCfg {
@@ -32,6 +35,7 @@ impl SeedCfg {
             locale: LocaleCfg::from_toml(t.get("locale")),
             jca: JcaCfg::from_toml(t.get("jca")),
             carriers: Carriers::new(&carriers),
+            services: ServicesCfg::from_toml(t.get("services")),
         }
     }
 }

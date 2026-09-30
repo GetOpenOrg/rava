@@ -6,6 +6,7 @@ impl<'a> Engine<'a> {
     pub(super) fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
         self.refs.insert(mref.to_string());
         self.reflective_writes(m, off, mref, opcode, args);
+        self.service_lookup(m, off, opcode, mref, args);
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
         self.invoke_inner(m, off, opcode, mref, iface, args);

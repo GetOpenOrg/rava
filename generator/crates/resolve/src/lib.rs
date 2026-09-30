@@ -4,5 +4,5 @@ pub mod classpath;
 pub mod hierarchy;
 pub mod jdk;
 
-pub use classpath::{ClassPath, Origin};
+pub use classpath::{ArchiveView, ClassPath, Origin};
 pub use hierarchy::{is_signature_polymorphic, package_of, FieldSite, Hierarchy, MethodSite};
