@@ -443,7 +443,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 
 观测：DeepCopy 闭包阶段的峰值 RSS 在同一二进制的多次运行间波动很大（1276–2097 MB）。这发生在闭包分析内部，早于本步改动的起点（`closure` 标记之后），与本步无关，已记为闭包线的观测项。
 
-### 5.5 N4 第一步：逐类析构与监视器默认方法去单态化（emitter-perf2）
+### 5.5 N4 第一步：逐类析构与监视器默认方法去单态化（emitter-perf2，提交 b488e11c、b1520ee7、7b1638bc）
 
 计量：HelloWorld 的 java_runtime crate，`-Z dump-mono-stats` 与 `-Z print-mono-items`（口径同 §4.5 第 5 步之后）。
 
@@ -484,6 +484,12 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 - dev 构建的墙钟与峰值 RSS 没有可测的变化：峰值出现在前端（类型检查、借用检查），不在代码生成段。收益在确定性指标（IR 体积）上，release（LTO）构建会更明显。
 - 剩下的 415 份 `Weak::drop` 按 `dyn X__VTable` / wrapper 字段逐类型实参各一份，是字段析构所必需的。
 
+验证：
+- 27 例生成树与上一步（user crate 清扫后）对照：各例只有 runtime overlay 的 `object.rs` 不同（54 行差异），加上随它变化的 Cargo.toml 版本哈希与 closure.json 的计时字段。宏展开不落生成树。raw-audit 逐行一致。
+- `cargo check` 通过：TestSynchronized（34 s，1.37 GB）、TestCasting（18 s，1.62 GB）、TestCompletableFuture（96 s，5.88 GB）。HelloWorld java_runtime 的 dev 完整编译通过（见上表）。
+- 生成侧的 `monitor_enter` 接收者全是 `Object::from(..)` / `Into::<Object>::into(..)`，走固有方法。手写层没有经 trait 调用监视器方法的点。
+- 生成器单测通过。
+
 仍未做（与泛型擦除布局相关，并入拆 crate 一并处理，见 §五 N4）：`__shallow_copy`（15.7k）、`__erased_vtable`（11.8k）、`__view_into`（11.0k）、`__clinit`（19.3k，按类体量）、`From`（20.4k）。
 
 ## 六、需要主会话 e2e 抽查的用例
@@ -508,6 +514,12 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
   - 建议抽查 `DeepCopy`（最多类，析构与发射重叠）、`Digester`，再加一例开动态对照的常规用例（如 `TestStreamBasic`）。
   - 另跑一例 `--no-dyn`（不写 closure.json 的缺省路径），确认输出与 JVM 一致。
 - **mod 树单次列举**（提交 092f9bed）：生成形态不变。建议抽查一例复用 scratch 且闭包缩小的运行：先跑 `DeepCopy`，再不加 `--clean` 把同一 scratch 用于一个小用例，确认编译运行正常（陈旧文件清扫、陈旧包目录清除）；同一场景下 user/src 只应剩本测试的文件（user crate 清扫，提交 a7170673）。
+- **N4 第一步**（提交 b488e11c、b1520ee7、7b1638bc）：宏展开形态改变，生成树文本不变。
+  - `TestSynchronized`：wait / notify / synchronized，覆盖监视器方法。
+  - `TestCasting`：checkcast / `From<Object>`，覆盖部件路径 A / B。
+  - `TestSwitchString`、`TestZonedDateTime`：枚举常量经 Object 取回子类视图，走路径 B。
+  - `TestNestedTry`、`TestSuppressed`：中间型 catch 的擦除重建，经 `__erased_vtable`。
+  - 带接口视图的用例，如 `TestStreamBasic`、`TestCompletableFuture`，经 `__interface`。
 - **P3**（全局分配器）与 **P5**（lib.rs / 陈旧清扫时机）：影响所有生成器运行，生成树已逐字节一致。
   - 抽查一例复用 scratch 的连续两次运行（不加 `--clean`），确认第二次 cargo 不重编 java_runtime。
   - 抽查一例在 runtime/ 删除手写文件后的复用 scratch 运行（陈旧手写清扫）。
