@@ -38,6 +38,12 @@ def resolve(cli_value: str | None) -> str:
     return g
 
 
+def rava_cmd(*args: str) -> list[str]:
+    """rava 子命令的调用形态（release 构建，与闭包分析器共用构建目录）"""
+    return ['cargo', 'run', '--release', '-q', '--manifest-path', _GENERATOR_MANIFEST,
+            '--target-dir', _RAVA_TARGET, '--', *args]
+
+
 def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict: bool, locales: tuple[str, ...],
              libs: tuple[str, ...] = (), batch: bool = False, debug: bool = False, trace_class: str = '',
              precheck_only: bool = False, raw_sites: str = '') -> None:
@@ -49,9 +55,8 @@ def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict
     home = os.environ.get('JAVA_HOME', '')
     if not home:
         sys.exit('Rust 生成器需要 JAVA_HOME（main.py 经 jdk_select.apply_jdk 设置）')
-    cmd = ['cargo', 'run', '--release', '-q', '--manifest-path', _GENERATOR_MANIFEST,
-           '--target-dir', _RAVA_TARGET, '--', 'build', *[os.path.abspath(f) for f in java_files],
-           '--java-home', home, '--runtime', _RUNTIME, '--out', os.path.abspath(out_dir), '--no-run']
+    cmd = rava_cmd('build', *[os.path.abspath(f) for f in java_files],
+                   '--java-home', home, '--runtime', _RUNTIME, '--out', os.path.abspath(out_dir), '--no-run')
     if clean:
         cmd.append('--clean')
     for loc in locales:

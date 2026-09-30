@@ -10,6 +10,8 @@
 
       python3 scripts/gap_scan.py api java/lang java/util java/text java/time java/io
 
+  （`rava build --api-package … --precheck-only`：Rust 侧枚举入口，边界域类跳过）
+
   语料模式：全部（或过滤后的）e2e 测试逐例 BFS（`main.py --precheck-only`，可并行），
   汇总每个缺口被多少个测试触达，按频次排序：
 
@@ -36,7 +38,6 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'scripts'))
 
 _PC_RE = re.compile(r'^\[precheck\] (native-missing|boundary-stub): (\S+)$')
@@ -130,52 +131,41 @@ def run_corpus(ns) -> None:
 
 # ── API 模式 ───────────────────────────────────────────────────────────────────
 
+_API_RE = re.compile(r'^\[api\] .*→ (\d+) 个 public 类，(\d+) 个入口方法$')
+
+
 def run_api(ns) -> None:
-    from codegen.jdk_resolver import JdkResolver
-    from codegen.classfile import parse_class_bytes
-    from codegen import callchain as cc
-    if ns.jdk:
-        os.environ['JAVA_HOME'] = str(__import__('jdk_select').select_jdk(int(ns.jdk)))
-    resolver = JdkResolver()
-    pkgs = tuple(p.rstrip('/') + '/' for p in ns.packages)
-    seeds: list[tuple[str, str, str]] = []
-    n_cls = 0
-    for jmod in ns.modules:
-        for name in resolver.list_module(jmod if jmod.endswith('.jmod') else jmod + '.jmod'):
-            if not name.startswith(pkgs) or name.endswith(('module-info', 'package-info')):
-                continue
-            # 子包按 --recursive 决定是否纳入
-            if not ns.recursive and name.rsplit('/', 1)[0] + '/' not in pkgs:
-                continue
-            if cc._is_boundary_class(name):
-                continue
-            data = resolver.resolve(name)
-            ci = parse_class_bytes(data, name) if data else None
-            if ci is None or not (ci.access_flags & 0x0001):      # public 类
-                continue
-            n_cls += 1
-            for m in ci.methods:
-                if m.name == '<clinit>' or not (m.access_flags & (0x0001 | 0x0004)):
-                    continue
-                seeds.append((name, m.name, m.descriptor))
-    print(f"API 模式：{', '.join(ns.packages)} → {n_cls} 个 public 类，{len(seeds)} 个入口方法")
-    t0 = time.perf_counter()
-    from main import prepare_scratch
-    from codegen import options as _opts
-    from codegen.transpile import transpile
+    from jdk_select import apply_jdk
+    from generator_select import rava_cmd
+    _, home = apply_jdk(int(ns.jdk) if ns.jdk else None, quiet=True)
     scan_dir = ROOT / 'build' / 'gap_scan'
     entry_dir = scan_dir / 'entry'
     entry_dir.mkdir(parents=True, exist_ok=True)
     entry = entry_dir / 'GapScanEntry.java'
     entry.write_text('public class GapScanEntry { public static void main(String[] a) {} }\n')
-    out_dir = str(scan_dir / ('api-' + '-'.join(p.replace('/', '.') for p in ns.packages)))
-    prepare_scratch(out_dir, clean=True)
-    _opts.JDK_SEEDS, _opts.PRECHECK_ONLY = seeds, True
-    transpile([str(entry)], out_dir)
+    out_dir = scan_dir / ('api-' + '-'.join(p.replace('/', '.') for p in ns.packages))
+    cmd = rava_cmd('build', str(entry), '--java-home', str(home),
+                   '--runtime', str(ROOT / 'runtime' / 'java_runtime'),
+                   '--out', str(out_dir), '--clean', '--precheck-only')
+    for p in ns.packages:
+        cmd += ['--api-package', p]
+    if ns.recursive:
+        cmd.append('--api-recursive')
+    t0 = time.perf_counter()
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     dt = time.perf_counter() - t0
-    hits = {k: {m: {'api'} for m in cc.PRECHECK[k.replace('-', '_')]} for k in _KINDS}
+    if r.returncode != 0:
+        sys.exit(f"rava build 失败（{r.returncode}）：{(r.stdout + r.stderr)[-800:]}")
+    hits: dict[str, dict[str, set]] = {k: {} for k in _KINDS}
+    n_cls = n_seeds = 0
+    for line in r.stdout.splitlines():
+        if m := _API_RE.match(line):
+            n_cls, n_seeds = int(m.group(1)), int(m.group(2))
+            print(line)
+        elif (m := _PC_RE.match(line)) and not m.group(2).startswith('…'):
+            hits[m.group(1)][m.group(2)] = {'api'}
     meta = [f"入口包：{', '.join(ns.packages)}（{'含' if ns.recursive else '不含'}子包），"
-            f"{n_cls} 个 public 类 / {len(seeds)} 个 public·protected 方法",
+            f"{n_cls} 个 public 类 / {n_seeds} 个 public·protected 方法",
             f"BFS 耗时 {dt / 60:.1f} 分钟",
             f"native-missing {len(hits['native-missing'])} 个，boundary-stub {len(hits['boundary-stub'])} 个"]
     suffix = '-'.join(p.replace('/', '.') for p in ns.packages)
@@ -191,7 +181,6 @@ def main() -> None:
     a = sub.add_parser('api', help='公开 API 包为入口（与测试无关）')
     a.add_argument('packages', nargs='+', help='包（斜线形态，如 java/util）')
     a.add_argument('--recursive', action='store_true', help='包含子包')
-    a.add_argument('--modules', nargs='+', default=['java.base'], help='jmod 名（缺省 java.base）')
     a.add_argument('--jdk', default=None)
     c = sub.add_parser('corpus', help='e2e 测试逐例 BFS 汇总')
     c.add_argument('-j', '--jobs', type=int, default=max(1, (os.cpu_count() or 2) // 1))

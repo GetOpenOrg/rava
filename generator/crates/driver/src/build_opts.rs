@@ -2,7 +2,8 @@
 //!
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
-//!   [--trace-class 类] [--clean] [--no-run] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]`
+//!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug]
+//!   [--precheck-only] [--raw-sites FILE]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
 //!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]`
 //!   （`--java`：源文件，决定用户类包布局与入口序）
@@ -72,6 +73,10 @@ pub struct BuildOpts {
     pub images: Vec<PathBuf>,
     pub locales: Vec<String>,
     pub roots: Vec<String>,
+    /// 公开 API 包为调用链入口（包内 public 类的 public / protected 方法，[`crate::api_roots`]）
+    pub api_packages: Vec<String>,
+    /// `--api-package` 含子包
+    pub api_recursive: bool,
     pub libs: Vec<LibSpec>,
     /// 批量模式：入口写 `user/src/bin/<bin>.rs` 并向 user/Cargo.toml 追加 `[[bin]]`
     pub batch: bool,
@@ -88,7 +93,7 @@ pub struct BuildOpts {
     pub raw_sites: Option<PathBuf>,
 }
 
-const VALUED: [&str; 14] = [
+const VALUED: [&str; 15] = [
     "--jdk",
     "--java-home",
     "--runtime",
@@ -103,10 +108,12 @@ const VALUED: [&str; 14] = [
     "--lib",
     "--trace-class",
     "--raw-sites",
+    "--api-package",
 ];
-const FLAGS: [&str; 6] = ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only"];
+const FLAGS: [&str; 7] = ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only", "--api-recursive"];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 8] = ["--main", "--locale", "--root", "--no-run", "-o", "--lib", "--batch", "--trace-class"];
+const BUILD_ONLY: [&str; 10] =
+    ["--main", "--locale", "--root", "--no-run", "-o", "--lib", "--batch", "--trace-class", "--api-package", "--api-recursive"];
 /// 只属于 emit 的选项
 const EMIT_ONLY: [&str; 2] = ["--classes", "--java"];
 
@@ -133,6 +140,7 @@ impl BuildOpts {
                     "--batch" => o.batch = true,
                     "--debug" => o.debug = true,
                     "--precheck-only" => o.precheck_only = true,
+                    "--api-recursive" => o.api_recursive = true,
                     _ => o.strict = true,
                 }
                 continue;
@@ -151,6 +159,7 @@ impl BuildOpts {
                 "--lib" => o.libs.push(LibSpec::parse(v)?),
                 "--trace-class" => o.trace_class = Some(v.clone()),
                 "--raw-sites" => o.raw_sites = Some(PathBuf::from(v)),
+                "--api-package" => o.api_packages.push(v.clone()),
                 _ => o.roots.push(v.clone()),
             }
         }
@@ -161,6 +170,9 @@ impl BuildOpts {
     fn validate(&self, mode: Mode) -> Result<(), String> {
         if self.jdk.is_some() && self.java_home.is_some() {
             return Err("--jdk 与 --java-home 互斥".into());
+        }
+        if self.api_recursive && self.api_packages.is_empty() {
+            return Err("--api-recursive 需配合 --api-package".into());
         }
         if !self.libs.is_empty() && self.batch {
             return Err("jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）".into());
@@ -301,6 +313,15 @@ mod tests {
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --lib h=/a.jar")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --trace-class X")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --debug --precheck-only")).is_ok());
+    }
+
+    #[test]
+    fn api_package_options() {
+        let o = BuildOpts::parse(Mode::Build, &args("E.java --api-package java/util --api-package java.text --api-recursive")).unwrap();
+        assert_eq!(o.api_packages, ["java/util", "java.text"]);
+        assert!(o.api_recursive);
+        assert!(BuildOpts::parse(Mode::Build, &args("E.java --api-recursive")).is_err());
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --api-package java/util")).is_err());
     }
 
     #[test]

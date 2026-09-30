@@ -211,3 +211,18 @@ fn image_dirs_lists_existing_class_dirs() {
     let modules = std::fs::read_dir(runtime_dir().join("../java_support")).unwrap().flatten().filter(|e| e.path().is_dir()).count();
     assert!(dirs.iter().filter(|d| d.contains("/rava/vmsupport/")).count() == modules, "{text}");
 }
+
+/// `--api-package`：包内公开 API 为入口，`--precheck-only` 出预检明细（gap_scan.py api 模式）
+#[test]
+fn api_package_precheck() {
+    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only"]) else {
+        return;
+    };
+    let line = stdout.lines().find(|l| l.starts_with("[api] java/util/function（不含子包）→ ")).unwrap_or_else(|| panic!("{stdout}"));
+    let n: usize = line.split("→ ").nth(1).and_then(|r| r.split(' ').next()).and_then(|n| n.parse().ok()).unwrap();
+    assert!(n > 30, "{line}");
+    assert!(stdout.contains("[precheck] native-missing="), "{stdout}");
+    let facts = std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap();
+    assert!(facts.contains("java/util/function/BiFunction"), "API 入口类入闭包");
+    std::fs::remove_dir_all(&out).ok();
+}

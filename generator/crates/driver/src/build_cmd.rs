@@ -21,6 +21,7 @@ use input::{BuildInput, ClosureFacts, LibCrate, RuntimeManifest};
 use resolve::{ClassPath, Hierarchy, Origin};
 use ty::short_names::ShortNames;
 
+use crate::api_roots::api_roots;
 use crate::build_libs::{self, Libs};
 use crate::build_opts::{BuildOpts, Mode, CLOSURE_INPUT_DIR};
 use crate::closure_cmd::{find_runtime_dir, seed_roots, MAIN};
@@ -151,11 +152,22 @@ fn analyze(cp: &ClassPath, rt: &Path, main: &str, o: &BuildOpts, seed_classes: &
     let h = Hierarchy::new(cp);
     let roots: Vec<&String> = o.roots.iter().collect();
     let seeds: Vec<&String> = seed_classes.iter().collect();
+    let mut seed_members = seed_roots(cp, &roots, &seeds)?;
+    if !o.api_packages.is_empty() {
+        let (api, n_cls) = api_roots(cp, &man, &o.api_packages, o.api_recursive);
+        println!(
+            "[api] {}（{}子包）→ {n_cls} 个 public 类，{} 个入口方法",
+            o.api_packages.join(", "),
+            if o.api_recursive { "含" } else { "不含" },
+            api.len()
+        );
+        seed_members.extend(api);
+    }
     let input = closure::Input {
         cp,
         runtime_dir: rt,
         roots: vec![MemberRef { owner: main.to_string(), name: MAIN.0.into(), desc: MAIN.1.into() }],
-        seed_roots: seed_roots(cp, &roots, &seeds)?,
+        seed_roots: seed_members,
         locales: o.locales.clone(),
         flow_batch: None,
     };
