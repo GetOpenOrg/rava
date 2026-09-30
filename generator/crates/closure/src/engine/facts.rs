@@ -89,6 +89,8 @@ pub(super) struct Ctx<'a> {
     pub(super) objs: RefCell<HashMap<String, Option<Rc<Obj>>>>,
     /// 字节码方法的属性读取摘要（None = 不是读取形态）
     pub(super) psums: RefCell<HashMap<MemberRef, Option<PropSum>>>,
+    /// 只读形参判定缓存：(方法, 形参序号) → 属性表对象经该形参传入时不逃逸
+    pub(super) preadonly: RefCell<HashMap<(MemberRef, usize), bool>>,
     /// 运行期可能被改写（不折叠）的系统属性键
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）

@@ -174,6 +174,7 @@ impl Closure<'_> {
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
             "fold_null_recv": folds.iter().map(|f| f.null_recv.len()).sum::<usize>(),
             "fold_props": folds.iter().map(|f| f.props.len()).sum::<usize>(),
+            "sysprops_unstable": e.sysprops_report(),
             "reflect_members": e.reflect_members.len(),
             "reflect_gaps": e.reflect_gaps.len(),
             "hw_written_fields": e.hw_written.len(),
