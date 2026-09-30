@@ -123,9 +123,11 @@ pub(crate) fn expand_statics(
 /// 状态：0 = 未初始化；1 = 初始化中；2 = erroneous（`<clinit>` 曾抛出异常）；3 = 已完成。
 /// 多线程协议（他线程等待 / 同线程递归返回）由运行时 `gil::clinit_enter/exit` 承载。
 ///
-/// `register` 为初始化成功后追加执行的语句（常量目录登记，见
-/// `constant_directory_registration`），在 `<clinit>` 之后执行——此时 static
-/// 字段已就位，取值闭包经访问器读到的是初始化完成的值。
+/// `register` 为常量目录登记语句（见 `constant_directory_registration`），在 `<clinit>`
+/// 之前执行：登记的是惰性取值闭包（查询时才经访问器读 static 字段），提前登记使
+/// `<clinit>` 自身里的 `Enum.valueOf`（如 `OperatingSystem.initOS` → `valueOf("LINUX")`，
+/// 此时枚举常量已赋值）能查到本类目录——JVM 经 `values()` 读已赋值的 `$VALUES`，
+/// 同样不要求初始化完成。
 pub(crate) fn expand_class_init(
     struct_ident: &Ident,
     binary_name: &str,
@@ -145,9 +147,8 @@ pub(crate) fn expand_class_init(
     // JVMS §5.5 步骤 7：父类之后、本类 `<clinit>` 之前，初始化带 default 方法的超接口
     let init_ifaces = init_interfaces.iter().map(|t| quote! { <#t>::__class_init()?; });
     let clinit_ident = format_ident!("{}", CLINIT_FN);
-    // 带 `?;` 的语句形态（不再作为尾表达式）：常量目录登记语句要追加在
-    // `<clinit>` 之后；无 `<clinit>` 时不生成该语句（独立的 `Ok(())?;`
-    // 缺少类型上下文，无法推断）。
+    // 带 `?;` 的语句形态（不再作为尾表达式）：无 `<clinit>` 时不生成该语句
+    // （独立的 `Ok(())?;` 缺少类型上下文，无法推断）。
     let run_clinit = if has_clinit {
         quote! { Self::#clinit_ident()?; }
     } else {
@@ -168,8 +169,8 @@ pub(crate) fn expand_class_init(
             let run = || -> Result<()> {
                 #init_super
                 #(#init_ifaces)*
-                #run_clinit
                 #register
+                #run_clinit
                 Ok(())
             };
             let result = run();

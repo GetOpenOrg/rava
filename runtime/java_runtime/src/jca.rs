@@ -68,15 +68,25 @@ pub fn register_providers(ctors: &[(&'static str, ProviderCtor)]) {
 
 /// 按 (类型, 算法) 登记了服务的 provider 名（算法名大小写不敏感，JDK `Provider.getService`
 /// 同语义；登记序即 provider 优先序，去重）。
+///
+/// 按标准名无匹配时（算法名是别名，如 `sun.security.provider.SecureRandom.init` 的
+/// `MessageDigest.getInstance("SHA")`，服务表登记为标准名 `SHA-1`）退回该类型的全部 provider：
+/// 别名由各 provider 的 `getService`（翻译字节码，查 legacy `Alg.Alias.*` 映射）解析，与 JDK
+/// ProviderList 逐个 provider 询问同语义；不提供该算法的 provider 返回 null，由调用方滤除。
 pub fn providers_for(type_: &str, algorithm: &str) -> Vec<&'static str> {
     SERVICES.with(|s| {
-        let mut out: Vec<&'static str> = Vec::new();
-        for e in s.borrow().iter() {
-            if e.type_ == type_ && e.algorithm.eq_ignore_ascii_case(algorithm) && !out.contains(&e.provider) {
-                out.push(e.provider);
+        let s = s.borrow();
+        let collect = |exact: bool| {
+            let mut out: Vec<&'static str> = Vec::new();
+            for e in s.iter() {
+                if e.type_ == type_ && (!exact || e.algorithm.eq_ignore_ascii_case(algorithm)) && !out.contains(&e.provider) {
+                    out.push(e.provider);
+                }
             }
-        }
-        out
+            out
+        };
+        let exact = collect(true);
+        if exact.is_empty() { collect(false) } else { exact }
     })
 }
 

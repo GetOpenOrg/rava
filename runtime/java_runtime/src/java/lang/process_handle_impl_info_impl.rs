@@ -12,19 +12,9 @@ use crate::prelude::*;
 use super::process_handle_impl_info::ProcessHandleImpl_Info;
 use super::process_handle_impl_impl::proc_stat;
 
-/// uid → 用户名（getpwuid_r）；无对应条目时为数字串。
+/// uid → 用户名；无对应条目时为数字串（JDK ProcessHandleImpl_unix.c 同形）。
 fn user_name(uid: u32) -> std::string::String {
-    let mut buf = vec![0 as libc::c_char; 4096];
-    // SAFETY: passwd 全零为合法初值；getpwuid_r 只写入 pwd / buf，result 指向 pwd 或为 null
-    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut result: *mut libc::passwd = std::ptr::null_mut();
-    let r = unsafe { libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result) };
-    if r == 0 && !result.is_null() && !pwd.pw_name.is_null() {
-        // SAFETY: 成功时 pw_name 是 buf 内以 NUL 结尾的字符串
-        let name = unsafe { std::ffi::CStr::from_ptr(pwd.pw_name) };
-        return name.to_string_lossy().into_owned();
-    }
-    uid.to_string()
+    crate::posix::passwd_name(uid).unwrap_or_else(|| uid.to_string())
 }
 
 impl ProcessHandleImpl_Info {

@@ -47,13 +47,10 @@ impl StaticProperty {
         Ok(String::from(std::env::var("HOME").unwrap_or_default().as_str()))
     }
 
-    /// user.name：$USER，回落 $LOGNAME。
+    /// user.name：`getpwuid(getuid())->pw_name`（System.props 同源同值，见 posix::current_user_name）。
     #[jvm_boundary]
     pub fn userName() -> Result<String> {
-        Ok(String::from(std::env::var("USER")
-            .or_else(|_| std::env::var("LOGNAME"))
-            .unwrap_or_default()
-            .as_str()))
+        Ok(String::from(crate::posix::current_user_name().as_str()))
     }
 
     /// java.io.tmpdir：$TMPDIR，回落 /tmp。
