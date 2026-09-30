@@ -282,7 +282,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 | # | 事项 | 说明 |
 |---|---|---|
 | N1 | 按类并行发射（输出确定） | ✅ 已做，见 §5.1 |
-| N2 | 闭包结果进程内传递 | `rava build` 现在由闭包写出 closure.json，发射再读入并二次解析手写层（`syn` 约 3%）、按类二次解析补充属性（`extras` 约 2.7%）。终态由闭包直接交出内存结构，手写层解析结果复用。需要闭包 crate 暴露接口（闭包线） |
+| N2 | 闭包结果进程内传递 | ✅ 已做，见 §5.4（提交 b5291a03）。手写层二次解析（`syn` 约 3%）与按类补充属性（`extras` 约 2.7%）是 `rava emit` / 剖析口径的数字；`rava build` 路径下 `input.handwritten` 已降到约 10–14 ms |
 | N3 | 冷写出 DeepCopy ≤ 2 s | ✅ N1 落地后达成（1.08 s）。剩余串行段见 §5.1 N6 |
 | N4 | 剩余 mono 热点（步 1–3 后） | `drop`（逐 T 的 Weak / Arc 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
 | N5 | 按类并行发射（N1）的实施时机 | 协调决定：等 closure-perf2 合入主线后，本线先合主线，再把 `resolve` 的 `Rc` 改为 `Arc`，改完闭包 4 例集合必须一致 |
@@ -389,9 +389,39 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 - 27 例生成树与 ef1daf34 对照 0 差异，raw-audit 一致；Digester scratch 改前后逐文件一致。
 
 仍在串行段上的（Digester / DeepCopy）：
-- 闭包结构析构约 36 / 95 ms（`input` 余项）。`Closure` 借用含 `RefCell` 的 `Handwritten`，不能移交其他线程析构；随 N2（闭包结果进程内交接）改为只保留发射需要的事实后一并消掉。
-- `input.normalize` 约 19 ms：逐类规整，结果进 BTreeMap、与顺序无关，可并行；input crate 需引入 `par_map`（与 emit 共用），并入 N2。
+- 闭包结构析构、`input.normalize`：已由 N2 处理，见 §5.4。
 - `mod_tree` 的三次目录遍历（清扫 / 扫描 / 陈旧目录）约 17 ms。
+
+### 5.4 N2：闭包事实进程内直传（emitter-perf2，提交 b5291a03）
+
+做法：
+- `rava build` 缺省不再生成 closure.json。闭包分析结束后直接由 `ClosureFacts::from_closure` 交给发射。
+- `--closure-json` 时另写出 `<scratch>/closure_input/closure.json`，同时用 `ClosureFacts::from_json` 把刚写出的内容解析回来，与直传的事实比对 `Debug` 全文，不一致就报错退出。两条路径的等价性由此在每次写 json 时自检。
+- 不写 json 时，删除 scratch 里上一轮遗留的 closure.json，避免它与本轮结果不符。
+- 需要 closure.json 的调用方显式开启：`run_tests.py` 在开动态对照（缺省）时开启，`gen_trees.sh`（生成树对照含 closure.json）和 `emit_bench.sh`（`rava emit` 读它）也开启。因此每次 e2e 默认都会做一遍直传与 json 两路事实的比对。
+- 闭包结构的析构与发射重叠：`Closure` 借用含 `RefCell` 的 `Handwritten`，不能交给别的线程析构，所以改为把发射放到作用域线程（栈 16 MiB，与发射工作线程相同），本线程析构闭包。
+- 输入构建：
+  - 方法体规范化逐类并行，结果按类序归并进 BTreeMap；出错时报类序最先的错误，与串行一致。
+  - 手写文件扫描改为逐文件并行读取和提取文本，归并仍按遍历序串行进行。
+  - 反射字符串扫描不再把未改写的方法体复制成 `NormCode`，而是直接读原字节码。原先读的是 `NInsn::Op` 的 LDC，`FoldCall` / `FoldField` 本来就不含 LDC，所以集合不变。
+  - `BuildInput.jobs` 取 `--emit-jobs`。
+
+实测（`--perf`，共享机负载 7–20）：
+
+| 段 | Digester 改前 | 改后 | DeepCopy 改前 | 改后 |
+|---|---:|---:|---:|---:|
+| `closure_json`（value + 文本 + 落盘） | 约 150 ms | **0**（缺省不写） | 约 400 ms | **0** |
+| 闭包析构（原 `input` 余项） | 58–157 ms | **与发射重叠** | 约 617 ms | **与发射重叠** |
+| `input.normalize` | 44.8 ms | **7.6 ms** | 101.8 ms | **8.2 ms** |
+| `input.reflect` | 11.5 ms | 5.8 ms | 15.2 ms | 6.4 ms |
+| `input.handwritten` | 28.1 ms | 14.0 ms | 133.1 ms | 9.3 ms |
+
+等价性：
+- 发射只消费 `ClosureFacts`。直传与 json 两条路径产出的事实在 `--closure-json` 下逐字节比对，27 例生成树全部走这条路径，未报不一致。
+- Digester 开与不开 `--closure-json` 的 scratch，除 closure.json 本身外逐文件一致。
+- 27 例生成树（含 closure.json）与 ef1daf34 对照 0 差异，raw-audit 一致，单测通过。
+
+观测：DeepCopy 闭包阶段的峰值 RSS 在同一二进制的多次运行间波动很大（1276–2097 MB）。这发生在闭包分析内部，早于本步改动的起点（`closure` 标记之后），与本步无关，已记为闭包线的观测项。
 
 ## 六、需要主会话 e2e 抽查的用例
 
@@ -410,6 +440,10 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
   - `HelloWorld`、`TestStreamBasic`：普通工作区的 profile 生效。
   - `DeepCopy`：≥ 1700 类，经 `rava build` 走 `CARGO_BUILD_JOBS=1` 分支。
   - 任选一个依赖 panic 回溯 / 异常路径的用例（如 `TestSuppressed`、`TestNestedTry`）：确认 unwind 语义未变。
+- **N2**（闭包事实直传，提交 b5291a03）：生成形态不变。
+  - `run_tests.py` 缺省带 `--closure-json`，每次运行都会校验两路事实一致；若出现「由 closure.json 解析的闭包事实与进程内直传的不一致」即为回归。
+  - 建议抽查 `DeepCopy`（最多类，析构与发射重叠）、`Digester`，再加一例开动态对照的常规用例（如 `TestStreamBasic`）。
+  - 另跑一例 `--no-dyn`（不写 closure.json 的缺省路径），确认输出与 JVM 一致。
 - **P3**（全局分配器）与 **P5**（lib.rs / 陈旧清扫时机）：影响所有生成器运行，生成树已逐字节一致。
   - 抽查一例复用 scratch 的连续两次运行（不加 `--clean`），确认第二次 cargo 不重编 java_runtime。
   - 抽查一例在 runtime/ 删除手写文件后的复用 scratch 运行（陈旧手写清扫）。
