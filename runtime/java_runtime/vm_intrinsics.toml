@@ -199,20 +199,41 @@ constructor_invokers = [
 #   values    写入值取自这些形参的值
 #   elements  写入值取自这些形参数组的元素
 #   produced  写入值含手写体自身产出的对象
+#   fields    dst 为对象（非数组）时写入值落在其引用实例字段上（按偏移写入，偏移只能指向这些位置）
+#   last      写入值取自调用点最后一个实参（签名多态方法，实参个数随调用点变化）
 # 未列出、且手写体取得数组视图（JArray / __view_into / array_store_*）的方法按保守规则：
 # 每个非接收者引用形参都可被写入，来源为其它形参、全部实参数组的元素与手写体产出。
 # 准入：JVM 规范 / JDK 文档给出的写入语义，与手写实现一致（注明实现位置）。
 # System.arraycopy：dest[destPos..] ← src[srcPos..]（system_impl.rs）
 "java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V" = { dst = 2, elements = [0] }
-# Unsafe 引用写入：o 为引用元素数组时写入 x（unsafe__impl.rs `_erased_ref_array` 臂）
-"jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2] }
-"jdk/internal/misc/Unsafe.putReferenceVolatile:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2] }
-"jdk/internal/misc/Unsafe.putReferenceOpaque:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2] }
-"jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2] }
-"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [2] }
-"jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3] }
-"jdk/internal/misc/Unsafe.weakCompareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3] }
-"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [3] }
+# Unsafe 引用写入：o 为引用元素数组时写入元素（unsafe__impl.rs `_erased_ref_array` 臂），
+# 为对象时写入其引用字段（`__unsafe_ref_update` 按字段名匹配）
+"jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true }
+"jdk/internal/misc/Unsafe.putReferenceVolatile:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true }
+"jdk/internal/misc/Unsafe.putReferenceOpaque:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true }
+"jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true }
+"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [2], fields = true }
+"jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true }
+"jdk/internal/misc/Unsafe.weakCompareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true }
+"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [3], fields = true }
+# VarHandle 引用写入访问模式（签名多态，var_handle_impl.rs → `__unsafe_ref_update` / 数组元素写入）：
+# 形参序号按调用点实参；第 0 个坐标是 holder（实例字段 / 数组），写入值是最后一个实参（last）。
+# 静态字段句柄没有 holder 坐标：写入值另接到按名打开的静态字段（findStaticVarHandle 等）
+"java/lang/invoke/VarHandle.set:([Ljava/lang/Object;)V" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.setVolatile:([Ljava/lang/Object;)V" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.setOpaque:([Ljava/lang/Object;)V" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.setRelease:([Ljava/lang/Object;)V" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.compareAndSet:([Ljava/lang/Object;)Z" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.weakCompareAndSet:([Ljava/lang/Object;)Z" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.weakCompareAndSetPlain:([Ljava/lang/Object;)Z" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.weakCompareAndSetAcquire:([Ljava/lang/Object;)Z" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.weakCompareAndSetRelease:([Ljava/lang/Object;)Z" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.compareAndExchange:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.compareAndExchangeAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.compareAndExchangeRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.getAndSet:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.getAndSetAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
+"java/lang/invoke/VarHandle.getAndSetRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
 # 只读：引用读取、调用器（实参数组原样转交目标方法，目标方法的写入按其自身建模）、栈帧填充（写元素对象的字段）
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
 "jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}

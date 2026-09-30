@@ -242,6 +242,10 @@ struct HwWrite {
     elements: Vec<usize>,
     /// 手写体产出（分配 / 字段读取 / 回调返回值）
     produced: bool,
+    /// 目标为对象时写入其引用实例字段
+    fields: bool,
+    /// 写入值取自调用点最后一个实参（签名多态）
+    last: bool,
 }
 
 /// 按声明形参位置的实参来源（基本类型为 None）
@@ -429,6 +433,10 @@ pub struct Engine<'a> {
     /// 类（含超类）的引用实例字段节点（内存读取的对象分量）
     ref_fields: HashMap<u32, Rc<[(usize, u32)]>>,
     hw_writes: HashMap<usize, Rc<[Option<HwWrite>]>>,
+    /// 签名多态写入调用点的写入值节点（静态字段句柄无 holder 坐标：写入值接到按名打开的静态字段）
+    poly_writes: Vec<Node>,
+    /// 按名打开（反射 / VarHandle / Unsafe 按名写入）的静态引用字段
+    open_statics: Vec<(usize, u32)>,
     fwork: VecDeque<Node>,
     in_fwork: HashSet<Node>,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理
@@ -555,6 +563,8 @@ impl<'a> Engine<'a> {
             hw_reads: HashMap::default(),
             ref_fields: HashMap::default(),
             hw_writes: HashMap::default(),
+            poly_writes: Vec::new(),
+            open_statics: Vec::new(),
             fwork: VecDeque::new(),
             in_fwork: HashSet::default(),
             open_methods: BTreeMap::new(),
@@ -906,6 +916,7 @@ impl<'a> Engine<'a> {
         if self.ctx.fopen.borrow_mut().insert(key.clone()) {
             let deps = self.ctx.fdeps.borrow().get(&key).cloned();
             self.invalidate_all(deps);
+            self.open_static(&key);
         }
     }
 
@@ -914,6 +925,11 @@ impl<'a> Engine<'a> {
             let deps: BTreeSet<usize> =
                 self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()).collect();
             self.invalidate_all(Some(deps));
+            // 已登记的同名字段；之后登记的由 field_node 按 fopen_names 接入
+            let hits: Vec<MemberRef> = self.fields.keys().filter(|k| k.name == name).cloned().collect();
+            for k in hits {
+                self.open_static(&k);
+            }
         }
     }
 

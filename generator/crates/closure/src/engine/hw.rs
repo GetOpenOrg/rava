@@ -15,8 +15,16 @@ impl<'a> Engine<'a> {
         }
         let s = self.hw_site_id(m, off, t);
         let base = usize::from(!self.methods[t].is_static);
-        let ptypes = self.methods[t].ptypes.clone();
         let obj = self.id(OBJECT);
+        // 签名多态：实参按调用点描述符排布（VM 打包进 Object[]），引用实参一律按 Object 接入
+        let poly = self.is_poly(t);
+        let ptypes = if poly {
+            let mut p = self.methods[t].ptypes[..base].to_vec();
+            p.extend(a.iter().map(|f| f.as_ref().map(|_| obj)));
+            p
+        } else {
+            self.methods[t].ptypes.clone()
+        };
         let feeds: Vec<Option<&[Feed]>> = (0..ptypes.len()).map(|i| if i < base { recv } else { a.get(i - base).and_then(|f| f.as_deref()) }).collect();
         let mut watched: BTreeSet<usize> = BTreeSet::new();
         for (j, w) in ws.iter().enumerate() {
@@ -25,7 +33,11 @@ impl<'a> Engine<'a> {
             if w.produced {
                 self.flow(Node::S(t, PROD), wn, obj);
             }
-            for &i in &w.values {
+            let last = (w.last && ptypes.len() > base).then(|| ptypes.len() - 1);
+            if last.is_some() && poly {
+                self.poly_write(wn);
+            }
+            for &i in w.values.iter().chain(last.iter()) {
                 if let (Some(Some(pi)), Some(Some(fs))) = (ptypes.get(i), feeds.get(i)) {
                     self.feed(fs, wn, *pi);
                 }
@@ -127,6 +139,8 @@ impl<'a> Engine<'a> {
                         values: d.values.iter().map(|x| x + base).collect(),
                         elements: d.elements.iter().map(|x| x + base).collect(),
                         produced: d.produced,
+                        fields: d.fields,
+                        last: d.last,
                     })
                 })
                 .collect(),
@@ -138,6 +152,8 @@ impl<'a> Engine<'a> {
                             values: refs.iter().copied().filter(|&i| i != j).collect(),
                             elements: refs.clone(),
                             produced: true,
+                            fields: false,
+                            last: false,
                         })
                     })
                     .collect()
@@ -169,6 +185,63 @@ impl<'a> Engine<'a> {
             for p in PARITIES {
                 self.flow(Node::W(s, i), Node::E(y, p), cid);
             }
+        }
+    }
+
+    fn is_poly(&self, t: usize) -> bool {
+        let key = &self.methods[t].key;
+        self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(resolve::is_signature_polymorphic)).unwrap_or(false)
+    }
+
+    /// 签名多态写入调用点：写入值接到按名打开的静态引用字段（静态字段句柄没有 holder 坐标）
+    fn poly_write(&mut self, wn: Node) {
+        self.poly_writes.push(wn);
+        for (fi, tid) in self.open_statics.clone() {
+            self.flow(wn, Node::U(fi), tid);
+        }
+    }
+
+    /// 字段按名打开：静态引用字段接收签名多态写入调用点的写入值
+    pub(super) fn open_static(&mut self, key: &MemberRef) {
+        let is_static = self.h.class(&key.owner).and_then(|cf| cf.field(&key.name, &key.desc).map(|f| f.is_static())).unwrap_or(false);
+        let Some(tid) = parse_field(&key.desc).and_then(|t| self.ptype(&t)).filter(|_| is_static) else { return };
+        let fi = self.field_node(key.clone());
+        if self.open_statics.iter().any(|&(f, _)| f == fi) {
+            return;
+        }
+        self.open_statics.push((fi, tid));
+        for wn in self.poly_writes.clone() {
+            self.flow(wn, Node::U(fi), tid);
+        }
+    }
+
+    /// 调用点 s 的写入目标实参 i 新增对象：写入值接到对象的引用实例字段（与 `memory_read` 对称）。
+    /// 抽象对象按对象分量接入；非抽象类 / open 目标接未知接收者写入节点，open 目标的子类字段不可枚举，
+    /// 写入值随之逃逸
+    pub(super) fn hw_site_fields(&mut self, s: u32, i: u16, delta: &TypeSet) {
+        let (_, _, t) = self.hw_sites[s as usize];
+        if !self.hw_writes(t).get(i as usize).is_some_and(|w| w.as_ref().is_some_and(|w| w.fields)) {
+            return;
+        }
+        let wn = Node::W(s, i);
+        let obj = self.id(OBJECT);
+        let xs: Vec<u32> = delta.classes.iter().copied().filter(|x| !self.arrays.contains_key(x)).collect();
+        for x in xs {
+            let (cls, is_obj) = match self.objs.get(&x) {
+                Some(&c) => (c, true),
+                None => (x, false),
+            };
+            for (fi, tid) in self.ref_fields(cls).iter().copied() {
+                let n = if is_obj { self.obj_field(x, fi, tid) } else { Node::U(fi) };
+                self.flow(wn, n, tid);
+            }
+        }
+        let os: Vec<u32> = delta.open.iter().copied().collect();
+        for o in os {
+            for (fi, tid) in self.ref_fields(o).iter().copied() {
+                self.flow(wn, Node::U(fi), tid);
+            }
+            self.flow(wn, Node::Esc, obj);
         }
     }
 

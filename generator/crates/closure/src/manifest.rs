@@ -37,6 +37,10 @@ pub struct ArrayWrite {
     pub elements: Vec<usize>,
     /// 写入值含手写体产出
     pub produced: bool,
+    /// dst 为对象（非数组）时写入其引用实例字段（Unsafe 按偏移写入）
+    pub fields: bool,
+    /// 写入值取自调用点最后一个实参（签名多态方法：实参个数随调用点变化）
+    pub last: bool,
 }
 
 /// 反射成员对象所表示的成员类别（`[facts.reflect]`）
@@ -165,6 +169,8 @@ impl Manifest {
                         values: idx(e.get("values")),
                         elements: idx(e.get("elements")),
                         produced: e.get("produced").and_then(|x| x.as_bool()).unwrap_or(false),
+                        fields: e.get("fields").and_then(|x| x.as_bool()).unwrap_or(false),
+                        last: e.get("last").and_then(|x| x.as_bool()).unwrap_or(false),
                     },
                 );
             }
