@@ -611,8 +611,8 @@ fn descriptor_params(descriptor: &str) -> Vec<std::string::String> {
     let mut cur = std::string::String::new();
     for ch in body.chars() {
         cur.push(ch);
-        if cur.starts_with('L') {
-            // 类描述符：累积到 ';' 闭合
+        if cur.trim_start_matches('[').starts_with('L') {
+            // 类描述符（含对象数组 `[Ljava/lang/String;`）：累积到 ';' 闭合
             if ch == ';' { out.push(std::mem::take(&mut cur)); }
             continue;
         }

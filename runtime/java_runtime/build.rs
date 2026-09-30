@@ -522,21 +522,25 @@ fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>>)
     -> BTreeMap<String, Vec<MethodMeta>>
 {
     let rows = methods.entry("java/lang/Object".to_owned()).or_default();
-    // (name, descriptor, modifiers, is_native, throws)：PUBLIC 0x1 / PROTECTED 0x4 /
-    // FINAL 0x10 / NATIVE 0x100（JDK 21 java.lang.Object 声明序）
+    // (name, descriptor, modifiers, is_native, throws)：PUBLIC 0x1 / PRIVATE 0x2 / PROTECTED 0x4 /
+    // FINAL 0x10 / NATIVE 0x100。顺序 = HotSpot 方法表序（JDK 21 `Object.class.getDeclaredMethods()`
+    // 实测：finalize, wait0, equals, toString, hashCode, getClass, clone, notify, notifyAll,
+    // wait(J), wait(JI), wait()）——getMethods / getDeclaredMethods 的输出顺序与 JVM 一致
+    //（ListMethods 实证）；构造器不在方法序列中，置首位不影响方法序
     const OBJECT_MEMBERS: &[(&str, &str, i32, bool, &[&str])] = &[
         ("<init>", "()V", 0x0001, false, &[]),
-        ("getClass", "()Ljava/lang/Class;", 0x0111, true, &[]),
-        ("hashCode", "()I", 0x0101, true, &[]),
+        ("finalize", "()V", 0x0004, false, &["java/lang/Throwable"]),
+        ("wait0", "(J)V", 0x0112, true, &["java/lang/InterruptedException"]),
         ("equals", "(Ljava/lang/Object;)Z", 0x0001, false, &[]),
-        ("clone", "()Ljava/lang/Object;", 0x0104, true, &["java/lang/CloneNotSupportedException"]),
         ("toString", "()Ljava/lang/String;", 0x0001, false, &[]),
+        ("hashCode", "()I", 0x0101, true, &[]),
+        ("getClass", "()Ljava/lang/Class;", 0x0111, true, &[]),
+        ("clone", "()Ljava/lang/Object;", 0x0104, true, &["java/lang/CloneNotSupportedException"]),
         ("notify", "()V", 0x0111, true, &[]),
         ("notifyAll", "()V", 0x0111, true, &[]),
-        ("wait", "()V", 0x0011, false, &["java/lang/InterruptedException"]),
         ("wait", "(J)V", 0x0011, false, &["java/lang/InterruptedException"]),
         ("wait", "(JI)V", 0x0011, false, &["java/lang/InterruptedException"]),
-        ("finalize", "()V", 0x0004, false, &["java/lang/Throwable"]),
+        ("wait", "()V", 0x0011, false, &["java/lang/InterruptedException"]),
     ];
     for (i, (name, desc, mods, native, throws)) in OBJECT_MEMBERS.iter().enumerate() {
         if rows.iter().any(|m| m.name == *name && m.descriptor == *desc) {

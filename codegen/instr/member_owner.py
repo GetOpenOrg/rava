@@ -526,7 +526,50 @@ def _first_decl_is_bridge(ci, mname: str, desc: str, registry: dict) -> bool:
             if m.name == mname and m.descriptor == desc:
                 return bool(m.is_synthetic)
         walk = registry.get(walk.super_class) if walk.super_class else None
+    # 类链无声明：按 JVM 解析序落到超接口（广度优先）的首个声明——接口 default 桥
+    # （`Spliterator.OfInt.tryAdvance(Object)` → `tryAdvance(IntConsumer)`）同样只生成真实方法
+    pending = list(ci.interfaces or []) if ci is not None else []
+    cur = ci
+    while cur is not None and cur.super_class:
+        cur = registry.get(cur.super_class)
+        if cur is not None:
+            pending.extend(cur.interfaces or [])
+    while pending:
+        iface = registry.get(pending.pop(0))
+        if iface is None or iface.name in seen:
+            continue
+        seen.add(iface.name)
+        for m in iface.methods:
+            if m.name == mname and m.descriptor == desc and not m.is_static:
+                return bool(m.is_synthetic)
+        pending.extend(iface.interfaces or [])
     return False
+
+
+def _erase_slot_params(owner_ci, mname: str, desc: str, sig_params: list, registry: dict) -> list:
+    """被调方法是类（非接口）的 vtable 方法：声明方发射签名里为 Object / 提及声明类自身类型形参
+    的形参位按 A-1 擦除为 Object（继承成员经 vtable_erasure 同步擦除，见 inherited_gen
+    _slot_erasure_entries），调用点的期望形参与之对齐——否则按接收者实参代入的具体类型
+    （`EmptySpliterator<.., C=DoubleConsumer>.tryAdvance(C)`）与 Object 形参不符（E0308）。"""
+    import re as _re_es
+    from ..sig_types import emitted_method_sig_types
+    from ..type_map import effective_class_type_params as _ectp
+    param_desc = desc.split(')', 1)[0] + ')'
+    m = next((x for x in owner_ci.methods
+              if x.name == mname and not x.is_synthetic and not x.is_static
+              and x.descriptor.startswith(param_desc)), None)
+    if m is None:
+        return sig_params
+    tps = _ectp(owner_ci, registry)
+    slot_types, _ = emitted_method_sig_types(owner_ci, m, tps, registry)
+    if len(slot_types) != len(sig_params):
+        return sig_params
+    out = []
+    for slot_ty, sp in zip(slot_types, sig_params):
+        erased = (slot_ty == 'Object'
+                  or any(_re_es.search(r'\b' + _re_es.escape(p) + r'\b', slot_ty) for p in tps))
+        out.append('Object' if erased else sp)
+    return out
 
 
 def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: str,
@@ -621,6 +664,11 @@ def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: st
                         receiver_is_this=_recv_is_this,
                         receiver_type=_recv_ty,
                     ) or [jvm_to_rust(_p, registry) for _p in _br_params]
+                    if (not _br_target[0].is_interface
+                            and _br_target[0].name != _br_recv_ci.name):
+                        # 继承成员（祖先声明）：形参位按槽位擦除对齐
+                        sig_params_v = _erase_slot_params(_br_target[0], mname, _br_target[1],
+                                                          sig_params_v, registry)
     if sig_params_v is None:
         sig_params_v = _lookup_method_sig_params(
             cls, mname, params, ret, registry, sim.class_type_params,
