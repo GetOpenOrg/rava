@@ -33,6 +33,7 @@ mod construct;
 mod sysprops;
 mod fold;
 mod forward;
+mod ctxsel;
 mod classes;
 mod reflect;
 mod flow;
@@ -70,6 +71,7 @@ mod scc;
 
 use graph::FlowGraph;
 use share::Dep;
+use ctxsel::Call;
 use stats::{Phase, Why};
 pub use stats::{peak_mem_mb, peak_rss_mb};
 
@@ -574,15 +576,6 @@ pub struct Engine<'a> {
 }
 
 impl<'a> Engine<'a> {
-    /// 接收者对应的克隆上下文
-    fn ctx_of(&self, r: u32) -> u32 {
-        if self.objs.contains_key(&r) {
-            r
-        } else {
-            NOCTX
-        }
-    }
-
     fn on_g_grow(&mut self, id: u32) {
         let ts: Vec<u32> = self.g_sub.keys().copied().collect();
         for t in ts {

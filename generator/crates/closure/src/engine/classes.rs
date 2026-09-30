@@ -476,28 +476,6 @@ impl<'a> Engine<'a> {
         id
     }
 
-    /// 调用点上下文：以调用点命名的堆上下文（不是对象，不进入值集），克隆体内的容器分配以它为链首
-    pub(super) fn site_ctx(&mut self, m: usize, off: u32) -> u32 {
-        self.site_ctx_in(m, off, NOCTX)
-    }
-
-    /// 调用点上下文，链尾接外层上下文 outer 的链（截断到 HEAP_DEPTH；outer = NOCTX 即 `site_ctx`）
-    pub(super) fn site_ctx_in(&mut self, m: usize, off: u32, outer: u32) -> u32 {
-        let mut chain = format!("@{}:{off}", self.mbase[&self.methods[m].key]);
-        if outer != NOCTX {
-            for seg in self.obj_chain.get(&outer).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).take(HEAP_DEPTH - 1) {
-                chain.push('#');
-                chain.push_str(seg);
-            }
-        }
-        if let Some(&id) = self.ids.get(chain.as_str()) {
-            return id;
-        }
-        let id = self.id(&chain);
-        self.obj_chain.insert(id, Rc::from(chain));
-        id
-    }
-
     /// 新鲜工厂：有引用形参的静态字节码方法，返回值来自本方法分配的容器对象 / 引用数组，或来自另一个新鲜工厂
     pub(super) fn fresh_factory(&mut self, key: &MemberRef) -> bool {
         if let Some(&r) = self.factories.get(key) {

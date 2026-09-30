@@ -72,28 +72,8 @@ fn forwarded(mask: u64, args: &[V]) -> u64 {
 }
 
 /// 选择子形参上有常量实参
-fn const_selector(mask: u64, args: &[V]) -> bool {
+pub(super) fn const_selector(mask: u64, args: &[V]) -> bool {
     args.iter().enumerate().any(|(j, v)| j < 64 && mask & (1 << j) != 0 && matches!(v, V::Int(_)))
-}
-
-impl Engine<'_> {
-    /// 静态调用点 (m, off) 以实参 args（不含接收者）调用 key：按选择子形参克隆的上下文（None = 不克隆）
-    pub(super) fn selector_ctx(&mut self, m: usize, off: u32, key: &MemberRef, args: &[V]) -> Option<u32> {
-        if self.methods[m].kind != Kind::Bytecode {
-            return None;
-        }
-        let mask = self.ctx.selector_slots(key);
-        if mask == 0 {
-            return None;
-        }
-        let c = self.methods[m].ctx;
-        if const_selector(mask, args) {
-            // 同一调用方（克隆）里不同调用点传不同常量：按调用点分开，链尾接调用方上下文
-            Some(self.site_ctx_in(m, off, c))
-        } else {
-            (c != NOCTX).then_some(c)
-        }
-    }
 }
 
 #[cfg(test)]

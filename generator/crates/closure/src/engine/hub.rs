@@ -225,7 +225,7 @@ impl<'a> Engine<'a> {
         };
         let (o, n, d) = sel.key();
         let via = self.hubs[h as usize].via.clone();
-        let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.ctx_of(r), via);
+        let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.recv_ctx(r), via);
         if self.vm_hubs.contains(&h) {
             // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参 open；返回值由反射调用点按声明类型给出）
             self.add_to(Node::P(t, 0), &TypeSet::exact(r));

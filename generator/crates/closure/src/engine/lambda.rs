@@ -75,13 +75,14 @@ impl<'a> Engine<'a> {
         match l.imh.kind {
             6 => {
                 // 静态实现方法继承 lambda 创建时的克隆上下文；分派转发的实现方法按调用点克隆
-                let t = self.callee(m, off, resolved, l.ctx, via);
+                let ctx = self.static_ctx(m, off, &resolved, Call::Lambda(l.ctx));
+                let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &all, ret, res);
             }
             8 => {
                 // 构造器引用：容器类在 lambda 创建点分配抽象对象
                 let oid = if self.container(&k.owner) { self.obj_at(l.site.0, l.site.1, &k.owner) } else { self.id(&k.owner) };
-                let t = self.method_ctx(resolved, self.ctx_of(oid), via);
+                let t = self.method_ctx(resolved, self.recv_ctx(oid), via);
                 self.edge(m, off, t, Recv::Exact(oid), &all, None, None);
                 if let (Some(res), Some(rt)) = (res, ret) {
                     let s = self.filter(&TypeSet::exact(oid), rt);
@@ -137,7 +138,8 @@ impl<'a> Engine<'a> {
                 match mh.kind {
                     6 => {
                         self.init(&resolved.owner, via.clone());
-                        let t = self.callee(m, off, resolved, NOCTX, via);
+                        let ctx = self.static_ctx(m, off, &resolved, Call::Handle);
+                        let t = self.method_ctx(resolved, ctx, via);
                         self.edge(m, off, t, Recv::None, &a, None, None);
                     }
                     7 => {
@@ -213,8 +215,9 @@ impl<'a> Engine<'a> {
                             self.instantiate(&k.owner, via.clone());
                             self.init(&k.owner, via.clone());
                         }
-                        let c = if imh.kind == 6 { self.methods[m].ctx } else { NOCTX };
-                        self.method_ctx(MemberRef { owner: o, name: n, desc: d }, c, via);
+                        let key = MemberRef { owner: o, name: n, desc: d };
+                        let c = if imh.kind == 6 { self.static_ctx(m, off, &key, Call::Eager) } else { NOCTX };
+                        self.method_ctx(key, c, via);
                     } else {
                         self.unresolved.insert(k.to_string());
                     }
