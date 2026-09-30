@@ -82,6 +82,25 @@ packages = [
     # BaseCalendar、ZoneInfo、ZoneInfoFile 等，纯 Java）。ZoneInfoFile 读
     # <java.home>/lib/tzdb.dat → jdk_resources 嵌入数据；TimeZone 的两个 native 见 time_zone_impl.rs。
     "sun/util/calendar/",
+    # C1d：浮点十进制转换（DoubleToDecimal / FloatToDecimal / FormattedFPDecimal、dtoa 的 FloatingDecimal /
+    # FDBigInteger 等，纯 Java）。手写近似无法逐位一致（DecimalFormat HALF_EVEN 依赖 dtoa 产物），按字节码翻译。
+    "jdk/internal/math/",
+    # C1d：特权属性读取动作（GetPropertyAction / GetBooleanAction / GetIntegerAction 等，纯 Java，0 个
+    # ACC_NATIVE）。安全管理器恒 null，privilegedGetProperty 等按字节码直通 System.getProperty；原手写
+    # 属过渡类（策略截断），删除后闭包变小（手写不透明返回的 Character* 过近似消失，计划 §6.6）。
+    "sun/security/action/",
+    # C1d：模块系统工具（ServicesCatalog / Resources / Checks 等，纯 Java，0 个 ACC_NATIVE）。
+    # ServicesCatalog 的 getServicesCatalogOrNull / findServices 仍为过渡手写（被 jdk/internal/access 的
+    # 整体手写 JavaLangAccess 与 jdk/internal/loader 截断阻塞，见 services_catalog_impl.rs），其余按字节码。
+    "jdk/internal/module/",
+    # C1d：HotSpot 性能计数器（PerfCounter / Perf 包装，Java 部分纯字节码）。Perf 的 ACC_NATIVE
+    # （registerNatives / createLong 等）按需手写于 perf_impl.rs：原生二进制无 jvmstat 共享内存，
+    # createLong 返回进程私有的 8 字节缓冲，计数器语义（get/set/add）由字节码经 LongBuffer 承载。
+    "jdk/internal/perf/",
+    # C1d：安全工具类（SecurityConstants / KnownOIDs / ArrayUtil / 算法约束 / HexDumpEncoder 等，纯 Java，
+    # 0 个 ACC_NATIVE）。SecurityConstants.PROVIDER_VER 与 CryptoAlgorithmConstraints.permits 的过渡手写已删；
+    # Debug.getInstance / isOn / isVerbose 仍为过渡手写（阻塞在分析器系统属性折叠，见 debug_impl.rs）。
+    "sun/security/util/",
 ]
 classes = [
     # MH-native：asType / 组合子的类型转换与名字工具。纯 Java（装拆箱 / 拓宽句柄经 IMPL_LOOKUP
@@ -123,13 +142,6 @@ classes = [
     "java/security/BasicPermission",
     "java/security/BasicPermissionCollection",
     "java/security/ProtectionDomain",
-
-    # FS-L8 / FS-H13：dtoa 转换器（纯 Java；含嵌套 $BinaryToASCIIBuffer / $ASCIIToBinaryBuffer 等）。
-    # DecimalFormat 的 HALF_EVEN 舍入依赖 BinaryToASCIIConverter 的 decimalDigitsExact /
-    # digitsRoundedUp——这是 dtoa 算法本身的产物（如 2.675 → 2.67 而 0.05625 → 0.0563），
-    # 手写近似无法逐位一致，故整体按字节码翻译。FDBigInteger 为其大数运算依赖。
-    "jdk/internal/math/FloatingDecimal",
-    "jdk/internal/math/FDBigInteger",
 
     # gap 批次 4：随机数流（纯 Java；含嵌套 $AbstractSpliteratorGenerator / $Random*Spliterator /
     # $AbstractSplittableGenerator 等）。Random / SplittableRandom 的 ints / longs / doubles 流、

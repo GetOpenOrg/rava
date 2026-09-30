@@ -358,11 +358,11 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 用户确认「直接删除这些不要的手写方法」。逐包独立提交，每包：删除手写 → `[boundary]` 去前缀 → 抽查
 （`master_passed_jdk21.txt` 中触达该包的用例）通过数不降、动态对照漏覆盖不增。顺序按依赖与风险由低到高：
 
-1. `jdk/internal/math`（已有实施分支 `c1d-math-release`，061a7b13）
-2. `sun/security/action`
-3. `jdk/internal/module`
-4. `jdk/internal/perf`
-5. `sun/security/util`
+1. `jdk/internal/math` ✅ 705d54f5（抽查 10 例 4 过；6 例失败经闭包对照与本包无关：3+1 例为手写 LocaleProviderAdapter 返回流未建模的既有精度缺口，已转闭包精度子任务；2 例为并发编译资源争抢）
+2. `sun/security/action` ✅ 2322925c（删 GetPropertyAction / GetBooleanAction 9 个过渡方法；e2e 抽查待跑）
+3. `jdk/internal/module` ✅ 5a72714c（放行；`ServicesCatalog` 3 个过渡手写暂留：依赖手写 JLA 不可见 + `jdk/internal/loader` 截断 + `ServicesCatalog.create` 未入链致 map 折叠为 null；e2e 抽查待跑）
+4. `jdk/internal/perf` ✅ 29447fa0（删 PerfCounter 14 个过渡方法；新增 `perf_impl.rs` 仅含 2 个 `ACC_NATIVE`；e2e 抽查待跑）
+5. `sun/security/util` ✅ d6101c07（删 SecurityConstants / CryptoAlgorithmConstraints；`Debug` 4 个过渡手写暂留，待分析器折叠未设置的系统属性为 null 后删除；e2e 抽查待跑）
 6. `sun/invoke/util`
 7. `jdk/internal/access`
 8. `sun/nio/cs`
