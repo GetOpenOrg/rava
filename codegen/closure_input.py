@@ -53,6 +53,12 @@ def _run_analyzer(args: list[str]) -> None:
             print(f"      {line}")
     if r.returncode != 0:
         sys.exit(f"rava closure 失败（{r.returncode}）：\n{r.stderr[-4000:]}")
+    if _options.TRACE_CLASS:
+        # --why 的 provenance 链在 stdout 摘要 JSON 之前
+        for line in r.stdout.splitlines():
+            if line.startswith('{'):
+                break
+            print(f"      [why] {line}" if line else '')
 
 
 def discover(class_infos, class_files, out_dir: str, *, lib_jars=(), lib_registries=(),
@@ -80,6 +86,8 @@ def discover(class_infos, class_files, out_dir: str, *, lib_jars=(), lib_registr
         args += ['--seed-class', c]
     for d in getattr(resolver, 'image_class_dirs', lambda: ())():
         args += ['--image', d]
+    if _options.TRACE_CLASS:
+        args += ['--why', _options.TRACE_CLASS]
     _run_analyzer(args)
     with open(json_path, encoding='utf-8') as f:
         cj = json.load(f)
