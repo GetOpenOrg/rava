@@ -24,6 +24,17 @@ fn unix_exception(err: i32) -> JvmError {
     }
 }
 
+/// errno 存放位置（平台差异）
+#[cfg(target_os = "macos")]
+unsafe fn errno_location() -> *mut i32 {
+    libc::__error()
+}
+
+#[cfg(not(target_os = "macos"))]
+unsafe fn errno_location() -> *mut i32 {
+    libc::__errno_location()
+}
+
 /// 地址 → C 串指针（NativeBuffer 由 copyToNativeBuffer 写入并以 NUL 结尾）。
 fn c_path(address: i64) -> *const libc::c_char {
     address as *const libc::c_char
@@ -133,6 +144,84 @@ impl UnixNativeDispatcher {
         // SAFETY: 同 open0
         let r = restartable(|| unsafe { libc::access(c_path(path_address), amode) });
         Ok(if r == -1 { errno() } else { 0 })
+    }
+
+    /// native `getcwd()`：当前工作目录（字节形态）；失败抛 UnixException(errno)。
+    #[jvm_native]
+    pub fn getcwd() -> Result<JArray<i8>> {
+        let mut buf = vec![0u8; libc::PATH_MAX as usize + 1];
+        // SAFETY: buf 可写 buf.len() 字节
+        let p = unsafe { libc::getcwd(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+        if p.is_null() {
+            return Err(unix_exception(errno()));
+        }
+        let n = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        Ok(JArray::from(buf[..n].iter().map(|&b| b as i8).collect::<Vec<i8>>()))
+    }
+
+    /// native `dup(int)`：dup(2)。
+    #[jvm_native]
+    pub fn dup(fd: i32) -> Result<i32> {
+        // SAFETY: dup 只作用于 fd
+        let r = restartable(|| unsafe { libc::dup(fd) });
+        if r == -1 {
+            return Err(unix_exception(errno()));
+        }
+        Ok(r)
+    }
+
+    /// native `opendir0(long path)`：opendir(3)，返回 DIR* 地址。
+    #[jvm_native]
+    pub fn opendir0(path_address: i64) -> Result<i64> {
+        // SAFETY: 同 open0
+        let d = unsafe { libc::opendir(c_path(path_address)) };
+        if d.is_null() {
+            return Err(unix_exception(errno()));
+        }
+        Ok(d as i64)
+    }
+
+    /// native `fdopendir(int)`：fdopendir(3)，返回 DIR* 地址。
+    #[jvm_native]
+    pub fn fdopendir(dfd: i32) -> Result<i64> {
+        // SAFETY: dfd 为调用方持有的目录描述符
+        let d = unsafe { libc::fdopendir(dfd) };
+        if d.is_null() {
+            return Err(unix_exception(errno()));
+        }
+        Ok(d as i64)
+    }
+
+    /// native `closedir(long)`：closedir(3)；EINTR 视为已关闭（JNI 同款）。
+    #[jvm_native]
+    pub fn closedir(dir: i64) -> Result<()> {
+        // SAFETY: dir 为 opendir0 / fdopendir 返回的 DIR*
+        if unsafe { libc::closedir(dir as *mut libc::DIR) } == -1 {
+            let err = errno();
+            if err != libc::EINTR {
+                return Err(unix_exception(err));
+            }
+        }
+        Ok(())
+    }
+
+    /// native `readdir0(long)`：下一目录项名（字节形态）；目录读完返回 null。
+    #[jvm_native]
+    pub fn readdir0(dir: i64) -> Result<JArray<i8>> {
+        // SAFETY: dir 为有效 DIR*；清 errno 以区分读完与出错
+        unsafe {
+            *errno_location() = 0;
+            let ent = libc::readdir(dir as *mut libc::DIR);
+            if ent.is_null() {
+                let err = errno();
+                if err != 0 {
+                    return Err(unix_exception(err));
+                }
+                return Ok(JArray::default());
+            }
+            let name = std::ffi::CStr::from_ptr((*ent).d_name.as_ptr());
+            Ok(JArray::from(name.to_bytes().iter().map(|&b| b as i8).collect::<Vec<i8>>()))
+        }
     }
 
     /// native `strerror(int)`：平台错误字符串（jnu 编码字节）。

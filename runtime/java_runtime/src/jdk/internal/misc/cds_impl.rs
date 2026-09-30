@@ -32,4 +32,22 @@ impl CDS {
     pub fn logLambdaFormInvoker(_line: String) -> Result<()> {
         Ok(())
     }
+
+    /// native `isDumpingClassList0()`：-XX:DumpLoadedClassList 模式；原生二进制无 CDS → false。
+    #[jvm_native]
+    pub fn isDumpingClassList0() -> Result<bool> {
+        Ok(false)
+    }
+
+    /// native `isDumpingArchive0()`：-Xshare:dump / 动态归档转储期；原生二进制无 CDS → false。
+    #[jvm_native]
+    pub fn isDumpingArchive0() -> Result<bool> {
+        Ok(false)
+    }
+
+    /// native `isSharingEnabled0()`：是否映射了 CDS 归档；原生二进制无归档 → false。
+    #[jvm_native]
+    pub fn isSharingEnabled0() -> Result<bool> {
+        Ok(false)
+    }
 }
