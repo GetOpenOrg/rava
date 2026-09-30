@@ -74,7 +74,7 @@ impl Ctx<'_> {
         self.ceval_depth.set(self.ceval_depth.get() + 1);
         self.ceval_reads.borrow_mut().push(Vec::new());
         let live = |_: &str| true;
-        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound });
+        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![] });
         let reads: Rc<[MemberRef]> = self.ceval_reads.borrow_mut().pop().unwrap_or_default().into();
         self.ceval_depth.set(self.ceval_depth.get() - 1);
         self.in_progress.borrow_mut().remove(key);

@@ -780,6 +780,29 @@ DeepCopy 1624 / 10824 / 37760 → **1625 / 10841 / 37777**、CollectorsDemo 934 
 `Provider$Service.getImplClass@64`、`ServiceLoader$LazyClassPathLookupIterator.nextProviderClass@207`、`URL$DefaultFactory.createURLStreamHandler@162`，
 与本链无关（`forName@81` 已不再 top）。
 
+**项 9 候选：`MemberName.clazz` 对象敏感 → 落为「类字面量与 Class 形参的引用比较」**。`--flows @srcs:VarHandle 镜像` / `@path` 实测：
+`VarHandle` 镜像经 `MethodHandles$Lookup.findVirtual` 的 `refc == VarHandle.class` 分支（→ `findVirtualForVH` → `varHandleInvoker` 一族）进入，
+而该方法 `refc` 形参值集里并无 `VarHandle` 镜像——`if_acmp` 两侧一边是 `ldc` 类字面量、一边是 Class 形参，原先一律按未知处理。
+字段按对象敏感需要堆抽象，收益集中在这一条比较上，于是改做通用的比较规则：
+- absint：`Oracle::param_mirror(i, cls)`（缺省 None）；`if_acmp` 比较 `Class(c)` 与值源恰为 `[Param(i)]` 的引用时，形参值集已知且不含 c 的镜像 → 恒不等，
+  记入 `Analysis::mirror_assumed`（`Class(x)` 对 `Class(y)` 直接按类名比较）。
+- 引擎（`engine/mirror_eq.rs`）：`param_mirror_sets` 取 Class 类型形参节点的值集，仅当全部元素都是所指已知的镜像伪类型时给出类集（含普通 `Class`
+  对象或未知来源即 None）。分析采用的每条假设登记到 `mirror_watch[P(m, i)]`；节点增长（`node_grown`）到可能含该镜像时以 `Why::Mirror` 失效重分析，
+  命中的登记随之撤销。单测 `absint::tests::class_literal_eq_folds_by_param_mirrors`、`mirror_eq::tests::{mirror_sets_known_only_for_pure_mirrors,
+  growth_invalidates_only_when_answer_may_change}`（虚构类名）。
+- 诊断：`--flows @srcs:<类>` 列出持有某类镜像 / 对象的全部源节点（与 `@opens` 共用代码）；`@path` 回溯在第一个无前驱持有该类的节点（源）处截止。
+结果（类 / 方法 / 上下文，相对上一项）：DeepCopy 1625 / 10841 / 37777 → 1625 / **10827** / 37757、MH Combinators 1071 / 6824 / 15773 → 1071 / **6809** / 15753、
+MH Direct 1079 / 6839 / 15924 → 1079 / **6824** / 15904；其余 6 例不变；9 例漏均为 0。减少的方法：`findVirtualForVH`、`MethodHandles.varHandleInvoker`、
+`Invokers.{varHandleMethodInvoker, makeVarHandleMethodInvoker, cachedVHInvoker, setCachedVHInvoker, varHandleMethodInvokerHandleForm}`、
+`MemberName.makeVarHandleMethodInvoke` ×2、`VarHandle$AccessDescriptor.<init>`、`LambdaForm.{basicTypeSignature, shortenSignature}`、`BasicType.basicTypeChar`、
+`String.valueOf([C)`（MH 两例另有 `AccessMode.methodName`）。余下的 `VarHandle` 镜像源含 `Invokers.createFunction@134/159/182`（VH 的 NamedFunction 分支），
+`VarHandleGuards` init 级与 `VarHandle.<clinit>` 仍在——后续「createFunction 按调用点常量克隆」项的收益因此变大。
+耗时：DeepCopy 16–20 s（上项 11.9 s），但工作量计数相同，测时机器负载 6.75，不计为回归。
+顺序矩阵：MH Combinators / CollectorsDemo 三组与缺省一致；DeepCopy 在 `--flow-batch 64 --hash-seed 12345` 下多 5 方法（`VarHandles.filterCoordinates`
+一族，via `VarHandles.maybeAdapt@62`）。其终态折叠为 `maybeAdapt` 8–74 死代码，插桩确认：`MethodHandleStatics` 的 `<clinit>` 常量首次在常量实参
+求值深度 3 处计算，`parseBoolean(getProperty(…))` 被深度上限截断，`VAR_HANDLE_IDENTITY_ADAPT` 以「非常量」写入缓存；系统属性不稳定集增长清缓存后才在
+深度 0 重算为 false，其间 `maybeAdapt` 的调用边已加入。这是辅助分析记忆与计算上下文相关的既有缺陷（本规则改变处理次序而暴露），下一步单独修复。
+
 ## 七、验收
 
 - §一 终态表各项达标。

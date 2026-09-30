@@ -159,6 +159,10 @@ impl<'a> Engine<'a> {
             let mut last = None;
             while let Some(n) = q.pop_front() {
                 last = Some(n);
+                // 最近的引入点（没有含该类的前驱）即源头
+                if !rev.get(&n).is_some_and(|v| v.iter().any(|p| has(p))) {
+                    break;
+                }
                 let mut ps: Vec<Node> = rev.get(&n).map(|v| v.iter().filter(|p| has(p) && !prev.contains_key(*p)).copied().collect()).unwrap_or_default();
                 ps.sort_by_key(|p| format!("{p:?}"));
                 for p in ps {
@@ -166,7 +170,7 @@ impl<'a> Engine<'a> {
                     q.push_back(p);
                 }
             }
-            // 最远的源头往回打印到起点
+            // 源头（或最远节点）往回打印到起点
             let mut cur = last;
             while let Some(n) = cur {
                 let sz = self.graph.get(&n).map_or(0, |s| s.classes.len());
@@ -211,9 +215,11 @@ impl<'a> Engine<'a> {
             return v.into_iter().take(40).map(|x| x.1).collect();
         }
         // open 源头诊断：`@opens:<类型>`——含 open(类型)、但没有任何含同一 open 的前驱的节点（open 的引入点）
-        if let Some(q) = pat.strip_prefix("@opens:") {
+        // 来源诊断：`@opens:<类型>` 为 open(类型) 的引入点，`@srcs:<类>` 为含该类（非 open）的引入点（直接播种、无同类前驱的节点）
+        let src_q = pat.strip_prefix("@opens:").map(|q| (q, true)).or_else(|| pat.strip_prefix("@srcs:").map(|q| (q, false)));
+        if let Some((q, open)) = src_q {
             let Some(&cid) = self.ids.get(q) else { return vec![format!("无此类：{q}")] };
-            let has = |x: &Node| self.graph.get(x).is_some_and(|s| s.open.contains(&cid));
+            let has = |x: &Node| self.graph.get(x).is_some_and(|s| if open { s.open.contains(&cid) } else { s.classes.contains(&cid) });
             let mut fed: HashSet<Node> = HashSet::default();
             for (src, edges) in &self.graph.flow_list() {
                 if has(src) {

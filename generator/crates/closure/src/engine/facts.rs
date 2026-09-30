@@ -130,6 +130,8 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) m: Option<usize>,
     /// 形参常量（按形参槽序号）
     pub(super) params: Vec<Option<V>>,
+    /// Class 形参值集所指的类镜像（按形参序号；None = 非 Class 形参或值集含所指未知的 Class）
+    pub(super) mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {
@@ -313,7 +315,7 @@ impl Ctx<'_> {
         let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
         let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
             let live = |_: &str| true;
-            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![] })
+            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![] })
         });
         for (_, e) in a.iter().flat_map(|a| &a.events) {
             if let Event::Field { opcode: classfile::op::PUTSTATIC, mref, value, .. } = e {
@@ -378,6 +380,9 @@ impl Oracle for Facts<'_, '_> {
     }
     fn param(&self, i: u16) -> Option<V> {
         self.params.get(i as usize).cloned().flatten()
+    }
+    fn param_mirror(&self, i: u16, cls: &str) -> Option<bool> {
+        self.mirrors.get(i as usize)?.as_ref().map(|s| s.contains(cls))
     }
     fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)

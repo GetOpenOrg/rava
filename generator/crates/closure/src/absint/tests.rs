@@ -53,3 +53,48 @@ fn instanceof_live_type_keeps_both() {
     assert_eq!(a.reachable, vec![true; 6]);
     assert!(a.pending_types.is_empty());
 }
+
+/// 桩 Oracle：形参 0 的类镜像值集（None = 未知）
+struct Mirrors(Option<Vec<&'static str>>);
+
+impl Oracle for Mirrors {
+    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+        Ret::Unknown
+    }
+    fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
+        None
+    }
+    fn type_live(&self, _: &str) -> bool {
+        true
+    }
+    fn param_mirror(&self, i: u16, cls: &str) -> Option<bool> {
+        (i == 0).then(|| self.0.as_ref().map(|s| s.contains(&cls))).flatten()
+    }
+}
+
+/// `static void f(Class c) { if (c == X.class) throw …; }`
+fn class_eq_code() -> Code {
+    let i = |offset, opcode, operand| Insn { offset, opcode, operand };
+    let insns = vec![
+        i(0, ALOAD_0, Operand::None),
+        i(1, op::LDC, Operand::Ldc(classfile::Const::Class("p/X".into()))),
+        i(3, 0xa6, Operand::Branch(8)),
+        i(6, ALOAD_0, Operand::None),
+        i(7, op::ATHROW, Operand::None),
+        i(8, op::RETURN, Operand::None),
+    ];
+    Code { max_stack: 2, max_locals: 1, code_len: 9, insns, exception_table: vec![] }
+}
+
+/// 形参值集不含该类镜像：相等分支不可达，登记乐观答复；含或未知：两支都可达
+#[test]
+fn class_literal_eq_folds_by_param_mirrors() {
+    let a = analyze("p/A", "(Lp/C;)V", true, &class_eq_code(), &Mirrors(Some(vec!["p/Y"])));
+    assert_eq!(a.reachable, vec![true, true, true, false, false, true]);
+    assert_eq!(a.mirror_assumed, vec![(0, "p/X".to_string())]);
+    let a = analyze("p/A", "(Lp/C;)V", true, &class_eq_code(), &Mirrors(Some(vec!["p/X"])));
+    assert_eq!(a.reachable, vec![true; 6]);
+    assert!(a.mirror_assumed.is_empty());
+    let a = analyze("p/A", "(Lp/C;)V", true, &class_eq_code(), &Mirrors(None));
+    assert_eq!(a.reachable, vec![true; 6]);
+}

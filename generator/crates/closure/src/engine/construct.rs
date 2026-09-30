@@ -47,7 +47,7 @@ impl Ctx<'_> {
         }
         let params: Vec<Option<V>> = std::iter::once(None).chain(rest.iter().map(|v| PV::of(v).value())).collect();
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &init.desc, false, code, &Facts { ctx: self, live: &live, m: None, params });
+        let a = self.aux_analyze(&cf.name, &init.desc, false, code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![] });
         let out = (!a.conservative).then(|| self.ctor_puts(&cf.name, &finals, &a)).flatten();
         self.in_progress.borrow_mut().remove(&guard);
         out

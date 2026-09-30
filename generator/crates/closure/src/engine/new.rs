@@ -95,6 +95,7 @@ impl<'a> Engine<'a> {
             lcalls: Vec::new(),
             cur_call: None,
             call_watch: HashMap::default(),
+            mirror_watch: HashMap::default(),
             open_calls: BTreeMap::new(),
             cwork: VecDeque::new(),
             in_cwork: HashSet::default(),

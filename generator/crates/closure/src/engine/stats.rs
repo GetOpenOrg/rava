@@ -62,9 +62,11 @@ pub(super) enum Why {
     Never,
     /// catch 类型变为存活
     Catch,
+    /// Class 形参值集增长（引用比较的镜像答复作废）
+    Mirror,
 }
 
-const WHYS: [(Why, &str); 10] = [
+const WHYS: [(Why, &str); 11] = [
     (Why::First, "first"),
     (Why::FieldPut, "field_put"),
     (Why::FieldOpen, "field_open"),
@@ -75,6 +77,7 @@ const WHYS: [(Why, &str); 10] = [
     (Why::ParamConst, "param_const"),
     (Why::Never, "never"),
     (Why::Catch, "catch"),
+    (Why::Mirror, "mirror"),
 ];
 
 pub(super) struct Stats {

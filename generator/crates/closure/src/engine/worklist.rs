@@ -227,7 +227,8 @@ impl<'a> Engine<'a> {
         let n = self.methods[m].ptypes.len();
         let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
-        let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params };
+        let mirrors = self.param_mirror_sets(m);
+        let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors };
         self.stat_enter(Phase::Analyze);
         self.nr_begin(m);
         let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
@@ -251,6 +252,10 @@ impl<'a> Engine<'a> {
         }
         if !a.pending_types.is_empty() {
             self.pending_types.insert(m, a.pending_types.clone());
+        }
+        for (i, c) in &a.mirror_assumed {
+            let cid = self.id(c);
+            self.mirror_watch.entry(Node::P(m, *i)).or_default().insert((m, cid));
         }
         self.methods[m].analysis = Some(a.clone());
         self.nr_end(m);

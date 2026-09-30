@@ -51,6 +51,7 @@ mod diag;
 mod seeds;
 mod services;
 mod class_init;
+mod mirror_eq;
 mod noreturn;
 mod class_lookup;
 mod sealed;
@@ -481,6 +482,8 @@ pub struct Engine<'a> {
     cur_call: Option<u32>,
     /// 类型集节点 → 读它的 lambda 调用；open 展开过的 lambda 调用，按 (open 类型, 接收者上界) 索引
     call_watch: HashMap<Node, HashSet<u32>>,
+    /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
+    mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
     open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
     cwork: VecDeque<u32>,
     in_cwork: HashSet<u32>,

@@ -519,7 +519,7 @@ impl<'a> Engine<'a> {
         }
         let Some(code) = meth.code.as_ref() else { return false };
         let live = |_: &str| true;
-        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![] });
+        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![] });
         if a.conservative {
             return false;
         }
