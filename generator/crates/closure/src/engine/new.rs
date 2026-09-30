@@ -92,6 +92,7 @@ impl<'a> Engine<'a> {
             hub_lsent: HashMap::default(),
             hub_ssent: HashMap::default(),
             recv_done: HashMap::default(),
+            whole_sites: HashMap::default(),
             lambda_done: HashMap::default(),
             lcalls: Vec::new(),
             cur_call: None,

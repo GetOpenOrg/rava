@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// 重分析后须重跑的整体依赖站点：仍在新分析事件里的偏移
+fn whole_rerun(a: &Analysis, sites: Option<&BTreeSet<u32>>) -> Vec<u32> {
+    sites.into_iter().flatten().copied().filter(|&o| a.events.get(a.events.partition_point(|e| e.0 < o)).is_some_and(|e| e.0 == o)).collect()
+}
+
 impl<'a> Engine<'a> {
     pub(super) fn process_bytecode(&mut self, m: usize) {
         let Some(a) = self.analysis(m) else { return };
@@ -40,10 +45,12 @@ impl<'a> Engine<'a> {
         let same_at = |off: u32| at(&a, off) == at(&old, off);
         let mut offs: Vec<u32> = a.events.iter().map(|e| e.0).collect();
         offs.dedup();
-        let changed: HashSet<u32> = offs.into_iter().filter(|&o| !same_at(o)).collect();
+        let mut changed: HashSet<u32> = offs.into_iter().filter(|&o| !same_at(o)).collect();
         if changed.is_empty() {
             return;
         }
+        // 整体依赖站点：自身事件未变，但回溯读到的事件（如常量表读取的接收者）可能已变
+        changed.extend(whole_rerun(&a, self.whole_sites.get(&m)));
         self.reset_offsets(m, &changed);
         for (off, e) in a.events.iter() {
             if changed.contains(off) {
@@ -348,5 +355,24 @@ impl<'a> Engine<'a> {
             return;
         }
         self.apply_hw(m, decl, &mh, via);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 整体依赖站点：只重跑仍在新分析事件里的偏移（被不可达裁掉的不跑）
+    #[test]
+    fn whole_rerun_keeps_live_offsets() {
+        let a = Analysis {
+            reachable: vec![],
+            events: vec![(3, Event::Return(V::Top)), (7, Event::Throw(V::Top)), (7, Event::Return(V::Null))],
+            pending_types: vec![],
+            conservative: false,
+        };
+        let sites: BTreeSet<u32> = [1, 7, 9].into_iter().collect();
+        assert_eq!(whole_rerun(&a, Some(&sites)), vec![7]);
+        assert!(whole_rerun(&a, None).is_empty());
     }
 }

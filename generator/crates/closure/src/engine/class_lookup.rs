@@ -75,6 +75,7 @@ impl<'a> Engine<'a> {
     /// 按名取类调用点（方法 m、偏移 off、实参 args）的所指类集；Some(空) = 候选来源尚未流到（值集增长时重跑），
     /// None = 形状不符（按原样返回所指未知的 Class）
     pub(super) fn class_lookup(&mut self, m: usize, off: u32, args: &[V]) -> Option<Vec<String>> {
+        self.whole_sites.entry(m).or_default().insert(off);
         let a = self.methods[m].analysis.clone()?;
         if a.conservative {
             return None;

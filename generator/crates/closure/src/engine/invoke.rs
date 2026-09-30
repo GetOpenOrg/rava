@@ -35,6 +35,7 @@ impl<'a> Engine<'a> {
             .collect();
         let k = mref.to_string();
         if self.man.is_method_lookup(&k) {
+            self.whole_sites.entry(m).or_default().insert(off);
             let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
             // 拼接出的名字按目标类逐个解析（只保留该类上声明的方法）；目标类另取 Class 实参值集里类镜像所指的类
             // （如取自 static final Class 字段）。形参透传的名字不与镜像类相乘：其类同样来自形参，交叉组合会失真

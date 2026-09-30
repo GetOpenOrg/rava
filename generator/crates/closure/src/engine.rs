@@ -473,6 +473,9 @@ pub struct Engine<'a> {
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
     /// 站点因接收者集合增长重跑时只接新增对象
     recv_done: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 求值读取同一分析里其他偏移事件的站点（按名取类 / 按名查方法：沿拼接链、常量表接收者回溯）：方法 → 偏移。
+    /// 重分析时只要有事件变化，这些站点连同变化的偏移一起重跑（见 `process_bytecode`）
+    whole_sites: HashMap<usize, BTreeSet<u32>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
     lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
     lcalls: Vec<LCall>,

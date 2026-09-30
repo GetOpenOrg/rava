@@ -635,7 +635,7 @@ TestCharsetForName 新增 12 类（`ExtendedCharsets`、`AbstractCharsetProvider
 （重分析时先移出）。每次排空重算 `never`，为空即结束；两次排空的 `never` 相同（互等的环、接收者恒空永不建节点的目标）或满 32 轮时转为全部按值未知，
 保证终止。单测 `closing_answers_and_stall`。
 结果：TestCharsetForName（无项 5 清单时）1157 / 7293 / 16810 → **407 / 1299 / 2055**；其余 8 例类 / 方法 / 上下文与项 5 后完全相同，漏均为 0。
-同类剩余（性能线 §4.5 记录）：`CalendarSystem.forName` 的按名查找结果依赖求值次序（`class_lookup` 返回 `Some` 时不接返回边），待单调化。
+同类剩余（性能线 §4.5 记录）：`CalendarSystem.forName` 的按名查找结果依赖求值次序——真因是重分析的依赖登记缺失，已按项 9-c 修复（见下）。
 
 **项 7 DeepCopy 数组汇聚：真正的汇聚源不是 arraycopy，而是基本元素数组视图被当作可改写引用元素**。
 上界实验（临时去掉全部 `W→E` 边，不健全）：DeepCopy 1623 → 1619、Digester 1165 → 1158、CollectorsDemo 911 → 907、MH Combinators 1057 → 1051。
@@ -673,6 +673,25 @@ MH 两例的 +1 经 `--why` 为不精确：`VarHandle` 由 `DirectMethodHandle.s
 键为类的 binary name）；手写 `Unsafe.ensureClassInitialized(0)` 由空操作改为 `crate::ensure_class_initialized(c)`——按类镜像名查钩子执行，
 查不到即无 `<clinit>` 或未入闭包（此时语义为空操作）。`unknown = true` 时钩子表覆盖闭包内全部带 `<clinit>` 的类（`clinit` 列表），
 保证所指未知的实参同样可初始化。`sites` 仅供溯源 / 审计。`build_time_init`（§6.11 项 3）与本事实共用这张钩子表。
+
+**项 9-c 按名取类 / 按名查方法站点的重分析遗漏（健全性，引擎缺口）**。现象：CollectorsDemo `CalendarSystem.forName@81`（`Class.newInstance`）折叠为
+`null_recv`，JapaneseImperialCalendar → `forName("julian")` 这条反射实例化链被整体切掉。调试数据（临时插桩）：`@78 Class.forName` 的按名取类只求值了一次——
+当时字段 `names` 的值格仍是初值 `Const(Null)`（`initNames` 尚未处理），`@45 ConcurrentMap.get` 的接收者为 `Null`、无读者登记可挂，常量表读取给出空集，
+结果 `Some([])` 不接返回边；`initNames` 的 `putstatic names` 随后使值格升为 Top、`forName` 重分析，但重分析只重跑**事件变化了的偏移**：`@45` 变了，
+`@78` 的事件（实参仍是 `Src::Site(50)`）没变，而它的求值恰恰读的是 `@45` / `@50` 的事件内容——于是永远停在空集。
+这不是 `class_lookup` 自身的非单调：值集只增、`table_read` 一旦因非常量表类型 / open 给出 None 就保持 None，返回边一经接上不撤；缺的是依赖登记。
+修法（`engine/bytecode.rs`，通用规则）：求值会回溯同一分析里其他偏移事件的站点（按名取类、按名查方法）登记为「整体依赖站点」（`whole_sites`）；
+重分析只要有事件变化，这些站点连同变化的偏移一起重跑（仍在新分析里的偏移才跑）。单测 `whole_rerun_keeps_live_offsets`。
+结果（类 / 方法 / 上下文，均相对项 8）：HelloWorld、FileIOTest、TestStreamBasic、TestCharsetForName 不变；Digester 1165 / 6630 / 17271 → 1166 / 6638 / 17300、
+DeepCopy 1623 / 10808 / 37737 → 1624 / 10816 / 37751（均 +`Class$1`）；CollectorsDemo 911 / 5283 / 12363 → **933 / 5372 / 12560**；
+MH Combinators 1058 / 6730 / 15600 → **1070 / 6803 / 15752**；MH Direct 1067 / 6749 / 15796 → **1078 / 6818 / 15903**；9 例漏均为 0。
+增加的类经 `--why` 全部经 `CalendarSystem.forName@81 → Class.newInstance → ReflectionFactory.newInstance → Constructor.acquireConstructorAccessor`
+（`MethodHandleAccessorFactory`、`DirectConstructorHandleAccessor`、`ConstructorAccessorImpl` 等），是先前不健全折叠漏掉的可达内容（本次运行 JVM 未走
+`forName("julian")`，所以动态对照看不出）。其中 CollectorsDemo 11 个、MH 两例各 3 个 JVM 实际加载了，但经另一入口（`getEnumConstantsShared → Method.invoke`
+的边界派发，动态对照归 `boundary-dispatch`），与本链无关。
+精度余量：`names` 的值来自 `"sun.util.calendar." + namePairs[奇数]` 写入 `ConcurrentHashMap`，精确答案只有 `Gregorian` / `LocalGregorianCalendar` /
+`JulianCalendar` 三类；需要「映射值的字符串来源」建模（按容器对象的值槽追踪常量拼接），不在本期范围，记为后续候选。性能线 §4.5 所记
+「批量排空时 CollectorsDemo 丢 11 类 / 69 方法」即本缺口的另一次序表现，修复后与次序无关。
 
 ## 七、验收
 
