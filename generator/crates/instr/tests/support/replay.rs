@@ -24,12 +24,19 @@ pub enum Replayed {
     Lines { py: Vec<String>, rs: Vec<String> },
 }
 
-/// 按 fx 日志里的 `sam_ctor` 查询结果回答 [`InstrHooks`]
+/// 按 fx 日志里的 `sam_ctor` 查询结果、记录的 invokedynamic 操作数（常量池下标）回答 [`InstrHooks`]
 struct ReplayHooks {
     sam: Vec<(String, String, Option<String>)>,
+    indy_idx: Option<u16>,
 }
 
 impl ReplayHooks {
+    fn from_rec(rec: &Value) -> ReplayHooks {
+        let ins = &rec["ins"];
+        let indy_idx = (ins["op"] == "invokedynamic").then(|| ins["operand"].as_str().and_then(|o| o.trim().parse().ok())).flatten();
+        ReplayHooks { indy_idx, ..ReplayHooks::from_fx(&rec["fx"]) }
+    }
+
     fn from_fx(fx: &Value) -> ReplayHooks {
         let sam = fx
             .as_array()
@@ -41,7 +48,7 @@ impl ReplayHooks {
                 (a(0), a(1), f[2].as_str().map(str::to_string))
             })
             .collect();
-        ReplayHooks { sam }
+        ReplayHooks { sam, indy_idx: None }
     }
 }
 
@@ -50,6 +57,10 @@ impl InstrHooks for ReplayHooks {
         let (_, _, out) = self.sam.iter().find(|(i, c, _)| i == iface && c == current_class)?;
         let segs = out.as_deref()?.split("::").map(|s| Ident::new(s).ok().map(PathSegment::new)).collect::<Option<Vec<_>>>()?;
         Some(Path::new(segs))
+    }
+
+    fn indy_cp_index(&self, _current_class: &str, _bsm: u16, _name: &str, _desc: &str) -> Option<u16> {
+        self.indy_idx
     }
 }
 
@@ -65,7 +76,7 @@ pub fn replay(env: &Env, rec: &Value, ninsn: &NInsn) -> R<Replayed> {
         let s = conv.stmt(&l[1]["j"])?;
         *st.stmts.get_mut(i).ok_or("lets 下标越界")? = s;
     }
-    let hooks = ReplayHooks::from_fx(&rec["fx"]);
+    let hooks = ReplayHooks::from_rec(rec);
     let cls = rec["cls"].as_str().unwrap_or("");
     let ctx = InstrCtx::new(TyCtx::new(&env.reg, &env.names, &env.manifest), &env.rt, &env.facts, &hooks, cls);
     let tparams = cfg.class_type_params.clone();

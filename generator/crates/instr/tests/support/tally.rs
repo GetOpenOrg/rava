@@ -3,7 +3,8 @@
 
 use std::collections::BTreeMap;
 
-/// 断言 mismatch = 0 的已移植指令集（consts / locals / stack / arith 与两类折叠点）；
+/// 断言 mismatch = 0 的已移植指令集（consts / locals / stack / arith / arrays / returns /
+/// control / dynamic 与两类折叠点）；
 /// 其余指令只报告不断言
 pub const PORTED_OPS: &[&str] = &[
     // consts
@@ -27,6 +28,16 @@ pub const PORTED_OPS: &[&str] = &[
     "ishl", "lshl", "ishr", "lshr", "iushr", "lushr", "iand", "land", "ior", "lor", "ixor", "lxor",
     "i2l", "i2f", "i2d", "l2i", "l2f", "l2d", "f2i", "f2l", "f2d", "d2i", "d2l", "d2f", "i2b", "i2c", "i2s",
     "lcmp", "fcmpl", "fcmpg", "dcmpl", "dcmpg",
+    // arrays
+    "newarray", "anewarray", "multianewarray", "arraylength",
+    "iaload", "laload", "faload", "daload", "aaload", "baload", "caload", "saload",
+    "iastore", "lastore", "fastore", "dastore", "aastore", "bastore", "castore", "sastore",
+    // returns
+    "return", "ireturn", "lreturn", "freturn", "dreturn", "areturn",
+    // control
+    "checkcast", "instanceof",
+    // dynamic
+    "invokedynamic", "monitorenter", "monitorexit", "nop", "wide", "athrow",
     // 折叠点
     "fold_const", "fold",
 ];

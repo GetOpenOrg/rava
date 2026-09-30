@@ -82,10 +82,11 @@ pub fn sim_consts(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &
             sim.push(int(digit(), IntTy::I64), prim(Prim::I64));
         }
         "fconst_0" | "fconst_1" | "fconst_2" => {
-            sim.push(float(digit() as f64, FloatTy::F32)?, prim(Prim::F32));
+            // Python `Lit(f"{n}f32")`：整数记号的浮点字面量（`0f32`）
+            sim.push(int_float(digit(), FloatTy::F32)?, prim(Prim::F32));
         }
         "dconst_0" | "dconst_1" => {
-            sim.push(float(digit() as f64, FloatTy::F64)?, prim(Prim::F64));
+            sim.push(int_float(digit(), FloatTy::F64)?, prim(Prim::F64));
         }
         "bipush" | "sipush" => {
             let Operand::Int(v) = ins.operand else {
@@ -105,4 +106,9 @@ pub fn sim_consts(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// 整数记号的浮点字面量（fconst / dconst：`2f32`，不经 `repr(float)`）
+fn int_float(n: i128, ty: FloatTy) -> InstrResult<Expr> {
+    Ok(Expr::Lit(Lit::Float { value: FloatLit::parse(&n.to_string())?, ty }))
 }
