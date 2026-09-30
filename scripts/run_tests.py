@@ -57,6 +57,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from jdk_select import apply_jdk, _major_of
 from cargo_env import with_heavy_jobs, is_heavy
 import dyn_compare
+import generator_select
 
 
 def _current_jdk_major() -> 'int | None':
@@ -1602,12 +1603,17 @@ def main():
                     help="透传 main.py --strict（兜底硬失败 + 缺手写 native 编译报错）")
     ap.add_argument("--no-dyn",          action="store_true",
                     help="关闭动态对照（真实 JVM 类加载轨迹 vs 静态闭包；缺省开，每测试一次 java 运行）")
+    generator_select.add_argument(ap)
     args = ap.parse_args()
 
     global BUILD_TIMEOUT, MAIN_FLAGS, DYN_COMPARE
     DYN_COMPARE = not args.no_dyn
     BUILD_TIMEOUT = args.build_timeout
     MAIN_FLAGS = [f for f, on in (("--debug", args.debug), ("--strict", args.strict)) if on]
+    # 生成器选择（generator_select 唯一定义缺省）：非缺省时显式透传，[meta] options 可见
+    _generator = generator_select.resolve(args.generator)
+    if _generator != generator_select.DEFAULT_GENERATOR:
+        MAIN_FLAGS += ["--generator", _generator]
 
     _validate_deny(args.deny)
     if args.failed and args.skip_failed:

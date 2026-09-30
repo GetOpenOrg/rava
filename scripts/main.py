@@ -42,6 +42,10 @@ from codegen.constants import (RUNTIME_JAVA_RUNTIME, RUNTIME_MACROS_CRATE,
                                scratch_pkg_version)
 from codegen.emitter import to_snake
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from generator_select import (add_argument as add_generator_argument, resolve as resolve_generator,
+                              run_rust)
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEFAULT_JAVA = os.path.join(_REPO_ROOT, 'tests', 'e2e', '01_basics', 'HelloWorld.java')
 _BUILD_ROOT = os.path.join(_REPO_ROOT, 'build')
@@ -209,69 +213,12 @@ def _parse_lib_specs(raw_libs: list[str]) -> list:
     return specs
 
 
-def main():
-    ap = argparse.ArgumentParser(description='Java .class → Rust 转译器')
-    ap.add_argument('java_files', nargs='*', help='.java 源文件列表（默认 tests/e2e/01_basics/HelloWorld.java）')
-    ap.add_argument('--out', default=None,
-                    help='scratch 工作区目录（默认 build/<主类 snake 名>）')
-    ap.add_argument('--clean', action='store_true', help='转译前清空 scratch 工作区')
-    ap.add_argument('--no-run', action='store_true', help='只生成 Rust 代码，不编译运行')
-    ap.add_argument('--batch', action='store_true', help='批量模式：写 src/bin/<class>.rs（供并行测试用）')
-    ap.add_argument('--jdk', type=int, default=None, metavar='N',
-                    help='指定 JDK 主版本（javac 与翻译语料同源；默认 JAVA_HOME > .jdk-version）')
-    ap.add_argument('--lib', action='append', default=[], metavar='NAME=JAR[:seed=FQN]',
-                    help='jar 输入模式：依赖库发射为 lib crate（可重复；无 seed=整包，'
-                         '有 seed=只收种子类闭包）。顺序即 crate 依赖序')
-    ap.add_argument('--locales', default='', metavar='TAG[,TAG...]',
-                    help='额外编入的 locale（BCP 47 或下划线形式，逗号分隔；默认只含用户字节码'
-                         '静态可见的 locale + en + ROOT，见闭包分析器 generator/crates/closure/src/seeds/locale.rs）')
-    ap.add_argument('--debug', action='store_true',
-                    help='诊断明细：兜底 / 闭包未解析调用 / cfg 结构化判定逐条输出')
-    ap.add_argument('--strict', action='store_true',
-                    help='严格模式：转译兜底改为硬失败，缺手写实现的 native 方法编译报错')
-    ap.add_argument('--trace-class', default='', metavar='CLASS',
-                    help='打印该类或方法（斜线形态，如 java/net/InetAddress 或 类.方法:描述符）入闭包的'
-                         '最短 provenance 链（rava closure --why）')
-    ap.add_argument('--precheck-only', action='store_true',
-                    help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
-    ap.add_argument('--raw-sites', default='', metavar='FILE',
-                    help='Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序）')
-    args = ap.parse_args()
-
-    from codegen import options as _options, raw_audit as _raw_audit_opt
-    _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
-    _options.PRECHECK_ONLY = args.precheck_only
-    _raw_audit_opt.enable_raw_sites(args.raw_sites)
-
-    lib_specs = _parse_lib_specs(args.lib)
-    if lib_specs and args.batch:
-        sys.exit('jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）')
-
-    # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > JAVA_HOME >
-    # .jdk-version > 最新已安装——多 JDK 并存时不随系统默认 java 漂移。run_tests 子进程
-    # 已继承父进程选定的 JAVA_HOME，此处静默沿用
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from jdk_select import apply_jdk
-    apply_jdk(args.jdk, quiet=(args.jdk is None and bool(os.environ.get('JAVA_HOME'))))
-
-    java_files = args.java_files or [_DEFAULT_JAVA]
-    stem = os.path.splitext(os.path.basename(java_files[0]))[0]
-    out_dir = args.out or os.path.join(_BUILD_ROOT, to_snake(stem))
-
-    t_total = time.perf_counter()
-
-    # 1. overlay 手写代码（必须在 codegen 之前）
-    t0 = time.perf_counter()
-    prepare_scratch(out_dir, clean=args.clean)
-    t_overlay = time.perf_counter() - t0
-    print(f"[time] overlay     {fmt_dur(t_overlay)}")
-
-    # 2. codegen
-    t0 = time.perf_counter()
+def _python_codegen(args, java_files: list[str], out_dir: str, lib_specs: list) -> bool:
+    """Python 生成器转译段 + 审计汇总行；--precheck-only 时返回 False（调用方就此结束）"""
     transpile(java_files, out_dir, batch_bin=args.batch, lib_specs=lib_specs,
               locales=tuple(t for t in args.locales.split(',') if t.strip()))
     if args.precheck_only:
-        return
+        return False
     # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
     print(CFG_AUDIT_STATS.summary())
     if args.debug:
@@ -337,6 +284,81 @@ def main():
     if _vb:
         # VM 耦合边界类的手写方法（策略边界，单独计数；随对应子系统落地逐类复核）
         print('[vm-boundary-audit] ' + ' '.join(_vb))
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser(description='Java .class → Rust 转译器')
+    ap.add_argument('java_files', nargs='*', help='.java 源文件列表（默认 tests/e2e/01_basics/HelloWorld.java）')
+    ap.add_argument('--out', default=None,
+                    help='scratch 工作区目录（默认 build/<主类 snake 名>）')
+    ap.add_argument('--clean', action='store_true', help='转译前清空 scratch 工作区')
+    ap.add_argument('--no-run', action='store_true', help='只生成 Rust 代码，不编译运行')
+    ap.add_argument('--batch', action='store_true', help='批量模式：写 src/bin/<class>.rs（供并行测试用）')
+    ap.add_argument('--jdk', type=int, default=None, metavar='N',
+                    help='指定 JDK 主版本（javac 与翻译语料同源；默认 JAVA_HOME > .jdk-version）')
+    ap.add_argument('--lib', action='append', default=[], metavar='NAME=JAR[:seed=FQN]',
+                    help='jar 输入模式：依赖库发射为 lib crate（可重复；无 seed=整包，'
+                         '有 seed=只收种子类闭包）。顺序即 crate 依赖序')
+    ap.add_argument('--locales', default='', metavar='TAG[,TAG...]',
+                    help='额外编入的 locale（BCP 47 或下划线形式，逗号分隔；默认只含用户字节码'
+                         '静态可见的 locale + en + ROOT，见闭包分析器 generator/crates/closure/src/seeds/locale.rs）')
+    ap.add_argument('--debug', action='store_true',
+                    help='诊断明细：兜底 / 闭包未解析调用 / cfg 结构化判定逐条输出')
+    ap.add_argument('--strict', action='store_true',
+                    help='严格模式：转译兜底改为硬失败，缺手写实现的 native 方法编译报错')
+    ap.add_argument('--trace-class', default='', metavar='CLASS',
+                    help='打印该类或方法（斜线形态，如 java/net/InetAddress 或 类.方法:描述符）入闭包的'
+                         '最短 provenance 链（rava closure --why）')
+    ap.add_argument('--precheck-only', action='store_true',
+                    help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
+    ap.add_argument('--raw-sites', default='', metavar='FILE',
+                    help='Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序）')
+    add_generator_argument(ap)
+    args = ap.parse_args()
+    generator = resolve_generator(args.generator)
+    if generator == 'rust':
+        _unsupported = [f for f, on in (('--lib', args.lib), ('--batch', args.batch), ('--debug', args.debug),
+                                        ('--trace-class', args.trace_class), ('--precheck-only', args.precheck_only),
+                                        ('--raw-sites', args.raw_sites)) if on]
+        if _unsupported:
+            sys.exit(f"Rust 生成器尚不支持：{' '.join(_unsupported)}（用 --generator python）")
+
+    from codegen import options as _options, raw_audit as _raw_audit_opt
+    _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
+    _options.PRECHECK_ONLY = args.precheck_only
+    _raw_audit_opt.enable_raw_sites(args.raw_sites)
+
+    lib_specs = _parse_lib_specs(args.lib)
+    if lib_specs and args.batch:
+        sys.exit('jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）')
+
+    # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > JAVA_HOME >
+    # .jdk-version > 最新已安装——多 JDK 并存时不随系统默认 java 漂移。run_tests 子进程
+    # 已继承父进程选定的 JAVA_HOME，此处静默沿用
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from jdk_select import apply_jdk
+    apply_jdk(args.jdk, quiet=(args.jdk is None and bool(os.environ.get('JAVA_HOME'))))
+
+    java_files = args.java_files or [_DEFAULT_JAVA]
+    stem = os.path.splitext(os.path.basename(java_files[0]))[0]
+    out_dir = args.out or os.path.join(_BUILD_ROOT, to_snake(stem))
+
+    t_total = time.perf_counter()
+
+    # 1. overlay 手写代码（必须在 codegen 之前）
+    t0 = time.perf_counter()
+    prepare_scratch(out_dir, clean=args.clean)
+    t_overlay = time.perf_counter() - t0
+    print(f"[time] overlay     {fmt_dur(t_overlay)}")
+
+    # 2. 转译（生成器选择：generator_select.py）
+    t0 = time.perf_counter()
+    if generator == 'rust':
+        run_rust(java_files, out_dir, strict=args.strict,
+                 locales=tuple(t for t in args.locales.split(',') if t.strip()))
+    elif not _python_codegen(args, java_files, out_dir, lib_specs):
+        return
     t_codegen = time.perf_counter() - t0
     print(f"[time] transpile   {fmt_dur(t_codegen)}")
 

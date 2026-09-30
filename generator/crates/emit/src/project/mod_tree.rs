@@ -1,7 +1,8 @@
 //! 包 mod 树落盘（`project_writer._write_jdk_mod_tree` / `_complete_jrt_lib_rs` 的移植）。
 //!
 //! 类文件全部落盘后调用：mod.rs 如实声明磁盘上的全部模块（手写 overlay + 本轮生成 +
-//! 同 scratch 上轮幸存）。本轮未写入的带生成标记文件先清除。
+//! 同 scratch 上轮幸存）。本轮未写入的带生成标记文件先清除；不在本轮 mod 树中的陈旧包目录
+//! 删除生成 mod.rs 与空目录（复用 scratch 场景）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -160,6 +161,48 @@ fn scan_tree(src_root: &Path, handwritten_src: Option<&Path>) -> BTreeMap<PathBu
     tree
 }
 
+/// 陈旧包目录清除（`project_writer._write_jdk_mod_tree` 同款）：[`sweep_stale`] 只删类文件，包内类
+/// 全部离开闭包后，上轮生成的 mod.rs 仍声明已删除模块（E0583），且目录与同名类文件并存
+/// （E0761，`java/lang/module/` 与 `java/lang/module.rs`）。不在本轮 mod 树中的子包目录删除其
+/// mod.rs 与空目录（目录内只剩本轮无宿主的共置手写时同样无可声明模块，保留文件）。
+/// 保留：手写模块目录（runtime/ 真源提供 mod.rs）整棵子树；java_runtime 手写 lib.rs 直接声明的
+/// 顶层目录（其余顶层包由 [`complete_lib_rs`] 按磁盘补声明，目录删除即不再声明）；lib crate
+/// （`handwritten_src` 为 None）的全部顶层目录
+fn prune_stale_pkg_dirs(src_root: &Path, handwritten_src: Option<&Path>, tree: &BTreeMap<PathBuf, BTreeSet<String>>) -> Result<()> {
+    let lib_declared: BTreeSet<String> = handwritten_src
+        .and_then(|hw| std::fs::read_to_string(hw.join("lib.rs")).ok())
+        .map(|text| {
+            let re = regex::Regex::new(r"(?m)^\s*(?:pub\s+)?mod\s+(?:r#)?(\w+)\s*;").expect("静态正则");
+            re.captures_iter(&text).filter_map(|c| c.get(1)).map(|m| m.as_str().to_string()).collect()
+        })
+        .unwrap_or_default();
+    let handwritten_mod_dir = |d: &Path| {
+        let Some(hw) = handwritten_src else { return false };
+        let rel = d.strip_prefix(src_root).unwrap_or(Path::new(""));
+        rel.ancestors().any(|a| !a.as_os_str().is_empty() && hw.join(a).join("mod.rs").is_file())
+    };
+    // 自底向上：子目录先于父目录处理，删空的子目录让父目录也可能变空
+    for (dir, _, files) in walk(src_root).into_iter().rev() {
+        if dir == src_root || tree.contains_key(&dir) || handwritten_mod_dir(&dir) {
+            continue;
+        }
+        if dir.parent() == Some(src_root) {
+            let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if handwritten_src.is_none() || lib_declared.contains(&name) {
+                continue;
+            }
+        }
+        if files.iter().any(|f| f == "mod.rs") {
+            let m = dir.join("mod.rs");
+            std::fs::remove_file(&m).map_err(|e| io_err(&m.display().to_string(), e))?;
+        }
+        if std::fs::read_dir(&dir).is_ok_and(|mut rd| rd.next().is_none()) {
+            std::fs::remove_dir(&dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
+        }
+    }
+    Ok(())
+}
+
 /// 目录的共置手写声明：(补充 pub 声明的宿主, `mod X_impl;` 行)
 fn companions(
     dir: &Path,
@@ -206,6 +249,7 @@ pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, writer: &mut 
     }
     let handwritten_src = runtime_dir.map(|r| r.join("src"));
     let tree = scan_tree(src_root, handwritten_src.as_deref());
+    prune_stale_pkg_dirs(src_root, handwritten_src.as_deref(), &tree)?;
     let deps = runtime_dir.map(|r| CompanionDeps::new(r, src_root));
     for (dir, children) in &tree {
         if dir == src_root {

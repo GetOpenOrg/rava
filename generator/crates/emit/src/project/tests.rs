@@ -109,6 +109,36 @@ fn mod_tree_declares_disk_contents() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// 复用 scratch：包内类全部离开闭包后，陈旧包目录的生成 mod.rs 与空目录清除（E0583 / E0761）；
+/// 手写模块目录整棵子树、手写 lib.rs 声明的顶层目录、只剩共置手写的目录保留
+#[test]
+fn mod_tree_prunes_stale_package_dirs() {
+    let root = tmp("modprune");
+    let rt = runtime(&root);
+    put(&rt.join("src/java/nio/buffer_impl.rs"), "// 手写 impl\n");
+    let out = root.join("build").join("t");
+    let src = out.join("java_runtime/src");
+    // 上轮：java/lang/module/ 包（本轮其类全部离开闭包）、未声明的顶层包 javax/、
+    // 手写模块目录下的子目录
+    put(&src.join("java/lang/module/mod.rs"), "pub mod descriptor;\n");
+    put(&src.join("java/lang/module/descriptor.rs"), "rava_macros::java_class! {}\n");
+    put(&src.join("javax/crypto/mod.rs"), "pub mod cipher;\n");
+    put(&src.join("javax/mod.rs"), "pub mod crypto;\n");
+    put(&src.join("jdk_resources/sub/mod.rs"), "// 手写子树\n");
+    put(&src.join("java/nio/mod.rs"), "pub mod buffer;\n");
+    prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
+    let mut w = Writer::new(&out, &rt.join("src"));
+    w.write(&src.join("java/lang/module.rs"), "rava_macros::java_class! {}\n").unwrap();
+    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    assert!(!src.join("java/lang/module").exists(), "陈旧包目录删除（与 module.rs 并存即 E0761）");
+    assert!(read(&src.join("java/lang/mod.rs")).contains("pub mod module;\npub use module::*;"));
+    assert!(!src.join("javax").exists(), "lib.rs 未声明的顶层陈旧包删除");
+    assert!(src.join("sun/mod.rs").is_file(), "lib.rs 声明的顶层目录保留");
+    assert!(src.join("jdk_resources/sub/mod.rs").is_file(), "手写模块目录子树保留");
+    assert!(src.join("java/nio/buffer_impl.rs").is_file() && !src.join("java/nio/mod.rs").exists(), "只剩共置手写：删 mod.rs 留文件");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn companion_skipped_when_used_module_absent() {
     let root = tmp("companion");

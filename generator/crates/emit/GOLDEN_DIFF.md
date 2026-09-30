@@ -45,6 +45,8 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
    与 `codegen/instr` 同口径；P4c method crate 落地后统一到其公共实现。
 7. **FS-H0 手写审计**：`ProjectState.hw_audit` 已按 VmBoundary / Intrinsic / Override 分类记录，尚未写入
    raw_audit 输出（P0 driver 接入时落盘）。
+8. **陈旧包目录清除**（Python edd1362b 同款语义，复用 scratch 才触发，golden 全新目录无影响）：Python 只按目录自身
+   判定手写模块目录；Rust 保护手写模块目录的整棵子树（与 mod 树扫描跳过整棵子树同口径）。
 
 ## 三、Python 行为照搬（疑似缺陷，按原样移植，不在 P5a 修）
 

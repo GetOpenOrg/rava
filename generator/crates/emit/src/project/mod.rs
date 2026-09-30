@@ -32,6 +32,8 @@ use layout::{JdkLayout, UserLayout};
 pub struct ProjectReport {
     pub jdk_classes: usize,
     pub user_classes: usize,
+    /// 入口类 bin 名（`cargo run --bin`）
+    pub bin_name: String,
     /// 类发射记录（发射序）
     pub emissions: Vec<ClassEmission>,
 }
@@ -107,6 +109,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &mut dyn MethodB
     Ok(ProjectReport {
         jdk_classes: jdk.files.len(),
         user_classes: user.entries.len(),
+        bin_name: bin,
         emissions: ems.into_values().collect(),
     })
 }

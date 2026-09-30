@@ -67,8 +67,11 @@ version = "0.1.0"
 dependencies = [
  "classfile",
  "closure",
+ "emit",
+ "input",
  "resolve",
  "serde_json",
+ "ty",
 ]
 
 [[package]]
