@@ -17,6 +17,7 @@ use emit::audit::audit_lines;
 use emit::body::PlaceholderBodies;
 use emit::method_bodies::MethodBodies;
 use emit::ctx::{EmitCtx, EmitOptions};
+use emit::perf::{report_lines, Perf};
 use emit::project::{prepare_scratch, write_project, ProjectReport};
 use input::{BuildInput, ClosureFacts, RuntimeManifest};
 use resolve::{ClassPath, Hierarchy, Origin};
@@ -123,7 +124,7 @@ pub fn user_order(cp: &ClassPath, java_files: &[PathBuf], main: Option<&str>) ->
 }
 
 /// 闭包分析（同 `rava closure`）；closure.json 写入 `json_path`
-fn analyze(cp: &ClassPath, rt: &Path, main: &str, o: &BuildOpts, json_path: &Path) -> Result<ClosureFacts, String> {
+fn analyze(cp: &ClassPath, rt: &Path, main: &str, o: &BuildOpts, json_path: &Path, perf: &mut Perf) -> Result<ClosureFacts, String> {
     let man = Manifest::load(rt)?;
     let hw = Handwritten::new(rt);
     let h = Hierarchy::new(cp);
@@ -139,9 +140,13 @@ fn analyze(cp: &ClassPath, rt: &Path, main: &str, o: &BuildOpts, json_path: &Pat
     for e in hw.errors.borrow().iter() {
         eprintln!("[closure] 手写文件解析失败：{e}");
     }
+    perf.mark("closure");
     let s = serde_json::to_string_pretty(&c.to_json()).map_err(|e| e.to_string())?;
     std::fs::write(json_path, s).map_err(|e| format!("{}：{e}", json_path.display()))?;
-    Ok(ClosureFacts::from_closure(&c))
+    perf.mark("closure_json");
+    let facts = ClosureFacts::from_closure(&c);
+    perf.mark("closure_facts");
+    Ok(facts)
 }
 
 /// 一次发射所需的全部输入
@@ -157,30 +162,49 @@ struct EmitJob<'a> {
     strict: bool,
 }
 
+/// `--perf` 报告的 Top-N 条数
+const PERF_TOP: usize = 15;
+
 /// EmitInput → overlay → 写 scratch
-fn emit_scratch(j: &EmitJob<'_>) -> Result<ProjectReport, String> {
+fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
     let manifest = RuntimeManifest::load(j.rt).map_err(|e| e.to_string())?;
     let runtime_src = j.rt.join("src");
     let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: &[], runtime_src: &runtime_src }
         .build()
         .map_err(|e| format!("构建发射层输入：{e}"))?;
+    perf.mark("input");
     let names = ShortNames::build(&inp.registry);
     let opts = EmitOptions { strict: j.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone() };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
+    perf.mark("names+ctx");
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
+    perf.mark("overlay");
     if j.skeleton_only {
-        return write_project(&ctx, j.out, &mut PlaceholderBodies).map_err(|e| format!("发射：{e}"));
+        let mut r = write_project(&ctx, j.out, &mut PlaceholderBodies).map_err(|e| format!("发射：{e}"))?;
+        perf.absorb(std::mem::take(&mut r.perf));
+        return Ok((r, Vec::new()));
     }
     let mut bodies = MethodBodies::new(&ctx);
-    let r = write_project(&ctx, j.out, &mut bodies).map_err(|e| format!("发射：{e}"))?;
+    perf.mark("body_facts");
+    let mut r = write_project(&ctx, j.out, &mut bodies).map_err(|e| format!("发射：{e}"))?;
+    perf.absorb(std::mem::take(&mut r.perf));
     for line in audit_lines(&bodies.audit, &r.hw_audit) {
         println!("{line}");
     }
-    Ok(r)
+    perf.mark("audit");
+    Ok((r, std::mem::take(&mut bodies.timings)))
 }
 
 fn report(r: &ProjectReport, out: &Path) {
     println!("[emit] {} JDK 类 + {} 用户类 → {}（bin {}）", r.jdk_classes, r.user_classes, out.display(), r.bin_name);
+}
+
+fn print_perf(on: bool, perf: &Perf, methods: &[(String, std::time::Duration)]) {
+    if on {
+        for l in report_lines(perf, methods, PERF_TOP) {
+            println!("{l}");
+        }
+    }
 }
 
 /// 与 main.py 同一 cargo 流程：共享 `build/target`、关闭增量
@@ -201,6 +225,7 @@ fn cargo_run(out: &Path, bin: &str, repo: &Path) -> Result<(), String> {
 
 pub fn run_build(args: &Args) -> Result<(), String> {
     let o = BuildOpts::parse(Mode::Build, &args.rest)?;
+    let mut perf = Perf::new();
     let home = java_home(&o)?;
     let rt = abs(&find_runtime_dir(o.runtime.clone())?);
     let repo = repo_root(&rt);
@@ -211,13 +236,16 @@ pub fn run_build(args: &Args) -> Result<(), String> {
     let cin = out.join(CLOSURE_INPUT_DIR);
     let classes = cin.join("classes");
     javac(&home, &o.inputs, &classes)?;
+    perf.mark("javac");
     let cp = class_path(&classes, &home, &o.images)?;
     let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
-    let facts = analyze(&cp, &rt, &user[0], &o, &cin.join("closure.json"))?;
+    perf.mark("classpath");
+    let facts = analyze(&cp, &rt, &user[0], &o, &cin.join("closure.json"), &mut perf)?;
     let java_files = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
     let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict };
-    let r = emit_scratch(&job)?;
+    let (r, timings) = emit_scratch(&job, &mut perf)?;
     report(&r, &out);
+    print_perf(o.perf, &perf, &timings);
     if o.no_run {
         return Ok(());
     }
@@ -226,6 +254,7 @@ pub fn run_build(args: &Args) -> Result<(), String> {
 
 pub fn run_emit(args: &Args) -> Result<(), String> {
     let o = BuildOpts::parse(Mode::Emit, &args.rest)?;
+    let mut perf = Perf::new();
     let home = java_home(&o)?;
     let rt = abs(&find_runtime_dir(o.runtime.clone())?);
     let out = abs(&o.scratch_dir(Mode::Emit, &repo_root(&rt))?);
@@ -234,6 +263,7 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     let text = std::fs::read_to_string(&cj).map_err(|e| format!("{}：{e}", cj.display()))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}：{e}", cj.display()))?;
     let facts = ClosureFacts::from_json(&v).map_err(|e| format!("{}：{e}", cj.display()))?;
+    perf.mark("closure_json_load");
     if o.clean {
         if cj.starts_with(&out) || classes.starts_with(&out) {
             return Err("closure.json / 用户类目录位于 scratch 内：--clean 会删除输入".into());
@@ -242,10 +272,12 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     }
     let cp = class_path(&classes, &home, &o.images)?;
     let user = user_order(&cp, o.java_files(Mode::Emit), None)?;
+    perf.mark("classpath");
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
     let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict };
-    let r = emit_scratch(&job)?;
+    let (r, timings) = emit_scratch(&job, &mut perf)?;
     report(&r, &out);
+    print_perf(o.perf, &perf, &timings);
     Ok(())
 }
 

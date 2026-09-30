@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# 发射层基准（docs/plans/2026-09-30-emitter-performance.md P0）：基准集串行跑
+#   ① `rava build --no-run --perf --clean`（javac + 闭包 + 发射，整条生成管线）；
+#   ② `rava emit <closure.json> --perf` 进空目录（只发射，冷写出）；
+#   ③ 同一 ② 目录再 emit 一次（热写出：内容不变文件不重写）。
+# 每次记录 /usr/bin/time -l 的墙钟 / user / sys / 峰值 RSS 与 `[perf]` 分阶段行，产出对照表。
+#
+# 用法：scripts/emit_bench.sh <out_dir> [Test ...]   缺省 HelloWorld Digester DeepCopy CollectorsDemo TestCompletableFuture
+# 环境变量：RAVA（二进制，缺省 build/analyzer-target/release/rava）、JDK（缺省 21）、
+#           SKIP_BUILD=1（跳过 ①，复用 <out_dir>/<Test>/closure_input）
+# 同一时间只跑一个 rava 进程（串行），不跑 cargo。
+set -u
+REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
+RAVA="${RAVA:-$REPO/build/analyzer-target/release/rava}"
+JDKV="${JDK:-21}"
+OUT="${1:?用法: $0 <out_dir> [tests...]}"; shift
+TESTS="${*:-HelloWorld Digester DeepCopy CollectorsDemo TestCompletableFuture}"
+mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
+HOME_J="$(/usr/libexec/java_home -v "$JDKV" 2>/dev/null || echo "${JAVA_HOME:?}")"
+IMAGES=$(python3 -c "
+import sys; sys.path.insert(0, '.')
+from codegen.jdk_resolver import JdkResolver
+print(' '.join('--image ' + d for d in JdkResolver(prefer_major=$JDKV).image_class_dirs()))")
+COMMON="--java-home $HOME_J --runtime $REPO/runtime/java_runtime $IMAGES --perf"
+
+# /usr/bin/time -l 输出 → "墙钟 user sys RSS_MB"
+tm() {
+    awk '/real/ && /user/ {w=$1; u=$3; s=$5} /maximum resident set size/ {r=int($1/1048576)} END {printf "%s %s %s %s", w, u, s, r}' "$1"
+}
+# [perf] 阶段 name ms
+ph() { grep "\[perf\] 阶段 $2 " "$1" | awk '{printf "%.0f", $4}'; }
+
+TABLE="$OUT/bench.md"
+{
+echo "| 用例 | 模式 | 墙钟 s | user s | sys s | 峰值 RSS MB | closure | input | names+ctx | overlay | classes | phase2 | write | mod+entry |"
+echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+} > "$TABLE"
+row() { # 用例 模式 log timefile
+    read -r w u s r <<< "$(tm "$4")"
+    echo "| $1 | $2 | $w | $u | $s | $r | $(ph "$3" closure) | $(ph "$3" input) | $(ph "$3" names+ctx) | $(ph "$3" overlay) | $(ph "$3" classes) | $(ph "$3" phase2) | $(ph "$3" write) | $(ph "$3" mod_tree+entry) |" >> "$TABLE"
+}
+for n in $TESTS; do
+    f=$(find tests/e2e -name "$n.java" | head -1)
+    [ -n "$f" ] || { echo "NOT-FOUND $n"; continue; }
+    f="$REPO/$f"
+    S="$OUT/$n"
+    if [ -z "${SKIP_BUILD:-}" ]; then
+        /usr/bin/time -l "$RAVA" build "$f" $COMMON --out "$S" --clean --no-run > "$OUT/$n.build.log" 2> "$OUT/$n.build.time" \
+            || { echo "BUILD-FAIL $n"; continue; }
+        row "$n" build "$OUT/$n.build.log" "$OUT/$n.build.time"
+    fi
+    E="$OUT/$n.emit"
+    rm -rf "$E"
+    for mode in cold warm; do
+        /usr/bin/time -l "$RAVA" emit "$S/closure_input/closure.json" --java "$f" $COMMON --out "$E" > "$OUT/$n.$mode.log" 2> "$OUT/$n.$mode.time" \
+            || { echo "EMIT-FAIL $n $mode"; continue; }
+        row "$n" "emit-$mode" "$OUT/$n.$mode.log" "$OUT/$n.$mode.time"
+    done
+    echo "done $n"
+done
+cat "$TABLE"

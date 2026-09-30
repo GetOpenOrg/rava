@@ -39,13 +39,15 @@ pub struct MethodBodies {
     facts: InstrFacts,
     strict: bool,
     pub audit: BodyAudit,
+    /// 逐方法体生成耗时（`类.名:描述符`，生成序；性能观测用）
+    pub timings: Vec<(String, std::time::Duration)>,
 }
 
 impl MethodBodies {
     pub fn new(ctx: &EmitCtx<'_>) -> MethodBodies {
         let root = ctx.cp.get(ty::consts::OBJECT);
         let facts = InstrFacts::build(ctx.ty.reg, root.as_deref(), &ctx.runtime_src());
-        MethodBodies { facts, strict: ctx.opts.strict, audit: BodyAudit::default() }
+        MethodBodies { facts, strict: ctx.opts.strict, audit: BodyAudit::default(), timings: Vec::new() }
     }
 
     fn absorb_audit(&mut self, sink: &MethodSink) {
@@ -109,6 +111,7 @@ fn local_vars(ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, index: Option<usize>) ->
 
 impl MethodBodyEmitter for MethodBodies {
     fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
+        let t0 = std::time::Instant::now();
         let (name, desc) = (&req.method.name, &req.method.desc);
         let key = format!("{}.{name}:{desc}", req.class.name());
         let owner = ctx
@@ -132,6 +135,7 @@ impl MethodBodyEmitter for MethodBodies {
         let mut sink = MethodSink::default();
         let res = gen_method_body(&env, &mreq, &mut sink);
         self.absorb_audit(&sink);
+        self.timings.push((key.clone(), t0.elapsed()));
         match res {
             Ok(text) => Ok(BodyOutput { text, effects: effects_of(&sink) }),
             Err(MethodError::Cfg(msg)) if !self.strict => {

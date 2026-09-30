@@ -35,11 +35,13 @@ pub struct BuildOpts {
     pub no_run: bool,
     pub skeleton_only: bool,
     pub strict: bool,
+    /// 输出 `[perf]` 分阶段耗时 / 峰值 RSS / 逐类逐方法 Top-N
+    pub perf: bool,
 }
 
 const VALUED: [&str; 11] =
     ["--jdk", "--java-home", "--runtime", "--out", "--main", "--classes", "--java", "--image", "--locale", "--root", "-o"];
-const FLAGS: [&str; 4] = ["--clean", "--no-run", "--skeleton-only", "--strict"];
+const FLAGS: [&str; 5] = ["--clean", "--no-run", "--skeleton-only", "--strict", "--perf"];
 /// 只属于 build 的选项
 const BUILD_ONLY: [&str; 5] = ["--main", "--locale", "--root", "--no-run", "-o"];
 /// 只属于 emit 的选项
@@ -66,6 +68,7 @@ impl BuildOpts {
                     "--clean" => o.clean = true,
                     "--no-run" => o.no_run = true,
                     "--skeleton-only" => o.skeleton_only = true,
+                    "--perf" => o.perf = true,
                     _ => o.strict = true,
                 }
                 continue;
