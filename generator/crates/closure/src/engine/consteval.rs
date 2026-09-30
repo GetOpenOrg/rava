@@ -50,10 +50,9 @@ impl Ctx<'_> {
         let v = v?;
         match me {
             Some(me) => {
-                self.pdeps.borrow_mut().insert(me);
-                let mut fdeps = self.fdeps.borrow_mut();
+                self.dep(me, Dep::Props);
                 for f in reads.iter() {
-                    fdeps.entry(f.clone()).or_default().insert(me);
+                    self.dep(me, Dep::Field(f.clone()));
                 }
             }
             // 嵌套于另一次辅助分析：读过的字段并入外层求值

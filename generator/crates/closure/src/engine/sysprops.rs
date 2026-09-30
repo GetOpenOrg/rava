@@ -129,7 +129,7 @@ impl Ctx<'_> {
         }
         let V::Str(key) = args.get(spec.key)? else { return None };
         if let Some(me) = me {
-            self.pdeps.borrow_mut().insert(me);
+            self.dep(me, Dep::Props);
         }
         {
             let u = self.punstable.borrow();

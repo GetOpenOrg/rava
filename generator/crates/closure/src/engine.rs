@@ -59,6 +59,7 @@ mod class_lookup;
 mod sealed;
 mod method_lookup;
 mod pstrs;
+mod share;
 mod new;
 mod methods;
 mod worklist;
@@ -68,6 +69,7 @@ mod graph;
 mod scc;
 
 use graph::FlowGraph;
+use share::Dep;
 use stats::{Phase, Why};
 pub use stats::{peak_mem_mb, peak_rss_mb};
 
@@ -208,6 +210,10 @@ pub struct MNode {
     analysis: Option<Rc<Analysis>>,
     /// 事件已全部执行过的分析（None = 须完整执行）：重分析后只执行与之不同的事件
     applied: Option<Rc<Analysis>>,
+    /// `analysis` 的装入序号（每次装入加一）；`applied_seq` 为 `applied` 装入时的序号。
+    /// 摘要在上下文间共享（`share.rs`），「同一次装入」不能再按 `Rc` 身份判定
+    aseq: u32,
+    applied_seq: u32,
     /// 最近一次分析的透传摘要（None = 尚未分析）
     returned: Option<Option<Vec<u16>>>,
     /// 手写体命中的 fn 名（溯源）
@@ -485,6 +491,8 @@ pub struct Engine<'a> {
     call_watch: HashMap<Node, HashSet<u32>>,
     /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
     mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
+    /// 方法 → 可共享的摘要（按入口状态，见 `share.rs`）
+    shared: HashMap<MemberRef, Vec<share::Shared>>,
     open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
     cwork: VecDeque<u32>,
     in_cwork: HashSet<u32>,

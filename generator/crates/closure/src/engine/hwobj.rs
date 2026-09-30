@@ -122,6 +122,8 @@ impl<'a> Engine<'a> {
                 rtype,
                 analysis: None,
                 applied: None,
+                aseq: 0,
+                applied_seq: 0,
                 returned: None,
                 hw_fns: fns,
                 ctx: NOCTX,

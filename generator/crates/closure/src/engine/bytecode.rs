@@ -5,12 +5,16 @@ use super::*;
 impl<'a> Engine<'a> {
     pub(super) fn process_bytecode(&mut self, m: usize) {
         let Some(a) = self.analysis(m) else { return };
-        if !self.methods[m].applied.as_ref().is_some_and(|o| Rc::ptr_eq(o, &a)) {
+        // 同一次装入：`applied` 就是当前这次装入的分析（共享摘要下 `Rc` 身份不足以判定）
+        let seq = self.methods[m].aseq;
+        let same = self.methods[m].applied.is_some() && self.methods[m].applied_seq == seq;
+        if !same {
             self.sysprops_scan(m, &a);
         }
         let owner = self.methods[m].key.owner.clone();
         let cf = self.h.class(&owner);
         self.returns(m, &a);
+        self.methods[m].applied_seq = seq;
         let old = match self.methods[m].applied.replace(a.clone()) {
             // 首次 / 被调方摘要变化：站点按新摘要完整重接
             None => {
@@ -18,7 +22,7 @@ impl<'a> Engine<'a> {
                 None
             }
             // 同一分析重处理（open 展开的 G 增长）：站点去重记录仍成立
-            Some(o) if Rc::ptr_eq(&o, &a) => {
+            Some(_) if same => {
                 self.ctx.stats.borrow_mut().reprocess += 1;
                 None
             }

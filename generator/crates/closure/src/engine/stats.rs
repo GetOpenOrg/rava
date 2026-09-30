@@ -97,6 +97,8 @@ pub(super) struct Stats {
     pub(super) reapply: u64,
     /// 同一分析结果的整方法重处理（open 展开的 G 增长等）
     pub(super) reprocess: u64,
+    /// 按入口状态复用共享摘要（免分析）的次数
+    pub(super) shared: u64,
     pub(super) site_reruns: u64,
     pub(super) lcall_reruns: u64,
     pub(super) aux_analyses: u64,
@@ -118,6 +120,7 @@ impl Default for Stats {
             unchanged: Default::default(),
             reapply: 0,
             reprocess: 0,
+            shared: 0,
             site_reruns: 0,
             lcall_reruns: 0,
             aux_analyses: 0,
@@ -270,6 +273,7 @@ impl<'a> Engine<'a> {
             "reasons": reasons,
             "reapply_callee_summary": s.reapply,
             "reprocess_same_analysis": s.reprocess,
+            "shared_analyses": s.shared,
             "site_reruns": s.site_reruns,
             "lcall_reruns": s.lcall_reruns,
             "flow_edges": self.graph.edge_count,
