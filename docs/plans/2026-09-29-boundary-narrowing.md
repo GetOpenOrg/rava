@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态（2026-09-30）：🔄 第 1 步完成（`--release` 实测，§六）；逐包删除（§6.8）包 1–5 已提交、包 6 待抽查合入、包 7–9 未开始；精度项 G2′ 完成，G4–G6 未开始。
+> 状态（2026-09-30）：C1d 终态已落地（§6.10）：`[boundary]` 包前缀全部删除，非 VM 契约过渡手写一次性删除（1e623cec）；截断只剩 `[vm_boundary]` 逐类清单。未完成的是精度收敛项和 native 缺口（§6.10.4）。
 
 ## 一、目标
 
@@ -370,6 +370,72 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 9. `jdk/internal/misc` 中非 VM 契约部分（`Unsafe` / `VM` / `Signal` 等 VM 契约类保留）
 
 精度项 G2′ ✅（02bf00ff + c731a473）/ G4–G6 ⏳ 与删除并行推进，不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
+
+### 6.10 终态一次性删除（2026-09-30，分支 `c1d-final`）
+
+用户要求：「删除非 VM 契约部分时直接一次性删干净，然后再验证，不要一个包一个包处理。」
+所以 §6.8 包 7–9 以及包 1–6 暂留的过渡手写一并删除，逐包顺序不再执行。
+
+#### 6.10.1 提交
+
+| 提交 | 内容 |
+|---|---|
+| 1e623cec | 一次性删除：`runtime/` 删 8021 行，删除 82 个整文件；删 `[boundary]` 前缀、`[release]`、`seeds.toml [jca]` / `[data_bundle]`、`jca.rs` / `data_bundles.rs` 注册表、`codegen/jca_services.py` / `data_bundle.py`；`[vm_boundary]` 改为逐类清单；新增 `[boot_init] calls`（`System.setJavaLangAccess`） |
+| d641abd3 | 闭包：属性表对象作为实参传给唯一字节码目标、且该形参只读时，不再算逃逸（`StaticProperty.<clinit>` → `getProperty(Properties,String)`）。修复后系统属性折叠重新生效（5 例 `fold_props` 均 > 0，不稳定键只剩 `user.timezone`） |
+| 4a1437d3 | 补齐入链的 `ACC_NATIVE`（类 1）：CDS / PreviewFeatures / ScopedMemoryAccess / Continuation / ContinuationSupport / StackStreamFactory / IOUtil / NativeThread / UnixFileDispatcherImpl / UnixNativeDispatcher 目录族 / Unsafe.arrayBaseOffset0、throwException |
+| 9a231b6b | 生成器修复删除后暴露的翻译缺口（Python 与 Rust 同步）：双向控制符转义；泛型祖先合流时补 `<Object..>`；static 字段与方法同名时统一加 `_field` 后缀；import 收集时祖先的隐藏字段不按名去重；同族重实例化的类型实参允许接口载体 |
+
+按包统计删除行数：sun/nio/fs 1790、sun/util/locale 1345、jdk/internal/util 1308、sun/nio/cs 864、
+jdk/internal/access 542、sun/nio/ch 370、jdk/internal/misc 341、sun/security/jca 264、jdk/internal/vm 154、
+jdk/internal/event 148，其余各包合计约 700。
+
+#### 6.10.2 保留的手写（按准入类别）
+
+- **① ACC_NATIVE**：各 `<x>_impl.rs` 中的 `#[jvm_native]`。
+- **② 运行模型替换**：
+  - `java/lang/invoke/InvokerBytecodeGenerator`（原生 LambdaForm 解释器）；
+  - `jdk/internal/loader/BootLoader`、`ClassLoaders`（内建类加载器层级）；
+  - `java/lang/ClassLoader` / `Module` / `ModuleLayer` / `Class` 的 VM 边界成员。
+- **③ VM 注入状态 / VM 驱动行为**：
+  - `jdk/internal/misc/Unsafe`：对象模型访问原语；
+  - `jdk/internal/misc/VM`：引导档位、保存属性；
+  - `java/lang/VirtualThread`；
+  - `java/lang/SecurityManager`。
+- **策略截断**（过渡，终态为 0，单独计数）：
+  - `java/nio/file/FileSystems`；
+  - `java/net/InetAddress`；
+  - `javax/crypto/JceSecurity`。
+
+HelloWorld 生成：`raw-audit vm_boundary_methods=98`，`non_native_overrides=0`。
+
+#### 6.10.3 闭包对照（`rava closure`，5 例）
+
+| 用例 | 基线 类 / 方法 | 终态 类 / 方法 | 终态耗时 / 峰值内存 |
+|---|---|---|---|
+| HelloWorld | 251 / 620 | 1589 / 9261 | 5.9 s / 1.1 GB |
+| FileIOTest | 293 / 795 | 1589 / 9278 | 8.3 s / 0.75 GB |
+| Digester | 1353 / 8056 | 2405 / 14809 | 44.9 s / 3.0 GB |
+| CollectorsDemo | 1155 / 7006 | 1590 / 9318 | 6.8 s / 1.1 GB |
+| DeepCopy | 1617 / 9706 | 2521 / 15767 | 342 s / 5.5 GB（基线 132 s / 4.0 GB） |
+
+HelloWorld 生成树：`cargo check` 0 错误；precheck 报 native-missing 7、boundary-stub 8。
+
+#### 6.10.4 精度收敛项与风险
+
+1. **共同底座约 1589 类。** 来自异常消息路径。`--why java/util/regex/Pattern` 的链为：
+   `HelloWorld.main → greet → UTF_8.<clinit> → UTF_8.<init> → Unicode.<init> → Charset.<init> → Charset.checkName → String.charAt → StringLatin1.charAt → String.checkIndex → Preconditions.checkIndex → outOfBoundsCheckIndex → outOfBounds → outOfBoundsMessage → String.format → Formatter.<clinit> → Pattern`。
+   - 这条路径静态可达。要剪掉它，需要下标区间推理（在 `i < s.length()` 守卫下判定越界分支不可达）。
+   - 在此之前，java/lang/invoke（1026 方法）、regex（358）、concurrent（337）、time / calendar 都会随格式化器进入闭包。
+2. **DeepCopy 分析 342 s / 5.5 GB。** 并入闭包性能计划（`2026-09-30-closure-analyzer-performance.md`）。
+3. **sun/reflect/generics 编译内存。** 不保留截断，靠分析器精度收敛解决（泛型签名解析只在反射查询 `getGenericXxx` 可达时入链）。
+4. **native 缺口。** 入链但未实现，命中时 panic 并报出精确描述符：
+   - `Class.setSigners`；`ClassLoader.defineClass0/1/2`；
+   - `StackStreamFactory$AbstractStackWalker.callStackWalk`、`StackTraceElement.initStackTraceElement`（logger 经 StackWalker 取调用者）；
+   - `MethodHandleNatives.expand`；`BootLoader.getSystemPackageLocation`；`Module` 的 *0 族；
+   - `JdkConsoleImpl.echo`；`NativeImageBuffer.getNativeMap`；`NativeLibraries.*`；`PortConfig.*`；
+   - `FileDispatcherImpl.transferTo0 / map0 / unmap0 / release0 / lock0`。
+5. **Unsafe 仍有非 native 手写**（@IntrinsicCandidate 包装族）。按规范应收窄为只保留 native；`unsafe__impl.rs` 约 1200 行，超过 600 行上限，需要拆分。
+6. **ProviderConfig 经 ServiceLoader 装载 provider。** JCA 注册表删除后由字节码翻译承载，需要由 Cipher / MessageDigest 用例抽查确认。
 
 ## 七、验收
 
