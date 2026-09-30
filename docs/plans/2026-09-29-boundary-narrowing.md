@@ -637,6 +637,22 @@ TestCharsetForName 新增 12 类（`ExtendedCharsets`、`AbstractCharsetProvider
 结果：TestCharsetForName（无项 5 清单时）1157 / 7293 / 16810 → **407 / 1299 / 2055**；其余 8 例类 / 方法 / 上下文与项 5 后完全相同，漏均为 0。
 同类剩余（性能线 §4.5 记录）：`CalendarSystem.forName` 的按名查找结果依赖求值次序（`class_lookup` 返回 `Some` 时不接返回边），待单调化。
 
+**项 7 DeepCopy 数组汇聚：真正的汇聚源不是 arraycopy，而是基本元素数组视图被当作可改写引用元素**。
+上界实验（临时去掉全部 `W→E` 边，不健全）：DeepCopy 1623 → 1619、Digester 1165 → 1158、CollectorsDemo 911 → 907、MH Combinators 1057 → 1051。
+少掉的类（`StringUTF16$CharsSpliterator`、`ReduceOps$5ReducingSink` / `$6`、`IntBinaryOperator` 等）经 `--why` 与折叠对照全部来自**真实流的丢失**：
+`Currency$CurrencyProperty.getValidEntry@32` 变成 `null_recv`，因为 `Properties` 值经 `ConcurrentHashMap` 表数组的 Unsafe 写入（`casTabAt`）/ 读取（`tabAt`）
+在同一数组上往返，砍掉 `W→E` 即砍掉真实流——**任何健全的拆分都不会减少类**。按分配点拆分 arraycopy 站点也不改变集合：站点的 `W` 已是按调用点的枢纽，
+拆成 (src 数组, dst 数组) 对边得到同一个完全二部连接；只有让源 / 目标按调用上下文相关联（克隆上下文）才会更精，那属于上下文敏感度问题而非汇聚点拆分。
+按站点计数（临时插桩，每站点新增数组）：DeepCopy 共 5 477 256 条，其中 `Object.equals` 各调用点派发到手写 `sun/nio/fs/UnixPath.equals` 形成的站点占绝大多数
+（单站点 3 030 个数组；`ConcurrentHashMap$Node.equals` 内的站点合计 150 万条，`Objects.equals` 73 万条，`HashMap.getNode` / `TreeNode.find` 等同类）。
+原因：`UnixPath.equals` 手写体经 `to_u8(&JArray<i8>)` 读自身 `byte[]` 路径，扫描器只认 `JArray` 标识符即标 `array_access`，`hw_writes` 保守规则于是把
+`Object` 形参当写入目标、来源为全部实参数组元素——凡传给 `equals` 的数组元素两两并成一个集合。
+修法（`handwritten/syntax.rs::ArrayIdents`，通用规则，无类名）：`array_access` 改为「取得**引用元素**数组视图」：`JArray<P>` / `try_cast_array::<P>` 的 P
+为基本元素类型（i8 / u16 / i16 / i32 / i64 / f32 / f64 / bool）不计，`array_store_byte` 不计；引用 / 泛型 / 未写明元素类型的 `JArray`、`__view_into`、
+`array_store_object`、宏内标识符照旧保守计入。基本元素数组的元素不携带类型，不可能写入引用，健全。单测 `ref_array_access`。
+结果：DeepCopy 类 / 方法 / 上下文 1623 / 10845 / 39770 → **1623 / 10806 / 37735**，耗时 45 s → 13 s，站点新增数组 5 477 256 → 39 403（剩余写入扇入是
+`System.arraycopy` 按清单语义的逐站点扇入，如 `Arrays.copyOf` 单上下文 2 714 个源数组，属上下文敏感度问题）；其余 8 例类 / 方法 / 上下文不变；9 例动态对照漏均为 0。
+
 ## 七、验收
 
 - §一 终态表各项达标。

@@ -350,6 +350,30 @@ mod tests {
         SType::Named(TypeRef(p.iter().map(|s| s.to_string()).collect()))
     }
 
+    /// 只取基本元素数组视图的手写体不改写引用元素；引用 / 未写明元素类型的视图与宏内标识符保守计入
+    #[test]
+    fn ref_array_access() {
+        let src = r#"
+            impl P {
+                pub fn eq(&self, ob: Object) -> Result<bool> { Ok(to_u8(&self.__get_path()) == vec![]) }
+                pub fn prim(&self, ob: Object) { let a = ob.try_cast_array::<i32>("[I"); let b = JArray::<u16>::new(1); ob.array_store_byte(0, 1); }
+                pub fn refs(&self, ob: Object) { let a = ob.try_cast_array::<Object>("[Ljava/lang/Object;"); }
+                pub fn bare(&self) { let a = JArray::from_vec(vec![]); }
+                pub fn store(&self, ob: Object) { ob.array_store_object(0, ob); }
+                pub fn generic<T>(&self, a: &JArray<T>) {}
+                pub fn nested(&self, a: &JArray<JArray<i8>>) {}
+                pub fn mac(&self) { m!(JArray<i8>); }
+            }
+            fn to_u8(a: &JArray<i8>) -> Vec<u8> { vec![] }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let acc = |f: &str| out.fns.get(f).map(|i| i.array_access).expect("fn 存在");
+        assert!(!acc("eq") && !acc("prim") && !acc("to_u8"));
+        assert!(acc("refs") && acc("bare") && acc("store") && acc("generic") && acc("nested") && acc("mac"));
+    }
+
     #[test]
     fn field_access_receivers() {
         let src = r#"

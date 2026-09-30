@@ -349,7 +349,8 @@ results = [
 #   produced  写入值含手写体自身产出的对象
 #   fields    dst 为对象（非数组）时写入值落在其引用实例字段上（按偏移写入，偏移只能指向这些位置）
 #   last      写入值取自调用点最后一个实参（签名多态方法，实参个数随调用点变化）
-# 未列出、且手写体取得数组视图（JArray / __view_into / array_store_*）的方法按保守规则：
+# 未列出、且手写体取得引用元素数组视图（JArray<引用 / 泛型 / 未写明>、__view_into、try_cast_array::<引用>、
+# array_store_object，宏内按标识符计；JArray<i8> 等基本元素视图不计）的方法按保守规则：
 # 每个非接收者引用形参都可被写入，来源为其它形参、全部实参数组的元素与手写体产出。
 # 准入：JVM 规范 / JDK 文档给出的写入语义，与手写实现一致（注明实现位置）。
 # System.arraycopy：dest[destPos..] ← src[srcPos..]（system_impl.rs）
