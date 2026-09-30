@@ -3,7 +3,7 @@
 use super::*;
 
 /// 缺省流传播批量（`Engine::flow_batch`）
-pub(super) const FLOW_BATCH: usize = 64;
+pub const FLOW_BATCH: usize = 64;
 
 impl<'a> Engine<'a> {
     // ── 主循环 ──────────────────────────────────────────────────────────────

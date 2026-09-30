@@ -31,6 +31,8 @@ pub struct Input<'a> {
     pub seed_roots: Vec<MemberRef>,
     /// `--locale` 显式给出的 locale 标签
     pub locales: Vec<String>,
+    /// 流传播批量（`--flow-batch`；缺省 `engine::FLOW_BATCH`）
+    pub flow_batch: Option<usize>,
 }
 
 pub struct Closure<'a> {
@@ -43,6 +45,9 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     let t0 = std::time::Instant::now();
     let mut e = Engine::new(h, input.cp, man, hw);
     e.seeds.locales = input.locales.clone();
+    if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
+        e.flow_batch = n;
+    }
     for r in &input.roots {
         e.root(r.clone(), "main");
     }
