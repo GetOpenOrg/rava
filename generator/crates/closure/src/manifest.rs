@@ -58,7 +58,7 @@ pub enum Members {
 
 mod sysprops;
 mod names;
-pub use names::NameFacts;
+pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, SysProps};
 
 /// 方法返回值事实（[vm_constants] / [facts]）

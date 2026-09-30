@@ -16,7 +16,7 @@
 use super::*;
 
 /// 候选名数上限：超出按推不出处理
-const MAX_NAMES: usize = 4096;
+pub(super) const MAX_NAMES: usize = 4096;
 
 /// 拼接段：字面量、候选集，或任意串（仅按名查方法：由目标类上的方法名反向匹配）
 pub(super) enum Part {
@@ -49,7 +49,7 @@ fn event_values(e: &Event) -> Vec<&V> {
 }
 
 /// 使用来源站点 o 的（事件, 值）：同一事件里出现多次计多次
-fn uses(a: &Analysis, o: u32) -> Vec<(u32, &Event, &V)> {
+pub(super) fn uses(a: &Analysis, o: u32) -> Vec<(u32, &Event, &V)> {
     let mut out = vec![];
     for (off, e) in &a.events {
         for v in event_values(e) {
@@ -69,6 +69,35 @@ pub(super) fn event_at(a: &Analysis, o: u32, f: impl Fn(&Event) -> bool) -> Opti
 
 pub(super) fn is_invoke(e: &Event) -> bool {
     matches!(e, Event::Invoke { .. })
+}
+
+/// 链首：新建构建器 s，其用途只有构造器、清空（实参常量 0）与链上第一次使用 p（追加或取结果）各一；
+/// 且从 p 出发不经构造器 / 清空点回不到 p（循环复用而不清空时上一轮内容会残留）。返回构造器实参与是否有清空
+pub(super) fn builder_head(names: &crate::manifest::NameFacts, a: &Analysis, s: u32, p: u32) -> Option<(Vec<V>, bool)> {
+    event_at(a, s, |e| matches!(e, Event::New(_)))?;
+    let mut init = None;
+    let mut clear = vec![];
+    let mut reset = false;
+    let mut chain = 0;
+    for (uo, e, _) in uses(a, s) {
+        let on_s = |args: &[V]| args.first().and_then(site_of) == Some(s);
+        match e {
+            Event::Invoke { mref, args, .. } if on_s(args) && names.is_builder(&mref.to_string()) && init.is_none() => {
+                init = Some(args.clone());
+                clear.push(uo);
+            }
+            Event::Invoke { mref, args, .. } if on_s(args) && names.is_reset(&mref.to_string()) && args.len() == 2 && args[1] == V::Int(0) => {
+                reset = true;
+                clear.push(uo);
+            }
+            _ if uo == p => chain += 1,
+            _ => return None,
+        }
+    }
+    if chain != 1 || a.cfg.recurs_avoiding(p, &clear) {
+        return None;
+    }
+    Some((init?, reset))
 }
 
 impl<'a> Engine<'a> {
@@ -144,6 +173,8 @@ impl<'a> Engine<'a> {
         }
         let mut segs: Vec<V> = vec![];
         let mut cur = args.first()?.clone();
+        // 使用 cur 的链上事件偏移（取结果 / 追加）
+        let mut p = o;
         loop {
             let s = site_of(&cur)?;
             let append = event_at(a, s, is_invoke).and_then(|e| match e {
@@ -156,19 +187,15 @@ impl<'a> Engine<'a> {
                 }
                 segs.push(args.get(1)?.clone());
                 cur = args.first()?.clone();
+                p = s;
                 continue;
             }
-            // 链首：新建构建器，恰被构造器与第一次追加（或取结果）各使用一次
-            event_at(a, s, |e| matches!(e, Event::New(_)))?;
-            let us = uses(a, s);
-            let init = us.iter().find_map(|(_, e, _)| match e {
-                Event::Invoke { mref, args, .. } if names.is_builder(&mref.to_string()) && args.first().and_then(site_of) == Some(s) => Some(args.clone()),
-                _ => None,
-            })?;
-            if us.len() != 2 {
-                return None;
-            }
+            let (init, reset) = builder_head(names, a, s, p)?;
             if let Some(init_v) = init.get(1) {
+                // 清空与带初始内容的构造并存：追加点的内容可能是两者之一，不拆
+                if reset {
+                    return None;
+                }
                 segs.push(init_v.clone());
             }
             break;
@@ -191,8 +218,11 @@ impl<'a> Engine<'a> {
         Some(parts)
     }
 
-    /// 引用值段：常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）
+    /// 引用值段：封存静态字段（值映射读取 / 常量字符串数组元素，`sealed.rs`）→ 常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）
     fn segment_values(&mut self, m: Option<usize>, a: &Analysis, v: &V, wild: bool, depth: u8) -> Option<Part> {
+        if let Some(set) = self.sealed_segment(a, v) {
+            return Some(Part::Any(set));
+        }
         if let Some((set, partial)) = m.and_then(|m| self.table_values(m, a, v)) {
             // 接收者含非常量表值：按名查方法（wild）记为任意串；按名取类给出常量表部分并记 top
             if !partial {

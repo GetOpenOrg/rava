@@ -53,6 +53,7 @@ mod services;
 mod class_init;
 mod noreturn;
 mod class_lookup;
+mod sealed;
 mod method_lookup;
 mod pstrs;
 mod new;

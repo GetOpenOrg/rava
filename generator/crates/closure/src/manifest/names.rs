@@ -1,5 +1,5 @@
 //! 按名取类与字符串拼接的清单事实（`[facts.reflect]` 的 `class_lookups` / `instantiators` / `constant_tables`，
-//! `[facts.string_concat]`）。分析器据此把「常量前缀 + 常量表取值」拼出的类名解析成具体类（engine/class_lookup.rs）。
+//! `value_maps`，`[facts.string_concat]`）。分析器据此把「常量前缀 + 常量表取值」拼出的类名解析成具体类（engine/class_lookup.rs）。
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -15,6 +15,18 @@ pub struct NameFacts {
     builders: HashSet<String>,
     appends: HashSet<String>,
     results: HashSet<String>,
+    /// 构建器清空（实参为常量 0 时内容变空）：循环复用的构建器在追加前清空时拆段仍成立
+    resets: HashSet<String>,
+    /// 值映射：新建即空、写入入口按（键, 值）存入、读取入口只返回已存入的值或 null 的映射实现类
+    value_maps: ValueMaps,
+}
+
+/// `[facts.reflect.value_maps]`：`classes` 映射实现类；`writers` / `readers` 为写入 / 读取入口（`名字:描述符`）
+#[derive(Debug, Default)]
+pub struct ValueMaps {
+    pub classes: HashSet<String>,
+    pub writers: HashSet<String>,
+    pub readers: HashSet<String>,
 }
 
 fn list(t: Option<&toml::Value>, key: &str) -> Vec<String> {
@@ -47,6 +59,15 @@ impl NameFacts {
             builders: list(concat, "builders").into_iter().collect(),
             appends: list(concat, "appends").into_iter().collect(),
             results: list(concat, "results").into_iter().collect(),
+            resets: list(concat, "resets").into_iter().collect(),
+            value_maps: {
+                let vm = reflect.and_then(|r| r.get("value_maps"));
+                ValueMaps {
+                    classes: list(vm, "classes").into_iter().collect(),
+                    writers: list(vm, "writers").into_iter().collect(),
+                    readers: list(vm, "readers").into_iter().collect(),
+                }
+            },
         })
     }
 
@@ -74,6 +95,14 @@ impl NameFacts {
     pub fn is_result(&self, member: &str) -> bool {
         self.results.contains(member)
     }
+
+    pub fn is_reset(&self, member: &str) -> bool {
+        self.resets.contains(member)
+    }
+
+    pub fn value_maps(&self) -> &ValueMaps {
+        &self.value_maps
+    }
 }
 
 #[cfg(test)]
@@ -89,10 +118,15 @@ mod tests {
             instantiators = ["a/C.make:()Ljava/lang/Object;"]
             [r.constant_tables."a/T"]
             readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
+            [r.value_maps]
+            classes = ["a/M"]
+            writers = ["put:(La/K;La/K;)La/K;"]
+            readers = ["get:(La/K;)La/K;"]
             [s]
             builders = ["a/B.<init>:()V"]
             appends = ["a/B.add:(Ljava/lang/String;)La/B;"]
             results = ["a/B.str:()Ljava/lang/String;"]
+            resets = ["a/B.clear:(I)V"]
             "#,
         )
         .unwrap();
@@ -100,6 +134,9 @@ mod tests {
         assert!(f.is_class_lookup("a/C.byName:(Ljava/lang/String;)La/C;") && f.is_instantiator("a/C.make:()Ljava/lang/Object;"));
         assert_eq!(f.table_bases("get:(Ljava/lang/Object;)Ljava/lang/Object;").collect::<Vec<_>>(), vec!["a/T"]);
         assert!(f.is_builder("a/B.<init>:()V") && f.is_append("a/B.add:(Ljava/lang/String;)La/B;") && f.is_result("a/B.str:()Ljava/lang/String;"));
+        assert!(f.is_reset("a/B.clear:(I)V"));
+        let vm = f.value_maps();
+        assert!(vm.classes.contains("a/M") && vm.writers.len() == 1 && vm.readers.contains("get:(La/K;)La/K;"));
         let bad: toml::Value = toml::from_str("[r.constant_tables.\"a/T\"]\nx = 1\n").unwrap();
         assert!(NameFacts::from_toml(bad.get("r"), None).is_err());
     }

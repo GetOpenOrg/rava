@@ -755,6 +755,31 @@ TestCharsetForName 429 / 1486 / 2375。
 失败记录走 `lock(&self.failures)`。合并后 9 例类 / 方法 / 上下文与上表逐一相同，漏均为 0；顺序矩阵（HelloWorld / CollectorsDemo / DeepCopy ×
 `--flow-batch 1 / 64` × `--hash-seed 0 / 12345`）类集与方法集四组一致（仅 via 不同）。
 
+**项 9 候选：封存的静态映射值 / 常量字符串数组（`CalendarSystem.names`）**。按名取类拆段新增两种来源（`engine/sealed.rs`，通用规则，类名只在清单）：
+- **值映射字段**：private static 字段，嵌套（宿主 + 全部 `NestMembers`）内每次 putstatic 的值都是「新建 `[facts.reflect.value_maps] classes` 的实现类 →
+  无引用实参的构造 → 若干次 `writers` 写入 → putstatic 本字段」（或 null），映射对象别无他用；每次 getstatic 的值只作 `readers` 的接收者。映射不逃逸，
+  读取结果只能是某次写入的值或 null：候选 = 各写入值按拆段规则（`name_parts`）求得字符串集的并。
+- **常量字符串数组字段**：private static `String[]`，每次写入是新建数组、元素只存字符串常量 / null、除 putstatic 外只被元素读取；每次读取只作数组元素读取。
+  读取下标奇偶已知（`V::Par`）时只取同奇偶下标处存入的常量——`namePairs` 为「名, 类名」交错数组，`initNames` 以 `i += 2` / `i + 1` 访问。
+- 嵌套内访问方法以不读事实的 Oracle 分析（结果只取决于字节码，与处理次序无关）；private 字段在嵌套外无字节码访问，反射 / Unsafe 写 private static
+  不建模（与常量折叠同一前提）。任一条件不满足即不给候选。
+- **构建器复用的健全性**（`builder_head` + 新增 `absint/cfg.rs`）：`initNames` 在循环里复用一个 `StringBuilder`，每轮先 `setLength(0)`。链首判定改为：
+  新建构建器的使用只能是构造器、实参常量 0 的清空（`[facts.string_concat] resets`）与链上第一次使用 p；且从 p 出发、不经构造器 / 清空点回不到 p
+  （基本块 CFG 可达性，异常边从块首保守进入处理器）。有清空时丢弃构造器实参内容。原规则只要求「构造 + 一次使用」，对「循环外构造、循环内追加且不清空」
+  的写法会漏掉上一轮残留的内容——本次一并堵上。
+- 单测：`cfg::loop_append_needs_reset_in_body`、`sealed::tests::{map_writes_collects_values, map_writes_rejects_escape_and_unlisted,
+  array_writes_constants_only, builder_head_requires_reset_in_loop}`（虚构类名）；清单解析测试补 `value_maps` / `resets`。
+结果（类 / 方法 / 上下文，相对合并后）：HelloWorld、FileIOTest、TestStreamBasic、TestCharsetForName 不变；Digester 1167 / 6640 / 17288 → **1168 / 6657 / 17305**、
+DeepCopy 1624 / 10824 / 37760 → **1625 / 10841 / 37777**、CollectorsDemo 934 / 5372 / 12560 → **935 / 5389 / 12577**、MH Combinators 1070 / 6807 / 15756 →
+**1071 / 6824 / 15773**、MH Direct 1078 / 6822 / 15907 → **1079 / 6839 / 15924**；9 例漏均为 0，耗时不变（DeepCopy 11.9 s）。
+增量逐一核对（5 例相同）：+1 类 `JulianCalendar$Date`，`JulianCalendar` 由 type 级升 code 级，+17 方法全部属于这两个类（`<clinit>` / `<init>` /
+`getCalendarDate` 等）；无类 / 方法减少。原因：此前 `forName@81` 的 `Class.forName(className)` 为 top，`newInstance` 的构造器只能记 `open(Class)`
+反射缺口而不展开——`JulianCalendar` 的构造器与方法体是**漏掉的可达内容**（JVM 在 `forName("julian")` 时会走到）；现在候选精确为
+`Gregorian` / `LocalGregorianCalendar` / `JulianCalendar` 三类，按候选展开。反射缺口：CollectorsDemo、MH 两例的
+`getDeclaredConstructors0 <- open(java/lang/Class)` 消失；Digester / DeepCopy 仍有，临时插桩确认 Digester 的 top 取类点只剩
+`Provider$Service.getImplClass@64`、`ServiceLoader$LazyClassPathLookupIterator.nextProviderClass@207`、`URL$DefaultFactory.createURLStreamHandler@162`，
+与本链无关（`forName@81` 已不再 top）。
+
 ## 七、验收
 
 - §一 终态表各项达标。

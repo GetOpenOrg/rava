@@ -19,6 +19,7 @@ use std::rc::Rc;
 use classfile::descriptor::{parse_field, parse_method, FieldType};
 use classfile::{op, Code, Const, Insn, MemberRef, Operand};
 
+pub mod cfg;
 mod lit;
 mod obj;
 #[cfg(test)]
@@ -253,6 +254,8 @@ pub struct Analysis {
     pub pending_types: Vec<String>,
     /// 无法建模、按全部可达保守处理
     pub conservative: bool,
+    /// 基本块控制流图（拼接链拆段的循环判定用）
+    pub cfg: Rc<cfg::Cfg>,
 }
 
 impl Analysis {
@@ -938,7 +941,7 @@ fn conservative(code: &Code) -> Analysis {
         events.push((h.handler, Event::Catch(h.catch_type.clone())));
     }
     events.sort_by_key(|e| e.0);
-    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], conservative: true }
+    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], conservative: true, cfg: Rc::new(cfg::Cfg::build(code)) }
 }
 
 /// 分析一个方法体
@@ -1131,7 +1134,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
     events.sort_by_key(|e| e.0);
     pending_types.sort();
     pending_types.dedup();
-    Some(Analysis { reachable, events, pending_types, conservative: false })
+    Some(Analysis { reachable, events, pending_types, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)) })
 }
 
 fn targets_empty(o: &Operand) -> bool {
