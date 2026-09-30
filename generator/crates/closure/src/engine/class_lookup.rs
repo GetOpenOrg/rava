@@ -79,7 +79,7 @@ impl<'a> Engine<'a> {
         if a.conservative {
             return None;
         }
-        let parts = self.name_parts(m, &a, args.first()?, false)?;
+        let parts = self.name_parts(Some(m), &a, args.first()?, false, 0)?;
         let mut names: Vec<String> = vec![String::new()];
         for p in &parts {
             names = match p {
@@ -109,15 +109,21 @@ impl<'a> Engine<'a> {
     }
 
     /// 名字值拆成拼接段；wild = 推不出的段记为任意串（否则整体推不出）
-    pub(super) fn name_parts(&mut self, m: usize, a: &Analysis, v: &V, wild: bool) -> Option<Vec<Part>> {
+    /// m = 值所在方法（None = 被调方法的独立分析，不读常量表：其接收者值集不在引擎里）；
+    /// depth = 已穿过的辅助方法层数（名字由唯一目标的辅助方法拼出并返回时，进入其字节码继续拆）
+    pub(super) fn name_parts(&mut self, m: Option<usize>, a: &Analysis, v: &V, wild: bool, depth: u8) -> Option<Vec<Part>> {
         if let V::Str(s) = v {
             return Some(vec![Part::Lit(s.clone())]);
         }
         let o = site_of(v)?;
         let names = &self.man.names;
-        let Event::Invoke { mref, args, .. } = event_at(a, o, is_invoke)? else { return None };
+        let Some(Event::Invoke { mref, args, .. }) = event_at(a, o, is_invoke) else {
+            // 非调用结果（如直接读字段）：整体作为一段
+            return self.segment_values(m, a, v, false, depth).map(|p| vec![p]);
+        };
         if !names.is_result(&mref.to_string()) {
-            return None;
+            let (ca, rv) = self.callee_return(a, o, depth)?;
+            return self.name_parts(None, &ca, &rv, wild, depth + 1);
         }
         let mut segs: Vec<V> = vec![];
         let mut cur = args.first()?.clone();
@@ -156,8 +162,8 @@ impl<'a> Engine<'a> {
             parts.push(match s {
                 V::Str(x) => Part::Lit(x.clone()),
                 V::Null => Part::Lit(Rc::from("null")),
-                V::Ref { .. } => match self.table_values(m, a, s).or_else(|| self.enum_field_values(a, s)) {
-                    Some(set) => Part::Any(set),
+                V::Ref { .. } => match self.segment_values(m, a, s, wild, depth) {
+                    Some(p) => p,
                     None if wild => Part::Wild,
                     None => return None,
                 },
@@ -166,6 +172,31 @@ impl<'a> Engine<'a> {
             });
         }
         Some(parts)
+    }
+
+    /// 引用值段：常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）
+    fn segment_values(&mut self, m: Option<usize>, a: &Analysis, v: &V, wild: bool, depth: u8) -> Option<Part> {
+        if let Some(set) = m.and_then(|m| self.table_values(m, a, v)).or_else(|| self.enum_field_values(a, v)) {
+            return Some(Part::Any(set));
+        }
+        let o = site_of(v)?;
+        if let Some(set) = self.callee_consts(a, o, depth) {
+            return Some(Part::Any(set));
+        }
+        // 辅助方法拼出的段：拍平成一个候选集（含任意串时整体记为任意串）
+        let (ca, rv) = self.callee_return(a, o, depth)?;
+        let parts = self.name_parts(None, &ca, &rv, wild, depth + 1)?;
+        let mut names: Vec<String> = vec![String::new()];
+        for p in &parts {
+            names = match p {
+                Part::Lit(l) => names.into_iter().map(|n| n + l).collect(),
+                Part::Any(set) if names.len().saturating_mul(set.len()) <= MAX_NAMES => {
+                    names.iter().flat_map(|n| set.iter().map(move |x| format!("{n}{x}"))).collect()
+                }
+                _ => return wild.then_some(Part::Wild),
+            };
+        }
+        Some(Part::Any(names.into_iter().map(Rc::from).collect()))
     }
 
     /// 常量表读取结果的候选字符串（可经一次 checkcast）；接收者尚无值时为空集

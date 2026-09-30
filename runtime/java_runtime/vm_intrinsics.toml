@@ -321,6 +321,11 @@ appends = [
     "java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;",
     "java/lang/StringBuilder.append:(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
     "java/lang/StringBuilder.append:(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;",
+    # 基本类型段：按名取类推不出；按名查方法记为任意串
+    "java/lang/StringBuilder.append:(C)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(J)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(Z)Ljava/lang/StringBuilder;",
 ]
 results = [
     "java/lang/StringBuilder.toString:()Ljava/lang/String;",

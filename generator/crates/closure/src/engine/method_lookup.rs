@@ -2,9 +2,11 @@
 //!
 //! 形状（与按名取类共用拆段，见 `class_lookup.rs`）：
 //! - 名字实参是一条线性的字符串拼接链；各段是字符串常量、常量表读取、枚举取值，推不出的段记为任意串；
-//! - 枚举取值：段是对某个 final 枚举类（或 final 方法）上无参实例方法的调用，方法体恰为「读本对象的 final
-//!   字符串字段并返回」，且该字段只在构造器里由形参或字符串常量写入。枚举常量只在本类 `<clinit>` 里构造，
+//! - 枚举取值：段是直接读枚举的 final 字符串实例字段，或对 final 枚举类（或 final 方法）上无参实例方法的调用、
+//!   方法体恰为「读本对象的该类字段并返回」；且该字段只在构造器里由形参或字符串常量写入。枚举常量只在本类 `<clinit>` 里构造，
 //!   构造实参即本类代码里的字符串常量——候选值取该类全部方法的 ldc 字符串（超集）；
+//! - 名字或某段由唯一目标的辅助方法给出时进入其字节码：返回值全是字符串常量（可合流）的，候选取该方法的 ldc
+//!   字符串；唯一返回值是拼接的，继续拆段（至多 2 层；辅助方法的独立分析不读常量表）；
 //! - 目标类取 Class 形参上的类常量，或其值集里类镜像所指的类（如取自 `static final Class` 字段）；
 //! - 候选名只保留目标类上实际声明的方法：逐个方法名按拼接段匹配（字面量逐字、候选集任取其一、任意串任意长），
 //!   因此不做笛卡尔积；全部段都是任意串（无任何字面量 / 候选集）时推不出，按原样处理（不补方法名）。
@@ -18,6 +20,8 @@ const ALOAD_0: u8 = 0x2a;
 const ALOAD_3: u8 = 0x2d;
 const ARETURN: u8 = 0xb0;
 const CTOR: &str = "<init>";
+/// 穿过辅助方法的最大层数
+const MAX_DEPTH: u8 = 2;
 
 /// 名字 s 是否能由拼接段拼出
 fn parts_match(parts: &[Part], s: &str) -> bool {
@@ -94,7 +98,7 @@ impl<'a> Engine<'a> {
         if a.conservative {
             return None;
         }
-        let parts = self.name_parts(m, &a, v, true)?;
+        let parts = self.name_parts(Some(m), &a, v, true, 0)?;
         constrained(&parts).then_some(parts)
     }
 
@@ -104,20 +108,86 @@ impl<'a> Engine<'a> {
         cf.methods.iter().filter(|mm| !mm.name.starts_with('<') && parts_match(parts, &mm.name)).map(|mm| Rc::from(mm.name.as_str())).collect()
     }
 
+    /// 站点 o 的调用有唯一目标且有字节码时，目标方法的独立分析（不绑定形参、不入引擎）；层数超限为 None
+    fn callee_analysis(&self, a: &Analysis, o: u32, depth: u8) -> Option<Rc<Analysis>> {
+        if depth >= MAX_DEPTH {
+            return None;
+        }
+        let Event::Invoke { opcode, mref, iface, .. } = event_at(a, o, is_invoke)? else { return None };
+        if !mref.desc.ends_with(&format!(")L{STRING};")) {
+            return None;
+        }
+        let (cf, t) = self.ctx.exact_target(*opcode, mref, *iface)?;
+        let meth = cf.method(&t.name, &t.desc)?;
+        let code = meth.code.as_ref()?;
+        let live = |_: &str| true;
+        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![] });
+        (!ca.conservative).then(|| Rc::new(ca))
+    }
+
+    /// 辅助方法的唯一返回值（及其分析）
+    pub(super) fn callee_return(&self, a: &Analysis, o: u32, depth: u8) -> Option<(Rc<Analysis>, V)> {
+        let ca = self.callee_analysis(a, o, depth)?;
+        let mut rets = ca.events.iter().filter_map(|(_, e)| match e {
+            Event::Return(v) => Some(v.clone()),
+            _ => None,
+        });
+        let v = rets.next()?;
+        rets.next().is_none().then_some((ca, v))
+    }
+
+    /// 辅助方法的返回值全是字符串常量（可合流）时的候选：该方法字节码里的全部 ldc 字符串（超集）
+    pub(super) fn callee_consts(&self, a: &Analysis, o: u32, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+        let ca = self.callee_analysis(a, o, depth)?;
+        let mut any = false;
+        for (_, e) in &ca.events {
+            let Event::Return(v) = e else { continue };
+            any = true;
+            let plain = match v {
+                V::Str(_) => true,
+                V::Ref { src, .. } => !src.is_empty() && src.iter().all(|s| *s == Src::Str),
+                _ => false,
+            };
+            if !plain {
+                return None;
+            }
+        }
+        if !any {
+            return None;
+        }
+        let Event::Invoke { opcode, mref, iface, .. } = event_at(a, o, is_invoke)? else { return None };
+        let (cf, t) = self.ctx.exact_target(*opcode, mref, *iface)?;
+        let code = cf.method(&t.name, &t.desc)?.code.as_ref()?;
+        Some(code.insns.iter().filter_map(|i| match &i.operand {
+            classfile::Operand::Ldc(Const::String(s)) => Some(Rc::from(s.as_str())),
+            _ => None,
+        }).collect())
+    }
+
     /// 枚举取值段的候选字符串
     pub(super) fn enum_field_values(&self, a: &Analysis, v: &V) -> Option<BTreeSet<Rc<str>>> {
         let o = site_of(v)?;
-        let Event::Invoke { opcode, mref, iface, args } = event_at(a, o, is_invoke)? else { return None };
-        if *opcode == classfile::op::INVOKESTATIC || args.len() != 1 {
+        // 取值方法调用，或直接读字段
+        let (cf, fname, fdesc) = match event_at(a, o, |e| is_invoke(e) || matches!(e, Event::Field { .. }))? {
+            Event::Invoke { opcode, mref, iface, args } => {
+                if *opcode == classfile::op::INVOKESTATIC || args.len() != 1 {
+                    return None;
+                }
+                let site = self.h.resolve_method(&mref.owner, &mref.name, &mref.desc, *iface)?;
+                let cf = site.class.clone();
+                let rm = site.method();
+                if cf.access & acc::FINAL == 0 && !rm.is_final() {
+                    return None;
+                }
+                let (n, d) = getter_field(rm.code.as_ref()?, &cf.name)?;
+                (cf, n, d)
+            }
+            Event::Field { opcode: classfile::op::GETFIELD, mref, .. } => (self.h.class(&mref.owner)?, mref.name.clone(), mref.desc.clone()),
+            _ => return None,
+        };
+        if cf.access & acc::ENUM == 0 {
             return None;
         }
-        let site = self.h.resolve_method(&mref.owner, &mref.name, &mref.desc, *iface)?;
-        let cf = site.class.clone();
-        let rm = site.method();
-        if cf.access & acc::ENUM == 0 || cf.access & acc::FINAL == 0 && !rm.is_final() {
-            return None;
-        }
-        let (fname, fdesc) = getter_field(rm.code.as_ref()?, &cf.name)?;
         let f = cf.field(&fname, &fdesc)?;
         if f.is_static() || f.access & acc::FINAL == 0 || fdesc != format!("L{STRING};") || !ctor_writes_plain(&cf, &fname, &fdesc) {
             return None;
