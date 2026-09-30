@@ -37,6 +37,10 @@ pub struct ArrayWrite {
     pub elements: Vec<usize>,
     /// 写入值含手写体产出
     pub produced: bool,
+    /// dst 为对象（非数组）时写入其引用实例字段（Unsafe 按偏移写入）
+    pub fields: bool,
+    /// 写入值取自调用点最后一个实参（签名多态方法：实参个数随调用点变化）
+    pub last: bool,
 }
 
 /// 反射成员对象所表示的成员类别（`[facts.reflect]`）
@@ -72,6 +76,7 @@ pub struct Manifest {
     deserializers: HashSet<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
+    array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
@@ -165,6 +170,8 @@ impl Manifest {
                         values: idx(e.get("values")),
                         elements: idx(e.get("elements")),
                         produced: e.get("produced").and_then(|x| x.as_bool()).unwrap_or(false),
+                        fields: e.get("fields").and_then(|x| x.as_bool()).unwrap_or(false),
+                        last: e.get("last").and_then(|x| x.as_bool()).unwrap_or(false),
                     },
                 );
             }
@@ -177,6 +184,23 @@ impl Manifest {
                     return Err(format!("vm_intrinsics.toml [facts.memory_reads]：{k} 须为 {{ src = 形参序号 }}"));
                 };
                 memory_reads.insert(k.clone(), src as usize);
+            }
+        }
+
+        let mut array_returns = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("array_returns")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let elems: Option<Vec<String>> = v
+                    .as_table()
+                    .and_then(|e| e.get("elements"))
+                    .and_then(|x| x.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+                match elems {
+                    Some(es) if !es.is_empty() && k.contains(")[") => {
+                        array_returns.insert(k.clone(), es);
+                    }
+                    _ => return Err(format!("vm_intrinsics.toml [facts.array_returns]：{k} 须为返回引用数组的方法，值为 {{ elements = [类型…] }}")),
+                }
             }
         }
 
@@ -216,6 +240,7 @@ impl Manifest {
             deserializers: field_writes("deserializers").into_iter().collect(),
             array_writes,
             memory_reads,
+            array_returns,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             member_enumerators,
             member_invokers,
@@ -305,6 +330,11 @@ impl Manifest {
         self.memory_reads.get(member).copied()
     }
 
+    /// 手写方法返回新数组、VM 只写入所列类型的元素（`[facts.array_returns]`）：返回元素类型（binary name / 数组描述符）
+    pub fn array_return(&self, member: &str) -> Option<&[String]> {
+        self.array_returns.get(member).map(|v| v.as_slice())
+    }
+
     /// 返回字段句柄数组的反射枚举（字段常量折叠的写入来源）
     pub fn is_field_enumerator(&self, member: &str) -> bool {
         self.field_enumerators.contains(member)
@@ -352,5 +382,32 @@ fn entry_matches(entry: &str, cls: &str) -> bool {
         cls.starts_with(entry)
     } else {
         cls == entry || cls.strip_prefix(entry).is_some_and(|rest| rest.starts_with('$'))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_vm(vm: &str) -> Result<Manifest, String> {
+        let dir = std::env::temp_dir().join(format!("rava-manifest-{}-{}", std::process::id(), vm.len()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("vm_intrinsics.toml"), vm).unwrap();
+        let r = Manifest::load(&dir);
+        std::fs::remove_dir_all(&dir).ok();
+        r
+    }
+
+    #[test]
+    fn array_returns_parse() {
+        let m = with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [\"a/C\", \"a/D\"] }\n").unwrap();
+        assert_eq!(m.array_return("a/B.f:()[Ljava/lang/Object;"), Some(&["a/C".to_string(), "a/D".to_string()][..]));
+        assert_eq!(m.array_return("a/B.g:()[Ljava/lang/Object;"), None);
+    }
+
+    #[test]
+    fn array_returns_reject_non_array() {
+        assert!(with_vm("[facts.array_returns]\n\"a/B.f:()Ljava/lang/Object;\" = { elements = [\"a/C\"] }\n").is_err());
+        assert!(with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [] }\n").is_err());
     }
 }

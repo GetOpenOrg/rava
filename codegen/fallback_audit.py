@@ -10,7 +10,7 @@
   NameError / TypeError / KeyError 等代码 bug 全部穿透硬失败。本模块提供
   九点统一的埋点形态（:func:`stub_fallback`——位点标记 + 异常类型 +
   --debug 全点 traceback）。
-- **B 组（15 处非 stub 静默降级）新增 [fallback-audit]**：语义是「非 stub
+- **B 组（10 处非 stub 静默降级；原 callchain 五点随 Python 发现删除，2026-09-30）新增 [fallback-audit]**：语义是「非 stub
   质量降级」（类型回退描述符 / 渲染空串 / 类解析失败静默丢类），塞进
   cfg-audit 会混淆既有契约，按 equiv_audit 同款 record/summary/reset 模式
   独立成线（见 :func:`record` / :func:`summary`）。
@@ -38,14 +38,6 @@ sam-functional      sam_objects._functional_sam：SAM 描述符无法映射 Rust
                     → None（站点回落闭包装箱）。收窄为 (ValueError, IndexError)。
 sam-prescan         sam_objects.prescan：invokedynamic 站点返回描述符解析失败
                     → 跳过该站点。同上收窄。
-cc-load-class       callchain._load_class：类字节码解析失败 → 置 None 静默
-                    移出层次遍历（调用链缺口源）。保留 except Exception +
-                    计数 + 警告清单（解析 JDK 类失败的形态谱不可预枚举）。
-cc-root-names       callchain._object_method_names：Object.class 解析失败 →
-                    根方法名集合为空（根继承判定全数落入 unresolved）。
-cc-root-desc        callchain 根方法描述符类型闭包入队失败 → 丢类型边。
-cc-stub-chan        callchain stub 通道类处理失败 → 丢类（此前完全无信号）。
-cc-parent-queue     callchain 父类补全队列处理失败 → 丢父类。
 ==================  =========================================================
 """
 
@@ -79,23 +71,16 @@ IDS: tuple[str, ...] = (
     'vars-render-loop', 'vars-render-if', 'vars-type-decl',
     'vars-type-outer', 'vars-type-later',
     'sam-functional', 'sam-prescan',
-    'cc-load-class', 'cc-root-names', 'cc-root-desc',
-    'cc-stub-chan', 'cc-parent-queue',
 )
 
 _counts: dict[str, int] = {i: 0 for i in IDS}
-_warnings: list[str] = []   # callchain 丢类明细（site: detail），供调用侧打印警告清单
 
 
 def record(site_id: str, detail: str = '') -> None:
     """B 组某静默兜底点触发 +1（只计数与明细，不改变降级行为本身）。
 
-    detail 非空时进警告清单（callchain 丢类需指名道姓——哪个类被静默移出
-    遍历，光有计数无法排查调用链缺口）；--debug 时逐触发打印明细
-    （报告 §4.2：DEBUG=默认之上 + B 组计数明细）。"""
+    --debug 时逐触发打印明细（报告 §4.2：DEBUG=默认之上 + B 组计数明细）。"""
     _counts[site_id] = _counts.get(site_id, 0) + 1
-    if detail:
-        _warnings.append(f"{site_id}: {detail}")
     if options.DEBUG:
         import sys
         print(f"[fallback-audit] {site_id} {detail}".rstrip(), file=sys.stderr)
@@ -104,22 +89,16 @@ def record(site_id: str, detail: str = '') -> None:
 def summary() -> str:
     """[fallback-audit] 行：只列非零项（equiv-audit 风格）；全零输出 none。
 
-    2026-09-23 审计实证 B 组 15 点在全语料零触发（死代码）——收窄后任何非零
+    2026-09-23 审计实证 B 组各点在全语料零触发（死代码）——收窄后任何非零
     都极可能是真 bug（K-6b 型），runner 可经 --deny fallback 升级为整体失败。"""
     items = ' '.join(f"{k}={v}" for k, v in _counts.items() if v)
     return f"[fallback-audit] {items or 'none'}"
-
-
-def warnings() -> list[str]:
-    """callchain 丢类明细的拷贝（调用侧打印警告清单用）。"""
-    return list(_warnings)
 
 
 def reset() -> None:
     """清零（与 cfg AuditStats.reset 同约定，供复用进程的场景）。"""
     for k in _counts:
         _counts[k] = 0
-    _warnings.clear()
 
 
 def stub_fallback(method_id: str, site: str, e: BaseException) -> None:

@@ -12,6 +12,8 @@ class Instr:
     opcode:  str
     operand: Optional[str] = None
     comment: Optional[str] = None
+    # closure.json invoke 折叠（closure_folds）：调用照常翻译、结果丢弃，改压此常量装载指令
+    fold:    Optional['Instr'] = None
 
 
 @dataclass

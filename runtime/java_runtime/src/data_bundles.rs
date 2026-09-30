@@ -2,7 +2,7 @@
 //!
 //! JDK 的 `ResourceBundle.getBundle` 按类名反射实例化 CLDR 资源束类（无静态调用边）。
 //! 原生侧在「装载」这一跳截断：codegen 对入选 locale（用户字节码静态可见的 locale
-//! 引用 + 父链，见 `codegen/locale_seed.py`）的束类照常翻译字节码，并在生成 main
+//! 引用 + 父链，见闭包分析器 `generator/crates/closure/src/seeds/locale.rs`）的束类照常翻译字节码，并在生成 main
 //! 启动时经 [`register_data_bundles`] 登记 `(binary name, 构造闭包)`——与
 //! reflect_dispatch / 类初始化钩子同一登记模式。束内数据消费（getObject → 父链回退 →
 //! ListResourceBundle.handleGetObject → getContents）全部走翻译字节码。

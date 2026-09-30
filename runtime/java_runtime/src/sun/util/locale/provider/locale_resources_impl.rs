@@ -35,7 +35,7 @@ crate::__process_static! {
         crate::sync_model::__RefSlot::new(HashMap::new());
 }
 
-/// ResourceBundle 候选后缀（由具体到一般，不含 ROOT）——与 `codegen/locale_seed.py`
+/// ResourceBundle 候选后缀（由具体到一般，不含 ROOT）——与闭包分析器 `generator/crates/closure/src/seeds/locale.rs`
 /// 的 `parent_chain` 同一顺序（生成侧按它选束，运行侧按它查束）。
 fn parent_chain(lang: &str, script: &str, region: &str, variant: &str) -> Vec<std::string::String> {
     let mut out: Vec<std::string::String> = Vec::new();

@@ -43,6 +43,7 @@ impl<'a> Engine<'a> {
             if !ys.is_empty() {
                 self.hw_site_arrays(s, i, &ys);
             }
+            self.hw_site_fields(s, i, &delta);
             if self.hw_reads.get(&s).is_some_and(|r| r.0 == i) {
                 self.memory_read(s, &delta);
             }
@@ -207,6 +208,9 @@ impl<'a> Engine<'a> {
             }
             for p in self.hw_read_names.get(&key.name).cloned().unwrap_or_default() {
                 self.flow(Node::F(fi), p, tid);
+            }
+            if self.ctx.fopen_names.borrow().contains(&key.name) {
+                self.open_static(&key);
             }
         }
         fi

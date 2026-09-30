@@ -64,8 +64,8 @@ impl<'a> Engine<'a> {
         let rest = all.get(1..).unwrap_or(&[]).to_vec();
         match l.imh.kind {
             6 => {
-                // 静态实现方法继承 lambda 创建时的克隆上下文
-                let t = self.method_ctx(resolved, l.ctx, via);
+                // 静态实现方法继承 lambda 创建时的克隆上下文；分派转发的实现方法按调用点克隆
+                let t = self.callee(m, off, resolved, l.ctx, via);
                 self.edge(m, off, t, Recv::None, &all, ret, res);
             }
             8 => {
@@ -127,7 +127,7 @@ impl<'a> Engine<'a> {
                 match mh.kind {
                     6 => {
                         self.init(&resolved.owner, via.clone());
-                        let t = self.method(resolved, via);
+                        let t = self.callee(m, off, resolved, NOCTX, via);
                         self.edge(m, off, t, Recv::None, &a, None, None);
                     }
                     7 => {

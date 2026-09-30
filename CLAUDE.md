@@ -59,7 +59,7 @@ animal.speak();
 
 - 判定单位是**方法**，不是类或包；`@IntrinsicCandidate` 之类的性能内建照样翻译字节码
 - 准入三类：① `ACC_NATIVE`；② 运行模型替换（lambda / indy 引导、LambdaForm 编译、动态代理等运行期类定义点）；③ VM 注入的状态与 VM 驱动行为的落地语义（GC 引用处理、JVMTI、栈遍历等）
-- 规模策略截断（`[boundary]` 前缀、`whole_class`、因截断补的手写）是**过渡类**：单独计数，终态为 0，不作为新增手写的理由
+- 规模策略截断（`[boundary]` 前缀、因截断补的手写）是**过渡类**：单独计数，终态为 0，不作为新增手写的理由
 - 终态下 Java 类的 struct 一律由字节码生成；VM 注入的隐藏字段由清单声明、生成器追加
 - 每个非 native 手写方法在清单登记类别，raw-audit 按类计数（`non_native_overrides` 2026-09-28 已清零，新增即回归）
 - `System.out.println`、`String`、`ArrayList` 等的 Rust 实现必须来自 JDK `.class` 字节码翻译，不得手写近似实现
@@ -141,7 +141,7 @@ python3 scripts/main.py <Test.java> --clean     # 清空 scratch 重建
 python3 scripts/run_tests.py                    # 全量 e2e（顺序）
 python3 scripts/run_tests.py -j 4               # 并行
 python3 scripts/run_tests.py --filter TestXxx   # 单测试
-python3 scripts/main.py <Test.java> --no-run --trace-class <类>   # 查某类为何入闭包（另有 --debug / --strict / --raw-sites）
+python3 scripts/main.py <Test.java> --no-run --trace-class <类>   # 查某类为何入闭包（转交 rava closure --why；另有 --debug / --strict / --raw-sites）
 python3 -m unittest tests.unit.<模块>            # 生成器单元测试
 # 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
 scripts/prune.sh                                # 清共享 target 过期产物（跑批间调用，防磁盘满）

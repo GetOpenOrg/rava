@@ -769,8 +769,6 @@ FALLBACK_IDS = (
     'vars-render-loop', 'vars-render-if', 'vars-type-decl',
     'vars-type-outer', 'vars-type-later',
     'sam-functional', 'sam-prescan',
-    'cc-load-class', 'cc-root-names', 'cc-root-desc',
-    'cc-stub-chan', 'cc-parent-queue',
 )
 
 

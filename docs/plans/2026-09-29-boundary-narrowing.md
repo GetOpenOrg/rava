@@ -220,7 +220,7 @@ ChineseRemainderTheorem / TestStreamBasic / TestRecordComponents / CollectorsDem
 
 1. 分析器：G1 静态转发按调用点克隆（形参流入分派接收者的静态方法）、G2 汇合点上下文（`append(Object)` /
    `valueOf` / `equals` 按调用点）、G3 `[facts]` 增加 native 返回数组元素类型（`Class.getEnclosingMethod0` 等）；
-   修正后对「待重测」行复测。
+   修正后对「待重测」行复测。✅ G3 / G1 已实施，G2 实测否决，复测与逐包建议见 §6.7。
 2. 「无数据」行在全量 e2e 语料上重测（`rava closure --release` 批量）。
 3. ✅ `--release-bytecode`（放行且忽略前缀内同名手写）已实现，复测结果见 §6.6。
 4. 放行行的删除候选经用户逐项确认后，按 §五 第 3 步逐包实施并复测漏覆盖。`StreamDecoder` / `StreamEncoder`
@@ -279,6 +279,96 @@ native 仍取手写。11 个前缀 × 8 例（2026-09-30）。「JVM 加载」= 
 - 精度问题新增一项：**G4** 平台线程上 `instanceof CarrierThread` / 虚拟线程分支（`Blocker`、`VirtualThreads`）——
   由清单事实声明「无虚拟线程载体」或按 `Thread.currentCarrierThread` 的返回事实收窄。
 - `sun/security/action`、`sun/util` 删除手写使闭包**变小**，是「手写对分析不透明」的直接证据（规范 §六）。
+
+### 6.7 G1–G3 修正后复测
+
+口径：验收集 8 例（HelloWorld、TestSwitchString、PatternSwitchTest、FileIOTest、ChineseRemainderTheorem、TestStreamBasic、
+TestRecordComponents、CollectorsDemo）× 9 配置（基线 + 下列 8 个前缀各自 `--release`），JDK 21。
+三个版本：修正前（2026-09-29 C1d 基线）、G3、G3+G1（终版）。动态对照 = JVM `-Xlog:class+load` 在主类之后加载、
+不在闭包内的类（隐藏类 / lambda 类除外），逐配置比较漏覆盖集合。
+
+**实现**
+
+- **G3**（2208ddda）：`vm_intrinsics.toml` 新增 `[facts.array_returns]`（`"<成员>" = { elements = [...] }`，成员须返回引用数组），
+  分析器把该手写返回建模为一个数组分配点，元素 = 所列类型的 open；首条：`Class.getEnclosingMethod0` → `{Class, String}`。
+- **G1**（69c2e14d）：**静态分派转发方法按调用点克隆，k = 1**。判定纯看字节码（`engine/forward.rs`）：静态方法的引用形参
+  经 checkcast、经下游非虚调用的转发槽（递归）、或作为字符串拼接动态实参，流到虚 / 接口分派接收者。上下文无关的调用方
+  调用它时按调用点克隆，调用方已在上下文中（容器对象 / 调用点）则继承——`doPrivileged → executePrivileged` 整条链随
+  最外层调用点分开（实测各克隆的 `action` 形参均为单一类）。无类名、无清单项。
+  实现要点：上下文须在**建方法节点前**判定——先建上下文无关本体再改道到克隆，本体成为无调用方的孤立节点，以 Top 形参被分析，
+  常量折叠失效（`ZipFile$Source.<init>` 的 `toDelete` 分支 → `OperatingSystem`）且耗时 ×7。
+- **G2 否决**：同一规则扩展到实例方法（`append(Object)` / `valueOf(Object)` / `Objects.equals` 等汇合点，含分派中心按调用点接边）
+  后，CollectorsDemo 等 4 个配置的闭包类集与只做 G1 **逐一相同**（CollectorsDemo 1256 = 1256），上下文 22838 → 77231、
+  耗时 5.0 s → 30.3 s（放行 `java/security/` 时 70 s）。原因：汇合点上的 open(Object) 在调用点处已经是 open——
+  例 `LambdaForm$Name.exprString` 把 `Object[] arguments` 的元素传给 `append(Object)`，元素集本身是 open(Object)，
+  调用点上下文分不开。收窄要落在 open(Object) 的**引入点**（`Object[]` 元素读、手写返回、`Permissions.getUnresolvedPermissions`、
+  `MemberName.getMethodType` 等，`--flows @opens:java/lang/Object` 可列），记为 **G2′**。
+
+**基线配置（不放行）**
+
+| 用例 | 类数 修正前 → G3 → G1 | open(Object) 节点 | 方法上下文 | 耗时 ms | 动态漏覆盖 |
+|---|---|---|---|---|---|
+| HelloWorld | 251 → 251 → 251 | 44 → 44 → 42 | 854 → 854 → 878 | 134 → 165 → 181 | 76 → 76 → 76 |
+| TestStreamBasic | 400 → 400 → 400 | 399 → 399 → 556 | 2369 → 2369 → 2479 | 226 → 242 → 286 | 92 → 92 → 92 |
+| FileIOTest | 293 → 293 → 293 | 62 → 62 → 60 | 1027 → 1027 → 1057 | 169 → 165 → 164 | 80 → 80 → 80 |
+| CollectorsDemo | 1261 → 1261 → 1256 | 9606 → 9600 → 11140 | 18081 → 18081 → 22838 | 3982 → 4030 → 4964 | 25 → 25 → 25 |
+
+open(Object) 节点按方法克隆计数：G3 使 `getEnclosingMethod0` 的引入点消失（−3~−6）；G1 克隆把同一 open 值复制到各调用点副本，
+节点数随上下文增加而增加，不代表更宽。G1 删去的类：`ReduceOps$5` / `CountingSink*`（`MethodHandleImpl.loop` 的
+`Object...` 形参跨调用点汇合）、`MethodHandleImpl$CasesHolder` / `$LoopClauses`、`VarHandles`（TestRecordComponents）。
+
+**`--release` 增量（相对同版本基线配置；修正前 → G3 → G1）**
+
+| 前缀 | HelloWorld | TestStreamBasic | FileIOTest | CollectorsDemo |
+|---|---|---|---|---|
+| `sun/reflect/generics/` | +1036 → +1036 → +1031 | +939 → +939 → +937 | +995 → +995 → +990 | +48 → +48 → +48 |
+| `java/security/` | 0 → 0 → 0 | −5 → −5 → −5 | 0 → 0 → 0 | +227 → +227 → +227 |
+| `jdk/internal/loader/` | 0 → 0 → 0 | 0 → 0 → 0 | 0 → 0 → 0 | +238 → +238 → +238 |
+| `jdk/internal/util/` | +4 → +4 → +4 | +3 → +3 → +3 | +3 → +3 → +3 | +59 → +59 → +59 |
+| `jdk/internal/ref/` | 0 → 0 → 0 | 0 → 0 → 0 | +39 → +39 → +39 | +9 → +9 → +9 |
+| `sun/util/` | 0 → 0 → 0 | 0 → 0 → 0 | 0 → 0 → 0 | +21 → +21 → +21 |
+| `jdk/internal/icu/` | 0 → 0 → 0 | 0 → 0 → 0 | 0 → 0 → 0 | +55 → +55 → +55 |
+| `jdk/internal/org/objectweb/asm/` | 0 → 0 → 0 | 0 → 0 → 0 | 0 → 0 → 0 | +17 → +17 → +17 |
+
+**健全性**：8 例 × 9 配置共 72 个闭包，G1 相对 G3 类集只减不增；漏覆盖合计 4791 → 4793，新增 2 个均为 PatternSwitchTest
+放行 `sun/reflect/generics/` 时的 `MethodHandleImpl$CasesHolder` / `$LoopClauses`——二者在该用例其余 8 个配置（含基线）
+修正前后都是漏报（`typeSwitch` 引导的 MethodHandle 组合子，§6.3 「indy / MethodHandle 引导」类，运行模型替换），
+G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `ldc` 顺带覆盖。其余 70 个配置漏覆盖集合逐一相同。
+`cargo test -p closure` 通过（含 `[facts.array_returns]` 解析 / 拒绝两例）。
+
+**结论：增量主因不是 G1–G3**。G1–G3 修正后 8 个前缀的增量基本不变；§6.2 按 `--why` 首条路径归因 G1/G2 不成立——
+`--why` 按方法本体合并上下文，去掉一条路径后同一批类经其他真实路径仍可达。逐包追到的主路径（G1 版本）：
+
+| 前缀 | 增量中 JVM 实际加载 | 主路径 | 性质 | 建议 |
+|---|---|---|---|---|
+| `sun/reflect/generics/` | HelloWorld 193 / 1031；CollectorsDemo 1 / 48 | `ConcurrentHashMap.comparableClassFor → Class.getGenericInterfaces → Reifier → ParameterizedTypeImpl.validateConstructorArguments → String.format`（异常消息） | 包自身成本 +48（39 类属本包）；小例的 ~1000 是首次触达 `Formatter` 子系统（→ `Pattern` → 大小写 / 断词 / locale → 流水线 / MethodHandle），CollectorsDemo 经 `Collectors.duplicateKeyException` 已含 | **放行**；`Formatter` 冷路径另立 G5（异常构造分支的冷路径成本），不据此保留截断 |
+| `java/security/` | 18 / 227 | `String.format → Formatter → Calendar → JapaneseImperialCalendar → CalendarSystem.forName → Class.newInstance → MethodHandle → LambdaForm.toString → append(Object)`（open 元素）`→ ProtectionDomain.toString → Policy → PolicyFile → URL / InetAddress / SocketPermission` | 精度（G2′：`Object[]` 元素 open） | G2′ 修正后复测再放行；终态放行 |
+| `jdk/internal/loader/` | 37 / 238 | `Pattern \N{}` → `CharacterName` 读 `uniName.dat` → `Class.getResourceAsStream → BuiltinClassLoader.findResource → URLClassPath → JarFile / ZipFile` | 真实路径（类路径资源分支静态不可排除） | **放行** |
+| `jdk/internal/util/` | CollectorsDemo 5 / 59（小例 +3~+4） | `BindCaller.makeInjectedInvoker → Lookup$ClassDefiner.defineClass → ClassFileDumper.dumpClass → doPrivileged → Files` | 穿过运行期类定义点（规范准入②），该点承载后截断 | **放行** |
+| `jdk/internal/ref/` | FileIOTest 30 / 39；CollectorsDemo 8 / 9 | 文件流的 `Cleaner` 注册路径 | 真实路径 | **放行** |
+| `sun/util/` | 1 / 21 | `Currency$1` 错误路径取日志器 →（手写 `LazyLoggers.getLazyLogger` 返回 open(`System$Logger`)）→ 各实现类 | 手写不透明（§6.6 按字节码后 −226） | **放行**（连同 `jdk/internal/logger` 手写按字节码） |
+| `jdk/internal/icu/` | 0 / 55 | `Pattern.<init>` 的 `CANON_EQ` 分支 `→ Pattern.normalize → Normalizer → NormalizerBase` | 精度（G6：`CANON_EQ` 标志经字段 / 汇合形参（`Pattern(p, 0)`）传递，分支不折叠） | **放行**；G6 修正后增量应归零 |
+| `jdk/internal/org/objectweb/asm/` | 7 / 17 | `InvokerBytecodeGenerator` 运行期字节码生成 | 运行模型替换（规范准入②） | 不放行，由承载点截断（同 §6.4） |
+
+新增精度项：**G2′** open(Object) 引入点收窄（`Object[]` 元素、手写返回）；**G5** 异常构造分支触达 `Formatter` 子系统的冷路径成本；
+**G6** 经字段传递的构造期标志常量。
+
+### 6.8 逐包删除手写的顺序（2026-09-30 确认）
+
+用户确认「直接删除这些不要的手写方法」。逐包独立提交，每包：删除手写 → `[boundary]` 去前缀 → 抽查
+（`master_passed_jdk21.txt` 中触达该包的用例）通过数不降、动态对照漏覆盖不增。顺序按依赖与风险由低到高：
+
+1. `jdk/internal/math`（已有实施分支 `c1d-math-release`，061a7b13）
+2. `sun/security/action`
+3. `jdk/internal/module`
+4. `jdk/internal/perf`
+5. `sun/security/util`
+6. `sun/invoke/util`
+7. `jdk/internal/access`
+8. `sun/nio/cs`
+9. `jdk/internal/misc` 中非 VM 契约部分（`Unsafe` / `VM` / `Signal` 等 VM 契约类保留）
+
+精度项 G2′ / G4–G6 与删除并行推进，不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
 
 ## 七、验收
 

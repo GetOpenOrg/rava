@@ -1,7 +1,7 @@
 # Rust 生成器（发射层）实施计划：单二进制 `rava build`
 
 > 日期：2026-09-30
-> 状态：P2 / P3 开工（子代理并行）；P0 / P1 / P4 / P5 待排
+> 状态（2026-09-30）：P2（`ty`）/ P3（`ir`）已完成并合入；P4a（`sim` / `cfg`）、P1（输入层）子代理进行中；P4b（`instr`）待 P4a 合入后派发；P0 / P5 / C3 待排
 > 决策（用户 2026-09-30 拍板）：
 > ① Python 生成器用 Rust 重写，与 Rust 闭包分析器合为**一个二进制** `rava build`：闭包分析 → 发射 → cargo，闭包结果进程内传递；管道形态（`rava closure … -o x.json` / `rava emit x.json`）只作调试与审计入口。
 > ② **C3（发射层消费 levels / dispatch / folds）直接在 Rust 生成器做**，Python 侧不再投入。
@@ -30,6 +30,7 @@ generator/crates/
 ├── classfile/   ✅ 已有：.class 解析
 ├── resolve/     ✅ 已有：classpath / 层次 / jimage
 ├── closure/     ✅ 已有：精确闭包分析 + 手写层扫描（handwritten.rs 供发射层复用）
+├── input/       P1：发射层输入（registry 插入序 / 调用链 visited / 反射面 / 补种 / 折叠与 VM 常量剪枝后的规范化方法体 / 手写扫描 / 逐方法发射判定）（← closure_input / closure_folds / vm_constants / runtime_manifest / transpile 的 registry 构建）
 ├── ty/          P2：签名解析 + 类型映射 + 层次实参 + 签名类型 + JvmType（← sig_parse / type_map / type_args / sig_types / jvm_type）
 ├── ir/          P3：RsIR 节点 + render 单出口（← rs_ir / render）
 ├── sim/  cfg/  instr/   P4：栈模拟 / 结构化 / 指令翻译（← stack / cfg/ / instr/ / method/）
@@ -69,7 +70,10 @@ Python 模块内部状态大量以字符串往返，Rust 侧不复刻其 API 形
 - 子代理只编译 `generator/`（`--target-dir` 置于各自 worktree 的 `build/gen-target`），**不跑 e2e**；golden 转储需要的一次转译可跑（单测试，`--no-run`）。
 - 每个子代理只新增自己的 crate + 转储脚本 + workspace `members` 一行；不改其他 crate、不改 `codegen/`、不改 `runtime/`。
 - 交付：分支上的提交（`cargo test -p <crate>` 与 `cargo clippy -p <crate>` 通过，golden 全等或差异清单明示）。主会话审查后合并回 `rust-closure-analyzer`。
-- 当前批次：P2（`rust-emitter-ty`）、P3（`rust-emitter-ir`）。
+- 已合入：P2（`rust-emitter-ty`）、P3（`rust-emitter-ir`），分支与 worktree 已清理。
+- 当前批次：P4a（`rust-emitter-sim`：栈模拟 + CFG 结构化）、P1（`rust-emitter-input`：Registry / 折叠 / manifest）。
+- 下一批：P4b（指令翻译，依赖 P4a）；P0 + P5 同批（依赖 P1 / P4b）；C3 在 P5 切换后。
+- 合入后同步删除子代理 worktree 与分支。
 
 ## 六、硬性规则（在 2026-09-20 方案 §4 基础上）
 
