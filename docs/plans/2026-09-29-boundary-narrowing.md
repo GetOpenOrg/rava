@@ -576,6 +576,16 @@ Digester / CollectorsDemo 的 `AbstractPipeline.evaluate` 并行分支（`dead_p
 解析器与 `CANON_EQ` 分支整体不入链）。`UCharacter` 另经手写 `sun/text/Normalizer.getCombiningClass`（`String.toUpperCase(Locale)` → `ConditionalSpecialCasing`）
 以 type 级入闭包，与 G6 无关，属手写层对分析不透明（规范 §六），随该手写按字节码翻译消失。
 
+**项 6 SystemJavaLangAccess 选择失败——分析器侧已无缺口，残余随 C1d 删除手写消失，无需新规则**。原记录的 FileIOTest 3 条
+（`decodeASCII` / `encodeASCII` / `inflateBytesToChars`）在本期基线已为 0。残余 unresolved 全部是 `hwobj_target` 在手写对象上找不到方法：
+`SharedSecrets.getJavaLangAccess` 的手写实现返回手写 `SystemJavaLangAccess`（`jvm_boundary`，过渡类），它只实现了部分接口方法——
+Digester 1 条（`getDeclaredPublicMethods`）、DeepCopy 11 条（`addExports` / `addOpens` / `addReads` / `defineClass` …）、
+TestMethodHandleCombinators 2 条（`defineClass` / `protectionDomain`）；另 `NativeLocaleAdapter.getBreakIteratorProvider` 同属手写对象残缺。
+这是手写层不完整，不是分析精度问题：给分析器补「选择失败时回落到接口全部实现」只会把缺失手写掩盖成过近似。
+实测：本分支分析器 + c1d-final（80c5c1df）runtime（已删 `java_lang_access_impl.rs`，`SharedSecrets` 走 `System.<clinit>` →
+`setJavaLangAccess(new System$2)` 字节码），Digester / TestMethodHandleCombinators / CollectorsDemo / FileIOTest / HelloWorld 的 unresolved 全部为 0
+（类数 471 / 725 / 518 / 228 / 194，含 c1d-final 清单收窄的影响，不与本表直接对照）。终态：c1d-final 合入即清零，分析器不改。
+
 ## 七、验收
 
 - §一 终态表各项达标。
