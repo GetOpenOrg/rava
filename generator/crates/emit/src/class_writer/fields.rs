@@ -187,10 +187,12 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
         if !sf.is_static() {
             continue;
         }
-        let mut fname = safe_ident(&sf.name);
-        if method_names.contains(sf.name.as_str()) {
-            fname.push_str("_field");
-        }
+        // 与方法同名：先加 `_field` 后缀再转义（与访问端 instr `StaticField.accessor` 同口径）
+        let fname = if method_names.contains(sf.name.as_str()) {
+            safe_ident(&format!("{}_field", sf.name))
+        } else {
+            safe_ident(&sf.name)
+        };
         let ty = static_field_rust(ctx, sf, tps);
         let meta = field_attr(sf, ex.fields.get(i));
         let head = format!("{meta}\n// static field: {}:{}\n", sf.name, sf.desc);
