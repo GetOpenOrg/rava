@@ -64,7 +64,8 @@ pub(super) struct Ctx<'a> {
     pub(super) calls: RefCell<HashMap<MemberRef, Vec<(u8, bool, Rc<CallInfo>)>>>,
     /// 字段引用的解析缓存（None = 解析失败）
     pub(super) fields: RefCell<HashMap<MemberRef, Option<Rc<FieldInfo>>>>,
-    pub(super) in_progress: RefCell<HashSet<String>>,
+    /// 进行中的记忆化计算（递归保护与截断记录，见 `memo.rs`）
+    pub(super) guards: RefCell<super::memo::Guards>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
     /// 字节码方法的返回常量（缺席 = 尚无返回路径）
@@ -307,11 +308,9 @@ impl Ctx<'_> {
             return v.clone();
         }
         // `<clinit>` 唯一一次常量赋值（递归保护：分析中的类不再展开）。
-        // 一次分析得出本类全部 static final 字段的答复，逐字段缓存
+        // 一次分析得出本类全部 static final 字段的答复，与外层无关时逐字段缓存
         let cls = self.h.class(&key.owner)?;
-        if !self.in_progress.borrow_mut().insert(cls.name.clone()) {
-            return None;
-        }
+        let frame = self.memo_enter(format!("clinit:{}", cls.name), true)?;
         let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
         let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
             let live = |_: &str| true;
@@ -324,17 +323,20 @@ impl Ctx<'_> {
                 }
             }
         }
-        self.in_progress.borrow_mut().remove(&cls.name);
+        let clean = self.memo_leave(frame);
+        let value_of = |name: &str, desc: &str| match puts.get(&(name, desc)).map(Vec::as_slice) {
+            Some([Some(v)]) => PV::of(v).value(),
+            _ => None,
+        };
+        if !clean {
+            return value_of(&key.name, &key.desc);
+        }
         let mut consts = self.consts.borrow_mut();
         for fd in &cls.fields {
             if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 || fd.constant_value.is_some() {
                 continue;
             }
-            let v = match puts.get(&(fd.name.as_str(), fd.desc.as_str())).map(Vec::as_slice) {
-                Some([Some(v)]) => PV::of(v).value(),
-                _ => None,
-            };
-            consts.insert(MemberRef { owner: cls.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() }, v);
+            consts.insert(MemberRef { owner: cls.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() }, value_of(&fd.name, &fd.desc));
         }
         consts.get(key).cloned().flatten()
     }

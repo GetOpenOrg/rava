@@ -33,13 +33,17 @@ impl Ctx<'_> {
             return None;
         }
         let bound: Vec<Option<V>> = args.iter().map(|a| is_const(a).then(|| a.clone())).collect();
+        // 记忆键带起始深度：嵌套求值的深度上限截断只取决于它
         let key = format!("{t}|{bound:?}");
-        let hit = self.cevals.borrow().get(&key).cloned();
+        let memo_key = format!("{key}|{}", self.ceval_depth.get());
+        let hit = self.cevals.borrow().get(&memo_key).cloned();
         let (v, reads) = match hit {
             Some(e) => e,
             None => {
-                let e = self.const_eval_fresh(&key, t, bound)?;
-                self.cevals.borrow_mut().insert(key, e.clone());
+                let (e, clean) = self.const_eval_fresh(&key, t, bound)?;
+                if clean {
+                    self.cevals.borrow_mut().insert(memo_key, e.clone());
+                }
                 e
             }
         };
@@ -62,22 +66,22 @@ impl Ctx<'_> {
         Some(v)
     }
 
-    /// 实际求值；None = 超出深度 / 递归中（不记忆）
-    fn const_eval_fresh(&self, key: &str, t: &MemberRef, bound: Vec<Option<V>>) -> Option<CEval> {
-        let empty = || Some((None, Rc::from([].as_slice())));
+    /// 实际求值与是否可记忆（见 `memo.rs`）；None = 超出深度 / 递归中
+    fn const_eval_fresh(&self, key: &str, t: &MemberRef, bound: Vec<Option<V>>) -> Option<(CEval, bool)> {
+        let empty = || Some(((None, Rc::from([].as_slice())), true));
         let Some(cf) = self.h.class(&t.owner) else { return empty() };
         let Some(meth) = cf.method(&t.name, &t.desc) else { return empty() };
         let Some(code) = meth.code.as_ref().filter(|c| c.insns.len() <= MAX_INSNS) else { return empty() };
-        if self.ceval_depth.get() >= MAX_DEPTH || !self.in_progress.borrow_mut().insert(key.to_string()) {
+        if self.ceval_depth.get() >= MAX_DEPTH {
             return None;
         }
+        let frame = self.memo_enter(format!("ceval:{key}"), false)?;
         self.ceval_depth.set(self.ceval_depth.get() + 1);
         self.ceval_reads.borrow_mut().push(Vec::new());
         let live = |_: &str| true;
         let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![] });
         let reads: Rc<[MemberRef]> = self.ceval_reads.borrow_mut().pop().unwrap_or_default().into();
-        self.ceval_depth.set(self.ceval_depth.get() - 1);
-        self.in_progress.borrow_mut().remove(key);
+        let clean = self.memo_leave(frame);
         let mut r: Option<PV> = None;
         if !a.conservative {
             for (_, e) in &a.events {
@@ -90,7 +94,7 @@ impl Ctx<'_> {
             Some(PV::Const(v)) if exportable(&v) => Some(v),
             _ => None,
         };
-        Some((v, reads))
+        Some(((v, reads), clean))
     }
 
     /// 辅助分析（m = None）读字段：计入当前常量实参求值的读集

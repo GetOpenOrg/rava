@@ -51,6 +51,7 @@ mod diag;
 mod seeds;
 mod services;
 mod class_init;
+mod memo;
 mod mirror_eq;
 mod noreturn;
 mod class_lookup;

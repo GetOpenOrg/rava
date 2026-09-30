@@ -14,7 +14,7 @@ impl<'a> Engine<'a> {
                 domains: Default::default(),
                 calls: Default::default(),
                 fields: Default::default(),
-                in_progress: Default::default(),
+                guards: RefCell::new(memo::Guards::new()),
                 fvals: Default::default(),
                 rvals: Default::default(),
                 fopen: Default::default(),

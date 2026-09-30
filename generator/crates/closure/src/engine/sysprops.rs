@@ -158,13 +158,14 @@ impl Ctx<'_> {
         if let Some(s) = self.psums.borrow().get(t) {
             return s.clone();
         }
-        let guard = format!("psum:{t}");
-        if !t.desc.ends_with(';') || !self.in_progress.borrow_mut().insert(guard.clone()) {
+        if !t.desc.ends_with(';') {
             return None;
         }
+        let frame = self.memo_enter(format!("psum:{t}"), true)?;
         let s = self.compute_summary(t);
-        self.in_progress.borrow_mut().remove(&guard);
-        self.psums.borrow_mut().insert(t.clone(), s.clone());
+        if self.memo_leave(frame) {
+            self.psums.borrow_mut().insert(t.clone(), s.clone());
+        }
         s
     }
 

@@ -803,6 +803,23 @@ MH Direct 1079 / 6839 / 15924 → 1079 / **6824** / 15904；其余 6 例不变�
 求值深度 3 处计算，`parseBoolean(getProperty(…))` 被深度上限截断，`VAR_HANDLE_IDENTITY_ADAPT` 以「非常量」写入缓存；系统属性不稳定集增长清缓存后才在
 深度 0 重算为 false，其间 `maybeAdapt` 的调用边已加入。这是辅助分析记忆与计算上下文相关的既有缺陷（本规则改变处理次序而暴露），下一步单独修复。
 
+**辅助分析记忆与上下文无关（`engine/memo.rs`，修上条的顺序依赖）**。`<clinit>` 常量（`consts`）、构造器摘要（`objs`）、属性读取摘要（`psums`）、
+常量实参求值（`cevals`）按键记忆，但计算时受两种截断影响：递归保护（键已在进行中 → 未知）与常量实参求值深度上限 3。截断取决于外层正在算什么，
+截断后的答复被记下后就随处理次序变化。规则：
+- 四处记忆化计算统一为帧（`Guards`：进行中的键 → 层号）。递归保护命中键 K 时记下 K 所在帧的层号；一帧子树里的截断层都不低于本帧层号
+  （截断只来自本帧自身的递归）才写入记忆，否则答复只供本次使用。
+- 深度：`<clinit>` 常量 / 构造器摘要 / 属性读取摘要从深度 0 开始算（外层深度不影响），常量实参求值的记忆键带起始深度。
+  终止性不变：每层新帧都占用一个不同的进行中键。
+- 于是记忆里的每个答复都等于在空上下文中计算该键的答复。单测 `memo::tests::{cut_below_frame_blocks_memo, self_recursion_keeps_memo}`。
+实测：修前**所有顺序**下 `maybeAdapt` 都先按 `VAR_HANDLE_IDENTITY_ADAPT` 未知分析过（`MethodHandleStatics.<clinit>` 首次在深度 3 处计算，
+`parseBoolean(getProperty(…))` 被截断），`filterValue@23` 等调用边永久留下，终态折叠却报 8–74 死代码；64/12345 只是多走了一步 `filterCoordinates`。
+修后该字段从一开始即为 false（`MemberName.<init>` 的 `$assertionsDisabled` 同理由未知变为 true）。
+结果（类 / 方法 / 上下文，相对上一项）：DeepCopy 1625 / 10827 / 37757 → **1597 / 9817 / 33686**（−28 类 / −1010 方法：`VarHandles.filterValue` 起的
+VarHandle 适配一族、`VarHandleByteArrayAs*`、`IndirectVarHandle`、`NativeMethodHandle`、`InfoFromMemberName`、`UnsafeConstants`、`BitSet`、
+`PrimitiveIterator` / `Spliterators$*Adapter` 等，按包 `java/lang/invoke` 754、`jdk/internal/misc` 199），无增加；其余 8 例不变；9 例漏均为 0。
+DeepCopy 辅助分析次数 45635 → 53640（带截断的帧不记忆、重算），总耗时 13.6 s。
+顺序矩阵（`--flow-batch 1 / 64` × `--hash-seed 0 / 12345`）：DeepCopy、HelloWorld、CollectorsDemo、MH Combinators 类集与方法集四组一致。
+
 ## 七、验收
 
 - §一 终态表各项达标。
