@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态：⏳ 未开始。排期：闭包精度线手上的回归（DeepCopy / DES / Digester / TestFileAccessSpace 一组）修完后接手；与精度线同改 `closure` crate，**不并行**，由同一执行者串行推进或精度线收尾后交接。
+> 状态：P0 ✅（见 §四）；P1 / P2 进行中（`closure-perf` 分支）。原排期：排期：闭包精度线手上的回归（DeepCopy / DES / Digester / TestFileAccessSpace 一组）修完后接手；与精度线同改 `closure` crate，**不并行**，由同一执行者串行推进或精度线收尾后交接。
 
 ---
 
@@ -64,7 +64,33 @@
 
 ## 四、剖析结论
 
-（P0 完成后填写：热点函数、重分析分布、失效原因占比。）
+> 2026-09-30，`closure-perf` 分支（自 b3ccb0e9），release 二进制。观测字段在 closure.json `summary.perf`（不属于分析结果，`scripts/closure_bench.sh --diff` 对照时剔除）。
+> DeepCopy 两次均在主会话 e2e 批次并行时跑，内存压力下墙钟 454–652 s（计划 §一 无压力为 174 s），**绝对秒数偏大，比例可信**。
+
+### 4.1 分阶段耗时（ms，自耗时，`summary.perf.phases_ms`）
+
+| 用例 | 上下文 | 分析次数 | flows（类型流传播） | sites（调用点重跑） | process（事件应用） | analyze（absint） | setup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| HelloWorld | 882 | 1 681 | 2 | 2 | 62 | 61 | 44 |
+| CollectorsDemo | 20 380 | 38 651 | 1 159 | 844 | 981 | 1 053 | 163 |
+| Digester | 24 442 | 41 271 | 1 890 | 1 348 | 1 166 | 1 007 | 221 |
+| DeepCopy | 39 640 | 60 282 | 352 k–443 k | 68 k–151 k | 23 k–32 k | **1.6 k–3.6 k** | — |
+
+### 4.2 结论
+
+1. **§1.2 假设 1（整方法重分析是热点）被否定**：DeepCopy 抽象解释总计 < 1 % 墙钟；分析次数 60 282 / 上下文 39 640 = 1.5 倍，与 Digester（1.7 倍）同量级，没有级联放大。失效原因（Digester）：ret_const 6 728、never 4 060（其中 3 925 次事件不变）、sysprops 2 555（2 553 次不变）、param_const 1 482、field_put 1 137——多数重分析是「事件不变」的空转，但成本本身小。
+2. **§1.2 假设 2（`MemberRef` 字符串键）收益可忽略**：`sample` 采样中 MemberRef 哈希 / 克隆 < 1 % 样本。
+3. **超线性在类型流图**：DeepCopy 流边 24.66 M（Digester 2.17 M，11 倍），类型节点 25 万；`add_to` 调用 **7 804 761 719 次，其中仅 23 430 375 次（0.3 %）使目标增长**——99.7 % 是空传播。边种类分布：
+   - `E→W` 10.9 M、`W→E` 9.3 M（合计 82 %）：手写调用点数组写（`engine/hw_mem.rs::hw_site_arrays`）把每个逃逸值 E 与每个手写站点数组槽 W 两两相连，二部图全连接；单个 `W(site,1)` 入度 6 201；
+   - `O→S` 1.48 M、`E→S` 628 k、`S→O` 496 k、`S→HP` 403 k、`HR→S` 311 k；
+   - 入度 Top：`ObjectStreamClass$FieldReflector.getObjFieldValues` 的 S74（13 785）、`Esc`（7 041）；出度 Top：数组总节点、`SpinedBuffer.accept` P1 的多个上下文、LambdaForm `Name` 节点（各 5 458）。
+4. **sites 次之**：DeepCopy 调用点重跑 254 565 次（Digester 156 981），每次重跑按整个接收者值集重新枚举目标。
+5. `sample` 热点（DeepCopy）：`run` 内 drain 循环自耗时、`add_to`、`IdSet::minus / insert / union_with` 与 memmove、`sets.entry` 的 Node 哈希 / 比较、`flow_seen` 插入、`ClassPath::get` 与 resolve 层标准库 SipHash 表。
+
+### 4.3 对后续步骤的约束
+
+- **输出依赖处理顺序**：closure.json 的 `classes` / `methods` 按首次发现顺序（IndexMap 插入序）并带 `via`，上下文标签内嵌方法序号（`@10772:0`）。凡改变处理顺序的结构性改造（E↔W 改汇聚节点、调用图 SCC 逆拓扑序、失效合并批处理）都会改变 `via` / 顺序，与「逐字节一致」不变量冲突。P1 / P2 只做**保序**优化；结构性改造（E↔W 汇聚节点化、SCC 排序）需要把不变量放宽为「集合一致 + via 可变」，由决策方拍板后作为独立步骤。
+- 据此 P1 调整为「**图节点驻留**」（Node → 稠密 `u32`，`sets` / `fdelta` / `flows` 改 `Vec` 索引、`flow_seen` 紧凑键），MemberRef 驻留不做（无收益）；P2 调整为「空传播 / 空重跑削减」（保序）。
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 

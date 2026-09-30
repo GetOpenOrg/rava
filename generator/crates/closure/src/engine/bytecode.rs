@@ -18,7 +18,10 @@ impl<'a> Engine<'a> {
                 None
             }
             // 同一分析重处理（open 展开的 G 增长）：站点去重记录仍成立
-            Some(o) if Rc::ptr_eq(&o, &a) => None,
+            Some(o) if Rc::ptr_eq(&o, &a) => {
+                self.ctx.stats.borrow_mut().reprocess += 1;
+                None
+            }
             Some(o) => Some(o),
         };
         let Some(old) = old else {
@@ -199,7 +202,7 @@ impl<'a> Engine<'a> {
         }
         self.ctx.rvals.borrow_mut().insert(key.clone(), new);
         let deps = self.ctx.rdeps.borrow().get(&key).cloned();
-        self.invalidate_all(deps);
+        self.invalidate_all(deps, Why::RetConst);
     }
 
     pub(super) fn ldc(&mut self, m: usize, off: u32, c: &Const) {

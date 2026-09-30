@@ -11,6 +11,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn add_to(&mut self, n: Node, s: &TypeSet) {
         let direct = !std::mem::take(&mut self.via_flow);
+        self.ctx.stats.borrow_mut().adds += 1;
         if s.is_empty() {
             return;
         }
@@ -29,6 +30,11 @@ impl<'a> Engine<'a> {
             return;
         }
         cur.add_all(&delta);
+        {
+            let mut st = self.ctx.stats.borrow_mut();
+            st.adds_grew += 1;
+            st.added_elems += (delta.classes.len() + delta.open.len()) as u64;
+        }
         if direct && !delta.open.is_empty() {
             self.open_inj.entry(n).or_default().extend(delta.open.iter().copied());
         }

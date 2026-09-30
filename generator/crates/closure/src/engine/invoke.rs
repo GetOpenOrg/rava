@@ -403,7 +403,7 @@ impl<'a> Engine<'a> {
         }
         self.pvals.insert(t, new);
         if cur.is_some() {
-            self.invalidate(t);
+            self.invalidate(t, Why::ParamConst);
         }
     }
 }
