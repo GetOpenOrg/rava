@@ -6,7 +6,7 @@
 
 mod ctor;
 
-use ir::{Expr, PathSegment, Raw, Stmt, Type};
+use ir::{Expr, PathSegment, Stmt, Type};
 use sim::StackSim;
 use ty::{ClassInfo, RsType};
 
@@ -104,7 +104,7 @@ fn pop_args_text(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call: &
 fn emit_call_result(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, call_text: &str) -> InstrResult<()> {
     let rust_ret = env.ctx.ty.jvm_to_rust(&call.ret);
     if matches!(rust_ret, RsType::Unit) {
-        sim.emit(Stmt::Raw(Raw(format!("{call_text};"))));
+        sim.emit(Stmt::raw(format!("{call_text};")));
         return Ok(());
     }
     let v = sim.fresh("_t")?;
@@ -113,7 +113,7 @@ fn emit_call_result(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, call_tex
     } else {
         format!("let {v} = {call_text};")
     };
-    sim.emit(Stmt::Raw(Raw(stmt)));
+    sim.emit(Stmt::raw(stmt));
     sim.push(Expr::Var(v), rust_ret);
     Ok(())
 }

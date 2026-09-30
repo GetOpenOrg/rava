@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cfg::{Block, BreakLabel, Cond, FlowAnalysis, FlowNode, Item, NodeId, Terminal, Terminator};
 use classfile::{ExceptionEntry, Insn, Operand};
-use ir::{Expr, Raw};
+use ir::{Expr};
 use serde_json::{json, Value};
 
 pub type R<T> = Result<T, String>;
@@ -22,7 +22,7 @@ pub fn arr(v: &Value) -> R<&Vec<Value>> {
 }
 
 fn raw(v: &Value) -> R<Expr> {
-    Ok(Expr::Raw(Raw(v.as_str().ok_or_else(|| format!("非文本 {v}"))?.to_string())))
+    Ok(Expr::raw(v.as_str().ok_or_else(|| format!("非文本 {v}"))?.to_string()))
 }
 
 pub fn opcode_by_name(name: &str) -> R<u8> {
@@ -133,7 +133,7 @@ pub fn cond(v: &Value) -> R<Cond> {
 
 fn raw_text(e: &Expr) -> Value {
     match e {
-        Expr::Raw(r) => json!(r.0),
+        Expr::Raw(r) => json!(r.as_str()),
         other => json!(format!("<non-raw {other:?}>")),
     }
 }

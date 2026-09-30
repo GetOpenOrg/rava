@@ -234,7 +234,7 @@ impl TreeEmitter<'_> {
         let else_sig = significant(&it.else_);
         if then_sig.is_empty() && else_sig.is_empty() {
             // 两臂皆空：条件只为副作用求值
-            out.push(Entry::stmt(ind, Stmt::Raw(ir::Raw(format!("let _ = {};", render_cond(&it.cond))))));
+            out.push(Entry::stmt(ind, Stmt::raw(format!("let _ = {};", render_cond(&it.cond)))));
             return;
         }
         let (delta, tag) = if prefix.is_empty() { (1, Tag::Plain) } else { (0, Tag::Else) };

@@ -79,6 +79,7 @@ dependencies = [
  "closure",
  "emit",
  "input",
+ "ir",
  "mimalloc",
  "resolve",
  "serde_json",

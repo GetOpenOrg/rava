@@ -1,7 +1,7 @@
 //! 实参 / 接收者弹出（`_pop_receiver_and_args`）与特殊接收者早路径
 //! （`_try_early_receiver_paths` / `_emit_object_direct_call`）。
 
-use ir::{Expr, Raw};
+use ir::{Expr};
 use sim::StackSim;
 use ty::RsType;
 
@@ -64,7 +64,7 @@ fn close_constructed_receiver(env: &InstrEnv, site: &mut Site) {
     let erased = vec![O; args.len()].join(", ");
     site.obj_e = format!("{head}::<{erased}>::{rest}");
     site.obj_ty = RsType::class(binary.clone(), vec![RsType::Object; args.len()]);
-    site.obj_node = Expr::Raw(Raw(site.obj_e.clone()));
+    site.obj_node = Expr::raw(site.obj_e.clone());
 }
 
 /// 结果形态：void → `{call};`，否则 `let v: R = {call};` 入栈

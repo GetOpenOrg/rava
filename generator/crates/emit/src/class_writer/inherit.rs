@@ -2,7 +2,8 @@
 //! `_emit_interface_special_members` / `_adapt_interface_method`）。
 //!
 //! - **default 继承**：类实现接口而未覆盖其 default 方法时，把 default 方法体展开到本类
-//!   （`virtual_in` = 本类，VirtualDefine）；祖先类已实现的接口不重复注入（E0034）。
+//!   （`virtual_in` = 本类，VirtualDefine；祖先类已由别的接口 default 注入同一槽位时覆盖该祖先
+//!   槽位）；祖先类已实现的接口不重复注入（E0034）。
 //! - **`Iface.super.m()` / 接口私有方法**：invokespecial InterfaceMethod 的落点以非虚成员
 //!   `Iface_super_m` 展开到本类；展开出的方法体自身的同类调用递归处理。
 
@@ -16,7 +17,7 @@ use ty::type_map::mangle_name;
 use ty::ClassInfo;
 
 use super::attrs::MethodAttrExtra;
-use super::methods::{BodySpec, Cx, Emitted};
+use super::methods::{slot_extra, BodySpec, Cx, Emitted};
 use crate::body::MethodBodyEmitter;
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::error::{EmitError, Result};
@@ -151,7 +152,6 @@ pub(super) fn interface_default_inheritance<'c>(
             pending.push((ici, dm));
         }
     });
-    let own_short = ctx.short(ci.name());
     for (ici, dm) in pending {
         let mangle = cx.overloaded.contains(&dm.name)
             || used_rust.contains(&dm.name)
@@ -160,11 +160,13 @@ pub(super) fn interface_default_inheritance<'c>(
         used_rust.insert(rust.clone());
         let (adapted, view) = adapt_interface_method(ctx, ci, ici.name(), dm)?;
         let e = Emitted { method: Cow::Owned(adapted), owner: ici, index: method_index(ici, dm) };
-        let attr = cx.attr(&e, &MethodAttrExtra { virtual_in: own_short.clone(), ..Default::default() });
+        // 槽位归属：祖先类已经由（别的接口的）default 注入同一槽位时覆盖那一槽位（JVM 选最具体
+        // default 的结果须经祖先 vtable 派发）；否则本类新开槽位
+        let attr = cx.attr(&e, &slot_extra(cx, &e.method, &rust));
         let in_cc = chain_all(ctx, ci) || ctx.in_chain(ci.name(), &dm.name, &dm.desc) || ctx.in_chain(ici.name(), &dm.name, &dm.desc);
         let mut text = None;
         if in_cc {
-            let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: true, view: view.as_ref() };
+            let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: true, view: view.as_ref(), site: "iface-inherit" };
             text = cx.body_with(state, bodies, &e, &spec)?;
             if text.is_some() {
                 translated.push((ici, dm));
@@ -260,7 +262,7 @@ pub(super) fn interface_special_members<'c>(
             let attr = cx.attr(&e, &MethodAttrExtra::default());
             let mut text = None;
             if all || ctx.in_chain(owner.name(), &name, &desc) {
-                let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: false, view: view.as_ref() };
+                let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: false, view: view.as_ref(), site: "iface-special" };
                 text = cx.body_with(state, bodies, &e, &spec)?;
                 if text.is_some() {
                     sources.push_back((owner, Cow::Borrowed(sp_m)));

@@ -7,7 +7,7 @@
 
 use classfile::{Insn, Operand};
 use ir::anchors::OBJECT;
-use ir::{Expr, Ident, Raw, Stmt};
+use ir::{Expr, Ident, Stmt};
 use sim::exprs::{clone_ref, from_call, object_from};
 use sim::{StackEntry, StackSim};
 use ty::{consts, Prim, RsType};
@@ -166,7 +166,7 @@ fn multi_new_array(env: &InstrEnv, sim: &mut StackSim, ins: &Insn) -> InstrResul
         init = format!("{}::try_new_with({}, || {init})", turbofish(&levels[lv]), sizes[lv]);
     }
     let v = sim.fresh("_arr")?;
-    sim.emit(Stmt::Raw(Raw(format!("let mut {v}: {} = {init}?;", ty_text(env, &arr_t)))));
+    sim.emit(Stmt::raw(format!("let mut {v}: {} = {init}?;", ty_text(env, &arr_t))));
     sim.push(Expr::Var(v), arr_t);
     Ok(())
 }
@@ -227,7 +227,7 @@ fn narrow_store(env: &InstrEnv, sim: &mut StackSim, op: &str) -> InstrResult<()>
         };
         format!("{a}.set({i}, ({v}) as {t})?;")
     };
-    sim.emit(Stmt::Raw(Raw(code)));
+    sim.emit(Stmt::raw(code));
     Ok(())
 }
 
@@ -321,12 +321,12 @@ fn retype_fresh_array(env: &InstrEnv, sim: &mut StackSim, val: &Expr, elem: &RsT
                 };
                 new_array_let(env, id(&name)?, &inner, count)?
             }
-            Stmt::Raw(Raw(code)) if code.starts_with(&fresh_decl) => Stmt::Raw(Raw(format!(
+            Stmt::Raw(r) if r.as_str().starts_with(&fresh_decl) => Stmt::raw(format!(
                 "let mut {name}: {} = JArray::<{}>::try_new({}",
                 ty_text(env, elem),
                 ty_text(env, &inner),
-                &code[fresh_decl.len()..]
-            ))),
+                &r.as_str()[fresh_decl.len()..]
+            )),
             _ => continue,
         };
         sim.state.stmts[si] = replacement;

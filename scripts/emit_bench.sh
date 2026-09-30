@@ -18,11 +18,8 @@ OUT="${1:?用法: $0 <out_dir> [tests...]}"; shift
 TESTS="${*:-HelloWorld Digester DeepCopy CollectorsDemo TestCompletableFuture}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 HOME_J="$(/usr/libexec/java_home -v "$JDKV" 2>/dev/null || echo "${JAVA_HOME:?}")"
-IMAGES=$(python3 -c "
-import sys; sys.path.insert(0, '.')
-from codegen.jdk_resolver import JdkResolver
-print(' '.join('--image ' + d for d in JdkResolver(prefer_major=$JDKV).image_class_dirs()))")
-COMMON="--java-home $HOME_J --runtime $REPO/runtime/java_runtime $IMAGES --perf ${EMIT_ARGS:-}"
+# 镜像独有类 / VM 支持类目录由 rava 在未给 --image 时自行派生（resolve::image）
+COMMON="--java-home $HOME_J --runtime $REPO/runtime/java_runtime --perf ${EMIT_ARGS:-}"
 
 # /usr/bin/time -l 输出 → "墙钟 user sys RSS_MB 指令G 周期G"（指令数不受机器负载影响，作 A/B 主指标）
 tm() {

@@ -39,7 +39,7 @@
      （owner ≠ 发射类的记录分别为 0 / 25 / 235 条）。
    - 出处类为空时 `gen_method_body` 显式报 `MethodError::Runtime`，不按空 owner 继续生成。
 
-## 未移植分支（显式报错 `MethodError::Unported`）
+## 显式错误分支（原 `MethodError::Unported`，已删除，改报 `MethodError::Ir`）
 
 | 位置 | 触发条件 | 说明 |
 |---|---|---|

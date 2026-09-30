@@ -129,7 +129,7 @@ pub(super) fn emit(
         _ => (None, None),
     };
     let decl = LetStmt {
-        name: ir::Ident::new(name).map_err(|e| crate::error::MethodError::Unported(format!("变量名 {name}：{e:?}")))?,
+        name: ir::Ident::new(name).map_err(|e| crate::error::MethodError::Ir(format!("变量名 {name}：{e:?}")))?,
         ty: hoisted_type.clone(),
         mutable: true,
         value: None,

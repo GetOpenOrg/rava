@@ -31,9 +31,6 @@ pub struct BodyAudit {
     pub cfg: AuditStats,
 }
 
-/// 存根兜底的位点名：发射层不区分 Python 的九吞点（iface-lambda / main / clinit …），统一记为方法体
-const FALLBACK_SITE: &str = "body";
-
 impl BodyAudit {
     /// 按发射序重放方法体日志（同一方法的控制流审计只记首次、存根兜底按 (方法, 位点) 去重，
     /// 与逐次记账同序同值）
@@ -50,8 +47,8 @@ impl BodyAudit {
                         c.record(&mut audit.cfg);
                     }
                 }
-                BodyEvent::StubFallback { key, reason } => {
-                    audit.cfg.record_stub_fallback(key, reason, FALLBACK_SITE, "CfgError");
+                BodyEvent::StubFallback { key, reason, site } => {
+                    audit.cfg.record_stub_fallback(key, reason, site, "CfgError");
                 }
             }
         }
@@ -95,7 +92,11 @@ struct Hooks<'c, 'a> {
 impl InstrHooks for Hooks<'_, '_> {
     fn sam_ctor_path(&self, iface: &str, current_class: &str) -> Option<ir::Path> {
         let text = self.ctx.sam().site_ctor_path(self.ctx, iface, current_class)?;
-        let segs = text.split("::").map(|s| ir::Ident::new(s).ok().map(ir::PathSegment::new)).collect::<Option<Vec<_>>>()?;
+        let segs = text.split("::").map(|s| ir::Ident::new(s).ok().map(ir::PathSegment::new)).collect::<Option<Vec<_>>>();
+        let Some(segs) = segs else {
+            self.ctx.fallback.record("sam-ctor-path", || format!("{iface} @ {current_class}: {text}"));
+            return None;
+        };
         Some(ir::Path::new(segs))
     }
 }
@@ -124,7 +125,10 @@ fn local_vars(ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, index: Option<usize>) ->
         Some(view) => lvs
             .iter()
             .map(|lv| {
-                let signature = substitute_signature_type_vars(&lv.signature, view).unwrap_or_else(|| lv.signature.clone());
+                let signature = substitute_signature_type_vars(&lv.signature, view).unwrap_or_else(|| {
+                    ctx.fallback.record("lvt-substitute", || format!("{}.{}: {}", req.declaring_class, lv.name, lv.signature));
+                    lv.signature.clone()
+                });
                 LocalVar { signature, ..lv.clone() }
             })
             .collect(),
@@ -164,7 +168,7 @@ impl MethodBodyEmitter for MethodBodies {
             Ok(text) => Ok(BodyOutput { text, effects }),
             Err(MethodError::Cfg(msg)) if !self.strict => {
                 let text = format!("CfgError: {msg}");
-                log.events.push(BodyEvent::StubFallback { key, reason: text.clone() });
+                log.events.push(BodyEvent::StubFallback { key, reason: text.clone(), site: req.site });
                 Err(BodyError::Fallback(text))
             }
             Err(e) => Err(BodyError::Fatal(format!("{key}：{e}"))),

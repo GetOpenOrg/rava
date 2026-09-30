@@ -24,6 +24,7 @@ mod expr;
 mod ident;
 mod item;
 mod lit;
+pub mod raw_audit;
 pub mod render;
 mod stmt;
 mod ty;

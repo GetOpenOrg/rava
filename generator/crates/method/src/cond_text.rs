@@ -6,18 +6,19 @@
 use cfg::opcodes::{self as opc, is_two_operand_branch};
 use cfg::Cond;
 use classfile::insn::op;
-use ir::{Expr, Raw};
+use ir::{Expr};
 
 use crate::error::{cfg_err, MethodResult};
 
+#[track_caller]
 pub fn raw(text: impl Into<String>) -> Expr {
-    Expr::Raw(Raw(text.into()))
+    Expr::raw(text.into())
 }
 
 /// 原子文本（Raw 之外的形态按渲染器口径取文本不在此层出现）
 pub fn atom_text(e: &Expr) -> &str {
     match e {
-        Expr::Raw(r) => &r.0,
+        Expr::Raw(r) => r.as_str(),
         _ => "",
     }
 }
