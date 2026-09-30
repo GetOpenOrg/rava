@@ -5,7 +5,7 @@
 
 use super::parse::{parse_expr, parse_fn_path, parse_lit, parse_turbofish, parse_type};
 use ir::{
-    AssignStmt, BinOp, CastExpr, CastMode, Expr, Ident, LetStmt, Lit, Raw, Renderer, StaticFieldRef, Stmt,
+    AssignStmt, BinOp, CastExpr, CastMode, Expr, Ident, LetStmt, Lit, Renderer, StaticFieldRef, Stmt,
     Type, UpcastWrap, VarOrigin,
 };
 use serde_json::Value;
@@ -50,7 +50,7 @@ fn ident(t: &str) -> Res<Ident> {
 }
 
 fn raw(t: &str) -> Expr {
-    Expr::Raw(Raw(t.to_string()))
+    Expr::raw(t)
 }
 
 fn opt<'v>(v: &'v Value, k: &str) -> Option<&'v Value> {
@@ -227,7 +227,7 @@ impl Conv<'_> {
             "ReturnStmt" => Stmt::Return(opt(v, "value").map(|e| self.expr(e)).transpose()?),
             "BreakStmt" => Stmt::Break(None),
             "ContinueStmt" => Stmt::Continue(None),
-            "RawStmt" => Stmt::Raw(Raw(s(v, "code")?.to_string())),
+            "RawStmt" => Stmt::raw(s(v, "code")?),
             t => return Err(format!("未支持的语句节点 {t}")),
         })
     }

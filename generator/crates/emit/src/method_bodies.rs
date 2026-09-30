@@ -31,9 +31,6 @@ pub struct BodyAudit {
     pub cfg: AuditStats,
 }
 
-/// 存根兜底的位点名：发射层不区分 Python 的九吞点（iface-lambda / main / clinit …），统一记为方法体
-const FALLBACK_SITE: &str = "body";
-
 /// `method` crate 驱动的方法体生成器
 pub struct MethodBodies {
     facts: InstrFacts,
@@ -70,7 +67,11 @@ struct Hooks<'c, 'a> {
 impl InstrHooks for Hooks<'_, '_> {
     fn sam_ctor_path(&self, iface: &str, current_class: &str) -> Option<ir::Path> {
         let text = self.ctx.sam().site_ctor_path(self.ctx, iface, current_class)?;
-        let segs = text.split("::").map(|s| ir::Ident::new(s).ok().map(ir::PathSegment::new)).collect::<Option<Vec<_>>>()?;
+        let segs = text.split("::").map(|s| ir::Ident::new(s).ok().map(ir::PathSegment::new)).collect::<Option<Vec<_>>>();
+        let Some(segs) = segs else {
+            self.ctx.fallback.record("sam-ctor-path", || format!("{iface} @ {current_class}: {text}"));
+            return None;
+        };
         Some(ir::Path::new(segs))
     }
 }
@@ -99,7 +100,10 @@ fn local_vars(ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, index: Option<usize>) ->
         Some(view) => lvs
             .iter()
             .map(|lv| {
-                let signature = substitute_signature_type_vars(&lv.signature, view).unwrap_or_else(|| lv.signature.clone());
+                let signature = substitute_signature_type_vars(&lv.signature, view).unwrap_or_else(|| {
+                    ctx.fallback.record("lvt-substitute", || format!("{}.{}: {}", req.declaring_class, lv.name, lv.signature));
+                    lv.signature.clone()
+                });
                 LocalVar { signature, ..lv.clone() }
             })
             .collect(),
@@ -136,7 +140,7 @@ impl MethodBodyEmitter for MethodBodies {
             Ok(text) => Ok(BodyOutput { text, effects: effects_of(&sink) }),
             Err(MethodError::Cfg(msg)) if !self.strict => {
                 let text = format!("CfgError: {msg}");
-                self.audit.cfg.record_stub_fallback(&key, &text, FALLBACK_SITE, "CfgError");
+                self.audit.cfg.record_stub_fallback(&key, &text, req.site, "CfgError");
                 Err(BodyError::Fallback(text))
             }
             Err(e) => Err(BodyError::Fatal(format!("{key}：{e}"))),

@@ -18,7 +18,7 @@ mod type_switch;
 
 use classfile::{BootstrapMethod, Const, Insn, Operand};
 use input::manifest::IndyKind;
-use ir::{Expr, Raw, Stmt};
+use ir::{Expr, Stmt};
 use sim::StackSim;
 use type_switch::SwitchKind;
 
@@ -61,12 +61,14 @@ pub(super) fn wrapper_of(desc: &str) -> Option<&'static str> {
     }
 }
 
+#[track_caller]
 pub(super) fn raw_stmt(s: String) -> Stmt {
-    Stmt::Raw(Raw(s))
+    Stmt::raw(s)
 }
 
+#[track_caller]
 pub(super) fn raw(s: impl Into<String>) -> Expr {
-    Expr::Raw(Raw(s.into()))
+    Expr::raw(s.into())
 }
 
 /// monitorenter / monitorexit 的操作数 → 保持对象身份的 Object 表达式（`_monitor_operand`）：

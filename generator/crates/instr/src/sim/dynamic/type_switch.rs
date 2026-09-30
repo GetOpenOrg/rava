@@ -12,7 +12,7 @@
 use std::fmt::Write as _;
 
 use classfile::Const;
-use ir::{Expr, Raw};
+use ir::{Expr};
 use sim::StackSim;
 use ty::{Prim, RsType};
 
@@ -150,7 +150,7 @@ pub(super) fn gen_type_switch(env: &InstrEnv, sim: &mut StackSim, site: &IndySit
         }
     } else {
         let coerced = obj_text(env, &text(env, &sel.expr), &sel.ty);
-        sim.fresh_let("__ts_sel", Expr::Raw(Raw(coerced)), &RsType::Object)?
+        sim.fresh_let("__ts_sel", Expr::raw(coerced), &RsType::Object)?
     };
     let obj_s = text(env, &obj_expr);
     // null → -1；否则按标签序判定（`restart <= i` 守卫实现 restart 语义）；未命中 → 标签数。
@@ -168,7 +168,7 @@ pub(super) fn gen_type_switch(env: &InstrEnv, sim: &mut StackSim, site: &IndySit
     }
     let _ = write!(chain, "{{ {} }}", labels.len());
     let i32_t = RsType::Prim(Prim::I32);
-    let idx = sim.fresh_let("__ts_idx", Expr::Raw(Raw(chain)), &i32_t)?;
+    let idx = sim.fresh_let("__ts_idx", Expr::raw(chain), &i32_t)?;
     sim.push(idx, i32_t);
     Ok(())
 }

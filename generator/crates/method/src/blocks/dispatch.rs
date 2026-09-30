@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use cfg::{JumpKind, NodeId};
-use ir::{AssignStmt, Expr, Raw, Stmt, VarOrigin};
+use ir::{AssignStmt, Expr, Stmt, VarOrigin};
 use sim::{Local, StackEntry};
 
 use super::{Blocks, SimOutcome};
@@ -30,7 +30,7 @@ impl Blocks<'_, '_> {
                 let mut e = e.clone();
                 if succs.len() > 1 && !matches!(e.expr, Expr::Var(_)) {
                     let tmp = self.sim.fresh("_spill")?;
-                    extra.push(Stmt::Raw(Raw(format!("let {tmp} = {};", text::expr(self.env, &e.expr)))));
+                    extra.push(Stmt::raw(format!("let {tmp} = {};", text::expr(self.env, &e.expr))));
                     e.expr = Expr::Var(tmp);
                 }
                 values.push(e);
@@ -51,7 +51,7 @@ impl Blocks<'_, '_> {
                     return cfg_err(format!("状态机：pc={} 各前驱栈深不一致", self.nodes.node(s).start_pc));
                 }
                 for (var, v) in vars.iter().zip(&values) {
-                    extra.push(Stmt::Raw(Raw(format!("{} = {};", text::expr(self.env, &var.expr), arm_value(self.env, v)?))));
+                    extra.push(Stmt::raw(format!("{} = {};", text::expr(self.env, &var.expr), arm_value(self.env, v)?)));
                 }
             }
             self.nodes.node_mut(nid).stmts.extend(extra);

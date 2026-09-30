@@ -4,7 +4,7 @@
 //! 文本逐字一致；Python 已节点化的形态（`(a).wrapping_add(b)`、`(a as i64)`）以节点构造。
 
 use classfile::Insn;
-use ir::{Expr, Raw, Type};
+use ir::{Expr, Type};
 use sim::{StackEntry, StackSim};
 use ty::{Prim, RsType};
 
@@ -13,8 +13,9 @@ use crate::coerce::to_i32;
 use crate::env::InstrEnv;
 use crate::error::InstrResult;
 
+#[track_caller]
 fn raw(s: String) -> Expr {
-    Expr::Raw(Raw(s))
+    Expr::raw(s)
 }
 
 fn p(t: Prim) -> RsType {

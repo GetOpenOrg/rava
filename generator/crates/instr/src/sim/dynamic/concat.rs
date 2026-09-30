@@ -6,7 +6,7 @@
 //! `template` / `template_consts` 口径）。
 
 use classfile::Const;
-use ir::{Expr, Lit, Raw};
+use ir::{Expr, Lit};
 use sim::StackSim;
 use ty::RsType;
 
@@ -92,7 +92,7 @@ fn concat_arg(env: &InstrEnv, sim: &mut StackSim, e: sim::StackEntry, p: &str) -
 
 /// 拼接结果值（← Python 以 `Lit` 承载：参与 trivial / opaque-let 判定）
 fn concat_value(fmt: Option<String>, args: Vec<String>) -> Expr {
-    Expr::Lit(Lit::JStringConcat { fmt, args: args.into_iter().map(|a| Expr::Raw(Raw(a))).collect() })
+    Expr::Lit(Lit::JStringConcat { fmt, args: args.into_iter().map(|a| Expr::raw(a)).collect() })
 }
 
 /// 拼接调用点：弹出动态实参，按配方生成 `String::from_owned(format!(..))`

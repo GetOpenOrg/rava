@@ -33,7 +33,7 @@ impl Renderer<'_> {
                 out.push(';');
             }
             // Python 原样输出（不加缩进）
-            Item::Raw(r) => out.push_str(&r.0),
+            Item::Raw(r) => out.push_str(r.as_str()),
         }
     }
 

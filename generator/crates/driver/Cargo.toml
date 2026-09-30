@@ -13,5 +13,6 @@ resolve.workspace = true
 serde_json.workspace = true
 closure.workspace = true
 emit.workspace = true
+ir.workspace = true
 input.workspace = true
 ty.workspace = true

@@ -9,7 +9,7 @@
 //! 分量读取与 getfield 同一翻译（访问器命名、声明类型恢复都复用 [`crate::sim::fields::getfield`]）。
 
 use classfile::{Const, MemberRef};
-use ir::{Expr, Raw};
+use ir::{Expr};
 use sim::StackSim;
 use ty::{Prim, RsType};
 
@@ -141,11 +141,11 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, site: &Indy
                 (Expr::Var(v), RsType::Object) => v.as_str().to_string(),
                 (e, RsType::Object) => {
                     let t = text(env, e);
-                    text(env, &sim.fresh_let("__om_other", Expr::Raw(Raw(format!("Clone::clone(&{t})"))), &RsType::Object)?)
+                    text(env, &sim.fresh_let("__om_other", Expr::raw(format!("Clone::clone(&{t})")), &RsType::Object)?)
                 }
                 (e, t) => {
                     let o = obj_text(env, &text(env, e), t);
-                    text(env, &sim.fresh_let("__om_other", Expr::Raw(Raw(o)), &RsType::Object)?)
+                    text(env, &sim.fresh_let("__om_other", Expr::raw(o), &RsType::Object)?)
                 }
             };
             let r_ty = ty_text(env, &recv.ty);
@@ -171,7 +171,7 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, site: &Indy
                 block.push_str(&c);
             }
             let v = format!("{o_s}.is_instance_of(\"{cls}\") && {{ {block} {all} }}");
-            let e = sim.fresh_let("__om_eq", Expr::Raw(Raw(v)), &RsType::Prim(Prim::Bool))?;
+            let e = sim.fresh_let("__om_eq", Expr::raw(v), &RsType::Prim(Prim::Bool))?;
             sim.push(e, RsType::Prim(Prim::Bool));
             Ok(())
         }

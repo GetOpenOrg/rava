@@ -25,7 +25,7 @@ use classfile::extras::LocalVar;
 use classfile::{ExceptionEntry, Insn, Operand};
 use input::NInsn;
 use instr::{sim_instr, InstrEnv, InstrLog};
-use ir::{Expr, Ident, Raw, Stmt};
+use ir::{Expr, Ident, Stmt};
 use sim::{StackEntry, StackSim};
 use ty::RsType;
 
@@ -267,7 +267,7 @@ impl<'s, 'e> Blocks<'s, 'e> {
         } else if n.target == n.fallthrough {
             // 两臂同一目标：条件只为副作用求值
             let n = self.nodes.node_mut(nid);
-            n.stmts.push(Stmt::Raw(Raw(format!("let _ = {};", render_cond(&cond)))));
+            n.stmts.push(Stmt::raw(format!("let _ = {};", render_cond(&cond))));
             (n.kind, n.cond, n.fallthrough) = (Kind::Goto, None, None);
             n.pcs.clear();
             self.consume(&pcs, JumpKind::Structured);

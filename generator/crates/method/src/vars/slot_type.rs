@@ -4,7 +4,7 @@
 
 use ir::anchors::OBJECT;
 use ir::render::render_type;
-use ir::{Expr, LetStmt, Raw, Stmt, Type, UpcastWrap};
+use ir::{Expr, LetStmt, Stmt, Type, UpcastWrap};
 use ty::RsType;
 
 use super::{is_default_value, store_type, store_value, VarsCtx};
@@ -93,7 +93,7 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
             Stmt::Let(l) => retarget_let(l, convert.as_deref(), merged, |v, r| widen_value(cx, v, r, is_root)),
             Stmt::Assign(a) => {
                 if let Some(rendered) = convert {
-                    let v = std::mem::replace(&mut a.value, Expr::Raw(Raw(String::new())));
+                    let v = std::mem::replace(&mut a.value, Expr::Lit(ir::Lit::Unit));
                     a.value = widen_value(cx, v, &rendered, is_root);
                 }
                 a.origin.value_ty = Some(merged.clone());
@@ -121,7 +121,7 @@ fn retarget_let(l: &mut LetStmt, convert: Option<&str>, merged: &Type, widen: im
 fn widen_value(cx: &VarsCtx, v: Expr, rendered: &str, is_root: bool) -> Expr {
     if is_root {
         let rt = from_rust_text(cx.env, rendered).unwrap_or(RsType::Object);
-        Expr::Raw(Raw(to_object(cx.env, &text::expr(cx.env, &v), &rt, false)))
+        Expr::raw(to_object(cx.env, &text::expr(cx.env, &v), &rt, false))
     } else {
         Expr::Upcast { expr: Box::new(v), wrap: UpcastWrap::Auto }
     }
@@ -132,7 +132,7 @@ mod tests {
     use super::retarget_let;
     use crate::types::ir_type_of;
     use ir::anchors::OBJECT;
-    use ir::{Expr, Ident, LetStmt, Raw, VarOrigin};
+    use ir::{Expr, Ident, LetStmt, VarOrigin};
 
     fn let_of(ty: &str, value: &str) -> LetStmt {
         LetStmt {
@@ -163,9 +163,9 @@ mod tests {
         retarget_let(&mut l, Some("Foo"), &merged, |v, r| {
             assert_eq!(r, "Foo");
             assert_eq!(v, Expr::Var(Ident::new("_t2").unwrap()));
-            Expr::Raw(Raw("boxed".into()))
+            Expr::raw("boxed")
         });
-        assert_eq!(l.value, Some(Expr::Raw(Raw("boxed".into()))));
+        assert_eq!(l.value, Some(Expr::raw("boxed")));
         assert_eq!(l.ty, Some(merged));
     }
 }

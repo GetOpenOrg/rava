@@ -80,12 +80,17 @@ fn record_and_switch_bootstraps_translate() {
 }
 
 /// `--batch`：入口写 `user/src/bin/<bin>.rs`（`#[path]` 引用同级类文件），user/Cargo.toml 追加 `[[bin]]`；
-/// `--trace-class` 打印 provenance 链；`--debug` 时审计照常输出
+/// `--trace-class` 打印 provenance 链；`--debug` 时审计照常输出（Python 序八行）；`--raw-sites` 追加位点剖面
 #[test]
 fn batch_trace_and_debug() {
-    let Some((stdout, out)) =
-        build("RecordSwitch.java", "batch", &["--batch", "--debug", "--trace-class", "RecordSwitch$Point"])
-    else {
+    let sites = std::env::temp_dir().join(format!("rava-it-raw-sites-{}.tsv", std::process::id()));
+    let _ = std::fs::remove_file(&sites);
+    let sites_arg = sites.to_string_lossy().to_string();
+    let Some((stdout, out)) = build(
+        "RecordSwitch.java",
+        "batch",
+        &["--batch", "--debug", "--trace-class", "RecordSwitch$Point", "--raw-sites", &sites_arg],
+    ) else {
         return;
     };
     let bin = std::fs::read_to_string(out.join("user/src/bin/record_switch.rs")).expect("批量入口");
@@ -94,7 +99,29 @@ fn batch_trace_and_debug() {
     assert!(cargo.contains("[[bin]]\nname = \"record_switch\"\npath = \"src/bin/record_switch.rs\""), "[[bin]] 段：{cargo}");
     assert!(stdout.contains("      [why] RecordSwitch$Point"), "provenance 链：{stdout}");
     assert!(stdout.contains("[precheck] native-missing="), "预检行");
-    assert!(stdout.contains("[cfg-audit] ") && stdout.contains("[equiv-audit] "), "审计行");
+    let heads = ["[cfg-audit] ", "[readability-audit] ", "[equiv-audit] ", "[fallback-audit] ", "[shortname-audit] ", "[raw-audit] "];
+    let pos: Vec<usize> = heads.iter().map(|h| stdout.find(h).unwrap_or_else(|| panic!("缺审计行 {h}：{stdout}"))).collect();
+    assert!(pos.windows(2).all(|w| w[0] < w[1]), "审计行序：{pos:?}");
+    let rd = stdout.lines().find(|l| l.starts_with("[readability-audit] ")).unwrap();
+    let keys: Vec<&str> = rd["[readability-audit] ".len()..].split(' ').map(|kv| kv.split('=').next().unwrap()).collect();
+    assert_eq!(keys, ["from_any", "downcast", "downcast_ref", "rc_new", "borrow"], "{rd}");
+    let raw = stdout.lines().find(|l| l.starts_with("[raw-audit] ")).unwrap();
+    assert!(raw.starts_with("[raw-audit] raw_expr=") && raw.contains(" raw_stmt=") && raw.contains(" non_native_overrides="), "{raw}");
+    // 剖面行 `{n}\t{kind}\t{site}`，次数降序；总数与审计行一致
+    let prof = std::fs::read_to_string(&sites).unwrap_or_default();
+    let rows: Vec<(usize, &str)> = prof
+        .lines()
+        .map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            assert_eq!(f.len(), 3, "剖面行：{l}");
+            assert!(f[2].contains(".rs:"), "位点：{l}");
+            (f[0].parse().unwrap(), f[1])
+        })
+        .collect();
+    assert!(rows.windows(2).all(|w| w[0].0 >= w[1].0), "降序");
+    let total = |k: &str| rows.iter().filter(|r| r.1 == k).map(|r| r.0).sum::<usize>();
+    assert!(raw.contains(&format!("raw_expr={} raw_stmt={}", total("raw_expr"), total("raw_stmt"))), "{raw} vs 剖面");
+    std::fs::remove_file(&sites).ok();
     std::fs::remove_dir_all(&out).ok();
 }
 

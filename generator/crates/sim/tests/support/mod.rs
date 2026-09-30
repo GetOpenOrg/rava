@@ -3,7 +3,7 @@
 
 use crate::ir_golden::convert::Conv;
 use crate::ir_golden::parse::parse_expr;
-use ir::{Expr, Raw, Renderer, ShortNames, Stmt};
+use ir::{Expr, Renderer, ShortNames, Stmt};
 use serde_json::Value;
 use sim::{erased_base, exprs::is_trivial, type_text, Local, SimConfig, SimEnv, SimError, SimResult, SimState, SlotDecl, StackEntry};
 use std::cell::RefCell;
@@ -169,7 +169,7 @@ impl SimEnv for ReplayEnv<'_> {
         let out = self.lookup("box_object", &[&src, &t]).ok_or_else(|| SimError::Env(format!("box_object 未命中 {src}")))?;
         let text = out.as_str().ok_or_else(|| SimError::Env("box_object 返回非字符串".into()))?;
         let rd = Renderer::new(self.names);
-        Ok(parse_expr(text).filter(|e| rd.expr(e) == text).unwrap_or_else(|| Expr::Raw(Raw(text.to_string()))))
+        Ok(parse_expr(text).filter(|e| rd.expr(e) == text).unwrap_or_else(|| Expr::raw(text.to_string())))
     }
 
     fn infer_type_args(&self, ty: &RsType, declared_sig: &str) -> Option<Vec<RsType>> {

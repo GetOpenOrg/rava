@@ -3,7 +3,7 @@
 //! 同类 `this(..)` → `this = Self::__init_on(this, ..)?`。
 
 use classfile::Operand;
-use ir::{Expr, Path, Raw, Stmt};
+use ir::{Expr, Path, Stmt};
 use sim::StackSim;
 use ty::RsType;
 
@@ -18,8 +18,9 @@ use crate::invoke::CallRef;
 use crate::log::InstrLog;
 use crate::naming::mangle_if_overloaded;
 
+#[track_caller]
 fn raw_stmt(s: String) -> Stmt {
-    Stmt::Raw(Raw(s))
+    Stmt::raw(s)
 }
 
 /// javac 私有构造器访问桥（synthetic `<init>(.., X$1)`）→ 委托目标构造器：
@@ -211,7 +212,7 @@ fn strip_boxing(env: &InstrEnv, call: &CallRef, full_cls: &str, tparams: &[RsTyp
             continue;
         };
         if tparams.get(idx).is_some_and(|t| !matches!(t, RsType::Object) && !is_infer(t)) {
-            *node = Expr::Raw(Raw(arg[pfx.len()..arg.len() - 1].to_string()));
+            *node = Expr::raw(arg[pfx.len()..arg.len() - 1].to_string());
         }
     }
 }
@@ -225,7 +226,7 @@ fn new_object(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, targs: &CtorTa
         if matches!(rust_ty, RsType::Prim(_)) {
             // 自动装箱优化：原始包装类型直接用值，跳过构造器调用
             let v = nodes.first().map_or_else(|| "0".to_string(), |n| text(env, n));
-            (Expr::Raw(Raw(v)), rust_ty)
+            (Expr::raw(v), rust_ty)
         } else if !sim::types::is_object(&rust_ty) && !rust_ty.type_args().is_empty() {
             let tparams = ctor_tparams(env, sim, call, targs, full_cls, tys).unwrap_or_default();
             if !tparams.is_empty() {
@@ -254,7 +255,7 @@ fn new_object(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, targs: &CtorTa
     }
     let v = sim.fresh("_obj")?;
     let stmt = match &init {
-        Expr::Raw(Raw(s)) => raw_stmt(format!("let mut {v}: {} = {s};", crate::build::ty_text(env, &rust_ty))),
+        Expr::Raw(r) => raw_stmt(format!("let mut {v}: {} = {};", crate::build::ty_text(env, &rust_ty), r.as_str())),
         _ => let_mut(v.clone(), Some(ir_ty(env, &rust_ty)?), init),
     };
     sim.emit(stmt);

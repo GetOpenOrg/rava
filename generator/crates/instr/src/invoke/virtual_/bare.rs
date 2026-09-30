@@ -1,7 +1,7 @@
 //! bare Object 接收者的多态分派（`_dispatch_bare_object`）：接口经载体 / 根类方法经根
 //! vtable 单次直调 / 类虚方法经类 vtable 视图重建；均不命中时为精确存根。
 
-use ir::{Expr, Raw};
+use ir::{Expr};
 use sim::StackSim;
 use ty::RsType;
 
@@ -119,6 +119,6 @@ fn iface_dispatch(
 
 /// `_coerce_to_object(call_text, t)`（clone 缺省开启）的渲染文本
 pub(super) fn boxed_text(env: &InstrEnv, value: &str, t: &RsType) -> InstrResult<String> {
-    let e = coerce::to_object(env, Expr::Raw(Raw(value.to_string())), t, true)?;
+    let e = coerce::to_object(env, Expr::raw(value.to_string()), t, true)?;
     Ok(text(env, &e))
 }

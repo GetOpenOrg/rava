@@ -31,7 +31,7 @@ pub fn expr_names(env: &InstrEnv, e: &Expr, out: &mut BTreeSet<String>) {
         Expr::Var(v) => {
             out.insert(v.as_str().to_string());
         }
-        Expr::Raw(r) => scan(&r.0, out),
+        Expr::Raw(r) => scan(r.as_str(), out),
         // Python `Lit.value` 是渲染文本：去掉字符串字面量后扫描
         Expr::Lit(_) => scan_no_str(&text::expr(env, e), out),
         // Python 宏实参是原始文本
@@ -104,7 +104,7 @@ pub fn stmt_names(env: &InstrEnv, s: &Stmt, out: &mut BTreeSet<String>) {
         }
         Stmt::Expr(e) | Stmt::Return(Some(e)) => expr_names(env, e, out),
         Stmt::Return(None) | Stmt::Break(_) | Stmt::Continue(_) => {}
-        Stmt::Raw(r) => scan(&r.0, out),
+        Stmt::Raw(r) => scan(r.as_str(), out),
         Stmt::Loop(l) => stmts_names(env, &l.body, out),
         Stmt::While(w) => {
             expr_names(env, &w.cond, out);

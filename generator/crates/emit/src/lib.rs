@@ -25,6 +25,7 @@ pub mod class_writer;
 pub mod ctx;
 pub mod emission;
 pub mod error;
+pub mod fallback;
 pub mod imports;
 pub mod lang;
 pub mod method_bodies;

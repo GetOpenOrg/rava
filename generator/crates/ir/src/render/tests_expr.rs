@@ -1,7 +1,7 @@
 //! 表达式 / 转换渲染单测（← tests/unit/test_upcast_expr.py、test_try_expr.py 及补充形态）。
 
 use crate::{
-    BinOp, BlockExpr, CastExpr, CastMode, Expr, FnPath, IfExpr, Ident, Lit, Path, PathSegment, Raw,
+    BinOp, BlockExpr, CastExpr, CastMode, Expr, FnPath, IfExpr, Ident, Lit, Path, PathSegment,
     Renderer, ShortNames, StaticFieldRef, Type, UnOp, UpcastWrap,
 };
 
@@ -23,7 +23,7 @@ pub(super) fn var(s: &str) -> Expr {
 }
 
 fn raw(s: &str) -> Expr {
-    Expr::Raw(Raw(s.into()))
+    Expr::raw(s)
 }
 
 fn named(s: &str) -> Type {

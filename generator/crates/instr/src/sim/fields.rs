@@ -11,7 +11,7 @@ mod store;
 mod types;
 
 use classfile::{Insn, MemberRef, Operand};
-use ir::{Expr, Ident, Path, Raw, StaticFieldRef};
+use ir::{Expr, Ident, Path, StaticFieldRef};
 use sim::{StackEntry, StackSim};
 use ty::RsType;
 
@@ -77,7 +77,7 @@ fn value_node(env: &InstrEnv, val: Expr, val_str: String) -> Expr {
     if text(env, &val) == val_str {
         val
     } else {
-        Expr::Raw(Raw(val_str))
+        Expr::raw(val_str)
     }
 }
 

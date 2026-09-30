@@ -12,7 +12,7 @@ use std::process::Command;
 use classfile::MemberRef;
 use closure::handwritten::Handwritten;
 use closure::manifest::Manifest;
-use emit::audit::audit_lines;
+use emit::audit::{append_raw_sites, audit_lines, AuditInputs};
 use emit::ctx::{EmitCtx, EmitOptions};
 use emit::method_bodies::MethodBodies;
 use emit::precheck::{Precheck, DEFAULT_LIMIT};
@@ -189,10 +189,19 @@ fn emit_scratch(j: &EmitJob<'_>) -> Result<ProjectReport, String> {
         .build()
         .map_err(|e| format!("构建发射层输入：{e}"))?;
     let names = ShortNames::build(&inp.registry);
-    let opts =
-        EmitOptions { strict: j.o.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone(), batch: j.o.batch };
+    let opts = EmitOptions {
+        strict: j.o.strict,
+        jdk_major: jdk_major(j.home),
+        java_files: j.java_files.clone(),
+        batch: j.o.batch,
+        debug: j.o.debug,
+    };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
+    ir::raw_audit::reset();
+    if j.o.raw_sites.is_some() {
+        ir::raw_audit::enable_sites();
+    }
     let mut bodies = MethodBodies::new(&ctx);
     let r = write_project(&ctx, j.out, &mut bodies).map_err(|e| format!("发射：{e}"))?;
     let limit = if j.o.precheck_only { usize::MAX } else { DEFAULT_LIMIT };
@@ -200,9 +209,23 @@ fn emit_scratch(j: &EmitJob<'_>) -> Result<ProjectReport, String> {
         println!("{line}");
     }
     if !j.o.precheck_only {
-        for line in audit_lines(&bodies.audit, &r.hw_audit, j.o.debug) {
+        let crates: Vec<String> =
+            std::iter::once("java_runtime".to_string()).chain(j.libs.iter().map(|l| l.name.clone())).chain(["user".to_string()]).collect();
+        let a = AuditInputs {
+            body: &bodies.audit,
+            hw: &r.hw_audit,
+            fallback: &ctx.fallback,
+            out: j.out,
+            crates: &crates,
+            prelude_disambiguated: names.prelude_disambiguated(),
+            debug: j.o.debug,
+        };
+        for line in audit_lines(&a) {
             println!("{line}");
         }
+    }
+    if let Some(p) = &j.o.raw_sites {
+        append_raw_sites(p).map_err(|e| format!("{}：{e}", p.display()))?;
     }
     Ok(r)
 }

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use ir::{Expr, LetStmt, Raw, Stmt};
+use ir::{Expr, LetStmt, Stmt};
 use sim::StackSim;
 use ty::RsType;
 
@@ -162,11 +162,11 @@ fn call_node(env: &InstrEnv, cs: &CsCtx, rust_mname: &str, recv: &str, site: &Si
     let rn = if let Some(i) = is_ident.then(|| ir::Ident::new(recv).ok()).flatten() {
         Expr::Var(i)
     } else if is_ident {
-        Expr::Raw(Raw(recv.to_string()))
+        Expr::raw(recv.to_string())
     } else if text(env, &site.obj_node) == recv {
         site.obj_node.clone()
     } else {
-        Expr::Raw(Raw(recv.to_string()))
+        Expr::raw(recv.to_string())
     };
     Ok(Some(Expr::method(rn, id(rust_mname)?, site.arg_nodes.clone())))
 }

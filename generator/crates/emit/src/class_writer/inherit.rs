@@ -166,7 +166,7 @@ pub(super) fn interface_default_inheritance<'c>(
         let in_cc = chain_all(ctx, ci) || ctx.in_chain(ci.name(), &dm.name, &dm.desc) || ctx.in_chain(ici.name(), &dm.name, &dm.desc);
         let mut text = None;
         if in_cc {
-            let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: true, view: view.as_ref() };
+            let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: true, view: view.as_ref(), site: "iface-inherit" };
             text = cx.body_with(state, bodies, &e, &spec)?;
             if text.is_some() {
                 translated.push((ici, dm));
@@ -264,7 +264,7 @@ pub(super) fn interface_special_members<'c>(
             let attr = cx.attr(&e, &MethodAttrExtra::default());
             let mut text = None;
             if all || ctx.in_chain(owner.name(), &name, &desc) {
-                let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: false, view: view.as_ref() };
+                let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: false, view: view.as_ref(), site: "iface-special" };
                 text = cx.body_with(state, bodies, &e, &spec)?;
                 if text.is_some() {
                     sources.push_back((owner, Cow::Borrowed(sp_m)));

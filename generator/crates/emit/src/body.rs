@@ -28,6 +28,9 @@ pub struct BodyRequest<'a> {
     /// 显式 Rust 名（None：由方法体生成器按自身规则命名）
     pub rust_name: Option<&'a str>,
     pub in_vtable_body: bool,
+    /// 发射位点名（存根兜底审计的位点分解：`main` / `clinit` / `iface-default` / `iface-lambda` /
+    /// `iface-private` / `iface-inherit` / `iface-special` / `bridge` / `super-inherit`）
+    pub site: &'static str,
 }
 
 /// 方法体生成期间登记的事实

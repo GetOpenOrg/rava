@@ -3,7 +3,7 @@
 //! 沿用 Python 字符串管线的文本产出：各分支以 Raw 叶子承载已渲染的值，结果为存储表达式文本，
 //! 由调用方在「未经转换」时换回原节点（`_value_node`）。
 
-use ir::{CastExpr, Expr, Raw, UpcastWrap};
+use ir::{CastExpr, Expr, UpcastWrap};
 use ty::RsType;
 
 use crate::build::{ir_ty, text, ty_text};
@@ -22,8 +22,9 @@ pub struct StoreCtx<'a> {
     pub class_tps: &'a [String],
 }
 
+#[track_caller]
 fn leaf(s: &str) -> Expr {
-    Expr::Raw(Raw(s.to_string()))
+    Expr::raw(s.to_string())
 }
 
 /// 擦除数组还原（CastExpr 目标 `JArray<Object>`）赋给参数化 Vec 字段：转换目标重定向为字段类型

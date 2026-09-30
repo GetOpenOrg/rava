@@ -24,6 +24,8 @@ pub struct EmitOptions {
     pub java_files: Vec<PathBuf>,
     /// 批量模式：入口写 `user/src/bin/<bin>.rs`，向 user/Cargo.toml 追加 `[[bin]]`
     pub batch: bool,
+    /// 调试：审计逐条明细（存根兜底位点、静默兜底触发）
+    pub debug: bool,
 }
 
 /// 发射上下文：输入事实 + 类型层 + 清单（全部只读；缓存经内部可变性）
@@ -40,6 +42,8 @@ pub struct EmitCtx<'a> {
     pub macros_crate: PathBuf,
     pub seeds: SeedCfg,
     pub opts: EmitOptions,
+    /// 静默兜底审计（`[fallback-audit]`）
+    pub fallback: crate::fallback::FallbackAudit,
     extras: RefCell<HashMap<String, Rc<ClassExtras>>>,
     subtype_children: OnceCell<BTreeMap<String, Vec<String>>>,
     root_api: OnceCell<BTreeSet<String>>,
@@ -76,6 +80,7 @@ impl<'a> EmitCtx<'a> {
             runtime_dir,
             macros_crate,
             seeds: SeedCfg::from_toml(&table),
+            fallback: crate::fallback::FallbackAudit::new(opts.debug),
             opts,
             extras: RefCell::new(HashMap::new()),
             subtype_children: OnceCell::new(),
@@ -107,7 +112,14 @@ impl<'a> EmitCtx<'a> {
         if let Some(x) = self.extras.borrow().get(cls) {
             return x.clone();
         }
-        let x = Rc::new(self.cp.bytes(cls).and_then(|b| parse_extras(&b).ok()).unwrap_or_default());
+        let parsed = self.cp.bytes(cls).and_then(|b| match parse_extras(&b) {
+            Ok(x) => Some(x),
+            Err(e) => {
+                self.fallback.record("class-extras", || format!("{cls}: {e}"));
+                None
+            }
+        });
+        let x = Rc::new(parsed.unwrap_or_default());
         self.extras.borrow_mut().insert(cls.to_string(), x.clone());
         x
     }

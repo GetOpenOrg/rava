@@ -4,7 +4,7 @@
 
 use input::NInsn;
 use instr::{sim_instr, Effect, InstrCtx, InstrEnv, InstrError, InstrHooks, InstrLog};
-use ir::{Ident, Path, PathSegment, Raw, Renderer, Stmt};
+use ir::{Ident, Path, PathSegment, Renderer, Stmt};
 use serde_json::Value;
 use sim::{exprs::is_trivial, StackSim};
 use ty::TyCtx;
@@ -63,7 +63,7 @@ pub fn replay(env: &Env, rec: &Value, (ninsn, owner): &(NInsn, Option<String>)) 
     let cfg = config(&renv, &rec["cfg"], &[])?;
     let mut st = state(&renv, &mut conv, &rec["cfg"], &rec["pre"])?;
     let n_pre = rec["pre"]["n_stmts"].as_u64().ok_or("pre 缺 n_stmts")? as usize;
-    st.stmts = vec![Stmt::Raw(Raw(PLACEHOLDER.to_string())); n_pre];
+    st.stmts = vec![Stmt::raw(PLACEHOLDER.to_string()); n_pre];
     for l in rec["lets"].as_array().into_iter().flatten() {
         let i = l[0].as_u64().ok_or("lets 下标")? as usize;
         let s = conv.stmt(&l[1]["j"])?;
