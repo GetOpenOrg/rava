@@ -3,7 +3,7 @@
 //!
 //! JDK 中该接口由 `java/lang/System$JavaLangAccess`（System 的内部类）实现，
 //! `System.<clinit>` 经 `setJavaLangAccess()` 登记到 SharedSecrets。该内部类实现
-//! `jdk/internal/` 内部接口，属内部边界族 → 本文件整体手写（规则 3b）：只实现
+//! `jdk/internal/` 内部接口，属内部边界族 → 本文件整体手写（过渡类，docs/reference/handwritten-boundary.md §三）：只实现
 //! 调用链触达的 `newStringNoRepl`、`getEnumConstantsShared` 与 `join`，其余方法
 //! 走接口 vtable trait 的默认 `panic!("stub: ...")` 存根（生成侧
 //! java_lang_access.rs 自带）。

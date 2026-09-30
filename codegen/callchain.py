@@ -1537,7 +1537,7 @@ def _discover_jdk_classes_method_level(class_infos: list, runtime_src: str | Non
                         or _sdecl.is_native or _sdecl.is_abstract):
                     continue
                 # 门 1：类处于增量手写管理（impl 文件存在）才补译缺口；无 impl 文件的
-                # 边界类保持整体 panic 存根节奏（CLAUDE.md 3b 按需推进，未实现即
+                # 边界类保持整体 panic 存根节奏（手写边界规范 §一 按需推进，未实现即
                 # 如实存根）。无此门，补扫会把全部未覆盖边界静态边（JDK21 Stream
                 # 语料 ~90 条：ValueConversions/Modules/ZoneInfoFile 族）及其传递
                 # 引用整体展开——正是 4b776b6 记录的 stub 通道类型闭环重开。

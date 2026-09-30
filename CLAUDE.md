@@ -46,7 +46,6 @@ animal.speak();
 
 **能通过字节码翻译、codegen、或 proc-macro 宏实现的功能，禁止通过手写覆盖生成 Rust 文件解决。**
 
-- 手写代码只留 **VM 契约层**：① `ACC_NATIVE` 方法（`*_impl.rs`）；② VM 注入的状态与对象（类元数据表、反射对象构造等）；③ 运行模型替换（lambda / indy 引导、MethodHandle）。其余一律字节码翻译（同 GraalVM native-image 只对 VM 层 `@Substitute`；2026-09-29 用户确认，见 [`docs/plans/2026-09-29-boundary-narrowing.md`](docs/plans/2026-09-29-boundary-narrowing.md)）
 - 遇到编译错误，优先修复生成器逻辑或宏实现，而非给生成文件打补丁
 - 生成器 + 宏建好后，编译错误自然消解；先打补丁会造成技术债务积累
 
@@ -54,11 +53,19 @@ animal.speak();
 
 ---
 
-### 1. HelloWorld 必须运行在 JDK 字节码翻译出的 Rust 代码上
+### 1. 手写边界：方法的语义以它自己的字节码为准
 
-`System.out.println`、`String`、`ArrayList` 等的 Rust 实现必须来自对 JDK `.class` 文件的字节码翻译，**不得**来自手写 Rust 近似实现。
+> **只有字节码无法表达该语义时才手写——没有字节码，或依赖运行期生成与加载字节码，或由 VM 直接驱动。性能替换不算。**
 
-公开 API 类（`java/`、`javax/`）的手写只允许 `ACC_NATIVE` 方法；越界的手写覆盖由审计线计数（`[raw-audit] non_native_overrides`，2026-09-28 已清零，新增即回归）。
+- 判定单位是**方法**，不是类或包；`@IntrinsicCandidate` 之类的性能内建照样翻译字节码
+- 准入三类：① `ACC_NATIVE`；② 运行模型替换（lambda / indy 引导、LambdaForm 编译、动态代理等运行期类定义点）；③ VM 注入的状态与 VM 驱动行为的落地语义（GC 引用处理、JVMTI、栈遍历等）
+- 规模策略截断（`[boundary]` 前缀、`whole_class`、因截断补的手写）是**过渡类**：单独计数，终态为 0，不作为新增手写的理由
+- 终态下 Java 类的 struct 一律由字节码生成；VM 注入的隐藏字段由清单声明、生成器追加
+- 每个非 native 手写方法在清单登记类别，raw-audit 按类计数（`non_native_overrides` 2026-09-28 已清零，新增即回归）
+- `System.out.println`、`String`、`ArrayList` 等的 Rust 实现必须来自 JDK `.class` 字节码翻译，不得手写近似实现
+
+完整规范（类别细则、struct 归属、文件布局、登记与审计、过渡期现状）：**[`docs/reference/handwritten-boundary.md`](docs/reference/handwritten-boundary.md)**。
+收窄的实测与实施：[`docs/plans/2026-09-29-boundary-narrowing.md`](docs/plans/2026-09-29-boundary-narrowing.md)。
 
 ### 2. 只分析调用链上的方法内部依赖
 
@@ -68,85 +75,18 @@ D()  ← 不在调用链上，panic!("stub: ...") 存根，其依赖的类不被
 ```
 
 - 不在调用链上的方法 → 生成 `panic!("stub: ClassName.method:descriptor")` 存根，不分析其内部引用的类
-- 在调用链上有字节码的方法（公开 API 类）→ 翻译字节码
-- 在调用链上的 `ACC_NATIVE` 方法（公开 API 类）→ 在同目录的 `<classname>_impl.rs` 中手写
-- 调用链进入内部包（`jdk/internal/`、`sun/`）→ 停止 BFS，该类视为内部边界类，整体手写（见规则 3b）
+- 在调用链上有字节码的方法 → 翻译字节码；满足手写准入的方法 → 共置手写
+- 过渡期：调用链进入 `closure.toml [boundary]` 前缀的类停止展开（见规范 §七）
 
-不在调用链上的方法生成 `panic!("stub: ClassName.method:descriptor")` 存根，**不用 `todo!()`**。原因：运行时命中存根时，panic 消息精确报出类名+方法名+描述符，方便定位哪条规则或翻译路径没有覆盖到。
+存根**不用 `todo!()`**：运行时命中存根时，panic 消息精确报出类名+方法名+描述符，方便定位哪条规则或翻译路径没有覆盖到。
 
 **禁止以"保证编译通过"为由**将不在调用链上的类加入生成范围。
 
-### 3. 手写实现与生成代码共置，按需增量实现
+### 3. 手写与生成代码共置，清单即边界
 
-**手写代码与生成代码放在同一目录层次下，不存在独立的 `native_impls/` 目录。**
-
-手写文件分两类，处理方式不同：
-
-#### 3a. 公开 API 类的 native 方法（与生成文件共置）
-
-公开 API 类（`java/`、`javax/`）的 `ACC_NATIVE` 方法，以 `<classname>_impl.rs` 的形式与生成的 `<classname>.rs` 并列存放。Struct 定义由 codegen 从字节码生成，`_impl.rs` 只添加方法 `impl` 块：
-
-```
-output/src/java/lang/
-├── string.rs          ← codegen 生成（struct + 字节码翻译方法）
-├── string_impl.rs     ← 手写（native 方法 impl，co-located）
-└── mod.rs             ← codegen 生成，同时 pub mod string; mod string_impl;
-```
-
-`string_impl.rs` 中直接写 `impl String { ... }`，无需任何注解或注入机制，由 `mod.rs` 自然包含。
-
-**禁止使用 `/// @field name: Type` 注释注入机制**，也禁止 `#[path = "..."] mod _impl;` 的远程引用方式。
-
-#### 3b. 内部边界类（完整手写，BFS 在此截断）
-
-> **终态**：内部包前缀截断由 C1d「边界收窄」取消，`[boundary]` 收窄为逐类的 VM 契约清单，按方法划分（见下表 `[vm_boundary]` 行与 [`2026-09-29-boundary-narrowing.md`](docs/plans/2026-09-29-boundary-narrowing.md)）。本节描述的是 C1d 完成前清单中前缀条目的处理方式。
-
-当调用链从公开 API 进入 `jdk/internal/` 或 `sun/` 包时，**停止 BFS 展开**，该类视为「内部边界类」：
-
-- **struct 和全部方法由手写文件完整定义**，codegen 不生成任何 struct
-- 手写文件放在与公开 API 一致的对应目录层次下
-- 因为手写文件完全拥有 struct 定义，字段可自由声明，无需 `@field` 注入
-
-```
-output/src/jdk/internal/misc/
-├── internal_lock.rs   ← 手写（完整 struct + 被调用的方法）
-├── unsafe.rs          ← 手写（完整 struct + ACC_NATIVE 方法实现）
-└── mod.rs             ← codegen 或手写，pub use 两个类
-```
-
-**内部边界类的实现节奏：按调用链按需推进，不一次性全量手写。**  
-当前调用链用到哪些方法，就实现哪些；其余保持 `panic!("stub: ...")` 存根。随着测试覆盖扩大，逐步补全。
-
-```rust
-// internal_lock.rs 示例：只实现当前被调用的 lock/unlock
-pub struct InternalLock {
-    _mutex: MutexHolder,    // 自有字段，无需注入
-}
-impl InternalLock {
-    pub fn lock(&self) -> Result<()> { ... }    // 已实现
-    pub fn unlock(&self) -> Result<()> { ... }  // 已实现
-    pub fn tryLock(&self) -> Result<bool> {     // 当前未被调用
-        panic!("stub: jdk/internal/misc/InternalLock.tryLock:()Z")
-    }
-}
-```
-
-#### 内部包边界截断规则
-
-BFS 调用链分析规则：
-
-| 调用目标 | 处理方式 |
-|--------------|---------|
-| `java/`、`javax/`（公开 API） | 继续 BFS，翻译字节码 |
-| `closure.toml [boundary]` 内部包前缀（`jdk/`、`sun/`、`com/sun/` 等） | 停止 BFS，视为内部边界类，整体手写 |
-| `closure.toml [vm_boundary]`（公开包中由 VM 本地代码驱动的类，如 `Class`、`ClassLoader`、`Module`） | **按方法划分**：native / VM 内建 / 共置手写体按精确名提供的方法取手写（单独计数 `vm_boundary_methods`），其余被调用到的方法按字节码翻译（运行时执行的就是其字节码；闭包分析同口径建模），`<clinit>` 不翻译；`whole_class` 子清单（规模驱动的策略截断，如 `InetAddress`）在 Python 生成器中仍整类截断 |
-| `closure.toml [release]` / `seeds.toml [jca]` 放行条目 | 边界前缀内按字节码翻译（纯 Java 逻辑的内部类） |
-
-**清单即边界**：边界、放行、补种、VM 承载全部集中在 `runtime/java_runtime/` 下三个 TOML
-（`closure.toml` / `seeds.toml` / `vm_intrinsics.toml`，读取入口 `codegen/runtime_manifest.py`），
-生成器代码里不写类名特判。
-
-**截断的意义**：报告数据（`docs/reports/2026-09-14-impl-strategy.md`）显示，跟随内部包调用链会使类数从 111 膨胀到 635（+470%）。边界截断将翻译规模压缩 83%，是策略性收益而非渐进优化。该数据是 Python BFS 过近似口径；精确闭包分析（`rava closure`）落地后按包重测，增量小的包放行为字节码翻译（C1d）。
+- 手写与生成放在同一目录层次，不存在独立的 `native_impls/` 目录：类 `X` 的手写方法放 `<x>_impl.rs`，与生成的 `<x>.rs` 并列，只写 `impl X { ... }`，由生成的 `mod.rs` 包含
+- **禁止** `/// @field name: Type` 注释注入与 `#[path = "..."] mod _impl;` 远程引用
+- 边界、放行、补种、VM 承载、手写登记全部集中在 `runtime/java_runtime/` 下的 TOML 清单（`closure.toml` / `seeds.toml` / `vm_intrinsics.toml`），生成器代码里不写类名特判
 
 ### 4. Python 代码中不得出现任何 JDK 类名常量
 

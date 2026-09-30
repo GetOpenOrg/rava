@@ -198,7 +198,7 @@ class NativeUpcalls:
     def has_impls(self, cls: str) -> bool:
         """类是否有共置手写文件（含至少一个 `pub fn`）。
 
-        「按需推进手写」的边界类（CLAUDE.md 3b）：impl 文件存在 = 该类处于
+        「按需推进手写」的边界类（docs/reference/handwritten-boundary.md §一）：impl 文件存在 = 该类处于
         增量手写管理中，语料版本演化（如 JDK25 新方法）造成的成员缺口由
         生成器按调用边补译；impl 文件不存在 = 该类仍处整体 panic 存根节奏
         （未实现即如实存根），不因补扫提前展开。

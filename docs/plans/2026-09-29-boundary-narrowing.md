@@ -1,6 +1,6 @@
 # C1d 边界收窄：手写只留 VM 契约层
 
-> 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 0 / 3b、
+> 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
 > 状态：🔄 第 1 步完成（`--release` 实测，§六）；第 2 步分类见 §6.4，删除候选待用户逐项确认。
 
@@ -18,13 +18,9 @@
 | 全量 e2e（JDK 21 + 25） | 现行通过集 | 不减少 |
 | 验收集闭包规模（C1c 7 例） | C1c 终值 | 每例增量逐包记录；translate∩code ≤ 运行时下限 × 1.3（C1c 验收口径） |
 
-VM 契约层的定义（与 GraalVM native-image 只对 VM 层做 `@Substitute` 同思路）：
-
-1. `ACC_NATIVE` 方法：`Unsafe`、`Class` 元数据、`Thread` / monitor、文件与系统调用；
-2. VM 注入的状态与对象：类元数据表、反射对象构造（`getRecordComponents0` 等），以及 VM 直接写入的字段；
-3. 运行模型替换：lambda / indy 引导、MethodHandle / LambdaForm，rava 用自有模型替代 JVM 实现。
-
-不属于以上三类的手写代码，都是在复刻本可翻译的 Java 逻辑。
+VM 契约层的定义与准入类别见 [手写边界规范](../reference/handwritten-boundary.md) §一–§二（原则：方法的语义以它自己的
+字节码为准；只有字节码无法表达时才手写，性能替换不算）。本阶段处理的是规范 §三 的**过渡类**（规模策略截断），
+终态计数 0。
 
 ## 二、现状
 
@@ -77,6 +73,8 @@ VM 契约层的定义（与 GraalVM native-image 只对 VM 层做 `@Substitute` 
 
 `rava closure` 增加 `--release <前缀>`（可多次）：分析期把该前缀视同 `[release]` 放行（Domain::Translate），
 不改清单文件。同一前缀下仍有手写提供的成员按 `provides` 取手写（与翻译类的共置手写同一规则）。
+另需「忽略前缀内 provides」模式，模拟手写删除后的闭包：删除候选落地前以此实测真实增量（如 `sun/nio/cs` 的
+`StandardCharsets` 查找链），§六 中依赖 provides 的结论以该模式复测为准。
 
 每个前缀在验收集（C1c 7 例 + FileIOTest）上各跑一次，记录：
 
@@ -104,6 +102,9 @@ MethodHandle / LambdaForm 相关。预期放行候选：`sun/nio/cs`、`sun/util
 - `[boundary].packages` 前缀截断整体取消，改为 `[vm_contract].classes`：逐类列出的 VM 契约类（含嵌套类）。
   与现 `[vm_boundary]` 合并为同一语义：**按方法划分**（native / VM 内建 / 手写提供 → 手写，其余字节码）。
 - `[release]` 放行清单随之删除（不再有前缀截断需要例外）。
+- `whole_class` 删除；其中 `InvokerBytecodeGenerator` 的生成入口已按方法登记为运行模型替换（规范类 2），其余成员按字节码翻译。
+- 每个非 native 手写方法登记类别（运行模型 / VM 行为 / 策略截断），raw-audit 按类计数（规范 §六）。
+- 内部边界类的 struct 改由字节码生成，VM 注入的隐藏字段由清单声明、生成器追加（规范 §四）。
 - 生成器代码仍不出现类名（原则 4），全部边界知识只在清单里。
 
 ### 4.5 发射层与手写层
@@ -119,7 +120,7 @@ MethodHandle / LambdaForm 相关。预期放行候选：`sun/nio/cs`、`sun/util
 2. 按 §4.3 给出每个包的结论与删除候选清单，提交用户逐项确认。
 3. 逐包实施（按增量从小到大）：清单改动 → 删除确认过的手写 → 补 native → 全量 e2e（JDK 21 + 25）→ 提交。
 4. 所有包处理完后：`[boundary].packages` 删除、`[release]` 删除，清单改为 `[vm_contract]`；
-   `CLAUDE.md` 原则 3b 与「内部包边界截断规则」表同步改写为按方法划分的 VM 契约语义。
+   手写边界规范 §七 过渡表收敛为终态（CLAUDE.md 原则 1 已于 2026-09-30 改写为按方法划分的准入原则）。
 
 ## 六、实测数据
 
@@ -206,7 +207,7 @@ ChineseRemainderTheorem / TestStreamBasic / TestRecordComponents / CollectorsDem
 | 结论 | 前缀 | 依据 |
 |---|---|---|
 | 放行 | `jdk/internal/access/`、`jdk/internal/math/`、`sun/security/action/`、`jdk/internal/module/`、`jdk/internal/perf/`、`sun/invoke/util/`、`sun/security/util/`、`sun/text/` | 增量 ≤ 预算；穿透目标在同批（`sun/invoke/util` → `jdk/internal/math`）或为 VM 契约接口 |
-| 放行（附条件） | `sun/nio/cs/` | +27 ≤ 36；穿透 `jdk/internal/access`（同批放行）、`jdk/internal/misc/ScopedMemoryAccess` / `jdk/internal/foreign/MemorySessionImpl`（VM 契约）；`StreamDecoder` 的 Charset 直连解码需用户判定是否属运行模型替换 |
+| 放行（附条件） | `sun/nio/cs/` | +27 ≤ 36；穿透 `jdk/internal/access`（同批放行）、`jdk/internal/misc/ScopedMemoryAccess` / `jdk/internal/foreign/MemorySessionImpl`（VM 契约）；`StreamDecoder` / `StreamEncoder` 属过渡类（规范 §三），删除前以「忽略 provides」模式复测 `StandardCharsets` 查找链增量 |
 | 部分放行 | `jdk/internal/misc/` | 负增量；VM 契约类逐类列清单：`Unsafe`、`VM`、`CDS`、`ScopedMemoryAccess`、`PreviewFeatures`（放行后触达的 26 个 native 全部落在这 5 类），其余按字节码 |
 | 部分放行 | `jdk/internal/vm/` | +31 > 12；`Continuation` / `ContinuationSupport` 承载 native（虚拟线程，VM 契约），其余类待 G1–G3 修正后重测 |
 | 待重测（分析器先修） | `sun/reflect/generics/`、`java/security/`、`jdk/internal/loader/`、`jdk/internal/util/`、`jdk/internal/ref/`、`sun/util/`（含 `locale`、`locale/provider`、`logging`）、`jdk/internal/icu/`、`jdk/internal/org/objectweb/asm/` | 超预算，主因 G1–G3；按 §八「精确分析的问题先修分析器」处理，不据此保留截断 |
@@ -221,7 +222,9 @@ ChineseRemainderTheorem / TestStreamBasic / TestRecordComponents / CollectorsDem
    `valueOf` / `equals` 按调用点）、G3 `[facts]` 增加 native 返回数组元素类型（`Class.getEnclosingMethod0` 等）；
    修正后对「待重测」行复测。
 2. 「无数据」行在全量 e2e 语料上重测（`rava closure --release` 批量）。
-3. 放行行的删除候选经用户逐项确认后，按 §五 第 3 步逐包实施并复测漏覆盖。
+3. `--release` 增加「忽略前缀内 provides」模式，复测放行行与 `sun/nio/cs`（§4.2）。
+4. 放行行的删除候选经用户逐项确认后，按 §五 第 3 步逐包实施并复测漏覆盖。`StreamDecoder` / `StreamEncoder`
+   属过渡类（规范 §三），终态删除，随 `sun/nio/cs` 放行一起走。
 
 ## 七、验收
 

@@ -4,7 +4,7 @@
 //! JDK 中该接口由 `java/util/ImmutableCollections` 的 `<clinit>` 以匿名类实例
 //! 登记到 `SharedSecrets.setJavaUtilCollectionAccess`，两个方法各自转发
 //! `ImmutableCollections` 的同名静态。匿名类实现 `jdk/internal/` 内部接口，
-//! 属内部边界族 → 整体手写（规则 3b）：转发目标静态由
+//! 属内部边界族 → 整体手写（过渡类，docs/reference/handwritten-boundary.md §三）：转发目标静态由
 //! `shared_secrets_impl.rs::getJavaUtilCollectionAccess` 的 upcalls 声明拉入
 //! 闭包（BFS 触达即翻译，签名引用保证任意闭包形态可编译）。
 
