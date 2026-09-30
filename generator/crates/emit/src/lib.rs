@@ -32,6 +32,7 @@ pub mod perf;
 pub mod phase2;
 pub mod project;
 pub mod sam;
+pub mod scan;
 pub mod text;
 pub mod vtable;
 

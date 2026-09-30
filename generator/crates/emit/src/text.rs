@@ -202,7 +202,8 @@ pub fn indent(text: &str, pad: &str) -> String {
 
 /// 源文本中的 `pub fn` 名（`\bpub fn\s+(\w+)\s*[(<]`）
 pub fn pub_fn_names(text: &str) -> Vec<String> {
-    let re = regex::Regex::new(r"\bpub fn\s+(\w+)\s*[(<]").expect("静态正则");
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"\bpub fn\s+(\w+)\s*[(<]").expect("静态正则"));
     re.captures_iter(text).map(|c| c[1].to_string()).collect()
 }
 

@@ -88,6 +88,7 @@ dependencies = [
  "ir",
  "method",
  "regex",
+ "regex-syntax",
  "resolve",
  "serde_json",
  "toml",
