@@ -80,16 +80,17 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                         }
                         // 部件路径 B（祖先视图值）：运行时 inner 就是本类 inner（如
                         // `Enum<E>::from(枚举常量)` 装箱后按子类取回）→ 按精确 inner 还原
-                        if let ::std::option::Option::Some(__rc) =
-                            __any.downcast::<#inner_ident>().ok()
-                        {
-                            return #struct_ident {
-                                vtable: __Shared::clone(&__rc)
-                                    as __Shared<dyn #vtable_trait_ident>,
-                                any: __rc as __AnyRef,
-                                _jvm_null: false,
-                                #phantom_init
-                            };
+                        match __any.downcast::<#inner_ident>() {
+                            ::std::result::Result::Ok(__rc) => {
+                                return #struct_ident {
+                                    vtable: __Shared::clone(&__rc)
+                                        as __Shared<dyn #vtable_trait_ident>,
+                                    any: __rc as __AnyRef,
+                                    _jvm_null: false,
+                                    #phantom_init
+                                };
+                            }
+                            ::std::result::Result::Err(__other) => ::std::mem::drop(__other),
                         }
                     }
                 }
