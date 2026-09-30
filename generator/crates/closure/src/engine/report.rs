@@ -73,9 +73,9 @@ impl<'a> Engine<'a> {
         let mut v: Vec<String> = if s.classes.len() > 6 {
             vec![format!("{} 个类", s.classes.len())]
         } else {
-            s.classes.iter().map(|i| self.names[*i as usize].to_string()).collect()
+            s.classes.iter().map(|i| self.names[i as usize].to_string()).collect()
         };
-        v.extend(s.open.iter().map(|i| format!("open({})", self.names[*i as usize])));
+        v.extend(s.open.iter().map(|i| format!("open({})", self.names[i as usize])));
         v.join(", ")
     }
 
@@ -119,15 +119,15 @@ impl<'a> Engine<'a> {
         }
         let mut out = Vec::new();
         if let Some(q) = pat.strip_prefix("elem:") {
-            let mut es: Vec<Node> = self.sets.keys().filter(|n| matches!(n, Node::E(x, _) if self.names[*x as usize].contains(q))).copied().collect();
+            let mut es: Vec<Node> = self.graph.keys().filter(|n| matches!(n, Node::E(x, _) if self.names[*x as usize].contains(q))).copied().collect();
             es.sort_by_key(|n| format!("{n:?}"));
             for n in es {
-                let s = self.sets.get(&n).cloned().unwrap_or_default();
+                let s = self.graph.get(&n).cloned().unwrap_or_default();
                 out.push(format!("  {} = {{{}}}", self.node_str(n), self.set_str(&s)));
-                for (src, edges) in &self.flows {
+                for (src, edges) in &self.graph.flow_list() {
                     for (dst, f) in edges {
                         if *dst == n {
-                            let s = self.sets.get(src).cloned().unwrap_or_default();
+                            let s = self.graph.get(src).cloned().unwrap_or_default();
                             out.push(format!("    ← {} [{}] {{{}}}", self.node_str(*src), self.names[*f as usize], self.set_str(&s)));
                         }
                     }
@@ -142,14 +142,14 @@ impl<'a> Engine<'a> {
                 None => (false, cls),
             };
             let Some(&cid) = self.ids.get(cls) else { return vec![format!("无此类：{cls}")] };
-            let has = |x: &Node| self.sets.get(x).is_some_and(|s| if open { s.open.contains(&cid) } else { s.classes.contains(&cid) });
+            let has = |x: &Node| self.graph.get(x).is_some_and(|s| if open { s.open.contains(&cid) } else { s.classes.contains(&cid) });
             let mut rev: HashMap<Node, Vec<Node>> = HashMap::default();
-            for (src, edges) in &self.flows {
+            for (src, edges) in &self.graph.flow_list() {
                 for (dst, _) in edges {
                     rev.entry(*dst).or_default().push(*src);
                 }
             }
-            let starts: Vec<Node> = self.sets.keys().filter(|n| has(n) && self.node_str(**n).contains(np)).copied().collect();
+            let starts: Vec<Node> = self.graph.keys().filter(|n| has(n) && self.node_str(**n).contains(np)).copied().collect();
             let mut prev: HashMap<Node, Option<Node>> = HashMap::default();
             let mut q: VecDeque<Node> = VecDeque::new();
             for n in starts.into_iter().take(1) {
@@ -169,7 +169,7 @@ impl<'a> Engine<'a> {
             // 最远的源头往回打印到起点
             let mut cur = last;
             while let Some(n) = cur {
-                let sz = self.sets.get(&n).map_or(0, |s| s.classes.len());
+                let sz = self.graph.get(&n).map_or(0, |s| s.classes.len());
                 out.push(format!("  {} (|{sz}|)", self.node_str(n)));
                 cur = prev.get(&n).copied().flatten();
             }
@@ -178,9 +178,9 @@ impl<'a> Engine<'a> {
         // open 统计诊断：`@openstat`——各 open 类型：含它的节点数、引入点数、按 G 展开的类数
         if pat == "@openstat" {
             let mut fed: HashSet<(Node, u32)> = HashSet::default();
-            for (src, edges) in &self.flows {
-                if let Some(ss) = self.sets.get(src) {
-                    for &o in &ss.open {
+            for (src, edges) in &self.graph.flow_list() {
+                if let Some(ss) = self.graph.get(src) {
+                    for o in &ss.open {
                         for (dst, _) in edges {
                             fed.insert((*dst, o));
                         }
@@ -188,8 +188,8 @@ impl<'a> Engine<'a> {
                 }
             }
             let mut stat: HashMap<u32, (usize, Vec<String>)> = HashMap::default();
-            for (n, ss) in &self.sets {
-                for &o in &ss.open {
+            for (n, ss) in self.graph.iter() {
+                for o in &ss.open {
                     let e = stat.entry(o).or_default();
                     e.0 += 1;
                     if !fed.contains(&(*n, o)) {
@@ -213,16 +213,16 @@ impl<'a> Engine<'a> {
         // open 源头诊断：`@opens:<类型>`——含 open(类型)、但没有任何含同一 open 的前驱的节点（open 的引入点）
         if let Some(q) = pat.strip_prefix("@opens:") {
             let Some(&cid) = self.ids.get(q) else { return vec![format!("无此类：{q}")] };
-            let has = |x: &Node| self.sets.get(x).is_some_and(|s| s.open.contains(&cid));
+            let has = |x: &Node| self.graph.get(x).is_some_and(|s| s.open.contains(&cid));
             let mut fed: HashSet<Node> = HashSet::default();
-            for (src, edges) in &self.flows {
+            for (src, edges) in &self.graph.flow_list() {
                 if has(src) {
                     for (dst, _) in edges {
                         fed.insert(*dst);
                     }
                 }
             }
-            let mut v: Vec<String> = self.sets.keys().filter(|n| has(n) && !fed.contains(*n)).map(|n| format!("  {}", self.node_str(*n))).collect();
+            let mut v: Vec<String> = self.graph.keys().filter(|n| has(n) && !fed.contains(*n)).map(|n| format!("  {}", self.node_str(*n))).collect();
             v.sort();
             return v;
         }
@@ -245,9 +245,9 @@ impl<'a> Engine<'a> {
         }
         // 汇合点诊断：值集 ≥ N 的节点中，由小值集（< N）来源直接汇入的类最多者（污染的起始汇点）
         if let Some(n) = pat.strip_prefix("@merge:").and_then(|v| v.parse::<usize>().ok()) {
-            let size = |x: &Node| self.sets.get(x).map_or(0, |s| s.classes.len());
+            let size = |x: &Node| self.graph.get(x).map_or(0, |s| s.classes.len());
             let mut inc: HashMap<Node, (IdSet, usize)> = HashMap::default();
-            for (src, edges) in &self.flows {
+            for (src, edges) in &self.graph.flow_list() {
                 if size(src) >= n {
                     continue;
                 }
@@ -255,9 +255,9 @@ impl<'a> Engine<'a> {
                     if size(dst) >= n {
                         let e = inc.entry(*dst).or_default();
                         e.1 += 1;
-                        if let Some(s) = self.sets.get(src) {
+                        if let Some(s) = self.graph.get(src) {
                             for c in s.classes.iter() {
-                                e.0.insert(*c);
+                                e.0.insert(c);
                             }
                         }
                     }
@@ -271,11 +271,11 @@ impl<'a> Engine<'a> {
             return out;
         }
         if pat == "@array" {
-            let s = self.sets.get(&Node::Array).cloned().unwrap_or_default();
+            let s = self.graph.get(&Node::Array).cloned().unwrap_or_default();
             out.push(format!("  array = {{{}}}", self.set_str(&s)));
-            for (src, edges) in &self.flows {
+            for (src, edges) in &self.graph.flow_list() {
                 if edges.iter().any(|(d, _)| *d == Node::Array) {
-                    let s = self.sets.get(src).cloned().unwrap_or_default();
+                    let s = self.graph.get(src).cloned().unwrap_or_default();
                     out.push(format!("  array ← {} {{{}}}", self.node_str(*src), self.set_str(&s)));
                 }
             }
@@ -290,7 +290,7 @@ impl<'a> Engine<'a> {
             nodes.push(Node::R(i));
             // 站点与该方法分配的数组元素
             let mut extra: Vec<Node> = self
-                .sets
+                .graph
                 .keys()
                 .filter(|n| match **n {
                     Node::S(j, _) => j == i,
@@ -302,12 +302,12 @@ impl<'a> Engine<'a> {
             extra.sort_by_key(|n| format!("{n:?}"));
             nodes.extend(extra);
             for n in nodes {
-                let Some(s) = self.sets.get(&n) else { continue };
+                let Some(s) = self.graph.get(&n) else { continue };
                 out.push(format!("  {} = {{{}}}", self.node_str(n), self.set_str(s)));
-                for (src, edges) in &self.flows {
+                for (src, edges) in &self.graph.flow_list() {
                     for (dst, f) in edges {
                         if *dst == n {
-                            let s = self.sets.get(src).cloned().unwrap_or_default();
+                            let s = self.graph.get(src).cloned().unwrap_or_default();
                             out.push(format!("    ← {} [{}] {{{}}}", self.node_str(*src), self.names[*f as usize], self.set_str(&s)));
                         }
                     }

@@ -228,7 +228,7 @@ impl<'a> Engine<'a> {
             return None;
         }
         let mut out = BTreeSet::new();
-        let xs: Vec<u32> = s.classes.iter().copied().collect();
+        let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
             if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
                 return None;

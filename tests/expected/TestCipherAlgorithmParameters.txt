@@ -1,0 +1,9 @@
+DES/CBC/PKCS5Padding alg=DES provider=SunJCE iv=0908070605040302 der=04080908070605040302
+  ct=4798e3e695349ffcda533ea4bd8a5d85d38b0aab50825aa217b8fd51e3dadb10
+  plain=Attack at dawn, retreat at dusk iv=0908070605040302
+AES/CBC/PKCS5Padding alg=AES provider=SunJCE iv=f0e9e2dbd4cdc6bfb8b1aaa39c958e87 der=0410f0e9e2dbd4cdc6bfb8b1aaa39c958e87
+  ct=8fdef368ae7ad8076542b20aba83c22368c5086aa4a62a0b5ef07a14ae9dc4bb
+  plain=Attack at dawn, retreat at dusk iv=f0e9e2dbd4cdc6bfb8b1aaa39c958e87
+rebuilt iv=f0e9e2dbd4cdc6bfb8b1aaa39c958e87 same=true
+via params: Attack at dawn, retreat at dusk
+ecb params=null

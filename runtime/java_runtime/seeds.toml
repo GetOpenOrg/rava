@@ -105,6 +105,14 @@ release_classes = [
     "java/security/KeyException",
     "java/security/InvalidKeyException",
     "java/security/InvalidAlgorithmParameterException",
+    # 参数对象 engine 族（纯 Java）：Cipher.getParameters / init(mode, key, AlgorithmParameters)、
+    # AlgorithmParameters.getInstance。实例经 Security.getImpl（纯 Java：getSpiClass 按名取 SPI 类 +
+    # GetInstance）取得；Security.<clinit> 读 <java.home>/conf/security/java.security（jdk_resources 嵌入，
+    # Properties.load 按字节码解析）。Security.getProperty / setProperty 的手写伴生仍取手写。
+    "java/security/AlgorithmParameters",
+    "java/security/AlgorithmParametersSpi",
+    "java/security/Security",
+    "java/security/spec/InvalidParameterSpecException",
 ]
 defaults = [
     # SecureRandom 缺省 PRNG：SunEntries.DEF_SECURE_RANDOM_ALGO 由 securerandom.source（JDK 默认

@@ -13,6 +13,10 @@ crc32fast.workspace = true
 indexmap.workspace = true
 closure.workspace = true
 toml.workspace = true
+instr.workspace = true
+method.workspace = true
+cfg.workspace = true
+ir.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

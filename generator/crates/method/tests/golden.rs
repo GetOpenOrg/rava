@@ -4,16 +4,15 @@
 //! 环境按 meta 行以 [`BuildInput`] 重建（类路径：用户类目录 → JDK jmods → 镜像类目录；
 //! 同一 closure.json 与 runtime 清单）。每条记录的方法视图取自记录（名字 / 描述符 / 访问
 //! 标志 / 适配后的泛型签名与局部变量表），字节码取自出处类（`owner`）的规范化指令；
-//! SAM 合成对象路径与 invokedynamic 常量池下标按记录回答。
+//! SAM 合成对象路径按记录回答（invokedynamic 常量池下标由指令操作数携带）。
 //! 失配明细写入 `build/golden/method/<Test>.diff.txt`；golden 文件缺失时跳过。
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use classfile::extras::LocalVar;
-use classfile::{Method, Operand};
-use input::{BuildInput, ClosureFacts, EmitInput, NInsn, RuntimeManifest};
+use classfile::Method;
+use input::{BuildInput, ClosureFacts, EmitInput, RuntimeManifest};
 use instr::{Effect, InstrCtx, InstrEnv, InstrFacts, InstrHooks};
 use ir::{Ident, Path as IrPath, PathSegment};
 use method::{gen_method_body, MethodRequest, MethodSink};
@@ -86,10 +85,9 @@ fn build_env(meta: &Value) -> Env {
     Env { emit, names, manifest, rt, facts }
 }
 
-/// 按记录回答 SAM 合成对象路径与 invokedynamic 常量池下标
+/// 按记录回答 SAM 合成对象路径
 struct GoldenHooks {
     sam: Vec<(String, String, Option<String>)>,
-    indy: BTreeMap<(u16, String, String), u16>,
 }
 
 impl InstrHooks for GoldenHooks {
@@ -98,13 +96,9 @@ impl InstrHooks for GoldenHooks {
         let segs = out.as_deref()?.split("::").map(|s| Ident::new(s).ok().map(PathSegment::new)).collect::<Option<Vec<_>>>()?;
         Some(IrPath::new(segs))
     }
-
-    fn indy_cp_index(&self, _code_owner: &str, bsm: u16, name: &str, desc: &str) -> Option<u16> {
-        self.indy.get(&(bsm, name.to_string(), desc.to_string())).copied()
-    }
 }
 
-fn hooks_of(rec: &Value, insns: &[NInsn]) -> GoldenHooks {
+fn hooks_of(rec: &Value) -> GoldenHooks {
     let sam = rec["sam"]
         .as_array()
         .into_iter()
@@ -115,19 +109,7 @@ fn hooks_of(rec: &Value, insns: &[NInsn]) -> GoldenHooks {
             (a(0), a(1), f.last().and_then(Value::as_str).map(str::to_string))
         })
         .collect();
-    let mut indy = BTreeMap::new();
-    for e in rec["indy"].as_array().into_iter().flatten() {
-        let off = e[0].as_u64().unwrap_or(u64::MAX);
-        let Some(idx) = e[1].as_str().and_then(|s| s.trim().parse::<u16>().ok()).or_else(|| e[1].as_u64().map(|v| v as u16))
-        else {
-            continue;
-        };
-        let hit = insns.iter().filter_map(NInsn::insn).find(|i| u64::from(i.offset) == off);
-        if let Some(Operand::InvokeDynamic { bsm, name, desc }) = hit.map(|i| &i.operand) {
-            indy.insert((*bsm, name.clone(), desc.clone()), idx);
-        }
-    }
-    GoldenHooks { sam, indy }
+    GoldenHooks { sam }
 }
 
 fn local_vars(rec: &Value) -> Vec<LocalVar> {
@@ -193,7 +175,7 @@ fn eval(env: &Env, rec: &Value) -> Result<(String, Vec<String>), String> {
     view.signature = (!gsig.is_empty()).then(|| gsig.to_string());
     let code = env.emit.code(owner, om);
     let lvs = local_vars(rec);
-    let hooks = hooks_of(rec, code.as_ref().map_or(&[][..], |c| &c.insns));
+    let hooks = hooks_of(rec);
     let ctp = str_list(&rec["ctp"]);
     let ctx = InstrCtx::new(TyCtx::new(reg, &env.names, &env.manifest), &env.rt, &env.facts, &hooks, cls).with_code_owner(owner);
     let ienv = InstrEnv::new(ctx, &ctp);

@@ -176,6 +176,8 @@ impl Closure<'_> {
             "hw_written_fields": e.hw_written.len(),
             "hw_written_names": e.hw_written_names,
             "elapsed_ms": self.elapsed_ms,
+            // 性能观测（计时 / 内存 / 重分析分布）：不属于分析结果，对照输出时与 elapsed_ms 一并剔除
+            "perf": e.perf_json(20),
         })
     }
 

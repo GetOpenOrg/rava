@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态：⏳ 未开始。排期：闭包精度线手上的回归（DeepCopy / DES / Digester / TestFileAccessSpace 一组）修完后接手；与精度线同改 `closure` crate，**不并行**，由同一执行者串行推进或精度线收尾后交接。
+> 状态（2026-09-30 深夜）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，4 例 closure.json 逐字节一致；DeepCopy user 351 s → 130 s、RSS 4.1 GB → 2.3–2.8 GB），已合入 rust-closure-analyzer。结构性改造（手写调用点数组扇出经共享节点 / 按调用图 SCC 排序）会改变 `via` 与条目顺序，待用户决定是否把不变量放宽为「集合一致、`via` 可变」，见 §4.4 末。精度二期（`closure-prec2`）合入时解决 `engine` 拆分冲突。
 
 ---
 
@@ -64,7 +64,56 @@
 
 ## 四、剖析结论
 
-（P0 完成后填写：热点函数、重分析分布、失效原因占比。）
+> 2026-09-30，`closure-perf` 分支（自 b3ccb0e9），release 二进制。观测字段在 closure.json `summary.perf`（不属于分析结果，`scripts/closure_bench.sh --diff` 对照时剔除）。
+> DeepCopy 两次均在主会话 e2e 批次并行时跑，内存压力下墙钟 454–652 s（计划 §一 无压力为 174 s），**绝对秒数偏大，比例可信**。
+
+### 4.1 分阶段耗时（ms，自耗时，`summary.perf.phases_ms`）
+
+| 用例 | 上下文 | 分析次数 | flows（类型流传播） | sites（调用点重跑） | process（事件应用） | analyze（absint） | setup |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| HelloWorld | 882 | 1 681 | 2 | 2 | 62 | 61 | 44 |
+| CollectorsDemo | 20 380 | 38 651 | 1 159 | 844 | 981 | 1 053 | 163 |
+| Digester | 24 442 | 41 271 | 1 890 | 1 348 | 1 166 | 1 007 | 221 |
+| DeepCopy | 39 640 | 60 282 | 352 k–443 k | 68 k–151 k | 23 k–32 k | **1.6 k–3.6 k** | — |
+
+### 4.2 结论
+
+1. **§1.2 假设 1（整方法重分析是热点）被否定**：DeepCopy 抽象解释总计 < 1 % 墙钟；分析次数 60 282 / 上下文 39 640 = 1.5 倍，与 Digester（1.7 倍）同量级，没有级联放大。失效原因（Digester）：ret_const 6 728、never 4 060（其中 3 925 次事件不变）、sysprops 2 555（2 553 次不变）、param_const 1 482、field_put 1 137——多数重分析是「事件不变」的空转，但成本本身小。
+2. **§1.2 假设 2（`MemberRef` 字符串键）收益可忽略**：`sample` 采样中 MemberRef 哈希 / 克隆 < 1 % 样本。
+3. **超线性在类型流图**：DeepCopy 流边 24.66 M（Digester 2.17 M，11 倍），类型节点 25 万；`add_to` 调用 **7 804 761 719 次，其中仅 23 430 375 次（0.3 %）使目标增长**——99.7 % 是空传播。边种类分布：
+   - `E→W` 10.9 M、`W→E` 9.3 M（合计 82 %）：手写调用点数组写（`engine/hw_mem.rs::hw_site_arrays`）把每个逃逸值 E 与每个手写站点数组槽 W 两两相连，二部图全连接；单个 `W(site,1)` 入度 6 201；
+   - `O→S` 1.48 M、`E→S` 628 k、`S→O` 496 k、`S→HP` 403 k、`HR→S` 311 k；
+   - 入度 Top：`ObjectStreamClass$FieldReflector.getObjFieldValues` 的 S74（13 785）、`Esc`（7 041）；出度 Top：数组总节点、`SpinedBuffer.accept` P1 的多个上下文、LambdaForm `Name` 节点（各 5 458）。
+4. **sites 次之**：DeepCopy 调用点重跑 254 565 次（Digester 156 981），每次重跑按整个接收者值集重新枚举目标。
+5. `sample` 热点（DeepCopy）：`run` 内 drain 循环自耗时、`add_to`、`IdSet::minus / insert / union_with` 与 memmove、`sets.entry` 的 Node 哈希 / 比较、`flow_seen` 插入、`ClassPath::get` 与 resolve 层标准库 SipHash 表。
+
+### 4.3 对后续步骤的约束
+
+- **输出依赖处理顺序**：closure.json 的 `classes` / `methods` 按首次发现顺序（IndexMap 插入序）并带 `via`，上下文标签内嵌方法序号（`@10772:0`）。凡改变处理顺序的结构性改造（E↔W 改汇聚节点、调用图 SCC 逆拓扑序、失效合并批处理）都会改变 `via` / 顺序，与「逐字节一致」不变量冲突。P1 / P2 只做**保序**优化；结构性改造（E↔W 汇聚节点化、SCC 排序）需要把不变量放宽为「集合一致 + via 可变」，由决策方拍板后作为独立步骤。
+- 据此 P1 调整为「**图节点驻留**」（Node → 稠密 `u32`，`sets` / `fdelta` / `flows` 改 `Vec` 索引、`flow_seen` 紧凑键），MemberRef 驻留不做（无收益）；P2 调整为「空传播 / 空重跑削减」（保序）。
+
+### 4.4 进展实测（release，`scripts/closure_bench.sh`；逐字节对照 `--diff` 全部 SAME）
+
+| 步骤 | 提交 | HelloWorld | Digester 墙钟 / RSS | CollectorsDemo 墙钟 / RSS | DeepCopy 墙钟（user）/ RSS | DeepCopy flows / sites ms |
+|---|---|---:|---:|---:|---:|---:|
+| 基线 b3ccb0e9 | — | 0.80 s | 6.10 s / 1124 MB | 4.55 s / 764 MB | 454 s（351 s）/ 4074 MB ¹ | 352 k–443 k / 68 k–151 k |
+| P1 图节点驻留 | 见 git log | 0.72 s | 5.43 s / 954 MB | 4.17 s / 710 MB | 256 s（231 s）/ 3606 MB ² | 170 k / 59 k |
+| P2a 无增量快路径 + `IdSet` 稠密形态 | 见 git log | 0.91 s | 6.05 s / 705 MB | 4.60 s / 586 MB | **154 s（150 s）/ 2380 MB** | 92 k / 43 k |
+| P2b 接收者集合改向量 | 见 git log | 0.20 s（user）| 5.15–5.89 s / 796 MB | 4.59 s / 656 MB | **131 s（130 s）/ 2252–2819 MB** ³ | 86 k / 29 k |
+
+¹ 与主会话 e2e 批次并行、内存压力下测得（计划 §一 的 173.6 s 为无压力值，基线二进制未在无压力下复测）；比较以 user 时间为准。
+
+² P1 首版（图节点驻留，未含 open 收窄缓存 / 原地归并）测得；Digester / CollectorsDemo 列为 P1 完整版。
+
+³ 引擎自报峰值 2252 MB，`/usr/bin/time` 最大驻留 2819 MB（含释放前的分配器保留）；两次 P2a/P2b DeepCopy 的 time 读数在 2.4–2.8 GB 间波动。Digester 同机 A/B（P1 vs P2b 各两次）：user 5.20/5.29 s vs 5.20/5.01 s，RSS 912/954 vs 796/796 MB，小用例无回退。
+
+**P1 调整说明**：按 §4.2 数据，`MemberRef` 驻留收益 < 1 %，改为驻留类型流图节点——`engine/graph.rs::FlowGraph`：`Node` → 稠密 `u32`，类型集 / 出边 / 待推增量 / 入队标记改为按序号索引的 `Vec`，流边去重键从 40 字节降到 12 字节，`drain_flows` 逐边只做数组索引，Object 过滤判定由逐边字符串比较改为 id 比较；另加 open 收窄结果按 (o, t) 缓存（去掉逐次 `ClassPath::get` 的 SipHash）、`IdSet` 小并大改为原地自尾归并（一次搬移）。
+
+**P2a 说明**（保序、纯常数）：`add_to` 先做不分配的子集判定，无增量直接返回（不取节点、不查空数组暂存）；新接 Object 过滤边且目标已含源集合时不再克隆整集合；`IdSet` 拆到 `engine/idset.rs`，≥ 64 元素改为「位图 + 非零字摘要」单一稠密形态（插入 O(1)、差 / 并 / 子集按字、升序遍历跳零字），取代「有序向量 + 位图索引」双存（大集合逐个插入的 memmove 与双份内存一并消除）；哈希与旧形态逐字节相同。小用例墙钟在噪声内（主会话并行 e2e），DeepCopy user 时间 231 → 150 s、峰值 RSS 3.6 → 2.4 GB。
+
+**P2b 说明**：`receivers` 的 exact 部分直接收集为 `Vec<u32>`，仅在存在 open 类型时才建 `IdSet` 并入 G 展开，调用点重跑（sites）43 k → 29 k ms。
+
+**P2 结论与遗留**：保序前提下 DeepCopy user 351 → 130 s（基线受内存压力放大；对无压力的 150 s 级 user 仍降约 2.7×），但未达「与 Digester 同量级」。剩余热点仍是 E↔W 二部扇出上的无增量传播（`add_to` 调用 99.7 % 无增量）与站点重跑，需按 §4.3 的结构性改造（汇聚节点化 / SCC 序）才能再降一个量级，这要求把不变量放宽为「集合一致 + via 可变」，待决策。另记精度观察（未改）：DeepCopy 中单个 arraycopy 类手写站点的 W 入度约 6200 个数组，是潜在的不精确来源。
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 

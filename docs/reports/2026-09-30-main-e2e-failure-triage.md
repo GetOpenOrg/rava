@@ -131,3 +131,21 @@
 | 9 | F / G / H | 各 1 | 测试与环境 | |
 
 C、K、D 三组的实际影响面比这里的用例数大：方法引用装箱、record 分量派发、槽位复用都是常见形态，这批只是首先暴露出来的用例。建议排在 A 的跑批参数调整之后优先修。
+
+## 4. 复核进展（2026-09-30 深夜，`rust-closure-analyzer`）
+
+B 组 6 例以 f1d00887 之后的代码重跑（批次 c1d25i，JDK 21）：
+
+| 用例 | 结果 | 现因 / 去向 |
+|---|---|---|
+| TestRecordComponents | ✅ PASS | — |
+| TestMessageDigestApi | ✅ PASS | — |
+| EasterRelatedHolidays | ❌ | 新因：`SharedSecrets.ensureClassInitialized` 存根——`getJavaNioAccess` 的「静态字段为 null 再初始化」分支被判死（疑静态字段值集缺默认 null）；精度二期处理 |
+| TestMethodHandleCombinators | ❌ | 新因：L3 反射分派缺 `ValueConversions.boxInteger`——按名方法查找的名字为拼接（`"box" + 包装类简名`），未解析；精度二期处理（推广 f1d00887 的拼接解析到方法查找） |
+| TestMethodHandleDirect | ❌ | 同上（`ValueConversions.unboxInteger`） |
+| TestNetworkInterface | ❌ | `SHA MessageDigest not available`：过渡手写 `GetInstance` 按算法名精确查服务表、不认别名；该手写已在 `c1d-final` 1e623cec 删除，合入后复测 |
+
+C / K 组：闭包侧已修（`closure-prec2`：C dd2737ad，K c111e64f），缺失方法均已入链，待合入后 e2e 复测。
+更正：C 组中只有 TestMethodRef 需要 `Integer.intValue`；TestMethodRefKinds / TestOptional 缺的是 `Integer.valueOf`。
+
+同期回归抽查（非本报告失败集）：DES、DeepCopy、Digester、ListFields、TestFileAccessSpace、RecordsSerializationTest（transformHelper 回归，0333ede2 修复）、HelloWorld、FileIOTest、TestCharsetForName、TestStreamEncoderCharsets 均 PASS。

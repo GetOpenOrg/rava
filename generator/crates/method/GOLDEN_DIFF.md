@@ -33,8 +33,11 @@
 4. **`Node::sync_term` 在 body 层统一调用**
    - 时机：`split_disjoint_try_ranges` 之后、求后继之前。
    - 作用：与 Python 节点终结指令的即时同步等价。
-5. **Python `_owner` 回退未移植**
-   - 回退的对象是 owner 为空的情况。golden 中所有记录的 owner 都不为空（owner ≠ 发射类的记录分别为 0 / 25 / 235 条），调用方必须提供 owner。
+5. **字节码出处类由调用方显式给出，不做回退推断**
+   - golden 采集脚本的 `_owner`（按指令表对象同一性反查出处类，查不到为 null）只是采集手段，Rust 不移植；
+     出处类经 `InstrCtx::with_code_owner` 传入（缺省即发射类）。golden 中所有记录的 owner 都不为空
+     （owner ≠ 发射类的记录分别为 0 / 25 / 235 条）。
+   - 出处类为空时 `gen_method_body` 显式报 `MethodError::Runtime`，不按空 owner 继续生成。
 
 ## 未移植分支（显式报错 `MethodError::Unported`）
 

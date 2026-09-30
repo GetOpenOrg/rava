@@ -20,8 +20,9 @@ pub enum Operand {
     Field(MemberRef),
     /// invokevirtual / invokespecial / invokestatic / invokeinterface；bool = InterfaceMethodref
     Method(MemberRef, bool),
-    /// invokedynamic：(bootstrap 索引, 名字, 描述符)
-    InvokeDynamic { bsm: u16, name: String, desc: String },
+    /// invokedynamic：(常量池下标, bootstrap 索引, 名字, 描述符)。常量池下标是调用点身份
+    /// （lambda 站点变量名 `__lam_{idx}` 等的来源）
+    InvokeDynamic { index: u16, bsm: u16, name: String, desc: String },
     /// new / anewarray / checkcast / instanceof：binary name 或数组描述符
     Class(String),
     MultiANewArray(String, u8),
@@ -187,7 +188,7 @@ pub fn decode(code: &[u8], pool: &ConstantPool) -> Result<Vec<Insn>, Error> {
                 match pool.get(idx)? {
                     crate::constant::CpEntry::InvokeDynamic(bsm, nt) => {
                         let (n, d) = pool.name_and_type(*nt)?;
-                        Operand::InvokeDynamic { bsm: *bsm, name: n.to_string(), desc: d.to_string() }
+                        Operand::InvokeDynamic { index: idx, bsm: *bsm, name: n.to_string(), desc: d.to_string() }
                     }
                     _ => return Err(Error::BadIndex(idx)),
                 }

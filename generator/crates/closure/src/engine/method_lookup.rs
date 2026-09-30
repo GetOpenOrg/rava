@@ -84,7 +84,7 @@ impl<'a> Engine<'a> {
             let fs = self.feeds(m, a, class);
             let s = self.value_set(&fs);
             for x in s.classes.iter() {
-                if let Some(&c) = self.mirrors.get(x) {
+                if let Some(&c) = self.mirrors.get(&x) {
                     out.push(self.names[c as usize].to_string());
                 }
             }

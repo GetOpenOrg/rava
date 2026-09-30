@@ -78,11 +78,15 @@ dependencies = [
 name = "emit"
 version = "0.1.0"
 dependencies = [
+ "cfg",
  "classfile",
  "closure",
  "crc32fast",
  "indexmap",
  "input",
+ "instr",
+ "ir",
+ "method",
  "regex",
  "resolve",
  "serde_json",

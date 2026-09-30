@@ -82,7 +82,7 @@ impl<'a> Engine<'a> {
         if !delta.open.is_empty() {
             self.add_to(res, &TypeSet::open(rt));
         }
-        for &x in delta.classes.iter() {
+        for x in delta.classes.iter() {
             if self.arrays.contains_key(&x) {
                 for p in PARITIES {
                     self.flow(Node::E(x, p), res, rt);
@@ -252,7 +252,7 @@ impl<'a> Engine<'a> {
         let wn = Node::W(s, i);
         let obj = self.id(OBJECT);
         let class = self.id(CLASS);
-        let xs: Vec<u32> = delta.classes.iter().copied().filter(|x| !self.arrays.contains_key(x)).collect();
+        let xs: Vec<u32> = delta.classes.iter().filter(|x| !self.arrays.contains_key(x)).collect();
         for x in xs {
             if let Some(&c) = self.mirrors.get(&x) {
                 for (fi, tid) in self.static_ref_fields(c) {
@@ -271,7 +271,7 @@ impl<'a> Engine<'a> {
                 self.flow(wn, n, tid);
             }
         }
-        let os: Vec<u32> = delta.open.iter().copied().collect();
+        let os: Vec<u32> = delta.open.iter().collect();
         for o in os {
             for (fi, tid) in self.ref_fields(o).iter().copied() {
                 self.flow(wn, Node::U(fi), tid);

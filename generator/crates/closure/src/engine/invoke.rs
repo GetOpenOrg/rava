@@ -213,7 +213,7 @@ impl<'a> Engine<'a> {
                 let s = self.value_set(&r);
                 // 精确接收者：少量时逐个派发，否则经集合枢纽；open 部分经 open 枢纽
                 let exact = TypeSet { classes: s.classes, open: IdSet::default() };
-                let recv: Vec<u32> = self.receivers(m, &exact, owner).into_iter().collect();
+                let recv: Vec<u32> = self.receivers(m, &exact, owner);
                 if recv.len() < HUB_MIN {
                     for r in recv {
                         self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
@@ -224,7 +224,7 @@ impl<'a> Engine<'a> {
                     self.hub_last.insert((m, off), h);
                     self.link_hub(h, m, off, &a, res);
                 }
-                for &o in s.open.iter() {
+                for o in s.open.iter() {
                     let h = self.hub(mref, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
                     self.link_hub(h, m, off, &a, res);
                 }
@@ -289,7 +289,7 @@ impl<'a> Engine<'a> {
         let mut rest = TypeSet { classes: IdSet::default(), open: s.open.clone() };
         // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增对象
         let dedup = site && self.methods[m].kind == Kind::Bytecode;
-        for &x in &s.classes {
+        for x in &s.classes {
             if self.objs.contains_key(&x) {
                 if dedup && !self.recv_done.entry(m).or_default().insert((off, x)) {
                     continue;
@@ -427,7 +427,7 @@ impl<'a> Engine<'a> {
         }
         self.pvals.insert(t, new);
         if cur.is_some() {
-            self.invalidate(t);
+            self.invalidate(t, Why::ParamConst);
         }
     }
 }

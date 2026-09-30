@@ -105,6 +105,33 @@ impl GetInstance {
         instance_of(&s)
     }
 
+    /// `getInstance(String type, Class<?> clazz, String algorithm, Provider provider)`：JDK
+    /// `getService(type, algorithm, provider)` 同一校验与异常形态——provider 为 null →
+    /// IllegalArgumentException("missing provider")；该 provider 无此服务 →
+    /// NoSuchAlgorithmException("no such algorithm: " + algorithm + " for provider " + provider.getName())。
+    /// 消费方：`Security.getImpl(String, String, Provider)`（AlgorithmParameters.getInstance(String, Provider)，
+    /// CipherCore.getParameters 经此以 SunJCE 实例取参数对象）。
+    #[jvm_boundary(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V java/security/NoSuchAlgorithmException.<init>:(Ljava/lang/String;)V java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service; java/security/Provider.getName:()Ljava/lang/String; java/security/Provider$Service.newInstance:(Ljava/lang/Object;)Ljava/lang/Object; java/security/Provider$Service.getProvider:()Ljava/security/Provider;")]
+    pub fn getInstance_str_class_str_provider(type_: String, _clazz: Class, algorithm: String, provider: Provider) -> Result<GetInstance_Instance> {
+        if provider.is_jvm_null() {
+            let ex = crate::java::lang::IllegalArgumentException::new_str(String::from("missing provider"))?;
+            return Err(ex.into());
+        }
+        let s = provider.getService(type_, Clone::clone(&algorithm))?;
+        if s.is_jvm_null() {
+            let ex = crate::java::security::NoSuchAlgorithmException::new_str(String::from(
+                format!("no such algorithm: {} for provider {}", algorithm, provider.getName()?).as_str()))?;
+            return Err(ex.into());
+        }
+        instance_of(&s)
+    }
+
+    /// `getInstance(Provider.Service s, Class<?> clazz)`：`s.newInstance(null)` 包成 `Instance`。
+    #[jvm_boundary(upcalls = "java/security/Provider$Service.newInstance:(Ljava/lang/Object;)Ljava/lang/Object; java/security/Provider$Service.getProvider:()Ljava/security/Provider;")]
+    pub fn getInstance_provider_service_class(s: Provider_Service, _clazz: Class) -> Result<GetInstance_Instance> {
+        instance_of(&s)
+    }
+
     /// `getServices(List<ServiceId>)`：按候选序（transformation 由具体到一般）收集已登记服务；
     /// 无匹配 → 空表（Cipher 据此抛 `NoSuchAlgorithmException("Cannot find any provider
     /// supporting ..")`，走翻译字节码）。
