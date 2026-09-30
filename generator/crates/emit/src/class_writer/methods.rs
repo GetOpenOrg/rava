@@ -244,7 +244,7 @@ fn clinit_block(
         _ => None,
     };
     let text = body.unwrap_or_else(|| {
-        format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    panic!(\"stub: {}.<clinit>:()V\")\n}}", cx.ci.name())
+        format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    __stub(\"stub: {}.<clinit>:()V\")\n}}", cx.ci.name())
     });
     Ok(format!("{attr}\n{text}"))
 }

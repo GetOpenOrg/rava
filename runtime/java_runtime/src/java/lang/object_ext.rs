@@ -99,7 +99,7 @@ impl Object {
         let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
         match self.0.__view_as(unused, binary_name).and_then(|boxed| boxed.downcast::<T>().ok()) {
             Some(view) => *view,
-            None => panic!("ClassCastException: {} cannot be cast to {}", self.0.__class_name(), binary_name),
+            None => checkcast_fail(self, binary_name),
         }
     }
 
@@ -423,3 +423,11 @@ impl PartialEq for Object {
     }
 }
 impl Eq for Object {}
+
+/// `Object::checkcast` 的失败出口：非泛型冷路径，panic 与格式化代码全程序一份，
+/// 不随 `checkcast::<T>` 的每个实例化重复展开。
+#[cold]
+#[inline(never)]
+fn checkcast_fail(obj: &Object, binary_name: &str) -> ! {
+    panic!("ClassCastException: {} cannot be cast to {}", obj.0.__class_name(), binary_name)
+}

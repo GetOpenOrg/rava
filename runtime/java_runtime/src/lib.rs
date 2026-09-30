@@ -254,6 +254,16 @@ pub fn java_fmt_f32(v: f32) -> String {
     )
 }
 
+/// 存根出口（不在调用链上的方法体、未覆盖的翻译路径）：panic 消息即入参（`stub: 类.方法:描述符`
+/// 等），报告位置经 `#[track_caller]` 落在存根所在处。非泛型冷路径——panic 与格式化代码
+/// 全程序一份，存根处只剩一次调用。
+#[cold]
+#[inline(never)]
+#[track_caller]
+pub fn __stub(msg: &'static str) -> ! {
+    panic!("{msg}")
+}
+
 /// 整数除法/取余（JVMS §6.5 idiv / irem / ldiv / lrem）：
 /// 除数为 0 抛 `ArithmeticException("/ by zero")`；`MIN / -1` 按二进制补码回绕。
 pub fn idiv(a: i32, b: i32) -> error::Result<i32> {
@@ -480,6 +490,7 @@ pub mod prelude {
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
+    pub use super::__stub;
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;

@@ -99,7 +99,7 @@ pub(crate) fn expand_interface(
         let stub_msg = format!("stub: {}.{}:{}", binary_name, mname, desc);
         vtable_methods.push(quote! {
             #[allow(unused_variables)]
-            #erased { panic!(#stub_msg) }
+            #erased { __stub(#stub_msg) }
         });
 
         let args = param_idents(&f.sig);
