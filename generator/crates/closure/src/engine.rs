@@ -65,6 +65,8 @@ const CATCH: u32 = 1 << 31;
 const POOL: u32 = u32::MAX;
 /// 站点键：手写体产出的值（分配 / 构造 / 字段读取 / 回调返回值），汇入值池
 const PROD: u32 = u32::MAX - 1;
+/// 站点键：清单声明元素类型的手写返回数组（`[facts.array_returns]`）的分配点
+const ARRAY_RET: u32 = u32::MAX - 2;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
 /// 方法克隆的上下文：无（按声明类型 / open 接收者进入的方法本体）
