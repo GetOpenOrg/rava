@@ -1,6 +1,6 @@
 //! 手写文件的 syn 扫描：逐 fn 收集回调、调用、分配、字段访问，同文件 fn 调用的传递闭包，use 表与 prelude。
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use syn::visit::Visit;
 
@@ -30,11 +30,43 @@ pub(super) struct RawFn {
     pub(super) calls: HashSet<String>,
 }
 
+/// 手写实现对象的扫描原料（trait impl 与固有 impl 的 fn，未闭包）
+#[derive(Default)]
+pub(super) struct RawObject {
+    pub(super) supers: BTreeSet<TypeRef>,
+    pub(super) fns: HashMap<String, FnInfo>,
+    pub(super) calls: HashMap<String, HashSet<String>>,
+}
+
+/// 一个类的手写文件扫描结果（未闭包）
+#[derive(Default)]
+pub(super) struct FileFns {
+    pub(super) fns: HashMap<String, FnInfo>,
+    pub(super) calls: HashMap<String, HashSet<String>>,
+    pub(super) objects: BTreeMap<String, RawObject>,
+}
+
 pub(super) struct FileScan<'a> {
     pub(super) uses: &'a HashMap<String, Vec<String>>,
+    /// 本文件的手写实现对象 struct 名
+    pub(super) local_objects: &'a HashSet<String>,
     pub(super) fns: Vec<(String, RawFn)>,
+    /// 手写实现对象的 fn：(struct 名, fn 名, 原料)；实现的 Java 类型
+    pub(super) object_fns: Vec<(String, String, RawFn)>,
+    pub(super) supers: Vec<(String, TypeRef)>,
     /// 当前 impl 块的 self 类型
     pub(super) self_ty: Option<Vec<String>>,
+    /// 当前 impl 块的 self 类型是本文件的手写实现对象
+    pub(super) cur_obj: Option<String>,
+}
+
+/// 标识符收集（宏外；宏内标识符另经 `macro_idents` 收集）
+struct Idents(HashSet<String>);
+
+impl<'ast> Visit<'ast> for Idents {
+    fn visit_ident(&mut self, i: &'ast proc_macro2::Ident) {
+        self.0.insert(i.to_string());
+    }
 }
 
 impl FileScan<'_> {
@@ -92,7 +124,27 @@ impl FileScan<'_> {
         for (ty, ctor) in b.ctors {
             info.ctors.insert((TypeRef(expand(self.uses, ty)), ctor));
         }
-        self.fns.push((name, RawFn { info, calls: b.calls }));
+        let mut ids = Idents(HashSet::new());
+        ids.visit_block(block);
+        ids.0.extend(info.opaque.iter().cloned());
+        info.objects = ids.0.iter().filter_map(|i| self.object_ref(i)).collect();
+        let raw = RawFn { info, calls: b.calls };
+        match &self.cur_obj {
+            Some(o) => self.object_fns.push((o.clone(), name, raw)),
+            None => self.fns.push((name, raw)),
+        }
+    }
+
+    /// 标识符指称的手写实现对象：本文件的实现对象 struct，或经 `use` 从共置手写模块（`…::<类>_impl::S`）引入的
+    fn object_ref(&self, ident: &str) -> Option<TypeRef> {
+        if self.local_objects.contains(ident) {
+            return Some(TypeRef(vec![ident.to_string()]));
+        }
+        let full = self.uses.get(ident)?;
+        let n = full.len();
+        let module = full.get(n.checked_sub(2)?)?;
+        let upper = ident.starts_with(|c: char| c.is_ascii_uppercase());
+        (upper && MODULE_SUFFIXES.iter().any(|x| module.ends_with(x))).then(|| TypeRef(full.clone()))
     }
 }
 
@@ -101,15 +153,29 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
         let is_pub = matches!(f.vis, syn::Visibility::Public(_));
         // 自由 fn 内的 Self 无意义：暂离 impl 上下文
         let outer = self.self_ty.take();
+        let outer_obj = self.cur_obj.take();
         self.add(&f.sig, is_pub, &f.attrs, &f.block);
         syn::visit::visit_item_fn(self, f);
         self.self_ty = outer;
+        self.cur_obj = outer_obj;
     }
 
     fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
-        let outer = std::mem::replace(&mut self.self_ty, type_path(&i.self_ty));
+        let ty = type_path(&i.self_ty);
+        let obj = ty.as_ref().filter(|t| t.len() == 1 && self.local_objects.contains(&t[0])).map(|t| t[0].clone());
+        if let (Some(o), Some(tr)) = (&obj, vtable_trait(i)) {
+            // trait 名可能经 use 引入：先展开，再去后缀得 Java 类型的 Rust 路径
+            let mut full = expand(self.uses, tr);
+            if let Some(last) = full.last_mut().and_then(|l| l.strip_suffix(VTABLE_SUFFIX).map(str::to_string)) {
+                *full.last_mut().expect("非空路径") = last;
+                self.supers.push((o.clone(), TypeRef(full)));
+            }
+        }
+        let outer = std::mem::replace(&mut self.self_ty, ty);
+        let outer_obj = std::mem::replace(&mut self.cur_obj, obj);
         syn::visit::visit_item_impl(self, i);
         self.self_ty = outer;
+        self.cur_obj = outer_obj;
     }
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
@@ -177,27 +243,52 @@ pub(super) fn prelude_uses(file: &syn::File) -> HashMap<String, Vec<String>> {
         .collect()
 }
 
-pub(super) fn scan_file(
-    file: &syn::File,
-    prelude: &HashMap<String, Vec<String>>,
-    fns: &mut HashMap<String, FnInfo>,
-    calls: &mut HashMap<String, HashSet<String>>,
-) {
+/// `impl X__VTable for S` 的 trait 路径（`X__VTable` 形态才算 Java 类型的 vtable trait）
+pub(super) fn vtable_trait(i: &syn::ItemImpl) -> Option<Vec<String>> {
+    let (_, path, _) = i.trait_.as_ref()?;
+    let segs = path_segs(path);
+    segs.last()?.strip_suffix(VTABLE_SUFFIX).filter(|s| !s.is_empty())?;
+    Some(segs)
+}
+
+/// 同名 fn（多个 impl 块 / 文件）并入
+fn merge_fn(fns: &mut HashMap<String, FnInfo>, calls: &mut HashMap<String, HashSet<String>>, name: String, raw: RawFn) {
+    calls.entry(name.clone()).or_default().extend(raw.calls);
+    let e = fns.entry(name).or_default();
+    e.is_pub |= raw.info.is_pub;
+    e.upcalls.extend(raw.info.upcalls);
+    e.allocs.extend(raw.info.allocs);
+    e.ctors.extend(raw.info.ctors);
+    e.calls.extend(raw.info.calls);
+    e.opaque.extend(raw.info.opaque);
+    e.fields.extend(raw.info.fields);
+    e.array_access |= raw.info.array_access;
+    e.objects.extend(raw.info.objects);
+}
+
+pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>, out: &mut FileFns) {
     let mut us = UseScan(prelude.clone());
     us.visit_file(file);
-    let mut fs = FileScan { uses: &us.0, fns: Vec::new(), self_ty: None };
+    let local = super::objects::object_structs(file);
+    let mut fs = FileScan {
+        uses: &us.0,
+        local_objects: &local,
+        fns: Vec::new(),
+        object_fns: Vec::new(),
+        supers: Vec::new(),
+        self_ty: None,
+        cur_obj: None,
+    };
     fs.visit_file(file);
     for (name, raw) in fs.fns {
-        calls.entry(name.clone()).or_default().extend(raw.calls);
-        let e = fns.entry(name).or_default();
-        e.is_pub |= raw.info.is_pub;
-        e.upcalls.extend(raw.info.upcalls);
-        e.allocs.extend(raw.info.allocs);
-        e.ctors.extend(raw.info.ctors);
-        e.calls.extend(raw.info.calls);
-        e.opaque.extend(raw.info.opaque);
-        e.fields.extend(raw.info.fields);
-        e.array_access |= raw.info.array_access;
+        merge_fn(&mut out.fns, &mut out.calls, name, raw);
+    }
+    for (obj, name, raw) in fs.object_fns {
+        let o = out.objects.entry(obj).or_default();
+        merge_fn(&mut o.fns, &mut o.calls, name, raw);
+    }
+    for (obj, sup) in fs.supers {
+        out.objects.entry(obj).or_default().supers.insert(sup);
     }
 }
 
@@ -208,7 +299,7 @@ pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMa
     for n in &names {
         let mut seen: HashSet<&str> = HashSet::from([n.as_str()]);
         let mut stack = vec![n.as_str()];
-        let (mut allocs, mut ctors) = (BTreeSet::new(), BTreeSet::new());
+        let (mut allocs, mut ctors, mut objects) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
         let (mut tcalls, mut opaque, mut fields) = (Vec::new(), HashSet::new(), Vec::new());
         let mut arr = false;
         while let Some(x) = stack.pop() {
@@ -218,6 +309,7 @@ pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMa
                 ctors.extend(f.ctors.iter().cloned());
                 tcalls.extend(f.calls.iter().cloned());
                 opaque.extend(f.opaque.iter().cloned());
+                objects.extend(f.objects.iter().cloned());
                 // 被调 fn 的 self 不一定是本方法的接收者
                 let own = x == n.as_str();
                 fields.extend(f.fields.iter().map(|fa| FieldAccess { on_self: fa.on_self && own, ..fa.clone() }));
@@ -228,9 +320,9 @@ pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMa
                 }
             }
         }
-        closed.push((n.clone(), allocs, ctors, tcalls, opaque, fields, arr));
+        closed.push((n.clone(), allocs, ctors, tcalls, opaque, fields, arr, objects));
     }
-    for (n, a, c, t, o, fl, arr) in closed {
+    for (n, a, c, t, o, fl, arr, objs) in closed {
         let f = fns.get_mut(&n).expect("fn 名来自同一表");
         f.allocs = a;
         f.ctors = c;
@@ -238,6 +330,7 @@ pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMa
         f.opaque = o;
         f.fields = fl;
         f.array_access = arr;
+        f.objects = objs;
     }
 }
 
@@ -247,9 +340,9 @@ mod tests {
 
     fn fields_of(src: &str, f: &str) -> Vec<FieldAccess> {
         let file = syn::parse_file(src).expect("测试源码可解析");
-        let (mut fns, mut calls) = (HashMap::new(), HashMap::new());
-        scan_file(&file, &HashMap::new(), &mut fns, &mut calls);
-        fns.remove(f).map(|i| i.fields).unwrap_or_default()
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        out.fns.remove(f).map(|i| i.fields).unwrap_or_default()
     }
 
     fn named(p: &[&str]) -> SType {
@@ -301,9 +394,9 @@ mod tests {
             }
         "#;
         let file = syn::parse_file(src).expect("测试源码可解析");
-        let (mut fns, mut calls) = (HashMap::new(), HashMap::new());
-        scan_file(&file, &HashMap::new(), &mut fns, &mut calls);
-        let cs = fns.remove("open").map(|i| i.calls).unwrap_or_default();
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let cs = out.fns.remove("open").map(|i| i.calls).unwrap_or_default();
         let site = |n: &str| cs.iter().find(|c| c.name == n).expect("调用点已登记");
         let set = named(&["Set"]);
         let iter = SType::Call(Box::new(set.clone()), "iterator".into());

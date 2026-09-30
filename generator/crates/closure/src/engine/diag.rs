@@ -7,7 +7,34 @@
 use super::*;
 
 impl Engine<'_> {
+    /// 接收者恒为 null 的活虚调用点（folds `null_recv`）：成员@偏移 → 被调成员
+    fn null_recv_sites(&self) -> Vec<String> {
+        let mut clones: BTreeMap<&MemberRef, Vec<usize>> = BTreeMap::new();
+        for (i, mn) in self.methods.values().enumerate() {
+            if mn.kind == Kind::Bytecode {
+                clones.entry(&mn.key).or_default().push(i);
+            }
+        }
+        let mut out: Vec<String> = Vec::new();
+        for (k, cs) in &clones {
+            for pc in self.null_recv(cs) {
+                let callee = cs.iter().filter_map(|&i| self.methods[i].analysis.as_ref()).find_map(|a| {
+                    a.events.iter().find_map(|(p, e)| match e {
+                        Event::Invoke { mref, .. } if *p == pc => Some(mref.to_string()),
+                        _ => None,
+                    })
+                });
+                out.push(format!("  {k}@{pc} → {}", callee.unwrap_or_default()));
+            }
+        }
+        out.insert(0, format!("  {} 个接收者恒为 null 的活虚调用点", out.len()));
+        out
+    }
+
     pub(super) fn diag_open(&self, pat: &str) -> Option<Vec<String>> {
+        if pat == "@nullrecv" {
+            return Some(self.null_recv_sites());
+        }
         if let Some(q) = pat.strip_prefix("@openinj:") {
             let Some(&cid) = self.ids.get(q) else { return Some(vec![format!("无此类：{q}")]) };
             let mut v: Vec<String> =

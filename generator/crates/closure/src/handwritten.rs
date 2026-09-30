@@ -12,17 +12,18 @@
 //! 成员匹配：Rust fn 名 = Java 名或 `名_<重载后缀>`；虚方法体前缀 `__impl_`；构造器 `<init>` ↔ `new`。
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use classfile::MemberRef;
 
+mod objects;
 mod scan;
 mod syntax;
 mod type_refs;
 pub use type_refs::MODULE_SUFFIXES;
-use scan::{close_transitive, collect_uses, prelude_uses, scan_file};
+use scan::{close_transitive, collect_uses, prelude_uses, scan_file, FileFns};
 use syntax::path_segs;
 
 /// 生成类文件的标记（手写共置文件恒不含限定宏调用）
@@ -33,6 +34,8 @@ const CTOR_RUST: &str = "new";
 const OBJECT_RUST: &str = "Object";
 const STRING_RUST: &str = "String";
 const VIRTUAL_PREFIX: &str = "__impl_";
+/// Java 类型的 vtable trait 名后缀（`X__VTable`，rava_macros 生成）
+const VTABLE_SUFFIX: &str = "__VTable";
 /// 字段访问器前缀（rava_macros 生成）
 const SET_PREFIX: &str = "__set_";
 const GET_PREFIX: &str = "__get_";
@@ -124,6 +127,19 @@ pub struct FnInfo {
     /// 取得数组视图（`JArray` 类型、`__view_into`、`array_store_*` 等，含宏内与同文件被调 fn）：
     /// 没有数组视图的手写体不可能改写实参数组的元素
     pub array_access: bool,
+    /// 引用的手写实现对象（本文件的 struct 名 `S`，或经 `use` 引入的 `…::<类>_impl::S`），同样传递闭包：
+    /// 手写体可能在此新建该对象并交给建模代码
+    pub objects: BTreeSet<TypeRef>,
+}
+
+/// 手写实现对象：手写文件里实现 Java 类型 vtable trait（`impl X__VTable for S`）的本地 struct。
+/// 它是运行期真实存在的 Java 接收者（手写边界方法把它当作 `X` 交出），方法体即各 trait impl 的 fn
+#[derive(Debug, Default)]
+pub struct HwObject {
+    /// 实现的 Java 类型（trait 路径去 `__VTable`，按 use 表展开）
+    pub supers: BTreeSet<TypeRef>,
+    /// trait impl 的 fn 名 → 信息（沿本对象与同文件 fn 调用传递闭包）
+    pub fns: HashMap<String, FnInfo>,
 }
 
 /// 一个类的共置手写文件汇总
@@ -134,6 +150,8 @@ pub struct ClassHw {
     pub fns: HashMap<String, FnInfo>,
     /// 手写文件（共置 `_impl` / `_ext` 与整体手写 `<snake>.rs`）的编译期类型路径
     pub type_refs: BTreeSet<TypeRef>,
+    /// 手写实现对象（struct 名 → 对象）；其 trait impl fn 不并入 `fns`
+    pub objects: BTreeMap<String, HwObject>,
 }
 
 /// 成员（Java 名）对应的手写体汇总
@@ -147,8 +165,25 @@ pub struct MemberHw {
     pub opaque: HashSet<String>,
     pub fields: Vec<FieldAccess>,
     pub array_access: bool,
+    pub objects: BTreeSet<TypeRef>,
     /// 命中的 fn 名（溯源）
     pub fns: Vec<String>,
+}
+
+impl MemberHw {
+    /// 并入一个命中的 fn
+    pub fn absorb(&mut self, name: &str, f: &FnInfo) {
+        self.provided |= f.is_pub;
+        self.upcalls.extend(f.upcalls.iter().cloned());
+        self.allocs.extend(f.allocs.iter().cloned());
+        self.ctors.extend(f.ctors.iter().cloned());
+        self.calls.extend(f.calls.iter().cloned());
+        self.opaque.extend(f.opaque.iter().cloned());
+        self.fields.extend(f.fields.iter().cloned());
+        self.array_access |= f.array_access;
+        self.objects.extend(f.objects.iter().cloned());
+        self.fns.push(name.to_string());
+    }
 }
 
 pub struct Handwritten {
@@ -231,7 +266,7 @@ impl Handwritten {
     fn load(&self, cls: &str) -> ClassHw {
         let (pkg, simple) = cls.rsplit_once('/').unwrap_or(("", cls));
         let mut hw = ClassHw::default();
-        let mut calls = HashMap::new();
+        let mut raw = FileFns::default();
         for suf in SUFFIXES {
             let path = self.src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
             let Ok(content) = std::fs::read_to_string(&path) else { continue };
@@ -240,7 +275,7 @@ impl Handwritten {
                 continue;
             }
             match syn::parse_file(&content) {
-                Ok(file) => scan_file(&file, &self.prelude, &mut hw.fns, &mut calls),
+                Ok(file) => scan_file(&file, &self.prelude, &mut raw),
                 Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
             }
             hw.files.push(path);
@@ -253,7 +288,9 @@ impl Handwritten {
                 Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
             }
         }
-        close_transitive(&mut hw.fns, &calls);
+        close_transitive(&mut raw.fns, &raw.calls);
+        hw.objects = objects::close(&raw);
+        hw.fns = raw.fns;
         hw
     }
 
@@ -264,16 +301,21 @@ impl Handwritten {
         let mut names: Vec<&String> = hw.fns.keys().filter(|f| member_matches(f, member)).collect();
         names.sort();
         for n in names {
-            let f = &hw.fns[n];
-            out.provided |= f.is_pub;
-            out.upcalls.extend(f.upcalls.iter().cloned());
-            out.allocs.extend(f.allocs.iter().cloned());
-            out.ctors.extend(f.ctors.iter().cloned());
-            out.calls.extend(f.calls.iter().cloned());
-            out.opaque.extend(f.opaque.iter().cloned());
-            out.fields.extend(f.fields.iter().cloned());
-            out.array_access |= f.array_access;
-            out.fns.push(n.clone());
+            out.absorb(n, &hw.fns[n]);
+        }
+        out
+    }
+
+    /// 手写实现对象 `obj`（`cls` 的手写文件里）按 fn 名汇总的手写体
+    pub fn object_member(&self, cls: &str, obj: &str, fns: &[String]) -> MemberHw {
+        let hw = self.class(cls);
+        let mut out = MemberHw::default();
+        if let Some(o) = hw.objects.get(obj) {
+            for n in fns {
+                if let Some(f) = o.fns.get(n) {
+                    out.absorb(n, f);
+                }
+            }
         }
         out
     }

@@ -143,7 +143,7 @@ impl<'a> Engine<'a> {
                 })
                 .collect(),
             None => {
-                let access = self.h.class(&key.owner).is_some_and(|cf| self.hw_member(&cf, &key.name, &key.desc).array_access);
+                let access = self.hw_body(t).is_some_and(|(_, mh)| mh.array_access);
                 (0..ptypes.len())
                     .map(|j| {
                         (access && j >= base && ptypes[j].is_some()).then(|| HwWrite {

@@ -122,17 +122,8 @@ impl<'a> Engine<'a> {
         let hwc = self.hw.class(&cf.name);
         let mut out = crate::handwritten::MemberHw::default();
         for f in &exact {
-            let i = &hwc.fns[f];
-            out.provided |= i.is_pub;
-            out.upcalls.extend(i.upcalls.iter().cloned());
-            out.allocs.extend(i.allocs.iter().cloned());
-            out.ctors.extend(i.ctors.iter().cloned());
-            out.calls.extend(i.calls.iter().cloned());
-            out.opaque.extend(i.opaque.iter().cloned());
-            out.fields.extend(i.fields.iter().cloned());
-            out.array_access |= i.array_access;
+            out.absorb(f, &hwc.fns[f]);
         }
-        out.fns = exact;
         out
     }
 
@@ -146,6 +137,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn apply_hw(&mut self, m: usize, host: &str, mh: &MemberHw, via: &Via) {
         let prod = Node::S(m, PROD);
+        self.hwobj_made(m, host, mh);
         self.hw_fields(m, host, &mh.fields);
         let mut k = 0u32;
         // 手写体新建的对象（按类）：新建局部变量上的回调以它们为接收者
