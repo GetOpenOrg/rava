@@ -1,6 +1,6 @@
 # 生成器效率：发射层与下游编译成本
 
-> 分支 `emitter-perf`。上位文档：[`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md) §三.3。
+> 分支 `emitter-perf`（发射层、D1），`emitter-perf2`（下游编译成本 §4.4–4.7）。上位文档：[`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md) §三.3。
 > 根本原则（用户 2026-10-01）：目标是降低耗时、内存和成本，但正确性不可让步——生成代码必须能编译、能运行，输出与 JVM 一致。
 > 改生成形态的每一步都要论证语义等价，并列出需要主会话 e2e 抽查的用例；不确定的形态改动先不做，写进本方案。
 
@@ -141,15 +141,140 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
   - `codegen-units=4`：24.0，但峰值 RSS 1.9 GB，超出内存预算，不取。
 - TestStreamBasic 新树 `cargo check` 通过（22.6 s user）。
 
-### 4.4 未做（不确定，或归属其他线），列入待办
+### 4.4 事项状态
 
-| # | 事项 | 预期收益 | 为何未做 / 归属 |
+| # | 事项 | 状态 |
+|---|---|---|
+| X1a | `panic = "abort"` | ✅ 已做（§4.5 第 5 步），论证见 §4.6 |
+| X1b | `overflow-checks = false` | **不做**：实测无收益（§4.6），且保留它可以检出手写层 usize 运算缺陷 |
+| X2 | 宏样板瘦身 | ✅ 引用字段协议已做（§4.5 第 1 步）；`__shallow_copy` / `From<Object>` / `__erased_vtable` / `__view_*` 未做，见 §五 N4 |
+| X3 | `gil::clinit_enter::<T>` 去泛型 | ✅ 已做（§4.5 第 2 步） |
+| X4 | 存根瘦身 | ✅ 改为调用共享冷函数（§4.5 第 3 步）。存根仍然生成、仍 panic、消息不变；参数传递方式不改 |
+| X5 | `codegen-units` 调整 | 未做：峰值内存与收益随用例变化，需全量实测后再定 |
+
+### 4.5 分支 `emitter-perf2`：下游编译成本的逐步实施
+
+计量对象：HelloWorld 的 java_runtime crate。
+- 确定性指标：`-Z dump-mono-stats` 的 size_est 合计。
+- 耗时 / RSS：与基线 worktree（d145f609）交替跑（ABAB）。
+- 共享机上其他线同时编译，墙钟与 RSS 只看同批对照。
+
+| 步 | 提交 | 改动 | mono size_est | 条目数 |
+|---|---|---|---:|---:|
+| 0 | d145f609 | 基线 | 990,227 | 31,051 |
+| 1 | 8f022dd5 | 引用字段 `__unsafe_ref_get/set/update` 三个按名协议合为单一分派 `__unsafe_ref_access(field, &mut __RefAccess)`，逐字段分支调非泛型化的 `__ref_slot_access` | 854,413（−13.7%） | — |
+| 2 | 394619fd | `clinit_enter` / `clinit_exit` 以 `&'static __PrimCell<u8>` 取状态，不再按类单态化；静态字段读写经 `__GilStatic::force` | 758,805（−11.2%） | — |
+| 3 | 84fc5581 | 存根 `panic!("…")` → `__stub("…")`（`#[cold] #[inline(never)] #[track_caller]`，入参 `&'static str`）；`checkcast` 失败出口改非泛型的 `checkcast_fail` | 750,474 | 26,214 |
+| 4 | 2d6af212、0844b55b | 手写层正确性修复（§4.6），不以性能为目的 | — | — |
+| 5 | ee90ef5f | 两个 profile 都设 `panic = "abort"`，并由 `create_java_vm` 登记退出码 101 的 panic 钩子 | −25.6%（同批对照 434,653 → 323,540） | — |
+
+注：第 5 步的 size_est 取自重建后的计量区，统计口径与第 0–3 步不同，只看同批相对值。
+
+步 1–3 合计：size_est −24.2%，条目数 −15.6%。
+
+步 1–3 的 ABAB 编译对照（HelloWorld java_runtime，`cargo rustc` dev）：
+
+| 指标 | 基线 | 步 1–3 后 |
+|---|---:|---:|
+| rustc 合计 | 18.3 s / 17.4 s | 15.6 s / 16.5 s（约 −10%） |
+| 峰值 RSS | 2,336 MB / 2,338 MB | 2,010 MB / 2,009 MB（−14%） |
+
+步 1–3 后各阶段耗时：type_check 3.8 s、LLVM 3.6 s、codegen 3.5 s、borrowck 3.4 s、expand 2.6 s。
+
+步 5 的 ABAB 编译对照（cargo build dev，重编 java_runtime + user，`CARGO_PROFILE_DEV_PANIC` 切换，其余相同）：
+
+| 用例 | unwind（user s / 峰值 RSS） | abort（user s / 峰值 RSS） | 二进制 |
 |---|---|---|---|
-| X1 | `overflow-checks = false` / `panic = "abort"` | LLVM 阶段 10–20% | **语义不确定**：生成代码或手写层可能依赖 debug 溢出 panic、依赖 unwind 实现 Java 异常 / `catch_unwind`。未做，需逐项论证后由用户决定 |
-| X2 | 宏样板瘦身（`__unsafe_ref_*` / `__shallow_copy` 改为泛型共享实现，或按需生成） | IR 约 40% 中的大部分 | `runtime/rava_macros` 属 runtime 线 |
-| X3 | `gil::clinit_enter::<T>` 去泛型（按 `&'static str` / TypeId 调非泛型内核） | IR 约 4% | `runtime/` 属 runtime 线 |
-| X4 | 存根瘦身：参数改借用、共享 `#[cold]` 非泛型 panic 函数，或不生成未被引用的存根 | IR 约 7% | 删除存根与 CLAUDE.md 存根原则冲突，属**用户决策**；改参数传递方式会改 vtable 签名形态，**不确定**，未做 |
-| X5 | `codegen-units` 调整 | user 约 −8% | 峰值内存与收益随用例变化，需全量实测后再定 |
+| HelloWorld（5 组） | 20.73 / 19.93 / 22.80 / 20.45 / 20.56 s；1.4–1.9 GB | 18.84 / 18.01 / 18.42 / 18.13 / 18.46 s；1.4–1.7 GB | 24.2 MB → 18.3 MB（−24%） |
+| TestCompletableFuture（2 组） | 139.5 / 138.8 s；5.6–6.6 GB | 111.5 / 141.8 s；4.8–7.1 GB | 175.3 MB → 129.5 MB（−26%） |
+
+- HelloWorld：user 时间稳定下降约 10%。
+- TestCompletableFuture：第二组 abort 与其他线的编译重叠，噪声大于差值。确定性指标（mono size_est −25.6%、二进制 −26%）方向一致。
+
+验证（步 1–3）：
+- 27 例生成树与基线相比，runtime overlay 以外只有 `panic!("…")` → `__stub("…")` 一类差异：单行形态 169,881 处，缩进形态 345 对。
+- runtime 文件差异只在 `object.rs`、`lib.rs`、`sync_model.rs`、`gil.rs`、`object_ext.rs`。
+- raw-audit 逐行一致。
+- `cargo check` 全部通过：TestAtomics（144 s，3.09 GB）、TestCompletableFuture（231 s，1.98 GB）、TestStreamCollectors（154 s，2.73 GB）。
+
+验证（步 4、5）：TestCompletableFuture 树 `cargo check` 通过，HelloWorld 与 TestCompletableFuture 树 dev `cargo build` 通过。27 例树对照见 §4.7。
+
+语义等价论证：
+- **步 1**：协议只改分派形态，不改语义。
+  - 取值用读锁；设值先在锁外完成类型转换，再取写锁；更新在锁内转换。三者的原子性与原 `__unsafe_ref_get/set/update` 相同。
+  - 命中字段返回 `Some`，未命中返回 `None`。wrapper 先问内层存储，未命中再委托 vtable，与原先的逐方法委托顺序相同。
+  - 调用方经 `impl dyn ObjectVTable` 上的同名包装方法调用，调用点源码不变。
+- **步 2**：`clinit` 状态机的判定、等待、异常包装逻辑不变，只把状态单元改为经 `&'static` 引用传入。`force` 与原 `with` 的惰性初始化是同一 `OnceLock` 语义。
+- **步 3**：`__stub` 与原 `panic!` 输出同一消息（`stub: 类.方法:描述符`）。`#[track_caller]` 使 panic 位置仍报存根所在行。`checkcast_fail` 抛出的 ClassCastException 消息构造与原内联代码逐字相同。
+- **步 5**：见 §4.6。
+
+### 4.6 `overflow-checks` / `panic = "abort"` 论证
+
+**整数运算审计**
+
+生成器侧已全部显式：
+- `iadd/isub/imul/ineg/ladd/lsub/lmul/lneg` 与 `iinc` 用 `wrapping_*`。
+- 移位先掩码（`&0x1f` / `&0x3f`）；long 移位用 `wrapping_shl/shr`。
+- `idiv/irem/ldiv/lrem` 经运行时函数（`wrapping_div/rem` + 除零 ArithmeticException）。只有正的非零字面量除数保留裸运算符，这种情况不会溢出。
+- 窄化与类型转换用 `as`，与 JVM 的截断语义一致。
+- 浮点运算为裸运算，不涉及溢出检查。
+- `rava_macros` 不发射整数算术。
+
+手写层：共 176 个文件，筛出 311 行含裸 `+ - *`，逐行分类如下。
+- 绝大多数是 Rust 内部的 usize / 迭代下标运算，或 OS 取值的换算。这类运算溢出即是运行时缺陷，与 Java 语义无关。
+- 以 Java 实参为操作数、可能溢出的有 12 个文件，已在 0844b55b 改为显式形态：
+  - `off..off + len` 循环区间改 `saturating_add`（涉及 StreamEncoder.write、FileOutputStream.writeBytes、Adler32 / CRC32.updateBytes、Deflater / Inflater.copy_in、vectorizedHashCode）。溢出时的行为与未溢出的越界区间相同：逐元素访问到数组末端时抛 AIOOBE。
+  - 下标偏移 `base + i` 改 `wrapping_add` / `wrapping_mul`（涉及 System.arraycopy、countPositives、ArraysSupport 各 mismatch、ByteArray、Deflater / Inflater 输出）。回绕后的负下标由 `JArray::get/set` 抛 AIOOBE，与 JVM 的下标检查一致。
+  - `StreamDecoder.read` 的 `offset + length > cbuf.length` 改为 i64 拓宽比较。溢出的区间现在抛 IOOBE；原先在 overflow-checks 下会 panic，与 JDK 的 `(off + len) < 0` 判定对齐。
+  - `Unsafe` 的 `alignToHeapWordSize` 改为 `bytes.wrapping_add(7) & !7`，与 Java 的 long 回绕逐位一致。
+  - `decimal_digits_impl` 采用 JDK 的负数形式，对 `MIN_VALUE` 也不会溢出，无需改动。`Preconditions` 的 `length - fromIndex` 在两个操作数都非负后才计算，不会溢出。`VM.getNanoTimeAdjustment` 先按 ±2^32 秒截断再乘，也不会溢出。
+- 审计中发现一处与溢出检查无关的真缺陷，已在 2d6af212 修复：`Object.wait` / `Unsafe.park` / `Thread.sleep0` / `VirtualThread.joinNanos` 以 `Instant::now() + Duration` 计算截止时刻。Java 超时可取到 `Long.MAX_VALUE`，此时加法越界，任何 profile 下都会 panic。现在统一经 `monitor::deadline_after` 截到 2^32 秒（约 136 年，观测上等同无限期）。
+
+**`overflow-checks = false`：不做**
+
+- 经上述修正后，生成代码与手写层的 Java 语义运算都不再依赖这个开关，关掉它在语义上是安全的。
+- 实测没有收益：mono size_est 434,653 → 434,066（−0.13%），耗时差落在噪声内。原因是生成代码本身已全部使用 `wrapping_*`，没有溢出检查可省。
+- 保持开启还能在 dev 构建里检出手写层 usize 运算的缺陷。终态保持默认值。
+
+**`panic = "abort"`：已做**
+
+依赖 unwind 的出现处，全部列出：
+- `catch_unwind` 全仓只有一处：`thread_impl.rs` 的 Java 线程入口。捕获后只判断 `is_err()`，然后 `exit(101)`。
+- 没有 `set_hook`、`resume_unwind`、panic payload downcast、`thread::scope`，也没有用 `JoinHandle::join` 取 panic。
+- 没有 StackOverflowError 映射。Rust 栈溢出由 SIGSEGV 处理器报告后 abort，这一点与 profile 无关。
+- Java 异常全部经 `Result<_, JvmError>` 传播，不走 unwind。
+
+等价设计：
+- 生成的 `main` 第一条语句调用 `java_runtime::create_java_vm()`，它登记 panic 钩子：先调用默认钩子（输出 panic 位置、消息与回溯提示），再 `process::exit(101)`。
+- 线程入口的 `catch_unwind` 随之删除，任何线程的 panic 走同一出口。
+
+与改前 unwind 形态逐项对照：
+
+| 项目 | 改前 | 改后 |
+|---|---|---|
+| stderr 文本 | 默认钩子输出 | 同一默认钩子，文本相同 |
+| 主线程 panic 退出码 | lang_start 返回 101 | 101 |
+| 子线程 panic 退出码 | catch_unwind 后 `exit(101)` | 101 |
+| 标准输出冲刷 | 进程退出时冲刷 | 由 `process::exit` 的 `rt::cleanup` 完成 |
+| unwind 期间运行的 Drop | 会运行 | 不再运行；Java 对象没有析构语义，进程随即退出，无可观测差别 |
+
+- 以上各项已用独立探针 crate 验证：panic=abort 加同形钩子，主线程与子线程 panic 都以退出码 101 结束，panic 前未换行的 `print!` 输出已冲刷，stderr 文本与默认形态相同。
+- `run_tests.py` 的 run.log 落盘与 `panicked at` / `stub:` 首行提取依赖非零退出码和 stderr 文本，两者都不变。
+- cargo 对测试、构建脚本与 proc-macro 忽略 `panic` 设置，`rava_macros` 与 `build.rs` 不受影响。
+
+### 4.7 27 例生成树对照（基线 d145f609 → ee90ef5f）
+
+`scripts/gen_trees.sh`：基线用 `java_rta_emitter_perf2_base` worktree，新树用本分支。27 例都转译成功，raw-audit 逐行一致。`closure.json` 按惯例排除。差异共 10,831 个文件，逐类列出：
+
+| 类别 | 出现处 | 来源 |
+|---|---|---|
+| `panic!("…")` → `__stub("…")`，其余逐字节相同 | 169,881 处调用 | 步 3 |
+| runtime overlay 文件（手写真源的拷贝） | 20 个文件 × 27：`gil.rs`、`lib.rs`、`monitor.rs`、`sync_model.rs`、`java/lang/{object,object_ext,system_impl,thread_impl,virtual_thread_impl}.rs`、`java/io/file_output_stream_impl.rs`、`java/util/zip/{adler32,crc32,deflater,inflater}_impl.rs`、`jdk/internal/access/java_lang_access_impl.rs`、`jdk/internal/misc/unsafe__impl.rs`、`jdk/internal/util/{arrays_support,byte_array}_impl.rs`、`sun/nio/cs/stream_{decoder,encoder}_impl.rs` | 步 1–5 |
+| 根 Cargo.toml 两个 profile 各加一行 `panic = "abort"` | 27 × 2 | 步 5 |
+| `user/src/main.rs` 首行加 `java_runtime::create_java_vm();` | 27 | 步 5 |
+| `rava_macros` 绝对路径与 scratch 包版本号 | 每例 2 个 Cargo.toml | 由 worktree 路径派生，不是本线改动 |
+
+除以上类别外没有其他差异。
 
 ## 五、未完成与后续
 
@@ -158,8 +283,20 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 | N1 | 按类并行发射（输出确定） | 被阻塞：`resolve`（闭包 crate 依赖，本线禁改）、ty `Registry`、`EmitCtx` 使用 `Rc` / `RefCell`；`ProjectState.seen_simples` 跨类累积，与发射顺序相关。终态做法：共享只读上下文改 `Arc` + 线程安全只读缓存（`OnceLock` / 分片），`seen_simples` 改为先并行生成、后按原序做一次确定性的导入冲突裁决。需要与闭包线协调 `resolve` 的 `Rc → Arc` |
 | N2 | 闭包结果进程内传递 | `rava build` 现在由闭包写出 closure.json，发射再读入并二次解析手写层（`syn` 约 3%）、按类二次解析补充属性（`extras` 约 2.7%）。终态由闭包直接交出内存结构，手写层解析结果复用。需要闭包 crate 暴露接口（闭包线） |
 | N3 | 冷写出 DeepCopy 2.13 s 仍略高于 2 s | 剩余热点是平的。可以做的小项：`Acc::precise` 按类名缓存包路径 / 短名（约 2%）、`collect_referenced` 免重复插入、phase2 `fill_slot` 分配。N1 落地后（2 线程）会有充分余量 |
+| N4 | 剩余 mono 热点（步 1–3 后） | `drop`（逐 T 的 Weak / Arc 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
+| N5 | 按类并行发射（N1）的实施时机 | 协调决定：等 closure-perf2 合入主线后，本线先合主线，再把 `resolve` 的 `Rc` 改为 `Arc`，改完闭包 4 例集合必须一致 |
 
 ## 六、需要主会话 e2e 抽查的用例
+
+- **emitter-perf2 步 1**（引用字段协议）：`TestAtomics`、`TestCompletableFuture`、`TestChmTransfer`。这三例覆盖 Unsafe / VarHandle / AtomicReference 的引用字段 get / set / CAS / getAndUpdate。
+- **步 2**（clinit / 静态字段）：`TestSynchronized`、`TestCompletableFuture`（多线程下的类初始化），`TestSwitchString`、`TestZonedDateTime`（静态表与枚举初始化）。
+- **步 3**（存根 / checkcast）：`TestCasting`（ClassCastException 消息）。另任选一个当前命中存根而失败的用例，确认 stderr 仍含 `stub: 类.方法:描述符`，run.log 首行提取正常。
+- **步 4**（手写层）：`TestFilesApi`、`TestDateTimeFormat`（StreamDecoder / Encoder、arraycopy、ByteArray 路径），`TestSynchronized`（wait / sleep / park 截止时刻）。
+- **步 5**（panic = "abort"）：
+  - 同上任一命中存根的用例：退出码仍为 101，run.log 仍落盘。
+  - 一个有子线程的用例（`TestCompletableFuture`）：正常退出码 0，输出完整。
+  - 全量跑一次，确认没有用例由「失败」变为 `signal 6`。
+
 
 - **D1**（改动所有用例的根 Cargo.toml，并在重型工作区单作业）：
   - `HelloWorld`、`TestStreamBasic`：普通工作区的 profile 生效。

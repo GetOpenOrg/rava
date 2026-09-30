@@ -69,6 +69,11 @@
 - P0 观测：`rava build` 分阶段耗时、峰值内存、按类 / 方法的 Top-N。
 - 生成器自身优化：热路径分配、类型 / 描述符驻留与缓存、按类并行发射（输出确定）、闭包结果进程内传递、写文件去重（内容不变不重写、保持 mtime，减少下游 cargo 重编译）。
 - 降低下游编译成本：按 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md) §五 执行，依次为 rustc 分阶段测量 → 泛型擦除核心（先论证布局前提）→ decl / body 分层拆 crate。实测表明按包 / 按 SCC 直接拆不可行（95% 文件在同一个环里）。
+- `emitter-perf2` 进展（详见 [`2026-09-30-emitter-performance.md`](2026-09-30-emitter-performance.md) §4.4–4.7）：
+  - 已做：引用字段协议合并、clinit 去泛型、存根改调共享冷函数。HelloWorld java_runtime 的 mono size_est −24.2%，rustc −10%，峰值 RSS −14%。
+  - 已做：`panic = "abort"`，panic 钩子保持退出码 101。mono −25.6%，二进制约 −25%，HelloWorld user 时间约 −10%。
+  - `overflow-checks = false` 实测无收益，不做；手写层的 Java 整数运算已全部显式化。
+  - 按类并行发射：待 closure-perf2 合入主线后实施。
 - 验收：生成器自身优化（不改输出的）要求 27 例生成树与改前逐字节一致；降低下游编译成本的生成形态改造（Q1 已允许）要求 e2e 通过，生成树差异只含预期改动。
 
 ## 四、待用户决策
