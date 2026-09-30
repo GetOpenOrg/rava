@@ -79,7 +79,7 @@ def sim_stack(ins, sim, class_name, registry) -> bool:
             if any(c in e for c in ['(', 'push', 'insert']):
                 sim.emit(RawStmt(f"let _ = {e};"))
     elif op == 'fold_const':
-        # closure.json 折叠点（closure_folds）：弹出 receiver / 实参，有副作用的按求值序保留，
+        # closure.json getfield 折叠点（closure_folds）：弹出 receiver（有副作用的按求值序保留），
         # 再压入常量（装载指令走 sim_consts 的既有发射路径）
         from ...closure_folds import decode_fold_const
         from .consts import sim_consts

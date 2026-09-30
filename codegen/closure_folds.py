@@ -14,9 +14,11 @@ docs/plans/2026-09-29-rust-closure-analyzer.md §7.3「折叠点导出」：
   2. 条件跳转只剩一个活后继 → 弹出操作数（`pop`）+ `goto`（或直通），偏移沿用原指令字节；
      switch 的死目标改指向一个活目标，只剩一个活目标时同样改写为 `pop` + `goto`；
   3. dead_handlers 与受保护区间已全死的异常表项删除，其余区间端点收拢到活指令起点；
-  4. consts 读取点改写为常量装载：getstatic 直接替换为装载指令；getfield / invoke 替换为
-     合成指令 `fold_const`（operand = 弹出的模拟栈条目数，comment = 装载指令），由
-     instr/sim/stack.py 弹出 receiver / 实参（有副作用的保留求值）后压入常量。
+  4. consts 读取点改写为常量装载：getstatic 直接替换为装载指令；getfield 替换为合成指令
+     `fold_const`（operand = 弹出条目数、comment = 装载指令），由 instr/sim/stack.py 弹出 receiver
+     （有副作用的保留求值）再压常量；invoke 保留原指令（opcode / operand / comment 不变，所有按
+     调用指令识别引用的消费方照常看到这次调用），在 `Instr.fold` 挂装载指令，由 instr/sim 照常
+     翻译调用、丢弃结果（被调方的副作用必须保留，折叠的只是返回值），再压入常量。
 
 不认识的 folds_version 忽略全部折叠、按原样翻译（两侧可各自先合入）。
 违反格式约定的输入（端点不在指令起点、活指令顺序落入死区、读取点指令不符）直接报错。
@@ -118,14 +120,6 @@ def _push_instr(pc: int, value, jtype: str, where: str) -> Instr:
     raise FoldError(f"{where}: 不支持的常量类型 {jtype!r}")
 
 
-def _invoke_pops(ins: Instr) -> int:
-    """invoke 消耗的模拟栈条目数（long/double 在模拟栈中占一个条目）。"""
-    from .type_map import parse_descriptor_params
-    desc = (ins.comment or '').split(':', 1)[-1]
-    n = len(parse_descriptor_params(desc))
-    return n if ins.opcode == 'invokestatic' else n + 1
-
-
 def _const_instr(ins: Instr, c: dict, where: str) -> Instr:
     kind = c.get('kind')
     op = ins.opcode
@@ -135,15 +129,15 @@ def _const_instr(ins: Instr, c: dict, where: str) -> Instr:
     if not ok:
         raise FoldError(f"{where}: const kind={kind!r} 与指令 {op} 不符")
     push = _push_instr(ins.offset, c.get('value'), c.get('type', ''), where)
-    npop = 0 if kind == 'getstatic' else 1 if kind == 'getfield' else _invoke_pops(ins)
-    if npop == 0:
+    if kind == 'invoke':
+        return Instr(ins.offset, ins.opcode, ins.operand, ins.comment, fold=push)
+    if kind == 'getstatic':
         return push
-    return Instr(ins.offset, 'fold_const', str(npop),
-                 f'{push.opcode}\t{push.operand or ""}\t{push.comment or ""}')
+    return Instr(ins.offset, 'fold_const', '1', f'{push.opcode}\t{push.operand or ""}\t{push.comment or ""}')
 
 
 def decode_fold_const(ins: Instr) -> tuple[int, Instr]:
-    """`fold_const` → (弹出条目数, 装载指令)。"""
+    """getfield 折叠的 `fold_const` → (弹出条目数, 装载指令)。"""
     op, operand, comment = (ins.comment or '').split('\t', 2)
     return int(ins.operand), Instr(ins.offset, op, operand or None, comment or None)
 

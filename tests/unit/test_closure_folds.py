@@ -156,14 +156,23 @@ class Consts(unittest.TestCase):
         npop, push = cf.decode_fold_const(out[1])
         self.assertEqual((out[1].opcode, npop, push.opcode), ('fold_const', 1, 'aconst_null'))
 
-    def test_invoke_pops_receiver_and_args(self):
+    def test_invoke_keeps_call(self):
         code = [Instr(0, 'aload_0'), Instr(1, 'lload_1'), Instr(2, 'iload_3'),
                 Instr(3, 'invokevirtual', '2', 'Method p/C.g:(JI)J'), Instr(6, 'lreturn')]
         load([{'method': M, 'consts': [{'pc': 3, 'kind': 'invoke', 'value': '9007199254740993',
                                          'type': 'J'}]}])
         out = cf.apply(M, code, [], 7)
-        npop, push = cf.decode_fold_const(out[3])
-        self.assertEqual((npop, push.opcode, push.comment), (3, 'ldc2_w', 'long 9007199254740993'))
+        # 调用指令原样保留（被调方副作用不随返回值折叠而丢失；按调用指令识别引用的消费方照常看到），
+        # 折叠常量挂在 fold 上
+        self.assertEqual((out[3].opcode, out[3].operand, out[3].comment),
+                         ('invokevirtual', '2', 'Method p/C.g:(JI)J'))
+        self.assertEqual((out[3].fold.opcode, out[3].fold.comment), ('ldc2_w', 'long 9007199254740993'))
+
+    def test_invoke_static_no_args_keeps_call(self):
+        code = [Instr(0, 'invokestatic', '2', 'Method p/C.f:()Z'), Instr(3, 'ireturn')]
+        load([{'method': M, 'consts': [{'pc': 0, 'kind': 'invoke', 'value': True, 'type': 'Z'}]}])
+        out = cf.apply(M, code, [], 4)
+        self.assertEqual((out[0].opcode, out[0].fold is not None), ('invokestatic', True))
 
     def test_kind_mismatch_rejected(self):
         code = [Instr(0, 'getstatic', '2', 'Field p/C.F:I'), Instr(3, 'ireturn')]

@@ -30,6 +30,21 @@ _HANDLERS = [
 
 
 def sim_instr(ins, sim, class_name: str, registry=None):
+    if ins.fold is not None:
+        # closure.json invoke 折叠点（closure_folds）：调用照常翻译（被调方副作用保留），
+        # 丢弃返回值，改压折叠常量
+        from dataclasses import replace
+        from ...rs_ir import RawStmt
+        from ...render import render_expr
+        from .consts import sim_consts
+        from ...type_map import parse_descriptor_params
+        nargs = len(parse_descriptor_params((ins.comment or '').split(':', 1)[-1]))
+        depth = len(sim.stack) - nargs - (ins.opcode != 'invokestatic')
+        sim_instr(replace(ins, fold=None), sim, class_name, registry)
+        if len(sim.stack) > depth:
+            sim.emit(RawStmt(f"let _ = {render_expr(sim.pop()[0])};"))
+        sim_consts(ins.fold, sim, class_name, registry)
+        return
     for handler in _HANDLERS:
         if handler(ins, sim, class_name, registry):
             return

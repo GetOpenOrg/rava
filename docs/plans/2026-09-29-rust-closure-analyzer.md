@@ -662,8 +662,9 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
    不输出「try 区间部分删除，却保留引用它的 handler」的组合。
 3. **`consts`**：被折叠成常量的读取点。`kind` 取 `getfield` / `getstatic` / `invoke` 三种，栈效应如下：
    - `getfield`：替换后弹出 receiver。
-   - `invoke`：替换后弹出全部实参，有 receiver 也一并弹出。
-   - 实参 / receiver 表达式的副作用由 Python 保留求值、丢弃结果，JSON 只给 pc。
+   - `invoke`：**调用照常执行**，只丢弃返回值、改压常量。折叠的是返回值，不是调用：被调方的副作用
+     （如 CompletableFuture.postFire 内的 postComplete）必须保留；被调方仍在闭包内（分析器照常接边）。
+   - getfield 的 receiver 表达式副作用由 Python 保留求值、丢弃结果，JSON 只给 pc。
 4. **`value` 与 `type`**：`type` 是 JVM 描述符（`Z/B/C/S/I/J/F/D`、`Ljava/lang/String;`）。
    - null 写成 `"value": null`，`type` 给声明类型。
    - `J` / `D` 的值用字符串编码（`"9007199254740993"`），避免 JSON 数值丢精度。
@@ -680,10 +681,10 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
 **消费侧已就绪**（`codegen/closure_folds.py`，`main.py --closure-json <closure.json>`）：在 classfile 解码后、
 VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成代码共用）。
 - 条件跳转恒直通改写为 `pop`，恒跳转改写为 `pop` + `goto`；switch 的死目标改指向活目标，只剩一个活目标时改写为 `pop` + `goto`。偏移沿用原指令字节。
-- getstatic 折叠为装载指令；getfield / invoke 折叠为合成指令 `fold_const`，先弹出 receiver 和实参（有副作用的保留求值），再压入常量。
+- getstatic 折叠为装载指令；getfield 折叠为合成指令 `fold_const`，先弹出 receiver（有副作用的保留求值）再压入常量；invoke 保留原调用指令（按调用指令识别引用的消费方——导入收集、super 调用的 `_base` 函数收集等——照常看到），在 `Instr.fold` 挂装载指令，`sim_instr` 照常翻译调用、以 `let _ =` 丢弃结果，再压入常量。
 - 异常表：删掉 dead_handlers 的表项，以及受保护区间已全死的表项；其余区间端点收拢到活指令起点。
 - 违约输入直接报 `FoldError`：端点不在指令起点、活的非跳转指令顺序落入死区、const 的 kind 与指令不符、Z 不是布尔值、handler 在死区但未列入 dead_handlers。
-- 单元测试 `tests/unit/test_closure_folds.py`（19 项）；手工 closure.json 的端到端探针（静态字段 / 实例字段 / 调用三类折叠 + 死分支）生成体符合预期。
+- 单元测试 `tests/unit/test_closure_folds.py`（20 项）；手工 closure.json 的端到端探针（静态字段 / 实例字段 / 调用三类折叠 + 死分支）生成体符合预期。
 
 验收用 `compare_trees.sh`：
 - 不带 folds 时，生成树逐字节不变；
