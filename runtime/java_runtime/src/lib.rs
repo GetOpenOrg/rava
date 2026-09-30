@@ -279,6 +279,29 @@ pub fn __stub(msg: &'static str) -> ! {
     panic!("{msg}")
 }
 
+/// 接收者恒为 null 的虚调用点（闭包分析 folds `null_recv`：接收者值集为空，被调方不在调用链上）：
+/// 生成器不翻译调用，发射 `return Err(__null_recv(&recv, "被调方"))`。接收者确为 null → 与 JVM 同样
+/// 抛 NullPointerException；不为 null 说明分析器漏了写入来源（未建模的写入使值集偏小）——panic 报出
+/// 违约点，不把非 null 接收者静默当作 NPE。
+#[cold]
+#[inline(never)]
+#[track_caller]
+pub fn __null_recv<T: Clone + Into<Object>>(recv: &T, callee: &'static str) -> error::JvmError {
+    if _is_jnull_ref(recv) {
+        return error::JvmError::null_pointer();
+    }
+    panic!("null_recv 违约：{callee} 的接收者非 null（闭包分析判定恒为 null）")
+}
+
+/// 不返回的调用点之后（闭包分析 folds `noreturn_calls`：唯一目标没有任何返回路径）：
+/// 被调方正常返回即违反分析结论，panic 报出违约点，不继续执行已删去的代码。
+#[cold]
+#[inline(never)]
+#[track_caller]
+pub fn __noreturn(callee: &'static str) -> ! {
+    panic!("noreturn 违约：{callee} 正常返回（闭包分析判定不返回）")
+}
+
 /// 整数除法/取余（JVMS §6.5 idiv / irem / ldiv / lrem）：
 /// 除数为 0 抛 `ArithmeticException("/ by zero")`；`MIN / -1` 按二进制补码回绕。
 pub fn idiv(a: i32, b: i32) -> error::Result<i32> {
@@ -505,7 +528,7 @@ pub mod prelude {
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
-    pub use super::__stub;
+    pub use super::{__stub, __null_recv, __noreturn};
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;

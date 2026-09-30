@@ -116,6 +116,21 @@ pub struct MethodFold {
     pub dead_catches: BTreeSet<DeadCatch>,
     /// pc → 常量读取点
     pub consts: BTreeMap<u32, FoldConst>,
+    /// 接收者恒为 null 的活虚调用点：执行即 NullPointerException，调用不翻译
+    pub null_recv: BTreeSet<u32>,
+    /// 定论不返回的活调用点：调用照常翻译，其后控制流终止
+    pub noreturn_calls: BTreeSet<u32>,
+    /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交）
+    pub noreturn_dead_pcs: Vec<(u32, u32)>,
+}
+
+/// 类初始化事实（VM 以实参传入的类初始化入口，如 `Unsafe.ensureClassInitialized`）
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClassInitFacts {
+    /// 被初始化的类（各调用点并集，按类名排序）
+    pub targets: Vec<String>,
+    /// 存在 Class 实参值不定的调用点：任何带 `<clinit>` 的闭包类都可能经此初始化
+    pub unknown: bool,
 }
 
 /// JCA 服务四元组
@@ -154,6 +169,7 @@ pub struct ClosureFacts {
     pub reflect_members: Vec<MemberRef>,
     pub reflect_gaps: Vec<String>,
     pub seeds: SeedFacts,
+    pub class_init: ClassInitFacts,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -223,6 +239,9 @@ impl ClosureFacts {
                     .map(|c| DeadCatch { start: c.start, end: c.end, handler: c.handler, catch_type: c.catch_type.clone() })
                     .collect(),
                 consts,
+                null_recv: f.null_recv.iter().copied().collect(),
+                noreturn_calls: f.noreturn_calls.iter().copied().collect(),
+                noreturn_dead_pcs: f.noreturn_dead_pcs.clone(),
             };
             folds.insert(f.method.clone(), mf);
         }
@@ -252,6 +271,10 @@ impl ClosureFacts {
                     .collect(),
                 reflect_names: s.reflect_names.clone(),
                 reflect_all: s.reflect_all.clone(),
+            },
+            class_init: ClassInitFacts {
+                targets: e.class_init.targets().into_iter().map(String::from).collect(),
+                unknown: e.class_init.unknown,
             },
         }
     }
@@ -290,6 +313,12 @@ impl ClosureFacts {
         out.reflect_gaps = strings(reflect.get("gaps"))?;
         if let Some(s) = v.get("seeds") {
             out.seeds = parse_seeds(s)?;
+        }
+        if let Some(ci) = v.get("class_init") {
+            out.class_init = ClassInitFacts {
+                targets: strings(ci.get("targets"))?,
+                unknown: ci.get("unknown").and_then(Value::as_bool).unwrap_or(false),
+            };
         }
         Ok(out)
     }
@@ -355,12 +384,27 @@ fn parse_fold_value(v: &Value, ty: &str) -> Result<FoldValue, InputError> {
     })
 }
 
-pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
-    let mut mf = MethodFold::default();
-    for r in f.get("dead_pcs").and_then(Value::as_array).into_iter().flatten() {
-        let pair = r.as_array().filter(|p| p.len() == 2).ok_or_else(|| InputError::Format(format!("dead_pcs 项不合法：{r}")))?;
-        mf.dead_pcs.push((u32_of(&pair[0])?, u32_of(&pair[1])?));
+fn parse_ranges(f: &Value, key: &str) -> Result<Vec<(u32, u32)>, InputError> {
+    let mut out = Vec::new();
+    for r in f.get(key).and_then(Value::as_array).into_iter().flatten() {
+        let pair = r.as_array().filter(|p| p.len() == 2).ok_or_else(|| InputError::Format(format!("{key} 项不合法：{r}")))?;
+        out.push((u32_of(&pair[0])?, u32_of(&pair[1])?));
     }
+    Ok(out)
+}
+
+fn parse_pcs(f: &Value, key: &str) -> Result<BTreeSet<u32>, InputError> {
+    f.get(key).and_then(Value::as_array).into_iter().flatten().map(u32_of).collect()
+}
+
+pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
+    let mut mf = MethodFold {
+        dead_pcs: parse_ranges(f, "dead_pcs")?,
+        null_recv: parse_pcs(f, "null_recv")?,
+        noreturn_calls: parse_pcs(f, "noreturn_calls")?,
+        noreturn_dead_pcs: parse_ranges(f, "noreturn_dead_pcs")?,
+        ..MethodFold::default()
+    };
     for h in f.get("dead_handlers").and_then(Value::as_array).into_iter().flatten() {
         mf.dead_handlers.insert(u32_of(h)?);
     }
