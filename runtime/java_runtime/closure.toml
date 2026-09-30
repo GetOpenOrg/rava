@@ -97,6 +97,10 @@ packages = [
     # （registerNatives / createLong 等）按需手写于 perf_impl.rs：原生二进制无 jvmstat 共享内存，
     # createLong 返回进程私有的 8 字节缓冲，计数器语义（get/set/add）由字节码经 LongBuffer 承载。
     "jdk/internal/perf/",
+    # C1d：安全工具类（SecurityConstants / KnownOIDs / ArrayUtil / 算法约束 / HexDumpEncoder 等，纯 Java，
+    # 0 个 ACC_NATIVE）。SecurityConstants.PROVIDER_VER 与 CryptoAlgorithmConstraints.permits 的过渡手写已删；
+    # Debug.getInstance / isOn / isVerbose 仍为过渡手写（阻塞在分析器系统属性折叠，见 debug_impl.rs）。
+    "sun/security/util/",
 ]
 classes = [
     # MH-native：asType / 组合子的类型转换与名字工具。纯 Java（装拆箱 / 拓宽句柄经 IMPL_LOOKUP
