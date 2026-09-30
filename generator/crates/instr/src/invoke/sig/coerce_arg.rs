@@ -75,7 +75,7 @@ pub(super) fn coerce(env: &InstrEnv, sim: &StackSim, log: &mut InstrLog, e: Expr
         if !act_tv && is_this && is_generated_concrete_class(env, sim, actual) {
             return Ok(object_from(clone_plain(e)?)?);
         }
-        return coerce::to_object(env, e, actual, false);
+        return coerce::to_object(env, e, actual, true);
     }
     if ["bool", "i8", "i16", "u16"].contains(&et.as_str()) && at != et {
         return Ok(coerce::value(e, actual, expected));
@@ -110,17 +110,17 @@ pub(super) fn coerce(env: &InstrEnv, sim: &StackSim, log: &mut InstrLog, e: Expr
         return Ok(from_call(clone_arg(e, is_this)?)?);
     }
     if exp_tv && at != et && !is_prim(actual) && !is_obj_or_unit(&at) && !act_tv {
-        return Ok(from_call(coerce::to_object(env, e, actual, false)?)?);
+        return Ok(from_call(coerce::to_object(env, e, actual, true)?)?);
     }
     if act_tv && et != at && !is_prim(expected) && !is_obj_or_unit(&et) && !exp_tv && downcast_target_valid(env, sim, expected) {
-        return Ok(from_call(coerce::to_object(env, e, actual, false)?)?);
+        return Ok(from_call(coerce::to_object(env, e, actual, true)?)?);
     }
     let (act_arr, exp_arr) = (matches!(act_t, JvmType::Array(_)), matches!(exp_t, JvmType::Array(_)));
     if act_obj && exp_arr {
         return Ok(from_call(clone_ref(e)?)?);
     }
     if act_arr && exp_arr && at != et {
-        return Ok(from_call(coerce::to_object(env, e, actual, false)?)?);
+        return Ok(from_call(coerce::to_object(env, e, actual, true)?)?);
     }
     if !is_prim(actual) {
         return clone_arg(e, is_this);

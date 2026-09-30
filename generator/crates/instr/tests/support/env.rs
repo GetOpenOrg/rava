@@ -64,8 +64,9 @@ pub fn build_env(meta: &Value) -> R<Env> {
     let manifest = Manifest::load(Path::new(&runtime)).map_err(|e| format!("ty 清单：{e}"))?;
     let rt = RuntimeManifest::load(Path::new(&runtime)).map_err(|e| format!("runtime 清单：{e:?}"))?;
     let names = ShortNames::build(&reg);
-    let root = reg.get(ty::consts::OBJECT).map(|ci| ci.class_file());
-    let facts = InstrFacts::build(&reg, root, &Path::new(&runtime).join("src"));
+    // 根类由 runtime 手写、不在 registry 中：方法集取自 JDK 类文件（`_root_virtual_methods`）
+    let root = cp.get(ty::consts::OBJECT);
+    let facts = InstrFacts::build(&reg, root.as_deref(), &Path::new(&runtime).join("src"));
     let mut short = Map::new();
     for ci in reg.iter_insertion() {
         short.insert(ci.name().to_string(), Value::String(names.short(ci.name()).into_owned()));
