@@ -73,18 +73,14 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
         .name(name)
         .stack_size(JAVA_THREAD_STACK)
         .spawn(move || {
-            let handoff = handoff;
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let t = handoff.0;
-                CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&t)));
-                run_java_thread(&t);
-                CURRENT.with(|c| c.borrow_mut().take());
-                drop(t);
-            }));
-            if outcome.is_err() {
-                // Rust panic（未覆盖存根等致命缺口）：与主线程 panic 同样终止进程
-                std::process::exit(101);
-            }
+            // Rust panic（未覆盖存根等致命缺口）由 create_java_vm 登记的 panic 钩子
+            // 以退出码 101 终止整个进程，与主线程 panic 同一出口
+            let handoff = handoff; // 整体移入闭包（Handoff 承载跨线程移交），不按字段捕获
+            let t = handoff.0;
+            CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&t)));
+            run_java_thread(&t);
+            CURRENT.with(|c| c.borrow_mut().take());
+            drop(t);
             crate::gil::note_terminated(daemon);
         });
     if spawned.is_err() {
