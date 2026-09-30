@@ -3,8 +3,11 @@
 pub mod blocks;
 pub mod coerce_text;
 pub mod cond_text;
+pub mod emit;
+pub mod entry;
 pub mod error;
 pub mod node;
+pub mod split_try;
 pub mod text;
 pub mod try_plan;
 pub mod types;
