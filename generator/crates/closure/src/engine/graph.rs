@@ -18,8 +18,10 @@ pub(super) struct FlowGraph {
     pub(super) delta: Vec<TypeSet>,
     /// 已在 `fwork` 中
     pub(super) queued: Vec<bool>,
-    /// 去重的流边（源, 目标, 过滤类型）
-    pub(super) seen: HashSet<(u32, u32, u32)>,
+    /// 流边去重索引（源, 目标, 过滤类型）：只收出度达 `SEEN_AT` 的源；低出度源直接扫自己的出边表
+    seen: HashSet<(u32, u32, u32)>,
+    /// 流边总数（去重后）
+    pub(super) edge_count: usize,
     /// 观测：`add_to` 调用次数 / 有增量的次数 / 并入的元素数
     pub(super) adds: [u64; 3],
     /// 节点 → 所属代表（自身 = 代表）；合并时整组改指，恒为一跳
@@ -41,7 +43,42 @@ pub(super) struct FlowGraph {
     pub(super) fmemo_stats: [u64; 3],
 }
 
+/// 出度达到此数的源进入去重索引；以下逐条比对出边表（多数源只有几条出边）
+const SEEN_AT: usize = 16;
+
 impl FlowGraph {
+    /// 接流边 rs → rd（代表间）；已有同一（目标, 过滤类型）的边时返回 false
+    pub(super) fn add_edge(&mut self, rs: u32, rd: u32, f: u32) -> bool {
+        let es = &mut self.edges[rs as usize];
+        if es.len() < SEEN_AT {
+            if es.contains(&(rd, f)) {
+                return false;
+            }
+        } else {
+            if es.len() == SEEN_AT {
+                self.seen.extend(es.iter().map(|&(t, g)| (rs, t, g)));
+            }
+            if !self.seen.insert((rs, rd, f)) {
+                return false;
+            }
+        }
+        es.push((rd, f));
+        self.edge_count += 1;
+        true
+    }
+    /// 源 s 的出边整体替换为已去重的 es（环合并重写出边用）；须先 `clear_seen`
+    pub(super) fn set_edges(&mut self, s: u32, es: Vec<(u32, u32)>) {
+        if es.len() > SEEN_AT {
+            self.seen.extend(es.iter().map(|&(t, g)| (s, t, g)));
+        }
+        self.edge_count += es.len();
+        self.edges[s as usize] = es;
+    }
+    /// 清空去重索引与边计数（随后逐源 `set_edges` 重建）
+    pub(super) fn clear_seen(&mut self) {
+        self.seen = HashSet::default();
+        self.edge_count = 0;
+    }
     /// 节点序号（首次出现时驻留）
     #[inline]
     pub(super) fn id(&mut self, n: Node) -> u32 {

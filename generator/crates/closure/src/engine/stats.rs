@@ -272,7 +272,7 @@ impl<'a> Engine<'a> {
             "reprocess_same_analysis": s.reprocess,
             "site_reruns": s.site_reruns,
             "lcall_reruns": s.lcall_reruns,
-            "flow_edges": self.graph.seen.len(),
+            "flow_edges": self.graph.edge_count,
             "adds": self.graph.adds,
             // 环合并：检测次数 / 合并掉的节点数 / 检测耗时 ms（scc.rs）
             "scc": self.graph.scc_stats,

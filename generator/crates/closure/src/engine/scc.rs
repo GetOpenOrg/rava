@@ -19,7 +19,7 @@ const SCC_MIN_EDGES: usize = 100_000;
 impl<'a> Engine<'a> {
     pub(super) fn scc_due(&self) -> bool {
         let e = self.graph.edges_since;
-        e >= SCC_MIN_EDGES && e * 4 >= self.graph.seen.len()
+        e >= SCC_MIN_EDGES && e * 4 >= self.graph.edge_count
     }
 
     /// 可参与合并的节点：代表自身，且不是暂存中的空数组元素节点
@@ -145,24 +145,25 @@ impl<'a> Engine<'a> {
                 push.push((a, pend));
             }
         }
-        // 全图出边改指代表并去重；去重表按新边重建
-        let mut seen: HashSet<(u32, u32, u32)> = HashSet::default();
+        // 全图出边改指代表并去重；去重索引按新边重建
+        self.graph.clear_seen();
+        let mut seen: HashSet<(u32, u32)> = HashSet::default();
         for s in 0..self.graph.node_count() {
             if self.graph.edges[s].is_empty() {
                 continue;
             }
             let es = std::mem::take(&mut self.graph.edges[s]);
             let s32 = s as u32;
+            seen.clear();
             let kept: Vec<(u32, u32)> = es
                 .into_iter()
                 .filter_map(|(t, f)| {
                     let r = self.graph.rep(t);
-                    (!(r == s32 && f == obj) && seen.insert((s32, r, f))).then_some((r, f))
+                    (!(r == s32 && f == obj) && seen.insert((r, f))).then_some((r, f))
                 })
                 .collect();
-            self.graph.edges[s] = kept;
+            self.graph.set_edges(s32, kept);
         }
-        self.graph.seen = seen;
         for (a, d) in push {
             self.queue_delta(a, &d);
         }

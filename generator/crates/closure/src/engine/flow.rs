@@ -136,10 +136,9 @@ impl<'a> Engine<'a> {
         if rs == rd && objf {
             return;
         }
-        if !self.graph.seen.insert((rs, rd, filter)) {
+        if !self.graph.add_edge(rs, rd, filter) {
             return;
         }
-        self.graph.edges[rs as usize].push((rd, filter));
         self.graph.edges_since += 1;
         if self.graph.set(rs).is_empty() {
             return;
@@ -228,23 +227,19 @@ impl<'a> Engine<'a> {
             if s.is_empty() || self.graph.rep(i) != i {
                 continue;
             }
-            // 边表借出（推送中新接的边已由 `flow` 按当前集合推过，归还时并在后面）；
-            // 同一过滤类型只收窄一次，Object 过滤直接推增量本身
-            let edges = std::mem::take(&mut self.graph.edges[ix]);
+            // 按下标原地遍历推送前已有的出边（推送中新接的边追加在后，已由 `flow` 按当前集合推过；
+            // 边表只增不改，环合并只在两次出队之间）；同一过滤类型只收窄一次，Object 过滤直接推增量本身
+            let ne = self.graph.edges[ix].len();
             let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
             let sk = kind_ix(&self.graph.node(i)) * KINDS;
-            for &(dst, f) in &edges {
+            for k in 0..ne {
+                let (dst, f) = self.graph.edges[ix][k];
                 let pk = sk + kind_ix(&self.graph.node(dst));
                 let grew = self.graph.adds[1];
                 self.push_edge(dst, f, obj, &s, &mut narrowed);
                 let p = &mut self.graph.pushes[pk];
                 p[0] += 1;
                 p[1] += u64::from(self.graph.adds[1] != grew);
-            }
-            if !edges.is_empty() {
-                let slot = &mut self.graph.edges[ix];
-                let added = std::mem::replace(slot, edges);
-                slot.extend(added);
             }
             let ms = self.graph.members.get(&i).cloned().unwrap_or_else(|| vec![i]);
             for m in ms {
