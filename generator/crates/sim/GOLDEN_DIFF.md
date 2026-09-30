@@ -43,6 +43,18 @@ infer_type_args 0（两例无菱形构造存入泛型声明局部，该路径只
 6. **钩子实参**：Python 以短名 / 类型串调用，Rust 传擦除后的 `RsType`（`is_subtype` / `is_interface`）或完整
    `RsType`（`carrier_type` / `box_object`），由实现方映射到注册表。
 
+## §1b 语义偏离（有意，golden 中表现为多出的 `let _tN`）
+
+7. **语句发射前物化有状态的待求值栈条目**（`StackSim::spill_stateful`，2026-10-01）：Python 只在写同一字段
+   前物化栈上读该字段的条目（`codegen/instr/sim/fields.py::_spill_pending_reads`）。其余情况下，栈上待求值的调用 / 字段读取 / 静态字段读取
+   会被推迟到其后发射的语句之后求值，与 JVM 的操作数栈求值序相反。例：`make("X") + "-" + step + "-" + make("Y")`
+   中 `step` 的读取落在 `make("Y")` 之后，JVM 输出 `X-1-Y`，旧生成物输出 `X-2-Y`；`synchronized` 块里
+   `return this.f;` 的字段读取落在 `monitor_exit` 之后。
+   Rust 在每条语句发射前（`emit` / `fresh_let` / dup 物化 / store 的 let 与赋值），把栈上 `reads_state` 为真的条目
+   按栈序物化为 `let _tN`，同一身份只物化一次。变量、字面量、`Clone::clone(&v)` 等平凡值与纯算术不物化。
+   原「写字段前物化读该字段的条目」被此规则覆盖，已删除。
+   golden 回放里出现在栈上仍有有状态条目时的语句会多出这些 `let`，属于本条。
+
 ## §2 回放装置的约定
 
 - `names.json` 只含注册表 binary 名；注册表外的 binary（如 `NewPendingExpr` 的根类）按 Python `short_cls`

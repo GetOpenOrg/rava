@@ -99,3 +99,32 @@ fn underflow_is_flagged() {
     assert!(sim.state.underflow);
     assert_eq!(Renderer::new(&Env).expr(&e.expr), "(panic!(\"stack underflow\") as i32)");
 }
+
+/// 语句发射前，栈上有状态的待求值条目按栈序物化（`f() + "-" + x + "-" + g()`：`x` 的读取不晚于 `g()`）；
+/// 变量 / 字面量不物化，dup 副本只物化一次
+#[test]
+fn statement_spills_stateful_pending_entries_in_stack_order() {
+    let mut sim = StackSim::new(cfg(vec![]), &Env).unwrap();
+    sim.push(Expr::Var(ir::Ident::new("local_1").unwrap()), RsType::Prim(Prim::I32));
+    let id = sim.push(Expr::raw("Foo::step()?"), RsType::Prim(Prim::I32));
+    sim.push_entry(StackEntry { expr: Expr::raw("Foo::step()?"), ty: RsType::Prim(Prim::I32), id });
+    sim.push(int(7), RsType::Prim(Prim::I32));
+    sim.push(Expr::raw("(local_1 + 1)"), RsType::Prim(Prim::I32));
+    sim.emit(ir::Stmt::raw("Foo::make()?;")).unwrap();
+    assert_eq!(stmts(&sim), vec!["let _t0 = Foo::step()?;", "Foo::make()?;"]);
+    let texts: Vec<String> = sim.state.stack.iter().map(|e| Renderer::new(&Env).expr(&e.expr)).collect();
+    assert_eq!(texts, vec!["local_1", "_t0", "_t0", "7", "(local_1 + 1)"]);
+}
+
+#[test]
+fn reads_state_classifies_pending_values() {
+    use sim::exprs::reads_state;
+    assert!(reads_state(&Expr::raw("this.__get_n()?")));
+    assert!(reads_state(&Expr::raw("Foo::<T>(x)")));
+    assert!(!reads_state(&Expr::raw("(local_1 + 1)")));
+    assert!(!reads_state(&Expr::raw("Clone::clone(&a)")));
+    assert!(!reads_state(&int(3)));
+    let concat = |arg: &str| Expr::Lit(Lit::JStringConcat { fmt: Some("{}-".into()), args: vec![Expr::raw(arg)] });
+    assert!(reads_state(&concat("Foo::step()?")), "拼接字面量的实参读状态");
+    assert!(!reads_state(&concat("_t3")));
+}

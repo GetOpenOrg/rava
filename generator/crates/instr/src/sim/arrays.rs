@@ -127,7 +127,7 @@ pub fn sim_arrays(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &
 fn new_array(env: &InstrEnv, sim: &mut StackSim, elem: RsType, count: Expr) -> InstrResult<()> {
     let v = sim.fresh("_arr")?;
     let stmt = new_array_let(env, v.clone(), &elem, count)?;
-    sim.emit(stmt);
+    sim.emit(stmt)?;
     sim.push(Expr::Var(v), RsType::array(elem));
     Ok(())
 }
@@ -166,7 +166,7 @@ fn multi_new_array(env: &InstrEnv, sim: &mut StackSim, ins: &Insn) -> InstrResul
         init = format!("{}::try_new_with({}, || {init})", turbofish(&levels[lv]), sizes[lv]);
     }
     let v = sim.fresh("_arr")?;
-    sim.emit(Stmt::raw(format!("let mut {v}: {} = {init}?;", ty_text(env, &arr_t))));
+    sim.emit(Stmt::raw(format!("let mut {v}: {} = {init}?;", ty_text(env, &arr_t))))?;
     sim.push(Expr::Var(v), arr_t);
     Ok(())
 }
@@ -181,7 +181,7 @@ fn pop_store(env: &InstrEnv, sim: &mut StackSim) -> InstrResult<(StackEntry, Exp
 
 /// `recv.method(idx, val)?;`
 fn emit_call(sim: &mut StackSim, recv: Expr, method: &str, idx: Expr, val: Expr) -> InstrResult<()> {
-    sim.emit(expr_stmt(try_(mcall(recv, method, vec![idx, val])?)));
+    sim.emit(expr_stmt(try_(mcall(recv, method, vec![idx, val])?)))?;
     Ok(())
 }
 
@@ -227,7 +227,7 @@ fn narrow_store(env: &InstrEnv, sim: &mut StackSim, op: &str) -> InstrResult<()>
         };
         format!("{a}.set({i}, ({v}) as {t})?;")
     };
-    sim.emit(Stmt::raw(code));
+    sim.emit(Stmt::raw(code))?;
     Ok(())
 }
 

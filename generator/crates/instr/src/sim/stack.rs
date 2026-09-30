@@ -49,10 +49,11 @@ fn dup_family(stack: &mut Vec<StackEntry>, name: &str) -> bool {
 }
 
 /// 弹出值有副作用时按求值序保留为 `let _ = e;`
-fn keep_effect(env: &InstrEnv, sim: &mut StackSim, e: StackEntry) {
+fn keep_effect(env: &InstrEnv, sim: &mut StackSim, e: StackEntry) -> InstrResult<()> {
     if looks_effectful(&text(env, &e.expr)) {
-        sim.emit(let_discard(e.expr));
+        sim.emit(let_discard(e.expr))?;
     }
+    Ok(())
 }
 
 /// getfield 折叠点：弹出 `npop` 个 receiver（有副作用的按求值序保留）；常量由调用方压入
@@ -63,7 +64,7 @@ pub fn fold_pop(env: &InstrEnv, sim: &mut StackSim, npop: usize) -> InstrResult<
         popped.push(sim.pop()?);
     }
     for e in popped.into_iter().rev() {
-        keep_effect(env, sim, e);
+        keep_effect(env, sim, e)?;
     }
     Ok(())
 }
@@ -78,7 +79,7 @@ pub fn sim_stack(env: &InstrEnv, sim: &mut StackSim, ins: &Insn) -> InstrResult<
         "pop" => {
             if !sim.state.stack.is_empty() {
                 let e = sim.pop()?;
-                keep_effect(env, sim, e);
+                keep_effect(env, sim, e)?;
             }
         }
         "pop2" => {

@@ -2,7 +2,7 @@
 
 use crate::env::{ident, to_ir_type, type_text, SimEnv};
 use crate::error::SimResult;
-use crate::exprs::{is_trivial, materialized_needs_type, underflow_value};
+use crate::exprs::{is_trivial, materialized_needs_type, reads_state, underflow_value};
 use crate::names::safe_name;
 use crate::types::is_scalar;
 use ir::{Expr, Ident, LetStmt, Stmt};
@@ -191,13 +191,38 @@ impl<'e> StackSim<'e> {
         if is_trivial(&top.expr) || !self.state.stack.iter().any(|e| e.id == top.id) {
             return Ok(top);
         }
-        let name = self.fresh("_t")?;
-        let ty = if materialized_needs_type(&top.expr) { Some(to_ir_type(&top.ty, self.env)?) } else { None };
-        self.state.stmts.push(Stmt::Let(LetStmt::new(name.clone(), ty, Some(top.expr))));
+        self.spill_stateful(Some(top.id))?;
+        let name = self.materialize(top.expr, &top.ty)?;
         for e in self.state.stack.iter_mut().filter(|e| e.id == top.id) {
             e.expr = Expr::Var(name.clone());
         }
         Ok(StackEntry { expr: Expr::Var(name), ty: top.ty, id: top.id })
+    }
+
+    /// `let _tN[: ty] = value;`（类型注解按 [`materialized_needs_type`]），返回变量名
+    fn materialize(&mut self, value: Expr, ty: &RsType) -> SimResult<Ident> {
+        let name = self.fresh("_t")?;
+        let ty = if materialized_needs_type(&value) { Some(to_ir_type(ty, self.env)?) } else { None };
+        self.state.stmts.push(Stmt::Let(LetStmt::new(name.clone(), ty, Some(value))));
+        Ok(name)
+    }
+
+    /// 发射语句前，把栈上依赖可变状态 / 带副作用的待求值条目（[`reads_state`]）按栈序物化：
+    /// JVM 在该语句之前已求值它们，留在栈上会被推迟到语句之后（`f() + "-" + x + "-" + g()`
+    /// 中 `x` 的读取不得晚于 `g()`）。同一身份（dup 副本）只物化一次；`keep` 是正由调用方物化的身份
+    pub(crate) fn spill_stateful(&mut self, keep: Option<ValueId>) -> SimResult<()> {
+        for i in 0..self.state.stack.len() {
+            let e = &self.state.stack[i];
+            if Some(e.id) == keep || !reads_state(&e.expr) {
+                continue;
+            }
+            let (id, expr, ty) = (e.id, e.expr.clone(), e.ty.clone());
+            let name = self.materialize(expr, &ty)?;
+            for e in self.state.stack.iter_mut().filter(|e| e.id == id) {
+                e.expr = Expr::Var(name.clone());
+            }
+        }
+        Ok(())
     }
 
     /// xstore 用弹栈：不物化 dup 副本（store 以局部变量本身作为物化结果）
@@ -208,12 +233,16 @@ impl<'e> StackSim<'e> {
         }
     }
 
-    pub fn emit(&mut self, stmt: Stmt) {
+    /// 发射语句（先物化栈上待求值的有状态条目，见 [`Self::spill_stateful`]）
+    pub fn emit(&mut self, stmt: Stmt) -> SimResult<()> {
+        self.spill_stateful(None)?;
         self.state.stmts.push(stmt);
+        Ok(())
     }
 
     /// `let {prefix}N: ty = value;`，返回 `Var(prefixN)`
     pub fn fresh_let(&mut self, prefix: &str, value: Expr, ty: &RsType) -> SimResult<Expr> {
+        self.spill_stateful(None)?;
         let name = self.fresh(prefix)?;
         let ir_ty = to_ir_type(ty, self.env)?;
         self.state.stmts.push(Stmt::Let(LetStmt::new(name.clone(), Some(ir_ty), Some(value))));

@@ -172,11 +172,12 @@ fn call_node(env: &InstrEnv, cs: &CsCtx, rust_mname: &str, recv: &str, site: &Si
 }
 
 /// `let v = call?;`：节点可用时结构化，否则 Raw
-fn let_call(sim: &mut StackSim, v: ir::Ident, node: Option<Expr>, call_str: &str) {
+fn let_call(sim: &mut StackSim, v: ir::Ident, node: Option<Expr>, call_str: &str) -> InstrResult<()> {
     match node {
-        Some(n) => sim.emit(Stmt::Let(LetStmt::new(v, None, Some(Expr::try_(n))))),
-        None => raw(sim, format!("let {v} = {call_str}?;")),
+        Some(n) => sim.emit(Stmt::Let(LetStmt::new(v, None, Some(Expr::try_(n)))))?,
+        None => raw(sim, format!("let {v} = {call_str}?;"))?,
     }
+    Ok(())
 }
 
 /// 调用发射与结果记录：void 直发 / 根路由 / clone 特例 / 签名真实返回类型与擦除类型的对齐
@@ -200,8 +201,8 @@ pub(super) fn emit_call_result(
     }
     if *rust_ret == RsType::Unit {
         match call_node(env, cs, rust_mname, &d.recv, site)? {
-            Some(n) => sim.emit(Stmt::Expr(Expr::try_(n))),
-            None => raw(sim, format!("{}?;", cs.build_call(env, rust_mname, &d.recv, &arg_str))),
+            Some(n) => sim.emit(Stmt::Expr(Expr::try_(n)))?,
+            None => raw(sim, format!("{}?;", cs.build_call(env, rust_mname, &d.recv, &arg_str)))?,
         }
         return Ok(());
     }
@@ -209,7 +210,7 @@ pub(super) fn emit_call_result(
     let r = ty_text(env, rust_ret);
     let mname = d.call.name.as_str();
     if d.root_routed {
-        raw(sim, format!("let {v}: {r} = {}?;", cs.build_call(env, rust_mname, &d.recv, &arg_str)));
+        raw(sim, format!("let {v}: {r} = {}?;", cs.build_call(env, rust_mname, &d.recv, &arg_str)))?;
         sim.push(Expr::Var(v), rust_ret.clone());
         return Ok(());
     }
@@ -218,7 +219,7 @@ pub(super) fn emit_call_result(
         // 解析到根类 Object.clone（数组 / 类链无人声明）：Java 浅拷贝经 __shallow_copy 派发；
         // `this` 已是 &Self
         let src = if site.obj_e == "this" { "this".to_string() } else { format!("&{}", site.obj_e) };
-        raw(sim, format!("let {v}: {O} = {O}__clone_base({src})?;"));
+        raw(sim, format!("let {v}: {O} = {O}__clone_base({src})?;"))?;
         sim.push(Expr::Var(v), RsType::Object);
         return Ok(());
     }
@@ -236,12 +237,12 @@ pub(super) fn emit_call_result(
     match sig_ret {
         Some(s) if is_object(env, rust_ret) && !is_object(env, &s) => {
             // 签名真实返回类型装箱（S-3.1）
-            raw(sim, format!("let {v} = {};", boxed_text(env, &format!("{call_str}?"), &s)?));
+            raw(sim, format!("let {v} = {};", boxed_text(env, &format!("{call_str}?"), &s)?))?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
         Some(s) if !same_text(env, &s, rust_ret) && !is_prim(rust_ret) => {
             let node = call_node(env, cs, rust_mname, &d.recv, site)?;
-            let_call(sim, v.clone(), node, &call_str);
+            let_call(sim, v.clone(), node, &call_str)?;
             sim.push(Expr::Var(v), s);
         }
         None if !is_prim(rust_ret) && !is_object(env, rust_ret) && env.ctx.ty.is_carrier(rust_ret) && erased_tv() => {
@@ -249,17 +250,17 @@ pub(super) fn emit_call_result(
             raw(
                 sim,
                 format!("let {v}: {r} = <{r} as ::std::convert::From<{O}>>::from(::std::convert::Into::<{O}>::into({call_str}?));"),
-            );
+            )?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
         None if is_object(env, rust_ret) && erased_tv() => {
             // 返回裸类型变量且无法按接收者实例化：幂等装箱与 sim 记录的 Object 一致
-            raw(sim, format!("let {v} = {O}::from_any({call_str}?);"));
+            raw(sim, format!("let {v} = {O}::from_any({call_str}?);"))?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
         _ => {
             let node = call_node(env, cs, rust_mname, &d.recv, site)?;
-            let_call(sim, v.clone(), node, &call_str);
+            let_call(sim, v.clone(), node, &call_str)?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
     }

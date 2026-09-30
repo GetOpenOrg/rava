@@ -49,14 +49,14 @@ impl Site {
 }
 
 /// `Raw` 语句（Python `RawStmt(f"..")` 同文本）
-fn raw(sim: &mut StackSim, text: String) {
-    sim.emit(Stmt::raw(text));
+fn raw(sim: &mut StackSim, text: String) -> InstrResult<()> {
+    Ok(sim.emit(Stmt::raw(text))?)
 }
 
 /// `let {v}: {ty} = {value};`，压 `Var(v)`（fresh 前缀缺省 `_t`）
 fn let_push(env: &InstrEnv, sim: &mut StackSim, prefix: &str, value: &str, t: RsType) -> InstrResult<()> {
     let v = sim.fresh(prefix)?;
-    raw(sim, format!("let {v}: {} = {value};", ty_text(env, &t)));
+    raw(sim, format!("let {v}: {} = {value};", ty_text(env, &t)))?;
     sim.push(Expr::Var(v), t);
     Ok(())
 }
@@ -165,7 +165,7 @@ fn private_iface_call(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, site: 
     };
     let pv_call = format!("{recv}.{pv_mname}({})?", site.arg_str());
     if rust_ret == RsType::Unit {
-        raw(sim, format!("{pv_call};"));
+        raw(sim, format!("{pv_call};"))?;
     } else {
         let_push(env, sim, "_t", &pv_call, rust_ret)?;
     }

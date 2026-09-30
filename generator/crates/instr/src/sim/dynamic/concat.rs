@@ -83,7 +83,7 @@ fn concat_arg(env: &InstrEnv, sim: &mut StackSim, e: sim::StackEntry, p: &str) -
             // null 给出 "null"。String 自身走 Display 快速路径不变
             let boxed = obj_text(env, &raw_s, &e.ty);
             let sv = sim.fresh("_t")?;
-            sim.emit(raw_stmt(format!("let {}: {} = {boxed}.toString()?;", sv.as_str(), ir::anchors::STRING)));
+            sim.emit(raw_stmt(format!("let {}: {} = {boxed}.toString()?;", sv.as_str(), ir::anchors::STRING)))?;
             sv.as_str().to_string()
         }
         _ => raw_s,

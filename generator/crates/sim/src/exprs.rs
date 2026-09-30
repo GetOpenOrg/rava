@@ -184,6 +184,41 @@ pub fn is_trivial(e: &Expr) -> bool {
     }
 }
 
+/// Raw 文本含调用 / 宏（标识符、`>` 或 `!` 紧接 `(`），或 `?` 传播
+fn raw_reads_state(t: &str) -> bool {
+    let b = t.as_bytes();
+    b.contains(&b'?') || b.windows(2).any(|w| w[1] == b'(' && (w[0].is_ascii_alphanumeric() || matches!(w[0], b'_' | b'>' | b'!')))
+}
+
+/// 求值结果依赖可变状态或带副作用：含调用、宏、字段 / 数组读取、静态字段、`?` 传播。
+/// 栈上这类待求值条目在任何语句发射之前按栈序物化（JVM 已在语句之前求值它们）
+pub fn reads_state(e: &Expr) -> bool {
+    match e {
+        Expr::Lit(Lit::JStringConcat { args, .. }) => args.iter().any(reads_state),
+        _ if is_trivial(e) => false,
+        Expr::Lit(_) | Expr::Var(_) | Expr::NewPending { .. } => false,
+        Expr::Call { .. }
+        | Expr::MethodCall { .. }
+        | Expr::Macro(_)
+        | Expr::StaticField(_)
+        | Expr::Index { .. }
+        | Expr::Field { .. }
+        | Expr::Try(_)
+        | Expr::Block(_)
+        | Expr::If(_) => true,
+        Expr::Raw(r) => raw_reads_state(r.as_str()),
+        Expr::Binary { lhs, rhs, .. } => reads_state(lhs) || reads_state(rhs),
+        Expr::Unary { expr, .. }
+        | Expr::Cast { expr, .. }
+        | Expr::Ref { expr, .. }
+        | Expr::Deref(expr)
+        | Expr::Paren(expr)
+        | Expr::Upcast { expr, .. }
+        | Expr::InstanceOf { expr, .. } => reads_state(expr),
+        Expr::CheckCast(c) => reads_state(&c.expr),
+    }
+}
+
 /// let 省略类型标注的值：类型自明的既有类型化节点之外的全部表达式
 pub fn opaque_let_value(e: &Expr) -> bool {
     !matches!(
