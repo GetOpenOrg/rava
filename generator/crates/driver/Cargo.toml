@@ -16,3 +16,4 @@ emit.workspace = true
 ir.workspace = true
 input.workspace = true
 ty.workspace = true
+mimalloc.workspace = true

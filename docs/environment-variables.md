@@ -68,6 +68,10 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--trace-class 类` | 仅 build：打印该类或方法（`类.方法:描述符`）入闭包的最短 provenance 链（`      [why] …`，同 `rava closure --why`） |
 | `--debug` | 闭包未解析调用（`[closure] unresolved: …`）与存根兜底逐条（`[cfg-audit] stub fallback (位点): 方法: 原因`） |
 | `--precheck-only` | 发射后只输出完整预检明细（`[precheck]` 不截断），不出审计行、不编译运行。缺省时预检每类明细封顶 40 行 |
+| `--api-package P` / `--api-recursive` | 仅 build：以公开 API 包为调用链入口（包内 public 类的 public / protected 方法，边界域包跳过；可多次）。`--api-recursive` 含子包，须配合 `--api-package`。输出 `[api] …` 行（`scripts/gap_scan.py api` 使用） |
+| `--raw-sites FILE` | 同 `main.py --raw-sites`（位点为构造调用处 `文件:行:列`） |
+| `--emit-jobs N` | 按类并行发射的线程数（缺省 0 = 可用核数；1 = 串行）。输出与串行逐字节一致 |
+| `--perf` | 输出 `[perf]` 分阶段耗时、峰值 RSS 与逐类 / 逐方法耗时 Top-N |
 
 ### 重型闭包的自动处理（无需配置）
 

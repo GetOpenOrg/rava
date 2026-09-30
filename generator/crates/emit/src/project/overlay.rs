@@ -1,13 +1,15 @@
 //! runtime/ 手写层 overlay 进 scratch（`scripts/main.py prepare_scratch` 的移植）。
 //!
 //! - `runtime/java_runtime/src/**` → `<scratch>/java_runtime/src/**`（内容相同跳过，保留 mtime）；
-//! - scratch 中 runtime/ 已删除的手写文件（无生成标记、非 mod.rs）清除；
+//! - 根 `lib.rs` 不在此复制：由 [`super::mod_tree::complete_lib_rs`] 写出（手写真源 + 顶层包补全）；
+//! - scratch 中 runtime/ 已删除的手写文件在 mod 树阶段清扫（[`super::mod_tree`] `sweep_stale`：
+//!   须在本轮写出之后判定，否则本轮生成的无标记文件会被先删后写）；
 //! - `build.rs` 原样复制；`Cargo.toml` 宏依赖改绝对路径、包版本唯一化；
 //! - `java/ jdk/ sun/` 顶层目录兜底占位 mod.rs。
 
 use std::path::Path;
 
-use super::fs::{has_marker, walk};
+use super::fs::walk;
 use crate::error::{io_err, Result};
 use crate::text::scratch_pkg_version;
 
@@ -32,26 +34,6 @@ fn write_if_changed(path: &Path, content: &str) -> Result<()> {
     std::fs::write(path, content).map_err(|e| io_err(&path.display().to_string(), e))
 }
 
-/// scratch 里 runtime/ 已删除的手写文件
-fn prune_stale_handwritten(rt_src: &Path, dst_src: &Path) -> Result<()> {
-    for (dir, _, files) in walk(dst_src) {
-        let rel_dir = dir.strip_prefix(dst_src).unwrap_or(Path::new(""));
-        for f in files {
-            if !f.ends_with(".rs") || f == "mod.rs" {
-                continue;
-            }
-            if rt_src.join(rel_dir).join(&f).exists() {
-                continue;
-            }
-            let p = dir.join(&f);
-            if has_marker(&p) == Some(false) {
-                std::fs::remove_file(&p).map_err(|e| io_err(&p.display().to_string(), e))?;
-            }
-        }
-    }
-    Ok(())
-}
-
 /// overlay 规则：`clean` 时先清空 scratch
 pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, clean: bool) -> Result<()> {
     if clean && out_dir.is_dir() {
@@ -64,10 +46,13 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
         let dst_dir = dst_src.join(rel);
         std::fs::create_dir_all(&dst_dir).map_err(|e| io_err(&dst_dir.display().to_string(), e))?;
         for f in files {
+            // crate 根 lib.rs 由 mod 树阶段按「手写真源 + 顶层包补全」整体写出（内容不变不重写）
+            if rel.as_os_str().is_empty() && f == "lib.rs" {
+                continue;
+            }
             copy_if_changed(&dir.join(&f), &dst_dir.join(&f))?;
         }
     }
-    prune_stale_handwritten(&rt_src, &dst_src)?;
     let jrt = out_dir.join("java_runtime");
     copy_if_changed(&runtime_dir.join("build.rs"), &jrt.join("build.rs"))?;
     let cargo_src = runtime_dir.join("Cargo.toml");

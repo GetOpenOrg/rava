@@ -99,6 +99,25 @@ extern 函数只能是单态的。实测泛型 struct 占比：HelloWorld 56 / 2
 
 **待验证的前提：内存布局与类型实参无关。** 实测 Digester 中有 58 个字段直接以类型参数作为字段类型（例如 `HashMap_Node { key: K, value: V }`、`JArray<T>`）。如果实参为具体类（如 `String`）与实参为 `Object`（`Rc<dyn ObjectVTable>`）时表示不同（瘦指针与胖指针），就不能零成本转换，需要改成「类型参数位统一存 `Object`，外壳负责类型化」。这会触及命名原则 3（泛型 `T` 不强制擦除为 `Object`）的实现方式，但不改变它的可读层要求：签名和调用处仍然是泛型 `T`，只是存储层统一。这一条要先论证，再实施。
 
+#### 4.2.1 布局前提论证（2026-10-01，生成器效率线）
+
+结论：**除数组外，前提成立**。类型实参只存在于类型系统里，不影响句柄布局和对象存储；只有 `JArray<T>` 的自有存储随 `T` 变化。依据取自主线 `java_class!` 宏展开与 `runtime/java_runtime/src/array.rs`。
+
+| 形态 | 表示 | 与类型实参的关系 | 擦除核心 ↔ 泛型外壳的转换 |
+|---|---|---|---|
+| 类句柄 `X<K, V>` | `{ vtable: Rc<dyn X__VTable>, any: AnyRef, _jvm_null: bool, __phantom: PhantomData<fn() -> K> … }` | 无关（只差零尺寸的 phantom） | `__from_parts(vtable, any, null)` 逐域搬移；零成本，对象标识不变 |
+| 接口句柄 `I<T>` | `{ __ref: Object, __phantom }` | 无关 | 同上，零成本 |
+| 对象存储 `X__inner` | 以类型参数为类型的字段，宏已擦除为 `Object`（例：`KeyValueHolder__inner.key: Rc<RefSlot<Option<Box<Object>>>>`）；泛型元素数组字段也存为 `JArray<Object>`（例：`HashMap__inner.table`） | 无关 | 无需转换。§4.2 所说的 58 个 `key: K` 字段只是源码层声明，存储层早已统一为 `Object` |
+| 类型参数位的值 `K` | 实参为具体类时是该类句柄（约 40 B：vtable + any + null 标志），为 `Object` 时是胖指针（16 B） | **不同** | 入口 `Into<Object>`、出口 `From<Object>`。这正是现有字段读写已经走的转换（约束 `K: From<Object> + Into<Object>` 已在全部泛型类上），不是新增成本，语义与现状同源 |
+| 数组 `JArray<T>`（`T` 为类型参数） | `Rc<Repr<T>>`，`Repr::Own(RefCell<Vec<T>>, …)` | **不同**：元素布局随 `T` 变化 | 不能零成本重解释。可用运行时已有的 `Covariant` 视图（保持对象标识，读写经源数组，aastore 检查不变）；代价是每次转换分配一个视图，每次元素访问多一次 dyn 调用和一次元素转换 |
+
+实施约束：
+1. 擦除核心的签名按描述符（`T[]` → `[Ljava/lang/Object;` → `JArray<Object>`）生成。外壳里把 `JArray<T>` 转为 `JArray<Object>` 走 `Covariant` 视图，从 `JArray<Object>` 还原走视图回源（运行时已有语义：「还原为源类型取回源数组本身」）。
+   - 涉及面：DeepCopy 树中签名含 `JArray<类型参数>` 的函数共 52 个（全部函数 42,310 个），集中在 `TimSort` / `ComparableTimSort` / `Arrays` 一类排序与拷贝代码。
+   - 运行期影响集中在这些热循环，需要单独做性能验收。
+2. 命名原则 3 的可读层不变：外壳签名保持泛型 `T`，擦除只发生在 decl 与 body 之间的 extern 边界。
+3. 等价性：Java 语义本来就在擦除后执行，擦除核心与 JVM 字节码一一对应。转换点从「方法体内的字段读写」前移到「外壳入口 / 出口」，`From<Object>` 失败的时机可能随之改变（例如堆污染时，由读字段时报错变为返回时报错）。这正对应 javac 在调用方插入 checkcast 的位置，但仍需逐一核对 `From<Object>` 在类型不符时的行为（返回 null 句柄还是抛 ClassCastException），再给出 e2e 抽查清单。
+
 ### 4.3 代价与风险
 
 | 项 | 说明 | 对策 |
@@ -122,4 +141,81 @@ extern 函数只能是单态的。实测泛型 struct 占比：HelloWorld 56 / 2
 
 ## 六、测量记录
 
-（第 1 步完成后填写：各阶段内存峰值、单态化实例数、decl 与 body 的体量估算。）
+### 6.1 第 1 步：rustc 分阶段测量（2026-10-01，生成器效率线）
+
+**测量方法**
+- 生成树：主线生成器（`emitter-perf` 与主线逐字节一致；唯一差别是根 Cargo.toml 的 `[profile.dev] debug = "line-tables-only"`、`incremental = false`，与 e2e 的环境变量设置相同），JDK 21，`rava build --no-run`。
+- 编译命令：
+  ```
+  cargo +nightly rustc -p java_runtime --lib -- -Z time-passes -Z dump-mono-stats=<dir> -Z dump-mono-stats-format=json
+  ```
+  dev profile，`CARGO_BUILD_JOBS=2`，依赖预先编好，一次只跑一个；外层 `/usr/bin/time -l` 取峰值 RSS，另每 2 s 采样 rustc RSS。
+- 共享机负载 3–19，其他代理并行占用内存。macOS 在内存压力下会压缩页面，使 RSS 下降：Digester 运行时出现 sys 68 s 和逐阶段 RSS 回落。**各阶段 RSS 是下限，真实工作集以峰值 RSS 为准**；耗时同样偏高。
+
+**规模**
+
+| 用例 | 生成类 | 生成源码（java_runtime） | `fn` 数 | 泛型 struct |
+|---|---:|---:|---:|---:|
+| HelloWorld | 249 | 4.7 MB | 8,761 | 62 |
+| Digester | 1,438 | 27.9 MB | 38,691 | 335 |
+| DeepCopy | 1,645 | 31.2 MB | 42,310 | 355 |
+
+**java_runtime 单个 rustc：耗时（s）/ 阶段结束时 RSS（MB）**
+
+| 阶段 | HelloWorld | Digester | DeepCopy |
+|---|---|---|---|
+| 宏展开 `expand_crate` | 3.1 / 45 → 504 | 24.8 / 45 → 1590 | 22.0 / 45 → 2944 |
+| 名称解析 `resolve_crate` | 0.2 / 598 | 3.4 / 1707 | 2.0 / 3321 |
+| AST → HIR 降级（未单列计时，按前后阶段 RSS 推算） | +212 MB → 811 | —（压力下不可读） | +1.8 GB → 5114 |
+| coherence | 0.4 / 933 | 9.4 / — | 3.1 / **6067** |
+| 类型检查 `type_check_crate` | 3.6 / 1414 | 97.2 / — | 29.2 / — |
+| MIR 借用检查 | 3.7 / 1880 | 60.9 / 2360 | 42.1 / —（此处失败，见下） |
+| lints / misc_checking_3 | 0.2 | 6.9 | — |
+| 单态化收集 | 1.1 / 2113 | 18.4 / 3039 | — |
+| crate 元数据 | 1.7 / 2151 | 28.8 | — |
+| codegen → LLVM IR | 1.6 / 2320 | 55.9 | — |
+| LLVM passes（与 codegen 重叠） | 3.6 | 86.4 | — |
+| 链接 rlib | 0.03 | 4.9 | — |
+| **合计墙钟** | **17.1** | **332.6** | 103.7（失败退出） |
+| **峰值 RSS（time -l）** | **2.35 GB** | **4.35 GB**（压力下偏低） | **≥ 6.14 GB**（只到借用检查） |
+
+**DeepCopy 在主线上编译失败**
+- 错误：`java/io/object_input_stream.rs:977` E0381（`ObjectInputStream.readObject0` 的 `local_5` 在 try / finally 复制出的 `return Ok(local_5)` 路径上未初始化）。
+- 这是方法体结构化翻译的缺陷，属生成器 bug，已转交主会话。
+- 因此 DeepCopy 的后端阶段（单态化、LLVM）没有数据，后端用规模相近的 Digester 代替。
+
+**单态化实例（`-Z dump-mono-stats`，size 为 rustc 的 MIR 规模估计）**
+
+| 类别 | HelloWorld 实例 / size 占比 | Digester 实例 / size 占比 |
+|---|---|---|
+| 合计 | 68,387 / 99 万 | 400,360 / 677 万 |
+| 生成代码的非泛型项（方法体、存根、From 等） | 50.8% / 44.2% | 54.9% / 54.9% |
+| std / core 泛型实例 | 27.0% / 26.8% | 23.8% / 20.2% |
+| 宏 `__` 样板（`__unsafe_ref_*` / `__shallow_copy` / `__view_*` …） | 10.0% / 19.1% | 10.2% / 17.2% |
+| runtime `gil` / `sync_model` 泛型（`clinit_enter::<T>`、`__GilStatic::<T>::with` 按类单态化） | 5.5% / 5.1% | 5.9% / 5.0% |
+| 泛型 Java 类的方法（`X::<K, V>::m`） | 4.9% / 6.2%，平均每项 1.15 份实例 | 6.6% / 7.9%，平均每项 1.37 份实例 |
+| 其中擦除成单份可省的部分 | 436 份实例 / 0.8% | 7,144 份实例 / **1.8%** |
+| `ObjectVTable` 缺省方法（按实现类型单态化） | 8,276 份实例 / 4.3% | 50,135 份实例 / 3.9% |
+| `object_ext` 泛型辅助（`checkcast::<T>` 等） | 782 份实例 / 2.0% | 5,032 份实例 / 2.0% |
+
+**结论**
+1. **内存峰值在前端，不在后端。**
+   - HelloWorld 的 RSS 随阶段单调上升，到 codegen 时约 2.3 GB。
+   - DeepCopy 在 coherence / 类型检查阶段已达 6.1 GB。
+   - DeepCopy 的峰值中，宏展开（+2.9 GB）和 HIR 降级（约 +1.8 GB）两项合计约占 3/4。
+   - HelloWorld 的峰值出现在 codegen，这两项（+0.46 GB、+0.21 GB）约占 30%，其余在类型检查和借用检查中逐步累积。
+   - 两者都与展开后的代码体量成正比（HelloWorld 展开前 4.7 MB，展开后 24.6 MB），瓶颈在 `java_class!` 的逐类展开量。
+2. **耗时也在前端。**
+   - Digester 的前端（宏展开、解析、coherence、类型检查、借用检查、misc checks）约 205 s，占总耗时 62%。
+   - 后端的单态化、元数据、codegen 和链接约 139 s（LLVM passes 与 codegen 重叠）。
+   - 类型检查和借用检查按函数定义计费，与单态化实例数无关。
+3. **第 3 步「泛型擦除核心」对编译成本的直接收益很小。**
+   - 泛型 Java 类方法平均只有 1.15–1.37 份实例，擦除成单份只省 0.8–1.8% 的单态化规模；类型检查和借用检查的成本本来就按定义只算一次。
+   - 这一步的必要性只来自第 4 步：extern 边界必须是单态的。不能把它当作独立的降本手段。
+4. **有效杠杆按规模排序：**
+   - ① 宏展开体量：逐类 `__` 样板占单态化 size 17–19%，还同时推高宏展开和 HIR 的内存。
+   - ② 闭包规模（第 2 步）：所有阶段都随类数线性增长。
+   - ③ 按类单态化的 runtime 泛型（`gil` / `sync_model` / `ObjectVTable` 缺省方法，合计约 9%），改成非泛型内核 + 薄泛型入口。
+   - ④ 拆 crate（第 4 步）：降低单个 rustc 峰值的唯一结构性手段；前端内存按 crate 体量线性分摊。
+   - ①③ 归 runtime / 宏的属主。
+

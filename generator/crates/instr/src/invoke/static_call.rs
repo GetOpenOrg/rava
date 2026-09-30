@@ -164,10 +164,10 @@ fn emit_unknown_stub(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, cls_sho
     let rust_ret = env.ctx.ty.jvm_to_rust(&call.ret);
     let msg = format!("stub: {cls_short}.{}", call.name);
     if matches!(rust_ret, RsType::Unit) {
-        sim.emit(raw_stmt(format!("panic!(\"{msg}\");")));
+        sim.emit(raw_stmt(format!("__stub(\"{msg}\");")));
     } else {
         let v = sim.fresh("_t")?;
-        sim.emit(raw_stmt(format!("let {v}: {} = panic!(\"{msg}\");", ty_text(env, &rust_ret))));
+        sim.emit(raw_stmt(format!("let {v}: {} = __stub(\"{msg}\");", ty_text(env, &rust_ret))));
         sim.push(Expr::Var(v), rust_ret);
     }
     Ok(())

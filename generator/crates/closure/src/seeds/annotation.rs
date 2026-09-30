@@ -66,7 +66,7 @@ fn mounted(cf: &ClassFile) -> impl Iterator<Item = &Annotation> {
     cf.annotations.iter().chain(cf.fields.iter().flat_map(|f| f.annotations.iter())).chain(cf.methods.iter().flat_map(|m| m.annotations.iter()))
 }
 
-pub fn collect(cp: &ClassPath, users: &[std::rc::Rc<ClassFile>]) -> AnnoSeeds {
+pub fn collect(cp: &ClassPath, users: &[std::sync::Arc<ClassFile>]) -> AnnoSeeds {
     let user_names: HashSet<&str> = users.iter().map(|c| c.name.as_str()).collect();
     let mut pending: Vec<Annotation> = users.iter().flat_map(|c| mounted(c).cloned().collect::<Vec<_>>()).collect();
     let mut seen: HashSet<String> = HashSet::new();

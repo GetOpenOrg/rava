@@ -267,9 +267,9 @@ fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc:
         if !inp.all_in_chain && !ctx.in_chain(owner, &m.name, &m.desc) {
             continue;
         }
-        let Some(code) = ctx.input.code(owner, m) else { continue };
-        for ni in &code.insns {
-            let Some(Insn { opcode: INVOKESPECIAL, operand: Operand::Method(r, _), .. }) = ni.insn() else { continue };
+        let Some(code) = ctx.input.code_ops(owner, m) else { continue };
+        for insn in code.ops() {
+            let Insn { opcode: INVOKESPECIAL, operand: Operand::Method(r, _), .. } = insn else { continue };
             if r.name == "<init>" || reg.get(&r.owner).is_some_and(ClassInfo::is_interface) {
                 continue;
             }

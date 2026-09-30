@@ -3,10 +3,10 @@
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug]
-//!   [--precheck-only] [--raw-sites FILE]`
+//!   [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
-//!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]`
-//!   （`--java`：源文件，决定用户类包布局与入口序）
+//!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]
+//!   [--perf] [--emit-jobs N]`（`--java`：源文件，决定用户类包布局与入口序）
 //!
 //! 选项语义与 `scripts/main.py` 同名选项一致（docs/environment-variables.md）。
 
@@ -91,9 +91,13 @@ pub struct BuildOpts {
     pub precheck_only: bool,
     /// Raw 逃生舱构造位点剖面追加写入的文件
     pub raw_sites: Option<PathBuf>,
+    /// 输出 `[perf]` 分阶段耗时 / 峰值 RSS / 逐类逐方法 Top-N
+    pub perf: bool,
+    /// 逐类发射并行度（缺省 0 = 可用核数；输出与并行度无关）
+    pub emit_jobs: usize,
 }
 
-const VALUED: [&str; 15] = [
+const VALUED: [&str; 16] = [
     "--jdk",
     "--java-home",
     "--runtime",
@@ -109,8 +113,9 @@ const VALUED: [&str; 15] = [
     "--trace-class",
     "--raw-sites",
     "--api-package",
+    "--emit-jobs",
 ];
-const FLAGS: [&str; 7] = ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only", "--api-recursive"];
+const FLAGS: [&str; 8] = ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only", "--api-recursive", "--perf"];
 /// 只属于 build 的选项
 const BUILD_ONLY: [&str; 10] =
     ["--main", "--locale", "--root", "--no-run", "-o", "--lib", "--batch", "--trace-class", "--api-package", "--api-recursive"];
@@ -141,6 +146,7 @@ impl BuildOpts {
                     "--debug" => o.debug = true,
                     "--precheck-only" => o.precheck_only = true,
                     "--api-recursive" => o.api_recursive = true,
+                    "--perf" => o.perf = true,
                     _ => o.strict = true,
                 }
                 continue;
@@ -148,6 +154,7 @@ impl BuildOpts {
             let v = it.next().ok_or_else(|| format!("{a} 缺少取值"))?;
             match a.as_str() {
                 "--jdk" => o.jdk = Some(v.parse().map_err(|_| format!("--jdk 需为数字：{v}"))?),
+                "--emit-jobs" => o.emit_jobs = v.parse().map_err(|_| format!("--emit-jobs 需为数字：{v}"))?,
                 "--java-home" => o.java_home = Some(PathBuf::from(v)),
                 "--runtime" => o.runtime = Some(PathBuf::from(v)),
                 "--out" | "-o" => o.out = Some(PathBuf::from(v)),

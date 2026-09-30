@@ -29,10 +29,13 @@ pub mod fallback;
 pub mod imports;
 pub mod lang;
 pub mod method_bodies;
+pub mod par;
+pub mod perf;
 pub mod phase2;
 pub mod precheck;
 pub mod project;
 pub mod sam;
+pub mod scan;
 pub mod text;
 pub mod vtable;
 

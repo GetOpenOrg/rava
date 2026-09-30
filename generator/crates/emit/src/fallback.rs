@@ -7,8 +7,8 @@
 //! `vars` 渲染与类型渲染不会失败（IR 渲染是全函数），SAM 描述符映射同理——这些点在 Rust
 //! 实现里没有失败分支，无需计数。Rust 自有的降级点见 [`FALLBACK_IDS`]。
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 /// 降级点 ID 全集（`scripts/run_tests.py` `FALLBACK_IDS` 同步收录）
 ///
@@ -19,23 +19,23 @@ use std::collections::BTreeMap;
 /// | `sam-ctor-path` | SAM 合成对象构造路径含非法标识符段 → 站点回落闭包装箱 |
 pub const FALLBACK_IDS: [&str; 3] = ["class-extras", "lvt-substitute", "sam-ctor-path"];
 
-/// 触发计数（发射单线程；经共享引用记录）
+/// 触发计数（逐类并行发射共享；经共享引用记录）
 #[derive(Debug, Default)]
 pub struct FallbackAudit {
-    counts: RefCell<BTreeMap<&'static str, usize>>,
+    counts: Mutex<BTreeMap<&'static str, usize>>,
     debug: bool,
 }
 
 impl FallbackAudit {
     /// `debug`：逐触发向 stderr 打印明细（`[fallback-audit] {id} {detail}`）
     pub fn new(debug: bool) -> FallbackAudit {
-        FallbackAudit { counts: RefCell::new(BTreeMap::new()), debug }
+        FallbackAudit { counts: Mutex::new(BTreeMap::new()), debug }
     }
 
     /// 某降级点触发一次（只计数与明细，不改变降级行为本身）
     pub fn record(&self, id: &'static str, detail: impl FnOnce() -> String) {
         debug_assert!(FALLBACK_IDS.contains(&id), "未登记的降级点 {id}");
-        *self.counts.borrow_mut().entry(id).or_default() += 1;
+        *self.counts.lock().unwrap_or_else(|e| e.into_inner()).entry(id).or_default() += 1;
         if self.debug {
             let d = detail();
             eprintln!("{}", format!("[fallback-audit] {id} {d}").trim_end());
@@ -43,12 +43,12 @@ impl FallbackAudit {
     }
 
     pub fn count(&self, id: &str) -> usize {
-        self.counts.borrow().get(id).copied().unwrap_or(0)
+        self.counts.lock().unwrap_or_else(|e| e.into_inner()).get(id).copied().unwrap_or(0)
     }
 
     /// `[fallback-audit]` 行：只列非零项（按 [`FALLBACK_IDS`] 序）；全零输出 none
     pub fn summary(&self) -> String {
-        let c = self.counts.borrow();
+        let c = self.counts.lock().unwrap_or_else(|e| e.into_inner());
         let items: Vec<String> =
             FALLBACK_IDS.iter().filter_map(|id| c.get(id).filter(|n| **n > 0).map(|n| format!("{id}={n}"))).collect();
         format!("[fallback-audit] {}", if items.is_empty() { "none".to_string() } else { items.join(" ") })

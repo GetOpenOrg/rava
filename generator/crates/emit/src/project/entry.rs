@@ -175,6 +175,8 @@ pub fn write_main(
     lines.push(format!("use {use_path};"));
     lines.push(String::new());
     lines.push("fn main() {".into());
+    // 进程级终止约定（panic 钩子）先于一切登记就位：此后任何 panic 同一出口
+    lines.push("    java_runtime::create_java_vm();".into());
     let hb = hook_block(ctx, user, jdk, disp);
     if !hb.is_empty() {
         lines.push(hb);
@@ -292,9 +294,16 @@ pub fn write_cargo_files(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_
         w.write(&user_dir.join("Cargo.toml"), &l.join("\n"))?;
     }
     let members: Vec<String> = std::iter::once("java_runtime").chain(libs.iter().copied()).chain(["user"]).map(|m| format!("\"{m}\"")).collect();
+    // dev 构建：只保留行号表（回溯仍带文件行号；完整调试信息使大闭包 rustc 峰值内存翻倍、
+    // 编译耗时约 +20%），关闭增量（scratch 每轮重生成，增量元数据只占内存与磁盘）。
+    // 两项只影响调试信息与编译缓存，不影响程序语义。
+    // 两个 profile 都 panic = "abort"：Java 异常经 Result 传播，不依赖 unwind；panic 只来自存根 /
+    // 运行时缺陷，由 create_java_vm 的钩子以退出码 101 终止（与 unwind 形态退出码、stderr 一致），
+    // 免除全部 unwind 清理路径（landing pad）
     let root = format!(
         "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
-         opt-level = 3\nlto       = true\ncodegen-units = 1\nstrip     = \"symbols\"\n",
+         opt-level = 3\nlto       = true\ncodegen-units = 1\nstrip     = \"symbols\"\npanic     = \"abort\"\n\n\
+         [profile.dev]\ndebug = \"line-tables-only\"\nincremental = false\npanic = \"abort\"\n",
         members.join(", ")
     );
     w.write(&out_dir.join("Cargo.toml"), &root)?;

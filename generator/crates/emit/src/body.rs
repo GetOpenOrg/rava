@@ -60,8 +60,32 @@ pub enum BodyError {
     Fatal(String),
 }
 
-/// 方法体生成器（生产实现 [`crate::method_bodies::MethodBodies`]）
-pub trait MethodBodyEmitter {
-    fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError>;
+/// 方法体生成日志：审计事实与逐方法耗时。随类账本增量按发射序合并，汇总结果与串行发射逐项一致
+#[derive(Debug, Default)]
+pub struct BodyLog {
+    pub events: Vec<BodyEvent>,
+    /// 逐方法体生成耗时（`类.名:描述符`，发射序；性能观测用）
+    pub timings: Vec<(String, std::time::Duration)>,
 }
 
+impl BodyLog {
+    pub fn append(&mut self, other: BodyLog) {
+        self.events.extend(other.events);
+        self.timings.extend(other.timings);
+    }
+}
+
+/// 一条方法体审计事实（汇总见 [`crate::method_bodies::BodyAudit::from_log`]）
+#[derive(Debug)]
+pub enum BodyEvent {
+    /// 一次方法体生成：等价性审计项、instanceof 折叠次数、控制流审计数据
+    Method { equiv: Vec<instr::Audit>, instanceof_folds: usize, cfg: Option<method::CfgStats> },
+    /// 控制流语义限制退化为存根（方法键, 原因, 发射位点）
+    StubFallback { key: String, reason: String, site: &'static str },
+}
+
+/// 方法体生成器（生产实现 [`crate::method_bodies::MethodBodies`]）。
+/// 并行发射下跨线程共享：生成器本身不可变，生成期事实写入调用方给的 [`BodyLog`]
+pub trait MethodBodyEmitter: Sync {
+    fn emit_body(&self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, log: &mut BodyLog) -> Result<BodyOutput, BodyError>;
+}

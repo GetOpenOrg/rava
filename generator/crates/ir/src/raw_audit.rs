@@ -4,7 +4,9 @@
 //! [`Item::raw`](crate::Item::raw) 构造（字段私有），构造即计数；终态 0。位点剖面（`--raw-sites`）
 //! 开启后按构造调用位点（`#[track_caller]`，`文件:行:列`）累计，供按热点收敛。
 //!
-//! 计数为线程局部：发射单线程，并行单元测试互不干扰。
+//! 计数为线程局部（并行单元测试互不干扰）。并行发射的工作线程开工前按调用方状态
+//! [`enable_sites`]，收工时 [`take_local`] 取走本线程账本，由调用方 [`absorb`] 并入自身——
+//! 计数为加法、位点表有序，合并结果与串行发射一致。
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -69,6 +71,43 @@ pub fn sites() -> Vec<(usize, RawKind, String)> {
     v
 }
 
+/// 位点剖面是否已开启（本线程）
+pub fn sites_enabled() -> bool {
+    SITES.with(|s| s.borrow().is_some())
+}
+
+/// 一个线程的账本（计数 + 位点剖面）
+#[derive(Debug, Default)]
+pub struct Tally {
+    counts: [usize; 3],
+    sites: BTreeMap<(RawKind, String), usize>,
+}
+
+/// 取走本线程账本并清零（位点剖面保持开启状态）
+pub fn take_local() -> Tally {
+    let counts = COUNTS.with(|c| c.replace([0; 3]));
+    let sites = SITES.with(|s| s.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default());
+    Tally { counts, sites }
+}
+
+/// 把其它线程的账本并入本线程（位点只在本线程已开启剖面时并入）
+pub fn absorb(t: Tally) {
+    COUNTS.with(|c| {
+        let mut v = c.get();
+        for (a, b) in v.iter_mut().zip(t.counts) {
+            *a += b;
+        }
+        c.set(v);
+    });
+    SITES.with(|s| {
+        if let Some(m) = s.borrow_mut().as_mut() {
+            for (k, n) in t.sites {
+                *m.entry(k).or_default() += n;
+            }
+        }
+    });
+}
+
 /// 清零计数与位点剖面（位点剖面保持开启状态）
 pub fn reset() {
     COUNTS.with(|c| c.set([0; 3]));
@@ -100,5 +139,26 @@ mod tests {
         reset();
         assert_eq!(count(RawKind::Stmt), 0);
         assert!(super::sites().is_empty());
+    }
+
+    #[test]
+    fn worker_tally_merges_into_caller() {
+        reset();
+        enable_sites();
+        let _a = Expr::raw("a");
+        let worker = std::thread::spawn(|| {
+            enable_sites();
+            let _b = Expr::raw("b");
+            let _c = Stmt::raw("c;");
+            take_local()
+        });
+        let t = worker.join().unwrap();
+        absorb(t);
+        assert_eq!((count(RawKind::Expr), count(RawKind::Stmt)), (2, 1));
+        assert_eq!(sites().iter().map(|(n, _, _)| n).sum::<usize>(), 3);
+        let t = take_local();
+        assert_eq!(t.counts, [2, 1, 0]);
+        assert_eq!(count(RawKind::Expr), 0);
+        assert!(sites_enabled());
     }
 }

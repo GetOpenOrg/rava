@@ -234,174 +234,56 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 quote! { __copy.#set(self.#get()); }
             })
             .collect();
-        // Unsafe 实例字段 long 原子协议（ObjectVTable::__unsafe_long_cell）：平铺字段
-        // （继承 + 自有）里非擦除 `long` 字段的共享存储单元臂。unsafe__impl 经
-        // offset→字段名反查后按名分派；返回的 Rc<Cell<i64>> 与全部 wrapper 视图共享，
-        // Unsafe 写入对直接字段读取（__get_xxx）可见（与 JVM 字段内存语义一致）。
-        let long_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-            .chain(ctx.fields.iter())
-            .filter(|(name, ty)| !ctx.is_erased(name) && type_is_long(ty))
-            .map(|(name, _)| {
-                let field_str = name.to_string();
+        // 按名字段协议（Unsafe 实例字段 long / int / boolean 共享单元、引用槽访问）：
+        // 字段名单与分派臂只在 inner 侧生成（inner 平铺持有全部继承字段）。wrapper 侧
+        // 先问静态类 inner（any 能 downcast 为本类 inner 时），未命中（any 是运行时子类
+        // inner——静态基类视图，如 AQS 视图承载 CountDownLatch$Sync；或字段不在本类名单）
+        // 委托 vtable 对象（= 运行时类 inner）的同名覆盖应答（与 `__erased_vtable` 的
+        // 委托同型）。本类无该类字段 → inner 不应答，直接委托。
+        let flat_fields = || ctx.meta.superclass_fields.iter()
+            .map(|(n, t)| (n, t, ctx.inherited_is_basic(n, t)))
+            .chain(ctx.fields.iter().map(|(n, t)| (n, t, is_basic(t))));
+        let has_prim = |pred: fn(&Type) -> bool| flat_fields()
+            .any(|(n, t, _)| !ctx.is_erased(n) && pred(t));
+        let cell_query = |method: &str, prim: TokenStream2, has: bool| -> TokenStream2 {
+            let method = format_ident!("{}", method);
+            let body = if has {
                 quote! {
-                    (::std::option::Option::Some(i), #field_str) =>
-                        ::std::option::Option::Some(__Shared::clone(&i.#name)),
+                    ::std::option::Option::or_else(
+                        ::std::option::Option::and_then(
+                            self.any.downcast_ref::<#inner_ident>(),
+                            |i| ObjectVTable::#method(i, field)),
+                        || ObjectVTable::#method(&*self.vtable, field))
                 }
-            })
-            .collect();
-        // 同一协议的 int 镜像（`__unsafe_int_cell`）：平铺的非擦除 `int` 字段。
-        let int_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-            .chain(ctx.fields.iter())
-            .filter(|(name, ty)| !ctx.is_erased(name) && type_is_int(ty))
-            .map(|(name, _)| {
-                let field_str = name.to_string();
-                quote! {
-                    (::std::option::Option::Some(i), #field_str) =>
-                        ::std::option::Option::Some(__Shared::clone(&i.#name)),
-                }
-            })
-            .collect();
-        // 同一协议的 boolean 镜像（`__unsafe_bool_cell`）：平铺的非擦除 `boolean` 字段
-        // （VarHandle 字节数组视图的 `be` 字节序位等只读形态消费）。
-        let bool_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-            .chain(ctx.fields.iter())
-            .filter(|(name, ty)| !ctx.is_erased(name) && type_is_bool(ty))
-            .map(|(name, _)| {
-                let field_str = name.to_string();
-                quote! {
-                    (::std::option::Option::Some(i), #field_str) =>
-                        ::std::option::Option::Some(__Shared::clone(&i.#name)),
-                }
-            })
-            .collect();
-        // Unsafe/VarHandle 实例字段引用原子协议（`__unsafe_ref_get`/`__unsafe_ref_set`）：
-        // 平铺字段里非基本的引用字段（含擦除——载体即 `RefCell<Option<Box<Object>>>`）。
-        // 臂内直接 cell 访问（i: &__inner），边界转换与 inner 侧同式；静态类臂未命中
-        // （any 是运行时子类 inner / 字段不在本类名单）→ 委托 vtable 对象的同名
-        // 覆盖应答（与 long/int cell 的委托同型）。
-        let ref_get_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-            .filter(|(name, ty)| ctx.is_erased(name) || !ctx.inherited_is_basic(name, ty))
-            .map(|(name, _)| {
-                let field_str = name.to_string();
-                if ctx.is_erased(name) {
-                    quote! {
-                        (::std::option::Option::Some(i), #field_str) =>
-                            ::std::option::Option::Some(
-                                ::std::option::Option::unwrap_or_default(
-                                    i.#name.borrow().as_deref().map(::std::clone::Clone::clone))),
-                    }
-                } else {
-                    quote! {
-                        (::std::option::Option::Some(i), #field_str) =>
-                            ::std::option::Option::Some(
-                                ::std::option::Option::unwrap_or_default(
-                                    i.#name.borrow().as_deref()
-                                        .map(|__b| Object::from(::std::clone::Clone::clone(__b))))),
-                    }
-                }
-            })
-            .chain(ctx.fields.iter()
-                .filter(|(name, ty)| ctx.is_erased(name) || !is_basic(ty))
-                .map(|(name, _)| {
-                    let field_str = name.to_string();
-                    if ctx.is_erased(name) {
-                        quote! {
-                            (::std::option::Option::Some(i), #field_str) =>
-                                ::std::option::Option::Some(
-                                    ::std::option::Option::unwrap_or_default(
-                                        i.#name.borrow().as_deref()
-                                            .map(::std::clone::Clone::clone))),
-                        }
-                    } else {
-                        quote! {
-                            (::std::option::Option::Some(i), #field_str) =>
-                                ::std::option::Option::Some(
-                                    ::std::option::Option::unwrap_or_default(
-                                        i.#name.borrow().as_deref()
-                                            .map(|__b| Object::from(
-                                                ::std::clone::Clone::clone(__b))))),
-                        }
-                    }
-                }))
-            .collect();
-        let ref_set_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-            .filter(|(name, ty)| ctx.is_erased(name) || !ctx.inherited_is_basic(name, ty))
-            .map(|(name, ty)| {
-                let field_str = name.to_string();
-                if ctx.is_erased(name) {
-                    quote! {
-                        (::std::option::Option::Some(i), #field_str) => {
-                            *i.#name.borrow_mut() =
-                                ::std::option::Option::Some(::std::boxed::Box::new(v));
-                            true
-                        }
-                    }
-                } else {
-                    quote! {
-                        (::std::option::Option::Some(i), #field_str) => {
-                            *i.#name.borrow_mut() = ::std::option::Option::Some(
-                                ::std::boxed::Box::new(
-                                    <#ty as ::std::convert::From<Object>>::from(v)));
-                            true
-                        }
-                    }
-                }
-            })
-            .chain(ctx.fields.iter()
-                .filter(|(name, ty)| ctx.is_erased(name) || !is_basic(ty))
-                .map(|(name, ty)| {
-                    let field_str = name.to_string();
-                    if ctx.is_erased(name) {
-                        quote! {
-                            (::std::option::Option::Some(i), #field_str) => {
-                                *i.#name.borrow_mut() =
-                                    ::std::option::Option::Some(
-                                        ::std::boxed::Box::new(v));
-                                true
-                            }
-                        }
-                    } else {
-                        quote! {
-                            (::std::option::Option::Some(i), #field_str) => {
-                                *i.#name.borrow_mut() = ::std::option::Option::Some(
-                                    ::std::boxed::Box::new(
-                                        <#ty as ::std::convert::From<Object>>::from(v)));
-                                true
-                            }
-                        }
-                    }
-                }))
-            .collect();
-        // 引用原子协议的读-改-写形态（`__unsafe_ref_update`）：在同一引用槽的写锁内读出
-        // 当前值、由 `f` 决定是否写入新值，返回旧值——CAS / compareAndExchange / getAndSet
-        // 在并行后端真正原子（单线程后端 RefCell 独占借用同样不可分割）。
-        let ref_update_arm = |name: &syn::Ident, ty: &Type, erased: bool| -> TokenStream2 {
-            let field_str = name.to_string();
-            let (read, write) = if erased {
-                (quote! { __g.as_deref().map(::std::clone::Clone::clone) },
-                 quote! { ::std::boxed::Box::new(__n) })
             } else {
-                (quote! { __g.as_deref().map(|__b| Object::from(::std::clone::Clone::clone(__b))) },
-                 quote! { ::std::boxed::Box::new(<#ty as ::std::convert::From<Object>>::from(__n)) })
+                quote! { ObjectVTable::#method(&*self.vtable, field) }
             };
             quote! {
-                (::std::option::Option::Some(i), #field_str) => {
-                    let mut __g = i.#name.borrow_mut();
-                    let __cur: Object = ::std::option::Option::unwrap_or_default(#read);
-                    if let ::std::option::Option::Some(__n) = f(::std::clone::Clone::clone(&__cur)) {
-                        *__g = ::std::option::Option::Some(#write);
-                    }
-                    ::std::option::Option::Some(__cur)
+                fn #method(
+                    &self,
+                    field: &str,
+                ) -> ::std::option::Option<__Shared<__PrimCell<#prim>>> {
+                    #body
                 }
             }
         };
-        let ref_update_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-            .filter(|(name, ty)| ctx.is_erased(name) || !ctx.inherited_is_basic(name, ty))
-            .map(|(name, ty)| ref_update_arm(name, ty, ctx.is_erased(name)))
-            .chain(ctx.fields.iter()
-                .filter(|(name, ty)| ctx.is_erased(name) || !is_basic(ty))
-                .map(|(name, ty)| ref_update_arm(name, ty, ctx.is_erased(name))))
-            .collect();
+        let long_cell_query = cell_query("__unsafe_long_cell", quote! { i64 }, has_prim(type_is_long));
+        let int_cell_query = cell_query("__unsafe_int_cell", quote! { i32 }, has_prim(type_is_int));
+        let bool_cell_query = cell_query("__unsafe_bool_cell", quote! { bool }, has_prim(type_is_bool));
+        let has_ref = flat_fields().any(|(n, _, basic)| ctx.is_erased(n) || !basic);
+        let ref_access_inner = if has_ref {
+            quote! {
+                if let ::std::option::Option::Some(i) = self.any.downcast_ref::<#inner_ident>() {
+                    if let __r @ ::std::option::Option::Some(_) =
+                        ObjectVTable::__unsafe_ref_access(i, field, op)
+                    {
+                        return __r;
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote! {
             impl #impl_g ObjectVTable for #struct_ident #ty_g #where_c {
                 fn is_instance_of(&self, type_id: &str) -> bool {
@@ -494,73 +376,14 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     #(#copy_stmts)*
                     ::std::option::Option::Some(Object::from(__copy))
                 }
-                /// Unsafe 实例字段 long 原子协议：按字段名取共享存储单元（ObjectVTable
-                /// 侧默认 None，见 object.rs）。臂覆盖平铺的非擦除 long 字段；静态类臂
-                /// 未命中（any 是运行时子类 inner——静态基类视图，如 AQS 视图承载
-                /// CountDownLatch$Sync；或字段不在本类名单）→ 委托 vtable 对象（=
-                /// 运行时类 inner）的同名覆盖应答（vtable trait 链根部超 trait 即
-                /// ObjectVTable，上转分派；inner 平铺持有全部继承字段，直接可答——
-                /// 与 `__erased_vtable` 的委托同型）。
-                fn __unsafe_long_cell(
-                    &self,
-                    field: &str,
-                ) -> ::std::option::Option<__Shared<__PrimCell<i64>>> {
-                    match (self.any.downcast_ref::<#inner_ident>(), field) {
-                        #(#long_cell_arms)*
-                        _ => ObjectVTable::__unsafe_long_cell(&*self.vtable, field),
-                    }
-                }
-                /// Unsafe 实例字段 int 原子协议：`__unsafe_long_cell` 的 int 镜像
-                /// （平铺的非擦除 int 字段臂 + 未命中委托 vtable 对象）。
-                fn __unsafe_int_cell(
-                    &self,
-                    field: &str,
-                ) -> ::std::option::Option<__Shared<__PrimCell<i32>>> {
-                    match (self.any.downcast_ref::<#inner_ident>(), field) {
-                        #(#int_cell_arms)*
-                        _ => ObjectVTable::__unsafe_int_cell(&*self.vtable, field),
-                    }
-                }
-                /// 实例字段 boolean 按名协议：`__unsafe_int_cell` 的 boolean 镜像。
-                fn __unsafe_bool_cell(
-                    &self,
-                    field: &str,
-                ) -> ::std::option::Option<__Shared<__PrimCell<bool>>> {
-                    match (self.any.downcast_ref::<#inner_ident>(), field) {
-                        #(#bool_cell_arms)*
-                        _ => ObjectVTable::__unsafe_bool_cell(&*self.vtable, field),
-                    }
-                }
-                /// Unsafe/VarHandle 实例字段引用原子协议（读形态）：平铺的引用字段
-                /// 臂（含擦除——载体即 `RefCell<Option<Box<Object>>>`）+ 未命中委托
-                /// vtable 对象（运行时类 inner 平铺持有全部继承字段，直接可答——
-                /// 静态基类视图由此承接，与 long/int cell 的委托同型）。
-                fn __unsafe_ref_get(
-                    &self,
-                    field: &str,
+                #long_cell_query
+                #int_cell_query
+                #bool_cell_query
+                fn __unsafe_ref_access(
+                    &self, field: &str, op: &mut __RefAccess<'_>,
                 ) -> ::std::option::Option<Object> {
-                    match (self.any.downcast_ref::<#inner_ident>(), field) {
-                        #(#ref_get_arms)*
-                        _ => ObjectVTable::__unsafe_ref_get(&*self.vtable, field),
-                    }
-                }
-                /// Unsafe/VarHandle 实例字段引用原子协议（写形态）：
-                /// `__unsafe_ref_get` 的镜像（命中写入 true + 未命中委托）。
-                fn __unsafe_ref_set(&self, field: &str, v: Object) -> bool {
-                    match (self.any.downcast_ref::<#inner_ident>(), field) {
-                        #(#ref_set_arms)*
-                        _ => ObjectVTable::__unsafe_ref_set(&*self.vtable, field, v),
-                    }
-                }
-                /// 引用原子协议的读-改-写形态（见 ObjectVTable::__unsafe_ref_update）。
-                fn __unsafe_ref_update(
-                    &self, field: &str,
-                    f: &mut dyn FnMut(Object) -> ::std::option::Option<Object>,
-                ) -> ::std::option::Option<Object> {
-                    match (self.any.downcast_ref::<#inner_ident>(), field) {
-                        #(#ref_update_arms)*
-                        _ => ObjectVTable::__unsafe_ref_update(&*self.vtable, field, f),
-                    }
+                    #ref_access_inner
+                    ObjectVTable::__unsafe_ref_access(&*self.vtable, field, op)
                 }
                 #to_string_fwd
                 #hash_code_fwd

@@ -40,7 +40,7 @@ impl<'a> Engine<'a> {
         self.methods.values().map(|m| format!("{}.{}", m.key.owner, m.key.name)).collect()
     }
 
-    fn user_classes(&self) -> Vec<Rc<ClassFile>> {
+    fn user_classes(&self) -> Vec<std::sync::Arc<ClassFile>> {
         self.cp.names_of(Origin::User).iter().filter_map(|n| self.cp.get(n)).collect()
     }
 

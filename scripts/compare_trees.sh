@@ -29,6 +29,9 @@ for d in "$BASE"/*/; do
         if [ ! -f "$NEW/$n/$j" ]; then c=$((c + 1)); continue; fi
         c=$(( c + $(diff <(_strip_timing "$BASE/$n/$j") <(_strip_timing "$NEW/$n/$j") | wc -l) ))
     done
+    for j in $(cd "$NEW/$n" && find . -name closure.json); do
+        [ -f "$BASE/$n/$j" ] || c=$((c + 1))
+    done
     echo -n "$n=$c "; [ "$c" = 0 ] || rc=1
 done
 echo

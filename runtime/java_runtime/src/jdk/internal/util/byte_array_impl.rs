@@ -12,7 +12,7 @@ macro_rules! be_get {
         let mut v: $t = 0;
         let n = std::mem::size_of::<$t>();
         for i in 0..n {
-            v = (v << 8) | ($arr.get($off + i as i32)? as u8) as $t;
+            v = (v << 8) | ($arr.get($off.wrapping_add(i as i32))? as u8) as $t;
         }
         v
     }};
@@ -23,7 +23,7 @@ macro_rules! be_set {
         let mut v: $t = $val;
         let n = std::mem::size_of::<$t>();
         for i in (0..n).rev() {
-            $arr.set($off + i as i32, (v & 0xFF) as u8 as i8)?;
+            $arr.set($off.wrapping_add(i as i32), (v & 0xFF) as u8 as i8)?;
             v >>= 8;
         }
     }};

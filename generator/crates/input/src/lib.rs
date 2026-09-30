@@ -24,7 +24,7 @@ pub use boundary::Boundary;
 pub use build::{BuildInput, EmitInput, LibCrate, MethodKey, ReflectFacts};
 pub use facts::{ClosureFacts, MethodKind};
 pub use manifest::RuntimeManifest;
-pub use norm::{NInsn, NormCode};
+pub use norm::{CodeOps, NInsn, NormCode};
 pub use plan::{ClassPlan, MethodPlan, Planner, Role, Verdict};
 pub use prune::VmConstants;
 

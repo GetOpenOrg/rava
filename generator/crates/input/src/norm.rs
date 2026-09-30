@@ -56,6 +56,30 @@ impl NInsn {
     }
 }
 
+/// 方法体的只读指令视图（规范化体或原始体，不复制指令）
+#[derive(Debug, Clone, Copy)]
+pub enum CodeOps<'s> {
+    Norm(&'s NormCode),
+    Raw(&'s Code),
+}
+
+impl<'s> CodeOps<'s> {
+    /// JVM 指令序列（等同逐条 [`NInsn::insn`] 过滤：FoldField 不出现）
+    pub fn ops(self) -> Box<dyn DoubleEndedIterator<Item = &'s Insn> + 's> {
+        match self {
+            CodeOps::Norm(n) => Box::new(n.insns.iter().filter_map(NInsn::insn)),
+            CodeOps::Raw(c) => Box::new(c.insns.iter()),
+        }
+    }
+
+    pub fn exception_table(self) -> &'s [ExceptionEntry] {
+        match self {
+            CodeOps::Norm(n) => &n.exception_table,
+            CodeOps::Raw(c) => &c.exception_table,
+        }
+    }
+}
+
 /// 规范化后的方法体
 #[derive(Debug, Clone)]
 pub struct NormCode {

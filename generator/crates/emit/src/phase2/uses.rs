@@ -16,9 +16,21 @@ use crate::text::to_snake;
 
 const JAVA_RUNTIME: &str = "java_runtime";
 
-fn use_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^use\s+(.+)::([A-Za-z_][A-Za-z0-9_]*);\s*$").expect("静态正则"))
+/// use 行导入的末段名：`^use\s+(.+)::([A-Za-z_][A-Za-z0-9_]*);\s*$` 的第 2 组。
+/// `(.+)` 贪婪且末段不含 `:`，唯一候选是最后一个 `::`
+fn use_name(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("use")?;
+    let ws = rest.chars().next().filter(|c| c.is_whitespace())?;
+    let p = line.rfind("::")?;
+    if p < 3 + ws.len_utf8() + 1 {
+        return None;
+    }
+    let tail = &line[p + 2..];
+    let semi = tail.find(';')?;
+    let (name, after) = (&tail[..semi], &tail[semi + 1..]);
+    let mut cs = name.chars();
+    let head_ok = cs.next().is_some_and(|c| c == '_' || c.is_ascii_alphabetic());
+    (head_ok && cs.all(|c| c == '_' || c.is_ascii_alphanumeric()) && after.chars().all(char::is_whitespace)).then_some(name)
 }
 
 fn sig_class_re() -> &'static Regex {
@@ -28,7 +40,41 @@ fn sig_class_re() -> &'static Regex {
 
 /// 文件 use 行导入的末段名（`_USE_RE` 的 group 2），全文扫描
 pub fn imported_names(text: &str) -> BTreeSet<String> {
-    text.split('\n').filter_map(|l| use_re().captures(l).map(|c| c[2].to_string())).collect()
+    text.split('\n').filter_map(|l| use_name(l).map(str::to_string)).collect()
+}
+
+/// 类文件头（`rava_macros::java_class!` 行之前）的 use 行索引：末段名 → 首条 use 行（trim）
+pub struct UseIndex {
+    header: String,
+    map: BTreeMap<String, String>,
+}
+
+const CLASS_MACRO_LINE: &str = "rava_macros::java_class!";
+
+/// 文本头部：首个以类宏起始的行之前的部分（无该行 → 全文）
+fn header_of(text: &str) -> &str {
+    if text.starts_with(CLASS_MACRO_LINE) {
+        return "";
+    }
+    let marker = format!("\n{CLASS_MACRO_LINE}");
+    text.find(&marker).map_or(text, |i| &text[..i + 1])
+}
+
+/// owner 的 use 行索引（缓存；头部文本变化——继承 use 插入位填充后——即重建）
+fn use_index(ctx: &EmitCtx<'_>, owner: &ClassEmission) -> std::sync::Arc<UseIndex> {
+    let header = header_of(&owner.text);
+    if let Some(ix) = ctx.use_index.lock().unwrap_or_else(|e| e.into_inner()).get(&owner.binary_name).filter(|ix| ix.header == header) {
+        return ix.clone();
+    }
+    let mut map = BTreeMap::new();
+    for ln in header.split('\n') {
+        if let Some(name) = use_name(ln) {
+            map.entry(name.to_string()).or_insert_with(|| ln.trim().to_string());
+        }
+    }
+    let ix = std::sync::Arc::new(UseIndex { header: header.to_string(), map });
+    ctx.use_index.lock().unwrap_or_else(|e| e.into_inner()).insert(owner.binary_name.clone(), ix.clone());
+    ix
 }
 
 /// 类在 Rust 中的完整引用路径（不含 `use` 与 `;`）。
@@ -113,19 +159,12 @@ pub fn imports_for(
     arg_uses: Option<&BTreeMap<String, String>>,
     ems: Option<&Emissions>,
 ) -> Vec<String> {
-    let mut owner_uses: BTreeMap<String, String> = BTreeMap::new();
-    for ln in owner.text.split('\n') {
-        if let Some(c) = use_re().captures(ln) {
-            owner_uses.entry(c[2].to_string()).or_insert_with(|| ln.trim().to_string());
-        } else if ln.starts_with("rava_macros::java_class!") {
-            break;
-        }
-    }
-    if owner.binary_name.contains('/') {
-        owner_uses.entry(ctx.short(&owner.binary_name)).or_insert_with(|| {
-            format!("use {};", class_use_path(ctx, &owner.binary_name, &owner.crate_prefix, ems, &recv.crate_name))
-        });
-    }
+    let index = use_index(ctx, owner);
+    let self_short = owner.binary_name.contains('/').then(|| ctx.short(&owner.binary_name));
+    let self_use = |ident: &str| -> Option<String> {
+        (self_short.as_deref() == Some(ident))
+            .then(|| format!("use {};", class_use_path(ctx, &owner.binary_name, &owner.crate_prefix, ems, &recv.crate_name)))
+    };
     let owner_crate = if owner.crate_name.is_empty() { JAVA_RUNTIME } else { owner.crate_name.as_str() };
     let mut out = Vec::new();
     let mut seen_ident = BTreeSet::new();
@@ -133,7 +172,7 @@ pub fn imports_for(
         if !seen_ident.insert(ident) || already.contains(ident) {
             continue;
         }
-        let Some(use_line) = owner_uses.get(ident) else {
+        let Some(use_line) = index.map.get(ident).cloned().or_else(|| self_use(ident)) else {
             if let Some(u) = arg_uses.and_then(|a| a.get(ident)) {
                 already.insert(ident.to_string());
                 out.push(u.clone());
@@ -142,10 +181,37 @@ pub fn imports_for(
         };
         let line = match use_line.strip_prefix("use crate::") {
             Some(rest) if owner_crate != recv.crate_name => format!("use {owner_crate}::{rest}"),
-            _ => use_line.clone(),
+            _ => use_line,
         };
         already.insert(ident.to_string());
         out.push(line);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::use_name;
+
+    #[test]
+    fn use_name_matches_regex() {
+        let rx = regex::Regex::new(r"^use\s+(.+)::([A-Za-z_][A-Za-z0-9_]*);\s*$").unwrap();
+        for l in [
+            "use crate::java::lang::String;",
+            "use crate::java::lang::String;  ",
+            "use  a::B;",
+            "use a::B; x",
+            "use a:::B;",
+            "use ::B;",
+            "use  ::B;",
+            "use\u{3000}x::_B9;",
+            "usex::B;",
+            "use a::B::{C};",
+            "use a::1B;",
+            "use a::B;\u{a0}",
+            "  use a::B;",
+        ] {
+            assert_eq!(use_name(l), rx.captures(l).map(|c| c.get(2).unwrap().as_str()), "{l}");
+        }
+    }
 }

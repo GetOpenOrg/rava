@@ -14,6 +14,7 @@
 //! 模块名沿用 `gil`（生成代码经 prelude 引用其入口），后续随调用点收敛再更名。
 
 use parking_lot::{Condvar, Mutex};
+use crate::sync_model::__PrimCell;
 
 /// 在阻塞状态下执行 `f`（sleep / wait / park / 竞争 monitorenter / join / 类初始化等待）。
 /// 并行后端无全局锁可让，直接执行。
@@ -85,17 +86,17 @@ static CLINIT_OWNERS: Mutex<Vec<(&'static str, std::thread::ThreadId)>> = Mutex:
 static CLINIT_GEN: Mutex<u64> = Mutex::new(0);
 static CLINIT_CV: Condvar = Condvar::new();
 
-/// 进入类初始化（`get` / `set` 读写该类的状态单元）。
-pub fn clinit_enter(class: &'static str, get: impl Fn() -> u8, set: impl Fn(u8)) -> ClinitEnter {
+/// 进入类初始化（`state` 为该类的状态单元）。非泛型：全部类共用一份实例。
+pub fn clinit_enter(class: &'static str, state: &'static __PrimCell<u8>) -> ClinitEnter {
     // 持有者登记：<clinit> 内启动的线程据此等待而非越过未完成的初始化。状态转换在
     // CLINIT_OWNERS 锁内完成（两线程同时读到 0 时只有一个进入 <clinit>——JVMS §5.5 的 LC 锁）。
     let me = std::thread::current().id();
     loop {
         {
             let mut owners = CLINIT_OWNERS.lock();
-            match get() {
+            match state.get() {
                 0 => {
-                    set(1);
+                    state.set(1);
                     owners.push((class, me));
                     return ClinitEnter::Run;
                 }
@@ -111,17 +112,17 @@ pub fn clinit_enter(class: &'static str, get: impl Fn() -> u8, set: impl Fn(u8))
         }
         // 他线程初始化中：在广播锁下复查后等待（clinit_exit 先改状态再取广播锁通知，不丢唤醒）
         let mut gen = CLINIT_GEN.lock();
-        if get() == 1 {
+        if state.get() == 1 {
             CLINIT_CV.wait(&mut gen);
         }
     }
 }
 
 /// 结束类初始化：`ok` → 已完成（3），否则 erroneous（2）；唤醒等待者。
-pub fn clinit_exit(class: &'static str, ok: bool, set: impl Fn(u8)) {
+pub fn clinit_exit(class: &'static str, ok: bool, state: &'static __PrimCell<u8>) {
     {
         let mut owners = CLINIT_OWNERS.lock();
-        set(if ok { 3 } else { 2 });
+        state.set(if ok { 3 } else { 2 });
         owners.retain(|(c, _)| *c != class);
     }
     let mut gen = CLINIT_GEN.lock();

@@ -203,7 +203,7 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
             if hw.is_some_and(|h| h.methods.contains(&fname)) {
                 continue;
             }
-            let setter = format!("pub fn set_{fname}(v: {ty}) -> Result<()> {{\n    panic!(\"stub-set: {cls}.{fnm}:{fd}\")\n}}");
+            let setter = format!("pub fn set_{fname}(v: {ty}) -> Result<()> {{\n    __stub(\"stub-set: {cls}.{fnm}:{fd}\")\n}}");
             if let Some((core, core_ret)) = hw.and_then(|h| h.method_cores.get(&fname)) {
                 let cr = core_ret.strip_prefix("Result<").and_then(|s| s.strip_suffix('>'));
                 let cast = match cr {
@@ -218,7 +218,7 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
                 continue;
             }
             blocks.push(format!(
-                "{head}pub fn {fname}() -> Result<{ty}> {{\n    panic!(\"stub: {cls}.{fnm}:{fd}\")\n}}\n{setter}"
+                "{head}pub fn {fname}() -> Result<{ty}> {{\n    __stub(\"stub: {cls}.{fnm}:{fd}\")\n}}\n{setter}"
             ));
         } else {
             blocks.push(format!("{head}pub static {fname}: {ty};"));

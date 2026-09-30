@@ -33,6 +33,7 @@
 | 13 | `scripts/seed_check.sh` | 经 `main.py`（`PYTHONHASHSEED` 双种子） | 是 | 无需迁移 | 在 rust 下是一般的确定性检查（两次生成逐字节一致）；删除 Python 后可去掉 `PYTHONHASHSEED` 的说法 | — |
 | 14 | `scripts/gen_trees.sh` / `compare_trees.sh` | 经 `main.py` | 是 | 无需迁移 | `compare_trees.sh` 已去掉 closure.json 计时噪声（0ef2ebe1） | — |
 | 15 | `runtime/java_runtime/*.toml` / `*.txt`、`runtime/java_support/*.java` | 注释中引用 codegen 路径 | — | 保留 | 清单是手写层真源，Rust 读同一文件。删除时统一改注释指向 Rust 读取端 | — |
+| 16 | `scripts/emit_bench.sh`（合入 rust-closure-analyzer 带入） | `jdk_resolver.JdkResolver.image_class_dirs()` | 是（基准脚本） | 迁移 | 去掉 `--image` 拼装，由 `rava build` / `rava emit` 自行派生（同第 1 项） | ✅ 合并提交 |
 
 ## 三、Python 单测 → Rust 对应测试
 
