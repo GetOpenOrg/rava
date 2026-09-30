@@ -1,0 +1,11 @@
+[package]
+name = "cfg"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+classfile.workspace = true
+ir.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
