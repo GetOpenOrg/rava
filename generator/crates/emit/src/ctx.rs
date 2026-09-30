@@ -54,7 +54,7 @@ pub struct EmitCtx<'a> {
     instr_facts: OnceLock<instr::InstrFacts>,
     lib_crate_of: OnceLock<HashMap<String, String>>,
     /// 类文件头 use 行索引缓存（binary → 索引；按头部文本校验，见 `phase2::uses`）
-    pub(crate) use_index: Mutex<HashMap<String, Arc<crate::phase2::uses::UseIndex>>>,
+    pub(crate) use_index: Mutex<HashMap<String, Vec<Arc<crate::phase2::uses::UseIndex>>>>,
 }
 
 impl<'a> EmitCtx<'a> {

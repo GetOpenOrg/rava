@@ -75,6 +75,7 @@ fn build_env(meta: &Value) -> Env {
         user_classes: &user,
         libs: &[],
         runtime_src: &runtime.join("src"),
+        jobs: 0,
     }
     .build()
     .expect("构建发射层输入");

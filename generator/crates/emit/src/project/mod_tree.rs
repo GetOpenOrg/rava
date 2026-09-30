@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use closure::handwritten::Handwritten;
+use closure::handwritten::HwTypeRefs;
 use ty::ident::is_rust_keyword;
 
 use super::fs::{has_marker, walk, Writer};
@@ -18,7 +18,7 @@ use crate::error::{io_err, Result};
 /// （语料条件生成类本轮未生成）则该 companion 不声明——等价于该 impl 尚不存在，
 /// 其服务的 native 方法回落 panic 存根，而不是让无法解析的 import 拖垮整个 crate。
 pub struct CompanionDeps {
-    hw: Handwritten,
+    hw: HwTypeRefs,
     /// scratch 的 crate src 根（`crate::` 起点）
     src_root: PathBuf,
 }
@@ -30,7 +30,7 @@ fn seg_name(s: &str) -> &str {
 
 impl CompanionDeps {
     pub fn new(runtime_dir: &Path, src_root: &Path) -> CompanionDeps {
-        CompanionDeps { hw: Handwritten::new(runtime_dir), src_root: src_root.to_path_buf() }
+        CompanionDeps { hw: HwTypeRefs::new(runtime_dir), src_root: src_root.to_path_buf() }
     }
 
     /// 一条路径引用（`super::…` / `crate::…`）指向的模块文件是否在场。
@@ -72,8 +72,7 @@ impl CompanionDeps {
         let Ok(rel) = dir.strip_prefix(&self.src_root) else { return true };
         let rel = rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
         let cls = if rel.is_empty() { base.to_string() } else { format!("{rel}/{base}") };
-        let hw = self.hw.class(&cls);
-        hw.type_refs.iter().all(|t| self.path_present(dir, &t.0))
+        self.hw.class(&cls).iter().all(|t| self.path_present(dir, &t.0))
     }
 }
 
@@ -93,38 +92,54 @@ fn use_decl(name: &str) -> String {
     }
 }
 
+/// 一次递归列举（[`walk`] 形态）；清扫后原地剔除已删文件，供后续各步复用
+type Listing = Vec<(PathBuf, Vec<String>, Vec<String>)>;
+
+/// 已读过的生成标记（路径 → [`has_marker`]），免得同一文件读两遍
+type Markers = BTreeMap<PathBuf, Option<bool>>;
+
+fn is_module_file(f: &str) -> bool {
+    f.ends_with(".rs") && f != "lib.rs" && f != "mod.rs"
+}
+
 /// 本轮未写入的陈旧 .rs（lib.rs / mod.rs 除外）清除：带生成标记的上轮生成文件；
 /// `handwritten_src` 给出时（java_runtime）还有手写真源已删除的无标记文件。
-/// 在本轮写出之后判定，本轮生成的无标记文件（如模块资源表）不会被先删后写
-fn sweep_stale(src_root: &Path, handwritten_src: Option<&Path>, writer: &Writer) -> Result<()> {
-    for (dir, _, files) in walk(src_root) {
-        let rel = dir.strip_prefix(src_root).unwrap_or(Path::new(""));
-        for f in files {
-            if !f.ends_with(".rs") || f == "lib.rs" || f == "mod.rs" {
-                continue;
-            }
-            let p = dir.join(&f);
-            if writer.written_this_run(&p) {
-                continue;
-            }
-            let stale = match has_marker(&p) {
+/// 在本轮写出之后判定，本轮生成的无标记文件（如模块资源表）不会被先删后写。
+/// 标记按 `jobs` 并行读取，删除按列举序串行（出错报列举序第一个）；删除的文件从 `listing` 剔除
+fn sweep_stale(listing: &mut Listing, src_root: &Path, handwritten_src: Option<&Path>, writer: &Writer, jobs: usize) -> Result<Markers> {
+    let cands: Vec<PathBuf> = listing
+        .iter()
+        .flat_map(|(dir, _, files)| files.iter().filter(|f| is_module_file(f)).map(move |f| dir.join(f)))
+        .filter(|p| !writer.written_this_run(p))
+        .collect();
+    let marks = crate::par::par_map(jobs, &cands, |p| has_marker(p));
+    let markers: Markers = cands.into_iter().zip(marks).collect();
+    for (dir, _, files) in listing.iter_mut() {
+        let rel = dir.strip_prefix(src_root).unwrap_or(Path::new("")).to_path_buf();
+        let mut removed = Vec::new();
+        for f in files.iter() {
+            let p = dir.join(f);
+            let Some(&mark) = markers.get(&p) else { continue };
+            let stale = match mark {
                 Some(true) => true,
-                Some(false) => handwritten_src.is_some_and(|hw| !hw.join(rel).join(&f).exists()),
+                Some(false) => handwritten_src.is_some_and(|hw| !hw.join(&rel).join(f).exists()),
                 None => false,
             };
             if stale {
                 std::fs::remove_file(&p).map_err(|e| io_err(&p.display().to_string(), e))?;
+                removed.push(f.clone());
             }
         }
+        files.retain(|f| !removed.contains(f));
     }
-    Ok(())
+    Ok(markers)
 }
 
 /// 从磁盘收集 mod 树：目录 → 子模块名（文件 stem 与子目录名）
-fn scan_tree(src_root: &Path, handwritten_src: Option<&Path>) -> BTreeMap<PathBuf, BTreeSet<String>> {
+fn scan_tree(listing: &Listing, src_root: &Path, handwritten_src: Option<&Path>, markers: &Markers) -> BTreeMap<PathBuf, BTreeSet<String>> {
     let mut tree: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
     let mut skip_under: Vec<PathBuf> = Vec::new();
-    for (dir, _, files) in walk(src_root) {
+    for (dir, _, files) in listing {
         if skip_under.iter().any(|s| dir.starts_with(s)) {
             continue;
         }
@@ -137,12 +152,16 @@ fn scan_tree(src_root: &Path, handwritten_src: Option<&Path>) -> BTreeMap<PathBu
             }
         }
         for f in files {
-            if !f.ends_with(".rs") || f == "lib.rs" || f == "mod.rs" {
+            if !is_module_file(f) {
                 continue;
             }
             // 共置手写文件由 companion 声明；含生成标记的是碰巧以 Impl/Ext 结尾的生成类
-            if (f.ends_with("_impl.rs") || f.ends_with("_ext.rs")) && has_marker(&dir.join(&f)) != Some(true) {
-                continue;
+            if f.ends_with("_impl.rs") || f.ends_with("_ext.rs") {
+                let p = dir.join(f);
+                let mark = markers.get(&p).copied().unwrap_or_else(|| has_marker(&p));
+                if mark != Some(true) {
+                    continue;
+                }
             }
             tree.entry(dir.clone()).or_default().insert(f[..f.len() - 3].to_string());
         }
@@ -176,7 +195,12 @@ fn scan_tree(src_root: &Path, handwritten_src: Option<&Path>) -> BTreeMap<PathBu
 /// 保留：手写模块目录（runtime/ 真源提供 mod.rs）整棵子树；java_runtime 手写 lib.rs 直接声明的
 /// 顶层目录（其余顶层包由 [`complete_lib_rs`] 按磁盘补声明，目录删除即不再声明）；lib crate
 /// （`handwritten_src` 为 None）的全部顶层目录
-fn prune_stale_pkg_dirs(src_root: &Path, handwritten_src: Option<&Path>, tree: &BTreeMap<PathBuf, BTreeSet<String>>) -> Result<()> {
+fn prune_stale_pkg_dirs(
+    listing: &Listing,
+    src_root: &Path,
+    handwritten_src: Option<&Path>,
+    tree: &BTreeMap<PathBuf, BTreeSet<String>>,
+) -> Result<()> {
     let lib_declared: BTreeSet<String> = handwritten_src
         .and_then(|hw| std::fs::read_to_string(hw.join("lib.rs")).ok())
         .map(|text| {
@@ -190,8 +214,8 @@ fn prune_stale_pkg_dirs(src_root: &Path, handwritten_src: Option<&Path>, tree: &
         rel.ancestors().any(|a| !a.as_os_str().is_empty() && hw.join(a).join("mod.rs").is_file())
     };
     // 自底向上：子目录先于父目录处理，删空的子目录让父目录也可能变空
-    for (dir, _, files) in walk(src_root).into_iter().rev() {
-        if dir == src_root || tree.contains_key(&dir) || handwritten_mod_dir(&dir) {
+    for (dir, _, files) in listing.iter().rev() {
+        if dir == src_root || tree.contains_key(dir) || handwritten_mod_dir(dir) {
             continue;
         }
         if dir.parent() == Some(src_root) {
@@ -200,12 +224,33 @@ fn prune_stale_pkg_dirs(src_root: &Path, handwritten_src: Option<&Path>, tree: &
                 continue;
             }
         }
-        if files.iter().any(|f| f == "mod.rs") {
-            let m = dir.join("mod.rs");
-            std::fs::remove_file(&m).map_err(|e| io_err(&m.display().to_string(), e))?;
-        }
-        if std::fs::read_dir(&dir).is_ok_and(|mut rd| rd.next().is_none()) {
-            std::fs::remove_dir(&dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
+        remove_stale_dir(dir, files)?;
+    }
+    Ok(())
+}
+
+/// 陈旧包目录：删除其生成 mod.rs，目录变空则删除目录
+fn remove_stale_dir(dir: &Path, files: &[String]) -> Result<()> {
+    if files.iter().any(|f| f == "mod.rs") {
+        let m = dir.join("mod.rs");
+        std::fs::remove_file(&m).map_err(|e| io_err(&m.display().to_string(), e))?;
+    }
+    if std::fs::read_dir(dir).is_ok_and(|mut rd| rd.next().is_none()) {
+        std::fs::remove_dir(dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
+    }
+    Ok(())
+}
+
+/// user crate 的陈旧清扫（复用 scratch）：与 java_runtime 同一机制——本轮未写入的带生成标记
+/// .rs 清除（user crate 无手写真源），不在本轮 mod 树 `dirs` 中的包目录删除 mod.rs 与空目录。
+/// 顶层包目录也在其列：user crate 的顶层模块由本轮写出的 main.rs 声明，不在本轮树中即不再声明。
+/// 须在本轮 user 类文件、mod.rs、main.rs 全部写出之后调用
+pub fn sweep_user_crate(src_root: &Path, dirs: &BTreeMap<PathBuf, BTreeSet<String>>, writer: &Writer, jobs: usize) -> Result<()> {
+    let mut listing = walk(src_root);
+    sweep_stale(&mut listing, src_root, None, writer, jobs)?;
+    for (dir, _, files) in listing.iter().rev() {
+        if dir != src_root && !dirs.contains_key(dir) {
+            remove_stale_dir(dir, files)?;
         }
     }
     Ok(())
@@ -214,15 +259,13 @@ fn prune_stale_pkg_dirs(src_root: &Path, handwritten_src: Option<&Path>, tree: &
 /// 目录的共置手写声明：(补充 pub 声明的宿主, `mod X_impl;` 行)
 fn companions(
     dir: &Path,
+    files: &[String],
     children: &BTreeSet<String>,
     deps: Option<&CompanionDeps>,
 ) -> (BTreeSet<String>, Vec<String>) {
     let mut extra_pub = BTreeSet::new();
     let mut mods = Vec::new();
-    let Ok(rd) = std::fs::read_dir(dir) else { return (extra_pub, mods) };
-    let mut names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-    names.sort();
-    for f in names {
+    for f in files {
         let base = if let Some(b) = f.strip_suffix("_impl.rs") {
             b
         } else if let Some(b) = f.strip_suffix("_ext.rs") {
@@ -249,38 +292,58 @@ fn companions(
 }
 
 /// 重建 `src_root` 下各包的 mod.rs（根目录自身除外：lib.rs 手写）。
-/// `runtime_dir`：手写真源 `runtime/java_runtime`（java_runtime 时给出，lib crate 为 None）
-pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, writer: &mut Writer) -> Result<()> {
+/// `runtime_dir`：手写真源 `runtime/java_runtime`（java_runtime 时给出，lib crate 为 None）。
+///
+/// 目录只列举一次：清扫只删文件（从列举中剔除），扫描不改盘，陈旧目录清除只动不在 mod 树中的
+/// 目录，所以三步与共置手写判定看到的列举与各自重新遍历相同。共置手写取列举中的文件名：
+/// 包目录名是 Java 包名段或手写模块名，不含 `.`，不会被当成 `_impl.rs` / `_ext.rs`。
+/// 各目录的 mod.rs 只取决于该目录的列举与手写依赖判定（写 mod.rs 不改变任何目录的
+/// `_impl` / `_ext` / 类文件在场情况），按 `jobs` 并行生成与落盘，写出顺序同目录序
+pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, jobs: usize, writer: &mut Writer) -> Result<()> {
     let handwritten_src = runtime_dir.map(|r| r.join("src"));
-    sweep_stale(src_root, handwritten_src.as_deref(), writer)?;
+    let mut listing = walk(src_root);
+    let markers = sweep_stale(&mut listing, src_root, handwritten_src.as_deref(), writer, jobs)?;
     if !src_root.is_dir() {
         return Ok(());
     }
-    let tree = scan_tree(src_root, handwritten_src.as_deref());
-    prune_stale_pkg_dirs(src_root, handwritten_src.as_deref(), &tree)?;
+    let tree = scan_tree(&listing, src_root, handwritten_src.as_deref(), &markers);
+    prune_stale_pkg_dirs(&listing, src_root, handwritten_src.as_deref(), &tree)?;
+    let files_of: BTreeMap<&Path, &[String]> = listing.iter().map(|(d, _, f)| (d.as_path(), f.as_slice())).collect();
     let deps = runtime_dir.map(|r| CompanionDeps::new(r, src_root));
-    for (dir, children) in &tree {
-        if dir == src_root {
+    let dirs: Vec<(&PathBuf, &BTreeSet<String>)> = tree.iter().filter(|(d, _)| d.as_path() != src_root).collect();
+    let texts = crate::par::par_map(jobs, &dirs, |&(dir, children)| {
+        let files = files_of.get(dir.as_path()).copied().unwrap_or(&[]);
+        mod_rs_text(&tree, dir, files, children, deps.as_ref())
+    });
+    let paths: Vec<PathBuf> = dirs.iter().map(|(d, _)| d.join("mod.rs")).collect();
+    let files: Vec<(&Path, &str)> = paths.iter().map(PathBuf::as_path).zip(texts.iter().map(String::as_str)).collect();
+    writer.write_all(jobs, &files)
+}
+
+/// 一个包目录的 mod.rs 内容
+fn mod_rs_text(
+    tree: &BTreeMap<PathBuf, BTreeSet<String>>,
+    dir: &Path,
+    files: &[String],
+    children: &BTreeSet<String>,
+    deps: Option<&CompanionDeps>,
+) -> String {
+    let mut lines = vec!["#![allow(ambiguous_glob_reexports)]".to_string()];
+    for c in children {
+        lines.push(mod_decl(c));
+        // 子包只声明 pub mod，不 glob 再导出（Java 包无嵌套可见性）
+        if tree.contains_key(&dir.join(c)) {
             continue;
         }
-        let mut lines = vec!["#![allow(ambiguous_glob_reexports)]".to_string()];
-        for c in children {
-            lines.push(mod_decl(c));
-            // 子包只声明 pub mod，不 glob 再导出（Java 包无嵌套可见性）
-            if tree.contains_key(&dir.join(c)) {
-                continue;
-            }
-            lines.push(use_decl(c));
-        }
-        let (extra_pub, comp) = companions(dir, children, deps.as_ref());
-        for b in &extra_pub {
-            lines.push(mod_decl(b));
-            lines.push(use_decl(b));
-        }
-        lines.extend(comp);
-        writer.write(&dir.join("mod.rs"), &(lines.join("\n") + "\n"))?;
+        lines.push(use_decl(c));
     }
-    Ok(())
+    let (extra_pub, comp) = companions(dir, files, children, deps);
+    for b in &extra_pub {
+        lines.push(mod_decl(b));
+        lines.push(use_decl(b));
+    }
+    lines.extend(comp);
+    lines.join("\n") + "\n"
 }
 
 fn is_identifier(s: &str) -> bool {
