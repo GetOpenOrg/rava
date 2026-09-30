@@ -11,8 +11,7 @@
 import os
 import re
 
-from .runtime_manifest import (boundary_packages, vm_boundary_classes, release_entries,
-                               vm_boundary_whole_class)
+from .runtime_manifest import boundary_packages, vm_boundary_classes, release_entries
 from .jca_services import load_manifest as _jca_manifest, released as _jca_released
 
 
@@ -41,7 +40,6 @@ def _released_general(cls: str) -> bool:
 # VM 耦合边界类：公开包里由 JVM 自身引导 / 承载 VM 设施（模块系统、类加载、安全管理器等）的类。
 # 清单在 runtime/（手写层真源）维护，生成器不出现任何 JDK 类名。
 _VM_BOUNDARY_CLASSES: frozenset[str] = frozenset(vm_boundary_classes())
-_VM_BOUNDARY_WHOLE: frozenset[str] = frozenset(vm_boundary_whole_class())
 
 
 # 纯数据资源束豁免（L-1）：内部包（前缀）下经结构判定为纯数据类（codegen/data_bundle.py）的类
@@ -104,12 +102,11 @@ def _is_data_bundle(cls: str) -> bool:
 def _is_boundary_class(cls: str) -> bool:
     """内部包（前缀）边界类：整类手写；前缀内的纯数据资源束与 K-JCA / 通用放行类除外。
 
-    VM 耦合边界类（closure.toml [vm_boundary]）按方法划分（见 _is_vm_boundary_class），不在此列；
-    其中 whole_class 子清单（规模驱动的策略截断）仍整类截断。"""
+    VM 耦合边界类（closure.toml [vm_boundary]）按方法划分（见 _is_vm_boundary_class），不在此列。"""
     if cls.startswith(_JDK_STUB_ONLY_PREFIXES):
         return not (_jca_released(cls, _JCA_MANIFEST) or _released_general(cls)
                     or _is_data_bundle(cls))
-    return cls.split('$', 1)[0] in _VM_BOUNDARY_WHOLE and not _released_general(cls)
+    return False
 
 
 def _is_vm_boundary_class(cls: str) -> bool:
@@ -119,8 +116,7 @@ def _is_vm_boundary_class(cls: str) -> bool:
     其余被调用到的方法按字节码翻译；`<clinit>` 不翻译（类的静态状态由 VM / 手写层承载——
     HotSpot 中这些类由 VM 引导初始化，其 `<clinit>` 会展开安全管理器 / 模块层 / 类加载子系统）。"""
     outer = cls.split('$', 1)[0]
-    return (outer in _VM_BOUNDARY_CLASSES and outer not in _VM_BOUNDARY_WHOLE
-            and not _released_general(cls))
+    return outer in _VM_BOUNDARY_CLASSES and not _released_general(cls)
 
 
 # 编译前预检（转译期可判定的必然存根）：代码生成后由 precheck_from_tree 填充，scripts/main.py 打印
