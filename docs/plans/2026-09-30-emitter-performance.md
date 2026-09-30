@@ -286,7 +286,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 | N3 | 冷写出 DeepCopy ≤ 2 s | ✅ N1 落地后达成（1.08 s）。剩余串行段见 §5.1 N6 |
 | N4 | 剩余 mono 热点（步 1–3 后） | `drop`（逐 T 的 Weak / Arc 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
 | N5 | 按类并行发射（N1）的实施时机 | 协调决定：等 closure-perf2 合入主线后，本线先合主线，再把 `resolve` 的 `Rc` 改为 `Arc`，改完闭包 4 例集合必须一致 |
-| N6 | 并行后剩余串行段 | 跨类导入、phase2 已做，见 §5.2；输入重建见 §5.2 分项。原记录：DeepCopy 冷写出 1.08 s 中：输入重建约 100 ms、跨类导入裁决约 120 ms、phase2 约 240 ms 仍串行。跨类导入是「先引入者得短名」语义，必须按发射序；终态可改为并行收集各类候选短名、再按序一次裁决（纯计算约数十 ms）。phase2 按 crate 分片可并行。输入重建并入 N2 |
+| N6 | 并行后剩余串行段 | 跨类导入、phase2 已做，见 §5.2；输入重建见 §5.2 分项；`rava build` 路径的闭包 JSON、落盘、mod 树见 §5.3。原记录：DeepCopy 冷写出 1.08 s 中：输入重建约 100 ms、跨类导入裁决约 120 ms、phase2 约 240 ms 仍串行。跨类导入是「先引入者得短名」语义，必须按发射序；终态可改为并行收集各类候选短名、再按序一次裁决（纯计算约数十 ms）。phase2 按 crate 分片可并行。输入重建并入 N2 |
 
 
 ### 5.1 N1 按类并行发射（emitter-perf2，提交 2a800b4b）
@@ -335,7 +335,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
   1. 接口：非具体类不生成 impl 声明，也不读别的类文件头，彼此独立；
   2. 其余类：保留第 1 轮回写前的接口记录副本；接口排在本类之前就取回写后的记录，排在之后就取回写前的记录（`IfaceView`）；继承成员需求按发射序并入账本。
 - `use_index` 缓存按文件头文本区分版本，每个 owner 最多存 4 版，避免上述两版交替使用时反复重建。
-- `resolve_interface_inherited_members` 仍串行：同一轮里超接口的文件头会被先处理者修改；实测它和 sam 合计 < 1 ms，不值得改。
+- `resolve_interface_inherited_members` 仍串行：同一轮里超接口的文件头会被先处理者修改。实测 Digester 上它约 2.1 ms、sam 约 0.3 ms（`phase2.iface_inherited` / `phase2.sam`），不值得改。
 - 新增 `--perf` 分项：`phase2.impls` / `phase2.inherited` / `phase2.sam` / `phase2.dispatch`；输入重建分项：`input.closure` / `input.registry` / `input.normalize` / `input.reflect` / `input.handwritten`。
 
 **验证**
@@ -372,6 +372,26 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 
 - `input.closure` 是闭包类的首次装载（class 文件解析），走 `ClassPath::get`，目前串行。
 - 手写层扫描原先对每个 vtable 标识遍历整个 registry，复杂度 O(标识 × 类)。现改为一次性建「标识 → 类」索引，候选序不变。
+
+### 5.3 `rava build` 路径的剩余串行段（emitter-perf2，提交 db72cc60、82412b89）
+
+`rava build` 里类装载已由闭包阶段缓存（`input.closure` 约 3 ms），emit_bench 看不到的串行段在闭包收尾与落盘。Digester 实测（`--perf`，共享机负载 20–46，数值波动约 ±30%）：
+
+| 段 | 改前 | 改后 | 做法 |
+|---|---:|---:|---|
+| `closure_json.value`（`Closure::to_json`） | 232 ms | **86 ms** | 边种类计数改按种类序号数组（原先逐边 `format!` 键 + BTreeMap 字符串比较）；出入度按节点序号计数，先选前 N 再排序；`folds()` 只算一次 |
+| `write`（类文件落盘） | 131 ms | 100–127 ms | `Writer::write_all` 按 `--emit-jobs` 并行，写入记录按发射序并入，出错报发射序第一个 |
+| `mod_tree` | 86 ms | **44–53 ms** | 共置手写依赖判定只需类型路径：新增 `closure::handwritten::HwTypeRefs`（与 `Handwritten::class` 的 `type_refs` 同一函数算出），不再 `syn` 解析 fn 表；各目录 mod.rs 并行生成、并行写出 |
+
+等价性：
+- `to_json`：closure.json 连同 `summary.perf` 的结构字段（edges_by_kind / top_*_degree / top_members 等，剔除计时与 RSS）与改前逐字节一致。节点驻留唯一，度数排序键是全序，先选后排与全排结果相同；`node_kind` 改为 `KIND_NAMES[kind_ix]`，两表逐项相同。
+- mod.rs：每个目录的内容只取决于该目录的磁盘列举与类型路径在场判定；写 mod.rs 不改变任何目录里 `_impl` / `_ext` / 类文件 / 子目录的在场情况，所以并行与逐目录串行结果相同。
+- 27 例生成树与 ef1daf34 对照 0 差异，raw-audit 一致；Digester scratch 改前后逐文件一致。
+
+仍在串行段上的（Digester / DeepCopy）：
+- 闭包结构析构约 36 / 95 ms（`input` 余项）。`Closure` 借用含 `RefCell` 的 `Handwritten`，不能移交其他线程析构；随 N2（闭包结果进程内交接）改为只保留发射需要的事实后一并消掉。
+- `input.normalize` 约 19 ms：逐类规整，结果进 BTreeMap、与顺序无关，可并行；input crate 需引入 `par_map`（与 emit 共用），并入 N2。
+- `mod_tree` 的三次目录遍历（清扫 / 扫描 / 陈旧目录）约 17 ms。
 
 ## 六、需要主会话 e2e 抽查的用例
 
