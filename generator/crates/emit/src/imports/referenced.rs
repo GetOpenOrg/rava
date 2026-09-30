@@ -172,16 +172,14 @@ fn scan_method_body(ctx: &EmitCtx<'_>, s: ScanMethod<'_>, out: &mut BTreeSet<Str
 
 /// 字段描述符 / 签名（本类全部字段 + 祖先未遮蔽的实例字段）
 fn scan_fields(ctx: &EmitCtx<'_>, ci: &ClassInfo, out: &mut BTreeSet<String>) {
+    // 祖先字段不按名字去重：本类同名字段隐藏祖先字段时，祖先字段仍以独立槽位名进入
+    // superclass_fields 宏属性，其类型须在作用域内
     let mut fields: Vec<&classfile::Field> = ci.fields().iter().collect();
-    let mut seen: BTreeSet<&str> = ci.fields().iter().map(|f| f.name.as_str()).collect();
+    let mut seen_classes: BTreeSet<&str> = BTreeSet::new();
     let mut sup = ci.super_class();
-    while !sup.is_empty() && sup != lang::OBJECT {
+    while !sup.is_empty() && sup != lang::OBJECT && seen_classes.insert(sup) {
         let Some(sci) = ctx.ty.reg.get(sup) else { break };
-        for f in sci.fields() {
-            if !f.is_static() && seen.insert(f.name.as_str()) {
-                fields.push(f);
-            }
-        }
+        fields.extend(sci.fields().iter().filter(|f| !f.is_static()));
         sup = sci.super_class();
     }
     for f in fields {

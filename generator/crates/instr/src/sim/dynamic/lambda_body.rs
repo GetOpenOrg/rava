@@ -75,10 +75,43 @@ fn adapt_return(env: &InstrEnv, lam: &Lam, body: String) -> InstrResult<String> 
     Ok(body)
 }
 
+/// 绑定接收者（首个捕获值）的静态类型是实现类的真子类，且实现方法可被继承（非 private）：
+/// javac 把 `super::m` 编成本类合成方法，故此形态只来自 invokevirtual
+fn bound_subclass_recv(env: &InstrEnv, lam: &Lam, ci: &ty::ClassInfo) -> bool {
+    if !lam.is_instance || lam.is_ctor || lam.cap_names.is_empty() {
+        return false;
+    }
+    if !ci.methods().iter().any(|m| m.name == lam.impl_mname && m.desc == lam.impl_desc && !m.is_private()) {
+        return false;
+    }
+    let RsType::Class { binary, .. } = &lam.cap_tys[0] else { return false };
+    let reg = env.ctx.reg();
+    let mut cur = reg.get(binary).filter(|c| !c.is_interface()).map(|c| c.super_class());
+    let mut hops = 0;
+    while let Some(sup) = cur.filter(|s| !s.is_empty()) {
+        if sup == lam.impl_cls {
+            return true;
+        }
+        hops += 1;
+        if hops > 64 {
+            break;
+        }
+        cur = reg.get(sup).map(|c| c.super_class());
+    }
+    false
+}
+
 /// 闭包体：`Impl::<..>::name(args)`（接口实例方法走载体分派），再做返回值适配
 pub(super) fn closure_body(env: &InstrEnv, sim: &StackSim, lam: &Lam, call: &CallArgs) -> InstrResult<String> {
     let body = match lam.ci {
         Some(ci) if lam.is_instance && ci.is_interface() => iface_call(env, lam, ci, call)?,
+        Some(ci) if bound_subclass_recv(env, lam, ci) => {
+            // 绑定接收者的方法引用（`sdf::getTimeZone`），捕获值静态类型是实现类的子类：
+            // invokevirtual 语义，与普通虚调用同形态 `recv.m(args)`（子类无 Deref 到父类，
+            // UFCS `Impl::m(&recv)` 既类型不符也绕过子类重写）
+            let rest: Vec<&str> = call.cap[1..].iter().chain(&call.sam).map(String::as_str).collect();
+            format!("{}.{}({})", lam.cap_names[0], lam.impl_rust_name, rest.join(", "))
+        }
         _ => {
             // 泛型类上的静态实现方法：闭包内无上下文可推断（E0283），与 invokestatic 同规则
             // 显式给出 turbofish；实例实现方法由接收者类型推断
