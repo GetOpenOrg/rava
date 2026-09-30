@@ -77,6 +77,8 @@ pub struct Manifest {
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
     pub boot_init: Vec<String>,
+    /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
+    pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
 }
 
@@ -219,6 +221,7 @@ impl Manifest {
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
+            seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
         })
     }

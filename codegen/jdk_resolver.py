@@ -401,6 +401,20 @@ class JdkResolver:
         except OSError:
             return None
 
+    def image_class_dirs(self) -> list[str]:
+        """镜像独有类（按模块提取到缓存）与 VM 支持类的类目录：`rava closure --image` 输入。"""
+        dirs: list[str] = []
+        only = sorted(self.image_only_classes())
+        if only:
+            self._resolve_from_image(only[0])   # 一次提取全部镜像独有类
+            cache = self._image_cache_dir()
+            for module in sorted({self._image_modules[n] for n in only}):
+                if (cache / module).is_dir():
+                    dirs.append(str(cache / module))
+        self.vm_support_classes()
+        dirs.extend(sorted({str(d) for d in self._vm_support_dir.values()}))
+        return dirs
+
     def is_jdk_class(self, binary_name: str) -> bool:
         """判断 binary_name 是否属于 JDK 内置类（无需解析字节码判断）。"""
         return binary_name.startswith(_JDK_PREFIXES)

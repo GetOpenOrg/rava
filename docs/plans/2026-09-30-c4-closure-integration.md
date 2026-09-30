@@ -58,10 +58,10 @@
 
 | 步 | 内容 | 状态 |
 |---|---|---|
-| 1 | A1 refs | ⏳ |
-| 2 | A2 镜像 / VM 支持类 | ⏳ |
-| 3 | A3–A6 种子 | ⏳ |
-| 4 | A7–A8 库模式 / 额外根 | ⏳ |
-| 5 | 接入层 + transpile 切换 | ⏳ |
+| 1 | A1 refs | ✅ `engine/invoke.rs` 活代码调用点符号键；手写 `use` / 路径类型引用（`handwritten/type_refs.rs`）按类型级入闭包 |
+| 2 | A2 镜像 / VM 支持类 | ✅ `--image`（`JdkResolver.image_class_dirs()`）+ `engine/seeds.rs` `seed_image`；导出 `seeds.reflect_all / reflect_names` |
+| 3 | A3–A6 种子 | ✅ `seeds/{annotation,locale,jca,data_bundle}.rs`（纯判定）+ `engine/seeds.rs`（工作队列排空时补种，外层不动点）；A6 在 `Ctx::domain` |
+| 4 | A7–A8 库模式 / 额外根 | ✅ `--lib`（`Origin::Lib` 一律翻译域）/ `--seed-class` / `--root`（`Engine::root_seed`） |
+| 5 | 接入层 + transpile 切换 | ✅ `codegen/closure_input.py`；visited 按方法 kind 过滤（vm_boundary 类按方法划分，不能按类域过滤） |
 | 6 | 验收 27 例 + 全量 e2e | ⏳ |
-| 7 | 删除 Python 发现机制 | ⏳ |
+| 7 | 删除 Python 发现机制（含 `closure.toml [vm_boundary] whole_class`：只有 Python BFS 读） | ⏳ |
