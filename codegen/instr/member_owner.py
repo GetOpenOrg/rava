@@ -547,11 +547,10 @@ def _first_decl_is_bridge(ci, mname: str, desc: str, registry: dict) -> bool:
 
 
 def _erase_slot_params(owner_ci, mname: str, desc: str, sig_params: list, registry: dict) -> list:
-    """被调方法是类（非接口）的 vtable 方法：声明方发射签名里为 Object / 提及声明类自身类型形参
-    的形参位按 A-1 擦除为 Object（继承成员经 vtable_erasure 同步擦除，见 inherited_gen
-    _slot_erasure_entries），调用点的期望形参与之对齐——否则按接收者实参代入的具体类型
+    """被调方法是祖先类（非接口）声明的虚方法：继承成员 wrapper 的形参 = 声明方发射签名按接收者
+    实参代入。发射签名某位字面为 Object（类型形参未能进入签名、回退描述符形态）时 wrapper 该位
+    亦为 Object，调用点的期望形参与之对齐——否则按泛型签名代入的具体类型
     （`EmptySpliterator<.., C=DoubleConsumer>.tryAdvance(C)`）与 Object 形参不符（E0308）。"""
-    import re as _re_es
     from ..sig_types import emitted_method_sig_types
     from ..type_map import effective_class_type_params as _ectp
     param_desc = desc.split(')', 1)[0] + ')'
@@ -564,12 +563,9 @@ def _erase_slot_params(owner_ci, mname: str, desc: str, sig_params: list, regist
     slot_types, _ = emitted_method_sig_types(owner_ci, m, tps, registry)
     if len(slot_types) != len(sig_params):
         return sig_params
-    out = []
-    for slot_ty, sp in zip(slot_types, sig_params):
-        erased = (slot_ty == 'Object'
-                  or any(_re_es.search(r'\b' + _re_es.escape(p) + r'\b', slot_ty) for p in tps))
-        out.append('Object' if erased else sp)
-    return out
+    # 声明方发射签名字面为 Object 的位 → 继承成员 wrapper 的该位同为 Object；
+    # 类型形参位（`C`）由 wrapper 按接收者实参代入，保持代入结果
+    return ['Object' if slot_ty == 'Object' else sp for slot_ty, sp in zip(slot_types, sig_params)]
 
 
 def _resolve_virtual_sig_params(sim, cls: str, mname: str, params: list, ret: str,
