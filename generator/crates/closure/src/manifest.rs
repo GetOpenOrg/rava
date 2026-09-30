@@ -54,6 +54,9 @@ pub enum Members {
     RecordAccessors,
 }
 
+mod sysprops;
+pub use sysprops::{PropRead, PropValue, SysProps};
+
 /// 方法返回值事实（[vm_constants] / [facts]）
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fact {
@@ -85,6 +88,10 @@ pub struct Manifest {
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
+    /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
+    value_equals: HashSet<String>,
+    /// VM 初始系统属性表与读写锚点
+    pub sysprops: SysProps,
 }
 
 const OBJECT: &str = "java/lang/Object";
@@ -248,6 +255,8 @@ impl Manifest {
             boot_init: strings(&seeds, "boot_init", "classes"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
+            value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
+            sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
         })
     }
 
@@ -366,6 +375,10 @@ impl Manifest {
     }
 
     /// 纯函数：null 实参 → false
+    pub fn is_value_equals(&self, member: &str) -> bool {
+        self.value_equals.contains(member)
+    }
+
     pub fn is_null_to_false(&self, member: &str) -> bool {
         self.null_to_false.contains(member)
     }

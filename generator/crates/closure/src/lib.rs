@@ -169,6 +169,7 @@ impl Closure<'_> {
             "fold_consts": folds.iter().map(|f| f.consts.len()).sum::<usize>(),
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
             "fold_null_recv": folds.iter().map(|f| f.null_recv.len()).sum::<usize>(),
+            "fold_props": folds.iter().map(|f| f.props.len()).sum::<usize>(),
             "reflect_members": e.reflect_members.len(),
             "reflect_gaps": e.reflect_gaps.len(),
             "hw_written_fields": e.hw_written.len(),

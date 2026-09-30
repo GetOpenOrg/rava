@@ -123,12 +123,79 @@ null_to_false = [
 receiver_returns = [
     "java/lang/Object.clone:()Ljava/lang/Object;",
 ]
+# 按值比较的纯函数：接收者与实参都是常量（字符串 / null）时结果即常量（JDK 规范语义：
+# 内容相同为 true，实参为 null 为 false）
+value_equals = [
+    "java/lang/String.equals:(Ljava/lang/Object;)Z",
+]
 
 [facts.returns]
 # 断言恒关（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false；javac 的
 # `$assertionsDisabled = !desiredAssertionStatus()` 由此成为常量，assert 语句体整片不可达
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = false
 "java/lang/Class.desiredAssertionStatus:()Z" = false
+# 原生二进制进入 main 时运行时已完成引导（vm_impl.rs：isBooted / isModuleSystemInited /
+# isJavaLangInvokeInited 恒 true）；引导期分支（如 ReflectionFactory.config 的 DEFAULT_CONFIG）不可达
+"jdk/internal/misc/VM.isBooted:()Z" = true
+"jdk/internal/misc/VM.isModuleSystemInited:()Z" = true
+"jdk/internal/misc/VM.isJavaLangInvokeInited:()Z" = true
+
+# VM 初始系统属性表：原生二进制启动时 `System.props` 的内容（System.registerNatives 按本表填充，
+# 与 system_impl.rs 的 initPhase1 对应物同源）。原生二进制无 `-D` 注入机制，因此：
+#   values   取值恒定的键——读取折叠为该值
+#   dynamic  存在、但取值由宿主环境 / 语料 JDK（VersionProps）在启动期决定的键——不折叠
+#   其余键   启动时不存在——读取折叠为 null（带缺省值的读取折叠为缺省值）
+# 折叠只针对运行期不会被改写的键：可达代码里对系统属性表的按键改写（writers，键为常量）使该键
+# 不折叠；键不定的改写、整表替换（写 holders 字段）、系统属性表对象流出读写锚点之外（作实参 /
+# 存入字段 / 返回 / 调用其他方法）使全部键不折叠。
+[facts.system_properties]
+# 持有系统属性表对象的静态字段 / 返回它的手写方法
+holders = [
+    "java/lang/System.props:Ljava/util/Properties;",
+    "sun/security/action/GetPropertyAction.privilegedGetProperties:()Ljava/util/Properties;",
+]
+dynamic = [
+    "java.home", "line.separator", "user.dir", "user.home", "user.name", "java.io.tmpdir",
+    "os.name", "os.arch", "os.version", "sun.arch.data.model", "sun.cpu.endian", "sun.io.unicode.encoding",
+    "sun.boot.library.path", "native.encoding", "sun.jnu.encoding", "user.timezone",
+    # VersionProps.init（翻译的字节码，取值随语料 JDK）
+    "java.version", "java.version.date", "java.runtime.version", "java.runtime.name", "java.vendor.version",
+    "java.class.version", "java.specification.version", "java.specification.name", "java.specification.vendor",
+    "java.vendor", "java.vendor.url", "java.vendor.url.bug",
+    # VM 族中随 VersionProps 取值的键
+    "java.vm.specification.version", "java.vm.vendor", "java.vm.version",
+]
+
+[facts.system_properties.values]
+"file.separator" = "/"
+"path.separator" = ":"
+"java.class.path" = ""
+"java.library.path" = ""
+"jdk.debug" = "release"
+"file.encoding" = "UTF-8"
+"stdout.encoding" = "UTF-8"
+"stderr.encoding" = "UTF-8"
+"java.vm.specification.name" = "Java Virtual Machine Specification"
+"java.vm.specification.vendor" = "Oracle Corporation"
+"java.vm.name" = "rava native runtime"
+"java.vm.info" = "native image"
+# 反射只走 native 访问器（NativeConstructorAccessorImpl / NativeMethodAccessorImpl 手写承载），
+# 不经 MethodHandle 访问器——原生二进制不在运行期生成 LambdaForm
+"jdk.reflect.useNativeAccessorOnly" = "true"
+
+# 读取入口：实参序号含接收者；receiver = 接收者须为系统属性表对象；default = 缺省值实参。
+# 包装方法（System.getProperty 等）由分析器从字节码识别：返回值恰是入口读取、键来自形参
+[facts.system_properties.readers]
+"java/util/Properties.getProperty:(Ljava/lang/String;)Ljava/lang/String;" = { receiver = true, key = 1 }
+"java/util/Properties.getProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" = { receiver = true, key = 1, default = 2 }
+"sun/security/action/GetPropertyAction.privilegedGetProperty:(Ljava/lang/String;)Ljava/lang/String;" = { key = 0 }
+"sun/security/action/GetPropertyAction.privilegedGetProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" = { key = 0, default = 1 }
+
+# 按键改写入口（接收者为系统属性表对象时只改写 key 实参所指的键）
+[facts.system_properties.writers]
+"java/util/Properties.setProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;" = { key = 1 }
+"java/util/Properties.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { key = 1 }
+"java/util/Properties.remove:(Ljava/lang/Object;)Ljava/lang/Object;" = { key = 1 }
 
 [facts.field_writes]
 # 字段常量折叠的反射式写入来源（计划 C1c 第 1 步）。分析器按「全部写入来源」求字段值集，

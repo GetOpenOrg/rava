@@ -4,8 +4,6 @@ use super::*;
 
 // ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
 
-// ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
-
 /// 常量格上的值：缺席（⊥，尚无值）→ 单一常量 → Top
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum PV {
@@ -14,10 +12,12 @@ pub(super) enum PV {
 }
 
 impl PV {
-    /// 抽象值 → 常量格（只折叠 int / long / null / 字符串常量）
+    /// 抽象值 → 常量格：int / long / null / 字符串常量，及带对象标签的引用（去来源存储；
+    /// 标签引用只在分析内部传递，不作为折叠常量导出）
     pub(super) fn of(v: &V) -> PV {
         match v {
             V::Int(_) | V::Long(_) | V::Null | V::Str(_) => PV::Const(v.clone()),
+            V::Ref { .. } if v.obj().is_some() => PV::Const(v.stripped()),
             _ => PV::Top,
         }
     }
@@ -25,6 +25,11 @@ impl PV {
         match (a, b) {
             (None, x) => x.clone(),
             (Some(PV::Const(x)), PV::Const(y)) if x == y => PV::Const(x.clone()),
+            // 同一对象标签（或 null 与标签对象）：合流保留标签，可空性取并
+            (Some(PV::Const(x)), PV::Const(y)) if x.obj().is_some() || y.obj().is_some() => match x.join(y) {
+                j @ V::Ref { .. } if j.obj().is_some() => PV::Const(j.stripped()),
+                _ => PV::Top,
+            },
             _ => PV::Top,
         }
     }
@@ -80,6 +85,14 @@ pub(super) struct Ctx<'a> {
     pub(super) optimistic: Cell<bool>,
     /// 乐观阶段得到过「尚无返回」答复的方法（收尾时按值未知重算）
     pub(super) never: RefCell<BTreeSet<usize>>,
+    /// 构造器摘要缓存：`构造器|实参` → 构造完成的对象标签
+    pub(super) objs: RefCell<HashMap<String, Option<Rc<Obj>>>>,
+    /// 字节码方法的属性读取摘要（None = 不是读取形态）
+    pub(super) psums: RefCell<HashMap<MemberRef, Option<PropSum>>>,
+    /// 运行期可能被改写（不折叠）的系统属性键
+    pub(super) punstable: RefCell<PropUnstable>,
+    /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
+    pub(super) pdeps: RefCell<BTreeSet<usize>>,
 }
 
 /// 调用点只依赖类文件与清单的摘要（`Oracle::invoke_result` 用）
@@ -302,7 +315,7 @@ impl Ctx<'_> {
                 continue;
             }
             let v = match puts.get(&(fd.name.as_str(), fd.desc.as_str())).map(Vec::as_slice) {
-                Some([Some(v @ (V::Int(_) | V::Long(_) | V::Str(_) | V::Null))]) => Some(v.clone()),
+                Some([Some(v)]) => PV::of(v).value(),
                 _ => None,
             };
             consts.insert(MemberRef { owner: cls.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() }, v);
@@ -320,6 +333,9 @@ impl Oracle for Facts<'_, '_> {
         if c.null_to_false && args.contains(&V::Null) {
             return Ret::Value(V::Int(0));
         }
+        if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
+            return r;
+        }
         let Some(me) = self.m else { return Ret::Unknown };
         // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）
         let Some(t) = &c.target else { return Ret::Unknown };
@@ -335,8 +351,14 @@ impl Oracle for Facts<'_, '_> {
             None => Ret::Unknown,
         }
     }
-    fn field(&self, _opcode: u8, f: &MemberRef) -> Option<V> {
+    fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V> {
+        if let Some(v) = self.ctx.object_field(self.m, opcode, f, recv) {
+            return Some(v);
+        }
         self.ctx.field_value(self.m, f)
+    }
+    fn construct(&self, init: &MemberRef, args: &[V]) -> Option<Rc<Obj>> {
+        self.ctx.construct(init, args)
     }
     fn param(&self, i: u16) -> Option<V> {
         self.params.get(i as usize).cloned().flatten()

@@ -5,6 +5,9 @@ use super::*;
 impl<'a> Engine<'a> {
     pub(super) fn process_bytecode(&mut self, m: usize) {
         let Some(a) = self.analysis(m) else { return };
+        if !self.methods[m].applied.as_ref().is_some_and(|o| Rc::ptr_eq(o, &a)) {
+            self.sysprops_scan(&a);
+        }
         let owner = self.methods[m].key.owner.clone();
         let cf = self.h.class(&owner);
         self.returns(m, &a);

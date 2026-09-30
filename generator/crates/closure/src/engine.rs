@@ -21,12 +21,14 @@ use classfile::{acc, ClassFile, Const, MemberRef, MethodHandle};
 use indexmap::IndexMap;
 use resolve::{ClassPath, Hierarchy, Origin};
 
-use crate::absint::{self, Analysis, Event, Oracle, Ret, Src, V};
+use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
 use crate::handwritten::{member_matches, to_snake, MODULE_SUFFIXES, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
-use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members};
+use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members, PropValue};
 
 mod sets;
 mod facts;
+mod construct;
+mod sysprops;
 mod fold;
 mod forward;
 mod classes;
@@ -49,6 +51,7 @@ pub use seeds::SeedState;
 
 pub use fold::Fold;
 use facts::*;
+use sysprops::{PropSum, PropUnstable};
 use fold::*;
 pub use sets::*;
 use hwobj::{HwObj, HWOBJ_KIND};
@@ -519,6 +522,10 @@ impl<'a> Engine<'a> {
                 rdeps: Default::default(),
                 optimistic: Cell::new(true),
                 never: Default::default(),
+                objs: Default::default(),
+                psums: Default::default(),
+                punstable: Default::default(),
+                pdeps: Default::default(),
             },
             h,
             cp,

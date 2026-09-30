@@ -1,0 +1,273 @@
+//! 常量查询：系统属性读取折叠（`[facts.system_properties]`）与派生的调用结果（值相等判定）。
+//!
+//! 折叠规则：
+//! - 读取点 = 清单读取锚点（接收者须为属性表对象时按对象标签判定），或其摘要形态的字节码方法
+//!   （返回值恰为某读取点的结果、键 / 缺省值来自本方法形参或常量，如 `System.getProperty`）；
+//! - 键为字符串常量时：表中键 → 声明值（`values`）；存在但取值启动期才定（`dynamic`）→ 不折叠；
+//!   表外键 → 缺省值（无缺省实参即 null）；
+//! - 运行期可能被改写的键不折叠：活代码里属性表对象上的按键改写入口（`writers`）使该键不折叠；
+//!   改写键推不出、属性表对象逃逸（写入字段 / 数组、作实参 / 返回值 / indy 实参、调用非读写入口）、
+//!   字节码写持有字段、手写体调用改写入口 → 全部不折叠。
+//!
+//! 不折叠集合只增不减；增长时清掉依赖它的缓存（static final 常量、构造器摘要、读取摘要），
+//! 折叠过属性读取 / 字段读取的方法失效重算——单调不动点上的折叠只来自最终仍稳定的键。
+
+use super::*;
+
+/// 缺省值来源
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum DefArg {
+    None,
+    /// 实参序号（含接收者）
+    Param(usize),
+    Const(V),
+}
+
+/// 读取入口的形态：键 / 缺省值的实参序号；`receiver` = 接收者须为属性表对象
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PropSum {
+    pub(super) receiver: bool,
+    pub(super) key: usize,
+    pub(super) default: DefArg,
+}
+
+/// 运行期可能被改写（不折叠）的键
+#[derive(Default)]
+pub(super) struct PropUnstable {
+    pub(super) all: bool,
+    pub(super) keys: BTreeSet<String>,
+}
+
+fn is_sysprops(v: &V) -> bool {
+    v.obj().is_some_and(|o| **o == Obj::SysProps)
+}
+
+fn may_be_sysprops(v: &V) -> bool {
+    v.obj().is_some_and(|o| o.may_be_sysprops())
+}
+
+/// 值恰为本方法某形参（无其它来源）
+fn param_of(v: &V) -> Option<usize> {
+    match &*v.srcs() {
+        [Src::Param(i)] if matches!(v, V::Ref { .. }) => Some(*i as usize),
+        _ => None,
+    }
+}
+
+impl Ctx<'_> {
+    /// 由调用实参派生的结果：值相等判定、属性表持有方法、属性读取
+    pub(super) fn derived_result(&self, me: Option<usize>, opcode: u8, m: &MemberRef, iface: bool, args: &[V], c: &CallInfo) -> Option<Ret> {
+        let k = m.to_string();
+        if self.man.is_value_equals(&k) || c.target.as_ref().is_some_and(|t| self.man.is_value_equals(&t.to_string())) {
+            return match args {
+                [V::Str(a), V::Str(b)] => Some(Ret::Value(V::Int((a == b) as i32))),
+                [V::Str(_), V::Null] => Some(Ret::Value(V::Int(0))),
+                _ => None,
+            };
+        }
+        if self.man.sysprops.is_empty() {
+            return None;
+        }
+        if self.man.sysprops.is_holder(&k) {
+            let ret = parse_method(&m.desc).and_then(|md| md.ret).map(|t| t.descriptor())?;
+            return Some(Ret::Value(self.sysprops_ref(&ret)));
+        }
+        if !args.iter().any(|a| matches!(a, V::Str(_))) {
+            return None;
+        }
+        let spec = self.read_spec(opcode, m, iface, Some(c))?;
+        self.prop_read(me, &spec, args)
+    }
+
+    /// 调用是否属性读取（清单锚点 / 摘要形态的字节码方法）
+    pub(super) fn read_spec(&self, opcode: u8, m: &MemberRef, iface: bool, c: Option<&CallInfo>) -> Option<PropSum> {
+        if let Some(r) = self.man.sysprops.reader(&m.to_string()) {
+            return Some(PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param) });
+        }
+        let c = match c {
+            Some(c) => c.target.clone(),
+            None => self.call_info(opcode, m, iface).target.clone(),
+        }?;
+        self.prop_summary(&c)
+    }
+
+    /// 属性读取的折叠值（键不是常量 / 键不稳定 / 取值启动期才定 → None）
+    fn prop_read(&self, me: Option<usize>, spec: &PropSum, args: &[V]) -> Option<Ret> {
+        if spec.receiver && !args.first().is_some_and(is_sysprops) {
+            return None;
+        }
+        let V::Str(key) = args.get(spec.key)? else { return None };
+        if let Some(me) = me {
+            self.pdeps.borrow_mut().insert(me);
+        }
+        {
+            let u = self.punstable.borrow();
+            if u.all || u.keys.contains(&**key) {
+                return None;
+            }
+        }
+        let v = match self.man.sysprops.lookup(key) {
+            PropValue::Const(s) => V::Str(Rc::from(s)),
+            PropValue::Dynamic => return None,
+            PropValue::Absent => match &spec.default {
+                DefArg::None => V::Null,
+                DefArg::Const(v) => v.clone(),
+                DefArg::Param(i) => match args.get(*i)? {
+                    v @ (V::Str(_) | V::Null) => v.clone(),
+                    _ => return None,
+                },
+            },
+        };
+        Some(Ret::Value(v))
+    }
+
+    /// 字节码方法的读取摘要：全部返回值恰为某读取点的结果，读取键为本方法形参、缺省值为形参或常量
+    /// （与调用点无关的独立分析，按成员缓存）
+    fn prop_summary(&self, t: &MemberRef) -> Option<PropSum> {
+        if let Some(s) = self.psums.borrow().get(t) {
+            return s.clone();
+        }
+        let guard = format!("psum:{t}");
+        if !t.desc.ends_with(';') || !self.in_progress.borrow_mut().insert(guard.clone()) {
+            return None;
+        }
+        let s = self.compute_summary(t);
+        self.in_progress.borrow_mut().remove(&guard);
+        self.psums.borrow_mut().insert(t.clone(), s.clone());
+        s
+    }
+
+    fn compute_summary(&self, t: &MemberRef) -> Option<PropSum> {
+        let cf = self.h.class(&t.owner)?;
+        let meth = cf.method(&t.name, &t.desc)?;
+        let code = meth.code.as_ref()?;
+        let n = parse_method(&t.desc)?.params.len() + usize::from(!meth.is_static());
+        let live = |_: &str| true;
+        let a = absint::analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n] });
+        if a.conservative {
+            return None;
+        }
+        let mut out: Option<PropSum> = None;
+        for (_, e) in &a.events {
+            let Event::Return(v) = e else { continue };
+            let V::Ref { .. } = v else { return None };
+            let srcs = v.srcs();
+            if srcs.is_empty() {
+                return None;
+            }
+            for s in srcs.iter() {
+                let Src::Site(o) = s else { return None };
+                let lo = a.events.partition_point(|x| x.0 < *o);
+                let inv = a.events[lo..].iter().take_while(|x| x.0 == *o).find_map(|(_, x)| match x {
+                    Event::Invoke { opcode, mref, iface, args } => Some((*opcode, mref, *iface, args)),
+                    _ => None,
+                });
+                let (opc, mref, iface, args) = inv?;
+                let inner = self.read_spec(opc, mref, iface, None)?;
+                let sum = Self::compose(&inner, args)?;
+                if out.as_ref().is_some_and(|x| *x != sum) {
+                    return None;
+                }
+                out = Some(sum);
+            }
+        }
+        out
+    }
+
+    /// 摘要方法里一个读取点（形态 inner、实参 args）换算成摘要方法自身形参上的读取形态
+    fn compose(inner: &PropSum, args: &[V]) -> Option<PropSum> {
+        if inner.receiver && !args.first().is_some_and(is_sysprops) {
+            return None;
+        }
+        let key = param_of(args.get(inner.key)?)?;
+        let default = match &inner.default {
+            DefArg::None => DefArg::None,
+            DefArg::Const(v) => DefArg::Const(v.clone()),
+            DefArg::Param(i) => match args.get(*i)? {
+                v @ (V::Str(_) | V::Null) => DefArg::Const(v.clone()),
+                v => DefArg::Param(param_of(v)?),
+            },
+        };
+        Some(PropSum { receiver: false, key, default })
+    }
+}
+
+impl Engine<'_> {
+    /// 字节码方法里属性表对象的改写 / 逃逸（活代码）：不折叠集合增长
+    pub(super) fn sysprops_scan(&mut self, a: &Analysis) {
+        if self.man.sysprops.is_empty() || self.ctx.punstable.borrow().all {
+            return;
+        }
+        let mut keys: Vec<Option<String>> = Vec::new();
+        for (_, e) in &a.events {
+            match e {
+                Event::Invoke { opcode, mref, iface, args } => {
+                    let k = mref.to_string();
+                    if self.man.sysprops.is_holder(&k) && a.conservative {
+                        keys.push(None);
+                    }
+                    for (i, _) in args.iter().enumerate().filter(|(_, v)| may_be_sysprops(v)) {
+                        if i == 0 && self.ctx.read_spec(*opcode, mref, *iface, None).is_some_and(|s| s.receiver) {
+                            continue;
+                        }
+                        let w = self.man.sysprops.writer(&k).filter(|_| i == 0);
+                        keys.push(match w.and_then(|w| args.get(w)) {
+                            Some(V::Str(s)) => Some(s.to_string()),
+                            _ => None,
+                        });
+                    }
+                }
+                Event::Field { opcode, mref, value, .. } => {
+                    let holder = self.ctx.field_info(mref).is_some_and(|fi| self.man.sysprops.is_holder(&fi.key.to_string()));
+                    let put = matches!(*opcode, classfile::op::PUTSTATIC | classfile::op::PUTFIELD);
+                    if holder && (put || a.conservative) || value.as_ref().is_some_and(may_be_sysprops) {
+                        keys.push(None);
+                    }
+                }
+                Event::ArrayStore { value, .. } | Event::Return(value) if may_be_sysprops(value) => keys.push(None),
+                Event::Indy { args, .. } if args.iter().any(may_be_sysprops) => keys.push(None),
+                _ => {}
+            }
+        }
+        self.sysprops_unstable(keys);
+    }
+
+    /// 手写体调用改写入口（接收者推不出）：全部不折叠
+    pub(super) fn sysprops_hw(&mut self, mh: &MemberHw) {
+        if self.man.sysprops.is_empty() {
+            return;
+        }
+        let hit = mh.upcalls.iter().any(|u| matches!(u, Upcall::Method(r) if self.man.sysprops.writer(&r.to_string()).is_some()));
+        if hit {
+            self.sysprops_unstable(vec![None]);
+        }
+    }
+
+    /// 不折叠集合并入（None = 全部）；增长时依赖缓存清空、折叠过的方法失效
+    fn sysprops_unstable(&mut self, keys: Vec<Option<String>>) {
+        let grew = {
+            let mut u = self.ctx.punstable.borrow_mut();
+            let mut grew = false;
+            for k in keys {
+                match k {
+                    None if !u.all => {
+                        u.all = true;
+                        grew = true;
+                    }
+                    Some(k) if !u.all => grew |= u.keys.insert(k),
+                    _ => {}
+                }
+            }
+            grew
+        };
+        if !grew {
+            return;
+        }
+        self.ctx.consts.borrow_mut().clear();
+        self.ctx.objs.borrow_mut().clear();
+        self.ctx.psums.borrow_mut().clear();
+        let mut deps: BTreeSet<usize> = std::mem::take(&mut *self.ctx.pdeps.borrow_mut());
+        deps.extend(self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()));
+        self.invalidate_all(Some(deps));
+    }
+}
