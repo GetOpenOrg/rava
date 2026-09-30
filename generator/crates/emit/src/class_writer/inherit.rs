@@ -198,7 +198,7 @@ pub(super) fn resolve_interface_special_target<'c>(ctx: &EmitCtx<'c>, iface: &st
 }
 
 /// `Iface.super.m(...)` 在实现类中的落点成员名 `Iface_super_m`（m 在接口内重载时带描述符后缀）
-pub(super) fn interface_special_member_name(ctx: &EmitCtx<'_>, owner: &ClassInfo, name: &str, desc: &str) -> String {
+pub(crate) fn interface_special_member_name(ctx: &EmitCtx<'_>, owner: &ClassInfo, name: &str, desc: &str) -> String {
     let m = if ctx.ty.hierarchy_overloaded_names(owner).contains(name) {
         mangle_name(&ctx.manifest.ty, name, desc)
     } else {

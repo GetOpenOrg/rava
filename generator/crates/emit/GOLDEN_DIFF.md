@@ -12,9 +12,11 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 | (c) 方法块（clinit / 声明方法 / 手写覆盖 / 接口 lambda / 接口补全） | `java_class!` 块到继承段插入位（方法体经 bodies.jsonl 回放替换） | 除 2 个 record 类外全部一致；record 访问器补丁（`_patch_record_method_blocks`）属步骤 (d) |
 | (c) 方法体请求 | bodies.jsonl 回放记录消费 | TestStreamBasic 25 条、TestCompletableFuture 235 条未请求——继承段（接口 default / special / 超类虚方法）的方法体请求属步骤 (d) |
 | (d1) 继承展开段 + record 补丁 | 同上（方法块全段） | 3 例全部一致；bodies.jsonl 回放记录全部被请求（0 未用） |
+| (d2) 第二阶段：接口实现 / 协变 upcast / 接口接收者超接口成员 / 类接收者继承成员 + use 行 | 全部类文件全文 | 3 例除 d3 尾段外逐字节一致（522 个文件的差异均为 py 多出的尾段：L3 反射字段 473、L3 反射分派 9、A-5 SAM 合成对象 40） |
 
-`tests/golden.rs` 的 `PENDING` 表列出尚待后续步骤接入的已知失配（报告但不判失败），全部移植后须清空；
-`CLASS_STAGE` 在方法块接入后切到全文对照。
+`tests/golden.rs` 已切到全文对照。尚待步骤 (d3) 接入的已知失配单列、不判失败：`PENDING` 表（`user/src/main.rs`
+反射注册表）与 `PENDING_TAILS`（rs 全文是 py 的行前缀、py 余下部分以反射字段 / 反射分派 / SAM 合成对象段头开始），
+d3 完成后两者须清空。
 
 ## 一、未移植分支（显式 `EmitError::Unported`）
 

@@ -9,7 +9,7 @@ pub mod attrs;
 pub mod fields;
 pub mod head;
 pub mod hw_overrides;
-mod inherit;
+pub(crate) mod inherit;
 pub mod methods;
 pub mod record;
 pub mod slot;
@@ -131,6 +131,12 @@ fn inherited_segments<'c>(
     super_inherit::superclass_virtual_inheritance(&cx, state, bodies, &all, out)
 }
 
+/// 单类发射结果：文件文本 + 实际输出的实例方法声明记录
+pub struct ClassText {
+    pub text: String,
+    pub methods: Vec<crate::emission::EmittedMethod>,
+}
+
 /// 生成单类文件文本
 pub fn gen_class_rs(
     ctx: &EmitCtx<'_>,
@@ -138,7 +144,7 @@ pub fn gen_class_rs(
     bodies: &mut dyn MethodBodyEmitter,
     ci: &ClassInfo,
     site: &ClassSite<'_>,
-) -> Result<String> {
+) -> Result<ClassText> {
     let cross = site.cross_input();
     let mut referenced = collect_referenced(ctx, ci, cross.generated);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
@@ -173,6 +179,7 @@ pub fn gen_class_rs(
     let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
     inherited_segments(ctx, state, bodies, ci, &tps, &visible, &overrides, &mut method_blocks)?;
     let method_blocks = record::patch_record_method_blocks(ctx, ci, &format!("{sname}{struct_generic}"), method_blocks);
+    let methods = crate::emission::record_methods(&method_blocks);
 
     let parent = parent_rust(ctx, ci);
     let empty = BTreeSet::new();
@@ -230,5 +237,5 @@ pub fn gen_class_rs(
     if !iface_supp_blocks.is_empty() {
         parts.extend(supplementary_iface_imports(ctx, &iface_supp_blocks, &cross_imports, &sname, site.prefix()));
     }
-    Ok(parts.join("\n"))
+    Ok(ClassText { text: parts.join("\n"), methods })
 }

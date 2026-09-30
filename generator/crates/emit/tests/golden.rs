@@ -8,15 +8,13 @@
 //! 回放文本用与采集脚本相同的哨兵行包裹方法体，落盘后同样替换为 `/*BODY key*/` 占位再比较——
 //! 发射层基于文本的处理（VTable 导入扫描、record 补丁）看到的仍是真实方法体。
 //!
-//! 对照口径随移植阶段收紧（[`CLASS_STAGE`]）：类文件当前比到方法段为止（文件头 / 导入 /
-//! 类块头 / struct / static 字段 / 方法块；继承段在步骤 (d) 接入后改为全文）；
-//! 非类文件（Cargo.toml / mod.rs / main.rs …）全文。golden 缺失时跳过并提示采集命令。
+//! 全部文件全文对照；待步骤 (d3) 接入的类文件尾段（反射字段 / 反射分派 / SAM 合成对象）
+//! 与 main.rs 反射注册表单列为待接入，不判失败。golden 缺失时跳过并提示采集命令。
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use emit::body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter};
-use emit::class_writer::{INHERITED_IMPORTS_SLOT, INHERITED_MEMBERS_SLOT};
 use emit::text::scratch_pkg_version;
 use emit::ctx::{EmitCtx, EmitOptions};
 use emit::project::{prepare_scratch, write_project};
@@ -31,22 +29,26 @@ const TESTS: [(&str, &str); 3] = [
     ("TestCompletableFuture", "tests/e2e/54_concurrency_api/TestCompletableFuture.java"),
 ];
 
-/// 类文件对照范围
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ClassStage {
-    /// `java_class!` 块到继承成员插入位为止（rs 方法段须是 py 方法段的前缀：py 在其后接续
-    /// 接口 default / special / 超类继承段）
-    UpToMethodBlocks,
-    /// 全文（继承段接入后启用）
-    #[allow(dead_code)]
-    Full,
-}
-const CLASS_STAGE: ClassStage = ClassStage::UpToMethodBlocks;
-const CLASS_MARK: &str = "rava_macros::java_class! {";
 /// 各 crate 目录（相对 scratch 根）：包版本按目录路径派生
 const CRATE_DIRS: [&str; 3] = ["", "java_runtime", "user"];
 /// 待后续步骤接入的已知失配（报告但不判失败；全部移植后须清空）
-const PENDING: [(&str, &str); 1] = [("user/src/main.rs", "反射分派注册表（步骤 d：dispatch_gen）")];
+const PENDING: [(&str, &str); 1] = [("user/src/main.rs", "反射分派注册表（步骤 d3：dispatch_gen）")];
+/// 待步骤 (d3) 接入的类文件尾段：rs 全文须是 py 的行前缀，py 余下部分以这些段头之一开始
+const PENDING_TAILS: [&str; 3] = [
+    "// ── L3 反射字段闭包（Field.get/set",
+    "// ── L3 反射分派闭包（Method.invoke",
+    "// ── A-5 函数式接口合成对象（LambdaMeta",
+];
+const PENDING_TAIL_MARK: &str = "[待接入 d3 尾段]";
+
+/// rs 是 py 的行前缀、且 py 余下部分（跳过空行）以待接入尾段段头开始
+fn pending_tail(want: &str, got: &str) -> bool {
+    let (w, g): (Vec<&str>, Vec<&str>) = (want.lines().collect(), got.lines().collect());
+    if g.len() >= w.len() || w[..g.len()] != g[..] {
+        return false;
+    }
+    w[g.len()..].iter().find(|l| !l.is_empty()).is_some_and(|l| PENDING_TAILS.iter().any(|t| l.starts_with(t)))
+}
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -80,36 +82,7 @@ fn files_under(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// 按阶段比较类文件：文件头（rs 去继承导入插入位后须是 py 文件头的前缀——py 在插入位
-/// 已填入继承成员导入）+ `java_class!` 块（rs 到继承成员插入位为止，须是 py 块的行前缀）。
-/// 返回首个差异描述
-fn staged_class_diff(want: &str, got: &str) -> Option<String> {
-    let (w, g): (Vec<&str>, Vec<&str>) = (want.lines().collect(), got.lines().collect());
-    let (Some(wm), Some(gm)) = (w.iter().position(|l| *l == CLASS_MARK), g.iter().position(|l| *l == CLASS_MARK)) else {
-        return Some("缺 java_class! 块".into());
-    };
-    let g_head: Vec<&str> = g[..gm].iter().copied().filter(|l| *l != INHERITED_IMPORTS_SLOT && !l.is_empty()).collect();
-    let w_head: Vec<&str> = w[..wm].iter().copied().filter(|l| !l.is_empty()).collect();
-    for (i, gl) in g_head.iter().enumerate() {
-        let wl = w_head.get(i).copied().unwrap_or("<EOF>");
-        if wl != *gl {
-            return Some(format!("文件头第 {} 条\n      py: {wl}\n      rs: {gl}", i + 1));
-        }
-    }
-    let g_end = g[gm..].iter().position(|l| l.trim() == INHERITED_MEMBERS_SLOT).map_or(g.len(), |p| gm + p);
-    for (i, gl) in g[gm..g_end].iter().enumerate() {
-        let wl = w.get(wm + i).copied().unwrap_or("<EOF>");
-        if wl != *gl {
-            return Some(format!("块 L{}\n      py: {wl}\n      rs: {gl}", i + 1));
-        }
-    }
-    None
-}
-
 fn file_diff(want: &str, got: &str) -> Option<String> {
-    if CLASS_STAGE == ClassStage::UpToMethodBlocks && want.contains(CLASS_MARK) {
-        return staged_class_diff(want, got);
-    }
     (want != got).then(|| {
         let (ln, a, b) = first_diff(want, got);
         format!("L{ln}\n      py: {a}\n      rs: {b}")
@@ -301,6 +274,7 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
             got = got.replace(rs_v, py_v);
         }
         if let Some(d) = file_diff(&want, &got) {
+            let d = if pending_tail(&want, &got) { PENDING_TAIL_MARK.to_string() } else { d };
             diffs.insert(key, d);
         }
     }
@@ -320,17 +294,23 @@ fn golden_emit() {
         any = true;
         let (total, diffs) = run_golden(&root, stem);
         eprintln!("{stem}: 对照 {total} 个文件，失配 {}", diffs.len());
+        let tails = diffs.values().filter(|d| *d == PENDING_TAIL_MARK).count();
+        if tails > 0 {
+            eprintln!("  {PENDING_TAIL_MARK} {tails} 个文件（反射字段 / 反射分派 / SAM 合成对象段）");
+        }
         let mut hard = 0;
-        for (p, d) in diffs.iter().take(60) {
+        for (p, d) in diffs.iter().filter(|(_, d)| *d != PENDING_TAIL_MARK) {
             match PENDING.iter().find(|(f, _)| f == p) {
                 Some((_, why)) => eprintln!("  [待接入：{why}] {p} {d}"),
                 None => {
                     hard += 1;
-                    eprintln!("  {p} {d}");
+                    if hard <= 60 {
+                        eprintln!("  {p} {d}");
+                    }
                 }
             }
         }
-        if hard > 0 || diffs.len() > 60 {
+        if hard > 0 {
             failed.push(stem);
         }
     }

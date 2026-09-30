@@ -8,7 +8,8 @@
 //! - [`ctx`]：只读发射上下文 [`ctx::EmitCtx`] 与每项目可变状态 [`ctx::ProjectState`]
 //!   （Python 模块级全局账本的显式化）；
 //! - [`project`]：布局、落盘（手写文件永不覆写）、mod 树、main.rs / Cargo.toml、overlay；
-//! - [`class_writer`]：单类文件文本。
+//! - [`class_writer`]：单类文件文本；
+//! - [`phase2`]：全部类文本生成后的第二阶段收尾（接口实现 / upcast / 继承成员插入位填充）。
 //!
 //! # C3 接入点（levels / dispatch / folds 消费，P5 切换后在本 crate 实施）
 //! - **levels**：`class_writer` 的类块头 / struct 发射处按类的 level 选择 L1 不透明类型形态
@@ -25,6 +26,7 @@ pub mod emission;
 pub mod error;
 pub mod imports;
 pub mod lang;
+pub mod phase2;
 pub mod project;
 pub mod text;
 pub mod vtable;

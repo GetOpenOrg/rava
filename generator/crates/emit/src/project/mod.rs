@@ -49,14 +49,15 @@ fn emit_classes(
     let mut ems = IndexMap::new();
     for (c, path) in &jdk.files {
         let Some(ci) = ctx.class(c) else { continue };
-        let text = gen_class_rs(ctx, state, bodies, ci, &ClassSite { jdk, user_sibling_imports: None })?;
+        let ct = gen_class_rs(ctx, state, bodies, ci, &ClassSite { jdk, user_sibling_imports: None })?;
         let em = ClassEmission {
             binary_name: c.clone(),
             crate_prefix: "crate".into(),
             path: path.clone(),
             handwritten: w.is_handwritten(path),
             crate_name: "java_runtime".into(),
-            text,
+            text: ct.text,
+            methods: ct.methods,
         };
         ems.insert(c.clone(), em);
     }
@@ -65,14 +66,15 @@ fn emit_classes(
         // 兄弟类导入按未过滤引用集（生成集过滤只作用于 JDK 导入）
         let referenced = collect_referenced(ctx, ci, None);
         let site = ClassSite { jdk, user_sibling_imports: Some(user.sibling_imports(ctx, c, &referenced)) };
-        let text = gen_class_rs(ctx, state, bodies, ci, &site)?;
+        let ct = gen_class_rs(ctx, state, bodies, ci, &site)?;
         let em = ClassEmission {
             binary_name: c.clone(),
             crate_prefix: "java_runtime".into(),
             path: e.path.clone(),
             handwritten: false,
             crate_name: "user".into(),
-            text,
+            text: ct.text,
+            methods: ct.methods,
         };
         ems.insert(c.clone(), em);
     }
@@ -91,9 +93,10 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &mut dyn MethodB
     let jdk = JdkLayout::build(ctx, &jrt_src);
     let user = UserLayout::build(ctx, &user_src);
     let mut state = ProjectState::default();
-    let ems = emit_classes(ctx, &mut state, bodies, &w, &jdk, &user)?;
+    let mut ems = emit_classes(ctx, &mut state, bodies, &w, &jdk, &user)?;
     state.check_lambda_ledger()?;
-    // 第二阶段收尾（继承补声明 / SAM 合成 / 反射分派）：步骤 (d)
+    crate::phase2::resolve_members(ctx, &mut state, &mut ems);
+    // SAM 合成 / 反射分派：步骤 (d3)
     let disp = DispatchReg::default();
     for em in ems.values() {
         w.write(&em.path, &em.text)?;
