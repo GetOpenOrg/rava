@@ -401,6 +401,10 @@ pub struct Engine<'a> {
     recv_sites: HashSet<(usize, u32)>,
     /// 形参常量（方法 → 按形参槽；缺席 = 尚无调用点）
     pvals: HashMap<usize, Vec<PV>>,
+    /// 形参上出现过的字符串常量实参（(方法, 形参槽) → 常量集；按名查找的名字来自形参时逐个展开）
+    pstrs: HashMap<(usize, usize), BTreeSet<Rc<str>>>,
+    /// 读过 pstrs 的按名查找站点（(方法, 形参槽) → 偏移）：常量集增长时重跑
+    pstr_sites: HashMap<(usize, usize), BTreeSet<u32>>,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
     hubs: Vec<Hub>,
     hub_ids: HashMap<(MemberRef, bool, HubSet), u32>,
@@ -565,6 +569,8 @@ impl<'a> Engine<'a> {
             dispatch: BTreeMap::new(),
             recv_sites: HashSet::default(),
             pvals: HashMap::default(),
+            pstrs: HashMap::default(),
+            pstr_sites: HashMap::default(),
             hubs: Vec::new(),
             hub_ids: HashMap::default(),
             hubs_by_open: BTreeMap::new(),
