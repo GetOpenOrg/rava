@@ -405,6 +405,13 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 - Digester 冷写出：mod_tree 44–53 ms → 36 ms。
 - DeepCopy 的 scratch 复用转 Digester（不加 `--clean`，清扫 210 个陈旧文件）：99 ms → 54 ms。改前、改后二进制在这一场景下的 scratch 逐文件一致，只有 Cargo.toml 的版本戳不同（每次运行都不同）。
 
+**user crate 陈旧清扫**（提交 a7170673）：复用 scratch 换测试时，user/src 原先会残留上一个测试的类文件（例如 DeepCopy 转 Digester 后还留着 `deep_copy*.rs`）。现在 user crate 与 java_runtime 走同一机制：
+- 本轮未写入的带生成标记的 .rs 一律清除（user crate 没有手写真源）。
+- 不在本轮 user mod 树中的包目录，删除其 mod.rs；目录变空则删除目录。顶层包也照此处理，因为顶层模块由本轮重写的 main.rs 声明。
+- 冷生成（`--clean`）时 user/src 本来就是空的，这一步不做任何事，所以 27 例生成树不变。
+- 复用 DeepCopy 的 scratch 转 Digester 后，user/src 只剩 `digester.rs` 和 `main.rs`，整个 scratch 与冷生成逐文件一致（Cargo.toml 的版本戳除外）。
+- 单测：`user_crate_sweeps_previous_test`。
+
 ### 5.4 N2：闭包事实进程内直传（emitter-perf2，提交 b5291a03）
 
 做法：
@@ -457,7 +464,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
   - `run_tests.py` 缺省带 `--closure-json`，每次运行都会校验两路事实一致；若出现「由 closure.json 解析的闭包事实与进程内直传的不一致」即为回归。
   - 建议抽查 `DeepCopy`（最多类，析构与发射重叠）、`Digester`，再加一例开动态对照的常规用例（如 `TestStreamBasic`）。
   - 另跑一例 `--no-dyn`（不写 closure.json 的缺省路径），确认输出与 JVM 一致。
-- **mod 树单次列举**（提交 092f9bed）：生成形态不变。建议抽查一例复用 scratch 且闭包缩小的运行：先跑 `DeepCopy`，再不加 `--clean` 把同一 scratch 用于一个小用例，确认编译运行正常（陈旧文件清扫、陈旧包目录清除）。
+- **mod 树单次列举**（提交 092f9bed）：生成形态不变。建议抽查一例复用 scratch 且闭包缩小的运行：先跑 `DeepCopy`，再不加 `--clean` 把同一 scratch 用于一个小用例，确认编译运行正常（陈旧文件清扫、陈旧包目录清除）；同一场景下 user/src 只应剩本测试的文件（user crate 清扫，提交 a7170673）。
 - **P3**（全局分配器）与 **P5**（lib.rs / 陈旧清扫时机）：影响所有生成器运行，生成树已逐字节一致。
   - 抽查一例复用 scratch 的连续两次运行（不加 `--clean`），确认第二次 cargo 不重编 java_runtime。
   - 抽查一例在 runtime/ 删除手写文件后的复用 scratch 运行（陈旧手写清扫）。
