@@ -42,8 +42,9 @@ animal.speak()?;
                                  ▼
              classfile.py   二进制解析（常量池 / BootstrapMethods / LVT / 注解 / 异常表）
                                  ▼
-             callchain.py   调用链 BFS：闭包 = 可达方法 + 类初始化 + 虚分派目标
-                            （closure.toml 边界 / seeds.toml 补种 / vm_intrinsics.toml VM 承载）
+             rava closure   Rust 精确闭包分析器（generator/）→ closure.json：可达方法 + 类初始化
+                            + 分派目标 + 折叠点（closure.toml 边界 / seeds.toml 补种 / vm_intrinsics.toml）
+             closure_input.py  读 closure.json → 发射范围；callchain.py 边界判定 / 种子全局 / 预检
                                  ▼
              cfg/           控制流结构化（循环 / try 区域 / 条件）
              instr/ stack   操作数栈模拟 → rs_ir（Rust IR）
@@ -84,7 +85,8 @@ scripts/run_bg.sh <tag> python3 scripts/run_tests.py --filter TestXxx   # 后台
 rava/
 ├── codegen/                       # 生成器（Python）
 │   ├── classfile.py               # .class 解析
-│   ├── callchain.py               # 调用链 BFS 闭包
+│   ├── closure_input.py           # 闭包来源：调用 rava closure，读 closure.json
+│   ├── callchain.py               # 边界判定 / 种子全局 / 编译前预检
 │   ├── vm_constants.py            # VM 常量守卫的死分支剪除
 │   ├── cfg/                       # 控制流结构化
 │   ├── instr/                     # 指令模拟（调用 / 字段 / 数组 / 强制转换）

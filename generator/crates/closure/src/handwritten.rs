@@ -1,6 +1,6 @@
 //! 手写层（runtime/java_runtime/src 共置 `_impl.rs` / `_ext.rs`）的语法级扫描（syn）。
 //!
-//! 与 `codegen/native_upcalls.py` 同一语义，但走真实语法树而非正则：
+//! 走真实语法树（取代已删除的 Python 正则扫描 native_upcalls.py），抽取：
 //! - `#[jvm_native|jvm_boundary|jvm_ext(upcalls = "类.成员:描述符 …")]` 声明的 Rust→Java 回调边；
 //! - `pub fn` 名（成员由手写体提供的判定）；
 //! - 手写体分配：`let mut x = T::default(); x._init_not_null();`（单独的 `T::default()` 是 Java null）

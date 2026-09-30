@@ -180,18 +180,24 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 
 ## 五、可以移除的现行机制
 
-分析器接入后，下面这些 Python 机制**整体删除**（删除前逐项向用户确认）：
+分析器接入后，下面这些 Python 机制**整体删除**（删除前逐项向用户确认）。2026-09-30 C4 已按本表执行
+（分支 `closure-c4-cleanup`；验收集 27 例生成树删除前后逐字节一致，raw-audit 仅 `jdk_literals` 2 → 1）：
 
-| 现行机制 | 替代 |
-|---|---|
-| 接口 CHA 遍历、迟至实现者清扫、`_drain_iface_edges` / `_pending_iface_edges` | 3.1 XTA 分派 |
-| `instantiated_classes` 全局集合、`root_virtual_targets` 广播、`boundary_virtual_targets` 传播 | 3.1 调用点级集合 |
-| `_enqueue_desc_types`、`_enqueue_iface_stub`、stub 通道、父类补全队列、收尾接口 drain | 3.5 分级（L1 不传递） |
-| 迟至静态边补扫及三道门 | 统一规则：边界静态方法 = 手写体节点（有 impl）或存根（无 impl），一次判定 |
-| `_process` 里的字符串 / 拼接 / 驼峰启发式、`_drain_nest_prefixes`、`_seed_species_family` 全量反射面 | 3.6 常量数据流 + `[reflect_sinks]` |
-| `_impl_signature_type_refs` 正则、`provides` 名字前缀判定 | 3.7 syn 解析 |
-| `callchain.py` 发现部分整体（`_discover_jdk_classes_method_level`、`_collect_method_refs`、`_scan_reflect_consts`） | `rava closure` + `closure.json` |
-| scripts：`trace_callchain*.py`、`rta.py`、`analyze_callchain.py`、`dep_scan.py` 的闭包部分、`scan_jdk_boundary.py` | `rava closure --why/--report/--dynamic` |
+| 现行机制 | 替代 | 状态 |
+|---|---|---|
+| 接口 CHA 遍历、迟至实现者清扫、`_drain_iface_edges` / `_pending_iface_edges` | 3.1 XTA 分派 | ✅ 已删（随 `_discover_jdk_classes_method_level`） |
+| `instantiated_classes` 全局集合、`root_virtual_targets` 广播、`boundary_virtual_targets` 传播 | 3.1 调用点级集合 | ✅ 已删（同上） |
+| `_enqueue_desc_types`、`_enqueue_iface_stub`、stub 通道、父类补全队列、收尾接口 drain | 3.5 分级（L1 不传递） | ✅ 已删（同上） |
+| 迟至静态边补扫及三道门 | 统一规则：边界静态方法 = 手写体节点（有 impl）或存根（无 impl），一次判定 | ✅ 已删（同上） |
+| `_process` 里的字符串 / 拼接 / 驼峰启发式、`_drain_nest_prefixes`、`_seed_species_family` 全量反射面 | 3.6 常量数据流 + `[reflect_sinks]` | ✅ 已删（同上；`_scan_reflect_consts` 一并删除） |
+| `_impl_signature_type_refs` 正则、`provides` 名字前缀判定 | 3.7 syn 解析 | ✅ 已删：`_impl_signature_type_refs` / `_resolve_impl_ref`、`codegen/native_upcalls.py` 整体 |
+| `callchain.py` 发现部分整体（`_discover_jdk_classes_method_level`、`_collect_method_refs`、`_scan_reflect_consts`） | `rava closure` + `closure.json` | ✅ 已删：callchain.py 1946 → 165 行，只留边界判定、种子全局、预检（`precheck_from_tree` / `print_precheck`） |
+| scripts：`trace_callchain*.py`、`rta.py`、`analyze_callchain.py`、`dep_scan.py` 的闭包部分、`scan_jdk_boundary.py` | `rava closure --why/--report/--dynamic` | ✅ 已删：`trace_callchain*.py`（3 个）、`rta.py`、`analyze_callchain.py`、`scan_jdk_boundary.py`；`dep_scan.py` 保留（一跳依赖透视，无闭包部分，`fetch_pilot_deps.sh` 使用） |
+
+同批删除的发现附属机制：`codegen/locale_seed.py`（→ `seeds/locale.rs`）、`jca_services.py` 的服务抽取 / 种子选择
+（→ `seeds/jca.rs`，只留清单查询与放行判定）、`runtime_manifest` 的注解触发函数（→ `seeds/annotation.rs`）、
+`fallback_audit` 的 cc-* 兜底点、`closure.toml [vm_boundary].whole_class`（只有 Python BFS 读）、
+`main.py --closure-json`（改由 closure_input 每轮装载）；`--trace-class` 改为转交 `rava closure --why`。
 
 **保留**：closure.toml / seeds.toml / vm_intrinsics.toml 三清单（新增 `[facts]`、`[reflect_sinks]` 两段）、JVMS 解析规则、边界截断、`vm-upcalls` 根、locale / JCA / 注解 / 模块资源种子（只是触发条件改成精确可达）。
 
@@ -208,7 +214,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | 🔄 进行中：第 1 步 ✅ 79480fa9（`--release` 34 前缀实测）；手写边界规范 ✅ 1c73648d（`docs/reference/handwritten-boundary.md`）；`--release-bytecode`（模拟删除手写）复测 ✅（计划 §6.6）；精度缺口 G3 ✅ 2208ddda（`[facts.array_returns]`）、G1 ✅ 69c2e14d（静态分派转发按调用点克隆，k = 1）、G2 实测否决（类集不变、耗时 ×6，改为 G2′ 收窄 open 引入点），复测与 8 个待重测前缀的去留建议见计划 §6.7；待：G2′ / G4–G6、全量语料重测、删除候选逐项确认与逐包实施 |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ⏳ 未开始（syn 解析手写层已在 C1 / C1c 第 0 步先行落地） |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 进行中（用户负责；folds v1 消费侧在 `claude/jolly-dijkstra-diftum`） |
-| C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 | ⏳ 未开始（删除 Python 机制须逐项确认） |
+| C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 | 🔄 接入 ✅（`codegen/closure_input.py`）；第五节 Python 机制删除 ✅（2026-09-30，`closure-c4-cleanup`，生成树逐字节一致）；待：全量 e2e（JDK 21 + 25） |
 | C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ✅ 已完成：`scripts/dyn_compare.py` + JVMTI agent `scripts/dyn_agent/load_trace.c`，run_tests 缺省开（`--no-dyn` 关），明细 `logs/dyn/<test>.json`；实测见 §3.8.1 |
 
 各阶段独立 worktree、独立提交；C4 之前 Python 管线保持不变，Rust 分析器只做旁路输出与对照。
@@ -678,7 +684,7 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
 
 原有的 `dead_branches` 输出整体由 `folds` 取代。Python 只消费这份数据，不另写判定。
 
-**消费侧已就绪**（`codegen/closure_folds.py`，`main.py --closure-json <closure.json>`）：在 classfile 解码后、
+**消费侧已就绪**（`codegen/closure_folds.py`，closure_input 每轮装载 closure.json）：在 classfile 解码后、
 VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成代码共用）。
 - 条件跳转恒直通改写为 `pop`，恒跳转改写为 `pop` + `goto`；switch 的死目标改指向活目标，只剩一个活目标时改写为 `pop` + `goto`。偏移沿用原指令字节。
 - getstatic 折叠为装载指令；getfield 折叠为合成指令 `fold_const`，先弹出 receiver（有副作用的保留求值）再压入常量；invoke 保留原调用指令（按调用指令识别引用的消费方——导入收集、super 调用的 `_base` 函数收集等——照常看到），在 `Instr.fold` 挂装载指令，`sim_instr` 照常翻译调用、以 `let _ =` 丢弃结果，再压入常量。

@@ -69,9 +69,9 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 手写不是因为语义要求，而是为了控制闭包规模或编译成本：
 
 - 内部包前缀截断：`closure.toml [boundary].packages`（`sun/`、`jdk/`、`com/sun/`、`com/oracle/`、`java/security/`）；
-- 整类截断：`closure.toml [vm_boundary].whole_class`（`FileSystems`、`InetAddress`、`JceSecurity`、
-  `InvokerBytecodeGenerator`）。其中 `InvokerBytecodeGenerator` 的生成入口属类 2（已按方法登记），
-  整类截断的其余部分才是策略；
+- 整类截断：`closure.toml [vm_boundary].whole_class` 已于 2026-09-30 随 Python 发现逻辑删除（C4），
+  四个类（`FileSystems`、`InetAddress`、`JceSecurity`、`InvokerBytecodeGenerator`）与其余 `[vm_boundary]`
+  类同样按方法划分；
 - 编译成本截断：如 `sun/reflect/generics`（泛型 visitor 体系使 `java_runtime` 编译峰值内存越过 15G）；
 - 因截断而补的手写：如 `sun/nio/cs` 的 `StreamDecoder` / `StreamEncoder`（以 Charset 直连编解码）、
   `ServicesCatalog.findServices`、`CleanerImpl$PhantomCleanableRef` 等。
@@ -117,7 +117,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 |---|---|---|
 | `java/`、`javax/`（公开 API） | 翻译字节码；native 手写 | 不变 |
 | `closure.toml [boundary]` 前缀（`jdk/`、`sun/` 等） | 停止展开，内部边界类整体手写（struct + 方法） | 前缀删除，按方法划分 |
-| `closure.toml [vm_boundary]`（`Class`、`ClassLoader`、`Module` 等） | 按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码，`<clinit>` 不翻译；`whole_class` 在 Python 生成器中整类截断 | 并入逐类 VM 契约清单（`[vm_contract]`），`whole_class` 删除 |
+| `closure.toml [vm_boundary]`（`Class`、`ClassLoader`、`Module` 等） | 按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码，`<clinit>` 不翻译（`whole_class` 已于 2026-09-30 删除） | 并入逐类 VM 契约清单（`[vm_contract]`） |
 | `closure.toml [release]` / `seeds.toml [jca]` | 边界前缀内按字节码翻译 | 随前缀截断一起删除 |
 
 截断的原始理由（`docs/reports/2026-09-14-impl-strategy.md`：跟随内部包类数 111 → 635）是 Python BFS 过近似口径；

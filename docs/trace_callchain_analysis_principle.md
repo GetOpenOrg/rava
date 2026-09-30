@@ -1,5 +1,8 @@
 # `trace_callchain.py` 完整分析原理
 
+> **2026-09-30 已删除**：`scripts/trace_callchain*.py` 随 C4 删除 Python 发现逻辑一并移除（历史见 git），
+> 闭包诊断改用 `rava closure --why / --report / --dynamic`（`docs/plans/2026-09-29-rust-closure-analyzer.md` §4.1）。本文仅作历史参考。
+
 > **2026-09-19 完整版修订**：本文描述 `scripts/trace_callchain.py` 的**完整版实现**（2026-09-19 重写）。
 > 历史版本 `trace_callchain0917.py` / `trace_callchain0919.py` 保留作对照，不再演进：
 > 基线版在字段指令处提取字段描述符类型（0917 起被移除），0919 补了 ldc/catch/字段声明三条通道

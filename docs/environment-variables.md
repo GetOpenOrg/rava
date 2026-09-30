@@ -11,9 +11,9 @@
 |---|---|
 | `--jdk N` | 指定 JDK 主版本。缺省按 `JAVA_HOME` → 仓库根 `.jdk-version`（当前 21）→ 已安装最新版 |
 | `--no-run` / `--clean` / `--out DIR` | 只生成不编译运行 / 清空 scratch 重建 / 指定 scratch 目录 |
-| `--debug` | 诊断明细：兜底点 traceback 与逐条触发、未解析调用、BFS 迟到 static 边、cfg 结构化逐块判定 |
+| `--debug` | 诊断明细：兜底点 traceback 与逐条触发、闭包分析未解析调用、cfg 结构化逐块判定 |
 | `--strict` | 严格模式：转译兜底改为硬失败；缺手写实现的 native 方法编译报错（写入 scratch 的 `java_runtime/strict.txt`，`build.rs` 读取） |
-| `--trace-class CLASS` | 打印该类（斜线形态，如 `java/net/InetAddress`）各方法进入调用链的路径，回答“为什么被拉进闭包” |
+| `--trace-class CLASS` | 打印该类或方法（斜线形态，如 `java/net/InetAddress`、`类.方法:描述符`）入闭包的最短 provenance 链，回答“为什么被拉进闭包”（转交 `rava closure --why`） |
 | `--raw-sites FILE` | Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序），不影响生成代码 |
 
 ```bash

@@ -7,7 +7,7 @@
 //! 触发，与 JVM 在被调方法侧完成初始化的语义一致。`__class_init` 的状态机对「初始化中」
 //! 立即返回，`<clinit>` 内调用本类 native（registerNatives）不会递归。
 //!
-//! 参数：`upcalls = "…"`（native_upcalls.py 消费，宏忽略）；`no_class_init`——宿主类型
+//! 参数：`upcalls = "…"`（Rust 闭包分析器 `generator/crates/closure/src/handwritten.rs` 消费，宏忽略）；`no_class_init`——宿主类型
 //! 不是 java_class! 生成类（无 `__class_init`，如手写根类 Object）时显式豁免。
 
 use proc_macro2::TokenStream;

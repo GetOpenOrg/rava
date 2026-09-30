@@ -224,28 +224,24 @@ def main():
                          '有 seed=只收种子类闭包）。顺序即 crate 依赖序')
     ap.add_argument('--locales', default='', metavar='TAG[,TAG...]',
                     help='额外编入的 locale（BCP 47 或下划线形式，逗号分隔；默认只含用户字节码'
-                         '静态可见的 locale + en + ROOT，见 codegen/locale_seed.py）')
+                         '静态可见的 locale + en + ROOT，见闭包分析器 generator/crates/closure/src/seeds/locale.rs）')
     ap.add_argument('--debug', action='store_true',
-                    help='诊断明细：兜底 / 未解析调用 / 迟到 static 边 / cfg 结构化判定逐条输出')
+                    help='诊断明细：兜底 / 闭包未解析调用 / cfg 结构化判定逐条输出')
     ap.add_argument('--strict', action='store_true',
                     help='严格模式：转译兜底改为硬失败，缺手写实现的 native 方法编译报错')
     ap.add_argument('--trace-class', default='', metavar='CLASS',
-                    help='打印该类（斜线形态 binary name，如 java/net/InetAddress）各方法的入链路径')
+                    help='打印该类或方法（斜线形态，如 java/net/InetAddress 或 类.方法:描述符）入闭包的'
+                         '最短 provenance 链（rava closure --why）')
     ap.add_argument('--precheck-only', action='store_true',
                     help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
     ap.add_argument('--raw-sites', default='', metavar='FILE',
                     help='Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序）')
-    ap.add_argument('--closure-json', default='', metavar='FILE',
-                    help='Rust 闭包分析器的 closure.json：消费其 folds（v1）剪除不可达代码、折叠常量读取点')
     args = ap.parse_args()
 
     from codegen import options as _options, raw_audit as _raw_audit_opt
     _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
     _options.PRECHECK_ONLY = args.precheck_only
     _raw_audit_opt.enable_raw_sites(args.raw_sites)
-    if args.closure_json:
-        from codegen import closure_folds as _folds
-        print(f"[folds] {args.closure_json}：{_folds.load(args.closure_json)} 个方法带折叠")
 
     lib_specs = _parse_lib_specs(args.lib)
     if lib_specs and args.batch:
@@ -317,7 +313,7 @@ def main():
     # --deny 升级），不是全 0。monitor-mt 待 S-20（锁真实化）合入后补埋，
     # 详见 codegen/equiv_audit.py 模块注释。
     print(EQUIV_AUDIT.summary())
-    # 静默兜底审计（fallback-audit 方案 §4.3）：B 组 15 处非 stub 静默降级点
+    # 静默兜底审计（fallback-audit 方案 §4.3）：B 组 10 处非 stub 静默降级点
     # 的触发计数（equiv_audit 同款模式）。2026-09-23 审计实证全语料零触发
     # （死代码收窄零损失）——非零即极可能是真 bug（K-6b 型），runner 可经
     # --deny fallback 升级。A 组 stub 兜底（九吞点）归 [cfg-audit] 的
