@@ -54,6 +54,11 @@ impl NoReturn {
         !self.settled && (!self.created.contains(t) || self.unanalyzed.contains_key(t) || self.waiting.contains_key(t))
     }
 
+    /// 分析结束后：t 有节点且全部节点已分析（返回常量格缺席即定论不返回）
+    pub(super) fn settled_never(&self, t: &MemberRef) -> bool {
+        self.created.contains(t) && !self.unanalyzed.contains_key(t)
+    }
+
     /// 排空时的收尾步：返回要重算的方法（空 = 结束）
     pub(super) fn drain(&mut self, never: BTreeSet<usize>) -> Vec<usize> {
         self.waiting.clear();

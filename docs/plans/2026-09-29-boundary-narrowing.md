@@ -845,6 +845,21 @@ DeepCopy 的 −18 类 / −148 方法来自条件跳转判据：临时插桩逐
 Spliterator。只用 switch 判据的对照：MH 两例收益相同、DeepCopy 无收益且上下文 34107，故保留条件跳转判据。
 耗时：DeepCopy 13.6 s → 6.8 s（上下文减少），其余持平。顺序矩阵：HelloWorld、CollectorsDemo、DeepCopy、MH Combinators 四组一致。
 
+**项 9 候选：noreturn 折叠标记（导出给 C3，不改变闭包）**。定论阶段对「全部节点已分析且没有返回路径」的被调方法按值未知答复，
+其后的代码照常分析（folds 规则 7：死区只从跳转 / switch / return / athrow 之后开始），所以永不返回的调用之后仍按可达导出、照常翻译。
+新增按条目的两个字段（folds_version 仍为 2，与 `null_recv` 同为附加字段，现有消费方忽略即保持原行为）：
+- `noreturn_calls`：定论不返回的活调用点——唯一目标为字节码方法（无清单返回事实、不走值相等 / 字符串运算 / 属性读取的派生结果），
+  目标有节点且全部节点已分析，返回常量格缺席（没有任何克隆含返回点）。判定只看分析终态，与处理次序无关。
+- `noreturn_dead_pcs`：把这些调用点当作控制流终点时另外不可达的区间（与 `dead_pcs` 不相交，格式同 `dead_pcs`）：只沿原本可达的指令走，
+  覆盖指令的处理器原本可达即计入（保守）。C3 发射层可在调用后终止控制流（如 `unreachable!()`）并删去这些区间；两字段并用时 `dead_pcs ∪
+  noreturn_dead_pcs` 满足「死区只从跳转 / switch / return / athrow 或 noreturn 调用之后开始」。
+- summary 增加 `fold_noreturn_calls` / `fold_noreturn_dead_bytes`。单测 `fold::tests::cut_after_stops_fallthrough_keeps_handlers`（虚构类名）。
+实测（调用点 / 另外不可达字节）：HelloWorld、FileIOTest、TestStreamBasic 0 / 0；Digester 60 / 15；DeepCopy 79 / 56；CollectorsDemo 22 / 5；
+MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数调用点其后紧跟 `athrow`（如 `throw uncaughtException(ex)`）或跳转，
+另外可达的只是其后的 `goto` / 返回。抽查 `ObjectStreamClass.invokeReadObject@68`（`throwMiscException` → `goto 92`）、
+`BoundMethodHandle.arg@146`（`uncaughtException` → `athrow`）、`BigInteger.checkRange@29`（`reportOverflow`）字节码均符合。
+9 例类集 / 方法集与上一项完全相同；DeepCopy、CollectorsDemo 在 `--flow-batch 64 --hash-seed 12345` 下标记逐项相同。
+
 ## 七、验收
 
 - §一 终态表各项达标。

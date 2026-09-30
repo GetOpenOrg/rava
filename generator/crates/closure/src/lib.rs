@@ -95,6 +95,8 @@ fn fold_json(f: &Fold) -> Value {
         "dead_catches": f.dead_catches.iter().map(|c| json!({"start": c.start, "end": c.end, "handler": c.handler, "catch_type": c.catch_type})).collect::<Vec<_>>(),
         "consts": f.consts.iter().map(|(pc, op, v, ty)| json!({"pc": pc, "kind": kind(*op), "value": const_json(v, ty), "type": ty})).collect::<Vec<_>>(),
         "null_recv": f.null_recv,
+        "noreturn_calls": f.noreturn_calls,
+        "noreturn_dead_pcs": f.noreturn_dead_pcs.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
     })
 }
 
@@ -179,6 +181,8 @@ impl Closure<'_> {
             "fold_consts": folds.iter().map(|f| f.consts.len()).sum::<usize>(),
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
             "fold_null_recv": folds.iter().map(|f| f.null_recv.len()).sum::<usize>(),
+            "fold_noreturn_calls": folds.iter().map(|f| f.noreturn_calls.len()).sum::<usize>(),
+            "fold_noreturn_dead_bytes": folds.iter().flat_map(|f| &f.noreturn_dead_pcs).map(|(a, b)| b - a).sum::<u32>(),
             "fold_props": folds.iter().map(|f| f.props.len()).sum::<usize>(),
             "reflect_members": e.reflect_members.len(),
             "reflect_gaps": e.reflect_gaps.len(),

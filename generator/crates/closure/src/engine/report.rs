@@ -27,12 +27,13 @@ impl<'a> Engine<'a> {
             let mut f = fold_of(key.to_string(), code, &all);
             self.dead_catches(code, &mut f);
             f.null_recv = self.null_recv(&clones);
+            self.noreturn_calls(code, &all, &mut f);
             f.props = self.prop_folds(&f, &all);
             // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷
             if !f.violations.is_empty() {
                 eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
             }
-            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() {
+            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() || !f.noreturn_calls.is_empty() {
                 out.push(f);
             }
         }
