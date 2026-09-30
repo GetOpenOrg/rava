@@ -189,7 +189,7 @@ impl<'a> Engine<'a> {
                 let s = self.value_set(&r);
                 // 精确接收者：少量时逐个派发，否则经集合枢纽；open 部分经 open 枢纽
                 let exact = TypeSet { classes: s.classes, open: IdSet::default() };
-                let recv: Vec<u32> = self.receivers(m, &exact, owner).into_iter().collect();
+                let recv: Vec<u32> = self.receivers(m, &exact, owner);
                 if recv.len() < HUB_MIN {
                     for r in recv {
                         self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);

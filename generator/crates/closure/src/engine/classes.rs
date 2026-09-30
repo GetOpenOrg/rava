@@ -124,14 +124,19 @@ impl<'a> Engine<'a> {
     }
 
     /// 类型集里 ⊂ owner 的具体接收者（open 按 G 展开；展开过的方法 m 在 G 增长时重处理）
-    pub(super) fn receivers(&mut self, m: usize, s: &TypeSet, owner: u32) -> BTreeSet<u32> {
-        let mut out = BTreeSet::new();
+    /// 接收者集合（升序）：精确部分 ⊂ owner 者，open 部分按 G 展开
+    pub(super) fn receivers(&mut self, m: usize, s: &TypeSet, owner: u32) -> Vec<u32> {
+        let mut exact = Vec::new();
         for x in &s.classes {
             if self.sub(x, owner) {
-                out.insert(x);
+                exact.push(x);
             }
         }
-        if !s.open.is_empty() {
+        if s.open.is_empty() {
+            return exact;
+        }
+        let mut out = IdSet::from_sorted(exact);
+        {
             for o in s.open.iter() {
                 match (self.cur_call, self.cur_site) {
                     (Some(c), _) => {
@@ -156,7 +161,7 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        out
+        out.iter().collect()
     }
 
     // ── 类登记 ──────────────────────────────────────────────────────────────
