@@ -94,11 +94,8 @@ OUT="${1:?用法: $0 <out_dir> [tests...]}"; shift
 [ -n "$TESTS" ] || TESTS="${*:-$FOUR $ACCEPT}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 HOME_J="$(/usr/libexec/java_home -v "$JDKV" 2>/dev/null || echo "${JAVA_HOME:?}")"
-# 镜像独有类 / VM 支持类目录（与 codegen/closure_input.py 同源）
-IMAGES=$(python3 -c "
-import sys; sys.path.insert(0, '.')
-from codegen.jdk_resolver import JdkResolver
-print(' '.join('--image ' + d for d in JdkResolver(prefer_major=$JDKV).image_class_dirs()))")
+# 镜像独有类 / VM 支持类目录（与 rava build 缺省派生同一实现：resolve::image）
+IMAGES=$("$RAVA" image-dirs --java-home "$HOME_J" --runtime runtime/java_runtime | sed 's/^/--image /' | tr '\n' ' ')
 
 TABLE="$OUT/bench.md"
 echo "| 用例 | 墙钟 s | user s | sys s | 峰值 RSS MB | 峰值 footprint MB | 类 | 方法 | 上下文 | 分析次数 |" > "$TABLE"

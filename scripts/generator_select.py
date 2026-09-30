@@ -38,24 +38,22 @@ def resolve(cli_value: str | None) -> str:
     return g
 
 
-def run_rust(java_files: list[str], out_dir: str, *, strict: bool, locales: tuple[str, ...],
+def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict: bool, locales: tuple[str, ...],
              libs: tuple[str, ...] = (), batch: bool = False, debug: bool = False, trace_class: str = '',
              precheck_only: bool = False, raw_sites: str = '') -> None:
-    """`rava build --no-run`：javac → 闭包 → 发射进 out_dir（overlay 已由调用方完成，rava 内幂等重放）。
+    """`rava build --no-run`：（clean 时先清空 out_dir）overlay → javac → 闭包 → 发射进 out_dir。
+
+    镜像独有 / VM 支持类目录由 rava 自行派生（resolve::image），不经 codegen。
 
     libs 为 main.py `--lib` 原样规格（NAME=JAR[:seed=FQN,…]），解析与校验在 rava 内完成"""
     home = os.environ.get('JAVA_HOME', '')
     if not home:
         sys.exit('Rust 生成器需要 JAVA_HOME（main.py 经 jdk_select.apply_jdk 设置）')
-    # 镜像独有 / VM 支持类目录：Rust 侧尚无 jimage 提取，沿用 Python 解析器的缓存产物
-    sys.path.insert(0, _REPO)
-    from codegen.jdk_resolver import JdkResolver
-    images = JdkResolver(java_home=home).image_class_dirs()
     cmd = ['cargo', 'run', '--release', '-q', '--manifest-path', _GENERATOR_MANIFEST,
            '--target-dir', _RAVA_TARGET, '--', 'build', *[os.path.abspath(f) for f in java_files],
            '--java-home', home, '--runtime', _RUNTIME, '--out', os.path.abspath(out_dir), '--no-run']
-    for d in images:
-        cmd += ['--image', d]
+    if clean:
+        cmd.append('--clean')
     for loc in locales:
         cmd += ['--locale', loc]
     for spec in libs:

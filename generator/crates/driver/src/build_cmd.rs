@@ -91,6 +91,19 @@ fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]
     Ok(cp)
 }
 
+/// `--image` 缺省：由 JDK 镜像与 `runtime/java_support` 派生（[`resolve::image`]）；显式给出则原样使用
+fn image_dirs(o: &BuildOpts, home: &Path, rt: &Path) -> Vec<PathBuf> {
+    if !o.images.is_empty() {
+        return o.images.clone();
+    }
+    resolve::image::image_class_dirs(home, &support_root(rt))
+}
+
+/// VM 支持类源码根：与手写运行时同级的 `java_support/`
+pub fn support_root(rt: &Path) -> PathBuf {
+    rt.parent().unwrap_or(rt).join("java_support")
+}
+
 fn simple(n: &str) -> &str {
     n.rsplit('/').next().unwrap_or(n)
 }
@@ -264,7 +277,7 @@ pub fn run_build(args: &Args) -> Result<(), String> {
     let classes = cin.join("classes");
     let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs)?;
     javac(&home, &o.inputs, &jars, &classes)?;
-    let cp = class_path(&classes, &jars, &home, &o.images)?;
+    let cp = class_path(&classes, &jars, &home, &image_dirs(&o, &home, &rt))?;
     let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
     let facts = analyze(&cp, &rt, &user[0], &o, &seed_classes, &cin.join("closure.json"))?;
     let java_files = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
@@ -296,7 +309,7 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
         }
         remove_dir(&out)?;
     }
-    let cp = class_path(&classes, &[], &home, &o.images)?;
+    let cp = class_path(&classes, &[], &home, &image_dirs(&o, &home, &rt))?;
     let user = user_order(&cp, o.java_files(Mode::Emit), None)?;
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
     let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &[], o: &o };

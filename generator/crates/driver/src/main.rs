@@ -3,6 +3,7 @@
 //! - `closure`：精确闭包分析（XTA + 抽象解释 + 手写层 syn 扫描），输出 closure.json / 溯源 / 报告
 //! - `build`：javac → 闭包 → 发射 scratch →（缺省）cargo run
 //! - `emit`：既有 closure.json → 发射 scratch
+//! - `image-dirs`：镜像独有 / VM 支持类目录（`build` / `emit` 未给 `--image` 时的缺省来源），每行一个
 
 mod build_cmd;
 mod build_libs;
@@ -17,7 +18,8 @@ fn usage() -> ExitCode {
     eprintln!(
         "用法：\n  rava dump-classes [--jdk <主版本> | --java-home <路径>] [--module <jmod 名>] [--prefix <包前缀>]\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N]\n  \
          rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]\n  \
-         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]"
+         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]\n  \
+         rava image-dirs [--jdk N | --java-home P] [--runtime R]"
     );
     ExitCode::from(2)
 }
@@ -41,6 +43,16 @@ pub fn java_home(args: &Args) -> Result<PathBuf, String> {
     resolve::jdk::find_java_home(major).ok_or_else(|| "找不到含 jmods/ 的 JDK".to_string())
 }
 
+/// `rava image-dirs`：与 `build` 缺省派生同一实现（[`resolve::image`]）
+fn image_dirs(args: &Args) -> Result<(), String> {
+    let home = java_home(args)?;
+    let rt = closure_cmd::find_runtime_dir(args.opt("--runtime").map(PathBuf::from))?;
+    for d in resolve::image::image_class_dirs(&home, &build_cmd::support_root(&rt)) {
+        println!("{}", d.display());
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let mut argv = std::env::args().skip(1);
     let Some(cmd) = argv.next() else { return usage() };
@@ -50,6 +62,7 @@ fn main() -> ExitCode {
         "closure" => closure_cmd::run(&args),
         "build" => build_cmd::run_build(&args),
         "emit" => build_cmd::run_emit(&args),
+        "image-dirs" => image_dirs(&args),
         _ => return usage(),
     };
     match r {

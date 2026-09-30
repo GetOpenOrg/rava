@@ -192,3 +192,22 @@ fn more_specific_default_overrides_ancestor_injected_slot() {
     );
     std::fs::remove_dir_all(&out).ok();
 }
+
+/// `rava image-dirs`：每行一个已存在的类目录；VM 支持类按模块给出（与 `build` 缺省派生同源）
+#[test]
+fn image_dirs_lists_existing_class_dirs() {
+    if resolve::jdk::find_java_home(Some(21)).is_none() {
+        return;
+    }
+    let o = Command::new(env!("CARGO_BIN_EXE_rava"))
+        .args(["image-dirs", "--jdk", "21", "--runtime"])
+        .arg(runtime_dir())
+        .output()
+        .expect("启动 rava");
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let text = String::from_utf8_lossy(&o.stdout).to_string();
+    let dirs: Vec<&str> = text.lines().collect();
+    assert!(dirs.iter().all(|d| Path::new(d).is_dir()), "{text}");
+    let modules = std::fs::read_dir(runtime_dir().join("../java_support")).unwrap().flatten().filter(|e| e.path().is_dir()).count();
+    assert!(dirs.iter().filter(|d| d.contains("/rava/vmsupport/")).count() == modules, "{text}");
+}
