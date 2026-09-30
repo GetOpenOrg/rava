@@ -93,13 +93,28 @@ pub(super) fn fold_of(method: String, code: &classfile::Code, all: &[Rc<Analysis
             },
             _ => continue,
         };
-        if consts.iter().any(|c| c.0 == *pc) {
+        if !exportable(value, &ty) || consts.iter().any(|c| c.0 == *pc) {
             continue;
         }
         consts.push((*pc, *opcode, value.clone(), ty));
     }
     consts.sort_by_key(|c| c.0);
     Fold { method, dead_pcs, dead_handlers, dead_catches: Vec::new(), consts, null_recv: Vec::new(), props: Vec::new(), violations }
+}
+
+/// 常量值能否按 folds 约定导出到该读取点：整型族 ↔ 整数、J ↔ long、String 槽 ↔ 字符串、引用槽 ↔ null。
+/// 其余组合不导出（消费方按读取点类型换成装载指令）：
+/// - 字符串值经声明为非 String 的返回 / 字段（`requireNonNull(s, …)` 返回 Object）到达——换成 `ldc`
+///   会改变该点的静态类型；
+/// - 类字面量值（V::Class）、奇偶值（V::Par）等没有装载指令等价物的抽象值。
+fn exportable(v: &V, ty: &str) -> bool {
+    match v {
+        V::Int(_) => matches!(ty, "Z" | "B" | "C" | "S" | "I"),
+        V::Long(_) => ty == "J",
+        V::Str(_) => ty.strip_prefix('L').and_then(|t| t.strip_suffix(';')) == Some(crate::absint::STRING),
+        V::Null => ty.starts_with('L') || ty.starts_with('['),
+        _ => false,
+    }
 }
 
 impl Engine<'_> {
@@ -156,5 +171,26 @@ impl Engine<'_> {
             }
         }
         hit.into_iter().filter(|(_, h)| !h).map(|(pc, _)| pc).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exportable_matches_slot_type() {
+        let s = V::Str(Rc::from("UTF-16BE"));
+        let string_slot = format!("L{};", crate::absint::STRING);
+        assert!(exportable(&s, &string_slot));
+        // 经 Object 返回的字符串（声明为基类型的恒等返回）不导出
+        assert!(!exportable(&s, "Lx/Base;"));
+        assert!(exportable(&V::Int(1), "Z"));
+        assert!(!exportable(&V::Int(1), "J"));
+        assert!(exportable(&V::Long(1), "J"));
+        assert!(exportable(&V::Null, "[I"));
+        assert!(!exportable(&V::Null, "I"));
+        assert!(!exportable(&V::Par(true), "I"));
+        assert!(!exportable(&V::Class(Rc::from("x/Y"), 0), "Lx/Mirror;"));
     }
 }
