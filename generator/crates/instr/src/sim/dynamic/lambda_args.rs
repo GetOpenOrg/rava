@@ -10,7 +10,7 @@ use super::wrapper_of;
 use crate::build::{id, ir_ty, text, ty_text};
 use crate::coerce::{cast_node, same_generic_family};
 use crate::env::InstrEnv;
-use crate::error::{unported, InstrResult};
+use crate::error::InstrResult;
 
 /// 闭包内调用实现方法的实参文本
 pub(super) struct CallArgs {
