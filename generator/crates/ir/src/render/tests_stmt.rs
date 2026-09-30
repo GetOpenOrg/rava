@@ -192,3 +192,9 @@ fn file() {
     assert_eq!(rd.file(&items, "//! pre\n\n"), "//! pre\n\npub mod a;\n\n// x\n");
     assert_eq!(rd.file(&[], ""), "\n");
 }
+
+#[test]
+fn discard_let() {
+    let st = Stmt::Let(crate::LetStmt::new(crate::Ident::discard(), None, Some(var("x"))));
+    assert_eq!(s(&st, 0), "let _ = x;");
+}
