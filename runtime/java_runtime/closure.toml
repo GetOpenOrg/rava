@@ -101,13 +101,12 @@ packages = [
     # 0 个 ACC_NATIVE）。SecurityConstants.PROVIDER_VER 与 CryptoAlgorithmConstraints.permits 的过渡手写已删；
     # Debug.getInstance / isOn / isVerbose 仍为过渡手写（阻塞在分析器系统属性折叠，见 debug_impl.rs）。
     "sun/security/util/",
+    # C1d：方法句柄类型工具（Wrapper / BytecodeDescriptor / VerifyAccess / ValueConversions / BytecodeName /
+    # VerifyType，纯 Java，0 个 ACC_NATIVE）。原 Wrapper / BytecodeDescriptor / VerifyAccess 的过渡手写已删：
+    # 枚举常量、描述符解析与访问检查（含 Module 导出判定）均由字节码翻译承载。
+    "sun/invoke/util/",
 ]
 classes = [
-    # MH-native：asType / 组合子的类型转换与名字工具。纯 Java（装拆箱 / 拓宽句柄经 IMPL_LOOKUP
-    # 按名查找本类静态方法——常量反射引用扫描入链）。
-    "sun/invoke/util/ValueConversions",
-    "sun/invoke/util/BytecodeName",
-    "sun/invoke/util/VerifyType",
 
     # file: 协议 URL 处理器（纯 Java 的 URLStreamHandler 子类；URL$DefaultFactory 对 file 协议直接
     # new）。消费方：NativePRNG.getEgdUrl 的 `new URL("file:/dev/random")`（SUN provider 初始化）。
