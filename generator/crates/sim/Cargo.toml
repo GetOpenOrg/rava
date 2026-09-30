@@ -1,0 +1,11 @@
+[package]
+name = "sim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ty.workspace = true
+ir.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
