@@ -28,6 +28,7 @@ use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members};
 mod sets;
 mod facts;
 mod fold;
+mod forward;
 mod classes;
 mod reflect;
 mod flow;
@@ -374,6 +375,8 @@ pub struct Engine<'a> {
     containers: HashMap<u32, bool>,
     /// 新鲜工厂方法判定缓存（按成员）
     factories: HashMap<MemberRef, bool>,
+    /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward`）
+    forwarders: HashMap<MemberRef, u64>,
     pub inited: IndexMap<String, Via>,
 
     flows: HashMap<Node, Vec<(Node, u32)>>,
@@ -522,6 +525,7 @@ impl<'a> Engine<'a> {
             obj_chain: HashMap::default(),
             containers: HashMap::default(),
             factories: HashMap::default(),
+            forwarders: HashMap::default(),
             inited: IndexMap::new(),
             flows: HashMap::default(),
             flow_seen: HashSet::default(),

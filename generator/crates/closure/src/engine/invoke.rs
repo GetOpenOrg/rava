@@ -110,13 +110,14 @@ impl<'a> Engine<'a> {
                 // 只有返回引用的辅助方法随上下文克隆（返回值按容器对象分开）；返回基本类型 / void 的静态方法克隆收益可忽略，按本体共享
                 // 上下文无关的调用方调用新鲜工厂（返回本方法新分配的容器 / 引用数组）：按调用点克隆，
                 // 否则各调用点的实参元素经同一个返回对象汇合（`Arrays.copyOf` 的副本数组）
+                // 分派转发方法（形参流到分派接收者）按调用点克隆，优先于以上规则（边界计划 §6.2 G1）
                 let caller_ctx = self.methods[m].ctx;
                 let ctx = match caller_ctx {
                     _ if !md.ret.as_ref().is_some_and(|r| r.is_reference()) => NOCTX,
                     NOCTX if self.fresh_factory(&resolved) => self.site_ctx(m, off),
                     c => c,
                 };
-                let t = self.method_ctx(resolved, ctx, via);
+                let t = self.callee(m, off, resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &a, ret, res);
             }
             op::INVOKESPECIAL => {
