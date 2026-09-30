@@ -81,8 +81,7 @@ impl VirtualThread {
     pub fn __impl_joinNanos(&self, nanos: i64) -> Result<bool> {
         let obj = Object::from(Clone::clone(self));
         let identity = obj.0.__identity() as usize;
-        let deadline = (nanos > 0).then(|| std::time::Instant::now()
-            + std::time::Duration::from_nanos(nanos as u64));
+        let deadline = (nanos > 0).then(|| crate::monitor::deadline_after(std::time::Duration::from_nanos(nanos as u64)));
         let guard = crate::monitor::MonitorGuard::acquire(&obj)?;
         while self.__get_state() != TERMINATED {
             let (ms, ns) = match deadline {

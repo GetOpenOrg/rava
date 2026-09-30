@@ -178,9 +178,8 @@ impl Monitor {
                 if millis == 0 && nanos == 0 {
                     self.wait_q.wait(&mut st);
                 } else {
-                    let deadline = Instant::now()
-                        + Duration::from_millis(millis as u64)
-                        + Duration::from_nanos(nanos as u64);
+                    let deadline = deadline_after(Duration::from_millis(millis as u64)
+                        .saturating_add(Duration::from_nanos(nanos as u64)));
                     self.wait_q.wait_until(&mut st, deadline);
                 }
             }
@@ -298,10 +297,10 @@ pub fn park(thread_identity: usize, is_absolute: bool, time: i64) {
         if time <= now_ms {
             None
         } else {
-            Some(Instant::now() + Duration::from_millis((time - now_ms) as u64))
+            Some(deadline_after(Duration::from_millis((time - now_ms) as u64)))
         }
     } else if time > 0 {
-        Some(Instant::now() + Duration::from_nanos(time as u64))
+        Some(deadline_after(Duration::from_nanos(time as u64)))
     } else {
         None
     };
@@ -369,7 +368,7 @@ fn take_interrupt(thread_identity: usize) -> bool {
 /// `Thread.sleep0`：按挂钟驻留，可被中断唤醒。返回 true = 被中断（镜像已清）。
 pub fn sleep_interruptibly(thread_identity: usize, nanos: i64) -> bool {
     let p = parker_for(thread_identity);
-    let deadline = Instant::now() + Duration::from_nanos(nanos.max(0) as u64);
+    let deadline = deadline_after(Duration::from_nanos(nanos.max(0) as u64));
     crate::gil::blocking(|| {
         let mut st = p.state.lock();
         while !st.interrupted {
@@ -379,6 +378,14 @@ pub fn sleep_interruptibly(thread_identity: usize, nanos: i64) -> bool {
         }
         std::mem::replace(&mut st.interrupted, false)
     })
+}
+
+/// 相对超时 → 截止时刻。Java 超时取值可达 `Long.MAX_VALUE`（毫秒 / 纳秒），`Instant + Duration`
+/// 超出平台时钟可表示范围会 panic；超时统一截到 2^32 秒（约 136 年，观测上等同无限期）
+/// 再相加，任何 Java 合法超时都得到有效截止时刻。
+pub(crate) fn deadline_after(timeout: Duration) -> Instant {
+    const MAX_TIMEOUT: Duration = Duration::from_secs(1 << 32);
+    Instant::now() + timeout.min(MAX_TIMEOUT)
 }
 
 // ── 身份侧表 ─────────────────────────────────────────────────────────────────
