@@ -1,7 +1,7 @@
 # Rust 生成器（发射层）实施计划：单二进制 `rava build`
 
 > 日期：2026-09-30
-> 状态（2026-09-30）：P2（`ty`）/ P3（`ir`）已完成并合入；P4a（`sim` / `cfg`）、P1（输入层）子代理进行中；P4b（`instr`）待 P4a 合入后派发；P0 / P5 / C3 待排
+> 状态（2026-09-30）：P1（`input`）/ P2（`ty`）/ P3（`ir`）/ P4a（`sim` / `cfg`）/ P4b（`instr`，golden 3 例全量逐字节一致）已合入；P4c（`method`）、P5a（`emit` 骨架）+ P0 子代理进行中；P5b / C3 待排
 > 决策（用户 2026-09-30 拍板）：
 > ① Python 生成器用 Rust 重写，与 Rust 闭包分析器合为**一个二进制** `rava build`：闭包分析 → 发射 → cargo，闭包结果进程内传递；管道形态（`rava closure … -o x.json` / `rava emit x.json`）只作调试与审计入口。
 > ② **C3（发射层消费 levels / dispatch / folds）直接在 Rust 生成器做**，Python 侧不再投入。
@@ -70,9 +70,9 @@ Python 模块内部状态大量以字符串往返，Rust 侧不复刻其 API 形
 - 子代理只编译 `generator/`（`--target-dir` 置于各自 worktree 的 `build/gen-target`），**不跑 e2e**；golden 转储需要的一次转译可跑（单测试，`--no-run`）。
 - 每个子代理只新增自己的 crate + 转储脚本 + workspace `members` 一行；不改其他 crate、不改 `codegen/`、不改 `runtime/`。
 - 交付：分支上的提交（`cargo test -p <crate>` 与 `cargo clippy -p <crate>` 通过，golden 全等或差异清单明示）。主会话审查后合并回 `rust-closure-analyzer`。
-- 已合入：P2（`rust-emitter-ty`）、P3（`rust-emitter-ir`），分支与 worktree 已清理。
-- 当前批次：P4a（`rust-emitter-sim`：栈模拟 + CFG 结构化）、P1（`rust-emitter-input`：Registry / 折叠 / manifest）。
-- 下一批：P4b（指令翻译，依赖 P4a）；P0 + P5 同批（依赖 P1 / P4b）；C3 在 P5 切换后。
+- 已合入：P1（`rust-emitter-input`）、P2（`rust-emitter-ty`）、P3（`rust-emitter-ir`）、P4a（`rust-emitter-sim`）、P4b（`rust-emitter-instr`），分支与 worktree 已清理。
+- 当前批次：P4c（`rust-emitter-method`：方法体，golden 按 `/*BODY 类.名:描述符*/` 占位逐方法对照）、P5a + P0（`rust-emitter-emit`）。子代理禁止再派发子代理 / fork，`CARGO_BUILD_JOBS=2`。
+- 下一批：P5b（`MethodBodyEmitter` 适配接通 method → emit，`compare_trees.sh` 27 例逐字节）；C3 在 P5b 切换后。
 - 合入后同步删除子代理 worktree 与分支。
 
 ## 六、硬性规则（在 2026-09-20 方案 §4 基础上）
