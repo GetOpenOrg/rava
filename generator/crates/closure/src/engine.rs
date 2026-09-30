@@ -69,7 +69,7 @@ mod scc;
 
 use graph::FlowGraph;
 use stats::{Phase, Why};
-pub use stats::peak_rss_mb;
+pub use stats::{peak_mem_mb, peak_rss_mb};
 
 pub use seeds::SeedState;
 
