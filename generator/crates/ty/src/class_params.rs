@@ -13,7 +13,10 @@ use crate::TyCtx;
 
 /// 基本类型描述符字符（含 `V`）
 pub(crate) fn is_prim_char(c: u8) -> bool {
-    matches!(c, b'V' | b'I' | b'J' | b'F' | b'D' | b'Z' | b'B' | b'C' | b'S')
+    matches!(
+        c,
+        b'V' | b'I' | b'J' | b'F' | b'D' | b'Z' | b'B' | b'C' | b'S'
+    )
 }
 
 /// 跳过一个 FieldTypeSignature，返回其后位置
@@ -24,7 +27,10 @@ pub fn skip_field_type_sig(sig: &str, i: usize) -> usize {
     };
     match c {
         _ if is_prim_char(c) => i + 1,
-        b'T' => sig[i + 1..].find(';').map(|p| i + 1 + p + 1).unwrap_or(b.len()),
+        b'T' => sig[i + 1..]
+            .find(';')
+            .map(|p| i + 1 + p + 1)
+            .unwrap_or(b.len()),
         b'L' => {
             let mut depth = 0i32;
             let mut j = i + 1;
@@ -79,7 +85,8 @@ pub fn parse_class_type_params(sig: &str) -> Vec<String> {
 
 /// `this$N`（N 为十进制数字）
 pub(crate) fn is_outer_this_field(name: &str) -> bool {
-    name.strip_prefix("this$").is_some_and(|d| !d.is_empty() && d.bytes().all(|c| c.is_ascii_digit()))
+    name.strip_prefix("this$")
+        .is_some_and(|d| !d.is_empty() && d.bytes().all(|c| c.is_ascii_digit()))
 }
 
 /// 内部类实例绑定的外部实例所属类；无外部实例 → 空串。
@@ -126,7 +133,10 @@ impl<'a> TyCtx<'a> {
             return None;
         }
         let outer = self.reg.get(enclosing)?;
-        outer.methods().iter().find(|m| m.name == name && m.desc == desc)
+        outer
+            .methods()
+            .iter()
+            .find(|m| m.name == name && m.desc == desc)
     }
 
     /// 类在 Rust 侧的有效类型形参 = 外围作用域的类型变量（被自身同名形参遮蔽者除外）+ 自身形参
@@ -140,12 +150,20 @@ impl<'a> TyCtx<'a> {
         let mut visiting = BTreeSet::new();
         let result = Rc::new(self.effective_params_uncached(ci, &mut visiting));
         if cacheable {
-            self.reg.caches.effective_params.borrow_mut().insert(ci.name().to_string(), result.clone());
+            self.reg
+                .caches
+                .effective_params
+                .borrow_mut()
+                .insert(ci.name().to_string(), result.clone());
         }
         result
     }
 
-    fn effective_params_uncached(&self, ci: &ClassInfo, visiting: &mut BTreeSet<String>) -> Vec<String> {
+    fn effective_params_uncached(
+        &self,
+        ci: &ClassInfo,
+        visiting: &mut BTreeSet<String>,
+    ) -> Vec<String> {
         let own = parse_class_type_params(ci.generic_signature());
         if self.reg.is_empty() {
             return own;
@@ -182,9 +200,18 @@ mod tests {
 
     #[test]
     fn class_type_params() {
-        assert_eq!(parse_class_type_params("<E:Ljava/lang/Object;>Ljava/lang/Object;"), ["E"]);
-        assert_eq!(parse_class_type_params("<K:Ljava/lang/Object;V:Ljava/lang/Object;>Lp/A<TK;>;"), ["K", "V"]);
-        assert_eq!(parse_class_type_params("<T::Lp/I<TT;>;:Lp/J;>Ljava/lang/Object;"), ["T"]);
+        assert_eq!(
+            parse_class_type_params("<E:Ljava/lang/Object;>Ljava/lang/Object;"),
+            ["E"]
+        );
+        assert_eq!(
+            parse_class_type_params("<K:Ljava/lang/Object;V:Ljava/lang/Object;>Lp/A<TK;>;"),
+            ["K", "V"]
+        );
+        assert_eq!(
+            parse_class_type_params("<T::Lp/I<TT;>;:Lp/J;>Ljava/lang/Object;"),
+            ["T"]
+        );
         assert!(parse_class_type_params("Ljava/lang/Object;").is_empty());
         assert!(parse_class_type_params("").is_empty());
     }

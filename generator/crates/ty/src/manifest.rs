@@ -33,9 +33,14 @@ impl std::error::Error for ManifestError {}
 impl Manifest {
     /// 从 `runtime/java_runtime` 目录读取
     pub fn load(runtime_dir: &Path) -> Result<Manifest, ManifestError> {
-        let erased = read_list(runtime_dir, "signature_erased_interfaces.txt").into_iter().collect();
+        let erased = read_list(runtime_dir, "signature_erased_interfaces.txt")
+            .into_iter()
+            .collect();
         let abbrev = read_map(runtime_dir, "overload_abbrev.txt")?;
-        Ok(Manifest { erased_interfaces: erased, overload_abbrev: abbrev })
+        Ok(Manifest {
+            erased_interfaces: erased,
+            overload_abbrev: abbrev,
+        })
     }
 }
 
@@ -43,7 +48,11 @@ fn read_list(dir: &Path, name: &str) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(dir.join(name)) else {
         return Vec::new();
     };
-    text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(str::to_string).collect()
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_string)
+        .collect()
 }
 
 fn read_map(dir: &Path, name: &str) -> Result<BTreeMap<String, String>, ManifestError> {
@@ -52,7 +61,10 @@ fn read_map(dir: &Path, name: &str) -> Result<BTreeMap<String, String>, Manifest
         let mut it = line.splitn(2, char::is_whitespace);
         let key = it.next().unwrap_or_default();
         let Some(val) = it.next().map(str::trim).filter(|v| !v.is_empty()) else {
-            return Err(ManifestError { file: name.to_string(), line });
+            return Err(ManifestError {
+                file: name.to_string(),
+                line,
+            });
         };
         out.insert(key.to_string(), val.to_string());
     }

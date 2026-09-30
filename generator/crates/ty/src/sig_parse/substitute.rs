@@ -5,7 +5,12 @@ use std::collections::BTreeMap;
 use crate::class_params::parse_class_type_params;
 
 /// 把 `sig[i..]` 处的一个类型签名写入 `out`（类型变量按 mapping 代入），返回其后位置
-fn substitute_type_sig(sig: &str, i: usize, out: &mut String, mapping: &BTreeMap<String, String>) -> usize {
+fn substitute_type_sig(
+    sig: &str,
+    i: usize,
+    out: &mut String,
+    mapping: &BTreeMap<String, String>,
+) -> usize {
     let b = sig.as_bytes();
     let Some(&c) = b.get(i) else {
         return i;
@@ -63,7 +68,10 @@ fn substitute_type_sig(sig: &str, i: usize, out: &mut String, mapping: &BTreeMap
 
 /// 签名里的类型变量按 mapping（名字 → 类型签名）代入；方法自身声明的类型形参
 /// 遮蔽同名外层变量。形参段缺 `:` 的残缺签名 → None（Python 抛 ValueError）。
-pub fn substitute_signature_type_vars(sig: &str, mapping: &BTreeMap<String, String>) -> Option<String> {
+pub fn substitute_signature_type_vars(
+    sig: &str,
+    mapping: &BTreeMap<String, String>,
+) -> Option<String> {
     if sig.is_empty() || mapping.is_empty() {
         return Some(sig.to_string());
     }
@@ -74,7 +82,11 @@ pub fn substitute_signature_type_vars(sig: &str, mapping: &BTreeMap<String, Stri
     let mut mapping = mapping;
     if b[0] == b'<' {
         let own = parse_class_type_params(sig);
-        shadowed = mapping.iter().filter(|(k, _)| !own.contains(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        shadowed = mapping
+            .iter()
+            .filter(|(k, _)| !own.contains(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         mapping = &shadowed;
         if mapping.is_empty() {
             return Some(sig.to_string());
@@ -112,17 +124,26 @@ mod tests {
     use super::*;
 
     fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn substitutes_and_shadows() {
         let m = map(&[("E", "Lp/S;"), ("T", "Lp/X;")]);
-        assert_eq!(substitute_signature_type_vars("(TE;Lp/L<TE;>;)[TE;", &m).as_deref(), Some("(Lp/S;Lp/L<Lp/S;>;)[Lp/S;"));
+        assert_eq!(
+            substitute_signature_type_vars("(TE;Lp/L<TE;>;)[TE;", &m).as_deref(),
+            Some("(Lp/S;Lp/L<Lp/S;>;)[Lp/S;")
+        );
         assert_eq!(
             substitute_signature_type_vars("<T:Ljava/lang/Object;>(TT;TE;)TT;", &m).as_deref(),
             Some("<T:Ljava/lang/Object;>(TT;Lp/S;)TT;")
         );
-        assert_eq!(substitute_signature_type_vars("Lp/A<+TE;*>;", &m).as_deref(), Some("Lp/A<+Lp/S;*>;"));
+        assert_eq!(
+            substitute_signature_type_vars("Lp/A<+TE;*>;", &m).as_deref(),
+            Some("Lp/A<+Lp/S;*>;")
+        );
     }
 }

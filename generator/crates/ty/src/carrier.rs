@@ -24,6 +24,7 @@ impl TyCtx<'_> {
 
     /// `carrier_type_for_ident(t) == t`（按渲染文本比较，与 Python 串比较同口径）
     pub fn is_carrier(&self, t: &RsType) -> bool {
-        self.carrier_type_for_ident(t).is_some_and(|c| c.render(self.names) == t.render(self.names))
+        self.carrier_type_for_ident(t)
+            .is_some_and(|c| c.render(self.names) == t.render(self.names))
     }
 }

@@ -53,8 +53,12 @@ impl TyCtx<'_> {
                             let start = i;
                             let (t, next) = self.parse_one_type(sig, i, type_params, None);
                             i = next;
-                            if first.is_none() && t.render(self.names) != "Object" && !self.is_carrier(&t) {
-                                if let (Some(bb), b'L') = (bound_binaries.as_deref_mut(), b[start]) {
+                            if first.is_none()
+                                && t.render(self.names) != "Object"
+                                && !self.is_carrier(&t)
+                            {
+                                if let (Some(bb), b'L') = (bound_binaries.as_deref_mut(), b[start])
+                                {
                                     let rest = &sig[start + 1..];
                                     let end = rest.find(['<', ';', '.']).unwrap_or(rest.len());
                                     bb.insert(name.to_string(), rest[..end].to_string());

@@ -16,8 +16,24 @@ use crate::registry::Registry;
 
 /// 发射面以裸名引用的 prelude 名（`java_runtime::prelude` 再导出 + std prelude）
 pub const PRELUDE_CONFLICT_NAMES: [&str; 18] = [
-    "JArray", "JvmError", "Result", "Object", "ObjectVTable", "String", "MonitorGuard", "Rc", "__Shared", "RefCell",
-    "Option", "Some", "None", "Ok", "Err", "Vec", "Clone", "Default",
+    "JArray",
+    "JvmError",
+    "Result",
+    "Object",
+    "ObjectVTable",
+    "String",
+    "MonitorGuard",
+    "Rc",
+    "__Shared",
+    "RefCell",
+    "Option",
+    "Some",
+    "None",
+    "Ok",
+    "Err",
+    "Vec",
+    "Clone",
+    "Default",
 ];
 
 /// prelude 名的本主（不参与任何冲突组）
@@ -46,7 +62,11 @@ fn qualify(binary: &str) -> String {
 
 impl ShortNames {
     pub fn build(reg: &Registry) -> ShortNames {
-        let canonical: BTreeSet<&str> = CANONICAL_OWNERS.iter().copied().filter(|b| reg.contains(b)).collect();
+        let canonical: BTreeSet<&str> = CANONICAL_OWNERS
+            .iter()
+            .copied()
+            .filter(|b| reg.contains(b))
+            .collect();
         let mut groups: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for ci in reg.iter() {
             let b = ci.name();
@@ -77,8 +97,12 @@ impl ShortNames {
             }
         }
         prelude_disambiguated.sort();
-        let mut names =
-            ShortNames { qualified, prelude_disambiguated, index: BTreeMap::new(), iface_shorts: BTreeSet::new() };
+        let mut names = ShortNames {
+            qualified,
+            prelude_disambiguated,
+            index: BTreeMap::new(),
+            iface_shorts: BTreeSet::new(),
+        };
         for ci in reg.iter_insertion() {
             let short = names.short(ci.name()).into_owned();
             if ci.is_interface() {

@@ -19,7 +19,10 @@ pub fn parse_descriptor_params(desc: &str) -> Vec<String> {
 
 /// 方法描述符 → 返回描述符（格式不符 → `V`）
 pub fn parse_descriptor_return(desc: &str) -> &str {
-    match desc.strip_prefix('(').and_then(|r| r.find(')').map(|p| &r[p + 1..])) {
+    match desc
+        .strip_prefix('(')
+        .and_then(|r| r.find(')').map(|p| &r[p + 1..]))
+    {
         Some(r) => r,
         None => "V",
     }
@@ -76,8 +79,17 @@ fn prim_suffix(c: u8) -> Option<&'static str> {
 }
 
 fn class_suffix(manifest: &Manifest, binary: &str) -> String {
-    let short = binary.rsplit('/').next().unwrap_or(binary).to_lowercase().replace('$', "_");
-    manifest.overload_abbrev.get(&short).cloned().unwrap_or(short)
+    let short = binary
+        .rsplit('/')
+        .next()
+        .unwrap_or(binary)
+        .to_lowercase()
+        .replace('$', "_");
+    manifest
+        .overload_abbrev
+        .get(&short)
+        .cloned()
+        .unwrap_or(short)
 }
 
 /// 描述符参数部分 → 重载后缀（不含分隔符），如 `(ITE;)V` → `i_e`
@@ -115,7 +127,11 @@ pub fn descriptor_to_suffix(manifest: &Manifest, descriptor: &str) -> String {
                 Some(&k @ (b'L' | b'T')) => match find_semi(j + 1) {
                     Some(end) => {
                         let body = &s[j + 1..end];
-                        let name = if k == b'L' { class_suffix(manifest, body) } else { body.to_lowercase() };
+                        let name = if k == b'L' {
+                            class_suffix(manifest, body)
+                        } else {
+                            body.to_lowercase()
+                        };
                         parts.push(format!("arr_{name}"));
                         i = end + 1;
                     }
@@ -201,15 +217,24 @@ mod tests {
     fn suffix_and_mangle() {
         let m = manifest();
         assert_eq!(descriptor_to_suffix(&m, "(ITE;)V"), "i_e");
-        assert_eq!(descriptor_to_suffix(&m, "(Ljava/lang/Object;[I[[Ljava/lang/String;)V"), "obj_arr_i_arr_str");
-        assert_eq!(descriptor_to_suffix(&m, "(Ljava/util/Map$Entry;[TT;)V"), "map_entry_arr_t");
+        assert_eq!(
+            descriptor_to_suffix(&m, "(Ljava/lang/Object;[I[[Ljava/lang/String;)V"),
+            "obj_arr_i_arr_str"
+        );
+        assert_eq!(
+            descriptor_to_suffix(&m, "(Ljava/util/Map$Entry;[TT;)V"),
+            "map_entry_arr_t"
+        );
         assert_eq!(mangle_name(&m, "add", "()V"), "add");
         assert_eq!(mangle_name(&m, "add", "(Ljava/lang/Integer;)Z"), "add_int");
     }
 
     #[test]
     fn descriptor_params() {
-        assert_eq!(parse_descriptor_params("(I[JLp/A;[[Lq/B;)V"), ["I", "[J", "Lp/A;", "[[Lq/B;"]);
+        assert_eq!(
+            parse_descriptor_params("(I[JLp/A;[[Lq/B;)V"),
+            ["I", "[J", "Lp/A;", "[[Lq/B;"]
+        );
         assert_eq!(parse_descriptor_return("(I)Lp/A;"), "Lp/A;");
         assert!(parse_descriptor_params("()V").is_empty());
     }

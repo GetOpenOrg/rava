@@ -67,7 +67,11 @@ impl ClassSpec {
         self
     }
     pub fn sup(mut self, s: &str) -> Self {
-        self.cf.super_name = if s.is_empty() { None } else { Some(s.to_string()) };
+        self.cf.super_name = if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        };
         self
     }
     pub fn ifaces(mut self, list: &[&str]) -> Self {
@@ -87,7 +91,10 @@ impl ClassSpec {
         self
     }
     pub fn enclosing(mut self, outer: &str, m: Option<(&str, &str)>) -> Self {
-        self.cf.enclosing_method = Some((outer.to_string(), m.map(|(n, d)| (n.to_string(), d.to_string()))));
+        self.cf.enclosing_method = Some((
+            outer.to_string(),
+            m.map(|(n, d)| (n.to_string(), d.to_string())),
+        ));
         self
     }
 }
@@ -106,7 +113,11 @@ impl Fixture {
             reg.insert(Rc::new(s.cf));
         }
         let names = ShortNames::build(&reg);
-        Fixture { reg, names, manifest: Manifest::default() }
+        Fixture {
+            reg,
+            names,
+            manifest: Manifest::default(),
+        }
     }
     pub fn ctx(&self) -> TyCtx<'_> {
         TyCtx::new(&self.reg, &self.names, &self.manifest)

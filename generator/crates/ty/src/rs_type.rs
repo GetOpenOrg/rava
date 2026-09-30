@@ -56,9 +56,14 @@ pub enum RsType {
     /// 根类 / 擦除载体 `Object`
     Object,
     /// 注册表内的类（或接口载体）；按短名渲染，实参非空时带 `<..>`
-    Class { binary: String, args: Vec<RsType> },
+    Class {
+        binary: String,
+        args: Vec<RsType>,
+    },
     /// 签名解析直映射的锚点类：按简单名渲染、不经短名消歧（`_CLASSNAME_MAP` 路径）
-    Bare { binary: String },
+    Bare {
+        binary: String,
+    },
     /// `JArray<elem>`
     Array(Box<RsType>),
     /// 作用域内类型形参
@@ -75,7 +80,10 @@ impl RsType {
     }
 
     pub fn class(binary: impl Into<String>, args: Vec<RsType>) -> RsType {
-        RsType::Class { binary: binary.into(), args }
+        RsType::Class {
+            binary: binary.into(),
+            args,
+        }
     }
 
     pub fn array(elem: RsType) -> RsType {
@@ -113,9 +121,10 @@ impl RsType {
     pub fn substitute(&self, mapping: &dyn Fn(&str) -> Option<RsType>) -> RsType {
         match self {
             RsType::Param(n) => mapping(n).unwrap_or_else(|| self.clone()),
-            RsType::Class { binary, args } => {
-                RsType::Class { binary: binary.clone(), args: args.iter().map(|a| a.substitute(mapping)).collect() }
-            }
+            RsType::Class { binary, args } => RsType::Class {
+                binary: binary.clone(),
+                args: args.iter().map(|a| a.substitute(mapping)).collect(),
+            },
             RsType::Array(e) => RsType::array(e.substitute(mapping)),
             _ => self.clone(),
         }
@@ -171,5 +180,9 @@ pub fn render_arg_list(args: &[RsType], names: &ShortNames) -> String {
 }
 
 fn bare_name(binary: &str) -> String {
-    binary.rsplit('/').next().unwrap_or(binary).replace('$', "_")
+    binary
+        .rsplit('/')
+        .next()
+        .unwrap_or(binary)
+        .replace('$', "_")
 }

@@ -68,7 +68,8 @@ impl TyCtx<'_> {
     /// 类实现的全部接口（自身 + 祖先类 + 超接口闭包）及其在 recv 视角下的类型实参，
     /// 广度优先、近者在前
     pub fn implemented_interface_views(&self, recv: &ClassInfo) -> Vec<(String, Vec<RsType>)> {
-        let anc_args: BTreeMap<String, Vec<RsType>> = self.ancestor_type_args(recv, None).into_iter().collect();
+        let anc_args: BTreeMap<String, Vec<RsType>> =
+            self.ancestor_type_args(recv, None).into_iter().collect();
         let mut queue: VecDeque<(&ClassInfo, BTreeMap<String, RsType>)> = VecDeque::new();
         queue.push_back((recv, BTreeMap::new()));
         let mut seen_cls = BTreeSet::from([recv.name().to_string()]);
@@ -77,8 +78,11 @@ impl TyCtx<'_> {
             seen_cls.insert(cur.to_string());
             let params = self.effective_class_type_params(cur_ci);
             let args = anc_args.get(cur).map(Vec::as_slice).unwrap_or(&[]);
-            let mapping =
-                params.iter().enumerate().map(|(i, p)| (p.clone(), args.get(i).cloned().unwrap_or(RsType::Object))).collect();
+            let mapping = params
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.clone(), args.get(i).cloned().unwrap_or(RsType::Object)))
+                .collect();
             queue.push_back((cur_ci, mapping));
             cur = cur_ci.super_class();
         }
@@ -89,9 +93,17 @@ impl TyCtx<'_> {
                 if !seen.insert(sup_bin.clone()) {
                     continue;
                 }
-                let args: Vec<RsType> = sup_args.iter().map(|a| a.substitute(&|n| mapping.get(n).cloned())).collect();
+                let args: Vec<RsType> = sup_args
+                    .iter()
+                    .map(|a| a.substitute(&|n| mapping.get(n).cloned()))
+                    .collect();
                 if let Some(sup_ci) = self.reg.get(&sup_bin) {
-                    let m = self.effective_class_type_params(sup_ci).iter().cloned().zip(args.iter().cloned()).collect();
+                    let m = self
+                        .effective_class_type_params(sup_ci)
+                        .iter()
+                        .cloned()
+                        .zip(args.iter().cloned())
+                        .collect();
                     queue.push_back((sup_ci, m));
                 }
                 out.push((sup_bin, args));
@@ -102,15 +114,21 @@ impl TyCtx<'_> {
 
     /// 类实现的全部接口 → 接口类型形参在 ci 视角下的类型签名（原始类型出现的接口不在结果里）；
     /// 按 BFS 发现序
-    pub fn interface_signature_views(&self, ci: &ClassInfo) -> Vec<(String, BTreeMap<String, String>)> {
+    pub fn interface_signature_views(
+        &self,
+        ci: &ClassInfo,
+    ) -> Vec<(String, BTreeMap<String, String>)> {
         let mut views = Vec::new();
         let mut queue: VecDeque<(&ClassInfo, SigMapping)> = VecDeque::new();
         queue.push_back((ci, Some(BTreeMap::new())));
         let mut seen = BTreeSet::from([ci.name().to_string()]);
         while let Some((cur_ci, mapping)) = queue.pop_front() {
             // Python dict(...)：同名重复时后者覆盖
-            let declared: BTreeMap<String, Vec<String>> = supertype_signature_args(cur_ci).into_iter().collect();
-            let supers = std::iter::once(cur_ci.super_class()).filter(|s| !s.is_empty()).chain(cur_ci.interfaces().iter().map(String::as_str));
+            let declared: BTreeMap<String, Vec<String>> =
+                supertype_signature_args(cur_ci).into_iter().collect();
+            let supers = std::iter::once(cur_ci.super_class())
+                .filter(|s| !s.is_empty())
+                .chain(cur_ci.interfaces().iter().map(String::as_str));
             for sup_bin in supers {
                 let Some(sup_ci) = self.reg.get(sup_bin) else {
                     continue;
@@ -121,7 +139,10 @@ impl TyCtx<'_> {
                 let params = self.effective_class_type_params(sup_ci);
                 let args = declared.get(sup_bin).map(Vec::as_slice).unwrap_or(&[]);
                 let mut sup_map = BTreeMap::new();
-                if let Some(m) = mapping.as_ref().filter(|_| !params.is_empty() && args.len() == params.len()) {
+                if let Some(m) = mapping
+                    .as_ref()
+                    .filter(|_| !params.is_empty() && args.len() == params.len())
+                {
                     for (p, a) in params.iter().zip(args) {
                         // 实参签名不以 `<` 开头，代入不会走形参段解析，不会失败
                         let v = substitute_signature_type_vars(a, m).unwrap_or_else(|| a.clone());
@@ -131,7 +152,11 @@ impl TyCtx<'_> {
                 if sup_ci.is_interface() && !sup_map.is_empty() {
                     views.push((sup_bin.to_string(), sup_map.clone()));
                 }
-                let next = if !sup_map.is_empty() || params.is_empty() { Some(sup_map) } else { None };
+                let next = if !sup_map.is_empty() || params.is_empty() {
+                    Some(sup_map)
+                } else {
+                    None
+                };
                 queue.push_back((sup_ci, next));
             }
         }

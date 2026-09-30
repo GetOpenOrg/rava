@@ -28,7 +28,11 @@ pub struct ClassInfo {
 
 impl ClassInfo {
     pub fn new(cf: Rc<ClassFile>) -> ClassInfo {
-        let signature = if cf.name == consts::CLASS { String::new() } else { cf.signature.clone().unwrap_or_default() };
+        let signature = if cf.name == consts::CLASS {
+            String::new()
+        } else {
+            cf.signature.clone().unwrap_or_default()
+        };
         ClassInfo { cf, signature }
     }
 
@@ -63,11 +67,19 @@ impl ClassInfo {
     }
     /// EnclosingMethod 的直接外围类（局部 / 匿名类才有；否则空串）
     pub fn enclosing_class(&self) -> &str {
-        self.cf.enclosing_method.as_ref().map(|(c, _)| c.as_str()).unwrap_or("")
+        self.cf
+            .enclosing_method
+            .as_ref()
+            .map(|(c, _)| c.as_str())
+            .unwrap_or("")
     }
     /// EnclosingMethod 的外围方法 (name, descriptor)；位于初始化器中时为 None
     pub fn enclosing_method(&self) -> Option<(&str, &str)> {
-        self.cf.enclosing_method.as_ref().and_then(|(_, m)| m.as_ref()).map(|(n, d)| (n.as_str(), d.as_str()))
+        self.cf
+            .enclosing_method
+            .as_ref()
+            .and_then(|(_, m)| m.as_ref())
+            .map(|(n, d)| (n.as_str(), d.as_str()))
     }
     /// ParsedMethod.is_constructor 口径：`<init>` 或与类名同名
     pub fn is_constructor(&self, m: &Method) -> bool {

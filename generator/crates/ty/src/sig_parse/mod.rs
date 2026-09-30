@@ -41,7 +41,9 @@ impl TyCtx<'_> {
             return Some(RsType::Object);
         }
         if binary == consts::CLASS {
-            return Some(RsType::Bare { binary: binary.to_string() });
+            return Some(RsType::Bare {
+                binary: binary.to_string(),
+            });
         }
         None
     }
@@ -113,7 +115,13 @@ impl TyCtx<'_> {
     }
 
     /// ClassTypeSignature：`L<name>(<args>)?(.<Inner>(<args>)?)*;`
-    fn parse_class_type(&self, sig: &str, i: usize, tps: &[String], bounds: Option<&Bounds>) -> (RsType, usize) {
+    fn parse_class_type(
+        &self,
+        sig: &str,
+        i: usize,
+        tps: &[String],
+        bounds: Option<&Bounds>,
+    ) -> (RsType, usize) {
         let b = sig.as_bytes();
         let mut j = i + 1;
         while j < b.len() && !is_name_end(b[j]) {
@@ -141,7 +149,9 @@ impl TyCtx<'_> {
                 }
                 let inner_ci = self.reg.get(&class_name);
                 type_args = match inner_ci {
-                    Some(inner) => self.inner_class_type_args(outer_ci, &type_args, inner, seg_args, tps),
+                    Some(inner) => {
+                        self.inner_class_type_args(outer_ci, &type_args, inner, seg_args, tps)
+                    }
                     None => seg_args,
                 };
                 outer_ci = inner_ci;
@@ -159,7 +169,8 @@ impl TyCtx<'_> {
                     let raw_eff = self.effective_class_type_params(raw_ci);
                     if !raw_eff.is_empty() {
                         let raw_own = parse_class_type_params(raw_ci.generic_signature());
-                        type_args = if raw_own.is_empty() && raw_eff.iter().all(|p| tps.contains(p)) {
+                        type_args = if raw_own.is_empty() && raw_eff.iter().all(|p| tps.contains(p))
+                        {
                             raw_eff.iter().map(|p| RsType::Param(p.clone())).collect()
                         } else {
                             RsType::objects(raw_eff.len())
@@ -172,11 +183,19 @@ impl TyCtx<'_> {
         if b.get(j) == Some(&b';') {
             j += 1;
         }
-        (self.class_type_node(&class_name, type_args, has_type_args), j)
+        (
+            self.class_type_node(&class_name, type_args, has_type_args),
+            j,
+        )
     }
 
     /// 类名 + 已解析实参 → 类型节点（接口载体 / 直映射 / 闭包外擦除 / 短名）
-    fn class_type_node(&self, class_name: &str, type_args: Vec<RsType>, has_type_args: bool) -> RsType {
+    fn class_type_node(
+        &self,
+        class_name: &str,
+        type_args: Vec<RsType>,
+        has_type_args: bool,
+    ) -> RsType {
         if let Some(carrier) = self.carrier_type(class_name) {
             return carrier;
         }
@@ -202,11 +221,25 @@ impl TyCtx<'_> {
     ) -> Vec<RsType> {
         let own = parse_class_type_params(inner_ci.generic_signature());
         let eff = self.effective_class_type_params(inner_ci);
-        let inherited = if own.is_empty() { &eff[..] } else { &eff[..eff.len().saturating_sub(own.len())] };
-        let own_args = if seg_args.len() == own.len() { seg_args } else { RsType::objects(own.len()) };
-        let outer_eff = outer_ci.map(|o| self.effective_class_type_params(o)).unwrap_or_default();
+        let inherited = if own.is_empty() {
+            &eff[..]
+        } else {
+            &eff[..eff.len().saturating_sub(own.len())]
+        };
+        let own_args = if seg_args.len() == own.len() {
+            seg_args
+        } else {
+            RsType::objects(own.len())
+        };
+        let outer_eff = outer_ci
+            .map(|o| self.effective_class_type_params(o))
+            .unwrap_or_default();
         let outer_map: BTreeMap<&str, &RsType> = if outer_eff.len() == outer_args.len() {
-            outer_eff.iter().map(String::as_str).zip(outer_args).collect()
+            outer_eff
+                .iter()
+                .map(String::as_str)
+                .zip(outer_args)
+                .collect()
         } else {
             BTreeMap::new()
         };
@@ -234,7 +267,12 @@ impl TyCtx<'_> {
     ///
     /// `is_static = false` 时方法级形参遮蔽同名类级形参（从 `tps` 剔除，按方法级变量——
     /// 上界 / `Object`——处理）。
-    pub fn parse_method_param_types(&self, sig: &str, tps: &[String], is_static: bool) -> Option<MethodSigTypes> {
+    pub fn parse_method_param_types(
+        &self,
+        sig: &str,
+        tps: &[String],
+        is_static: bool,
+    ) -> Option<MethodSigTypes> {
         if sig.is_empty() {
             return None;
         }
@@ -275,7 +313,11 @@ impl TyCtx<'_> {
         if b.get(i) == Some(&b')') {
             i += 1;
         }
-        let ret = if i < b.len() && b[i] != b'^' { self.parse_one_type(sig, i, &scope, bref).0 } else { RsType::Unit };
+        let ret = if i < b.len() && b[i] != b'^' {
+            self.parse_one_type(sig, i, &scope, bref).0
+        } else {
+            RsType::Unit
+        };
         Some(MethodSigTypes { params, ret })
     }
 }
@@ -289,7 +331,9 @@ mod tests {
         Fixture::new(vec![
             class(consts::OBJECT).sup(""),
             class(consts::STRING),
-            class("p/List").iface().sig("<E:Ljava/lang/Object;>Ljava/lang/Object;"),
+            class("p/List")
+                .iface()
+                .sig("<E:Ljava/lang/Object;>Ljava/lang/Object;"),
             class("p/Box").sig("<T:Ljava/lang/Object;>Ljava/lang/Object;"),
             class("p/Num"),
             class("p/Outer").sig("<A:Ljava/lang/Object;>Ljava/lang/Object;"),
@@ -310,9 +354,15 @@ mod tests {
         let r = |s: &str, t: &[&str]| c.parse_field_type(s, &tps(t)).map(|x| x.render(&f.names));
         assert_eq!(r("Lp/Box<TT;>;", &["T"]).as_deref(), Some("Box<T>"));
         assert_eq!(r("Lp/Box;", &[]).as_deref(), Some("Box<Object>"));
-        assert_eq!(r("Lp/List<Ljava/lang/String;>;", &[]).as_deref(), Some("List<Object>"));
+        assert_eq!(
+            r("Lp/List<Ljava/lang/String;>;", &[]).as_deref(),
+            Some("List<Object>")
+        );
         assert_eq!(r("[Lp/Missing;", &[]).as_deref(), Some("JArray<Object>"));
-        assert_eq!(r("Lp/Outer<Lp/Num;>.In<TX;>;", &["X"]).as_deref(), Some("Outer_In<Num, X>"));
+        assert_eq!(
+            r("Lp/Outer<Lp/Num;>.In<TX;>;", &["X"]).as_deref(),
+            Some("Outer_In<Num, X>")
+        );
         assert_eq!(r("", &[]), None);
     }
 
@@ -320,12 +370,16 @@ mod tests {
     fn method_types_with_bounds() {
         let f = fixture();
         let c = f.ctx();
-        let m = c.parse_method_param_types("<T:Lp/Num;>(TT;TE;I)[TT;", &tps(&["E"]), true).unwrap();
+        let m = c
+            .parse_method_param_types("<T:Lp/Num;>(TT;TE;I)[TT;", &tps(&["E"]), true)
+            .unwrap();
         let params: Vec<_> = m.params.iter().map(|t| t.render(&f.names)).collect();
         assert_eq!(params, ["Num", "E", "i32"]);
         assert_eq!(m.ret.render(&f.names), "JArray<Num>");
         // 实例方法：方法级 E 遮蔽类级 E
-        let m = c.parse_method_param_types("<E:Ljava/lang/Object;>(TE;)V", &tps(&["E"]), false).unwrap();
+        let m = c
+            .parse_method_param_types("<E:Ljava/lang/Object;>(TE;)V", &tps(&["E"]), false)
+            .unwrap();
         assert_eq!(m.params[0].render(&f.names), "Object");
         assert_eq!(m.ret.render(&f.names), "()");
         assert!(c.parse_method_param_types("I", &[], true).is_none());

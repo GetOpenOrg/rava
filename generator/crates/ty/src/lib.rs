@@ -11,22 +11,26 @@ pub mod carrier;
 pub mod class_params;
 pub mod consts;
 pub mod ident;
+pub mod jvm_type;
 pub mod manifest;
 pub mod registry;
 pub mod rs_type;
 pub mod short_names;
 pub mod sig_parse;
+pub mod sig_types;
 pub mod type_args;
 pub mod type_map;
 
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub use jvm_type::{HostPrim, JvmType, PrimKind, TypeParseError, WildKind};
 pub use manifest::Manifest;
 pub use registry::{ClassInfo, Registry};
 pub use rs_type::{Prim, RsType};
 pub use short_names::ShortNames;
 pub use sig_parse::MethodSigTypes;
+pub use sig_types::{EmittedSig, SigTypes};
 
 /// 类型层查询上下文：注册表 + 其短名表 + runtime 清单（均不可变）
 #[derive(Clone, Copy)]
@@ -38,6 +42,10 @@ pub struct TyCtx<'a> {
 
 impl<'a> TyCtx<'a> {
     pub fn new(reg: &'a Registry, names: &'a ShortNames, manifest: &'a Manifest) -> TyCtx<'a> {
-        TyCtx { reg, names, manifest }
+        TyCtx {
+            reg,
+            names,
+            manifest,
+        }
     }
 }
