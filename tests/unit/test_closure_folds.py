@@ -1,4 +1,4 @@
-"""closure.json 折叠点（folds v1）消费的单元测试（不依赖 JDK）：
+"""closure.json 折叠点（folds v2）消费的单元测试（不依赖 JDK）：
     python3 -m unittest tests.unit.test_closure_folds
 """
 
@@ -16,7 +16,7 @@ from codegen.types import Instr
 M = 'p/C.m:(I)I'
 
 
-def load(folds, version=1):
+def load(folds, version=2):
     with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
         json.dump({'folds_version': version, 'folds': folds}, f)
     try:
@@ -76,7 +76,7 @@ class Branches(unittest.TestCase):
             cf.apply(M, IF_ELSE, [], 10)
 
     def test_unknown_version_ignored(self):
-        self.assertEqual(load([{'method': M, 'dead_pcs': [[8, 9]]}], version=2), 0)
+        self.assertEqual(load([{'method': M, 'dead_pcs': [[8, 9]]}], version=1), 0)
         self.assertIs(cf.apply(M, IF_ELSE, [], 10), IF_ELSE)
 
 
@@ -122,6 +122,14 @@ class ExceptionTable(unittest.TestCase):
         out = cf.apply(M, self.CODE, table, 9)
         self.assertEqual(table, [])
         self.assertEqual(out[-1].opcode, 'ireturn')
+
+    def test_dead_catch_entry_removed(self):
+        # 同一处理器：死 catch 类型的表项删除，其余（含 catch-any）保留
+        table = [(0, 4, 6, 'p/Inst'), (0, 4, 6, 'p/Access'), (0, 4, 6, None)]
+        load([{'method': M, 'dead_catches': [{'start': 0, 'end': 4, 'handler': 6, 'catch_type': 'p/Inst'},
+                                             {'start': 0, 'end': 5, 'handler': 6, 'catch_type': 'p/Access'}]}])
+        cf.apply(M, self.CODE, table, 9)
+        self.assertEqual(table, [(0, 4, 6, 'p/Access'), (0, 4, 6, None)])
 
     def test_undeclared_dead_handler_rejected(self):
         load([{'method': M, 'dead_pcs': [[6, 9]]}])

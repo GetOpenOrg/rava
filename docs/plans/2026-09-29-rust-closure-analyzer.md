@@ -170,8 +170,8 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
   "dispatch": { "java/lang/Object.toString:()Ljava/lang/String;": ["java/lang/String"] },
   "reflect":  { "surfaces": { "…": ["…"] }, "gaps": [] },
   "seeds":    { "locale": [], "jca": [], "annotation_enums": [], "data_bundles": [], "module_resources": [] },
-  "folds_version": 1,
-  "folds":    [{ "method": "…", "dead_pcs": [[65, 80]], "dead_handlers": [90], "consts": [{ "pc": 12, "kind": "getfield", "value": false, "type": "Z" }] }]
+  "folds_version": 2,
+  "folds":    [{ "method": "…", "dead_pcs": [[65, 80]], "dead_handlers": [90], "dead_catches": [{ "start": 0, "end": 40, "handler": 60, "catch_type": "…" }], "consts": [{ "pc": 12, "kind": "getfield", "value": false, "type": "Z" }] }]
 }
 ```
 
@@ -645,15 +645,16 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
 
 第 1 步完成后单独测一次 TestStreamBasic，量出并行流路径（ForkJoin / VarHandles）占多少类，再定第 2、3 步做多深。
 
-**折叠点导出（C3 / C4 的衔接，格式 v1 已定）**：Rust 闭包剪掉的分支，Python 生成器必须同样不翻译，
+**折叠点导出（C3 / C4 的衔接，格式 v2 已定）**：Rust 闭包剪掉的分支，Python 生成器必须同样不翻译，
 否则生成代码会引用闭包外的类，编译失败。closure.json 为每个存在不可达代码或常量折叠点的方法导出：
 
 ```json
-"folds_version": 1,
+"folds_version": 2,
 "folds": [{
   "method": "java/util/stream/AbstractPipeline.evaluate:(Ljava/util/stream/TerminalOp;)Ljava/lang/Object;",
   "dead_pcs": [[65, 80]],
   "dead_handlers": [90],
+  "dead_catches": [{"start": 0, "end": 40, "handler": 60, "catch_type": "java/lang/InstantiationException"}],
   "consts": [{"pc": 12, "kind": "getfield", "value": false, "type": "Z"}]
 }]
 ```
@@ -666,6 +667,10 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
    - try 区间内没有可达指令；
    - catch 类型在闭包里从未实例化（没有子类型被 new，也没有被 VM / 手写层抛出）。
    不输出「try 区间部分删除，却保留引用它的 handler」的组合。
+   **`dead_catches`**：逐项删除的异常表项 `{start, end, handler, catch_type}`（按异常表原值逐字段匹配）。
+   catch 类型不在闭包类集合内时输出——多 catch（`catch (A | B e)`）共用处理器，A 在闭包内、B 不在时，
+   只删 B 的表项，处理器与 A 的表项保留，生成代码不再引用 B。catch-any 不输出；处理器的全部表项都死时
+   处理器并入 `dead_handlers`，不再逐项列出。
 3. **`consts`**：被折叠成常量的读取点。`kind` 取 `getfield` / `getstatic` / `invoke` 三种，栈效应如下：
    - `getfield`：替换后弹出 receiver。
    - `invoke`：**调用照常执行**，只丢弃返回值、改压常量。折叠的是返回值，不是调用：被调方的副作用
@@ -676,7 +681,7 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
    - `J` / `D` 的值用字符串编码（`"9007199254740993"`），避免 JSON 数值丢精度。
    - `Z` 用 JSON 布尔值，其余整型用 JSON 整数。
 5. **确定性**：`folds` 按 method 排序，`consts` 按 pc 排序，同输入逐字节相同。
-6. **版本**：顶层 `folds_version` 当前为 1。Python 遇到不认识的版本时忽略 folds、按原样翻译、不报错，两边可以各自先合入。
+6. **版本**：顶层 `folds_version` 当前为 2（v2 = v1 + `dead_catches`）。消费侧（Python `closure_folds.py`、Rust `input` crate）只认当前版本，遇到其他版本忽略 folds、按原样翻译、不报错。
 7. **不可达的起点**：活指令的顺序后继落入 `dead_pcs`，只允许出现在跳转、switch、return、athrow 之后。
    例如调用一个永不返回的方法，其后的代码不标死。Rust 侧导出前自检，Python 侧违反即报 `FoldError`。
 8. **`invoke` 的范围**：`kind: "invoke"` 只出现在 invokevirtual / invokespecial / invokestatic / invokeinterface 上，
@@ -688,9 +693,9 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
 VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成代码共用）。
 - 条件跳转恒直通改写为 `pop`，恒跳转改写为 `pop` + `goto`；switch 的死目标改指向活目标，只剩一个活目标时改写为 `pop` + `goto`。偏移沿用原指令字节。
 - getstatic 折叠为装载指令；getfield 折叠为合成指令 `fold_const`，先弹出 receiver（有副作用的保留求值）再压入常量；invoke 保留原调用指令（按调用指令识别引用的消费方——导入收集、super 调用的 `_base` 函数收集等——照常看到），在 `Instr.fold` 挂装载指令，`sim_instr` 照常翻译调用、以 `let _ =` 丢弃结果，再压入常量。
-- 异常表：删掉 dead_handlers 的表项，以及受保护区间已全死的表项；其余区间端点收拢到活指令起点。
+- 异常表：删掉 dead_handlers 的表项、dead_catches 列出的表项，以及受保护区间已全死的表项；其余区间端点收拢到活指令起点。Rust 侧 `input/src/norm.rs` `apply_fold` 同一规则。
 - 违约输入直接报 `FoldError`：端点不在指令起点、活的非跳转指令顺序落入死区、const 的 kind 与指令不符、Z 不是布尔值、handler 在死区但未列入 dead_handlers。
-- 单元测试 `tests/unit/test_closure_folds.py`（20 项）；手工 closure.json 的端到端探针（静态字段 / 实例字段 / 调用三类折叠 + 死分支）生成体符合预期。
+- 单元测试 `tests/unit/test_closure_folds.py`（21 项）；手工 closure.json 的端到端探针（静态字段 / 实例字段 / 调用三类折叠 + 死分支）生成体符合预期。
 
 验收用 `compare_trees.sh`：
 - 不带 folds 时，生成树逐字节不变；
@@ -717,7 +722,7 @@ VM 常量守卫剪除之前单点规范化指令序列（调用链 BFS 与生成
 
   （现值为第 4 步后。）未达标两例由 C1d 解决，归因见第 3b、4 步。
 - 上述 7 个用例以及 FileIOTest（手写层写字段密集，检验写入来源是否收全）的动态对照，翻译域漏覆盖 = 0。
-- closure.json 输出 `folds_version: 1` 与 `folds`（格式如上），结果确定；`dead_branches` 删除。
+- closure.json 输出 `folds_version`（现为 2）与 `folds`（格式如上），结果确定；`dead_branches` 删除。
 
 ## 八、风险与对策
 

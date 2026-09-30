@@ -49,7 +49,7 @@ mod seeds;
 
 pub use seeds::SeedState;
 
-pub use fold::Fold;
+pub use fold::{DeadCatch, Fold};
 use facts::*;
 use sysprops::{PropSum, PropUnstable};
 use fold::*;

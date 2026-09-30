@@ -5,7 +5,7 @@ use super::*;
 impl<'a> Engine<'a> {
     // ── 结果查询 ────────────────────────────────────────────────────────────
 
-    /// 折叠点导出（folds v1）：不可达指令区间、不进入的异常处理器、折叠为常量的读取点。
+    /// 折叠点导出（folds v2）：不可达指令区间、不进入的异常处理器、死 catch 表项、折叠为常量的读取点。
     /// 按方法标签排序；只含有折叠内容的字节码方法
     /// 同一成员的各克隆合并：任一克隆可达即可达，常量须在其可达的全部克隆里一致
     pub fn folds(&self) -> Vec<Fold> {
@@ -25,13 +25,14 @@ impl<'a> Engine<'a> {
             let Some(cf) = self.h.class(&key.owner) else { continue };
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
             let mut f = fold_of(key.to_string(), code, &all);
+            self.dead_catches(code, &mut f);
             f.null_recv = self.null_recv(&clones);
             f.props = self.prop_folds(&f, &all);
-            // 自检：活指令顺序落入 dead_pcs（v1 规则禁止），出现即分析缺陷
+            // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷
             if !f.violations.is_empty() {
                 eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
             }
-            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() {
+            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() {
                 out.push(f);
             }
         }

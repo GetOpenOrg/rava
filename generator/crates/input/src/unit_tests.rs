@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use classfile::{op, Code, ExceptionEntry, Insn, MemberRef, Operand};
 
-use crate::facts::{FoldConst, FoldValue, MethodFold, ReadKind};
+use crate::facts::{parse_fold, DeadCatch, FoldConst, FoldValue, MethodFold, ReadKind};
 use crate::norm::{apply_fold, NInsn, POP};
 use crate::prune::VmConstants;
 
@@ -114,6 +114,34 @@ fn exception_table_collapses() {
     // [4,6) 全死 → 删除；[0,5) 的 end 收拢到 6
     assert_eq!(n.exception_table.len(), 1);
     assert_eq!((n.exception_table[0].start, n.exception_table[0].end), (0, 6));
+}
+
+#[test]
+fn dead_catches_drop_entries() {
+    // 同一处理器 6：InstantiationException 表项死，IllegalAccessException 表项与 catch-any 保留
+    let entry = |t: Option<&str>| ExceptionEntry { start: 0, end: 4, handler: 6, catch_type: t.map(String::from) };
+    let mut c = if_code();
+    c.exception_table = vec![entry(Some("p/Inst")), entry(Some("p/Access")), entry(None)];
+    let dead = |t: &str| DeadCatch { start: 0, end: 4, handler: 6, catch_type: t.into() };
+    let fold = MethodFold { dead_catches: [dead("p/Inst")].into(), ..Default::default() };
+    let n = apply_fold("A.m:()I", &c, &fold).unwrap();
+    let kept: Vec<Option<&str>> = n.exception_table.iter().map(|e| e.catch_type.as_deref()).collect();
+    assert_eq!(kept, vec![Some("p/Access"), None]);
+    // 区间或处理器不符的条目不匹配（逐字段）
+    let fold = MethodFold { dead_catches: [DeadCatch { end: 5, ..dead("p/Inst") }].into(), ..Default::default() };
+    assert_eq!(apply_fold("A.m:()I", &c, &fold).unwrap().exception_table.len(), 3);
+}
+
+#[test]
+fn dead_catches_parse() {
+    let v = serde_json::json!({
+        "method": "A.m:()I",
+        "dead_catches": [{"start": 0, "end": 4, "handler": 6, "catch_type": "p/Inst"}],
+    });
+    let mf = parse_fold(&v).unwrap();
+    assert_eq!(mf.dead_catches.into_iter().collect::<Vec<_>>(), vec![DeadCatch { start: 0, end: 4, handler: 6, catch_type: "p/Inst".into() }]);
+    let bad = serde_json::json!({"method": "A.m:()I", "dead_catches": [{"start": 0, "end": 4, "handler": 6}]});
+    assert!(parse_fold(&bad).is_err());
 }
 
 #[test]

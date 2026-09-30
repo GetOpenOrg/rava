@@ -78,7 +78,7 @@ pub enum ReadKind {
     Invoke,
 }
 
-/// 折叠常量值（v1 编码的语义形态；类型解释在应用时按描述符进行）
+/// 折叠常量值（folds 编码的语义形态；类型解释在应用时按描述符进行）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FoldValue {
     Null,
@@ -97,12 +97,23 @@ pub struct FoldConst {
     pub ty: String,
 }
 
+/// 死 catch 表项：按异常表原值（区间、处理器、catch 类型）逐字段匹配
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DeadCatch {
+    pub start: u32,
+    pub end: u32,
+    pub handler: u32,
+    pub catch_type: String,
+}
+
 /// 一个方法的折叠点
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MethodFold {
     /// 半开区间 [start, end)
     pub dead_pcs: Vec<(u32, u32)>,
     pub dead_handlers: BTreeSet<u32>,
+    /// 逐项删除的异常表项（处理器仍活，只是这些 catch 类型不在闭包内）
+    pub dead_catches: BTreeSet<DeadCatch>,
     /// pc → 常量读取点
     pub consts: BTreeMap<u32, FoldConst>,
 }
@@ -205,6 +216,11 @@ impl ClosureFacts {
             let mf = MethodFold {
                 dead_pcs: f.dead_pcs.clone(),
                 dead_handlers: f.dead_handlers.iter().copied().collect(),
+                dead_catches: f
+                    .dead_catches
+                    .iter()
+                    .map(|c| DeadCatch { start: c.start, end: c.end, handler: c.handler, catch_type: c.catch_type.clone() })
+                    .collect(),
                 consts,
             };
             folds.insert(f.method.clone(), mf);
@@ -338,7 +354,7 @@ fn parse_fold_value(v: &Value, ty: &str) -> Result<FoldValue, InputError> {
     })
 }
 
-fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
+pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
     let mut mf = MethodFold::default();
     for r in f.get("dead_pcs").and_then(Value::as_array).into_iter().flatten() {
         let pair = r.as_array().filter(|p| p.len() == 2).ok_or_else(|| InputError::Format(format!("dead_pcs 项不合法：{r}")))?;
@@ -346,6 +362,10 @@ fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
     }
     for h in f.get("dead_handlers").and_then(Value::as_array).into_iter().flatten() {
         mf.dead_handlers.insert(u32_of(h)?);
+    }
+    for c in f.get("dead_catches").and_then(Value::as_array).into_iter().flatten() {
+        let at = |k: &str| u32_of(c.get(k).ok_or_else(|| missing(k))?);
+        mf.dead_catches.insert(DeadCatch { start: at("start")?, end: at("end")?, handler: at("handler")?, catch_type: str_of(c, "catch_type")?.to_string() });
     }
     for c in f.get("consts").and_then(Value::as_array).into_iter().flatten() {
         let pc = u32_of(c.get("pc").ok_or_else(|| missing("pc"))?)?;

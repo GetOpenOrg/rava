@@ -60,9 +60,9 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
 }
 
 /// closure.json 折叠点格式版本（计划 §7.3「折叠点导出」）
-pub const FOLDS_VERSION: u32 = 1;
+pub const FOLDS_VERSION: u32 = 2;
 
-/// 常量值按 v1 约定编码：Z → 布尔；B/C/S/I → 整数；J → 字符串；null → null；字符串常量 → 字符串
+/// 常量值按 folds 约定编码：Z → 布尔；B/C/S/I → 整数；J → 字符串；null → null；字符串常量 → 字符串
 fn const_json(v: &V, ty: &str) -> Value {
     match v {
         V::Int(i) if ty == "Z" => json!(*i != 0),
@@ -83,6 +83,7 @@ fn fold_json(f: &Fold) -> Value {
         "method": f.method,
         "dead_pcs": f.dead_pcs.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
         "dead_handlers": f.dead_handlers,
+        "dead_catches": f.dead_catches.iter().map(|c| json!({"start": c.start, "end": c.end, "handler": c.handler, "catch_type": c.catch_type})).collect::<Vec<_>>(),
         "consts": f.consts.iter().map(|(pc, op, v, ty)| json!({"pc": pc, "kind": kind(*op), "value": const_json(v, ty), "type": ty})).collect::<Vec<_>>(),
         "null_recv": f.null_recv,
     })
