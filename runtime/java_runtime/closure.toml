@@ -162,6 +162,10 @@ classes = [
     # 平台枚举（纯 Java；initOS 取 JDK 构建期常量 "linux"）。消费方：ProcessImpl.<clinit> 的 OS 字段
     # （initStreams / 启动模式按平台分支）。边界截断下 <clinit> 不发射，CURRENT_OS 恒 null → NPE。
     "jdk/internal/util/OperatingSystem",
+    # 旧式 Cleaner（PhantomReference 子类，纯 Java：静态双链表登记 + clean() 执行 thunk）。消费方：
+    # DirectByteBuffer 的内存释放登记（Cleaner.create(this, new Deallocator(..))）。原生二进制无 GC，
+    # 与 JDK 在引用不入队时同形：只在显式 clean() 时执行。
+    "jdk/internal/ref/Cleaner",
 
     # gap 批次 4：BCP 47 语言标签与区域匹配（纯 Java）。Locale.forLanguageTag / toLanguageTag /
     # Builder / 扩展（u- / x-）/ LanguageRange / lookup / filter，以及 Locale 实例缓存
