@@ -224,12 +224,33 @@ fn prune_stale_pkg_dirs(
                 continue;
             }
         }
-        if files.iter().any(|f| f == "mod.rs") {
-            let m = dir.join("mod.rs");
-            std::fs::remove_file(&m).map_err(|e| io_err(&m.display().to_string(), e))?;
-        }
-        if std::fs::read_dir(dir).is_ok_and(|mut rd| rd.next().is_none()) {
-            std::fs::remove_dir(dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
+        remove_stale_dir(dir, files)?;
+    }
+    Ok(())
+}
+
+/// 陈旧包目录：删除其生成 mod.rs，目录变空则删除目录
+fn remove_stale_dir(dir: &Path, files: &[String]) -> Result<()> {
+    if files.iter().any(|f| f == "mod.rs") {
+        let m = dir.join("mod.rs");
+        std::fs::remove_file(&m).map_err(|e| io_err(&m.display().to_string(), e))?;
+    }
+    if std::fs::read_dir(dir).is_ok_and(|mut rd| rd.next().is_none()) {
+        std::fs::remove_dir(dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
+    }
+    Ok(())
+}
+
+/// user crate 的陈旧清扫（复用 scratch）：与 java_runtime 同一机制——本轮未写入的带生成标记
+/// .rs 清除（user crate 无手写真源），不在本轮 mod 树 `dirs` 中的包目录删除 mod.rs 与空目录。
+/// 顶层包目录也在其列：user crate 的顶层模块由本轮写出的 main.rs 声明，不在本轮树中即不再声明。
+/// 须在本轮 user 类文件、mod.rs、main.rs 全部写出之后调用
+pub fn sweep_user_crate(src_root: &Path, dirs: &BTreeMap<PathBuf, BTreeSet<String>>, writer: &Writer, jobs: usize) -> Result<()> {
+    let mut listing = walk(src_root);
+    sweep_stale(&mut listing, src_root, None, writer, jobs)?;
+    for (dir, _, files) in listing.iter().rev() {
+        if dir != src_root && !dirs.contains_key(dir) {
+            remove_stale_dir(dir, files)?;
         }
     }
     Ok(())

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::fs::Writer;
-use super::mod_tree::{complete_lib_rs, write_mod_tree};
+use super::mod_tree::{complete_lib_rs, sweep_user_crate, write_mod_tree};
 use super::overlay::prepare_scratch;
 
 fn tmp(tag: &str) -> PathBuf {
@@ -172,5 +172,46 @@ fn companion_skipped_when_used_module_absent() {
     w.write(&dir.join("member_name.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(read(&dir.join("mod.rs")).ends_with("mod natives_impl;\n"), "依赖齐 → 声明");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 复用 scratch 换测试：user crate 上轮的生成类文件与陈旧包目录清除，本轮写出与无标记文件保留
+#[test]
+fn user_crate_sweeps_previous_test() {
+    let root = tmp("user_sweep");
+    let rt = runtime(&root);
+    let out = root.join("build").join("t");
+    let src = out.join("user/src");
+    let gen = "rava_macros::java_class! {}\n";
+    // 上轮（另一测试）遗留
+    put(&src.join("deep_copy.rs"), gen);
+    put(&src.join("deep_copy_person.rs"), gen);
+    put(&src.join("com/acme/old.rs"), gen);
+    put(&src.join("com/acme/mod.rs"), "pub mod old;\n");
+    put(&src.join("com/mod.rs"), "pub mod acme;\n");
+    put(&src.join("org/x/gone.rs"), gen);
+    put(&src.join("notes.rs"), "// 非生成\n");
+    // 本轮写出
+    let mut w = Writer::new(&out, &rt.join("src"));
+    w.write(&src.join("digester.rs"), gen).unwrap();
+    w.write(&src.join("org/x/y.rs"), gen).unwrap();
+    w.write(&src.join("org/x/mod.rs"), "pub mod y;\n").unwrap();
+    w.write(&src.join("org/mod.rs"), "pub mod x;\n").unwrap();
+    w.write(&src.join("main.rs"), "mod digester;\nmod org;\n").unwrap();
+    let mut dirs = std::collections::BTreeMap::new();
+    for (d, c) in [(src.clone(), ["digester", "org"].as_slice()), (src.join("org"), &["x"]), (src.join("org/x"), &["y"])] {
+        dirs.insert(d, c.iter().map(|s| s.to_string()).collect::<std::collections::BTreeSet<_>>());
+    }
+    sweep_user_crate(&src, &dirs, &w, 2).unwrap();
+    let mut left: Vec<String> = super::fs::walk(&src)
+        .into_iter()
+        .flat_map(|(d, _, fs)| {
+            let rel = d.strip_prefix(&src).unwrap().to_path_buf();
+            fs.into_iter().map(move |f| rel.join(f).to_string_lossy().into_owned())
+        })
+        .collect();
+    left.sort();
+    assert_eq!(left, ["digester.rs", "main.rs", "notes.rs", "org/mod.rs", "org/x/mod.rs", "org/x/y.rs"]);
+    assert!(!src.join("com").exists(), "陈旧包目录整棵删除");
     let _ = std::fs::remove_dir_all(&root);
 }
