@@ -1,0 +1,245 @@
+//! 引擎：手写方法的内存效果——调用点级数组 / 字段写入与读取建模、签名多态写入与静态字段按名打开。
+
+use super::*;
+
+impl<'a> Engine<'a> {
+    /// 手写方法的数组写入（arraycopy、Unsafe 引用写入等）按调用点建模：写入目标是本调用点实参里的数组，
+    /// 写入值按 `hw_writes` 给出的来源（实参值 / 实参数组的元素 / 手写体产出）逐调用点接入。
+    /// 不经被调方法的形参汇合：arraycopy 等被全程序共享，汇合会把所有数组的元素并成同一个集合
+    pub(super) fn hw_site(&mut self, m: usize, off: u32, t: usize, recv: Option<&[Feed]>, a: &[Option<Vec<Feed>>]) {
+        let ws = self.hw_writes(t);
+        if ws.iter().all(Option::is_none) || self.hw_site_ids.contains_key(&(m, off, t)) {
+            return;
+        }
+        let s = self.hw_site_id(m, off, t);
+        let base = usize::from(!self.methods[t].is_static);
+        let obj = self.id(OBJECT);
+        // 签名多态：实参按调用点描述符排布（VM 打包进 Object[]），引用实参一律按 Object 接入
+        let poly = self.is_poly(t);
+        let ptypes = if poly {
+            let mut p = self.methods[t].ptypes[..base].to_vec();
+            p.extend(a.iter().map(|f| f.as_ref().map(|_| obj)));
+            p
+        } else {
+            self.methods[t].ptypes.clone()
+        };
+        let feeds: Vec<Option<&[Feed]>> = (0..ptypes.len()).map(|i| if i < base { recv } else { a.get(i - base).and_then(|f| f.as_deref()) }).collect();
+        let mut watched: BTreeSet<usize> = BTreeSet::new();
+        for (j, w) in ws.iter().enumerate() {
+            let Some(w) = w else { continue };
+            let wn = Node::W(s, j as u16);
+            if w.produced {
+                self.flow(Node::S(t, PROD), wn, obj);
+            }
+            let last = (w.last && ptypes.len() > base).then(|| ptypes.len() - 1);
+            if last.is_some() && poly {
+                self.poly_write(wn);
+            }
+            for &i in w.values.iter().chain(last.iter()) {
+                if let (Some(Some(pi)), Some(Some(fs))) = (ptypes.get(i), feeds.get(i)) {
+                    self.feed(fs, wn, *pi);
+                }
+            }
+            watched.insert(j);
+            watched.extend(w.elements.iter().copied());
+        }
+        // 实参节点最后接入：新增数组经 add_to 钩子接上元素读写
+        for i in watched {
+            if let (Some(Some(pi)), Some(Some(fs))) = (ptypes.get(i), feeds.get(i)) {
+                self.feed(fs, Node::A(s, i as u16), *pi);
+            }
+        }
+    }
+
+    pub(super) fn hw_site_id(&mut self, m: usize, off: u32, t: usize) -> u32 {
+        if let Some(&s) = self.hw_site_ids.get(&(m, off, t)) {
+            return s;
+        }
+        let s = self.hw_sites.len() as u32;
+        self.hw_site_ids.insert((m, off, t), s);
+        self.hw_sites.push((m, off, t));
+        s
+    }
+
+    /// 读内存的手写调用点：结果 = 本调用点源实参所指各对象的元素 / 引用字段（逐调用点，不经 R 汇合）
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn hw_read_site(&mut self, m: usize, off: u32, t: usize, i: u16, fs: &[Feed], res: Node, rt: u32) {
+        let s = self.hw_site_id(m, off, t);
+        if self.hw_reads.insert(s, (i, res, rt)).is_some() {
+            return;
+        }
+        let pt = self.methods[t].ptypes.get(i as usize).copied().flatten().unwrap_or_else(|| self.id(OBJECT));
+        let a = Node::A(s, i);
+        let cur = self.set_of(a);
+        if !cur.is_empty() {
+            self.memory_read(s, &cur);
+        }
+        self.feed(fs, a, pt);
+    }
+
+    pub(super) fn memory_read(&mut self, s: u32, delta: &TypeSet) {
+        let (_, res, rt) = self.hw_reads[&s];
+        if !delta.open.is_empty() {
+            self.add_to(res, &TypeSet::open(rt));
+        }
+        for &x in delta.classes.iter() {
+            if self.arrays.contains_key(&x) {
+                for p in PARITIES {
+                    self.flow(Node::E(x, p), res, rt);
+                }
+                continue;
+            }
+            let (cls, obj) = match self.objs.get(&x) {
+                Some(&c) => (c, true),
+                None => (x, false),
+            };
+            for (fi, tid) in self.ref_fields(cls).iter().copied() {
+                let n = if obj { self.obj_field(x, fi, tid) } else { Node::F(fi) };
+                self.flow(n, res, rt);
+            }
+        }
+    }
+
+    pub(super) fn ref_fields(&mut self, cls: u32) -> Rc<[(usize, u32)]> {
+        if let Some(r) = self.ref_fields.get(&cls) {
+            return r.clone();
+        }
+        let mut out = Vec::new();
+        let mut cur = self.h.class(&self.names[cls as usize].clone());
+        while let Some(cf) = cur {
+            for f in cf.fields.iter().filter(|f| !f.is_static()) {
+                let Some(tid) = parse_field(&f.desc).and_then(|t| self.ptype(&t)) else { continue };
+                let fi = self.field_node(MemberRef { owner: cf.name.clone(), name: f.name.clone(), desc: f.desc.clone() });
+                out.push((fi, tid));
+            }
+            cur = cf.super_name.as_deref().and_then(|s| self.h.class(s));
+        }
+        let r: Rc<[(usize, u32)]> = out.into();
+        self.ref_fields.insert(cls, r.clone());
+        r
+    }
+
+    /// 手写方法按形参（含接收者序号）的数组写入来源。`[facts.array_writes]` 声明的按声明；
+    /// 其余取得数组视图的手写体保守处理：每个非接收者引用形参都可被写入，来源为其它形参的值、
+    /// 全部实参数组的元素与手写体产出。数组只有 Object 的方法，没有一个改写元素，接收者不是写入目标
+    pub(super) fn hw_writes(&mut self, t: usize) -> Rc<[Option<HwWrite>]> {
+        if let Some(w) = self.hw_writes.get(&t) {
+            return w.clone();
+        }
+        let base = usize::from(!self.methods[t].is_static);
+        let key = self.methods[t].key.clone();
+        let ptypes = self.methods[t].ptypes.clone();
+        let refs: Vec<usize> = (0..ptypes.len()).filter(|&i| ptypes[i].is_some()).collect();
+        let w: Rc<[Option<HwWrite>]> = match self.man.array_writes(&key.to_string()) {
+            Some(d) => (0..ptypes.len())
+                .map(|j| {
+                    (d.dst.map(|x| x + base) == Some(j)).then(|| HwWrite {
+                        values: d.values.iter().map(|x| x + base).collect(),
+                        elements: d.elements.iter().map(|x| x + base).collect(),
+                        produced: d.produced,
+                        fields: d.fields,
+                        last: d.last,
+                    })
+                })
+                .collect(),
+            None => {
+                let access = self.h.class(&key.owner).is_some_and(|cf| self.hw_member(&cf, &key.name, &key.desc).array_access);
+                (0..ptypes.len())
+                    .map(|j| {
+                        (access && j >= base && ptypes[j].is_some()).then(|| HwWrite {
+                            values: refs.iter().copied().filter(|&i| i != j).collect(),
+                            elements: refs.clone(),
+                            produced: true,
+                            fields: false,
+                            last: false,
+                        })
+                    })
+                    .collect()
+            }
+        };
+        self.hw_writes.insert(t, w.clone());
+        w
+    }
+
+    /// 调用点 s 的第 i 个实参新增数组 ys：元素来源含 i 的写入目标接上其元素；i 是写入目标则接收写入
+    pub(super) fn hw_site_arrays(&mut self, s: u32, i: u16, ys: &[u32]) {
+        let (_, _, t) = self.hw_sites[s as usize];
+        let ws = self.hw_writes(t);
+        let obj = self.id(OBJECT);
+        for &y in ys {
+            for (j, w) in ws.iter().enumerate() {
+                if w.as_ref().is_some_and(|w| w.elements.contains(&(i as usize))) {
+                    for p in PARITIES {
+                        self.flow(Node::E(y, p), Node::W(s, j as u16), obj);
+                    }
+                }
+            }
+            if ws.get(i as usize).is_none_or(Option::is_none) {
+                continue;
+            }
+            let t = self.arrays[&y];
+            let Some(c) = absint::component(&self.names[t as usize].clone()).filter(|c| c.len() > 1) else { continue };
+            let cid = self.id(&c);
+            for p in PARITIES {
+                self.flow(Node::W(s, i), Node::E(y, p), cid);
+            }
+        }
+    }
+
+    fn is_poly(&self, t: usize) -> bool {
+        let key = &self.methods[t].key;
+        self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(resolve::is_signature_polymorphic)).unwrap_or(false)
+    }
+
+    /// 签名多态写入调用点：写入值接到按名打开的静态引用字段（静态字段句柄没有 holder 坐标）
+    fn poly_write(&mut self, wn: Node) {
+        self.poly_writes.push(wn);
+        for (fi, tid) in self.open_statics.clone() {
+            self.flow(wn, Node::U(fi), tid);
+        }
+    }
+
+    /// 字段按名打开：静态引用字段接收签名多态写入调用点的写入值
+    pub(super) fn open_static(&mut self, key: &MemberRef) {
+        let is_static = self.h.class(&key.owner).and_then(|cf| cf.field(&key.name, &key.desc).map(|f| f.is_static())).unwrap_or(false);
+        let Some(tid) = parse_field(&key.desc).and_then(|t| self.ptype(&t)).filter(|_| is_static) else { return };
+        let fi = self.field_node(key.clone());
+        if self.open_statics.iter().any(|&(f, _)| f == fi) {
+            return;
+        }
+        self.open_statics.push((fi, tid));
+        for wn in self.poly_writes.clone() {
+            self.flow(wn, Node::U(fi), tid);
+        }
+    }
+
+    /// 调用点 s 的写入目标实参 i 新增对象：写入值接到对象的引用实例字段（与 `memory_read` 对称）。
+    /// 抽象对象按对象分量接入；非抽象类 / open 目标接未知接收者写入节点，open 目标的子类字段不可枚举，
+    /// 写入值随之逃逸
+    pub(super) fn hw_site_fields(&mut self, s: u32, i: u16, delta: &TypeSet) {
+        let (_, _, t) = self.hw_sites[s as usize];
+        if !self.hw_writes(t).get(i as usize).is_some_and(|w| w.as_ref().is_some_and(|w| w.fields)) {
+            return;
+        }
+        let wn = Node::W(s, i);
+        let obj = self.id(OBJECT);
+        let xs: Vec<u32> = delta.classes.iter().copied().filter(|x| !self.arrays.contains_key(x)).collect();
+        for x in xs {
+            let (cls, is_obj) = match self.objs.get(&x) {
+                Some(&c) => (c, true),
+                None => (x, false),
+            };
+            for (fi, tid) in self.ref_fields(cls).iter().copied() {
+                let n = if is_obj { self.obj_field(x, fi, tid) } else { Node::U(fi) };
+                self.flow(wn, n, tid);
+            }
+        }
+        let os: Vec<u32> = delta.open.iter().copied().collect();
+        for o in os {
+            for (fi, tid) in self.ref_fields(o).iter().copied() {
+                self.flow(wn, Node::U(fi), tid);
+            }
+            self.flow(wn, Node::Esc, obj);
+        }
+    }
+}
