@@ -7,6 +7,7 @@ pub mod archive;
 pub mod class;
 pub mod constant;
 pub mod descriptor;
+pub mod extras;
 pub mod insn;
 pub mod reader;
 
