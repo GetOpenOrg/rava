@@ -495,6 +495,8 @@ pub struct Engine<'a> {
     pub hw_written: BTreeSet<MemberRef>,
     /// 按字段句柄写字段的入口已可达
     fwriter_live: bool,
+    /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）
+    spret: sysprops::SpRet,
     /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段
     fenum_pending: BTreeSet<Option<String>>,
     /// 手写层写入但接收者类型推不出的字段名：所有同名字段按有手写写入处理
@@ -621,6 +623,7 @@ impl<'a> Engine<'a> {
             reflect_members: BTreeSet::new(),
             hw_written: BTreeSet::new(),
             fwriter_live: false,
+            spret: Default::default(),
             fenum_pending: BTreeSet::new(),
             hw_written_names: BTreeSet::new(),
             hw_read_names: BTreeMap::new(),
@@ -761,6 +764,7 @@ impl<'a> Engine<'a> {
         if !self.fwriter_live {
             self.handle_writer_edge(&key, &via);
         }
+        self.sysprops_entry(&key, &via);
         let k = (key, ctx);
         if let Some(i) = self.methods.get_index_of(&k) {
             return i;
