@@ -66,6 +66,9 @@ pub(super) struct Ctx<'a> {
     pub(super) fields: RefCell<HashMap<MemberRef, Option<Rc<FieldInfo>>>>,
     /// 进行中的记忆化计算（递归保护与截断记录，见 `memo.rs`）
     pub(super) guards: RefCell<super::memo::Guards>,
+    /// 服务目录与 provider 执行线（见 `services.rs`）
+    pub(super) catalog: std::cell::OnceCell<Rc<crate::seeds::services::Catalog>>,
+    pub(super) svc_lines: std::cell::OnceCell<BTreeSet<String>>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
@@ -218,6 +221,8 @@ impl Ctx<'_> {
             {
                 Domain::Translate
             }
+            // 服务 provider 执行线：运行期经 ServiceLoader 按普通构造实例化，执行的是字节码
+            Domain::Boundary if !self.man.is_vm_boundary(cls) && self.on_provider_line(cls) => Domain::Translate,
             d => d,
         };
         self.domains.borrow_mut().insert(cls.to_string(), d);

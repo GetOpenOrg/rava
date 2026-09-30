@@ -860,6 +860,27 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
 `BoundMethodHandle.arg@146`（`uncaughtException` → `athrow`）、`BigInteger.checkRange@29`（`reportOverflow`）字节码均符合。
 9 例类集 / 方法集与上一项完全相同；DeepCopy、CollectorsDemo 在 `--flow-batch 64 --hash-seed 12345` 下标记逐项相同。
 
+**e2e 回归修复：边界包内的服务 provider 按普通构造建模（TestCharsetForName）**。1b87995d 的 e2e 中 TestCharsetForName 命中存根
+`sun/nio/cs/ext/AbstractCharsetProvider.<init>:(Ljava/lang/String;)V`（主干通过）。根因（closure.json 实测）：服务目录装填后，
+运行期 `ServiceLoader` 真的实例化了 jdk.charsets 模块的 provider `ExtendedCharsets`；该类与父类 `AbstractCharsetProvider` 位于
+`[boundary]` 前缀 `sun/`、不在放行清单，分析器把 `ExtendedCharsets.<init>`（经 `service-provider` 入链）与 `AbstractCharsetProvider.charsetForName`
+（经 `Charset.lookupExtendedCharset@35`）登记为 `handwritten:boundary`、不展开方法体；发射层却对无手写承载的边界方法照常翻译字节码，
+体内调用的父类构造器、`charset` / `init` / `canonicalize` / `lookup` 不在闭包 → panic 存根。主干服务目录为空，provider 从未被实例化，
+所以没有暴露。provider 入链本身（`instantiate` + `init` + 构造器）已是普通 `new` 语义，缺的是边界截断把构造链与继承方法体切掉。
+- 修法（通用规则，无类名）：`Catalog::provider_lines` 取服务目录全部 provider 及其超类型闭包（超类链 + 超接口），这些类即便落在边界前缀
+  也归翻译域（`Ctx::domain`，与纯数据资源束同一位置；`[vm_boundary]` 类仍按方法划分）。ServiceLoader 按普通构造实例化 provider，构造链、
+  字段初始化、`<clinit>` 与继承的实例方法运行期执行的都是字节码，按字节码分析与发射层口径一致；共置手写体提供的方法仍取手写效果。
+  判定只依赖类路径与模块声明（静态），与处理次序无关。服务目录改由 `Ctx` 持有（`OnceCell`），引擎的服务查找与域判定共用一份。
+- 单测 `seeds::services::tests::provider_lines_cover_super_chain`（虚构类名）。
+- 结果：TestCharsetForName 429 / 1486 / 2451 → **437 / 1546 / 2622**（类 / 方法 / 上下文），`ExtendedCharsets`、`AbstractCharsetProvider`
+  域 boundary → translate，其 9 个方法（含 `<init>(String)`、`charset`、`init`、`canonicalize`、`lookup`、两个 `<clinit>`）全部 bytecode；
+  新增类为构造器里的 `TreeMap` 一族（`TreeMap` / `$Entry` / `$EntrySet` / `$EntryIterator` / `$PrivateEntryIterator`、`NavigableMap`、`SortedMap`）
+  与 `lookup` 的 `Class$1`。其余 8 例类 / 方法 / 上下文完全不变；9 例漏均为 0；反射缺口不变（1 条）。
+  顺序矩阵（`--flow-batch 1/64` × `--hash-seed 0/12345`）：TestCharsetForName、DeepCopy 类集 / 方法集（含 kind 与 cut 标记）四组一致。
+- 已知局限：`lookup` 对 map 值做 `Class.forName(className).newInstance()`；本例查的是不存在的字符集名，走不到。若测试查扩展字符集
+  （如按别名取 jdk.charsets 里的编码），被取的类需要按名取类的值集覆盖（`charset(name, className, aliases)` 的常量实参进 map 值），届时实测。
+
+
 ## 七、验收
 
 - §一 终态表各项达标。

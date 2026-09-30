@@ -57,6 +57,21 @@ impl Catalog {
     pub fn get(&self, service: &str) -> &[Provider] {
         self.by_service.get(service).map_or(&[], Vec::as_slice)
     }
+
+    /// provider 执行线：全部 provider 及其超类型闭包（`supers` 给出直接超类与直接超接口）。
+    /// 运行期 `ServiceLoader` 按普通构造实例化 provider，其构造链、字段初始化、`<clinit>`
+    /// 与继承来的实例方法执行的都是字节码
+    pub fn provider_lines(&self, supers: impl Fn(&str) -> Vec<String>) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        let mut work: Vec<String> = self.by_service.values().flatten().map(|p| p.class.clone()).collect();
+        while let Some(c) = work.pop() {
+            if !out.contains(&c) {
+                work.extend(supers(&c));
+                out.insert(c);
+            }
+        }
+        out
+    }
 }
 
 /// JVM 默认启动的引导层模块集
@@ -161,5 +176,22 @@ mod tests {
     fn service_file_lines() {
         let b = b"# comment\n a.b.C \n\na.b.C\nd.E # tail\n";
         assert_eq!(parse_service_file(b), vec!["a/b/C".to_string(), "d/E".to_string()]);
+    }
+
+    /// provider 执行线含 provider 自身与超类型闭包，不含无关类
+    #[test]
+    fn provider_lines_cover_super_chain() {
+        let mut c = Catalog::default();
+        c.by_service.insert("s/Svc".into(), vec![Provider { module: Some("m".into()), class: "q/Impl".into() }]);
+        let supers = |x: &str| -> Vec<String> {
+            match x {
+                "q/Impl" => vec!["q/Base".into(), "q/Iface".into()],
+                "q/Base" => vec!["s/Svc".into()],
+                "s/Svc" => vec!["p/Object".into()],
+                _ => vec![],
+            }
+        };
+        let got: Vec<String> = c.provider_lines(supers).into_iter().collect();
+        assert_eq!(got, ["p/Object", "q/Base", "q/Iface", "q/Impl", "s/Svc"]);
     }
 }

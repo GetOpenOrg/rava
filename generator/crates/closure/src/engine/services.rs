@@ -11,7 +11,6 @@ use crate::seeds::services::{self, Catalog, Provider};
 
 #[derive(Default)]
 pub struct ServiceState {
-    catalog: Option<Rc<Catalog>>,
     population_done: bool,
     /// 输出：被查找的服务 → 入选 provider（无 provider 的服务同样记录）
     pub selected: BTreeMap<String, Vec<Provider>>,
@@ -19,14 +18,28 @@ pub struct ServiceState {
     pub unknown: bool,
 }
 
+impl Ctx<'_> {
+    /// 服务目录（引导层模块 provides + 类路径 META-INF/services），首次使用时构造
+    pub(super) fn service_catalog(&self) -> Rc<Catalog> {
+        self.catalog.get_or_init(|| Rc::new(services::catalog(&self.cp.module_views()))).clone()
+    }
+
+    /// 类在 provider 执行线上（见 `Catalog::provider_lines`）：边界前缀内也按字节码分析，
+    /// 与发射层翻译其字节码的口径一致——否则构造链 / 继承方法体内的调用成为运行期存根
+    pub(super) fn on_provider_line(&self, cls: &str) -> bool {
+        self.svc_lines
+            .get_or_init(|| {
+                self.service_catalog().provider_lines(|c| {
+                    self.cp.get(c).map_or(vec![], |cf| cf.super_name.iter().chain(cf.interfaces.iter()).cloned().collect())
+                })
+            })
+            .contains(cls)
+    }
+}
+
 impl<'a> Engine<'a> {
     fn service_catalog(&mut self) -> Rc<Catalog> {
-        if let Some(c) = &self.seeds.services.catalog {
-            return c.clone();
-        }
-        let c = Rc::new(services::catalog(&self.cp.module_views()));
-        self.seeds.services.catalog = Some(c.clone());
-        c
+        self.ctx.service_catalog()
     }
 
     /// 调用点（方法 m、偏移 off）若是服务查找入口，按服务 Class 实参补种 provider
