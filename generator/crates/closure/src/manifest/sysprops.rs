@@ -3,7 +3,8 @@
 //! 表即原生二进制启动时 `System.props` 的内容：`values` 是取值恒定的键，`dynamic` 是存在、但取值
 //! 由宿主环境 / 语料 JDK 在启动期决定的键（不折叠）；两者之外的键启动时不存在（读取为 null——原生
 //! 二进制无 `-D` 注入机制）。锚点给出系统属性表对象从哪里来（`holders`：静态字段 / 返回它的方法）、
-//! 从哪里读（`readers`）、按键改写的入口（`writers`）；实参序号含接收者。
+//! 从哪里读（`readers`）、按键改写的入口（`writers`）、只读查询入口（`queries`：接收者为表对象时
+//! 既不改写表、结果也不持有表的引用）；实参序号含接收者。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -33,6 +34,8 @@ pub struct SysProps {
     readers: HashMap<String, PropRead>,
     /// 接收者为系统属性表对象时只改写一个键的入口：成员 → 键的实参序号
     writers: HashMap<String, usize>,
+    /// 只读查询入口（接收者为系统属性表对象时不算逃逸）
+    queries: HashSet<String>,
 }
 
 fn idx(t: &toml::Table, k: &str) -> Option<usize> {
@@ -56,6 +59,7 @@ impl SysProps {
             return Err(err(k, "不能同时列在 values 与 dynamic"));
         }
         out.holders = list("holders").into_iter().collect();
+        out.queries = list("queries").into_iter().collect();
         for (k, v) in sec.get("readers").and_then(|v| v.as_table()).into_iter().flatten() {
             let t = v.as_table().ok_or_else(|| err(k, "须为 { key = 序号, receiver = 布尔, default = 序号 }"))?;
             let key = idx(t, "key").ok_or_else(|| err(k, "缺 key"))?;
@@ -91,6 +95,10 @@ impl SysProps {
         self.writers.get(member).copied()
     }
 
+    pub fn is_query(&self, member: &str) -> bool {
+        self.queries.contains(member)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.holders.is_empty()
     }
@@ -111,6 +119,7 @@ mod tests {
             r#"
             [s]
             holders = ["a/B.props:Lx/P;"]
+            queries = ["x/P.names:()Ljava/util/Set;"]
             dynamic = ["user.dir"]
             [s.values]
             "k.on" = "true"
@@ -131,6 +140,7 @@ mod tests {
             p.reader("x/Q.get:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
             Some(PropRead { receiver: false, key: 0, default: Some(1) })
         );
+        assert!(p.is_query("x/P.names:()Ljava/util/Set;") && !p.is_query("x/P.set:(Ljava/lang/String;Ljava/lang/String;)V"));
         assert_eq!(p.writer("x/P.set:(Ljava/lang/String;Ljava/lang/String;)V"), Some(1));
     }
 

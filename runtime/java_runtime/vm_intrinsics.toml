@@ -165,6 +165,11 @@ dynamic = [
     # VM 族中随 VersionProps 取值的键
     "java.vm.specification.version", "java.vm.vendor", "java.vm.version",
 ]
+# 只读查询入口：接收者为系统属性表对象时既不改写表、结果也不持有表的引用（不算逃逸）
+queries = [
+    # 新建 HashMap 收集字符串键值，返回其键集的不可变视图
+    "java/util/Properties.stringPropertyNames:()Ljava/util/Set;",
+]
 
 [facts.system_properties.values]
 "file.separator" = "/"
