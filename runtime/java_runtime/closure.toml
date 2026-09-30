@@ -93,6 +93,10 @@ packages = [
     # ServicesCatalog 的 getServicesCatalogOrNull / findServices 仍为过渡手写（被 jdk/internal/access 的
     # 整体手写 JavaLangAccess 与 jdk/internal/loader 截断阻塞，见 services_catalog_impl.rs），其余按字节码。
     "jdk/internal/module/",
+    # C1d：HotSpot 性能计数器（PerfCounter / Perf 包装，Java 部分纯字节码）。Perf 的 ACC_NATIVE
+    # （registerNatives / createLong 等）按需手写于 perf_impl.rs：原生二进制无 jvmstat 共享内存，
+    # createLong 返回进程私有的 8 字节缓冲，计数器语义（get/set/add）由字节码经 LongBuffer 承载。
+    "jdk/internal/perf/",
 ]
 classes = [
     # MH-native：asType / 组合子的类型转换与名字工具。纯 Java（装拆箱 / 拓宽句柄经 IMPL_LOOKUP
