@@ -199,11 +199,14 @@ def _resolve_static_field(cls: str, field_name: str, descriptor: str, comment: s
                        for _n in _re_g.findall(r'[A-Za-z_][A-Za-z0-9_]*', _s_parsed)):
                     ty_str = _s_parsed
     # 若字段名与方法名冲突，emitter 生成了 fieldname_field 后缀，调用方也须一致
+    # field_name 已转义（关键字 unsafe → unsafe_），冲突判定与后缀须按 Java 原名（与声明侧
+    # clinit_extract 同规则：safe_ident(原名 + '_field')）
     _actual_field_name = field_name
     if _getstatic_cls_ci is not None:
-        _method_names = {m.name for m in _getstatic_cls_ci.methods}
-        if field_name in _method_names:
-            _actual_field_name = field_name + '_field'
+        _raw_name = next((_f.name for _f in _getstatic_cls_ci.fields
+                          if _f.is_static and _safe_ident(_f.name) == field_name), field_name)
+        if any(m.name == _raw_name for m in _getstatic_cls_ci.methods):
+            _actual_field_name = _raw_name + '_field'
     return cls, _safe_ident(_actual_field_name), ty_str, _getstatic_turbofish
 
 

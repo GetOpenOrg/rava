@@ -79,7 +79,8 @@ fn escape_str_into(out: &mut String, s: &str) {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || (0x7f..=0x9f).contains(&(c as u32)) => {
+            // 控制字符与双向文本控制符（rustc text_direction_codepoint_in_literal 默认 deny）
+            c if matches!(c as u32, 0..=0x1f | 0x7f..=0x9f | 0x202a..=0x202e | 0x2066..=0x2069) => {
                 let _ = write!(out, "\\u{{{:04x}}}", c as u32);
             }
             c => out.push(c),

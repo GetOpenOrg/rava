@@ -120,9 +120,9 @@ def _common_ref_type(a_rust: str, b_rust: str, registry: dict | None) -> str | N
     if not registry or a_rust == b_rust or '<' in a_rust or '<' in b_rust:
         return None
     if _is_subtype(a_rust, b_rust, registry):
-        return b_rust
+        return _erased_generic(b_rust, registry)
     if _is_subtype(b_rust, a_rust, registry):
-        return a_rust
+        return _erased_generic(a_rust, registry)
     cur = _rust_type_to_binary(a_rust, registry)
     seen: set[str] = set()
     while cur and cur not in seen:
@@ -133,8 +133,21 @@ def _common_ref_type(a_rust: str, b_rust: str, registry: dict | None) -> str | N
         cur = ci.super_class
         sc_short = _short_cls_g(cur)
         if _is_subtype(b_rust, sc_short, registry):
-            return sc_short
+            return _erased_generic(sc_short, registry)
     return None
+
+
+def _erased_generic(rust_short: str, registry: dict | None) -> str:
+    """公共祖先是泛型类时补擦除实例化（`Enum` → `Enum<Object>`）：两个非泛型子类
+    （`enum A` / `enum B` 分别继承 `Enum<A>` / `Enum<B>`）的合并点只能取擦除视图，
+    宏为子类生成的 `From<Child> for Ancestor<任意实参>` 保证上转成立。"""
+    from ..type_map import effective_class_type_params
+    binary = _rust_type_to_binary(rust_short, registry)
+    ci = registry.get(binary) if registry and binary else None
+    params = effective_class_type_params(ci, registry) if ci is not None else []
+    if not params:
+        return rust_short
+    return f"{rust_short}<{', '.join(['Object'] * len(params))}>"
 
 
 def _common_ref_type_widening(a_rust: str, b_rust: str, registry: dict | None) -> str | None:
@@ -156,13 +169,14 @@ def _common_ref_type_widening(a_rust: str, b_rust: str, registry: dict | None) -
         return base.strip(), args
     a_base, a_args = _split(a_rust)
     b_base, b_args = _split(b_rust)
-    common = _common_ref_type(a_base, b_base, registry)
-    if common is None or common == _OBJECT_CLASS:
+    common_full = _common_ref_type(a_base, b_base, registry)
+    if common_full is None or common_full == _OBJECT_CLASS:
         return None
+    common = rust_type_partition(common_full)[0].strip()
     if _is_interface(common, registry):
         return None
     if not a_args and not b_args:
-        return common
+        return common_full
     if a_args and a_args == b_args:
         return f"{common}<{a_args}>"
     return None

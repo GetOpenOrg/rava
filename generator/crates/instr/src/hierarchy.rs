@@ -97,10 +97,10 @@ pub fn common_ref_type(ctx: &InstrCtx, a: &RsType, b: &RsType) -> Option<RsType>
         return None;
     }
     if is_subtype(ctx, a, b) {
-        return Some(b.clone());
+        return Some(erased_generic(ctx, b.clone()));
     }
     if is_subtype(ctx, b, a) {
-        return Some(a.clone());
+        return Some(erased_generic(ctx, a.clone()));
     }
     let mut cur = type_binary(ctx, a)?;
     let mut seen = std::collections::BTreeSet::new();
@@ -113,10 +113,25 @@ pub fn common_ref_type(ctx: &InstrCtx, a: &RsType, b: &RsType) -> Option<RsType>
         cur = sc.to_string();
         let sc_t = RsType::class(cur.clone(), Vec::new());
         if is_subtype(ctx, b, &sc_t) {
-            return Some(sc_t);
+            return Some(erased_generic(ctx, sc_t));
         }
     }
     None
+}
+
+/// 公共祖先是泛型类时补擦除实例化（`Enum` → `Enum<Object>`，`_erased_generic`）：两个非泛型子类
+/// 的合并点只能取擦除视图，宏生成的 `From<Child> for Ancestor<任意实参>` 保证上转成立
+fn erased_generic(ctx: &InstrCtx, t: RsType) -> RsType {
+    let RsType::Class { binary, args } = &t else { return t };
+    if !args.is_empty() {
+        return t;
+    }
+    let Some(ci) = ctx.reg().get(binary.as_str()) else { return t };
+    let n = ctx.ty.effective_class_type_params(ci).len();
+    if n == 0 {
+        return t;
+    }
+    RsType::class(binary.to_string(), vec![RsType::Object; n])
 }
 
 /// 槽位 widening 的公共类祖先（`_common_ref_type_widening`）：基名走 [`common_ref_type`]；

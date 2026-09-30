@@ -519,8 +519,9 @@ def _constant_value_str(pool: list, cv_idx: int) -> str:
                 parts.append('\\r')
             elif ch == '\t':
                 parts.append('\\t')
-            elif cp < 0x20 or (0x7f <= cp <= 0x9f):
-                # Rust lexer rejects raw control chars in source — escape them
+            elif cp < 0x20 or (0x7f <= cp <= 0x9f) or (0x202a <= cp <= 0x202e) or (0x2066 <= cp <= 0x2069):
+                # Rust lexer rejects raw control chars in source — escape them；
+                # 双向文本控制符触发 rustc 默认 deny 的 text_direction_codepoint_in_literal
                 parts.append(f'\\u{{{cp:04x}}}')
             else:
                 parts.append(ch)

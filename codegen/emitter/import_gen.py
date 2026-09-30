@@ -254,16 +254,17 @@ def collect_referenced(ci, registry, generated_classes) -> set[str]:
             if _common:
                 _referenced.add(_common[0])
     # 扫描字段描述符（含超类链继承字段）
+    # 祖先字段不按名字去重：本类同名字段隐藏祖先字段时，祖先字段仍以独立槽位名进入
+    # superclass_fields 宏属性（NativeReferenceQueue.lock 隐藏 ReferenceQueue.lock），其类型须在作用域内
     _all_fields_to_scan = list(ci.fields)
     if registry:
         _sc_scan = ci.super_class
-        _seen_scan: set[str] = {f.name for f in ci.fields}
-        while _sc_scan and _sc_scan != _OBJECT_CLASS and _sc_scan in registry:
+        _seen_sc: set[str] = set()
+        while (_sc_scan and _sc_scan != _OBJECT_CLASS and _sc_scan in registry
+               and _sc_scan not in _seen_sc):
+            _seen_sc.add(_sc_scan)
             _sci_scan = registry[_sc_scan]
-            for _f2 in _sci_scan.fields:
-                if not _f2.is_static and _f2.name not in _seen_scan:
-                    _all_fields_to_scan.append(_f2)
-                    _seen_scan.add(_f2.name)
+            _all_fields_to_scan.extend(_f2 for _f2 in _sci_scan.fields if not _f2.is_static)
             _sc_scan = _sci_scan.super_class
     # 泛型签名中嵌套类型需要用更宽松的 regex（不能用 [^;]+ 因为嵌套 <TT;> 会截断）
     # _CLS_RE_NARROW / _CLS_RE_WIDE 为模块级常量（文件顶部编译，避免每次重复编译）

@@ -366,6 +366,25 @@ def _downcast_target_valid(expected: str, sim: 'StackSim', registry: dict | None
     return all(_n in _ok for _n in _names)
 
 
+def _reinstantiation_target_valid(expected: str, sim: 'StackSim', registry: dict | None) -> bool:
+    """同族重实例化（`<C<..> as From<Object>>::from`）目标合法性：头部须为具体类
+    （`_downcast_target_valid` 同口径）；类型实参另可为接口载体——实参只参与目标
+    类型的形参代入，不作 downcast 目标（`ReferencedKeyMap<T, ReferenceKey<T>>`）。"""
+    if _downcast_target_valid(expected, sim, registry):
+        return True
+    if '<' not in expected or not registry:
+        return False
+    _head, _args = expected.split('<', 1)
+    if not _downcast_target_valid(_head.strip(), sim, registry):
+        return False
+    import re as _re_r
+    _ok = (set(sim.class_type_params or ()) | set(_concrete_class_shorts(registry))
+           | {_short_cls_g(_b) for _b, _ci in registry.items() if getattr(_ci, 'is_interface', False)}
+           | {'Object', 'String', 'Class', 'Rc', '__Shared', 'Vec', 'RefCell', 'Option'}
+           | set(_PRIMITIVE_TYPE_NAMES))
+    return all(_n in _ok for _n in _re_r.findall(r'[A-Za-z_][A-Za-z0-9_]*', _args))
+
+
 def _is_generated_concrete_class(actual: str, sim: 'StackSim', registry: dict | None) -> bool:
     """actual 是否为 registry 中由字节码生成的具体（非接口）类的 Rust 类型。"""
     if not registry or not actual:
@@ -684,7 +703,7 @@ def coerce_arg_node(
         return _Cast(E, _Prim('i32'))
     # 同一泛型类的不同实例化（raw type / 通配符形参接收精确实例化的实参）：
     # CastExpr 的擦除路径（A-3，替代已删除的 _reinstantiate_generic 字符串发射）
-    if _downcast_target_valid(expected, sim, registry):
+    if _reinstantiation_target_valid(expected, sim, registry):
         if _same_generic_family(actual, expected):
             return _castn(_E_CAST, expected, box_first=True)
     # TypeIR 批次 3（S5）：实参 → 形参的子类上转判定走类型对象

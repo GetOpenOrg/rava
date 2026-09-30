@@ -42,7 +42,8 @@ def _escape_str(s: str) -> str:
             result.append('\\t')
         else:
             cp = ord(c)
-            if cp < 0x20 or (0x7f <= cp <= 0x9f):
+            # 控制字符与双向文本控制符（rustc text_direction_codepoint_in_literal 默认 deny）
+            if cp < 0x20 or (0x7f <= cp <= 0x9f) or (0x202a <= cp <= 0x202e) or (0x2066 <= cp <= 0x2069):
                 result.append(f'\\u{{{cp:04x}}}')
             else:
                 result.append(c)

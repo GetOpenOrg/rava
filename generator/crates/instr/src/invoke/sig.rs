@@ -187,6 +187,32 @@ pub fn downcast_target_valid(env: &InstrEnv, sim: &StackSim, expected: &RsType) 
     })
 }
 
+/// 同族重实例化目标合法性（`_reinstantiation_target_valid`）：头部须为具体类；类型实参另可为
+/// 接口载体（实参只参与目标类型的形参代入，不作 downcast 目标）
+pub fn reinstantiation_target_valid(env: &InstrEnv, sim: &StackSim, expected: &RsType) -> bool {
+    if downcast_target_valid(env, sim, expected) {
+        return true;
+    }
+    let text = ty_text(env, expected);
+    let Some((head, args)) = text.split_once('<') else {
+        return false;
+    };
+    let head = head.trim();
+    if !is_concrete_short(&env.ctx, head.rsplit("::").next().unwrap_or(head)) {
+        return false;
+    }
+    const BUILTIN: [&str; 5] = ["Rc", "__Shared", "Vec", "RefCell", "Option"];
+    const PRIMS: [&str; 12] = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "usize"];
+    let anchors = [ir::anchors::OBJECT, ir::anchors::STRING, ir::anchors::CLASS];
+    ident_tokens(args).iter().all(|n| {
+        sim.cfg.class_type_params.iter().any(|p| p == n)
+            || anchors.contains(n)
+            || BUILTIN.contains(n)
+            || PRIMS.contains(n)
+            || hierarchy::short_binary(&env.ctx, n).and_then(|b| env.ctx.reg().get(&b)).is_some()
+    })
+}
+
 /// 注册表内由字节码生成的具体（非接口）类（`_is_generated_concrete_class`）
 pub fn is_generated_concrete_class(env: &InstrEnv, sim: &StackSim, actual: &RsType) -> bool {
     let text = ty_text(env, actual);

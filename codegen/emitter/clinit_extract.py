@@ -46,10 +46,8 @@ def _gen_static_field_blocks(ci, registry, class_type_params: list,
     _nf_covered_sf = (_nf_entry or {}).get('methods', set())
     _nf_cores = (_nf_entry or {}).get('method_cores', {}) or {}
     for sf in static_fields:
-        safe_fname = _safe_field_name(sf.name)
-        if sf.name in existing_method_names:
-            # 字段名与方法名冲突：改用 _field 后缀（读写侧 fields.py 同规则）
-            safe_fname = safe_fname + '_field'
+        # 字段名与方法名冲突：改用 `<原名>_field` 后缀再做标识符转义（读写侧 fields.py 同规则）
+        safe_fname = _safe_field_name(sf.name + '_field' if sf.name in existing_method_names else sf.name)
         # 优先用 generic_signature 确定字段类型（包含泛型参数信息）
         if sf.generic_signature:
             _gs_ret = parse_field_type(sf.generic_signature, class_type_params, registry)
