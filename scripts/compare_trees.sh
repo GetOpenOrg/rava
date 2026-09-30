@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 两组转译树逐字节对照（Cargo.toml 除外——包版本按 scratch 唯一化）+ raw-audit 计数对照。
-# closure.json 去掉计时 / 内存采样键（键名以 _ms / _mb 结尾：elapsed_ms、perf.phases_ms、
-# perf.peak_rss_mb、perf.rss_marks_mb）后按结构对照——这些值每次运行都不同，不是生成结果。
+# closure.json 去掉计时键（键名以 _ms / _mb 结尾，如 summary.elapsed_ms）与分析器性能观测节
+# summary.perf（阶段计时、内存采样、传播推送 / SCC 等工作量计数——按哈希迭代序逐次浮动）后按结构对照：
+# 这些值每次运行都不同，不是闭包结果。
 #
 # 用法：scripts/compare_trees.sh <base_dir> <new_dir>
 #   输出每测试 diff 行数；全部为 0 且审计行一致 → exit 0，否则 exit 1。
@@ -13,7 +14,7 @@ _strip_timing() {
 import json, sys
 def strip(v):
     if isinstance(v, dict):
-        return {k: strip(x) for k, x in v.items() if not k.endswith(('_ms', '_mb'))}
+        return {k: strip(x) for k, x in v.items() if k != 'perf' and not k.endswith(('_ms', '_mb'))}
     if isinstance(v, list):
         return [strip(x) for x in v]
     return v
