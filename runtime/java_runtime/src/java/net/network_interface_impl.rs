@@ -72,13 +72,13 @@ fn enumerate() -> Vec<IfInfo> {
                 list.len() - 1
             }
         };
-        // SAFETY: ifa_addr / ifa_netmask / ifa_ifu 为节点内的 sockaddr 指针（可为 null）
+        // SAFETY: ifa_addr / ifa_netmask / 广播地址为节点内的 sockaddr 指针（可为 null）
         if let Some(addr) = unsafe { sockaddr_bytes(ifa.ifa_addr) } {
             let prefix = unsafe { sockaddr_bytes(ifa.ifa_netmask) }
                 .map(|m| m.iter().map(|b| b.count_ones() as i16).sum())
                 .unwrap_or(0);
             let broadcast = if addr.len() == 4 && ifa.ifa_flags & libc::IFF_BROADCAST as u32 != 0 {
-                unsafe { sockaddr_bytes(ifa.ifa_ifu) }
+                unsafe { sockaddr_bytes(broadcast_addr(ifa)) }
             } else {
                 None
             };
@@ -88,6 +88,17 @@ fn enumerate() -> Vec<IfInfo> {
     // SAFETY: 释放 getifaddrs 分配的链表
     unsafe { libc::freeifaddrs(ifap) };
     list
+}
+
+/// 广播地址字段：Linux 为 `ifa_ifu` 联合体，BSD 系（含 macOS）为 `ifa_dstaddr`
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn broadcast_addr(ifa: &libc::ifaddrs) -> *mut libc::sockaddr {
+    ifa.ifa_ifu
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn broadcast_addr(ifa: &libc::ifaddrs) -> *mut libc::sockaddr {
+    ifa.ifa_dstaddr
 }
 
 fn if_index(name: &str) -> i32 {
