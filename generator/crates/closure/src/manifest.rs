@@ -24,6 +24,8 @@ pub enum IndyKind {
     Lambda,
     Concat,
     Native,
+    /// record 的 equals / hashCode / toString（native 的细分）：各引用分量派发同名 Object 方法
+    ObjectMethods,
 }
 
 /// 手写方法写入实参数组的元素（`[facts.array_writes]`；形参序号按描述符，不含接收者）
@@ -235,10 +237,12 @@ impl Manifest {
         }
 
         let mut indy = HashMap::new();
+        // 细分类别在后：同时列于 native 时取细分
         for (key, kind) in [
             ("lambda", IndyKind::Lambda),
             ("concat", IndyKind::Concat),
             ("native", IndyKind::Native),
+            ("object_methods", IndyKind::ObjectMethods),
         ] {
             for m in strings(&vm, "indy", key) {
                 indy.insert(m, kind);
@@ -468,5 +472,15 @@ mod tests {
     fn array_returns_reject_non_array() {
         assert!(with_vm("[facts.array_returns]\n\"a/B.f:()Ljava/lang/Object;\" = { elements = [\"a/C\"] }\n").is_err());
         assert!(with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [] }\n").is_err());
+    }
+
+    #[test]
+    fn indy_object_methods_refines_native_and_boxing() {
+        let m = with_vm("[indy]\nnative = [\"a/B.boot\", \"a/C.boot\"]\nobject_methods = [\"a/B.boot\"]\n[boxing]\nI = \"a/BoxI\"\n").unwrap();
+        assert_eq!(m.indy_kind("a/B.boot"), Some(IndyKind::ObjectMethods));
+        assert_eq!(m.indy_kind("a/C.boot"), Some(IndyKind::Native));
+        assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));
+        assert_eq!(m.unboxed_prim("a/BoxI"), Some(b'I'));
+        assert_eq!(m.boxed_class(b'J'), None);
     }
 }

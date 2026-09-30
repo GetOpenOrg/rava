@@ -410,6 +410,8 @@ results = [
 #   lambda  LambdaMetafactory：调用点产出实现 SAM 接口的合成类，SAM 调用分派到实现方法句柄
 #   concat  StringConcatFactory：动态实参按 String.valueOf 语义调用 toString
 #   native  其余原生承载的引导方法：只沿静态实参里的方法句柄入链
+#   object_methods  native 的细分（record 的 equals / hashCode / toString）：静态实参里的 getter 句柄
+#           读出各分量，引用分量按调用点名派发同名 Object 方法（描述符 = indy 描述符去掉首个 record 形参）
 # 未列出的引导方法按普通静态调用分析其 Java 体（安全方向）。
 [indy]
 lambda = [
@@ -429,6 +431,9 @@ native = [
 #                生成器据此发射运行时标签判定链（S-17）
 type_switch = [
     "java/lang/runtime/SwitchBootstraps.typeSwitch",
+]
+object_methods = [
+    "java/lang/runtime/ObjectMethods.bootstrap",
 ]
 
 # ── 基本类型的装箱类（闭包分析，generator `rava closure` 读取）─────────────────────────
