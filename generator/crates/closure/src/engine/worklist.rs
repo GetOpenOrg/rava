@@ -117,6 +117,7 @@ impl<'a> Engine<'a> {
                 // 方法按值未知重算——导出的不可达代码只从跳转 / switch / return / athrow 之后开始
                 if !self.ctx.optimistic.replace(false) {
                     self.ctx.stats.borrow_mut().mark_rss("final");
+                    cut::dump_edges();
                     break;
                 }
                 let never: Vec<usize> = std::mem::take(&mut *self.ctx.never.borrow_mut()).into_iter().collect();
@@ -192,6 +193,10 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn process(&mut self, m: usize) {
+        let c = cut::cuts();
+        if c.active() && c.method(&self.methods[m].key.to_string()) {
+            return;
+        }
         match self.methods[m].kind {
             Kind::Bytecode => self.process_bytecode(m),
             Kind::Handwritten(HWOBJ_KIND) => self.process_hwobj_method(m),

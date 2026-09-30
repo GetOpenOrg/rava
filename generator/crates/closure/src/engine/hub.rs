@@ -62,6 +62,7 @@ impl<'a> Engine<'a> {
             if let Some(rt) = ret {
                 self.flow(Node::HR(p), Node::HR(h), rt);
             }
+            cut::edge_plain(&format!("H:{h}"), &format!("H:{p}"));
             let rs = self.hubs[p as usize].recvs.clone();
             self.hubs[h as usize].recvs.extend(rs);
         }
@@ -83,6 +84,9 @@ impl<'a> Engine<'a> {
             return;
         }
         self.hub_sites.entry((m, off)).or_default().insert(h);
+        if cut::edges_on() {
+            cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("H:{h}"));
+        }
         let hub = &self.hubs[h as usize];
         let (ptypes, ret) = (hub.ptypes.clone(), hub.ret);
         for (j, f) in a.iter().enumerate() {
@@ -201,7 +205,8 @@ impl<'a> Engine<'a> {
         };
         let (o, n, d) = sel.key();
         let via = self.hubs[h as usize].via.clone();
-        let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.ctx_of(r), via);
+        let cx = self.ctx_of(r);
+        let t = cut::with_ctx(Some(format!("H:{h}")), Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
         // 先并入形参常量，再判定是否按调用点建模（透传摘要依赖分析）
         if self.methods[t].kind == Kind::Bytecode && !self.methods[t].is_static {
             self.hub_bind(h, t);

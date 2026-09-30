@@ -269,7 +269,8 @@ impl<'a> Engine<'a> {
         match self.h.select(&rname, site) {
             Some(sel) => {
                 let (o, n, d) = sel.key();
-                let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.ctx_of(r), via);
+                let cx = self.ctx_of(r);
+                let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             None => {

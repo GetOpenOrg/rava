@@ -5,6 +5,10 @@ use super::*;
 impl<'a> Engine<'a> {
     /// JVMS §5.5 初始化：超类链、声明非抽象实例方法的超接口、`<clinit>`
     pub fn init(&mut self, cls: &str, via: Via) {
+        if cut::edges_on() && !cls.starts_with('[') {
+            let from = self.via_node(&via);
+            cut::edge(&from, &format!("I:{cls}"));
+        }
         if cls.starts_with('[') || self.inited.contains_key(cls) {
             return;
         }
@@ -59,6 +63,10 @@ impl<'a> Engine<'a> {
             self.handle_writer_edge(&key, &via);
         }
         self.sysprops_entry(&key, &via);
+        if cut::edges_on() {
+            let from = self.via_node(&via);
+            cut::edge(&from, &format!("M:{key}"));
+        }
         let k = (key, ctx);
         if let Some(i) = self.methods.get_index_of(&k) {
             return i;

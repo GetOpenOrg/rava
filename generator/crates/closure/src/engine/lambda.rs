@@ -75,13 +75,16 @@ impl<'a> Engine<'a> {
         match l.imh.kind {
             6 => {
                 // 静态实现方法继承 lambda 创建时的克隆上下文；分派转发的实现方法按调用点克隆
-                let t = self.callee(m, off, resolved, l.ctx, via);
+                let cond = Some(format!("A:{}", self.names[lid as usize]));
+                let t = super::cut::with_ctx(None, cond, || self.callee(m, off, resolved, l.ctx, via));
                 self.edge(m, off, t, Recv::None, &all, ret, res);
             }
             8 => {
                 // 构造器引用：容器类在 lambda 创建点分配抽象对象
                 let oid = if self.container(&k.owner) { self.obj_at(l.site.0, l.site.1, &k.owner) } else { self.id(&k.owner) };
-                let t = self.method_ctx(resolved, self.ctx_of(oid), via);
+                let cond = Some(format!("A:{}", self.names[lid as usize]));
+                let cx = self.ctx_of(oid);
+                let t = super::cut::with_ctx(None, cond, || self.method_ctx(resolved, cx, via));
                 self.edge(m, off, t, Recv::Exact(oid), &all, None, None);
                 if let (Some(res), Some(rt)) = (res, ret) {
                     let s = self.filter(&TypeSet::exact(oid), rt);
@@ -183,6 +186,9 @@ impl<'a> Engine<'a> {
                 }
                 let lname = format!("{}$$Lambda@{}:{}", cf.name, m, off);
                 let lid = self.id(&lname);
+                if super::cut::edges_on() {
+                    super::cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("A:{lname}"));
+                }
                 let ctx = self.methods[m].ctx;
                 let adapt = self.lambda_plan(&b.args, imh, cap.len());
                 self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), sam: name.to_string(), imh: imh.clone(), cap, adapt });
