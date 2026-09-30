@@ -854,7 +854,7 @@ fn write_class_anno_table(entries: &BTreeMap<String, (Vec<u8>, String)>) {
         "// 由 build.rs 自动生成：类级注解原始字节 + 注解引用的稀疏常量池（FS-R R4b）。
          // 消费方：Class.getRawAnnotations、ConstantPool natives。请勿手改。
 
-         pub enum CpVal { U(&'static str), I(i32), J(i64), F(f32), D(f64) }
+         pub enum CpVal { U(&'static str), W(&'static [u16]), I(i32), J(i64), F(f32), D(f64) }
 
          pub static CLASS_ANNO: &[(&str, &[u8], &[(i32, CpVal)])] = &[
 ",
@@ -866,6 +866,11 @@ fn write_class_anno_table(entries: &BTreeMap<String, (Vec<u8>, String)>) {
             let (Some(idx), Some(k), Some(v)) = (it.next(), it.next(), it.next()) else { continue };
             let val = match k {
                 "U" => format!("CpVal::U({:?})", std::string::String::from_utf8_lossy(&hex_bytes(v))),
+                // 含孤立代理项的字符串：UTF-16 码元（每码元 4 位 hex）原样承载
+                "W" => format!(
+                    "CpVal::W(&[{}])",
+                    v.as_bytes().chunks(4).map(|c| format!("0x{}", std::str::from_utf8(c).unwrap_or("0"))).collect::<Vec<_>>().join(", ")
+                ),
                 "I" => format!("CpVal::I({}i32)", v),
                 "J" => format!("CpVal::J({}i64)", v),
                 "F" => format!("CpVal::F(f32::from_bits(0x{}))", v),

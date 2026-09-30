@@ -27,6 +27,7 @@ impl ConstantPool {
     pub fn getUTF8At0(&self, cp_oop: Object, index: i32) -> Result<String> {
         match entry(&cp_oop, index)? {
             CpVal::U(s) => Ok(String::from(*s)),
+            CpVal::W(units) => Ok(String::from_utf16_lit(units)),
             _ => Err(wrong(index)),
         }
     }

@@ -14,7 +14,7 @@ use sim::StackSim;
 use ty::{Prim, RsType};
 
 use super::boxing::obj_text;
-use super::concat::concat_from_stack;
+use super::concat::{concat_from_stack, Recipe};
 use super::{raw_stmt, IndySite};
 use crate::build::{text, ty_text};
 use crate::env::InstrEnv;
@@ -119,7 +119,7 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, site: &Indy
             let parts: Vec<String> = names.iter().map(|n| format!("{n}=\u{1}")).collect();
             let template = format!("{}[{}]", simple_name(env, &cls), parts.join(", "));
             let descs: Vec<String> = getters.iter().map(|g| g.desc.clone()).collect();
-            concat_from_stack(env, sim, &descs, Some((template, Vec::new())))
+            concat_from_stack(env, sim, &descs, Some(Recipe::text(&template)))
         }
         ("hashCode", _) => {
             let recv = pop_bound(sim)?;
