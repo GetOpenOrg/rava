@@ -25,7 +25,7 @@ fn is_obj_or_unit(t: &str) -> bool {
 
 /// 子类值上转到祖先类的「另一实例化」（`_upcast_to_ancestor_instantiation`）：
 /// 先上转到精确祖先，再经 Object 边界重新实例化；目标就是精确祖先 → None
-fn upcast_to_ancestor_instantiation(env: &InstrEnv, sim: &StackSim, src: &Expr, actual: &RsType, expected: &RsType) -> InstrResult<Option<Expr>> {
+pub(crate) fn upcast_to_ancestor_instantiation(env: &InstrEnv, sim: &StackSim, src: &Expr, actual: &RsType, expected: &RsType) -> InstrResult<Option<Expr>> {
     let ctx = &env.ctx;
     let JvmType::Class { binary, args, .. } = jvm(ctx, expected) else {
         return Ok(None);

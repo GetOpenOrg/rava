@@ -166,7 +166,7 @@ fn anno_binary(type_desc: &str) -> &str {
 }
 
 /// 被调方法（沿超类链解析声明处）的声明：(是否 @CallerSensitive, 是否 native)
-fn caller_sensitive_decl(env: &InstrEnv, owner_bin: &str, mname: &str, desc: &str) -> (bool, bool) {
+pub(crate) fn caller_sensitive_decl(env: &InstrEnv, owner_bin: &str, mname: &str, desc: &str) -> (bool, bool) {
     let annos = &env.ctx.rt.caller_sensitive_annotations;
     if env.ctx.reg().is_empty() || annos.is_empty() {
         return (false, false);

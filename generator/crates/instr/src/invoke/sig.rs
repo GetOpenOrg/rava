@@ -246,6 +246,8 @@ pub fn exact_ancestor_type(ctx: &InstrCtx, actual: &RsType, ancestor_bin: &str) 
     Some(RsType::class(anc, args))
 }
 
+pub(crate) use coerce_arg::upcast_to_ancestor_instantiation;
+
 /// 实参 → 形参类型的强转（`coerce_arg_node`）
 pub fn coerce_arg(env: &InstrEnv, sim: &StackSim, log: &mut InstrLog, e: Expr, actual: &RsType, expected: &RsType) -> InstrResult<Expr> {
     coerce_arg::coerce(env, sim, log, e, actual, expected)

@@ -6,15 +6,16 @@
 use classfile::Insn;
 use ir::anchors::OBJECT;
 use ir::{Expr, FnPath, Lit, Path, Stmt};
-use sim::exprs::{clone_plain, default_value, from_call, into_call, object_from, object_type, qualified_from};
+use sim::exprs::{clone_plain, default_value, from_call, object_from, object_type, qualified_from};
 use sim::StackSim;
-use ty::{consts, JvmType, Prim, RsType};
+use ty::{JvmType, Prim, RsType};
 
 use crate::build::{call, ir_ty, seg, str_leaf, text, ty_text, var};
 use crate::coerce::{self, to_object};
 use crate::env::InstrEnv;
 use crate::error::InstrResult;
 use crate::hierarchy::{is_subtype, type_binary};
+use crate::invoke::sig::upcast_to_ancestor_instantiation;
 use crate::log::InstrLog;
 use crate::sim::control::{erased_base_ty, erased_shape, words};
 
@@ -127,7 +128,7 @@ fn areturn_value(env: &InstrEnv, sim: &StackSim, e: Expr, actual: &RsType) -> In
     let both_ref = !is_prim_text(&ret_s) && !is_prim_text(&act_s) && !is_obj(&ret_s) && ret_s != act_s;
     if both_ref && is_subtype(&env.ctx, &act_base, &ret_base) {
         // 返回值是类祖先的子类型：按值上转（宏 From<Self> for Ancestor）
-        return match upcast_to_ancestor_instantiation(env, sim, cur.clone(), actual, ret)? {
+        return match upcast_to_ancestor_instantiation(env, sim, &cur, actual, ret)? {
             Some(x) => Ok(x),
             None => Ok(Expr::upcast(cur, ir::UpcastWrap::Bare)),
         };
@@ -137,63 +138,4 @@ fn areturn_value(env: &InstrEnv, sim: &StackSim, e: Expr, actual: &RsType) -> In
         return Ok(from_call(to_object(env, cur, actual, true)?)?);
     }
     Ok(cur)
-}
-
-/// 子类值上转到祖先类的「另一实例化」（`invoke_sig._upcast_to_ancestor_instantiation`）：
-/// 先上转到精确祖先，再经 Object 边界重新实例化。目标就是精确祖先 / 不合法 → None
-fn upcast_to_ancestor_instantiation(
-    env: &InstrEnv,
-    sim: &StackSim,
-    src: Expr,
-    actual: &RsType,
-    expected: &RsType,
-) -> InstrResult<Option<Expr>> {
-    let none = Default::default();
-    let JvmType::Class { binary: exp_bin, args: exp_args, .. } = env.ctx.ty.from_rs_type(expected, &none) else {
-        return Ok(None);
-    };
-    let Some(exact) = exact_ancestor_type(env, actual, &exp_bin) else {
-        return Ok(None);
-    };
-    if ty_text(env, &exact) == ty_text(env, expected)
-        || exp_args.is_empty()
-        || !downcast_target_valid(env, sim, expected)
-        || !downcast_target_valid(env, sim, &exact)
-    {
-        return Ok(None);
-    }
-    let inner = object_from(into_call(ir_ty(env, &exact)?, src)?)?;
-    Ok(Some(qualified_from(ir_ty(env, expected)?, object_type()?, inner)?))
-}
-
-/// actual 沿超类链到祖先 `anc_bin` 的精确实例化（`_exact_ancestor_type`；不在链上 → None）
-fn exact_ancestor_type(env: &InstrEnv, actual: &RsType, anc_bin: &str) -> Option<RsType> {
-    let JvmType::Class { binary, .. } = env.ctx.ty.from_rs_type(actual, &Default::default()) else {
-        return None;
-    };
-    let ci = env.ctx.reg().get(&binary)?;
-    env.ctx
-        .ty
-        .ancestor_type_args(ci, Some(actual.type_args()))
-        .into_iter()
-        .find(|(b, _)| b == anc_bin)
-        .map(|(b, args)| RsType::class(b, args))
-}
-
-/// downcast 目标类型合法性（`_downcast_target_valid`）：类型文本的全部标识符须为具体类
-/// （非接口）短名、类级类型形参、根类 / 字符串 / 类字面量类短名、内建容器名或基本类型名
-fn downcast_target_valid(env: &InstrEnv, sim: &StackSim, t: &RsType) -> bool {
-    let s = ty_text(env, t);
-    let names = words(&s);
-    if names.is_empty() {
-        return false;
-    }
-    let builtin = [consts::OBJECT, consts::STRING, consts::CLASS].map(|b| env.ctx.short(b));
-    names.iter().all(|n| {
-        sim.cfg.class_type_params.iter().any(|p| p == n)
-            || builtin.iter().any(|b| b == n)
-            || matches!(*n, OBJECT | "Rc" | "__Shared" | "Vec" | "RefCell" | "Option")
-            || is_prim_text(n)
-            || env.ctx.reg().iter().any(|ci| !ci.is_interface() && env.ctx.short(ci.name()) == *n)
-    })
 }

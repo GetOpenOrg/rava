@@ -39,24 +39,5 @@ impl<'c> CsCtx<'c> {
 
 /// 被调方法（沿超类链解析声明处）是否标注清单登记的 caller-sensitive 注解
 fn is_caller_sensitive(env: &InstrEnv, owner: &str, mname: &str, desc: &str) -> bool {
-    let annos = &env.ctx.rt.caller_sensitive_annotations;
-    let reg = env.ctx.reg();
-    if reg.is_empty() || annos.is_empty() {
-        return false;
-    }
-    let mut cur = owner.to_string();
-    let mut seen = std::collections::BTreeSet::new();
-    while !cur.is_empty() && seen.insert(cur.clone()) {
-        let Some(ci) = reg.get(&cur) else {
-            return false;
-        };
-        if let Some(m) = ci.methods().iter().find(|m| m.name == mname && m.desc == desc) {
-            return m.annotations.iter().any(|a| {
-                let bin = a.type_desc.strip_prefix('L').and_then(|r| r.strip_suffix(';')).unwrap_or(&a.type_desc);
-                annos.contains(bin)
-            });
-        }
-        cur = ci.super_class().to_string();
-    }
-    false
+    crate::invoke::bind::caller_sensitive_decl(env, owner, mname, desc).0
 }
