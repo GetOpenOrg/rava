@@ -1,7 +1,7 @@
 # Rust 生成器（发射层）实施计划：单二进制 `rava build`
 
 > 日期：2026-09-30
-> 状态（2026-09-30 深夜）：P1（`input`）/ P2（`ty`）/ P3（`ir`）/ P4a（`sim` / `cfg`）/ P4b（`instr`，golden 5 例逐字节一致；移植期差异 D1 / D3 已并入 cacea617）/ P4c（`method`，golden 3 例 0 失配，bb50f5f0）/ P5a（`emit`，golden 3 例 2132 文件全文 0 失配）/ P0 外壳（`rava build` / `rava emit`、脚本 `--generator` / `RAVA_GENERATOR` 缺省 python，20c4ab58）已合入；input golden 已按 folds v2 重新转储并通过。P5b（method 接入 emit、27 例逐字节一致，并处理 unported 清点报告的 P5b 前置项）子代理进行中；C3（null_recv 抛 NPE、系统属性表与 `[facts.system_properties]` 同源等，见边界收窄计划 §6.9）待 P5b 后实施
+> 状态（2026-09-30 深夜）：P1（`input`）/ P2（`ty`）/ P3（`ir`）/ P4a（`sim` / `cfg`）/ P4b（`instr`，golden 5 例逐字节一致；移植期差异 D1 / D3 已并入 cacea617）/ P4c（`method`，golden 3 例 0 失配，bb50f5f0）/ P5a（`emit`，golden 3 例 2132 文件全文 0 失配）/ P0 外壳（`rava build` / `rava emit`、脚本 `--generator` / `RAVA_GENERATOR` 缺省 python，20c4ab58）已合入；input golden 已按 folds v2 重新转储并通过。P5b 已合入（838018b2：method 接入 emit，`rava build` 缺省用真实方法体；验收集 27 例生成树与 Python 逐字节一致，仅 `Cargo.toml` 与 closure.json `elapsed_ms` 除外；unported 前置项 U3 完成、U9 删除、登记失准 3 项更正、S1–S6 登记，27 例中占位命中 0）。P5b 遗留：S1–S6 占位代码清零；`--lib` / `--batch` / `--debug` / `--trace-class` / `--precheck-only` / `--raw-sites` 未接入；readability / fallback / shortname 审计未输出（详见 `generator/crates/emit/P5B_NOTES.md`）。缺省生成器仍为 python，切换待用户决定。C3（null_recv 抛 NPE、系统属性表与 `[facts.system_properties]` 同源等，见边界收窄计划 §6.9）为下一步
 > 决策（用户 2026-09-30 拍板）：
 > ① Python 生成器用 Rust 重写，与 Rust 闭包分析器合为**一个二进制** `rava build`：闭包分析 → 发射 → cargo，闭包结果进程内传递；管道形态（`rava closure … -o x.json` / `rava emit x.json`）只作调试与审计入口。
 > ② **C3（发射层消费 levels / dispatch / folds）直接在 Rust 生成器做**，Python 侧不再投入。
