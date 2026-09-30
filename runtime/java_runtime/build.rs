@@ -289,6 +289,8 @@ struct FieldMeta {
     is_static:  bool,
     constant:   Option<i64>,
     annotations: Vec<u8>,
+    /// Signature 属性（泛型签名，Field.signature / getGenericType 数据源）；无则空串
+    signature:  String,
 }
 
 /// 字段元数据扫描：java_class! 块内 java_field 属性行（每字段独立成行，
@@ -324,8 +326,9 @@ fn scan_class_fields(roots: &[&Path]) -> BTreeMap<String, Vec<FieldMeta>> {
             let constant = extract_attr(window, "constant_value")
                 .and_then(|v| v.strip_suffix('L').unwrap_or(&v).parse::<i64>().ok());
             let annotations = extract_key(window, "raw_annotations").map(|h| hex_bytes(&h)).unwrap_or_default();
+            let signature = extract_key(window, "generic_signature").unwrap_or_default();
             result.entry(current.clone()).or_default().push(FieldMeta {
-                name, descriptor, modifiers: bits, is_static, constant, annotations,
+                name, descriptor, modifiers: bits, is_static, constant, annotations, signature,
             });
         }
     }
@@ -409,6 +412,7 @@ fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {    let Ok(out
              pub is_static:  bool,
              pub constant:   Option<i64>,
              pub annotations: &'static [u8],
+             pub signature:  &'static str,
          }
 
          pub static CLASS_FIELDS: &[(&str, &[FieldMeta])] = &[
@@ -419,10 +423,10 @@ fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {    let Ok(out
         out.push_str(&format!("    ({:?}, &[\n", class));
         for f in fields {
             out.push_str(&format!(
-                "        FieldMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, constant: {}, annotations: &{:?} }},\n",
+                "        FieldMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, constant: {}, annotations: &{:?}, signature: {:?} }},\n",
                 f.name, f.descriptor, f.modifiers, f.is_static,
                 match f.constant { Some(v) => format!("Some({}i64)", v), None => "None".to_owned() },
-                f.annotations,
+                f.annotations, f.signature,
             ));
         }
         out.push_str("    ]),\n");
@@ -454,6 +458,8 @@ struct MethodMeta {
     annotations: Vec<u8>,
     param_annotations: Vec<u8>,
     annotation_default: Vec<u8>,
+    /// Signature 属性（泛型签名，Method / Constructor.signature 数据源）；无则空串
+    signature: String,
     /// 继承成员行（`inherited_from`：超类型声明、展平到本类块供分派 / MethodHandle 解析）；
     /// 不属本类声明面（getDeclaredMethods 过滤）。
     inherited: bool,
@@ -504,6 +510,7 @@ fn scan_class_methods(roots: &[&Path]) -> BTreeMap<String, Vec<MethodMeta>> {
                 annotations: raw("raw_annotations"),
                 param_annotations: raw("raw_param_annotations"),
                 annotation_default: raw("raw_annotation_default"),
+                signature: extract_key(window, "generic_signature").unwrap_or_default(),
                 inherited: extract_key(window, "inherited_from").is_some(),
             });
         }
@@ -551,7 +558,7 @@ fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>>)
             modifiers: *mods, is_static: false, is_native: *native, is_abstract: false,
             exceptions: throws.iter().map(|e| (*e).to_owned()).collect(),
             annotations: Vec::new(), param_annotations: Vec::new(), annotation_default: Vec::new(),
-            inherited: false,
+            signature: String::new(), inherited: false,
         });
     }
     methods
@@ -577,6 +584,7 @@ fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
              pub annotations: &'static [u8],
              pub param_annotations: &'static [u8],
              pub annotation_default: &'static [u8],
+             pub signature:   &'static str,
              pub inherited:   bool,
          }
 
@@ -589,9 +597,9 @@ fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
         for m in methods {
             let excs: Vec<String> = m.exceptions.iter().map(|e| format!("{:?}", e)).collect();
             out.push_str(&format!(
-                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}], annotations: &{:?}, param_annotations: &{:?}, annotation_default: &{:?}, inherited: {} }},\n",
+                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}], annotations: &{:?}, param_annotations: &{:?}, annotation_default: &{:?}, signature: {:?}, inherited: {} }},\n",
                 m.name, m.descriptor, m.modifiers, m.is_static, m.is_native, m.is_abstract,
-                excs.join(", "), m.annotations, m.param_annotations, m.annotation_default, m.inherited,
+                excs.join(", "), m.annotations, m.param_annotations, m.annotation_default, m.signature, m.inherited,
             ));
         }
         out.push_str("    ]),\n");
