@@ -14,9 +14,9 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 | (d1) 继承展开段 + record 补丁 | 同上（方法块全段） | 3 例全部一致；bodies.jsonl 回放记录全部被请求（0 未用） |
 | (d2) 第二阶段：接口实现 / 协变 upcast / 接口接收者超接口成员 / 类接收者继承成员 + use 行 | 全部类文件全文 | 3 例除 d3 尾段外逐字节一致（522 个文件的差异均为 py 多出的尾段：L3 反射字段 473、L3 反射分派 9、A-5 SAM 合成对象 40） |
 
-`tests/golden.rs` 已切到全文对照。尚待步骤 (d3) 接入的已知失配单列、不判失败：`PENDING` 表（`user/src/main.rs`
-反射注册表）与 `PENDING_TAILS`（rs 全文是 py 的行前缀、py 余下部分以反射字段 / 反射分派 / SAM 合成对象段头开始），
-d3 完成后两者须清空。
+| (d3) SAM 合成对象（A-5）+ L3 反射分派 / 字段闭包 + main 反射登记 | 全部文件全文 | 3 例 2132 个文件逐字节一致（失配 0）；回放方法体中 SAM 站点的构造路径与 `SamLedger::site_ctor_path` 一致 |
+
+`tests/golden.rs` 全文对照，无待接入项（`PENDING` 已删除）。
 
 ## 一、未移植分支（显式 `EmitError::Unported`）
 
@@ -60,3 +60,8 @@ d3 完成后两者须清空。
 4. **注册表插入序依赖**：`scan_used_vtable_imports` 与 `__base` 短名反查取注册表插入序首个短名命中者；
    Rust 注册表插入序与 Python dict 序一致时才等价（`ShortNames.index` 为后写覆盖，故手工按插入序迭代）。
 5. **浮点常量边界**：NaN payload 与代理对字符的常量文本按 Python repr 近似，非规范 NaN 可能与 Python 不同。
+
+6. **SAM 站点断言时机**：Python `record_site` 在站点生成时即抛错；Rust 由方法体生成器经 `BodyEffects::sam_sites`
+   登记，发射层在第二阶段开头统一 `SamLedger::check_sites`（断言内容相同，报错点后移）。
+7. **SAM 预扫描账本**：Python 模块级 `SAM_LEDGER`；Rust 为 `EmitCtx::sam()`（首次查询时预扫描，只读缓存）。
+   预扫描读规范化方法体（`EmitInput::code`），与 Python 发射前已折叠的指令同源。

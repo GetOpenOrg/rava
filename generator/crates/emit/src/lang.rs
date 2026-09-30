@@ -4,7 +4,7 @@
 //! JDK 命名空间前缀），不收库知识。`emit` 其余模块经本模块引用，JDK 类名字面量 lint
 //! （`tests/lint.rs`）豁免本文件。后续统一收归 `ty::consts`（本轮不改其它 crate）。
 
-pub use ty::consts::{CLASS, OBJECT, STRING};
+pub use ty::consts::{CLASS, OBJECT, SERIALIZABLE, STRING};
 
 /// 异常根类（JLS 11.1.1）：catch-any 处理器的绑定类型
 pub const THROWABLE: &str = "java/lang/Throwable";

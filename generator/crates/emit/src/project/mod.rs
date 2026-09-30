@@ -24,7 +24,6 @@ use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::ClassEmission;
 use crate::error::{EmitError, Result};
 use crate::imports::collect_referenced;
-use entry::DispatchReg;
 use fs::Writer;
 use layout::{JdkLayout, UserLayout};
 
@@ -95,9 +94,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &mut dyn MethodB
     let mut state = ProjectState::default();
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &jdk, &user)?;
     state.check_lambda_ledger()?;
-    crate::phase2::resolve_members(ctx, &mut state, &mut ems);
-    // SAM 合成 / 反射分派：步骤 (d3)
-    let disp = DispatchReg::default();
+    let disp = crate::phase2::finish(ctx, &mut state, &mut ems)?;
     for em in ems.values() {
         w.write(&em.path, &em.text)?;
     }

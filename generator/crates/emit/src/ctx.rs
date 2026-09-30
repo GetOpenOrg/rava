@@ -42,6 +42,8 @@ pub struct EmitCtx<'a> {
     subtype_children: OnceCell<BTreeMap<String, Vec<String>>>,
     root_api: OnceCell<BTreeSet<String>>,
     chain_slots: OnceCell<BTreeMap<String, BTreeSet<(String, String)>>>,
+    root_keys: OnceCell<BTreeSet<(String, String)>>,
+    sam: OnceCell<crate::sam::SamLedger>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -75,6 +77,8 @@ impl<'a> EmitCtx<'a> {
             subtype_children: OnceCell::new(),
             root_api: OnceCell::new(),
             chain_slots: OnceCell::new(),
+            root_keys: OnceCell::new(),
+            sam: OnceCell::new(),
         })
     }
 
@@ -134,6 +138,26 @@ impl<'a> EmitCtx<'a> {
             }
             names
         })
+    }
+
+    /// 根类的 public 实例方法键 {(名, 参数描述符部分)}（从 JDK 字节码解析；
+    /// `member_owner._root_virtual_methods`。与 `input::Planner` 的同名私有集合同源，后续统一）
+    pub fn root_keys(&self) -> &BTreeSet<(String, String)> {
+        self.root_keys.get_or_init(|| {
+            let Some(cf) = self.cp.get(ty::consts::OBJECT) else { return BTreeSet::new() };
+            cf.methods
+                .iter()
+                .filter(|m| !m.is_static() && !m.is_synthetic() && !m.name.starts_with('<'))
+                .filter(|m| m.access & classfile::acc::PUBLIC != 0)
+                .map(|m| (m.name.clone(), crate::phase2::sig::param_part(&m.desc).to_string()))
+                .collect()
+        })
+    }
+
+    /// A-5 可合成函数式接口账本（首次查询时预扫描；方法体生成器在 invokedynamic 站点经
+    /// [`crate::sam::SamLedger::site_ctor_path`] 查询构造路径）
+    pub fn sam(&self) -> &crate::sam::SamLedger {
+        self.sam.get_or_init(|| crate::sam::SamLedger::prescan(self))
     }
 
     /// 调用链按类索引的槽位键：类 → {(方法名, 参数描述符部分)}（`_cc_slot_index`）

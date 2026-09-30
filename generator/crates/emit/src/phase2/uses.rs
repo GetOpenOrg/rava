@@ -39,15 +39,20 @@ pub fn imported_names(text: &str) -> BTreeSet<String> {
 ///
 /// `ems` 为 None 时不查目标类的发射记录（Python 部分调用点不传 emissions，照搬）。
 pub fn class_use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, ems: Option<&Emissions>, recv_crate: &str) -> String {
+    let target = ems.and_then(|e| e.get(binary)).map(|e| (e.crate_name.as_str(), e.crate_prefix.as_str()));
+    use_path(ctx, binary, crate_prefix, target, recv_crate)
+}
+
+/// [`class_use_path`] 的核心：`target` 为目标类的 (crate 名, crate 前缀) 视图（None = 无发射记录）
+pub fn use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, target: Option<(&str, &str)>, recv_crate: &str) -> String {
     let short = ctx.short(binary);
-    let em = ems.and_then(|e| e.get(binary));
     let segs: Vec<&str> = binary.split('/').collect();
     let pkg = segs[..segs.len() - 1]
         .iter()
         .map(|p| if is_rust_keyword(p) { format!("r#{p}") } else { (*p).to_string() })
         .collect::<Vec<_>>()
         .join("::");
-    let lib_crate = em.map_or("", |e| e.crate_name.as_str());
+    let lib_crate = target.map_or("", |t| t.0);
     if !lib_crate.is_empty() && lib_crate != JAVA_RUNTIME {
         let prefix = if lib_crate == recv_crate { "crate" } else { lib_crate };
         if pkg.is_empty() {
@@ -55,7 +60,7 @@ pub fn class_use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, ems: 
         }
         return format!("{prefix}::{pkg}::{short}");
     }
-    if pkg.is_empty() || em.is_some_and(|e| e.crate_prefix != "crate") {
+    if pkg.is_empty() || target.is_some_and(|t| t.1 != "crate") {
         return format!("crate::{}::{short}", to_snake(binary));
     }
     format!("{crate_prefix}::{pkg}::{short}")

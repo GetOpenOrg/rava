@@ -28,6 +28,7 @@ pub mod imports;
 pub mod lang;
 pub mod phase2;
 pub mod project;
+pub mod sam;
 pub mod text;
 pub mod vtable;
 

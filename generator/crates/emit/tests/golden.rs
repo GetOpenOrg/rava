@@ -8,8 +8,8 @@
 //! 回放文本用与采集脚本相同的哨兵行包裹方法体，落盘后同样替换为 `/*BODY key*/` 占位再比较——
 //! 发射层基于文本的处理（VTable 导入扫描、record 补丁）看到的仍是真实方法体。
 //!
-//! 全部文件全文对照；待步骤 (d3) 接入的类文件尾段（反射字段 / 反射分派 / SAM 合成对象）
-//! 与 main.rs 反射注册表单列为待接入，不判失败。golden 缺失时跳过并提示采集命令。
+//! 全部文件全文对照，并核对回放方法体中 SAM 站点的合成对象构造路径与
+//! [`emit::sam::SamLedger::site_ctor_path`] 一致。golden 缺失时跳过并提示采集命令。
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -31,25 +31,6 @@ const TESTS: [(&str, &str); 3] = [
 
 /// 各 crate 目录（相对 scratch 根）：包版本按目录路径派生
 const CRATE_DIRS: [&str; 3] = ["", "java_runtime", "user"];
-/// 待后续步骤接入的已知失配（报告但不判失败；全部移植后须清空）
-const PENDING: [(&str, &str); 1] = [("user/src/main.rs", "反射分派注册表（步骤 d3：dispatch_gen）")];
-/// 待步骤 (d3) 接入的类文件尾段：rs 全文须是 py 的行前缀，py 余下部分以这些段头之一开始
-const PENDING_TAILS: [&str; 3] = [
-    "// ── L3 反射字段闭包（Field.get/set",
-    "// ── L3 反射分派闭包（Method.invoke",
-    "// ── A-5 函数式接口合成对象（LambdaMeta",
-];
-const PENDING_TAIL_MARK: &str = "[待接入 d3 尾段]";
-
-/// rs 是 py 的行前缀、且 py 余下部分（跳过空行）以待接入尾段段头开始
-fn pending_tail(want: &str, got: &str) -> bool {
-    let (w, g): (Vec<&str>, Vec<&str>) = (want.lines().collect(), got.lines().collect());
-    if g.len() >= w.len() || w[..g.len()] != g[..] {
-        return false;
-    }
-    w[g.len()..].iter().find(|l| !l.is_empty()).is_some_and(|l| PENDING_TAILS.iter().any(|t| l.starts_with(t)))
-}
-
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
@@ -118,6 +99,8 @@ type ReplayKey = (String, Option<String>, bool);
 /// `bodies.jsonl` 回放：按 (键, Rust 名, in_vtable_body) 队列依次取 Python 的方法体文本与登记事实
 struct Replay {
     queue: HashMap<ReplayKey, VecDeque<Result<BodyOutput, BodyError>>>,
+    /// SAM 站点的构造路径核对失配（`SamLedger::site_ctor_path` 须出现在回放方法体中）
+    sam_misses: Vec<String>,
 }
 
 fn triples(v: &Value) -> Vec<(String, String, String)> {
@@ -160,18 +143,27 @@ impl Replay {
             let rk = (key, r["rust_name"].as_str().map(str::to_string), r["in_vtable_body"].as_bool().unwrap_or(false));
             queue.entry(rk).or_default().push_back(out);
         }
-        Replay { queue }
+        Replay { queue, sam_misses: Vec::new() }
     }
 }
 
 impl MethodBodyEmitter for Replay {
-    fn emit_body(&mut self, _ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
+    fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
         let key = format!("{}.{}:{}", req.class.name(), req.method.name, req.method.desc);
         let rk = (key, req.rust_name.map(str::to_string), req.in_vtable_body);
-        match self.queue.get_mut(&rk).and_then(VecDeque::pop_front) {
+        let out = match self.queue.get_mut(&rk).and_then(VecDeque::pop_front) {
             Some(out) => out,
-            None => Err(BodyError::Fatal(format!("回放缺记录：{rk:?}"))),
+            None => return Err(BodyError::Fatal(format!("回放缺记录：{rk:?}"))),
+        };
+        if let Ok(o) = &out {
+            for (iface, _, cur) in &o.effects.sam_sites {
+                match ctx.sam().site_ctor_path(ctx, iface, cur) {
+                    Some(p) if o.text.contains(&p) => {}
+                    got => self.sam_misses.push(format!("{}：{iface} 构造路径 {got:?} 不在方法体中", rk.0)),
+                }
+            }
         }
+        out
     }
 }
 
@@ -237,6 +229,9 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
         diffs.insert("<write_project>".to_string(), e.to_string());
         return (0, diffs);
     }
+    if let Some(m) = replay.sam_misses.first() {
+        diffs.insert("<sam_sites>".to_string(), format!("{} 处站点失配，例：{m}", replay.sam_misses.len()));
+    }
     let unused: usize = replay.queue.values().map(VecDeque::len).sum();
     if unused > 0 {
         let sample: Vec<String> = replay.queue.iter().filter(|(_, q)| !q.is_empty()).take(5).map(|(k, _)| format!("{k:?}")).collect();
@@ -274,7 +269,6 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
             got = got.replace(rs_v, py_v);
         }
         if let Some(d) = file_diff(&want, &got) {
-            let d = if pending_tail(&want, &got) { PENDING_TAIL_MARK.to_string() } else { d };
             diffs.insert(key, d);
         }
     }
@@ -294,23 +288,10 @@ fn golden_emit() {
         any = true;
         let (total, diffs) = run_golden(&root, stem);
         eprintln!("{stem}: 对照 {total} 个文件，失配 {}", diffs.len());
-        let tails = diffs.values().filter(|d| *d == PENDING_TAIL_MARK).count();
-        if tails > 0 {
-            eprintln!("  {PENDING_TAIL_MARK} {tails} 个文件（反射字段 / 反射分派 / SAM 合成对象段）");
+        for (p, d) in diffs.iter().take(60) {
+            eprintln!("  {p} {d}");
         }
-        let mut hard = 0;
-        for (p, d) in diffs.iter().filter(|(_, d)| *d != PENDING_TAIL_MARK) {
-            match PENDING.iter().find(|(f, _)| f == p) {
-                Some((_, why)) => eprintln!("  [待接入：{why}] {p} {d}"),
-                None => {
-                    hard += 1;
-                    if hard <= 60 {
-                        eprintln!("  {p} {d}");
-                    }
-                }
-            }
-        }
-        if hard > 0 {
+        if !diffs.is_empty() {
             failed.push(stem);
         }
     }
