@@ -8,9 +8,11 @@
 //! （[`facts::ClosureFacts::from_json`]）。
 
 pub mod facts;
+pub mod handwritten;
 pub mod manifest;
 pub mod norm;
 pub mod prune;
+mod scan_text;
 
 #[cfg(test)]
 mod unit_tests;
