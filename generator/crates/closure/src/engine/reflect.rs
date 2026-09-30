@@ -93,7 +93,9 @@ impl<'a> Engine<'a> {
         let comps: Vec<(String, String)> = cf.record_components.clone().unwrap_or_default();
         // 用户类被枚举即全部成员有分派臂；其余类只有按名查找点到的方法（运行时反射分派面同口径：
         // 构造器无按名形状，非用户类的反射构造只经清单补种，如 JCA 服务实现类）
-        let user = self.domain(&cls) == Domain::User && self.enumerated.contains(&(k, c));
+        // 按名取类解析到的类（常量名拼出的具体类）同样按枚举给出构造器
+        let named = k == Members::Constructors && self.named_ctors.contains(&c);
+        let user = (self.domain(&cls) == Domain::User || named) && self.enumerated.contains(&(k, c));
         let names = self.reflect_names.get(&c).cloned().unwrap_or_default();
         let picked: Vec<(String, String)> = cf
             .methods
