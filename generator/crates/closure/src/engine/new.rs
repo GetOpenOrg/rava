@@ -80,6 +80,7 @@ impl<'a> Engine<'a> {
             unresolved: BTreeSet::new(),
             refs: BTreeSet::new(),
             indy_models: BTreeMap::new(),
+            cold_cut: false,
             mwork: VecDeque::new(),
             in_mwork: HashSet::default(),
             watch: HashMap::default(),

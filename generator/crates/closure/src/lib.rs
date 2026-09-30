@@ -5,6 +5,7 @@
 //! 每个节点带溯源（via），`why` 沿溯源回溯到根。
 
 pub mod absint;
+pub mod cold;
 pub mod engine;
 pub mod handwritten;
 pub mod manifest;
@@ -31,6 +32,8 @@ pub struct Input<'a> {
     pub seed_roots: Vec<MemberRef>,
     /// `--locale` 显式给出的 locale 标签
     pub locales: Vec<String>,
+    /// 诊断 `--cold-cut`：丢弃冷路径事件（不健全，只用于测量冷路径独占规模）
+    pub cold_cut: bool,
 }
 
 pub struct Closure<'a> {
@@ -43,6 +46,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     let t0 = std::time::Instant::now();
     let mut e = Engine::new(h, input.cp, man, hw);
     e.seeds.locales = input.locales.clone();
+    e.cold_cut = input.cold_cut;
     for r in &input.roots {
         e.root(r.clone(), "main");
     }

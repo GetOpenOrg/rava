@@ -217,7 +217,13 @@ impl<'a> Engine<'a> {
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
         let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params };
         self.stat_enter(Phase::Analyze);
-        let a = Rc::new(absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts));
+        let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
+        if self.cold_cut {
+            let cold = crate::cold::doomed(code);
+            let hot: HashSet<u32> = code.insns.iter().zip(&cold).filter(|(_, c)| !**c).map(|(x, _)| x.offset).collect();
+            a.events.retain(|(off, _)| hot.contains(off));
+        }
+        let a = Rc::new(a);
         self.stat_leave();
         let unchanged = self.methods[m].applied.as_ref().is_some_and(|o| o.events == a.events);
         self.ctx.stats.borrow_mut().analyzed(m, unchanged);

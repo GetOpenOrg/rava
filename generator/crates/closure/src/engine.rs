@@ -444,6 +444,8 @@ pub struct Engine<'a> {
     pub refs: BTreeSet<String>,
     /// 运行模型替换的 indy 调用点（`方法@偏移` → (引导方法, 类别)）
     pub indy_models: BTreeMap<String, (String, IndyKind)>,
+    /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
+    pub cold_cut: bool,
 
     mwork: VecDeque<usize>,
     in_mwork: HashSet<usize>,

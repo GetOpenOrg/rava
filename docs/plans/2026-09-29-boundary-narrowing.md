@@ -487,6 +487,42 @@ LambdaForm 解释路径的隐藏帧被剔除不是主因（若 `checkReceiver` �
   已建模方法（拼接 `toString`、lambda 实现）从该帧起照常归因，不被掩盖（单测 `test_indy_model`）。
 结果：Digester / TestStreamBasic / CollectorsDemo 漏 0（原先经 `MethodHandleNatives.linkCallSite` 归 `vm-upcall` 的链接期加载一并改归 `indy-model`）。
 
+**项 3 G5：异常构造 / 错误消息冷路径**。测量工具（已提交）：`cold.rs::doomed` 按指令给出「冷」标记——从该指令出发的每条正常路径都在本方法内
+以 `athrow` 结束、且覆盖它的处理器同为冷（最小不动点，循环不冷，单测 2 例）；诊断选项 `rava closure --cold-cut` 丢弃冷指令上的事件，
+得到「只经热路径可达」的闭包（**不健全，只用于测量**）。实测（类 / 方法，正常 → 截冷；「冷独占类」= 两者之差）：
+
+| 测试 | 正常 | 截冷 | 冷独占类 | 冷独占主要包 |
+|---|---|---|---|---|
+| HelloWorld | 251 / 620 | 236 / 508 | 15 | `java/lang` 14 |
+| Digester | 1297 / 7510 | 1245 / 7328 | 52 | `java/util` 15、`java/lang` 8、`java/io` 5 |
+| DeepCopy | 1649 / 10961 | 1599 / 10729 | 50 | 同上 |
+| FileIOTest | 293 / 795 | 286 / 748 | 7 | — |
+| CollectorsDemo | 1034 / 5951 | **349 / 1070** | **685** | `java/util` 113、`java/util/stream` 65、`java/util/regex` 63、`java/lang/invoke` 56、`java/time/temporal` 28 |
+| TestMethodHandleCombinators | 1140 / 7808 | **531 / 2887** | **609** | `java/util` 101、`java/util/regex` 63、`java/util/stream` 61 |
+| TestMethodHandleDirect | 1149 / 7829 | 539 / 2901 | 610 | 同上 |
+| TestStreamBasic | 400 / 1449 | 394 / 1427 | 6 | — |
+
+`--why`（冷独占的两大例）：CollectorsDemo 为 `Collectors.toMap → uniqKeysMapAccumulator` 的 lambda`@44`（`v != null` 时）`→ duplicateKeyException@22
+→ String.format → new Formatter → Formatter.<clinit>@7 Pattern.compile(<常量正则>)`；MH 两例为 `DirectMethodHandle$Interface.checkReceiver@41` /
+`$Special.checkReceiver@41`（`!refc.isInstance(recv)` 时）`→ String.format`。`Special` 只因 `DirectMethodHandle.make` 的 `refKind` 在
+`unreflect`（`MemberName.getReferenceKind()` 取自 flags）路径上为 Top 才入闭包，但 `Interface.checkReceiver`（运行期真实可达，S1）有同一条
+`String.format` 冷路径，因此给 `refKind` 加整数值集合域剪掉 `Special` 对类集无收益，不做。
+
+健全的分析层收窄不存在：抛出条件取决于运行期数据（重复键、接收者类型），异常消息是可观察语义（`getMessage`、未捕获异常打印），
+冷路径不能剪。冷独占规模的终态分两部分解决，都不降低健全性：
+1. **精度（分析层，需求并入项 8 类初始化事实）**：冷独占的大头不是 `format` 本身，而是**常量输入上的库初始化**——`Formatter.<clinit>`
+   以常量正则调 `Pattern.compile`（`java/util/regex` 63 类 + 字符属性表），以及调用点的常量格式串（`"Duplicate key %s (attempted merging values %s and %s)"`
+   只含 `%s`，`java/time/temporal` 等日期 / 数值转换分支不可达）。终态做**构建期类初始化**：对输入全为常量、无外部副作用的 `<clinit>`
+   在分析期解释执行得到堆快照，快照里的对象图（Pattern 节点实例）成为闭包事实，正则编译器代码不再入链；格式串按常量实参求值 `Formatter.parse`
+   （项 1 的常量实参求值扩展到对象返回）。前者需要带堆的字节码解释器，超出现有辅助分析（只求标量常量），单独立项。
+2. **成本（生成层分层，C3）**：冷独占方法仍须翻译（健全），但可按低成本形态生成。分析器导出 `cold_methods`（闭包内、只经冷指令可达的方法），
+   生成器把它们放入冷层：不做泛型 / 上下文特化、`opt-level = "s"`、JDK 冷层按内容哈希跨测试复用编译产物。
+   导出口径：单次不动点内给方法节点加「热 / 冷」两级可达标签——热方法中非冷指令上的事件传热，其余只传冷；类型流不截断（闭包不变），
+   冷标签只是分层依据，误标只影响成本、不影响正确性。
+
+**给 C3 的接口（G5）**：`closure.json` 新增 `cold_methods: ["类.方法:描述符", …]`（上条口径；未实现，按上表 CollectorsDemo 约 4900 方法、MH 约 4900 方法），
+生成器按之分层；`build_time_init`（构建期初始化快照）与项 8 的类初始化事实同一通道设计。
+
 ## 七、验收
 
 - §一 终态表各项达标。
