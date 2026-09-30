@@ -16,6 +16,7 @@ pub mod registry;
 pub mod rs_type;
 pub mod short_names;
 pub mod sig_parse;
+pub mod type_args;
 pub mod type_map;
 
 #[cfg(test)]
