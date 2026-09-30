@@ -284,7 +284,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 | N1 | 按类并行发射（输出确定） | ✅ 已做，见 §5.1 |
 | N2 | 闭包结果进程内传递 | ✅ 已做，见 §5.4（提交 b5291a03）。手写层二次解析（`syn` 约 3%）与按类补充属性（`extras` 约 2.7%）是 `rava emit` / 剖析口径的数字；`rava build` 路径下 `input.handwritten` 已降到约 10–14 ms |
 | N3 | 冷写出 DeepCopy ≤ 2 s | ✅ N1 落地后达成（1.08 s）。剩余串行段见 §5.1 N6 |
-| N4 | 剩余 mono 热点（步 1–3 后） | `drop`（逐 T 的 Weak / Arc 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
+| N4 | 剩余 mono 热点（步 1–3 后） | 第一步 ✅（§5.5）：逐类 `Arc<inner>` / `Arc<wrapper>` 析构、监视器默认方法、路径 B 的 `Result::ok`，mono size_est −8.6%。剩余：`drop`（字段所需的逐 T 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
 | N5 | 按类并行发射（N1）的实施时机 | 协调决定：等 closure-perf2 合入主线后，本线先合主线，再把 `resolve` 的 `Rc` 改为 `Arc`，改完闭包 4 例集合必须一致 |
 | N6 | 并行后剩余串行段 | 跨类导入、phase2 已做，见 §5.2；输入重建见 §5.2 分项；`rava build` 路径的闭包 JSON、落盘、mod 树见 §5.3。原记录：DeepCopy 冷写出 1.08 s 中：输入重建约 100 ms、跨类导入裁决约 120 ms、phase2 约 240 ms 仍串行。跨类导入是「先引入者得短名」语义，必须按发射序；终态可改为并行收集各类候选短名、再按序一次裁决（纯计算约数十 ms）。phase2 按 crate 分片可并行。输入重建并入 N2 |
 
