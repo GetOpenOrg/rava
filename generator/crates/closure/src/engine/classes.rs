@@ -23,8 +23,8 @@ impl<'a> Engine<'a> {
         if x == f {
             return true;
         }
-        if let Some(r) = self.sub_cache.get(&(x, f)) {
-            return *r;
+        if let Some(r) = self.sub_rows.get(f as usize).and_then(|row| row.get(x)) {
+            return r;
         }
         let fname = self.names[f as usize].clone();
         let r = if let Some(&t) = self.arrays.get(&x).or_else(|| self.objs.get(&x)) {
@@ -40,7 +40,11 @@ impl<'a> Engine<'a> {
             let xname = self.names[x as usize].clone();
             self.h.is_subtype(&xname, &fname)
         };
-        self.sub_cache.insert((x, f), r);
+        let fi = f as usize;
+        if self.sub_rows.len() <= fi {
+            self.sub_rows.resize_with(fi + 1, Default::default);
+        }
+        self.sub_rows[fi].set(x, r);
         r
     }
 
@@ -77,25 +81,13 @@ impl<'a> Engine<'a> {
         }
         let mut out = TypeSet::default();
         let ti = t as usize;
-        if self.sub_rows.len() <= ti {
-            self.sub_rows.resize_with(ti + 1, Vec::new);
-        }
-        let mut row = std::mem::take(&mut self.sub_rows[ti]);
         let mut kept: Vec<u32> = Vec::new();
         for (k, x) in s.classes.iter().enumerate() {
-            let i = x as usize;
-            let v = match row.get(i) {
-                Some(&v) if v != 0 => v,
-                _ => {
-                    let v = if self.sub(x, t) { 2 } else { 1 };
-                    if row.len() <= i {
-                        row.resize(i + 1, 0);
-                    }
-                    row[i] = v;
-                    v
-                }
+            let v = match self.sub_rows.get(ti).and_then(|row| row.get(x)) {
+                Some(v) => v,
+                None => self.sub(x, t),
             };
-            if v == 2 {
+            if v {
                 // 输入有序，输出按序追加（首个命中时按剩余输入一次预留）
                 if kept.capacity() == 0 {
                     kept.reserve(s.classes.len() - k);
@@ -104,7 +96,6 @@ impl<'a> Engine<'a> {
             }
         }
         out.classes = IdSet::from_sorted(kept);
-        self.sub_rows[ti] = row;
         for o in &s.open {
             if let Some(r) = self.open_narrow(o, t) {
                 out.open.insert(r);

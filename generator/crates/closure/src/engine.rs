@@ -380,11 +380,10 @@ pub struct Engine<'a> {
 
     names: Vec<Rc<str>>,
     ids: HashMap<Rc<str>, u32>,
-    sub_cache: HashMap<(u32, u32), bool>,
     /// open(o) 按过滤类型 t 收窄的结果缓存（`u32::MAX` = 空）
     narrow_cache: HashMap<(u32, u32), u32>,
-    /// 按过滤类型 f 的子类型判定行（下标为类型 id；0 未判定、1 否、2 是）：类型集收窄逐元素只做一次数组索引
-    sub_rows: Vec<Vec<u8>>,
+    /// 子类型判定缓存，按上界 f 分行、每个类型 id 两位（已判定 / 结果）：`sub` 与类型集收窄共用
+    sub_rows: Vec<sets::SubRow>,
 
     pub classes: IndexMap<String, ClassNode>,
     pub missing: BTreeMap<String, Via>,

@@ -43,7 +43,6 @@ impl<'a> Engine<'a> {
             hw,
             names: Vec::new(),
             ids: HashMap::default(),
-            sub_cache: HashMap::default(),
             narrow_cache: HashMap::default(),
             sub_rows: Vec::new(),
             classes: IndexMap::new(),
