@@ -143,3 +143,25 @@ fn try_finally_return_temp_kept_in_every_arm() {
     assert_eq!(body.iter().filter(|l| l.trim_start().starts_with("local_1 = ")).count(), 3, "三个臂都存储返回值");
     std::fs::remove_dir_all(&out).ok();
 }
+
+/// 祖先类由接口 default 注入的槽位，子类经更具体接口的 default 覆盖时落在祖先槽位上
+/// （回归：CollectorsDemo `ListN.stream` → `AbstractCollection.spliterator` 存根）
+#[test]
+fn more_specific_default_overrides_ancestor_injected_slot() {
+    let Some((_, out)) = build("DefaultSlot.java", "default-slot", &[]) else { return };
+    let user = rs_text(&out.join("user/src"));
+    let split_attrs: Vec<&str> = user.lines().filter(|l| l.contains("#[java_method(name = \"split\"")).collect();
+    let list_default =
+        split_attrs.iter().filter(|l| l.contains("virtual_in = ")).map(|l| l.to_string()).collect::<Vec<_>>();
+    assert!(
+        list_default.iter().all(|l| l.contains("virtual_in = \"DefaultSlot_AbsColl\"")),
+        "split 展开全部落在 AbsColl 槽位：{list_default:#?}"
+    );
+    assert_eq!(list_default.len(), 2, "AbsColl 注入 + AbsList 覆盖：{list_default:#?}");
+    // 叶子类的继承成员经祖先槽位派发到 AbsList 的覆盖
+    assert!(
+        user.contains("inherited_from = \"DefaultSlot_AbsList\", vtable_owner = \"DefaultSlot_AbsColl\")]"),
+        "ListN.split 继承自 AbsList、槽位在 AbsColl"
+    );
+    std::fs::remove_dir_all(&out).ok();
+}

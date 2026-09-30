@@ -250,7 +250,7 @@ fn clinit_block(
 }
 
 /// 类方法的槽位属性：槽位归属、槽位成员名解耦、槽位擦除名单
-fn slot_extra(cx: &Cx<'_, '_>, m: &Method, rust_name: &str) -> MethodAttrExtra {
+pub(super) fn slot_extra(cx: &Cx<'_, '_>, m: &Method, rust_name: &str) -> MethodAttrExtra {
     let virtual_in = cx.ctx.resolve_virtual_slot(m, cx.ci);
     let mut extra = MethodAttrExtra { virtual_in, ..Default::default() };
     if !extra.virtual_in.is_empty() && extra.virtual_in != cx.ctx.short(cx.ci.name()) {
