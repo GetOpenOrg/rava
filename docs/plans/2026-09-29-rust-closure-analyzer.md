@@ -688,6 +688,9 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
    例如调用一个永不返回的方法，其后的代码不标死。Rust 侧导出前自检，Python 侧违反即报 `FoldError`。
 8. **`invoke` 的范围**：`kind: "invoke"` 只出现在 invokevirtual / invokespecial / invokestatic / invokeinterface 上，
    invokedynamic 不折叠。
+9. **附加字段（v2 内，忽略即保持原行为）**：`null_recv`（接收者恒为 null 的活虚调用点）；`noreturn_calls`（定论不返回的活调用点）与
+   `noreturn_dead_pcs`（以这些调用为控制流终点时另外不可达的区间，与 `dead_pcs` 不相交）。消费 `noreturn_*` 时在调用后终止控制流并删去该区间，
+   规则 7 相应放宽为「死区只从跳转 / switch / return / athrow 或 noreturn 调用之后开始」。详见边界收窄计划 §6.11。
 
 原有的 `dead_branches` 输出整体由 `folds` 取代。Python 只消费这份数据，不另写判定。
 
