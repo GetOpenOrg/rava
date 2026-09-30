@@ -76,6 +76,7 @@ pub struct Manifest {
     returns: HashMap<String, Fact>,
     receiver_returns: HashSet<String>,
     field_enumerators: HashSet<String>,
+    field_handle_writers: HashSet<String>,
     deserializers: HashSet<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
@@ -244,6 +245,7 @@ impl Manifest {
             returns,
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             field_enumerators: field_writes("enumerators").into_iter().collect(),
+            field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
             array_writes,
             memory_reads,
@@ -347,6 +349,11 @@ impl Manifest {
     /// 返回字段句柄数组的反射枚举（字段常量折叠的写入来源）
     pub fn is_field_enumerator(&self, member: &str) -> bool {
         self.field_enumerators.contains(member)
+    }
+
+    /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）
+    pub fn is_field_handle_writer(&self, member: &str) -> bool {
+        self.field_handle_writers.contains(member)
     }
 
     /// 反序列化入口（可达即非 static、非 transient 字段不折叠）

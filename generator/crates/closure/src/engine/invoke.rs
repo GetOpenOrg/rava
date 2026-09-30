@@ -15,7 +15,8 @@ impl<'a> Engine<'a> {
     /// 反射式字段写入（按字节码形状）：
     /// - 同一调用里有字符串常量，且形参含 Class 或接收者是 Class：点名字段不折叠
     ///   （所属类取 Class 常量实参 / 接收者，取不到时同名字段全部不折叠）；
-    /// - 清单 `[facts.field_writes] enumerators`（返回字段句柄数组）：接收者类的全部字段不折叠，推不出时全部字段；
+    /// - 清单 `[facts.field_writes] enumerators`（返回字段句柄数组）：句柄写入口（`handle_writers`）也可达时
+    ///   接收者类的全部字段不折叠，推不出时全部字段；
     /// - 清单 `[facts.reflect] method_lookups`：字符串常量登记为 Class 常量所指类的方法点名；
     /// - 清单 `deserializers` 可达：非 static、非 transient 字段全部不折叠
     pub(super) fn reflective_writes(&mut self, mref: &MemberRef, opcode: u8, args: &[V]) {
@@ -54,26 +55,49 @@ impl<'a> Engine<'a> {
             }
         }
         if self.man.is_field_enumerator(&k) {
-            match args.first() {
-                Some(V::Class(c, _)) => {
-                    let mut cur = Some(c.to_string());
-                    while let Some(cls) = cur {
-                        let Some(cf) = self.h.class(&cls) else { break };
-                        for f in &cf.fields {
-                            self.open_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
-                        }
-                        cur = cf.super_name.clone();
-                    }
-                }
-                _ => {
-                    if !self.ctx.fopen_all.replace(true) {
-                        self.open_fields_all();
-                    }
-                }
-            }
+            let cls = match args.first() {
+                Some(V::Class(c, _)) => Some(c.to_string()),
+                _ => None,
+            };
+            self.enumerate_fields(cls);
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
             self.open_fields_all();
+        }
+    }
+
+    /// 字段枚举（cls = 接收者类字面量，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
+    fn enumerate_fields(&mut self, cls: Option<String>) {
+        if !self.fwriter_live {
+            self.fenum_pending.insert(cls);
+            return;
+        }
+        match cls {
+            Some(c) => {
+                let mut cur = Some(c);
+                while let Some(cls) = cur {
+                    let Some(cf) = self.h.class(&cls) else { break };
+                    for f in &cf.fields {
+                        self.open_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
+                    }
+                    cur = cf.super_name.clone();
+                }
+            }
+            None => {
+                if !self.ctx.fopen_all.replace(true) {
+                    self.open_fields_all();
+                }
+            }
+        }
+    }
+
+    /// 按字段句柄写字段的入口可达：挂起的字段枚举生效
+    pub(super) fn field_writer_live(&mut self) {
+        if std::mem::replace(&mut self.fwriter_live, true) {
+            return;
+        }
+        for cls in std::mem::take(&mut self.fenum_pending) {
+            self.enumerate_fields(cls);
         }
     }
 

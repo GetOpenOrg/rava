@@ -202,11 +202,32 @@ dynamic = [
 # 只有一个常量时把读取折叠掉；以下调用可达时相关字段不折叠。
 # 按名写入（objectFieldOffset(Class, "名") / findVarHandle / newUpdater / getDeclaredField("名")）
 # 按字节码形状识别（同一调用含 Class 实参 / 接收者 + 字符串常量），不在此列。
-# enumerators：返回字段句柄数组，经 Field.set* / Unsafe 可写任意字段。接收者是类字面量时
-#   只放开该类及其超类的字段，否则全部字段不折叠
+# enumerators：返回字段句柄数组。句柄只有经下列 handle_writers 才能写字段：两者都可达时，接收者是
+#   类字面量则只放开该类及其超类的字段，否则全部字段不折叠；只读句柄（取名字 / 修饰符 / 值，
+#   如 ObjectStreamClass.computeDefaultSUID）不放开任何字段
 enumerators = [
     "java/lang/Class.getDeclaredFields:()[Ljava/lang/reflect/Field;",
     "java/lang/Class.getFields:()[Ljava/lang/reflect/Field;",
+]
+# handle_writers：按字段句柄写字段的入口（Field.set* 的访问器、Lookup 的 setter / VarHandle、
+#   jdk.unsupported 的 Unsafe 偏移取法）。jdk.internal.misc.Unsafe 的 Field 偏移取法不在此列：
+#   JDK 内部调用者只有 Field.get* / set* 的访问器（写入仍经 Field.set*）与反序列化的 FieldReflector
+#   （由 deserializers 计入）
+handle_writers = [
+    "java/lang/reflect/Field.set:(Ljava/lang/Object;Ljava/lang/Object;)V",
+    "java/lang/reflect/Field.setBoolean:(Ljava/lang/Object;Z)V",
+    "java/lang/reflect/Field.setByte:(Ljava/lang/Object;B)V",
+    "java/lang/reflect/Field.setChar:(Ljava/lang/Object;C)V",
+    "java/lang/reflect/Field.setShort:(Ljava/lang/Object;S)V",
+    "java/lang/reflect/Field.setInt:(Ljava/lang/Object;I)V",
+    "java/lang/reflect/Field.setLong:(Ljava/lang/Object;J)V",
+    "java/lang/reflect/Field.setFloat:(Ljava/lang/Object;F)V",
+    "java/lang/reflect/Field.setDouble:(Ljava/lang/Object;D)V",
+    "java/lang/invoke/MethodHandles$Lookup.unreflectSetter:(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;",
+    "java/lang/invoke/MethodHandles$Lookup.unreflectVarHandle:(Ljava/lang/reflect/Field;)Ljava/lang/invoke/VarHandle;",
+    "sun/misc/Unsafe.objectFieldOffset:(Ljava/lang/reflect/Field;)J",
+    "sun/misc/Unsafe.staticFieldOffset:(Ljava/lang/reflect/Field;)J",
+    "sun/misc/Unsafe.staticFieldBase:(Ljava/lang/reflect/Field;)Ljava/lang/Object;",
 ]
 # deserializers：可达即全部非 static、非 transient 字段不折叠
 deserializers = [
