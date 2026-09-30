@@ -156,6 +156,10 @@ fn const_insn(ins: &Insn, c: &FoldConst, where_: &str) -> Result<NInsn, InputErr
         }
         _ => return Err(err(where_, format!("invoke 指令 pc={} 缺方法引用", ins.offset))),
     };
+    // 无弹出（无参 invokestatic）直接是装载指令，与 getstatic 同形
+    if pops == 0 {
+        return Ok(NInsn::Op(load));
+    }
     Ok(NInsn::FoldConst { offset: ins.offset, pops, load })
 }
 

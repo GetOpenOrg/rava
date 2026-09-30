@@ -213,8 +213,11 @@ fn ldc_string(ins: &NInsn) -> Option<&str> {
     }
 }
 
+/// (lib crate 名, 该 crate 的类), JDK 类
+type LibSplit = (Vec<(String, Vec<String>)>, Vec<String>);
+
 impl<'a> BuildInput<'a> {
-    fn lib_split(&self, closure: &[Rc<ClassFile>]) -> Result<(Vec<(String, Vec<String>)>, Vec<String>), InputError> {
+    fn lib_split(&self, closure: &[Rc<ClassFile>]) -> Result<LibSplit, InputError> {
         let mut crate_of: BTreeMap<&str, usize> = BTreeMap::new();
         for (i, l) in self.libs.iter().enumerate() {
             for n in &l.jar_classes {
