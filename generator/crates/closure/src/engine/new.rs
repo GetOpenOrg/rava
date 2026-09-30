@@ -77,6 +77,7 @@ impl<'a> Engine<'a> {
             hub_sites: BTreeMap::new(),
             hub_last: HashMap::default(),
             vm_hubs: HashSet::default(),
+            vm_targets: HashSet::default(),
             callers: HashMap::default(),
             call_vals: None,
             unresolved: BTreeSet::new(),
