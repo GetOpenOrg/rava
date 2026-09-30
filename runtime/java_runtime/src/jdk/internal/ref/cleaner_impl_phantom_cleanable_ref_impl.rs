@@ -18,7 +18,7 @@ impl CleanerImpl_PhantomCleanableRef {
 
     #[doc(hidden)]
     pub fn __init_on_obj_cleaner_runnable(this: Self, _obj: Object, _cleaner: Cleaner, action: Object) -> Result<Self> {
-        this.__set_action(action);
+        this.__set_action(action.into());
         Ok(this)
     }
 
