@@ -7,6 +7,8 @@
 //! （[`facts::ClosureFacts::from_closure`]）；closure.json 只作调试入口
 //! （[`facts::ClosureFacts::from_json`]）。
 
+pub mod boundary;
+pub mod build;
 pub mod facts;
 pub mod handwritten;
 pub mod manifest;
@@ -17,6 +19,8 @@ mod scan_text;
 #[cfg(test)]
 mod unit_tests;
 
+pub use boundary::Boundary;
+pub use build::{BuildInput, EmitInput, LibCrate, MethodKey, ReflectFacts};
 pub use facts::{ClosureFacts, MethodKind};
 pub use manifest::RuntimeManifest;
 pub use norm::{NInsn, NormCode};
