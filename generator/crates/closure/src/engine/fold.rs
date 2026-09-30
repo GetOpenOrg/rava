@@ -259,7 +259,9 @@ impl Engine<'_> {
         let cut = &f.noreturn_dead_pcs;
         let live = |pc: &u32| !cut.iter().any(|&(s, e)| s <= *pc && *pc < e);
         f.null_recv.retain(live);
-        f.consts.retain(|c| live(&c.0));
+        // null_recv 调用点只会抛 NPE：目标集为空时返回值格缺席而被当作常量的，不再列为常量
+        let nulls = &f.null_recv;
+        f.consts.retain(|c| live(&c.0) && nulls.binary_search(&c.0).is_err());
         f.noreturn_calls = stops.into_iter().filter(live).collect();
     }
 
