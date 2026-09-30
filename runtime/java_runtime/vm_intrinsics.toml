@@ -320,6 +320,20 @@ constructor_invokers = [
 class_initializers = [
     "jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V",
 ]
+# 成员声明类初始化点：下列方法里对 class_initializers 的调用，Class 实参恒为经该路径正被链接 / 访问的成员的声明类。
+# handle：DirectMethodHandle 的 getStatic / putStatic / invokeStatic / newInvokeSpecial 句柄、VarHandles 的静态字段句柄；
+# reflect：反射访问器工厂的 Method / Constructor / 静态 Field。分析器不按值集（MemberName.clazz 等跨全部成员的汇合）
+# 求目标：「静态方法 / 构造器可达、反射暴露的方法、按反射 / 句柄取得的静态字段 ⇒ 声明类初始化」的结构不变量已覆盖；
+# 运行期钩子目标取经同一路径链接到的成员声明类（该路径的初始化点可达时才登记）
+handle_owner_initializers = [
+    "java/lang/invoke/DirectMethodHandle.checkInitialized:(Ljava/lang/invoke/MemberName;)Z",
+    "java/lang/invoke/DirectMethodHandle.shouldBeInitialized:(Ljava/lang/invoke/MemberName;)Z",
+    "java/lang/invoke/VarHandles.makeFieldHandle:(Ljava/lang/invoke/MemberName;Ljava/lang/Class;Ljava/lang/Class;Z)Ljava/lang/invoke/VarHandle;",
+]
+reflect_owner_initializers = [
+    "jdk/internal/reflect/MethodHandleAccessorFactory.ensureClassInitialized:(Ljava/lang/Class;)V",
+    "jdk/internal/reflect/UnsafeFieldAccessorFactory.newFieldAccessor:(Ljava/lang/reflect/Field;Z)Ljdk/internal/reflect/FieldAccessor;",
+]
 
 # 按名取类（静态方法，第 0 个实参是 `.` 分隔的类名，返回该类镜像）：名字是字符串常量，或「常量前缀 + 常量表取值」
 # 的线性拼接（[facts.string_concat]）时，分析器解析出所指类集，结果只含这些类的镜像；结果唯一地经 instantiators

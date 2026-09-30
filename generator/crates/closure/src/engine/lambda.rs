@@ -127,6 +127,12 @@ impl<'a> Engine<'a> {
                 let opc = [0, classfile::op::GETFIELD, classfile::op::GETSTATIC, classfile::op::PUTFIELD, classfile::op::PUTSTATIC]
                     [mh.kind as usize];
                 self.field(m, off, opc, k, None, None, Node::S(m, off));
+                if matches!(mh.kind, 2 | 4) {
+                    if let Some(site) = self.h.resolve_field(&k.owner, &k.name, &k.desc) {
+                        let decl = site.class.name.clone();
+                        self.static_field_owner(&decl, via.clone());
+                    }
+                }
             }
             _ => {
                 let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, mh.interface) else {

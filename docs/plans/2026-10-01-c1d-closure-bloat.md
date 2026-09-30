@@ -158,3 +158,80 @@ CollectorsDemo 重测后结论不变（「String.format 咽喉不迁移」对它
 3. 仍属运行时缺口、未在本步改动：`UnsafeConstants` 的 VM 注入值（BIG_ENDIAN / PAGE_SIZE / UNALIGNED_ACCESS 折叠为 0，TestDirectBuffer 已知失败同源）、`System.in`（运行时无 `in` 访问器，HotSpot 由 initPhase1 / setIn0 设置）、`Field/Method/Constructor.signature`（class_impl.rs 从不设置，泛型反射信息丢失）。终态是在运行时补齐这些 VM 注入值；补齐后以字段同名手写访问器出现，分析器自动 `fi.open`，无需分析器改动。
 
 值集精度注记：DirectMethodHandle.checkInitialized / shouldBeInitialized、VarHandles.makeFieldHandle 的 Class 实参值集含推不出所指类的镜像，记为反射缺口（`reflect.gaps`）；Digester 的 `mirror_inits` 达 559 类（值集混入全部 getClass 镜像），只影响钩子表长度，不影响闭包。
+
+## 11. 成员声明类初始化点与钩子表收窄（§10 值集精度注记的终态处理）
+
+### 11.1 两类初始化点
+
+`Unsafe.ensureClassInitialized` 的 JDK 调用方按 Class 实参来源分两类：
+
+- **成员声明类初始化点**：实参恒为「正被链接 / 访问的成员的声明类」。清单 `[facts.reflect]` 按链接路径登记：
+  - `handle_owner_initializers`：`DirectMethodHandle.checkInitialized@9` / `shouldBeInitialized@104`、`VarHandles.makeFieldHandle@442`
+  - `reflect_owner_initializers`：`MethodHandleAccessorFactory.ensureClassInitialized`、`UnsafeFieldAccessorFactory.newFieldAccessor@59`
+- **一般调用点**：类字面量或形参（`SharedSecrets` → `Lookup.ensureInitialized`、各 `Holder` 的 `<clinit>` 等），仍按 §10 的值集求目标。
+
+### 11.2 成员声明类初始化点：分析上由结构不变量 S 覆盖，不按值集求目标
+
+值集是 `MemberName.clazz` 一类跨全部成员的汇合，按它求目标会把所有 getClass 镜像都拉进来（§10 的 3 条缺口与 559 类钩子表即由此而来）。改为依赖不变量 S：
+
+- **S1**：可达的静态方法（`<clinit>` 除外）或构造器 ⇒ 声明类初始化（JVMS §5.5 invokestatic / new）。在 `method_ctx` 按边强制执行，与进入路径无关（普通调用、反射、句柄一视同仁）。
+- **S2**：反射暴露的方法 ⇒ 声明类初始化（reflect.rs 的 expose，已有）。
+- **S3**：按反射 / 句柄取得的静态字段 ⇒ 声明类初始化。覆盖三条路径：
+  - 按名入口：解析到的静态字段初始化其声明类。Class 实参不是字面量时，按值集所指类解析；值集不齐全时按名兜底，即闭包中声明该名静态字段的类都初始化，补种阶段逐轮扫描新增类。
+  - ldc 静态字段句柄（kind 2 / 4）。
+  - 字段枚举：接收者所指类及其超类中声明非常量静态字段的类。
+
+**Soundness 论证**：成员声明类初始化点在运行期传入的类 C，必定是某个静态方法、构造器或静态字段 m 的声明类，并且 m 此刻正被链接或访问。
+
+- m 是方法或构造器：m 在闭包内可达，由 S1 / S2 可知 C 已初始化。
+- m 是静态字段：m 必经按名入口、ldc 句柄或枚举取得，由 S3 可知 C 已初始化。
+- 按名入口所属类推不出时，走兜底的按名扫描。运行期镜像只能指向闭包里的类，因此闭包中声明该名静态字段的类全部被初始化，覆盖所有可能的 C。
+
+**实测**：S1 在 4 例上单独加入时闭包 0 变化，说明不变量本已成立，现在只是显式化。
+
+### 11.3 运行期钩子表：只登记确有初始化点可达的类
+
+判定条件：类 C 登记为钩子，当且仅当以下任一成立：
+
+- C 是一般调用点值集或字面量的目标；
+- C 经链接路径 R 链接（R 的取值：
+  - `method-handle` 边 → handle；
+  - `reflect` 边 → reflect；
+  - 按名取字段 → 两路都记），且 R 的成员声明类初始化点可达。
+
+钩子只决定 `<clinit>` 在初始化点**提前**执行。即使不登记，`java_class!` 注入的 `__class_init` 也会在成员实际访问时触发初始化：
+
+- 静态方法 / 构造器入口；
+- `NAME()` / `set_NAME` 访问器；
+- 反射字段闭包的静态臂，以及 Unsafe `_static_ref_get/set` 走的正是这一路。
+
+因此收窄不会丢失任何 `<clinit>`，只影响「链接时初始化」与「首次访问时初始化」之间的时序差。
+
+### 11.4 前后数字（mi = 504fa6f8，mo = 本步）
+
+| 用例 | 类 | 方法 | 钩子表 mirror_inits | 反射缺口（本步后） |
+|---|---:|---:|---:|---:|
+| HelloWorld | 1987 → 1987 | 13338 → 13338 | 78 → 17 | 4（同基线） |
+| TestStreamBasic | 2002 → 2002 | 13442 → 13442 | 78 → 17 | 4（同基线） |
+| CollectorsDemo | 1987 → 1987 | 13338 → 13338 | 78 → 17 | 4（同基线） |
+| Digester | 2666 → 2662 | 17720 → 17691 | 559 → 150 | 4（同基线） |
+
+- **反射缺口**：剩余 4 条（`getDeclaredConstructors0` / `getDeclaredMethods0` 的 Class 值集）与 mirror-init 之前的基线逐条相同。`ensureClassInitialized` 相关缺口已归零。
+- **Digester 删掉的 16 个 `<clinit>`**：全部是只经 checkInitialized / shouldBeInitialized / MHAF 值集混入的目标，经 S 判定不可达：
+  - Runnable、MemorySegment、SegmentAllocator、CallSite；
+  - Policy$Parameters、SecureRandomParameters、CertStoreParameters、Configuration$Parameters；
+  - AbstractMemorySegmentImpl、GlobalSession、MemorySessionImpl、NativeMemorySegmentImpl、ScopedAccessError；
+  - PKCS12KeyStore、JavaKeyStore、JavaKeyStore$JKS。
+
+  Digester 连带去掉 4 个类、29 个方法。
+- **Digester 新增 2 个 `<clinit>`**：CertificateIssuerExtension、SubjectAlternativeNameExtension。来源是 S3 的按名兜底：`UnparseableExtension.<init>@26` 在 `OIDMap.getClass` 所得镜像上调用 `getDeclaredField("NAME")`。这 2 个是基线漏掉的真实依赖。
+- **HelloWorld 钩子表 17 类**：FileDescriptor、FilePermission、PrintStream、PrintWriter、Thread$ThreadNumbering、BoundMethodHandle、DMH / DelegatingMethodHandle / Invokers / LambdaForm 的 Holder、VarHandleGuards、URL、Buffer、ResourceBundle、ForkJoinPool、JarFile、ZipFile。
+- **Digester 钩子表 150 类**：因为 reflect 路径可达（MHAF 在链上），reflect 边链接的声明类（sun/nio/cs 字符集、locale 适配器、j.l.invoke 的反射暴露）按条件登记。
+- **动态对照**：用 504fa6f8 的生成树，并配合 f66c4ad8 修正后的基准 JVM 配置跑 dyn_compare，结果为：
+  - TestStreamBasic 漏覆盖 0；
+  - HelloWorld 漏覆盖 0；
+  - CollectorsDemo 只剩 LambdaMetafactory（prec3 负责）。
+
+### 11.5 已知未覆盖（既有，非本步引入）
+
+有一种情况 S3 不成立：按名取字段的入口处，名字非常量（`ptaint`）且 Class 实参也推不出。此时字段按名全部放开，但不初始化任何声明类。若出现，终态做法是按名兜底扩展为「闭包中全部含非常量静态字段的类」。

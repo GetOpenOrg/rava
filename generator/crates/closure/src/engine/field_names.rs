@@ -21,7 +21,8 @@ impl Engine<'_> {
     pub(super) fn field_name_site(&mut self, m: usize, off: u32, k: &str, opcode: u8, args: &[V]) {
         let Some(r) = self.man.field_name_resolver(k) else { return };
         let base = usize::from(opcode != classfile::op::INVOKESTATIC);
-        let cls = match r.class.map_or(args.first(), |i| args.get(base + i)) {
+        let cls_arg = r.class.map_or(args.first(), |i| args.get(base + i)).cloned();
+        let cls = match &cls_arg {
             Some(V::Class(c, _)) => Some(c.to_string()),
             _ => None,
         };
@@ -36,8 +37,30 @@ impl Engine<'_> {
         };
         for name in &names {
             match cls.as_deref().and_then(|c| self.field_by_name(c, name)) {
-                Some((decl, desc)) => self.open_field(MemberRef { owner: decl, name: name.to_string(), desc }),
-                None => self.open_field_name(name),
+                Some((decl, desc)) => {
+                    if self.is_static_field(&decl, name) {
+                        self.static_field_owner(&decl, Via::method("field-name", m, Some(off)));
+                    }
+                    self.open_field(MemberRef { owner: decl, name: name.to_string(), desc })
+                }
+                None => {
+                    // 类不是字面量：按 Class 值集所指类解析静态字段的声明类（初始化），字段按名放开；
+                    // 值集不齐全时按名兜底（闭包中声明该名静态字段的类都初始化），不记反射缺口
+                    if let Some(a) = &cls_arg {
+                        let (classes, complete) = self.mirror_classes_of(m, off, k, a, false);
+                        if !complete {
+                            self.static_owner_name_open(name);
+                        }
+                        for c in classes {
+                            if let Some((decl, _)) = self.field_by_name(&c, name) {
+                                if self.is_static_field(&decl, name) {
+                                    self.static_field_owner(&decl, Via::method("field-name", m, Some(off)));
+                                }
+                            }
+                        }
+                    }
+                    self.open_field_name(name)
+                }
             }
         }
         if !known {
@@ -47,6 +70,10 @@ impl Engine<'_> {
                 self.open_class_fields(cls);
             }
         }
+    }
+
+    fn is_static_field(&self, decl: &str, name: &str) -> bool {
+        self.h.class(decl).is_some_and(|cf| cf.fields.iter().any(|f| f.name == name && f.access & acc::STATIC != 0))
     }
 
     /// 形参槽并入实参（vals 不含接收者；None = 实参值未知）：非字符串常量的槽记为污染，重跑读过它的站点

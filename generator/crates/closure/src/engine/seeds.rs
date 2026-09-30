@@ -26,6 +26,12 @@ pub struct SeedState {
     pub annotation_enums: BTreeSet<String>,
     /// 输出：按类镜像强制初始化的目标类（类初始化钩子；运行期按名同步触发 `<clinit>`）
     pub mirror_inits: BTreeSet<String>,
+    /// 按反射 / 方法句柄链接到的静态成员与构造器的声明类（按链接路径；成员声明类初始化点的运行期目标）
+    pub(super) linked_owners: BTreeSet<(LinkRoute, String)>,
+    /// 已可达的成员声明类初始化点路径：该路径的 linked_owners 并入 mirror_inits
+    pub(super) live_routes: BTreeSet<LinkRoute>,
+    /// 所属类推不出的按名静态字段：名字 → 已扫描到的闭包类下标
+    pub(super) owner_names: BTreeMap<String, usize>,
     /// 已入选的 JCA 服务（去重；实现类经反射分派面登记）
     pub jca: BTreeSet<Service>,
     /// 输出：按名登记的反射分派面（类 → 成员名）
@@ -60,6 +66,7 @@ impl<'a> Engine<'a> {
         self.seed_locale(&reached);
         self.seed_jca(&reached);
         self.seed_image();
+        self.seed_static_owner_names();
         self.methods.len() + self.g.len() + self.inited.len() != before
     }
 

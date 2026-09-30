@@ -96,6 +96,9 @@ impl<'a> Engine<'a> {
                 _ => None,
             };
             self.enumerate_fields(cls);
+            if let Some(recv) = args.first() {
+                self.enumerated_static_owners(m, off, &k, recv);
+            }
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
             self.open_fields_all();

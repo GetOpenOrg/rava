@@ -63,6 +63,7 @@ impl<'a> Engine<'a> {
             self.handle_writer_edge(&key, &via);
         }
         self.sysprops_entry(&key, &via);
+        self.linked_member(&key, &via);
         if cut::edges_on() {
             let from = self.via_node(&via);
             cut::edge(&from, &format!("M:{key}"));
@@ -123,6 +124,9 @@ impl<'a> Engine<'a> {
             self.unresolved.insert(key.to_string());
         }
         self.push_m(idx);
+        if kind != Kind::Missing && (is_static && key.name != "<clinit>" || key.name == "<init>") {
+            self.init(&key.owner, via.clone());
+        }
         idx
     }
 

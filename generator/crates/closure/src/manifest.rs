@@ -56,6 +56,15 @@ pub enum Members {
     RecordAccessors,
 }
 
+/// 成员链接路径（成员声明类初始化点按路径接收声明类，`[facts.reflect] *_owner_initializers`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LinkRoute {
+    /// 方法句柄 / VarHandle（DirectMethodHandle、VarHandles 的链接）
+    Handle,
+    /// 核心反射（Method.invoke / Constructor.newInstance / Field 访问器工厂）
+    Reflect,
+}
+
 mod sysprops;
 mod names;
 mod field_names;
@@ -94,6 +103,7 @@ pub struct Manifest {
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
     class_initializers: HashSet<String>,
+    member_owner_initializers: HashMap<String, LinkRoute>,
     pub boot_init: Vec<String>,
     /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
     pub boot_calls: Vec<String>,
@@ -283,6 +293,11 @@ impl Manifest {
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
             class_initializers: reflect("class_initializers").into_iter().collect(),
+            member_owner_initializers: reflect("handle_owner_initializers")
+                .into_iter()
+                .map(|c| (c, LinkRoute::Handle))
+                .chain(reflect("reflect_owner_initializers").into_iter().map(|c| (c, LinkRoute::Reflect)))
+                .collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
             boot_calls: strings(&seeds, "boot_init", "calls"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
@@ -396,6 +411,13 @@ impl Manifest {
         self.class_initializers.contains(member)
     }
 
+    /// 调用方的 Class 实参恒为「经该路径正被链接 / 访问的静态成员或构造器的声明类」（`[facts.reflect]
+    /// handle_owner_initializers / reflect_owner_initializers`）：不按值集求目标，由「成员可达即声明类初始化」的
+    /// 结构不变量覆盖（engine/mirror_init.rs）
+    pub fn member_owner_route(&self, caller: &str) -> Option<LinkRoute> {
+        self.member_owner_initializers.get(caller).copied()
+    }
+
     /// 反序列化入口（可达即非 static、非 transient 字段不折叠）
     pub fn is_deserializer(&self, member: &str) -> bool {
         self.deserializers.contains(member)
@@ -494,7 +516,7 @@ mod tests {
     #[test]
     fn field_name_resolvers_and_class_initializers_parse() {
         let m = with_vm(
-            "[facts.field_writes]\nenumerators = []\n[facts.field_writes.name_resolvers]\n\"a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J\" = { class = 0, name = 1 }\n[facts.reflect]\nclass_initializers = [\"a/U.init:(Ljava/lang/Class;)V\"]\n",
+            "[facts.field_writes]\nenumerators = []\n[facts.field_writes.name_resolvers]\n\"a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J\" = { class = 0, name = 1 }\n[facts.reflect]\nclass_initializers = [\"a/U.init:(Ljava/lang/Class;)V\"]\nhandle_owner_initializers = [\"a/D.check:(La/M;)Z\"]\nreflect_owner_initializers = [\"a/F.acc:(La/M;)V\"]\n",
         )
         .unwrap();
         assert_eq!(
@@ -503,6 +525,9 @@ mod tests {
         );
         assert!(m.is_class_initializer("a/U.init:(Ljava/lang/Class;)V"));
         assert!(!m.is_class_initializer("a/U.other:(Ljava/lang/Class;)V"));
+        assert_eq!(m.member_owner_route("a/D.check:(La/M;)Z"), Some(LinkRoute::Handle));
+        assert_eq!(m.member_owner_route("a/F.acc:(La/M;)V"), Some(LinkRoute::Reflect));
+        assert_eq!(m.member_owner_route("a/U.init:(Ljava/lang/Class;)V"), None);
     }
 
     /// 仓库清单：按名取字段的入口与按镜像初始化入口都已登记（写入来源审计的闭合项）
@@ -514,5 +539,13 @@ mod tests {
         assert!(r.handle && r.class.is_none());
         assert!(m.field_name_resolver("jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J").is_some());
         assert!(m.is_class_initializer("jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V"));
+        assert_eq!(
+            m.member_owner_route("java/lang/invoke/DirectMethodHandle.checkInitialized:(Ljava/lang/invoke/MemberName;)Z"),
+            Some(LinkRoute::Handle)
+        );
+        assert_eq!(
+            m.member_owner_route("jdk/internal/reflect/MethodHandleAccessorFactory.ensureClassInitialized:(Ljava/lang/Class;)V"),
+            Some(LinkRoute::Reflect)
+        );
     }
 }

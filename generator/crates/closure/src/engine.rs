@@ -23,7 +23,7 @@ use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
 use crate::handwritten::{member_matches, to_snake, MODULE_SUFFIXES, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
-use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members, PropValue};
+use crate::manifest::{Domain, Fact, IndyKind, LinkRoute, Manifest, Members, PropValue};
 
 mod sets;
 mod idset;
