@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use ir::{Expr, Raw};
+use ir::{Expr};
 use sim::StackSim;
 use ty::{ClassInfo, JvmType, RsType};
 
@@ -107,7 +107,7 @@ fn align_args(
         if same_text(env, expected, &actual) || *expected == RsType::Unit {
             continue;
         }
-        let leaf = Expr::Raw(Raw(a.clone()));
+        let leaf = Expr::raw(a.clone());
         let e = if is_object(env, expected) {
             sig::coerce_arg(env, sim, log, leaf, &actual, &RsType::Object)?
         } else if is_object(env, &actual) {

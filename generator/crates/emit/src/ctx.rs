@@ -21,6 +21,10 @@ pub struct EmitOptions {
     pub jdk_major: Option<u32>,
     /// 用户 .java 源文件（package 声明来源）
     pub java_files: Vec<PathBuf>,
+    /// 批量模式：入口写 `user/src/bin/<bin>.rs`，向 user/Cargo.toml 追加 `[[bin]]`
+    pub batch: bool,
+    /// 调试：审计逐条明细（存根兜底位点、静默兜底触发）
+    pub debug: bool,
     /// 逐类发射的并行度（0 = 可用核数；1 = 串行）。输出与并行度无关
     pub jobs: usize,
 }
@@ -39,12 +43,16 @@ pub struct EmitCtx<'a> {
     pub macros_crate: PathBuf,
     pub seeds: SeedCfg,
     pub opts: EmitOptions,
+    /// 静默兜底审计（`[fallback-audit]`）
+    pub fallback: crate::fallback::FallbackAudit,
     extras: RwLock<HashMap<String, Arc<ClassExtras>>>,
     subtype_children: OnceLock<BTreeMap<String, Vec<String>>>,
     root_api: OnceLock<BTreeSet<String>>,
     chain_slots: OnceLock<BTreeMap<String, BTreeSet<(String, String)>>>,
     root_keys: OnceLock<BTreeSet<(String, String)>>,
     sam: OnceLock<crate::sam::SamLedger>,
+    instr_facts: OnceLock<instr::InstrFacts>,
+    lib_crate_of: OnceLock<HashMap<String, String>>,
     /// 类文件头 use 行索引缓存（binary → 索引；按头部文本校验，见 `phase2::uses`）
     pub(crate) use_index: Mutex<HashMap<String, Arc<crate::phase2::uses::UseIndex>>>,
 }
@@ -75,6 +83,7 @@ impl<'a> EmitCtx<'a> {
             runtime_dir,
             macros_crate,
             seeds: SeedCfg::from_toml(&table),
+            fallback: crate::fallback::FallbackAudit::new(opts.debug),
             opts,
             extras: RwLock::new(HashMap::new()),
             subtype_children: OnceLock::new(),
@@ -82,6 +91,8 @@ impl<'a> EmitCtx<'a> {
             chain_slots: OnceLock::new(),
             root_keys: OnceLock::new(),
             sam: OnceLock::new(),
+            instr_facts: OnceLock::new(),
+            lib_crate_of: OnceLock::new(),
             use_index: Mutex::new(HashMap::new()),
         })
     }
@@ -105,9 +116,22 @@ impl<'a> EmitCtx<'a> {
         if let Some(x) = self.extras.read().unwrap_or_else(|e| e.into_inner()).get(cls) {
             return x.clone();
         }
-        // 并发未命中时各自解析（结果只由字节决定），先入者胜出
-        let x = Arc::new(self.cp.bytes(cls).and_then(|b| parse_extras(&b).ok()).unwrap_or_default());
-        self.extras.write().unwrap_or_else(|e| e.into_inner()).entry(cls.to_string()).or_insert(x).clone()
+        // 并发未命中时各自解析（结果只由字节决定），先入者胜出；降级只由入表者计一次
+        let parsed = self.cp.bytes(cls).map(|b| parse_extras(&b));
+        let mut map = self.extras.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(x) = map.get(cls) {
+            return x.clone();
+        }
+        let x = Arc::new(match parsed {
+            Some(Ok(x)) => x,
+            Some(Err(e)) => {
+                self.fallback.record("class-extras", || format!("{cls}: {e}"));
+                ClassExtras::default()
+            }
+            None => ClassExtras::default(),
+        });
+        map.insert(cls.to_string(), x.clone());
+        x
     }
 
     /// 直接子类型索引：父类 / 直接接口 → 子类型（按 binary 排序；`_get_all_subtypes_ordered`
@@ -158,6 +182,15 @@ impl<'a> EmitCtx<'a> {
         })
     }
 
+    /// 方法体层的全局事实（根类方法集 / 手写根类 API 名面 / 子类索引）：发射层与方法体层
+    /// 共用同一成员命名函数时的上下文
+    pub fn instr_facts(&self) -> &instr::InstrFacts {
+        self.instr_facts.get_or_init(|| {
+            let root = self.cp.get(ty::consts::OBJECT);
+            instr::InstrFacts::build(self.ty.reg, root.as_deref(), &self.runtime_src())
+        })
+    }
+
     /// A-5 可合成函数式接口账本（首次查询时预扫描；方法体生成器在 invokedynamic 站点经
     /// [`crate::sam::SamLedger::site_ctor_path`] 查询构造路径）
     pub fn sam(&self) -> &crate::sam::SamLedger {
@@ -174,6 +207,22 @@ impl<'a> EmitCtx<'a> {
             }
             out
         })
+    }
+
+    /// jar 输入模式：类归属的 lib crate 名（非 lib 类 None）
+    pub fn lib_crate_of(&self, cls: &str) -> Option<&str> {
+        self.lib_crate_of
+            .get_or_init(|| {
+                let mut m = HashMap::new();
+                for (lib, classes) in &self.input.lib_crates {
+                    for c in classes {
+                        m.entry(c.clone()).or_insert_with(|| lib.clone());
+                    }
+                }
+                m
+            })
+            .get(cls)
+            .map(String::as_str)
     }
 
     /// 类是否为本编译单元的用户类

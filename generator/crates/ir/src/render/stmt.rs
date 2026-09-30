@@ -64,7 +64,7 @@ impl Renderer<'_> {
             }
             Stmt::Match(m) => self.write_match(out, m, indent),
             Stmt::JavaTry(t) => self.write_try(out, t, indent),
-            Stmt::Raw(r) => out.push_str(&r.0),
+            Stmt::Raw(r) => out.push_str(r.as_str()),
         }
     }
 

@@ -2,6 +2,7 @@
 
 pub mod classpath;
 pub mod hierarchy;
+pub mod image;
 pub mod jdk;
 
 pub use classpath::{ArchiveView, ClassPath, Origin};

@@ -28,6 +28,9 @@ pub struct BodyRequest<'a> {
     /// 显式 Rust 名（None：由方法体生成器按自身规则命名）
     pub rust_name: Option<&'a str>,
     pub in_vtable_body: bool,
+    /// 发射位点名（存根兜底审计的位点分解：`main` / `clinit` / `iface-default` / `iface-lambda` /
+    /// `iface-private` / `iface-inherit` / `iface-special` / `bridge` / `super-inherit`）
+    pub site: &'static str,
 }
 
 /// 方法体生成期间登记的事实
@@ -77,51 +80,12 @@ impl BodyLog {
 pub enum BodyEvent {
     /// 一次方法体生成：等价性审计项、instanceof 折叠次数、控制流审计数据
     Method { equiv: Vec<instr::Audit>, instanceof_folds: usize, cfg: Option<method::CfgStats> },
-    /// 控制流语义限制退化为存根（方法键, 原因）
-    StubFallback { key: String, reason: String },
+    /// 控制流语义限制退化为存根（方法键, 原因, 发射位点）
+    StubFallback { key: String, reason: String, site: &'static str },
 }
 
-/// 方法体生成器（生产实现 [`crate::method_bodies::MethodBodies`]；`--skeleton-only` 用占位实现）。
+/// 方法体生成器（生产实现 [`crate::method_bodies::MethodBodies`]）。
 /// 并行发射下跨线程共享：生成器本身不可变，生成期事实写入调用方给的 [`BodyLog`]
 pub trait MethodBodyEmitter: Sync {
     fn emit_body(&self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, log: &mut BodyLog) -> Result<BodyOutput, BodyError>;
-}
-
-/// 未接入方法体生成器：`--skeleton-only` 之外的任何方法体请求都报错
-pub struct NoBodies;
-
-impl MethodBodyEmitter for NoBodies {
-    fn emit_body(&self, _ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, _log: &mut BodyLog) -> Result<BodyOutput, BodyError> {
-        Err(BodyError::Fatal(format!(
-            "P4c/P5b 未接入：{}.{}:{}",
-            req.class.name(),
-            req.method.name,
-            req.method.desc
-        )))
-    }
-}
-
-/// 骨架模式：签名同存根（形参名取 `argN`），方法体为 `/*BODY key*/` 占位（`rava build --skeleton-only`）
-pub struct PlaceholderBodies;
-
-impl MethodBodyEmitter for PlaceholderBodies {
-    fn emit_body(&self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>, _log: &mut BodyLog) -> Result<BodyOutput, BodyError> {
-        let name = req.rust_name.unwrap_or(&req.method.name);
-        let stub = crate::class_writer::stub::native_stub(
-            ctx,
-            req.class,
-            req.method,
-            name,
-            req.class_type_params,
-            &BTreeMap::new(),
-        );
-        let text = format!(
-            "{} {{\n    /*BODY {}.{}:{}*/\n}}",
-            stub.sig,
-            req.class.name(),
-            req.method.name,
-            req.method.desc
-        );
-        Ok(BodyOutput { text, effects: BodyEffects::default() })
-    }
 }

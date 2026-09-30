@@ -6,7 +6,7 @@
 //! 每条被吸收的跳转记入账本。
 
 use cfg::{Cond, JumpKind, NodeId};
-use ir::{Expr, Raw};
+use ir::{Expr};
 use sim::StackEntry;
 use ty::{Prim, RsType};
 
@@ -178,14 +178,14 @@ impl Blocks<'_, '_> {
             && text::ty(self.env, &jump.ty) == "i32"
         {
             let truth = if js == "1i32" { jump_cond.clone() } else { jump_cond.negate() };
-            let expr = Expr::Raw(Raw(format!("({})", render_cond(&truth))));
+            let expr = Expr::raw(format!("({})", render_cond(&truth)));
             let e = self.new_entry(expr.clone(), RsType::Prim(Prim::Bool));
             self.conds.insert(e.id, expr, truth);
             return Ok(e);
         }
         let (tv, ev, ty) = unify_pair(self.env, arm_value(self.env, fall)?, &fall.ty, arm_value(self.env, jump)?, &jump.ty);
         let fall_cond = render_cond(&jump_cond.negate());
-        let expr = Expr::Raw(Raw(format!("(if {fall_cond} {{ {tv} }} else {{ {ev} }})")));
+        let expr = Expr::raw(format!("(if {fall_cond} {{ {tv} }} else {{ {ev} }})"));
         Ok(self.new_entry(expr, ty))
     }
 }

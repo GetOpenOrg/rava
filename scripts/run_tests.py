@@ -770,6 +770,8 @@ FALLBACK_IDS = (
     'vars-render-loop', 'vars-render-if', 'vars-type-decl',
     'vars-type-outer', 'vars-type-later',
     'sam-functional', 'sam-prescan',
+    # rust 生成器自有降级点（generator/crates/emit/src/fallback.rs FALLBACK_IDS）
+    'class-extras', 'lvt-substitute', 'sam-ctor-path',
 )
 
 

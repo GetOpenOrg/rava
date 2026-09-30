@@ -24,6 +24,10 @@ pub enum IndyKind {
     Concat,
     /// native 的细分；同时出现时优先
     TypeSwitch,
+    /// native 的细分：枚举选择子的模式 switch（标签为枚举常量名 / Class）
+    EnumSwitch,
+    /// native 的细分：record 的 toString / hashCode / equals
+    ObjectMethods,
 }
 
 impl IndyKind {
@@ -33,6 +37,8 @@ impl IndyKind {
             IndyKind::Lambda => "lambda",
             IndyKind::Concat => "concat",
             IndyKind::TypeSwitch => "type_switch",
+            IndyKind::EnumSwitch => "enum_switch",
+            IndyKind::ObjectMethods => "object_methods",
         }
     }
 }
@@ -130,7 +136,14 @@ fn intrinsics(vm: &Table) -> Result<BTreeSet<String>, InputError> {
 fn indy_kinds(vm: &Table) -> Result<BTreeMap<String, IndyKind>, InputError> {
     let sec = section(vm, "indy");
     let mut out = BTreeMap::new();
-    for kind in [IndyKind::Native, IndyKind::Lambda, IndyKind::Concat, IndyKind::TypeSwitch] {
+    for kind in [
+        IndyKind::Native,
+        IndyKind::Lambda,
+        IndyKind::Concat,
+        IndyKind::TypeSwitch,
+        IndyKind::EnumSwitch,
+        IndyKind::ObjectMethods,
+    ] {
         for m in str_list(sec, kind.as_str(), "indy")? {
             out.insert(m, kind);
         }

@@ -156,7 +156,9 @@ fn push_insn(pc: u32, c: &FoldConst, where_: &str) -> Result<Insn, InputError> {
         (FoldValue::Long(l) | FoldValue::Int(l), "J") => Ok(ldc(pc, op::LDC2_W, Const::Long(*l))),
         (FoldValue::Str(s), _) if ty == string_desc => Ok(ldc(pc, op::LDC, Const::String(s.clone()))),
         (v, _) if ty == string_desc => Err(err(where_, format!("String 常量须为 JSON 字符串，得到 {v:?}"))),
-        (v, "J" | "F" | "D") => Err(err(where_, format!("未移植：{ty} 常量编码 {v:?}"))),
+        // 闭包分析器的常量格只有 int / long / String / null（无浮点值），F / D 折叠常量与
+        // 非 long 值的 J 折叠常量均属输入不一致
+        (v, "J" | "F" | "D") => Err(err(where_, format!("{ty} 折叠常量的值 {v:?} 不在闭包常量格内"))),
         _ => Err(err(where_, format!("不支持的常量类型 {ty:?}"))),
     }
 }

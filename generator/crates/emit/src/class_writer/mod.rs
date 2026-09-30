@@ -11,10 +11,10 @@ pub mod head;
 pub mod hw_overrides;
 pub(crate) mod inherit;
 pub mod methods;
-pub mod record;
 pub mod slot;
 pub mod stub;
 mod super_inherit;
+pub mod visibility;
 
 use std::collections::BTreeSet;
 
@@ -25,7 +25,7 @@ use crate::body::MethodBodyEmitter;
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::error::Result;
 use crate::imports::refs::add_desc_refs;
-use crate::imports::{collect_referenced, gen_cross_imports, supplementary_iface_imports, used_vtable_imports, CrossInput};
+use crate::imports::{collect_referenced, gen_cross_imports, supplementary_iface_imports, used_vtable_imports, CrateRoute, CrossInput, Prefix};
 use crate::lang;
 use crate::project::layout::JdkLayout;
 use crate::text::indent;
@@ -41,12 +41,23 @@ pub const INTERFACE_UPCASTS_SLOT: &str = "//@@rava:interface-upcasts@@";
 
 const FILE_ALLOW: &str = "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs, unused_comparisons)]";
 
+/// lib 模式（jar 输入）下类所在 crate 的定向参数
+#[derive(Clone, Copy)]
+pub struct LibSite<'l> {
+    /// 引用按目标类归属 crate 定向（`current` = 本类所在 lib；None = user crate）
+    pub route: CrateRoute<'l>,
+    /// 可导入的生成集：JDK 生成类 ∪ 全部 lib crate 类
+    pub generated: &'l BTreeSet<String>,
+}
+
 /// 类所在 crate 的发射参数
 pub struct ClassSite<'l> {
     /// java_runtime 布局（包路径 / 同名消歧 / 跳过包 / 生成集）
     pub jdk: &'l JdkLayout,
-    /// user crate 类：同 crate 兄弟类导入行；None = java_runtime 内的 JDK 类
+    /// user crate 类：同 crate 兄弟类导入行；None = java_runtime / lib crate 内的类
     pub user_sibling_imports: Option<Vec<String>>,
+    /// lib 模式定向；None = 单 crate 发射（无 --lib）
+    pub lib: Option<LibSite<'l>>,
 }
 
 impl ClassSite<'_> {
@@ -54,17 +65,38 @@ impl ClassSite<'_> {
         self.user_sibling_imports.is_some()
     }
 
-    /// 引用 crate 外类型的前缀
+    /// lib crate 内的类：Java 可见性映射生效
+    fn in_lib_crate(&self) -> bool {
+        self.lib.is_some_and(|l| l.route.current.is_some())
+    }
+
+    /// 引用 crate 外类型的前缀（lib 模式按目标 crate 定向前的缺省值）
     pub fn prefix(&self) -> &'static str {
-        if self.is_user() {
+        if self.is_user() || self.lib.is_some() {
             "java_runtime"
         } else {
             "crate"
         }
     }
 
-    /// cross_imports 参数（用户类在无 JDK 类时不做包集合导入与生成集过滤）
+    fn scan_prefix(&self) -> Prefix<'_> {
+        Prefix { base: self.prefix(), route: self.lib.map(|l| l.route) }
+    }
+
+    /// cross_imports 参数（用户类在无 JDK 类时不做包集合导入与生成集过滤；lib 模式只按生成集定向）
     fn cross_input(&self) -> CrossInput<'_> {
+        if let Some(l) = self.lib {
+            return CrossInput {
+                pkg_paths: None,
+                generated: Some(l.generated),
+                conflict_map: None,
+                skipped: None,
+                sibling_imports: self.user_sibling_imports.as_deref().unwrap_or(&[]),
+                prefix: self.prefix(),
+                all_in_chain: self.is_user(),
+                route: Some(l.route),
+            };
+        }
         let jdk_on = !self.is_user() || !self.jdk.files.is_empty();
         CrossInput {
             pkg_paths: jdk_on.then_some(self.jdk.pkg_paths.as_slice()),
@@ -74,6 +106,7 @@ impl ClassSite<'_> {
             sibling_imports: self.user_sibling_imports.as_deref().unwrap_or(&[]),
             prefix: self.prefix(),
             all_in_chain: self.is_user(),
+            route: None,
         }
     }
 }
@@ -208,7 +241,8 @@ pub fn class_text(
         (format!("<{t}>"), format!("impl<{t}> {sname}<{t}>"))
     };
     let sup = fields::flatten_super_fields(ctx, ci);
-    let struct_lines = fields::struct_lines(ctx, ci, &tps, &sup);
+    let java_vis = site.in_lib_crate();
+    let struct_lines = fields::struct_lines(ctx, ci, &tps, &sup, java_vis);
 
     // G-10 账本：本类方法由本轮生成
     state.generated_classes.insert(ci.name().to_string());
@@ -217,8 +251,12 @@ pub fn class_text(
     method_blocks.extend(mb.method_blocks);
     let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
     inherited_segments(ctx, state, bodies, ci, &tps, visible, overrides, &mut method_blocks)?;
-    let method_blocks = record::patch_record_method_blocks(ctx, ci, &format!("{sname}{struct_generic}"), method_blocks);
+    // 先按 `pub fn` 形态记录方法声明，再做可见性降级（记录与文本最终形态解耦）
     let methods = crate::emission::record_methods(&method_blocks);
+    if java_vis {
+        visibility::downgrade_non_public_blocks(&mut method_blocks);
+    }
+    let struct_vis = if java_vis { visibility::java_member_vis(ci.class_file().access) } else { "pub" };
 
     let parent = parent_rust(ctx, ci);
     let empty = BTreeSet::new();
@@ -233,9 +271,9 @@ pub fn class_text(
     let mut block = head::block_head(ctx, ci, &head_in);
     block.push(String::new());
     if struct_lines.is_empty() {
-        block.push(format!("pub struct {sname}{struct_generic};"));
+        block.push(format!("{struct_vis} struct {sname}{struct_generic};"));
     } else {
-        block.push(format!("pub struct {sname}{struct_generic} {{"));
+        block.push(format!("{struct_vis} struct {sname}{struct_generic} {{"));
         block.extend(struct_lines);
         block.push("}".into());
     }
@@ -272,9 +310,9 @@ pub fn class_text(
     }
 
     let scanned: Vec<String> = method_blocks.iter().chain(&iface_lambda_blocks).cloned().collect();
-    parts.extend(used_vtable_imports(ctx, &scanned, &cross_imports, &sname, site.prefix()));
+    parts.extend(used_vtable_imports(ctx, &scanned, &cross_imports, &sname, site.scan_prefix()));
     if !iface_supp_blocks.is_empty() {
-        parts.extend(supplementary_iface_imports(ctx, &iface_supp_blocks, &cross_imports, &sname, site.prefix()));
+        parts.extend(supplementary_iface_imports(ctx, &iface_supp_blocks, &cross_imports, &sname, site.scan_prefix()));
     }
     Ok(ClassText { text: parts.join("\n"), methods })
 }

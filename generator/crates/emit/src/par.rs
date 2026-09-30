@@ -2,6 +2,7 @@
 //!
 //! 工作线程按原子游标领取下标（负载自平衡：类体耗时差异两三个数量级），结果按下标归位，
 //! 输出顺序与串行映射逐项一致。工作线程栈与主线程同量级（方法体生成有深递归）。
+//! 线程局部的 raw-audit 账本（[`ir::raw_audit`]）随工作线程收工并回调用线程。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -23,15 +24,19 @@ pub fn par_map<T: Sync, R: Send>(jobs: usize, items: &[T], f: impl Fn(&T) -> R +
     if jobs <= 1 {
         return items.iter().map(f).collect();
     }
+    let sites_on = ir::raw_audit::sites_enabled();
     let next = AtomicUsize::new(0);
     let mut slots: Vec<Option<R>> = (0..n).map(|_| None).collect();
     std::thread::scope(|s| {
         let work = || {
+            if sites_on {
+                ir::raw_audit::enable_sites();
+            }
             let mut out = Vec::new();
             loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 if i >= n {
-                    return out;
+                    return (out, ir::raw_audit::take_local());
                 }
                 out.push((i, f(&items[i])));
             }
@@ -46,7 +51,8 @@ pub fn par_map<T: Sync, R: Send>(jobs: usize, items: &[T], f: impl Fn(&T) -> R +
             .collect();
         for h in handles {
             match h.join() {
-                Ok(done) => {
+                Ok((done, tally)) => {
+                    ir::raw_audit::absorb(tally);
                     for (i, r) in done {
                         slots[i] = Some(r);
                     }
@@ -69,5 +75,14 @@ mod tests {
         assert_eq!(got, items.iter().map(|x| x * 2).collect::<Vec<_>>());
         assert_eq!(par_map(1, &items, |x| x + 1)[999], 1000);
         assert!(par_map(4, &Vec::<usize>::new(), |x| *x).is_empty());
+    }
+
+    #[test]
+    fn raw_audit_counts_survive_workers() {
+        use ir::raw_audit::{count, reset, RawKind};
+        reset();
+        let items: Vec<usize> = (0..64).collect();
+        let _ = par_map(4, &items, |_| ir::Expr::raw("x"));
+        assert_eq!(count(RawKind::Expr), 64);
     }
 }

@@ -16,7 +16,7 @@ mod cs;
 mod direct;
 mod vtable;
 
-use ir::{Expr, Raw, Stmt};
+use ir::{Expr, Stmt};
 use sim::StackSim;
 use ty::{JvmType, RsType};
 
@@ -50,7 +50,7 @@ impl Site {
 
 /// `Raw` 语句（Python `RawStmt(f"..")` 同文本）
 fn raw(sim: &mut StackSim, text: String) {
-    sim.emit(Stmt::Raw(Raw(text)));
+    sim.emit(Stmt::raw(text));
 }
 
 /// `let {v}: {ty} = {value};`，压 `Var(v)`（fresh 前缀缺省 `_t`）

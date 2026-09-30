@@ -109,27 +109,36 @@ stack / arith / arrays / returns / control / dynamic / invoke / fields——与�
 6. **`_coerce_stored_value` 的 `Vec<` → `JArray<Object>` 改写**：已移植但不可达（渲染后的数组类型不含
    `Vec<`，Python 注释亦言明不触发）。
 
-## 未移植分支（`InstrError::Unported`）
+## 显式错误分支（原 `InstrError::Unported`，2026-10-01 清零）
 
-全部为 Python 侧的**异常路径**或**生产调用方须提供的输入缺失**，三例命中数均为 0。
+`InstrError::Unported` 已删除。原未移植分支按性质改为三类显式错误，均不发射占位文本：
 
-| 分支 | 位置 | 理由 |
-|---|---|---|
-| `ldc 常量形态 …` | `sim/consts.rs` | MethodType / MethodHandle / Dynamic 常量：Python 落入 `{operand}i32` 兜底（语义错误的文本），不复制 |
-| `接口实现方法 … 无接收者实参` | `sim/dynamic/lambda_body.rs` | Python 对空实参表取下标（IndexError） |
-| `invokestatic 目标短名含包路径` | `invoke/static_call.rs` | Python 此处发射注释占位 `/* cls.m(args) */` 作为调用值（不可编译的占位，不复制）；短名表对注册表类恒不含 `/`，只在表外类出现 |
-| `IrError::BadFloat` → `SimError::Unported` | `sim/consts.rs`（经 `From<IrError>`） | `FloatLit::parse` 收到非数字文本；Python 直接拼接浮点文本。三例命中 0 |
+| 分支 | 位置 | 现错误 | 理由 |
+|---|---|---|---|
+| `ldc 常量形态 …`（MethodType / MethodHandle / 动态常量） | `sim/consts.rs` | `OutOfScope` | 合法但 javac 不产出的字节码；Python 落入 `{operand}i32` 兜底（错值），不复制 |
+| `switch 标签形态 …` | `sim/dynamic/type_switch.rs` | `OutOfScope` | `c`/`s`/`i`/EnumDesc 之外的标签，javac 不产出 |
+| `接口实现方法 … 无接收者实参` | `sim/dynamic/lambda_body.rs` | `BadInsn` | JVM 链接期即抛 LambdaConversionException；Python 对空实参表取下标（IndexError） |
+| `invokestatic 目标短名含包路径` | `invoke/static_call.rs` | 删除 | 短名表对注册表类恒不含 `/`，表外类经 `unresolved_stub` 先行落存根，分支不可达 |
+| `IrError::BadFloat` | `sim/consts.rs`（经 `From<IrError>`） | `SimError::Ir` | 生成器内部不变量（浮点记号由 classfile 数值格式化产出） |
 
-## 静默占位（复制 Python 占位文本或发射错值；不报 Unported，golden 计数不可见）
+## 静默占位（S1–S6，2026-10-01 清零）
 
-与上表「不复制不可编译占位」的口径不一致，终态为 0：表外类走精确 `panic!("stub: …")`，其余补真实翻译。
-27 例命中数见 `generator/crates/emit/P5B_NOTES.md`。
+原复制 Python 占位文本或发射错值的六处全部消除：
 
-| # | 位置 | 发射内容 | 触发条件 | 对应 Python | 后果 |
-|---|---|---|---|---|---|
-| S1 | `invoke/special/ctor.rs`（`new` 路径） | `/* {raw_cls}::new() */` 充当表达式 | `new` 目标类短名为空或含 `/`（表外类） | `codegen/instr/invoke.py:639` | 不可编译 |
-| S2 | `invoke/special/ctor.rs`（`init_on`） | `/* invokespecial Method … */` | 已有对象上的构造器调用，接收者不是 `this`/`self` 或 owner 为空 | `codegen/instr/invoke.py:689` | 静默丢弃 super/this 构造调用（错值） |
-| S3 | `sim/dynamic/lambda.rs` | `/* TODO: invokedynamic {idx} */` + `Object::default()` | lambda 引导缺实现方法信息或 SAM 描述符为空 | `codegen/instr/sim/dynamic.py:500` | 空对象（错值） |
-| S4 | `sim/dynamic/lambda.rs` | `/* TODO: invokedynamic {idx} (impl parse failed) */` + `Object::default()` | 实现方法引用解析失败 | `codegen/instr/sim/dynamic.py:493` | 空对象（错值） |
-| S5 | `sim/dynamic/type_switch.rs` | `/* TODO S-17 … */` + `Object::default()` | `typeSwitch` 标签含 `c`/`s`/`i` 之外的形态（EnumDesc 等 condy） | `codegen/instr/sim/dynamic.py:144` | 选择子应为 int 却压入 Object，大概率不可编译 |
-| S6 | `invoke/virtual_/bare.rs` | `/* A-5: 未翻译接收者残余 … */` 或 `Default::default()` | 虚调用接收者类不在注册表或为接口残余形 | `codegen/instr/invoke_virtual.py:256` | 静默空操作 / 默认值（错值） |
+| # | 位置 | 原发射 | 现处理 |
+|---|---|---|---|
+| S1 | `invoke/special/ctor.rs`（`new`） | `/* {raw_cls}::new() */` | `new` 类名为空 → `BadInsn`（常量池 Class 项不可为空）；表外类走精确存根 |
+| S2 | `invoke/special/ctor.rs`（`init_on`） | `/* invokespecial Method … */` | 接收者非未初始化对象 → `BadInsn`（JVMS §4.10.1.9 校验器拒绝） |
+| S3 | `sim/dynamic/lambda.rs` | `/* TODO: invokedynamic */` + `Object::default()` | 引导实参畸形 → `BadInsn`；清单外引导方法 → `panic!("stub: 引导类.方法:描述符")`；ObjectMethods / enumSwitch 引导点真实翻译 |
+| S4 | `sim/dynamic/lambda.rs` | `(impl parse failed)` + `Object::default()` | 实现句柄直接取 MemberRef，解析失败分支不可达，已删 |
+| S5 | `sim/dynamic/type_switch.rs` | `/* TODO S-17 */` + `Object::default()` | EnumDesc 动态常量标签结构化解码，按身份比较枚举常量 |
+| S6 | `invoke/virtual_/bare.rs` | `/* A-5 … */` / `Default::default()` | 接收者无可分派实现 → `panic!("stub: 类.方法:描述符")` |
+
+### 与 Python 的有意偏离
+
+1. **record ObjectMethods**：见 `emit/GOLDEN_DIFF.md` 二·9。`equals` 为单个 bool 表达式
+   （`o.is_instance_of(cls) && { let that = …; (分量比较 && …) }`），分量比较整体加括号，避免语句位置的
+   `{ .. } && ..` 被解析为块语句。
+2. **字符串拼接实参的 toString 物化次序**：Python `concat_from_stack` 逐个出栈并即时物化 `toString()`
+   临时量，临时量按**从右到左**求值（与 Java 从左到右的求值序相反，副作用可见时语义错误）；Rust 先整体出栈
+   再按实参顺序物化，`_t0` 对应最左实参。

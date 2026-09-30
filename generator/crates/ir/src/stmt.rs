@@ -133,3 +133,12 @@ pub enum Stmt {
     JavaTry(TryStmt),
     Raw(Raw),
 }
+
+impl Stmt {
+    /// 文本逃生舱语句（raw-audit `raw_stmt` 计数，位点取调用者）
+    #[track_caller]
+    pub fn raw(text: impl Into<String>) -> Stmt {
+        crate::raw_audit::record(crate::raw_audit::RawKind::Stmt, std::panic::Location::caller());
+        Stmt::Raw(Raw::from_text(text.into()))
+    }
+}

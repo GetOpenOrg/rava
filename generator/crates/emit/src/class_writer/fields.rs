@@ -122,8 +122,8 @@ pub fn flatten_super_fields(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> SuperFields {
     out
 }
 
-/// 本类实例字段的 struct 行（父类已展平的同名字段跳过）
-pub fn struct_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], sup: &SuperFields) -> Vec<String> {
+/// 本类实例字段的 struct 行（父类已展平的同名字段跳过）；`java_vis`：lib crate 的 Java 可见性映射
+pub fn struct_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], sup: &SuperFields, java_vis: bool) -> Vec<String> {
     let super_names: BTreeSet<&str> = sup.fields.iter().map(|(n, _)| n.as_str()).collect();
     let ex = ctx.extras(ci.name());
     let mut lines = Vec::new();
@@ -136,7 +136,8 @@ pub fn struct_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], sup: &Sup
             continue;
         }
         lines.push(format!("    {}", field_attr(f, ex.fields.get(i))));
-        lines.push(format!("    pub {name}: {},", resolve_field_rust(ctx, f, tps).render(ctx.ty.names)));
+        let vis = if java_vis { super::visibility::java_member_vis(f.access) } else { "pub" };
+        lines.push(format!("    {vis} {name}: {},", resolve_field_rust(ctx, f, tps).render(ctx.ty.names)));
     }
     lines
 }

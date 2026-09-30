@@ -27,7 +27,7 @@
 //! 6. **层次查询**（P4c 的槽位 widening 等也用）：[`hierarchy::common_ref_type`] /
 //!    [`hierarchy::common_ref_type_widening`] / [`hierarchy::is_subtype`]；值强转见 [`coerce`]。
 //!
-//! 未移植的 Python 分支返回 [`InstrError::Unported`]（清单见 crate 根 `GOLDEN_DIFF.md`）；
+//! 非法 / 超出 javac 产出范围的输入显式返回 [`InstrError`]，不发射占位；
 //! 全部状态显式传入，无全局可变状态；迭代序确定（BTreeMap / 稳定排序）。
 
 pub mod build;

@@ -461,13 +461,18 @@ concat = [
 ]
 native = [
     "java/lang/runtime/SwitchBootstraps.typeSwitch",
+    "java/lang/runtime/SwitchBootstraps.enumSwitch",
     "java/lang/runtime/ObjectMethods.bootstrap",
 ]
-# native 的细分（Python 生成器读取；Rust 分析器按上方 native 条目建模）：
-#   type_switch  模式匹配 switch：静态实参即 case 标签序列（Class / String / 整数常量），
+# native 的细分（生成器读取；Rust 分析器按上方 native 条目建模）：
+#   type_switch  模式匹配 switch：静态实参即 case 标签序列（Class / String / 整数常量 / EnumDesc 动态常量），
 #                生成器据此发射运行时标签判定链（S-17）
+#   enum_switch  枚举选择子的模式 switch：标签为枚举常量名（选择子枚举类）或 Class
 type_switch = [
     "java/lang/runtime/SwitchBootstraps.typeSwitch",
+]
+enum_switch = [
+    "java/lang/runtime/SwitchBootstraps.enumSwitch",
 ]
 object_methods = [
     "java/lang/runtime/ObjectMethods.bootstrap",
