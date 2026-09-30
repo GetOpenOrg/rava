@@ -492,7 +492,8 @@ pub struct Engine<'a> {
     open_methods: BTreeMap<(u32, u32), BTreeSet<usize>>,
     /// 按 open 在 G 上展开过接收者的字节码站点，索引同上（只重跑这些站点）
     open_sites: BTreeMap<(u32, u32), BTreeSet<(usize, u32)>>,
-    pending_catch: BTreeMap<usize, Vec<String>>,
+    /// 分析时按「尚无实例」处理的类型（catch / instanceof 目标）：其子类型进入 G 时方法重分析
+    pending_types: BTreeMap<usize, Vec<String>>,
     /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
     lambda_stack: HashSet<LambdaCall>,
     /// 下一次 `add_to` 来自流边推送（诊断：区分 open 的直接注入点）
@@ -560,14 +561,14 @@ impl<'a> Engine<'a> {
         }
         self.hubs_grow(id);
         self.reopen(id);
-        let pend: Vec<(usize, Vec<String>)> = self.pending_catch.iter().map(|(k, v)| (*k, v.clone())).collect();
+        let pend: Vec<(usize, Vec<String>)> = self.pending_types.iter().map(|(k, v)| (*k, v.clone())).collect();
         for (m, tys) in pend {
             let hit = tys.iter().any(|t| {
                 let tid = self.id(t);
                 self.sub(id, tid)
             });
             if hit {
-                self.pending_catch.remove(&m);
+                self.pending_types.remove(&m);
                 let had = self.methods[m].analysis.take().is_some();
                 self.ctx.stats.borrow_mut().invalidated(m, Why::Catch, had);
                 self.push_m(m);

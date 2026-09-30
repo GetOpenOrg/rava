@@ -201,10 +201,14 @@ impl<'a> Engine<'a> {
         let cf = self.h.class(&key.owner)?;
         let meth = cf.method(&key.name, &key.desc)?;
         let code = meth.code.as_ref()?;
-        // catch 类型存活：G 中有其子类型（预先计算，避免 Oracle 借用引擎）
+        // catch / instanceof 目标类型存活：G 中有其子类型（预先计算，避免 Oracle 借用引擎）
         let mut live_cache: HashMap<String, bool> = HashMap::default();
-        for h in &code.exception_table {
-            if let Some(ct) = &h.catch_type {
+        let inst_types = code.insns.iter().filter(|x| x.opcode == classfile::op::INSTANCEOF).filter_map(|x| match &x.operand {
+            classfile::Operand::Class(c) => Some(c),
+            _ => None,
+        });
+        for ct in code.exception_table.iter().filter_map(|h| h.catch_type.as_ref()).chain(inst_types) {
+            if !live_cache.contains_key(ct) {
                 let tid = self.id(ct);
                 let live = !self.g_of(tid).is_empty();
                 live_cache.insert(ct.clone(), live);
@@ -236,8 +240,8 @@ impl<'a> Engine<'a> {
                 self.push_m(c);
             }
         }
-        if !a.pending_catch.is_empty() {
-            self.pending_catch.insert(m, a.pending_catch.clone());
+        if !a.pending_types.is_empty() {
+            self.pending_types.insert(m, a.pending_types.clone());
         }
         self.methods[m].analysis = Some(a.clone());
         Some(a)

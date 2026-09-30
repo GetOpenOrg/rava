@@ -523,6 +523,31 @@ LambdaForm 解释路径的隐藏帧被剔除不是主因（若 `checkReceiver` �
 **给 C3 的接口（G5）**：`closure.json` 新增 `cold_methods: ["类.方法:描述符", …]`（上条口径；未实现，按上表 CollectorsDemo 约 4900 方法、MH 约 4900 方法），
 生成器按之分层；`build_time_init`（构建期初始化快照）与项 8 的类初始化事实同一通道设计。
 
+**项 2 G4：平台线程上的 `instanceof CarrierThread` / 虚拟线程分支**。`--why`（HelloWorld）：`ConcurrentHashMap.initTable@23 → Thread.yield`
+里 `currentThread() instanceof VirtualThread` 未折，`VirtualThread.tryYield → yieldContinuation → Continuation`；`LockSupport.unpark@12`
+同型分支带入 `VirtualThreads`；`Blocker.begin` 的 `currentCarrierThread() instanceof CarrierThread`。`currentThread()` 是 native，值为 open(Thread)，
+值层无法判定。修法（通用规则，无类名）：**instanceof 目标类型（非数组）在 G 中无已实例化子类型时恒为 false**——与 catch 类型存活判定同一口径
+（Oracle `catch_live` 更名 `type_live`，`Analysis.pending_catch` 更名 `pending_types`，可达 instanceof 的死目标类型一并登记，类型进入 G 时方法重分析）；
+只对 `V::Ref` 值折叠（字符串 / 类字面量不折）。依据：G 已是虚分派的实例化事实（VM 产生的 `Thread` / `String` / `Class` / VM 抛出异常均由清单种入），
+虚拟线程与载体线程只能由字节码 `new` 产生。单测 `absint/tests.rs` 2 例。结果（类 / 方法 / 上下文，动态对照漏）：
+
+| 测试 | 项 3 后 | 项 2 后 |
+|---|---|---|
+| HelloWorld | 251 / 620 / 882 | 246 / 605 / 867，漏 0 |
+| Digester | 1297 / 7510 / 21078 | 1289 / 7481 / 21045，漏 0 |
+| DeepCopy | 1649 / 10961 / 40300 | 1641 / 10934 / 40269，漏 0（S2 修复后首次复测，漏 1 → 0） |
+| FileIOTest | 293 / 795 / 1062 | 288 / 780 / 1047，漏 0 |
+| CollectorsDemo | 1034 / 5951 / 14375 | 1014 / 5835 / 14147，漏 0 |
+| TestMethodHandleCombinators | 1140 / 7808 / 17539 | 1132 / 7780 / 17509，漏 0 |
+| TestMethodHandleDirect | 1149 / 7829 / 18172 | 1141 / 7801 / 18142，漏 0 |
+| TestStreamBasic | 400 / 1449 / 2481 | 370 / 1361 / 2145，漏 0 |
+
+移出：`VirtualThreads`、`Continuation`、`ContinuationScope`（各例），及其下游（`Thread$Constants`、`TimeUnit`、CollectorsDemo 的反射构造访问器链等）。
+`VirtualThread` / `BaseVirtualThread` 降为 type 级（instanceof 指令仍在，只需类型名）；`Blocker` 留 init 级（`FileOutputStream.write` 真实调用 `begin/end`，
+其内 `CarrierThread` 分支已折，`CarrierThread` 不在闭包）。
+**给 C3 的接口**：恒 false 的 instanceof 已体现在 `folds.dead_pcs`（真分支死区）；若再把该点作为常量导出（`consts` 增 `instanceof` 指令、类型 `Z`），
+type 级的 `VirtualThread` 也可移出——需生成器消费 instanceof 常量，列为 C3 待定项。
+
 ## 七、验收
 
 - §一 终态表各项达标。

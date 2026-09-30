@@ -107,7 +107,7 @@ impl<'a> Engine<'a> {
             fwork: VecDeque::new(),
             open_methods: BTreeMap::new(),
             open_sites: BTreeMap::new(),
-            pending_catch: BTreeMap::new(),
+            pending_types: BTreeMap::new(),
             lambda_stack: HashSet::default(),
             mirrors: HashMap::default(),
             mflows: HashMap::default(),

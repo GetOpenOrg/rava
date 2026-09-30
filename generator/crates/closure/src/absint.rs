@@ -20,6 +20,8 @@ use classfile::descriptor::{parse_field, parse_method, FieldType};
 use classfile::{op, Code, Const, Insn, MemberRef, Operand};
 
 mod obj;
+#[cfg(test)]
+mod tests;
 pub use obj::Obj;
 
 /// 引用值来源
@@ -195,8 +197,8 @@ pub trait Oracle {
     fn param(&self, _i: u16) -> Option<V> {
         None
     }
-    /// catch 类型是否可能被抛出（有已实例化的子类型）
-    fn catch_live(&self, ty: &str) -> bool;
+    /// 类型是否可能有实例（有已实例化的子类型）：catch 类型能否被抛出、instanceof 能否为真
+    fn type_live(&self, ty: &str) -> bool;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,8 +232,8 @@ pub struct Analysis {
     pub reachable: Vec<bool>,
     /// (指令偏移, 事件)
     pub events: Vec<(u32, Event)>,
-    /// try 区间可达、但 catch 类型尚不存活的处理器（catch 类型）——类型存活后需重分析
-    pub pending_catch: Vec<String>,
+    /// 按「尚无实例」处理的类型：try 区间可达的未进入处理器的 catch 类型、可达 instanceof 的目标类型——类型存活后需重分析
+    pub pending_types: Vec<String>,
     /// 无法建模、按全部可达保守处理
     pub conservative: bool,
 }
@@ -836,7 +838,9 @@ impl<'a, O: Oracle> Interp<'a, O> {
             op::INSTANCEOF => {
                 let Operand::Class(c) = &ins.operand else { return Err(()) };
                 let v = pop(s)?;
-                s.stack.push(if v == V::Null { V::Int(0) } else { V::Top });
+                // 目标类型（非数组）无已实例化子类型时恒为 false：值只可能是 null 或其它类型的对象
+                let dead = matches!(v, V::Ref { .. }) && !c.starts_with('[') && !self.oracle.type_live(c);
+                s.stack.push(if v == V::Null || dead { V::Int(0) } else { V::Top });
                 self.ev(off, Event::InstanceOf(c.clone()));
             }
             0xc2 | 0xc3 => popn(s, 1)?,
@@ -917,7 +921,7 @@ fn conservative(code: &Code) -> Analysis {
         events.push((h.handler, Event::Catch(h.catch_type.clone())));
     }
     events.sort_by_key(|e| e.0);
-    Analysis { reachable: vec![true; code.insns.len()], events, pending_catch: vec![], conservative: true }
+    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], conservative: true }
 }
 
 /// 分析一个方法体
@@ -1053,7 +1057,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
             let Some(hl) = &hlocals[hi] else { continue };
             if !handler_on[hi] {
                 if let Some(ct) = &h.catch_type {
-                    if !oracle.catch_live(ct) {
+                    if !oracle.type_live(ct) {
                         continue;
                     }
                 }
@@ -1088,19 +1092,29 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
             }
         }
     }
-    let mut pending_catch = Vec::new();
+    let mut pending_types: Vec<String> = insns
+        .iter()
+        .enumerate()
+        .filter(|(i, x)| reachable[*i] && x.opcode == op::INSTANCEOF)
+        .filter_map(|(_, x)| match &x.operand {
+            Operand::Class(c) if !c.starts_with('[') && !oracle.type_live(c) => Some(c.clone()),
+            _ => None,
+        })
+        .collect();
     for (hi, h) in code.exception_table.iter().enumerate() {
         if handler_on[hi] {
             events.push((h.handler, Event::Catch(h.catch_type.clone())));
         } else if let Some(ct) = &h.catch_type {
             let live_range = insns.iter().enumerate().any(|(i, x)| reachable[i] && x.offset >= h.start && x.offset < h.end);
             if live_range {
-                pending_catch.push(ct.clone());
+                pending_types.push(ct.clone());
             }
         }
     }
     events.sort_by_key(|e| e.0);
-    Some(Analysis { reachable, events, pending_catch, conservative: false })
+    pending_types.sort();
+    pending_types.dedup();
+    Some(Analysis { reachable, events, pending_types, conservative: false })
 }
 
 fn targets_empty(o: &Operand) -> bool {

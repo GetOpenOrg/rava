@@ -375,7 +375,7 @@ impl Oracle for Facts<'_, '_> {
     fn param(&self, i: u16) -> Option<V> {
         self.params.get(i as usize).cloned().flatten()
     }
-    fn catch_live(&self, ty: &str) -> bool {
+    fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)
     }
 }
