@@ -92,6 +92,8 @@ pub struct Manifest {
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
+    /// 基本类型描述符字符 → 装箱类（`[boxing]`；lambda 装箱 / 拆箱适配）
+    boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
     value_equals: HashSet<String>,
     /// VM 初始系统属性表与读写锚点
@@ -233,11 +235,25 @@ impl Manifest {
         }
 
         let mut indy = HashMap::new();
-        for (key, kind) in [("lambda", IndyKind::Lambda), ("concat", IndyKind::Concat), ("native", IndyKind::Native)] {
+        for (key, kind) in [
+            ("lambda", IndyKind::Lambda),
+            ("concat", IndyKind::Concat),
+            ("native", IndyKind::Native),
+        ] {
             for m in strings(&vm, "indy", key) {
                 indy.insert(m, kind);
             }
         }
+        let boxing: HashMap<u8, String> = vm
+            .get("boxing")
+            .and_then(|s| s.as_table())
+            .into_iter()
+            .flatten()
+            .filter_map(|(k, v)| match (k.as_bytes(), v.as_str()) {
+                ([c], Some(cls)) => Some((*c, cls.to_string())),
+                _ => None,
+            })
+            .collect();
 
         Ok(Manifest {
             runtime_dir: runtime_dir.to_path_buf(),
@@ -263,6 +279,7 @@ impl Manifest {
             boot_init: strings(&seeds, "boot_init", "classes"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
+            boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
@@ -405,6 +422,16 @@ impl Manifest {
     /// 引导方法（`类.方法`）的分类；未登记 = 按普通静态调用分析
     pub fn indy_kind(&self, bsm: &str) -> Option<IndyKind> {
         self.indy.get(bsm).copied()
+    }
+
+    /// 基本类型描述符字符的装箱类（`[boxing]`）
+    pub fn boxed_class(&self, prim: u8) -> Option<&str> {
+        self.boxing.get(&prim).map(String::as_str)
+    }
+
+    /// 类是装箱类时其基本类型描述符字符
+    pub fn unboxed_prim(&self, cls: &str) -> Option<u8> {
+        self.boxing.iter().find(|(_, c)| c.as_str() == cls).map(|(p, _)| *p)
     }
 }
 

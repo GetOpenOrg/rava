@@ -430,3 +430,17 @@ native = [
 type_switch = [
     "java/lang/runtime/SwitchBootstraps.typeSwitch",
 ]
+
+# ── 基本类型的装箱类（闭包分析，generator `rava closure` 读取）─────────────────────────
+# LambdaMetafactory 在 SAM 与实现方法签名的基本类型 ↔ 引用类型位置上做装箱 / 拆箱适配：
+# 基本 → 引用调装箱类 `valueOf`，引用 → 基本调装箱类返回该基本类型的 `xxxValue`；
+# 这些调用由 VM 生成、不在任何字节码里，分析器据本表补调用边。键为基本类型描述符字符
+[boxing]
+B = "java/lang/Byte"
+C = "java/lang/Character"
+D = "java/lang/Double"
+F = "java/lang/Float"
+I = "java/lang/Integer"
+J = "java/lang/Long"
+S = "java/lang/Short"
+Z = "java/lang/Boolean"

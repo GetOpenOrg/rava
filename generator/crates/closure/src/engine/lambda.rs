@@ -60,6 +60,7 @@ impl<'a> Engine<'a> {
         let resolved = MemberRef { owner: o, name: n, desc: d };
         let mut all: Args = l.cap.clone();
         all.extend(a.iter().cloned());
+        self.lambda_adapt(m, off, &l, &mut all, ret, res);
         let first = || all.first().cloned().flatten().unwrap_or_default();
         let rest = all.get(1..).unwrap_or(&[]).to_vec();
         match l.imh.kind {
@@ -174,7 +175,8 @@ impl<'a> Engine<'a> {
                 let lname = format!("{}$$Lambda@{}:{}", cf.name, m, off);
                 let lid = self.id(&lname);
                 let ctx = self.methods[m].ctx;
-                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), sam: name.to_string(), imh: imh.clone(), cap });
+                let adapt = self.lambda_plan(&b.args, imh, cap.len());
+                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), sam: name.to_string(), imh: imh.clone(), cap, adapt });
                 self.touch(&iface, Level::Alloc, via.clone());
                 for a in &b.args {
                     if let Const::MethodType(d) = a {
