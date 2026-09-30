@@ -195,6 +195,7 @@ impl<'a> Engine<'a> {
         match self.methods[m].kind {
             Kind::Bytecode => self.process_bytecode(m),
             Kind::Handwritten(HWOBJ_KIND) => self.process_hwobj_method(m),
+            Kind::Handwritten(HWFIELD_KIND) => self.process_hwfield_method(m),
             Kind::Handwritten(_) => self.process_handwritten(m),
             Kind::Abstract | Kind::Missing => {}
         }

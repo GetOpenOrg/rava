@@ -163,12 +163,15 @@ impl<'a> Engine<'a> {
             let o = mn.ptypes.first().copied().flatten().and_then(|r| self.hwobjs.get(&r))?;
             return Some((o.host.clone(), self.hw.object_member(&o.host, &o.rust, &mn.hw_fns)));
         }
+        if mn.kind == Kind::Handwritten(HWFIELD_KIND) {
+            return Some((mn.key.owner.clone(), self.hw.member(&mn.key.owner, hwfield::field_of(&mn.key.name))));
+        }
         let cf = self.h.class(&mn.key.owner)?;
         Some((mn.key.owner.clone(), self.hw_member(&cf, &mn.key.name, &mn.key.desc)))
     }
 
-    /// 伪方法节点（不进输出）
+    /// 伪方法节点（实现对象的方法 / 手写字段访问器，不进输出）
     pub(super) fn is_hwobj_method(&self, t: usize) -> bool {
-        self.methods[t].kind == Kind::Handwritten(HWOBJ_KIND)
+        matches!(self.methods[t].kind, Kind::Handwritten(HWOBJ_KIND | HWFIELD_KIND))
     }
 }

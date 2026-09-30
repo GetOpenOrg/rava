@@ -45,6 +45,7 @@ mod hw_mem;
 mod hw_syntax;
 mod hw_infer;
 mod hwobj;
+mod hwfield;
 mod report;
 mod diag;
 mod seeds;
@@ -68,6 +69,7 @@ use sysprops::{PropSum, PropUnstable};
 use fold::*;
 pub use sets::*;
 pub use idset::{IdIter, IdSet};
+use hwfield::HWFIELD_KIND;
 use hwobj::{HwObj, HWOBJ_KIND};
 
 
