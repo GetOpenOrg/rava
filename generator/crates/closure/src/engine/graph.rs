@@ -18,8 +18,9 @@ pub(super) struct FlowGraph {
     pub(super) delta: Vec<TypeSet>,
     /// 已在 `fwork` 中
     pub(super) queued: Vec<bool>,
-    /// 流边去重索引（源, 目标, 过滤类型）：只收出度达 `SEEN_AT` 的源；低出度源直接扫自己的出边表
-    seen: HashSet<(u32, u32, u32)>,
+    /// 流边去重索引：高出度（≥ `SEEN_AT`）源 → 出边表下标的哈希表（哈希 / 判等回查出边表，
+    /// 每槽 5 字节）；低出度源直接扫自己的出边表。按需建立，环合并后整体清空
+    seen: HashMap<u32, hashbrown::HashTable<u32>>,
     /// 流边总数（去重后）
     pub(super) edge_count: usize,
     /// 观测：`add_to` 调用次数 / 有增量的次数 / 并入的元素数
@@ -43,42 +44,55 @@ pub(super) struct FlowGraph {
     pub(super) fmemo_stats: [u64; 3],
 }
 
-/// 出度达到此数的源进入去重索引；以下逐条比对出边表（多数源只有几条出边）
+/// 出度达到此数的源建去重索引；以下逐条比对出边表（多数源只有几条出边）
 const SEEN_AT: usize = 16;
+
+/// 出边（目标, 过滤类型）的哈希（只用于去重索引，与哈希种子无关）
+#[inline]
+fn edge_hash(e: (u32, u32)) -> u64 {
+    let m = u128::from(u64::from(e.0) << 32 | u64::from(e.1)) * 0x9e37_79b9_7f4a_7c15;
+    (m as u64) ^ (m >> 64) as u64
+}
 
 impl FlowGraph {
     /// 接流边 rs → rd（代表间）；已有同一（目标, 过滤类型）的边时返回 false
     pub(super) fn add_edge(&mut self, rs: u32, rd: u32, f: u32) -> bool {
         let es = &mut self.edges[rs as usize];
+        let e = (rd, f);
         if es.len() < SEEN_AT {
-            if es.contains(&(rd, f)) {
+            if es.contains(&e) {
                 return false;
             }
         } else {
-            if es.len() == SEEN_AT {
-                self.seen.extend(es.iter().map(|&(t, g)| (rs, t, g)));
-            }
-            if !self.seen.insert((rs, rd, f)) {
+            let at = |es: &[(u32, u32)], j: u32| edge_hash(es[j as usize]);
+            let t = self.seen.entry(rs).or_insert_with(|| {
+                let mut t = hashbrown::HashTable::with_capacity(es.len() * 2);
+                for (j, &x) in es.iter().enumerate() {
+                    t.insert_unique(edge_hash(x), j as u32, |&k| at(es, k));
+                }
+                t
+            });
+            let h = edge_hash(e);
+            if t.find(h, |&j| es[j as usize] == e).is_some() {
                 return false;
             }
+            t.insert_unique(h, es.len() as u32, |&k| at(es, k));
         }
-        es.push((rd, f));
+        es.push(e);
         self.edge_count += 1;
         true
     }
     /// 源 s 的出边整体替换为已去重的 es（环合并重写出边用）；须先 `clear_seen`
     pub(super) fn set_edges(&mut self, s: u32, es: Vec<(u32, u32)>) {
-        if es.len() > SEEN_AT {
-            self.seen.extend(es.iter().map(|&(t, g)| (s, t, g)));
-        }
         self.edge_count += es.len();
         self.edges[s as usize] = es;
     }
-    /// 清空去重索引与边计数（随后逐源 `set_edges` 重建）
+    /// 清空去重索引与边计数（随后逐源 `set_edges` 重写；索引在下次接边时按需重建）
     pub(super) fn clear_seen(&mut self) {
-        self.seen = HashSet::default();
+        self.seen = HashMap::default();
         self.edge_count = 0;
     }
+
     /// 节点序号（首次出现时驻留）
     #[inline]
     pub(super) fn id(&mut self, n: Node) -> u32 {

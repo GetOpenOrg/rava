@@ -54,6 +54,7 @@ name = "closure"
 version = "0.1.0"
 dependencies = [
  "classfile",
+ "hashbrown",
  "indexmap",
  "proc-macro2",
  "resolve",
