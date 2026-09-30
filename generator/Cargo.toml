@@ -2,7 +2,7 @@
 # docs/plans/2026-09-29-rust-closure-analyzer.md）
 [workspace]
 resolver = "2"
-members = ["crates/classfile", "crates/resolve", "crates/closure", "crates/driver"]
+members = ["crates/classfile", "crates/resolve", "crates/closure", "crates/driver", "crates/ty"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ edition = "2021"
 classfile = { path = "crates/classfile" }
 resolve = { path = "crates/resolve" }
 closure = { path = "crates/closure" }
+ty = { path = "crates/ty" }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
