@@ -84,6 +84,10 @@ pub struct Manifest {
     vm_boundary: HashSet<String>,
     /// VM 边界类中按字节码翻译的嵌套类（`[vm_boundary] translate_nested`）与分析期追加的放行条目
     release: Vec<String>,
+    /// VM 边界类中 `<clinit>` 按字节码翻译的类（`[vm_boundary] translate_clinit`）
+    translate_clinit: HashSet<String>,
+    /// VM 注入的静态字段（`[vm_constants.injected_statics]` 的键 `类.字段`）：运行期值由 VM 给出
+    injected_statics: HashSet<String>,
     /// 模拟删除共置手写的放行条目（`rava closure --release-bytecode`）：前缀内按精确名提供的手写不再取手写
     hw_dropped: Vec<String>,
     intrinsics: HashSet<String>,
@@ -275,6 +279,13 @@ impl Manifest {
             runtime_dir: runtime_dir.to_path_buf(),
             vm_boundary: strings(&closure, "vm_boundary", "classes").into_iter().collect(),
             release,
+            translate_clinit: strings(&closure, "vm_boundary", "translate_clinit").into_iter().collect(),
+            injected_statics: vm
+                .get("vm_constants")
+                .and_then(|s| s.get("injected_statics"))
+                .and_then(|v| v.as_table())
+                .map(|t| t.keys().cloned().collect())
+                .unwrap_or_default(),
             hw_dropped: Vec::new(),
             intrinsics,
             null_to_false: strings(&vm, "vm_constants", "null_to_false").into_iter().collect(),
@@ -354,6 +365,16 @@ impl Manifest {
     /// VM 耦合边界类（`[vm_boundary]`，含嵌套类）
     pub fn is_vm_boundary(&self, cls: &str) -> bool {
         self.vm_boundary.contains(cls.split('$').next().unwrap_or(cls))
+    }
+
+    /// VM 边界类的 `<clinit>` 按字节码翻译（`[vm_boundary] translate_clinit`，按类名精确匹配）
+    pub fn translates_clinit(&self, cls: &str) -> bool {
+        self.translate_clinit.contains(cls)
+    }
+
+    /// VM 注入的静态字段（`[vm_constants.injected_statics]`）：值不来自字节码，读取不折叠
+    pub fn is_injected_static(&self, owner: &str, name: &str) -> bool {
+        !self.injected_statics.is_empty() && self.injected_statics.contains(&format!("{owner}.{name}"))
     }
 
     /// VM 内建（手写承载、不分析 Java 体）

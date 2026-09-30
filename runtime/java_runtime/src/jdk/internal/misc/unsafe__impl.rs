@@ -15,7 +15,7 @@ use std::collections::HashMap;
 // （压缩指针）。CHM 等消费方按 `offset = (i << ASHIFT) + ABASE`、
 // `ASHIFT = 31 - numberOfLeadingZeros(scale)` 计算，反解
 // `i = (offset - 16) >> 2`。
-const ARRAY_BASE_OFFSET: i64 = 16;
+const ARRAY_BASE_OFFSET: i64 = crate::native_memory::ARRAY_BASE_OFFSET;
 const REF_INDEX_SCALE: i64 = 4;
 
 /// 数组类的元素 stride（HotSpot arrayIndexScale0 语义）：按 Class 名的数组
@@ -23,13 +23,7 @@ const REF_INDEX_SCALE: i64 = 4;
 /// 是元素描述符；引用元素（`L...;` / 嵌套 `[`）取压缩指针 4。
 fn _array_index_scale_by_name(name: &str) -> Option<i64> {
     let elem = name.strip_prefix('[')?;
-    Some(match elem {
-        "Z" | "B" => 1,
-        "C" | "S" => 2,
-        "I" | "F" => 4,
-        "J" | "D" => 8,
-        _ => 4,
-    })
+    Some(crate::vm_constants::array_index_scale(elem.chars().next()?))
 }
 
 /// 引用元素数组的擦除视图（S-4 协变视图通道）：经 `__view_into` 把任意引用
@@ -190,13 +184,6 @@ impl Unsafe {
         field_of_offset(off)
     }
 
-    /// `isBigEndian()Z`（final）：宿主平台字节序。JDK25 的 StringUTF16 / 字节序
-    /// 敏感路径经本方法查询（JDK21 为 StringUTF16.isBigEndian native，同义）；
-    /// 小端平台（x86-64 / aarch64 Linux 与 macOS）为 false。
-    pub fn isBigEndian(&self) -> Result<bool> {
-        Ok(cfg!(target_endian = "big"))
-    }
-
     /// `loadFence()`：JVM 内存序（LoadLoad|LoadStore）——单线程原生二进制下
     /// 取 Acquire 栅栏即观测等价。
     pub fn loadFence(&self) -> Result<()> {
@@ -340,49 +327,6 @@ impl Unsafe {
             panic!("stub: jdk/internal/misc/Unsafe.arrayBaseOffset:(Ljava/lang/Class;)J (非数组类 {})", name);
         }
         Ok(ARRAY_BASE_OFFSET)
-    }
-
-    // ── 数组布局静态常量（ARRAY_<T>_BASE_OFFSET / ARRAY_<T>_INDEX_SCALE）──────
-    // Unsafe 为内部边界类，<clinit> 不翻译，常量值由此给出：与 arrayBaseOffset /
-    // arrayIndexScale 同一组常量（偏移解码自洽）。字段类型随 JDK 演化（BASE_OFFSET
-    // JDK21 `I` → JDK25 `J`），核心按 JDK25 形态书写，生成侧 clinit_extract 按当前
-    // 模型类型发 getter 转发（静态字段 core_ 适配）。消费方：JDK25 ArraysSupport
-    // 向量化 hashCode / mismatch（TestArraysUtil）。
-    pub fn core_ARRAY_BOOLEAN_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_BOOLEAN_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[Z").unwrap_or(REF_INDEX_SCALE) as i32)
-    }
-    pub fn core_ARRAY_BYTE_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_BYTE_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[B").unwrap_or(REF_INDEX_SCALE) as i32)
-    }
-    pub fn core_ARRAY_SHORT_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_SHORT_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[S").unwrap_or(REF_INDEX_SCALE) as i32)
-    }
-    pub fn core_ARRAY_CHAR_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_CHAR_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[C").unwrap_or(REF_INDEX_SCALE) as i32)
-    }
-    pub fn core_ARRAY_INT_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_INT_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[I").unwrap_or(REF_INDEX_SCALE) as i32)
-    }
-    pub fn core_ARRAY_LONG_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_LONG_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[J").unwrap_or(REF_INDEX_SCALE) as i32)
-    }
-    pub fn core_ARRAY_FLOAT_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_FLOAT_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[F").unwrap_or(REF_INDEX_SCALE) as i32)
-    }
-    pub fn core_ARRAY_DOUBLE_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_DOUBLE_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[D").unwrap_or(REF_INDEX_SCALE) as i32)
-    }
-    pub fn core_ARRAY_OBJECT_BASE_OFFSET() -> Result<i64> { Ok(ARRAY_BASE_OFFSET) }
-    pub fn core_ARRAY_OBJECT_INDEX_SCALE() -> Result<i32> {
-        Ok(_array_index_scale_by_name("[Ljava/lang/Object;").unwrap_or(REF_INDEX_SCALE) as i32)
     }
 
     /// `arrayIndexScale(Class)`：数组元素的寻址 stride（字节）。HotSpot 语义按

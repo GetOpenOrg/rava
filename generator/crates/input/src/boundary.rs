@@ -31,6 +31,11 @@ impl<'a> Boundary<'a> {
         let m = self.manifest;
         m.vm_boundary_classes.contains(outer_of(cls)) && !listed(&m.release, cls)
     }
+
+    /// VM 边界类的 `<clinit>` 不翻译（清单 `translate_clinit` 逐类放行者除外）
+    pub fn skips_clinit(&self, cls: &str) -> bool {
+        self.is_vm_boundary_class(cls) && !self.manifest.vm_translate_clinit.contains(cls)
+    }
 }
 
 #[cfg(test)]

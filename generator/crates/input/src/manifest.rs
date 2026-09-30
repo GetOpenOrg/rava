@@ -3,7 +3,7 @@
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
 //! - closure.toml：`[vm_boundary]`（含 `translate_nested`）；
 //! - seeds.toml：`[module_resources]`、`[boot_init]`；
-//! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`。
+//! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`（含 `injected_statics` 子表）。
 //!
 //! 文件缺失视为空表；格式约定（类条目不以 `/` 结尾、
 //! 内建条目须写 kind 与 reason）违反时返回 [`InputError::Manifest`]。
@@ -51,6 +51,10 @@ pub struct RuntimeManifest {
     pub vm_boundary_classes: BTreeSet<String>,
     /// VM 边界类中按字节码翻译的嵌套类（`[vm_boundary] translate_nested`）
     pub release: Vec<String>,
+    /// VM 边界类中 `<clinit>` 按字节码翻译的类（`[vm_boundary] translate_clinit`）
+    pub vm_translate_clinit: BTreeSet<String>,
+    /// VM 注入的静态字段（`[vm_constants.injected_statics]`）：`类.字段` → crate 根下取值表达式
+    pub vm_injected_statics: BTreeMap<String, String>,
     /// 模块资源路径（jmod `classes/` 下相对路径）
     pub module_resource_paths: Vec<String>,
     /// 引导初始化类
@@ -105,6 +109,27 @@ fn classes(sec: Option<&Table>, key: &str, where_: &str) -> Result<Vec<String>, 
     Ok(v)
 }
 
+/// `[vm_constants.injected_statics]`：`"类.字段" = "取值表达式"`
+fn injected_statics(vmc: Option<&Table>) -> Result<BTreeMap<String, String>, InputError> {
+    let Some(t) = vmc.and_then(|s| s.get("injected_statics")) else {
+        return Ok(BTreeMap::new());
+    };
+    let t = t
+        .as_table()
+        .ok_or_else(|| InputError::Manifest("vm_constants.injected_statics：应为表".into()))?;
+    t.iter()
+        .map(|(k, v)| {
+            let expr = v.as_str().filter(|e| !e.is_empty());
+            match (k.split_once('.'), expr) {
+                (Some((c, f)), Some(e)) if !c.is_empty() && !f.is_empty() => Ok((k.clone(), e.to_string())),
+                _ => Err(InputError::Manifest(format!(
+                    "vm_constants.injected_statics：条目须为 \"类.字段\" = \"取值表达式\"：{k}"
+                ))),
+            }
+        })
+        .collect()
+}
+
 fn intrinsics(vm: &Table) -> Result<BTreeSet<String>, InputError> {
     let mut out = BTreeSet::new();
     let entries = vm.get("intrinsic").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -150,6 +175,7 @@ impl RuntimeManifest {
         let vmb = section(&closure, "vm_boundary");
         let vm_boundary_classes: BTreeSet<String> = classes(vmb, "classes", "vm_boundary")?.into_iter().collect();
         let release = classes(vmb, "translate_nested", "vm_boundary")?;
+        let vm_translate_clinit: BTreeSet<String> = classes(vmb, "translate_clinit", "vm_boundary")?.into_iter().collect();
         let boot = section(&seeds, "boot_init");
         let boot_init_calls = str_list(boot, "calls", "boot_init")?;
         if let Some(bad) = boot_init_calls.iter().find(|c| !c.ends_with(":()V") || !c.contains('.')) {
@@ -160,6 +186,8 @@ impl RuntimeManifest {
             ty,
             vm_boundary_classes,
             release,
+            vm_translate_clinit,
+            vm_injected_statics: injected_statics(vmc)?,
             module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
             boot_init_classes: classes(boot, "classes", "boot_init")?,
             boot_init_calls,

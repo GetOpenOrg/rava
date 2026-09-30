@@ -187,7 +187,7 @@ impl<'a> Planner<'a> {
 
     fn clinit_plan(&self, ci: &ClassInfo, m: &Method, type_only: bool) -> Option<MethodPlan> {
         let n = ci.name();
-        if type_only || self.boundary.is_vm_boundary_class(n) {
+        if type_only || self.boundary.skips_clinit(n) {
             return None;
         }
         let verdict = if self.in_chain(n, m) {

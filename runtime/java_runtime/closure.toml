@@ -77,6 +77,16 @@ translate_nested = [
     "java/lang/Class$1",
 ]
 
+# VM 边界类中 `<clinit>` 按字节码翻译的类（逐类精确匹配；其余边界类的 `<clinit>` 不翻译——其静态状态
+# 由 VM 建立并由手写层承载，如类加载器层级、调度器）。准入：初始化器只写 VM 之外可复现的缺省值，
+# 运行期改写由翻译的字节码完成（handwritten-boundary.md：方法语义以它自己的字节码为准）：
+#   VM：lock、directMemory 缺省值；引导期 System.initPhase1 → VM.saveProperties（字节码）按保存属性
+#       改写 directMemory / pageAlignDirectMemory / classFileMajorVersion 等
+# Unsafe 的数组布局与指针宽度静态字段属 VM 注入常量，见 vm_intrinsics.toml [vm_constants.injected_statics]。
+translate_clinit = [
+    "jdk/internal/misc/VM",
+]
+
 # ── 动态对照：JVM 直接调用的 Java 入口 ────────────────────────────────────────────────
 # 只供 scripts/dyn_compare.py（C5：真实 JVM 类加载轨迹 vs 静态闭包，只用于验证）读取；闭包分析器与
 # 生成器不读本段，它不影响闭包。

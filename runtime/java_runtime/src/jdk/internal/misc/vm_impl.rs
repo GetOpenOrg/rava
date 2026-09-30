@@ -6,6 +6,13 @@ use crate::java::lang::String;
 static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 impl VM {
+    /// native `initialize()`：HotSpot 由 CDS 归档恢复 VM 类的静态字段（`JVM_InitializeFromArchive`）；
+    /// 原生二进制无 CDS 归档，静态字段即 `<clinit>` 的字节码结果 → no-op。
+    #[jvm_native]
+    pub fn initialize() -> Result<()> {
+        Ok(())
+    }
+
     /// 原生二进制进入 main 时运行时已完成初始化（对应 initLevel == SYSTEM_BOOTED）。
     #[jvm_boundary]
     pub fn isBooted() -> Result<bool> {

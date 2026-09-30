@@ -112,6 +112,38 @@ null_to_false = [
     "java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z",
 ]
 
+# VM 注入的静态字段（handwritten-boundary.md 类 ③）：HotSpot 在类初始化期间写入平台 / 对象布局常量，
+# 字节码里的初值（UnsafeConstants.<clinit> 的 0 / false）或初始化器（Unsafe.<clinit> 经 VM 原语
+# arrayBaseOffset0 / arrayIndexScale0 取值，Unsafe 为 VM 边界类、<clinit> 不翻译）不给出运行期值。
+# 条目 `类.字段` = 取值表达式（crate 根下路径，返回 i64 / bool；runtime/java_runtime/src/vm_constants.rs）。
+# 生成器把字段发为读取该表达式的访问器（按字段描述符做数值宽度转换；字节码对它的写入被 VM 值覆盖，
+# 同 HotSpot UnsafeConstantsFixup 在 <clinit> 后改写），分析器不按字节码值折叠其读取。
+[vm_constants.injected_statics]
+"jdk/internal/misc/UnsafeConstants.ADDRESS_SIZE0" = "vm_constants::address_size()"
+"jdk/internal/misc/UnsafeConstants.PAGE_SIZE" = "vm_constants::page_size()"
+"jdk/internal/misc/UnsafeConstants.BIG_ENDIAN" = "vm_constants::big_endian()"
+"jdk/internal/misc/UnsafeConstants.UNALIGNED_ACCESS" = "vm_constants::unaligned_access()"
+"jdk/internal/misc/UnsafeConstants.DATA_CACHE_LINE_FLUSH_SIZE" = "vm_constants::data_cache_line_flush_size()"
+"jdk/internal/misc/Unsafe.ADDRESS_SIZE" = "vm_constants::address_size()"
+"jdk/internal/misc/Unsafe.ARRAY_BOOLEAN_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_BOOLEAN_INDEX_SCALE" = "vm_constants::array_index_scale('Z')"
+"jdk/internal/misc/Unsafe.ARRAY_BYTE_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_BYTE_INDEX_SCALE" = "vm_constants::array_index_scale('B')"
+"jdk/internal/misc/Unsafe.ARRAY_SHORT_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_SHORT_INDEX_SCALE" = "vm_constants::array_index_scale('S')"
+"jdk/internal/misc/Unsafe.ARRAY_CHAR_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_CHAR_INDEX_SCALE" = "vm_constants::array_index_scale('C')"
+"jdk/internal/misc/Unsafe.ARRAY_INT_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_INT_INDEX_SCALE" = "vm_constants::array_index_scale('I')"
+"jdk/internal/misc/Unsafe.ARRAY_LONG_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_LONG_INDEX_SCALE" = "vm_constants::array_index_scale('J')"
+"jdk/internal/misc/Unsafe.ARRAY_FLOAT_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_FLOAT_INDEX_SCALE" = "vm_constants::array_index_scale('F')"
+"jdk/internal/misc/Unsafe.ARRAY_DOUBLE_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_DOUBLE_INDEX_SCALE" = "vm_constants::array_index_scale('D')"
+"jdk/internal/misc/Unsafe.ARRAY_OBJECT_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_OBJECT_INDEX_SCALE" = "vm_constants::array_index_scale('L')"
+
 # ── VM 事实（闭包分析的常量条件，generator `rava closure` 读取）─────────────────────────
 # 手写层承载的方法在原生二进制中返回恒定值；分析器据此做常量传播与死分支剪枝（计划
 # docs/plans/2026-09-29-rust-closure-analyzer.md §3.2）。值：null / 整数 / true / false。

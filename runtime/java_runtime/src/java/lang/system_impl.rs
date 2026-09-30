@@ -25,11 +25,13 @@ impl System {
     /// java.vendor* / java.class.version）按 JDK initPhase1 同一来源——翻译的
     /// `VersionProps.init(Map)`（常量即语料 JDK 构建时写入 VersionProps.class 的值）；
     /// VM 族（java.vm.*）、平台族（os.version / sun.* / *.encoding）由本层按
-    /// HotSpot `Arguments` / `SystemProps.Raw` 的同名来源填充。
+    /// HotSpot `Arguments` / `SystemProps.Raw` 的同名来源填充。属性表建成后与 initPhase1 同样
+    /// 交 `VM.saveProperties`（翻译的字节码）保存快照。
     #[jvm_native(upcalls = "
         java/util/concurrent/ConcurrentHashMap.<init>:()V
         java/util/concurrent/ConcurrentHashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
         java/lang/VersionProps.init:(Ljava/util/Map;)V
+        jdk/internal/misc/VM.saveProperties:(Ljava/util/Map;)V
     ")]
     pub fn registerNatives() -> Result<()> {
         use crate::java::util::concurrent::ConcurrentHashMap;
@@ -42,6 +44,10 @@ impl System {
         for (k, v) in vm_derived_properties(&map)? {
             map.put(Object::from(String::from(k)), Object::from(String::from(v.as_str())))?;
         }
+        // initPhase1 同序：保存属性快照（VM.saveProperties：directMemory / pageAlignDirectMemory /
+        // classFileMajorVersion 等按快照取值，未指定 -XX:MaxDirectMemorySize 时取 Runtime.maxMemory()）
+        crate::jdk::internal::misc::VM::saveProperties(
+            Object::from(Clone::clone(&map)).try_cast("java/util/Map")?)?;
         let mut p = crate::java::util::Properties::default();
         p._init_not_null();
         p.__set_map(map);

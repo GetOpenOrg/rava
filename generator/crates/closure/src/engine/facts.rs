@@ -143,11 +143,11 @@ impl Ctx<'_> {
             // VM 契约边界（`[vm_boundary]`）按方法划分：手写承载（native / VM 内建 / 共置手写体
             // 按精确名提供 / 类初始化器）的取手写效果，其余被调用到的方法运行时执行的就是其字节码
             // （发射层同样翻译），按字节码建模——否则其体内的调用与写入（如经 native 手写体
-            // 写入的字段）从分析中消失，成为漏报
+            // 写入的字段）从分析中消失，成为漏报。类初始化器由清单逐类决定（`translate_clinit`）
             Domain::Boundary => {
                 let hw = m.is_native()
                     || m.code.is_none()
-                    || m.name == "<clinit>"
+                    || (m.name == "<clinit>" && !self.man.translates_clinit(&cf.name))
                     || self.man.is_intrinsic(&member)
                     || self.provided(cf, &m.name, &m.desc);
                 return if hw { Kind::Handwritten("boundary") } else { Kind::Bytecode };
@@ -222,8 +222,13 @@ impl Ctx<'_> {
         let fi = self.h.resolve_field(&f.owner, &f.name, &f.desc).map(|site| {
             let fd = site.field();
             let key = MemberRef { owner: site.class.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
-            let open = matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root) || !self.hw.member(&key.owner, &key.name).fns.is_empty();
-            Rc::new(FieldInfo { key, access: fd.access, constant: fd.constant_value.clone(), open })
+            // VM 注入的静态字段：运行期值由 VM 写入，字节码初值 / ConstantValue 均不代表运行期值
+            let injected = self.man.is_injected_static(&key.owner, &key.name);
+            let open = injected
+                || matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
+                || !self.hw.member(&key.owner, &key.name).fns.is_empty();
+            let constant = if injected { None } else { fd.constant_value.clone() };
+            Rc::new(FieldInfo { key, access: fd.access, constant, open })
         });
         self.fields.borrow_mut().insert(f.clone(), fi.clone());
         fi
