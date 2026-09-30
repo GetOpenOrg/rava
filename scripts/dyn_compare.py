@@ -25,6 +25,9 @@
   - 帧的 `方法:描述符` 与闭包 refs 里某个边界域方法一致（经边界接口 / 类虚派发进入其翻译域实现，
     闭包按边界手写建模、不展开实现）→ `boundary-dispatch`；
   - 栈底帧不在闭包（VM 自行启动的线程 / 入口）→ `vm-entry`；
+  - 帧停在闭包 `indy_models` 列出的 invokedynamic 调用点（引导方法由运行模型替换：lambda / 字符串拼接 /
+    record 方法 / native 引导），加载发生在该调用点的 JVM 链接期（解析引导方法句柄、执行引导方法）→
+    `indy-model`：原生程序不执行引导方法，这些类不属翻译程序；
   - 其余不在闭包的帧（调用方已建模，被调方未建模）→ **漏覆盖**，记录该帧（静态分析漏掉的方法）；
   - 全部帧已建模而类不在闭包 → **漏覆盖**（漏掉的是类引用边）。
 - 隐藏类帧（lambda 代理、LambdaForm 编译体：JVMTI 类名含 `.`）透明跳过。
@@ -202,15 +205,27 @@ def boundary_ref_sigs(refs: list[str], rules: DomainRules) -> set[str]:
 
 
 def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
-              boundary_sigs: set[str] = frozenset()) -> tuple[str, str | None]:
+              boundary_sigs: set[str] = frozenset(),
+              indy_sites: set[str] = frozenset()) -> tuple[str, str | None]:
     """按调用栈归因一次程序期加载 → (分类, 负责帧)。"""
     frames = list(reversed(ev.frames))           # 栈底在前
     if not frames:
         return "vm-entry", None                  # 无 Java 帧：VM 内部加载
-    for depth, f in enumerate(frames):
+    depth = 0
+    while depth < len(frames):
+        f = frames[depth]
         mid = _frame_id(f)
         kind = methods.get(mid)
         if kind == BYTECODE:
+            if _frame_str(f) in indy_sites:
+                # 运行模型替换的 indy：其上方是 JVM 链接期 / 引导产物的执行帧。模型再次进入的已建模方法
+                # （拼接时的 toString、lambda 实现方法）从该帧起照常归因；其上全是模型外帧 → 链接期加载
+                above = [j for j in range(depth + 1, len(frames)) if methods.get(_frame_id(frames[j])) == BYTECODE]
+                if not above:
+                    return "indy-model", _frame_str(f)
+                depth = above[0]
+                continue
+            depth += 1
             continue
         if kind is not None:
             return "handwritten", _frame_str(f)
@@ -247,6 +262,7 @@ def compare(closure: dict, xlog: str, agent: str, rules: DomainRules,
     loaded, program, hidden = parse_xlog(xlog, main_class)
     events = parse_agent(agent)
     bsigs = boundary_ref_sigs(closure.get("refs", []), rules)
+    indy_sites = {x["site"] for x in closure.get("indy_models", [])}
 
     miss: list[dict] = []
     unattributed: list[dict] = []
@@ -258,7 +274,7 @@ def compare(closure: dict, xlog: str, agent: str, rules: DomainRules,
         seen.add(name)
         dom = rules.domain(name)
         ev = events.get(name)
-        cat, frame = attribute(ev, methods, rules, bsigs) if ev is not None else (UNATTRIBUTED, None)
+        cat, frame = attribute(ev, methods, rules, bsigs, indy_sites) if ev is not None else (UNATTRIBUTED, None)
         item = {"class": name, "domain": dom, "frame": frame,
                 "thread": ev.thread if ev else None,
                 "stack": [_frame_str(f) for f in ev.frames[:16]] if ev else []}

@@ -139,6 +139,24 @@ class AttributeTest(unittest.TestCase):
         self.assertEqual(self.cat(ev(('java/lang/System$2', 'get', '(I)I', 1), MAIN), sigs),
                          'boundary-dispatch')
 
+    def test_indy_model(self):
+        # 运行模型替换的 indy 调用点上的链接期加载（栈顶即该帧 / 其上全是模型外帧）
+        site = 'java/util/A.f:()V@1'
+        self.assertEqual(dc.attribute(ev(('java/util/A', 'f', '()V', 1), MAIN), self.methods, self.r,
+                                      frozenset(), {site}), ('indy-model', site))
+        self.assertEqual(dc.attribute(ev(('java/lang/invoke/LMF', 'mf', '()V', 0),
+                                         ('java/util/A', 'f', '()V', 1), MAIN),
+                                      self.methods, self.r, frozenset(), {site})[0], 'indy-model')
+        # 模型再次进入已建模方法（拼接调 toString）：从该帧起照常归因，不被 indy 掩盖
+        c, f = dc.attribute(ev(('java/util/B', 'g', '()V', 2), ('java/util/A', 'f', '()V', 3),
+                               ('java/lang/invoke/SCH', 's', '()V', 0),
+                               ('java/util/A', 'f', '()V', 1), MAIN),
+                            self.methods, self.r, frozenset(), {site})
+        self.assertEqual((c, f), (dc.MISS, 'java/util/B.g:()V@2'))
+        # 非模型调用点照旧
+        self.assertEqual(dc.attribute(ev(('java/util/A', 'f', '()V', 2), MAIN), self.methods, self.r,
+                                      frozenset(), {site}), (dc.MISS, None))
+
 
 def closure():
     return {

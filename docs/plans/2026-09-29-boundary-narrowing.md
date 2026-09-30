@@ -460,6 +460,33 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 剩余同类缺口：(A) `AbstractPipeline.parallel` 由构造器从常量实参写入，`isParallel()` 未折（字段值域，并入项 4）；
 (C) `Invokers.createFunction(byte)` 的 tableswitch 未按常量实参剪枝（形参常量格合流为 Top；需按常量实参克隆上下文，见后续）。
 
+**健全性 S1：反射虚调用漏覆写（`DirectMethodHandle$Interface.checkReceiver` 存根命中）**。
+`--why`：`DirectMethodHandle.createFunction` 以 `new MemberName(DirectMethodHandle.class, "checkReceiver", OBJ_OBJ_TYPE, REF_invokeVirtual)`
+取 NF，按名暴露只补入了声明类上的 `DirectMethodHandle.checkReceiver`；LambdaForm 解释执行时该 NF 以 DMH 实例为接收者**虚调用**，
+`Interface` / `Special` 的覆写不在闭包（`Interface` 类本身经 `DirectMethodHandle.make@156` 已实例化入闭包）。同一缺口也吃掉了用户侧
+`findVirtual(Shape, "area")` 的 `Sq.area` / `Circle.area`（`Method.invoke` 同理）。
+修法：`reflect.rs::expose` 对可被覆写的实例方法（非 static / private / final、类非 final）经新的 VM 枢纽 `HubSet::Vm(open(声明类))`
+派发——G 中每个接收者选中的实现入链、形参 open（与反射成员同口径），G 增长时增量展开（`hub.rs::vm_dispatch`）。
+代价：TestMethodHandleDirect 552 / 3003 → 1149 / 7829，TestMethodHandleCombinators 540 / 2968 → 1140 / 7808——`--why` 均为
+`Special.checkReceiver@41` 的异常消息 `String.format`（→ Formatter / Locale / regex），属 G5 冷路径（项 3 处理），不是本修复的误差。
+其余 5 例不变。
+
+**动态对照为何没发现 S1**：`dyn_compare` 以**类加载**为粒度——只有程序期加载了闭包外的类才检查栈。`Interface` 已在闭包内（被实例化），
+执行其漏掉的方法 `checkReceiver` 没有触发任何新类加载（`refc.isInstance` 成功路径不加载类），于是没有事件可供归因；
+LambdaForm 解释路径的隐藏帧被剔除不是主因（若 `checkReceiver` 内发生加载，其帧不在闭包仍会报漏）。
+结论：类粒度对照对「已在闭包内的类上漏掉的方法」结构性失明。补救方向（记为项 9 候选）：load_trace agent 增加方法粒度轨迹
+（JVMTI `MethodEntry` 或采样），对照闭包 `methods` 的翻译域漏方法。
+
+**健全性 S2：Digester / CollectorsDemo / DeepCopy 漏 1 = `LambdaMetafactory`**。首次加载栈顶即 `Security.<clinit>@9`
+（invokedynamic，引导 `LambdaMetafactory.metafactory`）：JVM 链接 indy 调用点时解析引导方法句柄而加载其所属类，全栈已建模 → 报为类引用边漏覆盖。
+终态语义论证：清单 `[indy]` 列出的引导（lambda / 字符串拼接 / record 方法 / native）属手写准入第 ② 类「运行模型替换」，原生程序不执行
+引导方法，`LambdaMetafactory` 不属翻译程序——在分析器补 Ref 级类边会让生成器为一个永不执行的类出类型，是错误的闭包语义。
+修法：分析器导出事实、对照按事实归因（无类名特判）：
+- closure.json 新增 `indy_models: [{site: "方法@偏移", bootstrap, kind}]`（`lambda.rs::indy` 记录被运行模型替换的调用点）；
+- `dyn_compare` 新分类 `indy-model`：帧停在这些调用点、其上方全是模型外帧（JVM 链接期 / 引导执行）时的加载归此类；模型再次进入的
+  已建模方法（拼接 `toString`、lambda 实现）从该帧起照常归因，不被掩盖（单测 `test_indy_model`）。
+结果：Digester / TestStreamBasic / CollectorsDemo 漏 0（原先经 `MethodHandleNatives.linkCallSite` 归 `vm-upcall` 的链接期加载一并改归 `indy-model`）。
+
 ## 七、验收
 
 - §一 终态表各项达标。
