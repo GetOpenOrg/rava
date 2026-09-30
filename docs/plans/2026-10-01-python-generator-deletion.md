@@ -45,21 +45,27 @@
 | 位置 | 删除内容 |
 |---|---|
 | `scripts/main.py` | `_python_codegen`、`_parse_lib_specs`，以及 Python 分支的 overlay（`prepare_scratch` 及其文件复制辅助函数；rust 路径由 `rava build` 做 overlay） |
-| `scripts/generator_select.py` | `'python'` 取值与 `resolve` 中的 Python 分支（开关本身的去留见 §三） |
+| `scripts/generator_select.py` | 生成器选择整体移除（见 §三）：删 `DEFAULT_GENERATOR` / `CHOICES` / `ENV_VAR`、`add_argument`、`resolve`；`rava_cmd` / `run_rust` 迁入 `scripts/rava_cli.py`（`main.py`、`run_tests.py`、`gap_scan.py` 改为从此导入），原文件删除 |
+| `scripts/main.py`（开关） | `--generator` 选项、`resolve_generator` 调用与按生成器分派的分支，转译段直接调用 `rava build --no-run` |
+| `scripts/run_tests.py`（开关） | `generator_select.add_argument`、`--generator` 透传（`MAIN_FLAGS += ["--generator", …]`） |
 | `scripts/run_tests.py` | `FALLBACK_IDS` 中的 Python B 组十项（`sig-parse-*`、`type-map-params`、`vars-*`、`sam-*`）；`EQUIV_IDS` 注释改指 Rust 发射点 |
 | `scripts/gap_scan.py` | 无（api 模式已走 `rava build --api-package`） |
 | `scripts/seed_check.sh` | `PYTHONHASHSEED` 双种子说法改为「两次生成逐字节一致」 |
 
 ### D. 文档与注释（只改指向，不删文件）
 
-- `docs/environment-variables.md`：`--generator`、`RAVA_GENERATOR` 条目；`--debug` / `--raw-sites` 中 python 口径的说明。
+- `docs/environment-variables.md`：删除 `main.py` / `run_tests.py` 两处 `--generator` 行、第三节 `RAVA_GENERATOR` 行与开头「唯一例外」说明（删除后项目没有自有环境变量）；`--image` 行中 `main.py --generator rust` 改为 `main.py`；`--debug` / `--raw-sites` 中 python 口径的说明。
 - `runtime/java_runtime/*.toml` / `*.txt` 与 `runtime/java_support/*.java` 注释里的 `codegen/…` 路径，改指 Rust 读取端（`input::manifest`、`closure::manifest`、`resolve::image`）。
 - `docs/rules.md`、`docs/java-bytecode-transpiler-design.md`、`docs/compatibility.md` 中的 `codegen/` 路径。
 - `CLAUDE.md` 的生成器相关条目（原则 4 的 `instr.py` / `type_map.py` / `emitter.py`、常用命令里的 `python3 -m unittest tests.unit.<模块>`）：由用户改定。
 
 ## 三、`--generator` 开关
 
-按用户决定，现在保留 `--generator python`。删除 A–C 之后，`python` 取值没有实现可指，届时开关和 `RAVA_GENERATOR` 是一起移除，还是只保留 `rust` 一个取值，由用户在执行删除时决定。本清单不预设。
+已决定（2026-10-01）：按终态处理。删除 Python 生成器时，`--generator` 选项与 `RAVA_GENERATOR` 环境变量**一并删除**，不保留只剩 `rust` 一个取值的开关。具体改动列在 §二 C（`generator_select.py`、`main.py`、`run_tests.py`）与 §二 D（`docs/environment-variables.md`）。
+
+删除前的现状不变：`--generator python` 继续保留、可用。删除本身仍须用户确认后执行。
+
+删除后的核对：`grep -rn "generator_select\|RAVA_GENERATOR\|--generator" scripts tests docs` 只允许命中本清单与历史计划文档。
 
 ## 四、执行顺序（条件满足后）
 
