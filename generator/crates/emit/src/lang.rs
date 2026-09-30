@@ -9,6 +9,9 @@ pub use ty::consts::{CLASS, OBJECT, STRING};
 /// 异常根类（JLS 11.1.1）：catch-any 处理器的绑定类型
 pub const THROWABLE: &str = "java/lang/Throwable";
 
+/// record 类的隐式超类（JLS 8.10）
+pub const RECORD: &str = "java/lang/Record";
+
 /// 基本类型描述符 → 装箱类（JLS 5.1.7）
 pub const BOXED_CLASS_BY_DESC: [(&str, &str); 8] = [
     ("B", "java/lang/Byte"),

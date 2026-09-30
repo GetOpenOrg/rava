@@ -9,9 +9,12 @@ pub mod attrs;
 pub mod fields;
 pub mod head;
 pub mod hw_overrides;
+mod inherit;
 pub mod methods;
+pub mod record;
 pub mod slot;
 pub mod stub;
+mod super_inherit;
 
 use std::collections::BTreeSet;
 
@@ -105,6 +108,29 @@ fn parent_rust(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> String {
     format!("{}{args}", ctx.short(sup))
 }
 
+/// 继承展开段：接口 default 继承 → `Iface.super` / 接口私有方法展开 → 超类虚方法继承
+#[allow(clippy::too_many_arguments)]
+fn inherited_segments<'c>(
+    ctx: &EmitCtx<'c>,
+    state: &mut ProjectState,
+    bodies: &mut dyn MethodBodyEmitter,
+    ci: &'c ClassInfo,
+    tps: &[String],
+    visible: &[&'c classfile::Method],
+    overrides: &[hw_overrides::HwOverride<'c>],
+    out: &mut Vec<String>,
+) -> Result<()> {
+    let overloaded = ctx.ty.hierarchy_overloaded_names(ci);
+    let cx = methods::Cx { ctx, ci, tps, overloaded: &overloaded };
+    let mut all: Vec<&classfile::Method> = visible.to_vec();
+    all.extend(overrides.iter().map(|o| &o.method));
+    let translated = inherit::interface_default_inheritance(&cx, state, bodies, &all, out)?;
+    let mut sources: Vec<(&ClassInfo, &classfile::Method)> = visible.iter().map(|m| (ci, *m)).collect();
+    sources.extend(overrides.iter().map(|o| (o.owner, &o.method)));
+    inherit::interface_special_members(&cx, state, bodies, &sources, translated, out)?;
+    super_inherit::superclass_virtual_inheritance(&cx, state, bodies, &all, out)
+}
+
 /// 生成单类文件文本
 pub fn gen_class_rs(
     ctx: &EmitCtx<'_>,
@@ -144,8 +170,9 @@ pub fn gen_class_rs(
     let mut method_blocks = fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site));
     let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps, &overrides)?;
     method_blocks.extend(mb.method_blocks);
-    // 接口 default / special / 超类虚方法继承段（步骤 (d)）在此接入
     let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
+    inherited_segments(ctx, state, bodies, ci, &tps, &visible, &overrides, &mut method_blocks)?;
+    let method_blocks = record::patch_record_method_blocks(ctx, ci, &format!("{sname}{struct_generic}"), method_blocks);
 
     let parent = parent_rust(ctx, ci);
     let empty = BTreeSet::new();

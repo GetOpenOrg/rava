@@ -6,7 +6,7 @@
 //! 补 `virtual_in` / `vtable_name` / `vtable_erasure` 属性后翻译或出存根；接口伴生契约补发声明。
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use classfile::Method;
 use input::plan::CLINIT_FN;
@@ -27,7 +27,7 @@ use crate::text::split_top_level;
 
 const ACC_BRIDGE: u16 = 0x0040;
 /// 原语 Rust 类型（伴生核心适配的宽度还原判定）
-const PRIMITIVE_RUST_TYPES: [&str; 13] = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "usize", "()"];
+pub(super) const PRIMITIVE_RUST_TYPES: [&str; 13] = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "usize", "()"];
 const SUPP_NOTE: &str = "// 伴生契约声明（E0407）：手写 _impl 文件实现 Iface__VTable 的成员，类模型不含此方法（JDK 版本演化），\n// 生成 trait 恒含伴生方法集——签名取自伴生 impl，逐字一致保证 trait 相干。";
 
 /// 方法段产物
@@ -41,34 +41,52 @@ pub struct MethodBlocks {
     pub iface_supp_blocks: Vec<String>,
 }
 
-/// 待发射方法：本类声明 / 手写覆盖合成的祖先副本；`owner` + `index` 定位补充属性
-struct Emitted<'c> {
-    method: Cow<'c, Method>,
-    owner: &'c ClassInfo,
-    index: usize,
+/// 待发射方法：本类声明 / 手写覆盖合成的祖先副本 / 祖先与接口方法的展开副本；
+/// `owner` + `index` 定位补充属性（LVT、注解原始字节）与方法体字节码
+pub(super) struct Emitted<'c> {
+    pub method: Cow<'c, Method>,
+    pub owner: &'c ClassInfo,
+    pub index: usize,
+}
+
+impl<'c> Emitted<'c> {
+    /// `owner` 声明的第 `index` 个方法原样
+    pub fn declared(owner: &'c ClassInfo, index: usize) -> Emitted<'c> {
+        Emitted { method: Cow::Borrowed(&owner.methods()[index]), owner, index }
+    }
+}
+
+/// 方法体请求的可变部分
+pub(super) struct BodySpec<'s> {
+    pub ctparams: &'s [String],
+    /// None：方法体生成器按自身规则命名
+    pub rust_name: Option<&'s str>,
+    pub in_vtable_body: bool,
+    /// 接口方法展开时的类型变量代换
+    pub view: Option<&'s BTreeMap<String, String>>,
 }
 
 /// 单类方法段的共享参数
-struct Cx<'a, 'c> {
-    ctx: &'a EmitCtx<'c>,
-    ci: &'c ClassInfo,
-    tps: &'a [String],
-    overloaded: &'a BTreeSet<String>,
+pub(super) struct Cx<'a, 'c> {
+    pub ctx: &'a EmitCtx<'c>,
+    pub ci: &'c ClassInfo,
+    pub tps: &'a [String],
+    pub overloaded: &'a BTreeSet<String>,
 }
 
 impl Cx<'_, '_> {
-    fn attr(&self, e: &Emitted<'_>, extra: &MethodAttrExtra) -> String {
+    pub fn attr(&self, e: &Emitted<'_>, extra: &MethodAttrExtra) -> String {
         let ex = self.ctx.extras(e.owner.name());
         method_attr(&e.method, ex.methods.get(e.index), extra)
     }
 
-    fn stub(&self, e: &Emitted<'_>, rust_name: &str, ctparams: &[String]) -> Stub {
+    pub fn stub(&self, e: &Emitted<'_>, rust_name: &str, ctparams: &[String]) -> Stub {
         let ex = self.ctx.extras(e.owner.name());
         let names = ex.methods.get(e.index).map(|x| x.local_names()).unwrap_or_default();
         native_stub(self.ctx, self.ci, &e.method, rust_name, ctparams, &names)
     }
 
-    /// 翻译方法体；兜底类失败返回 None（调用方退化为存根），硬失败穿透
+    /// 翻译方法体（Rust 名显式、无类型变量代换的常用形态）
     fn body(
         &self,
         state: &mut ProjectState,
@@ -78,15 +96,27 @@ impl Cx<'_, '_> {
         rust_name: &str,
         in_vtable_body: bool,
     ) -> Result<Option<String>> {
+        let spec = BodySpec { ctparams, rust_name: Some(rust_name), in_vtable_body, view: None };
+        self.body_with(state, bodies, e, &spec)
+    }
+
+    /// 翻译方法体；兜底类失败返回 None（调用方退化为存根），硬失败穿透
+    pub fn body_with(
+        &self,
+        state: &mut ProjectState,
+        bodies: &mut dyn MethodBodyEmitter,
+        e: &Emitted<'_>,
+        spec: &BodySpec<'_>,
+    ) -> Result<Option<String>> {
         let req = BodyRequest {
             class: self.ci,
             method: &e.method,
             declaring_class: e.owner.name(),
-            type_var_view: None,
-            class_type_params: ctparams,
+            type_var_view: spec.view,
+            class_type_params: spec.ctparams,
             overloaded_names: self.overloaded,
-            rust_name: Some(rust_name),
-            in_vtable_body,
+            rust_name: spec.rust_name,
+            in_vtable_body: spec.in_vtable_body,
         };
         match bodies.emit_body(self.ctx, &req) {
             Ok(out) => {

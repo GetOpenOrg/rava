@@ -46,12 +46,7 @@ const CLASS_MARK: &str = "rava_macros::java_class! {";
 /// 各 crate 目录（相对 scratch 根）：包版本按目录路径派生
 const CRATE_DIRS: [&str; 3] = ["", "java_runtime", "user"];
 /// 待后续步骤接入的已知失配（报告但不判失败；全部移植后须清空）
-const PENDING: [(&str, &str); 4] = [
-    ("user/src/main.rs", "反射分派注册表（步骤 d：dispatch_gen）"),
-    ("<bodies.jsonl>", "接口 default / special / 超类虚方法继承段的方法体请求（步骤 d）"),
-    ("java_runtime/src/java/util/stream/collectors_collector_impl.rs", "record 访问器补丁（步骤 d）"),
-    ("java_runtime/src/jdk/internal/reflect/reflection_factory_config.rs", "record 访问器补丁（步骤 d）"),
-];
+const PENDING: [(&str, &str); 1] = [("user/src/main.rs", "反射分派注册表（步骤 d：dispatch_gen）")];
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")

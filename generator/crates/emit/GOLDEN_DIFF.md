@@ -11,6 +11,7 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 | (b) 非类文件 | Cargo.toml / mod.rs / lib.rs / 资源文件全文 | 一致；`user/src/main.rs` 反射分派注册表待步骤 (d) |
 | (c) 方法块（clinit / 声明方法 / 手写覆盖 / 接口 lambda / 接口补全） | `java_class!` 块到继承段插入位（方法体经 bodies.jsonl 回放替换） | 除 2 个 record 类外全部一致；record 访问器补丁（`_patch_record_method_blocks`）属步骤 (d) |
 | (c) 方法体请求 | bodies.jsonl 回放记录消费 | TestStreamBasic 25 条、TestCompletableFuture 235 条未请求——继承段（接口 default / special / 超类虚方法）的方法体请求属步骤 (d) |
+| (d1) 继承展开段 + record 补丁 | 同上（方法块全段） | 3 例全部一致；bodies.jsonl 回放记录全部被请求（0 未用） |
 
 `tests/golden.rs` 的 `PENDING` 表列出尚待后续步骤接入的已知失配（报告但不判失败），全部移植后须清空；
 `CLASS_STAGE` 在方法块接入后切到全文对照。
@@ -44,6 +45,10 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
    raw_audit 输出（P0 driver 接入时落盘）。
 
 ## 三、Python 行为照搬（疑似缺陷，按原样移植，不在 P5a 修）
+
+0. **record 方法文本补丁**：`record.rs` 按方法体文本中的 `/* TODO: invokedynamic` 占位识别 record 的
+   toString / hashCode / equals 并整体替换（Python `_patch_record_method_blocks`）。终态应由方法体生成器
+   直接翻译 `ObjectMethods` 引导点，届时删除该模块。
 
 1. **空串 ConstantValue**：`""` 字符串常量被当作「无常量」，走 clinit 抽取而非常量初始化。
 2. **用户类模块名**：layout 的用户类 mod 名取简单名，而 vtable / `__base` 导入的模块路径用 `to_snake(binary)`

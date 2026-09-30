@@ -41,6 +41,7 @@ pub struct EmitCtx<'a> {
     extras: RefCell<HashMap<String, Rc<ClassExtras>>>,
     subtype_children: OnceCell<BTreeMap<String, Vec<String>>>,
     root_api: OnceCell<BTreeSet<String>>,
+    chain_slots: OnceCell<BTreeMap<String, BTreeSet<(String, String)>>>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -73,6 +74,7 @@ impl<'a> EmitCtx<'a> {
             extras: RefCell::new(HashMap::new()),
             subtype_children: OnceCell::new(),
             root_api: OnceCell::new(),
+            chain_slots: OnceCell::new(),
         })
     }
 
@@ -131,6 +133,18 @@ impl<'a> EmitCtx<'a> {
                 }
             }
             names
+        })
+    }
+
+    /// 调用链按类索引的槽位键：类 → {(方法名, 参数描述符部分)}（`_cc_slot_index`）
+    pub fn chain_slots(&self) -> &BTreeMap<String, BTreeSet<(String, String)>> {
+        self.chain_slots.get_or_init(|| {
+            let mut out: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+            for (c, n, d) in &self.input.visited {
+                let pp = d.find(')').map_or(d.as_str(), |i| &d[..=i]);
+                out.entry(c.clone()).or_default().insert((n.clone(), pp.to_string()));
+            }
+            out
         })
     }
 
