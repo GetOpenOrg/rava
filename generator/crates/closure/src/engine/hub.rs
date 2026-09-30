@@ -239,17 +239,6 @@ impl<'a> Engine<'a> {
         self.methods[t].ret_model == RetModel::Plain && self.passthrough(t).is_none()
     }
 
-    /// 枢纽（含父链）中转的目标
-    pub(super) fn hub_targets(&self, h: u32) -> Vec<usize> {
-        let mut out = Vec::new();
-        let mut cur = Some(h);
-        while let Some(c) = cur {
-            out.extend(self.hubs[c as usize].plain.iter().copied());
-            cur = self.hubs[c as usize].parent;
-        }
-        out
-    }
-
     /// 字节码方法的返回值只来自形参时，返回这些形参序号
     pub(super) fn passthrough(&mut self, t: usize) -> Option<Vec<u16>> {
         if self.methods[t].kind != Kind::Bytecode {

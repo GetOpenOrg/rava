@@ -367,22 +367,57 @@ impl<'a> Engine<'a> {
         self.method_nodes().count()
     }
 
-    /// 调用点分派（按成员合并克隆）：调用方法标签@偏移 → 目标方法标签
+    /// 调用点分派（按成员合并克隆）：调用方法标签@偏移 → 目标方法标签。
+    /// 先按成员代表序号（`mbase`）聚合、枢纽目标链逐枢纽记忆，最后才格式化标签
     pub fn dispatch_sites(&self) -> BTreeMap<(String, u32), BTreeSet<String>> {
-        let mut out: BTreeMap<(String, u32), BTreeSet<String>> = BTreeMap::new();
+        let canon: Vec<usize> = self.methods.values().map(|m| self.mbase[&m.key]).collect();
+        let mut ids: HashMap<(usize, u32), BTreeSet<usize>> = HashMap::default();
         for ((m, off), ts) in &self.dispatch {
             if self.is_hwobj_method(*m) {
                 continue;
             }
-            let ts = ts.iter().filter(|t| !self.is_hwobj_method(**t)).map(|t| self.method_label(*t));
-            out.entry((self.method_label(*m), *off)).or_default().extend(ts);
+            let e = ids.entry((canon[*m], *off)).or_default();
+            e.extend(ts.iter().filter(|t| !self.is_hwobj_method(**t)).map(|&t| canon[t]));
         }
+        let mut memo: HashMap<u32, Rc<[usize]>> = HashMap::default();
         for ((m, off), hs) in &self.hub_sites {
-            let e = out.entry((self.method_label(*m), *off)).or_default();
+            let e = ids.entry((canon[*m], *off)).or_default();
             for &h in hs {
-                e.extend(self.hub_targets(h).into_iter().map(|t| self.method_label(t)));
+                let ts = self.hub_targets_canon(h, &canon, &mut memo);
+                e.extend(ts.iter().copied());
             }
         }
+        let mut labels: HashMap<usize, Rc<str>> = HashMap::default();
+        let mut label = |i: usize| labels.entry(i).or_insert_with(|| self.method_label(i).into()).clone();
+        let mut out: BTreeMap<(String, u32), BTreeSet<String>> = BTreeMap::new();
+        for ((m, off), ts) in ids {
+            let e = out.entry((label(m).to_string(), off)).or_default();
+            e.extend(ts.into_iter().map(|t| label(t).to_string()));
+        }
         out
+    }
+
+    /// 枢纽（含父链）的目标，按成员代表序号去重；逐枢纽记忆（父链迭代展开，不递归）
+    fn hub_targets_canon(&self, h: u32, canon: &[usize], memo: &mut HashMap<u32, Rc<[usize]>>) -> Rc<[usize]> {
+        let mut chain = Vec::new();
+        let mut cur = Some(h);
+        let mut base: Rc<[usize]> = Rc::from(Vec::new());
+        while let Some(c) = cur {
+            if let Some(r) = memo.get(&c) {
+                base = r.clone();
+                break;
+            }
+            chain.push(c);
+            cur = self.hubs[c as usize].parent;
+        }
+        for c in chain.into_iter().rev() {
+            let mut v: Vec<usize> = self.hubs[c as usize].plain.iter().map(|&t| canon[t]).collect();
+            v.extend(base.iter().copied());
+            v.sort_unstable();
+            v.dedup();
+            base = v.into();
+            memo.insert(c, base.clone());
+        }
+        base
     }
 }
