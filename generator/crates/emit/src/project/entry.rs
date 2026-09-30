@@ -231,8 +231,12 @@ pub fn write_cargo_files(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_
     l.extend(USER_LINTS.iter().map(|n| format!("{n} = \"allow\"")));
     l.push(String::new());
     w.write(&user_dir.join("Cargo.toml"), &l.join("\n"))?;
+    // dev 构建：只保留行号表（回溯仍带文件行号；完整调试信息使大闭包 rustc 峰值内存翻倍、
+    // 编译耗时约 +20%），关闭增量（scratch 每轮重生成，增量元数据只占内存与磁盘）。
+    // 两项只影响调试信息与编译缓存，不影响程序语义
     let root = "[workspace]\nmembers = [\"java_runtime\", \"user\"]\nresolver = \"2\"\n\n[profile.release]\n\
-                opt-level = 3\nlto       = true\ncodegen-units = 1\nstrip     = \"symbols\"\n";
+                opt-level = 3\nlto       = true\ncodegen-units = 1\nstrip     = \"symbols\"\n\n[profile.dev]\n\
+                debug = \"line-tables-only\"\nincremental = false\n";
     w.write(&out_dir.join("Cargo.toml"), root)?;
     let jrt = out_dir.join("java_runtime");
     w.write(&jrt.join("strict.txt"), if ctx.opts.strict { "1\n" } else { "0\n" })?;

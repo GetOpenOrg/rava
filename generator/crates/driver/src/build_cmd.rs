@@ -207,16 +207,24 @@ fn print_perf(on: bool, perf: &Perf, methods: &[(String, std::time::Duration)]) 
     }
 }
 
-/// 与 main.py 同一 cargo 流程：共享 `build/target`、关闭增量
-fn cargo_run(out: &Path, bin: &str, repo: &Path) -> Result<(), String> {
+/// 重型工作区阈值（生成类数）：16G 机器上单 rustc 峰值约 14G，达到阈值的工作区单作业编译；
+/// 调用方显式设置 `CARGO_BUILD_JOBS` 时尊重调用方（与 scripts/cargo_env.py `HEAVY_CLASSES` 同值）
+const HEAVY_CLASSES: usize = 1700;
+
+/// 与 main.py 同一 cargo 流程：共享 `build/target`、关闭增量、重型工作区单作业
+/// （调试信息级别由生成的 workspace `[profile.dev]` 决定）
+fn cargo_run(out: &Path, bin: &str, repo: &Path, classes: usize) -> Result<(), String> {
     println!("\n[run] cargo run --bin {bin}");
-    let st = Command::new("cargo")
-        .args(["run", "--bin", bin])
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--bin", bin])
         .current_dir(out)
         .env("CARGO_TARGET_DIR", repo.join("build").join("target"))
-        .env("CARGO_INCREMENTAL", "0")
-        .status()
-        .map_err(|e| format!("cargo：{e}"))?;
+        .env("CARGO_INCREMENTAL", "0");
+    if classes >= HEAVY_CLASSES && std::env::var_os("CARGO_BUILD_JOBS").is_none() {
+        println!("[cargo-env] 生成类 {classes} ≥ {HEAVY_CLASSES}：CARGO_BUILD_JOBS=1（内存上限）");
+        cmd.env("CARGO_BUILD_JOBS", "1");
+    }
+    let st = cmd.status().map_err(|e| format!("cargo：{e}"))?;
     if !st.success() {
         return Err(format!("cargo run 失败（{st}）"));
     }
@@ -249,7 +257,7 @@ pub fn run_build(args: &Args) -> Result<(), String> {
     if o.no_run {
         return Ok(());
     }
-    cargo_run(&out, &r.bin_name, &repo)
+    cargo_run(&out, &r.bin_name, &repo, r.jdk_classes + r.user_classes)
 }
 
 pub fn run_emit(args: &Args) -> Result<(), String> {
