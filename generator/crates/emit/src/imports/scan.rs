@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::cross::rust_pkg_of;
+use super::cross::{rust_pkg_of, Prefix};
 use crate::ctx::EmitCtx;
 
 /// prelude 由生成文件头统一引入的名字
@@ -50,7 +50,7 @@ pub fn used_vtable_imports(
     blocks: &[String],
     cross_imports: &[String],
     struct_name: &str,
-    prefix: &str,
+    prefix: Prefix<'_>,
 ) -> Vec<String> {
     let used: BTreeSet<&str> = blocks
         .iter()
@@ -84,7 +84,7 @@ pub fn used_vtable_imports(
                 ctx.ty.names.short(c.name()) == base || raw_short == norm
             });
             if let Some(c) = hit {
-                pkg = rust_pkg_of(c.name()).map(|p| format!("{prefix}::{p}"));
+                pkg = rust_pkg_of(c.name()).map(|p| format!("{}::{p}", prefix.of(c.name())));
             }
         }
         if let Some(p) = pkg {
@@ -100,7 +100,7 @@ pub fn supplementary_iface_imports(
     supp_blocks: &[String],
     cross_imports: &[String],
     struct_name: &str,
-    prefix: &str,
+    prefix: Prefix<'_>,
 ) -> Vec<String> {
     let mut out = Vec::new();
     if supp_blocks.is_empty() || ctx.ty.reg.is_empty() {
@@ -132,7 +132,7 @@ pub fn supplementary_iface_imports(
         let Some(bin) = short_to_bin.get(name) else { continue };
         let pkg = match simple_to_pkg.get(name) {
             Some(p) => (*p).to_string(),
-            None => format!("{prefix}::{}", rust_pkg_of(bin).unwrap_or_default()),
+            None => format!("{}::{}", prefix.of(bin), rust_pkg_of(bin).unwrap_or_default()),
         };
         out.push(format!("use {pkg}::{name};"));
     }

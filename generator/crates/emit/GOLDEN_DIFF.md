@@ -21,14 +21,14 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 `tests/golden.rs` 全文对照，无待接入项（`PENDING` 已删除）。
 方法体失配明细写入 `build/golden/emit/<Test>.bodies.diff.txt`（`=== TEXT` / `=== FX` / `=== EXTRA`）。
 
-## 一、未移植分支（显式 `EmitError::Unported`）
+## 一、未移植分支
 
-| 位置 | 分支 | 说明 |
-|---|---|---|
-| `project::write_project` | lib crate 模式（jar 输入） | `lib_crates` 非空即报错 |
+无。`EmitError::Unported` 已删除（2026-10-01）：lib crate 模式（jar 输入）按 Python 语义移植
+（`project/lib_crates.rs`：类文件布局 `_t` 后缀、lib.rs / Cargo.toml、按目标 crate 定向导入
+`imports::CrateRoute`、Java 可见性映射 `class_writer/visibility.rs`）。
 
-未移植的 Python 形参：`java_visibility`（仅 lib crate 用）、`full_impl_classes`（`_impl.rs` 内含 `pub struct` 的
-全量手写类；runtime 现无此类文件，按空集处理）、`stub_bodies`（project_writer 恒为 False）。
+未移植的 Python 形参：`full_impl_classes`（`_impl.rs` 内含 `pub struct` 的全量手写类；runtime 现无此类文件，
+按空集处理）、`stub_bodies`（project_writer 恒为 False）。
 
 ## 二、有意差异（Rust 取确定性 / 结构化口径，golden 三例无可见影响）
 

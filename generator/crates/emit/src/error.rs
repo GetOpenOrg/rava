@@ -1,11 +1,9 @@
-//! 发射层错误。未移植的分支显式报 [`EmitError::Unported`]（并登记于 GOLDEN_DIFF.md）。
+//! 发射层错误。
 
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitError {
-    /// 尚未移植的语义分支
-    Unported(String),
     /// 文件系统错误
     Io(String),
     /// 输入不一致（registry 缺类、清单格式等）
@@ -19,7 +17,6 @@ pub enum EmitError {
 impl fmt::Display for EmitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EmitError::Unported(s) => write!(f, "发射层未移植：{s}"),
             EmitError::Io(s) => write!(f, "发射层读写失败：{s}"),
             EmitError::Input(s) => write!(f, "发射层输入错误：{s}"),
             EmitError::Body(s) => write!(f, "方法体生成失败：{s}"),

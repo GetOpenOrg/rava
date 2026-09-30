@@ -78,3 +78,54 @@ fn record_and_switch_bootstraps_translate() {
     assert!(def("_t0").contains("(&p)") && def("_t1").contains("(&q)"), "拼接实参字符串化次序");
     std::fs::remove_dir_all(&out).ok();
 }
+
+/// `--batch`：入口写 `user/src/bin/<bin>.rs`（`#[path]` 引用同级类文件），user/Cargo.toml 追加 `[[bin]]`；
+/// `--trace-class` 打印 provenance 链；`--debug` 时审计照常输出
+#[test]
+fn batch_trace_and_debug() {
+    let Some((stdout, out)) =
+        build("RecordSwitch.java", "batch", &["--batch", "--debug", "--trace-class", "RecordSwitch$Point"])
+    else {
+        return;
+    };
+    let bin = std::fs::read_to_string(out.join("user/src/bin/record_switch.rs")).expect("批量入口");
+    assert!(bin.contains("#[path = \"../record_switch.rs\"]"), "批量入口 #[path]：{bin}");
+    let cargo = std::fs::read_to_string(out.join("user/Cargo.toml")).unwrap();
+    assert!(cargo.contains("[[bin]]\nname = \"record_switch\"\npath = \"src/bin/record_switch.rs\""), "[[bin]] 段：{cargo}");
+    assert!(stdout.contains("      [why] RecordSwitch$Point"), "provenance 链：{stdout}");
+    assert!(stdout.contains("[precheck] native-missing="), "预检行");
+    assert!(stdout.contains("[cfg-audit] ") && stdout.contains("[equiv-audit] "), "审计行");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// `--lib`：jar 类进独立 lib crate（Java 可见性、lib.rs 包模块、user 依赖）；`--precheck-only`
+/// 只出预检，不出审计与发射汇总
+#[test]
+fn lib_crate_and_precheck_only() {
+    let Some(home) = resolve::jdk::find_java_home(Some(21)) else { return };
+    let work = std::env::temp_dir().join(format!("rava-it-libjar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    let classes = work.join("classes");
+    let src = fixture("lib/greet/Greeter.java");
+    assert!(Command::new(home.join("bin/javac")).arg("-d").arg(&classes).arg(&src).status().unwrap().success());
+    let jar = work.join("greet.jar");
+    assert!(Command::new(home.join("bin/jar")).arg("cf").arg(&jar).arg("-C").arg(&classes).arg(".").status().unwrap().success());
+    let spec = format!("greet={}", jar.display());
+    let Some((stdout, out)) = build("LibUser.java", "lib", &["--lib", &spec, "--precheck-only"]) else { return };
+    assert!(stdout.contains("[jar] greet ← greet.jar（1 类）"), "{stdout}");
+    assert!(stdout.contains("[precheck] native-missing="), "预检行");
+    assert!(!stdout.contains("[equiv-audit]") && !stdout.contains("[emit]"), "--precheck-only 不出审计 / 汇总：{stdout}");
+    let lib_cargo = std::fs::read_to_string(out.join("greet/Cargo.toml")).unwrap();
+    assert!(lib_cargo.contains("crate-type = [\"lib\"]"), "{lib_cargo}");
+    assert!(std::fs::read_to_string(out.join("greet/src/lib.rs")).unwrap().contains("pub mod greet;"));
+    let greeter = std::fs::read_to_string(out.join("greet/src/greet/greeter.rs")).unwrap();
+    assert!(greeter.contains("pub fn greet(&self"), "public 方法跨 crate 可见");
+    assert!(greeter.contains("pub(crate) fn prefix("), "包可见方法降级：{greeter}");
+    let user_cargo = std::fs::read_to_string(out.join("user/Cargo.toml")).unwrap();
+    assert!(user_cargo.contains("greet           = { path = \"../greet\" }"), "{user_cargo}");
+    let ws = std::fs::read_to_string(out.join("Cargo.toml")).unwrap();
+    assert!(ws.contains("\"greet\""), "workspace 成员：{ws}");
+    assert!(rs_text(&out.join("user/src")).contains("greet::greet::Greeter"), "user 经 lib crate 名引用");
+    std::fs::remove_dir_all(&out).ok();
+    std::fs::remove_dir_all(&work).ok();
+}

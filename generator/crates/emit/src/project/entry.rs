@@ -162,8 +162,15 @@ pub fn write_main(
         format!("{main_short}::main()")
     };
     let mut lines = vec![MAIN_ALLOW.to_string()];
-    if let Some(top) = user.mod_tree.get(user_src) {
-        lines.extend(top.iter().map(|m| user_mod_decl(user_src, m, "")));
+    let top = user.mod_tree.get(user_src).into_iter().flatten();
+    if ctx.opts.batch {
+        // 批量模式：每个 bin 以 #[path] 独立包含自己的类文件（不共享 crate 根），单测编译失败互不影响
+        for m in top {
+            lines.push(format!("#[path = \"../{m}.rs\"]"));
+            lines.push(format!("mod {m};"));
+        }
+    } else {
+        lines.extend(top.map(|m| user_mod_decl(user_src, m, "")));
     }
     lines.push(format!("use {use_path};"));
     lines.push(String::new());
@@ -175,7 +182,8 @@ pub fn write_main(
     lines.push(format!("    java_runtime::destroy_java_vm({main_call});"));
     lines.push("}".into());
     lines.push(String::new());
-    w.write(&user_src.join("main.rs"), &lines.join("\n"))?;
+    let file = if ctx.opts.batch { user_src.join("bin").join(format!("{bin_name}.rs")) } else { user_src.join("main.rs") };
+    w.write(&file, &lines.join("\n"))?;
     Ok(bin_name)
 }
 
@@ -209,31 +217,87 @@ const USER_LINTS: &[&str] = &[
     "unreachable_patterns",
 ];
 
-/// user/Cargo.toml、根 Cargo.toml、strict.txt、jdk_feature.txt
-pub fn write_cargo_files(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_name: &str) -> Result<()> {
-    let user_dir = out_dir.join("user");
-    let mut l = vec![
-        "[package]".to_string(),
-        "name = \"user\"".into(),
-        format!("version = \"{}\"", scratch_pkg_version(&user_dir)),
-        "edition = \"2021\"".into(),
-        String::new(),
-        "[[bin]]".into(),
-        format!("name = \"{bin_name}\""),
-        "path = \"src/main.rs\"".into(),
-        String::new(),
-        "[dependencies]".into(),
-        "java_runtime    = { path = \"../java_runtime\" }".into(),
-        format!("rava_macros = {{ path = \"{}\" }}", ctx.macros_crate.display()),
-        String::new(),
-        "[lints.rust]".into(),
-    ];
+/// `[lints.rust]` 段（user / lib crate 同一口径）
+pub fn lints_section() -> Vec<String> {
+    let mut l = vec!["[lints.rust]".to_string()];
     l.extend(USER_LINTS.iter().map(|n| format!("{n} = \"allow\"")));
     l.push(String::new());
-    w.write(&user_dir.join("Cargo.toml"), &l.join("\n"))?;
-    let root = "[workspace]\nmembers = [\"java_runtime\", \"user\"]\nresolver = \"2\"\n\n[profile.release]\n\
-                opt-level = 3\nlto       = true\ncodegen-units = 1\nstrip     = \"symbols\"\n";
-    w.write(&out_dir.join("Cargo.toml"), root)?;
+    l
+}
+
+/// user/Cargo.toml 的依赖行：java_runtime、宏 crate、全部 lib crate（声明序）
+fn user_deps(ctx: &EmitCtx<'_>, libs: &[&str]) -> Vec<String> {
+    let mut d = vec![
+        "java_runtime    = { path = \"../java_runtime\" }".to_string(),
+        format!("rava_macros = {{ path = \"{}\" }}", ctx.macros_crate.display()),
+    ];
+    d.extend(libs.iter().map(|l| super::lib_crates::dep_line(l)));
+    d
+}
+
+/// 批量模式：向 user/Cargo.toml 追加 `[[bin]]`（同名已在则跳过；插在 `[dependencies]` 前）；
+/// 文件缺席时先建最小清单
+fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name: &str) -> Result<()> {
+    let path = user_dir.join("Cargo.toml");
+    let new_bin = format!("\n[[bin]]\nname = \"{bin_name}\"\npath = \"src/bin/{bin_name}.rs\"\n");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => {
+            if c.contains(&format!("name = \"{bin_name}\"")) {
+                return Ok(());
+            }
+            c
+        }
+        Err(_) => {
+            let mut base = vec![
+                "[package]".to_string(),
+                "name = \"user\"".into(),
+                format!("version = \"{}\"", scratch_pkg_version(user_dir)),
+                "edition = \"2021\"".into(),
+                String::new(),
+                "[dependencies]".into(),
+            ];
+            base.extend(user_deps(ctx, &[]));
+            base.push(String::new());
+            base.join("\n")
+        }
+    };
+    let out = match content.find("[dependencies]") {
+        Some(i) => format!("{}{new_bin}\n{}", &content[..i], &content[i..]),
+        None => content + &new_bin,
+    };
+    w.write(&path, &out)
+}
+
+/// user/Cargo.toml（批量模式为追加 `[[bin]]`）、根 Cargo.toml、strict.txt、jdk_feature.txt
+pub fn write_cargo_files(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_name: &str, libs: &[&str]) -> Result<()> {
+    let user_dir = out_dir.join("user");
+    if ctx.opts.batch {
+        append_cargo_bin(ctx, w, &user_dir, bin_name)?;
+    } else {
+        let mut l = vec![
+            "[package]".to_string(),
+            "name = \"user\"".into(),
+            format!("version = \"{}\"", scratch_pkg_version(&user_dir)),
+            "edition = \"2021\"".into(),
+            String::new(),
+            "[[bin]]".into(),
+            format!("name = \"{bin_name}\""),
+            "path = \"src/main.rs\"".into(),
+            String::new(),
+            "[dependencies]".into(),
+        ];
+        l.extend(user_deps(ctx, libs));
+        l.push(String::new());
+        l.extend(lints_section());
+        w.write(&user_dir.join("Cargo.toml"), &l.join("\n"))?;
+    }
+    let members: Vec<String> = std::iter::once("java_runtime").chain(libs.iter().copied()).chain(["user"]).map(|m| format!("\"{m}\"")).collect();
+    let root = format!(
+        "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
+         opt-level = 3\nlto       = true\ncodegen-units = 1\nstrip     = \"symbols\"\n",
+        members.join(", ")
+    );
+    w.write(&out_dir.join("Cargo.toml"), &root)?;
     let jrt = out_dir.join("java_runtime");
     w.write(&jrt.join("strict.txt"), if ctx.opts.strict { "1\n" } else { "0\n" })?;
     if let Some(v) = ctx.opts.jdk_major {

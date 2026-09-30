@@ -29,6 +29,7 @@ pub mod imports;
 pub mod lang;
 pub mod method_bodies;
 pub mod phase2;
+pub mod precheck;
 pub mod project;
 pub mod sam;
 pub mod text;

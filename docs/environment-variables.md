@@ -16,7 +16,7 @@
 | `--strict` | 严格模式：转译兜底改为硬失败；缺手写实现的 native 方法编译报错（写入 scratch 的 `java_runtime/strict.txt`，`build.rs` 读取） |
 | `--trace-class CLASS` | 打印该类或方法（斜线形态，如 `java/net/InetAddress`、`类.方法:描述符`）入闭包的最短 provenance 链，回答“为什么被拉进闭包”（转交 `rava closure --why`） |
 | `--raw-sites FILE` | Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序），不影响生成代码 |
-| `--generator {python,rust}` | 生成器实现：`python` = `codegen/`；`rust` = `generator/` 的 `rava build --no-run`（只替换转译段，overlay 与 cargo 流程共用）。缺省取 `RAVA_GENERATOR`，再缺省 `rust`（2026-10-01 起；缺省值唯一定义在 `scripts/generator_select.py`）。`rust` 下暂不支持 `--lib` / `--batch` / `--debug` / `--trace-class` / `--precheck-only` / `--raw-sites`（显式报错，需要时加 `--generator python`） |
+| `--generator {python,rust}` | 生成器实现：`python` = `codegen/`；`rust` = `generator/` 的 `rava build --no-run`（只替换转译段，overlay 与 cargo 流程共用）。缺省取 `RAVA_GENERATOR`，再缺省 `rust`（2026-10-01 起；缺省值唯一定义在 `scripts/generator_select.py`）。两路径支持同一组选项（`rust` 下原样转交 `rava build`）；`python` 保留为对照基线 |
 
 ```bash
 python3 scripts/main.py Foo.java --no-run --trace-class java/security/Provider
@@ -63,6 +63,11 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--clean` | 发射前清空 scratch（emit 的输入位于 scratch 内时拒绝） |
 | `--no-run` | 仅 build：只生成不编译运行 |
 | `--strict` | 同 `main.py --strict`（写入 scratch 的 `java_runtime/strict.txt`） |
+| `--lib NAME=JAR[:seed=FQN,…]` | 仅 build：jar 输入模式（可多次，声明序即 crate 依赖序）。jar 上 javac `-cp` 与类路径；无 seed = 整包（jar 全部类进 lib crate，种子 = 全部类的 public 方法），有 seed = 子集（种子类须在 jar 内，只收闭包触达的 jar 类）。每个 lib 一个 `crate-type = ["lib"]` 的 crate：public / protected → `pub`，其余 → `pub(crate)`；user 依赖全部 lib。与 `--batch` 互斥 |
+| `--batch` | 仅 build：入口写 `user/src/bin/<bin>.rs`（`#[path]` 引用同级类文件），向 `user/Cargo.toml` 追加 `[[bin]]`（已有同名 bin 跳过） |
+| `--trace-class 类` | 仅 build：打印该类或方法（`类.方法:描述符`）入闭包的最短 provenance 链（`      [why] …`，同 `rava closure --why`） |
+| `--debug` | 闭包未解析调用（`[closure] unresolved: …`）与存根兜底逐条（`[cfg-audit] stub fallback (位点): 方法: 原因`） |
+| `--precheck-only` | 发射后只输出完整预检明细（`[precheck]` 不截断），不出审计行、不编译运行。缺省时预检每类明细封顶 40 行 |
 
 ### 重型闭包的自动处理（无需配置）
 

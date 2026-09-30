@@ -15,9 +15,14 @@ use instr::Audit;
 use crate::ctx::HwAudit;
 use crate::method_bodies::BodyAudit;
 
-/// 审计行（输出序与 Python 一致）
-pub fn audit_lines(body: &BodyAudit, hw: &[(HwAudit, String)]) -> Vec<String> {
+/// 审计行（输出序与 Python 一致）；`debug` 时 cfg 汇总后逐条列存根兜底
+pub fn audit_lines(body: &BodyAudit, hw: &[(HwAudit, String)], debug: bool) -> Vec<String> {
     let mut lines = vec![body.cfg.summary()];
+    if debug {
+        lines.extend(
+            body.cfg.stub_fallbacks.iter().map(|f| format!("[cfg-audit] stub fallback ({}): {}: {}", f.site, f.method_id, f.reason)),
+        );
+    }
     let equiv: Vec<String> = Audit::REPORT_ORDER
         .iter()
         .filter_map(|a| body.equiv.get(a).filter(|n| **n > 0).map(|n| format!("{}={n}", a.as_str())))

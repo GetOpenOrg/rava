@@ -5,6 +5,7 @@
 //! - `emit`：既有 closure.json → 发射 scratch
 
 mod build_cmd;
+mod build_libs;
 mod build_opts;
 mod closure_cmd;
 mod dump;
@@ -15,8 +16,8 @@ use std::process::ExitCode;
 fn usage() -> ExitCode {
     eprintln!(
         "用法：\n  rava dump-classes [--jdk <主版本> | --java-home <路径>] [--module <jmod 名>] [--prefix <包前缀>]\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>]\n  \
-         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--clean] [--no-run] [--strict]\n  \
-         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict]"
+         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]\n  \
+         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]"
     );
     ExitCode::from(2)
 }

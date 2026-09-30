@@ -256,6 +256,7 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
         strict: false,
         jdk_major: jdk_major(meta["java_home"].as_str().unwrap_or_default()),
         java_files: str_list(&meta["java_files"]).into_iter().map(PathBuf::from).collect(),
+        batch: false,
     };
     let ctx = EmitCtx::new(&inp, &names, &manifest, &cp, &runtime, opts).expect("发射上下文");
     let out = root.join("build/golden/emit").join(format!("{stem}.rs-out"));

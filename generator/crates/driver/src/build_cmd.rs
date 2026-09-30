@@ -13,13 +13,15 @@ use classfile::MemberRef;
 use closure::handwritten::Handwritten;
 use closure::manifest::Manifest;
 use emit::audit::audit_lines;
-use emit::method_bodies::MethodBodies;
 use emit::ctx::{EmitCtx, EmitOptions};
+use emit::method_bodies::MethodBodies;
+use emit::precheck::{Precheck, DEFAULT_LIMIT};
 use emit::project::{prepare_scratch, write_project, ProjectReport};
-use input::{BuildInput, ClosureFacts, RuntimeManifest};
+use input::{BuildInput, ClosureFacts, LibCrate, RuntimeManifest};
 use resolve::{ClassPath, Hierarchy, Origin};
 use ty::short_names::ShortNames;
 
+use crate::build_libs::{self, Libs};
 use crate::build_opts::{BuildOpts, Mode, CLOSURE_INPUT_DIR};
 use crate::closure_cmd::{find_runtime_dir, seed_roots, MAIN};
 use crate::Args;
@@ -54,14 +56,19 @@ fn remove_dir(d: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// javac 编译到独占目录（与 main.py 同参：`-g`，JDK ≥ 14 时 `--enable-preview --release N`）
-fn javac(home: &Path, java_files: &[PathBuf], out: &Path) -> Result<(), String> {
+/// javac 编译到独占目录（与 main.py 同参：`-g`，JDK ≥ 14 时 `--enable-preview --release N`；
+/// jar 输入模式下全部 jar 上 `-cp`）
+fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> Result<(), String> {
     remove_dir(out)?;
     std::fs::create_dir_all(out).map_err(|e| format!("{}：{e}", out.display()))?;
     let mut cmd = Command::new(home.join("bin/javac"));
     cmd.arg("-g");
     if let Some(m) = jdk_major(home).filter(|m| *m >= 14) {
         cmd.args(["--enable-preview", "--release", &m.to_string()]);
+    }
+    if !jars.is_empty() {
+        let cp: Vec<String> = jars.iter().map(|j| j.display().to_string()).collect();
+        cmd.arg("-cp").arg(cp.join(":"));
     }
     let st = cmd.arg("-d").arg(out).args(java_files).status().map_err(|e| format!("javac：{e}"))?;
     if !st.success() {
@@ -70,10 +77,13 @@ fn javac(home: &Path, java_files: &[PathBuf], out: &Path) -> Result<(), String> 
     Ok(())
 }
 
-/// 用户类目录 → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）
-fn class_path(user_dir: &Path, home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
+/// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）
+fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
     let mut cp = ClassPath::new();
     cp.add(Origin::User, user_dir).map_err(|e| format!("{}：{e}", user_dir.display()))?;
+    for j in jars {
+        cp.add(Origin::Lib, j).map_err(|e| format!("{}：{e}", j.display()))?;
+    }
     cp.add_jdk(home).map_err(|e| e.to_string())?;
     for d in images {
         cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
@@ -120,26 +130,42 @@ pub fn user_order(cp: &ClassPath, java_files: &[PathBuf], main: Option<&str>) ->
     Ok(out)
 }
 
-/// 闭包分析（同 `rava closure`）；closure.json 写入 `json_path`
-fn analyze(cp: &ClassPath, rt: &Path, main: &str, o: &BuildOpts, json_path: &Path) -> Result<ClosureFacts, String> {
+/// 闭包分析（同 `rava closure`；lib 种子类同 `--seed-class`）；closure.json 写入 `json_path`。
+/// `--trace-class` 打印 provenance 链（`[why]`），`--debug` 列未解析调用
+fn analyze(cp: &ClassPath, rt: &Path, main: &str, o: &BuildOpts, seed_classes: &[String], json_path: &Path) -> Result<ClosureFacts, String> {
     let man = Manifest::load(rt)?;
     let hw = Handwritten::new(rt);
     let h = Hierarchy::new(cp);
     let roots: Vec<&String> = o.roots.iter().collect();
+    let seeds: Vec<&String> = seed_classes.iter().collect();
     let input = closure::Input {
         cp,
         runtime_dir: rt,
         roots: vec![MemberRef { owner: main.to_string(), name: MAIN.0.into(), desc: MAIN.1.into() }],
-        seed_roots: seed_roots(cp, &roots, &[])?,
+        seed_roots: seed_roots(cp, &roots, &seeds)?,
         locales: o.locales.clone(),
     };
     let c = closure::analyze(&input, &h, &man, &hw);
     for e in hw.errors.borrow().iter() {
         eprintln!("[closure] 手写文件解析失败：{e}");
     }
+    for (n, e) in cp.failures() {
+        eprintln!("[closure] 类解析失败：{n}：{e}");
+    }
+    if let Some(t) = &o.trace_class {
+        for line in c.why(&t.replace('.', "/")).into_iter().chain([String::new()]) {
+            println!("{}", if line.is_empty() { line } else { format!("      [why] {line}") });
+        }
+    }
     let s = serde_json::to_string_pretty(&c.to_json()).map_err(|e| e.to_string())?;
     std::fs::write(json_path, s).map_err(|e| format!("{}：{e}", json_path.display()))?;
-    Ok(ClosureFacts::from_closure(&c))
+    let facts = ClosureFacts::from_closure(&c);
+    if o.debug {
+        for u in &facts.unresolved {
+            println!("[closure] unresolved: {u}");
+        }
+    }
+    Ok(facts)
 }
 
 /// 一次发射所需的全部输入
@@ -151,24 +177,32 @@ struct EmitJob<'a> {
     java_files: Vec<PathBuf>,
     home: &'a Path,
     out: &'a Path,
-    strict: bool,
+    libs: &'a [LibCrate],
+    o: &'a BuildOpts,
 }
 
-/// EmitInput → overlay → 写 scratch
+/// EmitInput → overlay → 写 scratch → 预检 →（非 `--precheck-only`）审计行
 fn emit_scratch(j: &EmitJob<'_>) -> Result<ProjectReport, String> {
     let manifest = RuntimeManifest::load(j.rt).map_err(|e| e.to_string())?;
     let runtime_src = j.rt.join("src");
-    let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: &[], runtime_src: &runtime_src }
+    let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: j.libs, runtime_src: &runtime_src }
         .build()
         .map_err(|e| format!("构建发射层输入：{e}"))?;
     let names = ShortNames::build(&inp.registry);
-    let opts = EmitOptions { strict: j.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone() };
+    let opts =
+        EmitOptions { strict: j.o.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone(), batch: j.o.batch };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
     let mut bodies = MethodBodies::new(&ctx);
     let r = write_project(&ctx, j.out, &mut bodies).map_err(|e| format!("发射：{e}"))?;
-    for line in audit_lines(&bodies.audit, &r.hw_audit) {
+    let limit = if j.o.precheck_only { usize::MAX } else { DEFAULT_LIMIT };
+    for line in Precheck::scan(&r.emissions, &inp.precheck_visited).lines(limit) {
         println!("{line}");
+    }
+    if !j.o.precheck_only {
+        for line in audit_lines(&bodies.audit, &r.hw_audit, j.o.debug) {
+            println!("{line}");
+        }
     }
     Ok(r)
 }
@@ -204,13 +238,17 @@ pub fn run_build(args: &Args) -> Result<(), String> {
     }
     let cin = out.join(CLOSURE_INPUT_DIR);
     let classes = cin.join("classes");
-    javac(&home, &o.inputs, &classes)?;
-    let cp = class_path(&classes, &home, &o.images)?;
+    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs)?;
+    javac(&home, &o.inputs, &jars, &classes)?;
+    let cp = class_path(&classes, &jars, &home, &o.images)?;
     let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
-    let facts = analyze(&cp, &rt, &user[0], &o, &cin.join("closure.json"))?;
+    let facts = analyze(&cp, &rt, &user[0], &o, &seed_classes, &cin.join("closure.json"))?;
     let java_files = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, strict: o.strict };
+    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &crates, o: &o };
     let r = emit_scratch(&job)?;
+    if o.precheck_only {
+        return Ok(());
+    }
     report(&r, &out);
     if o.no_run {
         return Ok(());
@@ -234,12 +272,14 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
         }
         remove_dir(&out)?;
     }
-    let cp = class_path(&classes, &home, &o.images)?;
+    let cp = class_path(&classes, &[], &home, &o.images)?;
     let user = user_order(&cp, o.java_files(Mode::Emit), None)?;
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, strict: o.strict };
+    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &[], o: &o };
     let r = emit_scratch(&job)?;
-    report(&r, &out);
+    if !o.precheck_only {
+        report(&r, &out);
+    }
     Ok(())
 }
 

@@ -22,6 +22,8 @@ pub struct EmitOptions {
     pub jdk_major: Option<u32>,
     /// 用户 .java 源文件（package 声明来源）
     pub java_files: Vec<PathBuf>,
+    /// 批量模式：入口写 `user/src/bin/<bin>.rs`，向 user/Cargo.toml 追加 `[[bin]]`
+    pub batch: bool,
 }
 
 /// 发射上下文：输入事实 + 类型层 + 清单（全部只读；缓存经内部可变性）
@@ -45,6 +47,7 @@ pub struct EmitCtx<'a> {
     root_keys: OnceCell<BTreeSet<(String, String)>>,
     sam: OnceCell<crate::sam::SamLedger>,
     instr_facts: OnceCell<instr::InstrFacts>,
+    lib_crate_of: OnceCell<HashMap<String, String>>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -81,6 +84,7 @@ impl<'a> EmitCtx<'a> {
             root_keys: OnceCell::new(),
             sam: OnceCell::new(),
             instr_facts: OnceCell::new(),
+            lib_crate_of: OnceCell::new(),
         })
     }
 
@@ -181,6 +185,22 @@ impl<'a> EmitCtx<'a> {
             }
             out
         })
+    }
+
+    /// jar 输入模式：类归属的 lib crate 名（非 lib 类 None）
+    pub fn lib_crate_of(&self, cls: &str) -> Option<&str> {
+        self.lib_crate_of
+            .get_or_init(|| {
+                let mut m = HashMap::new();
+                for (lib, classes) in &self.input.lib_crates {
+                    for c in classes {
+                        m.entry(c.clone()).or_insert_with(|| lib.clone());
+                    }
+                }
+                m
+            })
+            .get(cls)
+            .map(String::as_str)
     }
 
     /// 类是否为本编译单元的用户类

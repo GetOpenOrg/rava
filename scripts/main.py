@@ -317,13 +317,6 @@ def main():
     add_generator_argument(ap)
     args = ap.parse_args()
     generator = resolve_generator(args.generator)
-    if generator == 'rust':
-        _unsupported = [f for f, on in (('--lib', args.lib), ('--batch', args.batch), ('--debug', args.debug),
-                                        ('--trace-class', args.trace_class), ('--precheck-only', args.precheck_only),
-                                        ('--raw-sites', args.raw_sites)) if on]
-        if _unsupported:
-            sys.exit(f"Rust 生成器尚不支持：{' '.join(_unsupported)}（用 --generator python）")
-
     from codegen import options as _options, raw_audit as _raw_audit_opt
     _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
     _options.PRECHECK_ONLY = args.precheck_only
@@ -356,7 +349,11 @@ def main():
     t0 = time.perf_counter()
     if generator == 'rust':
         run_rust(java_files, out_dir, strict=args.strict,
-                 locales=tuple(t for t in args.locales.split(',') if t.strip()))
+                 locales=tuple(t for t in args.locales.split(',') if t.strip()),
+                 libs=tuple(args.lib), batch=args.batch, debug=args.debug, trace_class=args.trace_class,
+                 precheck_only=args.precheck_only, raw_sites=args.raw_sites)
+        if args.precheck_only:
+            return
     elif not _python_codegen(args, java_files, out_dir, lib_specs):
         return
     t_codegen = time.perf_counter() - t0
