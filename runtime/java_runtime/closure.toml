@@ -82,6 +82,9 @@ packages = [
     # BaseCalendar、ZoneInfo、ZoneInfoFile 等，纯 Java）。ZoneInfoFile 读
     # <java.home>/lib/tzdb.dat → jdk_resources 嵌入数据；TimeZone 的两个 native 见 time_zone_impl.rs。
     "sun/util/calendar/",
+    # C1d：浮点十进制转换（DoubleToDecimal / FloatToDecimal / FormattedFPDecimal、dtoa 的 FloatingDecimal /
+    # FDBigInteger 等，纯 Java）。手写近似无法逐位一致（DecimalFormat HALF_EVEN 依赖 dtoa 产物），按字节码翻译。
+    "jdk/internal/math/",
 ]
 classes = [
     # MH-native：asType / 组合子的类型转换与名字工具。纯 Java（装拆箱 / 拓宽句柄经 IMPL_LOOKUP
@@ -123,13 +126,6 @@ classes = [
     "java/security/BasicPermission",
     "java/security/BasicPermissionCollection",
     "java/security/ProtectionDomain",
-
-    # FS-L8 / FS-H13：dtoa 转换器（纯 Java；含嵌套 $BinaryToASCIIBuffer / $ASCIIToBinaryBuffer 等）。
-    # DecimalFormat 的 HALF_EVEN 舍入依赖 BinaryToASCIIConverter 的 decimalDigitsExact /
-    # digitsRoundedUp——这是 dtoa 算法本身的产物（如 2.675 → 2.67 而 0.05625 → 0.0563），
-    # 手写近似无法逐位一致，故整体按字节码翻译。FDBigInteger 为其大数运算依赖。
-    "jdk/internal/math/FloatingDecimal",
-    "jdk/internal/math/FDBigInteger",
 
     # gap 批次 4：随机数流（纯 Java；含嵌套 $AbstractSpliteratorGenerator / $Random*Spliterator /
     # $AbstractSplittableGenerator 等）。Random / SplittableRandom 的 ints / longs / doubles 流、
