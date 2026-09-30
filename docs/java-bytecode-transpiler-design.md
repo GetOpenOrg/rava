@@ -3,7 +3,7 @@
 **版本** 0.2 · **日期** 2026-09-12 · **状态** 历史设计文档（早期可达性分析与 javap 解析阶段）
 
 > **2026-09-28 注**：本文记录项目起步期设计，文中的 `scripts/codegen/`、`javap.py`、`runtime.py` 等路径与机制均已被替代。
-> 现行架构见 [`README.md`](../README.md) 与 [`CLAUDE.md`](../CLAUDE.md)；调用链闭包现由 `codegen/callchain.py` 实现。
+> 现行架构见 [`README.md`](../README.md) 与 [`CLAUDE.md`](../CLAUDE.md)；调用链闭包现由 Rust 闭包分析器 `rava closure`（`generator/crates/closure`）计算，`codegen/closure_input.py` 接入。
 
 ---
 

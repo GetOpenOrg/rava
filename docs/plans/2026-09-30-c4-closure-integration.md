@@ -64,4 +64,4 @@
 | 4 | A7–A8 库模式 / 额外根 | ✅ `--lib`（`Origin::Lib` 一律翻译域）/ `--seed-class` / `--root`（`Engine::root_seed`） |
 | 5 | 接入层 + transpile 切换 | ✅ `codegen/closure_input.py`；visited 按方法 kind 过滤（vm_boundary 类按方法划分，不能按类域过滤） |
 | 6 | 验收 27 例 + 全量 e2e | ⏳ |
-| 7 | 删除 Python 发现机制（含 `closure.toml [vm_boundary] whole_class`：只有 Python BFS 读） | ⏳ |
+| 7 | 删除 Python 发现机制（含 `closure.toml [vm_boundary] whole_class`：只有 Python BFS 读） | ✅ 2026-09-30（`closure-c4-cleanup`）：清单见 `2026-09-29-rust-closure-analyzer.md` §五；27 例生成树删除前后逐字节一致（closure.json 仅 `elapsed_ms` 不同），raw-audit 仅 `jdk_literals` 2 → 1；单测 155 通过 |

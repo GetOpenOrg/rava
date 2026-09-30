@@ -9,7 +9,7 @@ docs/plans/2026-09-29-rust-closure-analyzer.md §7.3「折叠点导出」：
              "dead_handlers": [pc, ...],
              "consts": [{"pc": 12, "kind": "getfield", "value": false, "type": "Z"}]}]
 
-规范化动作（均在 CFG 结构化之前，调用链 BFS 与生成代码共用同一份指令序列）：
+规范化动作（均在 CFG 结构化之前，生成代码的唯一指令序列）：
   1. dead_pcs 内的指令删除；
   2. 条件跳转只剩一个活后继 → 弹出操作数（`pop`）+ `goto`（或直通），偏移沿用原指令字节；
      switch 的死目标改指向一个活目标，只剩一个活目标时同样改写为 `pop` + `goto`；
