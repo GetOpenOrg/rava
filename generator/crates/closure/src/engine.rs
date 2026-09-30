@@ -731,7 +731,7 @@ impl Ctx<'_> {
     /// 共置手写体按精确 Rust 名提供该成员（与发射侧 `_nf_covered` 同口径：mangle 名，或类内无重载时的裸名）
     fn provided(&self, cf: &ClassFile, name: &str, desc: &str) -> bool {
         let hw = self.hw.class(&cf.name);
-        if hw.fns.is_empty() {
+        if hw.fns.is_empty() || self.man.hw_dropped(&cf.name) {
             return false;
         }
         let (rust, mangled) = self.rust_names(cf, name, desc);

@@ -62,6 +62,8 @@ pub struct Manifest {
     boundary_pkgs: Vec<String>,
     vm_boundary: HashSet<String>,
     release: Vec<String>,
+    /// 模拟删除共置手写的放行条目（`rava closure --release-bytecode`）：前缀内按精确名提供的手写不再取手写
+    hw_dropped: Vec<String>,
     intrinsics: HashSet<String>,
     null_to_false: HashSet<String>,
     returns: HashMap<String, Fact>,
@@ -203,6 +205,7 @@ impl Manifest {
             boundary_pkgs: strings(&closure, "boundary", "packages"),
             vm_boundary: strings(&closure, "vm_boundary", "classes").into_iter().collect(),
             release,
+            hw_dropped: Vec::new(),
             intrinsics,
             null_to_false: strings(&vm, "vm_constants", "null_to_false").into_iter().collect(),
             returns,
@@ -225,15 +228,23 @@ impl Manifest {
         self.release.extend(entries);
     }
 
+    /// 放行并模拟删除前缀内的共置手写（`rava closure --release-bytecode`）：按精确名提供的手写方法改按字节码建模，
+    /// native 与 VM 内建不受影响——测手写删除后的真实闭包增量
+    pub fn release_bytecode(&mut self, entries: impl IntoIterator<Item = String>) {
+        for e in entries {
+            self.release.push(e.clone());
+            self.hw_dropped.push(e);
+        }
+    }
+
     /// 放行条目：包前缀（`/` 结尾）或类（含 `$` 嵌套类）
     fn released(&self, cls: &str) -> bool {
-        self.release.iter().any(|r| {
-            if r.ends_with('/') {
-                cls.starts_with(r.as_str())
-            } else {
-                cls == r || cls.strip_prefix(r.as_str()).is_some_and(|rest| rest.starts_with('$'))
-            }
-        })
+        self.release.iter().any(|r| entry_matches(r, cls))
+    }
+
+    /// 该类的共置手写在分析期视为已删除（`--release-bytecode`）
+    pub fn hw_dropped(&self, cls: &str) -> bool {
+        self.hw_dropped.iter().any(|r| entry_matches(r, cls))
     }
 
     /// 类的分析域（`user` = 类来自用户输入）
@@ -329,5 +340,14 @@ impl Manifest {
     /// 引导方法（`类.方法`）的分类；未登记 = 按普通静态调用分析
     pub fn indy_kind(&self, bsm: &str) -> Option<IndyKind> {
         self.indy.get(bsm).copied()
+    }
+}
+
+/// 清单条目匹配：包前缀（`/` 结尾）或类（含 `$` 嵌套类）
+fn entry_matches(entry: &str, cls: &str) -> bool {
+    if entry.ends_with('/') {
+        cls.starts_with(entry)
+    } else {
+        cls == entry || cls.strip_prefix(entry).is_some_and(|rest| rest.starts_with('$'))
     }
 }

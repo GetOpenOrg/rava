@@ -222,9 +222,63 @@ ChineseRemainderTheorem / TestStreamBasic / TestRecordComponents / CollectorsDem
    `valueOf` / `equals` 按调用点）、G3 `[facts]` 增加 native 返回数组元素类型（`Class.getEnclosingMethod0` 等）；
    修正后对「待重测」行复测。
 2. 「无数据」行在全量 e2e 语料上重测（`rava closure --release` 批量）。
-3. `--release` 增加「忽略前缀内 provides」模式，复测放行行与 `sun/nio/cs`（§4.2）。
+3. ✅ `--release-bytecode`（放行且忽略前缀内同名手写）已实现，复测结果见 §6.6。
 4. 放行行的删除候选经用户逐项确认后，按 §五 第 3 步逐包实施并复测漏覆盖。`StreamDecoder` / `StreamEncoder`
    属过渡类（规范 §三），终态删除，随 `sun/nio/cs` 放行一起走。
+
+### 6.6 删除手写后复测（`--release-bytecode`）
+
+`rava closure --release-bytecode <前缀>`：放行前缀，且前缀内手写不再按精确名提供（`provides`）——模拟删除候选落地后的闭包。
+native 仍取手写。11 个前缀 × 8 例（2026-09-30）。「JVM 加载」= 新增类中出现在该例 `-Xlog:class+load` 全量记录里的比例
+（含启动期加载），衡量增量中有多少是 JVM 实际执行到的工作。
+
+| 前缀 | `--release` Δ类 | `--release-bytecode` Δ类 | 逐例 Δ类 | JVM 加载 | 漏覆盖 | 成因 |
+|---|---:|---:|---|---|---|---|
+| `sun/nio/cs/` | +27 | +460 | 14/14/14/361/13/15/14/15 | 小例 12–16/22；FileIOTest 152/364 | 1 → 0 | 见下 ① |
+| `jdk/internal/access/` | +0 | +141 | 26/26/26/23/26/14/0/0 | 20–22/26 | 1 → 1 | 见下 ② |
+| `jdk/internal/misc/` | −128 | +121 | 18/18/18/18/17/17/11/4 | 10–11/18 | 2 → 2 | 见下 ③ |
+| `sun/security/util/` | +3 | +86 | 0/…/0/86 | 11/86 | 0 | 见下 ④ |
+| `sun/invoke/util/` | +6 | +25 | 0/…/4/11/10 | 1–2/例 | 7 → 7 | `Wrapper` / `VerifyAccess` 按字节码的真实工作；漏覆盖为 MethodHandle 引导（运行模型替换） |
+| `jdk/internal/perf/` | +2 | +6 | 0/…/0/6 | 0/6 | 0 | 小 |
+| `jdk/internal/math/` | +0 | +2 | 0/0/2/0/0/0/3/1 | 2/6 | 1 → 0 | `MathUtils` 漏覆盖消失（`DoubleToDecimal` 按字节码） |
+| `jdk/internal/module/` | +1 | +1 | 同 `--release` | — | 0 | 无手写 provides |
+| `sun/text/` | +1 | +1 | 同 `--release` | — | 0 | 无手写 provides |
+| `sun/security/action/` | +0 | −39 | −10/−10/−10/−9/0/0/0/0 | — | 1 → 1 | 手写不透明返回导致的 `Character*` 过近似消失；`GetBooleanAction` 仍漏，待查 |
+| `sun/util/` | +37 | −213 | 0/0/0/0/13/0/0/−226 | — | 0 | 见下 ⑤ |
+
+成因：
+
+1. **`sun/nio/cs`**：小例 +14 是 `StreamEncoder` / `UTF_8` 按字节码走的 `ByteBuffer` / `CharBuffer` / `CharsetEncoder` 等，
+   大部分 JVM 实际加载——此前由手写（Charset 直连编解码）承担，被隐藏的真实工作。FileIOTest +361 来自
+   `Charset.defaultCharset` → `StandardCharsets.lookup` → `Class.newInstance`（按类名表反射实例化非内建字符集）
+   → `ReflectionFactory.newConstructorAccessor` → `MethodHandleAccessorFactory` → MethodHandle 体系；该路径在 rava 中按字节码执行
+   （`jdk/internal/reflect/` 已放行，同 `Field.get` / `Method.invoke` 管线），静态上不可排除（字符集名来自属性）。CollectorsDemo
+   基线已含这套管线，故只 +15——属一次性基础设施成本。另有 G2（`StringBuilder.append(Object)` → `ProtectionDomain.toString`）的少量噪声。
+   手写版本多出的 8 个类（`UTF_16*` / `UTF_32*` 等，JVM 未加载）在按字节码时消失。
+2. **`jdk/internal/access`**：`SharedSecrets.getJavaXxxAccess` 的字节码先 `ensureClassInitialized(目标类)` 再读静态字段，
+   把目标类的 `<clinit>` 拉入闭包；新增类 85% 为 JVM 实际加载。真实工作。
+3. **`jdk/internal/misc`**：`VM` / `InternalLock` / `Blocker` / `VirtualThreads` 按字节码；JVM 未加载的 7 个
+   （`ForkJoinPool`、`Blocker$ForkJoinPools`、`JavaUtilConcurrentFJPAccess` 等）来自 `Blocker.begin` 中
+   `currentCarrierThread() instanceof CarrierThread` 分支——分析器不知道平台线程永不是 `CarrierThread`。
+   与 `--release` 的 −128 对比：−128 是「放行但 VM 契约类仍取手写」口径；`--release-bytecode` 把 `Unsafe` 等 VM 契约类的非 native
+   方法也按字节码走，终态口径以 §6.4「部分放行」（5 个 VM 契约类的 native 手写）为准，二者之间的差距不影响判定。
+4. **`sun/security/util`**：`Debug.getInstance` 按字节码后，`Debug.println` → `formatCaller` → `StackWalker` 进入闭包；到达路径是
+   G1（`AccessibleObject.<clinit>` 的 `doPrivileged` 与 `ForkJoinPool` 工厂共用 `executePrivileged`）→ `AccessController.getContext`
+   → `AccessControlContext.optimize` → `Debug.println`（运行时 `debug == null`，不执行）。`TzdbZoneRulesProvider` 等来自 G2
+   （`println(Object)` 广播）。精度问题，G1/G2 修正后应基本消失。
+5. **`sun/util`**：CollectorsDemo −226。手写的返回对分析不透明、只能取 open(返回类型)，经 G2 广播放大；按字节码后精度提高。
+   移除的 256 类中 9 个是 JVM 加载的（`PublicMethods$Key`、`InfoFromMemberName`、`FinalReference`、`WeakHashMap$KeySet` 等），
+   已查的均来自 lambda 引导的 `revealDirect`（运行模型替换）、finalizer（VM 驱动）或 G1 路径，其余待逐个核对后才能判定无漏。
+
+结论：
+
+- 删除手写的真实代价显著高于 `--release` 口径（`sun/nio/cs` +460 vs +27，`jdk/internal/access` +141 vs +0），
+  但**超出部分大多是 JVM 实际执行的工作**（小例 60–85% 为 JVM 加载类）——此前被手写近似承担，不是分析器噪声。
+  §4.3 的预算（文件数 × 3）是按「手写保留」设计的精度告警线，不适用于删除口径；删除按规范 §三「过渡类终态 0」执行，
+  超出部分只追查精度问题（G1/G2 与 ③ 的线程类型判定），不据此保留手写。
+- 精度问题新增一项：**G4** 平台线程上 `instanceof CarrierThread` / 虚拟线程分支（`Blocker`、`VirtualThreads`）——
+  由清单事实声明「无虚拟线程载体」或按 `Thread.currentCarrierThread` 的返回事实收窄。
+- `sun/security/action`、`sun/util` 删除手写使闭包**变小**，是「手写对分析不透明」的直接证据（规范 §六）。
 
 ## 七、验收
 

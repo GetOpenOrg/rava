@@ -178,8 +178,8 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 | ✅ 已完成（679cd5d3） |
 | C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 | ✅ 已完成（41dc1d6d；手写层 syn 扫描随本阶段落地） |
 | C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 | ✅ 已完成（8596056b） |
-| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | 🔄 进行中：第 0 步 ✅ bfcb75d7、第 1 步 ✅ 32a789c6、第 2 步 ✅、第 3 步 ✅（CPA 实测否决，改为手写数组写入模型）、第 3b 步 ✅、第 4 步 ✅（反射目标可靠性）、耗时 ✅（CollectorsDemo 28 s → 2.7 s） |
-| C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | ⏳ 未开始（2026-09-29 用户确认方向，C1c 之后实施） |
+| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | ✅ 已完成（1e09a9a4）：第 0 步 bfcb75d7、第 1 步 32a789c6、第 2 步、第 3 步（CPA 实测否决，改为手写数组写入模型）、第 3b 步、第 4 步 97b0393c（反射目标可靠性）、耗时（CollectorsDemo 28 s → 2.7 s） |
+| C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | 🔄 进行中：第 1 步 ✅ 79480fa9（`--release` 34 前缀实测）；手写边界规范 ✅ 1c73648d（`docs/reference/handwritten-boundary.md`）；`--release-bytecode`（模拟删除手写）复测 ✅（计划 §6.6）；待：分析器精度缺口 G1–G4、全量语料重测、删除候选逐项确认与逐包实施 |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ⏳ 未开始（syn 解析手写层已在 C1 / C1c 第 0 步先行落地） |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 进行中（用户负责；folds v1 消费侧在 `claude/jolly-dijkstra-diftum`） |
 | C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 | ⏳ 未开始（删除 Python 机制须逐项确认） |
@@ -195,10 +195,8 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
   不是这些代码本身必须手写。精确分析落地后，截断的收益需要重新实测。
 - 手写的代价：语义要逐个复刻 JDK；对分析不可见（需要 syn 推断 `__set_` 接收者、人工声明 upcalls，
   TestRecordComponents 的 `getAccessor` 漏报即出于此）；JDK 升级要逐个核对；未手写即 panic 存根。
-- 手写终态范围（VM 契约层）：
-  1. `ACC_NATIVE` 方法（`Unsafe`、`Class` 元数据、`Thread` / monitor、文件与系统调用）；
-  2. VM 注入的状态与对象（类元数据表、反射对象构造，如 `getRecordComponents0`）；
-  3. 运行模型替换（lambda / indy 引导、MethodHandle）。
+- 手写终态范围与准入规则见 [手写边界规范](../reference/handwritten-boundary.md)（2026-09-30 修订：方法语义以字节码为准，
+  字节码无法表达才手写，性能替换不算；规模策略截断为过渡类，终态 0）。
 - 分析器口径（C1c 起执行）：`[vm_boundary]` 公开包类**按方法划分**：共置手写体按精确名提供的方法、native、VM 内建
   取手写效果，其余被调用到的方法按字节码建模（发射层同样翻译）。内部包前缀边界在 C1d 之前保持截断语义。
 - C1d 做法：在精确分析下把内部包边界前缀逐包放行（`sun/nio/cs`、`jdk/internal/util`、`sun/util` 等），量出每个包放行后

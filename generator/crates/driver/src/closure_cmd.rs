@@ -2,7 +2,8 @@
 //!
 //! 选项：`--jdk N | --java-home P`、`--runtime <runtime/java_runtime>`、`--main <类>`、
 //! `-o <closure.json>`、`--why <类 | 类.方法:描述符>`（可多次）、`--flows <方法标签片段>`（类型流诊断，可多次）、`--report <报告.md>`、
-//! `--release <包前缀/ | 类>`（分析期视同 `[release]` 放行，可多次；C1d 放行实测）。
+//! `--release <包前缀/ | 类>`（分析期视同 `[release]` 放行，可多次；C1d 放行实测）、
+//! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）。
 
 use std::path::{Path, PathBuf};
 
@@ -82,6 +83,7 @@ pub fn run(args: &Args) -> Result<(), String> {
     };
     let mut man = Manifest::load(&rt)?;
     man.release_more(multi("--release").into_iter().cloned());
+    man.release_bytecode(multi("--release-bytecode").into_iter().cloned());
     let hw = Handwritten::new(&rt);
     let h = Hierarchy::new(&cp);
     let input_desc = closure::Input {
