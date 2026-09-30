@@ -1077,6 +1077,12 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                         for m in visible_methods)
                     if _slot_filled:
                         continue
+                if ((_vm.access_flags & 0x0040) and _vinh_is_user
+                        and _vm_virt_in == short_cls(_vinh_sci.name)):
+                    # 祖先自身的桥只承载接口槽位（HuffmanTree.compareTo(Object) → Comparable）：
+                    # 祖先文件不发射桥（接口 impl 块经载体承载），叶子重发射会与继承的真实方法
+                    # 同名重复（E0201）——无类祖先槽位可填，跳过
+                    continue
                 _vm2 = _copy3.copy(_vm)
                 _vm2.class_name = ci.name
                 _vm2.virtual_in = _vm_virt_in
@@ -1097,12 +1103,7 @@ def _emit_superclass_virtual_inheritance(ci, registry, call_chain, stub_bodies,
                     # 重载判定可能漏计桥自身）；同名同参（仅返回不同，参数位 mangle 无法
                     # 区分）→ 沿 Iface_super_m 命名约定取唯一名，槽位名经 vtable_name 传递
                     _vb_base = _vm_bridge.name
-                    # 被桥接的真实方法（_vm）本身也重发射进本类（祖先声明、本类未覆盖——
-                    # HuffmanTree.compareTo(HuffmanTree) → HuffmanLeaf）时同样占用裸名：
-                    # 与本类可见方法同名一并视为重名（E0201 实证）
-                    _reemitted_same = (_vm.name == _vm_bridge.name
-                                       and _vm.descriptor != _vm_bridge.descriptor)
-                    if _reemitted_same or any(m.name == _vm_bridge.name for m in visible_methods):
+                    if any(m.name == _vm_bridge.name for m in visible_methods):
                         _same_params = any(
                             m.name == _vm_bridge.name
                             and _vinh_param_part(m.descriptor) == _vinh_param_part(_vm_bridge.descriptor)
