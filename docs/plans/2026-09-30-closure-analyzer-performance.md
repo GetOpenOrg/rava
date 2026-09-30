@@ -115,6 +115,59 @@
 
 **P2 结论与遗留**：保序前提下 DeepCopy user 351 → 130 s（基线受内存压力放大；对无压力的 150 s 级 user 仍降约 2.7×），但未达「与 Digester 同量级」。剩余热点仍是 E↔W 二部扇出上的无增量传播（`add_to` 调用 99.7 % 无增量）与站点重跑，需按 §4.3 的结构性改造（汇聚节点化 / SCC 序）才能再降一个量级，这要求把不变量放宽为「集合一致 + via 可变」，待决策。另记精度观察（未改）：DeepCopy 中单个 arraycopy 类手写站点的 W 入度约 6200 个数组，是潜在的不精确来源。
 
+### 4.5 结构性改造与后续（`closure-perf2`，2026-10-01；不变量为「集合一致」，`--diff` 四例全部 SAME）
+
+**口径**：机器 16 GB、swap 常驻约 9.6 GB 且有其它代理并行，墙钟与 RSS 抖动大（同一二进制 DeepCopy 墙钟 33–41 s、HelloWorld 0.24–2.4 s，后者 user 恒为 0.16–0.17 s，墙钟差是缺页 I/O）。
+因此：CPU 以 `/usr/bin/time -l` 的 **instructions retired** 为准（同一二进制重复跑差 < 1 %），内存以 **peak memory footprint** 为准（RSS 受换出影响偏小或偏大）；`closure_bench.sh` 表已加「峰值 footprint MB」列。
+基线 = `build/rava-base`（f86695ac，与 P2b 同逻辑）。
+
+| 步骤 | 提交 | HelloWorld 墙钟 | Digester 墙钟 | CollectorsDemo 墙钟 | DeepCopy 墙钟（user）| DeepCopy footprint | DeepCopy 指令数 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 基线 | f86695ac | 0.30 s | 6.65 s | 4.44 s | 169 s（146 s）| 2886 MB | 2535 G |
+| S1 Object 边环合并 | 60a1b85f | 1.16 s ¹ | 7.87 s | 5.21 s | 79.2 s（74.1 s）| 1919 MB | 1012 G |
+| dispatch_sites 按规范成员聚合 | a92ebced | 1.35 s ¹ | 7.78 s | 5.54 s | 78.7 s（68.9 s）| — | — |
+| 热路径去字符串（镜像 id 记忆、句柄写入判定免分配）| e55f3bd2 | 0.95 s ¹ | 6.37 s | 4.64 s | 56.6 s（53.4 s）| 1714 MB | 895 G |
+| 新接边收窄记忆（fmemo，64 MB 预算）| 1e162d0a | 0.24 s | 6.35 s | 4.66 s | 41–50 s（40–45 s）| 1.8–1.9 GB | ≈ 600 G |
+| 枢纽重放去重（hub_lsent / hub_ssent）| 82eb2889 | 0.72 s ¹ | 7.14 s | 5.02 s | 33.1 s（32.4 s）| 2279 MB | 483 G |
+| 观测：pushes_by_kind / hubs | bfa815b4 | 1.33 s ¹ | 5.56 s | 4.07 s | 31.8 s（31.3 s）| 2382 MB | 483 G |
+
+¹ user 0.16–0.17 s，墙钟差为内存压力下的缺页 I/O。
+
+- **S1 环合并**（`engine/scc.rs`）：只经 Object 过滤边构成的强连通分量在不动点处类型集必然相等，合并为代表节点（成员保留身份，钩子逐成员触发）。DeepCopy 21 轮检测合并 12.5 k 节点，E→W→E 大环消失，指令数 2535 G → 1012 G。
+- **fmemo**：新接非 Object 过滤边时，大源集合（≥ 64 元素）的整集合收窄按 (源代表, 过滤) 记忆，源集合元素数作版本号。命中 3.25 M / 未命中 0.22 M。不设上限时 footprint 到 3.2 GB，故按 64 MB 预算整表清空（DeepCopy 清空 20 次）。
+- **枢纽重放去重**：同一分析结果下，调用点换接子枢纽时继承的 lambda / 按调用点建模接收者是恒等重放，按 (偏移, 接收者) 记已送达。代价是记录 2.14 M + 16.5 M 条（约 150–200 MB），是 footprint 回升的主因，留给 P4 收紧（例如改为按枢纽父链判定而非逐接收者记录）。
+
+**DeepCopy 现状剖析**（82eb2889 / bfa815b4）：
+
+- 分阶段：flows 15.7–16.3 s、sites 11.0 s、process 3.4 s、analyze 1.2 s。
+- `add_to` 5.45 亿次，其中 1580 万次有增量。
+- 推送按边种类（次数 / 有增量）：S→HP 211 M / 0.49 M，W→E 110 M / 85 k，P→HP 66 M / 263 k，HP→P 35 M / 919 k，O→S 28 M / 540 k，E→W 16 M / 47 k。
+- S→HP 边 38.3 万条，平均每条边被推约 450 次：源节点的集合在「处理一个方法 → 排空传播」的交替中被零碎增量反复推送，枢纽代数不是主因（11.6 k 枢纽、1.1 M 调用点接入、单调用点最多 244 次）。
+- 另有约 3 s 耗在内存压力下从 jmod 读类（`Archive::read_class` 阻塞），属环境因素，P6 缓存后消失。
+
+**试过未采用**：
+
+1. **拓扑序工作表**：`fwork` 改为按凝聚图拓扑序号出队（每轮环检测重算）。推送 −13 %，指令数 483 G → 473 G（−2 %），额外开销是堆与每节点 4 字节。收益不值，未提交。
+2. **换接后代枢纽时摘除直连祖先枢纽的冗余边**：可证健全，可达关系与过滤类型不变。实测只摘 2.8 万条，推送与指令数无变化，说明 S→HP 冗余不来自枢纽链。未提交。
+3. **批量排空（每处理 64 个方法 / 站点排空一次传播）**：DeepCopy 指令数 483 G → 421 G（−13 %），flows 16.1 → 11.7 s，`add_to` 次数减半。但 **CollectorsDemo 集合不一致**：类 1166 → 1155，方法 8010 → 7941，丢了 `Class.newInstance` 及反射构造一族。
+   - 原因是现有引擎存在**依赖处理顺序的非单调判定**。`CalendarSystem.forName@78`（`Class.forName(names.get(name))`）按名取类时，`class_lookup` 返回 `Some` 就不接 `R(Class.forName)` → 结果的边，返回 `None` 就接边，而边一经接上永不撤回。
+   - 基线顺序下该站点某次求值走了 `None` 路径，边留了下来，@81 `newInstance` 有接收者；批量顺序下每次求值都走 `Some`，@81 判为 `null_recv`。
+   - 所以基线结果本身是处理历史的产物，不是良定义的不动点。批量排空要落地，先得把这类判定改成单调：「`Some` → `None`」时接边，「`None` → `Some`」不撤边且对称处理，或者按名结果与常规返回值取并集。这会改变集合结果，属精度线的职责，待决策。
+   - 同理，任何改变方法 / 站点处理次序的改造（按调用图 SCC 排序、失效合并批处理）都可能触发它。
+
+**终态差距**：
+- DeepCopy 墙钟约 32 s（目标 ≤ 10 s）。
+- DeepCopy footprint 约 2.3 GB（目标 ≤ 1 GB）；Digester / CollectorsDemo footprint 0.69–0.94 GB，已达标。
+- HelloWorld user 0.16 s，达标。
+- 下一步收益最大的是批量排空（先解决上述顺序依赖）；其次是 W→E 扇出（手写 arraycopy 类站点 W 节点入度 2608，约 3110 个数组进入约 1800 个手写站点）和 P4 的去重记录 / fmemo 内存。
+
+**精度观察**（只记录，未改）：
+- `ConcurrentHashMap.put` P1 入度 11 796、出度 11 079。
+- arraycopy 类手写站点把全部逃逸数组两两相连（W 入度 2608）。
+- `CalendarSystem.forName` 的按名查找结果依赖求值次序（见上）。
+
+**生成器与顺序**：Python 与 Rust 生成器在 TestHashMapOps / TestStreamBasic / TestCompletableFuture / TestSwitchString 上对照 S1 前后的生成树不变，条目顺序变化不影响生成。
+
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 
 - Linux：`ulimit -v`、`prlimit --as=`、`systemd-run --scope -p MemoryMax=4G`、容器 `--memory`；
