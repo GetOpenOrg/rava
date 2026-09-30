@@ -33,7 +33,12 @@ impl UnixFileSystem {
     /// BA_DIRECTORY(4)；不存在返回 0。JDK 用 stat（跟随符号链接）。
     #[jvm_native]
     pub fn getBooleanAttributes0(&self, f: File) -> Result<i32> {
-        let Ok(md) = std::fs::metadata(file_path(&f)) else { return Ok(0) };
+        // 嵌入资源（伪 java.home 下的 JDK 数据文件）视为存在的普通文件（FileInputStream.open0 同一判定）
+        let path = file_path(&f);
+        if path.starts_with(crate::jdk_resources::JAVA_RUNTIME_HOME) && crate::jdk_resources::lookup(&path).is_some() {
+            return Ok(FileSystem::BA_EXISTS()? | FileSystem::BA_REGULAR()?);
+        }
+        let Ok(md) = std::fs::metadata(path) else { return Ok(0) };
         let mut attrs = FileSystem::BA_EXISTS()?;
         let ft = md.file_type();
         if ft.is_file() {

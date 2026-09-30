@@ -18,6 +18,7 @@ crate::__process_static! {
     static JAVA_LANG_REFLECT_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_UTIL_COLLECTION_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
     static JAVA_UTIL_CONCURRENT_FJP_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JAVA_SECURITY_PROPERTIES_ACCESS: RefCell<Option<Object>> = const { RefCell::new(None) };
 }
 
 impl SharedSecrets {
@@ -118,6 +119,13 @@ impl SharedSecrets {
     /// `ForkJoinPool.<clinit>` 登记的 FJP 访问器（容器/配置查询，供
     /// serviceability 与虚拟线程层消费）。当前闭包内无读取方
     /// （getJavaUtilConcurrentFJPAccess 未被触达）——按 JDK 形态存储即可。
+    /// `Security.<clinit>` 登记的 `JavaSecurityPropertiesAccess`（Security$1：getInitialProperties）。
+    #[jvm_boundary]
+    pub fn setJavaSecurityPropertiesAccess(a: impl Into<Object>) -> Result<()> {
+        JAVA_SECURITY_PROPERTIES_ACCESS.with(|slot| *slot.borrow_mut() = Some(a.into()));
+        Ok(())
+    }
+
     #[jvm_boundary]
     pub fn setJavaUtilConcurrentFJPAccess(a: impl Into<Object>) -> Result<()> {
         JAVA_UTIL_CONCURRENT_FJP_ACCESS.with(|slot| *slot.borrow_mut() = Some(a.into()));
