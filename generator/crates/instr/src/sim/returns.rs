@@ -4,6 +4,7 @@
 //! 祖先另一实例化的 Object 边界重建）；判定与 Python 同口径作用于类型渲染文本。
 
 use classfile::Insn;
+use ir::anchors::OBJECT;
 use ir::{Expr, FnPath, Lit, Path, Stmt};
 use sim::exprs::{clone_plain, default_value, from_call, into_call, object_from, object_type, qualified_from};
 use sim::StackSim;
@@ -69,12 +70,12 @@ fn areturn_value(env: &InstrEnv, sim: &StackSim, e: Expr, actual: &RsType) -> In
     let returns_this = text(env, &e) == "this" && !sim.cfg.is_static;
     let cur = if returns_this { clone_plain(var("this")?)? } else { str_leaf(e) };
     let carrier_ret = env.ctx.ty.carrier_type_for_ident(ret);
-    let is_obj = |s: &str| s == "Object";
+    let is_obj = |s: &str| s == OBJECT;
     if returns_this && ctps.contains(&ret_s) {
         // 声明返回类型变量（`return (S) this`）：经 Object 边界取回（宏补 From<Object> bound）
         return Ok(from_call(to_object(env, cur, actual, false)?)?);
     }
-    if returns_this && is_obj(&ret_s) && !matches!(act_s.as_str(), "Object" | "()") {
+    if returns_this && is_obj(&ret_s) && !matches!(act_s.as_str(), OBJECT | "()") {
         // 声明返回 Object / 接口：身份保持的向上转型
         return to_object(env, cur, actual, false);
     }
@@ -105,7 +106,7 @@ fn areturn_value(env: &InstrEnv, sim: &StackSim, e: Expr, actual: &RsType) -> In
         // 返回类型就是本类（同形态）：this 的克隆即返回值
         return Ok(cur);
     }
-    if is_obj(&ret_s) && !matches!(act_s.as_str(), "Object" | "()") {
+    if is_obj(&ret_s) && !matches!(act_s.as_str(), OBJECT | "()") {
         return to_object(env, cur, actual, true);
     }
     if !is_obj(&ret_s) && is_obj(&act_s) {
@@ -191,7 +192,7 @@ fn downcast_target_valid(env: &InstrEnv, sim: &StackSim, t: &RsType) -> bool {
     names.iter().all(|n| {
         sim.cfg.class_type_params.iter().any(|p| p == n)
             || builtin.iter().any(|b| b == n)
-            || matches!(*n, "Object" | "Rc" | "__Shared" | "Vec" | "RefCell" | "Option")
+            || matches!(*n, OBJECT | "Rc" | "__Shared" | "Vec" | "RefCell" | "Option")
             || is_prim_text(n)
             || env.ctx.reg().iter().any(|ci| !ci.is_interface() && env.ctx.short(ci.name()) == *n)
     })

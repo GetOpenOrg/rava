@@ -6,6 +6,7 @@
 //! 这里同样以 [`ir::Raw`] 承载（文本逐字一致），Python 已节点化的形态以节点构造。
 
 use classfile::{Insn, Operand};
+use ir::anchors::OBJECT;
 use ir::{Expr, Ident, Raw, Stmt};
 use sim::exprs::{clone_ref, from_call, object_from};
 use sim::{StackEntry, StackSim};
@@ -265,7 +266,7 @@ fn aastore(env: &InstrEnv, sim: &mut StackSim) -> InstrResult<()> {
     let val_s = ty_text(env, &val.ty);
     if is_object_receiver(&arr.ty) {
         // 擦除为 Object 的数组接收者：值统一装箱后经 array_store_object 转发（按源元素类型做存储检查）
-        let v = if matches!(val_s.as_str(), "Object" | "()") { val.expr } else { to_object(env, val.expr, &val.ty, true)? };
+        let v = if matches!(val_s.as_str(), OBJECT | "()") { val.expr } else { to_object(env, val.expr, &val.ty, true)? };
         return emit_call(sim, arr.expr, "array_store_object", idx, v);
     }
     let elem = elem_of(&arr.ty);
@@ -278,9 +279,9 @@ fn aastore(env: &InstrEnv, sim: &mut StackSim) -> InstrResult<()> {
         }
     }
     let val_s = ty_text(env, &val_ty);
-    let v = if elem_s == "Object" && !matches!(val_s.as_str(), "Object" | "()") {
+    let v = if elem_s == OBJECT && !matches!(val_s.as_str(), OBJECT | "()") {
         to_object(env, val.expr, &val_ty, true)?
-    } else if elem_s != "Object" && val_s == "Object" {
+    } else if elem_s != OBJECT && val_s == OBJECT {
         // 元素静态类型比值更具体（checkcast 被验证器省略的位置）：按对象标识还原
         from_call(clone_ref(val.expr)?)?
     } else if !sim::types::is_scalar(&val_ty) {

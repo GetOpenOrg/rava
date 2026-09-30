@@ -38,6 +38,9 @@ pub const PORTED_OPS: &[&str] = &[
     "checkcast", "instanceof",
     // dynamic
     "invokedynamic", "monitorenter", "monitorexit", "nop", "wide", "athrow",
+    // invoke / fields
+    "new", "invokespecial", "invokestatic", "invokevirtual", "invokeinterface",
+    "getfield", "putfield", "getstatic", "putstatic",
     // 折叠点
     "fold_const", "fold",
 ];
@@ -46,37 +49,9 @@ pub const PORTED_OPS: &[&str] = &[
 /// 命中计数按「该规则改变了任一侧某行」统计
 pub type LayoutRule = (&'static str, &'static str, fn(&str) -> String);
 
-pub const LAYOUT_RULES: &[LayoutRule] = &[(
-    "float-int-literal",
-    "fconst / dconst 的浮点字面量：Python `Lit(f\"{n}f64\")` 发射 `0f64`，Rust `FloatLit` 渲染为 `0.0f64`（同值同类型）",
-    float_int_literal,
-)];
-
-/// `0f64` / `12f32` → `0.0f64` / `12.0f32`（仅整数位后直接跟 `f32` / `f64` 且前后为词边界的记号）
-fn float_int_literal(line: &str) -> String {
-    let b = line.as_bytes();
-    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    let mut out = String::with_capacity(line.len() + 4);
-    let mut i = 0;
-    while i < b.len() {
-        let starts = b[i].is_ascii_digit() && (i == 0 || !(word(b[i - 1]) || b[i - 1] == b'.'));
-        if starts {
-            let j = (i..b.len()).find(|&j| !b[j].is_ascii_digit()).unwrap_or(b.len());
-            let suffix = &line[j..];
-            let is_float = (suffix.starts_with("f32") || suffix.starts_with("f64")) && b.get(j + 3).is_none_or(|&c| !word(c));
-            out.push_str(&line[i..j]);
-            if is_float {
-                out.push_str(".0");
-            }
-            i = j;
-            continue;
-        }
-        let ch = line[i..].chars().next().unwrap_or(' ');
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    out
-}
+/// 当前为空：fconst / dconst 已按 Python 的整数记号发射（`0f64`），无残余版式差异。
+/// 新的纯版式差异须在此登记并同步 `GOLDEN_DIFF.md`
+pub const LAYOUT_RULES: &[LayoutRule] = &[];
 
 #[derive(Default, Clone, Copy)]
 pub struct Counts {

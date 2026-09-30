@@ -280,7 +280,7 @@ fn emit_ret(env: &InstrEnv, sim: &mut StackSim, call_e: Expr, rust_ret: RsType, 
             Some(s) => {
                 // 签名真实返回类型装箱（S-3.1）：身份保持的 Object 上转
                 let leaf = Expr::Raw(Raw(text(env, &call_e)));
-                let boxed = coerce::to_object(env, leaf, &s, false)?;
+                let boxed = coerce::to_object(env, leaf, &s, true)?;
                 sim.emit(raw_stmt(format!("let {v} = {};", text(env, &boxed))));
             }
             None => typed(sim, call_e)?,

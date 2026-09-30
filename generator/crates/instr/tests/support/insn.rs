@@ -67,7 +67,9 @@ fn real_insn(env: &Env, rec: &Value, off: u32, op: &str) -> Option<(Insn, String
         }
         let Some(ci) = env.reg.get(&c) else { continue };
         let code = ci.class_file().methods.iter().find(|x| x.name == m && x.desc == d).and_then(|x| x.code.as_ref());
-        if let Some(i) = code.and_then(|code| code.insns.iter().find(|i| i.offset == off && i.name() == op)) {
+        let comment = rec["ins"]["comment"].as_str();
+        let hit = |i: &&Insn| i.offset == off && i.name() == op && member_matches(i, comment);
+        if let Some(i) = code.and_then(|code| code.insns.iter().find(hit)) {
             return Some((i.clone(), c));
         }
         if !ci.super_class().is_empty() {
@@ -76,6 +78,19 @@ fn real_insn(env: &Env, rec: &Value, off: u32, op: &str) -> Option<(Insn, String
         queue.extend(ci.interfaces().iter().cloned());
     }
     None
+}
+
+/// 成员引用指令与视图注释（`Method owner.name:desc`，本类成员省略 owner）一致；
+/// 同偏移同操作码的祖先 / 接口方法体只凭成员引用区分
+fn member_matches(i: &Insn, comment: Option<&str>) -> bool {
+    let (Operand::Field(m) | Operand::Method(m, _)) = &i.operand else {
+        return true;
+    };
+    let Some(target) = comment.and_then(|c| c.split_once(' ')).map(|(_, t)| t) else {
+        return true;
+    };
+    let full = m.to_string();
+    target == full || target == format!("{}:{}", m.name, m.desc)
 }
 
 fn opcode_of(name: &str) -> Option<u8> {

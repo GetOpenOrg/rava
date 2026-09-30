@@ -5,6 +5,7 @@
 //! 同样作用于 [`ty_text`] 文本（与 Python 同口径），发射一律为结构节点。
 
 use classfile::{Insn, Operand};
+use ir::anchors::OBJECT;
 use ir::{CastExpr, CastMode, Expr, Lit, Raw};
 use sim::StackSim;
 use ty::{consts, Prim, RsType};
@@ -143,7 +144,7 @@ fn replace_type(t: &RsType, from: &RsType, to: &RsType) -> RsType {
 }
 
 fn is_object_or_unit(s: &str) -> bool {
-    s == "Object" || s == "()"
+    s == OBJECT || s == "()"
 }
 
 fn checkcast(env: &InstrEnv, sim: &mut StackSim, comment: &str) -> InstrResult<()> {
@@ -158,27 +159,27 @@ fn checkcast(env: &InstrEnv, sim: &mut StackSim, comment: &str) -> InstrResult<(
     let tgt_ci = if comment.starts_with('[') { None } else { env.ctx.reg().get(comment) };
     // A-4 批次 1：checkcast 到未载体化的接口（目标擦除为 Object）→ try_cast_iface，
     // 栈类型保持擦除记录 Object
-    if src_name == "Object" && tgt_ci.is_some_and(|ci| ci.is_interface()) && env.ctx.ty.carrier_type(comment).is_none() {
+    if src_name == OBJECT && tgt_ci.is_some_and(|ci| ci.is_interface()) && env.ctx.ty.carrier_type(comment).is_none() {
         let target = ir_ty(env, &RsType::Object)?;
         let mode = CastMode::CheckedInterface { binary: comment.to_string() };
         sim.push(Expr::CheckCast(CastExpr { expr: Box::new(expr), target, mode, box_first: false }), RsType::Object);
         return Ok(());
     }
-    if src_name == "Object" && !is_object_or_unit(&cast_s) {
+    if src_name == OBJECT && !is_object_or_unit(&cast_s) {
         // 源是 Object（擦除边界）：checkcast 语义由 try_cast 按序判定
         expr = cast_node(expr, ir_ty(env, &cast_rust)?, comment, true, false);
-    } else if src_name != "Object" && !is_object_or_unit(&cast_s) && cast_s != src_name
+    } else if src_name != OBJECT && !is_object_or_unit(&cast_s) && cast_s != src_name
         && erased_shape(&src_name) == erased_shape(&cast_s)
     {
         // 同一擦除类型、仅类型实参不同：值不变；源侧待推断的 `_` 由目标类型给出
         let t = if words(&src_name).contains(&"_") { cast_rust } else { src_ty };
         sim.push(expr, t);
         return Ok(());
-    } else if src_name != "Object" && !is_object_or_unit(&cast_s) && bound_matches(env, sim, &src_name, &cast_rust) {
+    } else if src_name != OBJECT && !is_object_or_unit(&cast_s) && bound_matches(env, sim, &src_name, &cast_rust) {
         // 类型变量值转型到其上界的擦除类：恒成立，值与静态类型都不变
         sim.push(expr, src_ty);
         return Ok(());
-    } else if src_name != "Object" && !is_object_or_unit(&cast_s) && cast_s != src_name {
+    } else if src_name != OBJECT && !is_object_or_unit(&cast_s) && cast_s != src_name {
         if is_subtype(&env.ctx, &erased_base_ty(&cast_rust), &erased_base_ty(&src_ty)) {
             // 合法向下转型：经 Object 边界按目标类取回子类视图（失败 Err，S-1）
             expr = cast_node(expr, ir_ty(env, &cast_rust)?, comment, true, true);
@@ -188,7 +189,7 @@ fn checkcast(env: &InstrEnv, sim: &mut StackSim, comment: &str) -> InstrResult<(
             expr = cast_node(boxed, ir_ty(env, &cast_rust)?, comment, true, false);
         }
     }
-    if cast_s == "Object" && !is_object_or_unit(&src_name) {
+    if cast_s == OBJECT && !is_object_or_unit(&src_name) {
         // 目标擦除为 Object 而值有更精确的静态类型：记录源类型；源是具体类且静态上并未
         // 实现目标接口（交叉转型）→ 接口视图只能经对象身份取得 → 装箱为 Object
         let src_base = erased_base_ty(&src_ty);
@@ -228,7 +229,7 @@ fn instanceof(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, comment: &
     };
     let target_rust = operand_type(env, comment);
     // jvm_to_rust 对未载体化接口返回 Object；子类型判定需要接口的 Rust 短名
-    let target = if ty_text(env, &target_rust) == "Object" && !comment.starts_with('[') && comment != consts::OBJECT {
+    let target = if ty_text(env, &target_rust) == OBJECT && !comment.starts_with('[') && comment != consts::OBJECT {
         RsType::class(comment, Vec::new())
     } else {
         target_rust
@@ -236,7 +237,7 @@ fn instanceof(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, comment: &
     let obj_s = ty_text(env, &val.ty);
     let (obj_base, tgt_base) = (erased_base_ty(&val.ty), erased_base_ty(&target));
     let runtime = |sim: &mut StackSim, e: Expr| sim.push(Expr::InstanceOf { expr: Box::new(e), binary: comment.to_string() }, RsType::Prim(Prim::Bool));
-    if obj_s == "Object" {
+    if obj_s == OBJECT {
         // 运行时多态：ObjectVTable 按运行时类的继承链判定
         runtime(sim, val.expr);
     } else if obj_s == ty_text(env, &target) || is_subtype(&env.ctx, &obj_base, &tgt_base) {
