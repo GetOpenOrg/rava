@@ -59,6 +59,7 @@ mod methods;
 mod worklist;
 mod stats;
 mod graph;
+mod grow;
 pub mod cut;
 
 use graph::FlowGraph;
@@ -536,82 +537,4 @@ pub struct Engine<'a> {
     snake_index: Option<HashMap<String, String>>,
     /// 清单种子状态与输出
     pub seeds: SeedState,
-}
-
-impl<'a> Engine<'a> {
-    /// 接收者对应的克隆上下文
-    fn ctx_of(&self, r: u32) -> u32 {
-        if self.objs.contains_key(&r) {
-            r
-        } else {
-            NOCTX
-        }
-    }
-
-    fn on_g_grow(&mut self, id: u32) {
-        let ts: Vec<u32> = self.g_sub.keys().copied().collect();
-        for t in ts {
-            if self.sub(id, t) {
-                // 有序插入
-                let v = self.g_sub.get_mut(&t).unwrap();
-                if let Err(i) = v.binary_search(&id) {
-                    v.insert(i, id);
-                }
-            }
-        }
-        self.hubs_grow(id);
-        self.reopen(id);
-        let pend: Vec<(usize, Vec<String>)> = self.pending_catch.iter().map(|(k, v)| (*k, v.clone())).collect();
-        for (m, tys) in pend {
-            let hit = tys.iter().any(|t| {
-                let tid = self.id(t);
-                self.sub(id, tid)
-            });
-            if hit {
-                self.pending_catch.remove(&m);
-                let had = self.methods[m].analysis.take().is_some();
-                self.ctx.stats.borrow_mut().invalidated(m, Why::Catch, had);
-                self.push_m(m);
-            }
-        }
-    }
-
-    /// open 展开的取值面扩大（G 增长 / 数组逃逸）：x 落在其 open 类型与接收者上界之下的方法与站点重跑
-    fn reopen(&mut self, x: u32) {
-        let keys: Vec<(u32, u32)> =
-            self.open_methods.keys().chain(self.open_sites.keys()).chain(self.open_calls.keys()).copied().collect();
-        let hit: HashSet<(u32, u32)> = keys.into_iter().filter(|&(o, owner)| self.sub(x, o) && self.sub(x, owner)).collect();
-        let mut open: BTreeSet<usize> = BTreeSet::new();
-        let mut sites: BTreeSet<(usize, u32)> = BTreeSet::new();
-        for (k, ms) in &self.open_methods {
-            if hit.contains(k) {
-                open.extend(ms.iter().copied());
-            }
-        }
-        for (k, ws) in &self.open_sites {
-            if hit.contains(k) {
-                sites.extend(ws.iter().copied());
-            }
-        }
-        let mut calls: BTreeSet<u32> = BTreeSet::new();
-        for (k, cs) in &self.open_calls {
-            if hit.contains(k) {
-                calls.extend(cs.iter().copied());
-            }
-        }
-        for c in calls {
-            if self.in_cwork.insert(c) {
-                self.cwork.push_back(c);
-            }
-        }
-        for m in open {
-            self.push_m(m);
-        }
-        for w in sites {
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
-        }
-    }
-
 }
