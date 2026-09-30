@@ -487,7 +487,18 @@ impl<'a> Engine<'a> {
 
     /// 调用点上下文：以调用点命名的堆上下文（不是对象，不进入值集），克隆体内的容器分配以它为链首
     pub(super) fn site_ctx(&mut self, m: usize, off: u32) -> u32 {
-        let chain = format!("@{}:{off}", self.mbase[&self.methods[m].key]);
+        self.site_ctx_in(m, off, NOCTX)
+    }
+
+    /// 调用点上下文，链尾接外层上下文 outer 的链（截断到 HEAP_DEPTH；outer = NOCTX 即 `site_ctx`）
+    pub(super) fn site_ctx_in(&mut self, m: usize, off: u32, outer: u32) -> u32 {
+        let mut chain = format!("@{}:{off}", self.mbase[&self.methods[m].key]);
+        if outer != NOCTX {
+            for seg in self.obj_chain.get(&outer).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).take(HEAP_DEPTH - 1) {
+                chain.push('#');
+                chain.push_str(seg);
+            }
+        }
         if let Some(&id) = self.ids.get(chain.as_str()) {
             return id;
         }

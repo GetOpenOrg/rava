@@ -61,6 +61,8 @@ pub enum V {
     Int(i32),
     /// 奇偶已知的 int（true = 奇）：数组下标奇偶敏感（键值交错数组等）
     Par(bool),
+    /// 值未知、但恒等于入口处 int 族形参 i 的值（只经复制保持；参与运算 / 合流即为 Top）：判定形参是否选择分支
+    Arg(u16),
     Long(i64),
     Null,
     /// 引用：静态类型（binary name 或数组描述符）+ 是否确定非空 + 来源集合 + 对象身份标签（见 [`Obj`]）
@@ -164,7 +166,10 @@ fn value_of(ft: &FieldType, s: Src) -> V {
     if ft.is_reference() {
         V::Ref { ty: Some(ft_name(ft)), nonnull: false, src: src1(s), obj: None }
     } else {
-        V::Top
+        match (ft, s) {
+            (FieldType::Prim(b'B' | b'C' | b'I' | b'S' | b'Z'), Src::Param(i)) => V::Arg(i),
+            _ => V::Top,
+        }
     }
 }
 
@@ -263,6 +268,8 @@ pub struct Analysis {
     pub conservative: bool,
     /// 基本块控制流图（拼接链拆段的循环判定用）
     pub cfg: Rc<cfg::Cfg>,
+    /// 值未知时直接作 switch 键 / 条件跳转操作数的 int 族形参（按形参序号的位掩码，≥ 64 不计）
+    pub selector_params: u64,
 }
 
 impl Analysis {
@@ -333,11 +340,21 @@ struct Interp<'a, O: Oracle> {
     emit: Option<&'a mut Vec<(u32, Event)>>,
     /// 已作出的「形参不是该类镜像」乐观答复
     assumed: Vec<(u16, String)>,
+    /// 见 [`Analysis::selector_params`]
+    selects: u64,
 }
 
 impl<O: Oracle> Interp<'_, O> {
     /// 引用相等（if_acmp）：null 性已知；两个类字面量（同名即同一镜像）；类字面量与只来自一个 Class 形参的值——
     /// 形参值集不含该类镜像时不等（记为乐观答复）
+    fn select(&mut self, v: &V) {
+        if let V::Arg(i) = v {
+            if *i < 64 {
+                self.selects |= 1 << i;
+            }
+        }
+    }
+
     fn ref_eq(&mut self, a: &V, b: &V) -> Option<bool> {
         match (a.nonnull(), b.nonnull()) {
             (Some(false), Some(false)) => return Some(true),
@@ -711,6 +728,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
             }
             0x99..=0x9e => {
                 let a = pop(s)?;
+                self.select(&a);
                 let Operand::Branch(t) = ins.operand else { return Err(()) };
                 let k = if let V::Int(a) = a { Some(cond(opc, a, 0)) } else { None };
                 return Ok(Flow::Cond(t, k));
@@ -718,6 +736,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
             0x9f..=0xa4 => {
                 let b = pop(s)?;
                 let a = pop(s)?;
+                self.select(&a);
+                self.select(&b);
                 let Operand::Branch(t) = ins.operand else { return Err(()) };
                 let k = match (a, b) {
                     (V::Int(a), V::Int(b)) => Some(cond(opc, a, b)),
@@ -739,6 +759,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
             op::JSR | op::RET | op::JSR_W => return Err(()),
             op::TABLESWITCH | op::LOOKUPSWITCH => {
                 let key = pop(s)?;
+                self.select(&key);
                 let (default, cases): (u32, Vec<(i32, u32)>) = match &ins.operand {
                     Operand::TableSwitch { default, low, targets, .. } => {
                         (*default, targets.iter().enumerate().map(|(i, t)| (low + i as i32, *t)).collect())
@@ -972,7 +993,7 @@ fn conservative(code: &Code) -> Analysis {
         events.push((h.handler, Event::Catch(h.catch_type.clone())));
     }
     events.sort_by_key(|e| e.0);
-    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], conservative: true, cfg: Rc::new(cfg::Cfg::build(code)) }
+    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], conservative: true, cfg: Rc::new(cfg::Cfg::build(code)), selector_params: 0 }
 }
 
 /// 分析一个方法体
@@ -1031,7 +1052,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         })
         .collect();
     let mut hlocals: Vec<Option<Vec<V>>> = vec![None; code.exception_table.len()];
-    let mut interp = Interp { oracle, emit: None, assumed: vec![] };
+    let mut interp = Interp { oracle, emit: None, assumed: vec![], selects: 0 };
 
     let merge = |entry: &mut BTreeMap<usize, State>, work: &mut Vec<usize>, i: usize, st: &State| -> Option<()> {
         match entry.get_mut(&i) {
@@ -1144,6 +1165,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         }
     }
     let mut mirror_assumed = std::mem::take(&mut interp.assumed);
+    let selector_params = interp.selects;
     drop(interp);
     mirror_assumed.sort();
     let mut pending_types: Vec<String> = insns
@@ -1168,7 +1190,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
     events.sort_by_key(|e| e.0);
     pending_types.sort();
     pending_types.dedup();
-    Some(Analysis { reachable, events, pending_types, mirror_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)) })
+    Some(Analysis { reachable, events, pending_types, mirror_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params })
 }
 
 fn targets_empty(o: &Operand) -> bool {

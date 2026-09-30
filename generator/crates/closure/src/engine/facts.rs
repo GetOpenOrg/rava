@@ -66,6 +66,8 @@ pub(super) struct Ctx<'a> {
     pub(super) fields: RefCell<HashMap<MemberRef, Option<Rc<FieldInfo>>>>,
     /// 进行中的记忆化计算（递归保护与截断记录，见 `memo.rs`）
     pub(super) guards: RefCell<super::memo::Guards>,
+    /// 选择子形参缓存（见 `selector.rs`）
+    pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
     /// 字节码方法的返回常量（缺席 = 尚无返回路径）

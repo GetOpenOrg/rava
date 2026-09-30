@@ -820,6 +820,31 @@ VarHandle 适配一族、`VarHandleByteArrayAs*`、`IndirectVarHandle`、`Native
 DeepCopy 辅助分析次数 45635 → 53640（带截断的帧不记忆、重算），总耗时 13.6 s。
 顺序矩阵（`--flow-batch 1 / 64` × `--hash-seed 0 / 12345`）：DeepCopy、HelloWorld、CollectorsDemo、MH Combinators 类集与方法集四组一致。
 
+**项 9 候选：`createFunction` 按调用点常量克隆 → 落为「选择子形参的调用点上下文」（`engine/selector.rs`）**。`--why VarHandle$AccessDescriptor`（MH Direct）：
+`ldc @ Invokers.createFunction:(B)@142 ← getFunction:(B)@17 ← invokeHandleForm@500`——`createFunction` 对 byte 形参 tableswitch 0–6，
+各调用点传的编号不同，形参常量在共享节点汇合为 Top 后 VH 分支（case 2、4–6）都按可达处理。`MethodHandleImpl` / `DirectMethodHandle` 的
+`getFunction → createFunction` 同构。改为通用规则：
+- absint：int 族形参的入口值记为 `V::Arg(i)`（语义同 Top，只多一个来源标记，`PV::of` / 可导出 / 常量判定都按 Top）；直接作 switch 键或条件跳转操作数的
+  形参记入 `Analysis::selector_params`。
+- 选择子形参（`Ctx::selector_slots`）：静态字节码方法的上述形参，加上经 invokestatic 原样转给被调方选择子形参的形参（`getFunction` 转给 `createFunction`）。
+  用不读事实的 Oracle 分析，按成员记忆；递归走 `memo.rs` 帧规则（成环截断的答复不记忆），与处理次序无关。
+- 调用点（INVOKESTATIC，调用方为字节码）：选择子形参上传常量 → 被调方按调用点克隆，链尾接调用方上下文（`site_ctx_in`，截断到 HEAP_DEPTH）；
+  否则调用方已在上下文中时继承之（常量可能来自调用方克隆的形参常量）。优先于「返回基本类型 / void 不克隆」规则。
+  初版在调用方已有上下文时直接继承：MH Combinators 的 `invokeHandleForm` 在上下文中，其 @474 / @500 / @538 三个 `getFunction` 调用点的编号又汇合，
+  `AccessDescriptor` 仍在；改为链尾接调用方上下文后消失。
+- 单测 `selector::tests::{forwarding_maps_callee_slots_to_own_params, switch_on_param_marks_selector}`（虚构类名）。
+结果（类 / 方法 / 上下文，相对上一项）：DeepCopy 1597 / 9817 / 33686 → **1579 / 9669** / 30595、MH Combinators 1071 / 6809 / 15753 → **1069 / 6801** / 18192、
+MH Direct 1079 / 6824 / 15904 → **1070 / 6758** / 17878；其余 6 例类 / 方法不变，上下文 +2%–+10%（HelloWorld 867 → 901、Digester 17305 → 18728、
+CollectorsDemo 12577 → 13844）；无类 / 方法增加；9 例漏均为 0。MH 两例减少 `VarHandle$AccessDescriptor`、`CallSite`（Direct 另有 `Invokers$Lazy`、
+`MethodHandleImpl$CasesHolder` / `$LoopClauses`、`MethodHandle$1`、`ReduceOps$5` / `CountingSink` 一族）。
+DeepCopy 的 −18 类 / −148 方法来自条件跳转判据：临时插桩逐个跳过被调方的克隆（`SELSKIP`，未提交），只有跳过 `Arrays.fill([Object;IILObject;)V`
+时恢复为 1597 / 9817，跳过 `Formatter` / `BreakIterator` / `MethodType` / `Math` / `BigDecimal` / `Arrays.{sort, copyOf, spliterator, …}` 均不影响。
+`fill` 以 from / to 作循环判定，原先返回 void 按本体共享，`Collections$CopiesList.toArray` 填入的元素与 `ObjectInputStream$HandleTable.clear`
+等的数组汇合；按调用点克隆后各数组的元素流分开，减少的类为 `URLConnection` 一族（`FileURLConnection` / `JarURLConnection` / `JavaRuntimeURLConnection`、
+`ParseUtil`、`Proxy`、`FileNameMap`、`Collator`）与 `IdentityHashMap` / `WeakHashMap` / `ArrayList$SubList` / `Collections$2` / `RangeIntSpliterator` 等
+Spliterator。只用 switch 判据的对照：MH 两例收益相同、DeepCopy 无收益且上下文 34107，故保留条件跳转判据。
+耗时：DeepCopy 13.6 s → 6.8 s（上下文减少），其余持平。顺序矩阵：HelloWorld、CollectorsDemo、DeepCopy、MH Combinators 四组一致。
+
 ## 七、验收
 
 - §一 终态表各项达标。

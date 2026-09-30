@@ -15,6 +15,7 @@ impl<'a> Engine<'a> {
                 calls: Default::default(),
                 fields: Default::default(),
                 guards: RefCell::new(memo::Guards::new()),
+                selectors: Default::default(),
                 fvals: Default::default(),
                 rvals: Default::default(),
                 fopen: Default::default(),

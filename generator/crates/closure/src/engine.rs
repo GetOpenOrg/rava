@@ -53,6 +53,7 @@ mod services;
 mod class_init;
 mod memo;
 mod mirror_eq;
+mod selector;
 mod noreturn;
 mod class_lookup;
 mod sealed;

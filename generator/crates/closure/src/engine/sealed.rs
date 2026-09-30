@@ -14,7 +14,7 @@ use super::*;
 use classfile::op::{GETSTATIC, INVOKESTATIC, PUTSTATIC};
 
 /// 不读任何事实的 Oracle：调用结果未知、字段不折叠、类型全部存活
-struct Plain;
+pub(super) struct Plain;
 
 impl Oracle for Plain {
     fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
