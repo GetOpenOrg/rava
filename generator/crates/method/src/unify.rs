@@ -12,6 +12,7 @@ use cfg::Cond;
 use classfile::insn::op;
 use instr::hierarchy::{common_ref_type, common_ref_type_widening};
 use instr::InstrEnv;
+use ir::anchors::OBJECT;
 use ir::{Expr, Stmt};
 use sim::{StackEntry, StackSim, ValueId};
 use ty::{Prim, RsType};
@@ -53,7 +54,7 @@ fn short_tvar(ty: &str) -> bool {
 
 /// 类型是否以 `.is_jvm_null()` 判空（生成类、JArray）；其余走 `_is_jnull()`
 fn uses_jvm_null_method(ty: &str, tparams: &[String]) -> bool {
-    if matches!(ty, "Object" | "()" | "") || PRIM_TEXTS.contains(&ty) || tparams.iter().any(|p| p == ty) {
+    if matches!(ty, OBJECT | "()" | "") || PRIM_TEXTS.contains(&ty) || tparams.iter().any(|p| p == ty) {
         return false;
     }
     if ["Rc<", "__Shared<", "Vec<", "Box<", "std::"].iter().any(|p| ty.starts_with(p)) {
@@ -163,11 +164,11 @@ pub fn unify_pair(env: &InstrEnv, tv: String, ty: &RsType, ev: String, ety: &RsT
     } else if NULL_EXPRS.contains(&tv.as_str()) && !is_scalar(&es) {
         tv = "Default::default()".to_string();
         out = ety.clone();
-    } else if es == "Object" && !is_scalar(&ts) && ts != "Object" && !is_tparam(&ts) {
+    } else if es == OBJECT && !is_scalar(&ts) && ts != OBJECT && !is_tparam(&ts) {
         // 具体类型臂与擦除 Object 臂汇合：合并点按擦除 Object 落定，具体臂上转
         tv = to_object(env, &tv, ty, false);
         out = RsType::Object;
-    } else if ts == "Object" && !is_scalar(&es) && es != "Object" && !is_tparam(&es) {
+    } else if ts == OBJECT && !is_scalar(&es) && es != OBJECT && !is_tparam(&es) {
         ev = to_object(env, &ev, ety, false);
     } else if JVM_INT_FAMILY.contains(&ts.as_str()) && JVM_INT_FAMILY.contains(&es.as_str()) {
         // 两臂同属 JVM 计算类型 int：拓宽到 i32
@@ -199,11 +200,11 @@ pub fn unify_pair(env: &InstrEnv, tv: String, ty: &RsType, ev: String, ety: &RsT
             ev = from_common(&cs, &ev);
         }
         out = common;
-    } else if same_base && ts.contains("Object") && tparams.iter().any(|t| es.contains(t.as_str())) {
+    } else if same_base && ts.contains(OBJECT) && tparams.iter().any(|t| es.contains(t.as_str())) {
         // 擦除 Object 实例化臂 vs 具体泛型臂：合并点取具体臂类型
         tv = from_object(&es, &tv);
         out = ety.clone();
-    } else if same_base && es.contains("Object") && !ts.contains("Object") {
+    } else if same_base && es.contains(OBJECT) && !ts.contains(OBJECT) {
         ev = from_object(&ts, &ev);
     } else if same_base {
         // 同一泛型类的不同实例化：合并点取擦除实例化
@@ -219,10 +220,10 @@ pub fn unify_pair(env: &InstrEnv, tv: String, ty: &RsType, ev: String, ety: &RsT
         out = tgt_t;
     } else if !is_scalar(&ts) && !is_scalar(&es) {
         // 无公共父类的引用类型：合并点为根类，两臂各自上转
-        if ts != "Object" {
+        if ts != OBJECT {
             tv = to_object(env, &tv, ty, false);
         }
-        if es != "Object" {
+        if es != OBJECT {
             ev = to_object(env, &ev, ety, false);
         }
         out = RsType::Object;
@@ -262,7 +263,7 @@ pub fn unify_values(env: &InstrEnv, entries: &[StackEntry]) -> MethodResult<(Vec
     // 汇合值是菱形构造结果 `X<_>`：类型实参按擦除形态 Object 落定
     if let Some((base, n)) = infer_holes(&text::ty(env, &ty)) {
         let holes = vec!["_"; n].join(", ");
-        let erased = vec!["Object"; n].join(", ");
+        let erased = vec![OBJECT; n].join(", ");
         values = values
             .into_iter()
             .map(|v| {

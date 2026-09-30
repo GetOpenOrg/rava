@@ -6,6 +6,7 @@
 //! - [`forms_alignable`]：后到形态能否对齐到提升声明类型（`vars._forms_alignable`）。
 
 use instr::InstrEnv;
+use ir::anchors::OBJECT;
 use ir::{Ident, Path, PathSegment, Type};
 use ty::{Prim, RsType};
 
@@ -154,7 +155,7 @@ pub fn from_rust_text(env: &InstrEnv, s: &str) -> Option<RsType> {
     if is_value_form(s) {
         return None;
     }
-    if s == "Object" {
+    if s == OBJECT {
         return Some(RsType::Object);
     }
     let (head, args) = match s.split_once('<') {

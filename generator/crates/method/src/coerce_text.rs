@@ -4,6 +4,7 @@
 
 use instr::coerce::{object_kind, ObjectKind};
 use instr::InstrEnv;
+use ir::anchors::OBJECT;
 use ty::{JvmType, Prim, RsType};
 
 /// `_coerce_to_object(val, ty, clone)`：值文本 → Object 引用文本（对象身份保持）
@@ -38,7 +39,7 @@ pub fn icmp_operand(val: &str, t: &RsType) -> String {
 
 /// if_acmpX 操作数：非 Object 类型统一上转为 Object（`Object::from` 保持对象标识）
 pub fn acmp_operand(env: &InstrEnv, val: &str, t: &RsType) -> String {
-    if crate::text::ty(env, t) == "Object" {
+    if crate::text::ty(env, t) == OBJECT {
         return val.to_string();
     }
     let jt = env.ctx.ty.from_rs_type(t, &env.tparam_set());

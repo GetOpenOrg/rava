@@ -12,3 +12,4 @@ pub mod text;
 pub mod try_plan;
 pub mod types;
 pub mod unify;
+pub mod vars;
