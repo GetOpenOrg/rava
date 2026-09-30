@@ -4,8 +4,7 @@
 //! [`EmitInput`](input::EmitInput) → overlay → 发射层写 scratch →（缺省）`cargo run`。
 //! emit：从既有 closure.json + 用户类目录重建输入后同样发射（不编译运行）。
 //!
-//! 方法体缺省由 [`MethodBodies`]（P4c `method` crate）生成；`--skeleton-only` 以
-//! [`PlaceholderBodies`] 输出骨架（方法体为占位注释）。
+//! 方法体由 [`MethodBodies`]（`method` crate）生成。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,15 +12,18 @@ use std::process::Command;
 use classfile::MemberRef;
 use closure::handwritten::Handwritten;
 use closure::manifest::Manifest;
-use emit::audit::audit_lines;
-use emit::body::PlaceholderBodies;
-use emit::method_bodies::MethodBodies;
+use emit::audit::{append_raw_sites, audit_lines, AuditInputs};
 use emit::ctx::{EmitCtx, EmitOptions};
+use emit::method_bodies::{BodyAudit, MethodBodies};
+use emit::perf::{report_lines, Perf};
+use emit::precheck::{Precheck, DEFAULT_LIMIT};
 use emit::project::{prepare_scratch, write_project, ProjectReport};
-use input::{BuildInput, ClosureFacts, RuntimeManifest};
+use input::{BuildInput, ClosureFacts, LibCrate, RuntimeManifest};
 use resolve::{ClassPath, Hierarchy, Origin};
 use ty::short_names::ShortNames;
 
+use crate::api_roots::api_roots;
+use crate::build_libs::{self, Libs};
 use crate::build_opts::{BuildOpts, Mode, CLOSURE_INPUT_DIR};
 use crate::closure_cmd::{find_runtime_dir, seed_roots, MAIN};
 use crate::Args;
@@ -56,14 +58,19 @@ fn remove_dir(d: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// javac 编译到独占目录（与 main.py 同参：`-g`，JDK ≥ 14 时 `--enable-preview --release N`）
-fn javac(home: &Path, java_files: &[PathBuf], out: &Path) -> Result<(), String> {
+/// javac 编译到独占目录（与 main.py 同参：`-g`，JDK ≥ 14 时 `--enable-preview --release N`；
+/// jar 输入模式下全部 jar 上 `-cp`）
+fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> Result<(), String> {
     remove_dir(out)?;
     std::fs::create_dir_all(out).map_err(|e| format!("{}：{e}", out.display()))?;
     let mut cmd = Command::new(home.join("bin/javac"));
     cmd.arg("-g");
     if let Some(m) = jdk_major(home).filter(|m| *m >= 14) {
         cmd.args(["--enable-preview", "--release", &m.to_string()]);
+    }
+    if !jars.is_empty() {
+        let cp: Vec<String> = jars.iter().map(|j| j.display().to_string()).collect();
+        cmd.arg("-cp").arg(cp.join(":"));
     }
     let st = cmd.arg("-d").arg(out).args(java_files).status().map_err(|e| format!("javac：{e}"))?;
     if !st.success() {
@@ -72,15 +79,31 @@ fn javac(home: &Path, java_files: &[PathBuf], out: &Path) -> Result<(), String> 
     Ok(())
 }
 
-/// 用户类目录 → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）
-fn class_path(user_dir: &Path, home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
+/// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）
+fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
     let mut cp = ClassPath::new();
     cp.add(Origin::User, user_dir).map_err(|e| format!("{}：{e}", user_dir.display()))?;
+    for j in jars {
+        cp.add(Origin::Lib, j).map_err(|e| format!("{}：{e}", j.display()))?;
+    }
     cp.add_jdk(home).map_err(|e| e.to_string())?;
     for d in images {
         cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
     }
     Ok(cp)
+}
+
+/// `--image` 缺省：由 JDK 镜像与 `runtime/java_support` 派生（[`resolve::image`]）；显式给出则原样使用
+fn image_dirs(o: &BuildOpts, home: &Path, rt: &Path) -> Vec<PathBuf> {
+    if !o.images.is_empty() {
+        return o.images.clone();
+    }
+    resolve::image::image_class_dirs(home, &support_root(rt))
+}
+
+/// VM 支持类源码根：与手写运行时同级的 `java_support/`
+pub fn support_root(rt: &Path) -> PathBuf {
+    rt.parent().unwrap_or(rt).join("java_support")
 }
 
 fn simple(n: &str) -> &str {
@@ -122,27 +145,66 @@ pub fn user_order(cp: &ClassPath, java_files: &[PathBuf], main: Option<&str>) ->
     Ok(out)
 }
 
-/// 闭包分析（同 `rava closure`）；closure.json 写入 `json_path`
-fn analyze(cp: &ClassPath, rt: &Path, main: &str, o: &BuildOpts, json_path: &Path) -> Result<ClosureFacts, String> {
+/// 闭包分析（同 `rava closure`；lib 种子类同 `--seed-class`）；closure.json 写入 `json_path`。
+/// `--trace-class` 打印 provenance 链（`[why]`），`--debug` 列未解析调用
+fn analyze(
+    cp: &ClassPath,
+    rt: &Path,
+    main: &str,
+    o: &BuildOpts,
+    seed_classes: &[String],
+    json_path: &Path,
+    perf: &mut Perf,
+) -> Result<ClosureFacts, String> {
     let man = Manifest::load(rt)?;
     let hw = Handwritten::new(rt);
     let h = Hierarchy::new(cp);
     let roots: Vec<&String> = o.roots.iter().collect();
+    let seeds: Vec<&String> = seed_classes.iter().collect();
+    let mut seed_members = seed_roots(cp, &roots, &seeds)?;
+    if !o.api_packages.is_empty() {
+        let (api, n_cls) = api_roots(cp, &man, &o.api_packages, o.api_recursive);
+        println!(
+            "[api] {}（{}子包）→ {n_cls} 个 public 类，{} 个入口方法",
+            o.api_packages.join(", "),
+            if o.api_recursive { "含" } else { "不含" },
+            api.len()
+        );
+        seed_members.extend(api);
+    }
     let input = closure::Input {
         cp,
         runtime_dir: rt,
         roots: vec![MemberRef { owner: main.to_string(), name: MAIN.0.into(), desc: MAIN.1.into() }],
-        seed_roots: seed_roots(cp, &roots, &[])?,
+        seed_roots: seed_members,
         locales: o.locales.clone(),
         diag: crate::closure_cmd::diag_opts(&o.cuts, &o.cut_files, o.dump_edges.clone())?,
+        flow_batch: None,
     };
     let c = closure::analyze(&input, &h, &man, &hw);
     for e in hw.errors.borrow().iter() {
         eprintln!("[closure] 手写文件解析失败：{e}");
     }
+    for (n, e) in cp.failures() {
+        eprintln!("[closure] 类解析失败：{n}：{e}");
+    }
+    if let Some(t) = &o.trace_class {
+        for line in c.why(&t.replace('.', "/")).into_iter().chain([String::new()]) {
+            println!("{}", if line.is_empty() { line } else { format!("      [why] {line}") });
+        }
+    }
+    perf.mark("closure");
     let s = serde_json::to_string_pretty(&c.to_json()).map_err(|e| e.to_string())?;
     std::fs::write(json_path, s).map_err(|e| format!("{}：{e}", json_path.display()))?;
-    Ok(ClosureFacts::from_closure(&c))
+    perf.mark("closure_json");
+    let facts = ClosureFacts::from_closure(&c);
+    perf.mark("closure_facts");
+    if o.debug {
+        for u in &facts.unresolved {
+            println!("[closure] unresolved: {u}");
+        }
+    }
+    Ok(facts)
 }
 
 /// 一次发射所需的全部输入
@@ -154,46 +216,101 @@ struct EmitJob<'a> {
     java_files: Vec<PathBuf>,
     home: &'a Path,
     out: &'a Path,
-    skeleton_only: bool,
-    strict: bool,
+    libs: &'a [LibCrate],
+    o: &'a BuildOpts,
 }
 
-/// EmitInput → overlay → 写 scratch
-fn emit_scratch(j: &EmitJob<'_>) -> Result<ProjectReport, String> {
+/// `--perf` 报告的 Top-N 条数
+const PERF_TOP: usize = 15;
+
+/// EmitInput → overlay → 写 scratch → 预检 →（非 `--precheck-only`）审计行；另返回逐方法耗时（`--perf`）
+fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
     let manifest = RuntimeManifest::load(j.rt).map_err(|e| e.to_string())?;
     let runtime_src = j.rt.join("src");
-    let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: &[], runtime_src: &runtime_src }
+    let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: j.libs, runtime_src: &runtime_src }
         .build()
         .map_err(|e| format!("构建发射层输入：{e}"))?;
+    perf.mark("input");
     let names = ShortNames::build(&inp.registry);
-    let opts = EmitOptions { strict: j.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone() };
+    let opts = EmitOptions {
+        strict: j.o.strict,
+        jdk_major: jdk_major(j.home),
+        java_files: j.java_files.clone(),
+        batch: j.o.batch,
+        debug: j.o.debug,
+        jobs: j.o.emit_jobs,
+    };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
+    perf.mark("names+ctx");
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
-    if j.skeleton_only {
-        return write_project(&ctx, j.out, &mut PlaceholderBodies).map_err(|e| format!("发射：{e}"));
+    perf.mark("overlay");
+    ir::raw_audit::reset();
+    if j.o.raw_sites.is_some() {
+        ir::raw_audit::enable_sites();
     }
-    let mut bodies = MethodBodies::new(&ctx);
-    let r = write_project(&ctx, j.out, &mut bodies).map_err(|e| format!("发射：{e}"))?;
-    for line in audit_lines(&bodies.audit, &r.hw_audit) {
+    let bodies = MethodBodies::new(&ctx);
+    perf.mark("body_facts");
+    let mut r = write_project(&ctx, j.out, &bodies).map_err(|e| format!("发射：{e}"))?;
+    perf.absorb(std::mem::take(&mut r.perf));
+    let limit = if j.o.precheck_only { usize::MAX } else { DEFAULT_LIMIT };
+    for line in Precheck::scan(&r.emissions, &inp.precheck_visited).lines(limit) {
         println!("{line}");
     }
-    Ok(r)
+    if !j.o.precheck_only {
+        let crates: Vec<String> =
+            std::iter::once("java_runtime".to_string()).chain(j.libs.iter().map(|l| l.name.clone())).chain(["user".to_string()]).collect();
+        let body = BodyAudit::from_log(&r.body_log);
+        let a = AuditInputs {
+            body: &body,
+            hw: &r.hw_audit,
+            fallback: &ctx.fallback,
+            out: j.out,
+            crates: &crates,
+            prelude_disambiguated: names.prelude_disambiguated(),
+            debug: j.o.debug,
+        };
+        for line in audit_lines(&a) {
+            println!("{line}");
+        }
+    }
+    if let Some(p) = &j.o.raw_sites {
+        append_raw_sites(p).map_err(|e| format!("{}：{e}", p.display()))?;
+    }
+    perf.mark("audit");
+    let timings = std::mem::take(&mut r.body_log.timings);
+    Ok((r, timings))
 }
 
 fn report(r: &ProjectReport, out: &Path) {
     println!("[emit] {} JDK 类 + {} 用户类 → {}（bin {}）", r.jdk_classes, r.user_classes, out.display(), r.bin_name);
 }
 
-/// 与 main.py 同一 cargo 流程：共享 `build/target`、关闭增量
-fn cargo_run(out: &Path, bin: &str, repo: &Path) -> Result<(), String> {
+fn print_perf(on: bool, perf: &Perf, methods: &[(String, std::time::Duration)]) {
+    if on {
+        for l in report_lines(perf, methods, PERF_TOP) {
+            println!("{l}");
+        }
+    }
+}
+
+/// 重型工作区阈值（生成类数）：16G 机器上单 rustc 峰值约 14G，达到阈值的工作区单作业编译；
+/// 调用方显式设置 `CARGO_BUILD_JOBS` 时尊重调用方（与 scripts/cargo_env.py `HEAVY_CLASSES` 同值）
+const HEAVY_CLASSES: usize = 1700;
+
+/// 与 main.py 同一 cargo 流程：共享 `build/target`、关闭增量、重型工作区单作业
+/// （调试信息级别由生成的 workspace `[profile.dev]` 决定）
+fn cargo_run(out: &Path, bin: &str, repo: &Path, classes: usize) -> Result<(), String> {
     println!("\n[run] cargo run --bin {bin}");
-    let st = Command::new("cargo")
-        .args(["run", "--bin", bin])
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--bin", bin])
         .current_dir(out)
         .env("CARGO_TARGET_DIR", repo.join("build").join("target"))
-        .env("CARGO_INCREMENTAL", "0")
-        .status()
-        .map_err(|e| format!("cargo：{e}"))?;
+        .env("CARGO_INCREMENTAL", "0");
+    if classes >= HEAVY_CLASSES && std::env::var_os("CARGO_BUILD_JOBS").is_none() {
+        println!("[cargo-env] 生成类 {classes} ≥ {HEAVY_CLASSES}：CARGO_BUILD_JOBS=1（内存上限）");
+        cmd.env("CARGO_BUILD_JOBS", "1");
+    }
+    let st = cmd.status().map_err(|e| format!("cargo：{e}"))?;
     if !st.success() {
         return Err(format!("cargo run 失败（{st}）"));
     }
@@ -202,6 +319,7 @@ fn cargo_run(out: &Path, bin: &str, repo: &Path) -> Result<(), String> {
 
 pub fn run_build(args: &Args) -> Result<(), String> {
     let o = BuildOpts::parse(Mode::Build, &args.rest)?;
+    let mut perf = Perf::new();
     let home = java_home(&o)?;
     let rt = abs(&find_runtime_dir(o.runtime.clone())?);
     let repo = repo_root(&rt);
@@ -211,22 +329,30 @@ pub fn run_build(args: &Args) -> Result<(), String> {
     }
     let cin = out.join(CLOSURE_INPUT_DIR);
     let classes = cin.join("classes");
-    javac(&home, &o.inputs, &classes)?;
-    let cp = class_path(&classes, &home, &o.images)?;
+    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs)?;
+    javac(&home, &o.inputs, &jars, &classes)?;
+    perf.mark("javac");
+    let cp = class_path(&classes, &jars, &home, &image_dirs(&o, &home, &rt))?;
     let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
-    let facts = analyze(&cp, &rt, &user[0], &o, &cin.join("closure.json"))?;
+    perf.mark("classpath");
+    let facts = analyze(&cp, &rt, &user[0], &o, &seed_classes, &cin.join("closure.json"), &mut perf)?;
     let java_files = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict };
-    let r = emit_scratch(&job)?;
+    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &crates, o: &o };
+    let (r, timings) = emit_scratch(&job, &mut perf)?;
+    print_perf(o.perf, &perf, &timings);
+    if o.precheck_only {
+        return Ok(());
+    }
     report(&r, &out);
     if o.no_run {
         return Ok(());
     }
-    cargo_run(&out, &r.bin_name, &repo)
+    cargo_run(&out, &r.bin_name, &repo, r.jdk_classes + r.user_classes)
 }
 
 pub fn run_emit(args: &Args) -> Result<(), String> {
     let o = BuildOpts::parse(Mode::Emit, &args.rest)?;
+    let mut perf = Perf::new();
     let home = java_home(&o)?;
     let rt = abs(&find_runtime_dir(o.runtime.clone())?);
     let out = abs(&o.scratch_dir(Mode::Emit, &repo_root(&rt))?);
@@ -235,18 +361,23 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     let text = std::fs::read_to_string(&cj).map_err(|e| format!("{}：{e}", cj.display()))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}：{e}", cj.display()))?;
     let facts = ClosureFacts::from_json(&v).map_err(|e| format!("{}：{e}", cj.display()))?;
+    perf.mark("closure_json_load");
     if o.clean {
         if cj.starts_with(&out) || classes.starts_with(&out) {
             return Err("closure.json / 用户类目录位于 scratch 内：--clean 会删除输入".into());
         }
         remove_dir(&out)?;
     }
-    let cp = class_path(&classes, &home, &o.images)?;
+    let cp = class_path(&classes, &[], &home, &image_dirs(&o, &home, &rt))?;
     let user = user_order(&cp, o.java_files(Mode::Emit), None)?;
+    perf.mark("classpath");
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict };
-    let r = emit_scratch(&job)?;
-    report(&r, &out);
+    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &[], o: &o };
+    let (r, timings) = emit_scratch(&job, &mut perf)?;
+    if !o.precheck_only {
+        report(&r, &out);
+    }
+    print_perf(o.perf, &perf, &timings);
     Ok(())
 }
 
@@ -274,12 +405,10 @@ mod tests {
         remove_dir(&out).unwrap();
         assert!(!out.exists());
         put(&out.join(CLOSURE_INPUT_DIR).join("classes/A.class"), "cafebabe");
-        put(&out.join("java_runtime/src/gone_impl.rs"), "impl X {}\n");
         let macros = root.join("runtime/rava_macros");
         prepare_scratch(&out, &rt, &macros, false).unwrap();
         assert!(out.join(CLOSURE_INPUT_DIR).join("classes/A.class").is_file());
-        assert_eq!(std::fs::read_to_string(out.join("java_runtime/src/lib.rs")).unwrap(), "pub mod java;\n");
-        assert!(!out.join("java_runtime/src/gone_impl.rs").exists());
+        assert!(!out.join("java_runtime/src/lib.rs").exists(), "lib.rs 由 mod 树阶段写出");
         let cargo = std::fs::read_to_string(out.join("java_runtime/Cargo.toml")).unwrap();
         assert!(cargo.contains(&format!("path = \"{}\"", macros.display())));
         assert!(!cargo.contains("version = \"0.1.0\""));

@@ -33,6 +33,8 @@ pub struct Input<'a> {
     pub locales: Vec<String>,
     /// 诊断选项（反事实切除 / 触发边转储；缺省关闭，不影响闭包结果）
     pub diag: engine::Diag,
+    /// 流传播批量（`--flow-batch`；缺省 `engine::FLOW_BATCH`）
+    pub flow_batch: Option<usize>,
 }
 
 pub struct Closure<'a> {
@@ -49,6 +51,9 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
         engine::cut::edges_begin();
     }
     e.seeds.locales = input.locales.clone();
+    if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
+        e.flow_batch = n;
+    }
     for r in &input.roots {
         e.root(r.clone(), "main");
     }
@@ -202,14 +207,15 @@ impl Closure<'_> {
     pub fn to_json(&self) -> Value {
         let e = &self.engine;
         let classes: Vec<Value> = e
-            .classes
-            .iter()
+            .class_entries()
+            .into_iter()
             .map(|(n, c)| {
                 json!({"name": n, "domain": domain_str(c.domain), "level": level_str(c.level), "via": self.via_json(&c.via)})
             })
             .collect();
         let methods: Vec<Value> = e
-            .method_nodes()
+            .method_entries()
+            .into_iter()
             .map(|m| {
                 let mut v = json!({"id": m.key.to_string(), "kind": kind_str(m.kind), "via": self.via_json(&m.via)});
                 if !m.hw_fns.is_empty() {
@@ -230,7 +236,7 @@ impl Closure<'_> {
             "classes": classes,
             "methods": methods,
             "instantiated": e.instantiated(),
-            "clinit": e.inited.keys().collect::<Vec<_>>(),
+            "clinit": e.clinit_list(),
             "missing": e.missing.iter().map(|(n, v)| json!({"name": n, "via": self.via_json(v)})).collect::<Vec<_>>(),
             "unresolved": e.unresolved,
             "refs": e.refs,

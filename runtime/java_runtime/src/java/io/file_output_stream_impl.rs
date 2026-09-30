@@ -71,7 +71,7 @@ impl FileOutputStream {
     #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
     pub fn writeBytes(&self, b: JArray<i8>, off: i32, len: i32, _append: bool) -> Result<()> {
         let mut bytes: Vec<u8> = Vec::with_capacity(len.max(0) as usize);
-        for i in off..off + len {
+        for i in off..off.saturating_add(len) {
             bytes.push(b.get(i)? as u8);
         }
         self.write_all_fd(&bytes)

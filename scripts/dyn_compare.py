@@ -58,8 +58,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 AGENT_SRC = ROOT / "scripts" / "dyn_agent"
+MANIFEST_DIR = ROOT / "runtime" / "java_runtime"
 # 与 Manifest::domain 同口径：根类单列
 ROOT_CLASS = "java/lang/Object"
+
+
+def load_manifest(name: str) -> dict:
+    """runtime/java_runtime 下的 TOML 清单直读（缺省路径不经 codegen）。"""
+    import tomllib
+    with open(MANIFEST_DIR / name, "rb") as f:
+        return tomllib.load(f)
+
 BYTECODE = "bytecode"
 
 # 程序期加载类的分类
@@ -88,11 +97,13 @@ class DomainRules:
 
     @classmethod
     def from_manifest(cls, user: set[str]) -> "DomainRules":
-        sys.path.insert(0, str(ROOT))
-        from codegen import runtime_manifest as rm
-        return cls(vm_boundary=set(rm.vm_boundary_classes()),
-                   release=rm.vm_boundary_translate_nested(),
-                   vm_upcalls=rm.dynamic_vm_upcall_classes(),
+        """closure.toml 直读（与闭包分析器 input::RuntimeManifest 同一口径：C1d 终态无包前缀截断，
+        放行 = [vm_boundary] translate_nested，即 VM 契约边界类中按字节码翻译的嵌套类）"""
+        closure = load_manifest("closure.toml")
+        vm = closure.get("vm_boundary", {})
+        return cls(vm_boundary=set(vm.get("classes", [])),
+                   release=list(vm.get("translate_nested", [])),
+                   vm_upcalls=list(closure.get("dynamic", {}).get("vm_upcall_classes", [])),
                    user=set(user))
 
     def domain(self, cls: str) -> str:
@@ -334,9 +345,7 @@ LAUNCHER_PROPS = frozenset({"java.class.path"})
 
 def model_property_args() -> list[str]:
     """原生二进制的恒定系统属性（vm_intrinsics.toml [facts.system_properties.values]）→ 基准 JVM 的 `-D`。"""
-    sys.path.insert(0, str(ROOT))
-    from codegen import runtime_manifest as rm
-    values = rm.system_property_values()
+    values = load_manifest("vm_intrinsics.toml").get("facts", {}).get("system_properties", {}).get("values", {})
     return [f"-D{k}={v}" for k, v in sorted(values.items()) if k not in LAUNCHER_PROPS]
 
 

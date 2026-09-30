@@ -7,27 +7,26 @@
 //! - 插入语义 = `setdefault`（先到者占位），与 `write_cargo_project` 的
 //!   「用户类 → lib 类 → JDK 类」构建顺序一致；
 //! - 派生查询的缓存（有效类型形参、重载名、祖先闭包）挂在注册表实例上
-//!   （`RefCell`，不是全局状态）；注册表构建后不可变，缓存无需失效。
+//!   （读写锁，不是全局状态）；注册表构建后不可变，缓存无需失效。
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 use classfile::class::InnerClass;
 use classfile::{acc, ClassFile, Field, Method};
 
 use crate::consts;
 
-/// 类视图：`Rc<ClassFile>` + Python `ClassInfo` 口径的规范化
+/// 类视图：`Arc<ClassFile>` + Python `ClassInfo` 口径的规范化
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
-    cf: Rc<ClassFile>,
+    cf: Arc<ClassFile>,
     /// 类级泛型签名；类字面量类的签名置空（见 [`consts::CLASS`]）
     signature: String,
 }
 
 impl ClassInfo {
-    pub fn new(cf: Rc<ClassFile>) -> ClassInfo {
+    pub fn new(cf: Arc<ClassFile>) -> ClassInfo {
         let signature = if cf.name == consts::CLASS {
             String::new()
         } else {
@@ -100,9 +99,30 @@ pub fn field_signature(f: &Field) -> &str {
 /// 注册表实例上的派生查询缓存
 #[derive(Debug, Default)]
 pub(crate) struct Caches {
-    pub effective_params: RefCell<BTreeMap<String, Rc<Vec<String>>>>,
-    pub overloaded: RefCell<BTreeMap<String, Rc<BTreeSet<String>>>>,
-    pub super_closure: RefCell<BTreeMap<String, Rc<BTreeSet<String>>>>,
+    pub effective_params: Cache<Vec<String>>,
+    pub overloaded: Cache<BTreeSet<String>>,
+    pub super_closure: Cache<BTreeSet<String>>,
+}
+
+/// 派生查询缓存：纯函数的记忆化（值只由注册表决定），并行发射下读写锁共享
+#[derive(Debug)]
+pub(crate) struct Cache<V>(RwLock<BTreeMap<String, Arc<V>>>);
+
+impl<V> Default for Cache<V> {
+    fn default() -> Self {
+        Cache(RwLock::new(BTreeMap::new()))
+    }
+}
+
+impl<V> Cache<V> {
+    pub fn get(&self, key: &str) -> Option<Arc<V>> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).get(key).cloned()
+    }
+
+    /// 并发下同键可能各算一遍（结果相同），先入者胜出
+    pub fn insert(&self, key: &str, v: Arc<V>) -> Arc<V> {
+        self.0.write().unwrap_or_else(|e| e.into_inner()).entry(key.to_string()).or_insert(v).clone()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -119,7 +139,7 @@ impl Registry {
     }
 
     /// `setdefault` 语义：已存在同名类时忽略并返回 false
-    pub fn insert(&mut self, cf: Rc<ClassFile>) -> bool {
+    pub fn insert(&mut self, cf: Arc<ClassFile>) -> bool {
         if self.classes.contains_key(&cf.name) {
             return false;
         }

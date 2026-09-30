@@ -23,14 +23,14 @@
 
 - `python3 scripts/main.py <Test.java> --generator rust --no-run` 生成完整工程；HelloWorld 与 Python 树
   逐字节一致（`Cargo.toml` 除外；`closure_input/closure.json` 的 `elapsed_ms` 为计时值，两侧恒不同）。
-- 审计行（`emit::audit::audit_lines`）：`[cfg-audit]` / `[equiv-audit]` / `[raw-audit]`（手写三项）/
-  `[override-audit]` / `[vm-boundary-audit]`，HelloWorld 与 Python 数值一致。
-  - `[raw-audit]` 不输出 `raw_expr` / `raw_stmt` / `type_surgery_*` / `jdk_literals`：均为 Python 实现自身的度量
-    （Python IR 构造事件与 Python 源码静态扫描），对 Rust 生成器无对应口径，
-    `compare_trees.sh` 的审计行对照在 python ↔ rust 之间必然不同，只对照手写三项。
-  - 未输出：`[readability-audit]`（生成文件扫描，可移植）、`[fallback-audit]`（B 组静默降级点）、`[shortname-audit]`。
-  - 存根兜底位点统一记为 `body`（发射层不区分 Python 九吞点）。
-- rust 路径未支持的 main.py 选项：`--lib`、`--batch`、`--debug`、`--trace-class`、`--precheck-only`、`--raw-sites`。
+- 审计行（`emit::audit::audit_lines`）：`[cfg-audit]` / `[readability-audit]` / `[equiv-audit]` /
+  `[fallback-audit]` / `[shortname-audit]` / `[raw-audit]` / `[override-audit]` / `[vm-boundary-audit]`，序与 Python 一致。
+  - `[raw-audit]` 的 `raw_expr` / `raw_stmt` 为 Rust IR 逃生舱构造事件（`ir::raw_audit`，`Raw` 字段私有、构造即计数）；
+    数值口径与 Python 不同（两侧 IR 不同），`compare_trees.sh` 的 python ↔ rust 对照只比手写三项。
+    `type_surgery_*` / `jdk_literals` 是 Python 源码静态扫描，Rust 源码的对应约束由测试守护，不输出。
+  - `[fallback-audit]` 为 Rust 自有降级点（`emit::fallback::FALLBACK_IDS`）；Python B 组十点在 Rust 侧无失败分支。
+  - 存根兜底位点按 Python 九吞点分解（`BodyRequest.site`）。
+- `--raw-sites FILE`：按构造调用位点（`#[track_caller]`）追加剖面，格式同 Python（`{n}\t{kind}\t{site}`）。
 
 ## 步骤 3：27 例生成树对照
 

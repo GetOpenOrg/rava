@@ -1,6 +1,6 @@
 //! 单元测试夹具：以 `ClassFile` 结构字面量构造注册表（不经 .class 解析）。
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use classfile::{acc, ClassFile, Field, Method};
 
@@ -110,7 +110,7 @@ impl Fixture {
     pub fn new(specs: Vec<ClassSpec>) -> Fixture {
         let mut reg = Registry::new();
         for s in specs {
-            reg.insert(Rc::new(s.cf));
+            reg.insert(Arc::new(s.cf));
         }
         let names = ShortNames::build(&reg);
         Fixture {

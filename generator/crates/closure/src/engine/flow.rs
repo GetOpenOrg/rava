@@ -1,6 +1,16 @@
 //! 引擎：类型流——节点类型集、流边、实参来源、字段节点与逃逸。
 
+use super::stats::{kind_ix, KINDS};
 use super::*;
+
+/// 新接边整集合收窄走记忆的源集合元素数下限
+const FILTER_MEMO_AT: usize = 64;
+/// 收窄记忆的内存预算（字节）；超出整表清空（只影响速度，不影响结果）
+const FILTER_MEMO_BUDGET: usize = 64 << 20;
+
+fn memo_bytes(s: &TypeSet) -> usize {
+    s.classes.heap_bytes() + s.open.heap_bytes() + 64
+}
 
 impl<'a> Engine<'a> {
     // ── 类型流 ──────────────────────────────────────────────────────────────
@@ -14,7 +24,7 @@ impl<'a> Engine<'a> {
         self.add_to_id(i, s);
     }
 
-    /// 节点（序号）并入类型集；新增部分登记待沿流边推送
+    /// 节点（序号）并入类型集；新增部分登记待沿流边推送。类型集存于所属代表（见 `scc.rs`）
     fn add_to_id(&mut self, i: u32, s: &TypeSet) {
         let direct = !std::mem::take(&mut self.via_flow);
         self.graph.adds[0] += 1;
@@ -27,13 +37,15 @@ impl<'a> Engine<'a> {
             return;
         }
         let n = self.graph.node(i);
+        // 空数组元素节点不参与合并（`scc.rs`），恒为自身代表
         if let Node::E(x, _) = n {
             if let Some(held) = self.empty_arrays.get_mut(&x) {
                 held.entry(n).or_default().add_all(s);
                 return;
             }
         }
-        let cur = self.graph.set_mut(i);
+        let r = self.graph.rep(i);
+        let cur = self.graph.set_mut(r);
         let delta = TypeSet {
             classes: s.classes.minus(&cur.classes),
             open: s.open.minus(&cur.open),
@@ -47,11 +59,40 @@ impl<'a> Engine<'a> {
         if direct && !delta.open.is_empty() {
             self.open_inj.entry(n).or_default().extend(delta.open.iter());
         }
+        self.grown(r, &delta);
+        // 只沿流边推送新增部分（差分传播）
+        self.queue_delta(r, &delta);
+    }
+
+    /// 代表 r 登记待推增量
+    pub(super) fn queue_delta(&mut self, r: u32, delta: &TypeSet) {
+        let ix = r as usize;
+        self.graph.delta[ix].add_all(delta);
+        if !self.graph.queued[ix] {
+            self.graph.queued[ix] = true;
+            self.fwork.push_back(r);
+        }
+    }
+
+    /// 代表 r 的类型集新增 delta：逐成员触发节点钩子（逃逸、自身字段、成员枚举、手写调用点实参、读者重跑）
+    pub(super) fn grown(&mut self, r: u32, delta: &TypeSet) {
+        match self.graph.members.get(&r) {
+            None => self.node_grown(self.graph.node(r), delta),
+            Some(ms) => {
+                let ms = ms.clone();
+                for m in ms {
+                    self.node_grown(self.graph.node(m), delta);
+                }
+            }
+        }
+    }
+
+    pub(super) fn node_grown(&mut self, n: Node, delta: &TypeSet) {
         if n == Node::Esc {
             self.escape(&delta.classes);
         }
         if self.self_fields.contains_key(&n) {
-            self.self_field_objs(n, &delta);
+            self.self_field_objs(n, delta);
         }
         if let Some(&(k, e)) = self.enum_recv.get(&n) {
             self.rpending.push((k, e, delta.clone()));
@@ -62,9 +103,9 @@ impl<'a> Engine<'a> {
             if !ys.is_empty() {
                 self.hw_site_arrays(s, i, &ys);
             }
-            self.hw_site_fields(s, i, &delta);
+            self.hw_site_fields(s, i, delta);
             if self.hw_reads.get(&s).is_some_and(|r| r.0 == i) {
-                self.memory_read(s, &delta);
+                self.memory_read(s, delta);
             }
         }
         if let Some(ws) = self.watch.get(&n) {
@@ -81,78 +122,135 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        // 只沿流边推送新增部分（差分传播）
-        let ix = i as usize;
-        self.graph.delta[ix].add_all(&delta);
-        if !self.graph.queued[ix] {
-            self.graph.queued[ix] = true;
-            self.fwork.push_back(i);
-        }
     }
 
-    /// 流边 src → dst（按 filter 收窄）；立即按当前集合推一次
+    /// 流边 src → dst（按 filter 收窄）；立即按当前集合推一次。边接在两端的代表之间；
+    /// 同一代表内的 Object 边是空操作（合并只经 Object 边，见 `scc.rs`）
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
         let (si, di) = (self.graph.id(src), self.graph.id(dst));
-        if !self.graph.seen.insert((si, di, filter)) {
+        let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
+        let objf = self.names[filter as usize].as_ref() == OBJECT;
+        if rs == rd && objf {
             return;
         }
-        self.graph.edges[si as usize].push((di, filter));
-        if self.graph.set(si).is_empty() {
+        if !self.graph.seen.insert((rs, rd, filter)) {
+            return;
+        }
+        self.graph.edges[rs as usize].push((rd, filter));
+        self.graph.edges_since += 1;
+        if self.graph.set(rs).is_empty() {
             return;
         }
         // Object 过滤且目标已含源集合：推送必为无增量，免去整集合克隆（大集合新接边的常态）
-        if self.graph.set(si).is_subset_of(self.graph.set(di)) && self.names[filter as usize].as_ref() == OBJECT {
+        if objf && self.graph.set(rs).is_subset_of(self.graph.set(rd)) {
             return;
         }
-        let s = std::mem::take(self.graph.set_mut(si));
-        let out = self.filter(&s, filter);
-        *self.graph.set_mut(si) = s;
+        let n = {
+            let s = self.graph.set(rs);
+            s.classes.len() + s.open.len()
+        };
+        if objf || n < FILTER_MEMO_AT {
+            let s = std::mem::take(self.graph.own_set_mut(rs));
+            let out = self.filter(&s, filter);
+            *self.graph.own_set_mut(rs) = s;
+            self.via_flow = true;
+            self.add_to_id(di, &out);
+            return;
+        }
+        // 大集合经同一过滤类型接出多条新边（手写调用点写入槽 → 各数组元素）：收窄结果按集合版本记忆
+        let hit = self.graph.fmemo.remove(&(rs, filter));
+        if let Some((_, o)) = &hit {
+            self.graph.fmemo_bytes -= memo_bytes(o);
+        }
+        let out = match hit {
+            Some((len, out)) if len == n => {
+                self.graph.fmemo_stats[0] += 1;
+                out
+            }
+            _ => {
+                self.graph.fmemo_stats[1] += 1;
+                let s = std::mem::take(self.graph.own_set_mut(rs));
+                let out = self.filter(&s, filter);
+                *self.graph.own_set_mut(rs) = s;
+                out
+            }
+        };
         self.via_flow = true;
         self.add_to_id(di, &out);
+        let b = memo_bytes(&out);
+        if self.graph.fmemo_bytes + b > FILTER_MEMO_BUDGET {
+            self.graph.fmemo.clear();
+            self.graph.fmemo_bytes = 0;
+            self.graph.fmemo_stats[2] += 1;
+        }
+        self.graph.fmemo_bytes += b;
+        self.graph.fmemo.insert((rs, filter), (n, out));
+    }
+
+    /// 沿一条出边推送增量 s；同一过滤类型只收窄一次（`narrowed`），Object 过滤直接推增量本身
+    fn push_edge(&mut self, dst: u32, f: u32, obj: Option<u32>, s: &TypeSet, narrowed: &mut Vec<(u32, TypeSet)>) {
+        if Some(f) == obj {
+            self.via_flow = true;
+            self.add_to_id(dst, s);
+            return;
+        }
+        let k = match narrowed.iter().position(|x| x.0 == f) {
+            Some(k) => k,
+            None => {
+                let out = self.filter(s, f);
+                narrowed.push((f, out));
+                narrowed.len() - 1
+            }
+        };
+        let out = std::mem::take(&mut narrowed[k].1);
+        self.via_flow = true;
+        self.add_to_id(dst, &out);
+        narrowed[k].1 = out;
     }
 
     pub(super) fn drain_flows(&mut self) {
         let obj = self.ids.get(OBJECT).copied();
-        while let Some(i) = self.fwork.pop_front() {
+        if self.graph.pushes.is_empty() {
+            self.graph.pushes = vec![[0; 2]; KINDS * KINDS];
+        }
+        loop {
+            if self.scc_due() {
+                self.collapse_cycles();
+            }
+            let Some(i) = self.fwork.pop_front() else { break };
             let ix = i as usize;
             self.graph.queued[ix] = false;
             let s = std::mem::take(&mut self.graph.delta[ix]);
-            if s.is_empty() {
+            // 已并入其它代表的节点：增量已随合并转交
+            if s.is_empty() || self.graph.rep(i) != i {
                 continue;
             }
             // 边表借出（推送中新接的边已由 `flow` 按当前集合推过，归还时并在后面）；
             // 同一过滤类型只收窄一次，Object 过滤直接推增量本身
             let edges = std::mem::take(&mut self.graph.edges[ix]);
             let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
+            let sk = kind_ix(&self.graph.node(i)) * KINDS;
             for &(dst, f) in &edges {
-                if Some(f) == obj {
-                    self.via_flow = true;
-                    self.add_to_id(dst, &s);
-                    continue;
-                }
-                let k = match narrowed.iter().position(|x| x.0 == f) {
-                    Some(k) => k,
-                    None => {
-                        let out = self.filter(&s, f);
-                        narrowed.push((f, out));
-                        narrowed.len() - 1
-                    }
-                };
-                let out = std::mem::take(&mut narrowed[k].1);
-                self.via_flow = true;
-                self.add_to_id(dst, &out);
-                narrowed[k].1 = out;
+                let pk = sk + kind_ix(&self.graph.node(dst));
+                let grew = self.graph.adds[1];
+                self.push_edge(dst, f, obj, &s, &mut narrowed);
+                let p = &mut self.graph.pushes[pk];
+                p[0] += 1;
+                p[1] += u64::from(self.graph.adds[1] != grew);
             }
             if !edges.is_empty() {
                 let slot = &mut self.graph.edges[ix];
                 let added = std::mem::replace(slot, edges);
                 slot.extend(added);
             }
-            let n = self.graph.node(i);
-            if let Some(ds) = self.mflows.get(&n).cloned() {
-                let k = self.mirror_set(&s);
-                for d in ds {
-                    self.add_to(d, &k);
+            let ms = self.graph.members.get(&i).cloned().unwrap_or_else(|| vec![i]);
+            for m in ms {
+                let n = self.graph.node(m);
+                if let Some(ds) = self.mflows.get(&n).cloned() {
+                    let k = self.mirror_set(&s);
+                    for d in ds {
+                        self.add_to(d, &k);
+                    }
                 }
             }
         }
@@ -178,15 +276,18 @@ impl<'a> Engine<'a> {
                 vec![Feed::S(TypeSet::exact(k))]
             }
             V::Top => vec![Feed::S(TypeSet::open(decl))],
-            V::Ref { src, .. } => src
-                .iter()
-                .map(|s| match *s {
-                    Src::Param(i) => Feed::N(Node::P(m, i)),
-                    Src::Site(o) => Feed::N(Node::S(m, o)),
-                    Src::Catch(o) => Feed::N(Node::S(m, CATCH | o)),
-                    Src::Str => Feed::S(TypeSet::exact(self.id(STRING))),
-                })
-                .collect(),
+            V::Ref { src, .. } => {
+                // 字面量来源按序号区分，类型相同：只给一条 String 来源
+                let mut lit = false;
+                src.iter()
+                    .filter_map(|s| match *s {
+                        Src::Param(i) => Some(Feed::N(Node::P(m, i))),
+                        Src::Site(o) => Some(Feed::N(Node::S(m, o))),
+                        Src::Catch(o) => Some(Feed::N(Node::S(m, CATCH | o))),
+                        Src::Str(_) => (!std::mem::replace(&mut lit, true)).then(|| Feed::S(TypeSet::exact(self.id(STRING)))),
+                    })
+                    .collect()
+            }
             _ => vec![],
         }
     }

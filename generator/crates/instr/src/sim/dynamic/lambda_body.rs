@@ -11,7 +11,7 @@ use super::lambda_args::CallArgs;
 use super::{raw, wrapper_of, IndySite};
 use crate::build::ty_text;
 use crate::env::InstrEnv;
-use crate::error::{unported, InstrResult};
+use crate::error::{InstrError, InstrResult};
 use crate::invoke::turbofish::static_call_turbofish;
 use crate::log::{Effect, InstrLog};
 
@@ -20,8 +20,9 @@ use crate::log::{Effect, InstrLog};
 fn iface_call(env: &InstrEnv, lam: &Lam, ci: &ty::ClassInfo, call: &CallArgs) -> InstrResult<String> {
     let all: Vec<&String> = call.cap.iter().chain(&call.sam).collect();
     let Some(first) = all.first() else {
-        // Python 在此对空实参表取下标（IndexError）
-        return unported(format!("接口实现方法 {}.{} 无接收者实参", lam.impl_cls, lam.impl_mname));
+        // 实例实现方法的接收者只能来自捕获首值或 SAM 首参；两者皆空的调用点在 JVM 链接期即抛
+        // LambdaConversionException（metafactory 实参不相容），javac 不产出
+        return Err(InstrError::BadInsn(format!("接口实现方法 {}.{} 无接收者实参", lam.impl_cls, lam.impl_mname)));
     };
     let tps = env.ctx.ty.effective_class_type_params(ci);
     let targs =

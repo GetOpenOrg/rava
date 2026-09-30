@@ -21,7 +21,7 @@ pub struct SigTypes {
 }
 
 impl SigTypes {
-    fn fallback() -> SigTypes {
+    fn erased() -> SigTypes {
         SigTypes {
             params: Vec::new(),
             ret: None,
@@ -225,7 +225,7 @@ impl TyCtx<'_> {
                 params: s.params,
                 ret: Some(s.ret),
             },
-            None => SigTypes::fallback(),
+            None => SigTypes::erased(),
         };
         let Some((root_ci, root_m, root_args)) = root else {
             return to_sig(self.parse_method_param_types(
@@ -238,7 +238,7 @@ impl TyCtx<'_> {
         let Some(parsed) =
             self.parse_method_param_types(method_signature(root_m), &root_tparams, false)
         else {
-            return SigTypes::fallback();
+            return SigTypes::erased();
         };
         let root_args = if root_args.len() == root_tparams.len() {
             root_args

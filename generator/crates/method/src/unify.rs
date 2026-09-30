@@ -350,7 +350,7 @@ pub fn parse_temp_let_text(s: &str) -> Option<TempLet> {
 pub fn parse_temp_let(env: &InstrEnv, s: &Stmt) -> Option<TempLet> {
     match s {
         Stmt::Let(_) => parse_temp_let_text(&text::stmt(env, s)),
-        Stmt::Raw(r) => parse_temp_let_text(&r.0),
+        Stmt::Raw(r) => parse_temp_let_text(r.as_str()),
         _ => None,
     }
 }

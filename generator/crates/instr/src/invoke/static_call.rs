@@ -3,14 +3,14 @@
 //! 调用节点 `Self::m(args)?` / `Cls::<T..>::m(args)?` 以结构化节点发射；@CallerSensitive 包装、
 //! 装箱返回与 panic 存根沿用 Python 的文本形态（[`ir::Raw`]）。
 
-use ir::{Expr, Path, Raw, Stmt};
+use ir::{Expr, Path, Stmt};
 use sim::StackSim;
 use ty::{ClassInfo, RsType};
 
 use crate::build::{call_path, expr_stmt, id, ir_ty, let_typed, seg, text, try_, ty_text};
 use crate::coerce;
 use crate::env::InstrEnv;
-use crate::error::{unported, InstrResult};
+use crate::error::InstrResult;
 use crate::hierarchy::short_binary;
 use crate::invoke::bind::{bind_type_args, caller_sensitive_wrap};
 use crate::invoke::sig::{self, RecvView, TargMap};
@@ -24,8 +24,9 @@ fn same(env: &InstrEnv, a: &RsType, b: &RsType) -> bool {
     ty_text(env, a) == ty_text(env, b)
 }
 
+#[track_caller]
 fn raw_stmt(s: String) -> Stmt {
-    Stmt::Raw(Raw(s))
+    Stmt::raw(s)
 }
 
 /// 常量池类 → 静态方法的声明类（JVM 方法解析：常量池类可以是子类）；
@@ -163,10 +164,10 @@ fn emit_unknown_stub(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, cls_sho
     let rust_ret = env.ctx.ty.jvm_to_rust(&call.ret);
     let msg = format!("stub: {cls_short}.{}", call.name);
     if matches!(rust_ret, RsType::Unit) {
-        sim.emit(raw_stmt(format!("panic!(\"{msg}\");")));
+        sim.emit(raw_stmt(format!("__stub(\"{msg}\");")));
     } else {
         let v = sim.fresh("_t")?;
-        sim.emit(raw_stmt(format!("let {v}: {} = panic!(\"{msg}\");", ty_text(env, &rust_ret))));
+        sim.emit(raw_stmt(format!("let {v}: {} = __stub(\"{msg}\");", ty_text(env, &rust_ret))));
         sim.push(Expr::Var(v), rust_ret);
     }
     Ok(())
@@ -184,9 +185,6 @@ fn call_target(env: &InstrEnv, sim: &StackSim, call: &CallRef, cls_path: &[Strin
     let rust_m = ty::ident::safe_ident(&mangle_if_overloaded(ctx, &call.owner, &call.name, Some(&call.desc))?);
     if cls_short == ctx.class_name {
         return Ok(Target { path: Path::new(vec![seg("Self")?, seg(&rust_m)?]), turbofish_bound: false });
-    }
-    if cls_short.contains('/') {
-        return unported(format!("invokestatic 目标短名含包路径：{cls_short}"));
     }
     let turbofish = match inst {
         Some(i) => i.to_vec(),
@@ -236,13 +234,13 @@ pub fn gen_invokestatic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, 
     let owner = if call.owner.is_empty() { ctx.class_name.to_string() } else { call.owner.clone() };
     // @CallerSensitive 包装生效：沿用字符串形态
     let call_e = match caller_sensitive_wrap(env, &text(env, &node), &owner, &call.name, &call.desc) {
-        Some(w) => Expr::Raw(Raw(format!("{w}?"))),
+        Some(w) => Expr::raw(format!("{w}?")),
         None => try_(node),
     };
     let rust_ret = ctx.ty.jvm_to_rust(&call.ret);
     if matches!(rust_ret, RsType::Unit) {
         sim.emit(match call_e {
-            Expr::Raw(Raw(s)) => raw_stmt(format!("{s};")),
+            Expr::Raw(r) => raw_stmt(format!("{};", r.as_str())),
             e => expr_stmt(e),
         });
         return Ok(());
@@ -279,7 +277,7 @@ fn emit_ret(env: &InstrEnv, sim: &mut StackSim, call_e: Expr, rust_ret: RsType, 
         match sig_ret.filter(|s| !matches!(s, RsType::Object)) {
             Some(s) => {
                 // 签名真实返回类型装箱（S-3.1）：身份保持的 Object 上转
-                let leaf = Expr::Raw(Raw(text(env, &call_e)));
+                let leaf = Expr::raw(text(env, &call_e));
                 let boxed = coerce::to_object(env, leaf, &s, true)?;
                 sim.emit(raw_stmt(format!("let {v} = {};", text(env, &boxed))));
             }

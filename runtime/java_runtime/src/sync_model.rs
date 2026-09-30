@@ -213,9 +213,16 @@ impl<T> __GilStatic<T> {
         __GilStatic { init, cell: std::sync::OnceLock::new() }
     }
 
+    /// 取（必要时惰性初始化）存储单元。只随 `T` 实例化——宏展开的静态字段 / 类初始化
+    /// 状态访问经此直取单元，不为每个访问点的闭包各实例化一份 `with`。
+    #[inline]
+    pub fn force(&'static self) -> &'static T {
+        self.cell.get_or_init(self.init)
+    }
+
     #[inline]
     pub fn with<R>(&'static self, f: impl FnOnce(&T) -> R) -> R {
-        f(self.cell.get_or_init(self.init))
+        f(self.force())
     }
 }
 

@@ -130,10 +130,10 @@ pub struct SeedFacts {
 
 #[derive(Debug, Clone, Default)]
 pub struct ClosureFacts {
-    /// 引擎插入序
+    /// 按类名排序（与引擎处理次序无关）
     pub classes: Vec<ClassFact>,
     pub methods: Vec<MethodFact>,
-    /// 类初始化集合（插入序）
+    /// 类初始化集合（按类名排序）
     pub clinit: Vec<String>,
     /// 活代码调用点符号键
     pub refs: Vec<MemberRef>,
@@ -174,8 +174,8 @@ impl ClosureFacts {
     pub fn from_closure(c: &Closure<'_>) -> ClosureFacts {
         let e = &c.engine;
         let classes = e
-            .classes
-            .iter()
+            .class_entries()
+            .into_iter()
             .map(|(n, c)| ClassFact {
                 name: n.clone(),
                 domain: c.domain,
@@ -183,7 +183,8 @@ impl ClosureFacts {
             })
             .collect();
         let methods = e
-            .method_nodes()
+            .method_entries()
+            .into_iter()
             .map(|m| MethodFact {
                 id: m.key.clone(),
                 kind: MethodKind::of(m.kind),
@@ -220,7 +221,7 @@ impl ClosureFacts {
         ClosureFacts {
             classes,
             methods,
-            clinit: e.inited.keys().cloned().collect(),
+            clinit: e.clinit_list().into_iter().cloned().collect(),
             refs: e.refs.iter().filter_map(|r| parse_member_id(r).ok()).collect(),
             missing: e.missing.keys().cloned().collect(),
             unresolved: e.unresolved.iter().cloned().collect(),

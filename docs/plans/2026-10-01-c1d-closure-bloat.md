@@ -235,3 +235,36 @@ CollectorsDemo 重测后结论不变（「String.format 咽喉不迁移」对它
 ### 11.5 已知未覆盖（既有，非本步引入）
 
 有一种情况 S3 不成立：按名取字段的入口处，名字非常量（`ptaint`）且 Class 实参也推不出。此时字段按名全部放开，但不初始化任何声明类。若出现，终态做法是按名兜底扩展为「闭包中全部含非常量静态字段的类」。
+
+## 12. 合入 rust-closure-analyzer（ef1daf34）
+
+冲突以主干形态为准，C1d 终态语义保留：
+
+- **手写删除保留**：C1d 删掉的 5 个过渡手写文件（java_lang_access / arrays_support / byte_array / stream_decoder / stream_encoder 的 `_impl.rs`）继续删除，不接收主干对它们的机械改动。
+- **`input::boundary` 取 C1d 终态**：只判 VM 契约类，不带类路径与资源束判定。
+- **`api_roots` 不再跳过「边界域包」**：终态已无包前缀截断。
+- **`dyn_compare` 直读 TOML，不 import codegen**：
+  - 域规则取 `[vm_boundary] classes / translate_nested`；
+  - 基准 JVM 的 `-D` 取自 `vm_intrinsics.toml [facts.system_properties.values]`；
+  - `codegen/runtime_manifest.system_property_values` 已撤回。
+- **形参字符串常量改用主干的单调集 `pstrs.rs`**，按名取字段的污染判定（`ptaint`）保留：
+  - 污染槽的读者站点从 `pstr_readers` 取；
+  - 主干的 `Src::Str` 现在带字面量编号，合流的字面量可逐个取回，所以按名取字段把它们计入名字全集，不再判为不可知。
+- **驱动层**：闭包诊断选项（`--cut` / `--cut-file` / `--dump-edges`）与主干新增选项并存；`main.py` 的 rust 路径把诊断参数转交 `rava build`。
+- **合并后的机械修复**：`method::vars::slot_type` 的 null → `Default::default()` 改走计数构造器 `Expr::raw`；`class_writer` 去掉手写覆盖副本（C1d 已删 `hw_overrides`）。
+
+### 12.1 4 例闭包对照（合入前 b671d95f → 合入后）
+
+| 用例 | 类 | 方法 | 类初始化 | mirror_inits | 反射缺口 |
+|---|---|---|---|---|---|
+| HelloWorld | 不变 | +5 | 不变 | 17 → 17 | 不变 |
+| TestStreamBasic | 不变 | +5 | 不变 | 17 → 17 | 不变 |
+| CollectorsDemo | 不变 | +5 | 不变 | 17 → 17 | 不变 |
+| Digester | 不变 | +4 | 不变 | 150 → 150 | 不变 |
+
+新增方法均为 `MethodHandle.linkToVirtual / linkToStatic / linkToSpecial / linkToInterface`；前三例另加 `MethodHandle.invoke`。这正是主干 8162d43e 列出的变化：
+
+- `DirectMethodHandle.makePreparedLambdaForm@313` 的链接器名经合流取回；
+- `MethodHandle.invoke` 由 `makeExactOrGeneralInvoker` 的调用方引入。
+
+合并本身没有引入其它集合变化。

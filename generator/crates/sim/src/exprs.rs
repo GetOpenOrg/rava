@@ -115,7 +115,7 @@ fn call2_names(e: &Expr) -> Option<(&str, &str, &[Expr])> {
 
 fn raw_text(e: &Expr) -> Option<&str> {
     match e {
-        Expr::Raw(r) => Some(r.0.as_str()),
+        Expr::Raw(r) => Some(r.as_str()),
         _ => None,
     }
 }
@@ -174,7 +174,7 @@ fn trivial_raw(text: &str) -> bool {
 pub fn is_trivial(e: &Expr) -> bool {
     match e {
         Expr::Var(_) | Expr::Lit(_) | Expr::NewPending { .. } => true,
-        Expr::Raw(r) => trivial_raw(&r.0),
+        Expr::Raw(r) => trivial_raw(r.as_str()),
         Expr::Unary { op: ir::UnOp::Neg, expr } => matches!(**expr, Expr::Lit(_)),
         _ => {
             is_clone_of_var(e)
@@ -203,7 +203,7 @@ fn ends_with_into(e: &Expr) -> bool {
     match e {
         Expr::Upcast { .. } => true,
         Expr::MethodCall { method, turbofish, args, .. } => method.as_str() == "into" && turbofish.is_empty() && args.is_empty(),
-        Expr::Raw(r) => r.0.ends_with(".into()"),
+        Expr::Raw(r) => r.as_str().ends_with(".into()"),
         _ => false,
     }
 }
@@ -213,7 +213,7 @@ fn stmt_contains_default(s: &Stmt) -> bool {
         Stmt::Let(l) => l.value.as_ref().is_some_and(contains_default),
         Stmt::Assign(a) => contains_default(&a.target) || contains_default(&a.value),
         Stmt::Expr(e) | Stmt::Return(Some(e)) => contains_default(e),
-        Stmt::Raw(r) => r.0.contains("Default::default()"),
+        Stmt::Raw(r) => r.as_str().contains("Default::default()"),
         _ => false,
     }
 }
@@ -225,7 +225,7 @@ fn contains_default(e: &Expr) -> bool {
     }
     let sub = |x: &Expr| contains_default(x);
     match e {
-        Expr::Raw(r) => r.0.contains("Default::default()"),
+        Expr::Raw(r) => r.as_str().contains("Default::default()"),
         Expr::Binary { lhs, rhs, .. } => sub(lhs) || sub(rhs),
         Expr::Call { args, .. } | Expr::Macro(MacroCall { args, .. }) => args.iter().any(sub),
         Expr::MethodCall { recv, args, .. } => sub(recv) || args.iter().any(sub),

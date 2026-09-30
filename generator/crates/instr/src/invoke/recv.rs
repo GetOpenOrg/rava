@@ -1,7 +1,7 @@
 //! 虚调用接收者解析（← `member_owner.py` 中依赖栈状态的部分：`_close_open_type_args`、
 //! `_erase_slot_params`、`_resolve_virtual_sig_params`）。
 
-use ir::{Expr, FnPath, Path, Raw, Stmt, Type};
+use ir::{Expr, FnPath, Path, Stmt, Type};
 use sim::{StackEntry, StackSim};
 use ty::{ClassInfo, JvmType, RsType};
 
@@ -32,9 +32,9 @@ fn close_path(p: &mut Path) -> InstrResult<()> {
 /// 的路径泛型改写。形态不符 → false
 fn close_ctor(expr: &mut Expr, open_tf: &str, closed_tf: &str) -> InstrResult<bool> {
     match expr {
-        Expr::Raw(Raw(code)) => match code.strip_prefix(open_tf) {
+        Expr::Raw(r) => match r.as_str().strip_prefix(open_tf).map(str::to_string) {
             Some(rest) => {
-                *code = format!("{closed_tf}{rest}");
+                *r.text_mut() = format!("{closed_tf}{rest}");
                 Ok(true)
             }
             None => Ok(false),

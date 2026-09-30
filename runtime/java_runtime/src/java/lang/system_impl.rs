@@ -72,7 +72,7 @@ impl System {
                         Box::new(0..length)
                     };
                     for i in range {
-                        d.set(dest_pos + i, s.get(src_pos + i)?)?;
+                        d.set(dest_pos.wrapping_add(i), s.get(src_pos.wrapping_add(i))?)?;
                     }
                     return Ok(());
                 }
@@ -104,7 +104,7 @@ impl System {
                 Box::new(0..length)
             };
             for i in range {
-                d.set(dest_pos + i, s.get(src_pos + i)?)?;
+                d.set(dest_pos.wrapping_add(i), s.get(src_pos.wrapping_add(i))?)?;
             }
             return Ok(());
         }

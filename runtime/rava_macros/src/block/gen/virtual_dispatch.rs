@@ -132,7 +132,7 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
             // 无方法体（abstract）→ stub，子类必须覆盖
             let msg = format!("stub: {}.{}:{}", binary, mname_str, desc);
             vtable_default_methods.push(quote! {
-                #erased_default_sig { panic!(#msg) }
+                #erased_default_sig { __stub(#msg) }
             });
         }
     }
@@ -430,7 +430,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                             let bin = &ctx.meta.binary_name;
                             let msg = format!("stub: {}.{}:{}", bin, mname, desc);
                             items.push(quote! {
-                                #erased_item_sig { panic!(#msg) }
+                                #erased_item_sig { __stub(#msg) }
                             });
                         }
                     }
@@ -559,7 +559,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                         None => {
                             let mname = sig.ident.to_string();
                             let msg = format!("stub: {}.{}", ctx.meta.binary_name, mname);
-                            items.push(quote! { #erased_item_sig { panic!(#msg) } });
+                            items.push(quote! { #erased_item_sig { __stub(#msg) } });
                         }
                     }
                 }
@@ -690,7 +690,7 @@ pub(crate) fn base_fns(ctx: &GenContext) -> TokenStream2 {
                     #[doc(hidden)]
                     #[allow(non_snake_case, unused_variables)]
                     pub fn #fn_name #base_impl_g (this: &__BT #(, #non_self_params)*) #ret {
-                        panic!(#msg)
+                        __stub(#msg)
                     }
                 });
             } else {

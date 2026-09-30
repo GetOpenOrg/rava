@@ -1,9 +1,8 @@
 //! 发射上下文（不可变输入）与每项目状态（Python 模块级全局账本的显式化）。
 
-use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use classfile::extras::{parse_extras, ClassExtras};
 use closure::seeds::SeedCfg;
@@ -22,6 +21,12 @@ pub struct EmitOptions {
     pub jdk_major: Option<u32>,
     /// 用户 .java 源文件（package 声明来源）
     pub java_files: Vec<PathBuf>,
+    /// 批量模式：入口写 `user/src/bin/<bin>.rs`，向 user/Cargo.toml 追加 `[[bin]]`
+    pub batch: bool,
+    /// 调试：审计逐条明细（存根兜底位点、静默兜底触发）
+    pub debug: bool,
+    /// 逐类发射的并行度（0 = 可用核数；1 = 串行）。输出与并行度无关
+    pub jobs: usize,
 }
 
 /// 发射上下文：输入事实 + 类型层 + 清单（全部只读；缓存经内部可变性）
@@ -38,12 +43,18 @@ pub struct EmitCtx<'a> {
     pub macros_crate: PathBuf,
     pub seeds: SeedCfg,
     pub opts: EmitOptions,
-    extras: RefCell<HashMap<String, Rc<ClassExtras>>>,
-    subtype_children: OnceCell<BTreeMap<String, Vec<String>>>,
-    root_api: OnceCell<BTreeSet<String>>,
-    chain_slots: OnceCell<BTreeMap<String, BTreeSet<(String, String)>>>,
-    root_keys: OnceCell<BTreeSet<(String, String)>>,
-    sam: OnceCell<crate::sam::SamLedger>,
+    /// 静默兜底审计（`[fallback-audit]`）
+    pub fallback: crate::fallback::FallbackAudit,
+    extras: RwLock<HashMap<String, Arc<ClassExtras>>>,
+    subtype_children: OnceLock<BTreeMap<String, Vec<String>>>,
+    root_api: OnceLock<BTreeSet<String>>,
+    chain_slots: OnceLock<BTreeMap<String, BTreeSet<(String, String)>>>,
+    root_keys: OnceLock<BTreeSet<(String, String)>>,
+    sam: OnceLock<crate::sam::SamLedger>,
+    instr_facts: OnceLock<instr::InstrFacts>,
+    lib_crate_of: OnceLock<HashMap<String, String>>,
+    /// 类文件头 use 行索引缓存（binary → 索引；按头部文本校验，见 `phase2::uses`）
+    pub(crate) use_index: Mutex<HashMap<String, Arc<crate::phase2::uses::UseIndex>>>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -72,13 +83,17 @@ impl<'a> EmitCtx<'a> {
             runtime_dir,
             macros_crate,
             seeds: SeedCfg::from_toml(&table),
+            fallback: crate::fallback::FallbackAudit::new(opts.debug),
             opts,
-            extras: RefCell::new(HashMap::new()),
-            subtype_children: OnceCell::new(),
-            root_api: OnceCell::new(),
-            chain_slots: OnceCell::new(),
-            root_keys: OnceCell::new(),
-            sam: OnceCell::new(),
+            extras: RwLock::new(HashMap::new()),
+            subtype_children: OnceLock::new(),
+            root_api: OnceLock::new(),
+            chain_slots: OnceLock::new(),
+            root_keys: OnceLock::new(),
+            sam: OnceLock::new(),
+            instr_facts: OnceLock::new(),
+            lib_crate_of: OnceLock::new(),
+            use_index: Mutex::new(HashMap::new()),
         })
     }
 
@@ -97,12 +112,25 @@ impl<'a> EmitCtx<'a> {
     }
 
     /// 类的补充属性（LVT、注解原始字节、Deprecated 等；按需二次解析并缓存）
-    pub fn extras(&self, cls: &str) -> Rc<ClassExtras> {
-        if let Some(x) = self.extras.borrow().get(cls) {
+    pub fn extras(&self, cls: &str) -> Arc<ClassExtras> {
+        if let Some(x) = self.extras.read().unwrap_or_else(|e| e.into_inner()).get(cls) {
             return x.clone();
         }
-        let x = Rc::new(self.cp.bytes(cls).and_then(|b| parse_extras(&b).ok()).unwrap_or_default());
-        self.extras.borrow_mut().insert(cls.to_string(), x.clone());
+        // 并发未命中时各自解析（结果只由字节决定），先入者胜出；降级只由入表者计一次
+        let parsed = self.cp.bytes(cls).map(|b| parse_extras(&b));
+        let mut map = self.extras.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(x) = map.get(cls) {
+            return x.clone();
+        }
+        let x = Arc::new(match parsed {
+            Some(Ok(x)) => x,
+            Some(Err(e)) => {
+                self.fallback.record("class-extras", || format!("{cls}: {e}"));
+                ClassExtras::default()
+            }
+            None => ClassExtras::default(),
+        });
+        map.insert(cls.to_string(), x.clone());
         x
     }
 
@@ -154,6 +182,15 @@ impl<'a> EmitCtx<'a> {
         })
     }
 
+    /// 方法体层的全局事实（根类方法集 / 手写根类 API 名面 / 子类索引）：发射层与方法体层
+    /// 共用同一成员命名函数时的上下文
+    pub fn instr_facts(&self) -> &instr::InstrFacts {
+        self.instr_facts.get_or_init(|| {
+            let root = self.cp.get(ty::consts::OBJECT);
+            instr::InstrFacts::build(self.ty.reg, root.as_deref(), &self.runtime_src())
+        })
+    }
+
     /// A-5 可合成函数式接口账本（首次查询时预扫描；方法体生成器在 invokedynamic 站点经
     /// [`crate::sam::SamLedger::site_ctor_path`] 查询构造路径）
     pub fn sam(&self) -> &crate::sam::SamLedger {
@@ -170,6 +207,22 @@ impl<'a> EmitCtx<'a> {
             }
             out
         })
+    }
+
+    /// jar 输入模式：类归属的 lib crate 名（非 lib 类 None）
+    pub fn lib_crate_of(&self, cls: &str) -> Option<&str> {
+        self.lib_crate_of
+            .get_or_init(|| {
+                let mut m = HashMap::new();
+                for (lib, classes) in &self.input.lib_crates {
+                    for c in classes {
+                        m.entry(c.clone()).or_insert_with(|| lib.clone());
+                    }
+                }
+                m
+            })
+            .get(cls)
+            .map(String::as_str)
     }
 
     /// 类是否为本编译单元的用户类
@@ -202,6 +255,8 @@ pub struct ProjectState {
     pub sam_sites: Vec<(String, String, String)>,
     /// FS-H0 手写覆盖审计（`raw_audit` 三类登记；发射序）
     pub hw_audit: Vec<(HwAudit, String)>,
+    /// 方法体生成日志（审计事实 + 逐方法耗时；发射序）
+    pub body_log: crate::body::BodyLog,
 }
 
 /// 公开 API 类非 native 方法被手写覆盖的审计类别
@@ -216,6 +271,21 @@ pub enum HwAudit {
 }
 
 impl ProjectState {
+    /// 并入一个类的账本增量（按发射序调用：插入序账本与串行发射逐项一致）。
+    /// `seen_simples` 只在串行的跨类导入阶段累积，不经增量
+    pub fn merge(&mut self, d: ProjectState) {
+        debug_assert!(d.seen_simples.is_empty());
+        self.inherited_requests.extend(d.inherited_requests);
+        self.lambda_refs.extend(d.lambda_refs);
+        for (k, v) in d.lambda_defs {
+            self.lambda_defs.entry(k).or_default().extend(v);
+        }
+        self.generated_classes.extend(d.generated_classes);
+        self.sam_sites.extend(d.sam_sites);
+        self.hw_audit.extend(d.hw_audit);
+        self.body_log.append(d.body_log);
+    }
+
     /// 方法体生成登记的事实并入账本
     pub fn absorb(&mut self, fx: &crate::body::BodyEffects) {
         for r in &fx.requests {

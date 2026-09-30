@@ -44,6 +44,8 @@ impl<'a> Engine<'a> {
                         names.insert(name.clone());
                     }
                     V::Ref { .. } => {
+                        // 合流前的各字面量（如按条件二选一的名字）与形参上流入的字符串常量
+                        names.extend(a.lits());
                         names.extend(self.param_strs(m, off, a));
                         let Some(parts) = self.method_name_parts(m, a) else { continue };
                         if targets.is_none() {
@@ -74,8 +76,8 @@ impl<'a> Engine<'a> {
             }
         }
         if class_param || class_recv {
-            for a in args {
-                let V::Str(name) = a else { continue };
+            for name in args.iter().flat_map(V::lits) {
+                let name = &name;
                 let mut hit = false;
                 for c in &classes {
                     if let Some((decl, desc)) = self.field_by_name(c, name) {
@@ -138,7 +140,7 @@ impl<'a> Engine<'a> {
     /// 调用边到达字段句柄写入口：调用者是句柄桥（取得的句柄只经 Field.set* 的访问器使用，
     /// 写入由 Field.set* 计入）时不算；每条边都判（首个调用者是桥不代表后续调用者也是）
     pub(super) fn handle_writer_edge(&mut self, key: &MemberRef, via: &Via) {
-        if !self.man.is_field_handle_writer(&key.to_string()) {
+        if !self.man.is_field_handle_writer(key) {
             return;
         }
         if let From::Method(c) = via.from {
@@ -200,10 +202,10 @@ impl<'a> Engine<'a> {
                     c => c,
                 };
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
-                let named = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { None };
+                let (named, top) = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { (vec![], true) };
                 let t = self.callee(m, off, resolved, ctx, via);
-                self.edge(m, off, t, Recv::None, &a, ret, if named.is_some() { None } else { res });
-                for c in named.unwrap_or_default() {
+                self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
+                for c in named {
                     self.named_class(m, off, &c);
                 }
             }
@@ -326,6 +328,9 @@ impl<'a> Engine<'a> {
         let ptypes = self.methods[t].ptypes.clone();
         let base = usize::from(!is_static);
         self.bind_params(t, base, ptypes.len());
+        if let Some(cv) = self.call_vals.clone() {
+            self.pstr_site(m, &cv, |j| pstrs::PSlot::M(t, base + j));
+        }
         let mut recv_fs: Option<Vec<Feed>> = None;
         if !is_static {
             match (recv, ptypes.first().copied().flatten()) {
@@ -397,32 +402,13 @@ impl<'a> Engine<'a> {
         let mut out = Vec::new();
         for s in v.srcs().iter() {
             let Src::Param(i) = s else { continue };
-            let slot = (m, *i as usize);
-            self.pstr_sites.entry(slot).or_default().insert(off);
-            out.extend(self.pstrs.get(&slot).into_iter().flatten().cloned());
+            out.extend(self.pstr_read(m, *i as usize, off));
         }
         out
     }
 
-    /// 形参上的字符串常量并入；增长时重跑读过它的按名查找站点
-    fn bind_pstrs(&mut self, t: usize, base: usize, vals: &[PV]) {
-        for (j, v) in vals.iter().enumerate() {
-            let PV::Const(V::Str(s)) = v else { continue };
-            let slot = (t, base + j);
-            if !self.pstrs.entry(slot).or_default().insert(s.clone()) {
-                continue;
-            }
-            for off in self.pstr_sites.get(&slot).cloned().unwrap_or_default() {
-                self.rerun_site(t, off);
-            }
-        }
-    }
-
     /// 形参常量并入（vals 不含接收者；None = 实参值未知）
     pub(super) fn bind_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
-        if let Some(vs) = vals {
-            self.bind_pstrs(t, base, vs);
-        }
         self.taint_params(t, base, n, vals);
         let cur = self.pvals.get(&t).cloned();
         let new: Vec<PV> = (0..n)

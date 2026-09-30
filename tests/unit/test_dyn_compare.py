@@ -177,5 +177,20 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(dc.main_class_of(closure()), 'Main')
 
 
+class ManifestTest(unittest.TestCase):
+    def test_from_manifest_reads_toml_without_codegen(self):
+        rules = dc.DomainRules.from_manifest({'Main'})
+        self.assertTrue(rules.vm_boundary and rules.release and rules.vm_upcalls)
+        self.assertNotIn('codegen.runtime_manifest', sys.modules)
+        self.assertEqual(rules.domain('Main'), 'user')
+
+    def test_model_property_args_read_toml_without_codegen(self):
+        args = dc.model_property_args()
+        self.assertIn('-Djdk.reflect.useNativeAccessorOnly=true', args)
+        self.assertFalse(any(a.startswith('-Djava.class.path=') for a in args))
+        self.assertEqual(args, sorted(args))
+        self.assertNotIn('codegen.runtime_manifest', sys.modules)
+
+
 if __name__ == '__main__':
     unittest.main()

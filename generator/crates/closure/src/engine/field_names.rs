@@ -5,7 +5,8 @@
 //! - 常量：点名字段不折叠（与字节码形状规则一致）；
 //! - 取自本方法形参：取各调用点在该形参上的字符串常量逐个放开；形参槽出现过非常量实参（或方法无调用点
 //!   记录即进入，如 VM / 手写入口）时名字不可知，走保守回退；常量集增长 / 槽被污染时本站点重跑；
-//! - 其它（字段读 / 调用返回 / 拼接 / 合流后丢失内容的字面量）：名字不可知，走保守回退。
+//! - 合流的字面量（`Src::Str` 携带字面量编号）：逐个取回放开；
+//! - 其它（字段读 / 调用返回 / 拼接）：名字不可知，走保守回退。
 //!
 //! 保守回退：字段所属类是类字面量时放开该类及其超类的全部字段，否则全部字段不折叠；返回字段句柄的入口
 //! （`handle = true`）按字段枚举处理——句柄写入口（`handle_writers`）可达时才放开。
@@ -31,7 +32,9 @@ impl Engine<'_> {
             V::Str(s) => (vec![s.clone()], true),
             V::Null => return,
             _ => {
-                let names = self.param_strs(m, off, v);
+                // 合流前的各字面量（Src::Str 可取回）与形参上流入的字符串常量
+                let mut names = v.lits();
+                names.extend(self.param_strs(m, off, v));
                 (names, names_known(&v.srcs(), |i| self.ptaint.contains(&(m, i))))
             }
         };
@@ -83,16 +86,21 @@ impl Engine<'_> {
             if clean || !self.ptaint.insert((t, i)) {
                 continue;
             }
-            for off in self.pstr_sites.get(&(t, i)).cloned().unwrap_or_default() {
+            for off in self.pstr_readers(t, i) {
                 self.rerun_site(t, off);
             }
         }
     }
 }
 
-/// 名字值的全部来源都是未污染的形参槽（其常量集即名字全集）
+/// 名字值的全部来源都是可取回的字面量或未污染的形参槽（其常量集即名字全集）
 fn names_known(srcs: &[Src], tainted: impl Fn(usize) -> bool) -> bool {
-    !srcs.is_empty() && srcs.iter().all(|s| matches!(s, Src::Param(i) if !tainted(*i as usize)))
+    !srcs.is_empty()
+        && srcs.iter().all(|s| match s {
+            Src::Str(_) => true,
+            Src::Param(i) => !tainted(*i as usize),
+            _ => false,
+        })
 }
 
 /// 形参槽上的实参不污染名字集：字符串常量（入常量集）或 null（取字段身份时抛异常，不指向任何字段）
@@ -108,13 +116,14 @@ mod tests {
     fn names_from_clean_params_are_known() {
         assert!(names_known(&[Src::Param(1)], |_| false));
         assert!(names_known(&[Src::Param(1), Src::Param(2)], |i| i == 3));
+        // 合流前的字面量可取回
+        assert!(names_known(&[Src::Param(1), Src::Str(0)], |_| false));
     }
 
     #[test]
     fn tainted_or_non_param_sources_are_unknown() {
         assert!(!names_known(&[Src::Param(1)], |i| i == 1));
-        // 合流后丢失内容的字面量、字段读 / 调用返回、异常值
-        assert!(!names_known(&[Src::Param(1), Src::Str], |_| false));
+        // 字段读 / 调用返回、异常值
         assert!(!names_known(&[Src::Site(7)], |_| false));
         assert!(!names_known(&[Src::Catch(3)], |_| false));
         assert!(!names_known(&[], |_| false));

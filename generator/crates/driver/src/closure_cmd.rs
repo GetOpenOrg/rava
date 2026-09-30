@@ -9,6 +9,7 @@
 //! `--locale <标签>`（locale 资源束种子）；
 //! 诊断（缺省关闭，不影响结果）：`--cut <类.方法:描述符[@偏移]>`（反事实切除，可多次）、`--cut-file <文件>`（每行一条，`#` 注释）、
 //! `--dump-edges <文件>`（触发边转储）。
+//! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）。
 
 use std::path::{Path, PathBuf};
 
@@ -80,6 +81,10 @@ fn user_classes(input: &Path, home: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn run(args: &Args) -> Result<(), String> {
+    let num = |k: &str| args.opt(k).map(|v| v.parse::<u64>().map_err(|_| format!("{k} 需为非负整数：{v}"))).transpose();
+    if let Some(s) = num("--hash-seed")? {
+        closure::engine::set_hash_seed(s);
+    }
     let input = args.rest.first().filter(|a| !a.starts_with('-')).ok_or("缺少输入（.java 文件或类目录）")?;
     let home = crate::java_home(args)?;
     let rt = runtime_dir(args)?;
@@ -121,6 +126,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         seed_roots: seed_roots(&cp, &multi("--root"), &multi("--seed-class"))?,
         locales: multi("--locale").into_iter().cloned().collect(),
         diag: diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))?,
+        flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
     let c = closure::analyze(&input_desc, &h, &man, &hw);
 

@@ -19,7 +19,7 @@ fn lib() -> Result<&'static zlib::Zlib> {
 
 fn copy_in(a: &JArray<i8>, off: i32, len: i32) -> Result<Vec<u8>> {
     let mut v = Vec::with_capacity(len.max(0) as usize);
-    for i in off..off + len {
+    for i in off..off.saturating_add(len) {
         v.push(a.get(i)? as u8);
     }
     Ok(v)
@@ -27,7 +27,7 @@ fn copy_in(a: &JArray<i8>, off: i32, len: i32) -> Result<Vec<u8>> {
 
 fn copy_out(a: &JArray<i8>, off: i32, data: &[u8]) -> Result<()> {
     for (i, b) in data.iter().enumerate() {
-        a.set(off + i as i32, *b as i8)?;
+        a.set(off.wrapping_add(i as i32), *b as i8)?;
     }
     Ok(())
 }

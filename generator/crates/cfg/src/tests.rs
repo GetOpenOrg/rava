@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ir::{Expr, Ident, Raw, Renderer, ShortNames};
+use ir::{Expr, Ident, Renderer, ShortNames};
 
 use crate::*;
 
@@ -15,7 +15,7 @@ impl ShortNames for NoNames {
 }
 
 fn raw(s: &str) -> Expr {
-    Expr::Raw(Raw(s.to_string()))
+    Expr::raw(s.to_string())
 }
 
 fn var(s: &str) -> Expr {

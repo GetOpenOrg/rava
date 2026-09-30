@@ -2,7 +2,7 @@
 //!
 //! 只出现 Rust 语言 / std 名与运行时锚点（[`ir::anchors`]），不出现 JDK 类名。
 
-use ir::{Expr, FnPath, Ident, LetStmt, Lit, Path, PathSegment, Raw, Stmt, Type};
+use ir::{Expr, FnPath, Ident, LetStmt, Lit, Path, PathSegment, Stmt, Type};
 use ty::RsType;
 
 use crate::env::InstrEnv;
@@ -72,7 +72,7 @@ pub fn i32_lit(v: i64) -> Expr {
 /// 字符串管线历来发射 `Clone::clone(&this)`）
 pub fn str_leaf(e: Expr) -> Expr {
     if e.is_var_named("this") {
-        Expr::Raw(Raw("this".to_string()))
+        Expr::raw("this".to_string())
     } else {
         e
     }

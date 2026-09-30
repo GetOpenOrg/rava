@@ -11,7 +11,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use classfile::{op, ClassFile, Const, Method, MemberRef, Operand};
 use closure::engine::Level;
@@ -22,7 +22,7 @@ use ty::Registry;
 use crate::facts::ClosureFacts;
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
-use crate::norm::{apply_fold, NInsn, NormCode};
+use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
 use crate::InputError;
 
 /// 方法键 (类, 方法名, 描述符)
@@ -121,6 +121,16 @@ impl EmitInput {
         })
     }
 
+    /// 方法体指令视图（同 [`EmitInput::code`] 的取值，不复制指令；只读扫描用）
+    pub fn code_ops<'s>(&'s self, cls: &str, m: &'s Method) -> Option<CodeOps<'s>> {
+        let code = m.code.as_ref()?;
+        let k = (cls.to_string(), m.name.clone(), m.desc.clone());
+        Some(match self.normalized.get(&k) {
+            Some(n) => CodeOps::Norm(n),
+            None => CodeOps::Raw(code),
+        })
+    }
+
     /// 规范化改动过的方法（golden 对照 / 审计用）
     pub fn normalized(&self) -> &BTreeMap<MethodKey, NormCode> {
         &self.normalized
@@ -128,7 +138,7 @@ impl EmitInput {
 }
 
 /// 闭包类的装载口径：lib / JDK / 镜像档案（用户档案只经本编译单元进入）
-fn load(cp: &ClassPath, name: &str) -> Option<Rc<ClassFile>> {
+fn load(cp: &ClassPath, name: &str) -> Option<Arc<ClassFile>> {
     if cp.origin(name) == Some(Origin::User) {
         return None;
     }
@@ -140,7 +150,7 @@ fn declares(cf: &ClassFile, name: &str, desc: &str) -> bool {
 }
 
 /// 闭包类 → (非用户域的可装载类序, 类型层级类, 告警)
-fn closure_classes(inp: &BuildInput<'_>, warnings: &mut Vec<String>) -> (Vec<Rc<ClassFile>>, BTreeSet<String>) {
+fn closure_classes(inp: &BuildInput<'_>, warnings: &mut Vec<String>) -> (Vec<Arc<ClassFile>>, BTreeSet<String>) {
     let users: BTreeSet<&str> = inp.user_classes.iter().map(String::as_str).collect();
     let mut out = Vec::new();
     let mut field_stubs = BTreeSet::new();
@@ -217,7 +227,7 @@ fn ldc_string(ins: &NInsn) -> Option<&str> {
 type LibSplit = (Vec<(String, Vec<String>)>, Vec<String>);
 
 impl<'a> BuildInput<'a> {
-    fn lib_split(&self, closure: &[Rc<ClassFile>]) -> Result<LibSplit, InputError> {
+    fn lib_split(&self, closure: &[Arc<ClassFile>]) -> Result<LibSplit, InputError> {
         let mut crate_of: BTreeMap<&str, usize> = BTreeMap::new();
         for (i, l) in self.libs.iter().enumerate() {
             for n in &l.jar_classes {
@@ -286,7 +296,7 @@ impl<'a> BuildInput<'a> {
         Ok(out)
     }
 
-    fn reflect(&self, closure: &[Rc<ClassFile>], visited: &BTreeSet<MethodKey>, norm: &BTreeMap<MethodKey, NormCode>) -> ReflectFacts {
+    fn reflect(&self, closure: &[Arc<ClassFile>], visited: &BTreeSet<MethodKey>, norm: &BTreeMap<MethodKey, NormCode>) -> ReflectFacts {
         let f = self.facts;
         let mut consts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for r in &f.reflect_members {

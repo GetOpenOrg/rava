@@ -5,7 +5,7 @@
 //!   每个中间值只被链上下一步使用一次）；各段是字符串常量 / null，或「常量表读取」的结果（可经一次 checkcast）；
 //! - 常量表读取：接收者是 `[facts.reflect] constant_tables` 基类的子类对象、调用其读取入口。常量表子类是生成的
 //!   不可变映射，内容即子类自身代码里的字符串常量——候选值取该子类全部方法的 ldc 字符串（超集，安全）；
-//!   接收者值集含 open 部分时推不出，按原样处理（返回所指未知的 Class）；
+//!   接收者值集另含 open / 非常量表部分时，给出常量表部分的候选，结果另接所指未知的 Class（按名查方法记为任意串）；
 //! - 枚举取值：段是枚举常量上 final 字符串字段的平凡取值方法（见 `method_lookup.rs`）；
 //! - 按名查方法（`[facts.reflect] method_lookups`）复用同一拆段，推不出的段记为任意串，见 `method_lookup.rs`；
 //! - 候选名笛卡尔积后只保留类路径上存在的类；结果唯一地经实例化入口（`instantiators`）再唯一地 checkcast 到 T 时，
@@ -72,9 +72,26 @@ pub(super) fn is_invoke(e: &Event) -> bool {
 }
 
 impl<'a> Engine<'a> {
-    /// 按名取类调用点（方法 m、偏移 off、实参 args）的所指类集；Some(空) = 候选来源尚未流到（值集增长时重跑），
-    /// None = 形状不符（按原样返回所指未知的 Class）
-    pub(super) fn class_lookup(&mut self, m: usize, off: u32, args: &[V]) -> Option<Vec<String>> {
+    /// 按名取类调用点（方法 m、偏移 off、实参 args）的所指类集与是否推不出（top）。
+    /// 类集为空且非 top = 候选来源尚未流到（值集增长时重跑）；top = 结果另接被调方法返回的所指未知的 Class。
+    ///
+    /// 单调：同一调用点一旦 top 即恒为 top（已接的返回边不撤）；类集是当前状态的单调函数——常量表读取的接收者
+    /// 含非常量表值时仍给出常量表部分的候选并记 top，而不是整体放弃，因此结果与接收者值到达的先后无关。
+    /// 求值读本方法其它偏移的事件（拼接链、常量表接收者、结果用途）与辅助方法读过的字段，登记为跨偏移读者：
+    /// 重分析时一并重跑（见 `bytecode.rs::process_bytecode`）
+    pub(super) fn class_lookup(&mut self, m: usize, off: u32, args: &[V]) -> (Vec<String>, bool) {
+        self.xreaders.entry(m).or_default().insert(off);
+        let sticky = self.lookup_top.contains(&(m, off));
+        self.lookup_partial = false;
+        let r = self.class_lookup_eval(m, off, args);
+        let top = sticky || r.is_none() || std::mem::take(&mut self.lookup_partial);
+        if top {
+            self.lookup_top.insert((m, off));
+        }
+        (r.unwrap_or_default(), top)
+    }
+
+    fn class_lookup_eval(&mut self, m: usize, off: u32, args: &[V]) -> Option<Vec<String>> {
         let a = self.methods[m].analysis.clone()?;
         if a.conservative {
             return None;
@@ -176,7 +193,18 @@ impl<'a> Engine<'a> {
 
     /// 引用值段：常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）
     fn segment_values(&mut self, m: Option<usize>, a: &Analysis, v: &V, wild: bool, depth: u8) -> Option<Part> {
-        if let Some(set) = m.and_then(|m| self.table_values(m, a, v)).or_else(|| self.enum_field_values(a, v)) {
+        if let Some((set, partial)) = m.and_then(|m| self.table_values(m, a, v)) {
+            // 接收者含非常量表值：按名查方法（wild）记为任意串；按名取类给出常量表部分并记 top
+            if !partial {
+                return Some(Part::Any(set));
+            }
+            if wild {
+                return Some(Part::Wild);
+            }
+            self.lookup_partial = true;
+            return Some(Part::Any(set));
+        }
+        if let Some(set) = self.enum_field_values(a, v) {
             return Some(Part::Any(set));
         }
         let o = site_of(v)?;
@@ -199,8 +227,8 @@ impl<'a> Engine<'a> {
         Some(Part::Any(names.into_iter().map(Rc::from).collect()))
     }
 
-    /// 常量表读取结果的候选字符串（可经一次 checkcast）；接收者尚无值时为空集
-    fn table_values(&mut self, m: usize, a: &Analysis, v: &V) -> Option<BTreeSet<Rc<str>>> {
+    /// 常量表读取结果的候选字符串（可经一次 checkcast）与接收者是否含非常量表值；接收者尚无值时为空集
+    fn table_values(&mut self, m: usize, a: &Analysis, v: &V) -> Option<(BTreeSet<Rc<str>>, bool)> {
         let o = site_of(v)?;
         if let Some(Event::CheckCast(_, Some(inner))) = event_at(a, o, |e| matches!(e, Event::CheckCast(..))) {
             let inner = inner.clone();
@@ -210,7 +238,7 @@ impl<'a> Engine<'a> {
         self.table_read(m, a, o)
     }
 
-    fn table_read(&mut self, m: usize, a: &Analysis, o: u32) -> Option<BTreeSet<Rc<str>>> {
+    fn table_read(&mut self, m: usize, a: &Analysis, o: u32) -> Option<(BTreeSet<Rc<str>>, bool)> {
         let Event::Invoke { opcode, mref, args, .. } = event_at(a, o, is_invoke)? else { return None };
         if *opcode == classfile::op::INVOKESTATIC {
             return None;
@@ -224,21 +252,25 @@ impl<'a> Engine<'a> {
         let recv = args.first()?.clone();
         let fs = self.feeds(m, &recv, owner);
         let s = self.value_set(&fs);
-        if !s.open.is_empty() {
-            return None;
-        }
+        let mut partial = !s.open.is_empty();
+        let mut tables = false;
         let mut out = BTreeSet::new();
         let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
             if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
-                return None;
+                partial = true;
+                continue;
             }
             let t = self.ty(x);
             let cls = self.names[t as usize].to_string();
-            if !bases.iter().any(|b| self.h.is_subtype(&cls, b)) {
-                return None;
-            }
-            let cf = self.h.class(&cls)?;
+            let cf = match self.h.class(&cls) {
+                Some(cf) if bases.iter().any(|b| self.h.is_subtype(&cls, b)) => cf,
+                _ => {
+                    partial = true;
+                    continue;
+                }
+            };
+            tables = true;
             for mm in &cf.methods {
                 for i in mm.code.iter().flat_map(|c| c.insns.iter()) {
                     if let classfile::Operand::Ldc(Const::String(s)) = &i.operand {
@@ -247,7 +279,11 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        Some(out)
+        // 接收者全不是常量表（且非尚无值）：不是常量表读取，交给其余拆段方式
+        if partial && !tables {
+            return None;
+        }
+        Some((out, partial))
     }
 
     /// 按名取类结果唯一地经实例化入口、其结果再唯一地 checkcast 到 T：返回 T

@@ -25,22 +25,17 @@ per-test scratch workspace（见 docs/plans/2026-09-16-per-test-scratch-workspac
 """
 
 import argparse
+import re
 import subprocess
 import sys
 import os
 import shutil
 import time
+import tomllib
 
-# 将项目根目录加入 path，使 `import codegen` 可以找到根目录下的 codegen/ 包
+# 将项目根目录加入 path，使 Python 生成器分支的 `import codegen` 可以找到根目录下的 codegen/ 包。
+# codegen 只在 --generator python 分支按需导入：rust 缺省路径不经过 codegen
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from codegen import transpile
-from codegen.cfg import STATS as CFG_AUDIT_STATS
-from codegen import equiv_audit as EQUIV_AUDIT
-from codegen import fallback_audit as FALLBACK_AUDIT
-from codegen.constants import (RUNTIME_JAVA_RUNTIME, RUNTIME_MACROS_CRATE,
-                               scratch_pkg_version)
-from codegen.emitter import to_snake
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generator_select import (add_argument as add_generator_argument, resolve as resolve_generator,
@@ -58,6 +53,27 @@ def fmt_dur(sec: float) -> str:
         return f"{sec:.2f}s"
     m, s = divmod(sec, 60)
     return f"{int(m)}m{s:04.1f}s"
+
+
+def _to_snake(stem: str) -> str:
+    """主类名 → scratch 目录名（与 run_tests.py `_to_bin_name` 同一规则）"""
+    s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', stem.replace('$', '_'))
+    return re.sub(r'([a-z\d])([A-Z])', r'\1_\2', s).lower()
+
+
+def _bin_name(out_dir: str, stem: str) -> str:
+    """scratch 的 user/Cargo.toml `[[bin]]` 名（生成器是唯一真源）。
+
+    单 bin 直接取；批量模式多 bin 时取与主类同名者。"""
+    with open(os.path.join(out_dir, 'user', 'Cargo.toml'), 'rb') as f:
+        bins = [b['name'] for b in tomllib.load(f).get('bin', [])]
+    if len(bins) == 1:
+        return bins[0]
+    want = _to_snake(stem)
+    for b in bins:
+        if b.rstrip('_') == want:
+            return b
+    sys.exit(f'user/Cargo.toml 无主类 {stem} 的 [[bin]]（现有：{", ".join(bins) or "无"}）')
 
 
 def _copy_fresh(src: str, dst: str) -> None:
@@ -149,7 +165,10 @@ def prepare_scratch(out_dir: str, clean: bool = False) -> None:
       - java/ jdk/ sun/ 顶层目录保证存在且含占位 mod.rs
         （lib.rs 手写了 `pub mod java; jdk; sun;`，目录缺失会 E0583；
          codegen 在有生成类时会覆写占位文件）
+
+    Python 生成器分支专用；rust 分支由 `rava build` 完成同一 overlay（emit::project::overlay）。
     """
+    from codegen.constants import RUNTIME_JAVA_RUNTIME, RUNTIME_MACROS_CRATE, scratch_pkg_version
     if clean and os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
 
@@ -215,6 +234,14 @@ def _parse_lib_specs(raw_libs: list[str]) -> list:
 
 def _python_codegen(args, java_files: list[str], out_dir: str, lib_specs: list) -> bool:
     """Python 生成器转译段 + 审计汇总行；--precheck-only 时返回 False（调用方就此结束）"""
+    from codegen import transpile, options as _options, raw_audit as _raw_audit_opt
+    from codegen.cfg import STATS as CFG_AUDIT_STATS
+    from codegen import equiv_audit as EQUIV_AUDIT
+    from codegen import fallback_audit as FALLBACK_AUDIT
+    _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
+    _options.PRECHECK_ONLY = args.precheck_only
+    _options.CLOSURE_DIAG = _closure_diag_args(args)
+    _raw_audit_opt.enable_raw_sites(args.raw_sites)
     transpile(java_files, out_dir, batch_bin=args.batch, lib_specs=lib_specs,
               locales=tuple(t for t in args.locales.split(',') if t.strip()))
     if args.precheck_only:
@@ -287,7 +314,6 @@ def _python_codegen(args, java_files: list[str], out_dir: str, lib_specs: list) 
     return True
 
 
-
 def _closure_diag_args(args) -> list:
     """闭包诊断选项（--cut / --cut-file / --dump-edges）→ rava 参数（路径转绝对：rava 在生成器目录运行）"""
     out = []
@@ -335,21 +361,7 @@ def main():
     add_generator_argument(ap)
     args = ap.parse_args()
     generator = resolve_generator(args.generator)
-    if generator == 'rust':
-        _unsupported = [f for f, on in (('--lib', args.lib), ('--batch', args.batch), ('--debug', args.debug),
-                                        ('--trace-class', args.trace_class), ('--precheck-only', args.precheck_only),
-                                        ('--raw-sites', args.raw_sites)) if on]
-        if _unsupported:
-            sys.exit(f"Rust 生成器尚不支持：{' '.join(_unsupported)}（用 --generator python）")
-
-    from codegen import options as _options, raw_audit as _raw_audit_opt
-    _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
-    _options.PRECHECK_ONLY = args.precheck_only
-    _options.CLOSURE_DIAG = _closure_diag_args(args)
-    _raw_audit_opt.enable_raw_sites(args.raw_sites)
-
-    lib_specs = _parse_lib_specs(args.lib)
-    if lib_specs and args.batch:
+    if args.lib and args.batch:
         sys.exit('jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）')
 
     # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > JAVA_HOME >
@@ -361,29 +373,35 @@ def main():
 
     java_files = args.java_files or [_DEFAULT_JAVA]
     stem = os.path.splitext(os.path.basename(java_files[0]))[0]
-    out_dir = args.out or os.path.join(_BUILD_ROOT, to_snake(stem))
+    out_dir = args.out or os.path.join(_BUILD_ROOT, _to_snake(stem))
 
     t_total = time.perf_counter()
 
-    # 1. overlay 手写代码（必须在 codegen 之前）
-    t0 = time.perf_counter()
-    prepare_scratch(out_dir, clean=args.clean)
-    t_overlay = time.perf_counter() - t0
-    print(f"[time] overlay     {fmt_dur(t_overlay)}")
+    # 1. overlay 手写代码（必须在转译之前）：Python 分支在此完成；rust 分支由 rava build 内部完成（计入 transpile）
+    t_overlay = 0.0
+    if generator == 'python':
+        t0 = time.perf_counter()
+        prepare_scratch(out_dir, clean=args.clean)
+        t_overlay = time.perf_counter() - t0
+        print(f"[time] overlay     {fmt_dur(t_overlay)}")
 
     # 2. 转译（生成器选择：generator_select.py）
     t0 = time.perf_counter()
     if generator == 'rust':
-        run_rust(java_files, out_dir, strict=args.strict,
+        run_rust(java_files, out_dir, clean=args.clean, strict=args.strict,
                  locales=tuple(t for t in args.locales.split(',') if t.strip()),
-                 extra=_options.CLOSURE_DIAG)
-    elif not _python_codegen(args, java_files, out_dir, lib_specs):
+                 libs=tuple(args.lib), batch=args.batch, debug=args.debug, trace_class=args.trace_class,
+                 precheck_only=args.precheck_only, raw_sites=args.raw_sites,
+                 extra=_closure_diag_args(args))
+        if args.precheck_only:
+            return
+    elif not _python_codegen(args, java_files, out_dir, _parse_lib_specs(args.lib)):
         return
     t_codegen = time.perf_counter() - t0
     print(f"[time] transpile   {fmt_dur(t_codegen)}")
 
     if not args.no_run:
-        bin_name = to_snake(stem)
+        bin_name = _bin_name(out_dir, stem)
         print(f"\n[run] cargo run --bin {bin_name}")
         # CARGO_INCREMENTAL=0：宽闭包增量元数据是 OOM 压垮点（服务器 SIGKILL 实证）；scratch 每轮重生成，关闭无损失
         env = dict(os.environ, CARGO_TARGET_DIR=_SHARED_TARGET, CARGO_INCREMENTAL='0')

@@ -275,7 +275,7 @@ fn from_literals(l: &[String]) -> Locale {
 }
 
 /// 入选 locale 集（不含 ROOT；束基名总是入选）
-pub fn collect(cfg: &LocaleCfg, cp: &ClassPath, users: &[std::rc::Rc<ClassFile>], extra: &[String]) -> BTreeSet<Locale> {
+pub fn collect(cfg: &LocaleCfg, cp: &ClassPath, users: &[std::sync::Arc<ClassFile>], extra: &[String]) -> BTreeSet<Locale> {
     let tracer = Tracer { cp, fields: Default::default(), tables: Default::default() };
     let mut found = BTreeSet::new();
     found.insert(norm("en", "", "", ""));

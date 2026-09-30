@@ -159,11 +159,6 @@ def _indy_kinds() -> dict:
     return _INDY_KINDS
 
 
-def system_property_values() -> dict:
-    """原生二进制启动时的恒定系统属性（vm_intrinsics.toml [facts.system_properties.values]）。"""
-    return dict(_toml('vm_intrinsics.toml').get('facts', {}).get('system_properties', {}).get('values', {}))
-
-
 def vm_constant_null_returns() -> frozenset:
     """恒返回 null 的 VM 边界方法（vm_intrinsics.toml [vm_constants] null_returns，`类.方法:描述符`）。"""
     return frozenset(_toml('vm_intrinsics.toml').get('vm_constants', {}).get('null_returns', []))

@@ -143,9 +143,9 @@ impl SamLedger {
         for cls in input.user_classes.iter().chain(&input.jdk_classes) {
             let Some(ci) = ctx.ty.reg.get(cls) else { continue };
             for m in ci.methods() {
-                let Some(code) = input.code(cls, m) else { continue };
-                for ni in &code.insns {
-                    let Some(Operand::InvokeDynamic { desc, .. }) = ni.insn().map(|i| &i.operand) else { continue };
+                let Some(code) = input.code_ops(cls, m) else { continue };
+                for insn in code.ops() {
+                    let Operand::InvokeDynamic { desc, .. } = &insn.operand else { continue };
                     let rd = parse_descriptor_return(desc);
                     if let Some(b) = rd.strip_prefix('L').and_then(|r| r.strip_suffix(';')) {
                         candidates.insert(b.to_string());
@@ -174,11 +174,12 @@ impl SamLedger {
     /// 模块层路径 `crate::<mod>::<Short>`。None：该接口不可合成（站点回落闭包装箱）
     pub fn site_ctor_path(&self, ctx: &EmitCtx<'_>, iface: &str, current_class: &str) -> Option<String> {
         self.specs.get(iface)?;
-        let recv_crate = if ctx.is_user(current_class) { "user" } else { "java_runtime" };
+        let recv_crate = ctx.lib_crate_of(current_class).unwrap_or(if ctx.is_user(current_class) { "user" } else { "java_runtime" });
         let crate_prefix = if recv_crate == "java_runtime" { "crate" } else { "java_runtime" };
-        // 目标视图：注册表类的 emission 前缀（用户类 java_runtime / JDK crate），非 lib crate
+        // 目标视图：注册表类的 emission 前缀（用户类 java_runtime / JDK crate）+ lib crate 归属
         let target_prefix = if ctx.is_user(iface) { "java_runtime" } else { "crate" };
-        Some(format!("{}__Lambda::new", use_path(ctx, iface, crate_prefix, Some(("", target_prefix)), recv_crate)))
+        let target_crate = ctx.lib_crate_of(iface).unwrap_or("");
+        Some(format!("{}__Lambda::new", use_path(ctx, iface, crate_prefix, Some((target_crate, target_prefix)), recv_crate)))
     }
 
     /// 站点一致性断言（G-10 同款）：站点 samtype 描述符与预扫描 SAM 描述符恒等

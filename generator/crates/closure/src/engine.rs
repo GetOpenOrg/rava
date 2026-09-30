@@ -54,13 +54,16 @@ mod mirror_init;
 mod seeds;
 mod class_lookup;
 mod method_lookup;
+mod pstrs;
 mod new;
 mod methods;
 mod worklist;
+pub use worklist::FLOW_BATCH;
 mod stats;
 mod graph;
 mod grow;
 pub mod cut;
+mod scc;
 
 use graph::FlowGraph;
 use stats::{Phase, Why};
@@ -426,12 +429,10 @@ pub struct Engine<'a> {
     recv_sites: HashSet<(usize, u32)>,
     /// 形参常量（方法 → 按形参槽；缺席 = 尚无调用点）
     pvals: HashMap<usize, Vec<PV>>,
-    /// 形参上出现过的字符串常量实参（(方法, 形参槽) → 常量集；按名查找的名字来自形参时逐个展开）
-    pstrs: HashMap<(usize, usize), BTreeSet<Rc<str>>>,
-    /// 读过 pstrs 的按名查找站点（(方法, 形参槽) → 偏移）：常量集增长时重跑
-    pstr_sites: HashMap<(usize, usize), BTreeSet<u32>>,
     /// 出现过非字符串常量实参（或无调用点记录即进入）的形参槽：名字取自这些槽的按名取字段站点按保守回退处理
     ptaint: HashSet<(usize, usize)>,
+    /// 流到形参的字符串常量集（按名查找的名字来自形参时逐个展开；只并不减，见 `pstrs.rs`）
+    pstr: pstrs::PStrs,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
     hubs: Vec<Hub>,
     hub_ids: HashMap<(MemberRef, bool, HubSet), u32>,
@@ -460,6 +461,12 @@ pub struct Engine<'a> {
     dispatched: HashMap<usize, HashSet<(u32, u32, u32)>>,
     /// 已接入枢纽的调用点：方法 → (偏移, 枢纽)（同 `dispatched`，分析重算时清空）
     hub_linked: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 字节码调用点经枢纽已分派的 lambda / 手写实现对象接收者：方法 → (偏移, 接收者)（同 `hub_linked` 清空）。
+    /// 调用点换接子枢纽时继承的接收者、同一接收者经多个枢纽到达时，同一分析结果下重派发是恒等重放
+    hub_lsent: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 字节码调用点经枢纽已接的按调用点建模目标：方法 → (偏移, 目标) → 已送达的接收者（同上）。
+    /// `edge` 对接收者值集逐元素单调（首接生效的手写站点登记已在首次完成），接收者全已送达即恒等重放
+    hub_ssent: HashMap<usize, HashMap<(u32, usize), HashSet<u32>>>,
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
     /// 站点因接收者集合增长重跑时只接新增对象
     recv_done: HashMap<usize, HashSet<(u32, u32)>>,
@@ -488,6 +495,14 @@ pub struct Engine<'a> {
     open_statics: Vec<(usize, u32)>,
     /// 待沿流边推送增量的节点序号
     fwork: VecDeque<u32>,
+    /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑
+    xreaders: HashMap<usize, BTreeSet<u32>>,
+    /// 按名取类已推不出的调用点：恒按推不出处理（`class_lookup` 单调）
+    lookup_top: HashSet<(usize, u32)>,
+    /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
+    lookup_partial: bool,
+    /// 两次排空流传播之间最多处理的方法 / 站点数（`worklist.rs::run`；`rava closure --flow-batch N` 可改，1 = 逐个排空）
+    pub flow_batch: usize,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理
     open_methods: BTreeMap<(u32, u32), BTreeSet<usize>>,
     /// 按 open 在 G 上展开过接收者的字节码站点，索引同上（只重跑这些站点）
@@ -501,6 +516,8 @@ pub struct Engine<'a> {
     open_inj: HashMap<Node, BTreeSet<u32>>,
     /// 类镜像（Class 对象按所指类区分）：镜像 id → 所指类型 id。镜像的类型是 Class，不做克隆上下文
     mirrors: HashMap<u32, u32>,
+    /// 类型序号 → 其类镜像序号（`mirror` 的记忆，免逐值格式化镜像名）；未登记为 `u32::MAX`
+    mirror_of: Vec<u32>,
     /// 流边上的镜像变换 src → dst：src 中每个值的类镜像流入 dst（`getClass` 逐调用点）
     mflows: HashMap<Node, Vec<Node>>,
     mflow_seen: HashSet<(Node, Node)>,

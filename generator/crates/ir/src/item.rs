@@ -95,3 +95,12 @@ pub enum Item {
     TypeAlias(TypeAlias),
     Raw(Raw),
 }
+
+impl Item {
+    /// 文本逃生舱条目（raw-audit `raw_item` 计数，位点取调用者）
+    #[track_caller]
+    pub fn raw(text: impl Into<String>) -> Item {
+        crate::raw_audit::record(crate::raw_audit::RawKind::Item, std::panic::Location::caller());
+        Item::Raw(Raw::from_text(text.into()))
+    }
+}

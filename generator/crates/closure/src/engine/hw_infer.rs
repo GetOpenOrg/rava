@@ -12,7 +12,7 @@ const RUST_TRAIT_METHODS: &[&str] = &["clone"];
 
 impl Engine<'_> {
     /// 类及其全部超类型（超类链与超接口，广度优先，自类在前）
-    fn supertypes(&self, c: &str) -> Vec<Rc<ClassFile>> {
+    fn supertypes(&self, c: &str) -> Vec<std::sync::Arc<ClassFile>> {
         let mut out = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut q: VecDeque<String> = VecDeque::from([c.to_string()]);

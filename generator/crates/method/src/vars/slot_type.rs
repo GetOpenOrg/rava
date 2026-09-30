@@ -4,7 +4,7 @@
 
 use ir::anchors::OBJECT;
 use ir::render::render_type;
-use ir::{Expr, Raw, Stmt, Type, UpcastWrap};
+use ir::{Expr, LetStmt, Stmt, Type, UpcastWrap};
 use ty::RsType;
 
 use super::{is_default_value, store_type, store_value, VarsCtx};
@@ -19,7 +19,7 @@ const PRIMITIVE_RUST_TYPES: [&str; 13] =
 
 /// 空引用字面量存入（aconst_null）：不携带类型信息，不参与汇合（← `_is_null_value`）
 fn is_null_store(v: Option<&Expr>) -> bool {
-    v.is_some_and(|e| matches!(e, Expr::Lit(ir::Lit::Null)) || matches!(e, Expr::Raw(r) if r.0 == "Object::default()"))
+    v.is_some_and(|e| matches!(e, Expr::Lit(ir::Lit::Null)) || matches!(e, Expr::Raw(r) if r.as_str() == "Object::default()"))
 }
 
 /// (start, end) 内同名声明 / 降级赋值的引用类型不一致时的汇合类型；否则 None。
@@ -111,20 +111,14 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
                 if null_to_default {
                     l.value = Some(default_value());
                 }
-                if let (Some(rendered), Some(v)) = (convert, l.value.take()) {
-                    l.value = Some(widen_value(cx, v, &rendered, is_root));
-                }
-                if l.ty.is_some() {
-                    l.ty = Some(merged.clone());
-                }
-                l.origin.value_ty = Some(merged.clone());
+                retarget_let(l, convert.as_deref(), merged, |v, r| widen_value(cx, v, r, is_root))
             }
             Stmt::Assign(a) => {
                 if null_to_default {
                     a.value = default_value();
                 }
                 if let Some(rendered) = convert {
-                    let v = std::mem::replace(&mut a.value, Expr::Raw(Raw(String::new())));
+                    let v = std::mem::replace(&mut a.value, Expr::Lit(ir::Lit::Unit));
                     a.value = widen_value(cx, v, &rendered, is_root);
                 }
                 a.origin.value_ty = Some(merged.clone());
@@ -135,15 +129,72 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
 }
 
 fn default_value() -> Expr {
-    Expr::Raw(Raw("Default::default()".to_string()))
+    Expr::raw("Default::default()")
+}
+
+/// 同名 let 改指汇合类型：值类型与汇合类型不同（`convert` = 原类型文本）时按 `widen` 上转初值；
+/// 已是汇合类型的 let 保留原初值——随后降级为赋值时它就是这次存储本身
+fn retarget_let(l: &mut LetStmt, convert: Option<&str>, merged: &Type, widen: impl FnOnce(Expr, &str) -> Expr) {
+    if let Some(rendered) = convert {
+        if let Some(v) = l.value.take() {
+            l.value = Some(widen(v, rendered));
+        }
+    }
+    if l.ty.is_some() {
+        l.ty = Some(merged.clone());
+    }
+    l.origin.value_ty = Some(merged.clone());
 }
 
 /// 存入值上转到汇合类型：根类装箱，公共祖先 `.into()`（目标由汇合后的声明类型给出）
 fn widen_value(cx: &VarsCtx, v: Expr, rendered: &str, is_root: bool) -> Expr {
     if is_root {
         let rt = from_rust_text(cx.env, rendered).unwrap_or(RsType::Object);
-        Expr::Raw(Raw(to_object(cx.env, &text::expr(cx.env, &v), &rt, false)))
+        Expr::raw(to_object(cx.env, &text::expr(cx.env, &v), &rt, false))
     } else {
         Expr::Upcast { expr: Box::new(v), wrap: UpcastWrap::Auto }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retarget_let;
+    use crate::types::ir_type_of;
+    use ir::anchors::OBJECT;
+    use ir::{Expr, Ident, LetStmt, VarOrigin};
+
+    fn let_of(ty: &str, value: &str) -> LetStmt {
+        LetStmt {
+            name: Ident::new("local_1").unwrap(),
+            ty: Some(ir_type_of(ty).unwrap()),
+            mutable: true,
+            value: Some(Expr::Var(Ident::new(value).unwrap())),
+            origin: VarOrigin::default(),
+        }
+    }
+
+    /// 已是汇合类型的 let 保留初值（回归：DeepCopy `ObjectInputStream.readObject0` 的
+    /// try/finally 返回值暂存 `local_5` 在该臂丢失存储，E0381）
+    #[test]
+    fn same_type_let_keeps_value() {
+        let merged = ir_type_of(OBJECT).unwrap();
+        let mut l = let_of(OBJECT, "_t1");
+        retarget_let(&mut l, None, &merged, |_, _| panic!("同型不应上转"));
+        assert_eq!(l.value, Some(Expr::Var(Ident::new("_t1").unwrap())));
+        assert_eq!(l.ty, Some(merged.clone()));
+        assert_eq!(l.origin.value_ty, Some(merged));
+    }
+
+    #[test]
+    fn different_type_let_widens_value() {
+        let merged = ir_type_of(OBJECT).unwrap();
+        let mut l = let_of("Foo", "_t2");
+        retarget_let(&mut l, Some("Foo"), &merged, |v, r| {
+            assert_eq!(r, "Foo");
+            assert_eq!(v, Expr::Var(Ident::new("_t2").unwrap()));
+            Expr::raw("boxed")
+        });
+        assert_eq!(l.value, Some(Expr::raw("boxed")));
+        assert_eq!(l.ty, Some(merged));
     }
 }

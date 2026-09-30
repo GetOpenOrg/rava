@@ -3,7 +3,7 @@
 use super::tests_expr::{id, var, TailNames};
 use crate::{
     ArmBody, AssignStmt, CatchClause, ElseBranch, Expr, FnItem, IfStmt, ImplItem, Item, Label,
-    LetStmt, Lit, LoopStmt, MacroCall, MatchArm, MatchStmt, ModItem, Param, Path, Pattern, Raw,
+    LetStmt, Lit, LoopStmt, MacroCall, MatchArm, MatchStmt, ModItem, Param, Path, Pattern,
     Renderer, Stmt, StructField, StructItem, TryStmt, Type, TypeAlias, UseTree, VarOrigin, Vis,
     WhileStmt,
 };
@@ -13,7 +13,7 @@ fn s(st: &Stmt, indent: usize) -> String {
 }
 
 fn raw(t: &str) -> Stmt {
-    Stmt::Raw(Raw(t.into()))
+    Stmt::raw(t)
 }
 
 fn label(n: &str) -> Label {
@@ -188,7 +188,7 @@ fn items() {
 #[test]
 fn file() {
     let rd = Renderer::new(&TailNames);
-    let items = vec![Item::Mod(ModItem { name: id("a"), vis: Vis::Pub }), Item::Raw(Raw("// x".into()))];
+    let items = vec![Item::Mod(ModItem { name: id("a"), vis: Vis::Pub }), Item::raw("// x")];
     assert_eq!(rd.file(&items, "//! pre\n\n"), "//! pre\n\npub mod a;\n\n// x\n");
     assert_eq!(rd.file(&[], ""), "\n");
 }

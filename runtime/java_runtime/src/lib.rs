@@ -185,6 +185,21 @@ pub fn main_args() -> crate::array::JArray<crate::java::lang::String> {
             .collect::<Vec<_>>())
 }
 
+/// JVM CreateJavaVM：生成的 `main` 第一条语句，进程级终止约定就位。
+///
+/// Java 异常经 `Result` 传播，不走 Rust unwind；Rust panic 只来自未覆盖的存根与运行时
+/// 内部缺陷，一律终止进程。生成工作区的 profile 为 `panic = "abort"`（免除全部 unwind
+/// 清理路径），钩子在默认输出（panic 消息 + 回溯提示）之后以退出码 101 退出——与
+/// unwind 形态下主线程 panic 的退出码、stderr 文本一致，任何线程 panic 同一出口；
+/// `process::exit` 照常冲刷 Rust 标准输出。
+pub fn create_java_vm() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        std::process::exit(101);
+    }));
+}
+
 /// 主线程 `main` 返回后的 VM 收尾（JVM `DestroyJavaVM` 同序）：报告主线程未捕获异常 → 等待
 /// 全部非守护平台线程终结 → 运行 shutdown hook（`Shutdown.shutdown`）→ 退出（异常时码 1）。
 pub fn destroy_java_vm(result: crate::error::Result<()>) {
@@ -250,6 +265,16 @@ pub fn java_fmt_f32(v: f32) -> String {
         std::format!("{:.1e}", v),
         f32_odd_mantissa(v),
     )
+}
+
+/// 存根出口（不在调用链上的方法体、未覆盖的翻译路径）：panic 消息即入参（`stub: 类.方法:描述符`
+/// 等），报告位置经 `#[track_caller]` 落在存根所在处。非泛型冷路径——panic 与格式化代码
+/// 全程序一份，存根处只剩一次调用。
+#[cold]
+#[inline(never)]
+#[track_caller]
+pub fn __stub(msg: &'static str) -> ! {
+    panic!("{msg}")
 }
 
 /// 整数除法/取余（JVMS §6.5 idiv / irem / ldiv / lrem）：
@@ -463,6 +488,7 @@ pub mod prelude {
     pub use super::error::{JvmError, Result};
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;
+    pub use super::java::lang::{__RefAccess, __ref_slot_access};
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
     pub use super::sync_model::{__AnyRef, __PrimCell, __RefSlot, __Shared, __ThreadSafe};
@@ -478,6 +504,7 @@ pub mod prelude {
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
+    pub use super::__stub;
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;

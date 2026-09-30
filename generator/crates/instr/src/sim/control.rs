@@ -6,7 +6,7 @@
 
 use classfile::{Insn, Operand};
 use ir::anchors::OBJECT;
-use ir::{CastExpr, CastMode, Expr, Lit, Raw};
+use ir::{CastExpr, CastMode, Expr, Lit};
 use sim::StackSim;
 use ty::{consts, Prim, RsType};
 
@@ -19,8 +19,9 @@ use crate::log::{Effect, InstrLog};
 
 const ACC_FINAL: u16 = 0x0010;
 
+#[track_caller]
 pub(crate) fn raw(s: String) -> Expr {
-    Expr::Raw(Raw(s))
+    Expr::raw(s)
 }
 
 /// 擦除基名的类型形态（`erased_base` 的类型版）：类清空实参；数组 → 裸名 `JArray`
