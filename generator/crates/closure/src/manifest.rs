@@ -24,6 +24,8 @@ pub enum IndyKind {
     Lambda,
     Concat,
     Native,
+    /// record 的 equals / hashCode / toString（native 的细分）：各引用分量派发同名 Object 方法
+    ObjectMethods,
 }
 
 /// 手写方法写入实参数组的元素（`[facts.array_writes]`；形参序号按描述符，不含接收者）
@@ -92,6 +94,8 @@ pub struct Manifest {
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
+    /// 基本类型描述符字符 → 装箱类（`[boxing]`；lambda 装箱 / 拆箱适配）
+    boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
     value_equals: HashSet<String>,
     /// VM 初始系统属性表与读写锚点
@@ -233,11 +237,27 @@ impl Manifest {
         }
 
         let mut indy = HashMap::new();
-        for (key, kind) in [("lambda", IndyKind::Lambda), ("concat", IndyKind::Concat), ("native", IndyKind::Native)] {
+        // 细分类别在后：同时列于 native 时取细分
+        for (key, kind) in [
+            ("lambda", IndyKind::Lambda),
+            ("concat", IndyKind::Concat),
+            ("native", IndyKind::Native),
+            ("object_methods", IndyKind::ObjectMethods),
+        ] {
             for m in strings(&vm, "indy", key) {
                 indy.insert(m, kind);
             }
         }
+        let boxing: HashMap<u8, String> = vm
+            .get("boxing")
+            .and_then(|s| s.as_table())
+            .into_iter()
+            .flatten()
+            .filter_map(|(k, v)| match (k.as_bytes(), v.as_str()) {
+                ([c], Some(cls)) => Some((*c, cls.to_string())),
+                _ => None,
+            })
+            .collect();
 
         Ok(Manifest {
             runtime_dir: runtime_dir.to_path_buf(),
@@ -263,6 +283,7 @@ impl Manifest {
             boot_init: strings(&seeds, "boot_init", "classes"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
+            boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
@@ -406,6 +427,16 @@ impl Manifest {
     pub fn indy_kind(&self, bsm: &str) -> Option<IndyKind> {
         self.indy.get(bsm).copied()
     }
+
+    /// 基本类型描述符字符的装箱类（`[boxing]`）
+    pub fn boxed_class(&self, prim: u8) -> Option<&str> {
+        self.boxing.get(&prim).map(String::as_str)
+    }
+
+    /// 类是装箱类时其基本类型描述符字符
+    pub fn unboxed_prim(&self, cls: &str) -> Option<u8> {
+        self.boxing.iter().find(|(_, c)| c.as_str() == cls).map(|(p, _)| *p)
+    }
 }
 
 /// 清单条目匹配：包前缀（`/` 结尾）或类（含 `$` 嵌套类）
@@ -441,5 +472,15 @@ mod tests {
     fn array_returns_reject_non_array() {
         assert!(with_vm("[facts.array_returns]\n\"a/B.f:()Ljava/lang/Object;\" = { elements = [\"a/C\"] }\n").is_err());
         assert!(with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [] }\n").is_err());
+    }
+
+    #[test]
+    fn indy_object_methods_refines_native_and_boxing() {
+        let m = with_vm("[indy]\nnative = [\"a/B.boot\", \"a/C.boot\"]\nobject_methods = [\"a/B.boot\"]\n[boxing]\nI = \"a/BoxI\"\n").unwrap();
+        assert_eq!(m.indy_kind("a/B.boot"), Some(IndyKind::ObjectMethods));
+        assert_eq!(m.indy_kind("a/C.boot"), Some(IndyKind::Native));
+        assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));
+        assert_eq!(m.unboxed_prim("a/BoxI"), Some(b'I'));
+        assert_eq!(m.boxed_class(b'J'), None);
     }
 }

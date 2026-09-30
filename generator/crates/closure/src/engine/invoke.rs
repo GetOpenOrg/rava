@@ -32,14 +32,35 @@ impl<'a> Engine<'a> {
             })
             .collect();
         let k = mref.to_string();
-        if self.man.is_method_lookup(&k) && !classes.is_empty() {
+        if self.man.is_method_lookup(&k) {
             let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
+            // 拼接出的名字按目标类逐个解析（只保留该类上声明的方法）；目标类另取 Class 实参值集里类镜像所指的类
+            // （如取自 static final Class 字段）。形参透传的名字不与镜像类相乘：其类同样来自形参，交叉组合会失真
+            let mut per_class: Vec<(String, Rc<str>)> = vec![];
+            let mut targets: Option<Vec<String>> = None;
             for a in args {
                 match a {
                     V::Str(name) => {
                         names.insert(name.clone());
                     }
-                    V::Ref { .. } => names.extend(self.param_strs(m, off, a)),
+                    V::Ref { .. } => {
+                        names.extend(self.param_strs(m, off, a));
+                        let Some(parts) = self.method_name_parts(m, a) else { continue };
+                        if targets.is_none() {
+                            let mut ts = classes.clone();
+                            for c in self.class_arg_mirrors(m, mref, opcode, args) {
+                                if !ts.contains(&c) {
+                                    ts.push(c);
+                                }
+                            }
+                            targets = Some(ts);
+                        }
+                        for c in targets.iter().flatten() {
+                            for n in self.declared_matching(c, &parts) {
+                                per_class.push((c.clone(), n));
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -47,6 +68,9 @@ impl<'a> Engine<'a> {
                 for c in &classes {
                     self.reflect_name(c, name);
                 }
+            }
+            for (c, name) in &per_class {
+                self.reflect_name(c, name);
             }
         }
         if class_param || class_recv {

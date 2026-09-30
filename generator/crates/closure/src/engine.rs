@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-use classfile::descriptor::{class_refs, parse_field, parse_method, FieldType};
+use classfile::descriptor::{class_refs, parse_field, parse_method, FieldType, MethodDesc};
 use classfile::{acc, ClassFile, Const, MemberRef, MethodHandle};
 use indexmap::IndexMap;
 use resolve::{ClassPath, Hierarchy, Origin};
@@ -39,6 +39,7 @@ mod bytecode;
 mod invoke;
 mod hub;
 mod lambda;
+mod lambda_adapt;
 mod hw;
 mod hw_mem;
 mod hw_syntax;
@@ -48,6 +49,7 @@ mod report;
 mod diag;
 mod seeds;
 mod class_lookup;
+mod method_lookup;
 mod new;
 mod methods;
 mod worklist;
@@ -349,6 +351,8 @@ struct Lambda {
     imh: MethodHandle,
     /// 捕获实参来源（按 indy 描述符形参位置）
     cap: Args,
+    /// SAM 与实现方法签名差异处的装箱 / 拆箱适配
+    adapt: Vec<lambda_adapt::Conv>,
 }
 
 // ── 引擎 ────────────────────────────────────────────────────────────────────

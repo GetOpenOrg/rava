@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// `ObjectMethods` 调用点对应的 Object 方法描述符：indy 描述符去掉首个（record 接收者）形参
+fn object_method_desc(md: &MethodDesc) -> String {
+    let params: String = md.params.iter().skip(1).map(FieldType::descriptor).collect();
+    format!("({params}){}", md.ret.as_ref().map_or_else(|| "V".to_string(), FieldType::descriptor))
+}
+
+/// 站点键：record 引用分量值的汇合节点（`ObjectMethods` 调用点偏移 | 本位）
+const COMPONENTS: u32 = 1 << 30;
+
 impl<'a> Engine<'a> {
     /// lambda 的 SAM 调用：捕获实参 ++ SAM 实参 → 实现方法
     ///
@@ -60,6 +69,7 @@ impl<'a> Engine<'a> {
         let resolved = MemberRef { owner: o, name: n, desc: d };
         let mut all: Args = l.cap.clone();
         all.extend(a.iter().cloned());
+        self.lambda_adapt(m, off, &l, &mut all, ret, res);
         let first = || all.first().cloned().flatten().unwrap_or_default();
         let rest = all.get(1..).unwrap_or(&[]).to_vec();
         match l.imh.kind {
@@ -174,7 +184,8 @@ impl<'a> Engine<'a> {
                 let lname = format!("{}$$Lambda@{}:{}", cf.name, m, off);
                 let lid = self.id(&lname);
                 let ctx = self.methods[m].ctx;
-                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), sam: name.to_string(), imh: imh.clone(), cap });
+                let adapt = self.lambda_plan(&b.args, imh, cap.len());
+                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), sam: name.to_string(), imh: imh.clone(), cap, adapt });
                 self.touch(&iface, Level::Alloc, via.clone());
                 for a in &b.args {
                     if let Const::MethodType(d) = a {
@@ -219,6 +230,7 @@ impl<'a> Engine<'a> {
                     }
                 }
             }
+            Some(IndyKind::ObjectMethods) => self.object_methods(m, off, &b.args, name, &md, args),
             kind => {
                 // 引导方法产出的调用点：结果按声明类型 open
                 if let Some(rt) = ret {
@@ -242,5 +254,71 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+    }
+
+    /// `ObjectMethods` 引导的 record equals / hashCode / toString：静态实参里的 getter 句柄读出各分量
+    /// （接收者取 indy 实参，泛型 record 的抽象对象按对象读），引用分量的值集上派发同名 Object 方法。
+    /// 描述符 = indy 描述符去掉首个 record 形参；equals 的实参取同一分量汇合节点（对方 record 的分量）
+    fn object_methods(&mut self, m: usize, off: u32, bargs: &[Const], name: &str, md: &MethodDesc, args: &[V]) {
+        let via = Via::method("indy", m, Some(off));
+        let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
+        if let Some(rt) = ret {
+            self.add_to(Node::S(m, off), &TypeSet::open(rt));
+        }
+        let node = Node::S(m, COMPONENTS | off);
+        let mut any = false;
+        for a in bargs {
+            match a {
+                Const::Class(c) => {
+                    self.touch(c, Level::Type, via.clone());
+                }
+                Const::MethodHandle(x) if x.kind == 1 => {
+                    let Some(ft) = parse_field(&x.member.desc) else { continue };
+                    if !ft.is_reference() {
+                        continue;
+                    }
+                    let k = x.member.clone();
+                    for (p, v) in md.params.iter().zip(args.iter()) {
+                        if p.is_reference() {
+                            self.field(m, off, classfile::op::GETFIELD, &k, Some(v), None, node);
+                        }
+                    }
+                    any = true;
+                }
+                Const::MethodHandle(x) => {
+                    let x = x.clone();
+                    self.invoke_mh(m, off, &x);
+                }
+                _ => {}
+            }
+        }
+        if !any {
+            return;
+        }
+        let odesc = object_method_desc(md);
+        let Some(site) = self.h.resolve_method(OBJECT, name, &odesc, false) else {
+            self.unresolved.insert(format!("{OBJECT}.{name}:{odesc}"));
+            return;
+        };
+        let obj = self.id(OBJECT);
+        let s = self.value_set(&[Feed::N(node)]);
+        let a: Args = md.params.iter().skip(1).map(|p| p.is_reference().then(|| vec![Feed::N(node)])).collect();
+        let recv = self.receivers(m, &s, obj);
+        for r in recv {
+            self.dispatch_one(m, off, r, &site, &a, ret, None, NOCTX);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_method_desc_drops_record_receiver() {
+        let d = |s: &str| object_method_desc(&parse_method(s).unwrap());
+        assert_eq!(d("(Lt/R;Lt/O;)Z"), "(Lt/O;)Z");
+        assert_eq!(d("(Lt/R;)I"), "()I");
+        assert_eq!(d("(Lt/R;)Lt/S;"), "()Lt/S;");
     }
 }
