@@ -258,7 +258,7 @@ fn new_object(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, targs: &CtorTa
         Expr::Raw(r) => raw_stmt(format!("let mut {v}: {} = {};", crate::build::ty_text(env, &rust_ty), r.as_str())),
         _ => let_mut(v.clone(), Some(ir_ty(env, &rust_ty)?), init),
     };
-    sim.emit(stmt);
+    sim.emit(stmt)?;
     sim.push(Expr::Var(v), rust_ty);
     Ok(())
 }
@@ -287,14 +287,14 @@ fn init_on(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, obj_e: &str, args
     }
     let raw_cls = ctx.short(&call.owner);
     if call.owner == ty::consts::OBJECT || raw_cls == ctx.short(ty::consts::OBJECT) {
-        sim.emit(raw_stmt(format!("/* invokespecial {comment} ({} no-op) */", ir::anchors::OBJECT)));
+        sim.emit(raw_stmt(format!("/* invokespecial {comment} ({} no-op) */", ir::anchors::OBJECT)))?;
         return Ok(());
     }
     let init_on = ctor_rust_name(env, &call.owner, &call.desc, "__init_on")?;
     let tail = if args.is_empty() { String::new() } else { format!(", {}", args.join(", ")) };
     if super_chain_to_class(ctx, ctx.class_name, &raw_cls) == 0 {
         // 同类构造器委托 this(args)：同一身份上执行被委托构造器体
-        sim.emit(raw_stmt(format!("this = Self::{init_on}(this{tail})?;")));
+        sim.emit(raw_stmt(format!("this = Self::{init_on}(this{tail})?;")))?;
         return Ok(());
     }
     // super(..)：已存在的 this 经 From<Self> for Parent（宏生成的 vtable 上转）以父类视图
@@ -307,6 +307,6 @@ fn init_on(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, obj_e: &str, args
         (format!("{raw_cls}<{a}>"), format!("{raw_cls}::<{a}>::{init_on}"))
     };
     let view = format!("<{sup_ty} as ::std::convert::From<Self>>::from(::std::clone::Clone::clone(&this))");
-    sim.emit(raw_stmt(format!("{path}({view}{tail})?;")));
+    sim.emit(raw_stmt(format!("{path}({view}{tail})?;")))?;
     Ok(())
 }

@@ -124,11 +124,11 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, site: &Indy
         ("hashCode", _) => {
             let recv = pop_bound(sim)?;
             let h = sim.fresh("__om_hash")?;
-            sim.emit(raw_stmt(format!("let mut {h}: i32 = 0;")));
+            sim.emit(raw_stmt(format!("let mut {h}: i32 = 0;")))?;
             for g in &getters {
                 let (v, t) = read(env, sim, &recv, g)?;
                 let term = hash_of(env, &v, &t, &g.desc);
-                sim.emit(raw_stmt(format!("{h} = {h}.wrapping_mul(31).wrapping_add({term});")));
+                sim.emit(raw_stmt(format!("{h} = {h}.wrapping_mul(31).wrapping_add({term});")))?;
             }
             sim.push(Expr::Var(h), RsType::Prim(Prim::I32));
             Ok(())

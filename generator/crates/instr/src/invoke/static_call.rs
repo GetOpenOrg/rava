@@ -164,10 +164,10 @@ fn emit_unknown_stub(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, cls_sho
     let rust_ret = env.ctx.ty.jvm_to_rust(&call.ret);
     let msg = format!("stub: {cls_short}.{}", call.name);
     if matches!(rust_ret, RsType::Unit) {
-        sim.emit(raw_stmt(format!("__stub(\"{msg}\");")));
+        sim.emit(raw_stmt(format!("__stub(\"{msg}\");")))?;
     } else {
         let v = sim.fresh("_t")?;
-        sim.emit(raw_stmt(format!("let {v}: {} = __stub(\"{msg}\");", ty_text(env, &rust_ret))));
+        sim.emit(raw_stmt(format!("let {v}: {} = __stub(\"{msg}\");", ty_text(env, &rust_ret))))?;
         sim.push(Expr::Var(v), rust_ret);
     }
     Ok(())
@@ -242,7 +242,7 @@ pub fn gen_invokestatic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, 
         sim.emit(match call_e {
             Expr::Raw(r) => raw_stmt(format!("{};", r.as_str())),
             e => expr_stmt(e),
-        });
+        })?;
         return Ok(());
     }
     let recv_ty = inst.as_ref().map(|i| RsType::class(call.owner.clone(), i.clone()));
@@ -270,7 +270,7 @@ fn emit_ret(env: &InstrEnv, sim: &mut StackSim, call_e: Expr, rust_ret: RsType, 
         } else {
             let_typed(v.clone(), Some(ir_ty(env, &rust_ret)?), call_e)
         };
-        sim.emit(stmt);
+        sim.emit(stmt)?;
         Ok(())
     };
     if matches!(rust_ret, RsType::Object) {
@@ -279,7 +279,7 @@ fn emit_ret(env: &InstrEnv, sim: &mut StackSim, call_e: Expr, rust_ret: RsType, 
                 // 签名真实返回类型装箱（S-3.1）：身份保持的 Object 上转
                 let leaf = Expr::raw(text(env, &call_e));
                 let boxed = coerce::to_object(env, leaf, &s, true)?;
-                sim.emit(raw_stmt(format!("let {v} = {};", text(env, &boxed))));
+                sim.emit(raw_stmt(format!("let {v} = {};", text(env, &boxed))))?;
             }
             None => typed(sim, call_e)?,
         }
@@ -292,7 +292,7 @@ fn emit_ret(env: &InstrEnv, sim: &mut StackSim, call_e: Expr, rust_ret: RsType, 
                 raw_stmt(format!("let {v} = {};", text(env, &call_e)))
             } else {
                 let_typed(v.clone(), None, call_e)
-            });
+            })?;
             sim.push(Expr::Var(v), s);
         }
         _ => {
