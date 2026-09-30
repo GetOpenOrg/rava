@@ -142,6 +142,14 @@ classes = [
     "java/security/BasicPermission",
     "java/security/BasicPermissionCollection",
     "java/security/ProtectionDomain",
+    # gap 7e：权限枚举 / 代码来源 / 特权异常（纯 Java）。Permissions.elements 的 PermissionsEnumerator、
+    # ProtectionDomain 与 SecureClassLoader 的 CodeSource、doPrivileged(PrivilegedExceptionAction) 包装受检
+    # 异常的 PrivilegedActionException、AllPermission / SecurityPermission。
+    "java/security/PermissionsEnumerator",
+    "java/security/CodeSource",
+    "java/security/PrivilegedActionException",
+    "java/security/AllPermission",
+    "java/security/SecurityPermission",
 
     # gap 批次 4：随机数流（纯 Java；含嵌套 $AbstractSpliteratorGenerator / $Random*Spliterator /
     # $AbstractSplittableGenerator 等）。Random / SplittableRandom 的 ints / longs / doubles 流、
