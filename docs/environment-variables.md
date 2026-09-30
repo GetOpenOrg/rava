@@ -2,6 +2,7 @@
 
 > rava **不设项目自有环境变量**（2026-09-28 清理：原 `RAVA_*` 共 14 个全部改为命令行参数、生成文件或标准变量）。
 > 新增开关一律做成命令行参数；需要传给 cargo 构建的内部数据写入 scratch 的生成文件，由 `build.rs` 读取。
+> 唯一例外：生成器切换期的 `RAVA_GENERATOR`（见第三节），Python 生成器删除时随 `--generator` 一并删除。
 
 ## 一、命令行选项
 
@@ -15,6 +16,7 @@
 | `--strict` | 严格模式：转译兜底改为硬失败；缺手写实现的 native 方法编译报错（写入 scratch 的 `java_runtime/strict.txt`，`build.rs` 读取） |
 | `--trace-class CLASS` | 打印该类或方法（斜线形态，如 `java/net/InetAddress`、`类.方法:描述符`）入闭包的最短 provenance 链，回答“为什么被拉进闭包”（转交 `rava closure --why`） |
 | `--raw-sites FILE` | Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序），不影响生成代码 |
+| `--generator {python,rust}` | 生成器实现：`python` = `codegen/`；`rust` = `generator/` 的 `rava build --no-run`（只替换转译段，overlay 与 cargo 流程共用）。缺省取 `RAVA_GENERATOR`，再缺省 `python`（缺省值唯一定义在 `scripts/generator_select.py`，P5b 验收后改为 `rust`）。`rust` 下暂不支持 `--lib` / `--batch` / `--debug` / `--trace-class` / `--precheck-only` / `--raw-sites`（显式报错）；方法体生成器（P4c）接入前 Rust 路径在首个方法体请求处报「P4c/P5b 未接入」 |
 
 ```bash
 python3 scripts/main.py Foo.java --no-run --trace-class java/security/Provider
@@ -31,6 +33,7 @@ python3 scripts/main.py tests/e2e/01_basics/BubbleSort.java --strict
 | `--debug` / `--strict` | 透传给每个测试的 `main.py` |
 | `--deny SPEC` | 审计计数非零升级为整体失败（`equiv` / `fallback` / `stub-hit` 等，见 `--help`） |
 | `--no-dyn` | 关闭动态对照（缺省开，见下） |
+| `--generator {python,rust}` | 同 `main.py`；非缺省取值显式透传给每个测试的 `main.py`（`[meta]` 的 options 可见） |
 
 **动态对照**（闭包计划 C5，`scripts/dyn_compare.py`）：每个测试转译成功后（cargo 之前，`--no-run` 下同样执行）
 用 JVMTI agent + `-Xlog:class+load,class+init` 跑一次原始 Java 程序，把 JVM 实际加载的类与 `closure.json` 对照。
@@ -40,6 +43,27 @@ python3 scripts/main.py tests/e2e/01_basics/BubbleSort.java --strict
 编译，按源码 + JDK 缓存于 `build/dyn_agent/`。单独运行：`python3 scripts/dyn_compare.py build/jdk21/<test> [-o out.json]`。
 
 启动时的 `[meta]` 行打印 `PYTHONHASHSEED`、`CARGO_INCREMENTAL`、`CARGO_BUILD_JOBS` 与透传选项，便于事后解读结果。
+
+### `rava build` / `rava emit`（Rust 生成器外壳，`generator/crates/driver`）
+
+```bash
+cd generator && cargo run --release -q -- build ../tests/e2e/01_basics/HelloWorld.java --jdk 21 --no-run --skeleton-only
+cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json --jdk 21 --java ../tests/e2e/01_basics/HelloWorld.java --skeleton-only
+```
+
+| 选项 | 用途 |
+|---|---|
+| `build <A.java>…` | javac（`-g`，JDK ≥ 14 加 `--enable-preview --release N`）→ 闭包分析（同 `rava closure`）→ 发射 scratch →（缺省）`cargo run --bin <入口 snake 名>`（`CARGO_TARGET_DIR=<仓库>/build/target`、`CARGO_INCREMENTAL=0`）。用户类与 `closure.json` 落 `<scratch>/closure_input/` |
+| `emit <closure.json>` | 由既有 `closure.json` 与用户类目录重建输入后发射（不编译运行）。`--classes DIR` 缺省 `closure.json` 同目录的 `classes/`；`--java A.java`（可多次）给出源文件，决定用户类包布局与入口序 |
+| `--jdk N` / `--java-home P` | JDK 选择（互斥；缺省同 `rava closure`：`JAVA_HOME` → 已安装最新版） |
+| `--runtime R` | 手写层真源 `runtime/java_runtime`（缺省自当前目录向上查找） |
+| `--out DIR` | scratch 目录。build 缺省 `<仓库>/build/<入口 snake 名>`；emit 缺省为 `closure.json` 所在 `closure_input/` 的上级 |
+| `--image D` | 镜像独有 / VM 支持类目录（可多次；Rust 侧尚无 jimage 提取，`main.py --generator rust` 取 `JdkResolver.image_class_dirs()` 传入） |
+| `--main 类` / `--locale L` / `--root 类.方法:描述符` | 仅 build：入口类（缺省首个源文件的同名类，否则首个带 static main 的用户类）/ locale 种子 / 外部种子方法（均可多次） |
+| `--clean` | 发射前清空 scratch（emit 的输入位于 scratch 内时拒绝） |
+| `--no-run` | 仅 build：只生成不编译运行 |
+| `--skeleton-only` | 骨架模式：方法体为 `/*BODY 类.方法:描述符*/` 占位（`PlaceholderBodies`）。不给时以 `NoBodies` 发射，首个方法体请求报「P4c/P5b 未接入」 |
+| `--strict` | 同 `main.py --strict`（写入 scratch 的 `java_runtime/strict.txt`） |
 
 ### 重型闭包的自动处理（无需配置）
 
@@ -79,6 +103,7 @@ RUST_BACKTRACE=1 python3 scripts/main.py Foo.java
 | `XDG_CACHE_HOME` | `jdk_resolver.py` | JDK 解包缓存根目录（缺省 `~/.cache`，缓存在 `<根>/rava/`） |
 | `HOMEBREW_PREFIX` | `jdk_select.py` | macOS 自定义 brew 前缀，优先于 `/opt/homebrew`、`/usr/local` 扫描 |
 | `PILOT_LIBS` | `lib_pilot_golden.sh` | lib pilot 依赖 jar 目录（缺省 `tests/lib_pilot/deps/target/pilot-libs`，一般不需要设置） |
+| `RAVA_GENERATOR` | `generator_select.py`（`main.py` / `run_tests.py`） | 生成器切换期的缺省生成器（`python` / `rust`），`--generator` 显式值优先；项目唯一自有变量，随 Python 生成器删除 |
 | `OUT_DIR` | cargo → `build.rs` | cargo 标准变量：`build.rs` 在此生成 `jdk_feature.rs`（语料 JDK 版本常量） |
 
 ## 四、常用组合
