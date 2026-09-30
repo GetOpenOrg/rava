@@ -90,7 +90,7 @@ fn mod_tree_declares_disk_contents() {
     w.write(&src.join("java/util/stream/collectors_collector_impl.rs"), "rava_macros::java_class! {}\n").unwrap();
     put(&src.join("java/util/stale.rs"), "rava_macros::java_class! {}\n");
     put(&src.join("jdk_resources/module_resources.rs"), "pub fn lookup() {}\n");
-    write_mod_tree(&src, Some(&rt.join("src")), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
     assert!(!src.join("java/util/stale.rs").exists(), "本轮未写的生成文件清扫");
     assert_eq!(
         read(&src.join("java/lang/mod.rs")),
@@ -106,5 +106,31 @@ fn mod_tree_declares_disk_contents() {
     put(&src.join("javax/mod.rs"), "");
     complete_lib_rs(&src).unwrap();
     assert!(read(&src.join("lib.rs")).ends_with("非手写清单成员）\npub mod javax;\n"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn companion_skipped_when_used_module_absent() {
+    let root = tmp("companion");
+    let rt = runtime(&root);
+    put(
+        &rt.join("src/java/lang/invoke/natives_impl.rs"),
+        "use crate::prelude::*;\nuse crate::java::lang::Class;\nuse super::member_name::MemberName;\n\
+         impl Natives { pub fn f(x: MemberName) {} }\n",
+    );
+    let out = root.join("build").join("t");
+    prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
+    let src = out.join("java_runtime/src");
+    let dir = src.join("java/lang/invoke");
+    let gen = "rava_macros::java_class! {}\n";
+    let mut w = Writer::new(&out, &rt.join("src"));
+    w.write(&dir.join("natives.rs"), gen).unwrap();
+    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    assert!(!read(&dir.join("mod.rs")).contains("mod natives_impl;"), "依赖模块缺席 → 不声明");
+    let mut w = Writer::new(&out, &rt.join("src"));
+    w.write(&dir.join("natives.rs"), gen).unwrap();
+    w.write(&dir.join("member_name.rs"), gen).unwrap();
+    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    assert!(read(&dir.join("mod.rs")).ends_with("mod natives_impl;\n"), "依赖齐 → 声明");
     let _ = std::fs::remove_dir_all(&root);
 }

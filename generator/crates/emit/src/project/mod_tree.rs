@@ -6,14 +6,75 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use closure::handwritten::Handwritten;
 use ty::ident::is_rust_keyword;
 
 use super::fs::{has_marker, walk, Writer};
 use crate::error::{io_err, Result};
 
-/// 共置手写文件的编译期硬依赖（同目录 sibling 缺席则该 impl 不声明）。
-/// 过渡：Python `_IMPL_FILE_DEPS` 的逐项移植；终态应迁入 runtime 清单（生成器不写文件名特判）。
-const IMPL_FILE_DEPS: &[(&str, &[&str])] = &[("method_handle_natives_impl.rs", &["member_name.rs", "method_type.rs"])];
+/// 共置手写文件的编译期模块依赖判定：依赖取自手写文件自身的路径引用
+/// （`closure::handwritten` 已解析的 use 表 / 类型路径），引用的模块文件在 scratch 中缺席
+/// （语料条件生成类本轮未生成）则该 companion 不声明——等价于该 impl 尚不存在，
+/// 其服务的 native 方法回落 panic 存根，而不是让无法解析的 import 拖垮整个 crate。
+pub struct CompanionDeps {
+    hw: Handwritten,
+    /// scratch 的 crate src 根（`crate::` 起点）
+    src_root: PathBuf,
+}
+
+/// 路径段去 `r#` 前缀
+fn seg_name(s: &str) -> &str {
+    s.strip_prefix("r#").unwrap_or(s)
+}
+
+impl CompanionDeps {
+    pub fn new(runtime_dir: &Path, src_root: &Path) -> CompanionDeps {
+        CompanionDeps { hw: Handwritten::new(runtime_dir), src_root: src_root.to_path_buf() }
+    }
+
+    /// 一条路径引用（`super::…` / `crate::…`）指向的模块文件是否在场。
+    /// 逐段下行：目录 → 进入；`<seg>.rs` / `<seg>_t.rs` → 在场；crate 根层的名字属 lib.rs
+    /// 基础设施、大写段是 glob 再导出的类型 → 不再判定；包目录下缺席的小写段 → 缺席
+    fn path_present(&self, dir: &Path, segs: &[String]) -> bool {
+        let (mut cur, rest) = match segs.first().map(String::as_str) {
+            Some("crate") => (self.src_root.clone(), &segs[1..]),
+            Some("super") => {
+                let mut d = dir.to_path_buf();
+                let mut i = 1;
+                while segs.get(i).is_some_and(|s| s == "super") {
+                    d = d.parent().map_or(d.clone(), Path::to_path_buf);
+                    i += 1;
+                }
+                (d, &segs[i..])
+            }
+            _ => return true,
+        };
+        for seg in rest {
+            let seg = seg_name(seg);
+            if cur.join(seg).is_dir() {
+                cur = cur.join(seg);
+                continue;
+            }
+            if cur.join(format!("{seg}.rs")).is_file() || cur.join(format!("{seg}_t.rs")).is_file() {
+                return true;
+            }
+            if cur == self.src_root || !seg.starts_with(|c: char| c.is_ascii_lowercase()) {
+                return true;
+            }
+            return false;
+        }
+        true
+    }
+
+    /// `dir/<base>_impl.rs`（或 `_ext.rs`）的全部路径引用在场
+    fn satisfied(&self, dir: &Path, base: &str) -> bool {
+        let Ok(rel) = dir.strip_prefix(&self.src_root) else { return true };
+        let rel = rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+        let cls = if rel.is_empty() { base.to_string() } else { format!("{rel}/{base}") };
+        let hw = self.hw.class(&cls);
+        hw.type_refs.iter().all(|t| self.path_present(dir, &t.0))
+    }
+}
 
 fn mod_decl(name: &str) -> String {
     if is_rust_keyword(name) {
@@ -100,7 +161,11 @@ fn scan_tree(src_root: &Path, handwritten_src: Option<&Path>) -> BTreeMap<PathBu
 }
 
 /// 目录的共置手写声明：(补充 pub 声明的宿主, `mod X_impl;` 行)
-fn companions(dir: &Path, children: &BTreeSet<String>) -> (BTreeSet<String>, Vec<String>) {
+fn companions(
+    dir: &Path,
+    children: &BTreeSet<String>,
+    deps: Option<&CompanionDeps>,
+) -> (BTreeSet<String>, Vec<String>) {
     let mut extra_pub = BTreeSet::new();
     let mut mods = Vec::new();
     let Ok(rd) = std::fs::read_dir(dir) else { return (extra_pub, mods) };
@@ -121,8 +186,7 @@ fn companions(dir: &Path, children: &BTreeSet<String>) -> (BTreeSet<String>, Vec
         if !(dir.join(format!("{base}.rs")).exists() || dir.join(format!("{base}_t.rs")).exists()) {
             continue;
         }
-        let deps = IMPL_FILE_DEPS.iter().find(|(k, _)| *k == f).map_or(&[][..], |(_, d)| *d);
-        if !deps.iter().all(|d| dir.join(d).exists()) {
+        if deps.is_some_and(|d| !d.satisfied(dir, base)) {
             continue;
         }
         mods.push(format!("mod {stem};"));
@@ -134,13 +198,15 @@ fn companions(dir: &Path, children: &BTreeSet<String>) -> (BTreeSet<String>, Vec
 }
 
 /// 重建 `src_root` 下各包的 mod.rs（根目录自身除外：lib.rs 手写）。
-/// `handwritten_src`：手写真源 src（java_runtime 时给出，lib crate 为 None）
-pub fn write_mod_tree(src_root: &Path, handwritten_src: Option<&Path>, writer: &mut Writer) -> Result<()> {
+/// `runtime_dir`：手写真源 `runtime/java_runtime`（java_runtime 时给出，lib crate 为 None）
+pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, writer: &mut Writer) -> Result<()> {
     sweep_stale(src_root, writer)?;
     if !src_root.is_dir() {
         return Ok(());
     }
-    let tree = scan_tree(src_root, handwritten_src);
+    let handwritten_src = runtime_dir.map(|r| r.join("src"));
+    let tree = scan_tree(src_root, handwritten_src.as_deref());
+    let deps = runtime_dir.map(|r| CompanionDeps::new(r, src_root));
     for (dir, children) in &tree {
         if dir == src_root {
             continue;
@@ -154,7 +220,7 @@ pub fn write_mod_tree(src_root: &Path, handwritten_src: Option<&Path>, writer: &
             }
             lines.push(use_decl(c));
         }
-        let (extra_pub, comp) = companions(dir, children);
+        let (extra_pub, comp) = companions(dir, children, deps.as_ref());
         for b in &extra_pub {
             lines.push(mod_decl(b));
             lines.push(use_decl(b));
