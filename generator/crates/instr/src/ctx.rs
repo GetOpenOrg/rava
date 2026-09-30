@@ -28,8 +28,9 @@ pub trait InstrHooks {
     /// invokedynamic 调用点的常量池下标（Python 指令的 operand；lambda 站点变量名
     /// `__lam_{idx}` / `__lam_cap{idx}_{i}` 与 TODO 占位文本的来源）。classfile 指令操作数
     /// 只携带 (bsm, name, desc)——javac 对同一 (bsm, NameAndType) 只生成一个常量池项，
-    /// 三元组在类内唯一定位该下标。None → invokedynamic 的 lambda 路径按未移植报告
-    fn indy_cp_index(&self, _current_class: &str, _bsm: u16, _name: &str, _desc: &str) -> Option<u16> {
+    /// 三元组在类内唯一定位该下标。`code_owner` 为指令出处类（[`InstrCtx::code_owner`]，
+    /// 常量池所属类）。None → invokedynamic 的 lambda 路径按未移植报告
+    fn indy_cp_index(&self, _code_owner: &str, _bsm: u16, _name: &str, _desc: &str) -> Option<u16> {
         None
     }
 }
@@ -150,6 +151,9 @@ pub struct InstrCtx<'a> {
     pub hooks: &'a dyn InstrHooks,
     /// 当前类 binary 名
     pub class_name: &'a str,
+    /// 指令出处类 binary 名：方法体字节码（常量池 / bootstrap 表）所属类。继承展开把祖先 /
+    /// 接口 default 方法体发射进子类时与 `class_name` 不同；缺省等于 `class_name`
+    pub code_owner: &'a str,
 }
 
 impl<'a> InstrCtx<'a> {
@@ -160,7 +164,12 @@ impl<'a> InstrCtx<'a> {
         hooks: &'a dyn InstrHooks,
         class_name: &'a str,
     ) -> InstrCtx<'a> {
-        InstrCtx { ty, rt, facts, hooks, class_name }
+        InstrCtx { ty, rt, facts, hooks, class_name, code_owner: class_name }
+    }
+
+    /// 指定指令出处类（继承展开的方法体）
+    pub fn with_code_owner(self, code_owner: &'a str) -> InstrCtx<'a> {
+        InstrCtx { code_owner, ..self }
     }
 
     pub fn reg(&self) -> &'a ty::Registry {
@@ -172,8 +181,8 @@ impl<'a> InstrCtx<'a> {
         self.ty.names.short(binary).into_owned()
     }
 
-    /// 当前类的 bootstrap 方法表（invokedynamic 用）
+    /// 指令出处类的类文件（invokedynamic 的 bootstrap 方法表取自此处）
     pub fn class_file(&self) -> Option<&'a ClassFile> {
-        self.ty.reg.get(self.class_name).map(|ci| ci.class_file())
+        self.ty.reg.get(self.code_owner).map(|ci| ci.class_file())
     }
 }

@@ -41,7 +41,7 @@ pub(super) struct IndySite<'a> {
 impl IndySite<'_> {
     /// 调用点的常量池下标（经 [`crate::ctx::InstrHooks::indy_cp_index`]）
     pub fn cp_index(&self, env: &InstrEnv) -> InstrResult<u16> {
-        match env.ctx.hooks.indy_cp_index(env.ctx.class_name, self.bsm_index, self.name, self.desc) {
+        match env.ctx.hooks.indy_cp_index(env.ctx.code_owner, self.bsm_index, self.name, self.desc) {
             Some(i) => Ok(i),
             None => unported(format!("invokedynamic {}:{} 的常量池下标不可得（InstrHooks::indy_cp_index）", self.name, self.desc)),
         }

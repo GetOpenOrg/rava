@@ -24,7 +24,8 @@ pub fn op_key(rec: &Value) -> String {
     ins["op"].as_str().unwrap_or("?").to_string()
 }
 
-pub fn resolve(env: &Env, rec: &Value) -> R<NInsn> {
+/// 指令 + 其出处类（类文件里找到时为该方法体所属类，合成时为 None）
+pub fn resolve(env: &Env, rec: &Value) -> R<(NInsn, Option<String>)> {
     let ins = &rec["ins"];
     let op = ins["op"].as_str().ok_or("ins 缺 op")?;
     let off = ins["off"].as_u64().ok_or("ins 缺 off")? as u32;
@@ -34,19 +35,19 @@ pub fn resolve(env: &Env, rec: &Value) -> R<NInsn> {
         let mut parts = c.splitn(3, '\t');
         let (lop, operand, comment) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
         let load = synth(lop, off, non_empty(operand), non_empty(comment))?;
-        return Ok(NInsn::FoldField { offset: off, load });
+        return Ok((NInsn::FoldField { offset: off, load }, None));
     }
-    let main = match real_insn(env, rec, off, op) {
-        Some(r) => r,
-        None => synth(op, off, ins["operand"].as_str(), ins["comment"].as_str())?,
+    let (main, owner) = match real_insn(env, rec, off, op) {
+        Some((i, c)) => (i, Some(c)),
+        None => (synth(op, off, ins["operand"].as_str(), ins["comment"].as_str())?, None),
     };
     let fold = &ins["fold"];
     if fold.is_null() {
-        return Ok(NInsn::Op(main));
+        return Ok((NInsn::Op(main), owner));
     }
     let lop = fold["op"].as_str().ok_or("fold 缺 op")?;
     let load = synth(lop, off, fold["operand"].as_str(), fold["comment"].as_str())?;
-    Ok(NInsn::FoldCall { call: main, load })
+    Ok((NInsn::FoldCall { call: main, load }, owner))
 }
 
 fn non_empty(s: &str) -> Option<&str> {
@@ -56,7 +57,7 @@ fn non_empty(s: &str) -> Option<&str> {
 /// 类文件里的同一条指令：沿记录类 → 超类 / 接口广度优先找同名同描述符、且该偏移上操作码
 /// 与视图一致的方法体。记录类是发射所在类，而继承展开会把祖先 / 接口 default 方法体
 /// （含 `super.m()` 展开的接口 default 体）发射进子类，此时记录类自身的同名方法不是出处
-fn real_insn(env: &Env, rec: &Value, off: u32, op: &str) -> Option<Insn> {
+fn real_insn(env: &Env, rec: &Value, off: u32, op: &str) -> Option<(Insn, String)> {
     let (cls, m, d) = (rec["cls"].as_str()?, rec["m"].as_str()?, rec["d"].as_str()?);
     let mut queue = std::collections::VecDeque::from([cls.to_string()]);
     let mut seen = std::collections::BTreeSet::new();
@@ -67,7 +68,7 @@ fn real_insn(env: &Env, rec: &Value, off: u32, op: &str) -> Option<Insn> {
         let Some(ci) = env.reg.get(&c) else { continue };
         let code = ci.class_file().methods.iter().find(|x| x.name == m && x.desc == d).and_then(|x| x.code.as_ref());
         if let Some(i) = code.and_then(|code| code.insns.iter().find(|i| i.offset == off && i.name() == op)) {
-            return Some(i.clone());
+            return Some((i.clone(), c));
         }
         if !ci.super_class().is_empty() {
             queue.push_back(ci.super_class().to_string());

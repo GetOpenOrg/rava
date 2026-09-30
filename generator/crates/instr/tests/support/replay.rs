@@ -64,7 +64,7 @@ impl InstrHooks for ReplayHooks {
     }
 }
 
-pub fn replay(env: &Env, rec: &Value, ninsn: &NInsn) -> R<Replayed> {
+pub fn replay(env: &Env, rec: &Value, (ninsn, owner): &(NInsn, Option<String>)) -> R<Replayed> {
     let renv = ReplayEnv::new(&env.rnames, &Value::Null);
     let mut conv = Conv { rd: Renderer::new(&env.rnames), fb: Fallbacks::default() };
     let cfg = config(&renv, &rec["cfg"], &[])?;
@@ -78,7 +78,8 @@ pub fn replay(env: &Env, rec: &Value, ninsn: &NInsn) -> R<Replayed> {
     }
     let hooks = ReplayHooks::from_rec(rec);
     let cls = rec["cls"].as_str().unwrap_or("");
-    let ctx = InstrCtx::new(TyCtx::new(&env.reg, &env.names, &env.manifest), &env.rt, &env.facts, &hooks, cls);
+    let ctx = InstrCtx::new(TyCtx::new(&env.reg, &env.names, &env.manifest), &env.rt, &env.facts, &hooks, cls)
+        .with_code_owner(owner.as_deref().unwrap_or(cls));
     let tparams = cfg.class_type_params.clone();
     let ienv = InstrEnv::new(ctx, &tparams);
     let mut sim = StackSim::from_state(cfg, st, &ienv);
