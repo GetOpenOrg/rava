@@ -227,7 +227,8 @@ impl Engine<'_> {
 
     /// 定论不返回的活调用点与因此另外不可达的区间：唯一目标为字节码方法（无清单返回事实 / 派生结果），
     /// 目标有节点、全部节点已分析，且返回常量格缺席（没有任何克隆的分析含返回点）。
-    /// 截断区间把 `f.null_recv` 也当作终点（接收者恒 null 的调用只会抛 NPE）
+    /// 截断区间把 `f.null_recv` 也当作终点（接收者恒 null 的调用只会抛 NPE）；
+    /// 须在 consts / null_recv 算出之后、prop_folds 之前调用
     pub(super) fn noreturn_calls(&self, code: &classfile::Code, all: &[Rc<Analysis>], f: &mut Fold) {
         let reachable: Vec<bool> = (0..code.insns.len()).map(|i| all.iter().any(|a| a.reachable[i])).collect();
         let nr = self.ctx.noreturn.borrow();
@@ -254,10 +255,11 @@ impl Engine<'_> {
         if !ends.is_empty() {
             f.noreturn_dead_pcs = cut_after(code, &reachable, &ends);
         }
-        // 落入截断区间的终点本身已不可达（被前一终点截断）：不再列出
+        // 落入截断区间的终点与常量折叠点本身已不可达（被前一终点截断）：不再列出
         let cut = &f.noreturn_dead_pcs;
         let live = |pc: &u32| !cut.iter().any(|&(s, e)| s <= *pc && *pc < e);
         f.null_recv.retain(live);
+        f.consts.retain(|c| live(&c.0));
         f.noreturn_calls = stops.into_iter().filter(live).collect();
     }
 
