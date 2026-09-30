@@ -257,11 +257,13 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// `layers(ClassLoader)`：加载器可见的模块层序列（ModuleLayer.layers）。
     /// 单二进制无模块层——恒空 Stream（消费方 ServiceLoader 的
     /// ModuleServicesLookupIterator 迭代即终止，无附加 provider）。
-    /// `getServicesCatalog(ModuleLayer)`：层内服务目录。boot 层无命名模块、无 provides 声明——
-    /// 空目录（非 null：ServiceLoader.LayerLookupIterator.providers 不判空，直接 findServices；
-    /// Console.<clinit> 的 JdkConsoleProvider 查找经此路径）。
+    /// `getServicesCatalog(ModuleLayer)`：层内服务目录。运行期唯一的层即 boot 层，其目录与 boot
+    /// 加载器目录同一（全部类由 boot 定义；JDK 引导层目录即全部模块 provides 的汇总）。
+    /// 非 null：ServiceLoader.LayerLookupIterator.providers 不判空，直接 findServices
+    /// （Console.<clinit> 的 JdkConsoleProvider 查找经此路径）。
+    #[jvm_boundary(upcalls = "jdk/internal/module/ServicesCatalog.create:()Ljdk/internal/module/ServicesCatalog;")]
     fn getServicesCatalog(&self, _arg0: crate::java::lang::ModuleLayer) -> Result<crate::jdk::internal::module::ServicesCatalog> {
-        Ok(crate::jdk::internal::module::ServicesCatalog::__empty_layer_catalog())
+        crate::jdk::internal::module::ServicesCatalog::__boot_catalog()
     }
 
     fn layers_classloader(&self, _arg0: crate::java::lang::ClassLoader) -> Result<crate::java::util::stream::Stream<Object>> {

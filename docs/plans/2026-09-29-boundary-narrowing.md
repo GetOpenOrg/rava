@@ -710,6 +710,46 @@ CollectorsDemo 933 / 5372 / 12560、MH Combinators 1070 / **6807** / 15756、MH 
 TestCharsetForName 429 / 1492 / 2405；9 例漏均为 0（DeepCopy / MH 两例各 +4～5 方法来自上游的顺序修复）。
 顺序矩阵（`--flow-batch 1 / 64` × `--hash-seed 0 / 12345`）：HelloWorld、CollectorsDemo、DeepCopy 四种组合的类集与方法集逐一相同。
 
+**构建期类初始化（2026-10-01 用户决策）**：保留项 3 第 1 部分的设计（`build_time_init`：`<clinit>` 在分析期执行、对象图成为快照事实），
+归 C3 实施，本期不做；G6-a 随之达成。
+
+**运行期服务目录按分析器的服务事实装填（决策 4，只改 runtime/）**。项 5 让分析器导出 `closure.json` 的 `seeds.services`，但运行期
+`BootLoader.getServicesCatalog` 恒 null、`ServicesCatalog.findServices` 手写恒返回空 `ArrayList`——分析按事实建模 provider、运行期却找不到它，两侧不一致。
+改动：
+- `runtime/java_runtime/build.rs` 读 `../closure_input/closure.json`（两条流水线的 scratch 布局相同；缺席即空表），把模块 provider（`module` 非 null）按事实序
+  写成 `OUT_DIR/services_table.rs`。build 依赖只有 std，就地极简 JSON 解析（8 MB 的 DeepCopy closure.json 未优化构建 66 ms）。
+- `ServicesCatalog::__boot_catalog()`：进程唯一，首次请求时 `create()` + 逐条 `addProvider(provider.getModule(), 服务, provider)`（字节码翻译体）；
+  `BootLoader.getServicesCatalog()` 与 `JavaLangAccess.getServicesCatalog(ModuleLayer)`（boot 层目录）都返回它，二者各声明 `create` 回调边；
+  `addProvider` 仍由 `seeds.toml [services] population` 在有模块 provider 时作根，与运行期只在表非空时调用一致。
+- 删手写 `findServices`（改按字节码 `map.getOrDefault(service, List.of())`）与 `__empty_layer_catalog`；`getServicesCatalogOrNull` 保留（过渡：`CLV.get`
+  经边界存根）。运行期全部类由 boot 定义，模块 provider 在 boot 一步命中（JDK 上 `jdk.charsets` 在 platform 一步命中），迭代结果相同。
+- 补手写 `BootLoader.loadClass(Module, String)`（原为存根，`Class.forName(Module, String)` 在模块加载器为 null 时进入；照字节码：`loadClassOrNull` 后比对
+  `getModule()`）。
+- 未覆盖：类路径 provider（`META-INF/services`，`module` 为 null）仍无运行期资源表（FS-C2）；命名模块的静态 `provider()` 工厂路径——运行期模块恒未命名，
+  `inExplicitModule` 为 false，走构造器，与 JDK 对 `ExtendedCharsets` 的行为一致（其无 `provider()`）。
+结果（类 / 方法，相对合并后）：Digester 1166 / 6638 → 1166 / 6640（+`ServicesCatalog.create` / `<init>`、`ConcurrentHashMap.getOrDefault`、`BootLoader.loadClassOrNull`，
+−`ArrayList$SubList.toArray` / `Collections$EmptyList.toArray`）；DeepCopy 10821 → 10824；TestCharsetForName 429 / 1492 → **428 / 1486**（手写 `findServices`
+返回 `ArrayList` 带入的 `Collections$EmptyIterator` 等 8 方法消失）；其余 6 例不变；9 例漏均为 0。
+**COWIterator 结论**：`--why` 为 `CopyOnWriteArrayList$COWIterator.<init> ← CopyOnWriteArrayList.iterator@9 ← ModuleServicesLookupIterator.iteratorFor@55
+← … Charset.providers`。基线的漏由手写 `findServices` 引起：分析跟随手写返回的 `ArrayList`，JVM 迭代的是目录里的 `CopyOnWriteArrayList`；项 5 的
+population 根已在分析侧覆盖（此后漏 0），本项让运行期与之一致。编译验证：TestCharsetForName scratch `cargo check` 通过（`services_table.rs` 含
+`CharsetProvider → ExtendedCharsets`）；e2e 待协调方安排。
+
+**顺带修复的两处生成失败（本分支精度项引入，编译 TestCharsetForName / HelloWorld 时暴露）**：
+- **折叠常量类型不符**：项 1 的字符串纯函数事实让字符串值经声明为 `Object` 的返回（`Objects.requireNonNull(s, …)`、`System.getLogger` 内等）到达，
+  `fold.rs` 把它按调用点导出为 `{"type": "Ljava/lang/Object;", "value": "UTF-16BE"}`，发射层输入（`input/norm.rs`）拒收，**全部 Rust 流水线构建失败**
+  （9 例里 8 例有此类条目）。修法：`exportable(值, 读取点类型)`——整型族 ↔ 整数、J ↔ long、String 槽 ↔ 字符串、引用槽 ↔ null，其余不导出
+  （同时挡住 `V::Class` / `V::Par` 被 `const_json` 编成 null 的潜在错误）。单测 `exportable_matches_slot_type`。类 / 方法集不变。
+- **手写文件的派生类型需求**：`method_handle_ext.rs` 的 `interpret` 写 `mh.__get_form().__get_names()`；精度收窄后 TestCharsetForName 的
+  `MethodHandle` 只在 type 级（`AccessibleObject.checkCanSetAccessible` 的 `ldc`），`LambdaForm` 不入闭包，`form` 字段被发射为 `Object`，编译失败。
+  规则（`touch_hw_types`，通用）：类入生成范围即编译其手写文件，文件里经访问器 / 方法返回推得的接收者静态类型（`SType::Field` / `Call` / `Ret`
+  链上各级）与类型路径同为 L1 需求，按 type 级入闭包。单测 `derived_nodes_walk_accessor_chain`。结果：HelloWorld / FileIOTest / TestStreamBasic
+  +1 类（`Enumeration`，经 `ClassLoader` 手写），Digester / CollectorsDemo / TestCharsetForName +1 类（`LambdaForm`），方法数不变；9 例漏均为 0。
+  修后 TestCharsetForName、HelloWorld 的 scratch `cargo check` 通过。
+本段之后（类 / 方法 / 上下文）：HelloWorld 247 / 605 / 867、Digester 1167 / 6640 / 17288、DeepCopy 1624 / 10824 / 37760、FileIOTest 289 / 780 / 1047、
+CollectorsDemo 934 / 5372 / 12560、MH Combinators 1070 / 6807 / 15756、MH Direct 1078 / 6822 / 15907、TestStreamBasic 371 / 1361 / 2145、
+TestCharsetForName 429 / 1486 / 2375。
+
 ## 七、验收
 
 - §一 终态表各项达标。
