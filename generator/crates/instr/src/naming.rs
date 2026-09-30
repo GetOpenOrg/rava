@@ -39,6 +39,17 @@ fn root_overload_name(ctx: &InstrCtx, mname: &str, desc: &str) -> Option<String>
 /// 调用目标 `cls.mname:desc` 的 Rust 方法名（`_mangle_if_overloaded`）：重载 → 描述符后缀名，
 /// 否则原名。`cls` 为 binary 名或短名；`desc` 为调用描述符（None → 不做声明者解析）
 pub fn mangle_if_overloaded(ctx: &InstrCtx, cls: &str, mname: &str, desc: Option<&str>) -> InstrResult<String> {
+    // 结果只取决于注册表与全局事实（整次生成不变），按调用目标缓存
+    let key = format!("{cls}\0{mname}\0{}", desc.unwrap_or("\u{1}"));
+    if let Some(hit) = ctx.facts.mangle_cache.borrow().get(&key) {
+        return Ok(hit.clone());
+    }
+    let name = mangle_uncached(ctx, cls, mname, desc)?;
+    ctx.facts.mangle_cache.borrow_mut().insert(key, name.clone());
+    Ok(name)
+}
+
+fn mangle_uncached(ctx: &InstrCtx, cls: &str, mname: &str, desc: Option<&str>) -> InstrResult<String> {
     let reg = ctx.reg();
     if reg.is_empty() || mname.is_empty() || (mname.starts_with('<') && mname != "<init>") {
         return Ok(mname.to_string());
