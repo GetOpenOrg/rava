@@ -234,6 +234,10 @@ impl Closure<'_> {
             "dispatch": dispatch,
             "folds_version": FOLDS_VERSION,
             "folds": folds,
+            "system_properties": {
+                "values": e.sysprops().values(),
+                "dynamic": e.sysprops().dynamic(),
+            },
             "class_init": {
                 "targets": e.class_init.targets(),
                 "sites": e.class_init.sites.iter().map(|(s, cs)| json!({"site": s, "classes": cs})).collect::<Vec<_>>(),

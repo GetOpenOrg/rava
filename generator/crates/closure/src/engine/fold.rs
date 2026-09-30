@@ -22,7 +22,7 @@ pub struct Fold {
     /// 定论不返回的活调用点：唯一目标为字节码方法，全部节点已分析且没有任何返回路径（见 `noreturn.rs`）。
     /// 分析在定论阶段按值未知继续分析其后的代码（folds 规则 7），这里单独给出；发射层可在调用后终止控制流
     pub noreturn_calls: Vec<u32>,
-    /// 把 noreturn_calls 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交，格式同 dead_pcs）
+    /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交，格式同 dead_pcs）
     pub noreturn_dead_pcs: Vec<(u32, u32)>,
     /// 常量来自系统属性读取折叠的调用点（consts 的子集；统计用，不导出）
     pub props: Vec<u32>,
@@ -226,7 +226,8 @@ impl Engine<'_> {
     }
 
     /// 定论不返回的活调用点与因此另外不可达的区间：唯一目标为字节码方法（无清单返回事实 / 派生结果），
-    /// 目标有节点、全部节点已分析，且返回常量格缺席（没有任何克隆的分析含返回点）
+    /// 目标有节点、全部节点已分析，且返回常量格缺席（没有任何克隆的分析含返回点）。
+    /// 截断区间把 `f.null_recv` 也当作终点（接收者恒 null 的调用只会抛 NPE）
     pub(super) fn noreturn_calls(&self, code: &classfile::Code, all: &[Rc<Analysis>], f: &mut Fold) {
         let reachable: Vec<bool> = (0..code.insns.len()).map(|i| all.iter().any(|a| a.reachable[i])).collect();
         let nr = self.ctx.noreturn.borrow();
@@ -246,10 +247,13 @@ impl Engine<'_> {
                 stops.push(x.offset);
             }
         }
-        if stops.is_empty() {
-            return;
+        // null_recv 调用点的目标集为空，同样不会正常返回：一并作为截断终点（须先算出 f.null_recv）
+        let mut ends: Vec<u32> = stops.iter().chain(&f.null_recv).copied().collect();
+        ends.sort_unstable();
+        ends.dedup();
+        if !ends.is_empty() {
+            f.noreturn_dead_pcs = cut_after(code, &reachable, &ends);
         }
-        f.noreturn_dead_pcs = cut_after(code, &reachable, &stops);
         f.noreturn_calls = stops;
     }
 

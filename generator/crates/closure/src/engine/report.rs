@@ -41,6 +41,11 @@ impl<'a> Engine<'a> {
         out
     }
 
+    /// 折叠所用的系统属性表（清单 `[facts.system_properties]`）：运行时初始属性表与之同源
+    pub fn sysprops(&self) -> &crate::manifest::SysProps {
+        &self.man.sysprops
+    }
+
     /// 折叠常量里来自系统属性读取的调用点
     fn prop_folds(&self, f: &Fold, all: &[Rc<Analysis>]) -> Vec<u32> {
         f.consts
