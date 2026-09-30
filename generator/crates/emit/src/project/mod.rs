@@ -92,7 +92,8 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &mut dyn MethodB
     let user = UserLayout::build(ctx, &user_src);
     let mut state = ProjectState::default();
     let ems = emit_classes(ctx, &mut state, bodies, &w, &jdk, &user)?;
-    // 第二阶段收尾（LAMBDA 账本断言 / 继承补声明 / SAM 合成 / 反射分派）：步骤 (d)
+    state.check_lambda_ledger()?;
+    // 第二阶段收尾（继承补声明 / SAM 合成 / 反射分派）：步骤 (d)
     let disp = DispatchReg::default();
     for em in ems.values() {
         w.write(&em.path, &em.text)?;

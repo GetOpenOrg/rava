@@ -4,15 +4,19 @@
 //! `build/golden/emit/<Test>.rs-out/` 后逐文件对照（与 runtime 手写真源逐字节相同的文件
 //! golden 不转储，比较同样跳过）。
 //!
-//! 对照口径随移植阶段收紧（[`CLASS_STAGE`]）：类文件当前只比到 impl 头（文件头 / 导入 /
-//! 类块头 / struct），方法块接入后改为全文；非类文件（Cargo.toml / mod.rs / main.rs …）全文。
-//! golden 缺失时跳过并提示采集命令。
+//! 方法体以 [`Replay`] 回放 `bodies.jsonl`（Python 每次方法体生成的真实文本与登记事实），
+//! 回放文本用与采集脚本相同的哨兵行包裹方法体，落盘后同样替换为 `/*BODY key*/` 占位再比较——
+//! 发射层基于文本的处理（VTable 导入扫描、record 补丁）看到的仍是真实方法体。
+//!
+//! 对照口径随移植阶段收紧（[`CLASS_STAGE`]）：类文件当前比到方法段为止（文件头 / 导入 /
+//! 类块头 / struct / static 字段 / 方法块；继承段在步骤 (d) 接入后改为全文）；
+//! 非类文件（Cargo.toml / mod.rs / main.rs …）全文。golden 缺失时跳过并提示采集命令。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
-use emit::body::PlaceholderBodies;
-use emit::class_writer::INHERITED_IMPORTS_SLOT;
+use emit::body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter};
+use emit::class_writer::{INHERITED_IMPORTS_SLOT, INHERITED_MEMBERS_SLOT};
 use emit::text::scratch_pkg_version;
 use emit::ctx::{EmitCtx, EmitOptions};
 use emit::project::{prepare_scratch, write_project};
@@ -30,18 +34,24 @@ const TESTS: [(&str, &str); 3] = [
 /// 类文件对照范围
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ClassStage {
-    /// 到 `java_class!` 块内 impl 头为止
-    UpToImplHeader,
-    /// 全文（方法块接入后启用）
+    /// `java_class!` 块到继承成员插入位为止（rs 方法段须是 py 方法段的前缀：py 在其后接续
+    /// 接口 default / special / 超类继承段）
+    UpToMethodBlocks,
+    /// 全文（继承段接入后启用）
     #[allow(dead_code)]
     Full,
 }
-const CLASS_STAGE: ClassStage = ClassStage::UpToImplHeader;
+const CLASS_STAGE: ClassStage = ClassStage::UpToMethodBlocks;
 const CLASS_MARK: &str = "rava_macros::java_class! {";
 /// 各 crate 目录（相对 scratch 根）：包版本按目录路径派生
 const CRATE_DIRS: [&str; 3] = ["", "java_runtime", "user"];
 /// 待后续步骤接入的已知失配（报告但不判失败；全部移植后须清空）
-const PENDING: [(&str, &str); 1] = [("user/src/main.rs", "反射分派注册表（步骤 d：dispatch_gen）")];
+const PENDING: [(&str, &str); 4] = [
+    ("user/src/main.rs", "反射分派注册表（步骤 d：dispatch_gen）"),
+    ("<bodies.jsonl>", "接口 default / special / 超类虚方法继承段的方法体请求（步骤 d）"),
+    ("java_runtime/src/java/util/stream/collectors_collector_impl.rs", "record 访问器补丁（步骤 d）"),
+    ("java_runtime/src/jdk/internal/reflect/reflection_factory_config.rs", "record 访问器补丁（步骤 d）"),
+];
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -75,21 +85,9 @@ fn files_under(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// `java_class!` 块从开头到 impl 头（含）
-fn block_to_impl_header(lines: &[&str]) -> String {
-    let mut out = Vec::new();
-    for l in lines {
-        out.push(*l);
-        let t = l.trim_start();
-        if l.len() - t.len() == 4 && t.starts_with("impl") && t.ends_with('{') {
-            break;
-        }
-    }
-    out.join("\n")
-}
-
 /// 按阶段比较类文件：文件头（rs 去继承导入插入位后须是 py 文件头的前缀——py 在插入位
-/// 已填入继承成员导入）+ `java_class!` 块到 impl 头。返回首个差异描述
+/// 已填入继承成员导入）+ `java_class!` 块（rs 到继承成员插入位为止，须是 py 块的行前缀）。
+/// 返回首个差异描述
 fn staged_class_diff(want: &str, got: &str) -> Option<String> {
     let (w, g): (Vec<&str>, Vec<&str>) = (want.lines().collect(), got.lines().collect());
     let (Some(wm), Some(gm)) = (w.iter().position(|l| *l == CLASS_MARK), g.iter().position(|l| *l == CLASS_MARK)) else {
@@ -103,15 +101,18 @@ fn staged_class_diff(want: &str, got: &str) -> Option<String> {
             return Some(format!("文件头第 {} 条\n      py: {wl}\n      rs: {gl}", i + 1));
         }
     }
-    let (wb, gb) = (block_to_impl_header(&w[wm..]), block_to_impl_header(&g[gm..]));
-    (wb != gb).then(|| {
-        let (ln, a, b) = first_diff(&wb, &gb);
-        format!("块 L{ln}\n      py: {a}\n      rs: {b}")
-    })
+    let g_end = g[gm..].iter().position(|l| l.trim() == INHERITED_MEMBERS_SLOT).map_or(g.len(), |p| gm + p);
+    for (i, gl) in g[gm..g_end].iter().enumerate() {
+        let wl = w.get(wm + i).copied().unwrap_or("<EOF>");
+        if wl != *gl {
+            return Some(format!("块 L{}\n      py: {wl}\n      rs: {gl}", i + 1));
+        }
+    }
+    None
 }
 
 fn file_diff(want: &str, got: &str) -> Option<String> {
-    if CLASS_STAGE == ClassStage::UpToImplHeader && want.contains(CLASS_MARK) {
+    if CLASS_STAGE == ClassStage::UpToMethodBlocks && want.contains(CLASS_MARK) {
         return staged_class_diff(want, got);
     }
     (want != got).then(|| {
@@ -140,6 +141,106 @@ fn first_diff(want: &str, got: &str) -> (usize, String, String) {
     (n, String::new(), String::new())
 }
 
+const BODY_BEGIN: &str = "//@@BODY_BEGIN ";
+const BODY_END: &str = "//@@BODY_END";
+
+/// 回放记录键：(类.方法:描述符, 显式 Rust 名, in_vtable_body)
+type ReplayKey = (String, Option<String>, bool);
+
+/// `bodies.jsonl` 回放：按 (键, Rust 名, in_vtable_body) 队列依次取 Python 的方法体文本与登记事实
+struct Replay {
+    queue: HashMap<ReplayKey, VecDeque<Result<BodyOutput, BodyError>>>,
+}
+
+fn triples(v: &Value) -> Vec<(String, String, String)> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| {
+            let s = |i: usize| t[i].as_str().unwrap_or_default().to_string();
+            (s(0), s(1), s(2))
+        })
+        .collect()
+}
+
+impl Replay {
+    fn load(path: &Path) -> Replay {
+        let mut queue: HashMap<ReplayKey, VecDeque<_>> = HashMap::new();
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let r: Value = serde_json::from_str(line).expect("bodies.jsonl 行");
+            let key = r["key"].as_str().unwrap_or_default().to_string();
+            let effects = BodyEffects {
+                requests: triples(&r["requests"]),
+                lambda_refs: triples(&r["lambda_refs"]),
+                sam_sites: triples(&r["sam_sites"]),
+            };
+            let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
+            let out = if let Some(f) = r["fallback"].as_str() {
+                Err(BodyError::Fallback(f.to_string()))
+            } else if r["unsplit"].as_bool() == Some(true) {
+                Ok(BodyOutput { text: s("text"), effects })
+            } else {
+                let body = s("body");
+                let text = if body.is_empty() {
+                    format!("{}{BODY_BEGIN}{key}\n{BODY_END}\n}}", s("head"))
+                } else {
+                    format!("{}{BODY_BEGIN}{key}\n{body}\n{BODY_END}\n}}", s("head"))
+                };
+                Ok(BodyOutput { text, effects })
+            };
+            let rk = (key, r["rust_name"].as_str().map(str::to_string), r["in_vtable_body"].as_bool().unwrap_or(false));
+            queue.entry(rk).or_default().push_back(out);
+        }
+        Replay { queue }
+    }
+}
+
+impl MethodBodyEmitter for Replay {
+    fn emit_body(&mut self, _ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
+        let key = format!("{}.{}:{}", req.class.name(), req.method.name, req.method.desc);
+        let rk = (key, req.rust_name.map(str::to_string), req.in_vtable_body);
+        match self.queue.get_mut(&rk).and_then(VecDeque::pop_front) {
+            Some(out) => out,
+            None => Err(BodyError::Fatal(format!("回放缺记录：{rk:?}"))),
+        }
+    }
+}
+
+/// 哨兵段 → `{体内缩进}/*BODY key*/`（与采集脚本 `_replace_bodies` 同形，计嵌套）
+fn replace_bodies(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let l = lines[i];
+        let t = l.trim_start_matches([' ', '\t']);
+        let Some(key) = t.strip_prefix(BODY_BEGIN) else {
+            out.push(l.to_string());
+            i += 1;
+            continue;
+        };
+        let indent = &l[..l.len() - t.len()];
+        let mut depth = 1;
+        let mut j = i + 1;
+        while j < lines.len() {
+            let s = lines[j].trim();
+            if s.starts_with(BODY_BEGIN) {
+                depth += 1;
+            } else if s == BODY_END {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            j += 1;
+        }
+        out.push(format!("{indent}    /*BODY {key}*/"));
+        i = j + 1;
+    }
+    out.join("\n")
+}
+
 /// (对照文件数, 差异：路径 → 描述)
 fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
     let gdir = root.join("build/golden/emit").join(stem);
@@ -163,9 +264,15 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
     let out = root.join("build/golden/emit").join(format!("{stem}.rs-out"));
     prepare_scratch(&out, &runtime, &ctx.macros_crate, true).expect("scratch overlay");
     let mut diffs = BTreeMap::new();
-    if let Err(e) = write_project(&ctx, &out, &mut PlaceholderBodies) {
+    let mut replay = Replay::load(&gdir.join("bodies.jsonl"));
+    if let Err(e) = write_project(&ctx, &out, &mut replay) {
         diffs.insert("<write_project>".to_string(), e.to_string());
         return (0, diffs);
+    }
+    let unused: usize = replay.queue.values().map(VecDeque::len).sum();
+    if unused > 0 {
+        let sample: Vec<String> = replay.queue.iter().filter(|(_, q)| !q.is_empty()).take(5).map(|(k, _)| format!("{k:?}")).collect();
+        diffs.insert("<bodies.jsonl>".to_string(), format!("{unused} 条方法体记录未被请求，例：{}", sample.join(" / ")));
     }
     // 包版本由 crate 目录路径派生：rs 输出目录不同，按 py 输出目录的同一派生归一
     let py_out = PathBuf::from(meta["out_dir"].as_str().unwrap_or_default());
@@ -192,6 +299,9 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
             diffs.insert(key, "二进制内容不同".into());
             continue;
         };
+        if got.contains(BODY_BEGIN) {
+            got = replace_bodies(&got);
+        }
         for (rs_v, py_v) in &versions {
             got = got.replace(rs_v, py_v);
         }

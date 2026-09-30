@@ -9,6 +9,8 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 |---|---|---|
 | (b) 类块头 / struct / 字段 / 导入 | 文件头（cross_imports，去继承导入插入位后为 py 前缀）+ `java_class!` 块到 impl 头 | 3 例 2132 个文件全部一致 |
 | (b) 非类文件 | Cargo.toml / mod.rs / lib.rs / 资源文件全文 | 一致；`user/src/main.rs` 反射分派注册表待步骤 (d) |
+| (c) 方法块（clinit / 声明方法 / 手写覆盖 / 接口 lambda / 接口补全） | `java_class!` 块到继承段插入位（方法体经 bodies.jsonl 回放替换） | 除 2 个 record 类外全部一致；record 访问器补丁（`_patch_record_method_blocks`）属步骤 (d) |
+| (c) 方法体请求 | bodies.jsonl 回放记录消费 | TestStreamBasic 25 条、TestCompletableFuture 235 条未请求——继承段（接口 default / special / 超类虚方法）的方法体请求属步骤 (d) |
 
 `tests/golden.rs` 的 `PENDING` 表列出尚待后续步骤接入的已知失配（报告但不判失败），全部移植后须清空；
 `CLASS_STAGE` 在方法块接入后切到全文对照。
@@ -32,6 +34,14 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 3. **手写伴生依赖**：Python 手维 `IMPL_FILE_DEPS` 表；Rust 由 `closure::handwritten` 的 use 类型引用推导（4c783fa7）。
 4. **scratch 包版本**：`scratch_pkg_version` 按 `os.path.abspath` 口径词法消去 `..`（`std::path::absolute`
    不消去，路径含 `..` 时与 Python 不一致——已修正为一致，记录以免回退）。
+
+5. **Fallback 副作用**：Python 方法体翻译失败回落存根时，已登记的部分副作用（lambda 定义、跨类请求）残留在
+   项目状态中；Rust 在 `BodyError::Fallback` 时整体丢弃该方法体的副作用（`ProjectState::absorb` 仅在成功时调用）。
+   golden 三例的回落方法无残留副作用，故无可见差异。
+6. **lambda 命名为 emit 私有最小移植**：根 API 重载判断 → `hierarchy_overloaded_names` 改名 → `safe_ident`，
+   与 `codegen/instr` 同口径；P4c method crate 落地后统一到其公共实现。
+7. **FS-H0 手写审计**：`ProjectState.hw_audit` 已按 VmBoundary / Intrinsic / Override 分类记录，尚未写入
+   raw_audit 输出（P0 driver 接入时落盘）。
 
 ## 三、Python 行为照搬（疑似缺陷，按原样移植，不在 P5a 修）
 

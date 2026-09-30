@@ -45,3 +45,9 @@ pub fn in_public_api(binary: &str) -> bool {
 
 /// 不加入 java_runtime 全局跨包 glob 导入的内部实现包前缀（避免命名冲突）
 pub const INTERNAL_IMPL_PREFIX: &str = "jdk/";
+
+/// `Object.toString()` 描述符（存根给 vtable 可安全调用的默认值）
+pub const TO_STRING_DESC: &str = "()Ljava/lang/String;";
+
+/// 程序入口 `main(String[])` 描述符（JLS 12.1.4）
+pub const MAIN_DESC: &str = "([Ljava/lang/String;)V";

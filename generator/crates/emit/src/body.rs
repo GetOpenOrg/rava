@@ -76,15 +76,23 @@ impl MethodBodyEmitter for NoBodies {
     }
 }
 
-/// 骨架模式：方法体一律为 `/*BODY key*/` 占位（`rava build --skeleton-only`）
+/// 骨架模式：签名同存根（形参名取 `argN`），方法体为 `/*BODY key*/` 占位（`rava build --skeleton-only`）
 pub struct PlaceholderBodies;
 
 impl MethodBodyEmitter for PlaceholderBodies {
-    fn emit_body(&mut self, _ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
+    fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
         let name = req.rust_name.unwrap_or(&req.method.name);
+        let stub = crate::class_writer::stub::native_stub(
+            ctx,
+            req.class,
+            req.method,
+            name,
+            req.class_type_params,
+            &BTreeMap::new(),
+        );
         let text = format!(
-            "pub fn {}() -> Result<()> {{\n    /*BODY {}.{}:{}*/\n}}",
-            ty::ident::safe_ident(name),
+            "{} {{\n    /*BODY {}.{}:{}*/\n}}",
+            stub.sig,
             req.class.name(),
             req.method.name,
             req.method.desc

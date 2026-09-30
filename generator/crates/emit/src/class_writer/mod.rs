@@ -9,6 +9,9 @@ pub mod attrs;
 pub mod fields;
 pub mod head;
 pub mod hw_overrides;
+pub mod methods;
+pub mod slot;
+pub mod stub;
 
 use std::collections::BTreeSet;
 
@@ -106,16 +109,17 @@ fn parent_rust(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> String {
 pub fn gen_class_rs(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
-    _bodies: &mut dyn MethodBodyEmitter,
+    bodies: &mut dyn MethodBodyEmitter,
     ci: &ClassInfo,
     site: &ClassSite<'_>,
 ) -> Result<String> {
     let cross = site.cross_input();
     let mut referenced = collect_referenced(ctx, ci, cross.generated);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
-    for m in hw_overrides::handwritten_inherited_overrides(ctx, ci, &visible) {
-        add_desc_refs(&m.desc, &mut referenced);
-        add_desc_refs(m.signature.as_deref().unwrap_or(""), &mut referenced);
+    let overrides = hw_overrides::handwritten_inherited_overrides(ctx, ci, &visible);
+    for o in &overrides {
+        add_desc_refs(&o.method.desc, &mut referenced);
+        add_desc_refs(o.method.signature.as_deref().unwrap_or(""), &mut referenced);
     }
     let cross_imports = gen_cross_imports(ctx, state, ci, &cross, &referenced)?;
     let is_iface = ci.is_interface();
@@ -135,10 +139,13 @@ pub fn gen_class_rs(
     let sup = fields::flatten_super_fields(ctx, ci);
     let struct_lines = fields::struct_lines(ctx, ci, &tps, &sup);
 
-    let method_blocks = fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site));
-    // 方法块（步骤 (c)）与接口 default / special / 超类虚方法继承段（步骤 (d)）在此接入
-    let iface_lambda_blocks: Vec<String> = Vec::new();
-    let iface_supp_blocks: Vec<String> = Vec::new();
+    // G-10 账本：本类方法由本轮生成
+    state.generated_classes.insert(ci.name().to_string());
+    let mut method_blocks = fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site));
+    let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps, &overrides)?;
+    method_blocks.extend(mb.method_blocks);
+    // 接口 default / special / 超类虚方法继承段（步骤 (d)）在此接入
+    let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
 
     let parent = parent_rust(ctx, ci);
     let empty = BTreeSet::new();

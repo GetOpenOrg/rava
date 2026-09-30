@@ -162,6 +162,19 @@ pub struct ProjectState {
     pub generated_classes: BTreeSet<String>,
     /// SAM 合成站点 (接口, SAM 描述符, 当前类)（插入序）
     pub sam_sites: Vec<(String, String, String)>,
+    /// FS-H0 手写覆盖审计（`raw_audit` 三类登记；发射序）
+    pub hw_audit: Vec<(HwAudit, String)>,
+}
+
+/// 公开 API 类非 native 方法被手写覆盖的审计类别
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HwAudit {
+    /// 边界类（`[vm_boundary]` / 未放行的 `[boundary]`）：策略边界
+    VmBoundary,
+    /// VM 内建函数（`vm_intrinsics.toml` 准入）
+    Intrinsic,
+    /// 越界覆盖
+    Override,
 }
 
 impl ProjectState {
@@ -172,5 +185,35 @@ impl ProjectState {
         }
         self.lambda_refs.extend(fx.lambda_refs.iter().cloned());
         self.sam_sites.extend(fx.sam_sites.iter().cloned());
+    }
+
+    /// G-10 生成期断言：调用点引用的 lambda 实现名须在同类同名方法的定义名集合中；
+    /// 被引用类本轮生成过却无该方法定义 → 定义被过滤（`_LambdaNameLedger.check`）
+    pub fn check_lambda_ledger(&self) -> Result<()> {
+        let mut refs: BTreeMap<(&str, &str), BTreeSet<&str>> = BTreeMap::new();
+        for (c, m, r) in &self.lambda_refs {
+            refs.entry((c, m)).or_default().insert(r);
+        }
+        let mut problems = Vec::new();
+        for ((cls, mname), names) in &refs {
+            if !self.generated_classes.contains(*cls) {
+                continue;
+            }
+            let key = ((*cls).to_string(), (*mname).to_string());
+            let Some(defs) = self.lambda_defs.get(&key) else {
+                problems.push(format!("{cls}.{mname} → 调用点引用 {names:?}，但该类本轮生成时未输出此方法的任何定义（被过滤/跳过）"));
+                continue;
+            };
+            let drifted: Vec<&&str> = names.iter().filter(|n| !defs.contains(**n)).collect();
+            if !drifted.is_empty() {
+                problems.push(format!("{cls}.{mname} → 调用点引用 {drifted:?} 不在定义名集合 {defs:?} 中"));
+            }
+        }
+        if problems.is_empty() {
+            return Ok(());
+        }
+        let head: Vec<String> = problems.iter().take(10).map(|p| format!("  [G-10] {p}")).collect();
+        let more = if problems.len() > 10 { format!("\n  ...（共 {} 处）", problems.len()) } else { String::new() };
+        Err(EmitError::Assert(format!("invokedynamic 实现方法命名/定义不一致（G-10 断言）：\n{}{more}", head.join("\n"))))
     }
 }

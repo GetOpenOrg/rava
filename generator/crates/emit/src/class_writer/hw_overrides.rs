@@ -15,8 +15,16 @@ use crate::lang;
 const IMPL_PREFIX: &str = "__impl_";
 const ACC_ABSTRACT: u16 = 0x0400;
 
-/// 合成的覆盖声明（access 去 abstract）；`visible` 为本类非 synthetic 方法
-pub fn handwritten_inherited_overrides(ctx: &EmitCtx<'_>, ci: &ClassInfo, visible: &[&Method]) -> Vec<Method> {
+/// 合成的覆盖声明：祖先声明的副本（access 去 abstract）；`owner` / `index` 指向祖先原方法
+/// （局部变量表、Deprecated 等补充属性随副本取自祖先）
+pub struct HwOverride<'c> {
+    pub owner: &'c ClassInfo,
+    pub index: usize,
+    pub method: Method,
+}
+
+/// `visible` 为本类非 synthetic 方法
+pub fn handwritten_inherited_overrides<'c>(ctx: &EmitCtx<'c>, ci: &ClassInfo, visible: &[&Method]) -> Vec<HwOverride<'c>> {
     let Some(hw) = ctx.input.handwritten.get(ci.name()) else { return Vec::new() };
     if ci.is_interface() || ctx.ty.reg.is_empty() || lang::in_public_api(ci.name()) {
         return Vec::new();
@@ -31,21 +39,25 @@ pub fn handwritten_inherited_overrides(ctx: &EmitCtx<'_>, ci: &ClassInfo, visibl
     wanted.sort_unstable();
     let mut out = Vec::new();
     for name in wanted {
-        let mut found: Vec<&Method> = Vec::new();
+        let mut found: Vec<(&ClassInfo, usize)> = Vec::new();
         let mut sup = ci.super_class();
         while let Some(sci) = ctx.ty.reg.get(sup) {
             found.extend(
-                sci.methods().iter().filter(|m| m.name == name && !m.is_static() && !m.is_synthetic() && !m.is_private()),
+                sci.methods()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.name == name && !m.is_static() && !m.is_synthetic() && !m.is_private())
+                    .map(|(i, _)| (sci, i)),
             );
             if !found.is_empty() {
                 break;
             }
             sup = sci.super_class();
         }
-        if let [m] = found.as_slice() {
-            let mut m = (*m).clone();
-            m.access &= !ACC_ABSTRACT;
-            out.push(m);
+        if let [(owner, index)] = found.as_slice() {
+            let mut method = owner.methods()[*index].clone();
+            method.access &= !ACC_ABSTRACT;
+            out.push(HwOverride { owner, index: *index, method });
         }
     }
     out
