@@ -8,7 +8,7 @@
     python3 scripts/dep_scan.py lib.jar --json       # 机器可读输出
     python3 scripts/dep_scan.py lib.jar --classes    # 附类级清单（默认包级聚合）
 
-分类口径（与 scan_jdk_boundary.py 对齐）：
+分类口径：
   jdk-public    java/ javax/ + JDK 附带（org.w3c.dom / org.xml.sax / org.ietf.jgss）
   jdk-internal  jdk/ sun/ com/sun/ com/oracle/ —— 需伴生/手写排期的信号
   self          被扫描输入自身的包（.class 的 this_class / 源码 package 声明）
