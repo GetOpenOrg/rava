@@ -4,11 +4,15 @@
 //! - [`sig`]：被调方法的签名解析（形参 / 返回类型的泛型视角、接收者实参映射、实参强转）；
 //! - [`recv`]：虚调用的接收者解析（`member_owner` 中依赖栈状态的部分）；
 //! - [`turbofish`]：泛型类静态调用路径的 turbofish；
+//! - [`bind`]：调用点类型实参推断（钻石 / 构造器 turbofish）与 @CallerSensitive 包装；
+//! - [`special`]：invokespecial（`super.m()` / 构造器）；
 //! - [`static_call`]：invokestatic；
 //! - [`virtual_`]：invokevirtual / invokeinterface。
 
+pub mod bind;
 pub mod recv;
 pub mod sig;
+pub mod special;
 pub mod static_call;
 pub mod turbofish;
 pub mod virtual_;
