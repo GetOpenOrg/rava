@@ -48,6 +48,7 @@ mod report;
 mod diag;
 mod seeds;
 mod class_lookup;
+mod method_lookup;
 
 pub use seeds::SeedState;
 
