@@ -18,6 +18,33 @@ pub(super) fn expand(uses: &HashMap<String, Vec<String>>, segs: Vec<String>) -> 
     }
 }
 
+/// 手写层的对象转换入口：结果类型由 turbofish 给出（`x.try_cast::<T>(…)` / `try_checkcast::<T>()` /
+/// `catch_as::<T>(…)`，结果经 `Result` / `Option` 包装或直接为 T）
+const CAST_METHODS: [&str; 3] = ["try_cast", "try_checkcast", "catch_as"];
+
+/// 转换调用的目标类型路径（turbofish 单个类型实参）
+fn cast_target(m: &syn::ExprMethodCall) -> Option<Vec<String>> {
+    if !CAST_METHODS.contains(&m.method.to_string().as_str()) {
+        return None;
+    }
+    match m.turbofish.as_ref()?.args.iter().collect::<Vec<_>>().as_slice() {
+        [syn::GenericArgument::Type(t)] => type_path(t),
+        _ => None,
+    }
+}
+
+/// 模式绑定的变量：`x` / `x: T` / `Ok(x)` / `Some(x)`（包装内的值与被匹配表达式的推断类型相同——
+/// 推断对 `Result` / `Option` 透明）
+pub(super) fn bound_ident(p: &syn::Pat) -> Option<&syn::PatIdent> {
+    match strip_type(p) {
+        syn::Pat::Ident(pi) if pi.subpat.is_none() => Some(pi),
+        syn::Pat::TupleStruct(ts) if ts.elems.len() == 1 && ts.path.segments.last().is_some_and(|s| s.ident == "Ok" || s.ident == "Some") => {
+            bound_ident(&ts.elems[0])
+        }
+        _ => None,
+    }
+}
+
 #[derive(Default)]
 pub(super) struct BodyScan {
     /// let 绑定 → 推断类型（重复绑定且类型不一致 → None）
@@ -31,10 +58,10 @@ pub(super) struct BodyScan {
 
 impl<'ast> Visit<'ast> for BodyScan {
     fn visit_local(&mut self, l: &'ast syn::Local) {
-        if let syn::Pat::Ident(pi) = strip_type(&l.pat) {
+        if let Some(pi) = bound_ident(&l.pat) {
             let t = l.init.as_ref().and_then(|i| infer(&i.expr, &self.locals));
             bind(&mut self.locals, pi.ident.to_string(), t);
-            if pi.mutability.is_some() {
+            if pi.mutability.is_some() && matches!(strip_type(&l.pat), syn::Pat::Ident(_)) {
                 if let Some(init) = &l.init {
                     if let syn::Expr::Call(c) = &*init.expr {
                         if let syn::Expr::Path(p) = &*c.func {
@@ -78,6 +105,26 @@ impl<'ast> Visit<'ast> for BodyScan {
         syn::visit::visit_expr_call(self, c);
     }
 
+    // `if let` / `while let` 的模式绑定
+    fn visit_expr_let(&mut self, e: &'ast syn::ExprLet) {
+        if let Some(pi) = bound_ident(&e.pat) {
+            let t = infer(&e.expr, &self.locals);
+            bind(&mut self.locals, pi.ident.to_string(), t);
+        }
+        syn::visit::visit_expr_let(self, e);
+    }
+
+    // match 分支的模式绑定
+    fn visit_expr_match(&mut self, e: &'ast syn::ExprMatch) {
+        for a in &e.arms {
+            if let Some(pi) = bound_ident(&a.pat) {
+                let t = infer(&e.expr, &self.locals);
+                bind(&mut self.locals, pi.ident.to_string(), t);
+            }
+        }
+        syn::visit::visit_expr_match(self, e);
+    }
+
     // 嵌套 fn 单独登记（由外层 FileScan 处理）
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
 }
@@ -115,6 +162,7 @@ pub(super) fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, loc
         Expr::Reference(r) => stype(&r.expr, statics, locals),
         Expr::Try(t) => stype(&t.expr, statics, locals),
         Expr::Path(p) => p.path.get_ident().and_then(|i| statics.get(&i.to_string()).cloned().flatten()),
+        Expr::MethodCall(m) if cast_target(m).is_some() => cast_target(m).map(|t| SType::Named(TypeRef(t))),
         Expr::MethodCall(m) => {
             let name = m.method.to_string();
             match name.strip_prefix(GET_PREFIX) {
@@ -191,7 +239,9 @@ pub(super) fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>
             }
             None
         }
+        Expr::MethodCall(m) if cast_target(m).is_some() => cast_target(m),
         Expr::MethodCall(m) => match m.method.to_string().as_str() {
+            // 无 turbofish 的转换：目标类型由上下文推出，此处取接收者的动态类型
             "clone" | "try_cast" | "into" | "unwrap" | "expect" => infer(&m.receiver, locals),
             _ => None,
         },
@@ -271,6 +321,13 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
 
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
         macro_idents(m.tokens.clone(), &mut self.opaque);
+        // 实参形如逗号分隔表达式的宏（format! / write! / assert! 等）：按表达式记调用点，
+        // 标识符仍记入 opaque，实参来源推断对宏内同名调用保持保守
+        if let Ok(args) = m.parse_body_with(syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated) {
+            for a in &args {
+                self.visit_expr(a);
+            }
+        }
     }
 
     fn visit_block(&mut self, b: &'ast syn::Block) {
@@ -310,16 +367,44 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         (self.scope, self.fresh) = outer;
     }
 
+    // match 分支的 `Ok(x)` / `Some(x)` / `x` 绑定取被匹配表达式的静态类型（分支内有效）
+    fn visit_expr_match(&mut self, e: &'ast syn::ExprMatch) {
+        self.visit_expr(&e.expr);
+        let st = stype(&e.expr, &self.scope, self.locals);
+        for a in &e.arms {
+            let outer = (self.scope.clone(), self.fresh.clone());
+            self.visit_pat(&a.pat);
+            if let Some(pi) = bound_ident(&a.pat) {
+                self.scope.insert(pi.ident.to_string(), st.clone());
+            }
+            if let Some((_, g)) = &a.guard {
+                self.visit_expr(g);
+            }
+            self.visit_expr(&a.body);
+            (self.scope, self.fresh) = outer;
+        }
+    }
+
+    // `if let` / `while let` 的绑定取被匹配表达式的静态类型（作用域由外层 if / while 恢复）
+    fn visit_expr_let(&mut self, e: &'ast syn::ExprLet) {
+        syn::visit::visit_expr_let(self, e);
+        if let Some(pi) = bound_ident(&e.pat) {
+            let st = stype(&e.expr, &self.scope, self.locals);
+            self.scope.insert(pi.ident.to_string(), st);
+        }
+    }
+
     fn visit_local(&mut self, l: &'ast syn::Local) {
         syn::visit::visit_local(self, l);
-        if let syn::Pat::Ident(pi) = strip_type(&l.pat) {
+        if let Some(pi) = bound_ident(&l.pat) {
             let st = match &l.pat {
                 syn::Pat::Type(pt) => type_path(&pt.ty).map(|p| SType::Named(TypeRef(p))),
                 _ => l.init.as_ref().and_then(|i| stype(&i.expr, &self.scope, self.locals)),
             };
             self.scope.insert(pi.ident.to_string(), st);
             let name = pi.ident.to_string();
-            match l.init.as_ref().filter(|i| pi.mutability.is_none() && i.diverge.is_none()).and_then(|i| ctor_type(&i.expr)) {
+            let plain = matches!(strip_type(&l.pat), syn::Pat::Ident(_));
+            match l.init.as_ref().filter(|i| plain && pi.mutability.is_none() && i.diverge.is_none()).and_then(|i| ctor_type(&i.expr)) {
                 Some(t) => {
                     self.fresh.insert(name, t);
                 }
