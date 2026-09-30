@@ -3,14 +3,14 @@
 //! 同类 `this(..)` → `this = Self::__init_on(this, ..)?`。
 
 use classfile::Operand;
-use ir::{Expr, Path, Raw, Stmt};
+use ir::{Expr, Path, Stmt};
 use sim::StackSim;
 use ty::RsType;
 
 use super::{class_segs, join_types};
 use crate::build::{call_path, ir_ty, let_mut, seg, text, try_};
 use crate::env::InstrEnv;
-use crate::error::InstrResult;
+use crate::error::{InstrError, InstrResult};
 use crate::hierarchy::super_chain_to_class;
 use crate::invoke::bind::{ctor_outer_ref_base, is_infer, resolve_ctor_turbofish_args, super_ctor_view_args};
 use crate::invoke::sig::{self, RecvView, TargMap};
@@ -18,8 +18,9 @@ use crate::invoke::CallRef;
 use crate::log::InstrLog;
 use crate::naming::mangle_if_overloaded;
 
+#[track_caller]
 fn raw_stmt(s: String) -> Stmt {
-    Stmt::Raw(Raw(s))
+    Stmt::raw(s)
 }
 
 /// javac 私有构造器访问桥（synthetic `<init>(.., X$1)`）→ 委托目标构造器：
@@ -211,7 +212,7 @@ fn strip_boxing(env: &InstrEnv, call: &CallRef, full_cls: &str, tparams: &[RsTyp
             continue;
         };
         if tparams.get(idx).is_some_and(|t| !matches!(t, RsType::Object) && !is_infer(t)) {
-            *node = Expr::Raw(Raw(arg[pfx.len()..arg.len() - 1].to_string()));
+            *node = Expr::raw(arg[pfx.len()..arg.len() - 1].to_string());
         }
     }
 }
@@ -225,7 +226,7 @@ fn new_object(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, targs: &CtorTa
         if matches!(rust_ty, RsType::Prim(_)) {
             // 自动装箱优化：原始包装类型直接用值，跳过构造器调用
             let v = nodes.first().map_or_else(|| "0".to_string(), |n| text(env, n));
-            (Expr::Raw(Raw(v)), rust_ty)
+            (Expr::raw(v), rust_ty)
         } else if !sim::types::is_object(&rust_ty) && !rust_ty.type_args().is_empty() {
             let tparams = ctor_tparams(env, sim, call, targs, full_cls, tys).unwrap_or_default();
             if !tparams.is_empty() {
@@ -235,12 +236,13 @@ fn new_object(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, targs: &CtorTa
         } else {
             ctor_call(env, &raw_cls, full_cls, &call.desc, Vec::new(), nodes)?
         }
-    } else if !raw_cls.is_empty() && !raw_cls.contains('/') {
+    } else if !raw_cls.is_empty() {
+        // 无包类（缺省包）：短名表对任何 binary 名都给出不含 `/` 的短名，仅空类名得到空短名
         let generic = ctx.reg().get(&call.owner).is_some_and(|ci| !ctx.ty.effective_class_type_params(ci).is_empty());
         let tparams = if generic { ctor_tparams(env, sim, call, targs, full_cls, tys).unwrap_or_default() } else { Vec::new() };
         ctor_call(env, &raw_cls, &raw_cls, &call.desc, tparams, nodes)?
     } else {
-        (Expr::Raw(Raw(format!("/* {raw_cls}::new() */"))), RsType::class(full_cls, Vec::new()))
+        return Err(InstrError::BadInsn(format!("new 的类名为空（{}.<init>{}）", call.owner, call.desc)));
     };
     let dup_pending = sim.state.stack.last().is_some_and(|e| matches!(e.expr, Expr::NewPending { .. }));
     if dup_pending {
@@ -253,7 +255,7 @@ fn new_object(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, targs: &CtorTa
     }
     let v = sim.fresh("_obj")?;
     let stmt = match &init {
-        Expr::Raw(Raw(s)) => raw_stmt(format!("let mut {v}: {} = {s};", crate::build::ty_text(env, &rust_ty))),
+        Expr::Raw(r) => raw_stmt(format!("let mut {v}: {} = {};", crate::build::ty_text(env, &rust_ty), r.as_str())),
         _ => let_mut(v.clone(), Some(ir_ty(env, &rust_ty)?), init),
     };
     sim.emit(stmt);
@@ -279,8 +281,9 @@ fn init_on(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, obj_e: &str, args
     let ctx = &env.ctx;
     let comment = format!("Method {}.{}:{}", call.owner, call.name, call.desc);
     if !(obj_e == "this" || obj_e == "self") || call.owner.is_empty() {
-        sim.emit(raw_stmt(format!("/* invokespecial {comment} */")));
-        return Ok(());
+        // JVMS §4.10.1.9：`<init>` 的接收者只能是未初始化对象——`new` 的待定对象（上一分支）
+        // 或构造器内的 uninitializedThis（局部 0 = this）。其余形态是校验器拒绝的字节码
+        return Err(InstrError::BadInsn(format!("invokespecial {comment} 的接收者 {obj_e} 不是未初始化对象")));
     }
     let raw_cls = ctx.short(&call.owner);
     if call.owner == ty::consts::OBJECT || raw_cls == ctx.short(ty::consts::OBJECT) {

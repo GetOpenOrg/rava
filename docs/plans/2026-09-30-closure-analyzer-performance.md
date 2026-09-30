@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态（2026-09-30 深夜）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，4 例 closure.json 逐字节一致；DeepCopy user 351 s → 130 s、RSS 4.1 GB → 2.3–2.8 GB），已合入 rust-closure-analyzer。结构性改造（手写调用点数组扇出经共享节点 / 按调用图 SCC 排序）会改变 `via` 与条目顺序，用户已同意把不变量放宽为「集合一致、`via` / 顺序可变」（2026-09-30，见 §二），结构性改造与 P3 起由 `closure-perf2` 推进。精度二期已合入（a6b4c6d5）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
+> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（待合入）。待做：P3 上下文共享、P4 内存、W→E 扇出，P5–P8（预算降级、跨测试缓存、并行、工程化）随后。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
 
 ---
 
@@ -167,6 +167,70 @@
 - `CalendarSystem.forName` 的按名查找结果依赖求值次序（见上）。
 
 **生成器与顺序**：Python 与 Rust 生成器在 TestHashMapOps / TestStreamBasic / TestCompletableFuture / TestSwitchString 上对照 S1 前后的生成树不变，条目顺序变化不影响生成。
+
+### 4.6 顺序依赖修复与批量排空（`closure-mono`，2026-10-01；8162d43e / 4b283217 / 4f98da55）
+
+**根因**：按名查找的结果依赖求值先后，是健全性问题，不是精度取舍。有两处。
+
+1. **按名取类**：`CalendarSystem.forName@78` 首次分析时，常量表读取的接收者还没有来源，返回空集（底）。
+   - 该站点没有登记读者，后续重分析只重跑增量站点，@78 于是永久为空。
+   - @81 `newInstance` 因此拿不到接收者，被折叠为 `null_recv`，这是不健全的。
+   - 基线能拿到 `newInstance`，只是某次求值碰巧走了 `None` 路径，边留了下来。
+2. **形参字符串常量**：常量取自形参常量汇合格 `pvals`，而 `pvals` 对「取常量集」不单调，先到的常量会被后到的调用点抬为 Top。
+   - 另外，switch 合流的多个字面量在 `Src::Str` 上合成一个无值来源，字面量整体丢失。
+
+**修复**（8162d43e）：
+
+- **跨偏移读者 `xreaders`**：按名查找站点在本方法每次重分析时一并重跑。
+- **按名取类单调**：
+  - 常量表读取遇到非常量表接收者（open / lambda / 手写对象）时标 `partial`，候选照取，结果另接所指未知的 `Class`。
+  - 一旦推不出，即粘滞为 Top（`lookup_top`），不再回落到名字集。
+  - 按名求值读取被调方字段时，登记字段依赖。
+- **形参字符串常量集 `engine/pstrs.rs`**：
+  - 只并不减，不走汇合格。
+  - 实参字面量并入被调形参槽；透传的形参建子集边；派发枢纽同样有形参槽，并流向父枢纽和各目标。
+  - 槽增长时，读者站点进入站点队列重跑。
+- **字面量编号**：`Src::Str(u32)` 携带字面量编号（`absint/lit.rs`，线程内驻留），合流后仍可经 `V::lits` 取回。
+
+**顺序无关验收**：
+
+- 配置矩阵为批量 1 / 7 / 64 × 哈希种子 0 / 12345 / 99（`rava closure --flow-batch N --hash-seed N`）。
+- 在 HelloWorld / Digester / CollectorsDemo / DeepCopy 上，类、方法、派发、折叠、事实集合逐项一致（去掉 `via` 与统计后比较）。
+
+**相对 3e944bc9 的集合变化**（全部是原先漏掉的可达内容）：
+
+| 用例 | 变化 | 原因 |
+|---|---|---|
+| Digester / DeepCopy | 新增 `Class$1`（类 / clinit / 实例化，`<init>`、`run`）、`Class.newInstance`、`ReflectAccess.newInstance`、`ReflectionFactory.newInstance`、`InvocationTargetException.getTargetException`、`Unsafe.throwException`；去掉 `CalendarSystem.forName` 的 `null_recv` 折叠 | @78 的接收者是 `ConcurrentHashMap`（非常量表），正确结果是 Top，@81 由此可达 |
+| Digester / DeepCopy / CollectorsDemo | 新增 `MethodHandle.linkToVirtual` / `linkToStatic` / `linkToSpecial` / `linkToInterface`（方法、派发、反射成员）；`invokeExact` 成为反射成员 | `DirectMethodHandle.makePreparedLambdaForm@313` 的链接器名是 switch 合流的多个字面量，原先丢失 |
+| DeepCopy | 新增 `MethodHandle.invoke` | `makeExactOrGeneralInvoker(boolean)` 有两个调用方，名字合流为 `invoke` 或 `invokeExact` |
+
+**动态对照**（`scripts/dyn_compare.py`，mono 批量 64 的产物）：
+
+- HelloWorld、TestClassForName、TestForNameInit：漏覆盖 0。
+- Digester、CollectorsDemo、DeepCopy：各漏覆盖 1，均为 `LambdaMetafactory`。
+  - 它在 indy 引导方法句柄解析时由 JVM 装载，栈顶帧是 `invokedynamic`。
+  - 基线 3e944bc9 同样存在这一漏覆盖，与本改造无关。
+  - `closure-prec3` 06fd3f31 已修复（`indy_models` 导出，加 `indy-model` 分类），合并后归零。
+- 静态多出的 provenance 均为 100%。
+
+**批量排空**（4b283217，缺省 64）：
+
+| 用例 | 墙钟 s | 峰值 footprint MB | 类 | 方法 | 分析次数 |
+|---|---:|---:|---:|---:|---:|
+| HelloWorld | 0.21 | 78 | 251 | 620 | 1685 |
+| Digester | 7.03 | 924 | 1441 | 9749 | 46717 |
+| DeepCopy | 41.70 | 2322 | 1650 | 10982 | 63491 |
+| CollectorsDemo | 4.77 | 702 | 1166 | 8014 | 40620 |
+
+- 同机基线 3e944bc9 实测：DeepCopy 墙钟 59.5 s，Digester 7.7 s。
+- 机器同时承载其它代理，墙钟噪声大（DeepCopy 在 36–59 s 之间波动），以指令数为准：§4.5 的实测为 483 G → 421 G。
+
+**遗留（理论）**：
+
+- 常量表签名读取在尚无常量表接收者时会落到其它策略。若这时经被调方常量推出名字，读取之后再变成 `partial` 时，这些名字不会撤回。
+  - 名字只增不减，所以结果仍健全，但可能不是最小。
+- 其它依赖 `pvals` 乐观值的判定不在本次范围。
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 

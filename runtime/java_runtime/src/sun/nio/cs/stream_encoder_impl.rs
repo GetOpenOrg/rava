@@ -72,7 +72,7 @@ impl StreamEncoder {
     #[jvm_boundary(upcalls = "java/io/OutputStream.write:([BII)V")]
     pub fn write_arr_c_i_i(&self, cbuf: JArray<u16>, off: i32, len: i32) -> Result<()> {
         let mut units: Vec<u16> = Vec::with_capacity(len.max(0) as usize);
-        for i in off..off + len {
+        for i in off..off.saturating_add(len) {
             units.push(cbuf.get(i)?);
         }
         self.encode_units(&units)
@@ -81,7 +81,7 @@ impl StreamEncoder {
     #[jvm_boundary(upcalls = "java/io/OutputStream.write:([BII)V java/lang/String.charAt:(I)C")]
     pub fn write_str_i_i(&self, s: String, off: i32, len: i32) -> Result<()> {
         let mut units: Vec<u16> = Vec::with_capacity(len.max(0) as usize);
-        for i in off..off + len {
+        for i in off..off.saturating_add(len) {
             units.push(s.charAt(i)?);
         }
         self.encode_units(&units)

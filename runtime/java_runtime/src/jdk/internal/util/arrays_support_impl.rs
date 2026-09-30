@@ -8,7 +8,7 @@ impl ArraysSupport {
     pub fn mismatch_arr_b_i_arr_b_i_i(a: JArray<i8>, a_from_index: i32, b: JArray<i8>,
                                       b_from_index: i32, length: i32) -> Result<i32> {
         for i in 0..length {
-            if a.get(a_from_index + i)? != b.get(b_from_index + i)? {
+            if a.get(a_from_index.wrapping_add(i))? != b.get(b_from_index.wrapping_add(i))? {
                 return Ok(i);
             }
         }
@@ -64,7 +64,7 @@ impl ArraysSupport {
         const T_BYTE: i32 = 8;
         const T_SHORT: i32 = 9;
         const T_INT: i32 = 10;
-        let end = from_index + length;
+        let end = from_index.saturating_add(length);
         let mut result = initial_value;
         let step = |acc: i32, v: i32| acc.wrapping_mul(31).wrapping_add(v);
         match basic_type {
@@ -84,8 +84,8 @@ impl ArraysSupport {
                 } else {
                     let a = array.downcast::<JArray<i8>>();
                     for i in from_index..end {
-                        let lo = (a.get(i * 2)? as u8) as i32;
-                        let hi = (a.get(i * 2 + 1)? as u8) as i32;
+                        let lo = (a.get(i.wrapping_mul(2))? as u8) as i32;
+                        let hi = (a.get(i.wrapping_mul(2).wrapping_add(1))? as u8) as i32;
                         result = step(result, lo | (hi << 8));
                     }
                 }
@@ -112,7 +112,7 @@ impl ArraysSupport {
     pub fn mismatch_arr_c_i_arr_c_i_i(a: JArray<u16>, a_from_index: i32, b: JArray<u16>,
                                       b_from_index: i32, length: i32) -> Result<i32> {
         for i in 0..length {
-            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            let (x, y) = (a.get(a_from_index.wrapping_add(i))?, b.get(b_from_index.wrapping_add(i))?);
             if x != y {
                 return Ok(i);
             }
@@ -129,7 +129,7 @@ impl ArraysSupport {
     pub fn mismatch_arr_s_i_arr_s_i_i(a: JArray<i16>, a_from_index: i32, b: JArray<i16>,
                                       b_from_index: i32, length: i32) -> Result<i32> {
         for i in 0..length {
-            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            let (x, y) = (a.get(a_from_index.wrapping_add(i))?, b.get(b_from_index.wrapping_add(i))?);
             if x != y {
                 return Ok(i);
             }
@@ -146,7 +146,7 @@ impl ArraysSupport {
     pub fn mismatch_arr_l_i_arr_l_i_i(a: JArray<i64>, a_from_index: i32, b: JArray<i64>,
                                       b_from_index: i32, length: i32) -> Result<i32> {
         for i in 0..length {
-            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            let (x, y) = (a.get(a_from_index.wrapping_add(i))?, b.get(b_from_index.wrapping_add(i))?);
             if x != y {
                 return Ok(i);
             }
@@ -163,7 +163,7 @@ impl ArraysSupport {
     pub fn mismatch_arr_z_i_arr_z_i_i(a: JArray<bool>, a_from_index: i32, b: JArray<bool>,
                                       b_from_index: i32, length: i32) -> Result<i32> {
         for i in 0..length {
-            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            let (x, y) = (a.get(a_from_index.wrapping_add(i))?, b.get(b_from_index.wrapping_add(i))?);
             if x != y {
                 return Ok(i);
             }
@@ -180,7 +180,7 @@ impl ArraysSupport {
     pub fn mismatch_arr_i_i_arr_i_i_i(a: JArray<i32>, a_from_index: i32, b: JArray<i32>,
                                       b_from_index: i32, length: i32) -> Result<i32> {
         for i in 0..length {
-            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            let (x, y) = (a.get(a_from_index.wrapping_add(i))?, b.get(b_from_index.wrapping_add(i))?);
             if x != y {
                 return Ok(i);
             }
@@ -192,7 +192,7 @@ impl ArraysSupport {
     pub fn mismatch_arr_f_i_arr_f_i_i(a: JArray<f32>, a_from_index: i32, b: JArray<f32>,
                                       b_from_index: i32, length: i32) -> Result<i32> {
         for i in 0..length {
-            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            let (x, y) = (a.get(a_from_index.wrapping_add(i))?, b.get(b_from_index.wrapping_add(i))?);
             if fkey(x) != fkey(y) {
                 return Ok(i);
             }
@@ -209,7 +209,7 @@ impl ArraysSupport {
     pub fn mismatch_arr_d_i_arr_d_i_i(a: JArray<f64>, a_from_index: i32, b: JArray<f64>,
                                       b_from_index: i32, length: i32) -> Result<i32> {
         for i in 0..length {
-            let (x, y) = (a.get(a_from_index + i)?, b.get(b_from_index + i)?);
+            let (x, y) = (a.get(a_from_index.wrapping_add(i))?, b.get(b_from_index.wrapping_add(i))?);
             if dkey(x) != dkey(y) {
                 return Ok(i);
             }

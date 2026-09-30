@@ -11,7 +11,7 @@ mod store;
 mod types;
 
 use classfile::{Insn, MemberRef, Operand};
-use ir::{Expr, Ident, Path, Raw, StaticFieldRef};
+use ir::{Expr, Ident, Path, StaticFieldRef};
 use sim::{StackEntry, StackSim};
 use ty::RsType;
 
@@ -77,11 +77,11 @@ fn value_node(env: &InstrEnv, val: Expr, val_str: String) -> Expr {
     if text(env, &val) == val_str {
         val
     } else {
-        Expr::Raw(Raw(val_str))
+        Expr::raw(val_str)
     }
 }
 
-fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> InstrResult<()> {
+pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> InstrResult<()> {
     let ctx = &env.ctx;
     let obj = sim.pop()?;
     // 装箱类擦除特例：接收者已是基本类型时字段访问就是值本身
@@ -122,11 +122,17 @@ fn putfield(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberRe
     Ok(())
 }
 
-fn getstatic(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> InstrResult<()> {
-    let sf = resolve_static_field(env, &f.owner, &f.name, &f.desc);
+/// static 字段读取表达式与其类型（getstatic 与引导方法标签的枚举常量共用）
+pub(crate) fn static_field_read(env: &InstrEnv, owner: &str, name: &str, desc: &str) -> InstrResult<(Expr, RsType)> {
+    let sf = resolve_static_field(env, owner, name, desc);
     let turbofish = sf.turbofish.iter().map(|t| ir_ty(env, t)).collect::<InstrResult<Vec<_>>>()?;
     let r = StaticFieldRef { class: sf.class, field: Ident::new(sf.accessor)?, ty: ir_ty(env, &sf.ty)?, turbofish };
-    sim.push(Expr::StaticField(r), sf.ty);
+    Ok((Expr::StaticField(r), sf.ty))
+}
+
+fn getstatic(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> InstrResult<()> {
+    let (e, t) = static_field_read(env, &f.owner, &f.name, &f.desc)?;
+    sim.push(e, t);
     Ok(())
 }
 

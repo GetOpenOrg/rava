@@ -2,10 +2,9 @@
 //!
 //! JDK 语料的 jmod 顺序与 `codegen/jdk_resolver.py` 一致：优先级清单在前，其余按名排序。
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, RwLock};
 
 use classfile::archive::Archive;
 use classfile::ClassFile;
@@ -30,22 +29,26 @@ pub enum Origin {
 }
 
 pub struct ClassPath {
-    archives: RefCell<Vec<(Origin, Archive)>>,
+    /// 档案（读取需可变游标：并行发射下以互斥锁串行化）
+    archives: Mutex<Vec<Archive>>,
+    /// 档案下标 → 来源角色（与 `archives` 同序；只读，免锁）
+    origins: Vec<Origin>,
     /// binary name → 档案下标（首个命中者）
     index: HashMap<String, usize>,
-    cache: RefCell<HashMap<String, Option<Rc<ClassFile>>>>,
+    cache: RwLock<HashMap<String, Option<Arc<ClassFile>>>>,
     /// 解析失败的类（名字, 错误）：丢类必须可观测
-    failures: RefCell<Vec<(String, String)>>,
+    failures: Mutex<Vec<(String, String)>>,
     java_home: Option<PathBuf>,
 }
 
 impl ClassPath {
     pub fn new() -> Self {
         ClassPath {
-            archives: RefCell::new(Vec::new()),
+            archives: Mutex::new(Vec::new()),
+            origins: Vec::new(),
             index: HashMap::new(),
-            cache: RefCell::new(HashMap::new()),
-            failures: RefCell::new(Vec::new()),
+            cache: RwLock::new(HashMap::new()),
+            failures: Mutex::new(Vec::new()),
             java_home: None,
         }
     }
@@ -57,11 +60,12 @@ impl ClassPath {
     /// 追加一个档案（jmod / jar / 类目录）；先加入者优先
     pub fn add(&mut self, origin: Origin, path: &Path) -> Result<(), classfile::Error> {
         let a = Archive::open(path)?;
-        let idx = self.archives.borrow().len();
+        let idx = self.origins.len();
         for n in a.class_names() {
             self.index.entry(n).or_insert(idx);
         }
-        self.archives.borrow_mut().push((origin, a));
+        self.archives.get_mut().unwrap_or_else(|e| e.into_inner()).push(a);
+        self.origins.push(origin);
         Ok(())
     }
 
@@ -89,45 +93,50 @@ impl ClassPath {
     }
 
     pub fn origin(&self, name: &str) -> Option<Origin> {
-        self.index.get(name).map(|&i| self.archives.borrow()[i].0)
+        self.index.get(name).map(|&i| self.origins[i])
     }
 
     /// 某角色档案里的全部类名（排序）
     pub fn names_of(&self, origin: Origin) -> Vec<String> {
-        let archives = self.archives.borrow();
         let mut v: Vec<String> = self
             .index
             .iter()
-            .filter(|(_, &i)| archives[i].0 == origin)
+            .filter(|(_, &i)| self.origins[i] == origin)
             .map(|(n, _)| n.clone())
             .collect();
         v.sort();
         v
     }
 
-    pub fn get(&self, name: &str) -> Option<Rc<ClassFile>> {
-        if let Some(c) = self.cache.borrow().get(name) {
+    pub fn get(&self, name: &str) -> Option<Arc<ClassFile>> {
+        if let Some(c) = read(&self.cache).get(name) {
+            return c.clone();
+        }
+        // 未命中：持写锁复查后解析——每个类只解析一次（失败只登记一次），所有调用方拿到同一实例
+        let mut cache = lock_w(&self.cache);
+        if let Some(c) = cache.get(name) {
             return c.clone();
         }
         let loaded = self.load(name);
-        self.cache.borrow_mut().insert(name.to_string(), loaded.clone());
+        cache.insert(name.to_string(), loaded.clone());
         loaded
     }
 
-    fn load(&self, name: &str) -> Option<Rc<ClassFile>> {
+    fn load(&self, name: &str) -> Option<Arc<ClassFile>> {
         let &i = self.index.get(name)?;
-        let bytes = match self.archives.borrow_mut()[i].1.read_class(name) {
+        let read = lock(&self.archives)[i].read_class(name);
+        let bytes = match read {
             Ok(Some(b)) => b,
             Ok(None) => return None,
             Err(e) => {
-                self.failures.borrow_mut().push((name.to_string(), e.to_string()));
+                lock(&self.failures).push((name.to_string(), e.to_string()));
                 return None;
             }
         };
         match classfile::parse(&bytes) {
-            Ok(cf) => Some(Rc::new(cf)),
+            Ok(cf) => Some(Arc::new(cf)),
             Err(e) => {
-                self.failures.borrow_mut().push((name.to_string(), e.to_string()));
+                lock(&self.failures).push((name.to_string(), e.to_string()));
                 None
             }
         }
@@ -136,12 +145,12 @@ impl ClassPath {
     /// 读取原始字节（golden 对照等）
     pub fn bytes(&self, name: &str) -> Option<Vec<u8>> {
         let &i = self.index.get(name)?;
-        self.archives.borrow_mut()[i].1.read_class(name).ok().flatten()
+        lock(&self.archives)[i].read_class(name).ok().flatten()
     }
 
     /// 模块资源（非类文件）：按档案顺序首个命中
     pub fn resource(&self, path: &str) -> Option<Vec<u8>> {
-        for (_, a) in self.archives.borrow_mut().iter_mut() {
+        for a in lock(&self.archives).iter_mut() {
             if let Ok(Some(b)) = a.read_resource(path) {
                 return Some(b);
             }
@@ -150,8 +159,21 @@ impl ClassPath {
     }
 
     pub fn failures(&self) -> Vec<(String, String)> {
-        self.failures.borrow().clone()
+        lock(&self.failures).clone()
     }
+}
+
+/// 锁中毒只意味着别的线程在持锁时 panic（整个进程随之失败）；数据本身仍一致，照常取用
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn read<T>(m: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    m.read().unwrap_or_else(|e| e.into_inner())
+}
+
+fn lock_w<T>(m: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    m.write().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Default for ClassPath {

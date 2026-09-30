@@ -43,7 +43,7 @@ fn needs_paren_under_not(e: &Expr) -> bool {
         Expr::Binary { .. } | Expr::Ref { .. } | Expr::Deref(_) => true,
         Expr::Unary { op: UnOp::Neg, .. } => true,
         Expr::Cast { outer_paren, .. } => !outer_paren,
-        Expr::Raw(r) => !raw_is_simple(r.0.trim()),
+        Expr::Raw(r) => !raw_is_simple(r.as_str().trim()),
         _ => false,
     }
 }
@@ -209,7 +209,7 @@ fn raw_has_top_cmp(text: &str) -> bool {
 fn paren_if_cmp(e: Expr) -> Expr {
     let needs = match &e {
         Expr::Binary { op, .. } => is_cmp(*op),
-        Expr::Raw(r) => raw_has_top_cmp(&r.0),
+        Expr::Raw(r) => raw_has_top_cmp(r.as_str()),
         _ => false,
     };
     if needs {

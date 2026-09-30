@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cfg::{analyze, JumpKind, NodeId};
-use ir::{Expr, LetStmt, Raw, Stmt, VarOrigin};
+use ir::{Expr, LetStmt, Stmt, VarOrigin};
 
 use super::{Blocks, SimOutcome};
 use crate::cond_text::render_cond;
@@ -154,7 +154,7 @@ impl Blocks<'_, '_> {
                     name: ir::Ident::new(name)?,
                     ty,
                     mutable: t.mutable,
-                    value: Some(Expr::Raw(Raw(t.value))),
+                    value: Some(Expr::raw(t.value)),
                     origin: VarOrigin::default(),
                 };
                 self.nodes.node_mut(o).stmts[k] = Stmt::Let(decl);

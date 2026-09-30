@@ -119,7 +119,7 @@ fn store_value(e: &Entry) -> Option<&Expr> {
 fn is_default_value(v: Option<&Expr>) -> bool {
     match v {
         None => true,
-        Some(Expr::Raw(r)) => r.0 == "Default::default()",
+        Some(Expr::Raw(r)) => r.as_str() == "Default::default()",
         Some(_) => false,
     }
 }

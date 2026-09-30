@@ -82,7 +82,7 @@ impl Renderer<'_> {
             Expr::Block(b) => self.write_block_expr(out, b),
             Expr::If(i) => self.write_if_expr(out, i),
             Expr::Macro(m) => self.write_macro(out, m),
-            Expr::Raw(r) => out.push_str(&r.0),
+            Expr::Raw(r) => out.push_str(r.as_str()),
             Expr::NewPending { class } => {
                 out.push_str(&self.short(class));
                 out.push_str("::new()");

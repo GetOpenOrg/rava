@@ -27,7 +27,7 @@ impl Adler32 {
     #[jvm_native]
     pub fn updateBytes(adler: i32, b: JArray<i8>, off: i32, len: i32) -> Result<i32> {
         let mut buf = Vec::with_capacity(len.max(0) as usize);
-        for i in off..off + len {
+        for i in off..off.saturating_add(len) {
             buf.push(b.get(i)? as u8);
         }
         Ok(adler_update(adler, buf.into_iter()))

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ir::{LetStmt, Stmt, VarOrigin};
 
-use super::refs::{refs, render_entries};
+use super::refs::{render_entries, RefCache};
 use super::{apply_insertions, demote_let, entry_nesting, hoisted_let_type, leading_ws, let_of, VarsCtx};
 use crate::entry::Entry;
 
@@ -32,13 +32,14 @@ pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) {
     // Pass 2：作用域关闭后被引用（首个命中是另一 let 声明＝槽复用，不算）
     let rendered = render_entries(cx.env, entries);
     let depth = entry_nesting(entries);
+    let cache = RefCache::new(entries.len());
     let mut to_hoist: BTreeSet<&str> = BTreeSet::new();
     for (name, &(decl_k, decl_nesting)) in &declared_at {
         let Some(close) = (decl_k + 1..entries.len()).find(|&k2| depth[k2] < decl_nesting) else {
             continue;
         };
         for k2 in close..entries.len() {
-            let (hit, is_let) = refs(cx.env, &entries[k2], &rendered[k2], name);
+            let (hit, is_let) = cache.refs(cx.env, entries, k2, &rendered[k2], name);
             if hit {
                 if !is_let {
                     to_hoist.insert(name);

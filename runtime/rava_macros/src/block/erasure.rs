@@ -54,7 +54,7 @@ pub(crate) fn expand_non_virtual_fn(
             };
             quote! {
                 #(#keep_attrs)*
-                #vis #sig { panic!(#msg) }
+                #vis #sig { __stub(#msg) }
             }
         }
     }

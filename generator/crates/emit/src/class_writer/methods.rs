@@ -64,6 +64,8 @@ pub(super) struct BodySpec<'s> {
     pub in_vtable_body: bool,
     /// 接口方法展开时的类型变量代换
     pub view: Option<&'s BTreeMap<String, String>>,
+    /// 发射位点名（[`BodyRequest::site`]）
+    pub site: &'static str,
 }
 
 /// 单类方法段的共享参数
@@ -90,13 +92,14 @@ impl Cx<'_, '_> {
     fn body(
         &self,
         state: &mut ProjectState,
-        bodies: &mut dyn MethodBodyEmitter,
+        bodies: &dyn MethodBodyEmitter,
         e: &Emitted<'_>,
         ctparams: &[String],
         rust_name: &str,
         in_vtable_body: bool,
+        site: &'static str,
     ) -> Result<Option<String>> {
-        let spec = BodySpec { ctparams, rust_name: Some(rust_name), in_vtable_body, view: None };
+        let spec = BodySpec { ctparams, rust_name: Some(rust_name), in_vtable_body, view: None, site };
         self.body_with(state, bodies, e, &spec)
     }
 
@@ -104,7 +107,7 @@ impl Cx<'_, '_> {
     pub fn body_with(
         &self,
         state: &mut ProjectState,
-        bodies: &mut dyn MethodBodyEmitter,
+        bodies: &dyn MethodBodyEmitter,
         e: &Emitted<'_>,
         spec: &BodySpec<'_>,
     ) -> Result<Option<String>> {
@@ -117,8 +120,9 @@ impl Cx<'_, '_> {
             overloaded_names: self.overloaded,
             rust_name: spec.rust_name,
             in_vtable_body: spec.in_vtable_body,
+            site: spec.site,
         };
-        match bodies.emit_body(self.ctx, &req) {
+        match bodies.emit_body(self.ctx, &req, &mut state.body_log) {
             Ok(out) => {
                 state.absorb(&out.effects);
                 Ok(Some(out.text))
@@ -188,7 +192,7 @@ fn lambda_rust_name(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method) -> String {
 pub fn emit_method_blocks(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     ci: &ClassInfo,
     tps: &[String],
     overrides: &[HwOverride<'_>],
@@ -208,8 +212,9 @@ pub fn emit_method_blocks(
             Role::IfaceLambda | Role::IfacePrivate => {
                 let rust = if p.role == Role::IfaceLambda { lambda_rust_name(ctx, ci, &e.method) } else { p.rust_name.clone() };
                 let erased: Vec<String> = vec!["Object".to_string(); tps.len()];
+                let site = if p.role == Role::IfaceLambda { "iface-lambda" } else { "iface-private" };
                 let body = match p.verdict {
-                    Verdict::Bytecode => cx.body(state, bodies, &e, &erased, &rust, false)?,
+                    Verdict::Bytecode => cx.body(state, bodies, &e, &erased, &rust, false, site)?,
                     _ => None,
                 };
                 out.iface_lambda_blocks.push(body.unwrap_or_else(|| cx.stub(&e, &rust, &erased).text));
@@ -234,23 +239,23 @@ pub fn emit_method_blocks(
 fn clinit_block(
     cx: &Cx<'_, '_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     e: &Emitted<'_>,
     p: &MethodPlan,
 ) -> Result<String> {
     let attr = cx.attr(e, &MethodAttrExtra::default());
     let body = match p.verdict {
-        Verdict::Bytecode => cx.body(state, bodies, e, cx.tps, CLINIT_FN, false)?,
+        Verdict::Bytecode => cx.body(state, bodies, e, cx.tps, CLINIT_FN, false, "clinit")?,
         _ => None,
     };
     let text = body.unwrap_or_else(|| {
-        format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    panic!(\"stub: {}.<clinit>:()V\")\n}}", cx.ci.name())
+        format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    __stub(\"stub: {}.<clinit>:()V\")\n}}", cx.ci.name())
     });
     Ok(format!("{attr}\n{text}"))
 }
 
 /// 类方法的槽位属性：槽位归属、槽位成员名解耦、槽位擦除名单
-fn slot_extra(cx: &Cx<'_, '_>, m: &Method, rust_name: &str) -> MethodAttrExtra {
+pub(super) fn slot_extra(cx: &Cx<'_, '_>, m: &Method, rust_name: &str) -> MethodAttrExtra {
     let virtual_in = cx.ctx.resolve_virtual_slot(m, cx.ci);
     let mut extra = MethodAttrExtra { virtual_in, ..Default::default() };
     if !extra.virtual_in.is_empty() && extra.virtual_in != cx.ctx.short(cx.ci.name()) {
@@ -292,7 +297,7 @@ fn core_adapter(sig: &str, core: &str, core_ret: &str) -> String {
 fn member_block(
     cx: &Cx<'_, '_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     e: &Emitted<'_>,
     p: &MethodPlan,
 ) -> Result<String> {
@@ -324,7 +329,7 @@ fn member_block(
         Verdict::IfaceDefaultBody | Verdict::IfaceDecl => {
             let attr = cx.attr(e, &plain);
             if p.verdict == Verdict::IfaceDefaultBody {
-                if let Some(text) = cx.body(state, bodies, e, cx.tps, rust, false)? {
+                if let Some(text) = cx.body(state, bodies, e, cx.tps, rust, false, "iface-default")? {
                     return Ok(format!("{attr}\n{text}"));
                 }
             }
@@ -348,7 +353,7 @@ fn member_block(
             Ok(format!("{}\n{}", cx.attr(e, &extra), core_adapter(&sig, core, core_ret)))
         }
         Verdict::Bytecode => {
-            let body = cx.body(state, bodies, e, cx.tps, rust, !extra.virtual_in.is_empty())?;
+            let body = cx.body(state, bodies, e, cx.tps, rust, !extra.virtual_in.is_empty(), "main")?;
             let text = body.unwrap_or_else(|| cx.stub(e, rust, cx.tps).text);
             Ok(format!("{}\n{text}", cx.attr(e, &extra)))
         }

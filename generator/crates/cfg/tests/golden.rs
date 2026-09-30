@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use cfg::{analyze, build_blocks, simplify, structure, StructNode};
-use ir::{Expr, Raw, Renderer, ShortNames};
+use ir::{Expr, Renderer, ShortNames};
 use serde_json::{json, Value};
 use support::*;
 
@@ -52,8 +52,8 @@ fn replay(kind: &str, input: &Value) -> R<Value> {
         }
         "cmp_op" | "neg_cmp_op" => {
             let op = opcode_by_name(input["op"].as_str().ok_or("op")?)?;
-            let a = Expr::Raw(Raw(input["a"].as_str().ok_or("a")?.to_string()));
-            let b = Expr::Raw(Raw(input["b"].as_str().unwrap_or("").to_string()));
+            let a = Expr::raw(input["a"].as_str().ok_or("a")?.to_string());
+            let b = Expr::raw(input["b"].as_str().unwrap_or("").to_string());
             let e = if kind == "cmp_op" { cfg::cmp_op(op, a, b) } else { cfg::neg_cmp_op(op, a, b) };
             Ok(json!(Renderer::new(&NoNames).expr(&e.map_err(|e| e.0)?)))
         }

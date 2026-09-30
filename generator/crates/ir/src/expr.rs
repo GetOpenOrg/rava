@@ -178,7 +178,28 @@ pub struct CastExpr {
 /// 文本逃生舱（← `RawExpr` / `RawStmt` / `RsRawItem`）。raw-audit 计数对象，终态 0；
 /// 渲染器原样输出，任何判定不得解析其内容（原子性判定除外，见 `render::atomic`）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Raw(pub String);
+pub struct Raw(String);
+
+impl Raw {
+    /// 只供本 crate 的计数构造器（[`Expr::raw`] / [`Stmt::raw`] / [`Item::raw`]）使用
+    pub(crate) fn from_text(text: String) -> Raw {
+        Raw(text)
+    }
+
+    /// 原样文本
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// 原位改写文本（不是新构造，不计数）
+    pub fn text_mut(&mut self) -> &mut String {
+        &mut self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
 
 /// 表达式节点。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -215,6 +236,13 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// 文本逃生舱表达式（raw-audit `raw_expr` 计数，位点取调用者）
+    #[track_caller]
+    pub fn raw(text: impl Into<String>) -> Expr {
+        crate::raw_audit::record(crate::raw_audit::RawKind::Expr, std::panic::Location::caller());
+        Expr::Raw(Raw(text.into()))
+    }
+
     pub fn var(name: Ident) -> Expr {
         Expr::Var(name)
     }

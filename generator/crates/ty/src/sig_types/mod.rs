@@ -7,7 +7,7 @@ mod emitted;
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub use ctor::{is_anonymous_class, SigTypes};
 pub use emitted::EmittedSig;
@@ -70,7 +70,7 @@ impl TyCtx<'_> {
 
     /// 类中需要按描述符 mangle 的方法名集合（定义侧与调用侧的唯一判定来源；规则见
     /// Python `hierarchy_overloaded_names`）。按注册表实例缓存
-    pub fn hierarchy_overloaded_names(&self, ci: &ClassInfo) -> Rc<BTreeSet<String>> {
+    pub fn hierarchy_overloaded_names(&self, ci: &ClassInfo) -> Arc<BTreeSet<String>> {
         let mut visiting = BTreeSet::new();
         self.overloaded_rec(ci, &mut visiting)
     }
@@ -79,10 +79,10 @@ impl TyCtx<'_> {
         &self,
         ci: &ClassInfo,
         visiting: &mut BTreeSet<String>,
-    ) -> Rc<BTreeSet<String>> {
+    ) -> Arc<BTreeSet<String>> {
         let cacheable = self.reg.get(ci.name()).is_some_and(|r| std::ptr::eq(r, ci));
         if cacheable {
-            if let Some(hit) = self.reg.caches.overloaded.borrow().get(ci.name()) {
+            if let Some(hit) = self.reg.caches.overloaded.get(ci.name()) {
                 return hit.clone();
             }
         }
@@ -138,13 +138,12 @@ impl TyCtx<'_> {
             }
         }
         visiting.remove(ci.name());
-        let result = Rc::new(result);
+        let result = Arc::new(result);
         if cacheable {
             self.reg
                 .caches
                 .overloaded
-                .borrow_mut()
-                .insert(ci.name().to_string(), result.clone());
+                .insert(ci.name(), result.clone());
         }
         result
     }

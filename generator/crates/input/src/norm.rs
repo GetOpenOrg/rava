@@ -56,6 +56,30 @@ impl NInsn {
     }
 }
 
+/// 方法体的只读指令视图（规范化体或原始体，不复制指令）
+#[derive(Debug, Clone, Copy)]
+pub enum CodeOps<'s> {
+    Norm(&'s NormCode),
+    Raw(&'s Code),
+}
+
+impl<'s> CodeOps<'s> {
+    /// JVM 指令序列（等同逐条 [`NInsn::insn`] 过滤：FoldField 不出现）
+    pub fn ops(self) -> Box<dyn DoubleEndedIterator<Item = &'s Insn> + 's> {
+        match self {
+            CodeOps::Norm(n) => Box::new(n.insns.iter().filter_map(NInsn::insn)),
+            CodeOps::Raw(c) => Box::new(c.insns.iter()),
+        }
+    }
+
+    pub fn exception_table(self) -> &'s [ExceptionEntry] {
+        match self {
+            CodeOps::Norm(n) => &n.exception_table,
+            CodeOps::Raw(c) => &c.exception_table,
+        }
+    }
+}
+
 /// 规范化后的方法体
 #[derive(Debug, Clone)]
 pub struct NormCode {
@@ -132,7 +156,9 @@ fn push_insn(pc: u32, c: &FoldConst, where_: &str) -> Result<Insn, InputError> {
         (FoldValue::Long(l) | FoldValue::Int(l), "J") => Ok(ldc(pc, op::LDC2_W, Const::Long(*l))),
         (FoldValue::Str(s), _) if ty == string_desc => Ok(ldc(pc, op::LDC, Const::String(s.clone()))),
         (v, _) if ty == string_desc => Err(err(where_, format!("String 常量须为 JSON 字符串，得到 {v:?}"))),
-        (v, "J" | "F" | "D") => Err(err(where_, format!("未移植：{ty} 常量编码 {v:?}"))),
+        // 闭包分析器的常量格只有 int / long / String / null（无浮点值），F / D 折叠常量与
+        // 非 long 值的 J 折叠常量均属输入不一致
+        (v, "J" | "F" | "D") => Err(err(where_, format!("{ty} 折叠常量的值 {v:?} 不在闭包常量格内"))),
         _ => Err(err(where_, format!("不支持的常量类型 {ty:?}"))),
     }
 }

@@ -3,7 +3,7 @@
 //! [`crate::invoke::static_call`] / [`crate::invoke::virtual_`]。
 
 use classfile::{Insn, Operand};
-use ir::{Expr, Raw, Stmt};
+use ir::{Expr, Stmt};
 use sim::StackSim;
 use ty::RsType;
 
@@ -67,7 +67,7 @@ fn from_object_push(env: &InstrEnv, sim: &mut StackSim, target: RsType, src: &st
     let v = sim.fresh("_t")?;
     let t = ty_text(env, &target);
     let o = ir::anchors::OBJECT;
-    sim.emit(Stmt::Raw(Raw(format!("let {v}: {t} = <{t} as ::std::convert::From<{o}>>::from({src});"))));
+    sim.emit(Stmt::raw(format!("let {v}: {t} = <{t} as ::std::convert::From<{o}>>::from({src});")));
     sim.push(Expr::Var(v), target);
     Ok(())
 }
@@ -101,7 +101,7 @@ fn gen_signature_polymorphic(
         let item = if ty_text(env, &t) == ir::anchors::OBJECT {
             if s == "this" { "Clone::clone(this)".to_string() } else { format!("Clone::clone(&{s})") }
         } else {
-            text(env, &coerce::to_object(env, Expr::Raw(Raw(s)), &t, true)?)
+            text(env, &coerce::to_object(env, Expr::raw(s), &t, true)?)
         };
         packed.push(item);
     }
@@ -109,24 +109,24 @@ fn gen_signature_polymorphic(
     let decl_params = ty::type_map::parse_descriptor_params(decl_desc);
     let elem_ty = ty.jvm_to_rust(decl_params.first().map_or("", String::as_str));
     let arr = sim.fresh("_t")?;
-    sim.emit(Stmt::Raw(Raw(format!(
+    sim.emit(Stmt::raw(format!(
         "let {arr}: {} = {}::from(vec![{}]);",
         ty_text(env, &elem_ty),
         ir::anchors::ARRAY,
         packed.join(", ")
-    ))));
+    )));
     let decl_ret = ty::type_map::parse_descriptor_return(decl_desc);
     let site_key = format!("{}.{}", call.owner, call.name);
     if !is_static && env.ctx.rt.sigpoly_callsite_typed.contains(&site_key) {
         let recv = text(env, &sim.pop()?.expr);
         let res = sim.fresh("_t")?;
         let ret_ty = ty.jvm_to_rust(decl_ret);
-        sim.emit(Stmt::Raw(Raw(format!(
+        sim.emit(Stmt::raw(format!(
             "let {res}: {} = {recv}.{}__site(\"{}\", {arr})?;",
             ty_text(env, &ret_ty),
             call.name,
             call.desc
-        ))));
+        )));
         if call.ret == "V" {
             return Ok(());
         }

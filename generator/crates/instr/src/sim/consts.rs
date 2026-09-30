@@ -59,8 +59,10 @@ fn ldc(_env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, c: &Const) -> In
             log.audit(Audit::ClassLiteral);
             sim.push(Expr::Lit(Lit::ClassRef(b.clone())), RsType::class(ty::consts::CLASS.to_string(), Vec::new()));
         }
+        // javac 只在 invokedynamic 的引导实参里使用 MethodType / MethodHandle / 动态常量，
+        // 从不以 ldc 装载（JDK 与用户类同为 javac 产物）；其余编译器产出的此类 ldc 显式拒绝
         other => {
-            return Err(InstrError::Unported(format!("ldc 常量形态 {other:?}（Python 落入 `{{operand}}i32` 兜底）")));
+            return Err(InstrError::OutOfScope(format!("ldc 常量形态 {other:?}")));
         }
     }
     Ok(())

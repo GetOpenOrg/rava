@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use cfg::NodeId;
 use instr::hierarchy::{common_ref_type_widening, is_subtype};
-use ir::{AssignStmt, Expr, LetStmt, Raw, Stmt, VarOrigin};
+use ir::{AssignStmt, Expr, LetStmt, Stmt, VarOrigin};
 use sim::Local;
 use ty::RsType;
 
@@ -34,7 +34,7 @@ impl Blocks<'_, '_> {
                 // 汇合赋值：值文本为标识符时以 Var 承载，其余为 Raw 叶子
                 let value = match ir::Ident::new(v.clone()) {
                     Ok(id) if text::is_ident(&v) => Expr::Var(id),
-                    _ => Expr::Raw(Raw(v)),
+                    _ => Expr::raw(v),
                 };
                 self.nodes.node_mut(*p).stmts.push(Stmt::Assign(AssignStmt {
                     target: Expr::Var(name.clone()),

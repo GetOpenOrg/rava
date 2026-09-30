@@ -108,7 +108,7 @@ struct Anc<'c> {
 pub(super) fn superclass_virtual_inheritance(
     cx: &Cx<'_, '_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     visible: &[&Method],
     out: &mut Vec<String>,
 ) -> Result<()> {
@@ -178,7 +178,7 @@ pub(super) fn superclass_virtual_inheritance(
 fn user_ancestor_block(
     cx: &Cx<'_, '_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     visible: &[&Method],
     a: &Anc<'_>,
     bridge: Option<usize>,
@@ -223,7 +223,7 @@ fn user_ancestor_block(
             bx.vtable_erasure = override_vtable_erasure(ctx, ci, vm, &virt_in);
         }
         let be = Emitted::declared(ci, bi);
-        let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&base), in_vtable_body: true, view: None };
+        let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&base), in_vtable_body: true, view: None, site: "bridge" };
         if let Some(text) = cx.body_with(state, bodies, &be, &spec)? {
             return Ok(Some(format!("{}\n{text}", cx.attr(&be, &bx))));
         }
@@ -234,7 +234,7 @@ fn user_ancestor_block(
     let text = if vm.is_native() || vm.is_abstract() || !a.in_cc {
         None
     } else {
-        let spec = BodySpec { ctparams: cx.tps, rust_name: None, in_vtable_body: true, view: None };
+        let spec = BodySpec { ctparams: cx.tps, rust_name: None, in_vtable_body: true, view: None, site: "super-inherit" };
         cx.body_with(state, bodies, &e, &spec)?
     };
     let text = text.unwrap_or_else(|| cx.stub(&e, "", cx.tps).text);

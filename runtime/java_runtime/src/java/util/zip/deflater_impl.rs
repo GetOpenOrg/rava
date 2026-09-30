@@ -19,7 +19,7 @@ fn lib() -> Result<&'static zlib::Zlib> {
 
 fn copy_in(a: &JArray<i8>, off: i32, len: i32) -> Result<Vec<u8>> {
     let mut v = Vec::with_capacity(len.max(0) as usize);
-    for i in off..off + len {
+    for i in off..off.saturating_add(len) {
         v.push(a.get(i)? as u8);
     }
     Ok(v)
@@ -123,7 +123,7 @@ impl Deflater {
         let mut outbuf = vec![0u8; output_len.max(0) as usize];
         let r = deflate_raw(addr, inbuf.as_ptr(), input_len, outbuf.as_mut_ptr(), output_len, flush, params)?;
         for (i, b) in outbuf[..r.out_used.max(0) as usize].iter().enumerate() {
-            output.set(output_off + i as i32, *b as i8)?;
+            output.set(output_off.wrapping_add(i as i32), *b as i8)?;
         }
         deflate_status(params, r)
     }
@@ -147,7 +147,7 @@ impl Deflater {
         let mut outbuf = vec![0u8; output_len.max(0) as usize];
         let r = deflate_raw(addr, input_addr as *const u8, input_len, outbuf.as_mut_ptr(), output_len, flush, params)?;
         for (i, b) in outbuf[..r.out_used.max(0) as usize].iter().enumerate() {
-            output.set(output_off + i as i32, *b as i8)?;
+            output.set(output_off.wrapping_add(i as i32), *b as i8)?;
         }
         deflate_status(params, r)
     }

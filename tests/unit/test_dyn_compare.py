@@ -178,5 +178,15 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(dc.main_class_of(closure()), 'Main')
 
 
+class ManifestTest(unittest.TestCase):
+    def test_from_manifest_reads_toml_without_codegen(self):
+        rules = dc.DomainRules.from_manifest({'Main'})
+        self.assertTrue(rules.boundary_packages)
+        self.assertTrue(all(p.endswith('/') for p in rules.boundary_packages))
+        self.assertTrue(rules.vm_boundary and rules.release and rules.vm_upcalls)
+        self.assertNotIn('codegen.runtime_manifest', sys.modules)
+        self.assertEqual(rules.domain('Main'), 'user')
+
+
 if __name__ == '__main__':
     unittest.main()

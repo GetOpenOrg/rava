@@ -40,7 +40,12 @@ impl<'a> Engine<'a> {
         let same_at = |off: u32| at(&a, off) == at(&old, off);
         let mut offs: Vec<u32> = a.events.iter().map(|e| e.0).collect();
         offs.dedup();
-        let changed: HashSet<u32> = offs.into_iter().filter(|&o| !same_at(o)).collect();
+        let mut changed: HashSet<u32> = offs.into_iter().filter(|&o| !same_at(o)).collect();
+        // 跨偏移读者（按名查找）的求值依赖本方法其它偏移的事件与辅助方法读过的字段：重分析即一并重跑
+        // （事件全同也要重跑——失效可能来自辅助方法独立分析读过的字段转为不折叠）
+        if let Some(xs) = self.xreaders.get(&m) {
+            changed.extend(xs.iter().copied());
+        }
         if changed.is_empty() {
             return;
         }
@@ -68,13 +73,13 @@ impl<'a> Engine<'a> {
         }
     }
 
-    pub(super) fn event(&mut self, m: usize, off: u32, e: &Event, cf: &Option<Rc<ClassFile>>) {
+    pub(super) fn event(&mut self, m: usize, off: u32, e: &Event, cf: &Option<std::sync::Arc<ClassFile>>) {
         let prev = self.cur_site.replace((m, off));
         self.event_inner(m, off, e, cf);
         self.cur_site = prev;
     }
 
-    pub(super) fn event_inner(&mut self, m: usize, off: u32, e: &Event, cf: &Option<Rc<ClassFile>>) {
+    pub(super) fn event_inner(&mut self, m: usize, off: u32, e: &Event, cf: &Option<std::sync::Arc<ClassFile>>) {
         let obj = self.id(OBJECT);
         {
             let via = |k: &'static str| Via::method(k, m, Some(off));

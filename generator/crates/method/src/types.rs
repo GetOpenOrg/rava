@@ -20,9 +20,9 @@ pub fn parse_ir_type(s: &str) -> Option<Type> {
     (p.pos == p.s.len()).then_some(t)
 }
 
-/// 同 [`parse_ir_type`]，解析失败报未移植
+/// 同 [`parse_ir_type`]，解析失败报 IR 构造错误
 pub fn ir_type_of(s: &str) -> MethodResult<Type> {
-    parse_ir_type(s).ok_or_else(|| MethodError::Unported(format!("类型文本无法解析为 ir::Type：{s}")))
+    parse_ir_type(s).ok_or_else(|| MethodError::Ir(format!("类型文本无法解析为 ir::Type：{s}")))
 }
 
 struct Parser<'s> {

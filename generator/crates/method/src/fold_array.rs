@@ -44,20 +44,27 @@ static OBJ_STR_ELEM_RE: LazyLock<Regex> =
     LazyLock::new(|| re(r#"^Object::from\((?:Clone::clone\(&)?String::from\(("(?:[^"\\]|\\.)*")\)\)?\)$"#));
 
 /// 本类静态字段 getter 值形态：`X::f()?` / `Clone::clone(&X::f()?)` / 其 `Object::from` 包装
-fn getter_value_re(static_getters: &BTreeSet<String>) -> Option<Regex> {
-    if static_getters.is_empty() {
-        return None;
+/// （即 `^(?:{call}|Clone::clone\(&{call}\)|Object::from\(Clone::clone\(&{call}\)\))$`，
+/// `call = (?:g1|g2|..)\(\)\?`；按集合查找，不逐方法编译多选正则）
+struct GetterValue<'a>(&'a BTreeSet<String>);
+
+impl GetterValue<'_> {
+    fn is_match(&self, v: &str) -> bool {
+        let call = |s: &str| s.strip_suffix("()?").is_some_and(|g| self.0.contains(g));
+        let clone = |s: &str| s.strip_prefix("Clone::clone(&").and_then(|r| r.strip_suffix(')')).is_some_and(call);
+        call(v) || clone(v) || v.strip_prefix("Object::from(").and_then(|r| r.strip_suffix(')')).is_some_and(clone)
     }
-    let alts: Vec<String> = static_getters.iter().map(|g| regex::escape(g)).collect();
-    let call = format!(r"(?:{})\(\)\?", alts.join("|"));
-    Some(re(&format!(r"^(?:{call}|Clone::clone\(&{call}\)|Object::from\(Clone::clone\(&{call}\)\))$")))
 }
 
-fn foldable_value(v: &str, getter: Option<&Regex>) -> bool {
+fn getter_value_re(static_getters: &BTreeSet<String>) -> Option<GetterValue<'_>> {
+    (!static_getters.is_empty()).then_some(GetterValue(static_getters))
+}
+
+fn foldable_value(v: &str, getter: Option<&GetterValue<'_>>) -> bool {
     PURE_VALUE_RE.is_match(v) || getter.is_some_and(|g| g.is_match(v))
 }
 
-fn is_arr_intermediate(stmt: &str, getter: Option<&Regex>) -> bool {
+fn is_arr_intermediate(stmt: &str, getter: Option<&GetterValue<'_>>) -> bool {
     if stmt.contains('\n') || stmt.contains("JArray::from_strs(") || stmt.contains("JArray::objects_from_strs(") {
         // 已折叠块（多行 vec! / 去重表形态或单行字符串切片形态）
         return FOLDED_DECL_RE.is_match(stmt)
@@ -171,6 +178,21 @@ pub fn fold_array_literals(mut stmts: Vec<String>, static_getters: &BTreeSet<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn getter_value_matches_alternation_regex() {
+        let gs: BTreeSet<String> = ["X::a", "X::b_c", "Y::d"].map(String::from).into();
+        let alts: Vec<String> = gs.iter().map(|g| regex::escape(g)).collect();
+        let call = format!(r"(?:{})\(\)\?", alts.join("|"));
+        let rx = re(&format!(r"^(?:{call}|Clone::clone\(&{call}\)|Object::from\(Clone::clone\(&{call}\)\))$"));
+        let g = GetterValue(&gs);
+        for v in [
+            "X::a()?", "X::b_c()?", "X::a()", "Clone::clone(&X::a()?)", "Object::from(Clone::clone(&Y::d()?))",
+            "Object::from(X::a()?)", "Clone::clone(&X::z()?)", "X::a()?x", "Object::from(Clone::clone(&X::a()?)",
+        ] {
+            assert_eq!(g.is_match(v), rx.is_match(v), "{v}");
+        }
+    }
 
     #[test]
     fn fold_simple() {

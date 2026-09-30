@@ -229,32 +229,79 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> { None }
 
     /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
-    /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名读共享的
-    /// 引用存储单元。引用字段（含擦除字段）的存储是
-    /// `Rc<RefCell<Option<Box<T>>>>`——与 int/long 的 `Cell<i64/i32>` 不同，
-    /// 载体类型随字段声明类型异构（`Box<Object>` / `Box<Completion>` / ...），
-    /// 无法以统一 cell 类型导出，故以读/写双方法承载（值在边界经
-    /// `From<Object>` / `Into<Object>` 转换，与字段访问器的边界协议一致）。
-    /// java_class! 宏为每个含引用字段的生成类按平铺字段名单（含继承字段）
-    /// 生成臂；其余返回 None（调用方归 stub）。读与 `__get_xxx` 同一存储，
-    /// 经 Unsafe/VarHandle 写入对直接字段读取可见（JVM 字段内存语义）；
-    /// `None`（未写入）与 `Some(Box<null>)` 均以 jvm-null Object 应答。
+    /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名对共享的引用存储单元
+    /// 执行 `op`（读 / 写 / 读-改-写，见 [`__RefAccess`]）。引用字段（含擦除字段）的存储是
+    /// `Rc<RefCell<Option<Box<T>>>>`——载体类型随字段声明类型异构（`Box<Object>` /
+    /// `Box<Completion>` / ...），故由 java_class! 宏为每个含引用字段的生成类按平铺字段
+    /// 名单（含继承字段）生成「字段名 → 槽」的单一分派，槽上的操作由按载体类型实例化的
+    /// [`__ref_slot_access`] 承担（值在边界经 `From<Object>` / `Into<Object>` 转换，与字段
+    /// 访问器的边界协议一致）。命中 → `Some`（写形态的值为命中标记）；未命中 → None 且
+    /// `op` 原样保留（调用方可转交他处应答）。经 `dyn ObjectVTable` 的
+    /// `__unsafe_ref_get / __unsafe_ref_set / __unsafe_ref_update` 调用。
     #[doc(hidden)]
-    fn __unsafe_ref_get(&self, _field: &str) -> Option<Object> { None }
+    fn __unsafe_ref_access(&self, _field: &str, _op: &mut __RefAccess<'_>) -> Option<Object> { None }
+}
 
-    /// 引用原子协议的写形态：命中字段名单则写入并返回 true；未命中 → false
-    /// （与 `__unsafe_ref_get` 的 None 同一未命中语义，bool 仅为区分「命中」）。
-    /// 写入值经 `<T as From<Object>>::from` 还原字段声明类型的视图（null 直通，
-    /// 类型不符按 checkcast 语义处理——与 Java 字段存储检查同型）。
-    #[doc(hidden)]
-    fn __unsafe_ref_set(&self, _field: &str, _v: Object) -> bool { false }
+/// 引用原子协议的操作（[`ObjectVTable::__unsafe_ref_access`] 的入参）。
+#[doc(hidden)]
+pub enum __RefAccess<'a> {
+    /// 读：可重入读锁内取当前值；`None`（未写入）与 `Some(Box<null>)` 均以 jvm-null 应答。
+    Get,
+    /// 写：命中时取走值写入（值经 `<T as From<Object>>::from` 还原声明类型视图，在取写锁
+    /// 之前完成——类型不符按 checkcast 语义处理）；未命中时值原样保留。
+    Set(Option<Object>),
+    /// 读-改-写：写锁内读出当前值 `cur`，`f(cur)` 返回 `Some(new)` 时写入，应答 `cur`。
+    Update(&'a mut dyn FnMut(Object) -> Option<Object>),
+}
 
-    /// 引用原子协议的读-改-写形态：命中字段名单则在该引用槽的写锁内读出当前值 `cur`，
-    /// `f(cur)` 返回 `Some(new)` 时写入，返回 `Some(cur)`；未命中 → None。Unsafe /
-    /// VarHandle 的 compareAndSet / compareAndExchange / getAndSet 引用族经此真正原子。
+/// 引用槽上的协议操作：按字段载体类型 `T` 实例化（跨类共享同一实例），生成类的
+/// `__unsafe_ref_access` 只做字段名分派。擦除字段 `T = Object`，两向转换为恒等。
+#[doc(hidden)]
+#[inline(never)]
+pub fn __ref_slot_access<T>(slot: &crate::sync_model::__RefSlot<Option<Box<T>>>,
+                            op: &mut __RefAccess<'_>) -> Option<Object>
+where T: Clone + From<Object>, Object: From<T>
+{
+    match op {
+        __RefAccess::Get => Some(Option::unwrap_or_default(
+            slot.borrow().as_deref().map(|b| Object::from(Clone::clone(b))))),
+        __RefAccess::Set(v) => {
+            let v = Some(Box::new(<T as From<Object>>::from(v.take().unwrap_or_default())));
+            *slot.borrow_mut() = v;
+            Some(Object::default())
+        }
+        __RefAccess::Update(f) => {
+            let mut g = slot.borrow_mut();
+            let cur: Object = Option::unwrap_or_default(
+                g.as_deref().map(|b| Object::from(Clone::clone(b))));
+            if let Some(n) = f(Clone::clone(&cur)) {
+                *g = Some(Box::new(<T as From<Object>>::from(n)));
+            }
+            Some(cur)
+        }
+    }
+}
+
+impl dyn ObjectVTable {
+    /// 引用原子协议读形态：命中 → `Some(当前值)`；未命中（无该引用字段）→ None（调用方归 stub）。
     #[doc(hidden)]
-    fn __unsafe_ref_update(&self, _field: &str,
-                           _f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> { None }
+    pub fn __unsafe_ref_get(&self, field: &str) -> Option<Object> {
+        self.__unsafe_ref_access(field, &mut __RefAccess::Get)
+    }
+
+    /// 引用原子协议写形态：命中写入返回 true；未命中 → false。
+    #[doc(hidden)]
+    pub fn __unsafe_ref_set(&self, field: &str, v: Object) -> bool {
+        self.__unsafe_ref_access(field, &mut __RefAccess::Set(Some(v))).is_some()
+    }
+
+    /// 引用原子协议读-改-写形态：命中 → `Some(旧值)`；未命中 → None。Unsafe / VarHandle 的
+    /// compareAndSet / compareAndExchange / getAndSet 引用族经此真正原子。
+    #[doc(hidden)]
+    pub fn __unsafe_ref_update(&self, field: &str,
+                               f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> {
+        self.__unsafe_ref_access(field, &mut __RefAccess::Update(f))
+    }
 }
 
 /// 身份哈希（`Object.hashCode` / `System.identityHashCode` 的唯一来源，FS-M5）：

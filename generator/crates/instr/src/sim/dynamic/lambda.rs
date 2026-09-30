@@ -4,15 +4,15 @@
 //!
 //! 实参适配见 [`super::lambda_args`]，闭包体与返回值适配见 [`super::lambda_body`]。
 
-use classfile::Const;
+use classfile::{Const, MemberRef};
 use sim::StackSim;
 use ty::type_map::{parse_descriptor_params, parse_descriptor_return};
 use ty::{ClassInfo, RsType};
 
-use super::{raw, raw_stmt, IndySite};
+use super::{raw_stmt, IndySite};
 use crate::build::{text, ty_text};
 use crate::env::InstrEnv;
-use crate::error::InstrResult;
+use crate::error::{InstrError, InstrResult};
 use crate::log::{Effect, InstrLog};
 use crate::naming::lambda_impl_rust_name;
 
@@ -63,43 +63,24 @@ pub(super) fn rust_text(env: &InstrEnv, d: &str) -> String {
     ty_text(env, &env.ctx.ty.jvm_to_rust(d))
 }
 
-/// lambda 类引导方法的 (samtype, impl)：静态实参 ≥ 2，arg0 为 MethodType、arg1 为 MethodHandle
-fn lambda_args(site: &IndySite, is_lambda: bool) -> (String, String) {
-    let Some(args) = site.bsm.map(|b| &b.args).filter(|a| is_lambda && a.len() >= 2) else {
-        return (String::new(), String::new());
-    };
-    let sam = match &args[0] {
-        Const::MethodType(d) => d.clone(),
-        _ => String::new(),
-    };
-    let imp = match &args[1] {
-        Const::MethodHandle(h) => h.member.to_string(),
-        _ => String::new(),
-    };
-    (sam, imp)
+/// lambda 类引导方法的 (SAM 描述符, 实现方法)：静态实参 ≥ 2，arg0 为 MethodType、arg1 为
+/// MethodHandle（LambdaMetafactory 链接期约束；不符即 LambdaConversionException）
+fn lambda_args<'s>(site: &IndySite<'s>) -> InstrResult<(String, &'s MemberRef)> {
+    let args = site.bsm.map(|b| b.args.as_slice()).unwrap_or_default();
+    match args {
+        [Const::MethodType(sam), Const::MethodHandle(h), ..] => Ok((sam.clone(), &h.member)),
+        _ => Err(InstrError::BadInsn(format!(
+            "lambda 调用点 {}{} 的引导实参不是 (MethodType, MethodHandle, ..)",
+            site.name, site.desc
+        ))),
+    }
 }
 
-/// `Cls.method:desc`（或 `pkg/Cls.method:desc`）→ (类, 方法名, 描述符)
-fn split_impl(r: &str) -> Option<(&str, &str, &str)> {
-    let dot = r.rfind('.')?;
-    let colon = dot + r[dot..].find(':')?;
-    (colon > dot).then(|| (&r[..dot], &r[dot + 1..colon], &r[colon + 1..]))
-}
-
-/// 按动态描述符弹出捕获值（声明序）；栈空时以 `Object::default()` 占位
+/// 按动态描述符弹出捕获值（声明序）
 fn pop_captures(sim: &mut StackSim, dyn_desc: &str) -> InstrResult<Vec<sim::StackEntry>> {
     let mut caps = Vec::new();
-    if dyn_desc.starts_with('(') {
-        for _ in parse_descriptor_params(dyn_desc) {
-            let e = if sim.state.stack.is_empty() {
-                let id = sim.state.next_id;
-                sim.state.next_id += 1;
-                sim::StackEntry { expr: raw(format!("{}::default()", ir::anchors::OBJECT)), ty: RsType::Object, id }
-            } else {
-                sim.pop()?
-            };
-            caps.push(e);
-        }
+    for _ in parse_descriptor_params(dyn_desc) {
+        caps.push(sim.pop()?);
     }
     caps.reverse();
     Ok(caps)
@@ -118,26 +99,12 @@ fn impl_shape(env: &InstrEnv, ci: Option<&ClassInfo>, mname: &str, desc: &str, i
     (!m.is_static() && !is_ctor, !ty::registry::method_signature(m).is_empty(), tparams, sig)
 }
 
-/// invokedynamic 的 lambda / 其余形态分支；`is_lambda`：引导方法属 `[indy] lambda` 类
-pub(super) fn gen_lambda(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, site: &IndySite, is_lambda: bool) -> InstrResult<()> {
+/// lambda 类引导方法（`[indy] lambda`）调用点
+pub(super) fn gen_lambda(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, site: &IndySite) -> InstrResult<()> {
     let idx = site.cp_index;
+    let (sam_desc, impl_ref) = lambda_args(site)?;
     let caps = pop_captures(sim, site.desc)?;
-    let (sam_desc, impl_ref) = lambda_args(site, is_lambda);
-    if impl_ref.is_empty() || sam_desc.is_empty() {
-        // 短期占位（无实现方法信息，如 native 类引导方法）
-        sim.emit(raw_stmt(format!("/* TODO: invokedynamic {idx} */")));
-        if parse_descriptor_return(site.desc) != "V" {
-            sim.push(raw(format!("{}::default()", ir::anchors::OBJECT)), RsType::Object);
-        }
-        return Ok(());
-    }
-    let Some((impl_cls, impl_mname, impl_desc)) = split_impl(&impl_ref) else {
-        sim.emit(raw_stmt(format!("/* TODO: invokedynamic {idx} (impl parse failed) */")));
-        if parse_descriptor_return(&sam_desc) != "V" {
-            sim.push(raw(format!("{}::default()", ir::anchors::OBJECT)), RsType::Object);
-        }
-        return Ok(());
-    };
+    let (impl_cls, impl_mname, impl_desc) = (impl_ref.owner.as_str(), impl_ref.name.as_str(), impl_ref.desc.as_str());
     // 接口重声明的根类公开方法（`handle::equals` → ProcessHandle.equals）：接口不发射这类
     // 成员（经根类 vtable 分派），实现句柄按 JVM 方法解析落到根类
     let impl_is_iface = env.ctx.reg().get(impl_cls).is_some_and(|c| c.is_interface());

@@ -20,7 +20,7 @@ impl Renderer<'_> {
             Expr::Var(_) | Expr::Paren(_) | Expr::Block(_) | Expr::InstanceOf { .. } => true,
             Expr::Binary { .. } | Expr::Unary { .. } | Expr::Ref { .. } | Expr::Deref(_) => false,
             Expr::Macro(_) => false,
-            Expr::Raw(r) => scan_atomic(&r.0),
+            Expr::Raw(r) => scan_atomic(r.as_str()),
             Expr::Call { func, .. } => match func {
                 // turbofish 的 `<` 在顶层 → 非原子；限定路径以 `<` 开头 → 非原子
                 FnPath::Path(p) => p.segments.iter().all(|s| s.generics.is_empty()),

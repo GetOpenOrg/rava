@@ -100,7 +100,8 @@ pub(crate) fn expand_statics(
                 #vis fn #name() -> Result<#ty> {
                     Self::__class_init()?;
                     __safepoint();
-                    Ok(#cell.with(|c| ::std::clone::Clone::clone(&*c.borrow())).unwrap_or_default())
+                    let __v = ::std::clone::Clone::clone(&*#cell.force().borrow());
+                    Ok(__v.unwrap_or_default())
                 }
             });
         }
@@ -109,7 +110,7 @@ pub(crate) fn expand_statics(
                 #[allow(non_snake_case)]
                 #vis fn #setter(v: #ty) -> Result<()> {
                     Self::__class_init()?;
-                    #cell.with(|c| *c.borrow_mut() = ::std::option::Option::Some(v));
+                    *#cell.force().borrow_mut() = ::std::option::Option::Some(v);
                     Ok(())
                 }
             });
@@ -157,11 +158,12 @@ pub(crate) fn expand_class_init(
     let member = quote! {
         #[doc(hidden)]
         pub fn __class_init() -> Result<()> {
-            if #state.with(|s| s.get()) == 3 {
+            let __state = #state.force();
+            if __state.get() == 3 {
                 return Ok(());
             }
             // JVMS §5.5：他线程初始化中则等待；同线程递归立即返回；失败后 NoClassDefFoundError
-            match __clinit_enter(#binary_name, || #state.with(|s| s.get()), |v| #state.with(|s| s.set(v))) {
+            match __clinit_enter(#binary_name, __state) {
                 __ClinitEnter::Run => {}
                 __ClinitEnter::Done => return Ok(()),
                 __ClinitEnter::Erroneous => return Err(JvmError::no_class_def_found(#binary_name)),
@@ -174,7 +176,7 @@ pub(crate) fn expand_class_init(
                 Ok(())
             };
             let result = run();
-            __clinit_exit(#binary_name, result.is_ok(), |v| #state.with(|s| s.set(v)));
+            __clinit_exit(#binary_name, result.is_ok(), __state);
             result.map_err(JvmError::in_initializer)
         }
     };
