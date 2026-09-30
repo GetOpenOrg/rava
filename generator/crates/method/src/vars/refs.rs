@@ -90,6 +90,8 @@ fn stmts_names(env: &InstrEnv, ss: &[Stmt], out: &mut BTreeSet<String>) {
 
 pub fn stmt_names(env: &InstrEnv, s: &Stmt, out: &mut BTreeSet<String>) {
     match s {
+        // `let _ = e;`：Python 侧为原文语句，按渲染文本扫描标识符
+        Stmt::Let(l) if l.name.is_discard() => scan(&text::stmt(env, s), out),
         Stmt::Let(l) => {
             out.insert(l.name.as_str().to_string());
             if let Some(v) = &l.value {
@@ -159,7 +161,7 @@ pub fn refs(env: &InstrEnv, e: &Entry, rendered: &str, name: &str) -> (bool, boo
         Item::Stmt(s) => {
             let mut names = BTreeSet::new();
             stmt_names(env, s, &mut names);
-            let is_let = matches!(&**s, Stmt::Let(l) if l.name.as_str() == name);
+            let is_let = matches!(&**s, Stmt::Let(l) if !l.name.is_discard() && l.name.as_str() == name);
             (names.contains(name), is_let)
         }
         Item::Line(_) | Item::Struct { .. } | Item::Removed => {

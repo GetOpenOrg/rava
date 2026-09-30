@@ -65,10 +65,15 @@ impl Blocks<'_, '_> {
             let node = self.nodes.node(id);
             let mut new_stmts = Vec::new();
             for s in &node.stmts {
+                // `let _ = e;` 在 Python 侧是原文语句（RawStmt），不参与提升
                 let Stmt::Let(l) = s else {
                     new_stmts.push(s.clone());
                     continue;
                 };
+                if l.name.is_discard() {
+                    new_stmts.push(s.clone());
+                    continue;
+                }
                 let mut ty_s = l.ty.as_ref().map(ir::render::render_type);
                 if ty_s.is_none() {
                     ty_s = node.exit_locals.values().find(|x| x.name == l.name).map(|x| text::ty(self.env, &x.ty));

@@ -48,9 +48,10 @@ impl<'a> VarsCtx<'a> {
     }
 }
 
+/// 具名 let（`let _ = e;` 在 Python 侧是原文语句 RawStmt，变量分析不视为声明）
 fn let_of(e: &Entry) -> Option<&LetStmt> {
     match e.as_stmt() {
-        Some(Stmt::Let(l)) => Some(l),
+        Some(Stmt::Let(l)) if !l.name.is_discard() => Some(l),
         _ => None,
     }
 }
@@ -58,7 +59,7 @@ fn let_of(e: &Entry) -> Option<&LetStmt> {
 fn let_of_mut(e: &mut Entry) -> Option<&mut LetStmt> {
     match &mut e.item {
         Item::Stmt(s) => match &mut **s {
-            Stmt::Let(l) => Some(l),
+            Stmt::Let(l) if !l.name.is_discard() => Some(l),
             _ => None,
         },
         _ => None,
@@ -108,7 +109,7 @@ fn store_type(e: &Entry, name: &str) -> Option<Option<Type>> {
 /// 条目的值（let / 赋值）
 fn store_value(e: &Entry) -> Option<&Expr> {
     match e.as_stmt() {
-        Some(Stmt::Let(l)) => l.value.as_ref(),
+        Some(Stmt::Let(l)) if !l.name.is_discard() => l.value.as_ref(),
         Some(Stmt::Assign(a)) => Some(&a.value),
         _ => None,
     }
@@ -156,7 +157,7 @@ fn align_store_value(l: &mut LetStmt, hoisted: &Type, later_s: &str, hoisted_s: 
 /// 条目的变量身份（名字、槽位、store 偏移）
 fn var_identity(e: &Entry) -> Option<(&str, Option<u16>, Option<u32>)> {
     match e.as_stmt()? {
-        Stmt::Let(l) => Some((l.name.as_str(), l.origin.slot, l.origin.bind_off)),
+        Stmt::Let(l) if !l.name.is_discard() => Some((l.name.as_str(), l.origin.slot, l.origin.bind_off)),
         Stmt::Assign(a) => {
             let name = match &a.target {
                 Expr::Var(v) => v.as_str(),
@@ -229,7 +230,7 @@ pub fn promote_undeclared_assigns(entries: &mut [Entry], predeclared: &BTreeSet<
             continue;
         }
         let promoted = match e.as_stmt() {
-            Some(Stmt::Let(l)) => {
+            Some(Stmt::Let(l)) if !l.name.is_discard() => {
                 declared.insert(l.name.as_str().to_string(), nesting);
                 None
             }
