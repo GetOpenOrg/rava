@@ -357,7 +357,11 @@ impl Handwritten {
         }
         let ty = segs.last().cloned().unwrap_or_default();
         let (base, rest): (Vec<String>, &[String]) = match segs.first().map(String::as_str) {
-            Some("super") => (pkg.iter().map(|s| s.to_string()).collect(), &segs[1..]),
+            // 共置手写是包模块的子模块：首个 `super` = 宿主包，其后每个 `super` 上溯一级
+            Some("super") => {
+                let k = segs.iter().take_while(|s| *s == "super").count();
+                (pkg[..pkg.len().saturating_sub(k - 1)].iter().map(|s| s.to_string()).collect(), &segs[k..])
+            }
             Some("crate") => (vec![], &segs[1..]),
             _ if segs.len() == 1 => (pkg.iter().map(|s| s.to_string()).collect(), &segs[..]),
             _ => (vec![], &segs[..]),

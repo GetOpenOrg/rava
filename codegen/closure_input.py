@@ -21,6 +21,9 @@ from .jdk_resolver import JdkResolver
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _GENERATOR = os.path.join(_REPO, 'generator', 'Cargo.toml')
+# 分析器构建产物按工作树隔离：共享 target 下多个工作树的同名 crate 源路径不同，会互相作废指纹、
+# 交替重编（开发中的工作树与跑批快照并存时尤甚）
+_ANALYZER_TARGET = os.path.join(_REPO, 'build', 'analyzer-target')
 
 
 def _split_id(mid: str) -> tuple[str, str, str]:
@@ -42,7 +45,8 @@ def _user_class_dir(class_files, out_dir: str) -> str:
 
 
 def _run_analyzer(args: list[str]) -> None:
-    cmd = ['cargo', 'run', '--release', '-q', '--manifest-path', _GENERATOR, '--', 'closure'] + args
+    cmd = ['cargo', 'run', '--release', '-q', '--manifest-path', _GENERATOR,
+           '--target-dir', _ANALYZER_TARGET, '--', 'closure'] + args
     r = subprocess.run(cmd, capture_output=True, text=True)
     for line in r.stderr.splitlines():
         if line.startswith('[closure]'):
@@ -121,12 +125,21 @@ def _consume(cj, class_infos, resolver, lib_registries):
             field_stubs.add(name)
 
     # 边界成员（`handwritten:boundary`：手写整体承载）不入链，发射层对其只出手写转发或存根；
-    # 边界域类里按字节码执行的方法（VM 耦合边界类的非手写方法）照常入链。调用点符号键与
-    # `<clinit>` 同口径：边界域类只取分析器判为字节码执行的键
+    # 边界域类里按字节码执行的方法（VM 耦合边界类的非手写方法）照常入链。`<clinit>` 同口径：
+    # 边界域类只取分析器判为字节码执行的键
     boundary = {c['name'] for c in cj['classes'] if c['domain'] == 'boundary'}
     visited = {_split_id(m['id']) for m in cj['methods'] if m['kind'] != 'handwritten:boundary'}
-    extra = set(map(_split_id, cj.get('refs', ()))) | {(c, '<clinit>', '()V') for c in cj['clinit']}
-    visited |= {k for k in extra if k[0] not in boundary or k in visited}
+    visited |= {k for k in ((c, '<clinit>', '()V') for c in cj['clinit'])
+                if k[0] not in boundary or k in visited}
+    # 调用点符号键只表达继承槽位需求（常量池类未声明、经超类 / 接口解析的成员）：常量池类自身声明
+    # 而分析器未解析到的成员没有可达接收者，发射为存根
+    for k in map(_split_id, cj.get('refs', ())):
+        if k in visited or k[0] in boundary:
+            continue
+        ci = load(k[0])
+        if ci is not None and any(x.name == k[1] and x.descriptor == k[2] for x in ci.methods):
+            continue
+        visited.add(k)
 
     seeds = cj.get('seeds', {})
     _cc.REFLECT_CONSTS.clear()

@@ -214,8 +214,15 @@ impl<'a> Engine<'a> {
     fn class_of_module(&mut self, host: &str, segs: &[String], snake: &str) -> Option<String> {
         let host_pkg = host.rsplit_once('/').map_or("", |(p, _)| p);
         let dirs: Vec<&str> = segs[..segs.len() - 1].iter().map(String::as_str).filter(|s| *s != "self").collect();
+        let supers = dirs.iter().take_while(|s| **s == "super").count();
         let pkg = match dirs.first() {
-            Some(&"super") | None => host_pkg.to_string(),
+            Some(&"super") => {
+                let up: Vec<&str> = host_pkg.split('/').collect();
+                let mut p = up[..up.len().saturating_sub(supers - 1)].to_vec();
+                p.extend(&dirs[supers..]);
+                p.join("/")
+            }
+            None => host_pkg.to_string(),
             Some(&"crate") => dirs[1..].join("/"),
             _ => dirs.join("/"),
         };
