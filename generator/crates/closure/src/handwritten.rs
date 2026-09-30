@@ -39,6 +39,8 @@ const VTABLE_SUFFIX: &str = "__VTable";
 /// 字段访问器前缀（rava_macros 生成）
 const SET_PREFIX: &str = "__set_";
 const GET_PREFIX: &str = "__get_";
+/// java_class! 为 static 字段生成的写访问器前缀（`T::set_<字段>(v)`）
+const STATIC_SET_PREFIX: &str = "set_";
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
     "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self",
@@ -97,7 +99,8 @@ pub enum SType {
     Call(Box<SType>, String),
 }
 
-/// 手写体里的字段访问器调用：`recv.__set_<字段>(v)` / `recv.__get_<字段>()`（字段名即 Java 名）
+/// 手写体里的字段访问器调用：`recv.__set_<字段>(v)` / `recv.__get_<字段>()`，及 static 字段写访问器
+/// `T::set_<字段>(v)`（字段名即 Java 名）
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FieldAccess {
     pub field: String,
@@ -108,6 +111,8 @@ pub struct FieldAccess {
     pub value: Option<TypeRef>,
     /// 接收者是本 fn 的 `self`（即被调 Java 方法的接收者；经同文件被调 fn 传递来的访问不算）
     pub on_self: bool,
+    /// static 写访问器路径调用 `T::set_<字段>(v)`：`recv` 为 `T`；T 上无此字段时是同名的手写辅助函数，不算访问
+    pub path: bool,
 }
 
 #[derive(Debug, Default, Clone)]

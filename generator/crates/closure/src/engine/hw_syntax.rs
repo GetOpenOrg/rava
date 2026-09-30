@@ -90,7 +90,12 @@ impl<'a> Engine<'a> {
         let pool = Node::S(m, POOL);
         let prod = Node::S(m, PROD);
         for fa in fields {
-            let site = fa.recv.as_ref().and_then(|r| self.stype_class(host, r)).and_then(|c| self.field_by_name(&c, &fa.field));
+            let cls = fa.recv.as_ref().and_then(|r| self.stype_class(host, r));
+            let site = cls.as_ref().and_then(|c| self.field_by_name(c, &fa.field));
+            // static 写访问器形态的路径调用：类型上无此字段 → 同名手写辅助函数，不是字段写入
+            if fa.path && cls.is_some() && site.is_none() {
+                continue;
+            }
             let Some((decl, desc)) = site else {
                 if fa.write {
                     self.open_field_name(&fa.field);
@@ -148,6 +153,10 @@ impl<'a> Engine<'a> {
                     None => vec![Feed::N(pool)],
                 };
                 self.feed(&fs, Node::U(fi), tid);
+                // static 字段的手写写入值推不出类型：值未知，按字段声明类型的实例（open）
+                if fa.path && self.hw_type(host, &fa.value).is_none() {
+                    self.add_to(Node::U(fi), &TypeSet::open(tid));
+                }
             } else {
                 self.flow(Node::F(fi), prod, tid);
             }

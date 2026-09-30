@@ -96,9 +96,10 @@ impl FileScan<'_> {
         }
         let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new() };
         cs.visit_block(block);
-        for (field, write, recv, value, on_self) in cs.fields {
+        for (field, write, recv, value, on_self, path) in cs.fields {
             info.fields.push(FieldAccess {
                 on_self,
+                path,
                 field,
                 write,
                 recv: recv.map(|r| expand_s(self.uses, r, &self.self_ty)),
@@ -380,6 +381,34 @@ mod tests {
         assert_eq!(get(6), ("a", true, None));
         assert_eq!(get(7), ("b", true, Some(named(&["Stream"]))));
         assert_eq!(get(8), ("c", false, Some(named(&["Stream"]))));
+    }
+
+    #[test]
+    fn static_field_setters() {
+        let src = r#"
+            impl System {
+                pub fn registerNatives() {
+                    let mut p = Properties::default();
+                    p._init_not_null();
+                    System::set_props(p);
+                    Self::set_in_(x);
+                    crate::java::lang::Runtime::set_current(1);
+                    helper::set_mode(2);
+                    System::set_pair(1, 2);
+                }
+            }
+        "#;
+        let fs = fields_of(src, "registerNatives");
+        let w: Vec<(&str, bool, Option<SType>, bool)> = fs.iter().map(|f| (f.field.as_str(), f.write, f.recv.clone(), f.path)).collect();
+        assert_eq!(
+            w,
+            vec![
+                ("props", true, Some(named(&["System"])), true),
+                ("in", true, Some(named(&["System"])), true),
+                ("current", true, Some(named(&["crate", "java", "lang", "Runtime"])), true),
+            ]
+        );
+        assert_eq!(fs[0].value, Some(TypeRef(vec!["Properties".into()])));
     }
 
     #[test]

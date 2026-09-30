@@ -207,8 +207,8 @@ pub(super) struct CallScan<'a> {
     /// 不可变 let 绑定到构造调用 `T::new*(…)` 的局部变量 → `T`（块作用域，遮蔽即移除）
     pub(super) fresh: HashMap<String, Vec<String>>,
     pub(super) calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>)>,
-    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self)
-    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool)>,
+    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用)
+    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool)>,
     pub(super) opaque: HashSet<String>,
 }
 
@@ -237,7 +237,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             let f = f.strip_suffix('_').filter(|k| RUST_KEYWORDS.contains(k)).unwrap_or(f);
             let value = m.args.first().and_then(|a| infer(a, self.locals));
             let on_self = matches!(&*m.receiver, syn::Expr::Path(p) if p.path.is_ident("self"));
-            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self));
+            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false));
         }
         let args = m.args.iter().map(|a| infer(a, self.locals)).collect();
         let fresh = match &*m.receiver {
@@ -253,6 +253,14 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         if let syn::Expr::Path(p) = &*c.func {
             let segs = path_segs(&p.path);
             if let Some((last, head)) = segs.split_last() {
+                // static 字段写访问器 `T::set_<字段>(v)`（类型段首字母大写；关键字字段名带 `_` 后缀）
+                if let Some(f) = last.strip_prefix(STATIC_SET_PREFIX).filter(|_| c.args.len() == 1) {
+                    if head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase())) {
+                        let f = f.strip_suffix('_').filter(|k| RUST_KEYWORDS.contains(k)).unwrap_or(f);
+                        let value = c.args.first().and_then(|a| infer(a, self.locals));
+                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true));
+                    }
+                }
                 let args = c.args.iter().map(|a| infer(a, self.locals)).collect();
                 let ty = (!head.is_empty()).then(|| head.to_vec());
                 self.calls.push((last.clone(), ty, None, args, None, None));
