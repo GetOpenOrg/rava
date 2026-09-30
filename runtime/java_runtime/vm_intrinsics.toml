@@ -129,6 +129,13 @@ value_equals = [
     "java/lang/String.equals:(Ljava/lang/Object;)Z",
 ]
 
+# 字符串纯函数：接收者与实参都是字符串常量（或实参 null）时结果即常量（JDK 规范语义）。
+# 值：equals_ignore_case（实参 null 为 false）/ length（UTF-16 长度）/ is_empty
+[facts.string_ops]
+"java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z" = "equals_ignore_case"
+"java/lang/String.length:()I" = "length"
+"java/lang/String.isEmpty:()Z" = "is_empty"
+
 [facts.returns]
 # 断言恒关（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false；javac 的
 # `$assertionsDisabled = !desiredAssertionStatus()` 由此成为常量，assert 语句体整片不可达
@@ -241,11 +248,13 @@ handle_writers = [
 handle_bridges = [
     "java/lang/invoke/MethodHandleImpl$1.unreflectField:(Ljava/lang/reflect/Field;Z)Ljava/lang/invoke/MethodHandle;",
 ]
-# deserializers：可达即全部非 static、非 transient 字段不折叠
+# deserializers：可达即可序列化类（声明类是 serializable_markers 的子类型）的非 static、非 transient 字段不折叠。
+#   反序列化按 ObjectStreamClass 只写可序列化类声明的字段；首个不可序列化超类及其以上的字段由其无参构造器初始化（字节码可见）
 deserializers = [
     "java/io/ObjectInputStream.readObject:()Ljava/lang/Object;",
     "java/io/ObjectInputStream.readUnshared:()Ljava/lang/Object;",
 ]
+serializable_markers = ["java/io/Serializable"]
 
 [facts.reflect]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；
@@ -311,6 +320,14 @@ instantiators = [
 [facts.reflect.constant_tables."sun/util/PreHashedMap"]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
 
+# 值映射：新建即空、writers 按（键, 值）存入、readers 只返回已存入的值或 null 的映射实现类。
+# 封存的静态映射字段（private static，嵌套成员内的写入全是「新建本表 → 构造 → 写入 → putstatic」，读取全是 readers 的接收者）
+# 的读取结果候选 = 全部写入值的字符串候选（按名取类的拆段，engine/sealed.rs）
+[facts.reflect.value_maps]
+classes = ["java/util/HashMap", "java/util/concurrent/ConcurrentHashMap"]
+writers = ["put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"]
+readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
+
 [facts.string_concat]
 # 字符串拼接链：新建构建器（可带初始内容）→ 逐段追加（返回接收者本身）→ 取结果
 builders = [
@@ -330,6 +347,10 @@ appends = [
 results = [
     "java/lang/StringBuilder.toString:()Ljava/lang/String;",
 ]
+# 清空（实参为常量 0）：循环复用的构建器在每次追加前清空时，拆段从清空点起算
+resets = [
+    "java/lang/StringBuilder.setLength:(I)V",
+]
 
 [facts.array_writes]
 # 手写方法对实参数组元素的写入（闭包分析，generator `rava closure` 读取）。分析器按调用点把写入值
@@ -340,7 +361,8 @@ results = [
 #   produced  写入值含手写体自身产出的对象
 #   fields    dst 为对象（非数组）时写入值落在其引用实例字段上（按偏移写入，偏移只能指向这些位置）
 #   last      写入值取自调用点最后一个实参（签名多态方法，实参个数随调用点变化）
-# 未列出、且手写体取得数组视图（JArray / __view_into / array_store_*）的方法按保守规则：
+# 未列出、且手写体取得引用元素数组视图（JArray<引用 / 泛型 / 未写明>、__view_into、try_cast_array::<引用>、
+# array_store_object，宏内按标识符计；JArray<i8> 等基本元素视图不计）的方法按保守规则：
 # 每个非接收者引用形参都可被写入，来源为其它形参、全部实参数组的元素与手写体产出。
 # 准入：JVM 规范 / JDK 文档给出的写入语义，与手写实现一致（注明实现位置）。
 # System.arraycopy：dest[destPos..] ← src[srcPos..]（system_impl.rs）
@@ -388,6 +410,16 @@ results = [
 "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/StackTraceElement.initStackTraceElements:([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V" = {}
+
+[facts.class_init]
+# 类初始化事实（闭包分析，generator `rava closure` 读取；closure.json `class_init`）。所列方法由 VM 初始化以实参传入的类
+# （`ldc` 类字面量本身不触发初始化，JVMS §5.5）：分析器按调用点取 Class 实参值集里的类镜像，所指类进入初始化层（`<clinit>`
+# 入链）并记入输出；值为 Class 形参序号（按描述符，0 起，不含接收者）。
+# 准入：JDK 文档给出的初始化语义（Unsafe.ensureClassInitialized：「Ensures the given class has been initialized」）。
+# 生成器（C3）按 `class_init.targets` 登记初始化钩子，手写 ensureClassInitialized 按类名分派到钩子。
+[facts.class_init.initializers]
+"jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V" = 0
+"jdk/internal/misc/Unsafe.ensureClassInitialized0:(Ljava/lang/Class;)V" = 0
 
 [facts.array_returns]
 # 手写方法返回新分配的引用数组，VM 只写入所列类型的元素（闭包分析，generator `rava closure` 读取）。
