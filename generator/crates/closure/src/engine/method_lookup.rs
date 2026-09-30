@@ -92,6 +92,32 @@ impl<'a> Engine<'a> {
         out
     }
 
+    /// 按名查方法调用点的 Class 接收者（非常量，如 `this` / 形参 / 字段）值集中类镜像所指的类
+    /// （值集增长时本站点重跑）。所指未知的值（open、非镜像的 Class 值）记为反射缺口：
+    /// 该查找点在运行时可能按名取到任意类的方法，分析器不做模糊扩展
+    pub(super) fn recv_mirrors(&mut self, m: usize, recv: &V) -> Vec<String> {
+        if !matches!(recv, V::Ref { .. }) {
+            return vec![];
+        }
+        let class = self.id(CLASS);
+        let fs = self.feeds(m, recv, class);
+        let s = self.value_set(&fs);
+        let mut out = vec![];
+        for x in s.classes.iter() {
+            match self.mirrors.get(&x) {
+                Some(&c) => out.push(self.names[c as usize].to_string()),
+                None => {
+                    let what = self.names[x as usize].to_string();
+                    self.reflect_gaps.insert(format!("{} <- recv({what})", self.methods[m].key));
+                }
+            }
+        }
+        for o in &s.open {
+            self.reflect_gaps.insert(format!("{} <- recv(open({}))", self.methods[m].key, self.names[o as usize]));
+        }
+        out
+    }
+
     /// 按名查方法调用点（方法 m）的名字实参 v 拆成的拼接段；None = 形状不符或无任何约束
     pub(super) fn method_name_parts(&mut self, m: usize, v: &V) -> Option<Vec<Part>> {
         // 拆段读本方法其它偏移的事件：登记为跨偏移读者（同 `class_lookup`）

@@ -66,8 +66,19 @@ impl<'a> Engine<'a> {
                     _ => {}
                 }
             }
+            // 常量名的查找目标：Class 常量实参 + Class 接收者值集里类镜像所指的类
+            // （如 `this.getMethod("values")`：接收者是流到该方法的类镜像）。拼段名只按常量类 / Class 形参定目标：
+            // 接收者镜像与推不出的段相乘会把镜像类的全部方法拉进反射面
+            let mut lit_targets = classes.clone();
+            if class_recv && !names.is_empty() {
+                for c in args.first().map(|r| self.recv_mirrors(m, r)).unwrap_or_default() {
+                    if !lit_targets.contains(&c) {
+                        lit_targets.push(c);
+                    }
+                }
+            }
             for name in &names {
-                for c in &classes {
+                for c in &lit_targets {
                     self.reflect_name(c, name);
                 }
             }
