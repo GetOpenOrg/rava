@@ -5,7 +5,6 @@
 //! 按方法划分，照常纳入。包名斜线或点形态均可；`recursive` 含子包。
 
 use classfile::{acc, MemberRef};
-use closure::manifest::Manifest;
 use resolve::{ClassPath, Origin};
 
 /// 类所在包是否在入口包集内
@@ -15,7 +14,7 @@ fn in_packages(cls: &str, pkgs: &[String], recursive: bool) -> bool {
 }
 
 /// 入口方法（类名序、类内声明序）与入口类数
-pub fn api_roots(cp: &ClassPath, man: &Manifest, packages: &[String], recursive: bool) -> (Vec<MemberRef>, usize) {
+pub fn api_roots(cp: &ClassPath, packages: &[String], recursive: bool) -> (Vec<MemberRef>, usize) {
     let pkgs: Vec<String> = packages.iter().map(|p| p.replace('.', "/").trim_end_matches('/').to_string()).collect();
     let (mut roots, mut n_cls) = (Vec::new(), 0);
     for name in cp.names_of(Origin::Jdk) {
@@ -37,6 +36,7 @@ pub fn api_roots(cp: &ClassPath, man: &Manifest, packages: &[String], recursive:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use closure::manifest::Manifest;
 
     #[test]
     fn package_membership() {
@@ -57,7 +57,7 @@ mod tests {
         let mut cp = ClassPath::new();
         cp.add_jdk(&home).unwrap();
         let man = Manifest::load(&rt).unwrap();
-        let (roots, n_cls) = api_roots(&cp, &man, &["java.util.function".to_string()], false);
+        let (roots, n_cls) = api_roots(&cp, &["java.util.function".to_string()], false);
         assert!(n_cls > 30 && !roots.is_empty());
         for r in &roots {
             let cf = cp.get(&r.owner).unwrap();
@@ -65,11 +65,11 @@ mod tests {
             let m = cf.methods.iter().find(|m| m.name == r.name && m.desc == r.desc).unwrap();
             assert!(m.access & (acc::PUBLIC | acc::PROTECTED) != 0, "{r:?}");
         }
-        assert!(api_roots(&cp, &man, &["jdk/internal/misc".to_string()], true).1 > 0, "内部包照常纳入");
-        let (lang, _) = api_roots(&cp, &man, &["java/lang".to_string()], false);
+        assert!(api_roots(&cp, &["jdk/internal/misc".to_string()], true).1 > 0, "内部包照常纳入");
+        let (lang, _) = api_roots(&cp, &["java/lang".to_string()], false);
         let vm: Vec<&MemberRef> = lang.iter().filter(|r| man.is_vm_boundary(&r.owner)).collect();
         assert!(!vm.is_empty(), "VM 耦合边界类照常纳入");
-        let (rec, _) = api_roots(&cp, &man, &["java/util".to_string()], true);
+        let (rec, _) = api_roots(&cp, &["java/util".to_string()], true);
         assert!(rec.iter().any(|r| r.owner.starts_with("java/util/function/")));
     }
 }

@@ -163,7 +163,7 @@ fn analyze(
     let seeds: Vec<&String> = seed_classes.iter().collect();
     let mut seed_members = seed_roots(cp, &roots, &seeds)?;
     if !o.api_packages.is_empty() {
-        let (api, n_cls) = api_roots(cp, &man, &o.api_packages, o.api_recursive);
+        let (api, n_cls) = api_roots(cp, &o.api_packages, o.api_recursive);
         println!(
             "[api] {}（{}子包）→ {n_cls} 个 public 类，{} 个入口方法",
             o.api_packages.join(", "),
