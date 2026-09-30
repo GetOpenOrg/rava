@@ -4,6 +4,7 @@
 //!   调用方把方法退化为 `panic!("stub: ...")` 存根；
 //! - [`MethodError::Audit`]：跳转账本 / 结构树自检失败（Python `CfgAuditError`），必须中止；
 //! - [`MethodError::Instr`]：指令翻译失败（含未移植分支）；
+//! - [`MethodError::Runtime`]：生成环境不完整（Python `RuntimeError`）；
 //! - [`MethodError::Unported`]：本 crate 尚未移植的分支（显式报错，登记于 `GOLDEN_DIFF.md`）。
 
 use std::fmt;
@@ -18,6 +19,8 @@ pub enum MethodError {
     Audit(String),
     Instr(InstrError),
     Unported(String),
+    /// 生成环境不完整（Python `RuntimeError`，如 catch-any 绑定类型不在注册表）
+    Runtime(String),
 }
 
 impl fmt::Display for MethodError {
@@ -27,6 +30,7 @@ impl fmt::Display for MethodError {
             MethodError::Audit(s) => write!(f, "CfgAuditError: {s}"),
             MethodError::Instr(e) => write!(f, "{e}"),
             MethodError::Unported(s) => write!(f, "方法体生成未移植的分支：{s}"),
+            MethodError::Runtime(s) => write!(f, "RuntimeError: {s}"),
         }
     }
 }

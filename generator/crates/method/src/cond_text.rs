@@ -180,7 +180,9 @@ mod tests {
             other => format!("{other:?}"),
         };
         assert_eq!(neg("!x"), "x");
-        assert_eq!(neg("!(a && b)"), "a && b");
+        // 与 Python 同口径：`(a && b)` 顶层无运算符，按简单操作数剥 `!`
+        assert_eq!(neg("!(a && b)"), "(a && b)");
+        assert_eq!(neg("!(a) && b"), "!(!(a) && b)");
         assert_eq!(neg("a.b()"), "!a.b()");
         assert_eq!(neg("a == b"), "!(a == b)");
         assert!(matches!(atom(" true ", None), Cond::Const(true)));
@@ -190,7 +192,8 @@ mod tests {
     fn cmp_text() {
         assert_eq!(cmp_op(opc::IFEQ, "x", "").unwrap(), "(x==0)");
         assert_eq!(cmp_op(opc::IF_ICMPLT, "a < b", "c").unwrap(), "(a < b) < c");
-        assert_eq!(cmp_op(opc::IF_ICMPEQ, "f() -> x", "c").unwrap(), "f() -> x == c");
+        assert_eq!(cmp_op(opc::IF_ICMPEQ, "f() -> x", "c").unwrap(), "(f() -> x) == c");
+        assert_eq!(cmp_op(opc::IF_ICMPEQ, "|x| => y", "c").unwrap(), "(|x| => y) == c");
         assert_eq!(neg_cmp_op(op::IFNULL, "v", "").unwrap(), "!_is_jnull(&v)");
         let c = Cond::and(atom("a", None), Cond::or(atom("b", None), atom("c", None)));
         assert_eq!(render_cond(&c), "a && (b || c)");
