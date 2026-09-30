@@ -3,8 +3,27 @@
 use super::*;
 
 /// 整数键为主的内部表用的快速哈希（FxHash 乘法混合；遍历顺序不参与任何输出）
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct FxHasher(u64);
+
+static HASH_SEED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// 设置内部表哈希初值（`rava closure --hash-seed N`；缺省 0）：换种子即换各内部表的遍历顺序，
+/// 用于检验分析结果与处理顺序无关（双种子集合对照）。须在首个内部表建立前调用，之后调用无效
+pub fn set_hash_seed(seed: u64) {
+    let _ = HASH_SEED.set(seed);
+}
+
+fn hash_seed() -> u64 {
+    *HASH_SEED.get_or_init(|| 0)
+}
+
+impl Default for FxHasher {
+    #[inline]
+    fn default() -> Self {
+        FxHasher(hash_seed())
+    }
+}
 
 impl Hasher for FxHasher {
     fn write(&mut self, bytes: &[u8]) {
