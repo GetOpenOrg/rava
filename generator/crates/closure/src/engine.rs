@@ -451,6 +451,12 @@ pub struct Engine<'a> {
     dispatched: HashMap<usize, HashSet<(u32, u32, u32)>>,
     /// 已接入枢纽的调用点：方法 → (偏移, 枢纽)（同 `dispatched`，分析重算时清空）
     hub_linked: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 字节码调用点经枢纽已分派的 lambda / 手写实现对象接收者：方法 → (偏移, 接收者)（同 `hub_linked` 清空）。
+    /// 调用点换接子枢纽时继承的接收者、同一接收者经多个枢纽到达时，同一分析结果下重派发是恒等重放
+    hub_lsent: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 字节码调用点经枢纽已接的按调用点建模目标：方法 → (偏移, 目标) → 已送达的接收者（同上）。
+    /// `edge` 对接收者值集逐元素单调（首接生效的手写站点登记已在首次完成），接收者全已送达即恒等重放
+    hub_ssent: HashMap<usize, HashMap<(u32, usize), HashSet<u32>>>,
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
     /// 站点因接收者集合增长重跑时只接新增对象
     recv_done: HashMap<usize, HashSet<(u32, u32)>>,

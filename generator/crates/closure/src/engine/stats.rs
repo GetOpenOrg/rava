@@ -250,6 +250,8 @@ impl<'a> Engine<'a> {
             "scc": self.graph.scc_stats,
             // 新接边收窄记忆：命中 / 未命中（flow.rs）
             "fmemo": self.graph.fmemo_stats,
+            // 枢纽重放去重记录的规模：(调用点, lambda) 条数 / 按调用点建模目标的接收者条数（hub.rs）
+            "hub_sent": [self.hub_lsent.values().map(|d| d.len()).sum::<usize>(), self.hub_ssent.values().flat_map(|d| d.values()).map(|d| d.len()).sum::<usize>()],
             "edges_by_kind": self.edge_kinds(),
             "top_out_degree": self.top_degree(top, false),
             "top_in_degree": self.top_degree(top, true),
