@@ -34,7 +34,7 @@
 | 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 约 130 s user（P2 后） | ≤ 10 s（HelloWorld ≤ 0.5 s） |
 | 闭包分析效率 | e2e 任一用例的峰值 RSS | DeepCopy 2.3–2.8 GB | ≤ 1 GB |
 | 闭包分析效率 | 跨测试缓存命中时单测试墙钟 | 无缓存 | ≤ 2 s |
-| 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | P0 5.9 s / 342 MB → P5 1.99 s / 315 MB（DeepCopy 热写出；冷写出 2.13 s） | ≤ 2 s / ≤ 500 MB |
+| 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | P0 5.9 s / 342 MB → P5 1.99 s / 315 MB → 并行发射 1.02 s / 396 MB（DeepCopy 热写出；冷写出 1.08 s） | ≤ 2 s / ≤ 500 MB |
 | 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 0（P5） | 0 |
 | 下游编译 | 单个 rustc 峰值 RSS | 约 14 GB（N8 实测，单 crate） | ≤ 2 GB（路径见 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md)） |
 | 下游编译 | HelloWorld 编译墙钟 | 23.9 s（主线）/ 2 m 40 s（C1d） | ≤ 20 s；仅用户类变化时 JDK 部分零重编 |
@@ -73,7 +73,7 @@
   - 已做：引用字段协议合并、clinit 去泛型、存根改调共享冷函数。HelloWorld java_runtime 的 mono size_est −24.2%，rustc −10%，峰值 RSS −14%。
   - 已做：`panic = "abort"`，panic 钩子保持退出码 101。mono −25.6%，二进制约 −25%，HelloWorld user 时间约 −10%。
   - `overflow-checks = false` 实测无收益，不做；手写层的 Java 整数运算已全部显式化。
-  - 按类并行发射：待 closure-perf2 合入主线后实施。
+  - 按类并行发射：✅ 已做（2a800b4b），DeepCopy 冷写出 2.10 → 1.08 s，峰值 RSS 314 → 396 MB，输出与串行逐字节一致。
 - 验收：生成器自身优化（不改输出的）要求 27 例生成树与改前逐字节一致；降低下游编译成本的生成形态改造（Q1 已允许）要求 e2e 通过，生成树差异只含预期改动。
 
 ## 四、待用户决策

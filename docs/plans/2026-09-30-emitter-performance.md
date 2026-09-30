@@ -8,8 +8,8 @@
 
 | 指标 | 终态 | 现状（P5 后） |
 |---|---:|---|
-| 发射阶段墙钟（`rava emit`，任一 e2e 用例，热写出） | ≤ 2 s | ✅ 最重的 DeepCopy 1.99 s（冷写出 2.13 s，见 §五） |
-| 发射阶段峰值 RSS（任一用例） | ≤ 500 MB | ✅ 最大 315 MB（DeepCopy） |
+| 发射阶段墙钟（`rava emit`，任一 e2e 用例，热写出） | ≤ 2 s | ✅ 最重的 DeepCopy：按类并行后热写出 1.02 s、冷写出 1.08 s（串行时 1.99 s / 2.13 s，见 §5.1） |
+| 发射阶段峰值 RSS（任一用例） | ≤ 500 MB | ✅ 最大 396 MB（DeepCopy，并行；`--emit-jobs 1` 时 327 MB） |
 | 复用 scratch 时内容未变文件的重写数 | 0 | ✅ 0 / 1727（Digester） |
 | 发射的输出确定性 | 27 例生成树逐字节一致 | ✅ 每步验收 |
 | 下游 cargo 编译成本 | 见 §四（由 runtime / 宏样板主导，终态需跨线协调） | D1 已做：HelloWorld user 32.4 → 26.9 s |
@@ -151,6 +151,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 | X3 | `gil::clinit_enter::<T>` 去泛型 | ✅ 已做（§4.5 第 2 步） |
 | X4 | 存根瘦身 | ✅ 改为调用共享冷函数（§4.5 第 3 步）。存根仍然生成、仍 panic、消息不变；参数传递方式不改 |
 | X5 | `codegen-units` 调整 | 未做：峰值内存与收益随用例变化，需全量实测后再定 |
+| N1 | 按类并行发射 | ✅ 已做（提交 2a800b4b），输出与串行逐字节一致，见 §5.1 |
 
 ### 4.5 分支 `emitter-perf2`：下游编译成本的逐步实施
 
@@ -280,14 +281,50 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 
 | # | 事项 | 说明 |
 |---|---|---|
-| N1 | 按类并行发射（输出确定） | 被阻塞：`resolve`（闭包 crate 依赖，本线禁改）、ty `Registry`、`EmitCtx` 使用 `Rc` / `RefCell`；`ProjectState.seen_simples` 跨类累积，与发射顺序相关。终态做法：共享只读上下文改 `Arc` + 线程安全只读缓存（`OnceLock` / 分片），`seen_simples` 改为先并行生成、后按原序做一次确定性的导入冲突裁决。需要与闭包线协调 `resolve` 的 `Rc → Arc` |
+| N1 | 按类并行发射（输出确定） | ✅ 已做，见 §5.1 |
 | N2 | 闭包结果进程内传递 | `rava build` 现在由闭包写出 closure.json，发射再读入并二次解析手写层（`syn` 约 3%）、按类二次解析补充属性（`extras` 约 2.7%）。终态由闭包直接交出内存结构，手写层解析结果复用。需要闭包 crate 暴露接口（闭包线） |
-| N3 | 冷写出 DeepCopy 2.13 s 仍略高于 2 s | 剩余热点是平的。可以做的小项：`Acc::precise` 按类名缓存包路径 / 短名（约 2%）、`collect_referenced` 免重复插入、phase2 `fill_slot` 分配。N1 落地后（2 线程）会有充分余量 |
+| N3 | 冷写出 DeepCopy ≤ 2 s | ✅ N1 落地后达成（1.08 s）。剩余串行段见 §5.1 N6 |
 | N4 | 剩余 mono 热点（步 1–3 后） | `drop`（逐 T 的 Weak / Arc 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
 | N5 | 按类并行发射（N1）的实施时机 | 协调决定：等 closure-perf2 合入主线后，本线先合主线，再把 `resolve` 的 `Rc` 改为 `Arc`，改完闭包 4 例集合必须一致 |
+| N6 | 并行后剩余串行段 | DeepCopy 冷写出 1.08 s 中：输入重建约 100 ms、跨类导入裁决约 120 ms、phase2 约 240 ms 仍串行。跨类导入是「先引入者得短名」语义，必须按发射序；终态可改为并行收集各类候选短名、再按序一次裁决（纯计算约数十 ms）。phase2 按 crate 分片可并行。输入重建并入 N2 |
+
+
+### 5.1 N1 按类并行发射（emitter-perf2，提交 2a800b4b）
+
+**设计**
+- 共享只读上下文线程安全化：`resolve` / `closure` / `input` / `ty` 的 `Rc<ClassFile>` → `Arc`。`ClassPath::get` 读锁快路径；未命中时持写锁复查后加载，保证每类只解析一次、失败只记一次。ty `Registry` 的各缓存改为 `Cache<V>`（`RwLock<BTreeMap<String, Arc<V>>>`，首写者胜）。instr 的 `impl_fn_cache` / `mangle_cache`、emit 的 `extras` / `use_index` 同样处理。这些都是纯记忆化，读到谁写入的值结果都相同。
+- 逐类三段：
+  1. 并行 `class_prep`：引用收集、手写覆盖、用户同包导入；
+  2. 串行 `class_cross_imports`：`seen_simples` 按「先引入者得短名」裁决，与发射序相关，所以保持原序；
+  3. 并行 `class_text`：每类使用独立的 `ProjectState` 增量，结束后按发射序 `ProjectState::merge`。
+- 方法体审计账本改为按类事件日志 `BodyLog`（`BodyEvent::Method` / `StubFallback`），合并后由 `BodyAudit::from_log` 按序重放。去重、计数语义与串行完全相同。`MethodBodyEmitter` 由此变为无状态（`&self` + `Sync`）。
+- `par_map`：原子游标领取下标，结果按下标归位（保序）。工作线程栈 16 MiB（方法体生成有深递归）；子线程 panic 原样上抛。
+- 并行度 `--emit-jobs N`（缺省 0 = 可用核数，1 = 串行）。
+
+**验证**
+- 闭包 4 例（HelloWorld / Digester / DeepCopy / CollectorsDemo，基线 4c461708）：`closure_bench.sh --diff` 全部 SAME。指令数变化 ≤ 0.3%（DeepCopy 412.26 → 412.65 G）。
+- 27 例生成树：`compare_trees.sh` 0 差异，raw-audit 一致。`closure.json` 除 `elapsed_ms` / `perf` 外一致。
+- 并行（缺省）、串行（`--emit-jobs 1`）与基线三者的发射输出逐字节一致。审计行除 `[perf]` 外一致。
+
+**实测**（10 核共享机，`emit_bench.sh`，冷写出；ms 为 `--perf` 分阶段）
+
+| 用例 | 指标 | 基线 | 并行（缺省） | 串行 `--emit-jobs 1` |
+|---|---|---:|---:|---:|
+| DeepCopy | 冷写出墙钟 | 2.10 s | **1.08 s** | 2.03 s |
+| DeepCopy | 热写出墙钟 | 2.01 s | **1.02 s** | — |
+| DeepCopy | 类阶段 | 1392 ms | 42 + 122 + 238 = 402 ms | 107 + 123 + 1142 ms |
+| DeepCopy | 指令数 | 26.7 G | 27.2 G | — |
+| DeepCopy | 峰值 RSS | 314 MB | 396 MB | 327 MB |
+| Digester | 冷写出墙钟 | 1.84 s | **0.99 s** | 1.82 s |
+| Digester | 热写出墙钟 | 1.74 s | **0.86 s** | — |
+| Digester | 类阶段 | 1252 ms | 33 + 101 + 236 ms | — |
+| Digester | 峰值 RSS | 287 MB | 364 MB | — |
+
+类阶段三项依次为 prep / imports / text。RSS 增加约 80 MB，来自各工作线程并存的类体缓冲与线程栈，仍低于 500 MB 目标。总指令数增加约 2%，为锁与合并开销。
 
 ## 六、需要主会话 e2e 抽查的用例
 
+- **N1**（按类并行发射）：27 例生成树与串行逐字节一致，生成形态没有变化，抽查可选。建议正常跑一次 `DeepCopy`（最多类，走并行）和 `TestCompletableFuture`，确认生成器在多线程下无 panic、结果与此前一致。
 - **emitter-perf2 步 1**（引用字段协议）：`TestAtomics`、`TestCompletableFuture`、`TestChmTransfer`。这三例覆盖 Unsafe / VarHandle / AtomicReference 的引用字段 get / set / CAS / getAndUpdate。
 - **步 2**（clinit / 静态字段）：`TestSynchronized`、`TestCompletableFuture`（多线程下的类初始化），`TestSwitchString`、`TestZonedDateTime`（静态表与枚举初始化）。
 - **步 3**（存根 / checkcast）：`TestCasting`（ClassCastException 消息）。另任选一个当前命中存根而失败的用例，确认 stderr 仍含 `stub: 类.方法:描述符`，run.log 首行提取正常。
