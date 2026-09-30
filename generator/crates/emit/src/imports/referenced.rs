@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use classfile::{Const, ExceptionEntry, Insn, Method, Operand};
 use input::manifest::IndyKind;
+use instr::owner::{resolve_static_field_owner, resolve_static_method_owner};
 use ty::ClassInfo;
 
 use super::refs::{add_desc_refs, add_narrow_refs, desc_tokens, strip_generic, superclass_arg_refs};
@@ -65,12 +66,27 @@ pub fn indy_impl_ref<'c>(ctx: &EmitCtx<'_>, owner: &'c ClassInfo, bsm: u16) -> O
     }
 }
 
+const GETSTATIC: u8 = 0xb2;
+const PUTSTATIC: u8 = 0xb3;
+const INVOKESTATIC: u8 = 0xb8;
+
 /// 单条指令贡献的引用
 fn scan_insn(ctx: &EmitCtx<'_>, owner: &ClassInfo, insn: &Insn, out: &mut BTreeSet<String>) {
     match &insn.operand {
         Operand::Field(r) | Operand::Method(r, _) => {
             out.insert(r.owner.clone());
             add_desc_refs(&r.desc, out);
+            // 常量池类可以是子类：static 成员的访问点落在实际声明类上（与 instr 的
+            // getstatic / putstatic / invokestatic 解析同源），声明类须在作用域内
+            let reg = ctx.ty.reg;
+            let declared = match insn.opcode {
+                GETSTATIC | PUTSTATIC => resolve_static_field_owner(reg, &r.owner, &r.name),
+                INVOKESTATIC => resolve_static_method_owner(reg, &r.owner, &r.name, &r.desc),
+                _ => None,
+            };
+            if let Some(d) = declared.filter(|d| *d != r.owner) {
+                out.insert(d);
+            }
         }
         Operand::InvokeDynamic { bsm, .. } => {
             let Some(r) = indy_impl_ref(ctx, owner, *bsm) else { return };
