@@ -156,6 +156,7 @@ impl<'a> Engine<'a> {
     /// 字段的写入来源超出字节码：不折叠，读者失效
     pub(super) fn open_field(&mut self, key: MemberRef) {
         if self.ctx.fopen.borrow_mut().insert(key.clone()) {
+            self.ctx.cevals.borrow_mut().clear();
             let deps = self.ctx.fdeps.borrow().get(&key).cloned();
             self.invalidate_all(deps, Why::FieldOpen);
             self.open_static(&key);
@@ -164,6 +165,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn open_field_name(&mut self, name: &str) {
         if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
+            self.ctx.cevals.borrow_mut().clear();
             let deps: BTreeSet<usize> =
                 self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()).collect();
             self.invalidate_all(Some(deps), Why::FieldOpenName);
@@ -177,6 +179,7 @@ impl<'a> Engine<'a> {
 
     /// 全局开关（反射枚举 / 反序列化）打开：所有读过字段的方法失效
     pub(super) fn open_fields_all(&mut self) {
+        self.ctx.cevals.borrow_mut().clear();
         let deps: BTreeSet<usize> = self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()).collect();
         self.invalidate_all(Some(deps), Why::FieldsAll);
     }

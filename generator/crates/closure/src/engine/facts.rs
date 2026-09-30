@@ -93,6 +93,11 @@ pub(super) struct Ctx<'a> {
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
     pub(super) pdeps: RefCell<BTreeSet<usize>>,
+    /// 常量实参求值记忆：`目标|常量实参` → (结果, 读过的字段)
+    pub(super) cevals: RefCell<HashMap<String, super::consteval::CEval>>,
+    /// 进行中的常量实参求值的字段读集（栈）
+    pub(super) ceval_reads: RefCell<Vec<Vec<MemberRef>>>,
+    pub(super) ceval_depth: Cell<u32>,
     /// 性能观测（`summary.perf`）
     pub(super) stats: RefCell<super::stats::Stats>,
 }
@@ -238,8 +243,11 @@ impl Ctx<'_> {
     /// 字段读的常量值；方法 m 登记为该字段的读者
     pub(super) fn field_value(&self, m: Option<usize>, f: &MemberRef) -> Option<V> {
         let fi = self.field_info(f)?;
-        if let Some(m) = m {
-            self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
+        match m {
+            Some(m) => {
+                self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
+            }
+            None => self.note_aux_read(&fi.key),
         }
         if self.field_open(&fi) {
             return None;
@@ -338,19 +346,21 @@ impl Oracle for Facts<'_, '_> {
         if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
             return r;
         }
-        let Some(me) = self.m else { return Ret::Unknown };
-        // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）
+        // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）；
+        // 返回常量在各调用点上汇合为 Top 时按本调用点的常量实参求值
         let Some(t) = &c.target else { return Ret::Unknown };
+        let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
+        let Some(me) = self.m else { return eval() };
         let r = self.ctx.rvals.borrow().get(t).cloned();
         self.ctx.rdeps.borrow_mut().entry(t.clone()).or_default().insert(me);
         match r {
             Some(PV::Const(v)) => Ret::Value(v),
-            Some(PV::Top) => Ret::Unknown,
+            Some(PV::Top) => eval(),
             None if self.ctx.optimistic.get() => {
                 self.ctx.never.borrow_mut().insert(me);
                 Ret::Never
             }
-            None => Ret::Unknown,
+            None => eval(),
         }
     }
     fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V> {

@@ -129,6 +129,13 @@ value_equals = [
     "java/lang/String.equals:(Ljava/lang/Object;)Z",
 ]
 
+# 字符串纯函数：接收者与实参都是字符串常量（或实参 null）时结果即常量（JDK 规范语义）。
+# 值：equals_ignore_case（实参 null 为 false）/ length（UTF-16 长度）/ is_empty
+[facts.string_ops]
+"java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z" = "equals_ignore_case"
+"java/lang/String.length:()I" = "length"
+"java/lang/String.isEmpty:()Z" = "is_empty"
+
 [facts.returns]
 # 断言恒关（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false；javac 的
 # `$assertionsDisabled = !desiredAssertionStatus()` 由此成为常量，assert 语句体整片不可达

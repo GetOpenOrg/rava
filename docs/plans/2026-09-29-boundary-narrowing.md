@@ -431,6 +431,35 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 
 清单与验收见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md) §三.1。执行者按项把前后类 / 方法数与漏覆盖检查结果记录在本节。
 
+基线（合入 c6ae80bb 后，类 / 方法 / 上下文，动态对照漏 / 多）：
+
+| 测试 | 基线 | 常量实参求值后 |
+|---|---|---|
+| HelloWorld | 251 / 620 / 882，漏 0 | 251 / 620 / 882，漏 0 |
+| Digester | 1440 / 9737 / 28634，漏 1 | **1297 / 7510 / 21078**，漏 1 |
+| DeepCopy | 1649 / 10969 / 40942，漏 1 | 1649 / 10959 / 40294，漏 1 |
+| FileIOTest | 293 / 795 / 1062，漏 0 | 293 / 795 / 1062，漏 0 |
+| CollectorsDemo | 1166 / 8010 / 21319，漏 1 | **1034 / 5951 / 14375**，漏 1 |
+| TestMethodHandleCombinators | 540 / 2968 / 5954，漏 0 | 540 / 2968 / 5954，漏 0 |
+
+漏 1 均为 `LambdaMetafactory`（indy 引导，手写准入第 2 类，预先存在），漏集不变。
+
+**项 1 VarHandle 可达性（常量实参求值）**。`--why` 链：`MessageDigest.getInstance → CryptoAlgorithmConstraints.<init> → ReferencePipeline.anyMatch
+→ AbstractPipeline.evaluate`（未折 `isParallel()`，见下 (A)）`→ MatchTask → AtomicReference.<clinit> findVarHandle → VarHandles.makeFieldHandle@56
+→ maybeAdapt → filterValue → MethodHandleImpl.getConstantHandle → … → Invokers` 按名暴露 NF 方法 → `checkVarHandleGenericType → VarForm.resolveMemberName`（≈1045 方法）。
+`maybeAdapt` 的守卫 `MethodHandleStatics.VAR_HANDLE_IDENTITY_ADAPT = Boolean.parseBoolean(getProperty(k, "false"))`：属性读取已折为 `"false"`，
+但 `parseBoolean` 的返回常量格在全部调用点上汇合为 Top，`<clinit>` 常量求值（辅助分析）又不查被调方法。
+修法（分析层通用规则，无类名特判）：
+- `engine/consteval.rs` 常量实参求值：唯一字节码目标、实参含常量（int / long / 字符串 / null）、返回常量格为 Top 或缺席（及辅助分析中）时，
+  以常量实参绑定形参对被调方法做一次辅助分析，全部返回路径汇成同一常量即为该调用的结果。深度 ≤ 3、被调方法 ≤ 256 条指令、递归保护；
+  按 (目标, 常量实参) 记忆；求值中读过的字段随结果登记给外层方法（字段转不折叠 / 系统属性转不稳定时记忆清空、外层失效）。
+- `[facts.string_ops]`（清单）：`String.equalsIgnoreCase` / `length` / `isEmpty` 在常量实参上按 JDK 规范语义求值（非 ASCII 大小写比较不求值）。
+  `parseBoolean("false") = "true".equalsIgnoreCase("false") = false` 由此经字节码求出。
+结果：Digester 中 `filterValue` / `checkVarHandleGenericType` / `resolveMemberName` 全部移出闭包；CollectorsDemo 同链受益（−132 类 / −2059 方法）。
+辅助分析次数 Digester 5966 → 38027，总耗时持平（6.4 s → 5.4–6.4 s）。
+剩余同类缺口：(A) `AbstractPipeline.parallel` 由构造器从常量实参写入，`isParallel()` 未折（字段值域，并入项 4）；
+(C) `Invokers.createFunction(byte)` 的 tableswitch 未按常量实参剪枝（形参常量格合流为 Top；需按常量实参克隆上下文，见后续）。
+
 ## 七、验收
 
 - §一 终态表各项达标。

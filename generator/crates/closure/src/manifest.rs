@@ -68,6 +68,16 @@ pub enum Fact {
     Int(i32),
 }
 
+/// 字符串纯函数（[facts.string_ops]）：接收者与实参都是字符串常量时结果即常量
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrOp {
+    /// 忽略大小写相等（实参 null 为 false）
+    EqualsIgnoreCase,
+    /// UTF-16 长度
+    Length,
+    IsEmpty,
+}
+
 pub struct Manifest {
     pub runtime_dir: PathBuf,
     boundary_pkgs: Vec<String>,
@@ -98,6 +108,8 @@ pub struct Manifest {
     boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
     value_equals: HashSet<String>,
+    /// 字符串纯函数
+    string_ops: HashMap<String, StrOp>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
     /// 按名取类与字符串拼接
@@ -159,6 +171,19 @@ impl Manifest {
                     _ => return Err(format!("vm_intrinsics.toml [facts] returns：{k} 的值须为 null / 整数 / 布尔")),
                 };
                 returns.insert(k.clone(), f);
+            }
+        }
+
+        let mut string_ops = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("string_ops")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let op = match v.as_str() {
+                    Some("equals_ignore_case") => StrOp::EqualsIgnoreCase,
+                    Some("length") => StrOp::Length,
+                    Some("is_empty") => StrOp::IsEmpty,
+                    _ => return Err(format!("vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty")),
+                };
+                string_ops.insert(k.clone(), op);
             }
         }
 
@@ -285,6 +310,7 @@ impl Manifest {
             indy,
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
+            string_ops,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
         })
@@ -419,6 +445,10 @@ impl Manifest {
         self.value_equals.contains(member)
     }
 
+    pub fn string_op(&self, member: &str) -> Option<StrOp> {
+        self.string_ops.get(member).copied()
+    }
+
     pub fn is_null_to_false(&self, member: &str) -> bool {
         self.null_to_false.contains(member)
     }
@@ -482,5 +512,14 @@ mod tests {
         assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));
         assert_eq!(m.unboxed_prim("a/BoxI"), Some(b'I'));
         assert_eq!(m.boxed_class(b'J'), None);
+    }
+
+    #[test]
+    fn string_ops_parse() {
+        let m = with_vm("[facts.string_ops]\n\"a/S.eic:(La/S;)Z\" = \"equals_ignore_case\"\n\"a/S.len:()I\" = \"length\"\n").unwrap();
+        assert_eq!(m.string_op("a/S.eic:(La/S;)Z"), Some(StrOp::EqualsIgnoreCase));
+        assert_eq!(m.string_op("a/S.len:()I"), Some(StrOp::Length));
+        assert_eq!(m.string_op("a/S.x:()I"), None);
+        assert!(with_vm("[facts.string_ops]\n\"a/S.f:()I\" = \"upper\"\n").is_err());
     }
 }

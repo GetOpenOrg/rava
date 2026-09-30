@@ -61,6 +61,18 @@ fn may_be_sysprops(v: &V) -> bool {
     v.obj().is_some_and(|o| o.may_be_sysprops())
 }
 
+/// 字符串纯函数在常量实参上的值（非 ASCII 的大小写比较不求值：UTF-16 逐字符大小写映射不在此复刻）
+pub(super) fn string_op(op: crate::manifest::StrOp, args: &[V]) -> Option<V> {
+    use crate::manifest::StrOp;
+    match (op, args) {
+        (StrOp::EqualsIgnoreCase, [V::Str(_), V::Null]) => Some(V::Int(0)),
+        (StrOp::EqualsIgnoreCase, [V::Str(a), V::Str(b)]) if a.is_ascii() && b.is_ascii() => Some(V::Int(a.eq_ignore_ascii_case(b) as i32)),
+        (StrOp::Length, [V::Str(a)]) => Some(V::Int(a.encode_utf16().count() as i32)),
+        (StrOp::IsEmpty, [V::Str(a)]) => Some(V::Int(a.is_empty() as i32)),
+        _ => None,
+    }
+}
+
 /// 值恰为本方法某形参（无其它来源）
 fn param_of(v: &V) -> Option<usize> {
     match &*v.srcs() {
@@ -79,6 +91,10 @@ impl Ctx<'_> {
                 [V::Str(_), V::Null] => Some(Ret::Value(V::Int(0))),
                 _ => None,
             };
+        }
+        let op = self.man.string_op(&k).or_else(|| c.target.as_ref().and_then(|t| self.man.string_op(&t.to_string())));
+        if let Some(op) = op {
+            return string_op(op, args).map(Ret::Value);
         }
         if self.man.sysprops.is_empty() {
             return None;
@@ -339,6 +355,7 @@ impl Engine<'_> {
         self.ctx.consts.borrow_mut().clear();
         self.ctx.objs.borrow_mut().clear();
         self.ctx.psums.borrow_mut().clear();
+        self.ctx.cevals.borrow_mut().clear();
         let mut deps: BTreeSet<usize> = std::mem::take(&mut *self.ctx.pdeps.borrow_mut());
         deps.extend(self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()));
         self.invalidate_all(Some(deps), Why::Sysprops);

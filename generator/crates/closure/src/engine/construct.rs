@@ -106,9 +106,12 @@ impl Ctx<'_> {
         }
         let o = recv.and_then(V::obj)?;
         let v = o.field(&fi.key)?.clone();
-        if let Some(m) = m {
-            self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
-            self.pdeps.borrow_mut().insert(m);
+        match m {
+            Some(m) => {
+                self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
+                self.pdeps.borrow_mut().insert(m);
+            }
+            None => self.note_aux_read(&fi.key),
         }
         // 反序列化只写它自己分配的对象（不经构造器），构造器建出的标签对象不受其影响：不看 `deser`
         let open = fi.open || self.fopen_all.get() || self.fopen.borrow().contains(&fi.key) || self.fopen_names.borrow().contains(&fi.key.name);

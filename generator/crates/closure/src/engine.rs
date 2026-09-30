@@ -28,6 +28,7 @@ use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members, PropValue};
 mod sets;
 mod idset;
 mod facts;
+mod consteval;
 mod construct;
 mod sysprops;
 mod fold;
