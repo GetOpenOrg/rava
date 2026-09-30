@@ -16,6 +16,8 @@ pub struct Fold {
     /// 接收者恒为 null 的活虚调用点（invokevirtual / invokeinterface）：全部克隆里接收者值集都没有对象，
     /// 分析器不给目标入链；执行即 NullPointerException，发射层不得按调用翻译（否则撞到闭包外的存根）
     pub null_recv: Vec<u32>,
+    /// 常量来自系统属性读取折叠的调用点（consts 的子集；统计用，不导出）
+    pub props: Vec<u32>,
     /// 违反「活的非跳转指令落到死区」约定的 pc（应恒为空）
     pub violations: Vec<u32>,
 }
@@ -85,7 +87,7 @@ pub(super) fn fold_of(method: String, code: &classfile::Code, all: &[Rc<Analysis
         consts.push((*pc, *opcode, value.clone(), ty));
     }
     consts.sort_by_key(|c| c.0);
-    Fold { method, dead_pcs, dead_handlers, consts, null_recv: Vec::new(), violations }
+    Fold { method, dead_pcs, dead_handlers, consts, null_recv: Vec::new(), props: Vec::new(), violations }
 }
 
 impl Engine<'_> {

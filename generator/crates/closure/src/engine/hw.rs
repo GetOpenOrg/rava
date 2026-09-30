@@ -137,6 +137,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn apply_hw(&mut self, m: usize, host: &str, mh: &MemberHw, via: &Via) {
         let prod = Node::S(m, PROD);
+        self.sysprops_hw(mh);
         self.hwobj_made(m, host, mh);
         self.hw_fields(m, host, &mh.fields);
         let mut k = 0u32;

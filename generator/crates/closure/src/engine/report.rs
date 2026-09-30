@@ -26,6 +26,7 @@ impl<'a> Engine<'a> {
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
             let mut f = fold_of(key.to_string(), code, &all);
             f.null_recv = self.null_recv(&clones);
+            f.props = self.prop_folds(&f, &all);
             // 自检：活指令顺序落入 dead_pcs（v1 规则禁止），出现即分析缺陷
             if !f.violations.is_empty() {
                 eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
@@ -36,6 +37,19 @@ impl<'a> Engine<'a> {
         }
         out.sort_by(|a, b| a.method.cmp(&b.method));
         out
+    }
+
+    /// 折叠常量里来自系统属性读取的调用点
+    fn prop_folds(&self, f: &Fold, all: &[Rc<Analysis>]) -> Vec<u32> {
+        f.consts
+            .iter()
+            .filter(|c| {
+                all.iter().flat_map(|a| a.events.iter()).any(|(pc, e)| {
+                    *pc == c.0 && matches!(e, Event::Invoke { opcode, mref, iface, .. } if self.ctx.read_spec(*opcode, mref, *iface, None).is_some())
+                })
+            })
+            .map(|c| c.0)
+            .collect()
     }
 
     pub fn instantiated(&self) -> Vec<String> {

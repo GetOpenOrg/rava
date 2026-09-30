@@ -21,12 +21,14 @@ use classfile::{acc, ClassFile, Const, MemberRef, MethodHandle};
 use indexmap::IndexMap;
 use resolve::{ClassPath, Hierarchy, Origin};
 
-use crate::absint::{self, Analysis, Event, Oracle, Ret, Src, V};
+use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
 use crate::handwritten::{member_matches, to_snake, MODULE_SUFFIXES, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
-use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members};
+use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members, PropValue};
 
 mod sets;
 mod facts;
+mod construct;
+mod sysprops;
 mod fold;
 mod forward;
 mod classes;
@@ -49,6 +51,7 @@ pub use seeds::SeedState;
 
 pub use fold::Fold;
 use facts::*;
+use sysprops::{PropSum, PropUnstable};
 use fold::*;
 pub use sets::*;
 use hwobj::{HwObj, HWOBJ_KIND};
@@ -486,6 +489,10 @@ pub struct Engine<'a> {
     pub reflect_members: BTreeSet<(Members, MemberRef)>,
     /// 手写层写入的字段（`__set_` 接收者类型已定位）
     pub hw_written: BTreeSet<MemberRef>,
+    /// 按字段句柄写字段的入口已可达
+    fwriter_live: bool,
+    /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段
+    fenum_pending: BTreeSet<Option<String>>,
     /// 手写层写入但接收者类型推不出的字段名：所有同名字段按有手写写入处理
     pub hw_written_names: BTreeSet<String>,
     /// 手写层读取但接收者类型推不出的字段名 → 读出值汇入的值池：所有同名字段流入
@@ -519,6 +526,10 @@ impl<'a> Engine<'a> {
                 rdeps: Default::default(),
                 optimistic: Cell::new(true),
                 never: Default::default(),
+                objs: Default::default(),
+                psums: Default::default(),
+                punstable: Default::default(),
+                pdeps: Default::default(),
             },
             h,
             cp,
@@ -603,6 +614,8 @@ impl<'a> Engine<'a> {
             reflect_gaps: BTreeSet::new(),
             reflect_members: BTreeSet::new(),
             hw_written: BTreeSet::new(),
+            fwriter_live: false,
+            fenum_pending: BTreeSet::new(),
             hw_written_names: BTreeSet::new(),
             hw_read_names: BTreeMap::new(),
             snake_index: None,
@@ -771,6 +784,9 @@ impl<'a> Engine<'a> {
             rtype = md.ret.as_ref().and_then(|r| self.ptype(r));
         }
         let ks = key.to_string();
+        if self.man.is_field_handle_writer(&ks) {
+            self.field_writer_live();
+        }
         let ret_model = if self.man.returns_mirror(&ks) {
             RetModel::Mirror
         } else if self.man.returns_receiver(&ks) {

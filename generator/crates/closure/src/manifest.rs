@@ -54,6 +54,9 @@ pub enum Members {
     RecordAccessors,
 }
 
+mod sysprops;
+pub use sysprops::{PropRead, PropValue, SysProps};
+
 /// 方法返回值事实（[vm_constants] / [facts]）
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fact {
@@ -73,6 +76,7 @@ pub struct Manifest {
     returns: HashMap<String, Fact>,
     receiver_returns: HashSet<String>,
     field_enumerators: HashSet<String>,
+    field_handle_writers: HashSet<String>,
     deserializers: HashSet<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
@@ -85,6 +89,10 @@ pub struct Manifest {
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
+    /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
+    value_equals: HashSet<String>,
+    /// VM 初始系统属性表与读写锚点
+    pub sysprops: SysProps,
 }
 
 const OBJECT: &str = "java/lang/Object";
@@ -237,6 +245,7 @@ impl Manifest {
             returns,
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             field_enumerators: field_writes("enumerators").into_iter().collect(),
+            field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
             array_writes,
             memory_reads,
@@ -248,6 +257,8 @@ impl Manifest {
             boot_init: strings(&seeds, "boot_init", "classes"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
+            value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
+            sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
         })
     }
 
@@ -340,6 +351,11 @@ impl Manifest {
         self.field_enumerators.contains(member)
     }
 
+    /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）
+    pub fn is_field_handle_writer(&self, member: &str) -> bool {
+        self.field_handle_writers.contains(member)
+    }
+
     /// 反序列化入口（可达即非 static、非 transient 字段不折叠）
     pub fn is_deserializer(&self, member: &str) -> bool {
         self.deserializers.contains(member)
@@ -366,6 +382,10 @@ impl Manifest {
     }
 
     /// 纯函数：null 实参 → false
+    pub fn is_value_equals(&self, member: &str) -> bool {
+        self.value_equals.contains(member)
+    }
+
     pub fn is_null_to_false(&self, member: &str) -> bool {
         self.null_to_false.contains(member)
     }
