@@ -15,7 +15,7 @@ use ty::{ClassInfo, RsType};
 use crate::blocks::{cfg_view, Blocks};
 use crate::emit::{emit_dispatch, emit_tree};
 use crate::entry::{Entry, Item};
-use crate::error::{cfg_err, MethodResult};
+use crate::error::{cfg_err, MethodError, MethodResult};
 use crate::fold_array::fold_array_literals;
 use crate::node::{Graph, Node};
 use crate::sig::{ctor_functions, is_main, local_names, params_with_slot, rust_fn_name, signature_line};
@@ -258,6 +258,10 @@ fn vars_passes(
 /// 类 + 方法 → 完整 Rust 函数文本（见 crate 文档）
 pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mut MethodSink) -> MethodResult<String> {
     let m = req.method;
+    if env.ctx.code_owner.is_empty() {
+        // 字节码出处类决定常量池 / bootstrap 表的归属，调用方必须给出（无回退推断）
+        return Err(MethodError::Runtime(format!("{}.{}:{} 的字节码出处类为空", req.class.name(), m.name, m.desc)));
+    }
     let is_ctor = m.name == "<init>";
     let is_static = m.access & acc::STATIC != 0;
     let class_name = req.class.name();

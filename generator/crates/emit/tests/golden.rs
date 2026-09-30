@@ -4,17 +4,17 @@
 //! `build/golden/emit/<Test>.rs-out/` 后逐文件对照（与 runtime 手写真源逐字节相同的文件
 //! golden 不转储，比较同样跳过）。
 //!
-//! 方法体以 [`Replay`] 回放 `bodies.jsonl`（Python 每次方法体生成的真实文本与登记事实），
-//! 回放文本用与采集脚本相同的哨兵行包裹方法体，落盘后同样替换为 `/*BODY key*/` 占位再比较——
-//! 发射层基于文本的处理（VTable 导入扫描、record 补丁）看到的仍是真实方法体。
-//!
-//! 全部文件全文对照，并核对回放方法体中 SAM 站点的合成对象构造路径与
-//! [`emit::sam::SamLedger::site_ctor_path`] 一致。golden 缺失时跳过并提示采集命令。
+//! 方法体由真实生成器 [`MethodBodies`]（P4c `method` crate）生成，每次生成与 `bodies.jsonl`
+//! （Python 每次方法体生成的文本、兜底与登记事实）逐次对照；返回文本用与采集脚本相同的哨兵行
+//! 包裹方法体，落盘后同样替换为 `/*BODY key*/` 占位再与 golden 全文对照——发射层基于文本的处理
+//! （VTable 导入扫描、record 补丁）看到的是真实方法体。两者合起来即生成树逐字节对照。
+//! 方法体失配明细写入 `build/golden/emit/<Test>.bodies.diff.txt`。golden 缺失时跳过并提示采集命令。
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use emit::body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter};
+use emit::method_bodies::MethodBodies;
 use emit::text::scratch_pkg_version;
 use emit::ctx::{EmitCtx, EmitOptions};
 use emit::project::{prepare_scratch, write_project};
@@ -93,15 +93,11 @@ fn first_diff(want: &str, got: &str) -> (usize, String, String) {
 const BODY_BEGIN: &str = "//@@BODY_BEGIN ";
 const BODY_END: &str = "//@@BODY_END";
 
-/// 回放记录键：(类.方法:描述符, 显式 Rust 名, in_vtable_body)
-type ReplayKey = (String, Option<String>, bool);
+/// 方法体调用键：(类.方法:描述符, 显式 Rust 名, in_vtable_body)
+type CallKey = (String, Option<String>, bool);
 
-/// `bodies.jsonl` 回放：按 (键, Rust 名, in_vtable_body) 队列依次取 Python 的方法体文本与登记事实
-struct Replay {
-    queue: HashMap<ReplayKey, VecDeque<Result<BodyOutput, BodyError>>>,
-    /// SAM 站点的构造路径核对失配（`SamLedger::site_ctor_path` 须出现在回放方法体中）
-    sam_misses: Vec<String>,
-}
+/// Python 一次方法体生成的结果：完整函数文本或兜底异常文本，及登记事实
+type Expected = (Result<String, String>, BodyEffects);
 
 fn triples(v: &Value) -> Vec<(String, String, String)> {
     v.as_array()
@@ -114,56 +110,97 @@ fn triples(v: &Value) -> Vec<(String, String, String)> {
         .collect()
 }
 
-impl Replay {
-    fn load(path: &Path) -> Replay {
-        let mut queue: HashMap<ReplayKey, VecDeque<_>> = HashMap::new();
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            let r: Value = serde_json::from_str(line).expect("bodies.jsonl 行");
-            let key = r["key"].as_str().unwrap_or_default().to_string();
-            let effects = BodyEffects {
-                requests: triples(&r["requests"]),
-                lambda_refs: triples(&r["lambda_refs"]),
-                sam_sites: triples(&r["sam_sites"]),
-            };
-            let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
-            let out = if let Some(f) = r["fallback"].as_str() {
-                Err(BodyError::Fallback(f.to_string()))
-            } else if r["unsplit"].as_bool() == Some(true) {
-                Ok(BodyOutput { text: s("text"), effects })
-            } else {
-                let body = s("body");
-                let text = if body.is_empty() {
-                    format!("{}{BODY_BEGIN}{key}\n{BODY_END}\n}}", s("head"))
-                } else {
-                    format!("{}{BODY_BEGIN}{key}\n{body}\n{BODY_END}\n}}", s("head"))
-                };
-                Ok(BodyOutput { text, effects })
-            };
-            let rk = (key, r["rust_name"].as_str().map(str::to_string), r["in_vtable_body"].as_bool().unwrap_or(false));
-            queue.entry(rk).or_default().push_back(out);
-        }
-        Replay { queue, sam_misses: Vec::new() }
+/// `bodies.jsonl` → 按 (键, Rust 名, in_vtable_body) 分组的 Python 结果队列
+fn load_expected(path: &Path) -> HashMap<CallKey, VecDeque<Expected>> {
+    let mut queue: HashMap<CallKey, VecDeque<Expected>> = HashMap::new();
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let r: Value = serde_json::from_str(line).expect("bodies.jsonl 行");
+        let key = r["key"].as_str().unwrap_or_default().to_string();
+        let effects = BodyEffects {
+            requests: triples(&r["requests"]),
+            lambda_refs: triples(&r["lambda_refs"]),
+            sam_sites: triples(&r["sam_sites"]),
+        };
+        let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
+        let out = if let Some(f) = r["fallback"].as_str() {
+            Err(f.to_string())
+        } else if r["unsplit"].as_bool() == Some(true) {
+            Ok(s("text"))
+        } else if s("body").is_empty() {
+            Ok(format!("{}}}", s("head")))
+        } else {
+            Ok(format!("{}{}\n}}", s("head"), s("body")))
+        };
+        let rk = (key, r["rust_name"].as_str().map(str::to_string), r["in_vtable_body"].as_bool().unwrap_or(false));
+        queue.entry(rk).or_default().push_back((out, effects));
     }
+    queue
 }
 
-impl MethodBodyEmitter for Replay {
+/// 函数文本 → (头部含 ` {\n`, 方法体, 尾部)（采集脚本 `_split_body` 同口径：构造器双入口取最后一个 fn）
+fn split_body(text: &str) -> Option<(&str, &str, &str)> {
+    if !text.ends_with("\n}") {
+        return None;
+    }
+    let from = text.rfind("#[doc(hidden)]\n").unwrap_or(0);
+    let head_end = from + text[from..].find(" {\n")? + 3;
+    let body_end = text.len() - 2;
+    if body_end + 1 < head_end {
+        return None;
+    }
+    if body_end < head_end {
+        return Some((&text[..head_end], "", &text[head_end..]));
+    }
+    Some((&text[..head_end], &text[head_end..body_end], &text[body_end..]))
+}
+
+/// 真实方法体生成 + 逐次对照 Python 记录；返回文本按采集脚本同形包裹哨兵行，
+/// 落盘后替换为 `/*BODY key*/` 与占位 golden 做全文对照
+struct Checked {
+    real: MethodBodies,
+    expected: HashMap<CallKey, VecDeque<Expected>>,
+    /// 方法体级失配明细
+    mismatches: Vec<String>,
+    calls: usize,
+}
+
+impl MethodBodyEmitter for Checked {
     fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
+        self.calls += 1;
         let key = format!("{}.{}:{}", req.class.name(), req.method.name, req.method.desc);
-        let rk = (key, req.rust_name.map(str::to_string), req.in_vtable_body);
-        let out = match self.queue.get_mut(&rk).and_then(VecDeque::pop_front) {
-            Some(out) => out,
-            None => return Err(BodyError::Fatal(format!("回放缺记录：{rk:?}"))),
-        };
-        if let Ok(o) = &out {
-            for (iface, _, cur) in &o.effects.sam_sites {
-                match ctx.sam().site_ctor_path(ctx, iface, cur) {
-                    Some(p) if o.text.contains(&p) => {}
-                    got => self.sam_misses.push(format!("{}：{iface} 构造路径 {got:?} 不在方法体中", rk.0)),
+        let rk = (key.clone(), req.rust_name.map(str::to_string), req.in_vtable_body);
+        let got = self.real.emit_body(ctx, req);
+        match self.expected.get_mut(&rk).and_then(VecDeque::pop_front) {
+            None => self.mismatches.push(format!("=== EXTRA {rk:?}（Python 无此请求）")),
+            Some((want, fx)) => {
+                let got_text = match &got {
+                    Ok(o) => Ok(o.text.clone()),
+                    Err(BodyError::Fallback(e) | BodyError::Fatal(e)) => Err(e.clone()),
+                };
+                let text_ok = match (&want, &got_text) {
+                    (Ok(a), Ok(b)) => a == b,
+                    (Err(_), Err(_)) => matches!(got, Err(BodyError::Fallback(_))),
+                    _ => false,
+                };
+                if !text_ok {
+                    self.mismatches.push(format!("=== TEXT {rk:?}\n--- py\n{want:?}\n--- rs\n{got_text:?}\n"));
+                } else if let Ok(o) = &got {
+                    if o.effects != fx {
+                        self.mismatches.push(format!("=== FX {rk:?}\n--- py\n{fx:?}\n--- rs\n{:?}\n", o.effects));
+                    }
                 }
             }
         }
-        out
+        let mut out = got?;
+        if let Some((head, body, tail)) = split_body(&out.text) {
+            out.text = if body.is_empty() {
+                format!("{head}{BODY_BEGIN}{key}\n{BODY_END}{tail}")
+            } else {
+                format!("{head}{BODY_BEGIN}{key}\n{body}\n{BODY_END}{tail}")
+            };
+        }
+        Ok(out)
     }
 }
 
@@ -224,17 +261,23 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
     let out = root.join("build/golden/emit").join(format!("{stem}.rs-out"));
     prepare_scratch(&out, &runtime, &ctx.macros_crate, true).expect("scratch overlay");
     let mut diffs = BTreeMap::new();
-    let mut replay = Replay::load(&gdir.join("bodies.jsonl"));
-    if let Err(e) = write_project(&ctx, &out, &mut replay) {
+    let mut checked =
+        Checked { real: MethodBodies::new(&ctx), expected: load_expected(&gdir.join("bodies.jsonl")), mismatches: Vec::new(), calls: 0 };
+    let written = write_project(&ctx, &out, &mut checked);
+    let report = root.join("build/golden/emit").join(format!("{stem}.bodies.diff.txt"));
+    std::fs::write(&report, checked.mismatches.join("\n")).expect("写方法体失配明细");
+    eprintln!("{stem}: 方法体生成 {} 次，失配 {}（明细 {}）", checked.calls, checked.mismatches.len(), report.display());
+    if let Err(e) = written {
         diffs.insert("<write_project>".to_string(), e.to_string());
         return (0, diffs);
     }
-    if let Some(m) = replay.sam_misses.first() {
-        diffs.insert("<sam_sites>".to_string(), format!("{} 处站点失配，例：{m}", replay.sam_misses.len()));
+    if !checked.mismatches.is_empty() {
+        diffs.insert("<bodies>".to_string(), format!("{} 次方法体生成与 Python 失配", checked.mismatches.len()));
     }
-    let unused: usize = replay.queue.values().map(VecDeque::len).sum();
+    let unused: usize = checked.expected.values().map(VecDeque::len).sum();
     if unused > 0 {
-        let sample: Vec<String> = replay.queue.iter().filter(|(_, q)| !q.is_empty()).take(5).map(|(k, _)| format!("{k:?}")).collect();
+        let sample: Vec<String> =
+            checked.expected.iter().filter(|(_, q)| !q.is_empty()).take(5).map(|(k, _)| format!("{k:?}")).collect();
         diffs.insert("<bodies.jsonl>".to_string(), format!("{unused} 条方法体记录未被请求，例：{}", sample.join(" / ")));
     }
     // 包版本由 crate 目录路径派生：rs 输出目录不同，按 py 输出目录的同一派生归一

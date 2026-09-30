@@ -57,7 +57,7 @@ pub enum BodyError {
     Fatal(String),
 }
 
-/// 方法体生成器（P4c `method` crate 实现；golden 测试以回放实现）
+/// 方法体生成器（生产实现 [`crate::method_bodies::MethodBodies`]；`--skeleton-only` 用占位实现）
 pub trait MethodBodyEmitter {
     fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError>;
 }

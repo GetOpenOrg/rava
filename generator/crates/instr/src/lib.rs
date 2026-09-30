@@ -12,9 +12,8 @@
 //! 2. **上下文**：[`InstrCtx::new`]`(ty_ctx, runtime_manifest, &facts, &hooks, class_name)`；
 //!    继承展开（祖先 / 接口 default 方法体发射进子类）时再以
 //!    [`InstrCtx::with_code_owner`]`(字节码所属类)` 指定指令出处类（invokedynamic 的 bootstrap
-//!    表与常量池下标属于它）。`hooks` 实现 [`InstrHooks`]（instr 需要但归方法 / 类生成层所有的
-//!    查询）：`sam_ctor_path`（SAM 合成对象构造路径）与 `indy_cp_index`（invokedynamic 常量池
-//!    下标——classfile 指令操作数不携带；缺省 None 时 lambda 站点报未移植），无需时用 [`NoHooks`]。
+//!    表属于它；常量池下标由指令操作数携带）。`hooks` 实现 [`InstrHooks`]（instr 需要但归方法 /
+//!    类生成层所有的查询）：`sam_ctor_path`（SAM 合成对象构造路径），无需时用 [`NoHooks`]。
 //!    `root_object_classfile` 取类路径上的 JDK 根类类文件（根类手写、不在注册表）。
 //! 3. **模拟环境**：[`InstrEnv::new`]`(ctx, class_type_params)`，它实现 [`::sim::SimEnv`]
 //!    （短名、严格子类型、接口判定、接口载体、Object 装箱、菱形实参求解——与 Python

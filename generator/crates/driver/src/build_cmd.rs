@@ -4,8 +4,8 @@
 //! [`EmitInput`](input::EmitInput) → overlay → 发射层写 scratch →（缺省）`cargo run`。
 //! emit：从既有 closure.json + 用户类目录重建输入后同样发射（不编译运行）。
 //!
-//! 方法体生成器（P4c `method` crate）尚未接入本分支：缺省以 [`NoBodies`] 发射，首个方法体请求即报
-//! 「P4c/P5b 未接入」；`--skeleton-only` 以 [`PlaceholderBodies`] 输出骨架（方法体为占位注释）。
+//! 方法体缺省由 [`MethodBodies`]（P4c `method` crate）生成；`--skeleton-only` 以
+//! [`PlaceholderBodies`] 输出骨架（方法体为占位注释）。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,7 +13,8 @@ use std::process::Command;
 use classfile::MemberRef;
 use closure::handwritten::Handwritten;
 use closure::manifest::Manifest;
-use emit::body::{MethodBodyEmitter, NoBodies, PlaceholderBodies};
+use emit::body::{MethodBodyEmitter, PlaceholderBodies};
+use emit::method_bodies::MethodBodies;
 use emit::ctx::{EmitCtx, EmitOptions};
 use emit::project::{prepare_scratch, write_project, ProjectReport};
 use input::{BuildInput, ClosureFacts, RuntimeManifest};
@@ -166,11 +167,9 @@ fn emit_scratch(j: &EmitJob<'_>) -> Result<ProjectReport, String> {
     let opts = EmitOptions { strict: j.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone() };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
-    let mut bodies: Box<dyn MethodBodyEmitter> = if j.skeleton_only { Box::new(PlaceholderBodies) } else { Box::new(NoBodies) };
-    write_project(&ctx, j.out, bodies.as_mut()).map_err(|e| {
-        let hint = if j.skeleton_only { "" } else { "（只出骨架用 --skeleton-only）" };
-        format!("发射：{e}{hint}")
-    })
+    let mut bodies: Box<dyn MethodBodyEmitter> =
+        if j.skeleton_only { Box::new(PlaceholderBodies) } else { Box::new(MethodBodies::new(&ctx)) };
+    write_project(&ctx, j.out, bodies.as_mut()).map_err(|e| format!("发射：{e}"))
 }
 
 fn report(r: &ProjectReport, out: &Path) {

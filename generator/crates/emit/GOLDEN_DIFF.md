@@ -16,7 +16,10 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 
 | (d3) SAM 合成对象（A-5）+ L3 反射分派 / 字段闭包 + main 反射登记 | 全部文件全文 | 3 例 2132 个文件逐字节一致（失配 0）；回放方法体中 SAM 站点的构造路径与 `SamLedger::site_ctor_path` 一致 |
 
+| (P5b) 真实方法体 | 方法体由 `method_bodies::MethodBodies`（P4c `method` crate）真实生成，逐次与 bodies.jsonl 对照文本 / 兜底 / 登记副作用 | 3 例方法体生成 660 / 1310 / 7321 次，失配 0；文件对照 315 / 452 / 1354 个，失配 0 |
+
 `tests/golden.rs` 全文对照，无待接入项（`PENDING` 已删除）。
+方法体失配明细写入 `build/golden/emit/<Test>.bodies.diff.txt`（`=== TEXT` / `=== FX` / `=== EXTRA`）。
 
 ## 一、未移植分支（显式 `EmitError::Unported`）
 

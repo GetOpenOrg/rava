@@ -61,7 +61,7 @@ stack / arith / arrays / returns / control / dynamic / invoke / fields——与�
 | N8 | 副作用：`sam_ctor` 不参与比对（它是查询，由回放钩子按日志回答）；`audit` 的 `count` 参数展开为 count 条 | Rust 以 `InstrHooks::sam_ctor_path` 查询、`InstrLog` 每次计数一条 |
 | N9 | N2 的匹配另要求成员引用指令（字段 / 方法）与视图注释的 `owner.name:desc`（本类成员省略 owner）一致 | 子类自身方法与接口 default 体同名同描述符、同偏移同操作码时（`LocalDate.query` vs `ChronoLocalDate.query`），只凭成员引用区分出处 |
 | N10 | N2 找到的方法体所属类经 `InstrCtx::with_code_owner` 传入（出处类） | invokedynamic 的 bootstrap 表 / 常量池下标属于字节码出处类；生产侧由 P4c 按同一口径传入 |
-| N11 | invokedynamic 的常量池下标由回放钩子 `InstrHooks::indy_cp_index` 按记录 operand 回答 | classfile 指令操作数不携带常量池下标（见[已知差异](#已知差异不影响-golden-比对) 3） |
+| N11 | invokedynamic 的常量池下标取自 classfile 指令操作数 `Operand::InvokeDynamic.index`（与记录 operand 一致，无需回放钩子） | 与 Python 指令 operand 同源 |
 | N12 | `InstrFacts` 的根类方法集取自类路径上的 JDK `java/lang/Object` 类文件（根类由 runtime 手写、不在注册表） | 与 `member_owner._root_virtual_methods` 同源 |
 
 ### 版式规则
@@ -98,12 +98,9 @@ stack / arith / arrays / returns / control / dynamic / invoke / fields——与�
    常量两侧发射不同（本批三例未出现，ldc 全等）。
 2. **`hierarchy._has_subtypes` / `_is_direct_subtype` 未移植**：Python 侧两函数无调用点（死代码），
    Rust `hierarchy` 不提供对应 API。
-3. **invokedynamic 常量池下标经钩子取得**：Python 指令的 operand 是 invokedynamic 常量池下标（lambda 站点
-   变量名 `__lam_{idx}` / `__lam_cap{idx}_{i}` 与 TODO 占位文本的来源）；`classfile::Operand::InvokeDynamic`
-   只携带 (bsm, name, desc)，`ClassFile` 不保留常量池。instr 经 `InstrHooks::indy_cp_index(code_owner, bsm,
-   name, desc)` 查询（javac 对同一 (bsm, NameAndType) 只生成一个常量池项，三元组在类内唯一），缺省 None →
-   lambda 路径按未移植报告。P4c 驱动须实现该钩子；终态是 classfile 指令操作数直接携带下标（改动 classfile
-   与闭包分析的模式匹配，不在本批范围）。
+3. **invokedynamic 常量池下标（已消解，P5b）**：`classfile::Operand::InvokeDynamic` 直接携带常量池下标
+   `index`（与 Python 指令 operand 同源，lambda 站点变量名 `__lam_{idx}` / `__lam_cap{idx}_{i}` 由此得出），
+   `InstrHooks::indy_cp_index` 钩子与对应未移植分支已删除。
 4. **@CallerSensitive 包装的例外判定**：Python 以「声明类名以 `/Reflection` 结尾」跳过 `getCallerClass`
    自身的包装；Rust 以「方法名 `getCallerClass` 且 native」判定（生成器不写 JDK 类名），闭包内唯一满足者即
    `jdk/internal/reflect/Reflection.getCallerClass`，两侧行为一致。
@@ -119,7 +116,20 @@ stack / arith / arrays / returns / control / dynamic / invoke / fields——与�
 | 分支 | 位置 | 理由 |
 |---|---|---|
 | `ldc 常量形态 …` | `sim/consts.rs` | MethodType / MethodHandle / Dynamic 常量：Python 落入 `{operand}i32` 兜底（语义错误的文本），不复制 |
-| `invokedynamic … 的常量池下标不可得` | `sim/dynamic.rs` | `InstrHooks::indy_cp_index` 返回 None（见已知差异 3） |
-| `lambda 实现类 … 不在注册表且 SAM 实参 … 需类型变量判定` | `sim/dynamic/lambda_args.rs` | Python 对 None 取 `is_interface`（AttributeError） |
 | `接口实现方法 … 无接收者实参` | `sim/dynamic/lambda_body.rs` | Python 对空实参表取下标（IndexError） |
 | `invokestatic 目标短名含包路径` | `invoke/static_call.rs` | Python 此处发射注释占位 `/* cls.m(args) */` 作为调用值（不可编译的占位，不复制）；短名表对注册表类恒不含 `/`，只在表外类出现 |
+| `IrError::BadFloat` → `SimError::Unported` | `sim/consts.rs`（经 `From<IrError>`） | `FloatLit::parse` 收到非数字文本；Python 直接拼接浮点文本。三例命中 0 |
+
+## 静默占位（复制 Python 占位文本或发射错值；不报 Unported，golden 计数不可见）
+
+与上表「不复制不可编译占位」的口径不一致，终态为 0：表外类走精确 `panic!("stub: …")`，其余补真实翻译。
+27 例命中数见 `generator/crates/emit/P5B_NOTES.md`。
+
+| # | 位置 | 发射内容 | 触发条件 | 对应 Python | 后果 |
+|---|---|---|---|---|---|
+| S1 | `invoke/special/ctor.rs`（`new` 路径） | `/* {raw_cls}::new() */` 充当表达式 | `new` 目标类短名为空或含 `/`（表外类） | `codegen/instr/invoke.py:639` | 不可编译 |
+| S2 | `invoke/special/ctor.rs`（`init_on`） | `/* invokespecial Method … */` | 已有对象上的构造器调用，接收者不是 `this`/`self` 或 owner 为空 | `codegen/instr/invoke.py:689` | 静默丢弃 super/this 构造调用（错值） |
+| S3 | `sim/dynamic/lambda.rs` | `/* TODO: invokedynamic {idx} */` + `Object::default()` | lambda 引导缺实现方法信息或 SAM 描述符为空 | `codegen/instr/sim/dynamic.py:500` | 空对象（错值） |
+| S4 | `sim/dynamic/lambda.rs` | `/* TODO: invokedynamic {idx} (impl parse failed) */` + `Object::default()` | 实现方法引用解析失败 | `codegen/instr/sim/dynamic.py:493` | 空对象（错值） |
+| S5 | `sim/dynamic/type_switch.rs` | `/* TODO S-17 … */` + `Object::default()` | `typeSwitch` 标签含 `c`/`s`/`i` 之外的形态（EnumDesc 等 condy） | `codegen/instr/sim/dynamic.py:144` | 选择子应为 int 却压入 Object，大概率不可编译 |
+| S6 | `invoke/virtual_/bare.rs` | `/* A-5: 未翻译接收者残余 … */` 或 `Default::default()` | 虚调用接收者类不在注册表或为接口残余形 | `codegen/instr/invoke_virtual.py:256` | 静默空操作 / 默认值（错值） |
