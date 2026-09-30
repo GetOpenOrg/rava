@@ -13,6 +13,9 @@ pub struct Fold {
     pub dead_handlers: Vec<u32>,
     /// (pc, 指令, 常量值, 类型描述符)
     pub consts: Vec<(u32, u8, V, String)>,
+    /// 接收者恒为 null 的活虚调用点（invokevirtual / invokeinterface）：全部克隆里接收者值集都没有对象，
+    /// 分析器不给目标入链；执行即 NullPointerException，发射层不得按调用翻译（否则撞到闭包外的存根）
+    pub null_recv: Vec<u32>,
     /// 违反「活的非跳转指令落到死区」约定的 pc（应恒为空）
     pub violations: Vec<u32>,
 }
@@ -82,5 +85,40 @@ pub(super) fn fold_of(method: String, code: &classfile::Code, all: &[Rc<Analysis
         consts.push((*pc, *opcode, value.clone(), ty));
     }
     consts.sort_by_key(|c| c.0);
-    Fold { method, dead_pcs, dead_handlers, consts, violations }
+    Fold { method, dead_pcs, dead_handlers, consts, null_recv: Vec::new(), violations }
+}
+
+impl Engine<'_> {
+    /// 字节码调用点 (方法, 偏移) 有接收者到达（逐个派发 / 非虚接边 / 枢纽展开过接收者）
+    pub(super) fn site_has_recv(&self, m: usize, off: u32) -> bool {
+        if self.recv_sites.contains(&(m, off)) || self.dispatch.get(&(m, off)).is_some_and(|t| !t.is_empty()) {
+            return true;
+        }
+        self.hub_sites.get(&(m, off)).is_some_and(|hs| {
+            hs.iter().any(|&h| {
+                let mut cur = Some(h);
+                while let Some(c) = cur {
+                    if !self.hubs[c as usize].recvs.is_empty() {
+                        return true;
+                    }
+                    cur = self.hubs[c as usize].parent;
+                }
+                false
+            })
+        })
+    }
+
+    /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者即不算
+    pub(super) fn null_recv(&self, clones: &[usize]) -> Vec<u32> {
+        let mut hit: BTreeMap<u32, bool> = BTreeMap::new();
+        for &i in clones {
+            let Some(a) = &self.methods[i].analysis else { continue };
+            for (pc, e) in &a.events {
+                if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, .. } = e {
+                    *hit.entry(*pc).or_default() |= self.site_has_recv(i, *pc);
+                }
+            }
+        }
+        hit.into_iter().filter(|(_, h)| !h).map(|(pc, _)| pc).collect()
+    }
 }

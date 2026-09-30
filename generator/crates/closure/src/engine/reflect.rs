@@ -26,12 +26,12 @@ impl<'a> Engine<'a> {
         id
     }
 
-    /// 值集中各值的类镜像；类型推不出（open、lambda 合成类）为所指未知的 Class
+    /// 值集中各值的类镜像；类型推不出（open、lambda 合成类、手写实现对象）为所指未知的 Class
     pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
         let mut out = TypeSet::default();
         let xs: Vec<u32> = s.classes.iter().copied().collect();
         for x in xs {
-            let k = if self.lambdas.contains_key(&x) {
+            let k = if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
                 self.id(CLASS)
             } else {
                 let t = self.ty(x);

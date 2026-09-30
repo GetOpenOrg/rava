@@ -9,26 +9,28 @@ impl<'a> Engine<'a> {
     /// 按方法标签排序；只含有折叠内容的字节码方法
     /// 同一成员的各克隆合并：任一克隆可达即可达，常量须在其可达的全部克隆里一致
     pub fn folds(&self) -> Vec<Fold> {
-        let mut groups: IndexMap<&MemberRef, Vec<Option<Rc<Analysis>>>> = IndexMap::new();
-        for mn in self.methods.values() {
+        let mut groups: IndexMap<&MemberRef, Vec<(usize, Option<Rc<Analysis>>)>> = IndexMap::new();
+        for (i, mn) in self.methods.values().enumerate() {
             if mn.kind == Kind::Bytecode {
-                groups.entry(&mn.key).or_default().push(mn.analysis.clone());
+                groups.entry(&mn.key).or_default().push((i, mn.analysis.clone()));
             }
         }
         let mut out = Vec::new();
         for (key, group) in groups {
-            let Some(all) = group.into_iter().collect::<Option<Vec<_>>>() else { continue };
+            let clones: Vec<usize> = group.iter().map(|(i, _)| *i).collect();
+            let Some(all) = group.into_iter().map(|(_, a)| a).collect::<Option<Vec<_>>>() else { continue };
             if all.iter().any(|a| a.conservative) {
                 continue;
             }
             let Some(cf) = self.h.class(&key.owner) else { continue };
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
-            let f = fold_of(key.to_string(), code, &all);
+            let mut f = fold_of(key.to_string(), code, &all);
+            f.null_recv = self.null_recv(&clones);
             // 自检：活指令顺序落入 dead_pcs（v1 规则禁止），出现即分析缺陷
             if !f.violations.is_empty() {
                 eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
             }
-            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.consts.is_empty() {
+            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() {
                 out.push(f);
             }
         }
@@ -40,7 +42,7 @@ impl<'a> Engine<'a> {
         let mut v: Vec<String> = self
             .g
             .iter()
-            .filter(|i| !self.lambdas.contains_key(i))
+            .filter(|i| !self.lambdas.contains_key(i) && !self.hwobjs.contains_key(i))
             .map(|i| self.names[*i as usize].to_string())
             .filter(|n| !n.starts_with('['))
             .collect();
@@ -97,6 +99,9 @@ impl<'a> Engine<'a> {
 
     /// 类型流诊断：方法（标签含 `pat`）的形参 / 返回节点的类型集，以及流入它们的来源节点
     pub fn flows_of(&self, pat: &str) -> Vec<String> {
+        if let Some(r) = self.diag_open(pat) {
+            return r;
+        }
         let mut out = Vec::new();
         if let Some(q) = pat.strip_prefix("elem:") {
             let mut es: Vec<Node> = self.sets.keys().filter(|n| matches!(n, Node::E(x, _) if self.names[*x as usize].contains(q))).copied().collect();
@@ -313,20 +318,28 @@ impl<'a> Engine<'a> {
         self.fields.get_index(f).map(|(k, _)| k.to_string()).unwrap_or_default()
     }
 
-    /// 方法节点按成员去重（克隆只是分析内部的上下文区分；输出按成员）
+    /// 方法节点按成员去重（克隆只是分析内部的上下文区分；输出按成员）。手写实现对象的伪方法不是 Java 成员，不输出
     pub fn method_nodes(&self) -> impl Iterator<Item = &MNode> {
-        self.methods.values().enumerate().filter(|(i, m)| self.mbase[&m.key] == *i).map(|(_, m)| m)
+        self.methods
+            .values()
+            .enumerate()
+            .filter(|(i, m)| self.mbase[&m.key] == *i && !self.is_hwobj_method(*i))
+            .map(|(_, m)| m)
     }
 
     pub fn method_count(&self) -> usize {
-        self.mbase.len()
+        self.method_nodes().count()
     }
 
     /// 调用点分派（按成员合并克隆）：调用方法标签@偏移 → 目标方法标签
     pub fn dispatch_sites(&self) -> BTreeMap<(String, u32), BTreeSet<String>> {
         let mut out: BTreeMap<(String, u32), BTreeSet<String>> = BTreeMap::new();
         for ((m, off), ts) in &self.dispatch {
-            out.entry((self.method_label(*m), *off)).or_default().extend(ts.iter().map(|t| self.method_label(*t)));
+            if self.is_hwobj_method(*m) {
+                continue;
+            }
+            let ts = ts.iter().filter(|t| !self.is_hwobj_method(**t)).map(|t| self.method_label(*t));
+            out.entry((self.method_label(*m), *off)).or_default().extend(ts);
         }
         for ((m, off), hs) in &self.hub_sites {
             let e = out.entry((self.method_label(*m), *off)).or_default();
