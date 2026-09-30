@@ -17,11 +17,16 @@ use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::Args;
 
-const MAIN: (&str, &str) = ("main", "([Ljava/lang/String;)V");
+pub(crate) const MAIN: (&str, &str) = ("main", "([Ljava/lang/String;)V");
 
 fn runtime_dir(args: &Args) -> Result<PathBuf, String> {
-    if let Some(p) = args.opt("--runtime") {
-        return Ok(PathBuf::from(p));
+    find_runtime_dir(args.opt("--runtime").map(PathBuf::from))
+}
+
+/// 手写层真源 `runtime/java_runtime`：显式路径优先，否则自当前目录向上找，最后取本仓库
+pub(crate) fn find_runtime_dir(explicit: Option<PathBuf>) -> Result<PathBuf, String> {
+    if let Some(p) = explicit {
+        return Ok(p);
     }
     let mut cur = std::env::current_dir().map_err(|e| e.to_string())?;
     loop {
@@ -136,7 +141,7 @@ pub fn run(args: &Args) -> Result<(), String> {
 }
 
 /// `--root 类.方法:描述符` 与 `--seed-class 类`（全部 public 方法，命令行入口 main 除外）展开为种子方法
-fn seed_roots(cp: &ClassPath, roots: &[&String], classes: &[&String]) -> Result<Vec<MemberRef>, String> {
+pub(crate) fn seed_roots(cp: &ClassPath, roots: &[&String], classes: &[&String]) -> Result<Vec<MemberRef>, String> {
     let mut out = Vec::new();
     for r in roots {
         let (head, desc) = r.split_once(':').ok_or_else(|| format!("--root 格式应为 类.方法:描述符：{r}"))?;

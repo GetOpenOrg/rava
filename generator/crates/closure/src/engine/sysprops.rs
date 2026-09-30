@@ -6,8 +6,12 @@
 //! - 键为字符串常量时：表中键 → 声明值（`values`）；存在但取值启动期才定（`dynamic`）→ 不折叠；
 //!   表外键 → 缺省值（无缺省实参即 null）；
 //! - 运行期可能被改写的键不折叠：活代码里属性表对象上的按键改写入口（`writers`）使该键不折叠；
-//!   改写键推不出、属性表对象逃逸（写入字段 / 数组、作实参 / 返回值 / indy 实参、调用非读写入口）、
-//!   字节码写持有字段、手写体调用改写入口 → 全部不折叠。
+//!   改写键推不出、属性表对象逃逸（写入字段 / 数组、作实参 / indy 实参、调用非读写 / 只读查询入口）、
+//!   字节码写持有字段、手写体调用改写入口 → 全部不折叠；
+//! - 作返回值不算逃逸，只要每个调用方都拿到带标签的结果（其后的使用由调用方自己的扫描判定）：
+//!   调用方拿到标签 ⇔ 字节码调用点、调用目标唯一（取被调方法返回常量）、返回常量仍带属性表标签。
+//!   以下任一成立即全部不折叠：返回常量合流后丢了标签；方法有非字节码调用点入口（手写 / 反射 /
+//!   方法句柄 / lambda / VM 根）；某个目标不唯一（虚派发）的调用点与它同名同描述符。
 //!
 //! 不折叠集合只增不减；增长时清掉依赖它的缓存（static final 常量、构造器摘要、读取摘要），
 //! 折叠过属性读取 / 字段读取的方法失效重算——单调不动点上的折叠只来自最终仍稳定的键。
@@ -29,6 +33,17 @@ pub(super) struct PropSum {
     pub(super) receiver: bool,
     pub(super) key: usize,
     pub(super) default: DefArg,
+}
+
+/// 返回属性表对象的方法与调用方可见性（均只增不减，两侧先后到达都能判定）
+#[derive(Default)]
+pub(super) struct SpRet {
+    /// 返回值可能是属性表对象的方法
+    methods: BTreeSet<MemberRef>,
+    /// 有非字节码调用点入口的方法
+    untracked: BTreeSet<MemberRef>,
+    /// 目标不唯一的引用返回调用点（名字, 描述符）
+    virt: BTreeSet<(String, String)>,
 }
 
 /// 运行期可能被改写（不折叠）的键
@@ -194,7 +209,7 @@ impl Ctx<'_> {
 
 impl Engine<'_> {
     /// 字节码方法里属性表对象的改写 / 逃逸（活代码）：不折叠集合增长
-    pub(super) fn sysprops_scan(&mut self, a: &Analysis) {
+    pub(super) fn sysprops_scan(&mut self, m: usize, a: &Analysis) {
         if self.man.sysprops.is_empty() || self.ctx.punstable.borrow().all {
             return;
         }
@@ -202,12 +217,15 @@ impl Engine<'_> {
         for (_, e) in &a.events {
             match e {
                 Event::Invoke { opcode, mref, iface, args } => {
+                    if self.sysprops_virtual(*opcode, mref, *iface, a.conservative) {
+                        keys.push(None);
+                    }
                     let k = mref.to_string();
                     if self.man.sysprops.is_holder(&k) && a.conservative {
                         keys.push(None);
                     }
                     for (i, _) in args.iter().enumerate().filter(|(_, v)| may_be_sysprops(v)) {
-                        if i == 0 && self.ctx.read_spec(*opcode, mref, *iface, None).is_some_and(|s| s.receiver) {
+                        if i == 0 && (self.man.sysprops.is_query(&k) || self.ctx.read_spec(*opcode, mref, *iface, None).is_some_and(|s| s.receiver)) {
                             continue;
                         }
                         let w = self.man.sysprops.writer(&k).filter(|_| i == 0);
@@ -224,12 +242,67 @@ impl Engine<'_> {
                         keys.push(None);
                     }
                 }
-                Event::ArrayStore { value, .. } | Event::Return(value) if may_be_sysprops(value) => keys.push(None),
+                Event::ArrayStore { value, .. } if may_be_sysprops(value) => keys.push(None),
+                Event::Return(value) if may_be_sysprops(value) && self.sysprops_returner(m) => keys.push(None),
                 Event::Indy { args, .. } if args.iter().any(may_be_sysprops) => keys.push(None),
                 _ => {}
             }
         }
         self.sysprops_unstable(keys);
+    }
+
+    /// 方法返回属性表对象：已有非字节码入口或同名同描述符的虚调用点 → 逃逸（true）
+    fn sysprops_returner(&mut self, m: usize) -> bool {
+        let key = self.methods[m].key.clone();
+        let sig = (key.name.to_string(), key.desc.to_string());
+        let r = &mut self.spret;
+        let esc = r.untracked.contains(&key) || r.virt.contains(&sig);
+        r.methods.insert(key);
+        esc
+    }
+
+    /// 目标不唯一（或分析保守、返回值由清单事实替换）的引用返回调用点：与返回属性表对象的方法同名同描述符 → 逃逸（true）
+    fn sysprops_virtual(&mut self, opcode: u8, mref: &MemberRef, iface: bool, conservative: bool) -> bool {
+        if !mref.desc.ends_with(';') {
+            return false;
+        }
+        let c = self.ctx.call_info(opcode, mref, iface);
+        if !conservative && c.target.is_some() && c.fact.is_none() {
+            return false;
+        }
+        let r = &mut self.spret;
+        let esc = r.methods.iter().any(|k| k.name == mref.name && k.desc == mref.desc);
+        r.virt.insert((mref.name.to_string(), mref.desc.to_string()));
+        esc
+    }
+
+    /// 方法入口：非字节码调用点（手写 / 反射 / 方法句柄 / lambda / VM 根）拿不到带标签的返回值
+    pub(super) fn sysprops_entry(&mut self, key: &MemberRef, via: &Via) {
+        if self.man.sysprops.is_empty() || !key.desc.ends_with(';') {
+            return;
+        }
+        let tracked = matches!(via.kind, "invoke" | "dispatch")
+            && matches!(via.from, From::Method(c) if self.methods[c].kind == Kind::Bytecode);
+        if tracked || !self.spret.untracked.insert(key.clone()) {
+            return;
+        }
+        if self.spret.methods.contains(key) {
+            self.sysprops_unstable(vec![None]);
+        }
+    }
+
+    /// 返回常量合流后不再带属性表标签：调用方拿不到标签 → 全部不折叠
+    pub(super) fn sysprops_rval(&mut self, m: usize, a: &Analysis, r: &PV) {
+        if self.man.sysprops.is_empty() || self.ctx.punstable.borrow().all {
+            return;
+        }
+        let ret = a.events.iter().any(|(_, e)| matches!(e, Event::Return(v) if may_be_sysprops(v)));
+        let kept = matches!(r, PV::Const(v) if may_be_sysprops(v));
+        let cur = self.ctx.rvals.borrow().get(&self.methods[m].key).cloned();
+        let joined = PV::join(cur.as_ref(), r);
+        if ret && !(kept && matches!(&joined, PV::Const(v) if may_be_sysprops(v))) {
+            self.sysprops_unstable(vec![None]);
+        }
     }
 
     /// 手写体调用改写入口（接收者推不出）：全部不折叠

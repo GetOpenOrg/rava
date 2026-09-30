@@ -165,8 +165,13 @@ impl<'a> Engine<'a> {
                     NOCTX if self.fresh_factory(&resolved) => self.site_ctx(m, off),
                     c => c,
                 };
+                // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
+                let named = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { None };
                 let t = self.callee(m, off, resolved, ctx, via);
-                self.edge(m, off, t, Recv::None, &a, ret, res);
+                self.edge(m, off, t, Recv::None, &a, ret, if named.is_some() { None } else { res });
+                for c in named.unwrap_or_default() {
+                    self.named_class(m, off, &c);
+                }
             }
             op::INVOKESPECIAL => {
                 let r = recv_feeds(self);

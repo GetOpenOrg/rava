@@ -89,15 +89,38 @@ impl<'a> Engine<'a> {
                 }
                 continue;
             }
-            let (cls, obj) = match self.objs.get(&x) {
-                Some(&c) => (c, true),
-                None => (x, false),
+            // 类镜像是静态字段基址（staticFieldBase）：读所指类的静态引用字段；所指未知按 open
+            // 类镜像：同时是静态字段基址（staticFieldBase），读所指类的静态引用字段（所指未知按 open）与 Class 的实例字段
+            let class = self.id(CLASS);
+            if let Some(&c) = self.mirrors.get(&x) {
+                for (fi, _) in self.static_ref_fields(c) {
+                    self.flow(Node::F(fi), res, rt);
+                }
+            } else if x == class {
+                self.add_to(res, &TypeSet::open(rt));
+            }
+            let (cls, obj) = match (self.objs.get(&x), self.mirrors.contains_key(&x)) {
+                (Some(&c), _) => (c, true),
+                (None, true) => (class, false),
+                (None, false) => (x, false),
             };
             for (fi, tid) in self.ref_fields(cls).iter().copied() {
                 let n = if obj { self.obj_field(x, fi, tid) } else { Node::F(fi) };
                 self.flow(n, res, rt);
             }
         }
+    }
+
+    /// 类 c 自身声明的静态引用字段节点（静态字段基址 = 声明类的类镜像）
+    fn static_ref_fields(&mut self, c: u32) -> Vec<(usize, u32)> {
+        let Some(cf) = self.h.class(&self.names[c as usize].clone()) else { return vec![] };
+        let mut out = Vec::new();
+        for f in cf.fields.iter().filter(|f| f.is_static()) {
+            let Some(tid) = parse_field(&f.desc).and_then(|t| self.ptype(&t)) else { continue };
+            let fi = self.field_node(MemberRef { owner: cf.name.clone(), name: f.name.clone(), desc: f.desc.clone() });
+            out.push((fi, tid));
+        }
+        out
     }
 
     pub(super) fn ref_fields(&mut self, cls: u32) -> Rc<[(usize, u32)]> {
@@ -191,8 +214,11 @@ impl<'a> Engine<'a> {
         self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(resolve::is_signature_polymorphic)).unwrap_or(false)
     }
 
-    /// 签名多态写入调用点：写入值接到按名打开的静态引用字段（静态字段句柄没有 holder 坐标）
+    /// 签名多态写入调用点 / 所指未知的静态字段基址：写入值接到按名打开的静态引用字段
     fn poly_write(&mut self, wn: Node) {
+        if self.poly_writes.contains(&wn) {
+            return;
+        }
         self.poly_writes.push(wn);
         for (fi, tid) in self.open_statics.clone() {
             self.flow(wn, Node::U(fi), tid);
@@ -215,7 +241,9 @@ impl<'a> Engine<'a> {
 
     /// 调用点 s 的写入目标实参 i 新增对象：写入值接到对象的引用实例字段（与 `memory_read` 对称）。
     /// 抽象对象按对象分量接入；非抽象类 / open 目标接未知接收者写入节点，open 目标的子类字段不可枚举，
-    /// 写入值随之逃逸
+    /// 写入值随之逃逸。类镜像是静态字段基址（staticFieldBase 返回声明类的类镜像）：写入所指类的静态引用字段；
+    /// 所指未知的镜像、以及可能是类镜像的 open 目标（Class 的超类型）写入按名打开的静态引用字段——
+    /// 静态字段偏移只能经按名取到的字段句柄 / MemberName 得到，按名打开已覆盖全部可写目标
     pub(super) fn hw_site_fields(&mut self, s: u32, i: u16, delta: &TypeSet) {
         let (_, _, t) = self.hw_sites[s as usize];
         if !self.hw_writes(t).get(i as usize).is_some_and(|w| w.as_ref().is_some_and(|w| w.fields)) {
@@ -223,11 +251,20 @@ impl<'a> Engine<'a> {
         }
         let wn = Node::W(s, i);
         let obj = self.id(OBJECT);
+        let class = self.id(CLASS);
         let xs: Vec<u32> = delta.classes.iter().copied().filter(|x| !self.arrays.contains_key(x)).collect();
         for x in xs {
-            let (cls, is_obj) = match self.objs.get(&x) {
-                Some(&c) => (c, true),
-                None => (x, false),
+            if let Some(&c) = self.mirrors.get(&x) {
+                for (fi, tid) in self.static_ref_fields(c) {
+                    self.flow(wn, Node::U(fi), tid);
+                }
+            } else if x == class {
+                self.poly_write(wn);
+            }
+            let (cls, is_obj) = match (self.objs.get(&x), self.mirrors.contains_key(&x)) {
+                (Some(&c), _) => (c, true),
+                (None, true) => (class, false),
+                (None, false) => (x, false),
             };
             for (fi, tid) in self.ref_fields(cls).iter().copied() {
                 let n = if is_obj { self.obj_field(x, fi, tid) } else { Node::U(fi) };
@@ -238,6 +275,9 @@ impl<'a> Engine<'a> {
         for o in os {
             for (fi, tid) in self.ref_fields(o).iter().copied() {
                 self.flow(wn, Node::U(fi), tid);
+            }
+            if self.sub(class, o) {
+                self.poly_write(wn);
             }
             self.flow(wn, Node::Esc, obj);
         }
