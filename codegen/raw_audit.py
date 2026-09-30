@@ -162,8 +162,8 @@ _overrides: set = set()
 _intrinsic_hits: set = set()
 _INTRINSICS: 'frozenset | None' = None
 
-# VM 耦合边界类（closure.toml [vm_boundary]，逐类写明截断依据）的手写方法：与内部包边界类同
-# 规则整类手写、按调用链按需实现——是策略边界而非越界覆盖，单独计数（与 intrinsics 同理）。
+# VM 契约边界类（closure.toml [vm_boundary]，逐类写明准入依据）的手写方法：准入 ②③ 的承载面，
+# 按调用链按需实现——不是越界覆盖，单独计数（与 intrinsics 同理）。
 _vm_boundary_hits: set = set()
 
 
@@ -187,7 +187,7 @@ def record_override(member: str) -> None:
 
 
 def record_vm_boundary(member: str) -> None:
-    """登记一处 VM 耦合边界类的手写方法（不计越界覆盖）。"""
+    """登记一处 VM 契约边界类的手写方法（不计越界覆盖）。"""
     _vm_boundary_hits.add(member)
 
 

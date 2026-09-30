@@ -116,8 +116,6 @@ def _consume(cj, class_infos, resolver, lib_registries):
             cache[name] = parse_class_bytes(data, name) if data is not None else None
         return cache[name]
 
-    _cc.set_data_bundle_loader(load)
-
     jdk_infos = []
     field_stubs: set[str] = set()
     for c in cj['classes']:
@@ -173,9 +171,7 @@ def _consume(cj, class_infos, resolver, lib_registries):
                         s = cm[len('String '):]
                         if s.isidentifier():
                             _cc.REFLECT_FIELD_NAMES.add(s)
-    _cc.DATA_BUNDLE_SEEDS[:] = seeds.get('data_bundles', [])
     _cc.ANNOTATION_ENUM_SEEDS[:] = seeds.get('annotation_enums', [])
-    _cc.JCA_SEEDS[:] = [_jca_service(s) for s in seeds.get('jca', [])]
     _cc.MODULE_RESOURCES.clear()
     from .runtime_manifest import module_resource_paths
     for p in module_resource_paths():
@@ -199,7 +195,3 @@ def _consume(cj, class_infos, resolver, lib_registries):
         print(f"[closure] 反射缺口：{g}")
     return jdk_infos, visited, field_stubs
 
-
-def _jca_service(s: dict):
-    from .jca_services import Service
-    return Service(type=s['type'], algorithm=s['algorithm'], impl=s['impl'], provider=s['provider'])

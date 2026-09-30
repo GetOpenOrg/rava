@@ -14,9 +14,8 @@ import dyn_compare as dc
 
 
 def rules(**kw):
-    base = dict(boundary_packages=['jdk/internal/', 'sun/'],
-                vm_boundary={'java/lang/Thread'},
-                release=['sun/nio/cs/', 'jdk/internal/util/ArraysSupport'],
+    base = dict(vm_boundary={'java/lang/Thread', 'jdk/internal/misc/Unsafe'},
+                release=['java/lang/Thread$Builder'],
                 vm_upcalls=['java/lang/invoke/MethodHandleNatives'],
                 user={'Main'})
     base.update(kw)
@@ -28,16 +27,16 @@ class DomainTest(unittest.TestCase):
         r = rules()
         self.assertEqual(r.domain('Main'), 'user')
         self.assertEqual(r.domain('java/lang/Object'), 'root')
-        # 放行优先于边界包前缀
-        self.assertEqual(r.domain('sun/nio/cs/UTF_8'), 'translate')
-        self.assertEqual(r.domain('jdk/internal/util/ArraysSupport'), 'translate')
-        self.assertEqual(r.domain('jdk/internal/util/ArraysSupport$1'), 'translate')
-        self.assertEqual(r.domain('jdk/internal/util/ArraysSupportX'), 'boundary')
-        self.assertEqual(r.domain('sun/misc/Unsafe'), 'boundary')
+        # translate_nested 放行优先于 VM 边界类
+        self.assertEqual(r.domain('java/lang/Thread$Builder'), 'translate')
+        self.assertEqual(r.domain('java/lang/Thread$Builder$1'), 'translate')
         # VM 边界类连同嵌套类
         self.assertEqual(r.domain('java/lang/Thread$State'), 'boundary')
+        self.assertEqual(r.domain('jdk/internal/misc/Unsafe'), 'boundary')
+        # 其余一律翻译域（无包前缀截断）
         self.assertEqual(r.domain('java/util/ArrayList'), 'translate')
-        self.assertEqual(r.domain('com/foo/Bar'), 'boundary')
+        self.assertEqual(r.domain('sun/nio/cs/UTF_8'), 'translate')
+        self.assertEqual(r.domain('com/foo/Bar'), 'translate')
 
     def test_entry_matches(self):
         self.assertTrue(dc.entry_matches('a/b/', 'a/b/C'))
@@ -121,7 +120,7 @@ class AttributeTest(unittest.TestCase):
                                      ('java/util/H', 'n', '()V', 0), MAIN)), 'handwritten')
 
     def test_boundary_code(self):
-        self.assertEqual(self.cat(ev(('sun/misc/U', 'y', '()V', 0), MAIN)), 'boundary-code')
+        self.assertEqual(self.cat(ev(('jdk/internal/misc/Unsafe', 'y', '()V', 0), MAIN)), 'boundary-code')
 
     def test_vm_upcall(self):
         self.assertEqual(self.cat(ev(('java/lang/invoke/X', 'y', '()V', 0),
@@ -133,7 +132,7 @@ class AttributeTest(unittest.TestCase):
         self.assertEqual(self.cat(ev()), 'vm-entry')
 
     def test_boundary_dispatch(self):
-        sigs = dc.boundary_ref_sigs(['jdk/internal/access/JLA.get:(I)I', 'java/util/A.f:()V'],
+        sigs = dc.boundary_ref_sigs(['java/lang/Thread.get:(I)I', 'java/util/A.f:()V'],
                                     self.r)
         self.assertEqual(sigs, {'get:(I)I'})
         self.assertEqual(self.cat(ev(('java/lang/System$2', 'get', '(I)I', 1), MAIN), sigs),
@@ -159,14 +158,14 @@ def closure():
 class CompareTest(unittest.TestCase):
     def test_compare_and_tag(self):
         xlog = XLOG + "[0.04s][info][class,load] java.util.Missed source: jrt:/java.base\n" \
-                      "[0.05s][info][class,load] sun.misc.Unsafe source: jrt:/java.base\n" \
+                      "[0.05s][info][class,load] jdk.internal.misc.Unsafe source: jrt:/java.base\n" \
                       "[0.06s][info][class,load] java.util.NoEvent source: jrt:/java.base\n"
         agent = ("L java/util/Missed main\nF Main main ([Ljava/lang/String;)V 9\n"
-                 "L sun/misc/Unsafe main\nF Main main ([Ljava/lang/String;)V 9\n")
+                 "L jdk/internal/misc/Unsafe main\nF Main main ([Ljava/lang/String;)V 9\n")
         res = dc.compare(closure(), xlog, agent, rules(), 'Main')
         self.assertEqual([m['class'] for m in res['miss']], ['java/util/Missed'])
         self.assertEqual([m['class'] for m in res['unattributed']], ['java/util/NoEvent'])
-        self.assertEqual([m['class'] for m in res['attributed']['boundary']], ['sun/misc/Unsafe'])
+        self.assertEqual([m['class'] for m in res['attributed']['boundary']], ['jdk/internal/misc/Unsafe'])
         ex = res['extra']
         self.assertEqual(ex['classes'], ['java/util/Orphan', 'java/util/Unused'])
         self.assertEqual(ex['unexplained'], ['java/util/Orphan'])

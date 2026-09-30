@@ -53,8 +53,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 AGENT_SRC = ROOT / "scripts" / "dyn_agent"
-# 与 Manifest::domain 同口径：公开 API 前缀属翻译域，根类单列
-PUBLIC_API = ("java/", "javax/")
+# 与 Manifest::domain 同口径：根类单列
 ROOT_CLASS = "java/lang/Object"
 BYTECODE = "bytecode"
 
@@ -77,7 +76,6 @@ def entry_matches(entry: str, cls: str) -> bool:
 @dataclass
 class DomainRules:
     """闭包域判定规则（数据来自 closure.toml / seeds.toml）。"""
-    boundary_packages: list[str]
     vm_boundary: set[str]
     release: list[str]
     vm_upcalls: list[str]
@@ -87,9 +85,8 @@ class DomainRules:
     def from_manifest(cls, user: set[str]) -> "DomainRules":
         sys.path.insert(0, str(ROOT))
         from codegen import runtime_manifest as rm
-        return cls(boundary_packages=rm.boundary_packages(),
-                   vm_boundary=set(rm.vm_boundary_classes()),
-                   release=rm.release_entries() + rm.jca_release_entries(),
+        return cls(vm_boundary=set(rm.vm_boundary_classes()),
+                   release=rm.vm_boundary_translate_nested(),
                    vm_upcalls=rm.dynamic_vm_upcall_classes(),
                    user=set(user))
 
@@ -100,11 +97,9 @@ class DomainRules:
             return "root"
         if any(entry_matches(r, cls) for r in self.release):
             return "translate"
-        if any(cls.startswith(p) for p in self.boundary_packages):
-            return BOUNDARY
         if cls.split("$", 1)[0] in self.vm_boundary:
             return BOUNDARY
-        return "translate" if cls.startswith(PUBLIC_API) else BOUNDARY
+        return "translate"
 
     def is_vm_upcall(self, cls: str) -> bool:
         return any(entry_matches(e, cls) for e in self.vm_upcalls)

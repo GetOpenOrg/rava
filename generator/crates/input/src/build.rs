@@ -19,7 +19,7 @@ use closure::manifest::Domain;
 use resolve::classpath::{ClassPath, Origin};
 use ty::Registry;
 
-use crate::facts::{ClosureFacts, JcaService};
+use crate::facts::ClosureFacts;
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
 use crate::norm::{apply_fold, NInsn, NormCode};
@@ -96,9 +96,7 @@ pub struct EmitInput {
     /// 只按类型层级入闭包的类
     pub field_stubs: BTreeSet<String>,
     pub reflect: ReflectFacts,
-    pub data_bundle_seeds: Vec<String>,
     pub annotation_enum_seeds: Vec<String>,
-    pub jca_seeds: Vec<JcaService>,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
@@ -346,9 +344,7 @@ impl<'a> BuildInput<'a> {
             visited,
             field_stubs,
             reflect,
-            data_bundle_seeds: f.seeds.data_bundles.clone(),
             annotation_enum_seeds: f.seeds.annotation_enums.clone(),
-            jca_seeds: f.seeds.jca.clone(),
             module_resources,
             precheck_visited: f.methods.iter().map(|m| m.id.to_string()).collect(),
             handwritten,

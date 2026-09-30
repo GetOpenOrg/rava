@@ -1,23 +1,13 @@
-# 闭包边界清单：调用链 BFS 在哪里截断（手写边界）、哪里放行（按字节码翻译）。
+# 闭包边界清单：调用链 BFS 在哪里截断（手写边界）。
 #
-# 读取入口：codegen/runtime_manifest.py（生成器不出现 JDK 类名——原则 4，类名只在本清单）。
-# 条目形态：`packages` 为包前缀（必须以 `/` 结尾）；`classes` 为类 binary name（覆盖自身与其
-# `$` 嵌套类，不作字符串前缀匹配——`java/security/Permission` 不覆盖 `Permissions`）。
-# 加载器校验两种形态不混用。
-
-# ── 内部边界包 ─────────────────────────────────────────────────────────────────────
-# BFS 在此截断，类整体手写 / 存根，不展开调用链（docs/reference/handwritten-boundary.md §三 过渡类）。
-# 终态：C1d「边界收窄」按包实测后取消前缀截断，本段收窄为逐类的 VM 契约清单
-# （docs/plans/2026-09-29-boundary-narrowing.md）。
-[boundary]
-packages = [
-    "sun/",
-    "jdk/",
-    "com/sun/",
-    "com/oracle/",
-    # JVM 安全服务层（JDK 21 SecurityManager 恒 null；JDK 24+ JEP 486 移除）。
-    "java/security/",
-]
+# 读取入口：codegen/runtime_manifest.py 与 generator/crates/{closure,input}/src/manifest.rs（生成器 /
+# 分析器不出现 JDK 类名——原则 4，类名只在本清单）。
+# 条目形态：`classes` 为类 binary name（覆盖自身与其 `$` 嵌套类，不作字符串前缀匹配——
+# `java/security/Permission` 不覆盖 `Permissions`）。
+#
+# C1d 终态（2026-09-30，docs/plans/2026-09-29-boundary-narrowing.md §6.8）：包前缀截断（原 [boundary]
+# 的 sun/ jdk/ com/sun/ com/oracle/ java/security/）与放行清单（原 [release]）已取消——JDK 全部类
+# 按字节码翻译，截断只剩下方逐类的 VM 契约清单（docs/reference/handwritten-boundary.md 准入 ②③）。
 
 # ── VM 耦合边界类 ──────────────────────────────────────────────────────────────────
 # 公开包（java/）里由 JVM 自身引导、承载 VM 设施的类。它们在 HotSpot 中由 VM 本地代码直接
@@ -62,107 +52,29 @@ classes = [
     # MH-native（docs/plans/2026-09-26-mh-native.md）：LambdaForm 运行期字节码生成器。原生二进制
     # 不能定义隐藏类；句柄调用由原生 LambdaForm 解释器承载，编译入口返回解释入口（vm_intrinsics.toml）。
     "java/lang/invoke/InvokerBytecodeGenerator",
+
+    # ── C1d 终态：内部包的 VM 契约类（准入 ③ VM 注入状态 / VM 驱动行为，② 类加载模型）──────────────
+    # Unsafe：堆 / 直接内存访问原语（字段偏移 ↔ 字段身份、数组基址 / 比例、CAS、park）。native 之外
+    # 的包装（getInt(Object,long) 等 @IntrinsicCandidate 族）经原生对象模型直接承载（unsafe__impl.rs）。
+    "jdk/internal/misc/Unsafe",
+    # VM：引导阶段状态（initLevel / isBooted / isModuleSystemInited / isJavaLangInvokeInited）、停机标记、
+    # 保存属性——HotSpot 由 initPhase1~3 与 create_vm 写入，原生二进制进入 main 即「引导完成」档位。
+    "jdk/internal/misc/VM",
+    # 内建类加载器层级（boot / platform / app）与 boot 层服务：原生单二进制无动态类加载与本地库加载。
+    "jdk/internal/loader/BootLoader",
+    "jdk/internal/loader/ClassLoaders",
 ]
 
-# ── 边界放行：内部边界前缀下按字节码翻译的纯 Java 类 / 包 ─────────────────────────────
-# JCA 服务实现族的放行在 seeds.toml [jca]（与服务种子同一消费面）。
-[release]
-packages = [
-    # FS-R R2a（docs/plans/2026-09-27-reflection-metadata-table.md）：反射访问器族（JDK 21 的
-    # Field.get / Method.invoke 经 ReflectionFactory → MethodHandleAccessorFactory → DirectMethodHandle，
-    # 与 MH-native 同一管线）。包内 native（Reflection.getCallerClass 等）由共置 _impl.rs 手写；运行期
-    # 字节码生成点（generateSerializationConstructor）按 vm_intrinsics.toml 准入（R3）。
-    "jdk/internal/reflect/",
-    # FS-R R4b：注解解析族（Class/Field/Method.getAnnotation → AnnotationParser 按原始字节解析，
-    # 实例经 Proxy.newProxyInstance + AnnotationInvocationHandler）。唯一例外 parseSig 手写：注解签名
-    # 恒为描述符形态，结果即描述符 → Class（annotation_parser_impl.rs）——sun/reflect/generics 不放行
-    # （其泛型 visitor 体系使 java_runtime 编译峰值内存越过 15G）。
-    "sun/reflect/annotation/",
-    # 旧日历 API 的历法引擎（GregorianCalendar / Date / TimeZone 的 CalendarSystem、Gregorian、
-    # BaseCalendar、ZoneInfo、ZoneInfoFile 等，纯 Java）。ZoneInfoFile 读
-    # <java.home>/lib/tzdb.dat → jdk_resources 嵌入数据；TimeZone 的两个 native 见 time_zone_impl.rs。
-    "sun/util/calendar/",
-    # C1d：浮点十进制转换（DoubleToDecimal / FloatToDecimal / FormattedFPDecimal、dtoa 的 FloatingDecimal /
-    # FDBigInteger 等，纯 Java）。手写近似无法逐位一致（DecimalFormat HALF_EVEN 依赖 dtoa 产物），按字节码翻译。
-    "jdk/internal/math/",
-    # C1d：特权属性读取动作（GetPropertyAction / GetBooleanAction / GetIntegerAction 等，纯 Java，0 个
-    # ACC_NATIVE）。安全管理器恒 null，privilegedGetProperty 等按字节码直通 System.getProperty；原手写
-    # 属过渡类（策略截断），删除后闭包变小（手写不透明返回的 Character* 过近似消失，计划 §6.6）。
-    "sun/security/action/",
-    # C1d：模块系统工具（ServicesCatalog / Resources / Checks 等，纯 Java，0 个 ACC_NATIVE）。
-    # ServicesCatalog 的 getServicesCatalogOrNull / findServices 仍为过渡手写（被 jdk/internal/access 的
-    # 整体手写 JavaLangAccess 与 jdk/internal/loader 截断阻塞，见 services_catalog_impl.rs），其余按字节码。
-    "jdk/internal/module/",
-    # C1d：HotSpot 性能计数器（PerfCounter / Perf 包装，Java 部分纯字节码）。Perf 的 ACC_NATIVE
-    # （registerNatives / createLong 等）按需手写于 perf_impl.rs：原生二进制无 jvmstat 共享内存，
-    # createLong 返回进程私有的 8 字节缓冲，计数器语义（get/set/add）由字节码经 LongBuffer 承载。
-    "jdk/internal/perf/",
-    # C1d：安全工具类（SecurityConstants / KnownOIDs / ArrayUtil / 算法约束 / HexDumpEncoder 等，纯 Java，
-    # 0 个 ACC_NATIVE）。SecurityConstants.PROVIDER_VER 与 CryptoAlgorithmConstraints.permits 的过渡手写已删；
-    # Debug.getInstance / isOn / isVerbose 仍为过渡手写（阻塞在分析器系统属性折叠，见 debug_impl.rs）。
-    "sun/security/util/",
-    # C1d：方法句柄类型工具（Wrapper / BytecodeDescriptor / VerifyAccess / ValueConversions / BytecodeName /
-    # VerifyType，纯 Java，0 个 ACC_NATIVE）。原 Wrapper / BytecodeDescriptor / VerifyAccess 的过渡手写已删：
-    # 枚举常量、描述符解析与访问检查（含 Module 导出判定）均由字节码翻译承载。
-    "sun/invoke/util/",
-]
-classes = [
-
-    # file: 协议 URL 处理器（纯 Java 的 URLStreamHandler 子类；URL$DefaultFactory 对 file 协议直接
-    # new）。消费方：NativePRNG.getEgdUrl 的 `new URL("file:/dev/random")`（SUN provider 初始化）。
-    "sun/net/www/protocol/file/Handler",
-    # CLDR 货币名束的基类（纯 Java：getContents 数组 → 惰性 HashMap 查表 + 父链回退；L-2）
-    "sun/util/resources/OpenListResourceBundle",
-    # URL 解析的纯 Java 工具（主机串校验、延迟解析开关 $MASKS.DELAY_URL_PARSING_SP_VALUE）
-    "sun/net/util/IPAddressUtil",
-
-    # FS-R：VM 边界类 java/lang/Class 的纯 Java 嵌套辅助类（0 个 ACC_NATIVE）：reflectionData()
-    # 缓存、EnclosingMethodInfo（isLocalClass / isAnonymousClass / getEnclosingClass）、Atomic
-    # （reflectionData / annotationData 的 CAS）、AnnotationData。
+# VM 边界类的纯 Java 嵌套类：按字节码翻译（其余嵌套类随外层类归入边界）。
+# FS-R：java/lang/Class 的 reflectionData() 缓存、EnclosingMethodInfo（isLocalClass / isAnonymousClass /
+# getEnclosingClass）、Atomic（reflectionData / annotationData 的 CAS）、AnnotationData；Class$1 为
+# Class.newInstance 的特权块（构造器 setAccessible(true)）。
+translate_nested = [
     "java/lang/Class$ReflectionData",
     "java/lang/Class$EnclosingMethodInfo",
     "java/lang/Class$Atomic",
     "java/lang/Class$AnnotationData",
-    # Class.newInstance 的特权块（匿名 PrivilegedAction：构造器 setAccessible(true)，纯 Java）。
-    # 消费方：CalendarSystem.forName（JulianCalendar 按类名反射实例化）等 Class.newInstance 调用。
     "java/lang/Class$1",
-
-    # FS-H0 安全组：特权执行与访问控制上下文（纯 Java；native 仅栈上上下文 / 保护域 / 栈遍历物化，
-    # access_controller_impl.rs）。SecurityManager 恒 null，doPrivileged 直通 action.run()。
-    "java/security/AccessController",
-    "java/security/AccessControlContext",
-
-    # 权限与保护域（纯 Java）。消费方：ForkJoinPool 工作线程 ACC（contextWithPermissions）、
-    # ThreadPerTaskExecutor.<clinit>、JCA CryptoPermission。
-    "java/security/Permission",
-    "java/security/PermissionCollection",
-    "java/security/Permissions",
-    "java/security/PermissionsHash",
-    "java/security/BasicPermission",
-    "java/security/BasicPermissionCollection",
-    "java/security/ProtectionDomain",
-
-    # gap 批次 4：随机数流（纯 Java；含嵌套 $AbstractSpliteratorGenerator / $Random*Spliterator /
-    # $AbstractSplittableGenerator 等）。Random / SplittableRandom 的 ints / longs / doubles 流、
-    # 有界随机数核心（boundedNextInt 等）、mix 函数。唯一手写例外 initialSeed：其 secureRandomSeed
-    # 分支经 SecureRandom.getSeed 拉入整条 JCA 链（random_support_impl.rs）。
-    "jdk/internal/util/random/RandomSupport",
-
-    # gap 批次 4：BCP 47 语言标签与区域匹配（纯 Java）。Locale.forLanguageTag / toLanguageTag /
-    # Builder / 扩展（u- / x-）/ LanguageRange / lookup / filter，以及 Locale 实例缓存
-    # （Locale$Cache 的基类 LocaleObjectCache）。BaseLocale 仍手写（常量表下标随 JDK 版本变化）。
-    "sun/util/locale/LanguageTag",
-    "sun/util/locale/InternalLocaleBuilder",
-    "sun/util/locale/LocaleExtensions",
-    "sun/util/locale/Extension",
-    "sun/util/locale/UnicodeLocaleExtension",
-    "sun/util/locale/LocaleSyntaxException",
-    "sun/util/locale/ParseStatus",
-    "sun/util/locale/StringTokenIterator",
-    "sun/util/locale/LocaleMatcher",
-    "sun/util/locale/LocaleEquivalentMaps",
-    "sun/util/locale/LocaleObjectCache",
-    "sun/util/locale/LocaleUtils",
 ]
 
 # ── 动态对照：JVM 直接调用的 Java 入口 ────────────────────────────────────────────────

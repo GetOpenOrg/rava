@@ -22,11 +22,9 @@ pub struct SeedState {
     image_done: BTreeSet<String>,
     family_done: BTreeSet<String>,
 
-    /// 输出：纯数据资源束（发射层 register_data_bundles）
-    pub data_bundles: BTreeSet<String>,
     /// 输出：注解枚举元素类型（类初始化钩子）
     pub annotation_enums: BTreeSet<String>,
-    /// 输出：入选的 JCA 服务
+    /// 已入选的 JCA 服务（去重；实现类经反射分派面登记）
     pub jca: BTreeSet<Service>,
     /// 输出：按名登记的反射分派面（类 → 成员名）
     pub reflect_names: BTreeMap<String, BTreeSet<String>>,
@@ -98,17 +96,15 @@ impl<'a> Engine<'a> {
         }
         self.seeds.locale_bases.extend(bases.iter().cloned());
         let locs = locale::collect(cfg, self.cp, &self.user_classes(), &self.seeds.locales);
-        let names = locale::bundle_classes(&locs, &bases, self.cp, &self.man.seeds.carriers);
+        let names = locale::bundle_classes(&locs, &bases, self.cp);
         eprintln!("[closure] locale 种子：{} 个 locale → {} 个资源束（{}）", locs.len(), names.len(), bases.join(", "));
         for b in names {
-            let Some(cf) = self.cp.get(&b) else { continue };
+            // 资源束由 ResourceBundle / LocaleData 按类名反射构造（Class.forName + newInstance）：
+            // 无参构造器入链并登记反射分派面；内容方法经虚分派随实例化可达
             self.instantiate(&b, Via::root("locale", &b));
             self.init(&b, Via::root("locale", &b));
             self.seed_method(MemberRef { owner: b.clone(), name: "<init>".into(), desc: "()V".into() }, "locale");
-            if let Some((n, d)) = self.man.seeds.carriers.carrier_of(self.cp, &cf) {
-                self.seed_method(MemberRef { owner: b.clone(), name: n, desc: d }, "locale");
-            }
-            self.seeds.data_bundles.insert(b);
+            self.seeds.reflect_names.entry(b).or_default().insert("<init>".into());
         }
     }
 
@@ -156,7 +152,7 @@ impl<'a> Engine<'a> {
                 }
                 self.seeds.reflect_names.entry(s.imp.clone()).or_default().insert("<init>".into());
             }
-            // provider 对象由手写边界按需构造（ProviderConfig 对内建 provider 直接 new）
+            // provider 对象：ProviderConfig 对内建 provider 按字节码直接 new，其余经 ServiceLoader 反射构造
             if let Some(p) = self.man.seeds.jca.provider_class(&s.provider).map(String::from) {
                 if self.cp.contains(&p) {
                     self.instantiate(&p, Via::root("jca-provider", &p));

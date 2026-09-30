@@ -88,3 +88,20 @@ pub fn os_release() -> std::string::String {
         .map(|s| s.trim().to_owned())
         .unwrap_or_default()
 }
+
+/// `user.language` / `user.country`：宿主区域（HotSpot initPhase1 的 SystemProps.Raw 取
+/// LC_ALL / LC_MESSAGES / LANG，形如 `en_US.UTF-8`）；C / POSIX / 未设置时为 en / 空。
+pub fn locale() -> (std::string::String, std::string::String) {
+    let raw = ["LC_ALL", "LC_MESSAGES", "LANG"].iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    let tag = raw.split(['.', '@']).next().unwrap_or("");
+    if tag.is_empty() || tag == "C" || tag == "POSIX" {
+        return ("en".to_owned(), std::string::String::new());
+    }
+    let mut parts = tag.splitn(2, '_');
+    let language = parts.next().unwrap_or("en").to_owned();
+    let country = parts.next().unwrap_or("").to_owned();
+    (language, country)
+}

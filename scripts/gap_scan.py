@@ -147,8 +147,6 @@ def run_api(ns) -> None:
             # 子包按 --recursive 决定是否纳入
             if not ns.recursive and name.rsplit('/', 1)[0] + '/' not in pkgs:
                 continue
-            if cc._is_boundary_class(name):
-                continue
             data = resolver.resolve(name)
             ci = parse_class_bytes(data, name) if data else None
             if ci is None or not (ci.access_flags & 0x0001):      # public 类

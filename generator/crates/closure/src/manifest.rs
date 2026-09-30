@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 pub enum Domain {
     /// 用户类：字节码翻译
     User,
-    /// 公开 API（java/、javax/）与放行条目：字节码翻译
+    /// JDK 类（VM 契约类之外）：字节码翻译
     Translate,
-    /// 内部边界 / VM 耦合边界 / 翻译域外：整体手写，BFS 截断
+    /// VM 契约边界类（closure.toml [vm_boundary]）：手写 + 按方法字节码
     Boundary,
     /// 根类（java/lang/Object）：手写 ObjectVTable
     Root,
@@ -66,8 +66,8 @@ pub enum Fact {
 
 pub struct Manifest {
     pub runtime_dir: PathBuf,
-    boundary_pkgs: Vec<String>,
     vm_boundary: HashSet<String>,
+    /// VM 边界类中按字节码翻译的嵌套类（`[vm_boundary] translate_nested`）与分析期追加的放行条目
     release: Vec<String>,
     /// 模拟删除共置手写的放行条目（`rava closure --release-bytecode`）：前缀内按精确名提供的手写不再取手写
     hw_dropped: Vec<String>,
@@ -87,6 +87,8 @@ pub struct Manifest {
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
     pub boot_init: Vec<String>,
+    /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
+    pub boot_calls: Vec<String>,
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
@@ -97,7 +99,6 @@ pub struct Manifest {
 }
 
 const OBJECT: &str = "java/lang/Object";
-const PUBLIC_API: [&str; 2] = ["java/", "javax/"];
 
 fn load(dir: &Path, name: &str) -> Result<toml::Table, String> {
     let p = dir.join(name);
@@ -122,10 +123,7 @@ impl Manifest {
         let seeds = load(runtime_dir, "seeds.toml")?;
         let vm = load(runtime_dir, "vm_intrinsics.toml")?;
 
-        let mut release = strings(&closure, "release", "packages");
-        release.extend(strings(&closure, "release", "classes"));
-        release.extend(strings(&seeds, "jca", "release_packages"));
-        release.extend(strings(&seeds, "jca", "release_classes"));
+        let release = strings(&closure, "vm_boundary", "translate_nested");
 
         let mut intrinsics = HashSet::new();
         if let Some(arr) = vm.get("intrinsic").and_then(|v| v.as_array()) {
@@ -237,7 +235,6 @@ impl Manifest {
 
         Ok(Manifest {
             runtime_dir: runtime_dir.to_path_buf(),
-            boundary_pkgs: strings(&closure, "boundary", "packages"),
             vm_boundary: strings(&closure, "vm_boundary", "classes").into_iter().collect(),
             release,
             hw_dropped: Vec::new(),
@@ -257,6 +254,7 @@ impl Manifest {
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
+            boot_calls: strings(&seeds, "boot_init", "calls"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
@@ -299,17 +297,10 @@ impl Manifest {
         if self.released(cls) {
             return Domain::Translate;
         }
-        if self.boundary_pkgs.iter().any(|p| cls.starts_with(p.as_str())) {
-            return Domain::Boundary;
-        }
-        let outer = cls.split('$').next().unwrap_or(cls);
-        if self.vm_boundary.contains(outer) {
-            return Domain::Boundary;
-        }
-        if PUBLIC_API.iter().any(|p| cls.starts_with(p)) {
-            Domain::Translate
-        } else {
+        if self.is_vm_boundary(cls) {
             Domain::Boundary
+        } else {
+            Domain::Translate
         }
     }
 

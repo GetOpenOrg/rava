@@ -53,6 +53,8 @@ pub fn lookup(path: &str) -> Option<&'static [u8]> {
     let rel = rel.trim_start_matches('/');
     match rel {
         "lib/tzdb.dat" => Some(TZDB_DAT),
+        // Security.initialize 以 FileInputStream 读 <java.home>/conf/security/java.security
+        "conf/security/java.security" => Some(security_properties().as_bytes()),
         _ => None,
     }
 }
@@ -117,15 +119,12 @@ pub fn virtual_close(fd: i32) {
 }
 
 /// JDK `$JAVA_HOME/conf/security/java.security` 的生效属性（按语料 JDK 版本各一份，机械提取见
-/// 文件头注）——`Security.getProperty` 的只读数据源。版本随 `crate::jdk_feature()`（21 / 25 间
+/// 文件头注）——经 [`lookup`] 作为伪 `$JAVA_HOME` 下的 conf 文件供 `Security.initialize` 读取。版本随 `crate::jdk_feature()`（21 / 25 间
 /// 有键增删，如 25 移除 policy.provider）。
 static SECURITY_PROPERTIES_21: &str = include_str!("java.security.21.properties");
 static SECURITY_PROPERTIES_25: &str = include_str!("java.security.25.properties");
 
-/// 按键查 java.security 基线属性（未定义 → None）。
-pub fn security_property(key: &str) -> Option<&'static str> {
-    let table = if crate::jdk_feature() >= 22 { SECURITY_PROPERTIES_25 } else { SECURITY_PROPERTIES_21 };
-    table.lines()
-        .filter(|l| !l.starts_with('#'))
-        .find_map(|l| l.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v))
+/// 当前语料 JDK 版本的 java.security 属性文本（Properties.load 格式）。
+fn security_properties() -> &'static str {
+    if crate::jdk_feature() >= 22 { SECURITY_PROPERTIES_25 } else { SECURITY_PROPERTIES_21 }
 }

@@ -1,11 +1,11 @@
 //! 发射层读取的 runtime 清单（`codegen/runtime_manifest.py` 发射层消费部分的移植）。
 //!
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
-//! - closure.toml：`[boundary]` / `[vm_boundary]` / `[release]`；
-//! - seeds.toml：`[jca]` 放行、`[module_resources]`、`[boot_init]`、`[data_bundle]` 载体；
+//! - closure.toml：`[vm_boundary]`（含 `translate_nested`）；
+//! - seeds.toml：`[module_resources]`、`[boot_init]`；
 //! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`。
 //!
-//! 文件缺失视为空表；格式约定（包条目以 `/` 结尾、类条目不以 `/` 结尾、
+//! 文件缺失视为空表；格式约定（类条目不以 `/` 结尾、
 //! 内建条目须写 kind 与 reason）违反时返回 [`InputError::Manifest`]。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,20 +41,16 @@ impl IndyKind {
 pub struct RuntimeManifest {
     /// 类型层 txt 清单（签名擦除接口 / 重载缩写）
     pub ty: ty::Manifest,
-    /// 内部边界包前缀（`/` 结尾）
-    pub boundary_packages: Vec<String>,
     /// VM 耦合边界类
     pub vm_boundary_classes: BTreeSet<String>,
-    /// 通用边界放行：包前缀在前、类在后
+    /// VM 边界类中按字节码翻译的嵌套类（`[vm_boundary] translate_nested`）
     pub release: Vec<String>,
-    /// K-JCA 放行：包前缀在前、类在后
-    pub jca_release: Vec<String>,
     /// 模块资源路径（jmod `classes/` 下相对路径）
     pub module_resource_paths: Vec<String>,
     /// 引导初始化类
     pub boot_init_classes: Vec<String>,
-    /// 纯数据资源束载体（`类.方法:描述符`）
-    pub data_bundle_carriers: Vec<String>,
+    /// 引导期调用的静态方法（`类.方法:()V`）
+    pub boot_init_calls: Vec<String>,
     /// VM 内建成员
     pub intrinsic_members: BTreeSet<String>,
     pub caller_sensitive_annotations: BTreeSet<String>,
@@ -93,19 +89,11 @@ fn str_list(sec: Option<&Table>, key: &str, where_: &str) -> Result<Vec<String>,
         .collect()
 }
 
-fn packages(sec: Option<&Table>, key: &str, where_: &str) -> Result<Vec<String>, InputError> {
-    let v = str_list(sec, key, where_)?;
-    if let Some(bad) = v.iter().find(|p| !p.ends_with('/')) {
-        return Err(InputError::Manifest(format!("{where_}.{key}：包条目须以 / 结尾：{bad}")));
-    }
-    Ok(v)
-}
-
 fn classes(sec: Option<&Table>, key: &str, where_: &str) -> Result<Vec<String>, InputError> {
     let v = str_list(sec, key, where_)?;
     if let Some(bad) = v.iter().find(|p| p.ends_with('/')) {
         return Err(InputError::Manifest(format!(
-            "{where_}.{key}：类条目不得以 / 结尾（包请写入 packages）：{bad}"
+            "{where_}.{key}：类条目不得以 / 结尾（清单只收逐类条目）：{bad}"
         )));
     }
     Ok(v)
@@ -148,22 +136,20 @@ impl RuntimeManifest {
 
         let vmb = section(&closure, "vm_boundary");
         let vm_boundary_classes: BTreeSet<String> = classes(vmb, "classes", "vm_boundary")?.into_iter().collect();
-        let rel = section(&closure, "release");
-        let mut release = packages(rel, "packages", "release")?;
-        release.extend(classes(rel, "classes", "release")?);
-        let jca = section(&seeds, "jca");
-        let mut jca_release = packages(jca, "release_packages", "jca")?;
-        jca_release.extend(classes(jca, "release_classes", "jca")?);
+        let release = classes(vmb, "translate_nested", "vm_boundary")?;
+        let boot = section(&seeds, "boot_init");
+        let boot_init_calls = str_list(boot, "calls", "boot_init")?;
+        if let Some(bad) = boot_init_calls.iter().find(|c| !c.ends_with(":()V") || !c.contains('.')) {
+            return Err(InputError::Manifest(format!("boot_init.calls：须为无参静态方法 `类.方法:()V`：{bad}")));
+        }
         let vmc = section(&vm, "vm_constants");
         Ok(RuntimeManifest {
             ty,
-            boundary_packages: packages(section(&closure, "boundary"), "packages", "boundary")?,
             vm_boundary_classes,
             release,
-            jca_release,
             module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
-            boot_init_classes: classes(section(&seeds, "boot_init"), "classes", "boot_init")?,
-            data_bundle_carriers: str_list(section(&seeds, "data_bundle"), "carriers", "data_bundle")?,
+            boot_init_classes: classes(boot, "classes", "boot_init")?,
+            boot_init_calls,
             intrinsic_members: intrinsics(&vm)?,
             caller_sensitive_annotations: str_list(section(&vm, "caller_sensitive"), "annotations", "caller_sensitive")?
                 .into_iter()

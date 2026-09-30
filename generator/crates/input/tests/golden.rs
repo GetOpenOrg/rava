@@ -123,7 +123,7 @@ fn plan_json(p: &ClassPlan) -> Value {
         .iter()
         .map(|m| {
             json!({"n": m.name, "d": m.desc, "rust": m.rust_name, "role": role_str(m.role),
-                   "v": verdict_str(m.verdict), "inh": m.inherited_override})
+                   "v": verdict_str(m.verdict)})
         })
         .collect();
     json!({"c": p.name, "type_only": p.type_only, "methods": methods, "supp": p.iface_supplement})
@@ -140,13 +140,11 @@ fn fnv(b: &[u8]) -> String {
 fn manifest_json(m: &RuntimeManifest) -> Value {
     let indy: BTreeMap<&String, &str> = m.indy_kinds.iter().map(|(k, v)| (k, v.as_str())).collect();
     json!({
-        "boundary_packages": m.boundary_packages,
         "vm_boundary_classes": m.vm_boundary_classes,
         "release": m.release,
-        "jca_release": m.jca_release,
         "module_resource_paths": m.module_resource_paths,
         "boot_init_classes": m.boot_init_classes,
-        "data_bundle_carriers": m.data_bundle_carriers,
+        "boot_init_calls": m.boot_init_calls,
         "intrinsic_members": m.intrinsic_members,
         "caller_sensitive_annotations": m.caller_sensitive_annotations,
         "sigpoly_callsite_typed": m.sigpoly_callsite_typed,
@@ -181,9 +179,7 @@ impl Ctx<'_> {
             "reflect_consts" => json!(e.reflect.consts),
             "reflect_all" => json!(e.reflect.all_members),
             "reflect_field_names" => json!(e.reflect.field_names),
-            "data_bundle_seeds" => json!(e.data_bundle_seeds),
             "annotation_enum_seeds" => json!(e.annotation_enum_seeds),
-            "jca_seeds" => json!(e.jca_seeds.iter().map(|s| [&s.ty, &s.algorithm, &s.imp, &s.provider]).collect::<Vec<_>>()),
             "module_resources" => json!(e.module_resources.iter().map(|(p, b)| json!([p, b.len(), fnv(b)])).collect::<Vec<_>>()),
             "precheck_visited" => json!(e.precheck_visited),
             "manifest" => manifest_json(self.manifest),

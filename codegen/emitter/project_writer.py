@@ -776,21 +776,6 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         hook_block += ('    java_runtime::reflect_dispatch::register_field_dispatch(&[\n'
                        + '\n'.join(_field_reg_lines) + '\n    ]);\n')
 
-    # L-1 资源束登记：BFS 按 locale 种子入选的 CLDR 束类（翻译字节码）的构造闭包，
-    # 供手写边界 LocaleResources 按候选链装载（替代 ResourceBundle.getBundle 的类名反射）
-    from ..callchain import DATA_BUNDLE_SEEDS as _bundle_seeds
-    if _bundle_seeds:
-        _bundle_lines = []
-        for _b in _bundle_seeds:
-            _bpath = '::'.join(['java_runtime',
-                                *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _b.split('/')[:-1]),
-                                short_cls(_b)])
-            _bundle_lines.append(
-                f'        ("{_b}", (|| Ok(java_runtime::java::lang::Object::from({_bpath}::new()?)))'
-                f' as java_runtime::data_bundles::BundleCtor),')
-        hook_block += ('    java_runtime::data_bundles::register_data_bundles(&[\n'
-                       + '\n'.join(_bundle_lines) + '\n    ]);\n')
-
     # 模块资源嵌入表（seeds.toml [module_resources]）：字节写入 scratch 的
     # jdk_resources/module/<路径>，生成 jdk_resources/module_resources.rs（include_bytes! 表）。
     # 恒生成（资源缺席时为空表）——手写 jdk_resources/mod.rs 无条件声明该模块。
@@ -816,47 +801,29 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
            + ''.join(a + '\n' for a in _res_arms)
            + '        _ => None,\n    }\n}\n')
 
-    # K-JCA 服务登记：BFS 按「engine 类在链上 × 用户算法名」入选的服务（实现类翻译字节码，
-    # 构造走 Provider$Service.newInstance 的反射路径）与其 provider 的构造闭包（JDK
-    # ProviderConfig 对内建 provider 直接 new）。手写边界 sun/security/jca 按服务表选 provider、
-    # 经翻译的 Provider.getService 取服务描述。
-    from ..callchain import JCA_SEEDS as _jca_seeds
-    if _jca_seeds:
-        from ..jca_services import provider_class as _provider_class
-
-        def _jca_path(_bin: str) -> str:
-            return '::'.join(['java_runtime',
-                              *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _bin.split('/')[:-1]),
-                              short_cls(_bin)])
-        _jca_lines = [f'        ("{_sv.type}", "{_sv.algorithm}", "{_sv.impl}", "{_sv.provider}"),'
-                      for _sv in _jca_seeds]
-        _prov_lines = []
-        from ..jca_services import load_manifest as _jca_mf
-        _seeded_provs = {_sv.provider for _sv in _jca_seeds}
-        # 清单序 = provider 优先序（JDK security.provider.N）
-        for _pn in [p[0] for p in _jca_mf().providers if p[0] in _seeded_provs]:
-            _pc = _provider_class(_pn)
-            if _pc:
-                _prov_lines.append(
-                    f'        ("{_pn}", (|| Ok(java_runtime::java::lang::Object::from({_jca_path(_pc)}::new()?)))'
-                    f' as java_runtime::jca::ProviderCtor),')
-        hook_block += ('    java_runtime::jca::register_services(&[\n'
-                       + '\n'.join(_jca_lines) + '\n    ]);\n')
-        hook_block += ('    java_runtime::jca::register_providers(&[\n'
-                       + '\n'.join(_prov_lines) + '\n    ]);\n')
-
-    # VM 引导期类初始化（HotSpot initPhase1 对应物）：清单 seeds.toml [boot_init] 中在闭包内
-    # 翻译在场的类，main 启动时按清单顺序初始化（runtime vm_boot_init）
+    # VM 引导期（HotSpot initPhase1 对应物，清单 seeds.toml [boot_init]）：先按序调用 calls 中
+    # 入链的静态方法（VM 发起的全局登记），再按序初始化 classes 中在闭包内翻译在场的类
+    #（runtime vm_boot_init）
     from ..runtime_manifest import boot_init_classes as _boot_init_classes
+    from ..runtime_manifest import boot_init_calls as _boot_init_calls
+    from ..callchain import PRECHECK_CHAIN as _chain
+
+    def _jdk_path(_bin: str) -> str:
+        return '::'.join(['java_runtime',
+                          *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _bin.split('/')[:-1]),
+                          short_cls(_bin)])
     _jdk_names = {jci.name for jci in (jdk_class_infos or [])}
     _boot_lines = []
+    for _bc, _bm in _boot_init_calls():
+        if _bc not in _jdk_names or f'{_bc}.{_bm}:()V' not in _chain['visited']:
+            continue
+        _rm = f'r#{_bm}' if _bm in _RUST_KEYWORDS else _bm
+        _boot_lines.append(f'        ("{_bc}.{_bm}", {_jdk_path(_bc)}::{_rm}'
+                           f' as fn() -> java_runtime::error::Result<()>),')
     for _bn in _boot_init_classes():
         if _bn not in _jdk_names:
             continue
-        _bp = '::'.join(['java_runtime',
-                         *(f'r#{p}' if p in _RUST_KEYWORDS else p for p in _bn.split('/')[:-1]),
-                         short_cls(_bn)])
-        _boot_lines.append(f'        ("{_bn}", {_bp}::__class_init as fn() -> java_runtime::error::Result<()>),')
+        _boot_lines.append(f'        ("{_bn}", {_jdk_path(_bn)}::__class_init as fn() -> java_runtime::error::Result<()>),')
     if _boot_lines:
         hook_block += ('    java_runtime::vm_boot_init(&[\n'
                        + '\n'.join(_boot_lines) + '\n    ]);\n')

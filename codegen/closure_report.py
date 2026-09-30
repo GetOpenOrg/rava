@@ -3,14 +3,8 @@
 角色（每个 JDK 类恰属其一）：
   翻译方法体        调用链上至少一个方法入链，方法体由字节码翻译
   仅类型存根        只作为类型 / 字段 / 签名被引用，无方法入链（方法全部为 panic 存根）
-  手写边界·内部包   closure.toml [boundary] 前缀内、未放行的类（jdk/ sun/ …），整体手写
-  手写边界·VM 耦合  closure.toml [vm_boundary] 的公开包类（Class / ClassLoader …），按方法划分
-                    （手写提供的取手写，其余入链方法按字节码翻译）
-
-来源标注（与角色正交，只标边界前缀内按字节码翻译的类为何被放行）：
-  JCA 服务          seeds.toml [jca] 放行的 provider / 算法实现族
-  数据资源束        结构判定为纯数据的资源束（CLDR locale 数据等）
-  边界放行          closure.toml [release] 放行条目
+  VM 契约边界       closure.toml [vm_boundary] 的逐类 VM 契约清单（Class / ClassLoader / Unsafe …），
+                    按方法划分（手写提供的取手写，其余入链方法按字节码翻译）
 """
 from __future__ import annotations
 
@@ -18,13 +12,8 @@ from collections import defaultdict
 
 ROLE_TRANSLATED = '翻译方法体'
 ROLE_STUB = '仅类型存根'
-ROLE_BOUNDARY_INTERNAL = '手写边界·内部包'
-ROLE_BOUNDARY_VM = '手写边界·VM 耦合'
-ROLES = (ROLE_TRANSLATED, ROLE_STUB, ROLE_BOUNDARY_INTERNAL, ROLE_BOUNDARY_VM)
-
-SRC_JCA = 'JCA 服务'
-SRC_BUNDLE = '数据资源束'
-SRC_RELEASE = '边界放行'
+ROLE_BOUNDARY_VM = 'VM 契约边界'
+ROLES = (ROLE_TRANSLATED, ROLE_STUB, ROLE_BOUNDARY_VM)
 
 
 def _methods_by_class(visited_methods) -> dict[str, int]:
@@ -36,30 +25,19 @@ def _methods_by_class(visited_methods) -> dict[str, int]:
 
 
 def classify(jdk_class_infos, visited_methods) -> list[dict]:
-    """每个 JDK 类一条记录：name / package / role / source / methods（入链方法数）。"""
+    """每个 JDK 类一条记录：name / package / role / methods（入链方法数）。"""
     from . import callchain as cc
     per_cls = _methods_by_class(visited_methods)
     rows = []
     for ci in jdk_class_infos:
         name = ci.name
         n = per_cls.get(name, 0)
-        if cc._is_vm_boundary_class(name) or (cc._is_boundary_class(name)
-                                               and name.split('$', 1)[0] in cc._VM_BOUNDARY_CLASSES):
+        if cc._is_vm_boundary_class(name):
             role = ROLE_BOUNDARY_VM
-        elif cc._is_boundary_class(name):
-            role = ROLE_BOUNDARY_INTERNAL
         else:
             role = ROLE_TRANSLATED if n else ROLE_STUB
-        source = ''
-        if name.startswith(cc._JDK_STUB_ONLY_PREFIXES) and not cc._is_boundary_class(name):
-            if cc._jca_released(name, cc._JCA_MANIFEST):
-                source = SRC_JCA
-            elif cc._is_data_bundle(name):
-                source = SRC_BUNDLE
-            elif cc._released_general(name):
-                source = SRC_RELEASE
         rows.append({'name': name, 'package': name.rsplit('/', 1)[0] if '/' in name else '(默认包)',
-                     'role': role, 'source': source, 'methods': n})
+                     'role': role, 'methods': n})
     return rows
 
 
@@ -83,18 +61,12 @@ def print_summary(user_count: int, rows, top: int = 20) -> None:
         rs = by_role[k]
         m = sum(r['methods'] for r in rs)
         print(f"          {k:<14}{len(rs):>6} 类" + (f"{m:>8} 方法" if m else ''))
-    srcs = defaultdict(int)
-    for r in rows:
-        if r['source']:
-            srcs[r['source']] += 1
-    if srcs:
-        print("        边界前缀内按字节码翻译：" + ' · '.join(f"{k} {v}" for k, v in sorted(srcs.items())))
     table = _package_table(rows)
     print(f"        按包（共 {len(table)} 个包，前 {min(top, len(table))} 个；全表见 jdk-scan 报告）：")
     for pkg, d in table[:top]:
         parts = [f"翻译 {d[ROLE_TRANSLATED]}", f"存根 {d[ROLE_STUB]}"]
-        if d[ROLE_BOUNDARY_INTERNAL] or d[ROLE_BOUNDARY_VM]:
-            parts.append(f"手写 {d[ROLE_BOUNDARY_INTERNAL] + d[ROLE_BOUNDARY_VM]}")
+        if d[ROLE_BOUNDARY_VM]:
+            parts.append(f"VM 契约 {d[ROLE_BOUNDARY_VM]}")
         print(f"          {pkg:<34}{d['classes']:>5} 类（{' / '.join(parts)}）{d['methods']:>7} 方法")
 
 
@@ -104,15 +76,15 @@ def write_report_sections(f, rows) -> None:
     for k in ROLES:
         rs = [r for r in rows if r['role'] == k]
         f.write(f"| {k} | {len(rs)} | {sum(r['methods'] for r in rs)} |\n")
-    f.write("\n## 按包\n\n| 包 | 类数 | 翻译方法体 | 仅类型存根 | 手写边界 | 入链方法 |\n"
+    f.write("\n## 按包\n\n| 包 | 类数 | 翻译方法体 | 仅类型存根 | VM 契约边界 | 入链方法 |\n"
             "|----|-----:|-----:|-----:|-----:|-----:|\n")
     for pkg, d in _package_table(rows):
         f.write(f"| `{pkg}` | {d['classes']} | {d[ROLE_TRANSLATED]} | {d[ROLE_STUB]} | "
-                f"{d[ROLE_BOUNDARY_INTERNAL] + d[ROLE_BOUNDARY_VM]} | {d['methods']} |\n")
+                f"{d[ROLE_BOUNDARY_VM]} | {d['methods']} |\n")
     for k in ROLES:
         rs = sorted((r for r in rows if r['role'] == k), key=lambda r: r['name'])
         if not rs:
             continue
-        f.write(f"\n## {k}（{len(rs)}）\n\n| 类 | 入链方法 | 来源 |\n|----|-----:|------|\n")
+        f.write(f"\n## {k}（{len(rs)}）\n\n| 类 | 入链方法 |\n|----|-----:|\n")
         for r in rs:
-            f.write(f"| `{r['name']}` | {r['methods']} | {r['source']} |\n")
+            f.write(f"| `{r['name']}` | {r['methods']} |\n")

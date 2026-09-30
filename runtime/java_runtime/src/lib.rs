@@ -3,8 +3,6 @@ pub mod anno_pool;
 pub mod array;
 pub mod sync_model;
 pub mod gil;
-pub mod data_bundles;
-pub mod jca;
 pub mod reflect_dispatch;
 pub mod error;
 pub mod java;
@@ -421,10 +419,11 @@ crate::__process_static! {
     > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
 }
 
-/// VM 引导期类初始化（HotSpot `initPhase1` 等对应物，清单 `seeds.toml [boot_init]`）：JDK 依赖
+/// VM 引导期（HotSpot `initPhase1` 等对应物，清单 `seeds.toml [boot_init]`）：VM 发起的全局登记
+/// 调用（calls，例：System.setJavaLangAccess）与引导期类初始化（classes）。JDK 依赖
 /// 某些类先于任何应用代码完成初始化（例：AccessibleObject 登记 ReflectAccess 并缓存
 /// ReflectionFactory——若由 ReflectionFactory.<clinit> 反向触发，重入读到 null 单例）。
-/// 生成项目 main 按清单顺序传入闭包内在场的类；初始化失败即 VM 启动失败。
+/// 生成项目 main 按清单顺序（先 calls 后 classes）传入闭包内在场者；失败即 VM 启动失败。
 pub fn vm_boot_init(inits: &[(&str, fn() -> Result<()>)]) {
     for (_name, init) in inits {
         if let Err(e) = init() {

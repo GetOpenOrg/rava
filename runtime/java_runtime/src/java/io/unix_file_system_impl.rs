@@ -33,6 +33,10 @@ impl UnixFileSystem {
     /// BA_DIRECTORY(4)；不存在返回 0。JDK 用 stat（跟随符号链接）。
     #[jvm_native]
     pub fn getBooleanAttributes0(&self, f: File) -> Result<i32> {
+        // 伪 $JAVA_HOME 的嵌入资源（jdk_resources）是只读普通文件
+        if crate::jdk_resources::lookup(&file_path(&f)).is_some() {
+            return Ok(FileSystem::BA_EXISTS()? | FileSystem::BA_REGULAR()?);
+        }
         let Ok(md) = std::fs::metadata(file_path(&f)) else { return Ok(0) };
         let mut attrs = FileSystem::BA_EXISTS()?;
         let ft = md.file_type();

@@ -55,6 +55,9 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     for c in &man.boot_init {
         e.root_init(c, "boot_init");
     }
+    for m in &man.boot_calls {
+        e.root_boot_call(m, "boot_init");
+    }
     e.run();
     Closure { engine: e, elapsed_ms: t0.elapsed().as_millis() }
 }
@@ -222,9 +225,7 @@ impl Closure<'_> {
                 "gaps": e.reflect_gaps,
             },
             "seeds": {
-                "data_bundles": e.seeds.data_bundles,
                 "annotation_enums": e.seeds.annotation_enums,
-                "jca": e.seeds.jca.iter().map(|s| json!({"type": s.ty, "algorithm": s.algorithm, "impl": s.imp, "provider": s.provider})).collect::<Vec<_>>(),
                 "reflect_names": e.seeds.reflect_names,
                 "reflect_all": e.seeds.reflect_all,
             },

@@ -1,7 +1,7 @@
 """runtime/java_runtime/ 下的手写层清单文件读取（P-1：库知识表的唯一落点）。
 
 CLAUDE.md 原则 4：生成器 Python 代码中不出现 JDK 类名常量。需要按类名枚举的
-**库知识**（载体铺设名单、边界包前缀、重载后缀缩写、签名擦除接口等）以清单文件
+**库知识**（载体铺设名单、VM 契约边界类、重载后缀缩写、签名擦除接口等）以清单文件
 维护在 runtime/（手写层真源，与 closure.toml 同一先例），生成器只负责读取。
 JLS / JVMS 规定的语言层类（Object / String / Class / 包装类 / Record / 注解根接口
 等）不属库知识，集中在 constants.py。
@@ -57,19 +57,11 @@ def _toml(name: str) -> dict:
         return tomllib.load(f)
 
 
-def _packages(sec: dict, key: str, where: str) -> list[str]:
-    vals = list(sec.get(key, []))
-    for v in vals:
-        if not v.endswith('/'):
-            raise ValueError(f'{where}.{key}：包条目须以 / 结尾：{v}')
-    return vals
-
-
 def _classes(sec: dict, key: str, where: str) -> list[str]:
     vals = list(sec.get(key, []))
     for v in vals:
         if v.endswith('/'):
-            raise ValueError(f'{where}.{key}：类条目不得以 / 结尾（包请写入 packages）：{v}')
+            raise ValueError(f'{where}.{key}：类条目不得以 / 结尾（清单只收逐类条目）：{v}')
     return vals
 
 
@@ -86,20 +78,14 @@ def _method_ref(ref: str) -> tuple[str, str, str]:
     return cls, member, desc
 
 
-def boundary_packages() -> list[str]:
-    """内部边界包前缀（closure.toml [boundary]）。"""
-    return _packages(_toml('closure.toml').get('boundary', {}), 'packages', 'boundary')
-
-
 def vm_boundary_classes() -> list[str]:
     """VM 耦合边界类（closure.toml [vm_boundary]）。"""
     return _classes(_toml('closure.toml').get('vm_boundary', {}), 'classes', 'vm_boundary')
 
 
-def release_entries() -> list[str]:
-    """边界放行条目（closure.toml [release]）：包前缀（`/` 结尾）在前、类（含 `$` 嵌套类）在后。"""
-    sec = _toml('closure.toml').get('release', {})
-    return _packages(sec, 'packages', 'release') + _classes(sec, 'classes', 'release')
+def vm_boundary_translate_nested() -> list[str]:
+    """VM 契约边界类中按字节码翻译的嵌套类（closure.toml [vm_boundary] translate_nested）。"""
+    return _classes(_toml('closure.toml').get('vm_boundary', {}), 'translate_nested', 'vm_boundary')
 
 
 def dynamic_vm_upcall_classes() -> list[str]:
@@ -109,14 +95,8 @@ def dynamic_vm_upcall_classes() -> list[str]:
 
 
 def seed_section(name: str) -> dict:
-    """seeds.toml 的一节（annotation / locale / jca / data_bundle / boot_init）。"""
+    """seeds.toml 的一节（annotation / locale / jca / boot_init / module_resources）。"""
     return _toml('seeds.toml').get(name, {})
-
-
-def jca_release_entries() -> list[str]:
-    sec = seed_section('jca')
-    return (_packages(sec, 'release_packages', 'jca')
-            + _classes(sec, 'release_classes', 'jca'))
 
 
 def module_resource_paths() -> list[str]:
@@ -128,9 +108,15 @@ def boot_init_classes() -> list[str]:
     return _classes(seed_section('boot_init'), 'classes', 'boot_init')
 
 
-def data_bundle_carriers() -> list[tuple[str, str, str]]:
-    """纯数据资源束载体 (类, 方法, 描述符)。"""
-    return [_method_ref(r) for r in seed_section('data_bundle').get('carriers', [])]
+def boot_init_calls() -> list[tuple[str, str]]:
+    """VM 启动期调用的静态方法（seeds.toml [boot_init] calls，`类.方法:()V`）→ [(类, 方法)]。"""
+    out = []
+    for r in seed_section('boot_init').get('calls', []):
+        cls, name, desc = _method_ref(r)
+        if desc != '()V' or not cls:
+            raise ValueError(f'boot_init.calls：须为无参 void 静态方法 `类.方法:()V`：{r}')
+        out.append((cls, name))
+    return out
 
 
 def intrinsic_members() -> frozenset:

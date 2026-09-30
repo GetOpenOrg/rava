@@ -49,65 +49,23 @@ _ACC_STATIC  = 0x0008
 
 
 def _audit_override(ci, m) -> None:
-    """FS-H0 审计：公开 API 类的非 native 方法被手写覆盖（跳过字节码翻译）。
+    """FS-H0 审计：非 native 方法被手写覆盖（跳过字节码翻译）。
 
     两条覆盖路径同口径登记：同名 fn（静态 / 非虚）与虚方法的 `__impl_<m>` 手写体。
-    VM 内建函数（vm_intrinsics.toml 准入）与边界类（closure.toml [vm_boundary] / [boundary]
-    内未放行的类，整类手写的策略边界）单独计数，不算越界。"""
-    if m.is_native or m.is_abstract or not ci.name.startswith(('java/', 'javax/')):
+    审计面为全部 JDK 类（手写只存在于 runtime/，按方法判定，不分包）。VM 内建函数
+    （vm_intrinsics.toml 准入）与 VM 契约边界类（closure.toml [vm_boundary] 逐类清单，
+    准入 ②③ 的承载类）单独计数，不算越界；其余即越界覆盖（终态 0）。"""
+    if m.is_native or m.is_abstract:
         return
     from .. import raw_audit as _ra
-    from ..callchain import _is_boundary_class, _is_vm_boundary_class
+    from ..callchain import _is_vm_boundary_class
     _member = f'{ci.name}.{m.name}:{m.descriptor}'
-    if _is_boundary_class(ci.name) or _is_vm_boundary_class(ci.name):
-        # 边界类（closure.toml [vm_boundary] 的 VM 耦合类——按方法划分，手写提供的方法；与
-        # [boundary] 包内未放行的公开包类，如 java/security/Security）：策略边界，单独计数
+    if _is_vm_boundary_class(ci.name):
         _ra.record_vm_boundary(_member)
     elif _member in _ra.intrinsics():
         _ra.record_intrinsic(_member)
     else:
         _ra.record_override(_member)
-
-def _handwritten_inherited_overrides(ci, registry, nf_entry, visible_methods) -> list:
-    """边界类手写覆盖继承虚方法：共置 `_impl.rs` 提供 `__impl_<m>`，而本类字节码未声明 m
-    （声明在祖先，常为 abstract；JDK 中实现位于平台子类，如 LinuxFileSystem 的
-    supportedFileAttributeViews，边界形态以基类承载）。
-
-    按祖先声明合成本类的覆盖声明（去 abstract），走 `handwritten_body` 路径进 vtable
-    ——否则槽位落回声明类 trait default（抽象 = stub panic），手写体永不可达。
-    仅限内部边界类（`java/` `javax/` 公开 API 的手写只许 native，FS-H0）；按名唯一
-    匹配（祖先链上同名非静态方法恰一个），重载歧义不合成。"""
-    if not nf_entry or ci.is_interface or not registry \
-            or ci.name.startswith(('java/', 'javax/')):
-        return []
-    declared = {m.name for m in visible_methods}
-    wanted = sorted(n[len('__impl_'):] for n in nf_entry.get('methods', set())
-                    if n.startswith('__impl_') and n[len('__impl_'):] not in declared)
-    if not wanted:
-        return []
-    import copy as _copy_hw
-    out = []
-    for name in wanted:
-        found = []
-        sup = ci.super_class
-        while sup and sup in registry:
-            sci = registry.get(sup)
-            if sci is None:
-                break
-            found += [m for m in sci.methods
-                      if m.name == name and not m.is_static and not m.is_synthetic
-                      and not (m.access_flags & 0x0002)]   # private 不参与覆盖
-            if found:
-                break
-            sup = sci.super_class
-        if len(found) != 1:
-            continue
-        m = _copy_hw.copy(found[0])
-        m.class_name = ci.name
-        m.is_abstract = False
-        m.access_flags &= ~0x0400
-        out.append(m)
-    return out
 
 
 def _adapt_interface_method(method, ci, iface_bin: str, views: dict):
@@ -1349,13 +1307,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # ── Step 1+2: 引用收集与精确 cross_imports（import_gen）─────────────────
     _referenced = collect_referenced(ci, registry, generated_classes)
-    # 边界类手写覆盖的继承虚方法：合成声明的签名类型同样出现在本文件（E0425）
-    from .import_gen import _add_desc_refs as _add_hw_refs
-    for _hw_m in _handwritten_inherited_overrides(
-            ci, registry, (new_format_map or {}).get(ci.name),
-            [m for m in ci.methods if not m.is_synthetic]):
-        _add_hw_refs(_hw_m.descriptor, _referenced)
-        _add_hw_refs(_hw_m.generic_signature, _referenced)
     cross_imports = gen_cross_imports(
         ci, registry, jdk_crate_pkg_paths, call_chain, generated_classes,
         conflict_map, skipped_classes, user_sibling_imports,
@@ -1519,7 +1470,6 @@ def _gen_class_rs(ci: ClassInfo, registry: dict | None = None,
 
     # 过滤 synthetic 方法（编译器合成桥接方法），再统计重载
     visible_methods = [m for m in ci.methods if not m.is_synthetic]
-    visible_methods += _handwritten_inherited_overrides(ci, registry, _nf_entry, visible_methods)
     # 重载判定在整条父类链上进行（与调用侧 _mangle_if_overloaded 共用同一函数），
     # 保证子类方法名不会按名字遮蔽父类的同名异参方法。
     overloaded_names: set[str] = hierarchy_overloaded_names(ci, registry)

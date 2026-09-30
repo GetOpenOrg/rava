@@ -118,21 +118,10 @@ pub struct MethodFold {
     pub consts: BTreeMap<u32, FoldConst>,
 }
 
-/// JCA 服务四元组
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct JcaService {
-    pub ty: String,
-    pub algorithm: String,
-    pub imp: String,
-    pub provider: String,
-}
-
 /// 种子输出
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SeedFacts {
-    pub data_bundles: Vec<String>,
     pub annotation_enums: Vec<String>,
-    pub jca: Vec<JcaService>,
     pub reflect_names: BTreeMap<String, BTreeSet<String>>,
     pub reflect_all: BTreeSet<String>,
 }
@@ -237,18 +226,7 @@ impl ClosureFacts {
             reflect_members: e.reflect_members.iter().map(|(_, m)| m.clone()).collect(),
             reflect_gaps: e.reflect_gaps.iter().cloned().collect(),
             seeds: SeedFacts {
-                data_bundles: s.data_bundles.iter().cloned().collect(),
                 annotation_enums: s.annotation_enums.iter().cloned().collect(),
-                jca: s
-                    .jca
-                    .iter()
-                    .map(|j| JcaService {
-                        ty: j.ty.clone(),
-                        algorithm: j.algorithm.clone(),
-                        imp: j.imp.clone(),
-                        provider: j.provider.clone(),
-                    })
-                    .collect(),
                 reflect_names: s.reflect_names.clone(),
                 reflect_all: s.reflect_all.clone(),
             },
@@ -384,18 +362,9 @@ pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
 
 fn parse_seeds(s: &Value) -> Result<SeedFacts, InputError> {
     let mut out = SeedFacts {
-        data_bundles: strings(s.get("data_bundles"))?,
         annotation_enums: strings(s.get("annotation_enums"))?,
         ..SeedFacts::default()
     };
-    for j in s.get("jca").and_then(Value::as_array).into_iter().flatten() {
-        out.jca.push(JcaService {
-            ty: str_of(j, "type")?.to_string(),
-            algorithm: str_of(j, "algorithm")?.to_string(),
-            imp: str_of(j, "impl")?.to_string(),
-            provider: str_of(j, "provider")?.to_string(),
-        });
-    }
     if let Some(m) = s.get("reflect_names").and_then(Value::as_object) {
         for (owner, names) in m {
             out.reflect_names.insert(owner.clone(), strings(Some(names))?.into_iter().collect());

@@ -236,6 +236,12 @@ fn vm_snapshot_properties() -> Vec<(&'static str, std::string::String)> {
     props.push(("java.library.path", std::string::String::new()));
     props.push(("sun.boot.library.path", format!("{}/lib", crate::jdk_resources::JAVA_RUNTIME_HOME)));
     props.push(("jdk.debug", std::string::String::from("release")));
+    // 区域族（SystemProps.Raw：user.language / user.country 来自宿主区域环境变量）
+    let (language, country) = crate::posix::locale();
+    props.push(("user.language", language));
+    if !country.is_empty() {
+        props.push(("user.country", country));
+    }
     // 编码族（JDK 18+ JEP 400：file.encoding 缺省 UTF-8；native / jnu 编码取宿主区域
     // 的 codeset；标准流按本运行时实际编码器（UTF-8，见 new_std_print_stream））
     let native = crate::posix::native_encoding();

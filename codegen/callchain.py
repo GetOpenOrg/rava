@@ -2,56 +2,30 @@
 
 闭包（发现）的唯一来源是 Rust 闭包分析器 `rava closure` 输出的 closure.json
 （codegen/closure_input.py 读取并填充本模块的种子全局）。本模块只保留发射层仍需要的部分：
-  - 清单判定：`_is_boundary_class` / `_is_vm_boundary_class`（closure.toml 边界 / 放行、
-    K-JCA 放行、纯数据资源束豁免），emitter 与 closure_report 经同一入口求值；
-  - 种子全局：反射面、资源束、注解枚举、JCA 服务、模块资源（closure_input 填充，emitter 消费）；
+  - 清单判定：`_is_vm_boundary_class`（closure.toml [vm_boundary] 逐类 VM 契约清单及其
+    translate_nested 放行），emitter 与 closure_report 经同一入口求值；
+  - 种子全局：反射面、注解枚举、模块资源（closure_input 填充，emitter 消费）；
   - 预检：生成产物中调用链上的 panic 存根 / 缺失 native（`precheck_from_tree`）。
 """
 
 import os
 import re
 
-from .runtime_manifest import boundary_packages, vm_boundary_classes, release_entries
-from .jca_services import load_manifest as _jca_manifest, released as _jca_released
+from .runtime_manifest import vm_boundary_classes, vm_boundary_translate_nested
 
 
-# 内部包边界前缀（closure.toml [boundary]；P-1：库知识不进生成器）：前缀内未放行的类整类手写
-_JDK_STUB_ONLY_PREFIXES: tuple[str, ...] = tuple(boundary_packages())
-
-# K-JCA 放行（seeds.toml [jca] 的 release_packages / release_classes）：算法实现包（纯 Java 计算）
-# 与 engine / SPI / 工具类从边界前缀放行、按字节码翻译
-_JCA_MANIFEST = _jca_manifest()
-
-# 通用边界放行（closure.toml [release]，与 JCA 放行同一语义）：内部前缀下的纯 Java 类 / 包按字节码翻译
-_BOUNDARY_RELEASE: tuple[str, ...] = tuple(release_entries())
-
-
-def _released_general(cls: str) -> bool:
-    """类是否在通用边界放行清单内（包前缀 / 类及其嵌套类）。"""
-    for r in _BOUNDARY_RELEASE:
-        if r.endswith('/'):
-            if cls.startswith(r):
-                return True
-        elif cls == r or cls.startswith(r + '$'):
-            return True
-    return False
-
-
-# VM 耦合边界类：公开包里由 JVM 自身引导 / 承载 VM 设施（模块系统、类加载、安全管理器等）的类。
-# 清单在 runtime/（手写层真源）维护，生成器不出现任何 JDK 类名。
+# VM 契约边界类（closure.toml [vm_boundary] classes）：由 JVM 自身引导 / 承载 VM 设施（类加载、
+# 模块系统、Unsafe 等）的类，按方法划分。清单在 runtime/（手写层真源）维护，生成器不出现 JDK 类名。
 _VM_BOUNDARY_CLASSES: frozenset[str] = frozenset(vm_boundary_classes())
 
-
-# 纯数据资源束豁免（L-1）：内部包（前缀）下经结构判定为纯数据类（codegen/data_bundle.py）的类
-# 照常翻译。判定需要 ClassInfo，由 closure_input 注册类加载器后惰性求值并缓存——所有边界决策点
-# 经 _is_boundary_class 同一入口，判定结果一致。未注册加载器时不放行（纯前缀规则）。
-_DATA_BUNDLE_VERDICT: dict[str, bool] = {}
-_DATA_BUNDLE_LOADER: list = [None]
+# VM 契约边界类中按字节码翻译的嵌套类（[vm_boundary] translate_nested：纯 Java 辅助类）
+_TRANSLATE_NESTED: tuple[str, ...] = tuple(vm_boundary_translate_nested())
 
 
-# 本轮入选的资源束类（binary name，已排序）：emitter 在生成 main 中登记构造闭包
-#（runtime `data_bundles::register_data_bundles`）。closure_input 每轮重填。
-DATA_BUNDLE_SEEDS: list[str] = []
+def _is_translate_nested(cls: str) -> bool:
+    """类是否为 VM 契约边界类中放行翻译的嵌套类（条目本身及其嵌套类）。"""
+    return any(cls == r or cls.startswith(r + '$') for r in _TRANSLATE_NESTED)
+
 
 # 本轮经注解种子入闭包的枚举类（binary name，已排序）：emitter 在生成 main 中登记类初始化
 # 钩子（Enum.valueOf → 常量目录前强制初始化，FS-R R4b）。closure_input 每轮重填。
@@ -60,10 +34,6 @@ ANNOTATION_ENUM_SEEDS: list[str] = []
 # 模块资源（seeds.toml [module_resources]）：{jmod 内相对路径: 字节}，从本轮所用 JDK 的 jmod 提取，
 # emitter 写入 scratch 并生成 include_bytes! 嵌入表（数据与所用 JDK 版本同源）
 MODULE_RESOURCES: dict = {}
-
-# 本轮入选的 JCA 服务（jca_services.Service，已排序）：emitter 在生成 main 中登记构造闭包
-#（runtime `jca::register_services`）。closure_input 每轮重填。
-JCA_SEEDS: list = []
 
 # MH-native（docs/plans/2026-09-26-mh-native.md §二-5）：常量反射引用。
 # {类 binary: 成员名集合}——闭包分析器按常量数据流解析出的按名反射目标（Lookup.findStatic /
@@ -79,44 +49,14 @@ REFLECT_FIELD_NAMES: set[str] = set()
 REFLECT_ALL_MEMBERS: set[str] = set()
 
 
-def set_data_bundle_loader(load) -> None:
-    """注册（或以 None 清除）结构判定用的类加载器 load(binary_name) → ClassInfo|None。"""
-    _DATA_BUNDLE_LOADER[0] = load
-    _DATA_BUNDLE_VERDICT.clear()
-
-
-def _is_data_bundle(cls: str) -> bool:
-    if '[' in cls:
-        return False
-    verdict = _DATA_BUNDLE_VERDICT.get(cls)
-    if verdict is None:
-        load = _DATA_BUNDLE_LOADER[0]
-        if load is None:
-            return False
-        from .data_bundle import is_pure_data_bundle
-        verdict = is_pure_data_bundle(load(cls), load)
-        _DATA_BUNDLE_VERDICT[cls] = verdict
-    return verdict
-
-
-def _is_boundary_class(cls: str) -> bool:
-    """内部包（前缀）边界类：整类手写；前缀内的纯数据资源束与 K-JCA / 通用放行类除外。
-
-    VM 耦合边界类（closure.toml [vm_boundary]）按方法划分（见 _is_vm_boundary_class），不在此列。"""
-    if cls.startswith(_JDK_STUB_ONLY_PREFIXES):
-        return not (_jca_released(cls, _JCA_MANIFEST) or _released_general(cls)
-                    or _is_data_bundle(cls))
-    return False
-
-
 def _is_vm_boundary_class(cls: str) -> bool:
-    """VM 耦合边界类（closure.toml [vm_boundary]，含其嵌套类；放行清单中的嵌套辅助类除外）。
+    """VM 契约边界类（closure.toml [vm_boundary]，含其嵌套类；translate_nested 放行的嵌套类除外）。
 
     按方法划分（与 Rust 闭包分析器同口径）：native / VM 内建 / 共置手写体提供的方法取手写，
     其余被调用到的方法按字节码翻译；`<clinit>` 不翻译（类的静态状态由 VM / 手写层承载——
     HotSpot 中这些类由 VM 引导初始化，其 `<clinit>` 会展开安全管理器 / 模块层 / 类加载子系统）。"""
     outer = cls.split('$', 1)[0]
-    return outer in _VM_BOUNDARY_CLASSES and not _released_general(cls)
+    return outer in _VM_BOUNDARY_CLASSES and not _is_translate_nested(cls)
 
 
 # 编译前预检（转译期可判定的必然存根）：代码生成后由 precheck_from_tree 填充，scripts/main.py 打印

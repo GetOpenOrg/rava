@@ -136,9 +136,8 @@ impl Ctx<'_> {
     pub(super) fn kind_of(&self, cf: &ClassFile, m: &classfile::Method) -> Kind {
         let member = format!("{}.{}:{}", cf.name, m.name, m.desc);
         match self.domain(&cf.name) {
-            // 内部包边界：BFS 截断，整体手写（未手写的成员是 panic 存根，运行时不执行字节码）。
-            // VM 耦合边界（公开包，`[vm_boundary]`）按方法划分：手写承载（native / VM 内建 /
-            // 共置手写体按精确名提供）的取手写效果，其余被调用到的方法运行时执行的就是其字节码
+            // VM 契约边界（`[vm_boundary]`）按方法划分：手写承载（native / VM 内建 / 共置手写体
+            // 按精确名提供 / 类初始化器）的取手写效果，其余被调用到的方法运行时执行的就是其字节码
             // （发射层同样翻译），按字节码建模——否则其体内的调用与写入（如经 native 手写体
             // 写入的字段）从分析中消失，成为漏报
             Domain::Boundary => {
@@ -146,8 +145,7 @@ impl Ctx<'_> {
                     || m.code.is_none()
                     || m.name == "<clinit>"
                     || self.man.is_intrinsic(&member)
-                    || self.provided(cf, &m.name, &m.desc)
-                    || !self.man.is_vm_boundary(&cf.name);
+                    || self.provided(cf, &m.name, &m.desc);
                 return if hw { Kind::Handwritten("boundary") } else { Kind::Bytecode };
             }
             Domain::Root => return Kind::Handwritten("root"),
@@ -198,12 +196,6 @@ impl Ctx<'_> {
         let d = match self.man.domain(cls, origin == Some(Origin::User)) {
             // 依赖库类（`--lib`）：库自身不属 JDK 边界，一律按字节码翻译
             Domain::Boundary if origin == Some(Origin::Lib) => Domain::Translate,
-            // 纯数据资源束：数据不是实现细节，即便位于边界前缀内也按字节码翻译
-            Domain::Boundary
-                if !self.man.is_vm_boundary(cls) && self.cp.get(cls).is_some_and(|cf| self.man.seeds.carriers.is_pure_data_bundle(self.cp, &cf)) =>
-            {
-                Domain::Translate
-            }
             d => d,
         };
         self.domains.borrow_mut().insert(cls.to_string(), d);

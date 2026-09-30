@@ -136,27 +136,13 @@ def _gen_clinit_block(m, ci, registry: dict | None, class_type_params: list,
         return None
     from ..callchain import _is_vm_boundary_class
     if _is_vm_boundary_class(ci.name):
-        # VM 耦合边界类的 <clinit> 不翻译（按方法划分的类初始化口径：静态状态由 VM / 手写层
-        # 承载）；不生成 → 宏 has_clinit=false → __class_init() 为 no-op，与整类手写时一致
+        # VM 契约边界类的 <clinit> 不翻译（按方法划分的类初始化口径：静态状态由 VM / 手写层
+        # 承载）；不生成 → 宏 has_clinit=false → __class_init() 为 no-op
         return None
     attr_line = _java_method_attr(m)
     _clinit_stub = (f'pub fn {_CLINIT_FN}() -> Result<()> {{\n'
                     f'    panic!("stub: {ci.name}.<clinit>:()V")\n}}')
     if call_chain is not None and (ci.name, m.name, m.descriptor) not in call_chain:
-        from ..callchain import _is_boundary_class
-        if _is_boundary_class(ci.name):
-            # 内部边界类的 <clinit> 不在调用链上时**不发 panic 存根**：BFS 截断
-            # 策略下边界类的静态状态（含类初始化）是手写层职责——手写 impl 静态
-            # 方法的调用点本就缺初始化触发（equiv-audit class-init 登记的既有
-            # 审计偏差，S-10 子缺口 a）。迟至静态边补扫使边界类获得翻译体静态
-            # 方法后，宏按 JVMS §5.5 在其入口注入 Self::__class_init()?——若此处
-            # 发存根 <clinit>，任何静态调用必然先命中存根崩溃（JDK25
-            # ArraysSupport.<clinit> 实证，其 isBigEndian 等依赖无手写实现、
-            # 翻译体也只会撞下一层存根）。不发生成 → 宏 has_clinit=false →
-            # __class_init() 为 no-op：与该类补扫前（type-only 无 <clinit>）及
-            # 手写 impl 静态的可观察行为一致。判定单源：callchain 的
-            # _is_boundary_class（截断策略同一决策点）。
-            return None
         return attr_line + '\n' + _clinit_stub
     try:
         clinit_body = gen_method_body(

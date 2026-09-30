@@ -157,16 +157,13 @@ def _iface_default_body(ci, m, registry, call_chain) -> bool:
 
 
 def _plan(ci, registry, call_chain, nf_map) -> dict:
-    from codegen.emitter.class_writer import _handwritten_inherited_overrides, _ancestor_iface_member_names
+    from codegen.emitter.class_writer import _ancestor_iface_member_names
     from codegen.instr.member_owner import _root_virtual_methods
     nf = nf_map.get(ci.name)
     is_iface = ci.is_interface
     type_only = call_chain is not None and not any(
         (ci.name, x.name, x.descriptor) in call_chain for x in ci.methods)
     visible = [x for x in ci.methods if not x.is_synthetic]
-    n_decl = len(visible)
-    visible += _handwritten_inherited_overrides(ci, registry, nf, visible)
-    n_vis = len(visible)
     emitted = visible + [x for x in ci.methods if x.is_synthetic and not (x.access_flags & 0x40)
                          and x.name not in ('<init>', '<clinit>')]
     root = _root_virtual_methods()
@@ -184,33 +181,30 @@ def _plan(ci, registry, call_chain, nf_map) -> dict:
         used[n] = 0
         return n
 
-    def rec(m, rust, role, verdict, idx):
-        out.append({'n': m.name, 'd': m.descriptor, 'rust': rust, 'role': role, 'v': verdict,
-                    'inh': n_decl <= idx < n_vis})
+    def rec(m, rust, role, verdict):
+        out.append({'n': m.name, 'd': m.descriptor, 'rust': rust, 'role': role, 'v': verdict})
 
-    for idx, m in enumerate(emitted):
+    for m in emitted:
         if m.name == '<clinit>':
             if type_only or CC._is_vm_boundary_class(ci.name):
                 continue
             if call_chain is not None and (ci.name, m.name, m.descriptor) not in call_chain:
-                if CC._is_boundary_class(ci.name):
-                    continue
-                rec(m, '__clinit', 'clinit', 'stub_not_in_chain', idx)
+                rec(m, '__clinit', 'clinit', 'stub_not_in_chain')
             else:
-                rec(m, '__clinit', 'clinit', 'bytecode', idx)
+                rec(m, '__clinit', 'clinit', 'bytecode')
             continue
         iface_inst = is_iface and not m.is_static
         if iface_inst and m.is_synthetic and m.name.startswith('lambda$'):
             from codegen.instr.member_naming import lambda_impl_rust_name
             rust = lambda_impl_rust_name(ci.name, m.name, m.descriptor, registry)
-            rec(m, rust, 'iface_lambda', 'bytecode' if in_cc(m) else 'stub_not_in_chain', idx)
+            rec(m, rust, 'iface_lambda', 'bytecode' if in_cc(m) else 'stub_not_in_chain')
             continue
         root_keyed = (m.name, m.descriptor[:m.descriptor.index(')') + 1]) in root
         private = bool(m.access_flags & 0x0002)
         if iface_inst and not m.is_synthetic and private and not root_keyed:
             rust = TM.mangle_name(m.name, m.descriptor) if ST.method_name_is_mangled(ci, m, registry) else m.name
             rust = dedupe(rust)
-            rec(m, rust, 'iface_private', 'bytecode' if in_cc(m) else 'stub_not_in_chain', idx)
+            rec(m, rust, 'iface_private', 'bytecode' if in_cc(m) else 'stub_not_in_chain')
             continue
         if iface_inst and (m.is_synthetic or private or root_keyed):
             continue
@@ -237,7 +231,7 @@ def _plan(ci, registry, call_chain, nf_map) -> dict:
             v = 'stub_not_in_chain'
         else:
             v = 'bytecode'
-        rec(m, rust, 'member', v, idx)
+        rec(m, rust, 'member', v)
 
     supp = []
     if is_iface:
@@ -263,13 +257,11 @@ def _key(k) -> str:
 
 def _manifest() -> dict:
     return {
-        'boundary_packages': RM.boundary_packages(),
         'vm_boundary_classes': sorted(RM.vm_boundary_classes()),
-        'release': RM.release_entries(),
-        'jca_release': RM.jca_release_entries(),
+        'release': RM.vm_boundary_translate_nested(),
         'module_resource_paths': RM.module_resource_paths(),
         'boot_init_classes': RM.boot_init_classes(),
-        'data_bundle_carriers': [f'{c}.{m}:{d}' for c, m, d in RM.data_bundle_carriers()],
+        'boot_init_calls': [f'{c}.{m}:()V' for c, m in RM.boot_init_calls()],
         'intrinsic_members': sorted(RM.intrinsic_members()),
         'caller_sensitive_annotations': sorted(RM.caller_sensitive_annotations()),
         'sigpoly_callsite_typed': sorted(RM.sigpoly_callsite_typed()),
@@ -318,9 +310,7 @@ def _make_hook(out_path: Path):
         rec('reflect_consts', v={k: sorted(v) for k, v in sorted(CC.REFLECT_CONSTS.items())})
         rec('reflect_all', v=sorted(CC.REFLECT_ALL_MEMBERS))
         rec('reflect_field_names', v=sorted(CC.REFLECT_FIELD_NAMES))
-        rec('data_bundle_seeds', v=list(CC.DATA_BUNDLE_SEEDS))
         rec('annotation_enum_seeds', v=list(CC.ANNOTATION_ENUM_SEEDS))
-        rec('jca_seeds', v=[[s.type, s.algorithm, s.impl, s.provider] for s in CC.JCA_SEEDS])
         rec('module_resources', v=[[p, len(b), _fnv(b)] for p, b in CC.MODULE_RESOURCES.items()])
         rec('precheck_visited', v=sorted(CC.PRECHECK_CHAIN['visited']))
         rec('manifest', v=_manifest())

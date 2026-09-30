@@ -1,230 +1,168 @@
-//! `sun/nio/fs/UnixNativeDispatcher` 手写伴生：POSIX 原生族档 A（切入序 4/5）。
+//! `sun/nio/fs/UnixNativeDispatcher` 的 ACC_NATIVE（类 1，docs/reference/handwritten-boundary.md）。
 //!
-//! 按用例面实现 open/close/stat/lstat/unlink/rmdir/access/strerror（报告 §3
-//! 的 4 native 子集 + rmdir），std::fs 承载（报告 §4 映射：open0 →
-//! OpenOptions+OpenOptionsExt::custom_flags+mode；fd 以 i32 裸 fd 流转，close0
-//! 以 File::from_raw_fd 回收）。其余 40+ native 保持 panic 存根（档 B 引入
-//! libc 后补全集）。
+//! 包装方法（`open` / `stat` / `unlink` …：UnixPath → NativeBuffer → `*0(address)`）按字节码翻译；
+//! 本文件只承载 JNI 对应物（libnio `UnixNativeDispatcher.c`）：路径参数是 NativeBuffer 的绝对地址
+//! （以 NUL 结尾的 C 串，`Unsafe.allocateMemory` 所得），失败时按 JNI 同款抛 `UnixException(errno)`
+//! 或返回 errno。未实现的 native 保持 panic 存根。
 
 use crate::prelude::*;
 use super::unix_native_dispatcher::UnixNativeDispatcher;
 use super::unix_exception::UnixException;
 use super::unix_file_attributes::UnixFileAttributes;
-use super::unix_path::UnixPath;
-use crate::java::lang::String;
 
-/// 平台 open(2) 标志位与 errno 常量（值随目标平台，与平台 JDK classfile 的
-/// UnixConstants 烧入值同源：macOS O_CREAT=0x200 / Linux 0x40——UnixConstants
-/// 由生成侧自动取对，此处是 std 侧 syscall 的宿主值）。
-pub(crate) mod consts {
-    #[cfg(target_os = "macos")]
-    pub mod oflags {
-        pub const O_WRONLY: i32 = 0x0001;
-        pub const O_RDWR: i32 = 0x0002;
-        pub const O_APPEND: i32 = 0x0008;
-        pub const O_CREAT: i32 = 0x0200;
-        pub const O_TRUNC: i32 = 0x0400;
-        pub const O_EXCL: i32 = 0x0800;
-        pub const O_NOFOLLOW: i32 = 0x0040_0000;
-    }
-    #[cfg(target_os = "linux")]
-    pub mod oflags {
-        pub const O_WRONLY: i32 = 0x0001;
-        pub const O_RDWR: i32 = 0x0002;
-        pub const O_APPEND: i32 = 0x0400;
-        pub const O_CREAT: i32 = 0x0040;
-        pub const O_TRUNC: i32 = 0x0200;
-        pub const O_EXCL: i32 = 0x0080;
-        pub const O_NOFOLLOW: i32 = 0x0020_0000;
-    }
-    pub mod errno {
-        pub const ENOENT: i32 = 2;
-        pub const EISDIR: i32 = 21;
-        #[cfg(target_os = "macos")]
-        pub const ELOOP: i32 = 62;
-        #[cfg(target_os = "linux")]
-        pub const ELOOP: i32 = 40;
-        pub const EACCES: i32 = 13;
-        pub const EEXIST: i32 = 17;
-        #[cfg(target_os = "macos")]
-        pub const ENOTEMPTY: i32 = 66;
-        #[cfg(target_os = "linux")]
-        pub const ENOTEMPTY: i32 = 39;
-        /// access(2) 的 amode。
-        pub const F_OK: i32 = 0;
-        pub const R_OK: i32 = 4;
-        pub const W_OK: i32 = 2;
-        pub const X_OK: i32 = 1;
+/// UnixNativeDispatcher.SUPPORTS_BIRTHTIME（JDK 常量值；init 的能力位只报告本文件实际承载的面）。
+const SUPPORTS_BIRTHTIME: i32 = 1 << 16;
+
+fn errno() -> i32 {
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+fn unix_exception(err: i32) -> JvmError {
+    match UnixException::new_i(err) {
+        Ok(e) => JvmError::from(e),
+        Err(e) => e,
     }
 }
 
-/// UnixPath → 系统调用路径（std String）。
-pub(crate) fn sys_path(path: &UnixPath) -> Result<std::string::String> {
-    let bytes = path.getByteArrayForSysCalls()?;
-    let raw: Vec<u8> = bytes.to_vec().into_iter().map(|b| b as u8).collect();
-    Ok(std::string::String::from_utf8_lossy(&raw).into_owned())
+/// 地址 → C 串指针（NativeBuffer 由 copyToNativeBuffer 写入并以 NUL 结尾）。
+fn c_path(address: i64) -> *const libc::c_char {
+    address as *const libc::c_char
 }
 
-/// io::Error → UnixException（errno 保真；无 os 错误码时以 ENOENT 兜底）。
-pub(crate) fn as_unix_exception(e: &std::io::Error) -> UnixException {
-    UnixException::new_i(e.raw_os_error().unwrap_or(consts::errno::ENOENT))
-        .expect("UnixException 构造无失败面")
+/// JNI `RESTARTABLE`：EINTR 时重试。
+fn restartable(mut f: impl FnMut() -> i32) -> i32 {
+    loop {
+        let r = f();
+        if r != -1 || errno() != libc::EINTR {
+            return r;
+        }
+    }
 }
 
 impl UnixNativeDispatcher {
-    /// `open(UnixPath, int flags, int mode)`：open(2)。flags 为宿主平台
-    /// O_* 位集；fd 以 i32 返回（裸 fd，FileDescriptor/通道层以 int 流转）。
+    /// native `init()`：能力位图（HotSpot 按平台探测 openat / futimes / xattr / birthtime）。
+    /// 本运行时的 *at / futimes / xattr native 未承载，只报告 birthtime（macOS stat 提供）。
     #[jvm_native]
-    pub fn open(path: UnixPath, flags: i32, mode: i32) -> Result<i32> {
-        use std::os::fd::IntoRawFd;
-        use std::os::unix::fs::OpenOptionsExt;
-        use consts::oflags as o;
-        let p = sys_path(&path)?;
-        let acc = flags & 0x3; // O_ACCMODE（O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2）
-        let mut opts = std::fs::OpenOptions::new();
-        opts.read(acc != o::O_WRONLY);
-        opts.write(acc == o::O_RDWR || acc == o::O_WRONLY);
-        if flags & o::O_APPEND != 0 {
-            opts.append(true);
-        }
-        if flags & o::O_CREAT != 0 {
-            if flags & o::O_EXCL != 0 {
-                opts.create_new(true);
-            } else {
-                opts.create(true);
-            }
-        }
-        if flags & o::O_TRUNC != 0 {
-            opts.truncate(true);
-        }
-        // 其余标志位（O_NOFOLLOW 等）原样透传
-        let passthrough =
-            flags & !(0x3 | o::O_APPEND | o::O_CREAT | o::O_EXCL | o::O_TRUNC);
-        opts.custom_flags(passthrough);
-        opts.mode(mode as u32);
-        match opts.open(&p) {
-            Ok(f) => Ok(f.into_raw_fd()),
-            Err(e) => Err(JvmError::from(as_unix_exception(&e))),
-        }
+    pub fn init() -> Result<i32> {
+        Ok(if cfg!(target_os = "macos") { SUPPORTS_BIRTHTIME } else { 0 })
     }
 
-    /// `close(int fd)`：fd==-1 no-op；否则 close(2)（File::from_raw_fd 回收）。
+    /// native `open0(long path, int flags, int mode)`：open(2)。
     #[jvm_native]
-    pub fn close(fd: i32) -> Result<()> {
-        use std::os::fd::FromRawFd;
+    pub fn open0(path_address: i64, flags: i32, mode: i32) -> Result<i32> {
+        // SAFETY: path_address 指向 NativeBuffer 中以 NUL 结尾的路径串
+        let fd = restartable(|| unsafe { libc::open(c_path(path_address), flags, mode as libc::c_uint) });
         if fd == -1 {
-            return Ok(());
+            return Err(unix_exception(errno()));
         }
-        // SAFETY: fd 来自本模块 open 的 into_raw_fd（所有权移交至此回收）
-        let f = unsafe { std::fs::File::from_raw_fd(fd) };
-        drop(f);
+        Ok(fd)
+    }
+
+    /// native `close0(int fd)`：close(2)；EINTR 视为已关闭（JNI 同款）。
+    #[jvm_native]
+    pub fn close0(fd: i32) -> Result<()> {
+        // SAFETY: fd 为调用方持有的文件描述符
+        if unsafe { libc::close(fd) } == -1 {
+            let err = errno();
+            if err != libc::EINTR {
+                return Err(unix_exception(err));
+            }
+        }
         Ok(())
     }
 
-    /// `stat(UnixPath, UnixFileAttributes)`：stat(2)（失败抛 UnixException）。
+    /// native `stat0(long path, UnixFileAttributes attrs)`：stat(2)，返回 errno（0 = 成功）。
     #[jvm_native]
-    pub fn stat(path: UnixPath, attrs: UnixFileAttributes) -> Result<()> {
-        let p = sys_path(&path)?;
-        match std::fs::metadata(&p) {
-            Ok(md) => {
-                fill_stat(&attrs, &md);
-                Ok(())
-            }
-            Err(e) => Err(JvmError::from(as_unix_exception(&e))),
+    pub fn stat0(path_address: i64, attrs: UnixFileAttributes) -> Result<i32> {
+        // SAFETY: 同 open0；buf 为栈上 stat 结构
+        let mut buf: libc::stat = unsafe { std::mem::zeroed() };
+        let r = restartable(|| unsafe { libc::stat(c_path(path_address), &mut buf) });
+        if r == -1 {
+            return Ok(errno());
         }
+        fill_stat(&attrs, &buf);
+        Ok(0)
     }
 
-    /// `stat2(UnixPath, UnixFileAttributes)`：stat 的 errno 返回形态（0=成功）。
+    /// native `lstat0(long path, UnixFileAttributes attrs)`：lstat(2)，失败抛 UnixException。
     #[jvm_native]
-    pub fn stat2(path: UnixPath, attrs: UnixFileAttributes) -> Result<i32> {
-        let p = sys_path(&path)?;
-        match std::fs::metadata(&p) {
-            Ok(md) => {
-                fill_stat(&attrs, &md);
-                Ok(0)
-            }
-            Err(e) => Ok(e.raw_os_error().unwrap_or(consts::errno::ENOENT)),
+    pub fn lstat0(path_address: i64, attrs: UnixFileAttributes) -> Result<()> {
+        // SAFETY: 同 stat0
+        let mut buf: libc::stat = unsafe { std::mem::zeroed() };
+        let r = restartable(|| unsafe { libc::lstat(c_path(path_address), &mut buf) });
+        if r == -1 {
+            return Err(unix_exception(errno()));
         }
+        fill_stat(&attrs, &buf);
+        Ok(())
     }
 
-    /// `lstat(UnixPath, UnixFileAttributes)`：lstat(2)。
+    /// native `unlink0(long path)`：unlink(2)。
     #[jvm_native]
-    pub fn lstat(path: UnixPath, attrs: UnixFileAttributes) -> Result<()> {
-        let p = sys_path(&path)?;
-        match std::fs::symlink_metadata(&p) {
-            Ok(md) => {
-                fill_stat(&attrs, &md);
-                Ok(())
-            }
-            Err(e) => Err(JvmError::from(as_unix_exception(&e))),
-        }
-    }
-
-    /// `unlink(UnixPath)`：unlink(2)。
-    #[jvm_native]
-    pub fn unlink(path: UnixPath) -> Result<()> {
-        let p = sys_path(&path)?;
-        std::fs::remove_file(&p).map_err(|e| JvmError::from(as_unix_exception(&e)))
-    }
-
-    /// `rmdir(UnixPath)`：rmdir(2)（implDelete 的目录分支）。
-    #[jvm_native]
-    pub fn rmdir(path: UnixPath) -> Result<()> {
-        let p = sys_path(&path)?;
-        std::fs::remove_dir(&p).map_err(|e| JvmError::from(as_unix_exception(&e)))
-    }
-
-    /// `access(UnixPath, int amode)`：access(2) 的 errno 返回形态（0=允许），F_OK / R_OK /
-    /// W_OK / X_OK 均按有效用户权限精确判定（FS-IO1）。
-    #[jvm_native]
-    pub fn access(path: UnixPath, amode: i32) -> Result<i32> {
-        let p = sys_path(&path)?;
-        Ok(crate::posix::access(std::path::Path::new(&p), amode))
-    }
-
-    /// `strerror(int)`：平台错误字符串（jnu 编码字节）。
-    #[jvm_native]
-    pub fn strerror(errno: i32) -> Result<JArray<i8>> {
-        let s = std::io::Error::from_raw_os_error(errno).to_string();
-        Ok(JArray::from(
-            s.into_bytes().into_iter().map(|b| b as i8).collect::<Vec<i8>>(),
-        ))
-    }
-
-    /// native `init(int[])`：capabilities 位图写入（JDK21 的 UnixCapabilities：
-    /// [0]=_support八位图）。宿主真实能力：xattr 与 birthtime 的平台分叉按
-    /// cfg 报告（Unsafe 常量自洽原则——不虚报能力）。
-    #[jvm_native]
-    pub fn init(capabilities: JArray<i32>) -> Result<()> {
-        // UnixNativeDispatcher.init 写入 capabilities[0] 的位：
-        //   0x01 = xattr supported, 0x02 = birthtime supported（JDK 语义位序）
-        let bits: i32 = if cfg!(target_os = "macos") { 0x03 } else { 0x00 };
-        if capabilities.len()? > 0 {
-            capabilities.set(0, bits)?;
+    pub fn unlink0(path_address: i64) -> Result<()> {
+        // SAFETY: 同 open0
+        if unsafe { libc::unlink(c_path(path_address)) } == -1 {
+            return Err(unix_exception(errno()));
         }
         Ok(())
+    }
+
+    /// native `rmdir0(long path)`：rmdir(2)。
+    #[jvm_native]
+    pub fn rmdir0(path_address: i64) -> Result<()> {
+        // SAFETY: 同 open0
+        if unsafe { libc::rmdir(c_path(path_address)) } == -1 {
+            return Err(unix_exception(errno()));
+        }
+        Ok(())
+    }
+
+    /// native `mkdir0(long path, int mode)`：mkdir(2)。
+    #[jvm_native]
+    pub fn mkdir0(path_address: i64, mode: i32) -> Result<()> {
+        // SAFETY: 同 open0
+        if unsafe { libc::mkdir(c_path(path_address), mode as libc::mode_t) } == -1 {
+            return Err(unix_exception(errno()));
+        }
+        Ok(())
+    }
+
+    /// native `access0(long path, int amode)`：access(2)，返回 errno（0 = 允许）。
+    #[jvm_native]
+    pub fn access0(path_address: i64, amode: i32) -> Result<i32> {
+        // SAFETY: 同 open0
+        let r = restartable(|| unsafe { libc::access(c_path(path_address), amode) });
+        Ok(if r == -1 { errno() } else { 0 })
+    }
+
+    /// native `strerror(int)`：平台错误字符串（jnu 编码字节）。
+    #[jvm_native]
+    pub fn strerror(err: i32) -> Result<JArray<i8>> {
+        let s = std::io::Error::from_raw_os_error(err).to_string();
+        let s = s.split(" (os error").next().unwrap_or("").to_owned();
+        Ok(JArray::from(s.into_bytes().into_iter().map(|b| b as i8).collect::<Vec<i8>>()))
     }
 }
 
-/// stat 缓冲填充（UnixFileAttributes.st_* 字段）。
-fn fill_stat(attrs: &UnixFileAttributes, md: &std::fs::Metadata) {
-    use std::os::unix::fs::MetadataExt;
-    attrs.__set_st_mode(md.mode() as i32);
-    attrs.__set_st_ino(md.ino() as i64);
-    attrs.__set_st_dev(md.dev() as i64);
-    attrs.__set_st_rdev(md.rdev() as i64);
-    attrs.__set_st_nlink(md.nlink() as i32);
-    attrs.__set_st_uid(md.uid() as i32);
-    attrs.__set_st_gid(md.gid() as i32);
-    attrs.__set_st_size(md.size() as i64);
-    attrs.__set_st_atime_sec(md.atime());
-    attrs.__set_st_mtime_sec(md.mtime());
-    attrs.__set_st_ctime_sec(md.mtime());
-    let birth = md
-        .created()
-        .ok()
-        .and_then(|st| st.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    attrs.__set_st_birthtime_sec(birth);
+/// stat 结构 → UnixFileAttributes.st_* 字段（JNI `prepAttributes` 同款）。
+fn fill_stat(attrs: &UnixFileAttributes, st: &libc::stat) {
+    attrs.__set_st_mode(st.st_mode as i32);
+    attrs.__set_st_ino(st.st_ino as i64);
+    attrs.__set_st_dev(st.st_dev as i64);
+    attrs.__set_st_rdev(st.st_rdev as i64);
+    attrs.__set_st_nlink(st.st_nlink as i32);
+    attrs.__set_st_uid(st.st_uid as i32);
+    attrs.__set_st_gid(st.st_gid as i32);
+    attrs.__set_st_size(st.st_size as i64);
+    attrs.__set_st_atime_sec(st.st_atime as i64);
+    attrs.__set_st_atime_nsec(st.st_atime_nsec as i64);
+    attrs.__set_st_mtime_sec(st.st_mtime as i64);
+    attrs.__set_st_mtime_nsec(st.st_mtime_nsec as i64);
+    attrs.__set_st_ctime_sec(st.st_ctime as i64);
+    attrs.__set_st_ctime_nsec(st.st_ctime_nsec as i64);
+    #[cfg(target_os = "macos")]
+    {
+        attrs.__set_st_birthtime_sec(st.st_birthtime as i64);
+        attrs.__set_st_birthtime_nsec(st.st_birthtime_nsec as i64);
+    }
 }
