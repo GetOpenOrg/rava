@@ -68,7 +68,7 @@
 
 ## 四、执行顺序（条件满足后）
 
-1. 按 §一 跑 R21 全量，与冻结的 P21 对比，结果记入 §五。
+1. 按 §一 跑 R21 全量（`run_tests.py --jdk 21 --record-passed`，或服务器分布式跑批），用 `scripts/baseline_diff.py --passed <通过清单…> --log <跑批日志…> --commit <sha>` 与冻结的 P21 对照，报告（Markdown，退出码 0 = 满足）贴入 §五。
 2. 一次性删除 A、B，并修改 C（按「一次删到终态再验证」原则，不逐文件分批）。
 3. 验证：
    - 生成器各 crate 通过 `cargo build` / `cargo test`；
