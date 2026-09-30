@@ -32,14 +32,35 @@ impl<'a> Engine<'a> {
             })
             .collect();
         let k = mref.to_string();
-        if self.man.is_method_lookup(&k) && !classes.is_empty() {
+        if self.man.is_method_lookup(&k) {
             let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
+            // 拼接出的名字按目标类逐个解析（只保留该类上声明的方法）；目标类另取 Class 实参值集里类镜像所指的类
+            // （如取自 static final Class 字段）。形参透传的名字不与镜像类相乘：其类同样来自形参，交叉组合会失真
+            let mut per_class: Vec<(String, Rc<str>)> = vec![];
+            let mut targets: Option<Vec<String>> = None;
             for a in args {
                 match a {
                     V::Str(name) => {
                         names.insert(name.clone());
                     }
-                    V::Ref { .. } => names.extend(self.param_strs(m, off, a)),
+                    V::Ref { .. } => {
+                        names.extend(self.param_strs(m, off, a));
+                        let Some(parts) = self.method_name_parts(m, a) else { continue };
+                        if targets.is_none() {
+                            let mut ts = classes.clone();
+                            for c in self.class_arg_mirrors(m, mref, opcode, args) {
+                                if !ts.contains(&c) {
+                                    ts.push(c);
+                                }
+                            }
+                            targets = Some(ts);
+                        }
+                        for c in targets.iter().flatten() {
+                            for n in self.declared_matching(c, &parts) {
+                                per_class.push((c.clone(), n));
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -47,6 +68,9 @@ impl<'a> Engine<'a> {
                 for c in &classes {
                     self.reflect_name(c, name);
                 }
+            }
+            for (c, name) in &per_class {
+                self.reflect_name(c, name);
             }
         }
         if class_param || class_recv {
@@ -165,8 +189,13 @@ impl<'a> Engine<'a> {
                     NOCTX if self.fresh_factory(&resolved) => self.site_ctx(m, off),
                     c => c,
                 };
+                // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
+                let named = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { None };
                 let t = self.callee(m, off, resolved, ctx, via);
-                self.edge(m, off, t, Recv::None, &a, ret, res);
+                self.edge(m, off, t, Recv::None, &a, ret, if named.is_some() { None } else { res });
+                for c in named.unwrap_or_default() {
+                    self.named_class(m, off, &c);
+                }
             }
             op::INVOKESPECIAL => {
                 let r = recv_feeds(self);
@@ -184,7 +213,7 @@ impl<'a> Engine<'a> {
                 let s = self.value_set(&r);
                 // 精确接收者：少量时逐个派发，否则经集合枢纽；open 部分经 open 枢纽
                 let exact = TypeSet { classes: s.classes, open: IdSet::default() };
-                let recv: Vec<u32> = self.receivers(m, &exact, owner).into_iter().collect();
+                let recv: Vec<u32> = self.receivers(m, &exact, owner);
                 if recv.len() < HUB_MIN {
                     for r in recv {
                         self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
@@ -195,7 +224,7 @@ impl<'a> Engine<'a> {
                     self.hub_last.insert((m, off), h);
                     self.link_hub(h, m, off, &a, res);
                 }
-                for &o in s.open.iter() {
+                for o in s.open.iter() {
                     let h = self.hub(mref, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
                     self.link_hub(h, m, off, &a, res);
                 }
@@ -260,7 +289,7 @@ impl<'a> Engine<'a> {
         let mut rest = TypeSet { classes: IdSet::default(), open: s.open.clone() };
         // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增对象
         let dedup = site && self.methods[m].kind == Kind::Bytecode;
-        for &x in &s.classes {
+        for x in &s.classes {
             if self.objs.contains_key(&x) {
                 if dedup && !self.recv_done.entry(m).or_default().insert((off, x)) {
                     continue;
@@ -398,7 +427,7 @@ impl<'a> Engine<'a> {
         }
         self.pvals.insert(t, new);
         if cur.is_some() {
-            self.invalidate(t);
+            self.invalidate(t, Why::ParamConst);
         }
     }
 }

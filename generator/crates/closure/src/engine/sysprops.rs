@@ -161,7 +161,7 @@ impl Ctx<'_> {
         let code = meth.code.as_ref()?;
         let n = parse_method(&t.desc)?.params.len() + usize::from(!meth.is_static());
         let live = |_: &str| true;
-        let a = absint::analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n] });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n] });
         if a.conservative {
             return None;
         }
@@ -427,7 +427,7 @@ impl Engine<'_> {
         self.ctx.preadonly.borrow_mut().clear();
         let mut deps: BTreeSet<usize> = std::mem::take(&mut *self.ctx.pdeps.borrow_mut());
         deps.extend(self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()));
-        self.invalidate_all(Some(deps));
+        self.invalidate_all(Some(deps), Why::Sysprops);
     }
 }
 

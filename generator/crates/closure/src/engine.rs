@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-use classfile::descriptor::{class_refs, parse_field, parse_method, FieldType};
+use classfile::descriptor::{class_refs, parse_field, parse_method, FieldType, MethodDesc};
 use classfile::{acc, ClassFile, Const, MemberRef, MethodHandle};
 use indexmap::IndexMap;
 use resolve::{ClassPath, Hierarchy, Origin};
@@ -26,6 +26,7 @@ use crate::handwritten::{member_matches, to_snake, MODULE_SUFFIXES, FieldAccess,
 use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members, PropValue};
 
 mod sets;
+mod idset;
 mod facts;
 mod construct;
 mod sysprops;
@@ -38,6 +39,7 @@ mod bytecode;
 mod invoke;
 mod hub;
 mod lambda;
+mod lambda_adapt;
 mod hw;
 mod hw_mem;
 mod hw_syntax;
@@ -46,6 +48,17 @@ mod hwobj;
 mod report;
 mod diag;
 mod seeds;
+mod class_lookup;
+mod method_lookup;
+mod new;
+mod methods;
+mod worklist;
+mod stats;
+mod graph;
+
+use graph::FlowGraph;
+use stats::{Phase, Why};
+pub use stats::peak_rss_mb;
 
 pub use seeds::SeedState;
 
@@ -54,6 +67,7 @@ use facts::*;
 use sysprops::{PropSum, PropUnstable};
 use fold::*;
 pub use sets::*;
+pub use idset::{IdIter, IdSet};
 use hwobj::{HwObj, HWOBJ_KIND};
 
 
@@ -337,6 +351,8 @@ struct Lambda {
     imh: MethodHandle,
     /// 捕获实参来源（按 indy 描述符形参位置）
     cap: Args,
+    /// SAM 与实现方法签名差异处的装箱 / 拆箱适配
+    adapt: Vec<lambda_adapt::Conv>,
 }
 
 // ── 引擎 ────────────────────────────────────────────────────────────────────
@@ -351,6 +367,8 @@ pub struct Engine<'a> {
     names: Vec<Rc<str>>,
     ids: HashMap<Rc<str>, u32>,
     sub_cache: HashMap<(u32, u32), bool>,
+    /// open(o) 按过滤类型 t 收窄的结果缓存（`u32::MAX` = 空）
+    narrow_cache: HashMap<(u32, u32), u32>,
     /// 按过滤类型 f 的子类型判定行（下标为类型 id；0 未判定、1 否、2 是）：类型集收窄逐元素只做一次数组索引
     sub_rows: Vec<Vec<u8>>,
 
@@ -361,7 +379,8 @@ pub struct Engine<'a> {
     /// 成员 → 首个方法节点（输出按成员去重）
     mbase: HashMap<MemberRef, usize>,
     fields: IndexMap<MemberRef, ()>,
-    sets: HashMap<Node, TypeSet>,
+    /// 类型流图：节点类型集 / 流边 / 待推增量（节点驻留为序号）
+    graph: FlowGraph,
 
     /// G：全局已实例化（类型 id）
     g: BTreeSet<u32>,
@@ -393,8 +412,6 @@ pub struct Engine<'a> {
     forwarders: HashMap<MemberRef, u64>,
     pub inited: IndexMap<String, Via>,
 
-    flows: HashMap<Node, Vec<(Node, u32)>>,
-    flow_seen: HashSet<(Node, Node, u32)>,
     /// 调用点分派结果：(方法, 偏移) → 目标方法
     pub dispatch: BTreeMap<(usize, u32), BTreeSet<usize>>,
     /// 有接收者到达过的虚调用点（含选不出目标的）：接收者恒为 null 的判定（folds `null_recv`）
@@ -454,12 +471,13 @@ pub struct Engine<'a> {
     /// 类（含超类）的引用实例字段节点（内存读取的对象分量）
     ref_fields: HashMap<u32, Rc<[(usize, u32)]>>,
     hw_writes: HashMap<usize, Rc<[Option<HwWrite>]>>,
-    /// 签名多态写入调用点的写入值节点（静态字段句柄无 holder 坐标：写入值接到按名打开的静态字段）
+    /// 目标可能是任一按名打开的静态字段的写入值节点：签名多态写入调用点（静态字段句柄无 holder 坐标）、
+    /// 以所指未知的类镜像为静态字段基址的按偏移写入
     poly_writes: Vec<Node>,
     /// 按名打开（反射 / VarHandle / Unsafe 按名写入）的静态引用字段
     open_statics: Vec<(usize, u32)>,
-    fwork: VecDeque<Node>,
-    in_fwork: HashSet<Node>,
+    /// 待沿流边推送增量的节点序号
+    fwork: VecDeque<u32>,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理
     open_methods: BTreeMap<(u32, u32), BTreeSet<usize>>,
     /// 按 open 在 G 上展开过接收者的字节码站点，索引同上（只重跑这些站点）
@@ -467,8 +485,6 @@ pub struct Engine<'a> {
     pending_catch: BTreeMap<usize, Vec<String>>,
     /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
     lambda_stack: HashSet<LambdaCall>,
-    /// 待沿流边推送的新增类型（差分传播）
-    fdelta: HashMap<Node, TypeSet>,
     /// 下一次 `add_to` 来自流边推送（诊断：区分 open 的直接注入点）
     via_flow: bool,
     /// open 的直接注入点：节点 → 注入的 open 类型（诊断 `@openorig`）
@@ -487,6 +503,8 @@ pub struct Engine<'a> {
     invokable: BTreeSet<Members>,
     /// 反射点名：类型 id → 在以 Class 为接收者 / 实参的调用里与之同现的字符串常量（按名取成员）
     reflect_names: HashMap<u32, BTreeSet<String>>,
+    /// 按名取类（常量名解析）取到的类：其构造器随构造器枚举进入反射面
+    named_ctors: BTreeSet<u32>,
     /// 反射缺口：接收者镜像推不出的成员枚举
     pub reflect_gaps: BTreeSet<String>,
     /// 反射成员面：（类别, 成员）
@@ -510,132 +528,6 @@ pub struct Engine<'a> {
 }
 
 impl<'a> Engine<'a> {
-    pub fn new(h: &'a Hierarchy<'a>, cp: &'a ClassPath, man: &'a Manifest, hw: &'a Handwritten) -> Self {
-        Engine {
-            ctx: Ctx {
-                h,
-                cp,
-                man,
-                hw,
-                consts: Default::default(),
-                domains: Default::default(),
-                calls: Default::default(),
-                fields: Default::default(),
-                in_progress: Default::default(),
-                fvals: Default::default(),
-                rvals: Default::default(),
-                fopen: Default::default(),
-                fopen_names: Default::default(),
-                fopen_all: Cell::new(false),
-                deser: Cell::new(false),
-                fdeps: Default::default(),
-                rdeps: Default::default(),
-                optimistic: Cell::new(true),
-                never: Default::default(),
-                objs: Default::default(),
-                psums: Default::default(),
-                preadonly: Default::default(),
-                punstable: Default::default(),
-                pdeps: Default::default(),
-            },
-            h,
-            cp,
-            man,
-            hw,
-            names: Vec::new(),
-            ids: HashMap::default(),
-            sub_cache: HashMap::default(),
-            sub_rows: Vec::new(),
-            classes: IndexMap::new(),
-            missing: BTreeMap::new(),
-            methods: IndexMap::new(),
-            mbase: HashMap::default(),
-            fields: IndexMap::new(),
-            sets: HashMap::default(),
-            g: BTreeSet::new(),
-            g_sub: HashMap::default(),
-            lambdas: HashMap::default(),
-            hwobjs: HashMap::default(),
-            arrays: HashMap::default(),
-            empty_arrays: HashMap::default(),
-            escaped: HashSet::default(),
-            self_fields: HashMap::default(),
-            obj_fields: HashMap::default(),
-            objs: HashMap::default(),
-            obj_chain: HashMap::default(),
-            containers: HashMap::default(),
-            factories: HashMap::default(),
-            forwarders: HashMap::default(),
-            inited: IndexMap::new(),
-            flows: HashMap::default(),
-            flow_seen: HashSet::default(),
-            dispatch: BTreeMap::new(),
-            recv_sites: HashSet::default(),
-            pvals: HashMap::default(),
-            pstrs: HashMap::default(),
-            pstr_sites: HashMap::default(),
-            hubs: Vec::new(),
-            hub_ids: HashMap::default(),
-            hubs_by_open: BTreeMap::new(),
-            hub_sites: BTreeMap::new(),
-            hub_last: HashMap::default(),
-            callers: HashMap::default(),
-            call_vals: None,
-            unresolved: BTreeSet::new(),
-            refs: BTreeSet::new(),
-            mwork: VecDeque::new(),
-            in_mwork: HashSet::default(),
-            watch: HashMap::default(),
-            swork: VecDeque::new(),
-            in_swork: HashSet::default(),
-            cur_site: None,
-            dispatched: HashMap::default(),
-            hub_linked: HashMap::default(),
-            recv_done: HashMap::default(),
-            lambda_done: HashMap::default(),
-            lcalls: Vec::new(),
-            cur_call: None,
-            call_watch: HashMap::default(),
-            open_calls: BTreeMap::new(),
-            cwork: VecDeque::new(),
-            in_cwork: HashSet::default(),
-            hw_site_ids: HashMap::default(),
-            hw_sites: Vec::new(),
-            hw_reads: HashMap::default(),
-            ref_fields: HashMap::default(),
-            hw_writes: HashMap::default(),
-            poly_writes: Vec::new(),
-            open_statics: Vec::new(),
-            fwork: VecDeque::new(),
-            in_fwork: HashSet::default(),
-            open_methods: BTreeMap::new(),
-            open_sites: BTreeMap::new(),
-            pending_catch: BTreeMap::new(),
-            lambda_stack: HashSet::default(),
-            mirrors: HashMap::default(),
-            mflows: HashMap::default(),
-            mflow_seen: HashSet::default(),
-            enum_recv: HashMap::default(),
-            rpending: Vec::new(),
-            enumerated: BTreeSet::new(),
-            reflect_names: HashMap::default(),
-            invokable: BTreeSet::new(),
-            reflect_gaps: BTreeSet::new(),
-            reflect_members: BTreeSet::new(),
-            hw_written: BTreeSet::new(),
-            fwriter_live: false,
-            spret: Default::default(),
-            fenum_pending: BTreeSet::new(),
-            hw_written_names: BTreeSet::new(),
-            hw_read_names: BTreeMap::new(),
-            snake_index: None,
-            seeds: SeedState::default(),
-            fdelta: HashMap::default(),
-            via_flow: false,
-            open_inj: HashMap::default(),
-        }
-    }
-
     /// 接收者对应的克隆上下文
     fn ctx_of(&self, r: u32) -> u32 {
         if self.objs.contains_key(&r) {
@@ -666,7 +558,8 @@ impl<'a> Engine<'a> {
             });
             if hit {
                 self.pending_catch.remove(&m);
-                self.methods[m].analysis = None;
+                let had = self.methods[m].analysis.take().is_some();
+                self.ctx.stats.borrow_mut().invalidated(m, Why::Catch, had);
                 self.push_m(m);
             }
         }
@@ -706,375 +599,6 @@ impl<'a> Engine<'a> {
         for w in sites {
             if self.in_swork.insert(w) {
                 self.swork.push_back(w);
-            }
-        }
-    }
-
-    /// JVMS §5.5 初始化：超类链、声明非抽象实例方法的超接口、`<clinit>`
-    pub fn init(&mut self, cls: &str, via: Via) {
-        if cls.starts_with('[') || self.inited.contains_key(cls) {
-            return;
-        }
-        let Some(cf) = self.touch(cls, Level::Init, via.clone()) else { return };
-        self.inited.insert(cls.to_string(), via);
-        if !cf.is_interface() {
-            if let Some(s) = &cf.super_name {
-                self.init(s, Via::class("super-init", cls));
-            }
-            for i in self.h.all_superinterfaces(&cf) {
-                if i.methods.iter().any(|m| !m.is_static() && !m.is_abstract() && !m.is_private()) {
-                    self.init(&i.name, Via::class("iface-init", cls));
-                }
-            }
-        }
-        if cf.method("<clinit>", "()V").is_some() {
-            let k = MemberRef { owner: cls.to_string(), name: "<clinit>".into(), desc: "()V".into() };
-            self.method(k, Via::class("clinit", cls));
-        }
-    }
-
-    // ── 方法节点 ────────────────────────────────────────────────────────────
-
-    fn kind_of(&self, cf: &ClassFile, m: &classfile::Method) -> Kind {
-        self.ctx.kind_of(cf, m)
-    }
-
-    /// (类内无重载时的裸名, mangle 名)
-    fn rust_names(&self, cf: &ClassFile, name: &str, desc: &str) -> (Option<String>, String) {
-        self.ctx.rust_names(cf, name, desc)
-    }
-
-    fn ptype(&mut self, t: &FieldType) -> Option<u32> {
-        match t {
-            FieldType::Object(c) => Some(self.id(c)),
-            other if other.is_reference() => {
-                let d = other.descriptor();
-                Some(self.id(&d))
-            }
-            _ => None,
-        }
-    }
-
-    /// 方法本体节点（无克隆上下文）
-    fn method(&mut self, key: MemberRef, via: Via) -> usize {
-        self.method_ctx(key, NOCTX, via)
-    }
-
-    /// 方法节点（按声明类 + 名字 + 描述符 + 克隆上下文）；首次登记入队。只有字节码方法按上下文克隆
-    fn method_ctx(&mut self, key: MemberRef, ctx: u32, via: Via) -> usize {
-        if !self.fwriter_live {
-            self.handle_writer_edge(&key, &via);
-        }
-        self.sysprops_entry(&key, &via);
-        let k = (key, ctx);
-        if let Some(i) = self.methods.get_index_of(&k) {
-            return i;
-        }
-        let (key, ctx) = k;
-        if ctx != NOCTX && self.mbase.get(&key).is_some_and(|&b| self.methods[b].kind != Kind::Bytecode) {
-            return self.method_ctx(key, NOCTX, via);
-        }
-        let (kind, cf, is_static) = match self.h.class(&key.owner) {
-            Some(cf) => match cf.method(&key.name, &key.desc) {
-                Some(m) => (self.kind_of(&cf, m), Some(cf.clone()), m.is_static()),
-                None => (Kind::Missing, None, false),
-            },
-            None => (Kind::Missing, None, false),
-        };
-        if ctx != NOCTX && kind != Kind::Bytecode {
-            return self.method_ctx(key, NOCTX, via);
-        }
-        let mut ptypes = Vec::new();
-        if !is_static {
-            ptypes.push(Some(self.id(&key.owner)));
-        }
-        let md = parse_method(&key.desc);
-        let mut rtype = None;
-        if let Some(md) = &md {
-            for p in &md.params {
-                let t = self.ptype(p);
-                ptypes.push(t);
-            }
-            rtype = md.ret.as_ref().and_then(|r| self.ptype(r));
-        }
-        let ks = key.to_string();
-        let ret_model = if self.man.returns_mirror(&ks) {
-            RetModel::Mirror
-        } else if self.man.returns_receiver(&ks) {
-            RetModel::Receiver
-        } else if let Some(src) = self.man.memory_read(&ks) {
-            RetModel::Read(src)
-        } else {
-            RetModel::Plain
-        };
-        let idx = self.methods.len();
-        self.methods.insert(
-            (key.clone(), ctx),
-            MNode { key: key.clone(), kind, via: via.clone(), is_static, ptypes, rtype, analysis: None, hw_fns: vec![], ctx, ret_model, returned: None, applied: None },
-        );
-        self.mbase.entry(key.clone()).or_insert(idx);
-        let lvl = if kind == Kind::Bytecode { Level::Code } else { Level::Type };
-        self.touch(&key.owner, lvl, Via::method("member", idx, None));
-        if cf.is_some() {
-            let v = Via::method("signature", idx, None);
-            self.touch_desc(&key.desc, &v);
-        } else {
-            self.unresolved.insert(key.to_string());
-        }
-        self.push_m(idx);
-        idx
-    }
-
-    fn push_m(&mut self, m: usize) {
-        if self.in_mwork.insert(m) {
-            self.mwork.push_back(m);
-        }
-    }
-
-    // ── 主循环 ──────────────────────────────────────────────────────────────
-
-    /// 入口形参来自 VM / 手写层：按声明类型 open
-    fn open_params(&mut self, t: usize) {
-        let pts = self.methods[t].ptypes.clone();
-        for (i, pt) in pts.iter().enumerate() {
-            if let Some(pt) = pt {
-                self.add_to(Node::P(t, i as u16), &TypeSet::open(*pt));
-            }
-        }
-    }
-
-    pub fn root(&mut self, key: MemberRef, kind: &'static str) {
-        let via = Via::root(kind, &key.to_string());
-        self.init(&key.owner.clone(), via.clone());
-        let m = self.method(key, via);
-        self.open_params(m);
-        self.returns_to_vm(m);
-    }
-
-    /// VM / 手写层回调的方法：返回值交给非建模代码
-    fn returns_to_vm(&mut self, t: usize) {
-        if let Some(rt) = self.methods[t].rtype {
-            self.flow(Node::R(t), Node::Esc, rt);
-        }
-    }
-
-    pub fn root_upcall(&mut self, u: &Upcall, kind: &'static str) {
-        match u {
-            Upcall::Method(k) => {
-                let via = Via::root(kind, &k.to_string());
-                if k.name == "<init>" {
-                    self.instantiate(&k.owner, via.clone());
-                }
-                self.init(&k.owner, via.clone());
-                if let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, false) {
-                    let (o, n, d) = site.key();
-                    let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
-                    self.open_params(t);
-                    self.returns_to_vm(t);
-                } else {
-                    self.unresolved.insert(k.to_string());
-                }
-            }
-            Upcall::Field(f) => self.init(&f.owner, Via::root(kind, &f.to_string())),
-        }
-    }
-
-    /// 外部种子方法（缺口扫描的 JDK 入口 / lib 公开 API 面）：等价于「某个用户程序调用了它」，构造器同时实例化
-    pub fn root_seed(&mut self, key: MemberRef, kind: &'static str) {
-        if key.name == "<init>" {
-            self.instantiate(&key.owner.clone(), Via::root(kind, &key.to_string()));
-        }
-        self.root(key, kind);
-    }
-
-    pub fn root_init(&mut self, cls: &str, kind: &'static str) {
-        self.init(cls, Via::root(kind, cls));
-    }
-
-    /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
-    pub fn root_boot_call(&mut self, member: &str, kind: &'static str) {
-        match seeds::parse_member(member) {
-            Some(key) => self.root(key, kind),
-            None => {
-                self.unresolved.insert(member.to_string());
-            }
-        }
-    }
-
-    pub fn run(&mut self) {
-        // 写入未知数组的元素：数组可能由非建模代码持有
-        let obj = self.id(OBJECT);
-        self.flow(Node::Array, Node::Esc, obj);
-        loop {
-            self.drain_flows();
-            if let Some((k, e, s)) = self.rpending.pop() {
-                self.enumerate(k, e, &s);
-                continue;
-            }
-            // 先处理方法（图扩张），读者站点最后重跑：集合增长在两次重跑之间尽量合并
-            let Some(m) = self.mwork.pop_front() else {
-                if let Some((m, off)) = self.swork.pop_front() {
-                    self.in_swork.remove(&(m, off));
-                    self.rerun_site(m, off);
-                    continue;
-                }
-                if let Some(c) = self.cwork.pop_front() {
-                    self.in_cwork.remove(&c);
-                    self.rerun_lcall(c);
-                    continue;
-                }
-                // 工作队列排空：清单种子按当前可达集补种，补入的新工作继续传播
-                if self.seed_round() {
-                    continue;
-                }
-                // 乐观阶段收敛：仍「尚无返回」的被调方法确实不返回。关掉乐观假设，把得到过该答复的
-                // 方法按值未知重算——导出的不可达代码只从跳转 / switch / return / athrow 之后开始
-                if !self.ctx.optimistic.replace(false) {
-                    break;
-                }
-                let never: Vec<usize> = std::mem::take(&mut *self.ctx.never.borrow_mut()).into_iter().collect();
-                for m in never {
-                    self.invalidate(m);
-                }
-                continue;
-            };
-            self.in_mwork.remove(&m);
-            self.process(m);
-        }
-    }
-
-    /// 方法的分析结果失效：重分析，调用方重处理
-    fn invalidate(&mut self, m: usize) {
-        if self.methods[m].analysis.take().is_none() && self.in_mwork.contains(&m) {
-            return;
-        }
-        // 调用方对被调方分析的依赖只有透传摘要（返回常量经 rdeps、「尚无返回」经 never 各自失效），
-        // 重分析后摘要变化才重处理调用方（见 `analysis`）
-        self.push_m(m);
-    }
-
-    fn invalidate_all(&mut self, ms: Option<BTreeSet<usize>>) {
-        for m in ms.unwrap_or_default() {
-            self.invalidate(m);
-        }
-    }
-
-    /// 字段写入值并入值集；变化时读者失效
-    fn field_put(&mut self, key: &MemberRef, v: PV) {
-        let cur = self.ctx.fvals.borrow().get(key).cloned().unwrap_or_else(|| default_pv(&key.desc));
-        let new = PV::join(Some(&cur), &v);
-        if new == cur {
-            return;
-        }
-        self.ctx.fvals.borrow_mut().insert(key.clone(), new);
-        let deps = self.ctx.fdeps.borrow().get(key).cloned();
-        self.invalidate_all(deps);
-    }
-
-    /// 字段的写入来源超出字节码：不折叠，读者失效
-    fn open_field(&mut self, key: MemberRef) {
-        if self.ctx.fopen.borrow_mut().insert(key.clone()) {
-            let deps = self.ctx.fdeps.borrow().get(&key).cloned();
-            self.invalidate_all(deps);
-            self.open_static(&key);
-        }
-    }
-
-    fn open_field_name(&mut self, name: &str) {
-        if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
-            let deps: BTreeSet<usize> =
-                self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()).collect();
-            self.invalidate_all(Some(deps));
-            // 已登记的同名字段；之后登记的由 field_node 按 fopen_names 接入
-            let hits: Vec<MemberRef> = self.fields.keys().filter(|k| k.name == name).cloned().collect();
-            for k in hits {
-                self.open_static(&k);
-            }
-        }
-    }
-
-    /// 全局开关（反射枚举 / 反序列化）打开：所有读过字段的方法失效
-    fn open_fields_all(&mut self) {
-        let deps: BTreeSet<usize> = self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()).collect();
-        self.invalidate_all(Some(deps));
-    }
-
-    fn process(&mut self, m: usize) {
-        match self.methods[m].kind {
-            Kind::Bytecode => self.process_bytecode(m),
-            Kind::Handwritten(HWOBJ_KIND) => self.process_hwobj_method(m),
-            Kind::Handwritten(_) => self.process_handwritten(m),
-            Kind::Abstract | Kind::Missing => {}
-        }
-    }
-
-    fn analysis(&mut self, m: usize) -> Option<Rc<Analysis>> {
-        if let Some(a) = &self.methods[m].analysis {
-            return Some(a.clone());
-        }
-        let key = self.methods[m].key.clone();
-        let cf = self.h.class(&key.owner)?;
-        let meth = cf.method(&key.name, &key.desc)?;
-        let code = meth.code.as_ref()?;
-        // catch 类型存活：G 中有其子类型（预先计算，避免 Oracle 借用引擎）
-        let mut live_cache: HashMap<String, bool> = HashMap::default();
-        for h in &code.exception_table {
-            if let Some(ct) = &h.catch_type {
-                let tid = self.id(ct);
-                let live = !self.g_of(tid).is_empty();
-                live_cache.insert(ct.clone(), live);
-            }
-        }
-        let live = |t: &str| live_cache.get(t).copied().unwrap_or(true);
-        // 尚无调用点记录的入口（根 / 手写 / VM）：形参值未知，并固定为 Top 保证单调
-        let n = self.methods[m].ptypes.len();
-        let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
-        let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
-        let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params };
-        let a = Rc::new(absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts));
-        // 透传摘要变化：调用方按新摘要重接调用边
-        let returned = a.returned_params();
-        if self.methods[m].returned.replace(returned.clone()).is_some_and(|old| old != returned) {
-            for c in self.callers.get(&m).cloned().unwrap_or_default() {
-                self.methods[c].applied = None;
-                self.push_m(c);
-            }
-        }
-        if !a.pending_catch.is_empty() {
-            self.pending_catch.insert(m, a.pending_catch.clone());
-        }
-        self.methods[m].analysis = Some(a.clone());
-        Some(a)
-    }
-
-    /// 方法在这些偏移处的站点去重记录作废（重分析后事件变化）
-    fn reset_offsets(&mut self, m: usize, offs: &HashSet<u32>) {
-        if let Some(d) = self.dispatched.get_mut(&m) {
-            d.retain(|k| !offs.contains(&k.0));
-        }
-        if let Some(d) = self.hub_linked.get_mut(&m) {
-            d.retain(|k| !offs.contains(&k.0));
-        }
-        if let Some(d) = self.recv_done.get_mut(&m) {
-            d.retain(|k| !offs.contains(&k.0));
-        }
-        if let Some(d) = self.lambda_done.get_mut(&m) {
-            for off in offs {
-                for (_, id) in d.remove(off).unwrap_or_default() {
-                    self.lcalls[id as usize].live = false;
-                }
-            }
-        }
-    }
-
-    /// 方法的站点去重记录作废（首次处理 / 被调方摘要变化后站点须完整重接）
-    fn reset_sites(&mut self, m: usize) {
-        self.dispatched.remove(&m);
-        self.hub_linked.remove(&m);
-        self.recv_done.remove(&m);
-        for (_, at) in self.lambda_done.remove(&m).unwrap_or_default() {
-            for (_, id) in at {
-                self.lcalls[id as usize].live = false;
             }
         }
     }

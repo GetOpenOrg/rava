@@ -29,7 +29,7 @@ impl<'a> Engine<'a> {
     /// 值集中各值的类镜像；类型推不出（open、lambda 合成类、手写实现对象）为所指未知的 Class
     pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
         let mut out = TypeSet::default();
-        let xs: Vec<u32> = s.classes.iter().copied().collect();
+        let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
             let k = if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
                 self.id(CLASS)
@@ -56,7 +56,7 @@ impl<'a> Engine<'a> {
 
     /// 成员枚举 e（手写方法）的接收者新增值 s：镜像所指类的该类成员进入反射面；推不出所指类记为缺口
     pub(super) fn enumerate(&mut self, k: Members, e: usize, s: &TypeSet) {
-        let xs: Vec<u32> = s.classes.iter().copied().collect();
+        let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
             match self.mirrors.get(&x).copied() {
                 Some(c) => {
@@ -70,7 +70,7 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        for &o in &s.open {
+        for o in &s.open {
             self.reflect_gaps.insert(format!("{} <- open({})", self.methods[e].key, self.names[o as usize]));
         }
     }
@@ -93,7 +93,9 @@ impl<'a> Engine<'a> {
         let comps: Vec<(String, String)> = cf.record_components.clone().unwrap_or_default();
         // 用户类被枚举即全部成员有分派臂；其余类只有按名查找点到的方法（运行时反射分派面同口径：
         // 构造器无按名形状，非用户类的反射构造只经清单补种，如 JCA 服务实现类）
-        let user = self.domain(&cls) == Domain::User && self.enumerated.contains(&(k, c));
+        // 按名取类解析到的类（常量名拼出的具体类）同样按枚举给出构造器
+        let named = k == Members::Constructors && self.named_ctors.contains(&c);
+        let user = (self.domain(&cls) == Domain::User || named) && self.enumerated.contains(&(k, c));
         let names = self.reflect_names.get(&c).cloned().unwrap_or_default();
         let picked: Vec<(String, String)> = cf
             .methods

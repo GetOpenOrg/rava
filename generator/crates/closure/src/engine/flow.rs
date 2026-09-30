@@ -6,21 +6,34 @@ impl<'a> Engine<'a> {
     // ── 类型流 ──────────────────────────────────────────────────────────────
 
     pub(super) fn set_of(&self, n: Node) -> TypeSet {
-        self.sets.get(&n).cloned().unwrap_or_default()
+        self.graph.get(&n).cloned().unwrap_or_default()
     }
 
     pub(super) fn add_to(&mut self, n: Node, s: &TypeSet) {
+        let i = self.graph.id(n);
+        self.add_to_id(i, s);
+    }
+
+    /// 节点（序号）并入类型集；新增部分登记待沿流边推送
+    fn add_to_id(&mut self, i: u32, s: &TypeSet) {
         let direct = !std::mem::take(&mut self.via_flow);
+        self.graph.adds[0] += 1;
         if s.is_empty() {
             return;
         }
+        // 无增量快速返回（流边推送的绝大多数）：不取节点、不查暂存。暂存中的空数组元素节点
+        // 若已含 s，旧路径暂存 s、补回时同样是无增量，两者等价
+        if s.is_subset_of(self.graph.set(i)) {
+            return;
+        }
+        let n = self.graph.node(i);
         if let Node::E(x, _) = n {
             if let Some(held) = self.empty_arrays.get_mut(&x) {
                 held.entry(n).or_default().add_all(s);
                 return;
             }
         }
-        let cur = self.sets.entry(n).or_default();
+        let cur = self.graph.set_mut(i);
         let delta = TypeSet {
             classes: s.classes.minus(&cur.classes),
             open: s.open.minus(&cur.open),
@@ -29,8 +42,10 @@ impl<'a> Engine<'a> {
             return;
         }
         cur.add_all(&delta);
+        self.graph.adds[1] += 1;
+        self.graph.adds[2] += (delta.classes.len() + delta.open.len()) as u64;
         if direct && !delta.open.is_empty() {
-            self.open_inj.entry(n).or_default().extend(delta.open.iter().copied());
+            self.open_inj.entry(n).or_default().extend(delta.open.iter());
         }
         if n == Node::Esc {
             self.escape(&delta.classes);
@@ -43,7 +58,7 @@ impl<'a> Engine<'a> {
         }
         // 手写方法调用点的实参新增数组分配点：接上该数组的元素读写
         if let Node::A(s, i) = n {
-            let ys: Vec<u32> = delta.classes.iter().copied().filter(|x| self.arrays.contains_key(x)).collect();
+            let ys: Vec<u32> = delta.classes.iter().filter(|x| self.arrays.contains_key(x)).collect();
             if !ys.is_empty() {
                 self.hw_site_arrays(s, i, &ys);
             }
@@ -67,57 +82,73 @@ impl<'a> Engine<'a> {
             }
         }
         // 只沿流边推送新增部分（差分传播）
-        self.fdelta.entry(n).or_default().add_all(&delta);
-        if self.in_fwork.insert(n) {
-            self.fwork.push_back(n);
+        let ix = i as usize;
+        self.graph.delta[ix].add_all(&delta);
+        if !self.graph.queued[ix] {
+            self.graph.queued[ix] = true;
+            self.fwork.push_back(i);
         }
     }
 
     /// 流边 src → dst（按 filter 收窄）；立即按当前集合推一次
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
-        if !self.flow_seen.insert((src, dst, filter)) {
+        let (si, di) = (self.graph.id(src), self.graph.id(dst));
+        if !self.graph.seen.insert((si, di, filter)) {
             return;
         }
-        self.flows.entry(src).or_default().push((dst, filter));
-        let Some(s) = self.sets.remove(&src) else { return };
+        self.graph.edges[si as usize].push((di, filter));
+        if self.graph.set(si).is_empty() {
+            return;
+        }
+        // Object 过滤且目标已含源集合：推送必为无增量，免去整集合克隆（大集合新接边的常态）
+        if self.graph.set(si).is_subset_of(self.graph.set(di)) && self.names[filter as usize].as_ref() == OBJECT {
+            return;
+        }
+        let s = std::mem::take(self.graph.set_mut(si));
         let out = self.filter(&s, filter);
-        self.sets.insert(src, s);
+        *self.graph.set_mut(si) = s;
         self.via_flow = true;
-        self.add_to(dst, &out);
+        self.add_to_id(di, &out);
     }
 
     pub(super) fn drain_flows(&mut self) {
-        while let Some(n) = self.fwork.pop_front() {
-            self.in_fwork.remove(&n);
-            let Some(s) = self.fdelta.remove(&n) else { continue };
+        let obj = self.ids.get(OBJECT).copied();
+        while let Some(i) = self.fwork.pop_front() {
+            let ix = i as usize;
+            self.graph.queued[ix] = false;
+            let s = std::mem::take(&mut self.graph.delta[ix]);
+            if s.is_empty() {
+                continue;
+            }
             // 边表借出（推送中新接的边已由 `flow` 按当前集合推过，归还时并在后面）；
             // 同一过滤类型只收窄一次，Object 过滤直接推增量本身
-            let edges = self.flows.get_mut(&n).map(std::mem::take).unwrap_or_default();
+            let edges = std::mem::take(&mut self.graph.edges[ix]);
             let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
             for &(dst, f) in &edges {
-                if self.names[f as usize].as_ref() == OBJECT {
+                if Some(f) == obj {
                     self.via_flow = true;
-                    self.add_to(dst, &s);
+                    self.add_to_id(dst, &s);
                     continue;
                 }
-                let i = match narrowed.iter().position(|x| x.0 == f) {
-                    Some(i) => i,
+                let k = match narrowed.iter().position(|x| x.0 == f) {
+                    Some(k) => k,
                     None => {
                         let out = self.filter(&s, f);
                         narrowed.push((f, out));
                         narrowed.len() - 1
                     }
                 };
-                let out = std::mem::take(&mut narrowed[i].1);
+                let out = std::mem::take(&mut narrowed[k].1);
                 self.via_flow = true;
-                self.add_to(dst, &out);
-                narrowed[i].1 = out;
+                self.add_to_id(dst, &out);
+                narrowed[k].1 = out;
             }
             if !edges.is_empty() {
-                let slot = self.flows.entry(n).or_default();
+                let slot = &mut self.graph.edges[ix];
                 let added = std::mem::replace(slot, edges);
                 slot.extend(added);
             }
+            let n = self.graph.node(i);
             if let Some(ds) = self.mflows.get(&n).cloned() {
                 let k = self.mirror_set(&s);
                 for d in ds {
@@ -183,7 +214,7 @@ impl<'a> Engine<'a> {
                     } else if let Some(w) = self.cur_site {
                         self.watch.entry(*n).or_default().insert(w);
                     }
-                    if let Some(s) = self.sets.get(n) {
+                    if let Some(s) = self.graph.get(n) {
                         out.add_all(s);
                     }
                 }
@@ -241,7 +272,7 @@ impl<'a> Engine<'a> {
     /// 值集新到达逃逸汇点：抽象对象接上未知接收者视图；数组分配点的元素随之逃逸（非建模代码可读出）
     pub(super) fn escape(&mut self, delta: &IdSet) {
         let obj = self.id(OBJECT);
-        for &x in delta.iter() {
+        for x in delta.iter() {
             if self.objs.contains_key(&x) {
                 if !self.escaped.insert(x) {
                     continue;

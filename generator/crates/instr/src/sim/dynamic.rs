@@ -21,7 +21,7 @@ use sim::StackSim;
 
 use crate::build::{call, text};
 use crate::env::InstrEnv;
-use crate::error::{unported, InstrError, InstrResult};
+use crate::error::{InstrError, InstrResult};
 use crate::log::{Audit, InstrLog};
 use crate::text::py_float_repr;
 
@@ -34,18 +34,9 @@ pub(super) struct IndySite<'a> {
     pub name: &'a str,
     /// 动态描述符（捕获值 → 函数式接口 / 拼接实参 → String / (selector, restart) → int）
     pub desc: &'a str,
-    pub bsm_index: u16,
+    /// 调用点的常量池下标（指令操作数携带）
+    pub cp_index: u16,
     pub bsm: Option<&'a BootstrapMethod>,
-}
-
-impl IndySite<'_> {
-    /// 调用点的常量池下标（经 [`crate::ctx::InstrHooks::indy_cp_index`]）
-    pub fn cp_index(&self, env: &InstrEnv) -> InstrResult<u16> {
-        match env.ctx.hooks.indy_cp_index(env.ctx.code_owner, self.bsm_index, self.name, self.desc) {
-            Some(i) => Ok(i),
-            None => unported(format!("invokedynamic {}:{} 的常量池下标不可得（InstrHooks::indy_cp_index）", self.name, self.desc)),
-        }
-    }
 }
 
 /// 数值常量的 Python `str(value)` 文本（Integer / Long / Float / Double；其余 → None）
@@ -107,13 +98,13 @@ fn athrow(sim: &mut StackSim) -> InstrResult<()> {
 }
 
 fn invokedynamic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &Insn) -> InstrResult<()> {
-    let Operand::InvokeDynamic { bsm, name, desc } = &ins.operand else {
+    let Operand::InvokeDynamic { index, bsm, name, desc } = &ins.operand else {
         return Err(InstrError::BadInsn("invokedynamic 缺调用点操作数".to_string()));
     };
     let bm = env.ctx.class_file().and_then(|cf| cf.bootstrap_methods.get(usize::from(*bsm)));
     // 引导方法分类键 `类.方法`（[indy] 清单；type_switch 是 native 的细分，清单装载时已优先）
     let kind = bm.and_then(|b| env.ctx.rt.indy_kind(&format!("{}.{}", b.handle.member.owner, b.handle.member.name)));
-    let site = IndySite { name, desc, bsm_index: *bsm, bsm: bm };
+    let site = IndySite { name, desc, cp_index: *index, bsm: bm };
     match kind {
         Some(IndyKind::Concat) => concat::string_concat(env, sim, &site),
         Some(IndyKind::TypeSwitch) => type_switch::gen_type_switch(env, sim, &site),

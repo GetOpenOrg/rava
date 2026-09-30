@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态（2026-09-30）：C1d 终态已落地（§6.10）：`[boundary]` 包前缀全部删除，非 VM 契约过渡手写一次性删除（1e623cec）；截断只剩 `[vm_boundary]` 逐类清单。未完成的是精度收敛项和 native 缺口（§6.10.4）。
+> 状态（2026-09-30）：C1d 终态已落地（§6.12）：`[boundary]` 包前缀全部删除，非 VM 契约过渡手写一次性删除（1e623cec）；截断只剩 `[vm_boundary]` 逐类清单。未完成的是精度收敛项和 native 缺口（§6.12.4）。
 
 ## 一、目标
 
@@ -369,14 +369,74 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 8. `sun/nio/cs`
 9. `jdk/internal/misc` 中非 VM 契约部分（`Unsafe` / `VM` / `Signal` 等 VM 契约类保留）
 
-精度项 G2′ ✅（02bf00ff + c731a473）/ G4–G6 ⏳ 与删除并行推进，不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
+精度项 G4–G6 与删除并行推进（G2′ 已完成，见 §6.9），不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
 
-### 6.10 终态一次性删除（2026-09-30，分支 `c1d-final`）
+### 6.9 精度线进展（`closure-precision`，2026-09-30）
+
+| 提交 | 内容 | 实测 |
+|---|---|---|
+| 5f40dcb0 / c501c499 / bfae1dee | 系统属性表折叠（`[facts.system_properties]`）、手写 static setter 识别、属性表作返回值不判逃逸 | 默认为 null 的属性读点折叠，其守卫分支成为死代码（`jdk.security.defaultKeySize` 等） |
+| 02bf00ff / c731a473 | **G2′ ✅**：字段枚举须与句柄写入口（按调用边）同时可达才放开字段 | `checkContext` 等随 SecurityManager 常量折叠 |
+| 8078f2b1 | 手写扫描：turbofish 转换、let-else / if let / match 绑定、宏实参调用点 | — |
+| b7f76452 | folds v2：逐条目 `dead_catches` | Python 与 Rust input 两侧消费 |
+| b643a597 | 按名查找的名字来自形参时取各调用点字符串常量；`MemberName` 按名构造登记为方法查找 | DMH / Invokers 具名函数进入反射分派 |
+| 0333ede2 | 类镜像作静态字段基址：`Unsafe` 按「镜像 + 偏移」读写接到该类静态引用字段；镜像所指类未知时按名开放静态字段 | RecordsSerializationTest：`SpeciesData.transformHelper` 入链，null_recv 691 → 503，missing 0 |
+| f1d00887 | **按名取类**：`Class.forName` 的名字为「常量前缀 + 常量表取值」拼接时解析成具体类（清单 `class_lookups` / `instantiators` / `constant_tables`、`[facts.string_concat]`），经实例化再 checkcast 到 T 时只留 T 的子类型 | `--release-bytecode sun/nio/cs/`：FileIOTest 661 → 478 类、反射缺口 1 → 0；HelloWorld 缺口 0 |
+
+**`MethodHandleAccessorFactory` 实况**：`StandardCharsets.lookup → Class.newInstance → ReflectionFactory.newConstructorAccessor`
+按字节码进入该类，但只有 `<clinit>` / `newConstructorAccessor` / `useNativeAccessor` 三个方法；`useNativeAccessor`
+折叠为 true，MethodHandle 生成分支（`newConstructorAccessor` dead_pcs [12, 84]）为死代码，实际只走
+`DirectConstructorHandleAccessor$NativeAccessor`。这是 `Class.newInstance` 字节码的如实结果，不据此手写。
+同一路径上 `getConstructor0` 的错误消息分支（`methodToString → Arrays.stream`）带入约 60 个 stream 类，属 G5 同类冷路径。
+
+**剩余缺口**：
+
+- `TestCharsetForName` / `TestStreamEncoderCharsets` 的 `getDeclaredConstructors0 <- open(Class)` 来自
+  `Charset$ExtendedProviderHolder → ServiceLoader → LazyClassPathLookupIterator.nextProviderClass` 的 `forName`：名字读自
+  `META-INF/services`，非常量，按设计记为缺口；终态由「服务目录」事实（模块描述符 `provides` + 类路径服务文件，
+  分析期可枚举）给出候选类，不做模糊扩展。
+- `SystemJavaLangAccess`：`JavaLangAccess.decodeASCII` / `encodeASCII` / `inflateBytesToChars` 选择失败（FileIOTest
+  unresolved 3），`SharedSecrets` 注入的实现对象（`System$2`）未建模到接口调用点。
+- **G6**（未实施，设计）：`Pattern.flags0` 被构造器形参与 `addFlag` 的常量位或写入，`has(CANON_EQ)` 读字段后与实参
+  按位与。终态：整型字段「可能置位掩码」域——字段掩码 = 全部写入值掩码之并（常量取其值；`x | C` 取 `x ∪ C`；
+  `x & C` 取 `x ∩ C`；形参取各调用点实参掩码之并；其余为全 1）；`(field & C) != 0` 在掩码与 C 不交时折叠为 false，
+  布尔返回的小方法（`has`）按调用点实参常量求值。验收：`jdk/internal/icu` 增量归零。
+
+**下游须知**：
+
+- **emitter 须消费 `null_recv`**：接收者值集为空的调用点目前仍生成对存根的调用，运行时若走到即 panic；终态
+  按 `null_recv` 生成 NullPointerException 抛出（与 JVM 在该点的行为一致），不再引用存根。
+- **运行时须加载 `[facts.system_properties]`**：分析器按清单初值折叠属性读点，运行时初始属性表必须来自同一张表，
+  否则折叠不可靠（死分支在运行时实际可达）。
+- **`Debug` 过渡手写可删**：`java.security.debug` 等属性默认 null，折叠后 `Debug.getInstance` 结果为 null，
+  各 `Debug.println` 调用点只以 null_recv 形式出现（TestNetworkInterface 中 KnownOIDs / Provider 各点均如此），
+  按字节码翻译不引入新类；前提是上面两条落地。
+- **TestNetworkInterface `SHA-1 not available`**（非分析器问题）：`GetInstance` 手写边界按 `crate::jca::providers_for`
+  精确匹配算法名，服务表只登记标准名（`SHA-1`），JDK 内部以别名 `SHA` 查询时返回空表。终态：provider 选择与 JDK
+  `ProviderList` 同构——遍历已登记 provider 逐个调翻译字节码的 `Provider.getService`（别名由 serviceMap 解析），服务表只决定
+  构造哪些 provider。`getInstance("SHA","SUN")` 同样失败，需运行期定位 `Sun.getService` 的别名查找。
+
+### 6.10 精度二期（`closure-prec2`，2026-09-30，已合入 a6b4c6d5）
+
+| 提交 | 内容 | 实测（类 / 方法） |
+|---|---|---|
+| dd2737ad | lambda 方法引用装箱适配（C 组） | TestMethodRef / TestMethodRefKinds / TestOptional / TestRecordHashCode 闭包正常 |
+| c111e64f | record `ObjectMethods` 引导（K 组） | 同上 |
+| b06fb0b6 / 66e176b2 | 按名方法查找（findStatic / findVirtual / resolveOrFail / MemberName.&lt;init&gt;）复用「常量前缀 + 常量表 / 枚举值」拼接解析，只保留目标类确实声明的方法；跟进单目标 String 返回辅助方法（≤ 2 层）、枚举 final String 字段候选值集；`[facts.string_concat]` 增 `StringBuilder.append(C/I/J/Z)` | TestMethodHandleCombinators 537/2741 → 540/2968（补 ValueConversions box/unbox 等）；HelloWorld 不变；Digester +9 / +1045（见下） |
+
+- **Digester +1045 方法**：几乎全部来自 `VarForm.resolveMemberName` 按访问模式名在约 25 个 VarHandle* 类里查方法。按现有可达性结果健全，但上游 `Invokers.checkVarHandleGenericType` 经反射根可达，而 VarHandle 访问模式实际走手写运行时——列入精度三期第 1 项收窄。
+- **EasterRelatedHolidays 诊断**：不是「静态字段缺默认 null」，是边界截断——`ZipUtils.<clinit>` 调 `SharedSecrets.getJavaNioAccess`（`jdk/` 边界手写），`ensureClassInitialized` 成为存根；且 `Unsafe.ensureClassInitialized` 手写为空操作，`CLASS_INIT_HOOKS` 只覆盖用户类与注解枚举。终态：C1d 取消截断后 SharedSecrets 按字节码翻译；分析器输出「初始化以参数传入的 Class」事实（精度三期第 8 项）；生成器按事实登记 JDK 类初始化钩子，`Unsafe.ensureClassInitialized` 接 `crate::ensure_class_initialized`（C3）。
+
+### 6.11 精度三期（`closure-prec3`，2026-09-30 起）
+
+清单与验收见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md) §三.1。执行者按项把前后类 / 方法数与漏覆盖检查结果记录在本节。
+
+### 6.12 终态一次性删除（2026-09-30，分支 `c1d-final`）
 
 用户要求：「删除非 VM 契约部分时直接一次性删干净，然后再验证，不要一个包一个包处理。」
 所以 §6.8 包 7–9 以及包 1–6 暂留的过渡手写一并删除，逐包顺序不再执行。
 
-#### 6.10.1 提交
+#### 6.12.1 提交
 
 | 提交 | 内容 |
 |---|---|
@@ -389,7 +449,7 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 jdk/internal/access 542、sun/nio/ch 370、jdk/internal/misc 341、sun/security/jca 264、jdk/internal/vm 154、
 jdk/internal/event 148，其余各包合计约 700。
 
-#### 6.10.2 保留的手写（按准入类别）
+#### 6.12.2 保留的手写（按准入类别）
 
 - **① ACC_NATIVE**：各 `<x>_impl.rs` 中的 `#[jvm_native]`。
 - **② 运行模型替换**：
@@ -408,7 +468,7 @@ jdk/internal/event 148，其余各包合计约 700。
 
 HelloWorld 生成：`raw-audit vm_boundary_methods=98`，`non_native_overrides=0`。
 
-#### 6.10.3 闭包对照（`rava closure`，5 例）
+#### 6.12.3 闭包对照（`rava closure`，5 例）
 
 | 用例 | 基线 类 / 方法 | 终态 类 / 方法 | 终态耗时 / 峰值内存 |
 |---|---|---|---|
@@ -420,7 +480,7 @@ HelloWorld 生成：`raw-audit vm_boundary_methods=98`，`non_native_overrides=0
 
 HelloWorld 生成树：`cargo check` 0 错误；precheck 报 native-missing 7、boundary-stub 8。
 
-#### 6.10.4 精度收敛项与风险
+#### 6.12.4 精度收敛项与风险
 
 1. **共同底座约 1589 类。** 来自异常消息路径。`--why java/util/regex/Pattern` 的链为：
    `HelloWorld.main → greet → UTF_8.<clinit> → UTF_8.<init> → Unicode.<init> → Charset.<init> → Charset.checkName → String.charAt → StringLatin1.charAt → String.checkIndex → Preconditions.checkIndex → outOfBoundsCheckIndex → outOfBounds → outOfBoundsMessage → String.format → Formatter.<clinit> → Pattern`。

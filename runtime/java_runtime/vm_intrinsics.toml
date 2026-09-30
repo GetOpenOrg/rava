@@ -295,6 +295,42 @@ constructor_invokers = [
     "java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;",
 ]
 
+# 按名取类（静态方法，第 0 个实参是 `.` 分隔的类名，返回该类镜像）：名字是字符串常量，或「常量前缀 + 常量表取值」
+# 的线性拼接（[facts.string_concat]）时，分析器解析出所指类集，结果只含这些类的镜像；结果唯一地经 instantiators
+# 实例化、再唯一地 checkcast 到 T 时只保留 T 的子类型。解析出的类初始化，其构造器随构造器枚举进入反射面
+class_lookups = [
+    "java/lang/Class.forName:(Ljava/lang/String;)Ljava/lang/Class;",
+    "java/lang/Class.forName:(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;",
+]
+# 实例化：接收者镜像所指类的无参构造
+instantiators = [
+    "java/lang/Class.newInstance:()Ljava/lang/Object;",
+]
+
+# 常量表：基类的具体子类是生成的不可变映射，内容即子类自身代码里的字符串常量；readers 为读取入口（名字:描述符）
+[facts.reflect.constant_tables."sun/util/PreHashedMap"]
+readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
+
+[facts.string_concat]
+# 字符串拼接链：新建构建器（可带初始内容）→ 逐段追加（返回接收者本身）→ 取结果
+builders = [
+    "java/lang/StringBuilder.<init>:()V",
+    "java/lang/StringBuilder.<init>:(Ljava/lang/String;)V",
+]
+appends = [
+    "java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;",
+    # 基本类型段：按名取类推不出；按名查方法记为任意串
+    "java/lang/StringBuilder.append:(C)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(J)Ljava/lang/StringBuilder;",
+    "java/lang/StringBuilder.append:(Z)Ljava/lang/StringBuilder;",
+]
+results = [
+    "java/lang/StringBuilder.toString:()Ljava/lang/String;",
+]
+
 [facts.array_writes]
 # 手写方法对实参数组元素的写入（闭包分析，generator `rava closure` 读取）。分析器按调用点把写入值
 # 接到该调用点实参数组的元素上；形参序号按描述符（0 起，不含接收者）：
@@ -379,6 +415,8 @@ constructor_invokers = [
 #   lambda  LambdaMetafactory：调用点产出实现 SAM 接口的合成类，SAM 调用分派到实现方法句柄
 #   concat  StringConcatFactory：动态实参按 String.valueOf 语义调用 toString
 #   native  其余原生承载的引导方法：只沿静态实参里的方法句柄入链
+#   object_methods  native 的细分（record 的 equals / hashCode / toString）：静态实参里的 getter 句柄
+#           读出各分量，引用分量按调用点名派发同名 Object 方法（描述符 = indy 描述符去掉首个 record 形参）
 # 未列出的引导方法按普通静态调用分析其 Java 体（安全方向）。
 [indy]
 lambda = [
@@ -399,3 +437,20 @@ native = [
 type_switch = [
     "java/lang/runtime/SwitchBootstraps.typeSwitch",
 ]
+object_methods = [
+    "java/lang/runtime/ObjectMethods.bootstrap",
+]
+
+# ── 基本类型的装箱类（闭包分析，generator `rava closure` 读取）─────────────────────────
+# LambdaMetafactory 在 SAM 与实现方法签名的基本类型 ↔ 引用类型位置上做装箱 / 拆箱适配：
+# 基本 → 引用调装箱类 `valueOf`，引用 → 基本调装箱类返回该基本类型的 `xxxValue`；
+# 这些调用由 VM 生成、不在任何字节码里，分析器据本表补调用边。键为基本类型描述符字符
+[boxing]
+B = "java/lang/Byte"
+C = "java/lang/Character"
+D = "java/lang/Double"
+F = "java/lang/Float"
+I = "java/lang/Integer"
+J = "java/lang/Long"
+S = "java/lang/Short"
+Z = "java/lang/Boolean"

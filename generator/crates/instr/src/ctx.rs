@@ -24,15 +24,6 @@ pub trait InstrHooks {
     /// invokedynamic lambda 站点的 SAM 合成对象构造路径（`sam_objects.site_ctor_path`）：
     /// `iface` 为函数式接口 binary 名，`current_class` 为站点所在类。None → 该接口不可合成。
     fn sam_ctor_path(&self, iface: &str, current_class: &str) -> Option<ir::Path>;
-
-    /// invokedynamic 调用点的常量池下标（Python 指令的 operand；lambda 站点变量名
-    /// `__lam_{idx}` / `__lam_cap{idx}_{i}` 与 TODO 占位文本的来源）。classfile 指令操作数
-    /// 只携带 (bsm, name, desc)——javac 对同一 (bsm, NameAndType) 只生成一个常量池项，
-    /// 三元组在类内唯一定位该下标。`code_owner` 为指令出处类（[`InstrCtx::code_owner`]，
-    /// 常量池所属类）。None → invokedynamic 的 lambda 路径按未移植报告
-    fn indy_cp_index(&self, _code_owner: &str, _bsm: u16, _name: &str, _desc: &str) -> Option<u16> {
-        None
-    }
 }
 
 /// 无合成对象的缺省回调（单元测试 / 不含 lambda 的调用方）

@@ -1,0 +1,283 @@
+//! 元数据属性（← `emitter/attrs.py`）：访问标志字符串、字段 / 方法属性行、
+//! 常量值与注解常量池编码。类块头在 [`super::head`]。
+
+use classfile::extras::{AnnoConst, FieldExtras, MethodExtras};
+use classfile::{Const, Field, Method};
+
+use crate::text::{hex, py_float_repr};
+
+pub const ACC_PUBLIC: u16 = 0x0001;
+pub const ACC_PRIVATE: u16 = 0x0002;
+pub const ACC_PROTECTED: u16 = 0x0004;
+pub const ACC_STATIC: u16 = 0x0008;
+pub const ACC_FINAL: u16 = 0x0010;
+pub const ACC_SYNCHRONIZED: u16 = 0x0020;
+pub const ACC_VOLATILE: u16 = 0x0040;
+pub const ACC_TRANSIENT: u16 = 0x0080;
+pub const ACC_NATIVE: u16 = 0x0100;
+pub const ACC_INTERFACE: u16 = 0x0200;
+pub const ACC_ABSTRACT: u16 = 0x0400;
+pub const ACC_SYNTHETIC: u16 = 0x1000;
+pub const ACC_ANNOTATION: u16 = 0x2000;
+pub const ACC_ENUM: u16 = 0x4000;
+
+/// 访问权限字符串（public / private / protected / package）
+pub fn access_str(flags: u16) -> &'static str {
+    if flags & ACC_PUBLIC != 0 {
+        "public"
+    } else if flags & ACC_PRIVATE != 0 {
+        "private"
+    } else if flags & ACC_PROTECTED != 0 {
+        "protected"
+    } else {
+        "package"
+    }
+}
+
+fn join_flags(flags: u16, table: &[(u16, &str)]) -> String {
+    table
+        .iter()
+        .filter(|(bit, _)| flags & bit != 0)
+        .map(|(_, s)| *s)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub fn class_modifiers_str(flags: u16) -> String {
+    join_flags(
+        flags,
+        &[
+            (ACC_FINAL, "final"),
+            (ACC_ABSTRACT, "abstract"),
+            (ACC_INTERFACE, "interface"),
+            (ACC_ENUM, "enum"),
+            (ACC_ANNOTATION, "annotation"),
+            (ACC_SYNTHETIC, "synthetic"),
+            (ACC_STATIC, "static"),
+        ],
+    )
+}
+
+pub fn field_modifiers_str(flags: u16) -> String {
+    join_flags(
+        flags,
+        &[
+            (ACC_STATIC, "static"),
+            (ACC_FINAL, "final"),
+            (ACC_VOLATILE, "volatile"),
+            (ACC_TRANSIENT, "transient"),
+            (ACC_SYNTHETIC, "synthetic"),
+        ],
+    )
+}
+
+pub fn method_modifiers_str(flags: u16) -> String {
+    join_flags(
+        flags,
+        &[
+            (ACC_STATIC, "static"),
+            (ACC_FINAL, "final"),
+            (ACC_SYNCHRONIZED, "synchronized"),
+            (ACC_NATIVE, "native"),
+            (ACC_ABSTRACT, "abstract"),
+            (ACC_VOLATILE, "bridge"),
+            (ACC_TRANSIENT, "varargs"),
+            (ACC_SYNTHETIC, "synthetic"),
+        ],
+    )
+}
+
+/// `"` / `\` 转义（属性字符串值）
+pub fn q(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// ConstantValue 的元数据文本（← `classfile._constant_value_str`；空串 = 非常量）
+pub fn constant_value_str(c: &Const) -> String {
+    match c {
+        Const::Int(v) => v.to_string(),
+        Const::Long(v) => v.to_string(),
+        Const::Float(bits) => {
+            let v = f32::from_bits(*bits);
+            if v.is_nan() {
+                "NaN".into()
+            } else {
+                py_float_repr(f64::from(v))
+            }
+        }
+        Const::Double(bits) => {
+            let v = f64::from_bits(*bits);
+            if v.is_nan() {
+                "NaN".into()
+            } else {
+                py_float_repr(v)
+            }
+        }
+        Const::String(s) => escape_const_string(s),
+        _ => String::new(),
+    }
+}
+
+fn escape_const_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let cp = ch as u32;
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ if cp < 0x20 || (0x7f..=0x9f).contains(&cp) => out.push_str(&format!("\\u{{{cp:04x}}}")),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// 稀疏注解常量池编码 `idx:K:值;…`（← `classfile.encode_anno_cpool`）
+pub fn anno_cpool_str(pool: &std::collections::BTreeMap<u16, AnnoConst>) -> String {
+    pool.iter()
+        .map(|(idx, c)| match c {
+            AnnoConst::Utf8(s) => format!("{idx}:U:{}", hex(s.as_bytes())),
+            AnnoConst::Int(v) => format!("{idx}:I:{v}"),
+            AnnoConst::Long(v) => format!("{idx}:J:{v}"),
+            AnnoConst::Float(b) => format!("{idx}:F:{b:08x}"),
+            AnnoConst::Double(b) => format!("{idx}:D:{b:016x}"),
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// 字段属性行 `#[cfg_attr(any(), java_field(...))]`
+pub fn field_attr(f: &Field, fx: Option<&FieldExtras>) -> String {
+    let mut parts = vec![format!("name = \"{}\"", f.name), format!("descriptor = \"{}\"", f.desc)];
+    if f.access != 0 {
+        let a = access_str(f.access);
+        if a != "package" {
+            parts.push(format!("access = \"{a}\""));
+        }
+        let mods = field_modifiers_str(f.access);
+        if !mods.is_empty() {
+            parts.push(format!("modifiers = \"{mods}\""));
+        }
+    }
+    if f.is_static() {
+        parts.push("is_static = true".into());
+    }
+    if let Some(sig) = f.signature.as_deref().filter(|s| !s.is_empty()) {
+        parts.push(format!("generic_signature = \"{}\"", sig.replace('"', "\\\"")));
+    }
+    let cv = f.constant_value.as_ref().map(constant_value_str).unwrap_or_default();
+    if !cv.is_empty() {
+        parts.push(format!("constant_value = \"{cv}\""));
+    }
+    if fx.is_some_and(|x| x.deprecated) {
+        parts.push("is_deprecated = true".into());
+    }
+    if let Some(x) = fx.filter(|x| !x.raw_annotations.is_empty()) {
+        parts.push(format!("raw_annotations = \"{}\"", hex(&x.raw_annotations)));
+    }
+    format!("#[cfg_attr(any(), java_field({}))]", parts.join(", "))
+}
+
+/// 方法属性行的发射期附加信息（Python 在 ParsedMethod 副本上挂的动态属性）
+#[derive(Debug, Clone, Default)]
+pub struct MethodAttrExtra {
+    pub virtual_in: String,
+    pub vtable_name: String,
+    pub vtable_erasure: Vec<String>,
+    pub handwritten_body: bool,
+}
+
+/// 方法元数据标注行（`#[java_method(...)]` / native 为 `#[native]\n#[java_native(...)]`）
+pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtra) -> String {
+    let esc = |s: &str| s.replace('"', "\\\"");
+    let tag = if m.is_native() { "java_native" } else { "java_method" };
+    let mut parts = vec![format!("name = \"{}\"", esc(&m.name)), format!("descriptor = \"{}\"", esc(&m.desc))];
+    if m.access != 0 {
+        let a = access_str(m.access);
+        if a != "package" {
+            parts.push(format!("access = \"{a}\""));
+        }
+        let mods = method_modifiers_str(m.access);
+        if !mods.is_empty() {
+            parts.push(format!("modifiers = \"{mods}\""));
+        }
+    }
+    let flags = [
+        (m.is_static(), "is_static    = true"),
+        (m.is_native(), "is_native    = true"),
+        (m.is_abstract(), "is_abstract  = true"),
+        (m.is_synthetic(), "is_synthetic = true"),
+    ];
+    parts.extend(flags.iter().filter(|(on, _)| *on).map(|(_, s)| s.to_string()));
+    if !m.exceptions.is_empty() {
+        parts.push(format!("exceptions = \"{}\"", esc(&m.exceptions.join(","))));
+    }
+    if let Some(sig) = m.signature.as_deref().filter(|s| !s.is_empty()) {
+        parts.push(format!("generic_signature = \"{}\"", esc(sig)));
+    }
+    if mx.is_some_and(|x| x.deprecated) {
+        parts.push("is_deprecated = true".into());
+    }
+    if !extra.virtual_in.is_empty() {
+        parts.push(format!("virtual_in = \"{}\"", esc(&extra.virtual_in)));
+        if !extra.vtable_name.is_empty() {
+            parts.push(format!("vtable_name = \"{}\"", esc(&extra.vtable_name)));
+        }
+    }
+    if !extra.vtable_erasure.is_empty() {
+        parts.push(format!("vtable_erasure = \"{}\"", esc(&extra.vtable_erasure.join(";"))));
+    }
+    if extra.handwritten_body {
+        parts.push("body = \"handwritten\"".into());
+    }
+    if !m.parameters.is_empty() {
+        let mp: Vec<String> = m
+            .parameters
+            .iter()
+            .map(|(n, a)| format!("{}:{a}", n.as_deref().unwrap_or("")))
+            .collect();
+        parts.push(format!("method_parameters = \"{}\"", esc(&mp.join(";"))));
+    }
+    if let Some(x) = mx {
+        for (bytes, key) in [
+            (&x.raw_annotations, "raw_annotations"),
+            (&x.raw_param_annotations, "raw_param_annotations"),
+            (&x.raw_annotation_default, "raw_annotation_default"),
+        ] {
+            if !bytes.is_empty() {
+                parts.push(format!("{key} = \"{}\"", hex(bytes)));
+            }
+        }
+    }
+    let body = format!("#[{tag}({})]", parts.join(", "));
+    if m.is_native() {
+        format!("#[native]\n{body}")
+    } else {
+        body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modifiers_and_access() {
+        assert_eq!(access_str(0x0011), "public");
+        assert_eq!(access_str(0x0010), "package");
+        assert_eq!(class_modifiers_str(0x0411 | ACC_STATIC), "final abstract static");
+        assert_eq!(method_modifiers_str(0x1041), "bridge synthetic");
+    }
+
+    #[test]
+    fn constant_values() {
+        assert_eq!(constant_value_str(&Const::Float(1.5f32.to_bits())), "1.5");
+        assert_eq!(constant_value_str(&Const::Float(0.1f32.to_bits())), "0.10000000149011612");
+        assert_eq!(constant_value_str(&Const::Double(f64::NAN.to_bits())), "NaN");
+        assert_eq!(constant_value_str(&Const::Double(f64::INFINITY.to_bits())), "inf");
+        assert_eq!(constant_value_str(&Const::String("a\"\\\n\u{1}".into())), "a\\\"\\\\\\n\\u{0001}");
+    }
+}

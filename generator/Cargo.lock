@@ -67,8 +67,31 @@ version = "0.1.0"
 dependencies = [
  "classfile",
  "closure",
+ "emit",
+ "input",
  "resolve",
  "serde_json",
+ "ty",
+]
+
+[[package]]
+name = "emit"
+version = "0.1.0"
+dependencies = [
+ "cfg",
+ "classfile",
+ "closure",
+ "crc32fast",
+ "indexmap",
+ "input",
+ "instr",
+ "ir",
+ "method",
+ "regex",
+ "resolve",
+ "serde_json",
+ "toml",
+ "ty",
 ]
 
 [[package]]

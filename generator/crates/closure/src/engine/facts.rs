@@ -95,6 +95,8 @@ pub(super) struct Ctx<'a> {
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
     pub(super) pdeps: RefCell<BTreeSet<usize>>,
+    /// 性能观测（`summary.perf`）
+    pub(super) stats: RefCell<super::stats::Stats>,
 }
 
 /// 调用点只依赖类文件与清单的摘要（`Oracle::invoke_result` 用）
@@ -293,7 +295,7 @@ impl Ctx<'_> {
         let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
         let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
             let live = |_: &str| true;
-            absint::analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![] })
+            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![] })
         });
         for (_, e) in a.iter().flat_map(|a| &a.events) {
             if let Event::Field { opcode: classfile::op::PUTSTATIC, mref, value, .. } = e {

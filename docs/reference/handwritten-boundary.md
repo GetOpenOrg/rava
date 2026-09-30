@@ -123,4 +123,4 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 
 原 `[boundary]` 前缀、`[release]`、`seeds.toml [jca]` / `[data_bundle]` 已删除。截断的原始理由
 （`docs/reports/2026-09-14-impl-strategy.md`：跟随内部包类数 111 → 635）是 Python BFS 过近似口径；
-精确闭包分析下的实测与精度收敛项见 C1d 计划 §6.10。
+精确闭包分析下的实测与精度收敛项见 C1d 计划 §6.12。

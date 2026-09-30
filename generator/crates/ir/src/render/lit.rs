@@ -1,10 +1,11 @@
 //! 字面量渲染：形态与 Python 各产出点（`instr/sim/consts.py`、`coerce._escape_str` /
 //! `_float_lit`）的文本逐字一致。
 
+use super::Renderer;
 use crate::{anchors, FloatLit, Lit};
 use std::fmt::Write as _;
 
-pub(crate) fn write_lit(out: &mut String, lit: &Lit) {
+pub(crate) fn write_lit(rd: &Renderer<'_>, out: &mut String, lit: &Lit) {
     match lit {
         Lit::Int { value, ty } => {
             let _ = write!(out, "{value}");
@@ -53,6 +54,20 @@ pub(crate) fn write_lit(out: &mut String, lit: &Lit) {
         Lit::Null => {
             let _ = write!(out, "{}::default()", anchors::OBJECT);
         }
+        Lit::JStringConcat { fmt: None, .. } => {
+            let _ = write!(out, "{}::new()", anchors::STRING);
+        }
+        Lit::JStringConcat { fmt: Some(fmt), args } if args.is_empty() => {
+            let _ = write!(out, "{}::from(\"{fmt}\")", anchors::STRING);
+        }
+        Lit::JStringConcat { fmt: Some(fmt), args } => {
+            let _ = write!(out, "{}::from_owned(format!(\"{fmt}\"", anchors::STRING);
+            for a in args {
+                out.push_str(", ");
+                rd.write_expr(out, a);
+            }
+            out.push_str("))");
+        }
     }
 }
 
@@ -95,7 +110,7 @@ mod tests {
 
     fn r(l: &Lit) -> String {
         let mut s = String::new();
-        write_lit(&mut s, l);
+        write_lit(&Renderer::new(&super::super::tests_expr::TailNames), &mut s, l);
         s
     }
 

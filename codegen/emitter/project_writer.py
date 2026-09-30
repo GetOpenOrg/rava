@@ -502,6 +502,28 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
                     if _dn not in jdk_mod_tree.get(_par, set()):
                         jdk_mod_tree.setdefault(_par, set()).add(_dn)
                         _changed = True
+            # 陈旧包目录清除：上方清扫只删类文件，包内类全部离开闭包后，上一轮生成的
+            # mod.rs 仍声明已删除的模块（E0583），且目录与同名类文件并存（E0761，如
+            # java/lang/module/ 与 java/lang/module.rs）。本轮不在 mod 树中的子包目录，
+            # 删除其生成 mod.rs 与空目录；手写 mod 目录与手写 lib.rs 直接声明的顶层目录保留
+            # （其余顶层包由 _complete_jrt_lib_rs 按磁盘目录补声明，目录删除即不再声明）。
+            _lib_declared: set[str] = set()
+            _lib_rs_rt = os.path.join(_RT_DIR, 'src', 'lib.rs')
+            if src_root is None and os.path.isfile(_lib_rs_rt):
+                with open(_lib_rs_rt, encoding='utf-8') as _f_lib:
+                    _lib_declared = set(re.findall(r'^\s*(?:pub\s+)?mod\s+(?:r#)?(\w+)\s*;',
+                                                   _f_lib.read(), re.M))
+            for root, _dirs, files in os.walk(_src_root, topdown=False):
+                _top = os.path.dirname(root) == _src_root
+                if (root == _src_root or root in jdk_mod_tree or _handwritten_mod_dir(root)
+                        or (_top and (src_root is not None
+                                      or os.path.basename(root) in _lib_declared))):
+                    continue
+                # 目录内若只剩本轮无对应类的手写伴生（*_impl.rs，不入 mod 树），同样无可声明模块
+                if 'mod.rs' in files:
+                    os.remove(os.path.join(root, 'mod.rs'))
+                if not os.listdir(root):
+                    os.rmdir(root)
 
         # java_runtime/src/lib.rs 是手写文件，不覆写。
         # 顶层 pub mod 声明（java/、jdk/ 等）已在 lib.rs 中手动维护。

@@ -1,0 +1,151 @@
+//! 继承成员 / 接口实现引用类型的 use 行推导（← `inherited_gen.class_use_path` /
+//! `type_arg_uses` / `_imports_for`）。
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::OnceLock;
+
+use regex::Regex;
+use ty::ident::is_rust_keyword;
+use ty::ClassInfo;
+
+use super::sig::idents;
+use super::Emissions;
+use crate::ctx::EmitCtx;
+use crate::emission::ClassEmission;
+use crate::text::to_snake;
+
+const JAVA_RUNTIME: &str = "java_runtime";
+
+fn use_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"^use\s+(.+)::([A-Za-z_][A-Za-z0-9_]*);\s*$").expect("静态正则"))
+}
+
+fn sig_class_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"L([A-Za-z_$][\w$]*(?:/[A-Za-z_$][\w$]*)+)[<;]").expect("静态正则"))
+}
+
+/// 文件 use 行导入的末段名（`_USE_RE` 的 group 2），全文扫描
+pub fn imported_names(text: &str) -> BTreeSet<String> {
+    text.split('\n').filter_map(|l| use_re().captures(l).map(|c| c[2].to_string())).collect()
+}
+
+/// 类在 Rust 中的完整引用路径（不含 `use` 与 `;`）。
+///
+/// - JDK 类（java_runtime，包 mod.rs 再导出）：`<crate 前缀>::java::lang::String`
+/// - 默认包用户类：main.rs 只声明 mod，路径写到模块层 `crate::<snake>::<Short>`
+/// - 标记了 crate 名的非 java_runtime 类：接收者同 crate 用 `crate::`，否则用其 crate 名
+///
+/// `ems` 为 None 时不查目标类的发射记录（Python 部分调用点不传 emissions，照搬）。
+pub fn class_use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, ems: Option<&Emissions>, recv_crate: &str) -> String {
+    let target = ems.and_then(|e| e.get(binary)).map(|e| (e.crate_name.as_str(), e.crate_prefix.as_str()));
+    use_path(ctx, binary, crate_prefix, target, recv_crate)
+}
+
+/// [`class_use_path`] 的核心：`target` 为目标类的 (crate 名, crate 前缀) 视图（None = 无发射记录）
+pub fn use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, target: Option<(&str, &str)>, recv_crate: &str) -> String {
+    let short = ctx.short(binary);
+    let segs: Vec<&str> = binary.split('/').collect();
+    let pkg = segs[..segs.len() - 1]
+        .iter()
+        .map(|p| if is_rust_keyword(p) { format!("r#{p}") } else { (*p).to_string() })
+        .collect::<Vec<_>>()
+        .join("::");
+    let lib_crate = target.map_or("", |t| t.0);
+    if !lib_crate.is_empty() && lib_crate != JAVA_RUNTIME {
+        let prefix = if lib_crate == recv_crate { "crate" } else { lib_crate };
+        if pkg.is_empty() {
+            return format!("{prefix}::{}::{short}", to_snake(binary));
+        }
+        return format!("{prefix}::{pkg}::{short}");
+    }
+    if pkg.is_empty() || target.is_some_and(|t| t.1 != "crate") {
+        return format!("crate::{}::{short}", to_snake(binary));
+    }
+    format!("{crate_prefix}::{pkg}::{short}")
+}
+
+/// 接收者视角下类型实参引用的类：短名 → use 行（接收者及全部超类型的类级泛型签名中
+/// 出现、且已生成的类）
+pub fn type_arg_uses(
+    ctx: &EmitCtx<'_>,
+    recv_ci: &ClassInfo,
+    ems: &Emissions,
+    crate_prefix: &str,
+    recv_crate: &str,
+) -> BTreeMap<String, String> {
+    let reg = ctx.ty.reg;
+    let mut uses = BTreeMap::new();
+    let mut queue: VecDeque<&ClassInfo> = VecDeque::from([recv_ci]);
+    let mut seen = BTreeSet::new();
+    while let Some(cur) = queue.pop_front() {
+        if !seen.insert(cur.name().to_string()) {
+            continue;
+        }
+        let sig = cur.generic_signature();
+        for c in sig_class_re().captures_iter(sig) {
+            let bin = &c[1];
+            if !ems.contains_key(bin) {
+                continue;
+            }
+            uses.entry(ctx.short(bin))
+                .or_insert_with(|| format!("use {};", class_use_path(ctx, bin, crate_prefix, Some(ems), recv_crate)));
+        }
+        let sups = std::iter::once(cur.super_class()).chain(cur.interfaces().iter().map(String::as_str));
+        for s in sups {
+            if let Some(sci) = (!s.is_empty()).then(|| reg.get(s)).flatten() {
+                queue.push_back(sci);
+            }
+        }
+    }
+    uses
+}
+
+/// 签名文本引用类型的 use 行：沿用祖先文件里的精确 use（跨 crate 时按目标 crate 重定向）；
+/// 代入的类型实参不在祖先文件中，按 `arg_uses` 解析。`already` 为接收者已导入名（随之更新）
+pub fn imports_for(
+    ctx: &EmitCtx<'_>,
+    signature: &str,
+    owner: &ClassEmission,
+    recv: &ClassEmission,
+    already: &mut BTreeSet<String>,
+    arg_uses: Option<&BTreeMap<String, String>>,
+    ems: Option<&Emissions>,
+) -> Vec<String> {
+    let mut owner_uses: BTreeMap<String, String> = BTreeMap::new();
+    for ln in owner.text.split('\n') {
+        if let Some(c) = use_re().captures(ln) {
+            owner_uses.entry(c[2].to_string()).or_insert_with(|| ln.trim().to_string());
+        } else if ln.starts_with("rava_macros::java_class!") {
+            break;
+        }
+    }
+    if owner.binary_name.contains('/') {
+        owner_uses.entry(ctx.short(&owner.binary_name)).or_insert_with(|| {
+            format!("use {};", class_use_path(ctx, &owner.binary_name, &owner.crate_prefix, ems, &recv.crate_name))
+        });
+    }
+    let owner_crate = if owner.crate_name.is_empty() { JAVA_RUNTIME } else { owner.crate_name.as_str() };
+    let mut out = Vec::new();
+    let mut seen_ident = BTreeSet::new();
+    for ident in idents(signature) {
+        if !seen_ident.insert(ident) || already.contains(ident) {
+            continue;
+        }
+        let Some(use_line) = owner_uses.get(ident) else {
+            if let Some(u) = arg_uses.and_then(|a| a.get(ident)) {
+                already.insert(ident.to_string());
+                out.push(u.clone());
+            }
+            continue;
+        };
+        let line = match use_line.strip_prefix("use crate::") {
+            Some(rest) if owner_crate != recv.crate_name => format!("use {owner_crate}::{rest}"),
+            _ => use_line.clone(),
+        };
+        already.insert(ident.to_string());
+        out.push(line);
+    }
+    out
+}

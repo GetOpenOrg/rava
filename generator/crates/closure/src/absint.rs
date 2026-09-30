@@ -778,7 +778,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 }
             }
             op::INVOKEDYNAMIC => {
-                let Operand::InvokeDynamic { bsm, name, desc } = &ins.operand else { return Err(()) };
+                let Operand::InvokeDynamic { bsm, name, desc, .. } = &ins.operand else { return Err(()) };
                 let md = parse_method(desc).ok_or(())?;
                 let args = pop_args(s, &md.params)?;
                 if let Some(ret) = &md.ret {
@@ -889,7 +889,7 @@ fn conservative(code: &Code) -> Analysis {
                 let n = parse_method(&m.desc).map_or(0, |d| d.params.len()) + usize::from(o != op::INVOKESTATIC);
                 Some(Event::Invoke { opcode: o, mref: m.clone(), iface: *iface, args: vec![V::Top; n] })
             }
-            (Operand::InvokeDynamic { bsm, name, desc }, _) => {
+            (Operand::InvokeDynamic { bsm, name, desc, .. }, _) => {
                 let n = parse_method(desc).map_or(0, |d| d.params.len());
                 Some(Event::Indy { bsm: *bsm, name: name.clone(), desc: desc.clone(), args: vec![V::Top; n] })
             }
