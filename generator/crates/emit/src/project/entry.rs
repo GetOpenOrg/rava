@@ -6,6 +6,8 @@ use std::path::Path;
 use super::fs::Writer;
 use super::layout::{JdkLayout, UserLayout};
 use crate::ctx::EmitCtx;
+use crate::phase2::dispatch::registration_turbofish;
+use crate::phase2::Emissions;
 use crate::error::Result;
 use crate::text::{safe_pkg_part, scratch_pkg_version, to_snake};
 
@@ -39,8 +41,9 @@ fn block(head: &str, lines: &[String], tail: &str) -> String {
     format!("{head}\n{}\n{tail}\n", lines.join("\n"))
 }
 
-/// 类初始化钩子：枚举形态 / 有 `<clinit>` 的用户类 + 注解枚举种子（JDK）
-fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Vec<String> {
+/// 类初始化钩子：枚举形态 / 有 `<clinit>` 的用户类 + 注解枚举种子与按镜像初始化目标（JDK）。
+/// 泛型类路径的类型实参按登记约定取 Object（钩子闭包无推断上下文，E0283）
+fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions) -> Vec<String> {
     let mut out = Vec::new();
     for (c, e) in &user.entries {
         let Some(ci) = ctx.class(c) else { continue };
@@ -55,8 +58,9 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Ve
         p.push(e.mod_name.clone());
         p.push(ctx.short(c));
         out.push(format!(
-            "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}::__class_init())),",
-            p.join("::")
+            "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
+            p.join("::"),
+            registration_turbofish(ctx, ems, c)
         ));
     }
     // 注解枚举元素类型、按类镜像强制初始化的目标类：运行期按名触发 `<clinit>`
@@ -66,17 +70,18 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Ve
             continue;
         }
         out.push(format!(
-            "    (\"{en}\", java_runtime::sync_model::__Shared::new(|| {}::__class_init())),",
-            jrt_path(ctx, en)
+            "    (\"{en}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
+            jrt_path(ctx, en),
+            registration_turbofish(ctx, ems, en)
         ));
     }
     out
 }
 
 /// main 启动段（钩子登记全部段落）
-fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, disp: &DispatchReg) -> String {
+fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions, disp: &DispatchReg) -> String {
     let mut hb = String::new();
-    let hooks = class_init_hooks(ctx, user, jdk);
+    let hooks = class_init_hooks(ctx, user, jdk, ems);
     if !hooks.is_empty() {
         hb += &block("    java_runtime::register_class_init_hooks(&[", &hooks, "    ]);");
     }
@@ -110,7 +115,13 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, disp: &Disp
         .boot_init_classes
         .iter()
         .filter(|b| jdk.generated.contains(*b))
-        .map(|b| format!("        (\"{b}\", {}::__class_init as fn() -> java_runtime::error::Result<()>),", jrt_path(ctx, b))));
+        .map(|b| {
+            format!(
+                "        (\"{b}\", {}{}::__class_init as fn() -> java_runtime::error::Result<()>),",
+                jrt_path(ctx, b),
+                registration_turbofish(ctx, ems, b)
+            )
+        }));
     if !boot.is_empty() {
         hb += &block("    java_runtime::vm_boot_init(&[", &boot, "    ]);");
     }
@@ -127,6 +138,7 @@ pub fn write_main(
     user_src: &Path,
     user: &UserLayout,
     jdk: &JdkLayout,
+    ems: &Emissions,
     disp: &DispatchReg,
 ) -> Result<String> {
     let Some((main_bin, main_e)) = user.entries.first() else {
@@ -156,7 +168,7 @@ pub fn write_main(
     lines.push(format!("use {use_path};"));
     lines.push(String::new());
     lines.push("fn main() {".into());
-    let hb = hook_block(ctx, user, jdk, disp);
+    let hb = hook_block(ctx, user, jdk, ems, disp);
     if !hb.is_empty() {
         lines.push(hb);
     }

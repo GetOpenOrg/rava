@@ -30,6 +30,11 @@
 - 隐藏类帧（lambda 代理、LambdaForm 编译体：JVMTI 类名含 `.`）透明跳过。
 - 无加载事件（agent 盲区）→ `unattributed`。
 
+基准 JVM 与原生二进制同一配置：vm_intrinsics.toml `[facts.system_properties.values]`（原生二进制启动时
+`System.props` 的恒定取值，闭包按它折叠）逐项以 `-D` 传给基准 JVM——否则按属性选路的 JDK 代码（如
+`jdk.reflect.useNativeAccessorOnly` 决定反射走 native 访问器还是 MethodHandle 访问器）在两侧走不同分支，
+基准加载的类不代表原生二进制的执行。启动器自有的键（`java.class.path`：基准以 `-cp` 指定用户类目录）除外。
+
 静态多出 = 闭包内、而 JVM 全程未加载的类；provenance 说明 = 该类的 `via` 边能解析到闭包内的
 来源（根 / 闭包内的类 / 闭包内的方法）。
 
@@ -323,6 +328,18 @@ def ensure_agent(java_home: Path, cache_root: Path) -> Path:
     return lib
 
 
+# 启动器自有、由基准命令行其它选项决定的系统属性（不按清单取值覆盖）
+LAUNCHER_PROPS = frozenset({"java.class.path"})
+
+
+def model_property_args() -> list[str]:
+    """原生二进制的恒定系统属性（vm_intrinsics.toml [facts.system_properties.values]）→ 基准 JVM 的 `-D`。"""
+    sys.path.insert(0, str(ROOT))
+    from codegen import runtime_manifest as rm
+    values = rm.system_property_values()
+    return [f"-D{k}={v}" for k, v in sorted(values.items()) if k not in LAUNCHER_PROPS]
+
+
 def main_class_of(closure: dict) -> str | None:
     for c in closure.get("classes", []):
         if (c.get("via") or {}).get("kind") == "main":
@@ -366,7 +383,7 @@ def run(ws: Path, java_home: Path, agent_cache: Path, cwd: Path,
         xlog_p = Path(tmp) / "load.log"
         agent_p = Path(tmp) / "agent.txt"
         # 基准与归因同一次运行：JVMTI agent 不执行 Java 代码，不改变加载序列
-        err = _java_run([java, "-Xshare:off", f"-agentpath:{lib}={agent_p}",
+        err = _java_run([java, "-Xshare:off", *model_property_args(), f"-agentpath:{lib}={agent_p}",
                          f"-Xlog:class+load=info,class+init=info:file={xlog_p}",
                          "-cp", str(classes_dir), main.replace("/", ".")], cwd, timeout)
         xlog = xlog_p.read_text(errors="replace") if xlog_p.exists() else ""

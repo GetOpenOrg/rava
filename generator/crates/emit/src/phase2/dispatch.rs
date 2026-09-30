@@ -319,9 +319,19 @@ fn emit_fields_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only:
     Some(out.join("\n"))
 }
 
+/// 泛型类的登记路径实参（反射分派 / 类初始化钩子 / 引导初始化的按名登记共用）：无发射（手写类）→ 空
+pub fn registration_turbofish(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str) -> String {
+    ems.get(bin).map(|em| object_turbofish(ctx, em, bin)).unwrap_or_default()
+}
+
 /// 泛型类的登记路径实参：每个类型形参取 Object
 fn object_turbofish(ctx: &EmitCtx<'_>, em: &ClassEmission, bin: &str) -> String {
-    let Some(g) = struct_generics(&em.text, &ctx.short(bin)) else { return String::new() };
+    object_turbofish_of(&em.text, &ctx.short(bin))
+}
+
+/// 按发射文本里的 struct 声明取泛型形参个数（形参带约束 `V: Clone` 时同样按逗号计）
+fn object_turbofish_of(text: &str, short: &str) -> String {
+    let Some(g) = struct_generics(text, short) else { return String::new() };
     let n = g.split(',').filter(|p| !p.trim().is_empty()).count();
     format!("::<{}>", vec!["java_runtime::java::lang::Object"; n].join(", "))
 }
@@ -395,4 +405,18 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
         );
     }
     DispatchReg { methods: methods.into_values().collect(), fields: fields.into_values().collect() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::object_turbofish_of;
+
+    /// 泛型类的按名登记（类初始化钩子 / 反射分派）：闭包无推断上下文，类型实参取 Object
+    #[test]
+    fn registration_turbofish_erases_generics() {
+        let o = "java_runtime::java::lang::Object";
+        assert_eq!(object_turbofish_of("pub struct AtomicReference<V> {", "AtomicReference"), format!("::<{o}>"));
+        assert_eq!(object_turbofish_of("pub struct HashMap<K, V> {", "HashMap"), format!("::<{o}, {o}>"));
+        assert_eq!(object_turbofish_of("pub struct Unsafe {", "Unsafe"), "");
+    }
 }
