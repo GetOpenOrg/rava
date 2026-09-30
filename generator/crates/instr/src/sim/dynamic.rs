@@ -1,8 +1,9 @@
 //! invokedynamic / monitor / athrow / nop / wide（← `instr/sim/dynamic.py`）。
 //!
 //! invokedynamic 按引导方法分类（`vm_intrinsics.toml [indy]`，[`IndyKind`]）分派：
-//! concat → [`concat`]；type_switch → [`type_switch`]；其余 → [`lambda`]（只有 lambda 类
-//! 携带实现方法与 SAM 描述符，其它形态落 TODO 占位）。Python 在类文件解析期拼进指令注释的
+//! concat → [`concat`]；type_switch / enum_switch → [`type_switch`]；object_methods →
+//! [`object_methods`]；lambda → [`lambda`]。清单外的引导方法（其 Java 体由闭包分析器照常分析，
+//! 生成侧无运行期链接）→ 精确存根 `panic!("stub: 引导类.方法:描述符")`，命中即报出引导方法。Python 在类文件解析期拼进指令注释的
 //! 引导信息（`indy:` / `template:` / `tconsts:` / `impl:` / `samtype:` / `tslabels:` 令牌）
 //! 在这里直接从当前类的 BootstrapMethods 表读取，取值口径与 `classfile._parse_bootstrap_methods`
 //! 一致。
@@ -12,14 +13,16 @@ mod concat;
 mod lambda;
 mod lambda_args;
 mod lambda_body;
+mod object_methods;
 mod type_switch;
 
 use classfile::{BootstrapMethod, Const, Insn, Operand};
 use input::manifest::IndyKind;
 use ir::{Expr, Raw, Stmt};
 use sim::StackSim;
+use type_switch::SwitchKind;
 
-use crate::build::{call, text};
+use crate::build::{call, text, ty_text};
 use crate::env::InstrEnv;
 use crate::error::{InstrError, InstrResult};
 use crate::log::{Audit, InstrLog};
@@ -107,10 +110,35 @@ fn invokedynamic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &I
     let site = IndySite { name, desc, cp_index: *index, bsm: bm };
     match kind {
         Some(IndyKind::Concat) => concat::string_concat(env, sim, &site),
-        Some(IndyKind::TypeSwitch) => type_switch::gen_type_switch(env, sim, &site),
-        Some(IndyKind::Lambda) => lambda::gen_lambda(env, sim, log, &site, true),
-        _ => lambda::gen_lambda(env, sim, log, &site, false),
+        Some(IndyKind::TypeSwitch) => type_switch::gen_type_switch(env, sim, &site, SwitchKind::Type),
+        Some(IndyKind::EnumSwitch) => type_switch::gen_type_switch(env, sim, &site, SwitchKind::Enum),
+        Some(IndyKind::ObjectMethods) => object_methods::gen_object_methods(env, sim, &site),
+        Some(IndyKind::Lambda) => lambda::gen_lambda(env, sim, log, &site),
+        Some(IndyKind::Native) | None => bootstrap_stub(env, sim, &site),
     }
+}
+
+/// 无生成侧翻译的引导方法调用点：弹出动态实参，以精确存根占据调用点结果
+/// （`panic!` 的 `!` 类型强转为调用点返回类型）
+fn bootstrap_stub(env: &InstrEnv, sim: &mut StackSim, site: &IndySite) -> InstrResult<()> {
+    let Some(bm) = site.bsm else {
+        return Err(InstrError::BadInsn(format!("invokedynamic {}{} 缺引导方法", site.name, site.desc)));
+    };
+    for _ in ty::type_map::parse_descriptor_params(site.desc) {
+        sim.pop()?;
+    }
+    let m = &bm.handle.member;
+    let stub = format!("panic!(\"stub: {}.{}:{}\")", m.owner, m.name, m.desc);
+    let ret = ty::type_map::parse_descriptor_return(site.desc);
+    if ret == "V" {
+        sim.emit(raw_stmt(format!("{stub};")));
+        return Ok(());
+    }
+    let t = env.ctx.ty.jvm_to_rust(ret);
+    let v = sim.fresh(&format!("__indy{}_", site.cp_index))?;
+    sim.emit(raw_stmt(format!("let {v}: {} = {stub};", ty_text(env, &t))));
+    sim.push(Expr::Var(v), t);
+    Ok(())
 }
 
 /// 本组指令；非本组 → Ok(false)

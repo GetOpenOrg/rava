@@ -81,7 +81,7 @@ pub fn replay(env: &Env, rec: &Value, (ninsn, owner): &(NInsn, Option<String>)) 
     let mut py = Vec::new();
     let mut rs = Vec::new();
     match res {
-        Err(InstrError::Unported(s)) => return Ok(Replayed::Unported(s)),
+        Err(InstrError::OutOfScope(s)) => return Ok(Replayed::Unported(s)),
         Err(e) => rs.push(format!("err {e}")),
         Ok(()) => {}
     }

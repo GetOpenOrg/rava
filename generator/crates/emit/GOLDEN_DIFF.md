@@ -26,8 +26,6 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 | 位置 | 分支 | 说明 |
 |---|---|---|
 | `project::write_project` | lib crate 模式（jar 输入） | `lib_crates` 非空即报错 |
-| `imports::base_fn::base_member_name` | 调用描述符只命中 synthetic bridge 的 `__base` 命名（桥接重定向） | 三例未触发 |
-| `imports::base_fn::base_member_name` | 接口接收者的 `__base` 命名（声明接口定位） | 三例未触发 |
 
 未移植的 Python 形参：`java_visibility`（仅 lib crate 用）、`full_impl_classes`（`_impl.rs` 内含 `pub struct` 的
 全量手写类；runtime 现无此类文件，按空集处理）、`stub_bodies`（project_writer 恒为 False）。
@@ -44,6 +42,13 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
 5. **Fallback 副作用**：Python 方法体翻译失败回落存根时，已登记的部分副作用（lambda 定义、跨类请求）残留在
    项目状态中；Rust 在 `BodyError::Fallback` 时整体丢弃该方法体的副作用（`ProjectState::absorb` 仅在成功时调用）。
    golden 三例的回落方法无残留副作用，故无可见差异。
+9. **record 的 toString / hashCode / equals**：Python 由 `_patch_record_method_blocks` 按方法体中的
+   `/* TODO: invokedynamic` 占位文本整体替换方法块；Rust 由方法体生成器直接翻译 `ObjectMethods` 引导点
+   （`instr::sim::dynamic::object_methods`，分量读取与 getfield 同一翻译），无文本补丁。
+10. **`__base` 导入命名**：Python 发射层与方法体层各有一份 `_mangle_if_overloaded` 调用面；Rust 发射层直接调
+   `instr::naming::mangle_if_overloaded`（与 invokespecial 调用点同一函数、同一声明类实参），桥接重定向与接口
+   接收者分支随之覆盖，不再有发射层私有移植。
+
 6. **lambda 命名为 emit 私有最小移植**：根 API 重载判断 → `hierarchy_overloaded_names` 改名 → `safe_ident`，
    与 `codegen/instr` 同口径；P4c method crate 落地后统一到其公共实现。
 7. **FS-H0 手写审计**：`ProjectState.hw_audit` 已按 VmBoundary / Intrinsic / Override 分类记录，尚未写入
@@ -52,10 +57,6 @@ golden：`scripts/golden/dump_emit.py` 采集 → `build/golden/emit/<Test>/`；
    判定手写模块目录；Rust 保护手写模块目录的整棵子树（与 mod 树扫描跳过整棵子树同口径）。
 
 ## 三、Python 行为照搬（疑似缺陷，按原样移植，不在 P5a 修）
-
-0. **record 方法文本补丁**：`record.rs` 按方法体文本中的 `/* TODO: invokedynamic` 占位识别 record 的
-   toString / hashCode / equals 并整体替换（Python `_patch_record_method_blocks`）。终态应由方法体生成器
-   直接翻译 `ObjectMethods` 引导点，届时删除该模块。
 
 1. **空串 ConstantValue**：`""` 字符串常量被当作「无常量」，走 clinit 抽取而非常量初始化。
 2. **用户类模块名**：layout 的用户类 mod 名取简单名，而 vtable / `__base` 导入的模块路径用 `to_snake(binary)`

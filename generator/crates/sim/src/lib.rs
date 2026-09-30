@@ -23,7 +23,7 @@
 //!
 //! 辅助：[`to_ir_type`] / [`type_text`]（`RsType` → `ir::Type` / 文本）、[`safe_name`]（LVT 名 → 标识符）、
 //! [`exprs`] 的结构化表达式构造与判定、[`types`] 的类型判定。
-//! 未移植语义返回 [`SimError::Unported`]；全部状态确定性（BTreeMap / Vec），无全局可变状态。
+//! 非法输入显式返回 [`SimError`]；全部状态确定性（BTreeMap / Vec），无全局可变状态。
 
 pub mod env;
 pub mod error;

@@ -98,7 +98,6 @@ fn concat_value(fmt: Option<String>, args: Vec<String>) -> Expr {
 
 /// 拼接调用点：弹出动态实参，按配方生成 `String::from_owned(format!(..))`
 pub(super) fn string_concat(env: &InstrEnv, sim: &mut StackSim, site: &IndySite) -> InstrResult<()> {
-    let string_t = RsType::class(ty::consts::STRING.to_string(), Vec::new());
     // Python 以 `^InvokeDynamic [^: ]+:(\([^)]*\))` 取形参段；取不到时按单个 String 实参
     let name_ok = !site.name.is_empty() && !site.name.contains([':', ' ']);
     let params = if name_ok && site.desc.starts_with('(') && site.desc.contains(')') {
@@ -106,13 +105,25 @@ pub(super) fn string_concat(env: &InstrEnv, sim: &mut StackSim, site: &IndySite)
     } else {
         vec![format!("L{};", ty::consts::STRING)]
     };
+    concat_from_stack(env, sim, &params, recipe(site))
+}
+
+/// 按配方拼接栈顶 `params.len()` 个实参（`params` 为其描述符，声明序），压入 String 结果；
+/// 配方缺省或实参位数不符时逐个实参直接拼接
+pub(super) fn concat_from_stack(
+    env: &InstrEnv,
+    sim: &mut StackSim,
+    params: &[String],
+    recipe: Option<(String, Vec<String>)>,
+) -> InstrResult<()> {
+    let string_t = RsType::class(ty::consts::STRING.to_string(), Vec::new());
     let mut args = Vec::with_capacity(params.len());
     for p in params.iter().rev() {
         args.push(concat_arg(env, sim, p)?);
     }
     args.reverse();
 
-    if let Some((template, consts)) = recipe(site) {
+    if let Some((template, consts)) = recipe {
         let parts: Vec<&str> = template.split('\u{1}').collect();
         if parts.len() == args.len() + 1 {
             let mut next = 0usize;

@@ -1,5 +1,5 @@
 //! bare Object 接收者的多态分派（`_dispatch_bare_object`）：接口经载体 / 根类方法经根
-//! vtable 单次直调 / 类虚方法经类 vtable 视图重建；均不命中时记默认值占位。
+//! vtable 单次直调 / 类虚方法经类 vtable 视图重建；均不命中时为精确存根。
 
 use ir::{Expr, Raw};
 use sim::StackSim;
@@ -49,13 +49,19 @@ pub(super) fn dispatch_bare_object(
             return vtable::emit_class_vtable_dispatch(env, sim, log, call, site, ci, &cls_rust, rust_ret);
         }
     }
-    // 未翻译类 / 接口残余形：无可分派实现，记默认值占位
+    unresolved_stub(env, sim, call, rust_ret)
+}
+
+/// 生成范围内无可分派实现（方法所属类不在注册表 / 接口无声明者）：调用点以精确存根占据，
+/// 命中即报出被调方法（与调用链外方法的存根同一口径）
+pub(super) fn unresolved_stub(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, rust_ret: &RsType) -> InstrResult<()> {
+    let stub = format!("panic!(\"stub: {}.{}:{}\")", call.owner, call.name, call.desc);
     if *rust_ret == RsType::Unit {
-        raw(sim, format!("/* A-5: 未翻译接收者残余 {}.{} —— 无可分派实现 */", env.ctx.short(cls_bin), call.name));
+        raw(sim, format!("{stub};"));
+        Ok(())
     } else {
-        let_push(env, sim, "_vdispatch", "Default::default()", rust_ret.clone())?;
+        let_push(env, sim, "_vdispatch", &stub, rust_ret.clone())
     }
-    Ok(())
 }
 
 /// 接口载体分派：`Into::<I<Object, ..>>::into(Clone::clone(&obj)).m(args)?`

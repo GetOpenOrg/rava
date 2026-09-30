@@ -193,23 +193,21 @@ pub(super) fn emit_call_result(
 ) -> InstrResult<()> {
     let arg_str = site.arg_str();
     let rust_ret = &d.rust_ret;
+    // bare Object 接收者只在注册表为空时走到这里（有注册表时已由 bare 多态分派接管）：
+    // 无可分派实现的 void / 具体引用返回形 → 精确存根
+    if obj_is_bare && (*rust_ret == RsType::Unit || (!is_object(env, rust_ret) && !is_prim(rust_ret))) {
+        return super::bare::unresolved_stub(env, sim, orig, rust_ret);
+    }
     if *rust_ret == RsType::Unit {
-        if !obj_is_bare {
-            match call_node(env, cs, rust_mname, &d.recv, site)? {
-                Some(n) => sim.emit(Stmt::Expr(Expr::try_(n))),
-                None => raw(sim, format!("{}?;", cs.build_call(env, rust_mname, &d.recv, &arg_str))),
-            }
+        match call_node(env, cs, rust_mname, &d.recv, site)? {
+            Some(n) => sim.emit(Stmt::Expr(Expr::try_(n))),
+            None => raw(sim, format!("{}?;", cs.build_call(env, rust_mname, &d.recv, &arg_str))),
         }
         return Ok(());
     }
     let v = sim.fresh("_t")?;
     let r = ty_text(env, rust_ret);
     let mname = d.call.name.as_str();
-    if obj_is_bare && !is_object(env, rust_ret) && !is_prim(rust_ret) {
-        // Python 同形：记默认值但不入栈
-        raw(sim, format!("let {v}: {r} = Default::default();"));
-        return Ok(());
-    }
     if d.root_routed {
         raw(sim, format!("let {v}: {r} = {}?;", cs.build_call(env, rust_mname, &d.recv, &arg_str)));
         sim.push(Expr::Var(v), rust_ret.clone());

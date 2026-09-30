@@ -11,7 +11,6 @@ pub mod head;
 pub mod hw_overrides;
 pub(crate) mod inherit;
 pub mod methods;
-pub mod record;
 pub mod slot;
 pub mod stub;
 mod super_inherit;
@@ -178,7 +177,6 @@ pub fn gen_class_rs(
     method_blocks.extend(mb.method_blocks);
     let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
     inherited_segments(ctx, state, bodies, ci, &tps, &visible, &overrides, &mut method_blocks)?;
-    let method_blocks = record::patch_record_method_blocks(ctx, ci, &format!("{sname}{struct_generic}"), method_blocks);
     let methods = crate::emission::record_methods(&method_blocks);
 
     let parent = parent_rust(ctx, ci);

@@ -28,7 +28,7 @@ pub use norm::{NInsn, NormCode};
 pub use plan::{ClassPlan, MethodPlan, Planner, Role, Verdict};
 pub use prune::VmConstants;
 
-/// 输入层错误；未移植的语义显式报 [`InputError::Unported`]
+/// 输入层错误
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputError {
     /// 闭包结果格式错误
@@ -39,8 +39,6 @@ pub enum InputError {
     Manifest(String),
     /// 文件读取失败
     Io(String),
-    /// 尚未移植的语义
-    Unported(String),
 }
 
 impl std::fmt::Display for InputError {
@@ -50,7 +48,6 @@ impl std::fmt::Display for InputError {
             InputError::Fold(s) => write!(f, "折叠点不一致：{s}"),
             InputError::Manifest(s) => write!(f, "清单错误：{s}"),
             InputError::Io(s) => write!(f, "读取失败：{s}"),
-            InputError::Unported(s) => write!(f, "未移植：{s}"),
         }
     }
 }

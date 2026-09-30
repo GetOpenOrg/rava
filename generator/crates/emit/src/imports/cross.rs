@@ -10,7 +10,7 @@ use classfile::{Insn, Method, Operand};
 use ty::ident::safe_ident;
 use ty::ClassInfo;
 
-use super::base_fn::{base_member_name, class_inherits_default_method, resolve_special_owner};
+use instr::owner::{class_inherits_default_method, resolve_special_method_owner};
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::error::Result;
 use crate::lang;
@@ -202,7 +202,7 @@ fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc:
             if r.name == "<init>" || reg.get(&r.owner).is_some_and(ClassInfo::is_interface) {
                 continue;
             }
-            let orig = resolve_special_owner(ctx, &r.owner, &r.name, &r.desc);
+            let orig = resolve_special_method_owner(reg, &r.owner, &r.name, &r.desc);
             if orig == ci.name() {
                 continue;
             }
@@ -214,7 +214,7 @@ fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc:
                 }
                 if let Some(oc) = reg.get(&orig) {
                     if !oc.methods().iter().any(|am| am.name == r.name)
-                        && !class_inherits_default_method(ctx, &orig, &r.name, &r.desc)
+                        && !class_inherits_default_method(reg, &orig, &r.name, &r.desc)
                     {
                         continue;
                     }
@@ -223,7 +223,9 @@ fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc:
             } else {
                 (orig.replace('$', "_"), to_snake(&orig))
             };
-            let rust_m = safe_ident(&base_member_name(ctx, &ctx.short(&orig), &r.name, &r.desc)?);
+            // 与调用点（instr invokespecial `__base` 路由）同一命名函数、同一声明类实参
+            let ictx = instr::InstrCtx::new(ctx.ty, ctx.manifest, ctx.instr_facts(), &instr::NoHooks, ci.name());
+            let rust_m = safe_ident(&instr::naming::mangle_if_overloaded(&ictx, &orig, &r.name, Some(&r.desc)).map_err(|e| crate::error::EmitError::Body(e.to_string()))?);
             let base_fn = format!("{base_simple}__{rust_m}_base");
             if acc.seen.insert(format!("crate::{base_mod}::{base_fn}")) {
                 let bprefix = if is_jdk { inp.prefix } else { "crate" };

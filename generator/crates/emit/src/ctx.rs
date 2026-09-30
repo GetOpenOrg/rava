@@ -44,6 +44,7 @@ pub struct EmitCtx<'a> {
     chain_slots: OnceCell<BTreeMap<String, BTreeSet<(String, String)>>>,
     root_keys: OnceCell<BTreeSet<(String, String)>>,
     sam: OnceCell<crate::sam::SamLedger>,
+    instr_facts: OnceCell<instr::InstrFacts>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -79,6 +80,7 @@ impl<'a> EmitCtx<'a> {
             chain_slots: OnceCell::new(),
             root_keys: OnceCell::new(),
             sam: OnceCell::new(),
+            instr_facts: OnceCell::new(),
         })
     }
 
@@ -151,6 +153,15 @@ impl<'a> EmitCtx<'a> {
                 .filter(|m| m.access & classfile::acc::PUBLIC != 0)
                 .map(|m| (m.name.clone(), crate::phase2::sig::param_part(&m.desc).to_string()))
                 .collect()
+        })
+    }
+
+    /// 方法体层的全局事实（根类方法集 / 手写根类 API 名面 / 子类索引）：发射层与方法体层
+    /// 共用同一成员命名函数时的上下文
+    pub fn instr_facts(&self) -> &instr::InstrFacts {
+        self.instr_facts.get_or_init(|| {
+            let root = self.cp.get(ty::consts::OBJECT);
+            instr::InstrFacts::build(self.ty.reg, root.as_deref(), &self.runtime_src())
         })
     }
 

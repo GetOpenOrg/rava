@@ -6,7 +6,6 @@
 //! - [`base_fn`]：`__base` 函数命名所需的 invokespecial 解析（instr 辅助的私有最小移植）；
 //! - [`refs`]：描述符 / 签名文本的类引用抽取。
 
-pub mod base_fn;
 pub mod cross;
 pub mod referenced;
 pub mod refs;

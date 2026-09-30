@@ -10,7 +10,7 @@ use ty::{ClassInfo, RsType};
 use crate::build::{call_path, expr_stmt, id, ir_ty, let_typed, seg, text, try_, ty_text};
 use crate::coerce;
 use crate::env::InstrEnv;
-use crate::error::{unported, InstrResult};
+use crate::error::InstrResult;
 use crate::hierarchy::short_binary;
 use crate::invoke::bind::{bind_type_args, caller_sensitive_wrap};
 use crate::invoke::sig::{self, RecvView, TargMap};
@@ -184,9 +184,6 @@ fn call_target(env: &InstrEnv, sim: &StackSim, call: &CallRef, cls_path: &[Strin
     let rust_m = ty::ident::safe_ident(&mangle_if_overloaded(ctx, &call.owner, &call.name, Some(&call.desc))?);
     if cls_short == ctx.class_name {
         return Ok(Target { path: Path::new(vec![seg("Self")?, seg(&rust_m)?]), turbofish_bound: false });
-    }
-    if cls_short.contains('/') {
-        return unported(format!("invokestatic 目标短名含包路径：{cls_short}"));
     }
     let turbofish = match inst {
         Some(i) => i.to_vec(),
