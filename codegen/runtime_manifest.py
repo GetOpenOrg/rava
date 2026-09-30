@@ -124,14 +124,6 @@ def seed_section(name: str) -> dict:
     return _toml('seeds.toml').get(name, {})
 
 
-def annotation_triggers() -> frozenset:
-    return frozenset(_member_ref(r) for r in seed_section('annotation').get('triggers', []))
-
-
-def annotation_seed_members() -> tuple:
-    return tuple(_method_ref(r) for r in seed_section('annotation').get('seeds', []))
-
-
 def jca_release_entries() -> list[str]:
     sec = seed_section('jca')
     return (_packages(sec, 'release_packages', 'jca')

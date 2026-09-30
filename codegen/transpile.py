@@ -1,8 +1,8 @@
 """
-转译流水线：javac → parse → jdk_scan → codegen → Cargo 项目。
+转译流水线：javac → parse → 闭包分析（rava closure → closure.json）→ codegen → Cargo 项目。
 
 jar 输入模式（--lib）：javac（-cp 全部 jar）→ 用户类解析 + jar 条目枚举进
-registry → 方法级 BFS（种子 = 库公开 API 面：全 public 类成员）→ lib crate
+registry → 闭包分析（种子 = 库公开 API 面：全 public 类成员）→ lib crate
 发射（crate-type=["lib"]）+ user bin 消费。
 """
 
@@ -11,11 +11,9 @@ import sys
 import os
 import re
 import zipfile
-from dataclasses import dataclass, field
-from collections import deque
+from dataclasses import dataclass
 from .classfile import parse_class, parse_class_bytes
 from .emitter import write_cargo_project
-from .constants import CLASS_CLASS as _CLASS_CLASS
 from .closure_input import discover as _discover_closure
 
 _ACC_PUBLIC = 0x0001
@@ -26,7 +24,7 @@ class LibSpec:
     """一个 lib crate 的 jar 输入规格（main.py --lib 解析产物）。
 
     seed_classes 为 None = 整包模式（M1 hamcrest）：jar 全部类发射进 crate，
-    BFS 种子 = 全部类的 public 成员（库的公开 API 面，access_flags 驱动）。
+    闭包种子 = 全部类的 public 成员（库的公开 API 面，access_flags 驱动）。
     seed_classes 非空 = 子集模式（M2 junit Assert 子集）：只有种子类可达闭包
     内的 jar 类进 crate，Runner/annotation 族等不被触达的类显式不入。
     """
@@ -52,12 +50,6 @@ def _load_jar_registry(jar_path: str) -> dict:
             except (ValueError, OSError) as e:
                 print(f"[jar] 跳过无法解析的条目 {entry}: {e}")
     return registry
-
-
-def _jar_package_prefixes(registry: dict) -> tuple[str, ...]:
-    """jar 全部类的包前缀（精确到包，排序确定）：BFS 各通道的 lib 前缀闸。"""
-    pkgs = {'/'.join(name.split('/')[:-1]) for name in registry if '/' in name}
-    return tuple(sorted(pkgs))
 
 
 def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
@@ -141,9 +133,8 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
     # 2b. jar 输入模式：枚举 lib crate 的 jar 条目 → registry。
     #     种子统一走可达性通道（lib 类不进用户类通道——用户通道全量翻译、
     #     不参与虚分派传播，库语义不符）：整包模式种子 = jar 全部类，
-    #     子集模式种子 = seed_classes；均收敛到 public 成员（callchain 侧）。
+    #     子集模式种子 = seed_classes；均收敛到 public 成员（分析器 --seed-class）。
     _lib_registries: list[dict] = []
-    _lib_prefixes: tuple[str, ...] = ()
     _lib_seed_classes: list[str] = []
     _crate_of: dict[str, str] = {}   # jar 类 binary name → crate 名（闭包拆分用）
     for spec in lib_specs:
@@ -155,7 +146,6 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
         for name in reg:
             _crate_of[name] = spec.crate_name
         _lib_registries.append(reg)
-        _lib_prefixes += _jar_package_prefixes(reg)
         if spec.seed_classes is None:
             _lib_seed_classes.extend(sorted(reg))
         else:
@@ -163,7 +153,6 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
                 if fqn not in reg:
                     sys.exit(f"--lib seed 类 {fqn} 不在 {spec.jar_path} 中")
             _lib_seed_classes.extend(spec.seed_classes)
-    _lib_prefixes = tuple(sorted(set(_lib_prefixes)))
 
     # 3. 精确闭包分析（rava closure）发现 JDK / 库类
     print(f"[3/4] 闭包分析...", flush=True)
@@ -176,10 +165,10 @@ def transpile(java_files: list[str], out_dir: str, batch_bin: bool = False,
         locales=tuple(locales),
         jdk_seed_methods=_options_seed.JDK_SEEDS or None)
 
-    # jar 模式闭包拆分：BFS 发现集里归属 jar 的类拆到对应 lib crate（整包模式
+    # jar 模式闭包拆分：闭包里归属 jar 的类拆到对应 lib crate（整包模式
     # 再并入 jar 全集——wholesale 语义），其余（java/ javax/ …）留在 java_runtime。
     # dict 按 lib_specs 声明序预置——crate 依赖方向（后面的 path 依赖前面的）
-    # 是用户声明语义，不能由 BFS 发现序（哪只 jar 的类先被触达）决定。
+    # 是用户声明语义，不能由闭包发现序（哪只 jar 的类先被触达）决定。
     _lib_crate_classes: dict[str, list] = {}
     if lib_specs:
         _lib_crate_classes = {spec.crate_name: [] for spec in lib_specs}
@@ -245,14 +234,14 @@ def _write_jdk_scan_report(path: str, jdk_class_infos: list, field_stubs: set, c
         f.write(f"# JDK 扫描报告\n\n生成时间：{date.today()}\n\n")
         f.write("## 摘要\n\n")
         f.write(f"| 来源 | 类数 |\n|------|-----:|\n")
-        f.write(f"| 调用链 BFS | {len(callchain_infos)} |\n")
+        f.write(f"| 闭包分析 | {len(callchain_infos)} |\n")
         f.write(f"| Field-only stub | {len(field_stub_names)} |\n")
         f.write(f"| 合计 | {len(jdk_class_infos)} |\n\n")
         if closure_rows is not None:
             from .closure_report import write_report_sections
             write_report_sections(f, closure_rows)
             f.write("\n")
-        f.write("## 调用链 BFS 发现的类\n\n")
+        f.write("## 闭包分析发现的类\n\n")
         f.write("| 类名 | 方法数 | native 数 |\n|------|-------:|----------:|\n")
         for ci in sorted(callchain_infos, key=lambda c: c.name):
             native = sum(1 for m in ci.methods if m.is_native)
