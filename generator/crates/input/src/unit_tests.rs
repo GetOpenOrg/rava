@@ -36,7 +36,8 @@ fn shape(v: &[NInsn]) -> Vec<(u32, u8)> {
     v.iter()
         .map(|x| match x {
             NInsn::Op(i) => (i.offset, i.opcode),
-            NInsn::FoldConst { offset, .. } => (*offset, 0),
+            NInsn::FoldField { offset, .. } => (*offset, 0),
+            NInsn::FoldCall { call, .. } => (call.offset, call.opcode),
         })
         .collect()
 }
@@ -85,7 +86,7 @@ fn switch_single_live_target() {
 }
 
 #[test]
-fn const_invoke_pops_receiver_and_args() {
+fn const_invoke_keeps_call() {
     let c = code(
         vec![i(0, ALOAD_1), i(1, ICONST_0), call(2, op::INVOKEVIRTUAL, "p/A", "f", "(I)Z"), i(5, op::IRETURN)],
         6,
@@ -95,7 +96,9 @@ fn const_invoke_pops_receiver_and_args() {
     consts.insert(2, FoldConst { pc: 2, kind: ReadKind::Invoke, value: FoldValue::Bool(true), ty: "Z".into() });
     let fold = MethodFold { consts, ..Default::default() };
     let n = apply_fold("A.m:()Z", &c, &fold).unwrap();
-    assert!(matches!(n.insns[2], NInsn::FoldConst { offset: 2, pops: 2, .. }));
+    // 调用保留（被调方副作用不随返回值折叠而丢失），insn() 对扫描方暴露原调用
+    assert!(matches!(&n.insns[2], NInsn::FoldCall { call, .. } if call.opcode == op::INVOKEVIRTUAL));
+    assert_eq!(n.insns[2].insn().map(|i| i.offset), Some(2));
 }
 
 #[test]

@@ -14,9 +14,10 @@ use resolve::classpath::{ClassPath, Origin};
 use serde_json::{json, Value};
 use ty::ShortNames;
 
-const TESTS: [(&str, &str); 2] = [
+const TESTS: [(&str, &str); 3] = [
     ("TestHashMapOps", "tests/e2e/33_maps/TestHashMapOps.java"),
     ("TestStreamBasic", "tests/e2e/30_streams/TestStreamBasic.java"),
+    ("TestCompletableFuture", "tests/e2e/54_concurrency_api/TestCompletableFuture.java"),
 ];
 
 fn repo_root() -> PathBuf {
@@ -71,14 +72,16 @@ fn insn_proj(i: &classfile::Insn) -> String {
     s
 }
 
+fn tail(load: &classfile::Insn) -> String {
+    let inner = insn_proj(load);
+    inner.split_once(' ').map_or(String::new(), |(_, t)| t.to_string())
+}
+
 fn ninsn_proj(n: &NInsn) -> String {
     match n {
         NInsn::Op(i) => insn_proj(i),
-        NInsn::FoldConst { offset, pops, load } => {
-            let inner = insn_proj(load);
-            let tail = inner.split_once(' ').map_or("", |(_, t)| t);
-            format!("{offset} fold_const {pops} {tail}")
-        }
+        NInsn::FoldField { offset, load } => format!("{offset} fold_field {}", tail(load)),
+        NInsn::FoldCall { call, load } => format!("{} fold_call {}", insn_proj(call), tail(load)),
     }
 }
 
@@ -139,7 +142,6 @@ fn manifest_json(m: &RuntimeManifest) -> Value {
     json!({
         "boundary_packages": m.boundary_packages,
         "vm_boundary_classes": m.vm_boundary_classes,
-        "vm_boundary_whole": m.vm_boundary_whole,
         "release": m.release,
         "jca_release": m.jca_release,
         "module_resource_paths": m.module_resource_paths,

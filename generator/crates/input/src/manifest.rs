@@ -1,11 +1,11 @@
 //! 发射层读取的 runtime 清单（`codegen/runtime_manifest.py` 发射层消费部分的移植）。
 //!
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
-//! - closure.toml：`[boundary]` / `[vm_boundary]`（含 `whole_class`）/ `[release]`；
+//! - closure.toml：`[boundary]` / `[vm_boundary]` / `[release]`；
 //! - seeds.toml：`[jca]` 放行、`[module_resources]`、`[boot_init]`、`[data_bundle]` 载体；
 //! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`。
 //!
-//! 文件缺失视为空表；格式约定（包条目以 `/` 结尾、类条目不以 `/` 结尾、whole_class ⊆ classes、
+//! 文件缺失视为空表；格式约定（包条目以 `/` 结尾、类条目不以 `/` 结尾、
 //! 内建条目须写 kind 与 reason）违反时返回 [`InputError::Manifest`]。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,8 +45,6 @@ pub struct RuntimeManifest {
     pub boundary_packages: Vec<String>,
     /// VM 耦合边界类
     pub vm_boundary_classes: BTreeSet<String>,
-    /// 整类截断的 VM 边界类（⊆ vm_boundary_classes）
-    pub vm_boundary_whole: BTreeSet<String>,
     /// 通用边界放行：包前缀在前、类在后
     pub release: Vec<String>,
     /// K-JCA 放行：包前缀在前、类在后
@@ -150,13 +148,6 @@ impl RuntimeManifest {
 
         let vmb = section(&closure, "vm_boundary");
         let vm_boundary_classes: BTreeSet<String> = classes(vmb, "classes", "vm_boundary")?.into_iter().collect();
-        let vm_boundary_whole: BTreeSet<String> = classes(vmb, "whole_class", "vm_boundary")?.into_iter().collect();
-        let stray: Vec<&String> = vm_boundary_whole.difference(&vm_boundary_classes).collect();
-        if !stray.is_empty() {
-            return Err(InputError::Manifest(format!(
-                "vm_boundary.whole_class：未列在 vm_boundary.classes：{stray:?}"
-            )));
-        }
         let rel = section(&closure, "release");
         let mut release = packages(rel, "packages", "release")?;
         release.extend(classes(rel, "classes", "release")?);
@@ -168,7 +159,6 @@ impl RuntimeManifest {
             ty,
             boundary_packages: packages(section(&closure, "boundary"), "packages", "boundary")?,
             vm_boundary_classes,
-            vm_boundary_whole,
             release,
             jca_release,
             module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,

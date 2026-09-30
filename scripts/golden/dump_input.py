@@ -122,8 +122,12 @@ def _proj_one(off, op, operand, comment) -> str:
 
 def _proj(ins) -> str:
     if ins.opcode == 'fold_const':
-        n, inner = _folds.decode_fold_const(ins)
-        return f'{ins.offset} fold_const {n} ' + _proj_one(inner.offset, inner.opcode, inner.operand, inner.comment).split(' ', 1)[1]
+        _n, inner = _folds.decode_fold_const(ins)
+        return f'{ins.offset} fold_field ' + _proj_one(inner.offset, inner.opcode, inner.operand, inner.comment).split(' ', 1)[1]
+    if ins.fold is not None:
+        load = ins.fold
+        return (_proj_one(ins.offset, ins.opcode, ins.operand, ins.comment) + ' fold_call '
+                + _proj_one(load.offset, load.opcode, load.operand, load.comment).split(' ', 1)[1])
     return _proj_one(ins.offset, ins.opcode, ins.operand, ins.comment)
 
 
@@ -261,7 +265,6 @@ def _manifest() -> dict:
     return {
         'boundary_packages': RM.boundary_packages(),
         'vm_boundary_classes': sorted(RM.vm_boundary_classes()),
-        'vm_boundary_whole': sorted(RM.vm_boundary_whole_class()),
         'release': RM.release_entries(),
         'jca_release': RM.jca_release_entries(),
         'module_resource_paths': RM.module_resource_paths(),

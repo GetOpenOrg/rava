@@ -1,8 +1,8 @@
 //! 发射层的边界判定（`codegen/callchain.py` `_is_boundary_class` / `_is_vm_boundary_class` 的移植）。
 //!
 //! - 内部边界类：类名落在 closure.toml `[boundary]` 包前缀内，且不属于 K-JCA 放行、通用放行、
-//!   纯数据资源束三者之一；或其最外层类列在 `[vm_boundary] whole_class`（且未通用放行）。
-//! - VM 耦合边界类：最外层类列在 `[vm_boundary] classes`、不在 whole_class、未通用放行。
+//!   纯数据资源束三者之一。
+//! - VM 耦合边界类：最外层类列在 `[vm_boundary] classes`、未通用放行。
 //!
 //! 纯数据资源束判定复用闭包分析器的 [`Carriers`]（同一结构判据），结果按类缓存在实例上。
 
@@ -79,20 +79,19 @@ impl<'a> Boundary<'a> {
         released_general(&self.manifest.release, cls)
     }
 
-    /// 内部边界类：整类截断、手写承载（前缀内的放行类 / 纯数据资源束除外）
+    /// 内部边界类：包前缀截断、手写承载（前缀内的放行类 / 纯数据资源束除外）
     pub fn is_boundary_class(&self, cls: &str) -> bool {
         let m = self.manifest;
         if m.boundary_packages.iter().any(|p| cls.starts_with(p.as_str())) {
             return !(jca_released(&m.jca_release, cls) || self.released_general(cls) || self.is_data_bundle(cls));
         }
-        m.vm_boundary_whole.contains(outer_of(cls)) && !self.released_general(cls)
+        false
     }
 
     /// VM 耦合边界类：按方法划分，`<clinit>` 不翻译
     pub fn is_vm_boundary_class(&self, cls: &str) -> bool {
         let m = self.manifest;
-        let outer = outer_of(cls);
-        m.vm_boundary_classes.contains(outer) && !m.vm_boundary_whole.contains(outer) && !self.released_general(cls)
+        m.vm_boundary_classes.contains(outer_of(cls)) && !self.released_general(cls)
     }
 }
 

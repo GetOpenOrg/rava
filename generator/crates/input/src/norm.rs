@@ -6,8 +6,9 @@
 //! 2. 条件跳转只剩一个活后继 → `pop`（×操作数个数）+ `goto`（或直通），偏移沿用原指令字节；
 //!    switch 死目标改指向回退活目标，只剩一个活目标时改写为 `pop` + `goto`；
 //! 3. dead_handlers 与受保护区间全死的异常表项删除，其余端点收拢到活指令起点；
-//! 4. 常量读取点：getstatic 直接替换为装载指令；getfield / invoke 替换为
-//!    [`NInsn::FoldConst`]（弹出 receiver / 实参后压入常量）。
+//! 4. 常量读取点：getstatic 直接替换为装载指令；getfield 替换为 [`NInsn::FoldField`]
+//!    （弹出 receiver 后压入常量）；invoke 替换为 [`NInsn::FoldCall`]：调用照常执行（被调方
+//!    副作用保留），只丢弃返回值、改压常量。
 //!
 //! 违反格式约定的输入返回 [`InputError::Fold`]。
 
@@ -15,7 +16,6 @@ use std::collections::BTreeSet;
 
 use classfile::{op, Code, Const, ExceptionEntry, Insn, Operand};
 use ty::consts;
-use ty::type_map::parse_descriptor_params;
 
 use crate::facts::{FoldConst, FoldValue, MethodFold, ReadKind};
 use crate::InputError;
@@ -32,22 +32,26 @@ const IF_ACMPNE: u8 = 0xa6;
 pub enum NInsn {
     /// 原始 / 改写后的 JVM 指令
     Op(Insn),
-    /// 折叠常量读取点：弹出 `pops` 个模拟栈条目（long/double 占一个）后执行装载指令 `load`
-    FoldConst { offset: u32, pops: u32, load: Insn },
+    /// getfield 折叠点：弹出 receiver 后执行装载指令 `load`
+    FoldField { offset: u32, load: Insn },
+    /// invoke 折叠点：调用 `call` 照常翻译、丢弃返回值，再执行装载指令 `load`
+    FoldCall { call: Insn, load: Insn },
 }
 
 impl NInsn {
     pub fn offset(&self) -> u32 {
         match self {
             NInsn::Op(i) => i.offset,
-            NInsn::FoldConst { offset, .. } => *offset,
+            NInsn::FoldField { offset, .. } => *offset,
+            NInsn::FoldCall { call, .. } => call.offset,
         }
     }
-    /// JVM 指令本体（合成的 FoldConst 为 None）
+    /// JVM 指令本体（FoldCall 为保留的调用指令；FoldField 为 None）
     pub fn insn(&self) -> Option<&Insn> {
         match self {
             NInsn::Op(i) => Some(i),
-            NInsn::FoldConst { .. } => None,
+            NInsn::FoldCall { call, .. } => Some(call),
+            NInsn::FoldField { .. } => None,
         }
     }
 }
@@ -143,24 +147,11 @@ fn const_insn(ins: &Insn, c: &FoldConst, where_: &str) -> Result<NInsn, InputErr
         return Err(err(where_, format!("const kind={:?} 与指令 {} 不符", c.kind, ins.name())));
     }
     let load = push_insn(ins.offset, c, where_)?;
-    let pops = match (c.kind, &ins.operand) {
-        (ReadKind::GetStatic, _) => return Ok(NInsn::Op(load)),
-        (ReadKind::GetField, _) => 1,
-        (ReadKind::Invoke, Operand::Method(m, _)) => {
-            let n = parse_descriptor_params(&m.desc).len() as u32;
-            if ins.opcode == op::INVOKESTATIC {
-                n
-            } else {
-                n + 1
-            }
-        }
-        _ => return Err(err(where_, format!("invoke 指令 pc={} 缺方法引用", ins.offset))),
-    };
-    // 无弹出（无参 invokestatic）直接是装载指令，与 getstatic 同形
-    if pops == 0 {
-        return Ok(NInsn::Op(load));
-    }
-    Ok(NInsn::FoldConst { offset: ins.offset, pops, load })
+    Ok(match c.kind {
+        ReadKind::GetStatic => NInsn::Op(load),
+        ReadKind::GetField => NInsn::FoldField { offset: ins.offset, load },
+        ReadKind::Invoke => NInsn::FoldCall { call: ins.clone(), load },
+    })
 }
 
 fn pops(pc: u32, n: u32) -> Vec<NInsn> {
