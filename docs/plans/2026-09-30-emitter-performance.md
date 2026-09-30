@@ -457,6 +457,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
   - `run_tests.py` 缺省带 `--closure-json`，每次运行都会校验两路事实一致；若出现「由 closure.json 解析的闭包事实与进程内直传的不一致」即为回归。
   - 建议抽查 `DeepCopy`（最多类，析构与发射重叠）、`Digester`，再加一例开动态对照的常规用例（如 `TestStreamBasic`）。
   - 另跑一例 `--no-dyn`（不写 closure.json 的缺省路径），确认输出与 JVM 一致。
+- **mod 树单次列举**（提交 092f9bed）：生成形态不变。建议抽查一例复用 scratch 且闭包缩小的运行：先跑 `DeepCopy`，再不加 `--clean` 把同一 scratch 用于一个小用例，确认编译运行正常（陈旧文件清扫、陈旧包目录清除）。
 - **P3**（全局分配器）与 **P5**（lib.rs / 陈旧清扫时机）：影响所有生成器运行，生成树已逐字节一致。
   - 抽查一例复用 scratch 的连续两次运行（不加 `--clean`），确认第二次 cargo 不重编 java_runtime。
   - 抽查一例在 runtime/ 删除手写文件后的复用 scratch 运行（陈旧手写清扫）。
