@@ -67,6 +67,7 @@ impl<'a> Engine<'a> {
             pvals: HashMap::default(),
             pstrs: HashMap::default(),
             pstr_sites: HashMap::default(),
+            ptaint: HashSet::default(),
             hubs: Vec::new(),
             hub_ids: HashMap::default(),
             hubs_by_open: BTreeMap::new(),

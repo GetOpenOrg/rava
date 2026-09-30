@@ -55,6 +55,9 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     for r in &input.seed_roots {
         e.root_seed(r.clone(), "seed");
     }
+    for n in hw.vm_field_writes() {
+        e.open_vm_field_write(&n);
+    }
     for u in hw.vm_upcalls() {
         e.root_upcall(&u, "vm-upcalls");
     }
@@ -240,6 +243,7 @@ impl Closure<'_> {
             },
             "seeds": {
                 "annotation_enums": e.seeds.annotation_enums,
+                "mirror_inits": e.seeds.mirror_inits,
                 "reflect_names": e.seeds.reflect_names,
                 "reflect_all": e.seeds.reflect_all,
             },

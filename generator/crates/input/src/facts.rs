@@ -122,6 +122,8 @@ pub struct MethodFold {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SeedFacts {
     pub annotation_enums: Vec<String>,
+    /// 按类镜像强制初始化的目标类（Unsafe.ensureClassInitialized 等；需初始化钩子）
+    pub mirror_inits: Vec<String>,
     pub reflect_names: BTreeMap<String, BTreeSet<String>>,
     pub reflect_all: BTreeSet<String>,
 }
@@ -227,6 +229,7 @@ impl ClosureFacts {
             reflect_gaps: e.reflect_gaps.iter().cloned().collect(),
             seeds: SeedFacts {
                 annotation_enums: s.annotation_enums.iter().cloned().collect(),
+                mirror_inits: s.mirror_inits.iter().cloned().collect(),
                 reflect_names: s.reflect_names.clone(),
                 reflect_all: s.reflect_all.clone(),
             },
@@ -363,6 +366,7 @@ pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
 fn parse_seeds(s: &Value) -> Result<SeedFacts, InputError> {
     let mut out = SeedFacts {
         annotation_enums: strings(s.get("annotation_enums"))?,
+        mirror_inits: strings(s.get("mirror_inits"))?,
         ..SeedFacts::default()
     };
     if let Some(m) = s.get("reflect_names").and_then(Value::as_object) {

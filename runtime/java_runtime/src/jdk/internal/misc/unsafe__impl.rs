@@ -231,14 +231,17 @@ impl Unsafe {
     }
 
     /// `ensureClassInitialized(Class)`：确保类初始化完成（HotSpot 走 VM 类初始化）。
-    /// 本运行的类初始化由翻译层的 `__class_init` 惰性协议承载（首次主动使用
-    /// 即初始化）——无需（也无法）从手写层按 Class 对象强制触发，no-op 即
-    /// 与惰性协议一致（初始化只是推迟到真实首次使用）。
-    /// 消费链：VarHandle.<clinit>（VarHandleGuards 的预初始化）、
-    /// VarHandles.makeFieldHandle 的静态字段分支。
+    /// JDK 以此运行目标类 `<clinit>` 的副作用（`SharedSecrets.javaUtilJarAccess()`：初始化 JarFile 以登记
+    /// 访问器字段），惰性协议推迟到「首次主动使用」会丢失该副作用，故按名同步触发：闭包把按镜像初始化的
+    /// 目标类导出为初始化钩子（closure.json `seeds.mirror_inits`），未登记的类（数组 / 基本类型 / 无
+    /// `<clinit>`）no-op。
     #[jvm_boundary]
-    pub fn ensureClassInitialized(&self, _c: Class) -> Result<()> {
-        Ok(())
+    pub fn ensureClassInitialized(&self, c: Class) -> Result<()> {
+        if c.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let name = format!("{}", c.__get_name());
+        crate::ensure_class_initialized(&name)
     }
 
     /// `shouldBeInitialized(Class)`：类是否已初始化。惰性 `__class_init` 协议

@@ -59,8 +59,10 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Ve
             p.join("::")
         ));
     }
-    for en in &ctx.input.annotation_enum_seeds {
-        if !jdk.generated.contains(en) {
+    // 注解枚举元素类型、按类镜像强制初始化的目标类：运行期按名触发 `<clinit>`
+    let mut seen = std::collections::BTreeSet::new();
+    for en in ctx.input.annotation_enum_seeds.iter().chain(&ctx.input.mirror_init_classes) {
+        if !jdk.generated.contains(en) || !seen.insert(en) {
             continue;
         }
         out.push(format!(

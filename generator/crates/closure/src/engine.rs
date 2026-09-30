@@ -48,6 +48,9 @@ mod hwobj;
 mod hwfield;
 mod report;
 mod diag;
+mod write_audit;
+mod field_names;
+mod mirror_init;
 mod seeds;
 mod class_lookup;
 mod method_lookup;
@@ -426,6 +429,8 @@ pub struct Engine<'a> {
     pstrs: HashMap<(usize, usize), BTreeSet<Rc<str>>>,
     /// 读过 pstrs 的按名查找站点（(方法, 形参槽) → 偏移）：常量集增长时重跑
     pstr_sites: HashMap<(usize, usize), BTreeSet<u32>>,
+    /// 出现过非字符串常量实参（或无调用点记录即进入）的形参槽：名字取自这些槽的按名取字段站点按保守回退处理
+    ptaint: HashSet<(usize, usize)>,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
     hubs: Vec<Hub>,
     hub_ids: HashMap<(MemberRef, bool, HubSet), u32>,

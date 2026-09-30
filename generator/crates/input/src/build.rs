@@ -97,6 +97,8 @@ pub struct EmitInput {
     pub field_stubs: BTreeSet<String>,
     pub reflect: ReflectFacts,
     pub annotation_enum_seeds: Vec<String>,
+    /// 按类镜像强制初始化的目标类（需类初始化钩子）
+    pub mirror_init_classes: Vec<String>,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
@@ -345,6 +347,7 @@ impl<'a> BuildInput<'a> {
             field_stubs,
             reflect,
             annotation_enum_seeds: f.seeds.annotation_enums.clone(),
+            mirror_init_classes: f.seeds.mirror_inits.clone(),
             module_resources,
             precheck_visited: f.methods.iter().map(|m| m.id.to_string()).collect(),
             handwritten,

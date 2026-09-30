@@ -35,6 +35,12 @@ impl Engine<'_> {
         if pat == "@nullrecv" {
             return Some(self.null_recv_sites());
         }
+        if pat == "@bynamesites" {
+            return Some(self.byname_sites());
+        }
+        if pat == "@foldfields" {
+            return Some(self.fold_fields());
+        }
         if let Some(q) = pat.strip_prefix("@openinj:") {
             let Some(&cid) = self.ids.get(q) else { return Some(vec![format!("无此类：{q}")]) };
             let mut v: Vec<String> =

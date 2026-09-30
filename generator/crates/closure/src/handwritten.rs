@@ -22,6 +22,7 @@ mod objects;
 mod scan;
 mod syntax;
 mod type_refs;
+mod vm_writes;
 pub use type_refs::MODULE_SUFFIXES;
 use scan::{close_transitive, collect_uses, prelude_uses, scan_file, FileFns};
 use syntax::path_segs;

@@ -1,0 +1,105 @@
+//! 引擎：按名取字段身份（`[facts.field_writes.name_resolvers]`）的名字实参求值。
+//!
+//! 名字 → 字段偏移 / setter / VarHandle / 更新器 / 字段句柄，是按名写字段的唯一入口。字段常量折叠要求
+//! 每个活调用点的名字值集都被放开：
+//! - 常量：点名字段不折叠（与字节码形状规则一致）；
+//! - 取自本方法形参：取各调用点在该形参上的字符串常量逐个放开；形参槽出现过非常量实参（或方法无调用点
+//!   记录即进入，如 VM / 手写入口）时名字不可知，走保守回退；常量集增长 / 槽被污染时本站点重跑；
+//! - 其它（字段读 / 调用返回 / 拼接 / 合流后丢失内容的字面量）：名字不可知，走保守回退。
+//!
+//! 保守回退：字段所属类是类字面量时放开该类及其超类的全部字段，否则全部字段不折叠；返回字段句柄的入口
+//! （`handle = true`）按字段枚举处理——句柄写入口（`handle_writers`）可达时才放开。
+
+use super::*;
+
+impl Engine<'_> {
+    /// VM 基础设施文件（非共置手写）写访问器点名的字段：同名字段不折叠（handwritten/vm_writes.rs）
+    pub fn open_vm_field_write(&mut self, name: &str) {
+        self.open_field_name(name);
+    }
+
+    pub(super) fn field_name_site(&mut self, m: usize, off: u32, k: &str, opcode: u8, args: &[V]) {
+        let Some(r) = self.man.field_name_resolver(k) else { return };
+        let base = usize::from(opcode != classfile::op::INVOKESTATIC);
+        let cls = match r.class.map_or(args.first(), |i| args.get(base + i)) {
+            Some(V::Class(c, _)) => Some(c.to_string()),
+            _ => None,
+        };
+        let Some(v) = args.get(base + r.name) else { return };
+        let (names, known) = match v {
+            V::Str(s) => (vec![s.clone()], true),
+            V::Null => return,
+            _ => {
+                let names = self.param_strs(m, off, v);
+                (names, names_known(&v.srcs(), |i| self.ptaint.contains(&(m, i))))
+            }
+        };
+        for name in &names {
+            match cls.as_deref().and_then(|c| self.field_by_name(c, name)) {
+                Some((decl, desc)) => self.open_field(MemberRef { owner: decl, name: name.to_string(), desc }),
+                None => self.open_field_name(name),
+            }
+        }
+        if !known {
+            if r.handle {
+                self.enumerate_fields(cls);
+            } else {
+                self.open_class_fields(cls);
+            }
+        }
+    }
+
+    /// 形参槽并入实参（vals 不含接收者；None = 实参值未知）：非字符串常量的槽记为污染，重跑读过它的站点
+    pub(super) fn taint_params(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
+        for i in base..n {
+            let clean = slot_clean(vals.and_then(|vs| vs.get(i - base)));
+            if clean || !self.ptaint.insert((t, i)) {
+                continue;
+            }
+            for off in self.pstr_sites.get(&(t, i)).cloned().unwrap_or_default() {
+                self.rerun_site(t, off);
+            }
+        }
+    }
+}
+
+/// 名字值的全部来源都是未污染的形参槽（其常量集即名字全集）
+fn names_known(srcs: &[Src], tainted: impl Fn(usize) -> bool) -> bool {
+    !srcs.is_empty() && srcs.iter().all(|s| matches!(s, Src::Param(i) if !tainted(*i as usize)))
+}
+
+/// 形参槽上的实参不污染名字集：字符串常量（入常量集）或 null（取字段身份时抛异常，不指向任何字段）
+fn slot_clean(v: Option<&PV>) -> bool {
+    matches!(v, Some(PV::Const(V::Str(_) | V::Null)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_from_clean_params_are_known() {
+        assert!(names_known(&[Src::Param(1)], |_| false));
+        assert!(names_known(&[Src::Param(1), Src::Param(2)], |i| i == 3));
+    }
+
+    #[test]
+    fn tainted_or_non_param_sources_are_unknown() {
+        assert!(!names_known(&[Src::Param(1)], |i| i == 1));
+        // 合流后丢失内容的字面量、字段读 / 调用返回、异常值
+        assert!(!names_known(&[Src::Param(1), Src::Str], |_| false));
+        assert!(!names_known(&[Src::Site(7)], |_| false));
+        assert!(!names_known(&[Src::Catch(3)], |_| false));
+        assert!(!names_known(&[], |_| false));
+    }
+
+    #[test]
+    fn only_string_or_null_arguments_keep_slot_clean() {
+        assert!(slot_clean(Some(&PV::Const(V::Str(Rc::from("value"))))));
+        assert!(slot_clean(Some(&PV::Const(V::Null))));
+        assert!(!slot_clean(Some(&PV::Const(V::Int(1)))));
+        assert!(!slot_clean(Some(&PV::Top)));
+        // 实参值未知（非字节码调用点 / 无调用点记录的入口）
+        assert!(!slot_clean(None));
+    }
+}

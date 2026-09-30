@@ -58,6 +58,8 @@ pub enum Members {
 
 mod sysprops;
 mod names;
+mod field_names;
+pub use field_names::NameResolver;
 pub use names::NameFacts;
 pub use sysprops::{PropRead, PropValue, SysProps};
 
@@ -82,6 +84,7 @@ pub struct Manifest {
     field_enumerators: HashSet<String>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
+    field_name_resolvers: HashMap<String, NameResolver>,
     deserializers: HashSet<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
@@ -90,6 +93,7 @@ pub struct Manifest {
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
+    class_initializers: HashSet<String>,
     pub boot_init: Vec<String>,
     /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
     pub boot_calls: Vec<String>,
@@ -269,6 +273,7 @@ impl Manifest {
             field_enumerators: field_writes("enumerators").into_iter().collect(),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
+            field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
             deserializers: field_writes("deserializers").into_iter().collect(),
             array_writes,
             memory_reads,
@@ -277,6 +282,7 @@ impl Manifest {
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
+            class_initializers: reflect("class_initializers").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
             boot_calls: strings(&seeds, "boot_init", "calls"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
@@ -380,6 +386,16 @@ impl Manifest {
         self.field_handle_bridges.contains(member)
     }
 
+    /// 按名取字段身份的入口（`[facts.field_writes.name_resolvers]`）
+    pub fn field_name_resolver(&self, member: &str) -> Option<NameResolver> {
+        self.field_name_resolvers.get(member).copied()
+    }
+
+    /// 按类镜像强制类初始化（`[facts.reflect] class_initializers`）：Class 实参所指类初始化
+    pub fn is_class_initializer(&self, member: &str) -> bool {
+        self.class_initializers.contains(member)
+    }
+
     /// 反序列化入口（可达即非 static、非 transient 字段不折叠）
     pub fn is_deserializer(&self, member: &str) -> bool {
         self.deserializers.contains(member)
@@ -473,5 +489,30 @@ mod tests {
         assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));
         assert_eq!(m.unboxed_prim("a/BoxI"), Some(b'I'));
         assert_eq!(m.boxed_class(b'J'), None);
+    }
+
+    #[test]
+    fn field_name_resolvers_and_class_initializers_parse() {
+        let m = with_vm(
+            "[facts.field_writes]\nenumerators = []\n[facts.field_writes.name_resolvers]\n\"a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J\" = { class = 0, name = 1 }\n[facts.reflect]\nclass_initializers = [\"a/U.init:(Ljava/lang/Class;)V\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            m.field_name_resolver("a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J"),
+            Some(NameResolver { class: Some(0), name: 1, handle: false })
+        );
+        assert!(m.is_class_initializer("a/U.init:(Ljava/lang/Class;)V"));
+        assert!(!m.is_class_initializer("a/U.other:(Ljava/lang/Class;)V"));
+    }
+
+    /// 仓库清单：按名取字段的入口与按镜像初始化入口都已登记（写入来源审计的闭合项）
+    #[test]
+    fn repo_manifest_declares_write_sources() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime");
+        let m = Manifest::load(&dir).unwrap();
+        let r = m.field_name_resolver("java/lang/Class.getDeclaredField:(Ljava/lang/String;)Ljava/lang/reflect/Field;").unwrap();
+        assert!(r.handle && r.class.is_none());
+        assert!(m.field_name_resolver("jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J").is_some());
+        assert!(m.is_class_initializer("jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V"));
     }
 }

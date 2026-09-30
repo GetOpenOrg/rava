@@ -247,6 +247,25 @@ deserializers = [
     "java/io/ObjectInputStream.readUnshared:()Ljava/lang/Object;",
 ]
 
+# name_resolvers：按名取字段身份的入口（名字 → 偏移 / setter / VarHandle / 更新器 / 字段句柄）。
+#   class = Class 实参形参序号（"receiver" = 接收者本身），name = 字段名形参序号（均不含接收者），
+#   handle = true 表示返回字段句柄（只经 handle_writers 写入）。名字是常量时按上面的形状规则放开；
+#   名字取自形参时按各调用点的常量逐个放开；形参出现过非常量实参、或名字来自字段读 / 调用返回 / 拼接时，
+#   放开 class 所指类（类字面量）及其超类的全部字段，推不出类则全部字段不折叠；handle = true 的按字段枚举
+#   处理（句柄写入口可达才放开）。JDK 内部的 resolveOrFail / MemberName 构造只经下列公开入口取字段
+#   写入能力（ClassSpecializer 的 resolveOrFail 取 species 字段的 getter，只读），不在此列
+[facts.field_writes.name_resolvers]
+"jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = { class = 0, name = 1 }
+"java/lang/invoke/MethodHandles$Lookup.findSetter:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;" = { class = 0, name = 1 }
+"java/lang/invoke/MethodHandles$Lookup.findStaticSetter:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;" = { class = 0, name = 1 }
+"java/lang/invoke/MethodHandles$Lookup.findVarHandle:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;" = { class = 0, name = 1 }
+"java/lang/invoke/MethodHandles$Lookup.findStaticVarHandle:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;" = { class = 0, name = 1 }
+"java/util/concurrent/atomic/AtomicReferenceFieldUpdater.newUpdater:(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/String;)Ljava/util/concurrent/atomic/AtomicReferenceFieldUpdater;" = { class = 0, name = 2 }
+"java/util/concurrent/atomic/AtomicIntegerFieldUpdater.newUpdater:(Ljava/lang/Class;Ljava/lang/String;)Ljava/util/concurrent/atomic/AtomicIntegerFieldUpdater;" = { class = 0, name = 1 }
+"java/util/concurrent/atomic/AtomicLongFieldUpdater.newUpdater:(Ljava/lang/Class;Ljava/lang/String;)Ljava/util/concurrent/atomic/AtomicLongFieldUpdater;" = { class = 0, name = 1 }
+"java/lang/Class.getDeclaredField:(Ljava/lang/String;)Ljava/lang/reflect/Field;" = { class = "receiver", name = 0, handle = true }
+"java/lang/Class.getField:(Ljava/lang/String;)Ljava/lang/reflect/Field;" = { class = "receiver", name = 0, handle = true }
+
 [facts.reflect]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；
 # 分析器把 Class 值按所指类区分（类字面量、下列 mirror_of_receiver 的逐调用点接收者），以此求反射目标：
@@ -293,6 +312,13 @@ constructor_invokers = [
     "jdk/internal/reflect/NativeConstructorAccessorImpl.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;",
     "java/lang/invoke/MethodHandle.invokeExact:([Ljava/lang/Object;)Ljava/lang/Object;",
     "java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;",
+]
+
+# 按类镜像强制类初始化：Class 实参所指类（类字面量 / 值集里的类镜像）按 JVMS §5.5 初始化，其 <clinit> 的写入
+# 计入字段值集（SharedSecrets 的 ensureClassInitialized(JarFile.class) 后读 JarFile.<clinit> 写入的访问器字段）。
+# JDK 内的按镜像初始化（Lookup.ensureInitialized、DirectMethodHandle / VarHandles 的静态成员句柄）都经此入口
+class_initializers = [
+    "jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V",
 ]
 
 # 按名取类（静态方法，第 0 个实参是 `.` 分隔的类名，返回该类镜像）：名字是字符串常量，或「常量前缀 + 常量表取值」

@@ -224,6 +224,9 @@ impl<'a> Engine<'a> {
         let live = |t: &str| live_cache.get(t).copied().unwrap_or(true);
         // 尚无调用点记录的入口（根 / 手写 / VM）：形参值未知，并固定为 Top 保证单调
         let n = self.methods[m].ptypes.len();
+        if !self.pvals.contains_key(&m) {
+            self.taint_params(m, 0, n, None);
+        }
         let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
         let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params };

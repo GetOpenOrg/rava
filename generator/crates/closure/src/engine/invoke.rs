@@ -88,6 +88,8 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+        self.field_name_site(m, off, &k, opcode, args);
+        self.mirror_init_site(m, off, mref, &k, opcode, args);
         if self.man.is_field_enumerator(&k) {
             let cls = match args.first() {
                 Some(V::Class(c, _)) => Some(c.to_string()),
@@ -101,11 +103,16 @@ impl<'a> Engine<'a> {
     }
 
     /// 字段枚举（cls = 接收者类字面量，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
-    fn enumerate_fields(&mut self, cls: Option<String>) {
+    pub(super) fn enumerate_fields(&mut self, cls: Option<String>) {
         if !self.fwriter_live {
             self.fenum_pending.insert(cls);
             return;
         }
+        self.open_class_fields(cls);
+    }
+
+    /// 放开类（含超类）的全部字段；None = 全部字段不折叠
+    pub(super) fn open_class_fields(&mut self, cls: Option<String>) {
         match cls {
             Some(c) => {
                 let mut cur = Some(c);
@@ -383,7 +390,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 值来自本方法形参时，各调用点在该形参上的字符串常量；登记 (m, off) 为读者
-    fn param_strs(&mut self, m: usize, off: u32, v: &V) -> Vec<Rc<str>> {
+    pub(super) fn param_strs(&mut self, m: usize, off: u32, v: &V) -> Vec<Rc<str>> {
         let mut out = Vec::new();
         for s in v.srcs().iter() {
             let Src::Param(i) = s else { continue };
@@ -413,6 +420,7 @@ impl<'a> Engine<'a> {
         if let Some(vs) = vals {
             self.bind_pstrs(t, base, vs);
         }
+        self.taint_params(t, base, n, vals);
         let cur = self.pvals.get(&t).cloned();
         let new: Vec<PV> = (0..n)
             .map(|i| {

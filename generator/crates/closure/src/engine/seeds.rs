@@ -24,6 +24,8 @@ pub struct SeedState {
 
     /// 输出：注解枚举元素类型（类初始化钩子）
     pub annotation_enums: BTreeSet<String>,
+    /// 输出：按类镜像强制初始化的目标类（类初始化钩子；运行期按名同步触发 `<clinit>`）
+    pub mirror_inits: BTreeSet<String>,
     /// 已入选的 JCA 服务（去重；实现类经反射分派面登记）
     pub jca: BTreeSet<Service>,
     /// 输出：按名登记的反射分派面（类 → 成员名）
