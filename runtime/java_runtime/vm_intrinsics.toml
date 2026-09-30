@@ -248,11 +248,13 @@ handle_writers = [
 handle_bridges = [
     "java/lang/invoke/MethodHandleImpl$1.unreflectField:(Ljava/lang/reflect/Field;Z)Ljava/lang/invoke/MethodHandle;",
 ]
-# deserializers：可达即全部非 static、非 transient 字段不折叠
+# deserializers：可达即可序列化类（声明类是 serializable_markers 的子类型）的非 static、非 transient 字段不折叠。
+#   反序列化按 ObjectStreamClass 只写可序列化类声明的字段；首个不可序列化超类及其以上的字段由其无参构造器初始化（字节码可见）
 deserializers = [
     "java/io/ObjectInputStream.readObject:()Ljava/lang/Object;",
     "java/io/ObjectInputStream.readUnshared:()Ljava/lang/Object;",
 ]
+serializable_markers = ["java/io/Serializable"]
 
 [facts.reflect]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；

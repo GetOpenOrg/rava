@@ -93,6 +93,7 @@ pub struct Manifest {
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
     deserializers: HashSet<String>,
+    serializable_markers: Vec<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
     array_returns: HashMap<String, Vec<String>>,
@@ -298,6 +299,7 @@ impl Manifest {
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
+            serializable_markers: field_writes("serializable_markers"),
             array_writes,
             memory_reads,
             array_returns,
@@ -420,6 +422,11 @@ impl Manifest {
         self.deserializers.contains(member)
     }
 
+    /// 可序列化标记接口：反序列化只写实现者（声明类是其子类型）的字段；空 = 不区分（全部字段）
+    pub fn serializable_markers(&self) -> &[String] {
+        &self.serializable_markers
+    }
+
     /// 返回接收者的类镜像（`Object.getClass` 语义）
     pub fn returns_mirror(&self, member: &str) -> bool {
         self.mirror_returns.contains(member)
@@ -496,6 +503,13 @@ mod tests {
         let m = with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [\"a/C\", \"a/D\"] }\n").unwrap();
         assert_eq!(m.array_return("a/B.f:()[Ljava/lang/Object;"), Some(&["a/C".to_string(), "a/D".to_string()][..]));
         assert_eq!(m.array_return("a/B.g:()[Ljava/lang/Object;"), None);
+    }
+
+    #[test]
+    fn serializable_markers_parse() {
+        let m = with_vm("[facts.field_writes]\nserializable_markers = [\"a/Ser\"]\n").unwrap();
+        assert_eq!(m.serializable_markers(), &["a/Ser".to_string()][..]);
+        assert!(with_vm("").unwrap().serializable_markers().is_empty());
     }
 
     #[test]

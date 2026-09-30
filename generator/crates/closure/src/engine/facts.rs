@@ -119,6 +119,8 @@ pub(super) struct FieldInfo {
     pub(super) constant: Option<Const>,
     /// 写入来源超出字节码（边界类 / 手写字段）
     pub(super) open: bool,
+    /// 声明类实现可序列化标记接口（反序列化可写该字段）
+    pub(super) serializable: bool,
 }
 
 pub(super) struct Facts<'c, 'a> {
@@ -223,7 +225,7 @@ impl Ctx<'_> {
             || self.fopen_all.get()
             || self.fopen.borrow().contains(&fi.key)
             || self.fopen_names.borrow().contains(&fi.key.name)
-            || self.deser.get() && fi.access & (acc::STATIC | acc::TRANSIENT) == 0
+            || self.deser.get() && deser_writes(fi.access, fi.serializable)
     }
 
     pub(super) fn field_info(&self, f: &MemberRef) -> Option<Rc<FieldInfo>> {
@@ -234,7 +236,9 @@ impl Ctx<'_> {
             let fd = site.field();
             let key = MemberRef { owner: site.class.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
             let open = matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root) || !self.hw.member(&key.owner, &key.name).fns.is_empty();
-            Rc::new(FieldInfo { key, access: fd.access, constant: fd.constant_value.clone(), open })
+            let markers = self.man.serializable_markers();
+            let serializable = markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(&key.owner, x));
+            Rc::new(FieldInfo { key, access: fd.access, constant: fd.constant_value.clone(), open, serializable })
         });
         self.fields.borrow_mut().insert(f.clone(), fi.clone());
         fi
@@ -377,5 +381,23 @@ impl Oracle for Facts<'_, '_> {
     }
     fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)
+    }
+}
+
+/// 反序列化可写的字段：非 static、非 transient，且声明类可序列化（非可序列化超类的字段由其无参构造器初始化，走字节码）
+fn deser_writes(access: u16, serializable: bool) -> bool {
+    serializable && access & (acc::STATIC | acc::TRANSIENT) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deser_writes_rule() {
+        assert!(deser_writes(acc::PRIVATE, true));
+        assert!(!deser_writes(acc::PRIVATE, false));
+        assert!(!deser_writes(acc::STATIC, true));
+        assert!(!deser_writes(acc::TRANSIENT, true));
     }
 }

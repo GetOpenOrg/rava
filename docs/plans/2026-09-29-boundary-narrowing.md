@@ -548,6 +548,34 @@ LambdaForm 解释路径的隐藏帧被剔除不是主因（若 `checkReceiver` �
 **给 C3 的接口**：恒 false 的 instanceof 已体现在 `folds.dead_pcs`（真分支死区）；若再把该点作为常量导出（`consts` 增 `instanceof` 指令、类型 `Z`），
 type 级的 `VirtualThread` 也可移出——需生成器消费 instanceof 常量，列为 C3 待定项。
 
+**项 9-a（项 1 遗留 (A) 的真因）：反序列化放开字段的范围**。`AbstractPipeline.parallel` 未折的原因不是字段值域：调试确认其写入只有常量 `false`，
+但 `ObjectInputStream.readObject` 可达（清单 `deserializers`）后**全部**非 static / 非 transient 字段按不折叠处理。反序列化只写可序列化类声明的字段
+（`ObjectStreamClass` 按类描述逐个写；首个不可序列化超类及其以上的字段由该超类无参构造器初始化，走字节码），`AbstractPipeline` 不可序列化。
+修法：清单 `[facts.field_writes] serializable_markers = ["java/io/Serializable"]`，字段声明类是其子类型时才因反序列化放开（`facts.rs::deser_writes`，
+单测 `deser_writes_rule` / `serializable_markers_parse`）。结果（类 / 方法 / 上下文，漏）：
+
+| 测试 | 项 2 后 | 本项后 |
+|---|---|---|
+| HelloWorld | 246 / 605 / 867 | 不变，漏 0 |
+| Digester | 1289 / 7481 / 21045 | **1165 / 6630 / 17271**，漏 0 |
+| DeepCopy | 1641 / 10934 / 40269 | 1623 / 10845 / 39770，漏 0 |
+| FileIOTest | 288 / 780 / 1047 | 不变，漏 0 |
+| CollectorsDemo | 1014 / 5835 / 14147 | **911 / 5283 / 12363**，漏 0 |
+| TestMethodHandleCombinators | 1132 / 7780 / 17509 | 1057 / 6729 / 15599，漏 0 |
+| TestMethodHandleDirect | 1141 / 7801 / 18142 | 1066 / 6748 / 15795，漏 0 |
+| TestStreamBasic | 370 / 1361 / 2145 | 不变，漏 0 |
+
+Digester / CollectorsDemo 的 `AbstractPipeline.evaluate` 并行分支（`dead_pcs` 增 `[56,76)`）折叠，移出 `java/util/stream` 60 / 26 类、`java/lang/invoke` 38 / 56 类。
+
+**项 4 G6：`Pattern.flags0` / `has(CANON_EQ)`——按原设计不可达成，未实施**。`jdk/internal/icu` 现为 3 类（`NormalizerBase`、`$Mode`、type 级 `UCharacter`；
+早期 +55 的大头已随 G1–G3 与本期各项消失）。`--why`：`Formatter.<clinit>@7 Pattern.compile(<常量正则>) → Pattern.<init>@108 → compile@24 has(CANON_EQ)
+→ normalize → Normalizer.normalize → NormalizerBase`；另 `sequence@175/285`、`atom@219` 在解析中途再查 `has(CANON_EQ)`。实测反例：`Pattern.addFlag`
+（内联标志 `(?c)`，`case 'c': flags0 |= 128`）可达——任何正则解析都经 `group0 → addFlag`。按原设计的流不敏感「可能置位掩码」，`flags0` 的掩码含 128，
+`has(CANON_EQ)` 不可折叠；即使做到对象 / 流敏感（`compile@24` 时 `addFlag` 尚未执行），`sequence` / `atom` 的解析期检查仍依赖「正则里没有 `(?c)`」，
+这只有对常量正则执行解析才能得知。结论：G6 并入项 3 第 1 部分（构建期类初始化：`Formatter.<clinit>` 在分析期执行，`Pattern` 对象图成为快照事实，
+解析器与 `CANON_EQ` 分支整体不入链）。`UCharacter` 另经手写 `sun/text/Normalizer.getCombiningClass`（`String.toUpperCase(Locale)` → `ConditionalSpecialCasing`）
+以 type 级入闭包，与 G6 无关，属手写层对分析不透明（规范 §六），随该手写按字节码翻译消失。
+
 ## 七、验收
 
 - §一 终态表各项达标。
