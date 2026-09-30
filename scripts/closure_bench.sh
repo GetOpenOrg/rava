@@ -5,7 +5,8 @@
 # 用法：
 #   scripts/closure_bench.sh <out_dir> [Test ...]        跑基准（缺省 = 四例 + 验收集 27 例）
 #   scripts/closure_bench.sh --quick <out_dir>           只跑 HelloWorld Digester CollectorsDemo
-#   scripts/closure_bench.sh --diff <base_dir> <new_dir> 逐例对照 closure.json（去掉 summary.elapsed_ms / summary.perf）
+#   scripts/closure_bench.sh --diff <base_dir> <new_dir> 逐例集合对照 closure.json（剔除 via、elapsed_ms、perf；
+#                                                      列表按内容排序，顺序不计；差异逐节报告）
 # 环境变量：RAVA（分析器二进制，缺省 build/analyzer-target/release/rava）、JDK（缺省 21）
 # 同一时间只跑一个分析进程（串行）；输入类目录缓存在 build/perf_in/<Test>/classes。
 set -u
@@ -20,15 +21,61 @@ TestZonedDateTime TestFilesApi TestDateTimeFormat TestOptionalFull TestSuppresse
 TestSynchronized TestArrayList TestStreamBasic TestStreamAdvanced TestStreamCollectors
 TestCompletableFuture"
 
-# closure.json 去掉计时 / 性能观测字段后的规范文本
-norm() {
-    python3 - "$1" <<'EOF'
+# closure.json 集合对照（不变量：计划 §二——集合一致，`via` 与条目顺序可变）：
+# 剔除 summary.elapsed_ms / summary.perf 与全部 `via`，列表按规范文本排序后逐节比较，报告差异明细
+setcmp() {
+    python3 - "$1" "$2" <<'EOF2'
 import json, sys
-d = json.load(open(sys.argv[1], encoding='utf-8'))
-d.get('summary', {}).pop('elapsed_ms', None)
-d.get('summary', {}).pop('perf', None)
-sys.stdout.write(json.dumps(d, indent=1, ensure_ascii=False))
-EOF
+def canon(x):
+    if isinstance(x, dict):
+        return {k: canon(v) for k, v in x.items() if k != 'via'}
+    if isinstance(x, list):
+        return sorted((canon(v) for v in x), key=lambda v: json.dumps(v, sort_keys=True, ensure_ascii=False))
+    return x
+def load(p):
+    d = json.load(open(p, encoding='utf-8'))
+    d.get('summary', {}).pop('elapsed_ms', None)
+    d.get('summary', {}).pop('perf', None)
+    return canon(d)
+def key(v):
+    if isinstance(v, dict):
+        for k in ('name', 'id', 'site', 'method', 'member'):
+            if k in v:
+                return v[k]
+    return json.dumps(v, sort_keys=True, ensure_ascii=False)
+def walk(path, a, b, out):
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in sorted(set(a) | set(b)):
+            if k not in a or k not in b:
+                out.append(f"  {path}.{k}: {'仅新' if k not in a else '仅基线'}")
+            elif a[k] != b[k]:
+                walk(f"{path}.{k}", a[k], b[k], out)
+    elif isinstance(a, list) and isinstance(b, list):
+        ka = {json.dumps(v, sort_keys=True, ensure_ascii=False): v for v in a}
+        kb = {json.dumps(v, sort_keys=True, ensure_ascii=False): v for v in b}
+        ia = {key(v): v for v in a}; ib = {key(v): v for v in b}
+        rm = [k for k in ka if k not in kb]; ad = [k for k in kb if k not in ka]
+        out.append(f"  {path}: 基线 {len(a)} / 新 {len(b)}，仅基线 {len(rm)}，仅新 {len(ad)}")
+        shown = 0
+        for k in sorted(set(key(ka[x]) for x in rm) | set(key(kb[x]) for x in ad)):
+            if shown >= 8:
+                out.append("    …"); break
+            va, vb = ia.get(k), ib.get(k)
+            tag = '-' if vb is None else '+' if va is None else '~'
+            s = k if isinstance(k, str) else json.dumps(k)
+            out.append(f"    {tag} {s[:200]}")
+            if tag == '~':
+                out.append(f"      基线 {json.dumps(va, ensure_ascii=False)[:300]}")
+                out.append(f"      新   {json.dumps(vb, ensure_ascii=False)[:300]}")
+            shown += 1
+    else:
+        out.append(f"  {path}: {json.dumps(a)[:120]} → {json.dumps(b)[:120]}")
+a, b = load(sys.argv[1]), load(sys.argv[2])
+out = []
+walk('', a, b, out)
+print('\n'.join(out))
+sys.exit(1 if out else 0)
+EOF2
 }
 
 if [ "${1:-}" = "--diff" ]; then
@@ -36,7 +83,7 @@ if [ "${1:-}" = "--diff" ]; then
     for f in "$BASE"/*.json; do
         n=$(basename "$f")
         if [ ! -f "$NEW/$n" ]; then echo "MISSING $n"; bad=1; continue; fi
-        if cmp -s <(norm "$f") <(norm "$NEW/$n"); then echo "SAME    $n"; else echo "DIFF    $n"; bad=1; fi
+        if detail=$(setcmp "$f" "$NEW/$n"); then echo "SAME    $n"; else echo "DIFF    $n"; echo "$detail"; bad=1; fi
     done
     exit $bad
 fi

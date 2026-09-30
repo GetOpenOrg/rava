@@ -342,6 +342,27 @@ impl<'a> Engine<'a> {
             .map(|(_, m)| m)
     }
 
+    /// 输出序的类表：按类名排序，与处理次序无关（计划 2026-09-30-closure-analyzer-performance.md §二 不变量）
+    pub fn class_entries(&self) -> Vec<(&String, &ClassNode)> {
+        let mut v: Vec<_> = self.classes.iter().collect();
+        v.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        v
+    }
+
+    /// 输出序的方法表：按成员标识（`类.名:描述符`）排序
+    pub fn method_entries(&self) -> Vec<&MNode> {
+        let mut v: Vec<(String, &MNode)> = self.method_nodes().map(|m| (m.key.to_string(), m)).collect();
+        v.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        v.into_iter().map(|(_, m)| m).collect()
+    }
+
+    /// 输出序的类初始化集合：按类名排序
+    pub fn clinit_list(&self) -> Vec<&String> {
+        let mut v: Vec<&String> = self.inited.keys().collect();
+        v.sort_unstable();
+        v
+    }
+
     pub fn method_count(&self) -> usize {
         self.method_nodes().count()
     }
