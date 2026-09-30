@@ -53,7 +53,7 @@ pub(super) fn emit_class_vtable_dispatch(
     // 接收者静态类型可能已带实参：turbofish 统一在裸基名上追加擦除实参
     let base = cls_rust.head_name(env.ctx.ty.names).unwrap_or_default();
     let n_tps = env.ctx.ty.effective_class_type_params(cls_ci).len();
-    let erased_targs = if n_tps == 0 { String::new() } else { format!("<{}>", vec![super::O; n_tps].join(", ")) };
+    let erased_targs = if n_tps == 0 { String::new() } else { format!("::<{}>", vec![super::O; n_tps].join(", ")) };
     let view_recv = format!("{base}{erased_targs}::__virtual_view(&{})", site.obj_e);
     let call_expr = format!("_d.{mname_r}({barg_str})?");
     if *rust_ret == RsType::Unit {

@@ -36,7 +36,7 @@
 | Python | `codegen/method/codegen.py` `gen_method_body` 入口（签名计算之前） |
 | 触发 | `jdk/internal/reflect/MethodAccessorGenerator$1.run` 的 `catch (InstantiationException \| IllegalAccessException)`：`NativeMethodAccessorImpl.invoke0` 实现后该类入闭包，但 `InstantiationException` 不在闭包 → catch 头引用未生成类型（E0425，SendAnUnknownMethodCall） |
 | 改动 | 异常表条目的 `catch_type` 不在 registry 时剔除该条目（方法对象浅拷贝后替换 `exception_table`）；多类型 catch 逐类型剔除，剩余类型照常；catch-any（`catch_type is None`）保留。语义与闭包分析 folds v1 的 `dead_handlers` 相同——类不在闭包即运行期不可能被抛出 |
-| Rust 落点 | `input/src/build.rs` `Build::normalize()`（266 行起）：Registry 与规范化后的 `exception_table` 均在手，过滤 `catch_type = Some(t)` 且 `reg.get(t).is_none()` 的条目，并计入改动标记。folds 的 `dead_handlers`（`input/src/norm.rs:282`）按处理器整体判定，多类型 catch 中仅部分类型缺失时不覆盖此情形，故不重复（审核报告 §三 D2） |
+| Rust 落点 | **终态（2026-09-30 拍板）：闭包分析器按条目判定，发射层只消费。** closure crate 的 folds 新增按条目的死异常表条目（`dead_catches`：catch_type 不在闭包类集的条目；某处理器全部条目皆死时仍并入 `dead_handlers`），`input/src/norm.rs` `apply_fold` 按其删除条目。不在 `input` 的 `normalize()` 里按 Registry 自行过滤——那会成为「死异常条目」的第二判定源（审核报告 §三 D2 指出 `dead_handlers` 按处理器判定、不覆盖多类型 catch 部分缺失，此缺口由分析器按条目输出补上）。Python `gen_method_body` 入口的 registry 过滤随 P5 切换退役 |
 | 验证 | e2e SendAnUnknownMethodCall（本机 cargo check 通过）；golden 对照需含 MethodAccessorGenerator$1（该例闭包内） |
 
 ### D3 — 类 vtable 分派的擦除视图调用补 turbofish（b8c182a）
@@ -52,7 +52,7 @@
 ## 三、并入顺序建议
 
 1. D3、D1：落在已合入的 instr crate，改动局部；并入后重跑 instr golden（转储前先把 Python 同步到含本三提交的版本，golden 自然全等）。
-2. D2：落在已合入的 input crate `normalize()`，可与 D1 / D3 同批。
+2. D2：闭包精度线实现（folds 按条目输出 + input 消费，含 Python `closure_folds.py` 读取端同步），与 D1 / D3 独立。
 3. 此后 Python 生成器如再有改动，续记本文（按提交号追加 D4…），直至 P5 切换。
 
 ## 四、相关

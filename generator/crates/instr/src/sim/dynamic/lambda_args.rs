@@ -49,11 +49,8 @@ fn adapt_sam_arg(env: &InstrEnv, lam: &Lam, si: usize, pi: usize) -> InstrResult
         return Ok(Some(format!("{name}.try_cast(\"{bin}\")?")));
     }
     if erased_sd {
-        let Some(ci) = lam.ci else {
-            // Python 在此对 None 取 is_interface（AttributeError）
-            return unported(format!("lambda 实现类 {} 不在注册表且 SAM 实参 {si} 需类型变量判定", lam.impl_cls));
-        };
-        if !ci.is_interface()
+        // 实现类不在注册表（手写根类）：无声明类类型变量可取，跳过本判定
+        if lam.ci.is_some_and(|ci| !ci.is_interface())
             && lam.sig_types.len() == lam.impl_params.len()
             && lam.tparams.contains(&ty_text(env, &lam.sig_types[pi]))
         {

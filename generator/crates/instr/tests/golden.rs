@@ -135,3 +135,15 @@ fn golden_stream_basic() {
 fn golden_completable_future() {
     big_stack(|| check("TestCompletableFuture", 10));
 }
+
+/// D1（bca2140）：方法引用 `handle::equals` 落到根类
+#[test]
+fn golden_process_handle_info() {
+    big_stack(|| check("TestProcessHandleInfo", 1));
+}
+
+/// D3（b8c182a）：泛型类接收者的 `__virtual_view` turbofish
+#[test]
+fn golden_check_output_device_is_a_terminal() {
+    big_stack(|| check("CheckOutputDeviceIsATerminal", 1));
+}

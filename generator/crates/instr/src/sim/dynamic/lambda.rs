@@ -138,6 +138,16 @@ pub(super) fn gen_lambda(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
         }
         return Ok(());
     };
+    // 接口重声明的根类公开方法（`handle::equals` → ProcessHandle.equals）：接口不发射这类
+    // 成员（经根类 vtable 分派），实现句柄按 JVM 方法解析落到根类
+    let impl_is_iface = env.ctx.reg().get(impl_cls).is_some_and(|c| c.is_interface());
+    let impl_cls = if impl_is_iface
+        && env.ctx.facts.root_virtual.contains(&(impl_mname.to_string(), crate::owner::param_part(impl_desc).to_string()))
+    {
+        ty::consts::OBJECT
+    } else {
+        impl_cls
+    };
     // G-10：实现方法名取 lambda_impl_rust_name 单一来源（定义侧同源取名），调用点引用名在此
     // 登记，生成收尾由账本断言两侧恒等
     let impl_rust_name = lambda_impl_rust_name(&env.ctx, impl_cls, impl_mname, impl_desc)?;
@@ -177,9 +187,9 @@ pub(super) fn gen_lambda(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
         .collect();
     if lam.ci.is_none() && !lam.is_ctor {
         // 实现类不在注册表（运行时手写层类）：其实例方法是 &self 形态（描述符不含接收者）。
-        // 接收者来自 SAM 首参（未绑定 X::m）或捕获首值（绑定 recv::m）——实参数恰多一个
-        let n = lam.impl_params.len();
-        if n + 1 == lam.sam_params.len() || (!lam.cap_names.is_empty() && lam.cap_names.len() == n + 1) {
+        // 接收者来自 SAM 首参（未绑定 X::m）或捕获首值（绑定 recv::m / this::m，`handle::equals`）；
+        // 两者合计：捕获数 + SAM 实参数恰比描述符形参多一个（接收者）
+        if lam.cap_names.len() + lam.sam_params.len() == lam.impl_params.len() + 1 {
             lam.is_instance = true;
         }
     }
