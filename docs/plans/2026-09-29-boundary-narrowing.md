@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态：🔄 第 1 步完成（`--release` 实测，§六）；第 2 步分类见 §6.4，删除候选待用户逐项确认。
+> 状态（2026-09-30）：🔄 第 1 步完成（`--release` 实测，§六）；逐包删除（§6.8）包 1–5 已提交、包 6 待抽查合入、包 7–9 未开始；精度项 G2′ 完成，G4–G6 未开始。
 
 ## 一、目标
 
@@ -362,13 +362,14 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 2. `sun/security/action` ✅ 2322925c（删 GetPropertyAction / GetBooleanAction 9 个过渡方法；e2e 抽查待跑）
 3. `jdk/internal/module` ✅ 5a72714c（放行；`ServicesCatalog` 3 个过渡手写暂留：依赖手写 JLA 不可见 + `jdk/internal/loader` 截断 + `ServicesCatalog.create` 未入链致 map 折叠为 null；e2e 抽查待跑）
 4. `jdk/internal/perf` ✅ 29447fa0（删 PerfCounter 14 个过渡方法；新增 `perf_impl.rs` 仅含 2 个 `ACC_NATIVE`；e2e 抽查待跑）
-5. `sun/security/util` ✅ d6101c07（删 SecurityConstants / CryptoAlgorithmConstraints；`Debug` 4 个过渡手写暂留，待分析器折叠未设置的系统属性为 null 后删除；e2e 抽查待跑）
-6. `sun/invoke/util`
+5. `sun/security/util` ✅ d6101c07（删 SecurityConstants / CryptoAlgorithmConstraints；`Debug` 4 个过渡手写暂留，待分析器折叠未设置的系统属性为 null 后删除）
+   - 包 2–5 抽查（c1d25 / c1d25b / c1d25c）暴露的回归均为分析器看不见手写层所致，已在分析器侧修正：System.props 折叠为 null（5f40dcb0）、`MethodType.toMethodDescriptorString` 误为存根（8078f2b1）、DeepCopy / ListFields / RecordsSerializationTest 经 checkContext 拉入 `DomainName$Rules`（02bf00ff + c731a473）；另修手写 NetworkInterface 在 macOS 上的 `ifa_ifu` 编译错误（8c898456）；修正后的复测进行中
+6. `sun/invoke/util` 🔄 a6c836e6（分支 `c1d-p6`：删 Wrapper / BytecodeDescriptor / VerifyAccess 过渡手写 576 行；抽查通过后合入）
 7. `jdk/internal/access`
 8. `sun/nio/cs`
 9. `jdk/internal/misc` 中非 VM 契约部分（`Unsafe` / `VM` / `Signal` 等 VM 契约类保留）
 
-精度项 G2′ / G4–G6 与删除并行推进，不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
+精度项 G2′ ✅（02bf00ff + c731a473）/ G4–G6 ⏳ 与删除并行推进，不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
 
 ## 七、验收
 

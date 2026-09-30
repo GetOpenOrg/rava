@@ -1,5 +1,7 @@
 # Python 生成器移植期差异清单（待并入 Rust 生成器）
 
+> 状态（2026-09-30）：D1 / D3 ✅ 已并入 instr（cacea617，golden 增补 TestProcessHandleInfo / CheckOutputDeviceIsATerminal，逐字节一致；当前闭包下 D3 形态无 golden 样本，待 P5b 后以 e2e 验证）；D2 ✅ 闭包按条目输出 `dead_catches`、input 消费（b7f76452，folds v2）。
+>
 > 2026-09-30（落点经代码审核修正，见 `docs/reports/2026-09-30-rust-emitter-review.md`）。Rust 生成器计划（`2026-09-30-rust-emitter.md` §三）规定：P5 切换前以 Python 产物为对照真源，
 > 移植期的 Python 改动须登记，由 Rust 侧同步。本文列出 **Rust 各 crate 移植基线之后** Python 生成器
 > （`codegen/`）的全部语义改动，供移植线逐条并入。
