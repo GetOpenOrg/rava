@@ -13,6 +13,7 @@ pub mod facts;
 pub mod handwritten;
 pub mod manifest;
 pub mod norm;
+pub mod plan;
 pub mod prune;
 mod scan_text;
 
@@ -24,6 +25,7 @@ pub use build::{BuildInput, EmitInput, LibCrate, MethodKey, ReflectFacts};
 pub use facts::{ClosureFacts, MethodKind};
 pub use manifest::RuntimeManifest;
 pub use norm::{NInsn, NormCode};
+pub use plan::{ClassPlan, MethodPlan, Planner, Role, Verdict};
 pub use prune::VmConstants;
 
 /// 输入层错误；未移植的语义显式报 [`InputError::Unported`]
