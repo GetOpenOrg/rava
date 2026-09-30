@@ -443,6 +443,49 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 
 观测：DeepCopy 闭包阶段的峰值 RSS 在同一二进制的多次运行间波动很大（1276–2097 MB）。这发生在闭包分析内部，早于本步改动的起点（`closure` 标记之后），与本步无关，已记为闭包线的观测项。
 
+### 5.5 N4 第一步：逐类析构与监视器默认方法去单态化（emitter-perf2）
+
+计量：HelloWorld 的 java_runtime crate，`-Z dump-mono-stats` 与 `-Z print-mono-items`（口径同 §4.5 第 5 步之后）。
+
+改前热点（按 size_est）：
+- `Weak::drop` 832 份、`Arc::drop_slow` 832 份、`Arc::drop` 834 份，合计约 5 万。按类型实参分：`dyn X__VTable` 244、`X__inner` 202、wrapper 约 238，其余是数组与存储单元。
+- `ObjectVTable` 的 `wait` / `wait_l` / `wait_l_i` / `notify` / `notify_all` / `monitor_enter` `monitor_exit` 各 454 份，前六项每项 size_est 4,086。
+
+来源：
+- `Arc<X__inner>` 与 `Arc<wrapper>` 的析构来自 `ObjectVTable` 上三个按值接收 `__Shared<Self>` 的钩子：`__interface`、`__erased_inner`、`__erased_vtable`。未把 self 移交出去的路径（含 trait 默认的空体）在函数末尾析构 self，每个实现类型各实例化一份 `Arc<Self>` 析构链。
+  - 最小复现（panic = "abort"）确认：`let rc = Arc::new(..); W { vt: rc.clone() as _, any: rc as _ }` 这种全部移走的写法不产生析构；只有未移走的路径才产生。
+- 监视器方法是 trait 默认方法，从不被覆盖。它们在 vtable 里，所以每个实现类型都要实例化一份，虽然调用点从不经 vtable 调用它们。
+- `From<Object>` 部件路径 B 的 `downcast::<X__inner>().ok()` 另为每类多出一份 `Result::ok`。
+
+改动与等价性论证：
+1. **按值 self 钩子统一经擦除释放。**
+   - inner 侧：`__interface`（无接口时也生成）、`__erased_inner`、`__erased_vtable` 全部显式覆盖。wrapper 侧：三个钩子保留原逻辑。
+   - 未移交 self 的出口改为 `drop::<__Shared<dyn ObjectVTable>>(self)`。
+   - 语义：释放的是同一个 `Arc` 句柄，引用计数同样减一。析构若恰为最后一个引用，经 vtable 调用的 `drop_in_place::<Self>` 与静态析构是同一个函数。内存布局与对齐取自 vtable，与静态值相同。释放时刻不变：wrapper 与 inner 的释放仍在函数末尾。wrapper 的 `__erased_vtable` 把 `return` 改为跳出带标签的块，释放语句位于块后，每条路径释放一次。
+   - inner 的 `__erased_inner` 原为 trait 默认空体（不填 slot），覆盖后同样不填 slot。无接口类的 `__interface` 同理。
+   - inner 的 `__erased_vtable` 原先写 `Some(__Shared::clone(&self) as …)` 再返回，返回时析构 self；现改为 `Some(self as …)`。「克隆后释放原句柄」与「直接移交」的最终引用计数相同。
+   - panic = "abort"（§4.6）下没有展开清理路径，所以上述移交之前的调用即使 panic，也不产生额外析构。
+2. **监视器默认方法加 `where Self: Sized`（`object.rs` 7 个）。**
+   - 方法体不变。它们由此移出 vtable，只在被调用的具体类型上实例化。
+   - 调用点：生成侧的 `{op}.monitor_enter()?` / `monitor_exit()` 与 `Object.wait/notify*` 调用，其接收者都是具体类型：wrapper、数组、盒类型，或 `Object`。`Object` 走 `object_impl.rs` 的固有方法，固有方法的解析优先于 trait 方法。
+   - 若某处经 `dyn` 调用这些方法，会得到编译错误（「cannot be invoked on a trait object」），而不会静默改走别的实现。所以等价性由编译通过即可判定。
+3. **`From<Object>` 部件路径 B 改用 `match`。** 写法为 `match __any.downcast::<X__inner>() { Ok(__rc) => return …, Err(__other) => drop(__other) }`。两臂都完整移走值，判定与构造的结果与 `if let Some(__rc) = ….ok()` 相同。`Err` 臂释放的是 `__AnyRef`，与原 `.ok()` 丢弃 `Err` 值的行为相同。
+
+结果（HelloWorld java_runtime，同一 scratch）：
+
+| 指标 | 改前 | 改后 |
+|---|---:|---:|
+| mono 实例 | 57,066 | **52,460（−8.1%）** |
+| mono size_est | 621,292 | **568,144（−8.6%）** |
+| `Weak::drop` / `Arc::drop_slow` / `Arc::drop` 份数 | 832 / 832 / 834 | 415 / 415 / 417 |
+| 监视器 7 方法实例 | 各 454 | 0（HelloWorld 无具体类型调用点） |
+| rustc 墙钟 / 峰值 RSS（dev，共享机） | 17.1 s / 1.82 GB | 17.6 s / 1.82 GB（噪声内） |
+
+- dev 构建的墙钟与峰值 RSS 没有可测的变化：峰值出现在前端（类型检查、借用检查），不在代码生成段。收益在确定性指标（IR 体积）上，release（LTO）构建会更明显。
+- 剩下的 415 份 `Weak::drop` 按 `dyn X__VTable` / wrapper 字段逐类型实参各一份，是字段析构所必需的。
+
+仍未做（与泛型擦除布局相关，并入拆 crate 一并处理，见 §五 N4）：`__shallow_copy`（15.7k）、`__erased_vtable`（11.8k）、`__view_into`（11.0k）、`__clinit`（19.3k，按类体量）、`From`（20.4k）。
+
 ## 六、需要主会话 e2e 抽查的用例
 
 - **N1**（按类并行发射）：27 例生成树与串行逐字节一致，生成形态没有变化，抽查可选。建议正常跑一次 `DeepCopy`（最多类，走并行）和 `TestCompletableFuture`，确认生成器在多线程下无 panic、结果与此前一致。
