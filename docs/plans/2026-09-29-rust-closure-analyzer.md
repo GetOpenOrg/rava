@@ -90,6 +90,11 @@ HelloWorld 只做一次 `println`，却有 `java/util/stream` 169 个翻译类�
 
 - 不再用正则：解析 `#[jvm_native(upcalls = …)]` / `#[jvm_boundary(…)]` 属性、`T::default()` + `_init_not_null()` 分配点、fn 签名与函数体里的**类型路径**（按 Rust 名称解析规则解析 `use` 和同模块名）。
 - 每个手写 fn 都作为图上的节点（「手写体」），它的回调、分配、类型引用是这个节点的出边；**只有它被触达时**这些出边才生效。
+- **回调由算法推断，声明只兜底**（`engine/hw_infer.rs`）：手写层与生成层命名空间同构，调用点按「接收者静态类型（方法调用）/ 路径类型（`T::m(…)` 关联函数）+ Rust 名 + 实参个数」反解为 Java 方法引用，与 `upcalls` 声明同等处理。
+  - 接收者静态类型的来源：形参 / `let` 标注、构造调用、字段访问器 `__get_f()`，以及链式调用的返回类型（`SType::Call`：`options.iterator()` 的返回类型取 Java 描述符 → `it.next()` 的接收者为 `Iterator`）。
+  - 名字匹配规则与 `hw_member` 一致：先匹配无重载时的裸名或描述符 mangle 名，全层次都不中时再按 Java 名前缀回退。手写层对重载成员也可能用裸名或缩写后缀调用。
+  - 只有语法上看不见的调用才需要声明 `upcalls`：宏内调用（syn 不展开，记为 opaque）、按字符串名反射。Rust 内建 trait 同名方法（`clone`）不作为 Java 回调。
+  - 实证：精确分派下，未声明的回调直接暴露为运行期存根（TestFilesApi：`newByteChannel` → `UnixChannelFactory.newFileChannel` → `Set.iterator`）。旧 BFS 是按 CHA 过近似，把这类遗漏掩盖了。
 - `error.rs` 的 `vm-upcalls` 保留，作为无条件根（VM 基础设施确实需要）。
 
 ### 3.8 动态视角：真实 JVM 运行轨迹作为健全性基准（只用于验证）

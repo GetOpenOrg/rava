@@ -218,6 +218,7 @@ impl<'a> Engine<'a> {
         let obj = self.id(OBJECT);
         self.flow(Node::S(m, PROD), Node::S(m, POOL), obj);
         let Some(cf) = self.h.class(&key.owner) else { return };
+        self.touch_truncated_body(m, &cf, &key, &via);
         let mh = self.hw_member(&cf, &key.name, &key.desc);
         // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像）时不经 open 返回值交出
         let modeled = reads || self.man.returns_receiver(&ks) || self.man.returns_mirror(&ks);
@@ -256,7 +257,7 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        for u in &mh.upcalls {
+        for u in &self.hw_upcalls(host, mh) {
             if let Upcall::Method(u) = u {
                 if u.name != "<init>" {
                     out.insert(self.id(&u.owner));
@@ -375,27 +376,8 @@ impl<'a> Engine<'a> {
                 let c = self.stype_class(host, b)?;
                 of_desc(&self.field_by_name(&c, f)?.1)
             }
-            SType::Ret(t, m) => {
-                let mut cur = self.resolve_tref(host, t);
-                // 自类起沿超类找 Rust 名匹配的方法，返回类型须唯一
-                while let Some(c) = cur {
-                    let cf = self.h.class(&c)?;
-                    let rets: BTreeSet<String> = cf
-                        .methods
-                        .iter()
-                        .filter(|x| {
-                            let (plain, mangled) = self.rust_names(&cf, &x.name, &x.desc);
-                            plain.as_deref() == Some(m.as_str()) || mangled == *m
-                        })
-                        .filter_map(|x| parse_method(&x.desc).and_then(|d| d.ret).map(|r| r.descriptor()))
-                        .collect();
-                    if !rets.is_empty() {
-                        return if rets.len() == 1 { of_desc(rets.first()?) } else { None };
-                    }
-                    cur = cf.super_name.clone();
-                }
-                None
-            }
+            SType::Ret(t, m) => self.rust_method_ret(&self.resolve_tref(host, t)?, m),
+            SType::Call(b, m) => self.rust_method_ret(&self.stype_class(host, b)?, m),
         }
     }
 
@@ -512,12 +494,17 @@ impl<'a> Engine<'a> {
         for (t, ctor) in &mh.ctors {
             let Some(c) = self.resolve_tref(host, t) else { continue };
             let Some(cf) = self.h.class(&c) else { continue };
-            let inits: Vec<String> = cf
-                .methods
+            // 无重载构造器的 Rust 名是裸 `new`，重载的取 mangle 名；都不中（缩写后缀等）→ 全部构造器（安全过近似）
+            let all: Vec<&classfile::Method> = cf.methods.iter().filter(|x| x.is_init()).collect();
+            let exact: Vec<String> = all
                 .iter()
-                .filter(|x| x.name == "<init>" && self.rust_names(&cf, "<init>", &x.desc).1 == *ctor)
+                .filter(|x| {
+                    let (plain, mangled) = self.rust_names(&cf, "<init>", &x.desc);
+                    plain.as_deref() == Some(ctor.as_str()) || mangled == *ctor
+                })
                 .map(|x| x.desc.clone())
                 .collect();
+            let inits = if exact.is_empty() { all.iter().map(|x| x.desc.clone()).collect() } else { exact };
             if inits.is_empty() {
                 continue;
             }
@@ -534,7 +521,7 @@ impl<'a> Engine<'a> {
                 self.edge(m, 0, t, Recv::Exact(id), &a, None, None);
             }
         }
-        for u in &mh.upcalls {
+        for u in &self.hw_upcalls(host, mh) {
             match u {
                 Upcall::Field(f) => {
                     let f = f.clone();

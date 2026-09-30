@@ -239,6 +239,44 @@ impl<'a> Engine<'a> {
         self.snake_index.as_ref().unwrap().get(&format!("{pkg}/{snake}")).cloned()
     }
 
+    /// 截断体：边界类里有字节码、未经手写提供的方法，发射层翻译其方法体但不展开被调方（规模截断的
+    /// 过渡语义）。体内引用的类按类型级入闭包，使翻译体里的类型与字段访问器可解析；被调方不入链
+    pub(super) fn touch_truncated_body(&mut self, m: usize, cf: &ClassFile, key: &MemberRef, via: &Via) {
+        if self.methods[m].kind != Kind::Handwritten("boundary")
+            || self.man.is_intrinsic(&key.to_string())
+            || self.ctx.provided(cf, &key.name, &key.desc)
+        {
+            return;
+        }
+        let Some(code) = cf.method(&key.name, &key.desc).filter(|x| !x.is_native()).and_then(|x| x.code.as_ref()) else { return };
+        let mut descs: Vec<String> = Vec::new();
+        let mut classes: Vec<String> = code.exception_table.iter().filter_map(|e| e.catch_type.clone()).collect();
+        for i in &code.insns {
+            match &i.operand {
+                classfile::Operand::Field(r) | classfile::Operand::Method(r, _) => {
+                    classes.push(r.owner.clone());
+                    descs.push(r.desc.clone());
+                }
+                classfile::Operand::Class(c) | classfile::Operand::Ldc(classfile::Const::Class(c)) | classfile::Operand::MultiANewArray(c, _) => {
+                    if c.starts_with('[') {
+                        descs.push(c.clone());
+                    } else {
+                        classes.push(c.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        for c in classes {
+            if !c.starts_with('[') {
+                self.touch(&c, Level::Type, via.clone());
+            }
+        }
+        for d in descs {
+            self.touch_desc(&d, via);
+        }
+    }
+
     pub(super) fn touch_desc(&mut self, desc: &str, via: &Via) {
         for c in class_refs(desc) {
             self.touch(&c, Level::Type, via.clone());

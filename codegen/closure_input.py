@@ -114,7 +114,9 @@ def _consume(cj, class_infos, resolver, lib_registries):
     field_stubs: set[str] = set()
     for c in cj['classes']:
         name = c['name']
-        if c['domain'] in ('user', 'root') and name in user_names:
+        # 根域类（手写整体承载，如 Object）不进发射 registry：其方法表不参与后代的重载判定，
+        # 与手写层的方法命名一致
+        if c['domain'] == 'root' or (c['domain'] == 'user' and name in user_names):
             continue
         ci = load(name)
         if ci is None:
@@ -124,11 +126,12 @@ def _consume(cj, class_infos, resolver, lib_registries):
         if c['level'] == 'type':
             field_stubs.add(name)
 
-    # 边界成员（`handwritten:boundary`：手写整体承载）不入链，发射层对其只出手写转发或存根；
-    # 边界域类里按字节码执行的方法（VM 耦合边界类的非手写方法）照常入链。`<clinit>` 同口径：
-    # 边界域类只取分析器判为字节码执行的键
+    # 边界成员（`handwritten:boundary`）同样入链：发射层对手写提供的出 [meta]，其余翻译方法体
+    # 而不展开其被调方（规模截断的过渡语义，分析器按类型级触达体内引用的类；终态随截断清零消失）。
+    # 边界类 `<clinit>` 手写承载，不入链
     boundary = {c['name'] for c in cj['classes'] if c['domain'] == 'boundary'}
-    visited = {_split_id(m['id']) for m in cj['methods'] if m['kind'] != 'handwritten:boundary'}
+    visited = {k for k, kind in ((_split_id(m['id']), m['kind']) for m in cj['methods'])
+               if not (k[1] == '<clinit>' and kind == 'handwritten:boundary')}
     visited |= {k for k in ((c, '<clinit>', '()V') for c in cj['clinit'])
                 if k[0] not in boundary or k in visited}
     # 调用点符号键只表达继承槽位需求（常量池类未声明、经超类 / 接口解析的成员）：常量池类自身声明

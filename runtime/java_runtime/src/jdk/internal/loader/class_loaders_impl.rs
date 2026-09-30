@@ -21,10 +21,21 @@ impl ClassLoaders {
 
     /// boot 加载器：层级的 null 形态（JDK BootClassLoader 对上层即 null——
     /// ClassLoader.parent 到顶为 null；此处的具名实例只服务于需要非 null
-    /// ClassLoader 值的消费面）。
+    /// 加载器值的消费面）。类型与描述符一致（`BuiltinClassLoader`）。
     #[jvm_boundary]
-    pub fn bootLoader() -> Result<crate::java::lang::ClassLoader> {
-        Ok(named_loader("boot"))
+    pub fn bootLoader() -> Result<super::builtin_class_loader::BuiltinClassLoader> {
+        use crate::sync_model::__RefSlot as RefCell;
+        crate::__process_static! {
+            static BOOT: RefCell<Option<super::builtin_class_loader::BuiltinClassLoader>> = RefCell::new(None);
+        }
+        Ok(BOOT.with(|b| {
+            b.borrow_mut().get_or_insert_with(|| {
+                let mut cl = super::builtin_class_loader::BuiltinClassLoader::default();
+                cl._init_not_null();
+                cl.__set_name(String::from("boot"));
+                cl
+            }).clone()
+        }))
     }
 }
 

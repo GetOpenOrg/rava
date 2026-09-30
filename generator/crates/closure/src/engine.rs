@@ -36,6 +36,7 @@ mod invoke;
 mod hub;
 mod lambda;
 mod hw;
+mod hw_infer;
 mod report;
 mod seeds;
 
