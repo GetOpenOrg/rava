@@ -353,6 +353,23 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 新增精度项：**G2′** open(Object) 引入点收窄（`Object[]` 元素、手写返回）；**G5** 异常构造分支触达 `Formatter` 子系统的冷路径成本；
 **G6** 经字段传递的构造期标志常量。
 
+### 6.8 逐包删除手写的顺序（2026-09-30 确认）
+
+用户确认「直接删除这些不要的手写方法」。逐包独立提交，每包：删除手写 → `[boundary]` 去前缀 → 抽查
+（`master_passed_jdk21.txt` 中触达该包的用例）通过数不降、动态对照漏覆盖不增。顺序按依赖与风险由低到高：
+
+1. `jdk/internal/math`（已有实施分支 `c1d-math-release`，061a7b13）
+2. `sun/security/action`
+3. `jdk/internal/module`
+4. `jdk/internal/perf`
+5. `sun/security/util`
+6. `sun/invoke/util`
+7. `jdk/internal/access`
+8. `sun/nio/cs`
+9. `jdk/internal/misc` 中非 VM 契约部分（`Unsafe` / `VM` / `Signal` 等 VM 契约类保留）
+
+精度项 G2′ / G4–G6 与删除并行推进，不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
+
 ## 七、验收
 
 - §一 终态表各项达标。
