@@ -53,6 +53,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 AGENT_SRC = ROOT / "scripts" / "dyn_agent"
+MANIFEST_DIR = ROOT / "runtime" / "java_runtime"
 # 与 Manifest::domain 同口径：公开 API 前缀属翻译域，根类单列
 PUBLIC_API = ("java/", "javax/")
 ROOT_CLASS = "java/lang/Object"
@@ -85,12 +86,19 @@ class DomainRules:
 
     @classmethod
     def from_manifest(cls, user: set[str]) -> "DomainRules":
-        sys.path.insert(0, str(ROOT))
-        from codegen import runtime_manifest as rm
-        return cls(boundary_packages=rm.boundary_packages(),
-                   vm_boundary=set(rm.vm_boundary_classes()),
-                   release=rm.release_entries() + rm.jca_release_entries(),
-                   vm_upcalls=rm.dynamic_vm_upcall_classes(),
+        """closure.toml / seeds.toml 直读（与闭包分析器 input::RuntimeManifest 同一口径：
+        放行 = [release] 包 + 类 ∪ seeds [jca] 放行包 + 类，包条目在前）"""
+        import tomllib
+        def load(name: str) -> dict:
+            with open(MANIFEST_DIR / name, "rb") as f:
+                return tomllib.load(f)
+        closure, jca = load("closure.toml"), load("seeds.toml").get("jca", {})
+        rel = closure.get("release", {})
+        return cls(boundary_packages=list(closure.get("boundary", {}).get("packages", [])),
+                   vm_boundary=set(closure.get("vm_boundary", {}).get("classes", [])),
+                   release=[*rel.get("packages", []), *rel.get("classes", []),
+                            *jca.get("release_packages", []), *jca.get("release_classes", [])],
+                   vm_upcalls=list(closure.get("dynamic", {}).get("vm_upcall_classes", [])),
                    user=set(user))
 
     def domain(self, cls: str) -> str:
