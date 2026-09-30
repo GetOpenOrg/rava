@@ -34,7 +34,7 @@ pub mod sam;
 pub mod text;
 pub mod vtable;
 
-pub use body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter, NoBodies, PlaceholderBodies};
+pub use body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter};
 pub use ctx::{EmitCtx, EmitOptions, ProjectState};
 pub use emission::ClassEmission;
 pub use error::{EmitError, Result};

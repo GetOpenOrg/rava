@@ -1,9 +1,9 @@
 //! `rava build` / `rava emit` 的参数解析（纯函数，单测覆盖）。
 //!
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
-//!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--clean] [--no-run] [--skeleton-only] [--strict]`
+//!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--clean] [--no-run] [--strict]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
-//!   [--java A.java]… [--image D]… [--clean] [--skeleton-only] [--strict]`（`--java`：源文件，决定用户类包布局与入口序）
+//!   [--java A.java]… [--image D]… [--clean] [--strict]`（`--java`：源文件，决定用户类包布局与入口序）
 
 use std::path::{Path, PathBuf};
 
@@ -33,13 +33,12 @@ pub struct BuildOpts {
     pub roots: Vec<String>,
     pub clean: bool,
     pub no_run: bool,
-    pub skeleton_only: bool,
     pub strict: bool,
 }
 
 const VALUED: [&str; 11] =
     ["--jdk", "--java-home", "--runtime", "--out", "--main", "--classes", "--java", "--image", "--locale", "--root", "-o"];
-const FLAGS: [&str; 4] = ["--clean", "--no-run", "--skeleton-only", "--strict"];
+const FLAGS: [&str; 3] = ["--clean", "--no-run", "--strict"];
 /// 只属于 build 的选项
 const BUILD_ONLY: [&str; 5] = ["--main", "--locale", "--root", "--no-run", "-o"];
 /// 只属于 emit 的选项
@@ -65,7 +64,6 @@ impl BuildOpts {
                 match a.as_str() {
                     "--clean" => o.clean = true,
                     "--no-run" => o.no_run = true,
-                    "--skeleton-only" => o.skeleton_only = true,
                     _ => o.strict = true,
                 }
                 continue;
@@ -165,14 +163,14 @@ mod tests {
     fn build_parses_flags_values_and_repeats() {
         let o = BuildOpts::parse(
             Mode::Build,
-            &args("A.java B.java --jdk 21 --image /i1 --image /i2 --locale fr --clean --no-run --skeleton-only --main p.Main"),
+            &args("A.java B.java --jdk 21 --image /i1 --image /i2 --locale fr --clean --no-run --main p.Main"),
         )
         .unwrap();
         assert_eq!(o.inputs, vec![PathBuf::from("A.java"), PathBuf::from("B.java")]);
         assert_eq!(o.jdk, Some(21));
         assert_eq!(o.images, vec![PathBuf::from("/i1"), PathBuf::from("/i2")]);
         assert_eq!(o.locales, vec!["fr".to_string()]);
-        assert!(o.clean && o.no_run && o.skeleton_only && !o.strict);
+        assert!(o.clean && o.no_run && !o.strict);
         assert_eq!(o.main.as_deref(), Some("p/Main"));
     }
 
@@ -189,7 +187,7 @@ mod tests {
 
     #[test]
     fn emit_parses_and_rejects_build_only() {
-        let o = BuildOpts::parse(Mode::Emit, &args("/s/closure_input/closure.json --skeleton-only --java A.java")).unwrap();
+        let o = BuildOpts::parse(Mode::Emit, &args("/s/closure_input/closure.json --java A.java")).unwrap();
         assert_eq!(o.emit_classes_dir(), PathBuf::from("/s/closure_input/classes"));
         assert_eq!(o.java_files(Mode::Emit), &[PathBuf::from("A.java")]);
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --no-run")).is_err());

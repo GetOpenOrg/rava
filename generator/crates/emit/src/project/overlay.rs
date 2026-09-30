@@ -11,7 +11,7 @@ use super::fs::{has_marker, walk};
 use crate::error::{io_err, Result};
 use crate::text::scratch_pkg_version;
 
-const PLACEHOLDER_MOD: &str = "// placeholder（overlay 兜底）：本包无生成类时 lib.rs 的\n\
+const EMPTY_PKG_MOD: &str = "// 空包模块（overlay）：本包无生成类时 lib.rs 的\n\
 // `pub mod` 声明仍需可解析；有生成类时被 codegen 覆写。\n";
 
 fn copy_if_changed(src: &Path, dst: &Path) -> Result<()> {
@@ -81,7 +81,7 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
         std::fs::create_dir_all(&d).map_err(|e| io_err(&d.display().to_string(), e))?;
         let m = d.join("mod.rs");
         if !m.exists() {
-            std::fs::write(&m, PLACEHOLDER_MOD).map_err(|e| io_err(&m.display().to_string(), e))?;
+            std::fs::write(&m, EMPTY_PKG_MOD).map_err(|e| io_err(&m.display().to_string(), e))?;
         }
     }
     Ok(())

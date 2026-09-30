@@ -57,46 +57,8 @@ pub enum BodyError {
     Fatal(String),
 }
 
-/// 方法体生成器（生产实现 [`crate::method_bodies::MethodBodies`]；`--skeleton-only` 用占位实现）
+/// 方法体生成器（生产实现 [`crate::method_bodies::MethodBodies`]）
 pub trait MethodBodyEmitter {
     fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError>;
 }
 
-/// 未接入方法体生成器：`--skeleton-only` 之外的任何方法体请求都报错
-pub struct NoBodies;
-
-impl MethodBodyEmitter for NoBodies {
-    fn emit_body(&mut self, _ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
-        Err(BodyError::Fatal(format!(
-            "P4c/P5b 未接入：{}.{}:{}",
-            req.class.name(),
-            req.method.name,
-            req.method.desc
-        )))
-    }
-}
-
-/// 骨架模式：签名同存根（形参名取 `argN`），方法体为 `/*BODY key*/` 占位（`rava build --skeleton-only`）
-pub struct PlaceholderBodies;
-
-impl MethodBodyEmitter for PlaceholderBodies {
-    fn emit_body(&mut self, ctx: &EmitCtx<'_>, req: &BodyRequest<'_>) -> Result<BodyOutput, BodyError> {
-        let name = req.rust_name.unwrap_or(&req.method.name);
-        let stub = crate::class_writer::stub::native_stub(
-            ctx,
-            req.class,
-            req.method,
-            name,
-            req.class_type_params,
-            &BTreeMap::new(),
-        );
-        let text = format!(
-            "{} {{\n    /*BODY {}.{}:{}*/\n}}",
-            stub.sig,
-            req.class.name(),
-            req.method.name,
-            req.method.desc
-        );
-        Ok(BodyOutput { text, effects: BodyEffects::default() })
-    }
-}

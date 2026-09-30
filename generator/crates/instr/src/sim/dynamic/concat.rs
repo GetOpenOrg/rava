@@ -64,9 +64,8 @@ fn tmpl_seg_consts(p: &str, consts: &[String], next: &mut usize) -> String {
     out
 }
 
-/// 弹出一个拼接实参并按 Java 字符串化语义渲染（`p` 为形参描述符）
-fn concat_arg(env: &InstrEnv, sim: &mut StackSim, p: &str) -> InstrResult<String> {
-    let e = sim.pop()?;
+/// 一个拼接实参按 Java 字符串化语义渲染（`p` 为形参描述符）；引用实参的 toString 物化为临时变量
+fn concat_arg(env: &InstrEnv, sim: &mut StackSim, e: sim::StackEntry, p: &str) -> InstrResult<String> {
     let raw_s = text(env, &e.expr);
     let string_desc = format!("L{};", ty::consts::STRING);
     Ok(match p {
@@ -117,11 +116,16 @@ pub(super) fn concat_from_stack(
     recipe: Option<(String, Vec<String>)>,
 ) -> InstrResult<()> {
     let string_t = RsType::class(ty::consts::STRING.to_string(), Vec::new());
-    let mut args = Vec::with_capacity(params.len());
-    for p in params.iter().rev() {
-        args.push(concat_arg(env, sim, p)?);
+    // 先按栈序弹出全部实参，再按声明序字符串化：引用实参的 toString 物化次序与 Java 求值序（从左到右）一致
+    let mut entries = Vec::with_capacity(params.len());
+    for _ in params {
+        entries.push(sim.pop()?);
     }
-    args.reverse();
+    entries.reverse();
+    let mut args = Vec::with_capacity(params.len());
+    for (e, p) in entries.into_iter().zip(params) {
+        args.push(concat_arg(env, sim, e, p)?);
+    }
 
     if let Some((template, consts)) = recipe {
         let parts: Vec<&str> = template.split('\u{1}').collect();

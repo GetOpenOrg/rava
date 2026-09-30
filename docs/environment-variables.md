@@ -47,8 +47,8 @@ python3 scripts/main.py tests/e2e/01_basics/BubbleSort.java --strict
 ### `rava build` / `rava emit`（Rust 生成器外壳，`generator/crates/driver`）
 
 ```bash
-cd generator && cargo run --release -q -- build ../tests/e2e/01_basics/HelloWorld.java --jdk 21 --no-run --skeleton-only
-cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json --jdk 21 --java ../tests/e2e/01_basics/HelloWorld.java --skeleton-only
+cd generator && cargo run --release -q -- build ../tests/e2e/01_basics/HelloWorld.java --jdk 21 --no-run
+cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json --jdk 21 --java ../tests/e2e/01_basics/HelloWorld.java
 ```
 
 | 选项 | 用途 |
@@ -62,7 +62,6 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--main 类` / `--locale L` / `--root 类.方法:描述符` | 仅 build：入口类（缺省首个源文件的同名类，否则首个带 static main 的用户类）/ locale 种子 / 外部种子方法（均可多次） |
 | `--clean` | 发射前清空 scratch（emit 的输入位于 scratch 内时拒绝） |
 | `--no-run` | 仅 build：只生成不编译运行 |
-| `--skeleton-only` | 骨架模式：方法体为 `/*BODY 类.方法:描述符*/` 占位（`PlaceholderBodies`）。不给时以 `NoBodies` 发射，首个方法体请求报「P4c/P5b 未接入」 |
 | `--strict` | 同 `main.py --strict`（写入 scratch 的 `java_runtime/strict.txt`） |
 
 ### 重型闭包的自动处理（无需配置）

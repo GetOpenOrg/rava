@@ -4,8 +4,7 @@
 //! [`EmitInput`](input::EmitInput) → overlay → 发射层写 scratch →（缺省）`cargo run`。
 //! emit：从既有 closure.json + 用户类目录重建输入后同样发射（不编译运行）。
 //!
-//! 方法体缺省由 [`MethodBodies`]（P4c `method` crate）生成；`--skeleton-only` 以
-//! [`PlaceholderBodies`] 输出骨架（方法体为占位注释）。
+//! 方法体由 [`MethodBodies`]（`method` crate）生成。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,7 +13,6 @@ use classfile::MemberRef;
 use closure::handwritten::Handwritten;
 use closure::manifest::Manifest;
 use emit::audit::audit_lines;
-use emit::body::PlaceholderBodies;
 use emit::method_bodies::MethodBodies;
 use emit::ctx::{EmitCtx, EmitOptions};
 use emit::project::{prepare_scratch, write_project, ProjectReport};
@@ -153,7 +151,6 @@ struct EmitJob<'a> {
     java_files: Vec<PathBuf>,
     home: &'a Path,
     out: &'a Path,
-    skeleton_only: bool,
     strict: bool,
 }
 
@@ -168,9 +165,6 @@ fn emit_scratch(j: &EmitJob<'_>) -> Result<ProjectReport, String> {
     let opts = EmitOptions { strict: j.strict, jdk_major: jdk_major(j.home), java_files: j.java_files.clone() };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
-    if j.skeleton_only {
-        return write_project(&ctx, j.out, &mut PlaceholderBodies).map_err(|e| format!("发射：{e}"));
-    }
     let mut bodies = MethodBodies::new(&ctx);
     let r = write_project(&ctx, j.out, &mut bodies).map_err(|e| format!("发射：{e}"))?;
     for line in audit_lines(&bodies.audit, &r.hw_audit) {
@@ -215,7 +209,7 @@ pub fn run_build(args: &Args) -> Result<(), String> {
     let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
     let facts = analyze(&cp, &rt, &user[0], &o, &cin.join("closure.json"))?;
     let java_files = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict };
+    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, strict: o.strict };
     let r = emit_scratch(&job)?;
     report(&r, &out);
     if o.no_run {
@@ -243,7 +237,7 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     let cp = class_path(&classes, &home, &o.images)?;
     let user = user_order(&cp, o.java_files(Mode::Emit), None)?;
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, skeleton_only: o.skeleton_only, strict: o.strict };
+    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, strict: o.strict };
     let r = emit_scratch(&job)?;
     report(&r, &out);
     Ok(())

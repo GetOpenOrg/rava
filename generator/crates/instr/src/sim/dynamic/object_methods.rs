@@ -9,7 +9,7 @@
 //! 分量读取与 getfield 同一翻译（访问器命名、声明类型恢复都复用 [`crate::sim::fields::getfield`]）。
 
 use classfile::{Const, MemberRef};
-use ir::{ElseBranch, Expr, IfStmt, Raw, Stmt};
+use ir::{Expr, Raw};
 use sim::StackSim;
 use ty::{Prim, RsType};
 
@@ -136,28 +136,43 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, site: &Indy
         ("equals", true) => {
             let other = sim.pop()?;
             let recv = pop_bound(sim)?;
-            let other_o = obj_text(env, &text(env, &other.expr), &other.ty);
-            let o = sim.fresh_let("__om_other", Expr::Raw(Raw(other_o)), &RsType::Object)?;
-            let o_s = text(env, &o);
+            // 实参按描述符为 Object：已是 Object 变量时直接使用，否则物化一次
+            let o_s = match (&other.expr, &other.ty) {
+                (Expr::Var(v), RsType::Object) => v.as_str().to_string(),
+                (e, RsType::Object) => {
+                    let t = text(env, e);
+                    text(env, &sim.fresh_let("__om_other", Expr::Raw(Raw(format!("Clone::clone(&{t})"))), &RsType::Object)?)
+                }
+                (e, t) => {
+                    let o = obj_text(env, &text(env, e), t);
+                    text(env, &sim.fresh_let("__om_other", Expr::Raw(Raw(o)), &RsType::Object)?)
+                }
+            };
             let r_ty = ty_text(env, &recv.ty);
-            let v = sim.fresh("__om_eq")?;
-            sim.emit(raw_stmt(format!("let mut {v}: bool = {o_s}.is_instance_of(\"{cls}\");")));
-            // 类型相符分支：实参转为本 record 类型后逐分量比较（分量读取可能物化的语句一并收入分支）
+            // 类型相符分支：实参转为本 record 类型后逐分量比较（分量读取可能物化的语句一并收入块内，
+            // 只在 instanceof 成立时求值）
             let mark = sim.state.stmts.len();
             let that = sim.fresh("__om_that")?;
-            sim.emit(raw_stmt(format!("let {that}: {r_ty} = Into::<{r_ty}>::into(Clone::clone(&{o_s}));")));
-            let that_e = sim::StackEntry { expr: Expr::Var(that), ty: recv.ty.clone(), id: recv.id };
+            let that_e = sim::StackEntry { expr: Expr::Var(that.clone()), ty: recv.ty.clone(), id: recv.id };
             let mut cmps = Vec::with_capacity(getters.len());
             for g in &getters {
                 let mine = read(env, sim, &recv, g)?;
                 let theirs = read(env, sim, &that_e, g)?;
                 cmps.push(eq_of(env, &mine, &theirs, &g.desc));
             }
-            let all = if cmps.is_empty() { "true".to_string() } else { cmps.join(" && ") };
-            sim.emit(raw_stmt(format!("{v} = {all};")));
-            let then = sim.state.stmts.split_off(mark);
-            sim.emit(Stmt::If(IfStmt { cond: Expr::Var(v.clone()), then, else_: ElseBranch::None }));
-            sim.push(Expr::Var(v), RsType::Prim(Prim::Bool));
+            let names = sim::TyNames(env);
+            let renderer = ir::Renderer::new(&names);
+            let captured: Vec<String> = sim.state.stmts.split_off(mark).iter().map(|st| renderer.stmt(st, 0)).collect();
+            // 语句位置的 `{ .. } && ..` 会被解析为块语句，整体加括号成表达式
+            let all = if cmps.is_empty() { "true".to_string() } else { format!("({})", cmps.join(" && ")) };
+            let mut block = format!("let {that}: {r_ty} = Into::<{r_ty}>::into(Clone::clone(&{o_s}));");
+            for c in captured {
+                block.push(' ');
+                block.push_str(&c);
+            }
+            let v = format!("{o_s}.is_instance_of(\"{cls}\") && {{ {block} {all} }}");
+            let e = sim.fresh_let("__om_eq", Expr::Raw(Raw(v)), &RsType::Prim(Prim::Bool))?;
+            sim.push(e, RsType::Prim(Prim::Bool));
             Ok(())
         }
         _ => Err(InstrError::BadInsn(format!("ObjectMethods 调用点 {}{} 不是 toString / hashCode / equals", site.name, site.desc))),

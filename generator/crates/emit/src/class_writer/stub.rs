@@ -158,7 +158,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn param_names_dedup_and_fallback() {
+    fn param_names_dedup_and_default() {
         let m = Method {
             access: 0x0008,
             name: "f".into(),
