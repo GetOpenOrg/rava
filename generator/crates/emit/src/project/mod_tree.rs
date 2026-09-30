@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use closure::handwritten::Handwritten;
+use closure::handwritten::HwTypeRefs;
 use ty::ident::is_rust_keyword;
 
 use super::fs::{has_marker, walk, Writer};
@@ -18,7 +18,7 @@ use crate::error::{io_err, Result};
 /// （语料条件生成类本轮未生成）则该 companion 不声明——等价于该 impl 尚不存在，
 /// 其服务的 native 方法回落 panic 存根，而不是让无法解析的 import 拖垮整个 crate。
 pub struct CompanionDeps {
-    hw: Handwritten,
+    hw: HwTypeRefs,
     /// scratch 的 crate src 根（`crate::` 起点）
     src_root: PathBuf,
 }
@@ -30,7 +30,7 @@ fn seg_name(s: &str) -> &str {
 
 impl CompanionDeps {
     pub fn new(runtime_dir: &Path, src_root: &Path) -> CompanionDeps {
-        CompanionDeps { hw: Handwritten::new(runtime_dir), src_root: src_root.to_path_buf() }
+        CompanionDeps { hw: HwTypeRefs::new(runtime_dir), src_root: src_root.to_path_buf() }
     }
 
     /// 一条路径引用（`super::…` / `crate::…`）指向的模块文件是否在场。
@@ -72,8 +72,7 @@ impl CompanionDeps {
         let Ok(rel) = dir.strip_prefix(&self.src_root) else { return true };
         let rel = rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
         let cls = if rel.is_empty() { base.to_string() } else { format!("{rel}/{base}") };
-        let hw = self.hw.class(&cls);
-        hw.type_refs.iter().all(|t| self.path_present(dir, &t.0))
+        self.hw.class(&cls).iter().all(|t| self.path_present(dir, &t.0))
     }
 }
 
@@ -249,8 +248,10 @@ fn companions(
 }
 
 /// 重建 `src_root` 下各包的 mod.rs（根目录自身除外：lib.rs 手写）。
-/// `runtime_dir`：手写真源 `runtime/java_runtime`（java_runtime 时给出，lib crate 为 None）
-pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, writer: &mut Writer) -> Result<()> {
+/// `runtime_dir`：手写真源 `runtime/java_runtime`（java_runtime 时给出，lib crate 为 None）。
+/// 各目录的 mod.rs 只取决于该目录的磁盘列举与手写依赖判定（写 mod.rs 不改变任何目录的
+/// `_impl` / `_ext` / 类文件在场情况），按 `jobs` 并行生成与落盘，写出顺序同目录序
+pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, jobs: usize, writer: &mut Writer) -> Result<()> {
     let handwritten_src = runtime_dir.map(|r| r.join("src"));
     sweep_stale(src_root, handwritten_src.as_deref(), writer)?;
     if !src_root.is_dir() {
@@ -259,28 +260,36 @@ pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, writer: &mut 
     let tree = scan_tree(src_root, handwritten_src.as_deref());
     prune_stale_pkg_dirs(src_root, handwritten_src.as_deref(), &tree)?;
     let deps = runtime_dir.map(|r| CompanionDeps::new(r, src_root));
-    for (dir, children) in &tree {
-        if dir == src_root {
+    let dirs: Vec<(&PathBuf, &BTreeSet<String>)> = tree.iter().filter(|(d, _)| d.as_path() != src_root).collect();
+    let texts = crate::par::par_map(jobs, &dirs, |&(dir, children)| mod_rs_text(&tree, dir, children, deps.as_ref()));
+    let paths: Vec<PathBuf> = dirs.iter().map(|(d, _)| d.join("mod.rs")).collect();
+    let files: Vec<(&Path, &str)> = paths.iter().map(PathBuf::as_path).zip(texts.iter().map(String::as_str)).collect();
+    writer.write_all(jobs, &files)
+}
+
+/// 一个包目录的 mod.rs 内容
+fn mod_rs_text(
+    tree: &BTreeMap<PathBuf, BTreeSet<String>>,
+    dir: &Path,
+    children: &BTreeSet<String>,
+    deps: Option<&CompanionDeps>,
+) -> String {
+    let mut lines = vec!["#![allow(ambiguous_glob_reexports)]".to_string()];
+    for c in children {
+        lines.push(mod_decl(c));
+        // 子包只声明 pub mod，不 glob 再导出（Java 包无嵌套可见性）
+        if tree.contains_key(&dir.join(c)) {
             continue;
         }
-        let mut lines = vec!["#![allow(ambiguous_glob_reexports)]".to_string()];
-        for c in children {
-            lines.push(mod_decl(c));
-            // 子包只声明 pub mod，不 glob 再导出（Java 包无嵌套可见性）
-            if tree.contains_key(&dir.join(c)) {
-                continue;
-            }
-            lines.push(use_decl(c));
-        }
-        let (extra_pub, comp) = companions(dir, children, deps.as_ref());
-        for b in &extra_pub {
-            lines.push(mod_decl(b));
-            lines.push(use_decl(b));
-        }
-        lines.extend(comp);
-        writer.write(&dir.join("mod.rs"), &(lines.join("\n") + "\n"))?;
+        lines.push(use_decl(c));
     }
-    Ok(())
+    let (extra_pub, comp) = companions(dir, children, deps);
+    for b in &extra_pub {
+        lines.push(mod_decl(b));
+        lines.push(use_decl(b));
+    }
+    lines.extend(comp);
+    lines.join("\n") + "\n"
 }
 
 fn is_identifier(s: &str) -> bool {

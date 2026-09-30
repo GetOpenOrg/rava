@@ -174,19 +174,19 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     state.check_lambda_ledger()?;
     perf.mark("classes");
     let disp = crate::phase2::finish(ctx, &mut state, &mut ems, &mut perf)?;
-    for em in ems.values() {
-        w.write(&em.path, &em.text)?;
-    }
+    let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
+    w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     entry::write_module_resources(ctx, &mut w, &jrt_src)?;
     perf.mark("write");
-    mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), &mut w)?;
+    mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
+    perf.mark("mod_tree");
     libs.write_crates(ctx, &mut w, out_dir)?;
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
     let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &disp)?;
     let lib_names: Vec<&str> = libs.names().collect();
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names)?;
-    perf.mark("mod_tree+entry");
+    perf.mark("entry");
     Ok(ProjectReport {
         jdk_classes: jdk.files.len(),
         user_classes: user.entries.len(),

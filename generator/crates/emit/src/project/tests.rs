@@ -92,7 +92,7 @@ fn mod_tree_declares_disk_contents() {
     put(&src.join("java/util/stale.rs"), "rava_macros::java_class! {}\n");
     w.write(&src.join("jdk_resources/module_resources.rs"), "pub fn lookup() {}\n").unwrap();
     put(&src.join("java/lang/gone.rs"), "// 旧手写\n");
-    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!src.join("java/util/stale.rs").exists(), "本轮未写的生成文件清扫");
     assert!(!src.join("java/lang/gone.rs").exists(), "手写真源已删除的无标记文件清扫");
     assert!(src.join("jdk_resources/module_resources.rs").exists(), "本轮写出的无标记生成文件保留");
@@ -139,7 +139,7 @@ fn mod_tree_prunes_stale_package_dirs() {
     prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
     let mut w = Writer::new(&out, &rt.join("src"));
     w.write(&src.join("java/lang/module.rs"), "rava_macros::java_class! {}\n").unwrap();
-    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!src.join("java/lang/module").exists(), "陈旧包目录删除（与 module.rs 并存即 E0761）");
     assert!(read(&src.join("java/lang/mod.rs")).contains("pub mod module;\npub use module::*;"));
     assert!(!src.join("javax").exists(), "lib.rs 未声明的顶层陈旧包删除");
@@ -165,12 +165,12 @@ fn companion_skipped_when_used_module_absent() {
     let gen = "rava_macros::java_class! {}\n";
     let mut w = Writer::new(&out, &rt.join("src"));
     w.write(&dir.join("natives.rs"), gen).unwrap();
-    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!read(&dir.join("mod.rs")).contains("mod natives_impl;"), "依赖模块缺席 → 不声明");
     let mut w = Writer::new(&out, &rt.join("src"));
     w.write(&dir.join("natives.rs"), gen).unwrap();
     w.write(&dir.join("member_name.rs"), gen).unwrap();
-    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(read(&dir.join("mod.rs")).ends_with("mod natives_impl;\n"), "依赖齐 → 声明");
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -97,6 +97,7 @@ pub fn finish(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &mut Emissions, 
     iface_impls::resolve_interface_impls(ctx, state, ems);
     perf.mark("phase2.impls");
     iface_impls::resolve_interface_inherited_members(ctx, state, ems);
+    perf.mark("phase2.iface_inherited");
     inherited::resolve_inherited_members(ctx, state, ems);
     perf.mark("phase2.inherited");
     sam_objects::synthesize(ctx, ems)?;
