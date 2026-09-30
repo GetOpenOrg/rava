@@ -19,7 +19,9 @@ use std::rc::Rc;
 use classfile::descriptor::{parse_field, parse_method, FieldType};
 use classfile::{op, Code, Const, Insn, MemberRef, Operand};
 
+mod lit;
 mod obj;
+pub use lit::{lit_id, lit_str};
 pub use obj::Obj;
 
 /// 引用值来源
@@ -31,8 +33,8 @@ pub enum Src {
     Site(u32),
     /// 异常处理器入口（处理器偏移）
     Catch(u32),
-    /// 字符串字面量（与其它值合流后）
-    Str,
+    /// 字符串字面量（与其它值合流后；携带字面量序号，见 [`lit_id`]）
+    Str(u32),
 }
 
 pub type Srcs = Rc<[Src]>;
@@ -95,9 +97,24 @@ impl V {
     pub fn srcs(&self) -> Srcs {
         match self {
             V::Ref { src, .. } => src.clone(),
-            V::Str(_) => src1(Src::Str),
+            V::Str(s) => src1(Src::Str(lit_id(s))),
             V::Class(_, off) => src1(Src::Site(*off)),
             _ => Rc::from([].as_slice()),
+        }
+    }
+
+    /// 值可能是的字符串字面量：字面量本身，或合流引用来源里的各个字面量
+    pub fn lits(&self) -> Vec<Rc<str>> {
+        match self {
+            V::Str(s) => vec![s.clone()],
+            V::Ref { src, .. } => src
+                .iter()
+                .filter_map(|s| match *s {
+                    Src::Str(id) => Some(lit_str(id)),
+                    _ => None,
+                })
+                .collect(),
+            _ => vec![],
         }
     }
 

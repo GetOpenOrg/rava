@@ -276,15 +276,18 @@ impl<'a> Engine<'a> {
                 vec![Feed::S(TypeSet::exact(k))]
             }
             V::Top => vec![Feed::S(TypeSet::open(decl))],
-            V::Ref { src, .. } => src
-                .iter()
-                .map(|s| match *s {
-                    Src::Param(i) => Feed::N(Node::P(m, i)),
-                    Src::Site(o) => Feed::N(Node::S(m, o)),
-                    Src::Catch(o) => Feed::N(Node::S(m, CATCH | o)),
-                    Src::Str => Feed::S(TypeSet::exact(self.id(STRING))),
-                })
-                .collect(),
+            V::Ref { src, .. } => {
+                // 字面量来源按序号区分，类型相同：只给一条 String 来源
+                let mut lit = false;
+                src.iter()
+                    .filter_map(|s| match *s {
+                        Src::Param(i) => Some(Feed::N(Node::P(m, i))),
+                        Src::Site(o) => Some(Feed::N(Node::S(m, o))),
+                        Src::Catch(o) => Some(Feed::N(Node::S(m, CATCH | o))),
+                        Src::Str(_) => (!std::mem::replace(&mut lit, true)).then(|| Feed::S(TypeSet::exact(self.id(STRING)))),
+                    })
+                    .collect()
+            }
             _ => vec![],
         }
     }

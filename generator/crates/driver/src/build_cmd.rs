@@ -144,6 +144,7 @@ fn analyze(cp: &ClassPath, rt: &Path, main: &str, o: &BuildOpts, seed_classes: &
         roots: vec![MemberRef { owner: main.to_string(), name: MAIN.0.into(), desc: MAIN.1.into() }],
         seed_roots: seed_roots(cp, &roots, &seeds)?,
         locales: o.locales.clone(),
+        flow_batch: None,
     };
     let c = closure::analyze(&input, &h, &man, &hw);
     for e in hw.errors.borrow().iter() {
