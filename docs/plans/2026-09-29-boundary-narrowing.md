@@ -616,7 +616,7 @@ TestCharsetForName 新增 12 类（`ExtendedCharsets`、`AbstractCharsetProvider
 `String.format → Formatter → regex`。原因是乐观阶段收尾后的顺序敏感：第一次排空时（1445 个方法节点）乐观假设关闭，其后新入链的
 `GetPropertyAction.privilegedGetProperties` 先于其被调方法 `System.getProperties` 分析，被调方法「尚无返回」按值未知答复，返回常量格记为 Top；
 被调方法随后给出带属性表标签的常量，并入 Top 仍为 Top → 系统属性全部转不稳定。本项改变了补种时机，该方法恰好在被调方法之后分析，所以没有触发。
-这是引擎缺口，记为项 9-b 修复（见下），修复后重测本项的净效果。
+这是引擎缺口，已按项 9-b 修复（见下）。修复后本项的净效果：TestCharsetForName 407 / 1299 / 2055、漏 1 → 429 / 1492 / 2405、漏 0（+22 类为 provider 及其实例化链，健全性修复）。
 
 **给 C3 的接口（项 5）**：`closure.json` `seeds.services: [{service, providers: [{module, class}]}]`（`module = null` 为类路径 provider）与 `seeds.services_unknown`。
 生成器 / 运行时需要：① 引导期按事实建立模块服务目录——对每个模块 provider 以 `ServicesCatalog.create` + `addProvider(模块, 服务, provider 类)`
@@ -624,6 +624,18 @@ TestCharsetForName 新增 12 类（`ExtendedCharsets`、`AbstractCharsetProvider
 `ServicesCatalog` 返回它；现行手写 `ServicesCatalog.findServices` 恒返回空、`BootLoader.getServicesCatalog` 返回 null，与 JVM 行为不一致
 （运行时拿不到 `ExtendedCharsets`，`Charset.forName` 的扩展字符集查不到），属手写层终态待改项；② 顺序按事实给出的顺序（模块声明序）；
 ③ 类路径 provider 需要把 `META-INF/services/<服务>` 作为资源嵌入，`ClassLoader.getResources` 可读，provider 类名已登记在 `reflect` 按名表中。
+
+**项 9-b 收尾阶段「尚无返回」答复的顺序依赖（引擎缺口）**。现象与 `--why` 见项 5：第一次排空后乐观假设全局关闭，其后入链的方法遇到**尚未建节点 /
+尚未分析**的被调方法时按值未知答复，Top 并入调用方的返回常量格，被调方法随后给出常量也撤不回（格只升不降）。TestCharsetForName 中
+`privilegedGetProperties` 因此记为 Top，系统属性全部转不稳定，`jdk.reflect.useNativeAccessorOnly` 事实失效，带入 `MethodHandleAccessorFactory`、
+`Formatter`、regex 等 700+ 类；结果取决于处理次序（项 5 改变补种时机就让它消失）。调试数据：收尾前 `never` 549 条答复中只有 14 条的被调方法确实没有返回路径，
+其余在收尾时都已有返回常量。
+修法（`engine/noreturn.rs`，通用规则）：收尾阶段区分两种缺席——被调方法**还没有节点、有节点未分析、或其当前分析自身含未定论的「不返回」答复**时
+仍答「不返回」并记入 `never`，排空后重算；全部节点已分析且没有返回路径才是定论，按值未知求值（folds 规则 7 不变）。`never` 改为「当前分析含该答复的节点」
+（重分析时先移出）。每次排空重算 `never`，为空即结束；两次排空的 `never` 相同（互等的环、接收者恒空永不建节点的目标）或满 32 轮时转为全部按值未知，
+保证终止。单测 `closing_answers_and_stall`。
+结果：TestCharsetForName（无项 5 清单时）1157 / 7293 / 16810 → **407 / 1299 / 2055**；其余 8 例类 / 方法 / 上下文与项 5 后完全相同，漏均为 0。
+同类剩余（性能线 §4.5 记录）：`CalendarSystem.forName` 的按名查找结果依赖求值次序（`class_lookup` 返回 `Some` 时不接返回边），待单调化。
 
 ## 七、验收
 

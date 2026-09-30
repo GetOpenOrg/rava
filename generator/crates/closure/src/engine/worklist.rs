@@ -103,18 +103,12 @@ impl<'a> Engine<'a> {
                 if seeded {
                     continue;
                 }
-                // 乐观阶段收敛：仍「尚无返回」的被调方法确实不返回。关掉乐观假设，把得到过该答复的
-                // 方法按值未知重算——导出的不可达代码只从跳转 / switch / return / athrow 之后开始
-                if !self.ctx.optimistic.replace(false) {
-                    self.ctx.stats.borrow_mut().mark_rss("final");
-                    break;
+                // 收尾：得到过「不返回」答复的方法按值未知重算（定论判定见 `noreturn.rs`）
+                if self.nr_drain() {
+                    continue;
                 }
-                let never: Vec<usize> = std::mem::take(&mut *self.ctx.never.borrow_mut()).into_iter().collect();
-                self.ctx.stats.borrow_mut().mark_rss("optimistic");
-                for m in never {
-                    self.invalidate(m, Why::Never);
-                }
-                continue;
+                self.ctx.stats.borrow_mut().mark_rss("final");
+                break;
             };
             self.in_mwork.remove(&m);
             self.stat_enter(Phase::Process);
@@ -126,6 +120,9 @@ impl<'a> Engine<'a> {
     /// 方法的分析结果失效：重分析，调用方重处理
     pub(super) fn invalidate(&mut self, m: usize, why: Why) {
         let had = self.methods[m].analysis.take().is_some();
+        if had {
+            self.nr_dropped(m);
+        }
         self.ctx.stats.borrow_mut().invalidated(m, why, had);
         if !had && self.in_mwork.contains(&m) {
             return;
@@ -221,6 +218,7 @@ impl<'a> Engine<'a> {
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
         let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params };
         self.stat_enter(Phase::Analyze);
+        self.nr_begin(m);
         let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
         if self.cold_cut {
             let cold = crate::cold::doomed(code);
@@ -244,6 +242,7 @@ impl<'a> Engine<'a> {
             self.pending_types.insert(m, a.pending_types.clone());
         }
         self.methods[m].analysis = Some(a.clone());
+        self.nr_end(m);
         Some(a)
     }
 

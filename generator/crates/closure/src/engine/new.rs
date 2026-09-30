@@ -23,7 +23,7 @@ impl<'a> Engine<'a> {
                 deser: Cell::new(false),
                 fdeps: Default::default(),
                 rdeps: Default::default(),
-                optimistic: Cell::new(true),
+                noreturn: Default::default(),
                 never: Default::default(),
                 objs: Default::default(),
                 psums: Default::default(),

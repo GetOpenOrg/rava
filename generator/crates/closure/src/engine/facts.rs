@@ -81,9 +81,9 @@ pub(super) struct Ctx<'a> {
     pub(super) fdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
     /// 被调方法 → 查询过其返回常量的方法
     pub(super) rdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
-    /// 乐观阶段：被调方法尚无返回路径时，调用之后按不可达处理
-    pub(super) optimistic: Cell<bool>,
-    /// 乐观阶段得到过「尚无返回」答复的方法（收尾时按值未知重算）
+    /// 「尚无返回」答复的阶段与定论判定（见 `noreturn.rs`）
+    pub(super) noreturn: RefCell<super::noreturn::NoReturn>,
+    /// 当前分析得到过「不返回」答复的方法节点（排空时按值未知重算）
     pub(super) never: RefCell<BTreeSet<usize>>,
     /// 构造器摘要缓存：`构造器|实参` → 构造完成的对象标签
     pub(super) objs: RefCell<HashMap<String, Option<Rc<Obj>>>>,
@@ -360,7 +360,7 @@ impl Oracle for Facts<'_, '_> {
         match r {
             Some(PV::Const(v)) => Ret::Value(v),
             Some(PV::Top) => eval(),
-            None if self.ctx.optimistic.get() => {
+            None if self.ctx.noreturn.borrow().answer_never(t) => {
                 self.ctx.never.borrow_mut().insert(me);
                 Ret::Never
             }

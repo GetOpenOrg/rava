@@ -50,6 +50,7 @@ mod report;
 mod diag;
 mod seeds;
 mod services;
+mod noreturn;
 mod class_lookup;
 mod method_lookup;
 mod new;
@@ -580,6 +581,9 @@ impl<'a> Engine<'a> {
             if hit {
                 self.pending_types.remove(&m);
                 let had = self.methods[m].analysis.take().is_some();
+                if had {
+                    self.nr_dropped(m);
+                }
                 self.ctx.stats.borrow_mut().invalidated(m, Why::Catch, had);
                 self.push_m(m);
             }
