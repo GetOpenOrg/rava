@@ -85,6 +85,10 @@ packages = [
     # C1d：浮点十进制转换（DoubleToDecimal / FloatToDecimal / FormattedFPDecimal、dtoa 的 FloatingDecimal /
     # FDBigInteger 等，纯 Java）。手写近似无法逐位一致（DecimalFormat HALF_EVEN 依赖 dtoa 产物），按字节码翻译。
     "jdk/internal/math/",
+    # C1d：特权属性读取动作（GetPropertyAction / GetBooleanAction / GetIntegerAction 等，纯 Java，0 个
+    # ACC_NATIVE）。安全管理器恒 null，privilegedGetProperty 等按字节码直通 System.getProperty；原手写
+    # 属过渡类（策略截断），删除后闭包变小（手写不透明返回的 Character* 过近似消失，计划 §6.6）。
+    "sun/security/action/",
 ]
 classes = [
     # MH-native：asType / 组合子的类型转换与名字工具。纯 Java（装拆箱 / 拓宽句柄经 IMPL_LOOKUP
