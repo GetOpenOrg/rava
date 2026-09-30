@@ -126,7 +126,7 @@ impl<'a> Engine<'a> {
                     let fs = self.feeds(m, array, aid);
                     let s = self.value_set(&fs);
                     let mut add = TypeSet::default();
-                    for &x in &s.classes {
+                    for x in &s.classes {
                         if self.arrays.contains_key(&x) {
                             for p in slots(index) {
                                 self.flow(Node::E(x, p), Node::S(m, off), tid);
@@ -136,7 +136,7 @@ impl<'a> Engine<'a> {
                         }
                     }
                     // open 数组（手写层 / VM 产出）的元素同样 open
-                    for &o in &s.open {
+                    for o in &s.open {
                         if let Some(c) = absint::component(&self.names[o as usize].clone()) {
                             let cid = self.id(&c);
                             if self.sub(cid, tid) {
@@ -158,7 +158,7 @@ impl<'a> Engine<'a> {
                     let fs = self.feeds(m, value, tid);
                     let afs = self.feeds(m, array, aid);
                     let s = self.value_set(&afs);
-                    for &x in &s.classes {
+                    for x in &s.classes {
                         // 按分配点的实际分量类型收窄（静态类型可能更宽，如经 Object[] 视角写入 Class[]）
                         let Some(&at) = self.arrays.get(&x) else { continue };
                         let Some(c) = absint::component(&self.names[at as usize].clone()).filter(|c| c.len() > 1) else { continue };
@@ -293,7 +293,7 @@ impl<'a> Engine<'a> {
                 let fs = self.feeds(m, v, oid);
                 let s = self.value_set(&fs);
                 let s = self.filter(&s, oid);
-                let objs: Vec<u32> = s.classes.iter().copied().filter(|x| self.objs.contains_key(x)).collect();
+                let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
                 (objs.clone(), !s.open.is_empty() || s.classes.len() > objs.len())
             }
             None => (vec![], true),

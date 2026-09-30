@@ -73,9 +73,9 @@ impl<'a> Engine<'a> {
         let mut v: Vec<String> = if s.classes.len() > 6 {
             vec![format!("{} 个类", s.classes.len())]
         } else {
-            s.classes.iter().map(|i| self.names[*i as usize].to_string()).collect()
+            s.classes.iter().map(|i| self.names[i as usize].to_string()).collect()
         };
-        v.extend(s.open.iter().map(|i| format!("open({})", self.names[*i as usize])));
+        v.extend(s.open.iter().map(|i| format!("open({})", self.names[i as usize])));
         v.join(", ")
     }
 
@@ -180,7 +180,7 @@ impl<'a> Engine<'a> {
             let mut fed: HashSet<(Node, u32)> = HashSet::default();
             for (src, edges) in &self.graph.flow_list() {
                 if let Some(ss) = self.graph.get(src) {
-                    for &o in &ss.open {
+                    for o in &ss.open {
                         for (dst, _) in edges {
                             fed.insert((*dst, o));
                         }
@@ -189,7 +189,7 @@ impl<'a> Engine<'a> {
             }
             let mut stat: HashMap<u32, (usize, Vec<String>)> = HashMap::default();
             for (n, ss) in self.graph.iter() {
-                for &o in &ss.open {
+                for o in &ss.open {
                     let e = stat.entry(o).or_default();
                     e.0 += 1;
                     if !fed.contains(&(*n, o)) {
@@ -257,7 +257,7 @@ impl<'a> Engine<'a> {
                         e.1 += 1;
                         if let Some(s) = self.graph.get(src) {
                             for c in s.classes.iter() {
-                                e.0.insert(*c);
+                                e.0.insert(c);
                             }
                         }
                     }

@@ -50,7 +50,7 @@ impl Engine<'_> {
             let n = &self.names[o as usize];
             o == cid || self.h.is_subtype(n, &q_name) || self.h.is_subtype(&q_name, n)
         };
-        let has = |x: &Node| self.graph.get(x).is_some_and(|s| s.open.iter().any(|&o| related(o)));
+        let has = |x: &Node| self.graph.get(x).is_some_and(|s| s.open.iter().any(related));
         let mut rev: HashMap<Node, Vec<Node>> = HashMap::default();
         for (src, edges) in &self.graph.flow_list() {
             if has(src) {

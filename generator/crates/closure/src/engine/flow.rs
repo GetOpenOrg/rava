@@ -21,6 +21,11 @@ impl<'a> Engine<'a> {
         if s.is_empty() {
             return;
         }
+        // 无增量快速返回（流边推送的绝大多数）：不取节点、不查暂存。暂存中的空数组元素节点
+        // 若已含 s，旧路径暂存 s、补回时同样是无增量，两者等价
+        if s.is_subset_of(self.graph.set(i)) {
+            return;
+        }
         let n = self.graph.node(i);
         if let Node::E(x, _) = n {
             if let Some(held) = self.empty_arrays.get_mut(&x) {
@@ -40,7 +45,7 @@ impl<'a> Engine<'a> {
         self.graph.adds[1] += 1;
         self.graph.adds[2] += (delta.classes.len() + delta.open.len()) as u64;
         if direct && !delta.open.is_empty() {
-            self.open_inj.entry(n).or_default().extend(delta.open.iter().copied());
+            self.open_inj.entry(n).or_default().extend(delta.open.iter());
         }
         if n == Node::Esc {
             self.escape(&delta.classes);
@@ -53,7 +58,7 @@ impl<'a> Engine<'a> {
         }
         // 手写方法调用点的实参新增数组分配点：接上该数组的元素读写
         if let Node::A(s, i) = n {
-            let ys: Vec<u32> = delta.classes.iter().copied().filter(|x| self.arrays.contains_key(x)).collect();
+            let ys: Vec<u32> = delta.classes.iter().filter(|x| self.arrays.contains_key(x)).collect();
             if !ys.is_empty() {
                 self.hw_site_arrays(s, i, &ys);
             }
@@ -93,6 +98,10 @@ impl<'a> Engine<'a> {
         }
         self.graph.edges[si as usize].push((di, filter));
         if self.graph.set(si).is_empty() {
+            return;
+        }
+        // Object 过滤且目标已含源集合：推送必为无增量，免去整集合克隆（大集合新接边的常态）
+        if self.graph.set(si).is_subset_of(self.graph.set(di)) && self.names[filter as usize].as_ref() == OBJECT {
             return;
         }
         let s = std::mem::take(self.graph.set_mut(si));
@@ -263,7 +272,7 @@ impl<'a> Engine<'a> {
     /// 值集新到达逃逸汇点：抽象对象接上未知接收者视图；数组分配点的元素随之逃逸（非建模代码可读出）
     pub(super) fn escape(&mut self, delta: &IdSet) {
         let obj = self.id(OBJECT);
-        for &x in delta.iter() {
+        for x in delta.iter() {
             if self.objs.contains_key(&x) {
                 if !self.escaped.insert(x) {
                     continue;

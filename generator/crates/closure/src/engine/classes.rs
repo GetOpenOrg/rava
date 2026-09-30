@@ -81,7 +81,8 @@ impl<'a> Engine<'a> {
             self.sub_rows.resize_with(ti + 1, Vec::new);
         }
         let mut row = std::mem::take(&mut self.sub_rows[ti]);
-        for (k, &x) in s.classes.iter().enumerate() {
+        let mut kept: Vec<u32> = Vec::new();
+        for (k, x) in s.classes.iter().enumerate() {
             let i = x as usize;
             let v = match row.get(i) {
                 Some(&v) if v != 0 => v,
@@ -96,14 +97,15 @@ impl<'a> Engine<'a> {
             };
             if v == 2 {
                 // 输入有序，输出按序追加（首个命中时按剩余输入一次预留）
-                if out.classes.0.capacity() == 0 {
-                    out.classes.0.reserve(s.classes.len() - k);
+                if kept.capacity() == 0 {
+                    kept.reserve(s.classes.len() - k);
                 }
-                out.classes.push_max(x);
+                kept.push(x);
             }
         }
+        out.classes = IdSet::from_sorted(kept);
         self.sub_rows[ti] = row;
-        for &o in &s.open {
+        for o in &s.open {
             if let Some(r) = self.open_narrow(o, t) {
                 out.open.insert(r);
             }
@@ -124,13 +126,13 @@ impl<'a> Engine<'a> {
     /// 类型集里 ⊂ owner 的具体接收者（open 按 G 展开；展开过的方法 m 在 G 增长时重处理）
     pub(super) fn receivers(&mut self, m: usize, s: &TypeSet, owner: u32) -> BTreeSet<u32> {
         let mut out = BTreeSet::new();
-        for &x in &s.classes {
+        for x in &s.classes {
             if self.sub(x, owner) {
                 out.insert(x);
             }
         }
         if !s.open.is_empty() {
-            for &o in s.open.iter() {
+            for o in s.open.iter() {
                 match (self.cur_call, self.cur_site) {
                     (Some(c), _) => {
                         self.open_calls.entry((o, owner)).or_default().insert(c);

@@ -26,6 +26,7 @@ use crate::handwritten::{member_matches, to_snake, MODULE_SUFFIXES, FieldAccess,
 use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members, PropValue};
 
 mod sets;
+mod idset;
 mod facts;
 mod construct;
 mod sysprops;
@@ -64,6 +65,7 @@ use facts::*;
 use sysprops::{PropSum, PropUnstable};
 use fold::*;
 pub use sets::*;
+pub use idset::{IdIter, IdSet};
 use hwobj::{HwObj, HWOBJ_KIND};
 
 
